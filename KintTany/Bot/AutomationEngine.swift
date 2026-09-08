@@ -810,6 +810,8 @@ final class AutomationEngine {
             reporter(.log("🎣 fish_spots já disponível • iniciando seleção do melhor tile"))
         }
 
+        var fishAttemptNumber = 0
+
         while successes < goal {
             try Task.checkCancellation()
             reporter(.state(.searching, "Procurando spot de pesca"))
@@ -819,9 +821,13 @@ final class AutomationEngine {
                 continue
             }
 
+            fishAttemptNumber += 1
+            let attemptNumber = fishAttemptNumber
+            let targetLabel = "Spot #\(target.slot) (\(target.fc),\(target.fr))"
+
             reporter(.target("Spot #\(target.slot) • \(target.fc),\(target.fr)"))
             reporter(.attempt)
-            reporter(.state(.acting, "Lançando linha"))
+            reporter(.state(.acting, "Lançando linha • Peixe #\(attemptNumber)"))
 
             let snapshotBefore = fishSnapshotSerial
             let biteBefore = fishBiteSerial
@@ -842,30 +848,38 @@ final class AutomationEngine {
 
             guard let bite else {
                 try? await clearAction()
-                reporter(.failure(fishSnapshotSerial != snapshotBefore ? "spot mudou antes da fisgada" : "fish_bite não recebido"))
+                let reason = fishSnapshotSerial != snapshotBefore ? "spot mudou antes da fisgada" : "sem fisgada (fish_bite não recebido)"
+                reporter(.failure("Peixe #\(attemptNumber) • \(targetLabel) • \(reason)"))
                 try await sleep(650)
                 continue
             }
 
+            let biteSeconds = String(format: "%.1f", Double(bite.ms) / 1000)
+            reporter(.log("🪝 Peixe #\(attemptNumber) • fisgada em \(biteSeconds)s • \(targetLabel)"))
+
             let ttl = remainingMS(for: fishSpots[target.slot])
             guard ttl >= Double(bite.ms + 4_500) else {
                 try? await clearAction()
-                reporter(.diagnostic("[FISH] cast descartado: TTL \(Int(ttl))ms < bite+margin"))
+                reporter(.log("↪️ Peixe #\(attemptNumber) • tentativa descartada: spot expirando • TTL=\(Int(ttl))ms"))
+                reporter(.diagnostic("[FISH] cast #\(attemptNumber) descartado: TTL \(Int(ttl))ms < bite+margin"))
                 try await sleep(500)
                 continue
             }
 
-            reporter(.state(.waitingResult, "Fisgada em \(String(format: "%.1f", Double(bite.ms) / 1000))s"))
+            reporter(.state(.waitingResult, "Peixe #\(attemptNumber) • fisgada em \(biteSeconds)s"))
             let waitUntil = nowMS + Double(bite.ms + 70)
+            var spotRotatedDuringWait = false
             while nowMS < waitUntil {
                 try Task.checkCancellation()
                 guard fishTargetStillValid(target, generation: generation) else {
                     try? await clearAction()
-                    reporter(.failure("spot rotacionou durante a espera"))
+                    reporter(.failure("Peixe #\(attemptNumber) • \(targetLabel) • spot rotacionou durante a espera"))
+                    spotRotatedDuringWait = true
                     break
                 }
                 try await sleep(100)
             }
+            if spotRotatedDuringWait { continue }
             guard fishTargetStillValid(target, generation: generation) else { continue }
 
             try await sendFishingPhase(target, phase: 1)
@@ -875,7 +889,7 @@ final class AutomationEngine {
 
             guard fishTargetStillValid(target, generation: generation) else {
                 try? await clearAction()
-                reporter(.failure("spot mudou antes do grant"))
+                reporter(.failure("Peixe #\(attemptNumber) • \(targetLabel) • spot mudou antes da confirmação"))
                 continue
             }
 
@@ -884,17 +898,20 @@ final class AutomationEngine {
                 let response = try await http.post("/api/auth/grant-fish-xp", body: ["mountCatch": true, "fleet": "us", "shardId": shardID])
                 try? await clearAction()
                 guard RealtimeProtocol.bool(response["ok"]) != false else {
-                    reporter(.failure((response["error"] as? String) ?? (response["message"] as? String) ?? "grant-fish-xp recusado"))
+                    let reason = (response["error"] as? String) ?? (response["message"] as? String) ?? "grant-fish-xp recusado"
+                    reporter(.failure("Peixe #\(attemptNumber) • \(targetLabel) • \(reason)"))
                     try await sleep(1_000)
                     continue
                 }
                 successes += 1
-                reporter(.success("fish"))
-                reporter(.log("✅ Peixe confirmado • \(successes)/\(goal)"))
+                // Incrementa a estatística da UI sem gerar a linha genérica
+                // "✅ fish"; o log útil abaixo identifica tentativa, spot e meta.
+                reporter(.success(nil))
+                reporter(.log("✅ Peixe #\(attemptNumber) confirmado • \(successes)/\(goal) • \(targetLabel)"))
                 try await sleep(650)
             } catch {
                 try? await clearAction()
-                reporter(.failure("grant-fish-xp: \(error.localizedDescription)"))
+                reporter(.failure("Peixe #\(attemptNumber) • \(targetLabel) • confirmação falhou: \(error.localizedDescription)"))
                 try await sleep(1_200)
             }
         }
