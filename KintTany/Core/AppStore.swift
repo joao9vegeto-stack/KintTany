@@ -202,10 +202,38 @@ final class AppStore: ObservableObject {
     }
 
     func diagnostic(_ value: String) {
+        // O "Log completo" é voltado ao uso do bot, não a um espelho do
+        // DevTools/Network/WebSocket. Mantemos apenas diagnóstico de conexão,
+        // autenticação e erros úteis; payloads IN/OUT e detalhes internos da
+        // engine continuam fora da interface.
+        guard shouldKeepDiagnostic(value) else { return }
         diagnosticLogs.append(timestamped(value))
-        if diagnosticLogs.count > 2_000 {
-            diagnosticLogs.removeFirst(diagnosticLogs.count - 2_000)
+        if diagnosticLogs.count > 10_000 {
+            diagnosticLogs.removeFirst(diagnosticLogs.count - 10_000)
         }
+    }
+
+    private func shouldKeepDiagnostic(_ value: String) -> Bool {
+        // Nunca exibir mensagens/payloads brutos do WebSocket.
+        if value.hasPrefix("[IN ") || value.hasPrefix("[OUT ") { return false }
+
+        // Conexão e autenticação são úteis para entender em que etapa o bot está.
+        if value.hasPrefix("[AUTH]") ||
+            value.hasPrefix("[NET]") ||
+            value.hasPrefix("[WS]") ||
+            value.hasPrefix("[WARN]") ||
+            value.hasPrefix("[ERROR]") ||
+            value.hasPrefix("[STATE]") {
+            return true
+        }
+
+        // Do HTTP, basta a negociação da conexão e o resultado. Corpos e tokens
+        // não agregam ao usuário e podem tornar o log enorme/sensível.
+        if value.hasPrefix("[HTTP]") {
+            return !value.contains(" body:") && !value.contains("token=<oculto>")
+        }
+
+        return false
     }
 
     func clearDiagnosticLogs() {
@@ -294,7 +322,9 @@ final class AppStore: ObservableObject {
             } else if result.completedGoal {
                 state = .completed
                 statusMessage = "Meta concluída"
-                log("Meta concluída: \(result.successes)/\(goal)")
+                currentTarget = nil
+                activity = nil
+                log("✅ Meta concluída: \(result.successes)/\(goal) • atividade encerrada automaticamente")
             } else {
                 state = .failed
                 statusMessage = "Engine encerrou antes da meta"
@@ -312,7 +342,7 @@ final class AppStore: ObservableObject {
             state = .failed
             statusMessage = error.localizedDescription
             stats.failures += 1
-            diagnostic("[ERROR] \(String(reflecting: error))")
+            diagnostic("[ERROR] \(error.localizedDescription)")
             log("Falha: \(error.localizedDescription)")
         }
     }
@@ -346,7 +376,7 @@ final class AppStore: ObservableObject {
         case .failure(let reason):
             stats.failures += 1
             stats.lastEvent = reason
-            diagnostic("[ENGINE] falha: \(reason)")
+            log("⚠️ Falha: \(reason)")
 
         case .hitSent:
             stats.hits += 1
@@ -389,8 +419,8 @@ final class AppStore: ObservableObject {
         if logs.count > 300 {
             logs.removeFirst(logs.count - 300)
         }
-        if diagnosticLogs.count > 2_000 {
-            diagnosticLogs.removeFirst(diagnosticLogs.count - 2_000)
+        if diagnosticLogs.count > 10_000 {
+            diagnosticLogs.removeFirst(diagnosticLogs.count - 10_000)
         }
     }
 }
