@@ -33,6 +33,7 @@ final class AutomationEngine {
 
     private var region: String
     private var serverRegion: String?
+    private var lastRegionConfirmationSource: String?
     private var position: Position
     private var lifeEpoch = 1
     private var equipment: String?
@@ -123,6 +124,7 @@ final class AutomationEngine {
         case "region_ack":
             if let value = packet["region"] as? String, !value.isEmpty {
                 serverRegion = value
+                lastRegionConfirmationSource = "region_ack"
                 region = value
                 reporter(.player(position, hp: playerHP, shield: playerShield, region: region))
                 reporter(.diagnostic("[REGION] ACK \(value)"))
@@ -195,6 +197,7 @@ final class AutomationEngine {
     private func ingestSnapshot(_ packet: [String: Any]) {
         if let packetRegion = packet["region"] as? String, !packetRegion.isEmpty {
             serverRegion = packetRegion
+            lastRegionConfirmationSource = "snapshot"
         }
 
         if let res = packet["res"] as? [[String: Any]] {
@@ -289,6 +292,7 @@ final class AutomationEngine {
         region = value
         position = pos
         serverRegion = nil
+        lastRegionConfirmationSource = nil
         reporter(.state(.syncing, "Entrando em \(prettyRegion(value))"))
         reporter(.log("🌍 Entrando em \(prettyRegion(value))…"))
         try await sendPosition(moving: false, full: true, action: extras)
@@ -1145,6 +1149,12 @@ final class AutomationEngine {
 
     private func runWild(mode: ActivityMode, goal: Int) async throws {
         let targetType = mode == .dragon ? "dragon" : "zombie"
+
+        // Paridade com o combat-bot v5.2.1: a Wild Sword já precisa estar
+        // equipada no pacote que faz World → Wilderness.
+        try await equip("wild_sword")
+        reporter(.log("⚔️ Wild Sword equipada"))
+
         if serverRegion?.lowercased() != "world" {
             try await setRegion("world", at: Position(x: 0.5, z: -29.5))
             _ = try await waitForRegion("world", timeoutMS: 5_000)
@@ -1152,16 +1162,20 @@ final class AutomationEngine {
 
         reporter(.state(.moving, "Indo ao portal da Wilderness"))
         try await walk(to: Position(x: 0.5, z: -30.5), maxSeconds: 25)
+        try await sleep(200)
 
+        // HAR/v5.2.1 comprovado: último ponto World 0.5,-30.5; primeiro
+        // pacote Wild 0.5,23.5 com wblk completo. O Node aguarda 14 s por
+        // region_ack OU snapshot autoritativo em wild.
         reporter(.state(.syncing, "Entrando na Wilderness"))
         try await setRegion("wild", at: Position(x: 0.5, z: 23.5), extras: ["wblk": Self.wildBlockedTiles])
-        guard try await waitForRegion("wild", timeoutMS: 6_000) else {
+        guard try await waitForRegion("wild", timeoutMS: 14_000) else {
             throw EngineError.regionNotConfirmed("wild")
         }
+        reporter(.log("✅ Wilderness confirmada via \(lastRegionConfirmationSource ?? "servidor")"))
 
         let hb = Task { [weak self] in await self?.heartbeat() }
         defer { hb.cancel() }
-        try await equip("wild_sword")
 
         while successes < goal {
             try Task.checkCancellation()
