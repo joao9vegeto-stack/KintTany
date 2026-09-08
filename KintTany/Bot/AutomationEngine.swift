@@ -212,13 +212,22 @@ final class AutomationEngine {
             }
         }
 
+        // A posição usada pela engine é o estado de comando local, assim como em
+        // presenceWs.js v5.2. Snapshots podem chegar atrasados (por exemplo ainda
+        // mostrando o portal 30.5,0.5 depois de já termos enviado o stand -1.5,-1.5).
+        // Se esses snapshots sobrescreverem `position`, o próximo heartbeat desfaz
+        // nosso próprio movimento e a pesca fica longe de todos os fish_spots.
+        //
+        // Ainda preservamos a posição recebida do servidor para a telemetria da UI;
+        // apenas não deixamos um snapshot antigo alterar a posição operacional.
+        var authoritativePosition = position
         if let players = packet["players"] as? [[String: Any]], let id = playerID,
            let me = players.first(where: { RealtimeProtocol.int($0["id"]) == id }) {
             if let x = RealtimeProtocol.double(me["x"]), let z = RealtimeProtocol.double(me["z"]) {
-                position.x = x
-                position.z = z
-                if let y = RealtimeProtocol.double(me["y"]) { position.y = y }
-                if let ry = RealtimeProtocol.double(me["ry"]) { position.ry = ry }
+                authoritativePosition.x = x
+                authoritativePosition.z = z
+                if let y = RealtimeProtocol.double(me["y"]) { authoritativePosition.y = y }
+                if let ry = RealtimeProtocol.double(me["ry"]) { authoritativePosition.ry = ry }
             }
             if let hp = RealtimeProtocol.int(me["php"]) { playerHP = hp }
             if let shield = RealtimeProtocol.int(me["wsh"]) { playerShield = shield }
@@ -252,7 +261,7 @@ final class AutomationEngine {
             ingestWildMobs(wild)
         }
 
-        reporter(.player(position, hp: playerHP, shield: playerShield, region: serverRegion ?? region))
+        reporter(.player(authoritativePosition, hp: playerHP, shield: playerShield, region: serverRegion ?? region))
         reporter(.world(nodes: availableSeedCount(), mobs: max(chickens.count, wildMobs.count), serverRegion: serverRegion))
     }
 
@@ -367,7 +376,12 @@ final class AutomationEngine {
                 } else {
                     try await sendPosition(moving: false)
                 }
+            } catch is CancellationError {
+                // Fim normal da atividade/meta/STOP. Cancelar o heartbeat não é
+                // perda de conexão e não pode transformar 5/5 em erro fatal.
+                return
             } catch {
+                if Task.isCancelled { return }
                 reporter(.fatal("Conexão realtime perdida: \(error.localizedDescription)"))
                 return
             }
@@ -779,16 +793,21 @@ final class AutomationEngine {
 
         // A v5.2 não usa coordenadas antigas como alvo: fish_spots é a fonte
         // autoritativa do servidor. Os pontos fixos servem apenas para entrar e
-        // posicionar o personagem no Pond.
-        reporter(.log("📡 Aguardando fish_spots do servidor…"))
-        let spotDeadline = nowMS + 8_000
-        while fishSpots.isEmpty && nowMS < spotDeadline {
-            try Task.checkCancellation()
-            reporter(.state(.syncing, "Aguardando spots de pesca"))
-            try await sleep(100)
-        }
+        // posicionar o personagem no Pond. Se o snapshot já chegou durante a
+        // entrada, não mostramos falsamente "Aguardando fish_spots".
         if fishSpots.isEmpty {
-            reporter(.log("📡 fish_spots ainda não chegou; aguardando o próximo snapshot sem usar coordenadas antigas"))
+            reporter(.log("📡 Aguardando fish_spots do servidor…"))
+            let spotDeadline = nowMS + 15_000
+            while fishSpots.isEmpty && nowMS < spotDeadline {
+                try Task.checkCancellation()
+                reporter(.state(.syncing, "Aguardando spots de pesca"))
+                try await sleep(100)
+            }
+            if fishSpots.isEmpty {
+                reporter(.log("📡 fish_spots ainda não chegou; aguardando o próximo snapshot sem usar coordenadas antigas"))
+            }
+        } else {
+            reporter(.log("🎣 fish_spots já disponível • iniciando seleção do melhor tile"))
         }
 
         while successes < goal {
