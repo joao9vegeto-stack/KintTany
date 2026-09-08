@@ -6,6 +6,7 @@ struct RootView: View {
     @EnvironmentObject var app: AppStore
     @State private var showLogin = false
     @State private var showFullLog = false
+    @FocusState private var goalFieldFocused: Bool
 
     private let columns = [
         GridItem(.flexible(), spacing: 12),
@@ -53,6 +54,22 @@ struct RootView: View {
             FullLogView()
                 .environmentObject(app)
                 .preferredColorScheme(.dark)
+        }
+        .toolbar {
+            ToolbarItemGroup(placement: .keyboard) {
+                Spacer()
+                Button("OK") {
+                    app.goal = min(100_000, max(1, app.goal))
+                    goalFieldFocused = false
+                }
+                .fontWeight(.bold)
+            }
+        }
+        .onChange(of: app.goal) { _, newValue in
+            let clamped = min(100_000, max(1, newValue))
+            if clamped != newValue {
+                app.goal = clamped
+            }
         }
     }
 
@@ -222,15 +239,36 @@ struct RootView: View {
 
     private var goalCard: some View {
         HStack(spacing: 12) {
-            VStack(alignment: .leading, spacing: 3) {
+            VStack(alignment: .leading, spacing: 7) {
                 Text("META DA SESSÃO")
                     .font(.caption2.bold())
                     .tracking(1.2)
                     .foregroundStyle(.secondary)
-                Text("\(app.goal)")
-                    .font(.title2.weight(.black))
+
+                HStack(spacing: 8) {
+                    TextField("Meta", value: $app.goal, format: .number)
+                        .keyboardType(.numberPad)
+                        .focused($goalFieldFocused)
+                        .font(.system(size: 25, weight: .black, design: .rounded))
+                        .multilineTextAlignment(.leading)
+                        .frame(width: 112)
+                        .padding(.horizontal, 12)
+                        .padding(.vertical, 8)
+                        .background(.black.opacity(0.24), in: RoundedRectangle(cornerRadius: 12, style: .continuous))
+                        .overlay(
+                            RoundedRectangle(cornerRadius: 12, style: .continuous)
+                                .stroke(goalFieldFocused ? Color.cyan.opacity(0.75) : Color.white.opacity(0.08), lineWidth: 1)
+                        )
+                        .disabled(app.activity != nil)
+
+                    Image(systemName: "keyboard")
+                        .font(.caption.bold())
+                        .foregroundStyle(goalFieldFocused ? .cyan : .secondary)
+                }
             }
+
             Spacer()
+
             Button {
                 app.goal = max(1, app.goal - 1)
             } label: {
