@@ -29,54 +29,180 @@ struct ActivityStats: Codable { var attempts = 0; var successes = 0; var failure
     @Published var stats = ActivityStats()
     @Published var goal = 100
     @Published var logs: [String] = []
+    @Published var diagnosticLogs: [String] = []
     @Published var connected = false
+
     private let session = SessionManager()
     private var task: Task<Void, Never>?
     private let socket = RealtimeSocket()
 
     func start(_ mode: ActivityMode) {
-        task?.cancel(); task = Task { [weak self] in await self?.run(mode) }
+        task?.cancel()
+        connected = false
+        task = Task { [weak self] in
+            await self?.run(mode)
+        }
     }
-    func stop() { task?.cancel(); task = nil; Task { await socket.close() }; activity = nil; state = .cancelled; log("STOP confirmado — nenhuma nova ação será enviada") }
-    func log(_ value: String) { logs.append("\(Date.now.formatted(date: .omitted, time: .standard))  \(value)"); if logs.count > 300 { logs.removeFirst(logs.count - 300) } }
-    func saveCookie(_ cookie: String) { session.save(cookie: cookie); log("Sessão salva com segurança no Keychain") }
+
+    func stop() {
+        task?.cancel()
+        task = nil
+        connected = false
+        Task { await socket.close() }
+        activity = nil
+        state = .cancelled
+        log("STOP confirmado — nenhuma nova ação será enviada")
+    }
+
+    func log(_ value: String) {
+        let line = timestamped(value)
+        logs.append(line)
+        diagnosticLogs.append(line)
+        trimLogs()
+    }
+
+    func diagnostic(_ value: String) {
+        diagnosticLogs.append(timestamped(value))
+        if diagnosticLogs.count > 2_000 {
+            diagnosticLogs.removeFirst(diagnosticLogs.count - 2_000)
+        }
+    }
+
+    func clearDiagnosticLogs() {
+        diagnosticLogs.removeAll()
+        diagnostic("[UI] Log completo limpo pelo usuário")
+    }
+
+    var fullLogText: String {
+        diagnosticLogs.joined(separator: "\n")
+    }
+
+    func saveCookie(_ cookie: String) {
+        session.save(cookie: cookie)
+        state = .idle
+        connected = false
+        log("Sessão autenticada e salva no Keychain; realtime será conectado ao iniciar uma atividade")
+    }
 
     private func run(_ mode: ActivityMode) async {
-        activity = mode; state = .connecting; stats = ActivityStats(startedAt: .now); log("Iniciando \(mode.title)")
+        activity = mode
+        state = .connecting
+        stats = ActivityStats(startedAt: .now)
+        connected = false
+        log("Iniciando \(mode.title)")
+        diagnostic("[UI] activity=\(mode.rawValue) state=connecting goal=\(goal)")
+
+        defer {
+            connected = false
+            Task { await socket.close() }
+        }
+
         do {
-            try await socket.connect(session: session, shard: "s4")
-            connected = true; state = .syncing; log("WebSocket pronto; aguardando snapshots autoritativos")
+            let stream = try await socket.connect(session: session, shard: "s4")
+            await importSocketTrace()
+
+            connected = true
+            state = .syncing
+            log("Realtime conectado; aguardando snapshots autoritativos")
+            diagnostic("[STATE] connected=true state=syncing")
+
             state = .searching
-            let stream = await socket.stream()
+            diagnostic("[STATE] state=searching")
+
             for await data in stream {
                 if Task.isCancelled { break }
+                await importSocketTrace()
                 handle(data: data, mode: mode)
                 if stats.successes >= goal { break }
             }
-            if !Task.isCancelled { state = .completed; log("Meta concluída") }
-        } catch is CancellationError { state = .cancelled }
-        catch { state = .failed; log("Falha de sessão: \(error.localizedDescription)") }
+
+            await importSocketTrace()
+
+            if Task.isCancelled {
+                state = .cancelled
+                diagnostic("[STATE] atividade cancelada")
+            } else if stats.successes >= goal {
+                state = .completed
+                log("Meta concluída")
+            } else {
+                state = .failed
+                stats.failures += 1
+                log("Conexão realtime encerrou antes da meta")
+            }
+        } catch is CancellationError {
+            await importSocketTrace()
+            state = .cancelled
+            diagnostic("[STATE] CancellationError")
+        } catch {
+            await importSocketTrace()
+            connected = false
+            state = .failed
+            stats.failures += 1
+            diagnostic("[ERROR] \(String(reflecting: error))")
+            log("Falha de sessão: \(error.localizedDescription)")
+        }
+    }
+
+    private func importSocketTrace() async {
+        let lines = await socket.drainTrace()
+        for line in lines {
+            diagnostic(line)
+        }
     }
 
     private func handle(data: Data, mode: ActivityMode) {
-        guard let event = RealtimeProtocol.decode(data) else { return }
+        guard let event = RealtimeProtocol.decode(data) else {
+            diagnostic("[PROTO] Payload recebido, mas RealtimeProtocol.decode não reconheceu JSON/tipo")
+            return
+        }
+
         switch event {
-        case .queueReady: log("queue_ready confirmado")
-        case .regionAck(let region): player.region = region; log("region_ack: \(region)")
+        case .queueReady:
+            log("queue_ready confirmado")
+        case .regionAck(let region):
+            player.region = region
+            log("region_ack: \(region)")
         case .snapshot(let packet):
             if let region = packet["region"] as? String { world.serverRegion = region }
-            stats.lastEvent = "snap"; log("snapshot recebido")
-        case .resourceEvent: stats.lastEvent = "res_evt"; state = .waitingResult
-        case .actionProof: stats.lastEvent = "action_proof"; state = .waitingProof
-        case .harvestHit: stats.lastEvent = "harv_hit"; stats.successes += 1; state = .cooldown
+            stats.lastEvent = "snap"
+            log("snapshot recebido")
+        case .resourceEvent:
+            stats.lastEvent = "res_evt"
+            state = .waitingResult
+            diagnostic("[STATE] event=res_evt state=waitingResult")
+        case .actionProof:
+            stats.lastEvent = "action_proof"
+            state = .waitingProof
+            diagnostic("[STATE] event=action_proof state=waitingProof")
+        case .harvestHit:
+            stats.lastEvent = "harv_hit"
+            stats.successes += 1
+            state = .cooldown
+            log("harv_hit confirmado • sucessos=\(stats.successes)")
         case .mobEvent(let packet):
             stats.lastEvent = packet["t"] as? String ?? "mob_event"
             if packet["a"] as? String == "hit" { stats.confirmedHits += 1 }
             state = .waitingResult
-        case .queuePosition: break
-        case .unknown(let name): log("evento não utilizado: \(name)")
+            diagnostic("[STATE] mob_event state=waitingResult confirmedHits=\(stats.confirmedHits)")
+        case .queuePosition(let position):
+            diagnostic("[PROTO] queue_pos=\(position)")
+        case .unknown(let name):
+            diagnostic("[PROTO] evento não utilizado: \(name)")
         }
         _ = mode
+    }
+
+    private func timestamped(_ value: String) -> String {
+        "\(Date.now.formatted(date: .omitted, time: .standard))  \(value)"
+    }
+
+    private func trimLogs() {
+        if logs.count > 300 {
+            logs.removeFirst(logs.count - 300)
+        }
+        if diagnosticLogs.count > 2_000 {
+            diagnosticLogs.removeFirst(diagnosticLogs.count - 2_000)
+        }
     }
 }
 
