@@ -1,5 +1,7 @@
 import Foundation
 import SwiftUI
+import UIKit
+import BackgroundTasks
 
 enum ActivityMode: String, CaseIterable, Codable, Identifiable {
     case tree, coal, stone, fishing, chicken, zombie, dragon
@@ -156,6 +158,28 @@ final class AppStore: ObservableObject {
     private var realtimeFailureMessage: String?
     private let socket = RealtimeSocket()
 
+    // MARK: - Execução em segundo plano
+    //
+    // iOS 26 introduziu BGContinuedProcessingTask exatamente para trabalhos
+    // iniciados por uma ação explícita do usuário que precisam continuar quando
+    // o app sai do primeiro plano. O Kintarabot inicia uma atividade com um toque
+    // e possui progresso mensurável (sucessos/meta), então a engine pode permanecer
+    // ativa, inclusive usando rede, enquanto o sistema mantiver a tarefa contínua.
+    //
+    // O objeto é mantido como AnyObject para que o projeto continue com deployment
+    // target iOS 17; o cast para BGContinuedProcessingTask só ocorre dentro de
+    // blocos #available(iOS 26.0, *).
+    private var continuedTaskObject: AnyObject?
+    private var continuedTaskRegistered = false
+    private var continuedTaskRequested = false
+    private var continuedTaskMode: ActivityMode?
+    private var legacyBackgroundTask: UIBackgroundTaskIdentifier = .invalid
+
+    private var continuedTaskIdentifier: String {
+        let bundleID = Bundle.main.bundleIdentifier ?? "com.joaopedro.kinttany"
+        return "\(bundleID).continuedBot"
+    }
+
     var hasSession: Bool {
         guard let cookie = session.cookie else { return false }
         return !cookie.isEmpty
@@ -169,6 +193,11 @@ final class AppStore: ObservableObject {
         if activity != nil {
             stop(silent: true)
         }
+
+        // A solicitação precisa nascer do toque do usuário, antes de o app ser
+        // colocado em segundo plano. No iOS 26 isso cria uma Continued Processing
+        // Task real; em versões anteriores usamos somente a janela curta do UIKit.
+        prepareContinuedProcessing(for: mode)
 
         task = Task { [weak self] in
             guard let self else { return }
@@ -194,6 +223,8 @@ final class AppStore: ObservableObject {
         activity = nil
         state = .cancelled
         statusMessage = "Atividade interrompida"
+        finishContinuedProcessing(success: false, reason: "interrompida")
+        endLegacyBackgroundTask()
         if !silent {
             log("STOP confirmado — nenhuma nova ação será enviada")
         }
@@ -228,6 +259,7 @@ final class AppStore: ObservableObject {
             value.hasPrefix("[WS]") ||
             value.hasPrefix("[QUEUE]") ||
             value.hasPrefix("[SERVER]") ||
+            value.hasPrefix("[BG]") ||
             value.hasPrefix("[WARN]") ||
             value.hasPrefix("[ERROR]") ||
             value.hasPrefix("[STATE]") {
@@ -266,6 +298,7 @@ final class AppStore: ObservableObject {
             state = .failed
             statusMessage = "Faça login antes de iniciar"
             log("Sessão ausente. Abra Sessão e faça login.")
+            finishContinuedProcessing(success: false, reason: "sessão ausente")
             return
         }
 
@@ -283,6 +316,7 @@ final class AppStore: ObservableObject {
         statusMessage = "Conectando ao Kintara"
         log("Iniciando \(mode.localizedTitle)")
         diagnostic("[UI] activity=\(mode.rawValue) state=connecting goal=\(runGoal)")
+        updateContinuedProcessingProgress()
 
         // O socket mantém um pequeno buffer interno. Antes, esse buffer só era
         // importado quando connect() terminava, então todos os eventos de conexão
@@ -372,6 +406,7 @@ final class AppStore: ObservableObject {
                 currentTarget = nil
                 activity = nil
                 log("✅ Meta concluída: \(result.successes)/\(runGoal) • atividade encerrada automaticamente")
+                finishContinuedProcessing(success: true, reason: "meta concluída")
             } else {
                 state = .failed
                 statusMessage = "Engine encerrou antes da meta"
@@ -379,6 +414,7 @@ final class AppStore: ObservableObject {
                 currentTarget = nil
                 activity = nil
                 log("Atividade encerrou antes da meta • bot interrompido automaticamente")
+                finishContinuedProcessing(success: false, reason: "engine encerrou antes da meta")
             }
         } catch is CancellationError {
             await importSocketTrace()
@@ -389,10 +425,12 @@ final class AppStore: ObservableObject {
                 state = .failed
                 statusMessage = reason
                 diagnostic("[STATE] engine cancelada após perda da conexão realtime")
+                finishContinuedProcessing(success: false, reason: "conexão realtime perdida")
             } else {
                 state = .cancelled
                 statusMessage = "Atividade cancelada"
                 diagnostic("[STATE] CancellationError")
+                finishContinuedProcessing(success: false, reason: "atividade cancelada")
             }
         } catch {
             await importSocketTrace()
@@ -404,6 +442,7 @@ final class AppStore: ObservableObject {
             stats.failures += 1
             diagnostic("[ERROR] \(error.localizedDescription)")
             log("Falha: \(error.localizedDescription) • bot interrompido automaticamente")
+            finishContinuedProcessing(success: false, reason: "falha da atividade")
         }
     }
 
@@ -428,6 +467,7 @@ final class AppStore: ObservableObject {
         stats.failures += 1
         diagnostic("[ERROR] \(reason)")
         log("Falha de conexão: \(reason) • bot interrompido automaticamente")
+        finishContinuedProcessing(success: false, reason: "conexão realtime perdida")
 
         // Cancela imediatamente a engine; nenhuma nova ação deve sobreviver
         // à perda da Presence. O catch de CancellationError preserva .failed.
@@ -441,6 +481,7 @@ final class AppStore: ObservableObject {
             state = newState
             statusMessage = message
             stats.lastEvent = newState.rawValue
+            updateContinuedProcessingProgress()
 
         case .log(let message):
             log(message)
@@ -460,11 +501,13 @@ final class AppStore: ObservableObject {
             stats.successes += 1
             stats.lastEvent = detail ?? "sucesso"
             if let detail { log("✅ \(detail) • \(stats.successes)/\(goal)") }
+            updateContinuedProcessingProgress()
 
         case .failure(let reason):
             stats.failures += 1
             stats.lastEvent = reason
             log("⚠️ Falha: \(reason)")
+            updateContinuedProcessingProgress()
 
         case .fatal(let reason):
             guard activity != nil else { return }
@@ -478,6 +521,7 @@ final class AppStore: ObservableObject {
             stats.lastEvent = "erro fatal"
             diagnostic("[ERROR] \(reason)")
             log("Falha de conexão: \(reason) • bot interrompido automaticamente")
+            finishContinuedProcessing(success: false, reason: "erro fatal")
             task?.cancel()
             Task { await socket.close() }
 
@@ -505,6 +549,230 @@ final class AppStore: ObservableObject {
             mobCount = mobs
             world.serverRegion = serverRegion
         }
+    }
+
+
+    // MARK: - Background runtime
+
+    /// Recebe as transições do SwiftUI. No iOS 26, a tarefa contínua é a fonte
+    /// principal de runtime em segundo plano. `beginBackgroundTask` é apenas uma
+    /// ponte/fallback curta caso o scheduler contínuo ainda não tenha entregue o
+    /// handler ou em sistemas anteriores.
+    func handleScenePhase(_ phase: ScenePhase) {
+        switch phase {
+        case .background:
+            guard activity != nil else { return }
+            if continuedTaskObject != nil {
+                diagnostic("[BG] App em segundo plano • Continued Processing ativa • realtime preservado")
+            } else if continuedTaskRequested {
+                diagnostic("[BG] App em segundo plano • aguardando Continued Processing • ativando ponte curta")
+                beginLegacyBackgroundTaskIfNeeded()
+            } else {
+                diagnostic("[BG] App em segundo plano • Continued Processing indisponível • ativando janela curta")
+                beginLegacyBackgroundTaskIfNeeded()
+            }
+
+        case .active:
+            if activity != nil {
+                diagnostic("[BG] App em primeiro plano • engine continua na mesma sessão")
+            }
+            endLegacyBackgroundTask()
+
+        case .inactive:
+            break
+
+        @unknown default:
+            break
+        }
+    }
+
+    private func prepareContinuedProcessing(for mode: ActivityMode) {
+        continuedTaskMode = mode
+        continuedTaskRequested = false
+
+        guard #available(iOS 26.0, *) else {
+            diagnostic("[BG] iOS anterior ao 26 • usando somente extensão curta de background")
+            return
+        }
+
+        let identifier = continuedTaskIdentifier
+        if !continuedTaskRegistered {
+            let registered = BGTaskScheduler.shared.register(
+                forTaskWithIdentifier: identifier,
+                using: nil
+            ) { [weak self] task in
+                guard let continued = task as? BGContinuedProcessingTask else {
+                    task.setTaskCompleted(success: false)
+                    return
+                }
+
+                Task { @MainActor [weak self] in
+                    guard let self else {
+                        continued.setTaskCompleted(success: false)
+                        return
+                    }
+                    self.attachContinuedProcessingTask(continued)
+                }
+            }
+
+            continuedTaskRegistered = registered
+            if !registered {
+                diagnostic("[WARN] BGContinuedProcessingTask não pôde ser registrada • fallback curto será usado")
+                return
+            }
+        }
+
+        let requestedGoal = min(100_000, max(1, goal))
+        let request = BGContinuedProcessingTaskRequest(
+            identifier: identifier,
+            title: "Kintarabot • \(mode.localizedTitle)",
+            subtitle: "Meta \(requestedGoal) • preparando"
+        )
+
+        // O bot só é útil se iniciar agora, em resposta direta ao toque. Se o
+        // sistema não puder fornecer a tarefa contínua imediatamente, preferimos
+        // saber disso e cair para a extensão curta em vez de deixar um job antigo
+        // enfileirado para começar depois.
+        request.strategy = .fail
+
+        do {
+            // Marque antes de submit para não perder um launch handler que seja
+            // entregue imediatamente pelo scheduler.
+            continuedTaskRequested = true
+            try BGTaskScheduler.shared.submit(request)
+            diagnostic("[BG] Continued Processing solicitada • \(mode.localizedTitle) • meta \(requestedGoal)")
+        } catch {
+            continuedTaskRequested = false
+            diagnostic("[WARN] Continued Processing não iniciou: \(error.localizedDescription) • fallback curto disponível")
+        }
+    }
+
+    @available(iOS 26.0, *)
+    private func attachContinuedProcessingTask(_ backgroundTask: BGContinuedProcessingTask) {
+        guard continuedTaskRequested else {
+            backgroundTask.setTaskCompleted(success: false)
+            return
+        }
+
+        continuedTaskObject = backgroundTask
+        continuedTaskRequested = false
+
+        backgroundTask.expirationHandler = { [weak self, weak backgroundTask] in
+            guard let backgroundTask else { return }
+            Task { @MainActor [weak self] in
+                self?.handleContinuedProcessingExpiration(backgroundTask)
+            }
+        }
+
+        updateContinuedProcessingProgress()
+        diagnostic("[BG] Continued Processing ATIVA • pode trocar de aplicativo sem pausar o bot")
+        endLegacyBackgroundTask()
+    }
+
+    private func updateContinuedProcessingProgress() {
+        guard #available(iOS 26.0, *),
+              let backgroundTask = continuedTaskObject as? BGContinuedProcessingTask
+        else { return }
+
+        let total = Int64(max(1, goal))
+        let completed = Int64(min(max(0, stats.successes), max(1, goal)))
+        backgroundTask.progress.totalUnitCount = total
+        backgroundTask.progress.completedUnitCount = completed
+
+        let modeName = (activity ?? continuedTaskMode)?.localizedTitle ?? "Atividade"
+        let shortStatus = statusMessage.count > 42 ? String(statusMessage.prefix(42)) + "…" : statusMessage
+        backgroundTask.updateTitle(
+            "Kintarabot • \(modeName)",
+            subtitle: "\(completed)/\(total) • \(shortStatus)"
+        )
+    }
+
+    private func finishContinuedProcessing(success: Bool, reason: String) {
+        let hadPendingRequest = continuedTaskRequested
+        continuedTaskRequested = false
+
+        if #available(iOS 26.0, *) {
+            if let backgroundTask = continuedTaskObject as? BGContinuedProcessingTask {
+                let total = Int64(max(1, goal))
+                backgroundTask.progress.totalUnitCount = total
+                if success {
+                    backgroundTask.progress.completedUnitCount = total
+                } else {
+                    backgroundTask.progress.completedUnitCount = Int64(min(max(0, stats.successes), max(1, goal)))
+                }
+                backgroundTask.expirationHandler = nil
+                backgroundTask.updateTitle(
+                    "Kintarabot • \((activity ?? continuedTaskMode)?.localizedTitle ?? "Atividade")",
+                    subtitle: success ? "Meta concluída" : "Encerrada • \(reason)"
+                )
+                backgroundTask.setTaskCompleted(success: success)
+                diagnostic("[BG] Continued Processing encerrada • sucesso=\(success ? "sim" : "não") • \(reason)")
+            } else if hadPendingRequest {
+                BGTaskScheduler.shared.cancel(taskRequestWithIdentifier: continuedTaskIdentifier)
+                diagnostic("[BG] Solicitação Continued Processing pendente cancelada • \(reason)")
+            }
+        }
+
+        continuedTaskObject = nil
+        continuedTaskMode = nil
+        endLegacyBackgroundTask()
+    }
+
+    @available(iOS 26.0, *)
+    private func handleContinuedProcessingExpiration(_ backgroundTask: BGContinuedProcessingTask) {
+        guard continuedTaskObject === backgroundTask else {
+            backgroundTask.setTaskCompleted(success: false)
+            return
+        }
+
+        // Pode acontecer por pressão de recursos ou porque o usuário cancelou a
+        // Live Activity do sistema. Erro/expiração deve parar o bot, conforme a
+        // regra já adotada no v2.0.
+        continuedTaskObject = nil
+        continuedTaskRequested = false
+        continuedTaskMode = nil
+        backgroundTask.expirationHandler = nil
+        backgroundTask.setTaskCompleted(success: false)
+
+        task?.cancel()
+        receiverTask?.cancel()
+        traceTask?.cancel()
+        task = nil
+        receiverTask = nil
+        traceTask = nil
+        realtimeFailureMessage = "Execução em segundo plano encerrada pelo iOS"
+        connected = false
+        currentTarget = nil
+        activity = nil
+        state = .failed
+        statusMessage = "Segundo plano encerrado pelo iOS"
+        stats.failures += 1
+        stats.lastEvent = "background expirado"
+        diagnostic("[ERROR] BGContinuedProcessingTask expirou/cancelou • bot interrompido automaticamente")
+        log("Falha: execução em segundo plano encerrada pelo iOS • bot interrompido automaticamente")
+        Task { await socket.close() }
+        endLegacyBackgroundTask()
+    }
+
+    private func beginLegacyBackgroundTaskIfNeeded() {
+        guard activity != nil, legacyBackgroundTask == .invalid else { return }
+
+        let app = UIApplication.shared
+        legacyBackgroundTask = app.beginBackgroundTask(withName: "KintarabotRealtime") { [weak self] in
+            guard let self else { return }
+            self.diagnostic("[WARN] Janela curta de background esgotada • o iOS poderá suspender o processo")
+            self.endLegacyBackgroundTask()
+        }
+
+        if legacyBackgroundTask != .invalid {
+            diagnostic("[BG] Extensão curta UIKit ativa • ponte para preservar realtime")
+        }
+    }
+
+    private func endLegacyBackgroundTask() {
+        guard legacyBackgroundTask != .invalid else { return }
+        UIApplication.shared.endBackgroundTask(legacyBackgroundTask)
+        legacyBackgroundTask = .invalid
     }
 
     private func importSocketTrace() async {
