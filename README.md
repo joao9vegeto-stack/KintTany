@@ -5,7 +5,7 @@
 **KintTany v2.0 (build 20)**.
 
 
-Projeto iOS nativo Swift/SwiftUI baseado na baseline funcional Kintarabot v5.2.
+Projeto iOS nativo Swift/SwiftUI.
 
 ## Fluxo oficial sem Mac
 
