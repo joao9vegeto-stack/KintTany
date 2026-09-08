@@ -1,3 +1,4 @@
+import Foundation
 import SwiftUI
 import UIKit
 
@@ -231,7 +232,7 @@ struct RootView: View {
             }
             Spacer()
             Button {
-                app.goal = max(1, app.goal - 10)
+                app.goal = max(1, app.goal - 1)
             } label: {
                 Image(systemName: "minus")
                     .frame(width: 38, height: 38)
@@ -240,7 +241,7 @@ struct RootView: View {
             .disabled(app.activity != nil)
 
             Button {
-                app.goal = min(100_000, app.goal + 10)
+                app.goal = min(100_000, app.goal + 1)
             } label: {
                 Image(systemName: "plus")
                     .frame(width: 38, height: 38)
@@ -444,6 +445,8 @@ private struct FullLogView: View {
     @EnvironmentObject var app: AppStore
     @Environment(\.dismiss) private var dismiss
     @State private var copied = false
+    @State private var exportedLogFile: ExportedLogFile?
+    @State private var exportError: String?
 
     var body: some View {
         NavigationStack {
@@ -493,6 +496,14 @@ private struct FullLogView: View {
                     .disabled(app.diagnosticLogs.isEmpty)
                     .accessibilityLabel("Copiar log completo")
 
+                    Button {
+                        exportLogAsTXT()
+                    } label: {
+                        Image(systemName: "square.and.arrow.up")
+                    }
+                    .disabled(app.diagnosticLogs.isEmpty)
+                    .accessibilityLabel("Exportar log em TXT")
+
                     Button(role: .destructive) {
                         app.clearDiagnosticLogs()
                     } label: {
@@ -503,6 +514,44 @@ private struct FullLogView: View {
                 }
             }
         }
+        .sheet(item: $exportedLogFile, onDismiss: cleanupExportedLogFile) { file in
+            ShareSheet(activityItems: [file.url])
+        }
+        .alert(
+            "Não foi possível exportar o log",
+            isPresented: Binding(
+                get: { exportError != nil },
+                set: { if !$0 { exportError = nil } }
+            )
+        ) {
+            Button("OK", role: .cancel) { exportError = nil }
+        } message: {
+            Text(exportError ?? "Erro desconhecido")
+        }
+    }
+
+    private func exportLogAsTXT() {
+        guard !app.diagnosticLogs.isEmpty else { return }
+
+        let formatter = DateFormatter()
+        formatter.locale = Locale(identifier: "en_US_POSIX")
+        formatter.dateFormat = "yyyy-MM-dd_HH-mm-ss"
+
+        let fileName = "KintTany-log-\(formatter.string(from: Date())).txt"
+        let url = FileManager.default.temporaryDirectory.appendingPathComponent(fileName)
+
+        do {
+            try app.fullLogText.write(to: url, atomically: true, encoding: .utf8)
+            exportedLogFile = ExportedLogFile(url: url)
+        } catch {
+            exportError = error.localizedDescription
+        }
+    }
+
+    private func cleanupExportedLogFile() {
+        guard let url = exportedLogFile?.url else { return }
+        try? FileManager.default.removeItem(at: url)
+        exportedLogFile = nil
     }
 
     private func scrollToBottom(_ proxy: ScrollViewProxy) {
@@ -512,4 +561,20 @@ private struct FullLogView: View {
             proxy.scrollTo(last, anchor: .bottom)
         }
     }
+}
+
+
+private struct ExportedLogFile: Identifiable {
+    let id = UUID()
+    let url: URL
+}
+
+private struct ShareSheet: UIViewControllerRepresentable {
+    let activityItems: [Any]
+
+    func makeUIViewController(context: Context) -> UIActivityViewController {
+        UIActivityViewController(activityItems: activityItems, applicationActivities: nil)
+    }
+
+    func updateUIViewController(_ uiViewController: UIActivityViewController, context: Context) {}
 }
