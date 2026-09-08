@@ -1,4 +1,4 @@
-# Arquitetura atual — v2.0
+# Arquitetura atual — v2.1
 
 KintTany/KINTARABOT é um aplicativo iOS nativo Swift/SwiftUI que executa a engine de automação diretamente no iPhone. A fonte funcional continua sendo o Kintarabot Node v5.2; nenhuma mensagem de protocolo deve ser inventada quando o comportamento não estiver documentado no código/log real.
 
@@ -7,11 +7,32 @@ KintTany/KINTARABOT é um aplicativo iOS nativo Swift/SwiftUI que executa a engi
 `RootView` → `AppStore` → `RealtimeSocket` → `AutomationEngine` → `RealtimeProtocol` → Kintara.
 
 - `RootView`: dashboard, meta manual, botões ±1, estatísticas, telemetria, log completo e exportação TXT.
-- `AppStore`: coordenador global; garante uma atividade por vez, STOP, encerramento automático por meta, encerramento automático em falha fatal e estado apresentado na UI.
+- `AppStore`: coordenador global; garante uma atividade por vez, STOP, encerramento automático por meta, encerramento automático em falha fatal, estado apresentado na UI e ciclo de execução contínua em segundo plano no iOS 26.
 - `RealtimeSocket`: `actor` de conexão. Consulta servidores NA, classifica disponibilidade/carga/fila, faz gate-check, abre queue, mantém `q_ping`, espera `queue_ready`, abre Presence e fecha/faz failover com segurança.
 - `RealtimeProtocol`: serialização/parsing dos frames usados pela baseline observada.
 - `AutomationEngine`: movimento, região, gathering, fishing e combat.
 - `SessionManager`/`KeychainStore`: sessão persistida localmente.
+
+## Execução em segundo plano (v2.1 / iOS 26)
+
+A atividade é finita e iniciada explicitamente por toque do usuário, então a v2.1
+usa `BGContinuedProcessingTask`/`BGContinuedProcessingTaskRequest`. O identificador
+`$(PRODUCT_BUNDLE_IDENTIFIER).continuedBot` está autorizado no `Info.plist`.
+
+Fluxo:
+
+1. toque em uma atividade chama `prepareContinuedProcessing`;
+2. `BGTaskScheduler` registra dinamicamente o handler e submete a tarefa com estratégia `.fail`;
+3. a engine normal de `AppStore` continua sendo a única dona do bot — a BackgroundTask apenas garante runtime;
+4. `stats.successes/goal` alimenta `Progress` e o título/subtítulo exibidos pelo sistema;
+5. trocar para outro app mantém CPU/rede disponíveis enquanto a tarefa contínua estiver ativa;
+6. meta, STOP ou erro concluem a tarefa;
+7. expiração/cancelamento do sistema encerra a engine como falha, sem enviar novas ações;
+8. se a tarefa contínua não puder iniciar, `beginBackgroundTask` é usado apenas como ponte curta.
+
+Não usar áudio silencioso, VoIP falso, localização falsa ou outros background modes
+sem relação com a função do app. O iOS ainda pode encerrar a tarefa sob pressão de
+recursos, e fechar o app manualmente no app switcher cancela as tarefas contínuas.
 
 ## Seleção automática de servidor NA
 
@@ -62,4 +83,4 @@ A UI não espelha payloads brutos de DevTools/WebSocket. Mantém informações �
 
 ## Distribuição
 
-O projeto continua preparado para GitHub Actions e Codemagic em runner macOS, sem exigir Mac/Xcode local. O fluxo sem assinatura produz `.app`/IPA não assinado para sideload; assinatura deve usar Secrets.
+O projeto continua preparado para GitHub Actions e Codemagic em runner macOS, sem exigir Mac/Xcode local. GitHub Actions usa `macos-26` e seleciona Xcode 26.x para compilar as APIs de BackgroundTasks do iOS 26. O fluxo sem assinatura produz `.app`/IPA não assinado para sideload; assinatura deve usar Secrets.
