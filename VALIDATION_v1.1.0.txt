@@ -1,0 +1,17 @@
+KintTany iOS v1.1.0 — validação realizada neste ambiente
+
+OK  swiftc -frontend -parse em todos os arquivos Swift do app e testes
+OK  swiftc -swift-version 5 -typecheck nas camadas Foundation: RealtimeProtocol + RealtimeSocket + AutomationEngine
+OK  plutil -lint KintTany/Info.plist
+OK  plutil -lint KintTany.xcodeproj/project.pbxproj
+OK  AutomationEngine.swift referenciado no target de Sources
+OK  catálogo gathering: 38 footprints (18 Tree, 11 Coal, 9 Stone)
+OK  manifesto Wild: 305 tiles bloqueados únicos
+OK  scan local: nenhum secret do usuário detectado nos arquivos do projeto
+
+NÃO EXECUTADO NESTE AMBIENTE:
+- xcodebuild / XCTest iOS (não há macOS/Xcode aqui)
+- teste autenticado ao vivo no personagem/servidor Kintara
+
+O workflow .github/workflows/ios.yml do projeto completo permanece configurado para
+executar XCTest, build iphoneos e gerar KintTany-unsigned.ipa/KintTany.app em runner macOS.
