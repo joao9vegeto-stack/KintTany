@@ -170,12 +170,13 @@ final class AppStore: ObservableObject {
     // target iOS 17; o cast para BGContinuedProcessingTask só ocorre dentro de
     // blocos #available(iOS 26.0, *).
     private var continuedTaskObject: AnyObject?
-    private var continuedTaskRegistered = false
     private var continuedTaskRequested = false
     private var continuedTaskMode: ActivityMode?
+    private var continuedTaskIdentifier: String?
+    private var continuedTaskActivationWatchdog: Task<Void, Never>?
     private var legacyBackgroundTask: UIBackgroundTaskIdentifier = .invalid
 
-    private var continuedTaskIdentifier: String {
+    private var continuedTaskIdentifierPrefix: String {
         let bundleID = Bundle.main.bundleIdentifier ?? "com.joaopedro.kinttany"
         return "\(bundleID).continuedBot"
     }
@@ -563,18 +564,22 @@ final class AppStore: ObservableObject {
         case .background:
             guard activity != nil else { return }
             if continuedTaskObject != nil {
-                diagnostic("[BG] App em segundo plano • Continued Processing ativa • realtime preservado")
+                diagnostic("[BG] App em segundo plano • Continued Processing ATIVA • realtime preservado")
             } else if continuedTaskRequested {
-                diagnostic("[BG] App em segundo plano • aguardando Continued Processing • ativando ponte curta")
+                diagnostic("[BG] App em segundo plano • Continued Processing ainda sem confirmação • ativando ponte curta")
                 beginLegacyBackgroundTaskIfNeeded()
             } else {
-                diagnostic("[BG] App em segundo plano • Continued Processing indisponível • ativando janela curta")
+                diagnostic("[BG] App em segundo plano • Continued Processing não ativa • ativando janela curta")
                 beginLegacyBackgroundTaskIfNeeded()
             }
 
         case .active:
             if activity != nil {
-                diagnostic("[BG] App em primeiro plano • engine continua na mesma sessão")
+                if continuedTaskObject != nil {
+                    diagnostic("[BG] App em primeiro plano • Continued Processing continua ativa")
+                } else {
+                    diagnostic("[BG] App em primeiro plano • engine continua na mesma sessão")
+                }
             }
             endLegacyBackgroundTask()
 
@@ -587,39 +592,47 @@ final class AppStore: ObservableObject {
     }
 
     private func prepareContinuedProcessing(for mode: ActivityMode) {
+        continuedTaskActivationWatchdog?.cancel()
+        continuedTaskActivationWatchdog = nil
         continuedTaskMode = mode
         continuedTaskRequested = false
+        continuedTaskObject = nil
 
         guard #available(iOS 26.0, *) else {
+            continuedTaskIdentifier = nil
             diagnostic("[BG] iOS anterior ao 26 • usando somente extensão curta de background")
             return
         }
 
-        let identifier = continuedTaskIdentifier
-        if !continuedTaskRegistered {
-            let registered = BGTaskScheduler.shared.register(
-                forTaskWithIdentifier: identifier,
-                using: nil
-            ) { [weak self] task in
-                guard let continued = task as? BGContinuedProcessingTask else {
-                    task.setTaskCompleted(success: false)
-                    return
-                }
+        // Continued Processing aceita identificadores dinâmicos quando o Info.plist
+        // declara o prefixo com wildcard. Um identificador novo por sessão evita
+        // reaproveitar requests/handlers antigos e torna cada toque do usuário uma
+        // solicitação independente.
+        let identifier = "\(continuedTaskIdentifierPrefix).\(UUID().uuidString.lowercased())"
+        continuedTaskIdentifier = identifier
 
-                Task { @MainActor [weak self] in
-                    guard let self else {
-                        continued.setTaskCompleted(success: false)
-                        return
-                    }
-                    self.attachContinuedProcessingTask(continued)
-                }
-            }
-
-            continuedTaskRegistered = registered
-            if !registered {
-                diagnostic("[WARN] BGContinuedProcessingTask não pôde ser registrada • fallback curto será usado")
+        let registered = BGTaskScheduler.shared.register(
+            forTaskWithIdentifier: identifier,
+            using: nil
+        ) { [weak self] task in
+            guard let continued = task as? BGContinuedProcessingTask else {
+                task.setTaskCompleted(success: false)
                 return
             }
+
+            Task { @MainActor [weak self] in
+                guard let self else {
+                    continued.setTaskCompleted(success: false)
+                    return
+                }
+                self.attachContinuedProcessingTask(continued, identifier: identifier)
+            }
+        }
+
+        guard registered else {
+            continuedTaskIdentifier = nil
+            diagnostic("[WARN] Continued Processing não pôde ser registrada • fallback curto será usado")
+            return
         }
 
         let requestedGoal = min(100_000, max(1, goal))
@@ -629,31 +642,44 @@ final class AppStore: ObservableObject {
             subtitle: "Meta \(requestedGoal) • preparando"
         )
 
-        // O bot só é útil se iniciar agora, em resposta direta ao toque. Se o
-        // sistema não puder fornecer a tarefa contínua imediatamente, preferimos
-        // saber disso e cair para a extensão curta em vez de deixar um job antigo
-        // enfileirado para começar depois.
+        // A atividade nasce de uma ação explícita do usuário e só é útil se o
+        // sistema puder protegê-la imediatamente. Não deixamos uma automação velha
+        // enfileirada para iniciar depois.
         request.strategy = .fail
 
+        diagnostic("[BG] Solicitando Continued Processing • \(mode.localizedTitle) • meta \(requestedGoal)")
+
         do {
-            // Marque antes de submit para não perder um launch handler que seja
-            // entregue imediatamente pelo scheduler.
+            // Marcar antes do submit evita perder um launch handler entregue de
+            // forma imediata. submit() no SDK 26 pode retornar sem erro e ainda
+            // assim o launch handler não chegar; por isso a ativação só é tratada
+            // como real quando attachContinuedProcessingTask() é chamado.
             continuedTaskRequested = true
             try BGTaskScheduler.shared.submit(request)
-            diagnostic("[BG] Continued Processing solicitada • \(mode.localizedTitle) • meta \(requestedGoal)")
+            diagnostic("[BG] Solicitação enviada ao scheduler • aguardando início confirmado")
+            armContinuedProcessingActivationWatchdog(identifier: identifier)
         } catch {
             continuedTaskRequested = false
-            diagnostic("[WARN] Continued Processing não iniciou: \(error.localizedDescription) • fallback curto disponível")
+            continuedTaskIdentifier = nil
+            diagnostic("[WARN] Continued Processing recusada: \(error.localizedDescription) • fallback curto disponível")
         }
     }
 
     @available(iOS 26.0, *)
-    private func attachContinuedProcessingTask(_ backgroundTask: BGContinuedProcessingTask) {
-        guard continuedTaskRequested else {
+    private func attachContinuedProcessingTask(
+        _ backgroundTask: BGContinuedProcessingTask,
+        identifier: String
+    ) {
+        guard continuedTaskIdentifier == identifier,
+              continuedTaskRequested,
+              continuedTaskObject == nil
+        else {
             backgroundTask.setTaskCompleted(success: false)
             return
         }
 
+        continuedTaskActivationWatchdog?.cancel()
+        continuedTaskActivationWatchdog = nil
         continuedTaskObject = backgroundTask
         continuedTaskRequested = false
 
@@ -665,8 +691,37 @@ final class AppStore: ObservableObject {
         }
 
         updateContinuedProcessingProgress()
-        diagnostic("[BG] Continued Processing ATIVA • pode trocar de aplicativo sem pausar o bot")
+        let current = min(max(0, stats.successes), max(1, goal))
+        diagnostic("[BG] ✅ Continued Processing INICIADA • \((activity ?? continuedTaskMode)?.localizedTitle ?? "Atividade") • \(current)/\(max(1, goal))")
         endLegacyBackgroundTask()
+    }
+
+    private func armContinuedProcessingActivationWatchdog(identifier: String) {
+        continuedTaskActivationWatchdog?.cancel()
+        continuedTaskActivationWatchdog = Task { [weak self] in
+            do {
+                try await Task.sleep(for: .seconds(3))
+            } catch {
+                return
+            }
+
+            guard !Task.isCancelled, let self else { return }
+            self.handleContinuedProcessingActivationTimeout(identifier: identifier)
+        }
+    }
+
+    private func handleContinuedProcessingActivationTimeout(identifier: String) {
+        guard #available(iOS 26.0, *),
+              continuedTaskIdentifier == identifier,
+              continuedTaskRequested,
+              continuedTaskObject == nil
+        else { return }
+
+        continuedTaskRequested = false
+        continuedTaskActivationWatchdog = nil
+        BGTaskScheduler.shared.cancel(taskRequestWithIdentifier: identifier)
+        continuedTaskIdentifier = nil
+        diagnostic("[WARN] Continued Processing não foi confirmada pelo iOS em 3s • fallback curto será usado se o app sair da tela")
     }
 
     private func updateContinuedProcessingProgress() {
@@ -688,7 +743,11 @@ final class AppStore: ObservableObject {
     }
 
     private func finishContinuedProcessing(success: Bool, reason: String) {
+        let pendingIdentifier = continuedTaskIdentifier
         let hadPendingRequest = continuedTaskRequested
+
+        continuedTaskActivationWatchdog?.cancel()
+        continuedTaskActivationWatchdog = nil
         continuedTaskRequested = false
 
         if #available(iOS 26.0, *) {
@@ -707,14 +766,15 @@ final class AppStore: ObservableObject {
                 )
                 backgroundTask.setTaskCompleted(success: success)
                 diagnostic("[BG] Continued Processing encerrada • sucesso=\(success ? "sim" : "não") • \(reason)")
-            } else if hadPendingRequest {
-                BGTaskScheduler.shared.cancel(taskRequestWithIdentifier: continuedTaskIdentifier)
+            } else if hadPendingRequest, let pendingIdentifier {
+                BGTaskScheduler.shared.cancel(taskRequestWithIdentifier: pendingIdentifier)
                 diagnostic("[BG] Solicitação Continued Processing pendente cancelada • \(reason)")
             }
         }
 
         continuedTaskObject = nil
         continuedTaskMode = nil
+        continuedTaskIdentifier = nil
         endLegacyBackgroundTask()
     }
 
@@ -725,12 +785,15 @@ final class AppStore: ObservableObject {
             return
         }
 
-        // Pode acontecer por pressão de recursos ou porque o usuário cancelou a
-        // Live Activity do sistema. Erro/expiração deve parar o bot, conforme a
-        // regra já adotada no v2.0.
+        // Pode acontecer por pressão de recursos ou cancelamento pelo sistema.
+        // Expiração é tratada como erro fatal da sessão: nenhuma nova ação fica
+        // viva depois que a proteção de background é retirada.
+        continuedTaskActivationWatchdog?.cancel()
+        continuedTaskActivationWatchdog = nil
         continuedTaskObject = nil
         continuedTaskRequested = false
         continuedTaskMode = nil
+        continuedTaskIdentifier = nil
         backgroundTask.expirationHandler = nil
         backgroundTask.setTaskCompleted(success: false)
 
@@ -759,14 +822,46 @@ final class AppStore: ObservableObject {
 
         let app = UIApplication.shared
         legacyBackgroundTask = app.beginBackgroundTask(withName: "KintarabotRealtime") { [weak self] in
-            guard let self else { return }
-            self.diagnostic("[WARN] Janela curta de background esgotada • o iOS poderá suspender o processo")
-            self.endLegacyBackgroundTask()
+            Task { @MainActor [weak self] in
+                self?.handleLegacyBackgroundExpiration()
+            }
         }
 
         if legacyBackgroundTask != .invalid {
-            diagnostic("[BG] Extensão curta UIKit ativa • ponte para preservar realtime")
+            diagnostic("[BG] Extensão curta UIKit ativa • ponte temporária para preservar realtime")
         }
+    }
+
+    private func handleLegacyBackgroundExpiration() {
+        // Se a Continued Processing conseguiu iniciar enquanto a ponte estava
+        // aberta, basta encerrar a ponte. Caso contrário, não deixamos uma engine
+        // aparentemente ativa com um WebSocket que o iOS está prestes a suspender.
+        if continuedTaskObject != nil {
+            endLegacyBackgroundTask()
+            return
+        }
+
+        diagnostic("[WARN] Janela curta de background esgotada sem Continued Processing ativa")
+        endLegacyBackgroundTask()
+
+        guard activity != nil else { return }
+
+        task?.cancel()
+        receiverTask?.cancel()
+        traceTask?.cancel()
+        task = nil
+        receiverTask = nil
+        traceTask = nil
+        realtimeFailureMessage = "Execução contínua em segundo plano não foi concedida pelo iOS"
+        connected = false
+        currentTarget = nil
+        activity = nil
+        state = .failed
+        statusMessage = "Segundo plano indisponível"
+        stats.failures += 1
+        stats.lastEvent = "background indisponível"
+        log("Falha: Continued Processing não ficou ativa e a janela curta terminou • bot interrompido automaticamente")
+        Task { await socket.close() }
     }
 
     private func endLegacyBackgroundTask() {
