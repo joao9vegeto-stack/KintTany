@@ -32,6 +32,7 @@ actor RealtimeSocket {
     private var continuation: AsyncStream<Data>.Continuation?
     private var traceBuffer: [String] = []
     private var connectionID = UUID()
+    private var lastDisconnectReason: String?
 
     /// v1.1.4 — seleciona automaticamente o melhor servidor NA antes de abrir
     /// queue/presence. A fonte é o mesmo endpoint já usado pelo Kintarabot Node
@@ -154,6 +155,7 @@ actor RealtimeSocket {
         connectionID = UUID()
         let currentConnectionID = connectionID
         closed = false
+        lastDisconnectReason = nil
 
         var streamContinuation: AsyncStream<Data>.Continuation?
         let inbound = AsyncStream<Data> { continuation in
@@ -261,9 +263,14 @@ actor RealtimeSocket {
         do {
             try await task.send(.data(data))
         } catch {
+            lastDisconnectReason = error.localizedDescription
             trace("[ERROR] Presence send falhou: \(error.localizedDescription)")
             throw error
         }
+    }
+
+    func disconnectReason() -> String? {
+        lastDisconnectReason
     }
 
     func close() {
@@ -578,6 +585,7 @@ actor RealtimeSocket {
                 continuation?.yield(data)
             } catch {
                 if !closed {
+                    lastDisconnectReason = error.localizedDescription
                     trace("[ERROR] Presence receive loop encerrou: \(error.localizedDescription)")
                 }
                 break
