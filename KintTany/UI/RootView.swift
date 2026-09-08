@@ -73,14 +73,27 @@ struct RootView: View {
         }
     }
 
+    private var appVersion: String {
+        Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? "2.0"
+    }
+
     private var header: some View {
         VStack(alignment: .leading, spacing: 14) {
             HStack(alignment: .center) {
                 VStack(alignment: .leading, spacing: 3) {
-                    Text("KINTARABOT")
-                        .font(.system(size: 12, weight: .black, design: .rounded))
-                        .tracking(2.6)
-                        .foregroundStyle(.cyan)
+                    HStack(spacing: 8) {
+                        Text("KINTARABOT")
+                            .font(.system(size: 12, weight: .black, design: .rounded))
+                            .tracking(2.6)
+                            .foregroundStyle(.cyan)
+                        Text("v\(appVersion)")
+                            .font(.system(size: 10, weight: .black, design: .rounded))
+                            .foregroundStyle(.cyan.opacity(0.78))
+                            .padding(.horizontal, 7)
+                            .padding(.vertical, 3)
+                            .background(.cyan.opacity(0.10), in: Capsule())
+                            .overlay(Capsule().stroke(.cyan.opacity(0.18), lineWidth: 1))
+                    }
                     Text("Painel de controle")
                         .font(.system(size: 32, weight: .black, design: .rounded))
                 }
