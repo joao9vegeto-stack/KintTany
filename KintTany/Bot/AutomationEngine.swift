@@ -75,6 +75,9 @@ final class AutomationEngine {
     private var lastWildHit: WildHitAck?
     private var wildSwordSeq = 0
     private var wildContactSeq = 0
+    private var wildGrantSerial = 0
+    private var recentWildGrants: [WildGrant] = []
+    private var lastWildAvailabilitySignature = ""
 
     private var successes = 0
 
@@ -164,6 +167,14 @@ final class AutomationEngine {
                 let killedType: String? = RealtimeProtocol.int(packet["dr"]) == 1 ? "dragon" : (RealtimeProtocol.int(packet["zm"]) == 1 ? "zombie" : nil)
                 lastWildHit = WildHitAck(serial: wildHitSerial, index: index, killedType: killedType)
                 reporter(.diagnostic("[COMBAT] wm_ev hit confirmado i=\(index)\(killedType.map { " kill=\($0)" } ?? "")"))
+            }
+
+        case "inv_grant":
+            if let grant = wildGrantHint(packet) {
+                wildGrantSerial += 1
+                recentWildGrants.append(WildGrant(serial: wildGrantSerial, type: grant.type, quantity: grant.quantity, at: nowMS))
+                if recentWildGrants.count > 40 { recentWildGrants.removeFirst(recentWildGrants.count - 40) }
+                reporter(.diagnostic("[LOOT] inv_grant #\(wildGrantSerial) • \(grant.quantity)x \(grant.type)"))
             }
 
         case "pvit", "wild_mb_ack":
@@ -1150,29 +1161,7 @@ final class AutomationEngine {
     private func runWild(mode: ActivityMode, goal: Int) async throws {
         let targetType = mode == .dragon ? "dragon" : "zombie"
 
-        // Paridade com o combat-bot v5.2.1: a Wild Sword já precisa estar
-        // equipada no pacote que faz World → Wilderness.
-        try await equip("wild_sword")
-        reporter(.log("⚔️ Wild Sword equipada"))
-
-        if serverRegion?.lowercased() != "world" {
-            try await setRegion("world", at: Position(x: 0.5, z: -29.5))
-            _ = try await waitForRegion("world", timeoutMS: 5_000)
-        }
-
-        reporter(.state(.moving, "Indo ao portal da Wilderness"))
-        try await walk(to: Position(x: 0.5, z: -30.5), maxSeconds: 25)
-        try await sleep(200)
-
-        // HAR/v5.2.1 comprovado: último ponto World 0.5,-30.5; primeiro
-        // pacote Wild 0.5,23.5 com wblk completo. O Node aguarda 14 s por
-        // region_ack OU snapshot autoritativo em wild.
-        reporter(.state(.syncing, "Entrando na Wilderness"))
-        try await setRegion("wild", at: Position(x: 0.5, z: 23.5), extras: ["wblk": Self.wildBlockedTiles])
-        guard try await waitForRegion("wild", timeoutMS: 14_000) else {
-            throw EngineError.regionNotConfirmed("wild")
-        }
-        reporter(.log("✅ Wilderness confirmada via \(lastRegionConfirmationSource ?? "servidor")"))
+        try await enterWildernessFromWorld()
 
         let hb = Task { [weak self] in await self?.heartbeat() }
         defer { hb.cancel() }
@@ -1185,6 +1174,16 @@ final class AutomationEngine {
                 throw EngineError.unsafeVitals
             }
 
+            let zombieCount = wildMobs.values.filter { $0.alive && $0.type == "zombie" }.count
+            let dragonCount = wildMobs.values.filter { $0.alive && $0.type == "dragon" }.count
+            if zombieCount + dragonCount > 0 {
+                let signature = "z\(zombieCount)-d\(dragonCount)"
+                if signature != lastWildAvailabilitySignature {
+                    lastWildAvailabilitySignature = signature
+                    reporter(.log("👹 Wilderness • Zumbis disponíveis=\(zombieCount) • Dragões disponíveis=\(dragonCount)"))
+                }
+            }
+
             reporter(.state(.searching, "Procurando \(mode.displayName.lowercased())"))
             let candidates = wildMobs.values.filter { $0.alive && $0.type == targetType }
             guard var target = nearestMob(in: candidates) else {
@@ -1193,26 +1192,45 @@ final class AutomationEngine {
                 continue
             }
 
-            reporter(.target("\(mode.displayName) #\(target.index) • HP \(target.hp.map { String($0) } ?? "?")"))
+            let targetName = "\(mode.displayName) #\(target.index)"
+            reporter(.target("\(targetName) • HP \(target.hp.map { String($0) } ?? "?")"))
+            reporter(.log("🎯 \(targetName) selecionado • HP \(target.hp.map { String($0) } ?? "?") • disponíveis=\(candidates.count)"))
             reporter(.attempt)
+
+            // Baselines autoritativos usados somente para associar recompensa à kill atual.
+            // Não inferimos drops por diferenças antigas da mochila.
+            let backpackBefore = try? await http.backpackState()
+            let groundBagBaseline = try? await http.groundBagIDs(shardID: shardNumber)
+            let grantBaseline = wildGrantSerial
+
+            reporter(.state(.moving, "Movendo até \(targetName)"))
             try await moveWildAdjacent(to: target)
             try await equip("wild_sword")
+            reporter(.state(.acting, "Preparando ataque • \(targetName)"))
 
             var killed = false
             var acceptedHits = 0
-            for _ in 0..<30 {
+            var lastTargetPosition = target.position
+
+            for swing in 1...30 {
                 try Task.checkCancellation()
                 guard let live = wildMobs[target.index], live.alive, live.type == targetType else {
                     break
                 }
                 target = live
+                lastTargetPosition = live.position
                 if playerHP + playerShield <= (mode == .dragon ? 80 : 55) {
+                    reporter(.state(.recovering, "Vitais baixos • interrompendo combate"))
                     break
                 }
 
                 if chebyshevDistance(to: live.position) > 1 {
+                    reporter(.state(.moving, "Reposicionando • \(targetName)"))
                     try await moveWildAdjacent(to: live)
                 }
+
+                reporter(.target("\(targetName) • HP \(live.hp.map { String($0) } ?? "?")"))
+                reporter(.state(.acting, "Hit \(swing) • \(targetName)"))
                 position.ry = atan2(live.position.x - position.x, live.position.z - position.z)
                 wildSwordSeq += 1
                 try await sendPosition(moving: false, action: ["wss": wildSwordSeq, "eq": "wild_sword"])
@@ -1222,6 +1240,7 @@ final class AutomationEngine {
                 let hit = try RealtimeProtocol.wildHit(region: "wild", index: live.index, lifeEpoch: lifeEpoch, position: position)
                 try await socket.send(hit)
                 reporter(.hitSent)
+                reporter(.state(.waitingResult, "Hit \(swing) • aguardando confirmação"))
 
                 // Replica o contato wmb do cliente oficial apenas quando adjacente.
                 let dx = position.x - live.position.x
@@ -1244,13 +1263,22 @@ final class AutomationEngine {
                 if let ack {
                     acceptedHits += 1
                     reporter(.confirmedHit)
+                    try await sleep(280)
+                    let refreshedHP = wildMobs[live.index]?.hp
+                    let hpLabel = ack.killedType == targetType ? "0" : (refreshedHP.map { String($0) } ?? "?")
+                    reporter(.target("\(targetName) • HP \(hpLabel)"))
+                    reporter(.state(.acting, "Hit \(swing) confirmado • \(targetName)"))
+                    reporter(.log("⚔️ \(targetName) • Hit \(swing) confirmado • alvo HP \(hpLabel) • você HP \(playerHP) + shield \(playerShield)"))
                     if ack.killedType == targetType {
                         killed = true
                         break
                     }
+                } else {
+                    reporter(.state(.recovering, "Hit \(swing) sem confirmação • \(targetName)"))
+                    reporter(.log("⚠️ \(targetName) • Hit \(swing) sem confirmação"))
+                    try await sleep(280)
                 }
 
-                try await sleep(280)
                 if playerHP <= 0 { throw EngineError.playerDead }
                 let cadenceLeft = 1_650.0 - (nowMS - sentAt)
                 if cadenceLeft > 0 { try await sleep(Int(cadenceLeft)) }
@@ -1260,13 +1288,270 @@ final class AutomationEngine {
                 successes += 1
                 reporter(.kill)
                 reporter(.success(nil))
-                reporter(.log("✅ \(mode.displayName) derrotado • \(successes)/\(goal) • hits confirmados=\(acceptedHits)"))
+                reporter(.state(.cooldown, "\(mode.displayName) \(successes)/\(goal) concluído"))
+                reporter(.log("✅ \(targetName) derrotado • \(successes)/\(goal) • hits confirmados=\(acceptedHits)"))
+
+                let drops = try await collectWildDrops(
+                    mode: mode,
+                    targetNumber: target.index,
+                    killPosition: lastTargetPosition,
+                    backpackBefore: backpackBefore?.backpack,
+                    groundBagBaseline: groundBagBaseline,
+                    grantBaseline: grantBaseline
+                )
+
+                if !drops.bankable.isEmpty {
+                    try await bankDropsAndReturnToWild(drops.bankable)
+                }
+
                 try await sleep(mode == .dragon ? 1_200 : 900)
             } else {
                 reporter(.failure("\(mode.displayName) sem kill autoritativa"))
+                reporter(.state(.recovering, "Buscando outro \(mode.displayName.lowercased())"))
                 try await sleep(1_000)
             }
         }
+    }
+
+    private func enterWildernessFromWorld() async throws {
+        // Paridade com combat-bot v5.2.1: a Wild Sword precisa estar equipada
+        // no pacote World → Wilderness.
+        try await equip("wild_sword")
+        reporter(.log("⚔️ Wild Sword equipada"))
+
+        if serverRegion?.lowercased() != "world" {
+            try await setRegion("world", at: Position(x: 0.5, z: -29.5))
+            guard try await waitForRegion("world", timeoutMS: 5_000) else {
+                throw EngineError.regionNotConfirmed("world")
+            }
+        }
+
+        reporter(.state(.moving, "Indo ao portal da Wilderness"))
+        try await walk(to: Position(x: 0.5, z: -30.5), maxSeconds: 25)
+        try await sleep(200)
+
+        reporter(.state(.syncing, "Entrando na Wilderness"))
+        try await setRegion("wild", at: Position(x: 0.5, z: 23.5), extras: ["wblk": Self.wildBlockedTiles])
+        guard try await waitForRegion("wild", timeoutMS: 14_000) else {
+            throw EngineError.regionNotConfirmed("wild")
+        }
+        reporter(.log("✅ Wilderness confirmada via \(lastRegionConfirmationSource ?? "servidor")"))
+    }
+
+    private func exitWildToWorldForBank() async throws {
+        reporter(.state(.moving, "Saindo da Wilderness para o banco"))
+        reporter(.log("🏦 Drop bancável detectado • retornando ao World para proteger no banco"))
+
+        // v5.2: primeiro alcança a borda norte do Wild (tile 25,49 = 0.5,24.5).
+        try await walk(to: Position(x: 0.5, z: 24.5), maxSeconds: 35)
+
+        let probes = [Position(x: 0.5, z: -29.5), Position(x: 0.5, z: -30.5)]
+        var confirmed = false
+        for probe in probes {
+            try await setRegion("world", at: probe)
+            if try await waitForRegion("world", timeoutMS: 5_000) {
+                confirmed = true
+                break
+            }
+            region = "wild"
+        }
+        guard confirmed else { throw EngineError.regionNotConfirmed("world") }
+        wildMobs.removeAll()
+        lastWildAvailabilitySignature = ""
+        reporter(.log("✅ World confirmado • seguindo para o banco"))
+    }
+
+    private func bankDropsAndReturnToWild(_ drops: [String: Int]) async throws {
+        try await exitWildToWorldForBank()
+
+        let bankPosition = Position(x: -24.0, z: -17.5)
+        reporter(.state(.moving, "Indo ao banco"))
+        try await walk(to: bankPosition, maxSeconds: 35)
+        try await sleep(700)
+
+        reporter(.state(.syncing, "Depositando drops no banco"))
+        let result = try await http.depositIntoBank(drops)
+        for item in result.confirmed.sorted(by: { $0.key < $1.key }) {
+            reporter(.log("🏦 \(item.value)x \(prettyItem(item.key)) → banco ✅"))
+        }
+        guard result.unresolved.isEmpty else {
+            let detail = result.unresolved.sorted().map(prettyItem).joined(separator: ", ")
+            throw EngineError.bankDepositFailed(detail)
+        }
+
+        reporter(.log("↩️ Drops protegidos • retornando à Wilderness na mesma sessão"))
+        try await enterWildernessFromWorld()
+        reporter(.state(.searching, "Retomando combate"))
+    }
+
+    private func collectWildDrops(
+        mode: ActivityMode,
+        targetNumber: Int,
+        killPosition: Position,
+        backpackBefore: [String: Any]?,
+        groundBagBaseline: Set<String>?,
+        grantBaseline: Int
+    ) async throws -> WildDropCollection {
+        let mobName = "\(mode.displayName) #\(targetNumber)"
+
+        // Primeiro procura bags novas, próximas da kill e pertencentes ao próprio jogador.
+        // Nunca toca em bolsa preexistente de outro jogador.
+        if let groundBagBaseline {
+            do {
+                let bags = try await http.groundBags(shardID: shardNumber)
+                for bag in bags {
+                    guard let id = groundBagID(bag), !groundBagBaseline.contains(id) else { continue }
+                    guard groundBagOwnerMatches(bag), groundBagNear(bag, killPosition) else { continue }
+                    let response = try await http.lootBag(id)
+                    if RealtimeProtocol.bool(response["ok"]) == false {
+                        reporter(.log("⚠️ \(mobName) • drop bag \(id) recusado pelo servidor"))
+                    } else {
+                        reporter(.log("🎁 \(mobName) • drop bag coletado"))
+                    }
+                }
+            } catch {
+                reporter(.diagnostic("[LOOT] ground-bags indisponível: \(error.localizedDescription)"))
+            }
+        } else {
+            reporter(.diagnostic("[LOOT] baseline de ground-bags indisponível; nenhuma bolsa será coletada por segurança"))
+        }
+
+        // Dê tempo para /me refletir inv_grant/loot-bag. A diferença é calculada
+        // somente contra o snapshot feito imediatamente antes deste combate.
+        var latestBackpack: [String: Any]? = nil
+        var diff = InventoryDiff.empty
+        if let before = backpackBefore {
+            for probe in 0..<6 {
+                if probe > 0 { try await sleep(350) }
+                if let state = try? await http.backpackState() {
+                    latestBackpack = state.backpack
+                    diff = inventoryDiff(before: before, after: state.backpack)
+                    if !diff.all.isEmpty { break }
+                }
+            }
+        } else if let state = try? await http.backpackState() {
+            latestBackpack = state.backpack
+        }
+
+        // inv_grant é a segunda evidência autoritativa. Complementa tipos que
+        // ainda não apareceram no snapshot HTTP, sem duplicar um drop já visto.
+        let grants = recentWildGrants.filter { $0.serial > grantBaseline }
+        for grant in grants where diff.all[grant.type] == nil {
+            diff.add(type: grant.type, quantity: grant.quantity, location: .unknown)
+        }
+
+        guard !diff.all.isEmpty else {
+            reporter(.diagnostic("[LOOT] \(mobName) sem drop confirmado"))
+            return WildDropCollection(bankable: [:])
+        }
+
+        var bankable: [String: Int] = [:]
+        for (type, quantity) in diff.all.sorted(by: { $0.key < $1.key }) {
+            let location = classifyDrop(type: type, backpack: latestBackpack, diff: diff)
+            switch location {
+            case .mountProtected:
+                reporter(.log("🎁 \(mobName) • \(quantity)x \(prettyItem(type)) • mount protegida; permanece no inventário ✅"))
+            case .bankableInventory:
+                bankable[type, default: 0] += quantity
+                reporter(.log("🎁 \(mobName) • \(quantity)x \(prettyItem(type)) • drop bancável confirmado"))
+            case .specialNonBankable:
+                reporter(.log("🎁 \(mobName) • \(quantity)x \(prettyItem(type)) • slot especial não bancável; mantido"))
+            case .unknown:
+                reporter(.log("🎁 \(mobName) • \(quantity)x \(prettyItem(type)) • não confirmado como bancável; mantido"))
+            }
+        }
+
+        return WildDropCollection(bankable: bankable)
+    }
+
+    private var shardNumber: Int {
+        Int(shard.replacingOccurrences(of: "s", with: "")) ?? 4
+    }
+
+    private func wildGrantHint(_ packet: [String: Any]) -> (type: String, quantity: Int)? {
+        if let grant = packet["grant"] as? String, !grant.isEmpty {
+            return (grant, max(1, RealtimeProtocol.int(packet["n"] ?? packet["qty"] ?? packet["quantity"]) ?? 1))
+        }
+        if let grant = packet["grant"] as? [String: Any] {
+            let type = (grant["t"] ?? grant["type"] ?? grant["itemType"] ?? grant["item"]) as? String
+            if let type, !type.isEmpty {
+                return (type, max(1, RealtimeProtocol.int(grant["n"] ?? grant["qty"] ?? grant["quantity"]) ?? 1))
+            }
+        }
+        if let type = (packet["itemType"] ?? (packet["item"] as? [String: Any])?["t"] ?? (packet["item"] as? [String: Any])?["type"]) as? String, !type.isEmpty {
+            return (type, max(1, RealtimeProtocol.int(packet["n"] ?? packet["qty"] ?? packet["quantity"] ?? (packet["item"] as? [String: Any])?["n"]) ?? 1))
+        }
+        return nil
+    }
+
+    private func groundBagID(_ bag: [String: Any]) -> String? {
+        for key in ["id", "bagId", "bag_id", "_id"] {
+            if let value = bag[key] as? String, !value.isEmpty { return value }
+            if let value = RealtimeProtocol.int(bag[key]) { return String(value) }
+        }
+        return nil
+    }
+
+    private func groundBagOwnerMatches(_ bag: [String: Any]) -> Bool {
+        let raw = bag["ownerId"] ?? bag["playerId"] ?? bag["pid"] ?? bag["by"] ?? (bag["owner"] as? [String: Any])?["id"]
+        guard let owner = RealtimeProtocol.int(raw), let playerID else { return true }
+        return owner == playerID
+    }
+
+    private func groundBagNear(_ bag: [String: Any], _ position: Position, radius: Double = 3.25) -> Bool {
+        let nested = bag["position"] as? [String: Any]
+        let x = RealtimeProtocol.double(bag["x"] ?? bag["px"] ?? nested?["x"])
+        let z = RealtimeProtocol.double(bag["z"] ?? bag["pz"] ?? nested?["z"])
+        guard let x, let z else { return false }
+        return hypot(x - position.x, z - position.z) <= radius
+    }
+
+    private func inventoryDiff(before: [String: Any], after: [String: Any]) -> InventoryDiff {
+        var result = InventoryDiff.empty
+        for key in ["invSlots", "hotbar", "mountSlots", "petSlots", "cosmeticSlots", "furnitureSlots"] {
+            let a = slotCounts(before[key])
+            let b = slotCounts(after[key])
+            let allTypes = Set(a.keys).union(b.keys)
+            for type in allTypes {
+                let gain = (b[type] ?? 0) - (a[type] ?? 0)
+                guard gain > 0 else { continue }
+                let location: DropLocation
+                switch key {
+                case "invSlots": location = .bankableInventory
+                case "mountSlots": location = .mountProtected
+                case "petSlots", "cosmeticSlots", "furnitureSlots": location = .specialNonBankable
+                default: location = .unknown
+                }
+                result.add(type: type, quantity: gain, location: location)
+            }
+        }
+        return result
+    }
+
+    private func slotCounts(_ value: Any?) -> [String: Int] {
+        guard let slots = value as? [Any] else { return [:] }
+        var out: [String: Int] = [:]
+        for raw in slots {
+            guard let slot = raw as? [String: Any], let type = slot["t"] as? String, !type.isEmpty else { continue }
+            out[type, default: 0] += max(1, RealtimeProtocol.int(slot["n"]) ?? 1)
+        }
+        return out
+    }
+
+    private func classifyDrop(type: String, backpack: [String: Any]?, diff: InventoryDiff) -> DropLocation {
+        if type.lowercased().hasPrefix("mount_") { return .mountProtected }
+        if let known = diff.locationByType[type], known != .unknown { return known }
+        guard let backpack else { return .unknown }
+        if (slotCounts(backpack["mountSlots"])[type] ?? 0) > 0 { return .mountProtected }
+        if (slotCounts(backpack["invSlots"])[type] ?? 0) > 0 { return .bankableInventory }
+        for key in ["petSlots", "cosmeticSlots", "furnitureSlots"] {
+            if (slotCounts(backpack[key])[type] ?? 0) > 0 { return .specialNonBankable }
+        }
+        return .unknown
+    }
+
+    private func prettyItem(_ type: String) -> String {
+        type.replacingOccurrences(of: "_", with: " ").capitalized
     }
 
     private func ingestWildMobs(_ array: [[String: Any]]) {
@@ -1561,11 +1846,55 @@ private struct WildHitAck {
     let killedType: String?
 }
 
+private struct WildGrant {
+    let serial: Int
+    let type: String
+    let quantity: Int
+    let at: Double
+}
+
+private enum DropLocation: Equatable {
+    case bankableInventory
+    case mountProtected
+    case specialNonBankable
+    case unknown
+}
+
+private struct InventoryDiff {
+    var all: [String: Int]
+    var locationByType: [String: DropLocation]
+
+    static let empty = InventoryDiff(all: [:], locationByType: [:])
+
+    mutating func add(type: String, quantity: Int, location: DropLocation) {
+        guard !type.isEmpty, quantity > 0 else { return }
+        all[type, default: 0] += quantity
+        if locationByType[type] == nil || locationByType[type] == .unknown {
+            locationByType[type] = location
+        }
+    }
+}
+
+private struct WildDropCollection {
+    let bankable: [String: Int]
+}
+
+private struct BackpackState {
+    let stateSeq: Int
+    let backpack: [String: Any]
+}
+
+private struct BankDepositResult {
+    let confirmed: [String: Int]
+    let unresolved: [String]
+}
+
 private enum EngineError: LocalizedError {
     case movementTimeout
     case regionNotConfirmed(String)
     case playerDead
     case unsafeVitals
+    case bankDepositFailed(String)
 
     var errorDescription: String? {
         switch self {
@@ -1573,6 +1902,7 @@ private enum EngineError: LocalizedError {
         case .regionNotConfirmed(let region): return "O servidor não confirmou a região \(region)"
         case .playerDead: return "O personagem morreu"
         case .unsafeVitals: return "Combate interrompido por HP/Shield baixos"
+        case .bankDepositFailed(let item): return "Drop não pôde ser confirmado no banco: \(item)"
         }
     }
 }
@@ -1587,6 +1917,167 @@ private struct KintaraHTTPClient {
 
     func post(_ path: String, body: [String: Any]) async throws -> [String: Any] {
         try await request(method: "POST", path: path, body: body)
+    }
+
+    func backpackState() async throws -> BackpackState {
+        let state = try await get("/api/auth/me")
+        guard let stateSeq = RealtimeProtocol.int(state["stateSeq"]), let backpack = state["backpack"] as? [String: Any] else {
+            throw HTTPError.invalidState
+        }
+        return BackpackState(stateSeq: stateSeq, backpack: backpack)
+    }
+
+    func groundBags(shardID: Int) async throws -> [[String: Any]] {
+        let any = try await requestAny(method: "GET", path: "/api/wild/ground-bags?shard=\(shardID)", body: nil)
+        return normalizeGroundBags(any)
+    }
+
+    func groundBagIDs(shardID: Int) async throws -> Set<String> {
+        let bags = try await groundBags(shardID: shardID)
+        var ids = Set<String>()
+        for bag in bags {
+            for key in ["id", "bagId", "bag_id", "_id"] {
+                if let value = bag[key] as? String, !value.isEmpty { ids.insert(value); break }
+                if let value = RealtimeProtocol.int(bag[key]) { ids.insert(String(value)); break }
+            }
+        }
+        return ids
+    }
+
+    func lootBag(_ bagID: String) async throws -> [String: Any] {
+        try await post("/api/wild/loot-bag", body: ["bagId": bagID])
+    }
+
+    func depositIntoBank(_ wanted: [String: Int]) async throws -> BankDepositResult {
+        let state = try await backpackState()
+        var backpack = state.backpack
+        var inv = backpack["invSlots"] as? [Any] ?? []
+        var bank = backpack["bankSlots"] as? [Any] ?? []
+        var moved: [String: Int] = [:]
+        var unresolved: [String] = []
+
+        func bankIndex(for type: String) -> Int? {
+            bank.firstIndex { raw in
+                guard let slot = raw as? [String: Any] else { return false }
+                return slot["t"] as? String == type
+            }
+        }
+
+        func emptyBankIndex() -> Int? {
+            bank.firstIndex { raw in
+                if raw is NSNull { return true }
+                return !(raw is [String: Any])
+            }
+        }
+
+        for (type, requestedRaw) in wanted.sorted(by: { $0.key < $1.key }) {
+            let requested = max(0, requestedRaw)
+            guard requested > 0 else { continue }
+
+            // Segurança: somente itens materializados em invSlots são considerados
+            // bancáveis. mountSlots/petSlots/cosmeticSlots/furnitureSlots jamais são tocados.
+            var remaining = requested
+            for i in inv.indices where remaining > 0 {
+                guard var slot = inv[i] as? [String: Any], slot["t"] as? String == type else { continue }
+                let count = max(0, RealtimeProtocol.int(slot["n"]) ?? 0)
+                guard count > 0 else { continue }
+
+                let amount = min(count, remaining)
+                let destination: Int
+                if let existing = bankIndex(for: type) {
+                    destination = existing
+                } else if let empty = emptyBankIndex() {
+                    destination = empty
+                    bank[destination] = ["t": type, "n": 0]
+                } else {
+                    break
+                }
+
+                var bankSlot = bank[destination] as? [String: Any] ?? ["t": type, "n": 0]
+                bankSlot["n"] = (RealtimeProtocol.int(bankSlot["n"]) ?? 0) + amount
+                bank[destination] = bankSlot
+
+                let left = count - amount
+                if left > 0 {
+                    slot["n"] = left
+                    inv[i] = slot
+                } else {
+                    inv[i] = NSNull()
+                }
+                remaining -= amount
+                moved[type, default: 0] += amount
+            }
+
+            if remaining > 0 { unresolved.append(type) }
+            let movedQty = moved[type] ?? 0
+            if movedQty > 0, backpack[type] != nil {
+                backpack[type] = max(0, (RealtimeProtocol.int(backpack[type]) ?? 0) - movedQty)
+            }
+        }
+
+        backpack["invSlots"] = inv
+        backpack["bankSlots"] = bank
+        if moved.values.reduce(0, +) > 0 {
+            _ = try await saveBackpack(backpack, baseSeq: state.stateSeq)
+        }
+
+        let fresh = try await backpackState()
+        var confirmed: [String: Int] = [:]
+        for (type, expected) in moved {
+            let before = slotCount(state.backpack["bankSlots"], type: type)
+            let after = slotCount(fresh.backpack["bankSlots"], type: type)
+            let increase = max(0, after - before)
+            if increase >= expected {
+                confirmed[type] = expected
+            } else if !unresolved.contains(type) {
+                unresolved.append(type)
+            }
+        }
+
+        return BankDepositResult(confirmed: confirmed, unresolved: Array(Set(unresolved)))
+    }
+
+    private func saveBackpack(_ backpack: [String: Any], baseSeq: Int) async throws -> [String: Any] {
+        let resourceKeys = ["wood", "stone", "coal", "metal", "gold", "fish", "cooked_fish_meat", "raw_chicken", "cooked_chicken", "potion_health", "potion_shield", "potion_strength", "potion_poison"]
+        var resources: [String: Any] = [:]
+        for key in resourceKeys { resources[key] = RealtimeProtocol.int(backpack[key]) ?? 0 }
+
+        var body: [String: Any] = [
+            "resources": resources,
+            "baseSeq": baseSeq,
+            "intentionalRemovals": []
+        ]
+        for key in ["invSlots", "hotbar", "mountSlots", "cosmeticSlots", "petSlots", "furnitureSlots", "bankSlots"] {
+            body[key] = backpack[key] ?? []
+        }
+        body["equippedHotbar"] = backpack["equippedHotbar"] ?? 0
+        for flag in ["mountDragonRiding", "mountWhaleRiding", "mountSpiderRiding", "mountWolfRiding", "mountTigerRiding", "mountUnicornRiding", "mountCrocodileRiding", "mountGiraffeRiding", "mountWoolyMammothRiding", "mountHarambeRiding", "mountTralaleroRiding"] {
+            body[flag] = backpack[flag] ?? false
+        }
+
+        let response = try await post("/api/auth/save-backpack", body: body)
+        guard RealtimeProtocol.bool(response["ok"]) != false else {
+            throw HTTPError.server((response["error"] as? String) ?? "save-backpack recusado")
+        }
+        return response
+    }
+
+    private func slotCount(_ value: Any?, type: String) -> Int {
+        guard let slots = value as? [Any] else { return 0 }
+        return slots.reduce(0) { partial, raw in
+            guard let slot = raw as? [String: Any], slot["t"] as? String == type else { return partial }
+            return partial + max(1, RealtimeProtocol.int(slot["n"]) ?? 1)
+        }
+    }
+
+    private func normalizeGroundBags(_ any: Any) -> [[String: Any]] {
+        if let bags = any as? [[String: Any]] { return bags }
+        guard let object = any as? [String: Any] else { return [] }
+        for key in ["bags", "groundBags", "items"] {
+            if let bags = object[key] as? [[String: Any]] { return bags }
+        }
+        if let data = object["data"] as? [String: Any], let bags = data["bags"] as? [[String: Any]] { return bags }
+        return []
     }
 
     func persistLoot(_ item: String, amount: Int) async throws -> Int? {
@@ -1642,6 +2133,12 @@ private struct KintaraHTTPClient {
     }
 
     private func request(method: String, path: String, body: [String: Any]?) async throws -> [String: Any] {
+        let any = try await requestAny(method: method, path: path, body: body)
+        guard let object = any as? [String: Any] else { throw HTTPError.nonJSON(200) }
+        return object
+    }
+
+    private func requestAny(method: String, path: String, body: [String: Any]?) async throws -> Any {
         guard let url = URL(string: path, relativeTo: base) else { throw HTTPError.invalidURL }
         var request = URLRequest(url: url)
         request.httpMethod = method
@@ -1654,13 +2151,14 @@ private struct KintaraHTTPClient {
         }
         let (data, response) = try await URLSession.shared.data(for: request)
         guard let http = response as? HTTPURLResponse else { throw HTTPError.invalidResponse }
-        guard let object = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else {
-            throw HTTPError.nonJSON(http.statusCode)
+        let any = try JSONSerialization.jsonObject(with: data)
+        if !(200...299).contains(http.statusCode) {
+            if let object = any as? [String: Any] {
+                throw HTTPError.server((object["error"] as? String) ?? (object["message"] as? String) ?? "HTTP \(http.statusCode)")
+            }
+            throw HTTPError.server("HTTP \(http.statusCode)")
         }
-        guard (200...299).contains(http.statusCode) else {
-            throw HTTPError.server((object["error"] as? String) ?? (object["message"] as? String) ?? "HTTP \(http.statusCode)")
-        }
-        return object
+        return any
     }
 }
 
