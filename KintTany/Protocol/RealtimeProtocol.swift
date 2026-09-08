@@ -3,6 +3,7 @@ import Foundation
 enum RealtimeEvent {
     case queueReady
     case queuePosition(Int)
+    case queueEvicted(String)
     case regionAck(String)
     case snapshot([String: Any])
     case resourceEvent([String: Any])
@@ -24,7 +25,9 @@ enum RealtimeProtocol {
         case "queue_ready":
             return .queueReady
         case "queue_pos":
-            return .queuePosition(int(object["p"]) ?? int(object["ahead"]) ?? 0)
+            return .queuePosition(int(object["pos"]) ?? int(object["p"]) ?? int(object["ahead"]) ?? 0)
+        case "queue_evicted":
+            return .queueEvicted((object["reason"] as? String) ?? "unknown")
         case "region_ack":
             return .regionAck((object["region"] as? String) ?? "")
         case "snap":
