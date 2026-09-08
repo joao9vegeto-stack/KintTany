@@ -4,6 +4,7 @@ import UIKit
 
 struct RootView: View {
     @EnvironmentObject var app: AppStore
+    @Environment(\.scenePhase) private var scenePhase
     @State private var showLogin = false
     @State private var showFullLog = false
     @FocusState private var goalFieldFocused: Bool
@@ -71,10 +72,13 @@ struct RootView: View {
                 app.goal = clamped
             }
         }
+        .onChange(of: scenePhase) { _, newPhase in
+            app.handleScenePhase(newPhase)
+        }
     }
 
     private var appVersion: String {
-        Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? "2.0"
+        Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? "2.1"
     }
 
     private var header: some View {
