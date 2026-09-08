@@ -1022,18 +1022,21 @@ final class AutomationEngine {
             reporter(.attempt)
             try await moveAdjacent(to: target, gap: 0.65)
             try await equip("wild_sword")
+            reporter(.state(.preparingAction, "Preparando ataque"))
 
             var acceptedHits = 0
             var confirmedKill = false
             var noAck = 0
 
-            for _ in 1...12 {
+            for swing in 1...12 {
                 try Task.checkCancellation()
                 guard let live = chickens[target.index], live.alive else {
                     confirmedKill = acceptedHits > 0
                     break
                 }
                 target = live
+                reporter(.target("Chicken #\(live.index) • HP \(live.hp.map { String($0) } ?? "?")"))
+
                 if distance(from: position, to: live.position) > 1.10 {
                     try await moveAdjacent(to: live, gap: 0.65)
                     try await equip("wild_sword")
@@ -1042,11 +1045,17 @@ final class AutomationEngine {
                     try await sendPosition(moving: false)
                 }
 
+                // v2.0: o card da Galinha não fica mais preso em “Movendo até o alvo”.
+                // Cada golpe enviado recebe numeração local do alvo (Hit 1, Hit 2, ...),
+                // sem alterar a confirmação autoritativa nem a métrica global de hits.
+                reporter(.state(.acting, "Hit \(swing)"))
+
                 let before = ambientHitSerial
                 let sentAt = nowMS
                 let data = try RealtimeProtocol.ambientHit(region: "eldergrove", index: live.index, lifeEpoch: lifeEpoch, position: position)
                 try await socket.send(data)
                 reporter(.hitSent)
+                reporter(.state(.waitingResult, "Hit \(swing) • aguardando confirmação"))
 
                 let ackDeadline = nowMS + 1_250
                 var accepted = false
@@ -1064,13 +1073,16 @@ final class AutomationEngine {
                     acceptedHits += 1
                     noAck = 0
                     reporter(.confirmedHit)
+                    reporter(.state(.acting, "Hit \(swing) confirmado"))
                 } else {
                     noAck += 1
+                    reporter(.state(.recovering, "Hit \(swing) sem confirmação"))
                 }
 
                 let nextSwing = sentAt + 2_050
                 if nowMS < nextSwing { try await sleep(Int(nextSwing - nowMS)) }
                 if let refreshed = chickens[live.index] {
+                    reporter(.target("Chicken #\(refreshed.index) • HP \(refreshed.hp.map { String($0) } ?? "?")"))
                     if !refreshed.alive {
                         confirmedKill = acceptedHits > 0
                         break
@@ -1087,10 +1099,12 @@ final class AutomationEngine {
                 successes += 1
                 reporter(.kill)
                 reporter(.success(nil))
+                reporter(.state(.cooldown, "Galinha \(successes)/\(goal) concluída"))
                 reporter(.log("✅ Galinha derrotada • \(successes)/\(goal) • hits confirmados=\(acceptedHits)"))
                 try await sleep(450)
             } else {
                 reporter(.failure("galinha não teve morte confirmada"))
+                reporter(.state(.recovering, "Buscando próxima galinha"))
                 try await sleep(900)
             }
         }
