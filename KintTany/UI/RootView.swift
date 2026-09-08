@@ -6,129 +6,367 @@ struct RootView: View {
     @State private var showLogin = false
     @State private var showFullLog = false
 
+    private let columns = [
+        GridItem(.flexible(), spacing: 12),
+        GridItem(.flexible(), spacing: 12)
+    ]
+
     var body: some View {
-        NavigationStack {
+        ZStack {
+            LinearGradient(
+                colors: [Color.black, Color(red: 0.015, green: 0.045, blue: 0.075), Color.black],
+                startPoint: .topLeading,
+                endPoint: .bottomTrailing
+            )
+            .ignoresSafeArea()
+
             ScrollView {
-                VStack(spacing: 16) {
-                    HStack(spacing: 10) {
-                        Label("KintTany", systemImage: "bolt.shield.fill")
-                            .font(.title2.bold())
-                        Spacer()
-                        Button("Sessão") { showLogin = true }
-                            .buttonStyle(.bordered)
-                        connectionBadge
-                    }
-
-                    statusCard
-
-                    LazyVGrid(
-                        columns: [GridItem(.flexible()), GridItem(.flexible())],
-                        spacing: 12
-                    ) {
-                        ForEach(ActivityMode.allCases) { mode in
-                            activityCard(mode)
-                        }
-                    }
-
+                VStack(spacing: 18) {
+                    header
+                    activeCard
+                    goalCard
+                    activityGrid
+                    telemetryCard
                     logCard
                 }
-                .padding()
+                .padding(.horizontal, 16)
+                .padding(.top, 10)
+                .padding(.bottom, 40)
             }
-            .navigationTitle("Dashboard")
-            .sheet(isPresented: $showLogin) {
-                LoginWebView(
-                    onCookie: { cookie in
-                        app.saveCookie(cookie)
-                        showLogin = false
-                    },
-                    onDiagnostic: { line in
-                        app.diagnostic(line)
-                    }
-                )
+            .scrollIndicators(.hidden)
+        }
+        .preferredColorScheme(.dark)
+        .sheet(isPresented: $showLogin) {
+            LoginWebView(
+                onCookie: { cookie in
+                    app.saveCookie(cookie)
+                    showLogin = false
+                },
+                onDiagnostic: { line in
+                    app.diagnostic(line)
+                }
+            )
+            .preferredColorScheme(.dark)
+        }
+        .sheet(isPresented: $showFullLog) {
+            FullLogView()
+                .environmentObject(app)
+                .preferredColorScheme(.dark)
+        }
+    }
+
+    private var header: some View {
+        VStack(alignment: .leading, spacing: 14) {
+            HStack(alignment: .center) {
+                VStack(alignment: .leading, spacing: 3) {
+                    Text("KINTARABOT")
+                        .font(.system(size: 12, weight: .black, design: .rounded))
+                        .tracking(2.6)
+                        .foregroundStyle(.cyan)
+                    Text("Painel de controle")
+                        .font(.system(size: 32, weight: .black, design: .rounded))
+                }
+
+                Spacer()
+
+                Button {
+                    showLogin = true
+                } label: {
+                    Image(systemName: app.hasSession ? "person.crop.circle.badge.checkmark" : "person.crop.circle.badge.exclamationmark")
+                        .font(.system(size: 23, weight: .semibold))
+                        .frame(width: 48, height: 48)
+                        .background(.white.opacity(0.08), in: Circle())
+                        .overlay(Circle().stroke(.white.opacity(0.08), lineWidth: 1))
+                }
+                .buttonStyle(.plain)
+                .accessibilityLabel("Sessão")
             }
-            .sheet(isPresented: $showFullLog) {
-                FullLogView()
-                    .environmentObject(app)
+
+            HStack(spacing: 10) {
+                Label("KintTany", systemImage: "bolt.shield.fill")
+                    .font(.headline.bold())
+                    .foregroundStyle(.white)
+                Spacer()
+                Button("Sessão") { showLogin = true }
+                    .font(.subheadline.bold())
+                    .buttonStyle(.bordered)
+                    .tint(.cyan)
+                connectionBadge
             }
         }
     }
 
     private var connectionBadge: some View {
         let presentation = connectionPresentation
-        return HStack(spacing: 6) {
+        return HStack(spacing: 7) {
             Circle()
                 .fill(presentation.color)
                 .frame(width: 9, height: 9)
+                .shadow(color: presentation.color.opacity(0.7), radius: 5)
             Text(presentation.text)
                 .font(.caption.bold())
         }
         .foregroundStyle(presentation.color)
-        .padding(.horizontal, 10)
-        .padding(.vertical, 7)
-        .background(presentation.color.opacity(0.14))
-        .clipShape(Capsule())
+        .padding(.horizontal, 11)
+        .padding(.vertical, 8)
+        .background(presentation.color.opacity(0.12), in: Capsule())
+        .overlay(Capsule().stroke(presentation.color.opacity(0.22), lineWidth: 1))
         .accessibilityLabel("Conexão \(presentation.text)")
     }
 
     private var connectionPresentation: (text: String, color: Color) {
-        if app.connected {
-            return ("Online", .green)
-        }
-
+        if app.connected { return ("Online", .green) }
         switch app.state {
-        case .connecting, .syncing:
-            return ("Conectando", .orange)
-        case .failed:
-            return ("Erro", .red)
-        default:
-            return ("Offline", .gray)
+        case .connecting, .syncing: return ("Conectando", .orange)
+        case .failed: return ("Erro", .red)
+        default: return ("Offline", .secondary)
         }
     }
 
-    private var statusCard: some View {
-        VStack(alignment: .leading, spacing: 8) {
-            Text(app.activity?.title ?? "Nenhuma atividade")
-                .font(.headline)
-            Text(app.state.rawValue)
-            ProgressView(
-                value: Double(app.stats.successes),
-                total: Double(max(app.goal, 1))
-            )
-            HStack {
-                Text("Sucessos: \(app.stats.successes)")
-                Spacer()
-                Text("Falhas: \(app.stats.failures)")
+    private var activeCard: some View {
+        let mode = app.activity
+        let accent = mode?.accent ?? .cyan
+
+        return VStack(alignment: .leading, spacing: 16) {
+            HStack(spacing: 13) {
+                ZStack {
+                    RoundedRectangle(cornerRadius: 15, style: .continuous)
+                        .fill(accent.opacity(0.17))
+                    Image(systemName: mode?.icon ?? "bolt.horizontal.circle.fill")
+                        .font(.system(size: 25, weight: .bold))
+                        .foregroundStyle(accent)
+                }
+                .frame(width: 54, height: 54)
+
+                VStack(alignment: .leading, spacing: 3) {
+                    Text(mode?.localizedTitle ?? "Nenhuma atividade")
+                        .font(.title3.bold())
+                    Text(app.statusMessage)
+                        .font(.subheadline)
+                        .foregroundStyle(.secondary)
+                        .lineLimit(2)
+                }
+
+                Spacer(minLength: 6)
+
+                if mode != nil {
+                    Text("\(app.stats.successes)/\(app.goal)")
+                        .font(.system(size: 18, weight: .black, design: .rounded))
+                        .foregroundStyle(accent)
+                }
             }
-            Button("STOP", role: .destructive) { app.stop() }
+
+            VStack(spacing: 8) {
+                GeometryReader { proxy in
+                    ZStack(alignment: .leading) {
+                        Capsule().fill(.white.opacity(0.08))
+                        Capsule()
+                            .fill(accent.gradient)
+                            .frame(width: proxy.size.width * app.progress)
+                    }
+                }
+                .frame(height: 8)
+
+                HStack {
+                    Label(app.state.label, systemImage: stateIcon)
+                        .font(.caption.bold())
+                        .foregroundStyle(.secondary)
+                    Spacer()
+                    if let target = app.currentTarget {
+                        Text(target)
+                            .font(.caption.monospaced())
+                            .foregroundStyle(.secondary)
+                            .lineLimit(1)
+                    }
+                }
+            }
+
+            Divider().overlay(.white.opacity(0.08))
+
+            HStack(spacing: 0) {
+                metric(value: app.stats.successes, label: "Sucessos")
+                metric(value: app.stats.failures, label: "Falhas")
+                if mode == .chicken || mode == .zombie || mode == .dragon {
+                    metric(value: app.stats.confirmedHits, label: "Hits")
+                    metric(value: app.stats.kills, label: "Kills")
+                } else {
+                    metric(value: app.stats.attempts, label: "Tentativas")
+                }
+            }
+
+            if mode != nil {
+                Button(role: .destructive) {
+                    app.stop()
+                } label: {
+                    Label("PARAR AGORA", systemImage: "stop.fill")
+                        .font(.headline.bold())
+                        .frame(maxWidth: .infinity)
+                        .padding(.vertical, 5)
+                }
                 .buttonStyle(.borderedProminent)
+                .tint(.red)
+            }
         }
-        .padding()
-        .background(.thinMaterial)
-        .clipShape(RoundedRectangle(cornerRadius: 16))
+        .padding(18)
+        .background(
+            RoundedRectangle(cornerRadius: 24, style: .continuous)
+                .fill(Color.white.opacity(0.065))
+        )
+        .overlay(
+            RoundedRectangle(cornerRadius: 24, style: .continuous)
+                .stroke(accent.opacity(mode == nil ? 0.12 : 0.28), lineWidth: 1)
+        )
+        .shadow(color: accent.opacity(mode == nil ? 0 : 0.08), radius: 24, y: 8)
+    }
+
+    private var goalCard: some View {
+        HStack(spacing: 12) {
+            VStack(alignment: .leading, spacing: 3) {
+                Text("META DA SESSÃO")
+                    .font(.caption2.bold())
+                    .tracking(1.2)
+                    .foregroundStyle(.secondary)
+                Text("\(app.goal)")
+                    .font(.title2.weight(.black))
+            }
+            Spacer()
+            Button {
+                app.goal = max(1, app.goal - 10)
+            } label: {
+                Image(systemName: "minus")
+                    .frame(width: 38, height: 38)
+            }
+            .buttonStyle(.bordered)
+            .disabled(app.activity != nil)
+
+            Button {
+                app.goal = min(100_000, app.goal + 10)
+            } label: {
+                Image(systemName: "plus")
+                    .frame(width: 38, height: 38)
+            }
+            .buttonStyle(.bordered)
+            .disabled(app.activity != nil)
+        }
+        .padding(15)
+        .background(.white.opacity(0.045), in: RoundedRectangle(cornerRadius: 18, style: .continuous))
+        .overlay(RoundedRectangle(cornerRadius: 18).stroke(.white.opacity(0.07), lineWidth: 1))
+    }
+
+    private var activityGrid: some View {
+        VStack(alignment: .leading, spacing: 11) {
+            sectionTitle("Atividades", subtitle: "Uma atividade por vez")
+            LazyVGrid(columns: columns, spacing: 12) {
+                ForEach(ActivityMode.allCases) { mode in
+                    activityCard(mode)
+                }
+            }
+        }
     }
 
     private func activityCard(_ mode: ActivityMode) -> some View {
-        Button { app.start(mode) } label: {
-            VStack(alignment: .leading, spacing: 8) {
-                Label(mode.title, systemImage: mode.icon)
-                    .font(.headline)
-                Text("Meta \(app.goal)")
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
+        let selected = app.activity == mode
+        return Button {
+            app.start(mode)
+        } label: {
+            VStack(alignment: .leading, spacing: 17) {
+                HStack {
+                    ZStack {
+                        Circle().fill(mode.accent.opacity(0.18))
+                        Image(systemName: mode.icon)
+                            .font(.system(size: 20, weight: .bold))
+                            .foregroundStyle(mode.accent)
+                    }
+                    .frame(width: 43, height: 43)
+                    Spacer()
+                    Image(systemName: selected ? "waveform.path.ecg" : "chevron.right")
+                        .font(.caption.bold())
+                        .foregroundStyle(selected ? mode.accent : .secondary)
+                }
+
+                VStack(alignment: .leading, spacing: 4) {
+                    Text(mode.localizedTitle)
+                        .font(.headline.bold())
+                    Text(selected ? app.state.label : "Meta \(app.goal)")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
             }
-            .frame(maxWidth: .infinity, alignment: .leading)
-            .padding()
-            .background(Color.blue.opacity(0.10))
-            .clipShape(RoundedRectangle(cornerRadius: 14))
+            .frame(maxWidth: .infinity, minHeight: 112, alignment: .leading)
+            .padding(15)
+            .background(
+                RoundedRectangle(cornerRadius: 20, style: .continuous)
+                    .fill(selected ? mode.accent.opacity(0.13) : Color.white.opacity(0.045))
+            )
+            .overlay(
+                RoundedRectangle(cornerRadius: 20, style: .continuous)
+                    .stroke(selected ? mode.accent.opacity(0.45) : .white.opacity(0.07), lineWidth: 1)
+            )
         }
         .buttonStyle(.plain)
+        .disabled(app.activity != nil && !selected)
+        .opacity(app.activity != nil && !selected ? 0.58 : 1)
+    }
+
+    private var telemetryCard: some View {
+        VStack(alignment: .leading, spacing: 13) {
+            sectionTitle("Telemetria", subtitle: "Estado autoritativo recebido do servidor")
+
+            HStack(spacing: 10) {
+                telemetryItem(icon: "map.fill", title: "Região", value: app.world.serverRegion ?? app.player.region)
+                telemetryItem(icon: "location.fill", title: "Posição", value: String(format: "%.1f, %.1f", app.player.position.x, app.player.position.z))
+            }
+
+            HStack(spacing: 10) {
+                telemetryItem(icon: "square.stack.3d.up.fill", title: "Recursos", value: "\(app.resourceCount)")
+                telemetryItem(icon: "figure.2", title: "Mobs", value: "\(app.mobCount)")
+            }
+
+            if !app.stats.lastEvent.isEmpty {
+                HStack(alignment: .top, spacing: 9) {
+                    Image(systemName: "waveform")
+                        .foregroundStyle(.cyan)
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text("Último evento")
+                            .font(.caption2.bold())
+                            .foregroundStyle(.secondary)
+                        Text(app.stats.lastEvent)
+                            .font(.caption.monospaced())
+                            .lineLimit(2)
+                    }
+                }
+                .padding(.top, 2)
+            }
+        }
+        .padding(16)
+        .background(.white.opacity(0.045), in: RoundedRectangle(cornerRadius: 20, style: .continuous))
+        .overlay(RoundedRectangle(cornerRadius: 20).stroke(.white.opacity(0.07), lineWidth: 1))
+    }
+
+    private func telemetryItem(icon: String, title: String, value: String) -> some View {
+        HStack(spacing: 9) {
+            Image(systemName: icon)
+                .foregroundStyle(.cyan)
+                .frame(width: 24)
+            VStack(alignment: .leading, spacing: 1) {
+                Text(title)
+                    .font(.caption2)
+                    .foregroundStyle(.secondary)
+                Text(value)
+                    .font(.caption.bold())
+                    .lineLimit(1)
+            }
+            Spacer(minLength: 0)
+        }
+        .frame(maxWidth: .infinity)
+        .padding(11)
+        .background(.black.opacity(0.22), in: RoundedRectangle(cornerRadius: 13))
     }
 
     private var logCard: some View {
-        VStack(alignment: .leading, spacing: 10) {
+        VStack(alignment: .leading, spacing: 12) {
             HStack {
-                Text("Logs")
-                    .font(.headline)
+                sectionTitle("Eventos", subtitle: "Resumo da sessão")
                 Spacer()
                 Button {
                     showFullLog = true
@@ -137,28 +375,68 @@ struct RootView: View {
                         .font(.caption.bold())
                 }
                 .buttonStyle(.bordered)
+                .tint(.cyan)
             }
 
             if app.logs.isEmpty {
-                Text("Nenhum evento registrado ainda.")
+                Label("Nenhum evento registrado ainda", systemImage: "sparkles")
                     .font(.caption)
                     .foregroundStyle(.secondary)
+                    .padding(.vertical, 8)
             } else {
-                ForEach(Array(app.logs.suffix(5).enumerated()), id: \.offset) { item in
-                    Text(item.element)
-                        .font(.caption.monospaced())
-                        .frame(maxWidth: .infinity, alignment: .leading)
+                VStack(spacing: 0) {
+                    ForEach(Array(app.logs.suffix(5).enumerated()), id: \.offset) { index, line in
+                        Text(line)
+                            .font(.system(size: 11, design: .monospaced))
+                            .foregroundStyle(.white.opacity(0.82))
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                            .padding(.vertical, 8)
+                        if index < min(app.logs.count, 5) - 1 {
+                            Divider().overlay(.white.opacity(0.06))
+                        }
+                    }
                 }
+                .padding(.horizontal, 11)
+                .background(.black.opacity(0.28), in: RoundedRectangle(cornerRadius: 14))
             }
 
-            Text("O log completo inclui HTTP, WebSocket, mensagens IN/OUT, estados e erros. Cookies, tokens e chaves são ocultados.")
+            Text("Tokens, cookies e chaves são ocultados no diagnóstico.")
                 .font(.caption2)
                 .foregroundStyle(.secondary)
         }
-        .frame(maxWidth: .infinity, alignment: .leading)
-        .padding()
-        .background(.thinMaterial)
-        .clipShape(RoundedRectangle(cornerRadius: 16))
+        .padding(16)
+        .background(.white.opacity(0.045), in: RoundedRectangle(cornerRadius: 20, style: .continuous))
+        .overlay(RoundedRectangle(cornerRadius: 20).stroke(.white.opacity(0.07), lineWidth: 1))
+    }
+
+    private func sectionTitle(_ title: String, subtitle: String) -> some View {
+        VStack(alignment: .leading, spacing: 2) {
+            Text(title).font(.headline.bold())
+            Text(subtitle).font(.caption2).foregroundStyle(.secondary)
+        }
+    }
+
+    private func metric(value: Int, label: String) -> some View {
+        VStack(spacing: 2) {
+            Text("\(value)")
+                .font(.system(size: 18, weight: .black, design: .rounded))
+            Text(label)
+                .font(.caption2)
+                .foregroundStyle(.secondary)
+        }
+        .frame(maxWidth: .infinity)
+    }
+
+    private var stateIcon: String {
+        switch app.state {
+        case .moving: "location.fill"
+        case .acting, .waitingProof, .waitingResult: "waveform.path.ecg"
+        case .completed: "checkmark.circle.fill"
+        case .failed: "exclamationmark.triangle.fill"
+        case .cancelled: "stop.circle.fill"
+        case .connecting, .syncing, .recovering: "arrow.triangle.2.circlepath"
+        default: "scope"
+        }
     }
 }
 
@@ -169,34 +447,34 @@ private struct FullLogView: View {
 
     var body: some View {
         NavigationStack {
-            ScrollViewReader { proxy in
-                ScrollView {
-                    LazyVStack(alignment: .leading, spacing: 7) {
-                        if app.diagnosticLogs.isEmpty {
-                            ContentUnavailableView(
-                                "Sem logs",
-                                systemImage: "doc.text",
-                                description: Text("Inicie uma sessão ou atividade para registrar o diagnóstico.")
-                            )
-                            .frame(maxWidth: .infinity)
-                            .padding(.top, 50)
-                        } else {
-                            ForEach(Array(app.diagnosticLogs.enumerated()), id: \.offset) { index, line in
-                                Text(line)
-                                    .font(.system(size: 11, design: .monospaced))
-                                    .textSelection(.enabled)
-                                    .frame(maxWidth: .infinity, alignment: .leading)
-                                    .id(index)
+            ZStack {
+                Color.black.ignoresSafeArea()
+                ScrollViewReader { proxy in
+                    ScrollView {
+                        LazyVStack(alignment: .leading, spacing: 7) {
+                            if app.diagnosticLogs.isEmpty {
+                                ContentUnavailableView(
+                                    "Sem logs",
+                                    systemImage: "doc.text",
+                                    description: Text("Inicie uma sessão ou atividade para registrar o diagnóstico.")
+                                )
+                                .frame(maxWidth: .infinity)
+                                .padding(.top, 50)
+                            } else {
+                                ForEach(Array(app.diagnosticLogs.enumerated()), id: \.offset) { index, line in
+                                    Text(line)
+                                        .font(.system(size: 11, design: .monospaced))
+                                        .foregroundStyle(.white.opacity(0.86))
+                                        .textSelection(.enabled)
+                                        .frame(maxWidth: .infinity, alignment: .leading)
+                                        .id(index)
+                                }
                             }
                         }
+                        .padding()
                     }
-                    .padding()
-                }
-                .onAppear {
-                    scrollToBottom(proxy)
-                }
-                .onChange(of: app.diagnosticLogs.count) { _, _ in
-                    scrollToBottom(proxy)
+                    .onAppear { scrollToBottom(proxy) }
+                    .onChange(of: app.diagnosticLogs.count) { _, _ in scrollToBottom(proxy) }
                 }
             }
             .navigationTitle("Log completo")
