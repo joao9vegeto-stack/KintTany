@@ -701,20 +701,26 @@ final class AutomationEngine {
         let hb = Task { [weak self] in await self?.heartbeat() }
         defer { hb.cancel() }
 
-        reporter(.state(.moving, "Indo ao portal de The Pond"))
-        try await walk(to: Position(x: 30.5, z: 0.5), maxSeconds: 20)
+        let pondPortal = Position(x: 30.5, z: 0.5)
+        let pondEntry = Position(x: -18.5, z: 0)
+        let pondStand = Position(x: -1.5, z: -1.5)
 
-        var pondConfirmed = try await waitForRegion("pond", timeoutMS: 5_000)
+        reporter(.state(.moving, "Indo ao portal de The Pond"))
+        try await walk(to: pondPortal, maxSeconds: 20)
+
+        // O fluxo funcional do Kintarabot v5.2 diferencia entrada real pelo portal
+        // de fallback via setRegion. O erro anterior confirmava Pond no ponto do
+        // portal e depois tentava atravessar ~32 unidades dentro do Pond; o servidor
+        // encerrava a Presence durante esse deslocamento artificial.
+        var enteredViaPortal = try await waitForRegion("pond", timeoutMS: 5_000)
+        var pondConfirmed = enteredViaPortal
         if !pondConfirmed {
-            let probes = [
-                Position(x: 30.5, z: 0.5),
-                Position(x: -18.5, z: 0),
-                Position(x: -1.5, z: -1.5)
-            ]
+            let probes = [pondPortal, pondEntry, pondStand]
             for probe in probes {
                 try await setRegion("pond", at: probe)
                 if try await waitForRegion("pond", timeoutMS: 2_500) {
                     pondConfirmed = true
+                    enteredViaPortal = false
                     break
                 }
             }
@@ -723,8 +729,34 @@ final class AutomationEngine {
 
         region = "pond"
         reporter(.log("✅ The Pond confirmado"))
-        try await walk(to: Position(x: -1.5, z: -1.5), maxSeconds: 20)
+
+        if enteredViaPortal {
+            // Paridade com fishing-bot.js v5.2: ao sair do portal, reposiciona no
+            // ponto de entrada do Pond e só então caminha até o stand de pesca.
+            position = pondEntry
+            try await sendPosition(moving: false)
+            try await sleep(300)
+            try await walk(to: pondStand, maxSeconds: 15)
+        } else {
+            // No fallback direto, o cliente Node usa moveTo(STAND), não um walk
+            // partindo das coordenadas do World/portal. Isso evita uma trajetória
+            // inválida que pode fazer o servidor fechar o WebSocket.
+            position = pondStand
+            try await sendPosition(moving: false)
+        }
+
+        try await sleep(450)
         try await equip("tool_fishing_rod")
+        try await sleep(450)
+        reporter(.log("🎣 Posição de pesca pronta • x=\(format(position.x)) z=\(format(position.z))"))
+
+        // fish_spots é autoritativo; espere um snapshot real antes de selecionar.
+        let spotDeadline = nowMS + 8_000
+        while fishSpots.isEmpty && nowMS < spotDeadline {
+            try Task.checkCancellation()
+            reporter(.state(.syncing, "Aguardando spots de pesca"))
+            try await sleep(100)
+        }
 
         while successes < goal {
             try Task.checkCancellation()
