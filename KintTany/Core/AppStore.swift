@@ -153,6 +153,7 @@ final class AppStore: ObservableObject {
     private var task: Task<Void, Never>?
     private var receiverTask: Task<Void, Never>?
     private var traceTask: Task<Void, Never>?
+    private var realtimeFailureMessage: String?
     private let socket = RealtimeSocket()
 
     var hasSession: Bool {
@@ -186,6 +187,7 @@ final class AppStore: ObservableObject {
         task = nil
         receiverTask = nil
         traceTask = nil
+        realtimeFailureMessage = nil
         connected = false
         Task { await socket.close() }
         currentTarget = nil
@@ -267,6 +269,10 @@ final class AppStore: ObservableObject {
             return
         }
 
+        goal = min(100_000, max(1, goal))
+        let runGoal = goal
+        realtimeFailureMessage = nil
+
         activity = mode
         state = .connecting
         stats = ActivityStats(startedAt: .now)
@@ -276,7 +282,7 @@ final class AppStore: ObservableObject {
         mobCount = 0
         statusMessage = "Conectando ao Kintara"
         log("Iniciando \(mode.localizedTitle)")
-        diagnostic("[UI] activity=\(mode.rawValue) state=connecting goal=\(goal)")
+        diagnostic("[UI] activity=\(mode.rawValue) state=connecting goal=\(runGoal)")
 
         // O socket mantém um pequeno buffer interno. Antes, esse buffer só era
         // importado quando connect() terminava, então todos os eventos de conexão
@@ -338,12 +344,25 @@ final class AppStore: ObservableObject {
                     engine.ingest(data)
                     await self.importSocketTrace()
                 }
+
+                // AsyncStream termina quando o receive loop da Presence encerra.
+                // Antes isso era silencioso: a engine continuava aparecendo ativa
+                // até alguma ação seguinte tentar enviar no socket já morto.
+                if !Task.isCancelled {
+                    await self.handleUnexpectedRealtimeEnd(for: mode)
+                }
             }
 
-            let result = try await engine.run(mode: mode, goal: goal)
+            let result = try await engine.run(mode: mode, goal: runGoal)
             await importSocketTrace()
 
-            if Task.isCancelled {
+            if let reason = realtimeFailureMessage {
+                connected = false
+                currentTarget = nil
+                activity = nil
+                state = .failed
+                statusMessage = reason
+            } else if Task.isCancelled {
                 state = .cancelled
                 statusMessage = "Atividade cancelada"
                 diagnostic("[STATE] atividade cancelada")
@@ -352,7 +371,7 @@ final class AppStore: ObservableObject {
                 statusMessage = "Meta concluída"
                 currentTarget = nil
                 activity = nil
-                log("✅ Meta concluída: \(result.successes)/\(goal) • atividade encerrada automaticamente")
+                log("✅ Meta concluída: \(result.successes)/\(runGoal) • atividade encerrada automaticamente")
             } else {
                 state = .failed
                 statusMessage = "Engine encerrou antes da meta"
@@ -363,9 +382,18 @@ final class AppStore: ObservableObject {
             }
         } catch is CancellationError {
             await importSocketTrace()
-            state = .cancelled
-            statusMessage = "Atividade cancelada"
-            diagnostic("[STATE] CancellationError")
+            if let reason = realtimeFailureMessage {
+                connected = false
+                currentTarget = nil
+                activity = nil
+                state = .failed
+                statusMessage = reason
+                diagnostic("[STATE] engine cancelada após perda da conexão realtime")
+            } else {
+                state = .cancelled
+                statusMessage = "Atividade cancelada"
+                diagnostic("[STATE] CancellationError")
+            }
         } catch {
             await importSocketTrace()
             connected = false
@@ -377,6 +405,34 @@ final class AppStore: ObservableObject {
             diagnostic("[ERROR] \(error.localizedDescription)")
             log("Falha: \(error.localizedDescription) • bot interrompido automaticamente")
         }
+    }
+
+    private func handleUnexpectedRealtimeEnd(for mode: ActivityMode) async {
+        guard activity == mode, connected else { return }
+
+        await importSocketTrace()
+        let detail = await socket.disconnectReason()
+        let reason: String
+        if let detail, !detail.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+            reason = "Conexão realtime perdida: \(detail)"
+        } else {
+            reason = "Conexão realtime encerrada inesperadamente"
+        }
+
+        realtimeFailureMessage = reason
+        connected = false
+        currentTarget = nil
+        activity = nil
+        state = .failed
+        statusMessage = reason
+        stats.failures += 1
+        diagnostic("[ERROR] \(reason)")
+        log("Falha de conexão: \(reason) • bot interrompido automaticamente")
+
+        // Cancela imediatamente a engine; nenhuma nova ação deve sobreviver
+        // à perda da Presence. O catch de CancellationError preserva .failed.
+        task?.cancel()
+        await socket.close()
     }
 
     private func handleEngineEvent(_ event: EngineEvent) {
@@ -409,6 +465,21 @@ final class AppStore: ObservableObject {
             stats.failures += 1
             stats.lastEvent = reason
             log("⚠️ Falha: \(reason)")
+
+        case .fatal(let reason):
+            guard activity != nil else { return }
+            realtimeFailureMessage = reason
+            connected = false
+            currentTarget = nil
+            activity = nil
+            state = .failed
+            statusMessage = reason
+            stats.failures += 1
+            stats.lastEvent = "erro fatal"
+            diagnostic("[ERROR] \(reason)")
+            log("Falha de conexão: \(reason) • bot interrompido automaticamente")
+            task?.cancel()
+            Task { await socket.close() }
 
         case .hitSent:
             stats.hits += 1
