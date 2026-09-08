@@ -152,6 +152,7 @@ final class AppStore: ObservableObject {
     private let session = SessionManager()
     private var task: Task<Void, Never>?
     private var receiverTask: Task<Void, Never>?
+    private var traceTask: Task<Void, Never>?
     private let socket = RealtimeSocket()
 
     var hasSession: Bool {
@@ -181,8 +182,10 @@ final class AppStore: ObservableObject {
     private func stop(silent: Bool) {
         task?.cancel()
         receiverTask?.cancel()
+        traceTask?.cancel()
         task = nil
         receiverTask = nil
+        traceTask = nil
         connected = false
         Task { await socket.close() }
         currentTarget = nil
@@ -221,6 +224,8 @@ final class AppStore: ObservableObject {
         if value.hasPrefix("[AUTH]") ||
             value.hasPrefix("[NET]") ||
             value.hasPrefix("[WS]") ||
+            value.hasPrefix("[QUEUE]") ||
+            value.hasPrefix("[SERVER]") ||
             value.hasPrefix("[WARN]") ||
             value.hasPrefix("[ERROR]") ||
             value.hasPrefix("[STATE]") {
@@ -273,23 +278,46 @@ final class AppStore: ObservableObject {
         log("Iniciando \(mode.localizedTitle)")
         diagnostic("[UI] activity=\(mode.rawValue) state=connecting goal=\(goal)")
 
+        // O socket mantém um pequeno buffer interno. Antes, esse buffer só era
+        // importado quando connect() terminava, então todos os eventos de conexão
+        // pareciam acontecer dezenas de segundos depois do toque. Enquanto a
+        // conexão está sendo negociada, drenamos o trace em tempo real.
+        traceTask?.cancel()
+        traceTask = Task { [weak self] in
+            guard let self else { return }
+            while !Task.isCancelled {
+                await self.importSocketTrace()
+                do {
+                    try await Task.sleep(nanoseconds: 100_000_000)
+                } catch {
+                    break
+                }
+            }
+        }
+
         let bootstrap = AutomationEngine.bootstrap(for: mode)
 
         defer {
             receiverTask?.cancel()
             receiverTask = nil
+            traceTask?.cancel()
+            traceTask = nil
             connected = false
             Task { await socket.close() }
         }
 
         do {
-            let stream = try await socket.connect(session: session, shard: "s4", bootstrap: bootstrap)
+            let connection = try await socket.connectBestNA(session: session, bootstrap: bootstrap)
+            let stream = connection.stream
+            let selectedShard = connection.shard
             await importSocketTrace()
+
+            log("Servidor NA selecionado automaticamente: \(connection.serverName) (\(selectedShard)) • carga \(connection.populationLabel) • fila \(connection.queueLength)")
 
             let engine = AutomationEngine(
                 socket: socket,
                 cookie: cookie,
-                shard: "s4",
+                shard: selectedShard,
                 bootstrap: bootstrap,
                 reporter: { [weak self] event in
                     self?.handleEngineEvent(event)
@@ -329,7 +357,9 @@ final class AppStore: ObservableObject {
                 state = .failed
                 statusMessage = "Engine encerrou antes da meta"
                 stats.failures += 1
-                log("Atividade encerrou antes da meta")
+                currentTarget = nil
+                activity = nil
+                log("Atividade encerrou antes da meta • bot interrompido automaticamente")
             }
         } catch is CancellationError {
             await importSocketTrace()
@@ -339,11 +369,13 @@ final class AppStore: ObservableObject {
         } catch {
             await importSocketTrace()
             connected = false
+            currentTarget = nil
+            activity = nil
             state = .failed
             statusMessage = error.localizedDescription
             stats.failures += 1
             diagnostic("[ERROR] \(error.localizedDescription)")
-            log("Falha: \(error.localizedDescription)")
+            log("Falha: \(error.localizedDescription) • bot interrompido automaticamente")
         }
     }
 
