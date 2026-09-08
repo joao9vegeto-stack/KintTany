@@ -8,6 +8,7 @@ enum EngineEvent {
     case attempt
     case success(String?)
     case failure(String)
+    case fatal(String)
     case hitSent
     case confirmedHit
     case kill
@@ -58,6 +59,8 @@ final class AutomationEngine {
     private var fishSnapshotSerial = 0
     private var fishBiteSerial = 0
     private var lastFishBite: FishBite?
+    private var activeFishingAction: [String: Any]?
+    private var lastFishSpotSignature = ""
 
     private var chickenCollectionPath: String?
     private var chickens: [Int: LiveMob] = [:]
@@ -301,8 +304,21 @@ final class AutomationEngine {
     }
 
     private func clearAction() async throws {
+        activeFishingAction = nil
         position.y = 0.25
         try await sendPosition(moving: false)
+    }
+
+    private func sendFishingPhase(_ target: FishTarget, phase: Int) async throws {
+        let action: [String: Any] = [
+            "act": "fish",
+            "eq": "tool_fishing_rod",
+            "fc": target.fc,
+            "fr": target.fr,
+            "fph": phase
+        ]
+        activeFishingAction = action
+        try await sendPosition(moving: false, action: action)
     }
 
     private func walk(to target: Position, maxSeconds: Double = 35) async throws {
@@ -341,8 +357,18 @@ final class AutomationEngine {
             do {
                 try await sleep(3_000)
                 if Task.isCancelled { return }
-                try await sendPosition(moving: false)
+
+                // Paridade com Presence._sendPos() da v5.2: durante um cast,
+                // o heartbeat precisa continuar enviando act=fish + fc/fr/fph.
+                // Um pos sem act equivale ao clearAct() usado pelo cliente Node
+                // e podia cancelar silenciosamente a pesca antes do fish_bite.
+                if region == "pond", let action = activeFishingAction {
+                    try await sendPosition(moving: false, action: action)
+                } else {
+                    try await sendPosition(moving: false)
+                }
             } catch {
+                reporter(.fatal("Conexão realtime perdida: \(error.localizedDescription)"))
                 return
             }
         }
@@ -693,6 +719,7 @@ final class AutomationEngine {
     // MARK: - Fishing
 
     private func runFishing(goal: Int) async throws {
+        activeFishingAction = nil
         if serverRegion?.lowercased() != "world" {
             try await setRegion("world", at: Position(x: 22.5, z: -3.5))
             _ = try await waitForRegion("world", timeoutMS: 4_000)
@@ -750,12 +777,18 @@ final class AutomationEngine {
         try await sleep(450)
         reporter(.log("🎣 Posição de pesca pronta • x=\(format(position.x)) z=\(format(position.z))"))
 
-        // fish_spots é autoritativo; espere um snapshot real antes de selecionar.
+        // A v5.2 não usa coordenadas antigas como alvo: fish_spots é a fonte
+        // autoritativa do servidor. Os pontos fixos servem apenas para entrar e
+        // posicionar o personagem no Pond.
+        reporter(.log("📡 Aguardando fish_spots do servidor…"))
         let spotDeadline = nowMS + 8_000
         while fishSpots.isEmpty && nowMS < spotDeadline {
             try Task.checkCancellation()
             reporter(.state(.syncing, "Aguardando spots de pesca"))
             try await sleep(100)
+        }
+        if fishSpots.isEmpty {
+            reporter(.log("📡 fish_spots ainda não chegou; aguardando o próximo snapshot sem usar coordenadas antigas"))
         }
 
         while successes < goal {
@@ -774,7 +807,7 @@ final class AutomationEngine {
             let snapshotBefore = fishSnapshotSerial
             let biteBefore = fishBiteSerial
             let generation = target.generation
-            try await sendPosition(moving: false, action: ["act": "fish", "eq": "tool_fishing_rod", "fc": target.fc, "fr": target.fr, "fph": 0])
+            try await sendFishingPhase(target, phase: 0)
 
             let biteDeadline = nowMS + 3_500
             var bite: FishBite?
@@ -816,9 +849,9 @@ final class AutomationEngine {
             }
             guard fishTargetStillValid(target, generation: generation) else { continue }
 
-            try await sendPosition(moving: false, action: ["act": "fish", "eq": "tool_fishing_rod", "fc": target.fc, "fr": target.fr, "fph": 1])
+            try await sendFishingPhase(target, phase: 1)
             try await sleep(180)
-            try await sendPosition(moving: false, action: ["act": "fish", "eq": "tool_fishing_rod", "fc": target.fc, "fr": target.fr, "fph": 2])
+            try await sendFishingPhase(target, phase: 2)
             try await sleep(220)
 
             guard fishTargetStillValid(target, generation: generation) else {
@@ -862,6 +895,16 @@ final class AutomationEngine {
         }
         fishSpots = next
         fishSnapshotSerial += 1
+
+        let signature = next.values
+            .sorted { $0.slot < $1.slot }
+            .map { "#\($0.slot):\($0.c),\($0.r)" }
+            .joined(separator: " • ")
+        if !signature.isEmpty, signature != lastFishSpotSignature {
+            lastFishSpotSignature = signature
+            reporter(.log("🎣 Spots do servidor: \(signature)"))
+        }
+
         reporter(.world(nodes: availableSeedCount(), mobs: max(chickens.count, wildMobs.count), serverRegion: "pond"))
     }
 
@@ -871,9 +914,13 @@ final class AutomationEngine {
               let c = RealtimeProtocol.int(source["c"] ?? packet["c"]),
               let r = RealtimeProtocol.int(source["r"] ?? packet["r"]),
               let ms = RealtimeProtocol.int(source["ms"] ?? packet["ms"]) else { return }
-        let generation = (fishSpots[slot]?.generation ?? 0) + 1
+        let previous = fishSpots[slot]
+        let generation = (previous?.generation ?? 0) + 1
         fishSpots[slot] = FishSpot(slot: slot, c: c, r: r, expiresAt: nowMS + Double(max(0, ms)), generation: generation)
         fishSnapshotSerial += 1
+        if previous?.c != c || previous?.r != r {
+            reporter(.log("🌀 Spot #\(slot) mudou para \(c),\(r)"))
+        }
     }
 
     private func selectFishTarget() -> FishTarget? {
