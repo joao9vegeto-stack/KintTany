@@ -577,6 +577,8 @@ final class AppStore: ObservableObject {
             if activity != nil {
                 if continuedTaskObject != nil {
                     diagnostic("[BG] App em primeiro plano • Continued Processing continua ativa")
+                } else if continuedTaskRequested {
+                    diagnostic("[BG] App em primeiro plano • engine continua na mesma sessão • Continued Processing ainda pendente")
                 } else {
                     diagnostic("[BG] App em primeiro plano • engine continua na mesma sessão")
                 }
@@ -642,10 +644,11 @@ final class AppStore: ObservableObject {
             subtitle: "Meta \(requestedGoal) • preparando"
         )
 
-        // A atividade nasce de uma ação explícita do usuário e só é útil se o
-        // sistema puder protegê-la imediatamente. Não deixamos uma automação velha
-        // enfileirada para iniciar depois.
-        request.strategy = .fail
+        // A engine já começa imediatamente em foreground. Para o mecanismo de
+        // proteção de background, porém, .queue é mais robusto: se o iOS estiver
+        // momentaneamente sem vaga, mantém a Continued Processing pendente para
+        // assumir a sessão assim que possível. A ponte UIKit cobre a transição.
+        request.strategy = .queue
 
         diagnostic("[BG] Solicitando Continued Processing • \(mode.localizedTitle) • meta \(requestedGoal)")
 
@@ -656,7 +659,7 @@ final class AppStore: ObservableObject {
             // como real quando attachContinuedProcessingTask() é chamado.
             continuedTaskRequested = true
             try BGTaskScheduler.shared.submit(request)
-            diagnostic("[BG] Solicitação enviada ao scheduler • aguardando início confirmado")
+            diagnostic("[BG] Solicitação enviada ao scheduler • estratégia=queue • aguardando início confirmado")
             armContinuedProcessingActivationWatchdog(identifier: identifier)
         } catch {
             continuedTaskRequested = false
@@ -717,11 +720,26 @@ final class AppStore: ObservableObject {
               continuedTaskObject == nil
         else { return }
 
-        continuedTaskRequested = false
+        // v2.2 cancelava a solicitação após apenas 3 s. Isso eliminava justamente
+        // a possibilidade de o scheduler entregar a Continued Processing alguns
+        // segundos depois, durante a ponte UIKit. Agora a request permanece viva.
         continuedTaskActivationWatchdog = nil
-        BGTaskScheduler.shared.cancel(taskRequestWithIdentifier: identifier)
-        continuedTaskIdentifier = nil
-        diagnostic("[WARN] Continued Processing não foi confirmada pelo iOS em 3s • fallback curto será usado se o app sair da tela")
+        diagnostic("[BG] Continued Processing ainda não iniciou após 3s • request será mantida pendente; ponte curta assume ao sair da tela")
+
+        BGTaskScheduler.shared.getPendingTaskRequests { [weak self] requests in
+            let pending = requests.contains { $0.identifier == identifier }
+            Task { @MainActor [weak self] in
+                guard let self,
+                      self.continuedTaskIdentifier == identifier,
+                      self.continuedTaskObject == nil
+                else { return }
+                if pending {
+                    self.diagnostic("[BG] Scheduler confirmou request pendente • aguardando oportunidade de execução")
+                } else {
+                    self.diagnostic("[WARN] Scheduler ainda não listou a request como pendente • mantendo-a registrada e usando ponte UIKit quando necessário")
+                }
+            }
+        }
     }
 
     private func updateContinuedProcessingProgress() {
@@ -841,9 +859,17 @@ final class AppStore: ObservableObject {
             return
         }
 
-        diagnostic("[WARN] Janela curta de background esgotada sem Continued Processing ativa")
         endLegacyBackgroundTask()
 
+        // Se a request continua pendente, NÃO mate a engine. O iOS pode suspender
+        // o processo por um intervalo e depois entregar a BGContinuedProcessingTask;
+        // cancelar aqui reproduzia o problema que estávamos tentando resolver.
+        if continuedTaskRequested {
+            diagnostic("[WARN] Ponte UIKit esgotada • Continued Processing segue pendente; engine preservada para o scheduler assumir")
+            return
+        }
+
+        diagnostic("[WARN] Janela curta de background esgotada sem Continued Processing ativa")
         guard activity != nil else { return }
 
         task?.cancel()
