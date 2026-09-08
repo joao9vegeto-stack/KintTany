@@ -86,11 +86,14 @@ actor RealtimeSocket {
 
             let gate = await gateCheck(cookie: cookie, serverID: candidate.id)
             if gate == false {
-                trace("[SERVER] \(candidate.shard) indisponível para esta conta • gate-check recusou")
-                continue
-            }
-            if gate == nil {
-                trace("[WARN] gate-check de \(candidate.shard) inconclusivo; conexão será tentada")
+                // O gate-check não é tratado como autoridade final. Há contas que
+                // entram manualmente no shard mesmo quando este endpoint responde 403.
+                // A validação real é feita pelo fluxo connect-token → queue_ready → presence.
+                trace("[SERVER] \(candidate.shard) gate-check recusou • validação real será feita pela conexão")
+            } else if gate == true {
+                trace("[SERVER] \(candidate.shard) gate-check aceitou")
+            } else {
+                trace("[WARN] gate-check de \(candidate.shard) inconclusivo • validação real será feita pela conexão")
             }
 
             attempted += 1
@@ -120,7 +123,7 @@ actor RealtimeSocket {
         }
 
         if attempted == 0 {
-            trace("[ERROR] Nenhum servidor NA passou pelo gate-check")
+            trace("[ERROR] Nenhum servidor NA pôde ser tentado")
             throw SocketError.noAvailableServer
         }
 
