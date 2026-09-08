@@ -1,5 +1,12 @@
 import Foundation
 
+struct PresenceBootstrap {
+    var region: String
+    var position: Position
+    var lifeEpoch: Int = 1
+    var action: [String: Any] = [:]
+}
+
 actor RealtimeSocket {
     private var task: URLSessionWebSocketTask?
     private var closed = false
@@ -7,7 +14,11 @@ actor RealtimeSocket {
     private var traceBuffer: [String] = []
     private var connectionID = UUID()
 
-    func connect(session: SessionManager, shard: String) async throws -> AsyncStream<Data> {
+    func connect(
+        session: SessionManager,
+        shard: String,
+        bootstrap: PresenceBootstrap
+    ) async throws -> AsyncStream<Data> {
         closeCurrentConnection()
         connectionID = UUID()
         let currentConnectionID = connectionID
@@ -25,32 +36,21 @@ actor RealtimeSocket {
             throw SocketError.missingSession
         }
 
-        trace("[NET] Iniciando conexão realtime • shard=\(shard) • cookie=presente (valor ocultado)")
+        trace("[NET] Iniciando conexão realtime • shard=\(shard) • region=\(bootstrap.region) • cookie=presente (valor ocultado)")
 
         do {
             let token = try await connectToken(cookie: cookie, shard: shard, purpose: "queue")
-            let queue = try await open(path: "/ws/queue/\(shard)?kt=\(token)", cookie: cookie, label: "queue")
+            let queue = try await open(path: "/ws/queue/\(shard)?kt=\(token)", label: "queue")
 
             let ping = try RealtimeProtocol.queuePing()
             tracePayload(direction: "OUT queue", data: ping)
-            do {
-                try await queue.send(.data(ping))
-            } catch {
-                trace("[ERROR] Falha ao enviar q_ping para queue: \(error.localizedDescription)")
-                throw error
-            }
+            try await queue.send(.data(ping))
 
             trace("[NET] Aguardando queue_ready")
             var ready = false
             while !ready {
-                let message: URLSessionWebSocketTask.Message
-                do {
-                    message = try await queue.receive()
-                } catch {
-                    trace("[ERROR] Queue receive falhou: \(error.localizedDescription)")
-                    throw error
-                }
-
+                try Task.checkCancellation()
+                let message = try await queue.receive()
                 guard let data = messageData(message) else {
                     trace("[WARN] Queue recebeu mensagem sem payload utilizável")
                     continue
@@ -68,7 +68,7 @@ actor RealtimeSocket {
             trace("[NET] Queue encerrada após queue_ready")
 
             let presenceToken = try await connectToken(cookie: cookie, shard: shard, purpose: "presence")
-            let presence = try await open(path: "/ws/presence/\(shard)?kt=\(presenceToken)", cookie: cookie, label: "presence")
+            let presence = try await open(path: "/ws/presence/\(shard)?kt=\(presenceToken)", label: "presence")
             task = presence
 
             Task { [weak self] in
@@ -76,13 +76,15 @@ actor RealtimeSocket {
             }
 
             let initialPosition = try RealtimeProtocol.position(
-                region: "world",
-                position: Position(x: 22.5, z: -3.5),
-                lifeEpoch: 1,
-                moving: false
+                region: bootstrap.region,
+                position: bootstrap.position,
+                lifeEpoch: bootstrap.lifeEpoch,
+                moving: false,
+                full: true,
+                action: bootstrap.action
             )
             try await send(initialPosition)
-            trace("[NET] Presence preparada; receive loop ativo")
+            trace("[NET] Presence preparada em \(bootstrap.region); receive loop ativo")
             return inbound
         } catch {
             trace("[ERROR] connect() abortado: \(error.localizedDescription)")
@@ -177,7 +179,7 @@ actor RealtimeSocket {
         }
     }
 
-    private func open(path: String, cookie: String, label: String) async throws -> URLSessionWebSocketTask {
+    private func open(path: String, label: String) async throws -> URLSessionWebSocketTask {
         guard let url = URL(string: "wss://us.kintara.com\(path)") else {
             trace("[ERROR] URL WebSocket inválida para \(label)")
             throw SocketError.invalidURL
@@ -192,7 +194,8 @@ actor RealtimeSocket {
 
         var request = URLRequest(url: url)
         request.setValue("https://kintara.com", forHTTPHeaderField: "Origin")
-        request.setValue(cookie, forHTTPHeaderField: "Cookie")
+        // O connect-token temporário é a credencial do WS. O cookie de lobby
+        // continua restrito aos endpoints HTTPS e não é repetido no upgrade.
         request.timeoutInterval = 15
 
         let socket = URLSession.shared.webSocketTask(with: request)
@@ -245,16 +248,18 @@ actor RealtimeSocket {
 
     private func tracePayload(direction: String, data: Data) {
         if let text = String(data: data, encoding: .utf8) {
-            trace("[\(direction)] \(redactSecrets(text))")
+            let safe = redactSecrets(text)
+            let clipped = safe.count > 6_000 ? String(safe.prefix(6_000)) + "… <truncado>" : safe
+            trace("[\(direction)] \(clipped)")
         } else {
-            trace("[\(direction)] <binário \(data.count) bytes> base64=\(data.base64EncodedString())")
+            trace("[\(direction)] <binário \(data.count) bytes>")
         }
     }
 
     private func trace(_ line: String) {
         traceBuffer.append(line)
-        if traceBuffer.count > 500 {
-            traceBuffer.removeFirst(traceBuffer.count - 500)
+        if traceBuffer.count > 1_000 {
+            traceBuffer.removeFirst(traceBuffer.count - 1_000)
         }
     }
 
