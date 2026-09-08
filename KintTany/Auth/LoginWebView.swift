@@ -179,9 +179,9 @@ private final class NoRedirectDelegate: NSObject, URLSessionTaskDelegate {
     func urlSession(
         _ session: URLSession,
         task: URLSessionTask,
-        willPerformHTTPRedirection newRequest: URLRequest,
-        newResponse response: HTTPURLResponse,
-        completionHandler: @escaping (URLRequest?) -> Void
+        willPerformHTTPRedirection response: HTTPURLResponse,
+        newRequest request: URLRequest,
+        completionHandler: @escaping @Sendable (URLRequest?) -> Void
     ) {
         completionHandler(nil)
     }
