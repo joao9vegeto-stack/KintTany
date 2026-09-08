@@ -79,6 +79,21 @@ final class AutomationEngine {
     private var recentWildGrants: [WildGrant] = []
     private var lastWildAvailabilitySignature = ""
 
+    // MARK: Wilderness potions / defensive recovery (ported from Node v5.2.1)
+    // HP/Shield remain server-authoritative. Potion ticks only PROPOSE php/wsh in
+    // position frames; pvit/snap is what changes playerHP/playerShield.
+    private var drinkSeq = 0
+    private var lastDrinkAck: PotionDrinkAck?
+    private var shieldPotionSeq = 0
+    private var strengthBuffUntil: Double = 0
+    private var lastPotionAt: Double = 0
+    private var potionStock = PotionStock()
+    private var potionPersistentCounts: [String: Int] = [:]
+    private var potionStockLoaded = false
+    private var persistentPotionTransport = false
+    private var shieldConfirmFailureStreak = 0
+    private var shieldMechanicUnavailable = false
+
     private var successes = 0
 
     init(socket: RealtimeSocket, cookie: String, shard: String, bootstrap: PresenceBootstrap, reporter: @escaping Reporter) {
@@ -175,6 +190,15 @@ final class AutomationEngine {
                 recentWildGrants.append(WildGrant(serial: wildGrantSerial, type: grant.type, quantity: grant.quantity, at: nowMS))
                 if recentWildGrants.count > 40 { recentWildGrants.removeFirst(recentWildGrants.count - 40) }
                 reporter(.diagnostic("[LOOT] inv_grant #\(wildGrantSerial) • \(grant.quantity)x \(grant.type)"))
+            }
+
+        case "drink_ack":
+            if let seq = RealtimeProtocol.int(packet["seq"]) {
+                let potion = (packet["pt"] as? String) ?? ""
+                let ok = RealtimeProtocol.bool(packet["ok"]) ?? ((packet["error"] as? String) == nil)
+                let error = packet["error"] as? String
+                lastDrinkAck = PotionDrinkAck(seq: seq, potion: potion, ok: ok, error: error)
+                reporter(.diagnostic("[POTION] drink_ack seq=\(seq) pt=\(potion.isEmpty ? "?" : potion) ok=\(ok ? "sim" : "não")\(error.map { " error=\($0)" } ?? "")"))
             }
 
         case "pvit", "wild_mb_ack":
@@ -291,9 +315,15 @@ final class AutomationEngine {
         var extra = action
         if let equipment, extra["eq"] == nil { extra["eq"] = equipment }
         if region.hasPrefix("wild") {
-            extra["php"] = playerHP
-            extra["wsh"] = playerShield
-            extra["wsp"] = extra["wsp"] ?? 0
+            // Important: a potion tick may intentionally pass php/wsh/sps/stb.
+            // Do not overwrite those one-shot proposals with stale local vitals.
+            if extra["php"] == nil { extra["php"] = playerHP }
+            if extra["wsh"] == nil { extra["wsh"] = playerShield }
+            if extra["wsp"] == nil { extra["wsp"] = 0 }
+            if extra["stb"] == nil {
+                let strengthSeconds = strengthBuffSeconds()
+                if strengthSeconds > 0 { extra["stb"] = strengthSeconds }
+            }
         }
         let data = try RealtimeProtocol.position(region: region, position: position, lifeEpoch: lifeEpoch, moving: moving, full: full, action: extra)
         try await socket.send(data)
@@ -1162,6 +1192,7 @@ final class AutomationEngine {
         let targetType = mode == .dragon ? "dragon" : "zombie"
 
         try await enterWildernessFromWorld()
+        try await refreshPotionStock(logSummary: true)
 
         let hb = Task { [weak self] in await self?.heartbeat() }
         defer { hb.cancel() }
@@ -1169,10 +1200,11 @@ final class AutomationEngine {
         while successes < goal {
             try Task.checkCancellation()
             guard playerHP > 0 else { throw EngineError.playerDead }
-            if playerHP + playerShield <= (mode == .dragon ? 80 : 55) {
-                reporter(.log("🛡️ Vitais baixos (HP \(playerHP) + shield \(playerShield)); atividade interrompida para evitar morte"))
-                throw EngineError.unsafeVitals
-            }
+
+            // v5.2.1: não iniciar um novo encontro já ferido. A recuperação
+            // acontece sem target lock aqui; durante um encontro, o mesmo índice
+            // fica travado e é retomado após as poções.
+            try await prepareWildVitalsBeforeNewTarget(mode: mode)
 
             let zombieCount = wildMobs.values.filter { $0.alive && $0.type == "zombie" }.count
             let dragonCount = wildMobs.values.filter { $0.alive && $0.type == "dragon" }.count
@@ -1205,46 +1237,73 @@ final class AutomationEngine {
 
             reporter(.state(.moving, "Movendo até \(targetName)"))
             try await moveWildAdjacent(to: target)
+            try await ensureStrengthReady(targetName: targetName)
             try await equip("wild_sword")
             reporter(.state(.acting, "Preparando ataque • \(targetName)"))
 
             var killed = false
             var acceptedHits = 0
             var lastTargetPosition = target.position
+            var swing = 1
+            var targetLostDuringRecovery = false
 
-            for swing in 1...30 {
+            while swing <= 30 {
                 try Task.checkCancellation()
                 guard let live = wildMobs[target.index], live.alive, live.type == targetType else {
                     break
                 }
                 target = live
                 lastTargetPosition = live.position
-                if playerHP + playerShield <= (mode == .dragon ? 80 : 55) {
-                    reporter(.state(.recovering, "Vitais baixos • interrompendo combate"))
+
+                // Não abandona o alvo: quando os vitais entram na faixa defensiva,
+                // salva o índice, recua ao SAFE_CAMP, usa poções e retorna ao MESMO
+                // mob. A numeração de Hit também continua do ponto onde parou.
+                if shouldRecoverVitals(mode: mode) {
+                    let resumed = try await recoverLockedWildTarget(
+                        mode: mode,
+                        targetIndex: target.index,
+                        targetName: targetName
+                    )
+                    if !resumed {
+                        targetLostDuringRecovery = true
+                        break
+                    }
+                    continue
+                }
+
+                // Strength v5.2: stb é client-driven por ~30 s. Renova antes do
+                // próximo swing quando restarem <=2 s, sem trocar o alvo.
+                if strengthBuffSeconds() <= 2, potionStock.strength > 0 {
+                    _ = try await ensureStrengthReady(targetName: targetName, force: true)
+                }
+
+                guard let current = wildMobs[target.index], current.alive, current.type == targetType else {
                     break
                 }
+                target = current
+                lastTargetPosition = current.position
 
-                if chebyshevDistance(to: live.position) > 1 {
+                if chebyshevDistance(to: current.position) > 1 {
                     reporter(.state(.moving, "Reposicionando • \(targetName)"))
-                    try await moveWildAdjacent(to: live)
+                    try await moveWildAdjacent(to: current)
                 }
 
-                reporter(.target("\(targetName) • HP \(live.hp.map { String($0) } ?? "?")"))
+                reporter(.target("\(targetName) • HP \(current.hp.map { String($0) } ?? "?")"))
                 reporter(.state(.acting, "Hit \(swing) • \(targetName)"))
-                position.ry = atan2(live.position.x - position.x, live.position.z - position.z)
+                position.ry = atan2(current.position.x - position.x, current.position.z - position.z)
                 wildSwordSeq += 1
                 try await sendPosition(moving: false, action: ["wss": wildSwordSeq, "eq": "wild_sword"])
 
                 let ackBefore = wildHitSerial
                 let sentAt = nowMS
-                let hit = try RealtimeProtocol.wildHit(region: "wild", index: live.index, lifeEpoch: lifeEpoch, position: position)
+                let hit = try RealtimeProtocol.wildHit(region: "wild", index: current.index, lifeEpoch: lifeEpoch, position: position)
                 try await socket.send(hit)
                 reporter(.hitSent)
                 reporter(.state(.waitingResult, "Hit \(swing) • aguardando confirmação"))
 
                 // Replica o contato wmb do cliente oficial apenas quando adjacente.
-                let dx = position.x - live.position.x
-                let dz = position.z - live.position.z
+                let dx = position.x - current.position.x
+                let dz = position.z - current.position.z
                 let len = max(0.001, hypot(dx, dz))
                 wildContactSeq += 1
                 try await sendPosition(moving: false, action: ["wmb": wildContactSeq, "wmx": dx / len, "wmz": dz / len, "eq": "wild_sword"])
@@ -1253,7 +1312,7 @@ final class AutomationEngine {
                 var ack: WildHitAck?
                 while nowMS < ackDeadline {
                     try Task.checkCancellation()
-                    if wildHitSerial > ackBefore, let candidate = lastWildHit, candidate.index == live.index {
+                    if wildHitSerial > ackBefore, let candidate = lastWildHit, candidate.index == current.index {
                         ack = candidate
                         break
                     }
@@ -1264,11 +1323,11 @@ final class AutomationEngine {
                     acceptedHits += 1
                     reporter(.confirmedHit)
                     try await sleep(280)
-                    let refreshedHP = wildMobs[live.index]?.hp
+                    let refreshedHP = wildMobs[current.index]?.hp
                     let hpLabel = ack.killedType == targetType ? "0" : (refreshedHP.map { String($0) } ?? "?")
                     reporter(.target("\(targetName) • HP \(hpLabel)"))
                     reporter(.state(.acting, "Hit \(swing) confirmado • \(targetName)"))
-                    reporter(.log("⚔️ \(targetName) • Hit \(swing) confirmado • alvo HP \(hpLabel) • você HP \(playerHP) + shield \(playerShield)"))
+                    reporter(.log("⚔️ \(targetName) • Hit \(swing) confirmado • alvo HP \(hpLabel) • você HP \(playerHP) + shield \(playerShield) • força \(strengthBuffSeconds())s"))
                     if ack.killedType == targetType {
                         killed = true
                         break
@@ -1280,8 +1339,24 @@ final class AutomationEngine {
                 }
 
                 if playerHP <= 0 { throw EngineError.playerDead }
+
+                // O hit recém confirmado pode ter trazido um pvit perigoso.
+                // Recupera imediatamente, mas mantém o target index travado.
+                if shouldRecoverVitals(mode: mode) {
+                    let resumed = try await recoverLockedWildTarget(
+                        mode: mode,
+                        targetIndex: target.index,
+                        targetName: targetName
+                    )
+                    if !resumed {
+                        targetLostDuringRecovery = true
+                        break
+                    }
+                }
+
                 let cadenceLeft = 1_650.0 - (nowMS - sentAt)
                 if cadenceLeft > 0 { try await sleep(Int(cadenceLeft)) }
+                swing += 1
             }
 
             if killed {
@@ -1302,15 +1377,394 @@ final class AutomationEngine {
 
                 if !drops.bankable.isEmpty {
                     try await bankDropsAndReturnToWild(drops.bankable)
+                    try await refreshPotionStock(logSummary: true)
                 }
 
                 try await sleep(mode == .dragon ? 1_200 : 900)
+            } else if targetLostDuringRecovery {
+                reporter(.state(.searching, "Alvo original não está mais disponível"))
+                reporter(.log("ℹ️ \(targetName) desapareceu/morreu durante a recuperação; nenhum novo alvo foi contado como continuação"))
+                try await sleep(500)
             } else {
                 reporter(.failure("\(mode.displayName) sem kill autoritativa"))
                 reporter(.state(.recovering, "Buscando outro \(mode.displayName.lowercased())"))
                 try await sleep(1_000)
             }
         }
+    }
+
+    private func prepareWildVitalsBeforeNewTarget(mode: ActivityMode) async throws {
+        let limits = wildCombatLimits(mode)
+        guard playerHP > 0 else { throw EngineError.playerDead }
+        guard playerHP < limits.preFightHP || playerShield < limits.preFightShield else { return }
+
+        reporter(.state(.recovering, "Preparando vitais antes do próximo alvo"))
+        reporter(.log("🛡️ Pré-combate • HP \(playerHP)/\(limits.preFightHP) • shield \(playerShield)/\(limits.preFightShield)"))
+        try await moveToWildSafeCamp(reason: "pré-combate")
+        try await recoverVitals(mode: mode, preFight: true)
+    }
+
+    private func shouldRecoverVitals(mode: ActivityMode) -> Bool {
+        let limits = wildCombatLimits(mode)
+        return playerHP <= limits.potionHP || playerShield <= limits.shieldHP
+    }
+
+    /// Retorna true somente se o MESMO mob continua vivo e foi reassumido.
+    private func recoverLockedWildTarget(mode: ActivityMode, targetIndex: Int, targetName: String) async throws -> Bool {
+        guard playerHP > 0 else { throw EngineError.playerDead }
+
+        reporter(.state(.recovering, "Recuando • mantendo \(targetName)"))
+        reporter(.log("🏃 Vitais baixos • mantendo \(targetName) travado • HP \(playerHP) + shield \(playerShield)"))
+        try await moveToWildSafeCamp(reason: targetName)
+        try await recoverVitals(mode: mode, preFight: false)
+
+        guard let sameTarget = wildMobs[targetIndex], sameTarget.alive,
+              sameTarget.type == (mode == .dragon ? "dragon" : "zombie")
+        else {
+            reporter(.target(nil))
+            return false
+        }
+
+        reporter(.log("↩️ Retornando ao mesmo \(targetName) • HP alvo \(sameTarget.hp.map { String($0) } ?? "?") • você HP \(playerHP) + shield \(playerShield)"))
+        reporter(.state(.moving, "Retornando ao mesmo \(targetName)"))
+        try await moveWildAdjacent(to: sameTarget)
+        try await equip("wild_sword")
+        reporter(.target("\(targetName) • HP \(sameTarget.hp.map { String($0) } ?? "?")"))
+        reporter(.state(.acting, "Combate retomado • \(targetName)"))
+        return true
+    }
+
+    private func moveToWildSafeCamp(reason: String) async throws {
+        // SAFE_CAMP da v5.2.1: col 25,row 47 -> world (0.5,22.5), faixa sem
+        // spawn de mobs usada para recuperação defensiva.
+        let safeCamp = Position(x: 0.5, z: 22.5)
+        if hypot(position.x - safeCamp.x, position.z - safeCamp.z) > 0.8 {
+            reporter(.state(.moving, "Recuando para área segura"))
+            reporter(.log("🏕️ Área segura • motivo=\(reason) • destino 25,47"))
+            try await walk(to: safeCamp, maxSeconds: 35)
+        }
+        try await sendPosition(moving: false)
+        try await sleep(450)
+    }
+
+    private func recoverVitals(mode: ActivityMode, preFight: Bool) async throws {
+        let limits = wildCombatLimits(mode)
+        let hpGoal = preFight ? limits.preFightHP : max(80, limits.potionHP)
+        let shieldGoal = preFight ? limits.preFightShield : max(50, limits.shieldHP)
+        let deadline = nowMS + Double(preFight ? (mode == .dragon ? 26_000 : 18_000) : 16_000)
+
+        try await refreshPotionStock(logSummary: false)
+        reporter(.log("🧪 Recuperação iniciada • meta HP \(hpGoal) • shield \(shieldGoal) • estoque ❤️\(potionStock.health) 🛡️\(potionStock.shield) 💪\(potionStock.strength)"))
+
+        var usedAny = false
+        while nowMS < deadline {
+            try Task.checkCancellation()
+            guard playerHP > 0 else { throw EngineError.playerDead }
+
+            if playerHP >= hpGoal && playerShield >= shieldGoal {
+                reporter(.log("✅ Recuperação confirmada • HP \(playerHP) • shield \(playerShield)"))
+                try await equip("wild_sword")
+                return
+            }
+
+            if playerHP < hpGoal {
+                if potionStock.health > 0 {
+                    let before = playerHP
+                    if try await consumePotion("potion_health") {
+                        usedAny = true
+                        reporter(.log("❤️ Poção de vida aceita • HP antes \(before) • aguardando pvit/snapshot"))
+                        try await driveHealthPotionTicks(goal: hpGoal)
+                        continue
+                    }
+                } else if playerHP <= limits.retreatHP {
+                    throw EngineError.potionRecoveryFailed("sem poção de vida com HP crítico \(playerHP)")
+                }
+            }
+
+            if !shieldMechanicUnavailable, playerShield < shieldGoal {
+                if potionStock.shield > 0 {
+                    let before = playerShield
+                    if try await consumePotion("potion_shield") {
+                        usedAny = true
+                        reporter(.log("🛡️ Poção de escudo aceita • shield antes \(before) • aguardando SPS + pvit"))
+                        try await driveShieldPotionTicks(goal: shieldGoal, before: before)
+                        if playerShield <= before {
+                            shieldConfirmFailureStreak += 1
+                            if shieldConfirmFailureStreak >= 2 {
+                                shieldMechanicUnavailable = true
+                                reporter(.log("⚠️ Shield sem confirmação em 2 doses; uso automático pausado para não desperdiçar poções"))
+                            }
+                        } else {
+                            shieldConfirmFailureStreak = 0
+                        }
+                        continue
+                    }
+                }
+            }
+
+            // Sem uma ação de poção possível neste instante. Revalida /me uma vez
+            // porque hotbar/Presence pode estar atrasado em relação ao estado persistido.
+            if !usedAny {
+                try await refreshPotionStock(logSummary: false)
+            }
+
+            if playerHP >= hpGoal && (playerShield >= shieldGoal || (shieldMechanicUnavailable && mode != .dragon)) {
+                reporter(.log("✅ Recuperação suficiente • HP \(playerHP) • shield \(playerShield)"))
+                try await equip("wild_sword")
+                return
+            }
+
+            if potionStock.health <= 0 && (potionStock.shield <= 0 || shieldMechanicUnavailable) {
+                let detail = "estoque insuficiente • HP \(playerHP)/\(hpGoal) • shield \(playerShield)/\(shieldGoal)"
+                throw EngineError.potionRecoveryFailed(detail)
+            }
+
+            try await sleep(250)
+        }
+
+        if playerHP >= hpGoal && (playerShield >= shieldGoal || (shieldMechanicUnavailable && mode != .dragon)) {
+            reporter(.log("✅ Recuperação concluída no limite • HP \(playerHP) • shield \(playerShield)"))
+            try await equip("wild_sword")
+            return
+        }
+        throw EngineError.potionRecoveryFailed("timeout • HP \(playerHP)/\(hpGoal) • shield \(playerShield)/\(shieldGoal)")
+    }
+
+    @discardableResult
+    private func ensureStrengthReady(targetName: String, force: Bool = false) async throws -> Bool {
+        let seconds = strengthBuffSeconds()
+        if !force, seconds > 2 { return true }
+        if force, seconds > 2 { return true }
+
+        if !potionStockLoaded { try await refreshPotionStock(logSummary: false) }
+        guard potionStock.strength > 0 else {
+            if seconds <= 0 {
+                reporter(.log("ℹ️ \(targetName) • sem poção de força carregada; combate segue sem buff"))
+            }
+            return false
+        }
+
+        if try await consumePotion("potion_strength") {
+            strengthBuffUntil = nowMS + 30_000
+            try await sendPosition(moving: false, action: ["stb": 30])
+            reporter(.log("💪 Poção de força ativa • 30s • \(targetName) • restantes \(potionStock.strength)"))
+            try await equip("wild_sword")
+            return true
+        }
+        return false
+    }
+
+    private func strengthBuffSeconds() -> Int {
+        guard strengthBuffUntil > nowMS else {
+            strengthBuffUntil = 0
+            return 0
+        }
+        return max(0, Int(ceil((strengthBuffUntil - nowMS) / 1_000)))
+    }
+
+    private func refreshPotionStock(logSummary: Bool) async throws {
+        let state = try await http.backpackState()
+        let bp = state.backpack
+        potionPersistentCounts = [
+            "potion_health": max(0, RealtimeProtocol.int(bp["potion_health"]) ?? 0),
+            "potion_shield": max(0, RealtimeProtocol.int(bp["potion_shield"]) ?? 0),
+            "potion_strength": max(0, RealtimeProtocol.int(bp["potion_strength"]) ?? 0)
+        ]
+        potionStock.health = carriedPotionCount(bp, type: "potion_health")
+        potionStock.shield = carriedPotionCount(bp, type: "potion_shield")
+        potionStock.strength = carriedPotionCount(bp, type: "potion_strength")
+        potionStockLoaded = true
+        if logSummary {
+            reporter(.log("🎒 Poções carregadas • ❤️ \(potionStock.health) • 🛡️ \(potionStock.shield) • 💪 \(potionStock.strength)"))
+        }
+    }
+
+    private func carriedPotionCount(_ backpack: [String: Any], type: String) -> Int {
+        let flat = max(0, RealtimeProtocol.int(backpack[type]) ?? 0)
+        guard flat > 0 else { return 0 }
+        let slotted = potionSlotCount(backpack["hotbar"], type: type) + potionSlotCount(backpack["invSlots"], type: type)
+        return slotted > 0 ? flat : 0
+    }
+
+    private func potionSlotCount(_ value: Any?, type: String) -> Int {
+        guard let slots = value as? [Any] else { return 0 }
+        return slots.reduce(0) { partial, raw in
+            guard let slot = raw as? [String: Any], slot["t"] as? String == type else { return partial }
+            return partial + max(0, RealtimeProtocol.int(slot["n"]) ?? 0)
+        }
+    }
+
+    private func decrementPotionStock(_ type: String) {
+        switch type {
+        case "potion_health": potionStock.health = max(0, potionStock.health - 1)
+        case "potion_shield": potionStock.shield = max(0, potionStock.shield - 1)
+        case "potion_strength": potionStock.strength = max(0, potionStock.strength - 1)
+        default: break
+        }
+        if let current = potionPersistentCounts[type] {
+            potionPersistentCounts[type] = max(0, current - 1)
+        }
+    }
+
+    private func currentPotionStock(_ type: String) -> Int {
+        switch type {
+        case "potion_health": potionStock.health
+        case "potion_shield": potionStock.shield
+        case "potion_strength": potionStock.strength
+        default: 0
+        }
+    }
+
+    /// Presence primeiro: pos act=eat/eq=potion -> drink(seq,pt) -> drink_ack.
+    /// Se a Presence disser not_carried mas /me provar estoque persistido, usa o
+    /// mesmo fallback oficial da v5.2: POST /api/auth/consume-potion.
+    private func consumePotion(_ type: String) async throws -> Bool {
+        if !potionStockLoaded { try await refreshPotionStock(logSummary: false) }
+        guard currentPotionStock(type) > 0 || (potionPersistentCounts[type] ?? 0) > 0 else { return false }
+
+        let rateWait = max(0, 2_550.0 - (nowMS - lastPotionAt))
+        if rateWait > 0 { try await sleep(Int(rateWait)) }
+        lastPotionAt = nowMS
+
+        if persistentPotionTransport {
+            return try await consumePotionHTTP(type)
+        }
+
+        let previousEquipment = equipment
+        drinkSeq += 1
+        let seq = drinkSeq
+        lastDrinkAck = nil
+
+        do {
+            equipment = type
+            try await sendPosition(moving: false, action: ["act": "eat", "eq": type])
+            let packet: [String: Any] = ["t": "drink", "seq": seq, "pt": type]
+            let data = try JSONSerialization.data(withJSONObject: packet)
+            try await socket.send(data)
+        } catch {
+            equipment = previousEquipment
+            try? await sendPosition(moving: false)
+            reporter(.diagnostic("[POTION] Presence send falhou para \(type): \(error.localizedDescription); tentando endpoint persistente"))
+            return try await consumePotionHTTP(type)
+        }
+
+        let deadline = nowMS + 3_200
+        var ack: PotionDrinkAck?
+        while nowMS < deadline {
+            try Task.checkCancellation()
+            if let candidate = lastDrinkAck, candidate.seq == seq {
+                ack = candidate
+                break
+            }
+            try await sleep(25)
+        }
+
+        equipment = previousEquipment
+        try? await sendPosition(moving: false)
+
+        if let ack, ack.ok {
+            decrementPotionStock(type)
+            return true
+        }
+
+        if let ack, ack.error == "not_carried" {
+            try await refreshPotionStock(logSummary: false)
+            if (potionPersistentCounts[type] ?? 0) > 0 {
+                persistentPotionTransport = true
+                reporter(.diagnostic("[POTION] Presence hotbar dessincronizada; transporte persistente ativado"))
+                return try await consumePotionHTTP(type)
+            }
+            return false
+        }
+
+        // ACK pode se perder depois de o servidor já aceitar a dose. Compare /me
+        // antes de arriscar um fallback que consumiria duas poções.
+        let before = currentPotionStock(type)
+        try? await refreshPotionStock(logSummary: false)
+        if currentPotionStock(type) < before || (potionPersistentCounts[type] ?? before) < before {
+            reporter(.diagnostic("[POTION] ACK ausente, mas /me confirmou consumo de \(type)"))
+            return true
+        }
+
+        reporter(.log("⚠️ \(prettyItem(type)) não teve consumo confirmado\(ack?.error.map { " • \($0)" } ?? "")"))
+        return false
+    }
+
+    private func consumePotionHTTP(_ type: String) async throws -> Bool {
+        do {
+            let response = try await http.consumePotion(type)
+            guard RealtimeProtocol.bool(response["ok"]) != false, response["error"] == nil else {
+                reporter(.log("⚠️ \(prettyItem(type)) recusada pelo endpoint persistente"))
+                return false
+            }
+            decrementPotionStock(type)
+            if let bp = response["backpack"] as? [String: Any] {
+                potionPersistentCounts[type] = max(0, RealtimeProtocol.int(bp[type]) ?? (potionPersistentCounts[type] ?? 0))
+            }
+            return true
+        } catch {
+            reporter(.log("⚠️ \(prettyItem(type)) falhou: \(error.localizedDescription)"))
+            return false
+        }
+    }
+
+    private func driveHealthPotionTicks(goal: Int) async throws {
+        try await sleep(1_250)
+        for _ in 0..<10 {
+            try Task.checkCancellation()
+            guard playerHP > 0 else { throw EngineError.playerDead }
+            if playerHP >= goal || playerHP >= 100 { break }
+            let before = playerHP
+            let proposed = min(100, before + 10)
+            try await sendPosition(moving: false, action: ["php": proposed])
+            try await sleep(35)
+            try await sendPosition(moving: false, action: ["php": proposed])
+
+            let deadline = nowMS + 1_100
+            while nowMS < deadline, playerHP <= before {
+                try Task.checkCancellation()
+                try await sleep(60)
+            }
+            reporter(.log("❤️ Tick de vida • \(before) → \(playerHP)\(playerHP <= before ? " (sem confirmação)" : "")"))
+            if playerHP >= goal { break }
+        }
+    }
+
+    private func driveShieldPotionTicks(goal: Int, before initialShield: Int) async throws {
+        try await sleep(1_800)
+        shieldPotionSeq += 1
+        try await sendPosition(moving: false, action: ["sps": shieldPotionSeq])
+        reporter(.diagnostic("[POTION] Shield SPS=\(shieldPotionSeq) enviado"))
+        try await sleep(1_000)
+
+        for _ in 0..<5 {
+            try Task.checkCancellation()
+            if playerShield >= goal || playerShield >= 100 { break }
+            let before = playerShield
+            let proposed = min(100, before + 10)
+            try await sendPosition(moving: false, action: ["wsh": proposed])
+            try await sleep(35)
+            try await sendPosition(moving: false, action: ["wsh": proposed])
+
+            let deadline = nowMS + 1_100
+            while nowMS < deadline, playerShield <= before {
+                try Task.checkCancellation()
+                try await sleep(60)
+            }
+            reporter(.log("🛡️ Tick de escudo • \(before) → \(playerShield)\(playerShield <= before ? " (sem confirmação)" : "")"))
+            if playerShield >= goal { break }
+        }
+
+        if playerShield <= initialShield {
+            reporter(.diagnostic("[POTION] Shield não aumentou após SPS/ticks"))
+        }
+    }
+
+    private func wildCombatLimits(_ mode: ActivityMode) -> WildCombatLimits {
+        if mode == .dragon {
+            return WildCombatLimits(potionHP: 88, shieldHP: 72, retreatHP: 68, preFightHP: 95, preFightShield: 90)
+        }
+        return WildCombatLimits(potionHP: 75, shieldHP: 45, retreatHP: 45, preFightHP: 90, preFightShield: 60)
     }
 
     private func enterWildernessFromWorld() async throws {
@@ -1846,6 +2300,27 @@ private struct WildHitAck {
     let killedType: String?
 }
 
+private struct PotionDrinkAck {
+    let seq: Int
+    let potion: String
+    let ok: Bool
+    let error: String?
+}
+
+private struct PotionStock {
+    var health = 0
+    var shield = 0
+    var strength = 0
+}
+
+private struct WildCombatLimits {
+    let potionHP: Int
+    let shieldHP: Int
+    let retreatHP: Int
+    let preFightHP: Int
+    let preFightShield: Int
+}
+
 private struct WildGrant {
     let serial: Int
     let type: String
@@ -1894,6 +2369,7 @@ private enum EngineError: LocalizedError {
     case regionNotConfirmed(String)
     case playerDead
     case unsafeVitals
+    case potionRecoveryFailed(String)
     case bankDepositFailed(String)
 
     var errorDescription: String? {
@@ -1902,6 +2378,7 @@ private enum EngineError: LocalizedError {
         case .regionNotConfirmed(let region): return "O servidor não confirmou a região \(region)"
         case .playerDead: return "O personagem morreu"
         case .unsafeVitals: return "Combate interrompido por HP/Shield baixos"
+        case .potionRecoveryFailed(let detail): return "Recuperação com poções falhou: \(detail)"
         case .bankDepositFailed(let item): return "Drop não pôde ser confirmado no banco: \(item)"
         }
     }
@@ -1917,6 +2394,10 @@ private struct KintaraHTTPClient {
 
     func post(_ path: String, body: [String: Any]) async throws -> [String: Any] {
         try await request(method: "POST", path: path, body: body)
+    }
+
+    func consumePotion(_ type: String) async throws -> [String: Any] {
+        try await post("/api/auth/consume-potion", body: ["type": type])
     }
 
     func backpackState() async throws -> BackpackState {
