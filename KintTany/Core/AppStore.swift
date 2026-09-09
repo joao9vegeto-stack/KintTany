@@ -87,68 +87,29 @@ enum ActivityState: String, Codable {
 
 
 enum ContinuedActivityStatusFormatter {
+    /// Única fonte de texto visível para o card do app e para a superfície
+    /// de Continued Processing do iOS. Se a engine já forneceu um status
+    /// legível (ex.: "Peixe #3 • fisgada em 25.7s"), ele é preservado
+    /// literalmente para que a Dynamic Island mostre o mesmo conteúdo.
     static func status(
         mode: ActivityMode,
         state: ActivityState,
         currentTarget: String?,
         rawStatus: String
     ) -> String {
-        if mode.isWildCombat,
-           state == .recovering,
-           rawStatus.localizedCaseInsensitiveContains("saindo") {
-            return "Saindo do combate com segurança"
-        }
+        let visible = rawStatus.trimmingCharacters(in: .whitespacesAndNewlines)
+        if !visible.isEmpty { return visible }
 
+        // Fallback somente para o caso anormal de uma engine ainda não ter
+        // publicado mensagem. Não substitui uma mensagem real da atividade.
         switch mode {
-        case .tree:
-            switch state {
-            case .searching, .selectingTarget, .moving: return "Procurando árvore"
-            case .recovering, .syncing: return "Sincronizando árvore"
-            case .completed, .cooldown: return "Madeira concluída"
-            default: return "Cortando árvore"
-            }
-        case .stone:
-            switch state {
-            case .searching, .selectingTarget, .moving: return "Procurando pedra"
-            case .recovering, .syncing: return "Sincronizando pedra"
-            case .completed, .cooldown: return "Pedra concluída"
-            default: return "Minerando pedra"
-            }
-        case .coal:
-            switch state {
-            case .searching, .selectingTarget, .moving: return "Procurando carvão"
-            case .recovering, .syncing: return "Sincronizando carvão"
-            case .completed, .cooldown: return "Carvão concluído"
-            default: return "Minerando carvão"
-            }
-        case .fishing:
-            switch state {
-            case .searching, .selectingTarget, .moving, .syncing, .preparingAction:
-                return "Preparando pesca"
-            case .recovering: return "Ressincronizando pesca"
-            case .completed, .cooldown: return "Peixe confirmado"
-            default: return "Aguardando fisgada"
-            }
-        case .chicken:
-            switch state {
-            case .searching, .selectingTarget, .moving: return "Procurando galinha"
-            case .completed, .cooldown: return "Galinha derrotada"
-            default: return "Combatendo galinha"
-            }
-        case .zombie:
-            switch state {
-            case .searching, .selectingTarget, .moving: return "Procurando zumbi"
-            case .recovering: return "Recuperando com segurança"
-            case .completed, .cooldown: return "Zumbi derrotado"
-            default: return "Em combate com zumbi"
-            }
-        case .dragon:
-            switch state {
-            case .searching, .selectingTarget, .moving: return "Procurando dragão"
-            case .recovering: return "Recuperando com segurança"
-            case .completed, .cooldown: return "Dragão derrotado"
-            default: return "Em combate com dragão"
-            }
+        case .tree: return "Cortando árvore"
+        case .stone: return "Minerando pedra"
+        case .coal: return "Minerando carvão"
+        case .fishing: return "Preparando pesca"
+        case .chicken: return "Combatendo galinha"
+        case .zombie: return state == .recovering ? "Saindo do combate com segurança" : "Em combate com zumbi"
+        case .dragon: return state == .recovering ? "Saindo do combate com segurança" : "Em combate com dragão"
         }
     }
 }
@@ -254,7 +215,6 @@ final class AppStore: ObservableObject {
     private var continuedProgressSubunit = 0
     private var lastScenePhaseKey: String?
     private var legacyBackgroundTask: UIBackgroundTaskIdentifier = .invalid
-    private var lastContinuedTitleUpdateAt: TimeInterval = 0
     private var lastContinuedTitleSuccesses = -1
     private var lastContinuedPublicStatus = ""
 
@@ -270,6 +230,18 @@ final class AppStore: ObservableObject {
 
     var progress: Double {
         min(1, Double(stats.successes) / Double(max(goal, 1)))
+    }
+
+    /// Texto compartilhado pelo card da atividade e pela Dynamic Island.
+    /// Assim, ambos nunca divergem por usarem formatters diferentes.
+    var displayStatusMessage: String {
+        guard let mode = activity ?? continuedTaskMode else { return statusMessage }
+        return ContinuedActivityStatusFormatter.status(
+            mode: mode,
+            state: state,
+            currentTarget: currentTarget,
+            rawStatus: statusMessage
+        )
     }
 
     func start(_ mode: ActivityMode) {
@@ -807,7 +779,6 @@ final class AppStore: ObservableObject {
         continuedTaskIdentifier = nil
         continuedTaskSubmissionAttempt = 0
         continuedProgressSubunit = 0
-        lastContinuedTitleUpdateAt = 0
         lastContinuedTitleSuccesses = -1
         lastContinuedPublicStatus = ""
         lastScenePhaseKey = nil
@@ -1014,8 +985,8 @@ final class AppStore: ObservableObject {
               let backgroundTask = continuedTaskObject as? BGContinuedProcessingTask
         else { return }
 
-        // Progresso interno continua granular; o texto público é desacoplado dos
-        // detalhes de protocolo (proof/handshake/wear) e sofre throttling visual.
+        // Progresso interno continua granular; o texto mostrado pelo sistema
+        // usa a mesma fonte visível do card da atividade no app.
         let goalUnits = Int64(max(1, goal))
         let total = goalUnits * 100
         let successBase = Int64(min(max(0, stats.successes), max(1, goal))) * 100
@@ -1024,23 +995,19 @@ final class AppStore: ObservableObject {
         backgroundTask.progress.completedUnitCount = completed
 
         guard let mode = activity ?? continuedTaskMode else { return }
-        let publicStatus = ContinuedActivityStatusFormatter.status(
-            mode: mode,
-            state: state,
-            currentTarget: currentTarget,
-            rawStatus: statusMessage
-        )
-        let now = Date().timeIntervalSince1970
+        let publicStatus = displayStatusMessage
         let successChanged = lastContinuedTitleSuccesses != stats.successes
         let statusChanged = lastContinuedPublicStatus != publicStatus
-        let throttleElapsed = now - lastContinuedTitleUpdateAt >= 1.0
-        guard forceTitleUpdate || successChanged || (statusChanged && throttleElapsed) || throttleElapsed else { return }
+
+        // A superfície do sistema deve acompanhar o mesmo texto que o card do
+        // app. Cada mudança visível relevante atualiza o título; não há mais
+        // formatter genérico que substitua "Peixe #N • fisgada em ...".
+        guard forceTitleUpdate || successChanged || statusChanged else { return }
 
         backgroundTask.updateTitle(
             "Kintarabot • \(mode.localizedTitle)",
             subtitle: "\(stats.successes)/\(max(1, goal)) • \(publicStatus)"
         )
-        lastContinuedTitleUpdateAt = now
         lastContinuedTitleSuccesses = stats.successes
         lastContinuedPublicStatus = publicStatus
     }
