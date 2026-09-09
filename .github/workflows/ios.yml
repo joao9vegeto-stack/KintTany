@@ -106,6 +106,18 @@ jobs:
           ditto -c -k --sequesterRsrc --keepParent Payload artifacts/unsigned/KintTany-unsigned.ipa
           cp -R Payload/KintTany.app artifacts/unsigned/KintTany.app
 
+      - name: Validate packaged background configuration
+        shell: bash
+        run: |
+          set -euo pipefail
+          APP_PLIST="artifacts/unsigned/KintTany.app/Info.plist"
+          echo "Validating $APP_PLIST"
+          plutil -p "$APP_PLIST" | grep -F 'BGTaskSchedulerPermittedIdentifiers'
+          plutil -p "$APP_PLIST" | grep -F 'com.joaopedro.kinttany.continuedBot.*'
+          plutil -p "$APP_PLIST" | grep -F 'com.joaopedro.kinttany.939CVZZW65.continuedBot.*'
+          plutil -p "$APP_PLIST" | grep -F 'processing'
+          echo "Background configuration present in packaged .app"
+
       - name: Detect optional signing Secrets
         env:
           IOS_DISTRIBUTION_CERTIFICATE_BASE64: ${{ secrets.IOS_DISTRIBUTION_CERTIFICATE_BASE64 }}
