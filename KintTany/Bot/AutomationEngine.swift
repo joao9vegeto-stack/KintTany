@@ -1298,6 +1298,25 @@ final class AutomationEngine {
             let targetName = "\(mode.displayName) #\(target.index)"
             reporter(.target("\(targetName) • HP \(target.hp.map { String($0) } ?? "?")"))
             reporter(.log("🎯 \(targetName) selecionado • HP \(target.hp.map { String($0) } ?? "?") • disponíveis=\(candidates.count)"))
+
+            reporter(.state(.moving, "Movendo até \(targetName)"))
+            try await moveWildAdjacent(to: target)
+
+            // v3.0: snapshots podem mudar enquanto caminhamos. Não gaste Strength
+            // nem conte tentativa se outro jogador matou/despawnou o mob antes de
+            // chegarmos em alcance.
+            guard let approachedTarget = wildMobs[target.index],
+                  approachedTarget.alive,
+                  approachedTarget.type == targetType
+            else {
+                reporter(.target(nil))
+                reporter(.state(.searching, "Alvo mudou durante a aproximação"))
+                reporter(.log("ℹ️ \(targetName) ficou indisponível durante a aproximação • nenhuma poção/hit consumido • buscando outro alvo"))
+                try await sleep(350)
+                continue
+            }
+            target = approachedTarget
+            reporter(.target("\(targetName) • HP \(target.hp.map { String($0) } ?? "?")"))
             reporter(.attempt)
 
             let targetXPStart = combatXPTotal
@@ -1307,9 +1326,21 @@ final class AutomationEngine {
             let groundBagBaseline = try? await http.groundBagIDs(shardID: shardNumber)
             let grantBaseline = wildGrantSerial
 
-            reporter(.state(.moving, "Movendo até \(targetName)"))
-            try await moveWildAdjacent(to: target)
             try await ensureStrengthReady(targetName: targetName)
+
+            // A ativação do buff também leva tempo. Se o mob desaparecer antes do
+            // primeiro hit, registre churn de alvo, nunca uma falsa falha de kill.
+            guard let preparedTarget = wildMobs[target.index],
+                  preparedTarget.alive,
+                  preparedTarget.type == targetType
+            else {
+                reporter(.target(nil))
+                reporter(.state(.searching, "Alvo indisponível antes do primeiro hit"))
+                reporter(.log("ℹ️ \(targetName) deixou de estar válido antes do primeiro hit • tentativa descartada sem falha"))
+                try await sleep(350)
+                continue
+            }
+            target = preparedTarget
             try await equip("wild_sword")
             reporter(.state(.acting, "Preparando ataque • \(targetName)"))
 
@@ -1318,10 +1349,12 @@ final class AutomationEngine {
             var lastTargetPosition = target.position
             var swing = 1
             var targetLostDuringRecovery = false
+            var targetBecameUnavailable = false
 
             while swing <= 30 {
                 try Task.checkCancellation()
                 guard let live = wildMobs[target.index], live.alive, live.type == targetType else {
+                    targetBecameUnavailable = true
                     break
                 }
                 target = live
@@ -1366,6 +1399,7 @@ final class AutomationEngine {
                 }
 
                 guard let current = wildMobs[target.index], current.alive, current.type == targetType else {
+                    targetBecameUnavailable = true
                     break
                 }
                 target = current
@@ -1496,6 +1530,11 @@ final class AutomationEngine {
             } else if targetLostDuringRecovery {
                 reporter(.state(.searching, "Alvo original não está mais disponível"))
                 reporter(.log("ℹ️ \(targetName) desapareceu/morreu durante recovery/reposição; será buscado um novo alvo"))
+                try await sleep(500)
+            } else if targetBecameUnavailable {
+                reporter(.target(nil))
+                reporter(.state(.searching, "Alvo ficou indisponível durante o combate"))
+                reporter(.log("ℹ️ \(targetName) desapareceu/morreu sem kill atribuível ao bot • não contabilizado como falha • buscando outro alvo"))
                 try await sleep(500)
             } else {
                 reporter(.failure("\(mode.displayName) sem kill autoritativa"))
@@ -1808,7 +1847,10 @@ final class AutomationEngine {
     private func finalizeCombatSessionSafely(mode: ActivityMode) async throws {
         if region.hasPrefix("wild") || serverRegion?.hasPrefix("wild") == true {
             reporter(.state(.recovering, "Meta concluída • ficando em segurança"))
-            reporter(.log("🛡️ Meta de \(mode.displayName) concluída • aguardando saída segura do combate"))
+            let elapsed = max(0, nowMS - lastCombatActivityAt)
+            let remaining = Int(ceil(max(0, combatLogoutWindowMS - elapsed) / 1_000))
+            reporter(.log("🛡️ Meta de \(mode.displayName) concluída • saída segura iniciada • combat timer \(remaining)s"))
+            reporter(.log("⏳ Deslocamento até a área segura conta dentro da janela de combate de 10s"))
             try await moveToWildSafeCamp(reason: "meta concluída")
             try await waitForCombatSafetyWindow(reason: "meta concluída")
             try await exitWildToWorld(reason: "meta concluída")
