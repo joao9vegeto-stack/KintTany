@@ -135,23 +135,31 @@ final class RealtimeProtocolTests: XCTestCase {
         XCTAssertFalse(ActivityMode.chicken.isWildCombat)
     }
 
-    func testContinuedStatusNeverLeaksGatherProtocolTerms() {
+    func testContinuedStatusMirrorsVisibleActivityStatus() {
+        let fishing = ContinuedActivityStatusFormatter.status(
+            mode: .fishing,
+            state: .preparingAction,
+            currentTarget: "Spot #1 • 19,23",
+            rawStatus: "Peixe #3 • fisgada em 25.7s"
+        )
         let tree = ContinuedActivityStatusFormatter.status(
             mode: .tree,
             state: .waitingProof,
             currentTarget: "Madeira • 3,26",
             rawStatus: "Handshake 1/3"
         )
-        let stone = ContinuedActivityStatusFormatter.status(
-            mode: .stone,
-            state: .waitingResult,
-            currentTarget: "Pedra • 30,45",
-            rawStatus: "Progresso 5/6"
+        XCTAssertEqual(fishing, "Peixe #3 • fisgada em 25.7s")
+        XCTAssertEqual(tree, "Handshake 1/3")
+    }
+
+    func testContinuedStatusFallsBackOnlyWhenRawStatusIsEmpty() {
+        let value = ContinuedActivityStatusFormatter.status(
+            mode: .fishing,
+            state: .preparingAction,
+            currentTarget: nil,
+            rawStatus: "   "
         )
-        XCTAssertEqual(tree, "Cortando árvore")
-        XCTAssertEqual(stone, "Minerando pedra")
-        XCTAssertFalse(tree.localizedCaseInsensitiveContains("handshake"))
-        XCTAssertFalse(stone.localizedCaseInsensitiveContains("progresso"))
+        XCTAssertEqual(value, "Preparando pesca")
     }
 
     func testContinuedStatusUsesSafeCombatExitCopy() {
