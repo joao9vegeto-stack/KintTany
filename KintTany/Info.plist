@@ -22,7 +22,15 @@
 	<string>30</string>
 	<key>BGTaskSchedulerPermittedIdentifiers</key>
 	<array>
+		<!-- Build normal/GitHub Actions. -->
 		<string>$(PRODUCT_BUNDLE_IDENTIFIER).continuedBot.*</string>
+		<!--
+		SideStore/free provisioning re-assina este app com o bundle ID observado
+		em runtime abaixo. BGContinuedProcessingTask exige que o wildcard comece
+		pelo bundle ID efetivo do app instalado, não apenas pelo ID pré-resign.
+		Manter ambos permite build normal e a instalação SideStore testada.
+		-->
+		<string>com.joaopedro.kinttany.939CVZZW65.continuedBot.*</string>
 	</array>
 	<key>LSRequiresIPhoneOS</key>
 	<true/>
