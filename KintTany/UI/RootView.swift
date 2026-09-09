@@ -176,7 +176,7 @@ struct RootView: View {
                 VStack(alignment: .leading, spacing: 3) {
                     Text(mode?.localizedTitle ?? "Nenhuma atividade")
                         .font(.title3.bold())
-                    Text(app.statusMessage)
+                    Text(app.displayStatusMessage)
                         .font(.subheadline)
                         .foregroundStyle(.secondary)
                         .lineLimit(2)
