@@ -83,4 +83,85 @@ final class RealtimeProtocolTests: XCTestCase {
         }
         XCTAssertEqual(packet["t"] as? String, "harv_hit")
     }
+
+    func testFishingRecoveryPolicyMatchesNodeV52() {
+        XCTAssertEqual(FishingRecoveryPolicy.minStartTTLMS, 38_000)
+        XCTAssertEqual(FishingRecoveryPolicy.biteExpiryMarginMS, 4_500)
+        XCTAssertEqual(FishingRecoveryPolicy.biteScheduleTimeoutMS, 3_500)
+        XCTAssertEqual(FishingRecoveryPolicy.betweenCatchMS, 4_800)
+        XCTAssertEqual(FishingRecoveryPolicy.staleRecoveryMS, 4_500)
+        XCTAssertTrue(FishingRecoveryPolicy.isStale("fish_action_stale"))
+        XCTAssertTrue(FishingRecoveryPolicy.isStale("grant failed: FISH_ACTION_STALE"))
+        XCTAssertFalse(FishingRecoveryPolicy.isStale("no_bite"))
+    }
+
+    func testGatherRetryPolicyDefersPureProofMissWithoutFailureStreak() {
+        var policy = GatherRetryPolicy()
+        policy.deferProofMiss(signature: "tree:3,26", nowMS: 1_000)
+        XCTAssertFalse(policy.isEligible(signature: "tree:3,26", nowMS: 10_999))
+        XCTAssertTrue(policy.isEligible(signature: "tree:3,26", nowMS: 11_000))
+        XCTAssertFalse(policy.hasRetryPriority(signature: "tree:3,26"))
+        XCTAssertNil(policy.retryStreaks["tree:3,26"])
+    }
+
+    func testGatherRetryPolicyAcceptedPartialGetsShortRetryPriority() {
+        var policy = GatherRetryPolicy()
+        policy.deferAcceptedPartial(signature: "rock:12,46|12,47", nowMS: 5_000)
+        XCTAssertTrue(policy.hasRetryPriority(signature: "rock:12,46|12,47"))
+        XCTAssertFalse(policy.isEligible(signature: "rock:12,46|12,47", nowMS: 6_199))
+        XCTAssertTrue(policy.isEligible(signature: "rock:12,46|12,47", nowMS: 6_200))
+    }
+
+    func testGatherRetryPolicyDefersAfterThreeRealFailures() {
+        var policy = GatherRetryPolicy()
+        let signature = "rock:12,46|12,47"
+        XCTAssertFalse(policy.markRealFailure(signature: signature, nowMS: 0))
+        XCTAssertEqual(policy.retryStreaks[signature], 1)
+        XCTAssertFalse(policy.markRealFailure(signature: signature, nowMS: 8_000))
+        XCTAssertEqual(policy.retryStreaks[signature], 2)
+        XCTAssertTrue(policy.markRealFailure(signature: signature, nowMS: 16_000))
+        XCTAssertNil(policy.retryStreaks[signature])
+        XCTAssertFalse(policy.isEligible(signature: signature, nowMS: 25_999))
+        XCTAssertTrue(policy.isEligible(signature: signature, nowMS: 26_000))
+    }
+
+    func testWildCombatModesRequireSafeStop() {
+        XCTAssertTrue(ActivityMode.zombie.isWildCombat)
+        XCTAssertTrue(ActivityMode.dragon.isWildCombat)
+        XCTAssertFalse(ActivityMode.tree.isWildCombat)
+        XCTAssertFalse(ActivityMode.coal.isWildCombat)
+        XCTAssertFalse(ActivityMode.stone.isWildCombat)
+        XCTAssertFalse(ActivityMode.fishing.isWildCombat)
+        XCTAssertFalse(ActivityMode.chicken.isWildCombat)
+    }
+
+    func testContinuedStatusNeverLeaksGatherProtocolTerms() {
+        let tree = ContinuedActivityStatusFormatter.status(
+            mode: .tree,
+            state: .waitingProof,
+            currentTarget: "Madeira • 3,26",
+            rawStatus: "Handshake 1/3"
+        )
+        let stone = ContinuedActivityStatusFormatter.status(
+            mode: .stone,
+            state: .waitingResult,
+            currentTarget: "Pedra • 30,45",
+            rawStatus: "Progresso 5/6"
+        )
+        XCTAssertEqual(tree, "Cortando árvore")
+        XCTAssertEqual(stone, "Minerando pedra")
+        XCTAssertFalse(tree.localizedCaseInsensitiveContains("handshake"))
+        XCTAssertFalse(stone.localizedCaseInsensitiveContains("progresso"))
+    }
+
+    func testContinuedStatusUsesSafeCombatExitCopy() {
+        let value = ContinuedActivityStatusFormatter.status(
+            mode: .dragon,
+            state: .recovering,
+            currentTarget: "Dragão #7",
+            rawStatus: "Saindo do combate com segurança"
+        )
+        XCTAssertEqual(value, "Saindo do combate com segurança")
+    }
+
 }
