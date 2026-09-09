@@ -55,6 +55,10 @@ enum ActivityMode: String, CaseIterable, Codable, Identifiable {
         case .dragon: .red
         }
     }
+
+    var isWildCombat: Bool {
+        self == .zombie || self == .dragon
+    }
 }
 
 enum ActivityState: String, Codable {
@@ -77,6 +81,74 @@ enum ActivityState: String, Codable {
         case .completed: "Concluído"
         case .cancelled: "Cancelado"
         case .failed: "Falha"
+        }
+    }
+}
+
+
+enum ContinuedActivityStatusFormatter {
+    static func status(
+        mode: ActivityMode,
+        state: ActivityState,
+        currentTarget: String?,
+        rawStatus: String
+    ) -> String {
+        if mode.isWildCombat,
+           state == .recovering,
+           rawStatus.localizedCaseInsensitiveContains("saindo") {
+            return "Saindo do combate com segurança"
+        }
+
+        switch mode {
+        case .tree:
+            switch state {
+            case .searching, .selectingTarget, .moving: return "Procurando árvore"
+            case .recovering, .syncing: return "Sincronizando árvore"
+            case .completed, .cooldown: return "Madeira concluída"
+            default: return "Cortando árvore"
+            }
+        case .stone:
+            switch state {
+            case .searching, .selectingTarget, .moving: return "Procurando pedra"
+            case .recovering, .syncing: return "Sincronizando pedra"
+            case .completed, .cooldown: return "Pedra concluída"
+            default: return "Minerando pedra"
+            }
+        case .coal:
+            switch state {
+            case .searching, .selectingTarget, .moving: return "Procurando carvão"
+            case .recovering, .syncing: return "Sincronizando carvão"
+            case .completed, .cooldown: return "Carvão concluído"
+            default: return "Minerando carvão"
+            }
+        case .fishing:
+            switch state {
+            case .searching, .selectingTarget, .moving, .syncing, .preparingAction:
+                return "Preparando pesca"
+            case .recovering: return "Ressincronizando pesca"
+            case .completed, .cooldown: return "Peixe confirmado"
+            default: return "Aguardando fisgada"
+            }
+        case .chicken:
+            switch state {
+            case .searching, .selectingTarget, .moving: return "Procurando galinha"
+            case .completed, .cooldown: return "Galinha derrotada"
+            default: return "Combatendo galinha"
+            }
+        case .zombie:
+            switch state {
+            case .searching, .selectingTarget, .moving: return "Procurando zumbi"
+            case .recovering: return "Recuperando com segurança"
+            case .completed, .cooldown: return "Zumbi derrotado"
+            default: return "Em combate com zumbi"
+            }
+        case .dragon:
+            switch state {
+            case .searching, .selectingTarget, .moving: return "Procurando dragão"
+            case .recovering: return "Recuperando com segurança"
+            case .completed, .cooldown: return "Dragão derrotado"
+            default: return "Em combate com dragão"
+            }
         }
     }
 }
@@ -158,6 +230,9 @@ final class AppStore: ObservableObject {
     private var realtimeFailureMessage: String?
     private var terminalFailureHandled = false
     private let socket = RealtimeSocket()
+    private var activeEngine: AutomationEngine?
+    private var activeRunID: UUID?
+    private var requestedStopReason: EngineStopReason?
 
     // MARK: - Execução em segundo plano
     //
@@ -179,6 +254,9 @@ final class AppStore: ObservableObject {
     private var continuedProgressSubunit = 0
     private var lastScenePhaseKey: String?
     private var legacyBackgroundTask: UIBackgroundTaskIdentifier = .invalid
+    private var lastContinuedTitleUpdateAt: TimeInterval = 0
+    private var lastContinuedTitleSuccesses = -1
+    private var lastContinuedPublicStatus = ""
 
     private var continuedTaskIdentifierPrefix: String {
         let bundleID = Bundle.main.bundleIdentifier ?? "com.joaopedro.kinttany"
@@ -195,18 +273,24 @@ final class AppStore: ObservableObject {
     }
 
     func start(_ mode: ActivityMode) {
-        if activity != nil {
-            stop(silent: true)
+        // Single-flight: um segundo toque nunca cancela e substitui uma sessão que
+        // ainda está fechando. Isso elimina corrida entre socket/engine antiga e nova.
+        guard task == nil, activeRunID == nil, activity == nil else {
+            diagnostic("[STATE] start ignorado • já existe execução/encerramento em andamento")
+            return
         }
 
+        let runID = UUID()
+        activeRunID = runID
+        requestedStopReason = nil
+
         // A solicitação precisa nascer do toque do usuário, antes de o app ser
-        // colocado em segundo plano. No iOS 26 isso cria uma Continued Processing
-        // Task real; em versões anteriores usamos somente a janela curta do UIKit.
+        // colocado em segundo plano.
         prepareContinuedProcessing(for: mode)
 
         task = Task { [weak self] in
             guard let self else { return }
-            await self.run(mode)
+            await self.run(mode, runID: runID)
         }
     }
 
@@ -215,24 +299,85 @@ final class AppStore: ObservableObject {
     }
 
     private func stop(silent: Bool) {
+        guard let runID = activeRunID else {
+            if !silent { log("STOP ignorado — nenhuma atividade está em execução") }
+            return
+        }
+        let stoppedMode = activity
+        guard requestedStopReason == nil else { return }
+        requestedStopReason = .user
+
+        // Em Wilderness o STOP é cooperativo: não cancela a Task no meio do Wild.
+        // A engine interrompe novos ataques, recua, espera combat timer 0 e confirma
+        // World antes de devolver o controle ao AppStore.
+        if activity?.isWildCombat == true, connected, let activeEngine {
+            activeEngine.requestSafeStop(reason: .user)
+            state = .recovering
+            statusMessage = "Saindo do combate com segurança"
+            stats.lastEvent = "safe stop solicitado"
+            updateContinuedProcessingProgress(forceTitleUpdate: true)
+            if !silent {
+                log("STOP solicitado — encerrando Wilderness com segurança antes de fechar a conexão")
+            }
+            return
+        }
+
         task?.cancel()
         receiverTask?.cancel()
         traceTask?.cancel()
-        task = nil
-        receiverTask = nil
-        traceTask = nil
         realtimeFailureMessage = nil
         connected = false
-        Task { await socket.close() }
         currentTarget = nil
         activity = nil
         state = .cancelled
         statusMessage = "Atividade interrompida"
+        if let stoppedMode { logSessionSummary(mode: stoppedMode, outcome: "STOP") }
         finishContinuedProcessing(success: false, reason: "interrompida")
         endLegacyBackgroundTask()
         if !silent {
             log("STOP confirmado — nenhuma nova ação será enviada")
         }
+
+        Task { [weak self] in
+            guard let self else { return }
+            await self.socket.close()
+            self.completeRunCleanup(runID: runID)
+        }
+    }
+
+    private func completeRunCleanup(runID: UUID) {
+        guard activeRunID == runID else { return }
+        receiverTask?.cancel()
+        traceTask?.cancel()
+        receiverTask = nil
+        traceTask = nil
+        activeEngine = nil
+        activeRunID = nil
+        requestedStopReason = nil
+        task = nil
+        connected = false
+    }
+
+    private func logSessionSummary(mode: ActivityMode, outcome: String) {
+        let elapsed = max(0, Date().timeIntervalSince(stats.startedAt ?? Date()))
+        let minutes = Int(elapsed) / 60
+        let seconds = Int(elapsed) % 60
+        let duration = String(format: "%02d:%02d", minutes, seconds)
+        let backgroundState: String
+        if continuedTaskObject != nil {
+            backgroundState = "Continued Processing ativa"
+        } else if continuedTaskRequested {
+            backgroundState = "Continued Processing pendente"
+        } else {
+            backgroundState = "foreground/finalizada"
+        }
+
+        log("📊 RESUMO DA SESSÃO • \(mode.localizedTitle) • \(outcome)")
+        log("Meta \(goal) • sucessos \(stats.successes) • tentativas \(stats.attempts) • falhas \(stats.failures) • tempo \(duration)")
+        if mode == .chicken || mode.isWildCombat {
+            log("Combate • hits enviados \(stats.hits) • hits confirmados \(stats.confirmedHits) • kills \(stats.kills)")
+        }
+        log("Background • \(backgroundState)")
     }
 
     func log(_ value: String) {
@@ -297,13 +442,15 @@ final class AppStore: ObservableObject {
         log("Sessão autenticada e salva no Keychain; realtime será conectado ao iniciar uma atividade")
     }
 
-    private func run(_ mode: ActivityMode) async {
+    private func run(_ mode: ActivityMode, runID: UUID) async {
+        guard activeRunID == runID else { return }
         guard let cookie = session.cookie, !cookie.isEmpty else {
             activity = nil
             state = .failed
             statusMessage = "Faça login antes de iniciar"
             log("Sessão ausente. Abra Sessão e faça login.")
             finishContinuedProcessing(success: false, reason: "sessão ausente")
+            completeRunCleanup(runID: runID)
             return
         }
 
@@ -322,12 +469,8 @@ final class AppStore: ObservableObject {
         statusMessage = "Conectando ao Kintara"
         log("Iniciando \(mode.localizedTitle)")
         diagnostic("[UI] activity=\(mode.rawValue) state=connecting goal=\(runGoal)")
-        updateContinuedProcessingProgress()
+        updateContinuedProcessingProgress(forceTitleUpdate: true)
 
-        // O socket mantém um pequeno buffer interno. Antes, esse buffer só era
-        // importado quando connect() terminava, então todos os eventos de conexão
-        // pareciam acontecer dezenas de segundos depois do toque. Enquanto a
-        // conexão está sendo negociada, drenamos o trace em tempo real.
         traceTask?.cancel()
         traceTask = Task { [weak self] in
             guard let self else { return }
@@ -345,15 +488,19 @@ final class AppStore: ObservableObject {
 
         defer {
             receiverTask?.cancel()
-            receiverTask = nil
             traceTask?.cancel()
-            traceTask = nil
             connected = false
-            Task { await socket.close() }
+            let closingRunID = runID
+            Task { [weak self] in
+                guard let self else { return }
+                await self.socket.close()
+                self.completeRunCleanup(runID: closingRunID)
+            }
         }
 
         do {
             let connection = try await socket.connectBestNA(session: session, bootstrap: bootstrap)
+            guard activeRunID == runID else { return }
             let stream = connection.stream
             let selectedShard = connection.shard
             await importSocketTrace()
@@ -366,9 +513,10 @@ final class AppStore: ObservableObject {
                 shard: selectedShard,
                 bootstrap: bootstrap,
                 reporter: { [weak self] event in
-                    self?.handleEngineEvent(event)
+                    self?.handleEngineEvent(event, runID: runID)
                 }
             )
+            activeEngine = engine
 
             connected = true
             state = .syncing
@@ -376,6 +524,7 @@ final class AppStore: ObservableObject {
             log("Realtime conectado; engine ativa iniciada")
 
             await engine.prepareIdentity()
+            guard activeRunID == runID else { return }
 
             receiverTask = Task { [weak self] in
                 guard let self else { return }
@@ -385,16 +534,14 @@ final class AppStore: ObservableObject {
                     await self.importSocketTrace()
                 }
 
-                // AsyncStream termina quando o receive loop da Presence encerra.
-                // Antes isso era silencioso: a engine continuava aparecendo ativa
-                // até alguma ação seguinte tentar enviar no socket já morto.
                 if !Task.isCancelled {
-                    await self.handleUnexpectedRealtimeEnd(for: mode)
+                    await self.handleUnexpectedRealtimeEnd(for: mode, runID: runID)
                 }
             }
 
             let result = try await engine.run(mode: mode, goal: runGoal)
             await importSocketTrace()
+            guard activeRunID == runID else { return }
 
             if let reason = realtimeFailureMessage {
                 connected = false
@@ -402,6 +549,26 @@ final class AppStore: ObservableObject {
                 activity = nil
                 state = .failed
                 statusMessage = reason
+            } else if result.stoppedSafely {
+                connected = false
+                currentTarget = nil
+                activity = nil
+                state = .cancelled
+                let stopReason = result.stopReason ?? requestedStopReason
+                switch stopReason {
+                case .backgroundExpiration:
+                    statusMessage = "Segundo plano encerrado com saída segura"
+                    stats.lastEvent = "background encerrado com saída segura"
+                    log("Segundo plano encerrado pelo iOS — World confirmado e conexão liberada com segurança")
+                    logSessionSummary(mode: mode, outcome: "EXPIRAÇÃO SEGURA")
+                    finishContinuedProcessing(success: false, reason: "expiração após saída segura")
+                case .user, .none:
+                    statusMessage = "Atividade encerrada com segurança"
+                    stats.lastEvent = "atividade cancelada pelo usuário"
+                    log("STOP confirmado — World seguro e nenhuma nova ação será enviada")
+                    logSessionSummary(mode: mode, outcome: "STOP SEGURO")
+                    finishContinuedProcessing(success: false, reason: "interrompida com saída segura")
+                }
             } else if Task.isCancelled {
                 state = .cancelled
                 statusMessage = "Atividade cancelada"
@@ -412,6 +579,7 @@ final class AppStore: ObservableObject {
                 currentTarget = nil
                 activity = nil
                 log("✅ Meta concluída: \(result.successes)/\(runGoal) • atividade encerrada automaticamente")
+                logSessionSummary(mode: mode, outcome: "META CONCLUÍDA")
                 finishContinuedProcessing(success: true, reason: "meta concluída")
             } else {
                 state = .failed
@@ -420,10 +588,12 @@ final class AppStore: ObservableObject {
                 currentTarget = nil
                 activity = nil
                 log("Atividade encerrou antes da meta • bot interrompido automaticamente")
+                logSessionSummary(mode: mode, outcome: "ENCERRADA ANTES DA META")
                 finishContinuedProcessing(success: false, reason: "engine encerrou antes da meta")
             }
         } catch is CancellationError {
             await importSocketTrace()
+            guard activeRunID == runID else { return }
             if let reason = realtimeFailureMessage {
                 connected = false
                 currentTarget = nil
@@ -438,11 +608,15 @@ final class AppStore: ObservableObject {
             } else {
                 state = .cancelled
                 statusMessage = "Atividade cancelada"
-                diagnostic("[STATE] CancellationError")
-                finishContinuedProcessing(success: false, reason: "atividade cancelada")
+                let byUser = requestedStopReason == .user
+                diagnostic(byUser ? "[STATE] atividade cancelada pelo usuário" : "[STATE] atividade cancelada")
+                if continuedTaskObject != nil || continuedTaskRequested {
+                    finishContinuedProcessing(success: false, reason: byUser ? "atividade cancelada pelo usuário" : "atividade cancelada")
+                }
             }
         } catch {
             await importSocketTrace()
+            guard activeRunID == runID else { return }
             if terminalFailureHandled { return }
             terminalFailureHandled = true
             connected = false
@@ -453,12 +627,13 @@ final class AppStore: ObservableObject {
             stats.failures += 1
             diagnostic("[ERROR] \(error.localizedDescription)")
             log("Falha: \(error.localizedDescription) • bot interrompido automaticamente")
+            logSessionSummary(mode: mode, outcome: "FALHA")
             finishContinuedProcessing(success: false, reason: "falha da atividade")
         }
     }
 
-    private func handleUnexpectedRealtimeEnd(for mode: ActivityMode) async {
-        guard activity == mode, connected, !terminalFailureHandled else { return }
+    private func handleUnexpectedRealtimeEnd(for mode: ActivityMode, runID: UUID) async {
+        guard activeRunID == runID, activity == mode, connected, !terminalFailureHandled else { return }
         terminalFailureHandled = true
 
         await importSocketTrace()
@@ -487,7 +662,8 @@ final class AppStore: ObservableObject {
         await socket.close()
     }
 
-    private func handleEngineEvent(_ event: EngineEvent) {
+    private func handleEngineEvent(_ event: EngineEvent, runID: UUID) {
+        guard activeRunID == runID else { return }
         switch event {
         case .state(let newState, let message):
             let changed = state != newState || statusMessage != message
@@ -518,7 +694,7 @@ final class AppStore: ObservableObject {
             continuedProgressSubunit = 0
             stats.lastEvent = detail ?? "sucesso"
             if let detail { log("✅ \(detail) • \(stats.successes)/\(goal)") }
-            updateContinuedProcessingProgress()
+            updateContinuedProcessingProgress(forceTitleUpdate: true)
 
         case .failure(let reason):
             stats.failures += 1
@@ -631,6 +807,9 @@ final class AppStore: ObservableObject {
         continuedTaskIdentifier = nil
         continuedTaskSubmissionAttempt = 0
         continuedProgressSubunit = 0
+        lastContinuedTitleUpdateAt = 0
+        lastContinuedTitleSuccesses = -1
+        lastContinuedPublicStatus = ""
         lastScenePhaseKey = nil
 
         guard #available(iOS 26.0, *) else {
@@ -754,7 +933,7 @@ final class AppStore: ObservableObject {
             }
         }
 
-        updateContinuedProcessingProgress()
+        updateContinuedProcessingProgress(forceTitleUpdate: true)
         let current = min(max(0, stats.successes), max(1, goal))
         diagnostic("[BG] ✅ Continued Processing INICIADA • \((activity ?? continuedTaskMode)?.localizedTitle ?? "Atividade") • \(current)/\(max(1, goal)) • tentativa \(continuedTaskSubmissionAttempt)/3")
         endLegacyBackgroundTask()
@@ -830,13 +1009,13 @@ final class AppStore: ObservableObject {
         continuedProgressSubunit = min(99, continuedProgressSubunit + 1)
     }
 
-    private func updateContinuedProcessingProgress() {
+    private func updateContinuedProcessingProgress(forceTitleUpdate: Bool = false) {
         guard #available(iOS 26.0, *),
               let backgroundTask = continuedTaskObject as? BGContinuedProcessingTask
         else { return }
 
-        // 100 unidades por meta permitem reportar etapas reais entre sucessos
-        // (movimento, tentativa, hit) sem falsificar o contador principal.
+        // Progresso interno continua granular; o texto público é desacoplado dos
+        // detalhes de protocolo (proof/handshake/wear) e sofre throttling visual.
         let goalUnits = Int64(max(1, goal))
         let total = goalUnits * 100
         let successBase = Int64(min(max(0, stats.successes), max(1, goal))) * 100
@@ -844,12 +1023,26 @@ final class AppStore: ObservableObject {
         backgroundTask.progress.totalUnitCount = total
         backgroundTask.progress.completedUnitCount = completed
 
-        let modeName = (activity ?? continuedTaskMode)?.localizedTitle ?? "Atividade"
-        let shortStatus = statusMessage.count > 42 ? String(statusMessage.prefix(42)) + "…" : statusMessage
-        backgroundTask.updateTitle(
-            "Kintarabot • \(modeName)",
-            subtitle: "\(stats.successes)/\(max(1, goal)) • \(shortStatus)"
+        guard let mode = activity ?? continuedTaskMode else { return }
+        let publicStatus = ContinuedActivityStatusFormatter.status(
+            mode: mode,
+            state: state,
+            currentTarget: currentTarget,
+            rawStatus: statusMessage
         )
+        let now = Date().timeIntervalSince1970
+        let successChanged = lastContinuedTitleSuccesses != stats.successes
+        let statusChanged = lastContinuedPublicStatus != publicStatus
+        let throttleElapsed = now - lastContinuedTitleUpdateAt >= 1.0
+        guard forceTitleUpdate || successChanged || (statusChanged && throttleElapsed) || throttleElapsed else { return }
+
+        backgroundTask.updateTitle(
+            "Kintarabot • \(mode.localizedTitle)",
+            subtitle: "\(stats.successes)/\(max(1, goal)) • \(publicStatus)"
+        )
+        lastContinuedTitleUpdateAt = now
+        lastContinuedTitleSuccesses = stats.successes
+        lastContinuedPublicStatus = publicStatus
     }
 
     private func finishContinuedProcessing(success: Bool, reason: String) {
@@ -898,9 +1091,20 @@ final class AppStore: ObservableObject {
             return
         }
 
-        // Pode acontecer por pressão de recursos ou cancelamento pelo sistema.
-        // Expiração é tratada como erro fatal da sessão: nenhuma nova ação fica
-        // viva depois que a proteção de background é retirada.
+        // Wild combat usa encerramento cooperativo enquanto o callback ainda tem
+        // runtime: parar novos hits -> safe camp -> combat timer 0 -> World.
+        if activity?.isWildCombat == true, connected, let activeEngine {
+            if requestedStopReason == nil { requestedStopReason = .backgroundExpiration }
+            activeEngine.requestSafeStop(reason: requestedStopReason ?? .backgroundExpiration)
+            state = .recovering
+            statusMessage = "Saindo do combate com segurança"
+            stats.lastEvent = "safe stop por expiração"
+            updateContinuedProcessingProgress(forceTitleUpdate: true)
+            diagnostic("[BG] Expiração recebida no Wild • safe-stop solicitado antes de concluir a tarefa")
+            return
+        }
+
+        requestedStopReason = .backgroundExpiration
         continuedTaskActivationWatchdog?.cancel()
         continuedTaskActivationWatchdog = nil
         continuedTaskObject = nil
@@ -913,9 +1117,6 @@ final class AppStore: ObservableObject {
         task?.cancel()
         receiverTask?.cancel()
         traceTask?.cancel()
-        task = nil
-        receiverTask = nil
-        traceTask = nil
         realtimeFailureMessage = "Execução em segundo plano encerrada pelo iOS"
         connected = false
         currentTarget = nil
@@ -924,7 +1125,7 @@ final class AppStore: ObservableObject {
         statusMessage = "Segundo plano encerrado pelo iOS"
         stats.failures += 1
         stats.lastEvent = "background expirado"
-        diagnostic("[ERROR] BGContinuedProcessingTask expirou/cancelou • bot interrompido automaticamente")
+        diagnostic("[ERROR] BGContinuedProcessingTask expirou/cancelou • atividade não-Wild interrompida automaticamente")
         log("Falha: execução em segundo plano encerrada pelo iOS • bot interrompido automaticamente")
         Task { await socket.close() }
         endLegacyBackgroundTask()
@@ -946,9 +1147,6 @@ final class AppStore: ObservableObject {
     }
 
     private func handleLegacyBackgroundExpiration() {
-        // Se a Continued Processing conseguiu iniciar enquanto a ponte estava
-        // aberta, basta encerrar a ponte. Caso contrário, não deixamos uma engine
-        // aparentemente ativa com um WebSocket que o iOS está prestes a suspender.
         if continuedTaskObject != nil {
             endLegacyBackgroundTask()
             return
@@ -956,9 +1154,6 @@ final class AppStore: ObservableObject {
 
         endLegacyBackgroundTask()
 
-        // Se a request continua pendente, NÃO mate a engine. O iOS pode suspender
-        // o processo por um intervalo e depois entregar a BGContinuedProcessingTask;
-        // cancelar aqui reproduzia o problema que estávamos tentando resolver.
         if continuedTaskRequested {
             diagnostic("[WARN] Ponte UIKit esgotada • Continued Processing segue pendente; engine preservada para o scheduler assumir")
             return
@@ -967,12 +1162,20 @@ final class AppStore: ObservableObject {
         diagnostic("[WARN] Janela curta de background esgotada sem Continued Processing ativa")
         guard activity != nil else { return }
 
+        if activity?.isWildCombat == true, connected, let activeEngine {
+            if requestedStopReason == nil { requestedStopReason = .backgroundExpiration }
+            activeEngine.requestSafeStop(reason: requestedStopReason ?? .backgroundExpiration)
+            state = .recovering
+            statusMessage = "Saindo do combate com segurança"
+            stats.lastEvent = "safe stop por background"
+            diagnostic("[BG] Runtime curto esgotou no Wild • safe-stop solicitado")
+            return
+        }
+
+        requestedStopReason = .backgroundExpiration
         task?.cancel()
         receiverTask?.cancel()
         traceTask?.cancel()
-        task = nil
-        receiverTask = nil
-        traceTask = nil
         realtimeFailureMessage = "Execução contínua em segundo plano não foi concedida pelo iOS"
         connected = false
         currentTarget = nil
