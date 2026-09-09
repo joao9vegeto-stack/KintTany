@@ -16,9 +16,16 @@ enum EngineEvent {
     case world(nodes: Int, mobs: Int, serverRegion: String?)
 }
 
+enum EngineStopReason: Equatable {
+    case user
+    case backgroundExpiration
+}
+
 struct EngineRunResult {
     let successes: Int
     let completedGoal: Bool
+    let stoppedSafely: Bool
+    let stopReason: EngineStopReason?
 }
 
 @MainActor
@@ -43,7 +50,12 @@ final class AutomationEngine {
 
     private var firstResourceSnapshotSeen = false
     private var cooldownUntil: [String: Double] = [:]
-    private var recentRetryUntil: [String: Double] = [:]
+    private var gatherRetryPolicy = GatherRetryPolicy()
+    private var gatherBusyUntil: [String: Double] = [:]
+    private var gatherPositionMemory: [String: Position] = [:]
+    private var gatherInternalRecoveries = 0
+    private var gatherProofMisses = 0
+    private var gatherResourceSerial = 0
 
     private var currentGatherSignature: String?
     private var currentGatherKind: String?
@@ -62,6 +74,8 @@ final class AutomationEngine {
     private var lastFishBite: FishBite?
     private var activeFishingAction: [String: Any]?
     private var lastFishSpotSignature = ""
+    private var fishingStats = FishingSessionStats()
+    private var lastFishingInventory = FishingInventorySnapshot()
 
     private var chickenCollectionPath: String?
     private var chickens: [Int: LiveMob] = [:]
@@ -114,6 +128,8 @@ final class AutomationEngine {
     private let targetStrengthPotions = 6
 
     private var successes = 0
+    private var safeStopReason: EngineStopReason?
+    private var safeStopCompleted = false
 
     init(socket: RealtimeSocket, cookie: String, shard: String, bootstrap: PresenceBootstrap, reporter: @escaping Reporter) {
         self.socket = socket
@@ -236,8 +252,15 @@ final class AutomationEngine {
         }
     }
 
+    func requestSafeStop(reason: EngineStopReason) {
+        guard safeStopReason == nil else { return }
+        safeStopReason = reason
+        reporter(.diagnostic("[STATE] safe-stop solicitado • motivo=\(reason == .user ? "usuário" : "background expiration")"))
+    }
+
     func run(mode: ActivityMode, goal: Int) async throws -> EngineRunResult {
         successes = 0
+        safeStopCompleted = false
         try Task.checkCancellation()
 
         switch mode {
@@ -251,7 +274,12 @@ final class AutomationEngine {
             try await runWild(mode: mode, goal: goal)
         }
 
-        return EngineRunResult(successes: successes, completedGoal: successes >= goal)
+        return EngineRunResult(
+            successes: successes,
+            completedGoal: successes >= goal,
+            stoppedSafely: safeStopCompleted,
+            stopReason: safeStopReason
+        )
     }
 
     // MARK: - Common state
@@ -314,8 +342,20 @@ final class AutomationEngine {
                 let kind = ((item["kind"] ?? item["k"]) as? String) ?? ""
                 let keys = stringArray(item["keys"] ?? item["key"])
                 guard matchesCurrentGather(kind: kind, keys: keys) else { continue }
-                if let h = RealtimeProtocol.int(item["h"]), h > harvestH { harvestH = h }
+                if let h = RealtimeProtocol.int(item["h"]), h >= harvestH {
+                    if h > harvestH {
+                        harvestWearSerial += 1
+                        gatherResourceSerial += 1
+                    }
+                    harvestH = h
+                }
                 if let hm = RealtimeProtocol.int(item["hm"]), hm > 0 { harvestHM = hm }
+                let proof = proofString(item)
+                if !proof.isEmpty, proof != harvestProof {
+                    harvestProof = proof
+                    harvestProofSerial += 1
+                    gatherResourceSerial += 1
+                }
             }
         }
 
@@ -485,6 +525,10 @@ final class AutomationEngine {
         let hb = Task { [weak self] in await self?.heartbeat() }
         defer { hb.cancel() }
 
+        gatherInternalRecoveries = 0
+        gatherProofMisses = 0
+        gatherRetryPolicy.resetExpired(nowMS: nowMS)
+
         reporter(.state(.searching, "Sincronizando recursos"))
         let resourceDeadline = nowMS + 7_000
         while !firstResourceSnapshotSeen && nowMS < resourceDeadline {
@@ -503,7 +547,7 @@ final class AutomationEngine {
 
             guard let seed = selectGatherSeed(for: mode) else {
                 reporter(.target(nil))
-                reporter(.diagnostic("[GATHER] Nenhum alvo disponível agora; aguardando cooldown"))
+                reporter(.diagnostic("[GATHER] Nenhum alvo disponível agora; aguardando cooldown/defer"))
                 try await sleep(1_500)
                 continue
             }
@@ -512,16 +556,20 @@ final class AutomationEngine {
             reporter(.state(.selectingTarget, "Alvo \(seed.targetKey)"))
             reporter(.log("🎯 \(mode.displayName) \(seed.targetKey) selecionado"))
 
-            try await walk(to: seed.position)
+            let interactionPosition = gatherPositionMemory[seed.signature] ?? seed.position
+            try await walk(to: interactionPosition)
+            position.ry = interactionPosition.ry
+            try await sendPosition(moving: false)
             reporter(.diagnostic("[MOVE] arrived \(seed.targetKey) pos=\(format(position.x)),\(format(position.z)) ry=\(format(position.ry))"))
 
-            reporter(.attempt)
-            let result = try await harvest(seed: seed, mode: mode)
+            let result = try await harvestWithRecovery(seed: seed, mode: mode)
             if result.felled {
+                reporter(.attempt)
                 let signature = seed.signature
                 let localCooldown = nowMS + 12_000
                 for key in seed.keys { cooldownUntil["\(seed.kind):\(key)"] = localCooldown }
-                recentRetryUntil.removeValue(forKey: signature)
+                gatherRetryPolicy.markSuccess(signature: signature)
+                gatherPositionMemory[signature] = Position(x: position.x, y: 0.25, z: position.z, ry: position.ry)
 
                 var persistenceLabel = "sem loot confirmado"
                 if let loot = result.loot, !loot.isEmpty {
@@ -539,17 +587,101 @@ final class AutomationEngine {
                 reporter(.state(.cooldown, "Concluído \(successes)/\(goal)"))
                 reporter(.log("✅ \(mode.displayName) concluído • h=\(result.h)/\(result.hm) • \(persistenceLabel) • \(successes)/\(goal)"))
                 try await sleep(280)
-            } else {
-                recentRetryUntil[seed.signature] = nowMS + 8_000
-                reporter(.failure(result.reason))
-                reporter(.state(.recovering, "Reavaliando alvo"))
-                reporter(.log("⚠️ \(mode.displayName) \(seed.targetKey): \(result.reason); outro alvo será tentado"))
-                try await sleep(650)
+                continue
             }
+
+            if result.recoverable {
+                gatherInternalRecoveries += 1
+                if result.pureProofMiss {
+                    gatherProofMisses += 1
+                    gatherRetryPolicy.deferProofMiss(signature: seed.signature, nowMS: nowMS)
+                    reporter(.state(.recovering, "Sincronizando recurso"))
+                    reporter(.log("🟡 \(mode.displayName) \(seed.targetKey) • proof ainda não aceito após recovery • alvo adiado • nenhuma falha contabilizada"))
+                } else {
+                    gatherRetryPolicy.deferAcceptedPartial(signature: seed.signature, nowMS: nowMS)
+                    reporter(.state(.recovering, "Continuando ação aceita"))
+                    reporter(.log("🔄 \(mode.displayName) \(seed.targetKey) • progresso aceito h=\(result.h)/\(result.hm) • continuará após resync • nenhuma falha contabilizada"))
+                }
+                try await sleep(350)
+                continue
+            }
+
+            reporter(.attempt)
+            let deferred = gatherRetryPolicy.markRealFailure(signature: seed.signature, nowMS: nowMS)
+            reporter(.failure(result.reason))
+            reporter(.state(.recovering, "Reavaliando alvo"))
+            if deferred {
+                reporter(.log("⚠️ \(mode.displayName) \(seed.targetKey): \(result.reason) • alvo adiado por 10s após falhas reais repetidas"))
+            } else {
+                reporter(.log("⚠️ \(mode.displayName) \(seed.targetKey): \(result.reason); outro alvo será tentado"))
+            }
+            try await sleep(650)
         }
+
+        reporter(.log("📊 Coleta encerrada • \(mode.displayName) • sucessos=\(successes)/\(goal) • recoveries internos=\(gatherInternalRecoveries) • proof misses=\(gatherProofMisses)"))
     }
 
-    private func harvest(seed: GatherSeed, mode: ActivityMode) async throws -> HarvestResult {
+    private func harvestWithRecovery(seed: GatherSeed, mode: ActivityMode) async throws -> HarvestResult {
+        var merged = try await harvest(seed: seed, mode: mode, handshakeTries: 4)
+
+        // v7.7: um proof miss puro é primeiro tratado como problema de sincronização,
+        // não como falha do usuário. Reenvia a mesma posição, espera refresh e tenta
+        // novamente antes de abandonar a geometria que acabou de ser usada.
+        if merged.pureProofMiss {
+            gatherProofMisses += 1
+            gatherInternalRecoveries += 1
+            reporter(.diagnostic("[GATHER] proof miss • same-position resync 900ms • \(seed.targetKey)"))
+            let serialBefore = gatherResourceSerial
+            position.y = 0.25
+            try await sendPosition(moving: false)
+            let deadline = nowMS + 900
+            while nowMS < deadline, gatherResourceSerial == serialBefore {
+                try Task.checkCancellation()
+                try await sleep(30)
+            }
+            try await equip(seed.kind == "tree" ? "tool_axe" : "tool_pickaxe")
+            let retry = try await harvest(seed: seed, mode: mode, handshakeTries: 2)
+            merged = merged.merging(retry)
+        }
+
+        // v7.7: se a mesma posição ainda não obtiver proof, percorre somente células
+        // cardinais canônicas adjacentes ao footprint real do recurso. Nenhum ponto
+        // arbitrário é inventado.
+        if merged.pureProofMiss {
+            let candidates = canonicalGatherRecoveryPositions(for: seed)
+            for (index, candidate) in candidates.enumerated() {
+                try Task.checkCancellation()
+                if hypot(position.x - candidate.x, position.z - candidate.z) < 0.25 { continue }
+                gatherInternalRecoveries += 1
+                reporter(.diagnostic("[GATHER] recovery adjacent \(index + 1)/\(candidates.count) • \(seed.targetKey) • x=\(format(candidate.x)) z=\(format(candidate.z))"))
+                try await walk(to: candidate, maxSeconds: 18)
+                position.ry = candidate.ry
+                try await sendPosition(moving: false)
+                let probe = try await harvest(seed: seed, mode: mode, handshakeTries: 2)
+                merged = merged.merging(probe)
+                if !probe.pureProofMiss { break }
+            }
+        }
+
+        // v7.7 accepted-continuation: se o servidor já aceitou proof/wear parcial,
+        // uma ausência transitória do próximo ACK não transforma a ação em falha.
+        var continuation = 0
+        while !merged.felled, merged.accepted, continuation < 3 {
+            try Task.checkCancellation()
+            continuation += 1
+            gatherInternalRecoveries += 1
+            reporter(.diagnostic("[GATHER] recovery accepted • \(seed.targetKey) • continuidade \(continuation)/3 • h=\(merged.h)/\(merged.hm)"))
+            try await sleep(90)
+            let next = try await harvest(seed: seed, mode: mode, handshakeTries: 2)
+            merged = merged.merging(next)
+            if merged.felled { break }
+            if !next.accepted && !next.pureProofMiss { break }
+        }
+
+        return merged
+    }
+
+    private func harvest(seed: GatherSeed, mode: ActivityMode, handshakeTries: Int) async throws -> HarvestResult {
         let kind = seed.kind
         currentGatherSignature = seed.signature
         currentGatherKind = kind
@@ -565,7 +697,7 @@ final class AutomationEngine {
         let tool = kind == "tree" ? "tool_axe" : "tool_pickaxe"
         try await equip(tool)
 
-        position.ry = seed.position.ry
+        position.ry = position.ry.isFinite ? position.ry : seed.position.ry
         position.y = 0.25
         try await sendPosition(moving: false)
         try await sleep(55)
@@ -629,21 +761,39 @@ final class AutomationEngine {
 
         func waitForAck(proofBefore: Int, wearBefore: Int, hBefore: Int, timeoutMS: Int) async throws -> HarvestAck {
             let deadline = nowMS + Double(timeoutMS)
+            var sawFreshProof = false
+            var sawProgress = false
             while nowMS < deadline {
                 try Task.checkCancellation()
                 if harvestHM < 99, harvestH >= harvestHM { return .felled }
-                if harvestProofSerial > proofBefore, harvestWearSerial > wearBefore, harvestH > hBefore, !harvestProof.isEmpty {
-                    return .accepted
-                }
+                if harvestProofSerial > proofBefore, !harvestProof.isEmpty { sawFreshProof = true }
+                if harvestWearSerial > wearBefore || harvestH > hBefore { sawProgress = true }
+                if sawFreshProof && sawProgress { return .accepted }
                 try await sleep(20)
             }
             if harvestHM < 99, harvestH >= harvestHM { return .felled }
+
+            // Paridade presenceWs.js: tolera até 300 ms de skew quando proof e wear
+            // chegam em mensagens separadas, algo especialmente relevante quando o
+            // scheduler do iOS coalesce timers em background.
+            if sawFreshProof || sawProgress {
+                let grace = nowMS + 300
+                while nowMS < grace {
+                    try Task.checkCancellation()
+                    if harvestProofSerial > proofBefore, !harvestProof.isEmpty { sawFreshProof = true }
+                    if harvestWearSerial > wearBefore || harvestH > hBefore { sawProgress = true }
+                    if sawFreshProof && sawProgress { return .accepted }
+                    if harvestHM < 99, harvestH >= harvestHM { return .felled }
+                    try await sleep(20)
+                }
+            }
             return .timeout
         }
 
         var handshake: HarvestAck = harvestProof.isEmpty ? .timeout : .accepted
         if harvestProof.isEmpty {
-            for attempt in 1...3 {
+            let tries = min(4, max(1, handshakeTries))
+            for attempt in 1...tries {
                 let proofBefore = harvestProofSerial
                 let wearBefore = harvestWearSerial
                 let hBefore = harvestH
@@ -656,9 +806,14 @@ final class AutomationEngine {
                     try await sendHit(proof: nil)
                 }
 
-                reporter(.state(.waitingProof, "Handshake \(attempt)/3"))
+                reporter(.state(.waitingProof, "Handshake \(attempt)/\(tries)"))
                 reporter(.diagnostic("[GATHER] handshake #\(attempt) \(kind) keys=\(seed.keys) proof=none"))
-                handshake = try await waitForAck(proofBefore: proofBefore, wearBefore: wearBefore, hBefore: hBefore, timeoutMS: attempt == 1 ? 900 : 1_200)
+                handshake = try await waitForAck(
+                    proofBefore: proofBefore,
+                    wearBefore: wearBefore,
+                    hBefore: hBefore,
+                    timeoutMS: attempt == 1 ? 900 : 1_200
+                )
                 if handshake != .timeout { break }
 
                 if attempt == 2 {
@@ -672,11 +827,20 @@ final class AutomationEngine {
 
         if handshake == .felled {
             try? await clearAction()
-            return HarvestResult(felled: true, h: harvestH, hm: harvestHM, loot: harvestLoot, reason: "felled_during_handshake")
+            return HarvestResult(felled: true, h: harvestH, hm: harvestHM, loot: harvestLoot, reason: "felled_during_handshake", accepted: true, proofMiss: false)
         }
         guard handshake == .accepted, !harvestProof.isEmpty else {
             try? await clearAction()
-            return HarvestResult(felled: false, h: harvestH, hm: harvestHM, loot: harvestLoot, reason: "sem action_proof próprio após handshake")
+            let accepted = harvestH > 0 || !harvestProof.isEmpty
+            return HarvestResult(
+                felled: false,
+                h: harvestH,
+                hm: harvestHM,
+                loot: harvestLoot,
+                reason: "sem action_proof próprio após handshake",
+                accepted: accepted,
+                proofMiss: !accepted
+            )
         }
 
         reporter(.state(.acting, kind == "tree" ? "Cortando" : "Minerando"))
@@ -715,18 +879,59 @@ final class AutomationEngine {
 
         let settle = nowMS + 1_200
         while nowMS < settle, !(harvestHM < 99 && harvestH >= harvestHM) {
+            try Task.checkCancellation()
             try await sleep(40)
         }
         try? await clearAction()
 
         let felled = harvestHM < 99 && harvestH >= harvestHM
+        let accepted = felled || damageHits > 0 || harvestH > 0 || !harvestProof.isEmpty
         return HarvestResult(
             felled: felled,
             h: harvestH,
             hm: harvestHM,
             loot: harvestLoot,
-            reason: felled ? "FELLED" : (harvestClearSeen ? "clear sem h/hm conclusivo" : "ação não concluiu o wear")
+            reason: felled ? "FELLED" : (harvestClearSeen ? "clear sem h/hm conclusivo" : "ação não concluiu o wear"),
+            accepted: accepted,
+            proofMiss: !accepted && !harvestClearSeen
         )
+    }
+
+    private func canonicalGatherRecoveryPositions(for seed: GatherSeed) -> [Position] {
+        let tiles: [(Int, Int)] = seed.keys.compactMap { key in
+            let parts = key.split(separator: ",")
+            guard parts.count == 2, let c = Int(parts[0]), let r = Int(parts[1]) else { return nil }
+            return (c, r)
+        }
+        guard !tiles.isEmpty else { return [] }
+
+        let occupied = Set(tiles.map { "\($0.0),\($0.1)" })
+        var seen = Set<String>()
+        var candidates: [Position] = []
+        for (c, r) in tiles {
+            for (dc, dr) in [(0, -1), (1, 0), (0, 1), (-1, 0)] {
+                let pc = c + dc
+                let pr = r + dr
+                let key = "\(pc),\(pr)"
+                guard !occupied.contains(key), seen.insert(key).inserted else { continue }
+
+                let px = Double(pc) - 24.5
+                let pz = Double(pr) - 24.5
+                let nearest = tiles.min { a, b in
+                    hypot(Double(a.0) - Double(pc), Double(a.1) - Double(pr)) < hypot(Double(b.0) - Double(pc), Double(b.1) - Double(pr))
+                } ?? (c, r)
+                let tx = Double(nearest.0) - 24.5
+                let tz = Double(nearest.1) - 24.5
+                let ry = atan2(tx - px, tz - pz)
+                candidates.append(Position(x: px, z: pz, ry: ry))
+            }
+        }
+
+        return candidates.sorted {
+            let da = hypot($0.x - position.x, $0.z - position.z)
+            let db = hypot($1.x - position.x, $1.z - position.z)
+            return da < db
+        }
     }
 
     private func ingestActionProof(_ packet: [String: Any]) {
@@ -738,14 +943,34 @@ final class AutomationEngine {
         guard !proof.isEmpty, proof != harvestProof else { return }
         harvestProof = proof
         harvestProofSerial += 1
+        gatherResourceSerial += 1
         reporter(.diagnostic("[GATHER] action_proof #\(harvestProofSerial)"))
     }
 
     private func ingestResourceEvent(_ packet: [String: Any]) {
         let kind = ((packet["kind"] ?? packet["k"]) as? String) ?? ""
         let keys = stringArray(packet["keys"] ?? packet["key"])
+        let by = RealtimeProtocol.int(packet["by"])
+
+        // v7.7 remote-activity guard: progresso de outro player torna somente
+        // aquele footprint temporariamente ocupado. Nunca aceite proof/wear alheio
+        // como confirmação da nossa ação.
+        if let by, let playerID, by != playerID {
+            let remoteProgress = packet["evt"] as? String == "wear" ||
+                (RealtimeProtocol.int(packet["h"]) ?? 0) > 0 ||
+                !proofString(packet).isEmpty
+            if remoteProgress {
+                let keySet = Set(keys)
+                for seed in Self.gatherSeeds where seed.kind == kind && !Set(seed.keys).isDisjoint(with: keySet) {
+                    gatherBusyUntil[seed.signature] = nowMS + 10_000
+                }
+                reporter(.diagnostic("[GATHER] recurso ocupado por outro player • kind=\(kind) keys=\(keys) • defer 10s"))
+            }
+            return
+        }
+
         guard matchesCurrentGather(kind: kind, keys: keys) else { return }
-        if let by = RealtimeProtocol.int(packet["by"]), let playerID, by != playerID { return }
+        gatherResourceSerial += 1
 
         if packet["evt"] as? String == "clear" {
             harvestClearSeen = true
@@ -788,11 +1013,17 @@ final class AutomationEngine {
                 }
             }
             .filter { seed in
-                if let until = recentRetryUntil[seed.signature], until > now { return false }
-                return seed.keys.allSatisfy { (cooldownUntil["\(seed.kind):\($0)"] ?? 0) <= now }
+                gatherRetryPolicy.isEligible(signature: seed.signature, nowMS: now) &&
+                (gatherBusyUntil[seed.signature] ?? 0) <= now &&
+                seed.keys.allSatisfy { (cooldownUntil["\(seed.kind):\($0)"] ?? 0) <= now }
             }
             .min { a, b in
-                distance(from: position, to: a.position) < distance(from: position, to: b.position)
+                let retryA = gatherRetryPolicy.hasRetryPriority(signature: a.signature) ? 0 : 1
+                let retryB = gatherRetryPolicy.hasRetryPriority(signature: b.signature) ? 0 : 1
+                if retryA != retryB { return retryA < retryB }
+                let pa = gatherPositionMemory[a.signature] ?? a.position
+                let pb = gatherPositionMemory[b.signature] ?? b.position
+                return distance(from: position, to: pa) < distance(from: position, to: pb)
             }
     }
 
@@ -810,7 +1041,10 @@ final class AutomationEngine {
             } else {
                 modeOK = true
             }
-            return modeOK && seed.keys.allSatisfy { (cooldownUntil["\(seed.kind):\($0)"] ?? 0) <= now }
+            return modeOK &&
+                gatherRetryPolicy.isEligible(signature: seed.signature, nowMS: now) &&
+                (gatherBusyUntil[seed.signature] ?? 0) <= now &&
+                seed.keys.allSatisfy { (cooldownUntil["\(seed.kind):\($0)"] ?? 0) <= now }
         }.count
     }
 
@@ -818,6 +1052,9 @@ final class AutomationEngine {
 
     private func runFishing(goal: Int) async throws {
         activeFishingAction = nil
+        fishingStats = FishingSessionStats()
+        lastFishingInventory = FishingInventorySnapshot()
+
         if serverRegion?.lowercased() != "world" {
             try await setRegion("world", at: Position(x: 22.5, z: -3.5))
             _ = try await waitForRegion("world", timeoutMS: 4_000)
@@ -833,10 +1070,6 @@ final class AutomationEngine {
         reporter(.state(.moving, "Indo ao portal de The Pond"))
         try await walk(to: pondPortal, maxSeconds: 20)
 
-        // O fluxo funcional do Kintarabot v5.2 diferencia entrada real pelo portal
-        // de fallback via setRegion. O erro anterior confirmava Pond no ponto do
-        // portal e depois tentava atravessar ~32 unidades dentro do Pond; o servidor
-        // encerrava a Presence durante esse deslocamento artificial.
         var enteredViaPortal = try await waitForRegion("pond", timeoutMS: 5_000)
         var pondConfirmed = enteredViaPortal
         if !pondConfirmed {
@@ -856,16 +1089,11 @@ final class AutomationEngine {
         reporter(.log("✅ The Pond confirmado"))
 
         if enteredViaPortal {
-            // Paridade com fishing-bot.js v5.2: ao sair do portal, reposiciona no
-            // ponto de entrada do Pond e só então caminha até o stand de pesca.
             position = pondEntry
             try await sendPosition(moving: false)
             try await sleep(300)
             try await walk(to: pondStand, maxSeconds: 15)
         } else {
-            // No fallback direto, o cliente Node usa moveTo(STAND), não um walk
-            // partindo das coordenadas do World/portal. Isso evita uma trajetória
-            // inválida que pode fazer o servidor fechar o WebSocket.
             position = pondStand
             try await sendPosition(moving: false)
         }
@@ -874,11 +1102,8 @@ final class AutomationEngine {
         try await equip("tool_fishing_rod")
         try await sleep(450)
         reporter(.log("🎣 Posição de pesca pronta • x=\(format(position.x)) z=\(format(position.z))"))
+        lastFishingInventory = await fetchFishingInventorySnapshot() ?? FishingInventorySnapshot()
 
-        // A v5.2 não usa coordenadas antigas como alvo: fish_spots é a fonte
-        // autoritativa do servidor. Os pontos fixos servem apenas para entrar e
-        // posicionar o personagem no Pond. Se o snapshot já chegou durante a
-        // entrada, não mostramos falsamente "Aguardando fish_spots".
         if fishSpots.isEmpty {
             reporter(.log("📡 Aguardando fish_spots do servidor…"))
             let spotDeadline = nowMS + 15_000
@@ -901,11 +1126,17 @@ final class AutomationEngine {
             reporter(.state(.searching, "Procurando spot de pesca"))
             guard let target = selectFishTarget() else {
                 reporter(.target(nil))
-                try await sleep(700)
+                // Paridade v5.2: enquanto aguarda um snapshot útil, reafirma STAND
+                // e vara sem inventar coordenadas de spot.
+                position = pondStand
+                try? await sendPosition(moving: false)
+                try? await equip("tool_fishing_rod")
+                try await sleep(2_500)
                 continue
             }
 
             fishAttemptNumber += 1
+            fishingStats.attempts += 1
             let attemptNumber = fishAttemptNumber
             let targetLabel = "Spot #\(target.slot) (\(target.fc),\(target.fr))"
 
@@ -918,7 +1149,7 @@ final class AutomationEngine {
             let generation = target.generation
             try await sendFishingPhase(target, phase: 0)
 
-            let biteDeadline = nowMS + 3_500
+            let biteDeadline = nowMS + FishingRecoveryPolicy.biteScheduleTimeoutMS
             var bite: FishBite?
             while nowMS < biteDeadline {
                 try Task.checkCancellation()
@@ -932,7 +1163,9 @@ final class AutomationEngine {
 
             guard let bite else {
                 try? await clearAction()
-                let reason = fishSnapshotSerial != snapshotBefore ? "spot mudou antes da fisgada" : "sem fisgada (fish_bite não recebido)"
+                let changed = fishSnapshotSerial != snapshotBefore
+                let reason = changed ? "spot mudou antes da fisgada" : "sem fisgada (fish_bite não recebido)"
+                if changed { fishingStats.spotChanged += 1 } else { fishingStats.noBite += 1 }
                 reporter(.failure("Peixe #\(attemptNumber) • \(targetLabel) • \(reason)"))
                 try await sleep(650)
                 continue
@@ -942,11 +1175,12 @@ final class AutomationEngine {
             reporter(.log("🪝 Peixe #\(attemptNumber) • fisgada em \(biteSeconds)s • \(targetLabel)"))
 
             let ttl = remainingMS(for: fishSpots[target.slot])
-            guard ttl >= Double(bite.ms + 4_500) else {
+            guard ttl >= Double(bite.ms + FishingRecoveryPolicy.biteExpiryMarginMS) else {
                 try? await clearAction()
+                fishingStats.staleAvoided += 1
                 reporter(.log("↪️ Peixe #\(attemptNumber) • tentativa descartada: spot expirando • TTL=\(Int(ttl))ms"))
                 reporter(.diagnostic("[FISH] cast #\(attemptNumber) descartado: TTL \(Int(ttl))ms < bite+margin"))
-                try await sleep(500)
+                try await sleep(650)
                 continue
             }
 
@@ -957,13 +1191,17 @@ final class AutomationEngine {
                 try Task.checkCancellation()
                 guard fishTargetStillValid(target, generation: generation) else {
                     try? await clearAction()
+                    fishingStats.spotChanged += 1
                     reporter(.failure("Peixe #\(attemptNumber) • \(targetLabel) • spot rotacionou durante a espera"))
                     spotRotatedDuringWait = true
                     break
                 }
                 try await sleep(100)
             }
-            if spotRotatedDuringWait { continue }
+            if spotRotatedDuringWait {
+                try await sleep(650)
+                continue
+            }
             guard fishTargetStillValid(target, generation: generation) else { continue }
 
             try await sendFishingPhase(target, phase: 1)
@@ -973,7 +1211,9 @@ final class AutomationEngine {
 
             guard fishTargetStillValid(target, generation: generation) else {
                 try? await clearAction()
+                fishingStats.spotChanged += 1
                 reporter(.failure("Peixe #\(attemptNumber) • \(targetLabel) • spot mudou antes da confirmação"))
+                try await sleep(650)
                 continue
             }
 
@@ -981,24 +1221,114 @@ final class AutomationEngine {
                 let shardID = Int(shard.replacingOccurrences(of: "s", with: "")) ?? 4
                 let response = try await http.post("/api/auth/grant-fish-xp", body: ["mountCatch": true, "fleet": "us", "shardId": shardID])
                 try? await clearAction()
+
                 guard RealtimeProtocol.bool(response["ok"]) != false else {
                     let reason = (response["error"] as? String) ?? (response["message"] as? String) ?? "grant-fish-xp recusado"
-                    reporter(.failure("Peixe #\(attemptNumber) • \(targetLabel) • \(reason)"))
-                    try await sleep(1_000)
+                    if isFishActionStale(reason) {
+                        fishingStats.staleRejects += 1
+                        reporter(.failure("Peixe #\(attemptNumber) • \(targetLabel) • fish_action_stale"))
+                        reporter(.log("⚠️ fish_action_stale #\(fishingStats.staleRejects) • conferindo inventário e ressincronizando Pond"))
+                        await verifyFishingInventoryAfterStale()
+                        try await recoverFishingAfterStale(stand: pondStand)
+                    } else {
+                        reporter(.failure("Peixe #\(attemptNumber) • \(targetLabel) • \(reason)"))
+                        try await sleep(FishingRecoveryPolicy.staleRecoveryMS)
+                    }
                     continue
                 }
+
                 successes += 1
-                // Incrementa a estatística da UI sem gerar a linha genérica
-                // "✅ fish"; o log útil abaixo identifica tentativa, spot e meta.
+                fishingStats.catches += 1
+                updateFishingInventory(fromGrant: response)
                 reporter(.success(nil))
                 reporter(.log("✅ Peixe #\(attemptNumber) confirmado • \(successes)/\(goal) • \(targetLabel)"))
-                try await sleep(650)
+
+                if successes < goal {
+                    // Node v5.2 usa 4.8 s entre capturas para aguardar o próximo
+                    // estado autoritativo e reduzir stale na ação seguinte.
+                    try await sleep(FishingRecoveryPolicy.betweenCatchMS)
+                }
             } catch {
                 try? await clearAction()
-                reporter(.failure("Peixe #\(attemptNumber) • \(targetLabel) • confirmação falhou: \(error.localizedDescription)"))
-                try await sleep(1_200)
+                let reason = error.localizedDescription
+                if isFishActionStale(reason) {
+                    fishingStats.staleRejects += 1
+                    reporter(.failure("Peixe #\(attemptNumber) • \(targetLabel) • confirmação falhou: fish_action_stale"))
+                    reporter(.log("⚠️ fish_action_stale #\(fishingStats.staleRejects) • conferindo inventário e aguardando novo estado do spot"))
+                    await verifyFishingInventoryAfterStale()
+                    try await recoverFishingAfterStale(stand: pondStand)
+                } else {
+                    reporter(.failure("Peixe #\(attemptNumber) • \(targetLabel) • confirmação falhou: \(reason)"))
+                    try await sleep(FishingRecoveryPolicy.staleRecoveryMS)
+                }
             }
         }
+
+        reporter(.log(
+            "📊 Pesca encerrada • peixes=\(fishingStats.catches)/\(goal) • tentativas=\(fishingStats.attempts) • stale=\(fishingStats.staleRejects) • stale evitado=\(fishingStats.staleAvoided) • no_bite=\(fishingStats.noBite) • rotações=\(fishingStats.spotChanged)"
+        ))
+    }
+
+    private func isFishActionStale(_ value: String) -> Bool {
+        FishingRecoveryPolicy.isStale(value)
+    }
+
+    private func recoverFishingAfterStale(stand: Position) async throws {
+        try? await clearAction()
+        position = stand
+        position.y = 0.25
+        try await sendPosition(moving: false)
+        try await equip("tool_fishing_rod")
+        reporter(.state(.recovering, "Ressincronizando pesca"))
+        try await sleep(FishingRecoveryPolicy.staleRecoveryMS)
+    }
+
+    private func fetchFishingInventorySnapshot() async -> FishingInventorySnapshot? {
+        do {
+            let me = try await http.get("/api/auth/me")
+            let backpack = (me["backpack"] as? [String: Any]) ?? ((me["player"] as? [String: Any])?["backpack"] as? [String: Any]) ?? [:]
+            return FishingInventorySnapshot(
+                fish: fishingResourceCount(backpack, key: "fish"),
+                bait: fishingResourceCount(backpack, key: "bait_feather"),
+                xp: fishingXP(from: me)
+            )
+        } catch {
+            reporter(.diagnostic("[FISH] inventário pós-stale indisponível: \(error.localizedDescription)"))
+            return nil
+        }
+    }
+
+    private func verifyFishingInventoryAfterStale() async {
+        guard let fresh = await fetchFishingInventorySnapshot() else { return }
+        if fresh != lastFishingInventory {
+            let xpText: String
+            if let old = lastFishingInventory.xp, let new = fresh.xp {
+                xpText = " • XP \(old)→\(new)"
+            } else {
+                xpText = ""
+            }
+            reporter(.log("🔎 Estado após stale • fish \(lastFishingInventory.fish)→\(fresh.fish) • bait \(lastFishingInventory.bait)→\(fresh.bait)\(xpText)"))
+        }
+        lastFishingInventory = fresh
+    }
+
+    private func updateFishingInventory(fromGrant response: [String: Any]) {
+        if let backpack = response["backpack"] as? [String: Any] {
+            lastFishingInventory.fish = fishingResourceCount(backpack, key: "fish")
+            lastFishingInventory.bait = fishingResourceCount(backpack, key: "bait_feather")
+        }
+        if let xp = fishingXP(from: response) { lastFishingInventory.xp = xp }
+    }
+
+    private func fishingResourceCount(_ backpack: [String: Any], key: String) -> Int {
+        if let flat = RealtimeProtocol.int(backpack[key]) { return max(0, flat) }
+        return max(0, slotCounts(backpack["invSlots"])[key] ?? 0)
+    }
+
+    private func fishingXP(from object: [String: Any]) -> Int? {
+        if let xp = object["xp"] as? [String: Any], let value = RealtimeProtocol.int(xp["fishing"]) { return value }
+        if let player = object["player"] as? [String: Any], let xp = player["xp"] as? [String: Any], let value = RealtimeProtocol.int(xp["fishing"]) { return value }
+        return nil
     }
 
     private func ingestFishSpots(_ packet: [String: Any]) {
@@ -1046,7 +1376,7 @@ final class AutomationEngine {
     private func selectFishTarget() -> FishTarget? {
         let playerCol = Int(round(position.x + 19.5))
         let playerRow = Int(round(position.z + 19.5))
-        let minTTL = 38_000.0
+        let minTTL = FishingRecoveryPolicy.minStartTTLMS
         var candidates: [FishTarget] = []
         for spot in fishSpots.values where remainingMS(for: spot) >= minTTL {
             for (fc, fr) in [(spot.c, spot.r), (spot.c + 1, spot.r), (spot.c, spot.r + 1), (spot.c + 1, spot.r + 1)] {
@@ -1234,6 +1564,12 @@ final class AutomationEngine {
         // o acumulado da sessão sejam calculados sem adivinhação.
         await loadCombatXPBaseline()
 
+        if safeStopReason != nil {
+            safeStopCompleted = true
+            reporter(.state(.cancelled, "STOP concluído em World seguro"))
+            return
+        }
+
         // v5.2: se qualquer categoria de poção já estiver zerada antes de entrar
         // no Wild, faça a reposição no World e só então comece a caça.
         try await refreshPotionStock(logSummary: true)
@@ -1250,6 +1586,7 @@ final class AutomationEngine {
 
         while successes < goal {
             try Task.checkCancellation()
+            if safeStopReason != nil { break }
             guard playerHP > 0 else { throw EngineError.playerDead }
 
             // Se uma categoria chegou a zero entre encontros, faça UMA viagem ao
@@ -1299,8 +1636,10 @@ final class AutomationEngine {
             reporter(.target("\(targetName) • HP \(target.hp.map { String($0) } ?? "?")"))
             reporter(.log("🎯 \(targetName) selecionado • HP \(target.hp.map { String($0) } ?? "?") • disponíveis=\(candidates.count)"))
 
+            if safeStopReason != nil { break }
             reporter(.state(.moving, "Movendo até \(targetName)"))
             try await moveWildAdjacent(to: target)
+            if safeStopReason != nil { break }
 
             // v3.0: snapshots podem mudar enquanto caminhamos. Não gaste Strength
             // nem conte tentativa se outro jogador matou/despawnou o mob antes de
@@ -1350,9 +1689,14 @@ final class AutomationEngine {
             var swing = 1
             var targetLostDuringRecovery = false
             var targetBecameUnavailable = false
+            var safeStopInterruptedTarget = false
 
             while swing <= 30 {
                 try Task.checkCancellation()
+                if safeStopReason != nil {
+                    safeStopInterruptedTarget = true
+                    break
+                }
                 guard let live = wildMobs[target.index], live.alive, live.type == targetType else {
                     targetBecameUnavailable = true
                     break
@@ -1473,6 +1817,11 @@ final class AutomationEngine {
                     }
                 }
 
+                if safeStopReason != nil {
+                    safeStopInterruptedTarget = true
+                    break
+                }
+
                 let cadenceLeft = 1_650.0 - (nowMS - sentAt)
                 if cadenceLeft > 0 { try await sleep(Int(cadenceLeft)) }
                 swing += 1
@@ -1502,6 +1851,18 @@ final class AutomationEngine {
                     grantBaseline: grantBaseline
                 )
 
+                if safeStopReason != nil {
+                    if !drops.bankable.isEmpty {
+                        try await combatWorldServiceTrip(
+                            drops: drops.bankable,
+                            resupplyReason: nil,
+                            returnToWild: false,
+                            reasonLabel: "STOP seguro"
+                        )
+                    }
+                    break
+                }
+
                 // Meta final: primeiro proteja drops bancáveis, respeitando o
                 // combat timer de 10 s, e permaneça no World. Não reentra no Wild.
                 if successes >= goal {
@@ -1527,6 +1888,10 @@ final class AutomationEngine {
                 }
 
                 try await sleep(mode == .dragon ? 1_200 : 900)
+            } else if safeStopInterruptedTarget || safeStopReason != nil {
+                reporter(.state(.recovering, "Saindo do combate com segurança"))
+                reporter(.log("🛑 STOP recebido • nenhum novo ataque será iniciado • iniciando saída segura"))
+                break
             } else if targetLostDuringRecovery {
                 reporter(.state(.searching, "Alvo original não está mais disponível"))
                 reporter(.log("ℹ️ \(targetName) desapareceu/morreu durante recovery/reposição; será buscado um novo alvo"))
@@ -1544,9 +1909,12 @@ final class AutomationEngine {
         }
 
         // Nunca entregue a Presence para o AppStore fechar enquanto ainda existe
-        // combat tag. Só termina a engine depois de 0 s e World confirmado.
-        if successes >= goal {
-            try await finalizeCombatSessionSafely(mode: mode)
+        // combat tag. Meta e STOP cooperativo passam pela mesma saída segura.
+        if safeStopReason != nil {
+            try await finalizeCombatSessionSafely(mode: mode, reason: "STOP seguro")
+            safeStopCompleted = true
+        } else if successes >= goal {
+            try await finalizeCombatSessionSafely(mode: mode, reason: "meta concluída")
         }
     }
 
@@ -1576,6 +1944,7 @@ final class AutomationEngine {
         reporter(.state(.recovering, "Recuando • mantendo \(targetName)"))
         reporter(.log("🏃 Vitais baixos • mantendo \(targetName) travado • HP \(playerHP) + shield \(playerShield)"))
         try await moveToWildSafeCamp(reason: targetName)
+        if safeStopReason != nil { return false }
 
         // Se alguma poção já está em zero, não entre num ciclo de recovery sem
         // suprimento. Saia de forma segura, reponha e tente o mesmo mob.
@@ -1589,6 +1958,7 @@ final class AutomationEngine {
         }
 
         try await recoverVitals(mode: mode, preFight: false)
+        if safeStopReason != nil { return false }
 
         // Uma das doses usadas no recovery pode ter zerado a categoria. Nesse
         // caso reabasteça antes de voltar a atacar o alvo travado.
@@ -1763,9 +2133,17 @@ final class AutomationEngine {
             }
         }
 
-        if let resupplyReason {
+        if let resupplyReason, safeStopReason == nil {
             reporter(.log("🧪 Reabastecendo no World • motivo=\(resupplyReason)"))
             try await ensureCombatSupplies()
+        } else if safeStopReason != nil, resupplyReason != nil {
+            reporter(.diagnostic("[STATE] safe-stop ativo • reposição cancelada no World"))
+        }
+
+        if safeStopReason != nil {
+            reporter(.state(.cooldown, "World seguro • STOP em andamento"))
+            reporter(.log("🏠 World confirmado durante STOP • retorno à Wilderness cancelado"))
+            return
         }
 
         guard returnToWild else {
@@ -1790,12 +2168,14 @@ final class AutomationEngine {
         reporter(.state(.recovering, "Reabastecendo • mantendo \(targetName)"))
         reporter(.log("🧪 Estoque zerado • \(reason) • mantendo \(targetName) #\(targetIndex) travado"))
         try await moveToWildSafeCamp(reason: "reposição \(targetName)")
+        if safeStopReason != nil { return false }
         try await combatWorldServiceTrip(
             drops: [:],
             resupplyReason: reason,
             returnToWild: true,
             reasonLabel: "reposição mantendo \(targetName)"
         )
+        if safeStopReason != nil { return false }
 
         let expectedType = mode == .dragon ? "dragon" : "zombie"
         let deadline = nowMS + 5_000
@@ -1844,19 +2224,19 @@ final class AutomationEngine {
         }
     }
 
-    private func finalizeCombatSessionSafely(mode: ActivityMode) async throws {
+    private func finalizeCombatSessionSafely(mode: ActivityMode, reason: String) async throws {
         if region.hasPrefix("wild") || serverRegion?.hasPrefix("wild") == true {
-            reporter(.state(.recovering, "Meta concluída • ficando em segurança"))
+            reporter(.state(.recovering, reason == "meta concluída" ? "Meta concluída • ficando em segurança" : "Saindo do combate com segurança"))
             let elapsed = max(0, nowMS - lastCombatActivityAt)
             let remaining = Int(ceil(max(0, combatLogoutWindowMS - elapsed) / 1_000))
-            reporter(.log("🛡️ Meta de \(mode.displayName) concluída • saída segura iniciada • combat timer \(remaining)s"))
+            reporter(.log("🛡️ \(mode.displayName) • saída segura iniciada • motivo=\(reason) • combat timer \(remaining)s"))
             reporter(.log("⏳ Deslocamento até a área segura conta dentro da janela de combate de 10s"))
-            try await moveToWildSafeCamp(reason: "meta concluída")
-            try await waitForCombatSafetyWindow(reason: "meta concluída")
-            try await exitWildToWorld(reason: "meta concluída")
+            try await moveToWildSafeCamp(reason: reason)
+            try await waitForCombatSafetyWindow(reason: reason)
+            try await exitWildToWorld(reason: reason)
         }
         reporter(.state(.cooldown, "World seguro • pronto para encerrar"))
-        reporter(.log("🏠 World confirmado • combate encerrado em área segura"))
+        reporter(.log("🏠 World confirmado • combate encerrado em área segura • motivo=\(reason)"))
     }
 
     private func loadCombatXPBaseline() async {
@@ -2712,6 +3092,75 @@ private struct HarvestResult {
     let hm: Int
     let loot: String?
     let reason: String
+    let accepted: Bool
+    let proofMiss: Bool
+
+    var pureProofMiss: Bool { !felled && !accepted && proofMiss }
+    var recoverable: Bool { pureProofMiss || (!felled && accepted) }
+
+    func merging(_ next: HarvestResult) -> HarvestResult {
+        let mergedAccepted = accepted || next.accepted
+        return HarvestResult(
+            felled: felled || next.felled,
+            h: max(h, next.h),
+            hm: next.hm < 99 ? next.hm : hm,
+            loot: next.loot ?? loot,
+            reason: next.reason,
+            accepted: mergedAccepted,
+            proofMiss: !mergedAccepted && (proofMiss || next.proofMiss)
+        )
+    }
+}
+
+struct GatherRetryPolicy {
+    private(set) var retryStreaks: [String: Int] = [:]
+    private(set) var deferredUntil: [String: Double] = [:]
+
+    let maxSameTargetRetries = 3
+    let proofMissDeferMS: Double = 10_000
+    let acceptedPartialDeferMS: Double = 1_200
+    let realFailureCooldownMS: Double = 8_000
+    let repeatedFailureDeferMS: Double = 10_000
+
+    mutating func resetExpired(nowMS: Double) {
+        deferredUntil = deferredUntil.filter { $0.value > nowMS }
+    }
+
+    func isEligible(signature: String, nowMS: Double) -> Bool {
+        (deferredUntil[signature] ?? 0) <= nowMS
+    }
+
+    func hasRetryPriority(signature: String) -> Bool {
+        (retryStreaks[signature] ?? 0) > 0
+    }
+
+    mutating func markSuccess(signature: String) {
+        retryStreaks.removeValue(forKey: signature)
+        deferredUntil.removeValue(forKey: signature)
+    }
+
+    mutating func deferProofMiss(signature: String, nowMS: Double) {
+        retryStreaks.removeValue(forKey: signature)
+        deferredUntil[signature] = nowMS + proofMissDeferMS
+    }
+
+    mutating func deferAcceptedPartial(signature: String, nowMS: Double) {
+        retryStreaks[signature] = 1
+        deferredUntil[signature] = nowMS + acceptedPartialDeferMS
+    }
+
+    @discardableResult
+    mutating func markRealFailure(signature: String, nowMS: Double) -> Bool {
+        let next = (retryStreaks[signature] ?? 0) + 1
+        if next >= maxSameTargetRetries {
+            retryStreaks.removeValue(forKey: signature)
+            deferredUntil[signature] = nowMS + repeatedFailureDeferMS
+            return true
+        }
+        retryStreaks[signature] = next
+        deferredUntil[signature] = nowMS + realFailureCooldownMS
+        return false
+    }
 }
 
 private enum HarvestAck { case accepted, felled, timeout }
@@ -2741,6 +3190,33 @@ private struct FishBite {
     let fr: Int
     let ms: Int
     let at: Double
+}
+
+struct FishingRecoveryPolicy {
+    static let minStartTTLMS: Double = 38_000
+    static let biteExpiryMarginMS = 4_500
+    static let biteScheduleTimeoutMS: Double = 3_500
+    static let betweenCatchMS = 4_800
+    static let staleRecoveryMS = 4_500
+
+    static func isStale(_ text: String) -> Bool {
+        text.range(of: "fish_action_stale", options: [.caseInsensitive, .diacriticInsensitive]) != nil
+    }
+}
+
+private struct FishingSessionStats {
+    var attempts = 0
+    var catches = 0
+    var staleRejects = 0
+    var staleAvoided = 0
+    var noBite = 0
+    var spotChanged = 0
+}
+
+private struct FishingInventorySnapshot: Equatable {
+    var fish = 0
+    var bait = 0
+    var xp: Int?
 }
 
 private struct LiveMob {
