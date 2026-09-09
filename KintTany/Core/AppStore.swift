@@ -156,6 +156,7 @@ final class AppStore: ObservableObject {
     private var receiverTask: Task<Void, Never>?
     private var traceTask: Task<Void, Never>?
     private var realtimeFailureMessage: String?
+    private var terminalFailureHandled = false
     private let socket = RealtimeSocket()
 
     // MARK: - Execução em segundo plano
@@ -174,6 +175,9 @@ final class AppStore: ObservableObject {
     private var continuedTaskMode: ActivityMode?
     private var continuedTaskIdentifier: String?
     private var continuedTaskActivationWatchdog: Task<Void, Never>?
+    private var continuedTaskSubmissionAttempt = 0
+    private var continuedProgressSubunit = 0
+    private var lastScenePhaseKey: String?
     private var legacyBackgroundTask: UIBackgroundTaskIdentifier = .invalid
 
     private var continuedTaskIdentifierPrefix: String {
@@ -306,6 +310,7 @@ final class AppStore: ObservableObject {
         goal = min(100_000, max(1, goal))
         let runGoal = goal
         realtimeFailureMessage = nil
+        terminalFailureHandled = false
 
         activity = mode
         state = .connecting
@@ -426,7 +431,10 @@ final class AppStore: ObservableObject {
                 state = .failed
                 statusMessage = reason
                 diagnostic("[STATE] engine cancelada após perda da conexão realtime")
-                finishContinuedProcessing(success: false, reason: "conexão realtime perdida")
+                if !terminalFailureHandled {
+                    terminalFailureHandled = true
+                    finishContinuedProcessing(success: false, reason: "conexão realtime perdida")
+                }
             } else {
                 state = .cancelled
                 statusMessage = "Atividade cancelada"
@@ -435,6 +443,8 @@ final class AppStore: ObservableObject {
             }
         } catch {
             await importSocketTrace()
+            if terminalFailureHandled { return }
+            terminalFailureHandled = true
             connected = false
             currentTarget = nil
             activity = nil
@@ -448,7 +458,8 @@ final class AppStore: ObservableObject {
     }
 
     private func handleUnexpectedRealtimeEnd(for mode: ActivityMode) async {
-        guard activity == mode, connected else { return }
+        guard activity == mode, connected, !terminalFailureHandled else { return }
+        terminalFailureHandled = true
 
         await importSocketTrace()
         let detail = await socket.disconnectReason()
@@ -479,9 +490,11 @@ final class AppStore: ObservableObject {
     private func handleEngineEvent(_ event: EngineEvent) {
         switch event {
         case .state(let newState, let message):
+            let changed = state != newState || statusMessage != message
             state = newState
             statusMessage = message
             stats.lastEvent = newState.rawValue
+            if changed { advanceContinuedProcessingSubprogress() }
             updateContinuedProcessingProgress()
 
         case .log(let message):
@@ -497,9 +510,12 @@ final class AppStore: ObservableObject {
         case .attempt:
             stats.attempts += 1
             stats.lastEvent = "tentativa"
+            advanceContinuedProcessingSubprogress()
+            updateContinuedProcessingProgress()
 
         case .success(let detail):
             stats.successes += 1
+            continuedProgressSubunit = 0
             stats.lastEvent = detail ?? "sucesso"
             if let detail { log("✅ \(detail) • \(stats.successes)/\(goal)") }
             updateContinuedProcessingProgress()
@@ -511,7 +527,8 @@ final class AppStore: ObservableObject {
             updateContinuedProcessingProgress()
 
         case .fatal(let reason):
-            guard activity != nil else { return }
+            guard activity != nil, !terminalFailureHandled else { return }
+            terminalFailureHandled = true
             realtimeFailureMessage = reason
             connected = false
             currentTarget = nil
@@ -533,6 +550,8 @@ final class AppStore: ObservableObject {
         case .confirmedHit:
             stats.confirmedHits += 1
             stats.lastEvent = "hit confirmado"
+            advanceContinuedProcessingSubprogress()
+            updateContinuedProcessingProgress()
 
         case .kill:
             stats.kills += 1
@@ -560,6 +579,16 @@ final class AppStore: ObservableObject {
     /// ponte/fallback curta caso o scheduler contínuo ainda não tenha entregue o
     /// handler ou em sistemas anteriores.
     func handleScenePhase(_ phase: ScenePhase) {
+        let phaseKey: String
+        switch phase {
+        case .active: phaseKey = "active"
+        case .inactive: phaseKey = "inactive"
+        case .background: phaseKey = "background"
+        @unknown default: phaseKey = "unknown"
+        }
+        guard lastScenePhaseKey != phaseKey else { return }
+        lastScenePhaseKey = phaseKey
+
         switch phase {
         case .background:
             guard activity != nil else { return }
@@ -599,19 +628,55 @@ final class AppStore: ObservableObject {
         continuedTaskMode = mode
         continuedTaskRequested = false
         continuedTaskObject = nil
+        continuedTaskIdentifier = nil
+        continuedTaskSubmissionAttempt = 0
+        continuedProgressSubunit = 0
+        lastScenePhaseKey = nil
 
         guard #available(iOS 26.0, *) else {
-            continuedTaskIdentifier = nil
             diagnostic("[BG] iOS anterior ao 26 • usando somente extensão curta de background")
             return
         }
 
-        // Continued Processing aceita identificadores dinâmicos quando o Info.plist
-        // declara o prefixo com wildcard. Um identificador novo por sessão evita
-        // reaproveitar requests/handlers antigos e torna cada toque do usuário uma
-        // solicitação independente.
+        let appState: String
+        switch UIApplication.shared.applicationState {
+        case .active: appState = "active"
+        case .inactive: appState = "inactive"
+        case .background: appState = "background"
+        @unknown default: appState = "unknown"
+        }
+
+        let refreshStatus: String
+        switch UIApplication.shared.backgroundRefreshStatus {
+        case .available: refreshStatus = "available"
+        case .denied: refreshStatus = "denied"
+        case .restricted: refreshStatus = "restricted"
+        @unknown default: refreshStatus = "unknown"
+        }
+
+        let bundleID = Bundle.main.bundleIdentifier ?? "<desconhecido>"
+        let expectedWildcard = "\(bundleID).continuedBot.*"
+        let permitted = Bundle.main.object(forInfoDictionaryKey: "BGTaskSchedulerPermittedIdentifiers") as? [String] ?? []
+        let wildcardOK = permitted.contains(expectedWildcard)
+        diagnostic("[BG] Ambiente • app=\(appState) • Background App Refresh=\(refreshStatus) • Low Power=\(ProcessInfo.processInfo.isLowPowerModeEnabled ? "on" : "off") • wildcard=\(wildcardOK ? "ok" : "ausente")")
+        if refreshStatus != "available" {
+            diagnostic("[WARN] Background App Refresh não está disponível • Ajustes > Geral > Atualização em 2º Plano pode impedir BackgroundTasks")
+        }
+        if !wildcardOK {
+            diagnostic("[ERROR] BGTaskSchedulerPermittedIdentifiers não contém \(expectedWildcard) • Continued Processing desativada")
+            return
+        }
+
+        submitContinuedProcessingAttempt(for: mode, requestedGoal: min(100_000, max(1, goal)), attempt: 1)
+    }
+
+    @available(iOS 26.0, *)
+    private func submitContinuedProcessingAttempt(for mode: ActivityMode, requestedGoal: Int, attempt: Int) {
+        guard continuedTaskObject == nil else { return }
+
         let identifier = "\(continuedTaskIdentifierPrefix).\(UUID().uuidString.lowercased())"
         continuedTaskIdentifier = identifier
+        continuedTaskSubmissionAttempt = attempt
 
         let registered = BGTaskScheduler.shared.register(
             forTaskWithIdentifier: identifier,
@@ -632,39 +697,35 @@ final class AppStore: ObservableObject {
         }
 
         guard registered else {
+            continuedTaskRequested = false
             continuedTaskIdentifier = nil
-            diagnostic("[WARN] Continued Processing não pôde ser registrada • fallback curto será usado")
+            diagnostic("[WARN] Continued Processing não pôde ser registrada • tentativa \(attempt)/3 • fallback curto será usado")
             return
         }
 
-        let requestedGoal = min(100_000, max(1, goal))
         let request = BGContinuedProcessingTaskRequest(
             identifier: identifier,
             title: "Kintarabot • \(mode.localizedTitle)",
             subtitle: "Meta \(requestedGoal) • preparando"
         )
 
-        // A engine já começa imediatamente em foreground. Para o mecanismo de
-        // proteção de background, porém, .queue é mais robusto: se o iOS estiver
-        // momentaneamente sem vaga, mantém a Continued Processing pendente para
-        // assumir a sessão assim que possível. A ponte UIKit cobre a transição.
-        request.strategy = .queue
+        // Realtime precisa de proteção AGORA. A Apple usa .fail para tarefas que
+        // só fazem sentido se puderem iniciar imediatamente. No SDK 26 submit(_:)
+        // pode raramente ser aceito sem entregar o handler; o watchdog abaixo faz
+        // no máximo duas novas tentativas, sempre com identificador único.
+        request.strategy = .fail
 
-        diagnostic("[BG] Solicitando Continued Processing • \(mode.localizedTitle) • meta \(requestedGoal)")
+        diagnostic("[BG] Solicitando Continued Processing • \(mode.localizedTitle) • meta \(requestedGoal) • tentativa \(attempt)/3")
 
         do {
-            // Marcar antes do submit evita perder um launch handler entregue de
-            // forma imediata. submit() no SDK 26 pode retornar sem erro e ainda
-            // assim o launch handler não chegar; por isso a ativação só é tratada
-            // como real quando attachContinuedProcessingTask() é chamado.
             continuedTaskRequested = true
             try BGTaskScheduler.shared.submit(request)
-            diagnostic("[BG] Solicitação enviada ao scheduler • estratégia=queue • aguardando início confirmado")
+            diagnostic("[BG] Solicitação aceita pelo submit • estratégia=fail • aguardando handler do scheduler")
             armContinuedProcessingActivationWatchdog(identifier: identifier)
         } catch {
             continuedTaskRequested = false
             continuedTaskIdentifier = nil
-            diagnostic("[WARN] Continued Processing recusada: \(error.localizedDescription) • fallback curto disponível")
+            diagnostic("[WARN] Continued Processing recusada imediatamente: \(error.localizedDescription) • fallback curto disponível")
         }
     }
 
@@ -695,7 +756,7 @@ final class AppStore: ObservableObject {
 
         updateContinuedProcessingProgress()
         let current = min(max(0, stats.successes), max(1, goal))
-        diagnostic("[BG] ✅ Continued Processing INICIADA • \((activity ?? continuedTaskMode)?.localizedTitle ?? "Atividade") • \(current)/\(max(1, goal))")
+        diagnostic("[BG] ✅ Continued Processing INICIADA • \((activity ?? continuedTaskMode)?.localizedTitle ?? "Atividade") • \(current)/\(max(1, goal)) • tentativa \(continuedTaskSubmissionAttempt)/3")
         endLegacyBackgroundTask()
     }
 
@@ -703,7 +764,7 @@ final class AppStore: ObservableObject {
         continuedTaskActivationWatchdog?.cancel()
         continuedTaskActivationWatchdog = Task { [weak self] in
             do {
-                try await Task.sleep(for: .seconds(3))
+                try await Task.sleep(for: .milliseconds(1_500))
             } catch {
                 return
             }
@@ -720,26 +781,53 @@ final class AppStore: ObservableObject {
               continuedTaskObject == nil
         else { return }
 
-        // v2.2 cancelava a solicitação após apenas 3 s. Isso eliminava justamente
-        // a possibilidade de o scheduler entregar a Continued Processing alguns
-        // segundos depois, durante a ponte UIKit. Agora a request permanece viva.
         continuedTaskActivationWatchdog = nil
-        diagnostic("[BG] Continued Processing ainda não iniciou após 3s • request será mantida pendente; ponte curta assume ao sair da tela")
+        let attempt = continuedTaskSubmissionAttempt
+        diagnostic("[BG] Handler não chegou em 1.5s • verificando scheduler • tentativa \(attempt)/3")
 
         BGTaskScheduler.shared.getPendingTaskRequests { [weak self] requests in
             let pending = requests.contains { $0.identifier == identifier }
             Task { @MainActor [weak self] in
                 guard let self,
                       self.continuedTaskIdentifier == identifier,
-                      self.continuedTaskObject == nil
+                      self.continuedTaskObject == nil,
+                      self.continuedTaskRequested
                 else { return }
+
                 if pending {
-                    self.diagnostic("[BG] Scheduler confirmou request pendente • aguardando oportunidade de execução")
+                    self.diagnostic("[BG] Scheduler confirmou request pendente • ponte UIKit cobrirá a transição")
+                    return
+                }
+
+                guard UIApplication.shared.applicationState == .active else {
+                    self.diagnostic("[WARN] Continued Processing sem handler e sem request pendente • app já saiu do foreground; somente ponte UIKit está disponível")
+                    self.continuedTaskRequested = false
+                    self.continuedTaskIdentifier = nil
+                    return
+                }
+
+                if attempt < 3, let mode = self.continuedTaskMode {
+                    BGTaskScheduler.shared.cancel(taskRequestWithIdentifier: identifier)
+                    self.continuedTaskRequested = false
+                    self.diagnostic("[BG] Scheduler não reteve a request • repetindo com novo identificador")
+                    self.submitContinuedProcessingAttempt(
+                        for: mode,
+                        requestedGoal: min(100_000, max(1, self.goal)),
+                        attempt: attempt + 1
+                    )
                 } else {
-                    self.diagnostic("[WARN] Scheduler ainda não listou a request como pendente • mantendo-a registrada e usando ponte UIKit quando necessário")
+                    BGTaskScheduler.shared.cancel(taskRequestWithIdentifier: identifier)
+                    self.continuedTaskRequested = false
+                    self.continuedTaskIdentifier = nil
+                    self.diagnostic("[WARN] Continued Processing não foi concedida após 3 tentativas • foreground continua normal; em background haverá apenas a janela curta do UIKit")
                 }
             }
         }
+    }
+
+    private func advanceContinuedProcessingSubprogress() {
+        guard continuedTaskObject != nil else { return }
+        continuedProgressSubunit = min(99, continuedProgressSubunit + 1)
     }
 
     private func updateContinuedProcessingProgress() {
@@ -747,8 +835,12 @@ final class AppStore: ObservableObject {
               let backgroundTask = continuedTaskObject as? BGContinuedProcessingTask
         else { return }
 
-        let total = Int64(max(1, goal))
-        let completed = Int64(min(max(0, stats.successes), max(1, goal)))
+        // 100 unidades por meta permitem reportar etapas reais entre sucessos
+        // (movimento, tentativa, hit) sem falsificar o contador principal.
+        let goalUnits = Int64(max(1, goal))
+        let total = goalUnits * 100
+        let successBase = Int64(min(max(0, stats.successes), max(1, goal))) * 100
+        let completed = min(total, successBase + Int64(continuedProgressSubunit))
         backgroundTask.progress.totalUnitCount = total
         backgroundTask.progress.completedUnitCount = completed
 
@@ -756,7 +848,7 @@ final class AppStore: ObservableObject {
         let shortStatus = statusMessage.count > 42 ? String(statusMessage.prefix(42)) + "…" : statusMessage
         backgroundTask.updateTitle(
             "Kintarabot • \(modeName)",
-            subtitle: "\(completed)/\(total) • \(shortStatus)"
+            subtitle: "\(stats.successes)/\(max(1, goal)) • \(shortStatus)"
         )
     }
 
@@ -770,12 +862,13 @@ final class AppStore: ObservableObject {
 
         if #available(iOS 26.0, *) {
             if let backgroundTask = continuedTaskObject as? BGContinuedProcessingTask {
-                let total = Int64(max(1, goal))
+                let total = Int64(max(1, goal)) * 100
                 backgroundTask.progress.totalUnitCount = total
                 if success {
                     backgroundTask.progress.completedUnitCount = total
                 } else {
-                    backgroundTask.progress.completedUnitCount = Int64(min(max(0, stats.successes), max(1, goal)))
+                    let base = Int64(min(max(0, stats.successes), max(1, goal))) * 100
+                    backgroundTask.progress.completedUnitCount = min(total, base + Int64(continuedProgressSubunit))
                 }
                 backgroundTask.expirationHandler = nil
                 backgroundTask.updateTitle(
@@ -793,6 +886,8 @@ final class AppStore: ObservableObject {
         continuedTaskObject = nil
         continuedTaskMode = nil
         continuedTaskIdentifier = nil
+        continuedTaskSubmissionAttempt = 0
+        continuedProgressSubunit = 0
         endLegacyBackgroundTask()
     }
 
