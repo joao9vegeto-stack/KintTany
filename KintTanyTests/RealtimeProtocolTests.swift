@@ -172,4 +172,191 @@ final class RealtimeProtocolTests: XCTestCase {
         XCTAssertEqual(value, "Saindo do combate com segurança")
     }
 
+    func testFishingPublicNumberAdvancesOnlyAfterSuccess() {
+        XCTAssertEqual(FishingNumberingPolicy.publicFishNumber(successes: 0), 1)
+        XCTAssertEqual(FishingNumberingPolicy.publicFishNumber(successes: 0), 1) // retry after failure
+        XCTAssertEqual(FishingNumberingPolicy.publicFishNumber(successes: 1), 2)
+        XCTAssertEqual(FishingNumberingPolicy.publicFishNumber(successes: 14), 15)
+    }
+
+    func testFishingBaitCatalogDoesNotPretendUnverifiedWireIDs() {
+        XCTAssertEqual(FishingBait.allCases.map(\.rawValue), [
+            "feather", "trout", "bass", "tuna", "squid"
+        ])
+        XCTAssertEqual(FishingBait.feather.confirmedInventoryKey, "bait_feather")
+        XCTAssertEqual(FishingBait.trout.confirmedInventoryKey, "bait_trout")
+        XCTAssertNil(FishingBait.bass.confirmedInventoryKey)
+        XCTAssertNil(FishingBait.tuna.confirmedInventoryKey)
+        XCTAssertNil(FishingBait.squid.confirmedInventoryKey)
+        XCTAssertTrue(FishingBait.feather.isAutomationValidated)
+        XCTAssertFalse(FishingBait.trout.isAutomationValidated)
+        XCTAssertEqual(FishingBait.squid.displayName, "Squid Bait")
+    }
+
+    func testBankFirstAllowlistMatchesNodeV521() {
+        XCTAssertEqual(CombatBankFirstPolicy.safeTypes, [
+            "wood", "stone", "coal", "metal", "fish", "cooked_fish_meat"
+        ])
+        XCTAssertFalse(CombatBankFirstPolicy.safeTypes.contains("mount_dragon"))
+        XCTAssertFalse(CombatBankFirstPolicy.safeTypes.contains("potion_strength"))
+    }
+
+    func testDragonSafetyPolicyMatchesNodeV521() {
+        let dragon = WildCombatSafetyPolicy.policy(for: .dragon)
+        XCTAssertEqual(dragon.emergencyEffectiveHP, 160)
+        XCTAssertEqual(dragon.finisherEffectiveHP, 175)
+        XCTAssertEqual(dragon.postKillSafeHP, 95)
+        XCTAssertEqual(dragon.postKillSafeShield, 90)
+        XCTAssertEqual(dragon.postKillDamageQuietMS, 1_400)
+        XCTAssertEqual(dragon.quickPostEffective, 185)
+    }
+
+    func testZombieGeneralLowVitalsRuleRemainsSeparateFromDragonSafetyLayer() {
+        let zombie = WildCombatSafetyPolicy.policy(for: .zombie)
+        XCTAssertEqual(zombie.emergencyEffectiveHP, 95)
+        XCTAssertEqual(zombie.finisherEffectiveHP, 135)
+        XCTAssertEqual(zombie.postKillSafeHP, 90)
+        XCTAssertEqual(zombie.postKillSafeShield, 65)
+    }
+
+    func testGatherKnowledgeNormalizesFootprintAndBuildsStableSignature() {
+        XCTAssertEqual(
+            GatherKnowledgeStore.normalizeKeys([" 12,46 ", "12,47", "12,46", "bad"]),
+            ["12,46", "12,47"]
+        )
+        XCTAssertEqual(
+            GatherKnowledgeStore.signature(kind: " ROCK ", keys: ["12,47", "12,46"]),
+            "rock:12,46|12,47"
+        )
+        XCTAssertEqual(
+            GatherKnowledgeStore.entryID(region: " ElderGrove ", kind: "rock", keys: ["12,47", "12,46"]),
+            "eldergrove|rock:12,46|12,47"
+        )
+    }
+
+    func testGatherResourceCatalogPersistsLearnedSubtypeAcrossStoreReload() throws {
+        let dir = FileManager.default.temporaryDirectory.appendingPathComponent("KintTanyGatherCatalog-\(UUID().uuidString)", isDirectory: true)
+        defer { try? FileManager.default.removeItem(at: dir) }
+
+        let now = Date().timeIntervalSince1970 * 1_000
+        var store: GatherKnowledgeStore? = GatherKnowledgeStore(directoryURL: dir)
+        XCTAssertEqual(
+            store?.rememberResource(
+                region: "eldergrove",
+                kind: "rock",
+                keys: ["40,10", "40,11"],
+                hasCoal: true,
+                source: "res_evt",
+                confirmedAt: now
+            ),
+            .added
+        )
+        store = nil
+
+        let reloaded = GatherKnowledgeStore(directoryURL: dir)
+        let entries = reloaded.catalogEntries(region: "eldergrove", kind: "rock", nowMS: now + 100)
+        XCTAssertEqual(entries.count, 1)
+        XCTAssertEqual(entries.first?.resourceKeys, ["40,10", "40,11"])
+        XCTAssertEqual(entries.first?.hasCoal, true)
+    }
+
+    func testGatherCatalogDoesNotDowngradeKnownRockSubtypeWhenLaterPacketOmitsFlag() throws {
+        let dir = FileManager.default.temporaryDirectory.appendingPathComponent("KintTanyGatherSubtype-\(UUID().uuidString)", isDirectory: true)
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let now = Date().timeIntervalSince1970 * 1_000
+        let store = GatherKnowledgeStore(directoryURL: dir, confirmationRefreshMS: 10_000)
+
+        _ = store.rememberResource(
+            region: "eldergrove",
+            kind: "rock",
+            keys: ["33,44"],
+            hasCoal: false,
+            source: "self_felled",
+            confirmedAt: now
+        )
+        _ = store.rememberResource(
+            region: "eldergrove",
+            kind: "rock",
+            keys: ["33,44"],
+            hasCoal: nil,
+            source: "snap_cooldown",
+            confirmedAt: now + 20_000
+        )
+
+        let entry = try XCTUnwrap(store.catalogEntries(region: "eldergrove", kind: "rock", nowMS: now + 20_100).first)
+        XCTAssertEqual(entry.hasCoal, false)
+    }
+
+    func testGatherSuccessfulPositionPersistsAcrossStoreReload() throws {
+        let dir = FileManager.default.temporaryDirectory.appendingPathComponent("KintTanyGatherPosition-\(UUID().uuidString)", isDirectory: true)
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let now = Date().timeIntervalSince1970 * 1_000
+        let expected = Position(x: -12.5, y: 0.25, z: 20.5, ry: 1.570796326795)
+
+        var store: GatherKnowledgeStore? = GatherKnowledgeStore(directoryURL: dir)
+        XCTAssertTrue(store?.rememberPosition(
+            region: "eldergrove",
+            kind: "rock",
+            keys: ["12,46", "12,47"],
+            position: expected,
+            at: now
+        ) == true)
+        store = nil
+
+        let reloaded = GatherKnowledgeStore(directoryURL: dir)
+        let actual = try XCTUnwrap(reloaded.position(
+            region: "eldergrove",
+            kind: "rock",
+            keys: ["12,47", "12,46"],
+            nowMS: now + 100
+        ))
+        XCTAssertEqual(actual.x, expected.x, accuracy: 0.000001)
+        XCTAssertEqual(actual.z, expected.z, accuracy: 0.000001)
+        XCTAssertEqual(actual.ry, expected.ry, accuracy: 0.000001)
+    }
+
+    func testGatherCatalogMergesPartialFootprintsAndCarriesPositionForward() throws {
+        let dir = FileManager.default.temporaryDirectory.appendingPathComponent("KintTanyGatherMerge-\(UUID().uuidString)", isDirectory: true)
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let now = Date().timeIntervalSince1970 * 1_000
+        let store = GatherKnowledgeStore(directoryURL: dir)
+        let learned = Position(x: 3.5, y: 0.25, z: 4.5, ry: 0)
+
+        XCTAssertEqual(store.rememberResource(
+            region: "eldergrove",
+            kind: "tree",
+            keys: ["28,29"],
+            hasCoal: nil,
+            source: "res_evt",
+            confirmedAt: now
+        ), .added)
+        XCTAssertTrue(store.rememberPosition(
+            region: "eldergrove",
+            kind: "tree",
+            keys: ["28,29"],
+            position: learned,
+            at: now + 1
+        ))
+        XCTAssertEqual(store.rememberResource(
+            region: "eldergrove",
+            kind: "tree",
+            keys: ["28,29", "28,30"],
+            hasCoal: nil,
+            source: "snap_cooldown",
+            confirmedAt: now + 20_000
+        ), .updated)
+
+        let entries = store.catalogEntries(region: "eldergrove", kind: "tree", nowMS: now + 20_100)
+        XCTAssertEqual(entries.count, 1)
+        XCTAssertEqual(entries.first?.resourceKeys, ["28,29", "28,30"])
+        let migrated = try XCTUnwrap(store.position(
+            region: "eldergrove",
+            kind: "tree",
+            keys: ["28,30", "28,29"],
+            nowMS: now + 20_100
+        ))
+        XCTAssertEqual(migrated.x, learned.x, accuracy: 0.000001)
+        XCTAssertEqual(migrated.z, learned.z, accuracy: 0.000001)
+    }
+
 }
