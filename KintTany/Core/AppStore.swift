@@ -61,6 +61,43 @@ enum ActivityMode: String, CaseIterable, Codable, Identifiable {
     }
 }
 
+
+enum FishingBait: String, CaseIterable, Codable, Identifiable {
+    // rawValue is a UI/persistence identifier, not a presumed server item id.
+    // Only Feather/Pond is wire-validated by the supplied Node v5.2 baseline.
+    case feather
+    case trout
+    case bass
+    case tuna
+    case squid
+
+    var id: String { rawValue }
+
+    var displayName: String {
+        switch self {
+        case .feather: "Feather Bait"
+        case .trout: "Trout Bait"
+        case .bass: "Bass Bait"
+        case .tuna: "Tuna Bait"
+        case .squid: "Squid Bait"
+        }
+    }
+
+    var confirmedInventoryKey: String? {
+        switch self {
+        case .feather: "bait_feather"
+        case .trout: "bait_trout"
+        case .bass, .tuna, .squid: nil
+        }
+    }
+
+    var isAutomationValidated: Bool { self == .feather }
+
+    var supportLabel: String {
+        isAutomationValidated ? "The Pond • validado" : "protocolo da zona ainda não validado"
+    }
+}
+
 enum ActivityState: String, Codable {
     case idle, connecting, syncing, searching, selectingTarget, moving, preparingAction, acting, waitingProof, waitingResult, cooldown, recovering, completed, cancelled, failed
 
@@ -183,17 +220,23 @@ final class AppStore: ObservableObject {
     @Published var statusMessage = "Pronto para iniciar"
     @Published var resourceCount = 0
     @Published var mobCount = 0
+    @Published var selectedFishingBait: FishingBait = .feather
 
     private let session = SessionManager()
     private var task: Task<Void, Never>?
     private var receiverTask: Task<Void, Never>?
     private var traceTask: Task<Void, Never>?
+    private var engineRunTask: Task<EngineRunResult, Error>?
     private var realtimeFailureMessage: String?
     private var terminalFailureHandled = false
     private let socket = RealtimeSocket()
     private var activeEngine: AutomationEngine?
     private var activeRunID: UUID?
     private var requestedStopReason: EngineStopReason?
+    private var connectionRecoveryRequested = false
+    private var connectionRecoveryDetail: String?
+    private var connectionRecoveryInProgress = false
+    private var activeShard: String?
 
     // MARK: - Execução em segundo plano
     //
@@ -252,6 +295,18 @@ final class AppStore: ObservableObject {
             return
         }
 
+        // O seletor cobre toda a escada de iscas, mas a baseline fornecida
+        // comprova wire/rota apenas para Feather Bait em The Pond. Uma opção não
+        // validada nunca cai silenciosamente no Feather nem envia grant incorreto.
+        if mode == .fishing, !selectedFishingBait.isAutomationValidated {
+            state = .failed
+            statusMessage = "\(selectedFishingBait.displayName) ainda não validada para automação"
+            stats.lastEvent = "isca sem protocolo validado"
+            log("🪱 \(selectedFishingBait.displayName) selecionada • automação bloqueada: falta captura/protocolo real da zona correspondente")
+            diagnostic("[FISH] nenhuma ação enviada • seletor preservado sem inventar item id/rota/wire")
+            return
+        }
+
         let runID = UUID()
         activeRunID = runID
         requestedStopReason = nil
@@ -278,6 +333,21 @@ final class AppStore: ObservableObject {
         let stoppedMode = activity
         guard requestedStopReason == nil else { return }
         requestedStopReason = .user
+
+        // Se a Presence já caiu no Wild, o único caminho capaz de tentar uma
+        // saída segura é manter a reconexão de emergência viva. STOP aqui apenas
+        // confirma a intenção; cancelar a Task impediria justamente o retorno ao
+        // World quando a rede reaparecesse.
+        if activity?.isWildCombat == true, connectionRecoveryRequested {
+            state = .recovering
+            statusMessage = "STOP • aguardando rede para saída segura"
+            stats.lastEvent = "STOP aguardando reconexão"
+            updateContinuedProcessingProgress(forceTitleUpdate: true)
+            if !silent {
+                log("STOP registrado durante queda de conexão • reconexão de emergência continuará apenas para voltar ao World")
+            }
+            return
+        }
 
         // Em Wilderness o STOP é cooperativo: não cancela a Task no meio do Wild.
         // A engine interrompe novos ataques, recua, espera combat timer 0 e confirma
@@ -324,6 +394,11 @@ final class AppStore: ObservableObject {
         receiverTask = nil
         traceTask = nil
         activeEngine = nil
+        engineRunTask = nil
+        connectionRecoveryRequested = false
+        connectionRecoveryDetail = nil
+        connectionRecoveryInProgress = false
+        activeShard = nil
         activeRunID = nil
         requestedStopReason = nil
         task = nil
@@ -430,6 +505,10 @@ final class AppStore: ObservableObject {
         let runGoal = goal
         realtimeFailureMessage = nil
         terminalFailureHandled = false
+        connectionRecoveryRequested = false
+        connectionRecoveryDetail = nil
+        connectionRecoveryInProgress = false
+        activeShard = nil
 
         activity = mode
         state = .connecting
@@ -475,6 +554,7 @@ final class AppStore: ObservableObject {
             guard activeRunID == runID else { return }
             let stream = connection.stream
             let selectedShard = connection.shard
+            activeShard = selectedShard
             await importSocketTrace()
 
             log("Servidor NA selecionado automaticamente: \(connection.serverName) (\(selectedShard)) • carga \(connection.populationLabel) • fila \(connection.queueLength)")
@@ -484,6 +564,7 @@ final class AppStore: ObservableObject {
                 cookie: cookie,
                 shard: selectedShard,
                 bootstrap: bootstrap,
+                fishingBait: selectedFishingBait,
                 reporter: { [weak self] event in
                     self?.handleEngineEvent(event, runID: runID)
                 }
@@ -511,7 +592,12 @@ final class AppStore: ObservableObject {
                 }
             }
 
-            let result = try await engine.run(mode: mode, goal: runGoal)
+            let child = Task { @MainActor in
+                try await engine.run(mode: mode, goal: runGoal)
+            }
+            engineRunTask = child
+            let result = try await child.value
+            engineRunTask = nil
             await importSocketTrace()
             guard activeRunID == runID else { return }
 
@@ -534,6 +620,12 @@ final class AppStore: ObservableObject {
                     log("Segundo plano encerrado pelo iOS — World confirmado e conexão liberada com segurança")
                     logSessionSummary(mode: mode, outcome: "EXPIRAÇÃO SEGURA")
                     finishContinuedProcessing(success: false, reason: "expiração após saída segura")
+                case .connectionLoss:
+                    statusMessage = "Conexão recuperada • World seguro"
+                    stats.lastEvent = "saída segura após perda de conexão"
+                    log("Conexão recuperada — World seguro e nenhuma nova ação será enviada")
+                    logSessionSummary(mode: mode, outcome: "RECONEXÃO SEGURA")
+                    finishContinuedProcessing(success: false, reason: "conexão recuperada com saída segura")
                 case .user, .none:
                     statusMessage = "Atividade encerrada com segurança"
                     stats.lastEvent = "atividade cancelada pelo usuário"
@@ -566,6 +658,10 @@ final class AppStore: ObservableObject {
         } catch is CancellationError {
             await importSocketTrace()
             guard activeRunID == runID else { return }
+            if mode.isWildCombat, connectionRecoveryRequested, let shard = activeShard {
+                _ = await recoverWildAfterUnexpectedDisconnect(mode: mode, runID: runID, shard: shard, cookie: cookie)
+                return
+            }
             if let reason = realtimeFailureMessage {
                 connected = false
                 currentTarget = nil
@@ -589,6 +685,10 @@ final class AppStore: ObservableObject {
         } catch {
             await importSocketTrace()
             guard activeRunID == runID else { return }
+            if mode.isWildCombat, connectionRecoveryRequested, let shard = activeShard {
+                _ = await recoverWildAfterUnexpectedDisconnect(mode: mode, runID: runID, shard: shard, cookie: cookie)
+                return
+            }
             if terminalFailureHandled { return }
             terminalFailureHandled = true
             connected = false
@@ -606,7 +706,6 @@ final class AppStore: ObservableObject {
 
     private func handleUnexpectedRealtimeEnd(for mode: ActivityMode, runID: UUID) async {
         guard activeRunID == runID, activity == mode, connected, !terminalFailureHandled else { return }
-        terminalFailureHandled = true
 
         await importSocketTrace()
         let detail = await socket.disconnectReason()
@@ -617,6 +716,16 @@ final class AppStore: ObservableObject {
             reason = "Conexão realtime encerrada inesperadamente"
         }
 
+        // RC3: em Wilderness uma queda real de rede não encerra a proteção de
+        // imediato. Congela a engine antiga e tenta recuperar a mesma Presence
+        // no mesmo shard exclusivamente para voltar ao World com segurança.
+        if mode.isWildCombat {
+            requestWildConnectionRecovery(reason: reason, runID: runID)
+            await socket.close()
+            return
+        }
+
+        terminalFailureHandled = true
         realtimeFailureMessage = reason
         connected = false
         currentTarget = nil
@@ -628,10 +737,179 @@ final class AppStore: ObservableObject {
         log("Falha de conexão: \(reason) • bot interrompido automaticamente")
         finishContinuedProcessing(success: false, reason: "conexão realtime perdida")
 
-        // Cancela imediatamente a engine; nenhuma nova ação deve sobreviver
-        // à perda da Presence. O catch de CancellationError preserva .failed.
+        engineRunTask?.cancel()
         task?.cancel()
         await socket.close()
+    }
+
+    /// Marks a transport loss in Wilderness as a recoverable safety event.
+    /// Receive/heartbeat callbacks only request recovery; the parent run Task is
+    /// the single owner of the reconnect loop, preventing double reconnects.
+    private func requestWildConnectionRecovery(reason: String, runID: UUID) {
+        guard activeRunID == runID, activity?.isWildCombat == true, !terminalFailureHandled else { return }
+        if !connectionRecoveryRequested {
+            connectionRecoveryDetail = reason
+            diagnostic("[WARN] \(reason) • Wilderness: reconexão de emergência solicitada")
+            log("⚠️ Conexão perdida no Wild • nenhum novo ataque será enviado • aguardando rede para retornar ao World")
+        }
+        connectionRecoveryRequested = true
+        connected = false
+        state = .recovering
+        statusMessage = requestedStopReason == .user
+            ? "STOP • aguardando rede para saída segura"
+            : "Conexão perdida • recuperando saída segura"
+        stats.lastEvent = "reconexão de emergência"
+        updateContinuedProcessingProgress(forceTitleUpdate: true)
+        engineRunTask?.cancel()
+        receiverTask?.cancel()
+    }
+
+    @discardableResult
+    private func recoverWildAfterUnexpectedDisconnect(
+        mode: ActivityMode,
+        runID: UUID,
+        shard: String,
+        cookie: String
+    ) async -> Bool {
+        guard activeRunID == runID, mode.isWildCombat else { return false }
+        guard !connectionRecoveryInProgress else { return false }
+        connectionRecoveryInProgress = true
+        defer { connectionRecoveryInProgress = false }
+
+        engineRunTask = nil
+        receiverTask?.cancel()
+        receiverTask = nil
+        await socket.close()
+
+        let started = Date()
+        // Keep trying while a realistic temporary outage may recover. iOS can
+        // still expire the Continued Processing task; no client can send a safe
+        // exit while the device has no network at all.
+        let recoveryDeadline: TimeInterval = 900
+        var attempt = 0
+        let lastKnownRegion = player.region.hasPrefix("wild") ? player.region : "wild"
+        let recoveryBootstrap = PresenceBootstrap(
+            region: lastKnownRegion,
+            position: player.position,
+            lifeEpoch: max(1, player.lifeEpoch)
+        )
+
+        while Date().timeIntervalSince(started) < recoveryDeadline {
+            guard activeRunID == runID else { return false }
+            attempt += 1
+            state = .recovering
+            statusMessage = "Reconectando para saída segura • tentativa \(attempt)"
+            stats.lastEvent = "reconexão de emergência \(attempt)"
+            updateContinuedProcessingProgress(forceTitleUpdate: true)
+            diagnostic("[NET] Reconexão de emergência Wild • \(shard) • tentativa \(attempt)")
+
+            do {
+                let stream = try await socket.connect(session: session, shard: shard, bootstrap: recoveryBootstrap)
+                await importSocketTrace()
+                guard activeRunID == runID else { return false }
+
+                let recoveryEngine = AutomationEngine(
+                    socket: socket,
+                    cookie: cookie,
+                    shard: shard,
+                    bootstrap: recoveryBootstrap,
+                    fishingBait: selectedFishingBait,
+                    reporter: { [weak self] event in
+                        self?.handleEngineEvent(event, runID: runID)
+                    }
+                )
+                activeEngine = recoveryEngine
+                await recoveryEngine.prepareIdentity()
+
+                receiverTask?.cancel()
+                receiverTask = Task { [weak self] in
+                    guard let self else { return }
+                    for await data in stream {
+                        if Task.isCancelled { break }
+                        recoveryEngine.ingest(data)
+                        await self.importSocketTrace()
+                    }
+                }
+
+                connected = true
+                statusMessage = "Reconectado • saindo do Wild com segurança"
+                updateContinuedProcessingProgress(forceTitleUpdate: true)
+                log("🔁 Conexão restaurada no \(shard) • prioridade absoluta: retornar ao World")
+
+                let outcome = try await recoveryEngine.runEmergencyWildExit(mode: mode)
+                receiverTask?.cancel()
+                receiverTask = nil
+                await importSocketTrace()
+
+                switch outcome {
+                case .worldSafe:
+                    connected = false
+                    currentTarget = nil
+                    activity = nil
+                    state = .cancelled
+                    statusMessage = "Conexão recuperada • World seguro"
+                    stats.lastEvent = "World seguro após reconexão"
+                    log("✅ Reconexão de emergência concluída • World confirmado • sessão encerrada sem novos ataques")
+                    logSessionSummary(mode: mode, outcome: "RECONEXÃO SEGURA")
+                    finishContinuedProcessing(success: false, reason: "conexão recuperada com saída segura")
+                    connectionRecoveryRequested = false
+                    connectionRecoveryDetail = nil
+                    return true
+
+                case .alreadyWorld:
+                    connected = false
+                    currentTarget = nil
+                    activity = nil
+                    state = .cancelled
+                    statusMessage = "Reconectado • personagem já estava no World"
+                    stats.lastEvent = "World confirmado após reconexão"
+                    log("✅ Reconexão confirmou que o personagem já estava no World • sessão encerrada")
+                    logSessionSummary(mode: mode, outcome: "RECONEXÃO • WORLD")
+                    finishContinuedProcessing(success: false, reason: "reconexão confirmou World")
+                    connectionRecoveryRequested = false
+                    connectionRecoveryDetail = nil
+                    return true
+
+                case .dead:
+                    terminalFailureHandled = true
+                    connected = false
+                    currentTarget = nil
+                    activity = nil
+                    state = .failed
+                    statusMessage = "Reconectado, mas o servidor confirmou morte"
+                    stats.failures += 1
+                    log("💀 Reconexão concluída, porém o servidor já confirmou a morte antes da saída segura")
+                    logSessionSummary(mode: mode, outcome: "MORTE APÓS QUEDA")
+                    finishContinuedProcessing(success: false, reason: "morte confirmada após queda de conexão")
+                    return false
+                }
+            } catch is CancellationError {
+                return false
+            } catch {
+                await importSocketTrace()
+                receiverTask?.cancel()
+                receiverTask = nil
+                connected = false
+                await socket.close()
+                let elapsed = Int(Date().timeIntervalSince(started))
+                diagnostic("[WARN] Reconexão Wild tentativa \(attempt) falhou após \(elapsed)s: \(error.localizedDescription)")
+                let wait = min(6.0, 1.5 + Double(attempt) * 0.5)
+                try? await Task.sleep(nanoseconds: UInt64(wait * 1_000_000_000))
+            }
+        }
+
+        terminalFailureHandled = true
+        realtimeFailureMessage = connectionRecoveryDetail ?? "Conexão realtime perdida no Wild"
+        connected = false
+        currentTarget = nil
+        activity = nil
+        state = .failed
+        statusMessage = "Não foi possível reconectar para saída segura"
+        stats.failures += 1
+        log("🛑 Reconexão de emergência expirou após 15 minutos • não foi possível confirmar World seguro")
+        logSessionSummary(mode: mode, outcome: "FALHA DE RECONEXÃO")
+        finishContinuedProcessing(success: false, reason: "reconexão de emergência expirou")
+        return false
     }
 
     private func handleEngineEvent(_ event: EngineEvent, runID: UUID) {
@@ -675,7 +953,17 @@ final class AppStore: ObservableObject {
             updateContinuedProcessingProgress()
 
         case .fatal(let reason):
-            guard activity != nil, !terminalFailureHandled else { return }
+            guard let currentMode = activity, !terminalFailureHandled else { return }
+
+            // Heartbeat send failure is a transport failure. In Wild it must
+            // enter the same emergency-reconnect state machine as a receive-loop
+            // close; cancelling the parent here would prevent the eventual safe exit.
+            if currentMode.isWildCombat {
+                requestWildConnectionRecovery(reason: reason, runID: runID)
+                Task { [weak self] in await self?.socket.close() }
+                return
+            }
+
             terminalFailureHandled = true
             realtimeFailureMessage = reason
             connected = false
@@ -1055,6 +1343,20 @@ final class AppStore: ObservableObject {
     private func handleContinuedProcessingExpiration(_ backgroundTask: BGContinuedProcessingTask) {
         guard continuedTaskObject === backgroundTask else {
             backgroundTask.setTaskCompleted(success: false)
+            return
+        }
+
+        // Se a task expirar durante uma queda de rede no Wild, não destrua a
+        // única tentativa de recuperação existente. Enquanto o callback ainda
+        // receber runtime, mantenha a reconexão; se o iOS matar o processo depois
+        // disso não existe comando offline capaz de garantir a saída.
+        if activity?.isWildCombat == true, connectionRecoveryRequested {
+            if requestedStopReason == nil { requestedStopReason = .backgroundExpiration }
+            state = .recovering
+            statusMessage = "Background expirando • aguardando rede para saída segura"
+            stats.lastEvent = "expiração durante reconexão Wild"
+            diagnostic("[BG] Expiração recebida durante queda de conexão no Wild • preservando reconexão de emergência enquanto houver runtime")
+            updateContinuedProcessingProgress(forceTitleUpdate: true)
             return
         }
 
