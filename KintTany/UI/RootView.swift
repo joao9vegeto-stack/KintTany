@@ -28,6 +28,9 @@ struct RootView: View {
                     header
                     activeCard
                     goalCard
+                    if app.activity == nil || app.activity == .fishing {
+                        fishingBaitCard
+                    }
                     activityGrid
                     telemetryCard
                     logCard
@@ -303,6 +306,48 @@ struct RootView: View {
             }
             .buttonStyle(.bordered)
             .disabled(app.activity != nil)
+        }
+        .padding(15)
+        .background(.white.opacity(0.045), in: RoundedRectangle(cornerRadius: 18, style: .continuous))
+        .overlay(RoundedRectangle(cornerRadius: 18).stroke(.white.opacity(0.07), lineWidth: 1))
+    }
+
+    private var fishingBaitCard: some View {
+        VStack(alignment: .leading, spacing: 11) {
+            HStack {
+                VStack(alignment: .leading, spacing: 3) {
+                    Text("PESCA • ISCA")
+                        .font(.caption2.bold())
+                        .tracking(1.2)
+                        .foregroundStyle(.secondary)
+                    Text("Escolha antes de iniciar a pesca")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
+                Spacer()
+                Image(systemName: "fish.fill")
+                    .foregroundStyle(.cyan)
+            }
+
+            Picker("Isca", selection: $app.selectedFishingBait) {
+                ForEach(FishingBait.allCases) { bait in
+                    Text(bait.displayName).tag(bait)
+                }
+            }
+            .pickerStyle(.menu)
+            .tint(.cyan)
+            .disabled(app.activity != nil)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .padding(.horizontal, 12)
+            .padding(.vertical, 9)
+            .background(.black.opacity(0.24), in: RoundedRectangle(cornerRadius: 12, style: .continuous))
+            .overlay(RoundedRectangle(cornerRadius: 12).stroke(.white.opacity(0.08), lineWidth: 1))
+
+            Text(app.activity == .fishing
+                 ? "Sessão atual: \(app.selectedFishingBait.displayName) • \(app.selectedFishingBait.supportLabel)"
+                 : "Selecionada: \(app.selectedFishingBait.displayName) • \(app.selectedFishingBait.supportLabel)")
+                .font(.caption2)
+                .foregroundStyle(app.selectedFishingBait.isAutomationValidated ? .secondary : .orange)
         }
         .padding(15)
         .background(.white.opacity(0.045), in: RoundedRectangle(cornerRadius: 18, style: .continuous))
