@@ -19,6 +19,54 @@ enum EngineEvent {
 enum EngineStopReason: Equatable {
     case user
     case backgroundExpiration
+    case connectionLoss
+}
+
+enum EmergencyWildExitResult: Equatable {
+    case worldSafe
+    case alreadyWorld
+    case dead
+}
+
+struct FishingNumberingPolicy {
+    static func publicFishNumber(successes: Int) -> Int {
+        max(1, successes + 1)
+    }
+}
+
+struct CombatBankFirstPolicy {
+    // Mesma allowlist do bank.js v5.2.1. Itens especiais continuam fora.
+    static let safeTypes = ["wood", "stone", "coal", "metal", "fish", "cooked_fish_meat"]
+}
+
+struct WildCombatSafetyPolicy {
+    let emergencyEffectiveHP: Int
+    let finisherEffectiveHP: Int
+    let postKillSafeHP: Int
+    let postKillSafeShield: Int
+    let postKillDamageQuietMS: Double
+    let quickPostEffective: Int
+
+    static func policy(for mode: ActivityMode) -> WildCombatSafetyPolicy {
+        if mode == .dragon {
+            return WildCombatSafetyPolicy(
+                emergencyEffectiveHP: 160,
+                finisherEffectiveHP: 175,
+                postKillSafeHP: 95,
+                postKillSafeShield: 90,
+                postKillDamageQuietMS: 1_400,
+                quickPostEffective: 185
+            )
+        }
+        return WildCombatSafetyPolicy(
+            emergencyEffectiveHP: 95,
+            finisherEffectiveHP: 135,
+            postKillSafeHP: 90,
+            postKillSafeShield: 65,
+            postKillDamageQuietMS: 850,
+            quickPostEffective: 145
+        )
+    }
 }
 
 struct EngineRunResult {
@@ -37,6 +85,7 @@ final class AutomationEngine {
     private let shard: String
     private let reporter: Reporter
     private let http: KintaraHTTPClient
+    private let fishingBait: FishingBait
 
     private var region: String
     private var serverRegion: String?
@@ -52,6 +101,7 @@ final class AutomationEngine {
     private var cooldownUntil: [String: Double] = [:]
     private var gatherRetryPolicy = GatherRetryPolicy()
     private var gatherBusyUntil: [String: Double] = [:]
+    private let gatherKnowledge: GatherKnowledgeStore
     private var gatherPositionMemory: [String: Position] = [:]
     private var gatherInternalRecoveries = 0
     private var gatherProofMisses = 0
@@ -114,6 +164,8 @@ final class AutomationEngine {
     // (hit aceito ou dano recebido) como relógio conservador. Qualquer novo dano
     // reinicia a janela antes de sair do Wild/encerrar a Presence.
     private var lastCombatActivityAt: Double = 0
+    private var lastCombatDamageAt: Double = 0
+    private var emergencyVitalDrop = false
     private let combatLogoutWindowMS: Double = 10_000
 
     // skill_xp é autoritativo pelo Presence; player-stats é fallback/linha de base.
@@ -131,14 +183,24 @@ final class AutomationEngine {
     private var safeStopReason: EngineStopReason?
     private var safeStopCompleted = false
 
-    init(socket: RealtimeSocket, cookie: String, shard: String, bootstrap: PresenceBootstrap, reporter: @escaping Reporter) {
+    init(
+        socket: RealtimeSocket,
+        cookie: String,
+        shard: String,
+        bootstrap: PresenceBootstrap,
+        fishingBait: FishingBait = .feather,
+        reporter: @escaping Reporter
+    ) {
         self.socket = socket
         self.cookie = cookie
         self.shard = shard
+        self.fishingBait = fishingBait
         self.reporter = reporter
         self.http = KintaraHTTPClient(cookie: cookie)
+        self.gatherKnowledge = GatherKnowledgeStore()
         self.region = bootstrap.region
         self.position = bootstrap.position
+        self.gatherPositionMemory = gatherKnowledge.positionSnapshot(region: "eldergrove")
     }
 
     static func bootstrap(for mode: ActivityMode) -> PresenceBootstrap {
@@ -255,7 +317,13 @@ final class AutomationEngine {
     func requestSafeStop(reason: EngineStopReason) {
         guard safeStopReason == nil else { return }
         safeStopReason = reason
-        reporter(.diagnostic("[STATE] safe-stop solicitado • motivo=\(reason == .user ? "usuário" : "background expiration")"))
+        let label: String
+        switch reason {
+        case .user: label = "usuário"
+        case .backgroundExpiration: label = "background expiration"
+        case .connectionLoss: label = "queda de conexão"
+        }
+        reporter(.diagnostic("[STATE] safe-stop solicitado • motivo=\(label)"))
     }
 
     func run(mode: ActivityMode, goal: Int) async throws -> EngineRunResult {
@@ -282,6 +350,49 @@ final class AutomationEngine {
         )
     }
 
+    /// RC3 emergency path used only after an unexpected Presence loss in Wild.
+    /// It never resumes combat: after authoritative state arrives, its sole goal
+    /// is to confirm death/World or leave Wilderness through the normal safe path.
+    func runEmergencyWildExit(mode: ActivityMode) async throws -> EmergencyWildExitResult {
+        guard mode.isWildCombat else { return .alreadyWorld }
+        reporter(.state(.recovering, "Sincronizando estado após reconexão"))
+
+        let syncDeadline = nowMS + 8_000
+        while nowMS < syncDeadline {
+            try Task.checkCancellation()
+            if playerHP <= 0 { return .dead }
+            if let authoritative = serverRegion?.lowercased(), !authoritative.isEmpty {
+                if !authoritative.hasPrefix("wild") {
+                    reporter(.log("✅ Reconexão autoritativa • região=\(authoritative) • personagem fora da Wilderness"))
+                    return .alreadyWorld
+                }
+                region = authoritative
+                break
+            }
+            try await sleep(80)
+        }
+
+        guard let authoritative = serverRegion?.lowercased(), authoritative.hasPrefix("wild") else {
+            throw EngineError.regionNotConfirmed("estado autoritativo após reconexão")
+        }
+        guard playerHP > 0 else { return .dead }
+
+        // A janela anterior ficou parcialmente offline e não pode ser conhecida com
+        // precisão. Reinicie conservadoramente os 10 s a partir da reconexão.
+        let recoveredAt = nowMS
+        lastCombatActivityAt = recoveredAt
+        lastCombatDamageAt = recoveredAt
+        safeStopReason = .connectionLoss
+        reporter(.log("🛡️ Reconexão confirmou Wilderness • nenhum ataque será retomado • iniciando saída segura"))
+
+        try await moveToWildSafeCamp(reason: "reconexão de emergência")
+        guard playerHP > 0 else { return .dead }
+        try await waitForCombatSafetyWindow(reason: "reconexão de emergência")
+        guard playerHP > 0 else { return .dead }
+        try await exitWildToWorld(reason: "reconexão de emergência")
+        return .worldSafe
+    }
+
     // MARK: - Common state
 
     private func ingestSnapshot(_ packet: [String: Any]) {
@@ -301,6 +412,13 @@ final class AutomationEngine {
                 guard !kind.isEmpty else { continue }
                 let keys = stringArray(group["keys"] ?? group["key"])
                 guard !keys.isEmpty else { continue }
+                rememberGatherMetadata(
+                    region: (packet["region"] as? String) ?? serverRegion ?? region,
+                    kind: kind,
+                    keys: keys,
+                    hasCoal: RealtimeProtocol.bool(group["hasCoal"]),
+                    source: "snap_cooldown"
+                )
                 let until = RealtimeProtocol.double(group["until"]) ?? (now + 2_500)
                 for key in keys {
                     cooldownUntil["\(kind):\(key)"] = until
@@ -341,6 +459,13 @@ final class AutomationEngine {
             for item in wear {
                 let kind = ((item["kind"] ?? item["k"]) as? String) ?? ""
                 let keys = stringArray(item["keys"] ?? item["key"])
+                rememberGatherMetadata(
+                    region: (packet["region"] as? String) ?? serverRegion ?? region,
+                    kind: kind,
+                    keys: keys,
+                    hasCoal: RealtimeProtocol.bool(item["hasCoal"]),
+                    source: "snap_wear"
+                )
                 guard matchesCurrentGather(kind: kind, keys: keys) else { continue }
                 if let h = RealtimeProtocol.int(item["h"]), h >= harvestH {
                     if h > harvestH {
@@ -370,7 +495,12 @@ final class AutomationEngine {
         }
 
         if (serverRegion ?? region).hasPrefix("wild"), (playerHP < previousHP || playerShield < previousShield) {
-            lastCombatActivityAt = nowMS
+            let timestamp = nowMS
+            lastCombatActivityAt = timestamp
+            lastCombatDamageAt = timestamp
+            let previousEffective = max(0, previousHP) + max(0, previousShield)
+            let currentEffective = max(0, playerHP) + max(0, playerShield)
+            if previousEffective - currentEffective >= 30 { emergencyVitalDrop = true }
         }
 
         reporter(.player(authoritativePosition, hp: playerHP, shield: playerShield, region: serverRegion ?? region))
@@ -385,7 +515,12 @@ final class AutomationEngine {
         if let shield = RealtimeProtocol.int(packet["wsh"]) { playerShield = shield }
         if let le = RealtimeProtocol.int(packet["le"]), le > lifeEpoch { lifeEpoch = le }
         if region.hasPrefix("wild"), (playerHP < previousHP || playerShield < previousShield) {
-            lastCombatActivityAt = nowMS
+            let timestamp = nowMS
+            lastCombatActivityAt = timestamp
+            lastCombatDamageAt = timestamp
+            let previousEffective = max(0, previousHP) + max(0, previousShield)
+            let currentEffective = max(0, playerHP) + max(0, playerShield)
+            if previousEffective - currentEffective >= 30 { emergencyVitalDrop = true }
         }
         reporter(.player(position, hp: playerHP, shield: playerShield, region: region))
     }
@@ -536,9 +671,10 @@ final class AutomationEngine {
             try await sleep(80)
         }
         if !firstResourceSnapshotSeen {
-            reporter(.diagnostic("[GATHER] snap.res ainda não chegou; mantendo catálogo conhecido, sem assumir cooldown inexistente"))
+            reporter(.diagnostic("[GATHER] snap.res ainda não chegou; usando somente bootstrap conhecido, sem assumir disponibilidade do catálogo persistido"))
         } else {
-            reporter(.log("🗺️ Catálogo v5.2 carregado • \(availableSeedCount(for: mode)) alvos disponíveis"))
+            let persisted = persistedSeedCount(for: mode)
+            reporter(.log("🗺️ Catálogo persistente v5.2 • \(availableSeedCount(for: mode)) alvos disponíveis • aprendidos=\(persisted) • posições lembradas=\(gatherPositionMemory.count)"))
         }
 
         while successes < goal {
@@ -569,7 +705,27 @@ final class AutomationEngine {
                 let localCooldown = nowMS + 12_000
                 for key in seed.keys { cooldownUntil["\(seed.kind):\(key)"] = localCooldown }
                 gatherRetryPolicy.markSuccess(signature: signature)
-                gatherPositionMemory[signature] = Position(x: position.x, y: 0.25, z: position.z, ry: position.ry)
+                let successfulPosition = Position(x: position.x, y: 0.25, z: position.z, ry: position.ry)
+                gatherPositionMemory[signature] = successfulPosition
+                _ = gatherKnowledge.rememberPosition(
+                    region: "eldergrove",
+                    kind: seed.kind,
+                    keys: seed.keys,
+                    position: successfulPosition,
+                    at: nowMS
+                )
+                let resolvedCoal: Bool? = seed.kind == "rock" ? (mode == .coal ? true : (mode == .stone ? false : seed.hasCoal)) : nil
+                let catalogChange = gatherKnowledge.rememberResource(
+                    region: "eldergrove",
+                    kind: seed.kind,
+                    keys: seed.keys,
+                    hasCoal: resolvedCoal,
+                    source: "self_felled",
+                    confirmedAt: nowMS
+                )
+                if catalogChange == .added || catalogChange == .updated {
+                    reporter(.diagnostic("[GATHER] catálogo persistente confirmado por sucesso • \(seed.signature)"))
+                }
 
                 var persistenceLabel = "sem loot confirmado"
                 if let loot = result.loot, !loot.isEmpty {
@@ -898,7 +1054,11 @@ final class AutomationEngine {
     }
 
     private func canonicalGatherRecoveryPositions(for seed: GatherSeed) -> [Position] {
-        let tiles: [(Int, Int)] = seed.keys.compactMap { key in
+        canonicalGatherPositions(keys: seed.keys)
+    }
+
+    private func canonicalGatherPositions(keys: [String]) -> [Position] {
+        let tiles: [(Int, Int)] = keys.compactMap { key in
             let parts = key.split(separator: ",")
             guard parts.count == 2, let c = Int(parts[0]), let r = Int(parts[1]) else { return nil }
             return (c, r)
@@ -952,6 +1112,17 @@ final class AutomationEngine {
         let keys = stringArray(packet["keys"] ?? packet["key"])
         let by = RealtimeProtocol.int(packet["by"])
 
+        // res_evt/res_snap são evidência autoritativa de metadados estáticos do
+        // footprint, inclusive quando o evento pertence a outro player. Nunca
+        // persistimos proof/wear/cooldown; somente região/tipo/keys/subtipo rock.
+        rememberGatherMetadata(
+            region: (packet["region"] as? String) ?? serverRegion ?? region,
+            kind: kind,
+            keys: keys,
+            hasCoal: RealtimeProtocol.bool(packet["hasCoal"]),
+            source: packet["evt"] as? String == "clear" ? "res_evt_clear" : "res_evt"
+        )
+
         // v7.7 remote-activity guard: progresso de outro player torna somente
         // aquele footprint temporariamente ocupado. Nunca aceite proof/wear alheio
         // como confirmação da nossa ação.
@@ -961,7 +1132,7 @@ final class AutomationEngine {
                 !proofString(packet).isEmpty
             if remoteProgress {
                 let keySet = Set(keys)
-                for seed in Self.gatherSeeds where seed.kind == kind && !Set(seed.keys).isDisjoint(with: keySet) {
+                for seed in gatherSeedPool() where seed.kind == kind && !Set(seed.keys).isDisjoint(with: keySet) {
                     gatherBusyUntil[seed.signature] = nowMS + 10_000
                 }
                 reporter(.diagnostic("[GATHER] recurso ocupado por outro player • kind=\(kind) keys=\(keys) • defer 10s"))
@@ -1001,9 +1172,98 @@ final class AutomationEngine {
         return !currentGatherKeys.isDisjoint(with: keys)
     }
 
+    private func rememberGatherMetadata(
+        region incomingRegion: String,
+        kind: String,
+        keys: [String],
+        hasCoal: Bool?,
+        source: String
+    ) {
+        let normalizedRegion = incomingRegion.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        guard normalizedRegion == "eldergrove" else { return }
+        let change = gatherKnowledge.rememberResource(
+            region: normalizedRegion,
+            kind: kind,
+            keys: keys,
+            hasCoal: hasCoal,
+            source: source,
+            confirmedAt: nowMS
+        )
+        guard change == .added || change == .updated else { return }
+        gatherPositionMemory = gatherKnowledge.positionSnapshot(region: "eldergrove")
+
+        let normalizedKind = kind.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        let subtype: String
+        if normalizedKind == "tree" {
+            subtype = "tree"
+        } else if hasCoal == true {
+            subtype = "coal"
+        } else if hasCoal == false {
+            subtype = "stone"
+        } else {
+            subtype = "rock (subtipo ainda não confirmado)"
+        }
+        reporter(.diagnostic("[GATHER] novo conhecimento persistido • \(subtype) • keys=\(GatherKnowledgeStore.normalizeKeys(keys)) • fonte=\(source)"))
+    }
+
+    /// Bootstrap compilado + recursos aprendidos. O catálogo restaurado só entra
+    /// na seleção depois do primeiro snap.res atual, pois snap.res é a verdade de
+    /// cooldown da geração atual. Isso replica a disciplina da v5.2: metadados
+    /// persistem, disponibilidade/proof/progresso NÃO.
+    private func gatherSeedPool() -> [GatherSeed] {
+        var result = Self.gatherSeeds
+        guard firstResourceSnapshotSeen else { return result }
+
+        var known = Set(result.map(\.signature))
+        for entry in gatherKnowledge.catalogEntries(region: "eldergrove") {
+            let kind = entry.kind.lowercased()
+            guard kind == "tree" || kind == "rock" else { continue }
+            let entryKeys = Set(entry.resourceKeys)
+            if result.contains(where: { $0.kind == kind && !Set($0.keys).isDisjoint(with: entryKeys) }) {
+                // O mesmo recurso pode ter sido observado primeiro como footprint
+                // parcial. O bootstrap comprovado continua sendo a geometria segura
+                // até um FELLED confirmar o footprint completo no catálogo.
+                continue
+            }
+            if kind == "rock", entry.hasCoal == nil {
+                // Um rock sem subtipo comprovado é lembrado, mas não é usado como
+                // Stone por omissão. Um res_evt/snap com hasCoal ou um FELLED em
+                // modo Stone/Coal resolverá a classificação futuramente.
+                continue
+            }
+            let signature = GatherKnowledgeStore.signature(kind: kind, keys: entry.resourceKeys)
+            guard !signature.isEmpty, known.insert(signature).inserted else { continue }
+            guard let fallback = gatherPositionMemory[signature] ?? canonicalGatherPositions(keys: entry.resourceKeys).first else { continue }
+            result.append(GatherSeed(
+                kind: kind,
+                keys: entry.resourceKeys,
+                position: fallback,
+                targetKey: entry.resourceKeys.first ?? "?",
+                hasCoal: entry.hasCoal ?? false
+            ))
+        }
+        return result
+    }
+
+    private func persistedSeedCount(for mode: ActivityMode? = nil) -> Int {
+        guard firstResourceSnapshotSeen else { return 0 }
+        return gatherKnowledge.catalogEntries(region: "eldergrove").filter { entry in
+            let entryKeys = Set(entry.resourceKeys)
+            if Self.gatherSeeds.contains(where: { $0.kind == entry.kind && !Set($0.keys).isDisjoint(with: entryKeys) }) { return false }
+            if entry.kind == "rock", entry.hasCoal == nil { return false }
+            guard let mode else { return true }
+            switch mode {
+            case .tree: return entry.kind == "tree"
+            case .coal: return entry.kind == "rock" && entry.hasCoal == true
+            case .stone: return entry.kind == "rock" && entry.hasCoal == false
+            default: return false
+            }
+        }.count
+    }
+
     private func selectGatherSeed(for mode: ActivityMode) -> GatherSeed? {
         let now = nowMS
-        return Self.gatherSeeds
+        return gatherSeedPool()
             .filter { seed in
                 switch mode {
                 case .tree: return seed.kind == "tree"
@@ -1029,7 +1289,7 @@ final class AutomationEngine {
 
     private func availableSeedCount(for mode: ActivityMode? = nil) -> Int {
         let now = nowMS
-        return Self.gatherSeeds.filter { seed in
+        return gatherSeedPool().filter { seed in
             let modeOK: Bool
             if let mode {
                 switch mode {
@@ -1051,6 +1311,15 @@ final class AutomationEngine {
     // MARK: - Fishing
 
     private func runFishing(goal: Int) async throws {
+        // Defense in depth: AppStore already blocks unvalidated bait paths before
+        // connecting. The engine repeats the guard so a future caller cannot
+        // silently fish The Pond with the wrong selected bait.
+        guard fishingBait.isAutomationValidated,
+              fishingBait.confirmedInventoryKey != nil
+        else {
+            throw EngineError.unsupportedFishingBait(fishingBait.displayName)
+        }
+
         activeFishingAction = nil
         fishingStats = FishingSessionStats()
         lastFishingInventory = FishingInventorySnapshot()
@@ -1103,6 +1372,10 @@ final class AutomationEngine {
         try await sleep(450)
         reporter(.log("🎣 Posição de pesca pronta • x=\(format(position.x)) z=\(format(position.z))"))
         lastFishingInventory = await fetchFishingInventorySnapshot() ?? FishingInventorySnapshot()
+        reporter(.log("🪱 Isca selecionada • \(fishingBait.displayName) • estoque \(lastFishingInventory.bait)"))
+        guard lastFishingInventory.bait > 0 else {
+            throw EngineError.missingFishingBait(fishingBait.displayName)
+        }
 
         if fishSpots.isEmpty {
             reporter(.log("📡 Aguardando fish_spots do servidor…"))
@@ -1138,11 +1411,12 @@ final class AutomationEngine {
             fishAttemptNumber += 1
             fishingStats.attempts += 1
             let attemptNumber = fishAttemptNumber
+            let fishNumber = FishingNumberingPolicy.publicFishNumber(successes: successes)
             let targetLabel = "Spot #\(target.slot) (\(target.fc),\(target.fr))"
 
             reporter(.target("Spot #\(target.slot) • \(target.fc),\(target.fr)"))
             reporter(.attempt)
-            reporter(.state(.acting, "Lançando linha • Peixe #\(attemptNumber)"))
+            reporter(.state(.acting, "Lançando linha • Peixe #\(fishNumber)"))
 
             let snapshotBefore = fishSnapshotSerial
             let biteBefore = fishBiteSerial
@@ -1166,25 +1440,25 @@ final class AutomationEngine {
                 let changed = fishSnapshotSerial != snapshotBefore
                 let reason = changed ? "spot mudou antes da fisgada" : "sem fisgada (fish_bite não recebido)"
                 if changed { fishingStats.spotChanged += 1 } else { fishingStats.noBite += 1 }
-                reporter(.failure("Peixe #\(attemptNumber) • \(targetLabel) • \(reason)"))
+                reporter(.failure("Peixe #\(fishNumber) • \(targetLabel) • \(reason)"))
                 try await sleep(650)
                 continue
             }
 
             let biteSeconds = String(format: "%.1f", Double(bite.ms) / 1000)
-            reporter(.log("🪝 Peixe #\(attemptNumber) • fisgada em \(biteSeconds)s • \(targetLabel)"))
+            reporter(.log("🪝 Peixe #\(fishNumber) • fisgada em \(biteSeconds)s • \(targetLabel)"))
 
             let ttl = remainingMS(for: fishSpots[target.slot])
             guard ttl >= Double(bite.ms + FishingRecoveryPolicy.biteExpiryMarginMS) else {
                 try? await clearAction()
                 fishingStats.staleAvoided += 1
-                reporter(.log("↪️ Peixe #\(attemptNumber) • tentativa descartada: spot expirando • TTL=\(Int(ttl))ms"))
+                reporter(.log("↪️ Peixe #\(fishNumber) • tentativa descartada: spot expirando • TTL=\(Int(ttl))ms"))
                 reporter(.diagnostic("[FISH] cast #\(attemptNumber) descartado: TTL \(Int(ttl))ms < bite+margin"))
                 try await sleep(650)
                 continue
             }
 
-            reporter(.state(.waitingResult, "Peixe #\(attemptNumber) • fisgada em \(biteSeconds)s"))
+            reporter(.state(.waitingResult, "Peixe #\(fishNumber) • fisgada em \(biteSeconds)s"))
             let waitUntil = nowMS + Double(bite.ms + 70)
             var spotRotatedDuringWait = false
             while nowMS < waitUntil {
@@ -1192,7 +1466,7 @@ final class AutomationEngine {
                 guard fishTargetStillValid(target, generation: generation) else {
                     try? await clearAction()
                     fishingStats.spotChanged += 1
-                    reporter(.failure("Peixe #\(attemptNumber) • \(targetLabel) • spot rotacionou durante a espera"))
+                    reporter(.failure("Peixe #\(fishNumber) • \(targetLabel) • spot rotacionou durante a espera"))
                     spotRotatedDuringWait = true
                     break
                 }
@@ -1212,7 +1486,7 @@ final class AutomationEngine {
             guard fishTargetStillValid(target, generation: generation) else {
                 try? await clearAction()
                 fishingStats.spotChanged += 1
-                reporter(.failure("Peixe #\(attemptNumber) • \(targetLabel) • spot mudou antes da confirmação"))
+                reporter(.failure("Peixe #\(fishNumber) • \(targetLabel) • spot mudou antes da confirmação"))
                 try await sleep(650)
                 continue
             }
@@ -1224,14 +1498,21 @@ final class AutomationEngine {
 
                 guard RealtimeProtocol.bool(response["ok"]) != false else {
                     let reason = (response["error"] as? String) ?? (response["message"] as? String) ?? "grant-fish-xp recusado"
-                    if isFishActionStale(reason) {
+                    if isMissingFishingBait(reason) {
+                        if let fresh = await fetchFishingInventorySnapshot() {
+                            lastFishingInventory = fresh
+                        }
+                        reporter(.failure("Peixe #\(fishNumber) • \(targetLabel) • \(fishingBait.displayName) indisponível"))
+                        reporter(.log("🛑 \(fishingBait.displayName) não foi aceita/está sem estoque • pesca encerrada sem repetir grants"))
+                        throw EngineError.missingFishingBait(fishingBait.displayName)
+                    } else if isFishActionStale(reason) {
                         fishingStats.staleRejects += 1
-                        reporter(.failure("Peixe #\(attemptNumber) • \(targetLabel) • fish_action_stale"))
+                        reporter(.failure("Peixe #\(fishNumber) • \(targetLabel) • fish_action_stale"))
                         reporter(.log("⚠️ fish_action_stale #\(fishingStats.staleRejects) • conferindo inventário e ressincronizando Pond"))
                         await verifyFishingInventoryAfterStale()
                         try await recoverFishingAfterStale(stand: pondStand)
                     } else {
-                        reporter(.failure("Peixe #\(attemptNumber) • \(targetLabel) • \(reason)"))
+                        reporter(.failure("Peixe #\(fishNumber) • \(targetLabel) • \(reason)"))
                         try await sleep(FishingRecoveryPolicy.staleRecoveryMS)
                     }
                     continue
@@ -1241,7 +1522,7 @@ final class AutomationEngine {
                 fishingStats.catches += 1
                 updateFishingInventory(fromGrant: response)
                 reporter(.success(nil))
-                reporter(.log("✅ Peixe #\(attemptNumber) confirmado • \(successes)/\(goal) • \(targetLabel)"))
+                reporter(.log("✅ Peixe #\(fishNumber) confirmado • \(successes)/\(goal) • \(targetLabel)"))
 
                 if successes < goal {
                     // Node v5.2 usa 4.8 s entre capturas para aguardar o próximo
@@ -1251,14 +1532,21 @@ final class AutomationEngine {
             } catch {
                 try? await clearAction()
                 let reason = error.localizedDescription
-                if isFishActionStale(reason) {
+                if isMissingFishingBait(reason) {
+                    if let fresh = await fetchFishingInventorySnapshot() {
+                        lastFishingInventory = fresh
+                    }
+                    reporter(.failure("Peixe #\(fishNumber) • \(targetLabel) • \(fishingBait.displayName) indisponível"))
+                    reporter(.log("🛑 \(fishingBait.displayName) não foi aceita/está sem estoque • pesca encerrada sem repetir grants"))
+                    throw EngineError.missingFishingBait(fishingBait.displayName)
+                } else if isFishActionStale(reason) {
                     fishingStats.staleRejects += 1
-                    reporter(.failure("Peixe #\(attemptNumber) • \(targetLabel) • confirmação falhou: fish_action_stale"))
+                    reporter(.failure("Peixe #\(fishNumber) • \(targetLabel) • confirmação falhou: fish_action_stale"))
                     reporter(.log("⚠️ fish_action_stale #\(fishingStats.staleRejects) • conferindo inventário e aguardando novo estado do spot"))
                     await verifyFishingInventoryAfterStale()
                     try await recoverFishingAfterStale(stand: pondStand)
                 } else {
-                    reporter(.failure("Peixe #\(attemptNumber) • \(targetLabel) • confirmação falhou: \(reason)"))
+                    reporter(.failure("Peixe #\(fishNumber) • \(targetLabel) • confirmação falhou: \(reason)"))
                     try await sleep(FishingRecoveryPolicy.staleRecoveryMS)
                 }
             }
@@ -1271,6 +1559,11 @@ final class AutomationEngine {
 
     private func isFishActionStale(_ value: String) -> Bool {
         FishingRecoveryPolicy.isStale(value)
+    }
+
+    private func isMissingFishingBait(_ value: String) -> Bool {
+        let normalized = value.lowercased().replacingOccurrences(of: " ", with: "_")
+        return normalized.contains("missing_bait") || normalized.contains("no_bait")
     }
 
     private func recoverFishingAfterStale(stand: Position) async throws {
@@ -1289,7 +1582,7 @@ final class AutomationEngine {
             let backpack = (me["backpack"] as? [String: Any]) ?? ((me["player"] as? [String: Any])?["backpack"] as? [String: Any]) ?? [:]
             return FishingInventorySnapshot(
                 fish: fishingResourceCount(backpack, key: "fish"),
-                bait: fishingResourceCount(backpack, key: "bait_feather"),
+                bait: fishingResourceCount(backpack, key: fishingBait.confirmedInventoryKey ?? ""),
                 xp: fishingXP(from: me)
             )
         } catch {
@@ -1315,7 +1608,7 @@ final class AutomationEngine {
     private func updateFishingInventory(fromGrant response: [String: Any]) {
         if let backpack = response["backpack"] as? [String: Any] {
             lastFishingInventory.fish = fishingResourceCount(backpack, key: "fish")
-            lastFishingInventory.bait = fishingResourceCount(backpack, key: "bait_feather")
+            lastFishingInventory.bait = fishingResourceCount(backpack, key: fishingBait.confirmedInventoryKey ?? "")
         }
         if let xp = fishingXP(from: response) { lastFishingInventory.xp = xp }
     }
@@ -1570,13 +1863,16 @@ final class AutomationEngine {
             return
         }
 
-        // v5.2: se qualquer categoria de poção já estiver zerada antes de entrar
-        // no Wild, faça a reposição no World e só então comece a caça.
+        // RC3 / Node v5.2.1: toda sessão Wild passa pelo banco ANTES de entrar,
+        // mesmo quando 6/6/6 já está carregado. Isso reduz o valor exposto se a
+        // rede desaparecer completamente, situação em que nenhum comando pode ser
+        // enviado até a conexão voltar. Depois, reponha somente se necessário.
         try await refreshPotionStock(logSummary: true)
-        if let reason = localPotionZeroReason(includeStrengthWhileBuffed: true) {
+        let initialResupplyReason = localPotionZeroReason(includeStrengthWhileBuffed: true)
+        if let reason = initialResupplyReason {
             reporter(.log("🧪 Reposição necessária antes do combate • \(reason)"))
-            try await prepareWorldCombatSupplies()
         }
+        try await prepareWorldCombatSession(resupplyReason: initialResupplyReason)
 
         try await enterWildernessFromWorld()
         try await refreshPotionStock(logSummary: true)
@@ -1721,6 +2017,33 @@ final class AutomationEngine {
                     continue
                 }
 
+                // v5.2.1 defensive layer: separate from the user's general
+                // HP<=50 && shield==0 rule. Dragon (and the conservative Zombie
+                // floor from the baseline) uses effective HP before a new swing,
+                // especially when the next hit can finish the mob.
+                if shouldUsePreventiveWildRecovery(mode: mode, targetHP: target.hp) {
+                    let policy = WildCombatSafetyPolicy.policy(for: mode)
+                    let effective = effectiveVitals
+                    let finishing = (target.hp ?? Int.max) <= 25
+                    let trigger = emergencyVitalDrop
+                        ? "queda brusca de vitais"
+                        : (finishing && effective < policy.finisherEffectiveHP ? "proteção antes do golpe final" : "reserva efetiva baixa")
+                    reporter(.log("🛡️ Defesa preventiva • \(targetName) • \(trigger) • efetivo \(effective) • HP \(playerHP) + shield \(playerShield)"))
+                    let resumed = try await recoverLockedWildTarget(
+                        mode: mode,
+                        targetIndex: target.index,
+                        targetName: targetName,
+                        preFightRecovery: true,
+                        reasonLabel: trigger
+                    )
+                    emergencyVitalDrop = false
+                    if !resumed {
+                        targetLostDuringRecovery = true
+                        break
+                    }
+                    continue
+                }
+
                 // v2.4: "vitais baixos" = HP <= 50 E shield == 0. Não recua por
                 // shield 72/50 etc. Isso elimina o ciclo visto no Dragon da v2.3.
                 if shouldRecoverVitals(mode: mode) {
@@ -1831,6 +2154,11 @@ final class AutomationEngine {
                 successes += 1
                 reporter(.kill)
                 reporter(.success(nil))
+
+                // Node v5.2.1: sobreviver aos pacotes/danos atrasados vem ANTES
+                // de XP, loot ou seleção do próximo mob. O teste real de Dragon
+                // morreu ~5 s após a kill com HP81/shield0, exatamente esta janela.
+                try await postKillSafety(mode: mode, defeatedMob: target, killPosition: lastTargetPosition)
                 reporter(.state(.cooldown, "\(mode.displayName) \(successes)/\(goal) concluído"))
 
                 let xp = await resolveCombatXPAfterKill(mode: mode, before: targetXPStart)
@@ -1937,13 +2265,166 @@ final class AutomationEngine {
         return playerHP <= 50 && playerShield <= 0
     }
 
+    private var effectiveVitals: Int {
+        max(0, playerHP) + max(0, playerShield)
+    }
+
+    private func shouldUsePreventiveWildRecovery(mode: ActivityMode, targetHP: Int?) -> Bool {
+        let policy = WildCombatSafetyPolicy.policy(for: mode)
+        let finishing = (targetHP ?? Int.max) <= 25
+        return emergencyVitalDrop
+            || effectiveVitals <= policy.emergencyEffectiveHP
+            || (finishing && effectiveVitals < policy.finisherEffectiveHP)
+    }
+
+    /// Port direto da disciplina pós-kill da baseline combat-bot v5.2.1.
+    /// Nada de XP/loot é processado antes deste método terminar: primeiro o
+    /// personagem se afasta, observa dano atrasado e recupera em SAFE_CAMP se
+    /// necessário. Não cria novos contatos/ataques.
+    private func postKillSafety(mode: ActivityMode, defeatedMob: LiveMob, killPosition: Position) async throws {
+        let policy = WildCombatSafetyPolicy.policy(for: mode)
+        let killedAt = nowMS
+        reporter(.state(.recovering, "Pós-kill • estabilizando combate"))
+
+        // Disengage de um tile, escolhendo a célula cardinal válida que aumenta
+        // a distância do mob morto. É a mesma geometria usada pelo Node.
+        if let step = safeWildStepAway(from: killPosition) {
+            reporter(.diagnostic("[COMBAT] pós-kill disengage → \(format(step.x)),\(format(step.z))"))
+            do {
+                try await walk(to: step, maxSeconds: mode == .dragon ? 2.4 : 3.5)
+            } catch is CancellationError {
+                throw CancellationError()
+            } catch {
+                reporter(.diagnostic("[COMBAT] disengage pós-kill não concluiu: \(error.localizedDescription)"))
+            }
+        }
+
+        guard playerHP > 0 else { throw EngineError.playerDead }
+
+        if mode == .dragon {
+            // Fast path v5.2: só preserva Strength e evita o recuo longo quando
+            // vitais estão realmente altos e nenhum dano apareceu após a kill.
+            let quickMin = killedAt + 1_100
+            let quickDeadline = killedAt + 3_200
+            while nowMS < quickDeadline {
+                try Task.checkCancellation()
+                guard playerHP > 0 else { throw EngineError.playerDead }
+                let damageAfterKill = lastCombatDamageAt > killedAt
+                let strong = playerHP >= policy.postKillSafeHP
+                    && playerShield >= policy.postKillSafeShield
+                    && effectiveVitals >= policy.quickPostEffective
+                    && !emergencyVitalDrop
+                if nowMS >= quickMin && !damageAfterKill && strong {
+                    reporter(.log("🛡️ Pós-Dragão seguro • disengage curto • HP \(playerHP) + shield \(playerShield)"))
+                    emergencyVitalDrop = false
+                    return
+                }
+                try await sleep(90)
+            }
+
+            reporter(.log("🛡️ Pós-Dragão defensivo • recuando ao SAFE_CAMP antes de XP/loot"))
+            try await moveToWildSafeCamp(reason: "pós-Dragão")
+        }
+
+        // Janela mínima/máxima da v5.2.1. Sem um campo de `pending contact` no
+        // Swift atual, usamos exclusivamente o dano autoritativo recebido; não
+        // inventamos ACK de contato.
+        let settleStarted = nowMS
+        let mustWaitUntil = settleStarted + 900
+        let settleDeadline = settleStarted + 3_200
+        while nowMS < settleDeadline {
+            try Task.checkCancellation()
+            guard playerHP > 0 else { throw EngineError.playerDead }
+            let quietFor = nowMS - lastCombatDamageAt
+            if nowMS >= mustWaitUntil && quietFor >= policy.postKillDamageQuietMS { break }
+            try await sleep(100)
+        }
+
+        let recoveryFloor = mode == .dragon ? 180 : 145
+        let needsRecovery = playerHP < policy.postKillSafeHP
+            || playerShield < policy.postKillSafeShield
+            || effectiveVitals < recoveryFloor
+
+        if needsRecovery {
+            reporter(.log("🧪 Pós-kill • estabilizando vitais • HP \(playerHP) • shield \(playerShield)"))
+            let attempts = mode == .dragon ? 3 : 2
+            for index in 0..<attempts {
+                try Task.checkCancellation()
+                guard playerHP > 0 else { throw EngineError.playerDead }
+                do {
+                    try await recoverVitals(mode: mode, preFight: true)
+                    break
+                } catch {
+                    if index == attempts - 1 { throw error }
+                    try await sleep(600)
+                }
+            }
+        }
+
+        if mode == .dragon {
+            // v5.2.1 aumentou esta quiet window porque um burst real apareceu
+            // cerca de 4 s após uma kill. Só avançamos para XP/loot quando os
+            // vitais altos e 3 s sem dano autoritativo coexistirem.
+            let quietDeadline = nowMS + 8_500
+            while nowMS < quietDeadline {
+                try Task.checkCancellation()
+                guard playerHP > 0 else { throw EngineError.playerDead }
+                let readyVitals = playerHP >= policy.postKillSafeHP && playerShield >= policy.postKillSafeShield
+                let quietFor = nowMS - lastCombatDamageAt
+                if readyVitals && quietFor >= 3_000 { break }
+                try await sleep(120)
+            }
+            guard playerHP > 0 else { throw EngineError.playerDead }
+            guard playerHP >= policy.postKillSafeHP && playerShield >= policy.postKillSafeShield else {
+                throw EngineError.potionRecoveryFailed("pós-Dragão permaneceu inseguro • HP \(playerHP)/\(policy.postKillSafeHP) • shield \(playerShield)/\(policy.postKillSafeShield)")
+            }
+        }
+
+        emergencyVitalDrop = false
+        reporter(.log("✅ Pós-kill seguro • \(mode.displayName) • HP \(playerHP) + shield \(playerShield)"))
+        _ = defeatedMob // mantém assinatura explícita do alvo validado para futuras métricas
+    }
+
+    private func safeWildStepAway(from mobPosition: Position) -> Position? {
+        let currentCol = Int(round(position.x + 24.5))
+        let currentRow = Int(round(position.z + 24.5))
+        let mobCol = Int(round(mobPosition.x + 24.5))
+        let mobRow = Int(round(mobPosition.z + 24.5))
+        let blocked = Set(Self.wildBlockedTiles)
+
+        let candidates = [
+            (currentCol + 1, currentRow),
+            (currentCol - 1, currentRow),
+            (currentCol, currentRow + 1),
+            (currentCol, currentRow - 1)
+        ].filter { col, row in
+            col >= 0 && col <= 49 && row >= 0 && row <= 49 && !blocked.contains("\(col),\(row)")
+        }
+
+        guard let best = candidates.max(by: { lhs, rhs in
+            hypot(Double(lhs.0 - mobCol), Double(lhs.1 - mobRow))
+                < hypot(Double(rhs.0 - mobCol), Double(rhs.1 - mobRow))
+        }) else { return nil }
+
+        return Position(x: Double(best.0) - 24.5, y: 0.25, z: Double(best.1) - 24.5)
+    }
+
     /// Retorna true somente se o MESMO mob continua vivo e foi reassumido.
-    private func recoverLockedWildTarget(mode: ActivityMode, targetIndex: Int, targetName: String) async throws -> Bool {
+    /// `preFightRecovery` é usado pela camada defensiva v5.2.1 para recuperar
+    /// até os thresholds altos sem alterar o gatilho geral HP<=50 && shield==0.
+    private func recoverLockedWildTarget(
+        mode: ActivityMode,
+        targetIndex: Int,
+        targetName: String,
+        preFightRecovery: Bool = false,
+        reasonLabel: String? = nil
+    ) async throws -> Bool {
         guard playerHP > 0 else { throw EngineError.playerDead }
 
         reporter(.state(.recovering, "Recuando • mantendo \(targetName)"))
-        reporter(.log("🏃 Vitais baixos • mantendo \(targetName) travado • HP \(playerHP) + shield \(playerShield)"))
-        try await moveToWildSafeCamp(reason: targetName)
+        let reasonText = reasonLabel ?? "vitais baixos"
+        reporter(.log("🏃 \(reasonText) • mantendo \(targetName) travado • HP \(playerHP) + shield \(playerShield)"))
+        try await moveToWildSafeCamp(reason: "\(targetName) • \(reasonText)")
         if safeStopReason != nil { return false }
 
         // Se alguma poção já está em zero, não entre num ciclo de recovery sem
@@ -1957,7 +2438,7 @@ final class AutomationEngine {
             )
         }
 
-        try await recoverVitals(mode: mode, preFight: false)
+        try await recoverVitals(mode: mode, preFight: preFightRecovery)
         if safeStopReason != nil { return false }
 
         // Uma das doses usadas no recovery pode ter zerado a categoria. Nesse
@@ -2005,16 +2486,40 @@ final class AutomationEngine {
         return localPotionZeroReason(includeStrengthWhileBuffed: includeStrengthWhileBuffed)
     }
 
-    /// Preparação bank-first quando a sessão ainda está no World.
-    private func prepareWorldCombatSupplies() async throws {
-        if serverRegion?.lowercased() == "wild" || region.hasPrefix("wild") {
-            throw EngineError.combatSupplyFailed("reposição inicial solicitada fora do World")
+    /// Preparação BANK-FIRST da v5.2.1. Toda entrada inicial no Wild passa aqui:
+    /// primeiro protege recursos comuns materializados em invSlots e só depois
+    /// completa poções, quando necessário. Itens especiais nunca entram na allowlist.
+    private func prepareWorldCombatSession(resupplyReason: String?) async throws {
+        if serverRegion?.lowercased().hasPrefix("wild") == true || region.hasPrefix("wild") {
+            throw EngineError.combatSupplyFailed("preparação de combate solicitada fora do World")
         }
         let bankPosition = Position(x: -24.0, z: -17.5)
-        reporter(.state(.moving, "Indo ao banco para reabastecer"))
+        reporter(.state(.moving, "Protegendo inventário no banco"))
         try await walk(to: bankPosition, maxSeconds: 35)
         try await sleep(600)
-        try await ensureCombatSupplies()
+        try await performCombatBankFirstSafety()
+        if resupplyReason != nil {
+            try await ensureCombatSupplies()
+        } else {
+            reporter(.log("🛡️ BANK-FIRST concluído • poções já suficientes • entrada no Wild liberada"))
+        }
+    }
+
+    private func performCombatBankFirstSafety() async throws {
+        reporter(.state(.syncing, "BANK-FIRST • protegendo recursos"))
+        let result = try await http.depositAllBankFirstResources(types: CombatBankFirstPolicy.safeTypes)
+        if result.confirmed.isEmpty && result.unresolved.isEmpty {
+            reporter(.log("🏦 BANK-FIRST • recursos comuns carregados já estão protegidos"))
+            return
+        }
+        for (type, quantity) in result.confirmed.sorted(by: { $0.key < $1.key }) {
+            reporter(.log("🏦 BANK-FIRST • \(quantity)x \(prettyItem(type)) → banco ✅"))
+        }
+        guard result.unresolved.isEmpty else {
+            let detail = result.unresolved.sorted().map(prettyItem).joined(separator: ", ")
+            reporter(.log("🛑 BANK-FIRST não confirmado • \(detail) • entrada na Wilderness bloqueada"))
+            throw EngineError.bankDepositFailed(detail)
+        }
     }
 
     /// Regra v5.2: um único zero dispara reposição completa 6/6/6. Primeiro
@@ -2099,6 +2604,15 @@ final class AutomationEngine {
         shieldMechanicUnavailable = false
         shieldConfirmFailureStreak = 0
         reporter(.log("🎒 Reposição concluída • ❤️ \(potionStock.health) • 🛡️ \(potionStock.shield) • 💪 \(potionStock.strength)"))
+
+        // Não deduzimos custos por fórmula para exibir saldo: o valor mostrado
+        // vem de um /me NOVO após todas as compras/materializações.
+        let finalState = try await http.backpackState()
+        let finalBP = finalState.backpack
+        let remainingWood = http.totalResource(finalBP, type: "wood")
+        let remainingStone = http.totalResource(finalBP, type: "stone")
+        let remainingCoal = http.totalResource(finalBP, type: "coal")
+        reporter(.log("📦 Recursos restantes • 🪵 Madeira \(remainingWood) • 🪨 Pedra \(remainingStone) • ⚫ Carvão \(remainingCoal)"))
     }
 
     /// Viagem única para banco/reposição. Antes de sair do Wild, sempre respeita
@@ -2132,6 +2646,11 @@ final class AutomationEngine {
                 throw EngineError.bankDepositFailed(detail)
             }
         }
+
+        // Toda visita ao banco antes de uma possível reentrada no Wild volta a
+        // aplicar a allowlist BANK-FIRST. Assim recursos comuns adquiridos durante
+        // a sessão não permanecem expostos por acidente.
+        try await performCombatBankFirstSafety()
 
         if let resupplyReason, safeStopReason == nil {
             reporter(.log("🧪 Reabastecendo no World • motivo=\(resupplyReason)"))
@@ -3311,6 +3830,8 @@ private enum EngineError: LocalizedError {
     case potionRecoveryFailed(String)
     case combatSupplyFailed(String)
     case bankDepositFailed(String)
+    case missingFishingBait(String)
+    case unsupportedFishingBait(String)
 
     var errorDescription: String? {
         switch self {
@@ -3321,6 +3842,8 @@ private enum EngineError: LocalizedError {
         case .potionRecoveryFailed(let detail): return "Recuperação com poções falhou: \(detail)"
         case .combatSupplyFailed(let detail): return "Reposição de combate falhou: \(detail)"
         case .bankDepositFailed(let item): return "Drop não pôde ser confirmado no banco: \(item)"
+        case .missingFishingBait(let bait): return "Isca selecionada sem estoque: \(bait)"
+        case .unsupportedFishingBait(let bait): return "Automação ainda não validada para \(bait)"
         }
     }
 }
@@ -3494,6 +4017,22 @@ private struct KintaraHTTPClient {
 
     func lootBag(_ bagID: String) async throws -> [String: Any] {
         try await post("/api/wild/loot-bag", body: ["bagId": bagID])
+    }
+
+    /// BANK-FIRST da baseline v5.2.1. Somente quantidades realmente
+    /// materializadas em invSlots entram no pedido; a função de depósito mantém
+    /// mount/pet/cosmetic/furniture completamente fora do caminho.
+    func depositAllBankFirstResources(types: [String]) async throws -> BankDepositResult {
+        let state = try await backpackState()
+        var wanted: [String: Int] = [:]
+        for type in types {
+            let quantity = slotCount(state.backpack["invSlots"], type: type)
+            if quantity > 0 { wanted[type] = quantity }
+        }
+        guard !wanted.isEmpty else {
+            return BankDepositResult(confirmed: [:], unresolved: [])
+        }
+        return try await depositIntoBank(wanted)
     }
 
     func depositIntoBank(_ wanted: [String: Int]) async throws -> BankDepositResult {
