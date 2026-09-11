@@ -520,5 +520,76 @@ final class RealtimeProtocolTests: XCTestCase {
         XCTAssertEqual(ActivityToolPolicy.requiredTool(for: .coal), "tool_pickaxe")
     }
 
+    func testGatherToolPreflightIsReadyWhenRequiredToolIsCarried() {
+        XCTAssertEqual(
+            GatherToolPreflightPolicy.disposition(tool: "tool_pickaxe", carried: 1, bank: 4),
+            .ready
+        )
+    }
+
+    func testGatherToolPreflightUsesWorldWhenToolExistsOnlyInBank() {
+        XCTAssertEqual(
+            GatherToolPreflightPolicy.disposition(tool: "tool_pickaxe", carried: 0, bank: 1),
+            .needsWorld(tool: "tool_pickaxe")
+        )
+    }
+
+    func testGatherToolPreflightFailsClosedWhenToolIsAbsentEverywhere() {
+        XCTAssertEqual(
+            GatherToolPreflightPolicy.disposition(tool: "tool_axe", carried: 0, bank: 0),
+            .missing(tool: "tool_axe")
+        )
+    }
+
+    func testCombatStateConfirmationRequiresFreshSnapshotAndHPDrop() {
+        XCTAssertTrue(CombatStateConfirmationPolicy.isStateCorrelatedHit(
+            beforeHP: 75, afterHP: 60, snapshotAdvanced: true
+        ))
+        XCTAssertFalse(CombatStateConfirmationPolicy.isStateCorrelatedHit(
+            beforeHP: 75, afterHP: 75, snapshotAdvanced: true
+        ))
+        XCTAssertFalse(CombatStateConfirmationPolicy.isStateCorrelatedHit(
+            beforeHP: 75, afterHP: 60, snapshotAdvanced: false
+        ))
+        XCTAssertFalse(CombatStateConfirmationPolicy.isStateCorrelatedHit(
+            beforeHP: nil, afterHP: 60, snapshotAdvanced: true
+        ))
+    }
+
+    func testGatherTimingAndHealthPoliciesBoundBackgroundRecovery() {
+        XCTAssertEqual(GatherTimingPolicy.maxFrameLatenessMS, 220)
+        XCTAssertEqual(GatherTimingPolicy.eventGraceMS, 420)
+        XCTAssertEqual(GatherHealthPolicy.recoveriesBeforeTransportResync, 2)
+        XCTAssertEqual(GatherHealthPolicy.noSuccessWindowMS, 25_000, accuracy: 0.001)
+    }
+
+    func testGatherKnowledgeExplicitFlushPersistsDebouncedChanges() throws {
+        let dir = FileManager.default.temporaryDirectory.appendingPathComponent("KintTanyGatherFlush-\(UUID().uuidString)", isDirectory: true)
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let now = Date().timeIntervalSince1970 * 1_000
+        let store = GatherKnowledgeStore(directoryURL: dir)
+        _ = store.rememberResource(
+            region: "eldergrove",
+            kind: "tree",
+            keys: ["17,4"],
+            hasCoal: nil,
+            source: "self_felled",
+            confirmedAt: now
+        )
+        XCTAssertTrue(store.rememberPosition(
+            region: "eldergrove",
+            kind: "tree",
+            keys: ["17,4"],
+            position: Position(x: 17.5, y: 0.25, z: 4.5, ry: 0),
+            at: now
+        ))
+
+        store.flush()
+
+        let reloaded = GatherKnowledgeStore(directoryURL: dir)
+        XCTAssertEqual(reloaded.catalogEntries(region: "eldergrove", kind: "tree", nowMS: now + 100).count, 1)
+        XCTAssertNotNil(reloaded.position(region: "eldergrove", kind: "tree", keys: ["17,4"], nowMS: now + 100))
+    }
+
 
 }
