@@ -211,7 +211,10 @@ enum ActivityRateMeter {
 struct ActivityStats: Codable {
     var attempts = 0
     var successes = 0
+    /// Falhas pertencentes a uma tentativa real da atividade. Erros estruturais
+    /// (expiração do iOS, transporte, preflight) ficam separados em sessionErrors.
     var failures = 0
+    var sessionErrors = 0
     var hits = 0
     var confirmedHits = 0
     var hitAckTimeouts = 0
@@ -233,6 +236,9 @@ final class AppStore: ObservableObject {
     @Published var world = WorldState()
     @Published var stats = ActivityStats()
     @Published var goal = 100
+    /// Meta congelada da sessão exibida. Alterar `goal` depois que uma sessão
+    /// termina não pode reescrever a barra/progresso histórico daquela sessão.
+    @Published private(set) var sessionGoal = 100
     @Published var logs: [String] = []
     @Published var diagnosticLogs: [String] = []
     @Published var connected = false
@@ -292,7 +298,7 @@ final class AppStore: ObservableObject {
     }
 
     var progress: Double {
-        min(1, Double(stats.successes) / Double(max(goal, 1)))
+        min(1, Double(stats.successes) / Double(max(sessionGoal, 1)))
     }
 
     func ratePerMinute(at now: Date = .now) -> Double {
@@ -334,6 +340,9 @@ final class AppStore: ObservableObject {
             diagnostic("[FISH] nenhuma ação enviada • seletor preservado sem inventar item id/rota/wire")
             return
         }
+
+        goal = min(100_000, max(1, goal))
+        sessionGoal = goal
 
         let runID = UUID()
         activeRunID = runID
@@ -392,6 +401,11 @@ final class AppStore: ObservableObject {
             return
         }
 
+        // Não-Wild também possui `engineRunTask` independente. Cancelá-la é
+        // obrigatório para que STOP de Fishing/Gathering não deixe uma sessão
+        // fantasma prendendo o single-flight após a UI voltar a idle.
+        terminalFailureHandled = true
+        engineRunTask?.cancel()
         task?.cancel()
         receiverTask?.cancel()
         traceTask?.cancel()
@@ -450,7 +464,10 @@ final class AppStore: ObservableObject {
         let finalRate = ActivityRateMeter.perMinute(successes: stats.successes, startedAt: stats.startedAt, now: .now)
 
         log("📊 RESUMO DA SESSÃO • \(mode.localizedTitle) • \(outcome)")
-        log("Meta \(goal) • sucessos \(stats.successes) • tentativas \(stats.attempts) • falhas \(stats.failures) • tempo \(duration)")
+        log("Meta \(sessionGoal) • sucessos \(stats.successes) • tentativas \(stats.attempts) • falhas \(stats.failures) • tempo \(duration)")
+        if stats.sessionErrors > 0 {
+            log("Sessão • erros estruturais \(stats.sessionErrors)")
+        }
         log(String(format: "⚡ Ritmo médio • %.2f/min", finalRate))
         if mode == .chicken || mode.isWildCombat {
             log("Combate • hits enviados \(stats.hits) • hits confirmados \(stats.confirmedHits) • ACK timeout \(stats.hitAckTimeouts) (FG \(stats.hitAckTimeoutsForeground) / BG \(stats.hitAckTimeoutsBackground)) • kills \(stats.kills)")
@@ -536,7 +553,8 @@ final class AppStore: ObservableObject {
         }
 
         goal = min(100_000, max(1, goal))
-        let runGoal = goal
+        sessionGoal = goal
+        let runGoal = sessionGoal
         realtimeFailureMessage = nil
         terminalFailureHandled = false
         connectionRecoveryRequested = false
@@ -675,6 +693,7 @@ final class AppStore: ObservableObject {
                 state = .completed
                 statusMessage = "Meta concluída"
                 currentTarget = nil
+                updateContinuedProcessingProgress(forceTitleUpdate: true)
                 activity = nil
                 log("✅ Meta concluída: \(result.successes)/\(runGoal) • atividade encerrada automaticamente")
                 logSessionSummary(mode: mode, outcome: "META CONCLUÍDA")
@@ -682,7 +701,7 @@ final class AppStore: ObservableObject {
             } else {
                 state = .failed
                 statusMessage = "Engine encerrou antes da meta"
-                stats.failures += 1
+                stats.sessionErrors += 1
                 currentTarget = nil
                 activity = nil
                 log("Atividade encerrou antes da meta • bot interrompido automaticamente")
@@ -730,7 +749,7 @@ final class AppStore: ObservableObject {
             activity = nil
             state = .failed
             statusMessage = error.localizedDescription
-            stats.failures += 1
+            stats.sessionErrors += 1
             diagnostic("[ERROR] \(error.localizedDescription)")
             log("Falha: \(error.localizedDescription) • bot interrompido automaticamente")
             logSessionSummary(mode: mode, outcome: "FALHA")
@@ -766,7 +785,7 @@ final class AppStore: ObservableObject {
         activity = nil
         state = .failed
         statusMessage = reason
-        stats.failures += 1
+        stats.sessionErrors += 1
         diagnostic("[ERROR] \(reason)")
         log("Falha de conexão: \(reason) • bot interrompido automaticamente")
         finishContinuedProcessing(success: false, reason: "conexão realtime perdida")
@@ -911,7 +930,7 @@ final class AppStore: ObservableObject {
                     activity = nil
                     state = .failed
                     statusMessage = "Reconectado, mas o servidor confirmou morte"
-                    stats.failures += 1
+                    stats.sessionErrors += 1
                     log("💀 Reconexão concluída, porém o servidor já confirmou a morte antes da saída segura")
                     logSessionSummary(mode: mode, outcome: "MORTE APÓS QUEDA")
                     finishContinuedProcessing(success: false, reason: "morte confirmada após queda de conexão")
@@ -939,7 +958,7 @@ final class AppStore: ObservableObject {
         activity = nil
         state = .failed
         statusMessage = "Não foi possível reconectar para saída segura"
-        stats.failures += 1
+        stats.sessionErrors += 1
         log("🛑 Reconexão de emergência expirou após 15 minutos • não foi possível confirmar World seguro")
         logSessionSummary(mode: mode, outcome: "FALHA DE RECONEXÃO")
         finishContinuedProcessing(success: false, reason: "reconexão de emergência expirou")
@@ -948,6 +967,10 @@ final class AppStore: ObservableObject {
 
     private func handleEngineEvent(_ event: EngineEvent, runID: UUID) {
         guard activeRunID == runID else { return }
+        // Depois de uma falha terminal a UI já foi encerrada; callbacks atrasados
+        // da engine antiga não podem ressuscitar status/contadores nem prender o
+        // single-flight. O cleanup do transporte continua em paralelo.
+        if activity == nil && (terminalFailureHandled || requestedStopReason != nil) { return }
         switch event {
         case .state(let newState, let message):
             let changed = state != newState || statusMessage != message
@@ -977,7 +1000,7 @@ final class AppStore: ObservableObject {
             stats.successes += 1
             continuedProgressSubunit = 0
             stats.lastEvent = detail ?? "sucesso"
-            if let detail { log("✅ \(detail) • \(stats.successes)/\(goal)") }
+            if let detail { log("✅ \(detail) • \(stats.successes)/\(sessionGoal)") }
             updateContinuedProcessingProgress(forceTitleUpdate: true)
 
         case .failure(let reason):
@@ -1005,11 +1028,12 @@ final class AppStore: ObservableObject {
             activity = nil
             state = .failed
             statusMessage = reason
-            stats.failures += 1
+            stats.sessionErrors += 1
             stats.lastEvent = "erro fatal"
             diagnostic("[ERROR] \(reason)")
             log("Falha de conexão: \(reason) • bot interrompido automaticamente")
             finishContinuedProcessing(success: false, reason: "erro fatal")
+            engineRunTask?.cancel()
             task?.cancel()
             Task { await socket.close() }
 
@@ -1157,7 +1181,7 @@ final class AppStore: ObservableObject {
             return
         }
 
-        submitContinuedProcessingAttempt(for: mode, requestedGoal: min(100_000, max(1, goal)), attempt: 1)
+        submitContinuedProcessingAttempt(for: mode, requestedGoal: min(100_000, max(1, sessionGoal)), attempt: 1)
     }
 
     @available(iOS 26.0, *)
@@ -1245,8 +1269,8 @@ final class AppStore: ObservableObject {
         }
 
         updateContinuedProcessingProgress(forceTitleUpdate: true)
-        let current = min(max(0, stats.successes), max(1, goal))
-        diagnostic("[BG] ✅ Continued Processing INICIADA • \((activity ?? continuedTaskMode)?.localizedTitle ?? "Atividade") • \(current)/\(max(1, goal)) • tentativa \(continuedTaskSubmissionAttempt)/3")
+        let current = min(max(0, stats.successes), max(1, sessionGoal))
+        diagnostic("[BG] ✅ Continued Processing INICIADA • \((activity ?? continuedTaskMode)?.localizedTitle ?? "Atividade") • \(current)/\(max(1, sessionGoal)) • tentativa \(continuedTaskSubmissionAttempt)/3")
         endLegacyBackgroundTask()
     }
 
@@ -1302,7 +1326,7 @@ final class AppStore: ObservableObject {
                     self.diagnostic("[BG] Scheduler não reteve a request • repetindo com novo identificador")
                     self.submitContinuedProcessingAttempt(
                         for: mode,
-                        requestedGoal: min(100_000, max(1, self.goal)),
+                        requestedGoal: min(100_000, max(1, self.sessionGoal)),
                         attempt: attempt + 1
                     )
                 } else {
@@ -1327,9 +1351,9 @@ final class AppStore: ObservableObject {
 
         // Progresso interno continua granular; o texto mostrado pelo sistema
         // usa a mesma fonte visível do card da atividade no app.
-        let goalUnits = Int64(max(1, goal))
+        let goalUnits = Int64(max(1, sessionGoal))
         let total = goalUnits * 100
-        let successBase = Int64(min(max(0, stats.successes), max(1, goal))) * 100
+        let successBase = Int64(min(max(0, stats.successes), max(1, sessionGoal))) * 100
         let completed = min(total, successBase + Int64(continuedProgressSubunit))
         backgroundTask.progress.totalUnitCount = total
         backgroundTask.progress.completedUnitCount = completed
@@ -1346,7 +1370,7 @@ final class AppStore: ObservableObject {
 
         backgroundTask.updateTitle(
             "Kintarabot • \(mode.localizedTitle)",
-            subtitle: "\(stats.successes)/\(max(1, goal)) • \(publicStatus)"
+            subtitle: "\(stats.successes)/\(max(1, sessionGoal)) • \(publicStatus)"
         )
         lastContinuedTitleSuccesses = stats.successes
         lastContinuedPublicStatus = publicStatus
@@ -1362,18 +1386,18 @@ final class AppStore: ObservableObject {
 
         if #available(iOS 26.0, *) {
             if let backgroundTask = continuedTaskObject as? BGContinuedProcessingTask {
-                let total = Int64(max(1, goal)) * 100
+                let total = Int64(max(1, sessionGoal)) * 100
                 backgroundTask.progress.totalUnitCount = total
                 if success {
                     backgroundTask.progress.completedUnitCount = total
                 } else {
-                    let base = Int64(min(max(0, stats.successes), max(1, goal))) * 100
+                    let base = Int64(min(max(0, stats.successes), max(1, sessionGoal))) * 100
                     backgroundTask.progress.completedUnitCount = min(total, base + Int64(continuedProgressSubunit))
                 }
                 backgroundTask.expirationHandler = nil
                 backgroundTask.updateTitle(
                     "Kintarabot • \((activity ?? continuedTaskMode)?.localizedTitle ?? "Atividade")",
-                    subtitle: success ? "Meta concluída" : "Encerrada • \(reason)"
+                    subtitle: success ? "\(stats.successes)/\(max(1, sessionGoal)) • Meta concluída" : "Encerrada • \(reason)"
                 )
                 backgroundTask.setTaskCompleted(success: success)
                 diagnostic("[BG] Continued Processing encerrada • sucesso=\(success ? "sim" : "não") • \(reason)")
@@ -1426,6 +1450,8 @@ final class AppStore: ObservableObject {
         }
 
         requestedStopReason = .backgroundExpiration
+        terminalFailureHandled = true
+        let expiringRunID = activeRunID
         continuedTaskActivationWatchdog?.cancel()
         continuedTaskActivationWatchdog = nil
         continuedTaskObject = nil
@@ -1435,6 +1461,11 @@ final class AppStore: ObservableObject {
         backgroundTask.expirationHandler = nil
         backgroundTask.setTaskCompleted(success: false)
 
+        // `engineRunTask` é uma Task independente da Task pai. Cancelar apenas
+        // `task` deixava Fishing viva depois da expiração e mantinha activeRunID
+        // ocupado (sessão fantasma / start ignorado). Encerre todos os donos da
+        // sessão explicitamente e só libere single-flight depois do socket fechar.
+        engineRunTask?.cancel()
         task?.cancel()
         receiverTask?.cancel()
         traceTask?.cancel()
@@ -1444,11 +1475,15 @@ final class AppStore: ObservableObject {
         activity = nil
         state = .failed
         statusMessage = "Segundo plano encerrado pelo iOS"
-        stats.failures += 1
+        stats.sessionErrors += 1
         stats.lastEvent = "background expirado"
         diagnostic("[ERROR] BGContinuedProcessingTask expirou/cancelou • atividade não-Wild interrompida automaticamente")
         log("Falha: execução em segundo plano encerrada pelo iOS • bot interrompido automaticamente")
-        Task { await socket.close() }
+        Task { [weak self] in
+            guard let self else { return }
+            await self.socket.close()
+            if let expiringRunID { self.completeRunCleanup(runID: expiringRunID) }
+        }
         endLegacyBackgroundTask()
     }
 
@@ -1494,6 +1529,9 @@ final class AppStore: ObservableObject {
         }
 
         requestedStopReason = .backgroundExpiration
+        terminalFailureHandled = true
+        let expiringRunID = activeRunID
+        engineRunTask?.cancel()
         task?.cancel()
         receiverTask?.cancel()
         traceTask?.cancel()
@@ -1503,10 +1541,14 @@ final class AppStore: ObservableObject {
         activity = nil
         state = .failed
         statusMessage = "Segundo plano indisponível"
-        stats.failures += 1
+        stats.sessionErrors += 1
         stats.lastEvent = "background indisponível"
         log("Falha: Continued Processing não ficou ativa e a janela curta terminou • bot interrompido automaticamente")
-        Task { await socket.close() }
+        Task { [weak self] in
+            guard let self else { return }
+            await self.socket.close()
+            if let expiringRunID { self.completeRunCleanup(runID: expiringRunID) }
+        }
     }
 
     private func endLegacyBackgroundTask() {
