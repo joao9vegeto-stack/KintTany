@@ -556,8 +556,11 @@ final class RealtimeProtocolTests: XCTestCase {
         ))
     }
 
-    func testGatherTimingPolicyStillBoundsLateBackgroundFrames() {
-        XCTAssertEqual(GatherTimingPolicy.maxFrameLatenessMS, 220)
+    func testGatherTimingPolicyPreservesRelativeSpacingInBackground() {
+        XCTAssertEqual(GatherTimingPolicy.treeFrameGapMS(frameCount: 12), 46)
+        XCTAssertEqual(GatherTimingPolicy.treeFrameGapMS(frameCount: 7), 84)
+        XCTAssertEqual(GatherTimingPolicy.mineFrameGapMS, 65)
+        XCTAssertEqual(GatherTimingPolicy.delayedFrameDiagnosticThresholdMS, 220)
         XCTAssertEqual(GatherTimingPolicy.eventGraceMS, 420)
     }
 
