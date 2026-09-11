@@ -193,12 +193,63 @@ final class RealtimeProtocolTests: XCTestCase {
         XCTAssertEqual(FishingBait.squid.displayName, "Squid Bait")
     }
 
-    func testBankFirstAllowlistMatchesNodeV521() {
-        XCTAssertEqual(CombatBankFirstPolicy.safeTypes, [
-            "wood", "stone", "coal", "metal", "fish", "cooked_fish_meat"
-        ])
-        XCTAssertFalse(CombatBankFirstPolicy.safeTypes.contains("mount_dragon"))
-        XCTAssertFalse(CombatBankFirstPolicy.safeTypes.contains("potion_strength"))
+    func testBankFirstPolicyProtectsCoreInventoryButKeepsCombatAndSpecialItemsOut() {
+        XCTAssertTrue(CombatBankFirstPolicy.shouldBankFirst(type: "wood", slot: ["t": "wood", "n": 2583]))
+        XCTAssertTrue(CombatBankFirstPolicy.shouldBankFirst(type: "bait_feather", slot: ["t": "bait_feather", "n": 111]))
+        XCTAssertTrue(CombatBankFirstPolicy.shouldBankFirst(type: "tool_axe", slot: ["t": "tool_axe", "n": 1, "durability": 77]))
+        XCTAssertFalse(CombatBankFirstPolicy.shouldBankFirst(type: "potion_strength", slot: ["t": "potion_strength", "n": 6]))
+        XCTAssertFalse(CombatBankFirstPolicy.shouldBankFirst(type: "wild_sword", slot: ["t": "wild_sword", "n": 1]))
+        XCTAssertFalse(CombatBankFirstPolicy.shouldBankFirst(type: "mount_dragon", slot: ["t": "mount_dragon", "n": 1]))
+        XCTAssertFalse(CombatBankFirstPolicy.shouldBankFirst(type: "item_scroll_x", slot: ["t": "item_scroll_x", "n": 1]))
+        XCTAssertFalse(CombatBankFirstPolicy.shouldBankFirst(type: "quest_item", slot: ["t": "quest_item", "n": 1, "soulbound": true]))
+    }
+
+    func testBankAllocatorSkipsFullTenKStackAndUsesNextPartialStack() throws {
+        var bank: [Any] = [
+            ["t": "wood", "n": 10_000],
+            ["t": "wood", "n": 5_100],
+            NSNull(),
+        ]
+        let moved = BankSlotAllocator.place(slot: ["t": "wood", "n": 2_583], quantity: 2_583, into: &bank)
+        XCTAssertEqual(moved, 2_583)
+        XCTAssertEqual(try XCTUnwrap((bank[0] as? [String: Any])?["n"] as? Int), 10_000)
+        XCTAssertEqual(try XCTUnwrap((bank[1] as? [String: Any])?["n"] as? Int), 7_683)
+        XCTAssertTrue(bank[2] is NSNull)
+    }
+
+    func testBankAllocatorSplitsSimpleStackAcrossTenKBoundary() throws {
+        var bank: [Any] = [
+            ["t": "stone", "n": 9_800],
+            NSNull(),
+            NSNull(),
+        ]
+        let moved = BankSlotAllocator.place(slot: ["t": "stone", "n": 799], quantity: 799, into: &bank)
+        XCTAssertEqual(moved, 799)
+        XCTAssertEqual(try XCTUnwrap((bank[0] as? [String: Any])?["n"] as? Int), 10_000)
+        XCTAssertEqual(try XCTUnwrap((bank[1] as? [String: Any])?["n"] as? Int), 599)
+    }
+
+    func testBankAllocatorPreservesMetadataForNonStackableItem() throws {
+        let tool: [String: Any] = ["t": "tool_pickaxe", "n": 1, "durability": 83, "quality": "rare"]
+        var bank: [Any] = [NSNull(), NSNull()]
+        XCTAssertEqual(BankSlotAllocator.place(slot: tool, quantity: 1, into: &bank), 1)
+        let stored = try XCTUnwrap(bank[0] as? [String: Any])
+        XCTAssertEqual(stored["t"] as? String, "tool_pickaxe")
+        XCTAssertEqual(stored["durability"] as? Int, 83)
+        XCTAssertEqual(stored["quality"] as? String, "rare")
+    }
+
+    func testWildAckCadenceBacksOffOnMissAndRecoversAfterThreeAcks() {
+        var cadence = CombatAckCadence()
+        XCTAssertEqual(cadence.cooldownMS, 1_650)
+        cadence.record(acknowledged: false)
+        XCTAssertEqual(cadence.cooldownMS, 1_775)
+        cadence.record(acknowledged: false)
+        XCTAssertEqual(cadence.cooldownMS, 1_900)
+        cadence.record(acknowledged: true)
+        cadence.record(acknowledged: true)
+        cadence.record(acknowledged: true)
+        XCTAssertEqual(cadence.cooldownMS, 1_850)
     }
 
     func testDragonSafetyPolicyMatchesNodeV521() {
@@ -357,6 +408,27 @@ final class RealtimeProtocolTests: XCTestCase {
         ))
         XCTAssertEqual(migrated.x, learned.x, accuracy: 0.000001)
         XCTAssertEqual(migrated.z, learned.z, accuracy: 0.000001)
+    }
+
+
+    func testActivityRateMatchesNodeSuccessesPerElapsedMinute() {
+        let start = Date(timeIntervalSince1970: 1_000)
+        let now = start.addingTimeInterval(134)
+        let rate = ActivityRateMeter.perMinute(successes: 15, startedAt: start, now: now)
+        XCTAssertEqual(rate, 15.0 / (134.0 / 60.0), accuracy: 0.000001)
+    }
+
+    func testActivityRateIgnoresAttemptsAndFailuresByUsingOnlySuccesses() {
+        let start = Date(timeIntervalSince1970: 2_000)
+        let now = start.addingTimeInterval(120)
+        XCTAssertEqual(ActivityRateMeter.perMinute(successes: 5, startedAt: start, now: now), 2.5, accuracy: 0.000001)
+    }
+
+    func testActivityRateUsesNodeMinimumElapsedWindowAndFormatsPerMinute() {
+        let start = Date(timeIntervalSince1970: 3_000)
+        let now = start.addingTimeInterval(0.1)
+        XCTAssertEqual(ActivityRateMeter.perMinute(successes: 1, startedAt: start, now: now), 100.0, accuracy: 0.000001)
+        XCTAssertEqual(ActivityRateMeter.formatted(successes: 0, startedAt: start, now: now), "0.00/min")
     }
 
 }
