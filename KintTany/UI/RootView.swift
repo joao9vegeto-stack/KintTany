@@ -189,7 +189,7 @@ struct RootView: View {
 
                 if mode != nil {
                     VStack(alignment: .trailing, spacing: 3) {
-                        Text("\(app.stats.successes)/\(app.goal)")
+                        Text("\(app.stats.successes)/\(app.sessionGoal)")
                             .font(.system(size: 18, weight: .black, design: .rounded))
                             .foregroundStyle(accent)
                         liveRateBadge
