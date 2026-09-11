@@ -554,137 +554,6 @@ final class AppStore: ObservableObject {
     }
 
 
-    /// RC3.5 transactional loadout: when Axe/Pickaxe lives only in the bank,
-    /// create a short World Presence, walk to the real bank through the same
-    /// proven engine path, materialize the tool, close that transport, and only
-    /// then allow the definitive ElderGrove Presence to start.
-    private func prepareGatherToolBeforeRealtime(mode: ActivityMode, cookie: String, runID: UUID) async throws {
-        guard mode.isGathering else { return }
-        guard activeRunID == runID else { throw CancellationError() }
-
-        let disposition = await AutomationEngine.gatherToolPreflightDisposition(for: mode, cookie: cookie)
-        switch disposition {
-        case .ready:
-            diagnostic("[LOADOUT] \(mode.localizedTitle) • ferramenta já carregada antes da Presence")
-            return
-
-        case .missing(let tool):
-            throw EngineError.missingRequiredItem(ActivityToolPolicy.displayName(tool))
-
-        case .needsWorld(let tool):
-            let name = ActivityToolPolicy.displayName(tool)
-            state = .syncing
-            statusMessage = "🧰 Buscando \(name) no banco"
-            stats.lastEvent = "preflight World • \(name)"
-            updateContinuedProcessingProgress(forceTitleUpdate: true)
-            log("🧰 Preflight transacional • \(name) está no banco • abrindo World antes de Whisperwood")
-
-            let worldBootstrap = PresenceBootstrap(region: "world", position: Position(x: 22.5, z: -3.5))
-            var preflightReceiver: Task<Void, Never>?
-            do {
-                let preflightConnection = try await socket.connectBestNA(session: session, bootstrap: worldBootstrap)
-                await importSocketTrace()
-                guard activeRunID == runID else { throw CancellationError() }
-
-                let preflightEngine = AutomationEngine(
-                    socket: socket,
-                    cookie: cookie,
-                    shard: preflightConnection.shard,
-                    bootstrap: worldBootstrap,
-                    fishingBait: selectedFishingBait,
-                    reporter: { [weak self] event in
-                        guard let self else { return }
-                        switch event {
-                        case .log(let message):
-                            self.log(message)
-                        case .diagnostic(let message):
-                            self.diagnostic(message)
-                        case .state(let nextState, let message):
-                            self.state = nextState
-                            self.statusMessage = message
-                            self.stats.lastEvent = message
-                            self.updateContinuedProcessingProgress()
-                        default:
-                            break
-                        }
-                    }
-                )
-
-                preflightReceiver = Task { [weak self] in
-                    guard let self else { return }
-                    for await data in preflightConnection.stream {
-                        if Task.isCancelled { break }
-                        preflightEngine.ingest(data)
-                        await self.importSocketTrace()
-                    }
-                }
-
-                await preflightEngine.prepareIdentity()
-                let carried = try await preflightEngine.prepareGatherToolFromWorld(for: mode)
-                guard carried >= 1 else { throw EngineError.missingRequiredItem(name) }
-
-                preflightReceiver?.cancel()
-                preflightReceiver = nil
-                await socket.close()
-                await importSocketTrace()
-                try await Task.sleep(nanoseconds: 180_000_000)
-                diagnostic("[LOADOUT] World preflight encerrado • \(name) confirmado • próxima Presence=ElderGrove")
-            } catch {
-                preflightReceiver?.cancel()
-                await socket.close()
-                await importSocketTrace()
-                throw error
-            }
-        }
-    }
-
-    /// Hard gather transport resync used only after repeated internal recoveries
-    /// and a long success drought. It preserves the run/meta and same shard, but
-    /// replaces the Presence stream so a stale background transport cannot hold
-    /// the session hostage for minutes.
-    private func restartGatherPresence(
-        mode: ActivityMode,
-        runID: UUID,
-        bootstrap: PresenceBootstrap
-    ) async throws {
-        guard activeRunID == runID else { throw CancellationError() }
-        guard mode.isGathering else { return }
-        guard let shard = activeShard, let engine = activeEngine else {
-            throw SocketError.notConnected
-        }
-
-        state = .recovering
-        statusMessage = "🔁 Ressincronizando \(mode.localizedTitle)"
-        stats.lastEvent = "gather transport resync"
-        updateContinuedProcessingProgress(forceTitleUpdate: true)
-        diagnostic("[GATHER] reiniciando Presence no mesmo shard \(shard) • meta/sessão preservadas")
-
-        receiverTask?.cancel()
-        receiverTask = nil
-        await socket.close()
-        await importSocketTrace()
-        try await Task.sleep(nanoseconds: 120_000_000)
-        guard activeRunID == runID else { throw CancellationError() }
-
-        let stream = try await socket.connect(session: session, shard: shard, bootstrap: bootstrap)
-        await importSocketTrace()
-        guard activeRunID == runID else { throw CancellationError() }
-
-        receiverTask = Task { [weak self] in
-            guard let self else { return }
-            for await data in stream {
-                if Task.isCancelled { break }
-                engine.ingest(data)
-                await self.importSocketTrace()
-            }
-            if !Task.isCancelled {
-                await self.handleUnexpectedRealtimeEnd(for: mode, runID: runID)
-            }
-        }
-        connected = true
-        diagnostic("[GATHER] nova Presence ativa • shard=\(shard) • region=eldergrove")
-    }
-
     private func run(_ mode: ActivityMode, runID: UUID) async {
         guard activeRunID == runID else { return }
         guard let cookie = session.cookie, !cookie.isEmpty else {
@@ -732,8 +601,6 @@ final class AppStore: ObservableObject {
             }
         }
 
-        let bootstrap = AutomationEngine.bootstrap(for: mode)
-
         defer {
             receiverTask?.cancel()
             traceTask?.cancel()
@@ -747,7 +614,32 @@ final class AppStore: ObservableObject {
         }
 
         do {
-            try await prepareGatherToolBeforeRealtime(mode: mode, cookie: cookie, runID: runID)
+            var gatherPreflight: GatherToolPreflightDisposition = .ready
+            if mode.isGathering {
+                gatherPreflight = await AutomationEngine.gatherToolPreflightDisposition(for: mode, cookie: cookie)
+                switch gatherPreflight {
+                case .ready:
+                    diagnostic("[LOADOUT] \(mode.localizedTitle) • ferramenta já carregada antes da Presence")
+                case .missing(let tool):
+                    throw EngineError.missingRequiredItem(ActivityToolPolicy.displayName(tool))
+                case .needsWorld(let tool):
+                    let name = ActivityToolPolicy.displayName(tool)
+                    state = .syncing
+                    statusMessage = "🧰 Buscando \(name) no banco"
+                    stats.lastEvent = "preflight World • \(name)"
+                    updateContinuedProcessingProgress(forceTitleUpdate: true)
+                    log("🧰 Preflight transacional • \(name) está no banco • uma única Presence será mantida de World até Whisperwood")
+                }
+            }
+
+            // A decisão autoritativa de inventário acontece antes da conexão.
+            // Se a ferramenta está no banco, esta mesma Presence nasce em World,
+            // faz o saque e segue por region_ack até ElderGrove sem trocar socket,
+            // queue token ou engine.
+            let bootstrap = AutomationEngine.bootstrapForRun(
+                for: mode,
+                gatherDisposition: gatherPreflight
+            )
             guard activeRunID == runID else { return }
             state = .connecting
             statusMessage = "Conectando à região da atividade"
@@ -770,14 +662,6 @@ final class AppStore: ObservableObject {
                 fishingBait: selectedFishingBait,
                 reporter: { [weak self] event in
                     self?.handleEngineEvent(event, runID: runID)
-                },
-                gatherTransportResyncer: { [weak self] reconnectBootstrap in
-                    guard let self else { throw CancellationError() }
-                    try await self.restartGatherPresence(
-                        mode: mode,
-                        runID: runID,
-                        bootstrap: reconnectBootstrap
-                    )
                 }
             )
             activeEngine = engine
@@ -787,9 +671,9 @@ final class AppStore: ObservableObject {
             statusMessage = "Sincronizando personagem e mundo"
             log("Realtime conectado; engine ativa iniciada")
 
-            await engine.prepareIdentity()
-            guard activeRunID == runID else { return }
-
+            // O receiver precisa estar ativo antes do preflight World porque a
+            // confirmação de região e os snapshots chegam pela mesma stream que
+            // continuará sendo usada durante toda a atividade.
             receiverTask = Task { [weak self] in
                 guard let self else { return }
                 for await data in stream {
@@ -801,6 +685,16 @@ final class AppStore: ObservableObject {
                 if !Task.isCancelled {
                     await self.handleUnexpectedRealtimeEnd(for: mode, runID: runID)
                 }
+            }
+
+            await engine.prepareIdentity()
+            guard activeRunID == runID else { return }
+
+            if case .needsWorld(let tool) = gatherPreflight {
+                let name = ActivityToolPolicy.displayName(tool)
+                let carried = try await engine.prepareGatherToolFromWorld(for: mode)
+                guard carried >= 1 else { throw EngineError.missingRequiredItem(name) }
+                diagnostic("[LOADOUT] \(name) confirmado • Presence preservada • transição World→ElderGrove será feita na mesma conexão")
             }
 
             let child = Task { @MainActor in
@@ -826,11 +720,11 @@ final class AppStore: ObservableObject {
                 let stopReason = result.stopReason ?? requestedStopReason
                 switch stopReason {
                 case .backgroundExpiration:
-                    statusMessage = "Segundo plano encerrado com saída segura"
-                    stats.lastEvent = "background encerrado com saída segura"
-                    log("Segundo plano encerrado pelo iOS — World confirmado e conexão liberada com segurança")
-                    logSessionSummary(mode: mode, outcome: "EXPIRAÇÃO SEGURA")
-                    finishContinuedProcessing(success: false, reason: "expiração após saída segura")
+                    statusMessage = "Continued Processing encerrada externamente"
+                    stats.lastEvent = "encerramento externo com saída segura"
+                    log("Continued Processing encerrada/cancelada externamente — World confirmado e conexão liberada com segurança")
+                    logSessionSummary(mode: mode, outcome: "ENCERRAMENTO EXTERNO SEGURO")
+                    finishContinuedProcessing(success: false, reason: "encerramento externo após saída segura")
                 case .connectionLoss:
                     statusMessage = "Conexão recuperada • World seguro"
                     stats.lastEvent = "saída segura após perda de conexão"
@@ -887,11 +781,19 @@ final class AppStore: ObservableObject {
                 }
             } else {
                 state = .cancelled
-                statusMessage = "Atividade cancelada"
                 let byUser = requestedStopReason == .user
-                diagnostic(byUser ? "[STATE] atividade cancelada pelo usuário" : "[STATE] atividade cancelada")
+                let externallyEnded = requestedStopReason == .backgroundExpiration
+                statusMessage = externallyEnded ? "Continued Processing encerrada externamente" : "Atividade cancelada"
+                if byUser {
+                    diagnostic("[STATE] atividade cancelada pelo usuário")
+                } else if externallyEnded {
+                    diagnostic("[STATE] atividade cancelada após encerramento externo de Continued Processing")
+                } else {
+                    diagnostic("[STATE] atividade cancelada")
+                }
                 if continuedTaskObject != nil || continuedTaskRequested {
-                    finishContinuedProcessing(success: false, reason: byUser ? "atividade cancelada pelo usuário" : "atividade cancelada")
+                    let reason = byUser ? "atividade cancelada pelo usuário" : (externallyEnded ? "Continued Processing encerrada externamente" : "atividade cancelada")
+                    finishContinuedProcessing(success: false, reason: reason)
                 }
             }
         } catch {
@@ -1638,9 +1540,9 @@ final class AppStore: ObservableObject {
         if activity?.isWildCombat == true, connectionRecoveryRequested {
             if requestedStopReason == nil { requestedStopReason = .backgroundExpiration }
             state = .recovering
-            statusMessage = "Background expirando • aguardando rede para saída segura"
-            stats.lastEvent = "expiração durante reconexão Wild"
-            diagnostic("[BG] Expiração recebida durante queda de conexão no Wild • preservando reconexão de emergência enquanto houver runtime")
+            statusMessage = "Continued Processing encerrada • aguardando rede para saída segura"
+            stats.lastEvent = "encerramento externo durante reconexão Wild"
+            diagnostic("[BG] Encerramento externo recebido durante queda de conexão no Wild • preservando reconexão de emergência enquanto houver runtime")
             updateContinuedProcessingProgress(forceTitleUpdate: true)
             return
         }
@@ -1651,13 +1553,17 @@ final class AppStore: ObservableObject {
             if requestedStopReason == nil { requestedStopReason = .backgroundExpiration }
             activeEngine.requestSafeStop(reason: requestedStopReason ?? .backgroundExpiration)
             state = .recovering
-            statusMessage = "Background expirando • saída imediata para o World"
-            stats.lastEvent = "saída de emergência por expiração"
+            statusMessage = "Continued Processing encerrada • saída imediata para o World"
+            stats.lastEvent = "saída de emergência por encerramento externo"
             updateContinuedProcessingProgress(forceTitleUpdate: true)
-            diagnostic("[BG] Expiração recebida no Wild • emergency-exit solicitado • recovery/XP/loot deixam de ter prioridade")
+            diagnostic("[BG] Encerramento externo recebido no Wild • emergency-exit solicitado • recovery/XP/loot deixam de ter prioridade")
             return
         }
 
+        // O mesmo callback é usado pelo sistema para expiração real e para um
+        // encerramento solicitado pela superfície de Continued Processing.
+        // A API não informa qual dos dois ocorreu; trate-o como cancelamento
+        // externo neutro, preservando exatamente o cleanup seguro existente.
         requestedStopReason = .backgroundExpiration
         terminalFailureHandled = true
         let expiringRunID = activeRunID
@@ -1678,16 +1584,15 @@ final class AppStore: ObservableObject {
         task?.cancel()
         receiverTask?.cancel()
         traceTask?.cancel()
-        realtimeFailureMessage = "Execução em segundo plano encerrada pelo iOS"
+        realtimeFailureMessage = nil
         connected = false
         currentTarget = nil
         activity = nil
-        state = .failed
-        statusMessage = "Segundo plano encerrado pelo iOS"
-        stats.sessionErrors += 1
-        stats.lastEvent = "background expirado"
-        diagnostic("[ERROR] BGContinuedProcessingTask expirou/cancelou • atividade não-Wild interrompida automaticamente")
-        log("Falha: execução em segundo plano encerrada pelo iOS • bot interrompido automaticamente")
+        state = .cancelled
+        statusMessage = "Continued Processing encerrada externamente"
+        stats.lastEvent = "encerramento externo"
+        diagnostic("[BG] Continued Processing encerrada/cancelada externamente • atividade não-Wild interrompida com cleanup completo")
+        log("Continued Processing encerrada/cancelada pelo sistema ou pelo controle da Dynamic Island • atividade interrompida com segurança")
         Task { [weak self] in
             guard let self else { return }
             await self.socket.close()
