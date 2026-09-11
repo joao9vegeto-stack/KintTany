@@ -59,11 +59,6 @@ struct GatherTimingPolicy {
     static let eventGraceMS = 420
 }
 
-struct GatherHealthPolicy {
-    static let recoveriesBeforeTransportResync = 2
-    static let noSuccessWindowMS: Double = 25_000
-}
-
 struct CombatStateConfirmationPolicy {
     static func isStateCorrelatedHit(beforeHP: Int?, afterHP: Int?, snapshotAdvanced: Bool) -> Bool {
         guard snapshotAdvanced, let beforeHP, let afterHP else { return false }
@@ -404,7 +399,6 @@ struct EngineRunResult {
 @MainActor
 final class AutomationEngine {
     typealias Reporter = (EngineEvent) -> Void
-    typealias GatherTransportResyncer = (PresenceBootstrap) async throws -> Void
 
     private let socket: RealtimeSocket
     private let cookie: String
@@ -412,7 +406,6 @@ final class AutomationEngine {
     private let reporter: Reporter
     private let http: KintaraHTTPClient
     private let fishingBait: FishingBait
-    private let gatherTransportResyncer: GatherTransportResyncer?
 
     private var region: String
     private var serverRegion: String?
@@ -424,7 +417,10 @@ final class AutomationEngine {
     private var playerHP = 100
     private var playerShield = 0
 
-    private var firstResourceSnapshotSeen = false
+    /// Region of the latest authoritative snapshot that actually contained the
+    /// `res` collection. A World snapshot must not unlock ElderGrove selection
+    /// after a single-Presence World→ElderGrove preflight.
+    private var resourceSnapshotRegion: String?
     private var cooldownUntil: [String: Double] = [:]
     private var gatherRetryPolicy = GatherRetryPolicy()
     private var gatherBusyUntil: [String: Double] = [:]
@@ -435,10 +431,6 @@ final class AutomationEngine {
     private var gatherResourceSerial = 0
     private let gatherEventGate = RealtimeEventGate()
     private let wildStateEventGate = RealtimeEventGate()
-    private var gatherTransportResyncInProgress = false
-    private var gatherRecoveriesSinceSuccess = 0
-    private var gatherLastSuccessAt: Double = 0
-    private var gatherTransportResyncNeeded = false
 
     private var currentGatherSignature: String?
     private var currentGatherKind: String?
@@ -535,15 +527,13 @@ final class AutomationEngine {
         shard: String,
         bootstrap: PresenceBootstrap,
         fishingBait: FishingBait = .feather,
-        reporter: @escaping Reporter,
-        gatherTransportResyncer: GatherTransportResyncer? = nil
+        reporter: @escaping Reporter
     ) {
         self.socket = socket
         self.cookie = cookie
         self.shard = shard
         self.fishingBait = fishingBait
         self.reporter = reporter
-        self.gatherTransportResyncer = gatherTransportResyncer
         self.http = KintaraHTTPClient(cookie: cookie)
         self.gatherKnowledge = GatherKnowledgeStore()
         self.region = bootstrap.region
@@ -562,13 +552,27 @@ final class AutomationEngine {
         }
     }
 
-    /// RC3.5: o bootstrap definitivo de Gathering nunca mais muda de região
-    /// por uma leitura duplicada de inventário. O AppStore executa um preflight
-    /// transacional em World quando necessário e só então abre a Presence final
-    /// em ElderGrove. Este método permanece por compatibilidade e retorna sempre
-    /// o bootstrap normal da atividade.
+    /// Compatibilidade com chamadas antigas que ainda pedem o bootstrap sem
+    /// fornecer a decisão autoritativa do preflight.
     static func bootstrapForRun(for mode: ActivityMode, cookie: String) async -> PresenceBootstrap {
         bootstrap(for: mode)
+    }
+
+    /// RC3.6: o local da ferramenta decide onde a única Presence da sessão
+    /// nasce. Ferramenta carregada conecta direto em ElderGrove; ferramenta no
+    /// banco conecta em World e a própria engine faz World→ElderGrove depois do
+    /// saque, sem fechar/reabrir o transporte.
+    static func bootstrapForRun(
+        for mode: ActivityMode,
+        gatherDisposition: GatherToolPreflightDisposition
+    ) -> PresenceBootstrap {
+        guard mode == .tree || mode == .stone || mode == .coal else {
+            return bootstrap(for: mode)
+        }
+        if case .needsWorld = gatherDisposition {
+            return PresenceBootstrap(region: "world", position: Position(x: 22.5, z: -3.5))
+        }
+        return bootstrap(for: mode)
     }
 
     static func gatherToolPreflightDisposition(for mode: ActivityMode, cookie: String) async -> GatherToolPreflightDisposition {
@@ -711,7 +715,7 @@ final class AutomationEngine {
         let label: String
         switch reason {
         case .user: label = "usuário"
-        case .backgroundExpiration: label = "background expiration"
+        case .backgroundExpiration: label = "encerramento externo de Continued Processing"
         case .connectionLoss: label = "queda de conexão"
         }
         reporter(.diagnostic("[STATE] safe-stop solicitado • motivo=\(label)"))
@@ -796,23 +800,32 @@ final class AutomationEngine {
         }
 
         if let res = packet["res"] as? [[String: Any]] {
-            firstResourceSnapshotSeen = true
-            let now = nowMS
-            for group in res {
-                let kind = ((group["kind"] ?? group["k"]) as? String) ?? ""
-                guard !kind.isEmpty else { continue }
-                let keys = stringArray(group["keys"] ?? group["key"])
-                guard !keys.isEmpty else { continue }
-                rememberGatherMetadata(
-                    region: (packet["region"] as? String) ?? serverRegion ?? region,
-                    kind: kind,
-                    keys: keys,
-                    hasCoal: RealtimeProtocol.bool(group["hasCoal"]),
-                    source: "snap_cooldown"
-                )
-                let until = RealtimeProtocol.double(group["until"]) ?? (now + 2_500)
-                for key in keys {
-                    cooldownUntil["\(kind):\(key)"] = until
+            let snapshotRegion = serverRegion?
+                .trimmingCharacters(in: .whitespacesAndNewlines)
+                .lowercased()
+            resourceSnapshotRegion = snapshotRegion
+
+            // World can also publish `res`. During the single-Presence tool
+            // preflight those rows must never contaminate ElderGrove cooldowns
+            // or unlock its persisted catalog.
+            if snapshotRegion == "eldergrove" {
+                let now = nowMS
+                for group in res {
+                    let kind = ((group["kind"] ?? group["k"]) as? String) ?? ""
+                    guard !kind.isEmpty else { continue }
+                    let keys = stringArray(group["keys"] ?? group["key"])
+                    guard !keys.isEmpty else { continue }
+                    rememberGatherMetadata(
+                        region: snapshotRegion ?? "",
+                        kind: kind,
+                        keys: keys,
+                        hasCoal: RealtimeProtocol.bool(group["hasCoal"]),
+                        source: "snap_cooldown"
+                    )
+                    let until = RealtimeProtocol.double(group["until"]) ?? (now + 2_500)
+                    for key in keys {
+                        cooldownUntil["\(kind):\(key)"] = until
+                    }
                 }
             }
         }
@@ -936,6 +949,13 @@ final class AutomationEngine {
     }
 
     private func setRegion(_ value: String, at pos: Position, extras: [String: Any] = [:]) async throws {
+        let previousRegion = region.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        let nextRegion = value.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        if nextRegion == "eldergrove", previousRegion != nextRegion {
+            resourceSnapshotRegion = nil
+            cooldownUntil.removeAll(keepingCapacity: true)
+            gatherBusyUntil.removeAll(keepingCapacity: true)
+        }
         region = value
         position = pos
         serverRegion = nil
@@ -1043,10 +1063,6 @@ final class AutomationEngine {
                 return
             } catch {
                 if Task.isCancelled { return }
-                if gatherTransportResyncInProgress {
-                    reporter(.diagnostic("[GATHER] heartbeat ignorou erro durante reconnect planejado: \(error.localizedDescription)"))
-                    continue
-                }
                 reporter(.fatal("Conexão realtime perdida: \(error.localizedDescription)"))
                 return
             }
@@ -1057,57 +1073,14 @@ final class AutomationEngine {
 
     private func recordGatherRecovery(proofMiss: Bool = false) {
         gatherInternalRecoveries += 1
-        gatherRecoveriesSinceSuccess += 1
         if proofMiss { gatherProofMisses += 1 }
-        if gatherLastSuccessAt > 0,
-           gatherRecoveriesSinceSuccess >= GatherHealthPolicy.recoveriesBeforeTransportResync,
-           nowMS - gatherLastSuccessAt >= GatherHealthPolicy.noSuccessWindowMS {
-            gatherTransportResyncNeeded = true
-        }
         reporter(.gatherRecovery(proofMiss: proofMiss))
     }
 
-    /// RC3.5 health recovery. Prefer a real Presence restart on the same shard
-    /// and ElderGrove so an extended background session cannot spend minutes on
-    /// a stale transport. If the host does not provide a reconnect hook (tests /
-    /// isolated engine usage), fall back to a local authoritative reassert.
-    private func gatherTransportResync(mode: ActivityMode, reason: String) async throws {
-        reporter(.state(.recovering, "Ressincronizando Presence • \(mode.displayName)"))
-        reporter(.log("🔁 Gather transport resync • \(mode.displayName) • \(reason)"))
-        try? await clearAction()
-
-        let beforeEvent = gatherEventGate.serial
-        let reconnectPosition = Position(x: position.x, y: 0.25, z: position.z, ry: position.ry)
-        let reconnectBootstrap = PresenceBootstrap(
-            region: "eldergrove",
-            position: reconnectPosition,
-            lifeEpoch: max(1, lifeEpoch)
-        )
-
-        if let gatherTransportResyncer {
-            gatherTransportResyncInProgress = true
-            defer { gatherTransportResyncInProgress = false }
-            try await gatherTransportResyncer(reconnectBootstrap)
-            region = "eldergrove"
-            position = reconnectPosition
-            _ = try await gatherEventGate.wait(after: beforeEvent, timeoutMS: 2_200)
-            reporter(.diagnostic("[GATHER] Presence reaberta no mesmo shard • region=eldergrove"))
-        } else {
-            position = reconnectPosition
-            try await sendPosition(moving: false, full: true)
-            _ = try await gatherEventGate.wait(after: beforeEvent, timeoutMS: 1_600)
-            reporter(.diagnostic("[GATHER] fallback de resync local concluído • region=\(serverRegion ?? region)"))
-        }
-
-        if let tool = ActivityToolPolicy.requiredTool(for: mode) {
-            try await equip(tool)
-        }
-    }
-
     private func runGather(mode: ActivityMode, goal: Int) async throws {
-        // RC3.5: o preflight transacional World→tool→ElderGrove pertence ao
-        // AppStore. Aqui a ferramenta já deve estar carregada. Se uma leitura
-        // autoritativa disser o contrário, falhe sem tentar ElderGrove→World.
+        // RC3.6: se a ferramenta estava no banco, a mesma engine/Presence já a
+        // materializou em World. Daqui em diante a ferramenta precisa estar
+        // carregada e Gathering nunca tenta ElderGrove→World no hot path.
         try await ensureActivityToolLoadout(for: mode)
 
         reporter(.state(.syncing, "Sincronizando Whisperwood"))
@@ -1127,19 +1100,15 @@ final class AutomationEngine {
 
         gatherInternalRecoveries = 0
         gatherProofMisses = 0
-        gatherRecoveriesSinceSuccess = 0
-        gatherLastSuccessAt = nowMS
-        gatherTransportResyncNeeded = false
         gatherRetryPolicy.resetExpired(nowMS: nowMS)
-        var consecutiveRecoverableResults = 0
 
         reporter(.state(.searching, "Sincronizando recursos"))
         let resourceDeadline = nowMS + 7_000
-        while !firstResourceSnapshotSeen && nowMS < resourceDeadline {
+        while resourceSnapshotRegion != "eldergrove" && nowMS < resourceDeadline {
             try Task.checkCancellation()
             try await sleep(80)
         }
-        if !firstResourceSnapshotSeen {
+        if resourceSnapshotRegion != "eldergrove" {
             reporter(.diagnostic("[GATHER] snap.res ainda não chegou; usando somente bootstrap conhecido, sem assumir disponibilidade do catálogo persistido"))
         } else {
             let persisted = persistedSeedCount(for: mode)
@@ -1208,10 +1177,6 @@ final class AutomationEngine {
                 }
 
                 successes += 1
-                gatherLastSuccessAt = nowMS
-                gatherRecoveriesSinceSuccess = 0
-                gatherTransportResyncNeeded = false
-                consecutiveRecoverableResults = 0
                 reporter(.success(result.loot))
                 reporter(.state(.cooldown, "Concluído \(successes)/\(goal)"))
                 reporter(.log("✅ \(mode.displayName) concluído • h=\(result.h)/\(result.hm) • \(persistenceLabel) • \(successes)/\(goal)"))
@@ -1220,7 +1185,6 @@ final class AutomationEngine {
             }
 
             if result.recoverable {
-                consecutiveRecoverableResults += 1
                 recordGatherRecovery(proofMiss: result.pureProofMiss)
                 if result.pureProofMiss {
                     gatherRetryPolicy.deferProofMiss(signature: seed.signature, nowMS: nowMS)
@@ -1231,36 +1195,8 @@ final class AutomationEngine {
                     reporter(.state(.recovering, "Continuando ação aceita"))
                     reporter(.log("🔄 \(mode.displayName) \(seed.targetKey) • progresso aceito h=\(result.h)/\(result.hm) • continuará após resync • nenhuma falha contabilizada"))
                 }
-                if gatherTransportResyncNeeded || (
-                    consecutiveRecoverableResults >= GatherHealthPolicy.recoveriesBeforeTransportResync &&
-                    nowMS - gatherLastSuccessAt >= GatherHealthPolicy.noSuccessWindowMS
-                ) {
-                    try await gatherTransportResync(
-                        mode: mode,
-                        reason: "\(gatherRecoveriesSinceSuccess) recoveries e \(Int(nowMS - gatherLastSuccessAt))ms sem conclusão"
-                    )
-                    consecutiveRecoverableResults = 0
-                    gatherRecoveriesSinceSuccess = 0
-                    gatherTransportResyncNeeded = false
-                    gatherLastSuccessAt = nowMS
-                }
                 try await sleep(350)
                 continue
-            }
-
-            consecutiveRecoverableResults += 1
-            if gatherTransportResyncNeeded || (
-                consecutiveRecoverableResults >= GatherHealthPolicy.recoveriesBeforeTransportResync &&
-                nowMS - gatherLastSuccessAt >= GatherHealthPolicy.noSuccessWindowMS
-            ) {
-                try await gatherTransportResync(
-                    mode: mode,
-                    reason: "falhas reais/recoveries repetidos sem conclusão"
-                )
-                consecutiveRecoverableResults = 0
-                gatherRecoveriesSinceSuccess = 0
-                gatherTransportResyncNeeded = false
-                gatherLastSuccessAt = nowMS
             }
 
             reporter(.attempt)
@@ -1286,10 +1222,6 @@ final class AutomationEngine {
         // novamente antes de abandonar a geometria que acabou de ser usada.
         if merged.pureProofMiss {
             recordGatherRecovery(proofMiss: true)
-            if gatherTransportResyncNeeded {
-                reporter(.diagnostic("[GATHER] recovery budget atingido • devolvendo controle para transport resync"))
-                return merged
-            }
             reporter(.diagnostic("[GATHER] proof miss • same-position event resync 900ms • \(seed.targetKey)"))
             let eventBefore = gatherEventGate.serial
             position.y = 0.25
@@ -1309,10 +1241,6 @@ final class AutomationEngine {
                 try Task.checkCancellation()
                 if hypot(position.x - candidate.x, position.z - candidate.z) < 0.25 { continue }
                 recordGatherRecovery(proofMiss: true)
-                if gatherTransportResyncNeeded {
-                    reporter(.diagnostic("[GATHER] recovery budget atingido durante posições adjacentes • transport resync solicitado"))
-                    break
-                }
                 reporter(.diagnostic("[GATHER] recovery adjacent \(index + 1)/\(candidates.count) • \(seed.targetKey) • x=\(format(candidate.x)) z=\(format(candidate.z))"))
                 try await walk(to: candidate, maxSeconds: 18, status: "Reposicionando para \(mode.displayName) \(seed.targetKey)")
                 position.ry = candidate.ry
@@ -1330,10 +1258,6 @@ final class AutomationEngine {
             try Task.checkCancellation()
             continuation += 1
             recordGatherRecovery()
-            if gatherTransportResyncNeeded {
-                reporter(.diagnostic("[GATHER] recovery budget atingido durante continuidade aceita • transport resync solicitado"))
-                break
-            }
             reporter(.diagnostic("[GATHER] recovery accepted • \(seed.targetKey) • continuidade \(continuation)/3 • h=\(merged.h)/\(merged.hm)"))
             try await sleep(90)
             let next = try await harvest(seed: seed, mode: mode, handshakeTries: 2)
@@ -1780,7 +1704,7 @@ final class AutomationEngine {
     /// persistem, disponibilidade/proof/progresso NÃO.
     private func gatherSeedPool() -> [GatherSeed] {
         var result = Self.gatherSeeds
-        guard firstResourceSnapshotSeen else { return result }
+        guard resourceSnapshotRegion == "eldergrove" else { return result }
 
         var known = Set(result.map(\.signature))
         for entry in gatherKnowledge.catalogEntries(region: "eldergrove") {
@@ -1814,7 +1738,7 @@ final class AutomationEngine {
     }
 
     private func persistedSeedCount(for mode: ActivityMode? = nil) -> Int {
-        guard firstResourceSnapshotSeen else { return 0 }
+        guard resourceSnapshotRegion == "eldergrove" else { return 0 }
         return gatherKnowledge.catalogEntries(region: "eldergrove").filter { entry in
             let entryKeys = Set(entry.resourceKeys)
             if Self.gatherSeeds.contains(where: { $0.kind == entry.kind && !Set($0.keys).isDisjoint(with: entryKeys) }) { return false }
@@ -1903,10 +1827,10 @@ final class AutomationEngine {
         }
     }
 
-    /// Used only by the short transactional World Presence owned by AppStore.
-    /// It reuses the same proven movement + backpack persistence path used by
-    /// Fishing/BANK-FIRST, then confirms the tool is materially carried before
-    /// the definitive ElderGrove Presence is allowed to start.
+    /// Executed by the definitive session engine when its single Presence was
+    /// bootstrapped in World. It reuses the proven movement + backpack path,
+    /// confirms the tool, and leaves World→ElderGrove to runGather on this same
+    /// transport.
     @discardableResult
     func prepareGatherToolFromWorld(for mode: ActivityMode) async throws -> Int {
         guard mode == .tree || mode == .stone || mode == .coal,
@@ -1948,9 +1872,9 @@ final class AutomationEngine {
             return
         }
 
-        // RC3.5: Gathering nunca volta ElderGrove→World para buscar ferramenta.
-        // O AppStore deve materializar Axe/Pickaxe em uma Presence temporária
-        // de World antes de criar esta engine definitiva.
+        // RC3.6: Gathering nunca volta ElderGrove→World para buscar ferramenta.
+        // Quando a ferramenta estava no banco, esta mesma engine já a trouxe em
+        // World antes de iniciar o hot path de Gathering.
         if mode == .tree || mode == .stone || mode == .coal {
             throw EngineError.gatherLoadoutNotReady(name)
         }
