@@ -556,11 +556,29 @@ final class RealtimeProtocolTests: XCTestCase {
         ))
     }
 
-    func testGatherTimingAndHealthPoliciesBoundBackgroundRecovery() {
+    func testGatherTimingPolicyStillBoundsLateBackgroundFrames() {
         XCTAssertEqual(GatherTimingPolicy.maxFrameLatenessMS, 220)
         XCTAssertEqual(GatherTimingPolicy.eventGraceMS, 420)
-        XCTAssertEqual(GatherHealthPolicy.recoveriesBeforeTransportResync, 2)
-        XCTAssertEqual(GatherHealthPolicy.noSuccessWindowMS, 25_000, accuracy: 0.001)
+    }
+
+    @MainActor
+    func testGatherPreflightUsesOneWorldPresenceWhenToolIsInBank() {
+        let bootstrap = AutomationEngine.bootstrapForRun(
+            for: .tree,
+            gatherDisposition: .needsWorld(tool: "tool_axe")
+        )
+        XCTAssertEqual(bootstrap.region, "world")
+        XCTAssertEqual(bootstrap.position.x, 22.5, accuracy: 0.001)
+        XCTAssertEqual(bootstrap.position.z, -3.5, accuracy: 0.001)
+    }
+
+    @MainActor
+    func testGatherPreflightConnectsDirectlyToElderGroveWhenToolIsCarried() {
+        let bootstrap = AutomationEngine.bootstrapForRun(
+            for: .stone,
+            gatherDisposition: .ready
+        )
+        XCTAssertEqual(bootstrap.region, "eldergrove")
     }
 
     func testGatherKnowledgeExplicitFlushPersistsDebouncedChanges() throws {
