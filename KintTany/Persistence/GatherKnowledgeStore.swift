@@ -1,4 +1,5 @@
 import Foundation
+import Dispatch
 
 struct GatherCatalogRecord: Codable, Equatable {
     let region: String
@@ -62,6 +63,13 @@ final class GatherKnowledgeStore {
     private var catalog = CatalogDocument()
     private var positions = PositionDocument()
 
+    // RC3.5: mutations stay synchronous/in-memory, but JSON encoding + atomic
+    // writes are debounced off the realtime hot path. A final synchronous flush
+    // happens when the gather session/store ends so cross-session persistence is
+    // preserved without blocking every FELLED/position update.
+    private let ioQueue = DispatchQueue(label: "com.joaopedro.kinttany.gather-knowledge-io", qos: .utility)
+    private var pendingFlush: DispatchWorkItem?
+
     init(
         directoryURL: URL? = nil,
         maxCatalogEntries: Int = 4_096,
@@ -82,6 +90,10 @@ final class GatherKnowledgeStore {
         try? FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
         load()
         prune(save: false)
+    }
+
+    deinit {
+        flush()
     }
 
     static func normalizeKeys(_ values: [String]) -> [String] {
@@ -226,11 +238,11 @@ final class GatherKnowledgeStore {
                 ry: newestPosition.ry,
                 at: newestPosition.at
             )
-            savePositions()
+            scheduleFlush()
         }
 
         pruneCatalog(nowMS: nowMS)
-        saveCatalog()
+        scheduleFlush()
         return newestOld == nil ? .added : (metadataChanged ? .updated : .refreshed)
     }
 
@@ -277,17 +289,14 @@ final class GatherKnowledgeStore {
         if positions.entries[id] == next { return false }
         positions.entries[id] = next
         prunePositions(nowMS: nowMS)
-        savePositions()
+        scheduleFlush()
         return true
     }
 
     func prune(save: Bool = true, nowMS: Double = GatherKnowledgeStore.nowMS) {
         pruneCatalog(nowMS: nowMS)
         prunePositions(nowMS: nowMS)
-        if save {
-            saveCatalog()
-            savePositions()
-        }
+        if save { scheduleFlush() }
     }
 
     private func load() {
@@ -318,15 +327,34 @@ final class GatherKnowledgeStore {
         positions.entries = Dictionary(uniqueKeysWithValues: survivors.map { ($0.key, $0.value) })
     }
 
-    private func saveCatalog() {
-        save(catalog, to: catalogURL)
+    func flush() {
+        pendingFlush?.cancel()
+        pendingFlush = nil
+        let catalogSnapshot = catalog
+        let positionSnapshot = positions
+        let catalogURL = self.catalogURL
+        let positionURL = self.positionURL
+        ioQueue.sync {
+            Self.saveSnapshot(catalogSnapshot, to: catalogURL)
+            Self.saveSnapshot(positionSnapshot, to: positionURL)
+        }
     }
 
-    private func savePositions() {
-        save(positions, to: positionURL)
+    private func scheduleFlush(delay: TimeInterval = 1.5) {
+        pendingFlush?.cancel()
+        let catalogSnapshot = catalog
+        let positionSnapshot = positions
+        let catalogURL = self.catalogURL
+        let positionURL = self.positionURL
+        let item = DispatchWorkItem {
+            Self.saveSnapshot(catalogSnapshot, to: catalogURL)
+            Self.saveSnapshot(positionSnapshot, to: positionURL)
+        }
+        pendingFlush = item
+        ioQueue.asyncAfter(deadline: .now() + delay, execute: item)
     }
 
-    private func save<T: Encodable>(_ value: T, to url: URL) {
+    private static func saveSnapshot<T: Encodable>(_ value: T, to url: URL) {
         let encoder = JSONEncoder()
         encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
         guard let data = try? encoder.encode(value) else { return }
