@@ -36,6 +36,26 @@ struct FishingNumberingPolicy {
     }
 }
 
+struct ActivityToolPolicy {
+    static func requiredTool(for mode: ActivityMode) -> String? {
+        switch mode {
+        case .tree: return "tool_axe"
+        case .coal, .stone: return "tool_pickaxe"
+        case .fishing: return "tool_fishing_rod"
+        case .chicken, .zombie, .dragon: return nil
+        }
+    }
+
+    static func displayName(_ type: String) -> String {
+        switch type {
+        case "tool_axe": return "Axe"
+        case "tool_pickaxe": return "Pickaxe"
+        case "tool_fishing_rod": return "Fishing Rod"
+        default: return type
+        }
+    }
+}
+
 struct CombatBankFirstPolicy {
     // RC3.2: o BANK-FIRST não é mais limitado à allowlist histórica de seis
     // recursos. Todo item core materializado em invSlots pode ser protegido,
@@ -125,6 +145,103 @@ struct BankSlotAllocator {
             let raw = bank[index]
             return raw is NSNull || !(raw is [String: Any])
         }
+    }
+}
+
+struct InventoryLoadoutAllocator {
+    static func carriedCount(type: String, hotbar: [Any], inventory: [Any]) -> Int {
+        func count(_ slots: [Any]) -> Int {
+            slots.reduce(0) { partial, raw in
+                guard let slot = raw as? [String: Any], slot["t"] as? String == type else { return partial }
+                return partial + CombatBankFirstPolicy.slotQuantity(slot)
+            }
+        }
+        return count(hotbar) + count(inventory)
+    }
+
+    /// Move apenas do bankSlots para hotbar/invSlots usando estruturas já
+    /// documentadas pelo save-backpack. Retorna a quantidade realmente retirada.
+    /// Itens com metadata são indivisíveis; stacks simples podem ser parciais.
+    static func withdraw(
+        type: String,
+        quantity targetRaw: Int,
+        preferHotbar: Bool,
+        hotbar: inout [Any],
+        inventory: inout [Any],
+        bank: inout [Any]
+    ) -> Int {
+        let target = max(1, targetRaw)
+        let before = carriedCount(type: type, hotbar: hotbar, inventory: inventory)
+        guard before < target else { return 0 }
+        var need = target - before
+        var movedTotal = 0
+
+        func placeSimple(quantity: Int, in slots: inout [Any]) -> Int {
+            var left = max(0, quantity)
+            guard left > 0 else { return 0 }
+            for index in slots.indices where left > 0 {
+                guard var slot = slots[index] as? [String: Any],
+                      slot["t"] as? String == type,
+                      CombatBankFirstPolicy.isSimpleStack(slot)
+                else { continue }
+                let current = max(0, RealtimeProtocol.int(slot["n"]) ?? 0)
+                let capacity = max(0, CombatBankFirstPolicy.maxStackCount - current)
+                guard capacity > 0 else { continue }
+                let moved = min(left, capacity)
+                slot["n"] = current + moved
+                slots[index] = slot
+                left -= moved
+            }
+            while left > 0 {
+                guard let empty = slots.firstIndex(where: { $0 is NSNull || !($0 is [String: Any]) }) else { break }
+                let moved = min(left, CombatBankFirstPolicy.maxStackCount)
+                slots[empty] = ["t": type, "n": moved]
+                left -= moved
+            }
+            return quantity - left
+        }
+
+        func placeMetadata(_ source: [String: Any], in slots: inout [Any]) -> Bool {
+            guard let empty = slots.firstIndex(where: { $0 is NSNull || !($0 is [String: Any]) }) else { return false }
+            slots[empty] = source
+            return true
+        }
+
+        for index in bank.indices where need > 0 {
+            guard var slot = bank[index] as? [String: Any], slot["t"] as? String == type else { continue }
+            let available = CombatBankFirstPolicy.slotQuantity(slot)
+            guard available > 0 else { continue }
+
+            if CombatBankFirstPolicy.isSimpleStack(slot) {
+                let take = min(need, available)
+                var placed = 0
+                if preferHotbar { placed += placeSimple(quantity: take - placed, in: &hotbar) }
+                if placed < take { placed += placeSimple(quantity: take - placed, in: &inventory) }
+                if !preferHotbar, placed < take { placed += placeSimple(quantity: take - placed, in: &hotbar) }
+                guard placed > 0 else { break }
+                let left = available - placed
+                if left > 0 {
+                    slot["n"] = left
+                    bank[index] = slot
+                } else {
+                    bank[index] = NSNull()
+                }
+                need -= placed
+                movedTotal += placed
+            } else {
+                var placed = false
+                if preferHotbar { placed = placeMetadata(slot, in: &hotbar) }
+                if !placed { placed = placeMetadata(slot, in: &inventory) }
+                if !preferHotbar && !placed { placed = placeMetadata(slot, in: &hotbar) }
+                guard placed else { break }
+                bank[index] = NSNull()
+                let amount = available
+                need = max(0, need - amount)
+                movedTotal += amount
+            }
+        }
+
+        return movedTotal
     }
 }
 
@@ -237,6 +354,10 @@ final class AutomationEngine {
     private var lastFishSpotSignature = ""
     private var fishingStats = FishingSessionStats()
     private var lastFishingInventory = FishingInventorySnapshot()
+    /// Depois de fish_action_stale, não reutilize a mesma geração antes de um
+    /// novo snapshot autoritativo de spots. Isso evita martelar imediatamente a
+    /// geração que o servidor acabou de rejeitar.
+    private var fishStaleGenerationSerial: [String: Int] = [:]
 
     private var chickenCollectionPath: String?
     private var chickens: [Int: LiveMob] = [:]
@@ -713,8 +834,10 @@ final class AutomationEngine {
         try await sendPosition(moving: false, action: action)
     }
 
-    private func walk(to target: Position, maxSeconds: Double = 35) async throws {
-        reporter(.state(.moving, "Movendo até o alvo"))
+    private func walk(to target: Position, maxSeconds: Double = 35, status: String? = nil) async throws {
+        if let status, !status.isEmpty {
+            reporter(.state(.moving, status))
+        }
         let started = nowMS
         let speed = 3.5
         let dt = 0.15
@@ -780,6 +903,7 @@ final class AutomationEngine {
             try await setRegion("eldergrove", at: start)
         }
         _ = try await waitForRegion("eldergrove", timeoutMS: 6_000)
+        try await ensureActivityToolLoadout(for: mode)
 
         let hb = Task { [weak self] in await self?.heartbeat() }
         defer { hb.cancel() }
@@ -817,7 +941,7 @@ final class AutomationEngine {
             reporter(.log("🎯 \(mode.displayName) \(seed.targetKey) selecionado"))
 
             let interactionPosition = gatherPositionMemory[seed.signature] ?? seed.position
-            try await walk(to: interactionPosition)
+            try await walk(to: interactionPosition, status: "Indo até \(mode.displayName) \(seed.targetKey)")
             position.ry = interactionPosition.ry
             try await sendPosition(moving: false)
             reporter(.diagnostic("[MOVE] arrived \(seed.targetKey) pos=\(format(position.x)),\(format(position.z)) ry=\(format(position.ry))"))
@@ -934,7 +1058,7 @@ final class AutomationEngine {
                 if hypot(position.x - candidate.x, position.z - candidate.z) < 0.25 { continue }
                 gatherInternalRecoveries += 1
                 reporter(.diagnostic("[GATHER] recovery adjacent \(index + 1)/\(candidates.count) • \(seed.targetKey) • x=\(format(candidate.x)) z=\(format(candidate.z))"))
-                try await walk(to: candidate, maxSeconds: 18)
+                try await walk(to: candidate, maxSeconds: 18, status: "Reposicionando para \(mode.displayName) \(seed.targetKey)")
                 position.ry = candidate.ry
                 try await sendPosition(moving: false)
                 let probe = try await harvest(seed: seed, mode: mode, handshakeTries: 2)
@@ -1432,6 +1556,86 @@ final class AutomationEngine {
         }.count
     }
 
+    // MARK: - Activity loadout preflight
+
+    private func ensureWorldBankAccess(reason: String) async throws {
+        if serverRegion?.lowercased() != "world" || region.lowercased() != "world" {
+            reporter(.state(.syncing, "🌍 Indo ao World • \(reason)"))
+            try await setRegion("world", at: Position(x: 22.5, z: -3.5))
+            guard try await waitForRegion("world", timeoutMS: 5_000) else {
+                throw EngineError.regionNotConfirmed("world")
+            }
+        }
+        let bankPosition = Position(x: -24.0, z: -17.5)
+        if hypot(position.x - bankPosition.x, position.z - bankPosition.z) > 0.8 {
+            try await walk(to: bankPosition, maxSeconds: 35, status: "🏦 Indo ao banco • \(reason)")
+        }
+        try await sleep(450)
+    }
+
+    private func returnToGatherRegionIfNeeded(for mode: ActivityMode) async throws {
+        guard mode == .tree || mode == .stone || mode == .coal else { return }
+        let start = mode == .tree ? Position(x: -6.5, z: -18.5) : Position(x: 22.5, z: -3.5)
+        reporter(.state(.syncing, "🌲 Retornando a Whisperwood"))
+        try await setRegion("eldergrove", at: start)
+        guard try await waitForRegion("eldergrove", timeoutMS: 6_000) else {
+            throw EngineError.regionNotConfirmed("eldergrove")
+        }
+    }
+
+    private func ensureActivityToolLoadout(for mode: ActivityMode) async throws {
+        guard let tool = ActivityToolPolicy.requiredTool(for: mode) else { return }
+        let name = ActivityToolPolicy.displayName(tool)
+        let counts = try await http.itemLocationCounts(type: tool)
+
+        if counts.carried >= 1 {
+            reporter(.log("🧰 Preflight • \(name) carregada ✅"))
+            return
+        }
+        guard counts.bank >= 1 else {
+            throw EngineError.missingRequiredItem(name)
+        }
+
+        reporter(.state(.syncing, "🧰 Buscando \(name) no banco"))
+        try await ensureWorldBankAccess(reason: "buscar \(name)")
+        let result = try await http.ensureCarriedItem(
+            type: tool,
+            quantity: 1,
+            preferHotbar: true
+        )
+        guard result >= 1 else {
+            throw EngineError.missingRequiredItem(name)
+        }
+        reporter(.log("🧰 Preflight • \(name) retirada do banco e carregada ✅"))
+        try await returnToGatherRegionIfNeeded(for: mode)
+    }
+
+    private func ensureFishingBaitLoadout(type: String, goal: Int) async throws {
+        let wanted = max(1, goal)
+        var counts = try await http.itemLocationCounts(type: type)
+        let totalAvailable = counts.carried + counts.bank
+        guard totalAvailable >= wanted else {
+            throw EngineError.insufficientFishingBait(fishingBait.displayName, have: totalAvailable, need: wanted)
+        }
+
+        if counts.carried < wanted {
+            reporter(.state(.syncing, "🪱 Buscando \(fishingBait.displayName) no banco"))
+            try await ensureWorldBankAccess(reason: "buscar \(fishingBait.displayName)")
+            let carried = try await http.ensureCarriedItem(
+                type: type,
+                quantity: wanted,
+                preferHotbar: false
+            )
+            counts = try await http.itemLocationCounts(type: type)
+            guard carried >= wanted || counts.carried >= wanted else {
+                throw EngineError.insufficientFishingBait(fishingBait.displayName, have: counts.carried, need: wanted)
+            }
+            reporter(.log("🪱 Preflight • \(fishingBait.displayName) retirada do banco • \(counts.carried)/\(wanted) carregada ✅"))
+        } else {
+            reporter(.log("🪱 Preflight • \(fishingBait.displayName) \(counts.carried)/\(wanted) carregada ✅"))
+        }
+    }
+
     // MARK: - Fishing
 
     private func runFishing(goal: Int) async throws {
@@ -1447,10 +1651,16 @@ final class AutomationEngine {
         activeFishingAction = nil
         fishingStats = FishingSessionStats()
         lastFishingInventory = FishingInventorySnapshot()
+        fishStaleGenerationSerial.removeAll()
 
         if serverRegion?.lowercased() != "world" {
             try await setRegion("world", at: Position(x: 22.5, z: -3.5))
             _ = try await waitForRegion("world", timeoutMS: 4_000)
+        }
+
+        try await ensureActivityToolLoadout(for: .fishing)
+        if let baitType = fishingBait.confirmedInventoryKey {
+            try await ensureFishingBaitLoadout(type: baitType, goal: goal)
         }
 
         let hb = Task { [weak self] in await self?.heartbeat() }
@@ -1485,7 +1695,7 @@ final class AutomationEngine {
             position = pondEntry
             try await sendPosition(moving: false)
             try await sleep(300)
-            try await walk(to: pondStand, maxSeconds: 15)
+            try await walk(to: pondStand, maxSeconds: 15, status: "Indo para o ponto de pesca")
         } else {
             position = pondStand
             try await sendPosition(moving: false)
@@ -1631,6 +1841,7 @@ final class AutomationEngine {
                         throw EngineError.missingFishingBait(fishingBait.displayName)
                     } else if isFishActionStale(reason) {
                         fishingStats.staleRejects += 1
+                        quarantineFishTarget(target)
                         reporter(.failure("Peixe #\(fishNumber) • \(targetLabel) • fish_action_stale"))
                         reporter(.log("⚠️ fish_action_stale #\(fishingStats.staleRejects) • conferindo inventário e ressincronizando Pond"))
                         await verifyFishingInventoryAfterStale()
@@ -1665,6 +1876,7 @@ final class AutomationEngine {
                     throw EngineError.missingFishingBait(fishingBait.displayName)
                 } else if isFishActionStale(reason) {
                     fishingStats.staleRejects += 1
+                    quarantineFishTarget(target)
                     reporter(.failure("Peixe #\(fishNumber) • \(targetLabel) • confirmação falhou: fish_action_stale"))
                     reporter(.log("⚠️ fish_action_stale #\(fishingStats.staleRejects) • conferindo inventário e aguardando novo estado do spot"))
                     await verifyFishingInventoryAfterStale()
@@ -1738,8 +1950,13 @@ final class AutomationEngine {
     }
 
     private func fishingResourceCount(_ backpack: [String: Any], key: String) -> Int {
-        if let flat = RealtimeProtocol.int(backpack[key]) { return max(0, flat) }
-        return max(0, slotCounts(backpack["invSlots"])[key] ?? 0)
+        let flat = max(0, RealtimeProtocol.int(backpack[key]) ?? 0)
+        let inv = max(0, slotCounts(backpack["invSlots"])[key] ?? 0)
+        let hotbar = max(0, slotCounts(backpack["hotbar"])[key] ?? 0)
+        // Baits não fazem parte dos 13 counters enviados em `resources` pela
+        // baseline v5.2. Portanto um flat 0 não pode esconder bait recém-retirada
+        // do banco e já confirmada nos slots.
+        return max(flat, inv + hotbar)
     }
 
     private func fishingXP(from object: [String: Any]) -> Int? {
@@ -1790,12 +2007,26 @@ final class AutomationEngine {
         }
     }
 
+    private func fishGenerationKey(slot: Int, generation: Int) -> String {
+        "\(slot):\(generation)"
+    }
+
+    private func quarantineFishTarget(_ target: FishTarget) {
+        let key = fishGenerationKey(slot: target.slot, generation: target.generation)
+        fishStaleGenerationSerial[key] = fishSnapshotSerial
+        reporter(.diagnostic("[FISH] geração em quarentena após stale • slot=#\(target.slot) gen=\(target.generation) • aguardando novo fish_spots/moved"))
+    }
+
     private func selectFishTarget() -> FishTarget? {
         let playerCol = Int(round(position.x + 19.5))
         let playerRow = Int(round(position.z + 19.5))
         let minTTL = FishingRecoveryPolicy.minStartTTLMS
         var candidates: [FishTarget] = []
         for spot in fishSpots.values where remainingMS(for: spot) >= minTTL {
+            let key = fishGenerationKey(slot: spot.slot, generation: spot.generation)
+            if let staleSerial = fishStaleGenerationSerial[key], fishSnapshotSerial <= staleSerial {
+                continue
+            }
             for (fc, fr) in [(spot.c, spot.r), (spot.c + 1, spot.r), (spot.c, spot.r + 1), (spot.c + 1, spot.r + 1)] {
                 let dist = hypot(Double(fc - playerCol), Double(fr - playerRow))
                 if dist <= 6.5 {
@@ -1804,7 +2035,7 @@ final class AutomationEngine {
             }
         }
         return candidates.sorted { a, b in
-            if abs(a.ttl - b.ttl) > 10_000 { return a.ttl > b.ttl }
+            if abs(a.ttl - b.ttl) > FishingRecoveryPolicy.ttlPriorityDifferenceMS { return a.ttl > b.ttl }
             return a.distance < b.distance
         }.first
     }
@@ -1837,7 +2068,7 @@ final class AutomationEngine {
         }
         if chickens.isEmpty {
             reporter(.log("🔎 Nenhuma galinha próxima; indo ao centro de Whisperwood"))
-            try await walk(to: Position(x: 0, z: 0), maxSeconds: 20)
+            try await walk(to: Position(x: 0, z: 0), maxSeconds: 20, status: "Indo procurar galinhas no centro")
         }
 
         while successes < goal {
@@ -2462,7 +2693,7 @@ final class AutomationEngine {
         if let step = safeWildStepAway(from: killPosition) {
             reporter(.diagnostic("[COMBAT] pós-kill disengage → \(format(step.x)),\(format(step.z))"))
             do {
-                try await walk(to: step, maxSeconds: mode == .dragon ? 2.4 : 3.5)
+                try await walk(to: step, maxSeconds: mode == .dragon ? 2.4 : 3.5, status: "Pós-kill • afastando do alvo")
             } catch is CancellationError {
                 throw CancellationError()
             } catch {
@@ -2675,7 +2906,7 @@ final class AutomationEngine {
         }
         let bankPosition = Position(x: -24.0, z: -17.5)
         reporter(.state(.moving, "Protegendo inventário no banco"))
-        try await walk(to: bankPosition, maxSeconds: 35)
+        try await walk(to: bankPosition, maxSeconds: 35, status: "🏦 Indo ao banco • BANK-FIRST")
         try await sleep(600)
         try await performCombatBankFirstSafety()
         if resupplyReason != nil {
@@ -2815,7 +3046,7 @@ final class AutomationEngine {
 
         let bankPosition = Position(x: -24.0, z: -17.5)
         reporter(.state(.moving, "Indo ao banco"))
-        try await walk(to: bankPosition, maxSeconds: 35)
+        try await walk(to: bankPosition, maxSeconds: 35, status: "🏦 Indo ao banco • protegendo itens")
         try await sleep(650)
 
         if !drops.isEmpty {
@@ -2903,7 +3134,7 @@ final class AutomationEngine {
     /// Aguarda 10 s desde o último hit confirmado/dano. Novo dano reinicia o
     /// countdown. Isso protege itens antes de Wild→World e antes do socket fechar.
     private func waitForCombatSafetyWindow(reason: String) async throws {
-        reporter(.state(.cooldown, "Aguardando combat timer"))
+        reporter(.state(.cooldown, "Aguardando combat timer • \(reason)"))
         var lastShown = Int.max
 
         while true {
@@ -2968,7 +3199,7 @@ final class AutomationEngine {
         let exitEdge = Position(x: 0.5, z: 24.5)
         if hypot(position.x - exitEdge.x, position.z - exitEdge.z) > 0.8 {
             do {
-                try await walk(to: exitEdge, maxSeconds: 18)
+                try await walk(to: exitEdge, maxSeconds: 18, status: "🚨 Saída de emergência para o World")
             } catch is CancellationError {
                 throw CancellationError()
             } catch {
@@ -3044,7 +3275,7 @@ final class AutomationEngine {
         if hypot(position.x - safeCamp.x, position.z - safeCamp.z) > 0.8 {
             reporter(.state(.moving, "Recuando para área segura"))
             reporter(.log("🏕️ Área segura • motivo=\(reason) • destino 25,47"))
-            try await walk(to: safeCamp, maxSeconds: 35)
+            try await walk(to: safeCamp, maxSeconds: 35, status: "🛡️ Recuando para área segura • \(reason)")
         }
         try await sendPosition(moving: false)
         try await sleep(450)
@@ -3431,7 +3662,7 @@ final class AutomationEngine {
         }
 
         reporter(.state(.moving, "Indo ao portal da Wilderness"))
-        try await walk(to: Position(x: 0.5, z: -30.5), maxSeconds: 25)
+        try await walk(to: Position(x: 0.5, z: -30.5), maxSeconds: 25, status: "🌍 Indo ao portal da Wilderness")
         try await sleep(200)
 
         reporter(.state(.syncing, "Entrando na Wilderness"))
@@ -3451,7 +3682,7 @@ final class AutomationEngine {
         // novamente toda a janela se a posição operacional já está na borda.
         let exitEdge = Position(x: 0.5, z: 24.5)
         if hypot(position.x - exitEdge.x, position.z - exitEdge.z) > 0.8 {
-            try await walk(to: exitEdge, maxSeconds: emergency ? 18 : 35)
+            try await walk(to: exitEdge, maxSeconds: emergency ? 18 : 35, status: emergency ? "🚨 Saída de emergência para o World" : "🌍 Saindo da Wilderness para o World")
         }
 
         let probes = [Position(x: 0.5, z: -29.5), Position(x: 0.5, z: -30.5)]
@@ -3679,7 +3910,7 @@ final class AutomationEngine {
         let ux = len > 0.001 ? dx / len : 1
         let uz = len > 0.001 ? dz / len : 0
         let target = Position(x: mob.position.x + ux * gap, z: mob.position.z + uz * gap)
-        try await walk(to: target)
+        try await walk(to: target, status: "Aproximando da Galinha #\(mob.index)")
         position.ry = atan2(mob.position.x - position.x, mob.position.z - position.z)
         try await sendPosition(moving: false)
         try await sleep(450)
@@ -3691,7 +3922,8 @@ final class AutomationEngine {
         let dz = position.z - mob.position.z
         let len = max(0.001, hypot(dx, dz))
         let target = Position(x: mob.position.x + dx / len * 0.75, z: mob.position.z + dz / len * 0.75)
-        try await walk(to: target, maxSeconds: 30)
+        let label = mob.type == "dragon" ? "Dragão" : (mob.type == "zombie" ? "Zumbi" : mob.type.capitalized)
+        try await walk(to: target, maxSeconds: 30, status: "Aproximando do \(label) #\(mob.index)")
         position.ry = atan2(mob.position.x - position.x, mob.position.z - position.z)
         try await sendPosition(moving: false)
     }
@@ -4004,6 +4236,9 @@ struct FishingRecoveryPolicy {
     static let biteScheduleTimeoutMS: Double = 3_500
     static let betweenCatchMS = 4_800
     static let staleRecoveryMS = 4_500
+    /// Paridade direta com fishing-bot.js v5.2: diferenças >5 s priorizam o
+    /// spot com maior TTL antes da distância.
+    static let ttlPriorityDifferenceMS: Double = 5_000
 
     static func isStale(_ text: String) -> Bool {
         text.range(of: "fish_action_stale", options: [.caseInsensitive, .diacriticInsensitive]) != nil
@@ -4104,6 +4339,11 @@ private struct BackpackState {
     let backpack: [String: Any]
 }
 
+private struct ItemLocationCounts {
+    let carried: Int
+    let bank: Int
+}
+
 private struct BankDepositResult {
     let confirmed: [String: Int]
     let unresolved: [String]
@@ -4118,7 +4358,9 @@ private enum EngineError: LocalizedError {
     case potionRecoveryFailed(String)
     case combatSupplyFailed(String)
     case bankDepositFailed(String)
+    case missingRequiredItem(String)
     case missingFishingBait(String)
+    case insufficientFishingBait(String, have: Int, need: Int)
     case unsupportedFishingBait(String)
 
     var errorDescription: String? {
@@ -4130,7 +4372,9 @@ private enum EngineError: LocalizedError {
         case .potionRecoveryFailed(let detail): return "Recuperação com poções falhou: \(detail)"
         case .combatSupplyFailed(let detail): return "Reposição de combate falhou: \(detail)"
         case .bankDepositFailed(let item): return "Recurso/item não pôde ser confirmado no banco: \(item)"
+        case .missingRequiredItem(let item): return "Item obrigatório não encontrado no inventário/banco: \(item)"
         case .missingFishingBait(let bait): return "Isca selecionada sem estoque: \(bait)"
+        case .insufficientFishingBait(let bait, let have, let need): return "Isca insuficiente: \(bait) \(have)/\(need)"
         case .unsupportedFishingBait(let bait): return "Automação ainda não validada para \(bait)"
         }
     }
@@ -4276,6 +4520,58 @@ private struct KintaraHTTPClient {
             return try await backpackState()
         }
         return state
+    }
+
+    func itemLocationCounts(type: String) async throws -> ItemLocationCounts {
+        let state = try await backpackState()
+        let hotbar = state.backpack["hotbar"] as? [Any] ?? []
+        let inv = state.backpack["invSlots"] as? [Any] ?? []
+        let bank = state.backpack["bankSlots"] as? [Any] ?? []
+        return ItemLocationCounts(
+            carried: InventoryLoadoutAllocator.carriedCount(type: type, hotbar: hotbar, inventory: inv),
+            bank: slotCount(bank, type: type)
+        )
+    }
+
+    /// Garante que um item necessário à próxima atividade esteja carregado.
+    /// Usa o mesmo save-backpack já comprovado para poções/BANK-FIRST; não cria
+    /// item e não altera bags especiais. Ferramentas com metadados são movidas
+    /// como objeto inteiro. Stacks simples (ex.: bait) podem ser retirados
+    /// parcialmente do banco até a quantidade solicitada.
+    @discardableResult
+    func ensureCarriedItem(type: String, quantity targetRaw: Int, preferHotbar: Bool) async throws -> Int {
+        let target = max(1, targetRaw)
+        let state = try await backpackState()
+        var backpack = state.backpack
+        var hotbar = backpack["hotbar"] as? [Any] ?? Array(repeating: NSNull(), count: 6)
+        var inv = backpack["invSlots"] as? [Any] ?? Array(repeating: NSNull(), count: 24)
+        var bank = backpack["bankSlots"] as? [Any] ?? []
+
+        let before = InventoryLoadoutAllocator.carriedCount(type: type, hotbar: hotbar, inventory: inv)
+        if before >= target { return before }
+
+        let moved = InventoryLoadoutAllocator.withdraw(
+            type: type,
+            quantity: target,
+            preferHotbar: preferHotbar,
+            hotbar: &hotbar,
+            inventory: &inv,
+            bank: &bank
+        )
+        guard moved > 0 else { return before }
+
+        backpack["hotbar"] = hotbar
+        backpack["invSlots"] = inv
+        backpack["bankSlots"] = bank
+        if backpack[type] != nil {
+            backpack[type] = max(0, RealtimeProtocol.int(backpack[type]) ?? 0) + moved
+        }
+        _ = try await saveBackpack(backpack, baseSeq: state.stateSeq)
+
+        let fresh = try await backpackState()
+        let freshHotbar = fresh.backpack["hotbar"] as? [Any] ?? []
+        let freshInv = fresh.backpack["invSlots"] as? [Any] ?? []
+        return InventoryLoadoutAllocator.carriedCount(type: type, hotbar: freshHotbar, inventory: freshInv)
     }
 
     func backpackState() async throws -> BackpackState {
