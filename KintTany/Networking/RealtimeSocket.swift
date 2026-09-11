@@ -257,7 +257,12 @@ actor RealtimeSocket {
     }
 
     func send(_ data: Data) async throws {
+        try Task.checkCancellation()
+
         guard !closed, let task else {
+            // Um teardown ordenado pode alcançar este actor depois que a Task
+            // foi cancelada. Isso é encerramento normal, não falha de transporte.
+            if Task.isCancelled { throw CancellationError() }
             trace("[ERROR] Tentativa de envio sem WebSocket conectado")
             throw SocketError.notConnected
         }
@@ -266,6 +271,7 @@ actor RealtimeSocket {
         do {
             try await task.send(.data(data))
         } catch {
+            if Task.isCancelled { throw CancellationError() }
             lastDisconnectReason = error.localizedDescription
             trace("[ERROR] Presence send falhou: \(error.localizedDescription)")
             throw error
