@@ -502,4 +502,23 @@ final class RealtimeProtocolTests: XCTestCase {
         XCTAssertEqual(value, "🏦 Indo ao banco • BANK-FIRST")
     }
 
+    func testFishingCellHealthBlocksAfterTwoFailures() {
+        XCTAssertEqual(FishingRecoveryPolicy.maxFailuresPerCell, 2)
+    }
+
+    func testCombatAckCircuitBreakerThresholdIsFour() {
+        XCTAssertEqual(CombatAckCadence.circuitBreakerThreshold, 4)
+    }
+
+    func testWorldExitUsesThreeProbeCyclesBeforeAuthoritativeReconnect() {
+        XCTAssertEqual(WorldExitPolicy.probeCycles, 3)
+    }
+
+    func testGatherRequiredToolsRemainMappedForPreflight() {
+        XCTAssertEqual(ActivityToolPolicy.requiredTool(for: .tree), "tool_axe")
+        XCTAssertEqual(ActivityToolPolicy.requiredTool(for: .stone), "tool_pickaxe")
+        XCTAssertEqual(ActivityToolPolicy.requiredTool(for: .coal), "tool_pickaxe")
+    }
+
+
 }
