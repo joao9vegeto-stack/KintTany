@@ -53,10 +53,21 @@ struct GatherToolPreflightPolicy {
 }
 
 struct GatherTimingPolicy {
-    /// Background scheduling can coalesce short sleeps. Keep the wire profile,
-    /// but abandon a frame train instead of dumping badly late frames.
-    static let maxFrameLatenessMS = 220
+    /// Preserve the captured browser profile with relative spacing. If iOS
+    /// wakes a frame late in background, the next delay starts from that real
+    /// wake-up: no frame is abandoned and no backlog is sent as a burst.
+    static let treeProfileWindowMS = 500
+    static let minimumTreeFrameGapMS = 35
+    static let mineFrameGapMS = 65
+    static let delayedFrameDiagnosticThresholdMS = 220
+    static let timingDiagnosticCooldownMS: Double = 5_000
     static let eventGraceMS = 420
+
+    static func treeFrameGapMS(frameCount: Int) -> Int {
+        let intervals = max(1, frameCount - 1)
+        let browserGap = (treeProfileWindowMS + intervals - 1) / intervals
+        return max(minimumTreeFrameGapMS, min(90, browserGap))
+    }
 }
 
 struct CombatStateConfirmationPolicy {
@@ -428,6 +439,7 @@ final class AutomationEngine {
     private var gatherPositionMemory: [String: Position] = [:]
     private var gatherInternalRecoveries = 0
     private var gatherProofMisses = 0
+    private var gatherLastTimingDiagnosticAt: Double = 0
     private var gatherResourceSerial = 0
     private let gatherEventGate = RealtimeEventGate()
     private let wildStateEventGate = RealtimeEventGate()
@@ -1100,6 +1112,7 @@ final class AutomationEngine {
 
         gatherInternalRecoveries = 0
         gatherProofMisses = 0
+        gatherLastTimingDiagnosticAt = 0
         gatherRetryPolicy.resetExpired(nowMS: nowMS)
 
         reporter(.state(.searching, "Sincronizando recursos"))
@@ -1193,7 +1206,7 @@ final class AutomationEngine {
                 } else {
                     gatherRetryPolicy.deferAcceptedPartial(signature: seed.signature, nowMS: nowMS)
                     reporter(.state(.recovering, "Continuando ação aceita"))
-                    reporter(.log("🔄 \(mode.displayName) \(seed.targetKey) • progresso aceito h=\(result.h)/\(result.hm) • continuará após resync • nenhuma falha contabilizada"))
+                    reporter(.log("🔄 \(mode.displayName) \(seed.targetKey) • progresso aceito h=\(result.h)/\(result.hm) • continuará em novo ciclo • nenhuma falha contabilizada"))
                 }
                 try await sleep(350)
                 continue
@@ -1302,63 +1315,56 @@ final class AutomationEngine {
             return (Int(parts.first ?? "0") ?? 0, Int(parts.dropFirst().first ?? "0") ?? 0)
         }
 
-        func sendProfile(_ second: Bool, progressive: Bool) async throws -> Bool {
-            let clock = ContinuousClock()
+        func sendProfile(_ second: Bool, progressive: Bool) async throws {
+            var maxSchedulerDelayMS = 0
 
-            func waitForFrame(start: ContinuousClock.Instant, offsetMS: Int) async throws -> Bool {
-                let deadline = start.advanced(by: .milliseconds(offsetMS))
-                if clock.now > deadline.advanced(by: .milliseconds(GatherTimingPolicy.maxFrameLatenessMS)) {
-                    reporter(.diagnostic("[GATHER][TIMING] frame abandonado antes do envio • atraso > \(GatherTimingPolicy.maxFrameLatenessMS)ms"))
-                    return false
-                }
-                try await clock.sleep(until: deadline, tolerance: .milliseconds(5))
-                if clock.now > deadline.advanced(by: .milliseconds(GatherTimingPolicy.maxFrameLatenessMS)) {
-                    reporter(.diagnostic("[GATHER][TIMING] frame abandonado após wake • atraso > \(GatherTimingPolicy.maxFrameLatenessMS)ms"))
-                    return false
-                }
-                return true
+            func waitRelative(_ intendedMS: Int) async throws {
+                let before = nowMS
+                try await sleep(intendedMS)
+                let actualMS = max(0, Int((nowMS - before).rounded()))
+                maxSchedulerDelayMS = max(maxSchedulerDelayMS, max(0, actualMS - intendedMS))
             }
 
             if kind == "tree" {
                 let profile = second ? Self.treeY2 : Self.treeY1
-                let gap = max(35, Int(500.0 / Double(max(1, profile.count - 1))))
-                let started = clock.now
+                let gap = GatherTimingPolicy.treeFrameGapMS(frameCount: profile.count)
                 for (index, delta) in profile.enumerated() {
-                    if index > 0, !(try await waitForFrame(start: started, offsetMS: gap * index)) { return false }
+                    if index > 0 { try await waitRelative(gap) }
                     position.y = 0.25 + delta
                     try await sendPosition(moving: false, action: ["act": "chop", "eq": tool])
                 }
-                if !(try await waitForFrame(start: started, offsetMS: gap * profile.count)) { return false }
             } else {
                 let tile = targetTile()
                 let yProfile = second ? Self.mineY2 : Self.mineY1
                 let mpProfile = second ? Self.mineMP2 : Self.mineMP1
                 let estimatedHM = harvestHM < 99 ? harvestHM : (seed.keys.count <= 1 ? 6 : (seed.keys.count == 2 ? 7 : 10))
-                let started = clock.now
                 if progressive {
                     mineProgress = max(mineProgress, min(1, Double(harvestH) / Double(max(1, estimatedHM))))
                     let next = min(1, Double(harvestH + 1) / Double(max(1, estimatedHM)) + min(0.010, 0.06 / Double(max(1, estimatedHM))))
                     let shapeMax = Self.mineMP1.last ?? 1
                     for index in Self.mineMP1.indices {
-                        if index > 0, !(try await waitForFrame(start: started, offsetMS: 65 * index)) { return false }
+                        if index > 0 { try await waitRelative(GatherTimingPolicy.mineFrameGapMS) }
                         let shape = Self.mineMP1[index] / shapeMax
                         let value = min(1, mineProgress + max(0, next - mineProgress) * shape)
                         position.y = 0.25 + Self.mineY1[index]
                         try await sendPosition(moving: false, action: ["act": "mine", "eq": tool, "mc": tile.0, "mr": tile.1, "mp": value])
                         mineProgress = max(mineProgress, value)
                     }
-                    if !(try await waitForFrame(start: started, offsetMS: 65 * Self.mineMP1.count)) { return false }
                 } else {
                     for index in mpProfile.indices {
-                        if index > 0, !(try await waitForFrame(start: started, offsetMS: 65 * index)) { return false }
+                        if index > 0 { try await waitRelative(GatherTimingPolicy.mineFrameGapMS) }
                         mineProgress = max(mineProgress, mpProfile[index])
                         position.y = 0.25 + yProfile[index % yProfile.count]
                         try await sendPosition(moving: false, action: ["act": "mine", "eq": tool, "mc": tile.0, "mr": tile.1, "mp": mineProgress])
                     }
-                    if !(try await waitForFrame(start: started, offsetMS: 65 * mpProfile.count)) { return false }
                 }
             }
-            return true
+
+            if maxSchedulerDelayMS >= GatherTimingPolicy.delayedFrameDiagnosticThresholdMS,
+               gatherLastTimingDiagnosticAt == 0 || nowMS - gatherLastTimingDiagnosticAt >= GatherTimingPolicy.timingDiagnosticCooldownMS {
+                gatherLastTimingDiagnosticAt = nowMS
+                reporter(.diagnostic("[GATHER][TIMING] scheduler atrasou até \(maxSchedulerDelayMS)ms • perfil preservado com espaçamento relativo • nenhuma rajada enviada"))
+            }
         }
 
         func sendHit(proof: String?) async throws {
@@ -1416,28 +1422,12 @@ final class AutomationEngine {
                 let wearBefore = harvestWearSerial
                 let hBefore = harvestH
 
-                let profileOK: Bool
                 if kind == "rock" {
                     try await sendHit(proof: nil)
-                    profileOK = try await sendProfile(attempt == 2, progressive: false)
+                    try await sendProfile(attempt == 2, progressive: false)
                 } else {
-                    profileOK = try await sendProfile(attempt == 2, progressive: false)
-                    if profileOK { try await sendHit(proof: nil) }
-                }
-
-                if !profileOK {
-                    try? await clearAction()
-                    let accepted = harvestH > 0 || !harvestProof.isEmpty
-                    reporter(.diagnostic("[GATHER][TIMING] perfil abortado por atraso do scheduler • h=\(harvestH)/\(harvestHM)"))
-                    return HarvestResult(
-                        felled: harvestHM < 99 && harvestH >= harvestHM,
-                        h: harvestH,
-                        hm: harvestHM,
-                        loot: harvestLoot,
-                        reason: "perfil realtime atrasado; resync necessário",
-                        accepted: accepted,
-                        proofMiss: !accepted
-                    )
+                    try await sendProfile(attempt == 2, progressive: false)
+                    try await sendHit(proof: nil)
                 }
 
                 reporter(.state(.waitingProof, "Handshake \(attempt)/\(tries)"))
@@ -1486,24 +1476,16 @@ final class AutomationEngine {
             let wearBefore = harvestWearSerial
             let hBefore = harvestH
 
-            let profileOK: Bool
             if kind == "rock" {
                 let gapLeft = 490.0 - (nowMS - lastHitAt)
                 if gapLeft > 0 { try await sleep(Int(gapLeft)) }
                 try await sendHit(proof: proof)
                 damageHits += 1
-                profileOK = try await sendProfile(false, progressive: true)
+                try await sendProfile(false, progressive: true)
             } else {
-                profileOK = try await sendProfile(damageHits % 2 == 1, progressive: false)
-                if profileOK {
-                    try await sendHit(proof: proof)
-                    damageHits += 1
-                }
-            }
-
-            if !profileOK {
-                reporter(.diagnostic("[GATHER][TIMING] ciclo de dano abortado por atraso do scheduler • h=\(harvestH)/\(harvestHM)"))
-                break
+                try await sendProfile(damageHits % 2 == 1, progressive: false)
+                try await sendHit(proof: proof)
+                damageHits += 1
             }
 
             reporter(.state(.waitingResult, "Progresso \(harvestH)/\(harvestHM < 99 ? String(harvestHM) : "?")"))
