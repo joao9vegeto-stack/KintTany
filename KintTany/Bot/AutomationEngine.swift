@@ -11,6 +11,8 @@ enum EngineEvent {
     case fatal(String)
     case hitSent
     case confirmedHit
+    case hitAckTimeout
+    case potionAckTimeout
     case kill
     case player(Position, hp: Int, shield: Int, region: String)
     case world(nodes: Int, mobs: Int, serverRegion: String?)
@@ -35,8 +37,117 @@ struct FishingNumberingPolicy {
 }
 
 struct CombatBankFirstPolicy {
-    // Mesma allowlist do bank.js v5.2.1. Itens especiais continuam fora.
-    static let safeTypes = ["wood", "stone", "coal", "metal", "fish", "cooked_fish_meat"]
+    // RC3.2: o BANK-FIRST não é mais limitado à allowlist histórica de seis
+    // recursos. Todo item core materializado em invSlots pode ser protegido,
+    // exceto o que precisa permanecer carregado para o combate e categorias
+    // conhecidamente especiais/soulbound. Arrays especiais nunca são tocados.
+    static let maxStackCount = 10_000
+    static let combatRequiredTypes: Set<String> = [
+        "wild_sword", "potion_health", "potion_shield", "potion_strength"
+    ]
+    static let protectedPrefixes = ["mount_", "pet_", "cosmetic_", "furniture_"]
+    static let protectedFragments = ["scroll", "soulbound"]
+
+    static func shouldBankFirst(type: String, slot: [String: Any]) -> Bool {
+        let normalized = type.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        guard !normalized.isEmpty else { return false }
+        if combatRequiredTypes.contains(normalized) { return false }
+        if protectedPrefixes.contains(where: { normalized.hasPrefix($0) }) { return false }
+        if protectedFragments.contains(where: { normalized.contains($0) }) { return false }
+        if RealtimeProtocol.bool(slot["soulbound"]) == true || RealtimeProtocol.bool(slot["bound"]) == true { return false }
+        return true
+    }
+
+    static func slotQuantity(_ slot: [String: Any]) -> Int {
+        max(1, RealtimeProtocol.int(slot["n"]) ?? 1)
+    }
+
+    // Só fazemos merge/split automático para stacks simples {t,n}. Itens com
+    // durabilidade/id/metadados são movidos como o objeto inteiro para um slot
+    // vazio, preservando seus campos.
+    static func isSimpleStack(_ slot: [String: Any]) -> Bool {
+        guard RealtimeProtocol.int(slot["n"]) != nil else { return false }
+        return Set(slot.keys).isSubset(of: Set(["t", "n"]))
+    }
+}
+
+struct BankSlotAllocator {
+    static func place(slot source: [String: Any], quantity requested: Int, into bank: inout [Any]) -> Int {
+        guard let type = source["t"] as? String, !type.isEmpty else { return 0 }
+        let sourceQuantity = CombatBankFirstPolicy.slotQuantity(source)
+        let wanted = min(max(0, requested), sourceQuantity)
+        guard wanted > 0 else { return 0 }
+
+        if !CombatBankFirstPolicy.isSimpleStack(source) {
+            // Itens com metadados/durabilidade são indivisíveis aqui. Mova o
+            // objeto completo, sem reconstruí-lo, somente para um slot vazio.
+            guard wanted >= sourceQuantity, let empty = firstEmptyIndex(in: bank) else { return 0 }
+            bank[empty] = source
+            return sourceQuantity
+        }
+
+        var left = wanted
+        while left > 0 {
+            if let index = firstCompatiblePartialStack(type: type, in: bank) {
+                var target = bank[index] as? [String: Any] ?? ["t": type, "n": 0]
+                let current = max(0, RealtimeProtocol.int(target["n"]) ?? 0)
+                let capacity = max(0, CombatBankFirstPolicy.maxStackCount - current)
+                if capacity > 0 {
+                    let moved = min(left, capacity)
+                    target["n"] = current + moved
+                    bank[index] = target
+                    left -= moved
+                    continue
+                }
+            }
+
+            guard let empty = firstEmptyIndex(in: bank) else { break }
+            let moved = min(left, CombatBankFirstPolicy.maxStackCount)
+            bank[empty] = ["t": type, "n": moved]
+            left -= moved
+        }
+        return wanted - left
+    }
+
+    private static func firstCompatiblePartialStack(type: String, in bank: [Any]) -> Int? {
+        bank.indices.first { index in
+            guard let slot = bank[index] as? [String: Any],
+                  slot["t"] as? String == type,
+                  CombatBankFirstPolicy.isSimpleStack(slot)
+            else { return false }
+            let count = max(0, RealtimeProtocol.int(slot["n"]) ?? 0)
+            return count < CombatBankFirstPolicy.maxStackCount
+        }
+    }
+
+    private static func firstEmptyIndex(in bank: [Any]) -> Int? {
+        bank.indices.first { index in
+            let raw = bank[index]
+            return raw is NSNull || !(raw is [String: Any])
+        }
+    }
+}
+
+struct CombatAckCadence {
+    static let baseWildMS: Double = 1_650
+    static let maxWildMS: Double = 2_100
+    static let missIncrementMS: Double = 125
+    static let recoveryDecrementMS: Double = 50
+
+    private(set) var cooldownMS: Double = baseWildMS
+    private(set) var ackStreak = 0
+
+    mutating func record(acknowledged: Bool) {
+        if acknowledged {
+            ackStreak += 1
+            if ackStreak >= 3 {
+                cooldownMS = max(Self.baseWildMS, cooldownMS - Self.recoveryDecrementMS)
+            }
+        } else {
+            ackStreak = 0
+            cooldownMS = min(Self.maxWildMS, cooldownMS + Self.missIncrementMS)
+        }
+    }
 }
 
 struct WildCombatSafetyPolicy {
@@ -157,6 +268,7 @@ final class AutomationEngine {
     private var persistentPotionTransport = false
     private var shieldConfirmFailureStreak = 0
     private var shieldMechanicUnavailable = false
+    private var potionAckTimeoutStreak: [String: Int] = [:]
 
     // MARK: Wilderness combat safety / XP / resupply
     // O timer de combate do jogo é de 10 s. Não há campo autoritativo exposto
@@ -182,6 +294,10 @@ final class AutomationEngine {
     private var successes = 0
     private var safeStopReason: EngineStopReason?
     private var safeStopCompleted = false
+
+    private var emergencyBackgroundExitRequested: Bool {
+        safeStopReason == .backgroundExpiration
+    }
 
     init(
         socket: RealtimeSocket,
@@ -554,13 +670,21 @@ final class AutomationEngine {
     }
 
     private func waitForRegion(_ expected: String, timeoutMS: Int) async throws -> Bool {
+        let expectedLower = expected.lowercased()
         let deadline = nowMS + Double(timeoutMS)
         while nowMS < deadline {
             try Task.checkCancellation()
-            if serverRegion?.lowercased() == expected.lowercased() { return true }
-            if expected == "pond", !fishSpots.isEmpty { return true }
+            if serverRegion?.lowercased() == expectedLower { return true }
+            if expectedLower == "pond", !fishSpots.isEmpty { return true }
             try await sleep(50)
         }
+
+        // Background scheduling may resume this task just after the nominal
+        // deadline even though the receive loop already ingested the ACK.
+        // Always perform one authoritative final read before declaring timeout.
+        try Task.checkCancellation()
+        if serverRegion?.lowercased() == expectedLower { return true }
+        if expectedLower == "pond", !fishSpots.isEmpty { return true }
         return false
     }
 
@@ -1776,6 +1900,14 @@ final class AutomationEngine {
                     try await sleep(25)
                 }
 
+                // Em background o iOS pode coalescer o sleep de 25 ms e devolver
+                // a Task já depois do deadline. Faça uma última leitura do estado
+                // autoritativo antes de declarar timeout para não perder um ACK que
+                // já chegou ao receive-loop enquanto esta Task estava suspensa.
+                if !accepted, ambientHitSerial > before, lastAmbientHitIndex == live.index {
+                    accepted = true
+                }
+
                 if accepted {
                     acceptedHits += 1
                     noAck = 0
@@ -1783,6 +1915,7 @@ final class AutomationEngine {
                     reporter(.state(.acting, "Hit \(swing) confirmado"))
                 } else {
                     noAck += 1
+                    reporter(.hitAckTimeout)
                     reporter(.state(.recovering, "Hit \(swing) sem confirmação"))
                 }
 
@@ -1873,6 +2006,11 @@ final class AutomationEngine {
             reporter(.log("🧪 Reposição necessária antes do combate • \(reason)"))
         }
         try await prepareWorldCombatSession(resupplyReason: initialResupplyReason)
+        if safeStopReason != nil {
+            safeStopCompleted = true
+            reporter(.state(.cancelled, "Encerrado em World seguro"))
+            return
+        }
 
         try await enterWildernessFromWorld()
         try await refreshPotionStock(logSummary: true)
@@ -1986,6 +2124,7 @@ final class AutomationEngine {
             var targetLostDuringRecovery = false
             var targetBecameUnavailable = false
             var safeStopInterruptedTarget = false
+            var ackCadence = CombatAckCadence()
 
             while swing <= 30 {
                 try Task.checkCancellation()
@@ -2107,6 +2246,15 @@ final class AutomationEngine {
                     try await sleep(25)
                 }
 
+                // Mesma proteção aplicada à Galinha: timers do iOS podem voltar
+                // depois do deadline em background. O receive-loop pode já ter
+                // gravado o ACK; faça a leitura final antes de marcar miss.
+                if ack == nil, wildHitSerial > ackBefore, let candidate = lastWildHit, candidate.index == current.index {
+                    ack = candidate
+                }
+
+                ackCadence.record(acknowledged: ack != nil)
+
                 if let ack {
                     acceptedHits += 1
                     reporter(.confirmedHit)
@@ -2121,8 +2269,9 @@ final class AutomationEngine {
                         break
                     }
                 } else {
+                    reporter(.hitAckTimeout)
                     reporter(.state(.recovering, "Hit \(swing) sem confirmação • \(targetName)"))
-                    reporter(.log("⚠️ \(targetName) • Hit \(swing) sem confirmação"))
+                    reporter(.log("⚠️ \(targetName) • Hit \(swing) sem confirmação • próximo intervalo \(Int(ackCadence.cooldownMS))ms"))
                     try await sleep(280)
                 }
 
@@ -2145,7 +2294,7 @@ final class AutomationEngine {
                     break
                 }
 
-                let cadenceLeft = 1_650.0 - (nowMS - sentAt)
+                let cadenceLeft = ackCadence.cooldownMS - (nowMS - sentAt)
                 if cadenceLeft > 0 { try await sleep(Int(cadenceLeft)) }
                 swing += 1
             }
@@ -2155,13 +2304,29 @@ final class AutomationEngine {
                 reporter(.kill)
                 reporter(.success(nil))
 
+                // Expiração do iOS tem prioridade maior que XP/loot/recovery. A
+                // kill já foi confirmada; não gaste a janela restante com trabalho
+                // secundário. Vá direto ao caminho de saída de emergência.
+                if emergencyBackgroundExitRequested {
+                    reporter(.diagnostic("[BG] Kill confirmada durante expiração • XP/loot pós-kill adiados • priorizando World"))
+                    break
+                }
+
                 // Node v5.2.1: sobreviver aos pacotes/danos atrasados vem ANTES
                 // de XP, loot ou seleção do próximo mob. O teste real de Dragon
                 // morreu ~5 s após a kill com HP81/shield0, exatamente esta janela.
                 try await postKillSafety(mode: mode, defeatedMob: target, killPosition: lastTargetPosition)
+                if emergencyBackgroundExitRequested {
+                    reporter(.diagnostic("[BG] Expiração detectada durante pós-kill • pulando XP/loot e saindo imediatamente"))
+                    break
+                }
                 reporter(.state(.cooldown, "\(mode.displayName) \(successes)/\(goal) concluído"))
 
                 let xp = await resolveCombatXPAfterKill(mode: mode, before: targetXPStart)
+                if emergencyBackgroundExitRequested {
+                    reporter(.diagnostic("[BG] Expiração detectada após XP • loot ignorado para priorizar saída"))
+                    break
+                }
                 let xpText: String
                 if let xp {
                     xpText = " • XP +\(xp.gain) • XP sessão +\(xp.sessionGain) • Combat XP \(xp.total)"
@@ -2180,6 +2345,10 @@ final class AutomationEngine {
                 )
 
                 if safeStopReason != nil {
+                    if emergencyBackgroundExitRequested {
+                        reporter(.diagnostic("[BG] Expiração durante coleta de loot • depósito adiado • priorizando World"))
+                        break
+                    }
                     if !drops.bankable.isEmpty {
                         try await combatWorldServiceTrip(
                             drops: drops.bankable,
@@ -2239,7 +2408,8 @@ final class AutomationEngine {
         // Nunca entregue a Presence para o AppStore fechar enquanto ainda existe
         // combat tag. Meta e STOP cooperativo passam pela mesma saída segura.
         if safeStopReason != nil {
-            try await finalizeCombatSessionSafely(mode: mode, reason: "STOP seguro")
+            let reason = emergencyBackgroundExitRequested ? "expiração de background" : "STOP seguro"
+            try await finalizeCombatSessionSafely(mode: mode, reason: reason)
             safeStopCompleted = true
         } else if successes >= goal {
             try await finalizeCombatSessionSafely(mode: mode, reason: "meta concluída")
@@ -2282,6 +2452,7 @@ final class AutomationEngine {
     /// personagem se afasta, observa dano atrasado e recupera em SAFE_CAMP se
     /// necessário. Não cria novos contatos/ataques.
     private func postKillSafety(mode: ActivityMode, defeatedMob: LiveMob, killPosition: Position) async throws {
+        if emergencyBackgroundExitRequested { return }
         let policy = WildCombatSafetyPolicy.policy(for: mode)
         let killedAt = nowMS
         reporter(.state(.recovering, "Pós-kill • estabilizando combate"))
@@ -2300,6 +2471,7 @@ final class AutomationEngine {
         }
 
         guard playerHP > 0 else { throw EngineError.playerDead }
+        if emergencyBackgroundExitRequested { return }
 
         if mode == .dragon {
             // Fast path v5.2: só preserva Strength e evita o recuo longo quando
@@ -2308,6 +2480,7 @@ final class AutomationEngine {
             let quickDeadline = killedAt + 3_200
             while nowMS < quickDeadline {
                 try Task.checkCancellation()
+                if emergencyBackgroundExitRequested { return }
                 guard playerHP > 0 else { throw EngineError.playerDead }
                 let damageAfterKill = lastCombatDamageAt > killedAt
                 let strong = playerHP >= policy.postKillSafeHP
@@ -2322,8 +2495,10 @@ final class AutomationEngine {
                 try await sleep(90)
             }
 
+            if emergencyBackgroundExitRequested { return }
             reporter(.log("🛡️ Pós-Dragão defensivo • recuando ao SAFE_CAMP antes de XP/loot"))
             try await moveToWildSafeCamp(reason: "pós-Dragão")
+            if emergencyBackgroundExitRequested { return }
         }
 
         // Janela mínima/máxima da v5.2.1. Sem um campo de `pending contact` no
@@ -2334,6 +2509,7 @@ final class AutomationEngine {
         let settleDeadline = settleStarted + 3_200
         while nowMS < settleDeadline {
             try Task.checkCancellation()
+            if emergencyBackgroundExitRequested { return }
             guard playerHP > 0 else { throw EngineError.playerDead }
             let quietFor = nowMS - lastCombatDamageAt
             if nowMS >= mustWaitUntil && quietFor >= policy.postKillDamageQuietMS { break }
@@ -2346,10 +2522,12 @@ final class AutomationEngine {
             || effectiveVitals < recoveryFloor
 
         if needsRecovery {
+            if emergencyBackgroundExitRequested { return }
             reporter(.log("🧪 Pós-kill • estabilizando vitais • HP \(playerHP) • shield \(playerShield)"))
             let attempts = mode == .dragon ? 3 : 2
             for index in 0..<attempts {
                 try Task.checkCancellation()
+                if emergencyBackgroundExitRequested { return }
                 guard playerHP > 0 else { throw EngineError.playerDead }
                 do {
                     try await recoverVitals(mode: mode, preFight: true)
@@ -2368,12 +2546,14 @@ final class AutomationEngine {
             let quietDeadline = nowMS + 8_500
             while nowMS < quietDeadline {
                 try Task.checkCancellation()
+                if emergencyBackgroundExitRequested { return }
                 guard playerHP > 0 else { throw EngineError.playerDead }
                 let readyVitals = playerHP >= policy.postKillSafeHP && playerShield >= policy.postKillSafeShield
                 let quietFor = nowMS - lastCombatDamageAt
                 if readyVitals && quietFor >= 3_000 { break }
                 try await sleep(120)
             }
+            if emergencyBackgroundExitRequested { return }
             guard playerHP > 0 else { throw EngineError.playerDead }
             guard playerHP >= policy.postKillSafeHP && playerShield >= policy.postKillSafeShield else {
                 throw EngineError.potionRecoveryFailed("pós-Dragão permaneceu inseguro • HP \(playerHP)/\(policy.postKillSafeHP) • shield \(playerShield)/\(policy.postKillSafeShield)")
@@ -2507,13 +2687,16 @@ final class AutomationEngine {
 
     private func performCombatBankFirstSafety() async throws {
         reporter(.state(.syncing, "BANK-FIRST • protegendo recursos"))
-        let result = try await http.depositAllBankFirstResources(types: CombatBankFirstPolicy.safeTypes)
+        let result = try await http.depositAllBankFirstInventory()
         if result.confirmed.isEmpty && result.unresolved.isEmpty {
-            reporter(.log("🏦 BANK-FIRST • recursos comuns carregados já estão protegidos"))
+            reporter(.log("🏦 BANK-FIRST • itens bancáveis carregados já estão protegidos"))
             return
         }
         for (type, quantity) in result.confirmed.sorted(by: { $0.key < $1.key }) {
             reporter(.log("🏦 BANK-FIRST • \(quantity)x \(prettyItem(type)) → banco ✅"))
+        }
+        for detail in result.diagnostics {
+            reporter(.diagnostic("[BANK] \(detail)"))
         }
         guard result.unresolved.isEmpty else {
             let detail = result.unresolved.sorted().map(prettyItem).joined(separator: ", ")
@@ -2744,6 +2927,11 @@ final class AutomationEngine {
     }
 
     private func finalizeCombatSessionSafely(mode: ActivityMode, reason: String) async throws {
+        if emergencyBackgroundExitRequested {
+            try await finalizeEmergencyBackgroundExit(mode: mode)
+            return
+        }
+
         if region.hasPrefix("wild") || serverRegion?.hasPrefix("wild") == true {
             reporter(.state(.recovering, reason == "meta concluída" ? "Meta concluída • ficando em segurança" : "Saindo do combate com segurança"))
             let elapsed = max(0, nowMS - lastCombatActivityAt)
@@ -2756,6 +2944,42 @@ final class AutomationEngine {
         }
         reporter(.state(.cooldown, "World seguro • pronto para encerrar"))
         reporter(.log("🏠 World confirmado • combate encerrado em área segura • motivo=\(reason)"))
+    }
+
+    /// BGContinuedProcessingTask expiration has a much smaller grace window than
+    /// a user STOP. Do not spend it on shield recovery, XP, loot or bank work.
+    /// Move directly toward the Wild exit while the combat timer elapses, then
+    /// request World with short repeated probes and require server confirmation.
+    private func finalizeEmergencyBackgroundExit(mode: ActivityMode) async throws {
+        if !(region.hasPrefix("wild") || serverRegion?.hasPrefix("wild") == true) {
+            reporter(.state(.cooldown, "World seguro • expiração concluída"))
+            reporter(.log("🏠 Expiração de background • personagem já estava fora da Wilderness"))
+            return
+        }
+
+        reporter(.state(.recovering, "Background expirando • saída imediata para o World"))
+        let elapsed = max(0, nowMS - lastCombatActivityAt)
+        let remaining = Int(ceil(max(0, combatLogoutWindowMS - elapsed) / 1_000))
+        reporter(.log("🚨 Expiração do iOS • \(mode.displayName) • prioridade absoluta=World • combat timer \(remaining)s"))
+        reporter(.diagnostic("[BG] emergency-exit • recovery/XP/loot/reposição ignorados"))
+
+        // Ir direto à borda, sem parada separada no SAFE_CAMP. A caminhada conta
+        // dentro da janela de combate e termina praticamente no mesmo corredor.
+        let exitEdge = Position(x: 0.5, z: 24.5)
+        if hypot(position.x - exitEdge.x, position.z - exitEdge.z) > 0.8 {
+            do {
+                try await walk(to: exitEdge, maxSeconds: 18)
+            } catch is CancellationError {
+                throw CancellationError()
+            } catch {
+                reporter(.diagnostic("[BG] emergency-exit • caminhada à borda não concluiu: \(error.localizedDescription)"))
+            }
+        }
+
+        try await waitForCombatSafetyWindow(reason: "expiração de background")
+        try await exitWildToWorld(reason: "expiração de background", emergency: true)
+        reporter(.state(.cooldown, "World seguro • expiração concluída"))
+        reporter(.log("🏠 World confirmado • expiração do iOS encerrada com saída de emergência"))
     }
 
     private func loadCombatXPBaseline() async {
@@ -2838,6 +3062,10 @@ final class AutomationEngine {
         var usedAny = false
         while nowMS < deadline {
             try Task.checkCancellation()
+            if emergencyBackgroundExitRequested {
+                reporter(.diagnostic("[BG] Recovery de vitais interrompido • saída de emergência tem prioridade"))
+                return
+            }
             guard playerHP > 0 else { throw EngineError.playerDead }
 
             if playerHP >= hpGoal && playerShield >= shieldGoal {
@@ -3031,6 +3259,7 @@ final class AutomationEngine {
         var ack: PotionDrinkAck?
         while nowMS < deadline {
             try Task.checkCancellation()
+            if emergencyBackgroundExitRequested { break }
             if let candidate = lastDrinkAck, candidate.seq == seq {
                 ack = candidate
                 break
@@ -3038,15 +3267,28 @@ final class AutomationEngine {
             try await sleep(25)
         }
 
+        // Mesmo princípio dos hits: se o scheduler devolveu a Task depois do
+        // deadline, o receive-loop pode já ter armazenado o drink_ack.
+        if ack == nil, let candidate = lastDrinkAck, candidate.seq == seq {
+            ack = candidate
+        }
+
         equipment = previousEquipment
         try? await sendPosition(moving: false)
 
+        if emergencyBackgroundExitRequested {
+            reporter(.diagnostic("[BG] Consumo de poção interrompido por expiração • nenhuma tentativa HTTP adicional será feita"))
+            return false
+        }
+
         if let ack, ack.ok {
+            potionAckTimeoutStreak[type] = 0
             decrementPotionStock(type)
             return true
         }
 
         if let ack, ack.error == "not_carried" {
+            potionAckTimeoutStreak[type] = 0
             try await refreshPotionStock(logSummary: false)
             if (potionPersistentCounts[type] ?? 0) > 0 {
                 persistentPotionTransport = true
@@ -3059,10 +3301,31 @@ final class AutomationEngine {
         // ACK pode se perder depois de o servidor já aceitar a dose. Compare /me
         // antes de arriscar um fallback que consumiria duas poções.
         let before = currentPotionStock(type)
+        if ack == nil {
+            reporter(.potionAckTimeout)
+            potionAckTimeoutStreak[type, default: 0] += 1
+        } else {
+            potionAckTimeoutStreak[type] = 0
+        }
+
         try? await refreshPotionStock(logSummary: false)
         if currentPotionStock(type) < before || (potionPersistentCounts[type] ?? before) < before {
+            potionAckTimeoutStreak[type] = 0
             reporter(.diagnostic("[POTION] ACK ausente, mas /me confirmou consumo de \(type)"))
             return true
+        }
+
+        // Duas janelas Presence consecutivas sem ACK e /me confirmando que nada
+        // foi consumido são evidência suficiente de transporte instável. Como o
+        // estado persistente acabou de confirmar ausência de consumo, o fallback
+        // HTTP não duplica a dose. Mantém-se neste modo durante a conexão atual.
+        if ack == nil, (potionAckTimeoutStreak[type] ?? 0) >= 2, (potionPersistentCounts[type] ?? 0) > 0 {
+            persistentPotionTransport = true
+            reporter(.diagnostic("[POTION] 2 timeouts de drink_ack para \(type) com /me inalterado • transporte persistente ativado"))
+            reporter(.log("🔁 \(prettyItem(type)) • Presence instável; usando consumo persistente confirmado pelo servidor"))
+            let consumed = try await consumePotionHTTP(type)
+            if consumed { potionAckTimeoutStreak[type] = 0 }
+            return consumed
         }
 
         reporter(.log("⚠️ \(prettyItem(type)) não teve consumo confirmado\(ack?.error.map { " • \($0)" } ?? "")"))
@@ -3076,6 +3339,7 @@ final class AutomationEngine {
                 reporter(.log("⚠️ \(prettyItem(type)) recusada pelo endpoint persistente"))
                 return false
             }
+            potionAckTimeoutStreak[type] = 0
             decrementPotionStock(type)
             if let bp = response["backpack"] as? [String: Any] {
                 potionPersistentCounts[type] = max(0, RealtimeProtocol.int(bp[type]) ?? (potionPersistentCounts[type] ?? 0))
@@ -3089,8 +3353,10 @@ final class AutomationEngine {
 
     private func driveHealthPotionTicks(goal: Int) async throws {
         try await sleep(1_250)
+        if emergencyBackgroundExitRequested { return }
         for _ in 0..<10 {
             try Task.checkCancellation()
+            if emergencyBackgroundExitRequested { return }
             guard playerHP > 0 else { throw EngineError.playerDead }
             if playerHP >= goal || playerHP >= 100 { break }
             let before = playerHP
@@ -3102,6 +3368,7 @@ final class AutomationEngine {
             let deadline = nowMS + 1_100
             while nowMS < deadline, playerHP <= before {
                 try Task.checkCancellation()
+                if emergencyBackgroundExitRequested { return }
                 try await sleep(60)
             }
             reporter(.log("❤️ Tick de vida • \(before) → \(playerHP)\(playerHP <= before ? " (sem confirmação)" : "")"))
@@ -3111,13 +3378,16 @@ final class AutomationEngine {
 
     private func driveShieldPotionTicks(goal: Int, before initialShield: Int) async throws {
         try await sleep(1_800)
+        if emergencyBackgroundExitRequested { return }
         shieldPotionSeq += 1
         try await sendPosition(moving: false, action: ["sps": shieldPotionSeq])
         reporter(.diagnostic("[POTION] Shield SPS=\(shieldPotionSeq) enviado"))
         try await sleep(1_000)
+        if emergencyBackgroundExitRequested { return }
 
         for _ in 0..<5 {
             try Task.checkCancellation()
+            if emergencyBackgroundExitRequested { return }
             if playerShield >= goal || playerShield >= 100 { break }
             let before = playerShield
             let proposed = min(100, before + 10)
@@ -3128,6 +3398,7 @@ final class AutomationEngine {
             let deadline = nowMS + 1_100
             while nowMS < deadline, playerShield <= before {
                 try Task.checkCancellation()
+                if emergencyBackgroundExitRequested { return }
                 try await sleep(60)
             }
             reporter(.log("🛡️ Tick de escudo • \(before) → \(playerShield)\(playerShield <= before ? " (sem confirmação)" : "")"))
@@ -3171,23 +3442,39 @@ final class AutomationEngine {
         reporter(.log("✅ Wilderness confirmada via \(lastRegionConfirmationSource ?? "servidor")"))
     }
 
-    private func exitWildToWorld(reason: String) async throws {
-        reporter(.state(.moving, "Saindo da Wilderness para o World"))
+    private func exitWildToWorld(reason: String, emergency: Bool = false) async throws {
+        reporter(.state(.moving, emergency ? "Saída de emergência para o World" : "Saindo da Wilderness para o World"))
         reporter(.log("🌍 Saída segura da Wilderness • motivo=\(reason)"))
 
         // v5.2: primeiro alcança a borda norte do Wild (tile 25,49 = 0.5,24.5).
-        try await walk(to: Position(x: 0.5, z: 24.5), maxSeconds: 35)
+        // Na expiração a função chamadora já iniciou esse deslocamento; não gaste
+        // novamente toda a janela se a posição operacional já está na borda.
+        let exitEdge = Position(x: 0.5, z: 24.5)
+        if hypot(position.x - exitEdge.x, position.z - exitEdge.z) > 0.8 {
+            try await walk(to: exitEdge, maxSeconds: emergency ? 18 : 35)
+        }
 
         let probes = [Position(x: 0.5, z: -29.5), Position(x: 0.5, z: -30.5)]
+        let attempts = emergency ? 3 : 1
+        let probeTimeout = emergency ? 2_500 : 5_000
         var confirmed = false
-        for probe in probes {
-            try await setRegion("world", at: probe)
-            if try await waitForRegion("world", timeoutMS: 5_000) {
-                confirmed = true
-                break
+
+        for attempt in 1...attempts where !confirmed {
+            for probe in probes {
+                try Task.checkCancellation()
+                try await setRegion("world", at: probe)
+                if try await waitForRegion("world", timeoutMS: probeTimeout) {
+                    confirmed = true
+                    break
+                }
+                region = "wild"
             }
-            region = "wild"
+            if !confirmed, attempt < attempts {
+                reporter(.diagnostic("[BG] World ainda não confirmou • probe de emergência \(attempt)/\(attempts)"))
+                try await sleep(250)
+            }
         }
+
         guard confirmed else { throw EngineError.regionNotConfirmed("world") }
         wildMobs.removeAll()
         lastWildAvailabilitySignature = ""
@@ -3820,6 +4107,7 @@ private struct BackpackState {
 private struct BankDepositResult {
     let confirmed: [String: Int]
     let unresolved: [String]
+    let diagnostics: [String]
 }
 
 private enum EngineError: LocalizedError {
@@ -3841,7 +4129,7 @@ private enum EngineError: LocalizedError {
         case .unsafeVitals: return "Combate interrompido por HP/Shield baixos"
         case .potionRecoveryFailed(let detail): return "Recuperação com poções falhou: \(detail)"
         case .combatSupplyFailed(let detail): return "Reposição de combate falhou: \(detail)"
-        case .bankDepositFailed(let item): return "Drop não pôde ser confirmado no banco: \(item)"
+        case .bankDepositFailed(let item): return "Recurso/item não pôde ser confirmado no banco: \(item)"
         case .missingFishingBait(let bait): return "Isca selecionada sem estoque: \(bait)"
         case .unsupportedFishingBait(let bait): return "Automação ainda não validada para \(bait)"
         }
@@ -4019,109 +4307,168 @@ private struct KintaraHTTPClient {
         try await post("/api/wild/loot-bag", body: ["bagId": bagID])
     }
 
-    /// BANK-FIRST da baseline v5.2.1. Somente quantidades realmente
-    /// materializadas em invSlots entram no pedido; a função de depósito mantém
-    /// mount/pet/cosmetic/furniture completamente fora do caminho.
-    func depositAllBankFirstResources(types: [String]) async throws -> BankDepositResult {
+    /// RC3.2 BANK-FIRST: protege todo item core materializado em invSlots/hotbar
+    /// que não pertence às categorias especiais e não é necessário durante o
+    /// combate. Mount/pet/cosmetic/furniture vivem em arrays separados e nunca
+    /// são tocados. Potions/wild_sword permanecem carregados.
+    func depositAllBankFirstInventory() async throws -> BankDepositResult {
         let state = try await backpackState()
         var wanted: [String: Int] = [:]
-        for type in types {
-            let quantity = slotCount(state.backpack["invSlots"], type: type)
-            if quantity > 0 { wanted[type] = quantity }
-        }
-        guard !wanted.isEmpty else {
-            return BankDepositResult(confirmed: [:], unresolved: [])
-        }
-        return try await depositIntoBank(wanted)
-    }
 
-    func depositIntoBank(_ wanted: [String: Int]) async throws -> BankDepositResult {
-        let state = try await backpackState()
-        var backpack = state.backpack
-        var inv = backpack["invSlots"] as? [Any] ?? []
-        var bank = backpack["bankSlots"] as? [Any] ?? []
-        var moved: [String: Int] = [:]
-        var unresolved: [String] = []
-
-        func bankIndex(for type: String) -> Int? {
-            bank.firstIndex { raw in
-                guard let slot = raw as? [String: Any] else { return false }
-                return slot["t"] as? String == type
+        for key in ["invSlots", "hotbar"] {
+            guard let slots = state.backpack[key] as? [Any] else { continue }
+            for raw in slots {
+                guard let slot = raw as? [String: Any],
+                      let type = slot["t"] as? String,
+                      CombatBankFirstPolicy.shouldBankFirst(type: type, slot: slot)
+                else { continue }
+                wanted[type, default: 0] += CombatBankFirstPolicy.slotQuantity(slot)
             }
         }
 
-        func emptyBankIndex() -> Int? {
-            bank.firstIndex { raw in
-                if raw is NSNull { return true }
-                return !(raw is [String: Any])
+        guard !wanted.isEmpty else {
+            return BankDepositResult(confirmed: [:], unresolved: [], diagnostics: [])
+        }
+
+        // Um tipo por transação: se um item futuro realmente não for aceito pelo
+        // banco, ele não impede que os demais recursos sejam protegidos e o log
+        // identifica exatamente qual tipo falhou. A Wilderness continua fail-closed
+        // enquanto qualquer item core candidato permanecer sem confirmação.
+        var confirmed: [String: Int] = [:]
+        var unresolved = Set<String>()
+        var diagnostics: [String] = []
+        for (type, quantity) in wanted.sorted(by: { $0.key < $1.key }) {
+            do {
+                let result = try await depositIntoBank([type: quantity], sourceKeys: ["invSlots", "hotbar"])
+                for (key, value) in result.confirmed { confirmed[key, default: 0] += value }
+                unresolved.formUnion(result.unresolved)
+                diagnostics.append(contentsOf: result.diagnostics)
+            } catch {
+                unresolved.insert(type)
+                diagnostics.append("\(type) • transação recusada/indisponível: \(error.localizedDescription)")
+            }
+        }
+        return BankDepositResult(confirmed: confirmed, unresolved: Array(unresolved).sorted(), diagnostics: diagnostics)
+    }
+
+    func depositIntoBank(_ wanted: [String: Int]) async throws -> BankDepositResult {
+        try await depositIntoBank(wanted, sourceKeys: ["invSlots"])
+    }
+
+    private func depositIntoBank(_ wanted: [String: Int], sourceKeys: [String]) async throws -> BankDepositResult {
+        let state = try await backpackState()
+        var backpack = state.backpack
+        var sourceArrays: [String: [Any]] = [:]
+        for key in sourceKeys { sourceArrays[key] = backpack[key] as? [Any] ?? [] }
+        var bank = backpack["bankSlots"] as? [Any] ?? []
+
+        var moved: [String: Int] = [:]
+        var unresolved = Set<String>()
+        var diagnostics: [String] = []
+        var beforeCarried: [String: Int] = [:]
+        var beforeBank: [String: Int] = [:]
+
+        func countInSources(type: String, arrays: [String: [Any]]) -> Int {
+            arrays.values.reduce(0) { partial, slots in
+                partial + slots.reduce(0) { subtotal, raw in
+                    guard let slot = raw as? [String: Any], slot["t"] as? String == type else { return subtotal }
+                    return subtotal + CombatBankFirstPolicy.slotQuantity(slot)
+                }
             }
         }
 
         for (type, requestedRaw) in wanted.sorted(by: { $0.key < $1.key }) {
             let requested = max(0, requestedRaw)
             guard requested > 0 else { continue }
-
-            // Segurança: somente itens materializados em invSlots são considerados
-            // bancáveis. mountSlots/petSlots/cosmeticSlots/furnitureSlots jamais são tocados.
+            beforeCarried[type] = countInSources(type: type, arrays: sourceArrays)
+            beforeBank[type] = slotCount(bank, type: type)
             var remaining = requested
-            for i in inv.indices where remaining > 0 {
-                guard var slot = inv[i] as? [String: Any], slot["t"] as? String == type else { continue }
-                let count = max(0, RealtimeProtocol.int(slot["n"]) ?? 0)
-                guard count > 0 else { continue }
 
-                let amount = min(count, remaining)
-                let destination: Int
-                if let existing = bankIndex(for: type) {
-                    destination = existing
-                } else if let empty = emptyBankIndex() {
-                    destination = empty
-                    bank[destination] = ["t": type, "n": 0]
-                } else {
-                    break
+            for sourceKey in sourceKeys where remaining > 0 {
+                guard var slots = sourceArrays[sourceKey] else { continue }
+
+                for index in slots.indices where remaining > 0 {
+                    guard var slot = slots[index] as? [String: Any],
+                          slot["t"] as? String == type
+                    else { continue }
+
+                    let available = CombatBankFirstPolicy.slotQuantity(slot)
+                    guard available > 0 else { continue }
+                    let requestedFromSlot = min(available, remaining)
+                    let placed = BankSlotAllocator.place(slot: slot, quantity: requestedFromSlot, into: &bank)
+                    guard placed > 0 else { continue }
+
+                    let left = available - placed
+                    if left <= 0 {
+                        slots[index] = NSNull()
+                    } else if CombatBankFirstPolicy.isSimpleStack(slot) {
+                        slot["n"] = left
+                        slots[index] = slot
+                    } else {
+                        // Metadados não são fracionados. Este caminho só deve ocorrer
+                        // para stack simples; se não, mantenha o objeto intacto.
+                        slots[index] = slot
+                        diagnostics.append("\(type): item com metadados não pôde ser fracionado")
+                        continue
+                    }
+
+                    remaining -= placed
+                    moved[type, default: 0] += placed
                 }
-
-                var bankSlot = bank[destination] as? [String: Any] ?? ["t": type, "n": 0]
-                bankSlot["n"] = (RealtimeProtocol.int(bankSlot["n"]) ?? 0) + amount
-                bank[destination] = bankSlot
-
-                let left = count - amount
-                if left > 0 {
-                    slot["n"] = left
-                    inv[i] = slot
-                } else {
-                    inv[i] = NSNull()
-                }
-                remaining -= amount
-                moved[type, default: 0] += amount
+                sourceArrays[sourceKey] = slots
             }
 
-            if remaining > 0 { unresolved.append(type) }
+            if remaining > 0 { unresolved.insert(type) }
             let movedQty = moved[type] ?? 0
             if movedQty > 0, backpack[type] != nil {
                 backpack[type] = max(0, (RealtimeProtocol.int(backpack[type]) ?? 0) - movedQty)
             }
         }
 
-        backpack["invSlots"] = inv
+        for (key, slots) in sourceArrays { backpack[key] = slots }
         backpack["bankSlots"] = bank
+
+        // Se o item atualmente selecionado no hotbar foi protegido, aponte o
+        // índice para um slot ainda existente. Não inventa equipamento nem move
+        // potions/wild_sword; apenas evita índice apontando para null.
+        if sourceKeys.contains("hotbar"), let hotbar = sourceArrays["hotbar"] {
+            let equipped = max(0, RealtimeProtocol.int(backpack["equippedHotbar"]) ?? 0)
+            if equipped >= hotbar.count || hotbar[equipped] is NSNull || !(hotbar[equipped] is [String: Any]) {
+                backpack["equippedHotbar"] = hotbar.indices.first(where: { hotbar[$0] is [String: Any] }) ?? 0
+            }
+        }
+
         if moved.values.reduce(0, +) > 0 {
             _ = try await saveBackpack(backpack, baseSeq: state.stateSeq)
         }
 
         let fresh = try await backpackState()
+        let freshArrays: [String: [Any]] = Dictionary(uniqueKeysWithValues: sourceKeys.map {
+            ($0, fresh.backpack[$0] as? [Any] ?? [])
+        })
         var confirmed: [String: Int] = [:]
-        for (type, expected) in moved {
-            let before = slotCount(state.backpack["bankSlots"], type: type)
-            let after = slotCount(fresh.backpack["bankSlots"], type: type)
-            let increase = max(0, after - before)
-            if increase >= expected {
+
+        for (type, expected) in moved.sorted(by: { $0.key < $1.key }) {
+            let b0 = beforeBank[type] ?? 0
+            let b1 = slotCount(fresh.backpack["bankSlots"], type: type)
+            let c0 = beforeCarried[type] ?? 0
+            let c1 = countInSources(type: type, arrays: freshArrays)
+            let bankIncrease = max(0, b1 - b0)
+            let carriedDecrease = max(0, c0 - c1)
+            diagnostics.append("\(type) • solicitado=\(wanted[type] ?? expected) movido=\(expected) • banco \(b0)→\(b1) • carregado \(c0)→\(c1)")
+
+            if bankIncrease >= expected && carriedDecrease >= expected {
                 confirmed[type] = expected
-            } else if !unresolved.contains(type) {
-                unresolved.append(type)
+            } else {
+                unresolved.insert(type)
             }
         }
 
-        return BankDepositResult(confirmed: confirmed, unresolved: Array(Set(unresolved)))
+        return BankDepositResult(
+            confirmed: confirmed,
+            unresolved: Array(unresolved).sorted(),
+            diagnostics: diagnostics
+        )
     }
 
     private func saveBackpack(_ backpack: [String: Any], baseSeq: Int) async throws -> [String: Any] {
