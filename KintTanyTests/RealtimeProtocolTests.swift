@@ -90,6 +90,7 @@ final class RealtimeProtocolTests: XCTestCase {
         XCTAssertEqual(FishingRecoveryPolicy.biteScheduleTimeoutMS, 3_500)
         XCTAssertEqual(FishingRecoveryPolicy.betweenCatchMS, 4_800)
         XCTAssertEqual(FishingRecoveryPolicy.staleRecoveryMS, 4_500)
+        XCTAssertEqual(FishingRecoveryPolicy.ttlPriorityDifferenceMS, 5_000)
         XCTAssertTrue(FishingRecoveryPolicy.isStale("fish_action_stale"))
         XCTAssertTrue(FishingRecoveryPolicy.isStale("grant failed: FISH_ACTION_STALE"))
         XCTAssertFalse(FishingRecoveryPolicy.isStale("no_bite"))
@@ -429,6 +430,76 @@ final class RealtimeProtocolTests: XCTestCase {
         let now = start.addingTimeInterval(0.1)
         XCTAssertEqual(ActivityRateMeter.perMinute(successes: 1, startedAt: start, now: now), 100.0, accuracy: 0.000001)
         XCTAssertEqual(ActivityRateMeter.formatted(successes: 0, startedAt: start, now: now), "0.00/min")
+    }
+
+
+    func testActivityToolPolicyMapsOnlyGatherAndFishingTools() {
+        XCTAssertEqual(ActivityToolPolicy.requiredTool(for: .tree), "tool_axe")
+        XCTAssertEqual(ActivityToolPolicy.requiredTool(for: .stone), "tool_pickaxe")
+        XCTAssertEqual(ActivityToolPolicy.requiredTool(for: .coal), "tool_pickaxe")
+        XCTAssertEqual(ActivityToolPolicy.requiredTool(for: .fishing), "tool_fishing_rod")
+        XCTAssertNil(ActivityToolPolicy.requiredTool(for: .chicken))
+        XCTAssertNil(ActivityToolPolicy.requiredTool(for: .zombie))
+        XCTAssertNil(ActivityToolPolicy.requiredTool(for: .dragon))
+    }
+
+    func testSessionRateStillUsesOnlyAuthoritativeSuccesses() {
+        let start = Date(timeIntervalSince1970: 1_000)
+        let now = start.addingTimeInterval(120)
+        XCTAssertEqual(ActivityRateMeter.perMinute(successes: 3, startedAt: start, now: now), 1.5, accuracy: 0.0001)
+    }
+
+
+    func testLoadoutAllocatorRestoresFishingRodFromBankIntoHotbar() throws {
+        let rod: [String: Any] = ["t": "tool_fishing_rod", "n": 1, "durability": 71]
+        var hotbar: [Any] = [NSNull(), NSNull(), NSNull(), NSNull(), NSNull(), NSNull()]
+        var inventory: [Any] = Array(repeating: NSNull(), count: 24)
+        var bank: [Any] = [rod, NSNull()]
+
+        let moved = InventoryLoadoutAllocator.withdraw(
+            type: "tool_fishing_rod", quantity: 1, preferHotbar: true,
+            hotbar: &hotbar, inventory: &inventory, bank: &bank
+        )
+
+        XCTAssertEqual(moved, 1)
+        let loaded = try XCTUnwrap(hotbar[0] as? [String: Any])
+        XCTAssertEqual(loaded["t"] as? String, "tool_fishing_rod")
+        XCTAssertEqual(loaded["durability"] as? Int, 71)
+        XCTAssertTrue(bank[0] is NSNull)
+    }
+
+    func testLoadoutAllocatorWithdrawsOnlyGoalBaitFromBank() throws {
+        var hotbar: [Any] = [NSNull(), NSNull(), NSNull(), NSNull(), NSNull(), NSNull()]
+        var inventory: [Any] = Array(repeating: NSNull(), count: 24)
+        var bank: [Any] = [["t": "bait_feather", "n": 20], NSNull()]
+
+        let moved = InventoryLoadoutAllocator.withdraw(
+            type: "bait_feather", quantity: 3, preferHotbar: false,
+            hotbar: &hotbar, inventory: &inventory, bank: &bank
+        )
+
+        XCTAssertEqual(moved, 3)
+        XCTAssertEqual(InventoryLoadoutAllocator.carriedCount(type: "bait_feather", hotbar: hotbar, inventory: inventory), 3)
+        XCTAssertEqual(try XCTUnwrap((bank[0] as? [String: Any])?["n"] as? Int), 17)
+    }
+
+    func testSessionErrorsAreSeparatedFromAttemptFailures() {
+        var stats = ActivityStats()
+        stats.attempts = 26
+        stats.failures = 26
+        stats.sessionErrors = 1
+        XCTAssertEqual(stats.failures, stats.attempts)
+        XCTAssertEqual(stats.sessionErrors, 1)
+    }
+
+    func testContinuedStatusPreservesContextualBankMovement() {
+        let value = ContinuedActivityStatusFormatter.status(
+            mode: .dragon,
+            state: .moving,
+            currentTarget: nil,
+            rawStatus: "🏦 Indo ao banco • BANK-FIRST"
+        )
+        XCTAssertEqual(value, "🏦 Indo ao banco • BANK-FIRST")
     }
 
 }
