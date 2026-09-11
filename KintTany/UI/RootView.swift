@@ -188,9 +188,12 @@ struct RootView: View {
                 Spacer(minLength: 6)
 
                 if mode != nil {
-                    Text("\(app.stats.successes)/\(app.goal)")
-                        .font(.system(size: 18, weight: .black, design: .rounded))
-                        .foregroundStyle(accent)
+                    VStack(alignment: .trailing, spacing: 3) {
+                        Text("\(app.stats.successes)/\(app.goal)")
+                            .font(.system(size: 18, weight: .black, design: .rounded))
+                            .foregroundStyle(accent)
+                        liveRateBadge
+                    }
                 }
             }
 
@@ -255,6 +258,21 @@ struct RootView: View {
                 .stroke(accent.opacity(mode == nil ? 0.12 : 0.28), lineWidth: 1)
         )
         .shadow(color: accent.opacity(mode == nil ? 0 : 0.08), radius: 24, y: 8)
+    }
+
+    private var liveRateBadge: some View {
+        TimelineView(.periodic(from: .now, by: 1.0)) { context in
+            let rateText = app.formattedRatePerMinute(at: context.date)
+            HStack(spacing: 4) {
+                Image(systemName: "bolt.fill")
+                    .font(.system(size: 9, weight: .bold))
+                Text(rateText)
+                    .font(.system(size: 11, weight: .bold, design: .rounded))
+                    .monospacedDigit()
+            }
+            .foregroundStyle(.secondary)
+            .accessibilityLabel("Ritmo \(rateText)")
+        }
     }
 
     private var goalCard: some View {
