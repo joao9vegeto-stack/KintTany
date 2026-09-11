@@ -245,7 +245,14 @@ struct InventoryLoadoutAllocator {
     }
 }
 
+struct WorldExitPolicy {
+    /// Paridade com combat-bot.js v5.2: três ciclos antes de classificar a
+    /// região como incerta e partir para verificação autoritativa por reconnect.
+    static let probeCycles = 3
+}
+
 struct CombatAckCadence {
+    static let circuitBreakerThreshold = 4
     static let baseWildMS: Double = 1_650
     static let maxWildMS: Double = 2_100
     static let missIncrementMS: Double = 125
@@ -354,10 +361,14 @@ final class AutomationEngine {
     private var lastFishSpotSignature = ""
     private var fishingStats = FishingSessionStats()
     private var lastFishingInventory = FishingInventorySnapshot()
-    /// Depois de fish_action_stale, não reutilize a mesma geração antes de um
-    /// novo snapshot autoritativo de spots. Isso evita martelar imediatamente a
-    /// geração que o servidor acabou de rejeitar.
-    private var fishStaleGenerationSerial: [String: Int] = [:]
+    /// RC3.4: saúde de alvo da pesca. Uma célula que repete no_bite/rotação
+    /// não pode ser martelada indefinidamente. Após o limite ela é bloqueada
+    /// pela geração atual; quando todas as células elegíveis de uma geração
+    /// ficam ruins, a geração inteira aguarda um movimento REAL do servidor.
+    private var fishCellFailureStreak: [String: Int] = [:]
+    private var fishBlockedCells = Set<String>()
+    private var fishQuarantinedGenerations = Set<String>()
+    private var fishHealthWaitSerial = -1
 
     private var chickenCollectionPath: String?
     private var chickens: [Int: LiveMob] = [:]
@@ -449,6 +460,24 @@ final class AutomationEngine {
         case .fishing, .zombie, .dragon:
             return PresenceBootstrap(region: "world", position: Position(x: 22.5, z: -3.5))
         }
+    }
+
+    /// RC3.4: Gathering normalmente continua conectando direto em ElderGrove.
+    /// Se a ferramenta obrigatória não estiver carregada, a Presence nasce em
+    /// World para fazer o preflight do banco ANTES da região definitiva.
+    static func bootstrapForRun(for mode: ActivityMode, cookie: String) async -> PresenceBootstrap {
+        let normal = bootstrap(for: mode)
+        guard mode == .tree || mode == .stone || mode == .coal,
+              let tool = ActivityToolPolicy.requiredTool(for: mode)
+        else { return normal }
+
+        do {
+            let counts = try await KintaraHTTPClient(cookie: cookie).itemLocationCounts(type: tool)
+            if counts.carried >= 1 { return normal }
+        } catch {
+            // Sem inventário autoritativo, World é o ponto seguro para o preflight.
+        }
+        return PresenceBootstrap(region: "world", position: Position(x: 22.5, z: -3.5))
     }
 
     func prepareIdentity() async {
@@ -897,13 +926,19 @@ final class AutomationEngine {
     // MARK: - Gathering
 
     private func runGather(mode: ActivityMode, goal: Int) async throws {
+        // RC3.4: ferramenta antes da região definitiva. Se o bootstrap veio em
+        // World porque Axe/Pickaxe estava no banco, retire primeiro e só depois
+        // entre em Whisperwood. Se já estava carregada, continua ElderGrove direto.
+        try await ensureActivityToolLoadout(for: mode)
+
         reporter(.state(.syncing, "Sincronizando Whisperwood"))
         if serverRegion?.lowercased() != "eldergrove" {
             let start = mode == .tree ? Position(x: -6.5, z: -18.5) : Position(x: 22.5, z: -3.5)
             try await setRegion("eldergrove", at: start)
         }
-        _ = try await waitForRegion("eldergrove", timeoutMS: 6_000)
-        try await ensureActivityToolLoadout(for: mode)
+        guard try await waitForRegion("eldergrove", timeoutMS: 6_000) else {
+            throw EngineError.regionNotConfirmed("eldergrove")
+        }
 
         let hb = Task { [weak self] in await self?.heartbeat() }
         defer { hb.cancel() }
@@ -1607,7 +1642,6 @@ final class AutomationEngine {
             throw EngineError.missingRequiredItem(name)
         }
         reporter(.log("🧰 Preflight • \(name) retirada do banco e carregada ✅"))
-        try await returnToGatherRegionIfNeeded(for: mode)
     }
 
     private func ensureFishingBaitLoadout(type: String, goal: Int) async throws {
@@ -1651,7 +1685,10 @@ final class AutomationEngine {
         activeFishingAction = nil
         fishingStats = FishingSessionStats()
         lastFishingInventory = FishingInventorySnapshot()
-        fishStaleGenerationSerial.removeAll()
+        fishCellFailureStreak.removeAll()
+        fishBlockedCells.removeAll()
+        fishQuarantinedGenerations.removeAll()
+        fishHealthWaitSerial = -1
 
         if serverRegion?.lowercased() != "world" {
             try await setRegion("world", at: Position(x: 22.5, z: -3.5))
@@ -1733,9 +1770,17 @@ final class AutomationEngine {
             reporter(.state(.searching, "Procurando spot de pesca"))
             guard let target = selectFishTarget() else {
                 reporter(.target(nil))
-                // Paridade v5.2: enquanto aguarda um snapshot útil, reafirma STAND
-                // e vara sem inventar coordenadas de spot.
+                // Sem alvo saudável, não contabilize novas tentativas. Apenas
+                // ressincronize STAND/vara e aguarde geração realmente nova.
+                if !fishBlockedCells.isEmpty || !fishQuarantinedGenerations.isEmpty {
+                    if fishHealthWaitSerial != fishSnapshotSerial {
+                        fishHealthWaitSerial = fishSnapshotSerial
+                        reporter(.log("🎣 Spots atuais temporariamente descartados • aguardando nova geração autoritativa"))
+                    }
+                    reporter(.state(.recovering, "Pesca • aguardando novo spot válido"))
+                }
                 position = pondStand
+                try? await clearAction()
                 try? await sendPosition(moving: false)
                 try? await equip("tool_fishing_rod")
                 try await sleep(2_500)
@@ -1771,13 +1816,18 @@ final class AutomationEngine {
 
             guard let bite else {
                 try? await clearAction()
-                let changed = fishSnapshotSerial != snapshotBefore
+                let stillSameGeneration = fishTargetStillValid(target, generation: generation)
+                let changed = !stillSameGeneration && fishSnapshotSerial != snapshotBefore
                 let reason = changed ? "spot mudou antes da fisgada" : "sem fisgada (fish_bite não recebido)"
                 if changed { fishingStats.spotChanged += 1 } else { fishingStats.noBite += 1 }
                 reporter(.failure("Peixe #\(fishNumber) • \(targetLabel) • \(reason)"))
+                recordFishTargetFailure(target, reason: reason)
                 try await sleep(650)
                 continue
             }
+
+            // fish_bite autoritativo prova que esta célula está saudável agora.
+            recordFishTargetSuccess(target)
 
             let biteSeconds = String(format: "%.1f", Double(bite.ms) / 1000)
             reporter(.log("🪝 Peixe #\(fishNumber) • fisgada em \(biteSeconds)s • \(targetLabel)"))
@@ -1801,6 +1851,7 @@ final class AutomationEngine {
                     try? await clearAction()
                     fishingStats.spotChanged += 1
                     reporter(.failure("Peixe #\(fishNumber) • \(targetLabel) • spot rotacionou durante a espera"))
+                    recordFishTargetFailure(target, reason: "spot rotacionou durante a espera")
                     spotRotatedDuringWait = true
                     break
                 }
@@ -1821,6 +1872,7 @@ final class AutomationEngine {
                 try? await clearAction()
                 fishingStats.spotChanged += 1
                 reporter(.failure("Peixe #\(fishNumber) • \(targetLabel) • spot mudou antes da confirmação"))
+                recordFishTargetFailure(target, reason: "spot mudou antes da confirmação")
                 try await sleep(650)
                 continue
             }
@@ -1855,6 +1907,7 @@ final class AutomationEngine {
 
                 successes += 1
                 fishingStats.catches += 1
+                recordFishTargetSuccess(target)
                 updateFishingInventory(fromGrant: response)
                 reporter(.success(nil))
                 reporter(.log("✅ Peixe #\(fishNumber) confirmado • \(successes)/\(goal) • \(targetLabel)"))
@@ -1889,7 +1942,7 @@ final class AutomationEngine {
         }
 
         reporter(.log(
-            "📊 Pesca encerrada • peixes=\(fishingStats.catches)/\(goal) • tentativas=\(fishingStats.attempts) • stale=\(fishingStats.staleRejects) • stale evitado=\(fishingStats.staleAvoided) • no_bite=\(fishingStats.noBite) • rotações=\(fishingStats.spotChanged)"
+            "📊 Pesca encerrada • peixes=\(fishingStats.catches)/\(goal) • tentativas=\(fishingStats.attempts) • stale=\(fishingStats.staleRejects) • stale evitado=\(fishingStats.staleAvoided) • no_bite=\(fishingStats.noBite) • rotações=\(fishingStats.spotChanged) • quarentenas=\(fishingStats.targetQuarantines)"
         ))
     }
 
@@ -1975,6 +2028,7 @@ final class AutomationEngine {
             let previous = fishSpots[slot]
             let moved = previous == nil || previous?.c != c || previous?.r != r
             let generation = moved ? (previous?.generation ?? 0) + 1 : (previous?.generation ?? 0)
+            if moved { clearOldFishHealth(slot: slot, keeping: generation) }
             next[slot] = FishSpot(slot: slot, c: c, r: r, expiresAt: now + Double(max(0, ms)), generation: generation)
         }
         fishSpots = next
@@ -2000,6 +2054,7 @@ final class AutomationEngine {
               let ms = RealtimeProtocol.int(source["ms"] ?? packet["ms"]) else { return }
         let previous = fishSpots[slot]
         let generation = (previous?.generation ?? 0) + 1
+        clearOldFishHealth(slot: slot, keeping: generation)
         fishSpots[slot] = FishSpot(slot: slot, c: c, r: r, expiresAt: nowMS + Double(max(0, ms)), generation: generation)
         fishSnapshotSerial += 1
         if previous?.c != c || previous?.r != r {
@@ -2011,10 +2066,55 @@ final class AutomationEngine {
         "\(slot):\(generation)"
     }
 
+    private func fishCellKey(_ target: FishTarget) -> String {
+        "\(target.slot):\(target.generation):\(target.fc),\(target.fr)"
+    }
+
     private func quarantineFishTarget(_ target: FishTarget) {
         let key = fishGenerationKey(slot: target.slot, generation: target.generation)
-        fishStaleGenerationSerial[key] = fishSnapshotSerial
-        reporter(.diagnostic("[FISH] geração em quarentena após stale • slot=#\(target.slot) gen=\(target.generation) • aguardando novo fish_spots/moved"))
+        if fishQuarantinedGenerations.insert(key).inserted {
+            fishingStats.targetQuarantines += 1
+        }
+        reporter(.diagnostic("[FISH] geração em quarentena • slot=#\(target.slot) gen=\(target.generation) • aguardando MOVIMENTO real do servidor"))
+    }
+
+    private func recordFishTargetSuccess(_ target: FishTarget) {
+        let key = fishCellKey(target)
+        fishCellFailureStreak.removeValue(forKey: key)
+        fishBlockedCells.remove(key)
+    }
+
+    private func recordFishTargetFailure(_ target: FishTarget, reason: String) {
+        let key = fishCellKey(target)
+        let next = (fishCellFailureStreak[key] ?? 0) + 1
+        fishCellFailureStreak[key] = next
+        guard next >= FishingRecoveryPolicy.maxFailuresPerCell else { return }
+
+        if fishBlockedCells.insert(key).inserted {
+            reporter(.diagnostic("[FISH] célula bloqueada nesta geração • #\(target.slot) gen=\(target.generation) cell=\(target.fc),\(target.fr) • motivo=\(reason)"))
+        }
+
+        let playerCol = Int(round(position.x + 19.5))
+        let playerRow = Int(round(position.z + 19.5))
+        let generationCells = [(target.c, target.r), (target.c + 1, target.r), (target.c, target.r + 1), (target.c + 1, target.r + 1)]
+            .filter { fc, fr in hypot(Double(fc - playerCol), Double(fr - playerRow)) <= 6.5 }
+            .map { fc, fr in "\(target.slot):\(target.generation):\(fc),\(fr)" }
+
+        if !generationCells.isEmpty && generationCells.allSatisfy({ fishBlockedCells.contains($0) }) {
+            quarantineFishTarget(target)
+        }
+    }
+
+    private func clearOldFishHealth(slot: Int, keeping generation: Int) {
+        // Um movimento autoritativo torna TODO conhecimento de saúde anterior
+        // daquele slot obsoleto. Remova tudo do slot, inclusive se o servidor
+        // omitiu o slot por um snapshot e a geração local voltou a um número já
+        // usado; nunca carregue uma quarentena antiga para um spot realmente novo.
+        let prefix = "\(slot):"
+        fishQuarantinedGenerations = Set(fishQuarantinedGenerations.filter { !$0.hasPrefix(prefix) })
+        fishCellFailureStreak = fishCellFailureStreak.filter { key, _ in !key.hasPrefix(prefix) }
+        fishBlockedCells = Set(fishBlockedCells.filter { key in !key.hasPrefix(prefix) })
+        _ = generation // mantém a assinatura explícita do evento que causou a limpeza
     }
 
     private func selectFishTarget() -> FishTarget? {
@@ -2023,15 +2123,14 @@ final class AutomationEngine {
         let minTTL = FishingRecoveryPolicy.minStartTTLMS
         var candidates: [FishTarget] = []
         for spot in fishSpots.values where remainingMS(for: spot) >= minTTL {
-            let key = fishGenerationKey(slot: spot.slot, generation: spot.generation)
-            if let staleSerial = fishStaleGenerationSerial[key], fishSnapshotSerial <= staleSerial {
-                continue
-            }
+            let generationKey = fishGenerationKey(slot: spot.slot, generation: spot.generation)
+            if fishQuarantinedGenerations.contains(generationKey) { continue }
             for (fc, fr) in [(spot.c, spot.r), (spot.c + 1, spot.r), (spot.c, spot.r + 1), (spot.c + 1, spot.r + 1)] {
                 let dist = hypot(Double(fc - playerCol), Double(fr - playerRow))
-                if dist <= 6.5 {
-                    candidates.append(FishTarget(slot: spot.slot, c: spot.c, r: spot.r, fc: fc, fr: fr, generation: spot.generation, distance: dist, ttl: remainingMS(for: spot)))
-                }
+                guard dist <= 6.5 else { continue }
+                let cellKey = "\(spot.slot):\(spot.generation):\(fc),\(fr)"
+                guard !fishBlockedCells.contains(cellKey) else { continue }
+                candidates.append(FishTarget(slot: spot.slot, c: spot.c, r: spot.r, fc: fc, fr: fr, generation: spot.generation, distance: dist, ttl: remainingMS(for: spot)))
             }
         }
         return candidates.sorted { a, b in
@@ -2356,6 +2455,7 @@ final class AutomationEngine {
             var targetBecameUnavailable = false
             var safeStopInterruptedTarget = false
             var ackCadence = CombatAckCadence()
+            var consecutiveAckTimeouts = 0
 
             while swing <= 30 {
                 try Task.checkCancellation()
@@ -2487,6 +2587,7 @@ final class AutomationEngine {
                 ackCadence.record(acknowledged: ack != nil)
 
                 if let ack {
+                    consecutiveAckTimeouts = 0
                     acceptedHits += 1
                     reporter(.confirmedHit)
                     try await sleep(280)
@@ -2500,9 +2601,19 @@ final class AutomationEngine {
                         break
                     }
                 } else {
+                    consecutiveAckTimeouts += 1
                     reporter(.hitAckTimeout)
                     reporter(.state(.recovering, "Hit \(swing) sem confirmação • \(targetName)"))
                     reporter(.log("⚠️ \(targetName) • Hit \(swing) sem confirmação • próximo intervalo \(Int(ackCadence.cooldownMS))ms"))
+
+                    // RC3.4: 4 ACK timeouts consecutivos indicam Presence degradada.
+                    // Pare antes de continuar enviando ataques às cegas e entregue
+                    // ao fluxo autoritativo de reconexão/saída segura do Wild.
+                    if consecutiveAckTimeouts >= CombatAckCadence.circuitBreakerThreshold {
+                        reporter(.diagnostic("[WARN] Presence degradada • \(consecutiveAckTimeouts) ACK timeouts consecutivos em \(targetName)"))
+                        reporter(.fatal("Presence degradada: \(consecutiveAckTimeouts) hits consecutivos sem confirmação"))
+                        throw CancellationError()
+                    }
                     try await sleep(280)
                 }
 
@@ -3686,7 +3797,10 @@ final class AutomationEngine {
         }
 
         let probes = [Position(x: 0.5, z: -29.5), Position(x: 0.5, z: -30.5)]
-        let attempts = emergency ? 3 : 1
+        // Paridade com a v5.2: saída normal também recebe três ciclos de probes.
+        // Persistindo incerteza, AppStore reconecta no mesmo shard e usa snapshot
+        // autoritativo em vez de declarar falha cega.
+        let attempts = WorldExitPolicy.probeCycles
         let probeTimeout = emergency ? 2_500 : 5_000
         var confirmed = false
 
@@ -3706,7 +3820,7 @@ final class AutomationEngine {
             }
         }
 
-        guard confirmed else { throw EngineError.regionNotConfirmed("world") }
+        guard confirmed else { throw EngineError.worldExitUnconfirmed }
         wildMobs.removeAll()
         lastWildAvailabilitySignature = ""
         reporter(.log("✅ World confirmado • área segura"))
@@ -4232,6 +4346,7 @@ private struct FishBite {
 
 struct FishingRecoveryPolicy {
     static let minStartTTLMS: Double = 38_000
+    static let maxFailuresPerCell = 2
     static let biteExpiryMarginMS = 4_500
     static let biteScheduleTimeoutMS: Double = 3_500
     static let betweenCatchMS = 4_800
@@ -4252,6 +4367,7 @@ private struct FishingSessionStats {
     var staleAvoided = 0
     var noBite = 0
     var spotChanged = 0
+    var targetQuarantines = 0
 }
 
 private struct FishingInventorySnapshot: Equatable {
@@ -4350,9 +4466,10 @@ private struct BankDepositResult {
     let diagnostics: [String]
 }
 
-private enum EngineError: LocalizedError {
+enum EngineError: LocalizedError {
     case movementTimeout
     case regionNotConfirmed(String)
+    case worldExitUnconfirmed
     case playerDead
     case unsafeVitals
     case potionRecoveryFailed(String)
@@ -4367,6 +4484,7 @@ private enum EngineError: LocalizedError {
         switch self {
         case .movementTimeout: return "Movimento excedeu o tempo limite"
         case .regionNotConfirmed(let region): return "O servidor não confirmou a região \(region)"
+        case .worldExitUnconfirmed: return "Saída para World enviada, mas a confirmação autoritativa ficou incerta"
         case .playerDead: return "O personagem morreu"
         case .unsafeVitals: return "Combate interrompido por HP/Shield baixos"
         case .potionRecoveryFailed(let detail): return "Recuperação com poções falhou: \(detail)"
