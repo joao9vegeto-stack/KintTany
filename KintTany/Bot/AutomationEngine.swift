@@ -11,7 +11,9 @@ enum EngineEvent {
     case fatal(String)
     case hitSent
     case confirmedHit
+    case stateConfirmedHit
     case hitAckTimeout
+    case gatherRecovery(proofMiss: Bool)
     case potionAckTimeout
     case kill
     case player(Position, hp: Int, shield: Int, region: String)
@@ -33,6 +35,94 @@ enum EmergencyWildExitResult: Equatable {
 struct FishingNumberingPolicy {
     static func publicFishNumber(successes: Int) -> Int {
         max(1, successes + 1)
+    }
+}
+
+enum GatherToolPreflightDisposition: Equatable {
+    case ready
+    case needsWorld(tool: String)
+    case missing(tool: String)
+}
+
+struct GatherToolPreflightPolicy {
+    static func disposition(tool: String, carried: Int, bank: Int) -> GatherToolPreflightDisposition {
+        if carried > 0 { return .ready }
+        if bank > 0 { return .needsWorld(tool: tool) }
+        return .missing(tool: tool)
+    }
+}
+
+struct GatherTimingPolicy {
+    /// Background scheduling can coalesce short sleeps. Keep the wire profile,
+    /// but abandon a frame train instead of dumping badly late frames.
+    static let maxFrameLatenessMS = 220
+    static let eventGraceMS = 420
+}
+
+struct GatherHealthPolicy {
+    static let recoveriesBeforeTransportResync = 2
+    static let noSuccessWindowMS: Double = 25_000
+}
+
+struct CombatStateConfirmationPolicy {
+    static func isStateCorrelatedHit(beforeHP: Int?, afterHP: Int?, snapshotAdvanced: Bool) -> Bool {
+        guard snapshotAdvanced, let beforeHP, let afterHP else { return false }
+        return afterHP < beforeHP
+    }
+}
+
+@MainActor
+private final class RealtimeEventGate {
+    private struct Waiter {
+        let afterSerial: Int
+        let continuation: CheckedContinuation<Bool, Never>
+    }
+
+    private(set) var serial = 0
+    private var waiters: [UUID: Waiter] = [:]
+
+    func signal() {
+        serial += 1
+        let current = serial
+        let ready = waiters.filter { $0.value.afterSerial < current }
+        for (id, waiter) in ready {
+            waiters.removeValue(forKey: id)
+            waiter.continuation.resume(returning: true)
+        }
+    }
+
+    func wait(after afterSerial: Int, timeoutMS: Int) async throws -> Bool {
+        try Task.checkCancellation()
+        if serial > afterSerial { return true }
+        let id = UUID()
+        let result = await withTaskCancellationHandler(operation: {
+            await withCheckedContinuation { continuation in
+                if self.serial > afterSerial {
+                    continuation.resume(returning: true)
+                    return
+                }
+                self.waiters[id] = Waiter(afterSerial: afterSerial, continuation: continuation)
+                Task { @MainActor [weak self] in
+                    do {
+                        try await Task.sleep(nanoseconds: UInt64(max(1, timeoutMS)) * 1_000_000)
+                    } catch {
+                        // Cancellation is handled by the outer cancellation handler.
+                    }
+                    self?.resolve(id: id, value: false)
+                }
+            }
+        }, onCancel: {
+            Task { @MainActor [weak self] in
+                self?.resolve(id: id, value: false)
+            }
+        })
+        try Task.checkCancellation()
+        return result
+    }
+
+    private func resolve(id: UUID, value: Bool) {
+        guard let waiter = waiters.removeValue(forKey: id) else { return }
+        waiter.continuation.resume(returning: value)
     }
 }
 
@@ -314,6 +404,7 @@ struct EngineRunResult {
 @MainActor
 final class AutomationEngine {
     typealias Reporter = (EngineEvent) -> Void
+    typealias GatherTransportResyncer = (PresenceBootstrap) async throws -> Void
 
     private let socket: RealtimeSocket
     private let cookie: String
@@ -321,6 +412,7 @@ final class AutomationEngine {
     private let reporter: Reporter
     private let http: KintaraHTTPClient
     private let fishingBait: FishingBait
+    private let gatherTransportResyncer: GatherTransportResyncer?
 
     private var region: String
     private var serverRegion: String?
@@ -341,6 +433,12 @@ final class AutomationEngine {
     private var gatherInternalRecoveries = 0
     private var gatherProofMisses = 0
     private var gatherResourceSerial = 0
+    private let gatherEventGate = RealtimeEventGate()
+    private let wildStateEventGate = RealtimeEventGate()
+    private var gatherTransportResyncInProgress = false
+    private var gatherRecoveriesSinceSuccess = 0
+    private var gatherLastSuccessAt: Double = 0
+    private var gatherTransportResyncNeeded = false
 
     private var currentGatherSignature: String?
     private var currentGatherKind: String?
@@ -437,13 +535,15 @@ final class AutomationEngine {
         shard: String,
         bootstrap: PresenceBootstrap,
         fishingBait: FishingBait = .feather,
-        reporter: @escaping Reporter
+        reporter: @escaping Reporter,
+        gatherTransportResyncer: GatherTransportResyncer? = nil
     ) {
         self.socket = socket
         self.cookie = cookie
         self.shard = shard
         self.fishingBait = fishingBait
         self.reporter = reporter
+        self.gatherTransportResyncer = gatherTransportResyncer
         self.http = KintaraHTTPClient(cookie: cookie)
         self.gatherKnowledge = GatherKnowledgeStore()
         self.region = bootstrap.region
@@ -462,22 +562,47 @@ final class AutomationEngine {
         }
     }
 
-    /// RC3.4: Gathering normalmente continua conectando direto em ElderGrove.
-    /// Se a ferramenta obrigatória não estiver carregada, a Presence nasce em
-    /// World para fazer o preflight do banco ANTES da região definitiva.
+    /// RC3.5: o bootstrap definitivo de Gathering nunca mais muda de região
+    /// por uma leitura duplicada de inventário. O AppStore executa um preflight
+    /// transacional em World quando necessário e só então abre a Presence final
+    /// em ElderGrove. Este método permanece por compatibilidade e retorna sempre
+    /// o bootstrap normal da atividade.
     static func bootstrapForRun(for mode: ActivityMode, cookie: String) async -> PresenceBootstrap {
-        let normal = bootstrap(for: mode)
+        bootstrap(for: mode)
+    }
+
+    static func gatherToolPreflightDisposition(for mode: ActivityMode, cookie: String) async -> GatherToolPreflightDisposition {
         guard mode == .tree || mode == .stone || mode == .coal,
               let tool = ActivityToolPolicy.requiredTool(for: mode)
-        else { return normal }
+        else { return .ready }
 
         do {
             let counts = try await KintaraHTTPClient(cookie: cookie).itemLocationCounts(type: tool)
-            if counts.carried >= 1 { return normal }
+            return GatherToolPreflightPolicy.disposition(tool: tool, carried: counts.carried, bank: counts.bank)
         } catch {
-            // Sem inventário autoritativo, World é o ponto seguro para o preflight.
+            // Falha de leitura não autoriza ElderGrove às cegas. O chamador fará
+            // o preflight World e uma nova leitura autoritativa sem cache.
+            return .needsWorld(tool: tool)
         }
-        return PresenceBootstrap(region: "world", position: Position(x: 22.5, z: -3.5))
+    }
+
+    @discardableResult
+    static func ensureGatherToolCarried(for mode: ActivityMode, cookie: String) async throws -> Int {
+        guard mode == .tree || mode == .stone || mode == .coal,
+              let tool = ActivityToolPolicy.requiredTool(for: mode)
+        else { return 0 }
+        let client = KintaraHTTPClient(cookie: cookie)
+        let before = try await client.itemLocationCounts(type: tool)
+        if before.carried >= 1 { return before.carried }
+        guard before.bank >= 1 else {
+            throw EngineError.missingRequiredItem(ActivityToolPolicy.displayName(tool))
+        }
+        let carried = try await client.ensureCarriedItem(type: tool, quantity: 1, preferHotbar: true)
+        let confirmed = try await client.itemLocationCounts(type: tool)
+        guard carried >= 1 || confirmed.carried >= 1 else {
+            throw EngineError.missingRequiredItem(ActivityToolPolicy.displayName(tool))
+        }
+        return max(carried, confirmed.carried)
     }
 
     func prepareIdentity() async {
@@ -747,6 +872,7 @@ final class AutomationEngine {
                     harvestProofSerial += 1
                     gatherResourceSerial += 1
                 }
+                gatherEventGate.signal()
             }
         }
 
@@ -917,6 +1043,10 @@ final class AutomationEngine {
                 return
             } catch {
                 if Task.isCancelled { return }
+                if gatherTransportResyncInProgress {
+                    reporter(.diagnostic("[GATHER] heartbeat ignorou erro durante reconnect planejado: \(error.localizedDescription)"))
+                    continue
+                }
                 reporter(.fatal("Conexão realtime perdida: \(error.localizedDescription)"))
                 return
             }
@@ -925,10 +1055,59 @@ final class AutomationEngine {
 
     // MARK: - Gathering
 
+    private func recordGatherRecovery(proofMiss: Bool = false) {
+        gatherInternalRecoveries += 1
+        gatherRecoveriesSinceSuccess += 1
+        if proofMiss { gatherProofMisses += 1 }
+        if gatherLastSuccessAt > 0,
+           gatherRecoveriesSinceSuccess >= GatherHealthPolicy.recoveriesBeforeTransportResync,
+           nowMS - gatherLastSuccessAt >= GatherHealthPolicy.noSuccessWindowMS {
+            gatherTransportResyncNeeded = true
+        }
+        reporter(.gatherRecovery(proofMiss: proofMiss))
+    }
+
+    /// RC3.5 health recovery. Prefer a real Presence restart on the same shard
+    /// and ElderGrove so an extended background session cannot spend minutes on
+    /// a stale transport. If the host does not provide a reconnect hook (tests /
+    /// isolated engine usage), fall back to a local authoritative reassert.
+    private func gatherTransportResync(mode: ActivityMode, reason: String) async throws {
+        reporter(.state(.recovering, "Ressincronizando Presence • \(mode.displayName)"))
+        reporter(.log("🔁 Gather transport resync • \(mode.displayName) • \(reason)"))
+        try? await clearAction()
+
+        let beforeEvent = gatherEventGate.serial
+        let reconnectPosition = Position(x: position.x, y: 0.25, z: position.z, ry: position.ry)
+        let reconnectBootstrap = PresenceBootstrap(
+            region: "eldergrove",
+            position: reconnectPosition,
+            lifeEpoch: max(1, lifeEpoch)
+        )
+
+        if let gatherTransportResyncer {
+            gatherTransportResyncInProgress = true
+            defer { gatherTransportResyncInProgress = false }
+            try await gatherTransportResyncer(reconnectBootstrap)
+            region = "eldergrove"
+            position = reconnectPosition
+            _ = try await gatherEventGate.wait(after: beforeEvent, timeoutMS: 2_200)
+            reporter(.diagnostic("[GATHER] Presence reaberta no mesmo shard • region=eldergrove"))
+        } else {
+            position = reconnectPosition
+            try await sendPosition(moving: false, full: true)
+            _ = try await gatherEventGate.wait(after: beforeEvent, timeoutMS: 1_600)
+            reporter(.diagnostic("[GATHER] fallback de resync local concluído • region=\(serverRegion ?? region)"))
+        }
+
+        if let tool = ActivityToolPolicy.requiredTool(for: mode) {
+            try await equip(tool)
+        }
+    }
+
     private func runGather(mode: ActivityMode, goal: Int) async throws {
-        // RC3.4: ferramenta antes da região definitiva. Se o bootstrap veio em
-        // World porque Axe/Pickaxe estava no banco, retire primeiro e só depois
-        // entre em Whisperwood. Se já estava carregada, continua ElderGrove direto.
+        // RC3.5: o preflight transacional World→tool→ElderGrove pertence ao
+        // AppStore. Aqui a ferramenta já deve estar carregada. Se uma leitura
+        // autoritativa disser o contrário, falhe sem tentar ElderGrove→World.
         try await ensureActivityToolLoadout(for: mode)
 
         reporter(.state(.syncing, "Sincronizando Whisperwood"))
@@ -941,11 +1120,18 @@ final class AutomationEngine {
         }
 
         let hb = Task { [weak self] in await self?.heartbeat() }
-        defer { hb.cancel() }
+        defer {
+            hb.cancel()
+            gatherKnowledge.flush()
+        }
 
         gatherInternalRecoveries = 0
         gatherProofMisses = 0
+        gatherRecoveriesSinceSuccess = 0
+        gatherLastSuccessAt = nowMS
+        gatherTransportResyncNeeded = false
         gatherRetryPolicy.resetExpired(nowMS: nowMS)
+        var consecutiveRecoverableResults = 0
 
         reporter(.state(.searching, "Sincronizando recursos"))
         let resourceDeadline = nowMS + 7_000
@@ -1022,6 +1208,10 @@ final class AutomationEngine {
                 }
 
                 successes += 1
+                gatherLastSuccessAt = nowMS
+                gatherRecoveriesSinceSuccess = 0
+                gatherTransportResyncNeeded = false
+                consecutiveRecoverableResults = 0
                 reporter(.success(result.loot))
                 reporter(.state(.cooldown, "Concluído \(successes)/\(goal)"))
                 reporter(.log("✅ \(mode.displayName) concluído • h=\(result.h)/\(result.hm) • \(persistenceLabel) • \(successes)/\(goal)"))
@@ -1030,9 +1220,9 @@ final class AutomationEngine {
             }
 
             if result.recoverable {
-                gatherInternalRecoveries += 1
+                consecutiveRecoverableResults += 1
+                recordGatherRecovery(proofMiss: result.pureProofMiss)
                 if result.pureProofMiss {
-                    gatherProofMisses += 1
                     gatherRetryPolicy.deferProofMiss(signature: seed.signature, nowMS: nowMS)
                     reporter(.state(.recovering, "Sincronizando recurso"))
                     reporter(.log("🟡 \(mode.displayName) \(seed.targetKey) • proof ainda não aceito após recovery • alvo adiado • nenhuma falha contabilizada"))
@@ -1041,8 +1231,36 @@ final class AutomationEngine {
                     reporter(.state(.recovering, "Continuando ação aceita"))
                     reporter(.log("🔄 \(mode.displayName) \(seed.targetKey) • progresso aceito h=\(result.h)/\(result.hm) • continuará após resync • nenhuma falha contabilizada"))
                 }
+                if gatherTransportResyncNeeded || (
+                    consecutiveRecoverableResults >= GatherHealthPolicy.recoveriesBeforeTransportResync &&
+                    nowMS - gatherLastSuccessAt >= GatherHealthPolicy.noSuccessWindowMS
+                ) {
+                    try await gatherTransportResync(
+                        mode: mode,
+                        reason: "\(gatherRecoveriesSinceSuccess) recoveries e \(Int(nowMS - gatherLastSuccessAt))ms sem conclusão"
+                    )
+                    consecutiveRecoverableResults = 0
+                    gatherRecoveriesSinceSuccess = 0
+                    gatherTransportResyncNeeded = false
+                    gatherLastSuccessAt = nowMS
+                }
                 try await sleep(350)
                 continue
+            }
+
+            consecutiveRecoverableResults += 1
+            if gatherTransportResyncNeeded || (
+                consecutiveRecoverableResults >= GatherHealthPolicy.recoveriesBeforeTransportResync &&
+                nowMS - gatherLastSuccessAt >= GatherHealthPolicy.noSuccessWindowMS
+            ) {
+                try await gatherTransportResync(
+                    mode: mode,
+                    reason: "falhas reais/recoveries repetidos sem conclusão"
+                )
+                consecutiveRecoverableResults = 0
+                gatherRecoveriesSinceSuccess = 0
+                gatherTransportResyncNeeded = false
+                gatherLastSuccessAt = nowMS
             }
 
             reporter(.attempt)
@@ -1067,17 +1285,16 @@ final class AutomationEngine {
         // não como falha do usuário. Reenvia a mesma posição, espera refresh e tenta
         // novamente antes de abandonar a geometria que acabou de ser usada.
         if merged.pureProofMiss {
-            gatherProofMisses += 1
-            gatherInternalRecoveries += 1
-            reporter(.diagnostic("[GATHER] proof miss • same-position resync 900ms • \(seed.targetKey)"))
-            let serialBefore = gatherResourceSerial
-            position.y = 0.25
-            try await sendPosition(moving: false)
-            let deadline = nowMS + 900
-            while nowMS < deadline, gatherResourceSerial == serialBefore {
-                try Task.checkCancellation()
-                try await sleep(30)
+            recordGatherRecovery(proofMiss: true)
+            if gatherTransportResyncNeeded {
+                reporter(.diagnostic("[GATHER] recovery budget atingido • devolvendo controle para transport resync"))
+                return merged
             }
+            reporter(.diagnostic("[GATHER] proof miss • same-position event resync 900ms • \(seed.targetKey)"))
+            let eventBefore = gatherEventGate.serial
+            position.y = 0.25
+            try await sendPosition(moving: false, full: true)
+            _ = try await gatherEventGate.wait(after: eventBefore, timeoutMS: 900)
             try await equip(seed.kind == "tree" ? "tool_axe" : "tool_pickaxe")
             let retry = try await harvest(seed: seed, mode: mode, handshakeTries: 2)
             merged = merged.merging(retry)
@@ -1091,7 +1308,11 @@ final class AutomationEngine {
             for (index, candidate) in candidates.enumerated() {
                 try Task.checkCancellation()
                 if hypot(position.x - candidate.x, position.z - candidate.z) < 0.25 { continue }
-                gatherInternalRecoveries += 1
+                recordGatherRecovery(proofMiss: true)
+                if gatherTransportResyncNeeded {
+                    reporter(.diagnostic("[GATHER] recovery budget atingido durante posições adjacentes • transport resync solicitado"))
+                    break
+                }
                 reporter(.diagnostic("[GATHER] recovery adjacent \(index + 1)/\(candidates.count) • \(seed.targetKey) • x=\(format(candidate.x)) z=\(format(candidate.z))"))
                 try await walk(to: candidate, maxSeconds: 18, status: "Reposicionando para \(mode.displayName) \(seed.targetKey)")
                 position.ry = candidate.ry
@@ -1108,7 +1329,11 @@ final class AutomationEngine {
         while !merged.felled, merged.accepted, continuation < 3 {
             try Task.checkCancellation()
             continuation += 1
-            gatherInternalRecoveries += 1
+            recordGatherRecovery()
+            if gatherTransportResyncNeeded {
+                reporter(.diagnostic("[GATHER] recovery budget atingido durante continuidade aceita • transport resync solicitado"))
+                break
+            }
             reporter(.diagnostic("[GATHER] recovery accepted • \(seed.targetKey) • continuidade \(continuation)/3 • h=\(merged.h)/\(merged.hm)"))
             try await sleep(90)
             let next = try await harvest(seed: seed, mode: mode, handshakeTries: 2)
@@ -1153,41 +1378,63 @@ final class AutomationEngine {
             return (Int(parts.first ?? "0") ?? 0, Int(parts.dropFirst().first ?? "0") ?? 0)
         }
 
-        func sendProfile(_ second: Bool, progressive: Bool) async throws {
+        func sendProfile(_ second: Bool, progressive: Bool) async throws -> Bool {
+            let clock = ContinuousClock()
+
+            func waitForFrame(start: ContinuousClock.Instant, offsetMS: Int) async throws -> Bool {
+                let deadline = start.advanced(by: .milliseconds(offsetMS))
+                if clock.now > deadline.advanced(by: .milliseconds(GatherTimingPolicy.maxFrameLatenessMS)) {
+                    reporter(.diagnostic("[GATHER][TIMING] frame abandonado antes do envio • atraso > \(GatherTimingPolicy.maxFrameLatenessMS)ms"))
+                    return false
+                }
+                try await clock.sleep(until: deadline, tolerance: .milliseconds(5))
+                if clock.now > deadline.advanced(by: .milliseconds(GatherTimingPolicy.maxFrameLatenessMS)) {
+                    reporter(.diagnostic("[GATHER][TIMING] frame abandonado após wake • atraso > \(GatherTimingPolicy.maxFrameLatenessMS)ms"))
+                    return false
+                }
+                return true
+            }
+
             if kind == "tree" {
                 let profile = second ? Self.treeY2 : Self.treeY1
                 let gap = max(35, Int(500.0 / Double(max(1, profile.count - 1))))
-                for delta in profile {
+                let started = clock.now
+                for (index, delta) in profile.enumerated() {
+                    if index > 0, !(try await waitForFrame(start: started, offsetMS: gap * index)) { return false }
                     position.y = 0.25 + delta
                     try await sendPosition(moving: false, action: ["act": "chop", "eq": tool])
-                    try await sleep(gap)
                 }
+                if !(try await waitForFrame(start: started, offsetMS: gap * profile.count)) { return false }
             } else {
                 let tile = targetTile()
                 let yProfile = second ? Self.mineY2 : Self.mineY1
                 let mpProfile = second ? Self.mineMP2 : Self.mineMP1
                 let estimatedHM = harvestHM < 99 ? harvestHM : (seed.keys.count <= 1 ? 6 : (seed.keys.count == 2 ? 7 : 10))
+                let started = clock.now
                 if progressive {
                     mineProgress = max(mineProgress, min(1, Double(harvestH) / Double(max(1, estimatedHM))))
                     let next = min(1, Double(harvestH + 1) / Double(max(1, estimatedHM)) + min(0.010, 0.06 / Double(max(1, estimatedHM))))
                     let shapeMax = Self.mineMP1.last ?? 1
                     for index in Self.mineMP1.indices {
+                        if index > 0, !(try await waitForFrame(start: started, offsetMS: 65 * index)) { return false }
                         let shape = Self.mineMP1[index] / shapeMax
                         let value = min(1, mineProgress + max(0, next - mineProgress) * shape)
                         position.y = 0.25 + Self.mineY1[index]
                         try await sendPosition(moving: false, action: ["act": "mine", "eq": tool, "mc": tile.0, "mr": tile.1, "mp": value])
                         mineProgress = max(mineProgress, value)
-                        try await sleep(65)
                     }
+                    if !(try await waitForFrame(start: started, offsetMS: 65 * Self.mineMP1.count)) { return false }
                 } else {
                     for index in mpProfile.indices {
+                        if index > 0, !(try await waitForFrame(start: started, offsetMS: 65 * index)) { return false }
                         mineProgress = max(mineProgress, mpProfile[index])
                         position.y = 0.25 + yProfile[index % yProfile.count]
                         try await sendPosition(moving: false, action: ["act": "mine", "eq": tool, "mc": tile.0, "mr": tile.1, "mp": mineProgress])
-                        try await sleep(65)
                     }
+                    if !(try await waitForFrame(start: started, offsetMS: 65 * mpProfile.count)) { return false }
                 }
             }
+            return true
         }
 
         func sendHit(proof: String?) async throws {
@@ -1199,32 +1446,40 @@ final class AutomationEngine {
         }
 
         func waitForAck(proofBefore: Int, wearBefore: Int, hBefore: Int, timeoutMS: Int) async throws -> HarvestAck {
+            func inspect() -> HarvestAck? {
+                if harvestHM < 99, harvestH >= harvestHM { return .felled }
+                let sawFreshProof = harvestProofSerial > proofBefore && !harvestProof.isEmpty
+                let sawProgress = harvestWearSerial > wearBefore || harvestH > hBefore
+                if sawFreshProof && sawProgress { return .accepted }
+                return nil
+            }
+
+            if let immediate = inspect() { return immediate }
             let deadline = nowMS + Double(timeoutMS)
-            var sawFreshProof = false
-            var sawProgress = false
+            var eventSerial = gatherEventGate.serial
             while nowMS < deadline {
                 try Task.checkCancellation()
-                if harvestHM < 99, harvestH >= harvestHM { return .felled }
-                if harvestProofSerial > proofBefore, !harvestProof.isEmpty { sawFreshProof = true }
-                if harvestWearSerial > wearBefore || harvestH > hBefore { sawProgress = true }
-                if sawFreshProof && sawProgress { return .accepted }
-                try await sleep(20)
+                let remaining = max(1, Int(deadline - nowMS))
+                let signaled = try await gatherEventGate.wait(after: eventSerial, timeoutMS: remaining)
+                eventSerial = gatherEventGate.serial
+                if let state = inspect() { return state }
+                if !signaled { break }
             }
-            if harvestHM < 99, harvestH >= harvestHM { return .felled }
 
-            // Paridade presenceWs.js: tolera até 300 ms de skew quando proof e wear
-            // chegam em mensagens separadas, algo especialmente relevante quando o
-            // scheduler do iOS coalesce timers em background.
-            if sawFreshProof || sawProgress {
-                let grace = nowMS + 300
-                while nowMS < grace {
-                    try Task.checkCancellation()
-                    if harvestProofSerial > proofBefore, !harvestProof.isEmpty { sawFreshProof = true }
-                    if harvestWearSerial > wearBefore || harvestH > hBefore { sawProgress = true }
-                    if sawFreshProof && sawProgress { return .accepted }
-                    if harvestHM < 99, harvestH >= harvestHM { return .felled }
-                    try await sleep(20)
-                }
+            if let final = inspect() { return final }
+
+            // Proof e wear podem chegar em mensagens separadas. Em vez de polling
+            // de 20 ms (sensível ao scheduler em background), aguarde diretamente
+            // o próximo evento autoritativo por uma pequena janela.
+            let hasHalfAck = (harvestProofSerial > proofBefore && !harvestProof.isEmpty) ||
+                (harvestWearSerial > wearBefore || harvestH > hBefore)
+            if hasHalfAck {
+                let beforeGrace = gatherEventGate.serial
+                _ = try await gatherEventGate.wait(
+                    after: beforeGrace,
+                    timeoutMS: GatherTimingPolicy.eventGraceMS
+                )
+                if let graceState = inspect() { return graceState }
             }
             return .timeout
         }
@@ -1237,12 +1492,28 @@ final class AutomationEngine {
                 let wearBefore = harvestWearSerial
                 let hBefore = harvestH
 
+                let profileOK: Bool
                 if kind == "rock" {
                     try await sendHit(proof: nil)
-                    try await sendProfile(attempt == 2, progressive: false)
+                    profileOK = try await sendProfile(attempt == 2, progressive: false)
                 } else {
-                    try await sendProfile(attempt == 2, progressive: false)
-                    try await sendHit(proof: nil)
+                    profileOK = try await sendProfile(attempt == 2, progressive: false)
+                    if profileOK { try await sendHit(proof: nil) }
+                }
+
+                if !profileOK {
+                    try? await clearAction()
+                    let accepted = harvestH > 0 || !harvestProof.isEmpty
+                    reporter(.diagnostic("[GATHER][TIMING] perfil abortado por atraso do scheduler • h=\(harvestH)/\(harvestHM)"))
+                    return HarvestResult(
+                        felled: harvestHM < 99 && harvestH >= harvestHM,
+                        h: harvestH,
+                        hm: harvestHM,
+                        loot: harvestLoot,
+                        reason: "perfil realtime atrasado; resync necessário",
+                        accepted: accepted,
+                        proofMiss: !accepted
+                    )
                 }
 
                 reporter(.state(.waitingProof, "Handshake \(attempt)/\(tries)"))
@@ -1291,16 +1562,24 @@ final class AutomationEngine {
             let wearBefore = harvestWearSerial
             let hBefore = harvestH
 
+            let profileOK: Bool
             if kind == "rock" {
                 let gapLeft = 490.0 - (nowMS - lastHitAt)
                 if gapLeft > 0 { try await sleep(Int(gapLeft)) }
                 try await sendHit(proof: proof)
                 damageHits += 1
-                try await sendProfile(false, progressive: true)
+                profileOK = try await sendProfile(false, progressive: true)
             } else {
-                try await sendProfile(damageHits % 2 == 1, progressive: false)
-                try await sendHit(proof: proof)
-                damageHits += 1
+                profileOK = try await sendProfile(damageHits % 2 == 1, progressive: false)
+                if profileOK {
+                    try await sendHit(proof: proof)
+                    damageHits += 1
+                }
+            }
+
+            if !profileOK {
+                reporter(.diagnostic("[GATHER][TIMING] ciclo de dano abortado por atraso do scheduler • h=\(harvestH)/\(harvestHM)"))
+                break
             }
 
             reporter(.state(.waitingResult, "Progresso \(harvestH)/\(harvestHM < 99 ? String(harvestHM) : "?")"))
@@ -1316,10 +1595,14 @@ final class AutomationEngine {
             }
         }
 
-        let settle = nowMS + 1_200
-        while nowMS < settle, !(harvestHM < 99 && harvestH >= harvestHM) {
+        let settleDeadline = nowMS + 1_200
+        var settleSerial = gatherEventGate.serial
+        while nowMS < settleDeadline, !(harvestHM < 99 && harvestH >= harvestHM) {
             try Task.checkCancellation()
-            try await sleep(40)
+            let remaining = max(1, Int(settleDeadline - nowMS))
+            let signaled = try await gatherEventGate.wait(after: settleSerial, timeoutMS: remaining)
+            settleSerial = gatherEventGate.serial
+            if !signaled { break }
         }
         try? await clearAction()
 
@@ -1387,6 +1670,7 @@ final class AutomationEngine {
         harvestProof = proof
         harvestProofSerial += 1
         gatherResourceSerial += 1
+        gatherEventGate.signal()
         reporter(.diagnostic("[GATHER] action_proof #\(harvestProofSerial)"))
     }
 
@@ -1445,6 +1729,7 @@ final class AutomationEngine {
             harvestProofSerial += 1
         }
         if changed { harvestWearSerial += 1 }
+        gatherEventGate.signal()
         reporter(.diagnostic("[GATHER] res_evt h=\(harvestH) hm=\(harvestHM) proof=\(!harvestProof.isEmpty) loot=\(harvestLoot ?? "-")"))
     }
 
@@ -1618,6 +1903,41 @@ final class AutomationEngine {
         }
     }
 
+    /// Used only by the short transactional World Presence owned by AppStore.
+    /// It reuses the same proven movement + backpack persistence path used by
+    /// Fishing/BANK-FIRST, then confirms the tool is materially carried before
+    /// the definitive ElderGrove Presence is allowed to start.
+    @discardableResult
+    func prepareGatherToolFromWorld(for mode: ActivityMode) async throws -> Int {
+        guard mode == .tree || mode == .stone || mode == .coal,
+              let tool = ActivityToolPolicy.requiredTool(for: mode)
+        else { return 0 }
+        let name = ActivityToolPolicy.displayName(tool)
+
+        guard try await waitForRegion("world", timeoutMS: 5_000) else {
+            throw EngineError.regionNotConfirmed("world")
+        }
+
+        let counts = try await http.itemLocationCounts(type: tool)
+        if counts.carried >= 1 {
+            reporter(.log("🧰 Preflight transacional • \(name) já está carregada ✅"))
+            return counts.carried
+        }
+        guard counts.bank >= 1 else {
+            throw EngineError.missingRequiredItem(name)
+        }
+
+        try await ensureWorldBankAccess(reason: "buscar \(name)")
+        let carried = try await http.ensureCarriedItem(type: tool, quantity: 1, preferHotbar: true)
+        let confirmed = try await http.itemLocationCounts(type: tool)
+        let finalCount = max(carried, confirmed.carried)
+        guard finalCount >= 1 else {
+            throw EngineError.missingRequiredItem(name)
+        }
+        reporter(.log("🧰 Preflight transacional • \(name) retirada do banco e carregada ✅"))
+        return finalCount
+    }
+
     private func ensureActivityToolLoadout(for mode: ActivityMode) async throws {
         guard let tool = ActivityToolPolicy.requiredTool(for: mode) else { return }
         let name = ActivityToolPolicy.displayName(tool)
@@ -1627,6 +1947,14 @@ final class AutomationEngine {
             reporter(.log("🧰 Preflight • \(name) carregada ✅"))
             return
         }
+
+        // RC3.5: Gathering nunca volta ElderGrove→World para buscar ferramenta.
+        // O AppStore deve materializar Axe/Pickaxe em uma Presence temporária
+        // de World antes de criar esta engine definitiva.
+        if mode == .tree || mode == .stone || mode == .coal {
+            throw EngineError.gatherLoadoutNotReady(name)
+        }
+
         guard counts.bank >= 1 else {
             throw EngineError.missingRequiredItem(name)
         }
@@ -2554,6 +2882,8 @@ final class AutomationEngine {
                 try await sendPosition(moving: false, action: ["wss": wildSwordSeq, "eq": "wild_sword"])
 
                 let ackBefore = wildHitSerial
+                let wildSnapshotBefore = wildSnapshotSerial
+                let hpBeforeSwing = current.hp
                 let sentAt = nowMS
                 let hit = try RealtimeProtocol.wildHit(region: "wild", index: current.index, lifeEpoch: lifeEpoch, position: position)
                 try await socket.send(hit)
@@ -2584,7 +2914,35 @@ final class AutomationEngine {
                     ack = candidate
                 }
 
-                ackCadence.record(acknowledged: ack != nil)
+                // RC3.5: `wm_ev` pode sumir/atrasar em background enquanto snapshots
+                // autoritativos continuam chegando. Antes de alimentar o circuit
+                // breaker, correlacione uma atualização fresca do mesmo mob com
+                // redução de HP. Mantemos métrica separada; não fingimos ACK.
+                var stateCorrelatedHP: Int?
+                if ack == nil {
+                    let existingHP = wildMobs[current.index]?.hp
+                    if CombatStateConfirmationPolicy.isStateCorrelatedHit(
+                        beforeHP: hpBeforeSwing,
+                        afterHP: existingHP,
+                        snapshotAdvanced: wildSnapshotSerial > wildSnapshotBefore
+                    ) {
+                        stateCorrelatedHP = existingHP
+                    } else {
+                        let stateSerialBeforeWait = wildStateEventGate.serial
+                        _ = try await wildStateEventGate.wait(after: stateSerialBeforeWait, timeoutMS: 550)
+                        let refreshedHP = wildMobs[current.index]?.hp
+                        if CombatStateConfirmationPolicy.isStateCorrelatedHit(
+                            beforeHP: hpBeforeSwing,
+                            afterHP: refreshedHP,
+                            snapshotAdvanced: wildSnapshotSerial > wildSnapshotBefore
+                        ) {
+                            stateCorrelatedHP = refreshedHP
+                        }
+                    }
+                }
+
+                let acknowledgedByServerState = stateCorrelatedHP != nil
+                ackCadence.record(acknowledged: ack != nil || acknowledgedByServerState)
 
                 if let ack {
                     consecutiveAckTimeouts = 0
@@ -2600,18 +2958,35 @@ final class AutomationEngine {
                         killed = true
                         break
                     }
+                } else if let stateHP = stateCorrelatedHP {
+                    consecutiveAckTimeouts = 0
+                    acceptedHits += 1
+                    reporter(.stateConfirmedHit)
+                    let beforeLabel = hpBeforeSwing.map(String.init) ?? "?"
+                    let hpLabel = String(stateHP)
+                    reporter(.target("\(targetName) • HP \(hpLabel)"))
+                    reporter(.state(.acting, "Hit \(swing) confirmado por estado • \(targetName)"))
+                    reporter(.log("🛰️ \(targetName) • Hit \(swing) correlacionado por snapshot • HP \(beforeLabel) → \(hpLabel) • ACK específico ausente"))
+                    if stateHP <= 0 {
+                        // Snapshot HP=0 proves the target died, but without the
+                        // bot-specific wm_ev/kill credit another player may have
+                        // delivered the final blow. Keep the transport healthy,
+                        // but never fabricate a bot kill from correlation alone.
+                        targetBecameUnavailable = true
+                        reporter(.diagnostic("[COMBAT] alvo chegou a HP 0 por estado sem kill ACK • kill não atribuída ao bot"))
+                        break
+                    }
                 } else {
                     consecutiveAckTimeouts += 1
                     reporter(.hitAckTimeout)
                     reporter(.state(.recovering, "Hit \(swing) sem confirmação • \(targetName)"))
-                    reporter(.log("⚠️ \(targetName) • Hit \(swing) sem confirmação • próximo intervalo \(Int(ackCadence.cooldownMS))ms"))
+                    reporter(.log("⚠️ \(targetName) • Hit \(swing) sem ACK nem queda autoritativa de HP • próximo intervalo \(Int(ackCadence.cooldownMS))ms"))
 
-                    // RC3.4: 4 ACK timeouts consecutivos indicam Presence degradada.
-                    // Pare antes de continuar enviando ataques às cegas e entregue
-                    // ao fluxo autoritativo de reconexão/saída segura do Wild.
+                    // Quatro misses REAIS consecutivos (sem ACK e sem mudança
+                    // correlacionável de HP) indicam Presence degradada.
                     if consecutiveAckTimeouts >= CombatAckCadence.circuitBreakerThreshold {
-                        reporter(.diagnostic("[WARN] Presence degradada • \(consecutiveAckTimeouts) ACK timeouts consecutivos em \(targetName)"))
-                        reporter(.fatal("Presence degradada: \(consecutiveAckTimeouts) hits consecutivos sem confirmação"))
+                        reporter(.diagnostic("[WARN] Presence degradada • \(consecutiveAckTimeouts) misses reais consecutivos em \(targetName)"))
+                        reporter(.fatal("Presence degradada: \(consecutiveAckTimeouts) hits consecutivos sem ACK/estado"))
                         throw CancellationError()
                     }
                     try await sleep(280)
@@ -2675,7 +3050,7 @@ final class AutomationEngine {
                 } else {
                     xpText = " • XP aguardando confirmação do servidor"
                 }
-                reporter(.log("✅ \(targetName) derrotado • \(successes)/\(goal) • hits confirmados=\(acceptedHits)\(xpText)"))
+                reporter(.log("✅ \(targetName) derrotado • \(successes)/\(goal) • hits aceitos=\(acceptedHits)\(xpText)"))
 
                 let drops = try await collectWildDrops(
                     mode: mode,
@@ -4015,6 +4390,7 @@ final class AutomationEngine {
         }
         wildMobs = next
         wildSnapshotSerial += 1
+        wildStateEventGate.signal()
     }
 
     private func moveAdjacent(to mob: LiveMob, gap: Double) async throws {
@@ -4476,6 +4852,7 @@ enum EngineError: LocalizedError {
     case combatSupplyFailed(String)
     case bankDepositFailed(String)
     case missingRequiredItem(String)
+    case gatherLoadoutNotReady(String)
     case missingFishingBait(String)
     case insufficientFishingBait(String, have: Int, need: Int)
     case unsupportedFishingBait(String)
@@ -4491,6 +4868,7 @@ enum EngineError: LocalizedError {
         case .combatSupplyFailed(let detail): return "Reposição de combate falhou: \(detail)"
         case .bankDepositFailed(let item): return "Recurso/item não pôde ser confirmado no banco: \(item)"
         case .missingRequiredItem(let item): return "Item obrigatório não encontrado no inventário/banco: \(item)"
+        case .gatherLoadoutNotReady(let item): return "Preflight de ferramenta não materializou \(item) antes de entrar em Whisperwood"
         case .missingFishingBait(let bait): return "Isca selecionada sem estoque: \(bait)"
         case .insufficientFishingBait(let bait, let have, let need): return "Isca insuficiente: \(bait) \(have)/\(need)"
         case .unsupportedFishingBait(let bait): return "Automação ainda não validada para \(bait)"
@@ -4991,6 +5369,11 @@ private struct KintaraHTTPClient {
         var request = URLRequest(url: url)
         request.httpMethod = method
         request.timeoutInterval = 15
+        if method == "GET", path.hasPrefix("/api/auth/me") {
+            request.cachePolicy = .reloadIgnoringLocalCacheData
+            request.setValue("no-cache", forHTTPHeaderField: "Cache-Control")
+            request.setValue("no-cache", forHTTPHeaderField: "Pragma")
+        }
         request.setValue(cookie, forHTTPHeaderField: "Cookie")
         request.setValue("application/json", forHTTPHeaderField: "Accept")
         if let body {
