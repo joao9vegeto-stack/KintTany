@@ -372,7 +372,7 @@ final class AppStore: ObservableObject {
     }
 
     private func stop(silent: Bool) {
-        guard let runID = activeRunID else {
+        guard activeRunID != nil else {
             if !silent { log("STOP ignorado — nenhuma atividade está em execução") }
             return
         }
@@ -431,11 +431,10 @@ final class AppStore: ObservableObject {
             log("STOP confirmado — nenhuma nova ação será enviada")
         }
 
-        Task { [weak self] in
-            guard let self else { return }
-            await self.socket.close()
-            self.completeRunCleanup(runID: runID)
-        }
+        // O fechamento pertence ao `defer` de `run`: ele só fecha o socket
+        // depois que `engineRunTask` devolve a ação em andamento cancelada.
+        // Fechar aqui em paralelo permitia um último frame disputar com o
+        // teardown e gerar "envio sem WebSocket conectado".
     }
 
     private func completeRunCleanup(runID: UUID) {
@@ -520,6 +519,7 @@ final class AppStore: ObservableObject {
             value.hasPrefix("[WS]") ||
             value.hasPrefix("[QUEUE]") ||
             value.hasPrefix("[SERVER]") ||
+            value.hasPrefix("[GATHER][TIMING]") ||
             value.hasPrefix("[BG]") ||
             value.hasPrefix("[WARN]") ||
             value.hasPrefix("[ERROR]") ||
@@ -608,6 +608,9 @@ final class AppStore: ObservableObject {
             let closingRunID = runID
             Task { [weak self] in
                 guard let self else { return }
+                // A engine já terminou neste ponto. Ceda uma vez para as tasks
+                // auxiliares observarem o cancelamento antes de fechar a Presence.
+                await Task.yield()
                 await self.socket.close()
                 self.completeRunCleanup(runID: closingRunID)
             }
@@ -1566,7 +1569,6 @@ final class AppStore: ObservableObject {
         // externo neutro, preservando exatamente o cleanup seguro existente.
         requestedStopReason = .backgroundExpiration
         terminalFailureHandled = true
-        let expiringRunID = activeRunID
         continuedTaskActivationWatchdog?.cancel()
         continuedTaskActivationWatchdog = nil
         continuedTaskObject = nil
@@ -1578,8 +1580,8 @@ final class AppStore: ObservableObject {
 
         // `engineRunTask` é uma Task independente da Task pai. Cancelar apenas
         // `task` deixava Fishing viva depois da expiração e mantinha activeRunID
-        // ocupado (sessão fantasma / start ignorado). Encerre todos os donos da
-        // sessão explicitamente e só libere single-flight depois do socket fechar.
+        // ocupado (sessão fantasma / start ignorado). O `defer` da Task pai
+        // fecha a Presence somente depois que esta engine cancelar de fato.
         engineRunTask?.cancel()
         task?.cancel()
         receiverTask?.cancel()
@@ -1593,11 +1595,6 @@ final class AppStore: ObservableObject {
         stats.lastEvent = "encerramento externo"
         diagnostic("[BG] Continued Processing encerrada/cancelada externamente • atividade não-Wild interrompida com cleanup completo")
         log("Continued Processing encerrada/cancelada pelo sistema ou pelo controle da Dynamic Island • atividade interrompida com segurança")
-        Task { [weak self] in
-            guard let self else { return }
-            await self.socket.close()
-            if let expiringRunID { self.completeRunCleanup(runID: expiringRunID) }
-        }
         endLegacyBackgroundTask()
     }
 
@@ -1644,7 +1641,6 @@ final class AppStore: ObservableObject {
 
         requestedStopReason = .backgroundExpiration
         terminalFailureHandled = true
-        let expiringRunID = activeRunID
         engineRunTask?.cancel()
         task?.cancel()
         receiverTask?.cancel()
@@ -1658,11 +1654,8 @@ final class AppStore: ObservableObject {
         stats.sessionErrors += 1
         stats.lastEvent = "background indisponível"
         log("Falha: Continued Processing não ficou ativa e a janela curta terminou • bot interrompido automaticamente")
-        Task { [weak self] in
-            guard let self else { return }
-            await self.socket.close()
-            if let expiringRunID { self.completeRunCleanup(runID: expiringRunID) }
-        }
+        // O `defer` de `run` fecha o socket após a engine observar o
+        // cancelamento, evitando corrida entre o último frame e o teardown.
     }
 
     private func endLegacyBackgroundTask() {
