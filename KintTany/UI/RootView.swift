@@ -343,15 +343,25 @@ struct RootView: View {
             .background(.black.opacity(0.24), in: RoundedRectangle(cornerRadius: 12, style: .continuous))
             .overlay(RoundedRectangle(cornerRadius: 12).stroke(.white.opacity(0.08), lineWidth: 1))
 
-            Text(app.activity == .fishing
-                 ? "Sessão atual: \(app.selectedFishingBait.displayName) • \(app.selectedFishingBait.supportLabel)"
-                 : "Selecionada: \(app.selectedFishingBait.displayName) • \(app.selectedFishingBait.supportLabel)")
+            Text(fishingBaitStatusText)
                 .font(.caption2)
-                .foregroundStyle(app.selectedFishingBait.isAutomationValidated ? .secondary : .orange)
+                .foregroundStyle(fishingBaitStatusColor)
         }
         .padding(15)
         .background(.white.opacity(0.045), in: RoundedRectangle(cornerRadius: 18, style: .continuous))
         .overlay(RoundedRectangle(cornerRadius: 18).stroke(.white.opacity(0.07), lineWidth: 1))
+    }
+
+
+    private var fishingBaitStatusText: String {
+        let prefix = app.activity == .fishing ? "Sessão atual" : "Selecionada"
+        let baitName = app.selectedFishingBait.displayName
+        let support = app.selectedFishingBait.supportLabel
+        return "\(prefix): \(baitName) • \(support)"
+    }
+
+    private var fishingBaitStatusColor: Color {
+        app.selectedFishingBait.isAutomationValidated ? Color.secondary : Color.orange
     }
 
     private var activityGrid: some View {
