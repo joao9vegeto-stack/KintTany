@@ -194,12 +194,32 @@ struct WorldState: Codable {
     var serverRegion: String?
 }
 
+enum ActivityRateMeter {
+    /// Matches the Node v5.2/v7.7 session-rate semantics: authoritative
+    /// successes divided by elapsed session minutes, with a 0.01 min floor.
+    static func perMinute(successes: Int, startedAt: Date?, now: Date = .now) -> Double {
+        guard successes > 0, let startedAt else { return 0 }
+        let elapsedMinutes = max(now.timeIntervalSince(startedAt) / 60.0, 0.01)
+        return Double(successes) / elapsedMinutes
+    }
+
+    static func formatted(successes: Int, startedAt: Date?, now: Date = .now) -> String {
+        String(format: "%.2f/min", perMinute(successes: successes, startedAt: startedAt, now: now))
+    }
+}
+
 struct ActivityStats: Codable {
     var attempts = 0
     var successes = 0
     var failures = 0
     var hits = 0
     var confirmedHits = 0
+    var hitAckTimeouts = 0
+    var hitAckTimeoutsForeground = 0
+    var hitAckTimeoutsBackground = 0
+    var potionAckTimeouts = 0
+    var potionAckTimeoutsForeground = 0
+    var potionAckTimeoutsBackground = 0
     var kills = 0
     var startedAt: Date?
     var lastEvent = ""
@@ -273,6 +293,14 @@ final class AppStore: ObservableObject {
 
     var progress: Double {
         min(1, Double(stats.successes) / Double(max(goal, 1)))
+    }
+
+    func ratePerMinute(at now: Date = .now) -> Double {
+        ActivityRateMeter.perMinute(successes: stats.successes, startedAt: stats.startedAt, now: now)
+    }
+
+    func formattedRatePerMinute(at now: Date = .now) -> String {
+        ActivityRateMeter.formatted(successes: stats.successes, startedAt: stats.startedAt, now: now)
     }
 
     /// Texto compartilhado pelo card da atividade e pela Dynamic Island.
@@ -419,10 +447,16 @@ final class AppStore: ObservableObject {
             backgroundState = "foreground/finalizada"
         }
 
+        let finalRate = ActivityRateMeter.perMinute(successes: stats.successes, startedAt: stats.startedAt, now: .now)
+
         log("📊 RESUMO DA SESSÃO • \(mode.localizedTitle) • \(outcome)")
         log("Meta \(goal) • sucessos \(stats.successes) • tentativas \(stats.attempts) • falhas \(stats.failures) • tempo \(duration)")
+        log(String(format: "⚡ Ritmo médio • %.2f/min", finalRate))
         if mode == .chicken || mode.isWildCombat {
-            log("Combate • hits enviados \(stats.hits) • hits confirmados \(stats.confirmedHits) • kills \(stats.kills)")
+            log("Combate • hits enviados \(stats.hits) • hits confirmados \(stats.confirmedHits) • ACK timeout \(stats.hitAckTimeouts) (FG \(stats.hitAckTimeoutsForeground) / BG \(stats.hitAckTimeoutsBackground)) • kills \(stats.kills)")
+            if mode.isWildCombat {
+                log("Poções • drink_ack timeout \(stats.potionAckTimeouts) (FG \(stats.potionAckTimeoutsForeground) / BG \(stats.potionAckTimeoutsBackground))")
+            }
         }
         log("Background • \(backgroundState)")
     }
@@ -989,6 +1023,24 @@ final class AppStore: ObservableObject {
             advanceContinuedProcessingSubprogress()
             updateContinuedProcessingProgress()
 
+        case .hitAckTimeout:
+            stats.hitAckTimeouts += 1
+            if lastScenePhaseKey == "background" {
+                stats.hitAckTimeoutsBackground += 1
+            } else {
+                stats.hitAckTimeoutsForeground += 1
+            }
+            stats.lastEvent = "hit ACK timeout"
+
+        case .potionAckTimeout:
+            stats.potionAckTimeouts += 1
+            if lastScenePhaseKey == "background" {
+                stats.potionAckTimeoutsBackground += 1
+            } else {
+                stats.potionAckTimeoutsForeground += 1
+            }
+            stats.lastEvent = "drink_ack timeout"
+
         case .kill:
             stats.kills += 1
             stats.lastEvent = "kill confirmado"
@@ -1366,10 +1418,10 @@ final class AppStore: ObservableObject {
             if requestedStopReason == nil { requestedStopReason = .backgroundExpiration }
             activeEngine.requestSafeStop(reason: requestedStopReason ?? .backgroundExpiration)
             state = .recovering
-            statusMessage = "Saindo do combate com segurança"
-            stats.lastEvent = "safe stop por expiração"
+            statusMessage = "Background expirando • saída imediata para o World"
+            stats.lastEvent = "saída de emergência por expiração"
             updateContinuedProcessingProgress(forceTitleUpdate: true)
-            diagnostic("[BG] Expiração recebida no Wild • safe-stop solicitado antes de concluir a tarefa")
+            diagnostic("[BG] Expiração recebida no Wild • emergency-exit solicitado • recovery/XP/loot deixam de ter prioridade")
             return
         }
 
@@ -1435,9 +1487,9 @@ final class AppStore: ObservableObject {
             if requestedStopReason == nil { requestedStopReason = .backgroundExpiration }
             activeEngine.requestSafeStop(reason: requestedStopReason ?? .backgroundExpiration)
             state = .recovering
-            statusMessage = "Saindo do combate com segurança"
-            stats.lastEvent = "safe stop por background"
-            diagnostic("[BG] Runtime curto esgotou no Wild • safe-stop solicitado")
+            statusMessage = "Background expirando • saída imediata para o World"
+            stats.lastEvent = "saída de emergência por background"
+            diagnostic("[BG] Runtime curto esgotou no Wild • emergency-exit solicitado")
             return
         }
 
