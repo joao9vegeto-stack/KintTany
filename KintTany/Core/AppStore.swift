@@ -59,6 +59,10 @@ enum ActivityMode: String, CaseIterable, Codable, Identifiable {
     var isWildCombat: Bool {
         self == .zombie || self == .dragon
     }
+
+    var isGathering: Bool {
+        self == .tree || self == .stone || self == .coal
+    }
 }
 
 
@@ -217,12 +221,17 @@ struct ActivityStats: Codable {
     var sessionErrors = 0
     var hits = 0
     var confirmedHits = 0
+    var stateConfirmedHits = 0
     var hitAckTimeouts = 0
     var hitAckTimeoutsForeground = 0
     var hitAckTimeoutsBackground = 0
     var potionAckTimeouts = 0
     var potionAckTimeoutsForeground = 0
     var potionAckTimeoutsBackground = 0
+    var gatherRecoveries = 0
+    var gatherRecoveriesForeground = 0
+    var gatherRecoveriesBackground = 0
+    var gatherProofMisses = 0
     var kills = 0
     var startedAt: Date?
     var lastEvent = ""
@@ -469,8 +478,12 @@ final class AppStore: ObservableObject {
             log("Sessão • erros estruturais \(stats.sessionErrors)")
         }
         log(String(format: "⚡ Ritmo médio • %.2f/min", finalRate))
+        if mode.isGathering {
+            log("Gather • recoveries internos \(stats.gatherRecoveries) (FG \(stats.gatherRecoveriesForeground) / BG \(stats.gatherRecoveriesBackground)) • proof misses \(stats.gatherProofMisses)")
+        }
         if mode == .chicken || mode.isWildCombat {
-            log("Combate • hits enviados \(stats.hits) • hits confirmados \(stats.confirmedHits) • ACK timeout \(stats.hitAckTimeouts) (FG \(stats.hitAckTimeoutsForeground) / BG \(stats.hitAckTimeoutsBackground)) • kills \(stats.kills)")
+            let statePart = stats.stateConfirmedHits > 0 ? " • por estado \(stats.stateConfirmedHits)" : ""
+            log("Combate • hits enviados \(stats.hits) • hits ACK \(stats.confirmedHits)\(statePart) • ACK timeout \(stats.hitAckTimeouts) (FG \(stats.hitAckTimeoutsForeground) / BG \(stats.hitAckTimeoutsBackground)) • kills \(stats.kills)")
             if mode.isWildCombat {
                 log("Poções • drink_ack timeout \(stats.potionAckTimeouts) (FG \(stats.potionAckTimeoutsForeground) / BG \(stats.potionAckTimeoutsBackground))")
             }
@@ -540,6 +553,138 @@ final class AppStore: ObservableObject {
         log("Sessão autenticada e salva no Keychain; realtime será conectado ao iniciar uma atividade")
     }
 
+
+    /// RC3.5 transactional loadout: when Axe/Pickaxe lives only in the bank,
+    /// create a short World Presence, walk to the real bank through the same
+    /// proven engine path, materialize the tool, close that transport, and only
+    /// then allow the definitive ElderGrove Presence to start.
+    private func prepareGatherToolBeforeRealtime(mode: ActivityMode, cookie: String, runID: UUID) async throws {
+        guard mode.isGathering else { return }
+        guard activeRunID == runID else { throw CancellationError() }
+
+        let disposition = await AutomationEngine.gatherToolPreflightDisposition(for: mode, cookie: cookie)
+        switch disposition {
+        case .ready:
+            diagnostic("[LOADOUT] \(mode.localizedTitle) • ferramenta já carregada antes da Presence")
+            return
+
+        case .missing(let tool):
+            throw EngineError.missingRequiredItem(ActivityToolPolicy.displayName(tool))
+
+        case .needsWorld(let tool):
+            let name = ActivityToolPolicy.displayName(tool)
+            state = .syncing
+            statusMessage = "🧰 Buscando \(name) no banco"
+            stats.lastEvent = "preflight World • \(name)"
+            updateContinuedProcessingProgress(forceTitleUpdate: true)
+            log("🧰 Preflight transacional • \(name) está no banco • abrindo World antes de Whisperwood")
+
+            let worldBootstrap = PresenceBootstrap(region: "world", position: Position(x: 22.5, z: -3.5))
+            var preflightReceiver: Task<Void, Never>?
+            do {
+                let preflightConnection = try await socket.connectBestNA(session: session, bootstrap: worldBootstrap)
+                await importSocketTrace()
+                guard activeRunID == runID else { throw CancellationError() }
+
+                let preflightEngine = AutomationEngine(
+                    socket: socket,
+                    cookie: cookie,
+                    shard: preflightConnection.shard,
+                    bootstrap: worldBootstrap,
+                    fishingBait: selectedFishingBait,
+                    reporter: { [weak self] event in
+                        guard let self else { return }
+                        switch event {
+                        case .log(let message):
+                            self.log(message)
+                        case .diagnostic(let message):
+                            self.diagnostic(message)
+                        case .state(let nextState, let message):
+                            self.state = nextState
+                            self.statusMessage = message
+                            self.stats.lastEvent = message
+                            self.updateContinuedProcessingProgress()
+                        default:
+                            break
+                        }
+                    }
+                )
+
+                preflightReceiver = Task { [weak self] in
+                    guard let self else { return }
+                    for await data in preflightConnection.stream {
+                        if Task.isCancelled { break }
+                        preflightEngine.ingest(data)
+                        await self.importSocketTrace()
+                    }
+                }
+
+                await preflightEngine.prepareIdentity()
+                let carried = try await preflightEngine.prepareGatherToolFromWorld(for: mode)
+                guard carried >= 1 else { throw EngineError.missingRequiredItem(name) }
+
+                preflightReceiver?.cancel()
+                preflightReceiver = nil
+                await socket.close()
+                await importSocketTrace()
+                try await Task.sleep(nanoseconds: 180_000_000)
+                diagnostic("[LOADOUT] World preflight encerrado • \(name) confirmado • próxima Presence=ElderGrove")
+            } catch {
+                preflightReceiver?.cancel()
+                await socket.close()
+                await importSocketTrace()
+                throw error
+            }
+        }
+    }
+
+    /// Hard gather transport resync used only after repeated internal recoveries
+    /// and a long success drought. It preserves the run/meta and same shard, but
+    /// replaces the Presence stream so a stale background transport cannot hold
+    /// the session hostage for minutes.
+    private func restartGatherPresence(
+        mode: ActivityMode,
+        runID: UUID,
+        bootstrap: PresenceBootstrap
+    ) async throws {
+        guard activeRunID == runID else { throw CancellationError() }
+        guard mode.isGathering else { return }
+        guard let shard = activeShard, let engine = activeEngine else {
+            throw SocketError.notConnected
+        }
+
+        state = .recovering
+        statusMessage = "🔁 Ressincronizando \(mode.localizedTitle)"
+        stats.lastEvent = "gather transport resync"
+        updateContinuedProcessingProgress(forceTitleUpdate: true)
+        diagnostic("[GATHER] reiniciando Presence no mesmo shard \(shard) • meta/sessão preservadas")
+
+        receiverTask?.cancel()
+        receiverTask = nil
+        await socket.close()
+        await importSocketTrace()
+        try await Task.sleep(nanoseconds: 120_000_000)
+        guard activeRunID == runID else { throw CancellationError() }
+
+        let stream = try await socket.connect(session: session, shard: shard, bootstrap: bootstrap)
+        await importSocketTrace()
+        guard activeRunID == runID else { throw CancellationError() }
+
+        receiverTask = Task { [weak self] in
+            guard let self else { return }
+            for await data in stream {
+                if Task.isCancelled { break }
+                engine.ingest(data)
+                await self.importSocketTrace()
+            }
+            if !Task.isCancelled {
+                await self.handleUnexpectedRealtimeEnd(for: mode, runID: runID)
+            }
+        }
+        connected = true
+        diagnostic("[GATHER] nova Presence ativa • shard=\(shard) • region=eldergrove")
+    }
+
     private func run(_ mode: ActivityMode, runID: UUID) async {
         guard activeRunID == runID else { return }
         guard let cookie = session.cookie, !cookie.isEmpty else {
@@ -602,6 +747,12 @@ final class AppStore: ObservableObject {
         }
 
         do {
+            try await prepareGatherToolBeforeRealtime(mode: mode, cookie: cookie, runID: runID)
+            guard activeRunID == runID else { return }
+            state = .connecting
+            statusMessage = "Conectando à região da atividade"
+            updateContinuedProcessingProgress()
+
             let connection = try await socket.connectBestNA(session: session, bootstrap: bootstrap)
             guard activeRunID == runID else { return }
             let stream = connection.stream
@@ -619,6 +770,14 @@ final class AppStore: ObservableObject {
                 fishingBait: selectedFishingBait,
                 reporter: { [weak self] event in
                     self?.handleEngineEvent(event, runID: runID)
+                },
+                gatherTransportResyncer: { [weak self] reconnectBootstrap in
+                    guard let self else { throw CancellationError() }
+                    try await self.restartGatherPresence(
+                        mode: mode,
+                        runID: runID,
+                        bootstrap: reconnectBootstrap
+                    )
                 }
             )
             activeEngine = engine
@@ -742,6 +901,23 @@ final class AppStore: ObservableObject {
                 _ = await recoverWildAfterUnexpectedDisconnect(mode: mode, runID: runID, shard: shard, cookie: cookie)
                 return
             }
+
+            // RC3.4: um World sem ACK pode já ter sido aplicado pelo servidor.
+            // Reconecte no mesmo shard e deixe snapshot autoritativo decidir se
+            // já estamos em World ou se ainda é preciso concluir safe-exit.
+            if mode.isWildCombat,
+               let engineError = error as? EngineError,
+               case .worldExitUnconfirmed = engineError,
+               let shard = activeShard {
+                requestWildConnectionRecovery(
+                    reason: "Saída para World sem confirmação; verificando estado autoritativo por reconexão",
+                    runID: runID
+                )
+                await socket.close()
+                _ = await recoverWildAfterUnexpectedDisconnect(mode: mode, runID: runID, shard: shard, cookie: cookie)
+                return
+            }
+
             if terminalFailureHandled { return }
             terminalFailureHandled = true
             connected = false
@@ -800,18 +976,35 @@ final class AppStore: ObservableObject {
     /// the single owner of the reconnect loop, preventing double reconnects.
     private func requestWildConnectionRecovery(reason: String, runID: UUID) {
         guard activeRunID == runID, activity?.isWildCombat == true, !terminalFailureHandled else { return }
+
+        let lower = reason.lowercased()
+        let worldVerification = lower.contains("world") && lower.contains("confirma")
+        let degradedPresence = lower.contains("presence degradada") || lower.contains("hits consecutivos")
+
         if !connectionRecoveryRequested {
             connectionRecoveryDetail = reason
             diagnostic("[WARN] \(reason) • Wilderness: reconexão de emergência solicitada")
-            log("⚠️ Conexão perdida no Wild • nenhum novo ataque será enviado • aguardando rede para retornar ao World")
+            if worldVerification {
+                log("🔎 Saída para World sem confirmação • nenhum novo ataque será enviado • verificando região por reconexão")
+            } else if degradedPresence {
+                log("⚠️ Presence degradada no Wild • ataques suspensos • reconectando para confirmar estado e sair com segurança")
+            } else {
+                log("⚠️ Conexão perdida no Wild • nenhum novo ataque será enviado • aguardando rede para retornar ao World")
+            }
         }
         connectionRecoveryRequested = true
         connected = false
         state = .recovering
-        statusMessage = requestedStopReason == .user
-            ? "STOP • aguardando rede para saída segura"
-            : "Conexão perdida • recuperando saída segura"
-        stats.lastEvent = "reconexão de emergência"
+        if requestedStopReason == .user {
+            statusMessage = "STOP • aguardando rede para saída segura"
+        } else if worldVerification {
+            statusMessage = "Verificando saída para World"
+        } else if degradedPresence {
+            statusMessage = "Presence degradada • saída segura"
+        } else {
+            statusMessage = "Conexão perdida • recuperando saída segura"
+        }
+        stats.lastEvent = worldVerification ? "verificando região autoritativa" : "reconexão de emergência"
         updateContinuedProcessingProgress(forceTitleUpdate: true)
         engineRunTask?.cancel()
         receiverTask?.cancel()
@@ -1043,7 +1236,13 @@ final class AppStore: ObservableObject {
 
         case .confirmedHit:
             stats.confirmedHits += 1
-            stats.lastEvent = "hit confirmado"
+            stats.lastEvent = "hit confirmado por ACK"
+            advanceContinuedProcessingSubprogress()
+            updateContinuedProcessingProgress()
+
+        case .stateConfirmedHit:
+            stats.stateConfirmedHits += 1
+            stats.lastEvent = "hit correlacionado por estado"
             advanceContinuedProcessingSubprogress()
             updateContinuedProcessingProgress()
 
@@ -1064,6 +1263,16 @@ final class AppStore: ObservableObject {
                 stats.potionAckTimeoutsForeground += 1
             }
             stats.lastEvent = "drink_ack timeout"
+
+        case .gatherRecovery(let proofMiss):
+            stats.gatherRecoveries += 1
+            if proofMiss { stats.gatherProofMisses += 1 }
+            if lastScenePhaseKey == "background" {
+                stats.gatherRecoveriesBackground += 1
+            } else {
+                stats.gatherRecoveriesForeground += 1
+            }
+            stats.lastEvent = proofMiss ? "gather proof miss/recovery" : "gather recovery"
 
         case .kill:
             stats.kills += 1
@@ -1560,6 +1769,18 @@ final class AppStore: ObservableObject {
     private func importSocketTrace() async {
         let lines = await socket.drainTrace()
         for line in lines {
+            let lower = line.lowercased()
+            let expectedCleanup = requestedStopReason != nil || terminalFailureHandled || activity == nil
+            if expectedCleanup && (
+                lower.contains("software caused connection abort") ||
+                lower.contains("operation cancelled") ||
+                lower.contains("operation canceled") ||
+                lower.contains("falhou: cancelled") ||
+                lower.contains("falhou: canceled") ||
+                (lower.contains("abortado em") && (lower.contains("cancelled") || lower.contains("canceled")))
+            ) {
+                continue
+            }
             diagnostic(line)
         }
     }
