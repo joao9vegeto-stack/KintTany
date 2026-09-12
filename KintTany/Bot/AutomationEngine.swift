@@ -153,7 +153,7 @@ struct ActivityToolPolicy {
     static func requiredTool(for mode: ActivityMode) -> String? {
         switch mode {
         case .tree: return "tool_axe"
-        case .coal, .stone: return "tool_pickaxe"
+        case .coal, .stone, .iron: return "tool_pickaxe"
         case .fishing: return "tool_fishing_rod"
         case .chicken, .zombie, .dragon: return nil
         }
@@ -165,6 +165,53 @@ struct ActivityToolPolicy {
         case "tool_pickaxe": return "Pickaxe"
         case "tool_fishing_rod": return "Fishing Rod"
         default: return type
+        }
+    }
+}
+
+struct GatherResourcePolicy {
+    static func matches(mode: ActivityMode, kind: String, hasCoal: Bool, hasMetal: Bool) -> Bool {
+        switch mode {
+        case .tree: return kind == "tree"
+        case .coal: return kind == "rock" && hasCoal && !hasMetal
+        case .stone: return kind == "rock" && !hasCoal && !hasMetal
+        case .iron: return kind == "rock" && !hasCoal && hasMetal
+        default: return false
+        }
+    }
+}
+
+struct GatherRegionPolicy {
+    static func region(for mode: ActivityMode) -> String {
+        mode == .iron ? "frostmere" : "eldergrove"
+    }
+
+    static func startPosition(for mode: ActivityMode) -> Position {
+        switch mode {
+        case .tree: return Position(x: -6.5, z: -18.5)
+        case .iron: return Position(x: 5.5, z: -18.5)
+        default: return Position(x: 22.5, z: -3.5)
+        }
+    }
+
+    static func isGatherRegion(_ region: String) -> Bool {
+        let normalized = region.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        return normalized == "eldergrove" || normalized == "frostmere"
+    }
+
+    static func gridOffset(for region: String) -> Double {
+        region.lowercased() == "frostmere" ? 19.5 : 24.5
+    }
+
+    static func hasCoal(region: String, packetValue: Bool?) -> Bool? {
+        region.lowercased() == "frostmere" ? (packetValue ?? false) : packetValue
+    }
+
+    static func hasMetal(region: String, packetValue: Bool?) -> Bool? {
+        switch region.lowercased() {
+        case "frostmere": return packetValue ?? true
+        case "eldergrove": return packetValue ?? false
+        default: return packetValue
         }
     }
 }
@@ -576,13 +623,15 @@ actor AutomationEngine {
         self.gatherKnowledge = GatherKnowledgeStore()
         self.region = bootstrap.region
         self.position = bootstrap.position
-        self.gatherPositionMemory = gatherKnowledge.positionSnapshot(region: "eldergrove")
+        self.gatherPositionMemory = gatherKnowledge.positionSnapshot(region: bootstrap.region)
     }
 
     static func bootstrap(for mode: ActivityMode) -> PresenceBootstrap {
         switch mode {
         case .tree:
             return PresenceBootstrap(region: "eldergrove", position: Position(x: -6.5, z: -18.5))
+        case .iron:
+            return PresenceBootstrap(region: "frostmere", position: Position(x: 5.5, z: -18.5))
         case .coal, .stone, .chicken:
             return PresenceBootstrap(region: "eldergrove", position: Position(x: 22.5, z: -3.5))
         case .fishing, .zombie, .dragon:
@@ -604,7 +653,7 @@ actor AutomationEngine {
         for mode: ActivityMode,
         gatherDisposition: GatherToolPreflightDisposition
     ) -> PresenceBootstrap {
-        guard mode == .tree || mode == .stone || mode == .coal else {
+        guard mode.isGathering else {
             return bootstrap(for: mode)
         }
         if case .needsWorld = gatherDisposition {
@@ -614,7 +663,7 @@ actor AutomationEngine {
     }
 
     static func gatherToolPreflightDisposition(for mode: ActivityMode, cookie: String) async -> GatherToolPreflightDisposition {
-        guard mode == .tree || mode == .stone || mode == .coal,
+        guard mode.isGathering,
               let tool = ActivityToolPolicy.requiredTool(for: mode)
         else { return .ready }
 
@@ -630,7 +679,7 @@ actor AutomationEngine {
 
     @discardableResult
     static func ensureGatherToolCarried(for mode: ActivityMode, cookie: String) async throws -> Int {
-        guard mode == .tree || mode == .stone || mode == .coal,
+        guard mode.isGathering,
               let tool = ActivityToolPolicy.requiredTool(for: mode)
         else { return 0 }
         let client = KintaraHTTPClient(cookie: cookie)
@@ -765,7 +814,7 @@ actor AutomationEngine {
         try Task.checkCancellation()
 
         switch mode {
-        case .tree, .coal, .stone:
+        case .tree, .coal, .stone, .iron:
             try await runGather(mode: mode, goal: goal)
         case .fishing:
             try await runFishing(goal: goal)
@@ -847,9 +896,9 @@ actor AutomationEngine {
             resourceSnapshotRegion = snapshotRegion
 
             // World can also publish `res`. During the single-Presence tool
-            // preflight those rows must never contaminate ElderGrove cooldowns
-            // or unlock its persisted catalog.
-            if snapshotRegion == "eldergrove" {
+            // preflight those rows must never contaminate a gathering region's
+            // cooldowns or unlock its persisted catalog.
+            if let snapshotRegion, GatherRegionPolicy.isGatherRegion(snapshotRegion) {
                 let now = nowMS
                 for group in res {
                     let kind = ((group["kind"] ?? group["k"]) as? String) ?? ""
@@ -861,6 +910,7 @@ actor AutomationEngine {
                         kind: kind,
                         keys: keys,
                         hasCoal: RealtimeProtocol.bool(group["hasCoal"]),
+                        hasMetal: RealtimeProtocol.bool(group["hasMetal"]),
                         source: "snap_cooldown"
                     )
                     let until = RealtimeProtocol.double(group["until"]) ?? (now + 2_500)
@@ -909,6 +959,7 @@ actor AutomationEngine {
                     kind: kind,
                     keys: keys,
                     hasCoal: RealtimeProtocol.bool(item["hasCoal"]),
+                    hasMetal: RealtimeProtocol.bool(item["hasMetal"]),
                     source: "snap_wear"
                 )
                 guard matchesCurrentGather(kind: kind, keys: keys) else { continue }
@@ -992,7 +1043,7 @@ actor AutomationEngine {
     private func setRegion(_ value: String, at pos: Position, extras: [String: Any] = [:]) async throws {
         let previousRegion = region.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
         let nextRegion = value.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
-        if nextRegion == "eldergrove", previousRegion != nextRegion {
+        if GatherRegionPolicy.isGatherRegion(nextRegion), previousRegion != nextRegion {
             resourceSnapshotRegion = nil
             cooldownUntil.removeAll(keepingCapacity: true)
             gatherBusyUntil.removeAll(keepingCapacity: true)
@@ -1122,17 +1173,19 @@ actor AutomationEngine {
     private func runGather(mode: ActivityMode, goal: Int) async throws {
         // RC3.6: se a ferramenta estava no banco, a mesma engine/Presence já a
         // materializou em World. Daqui em diante a ferramenta precisa estar
-        // carregada e Gathering nunca tenta ElderGrove→World no hot path.
+        // carregada e Gathering nunca volta ao World no hot path.
         try await ensureActivityToolLoadout(for: mode)
 
-        reporter(.state(.syncing, "Sincronizando Whisperwood"))
-        if serverRegion?.lowercased() != "eldergrove" {
-            let start = mode == .tree ? Position(x: -6.5, z: -18.5) : Position(x: 22.5, z: -3.5)
-            try await setRegion("eldergrove", at: start)
+        let targetRegion = GatherRegionPolicy.region(for: mode)
+        let start = GatherRegionPolicy.startPosition(for: mode)
+        reporter(.state(.syncing, "Sincronizando \(prettyRegion(targetRegion))"))
+        if serverRegion?.lowercased() != targetRegion {
+            try await setRegion(targetRegion, at: start)
         }
-        guard try await waitForRegion("eldergrove", timeoutMS: 6_000) else {
-            throw EngineError.regionNotConfirmed("eldergrove")
+        guard try await waitForRegion(targetRegion, timeoutMS: 6_000) else {
+            throw EngineError.regionNotConfirmed(targetRegion)
         }
+        gatherPositionMemory = gatherKnowledge.positionSnapshot(region: targetRegion)
 
         let hb = Task { [weak self] in await self?.heartbeat() }
         defer {
@@ -1147,11 +1200,11 @@ actor AutomationEngine {
 
         reporter(.state(.searching, "Sincronizando recursos"))
         let resourceDeadline = nowMS + 7_000
-        while resourceSnapshotRegion != "eldergrove" && nowMS < resourceDeadline {
+        while resourceSnapshotRegion != targetRegion && nowMS < resourceDeadline {
             try Task.checkCancellation()
             try await sleep(80)
         }
-        if resourceSnapshotRegion != "eldergrove" {
+        if resourceSnapshotRegion != targetRegion {
             reporter(.diagnostic("[GATHER] snap.res ainda não chegou; usando somente bootstrap conhecido, sem assumir disponibilidade do catálogo persistido"))
         } else {
             let persisted = persistedSeedCount(for: mode)
@@ -1189,18 +1242,20 @@ actor AutomationEngine {
                 let successfulPosition = Position(x: position.x, y: 0.25, z: position.z, ry: position.ry)
                 gatherPositionMemory[signature] = successfulPosition
                 _ = gatherKnowledge.rememberPosition(
-                    region: "eldergrove",
+                    region: targetRegion,
                     kind: seed.kind,
                     keys: seed.keys,
                     position: successfulPosition,
                     at: nowMS
                 )
-                let resolvedCoal: Bool? = seed.kind == "rock" ? (mode == .coal ? true : (mode == .stone ? false : seed.hasCoal)) : nil
+                let resolvedCoal: Bool? = seed.kind == "rock" ? seed.hasCoal : nil
+                let resolvedMetal: Bool? = seed.kind == "rock" ? seed.hasMetal : nil
                 let catalogChange = gatherKnowledge.rememberResource(
-                    region: "eldergrove",
+                    region: targetRegion,
                     kind: seed.kind,
                     keys: seed.keys,
                     hasCoal: resolvedCoal,
+                    hasMetal: resolvedMetal,
                     source: "self_felled",
                     confirmedAt: nowMS
                 )
@@ -1398,7 +1453,14 @@ actor AutomationEngine {
         }
 
         func sendHit(proof: String?) async throws {
-            let data = try RealtimeProtocol.harvestHit(region: region, kind: kind, keys: seed.keys, hasCoal: seed.hasCoal, hasMetal: false, proof: proof)
+            let data = try RealtimeProtocol.harvestHit(
+                region: region,
+                kind: kind,
+                keys: seed.keys,
+                hasCoal: seed.hasCoal,
+                hasMetal: seed.hasMetal,
+                proof: proof
+            )
             try await socket.send(data)
             totalHits += 1
             reporter(.hitSent)
@@ -1556,10 +1618,10 @@ actor AutomationEngine {
     }
 
     private func canonicalGatherRecoveryPositions(for seed: GatherSeed) -> [Position] {
-        canonicalGatherPositions(keys: seed.keys)
+        canonicalGatherPositions(keys: seed.keys, region: seed.region)
     }
 
-    private func canonicalGatherPositions(keys: [String]) -> [Position] {
+    private func canonicalGatherPositions(keys: [String], region: String) -> [Position] {
         let tiles: [(Int, Int)] = keys.compactMap { key in
             let parts = key.split(separator: ",")
             guard parts.count == 2, let c = Int(parts[0]), let r = Int(parts[1]) else { return nil }
@@ -1577,13 +1639,14 @@ actor AutomationEngine {
                 let key = "\(pc),\(pr)"
                 guard !occupied.contains(key), seen.insert(key).inserted else { continue }
 
-                let px = Double(pc) - 24.5
-                let pz = Double(pr) - 24.5
+                let gridOffset = GatherRegionPolicy.gridOffset(for: region)
+                let px = Double(pc) - gridOffset
+                let pz = Double(pr) - gridOffset
                 let nearest = tiles.min { a, b in
                     hypot(Double(a.0) - Double(pc), Double(a.1) - Double(pr)) < hypot(Double(b.0) - Double(pc), Double(b.1) - Double(pr))
                 } ?? (c, r)
-                let tx = Double(nearest.0) - 24.5
-                let tz = Double(nearest.1) - 24.5
+                let tx = Double(nearest.0) - gridOffset
+                let tz = Double(nearest.1) - gridOffset
                 let ry = atan2(tx - px, tz - pz)
                 candidates.append(Position(x: px, z: pz, ry: ry))
             }
@@ -1623,6 +1686,7 @@ actor AutomationEngine {
             kind: kind,
             keys: keys,
             hasCoal: RealtimeProtocol.bool(packet["hasCoal"]),
+            hasMetal: RealtimeProtocol.bool(packet["hasMetal"]),
             source: packet["evt"] as? String == "clear" ? "res_evt_clear" : "res_evt"
         )
 
@@ -1681,28 +1745,36 @@ actor AutomationEngine {
         kind: String,
         keys: [String],
         hasCoal: Bool?,
+        hasMetal: Bool?,
         source: String
     ) {
         let normalizedRegion = incomingRegion.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
-        guard normalizedRegion == "eldergrove" else { return }
+        guard GatherRegionPolicy.isGatherRegion(normalizedRegion) else { return }
+        let resolvedCoal = GatherRegionPolicy.hasCoal(region: normalizedRegion, packetValue: hasCoal)
+        let resolvedMetal = GatherRegionPolicy.hasMetal(region: normalizedRegion, packetValue: hasMetal)
         let change = gatherKnowledge.rememberResource(
             region: normalizedRegion,
             kind: kind,
             keys: keys,
-            hasCoal: hasCoal,
+            hasCoal: resolvedCoal,
+            hasMetal: resolvedMetal,
             source: source,
             confirmedAt: nowMS
         )
         guard change == .added || change == .updated else { return }
-        gatherPositionMemory = gatherKnowledge.positionSnapshot(region: "eldergrove")
+        if normalizedRegion == resourceSnapshotRegion {
+            gatherPositionMemory = gatherKnowledge.positionSnapshot(region: normalizedRegion)
+        }
 
         let normalizedKind = kind.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
         let subtype: String
         if normalizedKind == "tree" {
             subtype = "tree"
-        } else if hasCoal == true {
+        } else if resolvedMetal == true {
+            subtype = "iron"
+        } else if resolvedCoal == true {
             subtype = "coal"
-        } else if hasCoal == false {
+        } else if resolvedCoal == false && resolvedMetal == false {
             subtype = "stone"
         } else {
             subtype = "rock (subtipo ainda não confirmado)"
@@ -1714,12 +1786,14 @@ actor AutomationEngine {
     /// na seleção depois do primeiro snap.res atual, pois snap.res é a verdade de
     /// cooldown da geração atual. Isso replica a disciplina da v5.2: metadados
     /// persistem, disponibilidade/proof/progresso NÃO.
-    private func gatherSeedPool() -> [GatherSeed] {
-        var result = Self.gatherSeeds
-        guard resourceSnapshotRegion == "eldergrove" else { return result }
+    private func gatherSeedPool(region requestedRegion: String? = nil) -> [GatherSeed] {
+        let activeRegion = requestedRegion ?? resourceSnapshotRegion ?? serverRegion ?? region
+        let normalizedRegion = activeRegion.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        var result = Self.gatherSeeds.filter { $0.region == normalizedRegion }
+        guard resourceSnapshotRegion == normalizedRegion else { return result }
 
         var known = Set(result.map(\.signature))
-        for entry in gatherKnowledge.catalogEntries(region: "eldergrove") {
+        for entry in gatherKnowledge.catalogEntries(region: normalizedRegion) {
             let kind = entry.kind.lowercased()
             guard kind == "tree" || kind == "rock" else { continue }
             let entryKeys = Set(entry.resourceKeys)
@@ -1729,52 +1803,55 @@ actor AutomationEngine {
                 // até um FELLED confirmar o footprint completo no catálogo.
                 continue
             }
-            if kind == "rock", entry.hasCoal == nil {
+            let resolvedCoal = GatherRegionPolicy.hasCoal(region: normalizedRegion, packetValue: entry.hasCoal)
+            let resolvedMetal = GatherRegionPolicy.hasMetal(region: normalizedRegion, packetValue: entry.hasMetal)
+            if kind == "rock", resolvedCoal == nil || resolvedMetal == nil {
                 // Um rock sem subtipo comprovado é lembrado, mas não é usado como
-                // Stone por omissão. Um res_evt/snap com hasCoal ou um FELLED em
-                // modo Stone/Coal resolverá a classificação futuramente.
+                // Stone por omissão. Um res_evt/snap com os flags ou um FELLED
+                // resolverá a classificação futuramente.
                 continue
             }
             let signature = GatherKnowledgeStore.signature(kind: kind, keys: entry.resourceKeys)
             guard !signature.isEmpty, known.insert(signature).inserted else { continue }
-            guard let fallback = gatherPositionMemory[signature] ?? canonicalGatherPositions(keys: entry.resourceKeys).first else { continue }
+            guard let fallback = gatherPositionMemory[signature] ?? canonicalGatherPositions(keys: entry.resourceKeys, region: normalizedRegion).first else { continue }
             result.append(GatherSeed(
+                region: normalizedRegion,
                 kind: kind,
                 keys: entry.resourceKeys,
                 position: fallback,
                 targetKey: entry.resourceKeys.first ?? "?",
-                hasCoal: entry.hasCoal ?? false
+                hasCoal: resolvedCoal ?? false,
+                hasMetal: resolvedMetal ?? false
             ))
         }
         return result
     }
 
     private func persistedSeedCount(for mode: ActivityMode? = nil) -> Int {
-        guard resourceSnapshotRegion == "eldergrove" else { return 0 }
-        return gatherKnowledge.catalogEntries(region: "eldergrove").filter { entry in
+        let targetRegion = mode.map { GatherRegionPolicy.region(for: $0) } ?? resourceSnapshotRegion ?? region.lowercased()
+        guard resourceSnapshotRegion == targetRegion else { return 0 }
+        let bootstrapSeeds = Self.gatherSeeds.filter { $0.region == targetRegion }
+        return gatherKnowledge.catalogEntries(region: targetRegion).filter { entry in
             let entryKeys = Set(entry.resourceKeys)
-            if Self.gatherSeeds.contains(where: { $0.kind == entry.kind && !Set($0.keys).isDisjoint(with: entryKeys) }) { return false }
-            if entry.kind == "rock", entry.hasCoal == nil { return false }
+            if bootstrapSeeds.contains(where: { $0.kind == entry.kind && !Set($0.keys).isDisjoint(with: entryKeys) }) { return false }
+            let resolvedCoal = GatherRegionPolicy.hasCoal(region: targetRegion, packetValue: entry.hasCoal)
+            let resolvedMetal = GatherRegionPolicy.hasMetal(region: targetRegion, packetValue: entry.hasMetal)
+            if entry.kind == "rock", resolvedCoal == nil || resolvedMetal == nil { return false }
             guard let mode else { return true }
-            switch mode {
-            case .tree: return entry.kind == "tree"
-            case .coal: return entry.kind == "rock" && entry.hasCoal == true
-            case .stone: return entry.kind == "rock" && entry.hasCoal == false
-            default: return false
-            }
+            return GatherResourcePolicy.matches(
+                mode: mode,
+                kind: entry.kind,
+                hasCoal: resolvedCoal ?? false,
+                hasMetal: resolvedMetal ?? false
+            )
         }.count
     }
 
     private func selectGatherSeed(for mode: ActivityMode) -> GatherSeed? {
         let now = nowMS
-        return gatherSeedPool()
+        return gatherSeedPool(region: GatherRegionPolicy.region(for: mode))
             .filter { seed in
-                switch mode {
-                case .tree: return seed.kind == "tree"
-                case .coal: return seed.kind == "rock" && seed.hasCoal
-                case .stone: return seed.kind == "rock" && !seed.hasCoal
-                default: return false
-                }
+                GatherResourcePolicy.matches(mode: mode, kind: seed.kind, hasCoal: seed.hasCoal, hasMetal: seed.hasMetal)
             }
             .filter { seed in
                 gatherRetryPolicy.isEligible(signature: seed.signature, nowMS: now) &&
@@ -1793,15 +1870,11 @@ actor AutomationEngine {
 
     private func availableSeedCount(for mode: ActivityMode? = nil) -> Int {
         let now = nowMS
-        return gatherSeedPool().filter { seed in
+        let targetRegion = mode.map { GatherRegionPolicy.region(for: $0) }
+        return gatherSeedPool(region: targetRegion).filter { seed in
             let modeOK: Bool
             if let mode {
-                switch mode {
-                case .tree: modeOK = seed.kind == "tree"
-                case .coal: modeOK = seed.kind == "rock" && seed.hasCoal
-                case .stone: modeOK = seed.kind == "rock" && !seed.hasCoal
-                default: modeOK = false
-                }
+                modeOK = GatherResourcePolicy.matches(mode: mode, kind: seed.kind, hasCoal: seed.hasCoal, hasMetal: seed.hasMetal)
             } else {
                 modeOK = true
             }
@@ -1830,22 +1903,23 @@ actor AutomationEngine {
     }
 
     private func returnToGatherRegionIfNeeded(for mode: ActivityMode) async throws {
-        guard mode == .tree || mode == .stone || mode == .coal else { return }
-        let start = mode == .tree ? Position(x: -6.5, z: -18.5) : Position(x: 22.5, z: -3.5)
-        reporter(.state(.syncing, "🌲 Retornando a Whisperwood"))
-        try await setRegion("eldergrove", at: start)
-        guard try await waitForRegion("eldergrove", timeoutMS: 6_000) else {
-            throw EngineError.regionNotConfirmed("eldergrove")
+        guard mode.isGathering else { return }
+        let targetRegion = GatherRegionPolicy.region(for: mode)
+        let start = GatherRegionPolicy.startPosition(for: mode)
+        reporter(.state(.syncing, "Retornando a \(prettyRegion(targetRegion))"))
+        try await setRegion(targetRegion, at: start)
+        guard try await waitForRegion(targetRegion, timeoutMS: 6_000) else {
+            throw EngineError.regionNotConfirmed(targetRegion)
         }
     }
 
     /// Executed by the definitive session engine when its single Presence was
     /// bootstrapped in World. It reuses the proven movement + backpack path,
-    /// confirms the tool, and leaves World→ElderGrove to runGather on this same
+    /// confirms the tool, and leaves World→gather region to runGather on this same
     /// transport.
     @discardableResult
     func prepareGatherToolFromWorld(for mode: ActivityMode) async throws -> Int {
-        guard mode == .tree || mode == .stone || mode == .coal,
+        guard mode.isGathering,
               let tool = ActivityToolPolicy.requiredTool(for: mode)
         else { return 0 }
         let name = ActivityToolPolicy.displayName(tool)
@@ -1884,10 +1958,10 @@ actor AutomationEngine {
             return
         }
 
-        // RC3.6: Gathering nunca volta ElderGrove→World para buscar ferramenta.
+        // RC3.6: Gathering nunca volta da região de coleta ao World para buscar ferramenta.
         // Quando a ferramenta estava no banco, esta mesma engine já a trouxe em
         // World antes de iniciar o hot path de Gathering.
-        if mode == .tree || mode == .stone || mode == .coal {
+        if mode.isGathering {
             throw EngineError.gatherLoadoutNotReady(name)
         }
 
@@ -4444,6 +4518,7 @@ actor AutomationEngine {
     private func prettyRegion(_ value: String) -> String {
         switch value.lowercased() {
         case "eldergrove": return "Whisperwood"
+        case "frostmere": return "Frostmere"
         case "pond": return "The Pond"
         case "wild": return "Wilderness"
         default: return value.capitalized
@@ -4502,6 +4577,40 @@ actor AutomationEngine {
         GatherSeed(kind: "tree", keys: ["5,26"], position: Position(x: -18.5, z: 1.5, ry: -1.570796326795), targetKey: "5,26", hasCoal: false),
         GatherSeed(kind: "tree", keys: ["6,33"], position: Position(x: -18.5, z: 7.5, ry: 0), targetKey: "6,33", hasCoal: false),
         GatherSeed(kind: "tree", keys: ["9,28"], position: Position(x: -15.5, z: 2.5, ry: 0), targetKey: "9,28", hasCoal: false),
+        // Frostmere: 32 iron-rock footprints from the deterministic map layout.
+        // Iron remains wire kind `rock`; hasMetal is the authoritative subtype.
+        GatherSeed(region: "frostmere", kind: "rock", keys: ["38,34"], position: Position(x: 17.5, z: 14.5, ry: 1.570796326795), targetKey: "38,34", hasCoal: false, hasMetal: true),
+        GatherSeed(region: "frostmere", kind: "rock", keys: ["2,30", "3,30"], position: Position(x: -17.5, z: 9.5, ry: 0.463647609001), targetKey: "2,30", hasCoal: false, hasMetal: true),
+        GatherSeed(region: "frostmere", kind: "rock", keys: ["11,15"], position: Position(x: -8.5, z: -5.5, ry: 0), targetKey: "11,15", hasCoal: false, hasMetal: true),
+        GatherSeed(region: "frostmere", kind: "rock", keys: ["11,23"], position: Position(x: -8.5, z: 2.5, ry: 0), targetKey: "11,23", hasCoal: false, hasMetal: true),
+        GatherSeed(region: "frostmere", kind: "rock", keys: ["34,28"], position: Position(x: 14.5, z: 7.5, ry: 0), targetKey: "34,28", hasCoal: false, hasMetal: true),
+        GatherSeed(region: "frostmere", kind: "rock", keys: ["9,14", "9,15", "10,14", "10,15"], position: Position(x: -10.5, z: -6.5, ry: 0.321750554397), targetKey: "9,14", hasCoal: false, hasMetal: true),
+        GatherSeed(region: "frostmere", kind: "rock", keys: ["34,26"], position: Position(x: 14.5, z: 5.5, ry: 0), targetKey: "34,26", hasCoal: false, hasMetal: true),
+        GatherSeed(region: "frostmere", kind: "rock", keys: ["4,9", "5,9"], position: Position(x: -15.5, z: -11.5, ry: 0.463647609001), targetKey: "4,9", hasCoal: false, hasMetal: true),
+        GatherSeed(region: "frostmere", kind: "rock", keys: ["7,4"], position: Position(x: -13.5, z: -15.5, ry: 1.570796326795), targetKey: "7,4", hasCoal: false, hasMetal: true),
+        GatherSeed(region: "frostmere", kind: "rock", keys: ["8,35"], position: Position(x: -11.5, z: 14.5, ry: 0), targetKey: "8,35", hasCoal: false, hasMetal: true),
+        GatherSeed(region: "frostmere", kind: "rock", keys: ["1,21"], position: Position(x: -18.5, z: 0.5, ry: 0), targetKey: "1,21", hasCoal: false, hasMetal: true),
+        GatherSeed(region: "frostmere", kind: "rock", keys: ["38,36"], position: Position(x: 18.5, z: 15.5, ry: 0), targetKey: "38,36", hasCoal: false, hasMetal: true),
+        GatherSeed(region: "frostmere", kind: "rock", keys: ["37,15"], position: Position(x: 17.5, z: -5.5, ry: 0), targetKey: "37,15", hasCoal: false, hasMetal: true),
+        GatherSeed(region: "frostmere", kind: "rock", keys: ["9,18"], position: Position(x: -10.5, z: -2.5, ry: 0), targetKey: "9,18", hasCoal: false, hasMetal: true),
+        GatherSeed(region: "frostmere", kind: "rock", keys: ["39,22"], position: Position(x: 18.5, z: 2.5, ry: 1.570796326795), targetKey: "39,22", hasCoal: false, hasMetal: true),
+        GatherSeed(region: "frostmere", kind: "rock", keys: ["33,9", "34,9"], position: Position(x: 13.5, z: -11.5, ry: 0.463647609001), targetKey: "33,9", hasCoal: false, hasMetal: true),
+        GatherSeed(region: "frostmere", kind: "rock", keys: ["31,36"], position: Position(x: 11.5, z: 15.5, ry: 0), targetKey: "31,36", hasCoal: false, hasMetal: true),
+        GatherSeed(region: "frostmere", kind: "rock", keys: ["33,29"], position: Position(x: 13.5, z: 8.5, ry: 0), targetKey: "33,29", hasCoal: false, hasMetal: true),
+        GatherSeed(region: "frostmere", kind: "rock", keys: ["12,2", "13,2"], position: Position(x: -7.5, z: -18.5, ry: 0.463647609001), targetKey: "12,2", hasCoal: false, hasMetal: true),
+        GatherSeed(region: "frostmere", kind: "rock", keys: ["5,5"], position: Position(x: -14.5, z: -15.5, ry: 0), targetKey: "5,5", hasCoal: false, hasMetal: true),
+        GatherSeed(region: "frostmere", kind: "rock", keys: ["2,36", "3,36"], position: Position(x: -16.5, z: 15.5, ry: -0.463647609001), targetKey: "2,36", hasCoal: false, hasMetal: true),
+        GatherSeed(region: "frostmere", kind: "rock", keys: ["1,0"], position: Position(x: -19.5, z: -19.5, ry: 1.570796326795), targetKey: "1,0", hasCoal: false, hasMetal: true),
+        GatherSeed(region: "frostmere", kind: "rock", keys: ["39,9"], position: Position(x: 19.5, z: -11.5, ry: 0), targetKey: "39,9", hasCoal: false, hasMetal: true),
+        GatherSeed(region: "frostmere", kind: "rock", keys: ["34,17"], position: Position(x: 14.5, z: -3.5, ry: 0), targetKey: "34,17", hasCoal: false, hasMetal: true),
+        GatherSeed(region: "frostmere", kind: "rock", keys: ["26,8"], position: Position(x: 6.5, z: -12.5, ry: 0), targetKey: "26,8", hasCoal: false, hasMetal: true),
+        GatherSeed(region: "frostmere", kind: "rock", keys: ["25,30", "25,31"], position: Position(x: 4.5, z: 10.5, ry: 1.107148717794), targetKey: "25,30", hasCoal: false, hasMetal: true),
+        GatherSeed(region: "frostmere", kind: "rock", keys: ["23,33"], position: Position(x: 3.5, z: 12.5, ry: 0), targetKey: "23,33", hasCoal: false, hasMetal: true),
+        GatherSeed(region: "frostmere", kind: "rock", keys: ["39,21"], position: Position(x: 19.5, z: 0.5, ry: 0), targetKey: "39,21", hasCoal: false, hasMetal: true),
+        GatherSeed(region: "frostmere", kind: "rock", keys: ["7,25"], position: Position(x: -13.5, z: 5.5, ry: 1.570796326795), targetKey: "7,25", hasCoal: false, hasMetal: true),
+        GatherSeed(region: "frostmere", kind: "rock", keys: ["30,30"], position: Position(x: 10.5, z: 9.5, ry: 0), targetKey: "30,30", hasCoal: false, hasMetal: true),
+        GatherSeed(region: "frostmere", kind: "rock", keys: ["4,18"], position: Position(x: -15.5, z: -2.5, ry: 0), targetKey: "4,18", hasCoal: false, hasMetal: true),
+        GatherSeed(region: "frostmere", kind: "rock", keys: ["10,0"], position: Position(x: -10.5, z: -19.5, ry: 1.570796326795), targetKey: "10,0", hasCoal: false, hasMetal: true),
     ]
 
     private static let wildBlockedTiles: [String] = [
@@ -4535,11 +4644,32 @@ actor AutomationEngine {
 }
 
 private struct GatherSeed {
+    let region: String
     let kind: String
     let keys: [String]
     let position: Position
     let targetKey: String
     let hasCoal: Bool
+    let hasMetal: Bool
+
+    init(
+        region: String = "eldergrove",
+        kind: String,
+        keys: [String],
+        position: Position,
+        targetKey: String,
+        hasCoal: Bool,
+        hasMetal: Bool = false
+    ) {
+        self.region = region
+        self.kind = kind
+        self.keys = keys
+        self.position = position
+        self.targetKey = targetKey
+        self.hasCoal = hasCoal
+        self.hasMetal = hasMetal
+    }
+
     var signature: String { "\(kind):\(keys.sorted().joined(separator: "|"))" }
 }
 
@@ -4797,7 +4927,7 @@ enum EngineError: LocalizedError {
         case .combatSupplyFailed(let detail): return "Reposição de combate falhou: \(detail)"
         case .bankDepositFailed(let item): return "Recurso/item não pôde ser confirmado no banco: \(item)"
         case .missingRequiredItem(let item): return "Item obrigatório não encontrado no inventário/banco: \(item)"
-        case .gatherLoadoutNotReady(let item): return "Preflight de ferramenta não materializou \(item) antes de entrar em Whisperwood"
+        case .gatherLoadoutNotReady(let item): return "Preflight de ferramenta não materializou \(item) antes de entrar na região de coleta"
         case .missingFishingBait(let bait): return "Isca selecionada sem estoque: \(bait)"
         case .insufficientFishingBait(let bait, let have, let need): return "Isca insuficiente: \(bait) \(have)/\(need)"
         case .unsupportedFishingBait(let bait): return "Automação ainda não validada para \(bait)"
@@ -5346,6 +5476,7 @@ private extension ActivityMode {
         case .tree: return "Madeira"
         case .coal: return "Carvão"
         case .stone: return "Pedra"
+        case .iron: return "Iron Ore"
         case .fishing: return "Pesca"
         case .chicken: return "Galinha"
         case .zombie: return "Zumbi"
