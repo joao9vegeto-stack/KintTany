@@ -145,10 +145,17 @@ final class RealtimeProtocolTests: XCTestCase {
         XCTAssertTrue(policy.isEligible(signature: signature, nowMS: 26_000))
     }
 
-    func testGatherPersistenceNeverOwnsTheRealtimeHotPath() {
-        XCTAssertEqual(GatherPersistencePolicy.hotPathPreviewMS, 75)
-        XCTAssertEqual(GatherPersistencePolicy.finalDrainMS, 5_000)
-        XCTAssertLessThan(GatherPersistencePolicy.hotPathPreviewMS, GatherTimingPolicy.eventGraceMS)
+    func testGatherPersistenceSerializesAndDrainsBeforeNewRun() {
+        XCTAssertTrue(GatherPersistencePolicy.serializesLootWrites)
+        XCTAssertTrue(GatherPersistencePolicy.requiresCleanDrainBeforeCompletion)
+    }
+
+    func testGatherOptimisticInventoryRestoresPerSuccessTotal() {
+        XCTAssertEqual(GatherPersistencePolicy.optimisticTotal(current: 839, amount: 1), 840)
+        let grantTotal = GatherPersistencePolicy.reconciledTotal(current: 840, authoritative: 846)
+        XCTAssertEqual(grantTotal, 846)
+        XCTAssertEqual(GatherPersistencePolicy.optimisticTotal(current: grantTotal, amount: 1), 847)
+        XCTAssertNil(GatherPersistencePolicy.optimisticTotal(current: nil, amount: 1))
     }
 
     func testEverySafeGatherModeIsEligibleForTransportResume() {
