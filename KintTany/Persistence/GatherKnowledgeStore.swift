@@ -6,6 +6,7 @@ struct GatherCatalogRecord: Codable, Equatable {
     let kind: String
     let resourceKeys: [String]
     let hasCoal: Bool?
+    let hasMetal: Bool?
     let lastConfirmedAt: Double
     let source: String
 
@@ -146,6 +147,7 @@ final class GatherKnowledgeStore {
         kind: String,
         keys: [String],
         hasCoal incomingHasCoal: Bool?,
+        hasMetal incomingHasMetal: Bool? = nil,
         source: String,
         confirmedAt nowMS: Double = GatherKnowledgeStore.nowMS
     ) -> GatherKnowledgeChange {
@@ -180,21 +182,39 @@ final class GatherKnowledgeStore {
         let newestOld = oldRecords.max { $0.lastConfirmedAt < $1.lastConfirmedAt }
         let strongestOld = oldRecords.first(where: { $0.source == "self_felled" }) ?? newestOld
         let oldCoal = strongestOld?.hasCoal
+        let oldMetal = strongestOld?.hasMetal
         let hasCoal: Bool?
+        let hasMetal: Bool?
         if normalizedKind != "rock" {
             hasCoal = nil
-        } else if let incomingHasCoal {
-            if let oldCoal, oldCoal != incomingHasCoal, strongestOld?.source == "self_felled", cleanSource != "self_felled" {
-                hasCoal = oldCoal
-            } else {
-                hasCoal = incomingHasCoal
-            }
+            hasMetal = nil
         } else {
-            hasCoal = oldCoal
+            if let incomingHasCoal {
+                if let oldCoal, oldCoal != incomingHasCoal, strongestOld?.source == "self_felled", cleanSource != "self_felled" {
+                    hasCoal = oldCoal
+                } else {
+                    hasCoal = incomingHasCoal
+                }
+            } else {
+                hasCoal = oldCoal
+            }
+
+            if let incomingHasMetal {
+                if let oldMetal, oldMetal != incomingHasMetal, strongestOld?.source == "self_felled", cleanSource != "self_felled" {
+                    hasMetal = oldMetal
+                } else {
+                    hasMetal = incomingHasMetal
+                }
+            } else {
+                hasMetal = oldMetal
+            }
         }
 
         let oldKeys = newestOld?.resourceKeys.sorted() ?? []
-        let metadataChanged = newestOld == nil || oldKeys != mergedKeys || newestOld?.hasCoal != hasCoal
+        let metadataChanged = newestOld == nil ||
+            oldKeys != mergedKeys ||
+            newestOld?.hasCoal != hasCoal ||
+            newestOld?.hasMetal != hasMetal
         let oldAt = newestOld?.lastConfirmedAt ?? 0
 
         if !metadataChanged, nowMS - oldAt < confirmationRefreshMS {
@@ -211,6 +231,7 @@ final class GatherKnowledgeStore {
             kind: normalizedKind,
             resourceKeys: mergedKeys,
             hasCoal: hasCoal,
+            hasMetal: hasMetal,
             lastConfirmedAt: nowMS,
             source: cleanSource == "self_felled" || strongestOld?.source != "self_felled"
                 ? (metadataChanged ? cleanSource : (newestOld?.source ?? cleanSource))
