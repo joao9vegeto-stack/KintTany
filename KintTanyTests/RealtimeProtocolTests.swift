@@ -29,8 +29,27 @@ final class RealtimeProtocolTests: XCTestCase {
 
         XCTAssertEqual(stone["k"] as? String, "rock")
         XCTAssertEqual(stone["hasCoal"] as? Bool, false)
+        XCTAssertEqual(stone["hasMetal"] as? Bool, false)
         XCTAssertEqual(coal["k"] as? String, "rock")
         XCTAssertEqual(coal["hasCoal"] as? Bool, true)
+        XCTAssertEqual(coal["hasMetal"] as? Bool, false)
+    }
+
+    func testIronOreUsesRockWireKindWithMetalOnlyInFrostmere() throws {
+        let data = try RealtimeProtocol.harvestHit(
+            region: "frostmere",
+            kind: "rock",
+            keys: ["38,34"],
+            hasCoal: false,
+            hasMetal: true,
+            proof: "iron-proof"
+        )
+        let object = try XCTUnwrap(JSONSerialization.jsonObject(with: data) as? [String: Any])
+        XCTAssertEqual(object["region"] as? String, "frostmere")
+        XCTAssertEqual(object["k"] as? String, "rock")
+        XCTAssertEqual(object["hasCoal"] as? Bool, false)
+        XCTAssertEqual(object["hasMetal"] as? Bool, true)
+        XCTAssertEqual(object["actionProof"] as? String, "iron-proof")
     }
 
     func testHarvestHitCarriesActionProofOnlyWhenAvailable() throws {
@@ -318,6 +337,32 @@ final class RealtimeProtocolTests: XCTestCase {
         XCTAssertEqual(entries.first?.hasCoal, true)
     }
 
+    func testGatherResourceCatalogPersistsIronSubtypeInFrostmere() throws {
+        let dir = FileManager.default.temporaryDirectory.appendingPathComponent("KintTanyGatherIron-\(UUID().uuidString)", isDirectory: true)
+        defer { try? FileManager.default.removeItem(at: dir) }
+
+        let now = Date().timeIntervalSince1970 * 1_000
+        var store: GatherKnowledgeStore? = GatherKnowledgeStore(directoryURL: dir)
+        XCTAssertEqual(
+            store?.rememberResource(
+                region: "frostmere",
+                kind: "rock",
+                keys: ["38,34"],
+                hasCoal: false,
+                hasMetal: true,
+                source: "self_felled",
+                confirmedAt: now
+            ),
+            .added
+        )
+        store = nil
+
+        let reloaded = GatherKnowledgeStore(directoryURL: dir)
+        let entry = try XCTUnwrap(reloaded.catalogEntries(region: "frostmere", kind: "rock", nowMS: now + 100).first)
+        XCTAssertEqual(entry.hasCoal, false)
+        XCTAssertEqual(entry.hasMetal, true)
+    }
+
     func testGatherCatalogDoesNotDowngradeKnownRockSubtypeWhenLaterPacketOmitsFlag() throws {
         let dir = FileManager.default.temporaryDirectory.appendingPathComponent("KintTanyGatherSubtype-\(UUID().uuidString)", isDirectory: true)
         defer { try? FileManager.default.removeItem(at: dir) }
@@ -594,6 +639,29 @@ final class RealtimeProtocolTests: XCTestCase {
             gatherDisposition: .ready
         )
         XCTAssertEqual(bootstrap.region, "eldergrove")
+    }
+
+    @MainActor
+    func testIronPreflightConnectsDirectlyToFrostmereWhenPickaxeIsCarried() {
+        let bootstrap = AutomationEngine.bootstrapForRun(
+            for: .iron,
+            gatherDisposition: .ready
+        )
+        XCTAssertEqual(bootstrap.region, "frostmere")
+        XCTAssertEqual(ActivityToolPolicy.requiredTool(for: .iron), "tool_pickaxe")
+        XCTAssertTrue(ActivityMode.iron.isGathering)
+    }
+
+    func testStoneCoalAndIronResourceClassificationsNeverOverlap() {
+        XCTAssertTrue(GatherResourcePolicy.matches(mode: .stone, kind: "rock", hasCoal: false, hasMetal: false))
+        XCTAssertFalse(GatherResourcePolicy.matches(mode: .stone, kind: "rock", hasCoal: false, hasMetal: true))
+        XCTAssertTrue(GatherResourcePolicy.matches(mode: .coal, kind: "rock", hasCoal: true, hasMetal: false))
+        XCTAssertFalse(GatherResourcePolicy.matches(mode: .coal, kind: "rock", hasCoal: true, hasMetal: true))
+        XCTAssertTrue(GatherResourcePolicy.matches(mode: .iron, kind: "rock", hasCoal: false, hasMetal: true))
+        XCTAssertFalse(GatherResourcePolicy.matches(mode: .iron, kind: "rock", hasCoal: false, hasMetal: false))
+        XCTAssertEqual(GatherRegionPolicy.region(for: .iron), "frostmere")
+        XCTAssertEqual(GatherRegionPolicy.gridOffset(for: "frostmere"), 19.5)
+        XCTAssertEqual(GatherRegionPolicy.gridOffset(for: "eldergrove"), 24.5)
     }
 
     func testGatherKnowledgeExplicitFlushPersistsDebouncedChanges() throws {
