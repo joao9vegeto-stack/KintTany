@@ -70,6 +70,24 @@ struct GatherTimingPolicy {
     }
 }
 
+/// Movement is emitted as the same 150 ms / 3.5 units-per-second frame stream
+/// captured from the working Node client. A suspended iOS task must not consume
+/// the movement budget while no frame can run: only frames actually emitted
+/// advance the budget. This also prevents catch-up bursts after a background
+/// wake because every frame still waits for its normal relative delay.
+struct MovementProgressPolicy {
+    static let frameSeconds = 0.15
+    static let speed = 3.5
+
+    static func frameBudget(maxSeconds: Double, frameSeconds: Double = frameSeconds) -> Int {
+        max(1, Int(ceil(max(0, maxSeconds) / max(0.001, frameSeconds))))
+    }
+
+    static func exhausted(sentFrames: Int, maxSeconds: Double, frameSeconds: Double = frameSeconds) -> Bool {
+        sentFrames >= frameBudget(maxSeconds: maxSeconds, frameSeconds: frameSeconds)
+    }
+}
+
 struct CombatStateConfirmationPolicy {
     static func isStateCorrelatedHit(beforeHP: Int?, afterHP: Int?, snapshotAdvanced: Bool) -> Bool {
         guard snapshotAdvanced, let beforeHP, let afterHP else { return false }
@@ -77,8 +95,7 @@ struct CombatStateConfirmationPolicy {
     }
 }
 
-@MainActor
-private final class RealtimeEventGate {
+private actor RealtimeEventGate {
     private struct Waiter {
         let afterSerial: Int
         let continuation: CheckedContinuation<Bool, Never>
@@ -108,18 +125,18 @@ private final class RealtimeEventGate {
                     return
                 }
                 self.waiters[id] = Waiter(afterSerial: afterSerial, continuation: continuation)
-                Task { @MainActor [weak self] in
+                Task { [weak self] in
                     do {
                         try await Task.sleep(nanoseconds: UInt64(max(1, timeoutMS)) * 1_000_000)
                     } catch {
                         // Cancellation is handled by the outer cancellation handler.
                     }
-                    self?.resolve(id: id, value: false)
+                    await self?.resolve(id: id, value: false)
                 }
             }
         }, onCancel: {
-            Task { @MainActor [weak self] in
-                self?.resolve(id: id, value: false)
+            Task { [weak self] in
+                await self?.resolve(id: id, value: false)
             }
         })
         try Task.checkCancellation()
@@ -378,6 +395,13 @@ struct WildCombatSafetyPolicy {
     let postKillDamageQuietMS: Double
     let quickPostEffective: Int
 
+    /// A real Dragon burst was observed roughly four seconds after a kill.
+    /// The old 1.1 s fast path and 3 s quiet-only gate could therefore release
+    /// the combat loop before the authoritative damage arrived. Dragon always
+    /// remains in the no-new-contact observation phase for at least six seconds.
+    static let dragonMinimumPostKillObservationMS: Double = 6_000
+    static let dragonRequiredDamageQuietMS: Double = 3_000
+
     static func policy(for mode: ActivityMode) -> WildCombatSafetyPolicy {
         if mode == .dragon {
             return WildCombatSafetyPolicy(
@@ -407,8 +431,10 @@ struct EngineRunResult {
     let stopReason: EngineStopReason?
 }
 
-@MainActor
-final class AutomationEngine {
+/// The protocol engine owns one serial actor, independent from SwiftUI's main
+/// actor. Socket ingestion, ACK gates, movement and action profiles therefore
+/// continue to make progress while iOS deprioritizes UI work in background.
+actor AutomationEngine {
     typealias Reporter = (EngineEvent) -> Void
 
     private let socket: RealtimeSocket
@@ -635,7 +661,7 @@ final class AutomationEngine {
         }
     }
 
-    func ingest(_ data: Data) {
+    func ingest(_ data: Data) async {
         guard let packet = RealtimeProtocol.packet(data), let type = packet["t"] as? String else { return }
 
         if let le = RealtimeProtocol.int(packet["le"]), le > lifeEpoch {
@@ -653,13 +679,13 @@ final class AutomationEngine {
             }
 
         case "snap":
-            ingestSnapshot(packet)
+            await ingestSnapshot(packet)
 
         case "res_evt", "res_snap":
-            ingestResourceEvent(packet)
+            await ingestResourceEvent(packet)
 
         case "action_proof":
-            ingestActionProof(packet)
+            await ingestActionProof(packet)
 
         case "fish_spots":
             ingestFishSpots(packet)
@@ -760,9 +786,12 @@ final class AutomationEngine {
     /// RC3 emergency path used only after an unexpected Presence loss in Wild.
     /// It never resumes combat: after authoritative state arrives, its sole goal
     /// is to confirm death/World or leave Wilderness through the normal safe path.
-    func runEmergencyWildExit(mode: ActivityMode) async throws -> EmergencyWildExitResult {
+    func runEmergencyWildExit(
+        mode: ActivityMode,
+        reason: String = "reconexão de emergência"
+    ) async throws -> EmergencyWildExitResult {
         guard mode.isWildCombat else { return .alreadyWorld }
-        reporter(.state(.recovering, "Sincronizando estado após reconexão"))
+        reporter(.state(.recovering, "Sincronizando estado para saída segura"))
 
         let syncDeadline = nowMS + 8_000
         while nowMS < syncDeadline {
@@ -770,7 +799,7 @@ final class AutomationEngine {
             if playerHP <= 0 { return .dead }
             if let authoritative = serverRegion?.lowercased(), !authoritative.isEmpty {
                 if !authoritative.hasPrefix("wild") {
-                    reporter(.log("✅ Reconexão autoritativa • região=\(authoritative) • personagem fora da Wilderness"))
+                    reporter(.log("✅ Estado autoritativo • região=\(authoritative) • personagem fora da Wilderness"))
                     return .alreadyWorld
                 }
                 region = authoritative
@@ -790,19 +819,19 @@ final class AutomationEngine {
         lastCombatActivityAt = recoveredAt
         lastCombatDamageAt = recoveredAt
         safeStopReason = .connectionLoss
-        reporter(.log("🛡️ Reconexão confirmou Wilderness • nenhum ataque será retomado • iniciando saída segura"))
+        reporter(.log("🛡️ Wilderness confirmada após \(reason) • nenhum ataque será retomado • iniciando saída segura"))
 
-        try await moveToWildSafeCamp(reason: "reconexão de emergência")
+        try await moveToWildSafeCamp(reason: reason)
         guard playerHP > 0 else { return .dead }
-        try await waitForCombatSafetyWindow(reason: "reconexão de emergência")
+        try await waitForCombatSafetyWindow(reason: reason)
         guard playerHP > 0 else { return .dead }
-        try await exitWildToWorld(reason: "reconexão de emergência")
+        try await exitWildToWorld(reason: reason)
         return .worldSafe
     }
 
     // MARK: - Common state
 
-    private func ingestSnapshot(_ packet: [String: Any]) {
+    private func ingestSnapshot(_ packet: [String: Any]) async {
         let previousHP = playerHP
         let previousShield = playerShield
 
@@ -897,18 +926,18 @@ final class AutomationEngine {
                     harvestProofSerial += 1
                     gatherResourceSerial += 1
                 }
-                gatherEventGate.signal()
+                await gatherEventGate.signal()
             }
         }
 
         if let npcs = packet["npcs"] as? [String: Any] {
             ingestChickenCollections(npcs)
             if let wild = npcs["wildMobs"] as? [[String: Any]] {
-                ingestWildMobs(wild)
+                await ingestWildMobs(wild)
             }
         }
         if let wild = packet["wildMobs"] as? [[String: Any]] {
-            ingestWildMobs(wild)
+            await ingestWildMobs(wild)
         }
 
         if (serverRegion ?? region).hasPrefix("wild"), (playerHP < previousHP || playerShield < previousShield) {
@@ -1025,9 +1054,9 @@ final class AutomationEngine {
         if let status, !status.isEmpty {
             reporter(.state(.moving, status))
         }
-        let started = nowMS
-        let speed = 3.5
-        let dt = 0.15
+        let speed = MovementProgressPolicy.speed
+        let dt = MovementProgressPolicy.frameSeconds
+        var sentFrames = 0
 
         while true {
             try Task.checkCancellation()
@@ -1035,7 +1064,7 @@ final class AutomationEngine {
             let dz = target.z - position.z
             let distance = hypot(dx, dz)
             if distance < 0.4 { break }
-            if (nowMS - started) / 1_000 > maxSeconds {
+            if MovementProgressPolicy.exhausted(sentFrames: sentFrames, maxSeconds: maxSeconds, frameSeconds: dt) {
                 throw EngineError.movementTimeout
             }
 
@@ -1045,6 +1074,7 @@ final class AutomationEngine {
             position.y = 0.2978266400228179
             position.ry = atan2(dx, dz)
             try await sendPosition(moving: true)
+            sentFrames += 1
             reporter(.player(position, hp: playerHP, shield: playerShield, region: region))
             try await sleep(150)
         }
@@ -1236,7 +1266,7 @@ final class AutomationEngine {
         if merged.pureProofMiss {
             recordGatherRecovery(proofMiss: true)
             reporter(.diagnostic("[GATHER] proof miss • same-position event resync 900ms • \(seed.targetKey)"))
-            let eventBefore = gatherEventGate.serial
+            let eventBefore = await gatherEventGate.serial
             position.y = 0.25
             try await sendPosition(moving: false, full: true)
             _ = try await gatherEventGate.wait(after: eventBefore, timeoutMS: 900)
@@ -1386,12 +1416,12 @@ final class AutomationEngine {
 
             if let immediate = inspect() { return immediate }
             let deadline = nowMS + Double(timeoutMS)
-            var eventSerial = gatherEventGate.serial
+            var eventSerial = await gatherEventGate.serial
             while nowMS < deadline {
                 try Task.checkCancellation()
                 let remaining = max(1, Int(deadline - nowMS))
                 let signaled = try await gatherEventGate.wait(after: eventSerial, timeoutMS: remaining)
-                eventSerial = gatherEventGate.serial
+                eventSerial = await gatherEventGate.serial
                 if let state = inspect() { return state }
                 if !signaled { break }
             }
@@ -1404,7 +1434,7 @@ final class AutomationEngine {
             let hasHalfAck = (harvestProofSerial > proofBefore && !harvestProof.isEmpty) ||
                 (harvestWearSerial > wearBefore || harvestH > hBefore)
             if hasHalfAck {
-                let beforeGrace = gatherEventGate.serial
+                let beforeGrace = await gatherEventGate.serial
                 _ = try await gatherEventGate.wait(
                     after: beforeGrace,
                     timeoutMS: GatherTimingPolicy.eventGraceMS
@@ -1502,12 +1532,12 @@ final class AutomationEngine {
         }
 
         let settleDeadline = nowMS + 1_200
-        var settleSerial = gatherEventGate.serial
+        var settleSerial = await gatherEventGate.serial
         while nowMS < settleDeadline, !(harvestHM < 99 && harvestH >= harvestHM) {
             try Task.checkCancellation()
             let remaining = max(1, Int(settleDeadline - nowMS))
             let signaled = try await gatherEventGate.wait(after: settleSerial, timeoutMS: remaining)
-            settleSerial = gatherEventGate.serial
+            settleSerial = await gatherEventGate.serial
             if !signaled { break }
         }
         try? await clearAction()
@@ -1566,7 +1596,7 @@ final class AutomationEngine {
         }
     }
 
-    private func ingestActionProof(_ packet: [String: Any]) {
+    private func ingestActionProof(_ packet: [String: Any]) async {
         guard currentGatherSignature != nil else { return }
         if let by = RealtimeProtocol.int(packet["by"]), let playerID, by != playerID { return }
         let keys = stringArray(packet["keys"] ?? packet["key"])
@@ -1576,11 +1606,11 @@ final class AutomationEngine {
         harvestProof = proof
         harvestProofSerial += 1
         gatherResourceSerial += 1
-        gatherEventGate.signal()
+        await gatherEventGate.signal()
         reporter(.diagnostic("[GATHER] action_proof #\(harvestProofSerial)"))
     }
 
-    private func ingestResourceEvent(_ packet: [String: Any]) {
+    private func ingestResourceEvent(_ packet: [String: Any]) async {
         let kind = ((packet["kind"] ?? packet["k"]) as? String) ?? ""
         let keys = stringArray(packet["keys"] ?? packet["key"])
         let by = RealtimeProtocol.int(packet["by"])
@@ -1635,7 +1665,7 @@ final class AutomationEngine {
             harvestProofSerial += 1
         }
         if changed { harvestWearSerial += 1 }
-        gatherEventGate.signal()
+        await gatherEventGate.signal()
         reporter(.diagnostic("[GATHER] res_evt h=\(harvestH) hm=\(harvestHM) proof=\(!harvestProof.isEmpty) loot=\(harvestLoot ?? "-")"))
     }
 
@@ -2834,7 +2864,7 @@ final class AutomationEngine {
                     ) {
                         stateCorrelatedHP = existingHP
                     } else {
-                        let stateSerialBeforeWait = wildStateEventGate.serial
+                        let stateSerialBeforeWait = await wildStateEventGate.serial
                         _ = try await wildStateEventGate.wait(after: stateSerialBeforeWait, timeoutMS: 550)
                         let refreshedHP = wildMobs[current.index]?.hp
                         if CombatStateConfirmationPolicy.isStateCorrelatedHit(
@@ -3082,6 +3112,7 @@ final class AutomationEngine {
 
         // Disengage de um tile, escolhendo a célula cardinal válida que aumenta
         // a distância do mob morto. É a mesma geometria usada pelo Node.
+        var disengageCompleted = true
         if let step = safeWildStepAway(from: killPosition) {
             reporter(.diagnostic("[COMBAT] pós-kill disengage → \(format(step.x)),\(format(step.z))"))
             do {
@@ -3089,6 +3120,7 @@ final class AutomationEngine {
             } catch is CancellationError {
                 throw CancellationError()
             } catch {
+                disengageCompleted = false
                 reporter(.diagnostic("[COMBAT] disengage pós-kill não concluiu: \(error.localizedDescription)"))
             }
         }
@@ -3097,29 +3129,13 @@ final class AutomationEngine {
         if emergencyBackgroundExitRequested { return }
 
         if mode == .dragon {
-            // Fast path v5.2: só preserva Strength e evita o recuo longo quando
-            // vitais estão realmente altos e nenhum dano apareceu após a kill.
-            let quickMin = killedAt + 1_100
-            let quickDeadline = killedAt + 3_200
-            while nowMS < quickDeadline {
-                try Task.checkCancellation()
-                if emergencyBackgroundExitRequested { return }
-                guard playerHP > 0 else { throw EngineError.playerDead }
-                let damageAfterKill = lastCombatDamageAt > killedAt
-                let strong = playerHP >= policy.postKillSafeHP
-                    && playerShield >= policy.postKillSafeShield
-                    && effectiveVitals >= policy.quickPostEffective
-                    && !emergencyVitalDrop
-                if nowMS >= quickMin && !damageAfterKill && strong {
-                    reporter(.log("🛡️ Pós-Dragão seguro • disengage curto • HP \(playerHP) + shield \(playerShield)"))
-                    emergencyVitalDrop = false
-                    return
-                }
-                try await sleep(90)
-            }
-
+            // O histórico real contém burst autoritativo aproximadamente quatro
+            // segundos depois da kill. Portanto não existe fast path de 1.1 s:
+            // todo Dragão recua e permanece sem criar contato novo durante a
+            // janela que cobre esse dano tardio.
             if emergencyBackgroundExitRequested { return }
-            reporter(.log("🛡️ Pós-Dragão defensivo • recuando ao SAFE_CAMP antes de XP/loot"))
+            let suffix = disengageCompleted ? "" : " • disengage curto falhou"
+            reporter(.log("🛡️ Pós-Dragão defensivo • recuando ao SAFE_CAMP antes de XP/loot\(suffix)"))
             try await moveToWildSafeCamp(reason: "pós-Dragão")
             if emergencyBackgroundExitRequested { return }
         }
@@ -3128,14 +3144,21 @@ final class AutomationEngine {
         // Swift atual, usamos exclusivamente o dano autoritativo recebido; não
         // inventamos ACK de contato.
         let settleStarted = nowMS
-        let mustWaitUntil = settleStarted + 900
-        let settleDeadline = settleStarted + 3_200
+        let mustWaitUntil = mode == .dragon
+            ? max(settleStarted, killedAt + WildCombatSafetyPolicy.dragonMinimumPostKillObservationMS)
+            : settleStarted + 900
+        let settleDeadline = mode == .dragon
+            ? max(mustWaitUntil + WildCombatSafetyPolicy.dragonRequiredDamageQuietMS, killedAt + 12_000)
+            : settleStarted + 3_200
         while nowMS < settleDeadline {
             try Task.checkCancellation()
             if emergencyBackgroundExitRequested { return }
             guard playerHP > 0 else { throw EngineError.playerDead }
             let quietFor = nowMS - lastCombatDamageAt
-            if nowMS >= mustWaitUntil && quietFor >= policy.postKillDamageQuietMS { break }
+            let requiredQuiet = mode == .dragon
+                ? WildCombatSafetyPolicy.dragonRequiredDamageQuietMS
+                : policy.postKillDamageQuietMS
+            if nowMS >= mustWaitUntil && quietFor >= requiredQuiet { break }
             try await sleep(100)
         }
 
@@ -4277,7 +4300,7 @@ final class AutomationEngine {
         type.replacingOccurrences(of: "_", with: " ").capitalized
     }
 
-    private func ingestWildMobs(_ array: [[String: Any]]) {
+    private func ingestWildMobs(_ array: [[String: Any]]) async {
         guard region.hasPrefix("wild") || serverRegion?.hasPrefix("wild") == true else { return }
         var next: [Int: LiveMob] = [:]
         for (arrayIndex, mob) in array.enumerated() {
@@ -4296,7 +4319,7 @@ final class AutomationEngine {
         }
         wildMobs = next
         wildSnapshotSerial += 1
-        wildStateEventGate.signal()
+        await wildStateEventGate.signal()
     }
 
     private func moveAdjacent(to mob: LiveMob, gap: Double) async throws {
