@@ -145,6 +145,23 @@ final class RealtimeProtocolTests: XCTestCase {
         XCTAssertTrue(policy.isEligible(signature: signature, nowMS: 26_000))
     }
 
+    func testGatherPersistenceNeverOwnsTheRealtimeHotPath() {
+        XCTAssertEqual(GatherPersistencePolicy.hotPathPreviewMS, 75)
+        XCTAssertEqual(GatherPersistencePolicy.finalDrainMS, 5_000)
+        XCTAssertLessThan(GatherPersistencePolicy.hotPathPreviewMS, GatherTimingPolicy.eventGraceMS)
+    }
+
+    func testEverySafeGatherModeIsEligibleForTransportResume() {
+        XCTAssertTrue(ActivityMode.tree.isGathering)
+        XCTAssertTrue(ActivityMode.stone.isGathering)
+        XCTAssertTrue(ActivityMode.coal.isGathering)
+        XCTAssertTrue(ActivityMode.iron.isGathering)
+        XCTAssertFalse(ActivityMode.fishing.isGathering)
+        XCTAssertFalse(ActivityMode.chicken.isGathering)
+        XCTAssertFalse(ActivityMode.zombie.isGathering)
+        XCTAssertFalse(ActivityMode.dragon.isGathering)
+    }
+
     func testWildCombatModesRequireSafeStop() {
         XCTAssertTrue(ActivityMode.zombie.isWildCombat)
         XCTAssertTrue(ActivityMode.dragon.isWildCombat)
