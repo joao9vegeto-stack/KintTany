@@ -4,7 +4,7 @@ import UIKit
 import BackgroundTasks
 
 enum ActivityMode: String, CaseIterable, Codable, Identifiable {
-    case tree, coal, stone, fishing, chicken, zombie, dragon
+    case tree, coal, stone, iron, fishing, chicken, zombie, dragon
 
     var id: String { rawValue }
 
@@ -13,6 +13,7 @@ enum ActivityMode: String, CaseIterable, Codable, Identifiable {
         case .tree: "Tree"
         case .coal: "Coal"
         case .stone: "Stone"
+        case .iron: "Iron Ore"
         case .fishing: "Fishing"
         case .chicken: "Chicken"
         case .zombie: "Zombie"
@@ -25,6 +26,7 @@ enum ActivityMode: String, CaseIterable, Codable, Identifiable {
         case .tree: "Madeira"
         case .coal: "Carvão"
         case .stone: "Pedra"
+        case .iron: "Iron Ore"
         case .fishing: "Pesca"
         case .chicken: "Galinha"
         case .zombie: "Zumbi"
@@ -37,6 +39,7 @@ enum ActivityMode: String, CaseIterable, Codable, Identifiable {
         case .tree: "tree.fill"
         case .coal: "circle.fill"
         case .stone: "mountain.2.fill"
+        case .iron: "diamond.fill"
         case .fishing: "fish.fill"
         case .chicken: "bird.fill"
         case .zombie: "figure.walk"
@@ -49,6 +52,7 @@ enum ActivityMode: String, CaseIterable, Codable, Identifiable {
         case .tree: .green
         case .coal: .gray
         case .stone: .orange
+        case .iron: .blue
         case .fishing: .cyan
         case .chicken: .yellow
         case .zombie: .mint
@@ -61,7 +65,7 @@ enum ActivityMode: String, CaseIterable, Codable, Identifiable {
     }
 
     var isGathering: Bool {
-        self == .tree || self == .stone || self == .coal
+        self == .tree || self == .stone || self == .coal || self == .iron
     }
 }
 
@@ -147,6 +151,7 @@ enum ContinuedActivityStatusFormatter {
         case .tree: return "Cortando árvore"
         case .stone: return "Minerando pedra"
         case .coal: return "Minerando carvão"
+        case .iron: return "Minerando Iron Ore"
         case .fishing: return "Preparando pesca"
         case .chicken: return "Combatendo galinha"
         case .zombie: return state == .recovering ? "Saindo do combate com segurança" : "Em combate com zumbi"
@@ -734,13 +739,13 @@ final class AppStore: ObservableObject {
                     statusMessage = "🧰 Buscando \(name) no banco"
                     stats.lastEvent = "preflight World • \(name)"
                     updateContinuedProcessingProgress(forceTitleUpdate: true)
-                    log("🧰 Preflight transacional • \(name) está no banco • uma única Presence será mantida de World até Whisperwood")
+                    log("🧰 Preflight transacional • \(name) está no banco • uma única Presence será mantida de World até a região de coleta")
                 }
             }
 
             // A decisão autoritativa de inventário acontece antes da conexão.
             // Se a ferramenta está no banco, esta mesma Presence nasce em World,
-            // faz o saque e segue por region_ack até ElderGrove sem trocar socket,
+            // faz o saque e segue por region_ack até a região de coleta sem trocar socket,
             // queue token ou engine.
             let bootstrap = AutomationEngine.bootstrapForRun(
                 for: mode,
@@ -787,7 +792,7 @@ final class AppStore: ObservableObject {
                 let name = ActivityToolPolicy.displayName(tool)
                 let carried = try await engine.prepareGatherToolFromWorld(for: mode)
                 guard carried >= 1 else { throw EngineError.missingRequiredItem(name) }
-                diagnostic("[LOADOUT] \(name) confirmado • Presence preservada • transição World→ElderGrove será feita na mesma conexão")
+                diagnostic("[LOADOUT] \(name) confirmado • Presence preservada • transição World→região de coleta será feita na mesma conexão")
             }
 
             let child = Task.detached(priority: .userInitiated) {
