@@ -253,7 +253,7 @@ final class RealtimeProtocolTests: XCTestCase {
         XCTAssertEqual(cadence.cooldownMS, 1_850)
     }
 
-    func testDragonSafetyPolicyMatchesNodeV521() {
+    func testDragonSafetyThresholdsPreserveNodeV521Baseline() {
         let dragon = WildCombatSafetyPolicy.policy(for: .dragon)
         XCTAssertEqual(dragon.emergencyEffectiveHP, 160)
         XCTAssertEqual(dragon.finisherEffectiveHP, 175)
@@ -261,6 +261,12 @@ final class RealtimeProtocolTests: XCTestCase {
         XCTAssertEqual(dragon.postKillSafeShield, 90)
         XCTAssertEqual(dragon.postKillDamageQuietMS, 1_400)
         XCTAssertEqual(dragon.quickPostEffective, 185)
+    }
+
+    func testDragonPostKillObservationCoversKnownDelayedBurst() {
+        XCTAssertGreaterThanOrEqual(WildCombatSafetyPolicy.dragonMinimumPostKillObservationMS, 6_000)
+        XCTAssertGreaterThan(WildCombatSafetyPolicy.dragonMinimumPostKillObservationMS, 4_000)
+        XCTAssertEqual(WildCombatSafetyPolicy.dragonRequiredDamageQuietMS, 3_000)
     }
 
     func testZombieGeneralLowVitalsRuleRemainsSeparateFromDragonSafetyLayer() {
@@ -562,6 +568,12 @@ final class RealtimeProtocolTests: XCTestCase {
         XCTAssertEqual(GatherTimingPolicy.mineFrameGapMS, 65)
         XCTAssertEqual(GatherTimingPolicy.delayedFrameDiagnosticThresholdMS, 220)
         XCTAssertEqual(GatherTimingPolicy.eventGraceMS, 420)
+    }
+
+    func testMovementBudgetDependsOnEmittedFramesNotWallClock() {
+        XCTAssertEqual(MovementProgressPolicy.frameBudget(maxSeconds: 30), 200)
+        XCTAssertFalse(MovementProgressPolicy.exhausted(sentFrames: 199, maxSeconds: 30))
+        XCTAssertTrue(MovementProgressPolicy.exhausted(sentFrames: 200, maxSeconds: 30))
     }
 
     @MainActor
