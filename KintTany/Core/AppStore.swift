@@ -724,6 +724,12 @@ final class AppStore: ObservableObject {
             }
         }
 
+        // Compartilhada por todas as fases da sessão, inclusive após uma queda
+        // real da Presence. A fila serial impede concorrência entre stateSeqs.
+        let gatherPersistenceQueue = mode.isGathering
+            ? GatherLootPersistenceQueue(cookie: cookie)
+            : nil
+
         do {
             var gatherPreflight: GatherToolPreflightDisposition = .ready
             if mode.isGathering {
@@ -771,6 +777,7 @@ final class AppStore: ObservableObject {
                 shard: selectedShard,
                 bootstrap: bootstrap,
                 fishingBait: selectedFishingBait,
+                gatherPersistenceQueue: gatherPersistenceQueue,
                 reporter: engineReporter(runID: runID)
             )
             activeEngine = engine
@@ -870,6 +877,20 @@ final class AppStore: ObservableObject {
                 _ = await recoverWildAfterUnexpectedDisconnect(mode: mode, runID: runID, shard: shard, cookie: cookie)
                 return
             }
+            if mode.isGathering,
+               connectionRecoveryRequested,
+               let shard = activeShard,
+               let gatherPersistenceQueue {
+                _ = await recoverGatherAfterUnexpectedDisconnect(
+                    mode: mode,
+                    runID: runID,
+                    shard: shard,
+                    cookie: cookie,
+                    runGoal: runGoal,
+                    persistenceQueue: gatherPersistenceQueue
+                )
+                return
+            }
             if mode.isWildCombat, let activeEngine, let shard = activeShard {
                 await containWildTerminalFailure(
                     mode: mode,
@@ -915,6 +936,39 @@ final class AppStore: ObservableObject {
             if mode.isWildCombat, connectionRecoveryRequested, let shard = activeShard {
                 _ = await recoverWildAfterUnexpectedDisconnect(mode: mode, runID: runID, shard: shard, cookie: cookie)
                 return
+            }
+
+            if mode.isGathering, let shard = activeShard, let gatherPersistenceQueue {
+                let disconnectDetail = await socket.disconnectReason()
+                let socketAlreadyClosed: Bool
+                if let socketError = error as? SocketError, case .notConnected = socketError {
+                    socketAlreadyClosed = true
+                } else {
+                    socketAlreadyClosed = false
+                }
+
+                // Pode haver uma pequena corrida entre o send que percebeu a
+                // queda e o receive loop que solicita recovery. Um motivo real
+                // registrado pelo socket ou `.notConnected` fecha essa janela.
+                if connectionRecoveryRequested || disconnectDetail != nil || socketAlreadyClosed {
+                    if !connectionRecoveryRequested {
+                        let detail = disconnectDetail ?? error.localizedDescription
+                        requestGatherConnectionRecovery(
+                            reason: "Conexão realtime perdida: \(detail)",
+                            runID: runID
+                        )
+                    }
+                    await socket.close()
+                    _ = await recoverGatherAfterUnexpectedDisconnect(
+                        mode: mode,
+                        runID: runID,
+                        shard: shard,
+                        cookie: cookie,
+                        runGoal: runGoal,
+                        persistenceQueue: gatherPersistenceQueue
+                    )
+                    return
+                }
             }
 
             // RC3.4: um World sem ACK pode já ter sido aplicado pelo servidor.
@@ -987,6 +1041,15 @@ final class AppStore: ObservableObject {
             return
         }
 
+        // Gathering acontece em região segura. Uma stream realmente encerrada
+        // pausa a engine e transfere a conexão ao loop de retomada, preservando
+        // meta, sucessos e a mesma Continued Processing.
+        if mode.isGathering {
+            requestGatherConnectionRecovery(reason: reason, runID: runID)
+            await socket.close()
+            return
+        }
+
         terminalFailureHandled = true
         realtimeFailureMessage = reason
         connected = false
@@ -1002,6 +1065,216 @@ final class AppStore: ObservableObject {
         engineRunTask?.cancel()
         task?.cancel()
         await socket.close()
+    }
+
+    /// Somente perdas reais do transporte chegam aqui. Recoveries de harvest,
+    /// partial e proof miss pertencem exclusivamente à engine e nunca derrubam
+    /// uma Presence saudável.
+    private func requestGatherConnectionRecovery(reason: String, runID: UUID) {
+        guard activeRunID == runID, activity?.isGathering == true, !terminalFailureHandled else { return }
+
+        if !connectionRecoveryRequested {
+            connectionRecoveryDetail = reason
+            diagnostic("[WARN] \(reason) • Gathering: retomada no mesmo shard solicitada")
+            log("⚠️ Conexão perdida durante a coleta • progresso preservado • reconectando para continuar a meta")
+        }
+        connectionRecoveryRequested = true
+        connected = false
+        state = .recovering
+        statusMessage = "Conexão perdida • retomando coleta"
+        stats.lastEvent = "reconexão de Gathering"
+        updateContinuedProcessingProgress(forceTitleUpdate: true)
+        engineRunTask?.cancel()
+        receiverTask?.cancel()
+    }
+
+    @discardableResult
+    private func recoverGatherAfterUnexpectedDisconnect(
+        mode: ActivityMode,
+        runID: UUID,
+        shard: String,
+        cookie: String,
+        runGoal: Int,
+        persistenceQueue: GatherLootPersistenceQueue
+    ) async -> Bool {
+        guard activeRunID == runID, mode.isGathering else { return false }
+        guard !connectionRecoveryInProgress else { return false }
+        connectionRecoveryInProgress = true
+        defer { connectionRecoveryInProgress = false }
+
+        engineRunTask = nil
+        receiverTask?.cancel()
+        receiverTask = nil
+        await socket.close()
+
+        let started = Date()
+        let recoveryDeadline: TimeInterval = 300
+        var attempt = 0
+
+        while Date().timeIntervalSince(started) < recoveryDeadline {
+            guard activeRunID == runID,
+                  activity == mode,
+                  !terminalFailureHandled,
+                  requestedStopReason == nil,
+                  !Task.isCancelled
+            else { return false }
+
+            // Eventos de sucesso são entregues ao MainActor separadamente da
+            // realtime actor. Ceder evita calcular a meta restante antes deles.
+            await Task.yield()
+            let remaining = max(0, runGoal - stats.successes)
+            if remaining == 0 {
+                connectionRecoveryRequested = false
+                connectionRecoveryDetail = nil
+                connected = false
+                currentTarget = nil
+                state = .completed
+                statusMessage = "Meta concluída"
+                updateContinuedProcessingProgress(forceTitleUpdate: true)
+                activity = nil
+                log("✅ Meta concluída: \(stats.successes)/\(runGoal) • confirmada durante retomada da conexão")
+                logSessionSummary(mode: mode, outcome: "META CONCLUÍDA")
+                finishContinuedProcessing(success: true, reason: "meta concluída")
+                return true
+            }
+
+            attempt += 1
+            state = .recovering
+            statusMessage = "Reconectando coleta • tentativa \(attempt)"
+            stats.lastEvent = "reconexão de coleta \(attempt)"
+            updateContinuedProcessingProgress(forceTitleUpdate: true)
+            diagnostic("[NET] Reconexão Gathering • \(shard) • \(mode.rawValue) • tentativa \(attempt) • restantes=\(remaining)")
+
+            var phaseConnected = false
+            do {
+                let bootstrap = AutomationEngine.bootstrap(for: mode)
+                let stream = try await socket.connect(session: session, shard: shard, bootstrap: bootstrap)
+                phaseConnected = true
+                await importSocketTrace()
+                guard activeRunID == runID, activity == mode else { return false }
+
+                let engine = AutomationEngine(
+                    socket: socket,
+                    cookie: cookie,
+                    shard: shard,
+                    bootstrap: bootstrap,
+                    fishingBait: selectedFishingBait,
+                    gatherPersistenceQueue: persistenceQueue,
+                    reporter: engineReporter(runID: runID)
+                )
+                activeEngine = engine
+                receiverTask = makeReceiverTask(
+                    stream: stream,
+                    engine: engine,
+                    mode: mode,
+                    runID: runID
+                )
+                await engine.prepareIdentity()
+
+                connected = true
+                connectionRecoveryRequested = false
+                connectionRecoveryDetail = nil
+                state = .syncing
+                statusMessage = "Conexão restaurada • retomando coleta"
+                stats.lastEvent = "coleta reconectada"
+                updateContinuedProcessingProgress(forceTitleUpdate: true)
+                log("🔁 Conexão restaurada no \(shard) • retomando \(mode.localizedTitle) em \(stats.successes)/\(runGoal)")
+
+                await Task.yield()
+                let completedBeforePhase = stats.successes
+                let phaseGoal = max(1, runGoal - completedBeforePhase)
+                let child = Task.detached(priority: .userInitiated) {
+                    try await engine.run(mode: mode, goal: phaseGoal)
+                }
+                engineRunTask = child
+                let result = try await child.value
+                engineRunTask = nil
+                await importSocketTrace()
+                await Task.yield()
+
+                guard activeRunID == runID, activity == mode else { return false }
+                stats.successes = max(stats.successes, completedBeforePhase + result.successes)
+
+                if result.completedGoal || stats.successes >= runGoal {
+                    connectionRecoveryRequested = false
+                    connectionRecoveryDetail = nil
+                    connected = false
+                    currentTarget = nil
+                    state = .completed
+                    statusMessage = "Meta concluída"
+                    updateContinuedProcessingProgress(forceTitleUpdate: true)
+                    activity = nil
+                    log("✅ Meta concluída: \(stats.successes)/\(runGoal) • atividade retomada e encerrada automaticamente")
+                    logSessionSummary(mode: mode, outcome: "META CONCLUÍDA")
+                    finishContinuedProcessing(success: true, reason: "meta concluída após reconexão")
+                    return true
+                }
+
+                throw EngineError.gatherEndedBeforeGoal
+            } catch is CancellationError {
+                await importSocketTrace()
+                if connectionRecoveryRequested, activeRunID == runID, activity == mode {
+                    receiverTask?.cancel()
+                    receiverTask = nil
+                    connected = false
+                    await socket.close()
+                    continue
+                }
+                return false
+            } catch {
+                await importSocketTrace()
+                receiverTask?.cancel()
+                receiverTask = nil
+                connected = false
+
+                let disconnectDetail = await socket.disconnectReason()
+                let isClosedSocket: Bool
+                if let socketError = error as? SocketError, case .notConnected = socketError {
+                    isClosedSocket = true
+                } else {
+                    isClosedSocket = false
+                }
+                let transportFailure = !phaseConnected || connectionRecoveryRequested || disconnectDetail != nil || isClosedSocket
+
+                if !transportFailure {
+                    terminalFailureHandled = true
+                    realtimeFailureMessage = error.localizedDescription
+                    currentTarget = nil
+                    activity = nil
+                    state = .failed
+                    statusMessage = error.localizedDescription
+                    stats.sessionErrors += 1
+                    diagnostic("[ERROR] Retomada Gathering encontrou falha estrutural: \(error.localizedDescription)")
+                    log("Falha: \(error.localizedDescription) • coleta interrompida após reconexão")
+                    logSessionSummary(mode: mode, outcome: "FALHA")
+                    finishContinuedProcessing(success: false, reason: "falha estrutural após reconexão")
+                    return false
+                }
+
+                connectionRecoveryRequested = true
+                if connectionRecoveryDetail == nil {
+                    connectionRecoveryDetail = disconnectDetail ?? error.localizedDescription
+                }
+                await socket.close()
+                let elapsed = Int(Date().timeIntervalSince(started))
+                diagnostic("[WARN] Reconexão Gathering tentativa \(attempt) falhou após \(elapsed)s: \(error.localizedDescription)")
+                let wait = min(6.0, 1.0 + Double(attempt) * 0.5)
+                try? await Task.sleep(nanoseconds: UInt64(wait * 1_000_000_000))
+            }
+        }
+
+        terminalFailureHandled = true
+        realtimeFailureMessage = connectionRecoveryDetail ?? "Conexão realtime perdida durante a coleta"
+        connected = false
+        currentTarget = nil
+        activity = nil
+        state = .failed
+        statusMessage = "Não foi possível retomar a conexão da coleta"
+        stats.sessionErrors += 1
+        log("🛑 Reconexão da coleta expirou após 5 minutos • progresso preservado em \(stats.successes)/\(runGoal)")
+        logSessionSummary(mode: mode, outcome: "FALHA DE RECONEXÃO")
+        finishContinuedProcessing(success: false, reason: "reconexão da coleta expirou")
+        return false
     }
 
     /// Marks a transport loss in Wilderness as a recoverable safety event.
@@ -1240,6 +1513,12 @@ final class AppStore: ObservableObject {
             // close; cancelling the parent here would prevent the eventual safe exit.
             if currentMode.isWildCombat {
                 requestWildConnectionRecovery(reason: reason, runID: runID)
+                Task { [weak self] in await self?.socket.close() }
+                return
+            }
+
+            if currentMode.isGathering {
+                requestGatherConnectionRecovery(reason: reason, runID: runID)
                 Task { [weak self] in await self?.socket.close() }
                 return
             }
