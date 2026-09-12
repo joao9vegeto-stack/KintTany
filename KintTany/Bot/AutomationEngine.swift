@@ -478,105 +478,102 @@ struct EngineRunResult {
     let stopReason: EngineStopReason?
 }
 
-/// Paridade operacional com a `persistenceChain` do bot Node v5.2: gravações
-/// HTTP de loot continuam serializadas, mas nunca bloqueiam movimento, proof ou
-/// o próximo harvest da Presence.
+/// Paridade com a `persistenceChain` da v5.2: saves permanecem serializados e
+/// fora do hot path realtime. A diferença de ciclo de vida é que uma nova meta
+/// só pode nascer depois que esta fila ficou realmente vazia.
 struct GatherPersistencePolicy {
-    static let hotPathPreviewMS = 75
-    static let finalDrainMS = 5_000
+    static let serializesLootWrites = true
+    static let requiresCleanDrainBeforeCompletion = true
+
+    static func optimisticTotal(current: Int?, amount: Int) -> Int? {
+        guard let current, amount > 0 else { return current }
+        return current + amount
+    }
+
+    static func reconciledTotal(current: Int?, authoritative: Int) -> Int {
+        max(current ?? authoritative, authoritative)
+    }
 }
 
-struct GatherPersistenceReceipt: Sendable {
-    let item: String
-    let total: Int?
-    let errorDescription: String?
+struct GatherPersistenceDrainResult: Sendable {
+    let errors: [String]
+    let batches: Int
 }
 
 actor GatherLootPersistenceQueue {
     private let http: KintaraHTTPClient
-    private var tail: Task<GatherPersistenceReceipt, Never>?
+    private var tail: Task<Void, Never>?
     private var pending = 0
+    private var errors: [String] = []
+    private var completedBatches = 0
+    private var optimisticTotals: [String: Int] = [:]
+    private var inventorySeeded = false
 
     init(cookie: String) {
         http = KintaraHTTPClient(cookie: cookie)
     }
 
-    func enqueue(item: String, amount: Int) -> Task<GatherPersistenceReceipt, Never> {
+    func seedInventoryIfNeeded(_ totals: [String: Int]) {
+        guard !inventorySeeded else { return }
+        optimisticTotals = totals
+        inventorySeeded = true
+    }
+
+    func observeAuthoritativeInventory(_ totals: [String: Int]) {
+        guard !totals.isEmpty else { return }
+        for (item, value) in totals {
+            optimisticTotals[item] = GatherPersistencePolicy.reconciledTotal(
+                current: optimisticTotals[item],
+                authoritative: value
+            )
+        }
+        inventorySeeded = true
+    }
+
+    @discardableResult
+    func enqueue(item: String, amount: Int) -> Int? {
+        guard !item.isEmpty, amount > 0 else { return optimisticTotals[item] }
+        if let next = GatherPersistencePolicy.optimisticTotal(
+            current: optimisticTotals[item],
+            amount: amount
+        ) {
+            optimisticTotals[item] = next
+        }
+        let total = optimisticTotals[item]
         let previous = tail
         let client = http
         pending += 1
 
-        let job = Task {
-            if let previous { _ = await previous.value }
+        let job = Task { [weak self] in
+            if let previous { await previous.value }
             do {
-                let total = try await client.persistLoot(item, amount: amount)
-                return GatherPersistenceReceipt(item: item, total: total, errorDescription: nil)
+                let totals = try await client.persistLootBatch([item: amount])
+                await self?.recordCompletion(authoritativeTotals: totals, error: nil)
             } catch {
-                return GatherPersistenceReceipt(item: item, total: nil, errorDescription: error.localizedDescription)
+                await self?.recordCompletion(
+                    authoritativeTotals: [:],
+                    error: "\(item) x\(amount) • \(error.localizedDescription)"
+                )
             }
         }
         tail = job
-
-        Task { [weak self] in
-            _ = await job.value
-            await self?.markFinished()
-        }
-        return job
+        return total
     }
 
-    private func markFinished() {
+    private func recordCompletion(authoritativeTotals: [String: Int], error: String?) {
+        observeAuthoritativeInventory(authoritativeTotals)
+        if let error { errors.append(error) }
+        completedBatches += 1
         pending = max(0, pending - 1)
     }
 
-    /// A v5.2 aguardava no máximo 75 ms apenas para enriquecer o texto do log.
-    /// O job é não estruturado e continua na fila quando o preview expira.
-    func preview(
-        _ job: Task<GatherPersistenceReceipt, Never>,
-        timeoutMS: Int = GatherPersistencePolicy.hotPathPreviewMS
-    ) async -> GatherPersistenceReceipt? {
-        enum Preview {
-            case completed(GatherPersistenceReceipt)
-            case queued
-        }
-
-        let stream = AsyncStream<Preview> { continuation in
-            Task {
-                continuation.yield(.completed(await job.value))
-                continuation.finish()
-            }
-            Task {
-                try? await Task.sleep(nanoseconds: UInt64(max(0, timeoutMS)) * 1_000_000)
-                continuation.yield(.queued)
-                continuation.finish()
-            }
-        }
-
-        for await value in stream {
-            switch value {
-            case .completed(let receipt): return receipt
-            case .queued: return nil
-            }
-        }
-        return nil
-    }
-
-    func drain(timeoutMS: Int = GatherPersistencePolicy.finalDrainMS) async -> Bool {
-        guard let current = tail, pending > 0 else { return true }
-
-        let stream = AsyncStream<Bool> { continuation in
-            Task {
-                _ = await current.value
-                continuation.yield(true)
-                continuation.finish()
-            }
-            Task {
-                try? await Task.sleep(nanoseconds: UInt64(max(0, timeoutMS)) * 1_000_000)
-                continuation.yield(false)
-                continuation.finish()
-            }
-        }
-        for await drained in stream { return drained }
-        return false
+    /// Sem timeout: `meta concluída` só é publicada depois que nenhum request de
+    /// inventário da sessão anterior continua vivo.
+    func drainCompletely() async -> GatherPersistenceDrainResult {
+        if let tail { await tail.value }
+        let result = GatherPersistenceDrainResult(errors: errors, batches: completedBatches)
+        errors.removeAll(keepingCapacity: true)
+        return result
     }
 
     func pendingCount() -> Int { pending }
@@ -806,6 +803,9 @@ actor AutomationEngine {
     func prepareIdentity() async {
         do {
             let me = try await http.get("/api/auth/me")
+            if let backpack = me["backpack"] as? [String: Any] {
+                await gatherPersistenceQueue.seedInventoryIfNeeded(gatherInventoryTotals(backpack))
+            }
             if let player = me["player"] as? [String: Any], let id = RealtimeProtocol.int(player["id"]) {
                 playerID = id
                 reporter(.diagnostic("[PLAYER] /api/auth/me confirmou playerId=\(id)"))
@@ -872,6 +872,9 @@ actor AutomationEngine {
             }
 
         case "inv_grant":
+            if let backpack = packet["backpack"] as? [String: Any] {
+                await gatherPersistenceQueue.observeAuthoritativeInventory(gatherInventoryTotals(backpack))
+            }
             if let grant = wildGrantHint(packet) {
                 wildGrantSerial += 1
                 recentWildGrants.append(WildGrant(serial: wildGrantSerial, type: grant.type, quantity: grant.quantity, at: nowMS))
@@ -900,6 +903,13 @@ actor AutomationEngine {
 
         default:
             break
+        }
+    }
+
+    private func gatherInventoryTotals(_ backpack: [String: Any]) -> [String: Int] {
+        let resourceKeys = ["wood", "stone", "coal", "metal", "gold", "fish", "cooked_fish_meat", "raw_chicken", "cooked_chicken"]
+        return resourceKeys.reduce(into: [String: Int]()) { values, key in
+            values[key] = RealtimeProtocol.int(backpack[key]) ?? 0
         }
     }
 
@@ -1372,24 +1382,8 @@ actor AutomationEngine {
 
                 var persistenceLabel = "sem loot confirmado"
                 if let loot = result.loot, !loot.isEmpty {
-                    let job = await gatherPersistenceQueue.enqueue(item: loot, amount: 1)
-                    let reporter = self.reporter
-                    Task {
-                        let receipt = await job.value
-                        if let error = receipt.errorDescription {
-                            reporter(.diagnostic("[INVENTORY][ERROR] \(receipt.item) • \(error)"))
-                        }
-                    }
-
-                    if let receipt = await gatherPersistenceQueue.preview(job) {
-                        if let error = receipt.errorDescription {
-                            persistenceLabel = "persistência enfileirada; última gravação falhou: \(error)"
-                        } else {
-                            persistenceLabel = receipt.total.map { "\(loot)=\($0)" } ?? "\(loot) persistido"
-                        }
-                    } else {
-                        persistenceLabel = "\(loot) • persistência enfileirada"
-                    }
+                    let total = await gatherPersistenceQueue.enqueue(item: loot, amount: 1)
+                    persistenceLabel = total.map { "\(loot)=\($0)" } ?? "\(loot) • persistência enfileirada"
                 }
 
                 successes += 1
@@ -1429,12 +1423,14 @@ actor AutomationEngine {
 
         let pendingBeforeDrain = await gatherPersistenceQueue.pendingCount()
         if pendingBeforeDrain > 0 {
-            reporter(.diagnostic("[INVENTORY] aguardando fila serial • pendentes=\(pendingBeforeDrain) • limite=\(GatherPersistencePolicy.finalDrainMS)ms"))
+            reporter(.state(.syncing, "Finalizando inventário • \(pendingBeforeDrain) pendente(s)"))
+            reporter(.diagnostic("[INVENTORY] fechamento limpo • aguardando fila serial • pendentes=\(pendingBeforeDrain)"))
         }
-        let persistenceDrained = await gatherPersistenceQueue.drain()
-        if !persistenceDrained {
-            reporter(.diagnostic("[INVENTORY][WARN] fila ainda pendente após \(GatherPersistencePolicy.finalDrainMS)ms; atividade realtime já pode encerrar"))
+        let persistence = await gatherPersistenceQueue.drainCompletely()
+        for error in persistence.errors {
+            reporter(.diagnostic("[INVENTORY][ERROR] \(error)"))
         }
+        reporter(.diagnostic("[INVENTORY] fila encerrada • pendentes=0 • batches=\(persistence.batches)"))
         reporter(.log("📊 Coleta encerrada • \(mode.displayName) • sucessos=\(successes)/\(goal) • recoveries internos=\(gatherInternalRecoveries) • proof misses=\(gatherProofMisses)"))
     }
 
@@ -5493,27 +5489,32 @@ private struct KintaraHTTPClient {
         return []
     }
 
-    func persistLoot(_ item: String, amount: Int) async throws -> Int? {
+    func persistLootBatch(_ rawAmounts: [String: Int]) async throws -> [String: Int] {
+        let amounts = rawAmounts.filter { !$0.key.isEmpty && $0.value > 0 }
+        guard !amounts.isEmpty else { return [:] }
+
         let state = try await get("/api/auth/me")
         guard let stateSeq = RealtimeProtocol.int(state["stateSeq"]), var backpack = state["backpack"] as? [String: Any] else {
             throw HTTPError.invalidState
         }
 
-        let current = RealtimeProtocol.int(backpack[item]) ?? 0
-        backpack[item] = current + amount
-
         var slots = backpack["invSlots"] as? [Any] ?? []
-        var updatedSlot = false
-        for index in slots.indices {
-            if var slot = slots[index] as? [String: Any], slot["t"] as? String == item {
-                slot["n"] = (RealtimeProtocol.int(slot["n"]) ?? 0) + amount
-                slots[index] = slot
-                updatedSlot = true
-                break
+        for item in amounts.keys.sorted() {
+            guard let amount = amounts[item], amount > 0 else { continue }
+            backpack[item] = (RealtimeProtocol.int(backpack[item]) ?? 0) + amount
+
+            var updatedSlot = false
+            for index in slots.indices {
+                if var slot = slots[index] as? [String: Any], slot["t"] as? String == item {
+                    slot["n"] = (RealtimeProtocol.int(slot["n"]) ?? 0) + amount
+                    slots[index] = slot
+                    updatedSlot = true
+                    break
+                }
             }
-        }
-        if !updatedSlot, let empty = slots.firstIndex(where: { $0 is NSNull }) {
-            slots[empty] = ["t": item, "n": amount]
+            if !updatedSlot, let empty = slots.firstIndex(where: { $0 is NSNull }) {
+                slots[empty] = ["t": item, "n": amount]
+            }
         }
         backpack["invSlots"] = slots
 
@@ -5538,11 +5539,20 @@ private struct KintaraHTTPClient {
         guard RealtimeProtocol.bool(response["ok"]) != false else {
             throw HTTPError.server((response["error"] as? String) ?? "save-backpack recusado")
         }
+        let confirmedBackpack: [String: Any]
         if let confirmed = response["backpack"] as? [String: Any] {
-            return RealtimeProtocol.int(confirmed[item])
+            confirmedBackpack = confirmed
+        } else {
+            let fresh = try await get("/api/auth/me")
+            guard let confirmed = fresh["backpack"] as? [String: Any] else {
+                throw HTTPError.invalidState
+            }
+            confirmedBackpack = confirmed
         }
-        let fresh = try await get("/api/auth/me")
-        return (fresh["backpack"] as? [String: Any]).flatMap { RealtimeProtocol.int($0[item]) }
+
+        return amounts.keys.reduce(into: [String: Int]()) { totals, item in
+            totals[item] = RealtimeProtocol.int(confirmedBackpack[item]) ?? 0
+        }
     }
 
     private func request(method: String, path: String, body: [String: Any]?) async throws -> [String: Any] {
