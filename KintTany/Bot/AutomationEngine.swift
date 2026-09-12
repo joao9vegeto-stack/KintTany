@@ -478,6 +478,110 @@ struct EngineRunResult {
     let stopReason: EngineStopReason?
 }
 
+/// Paridade operacional com a `persistenceChain` do bot Node v5.2: gravações
+/// HTTP de loot continuam serializadas, mas nunca bloqueiam movimento, proof ou
+/// o próximo harvest da Presence.
+struct GatherPersistencePolicy {
+    static let hotPathPreviewMS = 75
+    static let finalDrainMS = 5_000
+}
+
+struct GatherPersistenceReceipt: Sendable {
+    let item: String
+    let total: Int?
+    let errorDescription: String?
+}
+
+actor GatherLootPersistenceQueue {
+    private let http: KintaraHTTPClient
+    private var tail: Task<GatherPersistenceReceipt, Never>?
+    private var pending = 0
+
+    init(cookie: String) {
+        http = KintaraHTTPClient(cookie: cookie)
+    }
+
+    func enqueue(item: String, amount: Int) -> Task<GatherPersistenceReceipt, Never> {
+        let previous = tail
+        let client = http
+        pending += 1
+
+        let job = Task {
+            if let previous { _ = await previous.value }
+            do {
+                let total = try await client.persistLoot(item, amount: amount)
+                return GatherPersistenceReceipt(item: item, total: total, errorDescription: nil)
+            } catch {
+                return GatherPersistenceReceipt(item: item, total: nil, errorDescription: error.localizedDescription)
+            }
+        }
+        tail = job
+
+        Task { [weak self] in
+            _ = await job.value
+            await self?.markFinished()
+        }
+        return job
+    }
+
+    private func markFinished() {
+        pending = max(0, pending - 1)
+    }
+
+    /// A v5.2 aguardava no máximo 75 ms apenas para enriquecer o texto do log.
+    /// O job é não estruturado e continua na fila quando o preview expira.
+    func preview(
+        _ job: Task<GatherPersistenceReceipt, Never>,
+        timeoutMS: Int = GatherPersistencePolicy.hotPathPreviewMS
+    ) async -> GatherPersistenceReceipt? {
+        enum Preview {
+            case completed(GatherPersistenceReceipt)
+            case queued
+        }
+
+        let stream = AsyncStream<Preview> { continuation in
+            Task {
+                continuation.yield(.completed(await job.value))
+                continuation.finish()
+            }
+            Task {
+                try? await Task.sleep(nanoseconds: UInt64(max(0, timeoutMS)) * 1_000_000)
+                continuation.yield(.queued)
+                continuation.finish()
+            }
+        }
+
+        for await value in stream {
+            switch value {
+            case .completed(let receipt): return receipt
+            case .queued: return nil
+            }
+        }
+        return nil
+    }
+
+    func drain(timeoutMS: Int = GatherPersistencePolicy.finalDrainMS) async -> Bool {
+        guard let current = tail, pending > 0 else { return true }
+
+        let stream = AsyncStream<Bool> { continuation in
+            Task {
+                _ = await current.value
+                continuation.yield(true)
+                continuation.finish()
+            }
+            Task {
+                try? await Task.sleep(nanoseconds: UInt64(max(0, timeoutMS)) * 1_000_000)
+                continuation.yield(false)
+                continuation.finish()
+            }
+        }
+        for await drained in stream { return drained }
+        return false
+    }
+
+    func pendingCount() -> Int { pending }
+}
+
 /// The protocol engine owns one serial actor, independent from SwiftUI's main
 /// actor. Socket ingestion, ACK gates, movement and action profiles therefore
 /// continue to make progress while iOS deprioritizes UI work in background.
@@ -490,6 +594,7 @@ actor AutomationEngine {
     private let reporter: Reporter
     private let http: KintaraHTTPClient
     private let fishingBait: FishingBait
+    private let gatherPersistenceQueue: GatherLootPersistenceQueue
 
     private var region: String
     private var serverRegion: String?
@@ -612,6 +717,7 @@ actor AutomationEngine {
         shard: String,
         bootstrap: PresenceBootstrap,
         fishingBait: FishingBait = .feather,
+        gatherPersistenceQueue: GatherLootPersistenceQueue? = nil,
         reporter: @escaping Reporter
     ) {
         self.socket = socket
@@ -620,6 +726,7 @@ actor AutomationEngine {
         self.fishingBait = fishingBait
         self.reporter = reporter
         self.http = KintaraHTTPClient(cookie: cookie)
+        self.gatherPersistenceQueue = gatherPersistenceQueue ?? GatherLootPersistenceQueue(cookie: cookie)
         self.gatherKnowledge = GatherKnowledgeStore()
         self.region = bootstrap.region
         self.position = bootstrap.position
@@ -1265,12 +1372,23 @@ actor AutomationEngine {
 
                 var persistenceLabel = "sem loot confirmado"
                 if let loot = result.loot, !loot.isEmpty {
-                    do {
-                        let total = try await http.persistLoot(loot, amount: 1)
-                        persistenceLabel = total.map { "\(loot)=\($0)" } ?? "\(loot) persistido"
-                    } catch {
-                        persistenceLabel = "persistência falhou: \(error.localizedDescription)"
-                        reporter(.diagnostic("[INVENTORY][ERROR] \(error.localizedDescription)"))
+                    let job = await gatherPersistenceQueue.enqueue(item: loot, amount: 1)
+                    let reporter = self.reporter
+                    Task {
+                        let receipt = await job.value
+                        if let error = receipt.errorDescription {
+                            reporter(.diagnostic("[INVENTORY][ERROR] \(receipt.item) • \(error)"))
+                        }
+                    }
+
+                    if let receipt = await gatherPersistenceQueue.preview(job) {
+                        if let error = receipt.errorDescription {
+                            persistenceLabel = "persistência enfileirada; última gravação falhou: \(error)"
+                        } else {
+                            persistenceLabel = receipt.total.map { "\(loot)=\($0)" } ?? "\(loot) persistido"
+                        }
+                    } else {
+                        persistenceLabel = "\(loot) • persistência enfileirada"
                     }
                 }
 
@@ -1309,6 +1427,14 @@ actor AutomationEngine {
             try await sleep(650)
         }
 
+        let pendingBeforeDrain = await gatherPersistenceQueue.pendingCount()
+        if pendingBeforeDrain > 0 {
+            reporter(.diagnostic("[INVENTORY] aguardando fila serial • pendentes=\(pendingBeforeDrain) • limite=\(GatherPersistencePolicy.finalDrainMS)ms"))
+        }
+        let persistenceDrained = await gatherPersistenceQueue.drain()
+        if !persistenceDrained {
+            reporter(.diagnostic("[INVENTORY][WARN] fila ainda pendente após \(GatherPersistencePolicy.finalDrainMS)ms; atividade realtime já pode encerrar"))
+        }
         reporter(.log("📊 Coleta encerrada • \(mode.displayName) • sucessos=\(successes)/\(goal) • recoveries internos=\(gatherInternalRecoveries) • proof misses=\(gatherProofMisses)"))
     }
 
@@ -4912,6 +5038,7 @@ enum EngineError: LocalizedError {
     case bankDepositFailed(String)
     case missingRequiredItem(String)
     case gatherLoadoutNotReady(String)
+    case gatherEndedBeforeGoal
     case missingFishingBait(String)
     case insufficientFishingBait(String, have: Int, need: Int)
     case unsupportedFishingBait(String)
@@ -4928,6 +5055,7 @@ enum EngineError: LocalizedError {
         case .bankDepositFailed(let item): return "Recurso/item não pôde ser confirmado no banco: \(item)"
         case .missingRequiredItem(let item): return "Item obrigatório não encontrado no inventário/banco: \(item)"
         case .gatherLoadoutNotReady(let item): return "Preflight de ferramenta não materializou \(item) antes de entrar na região de coleta"
+        case .gatherEndedBeforeGoal: return "Engine de coleta encerrou antes da meta após reconexão"
         case .missingFishingBait(let bait): return "Isca selecionada sem estoque: \(bait)"
         case .insufficientFishingBait(let bait, let have, let need): return "Isca insuficiente: \(bait) \(have)/\(need)"
         case .unsupportedFishingBait(let bait): return "Automação ainda não validada para \(bait)"
