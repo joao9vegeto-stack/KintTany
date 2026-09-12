@@ -28,6 +28,7 @@ actor RealtimeSocket {
 
     private var task: URLSessionWebSocketTask?
     private var queueTask: URLSessionWebSocketTask?
+    private var receiveLoopTask: Task<Void, Never>?
     private var closed = false
     private var continuation: AsyncStream<Data>.Continuation?
     private var traceBuffer: [String] = []
@@ -43,8 +44,7 @@ actor RealtimeSocket {
         session: SessionManager,
         bootstrap: PresenceBootstrap
     ) async throws -> RealtimeConnection {
-        closeCurrentConnection()
-        traceBuffer.removeAll(keepingCapacity: true)
+        await closeCurrentConnectionAndWait(clearTrace: true)
 
         guard let cookie = session.cookie, !cookie.isEmpty else {
             trace("[ERROR] Sessão ausente no Keychain")
@@ -118,7 +118,7 @@ actor RealtimeSocket {
             } catch {
                 lastError = error
                 trace("[WARN] \(candidate.shard) falhou: \(error.localizedDescription) • tentando próximo servidor NA")
-                closeCurrentConnection()
+                await closeCurrentConnectionAndWait(clearTrace: false)
             }
         }
 
@@ -138,8 +138,7 @@ actor RealtimeSocket {
         shard: String,
         bootstrap: PresenceBootstrap
     ) async throws -> AsyncStream<Data> {
-        closeCurrentConnection()
-        traceBuffer.removeAll(keepingCapacity: true)
+        await closeCurrentConnectionAndWait(clearTrace: true)
 
         guard let cookie = session.cookie, !cookie.isEmpty else {
             trace("[ERROR] Sessão ausente no Keychain")
@@ -228,7 +227,7 @@ actor RealtimeSocket {
             let presence = try await open(path: "/ws/presence/\(shard)?kt=\(presenceToken)", label: "presence")
             task = presence
 
-            Task { [weak self] in
+            receiveLoopTask = Task { [weak self] in
                 await self?.receiveLoop(presence, connectionID: currentConnectionID)
             }
 
@@ -282,9 +281,17 @@ actor RealtimeSocket {
         lastDisconnectReason
     }
 
-    func close() {
+    func close() async {
         trace("[NET] Fechando conexão realtime")
-        closeCurrentConnection()
+        await closeCurrentConnectionAndWait(clearTrace: false)
+    }
+
+    /// Barreira entre atividades independentes. Depois que retorna não existe
+    /// queue, Presence, continuation nem receive loop pertencente à meta anterior,
+    /// e seu diagnóstico não pode reaparecer no log da próxima execução.
+    func resetForNewRun() async {
+        await closeCurrentConnectionAndWait(clearTrace: true)
+        lastDisconnectReason = nil
     }
 
     func drainTrace() -> [String] {
@@ -302,6 +309,18 @@ actor RealtimeSocket {
         task = nil
         continuation?.finish()
         continuation = nil
+    }
+
+    private func closeCurrentConnectionAndWait(clearTrace: Bool) async {
+        let previousReceiveLoop = receiveLoopTask
+        closeCurrentConnection()
+        if let previousReceiveLoop {
+            await previousReceiveLoop.value
+        }
+        receiveLoopTask = nil
+        if clearTrace {
+            traceBuffer.removeAll(keepingCapacity: true)
+        }
     }
 
     // MARK: - Seleção de servidor NA
@@ -610,6 +629,7 @@ actor RealtimeSocket {
         continuation = nil
         task = nil
         closed = true
+        receiveLoopTask = nil
         trace("[NET] Presence receive loop finalizado")
     }
 
