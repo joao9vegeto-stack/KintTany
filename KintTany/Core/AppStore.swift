@@ -399,7 +399,9 @@ final class AppStore: ObservableObject {
         // A engine interrompe novos ataques, recua, espera combat timer 0 e confirma
         // World antes de devolver o controle ao AppStore.
         if activity?.isWildCombat == true, connected, let activeEngine {
-            activeEngine.requestSafeStop(reason: .user)
+            Task.detached(priority: .userInitiated) {
+                await activeEngine.requestSafeStop(reason: .user)
+            }
             state = .recovering
             statusMessage = "Saindo do combate com segurança"
             stats.lastEvent = "safe stop solicitado"
@@ -453,6 +455,107 @@ final class AppStore: ObservableObject {
         requestedStopReason = nil
         task = nil
         connected = false
+    }
+
+    /// AutomationEngine is intentionally isolated from MainActor. UI delivery
+    /// remains ordered by the engine but can be coalesced/delayed by iOS without
+    /// delaying ACK ingestion, movement or action frames.
+    private func engineReporter(runID: UUID) -> AutomationEngine.Reporter {
+        { [weak self] event in
+            Task { @MainActor [weak self] in
+                self?.handleEngineEvent(event, runID: runID)
+            }
+        }
+    }
+
+    /// Consume the socket stream on the cooperative executor rather than on
+    /// SwiftUI's MainActor. Socket trace is already imported by traceTask at a
+    /// controlled cadence, so it is not mirrored once per realtime packet here.
+    private func makeReceiverTask(
+        stream: AsyncStream<Data>,
+        engine: AutomationEngine,
+        mode: ActivityMode,
+        runID: UUID,
+        notifyUnexpectedEnd: Bool = true
+    ) -> Task<Void, Never> {
+        Task.detached(priority: .userInitiated) { [weak self] in
+            for await data in stream {
+                if Task.isCancelled { break }
+                await engine.ingest(data)
+            }
+
+            if notifyUnexpectedEnd, !Task.isCancelled {
+                await self?.handleUnexpectedRealtimeEnd(for: mode, runID: runID)
+            }
+        }
+    }
+
+    /// Last line of defense for every terminal path reached while a Wild
+    /// engine still exists. Returning from this method means the server either
+    /// confirmed World/death or the emergency reconnect loop took ownership.
+    private func containWildTerminalFailure(
+        mode: ActivityMode,
+        runID: UUID,
+        shard: String,
+        cookie: String,
+        engine: AutomationEngine,
+        failure: String
+    ) async {
+        diagnostic("[WILD][FAILSAFE] \(failure) • bloqueando encerramento dentro da Wilderness")
+        state = .recovering
+        statusMessage = "Falha detectada • saindo da Wilderness com segurança"
+        stats.lastEvent = "failsafe Wild • retorno ao World"
+        updateContinuedProcessingProgress(forceTitleUpdate: true)
+
+        do {
+            let outcome = try await engine.runEmergencyWildExit(
+                mode: mode,
+                reason: "falha operacional: \(failure)"
+            )
+            await importSocketTrace()
+            terminalFailureHandled = true
+            connected = false
+            currentTarget = nil
+            activity = nil
+            state = .failed
+            stats.sessionErrors += 1
+
+            switch outcome {
+            case .worldSafe:
+                statusMessage = "Falha encerrada com World seguro"
+                stats.lastEvent = "falha operacional • World confirmado"
+                log("🛡️ Falha operacional contida • World confirmado antes de liberar a conexão")
+                log("Falha: \(failure) • combate interrompido com saída segura")
+                logSessionSummary(mode: mode, outcome: "FALHA • WORLD SEGURO")
+                finishContinuedProcessing(success: false, reason: "falha contida após World confirmado")
+            case .alreadyWorld:
+                statusMessage = "Falha encerrada fora da Wilderness"
+                stats.lastEvent = "falha operacional • já estava no World"
+                log("🛡️ Falha operacional contida • estado autoritativo confirmou personagem fora da Wilderness")
+                log("Falha: \(failure) • conexão liberada fora do Wild")
+                logSessionSummary(mode: mode, outcome: "FALHA • FORA DO WILD")
+                finishContinuedProcessing(success: false, reason: "falha contida fora da Wilderness")
+            case .dead:
+                statusMessage = "Servidor confirmou morte"
+                stats.lastEvent = "morte autoritativamente confirmada"
+                log("💀 Falha: \(failure) • servidor confirmou morte antes da saída")
+                logSessionSummary(mode: mode, outcome: "MORTE CONFIRMADA")
+                finishContinuedProcessing(success: false, reason: "morte confirmada")
+            }
+        } catch {
+            diagnostic("[WILD][FAILSAFE] saída na Presence atual não confirmou: \(error.localizedDescription) • iniciando reconexão de emergência")
+            requestWildConnectionRecovery(
+                reason: "Falha operacional no Wild; reconectando exclusivamente para confirmar World",
+                runID: runID
+            )
+            await socket.close()
+            _ = await recoverWildAfterUnexpectedDisconnect(
+                mode: mode,
+                runID: runID,
+                shard: shard,
+                cookie: cookie
+            )
+        }
     }
 
     private func logSessionSummary(mode: ActivityMode, outcome: String) {
@@ -663,9 +766,7 @@ final class AppStore: ObservableObject {
                 shard: selectedShard,
                 bootstrap: bootstrap,
                 fishingBait: selectedFishingBait,
-                reporter: { [weak self] event in
-                    self?.handleEngineEvent(event, runID: runID)
-                }
+                reporter: engineReporter(runID: runID)
             )
             activeEngine = engine
 
@@ -677,18 +778,7 @@ final class AppStore: ObservableObject {
             // O receiver precisa estar ativo antes do preflight World porque a
             // confirmação de região e os snapshots chegam pela mesma stream que
             // continuará sendo usada durante toda a atividade.
-            receiverTask = Task { [weak self] in
-                guard let self else { return }
-                for await data in stream {
-                    if Task.isCancelled { break }
-                    engine.ingest(data)
-                    await self.importSocketTrace()
-                }
-
-                if !Task.isCancelled {
-                    await self.handleUnexpectedRealtimeEnd(for: mode, runID: runID)
-                }
-            }
+            receiverTask = makeReceiverTask(stream: stream, engine: engine, mode: mode, runID: runID)
 
             await engine.prepareIdentity()
             guard activeRunID == runID else { return }
@@ -700,7 +790,7 @@ final class AppStore: ObservableObject {
                 diagnostic("[LOADOUT] \(name) confirmado • Presence preservada • transição World→ElderGrove será feita na mesma conexão")
             }
 
-            let child = Task { @MainActor in
+            let child = Task.detached(priority: .userInitiated) {
                 try await engine.run(mode: mode, goal: runGoal)
             }
             engineRunTask = child
@@ -708,6 +798,10 @@ final class AppStore: ObservableObject {
             engineRunTask = nil
             await importSocketTrace()
             guard activeRunID == runID else { return }
+            // UI events are intentionally decoupled from the realtime actor.
+            // Reconcile the authoritative engine total before rendering the
+            // terminal state in case MainActor still has telemetry queued.
+            stats.successes = max(stats.successes, result.successes)
 
             if let reason = realtimeFailureMessage {
                 connected = false
@@ -771,6 +865,17 @@ final class AppStore: ObservableObject {
                 _ = await recoverWildAfterUnexpectedDisconnect(mode: mode, runID: runID, shard: shard, cookie: cookie)
                 return
             }
+            if mode.isWildCombat, let activeEngine, let shard = activeShard {
+                await containWildTerminalFailure(
+                    mode: mode,
+                    runID: runID,
+                    shard: shard,
+                    cookie: cookie,
+                    engine: activeEngine,
+                    failure: "Execução do combate cancelada inesperadamente"
+                )
+                return
+            }
             if let reason = realtimeFailureMessage {
                 connected = false
                 currentTarget = nil
@@ -820,6 +925,24 @@ final class AppStore: ObservableObject {
                 )
                 await socket.close()
                 _ = await recoverWildAfterUnexpectedDisconnect(mode: mode, runID: runID, shard: shard, cookie: cookie)
+                return
+            }
+
+            // Wild safety firewall: an operational engine error (including a
+            // real movement failure) is never allowed to fall through to the
+            // generic defer and close a live Presence in Wilderness. Freeze all
+            // combat, confirm authoritative state and leave through World. If
+            // that cannot be completed on this socket, the existing emergency
+            // reconnect becomes the only owner of teardown/recovery.
+            if mode.isWildCombat, let activeEngine, let shard = activeShard {
+                await containWildTerminalFailure(
+                    mode: mode,
+                    runID: runID,
+                    shard: shard,
+                    cookie: cookie,
+                    engine: activeEngine,
+                    failure: error.localizedDescription
+                )
                 return
             }
 
@@ -965,22 +1088,19 @@ final class AppStore: ObservableObject {
                     shard: shard,
                     bootstrap: recoveryBootstrap,
                     fishingBait: selectedFishingBait,
-                    reporter: { [weak self] event in
-                        self?.handleEngineEvent(event, runID: runID)
-                    }
+                    reporter: engineReporter(runID: runID)
                 )
                 activeEngine = recoveryEngine
                 await recoveryEngine.prepareIdentity()
 
                 receiverTask?.cancel()
-                receiverTask = Task { [weak self] in
-                    guard let self else { return }
-                    for await data in stream {
-                        if Task.isCancelled { break }
-                        recoveryEngine.ingest(data)
-                        await self.importSocketTrace()
-                    }
-                }
+                receiverTask = makeReceiverTask(
+                    stream: stream,
+                    engine: recoveryEngine,
+                    mode: mode,
+                    runID: runID,
+                    notifyUnexpectedEnd: false
+                )
 
                 connected = true
                 statusMessage = "Reconectado • saindo do Wild com segurança"
@@ -1554,7 +1674,10 @@ final class AppStore: ObservableObject {
         // runtime: parar novos hits -> safe camp -> combat timer 0 -> World.
         if activity?.isWildCombat == true, connected, let activeEngine {
             if requestedStopReason == nil { requestedStopReason = .backgroundExpiration }
-            activeEngine.requestSafeStop(reason: requestedStopReason ?? .backgroundExpiration)
+            let reason = requestedStopReason ?? .backgroundExpiration
+            Task.detached(priority: .userInitiated) {
+                await activeEngine.requestSafeStop(reason: reason)
+            }
             state = .recovering
             statusMessage = "Continued Processing encerrada • saída imediata para o World"
             stats.lastEvent = "saída de emergência por encerramento externo"
@@ -1631,7 +1754,10 @@ final class AppStore: ObservableObject {
 
         if activity?.isWildCombat == true, connected, let activeEngine {
             if requestedStopReason == nil { requestedStopReason = .backgroundExpiration }
-            activeEngine.requestSafeStop(reason: requestedStopReason ?? .backgroundExpiration)
+            let reason = requestedStopReason ?? .backgroundExpiration
+            Task.detached(priority: .userInitiated) {
+                await activeEngine.requestSafeStop(reason: reason)
+            }
             state = .recovering
             statusMessage = "Background expirando • saída imediata para o World"
             stats.lastEvent = "saída de emergência por background"
