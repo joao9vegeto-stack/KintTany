@@ -696,6 +696,19 @@ final class AppStore: ObservableObject {
         diagnostic("[UI] activity=\(mode.rawValue) state=connecting goal=\(runGoal)")
         updateContinuedProcessingProgress(forceTitleUpdate: true)
 
+        // Cada atividade nasce como uma execução independente: nenhuma queue,
+        // Presence, receive loop ou linha de trace da meta anterior atravessa
+        // esta barreira.
+        await socket.resetForNewRun()
+        guard activeRunID == runID else { return }
+
+        // Compartilhada por todas as fases da sessão, inclusive após uma queda
+        // real da Presence. A fila serial impede concorrência entre
+        // stateSeqs e também participa da barreira final de cleanup.
+        let gatherPersistenceQueue = mode.isGathering
+            ? GatherLootPersistenceQueue(cookie: cookie)
+            : nil
+
         traceTask?.cancel()
         traceTask = Task { [weak self] in
             guard let self else { return }
@@ -719,16 +732,16 @@ final class AppStore: ObservableObject {
                 // A engine já terminou neste ponto. Ceda uma vez para as tasks
                 // auxiliares observarem o cancelamento antes de fechar a Presence.
                 await Task.yield()
+                if let gatherPersistenceQueue {
+                    _ = await gatherPersistenceQueue.drainCompletely()
+                }
                 await self.socket.close()
+                // O fechamento pertence à execução que acabou; não deixe essas
+                // linhas reaparecerem quando o logger da próxima meta iniciar.
+                _ = await self.socket.drainTrace()
                 self.completeRunCleanup(runID: closingRunID)
             }
         }
-
-        // Compartilhada por todas as fases da sessão, inclusive após uma queda
-        // real da Presence. A fila serial impede concorrência entre stateSeqs.
-        let gatherPersistenceQueue = mode.isGathering
-            ? GatherLootPersistenceQueue(cookie: cookie)
-            : nil
 
         do {
             var gatherPreflight: GatherToolPreflightDisposition = .ready
