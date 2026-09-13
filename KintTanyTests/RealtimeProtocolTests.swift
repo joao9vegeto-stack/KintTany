@@ -692,6 +692,15 @@ final class RealtimeProtocolTests: XCTestCase {
         XCTAssertFalse(ActivityMode.cacti.requiresSafeExit)
     }
 
+    func testDunesHeatSafetyUsesAuthoritativeHPThresholdOnlyForDunes() {
+        XCTAssertFalse(DunesHeatSafetyPolicy.requiresRecovery(hp: 46, mode: .silver))
+        XCTAssertTrue(DunesHeatSafetyPolicy.requiresRecovery(hp: 45, mode: .silver))
+        XCTAssertTrue(DunesHeatSafetyPolicy.requiresRecovery(hp: 13, mode: .cacti))
+        XCTAssertFalse(DunesHeatSafetyPolicy.requiresRecovery(hp: 13, mode: .iron))
+        XCTAssertEqual(DunesHeatSafetyPolicy.recoveryGoalHP, 90)
+        XCTAssertEqual(DunesHeatSafetyPolicy.carriedHealthPotionPlusTarget, 6)
+    }
+
     func testGatherResourceMarkerUsesOnlyAuthoritativeBalanceDelta() {
         XCTAssertEqual(GatherLootMarkerPolicy.resource(for: .silver), "silver_ore")
         XCTAssertEqual(GatherLootMarkerPolicy.resource(for: .cacti), "cacti")
