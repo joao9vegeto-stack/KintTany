@@ -254,6 +254,138 @@ struct GatherRegionPolicy {
     }
 }
 
+struct DunesResourceDiscovery {
+    struct Observation: Equatable {
+        let observedKind: String?
+        let wireKind: String
+        let keys: [String]
+        let mode: ActivityMode?
+        let hasCoal: Bool?
+        let hasMetal: Bool?
+        let lootHint: String?
+        let fieldNames: [String]
+
+        var classificationLabel: String {
+            mode?.rawValue ?? "unknown"
+        }
+    }
+
+    /// Dunes launched after the legacy v5.2 tree/rock catalog. Classify newer
+    /// snapshot aliases independently, but keep harvest traffic on the observed
+    /// v5.2 wire kinds (`rock` / `tree`) instead of inventing a new action kind.
+    static func observe(_ packet: [String: Any]) -> Observation {
+        let fieldNames = packet.keys
+            .filter { !sensitiveFieldNames.contains($0.lowercased()) }
+            .sorted()
+
+        let observedKind = firstString(in: packet, keys: ["kind", "k"])
+        let classificationHint = firstString(in: packet, keys: [
+            "resourceKind", "nodeKind", "resourceType", "nodeType", "subtype",
+            "loot", "drop", "item", "resource", "material", "name", "type"
+        ])
+        let normalizedKind = normalizeToken(observedKind)
+        let normalizedHint = normalizeToken(classificationHint)
+        let combined = [normalizedKind, normalizedHint].filter { !$0.isEmpty }.joined(separator: " ")
+
+        let mode: ActivityMode?
+        if combined.contains("cact") {
+            mode = .cacti
+        } else if combined.contains("silver") {
+            mode = .silver
+        } else if ["tree", "plant", "cactus", "cacti"].contains(normalizedKind) {
+            mode = .cacti
+        } else if ["rock", "ore", "mineral", "silver_ore", "silverore"].contains(normalizedKind) {
+            mode = .silver
+        } else {
+            mode = nil
+        }
+
+        let fallbackKind: String
+        switch mode {
+        case .silver?: fallbackKind = "rock"
+        case .cacti?: fallbackKind = "tree"
+        default: fallbackKind = ""
+        }
+
+        let wireKind = ["tree", "rock"].contains(normalizedKind) ? normalizedKind : fallbackKind
+
+        return Observation(
+            observedKind: observedKind?.trimmingCharacters(in: .whitespacesAndNewlines).lowercased(),
+            wireKind: wireKind,
+            keys: extractKeys(from: packet),
+            mode: mode,
+            hasCoal: RealtimeProtocol.bool(packet["hasCoal"] ?? packet["coal"]),
+            hasMetal: RealtimeProtocol.bool(packet["hasMetal"] ?? packet["metal"]),
+            lootHint: firstString(in: packet, keys: ["loot", "drop", "item", "resource", "material"]),
+            fieldNames: fieldNames
+        )
+    }
+
+    static func diagnosticSummary(_ observation: Observation) -> String {
+        let observedKind = observation.observedKind?.isEmpty == false ? observation.observedKind! : "-"
+        let wireKind = observation.wireKind.isEmpty ? "-" : observation.wireKind
+        let loot = observation.lootHint?.trimmingCharacters(in: .whitespacesAndNewlines)
+        let lootLabel = (loot?.isEmpty == false) ? loot! : "-"
+        let coal = observation.hasCoal.map(String.init) ?? "-"
+        let metal = observation.hasMetal.map(String.init) ?? "-"
+        return "campos=\(observation.fieldNames.joined(separator: ",")) • kind observado=\(observedKind) • wire=\(wireKind) • classe=\(observation.classificationLabel) • keys=\(observation.keys.count) • coal=\(coal) • metal=\(metal) • loot=\(lootLabel)"
+    }
+
+    private static let sensitiveFieldNames: Set<String> = [
+        "actionproof", "proof", "token", "kt", "cookie", "authorization", "privatekey", "private_key"
+    ]
+
+    private static func normalizeToken(_ value: String?) -> String {
+        (value ?? "")
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+            .lowercased()
+            .replacingOccurrences(of: "-", with: "_")
+            .replacingOccurrences(of: " ", with: "_")
+    }
+
+    private static func firstString(in packet: [String: Any], keys: [String]) -> String? {
+        for key in keys {
+            if let value = packet[key] as? String, !value.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                return value
+            }
+        }
+        return nil
+    }
+
+    private static func extractKeys(from packet: [String: Any]) -> [String] {
+        var candidates: [String] = []
+        for key in ["keys", "key", "tiles", "tile", "cells", "cell", "footprint", "nodes"] {
+            appendKeyCandidates(packet[key], into: &candidates, depth: 0)
+        }
+        return GatherKnowledgeStore.normalizeKeys(candidates)
+    }
+
+    private static func appendKeyCandidates(_ value: Any?, into output: inout [String], depth: Int) {
+        guard let value, depth <= 2 else { return }
+        if let string = value as? String {
+            output.append(string)
+            return
+        }
+        if let strings = value as? [String] {
+            output.append(contentsOf: strings)
+            return
+        }
+        if let values = value as? [Any] {
+            for child in values { appendKeyCandidates(child, into: &output, depth: depth + 1) }
+            return
+        }
+        guard let object = value as? [String: Any] else { return }
+
+        for key in ["keys", "key", "tiles", "tile", "cells", "cell", "footprint"] {
+            appendKeyCandidates(object[key], into: &output, depth: depth + 1)
+        }
+
+        let column = RealtimeProtocol.int(object["c"] ?? object["col"] ?? object["column"])
+        let row = RealtimeProtocol.int(object["r"] ?? object["row"])
+        if let column, let row { output.append("\(column),\(row)") }
+    }
+}
+
 struct CombatBankFirstPolicy {
     // RC3.2: o BANK-FIRST não é mais limitado à allowlist histórica de seis
     // recursos. Todo item core materializado em invSlots pode ser protegido,
@@ -554,6 +686,13 @@ actor AutomationEngine {
     private var gatherResourceSerial = 0
     private let gatherEventGate = RealtimeEventGate()
     private let wildStateEventGate = RealtimeEventGate()
+    private var liveDunesSeeds: [String: GatherSeed] = [:]
+    private var dunesSnapshotVisibleCount = 0
+    private var dunesDiscoverySeen = Set<String>()
+    private var dunesScoutVisited = Set<String>()
+    private var dunesScoutMoves = 0
+    private var dunesZeroTargetSinceMS: Double?
+    private var dunesLastZeroTargetDiagnosticAt: Double = 0
 
     private var currentGatherSignature: String?
     private var currentGatherKind: String?
@@ -1005,13 +1144,27 @@ actor AutomationEngine {
             // cooldowns or unlock its persisted catalog.
             if let snapshotRegion, GatherRegionPolicy.isGatherRegion(snapshotRegion) {
                 let now = nowMS
+                var nextDunesSeeds: [String: GatherSeed] = [:]
+                if GatherRegionPolicy.isDunesRegion(snapshotRegion) {
+                    dunesSnapshotVisibleCount = res.count
+                }
+
                 for group in res {
+                    if GatherRegionPolicy.isDunesRegion(snapshotRegion) {
+                        let observation = DunesResourceDiscovery.observe(group)
+                        rememberDunesDiscovery(observation, region: snapshotRegion, source: "snap.res")
+                        if let seed = makeDunesSeed(from: observation, region: snapshotRegion) {
+                            nextDunesSeeds[seed.signature] = seed
+                            let until = RealtimeProtocol.double(group["until"]) ?? (now + 2_500)
+                            for key in seed.keys { cooldownUntil["\(seed.kind):\(key)"] = until }
+                        }
+                    }
+
                     let kind = ((group["kind"] ?? group["k"]) as? String) ?? ""
-                    guard !kind.isEmpty else { continue }
                     let keys = stringArray(group["keys"] ?? group["key"])
-                    guard !keys.isEmpty else { continue }
+                    guard !kind.isEmpty, !keys.isEmpty else { continue }
                     rememberGatherMetadata(
-                        region: snapshotRegion ?? "",
+                        region: snapshotRegion,
                         kind: kind,
                         keys: keys,
                         hasCoal: RealtimeProtocol.bool(group["hasCoal"]),
@@ -1022,6 +1175,13 @@ actor AutomationEngine {
                     for key in keys {
                         cooldownUntil["\(kind):\(key)"] = until
                     }
+                }
+
+                if GatherRegionPolicy.isDunesRegion(snapshotRegion) {
+                    // Dunes availability is generation-local. Replace, do not merge,
+                    // so a resource that vanished from the authoritative snapshot is
+                    // never chased from stale memory.
+                    liveDunesSeeds = nextDunesSeeds
                 }
             }
         }
@@ -1283,6 +1443,15 @@ actor AutomationEngine {
 
         let targetRegion = GatherRegionPolicy.region(for: mode)
         let start = GatherRegionPolicy.startPosition(for: mode)
+        if mode.isDunesGathering {
+            liveDunesSeeds.removeAll(keepingCapacity: true)
+            dunesSnapshotVisibleCount = 0
+            dunesDiscoverySeen.removeAll(keepingCapacity: true)
+            dunesScoutVisited.removeAll(keepingCapacity: true)
+            dunesScoutMoves = 0
+            dunesZeroTargetSinceMS = nil
+            dunesLastZeroTargetDiagnosticAt = 0
+        }
         reporter(.state(.syncing, "Sincronizando \(prettyRegion(targetRegion))"))
         if serverRegion?.lowercased() != targetRegion {
             try await setRegion(targetRegion, at: start)
@@ -1323,10 +1492,28 @@ actor AutomationEngine {
 
             guard let seed = selectGatherSeed(for: mode) else {
                 reporter(.target(nil))
-                reporter(.diagnostic("[GATHER] Nenhum alvo disponível agora; aguardando cooldown/defer"))
+                if mode.isDunesGathering {
+                    if let scout = selectDunesScoutSeed(for: mode) {
+                        dunesScoutVisited.insert(scout.signature)
+                        dunesScoutMoves += 1
+                        let scoutLabel = scout.modeHint?.displayName ?? scout.kind
+                        reporter(.state(.moving, "Explorando as Dunes"))
+                        reporter(.log("🧭 \(mode.displayName) • nenhum alvo elegível no snapshot atual • scout \(dunesScoutMoves)/3 usando \(scoutLabel) \(scout.targetKey) apenas como âncora; nenhuma coleta do recurso errado será enviada"))
+                        let scoutPosition = gatherPositionMemory[scout.signature] ?? scout.position
+                        try await walk(to: scoutPosition, status: "Explorando recursos das Dunes")
+                        position.ry = scoutPosition.ry
+                        try await sendPosition(moving: false)
+                        try await sleep(900)
+                        continue
+                    }
+                    reportDunesZeroTargetIfNeeded(mode: mode)
+                } else {
+                    reporter(.diagnostic("[GATHER] Nenhum alvo disponível agora; aguardando cooldown/defer"))
+                }
                 try await sleep(1_500)
                 continue
             }
+            dunesZeroTargetSinceMS = nil
 
             reporter(.target("\(mode.displayName) • \(seed.keys.joined(separator: ","))"))
             reporter(.state(.selectingTarget, "Alvo \(seed.targetKey)"))
@@ -1388,6 +1575,9 @@ actor AutomationEngine {
                 reporter(.success(result.loot))
                 reporter(.state(.cooldown, "Concluído \(successes)/\(goal)"))
                 reporter(.log("✅ \(mode.displayName) concluído • h=\(result.h)/\(result.hm) • \(persistenceLabel) • \(successes)/\(goal)"))
+                if mode.isDunesGathering {
+                    reporter(.log("📍 Marcador de recurso • \(mode.displayName) • kind=\(seed.kind) • keys=\(seed.keys.joined(separator: ",")) • loot=\(result.loot ?? "-")"))
+                }
                 try await sleep(280)
                 continue
             }
@@ -1822,9 +2012,22 @@ actor AutomationEngine {
     }
 
     private func ingestResourceEvent(_ packet: [String: Any]) async {
-        let kind = ((packet["kind"] ?? packet["k"]) as? String) ?? ""
-        let keys = stringArray(packet["keys"] ?? packet["key"])
+        let eventRegion = ((packet["region"] as? String) ?? serverRegion ?? region)
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+            .lowercased()
+        let dunesObservation = GatherRegionPolicy.isDunesRegion(eventRegion)
+            ? DunesResourceDiscovery.observe(packet)
+            : nil
+        let kind = dunesObservation?.wireKind ?? (((packet["kind"] ?? packet["k"]) as? String) ?? "")
+        let keys = dunesObservation?.keys ?? stringArray(packet["keys"] ?? packet["key"])
         let by = RealtimeProtocol.int(packet["by"])
+
+        if let dunesObservation {
+            rememberDunesDiscovery(dunesObservation, region: eventRegion, source: "res_evt")
+            if let seed = makeDunesSeed(from: dunesObservation, region: eventRegion) {
+                liveDunesSeeds[seed.signature] = seed
+            }
+        }
 
         // res_evt/res_snap são evidência autoritativa de metadados estáticos do
         // footprint, inclusive quando o evento pertence a outro player. Nunca
@@ -1940,6 +2143,9 @@ actor AutomationEngine {
         let activeRegion = requestedRegion ?? resourceSnapshotRegion ?? serverRegion ?? region
         let normalizedRegion = activeRegion.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
         var result = Self.gatherSeeds.filter { $0.region == normalizedRegion }
+        if GatherRegionPolicy.isDunesRegion(normalizedRegion) {
+            result.append(contentsOf: liveDunesSeeds.values.filter { $0.region == normalizedRegion })
+        }
         guard resourceSnapshotRegion == normalizedRegion else { return result }
 
         var known = Set(result.map(\.signature))
@@ -1977,6 +2183,65 @@ actor AutomationEngine {
         return result
     }
 
+    private func makeDunesSeed(from observation: DunesResourceDiscovery.Observation, region: String) -> GatherSeed? {
+        guard let mode = observation.mode,
+              !observation.wireKind.isEmpty,
+              !observation.keys.isEmpty else { return nil }
+        guard let interaction = canonicalGatherPositions(keys: observation.keys, region: region).first else { return nil }
+        return GatherSeed(
+            region: region,
+            kind: observation.wireKind,
+            keys: observation.keys,
+            position: interaction,
+            targetKey: observation.keys.first ?? "?",
+            hasCoal: observation.hasCoal ?? false,
+            hasMetal: observation.hasMetal ?? (mode == .silver),
+            modeHint: mode
+        )
+    }
+
+    private func rememberDunesDiscovery(
+        _ observation: DunesResourceDiscovery.Observation,
+        region: String,
+        source: String
+    ) {
+        let signature = "\(source)|\(observation.classificationLabel)|\(observation.wireKind)|\(observation.keys.joined(separator: "|"))|\(observation.fieldNames.joined(separator: ","))"
+        guard dunesDiscoverySeen.insert(signature).inserted else { return }
+        reporter(.diagnostic("[DUNES DISCOVERY] \(source) • \(DunesResourceDiscovery.diagnosticSummary(observation))"))
+        if observation.mode == nil || observation.keys.isEmpty {
+            reporter(.log("🧭 Dunes discovery • recurso ainda não classificável • \(DunesResourceDiscovery.diagnosticSummary(observation))"))
+        }
+    }
+
+    private func selectDunesScoutSeed(for mode: ActivityMode) -> GatherSeed? {
+        guard mode.isDunesGathering, dunesScoutMoves < 3 else { return nil }
+        return liveDunesSeeds.values
+            .filter { seed in
+                seed.modeHint != nil &&
+                seed.modeHint != mode &&
+                !dunesScoutVisited.contains(seed.signature)
+            }
+            .min { a, b in
+                let pa = gatherPositionMemory[a.signature] ?? a.position
+                let pb = gatherPositionMemory[b.signature] ?? b.position
+                return distance(from: position, to: pa) < distance(from: position, to: pb)
+            }
+    }
+
+    private func reportDunesZeroTargetIfNeeded(mode: ActivityMode) {
+        let now = nowMS
+        if dunesZeroTargetSinceMS == nil { dunesZeroTargetSinceMS = now }
+        guard let since = dunesZeroTargetSinceMS, now - since >= 15_000 else {
+            reporter(.diagnostic("[GATHER][DUNES] nenhum \(mode.displayName) elegível agora • visíveis=\(dunesSnapshotVisibleCount) • silver=\(liveDunesSeeds.values.filter { $0.modeHint == .silver }.count) • cacti=\(liveDunesSeeds.values.filter { $0.modeHint == .cacti }.count)"))
+            return
+        }
+        guard now - dunesLastZeroTargetDiagnosticAt >= 15_000 else { return }
+        dunesLastZeroTargetDiagnosticAt = now
+        let silver = liveDunesSeeds.values.filter { $0.modeHint == .silver }.count
+        let cacti = liveDunesSeeds.values.filter { $0.modeHint == .cacti }.count
+        reporter(.log("⚠️ \(mode.displayName) • \(dunesSnapshotVisibleCount) recursos no snapshot, mas 0 alvos elegíveis após 15s • reconhecidos: silver=\(silver), cacti=\(cacti) • aguardando estado autoritativo, sem enviar ação às cegas"))
+    }
+
     private func persistedSeedCount(for mode: ActivityMode? = nil) -> Int {
         let targetRegion = mode.map { GatherRegionPolicy.region(for: $0) } ?? resourceSnapshotRegion ?? region.lowercased()
         guard resourceSnapshotRegion == targetRegion else { return 0 }
@@ -2002,7 +2267,8 @@ actor AutomationEngine {
         let now = nowMS
         return gatherSeedPool(region: GatherRegionPolicy.region(for: mode))
             .filter { seed in
-                GatherResourcePolicy.matches(mode: mode, region: seed.region, kind: seed.kind, hasCoal: seed.hasCoal, hasMetal: seed.hasMetal)
+                seed.modeHint.map { $0 == mode } ??
+                    GatherResourcePolicy.matches(mode: mode, region: seed.region, kind: seed.kind, hasCoal: seed.hasCoal, hasMetal: seed.hasMetal)
             }
             .filter { seed in
                 gatherRetryPolicy.isEligible(signature: seed.signature, nowMS: now) &&
@@ -2025,7 +2291,8 @@ actor AutomationEngine {
         return gatherSeedPool(region: targetRegion).filter { seed in
             let modeOK: Bool
             if let mode {
-                modeOK = GatherResourcePolicy.matches(mode: mode, region: seed.region, kind: seed.kind, hasCoal: seed.hasCoal, hasMetal: seed.hasMetal)
+                modeOK = seed.modeHint.map { $0 == mode } ??
+                    GatherResourcePolicy.matches(mode: mode, region: seed.region, kind: seed.kind, hasCoal: seed.hasCoal, hasMetal: seed.hasMetal)
             } else {
                 modeOK = true
             }
@@ -4814,6 +5081,7 @@ private struct GatherSeed {
     let targetKey: String
     let hasCoal: Bool
     let hasMetal: Bool
+    let modeHint: ActivityMode?
 
     init(
         region: String = "eldergrove",
@@ -4822,7 +5090,8 @@ private struct GatherSeed {
         position: Position,
         targetKey: String,
         hasCoal: Bool,
-        hasMetal: Bool = false
+        hasMetal: Bool = false,
+        modeHint: ActivityMode? = nil
     ) {
         self.region = region
         self.kind = kind
@@ -4831,6 +5100,7 @@ private struct GatherSeed {
         self.targetKey = targetKey
         self.hasCoal = hasCoal
         self.hasMetal = hasMetal
+        self.modeHint = modeHint
     }
 
     var signature: String { "\(kind):\(keys.sorted().joined(separator: "|"))" }
