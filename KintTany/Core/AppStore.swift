@@ -81,7 +81,7 @@ enum ActivityMode: String, CaseIterable, Codable, Identifiable {
     }
 
     var requiresSafeExit: Bool {
-        isWildCombat || isDunesGathering
+        isWildCombat
     }
 
     var isExperimental: Bool {
@@ -421,9 +421,7 @@ final class AppStore: ObservableObject {
             stats.lastEvent = "STOP aguardando reconexão"
             updateContinuedProcessingProgress(forceTitleUpdate: true)
             if !silent {
-                log(activity?.isDunesGathering == true
-                    ? "STOP registrado durante queda de conexão • reconexão continuará apenas para sair em The Shores"
-                    : "STOP registrado durante queda de conexão • reconexão de emergência continuará apenas para voltar ao World")
+                log("STOP registrado durante queda de conexão • reconexão de emergência continuará apenas para voltar ao World")
             }
             return
         }
@@ -436,13 +434,11 @@ final class AppStore: ObservableObject {
                 await activeEngine.requestSafeStop(reason: .user)
             }
             state = .recovering
-            statusMessage = activity?.isDunesGathering == true ? "Saindo das Dunes com segurança" : "Saindo do combate com segurança"
+            statusMessage = "Saindo do combate com segurança"
             stats.lastEvent = "safe stop solicitado"
             updateContinuedProcessingProgress(forceTitleUpdate: true)
             if !silent {
-                log(activity?.isDunesGathering == true
-                    ? "STOP solicitado — saindo das Dunes para The Shores antes de fechar a conexão"
-                    : "STOP solicitado — encerrando Wilderness com segurança antes de fechar a conexão")
+                log("STOP solicitado — encerrando Wilderness com segurança antes de fechar a conexão")
             }
             return
         }
@@ -871,17 +867,13 @@ final class AppStore: ObservableObject {
                 case .backgroundExpiration:
                     statusMessage = "Continued Processing encerrada externamente"
                     stats.lastEvent = "encerramento externo com saída segura"
-                    log(mode.isDunesGathering
-                        ? "Continued Processing encerrada/cancelada externamente — The Shores confirmada e conexão liberada com segurança"
-                        : "Continued Processing encerrada/cancelada externamente — World confirmado e conexão liberada com segurança")
+                    log("Continued Processing encerrada/cancelada externamente — World confirmado e conexão liberada com segurança")
                     logSessionSummary(mode: mode, outcome: "ENCERRAMENTO EXTERNO SEGURO")
                     finishContinuedProcessing(success: false, reason: "encerramento externo após saída segura")
                 case .connectionLoss:
-                    statusMessage = mode.isDunesGathering ? "Conexão recuperada • The Shores segura" : "Conexão recuperada • World seguro"
+                    statusMessage = "Conexão recuperada • World seguro"
                     stats.lastEvent = "saída segura após perda de conexão"
-                    log(mode.isDunesGathering
-                        ? "Conexão recuperada — The Shores segura e nenhuma nova ação será enviada"
-                        : "Conexão recuperada — World seguro e nenhuma nova ação será enviada")
+                    log("Conexão recuperada — World seguro e nenhuma nova ação será enviada")
                     logSessionSummary(mode: mode, outcome: "RECONEXÃO SEGURA")
                     finishContinuedProcessing(success: false, reason: "conexão recuperada com saída segura")
                 case .user, .none:
@@ -1012,20 +1004,6 @@ final class AppStore: ObservableObject {
                 }
             }
 
-            // Dunes safety firewall: any non-transport operational failure is
-            // contained by returning to The Shores before the Presence closes.
-            if mode.isDunesGathering, let activeEngine, let shard = activeShard {
-                await containDunesTerminalFailure(
-                    mode: mode,
-                    runID: runID,
-                    shard: shard,
-                    cookie: cookie,
-                    engine: activeEngine,
-                    failure: error.localizedDescription
-                )
-                return
-            }
-
             // RC3.4: um World sem ACK pode já ter sido aplicado pelo servidor.
             // Reconecte no mesmo shard e deixe snapshot autoritativo decidir se
             // já estamos em World ou se ainda é preciso concluir safe-exit.
@@ -1122,51 +1100,6 @@ final class AppStore: ObservableObject {
         await socket.close()
     }
 
-    private func containDunesTerminalFailure(
-        mode: ActivityMode,
-        runID: UUID,
-        shard: String,
-        cookie: String,
-        engine: AutomationEngine,
-        failure: String
-    ) async {
-        diagnostic("[DUNES][FAILSAFE] \(failure) • tentando confirmar The Shores antes do teardown")
-        state = .recovering
-        statusMessage = "Falha detectada • saindo das Dunes"
-        stats.lastEvent = "failsafe Dunes • retorno a The Shores"
-        updateContinuedProcessingProgress(forceTitleUpdate: true)
-
-        do {
-            _ = try await engine.runEmergencyDunesExit(reason: "falha operacional: \(failure)")
-            await importSocketTrace()
-            terminalFailureHandled = true
-            connected = false
-            currentTarget = nil
-            activity = nil
-            state = .failed
-            stats.sessionErrors += 1
-            statusMessage = "Falha encerrada com The Shores segura"
-            log("🛡️ Falha operacional contida • The Shores confirmada antes de liberar a conexão")
-            log("Falha: \(failure) • coleta experimental interrompida com saída segura")
-            logSessionSummary(mode: mode, outcome: "FALHA • THE SHORES SEGURA")
-            finishContinuedProcessing(success: false, reason: "falha contida fora das Dunes")
-        } catch {
-            diagnostic("[DUNES][FAILSAFE] saída na Presence atual não confirmou: \(error.localizedDescription) • iniciando reconexão apenas para sair")
-            requestGatherConnectionRecovery(
-                reason: "Falha operacional nas Dunes; reconectando exclusivamente para confirmar The Shores",
-                runID: runID
-            )
-            await socket.close()
-            _ = await recoverGatherAfterUnexpectedDisconnect(
-                mode: mode,
-                runID: runID,
-                shard: shard,
-                cookie: cookie,
-                runGoal: sessionGoal
-            )
-        }
-    }
-
     /// Somente perdas reais do transporte chegam aqui. Recoveries de harvest,
     /// partial e proof miss pertencem exclusivamente à engine e nunca derrubam
     /// uma Presence saudável.
@@ -1176,9 +1109,7 @@ final class AppStore: ObservableObject {
         if !connectionRecoveryRequested {
             connectionRecoveryDetail = reason
             diagnostic("[WARN] \(reason) • Gathering: retomada no mesmo shard solicitada")
-            log(activity?.isDunesGathering == true
-                ? "⚠️ Conexão perdida nas Dunes • reconectando somente para sair em The Shores; coleta não será retomada"
-                : "⚠️ Conexão perdida durante a coleta • progresso preservado • reconectando para continuar a meta")
+            log("⚠️ Conexão perdida durante a coleta • progresso preservado • reconectando para continuar a meta")
         }
         connectionRecoveryRequested = true
         connected = false
@@ -1216,7 +1147,7 @@ final class AppStore: ObservableObject {
             guard activeRunID == runID,
                   activity == mode,
                   !terminalFailureHandled,
-                  (requestedStopReason == nil || mode.isDunesGathering),
+                  requestedStopReason == nil,
                   !Task.isCancelled
             else { return false }
 
@@ -1224,7 +1155,7 @@ final class AppStore: ObservableObject {
             // realtime actor. Ceder evita calcular a meta restante antes deles.
             await Task.yield()
             let remaining = max(0, runGoal - stats.successes)
-            if remaining == 0, !mode.isDunesGathering {
+            if remaining == 0 {
                 connectionRecoveryRequested = false
                 connectionRecoveryDetail = nil
                 connected = false
@@ -1270,37 +1201,6 @@ final class AppStore: ObservableObject {
                     runID: runID
                 )
                 await engine.prepareIdentity()
-
-                if mode.isDunesGathering {
-                    connected = true
-                    state = .recovering
-                    statusMessage = "Conexão restaurada • saindo das Dunes"
-                    stats.lastEvent = "Dunes reconectada para saída"
-                    updateContinuedProcessingProgress(forceTitleUpdate: true)
-                    log("🔁 Conexão restaurada no \(shard) • nenhuma coleta será retomada • saindo para The Shores")
-
-                    _ = try await engine.runEmergencyDunesExit(reason: "reconexão após perda de transporte")
-                    await importSocketTrace()
-                    terminalFailureHandled = true
-                    connectionRecoveryRequested = false
-                    connectionRecoveryDetail = nil
-                    connected = false
-                    currentTarget = nil
-                    activity = nil
-                    if requestedStopReason != nil {
-                        state = .cancelled
-                        statusMessage = "Atividade encerrada • The Shores segura"
-                        logSessionSummary(mode: mode, outcome: "STOP SEGURO • THE SHORES")
-                        finishContinuedProcessing(success: false, reason: "interrompida após saída segura das Dunes")
-                    } else {
-                        state = .failed
-                        stats.sessionErrors += 1
-                        statusMessage = "Conexão recuperada • The Shores segura"
-                        logSessionSummary(mode: mode, outcome: "FALHA DE CONEXÃO • THE SHORES SEGURA")
-                        finishContinuedProcessing(success: false, reason: "conexão perdida; Dunes evacuada")
-                    }
-                    return true
-                }
 
                 connected = true
                 connectionRecoveryRequested = false
@@ -2094,9 +1994,7 @@ final class AppStore: ObservableObject {
                 await activeEngine.requestSafeStop(reason: reason)
             }
             state = .recovering
-            statusMessage = activity?.isDunesGathering == true
-                ? "Continued Processing encerrada • saída imediata para The Shores"
-                : "Continued Processing encerrada • saída imediata para o World"
+            statusMessage = "Continued Processing encerrada • saída imediata para o World"
             stats.lastEvent = "saída de emergência por encerramento externo"
             updateContinuedProcessingProgress(forceTitleUpdate: true)
             diagnostic("[BG] Encerramento externo recebido em região de risco • saída segura cooperativa solicitada")
@@ -2176,9 +2074,7 @@ final class AppStore: ObservableObject {
                 await activeEngine.requestSafeStop(reason: reason)
             }
             state = .recovering
-            statusMessage = activity?.isDunesGathering == true
-                ? "Background expirando • saída imediata para The Shores"
-                : "Background expirando • saída imediata para o World"
+            statusMessage = "Background expirando • saída imediata para o World"
             stats.lastEvent = "saída de emergência por background"
             diagnostic("[BG] Runtime curto esgotou no Wild • emergency-exit solicitado")
             return
