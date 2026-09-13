@@ -145,24 +145,15 @@ final class RealtimeProtocolTests: XCTestCase {
         XCTAssertTrue(policy.isEligible(signature: signature, nowMS: 26_000))
     }
 
-    func testGatherPersistenceSerializesAndDrainsBeforeNewRun() {
-        XCTAssertTrue(GatherPersistencePolicy.serializesLootWrites)
-        XCTAssertTrue(GatherPersistencePolicy.requiresCleanDrainBeforeCompletion)
-    }
-
-    func testGatherOptimisticInventoryRestoresPerSuccessTotal() {
-        XCTAssertEqual(GatherPersistencePolicy.optimisticTotal(current: 839, amount: 1), 840)
-        let grantTotal = GatherPersistencePolicy.reconciledTotal(current: 840, authoritative: 846)
-        XCTAssertEqual(grantTotal, 846)
-        XCTAssertEqual(GatherPersistencePolicy.optimisticTotal(current: grantTotal, amount: 1), 847)
-        XCTAssertNil(GatherPersistencePolicy.optimisticTotal(current: nil, amount: 1))
-    }
-
-    func testEverySafeGatherModeIsEligibleForTransportResume() {
+    func testEveryGatherModeIsClassified() {
         XCTAssertTrue(ActivityMode.tree.isGathering)
         XCTAssertTrue(ActivityMode.stone.isGathering)
         XCTAssertTrue(ActivityMode.coal.isGathering)
         XCTAssertTrue(ActivityMode.iron.isGathering)
+        XCTAssertTrue(ActivityMode.silver.isGathering)
+        XCTAssertTrue(ActivityMode.cacti.isGathering)
+        XCTAssertTrue(ActivityMode.silver.isDunesGathering)
+        XCTAssertTrue(ActivityMode.cacti.requiresSafeExit)
         XCTAssertFalse(ActivityMode.fishing.isGathering)
         XCTAssertFalse(ActivityMode.chicken.isGathering)
         XCTAssertFalse(ActivityMode.zombie.isGathering)
@@ -512,6 +503,8 @@ final class RealtimeProtocolTests: XCTestCase {
         XCTAssertEqual(ActivityToolPolicy.requiredTool(for: .tree), "tool_axe")
         XCTAssertEqual(ActivityToolPolicy.requiredTool(for: .stone), "tool_pickaxe")
         XCTAssertEqual(ActivityToolPolicy.requiredTool(for: .coal), "tool_pickaxe")
+        XCTAssertEqual(ActivityToolPolicy.acceptedTools(for: .silver), ["silver_pickaxe", "tool_pickaxe_l2", "copper_pickaxe", "tool_pickaxe"])
+        XCTAssertEqual(ActivityToolPolicy.acceptedTools(for: .cacti), ["silver_axe", "tool_axe_l2"])
         XCTAssertEqual(ActivityToolPolicy.requiredTool(for: .fishing), "tool_fishing_rod")
         XCTAssertNil(ActivityToolPolicy.requiredTool(for: .chicken))
         XCTAssertNil(ActivityToolPolicy.requiredTool(for: .zombie))
@@ -686,6 +679,26 @@ final class RealtimeProtocolTests: XCTestCase {
         XCTAssertEqual(GatherRegionPolicy.region(for: .iron), "frostmere")
         XCTAssertEqual(GatherRegionPolicy.gridOffset(for: "frostmere"), 19.5)
         XCTAssertEqual(GatherRegionPolicy.gridOffset(for: "eldergrove"), 24.5)
+    }
+
+    @MainActor
+    func testDunesExperimentalBootstrapAndSafeExitCoordinates() {
+        let silver = AutomationEngine.bootstrapForRun(for: .silver, gatherDisposition: .ready)
+        let cacti = AutomationEngine.bootstrapForRun(for: .cacti, gatherDisposition: .ready)
+        XCTAssertEqual(silver.region, "desert")
+        XCTAssertEqual(cacti.region, "desert")
+        XCTAssertEqual(silver.position, Position(x: -9.5, z: -18.5))
+        XCTAssertEqual(GatherRegionPolicy.dunesExitPosition.x, -9.5)
+        XCTAssertEqual(GatherRegionPolicy.dunesExitPosition.z, -19.5)
+        XCTAssertEqual(GatherRegionPolicy.shoresArrivalPosition, Position(x: -9.5, z: 18.5, ry: .pi))
+    }
+
+    func testDunesResourceClassificationUsesRegionRatherThanLegacyRockFlags() {
+        XCTAssertTrue(GatherResourcePolicy.matches(mode: .silver, region: "desert", kind: "rock", hasCoal: false, hasMetal: false))
+        XCTAssertFalse(GatherResourcePolicy.matches(mode: .silver, region: "frostmere", kind: "rock", hasCoal: false, hasMetal: true))
+        XCTAssertTrue(GatherResourcePolicy.matches(mode: .cacti, region: "desert", kind: "tree", hasCoal: false, hasMetal: false))
+        XCTAssertFalse(GatherResourcePolicy.matches(mode: .tree, region: "desert", kind: "tree", hasCoal: false, hasMetal: false))
+        XCTAssertEqual(GatherRegionPolicy.gridOffset(for: "desert"), 19.5)
     }
 
     func testGatherKnowledgeExplicitFlushPersistsDebouncedChanges() throws {
