@@ -32,6 +32,11 @@ enum EmergencyWildExitResult: Equatable {
     case dead
 }
 
+enum EmergencyDunesExitResult: Equatable {
+    case shoresSafe
+    case alreadySafe
+}
+
 struct FishingNumberingPolicy {
     static func publicFishNumber(successes: Int) -> Int {
         max(1, successes + 1)
@@ -150,19 +155,30 @@ private actor RealtimeEventGate {
 }
 
 struct ActivityToolPolicy {
-    static func requiredTool(for mode: ActivityMode) -> String? {
+    static func acceptedTools(for mode: ActivityMode) -> [String] {
         switch mode {
-        case .tree: return "tool_axe"
-        case .coal, .stone, .iron: return "tool_pickaxe"
-        case .fishing: return "tool_fishing_rod"
-        case .chicken, .zombie, .dragon: return nil
+        case .tree: return ["tool_axe"]
+        case .coal, .stone, .iron: return ["tool_pickaxe"]
+        case .silver: return ["silver_pickaxe", "tool_pickaxe_l2", "copper_pickaxe", "tool_pickaxe"]
+        case .cacti: return ["silver_axe", "tool_axe_l2"]
+        case .fishing: return ["tool_fishing_rod"]
+        case .chicken, .zombie, .dragon: return []
         }
+    }
+
+    static func requiredTool(for mode: ActivityMode) -> String? {
+        acceptedTools(for: mode).first
     }
 
     static func displayName(_ type: String) -> String {
         switch type {
         case "tool_axe": return "Axe"
         case "tool_pickaxe": return "Pickaxe"
+        case "copper_pickaxe": return "Copper Pickaxe"
+        case "tool_pickaxe_l2": return "Iron Pickaxe"
+        case "silver_pickaxe": return "Silver Pickaxe"
+        case "tool_axe_l2": return "Iron Axe"
+        case "silver_axe": return "Silver Axe"
         case "tool_fishing_rod": return "Fishing Rod"
         default: return type
         }
@@ -171,11 +187,18 @@ struct ActivityToolPolicy {
 
 struct GatherResourcePolicy {
     static func matches(mode: ActivityMode, kind: String, hasCoal: Bool, hasMetal: Bool) -> Bool {
+        matches(mode: mode, region: GatherRegionPolicy.region(for: mode), kind: kind, hasCoal: hasCoal, hasMetal: hasMetal)
+    }
+
+    static func matches(mode: ActivityMode, region: String, kind: String, hasCoal: Bool, hasMetal: Bool) -> Bool {
+        let normalizedRegion = region.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
         switch mode {
-        case .tree: return kind == "tree"
-        case .coal: return kind == "rock" && hasCoal && !hasMetal
-        case .stone: return kind == "rock" && !hasCoal && !hasMetal
-        case .iron: return kind == "rock" && !hasCoal && hasMetal
+        case .tree: return normalizedRegion == "eldergrove" && kind == "tree"
+        case .coal: return normalizedRegion == "eldergrove" && kind == "rock" && hasCoal && !hasMetal
+        case .stone: return normalizedRegion == "eldergrove" && kind == "rock" && !hasCoal && !hasMetal
+        case .iron: return normalizedRegion == "frostmere" && kind == "rock" && !hasCoal && hasMetal
+        case .silver: return GatherRegionPolicy.isDunesRegion(normalizedRegion) && kind == "rock"
+        case .cacti: return GatherRegionPolicy.isDunesRegion(normalizedRegion) && kind == "tree"
         default: return false
         }
     }
@@ -183,34 +206,49 @@ struct GatherResourcePolicy {
 
 struct GatherRegionPolicy {
     static func region(for mode: ActivityMode) -> String {
-        mode == .iron ? "frostmere" : "eldergrove"
+        if mode == .iron { return "frostmere" }
+        if mode.isDunesGathering { return "desert" }
+        return "eldergrove"
     }
 
     static func startPosition(for mode: ActivityMode) -> Position {
         switch mode {
         case .tree: return Position(x: -6.5, z: -18.5)
         case .iron: return Position(x: 5.5, z: -18.5)
+        case .silver, .cacti: return Position(x: -9.5, z: -18.5)
         default: return Position(x: 22.5, z: -3.5)
         }
     }
 
+    static let dunesExitPosition = Position(x: -9.5, z: -19.5, ry: .pi)
+    static let shoresArrivalPosition = Position(x: -9.5, z: 18.5, ry: .pi)
+
+    static func isDunesRegion(_ region: String) -> Bool {
+        let normalized = region.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        return normalized == "desert" || normalized == "desert_west" || normalized == "desert_south"
+    }
+
     static func isGatherRegion(_ region: String) -> Bool {
         let normalized = region.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
-        return normalized == "eldergrove" || normalized == "frostmere"
+        return normalized == "eldergrove" || normalized == "frostmere" || isDunesRegion(normalized)
     }
 
     static func gridOffset(for region: String) -> Double {
-        region.lowercased() == "frostmere" ? 19.5 : 24.5
+        let normalized = region.lowercased()
+        return normalized == "frostmere" || isDunesRegion(normalized) ? 19.5 : 24.5
     }
 
     static func hasCoal(region: String, packetValue: Bool?) -> Bool? {
-        region.lowercased() == "frostmere" ? (packetValue ?? false) : packetValue
+        let normalized = region.lowercased()
+        if normalized == "frostmere" || isDunesRegion(normalized) { return packetValue ?? false }
+        return packetValue
     }
 
     static func hasMetal(region: String, packetValue: Bool?) -> Bool? {
         switch region.lowercased() {
         case "frostmere": return packetValue ?? true
         case "eldergrove": return packetValue ?? false
+        case "desert", "desert_west", "desert_south": return packetValue ?? false
         default: return packetValue
         }
     }
@@ -478,107 +516,6 @@ struct EngineRunResult {
     let stopReason: EngineStopReason?
 }
 
-/// Paridade com a `persistenceChain` da v5.2: saves permanecem serializados e
-/// fora do hot path realtime. A diferença de ciclo de vida é que uma nova meta
-/// só pode nascer depois que esta fila ficou realmente vazia.
-struct GatherPersistencePolicy {
-    static let serializesLootWrites = true
-    static let requiresCleanDrainBeforeCompletion = true
-
-    static func optimisticTotal(current: Int?, amount: Int) -> Int? {
-        guard let current, amount > 0 else { return current }
-        return current + amount
-    }
-
-    static func reconciledTotal(current: Int?, authoritative: Int) -> Int {
-        max(current ?? authoritative, authoritative)
-    }
-}
-
-struct GatherPersistenceDrainResult: Sendable {
-    let errors: [String]
-    let batches: Int
-}
-
-actor GatherLootPersistenceQueue {
-    private let http: KintaraHTTPClient
-    private var tail: Task<Void, Never>?
-    private var pending = 0
-    private var errors: [String] = []
-    private var completedBatches = 0
-    private var optimisticTotals: [String: Int] = [:]
-    private var inventorySeeded = false
-
-    init(cookie: String) {
-        http = KintaraHTTPClient(cookie: cookie)
-    }
-
-    func seedInventoryIfNeeded(_ totals: [String: Int]) {
-        guard !inventorySeeded else { return }
-        optimisticTotals = totals
-        inventorySeeded = true
-    }
-
-    func observeAuthoritativeInventory(_ totals: [String: Int]) {
-        guard !totals.isEmpty else { return }
-        for (item, value) in totals {
-            optimisticTotals[item] = GatherPersistencePolicy.reconciledTotal(
-                current: optimisticTotals[item],
-                authoritative: value
-            )
-        }
-        inventorySeeded = true
-    }
-
-    @discardableResult
-    func enqueue(item: String, amount: Int) -> Int? {
-        guard !item.isEmpty, amount > 0 else { return optimisticTotals[item] }
-        if let next = GatherPersistencePolicy.optimisticTotal(
-            current: optimisticTotals[item],
-            amount: amount
-        ) {
-            optimisticTotals[item] = next
-        }
-        let total = optimisticTotals[item]
-        let previous = tail
-        let client = http
-        pending += 1
-
-        let job = Task { [weak self] in
-            if let previous { await previous.value }
-            do {
-                let totals = try await client.persistLootBatch([item: amount])
-                await self?.recordCompletion(authoritativeTotals: totals, error: nil)
-            } catch {
-                await self?.recordCompletion(
-                    authoritativeTotals: [:],
-                    error: "\(item) x\(amount) • \(error.localizedDescription)"
-                )
-            }
-        }
-        tail = job
-        return total
-    }
-
-    private func recordCompletion(authoritativeTotals: [String: Int], error: String?) {
-        observeAuthoritativeInventory(authoritativeTotals)
-        if let error { errors.append(error) }
-        completedBatches += 1
-        pending = max(0, pending - 1)
-    }
-
-    /// Sem timeout: `meta concluída` só é publicada depois que nenhum request de
-    /// inventário da sessão anterior continua vivo.
-    func drainCompletely() async -> GatherPersistenceDrainResult {
-        if let tail { await tail.value }
-        let result = GatherPersistenceDrainResult(errors: errors, batches: completedBatches)
-        errors.removeAll(keepingCapacity: true)
-        return result
-    }
-
-    func pendingCount() -> Int { pending }
-}
-
 /// The protocol engine owns one serial actor, independent from SwiftUI's main
 /// actor. Socket ingestion, ACK gates, movement and action profiles therefore
 /// continue to make progress while iOS deprioritizes UI work in background.
@@ -591,7 +528,6 @@ actor AutomationEngine {
     private let reporter: Reporter
     private let http: KintaraHTTPClient
     private let fishingBait: FishingBait
-    private let gatherPersistenceQueue: GatherLootPersistenceQueue
 
     private var region: String
     private var serverRegion: String?
@@ -702,6 +638,7 @@ actor AutomationEngine {
 
     private var successes = 0
     private var safeStopReason: EngineStopReason?
+    private var activeGatherToolType: String?
     private var safeStopCompleted = false
 
     private var emergencyBackgroundExitRequested: Bool {
@@ -714,7 +651,6 @@ actor AutomationEngine {
         shard: String,
         bootstrap: PresenceBootstrap,
         fishingBait: FishingBait = .feather,
-        gatherPersistenceQueue: GatherLootPersistenceQueue? = nil,
         reporter: @escaping Reporter
     ) {
         self.socket = socket
@@ -723,7 +659,6 @@ actor AutomationEngine {
         self.fishingBait = fishingBait
         self.reporter = reporter
         self.http = KintaraHTTPClient(cookie: cookie)
-        self.gatherPersistenceQueue = gatherPersistenceQueue ?? GatherLootPersistenceQueue(cookie: cookie)
         self.gatherKnowledge = GatherKnowledgeStore()
         self.region = bootstrap.region
         self.position = bootstrap.position
@@ -736,6 +671,8 @@ actor AutomationEngine {
             return PresenceBootstrap(region: "eldergrove", position: Position(x: -6.5, z: -18.5))
         case .iron:
             return PresenceBootstrap(region: "frostmere", position: Position(x: 5.5, z: -18.5))
+        case .silver, .cacti:
+            return PresenceBootstrap(region: "desert", position: GatherRegionPolicy.startPosition(for: mode))
         case .coal, .stone, .chicken:
             return PresenceBootstrap(region: "eldergrove", position: Position(x: 22.5, z: -3.5))
         case .fishing, .zombie, .dragon:
@@ -767,31 +704,36 @@ actor AutomationEngine {
     }
 
     static func gatherToolPreflightDisposition(for mode: ActivityMode, cookie: String) async -> GatherToolPreflightDisposition {
-        guard mode.isGathering,
-              let tool = ActivityToolPolicy.requiredTool(for: mode)
-        else { return .ready }
+        guard mode.isGathering, let fallback = ActivityToolPolicy.requiredTool(for: mode) else { return .ready }
 
         do {
-            let counts = try await KintaraHTTPClient(cookie: cookie).itemLocationCounts(type: tool)
-            return GatherToolPreflightPolicy.disposition(tool: tool, carried: counts.carried, bank: counts.bank)
+            let client = KintaraHTTPClient(cookie: cookie)
+            var bankCandidate: String?
+            for tool in ActivityToolPolicy.acceptedTools(for: mode) {
+                let counts = try await client.itemLocationCounts(type: tool)
+                if counts.carried >= 1 { return .ready }
+                if counts.bank >= 1, bankCandidate == nil { bankCandidate = tool }
+            }
+            if let bankCandidate { return .needsWorld(tool: bankCandidate) }
+            return .missing(tool: fallback)
         } catch {
             // Falha de leitura não autoriza ElderGrove às cegas. O chamador fará
             // o preflight World e uma nova leitura autoritativa sem cache.
-            return .needsWorld(tool: tool)
+            return .needsWorld(tool: fallback)
         }
     }
 
     @discardableResult
     static func ensureGatherToolCarried(for mode: ActivityMode, cookie: String) async throws -> Int {
-        guard mode.isGathering,
-              let tool = ActivityToolPolicy.requiredTool(for: mode)
-        else { return 0 }
+        guard mode.isGathering, let fallback = ActivityToolPolicy.requiredTool(for: mode) else { return 0 }
         let client = KintaraHTTPClient(cookie: cookie)
-        let before = try await client.itemLocationCounts(type: tool)
-        if before.carried >= 1 { return before.carried }
-        guard before.bank >= 1 else {
-            throw EngineError.missingRequiredItem(ActivityToolPolicy.displayName(tool))
+        var bankCandidate: String?
+        for tool in ActivityToolPolicy.acceptedTools(for: mode) {
+            let before = try await client.itemLocationCounts(type: tool)
+            if before.carried >= 1 { return before.carried }
+            if before.bank >= 1, bankCandidate == nil { bankCandidate = tool }
         }
+        guard let tool = bankCandidate else { throw EngineError.missingRequiredItem(ActivityToolPolicy.displayName(fallback)) }
         let carried = try await client.ensureCarriedItem(type: tool, quantity: 1, preferHotbar: true)
         let confirmed = try await client.itemLocationCounts(type: tool)
         guard carried >= 1 || confirmed.carried >= 1 else {
@@ -800,12 +742,42 @@ actor AutomationEngine {
         return max(carried, confirmed.carried)
     }
 
+    /// Dunes preflight is intentionally completed over HTTP before opening a
+    /// Presence in the full-loot realm. Existing carried valuables are banked,
+    /// while only the selected tool stays loaded. Automated healing is not
+    /// assumed in this first experiment, so valuable consumables are protected.
+    static func prepareDunesPreflight(for mode: ActivityMode, cookie: String) async throws -> String {
+        guard mode.isDunesGathering, let fallback = ActivityToolPolicy.requiredTool(for: mode) else {
+            throw EngineError.missingRequiredItem("ferramenta das Dunes")
+        }
+        let client = KintaraHTTPClient(cookie: cookie)
+        var selected: String?
+        var bankCandidate: String?
+        for tool in ActivityToolPolicy.acceptedTools(for: mode) {
+            let counts = try await client.itemLocationCounts(type: tool)
+            if counts.carried >= 1 { selected = tool; break }
+            if counts.bank >= 1, bankCandidate == nil { bankCandidate = tool }
+        }
+        if selected == nil, let bankCandidate {
+            let carried = try await client.ensureCarriedItem(type: bankCandidate, quantity: 1, preferHotbar: true)
+            if carried >= 1 { selected = bankCandidate }
+        }
+        guard let selected else { throw EngineError.missingRequiredItem(ActivityToolPolicy.displayName(fallback)) }
+
+        let keep: Set<String> = [selected]
+        let deposit = try await client.depositAllBankFirstInventory(
+            preservingTypes: keep,
+            preserveCombatLoadout: false
+        )
+        guard deposit.unresolved.isEmpty else {
+            throw EngineError.bankDepositFailed(deposit.unresolved.joined(separator: ", "))
+        }
+        return selected
+    }
+
     func prepareIdentity() async {
         do {
             let me = try await http.get("/api/auth/me")
-            if let backpack = me["backpack"] as? [String: Any] {
-                await gatherPersistenceQueue.seedInventoryIfNeeded(gatherInventoryTotals(backpack))
-            }
             if let player = me["player"] as? [String: Any], let id = RealtimeProtocol.int(player["id"]) {
                 playerID = id
                 reporter(.diagnostic("[PLAYER] /api/auth/me confirmou playerId=\(id)"))
@@ -872,9 +844,6 @@ actor AutomationEngine {
             }
 
         case "inv_grant":
-            if let backpack = packet["backpack"] as? [String: Any] {
-                await gatherPersistenceQueue.observeAuthoritativeInventory(gatherInventoryTotals(backpack))
-            }
             if let grant = wildGrantHint(packet) {
                 wildGrantSerial += 1
                 recentWildGrants.append(WildGrant(serial: wildGrantSerial, type: grant.type, quantity: grant.quantity, at: nowMS))
@@ -906,13 +875,6 @@ actor AutomationEngine {
         }
     }
 
-    private func gatherInventoryTotals(_ backpack: [String: Any]) -> [String: Int] {
-        let resourceKeys = ["wood", "stone", "coal", "metal", "gold", "fish", "cooked_fish_meat", "raw_chicken", "cooked_chicken"]
-        return resourceKeys.reduce(into: [String: Int]()) { values, key in
-            values[key] = RealtimeProtocol.int(backpack[key]) ?? 0
-        }
-    }
-
     func requestSafeStop(reason: EngineStopReason) {
         guard safeStopReason == nil else { return }
         safeStopReason = reason
@@ -931,7 +893,7 @@ actor AutomationEngine {
         try Task.checkCancellation()
 
         switch mode {
-        case .tree, .coal, .stone, .iron:
+        case .tree, .coal, .stone, .iron, .silver, .cacti:
             try await runGather(mode: mode, goal: goal)
         case .fishing:
             try await runFishing(goal: goal)
@@ -993,6 +955,32 @@ actor AutomationEngine {
         guard playerHP > 0 else { return .dead }
         try await exitWildToWorld(reason: reason)
         return .worldSafe
+    }
+
+    /// Reconnection path for Dunes gathering. It never resumes harvesting;
+    /// after an authoritative snapshot it only attempts the official East→Shores exit.
+    func runEmergencyDunesExit(reason: String = "reconexão de emergência") async throws -> EmergencyDunesExitResult {
+        reporter(.state(.recovering, "Sincronizando estado das Dunes"))
+        let syncDeadline = nowMS + 8_000
+        while nowMS < syncDeadline {
+            try Task.checkCancellation()
+            if let authoritative = serverRegion?.lowercased(), !authoritative.isEmpty {
+                if !GatherRegionPolicy.isDunesRegion(authoritative) {
+                    reporter(.log("✅ Estado autoritativo • região=\(authoritative) • personagem fora das Dunes"))
+                    return .alreadySafe
+                }
+                region = authoritative
+                break
+            }
+            try await sleep(80)
+        }
+        guard let authoritative = serverRegion?.lowercased(), GatherRegionPolicy.isDunesRegion(authoritative) else {
+            throw EngineError.regionNotConfirmed("estado autoritativo das Dunes após reconexão")
+        }
+        safeStopReason = .connectionLoss
+        try await exitDunesToShores(reason: reason)
+        safeStopCompleted = true
+        return .shoresSafe
     }
 
     // MARK: - Common state
@@ -1330,6 +1318,7 @@ actor AutomationEngine {
 
         while successes < goal {
             try Task.checkCancellation()
+            if safeStopReason != nil { break }
             reporter(.state(.searching, "Procurando \(mode.displayName.lowercased())"))
 
             guard let seed = selectGatherSeed(for: mode) else {
@@ -1345,6 +1334,7 @@ actor AutomationEngine {
 
             let interactionPosition = gatherPositionMemory[seed.signature] ?? seed.position
             try await walk(to: interactionPosition, status: "Indo até \(mode.displayName) \(seed.targetKey)")
+            if safeStopReason != nil { break }
             position.ry = interactionPosition.ry
             try await sendPosition(moving: false)
             reporter(.diagnostic("[MOVE] arrived \(seed.targetKey) pos=\(format(position.x)),\(format(position.z)) ry=\(format(position.ry))"))
@@ -1382,8 +1372,16 @@ actor AutomationEngine {
 
                 var persistenceLabel = "sem loot confirmado"
                 if let loot = result.loot, !loot.isEmpty {
-                    let total = await gatherPersistenceQueue.enqueue(item: loot, amount: 1)
-                    persistenceLabel = total.map { "\(loot)=\($0)" } ?? "\(loot) • persistência enfileirada"
+                    do {
+                        // Fluxo síncrono já comprovado no 100/100: o próximo
+                        // alvo só nasce depois que este FELLED foi salvo e o
+                        // saldo autoritativo correspondente foi confirmado.
+                        let total = try await http.persistLoot(loot, amount: 1)
+                        persistenceLabel = total.map { "\(loot)=\($0)" } ?? "\(loot) persistido"
+                    } catch {
+                        persistenceLabel = "persistência falhou: \(error.localizedDescription)"
+                        reporter(.diagnostic("[INVENTORY][ERROR] \(error.localizedDescription)"))
+                    }
                 }
 
                 successes += 1
@@ -1421,17 +1419,43 @@ actor AutomationEngine {
             try await sleep(650)
         }
 
-        let pendingBeforeDrain = await gatherPersistenceQueue.pendingCount()
-        if pendingBeforeDrain > 0 {
-            reporter(.state(.syncing, "Finalizando inventário • \(pendingBeforeDrain) pendente(s)"))
-            reporter(.diagnostic("[INVENTORY] fechamento limpo • aguardando fila serial • pendentes=\(pendingBeforeDrain)"))
+        if mode.isDunesGathering {
+            let reason = safeStopReason == nil ? "meta concluída" : "STOP/encerramento solicitado"
+            try await exitDunesToShores(reason: reason)
+            if safeStopReason != nil { safeStopCompleted = true }
         }
-        let persistence = await gatherPersistenceQueue.drainCompletely()
-        for error in persistence.errors {
-            reporter(.diagnostic("[INVENTORY][ERROR] \(error)"))
-        }
-        reporter(.diagnostic("[INVENTORY] fila encerrada • pendentes=0 • batches=\(persistence.batches)"))
+
         reporter(.log("📊 Coleta encerrada • \(mode.displayName) • sucessos=\(successes)/\(goal) • recoveries internos=\(gatherInternalRecoveries) • proof misses=\(gatherProofMisses)"))
+    }
+
+    /// The Dunes are open-PvP/full-loot. A normal completion or cooperative
+    /// STOP walks back through the official north exit and only returns after
+    /// the Presence confirms The Shores, a non-PvP realm.
+    private func exitDunesToShores(reason: String) async throws {
+        let authoritative = (serverRegion ?? region).lowercased()
+        guard GatherRegionPolicy.isDunesRegion(authoritative) else {
+            reporter(.log("🛡️ Dunes • personagem já está fora da região de risco"))
+            return
+        }
+        guard authoritative == "desert" else {
+            throw EngineError.regionNotConfirmed("saída experimental das Dunes East")
+        }
+
+        reporter(.state(.recovering, "Saindo das Dunes com segurança"))
+        reporter(.log("🛡️ Dunes • \(reason) • retornando ao cercado seguro e à saída norte"))
+        let pen = GatherRegionPolicy.startPosition(for: .silver)
+        try await walk(to: pen, maxSeconds: 70, status: "Retornando ao cercado seguro das Dunes")
+        try await walk(to: GatherRegionPolicy.dunesExitPosition, maxSeconds: 12, status: "Saindo para The Shores")
+
+        for probe in 1...3 {
+            try await setRegion("beach", at: GatherRegionPolicy.shoresArrivalPosition)
+            if try await waitForRegion("beach", timeoutMS: 5_000) {
+                reporter(.log("✅ The Shores confirmada • Presence liberada fora das Dunes"))
+                return
+            }
+            reporter(.diagnostic("[DUNES] The Shores ainda não confirmou • probe \(probe)/3"))
+        }
+        throw EngineError.regionNotConfirmed("The Shores após saída das Dunes")
     }
 
     private func harvestWithRecovery(seed: GatherSeed, mode: ActivityMode) async throws -> HarvestResult {
@@ -1447,7 +1471,7 @@ actor AutomationEngine {
             position.y = 0.25
             try await sendPosition(moving: false, full: true)
             _ = try await gatherEventGate.wait(after: eventBefore, timeoutMS: 900)
-            try await equip(seed.kind == "tree" ? "tool_axe" : "tool_pickaxe")
+            try await equip(activeGatherToolType ?? ActivityToolPolicy.requiredTool(for: mode) ?? (seed.kind == "tree" ? "tool_axe" : "tool_pickaxe"))
             let retry = try await harvest(seed: seed, mode: mode, handshakeTries: 2)
             merged = merged.merging(retry)
         }
@@ -1502,7 +1526,7 @@ actor AutomationEngine {
         harvestLoot = nil
         harvestClearSeen = false
 
-        let tool = kind == "tree" ? "tool_axe" : "tool_pickaxe"
+        let tool = activeGatherToolType ?? ActivityToolPolicy.requiredTool(for: mode) ?? (kind == "tree" ? "tool_axe" : "tool_pickaxe")
         try await equip(tool)
 
         position.ry = position.ry.isFinite ? position.ry : seed.position.ry
@@ -1523,6 +1547,7 @@ actor AutomationEngine {
         }
 
         func sendProfile(_ second: Bool, progressive: Bool) async throws {
+            if safeStopReason != nil { return }
             var maxSchedulerDelayMS = 0
 
             func waitRelative(_ intendedMS: Int) async throws {
@@ -1575,6 +1600,7 @@ actor AutomationEngine {
         }
 
         func sendHit(proof: String?) async throws {
+            if safeStopReason != nil { return }
             let data = try RealtimeProtocol.harvestHit(
                 region: region,
                 kind: kind,
@@ -1891,7 +1917,9 @@ actor AutomationEngine {
         let normalizedKind = kind.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
         let subtype: String
         if normalizedKind == "tree" {
-            subtype = "tree"
+            subtype = GatherRegionPolicy.isDunesRegion(normalizedRegion) ? "cacti" : "tree"
+        } else if GatherRegionPolicy.isDunesRegion(normalizedRegion) {
+            subtype = "silver"
         } else if resolvedMetal == true {
             subtype = "iron"
         } else if resolvedCoal == true {
@@ -1962,6 +1990,7 @@ actor AutomationEngine {
             guard let mode else { return true }
             return GatherResourcePolicy.matches(
                 mode: mode,
+                region: targetRegion,
                 kind: entry.kind,
                 hasCoal: resolvedCoal ?? false,
                 hasMetal: resolvedMetal ?? false
@@ -1973,7 +2002,7 @@ actor AutomationEngine {
         let now = nowMS
         return gatherSeedPool(region: GatherRegionPolicy.region(for: mode))
             .filter { seed in
-                GatherResourcePolicy.matches(mode: mode, kind: seed.kind, hasCoal: seed.hasCoal, hasMetal: seed.hasMetal)
+                GatherResourcePolicy.matches(mode: mode, region: seed.region, kind: seed.kind, hasCoal: seed.hasCoal, hasMetal: seed.hasMetal)
             }
             .filter { seed in
                 gatherRetryPolicy.isEligible(signature: seed.signature, nowMS: now) &&
@@ -1996,7 +2025,7 @@ actor AutomationEngine {
         return gatherSeedPool(region: targetRegion).filter { seed in
             let modeOK: Bool
             if let mode {
-                modeOK = GatherResourcePolicy.matches(mode: mode, kind: seed.kind, hasCoal: seed.hasCoal, hasMetal: seed.hasMetal)
+                modeOK = GatherResourcePolicy.matches(mode: mode, region: seed.region, kind: seed.kind, hasCoal: seed.hasCoal, hasMetal: seed.hasMetal)
             } else {
                 modeOK = true
             }
@@ -2041,23 +2070,24 @@ actor AutomationEngine {
     /// transport.
     @discardableResult
     func prepareGatherToolFromWorld(for mode: ActivityMode) async throws -> Int {
-        guard mode.isGathering,
-              let tool = ActivityToolPolicy.requiredTool(for: mode)
-        else { return 0 }
-        let name = ActivityToolPolicy.displayName(tool)
+        guard mode.isGathering, let fallback = ActivityToolPolicy.requiredTool(for: mode) else { return 0 }
 
         guard try await waitForRegion("world", timeoutMS: 5_000) else {
             throw EngineError.regionNotConfirmed("world")
         }
 
-        let counts = try await http.itemLocationCounts(type: tool)
-        if counts.carried >= 1 {
-            reporter(.log("🧰 Preflight transacional • \(name) já está carregada ✅"))
-            return counts.carried
+        var bankCandidate: String?
+        for tool in ActivityToolPolicy.acceptedTools(for: mode) {
+            let counts = try await http.itemLocationCounts(type: tool)
+            if counts.carried >= 1 {
+                activeGatherToolType = tool
+                reporter(.log("🧰 Preflight transacional • \(ActivityToolPolicy.displayName(tool)) já está carregada ✅"))
+                return counts.carried
+            }
+            if counts.bank >= 1, bankCandidate == nil { bankCandidate = tool }
         }
-        guard counts.bank >= 1 else {
-            throw EngineError.missingRequiredItem(name)
-        }
+        guard let tool = bankCandidate else { throw EngineError.missingRequiredItem(ActivityToolPolicy.displayName(fallback)) }
+        let name = ActivityToolPolicy.displayName(tool)
 
         try await ensureWorldBankAccess(reason: "buscar \(name)")
         let carried = try await http.ensureCarriedItem(type: tool, quantity: 1, preferHotbar: true)
@@ -2066,19 +2096,22 @@ actor AutomationEngine {
         guard finalCount >= 1 else {
             throw EngineError.missingRequiredItem(name)
         }
+        activeGatherToolType = tool
         reporter(.log("🧰 Preflight transacional • \(name) retirada do banco e carregada ✅"))
         return finalCount
     }
 
     private func ensureActivityToolLoadout(for mode: ActivityMode) async throws {
-        guard let tool = ActivityToolPolicy.requiredTool(for: mode) else { return }
-        let name = ActivityToolPolicy.displayName(tool)
-        let counts = try await http.itemLocationCounts(type: tool)
-
-        if counts.carried >= 1 {
-            reporter(.log("🧰 Preflight • \(name) carregada ✅"))
-            return
+        guard let fallback = ActivityToolPolicy.requiredTool(for: mode) else { return }
+        for tool in ActivityToolPolicy.acceptedTools(for: mode) {
+            let counts = try await http.itemLocationCounts(type: tool)
+            if counts.carried >= 1 {
+                if mode.isGathering { activeGatherToolType = tool }
+                reporter(.log("🧰 Preflight • \(ActivityToolPolicy.displayName(tool)) carregada ✅"))
+                return
+            }
         }
+        let name = ActivityToolPolicy.displayName(fallback)
 
         // RC3.6: Gathering nunca volta da região de coleta ao World para buscar ferramenta.
         // Quando a ferramenta estava no banco, esta mesma engine já a trouxe em
@@ -2087,7 +2120,13 @@ actor AutomationEngine {
             throw EngineError.gatherLoadoutNotReady(name)
         }
 
-        guard counts.bank >= 1 else {
+        let bankCandidates = ActivityToolPolicy.acceptedTools(for: mode)
+        var bankTool: String?
+        for tool in bankCandidates {
+            let counts = try await http.itemLocationCounts(type: tool)
+            if counts.bank >= 1 { bankTool = tool; break }
+        }
+        guard let tool = bankTool else {
             throw EngineError.missingRequiredItem(name)
         }
 
@@ -4643,6 +4682,8 @@ actor AutomationEngine {
         case "frostmere": return "Frostmere"
         case "pond": return "The Pond"
         case "wild": return "Wilderness"
+        case "desert": return "The Dunes East"
+        case "beach": return "The Shores"
         default: return value.capitalized
         }
     }
@@ -5286,17 +5327,21 @@ private struct KintaraHTTPClient {
     /// que não pertence às categorias especiais e não é necessário durante o
     /// combate. Mount/pet/cosmetic/furniture vivem em arrays separados e nunca
     /// são tocados. Potions/wild_sword permanecem carregados.
-    func depositAllBankFirstInventory() async throws -> BankDepositResult {
+    func depositAllBankFirstInventory(
+        preservingTypes: Set<String> = [],
+        preserveCombatLoadout: Bool = true
+    ) async throws -> BankDepositResult {
         let state = try await backpackState()
         var wanted: [String: Int] = [:]
 
         for key in ["invSlots", "hotbar"] {
             guard let slots = state.backpack[key] as? [Any] else { continue }
             for raw in slots {
-                guard let slot = raw as? [String: Any],
-                      let type = slot["t"] as? String,
-                      CombatBankFirstPolicy.shouldBankFirst(type: type, slot: slot)
-                else { continue }
+                guard let slot = raw as? [String: Any], let type = slot["t"] as? String else { continue }
+                if preservingTypes.contains(type) { continue }
+                let policyCandidate = CombatBankFirstPolicy.shouldBankFirst(type: type, slot: slot)
+                let dunesCombatCandidate = !preserveCombatLoadout && CombatBankFirstPolicy.combatRequiredTypes.contains(type)
+                guard policyCandidate || dunesCombatCandidate else { continue }
                 wanted[type, default: 0] += CombatBankFirstPolicy.slotQuantity(slot)
             }
         }
@@ -5447,7 +5492,7 @@ private struct KintaraHTTPClient {
     }
 
     private func saveBackpack(_ backpack: [String: Any], baseSeq: Int) async throws -> [String: Any] {
-        let resourceKeys = ["wood", "stone", "coal", "metal", "gold", "fish", "cooked_fish_meat", "raw_chicken", "cooked_chicken", "potion_health", "potion_shield", "potion_strength", "potion_poison"]
+        let resourceKeys = ["wood", "stone", "coal", "metal", "silver_ore", "cacti", "gold", "fish", "cooked_fish_meat", "raw_chicken", "cooked_chicken", "potion_health", "potion_health_l2", "potion_shield", "potion_strength", "potion_poison"]
         var resources: [String: Any] = [:]
         for key in resourceKeys { resources[key] = RealtimeProtocol.int(backpack[key]) ?? 0 }
 
@@ -5489,36 +5534,31 @@ private struct KintaraHTTPClient {
         return []
     }
 
-    func persistLootBatch(_ rawAmounts: [String: Int]) async throws -> [String: Int] {
-        let amounts = rawAmounts.filter { !$0.key.isEmpty && $0.value > 0 }
-        guard !amounts.isEmpty else { return [:] }
-
+    func persistLoot(_ item: String, amount: Int) async throws -> Int? {
         let state = try await get("/api/auth/me")
         guard let stateSeq = RealtimeProtocol.int(state["stateSeq"]), var backpack = state["backpack"] as? [String: Any] else {
             throw HTTPError.invalidState
         }
 
-        var slots = backpack["invSlots"] as? [Any] ?? []
-        for item in amounts.keys.sorted() {
-            guard let amount = amounts[item], amount > 0 else { continue }
-            backpack[item] = (RealtimeProtocol.int(backpack[item]) ?? 0) + amount
+        let current = RealtimeProtocol.int(backpack[item]) ?? 0
+        backpack[item] = current + amount
 
-            var updatedSlot = false
-            for index in slots.indices {
-                if var slot = slots[index] as? [String: Any], slot["t"] as? String == item {
-                    slot["n"] = (RealtimeProtocol.int(slot["n"]) ?? 0) + amount
-                    slots[index] = slot
-                    updatedSlot = true
-                    break
-                }
+        var slots = backpack["invSlots"] as? [Any] ?? []
+        var updatedSlot = false
+        for index in slots.indices {
+            if var slot = slots[index] as? [String: Any], slot["t"] as? String == item {
+                slot["n"] = (RealtimeProtocol.int(slot["n"]) ?? 0) + amount
+                slots[index] = slot
+                updatedSlot = true
+                break
             }
-            if !updatedSlot, let empty = slots.firstIndex(where: { $0 is NSNull }) {
-                slots[empty] = ["t": item, "n": amount]
-            }
+        }
+        if !updatedSlot, let empty = slots.firstIndex(where: { $0 is NSNull }) {
+            slots[empty] = ["t": item, "n": amount]
         }
         backpack["invSlots"] = slots
 
-        let resourceKeys = ["wood", "stone", "coal", "metal", "gold", "fish", "cooked_fish_meat", "raw_chicken", "cooked_chicken", "potion_health", "potion_shield", "potion_strength", "potion_poison"]
+        let resourceKeys = ["wood", "stone", "coal", "metal", "silver_ore", "cacti", "gold", "fish", "cooked_fish_meat", "raw_chicken", "cooked_chicken", "potion_health", "potion_health_l2", "potion_shield", "potion_strength", "potion_poison"]
         var resources: [String: Any] = [:]
         for key in resourceKeys { resources[key] = RealtimeProtocol.int(backpack[key]) ?? 0 }
 
@@ -5539,20 +5579,11 @@ private struct KintaraHTTPClient {
         guard RealtimeProtocol.bool(response["ok"]) != false else {
             throw HTTPError.server((response["error"] as? String) ?? "save-backpack recusado")
         }
-        let confirmedBackpack: [String: Any]
         if let confirmed = response["backpack"] as? [String: Any] {
-            confirmedBackpack = confirmed
-        } else {
-            let fresh = try await get("/api/auth/me")
-            guard let confirmed = fresh["backpack"] as? [String: Any] else {
-                throw HTTPError.invalidState
-            }
-            confirmedBackpack = confirmed
+            return RealtimeProtocol.int(confirmed[item])
         }
-
-        return amounts.keys.reduce(into: [String: Int]()) { totals, item in
-            totals[item] = RealtimeProtocol.int(confirmedBackpack[item]) ?? 0
-        }
+        let fresh = try await get("/api/auth/me")
+        return (fresh["backpack"] as? [String: Any]).flatMap { RealtimeProtocol.int($0[item]) }
     }
 
     private func request(method: String, path: String, body: [String: Any]?) async throws -> [String: Any] {
@@ -5615,6 +5646,8 @@ private extension ActivityMode {
         case .coal: return "Carvão"
         case .stone: return "Pedra"
         case .iron: return "Iron Ore"
+        case .silver: return "Silver Ore"
+        case .cacti: return "Cacti"
         case .fishing: return "Pesca"
         case .chicken: return "Galinha"
         case .zombie: return "Zumbi"
