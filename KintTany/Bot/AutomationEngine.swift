@@ -24,6 +24,7 @@ enum EngineStopReason: Equatable {
     case user
     case backgroundExpiration
     case connectionLoss
+    case dunesHeatSafety
 }
 
 enum EmergencyWildExitResult: Equatable {
@@ -67,6 +68,19 @@ struct GatherTimingPolicy {
         let intervals = max(1, frameCount - 1)
         let browserGap = (treeProfileWindowMS + intervals - 1) / intervals
         return max(minimumTreeFrameGapMS, min(90, browserGap))
+    }
+}
+
+struct DunesHeatSafetyPolicy {
+    /// Uses only authoritative snapshot/pvit HP. The margin leaves enough time
+    /// to finish the current server-confirmed action and close the Presence.
+    static let minimumSafeHP = 45
+    static let recoveryGoalHP = 90
+    static let healthPotionPlusType = "potion_health_l2"
+    static let carriedHealthPotionPlusTarget = 6
+
+    static func requiresRecovery(hp: Int, mode: ActivityMode) -> Bool {
+        mode.isDunesGathering && hp <= minimumSafeHP
     }
 }
 
@@ -914,10 +928,11 @@ actor AutomationEngine {
     }
 
     /// Dunes preflight is intentionally completed over HTTP before opening a
-    /// Presence in the full-loot realm. Existing carried valuables are banked,
-    /// while only the selected tool stays loaded. Automated healing is not
-    /// assumed in this first experiment, so valuable consumables are protected.
-    static func prepareDunesPreflight(for mode: ActivityMode, cookie: String) async throws -> String {
+    /// Presence in the full-loot realm. Existing carried valuables are banked;
+    /// the selected tool and up to six Health Potion+ stay loaded. This reuses
+    /// the already validated Presence/consume-potion path and does not invent a
+    /// Cacti consumption packet.
+    static func prepareDunesPreflight(for mode: ActivityMode, cookie: String) async throws -> (tool: String, healthPotionPlus: Int) {
         guard mode.isDunesGathering, let fallback = ActivityToolPolicy.requiredTool(for: mode) else {
             throw EngineError.missingRequiredItem("ferramenta das Dunes")
         }
@@ -935,7 +950,12 @@ actor AutomationEngine {
         }
         guard let selected else { throw EngineError.missingRequiredItem(ActivityToolPolicy.displayName(fallback)) }
 
-        let keep: Set<String> = [selected]
+        _ = try await client.ensurePotionLoadout(targets: [
+            DunesHeatSafetyPolicy.healthPotionPlusType: DunesHeatSafetyPolicy.carriedHealthPotionPlusTarget
+        ])
+        let healthPotionPlusCounts = try await client.itemLocationCounts(type: DunesHeatSafetyPolicy.healthPotionPlusType)
+        let healthPotionPlus = healthPotionPlusCounts.carried
+        let keep: Set<String> = [selected, DunesHeatSafetyPolicy.healthPotionPlusType]
         let deposit = try await client.depositAllBankFirstInventory(
             preservingTypes: keep,
             preserveCombatLoadout: false
@@ -943,7 +963,7 @@ actor AutomationEngine {
         guard deposit.unresolved.isEmpty else {
             throw EngineError.bankDepositFailed(deposit.unresolved.joined(separator: ", "))
         }
-        return selected
+        return (selected, healthPotionPlus)
     }
 
     func prepareIdentity() async {
@@ -1054,6 +1074,7 @@ actor AutomationEngine {
         case .user: label = "usuário"
         case .backgroundExpiration: label = "encerramento externo de Continued Processing"
         case .connectionLoss: label = "queda de conexão"
+        case .dunesHeatSafety: label = "proteção contra calor das Dunes"
         }
         reporter(.diagnostic("[STATE] safe-stop solicitado • motivo=\(label)"))
     }
@@ -1501,6 +1522,7 @@ actor AutomationEngine {
         while successes < goal {
             try Task.checkCancellation()
             if safeStopReason != nil { break }
+            if try await enforceDunesHeatSafetyIfNeeded(mode: mode) == false { break }
             reporter(.state(.searching, "Procurando \(mode.displayName.lowercased())"))
 
             guard let seed = selectGatherSeed(for: mode) else {
@@ -1535,6 +1557,7 @@ actor AutomationEngine {
             let interactionPosition = gatherPositionMemory[seed.signature] ?? seed.position
             try await walk(to: interactionPosition, status: "Indo até \(mode.displayName) \(seed.targetKey)")
             if safeStopReason != nil { break }
+            if try await enforceDunesHeatSafetyIfNeeded(mode: mode) == false { break }
             position.ry = interactionPosition.ry
             try await sendPosition(moving: false)
             reporter(.diagnostic("[MOVE] arrived \(seed.targetKey) pos=\(format(position.x)),\(format(position.z)) ry=\(format(position.ry))"))
@@ -1640,6 +1663,57 @@ actor AutomationEngine {
         }
 
         reporter(.log("📊 Coleta encerrada • \(mode.displayName) • sucessos=\(successes)/\(goal) • recoveries internos=\(gatherInternalRecoveries) • proof misses=\(gatherProofMisses)"))
+    }
+
+    /// Heat bypasses shield in Dunes East. At the authoritative HP threshold,
+    /// attempt one Health Potion+; without a confirmed recovery, stop creating
+    /// actions and let AppStore close the Presence while preserving the region.
+    private func enforceDunesHeatSafetyIfNeeded(mode: ActivityMode) async throws -> Bool {
+        guard DunesHeatSafetyPolicy.requiresRecovery(hp: playerHP, mode: mode) else { return true }
+
+        if !potionStockLoaded { try await refreshPotionStock(logSummary: false) }
+        let type = DunesHeatSafetyPolicy.healthPotionPlusType
+        if currentPotionStock(type) > 0 {
+            let before = playerHP
+            if try await consumePotion(type) {
+                reporter(.log("❤️‍🔥 Calor das Dunes • Health Potion+ aceita com HP \(before) • aguardando pvit/snapshot"))
+                let confirmed = try await driveDunesHealthPotionPlusTicks(beforeDoseHP: before)
+                if confirmed, playerHP > DunesHeatSafetyPolicy.minimumSafeHP {
+                    reporter(.log("✅ Proteção térmica confirmada • HP \(before) → \(playerHP) • coleta retomada"))
+                    return true
+                }
+                reporter(.log("⚠️ Health Potion+ consumida, mas o servidor não confirmou recuperação suficiente • nenhuma segunda dose será arriscada"))
+            }
+        }
+
+        safeStopReason = .dunesHeatSafety
+        safeStopCompleted = true
+        reporter(.state(.recovering, "Proteção contra calor • encerrando coleta"))
+        reporter(.log("🛑 Proteção das Dunes • HP autoritativo \(playerHP)/100 • coleta interrompida antes da faixa crítica • região preservada e conexão será liberada"))
+        return false
+    }
+
+    private func driveDunesHealthPotionPlusTicks(beforeDoseHP: Int) async throws -> Bool {
+        let maximumAfterDose = min(100, beforeDoseHP + 50)
+        try await sleep(650)
+        for _ in 0..<5 {
+            try Task.checkCancellation()
+            guard playerHP > 0 else { throw EngineError.playerDead }
+            if playerHP >= maximumAfterDose || playerHP >= DunesHeatSafetyPolicy.recoveryGoalHP { break }
+            let beforeTick = playerHP
+            let proposed = min(maximumAfterDose, min(100, beforeTick + 10))
+            try await sendPosition(moving: false, action: ["php": proposed])
+            try await sleep(35)
+            try await sendPosition(moving: false, action: ["php": proposed])
+
+            let deadline = nowMS + 1_100
+            while nowMS < deadline, playerHP <= beforeTick {
+                try Task.checkCancellation()
+                try await sleep(60)
+            }
+            if playerHP <= beforeTick { break }
+        }
+        return playerHP > beforeDoseHP
     }
 
     private func harvestWithRecovery(seed: GatherSeed, mode: ActivityMode) async throws -> HarvestResult {
@@ -4323,10 +4397,12 @@ actor AutomationEngine {
         let bp = state.backpack
         potionPersistentCounts = [
             "potion_health": max(0, RealtimeProtocol.int(bp["potion_health"]) ?? 0),
+            "potion_health_l2": max(0, RealtimeProtocol.int(bp["potion_health_l2"]) ?? 0),
             "potion_shield": max(0, RealtimeProtocol.int(bp["potion_shield"]) ?? 0),
             "potion_strength": max(0, RealtimeProtocol.int(bp["potion_strength"]) ?? 0)
         ]
         potionStock.health = carriedPotionCount(bp, type: "potion_health")
+        potionStock.healthPlus = carriedPotionCount(bp, type: "potion_health_l2")
         potionStock.shield = carriedPotionCount(bp, type: "potion_shield")
         potionStock.strength = carriedPotionCount(bp, type: "potion_strength")
         potionStockLoaded = true
@@ -4353,6 +4429,7 @@ actor AutomationEngine {
     private func decrementPotionStock(_ type: String) {
         switch type {
         case "potion_health": potionStock.health = max(0, potionStock.health - 1)
+        case "potion_health_l2": potionStock.healthPlus = max(0, potionStock.healthPlus - 1)
         case "potion_shield": potionStock.shield = max(0, potionStock.shield - 1)
         case "potion_strength": potionStock.strength = max(0, potionStock.strength - 1)
         default: break
@@ -4365,6 +4442,7 @@ actor AutomationEngine {
     private func currentPotionStock(_ type: String) -> Int {
         switch type {
         case "potion_health": potionStock.health
+        case "potion_health_l2": potionStock.healthPlus
         case "potion_shield": potionStock.shield
         case "potion_strength": potionStock.strength
         default: 0
@@ -5273,6 +5351,7 @@ private struct PotionDrinkAck {
 
 private struct PotionStock {
     var health = 0
+    var healthPlus = 0
     var shield = 0
     var strength = 0
 }
