@@ -701,6 +701,45 @@ final class RealtimeProtocolTests: XCTestCase {
         XCTAssertEqual(GatherRegionPolicy.gridOffset(for: "desert"), 19.5)
     }
 
+    func testDunesDiscoveryKeepsLegacyRockWireKindForSilver() {
+        let observation = DunesResourceDiscovery.observe([
+            "kind": "rock",
+            "keys": ["10,11", "10,12"],
+            "hasMetal": true
+        ])
+        XCTAssertEqual(observation.mode, .silver)
+        XCTAssertEqual(observation.wireKind, "rock")
+        XCTAssertEqual(observation.keys, ["10,11", "10,12"])
+        XCTAssertEqual(observation.hasMetal, true)
+    }
+
+    func testDunesDiscoveryUnderstandsCactusAliasAndNestedNodes() {
+        let observation = DunesResourceDiscovery.observe([
+            "resourceType": "cactus",
+            "nodes": [
+                ["key": "4,7"],
+                ["c": 5, "r": 7]
+            ]
+        ])
+        XCTAssertEqual(observation.mode, .cacti)
+        XCTAssertEqual(observation.wireKind, "tree")
+        XCTAssertEqual(Set(observation.keys), Set(["4,7", "5,7"]))
+    }
+
+    func testDunesDiscoveryUnderstandsSilverAliasWithoutInventingProofData() {
+        let observation = DunesResourceDiscovery.observe([
+            "nodeType": "silver_ore",
+            "tiles": ["21,9"],
+            "actionProof": "SHOULD_NOT_APPEAR",
+            "loot": "silver_ore"
+        ])
+        XCTAssertEqual(observation.mode, .silver)
+        XCTAssertEqual(observation.wireKind, "rock")
+        XCTAssertEqual(observation.keys, ["21,9"])
+        XCTAssertFalse(observation.fieldNames.contains("actionProof"))
+        XCTAssertFalse(DunesResourceDiscovery.diagnosticSummary(observation).contains("SHOULD_NOT_APPEAR"))
+    }
+
     func testGatherKnowledgeExplicitFlushPersistsDebouncedChanges() throws {
         let dir = FileManager.default.temporaryDirectory.appendingPathComponent("KintTanyGatherFlush-\(UUID().uuidString)", isDirectory: true)
         defer { try? FileManager.default.removeItem(at: dir) }
