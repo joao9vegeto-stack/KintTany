@@ -378,10 +378,6 @@ final class AppStore: ObservableObject {
         }
 
         goal = min(100_000, max(1, goal))
-        if mode.isDunesGathering, goal > 20 {
-            goal = 20
-            log("🧪 Modo experimental das Dunes • meta limitada a 20 por sessão para reduzir exposição ao calor/PvP")
-        }
         sessionGoal = goal
 
         let runID = UUID()
@@ -768,7 +764,7 @@ final class AppStore: ObservableObject {
                 let selectedTool = try await AutomationEngine.prepareDunesPreflight(for: mode, cookie: cookie)
                 gatherPreflight = .ready
                 log("🛡️ Preflight Dunes • itens carregados protegidos no banco • \(ActivityToolPolicy.displayName(selectedTool)) mantida ✅")
-                log("⚠️ Dunes East é open-PvP/full-loot e sofre calor • execução experimental limitada a 20")
+                log("⚠️ Dunes East é open-PvP/full-loot e sofre calor • a meta escolhida será respeitada integralmente")
             } else if mode.isGathering {
                 gatherPreflight = await AutomationEngine.gatherToolPreflightDisposition(for: mode, cookie: cookie)
                 switch gatherPreflight {
