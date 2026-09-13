@@ -32,11 +32,6 @@ enum EmergencyWildExitResult: Equatable {
     case dead
 }
 
-enum EmergencyDunesExitResult: Equatable {
-    case shoresSafe
-    case alreadySafe
-}
-
 struct FishingNumberingPolicy {
     static func publicFishNumber(successes: Int) -> Int {
         max(1, successes + 1)
@@ -72,6 +67,46 @@ struct GatherTimingPolicy {
         let intervals = max(1, frameCount - 1)
         let browserGap = (treeProfileWindowMS + intervals - 1) / intervals
         return max(minimumTreeFrameGapMS, min(90, browserGap))
+    }
+}
+
+struct GatherLootMarkerPolicy {
+    static func resource(for mode: ActivityMode) -> String? {
+        switch mode {
+        case .tree: return "wood"
+        case .stone: return "stone"
+        case .coal: return "coal"
+        case .iron: return "metal"
+        case .silver: return "silver_ore"
+        case .cacti: return "cacti"
+        default: return nil
+        }
+    }
+
+    /// `h/hm` is action progress, not an inventory award. The only quantity
+    /// shown to the user is the delta between two server-confirmed balances.
+    static func confirmedDelta(previous: Int?, current: Int) -> Int? {
+        previous.map { max(0, current - $0) }
+    }
+
+    static func label(item: String, previous: Int?, current: Int) -> String {
+        guard let previous, let delta = confirmedDelta(previous: previous, current: current) else {
+            return "\(item)=\(current) • saldo autoritativo inicial"
+        }
+        return "\(item)=\(current) • saldo \(previous)→\(current) • +\(delta) confirmado"
+    }
+}
+
+enum HealthPotionEffectResult: Equatable {
+    case confirmed
+    case noAuthoritativeGain
+    case interrupted
+}
+
+struct HealthPotionEffectPolicy {
+    static func result(before: Int, after: Int, interrupted: Bool) -> HealthPotionEffectResult {
+        if interrupted { return .interrupted }
+        return after > before ? .confirmed : .noAuthoritativeGain
     }
 }
 
@@ -219,9 +254,6 @@ struct GatherRegionPolicy {
         default: return Position(x: 22.5, z: -3.5)
         }
     }
-
-    static let dunesExitPosition = Position(x: -9.5, z: -19.5, ry: .pi)
-    static let shoresArrivalPosition = Position(x: -9.5, z: 18.5, ry: .pi)
 
     static func isDunesRegion(_ region: String) -> Bool {
         let normalized = region.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
@@ -1096,32 +1128,6 @@ actor AutomationEngine {
         return .worldSafe
     }
 
-    /// Reconnection path for Dunes gathering. It never resumes harvesting;
-    /// after an authoritative snapshot it only attempts the official East→Shores exit.
-    func runEmergencyDunesExit(reason: String = "reconexão de emergência") async throws -> EmergencyDunesExitResult {
-        reporter(.state(.recovering, "Sincronizando estado das Dunes"))
-        let syncDeadline = nowMS + 8_000
-        while nowMS < syncDeadline {
-            try Task.checkCancellation()
-            if let authoritative = serverRegion?.lowercased(), !authoritative.isEmpty {
-                if !GatherRegionPolicy.isDunesRegion(authoritative) {
-                    reporter(.log("✅ Estado autoritativo • região=\(authoritative) • personagem fora das Dunes"))
-                    return .alreadySafe
-                }
-                region = authoritative
-                break
-            }
-            try await sleep(80)
-        }
-        guard let authoritative = serverRegion?.lowercased(), GatherRegionPolicy.isDunesRegion(authoritative) else {
-            throw EngineError.regionNotConfirmed("estado autoritativo das Dunes após reconexão")
-        }
-        safeStopReason = .connectionLoss
-        try await exitDunesToShores(reason: reason)
-        safeStopCompleted = true
-        return .shoresSafe
-    }
-
     // MARK: - Common state
 
     private func ingestSnapshot(_ packet: [String: Any]) async {
@@ -1472,6 +1478,13 @@ actor AutomationEngine {
         gatherLastTimingDiagnosticAt = 0
         gatherRetryPolicy.resetExpired(nowMS: nowMS)
 
+        var confirmedResourceBalances: [String: Int] = [:]
+        if let expectedResource = GatherLootMarkerPolicy.resource(for: mode),
+           let initialBalance = try? await http.resourceBalance(expectedResource) {
+            confirmedResourceBalances[expectedResource] = initialBalance
+            reporter(.diagnostic("[INVENTORY] saldo inicial autoritativo • \(expectedResource)=\(initialBalance)"))
+        }
+
         reporter(.state(.searching, "Sincronizando recursos"))
         let resourceDeadline = nowMS + 7_000
         while resourceSnapshotRegion != targetRegion && nowMS < resourceDeadline {
@@ -1558,13 +1571,22 @@ actor AutomationEngine {
                 }
 
                 var persistenceLabel = "sem loot confirmado"
+                var resourceMarker: String?
                 if let loot = result.loot, !loot.isEmpty {
                     do {
                         // Fluxo síncrono já comprovado no 100/100: o próximo
                         // alvo só nasce depois que este FELLED foi salvo e o
                         // saldo autoritativo correspondente foi confirmado.
                         let total = try await http.persistLoot(loot, amount: 1)
-                        persistenceLabel = total.map { "\(loot)=\($0)" } ?? "\(loot) persistido"
+                        if let total {
+                            let previous = confirmedResourceBalances[loot]
+                            let marker = GatherLootMarkerPolicy.label(item: loot, previous: previous, current: total)
+                            confirmedResourceBalances[loot] = total
+                            persistenceLabel = marker
+                            resourceMarker = marker
+                        } else {
+                            persistenceLabel = "\(loot) persistido • saldo não retornado"
+                        }
                     } catch {
                         persistenceLabel = "persistência falhou: \(error.localizedDescription)"
                         reporter(.diagnostic("[INVENTORY][ERROR] \(error.localizedDescription)"))
@@ -1575,8 +1597,11 @@ actor AutomationEngine {
                 reporter(.success(result.loot))
                 reporter(.state(.cooldown, "Concluído \(successes)/\(goal)"))
                 reporter(.log("✅ \(mode.displayName) concluído • h=\(result.h)/\(result.hm) • \(persistenceLabel) • \(successes)/\(goal)"))
+                if let resourceMarker {
+                    reporter(.log("📦 Marcador de recurso • \(mode.displayName) • \(resourceMarker)"))
+                }
                 if mode.isDunesGathering {
-                    reporter(.log("📍 Marcador de recurso • \(mode.displayName) • kind=\(seed.kind) • keys=\(seed.keys.joined(separator: ",")) • loot=\(result.loot ?? "-")"))
+                    reporter(.diagnostic("[DUNES] alvo confirmado • kind=\(seed.kind) • keys=\(seed.keys.joined(separator: ",")) • loot=\(result.loot ?? "-")"))
                 }
                 try await sleep(280)
                 continue
@@ -1610,42 +1635,11 @@ actor AutomationEngine {
         }
 
         if mode.isDunesGathering {
-            let reason = safeStopReason == nil ? "meta concluída" : "STOP/encerramento solicitado"
-            try await exitDunesToShores(reason: reason)
-            if safeStopReason != nil { safeStopCompleted = true }
+            let authoritative = (serverRegion ?? region).lowercased()
+            reporter(.log("🧭 Dunes • coleta encerrada mantendo região autoritativa \(authoritative) • nenhuma transição local foi enviada"))
         }
 
         reporter(.log("📊 Coleta encerrada • \(mode.displayName) • sucessos=\(successes)/\(goal) • recoveries internos=\(gatherInternalRecoveries) • proof misses=\(gatherProofMisses)"))
-    }
-
-    /// The Dunes are open-PvP/full-loot. A normal completion or cooperative
-    /// STOP walks back through the official north exit and only returns after
-    /// the Presence confirms The Shores, a non-PvP realm.
-    private func exitDunesToShores(reason: String) async throws {
-        let authoritative = (serverRegion ?? region).lowercased()
-        guard GatherRegionPolicy.isDunesRegion(authoritative) else {
-            reporter(.log("🛡️ Dunes • personagem já está fora da região de risco"))
-            return
-        }
-        guard authoritative == "desert" else {
-            throw EngineError.regionNotConfirmed("saída experimental das Dunes East")
-        }
-
-        reporter(.state(.recovering, "Saindo das Dunes com segurança"))
-        reporter(.log("🛡️ Dunes • \(reason) • retornando ao cercado seguro e à saída norte"))
-        let pen = GatherRegionPolicy.startPosition(for: .silver)
-        try await walk(to: pen, maxSeconds: 70, status: "Retornando ao cercado seguro das Dunes")
-        try await walk(to: GatherRegionPolicy.dunesExitPosition, maxSeconds: 12, status: "Saindo para The Shores")
-
-        for probe in 1...3 {
-            try await setRegion("beach", at: GatherRegionPolicy.shoresArrivalPosition)
-            if try await waitForRegion("beach", timeoutMS: 5_000) {
-                reporter(.log("✅ The Shores confirmada • Presence liberada fora das Dunes"))
-                return
-            }
-            reporter(.diagnostic("[DUNES] The Shores ainda não confirmou • probe \(probe)/3"))
-        }
-        throw EngineError.regionNotConfirmed("The Shores após saída das Dunes")
     }
 
     private func harvestWithRecovery(seed: GatherSeed, mode: ActivityMode) async throws -> HarvestResult {
@@ -4228,8 +4222,15 @@ actor AutomationEngine {
                     if try await consumePotion("potion_health") {
                         usedAny = true
                         reporter(.log("❤️ Poção de vida aceita • HP antes \(before) • aguardando pvit/snapshot"))
-                        try await driveHealthPotionTicks(goal: hpGoal)
-                        continue
+                        switch try await driveHealthPotionTicks(goal: hpGoal, beforeDoseHP: before) {
+                        case .confirmed:
+                            continue
+                        case .interrupted:
+                            return
+                        case .noAuthoritativeGain:
+                            reporter(.log("⚠️ Poção de vida consumida, mas pvit/snapshot não confirmou aumento de HP • novas doses bloqueadas nesta recuperação"))
+                            throw EngineError.potionRecoveryFailed("poção de vida sem efeito autoritativo • HP permaneceu \(playerHP); nenhuma segunda dose foi consumida")
+                        }
                     }
                 } else if playerHP <= limits.retreatHP {
                     throw EngineError.potionRecoveryFailed("sem poção de vida com HP crítico \(playerHP)")
@@ -4499,12 +4500,12 @@ actor AutomationEngine {
         }
     }
 
-    private func driveHealthPotionTicks(goal: Int) async throws {
+    private func driveHealthPotionTicks(goal: Int, beforeDoseHP: Int) async throws -> HealthPotionEffectResult {
         try await sleep(1_250)
-        if emergencyBackgroundExitRequested { return }
+        if emergencyBackgroundExitRequested { return .interrupted }
         for _ in 0..<10 {
             try Task.checkCancellation()
-            if emergencyBackgroundExitRequested { return }
+            if emergencyBackgroundExitRequested { return .interrupted }
             guard playerHP > 0 else { throw EngineError.playerDead }
             if playerHP >= goal || playerHP >= 100 { break }
             let before = playerHP
@@ -4516,12 +4517,17 @@ actor AutomationEngine {
             let deadline = nowMS + 1_100
             while nowMS < deadline, playerHP <= before {
                 try Task.checkCancellation()
-                if emergencyBackgroundExitRequested { return }
+                if emergencyBackgroundExitRequested { return .interrupted }
                 try await sleep(60)
             }
             reporter(.log("❤️ Tick de vida • \(before) → \(playerHP)\(playerHP <= before ? " (sem confirmação)" : "")"))
             if playerHP >= goal { break }
         }
+        return HealthPotionEffectPolicy.result(
+            before: beforeDoseHP,
+            after: playerHP,
+            interrupted: emergencyBackgroundExitRequested
+        )
     }
 
     private func driveShieldPotionTicks(goal: Int, before initialShield: Int) async throws {
@@ -5570,6 +5576,11 @@ private struct KintaraHTTPClient {
             throw HTTPError.invalidState
         }
         return BackpackState(stateSeq: stateSeq, backpack: backpack)
+    }
+
+    func resourceBalance(_ item: String) async throws -> Int {
+        let state = try await backpackState()
+        return max(0, RealtimeProtocol.int(state.backpack[item]) ?? 0)
     }
 
     func groundBags(shardID: Int) async throws -> [[String: Any]] {
