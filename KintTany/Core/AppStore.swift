@@ -761,10 +761,15 @@ final class AppStore: ObservableObject {
                 state = .syncing
                 statusMessage = "🛡️ Protegendo inventário para as Dunes"
                 updateContinuedProcessingProgress(forceTitleUpdate: true)
-                let selectedTool = try await AutomationEngine.prepareDunesPreflight(for: mode, cookie: cookie)
+                let dunesLoadout = try await AutomationEngine.prepareDunesPreflight(for: mode, cookie: cookie)
                 gatherPreflight = .ready
-                log("🛡️ Preflight Dunes • itens carregados protegidos no banco • \(ActivityToolPolicy.displayName(selectedTool)) mantida ✅")
-                log("⚠️ Dunes East é open-PvP/full-loot e sofre calor • a meta escolhida será respeitada integralmente")
+                log("🛡️ Preflight Dunes • itens carregados protegidos no banco • \(ActivityToolPolicy.displayName(dunesLoadout.tool)) mantida ✅")
+                if dunesLoadout.healthPotionPlus > 0 {
+                    log("❤️‍🔥 Proteção térmica • Health Potion+ carregadas: \(dunesLoadout.healthPotionPlus) • cura automática autoritativa habilitada")
+                } else {
+                    log("⚠️ Proteção térmica • sem Health Potion+ • a coleta será interrompida em HP 45 para impedir morte por calor")
+                }
+                log("⚠️ Dunes East é open-PvP/full-loot e sofre calor • a meta será respeitada enquanto houver HP seguro")
             } else if mode.isGathering {
                 gatherPreflight = await AutomationEngine.gatherToolPreflightDisposition(for: mode, cookie: cookie)
                 switch gatherPreflight {
@@ -872,6 +877,12 @@ final class AppStore: ObservableObject {
                     log("Conexão recuperada — World seguro e nenhuma nova ação será enviada")
                     logSessionSummary(mode: mode, outcome: "RECONEXÃO SEGURA")
                     finishContinuedProcessing(success: false, reason: "conexão recuperada com saída segura")
+                case .dunesHeatSafety:
+                    statusMessage = "Proteção contra calor • coleta encerrada"
+                    stats.lastEvent = "HP protegido nas Dunes"
+                    log("Proteção térmica concluída — nenhuma nova coleta foi enviada e a conexão foi liberada sem alterar a região")
+                    logSessionSummary(mode: mode, outcome: "PROTEÇÃO TÉRMICA")
+                    finishContinuedProcessing(success: false, reason: "proteção contra calor das Dunes")
                 case .user, .none:
                     statusMessage = "Atividade encerrada com segurança"
                     stats.lastEvent = "atividade cancelada pelo usuário"
