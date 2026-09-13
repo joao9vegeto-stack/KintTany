@@ -416,7 +416,7 @@ struct RootView: View {
                 VStack(alignment: .leading, spacing: 4) {
                     Text(mode.localizedTitle)
                         .font(.headline.bold())
-                    Text(selected ? app.state.label : "Meta \(app.goal)")
+                    Text(selected ? app.state.label : (mode.isExperimental ? "Experimental • meta máx. 20" : "Meta \(app.goal)"))
                         .font(.caption)
                         .foregroundStyle(.secondary)
                 }
