@@ -153,7 +153,7 @@ final class RealtimeProtocolTests: XCTestCase {
         XCTAssertTrue(ActivityMode.silver.isGathering)
         XCTAssertTrue(ActivityMode.cacti.isGathering)
         XCTAssertTrue(ActivityMode.silver.isDunesGathering)
-        XCTAssertTrue(ActivityMode.cacti.requiresSafeExit)
+        XCTAssertFalse(ActivityMode.cacti.requiresSafeExit)
         XCTAssertFalse(ActivityMode.fishing.isGathering)
         XCTAssertFalse(ActivityMode.chicken.isGathering)
         XCTAssertFalse(ActivityMode.zombie.isGathering)
@@ -682,15 +682,40 @@ final class RealtimeProtocolTests: XCTestCase {
     }
 
     @MainActor
-    func testDunesExperimentalBootstrapAndSafeExitCoordinates() {
+    func testDunesExperimentalBootstrapPreservesAuthoritativeRegionOnStop() {
         let silver = AutomationEngine.bootstrapForRun(for: .silver, gatherDisposition: .ready)
         let cacti = AutomationEngine.bootstrapForRun(for: .cacti, gatherDisposition: .ready)
         XCTAssertEqual(silver.region, "desert")
         XCTAssertEqual(cacti.region, "desert")
         XCTAssertEqual(silver.position, Position(x: -9.5, z: -18.5))
-        XCTAssertEqual(GatherRegionPolicy.dunesExitPosition.x, -9.5)
-        XCTAssertEqual(GatherRegionPolicy.dunesExitPosition.z, -19.5)
-        XCTAssertEqual(GatherRegionPolicy.shoresArrivalPosition, Position(x: -9.5, z: 18.5, ry: .pi))
+        XCTAssertFalse(ActivityMode.silver.requiresSafeExit)
+        XCTAssertFalse(ActivityMode.cacti.requiresSafeExit)
+    }
+
+    func testGatherResourceMarkerUsesOnlyAuthoritativeBalanceDelta() {
+        XCTAssertEqual(GatherLootMarkerPolicy.resource(for: .silver), "silver_ore")
+        XCTAssertEqual(GatherLootMarkerPolicy.resource(for: .cacti), "cacti")
+        XCTAssertEqual(GatherLootMarkerPolicy.confirmedDelta(previous: 8, current: 10), 2)
+        XCTAssertNil(GatherLootMarkerPolicy.confirmedDelta(previous: nil, current: 10))
+        XCTAssertEqual(
+            GatherLootMarkerPolicy.label(item: "silver_ore", previous: 8, current: 10),
+            "silver_ore=10 • saldo 8→10 • +2 confirmado"
+        )
+    }
+
+    func testHealthPotionWithoutAuthoritativeHPGainBlocksAnotherDose() {
+        XCTAssertEqual(
+            HealthPotionEffectPolicy.result(before: 66, after: 66, interrupted: false),
+            .noAuthoritativeGain
+        )
+        XCTAssertEqual(
+            HealthPotionEffectPolicy.result(before: 66, after: 76, interrupted: false),
+            .confirmed
+        )
+        XCTAssertEqual(
+            HealthPotionEffectPolicy.result(before: 66, after: 66, interrupted: true),
+            .interrupted
+        )
     }
 
     func testDunesResourceClassificationUsesRegionRatherThanLegacyRockFlags() {
