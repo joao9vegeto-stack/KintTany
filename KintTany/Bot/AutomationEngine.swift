@@ -1,4 +1,5 @@
 import Foundation
+import Dispatch
 
 enum EngineEvent {
     case state(ActivityState, String)
@@ -33,6 +34,11 @@ enum EmergencyWildExitResult: Equatable {
     case dead
 }
 
+enum EmergencyDunesExitResult: Equatable {
+    case shoresSafe
+    case alreadySafe
+}
+
 struct FishingNumberingPolicy {
     static func publicFishNumber(successes: Int) -> Int {
         max(1, successes + 1)
@@ -54,9 +60,10 @@ struct GatherToolPreflightPolicy {
 }
 
 struct GatherTimingPolicy {
-    /// Preserve the captured browser profile with relative spacing. If iOS
-    /// wakes a frame late in background, the next delay starts from that real
-    /// wake-up: no frame is abandoned and no backlog is sent as a burst.
+    /// The browser profile belongs to one absolute animation window. When iOS
+    /// wakes late in background, obsolete intermediate frames are coalesced and
+    /// only the newest due state is emitted. This avoids both a late burst and
+    /// the relative-delay drift that stretched a 500 ms action over many seconds.
     static let treeProfileWindowMS = 500
     static let minimumTreeFrameGapMS = 35
     static let mineFrameGapMS = 65
@@ -69,12 +76,38 @@ struct GatherTimingPolicy {
         let browserGap = (treeProfileWindowMS + intervals - 1) / intervals
         return max(minimumTreeFrameGapMS, min(90, browserGap))
     }
+
+    static func coalescedFrameIndex(
+        lastSentIndex: Int,
+        frameCount: Int,
+        elapsedMS: Int,
+        gapMS: Int
+    ) -> Int {
+        guard frameCount > 0 else { return 0 }
+        let last = frameCount - 1
+        guard lastSentIndex < last else { return last }
+        let due = max(0, elapsedMS) / max(1, gapMS)
+        return min(last, max(lastSentIndex + 1, due))
+    }
+}
+
+struct BackpackSaveRetryPolicy {
+    static let maximumAttempts = 3
+    static let retryDelayMS = 180
+
+    static func isStaleSave(_ message: String) -> Bool {
+        message.range(of: "stale_save", options: [.caseInsensitive, .diacriticInsensitive]) != nil
+    }
+
+    static func shouldRetry(message: String, attempt: Int) -> Bool {
+        isStaleSave(message) && attempt < maximumAttempts
+    }
 }
 
 struct DunesHeatSafetyPolicy {
-    /// Uses only authoritative snapshot/pvit HP. The margin leaves enough time
-    /// to finish the current server-confirmed action and close the Presence.
-    static let minimumSafeHP = 45
+    /// The threshold includes margin for the walk to the north portal, heat
+    /// ticks during that walk and a possible hostile contact on the route.
+    static let minimumSafeHP = 70
     static let recoveryGoalHP = 90
     static let healthPotionPlusType = "potion_health_l2"
     static let carriedHealthPotionPlusTarget = 6
@@ -97,8 +130,9 @@ struct GatherLootMarkerPolicy {
         }
     }
 
-    /// `h/hm` is action progress, not an inventory award. The only quantity
-    /// shown to the user is the delta between two server-confirmed balances.
+    /// `h/hm` is action progress, not an inventory award. A balance delta may
+    /// contain grants accumulated during partial/recovery cycles, so never label
+    /// it as the yield of the one target that just completed.
     static func confirmedDelta(previous: Int?, current: Int) -> Int? {
         previous.map { max(0, current - $0) }
     }
@@ -107,7 +141,10 @@ struct GatherLootMarkerPolicy {
         guard let previous, let delta = confirmedDelta(previous: previous, current: current) else {
             return "\(item)=\(current) • saldo autoritativo inicial"
         }
-        return "\(item)=\(current) • saldo \(previous)→\(current) • +\(delta) confirmado"
+        if delta == 0 {
+            return "\(item)=\(current) • saldo \(previous)→\(current) • sem variação nova"
+        }
+        return "\(item)=\(current) • saldo \(previous)→\(current) • variação acumulada +\(delta)"
     }
 }
 
@@ -268,6 +305,9 @@ struct GatherRegionPolicy {
         default: return Position(x: 22.5, z: -3.5)
         }
     }
+
+    static let dunesExitPosition = Position(x: -9.5, z: -19.5, ry: .pi)
+    static let shoresArrivalPosition = Position(x: -9.5, z: 18.5, ry: .pi)
 
     static func isDunesRegion(_ region: String) -> Bool {
         let normalized = region.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
@@ -710,6 +750,8 @@ actor AutomationEngine {
     private var region: String
     private var serverRegion: String?
     private var lastRegionConfirmationSource: String?
+    private var lastSnapshotRegion: String?
+    private var regionSnapshotSerial = 0
     private var position: Position
     private var lifeEpoch = 1
     private var equipment: String?
@@ -739,6 +781,9 @@ actor AutomationEngine {
     private var dunesScoutMoves = 0
     private var dunesZeroTargetSinceMS: Double?
     private var dunesLastZeroTargetDiagnosticAt: Double = 0
+    private var dunesHeatBaselineAtMS: Double?
+    private var dunesHeatBaselineHP = 100
+    private var dunesHeatGraceMS: Double = 30_000
 
     private var currentGatherSignature: String?
     private var currentGatherKind: String?
@@ -971,7 +1016,8 @@ actor AutomationEngine {
             let me = try await http.get("/api/auth/me")
             if let player = me["player"] as? [String: Any], let id = RealtimeProtocol.int(player["id"]) {
                 playerID = id
-                reporter(.diagnostic("[PLAYER] /api/auth/me confirmou playerId=\(id)"))
+                if let hp = RealtimeProtocol.int(player["php"] ?? player["hp"]) { playerHP = hp }
+                reporter(.diagnostic("[PLAYER] /api/auth/me confirmou playerId=\(id) • HP=\(playerHP)"))
             } else {
                 reporter(.diagnostic("[PLAYER] /api/auth/me não trouxe player.id; confirmações by=self ficarão conservadoras"))
             }
@@ -1149,6 +1195,54 @@ actor AutomationEngine {
         return .worldSafe
     }
 
+    /// A reconnection in the Dunes never resumes gathering. Its only allowed
+    /// action is to recover authoritative state and leave through the East→Shores
+    /// north portal, waiting for fresh beach snapshots before teardown.
+    func runEmergencyDunesExit(reason: String = "reconexão de emergência") async throws -> EmergencyDunesExitResult {
+        reporter(.state(.recovering, "Sincronizando estado das Dunes"))
+        let syncDeadline = nowMS + 8_000
+        while nowMS < syncDeadline {
+            try Task.checkCancellation()
+            if let authoritative = serverRegion?.lowercased(), !authoritative.isEmpty {
+                if !GatherRegionPolicy.isDunesRegion(authoritative) {
+                    region = authoritative
+                    if authoritative == "beach" {
+                        var observedSerial = regionSnapshotSerial
+                        for confirmation in 1...2 {
+                            try await sendPosition(moving: false, full: true)
+                            let deadline = nowMS + 5_000
+                            var confirmed = false
+                            while nowMS < deadline {
+                                try Task.checkCancellation()
+                                if lastSnapshotRegion == "beach", regionSnapshotSerial > observedSerial {
+                                    observedSerial = regionSnapshotSerial
+                                    confirmed = true
+                                    break
+                                }
+                                try await sleep(80)
+                            }
+                            guard confirmed else {
+                                throw EngineError.regionNotConfirmed("The Shores por snapshot autoritativo \(confirmation)/2")
+                            }
+                        }
+                    }
+                    reporter(.log("✅ Estado autoritativo • região=\(authoritative) • personagem fora das Dunes"))
+                    return .alreadySafe
+                }
+                region = authoritative
+                break
+            }
+            try await sleep(80)
+        }
+        guard let authoritative = serverRegion?.lowercased(), GatherRegionPolicy.isDunesRegion(authoritative) else {
+            throw EngineError.regionNotConfirmed("estado autoritativo das Dunes após reconexão")
+        }
+        if safeStopReason == nil { safeStopReason = .connectionLoss }
+        try await exitDunesToShores(reason: reason)
+        safeStopCompleted = true
+        return .shoresSafe
+    }
+
     // MARK: - Common state
 
     private func ingestSnapshot(_ packet: [String: Any]) async {
@@ -1158,6 +1252,8 @@ actor AutomationEngine {
         if let packetRegion = packet["region"] as? String, !packetRegion.isEmpty {
             serverRegion = packetRegion
             lastRegionConfirmationSource = "snapshot"
+            lastSnapshotRegion = packetRegion.lowercased()
+            regionSnapshotSerial += 1
         }
 
         if let res = packet["res"] as? [[String: Any]] {
@@ -1344,6 +1440,7 @@ actor AutomationEngine {
         position = pos
         serverRegion = nil
         lastRegionConfirmationSource = nil
+        lastSnapshotRegion = nil
         reporter(.state(.syncing, "Entrando em \(prettyRegion(value))"))
         reporter(.log("🌍 Entrando em \(prettyRegion(value))…"))
         try await sendPosition(moving: false, full: true, action: extras)
@@ -1485,6 +1582,12 @@ actor AutomationEngine {
         }
         guard try await waitForRegion(targetRegion, timeoutMS: 6_000) else {
             throw EngineError.regionNotConfirmed(targetRegion)
+        }
+        if mode.isDunesGathering {
+            dunesHeatBaselineAtMS = nowMS
+            dunesHeatBaselineHP = playerHP
+            dunesHeatGraceMS = 30_000
+            reporter(.diagnostic("[DUNES][HEAT] proteção iniciada • HP base=\(playerHP) • grace=30s • fallback monotônico ativo"))
         }
         gatherPositionMemory = gatherKnowledge.positionSnapshot(region: targetRegion)
 
@@ -1658,18 +1761,103 @@ actor AutomationEngine {
         }
 
         if mode.isDunesGathering {
-            let authoritative = (serverRegion ?? region).lowercased()
-            reporter(.log("🧭 Dunes • coleta encerrada mantendo região autoritativa \(authoritative) • nenhuma transição local foi enviada"))
+            let reason: String
+            switch safeStopReason {
+            case .dunesHeatSafety: reason = "proteção contra calor"
+            case .backgroundExpiration: reason = "encerramento externo"
+            case .user: reason = "STOP"
+            case .connectionLoss: reason = "perda de conexão"
+            case .none: reason = "meta concluída"
+            }
+            try await exitDunesToShores(reason: reason)
+            if safeStopReason != nil { safeStopCompleted = true }
         }
 
         reporter(.log("📊 Coleta encerrada • \(mode.displayName) • sucessos=\(successes)/\(goal) • recoveries internos=\(gatherInternalRecoveries) • proof misses=\(gatherProofMisses)"))
     }
 
+    /// Dunes are full-loot and heat continues while the player remains there.
+    /// Completion is not returned until two fresh authoritative beach snapshots
+    /// have stabilized the supported north-portal transition.
+    private func exitDunesToShores(reason: String) async throws {
+        let authoritative = (serverRegion ?? region).lowercased()
+        guard GatherRegionPolicy.isDunesRegion(authoritative) else {
+            guard authoritative == "beach" else {
+                throw EngineError.regionNotConfirmed("The Shores antes do encerramento")
+            }
+            region = "beach"
+            var observedSerial = regionSnapshotSerial
+            for confirmation in 1...2 {
+                try await sendPosition(moving: false, full: true)
+                let deadline = nowMS + 5_000
+                var confirmed = false
+                while nowMS < deadline {
+                    try Task.checkCancellation()
+                    if lastSnapshotRegion == "beach", regionSnapshotSerial > observedSerial {
+                        observedSerial = regionSnapshotSerial
+                        confirmed = true
+                        break
+                    }
+                    try await sleep(80)
+                }
+                guard confirmed else {
+                    throw EngineError.regionNotConfirmed("The Shores por snapshot autoritativo \(confirmation)/2")
+                }
+            }
+            reporter(.log("🛡️ Dunes • personagem já está em The Shores • 2 snapshots autoritativos confirmados"))
+            return
+        }
+        guard authoritative == "desert" else {
+            throw EngineError.regionNotConfirmed("saída segura disponível somente pelas Dunes East")
+        }
+
+        reporter(.state(.recovering, "Saindo das Dunes com segurança"))
+        reporter(.log("🛡️ Dunes • \(reason) • caminhando até a saída norte para The Shores"))
+        let pen = GatherRegionPolicy.startPosition(for: .silver)
+        try await walk(to: pen, maxSeconds: 70, status: "Retornando à saída das Dunes")
+        try await walk(to: GatherRegionPolicy.dunesExitPosition, maxSeconds: 12, status: "Cruzando para The Shores")
+
+        for probe in 1...3 {
+            let serialBefore = regionSnapshotSerial
+            try await setRegion("beach", at: GatherRegionPolicy.shoresArrivalPosition)
+            guard try await waitForRegion("beach", timeoutMS: 5_000) else {
+                reporter(.diagnostic("[DUNES] The Shores sem ACK/snapshot • probe \(probe)/3"))
+                continue
+            }
+
+            let firstDeadline = nowMS + 5_000
+            while nowMS < firstDeadline {
+                try Task.checkCancellation()
+                if lastSnapshotRegion == "beach", regionSnapshotSerial > serialBefore { break }
+                try await sleep(80)
+            }
+            guard lastSnapshotRegion == "beach", regionSnapshotSerial > serialBefore else {
+                reporter(.diagnostic("[DUNES] beach ACK recebido, mas snapshot autoritativo não estabilizou • probe \(probe)/3"))
+                continue
+            }
+
+            let firstSnapshotSerial = regionSnapshotSerial
+            try await sendPosition(moving: false, full: true)
+            let stableDeadline = nowMS + 5_000
+            while nowMS < stableDeadline {
+                try Task.checkCancellation()
+                if lastSnapshotRegion == "beach", regionSnapshotSerial > firstSnapshotSerial {
+                    reporter(.log("✅ The Shores confirmada por 2 snapshots autoritativos • itens fora das Dunes • Presence pronta para encerramento"))
+                    return
+                }
+                try await sleep(80)
+            }
+            reporter(.diagnostic("[DUNES] primeiro snapshot beach recebido, mas faltou confirmação estável • probe \(probe)/3"))
+        }
+        throw EngineError.regionNotConfirmed("The Shores por snapshots autoritativos após saída das Dunes")
+    }
+
     /// Heat bypasses shield in Dunes East. At the authoritative HP threshold,
     /// attempt one Health Potion+; without a confirmed recovery, stop creating
-    /// actions and let AppStore close the Presence while preserving the region.
+    /// gather actions and force the terminal path through The Shores.
     private func enforceDunesHeatSafetyIfNeeded(mode: ActivityMode) async throws -> Bool {
-        guard DunesHeatSafetyPolicy.requiresRecovery(hp: playerHP, mode: mode) else { return true }
+        let safetyHP = min(playerHP, estimatedDunesHPFromMonotonicClock())
+        guard DunesHeatSafetyPolicy.requiresRecovery(hp: safetyHP, mode: mode) else { return true }
 
         if !potionStockLoaded { try await refreshPotionStock(logSummary: false) }
         let type = DunesHeatSafetyPolicy.healthPotionPlusType
@@ -1679,6 +1867,9 @@ actor AutomationEngine {
                 reporter(.log("❤️‍🔥 Calor das Dunes • Health Potion+ aceita com HP \(before) • aguardando pvit/snapshot"))
                 let confirmed = try await driveDunesHealthPotionPlusTicks(beforeDoseHP: before)
                 if confirmed, playerHP > DunesHeatSafetyPolicy.minimumSafeHP {
+                    dunesHeatBaselineAtMS = nowMS
+                    dunesHeatBaselineHP = playerHP
+                    dunesHeatGraceMS = 0
                     reporter(.log("✅ Proteção térmica confirmada • HP \(before) → \(playerHP) • coleta retomada"))
                     return true
                 }
@@ -1687,10 +1878,16 @@ actor AutomationEngine {
         }
 
         safeStopReason = .dunesHeatSafety
-        safeStopCompleted = true
         reporter(.state(.recovering, "Proteção contra calor • encerrando coleta"))
-        reporter(.log("🛑 Proteção das Dunes • HP autoritativo \(playerHP)/100 • coleta interrompida antes da faixa crítica • região preservada e conexão será liberada"))
+        reporter(.log("🛑 Proteção das Dunes • HP servidor=\(playerHP)/100 • HP conservador=\(safetyHP)/100 • coleta interrompida • saída para The Shores obrigatória"))
         return false
+    }
+
+    private func estimatedDunesHPFromMonotonicClock() -> Int {
+        guard let baseline = dunesHeatBaselineAtMS else { return playerHP }
+        let exposedMS = max(0, nowMS - baseline - dunesHeatGraceMS)
+        let expectedDamage = Int(floor(exposedMS / 10_000))
+        return max(0, dunesHeatBaselineHP - expectedDamage)
     }
 
     private func driveDunesHealthPotionPlusTicks(beforeDoseHP: Int) async throws -> Bool {
@@ -1807,20 +2004,53 @@ actor AutomationEngine {
         func sendProfile(_ second: Bool, progressive: Bool) async throws {
             if safeStopReason != nil { return }
             var maxSchedulerDelayMS = 0
+            var coalescedFrames = 0
 
-            func waitRelative(_ intendedMS: Int) async throws {
-                let before = nowMS
-                try await sleep(intendedMS)
-                let actualMS = max(0, Int((nowMS - before).rounded()))
-                maxSchedulerDelayMS = max(maxSchedulerDelayMS, max(0, actualMS - intendedMS))
+            func streamAbsoluteProfile(
+                frameCount: Int,
+                gapMS: Int,
+                sendFrame: (_ index: Int) async throws -> Void
+            ) async throws {
+                guard frameCount > 0 else { return }
+                let startedAt = monotonicMS
+                var frameIndex = 0
+
+                while frameIndex < frameCount {
+                    try Task.checkCancellation()
+                    if safeStopReason != nil { return }
+
+                    if frameIndex > 0 {
+                        let deadline = startedAt + Double(frameIndex * max(1, gapMS))
+                        let beforeWait = monotonicMS
+                        if deadline > beforeWait {
+                            try await sleep(max(1, Int(ceil(deadline - beforeWait))))
+                        }
+
+                        let wokeAt = monotonicMS
+                        maxSchedulerDelayMS = max(
+                            maxSchedulerDelayMS,
+                            max(0, Int((wokeAt - deadline).rounded()))
+                        )
+                        let dueIndex = GatherTimingPolicy.coalescedFrameIndex(
+                            lastSentIndex: frameIndex - 1,
+                            frameCount: frameCount,
+                            elapsedMS: max(0, Int((wokeAt - startedAt).rounded(.down))),
+                            gapMS: gapMS
+                        )
+                        coalescedFrames += max(0, dueIndex - frameIndex)
+                        frameIndex = dueIndex
+                    }
+
+                    try await sendFrame(frameIndex)
+                    frameIndex += 1
+                }
             }
 
             if kind == "tree" {
                 let profile = second ? Self.treeY2 : Self.treeY1
                 let gap = GatherTimingPolicy.treeFrameGapMS(frameCount: profile.count)
-                for (index, delta) in profile.enumerated() {
-                    if index > 0 { try await waitRelative(gap) }
-                    position.y = 0.25 + delta
+                try await streamAbsoluteProfile(frameCount: profile.count, gapMS: gap) { index in
+                    position.y = 0.25 + profile[index]
                     try await sendPosition(moving: false, action: ["act": "chop", "eq": tool])
                 }
             } else {
@@ -1832,8 +2062,7 @@ actor AutomationEngine {
                     mineProgress = max(mineProgress, min(1, Double(harvestH) / Double(max(1, estimatedHM))))
                     let next = min(1, Double(harvestH + 1) / Double(max(1, estimatedHM)) + min(0.010, 0.06 / Double(max(1, estimatedHM))))
                     let shapeMax = Self.mineMP1.last ?? 1
-                    for index in Self.mineMP1.indices {
-                        if index > 0 { try await waitRelative(GatherTimingPolicy.mineFrameGapMS) }
+                    try await streamAbsoluteProfile(frameCount: Self.mineMP1.count, gapMS: GatherTimingPolicy.mineFrameGapMS) { index in
                         let shape = Self.mineMP1[index] / shapeMax
                         let value = min(1, mineProgress + max(0, next - mineProgress) * shape)
                         position.y = 0.25 + Self.mineY1[index]
@@ -1841,8 +2070,7 @@ actor AutomationEngine {
                         mineProgress = max(mineProgress, value)
                     }
                 } else {
-                    for index in mpProfile.indices {
-                        if index > 0 { try await waitRelative(GatherTimingPolicy.mineFrameGapMS) }
+                    try await streamAbsoluteProfile(frameCount: mpProfile.count, gapMS: GatherTimingPolicy.mineFrameGapMS) { index in
                         mineProgress = max(mineProgress, mpProfile[index])
                         position.y = 0.25 + yProfile[index % yProfile.count]
                         try await sendPosition(moving: false, action: ["act": "mine", "eq": tool, "mc": tile.0, "mr": tile.1, "mp": mineProgress])
@@ -1853,7 +2081,7 @@ actor AutomationEngine {
             if maxSchedulerDelayMS >= GatherTimingPolicy.delayedFrameDiagnosticThresholdMS,
                gatherLastTimingDiagnosticAt == 0 || nowMS - gatherLastTimingDiagnosticAt >= GatherTimingPolicy.timingDiagnosticCooldownMS {
                 gatherLastTimingDiagnosticAt = nowMS
-                reporter(.diagnostic("[GATHER][TIMING] scheduler atrasou até \(maxSchedulerDelayMS)ms • perfil preservado com espaçamento relativo • nenhuma rajada enviada"))
+                reporter(.diagnostic("[GATHER][TIMING] scheduler atrasou até \(maxSchedulerDelayMS)ms • frames vencidos coalescidos=\(coalescedFrames) • linha do tempo absoluta • nenhuma rajada enviada"))
             }
         }
 
@@ -5020,6 +5248,7 @@ actor AutomationEngine {
     }
 
     private var nowMS: Double { Date().timeIntervalSince1970 * 1_000 }
+    private var monotonicMS: Double { Double(DispatchTime.now().uptimeNanoseconds) / 1_000_000 }
 
     private func distance(from a: Position, to b: Position) -> Double {
         hypot(a.x - b.x, a.z - b.z)
@@ -5497,6 +5726,24 @@ private struct KintaraHTTPClient {
     /// e retira poções prontas do banco até a meta. Preserva todos os outros slots.
     @discardableResult
     func ensurePotionLoadout(targets: [String: Int]) async throws -> BackpackState {
+        for attempt in 1...BackpackSaveRetryPolicy.maximumAttempts {
+            do {
+                return try await ensurePotionLoadoutOnce(targets: targets)
+            } catch {
+                let message = error.localizedDescription
+                guard BackpackSaveRetryPolicy.shouldRetry(message: message, attempt: attempt) else {
+                    if BackpackSaveRetryPolicy.isStaleSave(message) {
+                        throw HTTPError.server("stale_save após \(attempt) tentativas com inventário fresco")
+                    }
+                    throw error
+                }
+                try await waitForFreshBackpackRetry()
+            }
+        }
+        throw HTTPError.server("stale_save após \(BackpackSaveRetryPolicy.maximumAttempts) tentativas com inventário fresco")
+    }
+
+    private func ensurePotionLoadoutOnce(targets: [String: Int]) async throws -> BackpackState {
         let state = try await backpackState()
         var backpack = state.backpack
         var hotbar = backpack["hotbar"] as? [Any] ?? Array(repeating: NSNull(), count: 6)
@@ -5615,6 +5862,24 @@ private struct KintaraHTTPClient {
     /// parcialmente do banco até a quantidade solicitada.
     @discardableResult
     func ensureCarriedItem(type: String, quantity targetRaw: Int, preferHotbar: Bool) async throws -> Int {
+        for attempt in 1...BackpackSaveRetryPolicy.maximumAttempts {
+            do {
+                return try await ensureCarriedItemOnce(type: type, quantity: targetRaw, preferHotbar: preferHotbar)
+            } catch {
+                let message = error.localizedDescription
+                guard BackpackSaveRetryPolicy.shouldRetry(message: message, attempt: attempt) else {
+                    if BackpackSaveRetryPolicy.isStaleSave(message) {
+                        throw HTTPError.server("stale_save após \(attempt) tentativas com inventário fresco")
+                    }
+                    throw error
+                }
+                try await waitForFreshBackpackRetry()
+            }
+        }
+        throw HTTPError.server("stale_save após \(BackpackSaveRetryPolicy.maximumAttempts) tentativas com inventário fresco")
+    }
+
+    private func ensureCarriedItemOnce(type: String, quantity targetRaw: Int, preferHotbar: Bool) async throws -> Int {
         let target = max(1, targetRaw)
         let state = try await backpackState()
         var backpack = state.backpack
@@ -5736,6 +6001,31 @@ private struct KintaraHTTPClient {
     }
 
     private func depositIntoBank(_ wanted: [String: Int], sourceKeys: [String]) async throws -> BankDepositResult {
+        var retryDiagnostics: [String] = []
+        for attempt in 1...BackpackSaveRetryPolicy.maximumAttempts {
+            do {
+                let result = try await depositIntoBankOnce(wanted, sourceKeys: sourceKeys)
+                return BankDepositResult(
+                    confirmed: result.confirmed,
+                    unresolved: result.unresolved,
+                    diagnostics: retryDiagnostics + result.diagnostics
+                )
+            } catch {
+                let message = error.localizedDescription
+                guard BackpackSaveRetryPolicy.shouldRetry(message: message, attempt: attempt) else {
+                    if BackpackSaveRetryPolicy.isStaleSave(message) {
+                        throw HTTPError.server("stale_save após \(attempt) tentativas com inventário fresco")
+                    }
+                    throw error
+                }
+                retryDiagnostics.append("stale_save na tentativa \(attempt) • estado descartado • nova leitura autoritativa solicitada")
+                try await waitForFreshBackpackRetry()
+            }
+        }
+        throw HTTPError.server("stale_save após \(BackpackSaveRetryPolicy.maximumAttempts) tentativas com inventário fresco")
+    }
+
+    private func depositIntoBankOnce(_ wanted: [String: Int], sourceKeys: [String]) async throws -> BankDepositResult {
         let state = try await backpackState()
         var backpack = state.backpack
         var sourceArrays: [String: [Any]] = [:]
@@ -5895,6 +6185,24 @@ private struct KintaraHTTPClient {
     }
 
     func persistLoot(_ item: String, amount: Int) async throws -> Int? {
+        for attempt in 1...BackpackSaveRetryPolicy.maximumAttempts {
+            do {
+                return try await persistLootOnce(item, amount: amount)
+            } catch {
+                let message = error.localizedDescription
+                guard BackpackSaveRetryPolicy.shouldRetry(message: message, attempt: attempt) else {
+                    if BackpackSaveRetryPolicy.isStaleSave(message) {
+                        throw HTTPError.server("stale_save após \(attempt) tentativas com inventário fresco")
+                    }
+                    throw error
+                }
+                try await waitForFreshBackpackRetry()
+            }
+        }
+        throw HTTPError.server("stale_save após \(BackpackSaveRetryPolicy.maximumAttempts) tentativas com inventário fresco")
+    }
+
+    private func persistLootOnce(_ item: String, amount: Int) async throws -> Int? {
         let state = try await get("/api/auth/me")
         guard let stateSeq = RealtimeProtocol.int(state["stateSeq"]), var backpack = state["backpack"] as? [String: Any] else {
             throw HTTPError.invalidState
@@ -5944,6 +6252,14 @@ private struct KintaraHTTPClient {
         }
         let fresh = try await get("/api/auth/me")
         return (fresh["backpack"] as? [String: Any]).flatMap { RealtimeProtocol.int($0[item]) }
+    }
+
+    private func waitForFreshBackpackRetry() async throws {
+        try Task.checkCancellation()
+        try await Task.sleep(
+            nanoseconds: UInt64(BackpackSaveRetryPolicy.retryDelayMS) * 1_000_000
+        )
+        try Task.checkCancellation()
     }
 
     private func request(method: String, path: String, body: [String: Any]?) async throws -> [String: Any] {
