@@ -710,6 +710,7 @@ final class AppStore: ObservableObject {
             value.hasPrefix("[WS]") ||
             value.hasPrefix("[QUEUE]") ||
             value.hasPrefix("[SERVER]") ||
+            value.hasPrefix("[BANK]") ||
             value.hasPrefix("[GATHER][TIMING]") ||
             value.hasPrefix("[BG]") ||
             value.hasPrefix("[WARN]") ||
@@ -803,16 +804,16 @@ final class AppStore: ObservableObject {
             traceTask?.cancel()
             connected = false
             let closingRunID = runID
-            Task { [weak self] in
-                guard let self else { return }
+            let socket = self.socket
+            Task.detached(priority: .userInitiated) { [weak self] in
                 // A engine já terminou neste ponto. Ceda uma vez para as tasks
                 // auxiliares observarem o cancelamento antes de fechar a Presence.
                 await Task.yield()
-                await self.socket.close()
+                await socket.close()
                 // O fechamento pertence à execução que acabou; não deixe essas
                 // linhas reaparecerem quando o logger da próxima meta iniciar.
-                _ = await self.socket.drainTrace()
-                self.completeRunCleanup(runID: closingRunID)
+                _ = await socket.drainTrace()
+                await self?.completeRunCleanup(runID: closingRunID)
             }
         }
 
@@ -2212,13 +2213,13 @@ final class AppStore: ObservableObject {
 
     private func closeTerminalNonWildPresenceNow(reason: String) {
         diagnostic("[NET] Encerramento terminal não-Wild • motivo=\(reason) • cancelando Presence sem aguardar a ação pendente")
-        Task { [weak self] in
-            guard let self else { return }
-            await self.socket.close()
+        let socket = self.socket
+        Task.detached(priority: .userInitiated) {
+            await socket.close()
             // O cancelamento da engine e o fechamento do socket podem se cruzar
             // por alguns milissegundos. Essas linhas pertencem ao teardown já
             // confirmado, não a uma nova falha estrutural da atividade.
-            _ = await self.socket.drainTrace()
+            _ = await socket.drainTrace()
         }
     }
 
