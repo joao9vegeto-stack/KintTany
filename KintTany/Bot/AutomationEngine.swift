@@ -1,5 +1,4 @@
 import Foundation
-import Dispatch
 
 enum EngineEvent {
     case state(ActivityState, String)
@@ -60,10 +59,9 @@ struct GatherToolPreflightPolicy {
 }
 
 struct GatherTimingPolicy {
-    /// The browser profile belongs to one absolute animation window. When iOS
-    /// wakes late in background, obsolete intermediate frames are coalesced and
-    /// only the newest due state is emitted. This avoids both a late burst and
-    /// the relative-delay drift that stretched a 500 ms action over many seconds.
+    /// Preserve the captured browser profile with relative spacing. If iOS
+    /// wakes a frame late in background, the next delay starts from that real
+    /// wake-up: no frame is abandoned and no backlog is sent as a burst.
     static let treeProfileWindowMS = 500
     static let minimumTreeFrameGapMS = 35
     static let mineFrameGapMS = 65
@@ -77,23 +75,11 @@ struct GatherTimingPolicy {
         return max(minimumTreeFrameGapMS, min(90, browserGap))
     }
 
-    static func coalescedFrameIndex(
-        lastSentIndex: Int,
-        frameCount: Int,
-        elapsedMS: Int,
-        gapMS: Int
-    ) -> Int {
-        guard frameCount > 0 else { return 0 }
-        let last = frameCount - 1
-        guard lastSentIndex < last else { return last }
-        let due = max(0, elapsedMS) / max(1, gapMS)
-        return min(last, max(lastSentIndex + 1, due))
-    }
 }
 
 struct BackpackSaveRetryPolicy {
     static let maximumAttempts = 3
-    static let retryDelayMS = 180
+    static let retryDelayMS = 220
 
     static func isStaleSave(_ message: String) -> Bool {
         message.range(of: "stale_save", options: [.caseInsensitive, .diacriticInsensitive]) != nil
@@ -101,6 +87,15 @@ struct BackpackSaveRetryPolicy {
 
     static func shouldRetry(message: String, attempt: Int) -> Bool {
         isStaleSave(message) && attempt < maximumAttempts
+    }
+}
+
+struct BackpackStateSettlingPolicy {
+    static let maximumObservations = 5
+    static let observationDelayMS = 220
+
+    static func isStable(previousSeq: Int, currentSeq: Int) -> Bool {
+        previousSeq == currentSeq
     }
 }
 
@@ -2004,53 +1999,20 @@ actor AutomationEngine {
         func sendProfile(_ second: Bool, progressive: Bool) async throws {
             if safeStopReason != nil { return }
             var maxSchedulerDelayMS = 0
-            var coalescedFrames = 0
 
-            func streamAbsoluteProfile(
-                frameCount: Int,
-                gapMS: Int,
-                sendFrame: (_ index: Int) async throws -> Void
-            ) async throws {
-                guard frameCount > 0 else { return }
-                let startedAt = monotonicMS
-                var frameIndex = 0
-
-                while frameIndex < frameCount {
-                    try Task.checkCancellation()
-                    if safeStopReason != nil { return }
-
-                    if frameIndex > 0 {
-                        let deadline = startedAt + Double(frameIndex * max(1, gapMS))
-                        let beforeWait = monotonicMS
-                        if deadline > beforeWait {
-                            try await sleep(max(1, Int(ceil(deadline - beforeWait))))
-                        }
-
-                        let wokeAt = monotonicMS
-                        maxSchedulerDelayMS = max(
-                            maxSchedulerDelayMS,
-                            max(0, Int((wokeAt - deadline).rounded()))
-                        )
-                        let dueIndex = GatherTimingPolicy.coalescedFrameIndex(
-                            lastSentIndex: frameIndex - 1,
-                            frameCount: frameCount,
-                            elapsedMS: max(0, Int((wokeAt - startedAt).rounded(.down))),
-                            gapMS: gapMS
-                        )
-                        coalescedFrames += max(0, dueIndex - frameIndex)
-                        frameIndex = dueIndex
-                    }
-
-                    try await sendFrame(frameIndex)
-                    frameIndex += 1
-                }
+            func waitRelative(_ intendedMS: Int) async throws {
+                let before = nowMS
+                try await sleep(intendedMS)
+                let actualMS = max(0, Int((nowMS - before).rounded()))
+                maxSchedulerDelayMS = max(maxSchedulerDelayMS, max(0, actualMS - intendedMS))
             }
 
             if kind == "tree" {
                 let profile = second ? Self.treeY2 : Self.treeY1
                 let gap = GatherTimingPolicy.treeFrameGapMS(frameCount: profile.count)
-                try await streamAbsoluteProfile(frameCount: profile.count, gapMS: gap) { index in
-                    position.y = 0.25 + profile[index]
+                for (index, delta) in profile.enumerated() {
+                    if index > 0 { try await waitRelative(gap) }
+                    position.y = 0.25 + delta
                     try await sendPosition(moving: false, action: ["act": "chop", "eq": tool])
                 }
             } else {
@@ -2062,7 +2024,8 @@ actor AutomationEngine {
                     mineProgress = max(mineProgress, min(1, Double(harvestH) / Double(max(1, estimatedHM))))
                     let next = min(1, Double(harvestH + 1) / Double(max(1, estimatedHM)) + min(0.010, 0.06 / Double(max(1, estimatedHM))))
                     let shapeMax = Self.mineMP1.last ?? 1
-                    try await streamAbsoluteProfile(frameCount: Self.mineMP1.count, gapMS: GatherTimingPolicy.mineFrameGapMS) { index in
+                    for index in Self.mineMP1.indices {
+                        if index > 0 { try await waitRelative(GatherTimingPolicy.mineFrameGapMS) }
                         let shape = Self.mineMP1[index] / shapeMax
                         let value = min(1, mineProgress + max(0, next - mineProgress) * shape)
                         position.y = 0.25 + Self.mineY1[index]
@@ -2070,7 +2033,8 @@ actor AutomationEngine {
                         mineProgress = max(mineProgress, value)
                     }
                 } else {
-                    try await streamAbsoluteProfile(frameCount: mpProfile.count, gapMS: GatherTimingPolicy.mineFrameGapMS) { index in
+                    for index in mpProfile.indices {
+                        if index > 0 { try await waitRelative(GatherTimingPolicy.mineFrameGapMS) }
                         mineProgress = max(mineProgress, mpProfile[index])
                         position.y = 0.25 + yProfile[index % yProfile.count]
                         try await sendPosition(moving: false, action: ["act": "mine", "eq": tool, "mc": tile.0, "mr": tile.1, "mp": mineProgress])
@@ -2081,7 +2045,7 @@ actor AutomationEngine {
             if maxSchedulerDelayMS >= GatherTimingPolicy.delayedFrameDiagnosticThresholdMS,
                gatherLastTimingDiagnosticAt == 0 || nowMS - gatherLastTimingDiagnosticAt >= GatherTimingPolicy.timingDiagnosticCooldownMS {
                 gatherLastTimingDiagnosticAt = nowMS
-                reporter(.diagnostic("[GATHER][TIMING] scheduler atrasou até \(maxSchedulerDelayMS)ms • frames vencidos coalescidos=\(coalescedFrames) • linha do tempo absoluta • nenhuma rajada enviada"))
+                reporter(.diagnostic("[GATHER][TIMING] scheduler atrasou até \(maxSchedulerDelayMS)ms • perfil preservado com espaçamento relativo • nenhuma rajada enviada"))
             }
         }
 
@@ -5248,7 +5212,6 @@ actor AutomationEngine {
     }
 
     private var nowMS: Double { Date().timeIntervalSince1970 * 1_000 }
-    private var monotonicMS: Double { Double(DispatchTime.now().uptimeNanoseconds) / 1_000_000 }
 
     private func distance(from a: Position, to b: Position) -> Double {
         hypot(a.x - b.x, a.z - b.z)
@@ -5744,7 +5707,7 @@ private struct KintaraHTTPClient {
     }
 
     private func ensurePotionLoadoutOnce(targets: [String: Int]) async throws -> BackpackState {
-        let state = try await backpackState()
+        let state = try await settledBackpackState()
         var backpack = state.backpack
         var hotbar = backpack["hotbar"] as? [Any] ?? Array(repeating: NSNull(), count: 6)
         var inv = backpack["invSlots"] as? [Any] ?? Array(repeating: NSNull(), count: 24)
@@ -5881,7 +5844,7 @@ private struct KintaraHTTPClient {
 
     private func ensureCarriedItemOnce(type: String, quantity targetRaw: Int, preferHotbar: Bool) async throws -> Int {
         let target = max(1, targetRaw)
-        let state = try await backpackState()
+        let state = try await settledBackpackState()
         var backpack = state.backpack
         var hotbar = backpack["hotbar"] as? [Any] ?? Array(repeating: NSNull(), count: 6)
         var inv = backpack["invSlots"] as? [Any] ?? Array(repeating: NSNull(), count: 24)
@@ -5920,6 +5883,27 @@ private struct KintaraHTTPClient {
             throw HTTPError.invalidState
         }
         return BackpackState(stateSeq: stateSeq, backpack: backpack)
+    }
+
+    /// Saves de inventário partem apenas de uma leitura que parou de avançar.
+    /// Se o servidor continuar atualizando durante toda a janela, devolvemos a
+    /// leitura mais nova e deixamos o retry estrito de stale_save refazer tudo.
+    private func settledBackpackState() async throws -> BackpackState {
+        var previous = try await backpackState()
+        guard BackpackStateSettlingPolicy.maximumObservations > 1 else { return previous }
+
+        for _ in 1..<BackpackStateSettlingPolicy.maximumObservations {
+            try await waitForBackpackState(milliseconds: BackpackStateSettlingPolicy.observationDelayMS)
+            let current = try await backpackState()
+            if BackpackStateSettlingPolicy.isStable(
+                previousSeq: previous.stateSeq,
+                currentSeq: current.stateSeq
+            ) {
+                return current
+            }
+            previous = current
+        }
+        return previous
     }
 
     func resourceBalance(_ item: String) async throws -> Int {
@@ -5975,25 +5959,18 @@ private struct KintaraHTTPClient {
             return BankDepositResult(confirmed: [:], unresolved: [], diagnostics: [])
         }
 
-        // Um tipo por transação: se um item futuro realmente não for aceito pelo
-        // banco, ele não impede que os demais recursos sejam protegidos e o log
-        // identifica exatamente qual tipo falhou. A Wilderness continua fail-closed
-        // enquanto qualquer item core candidato permanecer sem confirmação.
-        var confirmed: [String: Int] = [:]
-        var unresolved = Set<String>()
-        var diagnostics: [String] = []
-        for (type, quantity) in wanted.sorted(by: { $0.key < $1.key }) {
-            do {
-                let result = try await depositIntoBank([type: quantity], sourceKeys: ["invSlots", "hotbar"])
-                for (key, value) in result.confirmed { confirmed[key, default: 0] += value }
-                unresolved.formUnion(result.unresolved)
-                diagnostics.append(contentsOf: result.diagnostics)
-            } catch {
-                unresolved.insert(type)
-                diagnostics.append("\(type) • transação recusada/indisponível: \(error.localizedDescription)")
-            }
+        // Todos os itens candidatos são movidos sobre a mesma cópia autoritativa
+        // e confirmados por um único save-backpack. Isso elimina a sequência de
+        // saves por tipo que fazia o próprio BANK-FIRST invalidar o baseSeq.
+        do {
+            return try await depositIntoBank(wanted, sourceKeys: ["invSlots", "hotbar"])
+        } catch {
+            return BankDepositResult(
+                confirmed: [:],
+                unresolved: wanted.keys.sorted(),
+                diagnostics: ["transação BANK-FIRST atômica recusada/indisponível: \(error.localizedDescription)"]
+            )
         }
-        return BankDepositResult(confirmed: confirmed, unresolved: Array(unresolved).sorted(), diagnostics: diagnostics)
     }
 
     func depositIntoBank(_ wanted: [String: Int]) async throws -> BankDepositResult {
@@ -6026,7 +6003,7 @@ private struct KintaraHTTPClient {
     }
 
     private func depositIntoBankOnce(_ wanted: [String: Int], sourceKeys: [String]) async throws -> BankDepositResult {
-        let state = try await backpackState()
+        let state = try await settledBackpackState()
         var backpack = state.backpack
         var sourceArrays: [String: [Any]] = [:]
         for key in sourceKeys { sourceArrays[key] = backpack[key] as? [Any] ?? [] }
@@ -6255,9 +6232,13 @@ private struct KintaraHTTPClient {
     }
 
     private func waitForFreshBackpackRetry() async throws {
+        try await waitForBackpackState(milliseconds: BackpackSaveRetryPolicy.retryDelayMS)
+    }
+
+    private func waitForBackpackState(milliseconds: Int) async throws {
         try Task.checkCancellation()
         try await Task.sleep(
-            nanoseconds: UInt64(BackpackSaveRetryPolicy.retryDelayMS) * 1_000_000
+            nanoseconds: UInt64(max(1, milliseconds)) * 1_000_000
         )
         try Task.checkCancellation()
     }
