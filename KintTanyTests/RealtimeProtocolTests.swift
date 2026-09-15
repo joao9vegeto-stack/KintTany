@@ -638,15 +638,18 @@ final class RealtimeProtocolTests: XCTestCase {
         XCTAssertTrue(BackpackSaveRetryPolicy.isStaleSave("HTTP recusou: STALE_SAVE"))
         XCTAssertFalse(BackpackSaveRetryPolicy.isStaleSave("The request timed out"))
         XCTAssertTrue(BackpackSaveRetryPolicy.shouldRetry(message: "stale_save", attempt: 1))
-        XCTAssertTrue(BackpackSaveRetryPolicy.shouldRetry(message: "stale_save", attempt: 2))
-        XCTAssertFalse(BackpackSaveRetryPolicy.shouldRetry(message: "stale_save", attempt: 3))
-        XCTAssertEqual(BackpackSaveRetryPolicy.maximumAttempts, 3)
+        XCTAssertTrue(BackpackSaveRetryPolicy.shouldRetry(message: "stale_save", attempt: 4))
+        XCTAssertFalse(BackpackSaveRetryPolicy.shouldRetry(message: "stale_save", attempt: 5))
+        XCTAssertEqual(BackpackSaveRetryPolicy.maximumAttempts, 5)
+        XCTAssertEqual(BackpackSaveRetryPolicy.retryDelayMS(after: 1), 120)
+        XCTAssertEqual(BackpackSaveRetryPolicy.retryDelayMS(after: 4), 1_000)
     }
 
-    func testBackpackStateSettlingRequiresConsecutiveEqualSequences() {
-        XCTAssertTrue(BackpackStateSettlingPolicy.isStable(previousSeq: 42, currentSeq: 42))
-        XCTAssertFalse(BackpackStateSettlingPolicy.isStable(previousSeq: 42, currentSeq: 43))
-        XCTAssertGreaterThanOrEqual(BackpackStateSettlingPolicy.maximumObservations, 2)
+    func testBackpackFreshReadAlwaysUsesCacheBustingNonce() {
+        XCTAssertEqual(
+            BackpackFreshReadPolicy.path(nonce: "run-42"),
+            "/api/auth/me?fresh=run-42"
+        )
     }
 
     func testMovementBudgetDependsOnEmittedFramesNotWallClock() {
