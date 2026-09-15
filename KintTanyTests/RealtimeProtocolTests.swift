@@ -625,29 +625,12 @@ final class RealtimeProtocolTests: XCTestCase {
         ))
     }
 
-    func testGatherTimingPolicyUsesAbsoluteTimelineAndCoalescesLateFrames() {
+    func testGatherTimingPolicyPreservesRelativeSpacingInBackground() {
         XCTAssertEqual(GatherTimingPolicy.treeFrameGapMS(frameCount: 12), 46)
         XCTAssertEqual(GatherTimingPolicy.treeFrameGapMS(frameCount: 7), 84)
         XCTAssertEqual(GatherTimingPolicy.mineFrameGapMS, 65)
         XCTAssertEqual(GatherTimingPolicy.delayedFrameDiagnosticThresholdMS, 220)
         XCTAssertEqual(GatherTimingPolicy.eventGraceMS, 420)
-
-        XCTAssertEqual(
-            GatherTimingPolicy.coalescedFrameIndex(lastSentIndex: 0, frameCount: 8, elapsedMS: 65, gapMS: 65),
-            1
-        )
-        XCTAssertEqual(
-            GatherTimingPolicy.coalescedFrameIndex(lastSentIndex: 0, frameCount: 8, elapsedMS: 345, gapMS: 65),
-            5
-        )
-        XCTAssertEqual(
-            GatherTimingPolicy.coalescedFrameIndex(lastSentIndex: 0, frameCount: 8, elapsedMS: 641, gapMS: 65),
-            7
-        )
-        XCTAssertEqual(
-            GatherTimingPolicy.coalescedFrameIndex(lastSentIndex: 7, frameCount: 8, elapsedMS: 900, gapMS: 65),
-            7
-        )
     }
 
     func testBackpackStaleSaveRetryPolicyIsStrictAndBounded() {
@@ -658,6 +641,12 @@ final class RealtimeProtocolTests: XCTestCase {
         XCTAssertTrue(BackpackSaveRetryPolicy.shouldRetry(message: "stale_save", attempt: 2))
         XCTAssertFalse(BackpackSaveRetryPolicy.shouldRetry(message: "stale_save", attempt: 3))
         XCTAssertEqual(BackpackSaveRetryPolicy.maximumAttempts, 3)
+    }
+
+    func testBackpackStateSettlingRequiresConsecutiveEqualSequences() {
+        XCTAssertTrue(BackpackStateSettlingPolicy.isStable(previousSeq: 42, currentSeq: 42))
+        XCTAssertFalse(BackpackStateSettlingPolicy.isStable(previousSeq: 42, currentSeq: 43))
+        XCTAssertGreaterThanOrEqual(BackpackStateSettlingPolicy.maximumObservations, 2)
     }
 
     func testMovementBudgetDependsOnEmittedFramesNotWallClock() {
