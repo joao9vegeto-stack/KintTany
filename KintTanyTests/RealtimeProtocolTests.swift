@@ -153,7 +153,8 @@ final class RealtimeProtocolTests: XCTestCase {
         XCTAssertTrue(ActivityMode.silver.isGathering)
         XCTAssertTrue(ActivityMode.cacti.isGathering)
         XCTAssertTrue(ActivityMode.silver.isDunesGathering)
-        XCTAssertFalse(ActivityMode.cacti.requiresSafeExit)
+        XCTAssertTrue(ActivityMode.silver.requiresSafeExit)
+        XCTAssertTrue(ActivityMode.cacti.requiresSafeExit)
         XCTAssertFalse(ActivityMode.fishing.isGathering)
         XCTAssertFalse(ActivityMode.chicken.isGathering)
         XCTAssertFalse(ActivityMode.zombie.isGathering)
@@ -624,12 +625,39 @@ final class RealtimeProtocolTests: XCTestCase {
         ))
     }
 
-    func testGatherTimingPolicyPreservesRelativeSpacingInBackground() {
+    func testGatherTimingPolicyUsesAbsoluteTimelineAndCoalescesLateFrames() {
         XCTAssertEqual(GatherTimingPolicy.treeFrameGapMS(frameCount: 12), 46)
         XCTAssertEqual(GatherTimingPolicy.treeFrameGapMS(frameCount: 7), 84)
         XCTAssertEqual(GatherTimingPolicy.mineFrameGapMS, 65)
         XCTAssertEqual(GatherTimingPolicy.delayedFrameDiagnosticThresholdMS, 220)
         XCTAssertEqual(GatherTimingPolicy.eventGraceMS, 420)
+
+        XCTAssertEqual(
+            GatherTimingPolicy.coalescedFrameIndex(lastSentIndex: 0, frameCount: 8, elapsedMS: 65, gapMS: 65),
+            1
+        )
+        XCTAssertEqual(
+            GatherTimingPolicy.coalescedFrameIndex(lastSentIndex: 0, frameCount: 8, elapsedMS: 345, gapMS: 65),
+            5
+        )
+        XCTAssertEqual(
+            GatherTimingPolicy.coalescedFrameIndex(lastSentIndex: 0, frameCount: 8, elapsedMS: 641, gapMS: 65),
+            7
+        )
+        XCTAssertEqual(
+            GatherTimingPolicy.coalescedFrameIndex(lastSentIndex: 7, frameCount: 8, elapsedMS: 900, gapMS: 65),
+            7
+        )
+    }
+
+    func testBackpackStaleSaveRetryPolicyIsStrictAndBounded() {
+        XCTAssertTrue(BackpackSaveRetryPolicy.isStaleSave("stale_save"))
+        XCTAssertTrue(BackpackSaveRetryPolicy.isStaleSave("HTTP recusou: STALE_SAVE"))
+        XCTAssertFalse(BackpackSaveRetryPolicy.isStaleSave("The request timed out"))
+        XCTAssertTrue(BackpackSaveRetryPolicy.shouldRetry(message: "stale_save", attempt: 1))
+        XCTAssertTrue(BackpackSaveRetryPolicy.shouldRetry(message: "stale_save", attempt: 2))
+        XCTAssertFalse(BackpackSaveRetryPolicy.shouldRetry(message: "stale_save", attempt: 3))
+        XCTAssertEqual(BackpackSaveRetryPolicy.maximumAttempts, 3)
     }
 
     func testMovementBudgetDependsOnEmittedFramesNotWallClock() {
@@ -682,19 +710,21 @@ final class RealtimeProtocolTests: XCTestCase {
     }
 
     @MainActor
-    func testDunesExperimentalBootstrapPreservesAuthoritativeRegionOnStop() {
+    func testDunesBootstrapRequiresSafeExit() {
         let silver = AutomationEngine.bootstrapForRun(for: .silver, gatherDisposition: .ready)
         let cacti = AutomationEngine.bootstrapForRun(for: .cacti, gatherDisposition: .ready)
         XCTAssertEqual(silver.region, "desert")
         XCTAssertEqual(cacti.region, "desert")
         XCTAssertEqual(silver.position, Position(x: -9.5, z: -18.5))
-        XCTAssertFalse(ActivityMode.silver.requiresSafeExit)
-        XCTAssertFalse(ActivityMode.cacti.requiresSafeExit)
+        XCTAssertEqual(GatherRegionPolicy.dunesExitPosition, Position(x: -9.5, z: -19.5, ry: .pi))
+        XCTAssertEqual(GatherRegionPolicy.shoresArrivalPosition, Position(x: -9.5, z: 18.5, ry: .pi))
+        XCTAssertTrue(ActivityMode.silver.requiresSafeExit)
+        XCTAssertTrue(ActivityMode.cacti.requiresSafeExit)
     }
 
     func testDunesHeatSafetyUsesAuthoritativeHPThresholdOnlyForDunes() {
-        XCTAssertFalse(DunesHeatSafetyPolicy.requiresRecovery(hp: 46, mode: .silver))
-        XCTAssertTrue(DunesHeatSafetyPolicy.requiresRecovery(hp: 45, mode: .silver))
+        XCTAssertFalse(DunesHeatSafetyPolicy.requiresRecovery(hp: 71, mode: .silver))
+        XCTAssertTrue(DunesHeatSafetyPolicy.requiresRecovery(hp: 70, mode: .silver))
         XCTAssertTrue(DunesHeatSafetyPolicy.requiresRecovery(hp: 13, mode: .cacti))
         XCTAssertFalse(DunesHeatSafetyPolicy.requiresRecovery(hp: 13, mode: .iron))
         XCTAssertEqual(DunesHeatSafetyPolicy.recoveryGoalHP, 90)
@@ -708,7 +738,11 @@ final class RealtimeProtocolTests: XCTestCase {
         XCTAssertNil(GatherLootMarkerPolicy.confirmedDelta(previous: nil, current: 10))
         XCTAssertEqual(
             GatherLootMarkerPolicy.label(item: "silver_ore", previous: 8, current: 10),
-            "silver_ore=10 • saldo 8→10 • +2 confirmado"
+            "silver_ore=10 • saldo 8→10 • variação acumulada +2"
+        )
+        XCTAssertEqual(
+            GatherLootMarkerPolicy.label(item: "coal", previous: 10, current: 10),
+            "coal=10 • saldo 10→10 • sem variação nova"
         )
     }
 
