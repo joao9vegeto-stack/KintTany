@@ -77,6 +77,24 @@ struct GatherTimingPolicy {
 
 }
 
+/// Serializa somente as mutações de inventário feitas no banco. A Presence
+/// continua recebendo snapshots durante o deslocamento; por isso uma leitura
+/// isolada de `/me` pode carregar um `stateSeq` que já ficou velho quando o
+/// `save-backpack` chega ao servidor. A v5.2 espera 1,2 s após o movimento.
+/// Além dessa mesma janela, o port exige três leituras frescas consecutivas do
+/// mesmo `stateSeq` antes de montar o POST e refaz a operação no máximo uma vez.
+struct BankMutationPolicy {
+    static let postMovementSettlingMS = 1_200
+    static let stableProbeIntervalMS = 250
+    static let requiredEqualStateSeqReads = 3
+    static let stabilizationTimeoutMS = 8_000
+    static let maximumSaveAttempts = 2
+
+    static func isStaleSave(_ message: String) -> Bool {
+        message.range(of: "stale_save", options: [.caseInsensitive, .diacriticInsensitive]) != nil
+    }
+}
+
 struct DunesHeatSafetyPolicy {
     /// The threshold includes margin for the walk to the north portal, heat
     /// ticks during that walk and a possible hostile contact on the route.
@@ -452,7 +470,7 @@ struct CombatBankFirstPolicy {
     // conhecidamente especiais/soulbound. Arrays especiais nunca são tocados.
     static let maxStackCount = 10_000
     static let combatRequiredTypes: Set<String> = [
-        "wild_sword", "potion_health", "potion_shield", "potion_strength"
+        "wild_sword", "wild_sword_l2", "potion_health", "potion_shield", "potion_strength"
     ]
     static let protectedPrefixes = ["mount_", "pet_", "cosmetic_", "furniture_"]
     static let protectedFragments = ["scroll", "soulbound"]
@@ -2555,7 +2573,9 @@ actor AutomationEngine {
         if hypot(position.x - bankPosition.x, position.z - bankPosition.z) > 0.8 {
             try await walk(to: bankPosition, maxSeconds: 35, status: "🏦 Indo ao banco • \(reason)")
         }
-        try await sleep(450)
+        // Paridade literal com a v5.2: deixe o servidor consumir a cauda dos
+        // frames de movimento antes de qualquer CAS de inventário.
+        try await sleep(BankMutationPolicy.postMovementSettlingMS)
     }
 
     private func returnToGatherRegionIfNeeded(for mode: ActivityMode) async throws {
@@ -4062,7 +4082,7 @@ actor AutomationEngine {
         let bankPosition = Position(x: -24.0, z: -17.5)
         reporter(.state(.moving, "Protegendo inventário no banco"))
         try await walk(to: bankPosition, maxSeconds: 35, status: "🏦 Indo ao banco • BANK-FIRST")
-        try await sleep(600)
+        try await sleep(BankMutationPolicy.postMovementSettlingMS)
         try await performCombatBankFirstSafety()
         if resupplyReason != nil {
             try await ensureCombatSupplies()
@@ -4202,7 +4222,7 @@ actor AutomationEngine {
         let bankPosition = Position(x: -24.0, z: -17.5)
         reporter(.state(.moving, "Indo ao banco"))
         try await walk(to: bankPosition, maxSeconds: 35, status: "🏦 Indo ao banco • protegendo itens")
-        try await sleep(650)
+        try await sleep(BankMutationPolicy.postMovementSettlingMS)
 
         if !drops.isEmpty {
             reporter(.state(.syncing, "Depositando drops no banco"))
@@ -5667,12 +5687,12 @@ private struct KintaraHTTPClient {
     /// e retira poções prontas do banco até a meta. Preserva todos os outros slots.
     @discardableResult
     func ensurePotionLoadout(targets: [String: Int]) async throws -> BackpackState {
-        let state = try await backpackState()
-        var backpack = state.backpack
-        var hotbar = backpack["hotbar"] as? [Any] ?? Array(repeating: NSNull(), count: 6)
-        var inv = backpack["invSlots"] as? [Any] ?? Array(repeating: NSNull(), count: 24)
-        var bank = backpack["bankSlots"] as? [Any] ?? []
-        var dirty = false
+        return try await withStableBankMutation { state in
+            var backpack = state.backpack
+            var hotbar = backpack["hotbar"] as? [Any] ?? Array(repeating: NSNull(), count: 6)
+            var inv = backpack["invSlots"] as? [Any] ?? Array(repeating: NSNull(), count: 24)
+            var bank = backpack["bankSlots"] as? [Any] ?? []
+            var dirty = false
 
         func slotsCount(_ type: String) -> Int {
             func count(_ slots: [Any]) -> Int {
@@ -5757,14 +5777,15 @@ private struct KintaraHTTPClient {
             }
         }
 
-        if dirty {
-            backpack["hotbar"] = hotbar
-            backpack["invSlots"] = inv
-            backpack["bankSlots"] = bank
-            _ = try await saveBackpack(backpack, baseSeq: state.stateSeq)
-            return try await backpackState()
+            if dirty {
+                backpack["hotbar"] = hotbar
+                backpack["invSlots"] = inv
+                backpack["bankSlots"] = bank
+                _ = try await saveBackpack(backpack, baseSeq: state.stateSeq)
+                return try await backpackState()
+            }
+            return state
         }
-        return state
     }
 
     func itemLocationCounts(type: String) async throws -> ItemLocationCounts {
@@ -5785,12 +5806,12 @@ private struct KintaraHTTPClient {
     /// parcialmente do banco até a quantidade solicitada.
     @discardableResult
     func ensureCarriedItem(type: String, quantity targetRaw: Int, preferHotbar: Bool) async throws -> Int {
-        let target = max(1, targetRaw)
-        let state = try await backpackState()
-        var backpack = state.backpack
-        var hotbar = backpack["hotbar"] as? [Any] ?? Array(repeating: NSNull(), count: 6)
-        var inv = backpack["invSlots"] as? [Any] ?? Array(repeating: NSNull(), count: 24)
-        var bank = backpack["bankSlots"] as? [Any] ?? []
+        return try await withStableBankMutation { state in
+            let target = max(1, targetRaw)
+            var backpack = state.backpack
+            var hotbar = backpack["hotbar"] as? [Any] ?? Array(repeating: NSNull(), count: 6)
+            var inv = backpack["invSlots"] as? [Any] ?? Array(repeating: NSNull(), count: 24)
+            var bank = backpack["bankSlots"] as? [Any] ?? []
 
         let before = InventoryLoadoutAllocator.carriedCount(type: type, hotbar: hotbar, inventory: inv)
         if before >= target { return before }
@@ -5813,10 +5834,11 @@ private struct KintaraHTTPClient {
         }
         _ = try await saveBackpack(backpack, baseSeq: state.stateSeq)
 
-        let fresh = try await backpackState()
-        let freshHotbar = fresh.backpack["hotbar"] as? [Any] ?? []
-        let freshInv = fresh.backpack["invSlots"] as? [Any] ?? []
-        return InventoryLoadoutAllocator.carriedCount(type: type, hotbar: freshHotbar, inventory: freshInv)
+            let fresh = try await backpackState()
+            let freshHotbar = fresh.backpack["hotbar"] as? [Any] ?? []
+            let freshInv = fresh.backpack["invSlots"] as? [Any] ?? []
+            return InventoryLoadoutAllocator.carriedCount(type: type, hotbar: freshHotbar, inventory: freshInv)
+        }
     }
 
     func backpackState() async throws -> BackpackState {
@@ -5825,6 +5847,65 @@ private struct KintaraHTTPClient {
             throw HTTPError.invalidState
         }
         return BackpackState(stateSeq: stateSeq, backpack: backpack)
+    }
+
+    /// Lê diretamente da origem até observar o mesmo stateSeq três vezes. O
+    /// estado retornado é o próprio snapshot usado para montar a mutação; não há
+    /// outra leitura intermediária capaz de reintroduzir uma base velha.
+    private func stableBankMutationState() async throws -> BackpackState {
+        let timeoutNS = UInt64(BankMutationPolicy.stabilizationTimeoutMS) * 1_000_000
+        let deadline = DispatchTime.now().uptimeNanoseconds + timeoutNS
+        var previous = try await freshBackpackState()
+        var equalReads = 1
+
+        while DispatchTime.now().uptimeNanoseconds < deadline {
+            try await Task.sleep(nanoseconds: UInt64(BankMutationPolicy.stableProbeIntervalMS) * 1_000_000)
+            let current = try await freshBackpackState()
+            if current.stateSeq == previous.stateSeq {
+                equalReads += 1
+                if equalReads >= BankMutationPolicy.requiredEqualStateSeqReads {
+                    return current
+                }
+            } else {
+                equalReads = 1
+            }
+            previous = current
+        }
+
+        throw HTTPError.server("estado do inventário não estabilizou para acesso ao banco")
+    }
+
+    private func freshBackpackState() async throws -> BackpackState {
+        let state = try await get("/api/auth/me?bank_fresh=\(UUID().uuidString)")
+        guard let stateSeq = RealtimeProtocol.int(state["stateSeq"]), let backpack = state["backpack"] as? [String: Any] else {
+            throw HTTPError.invalidState
+        }
+        return BackpackState(stateSeq: stateSeq, backpack: backpack)
+    }
+
+    /// Uma corrida residual ainda pode ocorrer logo após a última sondagem. Só
+    /// nesse caso descartamos tudo, estabilizamos novamente e recalculamos a
+    /// mutação a partir do novo snapshot. Nunca repetimos o mesmo payload/baseSeq.
+    private func withStableBankMutation<T>(
+        _ operation: (BackpackState) async throws -> T
+    ) async throws -> T {
+        for attempt in 1...BankMutationPolicy.maximumSaveAttempts {
+            let state = try await stableBankMutationState()
+            do {
+                return try await operation(state)
+            } catch {
+                let message = error.localizedDescription
+                guard BankMutationPolicy.isStaleSave(message),
+                      attempt < BankMutationPolicy.maximumSaveAttempts
+                else {
+                    if BankMutationPolicy.isStaleSave(message) {
+                        throw HTTPError.server("stale_save mesmo após stateSeq estável")
+                    }
+                    throw error
+                }
+            }
+        }
+        throw HTTPError.server("transação de banco não concluída")
     }
 
     func resourceBalance(_ item: String) async throws -> Int {
@@ -5905,11 +5986,11 @@ private struct KintaraHTTPClient {
     }
 
     private func depositIntoBank(_ wanted: [String: Int], sourceKeys: [String]) async throws -> BankDepositResult {
-        let state = try await backpackState()
-        var backpack = state.backpack
-        var sourceArrays: [String: [Any]] = [:]
-        for key in sourceKeys { sourceArrays[key] = backpack[key] as? [Any] ?? [] }
-        var bank = backpack["bankSlots"] as? [Any] ?? []
+        return try await withStableBankMutation { state in
+            var backpack = state.backpack
+            var sourceArrays: [String: [Any]] = [:]
+            for key in sourceKeys { sourceArrays[key] = backpack[key] as? [Any] ?? [] }
+            var bank = backpack["bankSlots"] as? [Any] ?? []
 
         var moved: [String: Int] = [:]
         var unresolved = Set<String>()
@@ -6013,11 +6094,12 @@ private struct KintaraHTTPClient {
             }
         }
 
-        return BankDepositResult(
-            confirmed: confirmed,
-            unresolved: Array(unresolved).sorted(),
-            diagnostics: diagnostics
-        )
+            return BankDepositResult(
+                confirmed: confirmed,
+                unresolved: Array(unresolved).sorted(),
+                diagnostics: diagnostics
+            )
+        }
     }
 
     private func saveBackpack(_ backpack: [String: Any], baseSeq: Int) async throws -> [String: Any] {
@@ -6127,8 +6209,8 @@ private struct KintaraHTTPClient {
         request.httpMethod = method
         request.timeoutInterval = 15
         if method == "GET", path.hasPrefix("/api/auth/me") {
-            request.cachePolicy = .reloadIgnoringLocalCacheData
-            request.setValue("no-cache", forHTTPHeaderField: "Cache-Control")
+            request.cachePolicy = .reloadIgnoringLocalAndRemoteCacheData
+            request.setValue("no-store, no-cache, max-age=0", forHTTPHeaderField: "Cache-Control")
             request.setValue("no-cache", forHTTPHeaderField: "Pragma")
         }
         request.setValue(cookie, forHTTPHeaderField: "Cookie")
