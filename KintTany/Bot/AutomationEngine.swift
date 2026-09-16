@@ -136,16 +136,31 @@ struct BackpackSavePayloadPolicy {
     }
 }
 
+struct OwnVitalsPolicy {
+    /// `pvit` is a broadcast. Only an explicitly identified packet for this
+    /// player is allowed to mutate local HP/Shield, matching Node v5.2.
+    static func shouldApplyPvit(packetPlayerID: Int?, playerID: Int?) -> Bool {
+        guard let packetPlayerID, let playerID else { return false }
+        return packetPlayerID == playerID
+    }
+}
+
 struct DunesHeatSafetyPolicy {
-    /// The threshold includes margin for the walk to the north portal, heat
-    /// ticks during that walk and a possible hostile contact on the route.
-    static let minimumSafeHP = 70
+    /// Build 62: heat alone removes ~1 HP each 10 seconds. Stop gathering at
+    /// 30 HP and reserve the remaining margin for reaching The Shores.
+    static let minimumSafeHP = 30
     static let recoveryGoalHP = 90
     static let healthPotionPlusType = "potion_health_l2"
     static let carriedHealthPotionPlusTarget = 6
 
     static func requiresRecovery(hp: Int, mode: ActivityMode) -> Bool {
         mode.isDunesGathering && hp <= minimumSafeHP
+    }
+
+    static func estimatedHP(baselineHP: Int, elapsedMS: Double) -> Int {
+        let exposedMS = max(0, elapsedMS)
+        let expectedDamage = Int(floor(exposedMS / 10_000))
+        return max(0, baselineHP - expectedDamage)
     }
 }
 
@@ -918,7 +933,9 @@ actor AutomationEngine {
     private var dunesLastZeroTargetDiagnosticAt: Double = 0
     private var dunesHeatBaselineAtMS: Double?
     private var dunesHeatBaselineHP = 100
-    private var dunesHeatGraceMS: Double = 30_000
+    private var lastTrustedOwnHPAtMS: Double?
+    private var lastTrustedOwnHPRegion: String?
+    private var activeGatherMode: ActivityMode?
 
     private var currentGatherSignature: String?
     private var currentGatherKind: String?
@@ -1052,20 +1069,15 @@ actor AutomationEngine {
         bootstrap(for: mode)
     }
 
-    /// RC3.6: o local da ferramenta decide onde a única Presence da sessão
-    /// nasce. Ferramenta carregada conecta direto em ElderGrove; ferramenta no
-    /// banco conecta em World e a própria engine faz World→ElderGrove depois do
-    /// saque, sem fechar/reabrir o transporte.
+    /// Build 62: gathering Presence always starts directly in the activity
+    /// region. Bank-only tools are materialized over HTTP during preflight,
+    /// before queue/presence is opened, so Gathering no longer depends on a
+    /// World→region transition.
     static func bootstrapForRun(
         for mode: ActivityMode,
         gatherDisposition: GatherToolPreflightDisposition
     ) -> PresenceBootstrap {
-        guard mode.isGathering else {
-            return bootstrap(for: mode)
-        }
-        if case .needsWorld = gatherDisposition {
-            return PresenceBootstrap(region: "world", position: Position(x: 22.5, z: -3.5))
-        }
+        guard mode.isGathering else { return bootstrap(for: mode) }
         return bootstrap(for: mode)
     }
 
@@ -1078,16 +1090,21 @@ actor AutomationEngine {
             guard let best = ActivityToolPolicy.bestSelection(in: state.backpack, for: mode) else {
                 return .missing(tool: fallback)
             }
-            // “Melhor disponível” considera mochila + banco. Se um tier superior
-            // está somente no banco, a Presence nasce no World e materializa esse
-            // tier antes de entrar na região de coleta.
             if best.carried >= 1 { return .ready }
-            if best.bank >= 1 { return .needsWorld(tool: best.type) }
-            return .missing(tool: fallback)
+            guard best.bank >= 1 else { return .missing(tool: fallback) }
+
+            // Same proven Build61 backpack transaction, but completed before
+            // opening Presence. This removes the failing World→gather-region hop.
+            let carried = try await client.ensureCarriedItem(type: best.type, quantity: 1, preferHotbar: true)
+            let confirmed = try await client.itemLocationCounts(type: best.type)
+            guard max(carried, confirmed.carried) >= 1 else {
+                return .missing(tool: best.type)
+            }
+            return .ready
         } catch {
-            // Falha de leitura não autoriza ElderGrove às cegas. O chamador fará
-            // o preflight World e uma nova leitura autoritativa sem cache.
-            return .needsWorld(tool: fallback)
+            // Fail closed: a transport/inventory read failure must not open a
+            // Presence in World and attempt a region transition with unknown loadout.
+            return .missing(tool: fallback)
         }
     }
 
@@ -1240,8 +1257,11 @@ actor AutomationEngine {
                 reporter(.diagnostic("[XP] Combat XP autoritativo=\(combatXPTotal ?? 0)"))
             }
 
-        case "pvit", "wild_mb_ack":
-            ingestVitals(packet)
+        case "pvit":
+            ingestPlayerVitals(packet)
+
+        case "wild_mb_ack":
+            ingestWildVitals(packet)
 
         default:
             break
@@ -1462,14 +1482,14 @@ actor AutomationEngine {
                 if let y = RealtimeProtocol.double(me["y"]) { snapshotPosition.y = y }
                 if let ry = RealtimeProtocol.double(me["ry"]) { snapshotPosition.ry = ry }
             }
-            if let hp = RealtimeProtocol.int(me["php"]) { playerHP = hp }
+            if let hp = RealtimeProtocol.int(me["php"]) { recordTrustedOwnHP(hp, regionHint: serverRegion) }
             if let shield = RealtimeProtocol.int(me["wsh"]) { playerShield = shield }
             if let le = RealtimeProtocol.int(me["le"]), le > lifeEpoch { lifeEpoch = le }
         }
 
         if let vitals = packet["playersVital"] as? [[String: Any]], let id = playerID,
            let me = vitals.first(where: { RealtimeProtocol.int($0["id"] ?? $0["pid"]) == id }) {
-            if let hp = RealtimeProtocol.int(me["php"]) { playerHP = hp }
+            if let hp = RealtimeProtocol.int(me["php"]) { recordTrustedOwnHP(hp, regionHint: serverRegion) }
             if let shield = RealtimeProtocol.int(me["wsh"]) { playerShield = shield }
             if let le = RealtimeProtocol.int(me["le"]), le > lifeEpoch { lifeEpoch = le }
         }
@@ -1528,8 +1548,67 @@ actor AutomationEngine {
         reporter(.world(nodes: availableSeedCount(), mobs: max(chickens.count, wildMobs.count), serverRegion: serverRegion))
     }
 
-    private func ingestVitals(_ packet: [String: Any]) {
-        if let pid = RealtimeProtocol.int(packet["pid"] ?? packet["id"]), let playerID, pid != playerID { return }
+    private func recordTrustedOwnHP(_ hp: Int, regionHint: String? = nil) {
+        playerHP = hp
+        let trustedRegion = (regionHint ?? serverRegion ?? region)
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+            .lowercased()
+        let timestamp = nowMS
+        lastTrustedOwnHPAtMS = timestamp
+        lastTrustedOwnHPRegion = trustedRegion
+
+        guard GatherRegionPolicy.isDunesRegion(trustedRegion) else { return }
+        guard let baseline = dunesHeatBaselineAtMS else {
+            dunesHeatBaselineAtMS = timestamp
+            dunesHeatBaselineHP = hp
+            return
+        }
+
+        // Repeated/stale snapshots with the same or a higher HP must not restart
+        // the heat clock. Only a value at-or-below the already conservative
+        // estimate may tighten the baseline. A confirmed Potion+ recovery resets
+        // the baseline explicitly in enforceDunesHeatSafetyIfNeeded().
+        let conservativeBefore = DunesHeatSafetyPolicy.estimatedHP(
+            baselineHP: dunesHeatBaselineHP,
+            elapsedMS: timestamp - baseline
+        )
+        if hp < dunesHeatBaselineHP, hp <= conservativeBefore {
+            dunesHeatBaselineAtMS = timestamp
+            dunesHeatBaselineHP = hp
+        }
+    }
+
+    private func hasRecentTrustedDunesHP(maxAgeMS: Double = 5_000) -> Bool {
+        guard let at = lastTrustedOwnHPAtMS,
+              let trustedRegion = lastTrustedOwnHPRegion,
+              GatherRegionPolicy.isDunesRegion(trustedRegion)
+        else { return false }
+        return nowMS - at <= maxAgeMS
+    }
+
+    private func ingestPlayerVitals(_ packet: [String: Any]) {
+        let packetPlayerID = RealtimeProtocol.int(packet["pid"] ?? packet["id"])
+        guard OwnVitalsPolicy.shouldApplyPvit(packetPlayerID: packetPlayerID, playerID: playerID) else { return }
+        let previousHP = playerHP
+        let previousShield = playerShield
+        if let hp = RealtimeProtocol.int(packet["php"]) { recordTrustedOwnHP(hp) }
+        if let shield = RealtimeProtocol.int(packet["wsh"]) { playerShield = shield }
+        if let le = RealtimeProtocol.int(packet["le"]), le > lifeEpoch { lifeEpoch = le }
+        if region.hasPrefix("wild"), (playerHP < previousHP || playerShield < previousShield) {
+            let timestamp = nowMS
+            lastCombatActivityAt = timestamp
+            lastCombatDamageAt = timestamp
+            let previousEffective = max(0, previousHP) + max(0, previousShield)
+            let currentEffective = max(0, playerHP) + max(0, playerShield)
+            if previousEffective - currentEffective >= 30 { emergencyVitalDrop = true }
+        }
+        reporter(.player(position, hp: playerHP, shield: playerShield, region: region))
+    }
+
+    /// `wild_mb_ack` is a direct reply to this client's Wild contact and Node
+    /// v5.2 accepts its vitals without requiring pid/id. Keep that semantic
+    /// separate from the broadcast `pvit` identity gate.
+    private func ingestWildVitals(_ packet: [String: Any]) {
         let previousHP = playerHP
         let previousShield = playerShield
         if let hp = RealtimeProtocol.int(packet["php"]) { playerHP = hp }
@@ -1627,6 +1706,7 @@ actor AutomationEngine {
     }
 
     private func walk(to target: Position, maxSeconds: Double = 35, status: String? = nil) async throws {
+        let stopReasonAtEntry = safeStopReason
         if let status, !status.isEmpty {
             reporter(.state(.moving, status))
         }
@@ -1636,6 +1716,12 @@ actor AutomationEngine {
 
         while true {
             try Task.checkCancellation()
+            if safeStopReason == nil,
+               let mode = activeGatherMode,
+               mode.isDunesGathering,
+               try await enforceDunesHeatSafetyIfNeeded(mode: mode) == false {
+                return
+            }
             let dx = target.x - position.x
             let dz = target.z - position.z
             let distance = hypot(dx, dz)
@@ -1655,6 +1741,9 @@ actor AutomationEngine {
             try await sleep(150)
         }
 
+        if stopReasonAtEntry == nil,
+           safeStopReason != nil,
+           activeGatherMode?.isDunesGathering == true { return }
         position = Position(x: target.x, y: 0.25, z: target.z, ry: target.ry)
         try await sendPosition(moving: false)
         reporter(.player(position, hp: playerHP, shield: playerShield, region: region))
@@ -1696,9 +1785,11 @@ actor AutomationEngine {
     }
 
     private func runGather(mode: ActivityMode, goal: Int) async throws {
-        // RC3.6: se a ferramenta estava no banco, a mesma engine/Presence já a
-        // materializou em World. Daqui em diante a ferramenta precisa estar
-        // carregada e Gathering nunca volta ao World no hot path.
+        activeGatherMode = mode
+        defer { activeGatherMode = nil }
+        // Build 62: ordinary Gathering reaches this point with its tool already
+        // materialized before Presence; Dunes keeps its dedicated preflight.
+        // The tool still must be authoritatively present before any action.
         try await ensureActivityToolLoadout(for: mode)
 
         let targetRegion = GatherRegionPolicy.region(for: mode)
@@ -1720,10 +1811,28 @@ actor AutomationEngine {
             throw EngineError.regionNotConfirmed(targetRegion)
         }
         if mode.isDunesGathering {
-            dunesHeatBaselineAtMS = nowMS
-            dunesHeatBaselineHP = playerHP
-            dunesHeatGraceMS = 30_000
-            reporter(.diagnostic("[DUNES][HEAT] proteção iniciada • HP base=\(playerHP) • grace=30s • fallback monotônico ativo"))
+            // Never start a full-loot harvest from an unverified/local HP value.
+            // Wait briefly for an own-player snapshot/pvit from this Dunes Presence.
+            let vitalsDeadline = nowMS + 5_000
+            while !hasRecentTrustedDunesHP(), nowMS < vitalsDeadline {
+                try Task.checkCancellation()
+                try await sleep(80)
+            }
+            guard hasRecentTrustedDunesHP() else {
+                safeStopReason = .dunesHeatSafety
+                reporter(.state(.recovering, "HP autoritativo indisponível • saindo das Dunes"))
+                reporter(.log("🛑 Proteção das Dunes • HP próprio não confirmado por snapshot/pvit • nenhuma coleta iniciada • saída para The Shores obrigatória"))
+                try await exitDunesToShores(reason: "HP autoritativo indisponível")
+                safeStopCompleted = true
+                return
+            }
+            reporter(.diagnostic("[DUNES][HEAT] proteção iniciada • HP autoritativo base=\(dunesHeatBaselineHP) • 1 HP/10s • limite=30 • sem grace artificial"))
+            reporter(.log("❤️‍🔥 Proteção térmica Build 62 • limite efetivo=30 HP • estimativa conservadora=1 HP/10s • sem grace artificial"))
+            if try await enforceDunesHeatSafetyIfNeeded(mode: mode) == false {
+                try await exitDunesToShores(reason: "proteção contra calor")
+                safeStopCompleted = true
+                return
+            }
         }
         gatherPositionMemory = gatherKnowledge.positionSnapshot(region: targetRegion)
 
@@ -1775,6 +1884,8 @@ actor AutomationEngine {
                         reporter(.log("🧭 \(mode.displayName) • nenhum alvo elegível no snapshot atual • scout \(dunesScoutMoves)/3 usando \(scoutLabel) \(scout.targetKey) apenas como âncora; nenhuma coleta do recurso errado será enviada"))
                         let scoutPosition = gatherPositionMemory[scout.signature] ?? scout.position
                         try await walk(to: scoutPosition, status: "Explorando recursos das Dunes")
+                        if safeStopReason != nil { break }
+                        if try await enforceDunesHeatSafetyIfNeeded(mode: mode) == false { break }
                         position.ry = scoutPosition.ry
                         try await sendPosition(moving: false)
                         try await sleep(900)
@@ -1802,6 +1913,7 @@ actor AutomationEngine {
             reporter(.diagnostic("[MOVE] arrived \(seed.targetKey) pos=\(format(position.x)),\(format(position.z)) ry=\(format(position.ry))"))
 
             let result = try await harvestWithRecovery(seed: seed, mode: mode)
+            if safeStopReason != nil { break }
             if result.felled {
                 reporter(.attempt)
                 let signature = seed.signature
@@ -2005,7 +2117,6 @@ actor AutomationEngine {
                 if confirmed, playerHP > DunesHeatSafetyPolicy.minimumSafeHP {
                     dunesHeatBaselineAtMS = nowMS
                     dunesHeatBaselineHP = playerHP
-                    dunesHeatGraceMS = 0
                     reporter(.log("✅ Proteção térmica confirmada • HP \(before) → \(playerHP) • coleta retomada"))
                     return true
                 }
@@ -2021,9 +2132,18 @@ actor AutomationEngine {
 
     private func estimatedDunesHPFromMonotonicClock() -> Int {
         guard let baseline = dunesHeatBaselineAtMS else { return playerHP }
-        let exposedMS = max(0, nowMS - baseline - dunesHeatGraceMS)
-        let expectedDamage = Int(floor(exposedMS / 10_000))
-        return max(0, dunesHeatBaselineHP - expectedDamage)
+        return DunesHeatSafetyPolicy.estimatedHP(
+            baselineHP: dunesHeatBaselineHP,
+            elapsedMS: nowMS - baseline
+        )
+    }
+
+    private func maySendGatherAction(for mode: ActivityMode) async throws -> Bool {
+        guard safeStopReason == nil else { return false }
+        if mode.isDunesGathering {
+            return try await enforceDunesHeatSafetyIfNeeded(mode: mode)
+        }
+        return true
     }
 
     private func driveDunesHealthPotionPlusTicks(beforeDoseHP: Int) async throws -> Bool {
@@ -2122,6 +2242,9 @@ actor AutomationEngine {
 
         position.ry = position.ry.isFinite ? position.ry : seed.position.ry
         position.y = 0.25
+        guard try await maySendGatherAction(for: mode) else {
+            return HarvestResult(felled: false, h: harvestH, hm: harvestHM, loot: harvestLoot, reason: "Dunes safety stop", accepted: false, proofMiss: false)
+        }
         try await sendPosition(moving: false)
         try await sleep(55)
 
@@ -2153,6 +2276,7 @@ actor AutomationEngine {
                 let gap = GatherTimingPolicy.treeFrameGapMS(frameCount: profile.count)
                 for (index, delta) in profile.enumerated() {
                     if index > 0 { try await waitRelative(gap) }
+                    guard try await maySendGatherAction(for: mode) else { return }
                     position.y = 0.25 + delta
                     try await sendPosition(moving: false, action: ["act": "chop", "eq": tool])
                 }
@@ -2167,6 +2291,7 @@ actor AutomationEngine {
                     let shapeMax = Self.mineMP1.last ?? 1
                     for index in Self.mineMP1.indices {
                         if index > 0 { try await waitRelative(GatherTimingPolicy.mineFrameGapMS) }
+                        guard try await maySendGatherAction(for: mode) else { return }
                         let shape = Self.mineMP1[index] / shapeMax
                         let value = min(1, mineProgress + max(0, next - mineProgress) * shape)
                         position.y = 0.25 + Self.mineY1[index]
@@ -2176,6 +2301,7 @@ actor AutomationEngine {
                 } else {
                     for index in mpProfile.indices {
                         if index > 0 { try await waitRelative(GatherTimingPolicy.mineFrameGapMS) }
+                        guard try await maySendGatherAction(for: mode) else { return }
                         mineProgress = max(mineProgress, mpProfile[index])
                         position.y = 0.25 + yProfile[index % yProfile.count]
                         try await sendPosition(moving: false, action: ["act": "mine", "eq": tool, "mc": tile.0, "mr": tile.1, "mp": mineProgress])
@@ -2191,7 +2317,7 @@ actor AutomationEngine {
         }
 
         func sendHit(proof: String?) async throws {
-            if safeStopReason != nil { return }
+            guard try await maySendGatherAction(for: mode) else { return }
             let data = try RealtimeProtocol.harvestHit(
                 region: region,
                 kind: kind,
@@ -2301,6 +2427,7 @@ actor AutomationEngine {
         reporter(.state(.acting, kind == "tree" ? "Cortando" : "Minerando"))
         while damageHits < 12, !(harvestHM < 99 && harvestH >= harvestHM) {
             try Task.checkCancellation()
+            guard try await maySendGatherAction(for: mode) else { break }
             guard !harvestProof.isEmpty else { break }
             let proof = harvestProof
             let proofBefore = harvestProofSerial
@@ -2734,17 +2861,12 @@ actor AutomationEngine {
         }
     }
 
-    /// Executed by the definitive session engine when its single Presence was
-    /// bootstrapped in World. It reuses the proven movement + backpack path,
-    /// confirms the tool, and leaves World→gather region to runGather on this same
-    /// transport.
+    /// Compatibility fallback for callers that still classify a bank-only tool
+    /// as `.needsWorld`. Build 62 never requires a World Presence: the backpack
+    /// mutation itself is HTTP-only and the Presence stays in the gather region.
     @discardableResult
     func prepareGatherToolFromWorld(for mode: ActivityMode) async throws -> Int {
         guard mode.isGathering, let fallback = ActivityToolPolicy.requiredTool(for: mode) else { return 0 }
-
-        guard try await waitForRegion("world", timeoutMS: 5_000) else {
-            throw EngineError.regionNotConfirmed("world")
-        }
 
         let state = try await http.backpackState()
         guard let best = ActivityToolPolicy.bestSelection(in: state.backpack, for: mode) else {
@@ -2759,7 +2881,6 @@ actor AutomationEngine {
         let tool = best.type
         let name = ActivityToolPolicy.displayName(tool)
 
-        try await ensureWorldBankAccess(reason: "buscar \(name)")
         let carried = try await http.ensureCarriedItem(type: tool, quantity: 1, preferHotbar: true)
         let confirmed = try await http.itemLocationCounts(type: tool)
         let finalCount = max(carried, confirmed.carried)
