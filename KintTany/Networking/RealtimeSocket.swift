@@ -15,6 +15,14 @@ struct RealtimeConnection {
     let populationLabel: String
 }
 
+struct ServerGatePolicy {
+    /// An explicit gate denial is authoritative for candidate selection. A nil
+    /// result means the probe itself was inconclusive and may still be attempted.
+    static func shouldAttempt(gate: Bool?) -> Bool {
+        gate != false
+    }
+}
+
 actor RealtimeSocket {
     private struct ServerCandidate {
         let id: Int
@@ -86,15 +94,13 @@ actor RealtimeSocket {
 
             let gate = await gateCheck(cookie: cookie, serverID: candidate.id)
             if gate == false {
-                // O gate-check não é tratado como autoridade final. Há contas que
-                // entram manualmente no shard mesmo quando este endpoint responde 403.
-                // A validação real é feita pelo fluxo connect-token → queue_ready → presence.
-                trace("[SERVER] \(candidate.shard) gate-check recusou • validação real será feita pela conexão")
+                trace("[SERVER] \(candidate.shard) gate-check recusou • servidor ignorado")
             } else if gate == true {
                 trace("[SERVER] \(candidate.shard) gate-check aceitou")
             } else {
                 trace("[WARN] gate-check de \(candidate.shard) inconclusivo • validação real será feita pela conexão")
             }
+            guard ServerGatePolicy.shouldAttempt(gate: gate) else { continue }
 
             attempted += 1
             trace("[SERVER] Tentando \(candidate.name) (\(candidate.shard)) • carga=\(candidate.populationLabel) • fila=\(candidate.queueLength) • full=\(candidate.full ? "sim" : "não")")
