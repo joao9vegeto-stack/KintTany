@@ -724,14 +724,14 @@ final class RealtimeProtocolTests: XCTestCase {
     }
 
     @MainActor
-    func testGatherPreflightUsesOneWorldPresenceWhenToolIsInBank() {
+    func testGatherPreflightNeverBootstrapsWorldWhenToolWasInBank() {
         let bootstrap = AutomationEngine.bootstrapForRun(
             for: .tree,
             gatherDisposition: .needsWorld(tool: "tool_axe")
         )
-        XCTAssertEqual(bootstrap.region, "world")
-        XCTAssertEqual(bootstrap.position.x, 22.5, accuracy: 0.001)
-        XCTAssertEqual(bootstrap.position.z, -3.5, accuracy: 0.001)
+        XCTAssertEqual(bootstrap.region, "eldergrove")
+        XCTAssertEqual(bootstrap.position.x, -6.5, accuracy: 0.001)
+        XCTAssertEqual(bootstrap.position.z, -18.5, accuracy: 0.001)
     }
 
     @MainActor
@@ -779,13 +779,34 @@ final class RealtimeProtocolTests: XCTestCase {
         XCTAssertTrue(ActivityMode.cacti.requiresSafeExit)
     }
 
-    func testDunesHeatSafetyUsesAuthoritativeHPThresholdOnlyForDunes() {
-        XCTAssertFalse(DunesHeatSafetyPolicy.requiresRecovery(hp: 71, mode: .silver))
-        XCTAssertTrue(DunesHeatSafetyPolicy.requiresRecovery(hp: 70, mode: .silver))
+    func testDunesHeatSafetyUsesThirtyHPThresholdOnlyForDunes() {
+        XCTAssertFalse(DunesHeatSafetyPolicy.requiresRecovery(hp: 31, mode: .silver))
+        XCTAssertTrue(DunesHeatSafetyPolicy.requiresRecovery(hp: 30, mode: .silver))
         XCTAssertTrue(DunesHeatSafetyPolicy.requiresRecovery(hp: 13, mode: .cacti))
         XCTAssertFalse(DunesHeatSafetyPolicy.requiresRecovery(hp: 13, mode: .iron))
+        XCTAssertEqual(DunesHeatSafetyPolicy.minimumSafeHP, 30)
         XCTAssertEqual(DunesHeatSafetyPolicy.recoveryGoalHP, 90)
         XCTAssertEqual(DunesHeatSafetyPolicy.carriedHealthPotionPlusTarget, 6)
+    }
+
+    func testDunesHeatEstimateHasNoArtificialGracePeriod() {
+        XCTAssertEqual(DunesHeatSafetyPolicy.estimatedHP(baselineHP: 70, elapsedMS: 0), 70)
+        XCTAssertEqual(DunesHeatSafetyPolicy.estimatedHP(baselineHP: 70, elapsedMS: 9_999), 70)
+        XCTAssertEqual(DunesHeatSafetyPolicy.estimatedHP(baselineHP: 70, elapsedMS: 10_000), 69)
+        XCTAssertEqual(DunesHeatSafetyPolicy.estimatedHP(baselineHP: 70, elapsedMS: 42_000), 66)
+    }
+
+    func testPvitRequiresExplicitOwnPlayerIdentity() {
+        XCTAssertFalse(OwnVitalsPolicy.shouldApplyPvit(packetPlayerID: nil, playerID: 41106))
+        XCTAssertFalse(OwnVitalsPolicy.shouldApplyPvit(packetPlayerID: 999, playerID: 41106))
+        XCTAssertFalse(OwnVitalsPolicy.shouldApplyPvit(packetPlayerID: 41106, playerID: nil))
+        XCTAssertTrue(OwnVitalsPolicy.shouldApplyPvit(packetPlayerID: 41106, playerID: 41106))
+    }
+
+    func testServerGateExplicitDenialSkipsCandidateButNilRemainsAttemptable() {
+        XCTAssertFalse(ServerGatePolicy.shouldAttempt(gate: false))
+        XCTAssertTrue(ServerGatePolicy.shouldAttempt(gate: true))
+        XCTAssertTrue(ServerGatePolicy.shouldAttempt(gate: nil))
     }
 
     func testGatherResourceMarkerUsesOnlyAuthoritativeBalanceDelta() {
