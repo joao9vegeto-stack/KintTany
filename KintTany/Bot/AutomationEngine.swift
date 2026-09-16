@@ -77,29 +77,6 @@ struct GatherTimingPolicy {
 
 }
 
-struct BackpackSaveRetryPolicy {
-    static let maximumAttempts = 5
-
-    static func retryDelayMS(after attempt: Int) -> Int {
-        let delays = [120, 250, 500, 1_000]
-        return delays[min(max(0, attempt - 1), delays.count - 1)]
-    }
-
-    static func isStaleSave(_ message: String) -> Bool {
-        message.range(of: "stale_save", options: [.caseInsensitive, .diacriticInsensitive]) != nil
-    }
-
-    static func shouldRetry(message: String, attempt: Int) -> Bool {
-        isStaleSave(message) && attempt < maximumAttempts
-    }
-}
-
-struct BackpackFreshReadPolicy {
-    static func path(nonce: String) -> String {
-        "/api/auth/me?fresh=\(nonce)"
-    }
-}
-
 struct DunesHeatSafetyPolicy {
     /// The threshold includes margin for the walk to the north portal, heat
     /// ticks during that walk and a possible hostile contact on the route.
@@ -1313,14 +1290,14 @@ actor AutomationEngine {
         //
         // Ainda preservamos a posição recebida do servidor para a telemetria da UI;
         // apenas não deixamos um snapshot antigo alterar a posição operacional.
-        var authoritativePosition = position
+        var snapshotPosition = position
         if let players = packet["players"] as? [[String: Any]], let id = playerID,
            let me = players.first(where: { RealtimeProtocol.int($0["id"]) == id }) {
             if let x = RealtimeProtocol.double(me["x"]), let z = RealtimeProtocol.double(me["z"]) {
-                authoritativePosition.x = x
-                authoritativePosition.z = z
-                if let y = RealtimeProtocol.double(me["y"]) { authoritativePosition.y = y }
-                if let ry = RealtimeProtocol.double(me["ry"]) { authoritativePosition.ry = ry }
+                snapshotPosition.x = x
+                snapshotPosition.z = z
+                if let y = RealtimeProtocol.double(me["y"]) { snapshotPosition.y = y }
+                if let ry = RealtimeProtocol.double(me["ry"]) { snapshotPosition.ry = ry }
             }
             if let hp = RealtimeProtocol.int(me["php"]) { playerHP = hp }
             if let shield = RealtimeProtocol.int(me["wsh"]) { playerShield = shield }
@@ -1384,7 +1361,7 @@ actor AutomationEngine {
             if previousEffective - currentEffective >= 30 { emergencyVitalDrop = true }
         }
 
-        reporter(.player(authoritativePosition, hp: playerHP, shield: playerShield, region: serverRegion ?? region))
+        reporter(.player(snapshotPosition, hp: playerHP, shield: playerShield, region: serverRegion ?? region))
         reporter(.world(nodes: availableSeedCount(), mobs: max(chickens.count, wildMobs.count), serverRegion: serverRegion))
     }
 
@@ -5690,24 +5667,6 @@ private struct KintaraHTTPClient {
     /// e retira poções prontas do banco até a meta. Preserva todos os outros slots.
     @discardableResult
     func ensurePotionLoadout(targets: [String: Int]) async throws -> BackpackState {
-        for attempt in 1...BackpackSaveRetryPolicy.maximumAttempts {
-            do {
-                return try await ensurePotionLoadoutOnce(targets: targets)
-            } catch {
-                let message = error.localizedDescription
-                guard BackpackSaveRetryPolicy.shouldRetry(message: message, attempt: attempt) else {
-                    if BackpackSaveRetryPolicy.isStaleSave(message) {
-                        throw HTTPError.server("stale_save após \(attempt) tentativas com inventário fresco")
-                    }
-                    throw error
-                }
-                try await waitForFreshBackpackRetry(after: attempt)
-            }
-        }
-        throw HTTPError.server("stale_save após \(BackpackSaveRetryPolicy.maximumAttempts) tentativas com inventário fresco")
-    }
-
-    private func ensurePotionLoadoutOnce(targets: [String: Int]) async throws -> BackpackState {
         let state = try await backpackState()
         var backpack = state.backpack
         var hotbar = backpack["hotbar"] as? [Any] ?? Array(repeating: NSNull(), count: 6)
@@ -5826,24 +5785,6 @@ private struct KintaraHTTPClient {
     /// parcialmente do banco até a quantidade solicitada.
     @discardableResult
     func ensureCarriedItem(type: String, quantity targetRaw: Int, preferHotbar: Bool) async throws -> Int {
-        for attempt in 1...BackpackSaveRetryPolicy.maximumAttempts {
-            do {
-                return try await ensureCarriedItemOnce(type: type, quantity: targetRaw, preferHotbar: preferHotbar)
-            } catch {
-                let message = error.localizedDescription
-                guard BackpackSaveRetryPolicy.shouldRetry(message: message, attempt: attempt) else {
-                    if BackpackSaveRetryPolicy.isStaleSave(message) {
-                        throw HTTPError.server("stale_save após \(attempt) tentativas com inventário fresco")
-                    }
-                    throw error
-                }
-                try await waitForFreshBackpackRetry(after: attempt)
-            }
-        }
-        throw HTTPError.server("stale_save após \(BackpackSaveRetryPolicy.maximumAttempts) tentativas com inventário fresco")
-    }
-
-    private func ensureCarriedItemOnce(type: String, quantity targetRaw: Int, preferHotbar: Bool) async throws -> Int {
         let target = max(1, targetRaw)
         let state = try await backpackState()
         var backpack = state.backpack
@@ -5879,7 +5820,7 @@ private struct KintaraHTTPClient {
     }
 
     func backpackState() async throws -> BackpackState {
-        let state = try await get(BackpackFreshReadPolicy.path(nonce: UUID().uuidString))
+        let state = try await get("/api/auth/me")
         guard let stateSeq = RealtimeProtocol.int(state["stateSeq"]), let backpack = state["backpack"] as? [String: Any] else {
             throw HTTPError.invalidState
         }
@@ -5964,31 +5905,6 @@ private struct KintaraHTTPClient {
     }
 
     private func depositIntoBank(_ wanted: [String: Int], sourceKeys: [String]) async throws -> BankDepositResult {
-        var retryDiagnostics: [String] = []
-        for attempt in 1...BackpackSaveRetryPolicy.maximumAttempts {
-            do {
-                let result = try await depositIntoBankOnce(wanted, sourceKeys: sourceKeys)
-                return BankDepositResult(
-                    confirmed: result.confirmed,
-                    unresolved: result.unresolved,
-                    diagnostics: retryDiagnostics + result.diagnostics
-                )
-            } catch {
-                let message = error.localizedDescription
-                guard BackpackSaveRetryPolicy.shouldRetry(message: message, attempt: attempt) else {
-                    if BackpackSaveRetryPolicy.isStaleSave(message) {
-                        throw HTTPError.server("stale_save após \(attempt) tentativas com inventário fresco")
-                    }
-                    throw error
-                }
-                retryDiagnostics.append("stale_save na tentativa \(attempt) • estado descartado • nova leitura autoritativa solicitada")
-                try await waitForFreshBackpackRetry(after: attempt)
-            }
-        }
-        throw HTTPError.server("stale_save após \(BackpackSaveRetryPolicy.maximumAttempts) tentativas com inventário fresco")
-    }
-
-    private func depositIntoBankOnce(_ wanted: [String: Int], sourceKeys: [String]) async throws -> BankDepositResult {
         let state = try await backpackState()
         var backpack = state.backpack
         var sourceArrays: [String: [Any]] = [:]
@@ -6148,27 +6064,10 @@ private struct KintaraHTTPClient {
     }
 
     func persistLoot(_ item: String, amount: Int) async throws -> Int? {
-        for attempt in 1...BackpackSaveRetryPolicy.maximumAttempts {
-            do {
-                return try await persistLootOnce(item, amount: amount)
-            } catch {
-                let message = error.localizedDescription
-                guard BackpackSaveRetryPolicy.shouldRetry(message: message, attempt: attempt) else {
-                    if BackpackSaveRetryPolicy.isStaleSave(message) {
-                        throw HTTPError.server("stale_save após \(attempt) tentativas com inventário fresco")
-                    }
-                    throw error
-                }
-                try await waitForFreshBackpackRetry(after: attempt)
-            }
+        let state = try await get("/api/auth/me")
+        guard let stateSeq = RealtimeProtocol.int(state["stateSeq"]), var backpack = state["backpack"] as? [String: Any] else {
+            throw HTTPError.invalidState
         }
-        throw HTTPError.server("stale_save após \(BackpackSaveRetryPolicy.maximumAttempts) tentativas com inventário fresco")
-    }
-
-    private func persistLootOnce(_ item: String, amount: Int) async throws -> Int? {
-        let state = try await backpackState()
-        let stateSeq = state.stateSeq
-        var backpack = state.backpack
 
         let current = RealtimeProtocol.int(backpack[item]) ?? 0
         backpack[item] = current + amount
@@ -6212,20 +6111,8 @@ private struct KintaraHTTPClient {
         if let confirmed = response["backpack"] as? [String: Any] {
             return RealtimeProtocol.int(confirmed[item])
         }
-        let fresh = try await backpackState()
-        return RealtimeProtocol.int(fresh.backpack[item])
-    }
-
-    private func waitForFreshBackpackRetry(after attempt: Int) async throws {
-        try await waitForBackpackState(milliseconds: BackpackSaveRetryPolicy.retryDelayMS(after: attempt))
-    }
-
-    private func waitForBackpackState(milliseconds: Int) async throws {
-        try Task.checkCancellation()
-        try await Task.sleep(
-            nanoseconds: UInt64(max(1, milliseconds)) * 1_000_000
-        )
-        try Task.checkCancellation()
+        let fresh = try await get("/api/auth/me")
+        return (fresh["backpack"] as? [String: Any]).flatMap { RealtimeProtocol.int($0[item]) }
     }
 
     private func request(method: String, path: String, body: [String: Any]?) async throws -> [String: Any] {
@@ -6240,8 +6127,8 @@ private struct KintaraHTTPClient {
         request.httpMethod = method
         request.timeoutInterval = 15
         if method == "GET", path.hasPrefix("/api/auth/me") {
-            request.cachePolicy = .reloadIgnoringLocalAndRemoteCacheData
-            request.setValue("no-store, no-cache, max-age=0", forHTTPHeaderField: "Cache-Control")
+            request.cachePolicy = .reloadIgnoringLocalCacheData
+            request.setValue("no-cache", forHTTPHeaderField: "Cache-Control")
             request.setValue("no-cache", forHTTPHeaderField: "Pragma")
         }
         request.setValue(cookie, forHTTPHeaderField: "Cookie")
