@@ -241,15 +241,87 @@ final class RealtimeProtocolTests: XCTestCase {
         XCTAssertFalse(CombatBankFirstPolicy.shouldBankFirst(type: "quest_item", slot: ["t": "quest_item", "n": 1, "soulbound": true]))
     }
 
-    func testBankMutationWaitsForNodeV52SettlementAndUsesBoundedRecalculation() {
+    func testBankMutationUsesBounded409RebuildWithoutBlindStateSeqPolling() throws {
         XCTAssertEqual(BankMutationPolicy.postMovementSettlingMS, 1_200)
-        XCTAssertEqual(BankMutationPolicy.stableProbeIntervalMS, 250)
-        XCTAssertEqual(BankMutationPolicy.requiredEqualStateSeqReads, 3)
-        XCTAssertEqual(BankMutationPolicy.stabilizationTimeoutMS, 8_000)
         XCTAssertEqual(BankMutationPolicy.maximumSaveAttempts, 2)
         XCTAssertTrue(BankMutationPolicy.isStaleSave("stale_save"))
         XCTAssertTrue(BankMutationPolicy.isStaleSave("STALE_SAVE after movement"))
         XCTAssertFalse(BankMutationPolicy.isStaleSave("bank_full"))
+
+        let topLevel: [String: Any] = [
+            "error": "stale_save",
+            "stateSeq": 812,
+            "backpack": ["wood": 31, "silver_ore": 7]
+        ]
+        let state = try XCTUnwrap(BankMutationPolicy.authoritativeState(from: topLevel))
+        XCTAssertEqual(state.stateSeq, 812)
+        XCTAssertEqual(RealtimeProtocol.int(state.backpack["wood"]), 31)
+
+        let nested: [String: Any] = [
+            "error": "stale_save",
+            "current": [
+                "stateSeq": 813,
+                "backpack": ["wood": 32, "cacti": 4]
+            ]
+        ]
+        let nestedState = try XCTUnwrap(BankMutationPolicy.authoritativeState(from: nested))
+        XCTAssertEqual(nestedState.stateSeq, 813)
+        XCTAssertEqual(RealtimeProtocol.int(nestedState.backpack["cacti"]), 4)
+    }
+
+    func testCurrentSaveBackpackPayloadPreservesOfficialInventorySections() throws {
+        let armor: [Any] = [["t": "armor_test", "n": 1], NSNull()]
+        let bank: [Any] = [["t": "silver_axe", "n": 1], NSNull()]
+        let backpack: [String: Any] = [
+            "wood": 12,
+            "stone": 13,
+            "coal": 14,
+            "metal": 15,
+            "silver_ore": 16,
+            "cacti": 17,
+            "iron_ore": 18,
+            "bait_feather": 19,
+            "bait_trout": 20,
+            "fish_bass": 21,
+            "fish_tuna": 22,
+            "burnt_herring": 23,
+            "bankPages": 2,
+            "hotbar": [["t": "tool_axe", "n": 1], NSNull()],
+            "invSlots": [["t": "wood", "n": 12], NSNull()],
+            "bankSlots": bank,
+            "armorSlots": armor,
+            "mountSlots": [NSNull()],
+            "cosmeticSlots": [NSNull()],
+            "petSlots": [NSNull()],
+            "furnitureSlots": [NSNull()],
+            "equippedHotbar": 0,
+            "mountDragonRiding": true
+        ]
+
+        let body = BackpackSavePayloadPolicy.makeBody(
+            backpack: backpack,
+            baseSeq: 900,
+            fleet: "us",
+            shardID: 4
+        )
+        let resources = try XCTUnwrap(body["resources"] as? [String: Any])
+
+        XCTAssertEqual(RealtimeProtocol.int(resources["wood"]), 12)
+        XCTAssertNil(resources["silver_ore"])
+        XCTAssertNil(resources["cacti"])
+        XCTAssertEqual(RealtimeProtocol.int(body["silver_ore"]), 16)
+        XCTAssertEqual(RealtimeProtocol.int(body["cacti"]), 17)
+        XCTAssertEqual(RealtimeProtocol.int(body["iron_ore"]), 18)
+        XCTAssertEqual(RealtimeProtocol.int(body["bait_feather"]), 19)
+        XCTAssertEqual(RealtimeProtocol.int(body["fish_bass"]), 21)
+        XCTAssertEqual(RealtimeProtocol.int(body["bankPages"]), 2)
+        XCTAssertEqual(body["fleet"] as? String, "us")
+        XCTAssertEqual(RealtimeProtocol.int(body["shardId"]), 4)
+        XCTAssertEqual(RealtimeProtocol.int(body["baseSeq"]), 900)
+        XCTAssertNotNil(body["intentionalRelicRemovals"] as? [Any])
+        XCTAssertEqual((body["armorSlots"] as? [Any])?.count, armor.count)
+        XCTAssertEqual((body["bankSlots"] as? [Any])?.count, bank.count)
+        XCTAssertEqual(RealtimeProtocol.bool(body["mountDragonRiding"]), true)
     }
 
     func testBankAllocatorSkipsFullTenKStackAndUsesNextPartialStack() throws {
@@ -512,16 +584,53 @@ final class RealtimeProtocolTests: XCTestCase {
     }
 
 
-    func testActivityToolPolicyMapsOnlyGatherAndFishingTools() {
+    func testActivityToolPolicyRecognizesAndPrefersEquipmentTiers() throws {
         XCTAssertEqual(ActivityToolPolicy.requiredTool(for: .tree), "tool_axe")
         XCTAssertEqual(ActivityToolPolicy.requiredTool(for: .stone), "tool_pickaxe")
         XCTAssertEqual(ActivityToolPolicy.requiredTool(for: .coal), "tool_pickaxe")
+        XCTAssertEqual(ActivityToolPolicy.acceptedTools(for: .tree), ["silver_axe", "tool_axe_l2", "tool_axe"])
         XCTAssertEqual(ActivityToolPolicy.acceptedTools(for: .silver), ["silver_pickaxe", "tool_pickaxe_l2", "copper_pickaxe", "tool_pickaxe"])
         XCTAssertEqual(ActivityToolPolicy.acceptedTools(for: .cacti), ["silver_axe", "tool_axe_l2"])
         XCTAssertEqual(ActivityToolPolicy.requiredTool(for: .fishing), "tool_fishing_rod")
         XCTAssertNil(ActivityToolPolicy.requiredTool(for: .chicken))
-        XCTAssertNil(ActivityToolPolicy.requiredTool(for: .zombie))
-        XCTAssertNil(ActivityToolPolicy.requiredTool(for: .dragon))
+
+        XCTAssertTrue(ActivityToolPolicy.isCompatible(type: "copper_axe", with: .tree))
+        XCTAssertTrue(ActivityToolPolicy.isCompatible(type: "iron_axe", with: .tree))
+        XCTAssertTrue(ActivityToolPolicy.isCompatible(type: "silver_axe", with: .tree))
+        XCTAssertTrue(ActivityToolPolicy.isCompatible(type: "copper_pickaxe", with: .iron))
+        XCTAssertFalse(ActivityToolPolicy.isCompatible(type: "tool_pickaxe", with: .tree))
+        XCTAssertFalse(ActivityToolPolicy.isCompatible(type: "tool_axe", with: .cacti))
+
+        let backpack: [String: Any] = [
+            "hotbar": [["t": "tool_axe", "n": 1], ["t": "copper_pickaxe", "n": 1]],
+            "invSlots": [["t": "iron_axe", "n": 1]],
+            "bankSlots": [["t": "silver_axe", "n": 1], ["t": "silver_pickaxe", "n": 1]]
+        ]
+        let tree = try XCTUnwrap(ActivityToolPolicy.bestSelection(in: backpack, for: .tree))
+        XCTAssertEqual(tree.type, "silver_axe")
+        XCTAssertEqual(tree.carried, 0)
+        XCTAssertEqual(tree.bank, 1)
+
+        let stone = try XCTUnwrap(ActivityToolPolicy.bestSelection(in: backpack, for: .stone))
+        XCTAssertEqual(stone.type, "silver_pickaxe")
+        XCTAssertEqual(stone.bank, 1)
+    }
+
+    func testCombatBankFirstProtectsEverySwordTierAndBestSwordSelection() throws {
+        for sword in ["wild_sword", "wild_sword_l2", "copper_sword", "iron_sword", "silver_sword"] {
+            XCTAssertTrue(CombatBankFirstPolicy.isCombatRequiredType(sword))
+            XCTAssertFalse(CombatBankFirstPolicy.shouldBankFirst(type: sword, slot: ["t": sword, "n": 1]))
+        }
+        XCTAssertFalse(CombatBankFirstPolicy.isCombatRequiredType("silver_axe"))
+
+        let backpack: [String: Any] = [
+            "hotbar": [["t": "wild_sword", "n": 1]],
+            "invSlots": [["t": "iron_sword", "n": 1]],
+            "bankSlots": [["t": "silver_sword", "n": 1]]
+        ]
+        let best = try XCTUnwrap(EquipmentTierPolicy.bestSelection(in: backpack, family: .sword, minimumTier: 1))
+        XCTAssertEqual(best.type, "silver_sword")
+        XCTAssertEqual(best.bank, 1)
     }
 
     func testSessionRateStillUsesOnlyAuthoritativeSuccesses() {
