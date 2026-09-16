@@ -241,36 +241,11 @@ final class RealtimeProtocolTests: XCTestCase {
         XCTAssertFalse(CombatBankFirstPolicy.shouldBankFirst(type: "quest_item", slot: ["t": "quest_item", "n": 1, "soulbound": true]))
     }
 
-    func testBankMutationUsesBounded409RebuildWithoutBlindStateSeqPolling() throws {
+    func testBankMutationKeepsBuild43SingleSnapshotTransactionShape() {
         XCTAssertEqual(BankMutationPolicy.postMovementSettlingMS, 1_200)
-        XCTAssertEqual(BankMutationPolicy.maximumSaveAttempts, 2)
-        XCTAssertTrue(BankMutationPolicy.isStaleSave("stale_save"))
-        XCTAssertTrue(BankMutationPolicy.isStaleSave("STALE_SAVE after movement"))
-        XCTAssertFalse(BankMutationPolicy.isStaleSave("bank_full"))
-
-        let topLevel: [String: Any] = [
-            "error": "stale_save",
-            "stateSeq": 812,
-            "backpack": ["wood": 31, "silver_ore": 7]
-        ]
-        let state = try XCTUnwrap(BankMutationPolicy.authoritativeState(from: topLevel))
-        XCTAssertEqual(state.stateSeq, 812)
-        XCTAssertEqual(RealtimeProtocol.int(state.backpack["wood"]), 31)
-
-        let nested: [String: Any] = [
-            "error": "stale_save",
-            "current": [
-                "stateSeq": 813,
-                "backpack": ["wood": 32, "cacti": 4]
-            ]
-        ]
-        let nestedState = try XCTUnwrap(BankMutationPolicy.authoritativeState(from: nested))
-        XCTAssertEqual(nestedState.stateSeq, 813)
-        XCTAssertEqual(RealtimeProtocol.int(nestedState.backpack["cacti"]), 4)
     }
 
-    func testCurrentSaveBackpackPayloadPreservesOfficialInventorySections() throws {
-        let armor: [Any] = [["t": "armor_test", "n": 1], NSNull()]
+    func testStableSaveBackpackPayloadPreservesBuild43ContractAndCurrentResources() throws {
         let bank: [Any] = [["t": "silver_axe", "n": 1], NSNull()]
         let backpack: [String: Any] = [
             "wood": 12,
@@ -279,17 +254,11 @@ final class RealtimeProtocolTests: XCTestCase {
             "metal": 15,
             "silver_ore": 16,
             "cacti": 17,
-            "iron_ore": 18,
-            "bait_feather": 19,
-            "bait_trout": 20,
-            "fish_bass": 21,
-            "fish_tuna": 22,
-            "burnt_herring": 23,
-            "bankPages": 2,
+            "potion_health_l2": 3,
             "hotbar": [["t": "tool_axe", "n": 1], NSNull()],
             "invSlots": [["t": "wood", "n": 12], NSNull()],
             "bankSlots": bank,
-            "armorSlots": armor,
+            "armorSlots": [["t": "armor_test", "n": 1]],
             "mountSlots": [NSNull()],
             "cosmeticSlots": [NSNull()],
             "petSlots": [NSNull()],
@@ -298,30 +267,24 @@ final class RealtimeProtocolTests: XCTestCase {
             "mountDragonRiding": true
         ]
 
-        let body = BackpackSavePayloadPolicy.makeBody(
-            backpack: backpack,
-            baseSeq: 900,
-            fleet: "us",
-            shardID: 4
-        )
+        let body = BackpackSavePayloadPolicy.makeBody(backpack: backpack, baseSeq: 900)
         let resources = try XCTUnwrap(body["resources"] as? [String: Any])
 
         XCTAssertEqual(RealtimeProtocol.int(resources["wood"]), 12)
-        XCTAssertNil(resources["silver_ore"])
-        XCTAssertNil(resources["cacti"])
-        XCTAssertEqual(RealtimeProtocol.int(body["silver_ore"]), 16)
-        XCTAssertEqual(RealtimeProtocol.int(body["cacti"]), 17)
-        XCTAssertEqual(RealtimeProtocol.int(body["iron_ore"]), 18)
-        XCTAssertEqual(RealtimeProtocol.int(body["bait_feather"]), 19)
-        XCTAssertEqual(RealtimeProtocol.int(body["fish_bass"]), 21)
-        XCTAssertEqual(RealtimeProtocol.int(body["bankPages"]), 2)
-        XCTAssertEqual(body["fleet"] as? String, "us")
-        XCTAssertEqual(RealtimeProtocol.int(body["shardId"]), 4)
+        XCTAssertEqual(RealtimeProtocol.int(resources["silver_ore"]), 16)
+        XCTAssertEqual(RealtimeProtocol.int(resources["cacti"]), 17)
+        XCTAssertEqual(RealtimeProtocol.int(resources["potion_health_l2"]), 3)
         XCTAssertEqual(RealtimeProtocol.int(body["baseSeq"]), 900)
-        XCTAssertNotNil(body["intentionalRelicRemovals"] as? [Any])
-        XCTAssertEqual((body["armorSlots"] as? [Any])?.count, armor.count)
+        XCTAssertNotNil(body["intentionalRemovals"] as? [Any])
         XCTAssertEqual((body["bankSlots"] as? [Any])?.count, bank.count)
         XCTAssertEqual(RealtimeProtocol.bool(body["mountDragonRiding"]), true)
+
+        // Build61 deliberately reverts fields introduced only by the broken
+        // build60 transaction shape; they were not part of the known-good 43 path.
+        XCTAssertNil(body["fleet"])
+        XCTAssertNil(body["shardId"])
+        XCTAssertNil(body["armorSlots"])
+        XCTAssertNil(body["intentionalRelicRemovals"])
     }
 
     func testBankAllocatorSkipsFullTenKStackAndUsesNextPartialStack() throws {
