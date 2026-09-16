@@ -235,9 +235,21 @@ final class RealtimeProtocolTests: XCTestCase {
         XCTAssertTrue(CombatBankFirstPolicy.shouldBankFirst(type: "tool_axe", slot: ["t": "tool_axe", "n": 1, "durability": 77]))
         XCTAssertFalse(CombatBankFirstPolicy.shouldBankFirst(type: "potion_strength", slot: ["t": "potion_strength", "n": 6]))
         XCTAssertFalse(CombatBankFirstPolicy.shouldBankFirst(type: "wild_sword", slot: ["t": "wild_sword", "n": 1]))
+        XCTAssertFalse(CombatBankFirstPolicy.shouldBankFirst(type: "wild_sword_l2", slot: ["t": "wild_sword_l2", "n": 1, "durability": 91]))
         XCTAssertFalse(CombatBankFirstPolicy.shouldBankFirst(type: "mount_dragon", slot: ["t": "mount_dragon", "n": 1]))
         XCTAssertFalse(CombatBankFirstPolicy.shouldBankFirst(type: "item_scroll_x", slot: ["t": "item_scroll_x", "n": 1]))
         XCTAssertFalse(CombatBankFirstPolicy.shouldBankFirst(type: "quest_item", slot: ["t": "quest_item", "n": 1, "soulbound": true]))
+    }
+
+    func testBankMutationWaitsForNodeV52SettlementAndUsesBoundedRecalculation() {
+        XCTAssertEqual(BankMutationPolicy.postMovementSettlingMS, 1_200)
+        XCTAssertEqual(BankMutationPolicy.stableProbeIntervalMS, 250)
+        XCTAssertEqual(BankMutationPolicy.requiredEqualStateSeqReads, 3)
+        XCTAssertEqual(BankMutationPolicy.stabilizationTimeoutMS, 8_000)
+        XCTAssertEqual(BankMutationPolicy.maximumSaveAttempts, 2)
+        XCTAssertTrue(BankMutationPolicy.isStaleSave("stale_save"))
+        XCTAssertTrue(BankMutationPolicy.isStaleSave("STALE_SAVE after movement"))
+        XCTAssertFalse(BankMutationPolicy.isStaleSave("bank_full"))
     }
 
     func testBankAllocatorSkipsFullTenKStackAndUsesNextPartialStack() throws {
