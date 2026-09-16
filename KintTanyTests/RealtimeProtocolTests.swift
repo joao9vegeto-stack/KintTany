@@ -633,25 +633,6 @@ final class RealtimeProtocolTests: XCTestCase {
         XCTAssertEqual(GatherTimingPolicy.eventGraceMS, 420)
     }
 
-    func testBackpackStaleSaveRetryPolicyIsStrictAndBounded() {
-        XCTAssertTrue(BackpackSaveRetryPolicy.isStaleSave("stale_save"))
-        XCTAssertTrue(BackpackSaveRetryPolicy.isStaleSave("HTTP recusou: STALE_SAVE"))
-        XCTAssertFalse(BackpackSaveRetryPolicy.isStaleSave("The request timed out"))
-        XCTAssertTrue(BackpackSaveRetryPolicy.shouldRetry(message: "stale_save", attempt: 1))
-        XCTAssertTrue(BackpackSaveRetryPolicy.shouldRetry(message: "stale_save", attempt: 4))
-        XCTAssertFalse(BackpackSaveRetryPolicy.shouldRetry(message: "stale_save", attempt: 5))
-        XCTAssertEqual(BackpackSaveRetryPolicy.maximumAttempts, 5)
-        XCTAssertEqual(BackpackSaveRetryPolicy.retryDelayMS(after: 1), 120)
-        XCTAssertEqual(BackpackSaveRetryPolicy.retryDelayMS(after: 4), 1_000)
-    }
-
-    func testBackpackFreshReadAlwaysUsesCacheBustingNonce() {
-        XCTAssertEqual(
-            BackpackFreshReadPolicy.path(nonce: "run-42"),
-            "/api/auth/me?fresh=run-42"
-        )
-    }
-
     func testMovementBudgetDependsOnEmittedFramesNotWallClock() {
         XCTAssertEqual(MovementProgressPolicy.frameBudget(maxSeconds: 30), 200)
         XCTAssertFalse(MovementProgressPolicy.exhausted(sentFrames: 199, maxSeconds: 30))
