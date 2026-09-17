@@ -84,23 +84,58 @@ struct GatherTimingPolicy {
 /// reconstruída UMA vez a partir de um /me novo. Não existe polling, retry cego,
 /// payload sintético nem reaproveitamento da mutação montada sobre o seq antigo.
 struct BankMutationPolicy {
-    /// v3.0 FINAL / build 43: one authoritative snapshot, one mutation,
-    /// one save. No stale-save retry wrapper or polling layer.
+    /// O atraso após movimento continua igual ao fluxo funcional, mas não existe
+    /// polling nem retry genérico. Somente HTTP 409 `stale_save` autoriza UMA
+    /// reconstrução integral sobre o estado autoritativo mais novo.
     static let postMovementSettlingMS = 1_200
+    static let maximumSaveAttempts = 2
+
+    static func isStaleSave(_ message: String) -> Bool {
+        message.trimmingCharacters(in: .whitespacesAndNewlines)
+            .lowercased()
+            .contains("stale_save")
+    }
+
+    static func authoritativeState(from payload: [String: Any]) -> BackpackState? {
+        func decode(_ object: [String: Any]) -> BackpackState? {
+            let seq = RealtimeProtocol.int(object["stateSeq"] ?? object["currentStateSeq"] ?? object["serverStateSeq"])
+            let backpack = (object["backpack"] as? [String: Any]) ?? (object["currentBackpack"] as? [String: Any])
+            guard let seq, let backpack else { return nil }
+            return BackpackState(stateSeq: seq, backpack: backpack)
+        }
+        if let direct = decode(payload) { return direct }
+        for key in ["current", "state", "authoritative", "latest", "data"] {
+            if let object = payload[key] as? [String: Any], let state = decode(object) { return state }
+        }
+        return nil
+    }
 }
 
-/// Contrato de save-backpack usado pelo caminho conhecido como funcional na
-/// build 43, ampliado apenas com os recursos que passaram a existir depois dela.
-/// Não envia campos inferidos/externos àquele contrato transacional.
+/// Contrato de `save-backpack` alinhado ao cliente oficial atual. Campos
+/// opcionais só são copiados quando vieram do snapshot autoritativo de `/me`.
 struct BackpackSavePayloadPolicy {
+    /// Campos observados no contrato atual do cliente oficial. Os contadores
+    /// legados permanecem dentro de `resources`; inventário moderno é preservado
+    /// no nível superior quando o próprio `/api/auth/me` o fornece.
     static let resourceKeys = [
         "wood", "stone", "coal", "metal", "gold", "fish",
         "cooked_fish_meat", "raw_chicken", "cooked_chicken",
-        "potion_health", "potion_shield", "potion_strength", "potion_poison"
+        "potion_health", "potion_health_l2", "potion_shield",
+        "potion_strength", "potion_poison"
+    ]
+
+    static let topLevelInventoryKeys = [
+        "cacti", "feather", "iron_ore", "silver_ore", "brute_horn",
+        "molten_rock", "copper_ingot", "silver_ingot", "bankPages",
+        "bait_feather", "bait_trout", "bait_bass", "bait_tuna", "bait_squid", "bait_herring",
+        "fish_trout", "fish_bass", "fish_tuna", "fish_squid", "fish_herring",
+        "cooked_trout", "cooked_bass", "cooked_tuna", "cooked_squid", "cooked_herring",
+        "burnt_trout", "burnt_bass", "burnt_tuna", "burnt_squid", "burnt_herring",
+        "angler_raffle_ticket"
     ]
 
     static let slotKeys = [
-        "invSlots", "hotbar", "mountSlots", "cosmeticSlots",
+        "invSlots", "hotbar", "armorSlots", "mountSlots", "cosmeticSlots",
         "petSlots", "furnitureSlots", "bankSlots"
     ]
 
@@ -111,25 +146,48 @@ struct BackpackSavePayloadPolicy {
         "mountHarambeRiding", "mountTralaleroRiding"
     ]
 
-    static func makeBody(backpack: [String: Any], baseSeq: Int) -> [String: Any] {
+    static func makeBody(
+        backpack: [String: Any],
+        baseSeq: Int,
+        fleet: String,
+        shardID: Int?
+    ) -> [String: Any] {
         var resources: [String: Any] = [:]
-        for key in resourceKeys {
-            resources[key] = RealtimeProtocol.int(backpack[key]) ?? 0
-        }
+        for key in resourceKeys { resources[key] = RealtimeProtocol.int(backpack[key]) ?? 0 }
 
         var body: [String: Any] = [
             "resources": resources,
             "baseSeq": baseSeq,
-            "intentionalRemovals": []
+            "fleet": fleet,
+            "intentionalRemovals": [],
+            "intentionalRelicRemovals": []
         ]
-        for key in slotKeys {
-            body[key] = backpack[key] ?? []
-        }
+        if let shardID { body["shardId"] = shardID }
+        for key in topLevelInventoryKeys where backpack[key] != nil { body[key] = backpack[key] }
+        for key in slotKeys { body[key] = backpack[key] ?? [] }
         body["equippedHotbar"] = backpack["equippedHotbar"] ?? 0
-        for flag in mountFlags {
-            body[flag] = backpack[flag] ?? false
-        }
+        for flag in mountFlags { body[flag] = backpack[flag] ?? false }
         return body
+    }
+}
+
+struct ItemConservationPolicy {
+    static func slotCount(_ value: Any?, type: String) -> Int {
+        guard let slots = value as? [Any] else { return 0 }
+        return slots.reduce(0) { partial, raw in
+            guard let slot = raw as? [String: Any], slot["t"] as? String == type else { return partial }
+            return partial + CombatBankFirstPolicy.slotQuantity(slot)
+        }
+    }
+
+    static func total(type: String, in backpack: [String: Any]) -> Int {
+        slotCount(backpack["hotbar"], type: type)
+            + slotCount(backpack["invSlots"], type: type)
+            + slotCount(backpack["bankSlots"], type: type)
+    }
+
+    static func isConserved(type: String, before: [String: Any], after: [String: Any]) -> Bool {
+        total(type: type, in: before) == total(type: type, in: after)
     }
 }
 
@@ -139,6 +197,18 @@ struct OwnVitalsPolicy {
     static func shouldApplyPvit(packetPlayerID: Int?, playerID: Int?) -> Bool {
         guard let packetPlayerID, let playerID else { return false }
         return packetPlayerID == playerID
+    }
+}
+
+struct DunesSnapshotHPPolicy {
+    /// Heat normal pode chegar um pouco fora de fase com o relógio local.
+    /// Quedas de snapshot além desta margem são confirmadas em `/me` antes de
+    /// substituir HP local. `pvit` próprio continua imediato para não mascarar PvP.
+    static let heatToleranceHP = 4
+
+    static func requiresHTTPConfirmation(currentHP: Int, snapshotHP: Int, conservativeHP: Int, region: String) -> Bool {
+        guard GatherRegionPolicy.isDunesRegion(region), snapshotHP < currentHP else { return false }
+        return snapshotHP < max(0, conservativeHP - heatToleranceHP)
     }
 }
 
@@ -932,6 +1002,7 @@ actor AutomationEngine {
     private var dunesHeatBaselineHP = 100
     private var lastTrustedOwnHPAtMS: Double?
     private var lastTrustedOwnHPRegion: String?
+    private var ownHPRevision = 0
     private var activeGatherMode: ActivityMode?
 
     private var currentGatherSignature: String?
@@ -1134,6 +1205,7 @@ actor AutomationEngine {
         guard let best = ActivityToolPolicy.bestSelection(in: initial.backpack, for: mode) else {
             throw EngineError.missingRequiredItem(ActivityToolPolicy.displayName(fallback))
         }
+        let selectedInitialTotal = best.carried + best.bank
         var selected: String? = best.carried >= 1 ? best.type : nil
         if selected == nil, best.bank >= 1 {
             let carried = try await client.ensureCarriedItem(type: best.type, quantity: 1, preferHotbar: true)
@@ -1153,6 +1225,14 @@ actor AutomationEngine {
         )
         guard deposit.unresolved.isEmpty else {
             throw EngineError.bankDepositFailed(deposit.unresolved.joined(separator: ", "))
+        }
+        let finalTool = try await client.itemLocationCounts(type: selected)
+        let selectedFinalTotal = finalTool.carried + finalTool.bank
+        guard selectedFinalTotal == selectedInitialTotal else {
+            throw EngineError.bankDepositFailed("conservação de \(ActivityToolPolicy.displayName(selected)) falhou • total \(selectedInitialTotal)→\(selectedFinalTotal)")
+        }
+        guard finalTool.carried >= 1 else {
+            throw EngineError.gatherLoadoutNotReady(ActivityToolPolicy.displayName(selected))
         }
         return (selected, healthPotionPlus)
     }
@@ -1475,14 +1555,14 @@ actor AutomationEngine {
                 if let y = RealtimeProtocol.double(me["y"]) { snapshotPosition.y = y }
                 if let ry = RealtimeProtocol.double(me["ry"]) { snapshotPosition.ry = ry }
             }
-            if let hp = RealtimeProtocol.int(me["php"]) { recordTrustedOwnHP(hp, regionHint: serverRegion) }
+            if let hp = RealtimeProtocol.int(me["php"]) { await recordSnapshotOwnHP(hp, source: "snap.players", regionHint: serverRegion) }
             if let shield = RealtimeProtocol.int(me["wsh"]) { playerShield = shield }
             if let le = RealtimeProtocol.int(me["le"]), le > lifeEpoch { lifeEpoch = le }
         }
 
         if let vitals = packet["playersVital"] as? [[String: Any]], let id = playerID,
            let me = vitals.first(where: { RealtimeProtocol.int($0["id"] ?? $0["pid"]) == id }) {
-            if let hp = RealtimeProtocol.int(me["php"]) { recordTrustedOwnHP(hp, regionHint: serverRegion) }
+            if let hp = RealtimeProtocol.int(me["php"]) { await recordSnapshotOwnHP(hp, source: "snap.playersVital", regionHint: serverRegion) }
             if let shield = RealtimeProtocol.int(me["wsh"]) { playerShield = shield }
             if let le = RealtimeProtocol.int(me["le"]), le > lifeEpoch { lifeEpoch = le }
         }
@@ -1543,6 +1623,7 @@ actor AutomationEngine {
 
     private func recordTrustedOwnHP(_ hp: Int, regionHint: String? = nil) {
         playerHP = hp
+        ownHPRevision += 1
         let trustedRegion = (regionHint ?? serverRegion ?? region)
             .trimmingCharacters(in: .whitespacesAndNewlines)
             .lowercased()
@@ -1569,6 +1650,36 @@ actor AutomationEngine {
             dunesHeatBaselineAtMS = timestamp
             dunesHeatBaselineHP = hp
         }
+    }
+
+    private func recordSnapshotOwnHP(_ hp: Int, source: String, regionHint: String? = nil) async {
+        let trustedRegion = (regionHint ?? serverRegion ?? region)
+            .trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        let conservative = estimatedDunesHPFromMonotonicClock()
+        guard DunesSnapshotHPPolicy.requiresHTTPConfirmation(
+            currentHP: playerHP, snapshotHP: hp, conservativeHP: conservative, region: trustedRegion
+        ) else {
+            recordTrustedOwnHP(hp, regionHint: trustedRegion)
+            return
+        }
+        let revision = ownHPRevision
+        reporter(.diagnostic("[DUNES][HP] snapshot suspeito • fonte=\(source) • atual=\(playerHP) • snapshot=\(hp) • conservador=\(conservative)"))
+        do {
+            let me = try await http.get("/api/auth/me")
+            guard ownHPRevision == revision else {
+                reporter(.diagnostic("[DUNES][HP] confirmação descartada • vital mais novo chegou durante /me"))
+                return
+            }
+            if let player = me["player"] as? [String: Any],
+               let authoritativeHP = RealtimeProtocol.int(player["php"] ?? player["hp"]) {
+                reporter(.diagnostic("[DUNES][HP] snapshot=\(hp) • /me=\(authoritativeHP) • fonte=\(source)"))
+                recordTrustedOwnHP(authoritativeHP, regionHint: trustedRegion)
+                return
+            }
+        } catch {
+            reporter(.diagnostic("[DUNES][HP] /me indisponível • fail-safe aceita HP baixo • \(error.localizedDescription)"))
+        }
+        if ownHPRevision == revision { recordTrustedOwnHP(hp, regionHint: trustedRegion) }
     }
 
     private func hasRecentTrustedDunesHP(maxAgeMS: Double = 5_000) -> Bool {
@@ -6005,12 +6116,12 @@ private struct KintaraHTTPClient {
     /// e retira poções prontas do banco até a meta. Preserva todos os outros slots.
     @discardableResult
     func ensurePotionLoadout(targets: [String: Int]) async throws -> BackpackState {
-        let state = try await backpackState()
-        var backpack = state.backpack
-        var hotbar = backpack["hotbar"] as? [Any] ?? Array(repeating: NSNull(), count: 6)
-        var inv = backpack["invSlots"] as? [Any] ?? Array(repeating: NSNull(), count: 24)
-        var bank = backpack["bankSlots"] as? [Any] ?? []
-        var dirty = false
+        return try await withFreshBankMutation { state in
+            var backpack = state.backpack
+            var hotbar = backpack["hotbar"] as? [Any] ?? Array(repeating: NSNull(), count: 6)
+            var inv = backpack["invSlots"] as? [Any] ?? Array(repeating: NSNull(), count: 24)
+            var bank = backpack["bankSlots"] as? [Any] ?? []
+            var dirty = false
 
         func slotsCount(_ type: String) -> Int {
             func count(_ slots: [Any]) -> Int {
@@ -6095,14 +6206,15 @@ private struct KintaraHTTPClient {
             }
         }
 
-        if dirty {
-            backpack["hotbar"] = hotbar
-            backpack["invSlots"] = inv
-            backpack["bankSlots"] = bank
-            _ = try await saveBackpack(backpack, baseSeq: state.stateSeq)
-            return try await backpackState()
+            if dirty {
+                backpack["hotbar"] = hotbar
+                backpack["invSlots"] = inv
+                backpack["bankSlots"] = bank
+                _ = try await saveBackpack(backpack, baseSeq: state.stateSeq)
+                return try await freshBackpackState()
+            }
+            return state
         }
-        return state
     }
 
     func itemLocationCounts(type: String) async throws -> ItemLocationCounts {
@@ -6123,38 +6235,36 @@ private struct KintaraHTTPClient {
     /// parcialmente do banco até a quantidade solicitada.
     @discardableResult
     func ensureCarriedItem(type: String, quantity targetRaw: Int, preferHotbar: Bool) async throws -> Int {
-        let target = max(1, targetRaw)
-        let state = try await backpackState()
-        var backpack = state.backpack
-        var hotbar = backpack["hotbar"] as? [Any] ?? Array(repeating: NSNull(), count: 6)
-        var inv = backpack["invSlots"] as? [Any] ?? Array(repeating: NSNull(), count: 24)
-        var bank = backpack["bankSlots"] as? [Any] ?? []
-
-        let before = InventoryLoadoutAllocator.carriedCount(type: type, hotbar: hotbar, inventory: inv)
-        if before >= target { return before }
-
-        let moved = InventoryLoadoutAllocator.withdraw(
-            type: type,
-            quantity: target,
-            preferHotbar: preferHotbar,
-            hotbar: &hotbar,
-            inventory: &inv,
-            bank: &bank
-        )
-        guard moved > 0 else { return before }
-
-        backpack["hotbar"] = hotbar
-        backpack["invSlots"] = inv
-        backpack["bankSlots"] = bank
-        if backpack[type] != nil {
-            backpack[type] = max(0, RealtimeProtocol.int(backpack[type]) ?? 0) + moved
+        return try await withFreshBankMutation { state in
+            let target = max(1, targetRaw)
+            let beforeTotal = ItemConservationPolicy.total(type: type, in: state.backpack)
+            var backpack = state.backpack
+            var hotbar = backpack["hotbar"] as? [Any] ?? Array(repeating: NSNull(), count: 6)
+            var inv = backpack["invSlots"] as? [Any] ?? Array(repeating: NSNull(), count: 24)
+            var bank = backpack["bankSlots"] as? [Any] ?? []
+            let before = InventoryLoadoutAllocator.carriedCount(type: type, hotbar: hotbar, inventory: inv)
+            if before >= target { return before }
+            let moved = InventoryLoadoutAllocator.withdraw(
+                type: type, quantity: target, preferHotbar: preferHotbar,
+                hotbar: &hotbar, inventory: &inv, bank: &bank
+            )
+            guard moved > 0 else { return before }
+            backpack["hotbar"] = hotbar
+            backpack["invSlots"] = inv
+            backpack["bankSlots"] = bank
+            if backpack[type] != nil {
+                backpack[type] = max(0, RealtimeProtocol.int(backpack[type]) ?? 0) + moved
+            }
+            _ = try await saveBackpack(backpack, baseSeq: state.stateSeq)
+            let freshState = try await freshBackpackState()
+            let afterTotal = ItemConservationPolicy.total(type: type, in: freshState.backpack)
+            guard afterTotal == beforeTotal else {
+                throw HTTPError.server("item_conservation_failed: \(type) total \(beforeTotal)→\(afterTotal)")
+            }
+            let freshHotbar = freshState.backpack["hotbar"] as? [Any] ?? []
+            let freshInv = freshState.backpack["invSlots"] as? [Any] ?? []
+            return InventoryLoadoutAllocator.carriedCount(type: type, hotbar: freshHotbar, inventory: freshInv)
         }
-        _ = try await saveBackpack(backpack, baseSeq: state.stateSeq)
-
-        let fresh = try await backpackState()
-        let freshHotbar = fresh.backpack["hotbar"] as? [Any] ?? []
-        let freshInv = fresh.backpack["invSlots"] as? [Any] ?? []
-        return InventoryLoadoutAllocator.carriedCount(type: type, hotbar: freshHotbar, inventory: freshInv)
     }
 
     func backpackState() async throws -> BackpackState {
@@ -6163,6 +6273,39 @@ private struct KintaraHTTPClient {
             throw HTTPError.invalidState
         }
         return BackpackState(stateSeq: stateSeq, backpack: backpack)
+    }
+
+    private func freshBackpackState() async throws -> BackpackState {
+            try await backpackState()
+        }
+
+    private func withFreshBankMutation<T>(
+        _ operation: (BackpackState) async throws -> T
+    ) async throws -> T {
+        var state = try await freshBackpackState()
+
+        for attempt in 1...BankMutationPolicy.maximumSaveAttempts {
+            do {
+                return try await operation(state)
+            } catch let HTTPError.response(status, message, payload)
+                where status == 409 && BankMutationPolicy.isStaleSave(message) {
+                guard attempt < BankMutationPolicy.maximumSaveAttempts else {
+                    throw HTTPError.server("stale_save após uma reconstrução autoritativa")
+                }
+                // Nunca repete a mutação antiga. Recalcula tudo sobre o estado
+                // devolvido pelo servidor; se ele não vier completo, faz UM /me.
+                if let payload, let authoritative = BankMutationPolicy.authoritativeState(from: payload) {
+                    state = authoritative
+                } else {
+                    state = try await freshBackpackState()
+                }
+            } catch {
+                // Erros genéricos, inclusive texto contendo stale_save fora de
+                // HTTP 409, não recebem retry automático.
+                throw error
+            }
+        }
+        throw HTTPError.server("transação de inventário não concluída")
     }
 
     func resourceBalance(_ item: String) async throws -> Int {
@@ -6243,11 +6386,11 @@ private struct KintaraHTTPClient {
     }
 
     private func depositIntoBank(_ wanted: [String: Int], sourceKeys: [String]) async throws -> BankDepositResult {
-        let state = try await backpackState()
-        var backpack = state.backpack
-        var sourceArrays: [String: [Any]] = [:]
-        for key in sourceKeys { sourceArrays[key] = backpack[key] as? [Any] ?? [] }
-        var bank = backpack["bankSlots"] as? [Any] ?? []
+        return try await withFreshBankMutation { state in
+            var backpack = state.backpack
+            var sourceArrays: [String: [Any]] = [:]
+            for key in sourceKeys { sourceArrays[key] = backpack[key] as? [Any] ?? [] }
+            var bank = backpack["bankSlots"] as? [Any] ?? []
 
         var moved: [String: Int] = [:]
         var unresolved = Set<String>()
@@ -6329,7 +6472,7 @@ private struct KintaraHTTPClient {
             _ = try await saveBackpack(backpack, baseSeq: state.stateSeq)
         }
 
-        let fresh = try await backpackState()
+        let fresh = try await freshBackpackState()
         let freshArrays: [String: [Any]] = Dictionary(uniqueKeysWithValues: sourceKeys.map {
             ($0, fresh.backpack[$0] as? [Any] ?? [])
         })
@@ -6342,24 +6485,31 @@ private struct KintaraHTTPClient {
             let c1 = countInSources(type: type, arrays: freshArrays)
             let bankIncrease = max(0, b1 - b0)
             let carriedDecrease = max(0, c0 - c1)
-            diagnostics.append("\(type) • solicitado=\(wanted[type] ?? expected) movido=\(expected) • banco \(b0)→\(b1) • carregado \(c0)→\(c1)")
+            let conserved = (b0 + c0) == (b1 + c1)
+            diagnostics.append("\(type) • solicitado=\(wanted[type] ?? expected) movido=\(expected) • banco \(b0)→\(b1) • carregado \(c0)→\(c1) • total \(b0 + c0)→\(b1 + c1)")
 
-            if bankIncrease >= expected && carriedDecrease >= expected {
+            if bankIncrease >= expected && carriedDecrease >= expected && conserved {
                 confirmed[type] = expected
             } else {
                 unresolved.insert(type)
             }
         }
 
-        return BankDepositResult(
-            confirmed: confirmed,
-            unresolved: Array(unresolved).sorted(),
-            diagnostics: diagnostics
-        )
+            return BankDepositResult(
+                confirmed: confirmed,
+                unresolved: Array(unresolved).sorted(),
+                diagnostics: diagnostics
+            )
+        }
     }
 
     private func saveBackpack(_ backpack: [String: Any], baseSeq: Int) async throws -> [String: Any] {
-        let body = BackpackSavePayloadPolicy.makeBody(backpack: backpack, baseSeq: baseSeq)
+        let body = BackpackSavePayloadPolicy.makeBody(
+            backpack: backpack,
+            baseSeq: baseSeq,
+            fleet: fleet,
+            shardID: shardID
+        )
         let response = try await post("/api/auth/save-backpack", body: body)
         guard RealtimeProtocol.bool(response["ok"]) != false else {
             throw HTTPError.server((response["error"] as? String) ?? "save-backpack recusado")
@@ -6386,40 +6536,33 @@ private struct KintaraHTTPClient {
     }
 
     func persistLoot(_ item: String, amount: Int) async throws -> Int? {
-        let state = try await get("/api/auth/me")
-        guard let stateSeq = RealtimeProtocol.int(state["stateSeq"]), var backpack = state["backpack"] as? [String: Any] else {
-            throw HTTPError.invalidState
-        }
+        try await withFreshBankMutation { state in
+            var backpack = state.backpack
+            let current = RealtimeProtocol.int(backpack[item]) ?? 0
+            backpack[item] = current + amount
 
-        let current = RealtimeProtocol.int(backpack[item]) ?? 0
-        backpack[item] = current + amount
-
-        var slots = backpack["invSlots"] as? [Any] ?? []
-        var updatedSlot = false
-        for index in slots.indices {
-            if var slot = slots[index] as? [String: Any], slot["t"] as? String == item {
-                slot["n"] = (RealtimeProtocol.int(slot["n"]) ?? 0) + amount
-                slots[index] = slot
-                updatedSlot = true
-                break
+            var slots = backpack["invSlots"] as? [Any] ?? []
+            var updatedSlot = false
+            for index in slots.indices {
+                if var slot = slots[index] as? [String: Any], slot["t"] as? String == item {
+                    slot["n"] = (RealtimeProtocol.int(slot["n"]) ?? 0) + amount
+                    slots[index] = slot
+                    updatedSlot = true
+                    break
+                }
             }
-        }
-        if !updatedSlot, let empty = slots.firstIndex(where: { $0 is NSNull }) {
-            slots[empty] = ["t": item, "n": amount]
-        }
-        backpack["invSlots"] = slots
+            if !updatedSlot, let empty = slots.firstIndex(where: { $0 is NSNull }) {
+                slots[empty] = ["t": item, "n": amount]
+            }
+            backpack["invSlots"] = slots
 
-        let body = BackpackSavePayloadPolicy.makeBody(backpack: backpack, baseSeq: stateSeq)
-
-        let response = try await post("/api/auth/save-backpack", body: body)
-        guard RealtimeProtocol.bool(response["ok"]) != false else {
-            throw HTTPError.server((response["error"] as? String) ?? "save-backpack recusado")
+            let response = try await saveBackpack(backpack, baseSeq: state.stateSeq)
+            if let confirmed = response["backpack"] as? [String: Any] {
+                return RealtimeProtocol.int(confirmed[item])
+            }
+            let fresh = try await freshBackpackState()
+            return RealtimeProtocol.int(fresh.backpack[item])
         }
-        if let confirmed = response["backpack"] as? [String: Any] {
-            return RealtimeProtocol.int(confirmed[item])
-        }
-        let fresh = try await get("/api/auth/me")
-        return (fresh["backpack"] as? [String: Any]).flatMap { RealtimeProtocol.int($0[item]) }
     }
 
     private func request(method: String, path: String, body: [String: Any]?) async throws -> [String: Any] {
@@ -6448,10 +6591,9 @@ private struct KintaraHTTPClient {
         guard let http = response as? HTTPURLResponse else { throw HTTPError.invalidResponse }
         let any = try JSONSerialization.jsonObject(with: data)
         if !(200...299).contains(http.statusCode) {
-            if let object = any as? [String: Any] {
-                throw HTTPError.server((object["error"] as? String) ?? (object["message"] as? String) ?? "HTTP \(http.statusCode)")
-            }
-            throw HTTPError.server("HTTP \(http.statusCode)")
+            let object = any as? [String: Any]
+            let message = (object?["error"] as? String) ?? (object?["message"] as? String) ?? "HTTP \(http.statusCode)"
+            throw HTTPError.response(status: http.statusCode, message: message, payload: object)
         }
         return any
     }
@@ -6463,6 +6605,7 @@ private enum HTTPError: LocalizedError {
     case nonJSON(Int)
     case invalidState
     case server(String)
+    case response(status: Int, message: String, payload: [String: Any]?)
 
     var errorDescription: String? {
         switch self {
@@ -6471,6 +6614,7 @@ private enum HTTPError: LocalizedError {
         case .nonJSON(let status): return "Resposta não JSON (HTTP \(status))"
         case .invalidState: return "Estado de inventário incompleto"
         case .server(let message): return message
+        case .response(_, let message, _): return message
         }
     }
 }
