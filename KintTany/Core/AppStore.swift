@@ -829,7 +829,7 @@ final class AppStore: ObservableObject {
                 if dunesLoadout.healthPotionPlus > 0 {
                     log("❤️‍🔥 Proteção térmica • Health Potion+ carregadas: \(dunesLoadout.healthPotionPlus) • cura automática autoritativa habilitada")
                 } else {
-                    log("⚠️ Proteção térmica • sem Health Potion+ • a coleta será interrompida em HP 70 e sairá para The Shores")
+                    log("⚠️ Proteção térmica • sem Health Potion+ • a coleta será interrompida em HP 30 e sairá para The Shores")
                 }
                 log("⚠️ Dunes East é open-PvP/full-loot e sofre calor • a meta será respeitada enquanto houver HP seguro")
             } else if mode.isGathering {
