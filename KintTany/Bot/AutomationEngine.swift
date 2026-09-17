@@ -94,9 +94,9 @@ struct BankMutationPolicy {
 /// opcionais só são copiados quando vieram do snapshot autoritativo de `/me`.
 struct BackpackSavePayloadPolicy {
     static let resourceKeys = [
-        "wood", "stone", "coal", "metal", "gold", "fish",
+        "wood", "stone", "coal", "metal", "silver_ore", "cacti", "gold", "fish",
         "cooked_fish_meat", "raw_chicken", "cooked_chicken",
-        "potion_health", "potion_shield", "potion_strength", "potion_poison"
+        "potion_health", "potion_health_l2", "potion_shield", "potion_strength", "potion_poison"
     ]
 
     static let slotKeys = [
@@ -6486,7 +6486,7 @@ private struct KintaraHTTPClient {
         }
         backpack["invSlots"] = slots
 
-        let resourceKeys = ["wood", "stone", "coal", "metal", "gold", "fish", "cooked_fish_meat", "raw_chicken", "cooked_chicken", "potion_health", "potion_shield", "potion_strength", "potion_poison"]
+        let resourceKeys = ["wood", "stone", "coal", "metal", "silver_ore", "cacti", "gold", "fish", "cooked_fish_meat", "raw_chicken", "cooked_chicken", "potion_health", "potion_health_l2", "potion_shield", "potion_strength", "potion_poison"]
         var resources: [String: Any] = [:]
         for key in resourceKeys { resources[key] = RealtimeProtocol.int(backpack[key]) ?? 0 }
 
