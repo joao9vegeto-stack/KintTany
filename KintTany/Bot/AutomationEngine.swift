@@ -56,6 +56,13 @@ struct GatherToolPreflightPolicy {
         if bank > 0 { return .needsWorld(tool: tool) }
         return .missing(tool: tool)
     }
+
+    /// Uma falha transacional não rebaixa a ferramenta para Starter. Se o
+    /// snapshot já identificou o melhor tier, a segunda tentativa preserva o
+    /// type escolhido. Sem snapshot, a engine relê o inventário antes de agir.
+    static func retryAfterTransactionFailure(selectedTool: String?, fallback: String) -> GatherToolPreflightDisposition {
+        .needsWorld(tool: selectedTool ?? fallback)
+    }
 }
 
 struct GatherTimingPolicy {
@@ -77,18 +84,20 @@ struct GatherTimingPolicy {
 
 }
 
-/// Política do save-backpack atual. O atraso de 1,2 s após chegar ao banco
-/// continua sendo a janela observada na v5.2, mas NÃO tentamos mais “estabilizar”
-/// stateSeq com polling cego. Cada mutação parte de um snapshot autoritativo e,
-/// em HTTP 409 stale_save, é reconstruída uma única vez a partir do estado que o
-/// próprio servidor devolveu (com fallback para um /me fresco se esse estado
-/// estiver ausente/incompleto).
+/// Política do save-backpack. Cada tentativa parte de um /me autoritativo,
+/// aplica a mutação sobre aquele snapshot e salva com exatamente o stateSeq lido.
+/// Build 64: se — e somente se — o servidor responder `stale_save`, a operação é
+/// reconstruída UMA vez a partir de um /me novo. Não existe polling, retry cego,
+/// payload sintético nem reaproveitamento da mutação montada sobre o seq antigo.
 struct BankMutationPolicy {
-    /// Mantém somente a janela pós-movimento já usada pelo port da v5.2.
-    /// A transação em si segue a build 43: um /me, uma mutação e um save-backpack
-    /// com exatamente o stateSeq daquele snapshot. Sem polling, query sintética
-    /// ou reconstrução de 409.
     static let postMovementSettlingMS = 1_200
+    static let maximumStaleSaveRetries = 1
+
+    static func shouldRetryAfterStaleSave(_ description: String) -> Bool {
+        description.trimmingCharacters(in: .whitespacesAndNewlines)
+            .lowercased()
+            .contains("stale_save")
+    }
 }
 
 /// Contrato de save-backpack usado pelo caminho conhecido como funcional na
@@ -1084,28 +1093,43 @@ actor AutomationEngine {
     static func gatherToolPreflightDisposition(for mode: ActivityMode, cookie: String) async -> GatherToolPreflightDisposition {
         guard mode.isGathering, let fallback = ActivityToolPolicy.requiredTool(for: mode) else { return .ready }
 
+        let client = KintaraHTTPClient(cookie: cookie)
+        let state: BackpackState
         do {
-            let client = KintaraHTTPClient(cookie: cookie)
-            let state = try await client.backpackState()
-            guard let best = ActivityToolPolicy.bestSelection(in: state.backpack, for: mode) else {
-                return .missing(tool: fallback)
-            }
-            if best.carried >= 1 { return .ready }
-            guard best.bank >= 1 else { return .missing(tool: fallback) }
-
-            // Same proven Build61 backpack transaction, but completed before
-            // opening Presence. This removes the failing World→gather-region hop.
-            let carried = try await client.ensureCarriedItem(type: best.type, quantity: 1, preferHotbar: true)
-            let confirmed = try await client.itemLocationCounts(type: best.type)
-            guard max(carried, confirmed.carried) >= 1 else {
-                return .missing(tool: best.type)
-            }
-            return .ready
+            state = try await client.backpackState()
         } catch {
-            // Fail closed: a transport/inventory read failure must not open a
-            // Presence in World and attempt a region transition with unknown loadout.
+            // Regiões normais de Gathering são seguras. Não transforme uma falha
+            // HTTP de leitura em "Starter ... não encontrado": a engine fará uma
+            // leitura nova antes de qualquer ação e continuará usando bestSelection.
+            return GatherToolPreflightPolicy.retryAfterTransactionFailure(
+                selectedTool: nil,
+                fallback: fallback
+            )
+        }
+
+        guard let best = ActivityToolPolicy.bestSelection(in: state.backpack, for: mode) else {
             return .missing(tool: fallback)
         }
+        if best.carried >= 1 { return .ready }
+        guard best.bank >= 1 else { return .missing(tool: best.type) }
+
+        do {
+            // Sempre tenta materializar o MELHOR tier encontrado. ensureCarriedItem
+            // reconstrói a transação uma única vez quando o servidor responde
+            // stale_save, usando um snapshot/stateSeq novo.
+            let carried = try await client.ensureCarriedItem(type: best.type, quantity: 1, preferHotbar: true)
+            let confirmed = try await client.itemLocationCounts(type: best.type)
+            if max(carried, confirmed.carried) >= 1 { return .ready }
+        } catch {
+            // A existência da ferramenta já foi confirmada no snapshot acima.
+            // Preserve exatamente o tier selecionado para a segunda leitura da
+            // engine; nunca converta a falha em "Starter Axe/Pickaxe ausente".
+        }
+
+        return GatherToolPreflightPolicy.retryAfterTransactionFailure(
+            selectedTool: best.type,
+            fallback: fallback
+        )
     }
 
     @discardableResult
@@ -6122,6 +6146,26 @@ private struct KintaraHTTPClient {
     /// parcialmente do banco até a quantidade solicitada.
     @discardableResult
     func ensureCarriedItem(type: String, quantity targetRaw: Int, preferHotbar: Bool) async throws -> Int {
+        var staleRetries = 0
+        while true {
+            do {
+                return try await ensureCarriedItemOnce(
+                    type: type,
+                    quantity: targetRaw,
+                    preferHotbar: preferHotbar
+                )
+            } catch {
+                guard staleRetries < BankMutationPolicy.maximumStaleSaveRetries,
+                      BankMutationPolicy.shouldRetryAfterStaleSave(error.localizedDescription)
+                else { throw error }
+                staleRetries += 1
+                // A próxima iteração começa por backpackState(), portanto a
+                // mutação inteira é reconstruída sobre stateSeq novo.
+            }
+        }
+    }
+
+    private func ensureCarriedItemOnce(type: String, quantity targetRaw: Int, preferHotbar: Bool) async throws -> Int {
         let target = max(1, targetRaw)
         let state = try await backpackState()
         var backpack = state.backpack
@@ -6242,6 +6286,30 @@ private struct KintaraHTTPClient {
     }
 
     private func depositIntoBank(_ wanted: [String: Int], sourceKeys: [String]) async throws -> BankDepositResult {
+        var staleRetries = 0
+        while true {
+            do {
+                let result = try await depositIntoBankOnce(wanted, sourceKeys: sourceKeys)
+                if staleRetries > 0 {
+                    return BankDepositResult(
+                        confirmed: result.confirmed,
+                        unresolved: result.unresolved,
+                        diagnostics: ["stale_save • transação reconstruída com snapshot fresco ✅"] + result.diagnostics
+                    )
+                }
+                return result
+            } catch {
+                guard staleRetries < BankMutationPolicy.maximumStaleSaveRetries,
+                      BankMutationPolicy.shouldRetryAfterStaleSave(error.localizedDescription)
+                else { throw error }
+                staleRetries += 1
+                // Não reaproveita slots nem baseSeq da tentativa recusada.
+                // depositIntoBankOnce começa novamente por /api/auth/me.
+            }
+        }
+    }
+
+    private func depositIntoBankOnce(_ wanted: [String: Int], sourceKeys: [String]) async throws -> BankDepositResult {
         let state = try await backpackState()
         var backpack = state.backpack
         var sourceArrays: [String: [Any]] = [:]
