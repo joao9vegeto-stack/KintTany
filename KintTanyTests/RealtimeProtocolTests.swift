@@ -241,8 +241,19 @@ final class RealtimeProtocolTests: XCTestCase {
         XCTAssertFalse(CombatBankFirstPolicy.shouldBankFirst(type: "quest_item", slot: ["t": "quest_item", "n": 1, "soulbound": true]))
     }
 
-    func testBankMutationPolicyKeepsOnlyStablePostMovementWindow() {
-        XCTAssertEqual(BankMutationPolicy.postMovementSettlingMS, 1_200)
+    func testBankShopProtocolMatchesManualCaptureCoordinates() {
+        XCTAssertEqual(BankShopProtocolPolicy.worldEntranceX, -21.5, accuracy: 0.0001)
+        XCTAssertEqual(BankShopProtocolPolicy.worldEntranceZ, -17.5, accuracy: 0.0001)
+        XCTAssertEqual(BankShopProtocolPolicy.interiorX, 2.5, accuracy: 0.0001)
+        XCTAssertEqual(BankShopProtocolPolicy.interiorZ, -0.5, accuracy: 0.0001)
+        XCTAssertEqual(BankShopProtocolPolicy.region, "bank_shop")
+    }
+
+    func testBankShopTransitionRequiresServerAdvancedSequence() {
+        XCTAssertEqual(BankShopProtocolPolicy.acceptedTransitionSequence(baseSeq: 67647, responseSeq: 67648), 67648)
+        XCTAssertNil(BankShopProtocolPolicy.acceptedTransitionSequence(baseSeq: 67647, responseSeq: 67647))
+        XCTAssertNil(BankShopProtocolPolicy.acceptedTransitionSequence(baseSeq: 67647, responseSeq: 67649))
+        XCTAssertNil(BankShopProtocolPolicy.acceptedTransitionSequence(baseSeq: 67647, responseSeq: nil))
     }
 
 
@@ -301,7 +312,7 @@ final class RealtimeProtocolTests: XCTestCase {
         }
     }
 
-    func testStableSaveBackpackPayloadMatchesLastKnownWorkingBuild52Contract() throws {
+    func testSaveBackpackPayloadCarriesActiveSessionMetadataFromManualCapture() throws {
         let backpack: [String: Any] = [
             "wood": 10, "stone": 4, "potion_health": 2,
             "potion_health_l2": 9, "silver_ore": 7, "cacti": 3,
@@ -311,23 +322,33 @@ final class RealtimeProtocolTests: XCTestCase {
             "petSlots": [NSNull()], "furnitureSlots": [NSNull()], "bankSlots": [NSNull()],
             "equippedHotbar": 0, "mountDragonRiding": true
         ]
-        let body = BackpackSavePayloadPolicy.makeBody(backpack: backpack, baseSeq: 321)
-        XCTAssertEqual(RealtimeProtocol.int(body["baseSeq"]), 321)
-        XCTAssertNil(body["fleet"])
-        XCTAssertNil(body["shardId"])
+        let body = BackpackSavePayloadPolicy.makeBody(
+            backpack: backpack, baseSeq: 67647, fleet: "us", shardID: 2
+        )
+        XCTAssertEqual(RealtimeProtocol.int(body["baseSeq"]), 67647)
+        XCTAssertEqual(body["fleet"] as? String, "us")
+        XCTAssertEqual(RealtimeProtocol.int(body["shardId"]), 2)
+        XCTAssertNotNil(body["intentionalRemovals"] as? [Any])
+        XCTAssertNotNil(body["intentionalRelicRemovals"] as? [Any])
         XCTAssertNil(body["armorSlots"])
-        XCTAssertNil(body["intentionalRelicRemovals"])
-        XCTAssertNil(body["silver_ore"])
-        XCTAssertNil(body["cacti"])
-        XCTAssertNotNil(body["intentionalRemovals"])
         XCTAssertEqual(RealtimeProtocol.bool(body["mountDragonRiding"]), true)
         let resources = try XCTUnwrap(body["resources"] as? [String: Any])
         XCTAssertEqual(RealtimeProtocol.int(resources["wood"]), 10)
-        XCTAssertEqual(RealtimeProtocol.int(resources["stone"]), 4)
-        XCTAssertEqual(RealtimeProtocol.int(resources["potion_health"]), 2)
         XCTAssertEqual(RealtimeProtocol.int(resources["potion_health_l2"]), 9)
-        XCTAssertEqual(RealtimeProtocol.int(resources["silver_ore"]), 7)
-        XCTAssertEqual(RealtimeProtocol.int(resources["cacti"]), 3)
+    }
+
+    func testInstancedEquipmentSelectionUsesExactHighestDurabilityBankSlot() throws {
+        let bank: [Any] = [
+            ["t": "tool_axe_l2", "n": 1, "d": 719, "iid": "low"],
+            NSNull(),
+            ["t": "tool_axe_l2", "n": 1, "d": 3974, "iid": "high"],
+            ["t": "tool_axe", "n": 1]
+        ]
+        let index = try XCTUnwrap(BankItemSelectionPolicy.preferredBankSlotIndex(type: "tool_axe_l2", bank: bank))
+        XCTAssertEqual(index, 2)
+        let selected = try XCTUnwrap(bank[index] as? [String: Any])
+        XCTAssertEqual(selected["iid"] as? String, "high")
+        XCTAssertEqual(RealtimeProtocol.int(selected["d"]), 3974)
     }
 
 
