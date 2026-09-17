@@ -133,6 +133,43 @@ struct BackpackSavePayloadPolicy {
     }
 }
 
+enum SaveBackpackConflictClassification: String, Equatable {
+    case sequenceAdvanced = "sequence_advanced"
+    case sameSequenceRejected = "same_sequence_rejected"
+    case sequenceUnavailable = "sequence_unavailable"
+}
+
+struct SaveBackpackConflictPolicy {
+    static func authoritativeSequence(from payload: [String: Any]?) -> Int? {
+        guard let payload else { return nil }
+
+        func decode(_ object: [String: Any]) -> Int? {
+            if let seq = RealtimeProtocol.int(
+                object["stateSeq"] ?? object["currentStateSeq"] ?? object["serverStateSeq"] ?? object["latestStateSeq"]
+            ) {
+                return seq
+            }
+            for key in ["current", "state", "authoritative", "latest", "data"] {
+                if let child = object[key] as? [String: Any], let seq = decode(child) { return seq }
+            }
+            return nil
+        }
+
+        return decode(payload)
+    }
+
+    static func classify(sentSeq: Int, responseSeq: Int?, freshSeq: Int?) -> SaveBackpackConflictClassification {
+        if let responseSeq, responseSeq > sentSeq { return .sequenceAdvanced }
+        if let freshSeq, freshSeq > sentSeq { return .sequenceAdvanced }
+        if responseSeq == sentSeq || freshSeq == sentSeq { return .sameSequenceRejected }
+        return .sequenceUnavailable
+    }
+
+    static func safeTopLevelKeys(from payload: [String: Any]?) -> [String] {
+        payload.map { $0.keys.sorted() } ?? []
+    }
+}
+
 struct ItemConservationPolicy {
     static func slotCount(_ value: Any?, type: String) -> Int {
         guard let slots = value as? [Any] else { return 0 }
@@ -6172,7 +6209,7 @@ private struct KintaraHTTPClient {
             backpack["hotbar"] = hotbar
             backpack["invSlots"] = inv
             backpack["bankSlots"] = bank
-            _ = try await saveBackpack(backpack, baseSeq: state.stateSeq)
+            _ = try await saveBackpack(backpack, baseSeq: state.stateSeq, operation: "potion-loadout:\(targets.keys.sorted().joined(separator: ","))")
             return try await backpackState()
         }
         return state
@@ -6206,6 +6243,11 @@ private struct KintaraHTTPClient {
         let before = InventoryLoadoutAllocator.carriedCount(type: type, hotbar: hotbar, inventory: inv)
         if before >= target { return before }
 
+        let sourceItemKeys = bank.compactMap { $0 as? [String: Any] }
+            .first(where: { $0["t"] as? String == type })?
+            .keys.sorted().joined(separator: ",") ?? "-"
+        let flatCounterPresent = backpack[type] != nil ? "yes" : "no"
+
         let moved = InventoryLoadoutAllocator.withdraw(
             type: type,
             quantity: target,
@@ -6222,7 +6264,7 @@ private struct KintaraHTTPClient {
         if backpack[type] != nil {
             backpack[type] = max(0, RealtimeProtocol.int(backpack[type]) ?? 0) + moved
         }
-        _ = try await saveBackpack(backpack, baseSeq: state.stateSeq)
+        _ = try await saveBackpack(backpack, baseSeq: state.stateSeq, operation: "withdraw:\(type):itemKeys=\(sourceItemKeys):flat=\(flatCounterPresent)")
 
         let fresh = try await backpackState()
         let freshHotbar = fresh.backpack["hotbar"] as? [Any] ?? []
@@ -6403,7 +6445,7 @@ private struct KintaraHTTPClient {
         }
 
         if moved.values.reduce(0, +) > 0 {
-            _ = try await saveBackpack(backpack, baseSeq: state.stateSeq)
+            _ = try await saveBackpack(backpack, baseSeq: state.stateSeq, operation: "bank-deposit:\(moved.keys.sorted().joined(separator: ","))")
         }
 
         let fresh = try await backpackState()
@@ -6435,13 +6477,33 @@ private struct KintaraHTTPClient {
         )
     }
 
-    private func saveBackpack(_ backpack: [String: Any], baseSeq: Int) async throws -> [String: Any] {
+    private func saveBackpack(
+        _ backpack: [String: Any],
+        baseSeq: Int,
+        operation: String
+    ) async throws -> [String: Any] {
         let body = BackpackSavePayloadPolicy.makeBody(backpack: backpack, baseSeq: baseSeq)
-        let response = try await post("/api/auth/save-backpack", body: body)
-        guard RealtimeProtocol.bool(response["ok"]) != false else {
-            throw HTTPError.server((response["error"] as? String) ?? "save-backpack recusado")
+        do {
+            let response = try await post("/api/auth/save-backpack", body: body)
+            guard RealtimeProtocol.bool(response["ok"]) != false else {
+                throw HTTPError.server((response["error"] as? String) ?? "save-backpack recusado")
+            }
+            return response
+        } catch let HTTPError.response(status, message, payload)
+            where status == 409 && message.lowercased().contains("stale_save") {
+            let responseSeq = SaveBackpackConflictPolicy.authoritativeSequence(from: payload)
+            let freshSeq = try? await backpackState().stateSeq
+            let classification = SaveBackpackConflictPolicy.classify(
+                sentSeq: baseSeq, responseSeq: responseSeq, freshSeq: freshSeq
+            )
+            let responseLabel = responseSeq.map(String.init) ?? "-"
+            let freshLabel = freshSeq.map(String.init) ?? "-"
+            let keys = SaveBackpackConflictPolicy.safeTopLevelKeys(from: payload)
+            let keyLabel = keys.isEmpty ? "-" : keys.joined(separator: ",")
+            throw HTTPError.server(
+                "stale_save • op=\(operation) • baseSeq=\(baseSeq) • responseSeq=\(responseLabel) • freshSeq=\(freshLabel) • classe=\(classification.rawValue) • payloadKeys=\(keyLabel)"
+            )
         }
-        return response
     }
 
     private func slotCount(_ value: Any?, type: String) -> Int {
@@ -6486,27 +6548,7 @@ private struct KintaraHTTPClient {
         }
         backpack["invSlots"] = slots
 
-        let resourceKeys = ["wood", "stone", "coal", "metal", "silver_ore", "cacti", "gold", "fish", "cooked_fish_meat", "raw_chicken", "cooked_chicken", "potion_health", "potion_health_l2", "potion_shield", "potion_strength", "potion_poison"]
-        var resources: [String: Any] = [:]
-        for key in resourceKeys { resources[key] = RealtimeProtocol.int(backpack[key]) ?? 0 }
-
-        var body: [String: Any] = [
-            "resources": resources,
-            "baseSeq": stateSeq,
-            "intentionalRemovals": []
-        ]
-        for key in ["invSlots", "hotbar", "mountSlots", "cosmeticSlots", "petSlots", "furnitureSlots", "bankSlots"] {
-            body[key] = backpack[key] ?? []
-        }
-        body["equippedHotbar"] = backpack["equippedHotbar"] ?? 0
-        for flag in ["mountDragonRiding", "mountWhaleRiding", "mountSpiderRiding", "mountWolfRiding", "mountTigerRiding", "mountUnicornRiding", "mountCrocodileRiding", "mountGiraffeRiding", "mountWoolyMammothRiding", "mountHarambeRiding", "mountTralaleroRiding"] {
-            body[flag] = backpack[flag] ?? false
-        }
-
-        let response = try await post("/api/auth/save-backpack", body: body)
-        guard RealtimeProtocol.bool(response["ok"]) != false else {
-            throw HTTPError.server((response["error"] as? String) ?? "save-backpack recusado")
-        }
+        let response = try await saveBackpack(backpack, baseSeq: stateSeq, operation: "persist-loot:\(item)")
         if let confirmed = response["backpack"] as? [String: Any] {
             return RealtimeProtocol.int(confirmed[item])
         }
@@ -6540,10 +6582,11 @@ private struct KintaraHTTPClient {
         guard let http = response as? HTTPURLResponse else { throw HTTPError.invalidResponse }
         let any = try JSONSerialization.jsonObject(with: data)
         if !(200...299).contains(http.statusCode) {
-            if let object = any as? [String: Any] {
-                throw HTTPError.server((object["error"] as? String) ?? (object["message"] as? String) ?? "HTTP \(http.statusCode)")
-            }
-            throw HTTPError.server("HTTP \(http.statusCode)")
+            let object = any as? [String: Any]
+            let message = (object?["error"] as? String)
+                ?? (object?["message"] as? String)
+                ?? "HTTP \(http.statusCode)"
+            throw HTTPError.response(status: http.statusCode, message: message, payload: object)
         }
         return any
     }
@@ -6554,6 +6597,7 @@ private enum HTTPError: LocalizedError {
     case invalidResponse
     case nonJSON(Int)
     case invalidState
+    case response(status: Int, message: String, payload: [String: Any]?)
     case server(String)
 
     var errorDescription: String? {
@@ -6562,6 +6606,7 @@ private enum HTTPError: LocalizedError {
         case .invalidResponse: return "Resposta HTTP inválida"
         case .nonJSON(let status): return "Resposta não JSON (HTTP \(status))"
         case .invalidState: return "Estado de inventário incompleto"
+        case .response(_, let message, _): return message
         case .server(let message): return message
         }
     }
