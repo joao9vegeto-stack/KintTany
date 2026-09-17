@@ -246,6 +246,27 @@ final class RealtimeProtocolTests: XCTestCase {
     }
 
 
+    func testSaveBackpackConflictEvidenceSeparatesSequenceRaceFromPayloadMismatch() throws {
+        let nested: [String: Any] = [
+            "error": "stale_save",
+            "authoritative": ["currentStateSeq": 88]
+        ]
+        XCTAssertEqual(SaveBackpackConflictPolicy.authoritativeSequence(from: nested), 88)
+        XCTAssertEqual(
+            SaveBackpackConflictPolicy.classify(sentSeq: 87, responseSeq: 88, freshSeq: 88),
+            .sequenceAdvanced
+        )
+        XCTAssertEqual(
+            SaveBackpackConflictPolicy.classify(sentSeq: 88, responseSeq: nil, freshSeq: 88),
+            .sameSequenceRejected
+        )
+        XCTAssertEqual(
+            SaveBackpackConflictPolicy.classify(sentSeq: 88, responseSeq: nil, freshSeq: nil),
+            .sequenceUnavailable
+        )
+        XCTAssertEqual(SaveBackpackConflictPolicy.safeTopLevelKeys(from: nested), ["authoritative", "error"])
+    }
+
     func testStableSaveBackpackPayloadMatchesLastKnownWorkingBuild52Contract() throws {
         let backpack: [String: Any] = [
             "wood": 10, "stone": 4, "potion_health": 2,
