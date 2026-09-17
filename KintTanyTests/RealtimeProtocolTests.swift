@@ -246,7 +246,7 @@ final class RealtimeProtocolTests: XCTestCase {
     }
 
 
-    func testStableSaveBackpackPayloadUsesExactV30FinalContract() throws {
+    func testStableSaveBackpackPayloadMatchesLastKnownWorkingBuild52Contract() throws {
         let backpack: [String: Any] = [
             "wood": 10, "stone": 4, "potion_health": 2,
             "potion_health_l2": 9, "silver_ore": 7, "cacti": 3,
@@ -270,9 +270,9 @@ final class RealtimeProtocolTests: XCTestCase {
         XCTAssertEqual(RealtimeProtocol.int(resources["wood"]), 10)
         XCTAssertEqual(RealtimeProtocol.int(resources["stone"]), 4)
         XCTAssertEqual(RealtimeProtocol.int(resources["potion_health"]), 2)
-        XCTAssertNil(resources["potion_health_l2"])
-        XCTAssertNil(resources["silver_ore"])
-        XCTAssertNil(resources["cacti"])
+        XCTAssertEqual(RealtimeProtocol.int(resources["potion_health_l2"]), 9)
+        XCTAssertEqual(RealtimeProtocol.int(resources["silver_ore"]), 7)
+        XCTAssertEqual(RealtimeProtocol.int(resources["cacti"]), 3)
     }
 
 
@@ -714,6 +714,18 @@ final class RealtimeProtocolTests: XCTestCase {
         XCTAssertEqual(try best([
             ["t": "tool_axe", "n": 1]
         ]).type, "tool_axe")
+    }
+
+    func testTreePrefersHistoricalIronAxeL2IDOverStarterAxe() throws {
+        let backpack: [String: Any] = [
+            "hotbar": [NSNull()],
+            "invSlots": [NSNull()],
+            "bankSlots": [["t": "tool_axe", "n": 1], ["t": "tool_axe_l2", "n": 1]]
+        ]
+        let best = try XCTUnwrap(ActivityToolPolicy.bestSelection(in: backpack, for: .tree))
+        XCTAssertEqual(best.type, "tool_axe_l2")
+        XCTAssertEqual(best.tier, 3)
+        XCTAssertEqual(best.bank, 1)
     }
 
     func testBankOnlyIronAxePreservesBestTierInWorldDisposition() throws {
