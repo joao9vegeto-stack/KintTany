@@ -241,50 +241,40 @@ final class RealtimeProtocolTests: XCTestCase {
         XCTAssertFalse(CombatBankFirstPolicy.shouldBankFirst(type: "quest_item", slot: ["t": "quest_item", "n": 1, "soulbound": true]))
     }
 
-    func testStaleSaveAllowsExactlyOneAuthoritativeReconstruction() throws {
+    func testBankMutationPolicyKeepsOnlyStablePostMovementWindow() {
         XCTAssertEqual(BankMutationPolicy.postMovementSettlingMS, 1_200)
-        XCTAssertEqual(BankMutationPolicy.maximumSaveAttempts, 2)
-        XCTAssertTrue(BankMutationPolicy.isStaleSave("stale_save"))
-        XCTAssertFalse(BankMutationPolicy.isStaleSave("rate_limited"))
-        let payload: [String: Any] = [
-            "authoritative": ["currentStateSeq": 88, "currentBackpack": ["wood": 42]]
-        ]
-        let state = try XCTUnwrap(BankMutationPolicy.authoritativeState(from: payload))
-        XCTAssertEqual(state.stateSeq, 88)
-        XCTAssertEqual(RealtimeProtocol.int(state.backpack["wood"]), 42)
     }
 
-    func testStableSaveBackpackPayloadUsesCurrentOfficialContract() throws {
-        let armor: [Any] = [["t": "armor_test", "n": 1]]
+
+    func testStableSaveBackpackPayloadUsesExactV30FinalContract() throws {
         let backpack: [String: Any] = [
-            "wood": 10, "potion_health_l2": 2, "silver_ore": 7, "cacti": 3,
-            "bait_feather": 11, "bait_trout": 4, "bait_bass": 2, "bait_tuna": 1, "bait_squid": 5,
-            "fish_trout": 9, "fish_bass": 8, "fish_tuna": 6, "fish_squid": 4, "bankPages": 3,
-            "invSlots": [NSNull()], "hotbar": [NSNull()], "armorSlots": armor,
+            "wood": 10, "stone": 4, "potion_health": 2,
+            "potion_health_l2": 9, "silver_ore": 7, "cacti": 3,
+            "invSlots": [NSNull()], "hotbar": [NSNull()],
+            "armorSlots": [["t": "armor_test", "n": 1]],
             "mountSlots": [NSNull()], "cosmeticSlots": [NSNull()],
             "petSlots": [NSNull()], "furnitureSlots": [NSNull()], "bankSlots": [NSNull()],
             "equippedHotbar": 0, "mountDragonRiding": true
         ]
-        let body = BackpackSavePayloadPolicy.makeBody(
-            backpack: backpack, baseSeq: 321, fleet: "us", shardID: 4
-        )
+        let body = BackpackSavePayloadPolicy.makeBody(backpack: backpack, baseSeq: 321)
         XCTAssertEqual(RealtimeProtocol.int(body["baseSeq"]), 321)
-        XCTAssertEqual(body["fleet"] as? String, "us")
-        XCTAssertEqual(RealtimeProtocol.int(body["shardId"]), 4)
+        XCTAssertNil(body["fleet"])
+        XCTAssertNil(body["shardId"])
+        XCTAssertNil(body["armorSlots"])
+        XCTAssertNil(body["intentionalRelicRemovals"])
+        XCTAssertNil(body["silver_ore"])
+        XCTAssertNil(body["cacti"])
         XCTAssertNotNil(body["intentionalRemovals"])
-        XCTAssertNotNil(body["intentionalRelicRemovals"])
-        XCTAssertEqual((body["armorSlots"] as? [Any])?.count, armor.count)
-        XCTAssertEqual(RealtimeProtocol.int(body["bankPages"]), 3)
-        XCTAssertEqual(RealtimeProtocol.int(body["silver_ore"]), 7)
-        XCTAssertEqual(RealtimeProtocol.int(body["cacti"]), 3)
-        XCTAssertEqual(RealtimeProtocol.int(body["bait_feather"]), 11)
-        XCTAssertEqual(RealtimeProtocol.int(body["fish_trout"]), 9)
-        XCTAssertEqual(RealtimeProtocol.int(body["bait_squid"]), 5)
-        XCTAssertEqual(RealtimeProtocol.int(body["fish_squid"]), 4)
         XCTAssertEqual(RealtimeProtocol.bool(body["mountDragonRiding"]), true)
         let resources = try XCTUnwrap(body["resources"] as? [String: Any])
-        XCTAssertEqual(RealtimeProtocol.int(resources["potion_health_l2"]), 2)
+        XCTAssertEqual(RealtimeProtocol.int(resources["wood"]), 10)
+        XCTAssertEqual(RealtimeProtocol.int(resources["stone"]), 4)
+        XCTAssertEqual(RealtimeProtocol.int(resources["potion_health"]), 2)
+        XCTAssertNil(resources["potion_health_l2"])
+        XCTAssertNil(resources["silver_ore"])
+        XCTAssertNil(resources["cacti"])
     }
+
 
     func testBankAllocatorSkipsFullTenKStackAndUsesNextPartialStack() throws {
         var bank: [Any] = [
