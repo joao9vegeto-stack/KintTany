@@ -694,6 +694,74 @@ final class RealtimeProtocolTests: XCTestCase {
         )
     }
 
+    func testTreeTierLadderAlwaysChoosesHighestAvailableTool() throws {
+        func best(_ bankSlots: [Any]) throws -> EquipmentSelection {
+            let backpack: [String: Any] = [
+                "hotbar": [NSNull()],
+                "invSlots": [NSNull()],
+                "bankSlots": bankSlots
+            ]
+            return try XCTUnwrap(ActivityToolPolicy.bestSelection(in: backpack, for: .tree))
+        }
+
+        XCTAssertEqual(try best([
+            ["t": "tool_axe", "n": 1],
+            ["t": "copper_axe", "n": 1],
+            ["t": "iron_axe", "n": 1],
+            ["t": "silver_axe", "n": 1]
+        ]).type, "silver_axe")
+
+        XCTAssertEqual(try best([
+            ["t": "tool_axe", "n": 1],
+            ["t": "copper_axe", "n": 1],
+            ["t": "iron_axe", "n": 1]
+        ]).type, "iron_axe")
+
+        XCTAssertEqual(try best([
+            ["t": "tool_axe", "n": 1],
+            ["t": "copper_axe", "n": 1]
+        ]).type, "copper_axe")
+
+        XCTAssertEqual(try best([
+            ["t": "tool_axe", "n": 1]
+        ]).type, "tool_axe")
+    }
+
+    func testPickaxeTierLadderPrefersBankedHigherTierOverCarriedStarter() throws {
+        let backpack: [String: Any] = [
+            "hotbar": [["t": "tool_pickaxe", "n": 1]],
+            "invSlots": [NSNull()],
+            "bankSlots": [
+                ["t": "copper_pickaxe", "n": 1],
+                ["t": "tool_pickaxe_l2", "n": 1],
+                ["t": "silver_pickaxe", "n": 1]
+            ]
+        ]
+        let best = try XCTUnwrap(ActivityToolPolicy.bestSelection(in: backpack, for: .stone))
+        XCTAssertEqual(best.type, "silver_pickaxe")
+        XCTAssertEqual(best.tier, 4)
+        XCTAssertEqual(best.carried, 0)
+        XCTAssertEqual(best.bank, 1)
+    }
+
+    func testGatherPreflightTransactionFailurePreservesSelectedIronAxe() {
+        XCTAssertEqual(
+            GatherToolPreflightPolicy.retryAfterTransactionFailure(
+                selectedTool: "iron_axe",
+                fallback: "tool_axe"
+            ),
+            .needsWorld(tool: "iron_axe")
+        )
+    }
+
+    func testStaleSaveRetryIsExplicitAndSingleShot() {
+        XCTAssertEqual(BankMutationPolicy.maximumStaleSaveRetries, 1)
+        XCTAssertTrue(BankMutationPolicy.shouldRetryAfterStaleSave("stale_save"))
+        XCTAssertTrue(BankMutationPolicy.shouldRetryAfterStaleSave("HTTP 409 • STALE_SAVE"))
+        XCTAssertFalse(BankMutationPolicy.shouldRetryAfterStaleSave("timeout"))
+        XCTAssertFalse(BankMutationPolicy.shouldRetryAfterStaleSave("invalid_state"))
+    }
+
     func testCombatStateConfirmationRequiresFreshSnapshotAndHPDrop() {
         XCTAssertTrue(CombatStateConfirmationPolicy.isStateCorrelatedHit(
             beforeHP: 75, afterHP: 60, snapshotAdvanced: true
