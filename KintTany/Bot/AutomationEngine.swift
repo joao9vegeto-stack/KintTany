@@ -78,16 +78,39 @@ struct GatherTimingPolicy {
 
 }
 
-/// Política do save-backpack. Cada tentativa parte de um /me autoritativo,
-/// aplica a mutação sobre aquele snapshot e salva com exatamente o stateSeq lido.
-/// Build 64: se — e somente se — o servidor responder `stale_save`, a operação é
-/// reconstruída UMA vez a partir de um /me novo. Não existe polling, retry cego,
-/// payload sintético nem reaproveitamento da mutação montada sobre o seq antigo.
-struct BankMutationPolicy {
-    /// v3.0 FINAL: mantém apenas a janela pós-movimento. A transação de
-    /// inventário é uma leitura /me, uma mutação e um save-backpack.
-    /// Não existe retry/reconstrução automática de stale_save.
-    static let postMovementSettlingMS = 1_200
+/// Build 72: fluxo capturado do cliente oficial em 17/09/2026. O banco não é
+/// apenas uma coordenada no World; ele é uma região autoritativa própria.
+struct BankShopProtocolPolicy {
+    static let region = "bank_shop"
+    static let worldEntranceX = -21.5
+    static let worldEntranceZ = -17.5
+    static let interiorX = 2.5
+    static let interiorZ = -0.5
+
+    static func acceptedTransitionSequence(baseSeq: Int, responseSeq: Int?) -> Int? {
+        guard let responseSeq, responseSeq == baseSeq + 1 else { return nil }
+        return responseSeq
+    }
+}
+
+/// Quando existem duas instâncias do mesmo `t`, preserve a identidade do slot
+/// escolhido. Para ferramentas com durabilidade, prefira a de maior `d`; em
+/// empate, mantenha a ordem autoritativa do banco.
+struct BankItemSelectionPolicy {
+    static func preferredBankSlotIndex(type: String, bank: [Any]) -> Int? {
+        let candidates = bank.indices.filter { index in
+            guard let slot = bank[index] as? [String: Any] else { return false }
+            return slot["t"] as? String == type
+        }
+        return candidates.sorted { lhs, rhs in
+            let left = bank[lhs] as? [String: Any] ?? [:]
+            let right = bank[rhs] as? [String: Any] ?? [:]
+            let leftDurability = RealtimeProtocol.int(left["d"]) ?? -1
+            let rightDurability = RealtimeProtocol.int(right["d"]) ?? -1
+            if leftDurability != rightDurability { return leftDurability > rightDurability }
+            return lhs < rhs
+        }.first
+    }
 }
 
 /// Contrato de `save-backpack` alinhado ao cliente oficial atual. Campos
@@ -111,7 +134,12 @@ struct BackpackSavePayloadPolicy {
         "mountHarambeRiding", "mountTralaleroRiding"
     ]
 
-    static func makeBody(backpack: [String: Any], baseSeq: Int) -> [String: Any] {
+    static func makeBody(
+        backpack: [String: Any],
+        baseSeq: Int,
+        fleet: String? = nil,
+        shardID: Int? = nil
+    ) -> [String: Any] {
         var resources: [String: Any] = [:]
         for key in resourceKeys {
             resources[key] = RealtimeProtocol.int(backpack[key]) ?? 0
@@ -120,8 +148,11 @@ struct BackpackSavePayloadPolicy {
         var body: [String: Any] = [
             "resources": resources,
             "baseSeq": baseSeq,
-            "intentionalRemovals": []
+            "intentionalRemovals": [],
+            "intentionalRelicRemovals": []
         ]
+        if let fleet, !fleet.isEmpty { body["fleet"] = fleet }
+        if let shardID { body["shardId"] = shardID }
         for key in slotKeys {
             body[key] = backpack[key] ?? []
         }
@@ -880,7 +911,8 @@ struct InventoryLoadoutAllocator {
         preferHotbar: Bool,
         hotbar: inout [Any],
         inventory: inout [Any],
-        bank: inout [Any]
+        bank: inout [Any],
+        preferredBankIndex: Int? = nil
     ) -> Int {
         let target = max(1, targetRaw)
         let before = carriedCount(type: type, hotbar: hotbar, inventory: inventory)
@@ -919,7 +951,13 @@ struct InventoryLoadoutAllocator {
             return true
         }
 
-        for index in bank.indices where need > 0 {
+        var orderedBankIndices: [Int] = []
+        if let preferredBankIndex, bank.indices.contains(preferredBankIndex) {
+            orderedBankIndices.append(preferredBankIndex)
+        }
+        orderedBankIndices.append(contentsOf: bank.indices.filter { $0 != preferredBankIndex })
+
+        for index in orderedBankIndices where need > 0 {
             guard var slot = bank[index] as? [String: Any], slot["t"] as? String == type else { continue }
             let available = CombatBankFirstPolicy.slotQuantity(slot)
             guard available > 0 else { continue }
@@ -1270,50 +1308,18 @@ actor AutomationEngine {
         return max(carried, confirmed.carried)
     }
 
-    /// Dunes preflight is intentionally completed over HTTP before opening a
-    /// Presence in the full-loot realm. Existing carried valuables are banked;
-    /// the selected tool and up to six Health Potion+ stay loaded. This reuses
-    /// the already validated Presence/consume-potion path and does not invent a
-    /// Cacti consumption packet.
+    /// Build 72: o fluxo antigo das Dunes fazia mutação de banco só por HTTP,
+    /// sem Presence em `bank_shop`. A captura manual provou que isso não é uma
+    /// operação de banco válida. Até o AppStore migrar este preflight para a
+    /// mesma Presence World → bank_shop → World, falhe fechado antes de tocar
+    /// no inventário. Isso evita repetir `bank_offsite` numa zona full-loot.
     static func prepareDunesPreflight(for mode: ActivityMode, cookie: String) async throws -> (tool: String, healthPotionPlus: Int) {
-        guard mode.isDunesGathering, let fallback = ActivityToolPolicy.requiredTool(for: mode) else {
-            throw EngineError.missingRequiredItem("ferramenta das Dunes")
+        guard mode.isDunesGathering else {
+            throw EngineError.bankTransitionFailed("preflight Dunes solicitado para atividade incompatível")
         }
-        let client = KintaraHTTPClient(cookie: cookie)
-        let initial = try await client.backpackState()
-        guard let best = ActivityToolPolicy.bestSelection(in: initial.backpack, for: mode) else {
-            throw EngineError.missingRequiredItem(ActivityToolPolicy.displayName(fallback))
-        }
-        let selectedInitialTotal = best.carried + best.bank
-        var selected: String? = best.carried >= 1 ? best.type : nil
-        if selected == nil, best.bank >= 1 {
-            let carried = try await client.ensureCarriedItem(type: best.type, quantity: 1, preferHotbar: true)
-            if carried >= 1 { selected = best.type }
-        }
-        guard let selected else { throw EngineError.missingRequiredItem(ActivityToolPolicy.displayName(fallback)) }
-
-        _ = try await client.ensurePotionLoadout(targets: [
-            DunesHeatSafetyPolicy.healthPotionPlusType: DunesHeatSafetyPolicy.carriedHealthPotionPlusTarget
-        ])
-        let healthPotionPlusCounts = try await client.itemLocationCounts(type: DunesHeatSafetyPolicy.healthPotionPlusType)
-        let healthPotionPlus = healthPotionPlusCounts.carried
-        let keep: Set<String> = [selected, DunesHeatSafetyPolicy.healthPotionPlusType]
-        let deposit = try await client.depositAllBankFirstInventory(
-            preservingTypes: keep,
-            preserveCombatLoadout: false
+        throw EngineError.bankTransitionFailed(
+            "preflight Dunes bloqueado na Build 72 • banco exige Presence bank_shop antes de qualquer mutação"
         )
-        guard deposit.unresolved.isEmpty else {
-            throw EngineError.bankDepositFailed(deposit.unresolved.joined(separator: ", "))
-        }
-        let finalTool = try await client.itemLocationCounts(type: selected)
-        let selectedFinalTotal = finalTool.carried + finalTool.bank
-        guard selectedFinalTotal == selectedInitialTotal else {
-            throw EngineError.bankDepositFailed("conservação de \(ActivityToolPolicy.displayName(selected)) falhou • total \(selectedInitialTotal)→\(selectedFinalTotal)")
-        }
-        guard finalTool.carried >= 1 else {
-            throw EngineError.gatherLoadoutNotReady(ActivityToolPolicy.displayName(selected))
-        }
-        return (selected, healthPotionPlus)
     }
 
     func prepareIdentity() async {
@@ -3017,20 +3023,69 @@ actor AutomationEngine {
     // MARK: - Activity loadout preflight
 
     private func ensureWorldBankAccess(reason: String) async throws {
+        if serverRegion?.lowercased() == BankShopProtocolPolicy.region,
+           region.lowercased() == BankShopProtocolPolicy.region {
+            return
+        }
+
         if serverRegion?.lowercased() != "world" || region.lowercased() != "world" {
             reporter(.state(.syncing, "🌍 Indo ao World • \(reason)"))
-            try await setRegion("world", at: Position(x: 22.5, z: -3.5))
+            try await setRegion(
+                "world",
+                at: Position(x: BankShopProtocolPolicy.worldEntranceX, z: BankShopProtocolPolicy.worldEntranceZ)
+            )
             guard try await waitForRegion("world", timeoutMS: 5_000) else {
                 throw EngineError.regionNotConfirmed("world")
             }
         }
-        let bankPosition = Position(x: -24.0, z: -17.5)
-        if hypot(position.x - bankPosition.x, position.z - bankPosition.z) > 0.8 {
-            try await walk(to: bankPosition, maxSeconds: 35, status: "🏦 Indo ao banco • \(reason)")
+
+        let entrance = Position(
+            x: BankShopProtocolPolicy.worldEntranceX,
+            z: BankShopProtocolPolicy.worldEntranceZ
+        )
+        if hypot(position.x - entrance.x, position.z - entrance.z) > 0.4 {
+            try await walk(to: entrance, maxSeconds: 35, status: "🏦 Indo à entrada do banco • \(reason)")
+        } else {
+            position = entrance
+            try await sendPosition(moving: false)
         }
-        // Paridade literal com a v5.2: deixe o servidor consumir a cauda dos
-        // frames de movimento antes de qualquer CAS de inventário.
-        try await sleep(BankMutationPolicy.postMovementSettlingMS)
+
+        // Captura oficial: o save de entrada usa o stateSeq do World e acontece
+        // imediatamente após o primeiro Presence em bank_shop, antes da retirada.
+        let preTransition = try await http.backpackState()
+        reporter(.diagnostic("[BANK] entrada • worldSeq=\(preTransition.stateSeq) • shard=\(shard) • reason=\(reason)"))
+
+        try await setRegion(
+            BankShopProtocolPolicy.region,
+            at: Position(x: BankShopProtocolPolicy.interiorX, z: BankShopProtocolPolicy.interiorZ)
+        )
+        let transition = try await http.synchronizeBankShopEntry(from: preTransition)
+
+        guard try await waitForRegion(BankShopProtocolPolicy.region, timeoutMS: 6_000) else {
+            throw EngineError.bankTransitionFailed("region_ack(bank_shop) ausente")
+        }
+
+        let fresh = try await http.backpackState()
+        guard fresh.stateSeq == transition.responseSeq else {
+            throw EngineError.bankTransitionFailed(
+                "stateSeq após entrada divergiu • resposta \(transition.responseSeq) • /me \(fresh.stateSeq)"
+            )
+        }
+        reporter(.diagnostic("[BANK] bank_shop confirmado • stateSeq \(transition.baseSeq)→\(transition.responseSeq) • /me=\(fresh.stateSeq) • shard=\(shard)"))
+    }
+
+    private func leaveBankShopToWorld(reason: String) async throws {
+        guard serverRegion?.lowercased() == BankShopProtocolPolicy.region ||
+                region.lowercased() == BankShopProtocolPolicy.region else { return }
+        reporter(.state(.syncing, "🌍 Saindo do banco • \(reason)"))
+        try await setRegion(
+            "world",
+            at: Position(x: BankShopProtocolPolicy.worldEntranceX, z: BankShopProtocolPolicy.worldEntranceZ)
+        )
+        guard try await waitForRegion("world", timeoutMS: 6_000) else {
+            throw EngineError.bankTransitionFailed("saída bank_shop→world sem confirmação")
+        }
+        reporter(.diagnostic("[BANK] saída bank_shop→world confirmada • shard=\(shard) • reason=\(reason)"))
     }
 
     private func returnToGatherRegionIfNeeded(for mode: ActivityMode) async throws {
@@ -3080,6 +3135,7 @@ actor AutomationEngine {
         }
         activeGatherToolType = tool
         reporter(.log("🧰 Preflight transacional • \(name) retirada do banco e carregada ✅"))
+        try await leaveBankShopToWorld(reason: "\(name) carregada")
         return finalCount
     }
 
@@ -3135,6 +3191,7 @@ actor AutomationEngine {
             throw EngineError.missingRequiredItem(name)
         }
         reporter(.log("🧰 Preflight • \(name) retirada do banco e carregada ✅"))
+        try await leaveBankShopToWorld(reason: "loadout de \(name) concluído")
     }
 
     private func ensureFishingBaitLoadout(type: String, goal: Int) async throws {
@@ -3158,6 +3215,7 @@ actor AutomationEngine {
                 throw EngineError.insufficientFishingBait(fishingBait.displayName, have: counts.carried, need: wanted)
             }
             reporter(.log("🪱 Preflight • \(fishingBait.displayName) retirada do banco • \(counts.carried)/\(wanted) carregada ✅"))
+            try await leaveBankShopToWorld(reason: "isca carregada")
         } else {
             reporter(.log("🪱 Preflight • \(fishingBait.displayName) \(counts.carried)/\(wanted) carregada ✅"))
         }
@@ -4574,10 +4632,8 @@ actor AutomationEngine {
         if serverRegion?.lowercased().hasPrefix("wild") == true || region.hasPrefix("wild") {
             throw EngineError.combatSupplyFailed("preparação de combate solicitada fora do World")
         }
-        let bankPosition = Position(x: -24.0, z: -17.5)
         reporter(.state(.moving, "Protegendo inventário no banco"))
-        try await walk(to: bankPosition, maxSeconds: 35, status: "🏦 Indo ao banco • BANK-FIRST")
-        try await sleep(BankMutationPolicy.postMovementSettlingMS)
+        try await ensureWorldBankAccess(reason: "BANK-FIRST")
         try await performCombatBankFirstSafety()
         try await ensureBestCombatWeaponFromWorld()
         if resupplyReason != nil {
@@ -4585,6 +4641,7 @@ actor AutomationEngine {
         } else {
             reporter(.log("🛡️ BANK-FIRST concluído • poções já suficientes • entrada no Wild liberada"))
         }
+        try await leaveBankShopToWorld(reason: "BANK-FIRST concluído")
     }
 
     private func performCombatBankFirstSafety() async throws {
@@ -4715,10 +4772,8 @@ actor AutomationEngine {
             try await exitWildToWorld(reason: reasonLabel)
         }
 
-        let bankPosition = Position(x: -24.0, z: -17.5)
         reporter(.state(.moving, "Indo ao banco"))
-        try await walk(to: bankPosition, maxSeconds: 35, status: "🏦 Indo ao banco • protegendo itens")
-        try await sleep(BankMutationPolicy.postMovementSettlingMS)
+        try await ensureWorldBankAccess(reason: "protegendo itens")
 
         if !drops.isEmpty {
             reporter(.state(.syncing, "Depositando drops no banco"))
@@ -4741,8 +4796,10 @@ actor AutomationEngine {
             reporter(.log("🧪 Reabastecendo no World • motivo=\(resupplyReason)"))
             try await ensureCombatSupplies()
         } else if safeStopReason != nil, resupplyReason != nil {
-            reporter(.diagnostic("[STATE] safe-stop ativo • reposição cancelada no World"))
+            reporter(.diagnostic("[STATE] safe-stop ativo • reposição cancelada no banco"))
         }
+
+        try await leaveBankShopToWorld(reason: "serviço de banco concluído")
 
         if safeStopReason != nil {
             reporter(.state(.cooldown, "World seguro • STOP em andamento"))
@@ -6094,6 +6151,11 @@ struct BackpackState {
     let backpack: [String: Any]
 }
 
+private struct BankShopTransitionResult {
+    let baseSeq: Int
+    let responseSeq: Int
+}
+
 private struct ItemLocationCounts {
     let carried: Int
     let bank: Int
@@ -6114,6 +6176,7 @@ enum EngineError: LocalizedError {
     case potionRecoveryFailed(String)
     case combatSupplyFailed(String)
     case bankDepositFailed(String)
+    case bankTransitionFailed(String)
     case missingRequiredItem(String)
     case gatherLoadoutNotReady(String)
     case gatherEndedBeforeGoal
@@ -6131,6 +6194,7 @@ enum EngineError: LocalizedError {
         case .potionRecoveryFailed(let detail): return "Recuperação com poções falhou: \(detail)"
         case .combatSupplyFailed(let detail): return "Reposição de combate falhou: \(detail)"
         case .bankDepositFailed(let item): return "Recurso/item não pôde ser confirmado no banco: \(item)"
+        case .bankTransitionFailed(let detail): return "Transição do banco não confirmada: \(detail)"
         case .missingRequiredItem(let item): return "Item obrigatório não encontrado no inventário/banco: \(item)"
         case .gatherLoadoutNotReady(let item): return "Preflight de ferramenta não materializou \(item) antes de entrar na região de coleta"
         case .gatherEndedBeforeGoal: return "Engine de coleta encerrou antes da meta após reconexão"
@@ -6189,6 +6253,26 @@ private struct KintaraHTTPClient {
     func totalResource(_ backpack: [String: Any], type: String) -> Int {
         let carried = max(0, RealtimeProtocol.int(backpack[type]) ?? 0)
         return carried + slotCount(backpack["bankSlots"], type: type)
+    }
+
+    /// Save neutro observado na transição World → bank_shop. Não move item:
+    /// apenas persiste o mesmo backpack com o baseSeq pré-transição e exige que
+    /// a resposta do servidor avance a sequência antes de qualquer withdraw.
+    func synchronizeBankShopEntry(from state: BackpackState) async throws -> BankShopTransitionResult {
+        let response = try await saveBackpack(
+            state.backpack,
+            baseSeq: state.stateSeq,
+            operation: "bank-entry-sync"
+        )
+        let rawResponseSeq = SaveBackpackConflictPolicy.authoritativeSequence(from: response)
+        guard let responseSeq = BankShopProtocolPolicy.acceptedTransitionSequence(
+            baseSeq: state.stateSeq,
+            responseSeq: rawResponseSeq
+        ) else {
+            let label = rawResponseSeq.map(String.init) ?? "-"
+            throw HTTPError.server("bank_entry_seq_not_advanced • baseSeq=\(state.stateSeq) • responseSeq=\(label)")
+        }
+        return BankShopTransitionResult(baseSeq: state.stateSeq, responseSeq: responseSeq)
     }
 
     /// Replica ensurePotionLoadout da v5.2: materializa contadores flat sem slot
@@ -6323,8 +6407,8 @@ private struct KintaraHTTPClient {
         let before = InventoryLoadoutAllocator.carriedCount(type: type, hotbar: hotbar, inventory: inv)
         if before >= target { return before }
 
-        let sourceItem = bank.compactMap { $0 as? [String: Any] }
-            .first(where: { $0["t"] as? String == type })
+        let sourceIndex = BankItemSelectionPolicy.preferredBankSlotIndex(type: type, bank: bank)
+        let sourceItem = sourceIndex.flatMap { bank[$0] as? [String: Any] }
         let sourceItemKeys = sourceItem?.keys.sorted().joined(separator: ",") ?? "-"
         let sourceIID = SaveBackpackConflictPolicy.normalizedIID(sourceItem?["iid"])
         let flatCounterPresent = backpack[type] != nil ? "yes" : "no"
@@ -6335,7 +6419,8 @@ private struct KintaraHTTPClient {
             preferHotbar: preferHotbar,
             hotbar: &hotbar,
             inventory: &inv,
-            bank: &bank
+            bank: &bank,
+            preferredBankIndex: sourceIndex
         )
         guard moved > 0 else { return before }
 
@@ -6348,7 +6433,7 @@ private struct KintaraHTTPClient {
         _ = try await saveBackpack(
             backpack,
             baseSeq: state.stateSeq,
-            operation: "withdraw:\(type):itemKeys=\(sourceItemKeys):flat=\(flatCounterPresent)",
+            operation: "withdraw:\(type):bankSlot=\(sourceIndex.map(String.init) ?? "-"):itemKeys=\(sourceItemKeys):flat=\(flatCounterPresent)",
             itemDiagnostic: SaveBackpackItemDiagnosticContext(
                 type: type,
                 iid: sourceIID,
@@ -6573,7 +6658,12 @@ private struct KintaraHTTPClient {
         operation: String,
         itemDiagnostic: SaveBackpackItemDiagnosticContext? = nil
     ) async throws -> [String: Any] {
-        let body = BackpackSavePayloadPolicy.makeBody(backpack: backpack, baseSeq: baseSeq)
+        let body = BackpackSavePayloadPolicy.makeBody(
+            backpack: backpack,
+            baseSeq: baseSeq,
+            fleet: fleet,
+            shardID: shardID
+        )
         do {
             let response = try await post("/api/auth/save-backpack", body: body)
             guard RealtimeProtocol.bool(response["ok"]) != false else {
