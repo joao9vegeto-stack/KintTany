@@ -267,6 +267,40 @@ final class RealtimeProtocolTests: XCTestCase {
         XCTAssertEqual(SaveBackpackConflictPolicy.safeTopLevelKeys(from: nested), ["authoritative", "error"])
     }
 
+    func testSaveBackpackConflictDiagnosticFindsTieredEquipmentInstanceAndStructuralGap() throws {
+        let item: [String: Any] = ["t": "silver_pickaxe", "iid": "iid-77", "d": 91, "n": 1]
+        let before: [String: Any] = [
+            "hotbar": [NSNull()], "invSlots": [NSNull()], "bankSlots": [item]
+        ]
+        let sent: [String: Any] = [
+            "hotbar": [item], "invSlots": [NSNull()], "bankSlots": [NSNull()]
+        ]
+        let authoritative: [String: Any] = [
+            "hotbar": [NSNull()], "invSlots": [NSNull()], "bankSlots": [item],
+            "armorSlots": [["t": "armor_test", "n": 1]], "bankPages": 3
+        ]
+        let response: [String: Any] = [
+            "error": "stale_save", "reason": "instance_location_rejected",
+            "stateSeq": 67614, "backpack": authoritative
+        ]
+
+        XCTAssertEqual(SaveBackpackConflictPolicy.safeReason(from: response), "instance_location_rejected")
+        XCTAssertEqual(SaveBackpackConflictPolicy.equipmentLabel(type: "silver_pickaxe"), "pickaxe:T4:silver_pickaxe")
+        XCTAssertEqual(SaveBackpackConflictPolicy.itemLocation(type: "silver_pickaxe", iid: "iid-77", in: before), "bankSlots[0]")
+        XCTAssertEqual(SaveBackpackConflictPolicy.itemLocation(type: "silver_pickaxe", iid: "iid-77", in: sent), "hotbar[0]")
+        XCTAssertEqual(SaveBackpackConflictPolicy.itemLocation(type: "silver_pickaxe", iid: "iid-77", in: authoritative), "bankSlots[0]")
+        XCTAssertEqual(SaveBackpackConflictPolicy.itemKeys(type: "silver_pickaxe", iid: "iid-77", in: before), ["d", "iid", "n", "t"])
+        XCTAssertEqual(SaveBackpackConflictPolicy.itemKeys(type: "silver_pickaxe", iid: "iid-77", in: sent), ["d", "iid", "n", "t"])
+        XCTAssertEqual(SaveBackpackConflictPolicy.itemKeys(type: "silver_pickaxe", iid: "iid-77", in: authoritative), ["d", "iid", "n", "t"])
+        XCTAssertEqual(SaveBackpackConflictPolicy.unrepresentedAuthoritativeBackpackKeys(authoritative), ["armorSlots", "bankPages"])
+
+        for type in ["tool_axe", "copper_axe", "iron_axe", "tool_axe_l2", "silver_axe",
+                     "tool_pickaxe", "copper_pickaxe", "iron_pickaxe", "tool_pickaxe_l2", "silver_pickaxe",
+                     "wild_sword", "copper_sword", "iron_sword", "wild_sword_l2", "silver_sword"] {
+            XCTAssertNotEqual(SaveBackpackConflictPolicy.equipmentLabel(type: type), "other:T0:\(type)")
+        }
+    }
+
     func testStableSaveBackpackPayloadMatchesLastKnownWorkingBuild52Contract() throws {
         let backpack: [String: Any] = [
             "wood": 10, "stone": 4, "potion_health": 2,

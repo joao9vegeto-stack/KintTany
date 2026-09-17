@@ -168,6 +168,86 @@ struct SaveBackpackConflictPolicy {
     static func safeTopLevelKeys(from payload: [String: Any]?) -> [String] {
         payload.map { $0.keys.sorted() } ?? []
     }
+
+    static func safeReason(from payload: [String: Any]?) -> String {
+        guard let raw = payload?["reason"] else { return "-" }
+        let text: String
+        if let value = raw as? String {
+            text = value
+        } else if let value = raw as? NSNumber {
+            text = value.stringValue
+        } else if let value = raw as? [String: Any] {
+            text = "object{" + value.keys.sorted().joined(separator: ",") + "}"
+        } else if let value = raw as? [Any] {
+            text = "array[count=\(value.count)]"
+        } else {
+            text = String(describing: raw)
+        }
+        let flattened = text.replacingOccurrences(of: "\n", with: " ")
+            .replacingOccurrences(of: "\r", with: " ")
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        return flattened.isEmpty ? "-" : String(flattened.prefix(180))
+    }
+
+    static func equipmentLabel(type: String) -> String {
+        let family: String
+        switch EquipmentTierPolicy.family(of: type) {
+        case .axe: family = "axe"
+        case .pickaxe: family = "pickaxe"
+        case .sword: family = "sword"
+        case nil: family = "other"
+        }
+        return "\(family):T\(EquipmentTierPolicy.tier(of: type)):\(type)"
+    }
+
+    static func itemLocation(type: String, iid: String?, in backpack: [String: Any]) -> String {
+        matchingItem(type: type, iid: iid, in: backpack)?.location ?? "-"
+    }
+
+    static func itemKeys(type: String, iid: String?, in backpack: [String: Any]) -> [String] {
+        matchingItem(type: type, iid: iid, in: backpack)?.slot.keys.sorted() ?? []
+    }
+
+    static func unrepresentedAuthoritativeBackpackKeys(_ backpack: [String: Any]) -> [String] {
+        let represented = Set(
+            BackpackSavePayloadPolicy.resourceKeys
+            + BackpackSavePayloadPolicy.slotKeys
+            + BackpackSavePayloadPolicy.mountFlags
+            + ["equippedHotbar"]
+        )
+        return backpack.keys.filter { !represented.contains($0) }.sorted()
+    }
+
+    private static func matchingItem(
+        type: String,
+        iid: String?,
+        in backpack: [String: Any]
+    ) -> (location: String, slot: [String: Any])? {
+        for key in ["hotbar", "invSlots", "bankSlots", "armorSlots"] {
+            guard let slots = backpack[key] as? [Any] else { continue }
+            for (index, raw) in slots.enumerated() {
+                guard let slot = raw as? [String: Any], slot["t"] as? String == type else { continue }
+                if let iid {
+                    guard normalizedIID(slot["iid"]) == iid else { continue }
+                }
+                return ("\(key)[\(index)]", slot)
+            }
+        }
+        return nil
+    }
+
+    static func normalizedIID(_ raw: Any?) -> String? {
+        if let value = raw as? String, !value.isEmpty { return value }
+        if let value = raw as? NSNumber { return value.stringValue }
+        if let value = RealtimeProtocol.int(raw) { return String(value) }
+        return nil
+    }
+}
+
+private struct SaveBackpackItemDiagnosticContext {
+    let type: String
+    let iid: String?
+    let beforeBackpack: [String: Any]
 }
 
 struct ItemConservationPolicy {
@@ -6243,9 +6323,10 @@ private struct KintaraHTTPClient {
         let before = InventoryLoadoutAllocator.carriedCount(type: type, hotbar: hotbar, inventory: inv)
         if before >= target { return before }
 
-        let sourceItemKeys = bank.compactMap { $0 as? [String: Any] }
-            .first(where: { $0["t"] as? String == type })?
-            .keys.sorted().joined(separator: ",") ?? "-"
+        let sourceItem = bank.compactMap { $0 as? [String: Any] }
+            .first(where: { $0["t"] as? String == type })
+        let sourceItemKeys = sourceItem?.keys.sorted().joined(separator: ",") ?? "-"
+        let sourceIID = SaveBackpackConflictPolicy.normalizedIID(sourceItem?["iid"])
         let flatCounterPresent = backpack[type] != nil ? "yes" : "no"
 
         let moved = InventoryLoadoutAllocator.withdraw(
@@ -6264,7 +6345,16 @@ private struct KintaraHTTPClient {
         if backpack[type] != nil {
             backpack[type] = max(0, RealtimeProtocol.int(backpack[type]) ?? 0) + moved
         }
-        _ = try await saveBackpack(backpack, baseSeq: state.stateSeq, operation: "withdraw:\(type):itemKeys=\(sourceItemKeys):flat=\(flatCounterPresent)")
+        _ = try await saveBackpack(
+            backpack,
+            baseSeq: state.stateSeq,
+            operation: "withdraw:\(type):itemKeys=\(sourceItemKeys):flat=\(flatCounterPresent)",
+            itemDiagnostic: SaveBackpackItemDiagnosticContext(
+                type: type,
+                iid: sourceIID,
+                beforeBackpack: state.backpack
+            )
+        )
 
         let fresh = try await backpackState()
         let freshHotbar = fresh.backpack["hotbar"] as? [Any] ?? []
@@ -6480,7 +6570,8 @@ private struct KintaraHTTPClient {
     private func saveBackpack(
         _ backpack: [String: Any],
         baseSeq: Int,
-        operation: String
+        operation: String,
+        itemDiagnostic: SaveBackpackItemDiagnosticContext? = nil
     ) async throws -> [String: Any] {
         let body = BackpackSavePayloadPolicy.makeBody(backpack: backpack, baseSeq: baseSeq)
         do {
@@ -6500,8 +6591,36 @@ private struct KintaraHTTPClient {
             let freshLabel = freshSeq.map(String.init) ?? "-"
             let keys = SaveBackpackConflictPolicy.safeTopLevelKeys(from: payload)
             let keyLabel = keys.isEmpty ? "-" : keys.joined(separator: ",")
+            let reason = SaveBackpackConflictPolicy.safeReason(from: payload)
+
+            var itemEvidence = ""
+            if let itemDiagnostic {
+                let authoritativeBackpack = payload?["backpack"] as? [String: Any] ?? [:]
+                let beforeLocation = SaveBackpackConflictPolicy.itemLocation(
+                    type: itemDiagnostic.type, iid: itemDiagnostic.iid, in: itemDiagnostic.beforeBackpack
+                )
+                let sentLocation = SaveBackpackConflictPolicy.itemLocation(
+                    type: itemDiagnostic.type, iid: itemDiagnostic.iid, in: backpack
+                )
+                let serverLocation = SaveBackpackConflictPolicy.itemLocation(
+                    type: itemDiagnostic.type, iid: itemDiagnostic.iid, in: authoritativeBackpack
+                )
+                let beforeKeys = SaveBackpackConflictPolicy.itemKeys(
+                    type: itemDiagnostic.type, iid: itemDiagnostic.iid, in: itemDiagnostic.beforeBackpack
+                ).joined(separator: ",")
+                let sentKeys = SaveBackpackConflictPolicy.itemKeys(
+                    type: itemDiagnostic.type, iid: itemDiagnostic.iid, in: backpack
+                ).joined(separator: ",")
+                let serverKeys = SaveBackpackConflictPolicy.itemKeys(
+                    type: itemDiagnostic.type, iid: itemDiagnostic.iid, in: authoritativeBackpack
+                ).joined(separator: ",")
+                let gap = SaveBackpackConflictPolicy.unrepresentedAuthoritativeBackpackKeys(authoritativeBackpack)
+                let gapLabel = gap.isEmpty ? "-" : gap.prefix(32).joined(separator: ",")
+                itemEvidence = " • equip=\(SaveBackpackConflictPolicy.equipmentLabel(type: itemDiagnostic.type)) • iid=\(itemDiagnostic.iid == nil ? "não" : "sim") • loc=\(beforeLocation)→\(sentLocation)→server:\(serverLocation) • itemKeys=\(beforeKeys.isEmpty ? "-" : beforeKeys)|\(sentKeys.isEmpty ? "-" : sentKeys)|\(serverKeys.isEmpty ? "-" : serverKeys) • nãoRepresentadoNoSave=\(gapLabel)"
+            }
+
             throw HTTPError.server(
-                "stale_save • op=\(operation) • baseSeq=\(baseSeq) • responseSeq=\(responseLabel) • freshSeq=\(freshLabel) • classe=\(classification.rawValue) • payloadKeys=\(keyLabel)"
+                "stale_save • op=\(operation) • reason=\(reason) • baseSeq=\(baseSeq) • responseSeq=\(responseLabel) • freshSeq=\(freshLabel) • classe=\(classification.rawValue) • payloadKeys=\(keyLabel)\(itemEvidence)"
             )
         }
     }
