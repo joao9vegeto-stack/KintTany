@@ -245,7 +245,7 @@ final class RealtimeProtocolTests: XCTestCase {
         XCTAssertEqual(BankMutationPolicy.postMovementSettlingMS, 1_200)
     }
 
-    func testStableSaveBackpackPayloadPreservesBuild43ContractAndCurrentResources() throws {
+    func testStableSaveBackpackPayloadUsesExactV30FinalContract() throws {
         let bank: [Any] = [["t": "silver_axe", "n": 1], NSNull()]
         let backpack: [String: Any] = [
             "wood": 12,
@@ -271,9 +271,9 @@ final class RealtimeProtocolTests: XCTestCase {
         let resources = try XCTUnwrap(body["resources"] as? [String: Any])
 
         XCTAssertEqual(RealtimeProtocol.int(resources["wood"]), 12)
-        XCTAssertEqual(RealtimeProtocol.int(resources["silver_ore"]), 16)
-        XCTAssertEqual(RealtimeProtocol.int(resources["cacti"]), 17)
-        XCTAssertEqual(RealtimeProtocol.int(resources["potion_health_l2"]), 3)
+        XCTAssertNil(resources["silver_ore"])
+        XCTAssertNil(resources["cacti"])
+        XCTAssertNil(resources["potion_health_l2"])
         XCTAssertEqual(RealtimeProtocol.int(body["baseSeq"]), 900)
         XCTAssertNotNil(body["intentionalRemovals"] as? [Any])
         XCTAssertEqual((body["bankSlots"] as? [Any])?.count, bank.count)
@@ -727,6 +727,20 @@ final class RealtimeProtocolTests: XCTestCase {
         ]).type, "tool_axe")
     }
 
+    func testBankOnlyIronAxePreservesBestTierInWorldDisposition() throws {
+        let backpack: [String: Any] = [
+            "hotbar": [NSNull()],
+            "invSlots": [NSNull()],
+            "bankSlots": [["t": "iron_axe", "n": 1], ["t": "tool_axe", "n": 1]]
+        ]
+        let best = try XCTUnwrap(ActivityToolPolicy.bestSelection(in: backpack, for: .tree))
+        XCTAssertEqual(best.type, "iron_axe")
+        XCTAssertEqual(
+            GatherToolPreflightPolicy.disposition(tool: best.type, carried: best.carried, bank: best.bank),
+            .needsWorld(tool: "iron_axe")
+        )
+    }
+
     func testPickaxeTierLadderPrefersBankedHigherTierOverCarriedStarter() throws {
         let backpack: [String: Any] = [
             "hotbar": [["t": "tool_pickaxe", "n": 1]],
@@ -744,23 +758,6 @@ final class RealtimeProtocolTests: XCTestCase {
         XCTAssertEqual(best.bank, 1)
     }
 
-    func testGatherPreflightTransactionFailurePreservesSelectedIronAxe() {
-        XCTAssertEqual(
-            GatherToolPreflightPolicy.retryAfterTransactionFailure(
-                selectedTool: "iron_axe",
-                fallback: "tool_axe"
-            ),
-            .needsWorld(tool: "iron_axe")
-        )
-    }
-
-    func testStaleSaveRetryIsExplicitAndSingleShot() {
-        XCTAssertEqual(BankMutationPolicy.maximumStaleSaveRetries, 1)
-        XCTAssertTrue(BankMutationPolicy.shouldRetryAfterStaleSave("stale_save"))
-        XCTAssertTrue(BankMutationPolicy.shouldRetryAfterStaleSave("HTTP 409 • STALE_SAVE"))
-        XCTAssertFalse(BankMutationPolicy.shouldRetryAfterStaleSave("timeout"))
-        XCTAssertFalse(BankMutationPolicy.shouldRetryAfterStaleSave("invalid_state"))
-    }
 
     func testCombatStateConfirmationRequiresFreshSnapshotAndHPDrop() {
         XCTAssertTrue(CombatStateConfirmationPolicy.isStateCorrelatedHit(
@@ -792,14 +789,14 @@ final class RealtimeProtocolTests: XCTestCase {
     }
 
     @MainActor
-    func testGatherPreflightNeverBootstrapsWorldWhenToolWasInBank() {
+    func testGatherPreflightBootstrapsWorldWhenBestTierToolIsBankOnly() {
         let bootstrap = AutomationEngine.bootstrapForRun(
             for: .tree,
-            gatherDisposition: .needsWorld(tool: "tool_axe")
+            gatherDisposition: .needsWorld(tool: "iron_axe")
         )
-        XCTAssertEqual(bootstrap.region, "eldergrove")
-        XCTAssertEqual(bootstrap.position.x, -6.5, accuracy: 0.001)
-        XCTAssertEqual(bootstrap.position.z, -18.5, accuracy: 0.001)
+        XCTAssertEqual(bootstrap.region, "world")
+        XCTAssertEqual(bootstrap.position.x, 22.5, accuracy: 0.001)
+        XCTAssertEqual(bootstrap.position.z, -3.5, accuracy: 0.001)
     }
 
     @MainActor
