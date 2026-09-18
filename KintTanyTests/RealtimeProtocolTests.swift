@@ -1092,4 +1092,43 @@ final class RealtimeProtocolTests: XCTestCase {
     }
 
 
+    func testBuild74DunesAlwaysUsesWorldBankServiceBeforeDesertPresence() {
+        XCTAssertTrue(DunesWorldPreflightPolicy.requiresWorldBankService(for: .silver))
+        XCTAssertTrue(DunesWorldPreflightPolicy.requiresWorldBankService(for: .cacti))
+        XCTAssertFalse(DunesWorldPreflightPolicy.requiresWorldBankService(for: .iron))
+        XCTAssertEqual(DunesWorldPreflightPolicy.bankBootstrap.region, "world")
+        XCTAssertEqual(
+            AutomationEngine.bootstrapForRun(for: .silver, gatherDisposition: .needsWorld(tool: "tool_pickaxe")).region,
+            "world"
+        )
+        XCTAssertEqual(AutomationEngine.bootstrap(for: .silver).region, "desert")
+        XCTAssertEqual(AutomationEngine.bootstrap(for: .cacti).region, "desert")
+    }
+
+    func testBuild74MobTelemetryCountsOnlyAliveEntries() {
+        XCTAssertEqual(MobTelemetryPolicy.visibleCount(chickenAlive: 0, wildAlive: 6), 6)
+        XCTAssertEqual(MobTelemetryPolicy.visibleCount(chickenAlive: 3, wildAlive: 0), 3)
+        XCTAssertEqual(MobTelemetryPolicy.visibleCount(chickenAlive: 2, wildAlive: 5), 5)
+        XCTAssertEqual(MobTelemetryPolicy.visibleCount(chickenAlive: -1, wildAlive: -2), 0)
+    }
+
+    func testBuild74GroundBagPolicySelectsOnlyNewOwnNearbyBag() {
+        let bags: [[String: Any]] = [
+            ["id": "old", "ownerId": 41106, "x": 10.0, "z": 20.0],
+            ["id": "mine-near", "ownerId": 41106, "x": 11.0, "z": 21.0],
+            ["id": "other-near", "ownerId": 999, "x": 10.5, "z": 20.5],
+            ["id": "mine-far", "ownerId": 41106, "x": 30.0, "z": 30.0]
+        ]
+        XCTAssertEqual(
+            WildGroundBagPolicy.candidateIDs(
+                bags: bags,
+                excluding: Set(["old"]),
+                ownerID: 41106,
+                killX: 10.0,
+                killZ: 20.0
+            ),
+            ["mine-near"]
+        )
+    }
+
 }

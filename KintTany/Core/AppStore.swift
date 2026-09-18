@@ -831,18 +831,18 @@ final class AppStore: ObservableObject {
         do {
             var gatherPreflight: GatherToolPreflightDisposition = .ready
             if mode.isDunesGathering {
-                state = .syncing
-                statusMessage = "🛡️ Protegendo inventário para as Dunes"
-                updateContinuedProcessingProgress(forceTitleUpdate: true)
-                let dunesLoadout = try await AutomationEngine.prepareDunesPreflight(for: mode, cookie: cookie)
-                gatherPreflight = .ready
-                log("🛡️ Preflight Dunes • itens carregados protegidos no banco • \(ActivityToolPolicy.displayName(dunesLoadout.tool)) mantida ✅")
-                if dunesLoadout.healthPotionPlus > 0 {
-                    log("❤️‍🔥 Proteção térmica • Health Potion+ carregadas: \(dunesLoadout.healthPotionPlus) • cura automática autoritativa habilitada")
-                } else {
-                    log("⚠️ Proteção térmica • sem Health Potion+ • a coleta será interrompida em HP 30 e sairá para The Shores")
+                guard let fallback = ActivityToolPolicy.requiredTool(for: mode) else {
+                    throw EngineError.missingRequiredItem("ferramenta das Dunes")
                 }
-                log("⚠️ Dunes East é open-PvP/full-loot e sofre calor • a meta será respeitada enquanto houver HP seguro")
+                state = .syncing
+                statusMessage = "🛡️ Preparando banco para as Dunes"
+                stats.lastEvent = "preflight Dunes • World/bank_shop"
+                updateContinuedProcessingProgress(forceTitleUpdate: true)
+                // Build 74: Dunes SEMPRE passam por World/bank_shop, mesmo se a
+                // ferramenta já estiver carregada. Precisamos BANK-FIRST +
+                // Health Potion+ antes de abrir a Presence full-loot.
+                gatherPreflight = .needsWorld(tool: fallback)
+                log("🛡️ Preflight Dunes • World/bank_shop obrigatório • ferramenta + Health Potion+ + BANK-FIRST antes da região full-loot")
             } else if mode.isGathering {
                 gatherPreflight = await AutomationEngine.gatherToolPreflightDisposition(for: mode, cookie: cookie)
                 switch gatherPreflight {
@@ -910,9 +910,21 @@ final class AppStore: ObservableObject {
 
             if GatherPresenceHandoffPolicy.requiresFreshActivityPresence(after: gatherPreflight),
                case .needsWorld(let tool) = gatherPreflight {
-                let name = ActivityToolPolicy.displayName(tool)
-                let carried = try await engine.prepareGatherToolFromWorld(for: mode)
-                guard carried >= 1 else { throw EngineError.missingRequiredItem(name) }
+                var name = ActivityToolPolicy.displayName(tool)
+                if mode.isDunesGathering {
+                    let dunesLoadout = try await engine.prepareDunesLoadoutFromWorld(for: mode)
+                    name = ActivityToolPolicy.displayName(dunesLoadout.tool)
+                    log("🛡️ Preflight Dunes • itens bancáveis protegidos • \(name) mantida ✅")
+                    if dunesLoadout.healthPotionPlus > 0 {
+                        log("❤️‍🔥 Proteção térmica • Health Potion+ carregadas: \(dunesLoadout.healthPotionPlus) • cura automática autoritativa habilitada")
+                    } else {
+                        log("⚠️ Proteção térmica • sem Health Potion+ • coleta será interrompida em HP 30 e sairá para The Shores")
+                    }
+                    log("⚠️ Dunes East é open-PvP/full-loot e sofre calor • Presence do banco será encerrada antes de entrar")
+                } else {
+                    let carried = try await engine.prepareGatherToolFromWorld(for: mode)
+                    guard carried >= 1 else { throw EngineError.missingRequiredItem(name) }
+                }
 
                 diagnostic("[LOADOUT] \(name) confirmado • encerrando Presence World após banco antes da região de coleta")
                 receiverTask?.cancel()

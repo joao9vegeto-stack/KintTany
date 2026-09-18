@@ -59,6 +59,72 @@ struct GatherToolPreflightPolicy {
 
 }
 
+/// Build 74: Silver/Cacti are full-loot activities, so their loadout is always
+/// prepared in a dedicated World/bank_shop Presence before the Dunes Presence
+/// is opened. Even when the tool is already carried, BANK-FIRST and Health
+/// Potion+ preparation still require bank_shop.
+struct DunesWorldPreflightPolicy {
+    static let bankBootstrap = PresenceBootstrap(region: "world", position: Position(x: 22.5, z: -3.5))
+
+    static func requiresWorldBankService(for mode: ActivityMode) -> Bool {
+        mode.isDunesGathering
+    }
+}
+
+/// UI telemetry must describe actionable/live mobs rather than every record
+/// retained in the latest snapshot dictionary. Dead/despawned entries may stay
+/// cached briefly and must not inflate the dashboard counter.
+struct MobTelemetryPolicy {
+    static func visibleCount(chickenAlive: Int, wildAlive: Int) -> Int {
+        max(0, max(chickenAlive, wildAlive))
+    }
+}
+
+/// Ground-bag association is intentionally conservative: only a bag that did
+/// not exist before this fight, belongs to the player (when owner identity is
+/// exposed), and spawned close to the authoritative kill position can be
+/// attributed to this kill.
+struct WildGroundBagPolicy {
+    static let associationRadius: Double = 3.25
+
+    static func candidateIDs(
+        bags: [[String: Any]],
+        excluding baseline: Set<String>,
+        ownerID: Int?,
+        killX: Double,
+        killZ: Double,
+        radius: Double = associationRadius
+    ) -> [String] {
+        bags.compactMap { bag -> String? in
+            guard let id = bagID(bag), !baseline.contains(id) else { return nil }
+            if let ownerID, let observedOwner = bagOwnerID(bag), observedOwner != ownerID { return nil }
+            guard let point = bagPosition(bag), hypot(point.x - killX, point.z - killZ) <= radius else { return nil }
+            return id
+        }.sorted()
+    }
+
+    static func bagID(_ bag: [String: Any]) -> String? {
+        for key in ["id", "bagId", "bag_id", "_id"] {
+            if let value = bag[key] as? String, !value.isEmpty { return value }
+            if let value = RealtimeProtocol.int(bag[key]) { return String(value) }
+        }
+        return nil
+    }
+
+    static func bagOwnerID(_ bag: [String: Any]) -> Int? {
+        let raw = bag["ownerId"] ?? bag["playerId"] ?? bag["pid"] ?? bag["by"] ?? (bag["owner"] as? [String: Any])?["id"]
+        return RealtimeProtocol.int(raw)
+    }
+
+    static func bagPosition(_ bag: [String: Any]) -> (x: Double, z: Double)? {
+        let nested = bag["position"] as? [String: Any]
+        guard let x = RealtimeProtocol.double(bag["x"] ?? bag["px"] ?? nested?["x"]),
+              let z = RealtimeProtocol.double(bag["z"] ?? bag["pz"] ?? nested?["z"])
+        else { return nil }
+        return (x, z)
+    }
+}
+
 struct GatherTimingPolicy {
     /// Preserve the captured browser profile with relative spacing. If iOS
     /// wakes a frame late in background, the next delay starts from that real
@@ -1254,16 +1320,18 @@ actor AutomationEngine {
         bootstrap(for: mode)
     }
 
-    /// v3.0 FINAL architecture: if the selected best-tier tool is bank-only,
-    /// the single Presence starts in World, performs the proven bank withdrawal,
-    /// then the same engine transitions to the gathering region. A carried tool
-    /// still connects directly to its activity region.
+    /// Build 73/74 architecture: if preflight needs bank service, the first
+    /// Presence starts in World. AppStore closes it after World/bank_shop/World
+    /// and opens a fresh Presence already bootstraped in the activity region.
     static func bootstrapForRun(
         for mode: ActivityMode,
         gatherDisposition: GatherToolPreflightDisposition
     ) -> PresenceBootstrap {
         guard mode.isGathering else { return bootstrap(for: mode) }
         if case .needsWorld = gatherDisposition {
+            if DunesWorldPreflightPolicy.requiresWorldBankService(for: mode) {
+                return DunesWorldPreflightPolicy.bankBootstrap
+            }
             return PresenceBootstrap(region: "world", position: Position(x: 22.5, z: -3.5))
         }
         return bootstrap(for: mode)
@@ -1306,20 +1374,6 @@ actor AutomationEngine {
             throw EngineError.missingRequiredItem(ActivityToolPolicy.displayName(tool))
         }
         return max(carried, confirmed.carried)
-    }
-
-    /// Build 72: o fluxo antigo das Dunes fazia mutação de banco só por HTTP,
-    /// sem Presence em `bank_shop`. A captura manual provou que isso não é uma
-    /// operação de banco válida. Até o AppStore migrar este preflight para a
-    /// mesma Presence World → bank_shop → World, falhe fechado antes de tocar
-    /// no inventário. Isso evita repetir `bank_offsite` numa zona full-loot.
-    static func prepareDunesPreflight(for mode: ActivityMode, cookie: String) async throws -> (tool: String, healthPotionPlus: Int) {
-        guard mode.isDunesGathering else {
-            throw EngineError.bankTransitionFailed("preflight Dunes solicitado para atividade incompatível")
-        }
-        throw EngineError.bankTransitionFailed(
-            "preflight Dunes bloqueado na Build 72 • banco exige Presence bank_shop antes de qualquer mutação"
-        )
     }
 
     func prepareIdentity() async {
@@ -1703,7 +1757,13 @@ actor AutomationEngine {
         }
 
         reporter(.player(snapshotPosition, hp: playerHP, shield: playerShield, region: serverRegion ?? region))
-        reporter(.world(nodes: availableSeedCount(), mobs: max(chickens.count, wildMobs.count), serverRegion: serverRegion))
+        let aliveChickenCount = chickens.values.filter { $0.alive }.count
+        let aliveWildCount = wildMobs.values.filter { $0.alive }.count
+        reporter(.world(
+            nodes: availableSeedCount(),
+            mobs: MobTelemetryPolicy.visibleCount(chickenAlive: aliveChickenCount, wildAlive: aliveWildCount),
+            serverRegion: serverRegion
+        ))
     }
 
     private func recordTrustedOwnHP(_ hp: Int, regionHint: String? = nil) {
@@ -3099,9 +3159,9 @@ actor AutomationEngine {
         }
     }
 
-    /// v3.0 FINAL bank path with tier-aware selection. Bank-only gathering starts
-    /// in World, reaches the bank, moves the selected best-tier tool, confirms it,
-    /// and only then proceeds to the gathering region on the same Presence.
+    /// Tier-aware World bank path for ordinary Gathering. AppStore performs the
+    /// Build 73 handoff after this method returns: this Presence ends in World
+    /// and a fresh activity Presence is opened on the same shard.
     @discardableResult
     func prepareGatherToolFromWorld(for mode: ActivityMode) async throws -> Int {
         guard mode.isGathering, let fallback = ActivityToolPolicy.requiredTool(for: mode) else { return 0 }
@@ -3137,6 +3197,83 @@ actor AutomationEngine {
         reporter(.log("🧰 Preflight transacional • \(name) retirada do banco e carregada ✅"))
         try await leaveBankShopToWorld(reason: "\(name) carregada")
         return finalCount
+    }
+
+    /// Build 74: full-loot Dunes preflight runs inside the proven
+    /// World → bank_shop → World transaction. It selects the best valid tier,
+    /// loads up to six Health Potion+, banks every other bankable carried item,
+    /// verifies tool conservation, and returns to World before AppStore closes
+    /// this Presence and opens a fresh `desert` Presence on the same shard.
+    func prepareDunesLoadoutFromWorld(for mode: ActivityMode) async throws -> (tool: String, healthPotionPlus: Int) {
+        guard DunesWorldPreflightPolicy.requiresWorldBankService(for: mode),
+              let fallback = ActivityToolPolicy.requiredTool(for: mode)
+        else {
+            throw EngineError.bankTransitionFailed("preflight Dunes solicitado para atividade incompatível")
+        }
+
+        guard try await waitForRegion("world", timeoutMS: 5_000) else {
+            throw EngineError.regionNotConfirmed("world")
+        }
+
+        try await ensureWorldBankAccess(reason: "preflight Dunes")
+        do {
+            let initial = try await http.backpackState()
+            guard let best = ActivityToolPolicy.bestSelection(in: initial.backpack, for: mode) else {
+                throw EngineError.missingRequiredItem(ActivityToolPolicy.displayName(fallback))
+            }
+
+            let selected = best.type
+            let selectedName = ActivityToolPolicy.displayName(selected)
+            let selectedInitialTotal = best.carried + best.bank
+
+            if best.carried < 1 {
+                let carried = try await http.ensureCarriedItem(type: selected, quantity: 1, preferHotbar: true)
+                guard carried >= 1 else { throw EngineError.missingRequiredItem(selectedName) }
+            }
+
+            _ = try await http.ensurePotionLoadout(targets: [
+                DunesHeatSafetyPolicy.healthPotionPlusType: DunesHeatSafetyPolicy.carriedHealthPotionPlusTarget
+            ])
+
+            let keep: Set<String> = [selected, DunesHeatSafetyPolicy.healthPotionPlusType]
+            let deposit = try await http.depositAllBankFirstInventory(
+                preservingTypes: keep,
+                preserveCombatLoadout: false
+            )
+            guard deposit.unresolved.isEmpty else {
+                throw EngineError.bankDepositFailed(deposit.unresolved.sorted().joined(separator: ", "))
+            }
+
+            for (type, quantity) in deposit.confirmed.sorted(by: { $0.key < $1.key }) {
+                reporter(.log("🏦 Dunes BANK-FIRST • \(quantity)x \(prettyItem(type)) → banco ✅"))
+            }
+            for detail in deposit.diagnostics {
+                reporter(.diagnostic("[DUNES][BANK] \(detail)"))
+            }
+
+            let finalTool = try await http.itemLocationCounts(type: selected)
+            let selectedFinalTotal = finalTool.carried + finalTool.bank
+            guard selectedFinalTotal == selectedInitialTotal else {
+                throw EngineError.bankDepositFailed(
+                    "conservação de \(selectedName) falhou • total \(selectedInitialTotal)→\(selectedFinalTotal)"
+                )
+            }
+            guard finalTool.carried >= 1 else {
+                throw EngineError.gatherLoadoutNotReady(selectedName)
+            }
+
+            let healthPotionPlus = try await http.itemLocationCounts(type: DunesHeatSafetyPolicy.healthPotionPlusType)
+            activeGatherToolType = selected
+            reporter(.log("🧰 Preflight Dunes • \(selectedName) carregada ✅"))
+            reporter(.log("❤️‍🔥 Preflight Dunes • Health Potion+ carregadas: \(healthPotionPlus.carried)/\(DunesHeatSafetyPolicy.carriedHealthPotionPlusTarget)"))
+            try await leaveBankShopToWorld(reason: "preflight Dunes concluído")
+            return (selected, healthPotionPlus.carried)
+        } catch {
+            // Ainda não entramos em full-loot. Tente abandonar o bank_shop antes
+            // de propagar a falha, sem mascarar o erro original.
+            try? await leaveBankShopToWorld(reason: "preflight Dunes abortado")
+            throw error
+        }
     }
 
     private func ensureActivityToolLoadout(for mode: ActivityMode) async throws {
@@ -3594,7 +3731,14 @@ actor AutomationEngine {
             reporter(.log("🎣 Spots do servidor: \(signature)"))
         }
 
-        reporter(.world(nodes: availableSeedCount(), mobs: max(chickens.count, wildMobs.count), serverRegion: "pond"))
+        reporter(.world(
+            nodes: availableSeedCount(),
+            mobs: MobTelemetryPolicy.visibleCount(
+                chickenAlive: chickens.values.filter { $0.alive }.count,
+                wildAlive: wildMobs.values.filter { $0.alive }.count
+            ),
+            serverRegion: "pond"
+        ))
     }
 
     private func ingestFishSpotMoved(_ packet: [String: Any]) {
@@ -4253,11 +4397,27 @@ actor AutomationEngine {
                     break
                 }
 
+                // O probe de ground-bag começa em paralelo e nunca bloqueia o
+                // recuo defensivo. Se o servidor exigir proximidade, esta é a
+                // melhor janela: a requisição nasce enquanto o personagem ainda
+                // está junto da posição da kill. O movimento para SAFE_CAMP segue
+                // imediatamente no actor principal.
+                let immediateGroundBagTask = startImmediateGroundBagCollection(
+                    killPosition: lastTargetPosition,
+                    baseline: groundBagBaseline
+                )
+
                 // Node v5.2.1: sobreviver aos pacotes/danos atrasados vem ANTES
                 // de XP, loot ou seleção do próximo mob. O teste real de Dragon
                 // morreu ~5 s após a kill com HP81/shield0, exatamente esta janela.
-                try await postKillSafety(mode: mode, defeatedMob: target, killPosition: lastTargetPosition)
+                do {
+                    try await postKillSafety(mode: mode, defeatedMob: target, killPosition: lastTargetPosition)
+                } catch {
+                    immediateGroundBagTask?.cancel()
+                    throw error
+                }
                 if emergencyBackgroundExitRequested {
+                    immediateGroundBagTask?.cancel()
                     reporter(.diagnostic("[BG] Expiração detectada durante pós-kill • pulando XP/loot e saindo imediatamente"))
                     break
                 }
@@ -4276,12 +4436,14 @@ actor AutomationEngine {
                 }
                 reporter(.log("✅ \(targetName) derrotado • \(successes)/\(goal) • hits aceitos=\(acceptedHits)\(xpText)"))
 
+                let immediateGroundBagProbe = await immediateGroundBagTask?.value
                 let drops = try await collectWildDrops(
                     mode: mode,
                     targetNumber: target.index,
                     killPosition: lastTargetPosition,
                     backpackBefore: backpackBefore?.backpack,
                     groundBagBaseline: groundBagBaseline,
+                    immediateGroundBagProbe: immediateGroundBagProbe,
                     grantBaseline: grantBaseline
                 )
 
@@ -5459,29 +5621,108 @@ actor AutomationEngine {
         reporter(.log("✅ World confirmado • área segura"))
     }
 
+    private func startImmediateGroundBagCollection(
+        killPosition: Position,
+        baseline: Set<String>?
+    ) -> Task<WildGroundBagProbeResult, Never>? {
+        guard let baseline else { return nil }
+        let client = http
+        let shardID = shardNumber
+        let ownerID = playerID
+        let killX = killPosition.x
+        let killZ = killPosition.z
+
+        return Task {
+            if Task.isCancelled { return .empty }
+            do {
+                let bags = try await client.groundBags(shardID: shardID)
+                let candidates = WildGroundBagPolicy.candidateIDs(
+                    bags: bags,
+                    excluding: baseline,
+                    ownerID: ownerID,
+                    killX: killX,
+                    killZ: killZ
+                )
+                if candidates.isEmpty { return .empty }
+
+                var collected: [String] = []
+                var failures: [String] = []
+                for id in candidates {
+                    if Task.isCancelled { break }
+                    do {
+                        let response = try await client.lootBag(id)
+                        if RealtimeProtocol.bool(response["ok"]) == false {
+                            failures.append("\(id):\((response["error"] as? String) ?? "rejected")")
+                        } else {
+                            collected.append(id)
+                        }
+                    } catch {
+                        failures.append("\(id):\(error.localizedDescription)")
+                    }
+                }
+                return WildGroundBagProbeResult(
+                    observedIDs: candidates,
+                    collectedIDs: collected,
+                    failures: failures,
+                    fetchError: nil
+                )
+            } catch {
+                return WildGroundBagProbeResult(
+                    observedIDs: [],
+                    collectedIDs: [],
+                    failures: [],
+                    fetchError: error.localizedDescription
+                )
+            }
+        }
+    }
+
     private func collectWildDrops(
         mode: ActivityMode,
         targetNumber: Int,
         killPosition: Position,
         backpackBefore: [String: Any]?,
         groundBagBaseline: Set<String>?,
+        immediateGroundBagProbe: WildGroundBagProbeResult?,
         grantBaseline: Int
     ) async throws -> WildDropCollection {
         let mobName = "\(mode.displayName) #\(targetNumber)"
+        let immediatelyCollected = Set(immediateGroundBagProbe?.collectedIDs ?? [])
 
-        // Primeiro procura bags novas, próximas da kill e pertencentes ao próprio jogador.
-        // Nunca toca em bolsa preexistente de outro jogador.
+        if let probe = immediateGroundBagProbe {
+            if !probe.observedIDs.isEmpty {
+                reporter(.diagnostic("[LOOT] \(mobName) • bags observadas durante recuo=\(probe.observedIDs.joined(separator: ","))"))
+            }
+            for id in probe.collectedIDs {
+                reporter(.log("🎁 \(mobName) • drop bag \(id) coletado durante recuo defensivo ✅"))
+            }
+            for failure in probe.failures {
+                reporter(.diagnostic("[LOOT] coleta imediata falhou • \(failure) • fallback pós-segurança será tentado"))
+            }
+            if let fetchError = probe.fetchError {
+                reporter(.diagnostic("[LOOT] probe imediato de ground-bags indisponível: \(fetchError)"))
+            }
+        }
+
+        // Fallback após a estabilização: procura bags novas, próximas da kill e
+        // pertencentes ao jogador. Bags já coletadas pelo probe paralelo nunca
+        // são solicitadas novamente.
         if let groundBagBaseline {
             do {
                 let bags = try await http.groundBags(shardID: shardNumber)
-                for bag in bags {
-                    guard let id = groundBagID(bag), !groundBagBaseline.contains(id) else { continue }
-                    guard groundBagOwnerMatches(bag), groundBagNear(bag, killPosition) else { continue }
+                let candidateIDs = WildGroundBagPolicy.candidateIDs(
+                    bags: bags,
+                    excluding: groundBagBaseline,
+                    ownerID: playerID,
+                    killX: killPosition.x,
+                    killZ: killPosition.z
+                )
+                for id in candidateIDs where !immediatelyCollected.contains(id) {
                     let response = try await http.lootBag(id)
                     if RealtimeProtocol.bool(response["ok"]) == false {
                         reporter(.log("⚠️ \(mobName) • drop bag \(id) recusado pelo servidor"))
                     } else {
-                        reporter(.log("🎁 \(mobName) • drop bag coletado"))
+                        reporter(.log("🎁 \(mobName) • drop bag coletado após estabilização"))
                     }
                 }
             } catch {
@@ -5557,28 +5798,6 @@ actor AutomationEngine {
             return (type, max(1, RealtimeProtocol.int(packet["n"] ?? packet["qty"] ?? packet["quantity"] ?? (packet["item"] as? [String: Any])?["n"]) ?? 1))
         }
         return nil
-    }
-
-    private func groundBagID(_ bag: [String: Any]) -> String? {
-        for key in ["id", "bagId", "bag_id", "_id"] {
-            if let value = bag[key] as? String, !value.isEmpty { return value }
-            if let value = RealtimeProtocol.int(bag[key]) { return String(value) }
-        }
-        return nil
-    }
-
-    private func groundBagOwnerMatches(_ bag: [String: Any]) -> Bool {
-        let raw = bag["ownerId"] ?? bag["playerId"] ?? bag["pid"] ?? bag["by"] ?? (bag["owner"] as? [String: Any])?["id"]
-        guard let owner = RealtimeProtocol.int(raw), let playerID else { return true }
-        return owner == playerID
-    }
-
-    private func groundBagNear(_ bag: [String: Any], _ position: Position, radius: Double = 3.25) -> Bool {
-        let nested = bag["position"] as? [String: Any]
-        let x = RealtimeProtocol.double(bag["x"] ?? bag["px"] ?? nested?["x"])
-        let z = RealtimeProtocol.double(bag["z"] ?? bag["pz"] ?? nested?["z"])
-        guard let x, let z else { return false }
-        return hypot(x - position.x, z - position.z) <= radius
     }
 
     private func inventoryDiff(before: [String: Any], after: [String: Any]) -> InventoryDiff {
@@ -6144,6 +6363,15 @@ private struct InventoryDiff {
 
 private struct WildDropCollection {
     let bankable: [String: Int]
+}
+
+private struct WildGroundBagProbeResult: Sendable {
+    let observedIDs: [String]
+    let collectedIDs: [String]
+    let failures: [String]
+    let fetchError: String?
+
+    static let empty = WildGroundBagProbeResult(observedIDs: [], collectedIDs: [], failures: [], fetchError: nil)
 }
 
 struct BackpackState {
