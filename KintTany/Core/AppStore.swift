@@ -250,6 +250,23 @@ struct GatherPresenceHandoffPolicy {
     }
 }
 
+/// Build 75: a Dunes run has a safe preflight phase (World/bank_shop) and a
+/// full-loot phase. A transport loss during safe preflight must never be
+/// reported as a Dunes/Shores recovery because the desert Presence has not
+/// started yet. Once entry into `desert` is attempted, recovery becomes
+/// conservative and assumes full-loot exposure until The Shores is proven.
+enum DunesPresencePhase: Equatable {
+    case inactive
+    case preflightSafe
+    case fullLootOrEntering
+}
+
+struct DunesPresenceSafetyPolicy {
+    static func requiresShoresRecovery(mode: ActivityMode, phase: DunesPresencePhase) -> Bool {
+        mode.isDunesGathering && phase == .fullLootOrEntering
+    }
+}
+
 struct ActivityStats: Codable {
     var attempts = 0
     var successes = 0
@@ -310,6 +327,7 @@ final class AppStore: ObservableObject {
     private var connectionRecoveryDetail: String?
     private var connectionRecoveryInProgress = false
     private var activeShard: String?
+    private var dunesPresencePhase: DunesPresencePhase = .inactive
 
     // MARK: - Execução em segundo plano
     //
@@ -490,6 +508,7 @@ final class AppStore: ObservableObject {
         connectionRecoveryDetail = nil
         connectionRecoveryInProgress = false
         activeShard = nil
+        dunesPresencePhase = .inactive
         activeRunID = nil
         requestedStopReason = nil
         task = nil
@@ -778,6 +797,7 @@ final class AppStore: ObservableObject {
         connectionRecoveryDetail = nil
         connectionRecoveryInProgress = false
         activeShard = nil
+        dunesPresencePhase = mode.isDunesGathering ? .preflightSafe : .inactive
 
         activity = mode
         state = .connecting
@@ -926,6 +946,7 @@ final class AppStore: ObservableObject {
                     guard carried >= 1 else { throw EngineError.missingRequiredItem(name) }
                 }
 
+                guard activeRunID == runID, !terminalFailureHandled else { return }
                 diagnostic("[LOADOUT] \(name) confirmado • encerrando Presence World após banco antes da região de coleta")
                 receiverTask?.cancel()
                 receiverTask = nil
@@ -941,6 +962,13 @@ final class AppStore: ObservableObject {
                 stats.lastEvent = "handoff de Presence • \(activityBootstrap.region)"
                 updateContinuedProcessingProgress()
 
+                if mode.isDunesGathering {
+                    // From this point the server may create a desert Presence even
+                    // if the client loses transport during the handshake. Recovery
+                    // therefore becomes conservative and must prove The Shores.
+                    dunesPresencePhase = .fullLootOrEntering
+                    diagnostic("[DUNES] preflight seguro concluído • iniciando Presence full-loot em \(activityBootstrap.region)")
+                }
                 let activityStream = try await socket.connect(
                     session: session,
                     shard: selectedShard,
@@ -1089,7 +1117,8 @@ final class AppStore: ObservableObject {
                 )
                 return
             }
-            if mode.isDunesGathering, let activeEngine, let shard = activeShard {
+            if DunesPresenceSafetyPolicy.requiresShoresRecovery(mode: mode, phase: dunesPresencePhase),
+               let activeEngine, let shard = activeShard {
                 await containDunesTerminalFailure(
                     mode: mode,
                     runID: runID,
@@ -1149,8 +1178,16 @@ final class AppStore: ObservableObject {
                 // queda e o receive loop que solicita recovery. Um motivo real
                 // registrado pelo socket ou `.notConnected` fecha essa janela.
                 if connectionRecoveryRequested || disconnectDetail != nil || socketAlreadyClosed {
+                    let detail = disconnectDetail ?? error.localizedDescription
+                    if mode.isDunesGathering,
+                       !DunesPresenceSafetyPolicy.requiresShoresRecovery(mode: mode, phase: dunesPresencePhase) {
+                        await failDunesPreflightTransport(
+                            reason: "Conexão realtime perdida: \(detail)",
+                            runID: runID
+                        )
+                        return
+                    }
                     if !connectionRecoveryRequested {
-                        let detail = disconnectDetail ?? error.localizedDescription
                         requestGatherConnectionRecovery(
                             reason: "Conexão realtime perdida: \(detail)",
                             runID: runID
@@ -1206,7 +1243,8 @@ final class AppStore: ObservableObject {
             // generic teardown while the authoritative region can still be
             // desert. Exit to The Shores on the current Presence or reconnect
             // exclusively to finish that exit.
-            if mode.isDunesGathering, let activeEngine, let shard = activeShard {
+            if DunesPresenceSafetyPolicy.requiresShoresRecovery(mode: mode, phase: dunesPresencePhase),
+               let activeEngine, let shard = activeShard {
                 await containDunesTerminalFailure(
                     mode: mode,
                     runID: runID,
@@ -1258,6 +1296,11 @@ final class AppStore: ObservableObject {
         // pausa a engine e transfere a conexão ao loop de retomada, preservando
         // meta, sucessos e a mesma Continued Processing.
         if mode.isGathering {
+            if mode.isDunesGathering,
+               !DunesPresenceSafetyPolicy.requiresShoresRecovery(mode: mode, phase: dunesPresencePhase) {
+                await failDunesPreflightTransport(reason: reason, runID: runID)
+                return
+            }
             requestGatherConnectionRecovery(reason: reason, runID: runID)
             await socket.close()
             return
@@ -1280,12 +1323,40 @@ final class AppStore: ObservableObject {
         await socket.close()
     }
 
+    /// A queda aconteceu enquanto a sessão ainda estava em World/bank_shop.
+    /// Essa fase não é full-loot: encerre sem abrir `desert` e, principalmente,
+    /// sem declarar The Shores como confirmada.
+    private func failDunesPreflightTransport(reason: String, runID: UUID) async {
+        guard activeRunID == runID,
+              activity?.isDunesGathering == true,
+              dunesPresencePhase == .preflightSafe,
+              !terminalFailureHandled else { return }
+
+        terminalFailureHandled = true
+        realtimeFailureMessage = reason
+        connected = false
+        currentTarget = nil
+        state = .failed
+        statusMessage = "Conexão perdida durante preflight seguro"
+        stats.sessionErrors += 1
+        stats.lastEvent = "preflight Dunes interrompido fora do full-loot"
+        diagnostic("[DUNES][PREFLIGHT] \(reason) • fase segura World/bank_shop • Presence desert NÃO iniciada • The Shores não será declarada")
+        log("⚠️ Preflight Dunes interrompido por perda de conexão • personagem ainda fora da fase full-loot • nenhuma coleta será iniciada")
+        logSessionSummary(mode: activity ?? .silver, outcome: "FALHA DE CONEXÃO • PREFLIGHT SEGURO")
+        finishContinuedProcessing(success: false, reason: "conexão perdida durante preflight seguro das Dunes")
+
+        engineRunTask?.cancel()
+        task?.cancel()
+        await socket.close()
+    }
+
     /// Somente perdas reais do transporte chegam aqui. Recoveries de harvest,
     /// partial e proof miss pertencem exclusivamente à engine e nunca derrubam
     /// uma Presence saudável.
     private func requestGatherConnectionRecovery(reason: String, runID: UUID) {
         guard activeRunID == runID, activity?.isGathering == true, !terminalFailureHandled else { return }
-        let dunesExitOnly = activity?.isDunesGathering == true
+        let dunesExitOnly = activity?.isDunesGathering == true &&
+            DunesPresenceSafetyPolicy.requiresShoresRecovery(mode: activity ?? .stone, phase: dunesPresencePhase)
 
         if !connectionRecoveryRequested {
             connectionRecoveryDetail = reason
