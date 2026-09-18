@@ -29,16 +29,22 @@ struct DashboardBackground: View {
 
 struct PixelPanel<Content: View>: View {
     let accent: Color
+    let inset: CGFloat
     let content: Content
 
-    init(accent: Color = KintTanyTheme.border, @ViewBuilder content: () -> Content) {
+    init(
+        accent: Color = KintTanyTheme.border,
+        inset: CGFloat = 16,
+        @ViewBuilder content: () -> Content
+    ) {
         self.accent = accent
+        self.inset = inset
         self.content = content()
     }
 
     var body: some View {
         content
-            .padding(16)
+            .padding(inset)
             .background(
                 RoundedRectangle(cornerRadius: KintTanyTheme.cornerRadius, style: .continuous)
                     .fill(
