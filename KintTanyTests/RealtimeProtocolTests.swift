@@ -617,7 +617,8 @@ final class RealtimeProtocolTests: XCTestCase {
         XCTAssertEqual(ActivityToolPolicy.requiredTool(for: .stone), "tool_pickaxe")
         XCTAssertEqual(ActivityToolPolicy.requiredTool(for: .coal), "tool_pickaxe")
         XCTAssertEqual(ActivityToolPolicy.acceptedTools(for: .tree), ["silver_axe", "tool_axe_l2", "tool_axe"])
-        XCTAssertEqual(ActivityToolPolicy.acceptedTools(for: .silver), ["silver_pickaxe", "tool_pickaxe_l2", "copper_pickaxe", "tool_pickaxe"])
+        XCTAssertEqual(ActivityToolPolicy.acceptedTools(for: .silver), ["silver_pickaxe", "tool_pickaxe_l2", "copper_pickaxe"])
+        XCTAssertEqual(ActivityToolPolicy.requiredTool(for: .silver), "copper_pickaxe")
         XCTAssertEqual(ActivityToolPolicy.acceptedTools(for: .cacti), ["silver_axe", "tool_axe_l2"])
         XCTAssertEqual(ActivityToolPolicy.requiredTool(for: .fishing), "tool_fishing_rod")
         XCTAssertNil(ActivityToolPolicy.requiredTool(for: .chicken))
@@ -627,6 +628,10 @@ final class RealtimeProtocolTests: XCTestCase {
         XCTAssertTrue(ActivityToolPolicy.isCompatible(type: "silver_axe", with: .tree))
         XCTAssertTrue(ActivityToolPolicy.isCompatible(type: "copper_pickaxe", with: .iron))
         XCTAssertFalse(ActivityToolPolicy.isCompatible(type: "tool_pickaxe", with: .tree))
+        XCTAssertFalse(ActivityToolPolicy.isCompatible(type: "tool_pickaxe", with: .silver))
+        XCTAssertTrue(ActivityToolPolicy.isCompatible(type: "copper_pickaxe", with: .silver))
+        XCTAssertTrue(ActivityToolPolicy.isCompatible(type: "tool_pickaxe_l2", with: .silver))
+        XCTAssertTrue(ActivityToolPolicy.isCompatible(type: "silver_pickaxe", with: .silver))
         XCTAssertFalse(ActivityToolPolicy.isCompatible(type: "tool_axe", with: .cacti))
 
         let backpack: [String: Any] = [
@@ -742,6 +747,14 @@ final class RealtimeProtocolTests: XCTestCase {
         XCTAssertFalse(GatherPresenceHandoffPolicy.requiresFreshActivityPresence(after: .ready))
         XCTAssertTrue(GatherPresenceHandoffPolicy.requiresFreshActivityPresence(after: .needsWorld(tool: "tool_axe_l2")))
         XCTAssertFalse(GatherPresenceHandoffPolicy.requiresFreshActivityPresence(after: .missing(tool: "tool_axe_l2")))
+    }
+
+    func testBuild75DunesTransportRecoveryOnlyClaimsShoresAfterFullLootEntryBegins() {
+        XCTAssertFalse(DunesPresenceSafetyPolicy.requiresShoresRecovery(mode: .silver, phase: .preflightSafe))
+        XCTAssertFalse(DunesPresenceSafetyPolicy.requiresShoresRecovery(mode: .cacti, phase: .preflightSafe))
+        XCTAssertTrue(DunesPresenceSafetyPolicy.requiresShoresRecovery(mode: .silver, phase: .fullLootOrEntering))
+        XCTAssertTrue(DunesPresenceSafetyPolicy.requiresShoresRecovery(mode: .cacti, phase: .fullLootOrEntering))
+        XCTAssertFalse(DunesPresenceSafetyPolicy.requiresShoresRecovery(mode: .stone, phase: .fullLootOrEntering))
     }
 
     func testGatherToolPreflightIsReadyWhenRequiredToolIsCarried() {

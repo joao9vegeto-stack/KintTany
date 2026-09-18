@@ -599,7 +599,8 @@ struct ActivityToolPolicy {
     static func acceptedTools(for mode: ActivityMode) -> [String] {
         switch mode {
         case .tree: return ["silver_axe", "tool_axe_l2", "tool_axe"]
-        case .coal, .stone, .iron, .silver: return ["silver_pickaxe", "tool_pickaxe_l2", "copper_pickaxe", "tool_pickaxe"]
+        case .coal, .stone, .iron: return ["silver_pickaxe", "tool_pickaxe_l2", "copper_pickaxe", "tool_pickaxe"]
+        case .silver: return ["silver_pickaxe", "tool_pickaxe_l2", "copper_pickaxe"]
         case .cacti: return ["silver_axe", "tool_axe_l2"]
         case .fishing: return ["tool_fishing_rod"]
         case .chicken, .zombie, .dragon: return []
@@ -609,7 +610,8 @@ struct ActivityToolPolicy {
     static func requiredTool(for mode: ActivityMode) -> String? {
         switch mode {
         case .tree: return "tool_axe"
-        case .coal, .stone, .iron, .silver: return "tool_pickaxe"
+        case .coal, .stone, .iron: return "tool_pickaxe"
+        case .silver: return "copper_pickaxe"
         case .cacti: return "tool_axe_l2"
         case .fishing: return "tool_fishing_rod"
         case .chicken, .zombie, .dragon: return nil
@@ -655,7 +657,16 @@ struct ActivityToolPolicy {
     }
 
     private static func minimumTier(for mode: ActivityMode) -> Int {
-        mode == .cacti ? 3 : 1
+        switch mode {
+        case .silver:
+            // Kintara Wiki / runtime Build 74: Silver Ore in The Dunes refuses
+            // Starter Pickaxe. A forged Copper Pickaxe or better is required.
+            return 2
+        case .cacti:
+            return 3
+        default:
+            return 1
+        }
     }
 }
 
