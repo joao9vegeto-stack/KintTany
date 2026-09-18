@@ -738,6 +738,12 @@ final class RealtimeProtocolTests: XCTestCase {
         XCTAssertEqual(ActivityToolPolicy.requiredTool(for: .coal), "tool_pickaxe")
     }
 
+    func testGatherPresenceHandoffRequiresFreshActivityPresenceOnlyAfterWorldBankPreflight() {
+        XCTAssertFalse(GatherPresenceHandoffPolicy.requiresFreshActivityPresence(after: .ready))
+        XCTAssertTrue(GatherPresenceHandoffPolicy.requiresFreshActivityPresence(after: .needsWorld(tool: "tool_axe_l2")))
+        XCTAssertFalse(GatherPresenceHandoffPolicy.requiresFreshActivityPresence(after: .missing(tool: "tool_axe_l2")))
+    }
+
     func testGatherToolPreflightIsReadyWhenRequiredToolIsCarried() {
         XCTAssertEqual(
             GatherToolPreflightPolicy.disposition(tool: "tool_pickaxe", carried: 1, bank: 4),

@@ -239,6 +239,17 @@ enum ActivityRateMeter {
     }
 }
 
+/// Build 73: a Presence usada para o preflight transacional do banco não é
+/// reaproveitada para entrar na região de coleta. A evidência de runtime mostra
+/// que World→Eldergrove pode não receber region_ack após o ciclo do banco,
+/// enquanto uma Presence nova já bootstrapada na região funciona normalmente.
+struct GatherPresenceHandoffPolicy {
+    static func requiresFreshActivityPresence(after disposition: GatherToolPreflightDisposition) -> Bool {
+        if case .needsWorld = disposition { return true }
+        return false
+    }
+}
+
 struct ActivityStats: Codable {
     var attempts = 0
     var successes = 0
@@ -845,14 +856,16 @@ final class AppStore: ObservableObject {
                     statusMessage = "🧰 Buscando \(name) no banco"
                     stats.lastEvent = "preflight World • \(name)"
                     updateContinuedProcessingProgress(forceTitleUpdate: true)
-                    log("🧰 Preflight transacional • \(name) está no banco • uma única Presence será mantida de World até a região de coleta")
+                    log("🧰 Preflight transacional • \(name) está no banco • Presence World/bank_shop será encerrada antes da região de coleta")
                 }
             }
 
             // A decisão autoritativa de inventário acontece antes da conexão.
-            // Se a ferramenta está no banco, esta mesma Presence nasce em World,
-            // faz o saque e segue por region_ack até a região de coleta sem trocar socket,
-            // queue token ou engine.
+            // Se a ferramenta está no banco, a primeira Presence nasce em World,
+            // executa o ciclo World→bank_shop→World e termina. A atividade começa
+            // em uma segunda Presence nova, no mesmo shard, já bootstrapada na região
+            // correta. Esse é o ciclo que funcionou nas builds estáveis e evita tentar
+            // World→Eldergrove na Presence recém-usada pelo banco.
             let bootstrap = AutomationEngine.bootstrapForRun(
                 for: mode,
                 gatherDisposition: gatherPreflight
@@ -871,7 +884,7 @@ final class AppStore: ObservableObject {
 
             log("Servidor NA selecionado automaticamente: \(connection.serverName) (\(selectedShard)) • carga \(connection.populationLabel) • fila \(connection.queueLength)")
 
-            let engine = AutomationEngine(
+            var engine = AutomationEngine(
                 socket: socket,
                 cookie: cookie,
                 shard: selectedShard,
@@ -887,22 +900,72 @@ final class AppStore: ObservableObject {
             log("Realtime conectado; engine ativa iniciada")
 
             // O receiver precisa estar ativo antes do preflight World porque a
-            // confirmação de região e os snapshots chegam pela mesma stream que
-            // continuará sendo usada durante toda a atividade.
+            // confirmação de bank_shop/World e os snapshots chegam pela stream
+            // da fase bancária. Se houver saque, essa stream termina antes da
+            // Presence definitiva da atividade.
             receiverTask = makeReceiverTask(stream: stream, engine: engine, mode: mode, runID: runID)
 
             await engine.prepareIdentity()
             guard activeRunID == runID else { return }
 
-            if case .needsWorld(let tool) = gatherPreflight {
+            if GatherPresenceHandoffPolicy.requiresFreshActivityPresence(after: gatherPreflight),
+               case .needsWorld(let tool) = gatherPreflight {
                 let name = ActivityToolPolicy.displayName(tool)
                 let carried = try await engine.prepareGatherToolFromWorld(for: mode)
                 guard carried >= 1 else { throw EngineError.missingRequiredItem(name) }
-                diagnostic("[LOADOUT] \(name) confirmado • Presence preservada • transição World→região de coleta será feita na mesma conexão")
+
+                diagnostic("[LOADOUT] \(name) confirmado • encerrando Presence World após banco antes da região de coleta")
+                receiverTask?.cancel()
+                receiverTask = nil
+                activeEngine = nil
+                connected = false
+                await socket.close()
+                await importSocketTrace()
+                guard activeRunID == runID else { return }
+
+                let activityBootstrap = AutomationEngine.bootstrap(for: mode)
+                state = .connecting
+                statusMessage = "Conectando à região da atividade"
+                stats.lastEvent = "handoff de Presence • \(activityBootstrap.region)"
+                updateContinuedProcessingProgress()
+
+                let activityStream = try await socket.connect(
+                    session: session,
+                    shard: selectedShard,
+                    bootstrap: activityBootstrap
+                )
+                await importSocketTrace()
+                guard activeRunID == runID else { return }
+
+                let activityEngine = AutomationEngine(
+                    socket: socket,
+                    cookie: cookie,
+                    shard: selectedShard,
+                    bootstrap: activityBootstrap,
+                    fishingBait: selectedFishingBait,
+                    reporter: engineReporter(runID: runID)
+                )
+                engine = activityEngine
+                activeEngine = activityEngine
+                receiverTask = makeReceiverTask(
+                    stream: activityStream,
+                    engine: activityEngine,
+                    mode: mode,
+                    runID: runID
+                )
+                connected = true
+                state = .syncing
+                statusMessage = "Sincronizando personagem e mundo"
+                log("Realtime da atividade conectado em \(activityBootstrap.region); nova Presence ativa no \(selectedShard)")
+
+                await activityEngine.prepareIdentity()
+                guard activeRunID == runID else { return }
+                diagnostic("[LOADOUT] \(name) confirmado • Presence World encerrada • nova Presence \(activityBootstrap.region) aberta no mesmo shard \(selectedShard)")
             }
 
+            let runEngine = engine
             let child = Task.detached(priority: .userInitiated) {
-                try await engine.run(mode: mode, goal: runGoal)
+                try await runEngine.run(mode: mode, goal: runGoal)
             }
             engineRunTask = child
             let result = try await child.value
