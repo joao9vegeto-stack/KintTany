@@ -71,6 +71,80 @@ struct DunesWorldPreflightPolicy {
     }
 }
 
+
+/// Build 76: full-loot loadouts preserve exactly one physical tool instance.
+/// The activity tier/type is still selected by ActivityToolPolicy; among copies
+/// of that same type, prefer the lowest positive durability that is already
+/// carried. Only when none is carried do we select an exact bank slot.
+struct DunesToolInstanceIdentity: Equatable {
+    let type: String
+    let iid: String?
+    let durability: Int?
+}
+
+struct DunesToolInstanceSelection: Equatable {
+    let type: String
+    let iid: String?
+    let durability: Int?
+    let sourceKey: String
+    let sourceIndex: Int
+
+    var isCarried: Bool { sourceKey == "hotbar" || sourceKey == "invSlots" }
+    var bankIndex: Int? { sourceKey == "bankSlots" ? sourceIndex : nil }
+    var identity: DunesToolInstanceIdentity {
+        DunesToolInstanceIdentity(type: type, iid: iid, durability: durability)
+    }
+}
+
+struct DunesToolInstancePolicy {
+    static func preferredInstance(in backpack: [String: Any], type: String) -> DunesToolInstanceSelection? {
+        func candidates(in sourceKey: String) -> [DunesToolInstanceSelection] {
+            guard let slots = backpack[sourceKey] as? [Any] else { return [] }
+            return slots.enumerated().compactMap { index, raw in
+                guard let slot = raw as? [String: Any], slot["t"] as? String == type else { return nil }
+                let durability = RealtimeProtocol.int(slot["d"] ?? slot["durability"])
+                // A confirmed zero/negative durability is not intentionally exposed
+                // to a full-loot realm. Unknown durability remains eligible.
+                if let durability, durability <= 0 { return nil }
+                return DunesToolInstanceSelection(
+                    type: type,
+                    iid: SaveBackpackConflictPolicy.normalizedIID(slot["iid"]),
+                    durability: durability,
+                    sourceKey: sourceKey,
+                    sourceIndex: index
+                )
+            }
+        }
+
+        func best(_ values: [DunesToolInstanceSelection]) -> DunesToolInstanceSelection? {
+            values.sorted { lhs, rhs in
+                let ld = lhs.durability ?? Int.max
+                let rd = rhs.durability ?? Int.max
+                if ld != rd { return ld < rd }
+                if lhs.sourceKey != rhs.sourceKey { return lhs.sourceKey < rhs.sourceKey }
+                return lhs.sourceIndex < rhs.sourceIndex
+            }.first
+        }
+
+        let carried = candidates(in: "hotbar") + candidates(in: "invSlots")
+        if let selected = best(carried) { return selected }
+        return best(candidates(in: "bankSlots"))
+    }
+}
+
+struct BankDepositPreservationPolicy {
+    static func matchesSelectedTool(_ slot: [String: Any], selected: DunesToolInstanceIdentity) -> Bool {
+        guard slot["t"] as? String == selected.type else { return false }
+        if let iid = selected.iid {
+            return SaveBackpackConflictPolicy.normalizedIID(slot["iid"]) == iid
+        }
+        if let durability = selected.durability {
+            return RealtimeProtocol.int(slot["d"] ?? slot["durability"]) == durability
+        }
+        return true
+    }
+}
+
 /// UI telemetry must describe actionable/live mobs rather than every record
 /// retained in the latest snapshot dictionary. Dead/despawned entries may stay
 /// cached briefly and must not inflate the dashboard counter.
@@ -3236,9 +3310,17 @@ actor AutomationEngine {
             let selected = best.type
             let selectedName = ActivityToolPolicy.displayName(selected)
             let selectedInitialTotal = best.carried + best.bank
+            guard let selectedInstance = DunesToolInstancePolicy.preferredInstance(in: initial.backpack, type: selected) else {
+                throw EngineError.missingRequiredItem(selectedName)
+            }
 
-            if best.carried < 1 {
-                let carried = try await http.ensureCarriedItem(type: selected, quantity: 1, preferHotbar: true)
+            if !selectedInstance.isCarried {
+                let carried = try await http.ensureCarriedItem(
+                    type: selected,
+                    quantity: 1,
+                    preferHotbar: true,
+                    preferredBankIndex: selectedInstance.bankIndex
+                )
                 guard carried >= 1 else { throw EngineError.missingRequiredItem(selectedName) }
             }
 
@@ -3246,9 +3328,13 @@ actor AutomationEngine {
                 DunesHeatSafetyPolicy.healthPotionPlusType: DunesHeatSafetyPolicy.carriedHealthPotionPlusTarget
             ])
 
-            let keep: Set<String> = [selected, DunesHeatSafetyPolicy.healthPotionPlusType]
+            // Health Potion+ is preserved by type because it is a consumable stack.
+            // The gathering tool is preserved by exact physical identity; every
+            // duplicate of the same tool type is banked before entering full-loot.
+            let keep: Set<String> = [DunesHeatSafetyPolicy.healthPotionPlusType]
             let deposit = try await http.depositAllBankFirstInventory(
                 preservingTypes: keep,
+                preservingTool: selectedInstance.identity,
                 preserveCombatLoadout: false
             )
             guard deposit.unresolved.isEmpty else {
@@ -3269,13 +3355,20 @@ actor AutomationEngine {
                     "conservação de \(selectedName) falhou • total \(selectedInitialTotal)→\(selectedFinalTotal)"
                 )
             }
-            guard finalTool.carried >= 1 else {
-                throw EngineError.gatherLoadoutNotReady(selectedName)
+            guard finalTool.carried == 1 else {
+                throw EngineError.bankDepositFailed(
+                    "full-loot exige exatamente 1x \(selectedName) carregada • confirmado=\(finalTool.carried)"
+                )
             }
 
             let healthPotionPlus = try await http.itemLocationCounts(type: DunesHeatSafetyPolicy.healthPotionPlusType)
             activeGatherToolType = selected
-            reporter(.log("🧰 Preflight Dunes • \(selectedName) carregada ✅"))
+            let durabilityLabel = selectedInstance.durability.map(String.init) ?? "?"
+            let duplicatesProtected = deposit.confirmed[selected] ?? 0
+            reporter(.log("🧰 Preflight Dunes • \(selectedName) carregada ✅ • d=\(durabilityLabel) • instâncias expostas=1"))
+            if duplicatesProtected > 0 {
+                reporter(.log("🏦 Dunes FULL-LOOT • \(duplicatesProtected)x \(selectedName) duplicada(s) protegida(s) no banco ✅"))
+            }
             reporter(.log("❤️‍🔥 Preflight Dunes • Health Potion+ carregadas: \(healthPotionPlus.carried)/\(DunesHeatSafetyPolicy.carriedHealthPotionPlusTarget)"))
             try await leaveBankShopToWorld(reason: "preflight Dunes concluído")
             return (selected, healthPotionPlus.carried)
@@ -6635,7 +6728,12 @@ private struct KintaraHTTPClient {
     /// como objeto inteiro. Stacks simples (ex.: bait) podem ser retirados
     /// parcialmente do banco até a quantidade solicitada.
     @discardableResult
-    func ensureCarriedItem(type: String, quantity targetRaw: Int, preferHotbar: Bool) async throws -> Int {
+    func ensureCarriedItem(
+        type: String,
+        quantity targetRaw: Int,
+        preferHotbar: Bool,
+        preferredBankIndex: Int? = nil
+    ) async throws -> Int {
         let target = max(1, targetRaw)
         let state = try await backpackState()
         var backpack = state.backpack
@@ -6646,7 +6744,7 @@ private struct KintaraHTTPClient {
         let before = InventoryLoadoutAllocator.carriedCount(type: type, hotbar: hotbar, inventory: inv)
         if before >= target { return before }
 
-        let sourceIndex = BankItemSelectionPolicy.preferredBankSlotIndex(type: type, bank: bank)
+        let sourceIndex = preferredBankIndex ?? BankItemSelectionPolicy.preferredBankSlotIndex(type: type, bank: bank)
         let sourceItem = sourceIndex.flatMap { bank[$0] as? [String: Any] }
         let sourceItemKeys = sourceItem?.keys.sorted().joined(separator: ",") ?? "-"
         let sourceIID = SaveBackpackConflictPolicy.normalizedIID(sourceItem?["iid"])
@@ -6730,16 +6828,27 @@ private struct KintaraHTTPClient {
     /// são tocados. Potions/wild_sword permanecem carregados.
     func depositAllBankFirstInventory(
         preservingTypes: Set<String> = [],
+        preservingTool: DunesToolInstanceIdentity? = nil,
         preserveCombatLoadout: Bool = true
     ) async throws -> BankDepositResult {
         let state = try await backpackState()
         var wanted: [String: Int] = [:]
+        var fallbackToolPreserved = false
 
         for key in ["invSlots", "hotbar"] {
             guard let slots = state.backpack[key] as? [Any] else { continue }
             for raw in slots {
                 guard let slot = raw as? [String: Any], let type = slot["t"] as? String else { continue }
                 if preservingTypes.contains(type) { continue }
+                if let preservingTool, BankDepositPreservationPolicy.matchesSelectedTool(slot, selected: preservingTool) {
+                    if preservingTool.iid != nil {
+                        continue
+                    }
+                    if !fallbackToolPreserved {
+                        fallbackToolPreserved = true
+                        continue
+                    }
+                }
                 let policyCandidate = CombatBankFirstPolicy.shouldBankFirst(type: type, slot: slot)
                 let dunesCombatCandidate = !preserveCombatLoadout && CombatBankFirstPolicy.isCombatRequiredType(type)
                 guard policyCandidate || dunesCombatCandidate else { continue }
@@ -6759,7 +6868,11 @@ private struct KintaraHTTPClient {
         var diagnostics: [String] = []
         for (type, quantity) in wanted.sorted(by: { $0.key < $1.key }) {
             do {
-                let result = try await depositIntoBank([type: quantity], sourceKeys: ["invSlots", "hotbar"])
+                let result = try await depositIntoBank(
+                    [type: quantity],
+                    sourceKeys: ["invSlots", "hotbar"],
+                    preservingTool: preservingTool
+                )
                 for (key, value) in result.confirmed { confirmed[key, default: 0] += value }
                 unresolved.formUnion(result.unresolved)
                 diagnostics.append(contentsOf: result.diagnostics)
@@ -6772,10 +6885,14 @@ private struct KintaraHTTPClient {
     }
 
     func depositIntoBank(_ wanted: [String: Int]) async throws -> BankDepositResult {
-        try await depositIntoBank(wanted, sourceKeys: ["invSlots"])
+        try await depositIntoBank(wanted, sourceKeys: ["invSlots"], preservingTool: nil)
     }
 
-    private func depositIntoBank(_ wanted: [String: Int], sourceKeys: [String]) async throws -> BankDepositResult {
+    private func depositIntoBank(
+        _ wanted: [String: Int],
+        sourceKeys: [String],
+        preservingTool: DunesToolInstanceIdentity?
+    ) async throws -> BankDepositResult {
         let state = try await backpackState()
         var backpack = state.backpack
         var sourceArrays: [String: [Any]] = [:]
@@ -6797,6 +6914,7 @@ private struct KintaraHTTPClient {
             }
         }
 
+        var fallbackToolPreserved = false
         for (type, requestedRaw) in wanted.sorted(by: { $0.key < $1.key }) {
             let requested = max(0, requestedRaw)
             guard requested > 0 else { continue }
@@ -6811,6 +6929,16 @@ private struct KintaraHTTPClient {
                     guard var slot = slots[index] as? [String: Any],
                           slot["t"] as? String == type
                     else { continue }
+
+                    if let preservingTool, BankDepositPreservationPolicy.matchesSelectedTool(slot, selected: preservingTool) {
+                        if preservingTool.iid != nil {
+                            continue
+                        }
+                        if !fallbackToolPreserved {
+                            fallbackToolPreserved = true
+                            continue
+                        }
+                    }
 
                     let available = CombatBankFirstPolicy.slotQuantity(slot)
                     guard available > 0 else { continue }

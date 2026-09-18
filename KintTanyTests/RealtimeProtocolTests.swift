@@ -757,6 +757,64 @@ final class RealtimeProtocolTests: XCTestCase {
         XCTAssertFalse(DunesPresenceSafetyPolicy.requiresShoresRecovery(mode: .stone, phase: .fullLootOrEntering))
     }
 
+    func testBuild76DunesToolInstanceChoosesLowestPositiveDurabilityAmongCarriedCopies() throws {
+        let backpack: [String: Any] = [
+            "hotbar": [
+                ["t": "copper_pickaxe", "n": 1, "d": 2_200, "iid": "copper-high"],
+                ["t": "copper_pickaxe", "n": 1, "d": 800, "iid": "copper-low"],
+                ["t": "copper_pickaxe", "n": 1, "d": 0, "iid": "copper-broken"]
+            ],
+            "invSlots": [
+                ["t": "copper_pickaxe", "n": 1, "d": 1_400, "iid": "copper-mid"]
+            ],
+            "bankSlots": [
+                ["t": "copper_pickaxe", "n": 1, "d": 300, "iid": "copper-bank"]
+            ]
+        ]
+
+        let selected = try XCTUnwrap(DunesToolInstancePolicy.preferredInstance(in: backpack, type: "copper_pickaxe"))
+        XCTAssertTrue(selected.isCarried)
+        XCTAssertEqual(selected.iid, "copper-low")
+        XCTAssertEqual(selected.durability, 800)
+        XCTAssertEqual(selected.sourceKey, "hotbar")
+        XCTAssertEqual(selected.sourceIndex, 1)
+        XCTAssertNil(selected.bankIndex)
+    }
+
+    func testBuild76DunesToolInstanceUsesLowestPositiveDurabilityBankCopyWhenNoneCarried() throws {
+        let backpack: [String: Any] = [
+            "hotbar": [NSNull()],
+            "invSlots": [NSNull()],
+            "bankSlots": [
+                ["t": "copper_pickaxe", "n": 1, "d": 1_800, "iid": "bank-high"],
+                ["t": "copper_pickaxe", "n": 1, "d": 640, "iid": "bank-low"],
+                ["t": "copper_pickaxe", "n": 1, "d": 0, "iid": "bank-broken"]
+            ]
+        ]
+
+        let selected = try XCTUnwrap(DunesToolInstancePolicy.preferredInstance(in: backpack, type: "copper_pickaxe"))
+        XCTAssertFalse(selected.isCarried)
+        XCTAssertEqual(selected.iid, "bank-low")
+        XCTAssertEqual(selected.durability, 640)
+        XCTAssertEqual(selected.bankIndex, 1)
+    }
+
+    func testBuild76BankDepositPreservesOnlySelectedToolIID() {
+        let selected = DunesToolInstanceIdentity(type: "copper_pickaxe", iid: "keep-me", durability: 800)
+        XCTAssertTrue(BankDepositPreservationPolicy.matchesSelectedTool(
+            ["t": "copper_pickaxe", "n": 1, "d": 800, "iid": "keep-me"],
+            selected: selected
+        ))
+        XCTAssertFalse(BankDepositPreservationPolicy.matchesSelectedTool(
+            ["t": "copper_pickaxe", "n": 1, "d": 1_400, "iid": "bank-me"],
+            selected: selected
+        ))
+        XCTAssertFalse(BankDepositPreservationPolicy.matchesSelectedTool(
+            ["t": "tool_axe_l2", "n": 1, "d": 800, "iid": "keep-me"],
+            selected: selected
+        ))
+    }
+
     func testGatherToolPreflightIsReadyWhenRequiredToolIsCarried() {
         XCTAssertEqual(
             GatherToolPreflightPolicy.disposition(tool: "tool_pickaxe", carried: 1, bank: 4),
