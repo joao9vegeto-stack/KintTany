@@ -10,7 +10,7 @@ struct DashboardBackground: View {
             )
 
             Canvas { context, size in
-                let spacing: CGFloat = 24
+                let spacing: CGFloat = 22
                 var path = Path()
                 stride(from: CGFloat.zero, through: size.width, by: spacing).forEach { x in
                     path.move(to: CGPoint(x: x, y: 0))
@@ -20,7 +20,7 @@ struct DashboardBackground: View {
                     path.move(to: CGPoint(x: 0, y: y))
                     path.addLine(to: CGPoint(x: size.width, y: y))
                 }
-                context.stroke(path, with: .color(.cyan.opacity(0.025)), lineWidth: 0.5)
+                context.stroke(path, with: .color(KintTanyTheme.cyan.opacity(0.025)), lineWidth: 0.5)
             }
         }
         .ignoresSafeArea()
@@ -41,17 +41,28 @@ struct PixelPanel<Content: View>: View {
             .padding(16)
             .background(
                 RoundedRectangle(cornerRadius: KintTanyTheme.cornerRadius, style: .continuous)
-                    .fill(KintTanyTheme.panel.opacity(0.96))
+                    .fill(
+                        LinearGradient(
+                            colors: [KintTanyTheme.panelRaised.opacity(0.96), KintTanyTheme.panel.opacity(0.98)],
+                            startPoint: .topLeading,
+                            endPoint: .bottomTrailing
+                        )
+                    )
             )
             .overlay(
                 RoundedRectangle(cornerRadius: KintTanyTheme.cornerRadius, style: .continuous)
-                    .stroke(accent.opacity(0.44), lineWidth: 1)
+                    .stroke(accent.opacity(0.62), lineWidth: 1.2)
+            )
+            .overlay(
+                RoundedRectangle(cornerRadius: KintTanyTheme.cornerRadius - 3, style: .continuous)
+                    .stroke(.white.opacity(0.045), lineWidth: 1)
+                    .padding(3)
             )
             .overlay(alignment: .topLeading) {
                 PixelCorner(color: accent)
                     .padding(7)
             }
-            .shadow(color: .black.opacity(0.35), radius: 0, x: 0, y: 4)
+            .shadow(color: .black.opacity(0.46), radius: 0, x: 0, y: 4)
     }
 }
 
@@ -84,7 +95,7 @@ struct DashboardSectionTitle: View {
 
             VStack(alignment: .leading, spacing: 2) {
                 Text(title.uppercased())
-                    .font(.system(size: 14, weight: .black, design: .monospaced))
+                    .font(.system(size: 13, weight: .black, design: .monospaced))
                     .tracking(1.1)
                 Text(subtitle)
                     .font(.caption2)
@@ -117,8 +128,8 @@ struct PixelStatusChip: View {
         .foregroundStyle(color)
         .padding(.horizontal, 9)
         .padding(.vertical, 7)
-        .background(color.opacity(0.1), in: RoundedRectangle(cornerRadius: 7))
-        .overlay(RoundedRectangle(cornerRadius: 7).stroke(color.opacity(0.35), lineWidth: 1))
+        .background(color.opacity(0.12), in: RoundedRectangle(cornerRadius: 6))
+        .overlay(RoundedRectangle(cornerRadius: 6).stroke(color.opacity(0.48), lineWidth: 1))
     }
 }
 

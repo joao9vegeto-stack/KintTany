@@ -7,33 +7,29 @@ struct KintTanyDashboard: View {
     let onOpenSession: () -> Void
     let onOpenFullLog: () -> Void
 
-    private let columns = [
-        GridItem(.flexible(), spacing: 11),
-        GridItem(.flexible(), spacing: 11)
-    ]
+    private let activityColumns = Array(
+        repeating: GridItem(.flexible(), spacing: 6),
+        count: 5
+    )
 
     var body: some View {
         ZStack {
             DashboardBackground()
 
             ScrollView {
-                LazyVStack(spacing: 16) {
-                    header
+                LazyVStack(spacing: 12) {
+                    masthead
+                    connectionStrip
                     activeActivityHero
-                    sessionGoalPanel
-
-                    if app.activity == nil || app.activity == .fishing {
-                        fishingContextPanel
-                    }
-
+                    controlsRow
                     activitySelector
-                    telemetryPanel
-                    sessionStatistics
+                    informationPanels
                     eventLogPanel
+                    footer
                 }
-                .padding(.horizontal, 14)
-                .padding(.top, 8)
-                .padding(.bottom, 38)
+                .padding(.horizontal, 10)
+                .padding(.top, 6)
+                .padding(.bottom, 30)
             }
             .scrollIndicators(.hidden)
         }
@@ -61,72 +57,156 @@ struct KintTanyDashboard: View {
     }
 
     private var buildNumber: String {
-        Bundle.main.object(forInfoDictionaryKey: "CFBundleVersion") as? String ?? "77"
+        Bundle.main.object(forInfoDictionaryKey: "CFBundleVersion") as? String ?? "78"
     }
 
-    private var header: some View {
-        VStack(spacing: 13) {
-            HStack(alignment: .center, spacing: 12) {
-                VStack(alignment: .leading, spacing: 4) {
-                    HStack(spacing: 8) {
-                        Text("KintTany")
-                            .font(.system(size: 28, weight: .black, design: .rounded))
-                            .foregroundStyle(.white)
-                        Text("v\(appVersion) • \(buildNumber)")
-                            .font(.system(size: 9, weight: .black, design: .monospaced))
-                            .foregroundStyle(KintTanyTheme.cyan)
-                            .padding(.horizontal, 7)
-                            .padding(.vertical, 4)
-                            .background(KintTanyTheme.cyan.opacity(0.1), in: RoundedRectangle(cornerRadius: 5))
-                    }
+    // MARK: - Masthead
 
-                    Text("PAINEL DE AVENTURA")
-                        .font(.system(size: 10, weight: .black, design: .monospaced))
-                        .tracking(2.1)
-                        .foregroundStyle(KintTanyTheme.mutedText)
+    private var masthead: some View {
+        ZStack(alignment: .bottomLeading) {
+            Image("ActivityZombie")
+                .resizable()
+                .scaledToFill()
+                .frame(height: 154)
+                .clipped()
+
+            LinearGradient(
+                colors: [
+                    KintTanyTheme.backgroundBottom.opacity(0.35),
+                    KintTanyTheme.backgroundBottom.opacity(0.78),
+                    KintTanyTheme.backgroundBottom.opacity(0.98)
+                ],
+                startPoint: .topTrailing,
+                endPoint: .bottomLeading
+            )
+
+            VStack(alignment: .leading, spacing: 3) {
+                HStack(alignment: .firstTextBaseline, spacing: 8) {
+                    Text("KintTany")
+                        .font(.system(size: 42, weight: .black, design: .rounded))
+                        .foregroundStyle(
+                            LinearGradient(
+                                colors: [Color.yellow, KintTanyTheme.gold, KintTanyTheme.orange],
+                                startPoint: .top,
+                                endPoint: .bottom
+                            )
+                        )
+                        .shadow(color: .black, radius: 0, x: 2, y: 3)
+
+                    Text("v\(appVersion)")
+                        .font(.system(size: 12, weight: .black, design: .monospaced))
+                        .foregroundStyle(KintTanyTheme.cyan)
                 }
 
-                Spacer(minLength: 4)
+                Text("PAINEL DE CONTROLE")
+                    .font(.system(size: 13, weight: .black, design: .monospaced))
+                    .tracking(2.0)
+                    .foregroundStyle(.white)
 
+                Text("JOGUE MAIS • TRABALHE MENOS")
+                    .font(.system(size: 9, weight: .bold, design: .monospaced))
+                    .tracking(1.2)
+                    .foregroundStyle(KintTanyTheme.mutedText)
+            }
+            .padding(14)
+
+            VStack(alignment: .trailing, spacing: 5) {
+                Image(systemName: "crown.fill")
+                    .foregroundStyle(KintTanyTheme.gold)
+                Text("BUILD \(buildNumber)")
+                    .font(.system(size: 8, weight: .black, design: .monospaced))
+                    .foregroundStyle(KintTanyTheme.cyan)
+            }
+            .padding(12)
+            .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .bottomTrailing)
+        }
+        .frame(height: 154)
+        .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
+        .overlay(
+            RoundedRectangle(cornerRadius: 14, style: .continuous)
+                .stroke(KintTanyTheme.cyan.opacity(0.5), lineWidth: 1)
+        )
+        .accessibilityElement(children: .combine)
+    }
+
+    private var connectionStrip: some View {
+        PixelPanel(accent: connectionPresentation.color) {
+            HStack(spacing: 8) {
                 Button(action: onOpenSession) {
-                    Image(systemName: app.hasSession ? "person.crop.circle.badge.checkmark" : "person.crop.circle.badge.exclamationmark")
-                        .font(.system(size: 22, weight: .bold))
-                        .foregroundStyle(app.hasSession ? Color.green : KintTanyTheme.gold)
-                        .frame(width: 46, height: 46)
-                        .background(KintTanyTheme.panelRaised, in: RoundedRectangle(cornerRadius: 10))
-                        .overlay(RoundedRectangle(cornerRadius: 10).stroke(KintTanyTheme.border.opacity(0.5), lineWidth: 1))
+                    connectionDatum
                 }
                 .buttonStyle(.plain)
-                .accessibilityLabel("Abrir sessão")
-            }
 
-            HStack(spacing: 8) {
-                PixelStatusChip(text: connectionPresentation.text, color: connectionPresentation.color)
+                stripDivider
+
                 TimelineView(.periodic(from: .now, by: 1)) { context in
-                    headerDatum(icon: "clock.fill", text: sessionDurationText(at: context.date))
+                    stripDatum(
+                        icon: "clock.fill",
+                        label: "Sessão",
+                        value: sessionDurationText(at: context.date),
+                        color: KintTanyTheme.cyan
+                    )
                 }
-                headerDatum(icon: "map.fill", text: currentRegion)
-                Spacer(minLength: 0)
+
+                stripDivider
+
+                stripDatum(
+                    icon: "globe.americas.fill",
+                    label: "Mundo",
+                    value: currentRegion,
+                    color: .blue
+                )
             }
         }
-        .padding(.horizontal, 2)
     }
 
-    private func headerDatum(icon: String, text: String) -> some View {
-        HStack(spacing: 5) {
-            Image(systemName: icon)
-                .font(.system(size: 9, weight: .bold))
-                .foregroundStyle(KintTanyTheme.cyan)
-            Text(text)
-                .font(.system(size: 9, weight: .bold, design: .monospaced))
-                .foregroundStyle(KintTanyTheme.mutedText)
-                .lineLimit(1)
-                .minimumScaleFactor(0.7)
+    private var connectionDatum: some View {
+        HStack(spacing: 8) {
+            Circle()
+                .fill(connectionPresentation.color)
+                .frame(width: 12, height: 12)
+                .shadow(color: connectionPresentation.color, radius: 5)
+
+            VStack(alignment: .leading, spacing: 1) {
+                Text(connectionPresentation.text.uppercased())
+                    .font(.system(size: 11, weight: .black, design: .monospaced))
+                    .foregroundStyle(connectionPresentation.color)
+                Text(app.hasSession ? "KintTany Online" : "Abrir sessão")
+                    .font(.system(size: 8, weight: .semibold, design: .monospaced))
+                    .foregroundStyle(KintTanyTheme.mutedText)
+                    .lineLimit(1)
+            }
         }
-        .padding(.horizontal, 8)
-        .padding(.vertical, 7)
-        .background(.black.opacity(0.22), in: RoundedRectangle(cornerRadius: 7))
+        .frame(maxWidth: .infinity, alignment: .leading)
     }
+
+    private func stripDatum(icon: String, label: String, value: String, color: Color) -> some View {
+        HStack(spacing: 6) {
+            Image(systemName: icon)
+                .font(.system(size: 13, weight: .bold))
+                .foregroundStyle(color)
+
+            VStack(alignment: .leading, spacing: 1) {
+                Text(label.uppercased())
+                    .font(.system(size: 7, weight: .black, design: .monospaced))
+                    .foregroundStyle(KintTanyTheme.mutedText)
+                Text(value)
+                    .font(.system(size: 10, weight: .black, design: .monospaced))
+                    .foregroundStyle(.white)
+                    .lineLimit(1)
+                    .minimumScaleFactor(0.65)
+            }
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+    }
+
+    private var stripDivider: some View {
+        Rectangle()
+            .fill(KintTanyTheme.border.opacity(0.42))
+            .frame(width: 1, height: 34)
+    }
+
+    // MARK: - Current activity
 
     private var activeActivityHero: some View {
         Group {
@@ -136,13 +216,12 @@ struct KintTanyDashboard: View {
                 idleHero
             }
         }
-        .frame(maxWidth: .infinity)
-        .clipShape(RoundedRectangle(cornerRadius: 18, style: .continuous))
+        .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
         .overlay(
-            RoundedRectangle(cornerRadius: 18, style: .continuous)
-                .stroke((app.activity?.accent ?? KintTanyTheme.border).opacity(0.62), lineWidth: 1)
+            RoundedRectangle(cornerRadius: 14, style: .continuous)
+                .stroke((app.activity?.accent ?? KintTanyTheme.cyan).opacity(0.7), lineWidth: 1.2)
         )
-        .shadow(color: (app.activity?.accent ?? .black).opacity(0.22), radius: 18, y: 8)
+        .shadow(color: (app.activity?.accent ?? KintTanyTheme.cyan).opacity(0.18), radius: 12, y: 5)
     }
 
     private func activeHero(for mode: ActivityMode) -> some View {
@@ -150,48 +229,69 @@ struct KintTanyDashboard: View {
             Image(mode.artworkName)
                 .resizable()
                 .scaledToFill()
-                .frame(height: 320)
+                .frame(height: 318)
                 .clipped()
 
             LinearGradient(
-                colors: [.black.opacity(0.02), .black.opacity(0.46), KintTanyTheme.backgroundBottom.opacity(0.97)],
+                colors: [.black.opacity(0.02), .black.opacity(0.34), KintTanyTheme.backgroundBottom.opacity(0.97)],
                 startPoint: .top,
                 endPoint: .bottom
             )
 
-            VStack(alignment: .leading, spacing: 11) {
-                HStack {
-                    PixelStatusChip(text: mode.categoryLabel, color: mode.accent, systemImage: mode.icon)
+            VStack(alignment: .leading, spacing: 9) {
+                HStack(alignment: .top) {
+                    VStack(alignment: .leading, spacing: 4) {
+                        Label("ATIVIDADE ATUAL", systemImage: mode.icon)
+                            .font(.system(size: 9, weight: .black, design: .monospaced))
+                            .tracking(1)
+                            .foregroundStyle(KintTanyTheme.cyan)
+
+                        Text(mode.localizedTitle.uppercased())
+                            .font(.system(size: 34, weight: .black, design: .rounded))
+                            .foregroundStyle(mode.accent)
+                            .shadow(color: .black, radius: 2, y: 2)
+                    }
+
                     Spacer()
+
                     liveRateChip
                 }
 
-                Spacer(minLength: 70)
+                Spacer(minLength: 74)
 
-                Text(mode.localizedTitle.uppercased())
-                    .font(.system(size: 31, weight: .black, design: .rounded))
-                    .foregroundStyle(.white)
-                    .shadow(color: .black, radius: 2, y: 2)
+                HStack(alignment: .bottom, spacing: 10) {
+                    VStack(alignment: .leading, spacing: 4) {
+                        Text(app.displayStatusMessage)
+                            .font(.system(size: 12, weight: .bold, design: .monospaced))
+                            .foregroundStyle(.white)
+                            .lineLimit(2)
 
-                Text(app.displayStatusMessage)
-                    .font(.subheadline.weight(.semibold))
-                    .foregroundStyle(.white.opacity(0.9))
-                    .lineLimit(2)
+                        if let target = app.currentTarget {
+                            Label(target, systemImage: "scope")
+                                .font(.system(size: 10, weight: .bold, design: .monospaced))
+                                .foregroundStyle(mode.accent)
+                                .lineLimit(1)
+                        }
+                    }
 
-                if let target = app.currentTarget {
-                    Label(target, systemImage: "scope")
-                        .font(.system(size: 11, weight: .bold, design: .monospaced))
-                        .foregroundStyle(mode.accent)
-                        .lineLimit(1)
-                }
+                    Spacer(minLength: 4)
 
-                HStack(spacing: 12) {
-                    PixelStat(value: "\(app.stats.successes)/\(app.sessionGoal)", label: "Progresso", color: mode.accent)
-                    PixelStat(value: "\(app.stats.failures)", label: "Falhas")
-                    PixelStat(value: app.state.label, label: "Estado")
+                    PixelStatusChip(text: app.state.label, color: mode.accent, systemImage: stateIcon)
                 }
 
                 PixelProgressBar(progress: app.progress, color: mode.accent)
+
+                HStack(spacing: 11) {
+                    PixelStat(value: "\(app.stats.successes)/\(app.sessionGoal)", label: "Meta", color: mode.accent)
+                    PixelStat(value: "\(app.stats.attempts)", label: "Tentativas")
+
+                    if mode == .chicken || mode.isWildCombat {
+                        PixelStat(value: "\(app.stats.confirmedHits)", label: "Hits", color: KintTanyTheme.cyan)
+                        PixelStat(value: "\(app.stats.kills)", label: "Kills", color: KintTanyTheme.gold)
+                    } else {
+                        PixelStat(value: "\(app.stats.failures)", label: "Falhas", color: KintTanyTheme.red)
+                    }
+                }
 
                 Button(role: .destructive) {
                     app.stop()
@@ -199,45 +299,42 @@ struct KintTanyDashboard: View {
                     Label("PARAR ATIVIDADE", systemImage: "stop.fill")
                         .frame(maxWidth: .infinity)
                 }
-                .buttonStyle(PixelIconButtonStyle(color: .red))
+                .buttonStyle(PixelIconButtonStyle(color: KintTanyTheme.red))
             }
-            .padding(16)
+            .padding(14)
         }
-        .frame(height: 320)
+        .frame(height: 318)
     }
 
     private var idleHero: some View {
         ZStack {
-            LinearGradient(
-                colors: [KintTanyTheme.panelRaised, KintTanyTheme.backgroundBottom],
-                startPoint: .topLeading,
-                endPoint: .bottomTrailing
-            )
+            Image("ActivityZombie")
+                .resizable()
+                .scaledToFill()
+                .frame(height: 242)
+                .clipped()
+                .saturation(0.65)
 
-            Circle()
-                .fill(KintTanyTheme.cyan.opacity(0.08))
-                .frame(width: 190, height: 190)
-                .blur(radius: 2)
+            KintTanyTheme.backgroundBottom.opacity(0.76)
 
-            VStack(spacing: 14) {
-                Image(systemName: "sparkles.rectangle.stack.fill")
-                    .font(.system(size: 42, weight: .bold))
-                    .foregroundStyle(KintTanyTheme.cyan)
-                    .shadow(color: KintTanyTheme.cyan.opacity(0.6), radius: 12)
+            VStack(spacing: 11) {
+                PixelStatusChip(text: "ATIVIDADE ATUAL", color: KintTanyTheme.cyan, systemImage: "flag.fill")
 
-                Text("PRONTO PARA AVENTURA")
-                    .font(.system(size: 20, weight: .black, design: .monospaced))
+                Text("ESCOLHA SUA MISSÃO")
+                    .font(.system(size: 24, weight: .black, design: .monospaced))
+                    .foregroundStyle(.white)
+                    .multilineTextAlignment(.center)
 
-                Text("Escolha uma atividade abaixo para iniciar.")
-                    .font(.subheadline)
+                Text("As cenas e os dados mudam conforme a atividade real.")
+                    .font(.system(size: 10, weight: .semibold, design: .monospaced))
                     .foregroundStyle(KintTanyTheme.mutedText)
                     .multilineTextAlignment(.center)
 
                 PixelStatusChip(text: app.state.label, color: connectionPresentation.color, systemImage: stateIcon)
             }
-            .padding(24)
+            .padding(20)
         }
-        .frame(height: 250)
+        .frame(height: 242)
     }
 
     private var liveRateChip: some View {
@@ -250,63 +347,93 @@ struct KintTanyDashboard: View {
         }
     }
 
-    private var sessionGoalPanel: some View {
-        PixelPanel(accent: KintTanyTheme.gold) {
-            VStack(alignment: .leading, spacing: 14) {
-                DashboardSectionTitle(
-                    title: "Meta da sessão",
-                    subtitle: app.activity == nil ? "Defina antes de iniciar" : "Bloqueada durante a atividade",
-                    accent: KintTanyTheme.gold
-                )
+    // MARK: - Session controls
 
-                HStack(spacing: 10) {
-                    Button {
-                        app.goal = max(1, app.goal - 1)
-                    } label: {
-                        Image(systemName: "minus")
-                            .frame(width: 22, height: 22)
-                    }
-                    .buttonStyle(PixelIconButtonStyle(color: KintTanyTheme.border))
-                    .disabled(app.activity != nil)
+    private var controlsRow: some View {
+        ViewThatFits(in: .horizontal) {
+            HStack(alignment: .top, spacing: 10) {
+                sessionGoalPanel
+                activityContextPanel
+            }
 
-                    TextField("Meta", value: $app.goal, format: .number)
-                        .keyboardType(.numberPad)
-                        .focused($goalFieldFocused)
-                        .font(.system(size: 27, weight: .black, design: .monospaced))
-                        .multilineTextAlignment(.center)
-                        .frame(maxWidth: .infinity)
-                        .padding(.vertical, 10)
-                        .background(.black.opacity(0.32), in: RoundedRectangle(cornerRadius: 8))
-                        .overlay(
-                            RoundedRectangle(cornerRadius: 8)
-                                .stroke(goalFieldFocused ? KintTanyTheme.gold : Color.white.opacity(0.1), lineWidth: 1)
-                        )
-                        .disabled(app.activity != nil)
-
-                    Button {
-                        app.goal = min(100_000, app.goal + 1)
-                    } label: {
-                        Image(systemName: "plus")
-                            .frame(width: 22, height: 22)
-                    }
-                    .buttonStyle(PixelIconButtonStyle(color: KintTanyTheme.border))
-                    .disabled(app.activity != nil)
-                }
-
-                if app.activity != nil {
-                    PixelProgressBar(progress: app.progress, color: app.activity?.accent ?? KintTanyTheme.cyan)
-                }
+            VStack(spacing: 10) {
+                sessionGoalPanel
+                activityContextPanel
             }
         }
     }
 
-    private var fishingContextPanel: some View {
-        PixelPanel(accent: .cyan) {
-            VStack(alignment: .leading, spacing: 12) {
+    private var sessionGoalPanel: some View {
+        PixelPanel(accent: KintTanyTheme.gold) {
+            VStack(alignment: .leading, spacing: 11) {
                 DashboardSectionTitle(
-                    title: "Equipamento de pesca",
-                    subtitle: "Isca selecionada para a próxima sessão",
-                    accent: .cyan
+                    title: "Meta da sessão",
+                    subtitle: app.activity == nil ? "Quantidade desejada" : "Progresso atual",
+                    accent: KintTanyTheme.gold
+                )
+
+                HStack(spacing: 7) {
+                    compactGoalButton(systemImage: "minus") {
+                        app.goal = max(1, app.goal - 1)
+                    }
+
+                    TextField("Meta", value: $app.goal, format: .number)
+                        .keyboardType(.numberPad)
+                        .focused($goalFieldFocused)
+                        .font(.system(size: 22, weight: .black, design: .monospaced))
+                        .multilineTextAlignment(.center)
+                        .padding(.vertical, 9)
+                        .frame(maxWidth: .infinity)
+                        .background(KintTanyTheme.panelDeep, in: RoundedRectangle(cornerRadius: 6))
+                        .overlay(
+                            RoundedRectangle(cornerRadius: 6)
+                                .stroke(goalFieldFocused ? KintTanyTheme.gold : KintTanyTheme.border.opacity(0.45), lineWidth: 1)
+                        )
+                        .disabled(app.activity != nil)
+
+                    compactGoalButton(systemImage: "plus") {
+                        app.goal = min(100_000, app.goal + 1)
+                    }
+                }
+
+                if app.activity != nil {
+                    PixelProgressBar(progress: app.progress, color: app.activity?.accent ?? KintTanyTheme.green)
+                    Text("\(app.stats.successes) / \(app.sessionGoal)")
+                        .font(.system(size: 9, weight: .black, design: .monospaced))
+                        .foregroundStyle(KintTanyTheme.mutedText)
+                        .frame(maxWidth: .infinity, alignment: .trailing)
+                }
+            }
+            .frame(maxWidth: .infinity, alignment: .leading)
+        }
+    }
+
+    private func compactGoalButton(systemImage: String, action: @escaping () -> Void) -> some View {
+        Button(action: action) {
+            Image(systemName: systemImage)
+                .font(.system(size: 14, weight: .black))
+                .frame(width: 24, height: 24)
+        }
+        .buttonStyle(PixelIconButtonStyle(color: KintTanyTheme.border))
+        .disabled(app.activity != nil)
+    }
+
+    @ViewBuilder
+    private var activityContextPanel: some View {
+        if app.activity == nil || app.activity == .fishing {
+            fishingContextPanel
+        } else {
+            currentContextPanel
+        }
+    }
+
+    private var fishingContextPanel: some View {
+        PixelPanel(accent: KintTanyTheme.cyan) {
+            VStack(alignment: .leading, spacing: 11) {
+                DashboardSectionTitle(
+                    title: "Isca / equipamento",
+                    subtitle: "Configuração real de pesca",
+                    accent: KintTanyTheme.cyan
                 )
 
                 Picker("Isca", selection: $app.selectedFishingBait) {
@@ -315,54 +442,100 @@ struct KintTanyDashboard: View {
                     }
                 }
                 .pickerStyle(.menu)
-                .tint(.cyan)
+                .tint(KintTanyTheme.cyan)
                 .disabled(app.activity != nil)
                 .frame(maxWidth: .infinity, alignment: .leading)
-                .padding(.horizontal, 12)
-                .padding(.vertical, 8)
-                .background(.black.opacity(0.3), in: RoundedRectangle(cornerRadius: 8))
-                .overlay(RoundedRectangle(cornerRadius: 8).stroke(.cyan.opacity(0.28), lineWidth: 1))
+                .padding(.horizontal, 10)
+                .padding(.vertical, 7)
+                .background(KintTanyTheme.panelDeep, in: RoundedRectangle(cornerRadius: 6))
+                .overlay(RoundedRectangle(cornerRadius: 6).stroke(KintTanyTheme.cyan.opacity(0.4), lineWidth: 1))
 
-                HStack(spacing: 7) {
-                    Image(systemName: app.selectedFishingBait.isAutomationValidated ? "checkmark.shield.fill" : "exclamationmark.triangle.fill")
-                    Text(app.selectedFishingBait.supportLabel)
-                }
-                .font(.caption2.weight(.semibold))
-                .foregroundStyle(app.selectedFishingBait.isAutomationValidated ? Color.green : KintTanyTheme.gold)
+                Label(
+                    app.selectedFishingBait.supportLabel,
+                    systemImage: app.selectedFishingBait.isAutomationValidated ? "checkmark.shield.fill" : "exclamationmark.triangle.fill"
+                )
+                .font(.system(size: 8, weight: .semibold, design: .monospaced))
+                .foregroundStyle(app.selectedFishingBait.isAutomationValidated ? KintTanyTheme.green : KintTanyTheme.gold)
+                .lineLimit(2)
             }
+            .frame(maxWidth: .infinity, alignment: .leading)
         }
     }
+
+    private var currentContextPanel: some View {
+        PixelPanel(accent: app.activity?.accent ?? KintTanyTheme.cyan) {
+            VStack(alignment: .leading, spacing: 11) {
+                DashboardSectionTitle(
+                    title: "Contexto atual",
+                    subtitle: app.activity?.activityDescription ?? "Atividade",
+                    accent: app.activity?.accent ?? KintTanyTheme.cyan
+                )
+
+                contextLine(icon: "scope", label: "Alvo", value: app.currentTarget ?? "Aguardando")
+                contextLine(icon: stateIcon, label: "Estado", value: app.state.label)
+                contextLine(icon: "map.fill", label: "Região", value: currentRegion)
+            }
+            .frame(maxWidth: .infinity, alignment: .leading)
+        }
+    }
+
+    private func contextLine(icon: String, label: String, value: String) -> some View {
+        HStack(spacing: 7) {
+            Image(systemName: icon)
+                .font(.system(size: 10, weight: .bold))
+                .foregroundStyle(app.activity?.accent ?? KintTanyTheme.cyan)
+                .frame(width: 15)
+            Text(label.uppercased())
+                .font(.system(size: 7, weight: .black, design: .monospaced))
+                .foregroundStyle(KintTanyTheme.mutedText)
+            Spacer(minLength: 2)
+            Text(value)
+                .font(.system(size: 9, weight: .bold, design: .monospaced))
+                .foregroundStyle(.white)
+                .lineLimit(1)
+                .minimumScaleFactor(0.65)
+        }
+    }
+
+    // MARK: - Activity selector
 
     private var activitySelector: some View {
-        VStack(alignment: .leading, spacing: 12) {
-            DashboardSectionTitle(
-                title: "Selecionar atividade",
-                subtitle: "Cada toque inicia uma sessão real",
-                accent: KintTanyTheme.cyan
-            )
+        PixelPanel(accent: KintTanyTheme.cyan) {
+            VStack(alignment: .leading, spacing: 11) {
+                HStack(alignment: .top) {
+                    DashboardSectionTitle(
+                        title: "Selecionar atividade",
+                        subtitle: "Uma atividade real por vez",
+                        accent: KintTanyTheme.cyan
+                    )
+                    Spacer()
+                    Text("10 MISSÕES")
+                        .font(.system(size: 8, weight: .black, design: .monospaced))
+                        .foregroundStyle(KintTanyTheme.gold)
+                }
 
-            LazyVGrid(columns: columns, spacing: 11) {
-                ForEach(ActivityMode.allCases) { mode in
-                    activityCard(mode)
+                LazyVGrid(columns: activityColumns, spacing: 7) {
+                    ForEach(ActivityMode.allCases) { mode in
+                        compactActivityCard(mode)
+                    }
                 }
             }
         }
     }
 
-    private func activityCard(_ mode: ActivityMode) -> some View {
+    private func compactActivityCard(_ mode: ActivityMode) -> some View {
         let selected = app.activity == mode
         let unavailable = app.activity != nil && !selected
 
         return Button {
             app.start(mode)
         } label: {
-            VStack(alignment: .leading, spacing: 0) {
-                ZStack(alignment: .topTrailing) {
+            VStack(spacing: 4) {
+                ZStack {
                     Image(mode.artworkName)
                         .resizable()
                         .scaledToFill()
-                        .frame(maxWidth: .infinity)
-                        .frame(height: 92)
+                        .frame(height: 52)
                         .clipped()
 
                     LinearGradient(
@@ -371,149 +544,161 @@ struct KintTanyDashboard: View {
                         endPoint: .bottom
                     )
 
-                    PixelStatusChip(text: mode.categoryLabel, color: mode.accent)
-                        .scaleEffect(0.82, anchor: .topTrailing)
-                        .padding(6)
-                }
-
-                HStack(spacing: 8) {
                     Image(systemName: mode.icon)
-                        .font(.system(size: 13, weight: .bold))
+                        .font(.system(size: 16, weight: .black))
                         .foregroundStyle(mode.accent)
-                        .frame(width: 20)
-
-                    VStack(alignment: .leading, spacing: 2) {
-                        Text(mode.localizedTitle)
-                            .font(.system(size: 14, weight: .black, design: .rounded))
-                            .foregroundStyle(.white)
-                            .lineLimit(1)
-                        Text(selected ? app.state.label : mode.activityDescription)
-                            .font(.system(size: 9, weight: .medium))
-                            .foregroundStyle(KintTanyTheme.mutedText)
-                            .lineLimit(1)
-                    }
-
-                    Spacer(minLength: 0)
+                        .shadow(color: .black, radius: 2)
                 }
-                .padding(10)
+                .clipShape(RoundedRectangle(cornerRadius: 5))
+
+                Text(mode.localizedTitle)
+                    .font(.system(size: 8, weight: .black, design: .rounded))
+                    .foregroundStyle(.white)
+                    .lineLimit(1)
+                    .minimumScaleFactor(0.62)
             }
-            .background(KintTanyTheme.panel)
-            .clipShape(RoundedRectangle(cornerRadius: 12))
+            .padding(4)
+            .background(selected ? mode.accent.opacity(0.22) : KintTanyTheme.panelDeep)
+            .clipShape(RoundedRectangle(cornerRadius: 7))
             .overlay(
-                RoundedRectangle(cornerRadius: 12)
-                    .stroke(selected ? mode.accent : KintTanyTheme.border.opacity(0.34), lineWidth: selected ? 2 : 1)
+                RoundedRectangle(cornerRadius: 7)
+                    .stroke(selected ? mode.accent : KintTanyTheme.border.opacity(0.52), lineWidth: selected ? 2 : 1)
             )
+            .shadow(color: selected ? mode.accent.opacity(0.5) : .clear, radius: 5)
         }
         .buttonStyle(.plain)
         .disabled(unavailable || selected)
-        .opacity(unavailable ? 0.46 : 1)
+        .opacity(unavailable ? 0.42 : 1)
         .accessibilityLabel("Iniciar \(mode.localizedTitle)")
+    }
+
+    // MARK: - Real data panels
+
+    private var informationPanels: some View {
+        ViewThatFits(in: .horizontal) {
+            HStack(alignment: .top, spacing: 10) {
+                telemetryPanel
+                sessionStatistics
+            }
+
+            VStack(spacing: 10) {
+                telemetryPanel
+                sessionStatistics
+            }
+        }
     }
 
     private var telemetryPanel: some View {
         PixelPanel(accent: KintTanyTheme.cyan) {
-            VStack(alignment: .leading, spacing: 14) {
+            VStack(alignment: .leading, spacing: 10) {
                 DashboardSectionTitle(
                     title: "Telemetria",
-                    subtitle: "Estado autoritativo recebido do servidor",
+                    subtitle: "Dados do servidor",
                     accent: KintTanyTheme.cyan
                 )
 
-                LazyVGrid(columns: columns, spacing: 10) {
-                    telemetryCell(icon: "map.fill", label: "Região", value: currentRegion)
-                    telemetryCell(
-                        icon: "location.fill",
-                        label: "Posição",
-                        value: String(format: "%.1f, %.1f", app.player.position.x, app.player.position.z)
-                    )
-                    telemetryCell(icon: "square.stack.3d.up.fill", label: "Recursos", value: "\(app.resourceCount)")
-                    telemetryCell(icon: "figure.2", label: "Mobs", value: "\(app.mobCount)")
-                }
+                telemetryRow(icon: "map.fill", label: "Região", value: currentRegion, color: KintTanyTheme.green)
+                telemetryRow(
+                    icon: "location.fill",
+                    label: "Posição",
+                    value: String(format: "%.1f, %.1f", app.player.position.x, app.player.position.z),
+                    color: KintTanyTheme.cyan
+                )
+                telemetryRow(icon: "square.stack.3d.up.fill", label: "Recursos", value: "\(app.resourceCount)", color: KintTanyTheme.gold)
+                telemetryRow(icon: "figure.2", label: "Mobs", value: "\(app.mobCount)", color: KintTanyTheme.red)
 
                 if !app.stats.lastEvent.isEmpty {
-                    HStack(alignment: .top, spacing: 9) {
-                        Image(systemName: "waveform.path.ecg")
-                            .foregroundStyle(KintTanyTheme.cyan)
-                        VStack(alignment: .leading, spacing: 3) {
-                            Text("ÚLTIMO EVENTO")
-                                .font(.system(size: 9, weight: .black, design: .monospaced))
-                                .foregroundStyle(KintTanyTheme.mutedText)
-                            Text(app.stats.lastEvent)
-                                .font(.caption.monospaced())
-                                .lineLimit(3)
-                        }
-                    }
-                    .padding(11)
-                    .frame(maxWidth: .infinity, alignment: .leading)
-                    .background(.black.opacity(0.28), in: RoundedRectangle(cornerRadius: 8))
+                    telemetryRow(icon: "waveform.path.ecg", label: "Evento", value: app.stats.lastEvent, color: KintTanyTheme.green)
                 }
             }
+            .frame(maxWidth: .infinity, alignment: .leading)
         }
     }
 
-    private func telemetryCell(icon: String, label: String, value: String) -> some View {
-        HStack(spacing: 9) {
+    private func telemetryRow(icon: String, label: String, value: String, color: Color) -> some View {
+        HStack(spacing: 7) {
             Image(systemName: icon)
-                .font(.system(size: 14, weight: .bold))
-                .foregroundStyle(KintTanyTheme.cyan)
-                .frame(width: 20)
-            VStack(alignment: .leading, spacing: 2) {
-                Text(label.uppercased())
-                    .font(.system(size: 8, weight: .black, design: .monospaced))
-                    .foregroundStyle(KintTanyTheme.mutedText)
-                Text(value)
-                    .font(.system(size: 12, weight: .bold, design: .monospaced))
-                    .lineLimit(1)
-                    .minimumScaleFactor(0.68)
-            }
-            Spacer(minLength: 0)
+                .font(.system(size: 10, weight: .bold))
+                .foregroundStyle(color)
+                .frame(width: 16)
+            Text(label.uppercased())
+                .font(.system(size: 7, weight: .black, design: .monospaced))
+                .foregroundStyle(KintTanyTheme.mutedText)
+            Spacer(minLength: 3)
+            Text(value)
+                .font(.system(size: 9, weight: .bold, design: .monospaced))
+                .foregroundStyle(.white)
+                .lineLimit(1)
+                .minimumScaleFactor(0.55)
         }
-        .padding(10)
-        .background(.black.opacity(0.27), in: RoundedRectangle(cornerRadius: 8))
+        .padding(.vertical, 2)
     }
 
     private var sessionStatistics: some View {
         PixelPanel(accent: .indigo) {
-            VStack(alignment: .leading, spacing: 14) {
+            VStack(alignment: .leading, spacing: 10) {
                 DashboardSectionTitle(
-                    title: "Estatísticas da sessão",
-                    subtitle: "Somente contadores reais da execução atual",
+                    title: "Sessão",
+                    subtitle: "Contadores reais",
                     accent: .indigo
                 )
 
-                HStack(spacing: 10) {
-                    PixelStat(value: "\(app.stats.attempts)", label: "Tentativas", color: .white)
-                    PixelStat(value: "\(app.stats.successes)", label: "Sucessos", color: .green)
-                    PixelStat(value: "\(app.stats.failures)", label: "Falhas", color: .red)
-                }
+                statRow(label: "Tentativas", value: "\(app.stats.attempts)", color: .white)
+                statRow(label: "Sucessos", value: "\(app.stats.successes)", color: KintTanyTheme.green)
+                statRow(label: "Falhas", value: "\(app.stats.failures)", color: KintTanyTheme.red)
+                statRow(label: "Erros", value: "\(app.stats.sessionErrors)", color: KintTanyTheme.orange)
 
                 if let mode = app.activity, mode == .chicken || mode.isWildCombat {
-                    Divider().overlay(.white.opacity(0.08))
-                    HStack(spacing: 10) {
-                        PixelStat(value: "\(app.stats.confirmedHits)", label: "Hits", color: mode.accent)
-                        PixelStat(value: "\(app.stats.kills)", label: "Kills", color: KintTanyTheme.gold)
-                        PixelStat(value: "\(app.stats.sessionErrors)", label: "Erros", color: .orange)
-                    }
+                    statRow(label: "Hits", value: "\(app.stats.confirmedHits)", color: KintTanyTheme.cyan)
+                    statRow(label: "Kills", value: "\(app.stats.kills)", color: KintTanyTheme.gold)
+                }
+
+                TimelineView(.periodic(from: .now, by: 1)) { context in
+                    statRow(
+                        label: "Ritmo",
+                        value: app.formattedRatePerMinute(at: context.date),
+                        color: KintTanyTheme.cyan
+                    )
                 }
             }
+            .frame(maxWidth: .infinity, alignment: .leading)
         }
     }
 
+    private func statRow(label: String, value: String, color: Color) -> some View {
+        HStack(spacing: 6) {
+            Rectangle()
+                .fill(color)
+                .frame(width: 5, height: 5)
+            Text(label.uppercased())
+                .font(.system(size: 7, weight: .black, design: .monospaced))
+                .foregroundStyle(KintTanyTheme.mutedText)
+            Spacer(minLength: 3)
+            Text(value)
+                .font(.system(size: 10, weight: .black, design: .monospaced))
+                .foregroundStyle(color)
+                .lineLimit(1)
+                .minimumScaleFactor(0.6)
+        }
+        .padding(.vertical, 2)
+    }
+
+    // MARK: - Events
+
     private var eventLogPanel: some View {
         PixelPanel(accent: KintTanyTheme.border) {
-            VStack(alignment: .leading, spacing: 12) {
+            VStack(alignment: .leading, spacing: 10) {
                 HStack(alignment: .top) {
                     DashboardSectionTitle(
-                        title: "Eventos",
-                        subtitle: "Resumo real da sessão",
+                        title: "Log de eventos",
+                        subtitle: "Atividade e sistema",
                         accent: KintTanyTheme.border
                     )
 
                     Spacer()
 
                     Button(action: onOpenFullLog) {
-                        Image(systemName: "doc.text.magnifyingglass")
-                            .frame(width: 18, height: 18)
+                        Label("COMPLETO", systemImage: "doc.text.magnifyingglass")
                     }
                     .buttonStyle(PixelIconButtonStyle(color: KintTanyTheme.border))
                     .accessibilityLabel("Abrir log completo")
@@ -521,39 +706,65 @@ struct KintTanyDashboard: View {
 
                 if app.logs.isEmpty {
                     Label("Nenhum evento registrado ainda", systemImage: "sparkles")
-                        .font(.caption)
+                        .font(.system(size: 10, weight: .semibold, design: .monospaced))
                         .foregroundStyle(KintTanyTheme.mutedText)
-                        .padding(.vertical, 8)
+                        .padding(.vertical, 9)
                 } else {
                     VStack(spacing: 0) {
-                        ForEach(Array(app.logs.suffix(5).enumerated()), id: \.offset) { index, line in
+                        ForEach(Array(app.logs.suffix(6).enumerated()), id: \.offset) { index, line in
                             Text(line)
-                                .font(.system(size: 10, design: .monospaced))
-                                .foregroundStyle(.white.opacity(0.84))
+                                .font(.system(size: 9, design: .monospaced))
+                                .foregroundStyle(eventColor(for: line))
                                 .frame(maxWidth: .infinity, alignment: .leading)
-                                .padding(.vertical, 8)
+                                .padding(.vertical, 6)
 
-                            if index < min(app.logs.count, 5) - 1 {
-                                Divider().overlay(.white.opacity(0.06))
+                            if index < min(app.logs.count, 6) - 1 {
+                                Divider().overlay(.white.opacity(0.05))
                             }
                         }
                     }
-                    .padding(.horizontal, 10)
-                    .background(.black.opacity(0.3), in: RoundedRectangle(cornerRadius: 8))
+                    .padding(.horizontal, 9)
+                    .background(KintTanyTheme.panelDeep, in: RoundedRectangle(cornerRadius: 7))
                 }
 
-                Text("Tokens, cookies e chaves continuam ocultados no diagnóstico.")
-                    .font(.caption2)
+                Text("Tokens, cookies e chaves permanecem ocultados.")
+                    .font(.system(size: 7, weight: .medium, design: .monospaced))
                     .foregroundStyle(KintTanyTheme.mutedText)
             }
         }
     }
 
+    private func eventColor(for line: String) -> Color {
+        if line.contains("✅") || line.localizedCaseInsensitiveContains("sucesso") { return KintTanyTheme.green }
+        if line.contains("⚠️") || line.localizedCaseInsensitiveContains("falha") { return KintTanyTheme.gold }
+        if line.contains("🛑") || line.localizedCaseInsensitiveContains("erro") { return KintTanyTheme.red }
+        return .white.opacity(0.84)
+    }
+
+    private var footer: some View {
+        HStack(spacing: 8) {
+            Image(systemName: "crown.fill")
+                .foregroundStyle(KintTanyTheme.gold)
+            Text("KintTany")
+                .font(.system(size: 10, weight: .black, design: .monospaced))
+            Spacer()
+            Text("PEQUENAS AÇÕES • GRANDES CONQUISTAS")
+                .font(.system(size: 7, weight: .bold, design: .monospaced))
+                .foregroundStyle(KintTanyTheme.mutedText)
+        }
+        .padding(.horizontal, 10)
+        .padding(.vertical, 12)
+        .background(KintTanyTheme.panelDeep, in: RoundedRectangle(cornerRadius: 9))
+        .overlay(RoundedRectangle(cornerRadius: 9).stroke(KintTanyTheme.border.opacity(0.42), lineWidth: 1))
+    }
+
+    // MARK: - Presentation helpers
+
     private var connectionPresentation: (text: String, color: Color) {
-        if app.connected { return ("Online", .green) }
+        if app.connected { return ("Conectado", KintTanyTheme.green) }
         switch app.state {
-        case .connecting, .syncing: return ("Conectando", .orange)
-        case .failed: return ("Erro", .red)
+        case .connecting, .syncing: return ("Conectando", KintTanyTheme.orange)
+        case .failed: return ("Erro", KintTanyTheme.red)
         default: return ("Offline", KintTanyTheme.mutedText)
         }
     }

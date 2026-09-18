@@ -1,15 +1,19 @@
 import SwiftUI
 
 enum KintTanyTheme {
-    static let backgroundTop = Color(red: 0.025, green: 0.075, blue: 0.13)
-    static let backgroundBottom = Color(red: 0.008, green: 0.02, blue: 0.045)
-    static let panel = Color(red: 0.035, green: 0.09, blue: 0.145)
-    static let panelRaised = Color(red: 0.055, green: 0.13, blue: 0.195)
-    static let cyan = Color(red: 0.22, green: 0.91, blue: 1.0)
-    static let gold = Color(red: 1.0, green: 0.73, blue: 0.22)
-    static let border = Color(red: 0.18, green: 0.52, blue: 0.66)
-    static let mutedText = Color(red: 0.58, green: 0.71, blue: 0.79)
-    static let cornerRadius: CGFloat = 16
+    static let backgroundTop = Color(red: 0.018, green: 0.065, blue: 0.115)
+    static let backgroundBottom = Color(red: 0.003, green: 0.013, blue: 0.032)
+    static let panel = Color(red: 0.018, green: 0.070, blue: 0.120)
+    static let panelRaised = Color(red: 0.030, green: 0.105, blue: 0.165)
+    static let panelDeep = Color(red: 0.006, green: 0.028, blue: 0.055)
+    static let cyan = Color(red: 0.10, green: 0.86, blue: 1.0)
+    static let green = Color(red: 0.18, green: 0.95, blue: 0.48)
+    static let red = Color(red: 1.0, green: 0.24, blue: 0.31)
+    static let gold = Color(red: 1.0, green: 0.72, blue: 0.16)
+    static let orange = Color(red: 1.0, green: 0.43, blue: 0.13)
+    static let border = Color(red: 0.13, green: 0.50, blue: 0.68)
+    static let mutedText = Color(red: 0.59, green: 0.74, blue: 0.84)
+    static let cornerRadius: CGFloat = 12
 }
 
 extension ActivityMode {
@@ -51,4 +55,3 @@ extension ActivityMode {
         }
     }
 }
-
