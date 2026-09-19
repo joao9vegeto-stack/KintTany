@@ -58,6 +58,7 @@ struct PixelPanel<Content: View>: View {
             .overlay(
                 RoundedRectangle(cornerRadius: 7, style: .continuous)
                     .stroke(accent.opacity(0.34), lineWidth: 1)
+                    .allowsHitTesting(false)
             )
     }
 }
