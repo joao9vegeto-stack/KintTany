@@ -17,6 +17,11 @@ enum KintTanyTheme {
 }
 
 extension ActivityMode {
+    static let dashboardOrder: [ActivityMode] = [
+        .tree, .stone, .coal, .iron, .silver, .cacti,
+        .fishing, .chicken, .zombie, .dragon
+    ]
+
     var artworkName: String {
         switch self {
         case .tree: "ActivityWood"
@@ -29,6 +34,21 @@ extension ActivityMode {
         case .chicken: "ActivityChicken"
         case .zombie: "ActivityZombie"
         case .dragon: "ActivityDragon"
+        }
+    }
+
+    var selectorIconName: String {
+        switch self {
+        case .tree: "ActivityIconWood"
+        case .coal: "ActivityIconCoal"
+        case .stone: "ActivityIconStone"
+        case .iron: "ActivityIconIron"
+        case .silver: "ActivityIconSilver"
+        case .cacti: "ActivityIconCacti"
+        case .fishing: "ActivityIconFishing"
+        case .chicken: "ActivityIconChicken"
+        case .zombie: "ActivityIconZombie"
+        case .dragon: "ActivityIconDragon"
         }
     }
 

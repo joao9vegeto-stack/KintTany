@@ -7,11 +7,6 @@ struct KintTanyDashboard: View {
     let onOpenSession: () -> Void
     let onOpenFullLog: () -> Void
 
-    private let selectorOrder: [ActivityMode] = [
-        .tree, .stone, .coal, .iron, .silver, .cacti,
-        .fishing, .chicken, .zombie, .dragon
-    ]
-
     var body: some View {
         GeometryReader { proxy in
             let gap: CGFloat = proxy.size.height < 700 ? 3 : 4
@@ -73,7 +68,7 @@ struct KintTanyDashboard: View {
     }
 
     private var buildNumber: String {
-        Bundle.main.object(forInfoDictionaryKey: "CFBundleVersion") as? String ?? "81"
+        Bundle.main.object(forInfoDictionaryKey: "CFBundleVersion") as? String ?? "82"
     }
 
     // MARK: - Masthead
@@ -191,7 +186,7 @@ struct KintTanyDashboard: View {
 
                 statusCell(
                     icon: "globe.americas.fill",
-                    title: "Mundo",
+                    title: "Região",
                     value: currentRegion,
                     color: .blue
                 )
@@ -297,7 +292,7 @@ struct KintTanyDashboard: View {
     private func activeHeroContent(_ mode: ActivityMode) -> some View {
         VStack(alignment: .leading, spacing: 0) {
             HStack(alignment: .top, spacing: 6) {
-                ActivitySpriteIcon(mode: mode)
+                ActivityIcon(mode: mode)
                     .frame(width: 34, height: 34)
 
                 VStack(alignment: .leading, spacing: 0) {
@@ -511,19 +506,12 @@ struct KintTanyDashboard: View {
 
     private var liveContextPanel: some View {
         PixelPanel(accent: KintTanyTheme.border, inset: 6) {
-            HStack(spacing: 6) {
+            VStack(alignment: .leading, spacing: 2) {
+                panelHeader("CONTEXTO ATUAL", icon: "scope")
                 if let mode = app.activity {
-                    ActivitySpriteIcon(mode: mode)
-                        .frame(width: 33, height: 33)
-                }
-
-                VStack(alignment: .leading, spacing: 2) {
-                    panelHeader("CONTEXTO ATUAL", icon: "scope")
-                    if let mode = app.activity {
-                        compactValueRow("Tipo", mode.categoryLabel)
-                        compactValueRow("Ação", mode.activityDescription)
-                        compactValueRow("Disponíveis", availableTargetsText(for: mode))
-                    }
+                    compactValueRow("Tipo", mode.categoryLabel)
+                    compactValueRow("Ação", mode.activityDescription)
+                    compactValueRow("Disponíveis", availableTargetsText(for: mode))
                 }
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
@@ -538,7 +526,7 @@ struct KintTanyDashboard: View {
                 HStack(spacing: 4) {
                     panelHeader("SELECIONAR ATIVIDADE", icon: "map.fill")
                     Spacer()
-                    Text("10 MISSÕES")
+                    Text("10 ATIVIDADES")
                         .font(.system(size: 6, weight: .black, design: .monospaced))
                         .foregroundStyle(KintTanyTheme.gold)
                 }
@@ -550,22 +538,25 @@ struct KintTanyDashboard: View {
 
                     VStack(spacing: spacing) {
                         HStack(spacing: spacing) {
-                            ForEach(Array(selectorOrder.prefix(6))) { mode in
+                            ForEach(Array(ActivityMode.dashboardOrder.prefix(6))) { mode in
                                 activityButton(mode)
                                     .frame(width: cellWidth, height: cellHeight)
                             }
                         }
 
                         HStack(spacing: spacing) {
-                            ForEach(Array(selectorOrder.suffix(4))) { mode in
+                            ForEach(Array(ActivityMode.dashboardOrder.suffix(4))) { mode in
                                 activityButton(mode)
                                     .frame(width: cellWidth, height: cellHeight)
                             }
 
                             VStack(alignment: .leading, spacing: 1) {
-                                Text("PEQUENAS AÇÕES")
-                                Text("GRANDES CONQUISTAS")
-                                    .foregroundStyle(KintTanyTheme.gold)
+                                Text("MESMA DETERMINAÇÃO")
+                                HStack(spacing: 3) {
+                                    Text("MAIS CONQUISTAS")
+                                    Image(systemName: "crown.fill")
+                                }
+                                .foregroundStyle(KintTanyTheme.gold)
                             }
                             .font(.system(size: 5, weight: .black, design: .monospaced))
                             .foregroundStyle(KintTanyTheme.mutedText)
@@ -589,7 +580,7 @@ struct KintTanyDashboard: View {
             app.start(mode)
         } label: {
             VStack(spacing: 0) {
-                ActivitySpriteIcon(mode: mode)
+                ActivityIcon(mode: mode)
                     .frame(width: 33, height: 33)
 
                 Text(mode.localizedTitle)
@@ -601,15 +592,19 @@ struct KintTanyDashboard: View {
             .frame(maxWidth: .infinity, maxHeight: .infinity)
             .background(selected ? KintTanyTheme.green.opacity(0.16) : KintTanyTheme.panelRaised.opacity(0.76))
             .clipShape(RoundedRectangle(cornerRadius: 4))
+            .contentShape(RoundedRectangle(cornerRadius: 4))
             .overlay(
                 RoundedRectangle(cornerRadius: 4)
                     .stroke(selected ? KintTanyTheme.green : KintTanyTheme.border.opacity(0.30), lineWidth: selected ? 2 : 1)
             )
         }
         .buttonStyle(.plain)
+        .contentShape(Rectangle())
+        .clipped()
         .disabled(unavailable || selected)
         .opacity(1)
         .accessibilityLabel("Iniciar \(mode.localizedTitle)")
+        .accessibilityIdentifier("activity.\(mode.rawValue)")
     }
 
     // MARK: - Three compact insight panels
@@ -803,36 +798,15 @@ struct KintTanyDashboard: View {
     }
 }
 
-private struct ActivitySpriteIcon: View {
+private struct ActivityIcon: View {
     let mode: ActivityMode
 
-    private var index: Int {
-        switch mode {
-        case .tree: 0
-        case .stone: 1
-        case .coal: 2
-        case .iron: 3
-        case .silver: 4
-        case .cacti: 5
-        case .fishing: 6
-        case .chicken: 7
-        case .zombie: 8
-        case .dragon: 9
-        }
-    }
-
     var body: some View {
-        GeometryReader { geometry in
-            let column = CGFloat(index % 5)
-            let row = CGFloat(index / 5)
-
-            Image("ActivityIconSprite")
-                .resizable()
-                .interpolation(.none)
-                .frame(width: geometry.size.width * 5, height: geometry.size.height * 2)
-                .offset(x: -column * geometry.size.width, y: -row * geometry.size.height)
-        }
-        .clipped()
-        .accessibilityHidden(true)
+        Image(mode.selectorIconName)
+            .resizable()
+            .interpolation(.none)
+            .scaledToFit()
+            .allowsHitTesting(false)
+            .accessibilityHidden(true)
     }
 }

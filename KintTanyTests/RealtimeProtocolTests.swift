@@ -3,6 +3,24 @@ import XCTest
 @testable import KintTany
 
 final class RealtimeProtocolTests: XCTestCase {
+    func testDashboardActivityButtonsKeepExactVisualAndFunctionalOrder() {
+        XCTAssertEqual(
+            ActivityMode.dashboardOrder,
+            [.tree, .stone, .coal, .iron, .silver, .cacti, .fishing, .chicken, .zombie, .dragon]
+        )
+        XCTAssertEqual(Set(ActivityMode.dashboardOrder), Set(ActivityMode.allCases))
+    }
+
+    func testEveryActivityButtonUsesItsOwnIconAsset() {
+        let iconNames = ActivityMode.dashboardOrder.map(\.selectorIconName)
+        XCTAssertEqual(Set(iconNames).count, ActivityMode.allCases.count)
+        XCTAssertEqual(iconNames[0], "ActivityIconWood")
+        XCTAssertEqual(iconNames[1], "ActivityIconStone")
+        XCTAssertEqual(iconNames[2], "ActivityIconCoal")
+        XCTAssertEqual(iconNames[7], "ActivityIconChicken")
+        XCTAssertEqual(iconNames[9], "ActivityIconDragon")
+    }
+
     func testQueuePingUsesDocumentedEventName() throws {
         let data = try RealtimeProtocol.queuePing()
         let object = try XCTUnwrap(JSONSerialization.jsonObject(with: data) as? [String: Any])
