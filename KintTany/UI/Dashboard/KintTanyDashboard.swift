@@ -11,38 +11,44 @@ struct KintTanyDashboard: View {
         GeometryReader { proxy in
             let gap: CGFloat = proxy.size.height < 700 ? 3 : 4
             let edge: CGFloat = 6
-            let available = max(580, proxy.size.height - (edge * 2) - (gap * 6))
+            // Never make the dashboard taller than its container. The previous
+            // minimum of 580 points made sections overflow one another on compact
+            // devices, leaving invisible views on top of the activity buttons.
+            let available = max(0, proxy.size.height - (edge * 2) - (gap * 6))
 
             ZStack {
                 DashboardBackground()
 
                 VStack(spacing: gap) {
                     masthead
-                        .frame(height: available * 0.120)
+                        .frame(height: available * 0.105)
 
                     connectionStrip
                         .frame(height: available * 0.060)
 
                     activityHero
-                        .frame(height: available * 0.280)
+                        .frame(height: available * 0.190)
 
                     controlsRow
-                        .frame(height: available * 0.090)
+                        .frame(height: available * 0.110)
 
                     activitySelector
-                        .frame(height: available * 0.180)
+                        .frame(height: available * 0.160)
 
                     insightPanels
-                        .frame(height: available * 0.100)
+                        .frame(height: available * 0.130)
 
                     eventLogPanel
-                        .frame(height: available * 0.170)
+                        .frame(height: available * 0.215)
                 }
                 .padding(.horizontal, edge)
                 .padding(.vertical, edge)
                 .frame(width: proxy.size.width, height: proxy.size.height, alignment: .top)
             }
         }
+        // The reference artwork continues behind the status bar. The masthead's
+        // content is bottom-aligned, so extending only its background into the
+        // top safe area keeps the title readable without the large empty band.
         .ignoresSafeArea(edges: .top)
         .preferredColorScheme(.dark)
         .toolbar {
@@ -146,6 +152,7 @@ struct KintTanyDashboard: View {
         .overlay(
             RoundedRectangle(cornerRadius: 9, style: .continuous)
                 .stroke(KintTanyTheme.border.opacity(0.72), lineWidth: 1)
+                .allowsHitTesting(false)
         )
         .accessibilityElement(children: .combine)
     }
@@ -286,6 +293,7 @@ struct KintTanyDashboard: View {
         .overlay(
             RoundedRectangle(cornerRadius: 8, style: .continuous)
                 .stroke(KintTanyTheme.border.opacity(0.75), lineWidth: 1)
+                .allowsHitTesting(false)
         )
     }
 
@@ -367,15 +375,16 @@ struct KintTanyDashboard: View {
                 .foregroundStyle(mode.accent)
 
             Text(app.displayStatusMessage)
-                .font(.system(size: 11, weight: .black, design: .monospaced))
+                .font(.system(size: 10, weight: .black, design: .monospaced))
                 .foregroundStyle(.white)
-                .lineLimit(1)
-                .minimumScaleFactor(0.82)
+                .lineLimit(2)
+                .minimumScaleFactor(0.72)
+                .fixedSize(horizontal: false, vertical: true)
 
             Spacer(minLength: 4)
         }
         .padding(.horizontal, 9)
-        .frame(maxWidth: .infinity, minHeight: 30, maxHeight: 30)
+        .frame(maxWidth: .infinity, minHeight: 34, maxHeight: 34)
         .background(KintTanyTheme.panelDeep.opacity(0.98))
         .overlay(alignment: .top) {
             Rectangle().fill(mode.accent).frame(height: 1)
@@ -536,43 +545,60 @@ struct KintTanyDashboard: View {
 
                 GeometryReader { geometry in
                     let spacing: CGFloat = 3
-                    let cellWidth = max(40, (geometry.size.width - (spacing * 5)) / 6)
-                    let cellHeight = max(30, (geometry.size.height - spacing) / 2)
+                    let cellWidth = max(0, (geometry.size.width - (spacing * 5)) / 6)
+                    let cellHeight = max(0, (geometry.size.height - spacing) / 2)
 
                     VStack(spacing: spacing) {
                         HStack(spacing: spacing) {
-                            ForEach(Array(ActivityMode.dashboardOrder.prefix(6))) { mode in
+                            ForEach(ActivityMode.dashboardOrder.prefix(6), id: \.self) { mode in
                                 activityButton(mode)
                                     .frame(width: cellWidth, height: cellHeight)
                             }
                         }
+                        .frame(width: geometry.size.width, height: cellHeight, alignment: .leading)
 
                         HStack(spacing: spacing) {
-                            ForEach(Array(ActivityMode.dashboardOrder.suffix(4))) { mode in
+                            ForEach(ActivityMode.dashboardOrder.suffix(4), id: \.self) { mode in
                                 activityButton(mode)
                                     .frame(width: cellWidth, height: cellHeight)
                             }
 
-                            VStack(alignment: .leading, spacing: 1) {
-                                Text("MESMA DETERMINAÇÃO")
-                                HStack(spacing: 3) {
-                                    Text("MAIS CONQUISTAS")
-                                    Image(systemName: "crown.fill")
-                                }
-                                .foregroundStyle(KintTanyTheme.gold)
-                            }
-                            .font(.system(size: 5, weight: .black, design: .monospaced))
-                            .foregroundStyle(KintTanyTheme.mutedText)
-                            .padding(.horizontal, 7)
-                            .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .leading)
-                            .background(KintTanyTheme.panelDeep, in: RoundedRectangle(cornerRadius: 4))
-                            .overlay(RoundedRectangle(cornerRadius: 4).stroke(KintTanyTheme.border.opacity(0.30), lineWidth: 1))
+                            selectorMotto
+                                .frame(
+                                    width: cellWidth * 2 + spacing,
+                                    height: cellHeight
+                                )
                         }
+                        .frame(width: geometry.size.width, height: cellHeight, alignment: .leading)
                     }
+                    .frame(width: geometry.size.width, height: geometry.size.height, alignment: .top)
+                    .clipped()
                 }
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
         }
+    }
+
+    private var selectorMotto: some View {
+        VStack(alignment: .leading, spacing: 2) {
+            Text("MESMA DETERMINAÇÃO")
+            HStack(spacing: 4) {
+                Text("MAIS CONQUISTAS")
+                Spacer(minLength: 2)
+                Image(systemName: "crown.fill")
+                    .foregroundStyle(KintTanyTheme.gold)
+            }
+        }
+        .font(.system(size: 6, weight: .black, design: .monospaced))
+        .foregroundStyle(KintTanyTheme.mutedText)
+        .padding(.horizontal, 8)
+        .background(KintTanyTheme.panelDeep, in: RoundedRectangle(cornerRadius: 4))
+        .overlay {
+            RoundedRectangle(cornerRadius: 4)
+                .stroke(KintTanyTheme.border.opacity(0.30), lineWidth: 1)
+                .allowsHitTesting(false)
+        }
+        .allowsHitTesting(false)
     }
 
     private func activityButton(_ mode: ActivityMode) -> some View {
@@ -581,6 +607,8 @@ struct KintTanyDashboard: View {
 
         return Button {
             guard canStart else { return }
+            // `mode` is the stable enum value owned by this grid item; no visual
+            // index is translated into an activity at tap time.
             app.start(mode)
         } label: {
             VStack(spacing: 1) {
@@ -600,11 +628,15 @@ struct KintTanyDashboard: View {
             .overlay(
                 RoundedRectangle(cornerRadius: 4)
                     .stroke(selected ? KintTanyTheme.green : KintTanyTheme.border.opacity(0.52), lineWidth: selected ? 2 : 1)
+                    .allowsHitTesting(false)
             )
         }
         .buttonStyle(.plain)
-        .contentShape(Rectangle())
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .contentShape(RoundedRectangle(cornerRadius: 4))
         .clipped()
+        // Do not use `disabled` here: SwiftUI dims every inactive card, unlike
+        // the reference where the pixel-art choices remain vivid while running.
         .allowsHitTesting(canStart)
         .accessibilityLabel("Iniciar \(mode.localizedTitle)")
         .accessibilityIdentifier("activity.\(mode.rawValue)")
@@ -613,20 +645,23 @@ struct KintTanyDashboard: View {
     // MARK: - Three compact insight panels
 
     private var insightPanels: some View {
-        HStack(spacing: 4) {
-            telemetryPanel
-                .frame(maxWidth: .infinity, maxHeight: .infinity)
-            characterStatusPanel
-                .frame(maxWidth: .infinity, maxHeight: .infinity)
-            statisticsPanel
-                .frame(maxWidth: .infinity, maxHeight: .infinity)
+        GeometryReader { geometry in
+            let spacing: CGFloat = 4
+            let width = max(0, (geometry.size.width - spacing * 2) / 3)
+
+            HStack(spacing: spacing) {
+                telemetryPanel.frame(width: width, height: geometry.size.height)
+                characterStatusPanel.frame(width: width, height: geometry.size.height)
+                statisticsPanel.frame(width: width, height: geometry.size.height)
+            }
+            .frame(width: geometry.size.width, height: geometry.size.height, alignment: .leading)
         }
     }
 
     private var telemetryPanel: some View {
         PixelPanel(accent: KintTanyTheme.border, inset: 5) {
             VStack(alignment: .leading, spacing: 0) {
-                panelHeader("TELEMETRIA", icon: "chart.bar.fill")
+                panelHeader("TELEMETRIA DA SESSÃO", icon: "chart.bar.fill")
                 Spacer(minLength: 2)
                 insightRow("Posição X", String(format: "%.1f", app.player.position.x), color: KintTanyTheme.cyan)
                 Spacer(minLength: 1)
@@ -644,7 +679,7 @@ struct KintTanyDashboard: View {
     private var characterStatusPanel: some View {
         PixelPanel(accent: KintTanyTheme.border, inset: 5) {
             VStack(alignment: .leading, spacing: 0) {
-                panelHeader("PERSONAGEM", icon: "heart.fill")
+                panelHeader("STATUS DO PERSONAGEM", icon: "heart.fill")
                 Spacer(minLength: 2)
                 insightRow("HP", "\(app.player.hp)", color: KintTanyTheme.red)
                 Spacer(minLength: 1)
@@ -662,7 +697,7 @@ struct KintTanyDashboard: View {
     private var statisticsPanel: some View {
         PixelPanel(accent: KintTanyTheme.border, inset: 5) {
             VStack(alignment: .leading, spacing: 0) {
-                panelHeader("SESSÃO", icon: "chart.line.uptrend.xyaxis")
+                panelHeader("ESTATÍSTICAS GERAIS", icon: "chart.line.uptrend.xyaxis")
                 Spacer(minLength: 2)
                 insightRow("Tentativas", "\(app.stats.attempts)", color: .white)
                 Spacer(minLength: 1)
@@ -725,9 +760,9 @@ struct KintTanyDashboard: View {
                         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .center)
                 } else {
                     VStack(alignment: .leading, spacing: 3) {
-                        ForEach(Array(app.logs.suffix(8).enumerated()), id: \.offset) { _, line in
+                        ForEach(Array(app.logs.suffix(6).enumerated()), id: \.offset) { _, line in
                             Text(line)
-                                .font(.system(size: 7, design: .monospaced))
+                                .font(.system(size: 8, design: .monospaced))
                                 .foregroundStyle(eventColor(for: line))
                                 .lineLimit(1)
                                 .minimumScaleFactor(0.58)
