@@ -46,44 +46,24 @@ struct PixelPanel<Content: View>: View {
         content
             .padding(inset)
             .background(
-                RoundedRectangle(cornerRadius: KintTanyTheme.cornerRadius, style: .continuous)
+                RoundedRectangle(cornerRadius: 7, style: .continuous)
                     .fill(
                         LinearGradient(
-                            colors: [KintTanyTheme.panelRaised.opacity(0.96), KintTanyTheme.panel.opacity(0.98)],
-                            startPoint: .topLeading,
-                            endPoint: .bottomTrailing
+                            colors: [KintTanyTheme.panel.opacity(0.98), KintTanyTheme.panelDeep.opacity(0.99)],
+                            startPoint: .top,
+                            endPoint: .bottom
                         )
                     )
             )
             .overlay(
-                RoundedRectangle(cornerRadius: KintTanyTheme.cornerRadius, style: .continuous)
-                    .stroke(accent.opacity(0.62), lineWidth: 1.2)
+                RoundedRectangle(cornerRadius: 7, style: .continuous)
+                    .stroke(accent.opacity(0.62), lineWidth: 1)
             )
             .overlay(
-                RoundedRectangle(cornerRadius: KintTanyTheme.cornerRadius - 3, style: .continuous)
-                    .stroke(.white.opacity(0.045), lineWidth: 1)
-                    .padding(3)
+                RoundedRectangle(cornerRadius: 5, style: .continuous)
+                    .stroke(.white.opacity(0.035), lineWidth: 0.5)
+                    .padding(2)
             )
-            .overlay(alignment: .topLeading) {
-                PixelCorner(color: accent)
-                    .padding(7)
-            }
-            .shadow(color: .black.opacity(0.46), radius: 0, x: 0, y: 4)
-    }
-}
-
-private struct PixelCorner: View {
-    let color: Color
-
-    var body: some View {
-        Path { path in
-            path.move(to: CGPoint(x: 0, y: 12))
-            path.addLine(to: CGPoint(x: 0, y: 0))
-            path.addLine(to: CGPoint(x: 12, y: 0))
-        }
-        .stroke(color.opacity(0.9), style: StrokeStyle(lineWidth: 2, lineCap: .square))
-        .frame(width: 12, height: 12)
-        .accessibilityHidden(true)
     }
 }
 
