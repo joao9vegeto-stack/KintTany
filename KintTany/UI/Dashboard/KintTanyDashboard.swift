@@ -10,7 +10,7 @@ struct KintTanyDashboard: View {
     var body: some View {
         GeometryReader { proxy in
             let gap: CGFloat = proxy.size.height < 700 ? 3 : 4
-            let edge: CGFloat = 6
+            let edge: CGFloat = 12
             // Never make the dashboard taller than its container. The previous
             // minimum of 580 points made sections overflow one another on compact
             // devices, leaving invisible views on top of the activity buttons.
@@ -21,25 +21,25 @@ struct KintTanyDashboard: View {
 
                 VStack(spacing: gap) {
                     masthead
-                        .frame(height: available * 0.105)
-
-                    connectionStrip
-                        .frame(height: available * 0.060)
-
-                    activityHero
-                        .frame(height: available * 0.190)
-
-                    controlsRow
-                        .frame(height: available * 0.110)
-
-                    activitySelector
-                        .frame(height: available * 0.160)
-
-                    insightPanels
                         .frame(height: available * 0.130)
 
+                    connectionStrip
+                        .frame(height: available * 0.050)
+
+                    activityHero
+                        .frame(height: available * 0.210)
+
+                    controlsRow
+                        .frame(height: available * 0.120)
+
+                    activitySelector
+                        .frame(height: available * 0.170)
+
+                    insightPanels
+                        .frame(height: available * 0.145)
+
                     eventLogPanel
-                        .frame(height: available * 0.215)
+                        .frame(height: available * 0.145)
                 }
                 .padding(.horizontal, edge)
                 .padding(.vertical, edge)
@@ -101,6 +101,10 @@ struct KintTanyDashboard: View {
 
                 HStack(alignment: .bottom, spacing: 6) {
                     VStack(alignment: .leading, spacing: 0) {
+                        Text("KintTany")
+                            .font(.system(size: 10, weight: .black, design: .monospaced))
+                            .foregroundStyle(KintTanyTheme.gold)
+
                         HStack(alignment: .firstTextBaseline, spacing: 6) {
                             ZStack(alignment: .bottomLeading) {
                                 Text("KINTTANY")
@@ -116,7 +120,7 @@ struct KintTanyDashboard: View {
                                         )
                                     )
                             }
-                            .font(.system(size: 34, weight: .black, design: .rounded))
+                            .font(.system(size: 32, weight: .black, design: .monospaced))
                             .lineLimit(1)
                             .minimumScaleFactor(0.72)
 
@@ -160,43 +164,52 @@ struct KintTanyDashboard: View {
     // MARK: - Connection strip
 
     private var connectionStrip: some View {
-        PixelPanel(accent: connectionPresentation.color, inset: 0) {
-            HStack(spacing: 0) {
-                Button(action: onOpenSession) {
-                    connectionCell
+        GeometryReader { geometry in
+            let spacing: CGFloat = 4
+            let regionWidth = geometry.size.width * 0.27
+
+            HStack(spacing: spacing) {
+                PixelPanel(accent: connectionPresentation.color, inset: 0) {
+                    HStack(spacing: 0) {
+                        Button(action: onOpenSession) {
+                            connectionCell
+                        }
+                        .buttonStyle(.plain)
+
+                        verticalDivider
+
+                        TimelineView(.periodic(from: .now, by: 1)) { context in
+                            statusCell(
+                                icon: "clock.fill",
+                                title: "Tempo de sessão",
+                                value: sessionDurationText(at: context.date),
+                                color: KintTanyTheme.cyan
+                            )
+                        }
+
+                        verticalDivider
+
+                        TimelineView(.periodic(from: .now, by: 1)) { context in
+                            statusCell(
+                                icon: "chart.line.uptrend.xyaxis",
+                                title: "Ritmo",
+                                value: app.formattedRatePerMinute(at: context.date),
+                                color: KintTanyTheme.green
+                            )
+                        }
+                    }
                 }
-                .buttonStyle(.plain)
+                .frame(width: geometry.size.width - regionWidth - spacing)
 
-                verticalDivider
-
-                TimelineView(.periodic(from: .now, by: 1)) { context in
+                PixelPanel(accent: KintTanyTheme.border, inset: 0) {
                     statusCell(
-                        icon: "clock.fill",
-                        title: "Sessão",
-                        value: sessionDurationText(at: context.date),
-                        color: KintTanyTheme.cyan
+                        icon: "globe.americas.fill",
+                        title: "Mundo",
+                        value: currentRegion,
+                        color: .blue
                     )
                 }
-
-                verticalDivider
-
-                TimelineView(.periodic(from: .now, by: 1)) { context in
-                    statusCell(
-                        icon: "chart.line.uptrend.xyaxis",
-                        title: "Ritmo",
-                        value: app.formattedRatePerMinute(at: context.date),
-                        color: KintTanyTheme.green
-                    )
-                }
-
-                verticalDivider
-
-                statusCell(
-                    icon: "globe.americas.fill",
-                    title: "Região",
-                    value: currentRegion,
-                    color: .blue
-                )
+                .frame(width: regionWidth)
             }
         }
     }
