@@ -16,38 +16,39 @@ struct KintTanyDashboard: View {
         GeometryReader { proxy in
             let gap: CGFloat = proxy.size.height < 700 ? 3 : 4
             let edge: CGFloat = 6
-            let available = max(610, proxy.size.height - (edge * 2) - (gap * 6))
+            let available = max(580, proxy.size.height - (edge * 2) - (gap * 6))
 
             ZStack {
                 DashboardBackground()
 
                 VStack(spacing: gap) {
                     masthead
-                        .frame(height: available * 0.105)
+                        .frame(height: available * 0.120)
 
                     connectionStrip
                         .frame(height: available * 0.060)
 
                     activityHero
-                        .frame(height: available * 0.200)
+                        .frame(height: available * 0.250)
 
                     controlsRow
-                        .frame(height: available * 0.110)
+                        .frame(height: available * 0.100)
 
                     activitySelector
-                        .frame(height: available * 0.150)
+                        .frame(height: available * 0.160)
 
                     insightPanels
-                        .frame(height: available * 0.140)
+                        .frame(height: available * 0.130)
 
                     eventLogPanel
-                        .frame(height: available * 0.205)
+                        .frame(height: available * 0.180)
                 }
                 .padding(.horizontal, edge)
                 .padding(.vertical, edge)
                 .frame(width: proxy.size.width, height: proxy.size.height, alignment: .top)
             }
         }
+        .ignoresSafeArea(edges: .top)
         .preferredColorScheme(.dark)
         .toolbar {
             ToolbarItemGroup(placement: .keyboard) {
@@ -72,7 +73,7 @@ struct KintTanyDashboard: View {
     }
 
     private var buildNumber: String {
-        Bundle.main.object(forInfoDictionaryKey: "CFBundleVersion") as? String ?? "80"
+        Bundle.main.object(forInfoDictionaryKey: "CFBundleVersion") as? String ?? "81"
     }
 
     // MARK: - Masthead
@@ -100,16 +101,23 @@ struct KintTanyDashboard: View {
                 HStack(alignment: .bottom, spacing: 6) {
                     VStack(alignment: .leading, spacing: 0) {
                         HStack(alignment: .firstTextBaseline, spacing: 6) {
-                            Text("KintTany")
-                                .font(.system(size: 32, weight: .black, design: .rounded))
-                                .foregroundStyle(
-                                    LinearGradient(
-                                        colors: [Color.yellow, KintTanyTheme.gold, KintTanyTheme.orange],
-                                        startPoint: .top,
-                                        endPoint: .bottom
+                            ZStack(alignment: .bottomLeading) {
+                                Text("KINTTANY")
+                                    .foregroundStyle(Color(red: 0.04, green: 0.25, blue: 0.55))
+                                    .offset(y: 3)
+
+                                Text("KINTTANY")
+                                    .foregroundStyle(
+                                        LinearGradient(
+                                            colors: [Color.yellow, KintTanyTheme.gold, KintTanyTheme.orange],
+                                            startPoint: .top,
+                                            endPoint: .bottom
+                                        )
                                     )
-                                )
-                                .shadow(color: .black.opacity(0.9), radius: 0, x: 1, y: 2)
+                            }
+                            .font(.system(size: 34, weight: .black, design: .rounded))
+                            .lineLimit(1)
+                            .minimumScaleFactor(0.72)
 
                             Text("v\(appVersion)")
                                 .font(.system(size: 10, weight: .black, design: .monospaced))
@@ -170,12 +178,14 @@ struct KintTanyDashboard: View {
 
                 verticalDivider
 
-                statusCell(
-                    icon: stateIcon,
-                    title: "Estado",
-                    value: app.state.label,
-                    color: app.activity?.accent ?? KintTanyTheme.cyan
-                )
+                TimelineView(.periodic(from: .now, by: 1)) { context in
+                    statusCell(
+                        icon: "chart.line.uptrend.xyaxis",
+                        title: "Ritmo",
+                        value: app.formattedRatePerMinute(at: context.date),
+                        color: KintTanyTheme.green
+                    )
+                }
 
                 verticalDivider
 
@@ -288,27 +298,20 @@ struct KintTanyDashboard: View {
         VStack(alignment: .leading, spacing: 0) {
             HStack(alignment: .top, spacing: 6) {
                 ActivitySpriteIcon(mode: mode)
-                    .frame(width: 30, height: 30)
+                    .frame(width: 34, height: 34)
 
                 VStack(alignment: .leading, spacing: 0) {
                     Text("ATIVIDADE ATUAL")
                         .font(.system(size: 7, weight: .black, design: .monospaced))
                         .foregroundStyle(KintTanyTheme.cyan)
                     Text(mode.localizedTitle.uppercased())
-                        .font(.system(size: 25, weight: .black, design: .rounded))
+                        .font(.system(size: 28, weight: .black, design: .rounded))
                         .foregroundStyle(mode.accent)
                         .lineLimit(1)
                         .minimumScaleFactor(0.7)
                 }
 
                 Spacer(minLength: 4)
-
-                VStack(alignment: .trailing, spacing: 3) {
-                    TimelineView(.periodic(from: .now, by: 1)) { context in
-                        smallBadge(app.formattedRatePerMinute(at: context.date), color: KintTanyTheme.cyan)
-                    }
-                    smallBadge(app.state.label, color: mode.accent)
-                }
             }
             .padding(.horizontal, 8)
             .padding(.top, 6)
@@ -347,28 +350,15 @@ struct KintTanyDashboard: View {
                 .foregroundStyle(KintTanyTheme.cyan)
 
             Text(app.currentTarget ?? "Aguardando alvo")
-                .font(.system(size: 9, weight: .black, design: .monospaced))
+                .font(.system(size: 10, weight: .black, design: .monospaced))
                 .foregroundStyle(.white)
                 .lineLimit(1)
                 .minimumScaleFactor(0.55)
 
-            HStack(spacing: 6) {
-                Text("\(app.stats.successes)/\(app.sessionGoal)")
-                    .foregroundStyle(mode.accent)
-                Text("•")
-                    .foregroundStyle(KintTanyTheme.mutedText)
-                Text("\(app.stats.attempts) tent.")
-                    .foregroundStyle(.white)
-                if mode == .chicken || mode.isWildCombat {
-                    Text("• \(app.stats.confirmedHits) hits")
-                        .foregroundStyle(KintTanyTheme.cyan)
-                }
-            }
-            .font(.system(size: 6, weight: .bold, design: .monospaced))
-            .lineLimit(1)
-
-            PixelProgressBar(progress: app.progress, color: mode.accent)
-                .frame(height: 4)
+            Text("\(mode.categoryLabel) • \(currentRegion)")
+                .font(.system(size: 7, weight: .bold, design: .monospaced))
+                .foregroundStyle(KintTanyTheme.mutedText)
+                .lineLimit(1)
         }
         .padding(6)
         .background(KintTanyTheme.panelDeep.opacity(0.92), in: RoundedRectangle(cornerRadius: 5))
@@ -382,15 +372,15 @@ struct KintTanyDashboard: View {
                 .foregroundStyle(mode.accent)
 
             Text(app.displayStatusMessage)
-                .font(.system(size: 10, weight: .black, design: .monospaced))
+                .font(.system(size: 11, weight: .black, design: .monospaced))
                 .foregroundStyle(.white)
                 .lineLimit(1)
-                .minimumScaleFactor(0.72)
+                .minimumScaleFactor(0.82)
 
             Spacer(minLength: 4)
         }
         .padding(.horizontal, 9)
-        .frame(maxWidth: .infinity, minHeight: 28, maxHeight: 28)
+        .frame(maxWidth: .infinity, minHeight: 30, maxHeight: 30)
         .background(KintTanyTheme.panelDeep.opacity(0.98))
         .overlay(alignment: .top) {
             Rectangle().fill(mode.accent).frame(height: 1)
@@ -411,18 +401,6 @@ struct KintTanyDashboard: View {
         }
         .multilineTextAlignment(.center)
         .padding(12)
-    }
-
-    private func smallBadge(_ text: String, color: Color) -> some View {
-        Text(text.uppercased())
-            .font(.system(size: 6, weight: .black, design: .monospaced))
-            .foregroundStyle(color)
-            .lineLimit(1)
-            .minimumScaleFactor(0.55)
-            .padding(.horizontal, 5)
-            .frame(height: 16)
-            .background(KintTanyTheme.panelDeep.opacity(0.9), in: RoundedRectangle(cornerRadius: 4))
-            .overlay(RoundedRectangle(cornerRadius: 4).stroke(color.opacity(0.55), lineWidth: 1))
     }
 
     // MARK: - Goal and context
@@ -541,9 +519,11 @@ struct KintTanyDashboard: View {
 
                 VStack(alignment: .leading, spacing: 2) {
                     panelHeader("CONTEXTO ATUAL", icon: "scope")
-                    compactValueRow("Alvo", app.currentTarget ?? "Aguardando")
-                    compactValueRow("Estado", app.state.label)
-                    compactValueRow("Região", currentRegion)
+                    if let mode = app.activity {
+                        compactValueRow("Tipo", mode.categoryLabel)
+                        compactValueRow("Ação", mode.activityDescription)
+                        compactValueRow("Disponíveis", availableTargetsText(for: mode))
+                    }
                 }
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
@@ -592,7 +572,7 @@ struct KintTanyDashboard: View {
                             .padding(.horizontal, 7)
                             .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .leading)
                             .background(KintTanyTheme.panelDeep, in: RoundedRectangle(cornerRadius: 4))
-                            .overlay(RoundedRectangle(cornerRadius: 4).stroke(KintTanyTheme.border.opacity(0.55), lineWidth: 1))
+                            .overlay(RoundedRectangle(cornerRadius: 4).stroke(KintTanyTheme.border.opacity(0.30), lineWidth: 1))
                         }
                     }
                 }
@@ -610,10 +590,10 @@ struct KintTanyDashboard: View {
         } label: {
             VStack(spacing: 0) {
                 ActivitySpriteIcon(mode: mode)
-                    .frame(width: 27, height: 27)
+                    .frame(width: 33, height: 33)
 
                 Text(mode.localizedTitle)
-                    .font(.system(size: 6, weight: .black, design: .rounded))
+                    .font(.system(size: 7, weight: .black, design: .rounded))
                     .foregroundStyle(.white)
                     .lineLimit(1)
                     .minimumScaleFactor(0.48)
@@ -623,12 +603,12 @@ struct KintTanyDashboard: View {
             .clipShape(RoundedRectangle(cornerRadius: 4))
             .overlay(
                 RoundedRectangle(cornerRadius: 4)
-                    .stroke(selected ? KintTanyTheme.green : KintTanyTheme.border.opacity(0.56), lineWidth: selected ? 2 : 1)
+                    .stroke(selected ? KintTanyTheme.green : KintTanyTheme.border.opacity(0.30), lineWidth: selected ? 2 : 1)
             )
         }
         .buttonStyle(.plain)
         .disabled(unavailable || selected)
-        .opacity(unavailable ? 0.48 : 1)
+        .opacity(1)
         .accessibilityLabel("Iniciar \(mode.localizedTitle)")
     }
 
@@ -649,12 +629,8 @@ struct KintTanyDashboard: View {
         PixelPanel(accent: KintTanyTheme.border, inset: 5) {
             VStack(alignment: .leading, spacing: 3) {
                 panelHeader("TELEMETRIA", icon: "chart.bar.fill")
-                insightRow("Região", currentRegion, color: KintTanyTheme.green)
-                insightRow(
-                    "Posição",
-                    String(format: "%.1f, %.1f", app.player.position.x, app.player.position.z),
-                    color: KintTanyTheme.cyan
-                )
+                insightRow("Posição X", String(format: "%.1f", app.player.position.x), color: KintTanyTheme.cyan)
+                insightRow("Posição Z", String(format: "%.1f", app.player.position.z), color: KintTanyTheme.cyan)
                 insightRow("Recursos", "\(app.resourceCount)", color: KintTanyTheme.gold)
                 insightRow("Mobs", "\(app.mobCount)", color: KintTanyTheme.red)
             }
@@ -666,20 +642,11 @@ struct KintTanyDashboard: View {
     private var characterStatusPanel: some View {
         PixelPanel(accent: KintTanyTheme.border, inset: 5) {
             VStack(alignment: .leading, spacing: 3) {
-                panelHeader("ESTADO ATUAL", icon: stateIcon)
-
-                Text(app.state.label)
-                    .font(.system(size: 8, weight: .black, design: .monospaced))
-                    .foregroundStyle(app.activity?.accent ?? KintTanyTheme.cyan)
-                    .lineLimit(1)
-                    .minimumScaleFactor(0.5)
-
-                PixelProgressBar(progress: app.activity == nil ? 0 : app.progress, color: app.activity?.accent ?? KintTanyTheme.cyan)
-                    .frame(height: 5)
-
-                insightRow("Alvo", app.currentTarget ?? "Aguardando", color: KintTanyTheme.cyan)
+                panelHeader("PERSONAGEM", icon: "heart.fill")
+                insightRow("HP", "\(app.player.hp)", color: KintTanyTheme.red)
+                insightRow("Escudo", "\(app.player.shield)", color: .blue)
                 insightRow("Conexão", connectionPresentation.text, color: connectionPresentation.color)
-                insightRow("Evento", compactEventText, color: KintTanyTheme.green)
+                insightRow("Sessão", app.hasSession ? "Válida" : "Ausente", color: app.hasSession ? KintTanyTheme.green : KintTanyTheme.gold)
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
         }
@@ -693,14 +660,7 @@ struct KintTanyDashboard: View {
                 insightRow("Tentativas", "\(app.stats.attempts)", color: .white)
                 insightRow("Sucessos", "\(app.stats.successes)", color: KintTanyTheme.green)
                 insightRow("Falhas", "\(app.stats.failures)", color: KintTanyTheme.red)
-
-                if let mode = app.activity, mode == .chicken || mode.isWildCombat {
-                    insightRow("Hits/Kills", "\(app.stats.confirmedHits)/\(app.stats.kills)", color: KintTanyTheme.cyan)
-                } else {
-                    TimelineView(.periodic(from: .now, by: 1)) { context in
-                        insightRow("Ritmo", app.formattedRatePerMinute(at: context.date), color: KintTanyTheme.cyan)
-                    }
-                }
+                insightRow("Erros", "\(app.stats.sessionErrors)", color: KintTanyTheme.orange)
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
         }
@@ -713,12 +673,12 @@ struct KintTanyDashboard: View {
                 .fill(color)
                 .frame(width: 4, height: 4)
             Text(label.uppercased())
-                .font(.system(size: 5, weight: .black, design: .monospaced))
+                .font(.system(size: 6, weight: .black, design: .monospaced))
                 .foregroundStyle(KintTanyTheme.mutedText)
                 .lineLimit(1)
             Spacer(minLength: 2)
             Text(value)
-                .font(.system(size: 6, weight: .bold, design: .monospaced))
+                .font(.system(size: 7, weight: .bold, design: .monospaced))
                 .foregroundStyle(color)
                 .lineLimit(1)
                 .minimumScaleFactor(0.42)
@@ -754,10 +714,10 @@ struct KintTanyDashboard: View {
                         .foregroundStyle(KintTanyTheme.mutedText)
                         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .center)
                 } else {
-                    VStack(alignment: .leading, spacing: 2) {
-                        ForEach(Array(app.logs.suffix(6).enumerated()), id: \.offset) { _, line in
+                    VStack(alignment: .leading, spacing: 3) {
+                        ForEach(Array(app.logs.suffix(8).enumerated()), id: \.offset) { _, line in
                             Text(line)
-                                .font(.system(size: 6, design: .monospaced))
+                                .font(.system(size: 7, design: .monospaced))
                                 .foregroundStyle(eventColor(for: line))
                                 .lineLimit(1)
                                 .minimumScaleFactor(0.58)
@@ -780,7 +740,7 @@ struct KintTanyDashboard: View {
 
     private func panelHeader(_ title: String, icon: String) -> some View {
         Label(title, systemImage: icon)
-            .font(.system(size: 7, weight: .black, design: .monospaced))
+            .font(.system(size: 8, weight: .black, design: .monospaced))
             .foregroundStyle(KintTanyTheme.cyan)
             .lineLimit(1)
             .minimumScaleFactor(0.55)
@@ -789,20 +749,19 @@ struct KintTanyDashboard: View {
     private func compactValueRow(_ label: String, _ value: String) -> some View {
         HStack(spacing: 3) {
             Text(label.uppercased())
-                .font(.system(size: 5, weight: .black, design: .monospaced))
+                .font(.system(size: 6, weight: .black, design: .monospaced))
                 .foregroundStyle(KintTanyTheme.mutedText)
             Spacer(minLength: 2)
             Text(value)
-                .font(.system(size: 6, weight: .bold, design: .monospaced))
+                .font(.system(size: 7, weight: .bold, design: .monospaced))
                 .foregroundStyle(.white)
                 .lineLimit(1)
                 .minimumScaleFactor(0.45)
         }
     }
 
-    private var compactEventText: String {
-        let value = app.stats.lastEvent.trimmingCharacters(in: .whitespacesAndNewlines)
-        return value.isEmpty ? "Aguardando" : value
+    private func availableTargetsText(for mode: ActivityMode) -> String {
+        mode.isGathering ? "\(app.resourceCount) recursos" : "\(app.mobCount) mobs"
     }
 
     private func eventColor(for line: String) -> Color {

@@ -57,12 +57,7 @@ struct PixelPanel<Content: View>: View {
             )
             .overlay(
                 RoundedRectangle(cornerRadius: 7, style: .continuous)
-                    .stroke(accent.opacity(0.62), lineWidth: 1)
-            )
-            .overlay(
-                RoundedRectangle(cornerRadius: 5, style: .continuous)
-                    .stroke(.white.opacity(0.035), lineWidth: 0.5)
-                    .padding(2)
+                    .stroke(accent.opacity(0.42), lineWidth: 1)
             )
     }
 }

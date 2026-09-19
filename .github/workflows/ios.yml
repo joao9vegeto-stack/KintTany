@@ -79,6 +79,39 @@ jobs:
           echo "SIM_UDID=$SIM_UDID" >> "$GITHUB_ENV"
           xcrun simctl list devices available | grep "$SIM_UDID" || true
 
+      - name: Validate asset catalog sources
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          import json
+          from pathlib import Path
+
+          root = Path("KintTany/Assets.xcassets")
+          failures = []
+
+          for path in root.rglob("Contents.json"):
+              try:
+                  json.loads(path.read_text(encoding="utf-8"))
+              except Exception as error:
+                  failures.append(f"JSON inválido: {path} ({error})")
+
+          for path in root.rglob("*.png"):
+              if path.read_bytes()[:8] != b"\x89PNG\r\n\x1a\n":
+                  failures.append(f"PNG inválido: {path}")
+
+          for path in root.rglob("*"):
+              if path.name.startswith("._") or path.name == "__MACOSX":
+                  failures.append(f"Metadado AppleDouble proibido: {path}")
+              if path.name.startswith("Contents-") and path.suffix == ".json":
+                  failures.append(f"Contents duplicado inesperado: {path}")
+
+          if failures:
+              raise SystemExit("\n".join(failures))
+
+          print("Asset catalog validado com sucesso")
+          PY
+
       - name: Run XCTest on iOS Simulator
         run: |
           set -o pipefail
