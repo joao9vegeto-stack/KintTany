@@ -21,7 +21,7 @@ struct KintTanyDashboard: View {
 
                 VStack(spacing: gap) {
                     masthead
-                        .frame(height: available * 0.130)
+                        .frame(height: available * 0.118)
 
                     connectionStrip
                         .frame(height: available * 0.050)
@@ -30,7 +30,7 @@ struct KintTanyDashboard: View {
                         .frame(height: available * 0.210)
 
                     controlsRow
-                        .frame(height: available * 0.120)
+                        .frame(height: available * 0.112)
 
                     activitySelector
                         .frame(height: available * 0.170)
@@ -104,12 +104,13 @@ struct KintTanyDashboard: View {
                         Text("KintTany")
                             .font(.system(size: 10, weight: .black, design: .monospaced))
                             .foregroundStyle(KintTanyTheme.gold)
+                            .frame(maxWidth: 210, alignment: .center)
 
                         HStack(alignment: .firstTextBaseline, spacing: 6) {
                             ZStack(alignment: .bottomLeading) {
                                 Text("KINTTANY")
-                                    .foregroundStyle(Color(red: 0.04, green: 0.25, blue: 0.55))
-                                    .offset(y: 3)
+                                    .foregroundStyle(Color(red: 0.02, green: 0.18, blue: 0.46))
+                                    .offset(x: 2, y: 4)
 
                                 Text("KINTTANY")
                                     .foregroundStyle(
@@ -120,9 +121,9 @@ struct KintTanyDashboard: View {
                                         )
                                     )
                             }
-                            .font(.system(size: 32, weight: .black, design: .monospaced))
+                            .font(.system(size: 38, weight: .black, design: .rounded))
                             .lineLimit(1)
-                            .minimumScaleFactor(0.72)
+                            .minimumScaleFactor(0.62)
 
                             Text("v\(appVersion)")
                                 .font(.system(size: 10, weight: .black, design: .monospaced))
@@ -742,9 +743,10 @@ struct KintTanyDashboard: View {
 
     private func insightRow(_ label: String, _ value: String, color: Color) -> some View {
         HStack(spacing: 3) {
-            Rectangle()
-                .fill(color)
-                .frame(width: 5, height: 5)
+            Image(systemName: insightIcon(for: label))
+                .font(.system(size: 8, weight: .black))
+                .foregroundStyle(color)
+                .frame(width: 10)
             Text(label.uppercased())
                 .font(.system(size: 6.5, weight: .black, design: .monospaced))
                 .foregroundStyle(KintTanyTheme.mutedText)
@@ -756,6 +758,23 @@ struct KintTanyDashboard: View {
                 .lineLimit(1)
                 .minimumScaleFactor(0.42)
                 .truncationMode(.tail)
+        }
+    }
+
+    private func insightIcon(for label: String) -> String {
+        switch label {
+        case "Posição X", "Posição Z": "location.fill"
+        case "Recursos": "shippingbox.fill"
+        case "Mobs": "figure.walk"
+        case "HP": "heart.fill"
+        case "Escudo": "shield.fill"
+        case "Conexão": "antenna.radiowaves.left.and.right"
+        case "Sessão": "clock.fill"
+        case "Tentativas": "scope"
+        case "Sucessos": "checkmark.circle.fill"
+        case "Falhas": "xmark.circle.fill"
+        case "Erros": "exclamationmark.triangle.fill"
+        default: "square.fill"
         }
     }
 
