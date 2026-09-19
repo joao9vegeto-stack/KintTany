@@ -367,25 +367,44 @@ struct KintTanyDashboard: View {
     }
 
     private func heroTargetCard(_ mode: ActivityMode) -> some View {
-        HStack(spacing: 7) {
-            ActivityIcon(mode: mode)
-                .frame(width: 34, height: 34)
+        VStack(alignment: .leading, spacing: 3) {
+            HStack(spacing: 7) {
+                ActivityIcon(mode: mode)
+                    .frame(width: 32, height: 32)
 
-            VStack(alignment: .leading, spacing: 1) {
-                Text("ALVO ATUAL")
-                    .font(.system(size: 6, weight: .black, design: .monospaced))
-                    .foregroundStyle(KintTanyTheme.cyan)
+                VStack(alignment: .leading, spacing: 1) {
+                    Text(heroTargetLabel(for: mode))
+                        .font(.system(size: 6, weight: .black, design: .monospaced))
+                        .foregroundStyle(KintTanyTheme.cyan)
 
-                Text(app.currentTarget ?? "Aguardando alvo")
-                    .font(.system(size: 10, weight: .black, design: .monospaced))
-                    .foregroundStyle(.white)
-                    .lineLimit(1)
-                    .minimumScaleFactor(0.55)
+                    Text(app.currentTarget ?? heroWaitingText(for: mode))
+                        .font(.system(size: 10, weight: .black, design: .monospaced))
+                        .foregroundStyle(.white)
+                        .lineLimit(1)
+                        .minimumScaleFactor(0.55)
 
-                Text("\(mode.categoryLabel) • \(currentRegion)")
-                    .font(.system(size: 7, weight: .bold, design: .monospaced))
-                    .foregroundStyle(KintTanyTheme.mutedText)
-                    .lineLimit(1)
+                    Text("\(mode.categoryLabel) • \(currentRegion)")
+                        .font(.system(size: 7, weight: .bold, design: .monospaced))
+                        .foregroundStyle(KintTanyTheme.mutedText)
+                        .lineLimit(1)
+                }
+            }
+
+            Rectangle()
+                .fill(KintTanyTheme.border.opacity(0.42))
+                .frame(height: 1)
+
+            ForEach(heroDetailRows(for: mode), id: \.label) { row in
+                HStack(spacing: 3) {
+                    Text(row.label)
+                        .foregroundStyle(KintTanyTheme.mutedText)
+                    Spacer(minLength: 2)
+                    Text(row.value)
+                        .foregroundStyle(row.color)
+                        .lineLimit(1)
+                        .minimumScaleFactor(0.55)
+                }
+                .font(.system(size: 6, weight: .black, design: .monospaced))
             }
         }
         .padding(7)
@@ -395,6 +414,57 @@ struct KintTanyDashboard: View {
                 .stroke(KintTanyTheme.border.opacity(0.7), lineWidth: 1)
                 .allowsHitTesting(false)
         }
+    }
+
+    private func heroTargetLabel(for mode: ActivityMode) -> String {
+        switch mode {
+        case .tree: "RECURSO ATUAL"
+        case .stone: "ROCHA ATUAL"
+        case .coal: "VEIO DE CARVÃO"
+        case .iron: "MINÉRIO DE FERRO"
+        case .silver: "MINÉRIO DAS DUNES"
+        case .cacti: "CACTO ATUAL"
+        case .fishing: "PONTO DE PESCA"
+        case .chicken: "GALINHA ALVO"
+        case .zombie: "ZUMBI ALVO"
+        case .dragon: "DRAGÃO ALVO"
+        }
+    }
+
+    private func heroWaitingText(for mode: ActivityMode) -> String {
+        if mode == .fishing { return "Aguardando peixe" }
+        if mode == .chicken || mode.isWildCombat { return "Procurando inimigo" }
+        return "Aguardando recurso"
+    }
+
+    private func heroDetailRows(for mode: ActivityMode) -> [HeroDetailRow] {
+        if mode == .fishing {
+            return [
+                HeroDetailRow(label: "ISCA", value: app.selectedFishingBait.displayName, color: KintTanyTheme.gold),
+                HeroDetailRow(label: "SUCESSOS", value: "\(app.stats.successes) / \(app.sessionGoal)", color: KintTanyTheme.green)
+            ]
+        }
+
+        if mode == .chicken || mode.isWildCombat {
+            return [
+                HeroDetailRow(label: "MOBS", value: "\(app.mobCount) disponíveis", color: KintTanyTheme.red),
+                HeroDetailRow(label: "KILLS / HITS", value: "\(app.stats.kills) / \(app.stats.confirmedHits)", color: KintTanyTheme.green)
+            ]
+        }
+
+        let resourceName: String = switch mode {
+        case .tree: "ÁRVORES"
+        case .stone: "ROCHAS"
+        case .coal: "CARVÃO"
+        case .iron: "IRON ORE"
+        case .silver: "SILVER ORE"
+        case .cacti: "CACTOS"
+        default: "RECURSOS"
+        }
+        return [
+            HeroDetailRow(label: resourceName, value: "\(app.resourceCount) disponíveis", color: KintTanyTheme.gold),
+            HeroDetailRow(label: "COLETADOS", value: "\(app.stats.successes) / \(app.sessionGoal)", color: KintTanyTheme.green)
+        ]
     }
 
     private func operationStatusBanner(_ mode: ActivityMode) -> some View {
@@ -692,13 +762,7 @@ struct KintTanyDashboard: View {
             VStack(alignment: .leading, spacing: 0) {
                 panelHeader("TELEMETRIA DA SESSÃO", icon: "chart.bar.fill")
                 Spacer(minLength: 2)
-                insightRow("Posição X", String(format: "%.1f", app.player.position.x), color: KintTanyTheme.cyan)
-                Spacer(minLength: 1)
-                insightRow("Posição Z", String(format: "%.1f", app.player.position.z), color: KintTanyTheme.cyan)
-                Spacer(minLength: 1)
-                insightRow("Recursos", "\(app.resourceCount)", color: KintTanyTheme.gold)
-                Spacer(minLength: 1)
-                insightRow("Mobs", "\(app.mobCount)", color: KintTanyTheme.red)
+                telemetryRows
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
         }
@@ -710,9 +774,9 @@ struct KintTanyDashboard: View {
             VStack(alignment: .leading, spacing: 0) {
                 panelHeader("STATUS DO PERSONAGEM", icon: "heart.fill")
                 Spacer(minLength: 2)
-                insightRow("HP", "\(app.player.hp)", color: KintTanyTheme.red)
+                compactMeter("HP", value: app.player.hp, color: KintTanyTheme.red)
                 Spacer(minLength: 1)
-                insightRow("Escudo", "\(app.player.shield)", color: .blue)
+                compactMeter("Escudo", value: app.player.shield, color: .blue)
                 Spacer(minLength: 1)
                 insightRow("Conexão", connectionPresentation.text, color: connectionPresentation.color)
                 Spacer(minLength: 1)
@@ -721,6 +785,65 @@ struct KintTanyDashboard: View {
             .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
         }
         .clipped()
+    }
+
+    @ViewBuilder
+    private var telemetryRows: some View {
+        if let mode = app.activity, mode == .chicken || mode.isWildCombat {
+            insightRow("Kills", "\(app.stats.kills)", color: KintTanyTheme.red)
+            Spacer(minLength: 1)
+            insightRow("Hits", "\(app.stats.confirmedHits)", color: KintTanyTheme.cyan)
+            Spacer(minLength: 1)
+            insightRow("Mobs", "\(app.mobCount)", color: KintTanyTheme.gold)
+            Spacer(minLength: 1)
+            TimelineView(.periodic(from: .now, by: 1)) { context in
+                insightRow("Ritmo", app.formattedRatePerMinute(at: context.date), color: KintTanyTheme.green)
+            }
+        } else if app.activity == .fishing {
+            insightRow("Pescados", "\(app.stats.successes)", color: KintTanyTheme.cyan)
+            Spacer(minLength: 1)
+            insightRow("Tentativas", "\(app.stats.attempts)", color: .white)
+            Spacer(minLength: 1)
+            insightRow("Isca", app.selectedFishingBait.displayName, color: KintTanyTheme.gold)
+            Spacer(minLength: 1)
+            TimelineView(.periodic(from: .now, by: 1)) { context in
+                insightRow("Ritmo", app.formattedRatePerMinute(at: context.date), color: KintTanyTheme.green)
+            }
+        } else if app.activity?.isGathering == true {
+            insightRow("Coletados", "\(app.stats.successes)", color: KintTanyTheme.green)
+            Spacer(minLength: 1)
+            insightRow("Tentativas", "\(app.stats.attempts)", color: .white)
+            Spacer(minLength: 1)
+            insightRow("Recursos", "\(app.resourceCount)", color: KintTanyTheme.gold)
+            Spacer(minLength: 1)
+            TimelineView(.periodic(from: .now, by: 1)) { context in
+                insightRow("Ritmo", app.formattedRatePerMinute(at: context.date), color: KintTanyTheme.cyan)
+            }
+        } else {
+            insightRow("Posição X", String(format: "%.1f", app.player.position.x), color: KintTanyTheme.cyan)
+            Spacer(minLength: 1)
+            insightRow("Posição Z", String(format: "%.1f", app.player.position.z), color: KintTanyTheme.cyan)
+            Spacer(minLength: 1)
+            insightRow("Recursos", "\(app.resourceCount)", color: KintTanyTheme.gold)
+            Spacer(minLength: 1)
+            insightRow("Mobs", "\(app.mobCount)", color: KintTanyTheme.red)
+        }
+    }
+
+    private func compactMeter(_ label: String, value: Int, color: Color) -> some View {
+        VStack(spacing: 1) {
+            HStack(spacing: 3) {
+                Text(label.uppercased())
+                    .font(.system(size: 6.5, weight: .black, design: .monospaced))
+                    .foregroundStyle(KintTanyTheme.mutedText)
+                Spacer(minLength: 2)
+                Text("\(value) / 100")
+                    .font(.system(size: 7, weight: .black, design: .monospaced))
+                    .foregroundStyle(color)
+            }
+            PixelProgressBar(progress: Double(value) / 100, color: color)
+                .frame(height: 4)
+        }
     }
 
     private var statisticsPanel: some View {
@@ -771,6 +894,12 @@ struct KintTanyDashboard: View {
         case "Conexão": "antenna.radiowaves.left.and.right"
         case "Sessão": "clock.fill"
         case "Tentativas": "scope"
+        case "Coletados": "shippingbox.fill"
+        case "Pescados": "fish.fill"
+        case "Isca": "circle.hexagongrid.fill"
+        case "Kills": "bolt.fill"
+        case "Hits": "scope"
+        case "Ritmo": "hourglass"
         case "Sucessos": "checkmark.circle.fill"
         case "Falhas": "xmark.circle.fill"
         case "Erros": "exclamationmark.triangle.fill"
@@ -893,6 +1022,12 @@ struct KintTanyDashboard: View {
         default: "scope"
         }
     }
+}
+
+private struct HeroDetailRow {
+    let label: String
+    let value: String
+    let color: Color
 }
 
 private struct ActivityIcon: View {
