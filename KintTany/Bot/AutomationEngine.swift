@@ -1454,6 +1454,9 @@ actor AutomationEngine {
             return PresenceBootstrap(region: "eldergrove", position: Position(x: -17.5, z: -11.5))
         case .feather:
             return PresenceBootstrap(region: "pond", position: Position(x: -1.5, z: -1.5))
+        default:
+            // Unvalidated bait profiles are rejected before a fishing run.
+            return bootstrap(for: mode)
         }
     }
 
