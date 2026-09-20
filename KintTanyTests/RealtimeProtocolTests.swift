@@ -124,12 +124,42 @@ final class RealtimeProtocolTests: XCTestCase {
         XCTAssertNil(policy.retryStreaks["tree:3,26"])
     }
 
-    func testGatherRetryPolicyAcceptedPartialGetsShortRetryPriority() {
+    func testBuild80AcceptedPartialDoesNotJumpAheadOfFreshTargets() {
         var policy = GatherRetryPolicy()
-        policy.deferAcceptedPartial(signature: "rock:12,46|12,47", nowMS: 5_000)
-        XCTAssertTrue(policy.hasRetryPriority(signature: "rock:12,46|12,47"))
-        XCTAssertFalse(policy.isEligible(signature: "rock:12,46|12,47", nowMS: 6_199))
-        XCTAssertTrue(policy.isEligible(signature: "rock:12,46|12,47", nowMS: 6_200))
+        let signature = "rock:12,46|12,47"
+        policy.deferAcceptedPartial(signature: signature, nowMS: 5_000)
+        XCTAssertFalse(policy.hasRetryPriority(signature: signature))
+        XCTAssertFalse(policy.isEligible(signature: signature, nowMS: 8_999))
+        XCTAssertTrue(policy.isEligible(signature: signature, nowMS: 9_000))
+    }
+
+    func testBuild80StalledPartialUsesEscalatingQuarantine() {
+        var policy = GatherRetryPolicy()
+        let signature = "rock:33,8"
+
+        XCTAssertEqual(policy.deferStalledPartial(signature: signature, nowMS: 1_000), 30_000)
+        XCTAssertFalse(policy.isEligible(signature: signature, nowMS: 30_999))
+        XCTAssertTrue(policy.isEligible(signature: signature, nowMS: 31_000))
+
+        XCTAssertEqual(policy.deferStalledPartial(signature: signature, nowMS: 31_000), 60_000)
+        XCTAssertFalse(policy.isEligible(signature: signature, nowMS: 90_999))
+        XCTAssertTrue(policy.isEligible(signature: signature, nowMS: 91_000))
+
+        XCTAssertEqual(policy.deferStalledPartial(signature: signature, nowMS: 91_000), 120_000)
+        XCTAssertEqual(policy.deferStalledPartial(signature: signature, nowMS: 211_000), 120_000)
+        XCTAssertFalse(policy.hasRetryPriority(signature: signature))
+    }
+
+    func testBuild80ProgressOrSuccessResetsStallHistory() {
+        var policy = GatherRetryPolicy()
+        let signature = "rock:33,12"
+        XCTAssertEqual(policy.deferStalledPartial(signature: signature, nowMS: 0), 30_000)
+        policy.deferAcceptedPartial(signature: signature, nowMS: 30_000)
+        XCTAssertNil(policy.stalledPartialCounts[signature])
+        XCTAssertEqual(policy.deferStalledPartial(signature: signature, nowMS: 34_000), 30_000)
+        policy.markSuccess(signature: signature)
+        XCTAssertNil(policy.stalledPartialCounts[signature])
+        XCTAssertTrue(policy.isEligible(signature: signature, nowMS: 34_000))
     }
 
     func testGatherRetryPolicyDefersAfterThreeRealFailures() {

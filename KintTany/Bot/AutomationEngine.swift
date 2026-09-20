@@ -2443,14 +2443,19 @@ actor AutomationEngine {
                 recordGatherRecovery(proofMiss: result.pureProofMiss)
                 if result.pureProofMiss {
                     gatherRetryPolicy.deferProofMiss(signature: seed.signature, nowMS: nowMS)
-                    reporter(.state(.recovering, "Sincronizando recurso"))
-                    reporter(.log("🟡 \(mode.displayName) \(seed.targetKey) • proof ainda não aceito após recovery • alvo adiado • nenhuma falha contabilizada"))
+                    reporter(.state(.recovering, "Trocando alvo"))
+                    reporter(.log("🟡 \(mode.displayName) \(seed.targetKey) • proof não estabilizou • alvo adiado 30s • nenhuma falha contabilizada"))
+                } else if result.reason == "stalled_no_progress" {
+                    let deferMS = gatherRetryPolicy.deferStalledPartial(signature: seed.signature, nowMS: nowMS)
+                    let seconds = Int((deferMS / 1_000).rounded())
+                    reporter(.state(.recovering, "Trocando alvo"))
+                    reporter(.log("⏭️ \(mode.displayName) \(seed.targetKey) • sem avanço h=\(result.h)/\(result.hm) • alvo adiado \(seconds)s • nenhuma falha contabilizada"))
                 } else {
                     gatherRetryPolicy.deferAcceptedPartial(signature: seed.signature, nowMS: nowMS)
-                    reporter(.state(.recovering, "Continuando ação aceita"))
-                    reporter(.log("🔄 \(mode.displayName) \(seed.targetKey) • progresso aceito h=\(result.h)/\(result.hm) • continuará em novo ciclo • nenhuma falha contabilizada"))
+                    reporter(.state(.recovering, "Progresso salvo • trocando alvo"))
+                    reporter(.log("🔄 \(mode.displayName) \(seed.targetKey) • progresso real h=\(result.h)/\(result.hm) • alvo liberado em 4s • nenhuma falha contabilizada"))
                 }
-                try await sleep(350)
+                try await sleep(180)
                 continue
             }
 
@@ -2697,59 +2702,71 @@ actor AutomationEngine {
     private func harvestWithRecovery(seed: GatherSeed, mode: ActivityMode) async throws -> HarvestResult {
         var merged = try await harvest(seed: seed, mode: mode, handshakeTries: 4)
 
-        // v7.7: um proof miss puro é primeiro tratado como problema de sincronização,
-        // não como falha do usuário. Reenvia a mesma posição, espera refresh e tenta
-        // novamente antes de abandonar a geometria que acabou de ser usada.
+        // Build 80: proof miss recebe somente uma ressincronização curta e, se
+        // necessário, um único probe adjacente. Não percorremos várias posições
+        // de um alvo ruim enquanto outros recursos estão disponíveis.
         if merged.pureProofMiss {
             recordGatherRecovery(proofMiss: true)
-            reporter(.diagnostic("[GATHER] proof miss • same-position event resync 900ms • \(seed.targetKey)"))
+            reporter(.diagnostic("[GATHER] proof miss • resync curto na mesma posição • \(seed.targetKey)"))
             let eventBefore = await gatherEventGate.serial
             position.y = 0.25
             try await sendPosition(moving: false, full: true)
-            _ = try await gatherEventGate.wait(after: eventBefore, timeoutMS: 900)
+            _ = try await gatherEventGate.wait(after: eventBefore, timeoutMS: 650)
             try await equip(activeGatherToolType ?? ActivityToolPolicy.requiredTool(for: mode) ?? (seed.kind == "tree" ? "tool_axe" : "tool_pickaxe"))
-            let retry = try await harvest(seed: seed, mode: mode, handshakeTries: 2)
+            let retry = try await harvest(seed: seed, mode: mode, handshakeTries: 1, maxDamageHits: 1)
             merged = merged.merging(retry)
         }
 
-        // v7.7: se a mesma posição ainda não obtiver proof, percorre somente células
-        // cardinais canônicas adjacentes ao footprint real do recurso. Nenhum ponto
-        // arbitrário é inventado.
         if merged.pureProofMiss {
             let candidates = canonicalGatherRecoveryPositions(for: seed)
-            for (index, candidate) in candidates.enumerated() {
+            if let candidate = candidates.min(by: {
+                hypot(position.x - $0.x, position.z - $0.z) < hypot(position.x - $1.x, position.z - $1.z)
+            }), hypot(position.x - candidate.x, position.z - candidate.z) >= 0.25 {
                 try Task.checkCancellation()
-                if hypot(position.x - candidate.x, position.z - candidate.z) < 0.25 { continue }
                 recordGatherRecovery(proofMiss: true)
-                reporter(.diagnostic("[GATHER] recovery adjacent \(index + 1)/\(candidates.count) • \(seed.targetKey) • x=\(format(candidate.x)) z=\(format(candidate.z))"))
-                try await walk(to: candidate, maxSeconds: 18, status: "Reposicionando para \(mode.displayName) \(seed.targetKey)")
+                reporter(.diagnostic("[GATHER] proof miss • único probe adjacente • \(seed.targetKey) • x=\(format(candidate.x)) z=\(format(candidate.z))"))
+                try await walk(to: candidate, maxSeconds: 8, status: "Reposicionando para \(mode.displayName) \(seed.targetKey)")
                 position.ry = candidate.ry
                 try await sendPosition(moving: false)
-                let probe = try await harvest(seed: seed, mode: mode, handshakeTries: 2)
+                let probe = try await harvest(seed: seed, mode: mode, handshakeTries: 1, maxDamageHits: 1)
                 merged = merged.merging(probe)
-                if !probe.pureProofMiss { break }
             }
         }
 
-        // v7.7 accepted-continuation: se o servidor já aceitou proof/wear parcial,
-        // uma ausência transitória do próximo ACK não transforma a ação em falha.
-        var continuation = 0
-        while !merged.felled, merged.accepted, continuation < 3 {
+        // Build 80: progresso aceito ganha uma única continuidade curta.
+        // Se h/hm não avançar, o alvo é marcado como stalled e o loop principal
+        // o coloca em quarentena exponencial em vez de gastar dezenas de segundos.
+        if !merged.felled, merged.accepted {
             try Task.checkCancellation()
-            continuation += 1
+            let beforeH = merged.h
+            let beforeHM = merged.hm
             recordGatherRecovery()
-            reporter(.diagnostic("[GATHER] recovery accepted • \(seed.targetKey) • continuidade \(continuation)/3 • h=\(merged.h)/\(merged.hm)"))
-            try await sleep(90)
-            let next = try await harvest(seed: seed, mode: mode, handshakeTries: 2)
+            reporter(.diagnostic("[GATHER] recovery curto • \(seed.targetKey) • h=\(beforeH)/\(beforeHM)"))
+            try await sleep(70)
+            let next = try await harvest(seed: seed, mode: mode, handshakeTries: 1, maxDamageHits: 1)
+            let madeProgress = next.felled ||
+                next.h > beforeH ||
+                (beforeHM >= 99 && next.hm < 99)
             merged = merged.merging(next)
-            if merged.felled { break }
-            if !next.accepted && !next.pureProofMiss { break }
+
+            if !merged.felled, !madeProgress {
+                reporter(.diagnostic("[GATHER] alvo stalled • \(seed.targetKey) • sem avanço após probe curto • h=\(merged.h)/\(merged.hm)"))
+                return HarvestResult(
+                    felled: false,
+                    h: merged.h,
+                    hm: merged.hm,
+                    loot: merged.loot,
+                    reason: "stalled_no_progress",
+                    accepted: true,
+                    proofMiss: false
+                )
+            }
         }
 
         return merged
     }
 
-    private func harvest(seed: GatherSeed, mode: ActivityMode, handshakeTries: Int) async throws -> HarvestResult {
+    private func harvest(seed: GatherSeed, mode: ActivityMode, handshakeTries: Int, maxDamageHits: Int = 12) async throws -> HarvestResult {
         let kind = seed.kind
         currentGatherSignature = seed.signature
         currentGatherKind = kind
@@ -2950,7 +2967,7 @@ actor AutomationEngine {
         }
 
         reporter(.state(.acting, kind == "tree" ? "Cortando" : "Minerando"))
-        while damageHits < 12, !(harvestHM < 99 && harvestH >= harvestHM) {
+        while damageHits < max(1, maxDamageHits), !(harvestHM < 99 && harvestH >= harvestHM) {
             try Task.checkCancellation()
             guard try await maySendGatherAction(for: mode) else { break }
             guard !harvestProof.isEmpty else { break }
@@ -3329,9 +3346,9 @@ actor AutomationEngine {
                 seed.keys.allSatisfy { (cooldownUntil["\(seed.kind):\($0)"] ?? 0) <= now }
             }
             .min { a, b in
-                let retryA = gatherRetryPolicy.hasRetryPriority(signature: a.signature) ? 0 : 1
-                let retryB = gatherRetryPolicy.hasRetryPriority(signature: b.signature) ? 0 : 1
-                if retryA != retryB { return retryA < retryB }
+                // Build 80: retries nunca furam a fila. Entre alvos elegíveis,
+                // escolha apenas pela proximidade; alvos problemáticos permanecem
+                // fora da seleção enquanto estiverem em defer/quarentena.
                 let pa = gatherPositionMemory[a.signature] ?? a.position
                 let pb = gatherPositionMemory[b.signature] ?? b.position
                 return distance(from: position, to: pa) < distance(from: position, to: pb)
@@ -6486,10 +6503,16 @@ private struct HarvestResult {
 struct GatherRetryPolicy {
     private(set) var retryStreaks: [String: Int] = [:]
     private(set) var deferredUntil: [String: Double] = [:]
+    private(set) var stalledPartialCounts: [String: Int] = [:]
 
     let maxSameTargetRetries = 3
-    let proofMissDeferMS: Double = 10_000
-    let acceptedPartialDeferMS: Double = 1_200
+    // Build 80: recovery deve proteger produtividade. Um alvo sem proof ou sem
+    // avanço não volta imediatamente para o topo da fila quando há dezenas de
+    // recursos disponíveis.
+    let proofMissDeferMS: Double = 30_000
+    let acceptedPartialDeferMS: Double = 4_000
+    let stalledPartialBaseDeferMS: Double = 30_000
+    let stalledPartialMaxDeferMS: Double = 120_000
     let realFailureCooldownMS: Double = 8_000
     let repeatedFailureDeferMS: Double = 10_000
 
@@ -6507,6 +6530,7 @@ struct GatherRetryPolicy {
 
     mutating func markSuccess(signature: String) {
         retryStreaks.removeValue(forKey: signature)
+        stalledPartialCounts.removeValue(forKey: signature)
         deferredUntil.removeValue(forKey: signature)
     }
 
@@ -6516,8 +6540,23 @@ struct GatherRetryPolicy {
     }
 
     mutating func deferAcceptedPartial(signature: String, nowMS: Double) {
-        retryStreaks[signature] = 1
+        // Progresso parcial real continua válido, mas não recebe prioridade
+        // absoluta sobre alvos novos. Após poucos segundos pode ser revisitado
+        // naturalmente pela distância.
+        retryStreaks.removeValue(forKey: signature)
+        stalledPartialCounts.removeValue(forKey: signature)
         deferredUntil[signature] = nowMS + acceptedPartialDeferMS
+    }
+
+    @discardableResult
+    mutating func deferStalledPartial(signature: String, nowMS: Double) -> Double {
+        retryStreaks.removeValue(forKey: signature)
+        let count = min(3, (stalledPartialCounts[signature] ?? 0) + 1)
+        stalledPartialCounts[signature] = count
+        let multiplier = Double(1 << (count - 1))
+        let delay = min(stalledPartialMaxDeferMS, stalledPartialBaseDeferMS * multiplier)
+        deferredUntil[signature] = nowMS + delay
+        return delay
     }
 
     @discardableResult
