@@ -119,10 +119,10 @@ enum FishingBait: String, CaseIterable, Codable, Identifiable {
         }
     }
 
-    var isAutomationValidated: Bool { self == .feather }
+    var isAutomationValidated: Bool { self == .feather || self == .trout }
 
     var supportLabel: String {
-        isAutomationValidated ? "The Pond • validado" : "protocolo da zona ainda não validado"
+        self == .feather ? "The Pond • validado" : (self == .trout ? "Whisperwood • Trout • validado" : "protocolo da zona ainda não validado")
     }
 }
 
