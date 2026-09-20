@@ -1104,10 +1104,11 @@ final class AppStore: ObservableObject {
             // correta. Esse é o ciclo que funcionou nas builds estáveis e evita tentar
             // World→Eldergrove na Presence recém-usada pelo banco.
             let bootstrap: PresenceBootstrap
-            if mode == .fishing, selectedFishingBait == .trout {
-                // Trout must follow the proven ElderGrove gathering handoff:
-                // create Presence directly in ElderGrove, never mutate World→ElderGrove.
-                bootstrap = AutomationEngine.bootstrap(for: mode, fishingBait: selectedFishingBait)
+            if mode == .fishing {
+                // Fishing always starts with a safe World Presence for the
+                // transactional rod+bait bank preflight. A fresh activity
+                // Presence is opened only after World/bank_shop/World completes.
+                bootstrap = PresenceBootstrap(region: "world", position: Position(x: 22.5, z: -3.5))
             } else {
                 bootstrap = AutomationEngine.bootstrapForRun(
                     for: mode,
@@ -1151,6 +1152,62 @@ final class AppStore: ObservableObject {
 
             await engine.prepareIdentity()
             guard activeRunID == runID else { return }
+
+            if mode == .fishing {
+                state = .syncing
+                statusMessage = "🎣 Preparando vara e isca no banco"
+                stats.lastEvent = "preflight Pesca • World/bank_shop"
+                updateContinuedProcessingProgress(forceTitleUpdate: true)
+
+                try await engine.prepareFishingLoadoutFromWorld(goal: runGoal)
+                guard activeRunID == runID, !terminalFailureHandled else { return }
+
+                diagnostic("[FISH] preflight World concluído • encerrando Presence bancária antes da região de pesca")
+                receiverTask?.cancel()
+                receiverTask = nil
+                activeEngine = nil
+                connected = false
+                await socket.close()
+                await importSocketTrace()
+                guard activeRunID == runID else { return }
+
+                let activityBootstrap = AutomationEngine.bootstrap(for: mode, fishingBait: selectedFishingBait)
+                state = .connecting
+                statusMessage = "Conectando à região de pesca"
+                stats.lastEvent = "handoff Pesca • \(activityBootstrap.region)"
+                updateContinuedProcessingProgress()
+
+                let activityStream = try await socket.connect(
+                    session: session,
+                    shard: selectedShard,
+                    bootstrap: activityBootstrap
+                )
+                await importSocketTrace()
+                guard activeRunID == runID else { return }
+
+                let activityEngine = AutomationEngine(
+                    socket: socket,
+                    cookie: cookie,
+                    shard: selectedShard,
+                    bootstrap: activityBootstrap,
+                    fishingBait: selectedFishingBait,
+                    reporter: engineReporter(runID: runID)
+                )
+                engine = activityEngine
+                activeEngine = activityEngine
+                receiverTask = makeReceiverTask(
+                    stream: activityStream,
+                    engine: activityEngine,
+                    mode: mode,
+                    runID: runID
+                )
+                connected = true
+                state = .syncing
+                statusMessage = "Sincronizando região de pesca"
+                log("🎣 Presence World encerrada • nova Presence \(activityBootstrap.region) aberta no mesmo shard \(selectedShard)")
+                await activityEngine.prepareIdentity()
+                guard activeRunID == runID else { return }
+            }
 
             if GatherPresenceHandoffPolicy.requiresFreshActivityPresence(after: gatherPreflight),
                case .needsWorld(let tool) = gatherPreflight {
