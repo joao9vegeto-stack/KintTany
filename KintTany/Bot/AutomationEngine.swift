@@ -1447,6 +1447,16 @@ actor AutomationEngine {
         self.gatherPositionMemory = gatherKnowledge.positionSnapshot(region: bootstrap.region)
     }
 
+    static func bootstrap(for mode: ActivityMode, fishingBait: FishingBait) -> PresenceBootstrap {
+        if mode == .fishing, fishingBait == .trout {
+            // Same proven architecture used by ElderGrove gathering: open the
+            // Presence already in the activity region instead of switching a
+            // World Presence to ElderGrove.
+            return PresenceBootstrap(region: "eldergrove", position: Position(x: -17.5, z: -11.5))
+        }
+        return bootstrap(for: mode)
+    }
+
     static func bootstrap(for mode: ActivityMode) -> PresenceBootstrap {
         switch mode {
         case .tree:
@@ -3802,15 +3812,16 @@ actor AutomationEngine {
             try await walk(to: fishingStand, maxSeconds: 15, status: "Indo para o ponto de pesca")
             reporter(.log("✅ The Pond confirmado • Herring/Feather"))
         } else {
-            fishingStand = Position(x: -6.5, z: -18.5)
-            reporter(.state(.moving, "Entrando em Whisperwood para Trout"))
-            try await setRegion("eldergrove", at: fishingStand)
+            fishingStand = Position(x: -17.5, z: -11.5)
+            reporter(.state(.moving, "Sincronizando Whisperwood para Trout"))
+            // Presence was opened directly in ElderGrove. This avoids the same
+            // World→ElderGrove transition timeout previously fixed for gathering.
             guard try await waitForRegion("eldergrove", timeoutMS: 6_000) else { throw EngineError.regionNotConfirmed("eldergrove") }
             region = "eldergrove"
             position = fishingStand
             try await sendPosition(moving: false)
-            reporter(.log("✅ Whisperwood/Eldergrove confirmado • Trout Bait"))
-            reporter(.diagnostic("[FISH][TROUT] perfil validado por captura manual • region=eldergrove • gridOffset=24.5 • catch=fish_trout • bait=bait_trout"))
+            reporter(.log("✅ Whisperwood/Eldergrove confirmado pela Presence • Trout Bait"))
+            reporter(.diagnostic("[FISH][TROUT] Presence direta eldergrove • gridOffset=24.5 • catch=fish_trout • bait=bait_trout"))
         }
 
         try await sleep(450)
