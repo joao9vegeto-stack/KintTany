@@ -267,6 +267,18 @@ struct DunesPresenceSafetyPolicy {
     }
 }
 
+struct DunesCheckpointPolicy {
+    static let successInterval = 10
+
+    static func phaseGoal(totalGoal: Int, completed: Int) -> Int {
+        min(successInterval, max(0, totalGoal - completed))
+    }
+
+    static func needsAnotherPhase(totalGoal: Int, completed: Int) -> Bool {
+        completed < totalGoal
+    }
+}
+
 struct ActivityStats: Codable {
     var attempts = 0
     var successes = 0
@@ -328,6 +340,8 @@ final class AppStore: ObservableObject {
     private var connectionRecoveryInProgress = false
     private var activeShard: String?
     private var dunesPresencePhase: DunesPresencePhase = .inactive
+    private var dunesExpectedTool: DunesToolInstanceIdentity?
+    private var dunesExpectedLifeEpoch: Int?
 
     // MARK: - Execução em segundo plano
     //
@@ -509,6 +523,8 @@ final class AppStore: ObservableObject {
         connectionRecoveryInProgress = false
         activeShard = nil
         dunesPresencePhase = .inactive
+        dunesExpectedTool = nil
+        dunesExpectedLifeEpoch = nil
         activeRunID = nil
         requestedStopReason = nil
         task = nil
@@ -634,7 +650,11 @@ final class AppStore: ObservableObject {
         updateContinuedProcessingProgress(forceTitleUpdate: true)
 
         do {
-            _ = try await engine.runEmergencyDunesExit(reason: "falha operacional: \(failure)")
+            _ = try await engine.runEmergencyDunesExit(
+                reason: "falha operacional: \(failure)",
+                expectedTool: dunesExpectedTool,
+                expectedLifeEpoch: dunesExpectedLifeEpoch
+            )
             await closeDunesPresenceAfterConfirmedShores()
             terminalFailureHandled = true
             currentTarget = nil
@@ -648,6 +668,11 @@ final class AppStore: ObservableObject {
             logSessionSummary(mode: mode, outcome: "FALHA • THE SHORES SEGURA")
             finishContinuedProcessing(success: false, reason: "falha contida após The Shores confirmada")
         } catch {
+            if let engineError = error as? EngineError,
+               case .dunesDeathDuringExit(let detail) = engineError {
+                await handleConfirmedDunesDeath(mode: mode, detail: detail)
+                return
+            }
             diagnostic("[DUNES][FAILSAFE] saída na Presence atual não confirmou: \(error.localizedDescription) • iniciando reconexão exclusiva para saída")
             requestGatherConnectionRecovery(
                 reason: "Falha operacional nas Dunes; reconectando exclusivamente para confirmar The Shores",
@@ -673,7 +698,187 @@ final class AppStore: ObservableObject {
         await socket.close()
         await importSocketTrace()
         connected = false
-        diagnostic("[DUNES] Presence encerrada somente após confirmação autoritativa de The Shores")
+        diagnostic("[DUNES] Presence encerrada somente após The Shores + sobrevivência autoritativamente confirmadas")
+    }
+
+    private func handleConfirmedDunesDeath(mode: ActivityMode, detail: String) async {
+        guard !terminalFailureHandled else { return }
+        terminalFailureHandled = true
+        receiverTask?.cancel()
+        receiverTask = nil
+        engineRunTask?.cancel()
+        engineRunTask = nil
+        await socket.close()
+        await importSocketTrace()
+        connected = false
+        currentTarget = nil
+        activity = nil
+        state = .failed
+        statusMessage = "Morte detectada durante saída das Dunes"
+        stats.sessionErrors += 1
+        stats.lastEvent = "morte/full-loot detectado durante saída"
+        log("💀 Dunes • morte/full-loot detectado • The Shores recebida por respawn, não por fuga segura")
+        log("💀 Evidência: \(detail)")
+        logSessionSummary(mode: mode, outcome: "MORTE/FULL-LOOT CONFIRMADO")
+        finishContinuedProcessing(success: false, reason: "morte detectada durante saída das Dunes")
+    }
+
+    private func runDunesCheckpointed(
+        mode: ActivityMode,
+        runID: UUID,
+        shard: String,
+        cookie: String,
+        initialEngine: AutomationEngine,
+        runGoal: Int
+    ) async throws -> EngineRunResult {
+        var phaseEngine = initialEngine
+        var completedBeforePhase = stats.successes
+
+        while completedBeforePhase < runGoal {
+            guard activeRunID == runID, activity == mode, !terminalFailureHandled else {
+                throw CancellationError()
+            }
+            let phaseGoal = DunesCheckpointPolicy.phaseGoal(totalGoal: runGoal, completed: completedBeforePhase)
+            guard phaseGoal > 0 else {
+                return EngineRunResult(successes: completedBeforePhase, completedGoal: true, stoppedSafely: false, stopReason: nil)
+            }
+
+            if completedBeforePhase > 0 {
+                log("🏦 Dunes CHECKPOINT concluído • progresso protegido=\(completedBeforePhase)/\(runGoal) • iniciando próximo lote de até \(phaseGoal)")
+            }
+
+            let phaseStart = completedBeforePhase
+            let engineForPhase = phaseEngine
+            let child = Task.detached(priority: .userInitiated) {
+                try await engineForPhase.run(
+                    mode: mode,
+                    goal: phaseGoal,
+                    successOffset: phaseStart,
+                    displayGoal: runGoal
+                )
+            }
+            engineRunTask = child
+            let phaseResult = try await child.value
+            engineRunTask = nil
+            await importSocketTrace()
+            await Task.yield()
+            guard activeRunID == runID, activity == mode else { throw CancellationError() }
+
+            let total = max(stats.successes, phaseStart + phaseResult.successes)
+            stats.successes = total
+
+            if phaseResult.stoppedSafely {
+                return EngineRunResult(
+                    successes: total,
+                    completedGoal: false,
+                    stoppedSafely: true,
+                    stopReason: phaseResult.stopReason
+                )
+            }
+            guard phaseResult.completedGoal else {
+                return EngineRunResult(
+                    successes: total,
+                    completedGoal: false,
+                    stoppedSafely: false,
+                    stopReason: phaseResult.stopReason
+                )
+            }
+            if total >= runGoal {
+                return EngineRunResult(successes: total, completedGoal: true, stoppedSafely: false, stopReason: nil)
+            }
+
+            // A engine acabou de sair por The Shores e já confirmou que não foi
+            // respawn por morte. Só agora liberamos a Presence e protegemos loot.
+            log("🏦 Dunes CHECKPOINT \(total)/\(runGoal) • The Shores + sobrevivência confirmadas • protegendo recursos no banco")
+            await closeDunesPresenceAfterConfirmedShores()
+            guard activeRunID == runID, activity == mode else { throw CancellationError() }
+
+            dunesPresencePhase = .preflightSafe
+            // A ferramenta e o lifeEpoch acabaram de sobreviver ao checkpoint.
+            // Preserve-os durante a fase segura do banco para cobrir a janela da
+            // próxima abertura `desert`; a nova engine atualizará a exposição.
+            state = .connecting
+            statusMessage = "Checkpoint Dunes • protegendo recursos"
+            stats.lastEvent = "checkpoint Dunes • banco"
+            updateContinuedProcessingProgress(forceTitleUpdate: true)
+
+            let bankBootstrap = DunesWorldPreflightPolicy.bankBootstrap
+            let bankStream = try await socket.connect(session: session, shard: shard, bootstrap: bankBootstrap)
+            await importSocketTrace()
+            guard activeRunID == runID, activity == mode else { throw CancellationError() }
+
+            let bankEngine = AutomationEngine(
+                socket: socket,
+                cookie: cookie,
+                shard: shard,
+                bootstrap: bankBootstrap,
+                fishingBait: selectedFishingBait,
+                reporter: engineReporter(runID: runID)
+            )
+            activeEngine = bankEngine
+            receiverTask = makeReceiverTask(stream: bankStream, engine: bankEngine, mode: mode, runID: runID)
+            connected = true
+            await bankEngine.prepareIdentity()
+            let loadout = try await bankEngine.prepareDunesLoadoutFromWorld(for: mode)
+            dunesExpectedTool = loadout.toolIdentity
+            dunesExpectedLifeEpoch = loadout.lifeEpoch
+            player.lifeEpoch = max(player.lifeEpoch, loadout.lifeEpoch)
+            let toolName = ActivityToolPolicy.displayName(loadout.tool)
+            log("🏦 Dunes CHECKPOINT • recursos protegidos no banco • \(toolName) única mantida ✅")
+            if loadout.healthPotionPlus > 0 {
+                log("❤️‍🔥 Checkpoint • Health Potion+ carregadas: \(loadout.healthPotionPlus)")
+            } else {
+                log("⚠️ Checkpoint • sem Health Potion+ • próximo lote usa piso de \(DunesHeatSafetyPolicy.minimumSafeHP) HP")
+            }
+
+            receiverTask?.cancel()
+            receiverTask = nil
+            activeEngine = nil
+            connected = false
+            await socket.close()
+            await importSocketTrace()
+            guard activeRunID == runID, activity == mode else { throw CancellationError() }
+
+            let activityBootstrap = AutomationEngine.bootstrap(for: mode)
+            dunesPresencePhase = .fullLootOrEntering
+            state = .connecting
+            statusMessage = "Checkpoint concluído • reentrando nas Dunes"
+            stats.lastEvent = "checkpoint protegido • nova Presence desert"
+            updateContinuedProcessingProgress(forceTitleUpdate: true)
+            diagnostic("[DUNES][CHECKPOINT] banco concluído em \(total)/\(runGoal) • nova Presence full-loot no mesmo shard \(shard)")
+
+            let activityStream = try await socket.connect(
+                session: session,
+                shard: shard,
+                bootstrap: activityBootstrap
+            )
+            await importSocketTrace()
+            guard activeRunID == runID, activity == mode else { throw CancellationError() }
+
+            let activityEngine = AutomationEngine(
+                socket: socket,
+                cookie: cookie,
+                shard: shard,
+                bootstrap: activityBootstrap,
+                fishingBait: selectedFishingBait,
+                reporter: engineReporter(runID: runID)
+            )
+            phaseEngine = activityEngine
+            activeEngine = activityEngine
+            receiverTask = makeReceiverTask(
+                stream: activityStream,
+                engine: activityEngine,
+                mode: mode,
+                runID: runID
+            )
+            connected = true
+            state = .syncing
+            statusMessage = "Sincronizando novo lote das Dunes"
+            await activityEngine.prepareIdentity()
+            completedBeforePhase = total
+        }
+
+        return EngineRunResult(successes: completedBeforePhase, completedGoal: completedBeforePhase >= runGoal, stoppedSafely: false, stopReason: nil)
     }
 
     private func logSessionSummary(mode: ActivityMode, outcome: String) {
@@ -798,6 +1003,8 @@ final class AppStore: ObservableObject {
         connectionRecoveryInProgress = false
         activeShard = nil
         dunesPresencePhase = mode.isDunesGathering ? .preflightSafe : .inactive
+        dunesExpectedTool = nil
+        dunesExpectedLifeEpoch = nil
 
         activity = mode
         state = .connecting
@@ -933,12 +1140,15 @@ final class AppStore: ObservableObject {
                 var name = ActivityToolPolicy.displayName(tool)
                 if mode.isDunesGathering {
                     let dunesLoadout = try await engine.prepareDunesLoadoutFromWorld(for: mode)
+                    dunesExpectedTool = dunesLoadout.toolIdentity
+                    dunesExpectedLifeEpoch = dunesLoadout.lifeEpoch
+                    player.lifeEpoch = max(player.lifeEpoch, dunesLoadout.lifeEpoch)
                     name = ActivityToolPolicy.displayName(dunesLoadout.tool)
                     log("🛡️ Preflight Dunes • itens bancáveis protegidos • \(name) mantida ✅")
                     if dunesLoadout.healthPotionPlus > 0 {
                         log("❤️‍🔥 Proteção térmica • Health Potion+ carregadas: \(dunesLoadout.healthPotionPlus) • cura automática autoritativa habilitada")
                     } else {
-                        log("⚠️ Proteção térmica • sem Health Potion+ • coleta será interrompida em HP 30 e sairá para The Shores")
+                        log("⚠️ Proteção Dunes • sem Health Potion+ • coleta será interrompida em HP \(DunesHeatSafetyPolicy.minimumSafeHP) e sairá para The Shores")
                     }
                     log("⚠️ Dunes East é open-PvP/full-loot e sofre calor • Presence do banco será encerrada antes de entrar")
                 } else {
@@ -1004,13 +1214,25 @@ final class AppStore: ObservableObject {
             }
 
             let runEngine = engine
-            let child = Task.detached(priority: .userInitiated) {
-                try await runEngine.run(mode: mode, goal: runGoal)
+            let result: EngineRunResult
+            if mode.isDunesGathering {
+                result = try await runDunesCheckpointed(
+                    mode: mode,
+                    runID: runID,
+                    shard: selectedShard,
+                    cookie: cookie,
+                    initialEngine: runEngine,
+                    runGoal: runGoal
+                )
+            } else {
+                let child = Task.detached(priority: .userInitiated) {
+                    try await runEngine.run(mode: mode, goal: runGoal)
+                }
+                engineRunTask = child
+                result = try await child.value
+                engineRunTask = nil
+                await importSocketTrace()
             }
-            engineRunTask = child
-            let result = try await child.value
-            engineRunTask = nil
-            await importSocketTrace()
             guard activeRunID == runID else { return }
             // UI events are intentionally decoupled from the realtime actor.
             // Reconcile the authoritative engine total before rendering the
@@ -1048,11 +1270,17 @@ final class AppStore: ObservableObject {
                     logSessionSummary(mode: mode, outcome: "RECONEXÃO SEGURA")
                     finishContinuedProcessing(success: false, reason: "conexão recuperada com saída segura")
                 case .dunesHeatSafety:
-                    statusMessage = "Proteção contra calor • The Shores segura"
-                    stats.lastEvent = "The Shores confirmada após limite térmico"
-                    log("Proteção térmica concluída — The Shores confirmada antes de liberar a conexão")
+                    statusMessage = "Proteção térmica • The Shores + sobrevivência confirmadas"
+                    stats.lastEvent = "saída térmica sobrevivida"
+                    log("Proteção térmica concluída — The Shores e sobrevivência confirmadas antes de liberar a conexão")
                     logSessionSummary(mode: mode, outcome: "PROTEÇÃO TÉRMICA")
-                    finishContinuedProcessing(success: false, reason: "proteção contra calor das Dunes")
+                    finishContinuedProcessing(success: false, reason: "proteção térmica das Dunes")
+                case .dunesDangerSafety:
+                    statusMessage = "Dano externo detectado • The Shores + sobrevivência confirmadas"
+                    stats.lastEvent = "saída por dano não-térmico sobrevivida"
+                    log("🚨 Proteção Dunes concluída — dano não-térmico interrompeu a coleta e a sobrevivência foi confirmada")
+                    logSessionSummary(mode: mode, outcome: "RISCO EXTERNO • SAÍDA SEGURA")
+                    finishContinuedProcessing(success: false, reason: "dano não-térmico detectado nas Dunes")
                 case .user, .none:
                     statusMessage = "Atividade encerrada com segurança"
                     stats.lastEvent = "atividade cancelada pelo usuário"
@@ -1160,6 +1388,12 @@ final class AppStore: ObservableObject {
         } catch {
             await importSocketTrace()
             guard activeRunID == runID else { return }
+            if let engineError = error as? EngineError,
+               case .dunesDeathDuringExit(let detail) = engineError,
+               mode.isDunesGathering {
+                await handleConfirmedDunesDeath(mode: mode, detail: detail)
+                return
+            }
             if mode.isWildCombat, connectionRecoveryRequested, let shard = activeShard {
                 _ = await recoverWildAfterUnexpectedDisconnect(mode: mode, runID: runID, shard: shard, cookie: cookie)
                 return
@@ -1438,7 +1672,17 @@ final class AppStore: ObservableObject {
 
             var phaseConnected = false
             do {
-                let bootstrap = AutomationEngine.bootstrap(for: mode)
+                let bootstrap: PresenceBootstrap
+                if mode.isDunesGathering {
+                    let recoveryRegion = player.region.lowercased().contains("desert") ? player.region : "desert"
+                    bootstrap = PresenceBootstrap(
+                        region: recoveryRegion,
+                        position: player.position,
+                        lifeEpoch: max(1, dunesExpectedLifeEpoch ?? player.lifeEpoch)
+                    )
+                } else {
+                    bootstrap = AutomationEngine.bootstrap(for: mode)
+                }
                 let stream = try await socket.connect(session: session, shard: shard, bootstrap: bootstrap)
                 phaseConnected = true
                 await importSocketTrace()
@@ -1472,7 +1716,11 @@ final class AppStore: ObservableObject {
                     updateContinuedProcessingProgress(forceTitleUpdate: true)
                     log("🔁 Conexão restaurada no \(shard) • prioridade absoluta: confirmar The Shores")
 
-                    _ = try await engine.runEmergencyDunesExit(reason: "perda de conexão")
+                    _ = try await engine.runEmergencyDunesExit(
+                        reason: "perda de conexão",
+                        expectedTool: dunesExpectedTool,
+                        expectedLifeEpoch: dunesExpectedLifeEpoch
+                    )
                     await closeDunesPresenceAfterConfirmedShores()
                     terminalFailureHandled = true
                     connectionRecoveryRequested = false
@@ -1555,6 +1803,13 @@ final class AppStore: ObservableObject {
                 receiverTask?.cancel()
                 receiverTask = nil
                 connected = false
+
+                if let engineError = error as? EngineError,
+                   case .dunesDeathDuringExit(let detail) = engineError,
+                   mode.isDunesGathering {
+                    await handleConfirmedDunesDeath(mode: mode, detail: detail)
+                    return false
+                }
 
                 let disconnectDetail = await socket.disconnectReason()
                 let isClosedSocket: Bool
@@ -1838,6 +2093,16 @@ final class AppStore: ObservableObject {
             if let detail { log("✅ \(detail) • \(stats.successes)/\(sessionGoal)") }
             updateContinuedProcessingProgress(forceTitleUpdate: true)
 
+        case .gatherSuccess(let detail, let absolute):
+            // Build 77 checkpoint phases use independent engines. Absolute gather
+            // progress makes delayed MainActor delivery idempotent: a success from
+            // the previous 10-node phase can never increment the global total twice.
+            stats.successes = max(stats.successes, absolute)
+            continuedProgressSubunit = 0
+            stats.lastEvent = detail ?? "sucesso de coleta"
+            if let detail { log("✅ \(detail) • \(stats.successes)/\(sessionGoal)") }
+            updateContinuedProcessingProgress(forceTitleUpdate: true)
+
         case .failure(let reason):
             stats.failures += 1
             stats.lastEvent = reason
@@ -1932,6 +2197,13 @@ final class AppStore: ObservableObject {
             player.shield = shield
             player.region = region
             world.region = region
+
+        case .dunesExposure(let tool, let lifeEpoch):
+            dunesExpectedTool = tool
+            dunesExpectedLifeEpoch = lifeEpoch
+            player.lifeEpoch = max(player.lifeEpoch, lifeEpoch)
+            stats.lastEvent = "Dunes • exposição registrada"
+            diagnostic("[DUNES][EXPOSURE] ferramenta física registrada • type=\(tool.type) • iid=\(tool.iid == nil ? "não" : "sim") • lifeEpoch=\(lifeEpoch)")
 
         case .world(let nodes, let mobs, let serverRegion):
             resourceCount = nodes

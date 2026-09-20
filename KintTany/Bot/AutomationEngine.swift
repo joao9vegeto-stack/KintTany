@@ -7,6 +7,7 @@ enum EngineEvent {
     case target(String?)
     case attempt
     case success(String?)
+    case gatherSuccess(String?, absolute: Int)
     case failure(String)
     case fatal(String)
     case hitSent
@@ -17,6 +18,7 @@ enum EngineEvent {
     case potionAckTimeout
     case kill
     case player(Position, hp: Int, shield: Int, region: String)
+    case dunesExposure(tool: DunesToolInstanceIdentity, lifeEpoch: Int)
     case world(nodes: Int, mobs: Int, serverRegion: String?)
 }
 
@@ -25,6 +27,7 @@ enum EngineStopReason: Equatable {
     case backgroundExpiration
     case connectionLoss
     case dunesHeatSafety
+    case dunesDangerSafety
 }
 
 enum EmergencyWildExitResult: Equatable {
@@ -142,6 +145,47 @@ struct BankDepositPreservationPolicy {
             return RealtimeProtocol.int(slot["d"] ?? slot["durability"]) == durability
         }
         return true
+    }
+}
+
+struct DunesExitSurvivalPolicy {
+    static func toolStillCarried(_ selected: DunesToolInstanceIdentity, in backpack: [String: Any]) -> Bool {
+        for key in ["hotbar", "invSlots"] {
+            guard let slots = backpack[key] as? [Any] else { continue }
+            for raw in slots {
+                guard let slot = raw as? [String: Any], slot["t"] as? String == selected.type else { continue }
+                if let iid = selected.iid {
+                    if SaveBackpackConflictPolicy.normalizedIID(slot["iid"]) == iid { return true }
+                } else {
+                    // Build 76 guarantees one carried instance before Dunes entry.
+                    // Without iid, type presence is safer than durability equality
+                    // because durability legitimately changes while gathering.
+                    return true
+                }
+            }
+        }
+        return false
+    }
+
+    static func survived(
+        expectedLifeEpoch: Int,
+        observedLifeEpoch: Int?,
+        hp: Int?,
+        toolStillCarried: Bool
+    ) -> Bool {
+        if let observedLifeEpoch, observedLifeEpoch > expectedLifeEpoch { return false }
+        if let hp, hp <= 0 { return false }
+        return toolStillCarried
+    }
+}
+
+struct DunesDamageSafetyPolicy {
+    static let toleranceHP = 4
+
+    /// A heat clock already predicts expected HP loss. A trusted HP materially
+    /// below that projection is treated as mob/PvP damage and forces exit.
+    static func isUnexpectedDamage(observedHP: Int, conservativeHP: Int) -> Bool {
+        observedHP < max(0, conservativeHP - toleranceHP)
     }
 }
 
@@ -454,18 +498,19 @@ struct DunesSnapshotHPPolicy {
     /// Heat normal pode chegar um pouco fora de fase com o relógio local.
     /// Quedas de snapshot além desta margem são confirmadas em `/me` antes de
     /// substituir HP local. `pvit` próprio continua imediato para não mascarar PvP.
-    static let heatToleranceHP = 4
+    static let heatToleranceHP = DunesDamageSafetyPolicy.toleranceHP
 
     static func requiresHTTPConfirmation(currentHP: Int, snapshotHP: Int, conservativeHP: Int, region: String) -> Bool {
         guard GatherRegionPolicy.isDunesRegion(region), snapshotHP < currentHP else { return false }
-        return snapshotHP < max(0, conservativeHP - heatToleranceHP)
+        return DunesDamageSafetyPolicy.isUnexpectedDamage(observedHP: snapshotHP, conservativeHP: conservativeHP)
     }
 }
 
 struct DunesHeatSafetyPolicy {
-    /// Build 62: heat alone removes ~1 HP each 10 seconds. Stop gathering at
-    /// 30 HP and reserve the remaining margin for reaching The Shores.
-    static let minimumSafeHP = 30
+    /// Build 77: Dunes are full-loot and Giant Scorpion/PvP damage can arrive
+    /// on top of heat. At 70 HP we either confirm one Health Potion+ recovery
+    /// or stop gathering immediately and leave for The Shores.
+    static let minimumSafeHP = 70
     static let recoveryGoalHP = 90
     static let healthPotionPlusType = "potion_health_l2"
     static let carriedHealthPotionPlusTarget = 6
@@ -1272,6 +1317,8 @@ actor AutomationEngine {
     private var lastTrustedOwnHPRegion: String?
     private var ownHPRevision = 0
     private var activeGatherMode: ActivityMode?
+    private var activeDunesToolIdentity: DunesToolInstanceIdentity?
+    private var dunesUnexpectedDamageDetail: String?
 
     private var currentGatherSignature: String?
     private var currentGatherKind: String?
@@ -1355,6 +1402,8 @@ actor AutomationEngine {
     private let targetStrengthPotions = 6
 
     private var successes = 0
+    private var gatherSuccessOffset = 0
+    private var gatherDisplayGoal: Int?
     private var safeStopReason: EngineStopReason?
     private var activeGatherToolType: String?
     private var activeCombatWeaponType = "wild_sword"
@@ -1381,6 +1430,7 @@ actor AutomationEngine {
         self.gatherKnowledge = GatherKnowledgeStore()
         self.region = bootstrap.region
         self.position = bootstrap.position
+        self.lifeEpoch = max(1, bootstrap.lifeEpoch)
         self.gatherPositionMemory = gatherKnowledge.positionSnapshot(region: bootstrap.region)
     }
 
@@ -1574,12 +1624,20 @@ actor AutomationEngine {
         case .backgroundExpiration: label = "encerramento externo de Continued Processing"
         case .connectionLoss: label = "queda de conexão"
         case .dunesHeatSafety: label = "proteção contra calor das Dunes"
+        case .dunesDangerSafety: label = "dano não-térmico detectado nas Dunes"
         }
         reporter(.diagnostic("[STATE] safe-stop solicitado • motivo=\(label)"))
     }
 
-    func run(mode: ActivityMode, goal: Int) async throws -> EngineRunResult {
+    func run(
+        mode: ActivityMode,
+        goal: Int,
+        successOffset: Int = 0,
+        displayGoal: Int? = nil
+    ) async throws -> EngineRunResult {
         successes = 0
+        gatherSuccessOffset = max(0, successOffset)
+        gatherDisplayGoal = displayGoal
         safeStopCompleted = false
         try Task.checkCancellation()
 
@@ -1651,7 +1709,11 @@ actor AutomationEngine {
     /// A reconnection in the Dunes never resumes gathering. Its only allowed
     /// action is to recover authoritative state and leave through the East→Shores
     /// north portal, waiting for fresh beach snapshots before teardown.
-    func runEmergencyDunesExit(reason: String = "reconexão de emergência") async throws -> EmergencyDunesExitResult {
+    func runEmergencyDunesExit(
+        reason: String = "reconexão de emergência",
+        expectedTool: DunesToolInstanceIdentity? = nil,
+        expectedLifeEpoch: Int? = nil
+    ) async throws -> EmergencyDunesExitResult {
         reporter(.state(.recovering, "Sincronizando estado das Dunes"))
         let syncDeadline = nowMS + 8_000
         while nowMS < syncDeadline {
@@ -1678,6 +1740,10 @@ actor AutomationEngine {
                                 throw EngineError.regionNotConfirmed("The Shores por snapshot autoritativo \(confirmation)/2")
                             }
                         }
+                        try await verifyDunesExitSurvival(
+                            expectedLifeEpoch: expectedLifeEpoch ?? lifeEpoch,
+                            expectedTool: expectedTool ?? activeDunesToolIdentity
+                        )
                     }
                     reporter(.log("✅ Estado autoritativo • região=\(authoritative) • personagem fora das Dunes"))
                     return .alreadySafe
@@ -1691,7 +1757,11 @@ actor AutomationEngine {
             throw EngineError.regionNotConfirmed("estado autoritativo das Dunes após reconexão")
         }
         if safeStopReason == nil { safeStopReason = .connectionLoss }
-        try await exitDunesToShores(reason: reason)
+        try await exitDunesToShores(
+            reason: reason,
+            expectedTool: expectedTool,
+            expectedLifeEpoch: expectedLifeEpoch
+        )
         safeStopCompleted = true
         return .shoresSafe
     }
@@ -1852,12 +1922,31 @@ actor AutomationEngine {
     }
 
     private func recordTrustedOwnHP(_ hp: Int, regionHint: String? = nil) {
-        playerHP = hp
-        ownHPRevision += 1
+        let previousHP = playerHP
         let trustedRegion = (regionHint ?? serverRegion ?? region)
             .trimmingCharacters(in: .whitespacesAndNewlines)
             .lowercased()
         let timestamp = nowMS
+
+        if GatherRegionPolicy.isDunesRegion(trustedRegion),
+           let baseline = dunesHeatBaselineAtMS,
+           hp < previousHP {
+            let conservativeBefore = DunesHeatSafetyPolicy.estimatedHP(
+                baselineHP: dunesHeatBaselineHP,
+                elapsedMS: timestamp - baseline
+            )
+            if DunesDamageSafetyPolicy.isUnexpectedDamage(observedHP: hp, conservativeHP: conservativeBefore),
+               activeGatherMode?.isDunesGathering == true,
+               safeStopReason == nil {
+                dunesUnexpectedDamageDetail = "HP \(previousHP)→\(hp) • térmico esperado≈\(conservativeBefore)"
+                safeStopReason = .dunesDangerSafety
+                reporter(.state(.recovering, "Dano externo nas Dunes • saída imediata"))
+                reporter(.log("🚨 Proteção das Dunes • queda de HP incompatível com calor • \(dunesUnexpectedDamageDetail ?? "-") • coleta bloqueada • saída imediata para The Shores"))
+            }
+        }
+
+        playerHP = hp
+        ownHPRevision += 1
         lastTrustedOwnHPAtMS = timestamp
         lastTrustedOwnHPRegion = trustedRegion
 
@@ -1894,6 +1983,16 @@ actor AutomationEngine {
         }
         let revision = ownHPRevision
         reporter(.diagnostic("[DUNES][HP] snapshot suspeito • fonte=\(source) • atual=\(playerHP) • snapshot=\(hp) • conservador=\(conservative)"))
+        // Full-loot fail-safe: freeze gathering immediately. /me still confirms
+        // the value for diagnostics, but no new harvest/movement toward targets
+        // is allowed while that HTTP request is in flight. A stale snapshot may
+        // cause an unnecessary exit; it must never cause an unnecessary death.
+        if activeGatherMode?.isDunesGathering == true, safeStopReason == nil {
+            dunesUnexpectedDamageDetail = "snapshot próprio \(playerHP)→\(hp) • térmico esperado≈\(conservative)"
+            safeStopReason = .dunesDangerSafety
+            reporter(.state(.recovering, "HP anormal nas Dunes • saída imediata"))
+            reporter(.log("🚨 Proteção das Dunes • snapshot de HP incompatível com calor • coleta congelada imediatamente enquanto /me confirma • saída para The Shores"))
+        }
         do {
             let me = try await http.get("/api/auth/me")
             guard ownHPRevision == revision else {
@@ -2050,6 +2149,15 @@ actor AutomationEngine {
 
         while true {
             try Task.checkCancellation()
+            // Se uma vital autoritativa disparar o firewall das Dunes enquanto
+            // caminhamos para um recurso, abandone esse deslocamento no próximo
+            // frame (~150 ms). Quando a caminhada já começou como parte da saída
+            // segura, `stopReasonAtEntry` não é nil e ela deve continuar.
+            if stopReasonAtEntry == nil,
+               safeStopReason != nil,
+               activeGatherMode?.isDunesGathering == true {
+                return
+            }
             if safeStopReason == nil,
                let mode = activeGatherMode,
                mode.isDunesGathering,
@@ -2160,8 +2268,12 @@ actor AutomationEngine {
                 safeStopCompleted = true
                 return
             }
-            reporter(.diagnostic("[DUNES][HEAT] proteção iniciada • HP autoritativo base=\(dunesHeatBaselineHP) • 1 HP/10s • limite=30 • sem grace artificial"))
-            reporter(.log("❤️‍🔥 Proteção térmica Build 62 • limite efetivo=30 HP • estimativa conservadora=1 HP/10s • sem grace artificial"))
+            guard let exposedTool = activeDunesToolIdentity else {
+                throw EngineError.gatherLoadoutNotReady("identidade física da ferramenta das Dunes")
+            }
+            reporter(.dunesExposure(tool: exposedTool, lifeEpoch: lifeEpoch))
+            reporter(.diagnostic("[DUNES][SAFETY] proteção Build 77 iniciada • HP autoritativo base=\(dunesHeatBaselineHP) • 1 HP/10s conservador • limite=\(DunesHeatSafetyPolicy.minimumSafeHP) • lifeEpoch=\(lifeEpoch)"))
+            reporter(.log("❤️‍🔥 Proteção Dunes Build 77 • limite efetivo=\(DunesHeatSafetyPolicy.minimumSafeHP) HP • dano não-térmico força saída • checkpoints a cada 10 sucessos"))
             if try await enforceDunesHeatSafetyIfNeeded(mode: mode) == false {
                 try await exitDunesToShores(reason: "proteção contra calor")
                 safeStopCompleted = true
@@ -2302,9 +2414,11 @@ actor AutomationEngine {
                 }
 
                 successes += 1
-                reporter(.success(result.loot))
-                reporter(.state(.cooldown, "Concluído \(successes)/\(goal)"))
-                reporter(.log("✅ \(mode.displayName) concluído • h=\(result.h)/\(result.hm) • \(persistenceLabel) • \(successes)/\(goal)"))
+                let displaySuccesses = gatherSuccessOffset + successes
+                let displayGoal = gatherDisplayGoal ?? goal
+                reporter(.gatherSuccess(result.loot, absolute: displaySuccesses))
+                reporter(.state(.cooldown, "Concluído \(displaySuccesses)/\(displayGoal)"))
+                reporter(.log("✅ \(mode.displayName) concluído • h=\(result.h)/\(result.hm) • \(persistenceLabel) • \(displaySuccesses)/\(displayGoal)"))
                 if let resourceMarker {
                     reporter(.log("📦 Marcador de recurso • \(mode.displayName) • \(resourceMarker)"))
                 }
@@ -2345,7 +2459,8 @@ actor AutomationEngine {
         if mode.isDunesGathering {
             let reason: String
             switch safeStopReason {
-            case .dunesHeatSafety: reason = "proteção contra calor"
+            case .dunesHeatSafety: reason = "proteção térmica"
+            case .dunesDangerSafety: reason = "dano não-térmico / risco externo"
             case .backgroundExpiration: reason = "encerramento externo"
             case .user: reason = "STOP"
             case .connectionLoss: reason = "perda de conexão"
@@ -2355,13 +2470,72 @@ actor AutomationEngine {
             if safeStopReason != nil { safeStopCompleted = true }
         }
 
-        reporter(.log("📊 Coleta encerrada • \(mode.displayName) • sucessos=\(successes)/\(goal) • recoveries internos=\(gatherInternalRecoveries) • proof misses=\(gatherProofMisses)"))
+        let displaySuccesses = gatherSuccessOffset + successes
+        let displayGoal = gatherDisplayGoal ?? goal
+        reporter(.log("📊 Coleta encerrada • \(mode.displayName) • sucessos=\(displaySuccesses)/\(displayGoal) • recoveries internos=\(gatherInternalRecoveries) • proof misses=\(gatherProofMisses)"))
     }
 
     /// Dunes are full-loot and heat continues while the player remains there.
     /// Completion is not returned until two fresh authoritative beach snapshots
     /// have stabilized the supported north-portal transition.
-    private func exitDunesToShores(reason: String) async throws {
+    private func verifyDunesExitSurvival(
+        expectedLifeEpoch: Int,
+        expectedTool: DunesToolInstanceIdentity?
+    ) async throws {
+        guard let expectedTool else {
+            throw EngineError.dunesExitSurvivalUnconfirmed("ferramenta exposta sem identidade")
+        }
+        if lifeEpoch > expectedLifeEpoch {
+            throw EngineError.dunesDeathDuringExit("lifeEpoch \(expectedLifeEpoch)→\(lifeEpoch)")
+        }
+
+        var lastError: Error?
+        for attempt in 1...3 {
+            do {
+                let me = try await http.get("/api/auth/me")
+                let player = me["player"] as? [String: Any]
+                let backpack = (me["backpack"] as? [String: Any])
+                    ?? (player?["backpack"] as? [String: Any])
+                    ?? [:]
+                let observedEpoch = RealtimeProtocol.int(player?["le"] ?? me["lifeEpoch"] ?? me["le"])
+                let observedHP = RealtimeProtocol.int(player?["php"] ?? player?["hp"] ?? me["php"] ?? me["hp"])
+                let toolPresent = DunesExitSurvivalPolicy.toolStillCarried(expectedTool, in: backpack)
+
+                guard DunesExitSurvivalPolicy.survived(
+                    expectedLifeEpoch: expectedLifeEpoch,
+                    observedLifeEpoch: observedEpoch,
+                    hp: observedHP,
+                    toolStillCarried: toolPresent
+                ) else {
+                    let iidLabel = expectedTool.iid == nil ? "sem-iid" : "iid-confirmável"
+                    throw EngineError.dunesDeathDuringExit(
+                        "Shores recebida, mas sobrevivência falhou • lifeEpoch=\(observedEpoch.map(String.init) ?? "?") esperado<=\(expectedLifeEpoch) • HP=\(observedHP.map(String.init) ?? "?") • ferramenta \(iidLabel)=\(toolPresent ? "presente" : "ausente")"
+                    )
+                }
+                reporter(.log("🛡️ Sobrevivência confirmada em The Shores • lifeEpoch=\(observedEpoch.map(String.init) ?? String(lifeEpoch)) • ferramenta exposta preservada ✅"))
+                return
+            } catch let error as EngineError {
+                switch error {
+                case .dunesDeathDuringExit:
+                    throw error
+                default:
+                    lastError = error
+                }
+            } catch {
+                lastError = error
+            }
+            if attempt < 3 { try await sleep(250) }
+        }
+        throw EngineError.dunesExitSurvivalUnconfirmed(lastError?.localizedDescription ?? "/api/auth/me indisponível")
+    }
+
+    private func exitDunesToShores(
+        reason: String,
+        expectedTool overrideTool: DunesToolInstanceIdentity? = nil,
+        expectedLifeEpoch overrideLifeEpoch: Int? = nil
+    ) async throws {
+        let expectedLifeEpoch = overrideLifeEpoch ?? lifeEpoch
+        let expectedTool = overrideTool ?? activeDunesToolIdentity
         let authoritative = (serverRegion ?? region).lowercased()
         guard GatherRegionPolicy.isDunesRegion(authoritative) else {
             guard authoritative == "beach" else {
@@ -2386,7 +2560,8 @@ actor AutomationEngine {
                     throw EngineError.regionNotConfirmed("The Shores por snapshot autoritativo \(confirmation)/2")
                 }
             }
-            reporter(.log("🛡️ Dunes • personagem já está em The Shores • 2 snapshots autoritativos confirmados"))
+            try await verifyDunesExitSurvival(expectedLifeEpoch: expectedLifeEpoch, expectedTool: expectedTool)
+            reporter(.log("🛡️ Dunes • personagem já está em The Shores • snapshots + sobrevivência confirmados"))
             return
         }
         guard authoritative == "desert" else {
@@ -2424,7 +2599,8 @@ actor AutomationEngine {
             while nowMS < stableDeadline {
                 try Task.checkCancellation()
                 if lastSnapshotRegion == "beach", regionSnapshotSerial > firstSnapshotSerial {
-                    reporter(.log("✅ The Shores confirmada por 2 snapshots autoritativos • itens fora das Dunes • Presence pronta para encerramento"))
+                    try await verifyDunesExitSurvival(expectedLifeEpoch: expectedLifeEpoch, expectedTool: expectedTool)
+                    reporter(.log("✅ The Shores confirmada • 2 snapshots + sobrevivência + ferramenta preservada • Presence pronta para encerramento"))
                     return
                 }
                 try await sleep(80)
@@ -2438,6 +2614,10 @@ actor AutomationEngine {
     /// attempt one Health Potion+; without a confirmed recovery, stop creating
     /// gather actions and force the terminal path through The Shores.
     private func enforceDunesHeatSafetyIfNeeded(mode: ActivityMode) async throws -> Bool {
+        if safeStopReason == .dunesDangerSafety {
+            reporter(.state(.recovering, "Risco externo nas Dunes • saindo"))
+            return false
+        }
         let safetyHP = min(playerHP, estimatedDunesHPFromMonotonicClock())
         guard DunesHeatSafetyPolicy.requiresRecovery(hp: safetyHP, mode: mode) else { return true }
 
@@ -3289,7 +3469,12 @@ actor AutomationEngine {
     /// loads up to six Health Potion+, banks every other bankable carried item,
     /// verifies tool conservation, and returns to World before AppStore closes
     /// this Presence and opens a fresh `desert` Presence on the same shard.
-    func prepareDunesLoadoutFromWorld(for mode: ActivityMode) async throws -> (tool: String, healthPotionPlus: Int) {
+    func prepareDunesLoadoutFromWorld(for mode: ActivityMode) async throws -> (
+        tool: String,
+        healthPotionPlus: Int,
+        toolIdentity: DunesToolInstanceIdentity,
+        lifeEpoch: Int
+    ) {
         guard DunesWorldPreflightPolicy.requiresWorldBankService(for: mode),
               let fallback = ActivityToolPolicy.requiredTool(for: mode)
         else {
@@ -3371,7 +3556,7 @@ actor AutomationEngine {
             }
             reporter(.log("❤️‍🔥 Preflight Dunes • Health Potion+ carregadas: \(healthPotionPlus.carried)/\(DunesHeatSafetyPolicy.carriedHealthPotionPlusTarget)"))
             try await leaveBankShopToWorld(reason: "preflight Dunes concluído")
-            return (selected, healthPotionPlus.carried)
+            return (selected, healthPotionPlus.carried, selectedInstance.identity, lifeEpoch)
         } catch {
             // Ainda não entramos em full-loot. Tente abandonar o bank_shop antes
             // de propagar a falha, sem mascarar o erro original.
@@ -3386,6 +3571,11 @@ actor AutomationEngine {
             let state = try await http.backpackState()
             if let best = ActivityToolPolicy.bestSelection(in: state.backpack, for: mode), best.carried >= 1 {
                 activeGatherToolType = best.type
+                if mode.isDunesGathering {
+                    activeDunesToolIdentity = DunesToolInstancePolicy
+                        .preferredInstance(in: state.backpack, type: best.type)?
+                        .identity
+                }
                 reporter(.log("🧰 Preflight • \(ActivityToolPolicy.displayName(best.type)) carregada ✅"))
                 return
             }
@@ -6509,6 +6699,8 @@ enum EngineError: LocalizedError {
     case combatSupplyFailed(String)
     case bankDepositFailed(String)
     case bankTransitionFailed(String)
+    case dunesDeathDuringExit(String)
+    case dunesExitSurvivalUnconfirmed(String)
     case missingRequiredItem(String)
     case gatherLoadoutNotReady(String)
     case gatherEndedBeforeGoal
@@ -6527,6 +6719,8 @@ enum EngineError: LocalizedError {
         case .combatSupplyFailed(let detail): return "Reposição de combate falhou: \(detail)"
         case .bankDepositFailed(let item): return "Recurso/item não pôde ser confirmado no banco: \(item)"
         case .bankTransitionFailed(let detail): return "Transição do banco não confirmada: \(detail)"
+        case .dunesDeathDuringExit(let detail): return "Morte/full-loot detectado durante saída das Dunes: \(detail)"
+        case .dunesExitSurvivalUnconfirmed(let detail): return "The Shores recebida, mas sobrevivência não pôde ser confirmada: \(detail)"
         case .missingRequiredItem(let item): return "Item obrigatório não encontrado no inventário/banco: \(item)"
         case .gatherLoadoutNotReady(let item): return "Preflight de ferramenta não materializou \(item) antes de entrar na região de coleta"
         case .gatherEndedBeforeGoal: return "Engine de coleta encerrou antes da meta após reconexão"
