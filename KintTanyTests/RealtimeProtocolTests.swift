@@ -115,11 +115,11 @@ final class RealtimeProtocolTests: XCTestCase {
         XCTAssertFalse(FishingRecoveryPolicy.isStale("no_bite"))
     }
 
-    func testGatherRetryPolicyDefersPureProofMissWithoutFailureStreak() {
+    func testBuild80GatherRetryPolicyDefersPureProofMissForThirtySecondsWithoutPriority() {
         var policy = GatherRetryPolicy()
         policy.deferProofMiss(signature: "tree:3,26", nowMS: 1_000)
-        XCTAssertFalse(policy.isEligible(signature: "tree:3,26", nowMS: 10_999))
-        XCTAssertTrue(policy.isEligible(signature: "tree:3,26", nowMS: 11_000))
+        XCTAssertFalse(policy.isEligible(signature: "tree:3,26", nowMS: 30_999))
+        XCTAssertTrue(policy.isEligible(signature: "tree:3,26", nowMS: 31_000))
         XCTAssertFalse(policy.hasRetryPriority(signature: "tree:3,26"))
         XCTAssertNil(policy.retryStreaks["tree:3,26"])
     }
