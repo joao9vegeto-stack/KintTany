@@ -26,6 +26,7 @@ enum EngineStopReason: Equatable {
     case user
     case backgroundExpiration
     case connectionLoss
+    case dunesCheckpoint
     case dunesHeatSafety
     case dunesDangerSafety
 }
@@ -507,7 +508,7 @@ struct DunesSnapshotHPPolicy {
 }
 
 struct DunesHeatSafetyPolicy {
-    /// Build 77: Dunes are full-loot and Giant Scorpion/PvP damage can arrive
+    /// Dunes are full-loot and Giant Scorpion/PvP damage can arrive
     /// on top of heat. At 70 HP we either confirm one Health Potion+ recovery
     /// or stop gathering immediately and leave for The Shores.
     static let minimumSafeHP = 70
@@ -1623,6 +1624,7 @@ actor AutomationEngine {
         case .user: label = "usuário"
         case .backgroundExpiration: label = "encerramento externo de Continued Processing"
         case .connectionLoss: label = "queda de conexão"
+        case .dunesCheckpoint: label = "checkpoint adaptativo das Dunes"
         case .dunesHeatSafety: label = "proteção contra calor das Dunes"
         case .dunesDangerSafety: label = "dano não-térmico detectado nas Dunes"
         }
@@ -2252,6 +2254,7 @@ actor AutomationEngine {
         guard try await waitForRegion(targetRegion, timeoutMS: 6_000) else {
             throw EngineError.regionNotConfirmed(targetRegion)
         }
+        let dunesExposureStartedAtMS = mode.isDunesGathering ? nowMS : nil
         if mode.isDunesGathering {
             // Never start a full-loot harvest from an unverified/local HP value.
             // Wait briefly for an own-player snapshot/pvit from this Dunes Presence.
@@ -2272,8 +2275,8 @@ actor AutomationEngine {
                 throw EngineError.gatherLoadoutNotReady("identidade física da ferramenta das Dunes")
             }
             reporter(.dunesExposure(tool: exposedTool, lifeEpoch: lifeEpoch))
-            reporter(.diagnostic("[DUNES][SAFETY] proteção Build 77 iniciada • HP autoritativo base=\(dunesHeatBaselineHP) • 1 HP/10s conservador • limite=\(DunesHeatSafetyPolicy.minimumSafeHP) • lifeEpoch=\(lifeEpoch)"))
-            reporter(.log("❤️‍🔥 Proteção Dunes Build 77 • limite efetivo=\(DunesHeatSafetyPolicy.minimumSafeHP) HP • dano não-térmico força saída • checkpoints a cada 10 sucessos"))
+            reporter(.diagnostic("[DUNES][SAFETY] proteção Build 78 iniciada • HP autoritativo base=\(dunesHeatBaselineHP) • 1 HP/10s conservador • limite=\(DunesHeatSafetyPolicy.minimumSafeHP) • lifeEpoch=\(lifeEpoch)"))
+            reporter(.log("❤️‍🔥 Proteção Dunes Build 78 • limite efetivo=\(DunesHeatSafetyPolicy.minimumSafeHP) HP • dano não-térmico força saída • checkpoint em até \(DunesCheckpointPolicy.successInterval) sucessos ou 180s"))
             if try await enforceDunesHeatSafetyIfNeeded(mode: mode) == false {
                 try await exitDunesToShores(reason: "proteção contra calor")
                 safeStopCompleted = true
@@ -2317,6 +2320,13 @@ actor AutomationEngine {
             try Task.checkCancellation()
             if safeStopReason != nil { break }
             if try await enforceDunesHeatSafetyIfNeeded(mode: mode) == false { break }
+            if let dunesExposureStartedAtMS,
+               DunesCheckpointPolicy.exposureLimitReached(startedAtMS: dunesExposureStartedAtMS, nowMS: nowMS) {
+                safeStopReason = .dunesCheckpoint
+                reporter(.state(.recovering, "Checkpoint por tempo • saindo das Dunes"))
+                reporter(.log("⏱️ Dunes • 180s de exposição atingidos com \(successes)/\(goal) sucessos no lote • saindo para The Shores e protegendo recursos"))
+                break
+            }
             reporter(.state(.searching, "Procurando \(mode.displayName.lowercased())"))
 
             guard let seed = selectGatherSeed(for: mode) else {
@@ -2459,6 +2469,7 @@ actor AutomationEngine {
         if mode.isDunesGathering {
             let reason: String
             switch safeStopReason {
+            case .dunesCheckpoint: reason = "checkpoint por 180s de exposição"
             case .dunesHeatSafety: reason = "proteção térmica"
             case .dunesDangerSafety: reason = "dano não-térmico / risco externo"
             case .backgroundExpiration: reason = "encerramento externo"

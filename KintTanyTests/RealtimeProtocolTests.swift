@@ -757,14 +757,20 @@ final class RealtimeProtocolTests: XCTestCase {
         XCTAssertFalse(DunesPresenceSafetyPolicy.requiresShoresRecovery(mode: .stone, phase: .fullLootOrEntering))
     }
 
-    func testBuild77DunesCheckpointSplitsLongGoalsIntoTenSuccessLots() {
-        XCTAssertEqual(DunesCheckpointPolicy.successInterval, 10)
-        XCTAssertEqual(DunesCheckpointPolicy.phaseGoal(totalGoal: 200, completed: 0), 10)
-        XCTAssertEqual(DunesCheckpointPolicy.phaseGoal(totalGoal: 200, completed: 10), 10)
+    func testBuild78DunesCheckpointSplitsLongGoalsIntoTwentyFiveSuccessLots() {
+        XCTAssertEqual(DunesCheckpointPolicy.successInterval, 25)
+        XCTAssertEqual(DunesCheckpointPolicy.phaseGoal(totalGoal: 200, completed: 0), 25)
+        XCTAssertEqual(DunesCheckpointPolicy.phaseGoal(totalGoal: 200, completed: 25), 25)
         XCTAssertEqual(DunesCheckpointPolicy.phaseGoal(totalGoal: 23, completed: 20), 3)
         XCTAssertEqual(DunesCheckpointPolicy.phaseGoal(totalGoal: 3, completed: 0), 3)
-        XCTAssertTrue(DunesCheckpointPolicy.needsAnotherPhase(totalGoal: 200, completed: 10))
-        XCTAssertFalse(DunesCheckpointPolicy.needsAnotherPhase(totalGoal: 10, completed: 10))
+        XCTAssertTrue(DunesCheckpointPolicy.needsAnotherPhase(totalGoal: 200, completed: 25))
+        XCTAssertFalse(DunesCheckpointPolicy.needsAnotherPhase(totalGoal: 25, completed: 25))
+    }
+
+    func testBuild78DunesCheckpointAlsoTriggersAtThreeMinutesExposure() {
+        XCTAssertEqual(DunesCheckpointPolicy.maximumExposureMS, 180_000)
+        XCTAssertFalse(DunesCheckpointPolicy.exposureLimitReached(startedAtMS: 1_000, nowMS: 180_999))
+        XCTAssertTrue(DunesCheckpointPolicy.exposureLimitReached(startedAtMS: 1_000, nowMS: 181_000))
     }
 
     func testBuild76DunesToolInstanceChoosesLowestPositiveDurabilityAmongCarriedCopies() throws {
