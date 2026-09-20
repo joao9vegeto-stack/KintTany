@@ -245,15 +245,18 @@ struct WildGroundBagPolicy {
 }
 
 struct GatherTimingPolicy {
-    /// Preserve the captured browser profile with relative spacing. If iOS
-    /// wakes a frame late in background, the next delay starts from that real
-    /// wake-up: no frame is abandoned and no backlog is sent as a burst.
+    /// Build 81: o perfil do navegador é uma timeline, não uma sequência de
+    /// sleeps. Em background o scheduler pode acordar 300-600 ms atrasado.
+    /// Somar esse atraso a cada frame estica um gesto de ~500 ms para vários
+    /// segundos e o servidor deixa de correlacionar proof/wear. Usamos deadline
+    /// absoluto: frames já vencidos são descartados, nunca enviados em rajada.
     static let treeProfileWindowMS = 500
     static let minimumTreeFrameGapMS = 35
     static let mineFrameGapMS = 65
     static let delayedFrameDiagnosticThresholdMS = 220
     static let timingDiagnosticCooldownMS: Double = 5_000
     static let eventGraceMS = 420
+    static let maximumLateFrameMS = 130
 
     static func treeFrameGapMS(frameCount: Int) -> Int {
         let intervals = max(1, frameCount - 1)
@@ -261,6 +264,18 @@ struct GatherTimingPolicy {
         return max(minimumTreeFrameGapMS, min(90, browserGap))
     }
 
+    static func frameDecision(elapsedMS: Int, intendedOffsetMS: Int) -> GatherFrameDecision {
+        let remaining = intendedOffsetMS - elapsedMS
+        if remaining > 0 { return .wait(remaining) }
+        let lateness = -remaining
+        return lateness > maximumLateFrameMS ? .drop(lateness) : .send(lateness)
+    }
+}
+
+enum GatherFrameDecision: Equatable {
+    case wait(Int)
+    case send(Int)
+    case drop(Int)
 }
 
 /// Build 72: fluxo capturado do cliente oficial em 17/09/2026. O banco não é
@@ -2804,21 +2819,34 @@ actor AutomationEngine {
 
         func sendProfile(_ second: Bool, progressive: Bool) async throws {
             if safeStopReason != nil { return }
+            let profileStartedAt = nowMS
             var maxSchedulerDelayMS = 0
+            var droppedFrames = 0
 
-            func waitRelative(_ intendedMS: Int) async throws {
-                let before = nowMS
-                try await sleep(intendedMS)
-                let actualMS = max(0, Int((nowMS - before).rounded()))
-                maxSchedulerDelayMS = max(maxSchedulerDelayMS, max(0, actualMS - intendedMS))
+            func shouldSendFrame(index: Int, gapMS: Int) async throws -> Bool {
+                let intendedOffset = index * gapMS
+                while true {
+                    let elapsed = max(0, Int((nowMS - profileStartedAt).rounded()))
+                    switch GatherTimingPolicy.frameDecision(elapsedMS: elapsed, intendedOffsetMS: intendedOffset) {
+                    case .wait(let delay):
+                        try await sleep(delay)
+                    case .send(let lateness):
+                        maxSchedulerDelayMS = max(maxSchedulerDelayMS, lateness)
+                        return true
+                    case .drop(let lateness):
+                        maxSchedulerDelayMS = max(maxSchedulerDelayMS, lateness)
+                        droppedFrames += 1
+                        return false
+                    }
+                }
             }
 
             if kind == "tree" {
                 let profile = second ? Self.treeY2 : Self.treeY1
                 let gap = GatherTimingPolicy.treeFrameGapMS(frameCount: profile.count)
                 for (index, delta) in profile.enumerated() {
-                    if index > 0 { try await waitRelative(gap) }
                     guard try await maySendGatherAction(for: mode) else { return }
+                    guard try await shouldSendFrame(index: index, gapMS: gap) else { continue }
                     position.y = 0.25 + delta
                     try await sendPosition(moving: false, action: ["act": "chop", "eq": tool])
                 }
@@ -2832,8 +2860,8 @@ actor AutomationEngine {
                     let next = min(1, Double(harvestH + 1) / Double(max(1, estimatedHM)) + min(0.010, 0.06 / Double(max(1, estimatedHM))))
                     let shapeMax = Self.mineMP1.last ?? 1
                     for index in Self.mineMP1.indices {
-                        if index > 0 { try await waitRelative(GatherTimingPolicy.mineFrameGapMS) }
                         guard try await maySendGatherAction(for: mode) else { return }
+                        guard try await shouldSendFrame(index: index, gapMS: GatherTimingPolicy.mineFrameGapMS) else { continue }
                         let shape = Self.mineMP1[index] / shapeMax
                         let value = min(1, mineProgress + max(0, next - mineProgress) * shape)
                         position.y = 0.25 + Self.mineY1[index]
@@ -2842,8 +2870,8 @@ actor AutomationEngine {
                     }
                 } else {
                     for index in mpProfile.indices {
-                        if index > 0 { try await waitRelative(GatherTimingPolicy.mineFrameGapMS) }
                         guard try await maySendGatherAction(for: mode) else { return }
+                        guard try await shouldSendFrame(index: index, gapMS: GatherTimingPolicy.mineFrameGapMS) else { continue }
                         mineProgress = max(mineProgress, mpProfile[index])
                         position.y = 0.25 + yProfile[index % yProfile.count]
                         try await sendPosition(moving: false, action: ["act": "mine", "eq": tool, "mc": tile.0, "mr": tile.1, "mp": mineProgress])
@@ -2854,7 +2882,7 @@ actor AutomationEngine {
             if maxSchedulerDelayMS >= GatherTimingPolicy.delayedFrameDiagnosticThresholdMS,
                gatherLastTimingDiagnosticAt == 0 || nowMS - gatherLastTimingDiagnosticAt >= GatherTimingPolicy.timingDiagnosticCooldownMS {
                 gatherLastTimingDiagnosticAt = nowMS
-                reporter(.diagnostic("[GATHER][TIMING] scheduler atrasou até \(maxSchedulerDelayMS)ms • perfil preservado com espaçamento relativo • nenhuma rajada enviada"))
+                reporter(.diagnostic("[GATHER][TIMING] scheduler atrasou até \(maxSchedulerDelayMS)ms • timeline absoluta • frames vencidos descartados=\(droppedFrames) • nenhuma rajada enviada"))
             }
         }
 
@@ -2897,9 +2925,11 @@ actor AutomationEngine {
 
             if let final = inspect() { return final }
 
-            // Proof e wear podem chegar em mensagens separadas. Em vez de polling
-            // de 20 ms (sensível ao scheduler em background), aguarde diretamente
-            // o próximo evento autoritativo por uma pequena janela.
+            // Build 81: proof e wear podem chegar separados e, em BG, a task
+            // pode voltar depois do deadline nominal. O estado autoritativo já
+            // ingerido sempre vence o relógio. Se apenas metade chegou, damos
+            // uma janela dirigida por evento; se o scheduler atrasar de novo,
+            // fazemos uma última leitura antes de declarar timeout.
             let hasHalfAck = (harvestProofSerial > proofBefore && !harvestProof.isEmpty) ||
                 (harvestWearSerial > wearBefore || harvestH > hBefore)
             if hasHalfAck {
@@ -2910,7 +2940,8 @@ actor AutomationEngine {
                 )
                 if let graceState = inspect() { return graceState }
             }
-            return .timeout
+            try Task.checkCancellation()
+            return inspect() ?? .timeout
         }
 
         var handshake: HarvestAck = harvestProof.isEmpty ? .timeout : .accepted

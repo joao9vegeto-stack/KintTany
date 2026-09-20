@@ -1276,4 +1276,28 @@ final class RealtimeProtocolTests: XCTestCase {
         )
     }
 
+
+
+    func testBuild81GatherTimelineWaitsForFutureFrame() {
+        XCTAssertEqual(GatherTimingPolicy.frameDecision(elapsedMS: 20, intendedOffsetMS: 65), .wait(45))
+    }
+
+    func testBuild81GatherTimelineSendsSlightlyLateFrame() {
+        XCTAssertEqual(GatherTimingPolicy.frameDecision(elapsedMS: 150, intendedOffsetMS: 65), .send(85))
+    }
+
+    func testBuild81GatherTimelineDropsExpiredBackgroundFrame() {
+        XCTAssertEqual(GatherTimingPolicy.frameDecision(elapsedMS: 420, intendedOffsetMS: 65), .drop(355))
+    }
+
+    func testBuild81GatherTimelineDoesNotBurstAfterLongWakeup() {
+        let decisions = (0..<8).map {
+            GatherTimingPolicy.frameDecision(elapsedMS: 500, intendedOffsetMS: $0 * GatherTimingPolicy.mineFrameGapMS)
+        }
+        let sends = decisions.filter {
+            if case .send = $0 { return true }
+            return false
+        }
+        XCTAssertLessThanOrEqual(sends.count, 2)
+    }
 }
