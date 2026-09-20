@@ -26,6 +26,7 @@ enum EngineStopReason: Equatable {
     case user
     case backgroundExpiration
     case connectionLoss
+    case dunesCheckpoint
     case dunesHeatSafety
     case dunesDangerSafety
 }
@@ -1302,6 +1303,12 @@ actor AutomationEngine {
     private var gatherProofMisses = 0
     private var gatherLastTimingDiagnosticAt: Double = 0
     private var gatherResourceSerial = 0
+    // Build 83: observabilidade de latência do gather. Nunca registra proof/token/cookie;
+    // somente tipo de evento, latência, h/hm e FG/BG já exposto pelo app.
+    private var gatherTraceHitSentAtMS: Double?
+    private var gatherTraceFirstProofAtMS: Double?
+    private var gatherTraceFirstProgressAtMS: Double?
+    private var gatherTraceTarget = ""
     private let gatherEventGate = RealtimeEventGate()
     private let wildStateEventGate = RealtimeEventGate()
     private var liveDunesSeeds: [String: GatherSeed] = [:]
@@ -1623,6 +1630,7 @@ actor AutomationEngine {
         case .user: label = "usuário"
         case .backgroundExpiration: label = "encerramento externo de Continued Processing"
         case .connectionLoss: label = "queda de conexão"
+        case .dunesCheckpoint: label = "checkpoint adaptativo das Dunes"
         case .dunesHeatSafety: label = "proteção contra calor das Dunes"
         case .dunesDangerSafety: label = "dano não-térmico detectado nas Dunes"
         }
@@ -2252,6 +2260,7 @@ actor AutomationEngine {
         guard try await waitForRegion(targetRegion, timeoutMS: 6_000) else {
             throw EngineError.regionNotConfirmed(targetRegion)
         }
+        let dunesExposureStartedAtMS = mode.isDunesGathering ? nowMS : nil
         if mode.isDunesGathering {
             // Never start a full-loot harvest from an unverified/local HP value.
             // Wait briefly for an own-player snapshot/pvit from this Dunes Presence.
@@ -2272,8 +2281,8 @@ actor AutomationEngine {
                 throw EngineError.gatherLoadoutNotReady("identidade física da ferramenta das Dunes")
             }
             reporter(.dunesExposure(tool: exposedTool, lifeEpoch: lifeEpoch))
-            reporter(.diagnostic("[DUNES][SAFETY] proteção Build 77 iniciada • HP autoritativo base=\(dunesHeatBaselineHP) • 1 HP/10s conservador • limite=\(DunesHeatSafetyPolicy.minimumSafeHP) • lifeEpoch=\(lifeEpoch)"))
-            reporter(.log("❤️‍🔥 Proteção Dunes Build 77 • limite efetivo=\(DunesHeatSafetyPolicy.minimumSafeHP) HP • dano não-térmico força saída • checkpoints a cada 10 sucessos"))
+            reporter(.diagnostic("[DUNES][SAFETY] proteção Build 78 iniciada • HP autoritativo base=\(dunesHeatBaselineHP) • 1 HP/10s conservador • limite=\(DunesHeatSafetyPolicy.minimumSafeHP) • lifeEpoch=\(lifeEpoch)"))
+            reporter(.log("❤️‍🔥 Proteção Dunes Build 78 • limite efetivo=\(DunesHeatSafetyPolicy.minimumSafeHP) HP • dano não-térmico força saída • checkpoint em até \(DunesCheckpointPolicy.successInterval) sucessos ou 180s"))
             if try await enforceDunesHeatSafetyIfNeeded(mode: mode) == false {
                 try await exitDunesToShores(reason: "proteção contra calor")
                 safeStopCompleted = true
@@ -2317,6 +2326,13 @@ actor AutomationEngine {
             try Task.checkCancellation()
             if safeStopReason != nil { break }
             if try await enforceDunesHeatSafetyIfNeeded(mode: mode) == false { break }
+            if let dunesExposureStartedAtMS,
+               DunesCheckpointPolicy.exposureLimitReached(startedAtMS: dunesExposureStartedAtMS, nowMS: nowMS) {
+                safeStopReason = .dunesCheckpoint
+                reporter(.state(.recovering, "Checkpoint por tempo • saindo das Dunes"))
+                reporter(.log("⏱️ Dunes • 180s de exposição atingidos com \(successes)/\(goal) sucessos no lote • saindo para The Shores e protegendo recursos"))
+                break
+            }
             reporter(.state(.searching, "Procurando \(mode.displayName.lowercased())"))
 
             guard let seed = selectGatherSeed(for: mode) else {
@@ -2459,6 +2475,7 @@ actor AutomationEngine {
         if mode.isDunesGathering {
             let reason: String
             switch safeStopReason {
+            case .dunesCheckpoint: reason = "checkpoint por 180s de exposição"
             case .dunesHeatSafety: reason = "proteção térmica"
             case .dunesDangerSafety: reason = "dano não-térmico / risco externo"
             case .backgroundExpiration: reason = "encerramento externo"
@@ -2750,6 +2767,10 @@ actor AutomationEngine {
         harvestHM = 99
         harvestLoot = nil
         harvestClearSeen = false
+        gatherTraceHitSentAtMS = nil
+        gatherTraceFirstProofAtMS = nil
+        gatherTraceFirstProgressAtMS = nil
+        gatherTraceTarget = seed.targetKey
 
         let tool = activeGatherToolType ?? ActivityToolPolicy.requiredTool(for: mode) ?? (kind == "tree" ? "tool_axe" : "tool_pickaxe")
         try await equip(tool)
@@ -2844,6 +2865,10 @@ actor AutomationEngine {
             totalHits += 1
             reporter(.hitSent)
             lastHitAt = nowMS
+            gatherTraceHitSentAtMS = lastHitAt
+            gatherTraceFirstProofAtMS = nil
+            gatherTraceFirstProgressAtMS = nil
+            reporter(.diagnostic("[GATHER][TRACE] hit enviado • alvo=\(seed.targetKey) • h=\(harvestH)/\(harvestHM < 99 ? String(harvestHM) : "?")"))
         }
 
         func waitForAck(proofBefore: Int, wearBefore: Int, hBefore: Int, timeoutMS: Int) async throws -> HarvestAck {
@@ -2964,6 +2989,10 @@ actor AutomationEngine {
             let ack = try await waitForAck(proofBefore: proofBefore, wearBefore: wearBefore, hBefore: hBefore, timeoutMS: 1_400)
             if ack == .felled { break }
             if ack != .accepted {
+                let elapsed = gatherTraceHitSentAtMS.map { max(0, Int((nowMS - $0).rounded())) } ?? -1
+                let proofMS = gatherTraceFirstProofAtMS.flatMap { sent in gatherTraceHitSentAtMS.map { max(0, Int((sent - $0).rounded())) } } ?? -1
+                let progressMS = gatherTraceFirstProgressAtMS.flatMap { seen in gatherTraceHitSentAtMS.map { max(0, Int((seen - $0).rounded())) } } ?? -1
+                reporter(.diagnostic("[GATHER][TRACE] ACK incompleto • alvo=\(seed.targetKey) • total=\(elapsed)ms • proof=\(proofMS)ms • progresso=\(progressMS)ms • h=\(harvestH)/\(harvestHM)"))
                 reporter(.diagnostic("[GATHER] hit sem proof+wear fresco h=\(harvestH) hm=\(harvestHM)"))
                 break
             }
@@ -3048,6 +3077,12 @@ actor AutomationEngine {
         guard !proof.isEmpty, proof != harvestProof else { return }
         harvestProof = proof
         harvestProofSerial += 1
+        if gatherTraceFirstProofAtMS == nil {
+            gatherTraceFirstProofAtMS = nowMS
+            if let sent = gatherTraceHitSentAtMS {
+                reporter(.diagnostic("[GATHER][TRACE] action_proof • alvo=\(gatherTraceTarget) • +\(max(0, Int((nowMS - sent).rounded())))ms"))
+            }
+        }
         gatherResourceSerial += 1
         await gatherEventGate.signal()
         reporter(.diagnostic("[GATHER] action_proof #\(harvestProofSerial)"))
@@ -3121,7 +3156,15 @@ actor AutomationEngine {
             harvestProof = proof
             harvestProofSerial += 1
         }
-        if changed { harvestWearSerial += 1 }
+        if changed {
+            harvestWearSerial += 1
+            if gatherTraceFirstProgressAtMS == nil {
+                gatherTraceFirstProgressAtMS = nowMS
+                if let sent = gatherTraceHitSentAtMS {
+                    reporter(.diagnostic("[GATHER][TRACE] res_evt progresso • alvo=\(gatherTraceTarget) • +\(max(0, Int((nowMS - sent).rounded())))ms • h=\(harvestH)/\(harvestHM)"))
+                }
+            }
+        }
         await gatherEventGate.signal()
         reporter(.diagnostic("[GATHER] res_evt h=\(harvestH) hm=\(harvestHM) proof=\(!harvestProof.isEmpty) loot=\(harvestLoot ?? "-")"))
     }
