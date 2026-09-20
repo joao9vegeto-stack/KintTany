@@ -182,6 +182,11 @@ struct DunesExitSurvivalPolicy {
 
 struct DunesDamageSafetyPolicy {
     static let toleranceHP = 4
+    // Build 85: external damage in a full-loot realm gets an emergency heal
+    // before movement when HP is already at/below the thermal floor.
+    static func shouldEmergencyHeal(observedHP: Int) -> Bool {
+        observedHP <= DunesHeatSafetyPolicy.minimumSafeHP
+    }
 
     /// A heat clock already predicts expected HP loss. A trusted HP materially
     /// below that projection is treated as mob/PvP damage and forces exit.
@@ -2554,6 +2559,29 @@ actor AutomationEngine {
     ) async throws {
         let expectedLifeEpoch = overrideLifeEpoch ?? lifeEpoch
         let expectedTool = overrideTool ?? activeDunesToolIdentity
+
+        // Build 85: dunesDangerSafety is irreversible. If the external hit has
+        // already put us at/below the thermal floor, spend at most one Potion+
+        // before walking. Never run the synthetic heat-tick driver here: escape
+        // remains the only objective after this point.
+        if safeStopReason == .dunesDangerSafety,
+           GatherRegionPolicy.isDunesRegion((serverRegion ?? region).lowercased()),
+           DunesDamageSafetyPolicy.shouldEmergencyHeal(observedHP: playerHP) {
+            let before = playerHP
+            let type = DunesHeatSafetyPolicy.healthPotionPlusType
+            if !potionStockLoaded { try? await refreshPotionStock(logSummary: false) }
+            if currentPotionStock(type) > 0 {
+                reporter(.log("🆘 Dunes • emergência irreversível • HP \(before) • tentando uma Health Potion+ antes da fuga"))
+                let consumed = (try? await consumePotion(type)) ?? false
+                if consumed {
+                    reporter(.log("💚 Dunes • Health Potion+ aceita em emergência • fuga continua imediatamente"))
+                } else {
+                    reporter(.log("⚠️ Dunes • poção de emergência não confirmada • fuga continua sem nova tentativa"))
+                }
+            } else {
+                reporter(.log("⚠️ Dunes • HP \(before) em emergência e sem Health Potion+ confirmada • fuga imediata"))
+            }
+        }
         let authoritative = (serverRegion ?? region).lowercased()
         guard GatherRegionPolicy.isDunesRegion(authoritative) else {
             guard authoritative == "beach" else {
