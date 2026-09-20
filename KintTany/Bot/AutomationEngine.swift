@@ -1309,6 +1309,7 @@ actor AutomationEngine {
     private var gatherTraceFirstProofAtMS: Double?
     private var gatherTraceFirstProgressAtMS: Double?
     private var gatherTraceTarget = ""
+    private var gatherTraceLastSchedulerReportAtMS: Double = 0
     private let gatherEventGate = RealtimeEventGate()
     private let wildStateEventGate = RealtimeEventGate()
     private var liveDunesSeeds: [String: GatherSeed] = [:]
@@ -2849,6 +2850,11 @@ actor AutomationEngine {
                 gatherLastTimingDiagnosticAt = nowMS
                 reporter(.diagnostic("[GATHER][TIMING] scheduler atrasou até \(maxSchedulerDelayMS)ms • perfil preservado com espaçamento relativo • nenhuma rajada enviada"))
             }
+            if maxSchedulerDelayMS > 0,
+               gatherTraceLastSchedulerReportAtMS == 0 || nowMS - gatherTraceLastSchedulerReportAtMS >= 5_000 {
+                gatherTraceLastSchedulerReportAtMS = nowMS
+                reporter(.diagnostic("[GATHER][TRACE] scheduler • alvo=\(seed.targetKey) • drift_max=\(maxSchedulerDelayMS)ms • perfil=\(kind)"))
+            }
         }
 
         func sendHit(proof: String?) async throws {
@@ -2880,7 +2886,12 @@ actor AutomationEngine {
                 return nil
             }
 
-            if let immediate = inspect() { return immediate }
+            if let immediate = inspect() {
+                let elapsed = gatherTraceHitSentAtMS.map { max(0, Int((nowMS - $0).rounded())) } ?? -1
+                reporter(.diagnostic("[GATHER][TRACE] ACK imediato • alvo=\(seed.targetKey) • total=\(elapsed)ms • h=\(harvestH)/\(harvestHM)"))
+                return immediate
+            }
+            let ackWaitStartedAt = nowMS
             let deadline = nowMS + Double(timeoutMS)
             var eventSerial = await gatherEventGate.serial
             while nowMS < deadline {
@@ -2888,11 +2899,19 @@ actor AutomationEngine {
                 let remaining = max(1, Int(deadline - nowMS))
                 let signaled = try await gatherEventGate.wait(after: eventSerial, timeoutMS: remaining)
                 eventSerial = await gatherEventGate.serial
-                if let state = inspect() { return state }
+                if let state = inspect() {
+                    let elapsed = gatherTraceHitSentAtMS.map { max(0, Int((nowMS - $0).rounded())) } ?? -1
+                    reporter(.diagnostic("[GATHER][TRACE] ACK aceito • alvo=\(seed.targetKey) • total=\(elapsed)ms • espera=\(max(0, Int((nowMS - ackWaitStartedAt).rounded())))ms • h=\(harvestH)/\(harvestHM)"))
+                    return state
+                }
                 if !signaled { break }
             }
 
-            if let final = inspect() { return final }
+            if let final = inspect() {
+                let elapsed = gatherTraceHitSentAtMS.map { max(0, Int((nowMS - $0).rounded())) } ?? -1
+                reporter(.diagnostic("[GATHER][TRACE] ACK no limite • alvo=\(seed.targetKey) • total=\(elapsed)ms • espera=\(max(0, Int((nowMS - ackWaitStartedAt).rounded())))ms • h=\(harvestH)/\(harvestHM)"))
+                return final
+            }
 
             // Proof e wear podem chegar em mensagens separadas. Em vez de polling
             // de 20 ms (sensível ao scheduler em background), aguarde diretamente
@@ -2905,8 +2924,14 @@ actor AutomationEngine {
                     after: beforeGrace,
                     timeoutMS: GatherTimingPolicy.eventGraceMS
                 )
-                if let graceState = inspect() { return graceState }
+                if let graceState = inspect() {
+                    let elapsed = gatherTraceHitSentAtMS.map { max(0, Int((nowMS - $0).rounded())) } ?? -1
+                    reporter(.diagnostic("[GATHER][TRACE] ACK grace • alvo=\(seed.targetKey) • total=\(elapsed)ms • h=\(harvestH)/\(harvestHM)"))
+                    return graceState
+                }
             }
+            let elapsed = gatherTraceHitSentAtMS.map { max(0, Int((nowMS - $0).rounded())) } ?? -1
+            reporter(.diagnostic("[GATHER][TRACE] ACK timeout • alvo=\(seed.targetKey) • total=\(elapsed)ms • espera=\(max(0, Int((nowMS - ackWaitStartedAt).rounded())))ms • h=\(harvestH)/\(harvestHM)"))
             return .timeout
         }
 
