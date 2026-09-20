@@ -1103,10 +1103,17 @@ final class AppStore: ObservableObject {
             // em uma segunda Presence nova, no mesmo shard, já bootstrapada na região
             // correta. Esse é o ciclo que funcionou nas builds estáveis e evita tentar
             // World→Eldergrove na Presence recém-usada pelo banco.
-            let bootstrap = AutomationEngine.bootstrapForRun(
-                for: mode,
-                gatherDisposition: gatherPreflight
-            )
+            let bootstrap: PresenceBootstrap
+            if mode == .fishing, selectedFishingBait == .trout {
+                // Trout must follow the proven ElderGrove gathering handoff:
+                // create Presence directly in ElderGrove, never mutate World→ElderGrove.
+                bootstrap = AutomationEngine.bootstrap(for: mode, fishingBait: selectedFishingBait)
+            } else {
+                bootstrap = AutomationEngine.bootstrapForRun(
+                    for: mode,
+                    gatherDisposition: gatherPreflight
+                )
+            }
             guard activeRunID == runID else { return }
             state = .connecting
             statusMessage = "Conectando à região da atividade"
