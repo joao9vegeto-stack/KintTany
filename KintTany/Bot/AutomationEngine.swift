@@ -3856,8 +3856,24 @@ actor AutomationEngine {
             reporter(.state(.searching, "Procurando spot de pesca"))
             guard let target = selectFishTarget() else {
                 reporter(.target(nil))
-                // Sem alvo saudável, não contabilize novas tentativas. Apenas
-                // ressincronize STAND/vara e aguarde geração realmente nova.
+
+                // ElderGrove is much larger than The Pond. A healthy authoritative
+                // spot can still exist outside the 6.5-cell casting radius. Do not
+                // freeze on the original stand waiting for the nearby slot to move:
+                // walk to another healthy server spot and resume there.
+                if fishingBait == .trout, let recovery = selectFishRecoveryPosition() {
+                    try? await clearAction()
+                    reporter(.state(.moving, "Trout • reposicionando para outro spot válido"))
+                    reporter(.log("🎣 Trout • spot próximo esgotado • indo ao Spot #\(recovery.slot) em \(recovery.c),\(recovery.r)"))
+                    try await walk(to: recovery.position, maxSeconds: 30, status: "Indo para outro spot de Trout")
+                    try await equip("tool_fishing_rod")
+                    fishHealthWaitSerial = -1
+                    try await sleep(500)
+                    continue
+                }
+
+                // If no healthy reachable generation exists, wait only for a real
+                // authoritative movement/refresh instead of hammering dead cells.
                 if !fishBlockedCells.isEmpty || !fishQuarantinedGenerations.isEmpty {
                     if fishHealthWaitSerial != fishSnapshotSerial {
                         fishHealthWaitSerial = fishSnapshotSerial
@@ -3865,7 +3881,6 @@ actor AutomationEngine {
                     }
                     reporter(.state(.recovering, "Pesca • aguardando novo spot válido"))
                 }
-                position = fishingStand
                 try? await clearAction()
                 try? await sendPosition(moving: false)
                 try? await equip("tool_fishing_rod")
@@ -4236,6 +4251,27 @@ actor AutomationEngine {
             if abs(a.ttl - b.ttl) > FishingRecoveryPolicy.ttlPriorityDifferenceMS { return a.ttl > b.ttl }
             return a.distance < b.distance
         }.first
+    }
+
+    private func selectFishRecoveryPosition() -> (slot: Int, c: Int, r: Int, position: Position)? {
+        let minTTL = FishingRecoveryPolicy.minStartTTLMS
+        let offset = fishingGridOffset
+        let healthy = fishSpots.values
+            .filter { remainingMS(for: $0) >= minTTL }
+            .filter { !fishQuarantinedGenerations.contains(fishGenerationKey(slot: $0.slot, generation: $0.generation)) }
+            .sorted { a, b in remainingMS(for: a) > remainingMS(for: b) }
+
+        guard let spot = healthy.first else { return nil }
+        // Put the player on the center of the authoritative 2x2 fishing cell.
+        // Grid coordinates map to world coordinates through the same offset used
+        // by selectFishTarget(). Keep y/rotation neutral; walk() supplies frames.
+        let pos = Position(
+            x: Double(spot.c) + 0.5 - offset,
+            y: 0.25,
+            z: Double(spot.r) + 0.5 - offset,
+            ry: position.ry
+        )
+        return (spot.slot, spot.c, spot.r, pos)
     }
 
     private func fishTargetStillValid(_ target: FishTarget, generation: Int) -> Bool {
