@@ -956,6 +956,7 @@ final class AppStore: ObservableObject {
             value.hasPrefix("[SERVER]") ||
             value.hasPrefix("[BANK]") ||
             value.hasPrefix("[GATHER][TIMING]") ||
+            value.hasPrefix("[GATHER][TRACE]") ||
             value.hasPrefix("[BG]") ||
             value.hasPrefix("[WARN]") ||
             value.hasPrefix("[ERROR]") ||
@@ -2109,7 +2110,7 @@ final class AppStore: ObservableObject {
             updateContinuedProcessingProgress(forceTitleUpdate: true)
 
         case .gatherSuccess(let detail, let absolute):
-            // Build 77 checkpoint phases use independent engines. Absolute gather
+            // Build 78 checkpoint phases use independent engines. Absolute gather
             // progress makes delayed MainActor delivery idempotent: a success from
             // the previous 10-node phase can never increment the global total twice.
             stats.successes = max(stats.successes, absolute)
