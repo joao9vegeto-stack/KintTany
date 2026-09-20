@@ -225,7 +225,7 @@ final class RealtimeProtocolTests: XCTestCase {
         XCTAssertNil(FishingBait.tuna.confirmedInventoryKey)
         XCTAssertNil(FishingBait.squid.confirmedInventoryKey)
         XCTAssertTrue(FishingBait.feather.isAutomationValidated)
-        XCTAssertFalse(FishingBait.trout.isAutomationValidated)
+        XCTAssertTrue(FishingBait.trout.isAutomationValidated) // captura manual 20/09/2026: eldergrove + bait_trout + fish_trout
         XCTAssertEqual(FishingBait.squid.displayName, "Squid Bait")
     }
 
