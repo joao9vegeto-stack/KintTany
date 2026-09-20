@@ -1997,16 +1997,12 @@ actor AutomationEngine {
         }
         let revision = ownHPRevision
         reporter(.diagnostic("[DUNES][HP] snapshot suspeito • fonte=\(source) • atual=\(playerHP) • snapshot=\(hp) • conservador=\(conservative)"))
-        // Full-loot fail-safe: freeze gathering immediately. /me still confirms
-        // the value for diagnostics, but no new harvest/movement toward targets
-        // is allowed while that HTTP request is in flight. A stale snapshot may
-        // cause an unnecessary exit; it must never cause an unnecessary death.
-        if activeGatherMode?.isDunesGathering == true, safeStopReason == nil {
-            dunesUnexpectedDamageDetail = "snapshot próprio \(playerHP)→\(hp) • térmico esperado≈\(conservative)"
-            safeStopReason = .dunesDangerSafety
-            reporter(.state(.recovering, "HP anormal nas Dunes • saída imediata"))
-            reporter(.log("🚨 Proteção das Dunes • snapshot de HP incompatível com calor • coleta congelada imediatamente enquanto /me confirma • saída para The Shores"))
-        }
+        // Build 86: snapshots da abertura da Presence podem estar atrasados.
+        // Como na referência da Build 78, o snapshot suspeito não é prova de dano:
+        // /me precisa confirmá-lo antes de alterar HP ou disparar dunesDangerSafety.
+        // pvit próprio continua sendo aplicado imediatamente por recordTrustedOwnHP,
+        // portanto dano PvP/externo autoritativo não fica mascarado.
+        reporter(.diagnostic("[DUNES][HP] aguardando /me antes de classificar snapshot suspeito"))
         do {
             let me = try await http.get("/api/auth/me")
             guard ownHPRevision == revision else {
