@@ -757,6 +757,16 @@ final class RealtimeProtocolTests: XCTestCase {
         XCTAssertFalse(DunesPresenceSafetyPolicy.requiresShoresRecovery(mode: .stone, phase: .fullLootOrEntering))
     }
 
+    func testBuild77DunesCheckpointSplitsLongGoalsIntoTenSuccessLots() {
+        XCTAssertEqual(DunesCheckpointPolicy.successInterval, 10)
+        XCTAssertEqual(DunesCheckpointPolicy.phaseGoal(totalGoal: 200, completed: 0), 10)
+        XCTAssertEqual(DunesCheckpointPolicy.phaseGoal(totalGoal: 200, completed: 10), 10)
+        XCTAssertEqual(DunesCheckpointPolicy.phaseGoal(totalGoal: 23, completed: 20), 3)
+        XCTAssertEqual(DunesCheckpointPolicy.phaseGoal(totalGoal: 3, completed: 0), 3)
+        XCTAssertTrue(DunesCheckpointPolicy.needsAnotherPhase(totalGoal: 200, completed: 10))
+        XCTAssertFalse(DunesCheckpointPolicy.needsAnotherPhase(totalGoal: 10, completed: 10))
+    }
+
     func testBuild76DunesToolInstanceChoosesLowestPositiveDurabilityAmongCarriedCopies() throws {
         let backpack: [String: Any] = [
             "hotbar": [
@@ -812,6 +822,27 @@ final class RealtimeProtocolTests: XCTestCase {
         XCTAssertFalse(BankDepositPreservationPolicy.matchesSelectedTool(
             ["t": "tool_axe_l2", "n": 1, "d": 800, "iid": "keep-me"],
             selected: selected
+        ))
+    }
+
+    func testBuild77DunesExitRequiresSamePhysicalToolAndSameLifeEpoch() {
+        let selected = DunesToolInstanceIdentity(type: "copper_pickaxe", iid: "tool-1", durability: 3_984)
+        let backpackWithWornSameTool: [String: Any] = [
+            "hotbar": [["t": "copper_pickaxe", "n": 1, "d": 3_912, "iid": "tool-1"]],
+            "invSlots": [NSNull()]
+        ]
+        let emptyBackpack: [String: Any] = ["hotbar": [NSNull()], "invSlots": [NSNull()]]
+
+        XCTAssertTrue(DunesExitSurvivalPolicy.toolStillCarried(selected, in: backpackWithWornSameTool))
+        XCTAssertFalse(DunesExitSurvivalPolicy.toolStillCarried(selected, in: emptyBackpack))
+        XCTAssertTrue(DunesExitSurvivalPolicy.survived(
+            expectedLifeEpoch: 8, observedLifeEpoch: 8, hp: 68, toolStillCarried: true
+        ))
+        XCTAssertFalse(DunesExitSurvivalPolicy.survived(
+            expectedLifeEpoch: 8, observedLifeEpoch: 9, hp: 100, toolStillCarried: false
+        ))
+        XCTAssertFalse(DunesExitSurvivalPolicy.survived(
+            expectedLifeEpoch: 8, observedLifeEpoch: 8, hp: 100, toolStillCarried: false
         ))
     }
 
@@ -1027,14 +1058,21 @@ final class RealtimeProtocolTests: XCTestCase {
         ))
     }
 
-    func testDunesHeatSafetyUsesThirtyHPThresholdOnlyForDunes() {
-        XCTAssertFalse(DunesHeatSafetyPolicy.requiresRecovery(hp: 31, mode: .silver))
-        XCTAssertTrue(DunesHeatSafetyPolicy.requiresRecovery(hp: 30, mode: .silver))
-        XCTAssertTrue(DunesHeatSafetyPolicy.requiresRecovery(hp: 13, mode: .cacti))
+    func testBuild77DunesHeatSafetyUsesSeventyHPFloorOnlyForDunes() {
+        XCTAssertFalse(DunesHeatSafetyPolicy.requiresRecovery(hp: 71, mode: .silver))
+        XCTAssertTrue(DunesHeatSafetyPolicy.requiresRecovery(hp: 70, mode: .silver))
+        XCTAssertTrue(DunesHeatSafetyPolicy.requiresRecovery(hp: 69, mode: .cacti))
         XCTAssertFalse(DunesHeatSafetyPolicy.requiresRecovery(hp: 13, mode: .iron))
-        XCTAssertEqual(DunesHeatSafetyPolicy.minimumSafeHP, 30)
+        XCTAssertEqual(DunesHeatSafetyPolicy.minimumSafeHP, 70)
         XCTAssertEqual(DunesHeatSafetyPolicy.recoveryGoalHP, 90)
         XCTAssertEqual(DunesHeatSafetyPolicy.carriedHealthPotionPlusTarget, 6)
+    }
+
+    func testBuild77DunesUnexpectedDamageIsSeparatedFromHeatProjection() {
+        XCTAssertFalse(DunesDamageSafetyPolicy.isUnexpectedDamage(observedHP: 96, conservativeHP: 99))
+        XCTAssertFalse(DunesDamageSafetyPolicy.isUnexpectedDamage(observedHP: 95, conservativeHP: 99))
+        XCTAssertTrue(DunesDamageSafetyPolicy.isUnexpectedDamage(observedHP: 90, conservativeHP: 99))
+        XCTAssertTrue(DunesDamageSafetyPolicy.isUnexpectedDamage(observedHP: 70, conservativeHP: 97))
     }
 
     func testDunesHeatEstimateHasNoArtificialGracePeriod() {
