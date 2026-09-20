@@ -1448,13 +1448,13 @@ actor AutomationEngine {
     }
 
     static func bootstrap(for mode: ActivityMode, fishingBait: FishingBait) -> PresenceBootstrap {
-        if mode == .fishing, fishingBait == .trout {
-            // Same proven architecture used by ElderGrove gathering: open the
-            // Presence already in the activity region instead of switching a
-            // World Presence to ElderGrove.
+        guard mode == .fishing else { return bootstrap(for: mode) }
+        switch fishingBait {
+        case .trout:
             return PresenceBootstrap(region: "eldergrove", position: Position(x: -17.5, z: -11.5))
+        case .feather:
+            return PresenceBootstrap(region: "pond", position: Position(x: -1.5, z: -1.5))
         }
-        return bootstrap(for: mode)
     }
 
     static func bootstrap(for mode: ActivityMode) -> PresenceBootstrap {
@@ -3753,6 +3753,24 @@ actor AutomationEngine {
         }
     }
 
+    /// Fishing transaction: the first Presence is always World. It prepares
+    /// rod + selected bait through World/bank_shop/World. AppStore then closes
+    /// this Presence and opens a fresh Presence directly in the fishing region.
+    func prepareFishingLoadoutFromWorld(goal: Int) async throws {
+        guard try await waitForRegion("world", timeoutMS: 5_000) else {
+            throw EngineError.regionNotConfirmed("world")
+        }
+        try await ensureActivityToolLoadout(for: .fishing)
+        guard let baitType = fishingBait.confirmedInventoryKey else {
+            throw EngineError.unsupportedFishingBait(fishingBait.displayName)
+        }
+        try await ensureFishingBaitLoadout(type: baitType, goal: goal)
+        guard try await waitForRegion("world", timeoutMS: 5_000) else {
+            throw EngineError.regionNotConfirmed("world")
+        }
+        reporter(.log("🎣 Preflight Pesca concluído • vara + \(fishingBait.displayName) carregadas • Presence World pronta para handoff"))
+    }
+
     // MARK: - Fishing
 
     private func runFishing(goal: Int) async throws {
@@ -3773,45 +3791,23 @@ actor AutomationEngine {
         fishQuarantinedGenerations.removeAll()
         fishHealthWaitSerial = -1
 
-        // Trout Presence is intentionally bootstrapped directly in ElderGrove.
-        // Do not force it back to World here: that recreates the exact region
-        // transition timeout Build 88 removed. World is only required by the
-        // Feather/Pond path and by an actual bank loadout operation.
-        if fishingBait != .trout, serverRegion?.lowercased() != "world" {
-            try await setRegion("world", at: Position(x: 22.5, z: -3.5))
-            guard try await waitForRegion("world", timeoutMS: 4_000) else {
-                throw EngineError.regionNotConfirmed("world")
-            }
-        }
-
-        try await ensureActivityToolLoadout(for: .fishing)
-        if let baitType = fishingBait.confirmedInventoryKey {
-            try await ensureFishingBaitLoadout(type: baitType, goal: goal)
-        }
-
+        // Loadout was completed transactionally in the World Presence before
+        // this activity Presence was created. Never return to World from here.
         let hb = Task { [weak self] in await self?.heartbeat() }
         defer { hb.cancel() }
 
         let fishingRegion = fishingBait == .trout ? "eldergrove" : "pond"
         let fishingStand: Position
         if fishingRegion == "pond" {
-            let pondPortal = Position(x: 30.5, z: 0.5)
-            let pondEntry = Position(x: -18.5, z: 0)
             fishingStand = Position(x: -1.5, z: -1.5)
-            reporter(.state(.moving, "Indo ao portal de The Pond"))
-            try await walk(to: pondPortal, maxSeconds: 20)
-            var enteredViaPortal = try await waitForRegion("pond", timeoutMS: 5_000)
-            if !enteredViaPortal {
-                try await setRegion("pond", at: pondEntry)
-                enteredViaPortal = try await waitForRegion("pond", timeoutMS: 3_000)
+            reporter(.state(.moving, "Sincronizando The Pond"))
+            guard try await waitForRegion("pond", timeoutMS: 6_000) else {
+                throw EngineError.regionNotConfirmed("pond")
             }
-            guard enteredViaPortal else { throw EngineError.regionNotConfirmed("pond") }
             region = "pond"
-            position = pondEntry
+            position = fishingStand
             try await sendPosition(moving: false)
-            try await sleep(300)
-            try await walk(to: fishingStand, maxSeconds: 15, status: "Indo para o ponto de pesca")
-            reporter(.log("✅ The Pond confirmado • Herring/Feather"))
+            reporter(.log("✅ The Pond confirmado pela nova Presence • Herring/Feather"))
         } else {
             fishingStand = Position(x: -17.5, z: -11.5)
             reporter(.state(.moving, "Sincronizando Whisperwood para Trout"))
