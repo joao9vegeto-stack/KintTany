@@ -3810,7 +3810,7 @@ actor AutomationEngine {
             position = fishingStand
             try await sendPosition(moving: false)
             reporter(.log("✅ Whisperwood/Eldergrove confirmado • Trout Bait"))
-            reporter(.diagnostic("[FISH][TROUT] perfil ativo • region=eldergrove • gridOffset=24.5 • aguardando fish_spots autoritativos"))
+            reporter(.diagnostic("[FISH][TROUT] perfil validado por captura manual • region=eldergrove • gridOffset=24.5 • catch=fish_trout • bait=bait_trout"))
         }
 
         try await sleep(450)
@@ -4095,7 +4095,7 @@ actor AutomationEngine {
 
     private var fishingRegionName: String { fishingBait == .trout ? "eldergrove" : "pond" }
     private var fishingGridOffset: Double { fishingBait == .trout ? 24.5 : 19.5 }
-    private var fishingCatchInventoryKey: String { fishingBait == .trout ? "trout" : "fish" }
+    private var fishingCatchInventoryKey: String { fishingBait == .trout ? "fish_trout" : "fish" }
 
     private func ingestFishSpots(_ packet: [String: Any]) {
         if let packetRegion = packet["region"] as? String, !packetRegion.isEmpty, packetRegion.lowercased() != fishingRegionName { return }
