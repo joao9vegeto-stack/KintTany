@@ -2215,7 +2215,7 @@ actor AutomationEngine {
                 // o heartbeat precisa continuar enviando act=fish + fc/fr/fph.
                 // Um pos sem act equivale ao clearAct() usado pelo cliente Node
                 // e podia cancelar silenciosamente a pesca antes do fish_bite.
-                if region == "pond", let action = activeFishingAction {
+                if let action = activeFishingAction {
                     try await sendPosition(moving: false, action: action)
                 } else {
                     try await sendPosition(moving: false)
@@ -3781,39 +3781,36 @@ actor AutomationEngine {
         let hb = Task { [weak self] in await self?.heartbeat() }
         defer { hb.cancel() }
 
-        let pondPortal = Position(x: 30.5, z: 0.5)
-        let pondEntry = Position(x: -18.5, z: 0)
-        let pondStand = Position(x: -1.5, z: -1.5)
-
-        reporter(.state(.moving, "Indo ao portal de The Pond"))
-        try await walk(to: pondPortal, maxSeconds: 20)
-
-        var enteredViaPortal = try await waitForRegion("pond", timeoutMS: 5_000)
-        var pondConfirmed = enteredViaPortal
-        if !pondConfirmed {
-            let probes = [pondPortal, pondEntry, pondStand]
-            for probe in probes {
-                try await setRegion("pond", at: probe)
-                if try await waitForRegion("pond", timeoutMS: 2_500) {
-                    pondConfirmed = true
-                    enteredViaPortal = false
-                    break
-                }
+        let fishingRegion = fishingBait == .trout ? "eldergrove" : "pond"
+        let fishingStand: Position
+        if fishingRegion == "pond" {
+            let pondPortal = Position(x: 30.5, z: 0.5)
+            let pondEntry = Position(x: -18.5, z: 0)
+            fishingStand = Position(x: -1.5, z: -1.5)
+            reporter(.state(.moving, "Indo ao portal de The Pond"))
+            try await walk(to: pondPortal, maxSeconds: 20)
+            var enteredViaPortal = try await waitForRegion("pond", timeoutMS: 5_000)
+            if !enteredViaPortal {
+                try await setRegion("pond", at: pondEntry)
+                enteredViaPortal = try await waitForRegion("pond", timeoutMS: 3_000)
             }
-        }
-        guard pondConfirmed else { throw EngineError.regionNotConfirmed("pond") }
-
-        region = "pond"
-        reporter(.log("✅ The Pond confirmado"))
-
-        if enteredViaPortal {
+            guard enteredViaPortal else { throw EngineError.regionNotConfirmed("pond") }
+            region = "pond"
             position = pondEntry
             try await sendPosition(moving: false)
             try await sleep(300)
-            try await walk(to: pondStand, maxSeconds: 15, status: "Indo para o ponto de pesca")
+            try await walk(to: fishingStand, maxSeconds: 15, status: "Indo para o ponto de pesca")
+            reporter(.log("✅ The Pond confirmado • Herring/Feather"))
         } else {
-            position = pondStand
+            fishingStand = Position(x: -6.5, z: -18.5)
+            reporter(.state(.moving, "Entrando em Whisperwood para Trout"))
+            try await setRegion("eldergrove", at: fishingStand)
+            guard try await waitForRegion("eldergrove", timeoutMS: 6_000) else { throw EngineError.regionNotConfirmed("eldergrove") }
+            region = "eldergrove"
+            position = fishingStand
             try await sendPosition(moving: false)
+            reporter(.log("✅ Whisperwood/Eldergrove confirmado • Trout Bait"))
+            reporter(.diagnostic("[FISH][TROUT] perfil ativo • region=eldergrove • gridOffset=24.5 • aguardando fish_spots autoritativos"))
         }
 
         try await sleep(450)
@@ -3857,7 +3854,7 @@ actor AutomationEngine {
                     }
                     reporter(.state(.recovering, "Pesca • aguardando novo spot válido"))
                 }
-                position = pondStand
+                position = fishingStand
                 try? await clearAction()
                 try? await sendPosition(moving: false)
                 try? await equip("tool_fishing_rod")
@@ -3975,7 +3972,7 @@ actor AutomationEngine {
                         reporter(.failure("Peixe #\(fishNumber) • \(targetLabel) • fish_action_stale"))
                         reporter(.log("⚠️ fish_action_stale #\(fishingStats.staleRejects) • conferindo inventário e ressincronizando Pond"))
                         await verifyFishingInventoryAfterStale()
-                        try await recoverFishingAfterStale(stand: pondStand)
+                        try await recoverFishingAfterStale(stand: fishingStand)
                     } else {
                         reporter(.failure("Peixe #\(fishNumber) • \(targetLabel) • \(reason)"))
                         try await sleep(FishingRecoveryPolicy.staleRecoveryMS)
@@ -4011,7 +4008,7 @@ actor AutomationEngine {
                     reporter(.failure("Peixe #\(fishNumber) • \(targetLabel) • confirmação falhou: fish_action_stale"))
                     reporter(.log("⚠️ fish_action_stale #\(fishingStats.staleRejects) • conferindo inventário e aguardando novo estado do spot"))
                     await verifyFishingInventoryAfterStale()
-                    try await recoverFishingAfterStale(stand: pondStand)
+                    try await recoverFishingAfterStale(stand: fishingStand)
                 } else {
                     reporter(.failure("Peixe #\(fishNumber) • \(targetLabel) • confirmação falhou: \(reason)"))
                     try await sleep(FishingRecoveryPolicy.staleRecoveryMS)
@@ -4048,7 +4045,7 @@ actor AutomationEngine {
             let me = try await http.get("/api/auth/me")
             let backpack = (me["backpack"] as? [String: Any]) ?? ((me["player"] as? [String: Any])?["backpack"] as? [String: Any]) ?? [:]
             return FishingInventorySnapshot(
-                fish: fishingResourceCount(backpack, key: "fish"),
+                fish: fishingResourceCount(backpack, key: fishingCatchInventoryKey),
                 bait: fishingResourceCount(backpack, key: fishingBait.confirmedInventoryKey ?? ""),
                 xp: fishingXP(from: me)
             )
@@ -4074,7 +4071,7 @@ actor AutomationEngine {
 
     private func updateFishingInventory(fromGrant response: [String: Any]) {
         if let backpack = response["backpack"] as? [String: Any] {
-            lastFishingInventory.fish = fishingResourceCount(backpack, key: "fish")
+            lastFishingInventory.fish = fishingResourceCount(backpack, key: fishingCatchInventoryKey)
             lastFishingInventory.bait = fishingResourceCount(backpack, key: fishingBait.confirmedInventoryKey ?? "")
         }
         if let xp = fishingXP(from: response) { lastFishingInventory.xp = xp }
@@ -4096,8 +4093,12 @@ actor AutomationEngine {
         return nil
     }
 
+    private var fishingRegionName: String { fishingBait == .trout ? "eldergrove" : "pond" }
+    private var fishingGridOffset: Double { fishingBait == .trout ? 24.5 : 19.5 }
+    private var fishingCatchInventoryKey: String { fishingBait == .trout ? "trout" : "fish" }
+
     private func ingestFishSpots(_ packet: [String: Any]) {
-        if let packetRegion = packet["region"] as? String, !packetRegion.isEmpty, packetRegion.lowercased() != "pond" { return }
+        if let packetRegion = packet["region"] as? String, !packetRegion.isEmpty, packetRegion.lowercased() != fishingRegionName { return }
         guard let spots = packet["spots"] as? [[String: Any]] else { return }
         let now = nowMS
         var next: [Int: FishSpot] = [:]
@@ -4127,7 +4128,7 @@ actor AutomationEngine {
                 chickenAlive: chickens.values.filter { $0.alive }.count,
                 wildAlive: wildMobs.values.filter { $0.alive }.count
             ),
-            serverRegion: "pond"
+            serverRegion: fishingRegionName
         ))
     }
 
@@ -4179,8 +4180,9 @@ actor AutomationEngine {
             reporter(.diagnostic("[FISH] célula bloqueada nesta geração • #\(target.slot) gen=\(target.generation) cell=\(target.fc),\(target.fr) • motivo=\(reason)"))
         }
 
-        let playerCol = Int(round(position.x + 19.5))
-        let playerRow = Int(round(position.z + 19.5))
+        let gridOffset = fishingGridOffset
+        let playerCol = Int(round(position.x + gridOffset))
+        let playerRow = Int(round(position.z + gridOffset))
         let generationCells = [(target.c, target.r), (target.c + 1, target.r), (target.c, target.r + 1), (target.c + 1, target.r + 1)]
             .filter { fc, fr in hypot(Double(fc - playerCol), Double(fr - playerRow)) <= 6.5 }
             .map { fc, fr in "\(target.slot):\(target.generation):\(fc),\(fr)" }
@@ -4203,8 +4205,9 @@ actor AutomationEngine {
     }
 
     private func selectFishTarget() -> FishTarget? {
-        let playerCol = Int(round(position.x + 19.5))
-        let playerRow = Int(round(position.z + 19.5))
+        let gridOffset = fishingGridOffset
+        let playerCol = Int(round(position.x + gridOffset))
+        let playerRow = Int(round(position.z + gridOffset))
         let minTTL = FishingRecoveryPolicy.minStartTTLMS
         var candidates: [FishTarget] = []
         for spot in fishSpots.values where remainingMS(for: spot) >= minTTL {
