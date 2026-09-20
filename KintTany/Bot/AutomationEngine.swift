@@ -3773,9 +3773,15 @@ actor AutomationEngine {
         fishQuarantinedGenerations.removeAll()
         fishHealthWaitSerial = -1
 
-        if serverRegion?.lowercased() != "world" {
+        // Trout Presence is intentionally bootstrapped directly in ElderGrove.
+        // Do not force it back to World here: that recreates the exact region
+        // transition timeout Build 88 removed. World is only required by the
+        // Feather/Pond path and by an actual bank loadout operation.
+        if fishingBait != .trout, serverRegion?.lowercased() != "world" {
             try await setRegion("world", at: Position(x: 22.5, z: -3.5))
-            _ = try await waitForRegion("world", timeoutMS: 4_000)
+            guard try await waitForRegion("world", timeoutMS: 4_000) else {
+                throw EngineError.regionNotConfirmed("world")
+            }
         }
 
         try await ensureActivityToolLoadout(for: .fishing)
