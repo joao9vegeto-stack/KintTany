@@ -268,18 +268,10 @@ struct DunesPresenceSafetyPolicy {
 }
 
 struct DunesCheckpointPolicy {
-    /// Build 78: protect full-loot resources after at most 25 successful nodes,
-    /// but never remain continuously exposed for more than three minutes just
-    /// because targets are scarce or slow. Heat/danger safety remains separate.
-    static let successInterval = 25
-    static let maximumExposureMS: Double = 180_000
+    static let successInterval = 10
 
     static func phaseGoal(totalGoal: Int, completed: Int) -> Int {
         min(successInterval, max(0, totalGoal - completed))
-    }
-
-    static func exposureLimitReached(startedAtMS: Double, nowMS: Double) -> Bool {
-        nowMS - startedAtMS >= maximumExposureMS
     }
 
     static func needsAnotherPhase(totalGoal: Int, completed: Int) -> Bool {
@@ -775,8 +767,7 @@ final class AppStore: ObservableObject {
             let total = max(stats.successes, phaseStart + phaseResult.successes)
             stats.successes = total
 
-            let timedCheckpoint = phaseResult.stopReason == .dunesCheckpoint
-            if phaseResult.stoppedSafely && !timedCheckpoint {
+            if phaseResult.stoppedSafely {
                 return EngineRunResult(
                     successes: total,
                     completedGoal: false,
@@ -784,7 +775,7 @@ final class AppStore: ObservableObject {
                     stopReason: phaseResult.stopReason
                 )
             }
-            guard phaseResult.completedGoal || timedCheckpoint else {
+            guard phaseResult.completedGoal else {
                 return EngineRunResult(
                     successes: total,
                     completedGoal: false,
@@ -798,8 +789,7 @@ final class AppStore: ObservableObject {
 
             // A engine acabou de sair por The Shores e já confirmou que não foi
             // respawn por morte. Só agora liberamos a Presence e protegemos loot.
-            let checkpointTrigger = timedCheckpoint ? "180s de exposição" : "\(DunesCheckpointPolicy.successInterval) sucessos"
-            log("🏦 Dunes CHECKPOINT \(total)/\(runGoal) • gatilho=\(checkpointTrigger) • The Shores + sobrevivência confirmadas • protegendo recursos no banco")
+            log("🏦 Dunes CHECKPOINT \(total)/\(runGoal) • The Shores + sobrevivência confirmadas • protegendo recursos no banco")
             await closeDunesPresenceAfterConfirmedShores()
             guard activeRunID == runID, activity == mode else { throw CancellationError() }
 
@@ -1279,15 +1269,6 @@ final class AppStore: ObservableObject {
                     log("Conexão recuperada — \(destination) seguro e nenhuma nova ação será enviada")
                     logSessionSummary(mode: mode, outcome: "RECONEXÃO SEGURA")
                     finishContinuedProcessing(success: false, reason: "conexão recuperada com saída segura")
-                case .dunesCheckpoint:
-                    // runDunesCheckpointed consumes this internal reason and
-                    // continues through the bank. Reaching the terminal handler
-                    // would indicate that orchestration ended unexpectedly.
-                    statusMessage = "Checkpoint Dunes encerrou antes da retomada"
-                    stats.lastEvent = "checkpoint adaptativo interrompido"
-                    log("⚠️ Checkpoint adaptativo chegou ao encerramento da sessão sem retomar a coleta")
-                    logSessionSummary(mode: mode, outcome: "CHECKPOINT INTERROMPIDO")
-                    finishContinuedProcessing(success: false, reason: "checkpoint adaptativo interrompido")
                 case .dunesHeatSafety:
                     statusMessage = "Proteção térmica • The Shores + sobrevivência confirmadas"
                     stats.lastEvent = "saída térmica sobrevivida"
@@ -2113,9 +2094,9 @@ final class AppStore: ObservableObject {
             updateContinuedProcessingProgress(forceTitleUpdate: true)
 
         case .gatherSuccess(let detail, let absolute):
-            // Build 78 checkpoint phases use independent engines. Absolute gather
+            // Build 77 checkpoint phases use independent engines. Absolute gather
             // progress makes delayed MainActor delivery idempotent: a success from
-            // the previous phase can never increment the global total twice.
+            // the previous 10-node phase can never increment the global total twice.
             stats.successes = max(stats.successes, absolute)
             continuedProgressSubunit = 0
             stats.lastEvent = detail ?? "sucesso de coleta"
