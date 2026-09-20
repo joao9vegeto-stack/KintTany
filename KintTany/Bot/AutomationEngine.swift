@@ -26,7 +26,6 @@ enum EngineStopReason: Equatable {
     case user
     case backgroundExpiration
     case connectionLoss
-    case dunesCheckpoint
     case dunesHeatSafety
     case dunesDangerSafety
 }
@@ -245,18 +244,15 @@ struct WildGroundBagPolicy {
 }
 
 struct GatherTimingPolicy {
-    /// Build 81: o perfil do navegador é uma timeline, não uma sequência de
-    /// sleeps. Em background o scheduler pode acordar 300-600 ms atrasado.
-    /// Somar esse atraso a cada frame estica um gesto de ~500 ms para vários
-    /// segundos e o servidor deixa de correlacionar proof/wear. Usamos deadline
-    /// absoluto: frames já vencidos são descartados, nunca enviados em rajada.
+    /// Preserve the captured browser profile with relative spacing. If iOS
+    /// wakes a frame late in background, the next delay starts from that real
+    /// wake-up: no frame is abandoned and no backlog is sent as a burst.
     static let treeProfileWindowMS = 500
     static let minimumTreeFrameGapMS = 35
     static let mineFrameGapMS = 65
     static let delayedFrameDiagnosticThresholdMS = 220
     static let timingDiagnosticCooldownMS: Double = 5_000
     static let eventGraceMS = 420
-    static let maximumLateFrameMS = 130
 
     static func treeFrameGapMS(frameCount: Int) -> Int {
         let intervals = max(1, frameCount - 1)
@@ -264,18 +260,6 @@ struct GatherTimingPolicy {
         return max(minimumTreeFrameGapMS, min(90, browserGap))
     }
 
-    static func frameDecision(elapsedMS: Int, intendedOffsetMS: Int) -> GatherFrameDecision {
-        let remaining = intendedOffsetMS - elapsedMS
-        if remaining > 0 { return .wait(remaining) }
-        let lateness = -remaining
-        return lateness > maximumLateFrameMS ? .drop(lateness) : .send(lateness)
-    }
-}
-
-enum GatherFrameDecision: Equatable {
-    case wait(Int)
-    case send(Int)
-    case drop(Int)
 }
 
 /// Build 72: fluxo capturado do cliente oficial em 17/09/2026. O banco não é
@@ -523,7 +507,7 @@ struct DunesSnapshotHPPolicy {
 }
 
 struct DunesHeatSafetyPolicy {
-    /// Dunes are full-loot and Giant Scorpion/PvP damage can arrive
+    /// Build 77: Dunes are full-loot and Giant Scorpion/PvP damage can arrive
     /// on top of heat. At 70 HP we either confirm one Health Potion+ recovery
     /// or stop gathering immediately and leave for The Shores.
     static let minimumSafeHP = 70
@@ -1639,7 +1623,6 @@ actor AutomationEngine {
         case .user: label = "usuário"
         case .backgroundExpiration: label = "encerramento externo de Continued Processing"
         case .connectionLoss: label = "queda de conexão"
-        case .dunesCheckpoint: label = "checkpoint adaptativo das Dunes"
         case .dunesHeatSafety: label = "proteção contra calor das Dunes"
         case .dunesDangerSafety: label = "dano não-térmico detectado nas Dunes"
         }
@@ -2269,7 +2252,6 @@ actor AutomationEngine {
         guard try await waitForRegion(targetRegion, timeoutMS: 6_000) else {
             throw EngineError.regionNotConfirmed(targetRegion)
         }
-        let dunesExposureStartedAtMS = mode.isDunesGathering ? nowMS : nil
         if mode.isDunesGathering {
             // Never start a full-loot harvest from an unverified/local HP value.
             // Wait briefly for an own-player snapshot/pvit from this Dunes Presence.
@@ -2290,8 +2272,8 @@ actor AutomationEngine {
                 throw EngineError.gatherLoadoutNotReady("identidade física da ferramenta das Dunes")
             }
             reporter(.dunesExposure(tool: exposedTool, lifeEpoch: lifeEpoch))
-            reporter(.diagnostic("[DUNES][SAFETY] proteção Build 78 iniciada • HP autoritativo base=\(dunesHeatBaselineHP) • 1 HP/10s conservador • limite=\(DunesHeatSafetyPolicy.minimumSafeHP) • lifeEpoch=\(lifeEpoch)"))
-            reporter(.log("❤️‍🔥 Proteção Dunes Build 78 • limite efetivo=\(DunesHeatSafetyPolicy.minimumSafeHP) HP • dano não-térmico força saída • checkpoint em até \(DunesCheckpointPolicy.successInterval) sucessos ou 180s"))
+            reporter(.diagnostic("[DUNES][SAFETY] proteção Build 77 iniciada • HP autoritativo base=\(dunesHeatBaselineHP) • 1 HP/10s conservador • limite=\(DunesHeatSafetyPolicy.minimumSafeHP) • lifeEpoch=\(lifeEpoch)"))
+            reporter(.log("❤️‍🔥 Proteção Dunes Build 77 • limite efetivo=\(DunesHeatSafetyPolicy.minimumSafeHP) HP • dano não-térmico força saída • checkpoints a cada 10 sucessos"))
             if try await enforceDunesHeatSafetyIfNeeded(mode: mode) == false {
                 try await exitDunesToShores(reason: "proteção contra calor")
                 safeStopCompleted = true
@@ -2335,13 +2317,6 @@ actor AutomationEngine {
             try Task.checkCancellation()
             if safeStopReason != nil { break }
             if try await enforceDunesHeatSafetyIfNeeded(mode: mode) == false { break }
-            if let dunesExposureStartedAtMS,
-               DunesCheckpointPolicy.exposureLimitReached(startedAtMS: dunesExposureStartedAtMS, nowMS: nowMS) {
-                safeStopReason = .dunesCheckpoint
-                reporter(.state(.recovering, "Checkpoint por tempo • saindo das Dunes"))
-                reporter(.log("⏱️ Dunes • 180s de exposição atingidos com \(successes)/\(goal) sucessos no lote • saindo para The Shores e protegendo recursos"))
-                break
-            }
             reporter(.state(.searching, "Procurando \(mode.displayName.lowercased())"))
 
             guard let seed = selectGatherSeed(for: mode) else {
@@ -2458,19 +2433,14 @@ actor AutomationEngine {
                 recordGatherRecovery(proofMiss: result.pureProofMiss)
                 if result.pureProofMiss {
                     gatherRetryPolicy.deferProofMiss(signature: seed.signature, nowMS: nowMS)
-                    reporter(.state(.recovering, "Trocando alvo"))
-                    reporter(.log("🟡 \(mode.displayName) \(seed.targetKey) • proof não estabilizou • alvo adiado 30s • nenhuma falha contabilizada"))
-                } else if result.reason == "stalled_no_progress" {
-                    let deferMS = gatherRetryPolicy.deferStalledPartial(signature: seed.signature, nowMS: nowMS)
-                    let seconds = Int((deferMS / 1_000).rounded())
-                    reporter(.state(.recovering, "Trocando alvo"))
-                    reporter(.log("⏭️ \(mode.displayName) \(seed.targetKey) • sem avanço h=\(result.h)/\(result.hm) • alvo adiado \(seconds)s • nenhuma falha contabilizada"))
+                    reporter(.state(.recovering, "Sincronizando recurso"))
+                    reporter(.log("🟡 \(mode.displayName) \(seed.targetKey) • proof ainda não aceito após recovery • alvo adiado • nenhuma falha contabilizada"))
                 } else {
                     gatherRetryPolicy.deferAcceptedPartial(signature: seed.signature, nowMS: nowMS)
-                    reporter(.state(.recovering, "Progresso salvo • trocando alvo"))
-                    reporter(.log("🔄 \(mode.displayName) \(seed.targetKey) • progresso real h=\(result.h)/\(result.hm) • alvo liberado em 4s • nenhuma falha contabilizada"))
+                    reporter(.state(.recovering, "Continuando ação aceita"))
+                    reporter(.log("🔄 \(mode.displayName) \(seed.targetKey) • progresso aceito h=\(result.h)/\(result.hm) • continuará em novo ciclo • nenhuma falha contabilizada"))
                 }
-                try await sleep(180)
+                try await sleep(350)
                 continue
             }
 
@@ -2489,7 +2459,6 @@ actor AutomationEngine {
         if mode.isDunesGathering {
             let reason: String
             switch safeStopReason {
-            case .dunesCheckpoint: reason = "checkpoint por 180s de exposição"
             case .dunesHeatSafety: reason = "proteção térmica"
             case .dunesDangerSafety: reason = "dano não-térmico / risco externo"
             case .backgroundExpiration: reason = "encerramento externo"
@@ -2717,71 +2686,59 @@ actor AutomationEngine {
     private func harvestWithRecovery(seed: GatherSeed, mode: ActivityMode) async throws -> HarvestResult {
         var merged = try await harvest(seed: seed, mode: mode, handshakeTries: 4)
 
-        // Build 80: proof miss recebe somente uma ressincronização curta e, se
-        // necessário, um único probe adjacente. Não percorremos várias posições
-        // de um alvo ruim enquanto outros recursos estão disponíveis.
+        // v7.7: um proof miss puro é primeiro tratado como problema de sincronização,
+        // não como falha do usuário. Reenvia a mesma posição, espera refresh e tenta
+        // novamente antes de abandonar a geometria que acabou de ser usada.
         if merged.pureProofMiss {
             recordGatherRecovery(proofMiss: true)
-            reporter(.diagnostic("[GATHER] proof miss • resync curto na mesma posição • \(seed.targetKey)"))
+            reporter(.diagnostic("[GATHER] proof miss • same-position event resync 900ms • \(seed.targetKey)"))
             let eventBefore = await gatherEventGate.serial
             position.y = 0.25
             try await sendPosition(moving: false, full: true)
-            _ = try await gatherEventGate.wait(after: eventBefore, timeoutMS: 650)
+            _ = try await gatherEventGate.wait(after: eventBefore, timeoutMS: 900)
             try await equip(activeGatherToolType ?? ActivityToolPolicy.requiredTool(for: mode) ?? (seed.kind == "tree" ? "tool_axe" : "tool_pickaxe"))
-            let retry = try await harvest(seed: seed, mode: mode, handshakeTries: 1, maxDamageHits: 1)
+            let retry = try await harvest(seed: seed, mode: mode, handshakeTries: 2)
             merged = merged.merging(retry)
         }
 
+        // v7.7: se a mesma posição ainda não obtiver proof, percorre somente células
+        // cardinais canônicas adjacentes ao footprint real do recurso. Nenhum ponto
+        // arbitrário é inventado.
         if merged.pureProofMiss {
             let candidates = canonicalGatherRecoveryPositions(for: seed)
-            if let candidate = candidates.min(by: {
-                hypot(position.x - $0.x, position.z - $0.z) < hypot(position.x - $1.x, position.z - $1.z)
-            }), hypot(position.x - candidate.x, position.z - candidate.z) >= 0.25 {
+            for (index, candidate) in candidates.enumerated() {
                 try Task.checkCancellation()
+                if hypot(position.x - candidate.x, position.z - candidate.z) < 0.25 { continue }
                 recordGatherRecovery(proofMiss: true)
-                reporter(.diagnostic("[GATHER] proof miss • único probe adjacente • \(seed.targetKey) • x=\(format(candidate.x)) z=\(format(candidate.z))"))
-                try await walk(to: candidate, maxSeconds: 8, status: "Reposicionando para \(mode.displayName) \(seed.targetKey)")
+                reporter(.diagnostic("[GATHER] recovery adjacent \(index + 1)/\(candidates.count) • \(seed.targetKey) • x=\(format(candidate.x)) z=\(format(candidate.z))"))
+                try await walk(to: candidate, maxSeconds: 18, status: "Reposicionando para \(mode.displayName) \(seed.targetKey)")
                 position.ry = candidate.ry
                 try await sendPosition(moving: false)
-                let probe = try await harvest(seed: seed, mode: mode, handshakeTries: 1, maxDamageHits: 1)
+                let probe = try await harvest(seed: seed, mode: mode, handshakeTries: 2)
                 merged = merged.merging(probe)
+                if !probe.pureProofMiss { break }
             }
         }
 
-        // Build 80: progresso aceito ganha uma única continuidade curta.
-        // Se h/hm não avançar, o alvo é marcado como stalled e o loop principal
-        // o coloca em quarentena exponencial em vez de gastar dezenas de segundos.
-        if !merged.felled, merged.accepted {
+        // v7.7 accepted-continuation: se o servidor já aceitou proof/wear parcial,
+        // uma ausência transitória do próximo ACK não transforma a ação em falha.
+        var continuation = 0
+        while !merged.felled, merged.accepted, continuation < 3 {
             try Task.checkCancellation()
-            let beforeH = merged.h
-            let beforeHM = merged.hm
+            continuation += 1
             recordGatherRecovery()
-            reporter(.diagnostic("[GATHER] recovery curto • \(seed.targetKey) • h=\(beforeH)/\(beforeHM)"))
-            try await sleep(70)
-            let next = try await harvest(seed: seed, mode: mode, handshakeTries: 1, maxDamageHits: 1)
-            let madeProgress = next.felled ||
-                next.h > beforeH ||
-                (beforeHM >= 99 && next.hm < 99)
+            reporter(.diagnostic("[GATHER] recovery accepted • \(seed.targetKey) • continuidade \(continuation)/3 • h=\(merged.h)/\(merged.hm)"))
+            try await sleep(90)
+            let next = try await harvest(seed: seed, mode: mode, handshakeTries: 2)
             merged = merged.merging(next)
-
-            if !merged.felled, !madeProgress {
-                reporter(.diagnostic("[GATHER] alvo stalled • \(seed.targetKey) • sem avanço após probe curto • h=\(merged.h)/\(merged.hm)"))
-                return HarvestResult(
-                    felled: false,
-                    h: merged.h,
-                    hm: merged.hm,
-                    loot: merged.loot,
-                    reason: "stalled_no_progress",
-                    accepted: true,
-                    proofMiss: false
-                )
-            }
+            if merged.felled { break }
+            if !next.accepted && !next.pureProofMiss { break }
         }
 
         return merged
     }
 
-    private func harvest(seed: GatherSeed, mode: ActivityMode, handshakeTries: Int, maxDamageHits: Int = 12) async throws -> HarvestResult {
+    private func harvest(seed: GatherSeed, mode: ActivityMode, handshakeTries: Int) async throws -> HarvestResult {
         let kind = seed.kind
         currentGatherSignature = seed.signature
         currentGatherKind = kind
@@ -2819,34 +2776,21 @@ actor AutomationEngine {
 
         func sendProfile(_ second: Bool, progressive: Bool) async throws {
             if safeStopReason != nil { return }
-            let profileStartedAt = nowMS
             var maxSchedulerDelayMS = 0
-            var droppedFrames = 0
 
-            func shouldSendFrame(index: Int, gapMS: Int) async throws -> Bool {
-                let intendedOffset = index * gapMS
-                while true {
-                    let elapsed = max(0, Int((nowMS - profileStartedAt).rounded()))
-                    switch GatherTimingPolicy.frameDecision(elapsedMS: elapsed, intendedOffsetMS: intendedOffset) {
-                    case .wait(let delay):
-                        try await sleep(delay)
-                    case .send(let lateness):
-                        maxSchedulerDelayMS = max(maxSchedulerDelayMS, lateness)
-                        return true
-                    case .drop(let lateness):
-                        maxSchedulerDelayMS = max(maxSchedulerDelayMS, lateness)
-                        droppedFrames += 1
-                        return false
-                    }
-                }
+            func waitRelative(_ intendedMS: Int) async throws {
+                let before = nowMS
+                try await sleep(intendedMS)
+                let actualMS = max(0, Int((nowMS - before).rounded()))
+                maxSchedulerDelayMS = max(maxSchedulerDelayMS, max(0, actualMS - intendedMS))
             }
 
             if kind == "tree" {
                 let profile = second ? Self.treeY2 : Self.treeY1
                 let gap = GatherTimingPolicy.treeFrameGapMS(frameCount: profile.count)
                 for (index, delta) in profile.enumerated() {
+                    if index > 0 { try await waitRelative(gap) }
                     guard try await maySendGatherAction(for: mode) else { return }
-                    guard try await shouldSendFrame(index: index, gapMS: gap) else { continue }
                     position.y = 0.25 + delta
                     try await sendPosition(moving: false, action: ["act": "chop", "eq": tool])
                 }
@@ -2860,8 +2804,8 @@ actor AutomationEngine {
                     let next = min(1, Double(harvestH + 1) / Double(max(1, estimatedHM)) + min(0.010, 0.06 / Double(max(1, estimatedHM))))
                     let shapeMax = Self.mineMP1.last ?? 1
                     for index in Self.mineMP1.indices {
+                        if index > 0 { try await waitRelative(GatherTimingPolicy.mineFrameGapMS) }
                         guard try await maySendGatherAction(for: mode) else { return }
-                        guard try await shouldSendFrame(index: index, gapMS: GatherTimingPolicy.mineFrameGapMS) else { continue }
                         let shape = Self.mineMP1[index] / shapeMax
                         let value = min(1, mineProgress + max(0, next - mineProgress) * shape)
                         position.y = 0.25 + Self.mineY1[index]
@@ -2870,8 +2814,8 @@ actor AutomationEngine {
                     }
                 } else {
                     for index in mpProfile.indices {
+                        if index > 0 { try await waitRelative(GatherTimingPolicy.mineFrameGapMS) }
                         guard try await maySendGatherAction(for: mode) else { return }
-                        guard try await shouldSendFrame(index: index, gapMS: GatherTimingPolicy.mineFrameGapMS) else { continue }
                         mineProgress = max(mineProgress, mpProfile[index])
                         position.y = 0.25 + yProfile[index % yProfile.count]
                         try await sendPosition(moving: false, action: ["act": "mine", "eq": tool, "mc": tile.0, "mr": tile.1, "mp": mineProgress])
@@ -2882,7 +2826,7 @@ actor AutomationEngine {
             if maxSchedulerDelayMS >= GatherTimingPolicy.delayedFrameDiagnosticThresholdMS,
                gatherLastTimingDiagnosticAt == 0 || nowMS - gatherLastTimingDiagnosticAt >= GatherTimingPolicy.timingDiagnosticCooldownMS {
                 gatherLastTimingDiagnosticAt = nowMS
-                reporter(.diagnostic("[GATHER][TIMING] scheduler atrasou até \(maxSchedulerDelayMS)ms • timeline absoluta • frames vencidos descartados=\(droppedFrames) • nenhuma rajada enviada"))
+                reporter(.diagnostic("[GATHER][TIMING] scheduler atrasou até \(maxSchedulerDelayMS)ms • perfil preservado com espaçamento relativo • nenhuma rajada enviada"))
             }
         }
 
@@ -2925,11 +2869,9 @@ actor AutomationEngine {
 
             if let final = inspect() { return final }
 
-            // Build 81: proof e wear podem chegar separados e, em BG, a task
-            // pode voltar depois do deadline nominal. O estado autoritativo já
-            // ingerido sempre vence o relógio. Se apenas metade chegou, damos
-            // uma janela dirigida por evento; se o scheduler atrasar de novo,
-            // fazemos uma última leitura antes de declarar timeout.
+            // Proof e wear podem chegar em mensagens separadas. Em vez de polling
+            // de 20 ms (sensível ao scheduler em background), aguarde diretamente
+            // o próximo evento autoritativo por uma pequena janela.
             let hasHalfAck = (harvestProofSerial > proofBefore && !harvestProof.isEmpty) ||
                 (harvestWearSerial > wearBefore || harvestH > hBefore)
             if hasHalfAck {
@@ -2940,8 +2882,7 @@ actor AutomationEngine {
                 )
                 if let graceState = inspect() { return graceState }
             }
-            try Task.checkCancellation()
-            return inspect() ?? .timeout
+            return .timeout
         }
 
         var handshake: HarvestAck = harvestProof.isEmpty ? .timeout : .accepted
@@ -2998,7 +2939,7 @@ actor AutomationEngine {
         }
 
         reporter(.state(.acting, kind == "tree" ? "Cortando" : "Minerando"))
-        while damageHits < max(1, maxDamageHits), !(harvestHM < 99 && harvestH >= harvestHM) {
+        while damageHits < 12, !(harvestHM < 99 && harvestH >= harvestHM) {
             try Task.checkCancellation()
             guard try await maySendGatherAction(for: mode) else { break }
             guard !harvestProof.isEmpty else { break }
@@ -3377,9 +3318,9 @@ actor AutomationEngine {
                 seed.keys.allSatisfy { (cooldownUntil["\(seed.kind):\($0)"] ?? 0) <= now }
             }
             .min { a, b in
-                // Build 80: retries nunca furam a fila. Entre alvos elegíveis,
-                // escolha apenas pela proximidade; alvos problemáticos permanecem
-                // fora da seleção enquanto estiverem em defer/quarentena.
+                let retryA = gatherRetryPolicy.hasRetryPriority(signature: a.signature) ? 0 : 1
+                let retryB = gatherRetryPolicy.hasRetryPriority(signature: b.signature) ? 0 : 1
+                if retryA != retryB { return retryA < retryB }
                 let pa = gatherPositionMemory[a.signature] ?? a.position
                 let pb = gatherPositionMemory[b.signature] ?? b.position
                 return distance(from: position, to: pa) < distance(from: position, to: pb)
@@ -6534,16 +6475,10 @@ private struct HarvestResult {
 struct GatherRetryPolicy {
     private(set) var retryStreaks: [String: Int] = [:]
     private(set) var deferredUntil: [String: Double] = [:]
-    private(set) var stalledPartialCounts: [String: Int] = [:]
 
     let maxSameTargetRetries = 3
-    // Build 80: recovery deve proteger produtividade. Um alvo sem proof ou sem
-    // avanço não volta imediatamente para o topo da fila quando há dezenas de
-    // recursos disponíveis.
-    let proofMissDeferMS: Double = 30_000
-    let acceptedPartialDeferMS: Double = 4_000
-    let stalledPartialBaseDeferMS: Double = 30_000
-    let stalledPartialMaxDeferMS: Double = 120_000
+    let proofMissDeferMS: Double = 10_000
+    let acceptedPartialDeferMS: Double = 1_200
     let realFailureCooldownMS: Double = 8_000
     let repeatedFailureDeferMS: Double = 10_000
 
@@ -6561,7 +6496,6 @@ struct GatherRetryPolicy {
 
     mutating func markSuccess(signature: String) {
         retryStreaks.removeValue(forKey: signature)
-        stalledPartialCounts.removeValue(forKey: signature)
         deferredUntil.removeValue(forKey: signature)
     }
 
@@ -6571,23 +6505,8 @@ struct GatherRetryPolicy {
     }
 
     mutating func deferAcceptedPartial(signature: String, nowMS: Double) {
-        // Progresso parcial real continua válido, mas não recebe prioridade
-        // absoluta sobre alvos novos. Após poucos segundos pode ser revisitado
-        // naturalmente pela distância.
-        retryStreaks.removeValue(forKey: signature)
-        stalledPartialCounts.removeValue(forKey: signature)
+        retryStreaks[signature] = 1
         deferredUntil[signature] = nowMS + acceptedPartialDeferMS
-    }
-
-    @discardableResult
-    mutating func deferStalledPartial(signature: String, nowMS: Double) -> Double {
-        retryStreaks.removeValue(forKey: signature)
-        let count = min(3, (stalledPartialCounts[signature] ?? 0) + 1)
-        stalledPartialCounts[signature] = count
-        let multiplier = Double(1 << (count - 1))
-        let delay = min(stalledPartialMaxDeferMS, stalledPartialBaseDeferMS * multiplier)
-        deferredUntil[signature] = nowMS + delay
-        return delay
     }
 
     @discardableResult
