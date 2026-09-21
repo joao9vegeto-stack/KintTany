@@ -1111,6 +1111,10 @@ final class RealtimeProtocolTests: XCTestCase {
         )
     }
 
+    func testBuild96PresenceReceiveFastPathAvoidsRawPayloadWork() {
+        XCTAssertFalse(PresenceReceivePolicy.traceRawInboundPayload)
+    }
+
     func testBuild77DunesUnexpectedDamageIsSeparatedFromHeatProjection() {
         XCTAssertFalse(DunesDamageSafetyPolicy.isUnexpectedDamage(observedHP: 96, conservativeHP: 99))
         XCTAssertFalse(DunesDamageSafetyPolicy.isUnexpectedDamage(observedHP: 95, conservativeHP: 99))
