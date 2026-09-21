@@ -279,6 +279,24 @@ struct CharacterSkillStats: Equatable {
         Self.progressWithinLevel(fromTotalXP: totalXP(for: skill))
     }
 
+    /// XP conquistado desde o início do nível atual.
+    func currentLevelXP(for skill: CharacterSkill) -> Int {
+        let total = totalXP(for: skill)
+        let level = level(for: skill)
+        guard level < Self.maxLevel else { return 0 }
+        let lower = Self.xpThreshold(forLevelIndex: level - 1)
+        return max(0, Int(floor(Double(total) - lower)))
+    }
+
+    /// Quantidade de XP necessária para atravessar o nível atual.
+    func currentLevelXPGoal(for skill: CharacterSkill) -> Int {
+        let level = level(for: skill)
+        guard level < Self.maxLevel else { return 0 }
+        let lower = Self.xpThreshold(forLevelIndex: level - 1)
+        let upper = Self.xpThreshold(forLevelIndex: level)
+        return max(1, Int(ceil(upper - lower)))
+    }
+
     var totalLevel: Int {
         let precise = Self.totalLevelSkills.reduce(0.0) { partial, skill in
             partial + Self.preciseLevel(fromTotalXP: totalXP(for: skill))
