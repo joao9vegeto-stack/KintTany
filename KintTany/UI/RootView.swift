@@ -145,9 +145,8 @@ struct RootView: View {
                         }
                     }
                 }
-                .frame(width: 132, height: 154)
-                .clipShape(RoundedRectangle(cornerRadius: 18, style: .continuous))
-                .overlay(RoundedRectangle(cornerRadius: 18).stroke(.cyan.opacity(0.20), lineWidth: 1))
+                .frame(width: 150, height: 172)
+                .contentShape(Rectangle())
 
                 VStack(alignment: .leading, spacing: 8) {
                     Text(app.characterProfile.displayName)
@@ -695,12 +694,25 @@ private struct CharacterInteractiveView: UIViewRepresentable {
               const host = document.querySelector('#kintara-dash-outfit-letter');
               const canvas = host && host.querySelector('canvas');
               if (!host || !canvas) return false;
+              const renderer = window.__kintaraOutfitRenderer || window.kintaraOutfitRenderer || host.__renderer || canvas.__renderer || null;
               document.documentElement.style.cssText = 'margin:0!important;padding:0!important;background:transparent!important;overflow:hidden!important;';
               document.body.style.cssText = 'margin:0!important;padding:0!important;background:transparent!important;overflow:hidden!important;';
               [...document.body.children].forEach((el) => { if (el !== host && !el.contains(host)) el.style.display='none'; });
-              host.style.cssText = 'position:fixed!important;inset:0!important;width:100vw!important;height:100vh!important;margin:0!important;padding:0!important;background:transparent!important;display:block!important;overflow:hidden!important;';
-              canvas.style.cssText += ';width:100%!important;height:100%!important;max-width:none!important;max-height:none!important;touch-action:none!important;cursor:grab!important;';
+              host.style.cssText = 'position:fixed!important;inset:-18%!important;width:136vw!important;height:136vh!important;margin:0!important;padding:0!important;background:transparent!important;display:block!important;overflow:visible!important;border:0!important;box-shadow:none!important;';
+              canvas.style.cssText += ';width:100%!important;height:100%!important;max-width:none!important;max-height:none!important;touch-action:none!important;cursor:grab!important;background:transparent!important;';
               canvas.setAttribute('aria-label','Personagem 3D. Arraste para girar.');
+              let dragging=false,lastX=0;
+              const rotate=(dx)=>{
+                try {
+                  if (renderer && typeof renderer.rotate === 'function') renderer.rotate(dx * 0.012);
+                  else if (renderer && renderer.model) renderer.model.rotation.y += dx * 0.012;
+                  else window.postMessage({t:'kintara_outfit_rotate', deltaX:dx}, '*');
+                } catch (_) {}
+              };
+              canvas.addEventListener('pointerdown',(e)=>{dragging=true;lastX=e.clientX;canvas.setPointerCapture?.(e.pointerId);e.preventDefault();},{passive:false});
+              canvas.addEventListener('pointermove',(e)=>{if(!dragging)return;const dx=e.clientX-lastX;lastX=e.clientX;rotate(dx);e.preventDefault();},{passive:false});
+              canvas.addEventListener('pointerup',(e)=>{dragging=false;canvas.releasePointerCapture?.(e.pointerId);e.preventDefault();},{passive:false});
+              canvas.addEventListener('pointercancel',()=>{dragging=false;});
               return true;
             })();
             """
