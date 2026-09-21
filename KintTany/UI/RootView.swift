@@ -145,7 +145,7 @@ struct RootView: View {
                         }
                     }
                 }
-                .frame(width: 150, height: 172)
+                .frame(width: 176, height: 190)
                 .contentShape(Rectangle())
 
                 VStack(alignment: .leading, spacing: 8) {
@@ -698,7 +698,7 @@ private struct CharacterInteractiveView: UIViewRepresentable {
               document.documentElement.style.cssText = 'margin:0!important;padding:0!important;background:transparent!important;overflow:hidden!important;';
               document.body.style.cssText = 'margin:0!important;padding:0!important;background:transparent!important;overflow:hidden!important;';
               [...document.body.children].forEach((el) => { if (el !== host && !el.contains(host)) el.style.display='none'; });
-              host.style.cssText = 'position:fixed!important;inset:-18%!important;width:136vw!important;height:136vh!important;margin:0!important;padding:0!important;background:transparent!important;display:block!important;overflow:visible!important;border:0!important;box-shadow:none!important;';
+              host.style.cssText = 'position:fixed!important;left:-42vw!important;top:-34vh!important;width:184vw!important;height:184vh!important;margin:0!important;padding:0!important;background:transparent!important;display:block!important;overflow:visible!important;border:0!important;box-shadow:none!important;';
               canvas.style.cssText += ';width:100%!important;height:100%!important;max-width:none!important;max-height:none!important;touch-action:none!important;cursor:grab!important;background:transparent!important;';
               canvas.setAttribute('aria-label','Personagem 3D. Arraste para girar.');
               let dragging=false,lastX=0;
@@ -713,6 +713,10 @@ private struct CharacterInteractiveView: UIViewRepresentable {
               canvas.addEventListener('pointermove',(e)=>{if(!dragging)return;const dx=e.clientX-lastX;lastX=e.clientX;rotate(dx);e.preventDefault();},{passive:false});
               canvas.addEventListener('pointerup',(e)=>{dragging=false;canvas.releasePointerCapture?.(e.pointerId);e.preventDefault();},{passive:false});
               canvas.addEventListener('pointercancel',()=>{dragging=false;});
+              let touchX=null;
+              canvas.addEventListener('touchstart',(e)=>{if(!e.touches.length)return;touchX=e.touches[0].clientX;e.preventDefault();},{passive:false});
+              canvas.addEventListener('touchmove',(e)=>{if(touchX===null||!e.touches.length)return;const x=e.touches[0].clientX;rotate(x-touchX);touchX=x;e.preventDefault();},{passive:false});
+              canvas.addEventListener('touchend',(e)=>{touchX=null;e.preventDefault();},{passive:false});
               return true;
             })();
             """
