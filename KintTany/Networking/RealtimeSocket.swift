@@ -23,6 +23,13 @@ struct ServerGatePolicy {
     }
 }
 
+struct PresenceReceivePolicy {
+    /// Build 96: Presence is the latency-critical path. The engine already emits
+    /// structured protocol diagnostics, so serializing/redacting every raw inbound
+    /// frame before delivery only burns the scarce BG execution budget.
+    static let traceRawInboundPayload = false
+}
+
 actor RealtimeSocket {
     private struct ServerCandidate {
         let id: Int
@@ -233,7 +240,11 @@ actor RealtimeSocket {
             let presence = try await open(path: "/ws/presence/\(shard)?kt=\(presenceToken)", label: "presence")
             task = presence
 
-            receiveLoopTask = Task { [weak self] in
+            // Build 96: keep Presence reception on an explicit high-priority,
+            // detached task. AppStore's consumer is already detached/userInitiated;
+            // doing the same at the socket edge prevents a BG caller's inherited
+            // priority from becoming the bottleneck before AsyncStream delivery.
+            receiveLoopTask = Task.detached(priority: .userInitiated) { [weak self] in
                 await self?.receiveLoop(presence, connectionID: currentConnectionID)
             }
 
@@ -615,8 +626,14 @@ actor RealtimeSocket {
                     trace("[WARN] Presence recebeu mensagem sem payload utilizável")
                     continue
                 }
-                tracePayload(direction: "IN presence", data: data)
+                // Deliver first. Raw Presence tracing used to run regex redaction
+                // synchronously here, before the authoritative event could reach the
+                // AutomationEngine. Under prolonged iOS BG throttling that work can
+                // amplify receive latency and build a packet backlog.
                 continuation?.yield(data)
+                if PresenceReceivePolicy.traceRawInboundPayload {
+                    tracePayload(direction: "IN presence", data: data)
+                }
             } catch {
                 if !closed {
                     lastDisconnectReason = error.localizedDescription
