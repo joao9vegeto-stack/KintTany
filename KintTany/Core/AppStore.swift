@@ -730,6 +730,90 @@ final class AppStore: ObservableObject {
         finishContinuedProcessing(success: false, reason: "morte detectada durante saída das Dunes")
     }
 
+    /// Trout can enter a server-side state where every valid cell across several
+    /// authoritative spots stops producing fish_bite. Recreate only the activity
+    /// Presence on the same shard; rod/bait stay carried, so World/bank preflight
+    /// is intentionally NOT repeated. Progress is accumulated across Presences.
+    private func runFishingWithPresenceRecovery(
+        mode: ActivityMode,
+        runID: UUID,
+        shard: String,
+        cookie: String,
+        initialEngine: AutomationEngine,
+        runGoal: Int
+    ) async throws -> EngineRunResult {
+        var phaseEngine = initialEngine
+        var completedBeforePhase = stats.successes
+        var recoveries = 0
+
+        while completedBeforePhase < runGoal {
+            guard activeRunID == runID, activity == mode, !terminalFailureHandled else { throw CancellationError() }
+            let remaining = max(1, runGoal - completedBeforePhase)
+            do {
+                let engineForPhase = phaseEngine
+                let child = Task.detached(priority: .userInitiated) {
+                    try await engineForPhase.run(mode: mode, goal: remaining)
+                }
+                engineRunTask = child
+                let phaseResult = try await child.value
+                engineRunTask = nil
+                await importSocketTrace()
+                await Task.yield()
+                guard activeRunID == runID, activity == mode else { throw CancellationError() }
+                let total = max(stats.successes, completedBeforePhase + phaseResult.successes)
+                stats.successes = total
+                return EngineRunResult(
+                    successes: total,
+                    completedGoal: total >= runGoal,
+                    stoppedSafely: phaseResult.stoppedSafely,
+                    stopReason: phaseResult.stopReason
+                )
+            } catch let EngineError.fishingPresenceStalled(phaseSuccesses) {
+                engineRunTask = nil
+                recoveries += 1
+                completedBeforePhase = max(stats.successes, completedBeforePhase + phaseSuccesses)
+                stats.successes = completedBeforePhase
+                updateContinuedProcessingProgress(forceTitleUpdate: true)
+                log("🔄 Trout • Presence sem fish_bite global • progresso \(completedBeforePhase)/\(runGoal) preservado • recovery #\(recoveries)")
+
+                guard recoveries <= 6 else {
+                    throw EngineError.fishingPresenceStalled(successes: completedBeforePhase)
+                }
+                receiverTask?.cancel()
+                receiverTask = nil
+                activeEngine = nil
+                connected = false
+                await socket.close()
+                await importSocketTrace()
+                guard activeRunID == runID, activity == mode else { throw CancellationError() }
+
+                let bootstrap = AutomationEngine.bootstrap(for: mode, fishingBait: selectedFishingBait)
+                state = .connecting
+                statusMessage = "Trout • renovando Presence de ElderGrove"
+                stats.lastEvent = "recovery Trout • nova Presence"
+                updateContinuedProcessingProgress(forceTitleUpdate: true)
+                let stream = try await socket.connect(session: session, shard: shard, bootstrap: bootstrap)
+                let replacement = AutomationEngine(
+                    socket: socket,
+                    cookie: cookie,
+                    shard: shard,
+                    bootstrap: bootstrap,
+                    fishingBait: selectedFishingBait,
+                    reporter: engineReporter(runID: runID)
+                )
+                phaseEngine = replacement
+                activeEngine = replacement
+                receiverTask = makeReceiverTask(stream: stream, engine: replacement, mode: mode, runID: runID)
+                connected = true
+                state = .syncing
+                statusMessage = "Trout • Presence renovada"
+                await replacement.prepareIdentity()
+                log("✅ Trout • nova Presence \(bootstrap.region) ativa no mesmo shard \(shard) • retomando em \(completedBeforePhase)/\(runGoal)")
+            }
+        }
+        return EngineRunResult(successes: completedBeforePhase, completedGoal: true, stoppedSafely: false, stopReason: nil)
+    }
+
     private func runDunesCheckpointed(
         mode: ActivityMode,
         runID: UUID,
@@ -1300,6 +1384,15 @@ final class AppStore: ObservableObject {
             let result: EngineRunResult
             if mode.isDunesGathering {
                 result = try await runDunesCheckpointed(
+                    mode: mode,
+                    runID: runID,
+                    shard: selectedShard,
+                    cookie: cookie,
+                    initialEngine: runEngine,
+                    runGoal: runGoal
+                )
+            } else if mode == .fishing, selectedFishingBait == .trout {
+                result = try await runFishingWithPresenceRecovery(
                     mode: mode,
                     runID: runID,
                     shard: selectedShard,
