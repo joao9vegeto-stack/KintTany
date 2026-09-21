@@ -241,7 +241,7 @@ enum CharacterSkill: String, CaseIterable, Identifiable {
 
     var icon: String {
         switch self {
-        case .combat: "swords"
+        case .combat: "shield.lefthalf.filled"
         case .woodcutting: "tree.fill"
         case .mining: "hammer.fill"
         case .fishing: "fish.fill"
