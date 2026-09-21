@@ -559,8 +559,14 @@ final class AppStore: ObservableObject {
         mode: ActivityMode,
         runID: UUID,
         notifyUnexpectedEnd: Bool = true
-    ) -> Task<Void, Never> {
-        Task.detached(priority: .userInitiated) { [weak self] in
+    ) async -> Task<Void, Never> {
+        if mode == .tree || mode == .coal || mode == .stone || mode == .iron || mode == .silver || mode == .cacti {
+            await startCriticalGatherReceiver(engine: engine)
+        } else {
+            criticalGatherReceiverTask?.cancel()
+            criticalGatherReceiverTask = nil
+        }
+        return Task.detached(priority: .userInitiated) { [weak self] in
             for await data in stream {
                 if Task.isCancelled { break }
                 await engine.ingest(data)
@@ -818,7 +824,7 @@ final class AppStore: ObservableObject {
                 )
                 phaseEngine = replacement
                 activeEngine = replacement
-                receiverTask = makeReceiverTask(stream: stream, engine: replacement, mode: mode, runID: runID)
+                receiverTask = await makeReceiverTask(stream: stream, engine: replacement, mode: mode, runID: runID)
                 connected = true
                 state = .syncing
                 statusMessage = "Trout • Presence renovada"
@@ -933,7 +939,7 @@ final class AppStore: ObservableObject {
                 reporter: engineReporter(runID: runID)
             )
             activeEngine = bankEngine
-            receiverTask = makeReceiverTask(stream: bankStream, engine: bankEngine, mode: mode, runID: runID)
+            receiverTask = await makeReceiverTask(stream: bankStream, engine: bankEngine, mode: mode, runID: runID)
             connected = true
             await bankEngine.prepareIdentity()
             let loadout = try await bankEngine.prepareDunesLoadoutFromWorld(for: mode)
@@ -982,7 +988,7 @@ final class AppStore: ObservableObject {
             )
             phaseEngine = activityEngine
             activeEngine = activityEngine
-            receiverTask = makeReceiverTask(
+            receiverTask = await makeReceiverTask(
                 stream: activityStream,
                 engine: activityEngine,
                 mode: mode,
@@ -1256,7 +1262,7 @@ final class AppStore: ObservableObject {
             // confirmação de bank_shop/World e os snapshots chegam pela stream
             // da fase bancária. Se houver saque, essa stream termina antes da
             // Presence definitiva da atividade.
-            receiverTask = makeReceiverTask(stream: stream, engine: engine, mode: mode, runID: runID)
+            receiverTask = await makeReceiverTask(stream: stream, engine: engine, mode: mode, runID: runID)
 
             await engine.prepareIdentity()
             guard activeRunID == runID else { return }
@@ -1303,7 +1309,7 @@ final class AppStore: ObservableObject {
                 )
                 engine = activityEngine
                 activeEngine = activityEngine
-                receiverTask = makeReceiverTask(
+                receiverTask = await makeReceiverTask(
                     stream: activityStream,
                     engine: activityEngine,
                     mode: mode,
@@ -1379,7 +1385,7 @@ final class AppStore: ObservableObject {
                 )
                 engine = activityEngine
                 activeEngine = activityEngine
-                receiverTask = makeReceiverTask(
+                receiverTask = await makeReceiverTask(
                     stream: activityStream,
                     engine: activityEngine,
                     mode: mode,
@@ -1894,7 +1900,7 @@ final class AppStore: ObservableObject {
                     reporter: engineReporter(runID: runID)
                 )
                 activeEngine = engine
-                receiverTask = makeReceiverTask(
+                receiverTask = await makeReceiverTask(
                     stream: stream,
                     engine: engine,
                     mode: mode,
@@ -2163,7 +2169,7 @@ final class AppStore: ObservableObject {
                 await recoveryEngine.prepareIdentity()
 
                 receiverTask?.cancel()
-                receiverTask = makeReceiverTask(
+                receiverTask = await makeReceiverTask(
                     stream: stream,
                     engine: recoveryEngine,
                     mode: mode,
