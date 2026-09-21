@@ -1081,6 +1081,15 @@ final class RealtimeProtocolTests: XCTestCase {
         XCTAssertTrue(DunesDamageSafetyPolicy.shouldEmergencyHeal(observedHP: 69))
     }
 
+    func testBuild93DunesWorldRecoveryRequiresFullHPBeforeReentry() {
+        XCTAssertFalse(DunesWorldRecoveryPolicy.isRecovered(hp: 69))
+        XCTAssertFalse(DunesWorldRecoveryPolicy.isRecovered(hp: 99))
+        XCTAssertTrue(DunesWorldRecoveryPolicy.isRecovered(hp: 100))
+        XCTAssertEqual(DunesWorldRecoveryPolicy.requiredHP, 100)
+        XCTAssertEqual(DunesWorldRecoveryPolicy.safePoint.x, 0.5, accuracy: 0.001)
+        XCTAssertEqual(DunesWorldRecoveryPolicy.safePoint.z, 0.5, accuracy: 0.001)
+    }
+
     func testBuild77DunesUnexpectedDamageIsSeparatedFromHeatProjection() {
         XCTAssertFalse(DunesDamageSafetyPolicy.isUnexpectedDamage(observedHP: 96, conservativeHP: 99))
         XCTAssertFalse(DunesDamageSafetyPolicy.isUnexpectedDamage(observedHP: 95, conservativeHP: 99))
