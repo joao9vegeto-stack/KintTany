@@ -1115,6 +1115,16 @@ final class RealtimeProtocolTests: XCTestCase {
         XCTAssertFalse(PresenceReceivePolicy.traceRawInboundPayload)
     }
 
+    func testBuild99PresenceUsesNetworkFrameworkTransport() {
+        XCTAssertTrue(PresenceTransportPolicy.usesNetworkFramework)
+        let proof = Data(#"{"t":"action_proof","actionId":"abc"}"#.utf8)
+        let wear = Data(#"{"t":"res_evt","h":6,"hm":10}"#.utf8)
+        let unrelated = Data(#"{"t":"pvit","hp":99}"#.utf8)
+        XCTAssertTrue(PresenceCriticalReceivePolicy.isGatherCritical(proof))
+        XCTAssertTrue(PresenceCriticalReceivePolicy.isGatherCritical(wear))
+        XCTAssertFalse(PresenceCriticalReceivePolicy.isGatherCritical(unrelated))
+    }
+
     func testBuild77DunesUnexpectedDamageIsSeparatedFromHeatProjection() {
         XCTAssertFalse(DunesDamageSafetyPolicy.isUnexpectedDamage(observedHP: 96, conservativeHP: 99))
         XCTAssertFalse(DunesDamageSafetyPolicy.isUnexpectedDamage(observedHP: 95, conservativeHP: 99))
