@@ -339,6 +339,38 @@ struct CharacterSkillStats: Equatable {
     }
 }
 
+struct DailyQuest: Identifiable, Equatable {
+    let id: String
+    let kind: String
+    let label: String
+    let target: Int
+    let progress: Int
+    let claimed: Bool
+    let rewardXpSkill: String?
+    let rewardXpAmount: Int
+    let rewardXpSpreadTotal: Int
+    let rewardXpAll: Bool
+    let rewards: [String]
+    let rewardBadges: [String]
+
+    var isComplete: Bool { progress >= target }
+    var progressFraction: Double { min(1, Double(progress) / Double(max(1, target))) }
+
+    var rewardSummary: String {
+        var parts: [String] = []
+        if let skill = rewardXpSkill, rewardXpAmount > 0 {
+            let names = ["combat":"Combate","woodcutting":"Madeira","mining":"Mineração","fishing":"Pesca","cooking":"Culinária","smithing":"Ferraria"]
+            parts.append("+\(rewardXpAmount) \(names[skill] ?? skill) XP")
+        } else if rewardXpAll {
+            parts.append("Quarter XP (todas as skills)")
+        }
+        if rewardXpSpreadTotal > 0 { parts.append("+\(rewardXpSpreadTotal) XP") }
+        parts.append(contentsOf: rewards)
+        parts.append(contentsOf: rewardBadges)
+        return parts.isEmpty ? "Sem recompensa configurada" : parts.joined(separator: " · ")
+    }
+}
+
 struct CharacterAppearance: Equatable {
     var outfitSchema = 15
     var hat = 0
@@ -579,6 +611,10 @@ final class AppStore: ObservableObject {
     @Published private(set) var characterProfileLoading = false
     @Published private(set) var characterProfileError: String?
     @Published private(set) var characterArtwork: UIImage?
+    @Published private(set) var dailyQuests: [DailyQuest] = []
+    @Published private(set) var dailyQuestDay: String?
+    @Published private(set) var dailyQuestsLoading = false
+    @Published private(set) var dailyQuestsError: String?
 
     private let session = SessionManager()
     private var task: Task<Void, Never>?
@@ -1304,6 +1340,64 @@ final class AppStore: ObservableObject {
     func storeCharacterArtwork(_ image: UIImage) {
         characterArtwork = image
     }
+
+    func refreshDailyQuests() async {
+        guard let cookie = session.cookie, !cookie.isEmpty else {
+            dailyQuests = []
+            dailyQuestsError = "Faça login para carregar as quests."
+            return
+        }
+        guard !dailyQuestsLoading else { return }
+        dailyQuestsLoading = true
+        dailyQuestsError = nil
+        defer { dailyQuestsLoading = false }
+
+        do {
+            let payload = try await CharacterProfileHTTPClient(cookie: cookie).post("/api/auth/daily-quest-progress")
+            let config = payload["dailyQuestConfig"] as? [String: Any] ?? [:]
+            let state = payload["dailyQuest"] as? [String: Any] ?? [:]
+            let quests = config["quests"] as? [[String: Any]] ?? []
+            let prog = state["prog"] as? [String: Any] ?? [:]
+            let claimed = state["claimed"] as? [String: Any] ?? [:]
+            dailyQuestDay = state["day"] as? String
+
+            dailyQuests = quests.compactMap { q in
+                guard let id = q["id"] as? String else { return nil }
+                let target = max(1, Self.questInt(q["target"]) ?? 1)
+                let progress = min(target, max(0, Self.questInt(prog[id]) ?? 0))
+                let rawRewards = q["rewards"] as? [[String: Any]] ?? []
+                let rewards = rawRewards.compactMap { item -> String? in
+                    guard let type = item["t"] as? String, let count = Self.questInt(item["n"]), count > 0 else { return nil }
+                    return "\(count)× \(type)"
+                }
+                return DailyQuest(
+                    id: id,
+                    kind: q["kind"] as? String ?? "",
+                    label: q["label"] as? String ?? (q["kind"] as? String ?? "Daily Quest"),
+                    target: target,
+                    progress: progress,
+                    claimed: (claimed[id] as? Bool) ?? false,
+                    rewardXpSkill: q["rewardXpSkill"] as? String,
+                    rewardXpAmount: max(0, Self.questInt(q["rewardXpAmount"]) ?? 0),
+                    rewardXpSpreadTotal: max(0, Self.questInt(q["rewardXpSpreadTotal"]) ?? 0),
+                    rewardXpAll: (q["rewardXpAll"] as? Bool) ?? ((q["rewardXpSkill"] as? String)?.isEmpty != false),
+                    rewards: rewards,
+                    rewardBadges: q["rewardBadges"] as? [String] ?? []
+                )
+            }
+        } catch {
+            dailyQuestsError = "Não foi possível carregar as Daily Quests."
+            diagnostic("[QUESTS] atualização falhou • \(error.localizedDescription)")
+        }
+    }
+
+    private static func questInt(_ value: Any?) -> Int? {
+        if let v = value as? Int { return v }
+        if let v = value as? NSNumber { return v.intValue }
+        if let v = value as? String { return Int(v) }
+        return nil
+    }
+
 
 
     private func run(_ mode: ActivityMode, runID: UUID) async {
@@ -3166,6 +3260,13 @@ private struct CharacterProfileHTTPClient {
         return try await request(url)
     }
 
+    func post(_ path: String) async throws -> [String: Any] {
+        guard let url = URL(string: path, relativeTo: baseURL) else {
+            throw CharacterProfileHTTPError.invalidURL
+        }
+        return try await request(url, method: "POST", body: Data("{}".utf8))
+    }
+
     func playerStats(playerID: Int) async throws -> [String: Any] {
         guard var components = URLComponents(
             url: baseURL.appendingPathComponent("api/auth/player-stats"),
@@ -3178,9 +3279,11 @@ private struct CharacterProfileHTTPClient {
         return try await request(url)
     }
 
-    private func request(_ url: URL) async throws -> [String: Any] {
+    private func request(_ url: URL, method: String = "GET", body: Data? = nil) async throws -> [String: Any] {
         var request = URLRequest(url: url)
-        request.httpMethod = "GET"
+        request.httpMethod = method
+        request.httpBody = body
+        if body != nil { request.setValue("application/json", forHTTPHeaderField: "Content-Type") }
         request.timeoutInterval = 15
         request.cachePolicy = .reloadIgnoringLocalCacheData
         request.setValue(cookie, forHTTPHeaderField: "Cookie")
