@@ -109,7 +109,7 @@ struct RootView: View {
 
     private var header: some View {
         VStack(alignment: .leading, spacing: 14) {
-            HStack(alignment: .center) {
+            HStack(alignment: .firstTextBaseline) {
                 VStack(alignment: .leading, spacing: 3) {
                     HStack(spacing: 8) {
                         Text("KINTARABOT")
@@ -127,56 +127,64 @@ struct RootView: View {
                     Text("Painel de controle")
                         .font(.system(size: 32, weight: .black, design: .rounded))
                 }
-
                 Spacer()
-
-                Button {
-                    if app.hasSession {
-                        showCharacterStats = true
-                    } else {
-                        showLogin = true
-                    }
-                } label: {
-                    CharacterThumbnail(
-                        image: app.characterArtwork,
-                        hasSession: app.hasSession
-                    )
-                }
-                .buttonStyle(.plain)
-                .accessibilityLabel(app.hasSession ? "Abrir personagem e Stats" : "Abrir sessão")
-            }
-
-            HStack(spacing: 10) {
-                Button {
-                    if app.hasSession { showCharacterStats = true }
-                } label: {
-                    HStack(spacing: 7) {
-                        Image(systemName: "bolt.shield.fill")
-                        Text(app.characterProfile.displayName)
-                        if app.characterProfile.loaded {
-                            Text("Lvl \(app.characterProfile.totalLevel)")
-                                .font(.caption2.bold())
-                                .foregroundStyle(.cyan)
-                                .padding(.horizontal, 6)
-                                .padding(.vertical, 3)
-                                .background(.cyan.opacity(0.12), in: Capsule())
-                            Image(systemName: "chevron.right")
-                                .font(.caption.bold())
-                                .foregroundStyle(.secondary)
-                        }
-                    }
-                    .font(.headline.bold())
-                    .foregroundStyle(.white)
-                }
-                .buttonStyle(.plain)
-                .disabled(!app.hasSession)
-                Spacer()
-                Button("Sessão") { showLogin = true }
-                    .font(.subheadline.bold())
-                    .buttonStyle(.bordered)
-                    .tint(.cyan)
                 connectionBadge
             }
+
+            HStack(spacing: 14) {
+                Group {
+                    if app.hasSession, let cookie = app.authenticatedCookieForCharacter, !cookie.isEmpty {
+                        CharacterInteractiveView(cookie: cookie)
+                    } else {
+                        ZStack {
+                            RoundedRectangle(cornerRadius: 18, style: .continuous)
+                                .fill(.cyan.opacity(0.06))
+                            Image(systemName: "person.crop.square")
+                                .font(.system(size: 38, weight: .semibold))
+                                .foregroundStyle(.cyan.opacity(0.8))
+                        }
+                    }
+                }
+                .frame(width: 132, height: 154)
+                .clipShape(RoundedRectangle(cornerRadius: 18, style: .continuous))
+                .overlay(RoundedRectangle(cornerRadius: 18).stroke(.cyan.opacity(0.20), lineWidth: 1))
+
+                VStack(alignment: .leading, spacing: 8) {
+                    Text(app.characterProfile.displayName)
+                        .font(.system(size: 23, weight: .black, design: .rounded))
+                        .lineLimit(1)
+                        .minimumScaleFactor(0.72)
+
+                    Text("Lvl \(app.characterProfile.totalLevel)")
+                        .font(.headline.bold())
+                        .foregroundStyle(.cyan)
+
+                    Text(app.hasSession ? "Arraste o personagem para girar" : "Conecte sua sessão")
+                        .font(.caption2)
+                        .foregroundStyle(.secondary)
+                        .lineLimit(2)
+
+                    Button {
+                        if app.hasSession { showCharacterStats = true }
+                        else { showLogin = true }
+                    } label: {
+                        Label("STATS", systemImage: "chart.bar.fill")
+                            .font(.subheadline.bold())
+                            .frame(maxWidth: .infinity)
+                    }
+                    .buttonStyle(.borderedProminent)
+                    .tint(.cyan)
+
+                    Button("Sessão") { showLogin = true }
+                        .font(.caption.bold())
+                        .buttonStyle(.bordered)
+                        .tint(.cyan)
+                }
+                .frame(maxWidth: .infinity, alignment: .leading)
+            }
+            .padding(13)
+            .background(.white.opacity(0.045), in: RoundedRectangle(cornerRadius: 22, style: .continuous))
+            .overlay(RoundedRectangle(cornerRadius: 22).stroke(.white.opacity(0.07), lineWidth: 1))
         }
     }
 
