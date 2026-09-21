@@ -1,1 +1,0 @@
-function replaceAll() { [native code] }
