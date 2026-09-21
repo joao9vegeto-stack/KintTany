@@ -3691,7 +3691,16 @@ actor AutomationEngine {
             throw EngineError.regionNotConfirmed("world para regeneração")
         }
 
+        // Build 94: do not make an unnecessary trip when the authoritative
+        // World Presence already confirms full HP. playerHP is only updated by
+        // trusted pvit/snapshot or the /me confirmation path.
+        if DunesWorldRecoveryPolicy.isRecovered(hp: playerHP) {
+            reporter(.log("❤️ HP real confirmado • \(playerHP)/100 • regeneração dispensada"))
+            return
+        }
+
         reporter(.state(.recovering, "Recuperando HP no World"))
+        reporter(.log("❤️ HP real confirmado • \(playerHP)/100 • recuperação necessária"))
         reporter(.log("💚 Dunes CHECKPOINT • indo à zona segura de regeneração no World"))
         try await walk(
             to: DunesWorldRecoveryPolicy.safePoint,
@@ -3709,12 +3718,13 @@ actor AutomationEngine {
             }
 
             if DunesWorldRecoveryPolicy.isRecovered(hp: playerHP) {
-                reporter(.log("💚 World • HP 100/100 confirmado • retorno às Dunes liberado"))
+                reporter(.log("💚 HP real confirmado • \(playerHP)/100 • retorno às Dunes liberado"))
                 return
             }
 
             if playerHP != lastReportedHP {
                 lastReportedHP = playerHP
+                reporter(.log("❤️ Regeneração • HP real \(playerHP)/100"))
                 reporter(.diagnostic("[DUNES][RECOVERY] zona World • HP autoritativo=\(playerHP)/100"))
             }
 
