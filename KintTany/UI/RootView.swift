@@ -10,6 +10,7 @@ struct RootView: View {
     @State private var showLogin = false
     @State private var showFullLog = false
     @State private var showCharacterStats = false
+    @State private var showDailyQuests = false
     @FocusState private var goalFieldFocused: Bool
 
     private let columns = [
@@ -77,6 +78,11 @@ struct RootView: View {
         }
         .sheet(isPresented: $showCharacterStats) {
             CharacterStatsView()
+                .environmentObject(app)
+                .preferredColorScheme(.dark)
+        }
+        .sheet(isPresented: $showDailyQuests) {
+            DailyQuestsView()
                 .environmentObject(app)
                 .preferredColorScheme(.dark)
         }
@@ -175,9 +181,19 @@ struct RootView: View {
                     .buttonStyle(.borderedProminent)
                     .tint(.cyan)
 
-                    Button("Sessão") { showLogin = true }
+                    HStack(spacing: 7) {
+                        Button("QUESTS") {
+                            if app.hasSession { showDailyQuests = true }
+                            else { showLogin = true }
+                        }
                         .font(.caption.bold())
                         .buttonStyle(.bordered)
+                        .tint(.yellow)
+
+                        Button("Sessão") { showLogin = true }
+                            .font(.caption.bold())
+                            .buttonStyle(.bordered)
+                    }
                         .tint(.cyan)
                 }
                 .frame(maxWidth: .infinity, alignment: .leading)
@@ -619,6 +635,105 @@ struct RootView: View {
         case .cancelled: "stop.circle.fill"
         case .connecting, .syncing, .recovering: "arrow.triangle.2.circlepath"
         default: "scope"
+        }
+    }
+}
+
+
+private struct DailyQuestsView: View {
+    @EnvironmentObject var app: AppStore
+    @Environment(\.dismiss) private var dismiss
+
+    var body: some View {
+        NavigationStack {
+            ZStack {
+                LinearGradient(colors: [.black, Color(red: 0.02, green: 0.06, blue: 0.10), .black],
+                               startPoint: .topLeading, endPoint: .bottomTrailing)
+                    .ignoresSafeArea()
+                ScrollView {
+                    VStack(spacing: 14) {
+                        HStack {
+                            VStack(alignment: .leading, spacing: 4) {
+                                Text("DAILY QUESTS")
+                                    .font(.system(size: 13, weight: .black, design: .rounded))
+                                    .tracking(2)
+                                    .foregroundStyle(.yellow)
+                                Text("Dados oficiais do Kintara")
+                                    .font(.caption)
+                                    .foregroundStyle(.secondary)
+                            }
+                            Spacer()
+                            if app.dailyQuestsLoading { ProgressView() }
+                        }
+
+                        if let error = app.dailyQuestsError {
+                            Text(error).font(.subheadline).foregroundStyle(.orange)
+                                .frame(maxWidth: .infinity, alignment: .leading)
+                        }
+
+                        ForEach(app.dailyQuests) { quest in
+                            VStack(alignment: .leading, spacing: 10) {
+                                HStack(alignment: .top) {
+                                    Text(quest.label)
+                                        .font(.headline.bold())
+                                    Spacer()
+                                    Text(quest.claimed ? "RESGATADA" : (quest.isComplete ? "CONCLUÍDA" : "ATIVA"))
+                                        .font(.system(size: 10, weight: .black, design: .rounded))
+                                        .foregroundStyle(quest.claimed ? .green : (quest.isComplete ? .yellow : .cyan))
+                                }
+                                ProgressView(value: quest.progressFraction)
+                                    .tint(quest.isComplete ? .green : .cyan)
+                                HStack {
+                                    Text("\(quest.progress) / \(quest.target)")
+                                        .font(.subheadline.monospacedDigit().bold())
+                                    Spacer()
+                                    Text(quest.kind)
+                                        .font(.caption2.monospaced())
+                                        .foregroundStyle(.secondary)
+                                }
+                                Label(quest.rewardSummary, systemImage: "sparkles")
+                                    .font(.caption.bold())
+                                    .foregroundStyle(.yellow.opacity(0.9))
+                            }
+                            .padding(15)
+                            .background(.white.opacity(0.045), in: RoundedRectangle(cornerRadius: 18, style: .continuous))
+                            .overlay(RoundedRectangle(cornerRadius: 18, style: .continuous).stroke(.white.opacity(0.08), lineWidth: 1))
+                        }
+
+                        if !app.dailyQuestsLoading && app.dailyQuests.isEmpty && app.dailyQuestsError == nil {
+                            Text("Nenhuma Daily Quest foi publicada pelo servidor.")
+                                .foregroundStyle(.secondary)
+                                .padding(.top, 24)
+                        }
+
+                        VStack(alignment: .leading, spacing: 5) {
+                            Text("RESET")
+                                .font(.caption2.bold())
+                                .foregroundStyle(.secondary)
+                            Text("00:00 UTC")
+                                .font(.headline.monospacedDigit().bold())
+                            if let day = app.dailyQuestDay {
+                                Text("Dia do servidor: \(day)")
+                                    .font(.caption)
+                                    .foregroundStyle(.secondary)
+                            }
+                        }
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .padding(15)
+                        .background(.white.opacity(0.035), in: RoundedRectangle(cornerRadius: 16))
+                    }
+                    .padding(16)
+                }
+                .refreshable { await app.refreshDailyQuests() }
+            }
+            .navigationTitle("Quests")
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .confirmationAction) {
+                    Button("Fechar") { dismiss() }
+                }
+            }
+            .task { await app.refreshDailyQuests() }
         }
     }
 }
