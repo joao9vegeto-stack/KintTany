@@ -1,4 +1,5 @@
 import Foundation
+import Network
 
 struct PresenceBootstrap {
     var region: String
@@ -30,6 +31,159 @@ struct PresenceReceivePolicy {
     static let traceRawInboundPayload = false
 }
 
+struct PresenceTransportPolicy {
+    static let usesNetworkFramework = true
+    static let serviceClass: NWParameters.ServiceClass = .responsiveData
+    static let queueQoS: DispatchQoS = .userInteractive
+}
+
+/// Build 99: Presence no longer depends on URLSessionWebSocketTask.receive().
+/// Network.framework delivers WebSocket messages directly on one dedicated serial
+/// queue. The queue feeds the existing streams immediately, preserving protocol
+/// ordering and the authoritative proof/wear semantics used by the engine.
+private final class NetworkPresenceTransport: @unchecked Sendable {
+    typealias DataHandler = @Sendable (Data, Double) -> Void
+    typealias TerminalHandler = @Sendable (String?) -> Void
+
+    private let connection: NWConnection
+    private let queue = DispatchQueue(
+        label: "com.joaopedro.kinttany.presence",
+        qos: PresenceTransportPolicy.queueQoS
+    )
+    private let onData: DataHandler
+    private let onTerminal: TerminalHandler
+    private var startContinuation: CheckedContinuation<Void, Error>?
+    private var startCompleted = false
+    private var ready = false
+    private var cancelledByClient = false
+    private var terminalDelivered = false
+
+    init(url: URL, onData: @escaping DataHandler, onTerminal: @escaping TerminalHandler) {
+        self.onData = onData
+        self.onTerminal = onTerminal
+
+        let websocket = NWProtocolWebSocket.Options()
+        websocket.autoReplyPing = true
+        websocket.maximumMessageSize = 1_048_576
+        websocket.setAdditionalHeaders([(name: "Origin", value: "https://kintara.com")])
+
+        let parameters = NWParameters.tls
+        parameters.serviceClass = PresenceTransportPolicy.serviceClass
+        parameters.defaultProtocolStack.applicationProtocols.insert(websocket, at: 0)
+        self.connection = NWConnection(to: .url(url), using: parameters)
+    }
+
+    func start() async throws {
+        try await withCheckedThrowingContinuation { continuation in
+            queue.async { [self] in
+                startContinuation = continuation
+                connection.stateUpdateHandler = { [weak self] state in
+                    self?.handleState(state)
+                }
+                connection.start(queue: queue)
+            }
+        }
+    }
+
+    func send(_ data: Data) async throws {
+        try await withCheckedThrowingContinuation { continuation in
+            let metadata = NWProtocolWebSocket.Metadata(opcode: .binary)
+            let context = NWConnection.ContentContext(
+                identifier: "kinttany-presence-binary",
+                metadata: [metadata]
+            )
+            connection.send(
+                content: data,
+                contentContext: context,
+                isComplete: true,
+                completion: .contentProcessed { error in
+                    if let error {
+                        continuation.resume(throwing: error)
+                    } else {
+                        continuation.resume()
+                    }
+                }
+            )
+        }
+    }
+
+    func cancel() {
+        queue.async { [self] in
+            cancelledByClient = true
+            connection.cancel()
+        }
+    }
+
+    private func handleState(_ state: NWConnection.State) {
+        switch state {
+        case .ready:
+            ready = true
+            completeStart(nil)
+            receiveNext()
+        case .failed(let error):
+            completeStart(error)
+            finish(error.localizedDescription)
+        case .cancelled:
+            if !startCompleted {
+                completeStart(SocketError.notConnected)
+            }
+            finish(cancelledByClient ? nil : "NWConnection cancelada")
+        case .waiting(let error):
+            if !ready {
+                // Network.framework may recover from waiting; keep the handshake alive.
+                _ = error
+            }
+        default:
+            break
+        }
+    }
+
+    private func receiveNext() {
+        guard ready, !cancelledByClient else { return }
+        connection.receiveMessage { [weak self] data, context, _, error in
+            guard let self else { return }
+
+            if let error {
+                self.finish(error.localizedDescription)
+                return
+            }
+
+            if let metadata = context?.protocolMetadata(
+                definition: NWProtocolWebSocket.definition
+            ) as? NWProtocolWebSocket.Metadata, metadata.opcode == .close {
+                self.finish("WebSocket close")
+                return
+            }
+
+            if let data, !data.isEmpty {
+                let receivedAtMS = ProcessInfo.processInfo.systemUptime * 1_000
+                self.onData(data, receivedAtMS)
+            }
+
+            self.receiveNext()
+        }
+    }
+
+    private func completeStart(_ error: Error?) {
+        guard !startCompleted else { return }
+        startCompleted = true
+        guard let continuation = startContinuation else { return }
+        startContinuation = nil
+        if let error {
+            continuation.resume(throwing: error)
+        } else {
+            continuation.resume()
+        }
+    }
+
+    private func finish(_ reason: String?) {
+        guard !terminalDelivered else { return }
+        terminalDelivered = true
+        ready = false
+        onTerminal(reason)
+    }
+}
+
 struct PresenceCriticalPacket: Sendable {
     let data: Data
     let receivedAtMS: Double
@@ -59,10 +213,12 @@ actor RealtimeSocket {
 
     private var task: URLSessionWebSocketTask?
     private var queueTask: URLSessionWebSocketTask?
+    private var presenceTransport: NetworkPresenceTransport?
     private var receiveLoopTask: Task<Void, Never>?
     private var closed = false
     private var continuation: AsyncStream<Data>.Continuation?
     private var criticalContinuation: AsyncStream<PresenceCriticalPacket>.Continuation?
+    private var criticalStream: AsyncStream<PresenceCriticalPacket>?
     private var traceBuffer: [String] = []
     private var connectionID = UUID()
     private var lastDisconnectReason: String?
@@ -195,6 +351,13 @@ actor RealtimeSocket {
         }
         continuation = streamContinuation
 
+        var criticalStreamContinuation: AsyncStream<PresenceCriticalPacket>.Continuation?
+        let criticalInbound = AsyncStream<PresenceCriticalPacket>(bufferingPolicy: .bufferingNewest(64)) {
+            criticalStreamContinuation = $0
+        }
+        criticalContinuation = criticalStreamContinuation
+        criticalStream = criticalInbound
+
         trace("[NET] Iniciando conexão realtime • shard=\(shard) • region=\(bootstrap.region) • cookie=presente (valor ocultado)")
 
         do {
@@ -254,16 +417,38 @@ actor RealtimeSocket {
             trace("[NET] Queue encerrada após queue_ready")
 
             let presenceToken = try await connectToken(cookie: cookie, shard: shard, purpose: "presence")
-            let presence = try await open(path: "/ws/presence/\(shard)?kt=\(presenceToken)", label: "presence")
-            task = presence
-
-            // Build 96: keep Presence reception on an explicit high-priority,
-            // detached task. AppStore's consumer is already detached/userInitiated;
-            // doing the same at the socket edge prevents a BG caller's inherited
-            // priority from becoming the bottleneck before AsyncStream delivery.
-            receiveLoopTask = Task.detached(priority: .userInitiated) { [weak self] in
-                await self?.receiveLoop(presence, connectionID: currentConnectionID)
+            guard let presenceURL = URL(string: "wss://us.kintara.com/ws/presence/\(shard)?kt=\(presenceToken)") else {
+                throw SocketError.invalidURL
             }
+
+            // Build 99: capture the stream continuations directly in the Network.framework
+            // callback. No actor hop, Task or URLSession receive callback is required before
+            // the authoritative packet enters the same ordered streams used by Build 98.
+            let transport = NetworkPresenceTransport(
+                url: presenceURL,
+                onData: { data, receivedAtMS in
+                    if PresenceCriticalReceivePolicy.isGatherCritical(data) {
+                        criticalStreamContinuation?.yield(
+                            PresenceCriticalPacket(data: data, receivedAtMS: receivedAtMS)
+                        )
+                    }
+                    streamContinuation?.yield(data)
+                },
+                onTerminal: { [weak self] reason in
+                    streamContinuation?.finish()
+                    criticalStreamContinuation?.finish()
+                    Task {
+                        await self?.networkPresenceDidTerminate(
+                            reason: reason,
+                            connectionID: currentConnectionID
+                        )
+                    }
+                }
+            )
+            presenceTransport = transport
+            trace("[WS] Abrindo presence via Network.framework • service=responsiveData • qos=userInteractive")
+            try await transport.start()
+            trace("[WS] Presence Network.framework pronta")
 
             let initialPosition = try RealtimeProtocol.position(
                 region: bootstrap.region,
@@ -273,8 +458,9 @@ actor RealtimeSocket {
                 full: true,
                 action: bootstrap.action
             )
-            try await sendPresenceInitial(initialPosition, on: presence)
-            trace("[NET] Presence preparada em \(bootstrap.region); receive loop ativo")
+            tracePayload(direction: "OUT presence", data: initialPosition)
+            try await transport.send(initialPosition)
+            trace("[NET] Presence preparada em \(bootstrap.region); NW receive loop ativo")
             return inbound
         } catch {
             trace("[ERROR] connect() abortado em \(shard): \(error.localizedDescription)")
@@ -292,7 +478,7 @@ actor RealtimeSocket {
     func send(_ data: Data) async throws {
         try Task.checkCancellation()
 
-        guard !closed, let task else {
+        guard !closed, let presenceTransport else {
             // Um teardown ordenado pode alcançar este actor depois que a Task
             // foi cancelada. Isso é encerramento normal, não falha de transporte.
             if Task.isCancelled { throw CancellationError() }
@@ -302,7 +488,7 @@ actor RealtimeSocket {
 
         tracePayload(direction: "OUT presence", data: data)
         do {
-            try await task.send(.data(data))
+            try await presenceTransport.send(data)
         } catch {
             if Task.isCancelled { throw CancellationError() }
             lastDisconnectReason = error.localizedDescription
@@ -312,12 +498,16 @@ actor RealtimeSocket {
     }
 
     func criticalGatherStream() -> AsyncStream<PresenceCriticalPacket> {
+        if let criticalStream {
+            return criticalStream
+        }
         var streamContinuation: AsyncStream<PresenceCriticalPacket>.Continuation?
         let stream = AsyncStream<PresenceCriticalPacket>(bufferingPolicy: .bufferingNewest(64)) {
             streamContinuation = $0
         }
         criticalContinuation?.finish()
         criticalContinuation = streamContinuation
+        criticalStream = stream
         return stream
     }
 
@@ -351,10 +541,13 @@ actor RealtimeSocket {
         queueTask = nil
         task?.cancel(with: .normalClosure, reason: nil)
         task = nil
+        presenceTransport?.cancel()
+        presenceTransport = nil
         continuation?.finish()
         continuation = nil
         criticalContinuation?.finish()
         criticalContinuation = nil
+        criticalStream = nil
     }
 
     private func closeCurrentConnectionAndWait(clearTrace: Bool) async {
@@ -644,6 +837,25 @@ actor RealtimeSocket {
             }
         }
         throw lastError ?? SocketError.notConnected
+    }
+
+    private func networkPresenceDidTerminate(reason: String?, connectionID endedConnectionID: UUID) {
+        guard endedConnectionID == connectionID else {
+            trace("[NET] Presence Network.framework antiga finalizada; conexão atual preservada")
+            return
+        }
+        if !closed, let reason {
+            lastDisconnectReason = reason
+            trace("[ERROR] Presence Network.framework encerrou: \(reason)")
+        }
+        continuation?.finish()
+        criticalContinuation?.finish()
+        continuation = nil
+        criticalContinuation = nil
+        criticalStream = nil
+        presenceTransport = nil
+        closed = true
+        trace("[NET] Presence Network.framework finalizada")
     }
 
     private func receiveLoop(_ socket: URLSessionWebSocketTask, connectionID loopConnectionID: UUID) async {
