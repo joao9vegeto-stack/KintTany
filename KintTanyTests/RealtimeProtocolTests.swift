@@ -1097,6 +1097,20 @@ final class RealtimeProtocolTests: XCTestCase {
         XCTAssertTrue(DunesWorldRecoveryPolicy.isRecovered(hp: 100))
     }
 
+    func testBuild95DunesDangerSafeExitResumesAsProtectedCheckpoint() {
+        XCTAssertTrue(DunesCheckpointContinuationPolicy.shouldResumeAfterSafeExit(.dunesCheckpoint))
+        XCTAssertTrue(DunesCheckpointContinuationPolicy.shouldResumeAfterSafeExit(.dunesDangerSafety))
+        XCTAssertFalse(DunesCheckpointContinuationPolicy.shouldResumeAfterSafeExit(.dunesHeatSafety))
+        XCTAssertFalse(DunesCheckpointContinuationPolicy.shouldResumeAfterSafeExit(.backgroundExpiration))
+        XCTAssertFalse(DunesCheckpointContinuationPolicy.shouldResumeAfterSafeExit(.connectionLoss))
+        XCTAssertFalse(DunesCheckpointContinuationPolicy.shouldResumeAfterSafeExit(.user))
+        XCTAssertFalse(DunesCheckpointContinuationPolicy.shouldResumeAfterSafeExit(nil))
+        XCTAssertEqual(
+            DunesCheckpointContinuationPolicy.triggerLabel(for: .dunesDangerSafety),
+            "dano externo sobrevivido"
+        )
+    }
+
     func testBuild77DunesUnexpectedDamageIsSeparatedFromHeatProjection() {
         XCTAssertFalse(DunesDamageSafetyPolicy.isUnexpectedDamage(observedHP: 96, conservativeHP: 99))
         XCTAssertFalse(DunesDamageSafetyPolicy.isUnexpectedDamage(observedHP: 95, conservativeHP: 99))
