@@ -630,16 +630,17 @@ private struct CharacterInteractiveView: UIViewRepresentable {
     func makeUIView(context: Context) -> WKWebView {
         let controller = WKUserContentController()
         controller.add(context.coordinator, name: "kintaraInteractive")
-        controller.addUserScript(WKUserScript(source: Coordinator.captureScript, injectionTime: .atDocumentStart, forMainFrameOnly: true))
         let config = WKWebViewConfiguration()
-        config.websiteDataStore = .nonPersistent()
+        config.websiteDataStore = .default()
         config.userContentController = controller
+        config.suppressesIncrementalRendering = false
         let view = WKWebView(frame: .zero, configuration: config)
         view.isOpaque = false
         view.backgroundColor = .clear
         view.scrollView.backgroundColor = .clear
         view.scrollView.isScrollEnabled = false
         view.scrollView.bounces = false
+        view.navigationDelegate = context.coordinator
         context.coordinator.webView = view
         context.coordinator.load(cookie: cookie)
         return view
@@ -658,109 +659,61 @@ private struct CharacterInteractiveView: UIViewRepresentable {
         weak var webView: WKWebView?
         var loadedCookie = ""
 
-        static let captureScript = """
-        (() => {
-          if (window.__kintara3DProbeInstalled) return;
-          window.__kintara3DProbeInstalled = true;
-          const hook = () => {
-            const T = window.THREE;
-            if (!T || !T.WebGLRenderer || T.WebGLRenderer.prototype.__kintaraHooked) return false;
-            const p = T.WebGLRenderer.prototype;
-            const original = p.render;
-            p.render = function(scene, camera) {
-              window.__kintara3D = { renderer: this, scene, camera };
-              return original.call(this, scene, camera);
-            };
-            p.__kintaraHooked = true;
-            return true;
-          };
-          let n=0; const id=setInterval(()=>{ if(hook() || ++n>1000) clearInterval(id); },10);
-        })();
-        """
-
         func load(cookie rawCookie: String) {
             guard let webView, let cookie = makeCookie(rawCookie),
                   let url = URL(string: "https://kintara.com/play?embed=outfit") else { return }
             loadedCookie = rawCookie
-            webView.navigationDelegate = self
             webView.configuration.websiteDataStore.httpCookieStore.setCookie(cookie) { [weak webView] in
-                webView?.load(URLRequest(url: url, cachePolicy: .returnCacheDataElseLoad))
+                webView?.load(URLRequest(url: url, cachePolicy: .returnCacheDataElseLoad, timeoutInterval: 15))
             }
         }
 
-        func webView(_ webView: WKWebView, didFinish navigation: WKNavigation!) { installRendererShell() }
-
+        func webView(_ webView: WKWebView, didFinish navigation: WKNavigation!) { installPortraitControls() }
         func userContentController(_ userContentController: WKUserContentController, didReceive message: WKScriptMessage) {}
 
-        private func installRendererShell() {
+        private func installPortraitControls() {
             let script = """
             (() => {
+              if(window.__kintaraPortraitInstalled)return;
+              window.__kintaraPortraitInstalled=true;
               let tries=0;
               const timer=setInterval(()=>{
                 const host=document.querySelector('#kintara-dash-outfit-letter');
                 const canvas=host?.querySelector('canvas');
-                if(!host||!canvas){if(++tries>120)clearInterval(timer);return;}
-                const state=window.__kintara3D;
-                if(!state?.scene||!state?.camera){if(++tries>120)clearInterval(timer);return;}
+                if(!host||!canvas){if(++tries>200)clearInterval(timer);return;}
                 clearInterval(timer);
 
                 document.documentElement.style.cssText='margin:0!important;padding:0!important;background:transparent!important;overflow:hidden!important;';
                 document.body.style.cssText='margin:0!important;padding:0!important;background:transparent!important;overflow:hidden!important;';
-                [...document.body.children].forEach(el=>{if(el!==host&&!el.contains(host))el.remove();});
-                host.style.cssText='position:fixed!important;inset:0!important;width:100vw!important;height:100vh!important;margin:0!important;padding:0!important;background:transparent!important;overflow:hidden!important;border:0!important;box-shadow:none!important;';
-                canvas.style.cssText='position:absolute!important;inset:0!important;width:100%!important;height:100%!important;background:transparent!important;touch-action:none!important;';
+                [...document.body.children].forEach(el=>{if(el!==host&&!el.contains(host))el.style.display='none';});
+                host.style.cssText='position:fixed!important;inset:0!important;width:100vw!important;height:100vh!important;margin:0!important;padding:0!important;background:transparent!important;border:0!important;box-shadow:none!important;overflow:hidden!important;';
+                canvas.style.cssText='position:absolute!important;left:50%!important;top:50%!important;width:148%!important;height:148%!important;transform:translate(-50%,-50%)!important;max-width:none!important;max-height:none!important;background:transparent!important;touch-action:none!important;';
 
-                const {renderer,scene,camera}=state;
-                try{renderer.setClearColor(0x000000,0);renderer.setSize(innerWidth,innerHeight,false);}catch(_){}
-                try{scene.background=null;}catch(_){}
-
-                const T=window.THREE;
-                let character=null;
-                if(T){
-                  const box=new T.Box3(), size=new T.Vector3();
-                  const roots=scene.children.filter(o=>o.visible!==false);
-                  let best=-1;
-                  roots.forEach(o=>{
-                    try{
-                      box.setFromObject(o); box.getSize(size);
-                      const name=(o.name||'').toLowerCase();
-                      const flat=size.y < Math.max(size.x,size.z)*0.22;
-                      const groundish=flat || /ground|floor|platform|base|shadow/.test(name);
-                      if(groundish && size.x>0.4 && size.z>0.4){o.visible=false;return;}
-                      const score=size.y*3 + size.x + size.z;
-                      if(score>best){best=score;character=o;}
-                    }catch(_){}
-                  });
-                  if(character){
-                    try{
-                      box.setFromObject(character);
-                      const center=new T.Vector3(); box.getCenter(center);
-                      const size2=new T.Vector3(); box.getSize(size2);
-                      if(camera.isOrthographicCamera){
-                        const viewH=Math.abs(camera.top-camera.bottom);
-                        camera.zoom=Math.max(camera.zoom||1,(viewH/Math.max(size2.y,.01))*0.88);
-                        camera.position.x += center.x-(camera.position.x||0);
-                        camera.position.y += center.y-(camera.position.y||0);
-                        camera.updateProjectionMatrix();
-                      } else {
-                        camera.lookAt(center);
-                      }
-                    }catch(_){}
-                  }
-                }
-
-                let dragging=false,lastX=0;
-                const rotate=dx=>{
-                  if(!character)return;
-                  try{character.rotation.y += dx*0.018;}catch(_){}
+                const nativeDispatch=(type,x,y)=>{
+                  const rect=canvas.getBoundingClientRect();
+                  const cx=Math.max(rect.left+4,Math.min(rect.right-4,x));
+                  const cy=Math.max(rect.top+4,Math.min(rect.bottom-4,y));
+                  const common={bubbles:true,cancelable:true,clientX:cx,clientY:cy,screenX:cx,screenY:cy,buttons:type==='pointerup'||type==='mouseup'?0:1,button:0};
+                  try{canvas.dispatchEvent(new PointerEvent(type,{...common,pointerId:1,pointerType:'mouse',isPrimary:true}));}catch(_){}
+                  const mt=type.replace('pointer','mouse');
+                  try{canvas.dispatchEvent(new MouseEvent(mt,common));}catch(_){}
                 };
-                canvas.addEventListener('pointerdown',e=>{dragging=true;lastX=e.clientX;canvas.setPointerCapture?.(e.pointerId);e.preventDefault();},{passive:false});
-                canvas.addEventListener('pointermove',e=>{if(!dragging)return;const x=e.clientX;rotate(x-lastX);lastX=x;e.preventDefault();},{passive:false});
-                canvas.addEventListener('pointerup',e=>{dragging=false;e.preventDefault();},{passive:false});
-                canvas.addEventListener('touchstart',e=>{if(e.touches.length){dragging=true;lastX=e.touches[0].clientX;e.preventDefault();}},{passive:false});
-                canvas.addEventListener('touchmove',e=>{if(dragging&&e.touches.length){const x=e.touches[0].clientX;rotate(x-lastX);lastX=x;e.preventDefault();}},{passive:false});
-                canvas.addEventListener('touchend',()=>dragging=false,{passive:false});
-              },50);
+
+                let active=false,lastX=0,y=0;
+                const begin=e=>{active=true;lastX=e.clientX;y=e.clientY;nativeDispatch('pointerdown',lastX,y);e.preventDefault();};
+                const move=e=>{if(!active)return;const x=e.clientX;nativeDispatch('pointermove',x,y);lastX=x;e.preventDefault();};
+                const end=e=>{if(!active)return;nativeDispatch('pointerup',lastX,y);active=false;e.preventDefault();};
+                const overlay=document.createElement('div');
+                overlay.style.cssText='position:fixed;inset:0;z-index:2147483647;background:transparent;touch-action:none;';
+                document.body.appendChild(overlay);
+                overlay.addEventListener('pointerdown',begin,{passive:false});
+                overlay.addEventListener('pointermove',move,{passive:false});
+                overlay.addEventListener('pointerup',end,{passive:false});
+                overlay.addEventListener('pointercancel',end,{passive:false});
+                overlay.addEventListener('touchstart',e=>{if(!e.touches.length)return;const t=e.touches[0];begin({clientX:t.clientX,clientY:t.clientY,preventDefault:()=>e.preventDefault()});},{passive:false});
+                overlay.addEventListener('touchmove',e=>{if(!e.touches.length)return;const t=e.touches[0];move({clientX:t.clientX,clientY:t.clientY,preventDefault:()=>e.preventDefault()});},{passive:false});
+                overlay.addEventListener('touchend',e=>end({preventDefault:()=>e.preventDefault()}),{passive:false});
+              },25);
             })();
             """
             webView?.evaluateJavaScript(script)
