@@ -1590,6 +1590,28 @@ actor AutomationEngine {
         }
     }
 
+    /// Build 98 fast path: critical gather packets are delivered straight from
+    /// RealtimeSocket before the general AsyncStream/receiver chain. Processing
+    /// still happens on this actor, preserving a single authoritative harvest
+    /// state, but the waiting gather task is already suspended on its event gate.
+    func ingestGatherCritical(_ critical: PresenceCriticalPacket) async {
+        guard let packet = RealtimeProtocol.packet(critical.data),
+              let type = packet["t"] as? String else { return }
+        let engineAtMS = nowMS
+        let hopMS = max(0, Int((engineAtMS - critical.receivedAtMS).rounded()))
+        switch type {
+        case "action_proof":
+            await ingestActionProof(packet)
+        case "res_evt", "res_snap":
+            await ingestResourceEvent(packet)
+        default:
+            return
+        }
+        if hopMS >= 100 {
+            reporter(.diagnostic("[GATHER][RX] socket→engine=(hopMS)ms • tipo=(type)"))
+        }
+    }
+
     func ingest(_ data: Data) async {
         guard let packet = RealtimeProtocol.packet(data), let type = packet["t"] as? String else { return }
 
