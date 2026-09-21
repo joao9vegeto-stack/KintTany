@@ -680,39 +680,37 @@ private struct CharacterInteractiveView: UIViewRepresentable {
               const timer=setInterval(()=>{
                 const host=document.querySelector('#kintara-dash-outfit-letter');
                 const canvas=host?.querySelector('canvas');
-                if(!host||!canvas){if(++tries>200)clearInterval(timer);return;}
+                if(!host||!canvas){if(++tries>240)clearInterval(timer);return;}
                 clearInterval(timer);
 
                 document.documentElement.style.cssText='margin:0!important;padding:0!important;background:transparent!important;overflow:hidden!important;';
                 document.body.style.cssText='margin:0!important;padding:0!important;background:transparent!important;overflow:hidden!important;';
                 [...document.body.children].forEach(el=>{if(el!==host&&!el.contains(host))el.style.display='none';});
-                host.style.cssText='position:fixed!important;inset:0!important;width:100vw!important;height:100vh!important;margin:0!important;padding:0!important;background:transparent!important;border:0!important;box-shadow:none!important;overflow:hidden!important;';
-                canvas.style.cssText='position:absolute!important;left:50%!important;top:50%!important;width:148%!important;height:148%!important;transform:translate(-50%,-50%)!important;max-width:none!important;max-height:none!important;background:transparent!important;touch-action:none!important;';
+                host.style.cssText='position:fixed!important;inset:0!important;width:100vw!important;height:100vh!important;margin:0!important;padding:0!important;background:transparent!important;border:0!important;box-shadow:none!important;overflow:hidden!important;perspective:700px!important;';
 
-                const nativeDispatch=(type,x,y)=>{
-                  const rect=canvas.getBoundingClientRect();
-                  const cx=Math.max(rect.left+4,Math.min(rect.right-4,x));
-                  const cy=Math.max(rect.top+4,Math.min(rect.bottom-4,y));
-                  const common={bubbles:true,cancelable:true,clientX:cx,clientY:cy,screenX:cx,screenY:cy,buttons:type==='pointerup'||type==='mouseup'?0:1,button:0};
-                  try{canvas.dispatchEvent(new PointerEvent(type,{...common,pointerId:1,pointerType:'mouse',isPrimary:true}));}catch(_){}
-                  const mt=type.replace('pointer','mouse');
-                  try{canvas.dispatchEvent(new MouseEvent(mt,common));}catch(_){}
-                };
+                // Portrait crop: enlarge the game's render enough that the character fills the
+                // available area and push the pedestal below the visible crop.
+                canvas.style.cssText='position:absolute!important;left:50%!important;top:39%!important;width:300%!important;height:300%!important;max-width:none!important;max-height:none!important;background:transparent!important;touch-action:none!important;transform-origin:50% 42%!important;will-change:transform!important;';
+                let yaw=0;
+                const paint=()=>{canvas.style.transform='translate(-50%,-50%) rotateY('+yaw+'deg)';};
+                paint();
 
-                let active=false,lastX=0,y=0;
-                const begin=e=>{active=true;lastX=e.clientX;y=e.clientY;nativeDispatch('pointerdown',lastX,y);e.preventDefault();};
-                const move=e=>{if(!active)return;const x=e.clientX;nativeDispatch('pointermove',x,y);lastX=x;e.preventDefault();};
-                const end=e=>{if(!active)return;nativeDispatch('pointerup',lastX,y);active=false;e.preventDefault();};
+                // Do not forward touches to Kintara's outfit picker. The picker changes
+                // equipment on drag. We own this transparent gesture layer instead.
                 const overlay=document.createElement('div');
-                overlay.style.cssText='position:fixed;inset:0;z-index:2147483647;background:transparent;touch-action:none;';
+                overlay.style.cssText='position:fixed;inset:0;z-index:2147483647;background:transparent;touch-action:none;cursor:grab;';
                 document.body.appendChild(overlay);
-                overlay.addEventListener('pointerdown',begin,{passive:false});
-                overlay.addEventListener('pointermove',move,{passive:false});
-                overlay.addEventListener('pointerup',end,{passive:false});
-                overlay.addEventListener('pointercancel',end,{passive:false});
-                overlay.addEventListener('touchstart',e=>{if(!e.touches.length)return;const t=e.touches[0];begin({clientX:t.clientX,clientY:t.clientY,preventDefault:()=>e.preventDefault()});},{passive:false});
-                overlay.addEventListener('touchmove',e=>{if(!e.touches.length)return;const t=e.touches[0];move({clientX:t.clientX,clientY:t.clientY,preventDefault:()=>e.preventDefault()});},{passive:false});
-                overlay.addEventListener('touchend',e=>end({preventDefault:()=>e.preventDefault()}),{passive:false});
+                let dragging=false,lastX=0;
+                const down=(x,e)=>{dragging=true;lastX=x;overlay.style.cursor='grabbing';e?.preventDefault?.();};
+                const move=(x,e)=>{if(!dragging)return;const dx=x-lastX;lastX=x;yaw=Math.max(-62,Math.min(62,yaw+dx*.42));paint();e?.preventDefault?.();};
+                const up=e=>{dragging=false;overlay.style.cursor='grab';e?.preventDefault?.();};
+                overlay.addEventListener('pointerdown',e=>down(e.clientX,e),{passive:false});
+                overlay.addEventListener('pointermove',e=>move(e.clientX,e),{passive:false});
+                overlay.addEventListener('pointerup',up,{passive:false});
+                overlay.addEventListener('pointercancel',up,{passive:false});
+                overlay.addEventListener('touchstart',e=>{if(e.touches.length)down(e.touches[0].clientX,e);},{passive:false});
+                overlay.addEventListener('touchmove',e=>{if(e.touches.length)move(e.touches[0].clientX,e);},{passive:false});
+                overlay.addEventListener('touchend',up,{passive:false});
               },25);
             })();
             """
