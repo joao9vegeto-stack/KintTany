@@ -39,9 +39,9 @@ jobs:
           set -euo pipefail
           rm -rf .main5_tmp .main5_payload_parts
           rm -f .github/workflows/main5_apply_payload.yml
-          git fetch origin main4:refs/remotes/origin/main4
+          git fetch origin 6442ec3ed9503dfa4625e147fce92fa004c2b045
 
-          git diff --name-only origin/main4 -- | sort > /tmp/actual.txt
+          git diff --name-only 6442ec3ed9503dfa4625e147fce92fa004c2b045 -- | sort > /tmp/actual.txt
           printf '%s\n'             'KintTany/Core/AppStore.swift'             'KintTany/UI/RootView.swift'             'KintTanyTests/RealtimeProtocolTests.swift' | sort > /tmp/expected.txt
           echo "Final main5 diff:"
           cat /tmp/actual.txt
