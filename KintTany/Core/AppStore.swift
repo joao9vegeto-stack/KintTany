@@ -334,6 +334,7 @@ final class AppStore: ObservableObject {
     private let session = SessionManager()
     private var task: Task<Void, Never>?
     private var receiverTask: Task<Void, Never>?
+    private var criticalGatherReceiverTask: Task<Void, Never>?
     private var traceTask: Task<Void, Never>?
     private var engineRunTask: Task<EngineRunResult, Error>?
     private var realtimeFailureMessage: String?
@@ -567,6 +568,20 @@ final class AppStore: ObservableObject {
 
             if notifyUnexpectedEnd, !Task.isCancelled {
                 await self?.handleUnexpectedRealtimeEnd(for: mode, runID: runID)
+            }
+        }
+    }
+
+    /// Build 98: direct Node-v5.2-style receive path for gather ACK state.
+    /// The general receiver still ingests every packet; duplicate critical packets
+    /// are idempotent because proof/h only advance on fresh authoritative values.
+    private func startCriticalGatherReceiver(engine: AutomationEngine) async {
+        criticalGatherReceiverTask?.cancel()
+        let criticalStream = await socket.criticalGatherStream()
+        criticalGatherReceiverTask = Task.detached(priority: .userInitiated) {
+            for await packet in criticalStream {
+                if Task.isCancelled { break }
+                await engine.ingestGatherCritical(packet)
             }
         }
     }
