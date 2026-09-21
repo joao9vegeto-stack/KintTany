@@ -145,7 +145,7 @@ struct RootView: View {
                         }
                     }
                 }
-                .frame(width: 176, height: 190)
+                .frame(width: 164, height: 184)
                 .contentShape(Rectangle())
 
                 VStack(alignment: .leading, spacing: 8) {
@@ -158,7 +158,7 @@ struct RootView: View {
                         .font(.headline.bold())
                         .foregroundStyle(.cyan)
 
-                    Text(app.hasSession ? "Arraste o personagem para girar" : "Conecte sua sessão")
+                    Text(app.hasSession ? "Personagem 3D" : "Conecte sua sessão")
                         .font(.caption2)
                         .foregroundStyle(.secondary)
                         .lineLimit(2)
@@ -630,19 +630,6 @@ private struct CharacterInteractiveView: UIViewRepresentable {
     func makeUIView(context: Context) -> WKWebView {
         let controller = WKUserContentController()
         controller.add(context.coordinator, name: "kintaraInteractive")
-        controller.addUserScript(WKUserScript(
-            source: """
-            (() => {
-              window.addEventListener('message', (event) => {
-                if (event && event.data && event.data.t === 'kintara_outfit_embed_ready') {
-                  window.webkit.messageHandlers.kintaraInteractive.postMessage('ready');
-                }
-              });
-            })();
-            """,
-            injectionTime: .atDocumentStart,
-            forMainFrameOnly: true
-        ))
         let config = WKWebViewConfiguration()
         config.websiteDataStore = .nonPersistent()
         config.userContentController = controller
@@ -652,16 +639,13 @@ private struct CharacterInteractiveView: UIViewRepresentable {
         view.scrollView.backgroundColor = .clear
         view.scrollView.isScrollEnabled = false
         view.scrollView.bounces = false
-        view.allowsBackForwardNavigationGestures = false
         context.coordinator.webView = view
         context.coordinator.load(cookie: cookie)
         return view
     }
 
     func updateUIView(_ webView: WKWebView, context: Context) {
-        if context.coordinator.loadedCookie != cookie {
-            context.coordinator.load(cookie: cookie)
-        }
+        if context.coordinator.loadedCookie != cookie { context.coordinator.load(cookie: cookie) }
     }
 
     static func dismantleUIView(_ webView: WKWebView, coordinator: Coordinator) {
@@ -669,55 +653,80 @@ private struct CharacterInteractiveView: UIViewRepresentable {
         webView.configuration.userContentController.removeScriptMessageHandler(forName: "kintaraInteractive")
     }
 
-    final class Coordinator: NSObject, WKScriptMessageHandler {
+    final class Coordinator: NSObject, WKScriptMessageHandler, WKNavigationDelegate {
         weak var webView: WKWebView?
         var loadedCookie = ""
 
         func load(cookie rawCookie: String) {
-            guard let webView,
-                  let cookie = makeCookie(rawCookie),
+            guard let webView, let cookie = makeCookie(rawCookie),
                   let url = URL(string: "https://kintara.com/play?embed=outfit") else { return }
             loadedCookie = rawCookie
+            webView.navigationDelegate = self
             webView.configuration.websiteDataStore.httpCookieStore.setCookie(cookie) { [weak webView] in
-                webView?.load(URLRequest(url: url, cachePolicy: .reloadIgnoringLocalCacheData))
+                webView?.load(URLRequest(url: url, cachePolicy: .returnCacheDataElseLoad))
             }
         }
 
-        func userContentController(_ userContentController: WKUserContentController, didReceive message: WKScriptMessage) {
-            guard message.name == "kintaraInteractive" else { return }
-            isolateRenderer()
-        }
+        func webView(_ webView: WKWebView, didFinish navigation: WKNavigation!) { installRendererShell() }
 
-        private func isolateRenderer() {
+        func userContentController(_ userContentController: WKUserContentController, didReceive message: WKScriptMessage) {}
+
+        private func installRendererShell() {
             let script = """
             (() => {
-              const host = document.querySelector('#kintara-dash-outfit-letter');
-              const canvas = host && host.querySelector('canvas');
-              if (!host || !canvas) return false;
-              const renderer = window.__kintaraOutfitRenderer || window.kintaraOutfitRenderer || host.__renderer || canvas.__renderer || null;
-              document.documentElement.style.cssText = 'margin:0!important;padding:0!important;background:transparent!important;overflow:hidden!important;';
-              document.body.style.cssText = 'margin:0!important;padding:0!important;background:transparent!important;overflow:hidden!important;';
-              [...document.body.children].forEach((el) => { if (el !== host && !el.contains(host)) el.style.display='none'; });
-              host.style.cssText = 'position:fixed!important;left:-42vw!important;top:-34vh!important;width:184vw!important;height:184vh!important;margin:0!important;padding:0!important;background:transparent!important;display:block!important;overflow:visible!important;border:0!important;box-shadow:none!important;';
-              canvas.style.cssText += ';width:100%!important;height:100%!important;max-width:none!important;max-height:none!important;touch-action:none!important;cursor:grab!important;background:transparent!important;';
-              canvas.setAttribute('aria-label','Personagem 3D. Arraste para girar.');
-              let dragging=false,lastX=0;
-              const rotate=(dx)=>{
-                try {
-                  if (renderer && typeof renderer.rotate === 'function') renderer.rotate(dx * 0.012);
-                  else if (renderer && renderer.model) renderer.model.rotation.y += dx * 0.012;
-                  else window.postMessage({t:'kintara_outfit_rotate', deltaX:dx}, '*');
-                } catch (_) {}
-              };
-              canvas.addEventListener('pointerdown',(e)=>{dragging=true;lastX=e.clientX;canvas.setPointerCapture?.(e.pointerId);e.preventDefault();},{passive:false});
-              canvas.addEventListener('pointermove',(e)=>{if(!dragging)return;const dx=e.clientX-lastX;lastX=e.clientX;rotate(dx);e.preventDefault();},{passive:false});
-              canvas.addEventListener('pointerup',(e)=>{dragging=false;canvas.releasePointerCapture?.(e.pointerId);e.preventDefault();},{passive:false});
-              canvas.addEventListener('pointercancel',()=>{dragging=false;});
-              let touchX=null;
-              canvas.addEventListener('touchstart',(e)=>{if(!e.touches.length)return;touchX=e.touches[0].clientX;e.preventDefault();},{passive:false});
-              canvas.addEventListener('touchmove',(e)=>{if(touchX===null||!e.touches.length)return;const x=e.touches[0].clientX;rotate(x-touchX);touchX=x;e.preventDefault();},{passive:false});
-              canvas.addEventListener('touchend',(e)=>{touchX=null;e.preventDefault();},{passive:false});
-              return true;
+              let tries = 0;
+              const timer = setInterval(() => {
+                const host = document.querySelector('#kintara-dash-outfit-letter');
+                const canvas = host && host.querySelector('canvas');
+                if (!host || !canvas) { if (++tries > 80) clearInterval(timer); return; }
+                clearInterval(timer);
+
+                document.documentElement.style.cssText='margin:0!important;padding:0!important;background:transparent!important;overflow:hidden!important;';
+                document.body.style.cssText='margin:0!important;padding:0!important;background:transparent!important;overflow:hidden!important;';
+                [...document.body.children].forEach(el => { if (el !== host && !el.contains(host)) el.remove(); });
+
+                host.style.cssText='position:fixed!important;inset:0!important;width:100vw!important;height:100vh!important;margin:0!important;padding:0!important;background:transparent!important;border:0!important;box-shadow:none!important;overflow:hidden!important;';
+                canvas.style.cssText='position:absolute!important;inset:0!important;width:100%!important;height:100%!important;background:transparent!important;touch-action:none!important;';
+
+                const ctx = canvas.getContext('webgl2') || canvas.getContext('webgl');
+                if (ctx) {
+                  try {
+                    ctx.clearColor(0,0,0,0);
+                    const oldClear = ctx.clear.bind(ctx);
+                    ctx.clear = function(mask) { this.clearColor(0,0,0,0); return oldClear(mask); };
+                  } catch (_) {}
+                }
+
+                const renderer = window.__kintaraOutfitRenderer || window.kintaraOutfitRenderer || host.__renderer || canvas.__renderer;
+                const scene = renderer && (renderer.scene || renderer._scene);
+                if (scene) {
+                  try { scene.background = null; } catch (_) {}
+                  try {
+                    scene.traverse?.(o => {
+                      const n=(o.name||'').toLowerCase();
+                      if (n.includes('ground') || n.includes('floor') || n.includes('platform') || n.includes('base')) o.visible=false;
+                    });
+                  } catch (_) {}
+                }
+                try { if (renderer?.setClearColor) renderer.setClearColor(0x000000,0); } catch (_) {}
+                try { if (renderer?.renderer?.setClearColor) renderer.renderer.setClearColor(0x000000,0); } catch (_) {}
+
+                let dragging=false,lastX=0;
+                const rotate = dx => {
+                  try {
+                    if (renderer?.rotate) renderer.rotate(dx*.014);
+                    else if (renderer?.model?.rotation) renderer.model.rotation.y += dx*.014;
+                    else if (renderer?.character?.rotation) renderer.character.rotation.y += dx*.014;
+                    else window.postMessage({t:'kintara_outfit_rotate',deltaX:dx},'*');
+                  } catch (_) {}
+                };
+                canvas.addEventListener('pointerdown',e=>{dragging=true;lastX=e.clientX;canvas.setPointerCapture?.(e.pointerId);e.preventDefault();},{passive:false});
+                canvas.addEventListener('pointermove',e=>{if(!dragging)return;const dx=e.clientX-lastX;lastX=e.clientX;rotate(dx);e.preventDefault();},{passive:false});
+                canvas.addEventListener('pointerup',e=>{dragging=false;e.preventDefault();},{passive:false});
+                canvas.addEventListener('touchstart',e=>{if(e.touches.length){dragging=true;lastX=e.touches[0].clientX;e.preventDefault();}},{passive:false});
+                canvas.addEventListener('touchmove',e=>{if(dragging&&e.touches.length){const x=e.touches[0].clientX;rotate(x-lastX);lastX=x;e.preventDefault();}},{passive:false});
+                canvas.addEventListener('touchend',()=>{dragging=false;},{passive:false});
+              }, 100);
             })();
             """
             webView?.evaluateJavaScript(script)
@@ -727,10 +736,7 @@ private struct CharacterInteractiveView: UIViewRepresentable {
             let pair = raw.split(separator: ";", maxSplits: 1).first.map(String.init) ?? raw
             let parts = pair.split(separator: "=", maxSplits: 1).map(String.init)
             guard parts.count == 2, parts[0] == "kintara_session", !parts[1].isEmpty else { return nil }
-            return HTTPCookie(properties: [
-                .domain: ".kintara.com", .path: "/", .name: parts[0],
-                .value: parts[1], .secure: "TRUE"
-            ])
+            return HTTPCookie(properties: [.domain: ".kintara.com", .path: "/", .name: parts[0], .value: parts[1], .secure: "TRUE"])
         }
     }
 }
