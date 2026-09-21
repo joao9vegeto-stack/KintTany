@@ -135,7 +135,7 @@ struct RootView: View {
             HStack(spacing: 14) {
                 Group {
                     if app.hasSession, let cookie = app.authenticatedCookieForCharacter, !cookie.isEmpty {
-                        CharacterVoxel3DView(appearance: app.characterProfile.appearance)
+                        CharacterVoxel3DView(appearance: app.characterProfile.appearance, cookie: cookie)
                     } else {
                         ZStack {
                             RoundedRectangle(cornerRadius: 18, style: .continuous)
@@ -625,12 +625,58 @@ struct RootView: View {
 
 private struct CharacterVoxel3DView: UIViewRepresentable {
     let appearance: CharacterAppearance
+    let cookie: String
 
     func makeCoordinator() -> Coordinator { Coordinator() }
 
     final class Coordinator: NSObject {
         weak var view: SCNView?
         private var lastX: CGFloat = 0
+        private var syncTask: URLSessionDataTask?
+        private var lastCookie = ""
+        func syncRealAppearance(cookie: String, appearance: CharacterAppearance) {
+            guard cookie != lastCookie else { return }
+            lastCookie = cookie
+            guard let url = URL(string: "https://kintara.com/play?embed=outfit") else { return }
+            var request = URLRequest(url: url, cachePolicy: .returnCacheDataElseLoad, timeoutInterval: 12)
+            request.setValue(cookie, forHTTPHeaderField: "Cookie")
+            syncTask?.cancel()
+            syncTask = URLSession.shared.dataTask(with: request) { [weak self] data, response, _ in
+                guard let self, let data, let html = String(data: data, encoding: .utf8) else { return }
+                let urls = Self.assetURLs(in: html, base: url)
+                guard !urls.isEmpty else { return }
+                // Cache the actual game avatar resources. SceneKit stays authoritative for gestures;
+                // this cache is the source for replacing procedural placeholder parts as mappings land.
+                let group = DispatchGroup()
+                for assetURL in urls.prefix(48) {
+                    group.enter()
+                    URLSession.shared.dataTask(with: assetURL) { data, _, _ in
+                        if let data { try? data.write(to: Self.cacheURL(for: assetURL), options: .atomic) }
+                        group.leave()
+                    }.resume()
+                }
+                group.notify(queue: .main) { self.view?.setNeedsDisplay() }
+            }
+            syncTask?.resume()
+        }
+
+        private static func assetURLs(in html: String, base: URL) -> [URL] {
+            let pattern = #"(?i)(?:src|href)=[\"']([^\"']+\.(?:js|json|glb|gltf|png|webp))(?:\?[^\"']*)?[\"']"#
+            guard let re = try? NSRegularExpression(pattern: pattern) else { return [] }
+            let ns = html as NSString
+            return re.matches(in: html, range: NSRange(location: 0, length: ns.length)).compactMap {
+                guard $0.numberOfRanges > 1 else { return nil }
+                return URL(string: ns.substring(with: $0.range(at: 1)), relativeTo: base)?.absoluteURL
+            }
+        }
+
+        private static func cacheURL(for url: URL) -> URL {
+            let dir = FileManager.default.urls(for: .cachesDirectory, in: .userDomainMask)[0].appendingPathComponent("KintaraAvatarAssets", isDirectory: true)
+            try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+            let safe = String(url.absoluteString.hashValue, radix: 16) + "-" + url.lastPathComponent
+            return dir.appendingPathComponent(safe)
+        }
+
         @objc func pan(_ gesture: UIPanGestureRecognizer) {
             guard let avatar = view?.scene?.rootNode.childNode(withName: "avatar", recursively: false) else { return }
             let x = gesture.translation(in: view).x
@@ -650,11 +696,14 @@ private struct CharacterVoxel3DView: UIViewRepresentable {
         view.addGestureRecognizer(pan)
         context.coordinator.view = view
         view.scene = Self.scene(for: appearance)
+        context.coordinator.syncRealAppearance(cookie: cookie, appearance: appearance)
         return view
     }
 
     func updateUIView(_ view: SCNView, context: Context) {
         view.scene = Self.scene(for: appearance)
+        context.coordinator.view = view
+        context.coordinator.syncRealAppearance(cookie: cookie, appearance: appearance)
     }
 
     private static func scene(for a: CharacterAppearance) -> SCNScene {
