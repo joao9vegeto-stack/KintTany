@@ -716,7 +716,7 @@ private struct CharacterStatsView: View {
                     .padding(.vertical, compact ? 8 : 12)
                 }
             }
-            .navigationTitle("Personagem")
+            .navigationTitle("Stats")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) {
@@ -813,12 +813,24 @@ private struct CharacterSkillCard: View {
             ProgressView(value: stats.progress(for: skill))
                 .tint(.green)
 
-            Text("\(stats.totalXP(for: skill).formatted()) XP")
+            if stats.level(for: skill) >= CharacterSkillStats.maxLevel {
+                Text("Nível máximo")
+                    .font(.caption2.bold())
+                    .foregroundStyle(.green)
+            } else {
+                Text("\(stats.currentLevelXP(for: skill).formatted()) / \(stats.currentLevelXPGoal(for: skill).formatted()) XP no nível")
+                    .font(.caption2.monospacedDigit())
+                    .foregroundStyle(.white.opacity(0.82))
+                    .lineLimit(1)
+                    .minimumScaleFactor(0.72)
+            }
+
+            Text("\(stats.totalXP(for: skill).formatted()) XP total")
                 .font(.caption2.monospacedDigit())
                 .foregroundStyle(.secondary)
         }
         .padding(compact ? 11 : 13)
-        .frame(maxWidth: .infinity, minHeight: compact ? 72 : 82, alignment: .leading)
+        .frame(maxWidth: .infinity, minHeight: compact ? 88 : 98, alignment: .leading)
         .background(.white.opacity(0.065), in: RoundedRectangle(cornerRadius: 15, style: .continuous))
         .overlay(
             RoundedRectangle(cornerRadius: 15, style: .continuous)
