@@ -75,6 +75,20 @@ struct DunesWorldPreflightPolicy {
     }
 }
 
+/// Build 93: after every safe Dunes bank checkpoint, recover in the World
+/// regeneration area captured from the official client before exposing the
+/// full-loot loadout again. The capture traversed the regeneration area around
+/// the World origin; use an interior point rather than an observed edge.
+struct DunesWorldRecoveryPolicy {
+    static let safePoint = Position(x: 0.5, z: 0.5)
+    static let requiredHP = 100
+    static let timeoutMS: Double = 45_000
+
+    static func isRecovered(hp: Int) -> Bool {
+        hp >= requiredHP
+    }
+}
+
 
 /// Build 76: full-loot loadouts preserve exactly one physical tool instance.
 /// The activity tier/type is still selected by ActivityToolPolicy; among copies
@@ -3660,6 +3674,7 @@ actor AutomationEngine {
             }
             reporter(.log("❤️‍🔥 Preflight Dunes • Health Potion+ carregadas: \(healthPotionPlus.carried)/\(DunesHeatSafetyPolicy.carriedHealthPotionPlusTarget)"))
             try await leaveBankShopToWorld(reason: "preflight Dunes concluído")
+            try await recoverDunesHPInWorldBeforeEntry()
             return (selected, healthPotionPlus.carried, selectedInstance.identity, lifeEpoch)
         } catch {
             // Ainda não entramos em full-loot. Tente abandonar o bank_shop antes
@@ -3667,6 +3682,51 @@ actor AutomationEngine {
             try? await leaveBankShopToWorld(reason: "preflight Dunes abortado")
             throw error
         }
+    }
+
+    /// Build 93: the World regeneration zone is a safe checkpoint stage.
+    /// Do not re-enter Dunes until HP=100 is observed authoritatively.
+    private func recoverDunesHPInWorldBeforeEntry() async throws {
+        guard try await waitForRegion("world", timeoutMS: 5_000) else {
+            throw EngineError.regionNotConfirmed("world para regeneração")
+        }
+
+        reporter(.state(.recovering, "Recuperando HP no World"))
+        reporter(.log("💚 Dunes CHECKPOINT • indo à zona segura de regeneração no World"))
+        try await walk(
+            to: DunesWorldRecoveryPolicy.safePoint,
+            maxSeconds: 35,
+            status: "Indo à zona de regeneração"
+        )
+        try await sendPosition(moving: false, full: true)
+
+        let deadline = nowMS + DunesWorldRecoveryPolicy.timeoutMS
+        var lastReportedHP = -1
+        while nowMS < deadline {
+            try Task.checkCancellation()
+            guard (serverRegion ?? region).lowercased() == "world" else {
+                throw EngineError.regionNotConfirmed("world durante regeneração")
+            }
+
+            if DunesWorldRecoveryPolicy.isRecovered(hp: playerHP) {
+                reporter(.log("💚 World • HP 100/100 confirmado • retorno às Dunes liberado"))
+                return
+            }
+
+            if playerHP != lastReportedHP {
+                lastReportedHP = playerHP
+                reporter(.diagnostic("[DUNES][RECOVERY] zona World • HP autoritativo=\(playerHP)/100"))
+            }
+
+            // A posição fica parada dentro da área; heartbeats/snapshots são a
+            // fonte da confirmação. Não sintetize HP e não use poção.
+            try await sendPosition(moving: false)
+            try await sleep(500)
+        }
+
+        throw EngineError.gatherLoadoutNotReady(
+            "HP não chegou a 100/100 na zona de regeneração do World; reentrada nas Dunes bloqueada"
+        )
     }
 
     private func ensureActivityToolLoadout(for mode: ActivityMode) async throws {
