@@ -6978,6 +6978,7 @@ enum EngineError: LocalizedError {
         case .missingFishingBait(let bait): return "Isca selecionada sem estoque: \(bait)"
         case .insufficientFishingBait(let bait, let have, let need): return "Isca insuficiente: \(bait) \(have)/\(need)"
         case .unsupportedFishingBait(let bait): return "Automação ainda não validada para \(bait)"
+        case .fishingPresenceStalled(let successes): return "Presence de pesca sem fish_bite após falha global • progresso \(successes)"
         }
     }
 }
