@@ -145,7 +145,7 @@ struct RootView: View {
                         }
                     }
                 }
-                .frame(width: 164, height: 184)
+                .frame(width: 176, height: 202)
                 .contentShape(Rectangle())
 
                 VStack(alignment: .leading, spacing: 8) {
@@ -158,7 +158,7 @@ struct RootView: View {
                         .font(.headline.bold())
                         .foregroundStyle(.cyan)
 
-                    Text(app.hasSession ? "Personagem 3D" : "Conecte sua sessão")
+                    Text(app.hasSession ? "Arraste para girar" : "Conecte sua sessão")
                         .font(.caption2)
                         .foregroundStyle(.secondary)
                         .lineLimit(2)
@@ -630,6 +630,7 @@ private struct CharacterInteractiveView: UIViewRepresentable {
     func makeUIView(context: Context) -> WKWebView {
         let controller = WKUserContentController()
         controller.add(context.coordinator, name: "kintaraInteractive")
+        controller.addUserScript(WKUserScript(source: Coordinator.captureScript, injectionTime: .atDocumentStart, forMainFrameOnly: true))
         let config = WKWebViewConfiguration()
         config.websiteDataStore = .nonPersistent()
         config.userContentController = controller
@@ -657,6 +658,26 @@ private struct CharacterInteractiveView: UIViewRepresentable {
         weak var webView: WKWebView?
         var loadedCookie = ""
 
+        static let captureScript = """
+        (() => {
+          if (window.__kintara3DProbeInstalled) return;
+          window.__kintara3DProbeInstalled = true;
+          const hook = () => {
+            const T = window.THREE;
+            if (!T || !T.WebGLRenderer || T.WebGLRenderer.prototype.__kintaraHooked) return false;
+            const p = T.WebGLRenderer.prototype;
+            const original = p.render;
+            p.render = function(scene, camera) {
+              window.__kintara3D = { renderer: this, scene, camera };
+              return original.call(this, scene, camera);
+            };
+            p.__kintaraHooked = true;
+            return true;
+          };
+          let n=0; const id=setInterval(()=>{ if(hook() || ++n>1000) clearInterval(id); },10);
+        })();
+        """
+
         func load(cookie rawCookie: String) {
             guard let webView, let cookie = makeCookie(rawCookie),
                   let url = URL(string: "https://kintara.com/play?embed=outfit") else { return }
@@ -674,59 +695,72 @@ private struct CharacterInteractiveView: UIViewRepresentable {
         private func installRendererShell() {
             let script = """
             (() => {
-              let tries = 0;
-              const timer = setInterval(() => {
-                const host = document.querySelector('#kintara-dash-outfit-letter');
-                const canvas = host && host.querySelector('canvas');
-                if (!host || !canvas) { if (++tries > 80) clearInterval(timer); return; }
+              let tries=0;
+              const timer=setInterval(()=>{
+                const host=document.querySelector('#kintara-dash-outfit-letter');
+                const canvas=host?.querySelector('canvas');
+                if(!host||!canvas){if(++tries>120)clearInterval(timer);return;}
+                const state=window.__kintara3D;
+                if(!state?.scene||!state?.camera){if(++tries>120)clearInterval(timer);return;}
                 clearInterval(timer);
 
                 document.documentElement.style.cssText='margin:0!important;padding:0!important;background:transparent!important;overflow:hidden!important;';
                 document.body.style.cssText='margin:0!important;padding:0!important;background:transparent!important;overflow:hidden!important;';
-                [...document.body.children].forEach(el => { if (el !== host && !el.contains(host)) el.remove(); });
-
-                host.style.cssText='position:fixed!important;inset:0!important;width:100vw!important;height:100vh!important;margin:0!important;padding:0!important;background:transparent!important;border:0!important;box-shadow:none!important;overflow:hidden!important;';
+                [...document.body.children].forEach(el=>{if(el!==host&&!el.contains(host))el.remove();});
+                host.style.cssText='position:fixed!important;inset:0!important;width:100vw!important;height:100vh!important;margin:0!important;padding:0!important;background:transparent!important;overflow:hidden!important;border:0!important;box-shadow:none!important;';
                 canvas.style.cssText='position:absolute!important;inset:0!important;width:100%!important;height:100%!important;background:transparent!important;touch-action:none!important;';
 
-                const ctx = canvas.getContext('webgl2') || canvas.getContext('webgl');
-                if (ctx) {
-                  try {
-                    ctx.clearColor(0,0,0,0);
-                    const oldClear = ctx.clear.bind(ctx);
-                    ctx.clear = function(mask) { this.clearColor(0,0,0,0); return oldClear(mask); };
-                  } catch (_) {}
-                }
+                const {renderer,scene,camera}=state;
+                try{renderer.setClearColor(0x000000,0);renderer.setSize(innerWidth,innerHeight,false);}catch(_){}
+                try{scene.background=null;}catch(_){}
 
-                const renderer = window.__kintaraOutfitRenderer || window.kintaraOutfitRenderer || host.__renderer || canvas.__renderer;
-                const scene = renderer && (renderer.scene || renderer._scene);
-                if (scene) {
-                  try { scene.background = null; } catch (_) {}
-                  try {
-                    scene.traverse?.(o => {
-                      const n=(o.name||'').toLowerCase();
-                      if (n.includes('ground') || n.includes('floor') || n.includes('platform') || n.includes('base')) o.visible=false;
-                    });
-                  } catch (_) {}
+                const T=window.THREE;
+                let character=null;
+                if(T){
+                  const box=new T.Box3(), size=new T.Vector3();
+                  const roots=scene.children.filter(o=>o.visible!==false);
+                  let best=-1;
+                  roots.forEach(o=>{
+                    try{
+                      box.setFromObject(o); box.getSize(size);
+                      const name=(o.name||'').toLowerCase();
+                      const flat=size.y < Math.max(size.x,size.z)*0.22;
+                      const groundish=flat || /ground|floor|platform|base|shadow/.test(name);
+                      if(groundish && size.x>0.4 && size.z>0.4){o.visible=false;return;}
+                      const score=size.y*3 + size.x + size.z;
+                      if(score>best){best=score;character=o;}
+                    }catch(_){}
+                  });
+                  if(character){
+                    try{
+                      box.setFromObject(character);
+                      const center=new T.Vector3(); box.getCenter(center);
+                      const size2=new T.Vector3(); box.getSize(size2);
+                      if(camera.isOrthographicCamera){
+                        const viewH=Math.abs(camera.top-camera.bottom);
+                        camera.zoom=Math.max(camera.zoom||1,(viewH/Math.max(size2.y,.01))*0.88);
+                        camera.position.x += center.x-(camera.position.x||0);
+                        camera.position.y += center.y-(camera.position.y||0);
+                        camera.updateProjectionMatrix();
+                      } else {
+                        camera.lookAt(center);
+                      }
+                    }catch(_){}
+                  }
                 }
-                try { if (renderer?.setClearColor) renderer.setClearColor(0x000000,0); } catch (_) {}
-                try { if (renderer?.renderer?.setClearColor) renderer.renderer.setClearColor(0x000000,0); } catch (_) {}
 
                 let dragging=false,lastX=0;
-                const rotate = dx => {
-                  try {
-                    if (renderer?.rotate) renderer.rotate(dx*.014);
-                    else if (renderer?.model?.rotation) renderer.model.rotation.y += dx*.014;
-                    else if (renderer?.character?.rotation) renderer.character.rotation.y += dx*.014;
-                    else window.postMessage({t:'kintara_outfit_rotate',deltaX:dx},'*');
-                  } catch (_) {}
+                const rotate=dx=>{
+                  if(!character)return;
+                  try{character.rotation.y += dx*0.018;}catch(_){}
                 };
                 canvas.addEventListener('pointerdown',e=>{dragging=true;lastX=e.clientX;canvas.setPointerCapture?.(e.pointerId);e.preventDefault();},{passive:false});
-                canvas.addEventListener('pointermove',e=>{if(!dragging)return;const dx=e.clientX-lastX;lastX=e.clientX;rotate(dx);e.preventDefault();},{passive:false});
+                canvas.addEventListener('pointermove',e=>{if(!dragging)return;const x=e.clientX;rotate(x-lastX);lastX=x;e.preventDefault();},{passive:false});
                 canvas.addEventListener('pointerup',e=>{dragging=false;e.preventDefault();},{passive:false});
                 canvas.addEventListener('touchstart',e=>{if(e.touches.length){dragging=true;lastX=e.touches[0].clientX;e.preventDefault();}},{passive:false});
                 canvas.addEventListener('touchmove',e=>{if(dragging&&e.touches.length){const x=e.touches[0].clientX;rotate(x-lastX);lastX=x;e.preventDefault();}},{passive:false});
-                canvas.addEventListener('touchend',()=>{dragging=false;},{passive:false});
-              }, 100);
+                canvas.addEventListener('touchend',()=>dragging=false,{passive:false});
+              },50);
             })();
             """
             webView?.evaluateJavaScript(script)
