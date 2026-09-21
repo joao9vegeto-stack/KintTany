@@ -2,6 +2,7 @@ import Foundation
 import SwiftUI
 import UIKit
 import WebKit
+import SceneKit
 
 struct RootView: View {
     @EnvironmentObject var app: AppStore
@@ -134,7 +135,7 @@ struct RootView: View {
             HStack(spacing: 14) {
                 Group {
                     if app.hasSession, let cookie = app.authenticatedCookieForCharacter, !cookie.isEmpty {
-                        CharacterInteractiveView(cookie: cookie)
+                        CharacterVoxel3DView(appearance: app.characterProfile.appearance)
                     } else {
                         ZStack {
                             RoundedRectangle(cornerRadius: 18, style: .continuous)
@@ -622,113 +623,88 @@ struct RootView: View {
     }
 }
 
-private struct CharacterInteractiveView: UIViewRepresentable {
-    let cookie: String
+private struct CharacterVoxel3DView: UIViewRepresentable {
+    let appearance: CharacterAppearance
 
-    func makeCoordinator() -> Coordinator { Coordinator() }
-
-    func makeUIView(context: Context) -> WKWebView {
-        let controller = WKUserContentController()
-        controller.add(context.coordinator, name: "kintaraInteractive")
-        let config = WKWebViewConfiguration()
-        config.websiteDataStore = .default()
-        config.userContentController = controller
-        config.suppressesIncrementalRendering = false
-        let view = WKWebView(frame: .zero, configuration: config)
-        view.isOpaque = false
+    func makeUIView(context: Context) -> SCNView {
+        let view = SCNView()
         view.backgroundColor = .clear
-        view.scrollView.backgroundColor = .clear
-        view.scrollView.isScrollEnabled = false
-        view.scrollView.bounces = false
-        view.navigationDelegate = context.coordinator
-        context.coordinator.webView = view
-        context.coordinator.load(cookie: cookie)
+        view.isOpaque = false
+        view.autoenablesDefaultLighting = false
+        view.allowsCameraControl = true
+        view.defaultCameraController.interactionMode = .orbitTurntable
+        view.defaultCameraController.inertiaEnabled = true
+        view.scene = Self.scene(for: appearance)
         return view
     }
 
-    func updateUIView(_ webView: WKWebView, context: Context) {
-        if context.coordinator.loadedCookie != cookie { context.coordinator.load(cookie: cookie) }
+    func updateUIView(_ view: SCNView, context: Context) {
+        view.scene = Self.scene(for: appearance)
     }
 
-    static func dismantleUIView(_ webView: WKWebView, coordinator: Coordinator) {
-        webView.stopLoading()
-        webView.configuration.userContentController.removeScriptMessageHandler(forName: "kintaraInteractive")
-    }
+    private static func scene(for a: CharacterAppearance) -> SCNScene {
+        let scene = SCNScene()
+        let root = SCNNode()
+        root.name = "avatar"
+        scene.rootNode.addChildNode(root)
 
-    final class Coordinator: NSObject, WKScriptMessageHandler, WKNavigationDelegate {
-        weak var webView: WKWebView?
-        var loadedCookie = ""
-
-        func load(cookie rawCookie: String) {
-            guard let webView, let cookie = makeCookie(rawCookie),
-                  let url = URL(string: "https://kintara.com/play?embed=outfit") else { return }
-            loadedCookie = rawCookie
-            webView.configuration.websiteDataStore.httpCookieStore.setCookie(cookie) { [weak webView] in
-                webView?.load(URLRequest(url: url, cachePolicy: .returnCacheDataElseLoad, timeoutInterval: 15))
-            }
+        func color(_ index: Int?, fallback: UIColor) -> UIColor {
+            guard let index else { return fallback }
+            let palette: [UIColor] = [.systemBlue,.systemIndigo,.systemPurple,.systemTeal,.systemOrange,.systemRed,.systemGreen,.systemYellow]
+            return palette[abs(index) % palette.count]
+        }
+        func box(_ w: CGFloat,_ h: CGFloat,_ d: CGFloat,_ p: SCNVector3,_ material: UIColor) -> SCNNode {
+            let g=SCNBox(width:w,height:h,length:d,chamferRadius:0)
+            let m=SCNMaterial(); m.diffuse.contents=material; m.lightingModel = .constant
+            g.materials=[m]
+            let n=SCNNode(geometry:g); n.position=p; root.addChildNode(n); return n
         }
 
-        func webView(_ webView: WKWebView, didFinish navigation: WKNavigation!) { installPortraitControls() }
-        func userContentController(_ userContentController: WKUserContentController, didReceive message: WKScriptMessage) {}
+        let skinPalette: [UIColor] = [
+            UIColor(red:0.43,green:0.27,blue:0.16,alpha:1),
+            UIColor(red:0.72,green:0.48,blue:0.29,alpha:1),
+            UIColor(red:0.84,green:0.62,blue:0.40,alpha:1),
+            UIColor(red:0.94,green:0.75,blue:0.55,alpha:1)
+        ]
+        let skin=skinPalette[max(0,min(skinPalette.count-1,a.skinTone))]
+        let top=color(a.topColor,fallback:.systemIndigo)
+        let pants=color(a.pantsColor,fallback:UIColor(white:0.12,alpha:1))
+        let shoe=color(a.shoeColor,fallback:UIColor(white:0.06,alpha:1))
 
-        private func installPortraitControls() {
-            let script = """
-            (() => {
-              if(window.__kintaraPortraitInstalled)return;
-              window.__kintaraPortraitInstalled=true;
-              let tries=0;
-              const timer=setInterval(()=>{
-                const host=document.querySelector('#kintara-dash-outfit-letter');
-                const canvas=host?.querySelector('canvas');
-                if(!host||!canvas){if(++tries>240)clearInterval(timer);return;}
-                clearInterval(timer);
+        box(0.92,0.92,0.92,SCNVector3(0,2.58,0),material:skin)
+        box(0.82,0.86,0.56,SCNVector3(0,1.70,0),material:top)
+        box(0.34,0.72,0.42,SCNVector3(-0.23,0.91,0),material:pants)
+        box(0.34,0.72,0.42,SCNVector3(0.23,0.91,0),material:pants)
+        box(0.38,0.24,0.58,SCNVector3(-0.23,0.43,0.07),material:shoe)
+        box(0.38,0.24,0.58,SCNVector3(0.23,0.43,0.07),material:shoe)
+        box(0.22,0.76,0.28,SCNVector3(-0.56,1.70,0),material:skin)
+        box(0.22,0.76,0.28,SCNVector3(0.56,1.70,0),material:skin)
 
-                document.documentElement.style.cssText='margin:0!important;padding:0!important;background:transparent!important;overflow:hidden!important;';
-                document.body.style.cssText='margin:0!important;padding:0!important;background:transparent!important;overflow:hidden!important;';
-                [...document.body.children].forEach(el=>{if(el!==host&&!el.contains(host))el.style.display='none';});
-                host.style.cssText='position:fixed!important;left:50%!important;top:50%!important;width:220vw!important;height:220vh!important;transform:translate(-50%,-43%)!important;margin:0!important;padding:0!important;background:transparent!important;border:0!important;box-shadow:none!important;overflow:hidden!important;pointer-events:none!important;';
-                canvas.style.cssText='width:100%!important;height:100%!important;max-width:none!important;max-height:none!important;background:transparent!important;pointer-events:none!important;';
+        let eye=UIColor(white:0.03,alpha:1)
+        box(0.13,0.16,0.04,SCNVector3(-0.20,2.63,0.48),material:eye)
+        box(0.13,0.16,0.04,SCNVector3(0.20,2.63,0.48),material:eye)
 
-                // Rotation is intentionally implemented as a discrete view cycle instead of
-                // forwarding pointer events to Kintara's outfit editor or deforming its canvas.
-                // A horizontal swipe chooses a stable view by mirroring the already-rendered
-                // portrait. This preserves geometry and can never mutate equipment.
-                let facing=0;
-                const apply=()=>{
-                  const sx=facing<0?-1:1;
-                  canvas.style.transformOrigin='50% 50%';
-                  canvas.style.transform='scaleX('+sx+')';
-                };
-                const overlay=document.createElement('div');
-                overlay.style.cssText='position:fixed;inset:0;z-index:2147483647;background:transparent;touch-action:none;';
-                document.body.appendChild(overlay);
-                let startX=0,dragging=false;
-                const down=(x,e)=>{startX=x;dragging=true;e?.preventDefault?.();};
-                const up=(x,e)=>{
-                  if(!dragging)return; dragging=false;
-                  const dx=x-startX;
-                  if(Math.abs(dx)>18){facing=dx<0?-1:1;apply();}
-                  e?.preventDefault?.();
-                };
-                overlay.addEventListener('pointerdown',e=>down(e.clientX,e),{passive:false});
-                overlay.addEventListener('pointerup',e=>up(e.clientX,e),{passive:false});
-                overlay.addEventListener('pointercancel',e=>{dragging=false;e.preventDefault();},{passive:false});
-                overlay.addEventListener('touchstart',e=>{if(e.touches.length)down(e.touches[0].clientX,e);},{passive:false});
-                overlay.addEventListener('touchend',e=>{const t=e.changedTouches?.[0];if(t)up(t.clientX,e);},{passive:false});
-              },25);
-            })();
-            """
-            webView?.evaluateJavaScript(script)
+        if a.hat != 0 {
+            let hatColor=color(a.hatColor,fallback:UIColor(white:0.08,alpha:1))
+            box(1.02,0.20,1.02,SCNVector3(0,3.12,0),material:hatColor)
+            box(0.70,0.42,0.70,SCNVector3(0,3.38,0),material:hatColor)
+        }
+        if a.cape != nil {
+            box(0.72,1.05,0.10,SCNVector3(0,1.68,-0.36),material:.systemRed)
         }
 
-        private func makeCookie(_ raw: String) -> HTTPCookie? {
-            let pair = raw.split(separator: ";", maxSplits: 1).first.map(String.init) ?? raw
-            let parts = pair.split(separator: "=", maxSplits: 1).map(String.init)
-            guard parts.count == 2, parts[0] == "kintara_session", !parts[1].isEmpty else { return nil }
-            return HTTPCookie(properties: [.domain: ".kintara.com", .path: "/", .name: parts[0], .value: parts[1], .secure: "TRUE"])
-        }
+        let camera=SCNNode(); camera.camera=SCNCamera(); camera.camera?.usesOrthographicProjection=true
+        camera.camera?.orthographicScale=4.05
+        camera.position=SCNVector3(4.5,3.1,6.2)
+        camera.look(at: SCNVector3(0,1.75,0))
+        scene.rootNode.addChildNode(camera)
+
+        let light=SCNNode(); light.light=SCNLight(); light.light?.type = .ambient; light.light?.intensity=900
+        scene.rootNode.addChildNode(light)
+        return scene
     }
 }
+
 
 private struct CharacterThumbnail: View {
     let image: UIImage?
