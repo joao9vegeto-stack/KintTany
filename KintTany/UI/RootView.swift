@@ -135,7 +135,7 @@ struct RootView: View {
             HStack(spacing: 14) {
                 Group {
                     if app.hasSession, let cookie = app.authenticatedCookieForCharacter, !cookie.isEmpty {
-                        CharacterVoxel3DView(appearance: app.characterProfile.appearance, cookie: cookie)
+                        CharacterReal3DView(cookie: cookie)
                     } else {
                         ZStack {
                             RoundedRectangle(cornerRadius: 18, style: .continuous)
