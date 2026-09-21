@@ -840,8 +840,20 @@ private struct CharacterVoxel3DView: UIViewRepresentable {
 
         // Exact pc_head + eyes from Kintara uHt/buildCharacter.
         part(0.44,0.34,0.44,0,0.88,0,skinMat)
-        part(0.07,0.13,0.02,-0.09,0.90,0.24,eyeMat)
-        part(0.07,0.13,0.02, 0.09,0.90,0.24,eyeMat)
+
+        // pc_eyeL / pc_eyeR are face pixels, not volumetric blocks.
+        // Keep them flush with the head so rotation never exposes black side faces.
+        func eye(_ x: CGFloat) {
+            let plane = SCNPlane(width: sc(0.07), height: sc(0.13))
+            plane.materials = [eyeMat]
+            let node = SCNNode(geometry: plane)
+            node.name = x < 0 ? "pc_eyeL" : "pc_eyeR"
+            node.position = SCNVector3(Float(sc(x)), Float(sc(0.90)) + yOffset, Float(sc(0.221)))
+            node.renderingOrder = 6
+            root.addChildNode(node)
+        }
+        eye(-0.09)
+        eye(0.09)
 
         // Exact oUe top geometry table used by applyOutfitToGroup.
         let tops: [(CGFloat,CGFloat,CGFloat,CGFloat,Bool,Bool,CGFloat,CGFloat,CGFloat,CGFloat,CGFloat,Bool,Bool)] = [
