@@ -30,6 +30,22 @@ struct PresenceReceivePolicy {
     static let traceRawInboundPayload = false
 }
 
+struct PresenceCriticalPacket: Sendable {
+    let data: Data
+    let receivedAtMS: Double
+}
+
+/// Build 98: equivalent of the Node v5.2 ws.on("message") critical callback.
+/// action_proof/res_evt/res_snap get a direct stream from the socket receive edge;
+/// the normal stream remains intact for snapshots, UI and every other protocol event.
+struct PresenceCriticalReceivePolicy {
+    static func isGatherCritical(_ data: Data) -> Bool {
+        guard let packet = RealtimeProtocol.packet(data),
+              let type = packet["t"] as? String else { return false }
+        return type == "action_proof" || type == "res_evt" || type == "res_snap"
+    }
+}
+
 actor RealtimeSocket {
     private struct ServerCandidate {
         let id: Int
@@ -46,6 +62,7 @@ actor RealtimeSocket {
     private var receiveLoopTask: Task<Void, Never>?
     private var closed = false
     private var continuation: AsyncStream<Data>.Continuation?
+    private var criticalContinuation: AsyncStream<PresenceCriticalPacket>.Continuation?
     private var traceBuffer: [String] = []
     private var connectionID = UUID()
     private var lastDisconnectReason: String?
@@ -294,6 +311,16 @@ actor RealtimeSocket {
         }
     }
 
+    func criticalGatherStream() -> AsyncStream<PresenceCriticalPacket> {
+        var streamContinuation: AsyncStream<PresenceCriticalPacket>.Continuation?
+        let stream = AsyncStream<PresenceCriticalPacket>(bufferingPolicy: .bufferingNewest(64)) {
+            streamContinuation = $0
+        }
+        criticalContinuation?.finish()
+        criticalContinuation = streamContinuation
+        return stream
+    }
+
     func disconnectReason() -> String? {
         lastDisconnectReason
     }
@@ -326,6 +353,8 @@ actor RealtimeSocket {
         task = nil
         continuation?.finish()
         continuation = nil
+        criticalContinuation?.finish()
+        criticalContinuation = nil
     }
 
     private func closeCurrentConnectionAndWait(clearTrace: Bool) async {
@@ -630,6 +659,10 @@ actor RealtimeSocket {
                 // synchronously here, before the authoritative event could reach the
                 // AutomationEngine. Under prolonged iOS BG throttling that work can
                 // amplify receive latency and build a packet backlog.
+                let receivedAtMS = ProcessInfo.processInfo.systemUptime * 1_000
+                if PresenceCriticalReceivePolicy.isGatherCritical(data) {
+                    criticalContinuation?.yield(PresenceCriticalPacket(data: data, receivedAtMS: receivedAtMS))
+                }
                 continuation?.yield(data)
                 if PresenceReceivePolicy.traceRawInboundPayload {
                     tracePayload(direction: "IN presence", data: data)
