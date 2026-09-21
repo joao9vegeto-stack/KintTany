@@ -675,8 +675,8 @@ private struct CharacterReal3DView: UIViewRepresentable {
         let cfg=WKWebViewConfiguration()
         cfg.websiteDataStore = .default()
         let w=WKWebView(frame:.zero,configuration:cfg)
-        w.isOpaque=false; w.backgroundColor=.clear; w.scrollView.backgroundColor=.clear; w.scrollView.isScrollEnabled=false
-        w.navigationDelegate=context.coordinator; context.coordinator.webView=w
+        w.isOpaque = false; w.backgroundColor = .clear; w.scrollView.backgroundColor = .clear; w.scrollView.isScrollEnabled = false
+        w.navigationDelegate = context.coordinator; context.coordinator.webView = w
         if let u=URL(string:"https://kintara.com/play") {
             var r=URLRequest(url:u,cachePolicy:.returnCacheDataElseLoad)
             r.setValue(cookie,forHTTPHeaderField:"Cookie")
@@ -688,7 +688,7 @@ private struct CharacterReal3DView: UIViewRepresentable {
     }
 
     func updateUIView(_ w: WKWebView, context: Context) {
-        context.coordinator.webView=w
+        context.coordinator.webView = w
         context.coordinator.isolate(w)
     }
 }
