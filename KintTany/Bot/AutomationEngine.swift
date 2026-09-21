@@ -1394,6 +1394,10 @@ actor AutomationEngine {
     private var fishBlockedCells = Set<String>()
     private var fishQuarantinedGenerations = Set<String>()
     private var fishHealthWaitSerial = -1
+    /// Falhas consecutivas sem fish_bite atravessando células/spots. O log real
+    /// mostrou que, quando este estado se torna global, trocar de spot não cura a
+    /// Presence; o owner deve recriá-la preservando o progresso da sessão.
+    private var fishGlobalNoBiteStreak = 0
 
     private var chickenCollectionPath: String?
     private var chickens: [Int: LiveMob] = [:]
@@ -4010,14 +4014,24 @@ actor AutomationEngine {
                 let stillSameGeneration = fishTargetStillValid(target, generation: generation)
                 let changed = !stillSameGeneration && fishSnapshotSerial != snapshotBefore
                 let reason = changed ? "spot mudou antes da fisgada" : "sem fisgada (fish_bite não recebido)"
-                if changed { fishingStats.spotChanged += 1 } else { fishingStats.noBite += 1 }
+                if changed {
+                    fishingStats.spotChanged += 1
+                } else {
+                    fishingStats.noBite += 1
+                    fishGlobalNoBiteStreak += 1
+                }
                 reporter(.failure("Peixe #\(fishNumber) • \(targetLabel) • \(reason)"))
                 recordFishTargetFailure(target, reason: reason)
+                if fishingBait == .trout, fishGlobalNoBiteStreak >= 12 {
+                    reporter(.log("🔄 Trout • falha global de fish_bite detectada após \(fishGlobalNoBiteStreak) casts • recriando Presence sem voltar ao banco"))
+                    throw EngineError.fishingPresenceStalled(successes: successes)
+                }
                 try await sleep(650)
                 continue
             }
 
-            // fish_bite autoritativo prova que esta célula está saudável agora.
+            // fish_bite autoritativo prova que a Presence e esta célula estão saudáveis agora.
+            fishGlobalNoBiteStreak = 0
             recordFishTargetSuccess(target)
 
             let biteSeconds = String(format: "%.1f", Double(bite.ms) / 1000)
@@ -6943,6 +6957,7 @@ enum EngineError: LocalizedError {
     case missingFishingBait(String)
     case insufficientFishingBait(String, have: Int, need: Int)
     case unsupportedFishingBait(String)
+    case fishingPresenceStalled(successes: Int)
 
     var errorDescription: String? {
         switch self {
