@@ -623,6 +623,102 @@ struct RootView: View {
     }
 }
 
+private struct CharacterInteractiveView: UIViewRepresentable {
+    let cookie: String
+
+    func makeCoordinator() -> Coordinator { Coordinator() }
+
+    func makeUIView(context: Context) -> WKWebView {
+        let controller = WKUserContentController()
+        controller.add(context.coordinator, name: "kintaraInteractive")
+        controller.addUserScript(WKUserScript(
+            source: """
+            (() => {
+              window.addEventListener('message', (event) => {
+                if (event && event.data && event.data.t === 'kintara_outfit_embed_ready') {
+                  window.webkit.messageHandlers.kintaraInteractive.postMessage('ready');
+                }
+              });
+            })();
+            """,
+            injectionTime: .atDocumentStart,
+            forMainFrameOnly: true
+        ))
+        let config = WKWebViewConfiguration()
+        config.websiteDataStore = .nonPersistent()
+        config.userContentController = controller
+        let view = WKWebView(frame: .zero, configuration: config)
+        view.isOpaque = false
+        view.backgroundColor = .clear
+        view.scrollView.backgroundColor = .clear
+        view.scrollView.isScrollEnabled = false
+        view.scrollView.bounces = false
+        view.allowsBackForwardNavigationGestures = false
+        context.coordinator.webView = view
+        context.coordinator.load(cookie: cookie)
+        return view
+    }
+
+    func updateUIView(_ webView: WKWebView, context: Context) {
+        if context.coordinator.loadedCookie != cookie {
+            context.coordinator.load(cookie: cookie)
+        }
+    }
+
+    static func dismantleUIView(_ webView: WKWebView, coordinator: Coordinator) {
+        webView.stopLoading()
+        webView.configuration.userContentController.removeScriptMessageHandler(forName: "kintaraInteractive")
+    }
+
+    final class Coordinator: NSObject, WKScriptMessageHandler {
+        weak var webView: WKWebView?
+        var loadedCookie = ""
+
+        func load(cookie rawCookie: String) {
+            guard let webView,
+                  let cookie = makeCookie(rawCookie),
+                  let url = URL(string: "https://kintara.com/play?embed=outfit") else { return }
+            loadedCookie = rawCookie
+            webView.configuration.websiteDataStore.httpCookieStore.setCookie(cookie) { [weak webView] in
+                webView?.load(URLRequest(url: url, cachePolicy: .reloadIgnoringLocalCacheData))
+            }
+        }
+
+        func userContentController(_ userContentController: WKUserContentController, didReceive message: WKScriptMessage) {
+            guard message.name == "kintaraInteractive" else { return }
+            isolateRenderer()
+        }
+
+        private func isolateRenderer() {
+            let script = """
+            (() => {
+              const host = document.querySelector('#kintara-dash-outfit-letter');
+              const canvas = host && host.querySelector('canvas');
+              if (!host || !canvas) return false;
+              document.documentElement.style.cssText = 'margin:0!important;padding:0!important;background:transparent!important;overflow:hidden!important;';
+              document.body.style.cssText = 'margin:0!important;padding:0!important;background:transparent!important;overflow:hidden!important;';
+              [...document.body.children].forEach((el) => { if (el !== host && !el.contains(host)) el.style.display='none'; });
+              host.style.cssText = 'position:fixed!important;inset:0!important;width:100vw!important;height:100vh!important;margin:0!important;padding:0!important;background:transparent!important;display:block!important;overflow:hidden!important;';
+              canvas.style.cssText += ';width:100%!important;height:100%!important;max-width:none!important;max-height:none!important;touch-action:none!important;cursor:grab!important;';
+              canvas.setAttribute('aria-label','Personagem 3D. Arraste para girar.');
+              return true;
+            })();
+            """
+            webView?.evaluateJavaScript(script)
+        }
+
+        private func makeCookie(_ raw: String) -> HTTPCookie? {
+            let pair = raw.split(separator: ";", maxSplits: 1).first.map(String.init) ?? raw
+            let parts = pair.split(separator: "=", maxSplits: 1).map(String.init)
+            guard parts.count == 2, parts[0] == "kintara_session", !parts[1].isEmpty else { return nil }
+            return HTTPCookie(properties: [
+                .domain: ".kintara.com", .path: "/", .name: parts[0],
+                .value: parts[1], .secure: "TRUE"
+            ])
+        }
+    }
+}
+
 private struct CharacterThumbnail: View {
     let image: UIImage?
     let hasSession: Bool
