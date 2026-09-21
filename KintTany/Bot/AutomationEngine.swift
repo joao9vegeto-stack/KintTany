@@ -89,6 +89,26 @@ struct DunesWorldRecoveryPolicy {
     }
 }
 
+struct DunesCheckpointContinuationPolicy {
+    /// Build 95: an external-damage escape is terminal only if survival cannot
+    /// be confirmed. Once The Shores + exposed tool are confirmed, reuse the
+    /// normal protected checkpoint pipeline (bank → World HP recovery → Dunes).
+    static func shouldResumeAfterSafeExit(_ reason: EngineStopReason?) -> Bool {
+        reason == .dunesCheckpoint || reason == .dunesDangerSafety
+    }
+
+    static func triggerLabel(for reason: EngineStopReason?) -> String {
+        switch reason {
+        case .dunesDangerSafety:
+            return "dano externo sobrevivido"
+        case .dunesCheckpoint:
+            return "180s de exposição"
+        default:
+            return "checkpoint seguro"
+        }
+    }
+}
+
 
 /// Build 76: full-loot loadouts preserve exactly one physical tool instance.
 /// The activity tier/type is still selected by ActivityToolPolicy; among copies
