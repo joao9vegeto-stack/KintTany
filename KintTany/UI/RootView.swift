@@ -686,31 +686,35 @@ private struct CharacterInteractiveView: UIViewRepresentable {
                 document.documentElement.style.cssText='margin:0!important;padding:0!important;background:transparent!important;overflow:hidden!important;';
                 document.body.style.cssText='margin:0!important;padding:0!important;background:transparent!important;overflow:hidden!important;';
                 [...document.body.children].forEach(el=>{if(el!==host&&!el.contains(host))el.style.display='none';});
-                host.style.cssText='position:fixed!important;inset:0!important;width:100vw!important;height:100vh!important;margin:0!important;padding:0!important;background:transparent!important;border:0!important;box-shadow:none!important;overflow:hidden!important;perspective:700px!important;';
+                host.style.cssText='position:fixed!important;left:50%!important;top:50%!important;width:220vw!important;height:220vh!important;transform:translate(-50%,-43%)!important;margin:0!important;padding:0!important;background:transparent!important;border:0!important;box-shadow:none!important;overflow:hidden!important;pointer-events:none!important;';
+                canvas.style.cssText='width:100%!important;height:100%!important;max-width:none!important;max-height:none!important;background:transparent!important;pointer-events:none!important;';
 
-                // Portrait crop: enlarge the game's render enough that the character fills the
-                // available area and push the pedestal below the visible crop.
-                canvas.style.cssText='position:absolute!important;left:50%!important;top:39%!important;width:300%!important;height:300%!important;max-width:none!important;max-height:none!important;background:transparent!important;touch-action:none!important;transform-origin:50% 42%!important;will-change:transform!important;';
-                let yaw=0;
-                const paint=()=>{canvas.style.transform='translate(-50%,-50%) rotateY('+yaw+'deg)';};
-                paint();
-
-                // Do not forward touches to Kintara's outfit picker. The picker changes
-                // equipment on drag. We own this transparent gesture layer instead.
+                // Rotation is intentionally implemented as a discrete view cycle instead of
+                // forwarding pointer events to Kintara's outfit editor or deforming its canvas.
+                // A horizontal swipe chooses a stable view by mirroring the already-rendered
+                // portrait. This preserves geometry and can never mutate equipment.
+                let facing=0;
+                const apply=()=>{
+                  const sx=facing<0?-1:1;
+                  canvas.style.transformOrigin='50% 50%';
+                  canvas.style.transform='scaleX('+sx+')';
+                };
                 const overlay=document.createElement('div');
-                overlay.style.cssText='position:fixed;inset:0;z-index:2147483647;background:transparent;touch-action:none;cursor:grab;';
+                overlay.style.cssText='position:fixed;inset:0;z-index:2147483647;background:transparent;touch-action:none;';
                 document.body.appendChild(overlay);
-                let dragging=false,lastX=0;
-                const down=(x,e)=>{dragging=true;lastX=x;overlay.style.cursor='grabbing';e?.preventDefault?.();};
-                const move=(x,e)=>{if(!dragging)return;const dx=x-lastX;lastX=x;yaw=Math.max(-62,Math.min(62,yaw+dx*.42));paint();e?.preventDefault?.();};
-                const up=e=>{dragging=false;overlay.style.cursor='grab';e?.preventDefault?.();};
+                let startX=0,dragging=false;
+                const down=(x,e)=>{startX=x;dragging=true;e?.preventDefault?.();};
+                const up=(x,e)=>{
+                  if(!dragging)return; dragging=false;
+                  const dx=x-startX;
+                  if(Math.abs(dx)>18){facing=dx<0?-1:1;apply();}
+                  e?.preventDefault?.();
+                };
                 overlay.addEventListener('pointerdown',e=>down(e.clientX,e),{passive:false});
-                overlay.addEventListener('pointermove',e=>move(e.clientX,e),{passive:false});
-                overlay.addEventListener('pointerup',up,{passive:false});
-                overlay.addEventListener('pointercancel',up,{passive:false});
+                overlay.addEventListener('pointerup',e=>up(e.clientX,e),{passive:false});
+                overlay.addEventListener('pointercancel',e=>{dragging=false;e.preventDefault();},{passive:false});
                 overlay.addEventListener('touchstart',e=>{if(e.touches.length)down(e.touches[0].clientX,e);},{passive:false});
-                overlay.addEventListener('touchmove',e=>{if(e.touches.length)move(e.touches[0].clientX,e);},{passive:false});
-                overlay.addEventListener('touchend',up,{passive:false});
+                overlay.addEventListener('touchend',e=>{const t=e.changedTouches?.[0];if(t)up(t.clientX,e);},{passive:false});
               },25);
             })();
             """
