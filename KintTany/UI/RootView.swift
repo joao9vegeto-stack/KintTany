@@ -1,12 +1,14 @@
 import Foundation
 import SwiftUI
 import UIKit
+import WebKit
 
 struct RootView: View {
     @EnvironmentObject var app: AppStore
     @Environment(\.scenePhase) private var scenePhase
     @State private var showLogin = false
     @State private var showFullLog = false
+    @State private var showCharacterStats = false
     @FocusState private var goalFieldFocused: Bool
 
     private let columns = [
@@ -40,6 +42,19 @@ struct RootView: View {
                 .padding(.bottom, 40)
             }
             .scrollIndicators(.hidden)
+
+            if app.hasSession,
+               app.characterArtwork == nil,
+               let cookie = app.authenticatedCookieForCharacter,
+               !cookie.isEmpty {
+                CharacterArtworkCaptureView(cookie: cookie) { image in
+                    app.storeCharacterArtwork(image)
+                }
+                .frame(width: 220, height: 260)
+                .opacity(0.001)
+                .allowsHitTesting(false)
+                .accessibilityHidden(true)
+            }
         }
         .preferredColorScheme(.dark)
         .sheet(isPresented: $showLogin) {
@@ -56,6 +71,11 @@ struct RootView: View {
         }
         .sheet(isPresented: $showFullLog) {
             FullLogView()
+                .environmentObject(app)
+                .preferredColorScheme(.dark)
+        }
+        .sheet(isPresented: $showCharacterStats) {
+            CharacterStatsView()
                 .environmentObject(app)
                 .preferredColorScheme(.dark)
         }
@@ -77,6 +97,9 @@ struct RootView: View {
         }
         .onChange(of: scenePhase) { _, newPhase in
             app.handleScenePhase(newPhase)
+        }
+        .task {
+            await app.refreshCharacterProfile()
         }
     }
 
@@ -108,22 +131,45 @@ struct RootView: View {
                 Spacer()
 
                 Button {
-                    showLogin = true
+                    if app.hasSession {
+                        showCharacterStats = true
+                    } else {
+                        showLogin = true
+                    }
                 } label: {
-                    Image(systemName: app.hasSession ? "person.crop.circle.badge.checkmark" : "person.crop.circle.badge.exclamationmark")
-                        .font(.system(size: 23, weight: .semibold))
-                        .frame(width: 48, height: 48)
-                        .background(.white.opacity(0.08), in: Circle())
-                        .overlay(Circle().stroke(.white.opacity(0.08), lineWidth: 1))
+                    CharacterThumbnail(
+                        image: app.characterArtwork,
+                        hasSession: app.hasSession
+                    )
                 }
                 .buttonStyle(.plain)
-                .accessibilityLabel("Sessão")
+                .accessibilityLabel(app.hasSession ? "Abrir personagem e Stats" : "Abrir sessão")
             }
 
             HStack(spacing: 10) {
-                Label("KintTany", systemImage: "bolt.shield.fill")
+                Button {
+                    if app.hasSession { showCharacterStats = true }
+                } label: {
+                    HStack(spacing: 7) {
+                        Image(systemName: "bolt.shield.fill")
+                        Text(app.characterProfile.displayName)
+                        if app.characterProfile.loaded {
+                            Text("Lvl \(app.characterProfile.totalLevel)")
+                                .font(.caption2.bold())
+                                .foregroundStyle(.cyan)
+                                .padding(.horizontal, 6)
+                                .padding(.vertical, 3)
+                                .background(.cyan.opacity(0.12), in: Capsule())
+                            Image(systemName: "chevron.right")
+                                .font(.caption.bold())
+                                .foregroundStyle(.secondary)
+                        }
+                    }
                     .font(.headline.bold())
                     .foregroundStyle(.white)
+                }
+                .buttonStyle(.plain)
+                .disabled(!app.hasSession)
                 Spacer()
                 Button("Sessão") { showLogin = true }
                     .font(.subheadline.bold())
@@ -565,6 +611,344 @@ struct RootView: View {
         case .cancelled: "stop.circle.fill"
         case .connecting, .syncing, .recovering: "arrow.triangle.2.circlepath"
         default: "scope"
+        }
+    }
+}
+
+private struct CharacterThumbnail: View {
+    let image: UIImage?
+    let hasSession: Bool
+
+    var body: some View {
+        ZStack {
+            Circle()
+                .fill(.white.opacity(0.08))
+
+            if let image {
+                Image(uiImage: image)
+                    .resizable()
+                    .scaledToFit()
+                    .padding(2)
+            } else {
+                Image(systemName: hasSession
+                      ? "person.crop.circle.badge.checkmark"
+                      : "person.crop.circle.badge.exclamationmark")
+                    .font(.system(size: 23, weight: .semibold))
+            }
+        }
+        .frame(width: 48, height: 48)
+        .clipShape(Circle())
+        .overlay(Circle().stroke(.white.opacity(0.10), lineWidth: 1))
+    }
+}
+
+private struct CharacterStatsView: View {
+    @EnvironmentObject private var app: AppStore
+    @Environment(\.dismiss) private var dismiss
+
+    private let columns = [
+        GridItem(.flexible(), spacing: 10),
+        GridItem(.flexible(), spacing: 10)
+    ]
+
+    var body: some View {
+        NavigationStack {
+            ZStack {
+                LinearGradient(
+                    colors: [Color.black, Color(red: 0.015, green: 0.045, blue: 0.075), Color.black],
+                    startPoint: .topLeading,
+                    endPoint: .bottomTrailing
+                )
+                .ignoresSafeArea()
+
+                GeometryReader { proxy in
+                    let compact = proxy.size.height < 700
+                    VStack(spacing: compact ? 10 : 14) {
+                        characterHeader(compact: compact)
+
+                        if app.characterProfileLoading && !app.characterProfile.loaded {
+                            ProgressView("Carregando personagem e Stats…")
+                                .frame(maxWidth: .infinity, maxHeight: .infinity)
+                        } else if !app.characterProfile.skills.loaded {
+                            ContentUnavailableView(
+                                "Stats indisponíveis",
+                                systemImage: "chart.bar.xaxis",
+                                description: Text(app.characterProfileError ?? "Abra novamente após autenticar a sessão.")
+                            )
+                            .frame(maxWidth: .infinity, maxHeight: .infinity)
+                        } else {
+                            LazyVGrid(columns: columns, spacing: compact ? 8 : 10) {
+                                ForEach(CharacterSkill.allCases) { skill in
+                                    CharacterSkillCard(
+                                        skill: skill,
+                                        stats: app.characterProfile.skills,
+                                        compact: compact
+                                    )
+                                }
+                            }
+
+                            HStack {
+                                Label("Total Level", systemImage: "star.fill")
+                                    .font(.headline.bold())
+                                Spacer()
+                                Text("\(app.characterProfile.totalLevel)")
+                                    .font(.system(size: compact ? 24 : 28, weight: .black, design: .rounded))
+                                    .foregroundStyle(.cyan)
+                            }
+                            .padding(.horizontal, 16)
+                            .frame(height: compact ? 50 : 58)
+                            .background(.white.opacity(0.07), in: RoundedRectangle(cornerRadius: 16, style: .continuous))
+                            .overlay(
+                                RoundedRectangle(cornerRadius: 16, style: .continuous)
+                                    .stroke(.white.opacity(0.08), lineWidth: 1)
+                            )
+                        }
+                    }
+                    .padding(.horizontal, 16)
+                    .padding(.vertical, compact ? 8 : 12)
+                }
+            }
+            .navigationTitle("Personagem")
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .cancellationAction) {
+                    Button("Fechar") { dismiss() }
+                }
+                ToolbarItem(placement: .primaryAction) {
+                    Button {
+                        Task { await app.refreshCharacterProfile(force: true) }
+                    } label: {
+                        Image(systemName: "arrow.clockwise")
+                    }
+                    .disabled(app.characterProfileLoading)
+                    .accessibilityLabel("Atualizar personagem e Stats")
+                }
+            }
+        }
+        .task {
+            await app.refreshCharacterProfile(force: true)
+        }
+    }
+
+    private func characterHeader(compact: Bool) -> some View {
+        HStack(spacing: compact ? 12 : 16) {
+            ZStack {
+                RoundedRectangle(cornerRadius: 18, style: .continuous)
+                    .fill(.cyan.opacity(0.08))
+
+                if let image = app.characterArtwork {
+                    Image(uiImage: image)
+                        .resizable()
+                        .scaledToFit()
+                        .padding(5)
+                } else {
+                    Image(systemName: "person.crop.square.filled.and.at.rectangle")
+                        .font(.system(size: 36, weight: .semibold))
+                        .foregroundStyle(.cyan)
+                }
+            }
+            .frame(width: compact ? 88 : 108, height: compact ? 100 : 124)
+            .overlay(
+                RoundedRectangle(cornerRadius: 18, style: .continuous)
+                    .stroke(.cyan.opacity(0.22), lineWidth: 1)
+            )
+
+            VStack(alignment: .leading, spacing: 7) {
+                Text(app.characterProfile.displayName)
+                    .font(.system(size: compact ? 24 : 28, weight: .black, design: .rounded))
+                    .lineLimit(1)
+
+                Text("Lvl \(app.characterProfile.totalLevel)")
+                    .font(.headline.bold())
+                    .foregroundStyle(.cyan)
+
+                HStack(spacing: 7) {
+                    Circle()
+                        .fill(app.hasSession ? Color.green : Color.secondary)
+                        .frame(width: 8, height: 8)
+                    Text(app.hasSession ? "Conta conectada" : "Sem sessão")
+                        .font(.caption.bold())
+                        .foregroundStyle(.secondary)
+                }
+
+                Text("Personagem da sessão autenticada")
+                    .font(.caption2)
+                    .foregroundStyle(.secondary)
+                    .lineLimit(1)
+            }
+
+            Spacer(minLength: 0)
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+    }
+}
+
+private struct CharacterSkillCard: View {
+    let skill: CharacterSkill
+    let stats: CharacterSkillStats
+    let compact: Bool
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: compact ? 7 : 9) {
+            HStack(spacing: 8) {
+                Image(systemName: skill.icon)
+                    .foregroundStyle(.cyan)
+                    .frame(width: 20)
+                Text(skill.localizedName)
+                    .font(.subheadline.bold())
+                    .lineLimit(1)
+                Spacer(minLength: 4)
+                Text("\(stats.level(for: skill))/\(CharacterSkillStats.maxLevel)")
+                    .font(.caption.bold().monospacedDigit())
+            }
+
+            ProgressView(value: stats.progress(for: skill))
+                .tint(.green)
+
+            Text("\(stats.totalXP(for: skill).formatted()) XP")
+                .font(.caption2.monospacedDigit())
+                .foregroundStyle(.secondary)
+        }
+        .padding(compact ? 11 : 13)
+        .frame(maxWidth: .infinity, minHeight: compact ? 72 : 82, alignment: .leading)
+        .background(.white.opacity(0.065), in: RoundedRectangle(cornerRadius: 15, style: .continuous))
+        .overlay(
+            RoundedRectangle(cornerRadius: 15, style: .continuous)
+                .stroke(.white.opacity(0.075), lineWidth: 1)
+        )
+    }
+}
+
+private struct CharacterArtworkCaptureView: UIViewRepresentable {
+    let cookie: String
+    let onCapture: (UIImage) -> Void
+
+    func makeCoordinator() -> Coordinator {
+        Coordinator(onCapture: onCapture)
+    }
+
+    func makeUIView(context: Context) -> WKWebView {
+        let controller = WKUserContentController()
+        controller.add(context.coordinator, name: Coordinator.handlerName)
+        controller.addUserScript(WKUserScript(
+            source: Coordinator.bridgeScript,
+            injectionTime: .atDocumentStart,
+            forMainFrameOnly: true
+        ))
+
+        let configuration = WKWebViewConfiguration()
+        configuration.websiteDataStore = .nonPersistent()
+        configuration.userContentController = controller
+
+        let webView = WKWebView(frame: .zero, configuration: configuration)
+        webView.isOpaque = false
+        webView.backgroundColor = .clear
+        webView.scrollView.backgroundColor = .clear
+        webView.scrollView.isScrollEnabled = false
+        context.coordinator.webView = webView
+        context.coordinator.load(cookie: cookie)
+        return webView
+    }
+
+    func updateUIView(_ webView: WKWebView, context: Context) {}
+
+    static func dismantleUIView(_ webView: WKWebView, coordinator: Coordinator) {
+        webView.stopLoading()
+        webView.configuration.userContentController.removeScriptMessageHandler(forName: Coordinator.handlerName)
+    }
+
+    final class Coordinator: NSObject, WKScriptMessageHandler {
+        static let handlerName = "kintaraCharacter"
+        static let bridgeScript = """
+        (() => {
+          if (window.__kintaraIOSCharacterBridge) return;
+          window.__kintaraIOSCharacterBridge = true;
+          window.addEventListener('message', (event) => {
+            const value = event && event.data;
+            if (value && value.t === 'kintara_outfit_embed_ready') {
+              window.webkit.messageHandlers.kintaraCharacter.postMessage({ t: 'ready' });
+            }
+          });
+        })();
+        """
+
+        weak var webView: WKWebView?
+        private let onCapture: (UIImage) -> Void
+        private var captured = false
+        private var attempts = 0
+
+        init(onCapture: @escaping (UIImage) -> Void) {
+            self.onCapture = onCapture
+        }
+
+        func load(cookie rawCookie: String) {
+            guard let webView,
+                  let cookie = Self.makeSessionCookie(rawCookie),
+                  let url = URL(string: "https://kintara.com/play?embed=outfit")
+            else { return }
+
+            webView.configuration.websiteDataStore.httpCookieStore.setCookie(cookie) { [weak webView] in
+                var request = URLRequest(url: url)
+                request.cachePolicy = .reloadIgnoringLocalCacheData
+                webView?.load(request)
+            }
+        }
+
+        func userContentController(_ userContentController: WKUserContentController, didReceive message: WKScriptMessage) {
+            guard !captured,
+                  let body = message.body as? [String: Any],
+                  body["t"] as? String == "ready"
+            else { return }
+            captureAfterRenderDelay()
+        }
+
+        private func captureAfterRenderDelay() {
+            guard !captured, attempts < 8 else { return }
+            attempts += 1
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.25) { [weak self] in
+                self?.captureCanvas()
+            }
+        }
+
+        private func captureCanvas() {
+            guard let webView, !captured else { return }
+            let script = """
+            (() => {
+              const canvas = document.querySelector('#kintara-dash-outfit-letter canvas');
+              if (!canvas || canvas.width < 64 || canvas.height < 64) return null;
+              try { return canvas.toDataURL('image/png'); } catch (_) { return null; }
+            })();
+            """
+            webView.evaluateJavaScript(script) { [weak self] result, _ in
+                guard let self else { return }
+                guard let dataURL = result as? String,
+                      let comma = dataURL.firstIndex(of: ","),
+                      let data = Data(base64Encoded: String(dataURL[dataURL.index(after: comma)...])),
+                      let image = UIImage(data: data)
+                else {
+                    self.captureAfterRenderDelay()
+                    return
+                }
+                self.captured = true
+                self.onCapture(image)
+            }
+        }
+
+        private static func makeSessionCookie(_ raw: String) -> HTTPCookie? {
+            let pair = raw.split(separator: ";", maxSplits: 1).first.map(String.init) ?? raw
+            let parts = pair.split(separator: "=", maxSplits: 1).map(String.init)
+            guard parts.count == 2,
+                  parts[0] == "kintara_session",
+                  !parts[1].isEmpty
+            else { return nil }
+
+            return HTTPCookie(properties: [
+                .domain: ".kintara.com",
+                .path: "/",
+                .name: parts[0],
+                .value: parts[1],
+                .secure: "TRUE"
+            ])
         }
     }
 }

@@ -218,6 +218,233 @@ struct PlayerState: Codable {
     var resources: [String: Int] = [:]
 }
 
+enum CharacterSkill: String, CaseIterable, Identifiable {
+    case combat
+    case woodcutting
+    case mining
+    case fishing
+    case cooking
+    case smithing
+
+    var id: String { rawValue }
+
+    var localizedName: String {
+        switch self {
+        case .combat: "Combate"
+        case .woodcutting: "Madeira"
+        case .mining: "Mineração"
+        case .fishing: "Pesca"
+        case .cooking: "Culinária"
+        case .smithing: "Ferraria"
+        }
+    }
+
+    var icon: String {
+        switch self {
+        case .combat: "swords"
+        case .woodcutting: "tree.fill"
+        case .mining: "hammer.fill"
+        case .fishing: "fish.fill"
+        case .cooking: "flame.fill"
+        case .smithing: "anvil.fill"
+        }
+    }
+}
+
+struct CharacterSkillStats: Equatable {
+    static let maxLevel = 40
+    static let empty = CharacterSkillStats()
+
+    private static let totalLevelSkills: [CharacterSkill] = [
+        .combat, .woodcutting, .mining, .fishing, .cooking
+    ]
+
+    var xp: [CharacterSkill: Int] = [:]
+    var loaded = false
+
+    init(xp: [CharacterSkill: Int] = [:], loaded: Bool = false) {
+        self.xp = xp.mapValues { max(0, min(Self.maximumXP, $0)) }
+        self.loaded = loaded
+    }
+
+    func totalXP(for skill: CharacterSkill) -> Int {
+        max(0, xp[skill] ?? 0)
+    }
+
+    func level(for skill: CharacterSkill) -> Int {
+        Self.level(fromTotalXP: totalXP(for: skill))
+    }
+
+    func progress(for skill: CharacterSkill) -> Double {
+        Self.progressWithinLevel(fromTotalXP: totalXP(for: skill))
+    }
+
+    var totalLevel: Int {
+        let precise = Self.totalLevelSkills.reduce(0.0) { partial, skill in
+            partial + Self.preciseLevel(fromTotalXP: totalXP(for: skill))
+        } / Double(Self.totalLevelSkills.count)
+        return max(1, min(Self.maxLevel, Int(floor(precise))))
+    }
+
+    static func level(fromTotalXP value: Int) -> Int {
+        let value = max(0, value)
+        var level = 1
+        for index in 1..<maxLevel where Double(value) >= xpThreshold(forLevelIndex: index) {
+            level = index + 1
+        }
+        return min(maxLevel, level)
+    }
+
+    static func progressWithinLevel(fromTotalXP value: Int) -> Double {
+        let value = max(0, value)
+        let level = level(fromTotalXP: value)
+        guard level < maxLevel else { return 1 }
+        let lower = xpThreshold(forLevelIndex: level - 1)
+        let upper = xpThreshold(forLevelIndex: level)
+        return max(0, min(1, (Double(value) - lower) / max(1, upper - lower)))
+    }
+
+    private static func preciseLevel(fromTotalXP value: Int) -> Double {
+        let level = level(fromTotalXP: value)
+        return level >= maxLevel ? Double(maxLevel) : Double(level) + progressWithinLevel(fromTotalXP: value)
+    }
+
+    private static func xpThreshold(forLevelIndex index: Int) -> Double {
+        guard index > 0 else { return 0 }
+        return 480 * (pow(1.2, Double(index)) - 1) / 0.2
+    }
+
+    private static var maximumXP: Int {
+        let level40 = xpThreshold(forLevelIndex: maxLevel - 1)
+        let level39 = xpThreshold(forLevelIndex: maxLevel - 2)
+        return Int(floor(level40 + (level40 - level39)))
+    }
+}
+
+struct CharacterAppearance: Equatable {
+    var outfitSchema = 15
+    var hat = 0
+    var top = 0
+    var pants = 0
+    var shoe = 0
+    var skinTone = 1
+    var hatFX: String?
+    var torsoDecal: String?
+    var pantsPattern: String?
+    var shoeFX: String?
+    var topFX: String?
+    var pantsFX: String?
+    var aura: String?
+    var cape: String?
+    var glasses: String?
+    var shoeCosmetic: String?
+    var faceMask: String?
+    var wings: String?
+    var handProp: String?
+    var eyeFX: String?
+    var hatColor: Int?
+    var topColor: Int?
+    var pantsColor: Int?
+    var strapColor: Int?
+    var shoeColor: Int?
+}
+
+struct CharacterProfile: Equatable {
+    var playerID: Int?
+    var displayName = "KintTany"
+    var serverAverageLevel: Int?
+    var appearance = CharacterAppearance()
+    var skills = CharacterSkillStats.empty
+    var loaded = false
+
+    var totalLevel: Int {
+        serverAverageLevel ?? skills.totalLevel
+    }
+}
+
+enum CharacterProfilePayloadParser {
+    static func profile(me: [String: Any], playerStats: [String: Any]?) -> CharacterProfile {
+        let player = me["player"] as? [String: Any] ?? [:]
+        let meta = me["meta"] as? [String: Any] ?? [:]
+        let statsRoot = ((playerStats?["data"] as? [String: Any]) ?? playerStats) ?? [:]
+
+        let playerID = int(player["id"] ?? me["playerId"])
+        let rawName = string(player["display_name"])
+            ?? string(player["displayName"])
+            ?? string(player["name"])
+            ?? string(me["displayName"])
+            ?? "KintTany"
+        let displayName = rawName.trimmingCharacters(in: .whitespacesAndNewlines)
+
+        let outfit = (me["outfit"] as? [String: Any])
+            ?? (player["outfit"] as? [String: Any])
+            ?? [:]
+        let skillXP = (statsRoot["skillXp"] as? [String: Any])
+            ?? (meta["skillXp"] as? [String: Any])
+            ?? (me["skillXp"] as? [String: Any])
+            ?? [:]
+
+        var parsedXP: [CharacterSkill: Int] = [:]
+        for skill in CharacterSkill.allCases {
+            if let value = int(skillXP[skill.rawValue]) {
+                parsedXP[skill] = max(0, value)
+            }
+        }
+
+        let average = int(player["avg"] ?? meta["avg"] ?? me["avg"])
+        return CharacterProfile(
+            playerID: playerID,
+            displayName: displayName.isEmpty ? "KintTany" : displayName,
+            serverAverageLevel: average.map { max(1, min(CharacterSkillStats.maxLevel, $0)) },
+            appearance: appearance(outfit),
+            skills: CharacterSkillStats(xp: parsedXP, loaded: !parsedXP.isEmpty),
+            loaded: playerID != nil || !outfit.isEmpty || !parsedXP.isEmpty
+        )
+    }
+
+    private static func appearance(_ object: [String: Any]) -> CharacterAppearance {
+        CharacterAppearance(
+            outfitSchema: int(object["outfitSchema"]) ?? 15,
+            hat: int(object["hat"]) ?? 0,
+            top: int(object["top"]) ?? 0,
+            pants: int(object["pants"]) ?? 0,
+            shoe: int(object["shoe"]) ?? 0,
+            skinTone: int(object["skinTone"]) ?? 1,
+            hatFX: string(object["hatFx"]),
+            torsoDecal: string(object["torsoDecal"]),
+            pantsPattern: string(object["pantsPattern"]),
+            shoeFX: string(object["shoeFx"]),
+            topFX: string(object["topFx"]),
+            pantsFX: string(object["pantsFx"]),
+            aura: string(object["aura"]),
+            cape: string(object["cape"]),
+            glasses: string(object["glasses"]),
+            shoeCosmetic: string(object["shoeCosmetic"]),
+            faceMask: string(object["faceMask"]),
+            wings: string(object["wings"]),
+            handProp: string(object["handProp"]),
+            eyeFX: string(object["eyeFx"]),
+            hatColor: int(object["hatC"]),
+            topColor: int(object["topC"]),
+            pantsColor: int(object["pantsC"]),
+            strapColor: int(object["strapC"]),
+            shoeColor: int(object["shoeC"])
+        )
+    }
+
+    private static func int(_ value: Any?) -> Int? {
+        if let value = value as? Int { return value }
+        if let value = value as? NSNumber { return value.intValue }
+        if let value = value as? String { return Int(value) }
+        return nil
+    }
+
+    private static func string(_ value: Any?) -> String? {
+        guard let value = value as? String, !value.isEmpty else { return nil }
+        return value
+    }
+}
+
 struct WorldState: Codable {
     var nodes: [ResourceNode] = []
     var mobs: [Mob] = []
@@ -330,6 +557,10 @@ final class AppStore: ObservableObject {
     @Published var resourceCount = 0
     @Published var mobCount = 0
     @Published var selectedFishingBait: FishingBait = .feather
+    @Published private(set) var characterProfile = CharacterProfile()
+    @Published private(set) var characterProfileLoading = false
+    @Published private(set) var characterProfileError: String?
+    @Published private(set) var characterArtwork: UIImage?
 
     private let session = SessionManager()
     private var task: Task<Void, Never>?
@@ -383,6 +614,13 @@ final class AppStore: ObservableObject {
     var hasSession: Bool {
         guard let cookie = session.cookie else { return false }
         return !cookie.isEmpty
+    }
+
+    /// A sessão só é entregue à visualização oficial de outfit, em memória,
+    /// para que o próprio renderer do jogo produza o personagem autenticado.
+    /// O valor nunca é incluído em logs nem persistido fora do Keychain.
+    var authenticatedCookieForCharacter: String? {
+        session.cookie
     }
 
     var progress: Double {
@@ -984,10 +1222,69 @@ final class AppStore: ObservableObject {
 
     func saveCookie(_ cookie: String) {
         session.save(cookie: cookie)
+        characterProfile = CharacterProfile()
+        characterArtwork = nil
+        characterProfileError = nil
         state = .idle
         connected = false
         statusMessage = "Sessão salva"
         log("Sessão autenticada e salva no Keychain; realtime será conectado ao iniciar uma atividade")
+        Task { [weak self] in
+            await self?.refreshCharacterProfile(force: true)
+        }
+    }
+
+    func refreshCharacterProfile(force: Bool = false) async {
+        guard let cookie = session.cookie, !cookie.isEmpty else {
+            characterProfile = CharacterProfile()
+            characterArtwork = nil
+            characterProfileError = "Faça login para carregar o personagem."
+            return
+        }
+        guard !characterProfileLoading else { return }
+        if characterProfile.loaded, characterProfile.skills.loaded, !force { return }
+
+        characterProfileLoading = true
+        characterProfileError = nil
+        defer { characterProfileLoading = false }
+
+        do {
+            let client = CharacterProfileHTTPClient(cookie: cookie)
+            let me = try await client.get("/api/auth/me")
+            let provisional = CharacterProfilePayloadParser.profile(me: me, playerStats: nil)
+
+            var statsPayload: [String: Any]?
+            if let playerID = provisional.playerID {
+                do {
+                    statsPayload = try await client.playerStats(playerID: playerID)
+                } catch {
+                    // /me já inclui meta.skillXp no bootstrap atual. Se a rota
+                    // dedicada estiver temporariamente indisponível, preservamos
+                    // o perfil autoritativo e exibimos esses mesmos valores.
+                    characterProfileError = "Stats não puderam ser atualizados agora."
+                }
+            }
+
+            let refreshedProfile = CharacterProfilePayloadParser.profile(
+                me: me,
+                playerStats: statsPayload
+            )
+            if characterProfile.loaded,
+               characterProfile.appearance != refreshedProfile.appearance {
+                characterArtwork = nil
+            }
+            characterProfile = refreshedProfile
+            if characterProfile.skills.loaded {
+                characterProfileError = nil
+            }
+        } catch {
+            characterProfileError = "Não foi possível carregar o personagem."
+            diagnostic("[PROFILE] atualização falhou • \(error.localizedDescription)")
+        }
+    }
+
+    func storeCharacterArtwork(_ image: UIImage) {
+        characterArtwork = image
     }
 
 
@@ -2836,6 +3133,71 @@ final class AppStore: ObservableObject {
         }
         if diagnosticLogs.count > 10_000 {
             diagnosticLogs.removeFirst(diagnosticLogs.count - 10_000)
+        }
+    }
+}
+
+private struct CharacterProfileHTTPClient {
+    let cookie: String
+    private let baseURL = URL(string: "https://kintara.com")!
+
+    func get(_ path: String) async throws -> [String: Any] {
+        guard let url = URL(string: path, relativeTo: baseURL) else {
+            throw CharacterProfileHTTPError.invalidURL
+        }
+        return try await request(url)
+    }
+
+    func playerStats(playerID: Int) async throws -> [String: Any] {
+        guard var components = URLComponents(
+            url: baseURL.appendingPathComponent("api/auth/player-stats"),
+            resolvingAgainstBaseURL: false
+        ) else {
+            throw CharacterProfileHTTPError.invalidURL
+        }
+        components.queryItems = [URLQueryItem(name: "playerId", value: String(playerID))]
+        guard let url = components.url else { throw CharacterProfileHTTPError.invalidURL }
+        return try await request(url)
+    }
+
+    private func request(_ url: URL) async throws -> [String: Any] {
+        var request = URLRequest(url: url)
+        request.httpMethod = "GET"
+        request.timeoutInterval = 15
+        request.cachePolicy = .reloadIgnoringLocalCacheData
+        request.setValue(cookie, forHTTPHeaderField: "Cookie")
+        request.setValue("application/json", forHTTPHeaderField: "Accept")
+        request.setValue("no-cache", forHTTPHeaderField: "Cache-Control")
+
+        let configuration = URLSessionConfiguration.ephemeral
+        configuration.httpShouldSetCookies = false
+        configuration.requestCachePolicy = .reloadIgnoringLocalCacheData
+        let (data, response) = try await URLSession(configuration: configuration).data(for: request)
+        guard let http = response as? HTTPURLResponse else {
+            throw CharacterProfileHTTPError.invalidResponse
+        }
+        guard (200...299).contains(http.statusCode) else {
+            throw CharacterProfileHTTPError.http(http.statusCode)
+        }
+        guard let object = try JSONSerialization.jsonObject(with: data) as? [String: Any] else {
+            throw CharacterProfileHTTPError.invalidPayload
+        }
+        return object
+    }
+}
+
+private enum CharacterProfileHTTPError: LocalizedError {
+    case invalidURL
+    case invalidResponse
+    case invalidPayload
+    case http(Int)
+
+    var errorDescription: String? {
+        switch self {
+        case .invalidURL: "URL de perfil inválida"
+        case .invalidResponse: "Resposta de perfil inválida"
+        case .invalidPayload: "Dados de perfil inválidos"
+        case .http(let status): "Perfil retornou HTTP \(status)"
         }
     }
 }
