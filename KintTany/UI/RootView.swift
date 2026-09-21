@@ -671,26 +671,26 @@ private struct CharacterVoxel3DView: UIViewRepresentable {
         let pants=color(a.pantsColor,fallback:UIColor(white:0.12,alpha:1))
         let shoe=color(a.shoeColor,fallback:UIColor(white:0.06,alpha:1))
 
-        box(0.92,0.92,0.92,SCNVector3(0,2.58,0),material:skin)
-        box(0.82,0.86,0.56,SCNVector3(0,1.70,0),material:top)
-        box(0.34,0.72,0.42,SCNVector3(-0.23,0.91,0),material:pants)
-        box(0.34,0.72,0.42,SCNVector3(0.23,0.91,0),material:pants)
-        box(0.38,0.24,0.58,SCNVector3(-0.23,0.43,0.07),material:shoe)
-        box(0.38,0.24,0.58,SCNVector3(0.23,0.43,0.07),material:shoe)
-        box(0.22,0.76,0.28,SCNVector3(-0.56,1.70,0),material:skin)
-        box(0.22,0.76,0.28,SCNVector3(0.56,1.70,0),material:skin)
+        box(0.92,0.92,0.92,SCNVector3(0,2.58,0),skin)
+        box(0.82,0.86,0.56,SCNVector3(0,1.70,0),top)
+        box(0.34,0.72,0.42,SCNVector3(-0.23,0.91,0),pants)
+        box(0.34,0.72,0.42,SCNVector3(0.23,0.91,0),pants)
+        box(0.38,0.24,0.58,SCNVector3(-0.23,0.43,0.07),shoe)
+        box(0.38,0.24,0.58,SCNVector3(0.23,0.43,0.07),shoe)
+        box(0.22,0.76,0.28,SCNVector3(-0.56,1.70,0),skin)
+        box(0.22,0.76,0.28,SCNVector3(0.56,1.70,0),skin)
 
         let eye=UIColor(white:0.03,alpha:1)
-        box(0.13,0.16,0.04,SCNVector3(-0.20,2.63,0.48),material:eye)
-        box(0.13,0.16,0.04,SCNVector3(0.20,2.63,0.48),material:eye)
+        box(0.13,0.16,0.04,SCNVector3(-0.20,2.63,0.48),eye)
+        box(0.13,0.16,0.04,SCNVector3(0.20,2.63,0.48),eye)
 
         if a.hat != 0 {
             let hatColor=color(a.hatColor,fallback:UIColor(white:0.08,alpha:1))
-            box(1.02,0.20,1.02,SCNVector3(0,3.12,0),material:hatColor)
-            box(0.70,0.42,0.70,SCNVector3(0,3.38,0),material:hatColor)
+            box(1.02,0.20,1.02,SCNVector3(0,3.12,0),hatColor)
+            box(0.70,0.42,0.70,SCNVector3(0,3.38,0),hatColor)
         }
         if a.cape != nil {
-            box(0.72,1.05,0.10,SCNVector3(0,1.68,-0.36),material:.systemRed)
+            box(0.72,1.05,0.10,SCNVector3(0,1.68,-0.36),.systemRed)
         }
 
         let camera=SCNNode(); camera.camera=SCNCamera(); camera.camera?.usesOrthographicProjection=true
