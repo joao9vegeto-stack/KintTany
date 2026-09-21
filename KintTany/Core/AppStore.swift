@@ -774,8 +774,9 @@ final class AppStore: ObservableObject {
             let total = max(stats.successes, phaseStart + phaseResult.successes)
             stats.successes = total
 
-            let timedCheckpoint = phaseResult.stopReason == .dunesCheckpoint
-            if phaseResult.stoppedSafely && !timedCheckpoint {
+            let resumableSafeExit = phaseResult.stoppedSafely
+                && DunesCheckpointContinuationPolicy.shouldResumeAfterSafeExit(phaseResult.stopReason)
+            if phaseResult.stoppedSafely && !resumableSafeExit {
                 return EngineRunResult(
                     successes: total,
                     completedGoal: false,
@@ -783,7 +784,7 @@ final class AppStore: ObservableObject {
                     stopReason: phaseResult.stopReason
                 )
             }
-            guard phaseResult.completedGoal || timedCheckpoint else {
+            guard phaseResult.completedGoal || resumableSafeExit else {
                 return EngineRunResult(
                     successes: total,
                     completedGoal: false,
@@ -797,7 +798,15 @@ final class AppStore: ObservableObject {
 
             // A engine acabou de sair por The Shores e já confirmou que não foi
             // respawn por morte. Só agora liberamos a Presence e protegemos loot.
-            let checkpointTrigger = timedCheckpoint ? "180s de exposição" : "\(DunesCheckpointPolicy.successInterval) sucessos"
+            let checkpointTrigger: String
+            if resumableSafeExit {
+                checkpointTrigger = DunesCheckpointContinuationPolicy.triggerLabel(for: phaseResult.stopReason)
+            } else {
+                checkpointTrigger = "\(DunesCheckpointPolicy.successInterval) sucessos"
+            }
+            if phaseResult.stopReason == .dunesDangerSafety {
+                log("🛡️ Dunes • dano externo sobrevivido • progresso \(total)/\(runGoal) preservado • convertendo fuga em checkpoint recuperável")
+            }
             log("🏦 Dunes CHECKPOINT \(total)/\(runGoal) • gatilho=\(checkpointTrigger) • The Shores + sobrevivência confirmadas • protegendo recursos no banco")
             await closeDunesPresenceAfterConfirmedShores()
             guard activeRunID == runID, activity == mode else { throw CancellationError() }
