@@ -74,7 +74,7 @@ private final class NetworkPresenceTransport: @unchecked Sendable {
     }
 
     func start() async throws {
-        try await withCheckedThrowingContinuation { continuation in
+        try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<Void, Error>) in
             queue.async { [self] in
                 startContinuation = continuation
                 connection.stateUpdateHandler = { [weak self] state in
@@ -86,7 +86,7 @@ private final class NetworkPresenceTransport: @unchecked Sendable {
     }
 
     func send(_ data: Data) async throws {
-        try await withCheckedThrowingContinuation { continuation in
+        try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<Void, Error>) in
             let metadata = NWProtocolWebSocket.Metadata(opcode: .binary)
             let context = NWConnection.ContentContext(
                 identifier: "kinttany-presence-binary",
