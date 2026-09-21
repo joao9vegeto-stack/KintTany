@@ -626,14 +626,29 @@ struct RootView: View {
 private struct CharacterVoxel3DView: UIViewRepresentable {
     let appearance: CharacterAppearance
 
+    func makeCoordinator() -> Coordinator { Coordinator() }
+
+    final class Coordinator: NSObject {
+        weak var view: SCNView?
+        private var lastX: CGFloat = 0
+        @objc func pan(_ gesture: UIPanGestureRecognizer) {
+            guard let avatar = view?.scene?.rootNode.childNode(withName: "avatar", recursively: false) else { return }
+            let x = gesture.translation(in: view).x
+            if gesture.state == .began { lastX = x; return }
+            let dx = x - lastX; lastX = x
+            avatar.eulerAngles.y += Float(dx) * 0.012
+        }
+    }
+
     func makeUIView(context: Context) -> SCNView {
         let view = SCNView()
         view.backgroundColor = .clear
         view.isOpaque = false
         view.autoenablesDefaultLighting = false
-        view.allowsCameraControl = true
-        view.defaultCameraController.interactionMode = .orbitTurntable
-        view.defaultCameraController.inertiaEnabled = true
+        view.allowsCameraControl = false
+        let pan = UIPanGestureRecognizer(target: context.coordinator, action: #selector(Coordinator.pan(_:)))
+        view.addGestureRecognizer(pan)
+        context.coordinator.view = view
         view.scene = Self.scene(for: appearance)
         return view
     }
@@ -694,9 +709,11 @@ private struct CharacterVoxel3DView: UIViewRepresentable {
         }
 
         let camera=SCNNode(); camera.camera=SCNCamera(); camera.camera?.usesOrthographicProjection=true
-        camera.camera?.orthographicScale=4.05
-        camera.position=SCNVector3(4.5,3.1,6.2)
-        camera.look(at: SCNVector3(0,1.75,0))
+        // Fixed portrait framing: large avatar, but enough margin for the full model at every yaw.
+        camera.camera?.orthographicScale=3.95
+        camera.camera?.zNear=0.1; camera.camera?.zFar=100
+        camera.position=SCNVector3(0,2.02,7.0)
+        camera.look(at: SCNVector3(0,1.88,0))
         scene.rootNode.addChildNode(camera)
 
         let light=SCNNode(); light.light=SCNLight(); light.light?.type = .ambient; light.light?.intensity=900
