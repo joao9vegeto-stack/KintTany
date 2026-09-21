@@ -646,6 +646,7 @@ private struct CharacterVoxel3DView: UIViewRepresentable {
         view.isOpaque = false
         view.autoenablesDefaultLighting = false
         view.allowsCameraControl = false
+        view.antialiasingMode = .multisampling4X
         let pan = UIPanGestureRecognizer(target: context.coordinator, action: #selector(Coordinator.pan(_:)))
         view.addGestureRecognizer(pan)
         context.coordinator.view = view
@@ -665,112 +666,148 @@ private struct CharacterVoxel3DView: UIViewRepresentable {
         root.name = "avatar"
         scene.rootNode.addChildNode(root)
 
-        func material(_ color: UIColor) -> SCNMaterial {
+        // Values below come from Kintara outfit schema 15. Colors are server-authoritative
+        // 0xRRGGBB values; no character-specific colors are invented here.
+        let skinHex: [Int] = [15853791, 14926238, 13935988, 8281929, 6046514]
+        func color(_ value: Int?, fallback: Int) -> UIColor {
+            let v = value ?? fallback
+            return UIColor(red: CGFloat((v >> 16) & 255) / 255,
+                           green: CGFloat((v >> 8) & 255) / 255,
+                           blue: CGFloat(v & 255) / 255, alpha: 1)
+        }
+        let skin = color(skinHex[max(0, min(skinHex.count - 1, a.skinTone))], fallback: 14926238)
+        let hatColor = color(a.hatColor, fallback: 3816778)
+        let topColor = color(a.topColor, fallback: 2450411)
+        let pantsColor = color(a.pantsColor, fallback: 2450411)
+        let strapColor = color(a.strapColor, fallback: 1790656)
+        let shoeColor = color(a.shoeColor, fallback: 16777215)
+
+        func material(_ c: UIColor) -> SCNMaterial {
             let m = SCNMaterial()
-            m.diffuse.contents = color
-            m.ambient.contents = color
-            m.lightingModel = .constant
+            m.diffuse.contents = c
+            m.ambient.contents = c
+            m.lightingModel = .lambert
+            m.isDoubleSided = false
             return m
         }
         @discardableResult
-        func box(_ w: CGFloat, _ h: CGFloat, _ d: CGFloat, _ p: SCNVector3, _ color: UIColor, parent: SCNNode? = nil) -> SCNNode {
+        func box(_ w: CGFloat, _ h: CGFloat, _ d: CGFloat, _ p: SCNVector3, _ c: UIColor, parent: SCNNode? = nil) -> SCNNode {
             let g = SCNBox(width: w, height: h, length: d, chamferRadius: 0)
-            g.materials = [material(color)]
-            let n = SCNNode(geometry: g)
-            n.position = p
-            (parent ?? root).addChildNode(n)
-            return n
+            g.materials = [material(c)]
+            let n = SCNNode(geometry: g); n.position = p
+            (parent ?? root).addChildNode(n); return n
+        }
+        @discardableResult
+        func cylinder(_ r: CGFloat, _ h: CGFloat, _ p: SCNVector3, _ c: UIColor, parent: SCNNode? = nil) -> SCNNode {
+            let g = SCNCylinder(radius: r, height: h); g.radialSegmentCount = 12
+            g.materials = [material(c)]
+            let n = SCNNode(geometry: g); n.position = p
+            (parent ?? root).addChildNode(n); return n
         }
 
-        // Kintara's avatar is voxel-built. Keep the native SceneKit renderer,
-        // but reproduce the proportions/layers seen in the authenticated dashboard:
-        // dark outline, head inset, shirt shell, belt/shorts, boots and tall top hat.
-        let outline = UIColor(red: 0.025, green: 0.024, blue: 0.035, alpha: 1)
-        let skinPalette: [UIColor] = [
-            UIColor(red:0.36,green:0.23,blue:0.14,alpha:1),
-            UIColor(red:0.57,green:0.40,blue:0.24,alpha:1),
-            UIColor(red:0.72,green:0.51,blue:0.31,alpha:1),
-            UIColor(red:0.84,green:0.65,blue:0.43,alpha:1)
-        ]
-        let skin = skinPalette[max(0, min(skinPalette.count - 1, a.skinTone))]
-        let purple = UIColor(red:0.25,green:0.12,blue:0.43,alpha:1)
-        let purpleLight = UIColor(red:0.34,green:0.17,blue:0.57,alpha:1)
-        let blue = UIColor(red:0.08,green:0.25,blue:0.66,alpha:1)
-        let gold = UIColor(red:0.94,green:0.63,blue:0.12,alpha:1)
-        let hat = UIColor(red:0.075,green:0.075,blue:0.10,alpha:1)
-        let hatTop = UIColor(red:0.11,green:0.11,blue:0.15,alpha:1)
+        // Base player body: separate meshes, matching the game's material ownership:
+        // head/arms/leg-skin receive skin tone; torso, pants, straps and shoes receive outfit colors.
+        box(0.82, 0.82, 0.82, SCNVector3(0, 2.55, 0), skin)
+        let eye = UIColor(white: 0.035, alpha: 1)
+        box(0.11, 0.16, 0.025, SCNVector3(-0.19, 2.58, 0.422), eye)
+        box(0.11, 0.16, 0.025, SCNVector3( 0.19, 2.58, 0.422), eye)
 
-        // Legs / boots: black outer silhouette with blue lower garment.
-        box(0.42,0.82,0.48,SCNVector3(-0.23,0.82,0),outline)
-        box(0.42,0.82,0.48,SCNVector3(0.23,0.82,0),outline)
-        box(0.31,0.48,0.50,SCNVector3(-0.23,1.00,0.015),blue)
-        box(0.31,0.48,0.50,SCNVector3(0.23,1.00,0.015),blue)
-        box(0.40,0.25,0.62,SCNVector3(-0.23,0.40,0.08),outline)
-        box(0.40,0.25,0.62,SCNVector3(0.23,0.40,0.08),outline)
-
-        // Torso shell + purple garment. The dark border is geometry, not a platform.
-        box(1.02,0.98,0.66,SCNVector3(0,1.72,0),outline)
-        box(0.86,0.82,0.70,SCNVector3(0,1.73,0.02),purple)
-        box(0.86,0.12,0.73,SCNVector3(0,1.35,0.04),blue)
-        box(0.86,0.075,0.75,SCNVector3(0,1.43,0.05),gold)
-
-        // Sleeves and hands.
-        box(0.30,0.74,0.40,SCNVector3(-0.62,1.73,0),outline)
-        box(0.30,0.74,0.40,SCNVector3(0.62,1.73,0),outline)
-        box(0.24,0.38,0.42,SCNVector3(-0.62,1.89,0.02),purpleLight)
-        box(0.24,0.38,0.42,SCNVector3(0.62,1.89,0.02),purpleLight)
-        box(0.24,0.27,0.42,SCNVector3(-0.62,1.52,0.02),skin)
-        box(0.24,0.27,0.42,SCNVector3(0.62,1.52,0.02),skin)
-
-        // Head with the heavy dark Kintara silhouette visible in the dashboard.
-        box(1.02,1.02,1.02,SCNVector3(0,2.64,0),outline)
-        box(0.86,0.82,0.90,SCNVector3(0,2.61,0.045),skin)
-        let eye = UIColor(white:0.025,alpha:1)
-        box(0.13,0.20,0.055,SCNVector3(-0.22,2.64,0.505),eye)
-        box(0.13,0.20,0.055,SCNVector3(0.22,2.64,0.505),eye)
-
-        // Tall top-hat matching the authenticated Katharsis profile.
-        if a.hat != 0 {
-            box(1.22,0.22,1.18,SCNVector3(0,3.15,0),outline)
-            box(1.04,0.13,1.02,SCNVector3(0,3.18,0),hat)
-            box(0.88,0.72,0.88,SCNVector3(0,3.53,0),outline)
-            box(0.72,0.61,0.72,SCNVector3(0,3.54,0.02),hatTop)
+        // Top schema: 0 none, 1 wife beater, 2 T-shirt, 3 long sleeve, 4 hoodie.
+        box(0.82, 0.78, 0.54, SCNVector3(0, 1.72, 0), topColor)
+        let sleeveH: CGFloat = a.top == 3 || a.top == 4 ? 0.66 : (a.top == 2 ? 0.30 : 0.10)
+        let sleeveY: Float = a.top == 3 || a.top == 4 ? 1.75 : 1.94
+        if a.top > 0 {
+            box(0.25, sleeveH, 0.34, SCNVector3(-0.55, sleeveY, 0), topColor)
+            box(0.25, sleeveH, 0.34, SCNVector3( 0.55, sleeveY, 0), topColor)
+        }
+        let exposedArmH: CGFloat = max(0.12, 0.72 - sleeveH)
+        let exposedArmY = Float(1.45 + Double(exposedArmH) / 2)
+        box(0.23, exposedArmH, 0.32, SCNVector3(-0.55, exposedArmY, 0), skin)
+        box(0.23, exposedArmH, 0.32, SCNVector3( 0.55, exposedArmY, 0), skin)
+        if a.top == 4 {
+            box(0.68, 0.22, 0.34, SCNVector3(0, 2.18, -0.20), topColor)
         }
 
-        // Dashboard chest emblem: layered gold pixels instead of a flat generated image.
-        let emblem = SCNNode()
-        emblem.position = SCNVector3(0,1.78,0.385)
-        root.addChildNode(emblem)
-        box(0.08,0.43,0.045,SCNVector3(0,0,0),gold,parent:emblem)
-        box(0.30,0.08,0.045,SCNVector3(0,-0.16,0),gold,parent:emblem)
-        box(0.08,0.19,0.045,SCNVector3(-0.14,-0.08,0),gold,parent:emblem)
-        box(0.08,0.19,0.045,SCNVector3(0.14,-0.08,0),gold,parent:emblem)
-        box(0.12,0.08,0.045,SCNVector3(-0.12,0.14,0),gold,parent:emblem)
+        // Pants schema: 0 none, 1 straight, 2 baggy, 3 shorts, 4 cargo.
+        let shorts = a.pants == 3
+        let legClothH: CGFloat = shorts ? 0.28 : 0.62
+        let legClothY: Float = shorts ? 1.23 : 1.06
+        let legW: CGFloat = a.pants == 2 || a.pants == 4 ? 0.36 : 0.31
+        box(legW, legClothH, 0.40, SCNVector3(-0.20, legClothY, 0), pantsColor)
+        box(legW, legClothH, 0.40, SCNVector3( 0.20, legClothY, 0), pantsColor)
+        if shorts {
+            box(0.28, 0.34, 0.36, SCNVector3(-0.20, 0.88, 0), skin)
+            box(0.28, 0.34, 0.36, SCNVector3( 0.20, 0.88, 0), skin)
+        }
+        if a.pants == 4 {
+            box(0.10, 0.22, 0.42, SCNVector3(-0.39, 1.08, 0), pantsColor)
+            box(0.10, 0.22, 0.42, SCNVector3( 0.39, 1.08, 0), pantsColor)
+        }
+        box(0.84, 0.08, 0.56, SCNVector3(0, 1.34, 0), strapColor)
 
-        if a.cape != nil {
-            box(0.82,1.10,0.12,SCNVector3(0,1.70,-0.40),outline)
+        // Shoe schema: 0 none, 1 boots, 2 shoes.
+        if a.shoe > 0 {
+            let shoeH: CGFloat = a.shoe == 1 ? 0.30 : 0.20
+            box(0.34, shoeH, 0.52, SCNVector3(-0.20, 0.58, 0.06), shoeColor)
+            box(0.34, shoeH, 0.52, SCNVector3( 0.20, 0.58, 0.06), shoeColor)
+        } else {
+            box(0.29, 0.18, 0.42, SCNVector3(-0.20, 0.58, 0.03), skin)
+            box(0.29, 0.18, 0.42, SCNVector3( 0.20, 0.58, 0.03), skin)
         }
 
-        let camera = SCNNode()
-        camera.camera = SCNCamera()
+        // Hat IDs 1...9 are the exact base catalog captured from Kintara.
+        switch a.hat {
+        case 1: // Baseball Cap
+            cylinder(0.39, 0.24, SCNVector3(0, 3.04, 0), hatColor)
+            box(0.52, 0.08, 0.36, SCNVector3(0, 2.96, 0.24), hatColor)
+        case 2: // Sun Hat
+            cylinder(0.54, 0.09, SCNVector3(0, 2.99, 0), hatColor)
+            cylinder(0.34, 0.27, SCNVector3(0, 3.12, 0), hatColor)
+        case 3: // Cowboy Hat
+            box(1.02, 0.09, 0.72, SCNVector3(0, 3.00, 0), hatColor)
+            box(0.60, 0.34, 0.55, SCNVector3(0, 3.17, 0), hatColor)
+        case 4: // Mohawk
+            box(0.13, 0.52, 0.70, SCNVector3(0, 3.16, 0), hatColor)
+        case 5: // French Hat
+            cylinder(0.43, 0.13, SCNVector3(0, 3.04, 0), hatColor)
+            cylinder(0.05, 0.12, SCNVector3(0, 3.16, 0), hatColor)
+        case 6: // Buzzcut
+            box(0.78, 0.12, 0.78, SCNVector3(0, 3.00, 0), hatColor)
+        case 7: // Backwards Cap
+            cylinder(0.39, 0.24, SCNVector3(0, 3.04, 0), hatColor)
+            box(0.52, 0.08, 0.36, SCNVector3(0, 2.96, -0.24), hatColor)
+        case 8: // Bucket Hat
+            cylinder(0.47, 0.30, SCNVector3(0, 3.08, 0), hatColor)
+            cylinder(0.55, 0.08, SCNVector3(0, 2.96, 0), hatColor)
+        case 9: // Top Hat
+            cylinder(0.49, 0.10, SCNVector3(0, 3.00, 0), hatColor)
+            cylinder(0.34, 0.62, SCNVector3(0, 3.31, 0), hatColor)
+        default: break
+        }
+
+        // Cosmetic flags remain data-driven. Native base renderer never substitutes a
+        // different cosmetic when an asset is not locally available.
+        if a.cape != nil { box(0.76, 0.98, 0.08, SCNVector3(0, 1.68, -0.33), topColor) }
+
+        let camera = SCNNode(); camera.camera = SCNCamera()
         camera.camera?.usesOrthographicProjection = true
-        // Preserve Build 347 framing exactly.
         camera.camera?.orthographicScale = 3.95
-        camera.camera?.zNear = 0.1
-        camera.camera?.zFar = 100
-        camera.position = SCNVector3(0,2.02,7.0)
-        camera.look(at: SCNVector3(0,1.88,0))
+        camera.camera?.zNear = 0.1; camera.camera?.zFar = 100
+        camera.position = SCNVector3(0, 2.02, 7.0)
+        camera.look(at: SCNVector3(0, 1.88, 0))
         scene.rootNode.addChildNode(camera)
 
-        let light = SCNNode()
-        light.light = SCNLight()
-        light.light?.type = .ambient
-        light.light?.intensity = 900
-        scene.rootNode.addChildNode(light)
+        let ambient = SCNNode(); ambient.light = SCNLight()
+        ambient.light?.type = .ambient; ambient.light?.intensity = 650
+        ambient.light?.color = UIColor(white: 0.82, alpha: 1)
+        scene.rootNode.addChildNode(ambient)
+        let key = SCNNode(); key.light = SCNLight()
+        key.light?.type = .directional; key.light?.intensity = 700
+        key.eulerAngles = SCNVector3(-0.55, 0.65, 0)
+        scene.rootNode.addChildNode(key)
         return scene
     }
 }
-
 
 private struct CharacterThumbnail: View {
     let image: UIImage?
