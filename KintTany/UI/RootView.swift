@@ -11,6 +11,7 @@ struct RootView: View {
     @State private var showFullLog = false
     @State private var showCharacterStats = false
     @State private var showDailyQuests = false
+    @State private var showBaitPicker = false
     @FocusState private var goalFieldFocused: Bool
 
     private let copper = Color(red: 0.67, green: 0.34, blue: 0.23)
@@ -22,20 +23,20 @@ struct RootView: View {
             PaperTexture()
             GeometryReader { proxy in
                 let designWidth: CGFloat = 430
-                let designHeight: CGFloat = 900
+                let designHeight: CGFloat = 875
                 let scale = min(proxy.size.width / designWidth, proxy.size.height / designHeight)
 
-                VStack(spacing: 14) {
+                VStack(spacing: 9) {
                     topStatusBar
-                    heroSection.frame(height: 270)
-                    statsSection.frame(height: 238)
-                    sessionMetrics.frame(height: 64)
-                    pauseButton.frame(height: 68)
-                    bottomNavigation.frame(height: 56)
-                    fullLogButton.frame(height: 50)
+                    heroSection.frame(height: 292)
+                    statsSection.frame(height: 224)
+                    sessionMetrics.frame(height: 62)
+                    pauseButton.frame(height: 66)
+                    bottomNavigation.frame(height: 54)
+                    fullLogButton.frame(height: 48)
                 }
-                .padding(.horizontal, 16)
-                .padding(.vertical, 8)
+                .padding(.horizontal, 14)
+                .padding(.vertical, 5)
                 .frame(width: designWidth, height: designHeight, alignment: .top)
                 .scaleEffect(scale, anchor: .top)
                 .frame(width: proxy.size.width, height: proxy.size.height, alignment: .top)
@@ -73,6 +74,15 @@ struct RootView: View {
         }
         .sheet(isPresented: $showDailyQuests) {
             DailyQuestsView().environmentObject(app).preferredColorScheme(.dark)
+        }
+        .confirmationDialog("Selecionar isca", isPresented: $showBaitPicker, titleVisibility: .visible) {
+            ForEach(FishingBait.allCases) { bait in
+                Button(app.selectedFishingBait == bait ? "✓ \(bait.displayName)" : bait.displayName) {
+                    app.selectedFishingBait = bait
+                    app.start(.fishing)
+                }
+            }
+            Button("Cancelar", role: .cancel) {}
         }
         .toolbar {
             ToolbarItemGroup(placement: .keyboard) {
@@ -133,9 +143,9 @@ struct RootView: View {
     }
 
     private var heroSection: some View {
-        HStack(spacing: 14) {
-            characterPanel.frame(width: 116)
-            VStack(spacing: 9) {
+        HStack(spacing: 12) {
+            characterPanel.frame(width: 128)
+            VStack(spacing: 6) {
                 activeSummary
                 activitySelector
             }
@@ -168,29 +178,30 @@ struct RootView: View {
         VStack(spacing: 8) {
             HStack(alignment: .firstTextBaseline) {
                 Text(app.activity?.localizedTitle ?? "Selecione")
-                    .font(.system(size: 22, weight: .semibold, design: .rounded))
+                    .font(.system(size: 24, weight: .semibold, design: .rounded))
                     .foregroundStyle(ink)
                     .lineLimit(1)
                 Spacer()
                 Text("\(app.stats.successes)/\(app.activity == nil ? app.goal : app.sessionGoal)")
-                    .font(.system(size: 20, weight: .regular, design: .rounded))
+                    .font(.system(size: 21, weight: .regular, design: .rounded))
                     .foregroundStyle(ink)
                     .monospacedDigit()
             }
             progressBeads
             HStack {
                 Text(progressDetail)
-                    .font(.system(size: 14, weight: .medium, design: .rounded))
+                    .font(.system(size: 13.5, weight: .medium, design: .rounded))
                     .foregroundStyle(ink.opacity(0.92))
                     .lineLimit(1)
                 Spacer()
                 Text(app.activity == nil ? "Aguardando atividade" : app.state.label)
-                    .font(.system(size: 14, weight: .medium, design: .rounded))
+                    .font(.system(size: 13.5, weight: .medium, design: .rounded))
                     .foregroundStyle(ink.opacity(0.82))
-                    .lineLimit(1)
+                     .lineLimit(1)
+                    .minimumScaleFactor(0.72)
             }
         }
-        .padding(.horizontal, 10)
+        .padding(.horizontal, 6)
     }
 
     private var progressDetail: String {
@@ -223,16 +234,16 @@ struct RootView: View {
     }
 
     private var visibleModes: [ActivityMode] {
-        ActivityMode.allCases.filter { mode in app.activity?.rawValue != mode.rawValue }
+        ActivityMode.allCases
     }
 
     private var activitySelector: some View {
-        let columns = Array(repeating: GridItem(.flexible(), spacing: 6), count: 5)
-        return LazyVGrid(columns: columns, spacing: 6) {
+        let columns = Array(repeating: GridItem(.flexible(), spacing: 4), count: 5)
+        return LazyVGrid(columns: columns, spacing: 8) {
             ForEach(visibleModes) { mode in resourceTile(mode) }
         }
-        .padding(.horizontal, 3)
-        .padding(.vertical, 8)
+        .padding(.horizontal, 0)
+        .padding(.vertical, 5)
         .frame(maxHeight: .infinity)
     }
 
@@ -240,16 +251,20 @@ struct RootView: View {
     private func resourceTile(_ mode: ActivityMode) -> some View {
         let tile = Button {
             guard app.activity == nil else { return }
-            app.start(mode)
+            if mode == .fishing {
+                showBaitPicker = true
+            } else {
+                app.start(mode)
+            }
         } label: {
             VStack(spacing: 4) {
                 Image(activitySprite(mode))
                     .resizable()
                     .scaledToFit()
-                    .frame(width: 36, height: 36)
+                    .frame(width: 42, height: 42)
                     .shadow(color: .black.opacity(0.20), radius: 1.2, x: 1, y: 1)
                 Text(mode.localizedTitle)
-                    .font(.system(size: 11.5, weight: .medium, design: .rounded))
+                    .font(.system(size: 12.2, weight: .medium, design: .rounded))
                     .foregroundStyle(ink)
                     .lineLimit(1)
                     .minimumScaleFactor(0.72)
@@ -260,7 +275,7 @@ struct RootView: View {
                         .lineLimit(1)
                 }
             }
-            .frame(maxWidth: .infinity, minHeight: 58)
+            .frame(maxWidth: .infinity, minHeight: 68)
         }
         .buttonStyle(.plain)
         .disabled(app.activity != nil)
@@ -311,19 +326,19 @@ struct RootView: View {
     }
 
     private var statsSection: some View {
-        VStack(alignment: .leading, spacing: 7) {
+        VStack(alignment: .leading, spacing: 5) {
             Text("STATS")
-                .font(.system(size: 20, weight: .semibold, design: .rounded))
+                .font(.system(size: 21, weight: .semibold, design: .rounded))
                 .foregroundStyle(ink)
-            HStack(alignment: .top, spacing: 12) {
-                VStack(spacing: 5) {
+            HStack(alignment: .top, spacing: 10) {
+                VStack(spacing: 4) {
                     ForEach(CharacterSkill.allCases) { skill in skillRow(skill) }
                     Divider().overlay(ink.opacity(0.28))
                     HStack(spacing: 9) {
                         Text("Total Level")
                             .font(.system(size: 15, weight: .medium, design: .rounded))
                             .foregroundStyle(ink)
-                            .frame(width: 95, alignment: .leading)
+                            .frame(width: 76, alignment: .leading)
                         skillBar(progress: Double(app.characterProfile.totalLevel) / 40.0).frame(height: 15)
                         Text("\(app.characterProfile.totalLevel)")
                             .font(.system(size: 15, weight: .medium, design: .rounded))
@@ -333,10 +348,10 @@ struct RootView: View {
                 }
                 .frame(maxWidth: .infinity)
                 Rectangle().fill(ink.opacity(0.22)).frame(width: 1).padding(.vertical, 3)
-                telemetryColumn.frame(width: 145)
+                telemetryColumn.frame(width: 154)
             }
         }
-        .padding(12)
+        .padding(10)
         .embossedPanel(cornerRadius: 18, fill: paper)
     }
 
@@ -344,16 +359,16 @@ struct RootView: View {
         let level = app.characterProfile.skills.level(for: skill)
         return HStack(spacing: 9) {
             Text(skill.localizedName)
-                .font(.system(size: 14.5, weight: .medium, design: .rounded))
+                .font(.system(size: 13.5, weight: .medium, design: .rounded))
                 .foregroundStyle(ink)
                 .frame(width: 95, alignment: .leading)
                 .lineLimit(1)
             skillBar(progress: Double(level) / 40.0).frame(height: 15)
             Text("\(level)/40")
-                .font(.system(size: 14, weight: .medium, design: .rounded))
+                .font(.system(size: 13.5, weight: .medium, design: .rounded))
                 .foregroundStyle(ink.opacity(0.9))
                 .monospacedDigit()
-                .frame(width: 42, alignment: .trailing)
+                .frame(width: 48, alignment: .trailing)
         }
     }
 
@@ -373,11 +388,11 @@ struct RootView: View {
     }
 
     private var telemetryColumn: some View {
-        VStack(alignment: .leading, spacing: 8) {
+        VStack(alignment: .leading, spacing: 6) {
             HStack {
                 Spacer()
                 Image(systemName: "mountain.2.fill")
-                    .font(.system(size: 42, weight: .medium))
+                    .font(.system(size: 36, weight: .medium))
                     .foregroundStyle(Color(red: 0.39, green: 0.43, blue: 0.34))
                     .shadow(color: .black.opacity(0.20), radius: 1, x: 1, y: 1)
                 Spacer()
@@ -387,21 +402,21 @@ struct RootView: View {
             telemetryLine("Recursos", "\(app.resourceCount)")
             telemetryLine("Mobs", "\(app.mobCount)")
             Text("Último evento")
-                .font(.system(size: 12.5, weight: .medium, design: .rounded))
+                .font(.system(size: 12, weight: .medium, design: .rounded))
                 .foregroundStyle(ink.opacity(0.9))
             Text(app.stats.lastEvent.isEmpty ? "—" : app.stats.lastEvent)
-                .font(.system(size: 12, weight: .regular, design: .rounded))
+                .font(.system(size: 11.5, weight: .regular, design: .rounded))
                 .foregroundStyle(ink.opacity(0.78))
-                .lineLimit(2)
+                .lineLimit(1)
                 .minimumScaleFactor(0.74)
         }
     }
 
     private func telemetryLine(_ title: String, _ value: String) -> some View {
         HStack(spacing: 4) {
-            Text(title).font(.system(size: 12.5, weight: .medium, design: .rounded))
+            Text(title).font(.system(size: 12, weight: .medium, design: .rounded))
             Text(value)
-                .font(.system(size: 12.5, weight: .regular, design: .rounded))
+                .font(.system(size: 12, weight: .regular, design: .rounded))
                 .lineLimit(1)
                 .minimumScaleFactor(0.72)
         }
@@ -426,7 +441,7 @@ struct RootView: View {
     private var goalMetric: some View {
         VStack(spacing: 2) {
             Text("Meta da sessão")
-                .font(.system(size: 12.5, weight: .medium, design: .rounded))
+                .font(.system(size: 12, weight: .medium, design: .rounded))
                 .foregroundStyle(ink.opacity(0.84))
                 .lineLimit(1)
                 .minimumScaleFactor(0.76)
@@ -451,7 +466,7 @@ struct RootView: View {
     private func sessionMetric(title: String, value: String) -> some View {
         VStack(spacing: 2) {
             Text(title)
-                .font(.system(size: 12.5, weight: .medium, design: .rounded))
+                .font(.system(size: 12, weight: .medium, design: .rounded))
                 .foregroundStyle(ink.opacity(0.84))
             Text(value)
                 .font(.system(size: 24, weight: .medium, design: .rounded))
@@ -668,7 +683,7 @@ private struct DailyQuestsView: View {
 
                     if !app.dailyQuestsLoading && app.dailyQuests.isEmpty && app.dailyQuestsError == nil {
                         Text("Nenhuma Daily Quest publicada pelo servidor.")
-                            .font(.system(size: 14, weight: .medium, design: .rounded))
+                            .font(.system(size: 13.5, weight: .medium, design: .rounded))
                             .foregroundStyle(ink.opacity(0.62))
                             .frame(maxWidth: .infinity)
                             .padding(24)
