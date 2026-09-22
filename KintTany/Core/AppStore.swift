@@ -1949,7 +1949,12 @@ final class AppStore: ObservableObject {
                 let completedBeforePhase = stats.successes
                 let phaseGoal = max(1, runGoal - completedBeforePhase)
                 let child = Task.detached(priority: .userInitiated) {
-                    try await engine.run(mode: mode, goal: phaseGoal)
+                    try await engine.run(
+                        mode: mode,
+                        goal: phaseGoal,
+                        successOffset: completedBeforePhase,
+                        displayGoal: runGoal
+                    )
                 }
                 engineRunTask = child
                 let result = try await child.value
