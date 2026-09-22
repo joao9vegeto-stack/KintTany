@@ -615,18 +615,8 @@ actor RealtimeSocket {
                     trace("[WARN] Presence recebeu mensagem sem payload utilizável")
                     continue
                 }
-                // Deliver first. Raw Presence tracing used to run regex redaction
-                // synchronously here, before the authoritative event could reach the
-                // AutomationEngine. Under prolonged iOS BG throttling that work can
-                // amplify receive latency and build a packet backlog.
-                let receivedAtMS = ProcessInfo.processInfo.systemUptime * 1_000
-                if PresenceCriticalReceivePolicy.isGatherCritical(data) {
-                    criticalContinuation?.yield(PresenceCriticalPacket(data: data, receivedAtMS: receivedAtMS))
-                }
+                tracePayload(direction: "IN presence", data: data)
                 continuation?.yield(data)
-                if PresenceReceivePolicy.traceRawInboundPayload {
-                    tracePayload(direction: "IN presence", data: data)
-                }
             } catch {
                 if !closed {
                     lastDisconnectReason = error.localizedDescription
