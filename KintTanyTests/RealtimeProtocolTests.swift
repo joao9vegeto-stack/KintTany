@@ -1283,4 +1283,63 @@ final class RealtimeProtocolTests: XCTestCase {
         )
     }
 
+    func testCharacterSkillLevelMatchesOfficialXPThresholds() {
+        XCTAssertEqual(CharacterSkillStats.level(fromTotalXP: 0), 1)
+        XCTAssertEqual(CharacterSkillStats.level(fromTotalXP: 479), 1)
+        XCTAssertEqual(CharacterSkillStats.level(fromTotalXP: 480), 2)
+        XCTAssertEqual(CharacterSkillStats.progressWithinLevel(fromTotalXP: 0), 0, accuracy: 0.0001)
+    }
+
+    func testCharacterTotalLevelUsesFiveOfficialAverageSkills() {
+        let levelTwoXP = 480
+        let stats = CharacterSkillStats(xp: [
+            .combat: levelTwoXP,
+            .woodcutting: levelTwoXP,
+            .mining: levelTwoXP,
+            .fishing: levelTwoXP,
+            .cooking: levelTwoXP,
+            .smithing: 9_999_999
+        ], loaded: true)
+
+        XCTAssertEqual(stats.totalLevel, 2)
+        XCTAssertEqual(stats.level(for: .smithing), 40)
+    }
+
+    func testCharacterProfileParsesRealSessionShapeAndDedicatedStats() throws {
+        let me: [String: Any] = [
+            "player": ["id": 41106, "display_name": "Katharsis", "avg": 22],
+            "outfit": [
+                "outfitSchema": 15,
+                "hat": 9,
+                "top": 2,
+                "pants": 3,
+                "shoe": 0,
+                "skinTone": 2,
+                "topFx": "season1"
+            ],
+            "meta": ["skillXp": ["combat": 100]]
+        ]
+        let playerStats: [String: Any] = [
+            "ok": true,
+            "skillXp": [
+                "combat": 480,
+                "woodcutting": 240,
+                "mining": 720,
+                "fishing": 120,
+                "cooking": 60,
+                "smithing": 30
+            ]
+        ]
+
+        let profile = CharacterProfilePayloadParser.profile(me: me, playerStats: playerStats)
+
+        XCTAssertEqual(profile.playerID, 41106)
+        XCTAssertEqual(profile.displayName, "Katharsis")
+        XCTAssertEqual(profile.totalLevel, 22)
+        XCTAssertEqual(profile.appearance.hat, 9)
+        XCTAssertEqual(profile.appearance.topFX, "season1")
+        XCTAssertEqual(profile.skills.totalXP(for: .combat), 480)
+        XCTAssertTrue(profile.skills.loaded)
+    }
+
 }
