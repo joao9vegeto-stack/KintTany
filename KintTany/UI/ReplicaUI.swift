@@ -3,6 +3,7 @@ import SwiftUI
 import UIKit
 
 public enum KintActivity: String, CaseIterable, Identifiable, Sendable {
+    case idle
     case wood
     case coal
     case stone
@@ -18,6 +19,7 @@ public enum KintActivity: String, CaseIterable, Identifiable, Sendable {
 
     public var title: String {
         switch self {
+        case .idle: "Aguardando atividade"
         case .wood: "Madeira"
         case .coal: "Carvão"
         case .stone: "Pedra"
@@ -33,21 +35,23 @@ public enum KintActivity: String, CaseIterable, Identifiable, Sendable {
 
     public var assetName: String {
         switch self {
-        case .wood: "CloneWood"
-        case .coal: "CloneCoal"
-        case .stone: "CloneStone"
-        case .ironOre: "CloneIron"
-        case .silverOre: "CloneSilver"
-        case .cacti: "CloneCacti"
-        case .fishing: "CloneFishing"
-        case .chicken: "CloneChicken"
-        case .zombie: "CloneZombie"
-        case .dragon: "CloneDragon"
+        case .idle: ""
+        case .wood: "KintWood"
+        case .coal: "KintCoal"
+        case .stone: "KintIronOre"
+        case .ironOre: "KintIronOre"
+        case .silverOre: "KintSilverOre"
+        case .cacti: "KintCacti"
+        case .fishing: "KintFishing"
+        case .chicken: "KintChicken"
+        case .zombie: "KintZombie"
+        case .dragon: "KintDragon"
         }
     }
 
     public var headerTitle: String {
         switch self {
+        case .idle: "Aguardando atividade"
         case .stone: "Pedra"
         case .ironOre: "Iron Ore"
         case .silverOre: "Silver Ore"
@@ -131,6 +135,7 @@ public struct KintTanyDashboardState: Hashable, Sendable {
     public var totalLevelMaximum: Int
     public var location: KintLocationSummary
     public var session: KintSessionSummary
+    public var isRunning: Bool
     public var isPaused: Bool
     public var selectedTab: KintDashboardTab
 
@@ -148,6 +153,7 @@ public struct KintTanyDashboardState: Hashable, Sendable {
         totalLevelMaximum: Int = 240,
         location: KintLocationSummary,
         session: KintSessionSummary,
+        isRunning: Bool,
         isPaused: Bool,
         selectedTab: KintDashboardTab = .stats
     ) {
@@ -164,40 +170,36 @@ public struct KintTanyDashboardState: Hashable, Sendable {
         self.totalLevelMaximum = max(1, totalLevelMaximum)
         self.location = location
         self.session = session
+        self.isRunning = isRunning
         self.isPaused = isPaused
         self.selectedTab = selectedTab
     }
 
     public static let referenceSample = KintTanyDashboardState(
-        isOnline: true,
-        selectedActivity: .ironOre,
-        completed: 1,
-        target: 240,
-        actionProgress: 2,
-        actionRequirement: 6,
-        statusText: "Aguardando resultado",
+        isOnline: false,
+        selectedActivity: .idle,
+        activityTitle: "Aguardando atividade",
+        completed: 0,
+        target: 100,
+        actionProgress: 0,
+        actionRequirement: 100,
+        statusText: "Pronto",
         skills: [
-            .init(name: "Combat", value: 17),
-            .init(name: "Wood", value: 23),
-            .init(name: "Mining", value: 28),
-            .init(name: "Fishing", value: 21),
-            .init(name: "Cooking", value: 18),
-            .init(name: "Smithing", value: 17),
+            .init(name: "Combat", value: 0),
+            .init(name: "Wood", value: 0),
+            .init(name: "Mining", value: 0),
+            .init(name: "Fishing", value: 0),
+            .init(name: "Cooking", value: 0),
+            .init(name: "Smithing", value: 0),
         ],
-        totalLevel: 22,
+        totalLevel: 0,
         totalLevelMaximum: 100,
-        location: .init(
-            region: "Eldergrove",
-            position: "11.5, -4.5",
-            resources: 334,
-            mobs: 12,
-            lastEvent: "ataque enviado"
-        ),
-        session: .init(target: 240, successes: 1, failures: 0, attempts: 1),
+        location: .init(region: "—", position: "—", resources: 0, mobs: 0, lastEvent: "—"),
+        session: .init(target: 100, successes: 0, failures: 0, attempts: 0),
+        isRunning: false,
         isPaused: false,
         selectedTab: .stats
-    )
-}
+    )}
 
 public struct KintTanyDashboardActions {
     public var selectActivity: (KintActivity) -> Void
@@ -205,19 +207,25 @@ public struct KintTanyDashboardActions {
     public var selectTab: (KintDashboardTab) -> Void
     public var openFullLog: () -> Void
     public var editTarget: () -> Void
+    public var decrementTarget: () -> Void
+    public var incrementTarget: () -> Void
 
     public init(
         selectActivity: @escaping (KintActivity) -> Void = { _ in },
         togglePause: @escaping () -> Void = {},
         selectTab: @escaping (KintDashboardTab) -> Void = { _ in },
         openFullLog: @escaping () -> Void = {},
-        editTarget: @escaping () -> Void = {}
+        editTarget: @escaping () -> Void = {},
+        decrementTarget: @escaping () -> Void = {},
+        incrementTarget: @escaping () -> Void = {}
     ) {
         self.selectActivity = selectActivity
         self.togglePause = togglePause
         self.selectTab = selectTab
         self.openFullLog = openFullLog
         self.editTarget = editTarget
+        self.decrementTarget = decrementTarget
+        self.incrementTarget = incrementTarget
     }
 
     public static let inert = KintTanyDashboardActions()
@@ -231,7 +239,7 @@ public enum KintReplicaSizingMode: Equatable, Sendable {
 }
 
 public enum KintTanyTheme {
-    public static let canvasSize = CGSize(width: 390, height: 844)
+    public static let canvasSize = CGSize(width: 390, height: 760)
 
     public static let surface = Color(red: 218 / 255, green: 211 / 255, blue: 202 / 255)
     public static let surfaceHighlight = Color(red: 235 / 255, green: 231 / 255, blue: 225 / 255)
@@ -245,11 +253,11 @@ public enum KintTanyTheme {
     public static let divider = Color(red: 132 / 255, green: 124 / 255, blue: 115 / 255).opacity(0.82)
 
     public static func bodyFont(_ size: CGFloat, weight: Font.Weight = .regular) -> Font {
-        .system(size: size, design: .rounded).weight(weight)
+        .custom("Helvetica Neue", size: size).weight(weight)
     }
 
     public static func titleFont(_ size: CGFloat, weight: Font.Weight = .regular) -> Font {
-        .system(size: size, design: .rounded).weight(weight)
+        .custom("Helvetica Neue", size: size).weight(weight)
     }
 }
 
@@ -456,24 +464,74 @@ struct KintProgressDots: View {
     }
 }
 
+struct KintActivityGridBackground: View {
+    var body: some View {
+        ZStack {
+            RoundedRectangle(cornerRadius: 12, style: .continuous)
+                .fill(KintTanyTheme.surface.opacity(0.92))
+            KintResourceImage.image("KintPaperTexture")
+                .resizable(resizingMode: .tile)
+                .opacity(0.55)
+                .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
+            Canvas { context, size in
+                func zigzag(yPeak: CGFloat, yValley: CGFloat) -> Path {
+                    var p = Path()
+                    let margin: CGFloat = 5
+                    let cell = (size.width - margin * 2) / 5
+                    p.move(to: CGPoint(x: margin, y: yValley))
+                    for i in 0..<5 {
+                        let x = margin + CGFloat(i) * cell
+                        p.addLine(to: CGPoint(x: x + cell * 0.5, y: yPeak))
+                        p.addLine(to: CGPoint(x: x + cell, y: yValley))
+                    }
+                    return p
+                }
+                let shadow = Color(red: 157/255, green: 148/255, blue: 138/255).opacity(0.75)
+                let light = KintTanyTheme.surfaceHighlight.opacity(0.95)
+                context.stroke(zigzag(yPeak: 7, yValley: 28), with: .color(shadow), style: .init(lineWidth: 3.2, lineCap: .round, lineJoin: .round))
+                context.stroke(zigzag(yPeak: 6, yValley: 27), with: .color(light), style: .init(lineWidth: 1.4, lineCap: .round, lineJoin: .round))
+                context.stroke(zigzag(yPeak: size.height * 0.50, yValley: size.height * 0.65), with: .color(shadow), style: .init(lineWidth: 3.0, lineCap: .round, lineJoin: .round))
+                context.stroke(zigzag(yPeak: size.height * 0.495, yValley: size.height * 0.645), with: .color(light), style: .init(lineWidth: 1.3, lineCap: .round, lineJoin: .round))
+            }
+            RoundedRectangle(cornerRadius: 12, style: .continuous)
+                .stroke(LinearGradient(colors: [KintTanyTheme.surfaceHighlight, KintTanyTheme.surfaceShadow.opacity(0.70)], startPoint: .topLeading, endPoint: .bottomTrailing), lineWidth: 1.1)
+        }
+        .shadow(color: KintTanyTheme.surfaceShadow.opacity(0.45), radius: 2, x: 1, y: 1)
+    }
+}
+
+struct KintActivitySprite: View {
+    let activity: KintActivity
+    var body: some View {
+        Group {
+            if activity == .stone {
+                KintResourceImage.image("KintIronOre")
+                    .resizable().interpolation(.high).scaledToFit()
+                    .saturation(0).brightness(-0.08).contrast(0.94)
+            } else {
+                KintResourceImage.image(activity.assetName)
+                    .resizable().interpolation(.high).scaledToFit()
+            }
+        }
+    }
+}
+
 struct KintExactActivityGrid: View {
     @Binding var selected: KintActivity
     let didSelect: (KintActivity) -> Void
-
     private let top: [KintActivity] = [.wood, .coal, .stone, .ironOre, .silverOre]
     private let bottom: [KintActivity] = [.cacti, .fishing, .chicken, .zombie, .dragon]
 
     var body: some View {
-        VStack(spacing: 0) {
-            activityRow(top)
-            activityRow(bottom)
+        ZStack {
+            KintActivityGridBackground()
+            VStack(spacing: 0) {
+                activityRow(top)
+                activityRow(bottom)
+            }
+            .padding(.top, 18)
+            .padding(.bottom, 4)
         }
-        .background(
-            RoundedRectangle(cornerRadius: 11, style: .continuous)
-                .fill(KintTanyTheme.surface.opacity(0.72))
-                .shadow(color: KintTanyTheme.surfaceShadow.opacity(0.48), radius: 2, x: 1, y: 1)
-        )
-        .clipShape(RoundedRectangle(cornerRadius: 11, style: .continuous))
     }
 
     private func activityRow(_ activities: [KintActivity]) -> some View {
@@ -484,24 +542,17 @@ struct KintExactActivityGrid: View {
                     didSelect(activity)
                 } label: {
                     VStack(spacing: 1) {
-                        KintResourceImage.image(activity.assetName)
-                            .resizable()
-                            .interpolation(.high)
-                            .scaledToFit()
-                            .frame(maxWidth: 37, maxHeight: 36)
+                        KintActivitySprite(activity: activity).frame(width: 38, height: 34)
                         Text(activity.title)
-                            .font(KintTanyTheme.bodyFont(7.2, weight: selected == activity ? .semibold : .regular))
+                            .font(KintTanyTheme.bodyFont(7.7, weight: selected == activity ? .medium : .regular))
                             .foregroundStyle(KintTanyTheme.ink)
-                            .lineLimit(1)
-                            .minimumScaleFactor(0.65)
+                            .lineLimit(1).minimumScaleFactor(0.68)
                     }
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
                     .contentShape(Rectangle())
-                    .background(selected == activity ? KintTanyTheme.terracotta.opacity(0.10) : .clear)
+                    .background(selected == activity ? KintTanyTheme.terracotta.opacity(0.08) : .clear)
                 }
                 .buttonStyle(.plain)
-                .accessibilityLabel(activity.title)
-                .accessibilityAddTraits(selected == activity ? [.isSelected] : [])
             }
         }
         .frame(maxHeight: .infinity)
@@ -635,22 +686,18 @@ struct KintMetricCell: View {
 
 struct KintSessionCounters: View {
     let session: KintSessionSummary
-    let editTarget: () -> Void
+    let decrementTarget: () -> Void
+    let incrementTarget: () -> Void
+    let targetEnabled: Bool
 
     var body: some View {
         HStack(spacing: 0) {
-            HStack(spacing: 3) {
-                Button(action: editTarget) {
-                    Image(systemName: "chevron.left").font(.system(size: 10, weight: .bold))
-                }
+            HStack(spacing: 4) {
+                selectorButton(systemName: "chevron.left", action: decrementTarget)
                 KintMetricCell(title: "Meta da sessão", value: session.target)
-                Button(action: editTarget) {
-                    Image(systemName: "chevron.right").font(.system(size: 10, weight: .bold))
-                }
+                selectorButton(systemName: "chevron.right", action: incrementTarget)
             }
-            .buttonStyle(.plain)
-            .foregroundStyle(KintTanyTheme.ink)
-            .frame(width: 113, alignment: .center)
+            .frame(width: 118)
             separator
             KintMetricCell(title: "Sucessos", value: session.successes)
             separator
@@ -660,74 +707,53 @@ struct KintSessionCounters: View {
         }
     }
 
+    private func selectorButton(systemName: String, action: @escaping () -> Void) -> some View {
+        Button(action: action) {
+            Image(systemName: systemName)
+                .font(.system(size: 10, weight: .bold))
+                .foregroundStyle(KintTanyTheme.ink)
+                .frame(width: 20, height: 30)
+                .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .disabled(!targetEnabled)
+        .opacity(targetEnabled ? 1 : 0.30)
+    }
+
     private var separator: some View {
-        Rectangle()
-            .fill(KintTanyTheme.divider)
-            .frame(width: 0.75, height: 40)
-            .shadow(color: KintTanyTheme.surfaceHighlight.opacity(0.95), radius: 0, x: 0.8, y: 0)
+        Rectangle().fill(KintTanyTheme.divider).frame(width: 0.75, height: 40)
     }
 }
 
 struct KintPauseButton: View {
-    let isPaused: Bool
+    let isRunning: Bool
     let action: () -> Void
 
     var body: some View {
         Button(action: action) {
             HStack(spacing: 18) {
-                KintPauseGlyph(isPaused: isPaused)
-                    .frame(width: 23, height: 27)
+                RoundedRectangle(cornerRadius: 2.2, style: .continuous)
+                    .fill(KintTanyTheme.surfaceHighlight)
+                    .overlay(RoundedRectangle(cornerRadius: 2.2).stroke(KintTanyTheme.terracottaShadow.opacity(0.8), lineWidth: 0.8))
+                    .frame(width: 22, height: 22)
                 Text("PARAR")
                     .font(KintTanyTheme.titleFont(16.5, weight: .medium))
                     .tracking(0.7)
             }
             .foregroundStyle(KintTanyTheme.surfaceHighlight)
-            .textCase(.uppercase)
             .shadow(color: KintTanyTheme.terracottaShadow.opacity(0.9), radius: 0.6, x: 0.8, y: 1)
             .frame(maxWidth: .infinity, maxHeight: .infinity)
-            .background(
-                ZStack {
-                    KintTanyTheme.terracotta
-                    KintResourceImage.image("KintButtonTexture")
-                        .resizable(resizingMode: .tile)
-                        .opacity(0.62)
-                }
-            )
-            .overlay(
-                RoundedRectangle(cornerRadius: 13.5, style: .continuous)
-                    .stroke(KintTanyTheme.terracottaShadow, lineWidth: 1.3)
-                    .overlay(
-                        RoundedRectangle(cornerRadius: 12.2, style: .continuous)
-                            .stroke(KintTanyTheme.terracottaHighlight.opacity(0.7), lineWidth: 0.7)
-                            .padding(1.7)
-                    )
-            )
+            .background(ZStack {
+                KintTanyTheme.terracotta
+                KintResourceImage.image("KintButtonTexture").resizable(resizingMode: .tile).opacity(0.62)
+            })
+            .overlay(RoundedRectangle(cornerRadius: 13.5).stroke(KintTanyTheme.terracottaShadow, lineWidth: 1.3))
             .kintRaised(radius: 13.5, darkOffset: 2.5)
+            .opacity(isRunning ? 1 : 0.42)
         }
         .buttonStyle(.plain)
+        .disabled(!isRunning)
         .accessibilityLabel("Parar")
-    }
-}
-
-struct KintPauseGlyph: View {
-    let isPaused: Bool
-
-    var body: some View {
-        if isPaused {
-            Image(systemName: "play.fill")
-                .font(.system(size: 22, weight: .semibold))
-        } else {
-            HStack(spacing: 4.5) {
-                RoundedRectangle(cornerRadius: 1.5).frame(width: 6.5)
-                RoundedRectangle(cornerRadius: 1.5).frame(width: 6.5)
-            }
-            .overlay(
-                HStack(spacing: 4.5) {
-                    RoundedRectangle(cornerRadius: 1.5).stroke(KintTanyTheme.terracottaShadow, lineWidth: 0.7).frame(width: 6.5)
-                    RoundedRectangle(cornerRadius: 1.5).stroke(KintTanyTheme.terracottaShadow, lineWidth: 0.7).frame(width: 6.5)
-                }
-            )
-        }
     }
 }
 
@@ -888,13 +914,13 @@ private struct KintTanyDesignCanvas<AvatarContent: View>: View {
                 KintResourceImage.image("KintFullReference")
                     .resizable()
                     .interpolation(.high)
-                    .frame(width: 390, height: 844)
+                    .frame(width: 390, height: 760)
                     .opacity(referenceOverlayOpacity)
                     .allowsHitTesting(false)
                     .accessibilityHidden(true)
             }
         }
-        .frame(width: 390, height: 844)
+        .frame(width: 390, height: 760)
         .clipped()
     }
 
@@ -917,8 +943,8 @@ private struct KintTanyDesignCanvas<AvatarContent: View>: View {
                 )
         }
         .shadow(color: Color.black.opacity(0.3), radius: 8, x: 2, y: 5)
-        .frame(width: 388, height: 840)
-        .position(x: 195, y: 422)
+        .frame(width: 388, height: 756)
+        .position(x: 195, y: 380)
     }
 
     private var header: some View {
@@ -962,6 +988,8 @@ private struct KintTanyDesignCanvas<AvatarContent: View>: View {
             HStack(alignment: .firstTextBaseline) {
                 Text(state.activityTitle)
                     .font(KintTanyTheme.titleFont(20))
+                    .lineLimit(1)
+                    .minimumScaleFactor(0.68)
                 Spacer()
                 Text("\(state.completed)/\(state.target)")
                     .font(KintTanyTheme.titleFont(18))
@@ -1029,43 +1057,48 @@ private struct KintTanyDesignCanvas<AvatarContent: View>: View {
 
             KintDivider()
                 .frame(width: 350)
-                .position(x: 195, y: 528)
+                .position(x: 195, y: 516)
         }
     }
 
     private var session: some View {
         Group {
-            KintSessionCounters(session: state.session, editTarget: actions.editTarget)
+            KintSessionCounters(
+                session: state.session,
+                decrementTarget: actions.decrementTarget,
+                incrementTarget: actions.incrementTarget,
+                targetEnabled: !state.isRunning
+            )
                 .frame(width: 346, height: 48)
                 .contentShape(Rectangle())
                 .onTapGesture { actions.editTarget() }
-                .position(x: 195, y: 570)
+                .position(x: 195, y: 548.5)
         }
     }
 
     private var controls: some View {
         Group {
-            KintPauseButton(isPaused: false) {
+            KintPauseButton(isRunning: state.isRunning) {
                 actions.togglePause()
             }
             .frame(width: 258, height: 53)
-            .position(x: 195, y: 642)
+            .position(x: 195, y: 610.5)
 
             KintDivider()
                 .frame(width: 350)
-                .position(x: 195, y: 688)
+                .position(x: 195, y: 649)
 
             KintTabBar(selection: $state.selectedTab, didSelect: actions.selectTab)
                 .frame(width: 346, height: 41)
-                .position(x: 195, y: 718)
+                .position(x: 195, y: 672)
 
             KintDivider()
                 .frame(width: 350)
-                .position(x: 195, y: 747)
+                .position(x: 195, y: 694.5)
 
             KintLogRow(action: actions.openFullLog)
                 .frame(width: 350, height: 47)
-                .position(x: 195, y: 785)
+                .position(x: 195, y: 721)
         }
     }
 }
@@ -1101,13 +1134,12 @@ struct ReplicaDashboardHost: View {
     var body: some View {
         KintTanyDashboardView(
             state: $dashboard,
-            sizingMode: .fill,
+            sizingMode: .aspectFit,
             actions: dashboardActions,
             referenceOverlayOpacity: 0
         ) {
             avatarView
         }
-        .ignoresSafeArea()
         .onAppear { syncFromApp() }
         .onReceive(app.objectWillChange) { _ in
             DispatchQueue.main.async { syncFromApp() }
@@ -1154,6 +1186,7 @@ struct ReplicaDashboardHost: View {
             selectActivity: { activity in
                 guard app.activity == nil else { return }
                 switch activity {
+                case .idle: break
                 case .wood: start(.tree)
                 case .coal: start(.coal)
                 case .stone: start(.stone)
@@ -1189,7 +1222,9 @@ struct ReplicaDashboardHost: View {
                 guard app.activity == nil else { return }
                 goalDraft = String(app.goal)
                 showGoalEditor = true
-            }
+            },
+            decrementTarget: { adjustGoal(by: -10) },
+            incrementTarget: { adjustGoal(by: 10) }
         )
     }
 
@@ -1199,6 +1234,12 @@ struct ReplicaDashboardHost: View {
             app.selectedFishingBait = bait
             start(.fishing)
         }
+    }
+
+    private func adjustGoal(by delta: Int) {
+        guard app.activity == nil else { return }
+        app.goal = min(100_000, max(1, app.goal + delta))
+        syncFromApp()
     }
 
     private func commitGoal() {
@@ -1218,7 +1259,7 @@ struct ReplicaDashboardHost: View {
 
     private func syncFromApp() {
         let currentMode = app.activity
-        let selected = currentMode.map(kintActivity(for:)) ?? dashboard.selectedActivity
+        let selected = currentMode.map(kintActivity(for:)) ?? .idle
         let target = currentMode == nil ? app.goal : app.sessionGoal
         let combat = currentMode == .chicken || currentMode == .zombie || currentMode == .dragon
         let actionProgress = combat ? app.stats.confirmedHits : app.stats.successes
@@ -1242,8 +1283,8 @@ struct ReplicaDashboardHost: View {
         dashboard = KintTanyDashboardState(
             isOnline: app.connected,
             selectedActivity: selected,
-            activityTitle: currentMode?.localizedTitle ?? dashboard.activityTitle,
-            completed: app.stats.successes,
+            activityTitle: currentMode?.localizedTitle ?? "Aguardando atividade",
+            completed: currentMode == nil ? 0 : app.stats.successes,
             target: target,
             actionProgress: actionProgress,
             actionRequirement: actionRequirement,
@@ -1271,6 +1312,7 @@ struct ReplicaDashboardHost: View {
                 failures: app.stats.failures,
                 attempts: app.stats.attempts
             ),
+            isRunning: currentMode != nil,
             isPaused: false,
             selectedTab: dashboard.selectedTab
         )
