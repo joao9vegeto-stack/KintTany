@@ -7,7 +7,10 @@ import SceneKit
 struct RootView: View {
  @EnvironmentObject var app:AppStore
  @Environment(\.scenePhase) private var scenePhase
- @State private var showLogin=false,showFullLog=false,showCharacterStats=false,showDailyQuests=false
+ @State private var showLogin=false
+ @State private var showFullLog=false
+ @State private var showCharacterStats=false
+ @State private var showDailyQuests=false
  private let ink=Color(red:0.14,green:0.13,blue:0.12), copper=Color(red:0.66,green:0.34,blue:0.23), paper=Color(red:0.91,green:0.895,blue:0.855)
  var body:some View{ZStack{PaperTexture();GeometryReader{g in let W:CGFloat=390,H:CGFloat=780;let s=min(g.size.width/W,g.size.height/H);VStack(spacing:0){header.frame(height:52);hero.frame(height:270);rule;stats.frame(height:190);rule;metrics.frame(height:62);action.frame(height:70);nav.frame(height:52);log.frame(height:48)}.padding(.horizontal,22).frame(width:W,height:H,alignment:.top).scaleEffect(s,anchor:.top).frame(width:g.size.width,height:g.size.height,alignment:.top)}}.preferredColorScheme(.light)
  .sheet(isPresented:$showLogin){LoginWebView(onCookie:{app.saveCookie($0);showLogin=false},onDiagnostic:{app.diagnostic($0)})}
