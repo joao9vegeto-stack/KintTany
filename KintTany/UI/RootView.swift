@@ -20,18 +20,18 @@ struct RootView: View {
         ZStack {
             PaperTexture()
             GeometryReader { g in
-                let W:CGFloat=390, H:CGFloat=790
+                let W:CGFloat=390, H:CGFloat=800
                 let s=min(g.size.width/W,g.size.height/H)
                 VStack(spacing:0) {
-                    header.frame(height:48)
-                    hero.frame(height:274)
+                    header.frame(height:50)
+                    hero.frame(height:280)
                     Divider().overlay(ink.opacity(.35))
-                    stats.frame(height:198)
+                    stats.frame(height:202)
                     Divider().overlay(ink.opacity(.35))
-                    metrics.frame(height:62)
-                    stop.frame(height:70)
-                    nav.frame(height:54)
-                    log.frame(height:48)
+                    metrics.frame(height:58)
+                    stop.frame(height:66)
+                    nav.frame(height:52)
+                    log.frame(height:46)
                 }
                 .padding(.horizontal,10).frame(width:W,height:H,alignment:.top)
                 .scaleEffect(s,anchor:.top).frame(width:g.size.width,height:g.size.height,alignment:.top)
@@ -57,10 +57,10 @@ struct RootView: View {
     private var hero: some View {
         HStack(spacing:12) {
             ZStack {
-                if app.hasSession { CharacterVoxel3DView(appearance:app.characterProfile.appearance).scaleEffect(1.38).padding(-20) }
+                if app.hasSession { CharacterVoxel3DView(appearance:app.characterProfile.appearance).scaleEffect(1.56).padding(-28) }
                 else { Image(systemName:"person.crop.square").font(.system(size:48)).foregroundStyle(ink.opacity(.5)) }
             }
-            .frame(width:118).contentShape(Rectangle()).onTapGesture{app.hasSession ? (showCharacterStats=true):(showLogin=true)}
+            .frame(width:108).contentShape(Rectangle()).onTapGesture{app.hasSession ? (showCharacterStats=true):(showLogin=true)}
             .embossedPanel(cornerRadius:16,fill:paper)
             VStack(spacing:4) {
                 HStack{Text(app.activity?.localizedTitle ?? "Selecione");Spacer();Text("\(app.stats.successes)/\(app.activity == nil ? app.goal:app.sessionGoal)")}
@@ -88,17 +88,17 @@ struct RootView: View {
         } else { Button{guard app.activity==nil else{return};app.start(m)}label:{tileLabel(m)}.buttonStyle(.plain).disabled(app.activity != nil) }
     }
     private func tileLabel(_ m:ActivityMode)->some View {
-        VStack(spacing:1){Image(sprite(m)).resizable().scaledToFit().frame(width:42,height:42);Text(m.localizedTitle).font(.system(size:11.5)).lineLimit(1).minimumScaleFactor(.7);if m == .fishing {Text(bait).font(.system(size:8)).foregroundStyle(ink.opacity(.55))}}
-        .foregroundStyle(ink).frame(maxWidth:.infinity,minHeight:62).opacity(app.activity==nil ? 1:.45)
+        VStack(spacing:1){Image(sprite(m)).resizable().scaledToFit().frame(width:46,height:46);Text(m.localizedTitle).font(.system(size:11.5)).lineLimit(1).minimumScaleFactor(.7);if m == .fishing {Text(bait).font(.system(size:8)).foregroundStyle(ink.opacity(.55))}}
+        .foregroundStyle(ink).frame(maxWidth:.infinity,minHeight:66).opacity(app.activity==nil ? 1:.45)
     }
     private var bait:String {switch app.selectedFishingBait{case .feather:"Feather";case .trout:"Trout";case .bass:"Bass";case .tuna:"Tuna";case .squid:"Squid"}}
-    private func sprite(_ m:ActivityMode)->String {switch m{case .tree:"RefWood";case .coal:"RefCoal";case .stone:"RefStone";case .iron:"RefIron";case .silver:"RefSilver";case .cacti:"RefCacti";case .fishing:"RefFishing";case .chicken:"RefChicken";case .zombie:"RefZombie";case .dragon:"RefDragon"}}
+    private func sprite(_ m:ActivityMode)->String {switch m{case .tree:"CloneWood";case .coal:"CloneCoal";case .stone:"CloneStone";case .iron:"CloneIron";case .silver:"CloneSilver";case .cacti:"CloneCacti";case .fishing:"CloneFishing";case .chicken:"CloneChicken";case .zombie:"CloneZombie";case .dragon:"CloneDragon"}}
 
     private var stats: some View {
         VStack(alignment:.leading,spacing:3) {
             Text("STATS").font(.system(size:20,weight:.regular))
             HStack(spacing:8) {
-                VStack(spacing:3){ForEach(CharacterSkill.allCases){skill in skillRow(skill)};Divider();HStack(spacing:6){Text("Total Level").frame(width:72,alignment:.leading);bar(Double(app.characterProfile.totalLevel)/40);Text("\(app.characterProfile.totalLevel)").frame(width:28,alignment:.trailing)}.font(.system(size:12.5))}
+                VStack(spacing:3){ForEach(CharacterSkill.allCases){skill in skillRow(skill)};Divider();HStack(spacing:6){Text("Total Level").frame(width:68,alignment:.leading);bar(Double(app.characterProfile.totalLevel)/40);Text("\(app.characterProfile.totalLevel)").frame(width:28,alignment:.trailing)}.font(.system(size:12.5))}
                 Rectangle().fill(ink.opacity(.25)).frame(width:1)
                 VStack(alignment:.leading,spacing:5){Image(systemName:"mountain.2.fill").font(.system(size:30)).foregroundStyle(Color(red:.39,green:.43,blue:.34)).frame(maxWidth:.infinity);line("Região",app.world.serverRegion ?? app.player.region);line("Posição",String(format:"%.1f, %.1f",app.player.position.x,app.player.position.z));line("Recursos","\(app.resourceCount)");line("Mobs","\(app.mobCount)");Text("Último evento").font(.system(size:11.5));Text(app.stats.lastEvent.isEmpty ? "—":app.stats.lastEvent).font(.system(size:10.5)).lineLimit(1)}
                     .frame(width:112)
