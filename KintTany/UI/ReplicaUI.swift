@@ -5,6 +5,7 @@ import UIKit
 public enum KintActivity: String, CaseIterable, Identifiable, Sendable {
     case wood
     case coal
+    case stone
     case ironOre
     case silverOre
     case cacti
@@ -19,6 +20,7 @@ public enum KintActivity: String, CaseIterable, Identifiable, Sendable {
         switch self {
         case .wood: "Madeira"
         case .coal: "Carvão"
+        case .stone: "Pedra"
         case .ironOre: "Iron Ore"
         case .silverOre: "Silver Ore"
         case .cacti: "Cacti"
@@ -33,6 +35,7 @@ public enum KintActivity: String, CaseIterable, Identifiable, Sendable {
         switch self {
         case .wood: "KintWood"
         case .coal: "KintCoal"
+        case .stone: "KintStone"
         case .ironOre: "KintIronOre"
         case .silverOre: "KintSilverOre"
         case .cacti: "KintCacti"
@@ -45,7 +48,9 @@ public enum KintActivity: String, CaseIterable, Identifiable, Sendable {
 
     public var headerTitle: String {
         switch self {
-        case .ironOre, .silverOre: "Pedra"
+        case .stone: "Pedra"
+        case .ironOre: "Iron Ore"
+        case .silverOre: "Silver Ore"
         default: title
         }
     }
@@ -455,49 +460,51 @@ struct KintExactActivityGrid: View {
     @Binding var selected: KintActivity
     let didSelect: (KintActivity) -> Void
 
-    private let top: [KintActivity] = [.wood, .coal, .ironOre, .silverOre, .cacti]
-    private let bottom: [KintActivity] = [.fishing, .chicken, .zombie, .dragon]
+    private let top: [KintActivity] = [.wood, .coal, .stone, .ironOre, .silverOre]
+    private let bottom: [KintActivity] = [.cacti, .fishing, .chicken, .zombie, .dragon]
 
     var body: some View {
-        GeometryReader { proxy in
-            ZStack(alignment: .topLeading) {
-                KintResourceImage.image("KintActivityGridExact")
-                    .resizable()
-                    .interpolation(.high)
-                    .frame(width: proxy.size.width, height: proxy.size.height)
-
-                HStack(spacing: 0) {
-                    ForEach(top) { activity in
-                        activityButton(activity)
-                            .frame(width: proxy.size.width / 5, height: proxy.size.height * 0.51)
-                    }
-                }
-                .frame(width: proxy.size.width, alignment: .leading)
-                .offset(y: proxy.size.height * 0.04)
-
-                HStack(spacing: 0) {
-                    ForEach(bottom) { activity in
-                        activityButton(activity)
-                            .frame(width: proxy.size.width / 4, height: proxy.size.height * 0.45)
-                    }
-                }
-                .frame(width: proxy.size.width, alignment: .leading)
-                .offset(y: proxy.size.height * 0.53)
-            }
+        VStack(spacing: 0) {
+            activityRow(top)
+            activityRow(bottom)
         }
+        .background(
+            RoundedRectangle(cornerRadius: 11, style: .continuous)
+                .fill(KintTanyTheme.surface.opacity(0.72))
+                .shadow(color: KintTanyTheme.surfaceShadow.opacity(0.48), radius: 2, x: 1, y: 1)
+        )
+        .clipShape(RoundedRectangle(cornerRadius: 11, style: .continuous))
     }
 
-    private func activityButton(_ activity: KintActivity) -> some View {
-        Button {
-            selected = activity
-            didSelect(activity)
-        } label: {
-            Color.white.opacity(0.001)
-                .contentShape(Rectangle())
+    private func activityRow(_ activities: [KintActivity]) -> some View {
+        HStack(spacing: 0) {
+            ForEach(activities) { activity in
+                Button {
+                    selected = activity
+                    didSelect(activity)
+                } label: {
+                    VStack(spacing: 1) {
+                        KintResourceImage.image(activity.assetName)
+                            .resizable()
+                            .interpolation(.high)
+                            .scaledToFit()
+                            .frame(maxWidth: 37, maxHeight: 36)
+                        Text(activity.title)
+                            .font(KintTanyTheme.bodyFont(7.2, weight: selected == activity ? .semibold : .regular))
+                            .foregroundStyle(KintTanyTheme.ink)
+                            .lineLimit(1)
+                            .minimumScaleFactor(0.65)
+                    }
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+                    .contentShape(Rectangle())
+                    .background(selected == activity ? KintTanyTheme.terracotta.opacity(0.10) : .clear)
+                }
+                .buttonStyle(.plain)
+                .accessibilityLabel(activity.title)
+                .accessibilityAddTraits(selected == activity ? [.isSelected] : [])
+            }
         }
-        .buttonStyle(.plain)
-        .accessibilityLabel(activity.title)
-        .accessibilityAddTraits(selected == activity ? [.isSelected] : [])
+        .frame(maxHeight: .infinity)
     }
 }
 
@@ -659,7 +666,7 @@ struct KintPauseButton: View {
             HStack(spacing: 18) {
                 KintPauseGlyph(isPaused: isPaused)
                     .frame(width: 23, height: 27)
-                Text(isPaused ? "RETOMAR" : "PAUSAR")
+                Text("PARAR")
                     .font(KintTanyTheme.titleFont(16.5, weight: .medium))
                     .tracking(0.7)
             }
@@ -687,7 +694,7 @@ struct KintPauseButton: View {
             .kintRaised(radius: 13.5, darkOffset: 2.5)
         }
         .buttonStyle(.plain)
-        .accessibilityLabel(isPaused ? "Retomar" : "Pausar")
+        .accessibilityLabel("Parar")
     }
 }
 
@@ -905,37 +912,29 @@ private struct KintTanyDesignCanvas<AvatarContent: View>: View {
 
     private var header: some View {
         Group {
-            KintNotch()
-                .position(x: 216, y: 14.5)
-
             HStack(spacing: 7) {
                 KintResourceImage.image("KintOnlineDot")
                     .resizable()
                     .scaledToFit()
-                    .frame(width: 17, height: 17)
+                    .frame(width: 15, height: 15)
                     .saturation(state.isOnline ? 1 : 0)
                     .opacity(state.isOnline ? 1 : 0.5)
                 Text(state.isOnline ? "ONLINE" : "OFFLINE")
-                    .font(KintTanyTheme.bodyFont(15))
-                    .foregroundStyle(KintTanyTheme.ink)
+                    .font(KintTanyTheme.bodyFont(14))
+                Spacer()
+                Text("KintTany")
+                    .font(KintTanyTheme.titleFont(24))
+                Spacer()
+                Color.clear.frame(width: 82, height: 1)
             }
+            .foregroundStyle(KintTanyTheme.ink)
             .kintEmbossedText()
-            .frame(width: 106, height: 30, alignment: .leading)
-            .position(x: 79, y: 59)
-
-            Text("KintTany")
-                .font(KintTanyTheme.titleFont(25.5))
-                .foregroundStyle(KintTanyTheme.ink)
-                .kintEmbossedText()
-                .position(x: 216, y: 59)
-
-            KintStatusIcons()
-                .frame(width: 77, height: 20, alignment: .trailing)
-                .position(x: 368, y: 35.5)
+            .frame(width: 382, height: 38)
+            .position(x: 216, y: 35)
 
             KintDivider()
-                .frame(width: 264)
-                .position(x: 276.5, y: 89)
+                .frame(width: 382)
+                .position(x: 216, y: 61)
         }
     }
 
@@ -947,7 +946,7 @@ private struct KintTanyDesignCanvas<AvatarContent: View>: View {
                     .padding(.vertical, 10)
             }
             .frame(width: 107, height: 255)
-            .position(x: 77.5, y: 205.5)
+            .position(x: 77.5, y: 184)
 
             HStack(alignment: .firstTextBaseline) {
                 Text(state.activityTitle)
@@ -961,11 +960,11 @@ private struct KintTanyDesignCanvas<AvatarContent: View>: View {
             .foregroundStyle(KintTanyTheme.ink)
             .kintEmbossedText()
             .frame(width: 251, height: 27)
-            .position(x: 279.5, y: 108)
+            .position(x: 279.5, y: 82)
 
             KintProgressDots(completed: state.completed, target: state.target)
                 .frame(width: 247, height: 22)
-                .position(x: 277.5, y: 135)
+                .position(x: 277.5, y: 109)
 
             HStack {
                 Text("Progresso \(state.actionProgress)/\(state.actionRequirement)")
@@ -978,18 +977,18 @@ private struct KintTanyDesignCanvas<AvatarContent: View>: View {
             .foregroundStyle(KintTanyTheme.ink)
             .kintEmbossedText()
             .frame(width: 252, height: 20)
-            .position(x: 280, y: 163)
+            .position(x: 280, y: 136)
 
             KintExactActivityGrid(
                 selected: $state.selectedActivity,
                 didSelect: actions.selectActivity
             )
-            .frame(width: 272, height: 163.5)
-            .position(x: 278, y: 256.75)
+            .frame(width: 272, height: 172)
+            .position(x: 278, y: 238)
 
             KintDivider()
                 .frame(width: 384)
-                .position(x: 216, y: 344)
+                .position(x: 216, y: 326)
         }
     }
 
@@ -1001,21 +1000,21 @@ private struct KintTanyDesignCanvas<AvatarContent: View>: View {
                 totalMaximum: state.totalLevelMaximum
             )
             .frame(width: 251, height: 179, alignment: .topLeading)
-            .position(x: 156.5, y: 437.5)
+            .position(x: 156.5, y: 419.5)
 
             Rectangle()
                 .fill(KintTanyTheme.divider)
                 .frame(width: 0.75, height: 166)
                 .shadow(color: KintTanyTheme.surfaceHighlight.opacity(0.95), radius: 0, x: 0.8, y: 0)
-                .position(x: 295.5, y: 438)
+                .position(x: 295.5, y: 420)
 
             KintLocationPanel(location: state.location)
                 .frame(width: 99, height: 174, alignment: .topLeading)
-                .position(x: 357.5, y: 438)
+                .position(x: 357.5, y: 420)
 
             KintDivider()
                 .frame(width: 384)
-                .position(x: 216, y: 534)
+                .position(x: 216, y: 516)
         }
     }
 
@@ -1025,7 +1024,7 @@ private struct KintTanyDesignCanvas<AvatarContent: View>: View {
                 .frame(width: 378, height: 48)
                 .contentShape(Rectangle())
                 .onTapGesture { actions.editTarget() }
-                .position(x: 216, y: 566.5)
+                .position(x: 216, y: 548.5)
         }
     }
 
@@ -1035,23 +1034,23 @@ private struct KintTanyDesignCanvas<AvatarContent: View>: View {
                 actions.togglePause()
             }
             .frame(width: 272, height: 53)
-            .position(x: 216, y: 628.5)
+            .position(x: 216, y: 610.5)
 
             KintDivider()
                 .frame(width: 384)
-                .position(x: 216, y: 667)
+                .position(x: 216, y: 649)
 
             KintTabBar(selection: $state.selectedTab, didSelect: actions.selectTab)
                 .frame(width: 377, height: 41)
-                .position(x: 216, y: 690)
+                .position(x: 216, y: 672)
 
             KintDivider()
                 .frame(width: 384)
-                .position(x: 216, y: 712.5)
+                .position(x: 216, y: 694.5)
 
             KintLogRow(action: actions.openFullLog)
                 .frame(width: 383, height: 47)
-                .position(x: 216, y: 738.5)
+                .position(x: 216, y: 721)
         }
     }
 }
@@ -1082,7 +1081,6 @@ struct ReplicaDashboardHost: View {
     @State private var dashboard = KintTanyDashboardState.referenceSample
     @State private var showGoalEditor = false
     @State private var goalDraft = ""
-    @State private var showMiningSelector = false
     @State private var showFishingSelector = false
 
     var body: some View {
@@ -1107,13 +1105,6 @@ struct ReplicaDashboardHost: View {
         } message: {
             Text("Defina qualquer meta entre 1 e 100000. A alteração fica bloqueada durante uma atividade ativa.")
         }
-        .confirmationDialog("Mineração", isPresented: $showMiningSelector, titleVisibility: .visible) {
-            Button("Pedra") { start(.stone) }
-            Button("Iron Ore") { start(.iron) }
-            Button("Cancelar", role: .cancel) {}
-        } message: {
-            Text("O layout do kit possui um único slot visual para as duas opções. Escolha qual atividade iniciar.")
-        }
         .confirmationDialog("Isca da pesca", isPresented: $showFishingSelector, titleVisibility: .visible) {
             baitButton(.feather)
             baitButton(.trout)
@@ -1128,20 +1119,11 @@ struct ReplicaDashboardHost: View {
 
     @ViewBuilder
     private var avatarView: some View {
-        if let image = app.characterArtwork {
-            Image(uiImage: image)
-                .resizable()
-                .interpolation(.high)
-                .scaledToFit()
+        if app.hasSession {
+            CharacterVoxel3DView(appearance: app.characterProfile.appearance)
+                .scaleEffect(1.42)
+                .padding(-20)
                 .accessibilityLabel("Personagem da conta conectada")
-        } else if app.hasSession {
-            VStack(spacing: 8) {
-                ProgressView()
-                    .tint(KintTanyTheme.ink)
-                Text("Carregando")
-                    .font(KintTanyTheme.bodyFont(10, weight: .semibold))
-                    .foregroundStyle(KintTanyTheme.mutedInk)
-            }
         } else {
             Image(systemName: "person.crop.square")
                 .resizable()
@@ -1159,7 +1141,8 @@ struct ReplicaDashboardHost: View {
                 switch activity {
                 case .wood: start(.tree)
                 case .coal: start(.coal)
-                case .ironOre: showMiningSelector = true
+                case .stone: start(.stone)
+                case .ironOre: start(.iron)
                 case .silverOre: start(.silver)
                 case .cacti: start(.cacti)
                 case .fishing: showFishingSelector = true
@@ -1282,7 +1265,8 @@ struct ReplicaDashboardHost: View {
         switch mode {
         case .tree: .wood
         case .coal: .coal
-        case .stone, .iron: .ironOre
+        case .stone: .stone
+        case .iron: .ironOre
         case .silver: .silverOre
         case .cacti: .cacti
         case .fishing: .fishing
