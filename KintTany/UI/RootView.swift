@@ -21,21 +21,21 @@ struct RootView: View {
         ZStack {
             PaperTexture()
             GeometryReader { proxy in
-                let designWidth: CGFloat = 430
-                let designHeight: CGFloat = 844
+                let designWidth: CGFloat = 390
+                let designHeight: CGFloat = 812
                 let scale = min(proxy.size.width / designWidth, proxy.size.height / designHeight)
 
-                VStack(spacing: 4) {
+                VStack(spacing: 0) {
                     topStatusBar
-                    heroSection.frame(height: 294)
-                    statsSection.frame(height: 210)
-                    sessionMetrics.frame(height: 58)
-                    pauseButton.frame(height: 62)
-                    bottomNavigation.frame(height: 48)
-                    fullLogButton.frame(height: 44)
+                    heroSection.frame(height: 292)
+                    statsSection.frame(height: 205)
+                    sessionMetrics.frame(height: 62)
+                    pauseButton.frame(height: 68)
+                    bottomNavigation.frame(height: 54)
+                    fullLogButton.frame(height: 50)
                 }
-                .padding(.horizontal, 14)
-                .padding(.vertical, 3)
+                .padding(.horizontal, 12)
+                .padding(.vertical, 2)
                 .frame(width: designWidth, height: designHeight, alignment: .top)
                 .scaleEffect(scale, anchor: .top)
                 .frame(width: proxy.size.width, height: proxy.size.height, alignment: .top)
@@ -134,7 +134,7 @@ struct RootView: View {
 
     private var heroSection: some View {
         HStack(spacing: 10) {
-            characterPanel.frame(width: 132)
+            characterPanel.frame(width: 116)
             VStack(spacing: 6) {
                 activeSummary
                 activitySelector
@@ -146,9 +146,9 @@ struct RootView: View {
         ZStack {
             if app.hasSession {
                 CharacterVoxel3DView(appearance: app.characterProfile.appearance)
-                    .scaleEffect(1.42)
-                    .padding(.horizontal, -22)
-                    .padding(.vertical, -28)
+                    .scaleEffect(1.72)
+                    .padding(.horizontal, -30)
+                    .padding(.vertical, -38)
             } else {
                 VStack(spacing: 10) {
                     Image(systemName: "person.crop.square").font(.system(size: 48, weight: .medium))
@@ -276,10 +276,10 @@ struct RootView: View {
 
     private func resourceTileLabel(_ mode: ActivityMode) -> some View {
         VStack(spacing: 2) {
-            Image(activitySprite(mode))
+            Image(referenceSprite(mode))
                 .resizable()
                 .scaledToFit()
-                .frame(width: 44, height: 44)
+                .frame(width: 48, height: 48)
                 .shadow(color: .black.opacity(0.20), radius: 1.2, x: 1, y: 1)
             Text(mode.localizedTitle)
                 .font(.system(size: 12.5, weight: .regular, design: .rounded))
@@ -307,7 +307,7 @@ struct RootView: View {
         }
     }
 
-    private func activitySprite(_ mode: ActivityMode) -> String {
+    private func referenceSprite(_ mode: ActivityMode) -> String {
         switch mode {
         case .tree: "EmbossWood"
         case .coal: "EmbossCoal"
@@ -345,7 +345,7 @@ struct RootView: View {
                 }
                 .frame(maxWidth: .infinity)
                 Rectangle().fill(ink.opacity(0.22)).frame(width: 1).padding(.vertical, 3)
-                telemetryColumn.frame(width: 128)
+                telemetryColumn.frame(width: 116)
             }
         }
         .padding(.horizontal, 8)
@@ -359,14 +359,14 @@ struct RootView: View {
             Text(referenceSkillName(skill))
                 .font(.system(size: 12.5, weight: .regular, design: .rounded))
                 .foregroundStyle(ink)
-                .frame(width: 64, alignment: .leading)
+                .frame(width: 60, alignment: .leading)
                 .lineLimit(1)
             skillBar(progress: Double(level) / 40.0).frame(height: 15)
             Text("\(level)/40")
                 .font(.system(size: 12.5, weight: .regular, design: .rounded))
                 .foregroundStyle(ink.opacity(0.9))
                 .monospacedDigit()
-                .frame(width: 42, alignment: .trailing)
+                .frame(width: 38, alignment: .trailing)
         }
     }
 
