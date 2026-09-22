@@ -33,16 +33,16 @@ public enum KintActivity: String, CaseIterable, Identifiable, Sendable {
 
     public var assetName: String {
         switch self {
-        case .wood: "KintWood"
-        case .coal: "KintCoal"
-        case .stone: "KintStone"
-        case .ironOre: "KintIronOre"
-        case .silverOre: "KintSilverOre"
-        case .cacti: "KintCacti"
-        case .fishing: "KintFishing"
-        case .chicken: "KintChicken"
-        case .zombie: "KintZombie"
-        case .dragon: "KintDragon"
+        case .wood: "CloneWood"
+        case .coal: "CloneCoal"
+        case .stone: "CloneStone"
+        case .ironOre: "CloneIron"
+        case .silverOre: "CloneSilver"
+        case .cacti: "CloneCacti"
+        case .fishing: "CloneFishing"
+        case .chicken: "CloneChicken"
+        case .zombie: "CloneZombie"
+        case .dragon: "CloneDragon"
         }
     }
 
@@ -231,7 +231,7 @@ public enum KintReplicaSizingMode: Equatable, Sendable {
 }
 
 public enum KintTanyTheme {
-    public static let canvasSize = CGSize(width: 432, height: 768)
+    public static let canvasSize = CGSize(width: 390, height: 760)
 
     public static let surface = Color(red: 218 / 255, green: 211 / 255, blue: 202 / 255)
     public static let surfaceHighlight = Color(red: 235 / 255, green: 231 / 255, blue: 225 / 255)
@@ -405,7 +405,7 @@ public struct KintDefaultAvatarView: View {
 struct KintProgressDots: View {
     let completed: Int
     let target: Int
-    private let count = 12
+    private let count = 10
 
     private var activeCount: Int {
         guard completed > 0 else { return 0 }
@@ -414,7 +414,7 @@ struct KintProgressDots: View {
     }
 
     var body: some View {
-        HStack(spacing: 6.1) {
+        HStack(spacing: 5.0) {
             ForEach(0..<count, id: \.self) { index in
                 Circle()
                     .fill(index < activeCount ? AnyShapeStyle(
@@ -442,7 +442,7 @@ struct KintProgressDots: View {
                         y: 1
                     )
                     .shadow(color: KintTanyTheme.surfaceHighlight.opacity(0.95), radius: 0.8, x: -0.8, y: -0.8)
-                    .frame(width: 14.5, height: 14.5)
+                    .frame(width: 13.5, height: 13.5)
             }
         }
         .padding(.horizontal, 4)
@@ -520,7 +520,7 @@ struct KintSkillBar: View {
                 .lineLimit(1)
                 .minimumScaleFactor(0.76)
             KintProgressBar(fraction: skill.fraction)
-                .frame(width: 136, height: 11.5)
+                .frame(width: 118, height: 11.5)
             Text("\(skill.value)/\(skill.maximum)")
                 .font(KintTanyTheme.bodyFont(11.2))
                 .foregroundStyle(KintTanyTheme.ink)
@@ -579,7 +579,7 @@ struct KintStatsPanel: View {
                     .foregroundStyle(KintTanyTheme.ink)
                     .frame(width: 66, alignment: .leading)
                 KintProgressBar(fraction: min(1, max(0, Double(totalLevel) / Double(max(1, totalMaximum)))))
-                    .frame(width: 136, height: 11.5)
+                    .frame(width: 118, height: 11.5)
                 Text("\(totalLevel)")
                     .font(KintTanyTheme.bodyFont(11.2))
                     .foregroundStyle(KintTanyTheme.ink)
@@ -877,13 +877,13 @@ private struct KintTanyDesignCanvas<AvatarContent: View>: View {
                 KintResourceImage.image("KintFullReference")
                     .resizable()
                     .interpolation(.high)
-                    .frame(width: 432, height: 768)
+                    .frame(width: 390, height: 760)
                     .opacity(referenceOverlayOpacity)
                     .allowsHitTesting(false)
                     .accessibilityHidden(true)
             }
         }
-        .frame(width: 432, height: 768)
+        .frame(width: 390, height: 760)
         .clipped()
     }
 
@@ -906,8 +906,8 @@ private struct KintTanyDesignCanvas<AvatarContent: View>: View {
                 )
         }
         .shadow(color: Color.black.opacity(0.3), radius: 8, x: 2, y: 5)
-        .frame(width: 430, height: 764)
-        .position(x: 216, y: 384)
+        .frame(width: 388, height: 756)
+        .position(x: 195, y: 380)
     }
 
     private var header: some View {
@@ -929,12 +929,12 @@ private struct KintTanyDesignCanvas<AvatarContent: View>: View {
             }
             .foregroundStyle(KintTanyTheme.ink)
             .kintEmbossedText()
-            .frame(width: 382, height: 38)
-            .position(x: 216, y: 35)
+            .frame(width: 350, height: 38)
+            .position(x: 195, y: 35)
 
             KintDivider()
-                .frame(width: 382)
-                .position(x: 216, y: 61)
+                .frame(width: 350)
+                .position(x: 195, y: 61)
         }
     }
 
@@ -945,8 +945,8 @@ private struct KintTanyDesignCanvas<AvatarContent: View>: View {
                     .padding(.horizontal, 6)
                     .padding(.vertical, 10)
             }
-            .frame(width: 107, height: 255)
-            .position(x: 77.5, y: 184)
+            .frame(width: 96, height: 238)
+            .position(x: 62, y: 184)
 
             HStack(alignment: .firstTextBaseline) {
                 Text(state.activityTitle)
@@ -959,36 +959,38 @@ private struct KintTanyDesignCanvas<AvatarContent: View>: View {
             }
             .foregroundStyle(KintTanyTheme.ink)
             .kintEmbossedText()
-            .frame(width: 251, height: 27)
-            .position(x: 279.5, y: 82)
+            .frame(width: 238, height: 27)
+            .position(x: 253, y: 82)
 
             KintProgressDots(completed: state.completed, target: state.target)
-                .frame(width: 247, height: 22)
-                .position(x: 277.5, y: 109)
+                .frame(width: 235, height: 22)
+                .position(x: 253, y: 109)
 
             HStack {
                 Text("Progresso \(state.actionProgress)/\(state.actionRequirement)")
+                    .lineLimit(1)
                 Spacer()
                 Text(state.statusText)
                     .lineLimit(1)
-                    .minimumScaleFactor(0.76)
+                    .minimumScaleFactor(0.55)
+                    .frame(maxWidth: 126, alignment: .trailing)
             }
             .font(KintTanyTheme.bodyFont(13.2))
             .foregroundStyle(KintTanyTheme.ink)
             .kintEmbossedText()
-            .frame(width: 252, height: 20)
-            .position(x: 280, y: 136)
+            .frame(width: 238, height: 20)
+            .position(x: 253, y: 136)
 
             KintExactActivityGrid(
                 selected: $state.selectedActivity,
                 didSelect: actions.selectActivity
             )
-            .frame(width: 272, height: 172)
-            .position(x: 278, y: 238)
+            .frame(width: 246, height: 172)
+            .position(x: 253, y: 238)
 
             KintDivider()
-                .frame(width: 384)
-                .position(x: 216, y: 326)
+                .frame(width: 350)
+                .position(x: 195, y: 326)
         }
     }
 
@@ -999,32 +1001,32 @@ private struct KintTanyDesignCanvas<AvatarContent: View>: View {
                 totalLevel: state.totalLevel,
                 totalMaximum: state.totalLevelMaximum
             )
-            .frame(width: 251, height: 179, alignment: .topLeading)
-            .position(x: 156.5, y: 419.5)
+            .frame(width: 232, height: 179, alignment: .topLeading)
+            .position(x: 136, y: 419.5)
 
             Rectangle()
                 .fill(KintTanyTheme.divider)
                 .frame(width: 0.75, height: 166)
                 .shadow(color: KintTanyTheme.surfaceHighlight.opacity(0.95), radius: 0, x: 0.8, y: 0)
-                .position(x: 295.5, y: 420)
+                .position(x: 265, y: 420)
 
             KintLocationPanel(location: state.location)
-                .frame(width: 99, height: 174, alignment: .topLeading)
-                .position(x: 357.5, y: 420)
+                .frame(width: 103, height: 174, alignment: .topLeading)
+                .position(x: 328, y: 420)
 
             KintDivider()
-                .frame(width: 384)
-                .position(x: 216, y: 516)
+                .frame(width: 350)
+                .position(x: 195, y: 516)
         }
     }
 
     private var session: some View {
         Group {
             KintSessionCounters(session: state.session)
-                .frame(width: 378, height: 48)
+                .frame(width: 346, height: 48)
                 .contentShape(Rectangle())
                 .onTapGesture { actions.editTarget() }
-                .position(x: 216, y: 548.5)
+                .position(x: 195, y: 548.5)
         }
     }
 
@@ -1033,24 +1035,24 @@ private struct KintTanyDesignCanvas<AvatarContent: View>: View {
             KintPauseButton(isPaused: false) {
                 actions.togglePause()
             }
-            .frame(width: 272, height: 53)
-            .position(x: 216, y: 610.5)
+            .frame(width: 258, height: 53)
+            .position(x: 195, y: 610.5)
 
             KintDivider()
-                .frame(width: 384)
-                .position(x: 216, y: 649)
+                .frame(width: 350)
+                .position(x: 195, y: 649)
 
             KintTabBar(selection: $state.selectedTab, didSelect: actions.selectTab)
-                .frame(width: 377, height: 41)
-                .position(x: 216, y: 672)
+                .frame(width: 346, height: 41)
+                .position(x: 195, y: 672)
 
             KintDivider()
-                .frame(width: 384)
-                .position(x: 216, y: 694.5)
+                .frame(width: 350)
+                .position(x: 195, y: 694.5)
 
             KintLogRow(action: actions.openFullLog)
-                .frame(width: 383, height: 47)
-                .position(x: 216, y: 721)
+                .frame(width: 350, height: 47)
+                .position(x: 195, y: 721)
         }
     }
 }
