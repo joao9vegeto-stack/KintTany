@@ -20,30 +20,13 @@ struct RootView: View {
 
     var body: some View {
         ZStack {
-            LinearGradient(
-                colors: [Color.black, Color(red: 0.015, green: 0.045, blue: 0.075), Color.black],
-                startPoint: .topLeading,
-                endPoint: .bottomTrailing
+            ReplicaDashboardHost(
+                showLogin: $showLogin,
+                showFullLog: $showFullLog,
+                showCharacterStats: $showCharacterStats,
+                showDailyQuests: $showDailyQuests
             )
-            .ignoresSafeArea()
-
-            ScrollView {
-                VStack(spacing: 18) {
-                    header
-                    activeCard
-                    goalCard
-                    if app.activity == nil || app.activity == .fishing {
-                        fishingBaitCard
-                    }
-                    activityGrid
-                    telemetryCard
-                    logCard
-                }
-                .padding(.horizontal, 16)
-                .padding(.top, 10)
-                .padding(.bottom, 40)
-            }
-            .scrollIndicators(.hidden)
+            .environmentObject(app)
 
             if app.hasSession,
                app.characterArtwork == nil,
@@ -58,7 +41,7 @@ struct RootView: View {
                 .accessibilityHidden(true)
             }
         }
-        .preferredColorScheme(.dark)
+        .preferredColorScheme(.light)
         .sheet(isPresented: $showLogin) {
             LoginWebView(
                 onCookie: { cookie in
@@ -85,16 +68,6 @@ struct RootView: View {
             DailyQuestsView()
                 .environmentObject(app)
                 .preferredColorScheme(.dark)
-        }
-        .toolbar {
-            ToolbarItemGroup(placement: .keyboard) {
-                Spacer()
-                Button("OK") {
-                    app.goal = min(100_000, max(1, app.goal))
-                    goalFieldFocused = false
-                }
-                .fontWeight(.bold)
-            }
         }
         .onChange(of: app.goal) { _, newValue in
             let clamped = min(100_000, max(1, newValue))
