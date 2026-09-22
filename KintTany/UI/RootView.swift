@@ -22,20 +22,20 @@ struct RootView: View {
             PaperTexture()
             GeometryReader { proxy in
                 let designWidth: CGFloat = 430
-                let designHeight: CGFloat = 875
+                let designHeight: CGFloat = 844
                 let scale = min(proxy.size.width / designWidth, proxy.size.height / designHeight)
 
-                VStack(spacing: 5) {
+                VStack(spacing: 4) {
                     topStatusBar
-                    heroSection.frame(height: 302)
-                    statsSection.frame(height: 224)
-                    sessionMetrics.frame(height: 62)
-                    pauseButton.frame(height: 66)
-                    bottomNavigation.frame(height: 52)
-                    fullLogButton.frame(height: 46)
+                    heroSection.frame(height: 294)
+                    statsSection.frame(height: 210)
+                    sessionMetrics.frame(height: 58)
+                    pauseButton.frame(height: 62)
+                    bottomNavigation.frame(height: 48)
+                    fullLogButton.frame(height: 44)
                 }
-                .padding(.horizontal, 12)
-                .padding(.vertical, 4)
+                .padding(.horizontal, 14)
+                .padding(.vertical, 3)
                 .frame(width: designWidth, height: designHeight, alignment: .top)
                 .scaleEffect(scale, anchor: .top)
                 .frame(width: proxy.size.width, height: proxy.size.height, alignment: .top)
@@ -95,10 +95,10 @@ struct RootView: View {
     private var topStatusBar: some View {
         ZStack {
             Text("KintTany")
-                .font(.system(size: 29, weight: .semibold, design: .rounded))
+                .font(.system(size: 27, weight: .regular, design: .rounded))
                 .foregroundStyle(ink)
             HStack {
-                HStack(spacing: 8) {
+                HStack(spacing: 7) {
                     Circle()
                         .fill(connectionColor)
                         .frame(width: 13, height: 13)
@@ -112,7 +112,7 @@ struct RootView: View {
                 Spacer()
             }
         }
-        .frame(height: 38)
+        .frame(height: 34)
         .padding(.horizontal, 10)
     }
 
@@ -134,7 +134,7 @@ struct RootView: View {
 
     private var heroSection: some View {
         HStack(spacing: 10) {
-            characterPanel.frame(width: 150)
+            characterPanel.frame(width: 132)
             VStack(spacing: 6) {
                 activeSummary
                 activitySelector
@@ -146,8 +146,9 @@ struct RootView: View {
         ZStack {
             if app.hasSession {
                 CharacterVoxel3DView(appearance: app.characterProfile.appearance)
-                    .padding(.horizontal, -12)
-                    .padding(.vertical, -18)
+                    .scaleEffect(1.42)
+                    .padding(.horizontal, -22)
+                    .padding(.vertical, -28)
             } else {
                 VStack(spacing: 10) {
                     Image(systemName: "person.crop.square").font(.system(size: 48, weight: .medium))
@@ -161,31 +162,31 @@ struct RootView: View {
         .onTapGesture {
             if app.hasSession { showCharacterStats = true } else { showLogin = true }
         }
-        .embossedPanel(cornerRadius: 20, fill: paper)
+        .embossedPanel(cornerRadius: 16, fill: paper)
     }
 
     private var activeSummary: some View {
         VStack(spacing: 8) {
             HStack(alignment: .firstTextBaseline) {
                 Text(app.activity?.localizedTitle ?? "Selecione")
-                    .font(.system(size: 24, weight: .semibold, design: .rounded))
+                    .font(.system(size: 22, weight: .regular, design: .rounded))
                     .foregroundStyle(ink)
                     .lineLimit(1)
                 Spacer()
                 Text("\(app.stats.successes)/\(app.activity == nil ? app.goal : app.sessionGoal)")
-                    .font(.system(size: 21, weight: .regular, design: .rounded))
+                    .font(.system(size: 19, weight: .regular, design: .rounded))
                     .foregroundStyle(ink)
                     .monospacedDigit()
             }
             progressBeads
             HStack {
                 Text(progressDetail)
-                    .font(.system(size: 13.5, weight: .medium, design: .rounded))
+                    .font(.system(size: 12.5, weight: .regular, design: .rounded))
                     .foregroundStyle(ink.opacity(0.92))
                     .lineLimit(1)
                 Spacer()
                 Text(app.activity == nil ? "Aguardando atividade" : app.state.label)
-                    .font(.system(size: 13.5, weight: .medium, design: .rounded))
+                    .font(.system(size: 12.5, weight: .regular, design: .rounded))
                     .foregroundStyle(ink.opacity(0.82))
                      .lineLimit(1)
                     .minimumScaleFactor(0.72)
@@ -208,7 +209,7 @@ struct RootView: View {
             ForEach(0..<12, id: \.self) { index in
                 Circle()
                     .fill(index < filled ? copper : Color(red: 0.83, green: 0.81, blue: 0.76))
-                    .frame(width: 19, height: 19)
+                    .frame(width: 17, height: 17)
                     .overlay(Circle().stroke(index < filled ? copper.opacity(0.9) : ink.opacity(0.13), lineWidth: 1))
                     .shadow(color: .white.opacity(index < filled ? 0.35 : 0.8), radius: 1, x: -1, y: -1)
                     .shadow(color: .black.opacity(0.16), radius: 1.5, x: 1, y: 1)
@@ -229,49 +230,25 @@ struct RootView: View {
 
     private var activitySelector: some View {
         let columns = Array(repeating: GridItem(.flexible(), spacing: 4), count: 5)
-        return LazyVGrid(columns: columns, spacing: 8) {
+        return LazyVGrid(columns: columns, spacing: 4) {
             ForEach(visibleModes) { mode in resourceTile(mode) }
         }
         .padding(.horizontal, 0)
-        .padding(.vertical, 5)
+        .padding(.vertical, 2)
         .frame(maxHeight: .infinity)
+        .overlay(alignment: .center) {
+            Rectangle().fill(ink.opacity(0.14)).frame(height: 1).offset(y: 1)
+        }
     }
 
     @ViewBuilder
     private func resourceTile(_ mode: ActivityMode) -> some View {
-        let tile = Button {
-            guard app.activity == nil else { return }
-            app.start(mode)
-        } label: {
-            VStack(spacing: 4) {
-                Image(activitySprite(mode))
-                    .resizable()
-                    .scaledToFit()
-                    .frame(width: 47, height: 47)
-                    .shadow(color: .black.opacity(0.20), radius: 1.2, x: 1, y: 1)
-                Text(mode.localizedTitle)
-                    .font(.system(size: 12.8, weight: .medium, design: .rounded))
-                    .foregroundStyle(ink)
-                    .lineLimit(1)
-                    .minimumScaleFactor(0.72)
-                if mode == .fishing {
-                    Text(shortBaitName)
-                        .font(.system(size: 8.5, weight: .medium, design: .rounded))
-                        .foregroundStyle(ink.opacity(0.55))
-                        .lineLimit(1)
-                }
-            }
-            .frame(maxWidth: .infinity, minHeight: 72)
-        }
-        .buttonStyle(.plain)
-        .disabled(app.activity != nil)
-        .opacity(app.activity == nil ? 1 : 0.68)
-
         if mode == .fishing {
-            tile.contextMenu {
+            Menu {
                 ForEach(FishingBait.allCases) { bait in
                     Button {
                         app.selectedFishingBait = bait
+                        app.start(.fishing)
                     } label: {
                         if app.selectedFishingBait == bait {
                             Label(bait.displayName, systemImage: "checkmark")
@@ -280,10 +257,44 @@ struct RootView: View {
                         }
                     }
                 }
+            } label: {
+                resourceTileLabel(mode)
             }
+            .buttonStyle(.plain)
+            .disabled(app.activity != nil)
         } else {
-            tile
+            Button {
+                guard app.activity == nil else { return }
+                app.start(mode)
+            } label: {
+                resourceTileLabel(mode)
+            }
+            .buttonStyle(.plain)
+            .disabled(app.activity != nil)
         }
+    }
+
+    private func resourceTileLabel(_ mode: ActivityMode) -> some View {
+        VStack(spacing: 2) {
+            Image(activitySprite(mode))
+                .resizable()
+                .scaledToFit()
+                .frame(width: 44, height: 44)
+                .shadow(color: .black.opacity(0.20), radius: 1.2, x: 1, y: 1)
+            Text(mode.localizedTitle)
+                .font(.system(size: 12.5, weight: .regular, design: .rounded))
+                .foregroundStyle(ink)
+                .lineLimit(1)
+                .minimumScaleFactor(0.72)
+            if mode == .fishing {
+                Text(shortBaitName)
+                    .font(.system(size: 8.5, weight: .regular, design: .rounded))
+                    .foregroundStyle(ink.opacity(0.55))
+                    .lineLimit(1)
+            }
+        }
+        .frame(maxWidth: .infinity, minHeight: 66)
+        .opacity(app.activity == nil ? 1 : 0.62)
     }
 
     private var shortBaitName: String {
@@ -334,33 +345,39 @@ struct RootView: View {
                 }
                 .frame(maxWidth: .infinity)
                 Rectangle().fill(ink.opacity(0.22)).frame(width: 1).padding(.vertical, 3)
-                telemetryColumn.frame(width: 142)
+                telemetryColumn.frame(width: 128)
             }
         }
         .padding(.horizontal, 8)
-        .padding(.vertical, 7)
-        .overlay(alignment: .top) {
-            Rectangle().fill(ink.opacity(0.32)).frame(height: 1)
-        }
-        .overlay(alignment: .bottom) {
-            Rectangle().fill(ink.opacity(0.32)).frame(height: 1)
-        }
+        .padding(.vertical, 6)
+        .embossedPanel(cornerRadius: 14, fill: paper.opacity(0.55))
     }
 
     private func skillRow(_ skill: CharacterSkill) -> some View {
         let level = app.characterProfile.skills.level(for: skill)
         return HStack(spacing: 9) {
-            Text(skill.localizedName)
-                .font(.system(size: 13.5, weight: .medium, design: .rounded))
+            Text(referenceSkillName(skill))
+                .font(.system(size: 12.5, weight: .regular, design: .rounded))
                 .foregroundStyle(ink)
-                .frame(width: 82, alignment: .leading)
+                .frame(width: 64, alignment: .leading)
                 .lineLimit(1)
             skillBar(progress: Double(level) / 40.0).frame(height: 15)
             Text("\(level)/40")
-                .font(.system(size: 13.5, weight: .medium, design: .rounded))
+                .font(.system(size: 12.5, weight: .regular, design: .rounded))
                 .foregroundStyle(ink.opacity(0.9))
                 .monospacedDigit()
-                .frame(width: 48, alignment: .trailing)
+                .frame(width: 42, alignment: .trailing)
+        }
+    }
+
+    private func referenceSkillName(_ skill: CharacterSkill) -> String {
+        switch skill {
+        case .combat: return "Combat"
+        case .woodcutting: return "Wood"
+        case .mining: return "Mining"
+        case .fishing: return "Fishing"
+        case .cooking: return "Cooking"
+        case .smithing: return "Smithing"
         }
     }
 
@@ -384,7 +401,7 @@ struct RootView: View {
             HStack {
                 Spacer()
                 Image(systemName: "mountain.2.fill")
-                    .font(.system(size: 36, weight: .medium))
+                    .font(.system(size: 31, weight: .medium))
                     .foregroundStyle(Color(red: 0.39, green: 0.43, blue: 0.34))
                     .shadow(color: .black.opacity(0.20), radius: 1, x: 1, y: 1)
                 Spacer()
@@ -425,14 +442,9 @@ struct RootView: View {
             metricDivider
             sessionMetric(title: "Tentativas", value: "\(app.stats.attempts)")
         }
-        .padding(.vertical, 7)
+        .padding(.vertical, 6)
         .padding(.horizontal, 4)
-        .overlay(alignment: .top) {
-            Rectangle().fill(ink.opacity(0.32)).frame(height: 1)
-        }
-        .overlay(alignment: .bottom) {
-            Rectangle().fill(ink.opacity(0.32)).frame(height: 1)
-        }
+        .embossedPanel(cornerRadius: 13, fill: paper.opacity(0.52))
     }
 
     private var goalMetric: some View {
@@ -681,7 +693,7 @@ private struct DailyQuestsView: View {
 
                     if !app.dailyQuestsLoading && app.dailyQuests.isEmpty && app.dailyQuestsError == nil {
                         Text("Nenhuma Daily Quest publicada pelo servidor.")
-                            .font(.system(size: 13.5, weight: .medium, design: .rounded))
+                            .font(.system(size: 12.5, weight: .regular, design: .rounded))
                             .foregroundStyle(ink.opacity(0.62))
                             .frame(maxWidth: .infinity)
                             .padding(24)
