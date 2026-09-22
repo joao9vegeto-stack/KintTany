@@ -1599,6 +1599,17 @@ actor AutomationEngine {
               let type = packet["t"] as? String else { return }
         let engineAtMS = nowMS
         let hopMS = max(0, Int((engineAtMS - critical.receivedAtMS).rounded()))
+
+        // Build 100 diagnostic: split the observed gather latency at the actual
+        // Network.framework receive edge. This does not change ACK/proof/wear,
+        // timeouts, recovery, hit spacing or scheduling; it only tells field
+        // tests whether background delay happened before or after NW delivery.
+        if let hitSentAtMS = gatherTraceHitSentAtMS {
+            let hitToNWMS = max(0, Int((critical.receivedAtMS - hitSentAtMS).rounded()))
+            let totalMS = max(0, Int((engineAtMS - hitSentAtMS).rounded()))
+            reporter(.diagnostic("[GATHER][WIRE] tipo=\(type) • hit→NW=\(hitToNWMS)ms • NW→engine=\(hopMS)ms • total=\(totalMS)ms"))
+        }
+
         switch type {
         case "action_proof":
             await ingestActionProof(packet)
