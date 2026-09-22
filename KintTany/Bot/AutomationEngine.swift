@@ -4052,9 +4052,9 @@ actor AutomationEngine {
                 continue
             }
 
-            reporter(.state(.waitingResult, "Peixe #\(fishNumber) • fisgada em \(biteSeconds)s"))
             let waitUntil = nowMS + Double(bite.ms + 70)
             var spotRotatedDuringWait = false
+            var lastDisplayedTenth = Int.max
             while nowMS < waitUntil {
                 try Task.checkCancellation()
                 guard fishTargetStillValid(target, generation: generation) else {
@@ -4065,7 +4065,18 @@ actor AutomationEngine {
                     spotRotatedDuringWait = true
                     break
                 }
-                try await sleep(100)
+
+                let remainingMS = max(0, waitUntil - nowMS)
+                let remainingTenth = Int(ceil(remainingMS / 100.0))
+                if remainingTenth != lastDisplayedTenth {
+                    lastDisplayedTenth = remainingTenth
+                    let remainingSeconds = Double(remainingTenth) / 10.0
+                    reporter(.state(.waitingResult, String(format: "Peixe #%d • fisgada em %.1fs", fishNumber, remainingSeconds)))
+                }
+                try await sleep(80)
+            }
+            if !spotRotatedDuringWait {
+                reporter(.state(.waitingResult, "Peixe #\(fishNumber) • fisgada em 0.0s"))
             }
             if spotRotatedDuringWait {
                 try await sleep(650)
