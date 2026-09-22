@@ -199,7 +199,8 @@ public struct KintTanyDashboardState: Hashable, Sendable {
         isRunning: false,
         isPaused: false,
         selectedTab: .stats
-    )}
+    )
+}
 
 public struct KintTanyDashboardActions {
     public var selectActivity: (KintActivity) -> Void
