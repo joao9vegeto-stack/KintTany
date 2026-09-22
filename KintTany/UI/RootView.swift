@@ -25,14 +25,14 @@ struct RootView: View {
                 let designHeight: CGFloat = 900
                 let scale = min(proxy.size.width / designWidth, proxy.size.height / designHeight)
 
-                VStack(spacing: 10) {
+                VStack(spacing: 14) {
                     topStatusBar
-                    heroSection.frame(height: 286)
-                    statsSection.frame(height: 248)
-                    sessionMetrics.frame(height: 66)
-                    pauseButton.frame(height: 72)
-                    bottomNavigation.frame(height: 58)
-                    fullLogButton.frame(height: 52)
+                    heroSection.frame(height: 270)
+                    statsSection.frame(height: 238)
+                    sessionMetrics.frame(height: 64)
+                    pauseButton.frame(height: 68)
+                    bottomNavigation.frame(height: 56)
+                    fullLogButton.frame(height: 50)
                 }
                 .padding(.horizontal, 16)
                 .padding(.vertical, 8)
@@ -110,13 +110,6 @@ struct RootView: View {
                         .foregroundStyle(ink)
                 }
                 Spacer()
-                HStack(spacing: 9) {
-                    Image(systemName: "cellularbars")
-                    Image(systemName: "wifi")
-                    Image(systemName: "battery.100")
-                }
-                .font(.system(size: 16, weight: .medium))
-                .foregroundStyle(ink.opacity(0.86))
             }
         }
         .frame(height: 38)
@@ -477,8 +470,8 @@ struct RootView: View {
             if app.activity != nil { app.stop() }
         } label: {
             HStack(spacing: 22) {
-                Image(systemName: "pause.fill").font(.system(size: 27, weight: .semibold))
-                Text(app.activity == nil ? "PRONTO" : "PAUSAR")
+                Image(systemName: "stop.fill").font(.system(size: 25, weight: .semibold))
+                Text(app.activity == nil ? "PRONTO" : "PARAR")
                     .font(.system(size: 24, weight: .semibold, design: .rounded))
             }
             .foregroundStyle(Color(red: 0.92, green: 0.88, blue: 0.82))
