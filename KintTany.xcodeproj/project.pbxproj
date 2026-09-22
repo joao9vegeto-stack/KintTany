@@ -14,7 +14,7 @@
 		100000000000000000000010 = {isa = PBXBuildFile; fileRef = 400000000000000000000010; };
 		100000000000000000000011 = {isa = PBXBuildFile; fileRef = 400000000000000000000011; };
 		100000000000000000000012 = {isa = PBXBuildFile; fileRef = 400000000000000000000012; };
-		100000000000000000000013 = {isa = PBXBuildFile; fileRef = 400000000000000000000013; };
+		100000000000000000000013 = {isa = PBXBuildFile; fileRef = 400000000000000000000013; };\n\t\t100000000000000000000014 = {isa = PBXBuildFile; fileRef = 400000000000000000000014; };
 		200000000000000000000001 = {isa = PBXContainerItemProxy; containerPortal = 800000000000000000000001; proxyType = 1; remoteGlobalIDString = 700000000000000000000001; remoteInfo = KintTany; };
 		300000000000000000000001 = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = KintTany.app; sourceTree = BUILT_PRODUCTS_DIR; };
 		300000000000000000000002 = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = KintTanyTests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
@@ -30,11 +30,11 @@
 		400000000000000000000010 = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = XCTest.framework; path = System/Library/Frameworks/XCTest.framework; sourceTree = SDKROOT; };
 		400000000000000000000011 = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Bot/AutomationEngine.swift; sourceTree = "<group>"; };
 		400000000000000000000012 = {isa = PBXFileReference; lastKnownFileType = folder.assetcatalog; path = Assets.xcassets; sourceTree = "<group>"; };
-		400000000000000000000013 = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Persistence/GatherKnowledgeStore.swift; sourceTree = "<group>"; };
+		400000000000000000000013 = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Persistence/GatherKnowledgeStore.swift; sourceTree = "<group>"; };\n\t\t400000000000000000000014 = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = UI/ReplicaUI.swift; sourceTree = "<group>"; };
 		500000000000000000000001 = {isa = PBXFrameworksBuildPhase; buildActionMask = 2147483647; files = (); runOnlyForDeploymentPostprocessing = 0; };
 		500000000000000000000002 = {isa = PBXFrameworksBuildPhase; buildActionMask = 2147483647; files = (100000000000000000000010,); runOnlyForDeploymentPostprocessing = 0; };
 		600000000000000000000001 = {isa = PBXGroup; children = (600000000000000000000002, 600000000000000000000003, 600000000000000000000004); sourceTree = "<group>"; };
-		600000000000000000000002 = {isa = PBXGroup; children = (400000000000000000000001, 400000000000000000000002, 400000000000000000000003, 400000000000000000000004, 400000000000000000000005, 400000000000000000000006, 400000000000000000000007, 400000000000000000000008, 400000000000000000000011, 400000000000000000000012, 400000000000000000000013); path = KintTany; sourceTree = "<group>"; };
+		600000000000000000000002 = {isa = PBXGroup; children = (400000000000000000000001, 400000000000000000000002, 400000000000000000000003, 400000000000000000000004, 400000000000000000000005, 400000000000000000000006, 400000000000000000000007, 400000000000000000000008, 400000000000000000000011, 400000000000000000000012, 400000000000000000000013, 400000000000000000000014); path = KintTany; sourceTree = "<group>"; };
 		600000000000000000000003 = {isa = PBXGroup; children = (400000000000000000000009); path = KintTanyTests; sourceTree = "<group>"; };
 		600000000000000000000004 = {isa = PBXGroup; children = (300000000000000000000001, 300000000000000000000002); name = Products; sourceTree = "<group>"; };
 		700000000000000000000001 = {isa = PBXNativeTarget; buildConfigurationList = C00000000000000000000001; buildPhases = (A00000000000000000000001, A00000000000000000000002, A00000000000000000000003); buildRules = (); dependencies = (); name = KintTany; productName = KintTany; productReference = 300000000000000000000001; productType = "com.apple.product-type.application"; };
@@ -42,7 +42,7 @@
 		800000000000000000000001 = {isa = PBXProject; attributes = { LastUpgradeCheck = 1600; TargetAttributes = { 700000000000000000000001 = { CreatedOnToolsVersion = 16.0; }; 700000000000000000000002 = { CreatedOnToolsVersion = 16.0; TestTargetID = 700000000000000000000001; }; }; }; buildConfigurationList = C00000000000000000000000; compatibilityVersion = "Xcode 14.0"; developmentRegion = en; hasScannedForEncodings = 0; mainGroup = 600000000000000000000001; productRefGroup = 600000000000000000000004; projectDirPath = ""; projectRoot = ""; targets = (700000000000000000000001, 700000000000000000000002); };
 		A00000000000000000000002 = {isa = PBXResourcesBuildPhase; buildActionMask = 2147483647; files = (100000000000000000000012,); runOnlyForDeploymentPostprocessing = 0; };
 		A00000000000000000000005 = {isa = PBXResourcesBuildPhase; buildActionMask = 2147483647; files = (); runOnlyForDeploymentPostprocessing = 0; };
-		A00000000000000000000001 = {isa = PBXSourcesBuildPhase; buildActionMask = 2147483647; files = (100000000000000000000001, 100000000000000000000002, 100000000000000000000003, 100000000000000000000004, 100000000000000000000005, 100000000000000000000006, 100000000000000000000007, 100000000000000000000011, 100000000000000000000013); runOnlyForDeploymentPostprocessing = 0; };
+		A00000000000000000000001 = {isa = PBXSourcesBuildPhase; buildActionMask = 2147483647; files = (100000000000000000000001, 100000000000000000000002, 100000000000000000000003, 100000000000000000000004, 100000000000000000000005, 100000000000000000000006, 100000000000000000000007, 100000000000000000000011, 100000000000000000000013, 100000000000000000000014); runOnlyForDeploymentPostprocessing = 0; };
 		A00000000000000000000004 = {isa = PBXSourcesBuildPhase; buildActionMask = 2147483647; files = (100000000000000000000009,); runOnlyForDeploymentPostprocessing = 0; };
 		200000000000000000000002 = {isa = PBXTargetDependency; target = 700000000000000000000001; targetProxy = 200000000000000000000001; };
 		900000000000000000000001 = {isa = XCBuildConfiguration; buildSettings = { ALWAYS_SEARCH_USER_PATHS = NO; SWIFT_VERSION = 5.0; }; name = Debug; };
