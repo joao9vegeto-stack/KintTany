@@ -231,7 +231,7 @@ public enum KintReplicaSizingMode: Equatable, Sendable {
 }
 
 public enum KintTanyTheme {
-    public static let canvasSize = CGSize(width: 390, height: 760)
+    public static let canvasSize = CGSize(width: 390, height: 844)
 
     public static let surface = Color(red: 218 / 255, green: 211 / 255, blue: 202 / 255)
     public static let surfaceHighlight = Color(red: 235 / 255, green: 231 / 255, blue: 225 / 255)
@@ -245,11 +245,11 @@ public enum KintTanyTheme {
     public static let divider = Color(red: 132 / 255, green: 124 / 255, blue: 115 / 255).opacity(0.82)
 
     public static func bodyFont(_ size: CGFloat, weight: Font.Weight = .regular) -> Font {
-        .custom("Helvetica Neue", size: size).weight(weight)
+        .system(size: size, design: .rounded).weight(weight)
     }
 
     public static func titleFont(_ size: CGFloat, weight: Font.Weight = .regular) -> Font {
-        .custom("Helvetica Neue", size: size).weight(weight)
+        .system(size: size, design: .rounded).weight(weight)
     }
 }
 
@@ -635,11 +635,22 @@ struct KintMetricCell: View {
 
 struct KintSessionCounters: View {
     let session: KintSessionSummary
+    let editTarget: () -> Void
 
     var body: some View {
         HStack(spacing: 0) {
-            KintMetricCell(title: "Meta da sessão", value: session.target)
-                .frame(width: 113, alignment: .leading)
+            HStack(spacing: 3) {
+                Button(action: editTarget) {
+                    Image(systemName: "chevron.left").font(.system(size: 10, weight: .bold))
+                }
+                KintMetricCell(title: "Meta da sessão", value: session.target)
+                Button(action: editTarget) {
+                    Image(systemName: "chevron.right").font(.system(size: 10, weight: .bold))
+                }
+            }
+            .buttonStyle(.plain)
+            .foregroundStyle(KintTanyTheme.ink)
+            .frame(width: 113, alignment: .center)
             separator
             KintMetricCell(title: "Sucessos", value: session.successes)
             separator
@@ -877,13 +888,13 @@ private struct KintTanyDesignCanvas<AvatarContent: View>: View {
                 KintResourceImage.image("KintFullReference")
                     .resizable()
                     .interpolation(.high)
-                    .frame(width: 390, height: 760)
+                    .frame(width: 390, height: 844)
                     .opacity(referenceOverlayOpacity)
                     .allowsHitTesting(false)
                     .accessibilityHidden(true)
             }
         }
-        .frame(width: 390, height: 760)
+        .frame(width: 390, height: 844)
         .clipped()
     }
 
@@ -906,8 +917,8 @@ private struct KintTanyDesignCanvas<AvatarContent: View>: View {
                 )
         }
         .shadow(color: Color.black.opacity(0.3), radius: 8, x: 2, y: 5)
-        .frame(width: 388, height: 756)
-        .position(x: 195, y: 380)
+        .frame(width: 388, height: 840)
+        .position(x: 195, y: 422)
     }
 
     private var header: some View {
@@ -966,16 +977,18 @@ private struct KintTanyDesignCanvas<AvatarContent: View>: View {
                 .frame(width: 235, height: 22)
                 .position(x: 253, y: 109)
 
-            HStack {
+            HStack(spacing: 6) {
                 Text("Progresso \(state.actionProgress)/\(state.actionRequirement)")
                     .lineLimit(1)
-                Spacer()
+                    .layoutPriority(1)
+                Spacer(minLength: 2)
                 Text(state.statusText)
                     .lineLimit(1)
-                    .minimumScaleFactor(0.55)
-                    .frame(maxWidth: 126, alignment: .trailing)
+                    .minimumScaleFactor(0.42)
+                    .allowsTightening(true)
+                    .frame(maxWidth: 118, alignment: .trailing)
             }
-            .font(KintTanyTheme.bodyFont(13.2))
+            .font(KintTanyTheme.bodyFont(11.6))
             .foregroundStyle(KintTanyTheme.ink)
             .kintEmbossedText()
             .frame(width: 238, height: 20)
@@ -1016,17 +1029,17 @@ private struct KintTanyDesignCanvas<AvatarContent: View>: View {
 
             KintDivider()
                 .frame(width: 350)
-                .position(x: 195, y: 516)
+                .position(x: 195, y: 528)
         }
     }
 
     private var session: some View {
         Group {
-            KintSessionCounters(session: state.session)
+            KintSessionCounters(session: state.session, editTarget: actions.editTarget)
                 .frame(width: 346, height: 48)
                 .contentShape(Rectangle())
                 .onTapGesture { actions.editTarget() }
-                .position(x: 195, y: 548.5)
+                .position(x: 195, y: 570)
         }
     }
 
@@ -1036,23 +1049,23 @@ private struct KintTanyDesignCanvas<AvatarContent: View>: View {
                 actions.togglePause()
             }
             .frame(width: 258, height: 53)
-            .position(x: 195, y: 610.5)
+            .position(x: 195, y: 642)
 
             KintDivider()
                 .frame(width: 350)
-                .position(x: 195, y: 649)
+                .position(x: 195, y: 688)
 
             KintTabBar(selection: $state.selectedTab, didSelect: actions.selectTab)
                 .frame(width: 346, height: 41)
-                .position(x: 195, y: 672)
+                .position(x: 195, y: 718)
 
             KintDivider()
                 .frame(width: 350)
-                .position(x: 195, y: 694.5)
+                .position(x: 195, y: 747)
 
             KintLogRow(action: actions.openFullLog)
                 .frame(width: 350, height: 47)
-                .position(x: 195, y: 721)
+                .position(x: 195, y: 785)
         }
     }
 }
@@ -1088,7 +1101,7 @@ struct ReplicaDashboardHost: View {
     var body: some View {
         KintTanyDashboardView(
             state: $dashboard,
-            sizingMode: .aspectFit,
+            sizingMode: .fill,
             actions: dashboardActions,
             referenceOverlayOpacity: 0
         ) {
