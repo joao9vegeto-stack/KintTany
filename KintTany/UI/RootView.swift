@@ -399,21 +399,21 @@ private struct CharacterVoxel3DView: UIViewRepresentable {
         let isSeason = (a.topFX == "season1" || a.topFX == "season1gold") && ti == 2
         let seasonImage = isSeason ? Self.kintaraSeasonOneTee(gold: a.topFX == "season1gold") : nil
         let torsoMat = isSeason ? mat(.white, constant: true, image: seasonImage) : (ti == 0 ? skinMat : topMat)
-        let torso = part(T0.0,T0.1,T0.2,0,T0.3,0,torsoMat)
+        let torso = part(T.0,T.1,T.2,0,T.3,0,torsoMat)
 
-        let armMat = T0.11 && ti > 0 ? torsoMat : skinMat
-        let armL = part(T0.8,T0.7,T0.9,-0.225,T0.10,0,armMat)
-        let armR = part(T0.8,T0.7,T0.9, 0.225,T0.10,0,armMat)
-        if T0.12 {
+        let armMat = T.11 && ti > 0 ? torsoMat : skinMat
+        let armL = part(T.8,T.7,T.9,-0.225,T.10,0,armMat)
+        let armR = part(T.8,T.7,T.9, 0.225,T.10,0,armMat)
+        if T.12 {
             part(0.138,0.136,0.206,0,0.066,0.004,torsoMat,parent:armL,local:true)
             part(0.138,0.136,0.206,0,0.066,0.004,torsoMat,parent:armR,local:true)
         }
-        if T0.4 {
-            part(0.05,0.20,0.06,-0.09,T0.6,0.08,strapMat)
-            part(0.05,0.20,0.06, 0.09,T0.6,0.08,strapMat)
+        if T.4 {
+            part(0.05,0.20,0.06,-0.09,T.6,0.08,strapMat)
+            part(0.05,0.20,0.06, 0.09,T.6,0.08,strapMat)
         }
-        if T0.5 {
-            part(T0.0 + 0.05,0.21,0.27,0,T0.3 + 0.20,-0.13,torsoMat)
+        if T.5 {
+            part(T.0 + 0.05,0.21,0.27,0,T.3 + 0.20,-0.13,torsoMat)
         }
 
         // Exact rUe pants geometry table.
@@ -426,20 +426,20 @@ private struct CharacterVoxel3DView: UIViewRepresentable {
         ]
         let pi = max(0, min(4, a.pants))
         let P = pants[pi]
-        let legY = CGFloat(0.36) - P0.1 * 0.5
+        let legY = CGFloat(0.36) - P.1 * 0.5
         let legMat = pi == 0 ? skinMat : pantsMat
-        let legL = part(P0.0,P0.1,P0.2,-P0.3,legY,0,legMat)
-        let legR = part(P0.0,P0.1,P0.2, P0.3,legY,0,legMat)
+        let legL = part(P.0,P.1,P.2,-P.3,legY,0,legMat)
+        let legR = part(P.0,P.1,P.2, P.3,legY,0,legMat)
 
         var legSkinH: CGFloat = 0.195
-        if P0.4 {
-            let g = legY - P0.1 * 0.5
+        if P.4 {
+            let g = legY - P.1 * 0.5
             legSkinH = max(0.12, g - 0.008 - 0.06)
-            let localY = -P0.1 * 0.5 - 0.008 - legSkinH * 0.5
+            let localY = -P.1 * 0.5 - 0.008 - legSkinH * 0.5
             part(0.11,legSkinH,0.165,0,localY,0,skinMat,parent:legL,local:true)
             part(0.11,legSkinH,0.165,0,localY,0,skinMat,parent:legR,local:true)
         }
-        if P0.5 {
+        if P.5 {
             func cargo(_ x: CGFloat) {
                 let holder = SCNNode()
                 holder.position = SCNVector3(Float(sc(x)),Float(sc(legY + 0.04)) + yOffset,Float(sc(0.102)))
@@ -448,18 +448,18 @@ private struct CharacterVoxel3DView: UIViewRepresentable {
                 part(0.070,0.022,0.036,0,0.055,0.012,pantsMat,parent:holder,local:true)
                 part(0.050,0.030,0.015,0,-0.010,0.019,pantsMat,parent:holder,local:true)
             }
-            cargo(-P0.3 - 0.072); cargo(P0.3 + 0.072)
+            cargo(-P.3 - 0.072); cargo(P.3 + 0.072)
         }
 
         // Exact Nue shoe geometry + UZe anchor formula.
         if a.shoe > 0 {
             let shoes: [(CGFloat,CGFloat,CGFloat,CGFloat)] = [(0.182,0.058,0.234,0.028),(0.178,0.048,0.228,0.030)]
             let sh = shoes[min(shoes.count - 1, a.shoe - 1)]
-            let anchor = (P0.4 ? -P0.1*0.5 - 0.008 - legSkinH + sh0.1*0.5 + 0.015
-                              : -P0.1*0.5 + sh0.1*0.5 + 0.015) - 0.018
-            let z = sh0.3 - 0.006
-            part(sh0.0,sh0.1,sh0.2,-0.012,anchor,z,shoeMat,parent:legL,local:true)
-            part(sh0.0,sh0.1,sh0.2, 0.012,anchor,z,shoeMat,parent:legR,local:true)
+            let anchor = (P.4 ? -P.1*0.5 - 0.008 - legSkinH + sh.1*0.5 + 0.015
+                              : -P.1*0.5 + sh.1*0.5 + 0.015) - 0.018
+            let z = sh.3 - 0.006
+            part(sh.0,sh.1,sh.2,-0.012,anchor,z,shoeMat,parent:legL,local:true)
+            part(sh.0,sh.1,sh.2, 0.012,anchor,z,shoeMat,parent:legR,local:true)
         }
 
         // Exact base hat assets captured from pc_hatHolder.
@@ -511,7 +511,7 @@ private struct CharacterVoxel3DView: UIViewRepresentable {
             em.lightingModel = .constant; em.isDoubleSided = true
             plane.materials = [em]
             let badge = SCNNode(geometry:plane)
-            badge.position = SCNVector3(0,Float(sc(T0.3 + 0.04)) + yOffset,Float(sc(T0.2*0.5*1.04 + 0.012)))
+            badge.position = SCNVector3(0,Float(sc(T.3 + 0.04)) + yOffset,Float(sc(T.2*0.5*1.04 + 0.012)))
             badge.renderingOrder = 5
             root.addChildNode(badge)
             torso.renderingOrder = 4
