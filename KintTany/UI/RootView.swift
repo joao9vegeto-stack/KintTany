@@ -21,22 +21,24 @@ struct RootView: View {
         ZStack {
             PaperTexture()
             GeometryReader { proxy in
-                let compact = proxy.size.height < 760
-                ScrollView {
-                    VStack(spacing: compact ? 8 : 11) {
-                        topStatusBar
-                        heroSection.frame(height: compact ? 288 : 310)
-                        statsSection
-                        sessionMetrics
-                        pauseButton
-                        bottomNavigation
-                        fullLogButton
-                    }
-                    .padding(.horizontal, 18)
-                    .padding(.top, 8)
-                    .padding(.bottom, 24)
+                let designWidth: CGFloat = 430
+                let designHeight: CGFloat = 900
+                let scale = min(proxy.size.width / designWidth, proxy.size.height / designHeight)
+
+                VStack(spacing: 10) {
+                    topStatusBar
+                    heroSection.frame(height: 286)
+                    statsSection.frame(height: 248)
+                    sessionMetrics.frame(height: 66)
+                    pauseButton.frame(height: 72)
+                    bottomNavigation.frame(height: 58)
+                    fullLogButton.frame(height: 52)
                 }
-                .scrollIndicators(.hidden)
+                .padding(.horizontal, 16)
+                .padding(.vertical, 8)
+                .frame(width: designWidth, height: designHeight, alignment: .top)
+                .scaleEffect(scale, anchor: .top)
+                .frame(width: proxy.size.width, height: proxy.size.height, alignment: .top)
             }
 
             if app.hasSession,
@@ -199,12 +201,8 @@ struct RootView: View {
     }
 
     private var progressDetail: String {
-        guard let mode = app.activity else { return "Progresso 0" }
-        if mode.isGathering { return "Progresso \(app.stats.confirmedHits) hits" }
-        if mode == .chicken || mode == .zombie || mode == .dragon {
-            return "Progresso \(app.stats.kills) kills"
-        }
-        return "Progresso \(app.stats.attempts)"
+        guard app.activity != nil else { return "Progresso 0/\(app.goal)" }
+        return "Progresso \(app.stats.successes)/\(app.sessionGoal)"
     }
 
     private var progressBeads: some View {
@@ -237,7 +235,7 @@ struct RootView: View {
 
     private var activitySelector: some View {
         let columns = Array(repeating: GridItem(.flexible(), spacing: 6), count: 5)
-        return LazyVGrid(columns: columns, spacing: 10) {
+        return LazyVGrid(columns: columns, spacing: 6) {
             ForEach(visibleModes) { mode in resourceTile(mode) }
         }
         .padding(.horizontal, 3)
@@ -255,7 +253,7 @@ struct RootView: View {
                 Image(activitySprite(mode))
                     .resizable()
                     .scaledToFit()
-                    .frame(width: 41, height: 41)
+                    .frame(width: 36, height: 36)
                     .shadow(color: .black.opacity(0.20), radius: 1.2, x: 1, y: 1)
                 Text(mode.localizedTitle)
                     .font(.system(size: 11.5, weight: .medium, design: .rounded))
@@ -269,7 +267,7 @@ struct RootView: View {
                         .lineLimit(1)
                 }
             }
-            .frame(maxWidth: .infinity, minHeight: 66)
+            .frame(maxWidth: .infinity, minHeight: 58)
         }
         .buttonStyle(.plain)
         .disabled(app.activity != nil)
@@ -325,7 +323,7 @@ struct RootView: View {
                 .font(.system(size: 20, weight: .semibold, design: .rounded))
                 .foregroundStyle(ink)
             HStack(alignment: .top, spacing: 12) {
-                VStack(spacing: 7) {
+                VStack(spacing: 5) {
                     ForEach(CharacterSkill.allCases) { skill in skillRow(skill) }
                     Divider().overlay(ink.opacity(0.28))
                     HStack(spacing: 9) {
@@ -515,7 +513,7 @@ struct RootView: View {
             navDivider
             navButton(title: "SESSÃO", icon: "slider.horizontal.3") { showLogin = true }
         }
-        .frame(height: 64)
+        .frame(height: 58)
         .padding(.horizontal, 2)
         .embossedPanel(cornerRadius: 14, fill: paper)
     }
@@ -546,7 +544,7 @@ struct RootView: View {
             }
             .foregroundStyle(ink)
             .padding(.horizontal, 18)
-            .frame(height: 58)
+            .frame(height: 52)
         }
         .buttonStyle(.plain)
         .embossedPanel(cornerRadius: 14, fill: paper)
@@ -617,97 +615,144 @@ private struct DailyQuestsView: View {
     @EnvironmentObject var app: AppStore
     @Environment(\.dismiss) private var dismiss
 
+    private let paper = Color(red: 0.91, green: 0.895, blue: 0.855)
+    private let ink = Color(red: 0.16, green: 0.15, blue: 0.14)
+    private let copper = Color(red: 0.67, green: 0.34, blue: 0.23)
+
     var body: some View {
-        NavigationStack {
-            ZStack {
-                LinearGradient(colors: [.black, Color(red: 0.02, green: 0.06, blue: 0.10), .black],
-                               startPoint: .topLeading, endPoint: .bottomTrailing)
-                    .ignoresSafeArea()
-                ScrollView {
-                    VStack(spacing: 14) {
-                        HStack {
-                            VStack(alignment: .leading, spacing: 4) {
-                                Text("DAILY QUESTS")
-                                    .font(.system(size: 13, weight: .black, design: .rounded))
-                                    .tracking(2)
-                                    .foregroundStyle(.yellow)
-                                Text("Dados oficiais do Kintara")
-                                    .font(.caption)
-                                    .foregroundStyle(.secondary)
-                            }
-                            Spacer()
-                            if app.dailyQuestsLoading { ProgressView() }
-                        }
+        ZStack {
+            PaperTexture()
+            GeometryReader { proxy in
+                let designWidth: CGFloat = 430
+                let designHeight: CGFloat = 860
+                let scale = min(proxy.size.width / designWidth, proxy.size.height / designHeight)
 
-                        if let error = app.dailyQuestsError {
-                            Text(error).font(.subheadline).foregroundStyle(.orange)
-                                .frame(maxWidth: .infinity, alignment: .leading)
+                VStack(spacing: 12) {
+                    HStack {
+                        Button("Fechar") { dismiss() }
+                            .font(.system(size: 15, weight: .semibold, design: .rounded))
+                            .foregroundStyle(ink)
+                        Spacer()
+                        Text("QUESTS")
+                            .font(.system(size: 23, weight: .bold, design: .rounded))
+                            .foregroundStyle(ink)
+                        Spacer()
+                        Button {
+                            Task { await app.refreshDailyQuests() }
+                        } label: {
+                            Image(systemName: "arrow.clockwise")
+                                .font(.system(size: 18, weight: .bold))
+                                .foregroundStyle(ink)
                         }
-
-                        ForEach(app.dailyQuests) { quest in
-                            VStack(alignment: .leading, spacing: 10) {
-                                HStack(alignment: .top) {
-                                    Text(quest.label)
-                                        .font(.headline.bold())
-                                    Spacer()
-                                    Text(quest.claimed ? "RESGATADA" : (quest.isComplete ? "CONCLUÍDA" : "ATIVA"))
-                                        .font(.system(size: 10, weight: .black, design: .rounded))
-                                        .foregroundStyle(quest.claimed ? .green : (quest.isComplete ? .yellow : .cyan))
-                                }
-                                ProgressView(value: quest.progressFraction)
-                                    .tint(quest.isComplete ? .green : .cyan)
-                                HStack {
-                                    Text("\(quest.progress) / \(quest.target)")
-                                        .font(.subheadline.monospacedDigit().bold())
-                                    Spacer()
-                                    Text(quest.kind)
-                                        .font(.caption2.monospaced())
-                                        .foregroundStyle(.secondary)
-                                }
-                                Label(quest.rewardSummary, systemImage: "sparkles")
-                                    .font(.caption.bold())
-                                    .foregroundStyle(.yellow.opacity(0.9))
-                            }
-                            .padding(15)
-                            .background(.white.opacity(0.045), in: RoundedRectangle(cornerRadius: 18, style: .continuous))
-                            .overlay(RoundedRectangle(cornerRadius: 18, style: .continuous).stroke(.white.opacity(0.08), lineWidth: 1))
-                        }
-
-                        if !app.dailyQuestsLoading && app.dailyQuests.isEmpty && app.dailyQuestsError == nil {
-                            Text("Nenhuma Daily Quest foi publicada pelo servidor.")
-                                .foregroundStyle(.secondary)
-                                .padding(.top, 24)
-                        }
-
-                        VStack(alignment: .leading, spacing: 5) {
-                            Text("RESET")
-                                .font(.caption2.bold())
-                                .foregroundStyle(.secondary)
-                            Text("00:00 UTC")
-                                .font(.headline.monospacedDigit().bold())
-                            if let day = app.dailyQuestDay {
-                                Text("Dia do servidor: \(day)")
-                                    .font(.caption)
-                                    .foregroundStyle(.secondary)
-                            }
-                        }
-                        .frame(maxWidth: .infinity, alignment: .leading)
-                        .padding(15)
-                        .background(.white.opacity(0.035), in: RoundedRectangle(cornerRadius: 16))
                     }
-                    .padding(16)
+                    .padding(.horizontal, 6)
+                    .frame(height: 42)
+
+                    HStack {
+                        VStack(alignment: .leading, spacing: 3) {
+                            Text("DAILY QUESTS")
+                                .font(.system(size: 18, weight: .bold, design: .rounded))
+                            Text("Dados oficiais do Kintara")
+                                .font(.system(size: 12, weight: .medium, design: .rounded))
+                                .foregroundStyle(ink.opacity(0.58))
+                        }
+                        Spacer()
+                        if app.dailyQuestsLoading { ProgressView().tint(copper) }
+                    }
+                    .foregroundStyle(ink)
+                    .padding(.horizontal, 4)
+
+                    if let error = app.dailyQuestsError {
+                        Text(error)
+                            .font(.system(size: 12, weight: .medium, design: .rounded))
+                            .foregroundStyle(copper)
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                    }
+
+                    ForEach(app.dailyQuests.prefix(3)) { quest in
+                        questCard(quest)
+                    }
+
+                    if !app.dailyQuestsLoading && app.dailyQuests.isEmpty && app.dailyQuestsError == nil {
+                        Text("Nenhuma Daily Quest publicada pelo servidor.")
+                            .font(.system(size: 14, weight: .medium, design: .rounded))
+                            .foregroundStyle(ink.opacity(0.62))
+                            .frame(maxWidth: .infinity)
+                            .padding(24)
+                            .embossedPanel(cornerRadius: 18, fill: paper)
+                    }
+
+                    Spacer(minLength: 2)
+
+                    HStack {
+                        VStack(alignment: .leading, spacing: 2) {
+                            Text("RESET")
+                                .font(.system(size: 11, weight: .bold, design: .rounded))
+                                .foregroundStyle(ink.opacity(0.55))
+                            Text("00:00 UTC")
+                                .font(.system(size: 18, weight: .bold, design: .rounded))
+                                .foregroundStyle(ink)
+                        }
+                        Spacer()
+                        if let day = app.dailyQuestDay {
+                            Text(day)
+                                .font(.system(size: 12, weight: .medium, design: .rounded))
+                                .foregroundStyle(ink.opacity(0.58))
+                        }
+                    }
+                    .padding(14)
+                    .embossedPanel(cornerRadius: 16, fill: paper)
                 }
-                .refreshable { await app.refreshDailyQuests() }
+                .padding(16)
+                .frame(width: designWidth, height: designHeight, alignment: .top)
+                .scaleEffect(scale, anchor: .top)
+                .frame(width: proxy.size.width, height: proxy.size.height, alignment: .top)
             }
-            .navigationTitle("Quests")
-            .navigationBarTitleDisplayMode(.inline)
-            .toolbar {
-                ToolbarItem(placement: .confirmationAction) {
-                    Button("Fechar") { dismiss() }
-                }
-            }
-            .task { await app.refreshDailyQuests() }
         }
+        .preferredColorScheme(.light)
+        .task { await app.refreshDailyQuests() }
+    }
+
+    private func questCard(_ quest: DailyQuest) -> some View {
+        VStack(alignment: .leading, spacing: 10) {
+            HStack {
+                Text(quest.label)
+                    .font(.system(size: 18, weight: .bold, design: .rounded))
+                    .foregroundStyle(ink)
+                    .lineLimit(1)
+                Spacer()
+                Text(quest.claimed ? "RESGATADA" : (quest.isComplete ? "CONCLUÍDA" : "ATIVA"))
+                    .font(.system(size: 10, weight: .bold, design: .rounded))
+                    .foregroundStyle(copper)
+            }
+
+            GeometryReader { geo in
+                ZStack(alignment: .leading) {
+                    Capsule().fill(Color(red: 0.82, green: 0.80, blue: 0.75))
+                    Capsule().fill(copper)
+                        .frame(width: max(0, geo.size.width * quest.progressFraction))
+                }
+            }
+            .frame(height: 8)
+
+            HStack {
+                Text("\(quest.progress) / \(quest.target)")
+                    .font(.system(size: 16, weight: .semibold, design: .rounded))
+                    .monospacedDigit()
+                Spacer()
+                Text(quest.kind)
+                    .font(.system(size: 11, weight: .medium, design: .rounded))
+                    .foregroundStyle(ink.opacity(0.5))
+            }
+            .foregroundStyle(ink)
+
+            Label(quest.rewardSummary, systemImage: "sparkles")
+                .font(.system(size: 12, weight: .semibold, design: .rounded))
+                .foregroundStyle(copper)
+                .lineLimit(1)
+        }
+        .padding(14)
+        .embossedPanel(cornerRadius: 18, fill: paper)
     }
 }
 
@@ -1061,140 +1106,134 @@ private struct CharacterStatsView: View {
     @EnvironmentObject private var app: AppStore
     @Environment(\.dismiss) private var dismiss
 
-    private let columns = [
-        GridItem(.flexible(), spacing: 10),
-        GridItem(.flexible(), spacing: 10)
-    ]
+    private let paper = Color(red: 0.91, green: 0.895, blue: 0.855)
+    private let ink = Color(red: 0.16, green: 0.15, blue: 0.14)
+    private let copper = Color(red: 0.67, green: 0.34, blue: 0.23)
 
     var body: some View {
-        NavigationStack {
-            ZStack {
-                LinearGradient(
-                    colors: [Color.black, Color(red: 0.015, green: 0.045, blue: 0.075), Color.black],
-                    startPoint: .topLeading,
-                    endPoint: .bottomTrailing
-                )
-                .ignoresSafeArea()
+        ZStack {
+            PaperTexture()
+            GeometryReader { proxy in
+                let designWidth: CGFloat = 430
+                let designHeight: CGFloat = 860
+                let scale = min(proxy.size.width / designWidth, proxy.size.height / designHeight)
 
-                GeometryReader { proxy in
-                    let compact = proxy.size.height < 700
-                    VStack(spacing: compact ? 10 : 14) {
-                        characterHeader(compact: compact)
-
-                        if app.characterProfileLoading && !app.characterProfile.loaded {
-                            ProgressView("Carregando personagem e Stats…")
-                                .frame(maxWidth: .infinity, maxHeight: .infinity)
-                        } else if !app.characterProfile.skills.loaded {
-                            ContentUnavailableView(
-                                "Stats indisponíveis",
-                                systemImage: "chart.bar.xaxis",
-                                description: Text(app.characterProfileError ?? "Abra novamente após autenticar a sessão.")
-                            )
-                            .frame(maxWidth: .infinity, maxHeight: .infinity)
-                        } else {
-                            LazyVGrid(columns: columns, spacing: compact ? 8 : 10) {
-                                ForEach(CharacterSkill.allCases) { skill in
-                                    CharacterSkillCard(
-                                        skill: skill,
-                                        stats: app.characterProfile.skills,
-                                        compact: compact
-                                    )
-                                }
-                            }
-
-                            HStack {
-                                Label("Total Level", systemImage: "star.fill")
-                                    .font(.headline.bold())
-                                Spacer()
-                                Text("\(app.characterProfile.totalLevel)")
-                                    .font(.system(size: compact ? 24 : 28, weight: .black, design: .rounded))
-                                    .foregroundStyle(.cyan)
-                            }
-                            .padding(.horizontal, 16)
-                            .frame(height: compact ? 50 : 58)
-                            .background(.white.opacity(0.07), in: RoundedRectangle(cornerRadius: 16, style: .continuous))
-                            .overlay(
-                                RoundedRectangle(cornerRadius: 16, style: .continuous)
-                                    .stroke(.white.opacity(0.08), lineWidth: 1)
-                            )
+                VStack(spacing: 12) {
+                    HStack {
+                        Button("Fechar") { dismiss() }
+                            .font(.system(size: 15, weight: .semibold, design: .rounded))
+                        Spacer()
+                        Text("STATS")
+                            .font(.system(size: 23, weight: .bold, design: .rounded))
+                        Spacer()
+                        Button {
+                            Task { await app.refreshCharacterProfile(force: true) }
+                        } label: {
+                            Image(systemName: "arrow.clockwise")
+                                .font(.system(size: 18, weight: .bold))
                         }
                     }
-                    .padding(.horizontal, 16)
-                    .padding(.vertical, compact ? 8 : 12)
-                }
-            }
-            .navigationTitle("Stats")
-            .navigationBarTitleDisplayMode(.inline)
-            .toolbar {
-                ToolbarItem(placement: .cancellationAction) {
-                    Button("Fechar") { dismiss() }
-                }
-                ToolbarItem(placement: .primaryAction) {
-                    Button {
-                        Task { await app.refreshCharacterProfile(force: true) }
-                    } label: {
-                        Image(systemName: "arrow.clockwise")
+                    .foregroundStyle(ink)
+                    .padding(.horizontal, 6)
+                    .frame(height: 42)
+
+                    HStack(spacing: 14) {
+                        ZStack {
+                            CharacterVoxel3DView(appearance: app.characterProfile.appearance)
+                                .padding(5)
+                        }
+                        .frame(width: 104, height: 126)
+                        .embossedPanel(cornerRadius: 18, fill: paper)
+
+                        VStack(alignment: .leading, spacing: 6) {
+                            Text(app.characterProfile.displayName)
+                                .font(.system(size: 25, weight: .bold, design: .rounded))
+                                .foregroundStyle(ink)
+                                .lineLimit(1)
+                            Text("Lvl \(app.characterProfile.totalLevel)")
+                                .font(.system(size: 18, weight: .bold, design: .rounded))
+                                .foregroundStyle(copper)
+                            HStack(spacing: 7) {
+                                Circle()
+                                    .fill(app.hasSession ? Color(red: 0.42, green: 0.54, blue: 0.39) : .gray)
+                                    .frame(width: 9, height: 9)
+                                Text(app.hasSession ? "Conta conectada" : "Sem sessão")
+                                    .font(.system(size: 13, weight: .semibold, design: .rounded))
+                            }
+                            .foregroundStyle(ink.opacity(0.72))
+                        }
+                        Spacer()
                     }
-                    .disabled(app.characterProfileLoading)
-                    .accessibilityLabel("Atualizar personagem e Stats")
+
+                    if app.characterProfileLoading && !app.characterProfile.loaded {
+                        ProgressView("Carregando Stats…").tint(copper)
+                        Spacer()
+                    } else {
+                        VStack(spacing: 8) {
+                            ForEach(CharacterSkill.allCases) { skill in
+                                statRow(skill)
+                            }
+                        }
+                        .padding(14)
+                        .embossedPanel(cornerRadius: 20, fill: paper)
+
+                        HStack {
+                            Text("Total Level")
+                                .font(.system(size: 19, weight: .bold, design: .rounded))
+                            Spacer()
+                            Text("\(app.characterProfile.totalLevel)")
+                                .font(.system(size: 28, weight: .bold, design: .rounded))
+                                .foregroundStyle(copper)
+                        }
+                        .foregroundStyle(ink)
+                        .padding(.horizontal, 18)
+                        .frame(height: 66)
+                        .embossedPanel(cornerRadius: 18, fill: paper)
+                        Spacer(minLength: 0)
+                    }
                 }
+                .padding(16)
+                .frame(width: designWidth, height: designHeight, alignment: .top)
+                .scaleEffect(scale, anchor: .top)
+                .frame(width: proxy.size.width, height: proxy.size.height, alignment: .top)
             }
         }
-        .task {
-            await app.refreshCharacterProfile(force: true)
-        }
+        .preferredColorScheme(.light)
+        .task { await app.refreshCharacterProfile(force: true) }
     }
 
-    private func characterHeader(compact: Bool) -> some View {
-        HStack(spacing: compact ? 12 : 16) {
-            ZStack {
-                RoundedRectangle(cornerRadius: 18, style: .continuous)
-                    .fill(.cyan.opacity(0.08))
-
-                if let image = app.characterArtwork {
-                    Image(uiImage: image)
-                        .resizable()
-                        .scaledToFit()
-                        .padding(5)
-                } else {
-                    Image(systemName: "person.crop.square.filled.and.at.rectangle")
-                        .font(.system(size: 36, weight: .semibold))
-                        .foregroundStyle(.cyan)
+    private func statRow(_ skill: CharacterSkill) -> some View {
+        let stats = app.characterProfile.skills
+        let level = stats.level(for: skill)
+        return VStack(spacing: 5) {
+            HStack {
+                Text(skill.localizedName)
+                    .font(.system(size: 15, weight: .semibold, design: .rounded))
+                    .foregroundStyle(ink)
+                    .frame(width: 86, alignment: .leading)
+                GeometryReader { geo in
+                    ZStack(alignment: .leading) {
+                        Capsule().fill(Color(red: 0.82, green: 0.80, blue: 0.75))
+                        Capsule().fill(copper)
+                            .frame(width: max(6, geo.size.width * stats.progress(for: skill)))
+                    }
                 }
+                .frame(height: 12)
+                Text("\(level)/40")
+                    .font(.system(size: 14, weight: .semibold, design: .rounded))
+                    .foregroundStyle(ink)
+                    .monospacedDigit()
+                    .frame(width: 42, alignment: .trailing)
             }
-            .frame(width: compact ? 88 : 108, height: compact ? 100 : 124)
-            .overlay(
-                RoundedRectangle(cornerRadius: 18, style: .continuous)
-                    .stroke(.cyan.opacity(0.22), lineWidth: 1)
-            )
-
-            VStack(alignment: .leading, spacing: 7) {
-                Text(app.characterProfile.displayName)
-                    .font(.system(size: compact ? 24 : 28, weight: .black, design: .rounded))
-                    .lineLimit(1)
-
-                Text("Lvl \(app.characterProfile.totalLevel)")
-                    .font(.headline.bold())
-                    .foregroundStyle(.cyan)
-
-                HStack(spacing: 7) {
-                    Circle()
-                        .fill(app.hasSession ? Color.green : Color.secondary)
-                        .frame(width: 8, height: 8)
-                    Text(app.hasSession ? "Conta conectada" : "Sem sessão")
-                        .font(.caption.bold())
-                        .foregroundStyle(.secondary)
-                }
-
-                Text("Personagem da sessão autenticada")
-                    .font(.caption2)
-                    .foregroundStyle(.secondary)
-                    .lineLimit(1)
+            HStack {
+                Spacer().frame(width: 94)
+                Text("\(stats.currentLevelXP(for: skill)) / \(stats.currentLevelXPGoal(for: skill)) XP")
+                    .font(.system(size: 10.5, weight: .medium, design: .rounded))
+                    .foregroundStyle(ink.opacity(0.55))
+                    .monospacedDigit()
+                Spacer()
             }
-
-            Spacer(minLength: 0)
         }
-        .frame(maxWidth: .infinity, alignment: .leading)
     }
 }
 
