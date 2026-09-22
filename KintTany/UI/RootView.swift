@@ -620,94 +620,66 @@ private struct DailyQuestsView: View {
     var body: some View {
         NavigationStack {
             ZStack {
-                LinearGradient(colors: [.black, Color(red: 0.02, green: 0.06, blue: 0.10), .black],
-                               startPoint: .topLeading, endPoint: .bottomTrailing)
-                    .ignoresSafeArea()
+                KintTanyTheme.surface.ignoresSafeArea()
+                KintResourceImage.image("KintPaperTexture").resizable(resizingMode: .tile).opacity(0.54).ignoresSafeArea()
                 ScrollView {
-                    VStack(spacing: 14) {
+                    VStack(spacing: 12) {
                         HStack {
-                            VStack(alignment: .leading, spacing: 4) {
-                                Text("DAILY QUESTS")
-                                    .font(.system(size: 13, weight: .black, design: .rounded))
-                                    .tracking(2)
-                                    .foregroundStyle(.yellow)
-                                Text("Dados oficiais do Kintara")
-                                    .font(.caption)
-                                    .foregroundStyle(.secondary)
-                            }
+                            Text("DAILY QUESTS").font(KintTanyTheme.titleFont(18, weight: .semibold))
                             Spacer()
-                            if app.dailyQuestsLoading { ProgressView() }
+                            if app.dailyQuestsLoading { ProgressView().tint(KintTanyTheme.terracotta) }
                         }
+                        .foregroundStyle(KintTanyTheme.ink)
 
                         if let error = app.dailyQuestsError {
-                            Text(error).font(.subheadline).foregroundStyle(.orange)
+                            Text(error).font(KintTanyTheme.bodyFont(12)).foregroundStyle(KintTanyTheme.terracotta)
                                 .frame(maxWidth: .infinity, alignment: .leading)
                         }
 
                         ForEach(app.dailyQuests) { quest in
-                            VStack(alignment: .leading, spacing: 10) {
-                                HStack(alignment: .top) {
-                                    Text(quest.label)
-                                        .font(.headline.bold())
+                            VStack(alignment: .leading, spacing: 9) {
+                                HStack {
+                                    Text(quest.label).font(KintTanyTheme.titleFont(16, weight: .medium))
                                     Spacer()
                                     Text(quest.claimed ? "RESGATADA" : (quest.isComplete ? "CONCLUÍDA" : "ATIVA"))
-                                        .font(.system(size: 10, weight: .black, design: .rounded))
-                                        .foregroundStyle(quest.claimed ? .green : (quest.isComplete ? .yellow : .cyan))
+                                        .font(KintTanyTheme.bodyFont(10, weight: .semibold))
                                 }
-                                ProgressView(value: quest.progressFraction)
-                                    .tint(quest.isComplete ? .green : .cyan)
+                                ProgressView(value: quest.progressFraction).tint(KintTanyTheme.terracotta)
                                 HStack {
-                                    Text("\(quest.progress) / \(quest.target)")
-                                        .font(.subheadline.monospacedDigit().bold())
+                                    Text("\(quest.progress) / \(quest.target)").font(KintTanyTheme.bodyFont(13, weight: .semibold).monospacedDigit())
                                     Spacer()
-                                    Text(quest.kind)
-                                        .font(.caption2.monospaced())
-                                        .foregroundStyle(.secondary)
+                                    Text(quest.kind).font(KintTanyTheme.bodyFont(10)).foregroundStyle(KintTanyTheme.mutedInk)
                                 }
                                 Label(quest.rewardSummary, systemImage: "sparkles")
-                                    .font(.caption.bold())
-                                    .foregroundStyle(.yellow.opacity(0.9))
+                                    .font(KintTanyTheme.bodyFont(11, weight: .medium))
                             }
-                            .padding(15)
-                            .background(.white.opacity(0.045), in: RoundedRectangle(cornerRadius: 18, style: .continuous))
-                            .overlay(RoundedRectangle(cornerRadius: 18, style: .continuous).stroke(.white.opacity(0.08), lineWidth: 1))
-                        }
-
-                        if !app.dailyQuestsLoading && app.dailyQuests.isEmpty && app.dailyQuestsError == nil {
-                            Text("Nenhuma Daily Quest foi publicada pelo servidor.")
-                                .foregroundStyle(.secondary)
-                                .padding(.top, 24)
+                            .foregroundStyle(KintTanyTheme.ink)
+                            .padding(14)
+                            .background(KintTanyTheme.surface.opacity(0.75), in: RoundedRectangle(cornerRadius: 14))
+                            .kintRaised(radius: 14)
                         }
 
                         VStack(alignment: .leading, spacing: 5) {
-                            Text("RESET")
-                                .font(.caption2.bold())
-                                .foregroundStyle(.secondary)
-                            Text("00:00 UTC")
-                                .font(.headline.monospacedDigit().bold())
-                            if let day = app.dailyQuestDay {
-                                Text("Dia do servidor: \(day)")
-                                    .font(.caption)
-                                    .foregroundStyle(.secondary)
-                            }
+                            Text("RESET").font(KintTanyTheme.bodyFont(10, weight: .semibold))
+                            Text("00:00 UTC").font(KintTanyTheme.titleFont(17, weight: .medium))
+                            if let day = app.dailyQuestDay { Text("Dia do servidor: \(day)").font(KintTanyTheme.bodyFont(11)) }
                         }
+                        .foregroundStyle(KintTanyTheme.ink)
                         .frame(maxWidth: .infinity, alignment: .leading)
-                        .padding(15)
-                        .background(.white.opacity(0.035), in: RoundedRectangle(cornerRadius: 16))
+                        .padding(14)
+                        .background(KintTanyTheme.surface.opacity(0.72), in: RoundedRectangle(cornerRadius: 14))
+                        .kintRaised(radius: 14)
                     }
-                    .padding(16)
+                    .padding(18)
                 }
                 .refreshable { await app.refreshDailyQuests() }
             }
             .navigationTitle("Quests")
             .navigationBarTitleDisplayMode(.inline)
-            .toolbar {
-                ToolbarItem(placement: .confirmationAction) {
-                    Button("Fechar") { dismiss() }
-                }
-            }
+            .toolbar { ToolbarItem(placement: .confirmationAction) { Button("Fechar") { dismiss() } } }
             .task { await app.refreshDailyQuests() }
         }
+        .preferredColorScheme(.light)
     }
 }
 
@@ -1061,140 +1033,87 @@ private struct CharacterStatsView: View {
     @EnvironmentObject private var app: AppStore
     @Environment(\.dismiss) private var dismiss
 
-    private let columns = [
-        GridItem(.flexible(), spacing: 10),
-        GridItem(.flexible(), spacing: 10)
-    ]
+    private let columns = [GridItem(.flexible(), spacing: 10), GridItem(.flexible(), spacing: 10)]
 
     var body: some View {
         NavigationStack {
             ZStack {
-                LinearGradient(
-                    colors: [Color.black, Color(red: 0.015, green: 0.045, blue: 0.075), Color.black],
-                    startPoint: .topLeading,
-                    endPoint: .bottomTrailing
-                )
-                .ignoresSafeArea()
-
-                GeometryReader { proxy in
-                    let compact = proxy.size.height < 700
-                    VStack(spacing: compact ? 10 : 14) {
-                        characterHeader(compact: compact)
-
-                        if app.characterProfileLoading && !app.characterProfile.loaded {
-                            ProgressView("Carregando personagem e Stats…")
-                                .frame(maxWidth: .infinity, maxHeight: .infinity)
-                        } else if !app.characterProfile.skills.loaded {
-                            ContentUnavailableView(
-                                "Stats indisponíveis",
-                                systemImage: "chart.bar.xaxis",
-                                description: Text(app.characterProfileError ?? "Abra novamente após autenticar a sessão.")
-                            )
-                            .frame(maxWidth: .infinity, maxHeight: .infinity)
-                        } else {
-                            LazyVGrid(columns: columns, spacing: compact ? 8 : 10) {
-                                ForEach(CharacterSkill.allCases) { skill in
-                                    CharacterSkillCard(
-                                        skill: skill,
-                                        stats: app.characterProfile.skills,
-                                        compact: compact
-                                    )
+                KintTanyTheme.surface.ignoresSafeArea()
+                KintResourceImage.image("KintPaperTexture").resizable(resizingMode: .tile).opacity(0.54).ignoresSafeArea()
+                ScrollView {
+                    VStack(spacing: 12) {
+                        HStack(spacing: 14) {
+                            ZStack {
+                                RoundedRectangle(cornerRadius: 14).fill(KintTanyTheme.surface.opacity(0.75))
+                                if app.hasSession {
+                                    CharacterVoxel3DView(appearance: app.characterProfile.appearance)
+                                        .scaleEffect(1.28).padding(-16)
+                                } else {
+                                    Image(systemName: "person.crop.square").font(.system(size: 34)).foregroundStyle(KintTanyTheme.mutedInk)
                                 }
                             }
-
-                            HStack {
-                                Label("Total Level", systemImage: "star.fill")
-                                    .font(.headline.bold())
-                                Spacer()
-                                Text("\(app.characterProfile.totalLevel)")
-                                    .font(.system(size: compact ? 24 : 28, weight: .black, design: .rounded))
-                                    .foregroundStyle(.cyan)
+                            .frame(width: 92, height: 108).kintRaised(radius: 14)
+                            VStack(alignment: .leading, spacing: 6) {
+                                Text(app.characterProfile.displayName).font(KintTanyTheme.titleFont(25, weight: .semibold)).lineLimit(1)
+                                Text("Lvl \(app.characterProfile.totalLevel)").font(KintTanyTheme.titleFont(16, weight: .medium))
+                                Text(app.hasSession ? "● Conta conectada" : "○ Sem sessão").font(KintTanyTheme.bodyFont(11))
                             }
-                            .padding(.horizontal, 16)
-                            .frame(height: compact ? 50 : 58)
-                            .background(.white.opacity(0.07), in: RoundedRectangle(cornerRadius: 16, style: .continuous))
-                            .overlay(
-                                RoundedRectangle(cornerRadius: 16, style: .continuous)
-                                    .stroke(.white.opacity(0.08), lineWidth: 1)
-                            )
+                            .foregroundStyle(KintTanyTheme.ink)
+                            Spacer()
+                        }
+
+                        if app.characterProfileLoading && !app.characterProfile.loaded {
+                            ProgressView("Carregando personagem e Stats…").tint(KintTanyTheme.terracotta).padding(40)
+                        } else {
+                            LazyVGrid(columns: columns, spacing: 10) {
+                                ForEach(CharacterSkill.allCases) { skill in
+                                    let stats = app.characterProfile.skills
+                                    VStack(alignment: .leading, spacing: 7) {
+                                        HStack {
+                                            Image(systemName: skill.icon)
+                                            Text(skill.localizedName).lineLimit(1)
+                                            Spacer()
+                                            Text("\(stats.level(for: skill))/\(CharacterSkillStats.maxLevel)").monospacedDigit()
+                                        }
+                                        .font(KintTanyTheme.bodyFont(12, weight: .semibold))
+                                        ProgressView(value: stats.progress(for: skill)).tint(KintTanyTheme.terracotta)
+                                        Text("\(stats.currentLevelXP(for: skill).formatted()) / \(stats.currentLevelXPGoal(for: skill).formatted()) XP")
+                                            .font(KintTanyTheme.bodyFont(9.5)).lineLimit(1).minimumScaleFactor(0.7)
+                                        Text("\(stats.totalXP(for: skill).formatted()) XP total").font(KintTanyTheme.bodyFont(9.5))
+                                    }
+                                    .foregroundStyle(KintTanyTheme.ink)
+                                    .padding(12)
+                                    .frame(maxWidth: .infinity, minHeight: 100, alignment: .leading)
+                                    .background(KintTanyTheme.surface.opacity(0.75), in: RoundedRectangle(cornerRadius: 14))
+                                    .kintRaised(radius: 14)
+                                }
+                            }
+                            HStack {
+                                Label("Total Level", systemImage: "star.fill").font(KintTanyTheme.titleFont(17, weight: .medium))
+                                Spacer()
+                                Text("\(app.characterProfile.totalLevel)").font(KintTanyTheme.titleFont(25, weight: .semibold))
+                            }
+                            .foregroundStyle(KintTanyTheme.ink)
+                            .padding(15)
+                            .background(KintTanyTheme.surface.opacity(0.75), in: RoundedRectangle(cornerRadius: 14))
+                            .kintRaised(radius: 14)
                         }
                     }
-                    .padding(.horizontal, 16)
-                    .padding(.vertical, compact ? 8 : 12)
+                    .padding(18)
                 }
             }
             .navigationTitle("Stats")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
-                ToolbarItem(placement: .cancellationAction) {
-                    Button("Fechar") { dismiss() }
-                }
+                ToolbarItem(placement: .cancellationAction) { Button("Fechar") { dismiss() } }
                 ToolbarItem(placement: .primaryAction) {
-                    Button {
-                        Task { await app.refreshCharacterProfile(force: true) }
-                    } label: {
-                        Image(systemName: "arrow.clockwise")
-                    }
-                    .disabled(app.characterProfileLoading)
-                    .accessibilityLabel("Atualizar personagem e Stats")
+                    Button { Task { await app.refreshCharacterProfile(force: true) } } label: { Image(systemName: "arrow.clockwise") }
+                        .disabled(app.characterProfileLoading)
                 }
             }
         }
-        .task {
-            await app.refreshCharacterProfile(force: true)
-        }
-    }
-
-    private func characterHeader(compact: Bool) -> some View {
-        HStack(spacing: compact ? 12 : 16) {
-            ZStack {
-                RoundedRectangle(cornerRadius: 18, style: .continuous)
-                    .fill(.cyan.opacity(0.08))
-
-                if let image = app.characterArtwork {
-                    Image(uiImage: image)
-                        .resizable()
-                        .scaledToFit()
-                        .padding(5)
-                } else {
-                    Image(systemName: "person.crop.square.filled.and.at.rectangle")
-                        .font(.system(size: 36, weight: .semibold))
-                        .foregroundStyle(.cyan)
-                }
-            }
-            .frame(width: compact ? 88 : 108, height: compact ? 100 : 124)
-            .overlay(
-                RoundedRectangle(cornerRadius: 18, style: .continuous)
-                    .stroke(.cyan.opacity(0.22), lineWidth: 1)
-            )
-
-            VStack(alignment: .leading, spacing: 7) {
-                Text(app.characterProfile.displayName)
-                    .font(.system(size: compact ? 24 : 28, weight: .black, design: .rounded))
-                    .lineLimit(1)
-
-                Text("Lvl \(app.characterProfile.totalLevel)")
-                    .font(.headline.bold())
-                    .foregroundStyle(.cyan)
-
-                HStack(spacing: 7) {
-                    Circle()
-                        .fill(app.hasSession ? Color.green : Color.secondary)
-                        .frame(width: 8, height: 8)
-                    Text(app.hasSession ? "Conta conectada" : "Sem sessão")
-                        .font(.caption.bold())
-                        .foregroundStyle(.secondary)
-                }
-
-                Text("Personagem da sessão autenticada")
-                    .font(.caption2)
-                    .foregroundStyle(.secondary)
-                    .lineLimit(1)
-            }
-
-            Spacer(minLength: 0)
-        }
-        .frame(maxWidth: .infinity, alignment: .leading)
+        .preferredColorScheme(.light)
+        .task { await app.refreshCharacterProfile(force: true) }
     }
 }
 
