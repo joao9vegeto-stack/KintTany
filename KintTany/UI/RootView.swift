@@ -25,9 +25,9 @@ struct RootView: View {
                 VStack(spacing:0) {
                     header.frame(height:50)
                     hero.frame(height:280)
-                    Divider().overlay(ink.opacity(.35))
+                    Divider().overlay(ink.opacity(0.35))
                     stats.frame(height:202)
-                    Divider().overlay(ink.opacity(.35))
+                    Divider().overlay(ink.opacity(0.35))
                     metrics.frame(height:58)
                     stop.frame(height:66)
                     nav.frame(height:52)
@@ -50,7 +50,7 @@ struct RootView: View {
     private var header: some View {
         ZStack {
             Text("KintTany").font(.system(size:28,weight:.regular,design:.rounded))
-            HStack(spacing:7){Circle().fill(app.connected ? Color(red:.42,green:.54,blue:.39):Color(red:.70,green:.55,blue:.31)).frame(width:14,height:14).overlay(Circle().stroke(ink.opacity(.35)));Text(app.connected ? "ONLINE":"PRONTO").font(.system(size:15,weight:.regular));Spacer()}
+            HStack(spacing:7){Circle().fill(app.connected ? Color(red:0.42,green:0.54,blue:0.39):Color(red:0.70,green:0.55,blue:0.31)).frame(width:14,height:14).overlay(Circle().stroke(ink.opacity(0.35)));Text(app.connected ? "ONLINE":"PRONTO").font(.system(size:15,weight:.regular));Spacer()}
         }.foregroundStyle(ink).padding(.horizontal,8)
     }
 
@@ -58,7 +58,7 @@ struct RootView: View {
         HStack(spacing:12) {
             ZStack {
                 if app.hasSession { CharacterVoxel3DView(appearance:app.characterProfile.appearance).scaleEffect(1.56).padding(-28) }
-                else { Image(systemName:"person.crop.square").font(.system(size:48)).foregroundStyle(ink.opacity(.5)) }
+                else { Image(systemName:"person.crop.square").font(.system(size:48)).foregroundStyle(ink.opacity(0.5)) }
             }
             .frame(width:108).contentShape(Rectangle()).onTapGesture{app.hasSession ? (showCharacterStats=true):(showLogin=true)}
             .embossedPanel(cornerRadius:16,fill:paper)
@@ -74,7 +74,7 @@ struct RootView: View {
     }
 
     private var beads: some View {
-        HStack(spacing:5){ForEach(0..<12,id:\.self){i in Circle().fill(i < max(0,min(12,Int(ceil(app.progress*12)))) ? copper:Color(red:.83,green:.81,blue:.76)).frame(width:17,height:17).overlay(Circle().stroke(ink.opacity(.16)))}}.padding(5).background(Capsule().fill(Color(red:.87,green:.85,blue:.80)).shadow(color:.black.opacity(.15),radius:2,x:1,y:1))
+        HStack(spacing:5){ForEach(0..<12,id:\.self){i in Circle().fill(i < max(0,min(12,Int(ceil(app.progress*12)))) ? copper:Color(red:0.83,green:0.81,blue:0.76)).frame(width:17,height:17).overlay(Circle().stroke(ink.opacity(0.16)))}}.padding(5).background(Capsule().fill(Color(red:0.87,green:0.85,blue:0.80)).shadow(color:.black.opacity(0.15),radius:2,x:1,y:1))
     }
 
     private var activities: some View {
@@ -88,8 +88,8 @@ struct RootView: View {
         } else { Button{guard app.activity==nil else{return};app.start(m)}label:{tileLabel(m)}.buttonStyle(.plain).disabled(app.activity != nil) }
     }
     private func tileLabel(_ m:ActivityMode)->some View {
-        VStack(spacing:1){Image(sprite(m)).resizable().scaledToFit().frame(width:46,height:46);Text(m.localizedTitle).font(.system(size:11.5)).lineLimit(1).minimumScaleFactor(.7);if m == .fishing {Text(bait).font(.system(size:8)).foregroundStyle(ink.opacity(.55))}}
-        .foregroundStyle(ink).frame(maxWidth:.infinity,minHeight:66).opacity(app.activity==nil ? 1:.45)
+        VStack(spacing:1){Image(sprite(m)).resizable().scaledToFit().frame(width:46,height:46);Text(m.localizedTitle).font(.system(size:11.5)).lineLimit(1).minimumScaleFactor(0.7);if m == .fishing {Text(bait).font(.system(size:8)).foregroundStyle(ink.opacity(0.55))}}
+        .foregroundStyle(ink).frame(maxWidth:.infinity,minHeight:66).opacity(app.activity==nil ? 1:0.45)
     }
     private var bait:String {switch app.selectedFishingBait{case .feather:"Feather";case .trout:"Trout";case .bass:"Bass";case .tuna:"Tuna";case .squid:"Squid"}}
     private func sprite(_ m:ActivityMode)->String {switch m{case .tree:"CloneWood";case .coal:"CloneCoal";case .stone:"CloneStone";case .iron:"CloneIron";case .silver:"CloneSilver";case .cacti:"CloneCacti";case .fishing:"CloneFishing";case .chicken:"CloneChicken";case .zombie:"CloneZombie";case .dragon:"CloneDragon"}}
@@ -99,29 +99,29 @@ struct RootView: View {
             Text("STATS").font(.system(size:20,weight:.regular))
             HStack(spacing:8) {
                 VStack(spacing:3){ForEach(CharacterSkill.allCases){skill in skillRow(skill)};Divider();HStack(spacing:6){Text("Total Level").frame(width:68,alignment:.leading);bar(Double(app.characterProfile.totalLevel)/40);Text("\(app.characterProfile.totalLevel)").frame(width:28,alignment:.trailing)}.font(.system(size:12.5))}
-                Rectangle().fill(ink.opacity(.25)).frame(width:1)
-                VStack(alignment:.leading,spacing:5){Image(systemName:"mountain.2.fill").font(.system(size:30)).foregroundStyle(Color(red:.39,green:.43,blue:.34)).frame(maxWidth:.infinity);line("Região",app.world.serverRegion ?? app.player.region);line("Posição",String(format:"%.1f, %.1f",app.player.position.x,app.player.position.z));line("Recursos","\(app.resourceCount)");line("Mobs","\(app.mobCount)");Text("Último evento").font(.system(size:11.5));Text(app.stats.lastEvent.isEmpty ? "—":app.stats.lastEvent).font(.system(size:10.5)).lineLimit(1)}
+                Rectangle().fill(ink.opacity(0.25)).frame(width:1)
+                VStack(alignment:.leading,spacing:5){Image(systemName:"mountain0.2.fill").font(.system(size:30)).foregroundStyle(Color(red:0.39,green:0.43,blue:0.34)).frame(maxWidth:.infinity);line("Região",app.world.serverRegion ?? app.player.region);line("Posição",String(format:"%0.1f, %0.1f",app.player.position.x,app.player.position.z));line("Recursos","\(app.resourceCount)");line("Mobs","\(app.mobCount)");Text("Último evento").font(.system(size:11.5));Text(app.stats.lastEvent.isEmpty ? "—":app.stats.lastEvent).font(.system(size:10.5)).lineLimit(1)}
                     .frame(width:112)
             }
         }.foregroundStyle(ink).padding(.horizontal,6).padding(.vertical,5)
     }
     private func skillRow(_ s:CharacterSkill)->some View {let l=app.characterProfile.skills.level(for:s);return HStack(spacing:6){Text(skillName(s)).frame(width:72,alignment:.leading);bar(Double(l)/40);Text("\(l)/40").frame(width:34,alignment:.trailing)}.font(.system(size:12))}
     private func skillName(_ s:CharacterSkill)->String{switch s{case .combat:"Combat";case .woodcutting:"Wood";case .mining:"Mining";case .fishing:"Fishing";case .cooking:"Cooking";case .smithing:"Smithing"}}
-    private func bar(_ p:Double)->some View {GeometryReader{g in ZStack(alignment:.leading){Capsule().fill(Color(red:.83,green:.81,blue:.76));Capsule().fill(copper).frame(width:max(6,g.size.width*min(1,max(0,p))))}}.frame(height:11)}
-    private func line(_ a:String,_ b:String)->some View {HStack(spacing:3){Text(a);Text(b).lineLimit(1).minimumScaleFactor(.7)}.font(.system(size:11))}
+    private func bar(_ p:Double)->some View {GeometryReader{g in ZStack(alignment:.leading){Capsule().fill(Color(red:0.83,green:0.81,blue:0.76));Capsule().fill(copper).frame(width:max(6,g.size.width*min(1,max(0,p))))}}.frame(height:11)}
+    private func line(_ a:String,_ b:String)->some View {HStack(spacing:3){Text(a);Text(b).lineLimit(1).minimumScaleFactor(0.7)}.font(.system(size:11))}
 
     private var metrics:some View {HStack(spacing:0){metric("Meta da sessão",app.activity==nil ? "\(app.goal)":"\(app.sessionGoal)");div;metric("Sucessos","\(app.stats.successes)");div;metric("Falhas","\(app.stats.failures)");div;metric("Tentativas","\(app.stats.attempts)")}.padding(.vertical,6)}
-    private var div:some View{Rectangle().fill(ink.opacity(.25)).frame(width:1,height:44)}
+    private var div:some View{Rectangle().fill(ink.opacity(0.25)).frame(width:1,height:44)}
     private func metric(_ t:String,_ v:String)->some View{VStack(spacing:2){Text(t).font(.system(size:10.5));Text(v).font(.system(size:22))}.frame(maxWidth:.infinity).foregroundStyle(ink)}
-    private var stop:some View{Button{if app.activity != nil{app.stop()}}label:{HStack(spacing:18){Image(systemName:"stop.fill");Text(app.activity==nil ? "PRONTO":"PARAR")}.font(.system(size:22,weight:.regular)).foregroundStyle(Color(red:.92,green:.88,blue:.82)).frame(maxWidth:.infinity,height:56).background(RoundedRectangle(cornerRadius:16).fill(app.activity==nil ? copper.opacity(.35):copper)).overlay(RoundedRectangle(cornerRadius:16).stroke(ink.opacity(.55)))}.buttonStyle(.plain).disabled(app.activity==nil)}
-    private var nav:some View{HStack(spacing:0){navB("STATS","chart.bar.fill"){showCharacterStats=true};divN;navB("QUESTS","list.bullet.rectangle"){showDailyQuests=true};divN;navB("SESSÃO","slider.horizontal.3"){showLogin=true}}.overlay(alignment:.top){Rectangle().fill(ink.opacity(.3)).frame(height:1)}.overlay(alignment:.bottom){Rectangle().fill(ink.opacity(.3)).frame(height:1)}}
-    private var divN:some View{Rectangle().fill(ink.opacity(.25)).frame(width:1,height:30)}
+    private var stop:some View{Button{if app.activity != nil{app.stop()}}label:{HStack(spacing:18){Image(systemName:"stop.fill");Text(app.activity==nil ? "PRONTO":"PARAR")}.font(.system(size:22,weight:.regular)).foregroundStyle(Color(red:0.92,green:0.88,blue:0.82)).frame(maxWidth:.infinity,height:56).background(RoundedRectangle(cornerRadius:16).fill(app.activity==nil ? copper.opacity(0.35):copper)).overlay(RoundedRectangle(cornerRadius:16).stroke(ink.opacity(0.55)))}.buttonStyle(.plain).disabled(app.activity==nil)}
+    private var nav:some View{HStack(spacing:0){navB("STATS","chart.bar.fill"){showCharacterStats=true};divN;navB("QUESTS","list.bullet.rectangle"){showDailyQuests=true};divN;navB("SESSÃO","slider.horizontal0.3"){showLogin=true}}.overlay(alignment:.top){Rectangle().fill(ink.opacity(0.3)).frame(height:1)}.overlay(alignment:.bottom){Rectangle().fill(ink.opacity(0.3)).frame(height:1)}}
+    private var divN:some View{Rectangle().fill(ink.opacity(0.25)).frame(width:1,height:30)}
     private func navB(_ t:String,_ i:String,_ a:@escaping()->Void)->some View{Button(action:a){HStack(spacing:8){Image(systemName:i).font(.system(size:20));Text(t).font(.system(size:13))}.foregroundStyle(ink).frame(maxWidth:.infinity,maxHeight:.infinity)}.buttonStyle(.plain)}
     private var log:some View{Button{showFullLog=true}label:{HStack{Image(systemName:"doc.text");Text("Log completo");Spacer();Image(systemName:"chevron.right")}.font(.system(size:14)).foregroundStyle(ink).padding(.horizontal,14)}.buttonStyle(.plain)}
 
 }
-private struct PaperTexture:View{var body:some View{ZStack{Color(red:.925,green:.91,blue:.875);Canvas{c,s in for i in 0..<280{let x=CGFloat((i*73)%997)/997*s.width,y=CGFloat((i*149)%991)/991*s.height;c.fill(Path(ellipseIn:CGRect(x:x,y:y,width:.7,height:.7)),with:.color(.black.opacity(.025)))}}}.ignoresSafeArea()}}
-private struct EmbossedPanelModifier:ViewModifier{let cornerRadius:CGFloat;let fill:Color;func body(content:Content)->some View{content.background(RoundedRectangle(cornerRadius:cornerRadius).fill(fill).shadow(color:.white.opacity(.8),radius:2,x:-2,y:-2).shadow(color:.black.opacity(.17),radius:3,x:2,y:2)).overlay(RoundedRectangle(cornerRadius:cornerRadius).stroke(Color.black.opacity(.12),lineWidth:1))}}
+private struct PaperTexture:View{var body:some View{ZStack{Color(red:0.925,green:0.91,blue:0.875);Canvas{c,s in for i in 0..<280{let x=CGFloat((i*73)%997)/997*s.width,y=CGFloat((i*149)%991)/991*s.height;c.fill(Path(ellipseIn:CGRect(x:x,y:y,width:0.7,height:0.7)),with:.color(.black.opacity(0.025)))}}}.ignoresSafeArea()}}
+private struct EmbossedPanelModifier:ViewModifier{let cornerRadius:CGFloat;let fill:Color;func body(content:Content)->some View{content.background(RoundedRectangle(cornerRadius:cornerRadius).fill(fill).shadow(color:.white.opacity(0.8),radius:2,x:-2,y:-2).shadow(color:.black.opacity(0.17),radius:3,x:2,y:2)).overlay(RoundedRectangle(cornerRadius:cornerRadius).stroke(Color.black.opacity(0.12),lineWidth:1))}}
 private extension View{func embossedPanel(cornerRadius:CGFloat,fill:Color)->some View{modifier(EmbossedPanelModifier(cornerRadius:cornerRadius,fill:fill))}}
 
 private struct DailyQuestsView: View {
@@ -399,21 +399,21 @@ private struct CharacterVoxel3DView: UIViewRepresentable {
         let isSeason = (a.topFX == "season1" || a.topFX == "season1gold") && ti == 2
         let seasonImage = isSeason ? Self.kintaraSeasonOneTee(gold: a.topFX == "season1gold") : nil
         let torsoMat = isSeason ? mat(.white, constant: true, image: seasonImage) : (ti == 0 ? skinMat : topMat)
-        let torso = part(T.0,T.1,T.2,0,T.3,0,torsoMat)
+        let torso = part(T0.0,T0.1,T0.2,0,T0.3,0,torsoMat)
 
-        let armMat = T.11 && ti > 0 ? torsoMat : skinMat
-        let armL = part(T.8,T.7,T.9,-0.225,T.10,0,armMat)
-        let armR = part(T.8,T.7,T.9, 0.225,T.10,0,armMat)
-        if T.12 {
+        let armMat = T0.11 && ti > 0 ? torsoMat : skinMat
+        let armL = part(T0.8,T0.7,T0.9,-0.225,T0.10,0,armMat)
+        let armR = part(T0.8,T0.7,T0.9, 0.225,T0.10,0,armMat)
+        if T0.12 {
             part(0.138,0.136,0.206,0,0.066,0.004,torsoMat,parent:armL,local:true)
             part(0.138,0.136,0.206,0,0.066,0.004,torsoMat,parent:armR,local:true)
         }
-        if T.4 {
-            part(0.05,0.20,0.06,-0.09,T.6,0.08,strapMat)
-            part(0.05,0.20,0.06, 0.09,T.6,0.08,strapMat)
+        if T0.4 {
+            part(0.05,0.20,0.06,-0.09,T0.6,0.08,strapMat)
+            part(0.05,0.20,0.06, 0.09,T0.6,0.08,strapMat)
         }
-        if T.5 {
-            part(T.0 + 0.05,0.21,0.27,0,T.3 + 0.20,-0.13,torsoMat)
+        if T0.5 {
+            part(T0.0 + 0.05,0.21,0.27,0,T0.3 + 0.20,-0.13,torsoMat)
         }
 
         // Exact rUe pants geometry table.
@@ -426,20 +426,20 @@ private struct CharacterVoxel3DView: UIViewRepresentable {
         ]
         let pi = max(0, min(4, a.pants))
         let P = pants[pi]
-        let legY = CGFloat(0.36) - P.1 * 0.5
+        let legY = CGFloat(0.36) - P0.1 * 0.5
         let legMat = pi == 0 ? skinMat : pantsMat
-        let legL = part(P.0,P.1,P.2,-P.3,legY,0,legMat)
-        let legR = part(P.0,P.1,P.2, P.3,legY,0,legMat)
+        let legL = part(P0.0,P0.1,P0.2,-P0.3,legY,0,legMat)
+        let legR = part(P0.0,P0.1,P0.2, P0.3,legY,0,legMat)
 
         var legSkinH: CGFloat = 0.195
-        if P.4 {
-            let g = legY - P.1 * 0.5
+        if P0.4 {
+            let g = legY - P0.1 * 0.5
             legSkinH = max(0.12, g - 0.008 - 0.06)
-            let localY = -P.1 * 0.5 - 0.008 - legSkinH * 0.5
+            let localY = -P0.1 * 0.5 - 0.008 - legSkinH * 0.5
             part(0.11,legSkinH,0.165,0,localY,0,skinMat,parent:legL,local:true)
             part(0.11,legSkinH,0.165,0,localY,0,skinMat,parent:legR,local:true)
         }
-        if P.5 {
+        if P0.5 {
             func cargo(_ x: CGFloat) {
                 let holder = SCNNode()
                 holder.position = SCNVector3(Float(sc(x)),Float(sc(legY + 0.04)) + yOffset,Float(sc(0.102)))
@@ -448,18 +448,18 @@ private struct CharacterVoxel3DView: UIViewRepresentable {
                 part(0.070,0.022,0.036,0,0.055,0.012,pantsMat,parent:holder,local:true)
                 part(0.050,0.030,0.015,0,-0.010,0.019,pantsMat,parent:holder,local:true)
             }
-            cargo(-P.3 - 0.072); cargo(P.3 + 0.072)
+            cargo(-P0.3 - 0.072); cargo(P0.3 + 0.072)
         }
 
         // Exact Nue shoe geometry + UZe anchor formula.
         if a.shoe > 0 {
             let shoes: [(CGFloat,CGFloat,CGFloat,CGFloat)] = [(0.182,0.058,0.234,0.028),(0.178,0.048,0.228,0.030)]
             let sh = shoes[min(shoes.count - 1, a.shoe - 1)]
-            let anchor = (P.4 ? -P.1*0.5 - 0.008 - legSkinH + sh.1*0.5 + 0.015
-                              : -P.1*0.5 + sh.1*0.5 + 0.015) - 0.018
-            let z = sh.3 - 0.006
-            part(sh.0,sh.1,sh.2,-0.012,anchor,z,shoeMat,parent:legL,local:true)
-            part(sh.0,sh.1,sh.2, 0.012,anchor,z,shoeMat,parent:legR,local:true)
+            let anchor = (P0.4 ? -P0.1*0.5 - 0.008 - legSkinH + sh0.1*0.5 + 0.015
+                              : -P0.1*0.5 + sh0.1*0.5 + 0.015) - 0.018
+            let z = sh0.3 - 0.006
+            part(sh0.0,sh0.1,sh0.2,-0.012,anchor,z,shoeMat,parent:legL,local:true)
+            part(sh0.0,sh0.1,sh0.2, 0.012,anchor,z,shoeMat,parent:legR,local:true)
         }
 
         // Exact base hat assets captured from pc_hatHolder.
@@ -502,7 +502,7 @@ private struct CharacterVoxel3DView: UIViewRepresentable {
             }
         }
 
-        // Exact Season 1 chest overlay: 0.32 plane at torso depth*0.5*1.04 + .012.
+        // Exact Season 1 chest overlay: 0.32 plane at torso depth*0.5*1.04 + 0.012.
         if isSeason {
             let plane = SCNPlane(width: sc(0.32), height: sc(0.32))
             let em = SCNMaterial()
@@ -511,7 +511,7 @@ private struct CharacterVoxel3DView: UIViewRepresentable {
             em.lightingModel = .constant; em.isDoubleSided = true
             plane.materials = [em]
             let badge = SCNNode(geometry:plane)
-            badge.position = SCNVector3(0,Float(sc(T.3 + 0.04)) + yOffset,Float(sc(T.2*0.5*1.04 + 0.012)))
+            badge.position = SCNVector3(0,Float(sc(T0.3 + 0.04)) + yOffset,Float(sc(T0.2*0.5*1.04 + 0.012)))
             badge.renderingOrder = 5
             root.addChildNode(badge)
             torso.renderingOrder = 4
