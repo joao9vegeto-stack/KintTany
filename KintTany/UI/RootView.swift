@@ -11,7 +11,6 @@ struct RootView: View {
     @State private var showFullLog = false
     @State private var showCharacterStats = false
     @State private var showDailyQuests = false
-    @State private var showBaitPicker = false
     @FocusState private var goalFieldFocused: Bool
 
     private let copper = Color(red: 0.67, green: 0.34, blue: 0.23)
@@ -26,17 +25,17 @@ struct RootView: View {
                 let designHeight: CGFloat = 875
                 let scale = min(proxy.size.width / designWidth, proxy.size.height / designHeight)
 
-                VStack(spacing: 9) {
+                VStack(spacing: 5) {
                     topStatusBar
-                    heroSection.frame(height: 292)
+                    heroSection.frame(height: 302)
                     statsSection.frame(height: 224)
                     sessionMetrics.frame(height: 62)
                     pauseButton.frame(height: 66)
-                    bottomNavigation.frame(height: 54)
-                    fullLogButton.frame(height: 48)
+                    bottomNavigation.frame(height: 52)
+                    fullLogButton.frame(height: 46)
                 }
-                .padding(.horizontal, 14)
-                .padding(.vertical, 5)
+                .padding(.horizontal, 12)
+                .padding(.vertical, 4)
                 .frame(width: designWidth, height: designHeight, alignment: .top)
                 .scaleEffect(scale, anchor: .top)
                 .frame(width: proxy.size.width, height: proxy.size.height, alignment: .top)
@@ -74,15 +73,6 @@ struct RootView: View {
         }
         .sheet(isPresented: $showDailyQuests) {
             DailyQuestsView().environmentObject(app).preferredColorScheme(.dark)
-        }
-        .confirmationDialog("Selecionar isca", isPresented: $showBaitPicker, titleVisibility: .visible) {
-            ForEach(FishingBait.allCases) { bait in
-                Button(app.selectedFishingBait == bait ? "✓ \(bait.displayName)" : bait.displayName) {
-                    app.selectedFishingBait = bait
-                    app.start(.fishing)
-                }
-            }
-            Button("Cancelar", role: .cancel) {}
         }
         .toolbar {
             ToolbarItemGroup(placement: .keyboard) {
@@ -143,8 +133,8 @@ struct RootView: View {
     }
 
     private var heroSection: some View {
-        HStack(spacing: 12) {
-            characterPanel.frame(width: 128)
+        HStack(spacing: 10) {
+            characterPanel.frame(width: 150)
             VStack(spacing: 6) {
                 activeSummary
                 activitySelector
@@ -156,8 +146,8 @@ struct RootView: View {
         ZStack {
             if app.hasSession {
                 CharacterVoxel3DView(appearance: app.characterProfile.appearance)
-                    .padding(.horizontal, 1)
-                    .padding(.vertical, 5)
+                    .padding(.horizontal, -12)
+                    .padding(.vertical, -18)
             } else {
                 VStack(spacing: 10) {
                     Image(systemName: "person.crop.square").font(.system(size: 48, weight: .medium))
@@ -251,20 +241,16 @@ struct RootView: View {
     private func resourceTile(_ mode: ActivityMode) -> some View {
         let tile = Button {
             guard app.activity == nil else { return }
-            if mode == .fishing {
-                showBaitPicker = true
-            } else {
-                app.start(mode)
-            }
+            app.start(mode)
         } label: {
             VStack(spacing: 4) {
                 Image(activitySprite(mode))
                     .resizable()
                     .scaledToFit()
-                    .frame(width: 42, height: 42)
+                    .frame(width: 47, height: 47)
                     .shadow(color: .black.opacity(0.20), radius: 1.2, x: 1, y: 1)
                 Text(mode.localizedTitle)
-                    .font(.system(size: 12.2, weight: .medium, design: .rounded))
+                    .font(.system(size: 12.8, weight: .medium, design: .rounded))
                     .foregroundStyle(ink)
                     .lineLimit(1)
                     .minimumScaleFactor(0.72)
@@ -275,7 +261,7 @@ struct RootView: View {
                         .lineLimit(1)
                 }
             }
-            .frame(maxWidth: .infinity, minHeight: 68)
+            .frame(maxWidth: .infinity, minHeight: 72)
         }
         .buttonStyle(.plain)
         .disabled(app.activity != nil)
@@ -348,11 +334,17 @@ struct RootView: View {
                 }
                 .frame(maxWidth: .infinity)
                 Rectangle().fill(ink.opacity(0.22)).frame(width: 1).padding(.vertical, 3)
-                telemetryColumn.frame(width: 154)
+                telemetryColumn.frame(width: 142)
             }
         }
-        .padding(10)
-        .embossedPanel(cornerRadius: 18, fill: paper)
+        .padding(.horizontal, 8)
+        .padding(.vertical, 7)
+        .overlay(alignment: .top) {
+            Rectangle().fill(ink.opacity(0.32)).frame(height: 1)
+        }
+        .overlay(alignment: .bottom) {
+            Rectangle().fill(ink.opacity(0.32)).frame(height: 1)
+        }
     }
 
     private func skillRow(_ skill: CharacterSkill) -> some View {
@@ -361,7 +353,7 @@ struct RootView: View {
             Text(skill.localizedName)
                 .font(.system(size: 13.5, weight: .medium, design: .rounded))
                 .foregroundStyle(ink)
-                .frame(width: 95, alignment: .leading)
+                .frame(width: 82, alignment: .leading)
                 .lineLimit(1)
             skillBar(progress: Double(level) / 40.0).frame(height: 15)
             Text("\(level)/40")
@@ -433,9 +425,14 @@ struct RootView: View {
             metricDivider
             sessionMetric(title: "Tentativas", value: "\(app.stats.attempts)")
         }
-        .padding(.vertical, 9)
+        .padding(.vertical, 7)
         .padding(.horizontal, 4)
-        .embossedPanel(cornerRadius: 16, fill: paper)
+        .overlay(alignment: .top) {
+            Rectangle().fill(ink.opacity(0.32)).frame(height: 1)
+        }
+        .overlay(alignment: .bottom) {
+            Rectangle().fill(ink.opacity(0.32)).frame(height: 1)
+        }
     }
 
     private var goalMetric: some View {
@@ -521,9 +518,10 @@ struct RootView: View {
             navDivider
             navButton(title: "SESSÃO", icon: "slider.horizontal.3") { showLogin = true }
         }
-        .frame(height: 58)
+        .frame(height: 54)
         .padding(.horizontal, 2)
-        .embossedPanel(cornerRadius: 14, fill: paper)
+        .overlay(alignment: .top) { Rectangle().fill(ink.opacity(0.30)).frame(height: 1) }
+        .overlay(alignment: .bottom) { Rectangle().fill(ink.opacity(0.30)).frame(height: 1) }
     }
 
     private func navButton(title: String, icon: String, action: @escaping () -> Void) -> some View {
@@ -555,7 +553,7 @@ struct RootView: View {
             .frame(height: 52)
         }
         .buttonStyle(.plain)
-        .embossedPanel(cornerRadius: 14, fill: paper)
+        .overlay(alignment: .bottom) { Rectangle().fill(ink.opacity(0.30)).frame(height: 1) }
     }
 }
 
@@ -565,9 +563,9 @@ private struct PaperTexture: View {
         ZStack {
             LinearGradient(
                 colors: [
-                    Color(red: 0.94, green: 0.925, blue: 0.89),
-                    paper,
-                    Color(red: 0.88, green: 0.865, blue: 0.825)
+                    Color(red: 0.955, green: 0.945, blue: 0.915),
+                    Color(red: 0.925, green: 0.91, blue: 0.875),
+                    Color(red: 0.895, green: 0.88, blue: 0.84)
                 ],
                 startPoint: .topLeading,
                 endPoint: .bottomTrailing
