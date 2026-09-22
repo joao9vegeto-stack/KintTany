@@ -683,7 +683,7 @@ private struct DailyQuestsView: View {
     }
 }
 
-private struct CharacterVoxel3DView: UIViewRepresentable {
+struct CharacterVoxel3DView: UIViewRepresentable {
     let appearance: CharacterAppearance
 
     func makeCoordinator() -> Coordinator { Coordinator() }
