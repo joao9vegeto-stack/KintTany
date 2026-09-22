@@ -543,6 +543,13 @@ final class AppStore: ObservableObject {
     /// delaying ACK ingestion, movement or action frames.
     private func engineReporter(runID: UUID) -> AutomationEngine.Reporter {
         { [weak self] event in
+            // Build 101: gather TRACE is hot-path telemetry only. Do not enqueue
+            // one MainActor task per hit/proof/progress/ACK while backgrounded.
+            // The authoritative gather state still stays inside AutomationEngine.
+            if case .diagnostic(let value) = event,
+               value.hasPrefix("[GATHER][TRACE]") {
+                return
+            }
             Task { @MainActor [weak self] in
                 self?.handleEngineEvent(event, runID: runID)
             }
@@ -1049,7 +1056,6 @@ final class AppStore: ObservableObject {
             value.hasPrefix("[SERVER]") ||
             value.hasPrefix("[BANK]") ||
             value.hasPrefix("[GATHER][TIMING]") ||
-            value.hasPrefix("[GATHER][TRACE]") ||
             value.hasPrefix("[BG]") ||
             value.hasPrefix("[WARN]") ||
             value.hasPrefix("[ERROR]") ||
