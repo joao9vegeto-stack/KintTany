@@ -14,7 +14,8 @@
 		100000000000000000000010 = {isa = PBXBuildFile; fileRef = 400000000000000000000010; };
 		100000000000000000000011 = {isa = PBXBuildFile; fileRef = 400000000000000000000011; };
 		100000000000000000000012 = {isa = PBXBuildFile; fileRef = 400000000000000000000012; };
-		100000000000000000000013 = {isa = PBXBuildFile; fileRef = 400000000000000000000013; };\n\t\t100000000000000000000014 = {isa = PBXBuildFile; fileRef = 400000000000000000000014; };
+		100000000000000000000013 = {isa = PBXBuildFile; fileRef = 400000000000000000000013; };
+		100000000000000000000014 = {isa = PBXBuildFile; fileRef = 400000000000000000000014; };
 		200000000000000000000001 = {isa = PBXContainerItemProxy; containerPortal = 800000000000000000000001; proxyType = 1; remoteGlobalIDString = 700000000000000000000001; remoteInfo = KintTany; };
 		300000000000000000000001 = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = KintTany.app; sourceTree = BUILT_PRODUCTS_DIR; };
 		300000000000000000000002 = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = KintTanyTests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
@@ -30,7 +31,8 @@
 		400000000000000000000010 = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = XCTest.framework; path = System/Library/Frameworks/XCTest.framework; sourceTree = SDKROOT; };
 		400000000000000000000011 = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Bot/AutomationEngine.swift; sourceTree = "<group>"; };
 		400000000000000000000012 = {isa = PBXFileReference; lastKnownFileType = folder.assetcatalog; path = Assets.xcassets; sourceTree = "<group>"; };
-		400000000000000000000013 = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Persistence/GatherKnowledgeStore.swift; sourceTree = "<group>"; };\n\t\t400000000000000000000014 = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = UI/ReplicaUI.swift; sourceTree = "<group>"; };
+		400000000000000000000013 = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Persistence/GatherKnowledgeStore.swift; sourceTree = "<group>"; };
+		400000000000000000000014 = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = UI/ReplicaUI.swift; sourceTree = "<group>"; };
 		500000000000000000000001 = {isa = PBXFrameworksBuildPhase; buildActionMask = 2147483647; files = (); runOnlyForDeploymentPostprocessing = 0; };
 		500000000000000000000002 = {isa = PBXFrameworksBuildPhase; buildActionMask = 2147483647; files = (100000000000000000000010,); runOnlyForDeploymentPostprocessing = 0; };
 		600000000000000000000001 = {isa = PBXGroup; children = (600000000000000000000002, 600000000000000000000003, 600000000000000000000004); sourceTree = "<group>"; };
