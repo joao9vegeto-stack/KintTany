@@ -5,123 +5,40 @@ import WebKit
 import SceneKit
 
 struct RootView: View {
-    @EnvironmentObject var app: AppStore
-    @Environment(\.scenePhase) private var scenePhase
-    @State private var showLogin=false
-    @State private var showFullLog=false
-    @State private var showCharacterStats=false
-    @State private var showDailyQuests=false
-    @FocusState private var goalFieldFocused: Bool
-    private let ink=Color(red:0.16,green:0.15,blue:0.14)
-    private let copper=Color(red:0.67,green:0.34,blue:0.23)
-    private let paper=Color(red:0.925,green:0.91,blue:0.875)
-
-    var body: some View {
-        ZStack {
-            PaperTexture()
-            GeometryReader { g in
-                let W:CGFloat=390, H:CGFloat=800
-                let s=min(g.size.width/W,g.size.height/H)
-                VStack(spacing:0) {
-                    header.frame(height:50)
-                    hero.frame(height:280)
-                    Divider().overlay(ink.opacity(0.35))
-                    stats.frame(height:202)
-                    Divider().overlay(ink.opacity(0.35))
-                    metrics.frame(height:58)
-                    stop.frame(height:66)
-                    nav.frame(height:52)
-                    log.frame(height:46)
-                }
-                .padding(.horizontal,10).frame(width:W,height:H,alignment:.top)
-                .scaleEffect(s,anchor:.top).frame(width:g.size.width,height:g.size.height,alignment:.top)
-            }
-        }
-        .preferredColorScheme(.light)
-        .sheet(isPresented:$showLogin){LoginWebView(onCookie:{app.saveCookie($0);showLogin=false},onDiagnostic:{app.diagnostic($0)}).preferredColorScheme(.dark)}
-        .sheet(isPresented:$showFullLog){FullLogView().environmentObject(app).preferredColorScheme(.dark)}
-        .sheet(isPresented:$showCharacterStats){CharacterStatsView().environmentObject(app).preferredColorScheme(.dark)}
-        .sheet(isPresented:$showDailyQuests){DailyQuestsView().environmentObject(app).preferredColorScheme(.dark)}
-        .toolbar{ToolbarItemGroup(placement:.keyboard){Spacer();Button("OK"){app.goal=min(100000,max(1,app.goal));goalFieldFocused=false}}}
-        .onChange(of:scenePhase){_,p in app.handleScenePhase(p)}
-        .task{await app.refreshCharacterProfile()}
-    }
-
-    private var header: some View {
-        ZStack {
-            Text("KintTany").font(.system(size:28,weight:.regular,design:.rounded))
-            HStack(spacing:7){Circle().fill(app.connected ? Color(red:0.42,green:0.54,blue:0.39):Color(red:0.70,green:0.55,blue:0.31)).frame(width:14,height:14).overlay(Circle().stroke(ink.opacity(0.35)));Text(app.connected ? "ONLINE":"PRONTO").font(.system(size:15,weight:.regular));Spacer()}
-        }.foregroundStyle(ink).padding(.horizontal,8)
-    }
-
-    private var hero: some View {
-        HStack(spacing:12) {
-            ZStack {
-                if app.hasSession { CharacterVoxel3DView(appearance:app.characterProfile.appearance).scaleEffect(1.56).padding(-28) }
-                else { Image(systemName:"person.crop.square").font(.system(size:48)).foregroundStyle(ink.opacity(0.5)) }
-            }
-            .frame(width:108).contentShape(Rectangle()).onTapGesture{app.hasSession ? (showCharacterStats=true):(showLogin=true)}
-            .embossedPanel(cornerRadius:16,fill:paper)
-            VStack(spacing:4) {
-                HStack{Text(app.activity?.localizedTitle ?? "Selecione");Spacer();Text("\(app.stats.successes)/\(app.activity == nil ? app.goal:app.sessionGoal)")}
-                    .font(.system(size:20,weight:.regular,design:.rounded))
-                beads
-                HStack{Text("Progresso \(app.stats.successes)/\(app.activity == nil ? app.goal:app.sessionGoal)");Spacer();Text(app.activity == nil ? "Aguardando resultado":app.state.label)}
-                    .font(.system(size:11.5)).lineLimit(1)
-                activities
-            }.foregroundStyle(ink)
-        }.padding(.vertical,4)
-    }
-
-    private var beads: some View {
-        HStack(spacing:5){ForEach(0..<12,id:\.self){i in Circle().fill(i < max(0,min(12,Int(ceil(app.progress*12)))) ? copper:Color(red:0.83,green:0.81,blue:0.76)).frame(width:17,height:17).overlay(Circle().stroke(ink.opacity(0.16)))}}.padding(5).background(Capsule().fill(Color(red:0.87,green:0.85,blue:0.80)).shadow(color:.black.opacity(0.15),radius:2,x:1,y:1))
-    }
-
-    private var activities: some View {
-        let cols=Array(repeating:GridItem(.flexible(),spacing:2),count:5)
-        return LazyVGrid(columns:cols,spacing:3){ForEach(ActivityMode.allCases){m in tile(m)}}.frame(maxHeight:.infinity)
-    }
-    @ViewBuilder private func tile(_ m:ActivityMode)->some View {
-        if m == .fishing {
-            Menu { ForEach(FishingBait.allCases){b in Button{app.selectedFishingBait=b;app.start(.fishing)}label:{Text((app.selectedFishingBait==b ? "✓ ":"")+b.displayName)}} }
-            label:{tileLabel(m)}.buttonStyle(.plain).disabled(app.activity != nil)
-        } else { Button{guard app.activity==nil else{return};app.start(m)}label:{tileLabel(m)}.buttonStyle(.plain).disabled(app.activity != nil) }
-    }
-    private func tileLabel(_ m:ActivityMode)->some View {
-        VStack(spacing:1){Image(sprite(m)).resizable().scaledToFit().frame(width:46,height:46);Text(m.localizedTitle).font(.system(size:11.5)).lineLimit(1).minimumScaleFactor(0.7);if m == .fishing {Text(bait).font(.system(size:8)).foregroundStyle(ink.opacity(0.55))}}
-        .foregroundStyle(ink).frame(maxWidth:.infinity,minHeight:66).opacity(app.activity==nil ? 1:0.45)
-    }
-    private var bait:String {switch app.selectedFishingBait{case .feather:"Feather";case .trout:"Trout";case .bass:"Bass";case .tuna:"Tuna";case .squid:"Squid"}}
-    private func sprite(_ m:ActivityMode)->String {switch m{case .tree:"CloneWood";case .coal:"CloneCoal";case .stone:"CloneStone";case .iron:"CloneIron";case .silver:"CloneSilver";case .cacti:"CloneCacti";case .fishing:"CloneFishing";case .chicken:"CloneChicken";case .zombie:"CloneZombie";case .dragon:"CloneDragon"}}
-
-    private var stats: some View {
-        VStack(alignment:.leading,spacing:3) {
-            Text("STATS").font(.system(size:20,weight:.regular))
-            HStack(spacing:8) {
-                VStack(spacing:3){ForEach(CharacterSkill.allCases){skill in skillRow(skill)};Divider();HStack(spacing:6){Text("Total Level").frame(width:68,alignment:.leading);bar(Double(app.characterProfile.totalLevel)/40);Text("\(app.characterProfile.totalLevel)").frame(width:28,alignment:.trailing)}.font(.system(size:12.5))}
-                Rectangle().fill(ink.opacity(0.25)).frame(width:1)
-                VStack(alignment:.leading,spacing:5){Image(systemName:"mountain0.2.fill").font(.system(size:30)).foregroundStyle(Color(red:0.39,green:0.43,blue:0.34)).frame(maxWidth:.infinity);line("Região",app.world.serverRegion ?? app.player.region);line("Posição",String(format:"%0.1f, %0.1f",app.player.position.x,app.player.position.z));line("Recursos","\(app.resourceCount)");line("Mobs","\(app.mobCount)");Text("Último evento").font(.system(size:11.5));Text(app.stats.lastEvent.isEmpty ? "—":app.stats.lastEvent).font(.system(size:10.5)).lineLimit(1)}
-                    .frame(width:112)
-            }
-        }.foregroundStyle(ink).padding(.horizontal,6).padding(.vertical,5)
-    }
-    private func skillRow(_ s:CharacterSkill)->some View {let l=app.characterProfile.skills.level(for:s);return HStack(spacing:6){Text(skillName(s)).frame(width:72,alignment:.leading);bar(Double(l)/40);Text("\(l)/40").frame(width:34,alignment:.trailing)}.font(.system(size:12))}
-    private func skillName(_ s:CharacterSkill)->String{switch s{case .combat:"Combat";case .woodcutting:"Wood";case .mining:"Mining";case .fishing:"Fishing";case .cooking:"Cooking";case .smithing:"Smithing"}}
-    private func bar(_ p:Double)->some View {GeometryReader{g in ZStack(alignment:.leading){Capsule().fill(Color(red:0.83,green:0.81,blue:0.76));Capsule().fill(copper).frame(width:max(6,g.size.width*min(1,max(0,p))))}}.frame(height:11)}
-    private func line(_ a:String,_ b:String)->some View {HStack(spacing:3){Text(a);Text(b).lineLimit(1).minimumScaleFactor(0.7)}.font(.system(size:11))}
-
-    private var metrics:some View {HStack(spacing:0){metric("Meta da sessão",app.activity==nil ? "\(app.goal)":"\(app.sessionGoal)");div;metric("Sucessos","\(app.stats.successes)");div;metric("Falhas","\(app.stats.failures)");div;metric("Tentativas","\(app.stats.attempts)")}.padding(.vertical,6)}
-    private var div:some View{Rectangle().fill(ink.opacity(0.25)).frame(width:1,height:44)}
-    private func metric(_ t:String,_ v:String)->some View{VStack(spacing:2){Text(t).font(.system(size:10.5));Text(v).font(.system(size:22))}.frame(maxWidth:.infinity).foregroundStyle(ink)}
-    private var stop:some View{Button{if app.activity != nil{app.stop()}}label:{HStack(spacing:18){Image(systemName:"stop.fill");Text(app.activity==nil ? "PRONTO":"PARAR")}.font(.system(size:22,weight:.regular)).foregroundStyle(Color(red:0.92,green:0.88,blue:0.82)).frame(maxWidth:.infinity,minHeight:56,maxHeight:56).background(RoundedRectangle(cornerRadius:16).fill(app.activity==nil ? copper.opacity(0.35):copper)).overlay(RoundedRectangle(cornerRadius:16).stroke(ink.opacity(0.55)))}.buttonStyle(.plain).disabled(app.activity==nil)}
-    private var nav:some View{HStack(spacing:0){navB("STATS","chart.bar.fill"){showCharacterStats=true};divN;navB("QUESTS","list.bullet.rectangle"){showDailyQuests=true};divN;navB("SESSÃO","slider.horizontal.3"){showLogin=true}}.overlay(alignment:.top){Rectangle().fill(ink.opacity(0.3)).frame(height:1)}.overlay(alignment:.bottom){Rectangle().fill(ink.opacity(0.3)).frame(height:1)}}
-    private var divN:some View{Rectangle().fill(ink.opacity(0.25)).frame(width:1,height:30)}
-    private func navB(_ t:String,_ i:String,_ a:@escaping()->Void)->some View{Button(action:a){HStack(spacing:8){Image(systemName:i).font(.system(size:20));Text(t).font(.system(size:13))}.foregroundStyle(ink).frame(maxWidth:.infinity,maxHeight:.infinity)}.buttonStyle(.plain)}
-    private var log:some View{Button{showFullLog=true}label:{HStack{Image(systemName:"doc.text");Text("Log completo");Spacer();Image(systemName:"chevron.right")}.font(.system(size:14)).foregroundStyle(ink).padding(.horizontal,14)}.buttonStyle(.plain)}
-
+ @EnvironmentObject var app:AppStore
+ @Environment(\.scenePhase) private var scenePhase
+ @State private var showLogin=false,showFullLog=false,showCharacterStats=false,showDailyQuests=false
+ private let ink=Color(red:0.14,green:0.13,blue:0.12), copper=Color(red:0.66,green:0.34,blue:0.23), paper=Color(red:0.91,green:0.895,blue:0.855)
+ var body:some View{ZStack{PaperTexture();GeometryReader{g in let W:CGFloat=390,H:CGFloat=780;let s=min(g.size.width/W,g.size.height/H);VStack(spacing:0){header.frame(height:52);hero.frame(height:270);rule;stats.frame(height:190);rule;metrics.frame(height:62);action.frame(height:70);nav.frame(height:52);log.frame(height:48)}.padding(.horizontal,22).frame(width:W,height:H,alignment:.top).scaleEffect(s,anchor:.top).frame(width:g.size.width,height:g.size.height,alignment:.top)}}.preferredColorScheme(.light)
+ .sheet(isPresented:$showLogin){LoginWebView(onCookie:{app.saveCookie($0);showLogin=false},onDiagnostic:{app.diagnostic($0)})}
+ .sheet(isPresented:$showFullLog){FullLogView().environmentObject(app)}
+ .sheet(isPresented:$showCharacterStats){CharacterStatsView().environmentObject(app)}
+ .sheet(isPresented:$showDailyQuests){DailyQuestsView().environmentObject(app)}
+ .onChange(of:scenePhase){_,p in app.handleScenePhase(p)}.task{await app.refreshCharacterProfile()}}
+ private var rule:some View{Rectangle().fill(ink.opacity(0.38)).frame(height:1)}
+ private var header:some View{ZStack{Text("KintTany").font(.system(size:28,weight:.regular,design:.rounded));HStack(spacing:7){Circle().fill(app.connected ? Color(red:0.39,green:0.50,blue:0.38):Color(red:0.68,green:0.52,blue:0.29)).frame(width:14,height:14).overlay(Circle().stroke(ink.opacity(0.5)));Text(app.connected ? "ONLINE":"PRONTO").font(.system(size:14));Spacer()}}.foregroundStyle(ink)}
+ private var hero:some View{HStack(spacing:14){ZStack{if app.hasSession{CharacterVoxel3DView(appearance:app.characterProfile.appearance).scaleEffect(1.34).padding(-18)}else{Image(systemName:"person.crop.square").font(.system(size:46)).foregroundStyle(ink.opacity(0.4))}}.frame(width:108).embossedPanel(cornerRadius:15,fill:paper).onTapGesture{if app.hasSession{showCharacterStats=true}else{showLogin=true}}
+ VStack(spacing:5){rule;HStack{Text(app.activity?.localizedTitle ?? "Selecione");Spacer();Text("\(app.stats.successes)/\(app.activity == nil ? app.goal:app.sessionGoal)")}.font(.system(size:19));beads;HStack{Text("Progresso \(app.stats.successes)/\(app.activity == nil ? app.goal:app.sessionGoal)");Spacer();Text(app.activity == nil ? "Aguardando resultado":app.state.label)}.font(.system(size:11)).lineLimit(1);activityTray}.foregroundStyle(ink)}} 
+ private var beads:some View{HStack(spacing:6){ForEach(0..<12,id:\.self){i in Circle().fill(i<max(0,min(12,Int(ceil(app.progress*12)))) ? copper:paper).frame(width:15,height:15).overlay(Circle().stroke(ink.opacity(0.18)))}}.padding(5).background(Capsule().fill(paper).shadow(color:.white.opacity(0.85),radius:2,x:-2,y:-2).shadow(color:.black.opacity(0.18),radius:3,x:2,y:2))}
+ private var activityTray:some View{VStack(spacing:0){HStack(spacing:0){tile(.tree);tile(.coal);tile(.iron);tile(.silver);tile(.cacti)}.frame(height:76);HStack(spacing:0){tile(.fishing);tile(.chicken);tile(.zombie);tile(.dragon);Color.clear.frame(maxWidth:.infinity)}.frame(height:76)}.padding(.horizontal,4).padding(.vertical,3).background(RoundedRectangle(cornerRadius:20).fill(paper).shadow(color:.white.opacity(0.9),radius:2,x:-2,y:-2).shadow(color:.black.opacity(0.18),radius:3,x:2,y:2)).overlay(RoundedRectangle(cornerRadius:20).stroke(ink.opacity(0.08)))}
+ @ViewBuilder private func tile(_ m:ActivityMode)->some View{Button{guard app.activity==nil else{return};if m == .fishing{app.start(.fishing)}else{app.start(m)}}label:{VStack(spacing:1){Image(sprite(m)).resizable().scaledToFit().frame(width:39,height:39);Text(m.localizedTitle).font(.system(size:9.5)).lineLimit(1).minimumScaleFactor(0.7)}.foregroundStyle(ink).frame(maxWidth:.infinity,maxHeight:.infinity)}.buttonStyle(.plain).disabled(app.activity != nil)}
+ private func sprite(_ m:ActivityMode)->String{switch m{case .tree:"CloneWood";case .coal:"CloneCoal";case .stone:"CloneStone";case .iron:"CloneIron";case .silver:"CloneSilver";case .cacti:"CloneCacti";case .fishing:"CloneFishing";case .chicken:"CloneChicken";case .zombie:"CloneZombie";case .dragon:"CloneDragon"}}
+ private var stats:some View{VStack(alignment:.leading,spacing:3){Text("STATS").font(.system(size:20));HStack(spacing:12){VStack(spacing:4){ForEach(CharacterSkill.allCases){skillRow($0)};rule;HStack(spacing:5){Text("Total Level").frame(width:68,alignment:.leading);bar(Double(app.characterProfile.totalLevel)/40);Text("\(app.characterProfile.totalLevel)").frame(width:27,alignment:.trailing)}.font(.system(size:11.5))}.frame(maxWidth:.infinity);Rectangle().fill(ink.opacity(0.28)).frame(width:1);VStack(alignment:.leading,spacing:5){Image(systemName:"mountain.2.fill").font(.system(size:28)).foregroundStyle(Color(red:0.38,green:0.43,blue:0.34));datum("Região",app.world.serverRegion ?? app.player.region);datum("Posição",String(format:"%0.1f, %0.1f",app.player.position.x,app.player.position.z));datum("Recursos","\(app.resourceCount)");datum("Mobs","\(app.mobCount)");Text("Último evento").font(.system(size:11));Text(app.stats.lastEvent.isEmpty ? "—":app.stats.lastEvent).font(.system(size:10.5)).lineLimit(2)}.frame(width:100,alignment:.leading)}}.foregroundStyle(ink).padding(.horizontal,6).padding(.vertical,5)}
+ private func skillRow(_ s:CharacterSkill)->some View{let l=app.characterProfile.skills.level(for:s);return HStack(spacing:5){Text(skillName(s)).frame(width:68,alignment:.leading);bar(Double(l)/40);Text("\(l)/40").frame(width:30,alignment:.trailing)}.font(.system(size:11.5))}
+ private func skillName(_ s:CharacterSkill)->String{switch s{case .combat:"Combat";case .woodcutting:"Wood";case .mining:"Mining";case .fishing:"Fishing";case .cooking:"Cooking";case .smithing:"Smithing"}}
+ private func bar(_ p:Double)->some View{GeometryReader{g in ZStack(alignment:.leading){Capsule().fill(Color.black.opacity(0.08)).shadow(color:.black.opacity(0.16),radius:1,x:1,y:1);Capsule().fill(copper).frame(width:max(5,g.size.width*min(1,max(0,p))))}}.frame(height:11)}
+ private func datum(_ a:String,_ b:String)->some View{HStack(spacing:3){Text(a);Text(b).lineLimit(1).minimumScaleFactor(0.7)}.font(.system(size:10.5))}
+ private var metrics:some View{HStack(spacing:0){metric("Meta da sessão",app.activity==nil ? "\(app.goal)":"\(app.sessionGoal)");vline;metric("Sucessos","\(app.stats.successes)");vline;metric("Falhas","\(app.stats.failures)");vline;metric("Tentativas","\(app.stats.attempts)")}.padding(.vertical,5)}
+ private var vline:some View{Rectangle().fill(ink.opacity(0.28)).frame(width:1,height:42)}
+ private func metric(_ t:String,_ v:String)->some View{VStack(spacing:2){Text(t).font(.system(size:10));Text(v).font(.system(size:21))}.frame(maxWidth:.infinity).foregroundStyle(ink)}
+ private var action:some View{Button{if app.activity != nil{app.stop()}}label:{HStack(spacing:16){Image(systemName:"stop.fill");Text(app.activity == nil ? "PRONTO":"PARAR")}.font(.system(size:20)).foregroundStyle(Color(red:0.93,green:0.89,blue:0.83)).frame(maxWidth:.infinity,minHeight:54,maxHeight:54).background(RoundedRectangle(cornerRadius:14).fill(app.activity == nil ? copper.opacity(0.25):copper).shadow(color:.white.opacity(0.8),radius:1,x:-1,y:-1).shadow(color:.black.opacity(0.25),radius:2,x:2,y:2)).overlay(RoundedRectangle(cornerRadius:14).stroke(ink.opacity(0.55)))}.buttonStyle(.plain).disabled(app.activity==nil)}
+ private var nav:some View{HStack(spacing:0){navB("STATS","chart.bar.fill"){showCharacterStats=true};vnav;navB("QUESTS","list.bullet"){showDailyQuests=true};vnav;navB("SESSÃO","slider.horizontal.3"){showLogin=true}}.overlay(alignment:.top){rule}.overlay(alignment:.bottom){rule}}
+ private var vnav:some View{Rectangle().fill(ink.opacity(0.28)).frame(width:1,height:30)}
+ private func navB(_ t:String,_ i:String,_ a:@escaping()->Void)->some View{Button(action:a){HStack(spacing:8){Image(systemName:i).font(.system(size:18));Text(t).font(.system(size:12.5))}.foregroundStyle(ink).frame(maxWidth:.infinity,maxHeight:.infinity)}.buttonStyle(.plain)}
+ private var log:some View{Button{showFullLog=true}label:{HStack{Image(systemName:"list.bullet.rectangle");Text("Log completo");Spacer();Image(systemName:"chevron.right")}.font(.system(size:13.5)).foregroundStyle(ink).padding(.horizontal,8)}.buttonStyle(.plain)}
 }
-private struct PaperTexture:View{var body:some View{ZStack{Color(red:0.925,green:0.91,blue:0.875);Canvas{c,s in for i in 0..<280{let x=CGFloat((i*73)%997)/997*s.width,y=CGFloat((i*149)%991)/991*s.height;c.fill(Path(ellipseIn:CGRect(x:x,y:y,width:0.7,height:0.7)),with:.color(.black.opacity(0.025)))}}}.ignoresSafeArea()}}
-private struct EmbossedPanelModifier:ViewModifier{let cornerRadius:CGFloat;let fill:Color;func body(content:Content)->some View{content.background(RoundedRectangle(cornerRadius:cornerRadius).fill(fill).shadow(color:.white.opacity(0.8),radius:2,x:-2,y:-2).shadow(color:.black.opacity(0.17),radius:3,x:2,y:2)).overlay(RoundedRectangle(cornerRadius:cornerRadius).stroke(Color.black.opacity(0.12),lineWidth:1))}}
+private struct PaperTexture:View{var body:some View{ZStack{Color(red:0.91,green:0.895,blue:0.855);Canvas{c,s in for i in 0..<420{let x=CGFloat((i*73)%997)/997*s.width,y=CGFloat((i*149)%991)/991*s.height;c.fill(Path(ellipseIn:CGRect(x:x,y:y,width:0.8,height:0.8)),with:.color(.black.opacity(0.025)))}}}.ignoresSafeArea()}}
+private struct EmbossedPanelModifier:ViewModifier{let cornerRadius:CGFloat;let fill:Color;func body(content:Content)->some View{content.background(RoundedRectangle(cornerRadius:cornerRadius).fill(fill).shadow(color:.white.opacity(0.88),radius:2,x:-2,y:-2).shadow(color:.black.opacity(0.18),radius:3,x:2,y:2)).overlay(RoundedRectangle(cornerRadius:cornerRadius).stroke(Color.black.opacity(0.10),lineWidth:1))}}
 private extension View{func embossedPanel(cornerRadius:CGFloat,fill:Color)->some View{modifier(EmbossedPanelModifier(cornerRadius:cornerRadius,fill:fill))}}
 
 private struct DailyQuestsView: View {
