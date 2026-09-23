@@ -1618,20 +1618,6 @@ final class AppStore: ObservableObject {
             // correta. Esse é o ciclo que funcionou nas builds estáveis e evita tentar
             // World→Eldergrove na Presence recém-usada pelo banco.
             let bootstrap: PresenceBootstrap
-            if mode == .roastPit {
-                state = .syncing
-                statusMessage = "🔥 Preparando Roast Pit"
-                stats.lastEvent = "Roast Pit • \(selectedRoastMode.label)"
-                updateContinuedProcessingProgress(forceTitleUpdate: true)
-                let result = try await AutomationEngine.runRoastPitHTTP(cookie: cookie, shard: selectedShard, mode: selectedRoastMode, goal: runGoal, reporter: engineReporter(runID: runID))
-                stats.successes = result.successes
-                activity = nil
-                state = result.completedGoal ? .completed : .failed
-                statusMessage = result.completedGoal ? "Meta do Roast Pit concluída" : "Roast Pit interrompido"
-                finishContinuedProcessing(success: result.completedGoal, reason: result.completedGoal ? "meta concluída" : "Roast Pit interrompido")
-                return
-            }
-
             if mode == .fishing {
                 // Fishing always starts with a safe World Presence for the
                 // transactional rod+bait bank preflight. A fresh activity
@@ -1654,6 +1640,20 @@ final class AppStore: ObservableObject {
             let selectedShard = connection.shard
             activeShard = selectedShard
             await importSocketTrace()
+
+            if mode == .roastPit {
+                state = .syncing
+                statusMessage = "🔥 Preparando Roast Pit"
+                stats.lastEvent = "Roast Pit • \(selectedRoastMode.label)"
+                updateContinuedProcessingProgress(forceTitleUpdate: true)
+                let result = try await AutomationEngine.runRoastPitHTTP(cookie: cookie, shard: selectedShard, mode: selectedRoastMode, goal: runGoal, reporter: engineReporter(runID: runID))
+                stats.successes = result.successes
+                activity = nil
+                state = result.completedGoal ? .completed : .failed
+                statusMessage = result.completedGoal ? "Meta do Roast Pit concluída" : "Roast Pit interrompido"
+                finishContinuedProcessing(success: result.completedGoal, reason: result.completedGoal ? "meta concluída" : "Roast Pit interrompido")
+                return
+            }
 
             log("Servidor NA selecionado automaticamente: \(connection.serverName) (\(selectedShard)) • carga \(connection.populationLabel) • fila \(connection.queueLength)")
 
