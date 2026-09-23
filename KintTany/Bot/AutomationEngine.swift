@@ -283,6 +283,21 @@ struct WildGroundBagPolicy {
     }
 }
 
+enum RoastPitMode: String, CaseIterable, Codable, Identifiable {
+    case herring, trout, bass, tuna, swordfish, chicken
+    var id: String { rawValue }
+    var label: String { rawValue.prefix(1).uppercased() + rawValue.dropFirst() }
+    var rawItem: String { switch self { case .herring: return "fish"; case .trout: return "fish_trout"; case .bass: return "fish_bass"; case .tuna: return "fish_tuna"; case .swordfish: return "fish_swordfish"; case .chicken: return "raw_chicken" } }
+    var cookedItem: String { switch self { case .herring: return "cooked_fish_meat"; case .trout: return "cooked_trout"; case .bass: return "cooked_bass"; case .tuna: return "cooked_tuna"; case .swordfish: return "cooked_swordfish"; case .chicken: return "cooked_chicken" } }
+    var minCookingLevel: Int { switch self { case .herring, .chicken: return 1; case .trout: return 6; case .bass: return 13; case .tuna: return 20; case .swordfish: return 28 } }
+}
+struct RoastPitProtocolPolicy {
+    static let endpoint = "/api/auth/grant-cook-xp"
+    static let batchDelayMS = 10_000
+    static let proximityRetryMS = 700
+    static func body(mode: RoastPitMode, fleet: String, shardID: Int?) -> [String: Any] { var body:[String:Any] = ["mode":mode.rawValue,"fleet":fleet]; if let shardID { body["shardId"]=shardID }; return body }
+}
+
 struct GatherTimingPolicy {
     /// Preserve the captured browser profile with relative spacing. If iOS
     /// wakes a frame late in background, the next delay starts from that real
@@ -762,7 +777,7 @@ struct ActivityToolPolicy {
         case .silver: return ["silver_pickaxe", "tool_pickaxe_l2", "copper_pickaxe"]
         case .cacti: return ["silver_axe", "tool_axe_l2"]
         case .fishing: return ["tool_fishing_rod"]
-        case .chicken, .zombie, .dragon: return []
+        case .roastPit, .chicken, .zombie, .dragon: return []
         }
     }
 
@@ -773,7 +788,7 @@ struct ActivityToolPolicy {
         case .silver: return "copper_pickaxe"
         case .cacti: return "tool_axe_l2"
         case .fishing: return "tool_fishing_rod"
-        case .chicken, .zombie, .dragon: return nil
+        case .roastPit, .chicken, .zombie, .dragon: return nil
         }
     }
 
@@ -1510,6 +1525,8 @@ actor AutomationEngine {
             return PresenceBootstrap(region: "eldergrove", position: Position(x: 22.5, z: -3.5))
         case .fishing, .zombie, .dragon:
             return PresenceBootstrap(region: "world", position: Position(x: 22.5, z: -3.5))
+        case .roastPit:
+            return PresenceBootstrap(region: "pond", position: Position(x: -1.5, z: -1.5))
         }
     }
 
@@ -1573,6 +1590,18 @@ actor AutomationEngine {
             throw EngineError.missingRequiredItem(ActivityToolPolicy.displayName(tool))
         }
         return max(carried, confirmed.carried)
+    }
+
+    static func runRoastPitHTTP(cookie: String, shard: String, mode: RoastPitMode, goal: Int, reporter: @escaping Reporter) async throws -> EngineRunResult {
+        let client = KintaraHTTPClient(cookie: cookie, shard: shard); let target=max(1,goal); let before=try await client.backpackState()
+        let raw=max(0,RealtimeProtocol.int(before.backpack[mode.rawItem]) ?? 0), wood=max(0,RealtimeProtocol.int(before.backpack["wood"]) ?? 0)
+        guard raw >= target else { throw EngineError.missingRequiredItem("\(mode.label) \(raw)/\(target)") }; guard wood >= target else { throw EngineError.missingRequiredItem("Wood \(wood)/\(target)") }
+        reporter(.log("🔥 Roast Pit • \(mode.label) • meta \(target) • 1 Wood/ciclo • Cooking mínimo \(mode.minCookingLevel)")); var successes=0
+        while successes < target { try Task.checkCancellation(); reporter(.state(.acting,"Roast Pit • \(mode.label) #\(successes+1)/\(target)")); var response:[String:Any]
+            do { response=try await client.grantCook(mode:mode) } catch HTTPError.response(_,let message,_) where message=="not_at_roast_pit" { try await Task.sleep(nanoseconds:UInt64(RoastPitProtocolPolicy.proximityRetryMS)*1_000_000); response=try await client.grantCook(mode:mode) }
+            let burned=RealtimeProtocol.bool(response["burned"]) ?? false; successes += 1; reporter(.progress(attempts:successes,successes:successes,failures:0)); reporter(.log("🔥 \(mode.label) #\(successes)/\(target) • \(burned ? "queimou" : "cozido") • servidor confirmou")); if successes < target { try await Task.sleep(nanoseconds:UInt64(RoastPitProtocolPolicy.batchDelayMS)*1_000_000) }
+        }
+        return EngineRunResult(successes:successes,completedGoal:true,stoppedSafely:false,stopReason:nil)
     }
 
     func prepareIdentity() async {
@@ -1716,6 +1745,8 @@ actor AutomationEngine {
             try await runGather(mode: mode, goal: goal)
         case .fishing:
             try await runFishing(goal: goal)
+        case .roastPit:
+            throw EngineError.unsupportedMode("Roast Pit uses authoritative HTTP runner")
         case .chicken:
             try await runChicken(goal: goal)
         case .zombie, .dragon:
@@ -6973,6 +7004,7 @@ enum EngineError: LocalizedError {
     case missingFishingBait(String)
     case insufficientFishingBait(String, have: Int, need: Int)
     case unsupportedFishingBait(String)
+    case unsupportedMode(String)
     case fishingPresenceStalled(successes: Int)
 
     var errorDescription: String? {
@@ -6994,6 +7026,7 @@ enum EngineError: LocalizedError {
         case .missingFishingBait(let bait): return "Isca selecionada sem estoque: \(bait)"
         case .insufficientFishingBait(let bait, let have, let need): return "Isca insuficiente: \(bait) \(have)/\(need)"
         case .unsupportedFishingBait(let bait): return "Automação ainda não validada para \(bait)"
+        case .unsupportedMode(let mode): return mode
         case .fishingPresenceStalled(let successes): return "Presence de pesca sem fish_bite após falha global • progresso \(successes)"
         }
     }
@@ -7022,6 +7055,8 @@ private struct KintaraHTTPClient {
     func post(_ path: String, body: [String: Any]) async throws -> [String: Any] {
         try await request(method: "POST", path: path, body: body)
     }
+
+    func grantCook(mode: RoastPitMode) async throws -> [String: Any] { try await post(RoastPitProtocolPolicy.endpoint, body: RoastPitProtocolPolicy.body(mode: mode, fleet: fleet, shardID: shardID)) }
 
     func consumePotion(_ type: String) async throws -> [String: Any] {
         try await post("/api/auth/consume-potion", body: ["type": type])
@@ -7663,6 +7698,7 @@ private extension ActivityMode {
         case .chicken: return "Galinha"
         case .zombie: return "Zumbi"
         case .dragon: return "Dragão"
+        case .roastPit: return "Roast Pit"
         }
     }
 }

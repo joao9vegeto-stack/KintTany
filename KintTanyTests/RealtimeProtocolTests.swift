@@ -3,6 +3,11 @@ import XCTest
 @testable import KintTany
 
 final class RealtimeProtocolTests: XCTestCase {
+    func testRoastPitProtocolContract() {
+        XCTAssertEqual(RoastPitProtocolPolicy.endpoint, "/api/auth/grant-cook-xp"); XCTAssertEqual(RoastPitProtocolPolicy.batchDelayMS, 10_000); XCTAssertEqual(RoastPitProtocolPolicy.proximityRetryMS, 700); XCTAssertEqual(RoastPitMode.trout.rawItem, "fish_trout"); XCTAssertEqual(RoastPitMode.trout.cookedItem, "cooked_trout"); XCTAssertEqual(RoastPitMode.trout.minCookingLevel, 6)
+        let body=RoastPitProtocolPolicy.body(mode:.trout,fleet:"us",shardID:4); XCTAssertEqual(body["mode"] as? String,"trout"); XCTAssertEqual(body["fleet"] as? String,"us"); XCTAssertEqual(body["shardId"] as? Int,4)
+    }
+
     func testQueuePingUsesDocumentedEventName() throws {
         let data = try RealtimeProtocol.queuePing()
         let object = try XCTUnwrap(JSONSerialization.jsonObject(with: data) as? [String: Any])

@@ -4,7 +4,7 @@ import UIKit
 import BackgroundTasks
 
 enum ActivityMode: String, CaseIterable, Codable, Identifiable {
-    case tree, coal, stone, iron, silver, cacti, fishing, chicken, zombie, dragon
+    case tree, coal, stone, iron, silver, cacti, fishing, roastPit, chicken, zombie, dragon
 
     var id: String { rawValue }
 
@@ -17,6 +17,7 @@ enum ActivityMode: String, CaseIterable, Codable, Identifiable {
         case .silver: "Silver Ore"
         case .cacti: "Cacti"
         case .fishing: "Fishing"
+        case .roastPit: "Roast Pit"
         case .chicken: "Chicken"
         case .zombie: "Zombie"
         case .dragon: "Dragon"
@@ -32,6 +33,7 @@ enum ActivityMode: String, CaseIterable, Codable, Identifiable {
         case .silver: "Silver Ore"
         case .cacti: "Cacti"
         case .fishing: "Pesca"
+        case .roastPit: "Roast Pit"
         case .chicken: "Galinha"
         case .zombie: "Zumbi"
         case .dragon: "Dragão"
@@ -47,6 +49,7 @@ enum ActivityMode: String, CaseIterable, Codable, Identifiable {
         case .silver: "sparkles"
         case .cacti: "leaf.fill"
         case .fishing: "fish.fill"
+        case .roastPit: "flame.fill"
         case .chicken: "bird.fill"
         case .zombie: "figure.walk"
         case .dragon: "flame.fill"
@@ -62,6 +65,7 @@ enum ActivityMode: String, CaseIterable, Codable, Identifiable {
         case .silver: .indigo
         case .cacti: .green
         case .fishing: .cyan
+        case .roastPit: .orange
         case .chicken: .yellow
         case .zombie: .mint
         case .dragon: .red
@@ -175,6 +179,7 @@ enum ContinuedActivityStatusFormatter {
         case .silver: return "Minerando Silver Ore nas Dunes"
         case .cacti: return "Coletando Cacti nas Dunes"
         case .fishing: return "Preparando pesca"
+        case .roastPit: return "Assando no Roast Pit"
         case .chicken: return "Combatendo galinha"
         case .zombie: return state == .recovering ? "Saindo do combate com segurança" : "Em combate com zumbi"
         case .dragon: return state == .recovering ? "Saindo do combate com segurança" : "Em combate com dragão"
@@ -607,6 +612,7 @@ final class AppStore: ObservableObject {
     @Published var resourceCount = 0
     @Published var mobCount = 0
     @Published var selectedFishingBait: FishingBait = .feather
+    @Published var selectedRoastMode: RoastPitMode = .trout
     @Published private(set) var characterProfile = CharacterProfile()
     @Published private(set) var characterProfileLoading = false
     @Published private(set) var characterProfileError: String?
@@ -1612,6 +1618,20 @@ final class AppStore: ObservableObject {
             // correta. Esse é o ciclo que funcionou nas builds estáveis e evita tentar
             // World→Eldergrove na Presence recém-usada pelo banco.
             let bootstrap: PresenceBootstrap
+            if mode == .roastPit {
+                state = .syncing
+                statusMessage = "🔥 Preparando Roast Pit"
+                stats.lastEvent = "Roast Pit • \(selectedRoastMode.label)"
+                updateContinuedProcessingProgress(forceTitleUpdate: true)
+                let result = try await AutomationEngine.runRoastPitHTTP(cookie: cookie, shard: selectedShard, mode: selectedRoastMode, goal: runGoal, reporter: engineReporter(runID: runID))
+                stats.successes = result.successes
+                activity = nil
+                state = result.completedGoal ? .completed : .failed
+                statusMessage = result.completedGoal ? "Meta do Roast Pit concluída" : "Roast Pit interrompido"
+                finishContinuedProcessing(success: result.completedGoal, reason: result.completedGoal ? "meta concluída" : "Roast Pit interrompido")
+                return
+            }
+
             if mode == .fishing {
                 // Fishing always starts with a safe World Presence for the
                 // transactional rod+bait bank preflight. A fresh activity

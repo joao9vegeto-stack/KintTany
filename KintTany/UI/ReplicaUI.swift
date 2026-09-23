@@ -11,6 +11,7 @@ public enum KintActivity: String, CaseIterable, Identifiable, Sendable {
     case silverOre
     case cacti
     case fishing
+    case roastPit
     case chicken
     case zombie
     case dragon
@@ -27,6 +28,7 @@ public enum KintActivity: String, CaseIterable, Identifiable, Sendable {
         case .silverOre: "Silver Ore"
         case .cacti: "Cacti"
         case .fishing: "Pesca"
+        case .roastPit: "Roast Pit"
         case .chicken: "Galinha"
         case .zombie: "Zumbi"
         case .dragon: "Dragão"
@@ -43,6 +45,7 @@ public enum KintActivity: String, CaseIterable, Identifiable, Sendable {
         case .silverOre: "KintSilverOre"
         case .cacti: "KintCacti"
         case .fishing: "KintFishing"
+        case .roastPit: "KintFishing"
         case .chicken: "KintChicken"
         case .zombie: "KintZombie"
         case .dragon: "KintDragon"
@@ -512,8 +515,8 @@ struct KintActivitySprite: View {
 struct KintExactActivityGrid: View {
     @Binding var selected: KintActivity
     let didSelect: (KintActivity) -> Void
-    private let top: [KintActivity] = [.wood, .coal, .stone, .ironOre, .silverOre]
-    private let bottom: [KintActivity] = [.cacti, .fishing, .chicken, .zombie, .dragon]
+    private let top: [KintActivity] = [.wood, .coal, .stone, .ironOre, .silverOre, .cacti]
+    private let bottom: [KintActivity] = [.fishing, .roastPit, .chicken, .zombie, .dragon]
 
     var body: some View {
         ZStack {
@@ -1176,6 +1179,7 @@ struct ReplicaDashboardHost: View {
     @State private var showGoalEditor = false
     @State private var goalDraft = ""
     @State private var showFishingSelector = false
+    @State private var showRoastSelector = false
 
     var body: some View {
         KintTanyDashboardView(
@@ -1198,6 +1202,10 @@ struct ReplicaDashboardHost: View {
         } message: {
             Text("Defina qualquer meta entre 1 e 100000. A alteração fica bloqueada durante uma atividade ativa.")
         }
+        .confirmationDialog("O que assar", isPresented: $showRoastSelector, titleVisibility: .visible) {
+            ForEach(RoastPitMode.allCases) { roast in Button(roast.label) { app.selectedRoastMode = roast; start(.roastPit) } }
+            Button("Cancelar", role: .cancel) {}
+        } message: { Text("Cada unidade consome 1 Wood; o resultado é confirmado pelo servidor.") }
         .confirmationDialog("Isca da pesca", isPresented: $showFishingSelector, titleVisibility: .visible) {
             baitButton(.feather)
             baitButton(.trout)
@@ -1240,6 +1248,7 @@ struct ReplicaDashboardHost: View {
                 case .silverOre: start(.silver)
                 case .cacti: start(.cacti)
                 case .fishing: showFishingSelector = true
+                case .roastPit: showRoastSelector = true
                 case .chicken: start(.chicken)
                 case .zombie: start(.zombie)
                 case .dragon: start(.dragon)
@@ -1370,6 +1379,7 @@ struct ReplicaDashboardHost: View {
         case .silver: .silverOre
         case .cacti: .cacti
         case .fishing: .fishing
+        case .roastPit: .roastPit
         case .chicken: .chicken
         case .zombie: .zombie
         case .dragon: .dragon
