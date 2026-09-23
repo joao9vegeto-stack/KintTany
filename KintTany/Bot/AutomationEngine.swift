@@ -1599,7 +1599,7 @@ actor AutomationEngine {
         reporter(.log("🔥 Roast Pit • \(mode.label) • meta \(target) • 1 Wood/ciclo • Cooking mínimo \(mode.minCookingLevel)")); var successes=0
         while successes < target { try Task.checkCancellation(); reporter(.state(.acting,"Roast Pit • \(mode.label) #\(successes+1)/\(target)")); var response:[String:Any]
             do { response=try await client.grantCook(mode:mode) } catch HTTPError.response(_,let message,_) where message=="not_at_roast_pit" { try await Task.sleep(nanoseconds:UInt64(RoastPitProtocolPolicy.proximityRetryMS)*1_000_000); response=try await client.grantCook(mode:mode) }
-            let burned=RealtimeProtocol.bool(response["burned"]) ?? false; successes += 1; reporter(.progress(attempts:successes,successes:successes,failures:0)); reporter(.log("🔥 \(mode.label) #\(successes)/\(target) • \(burned ? "queimou" : "cozido") • servidor confirmou")); if successes < target { try await Task.sleep(nanoseconds:UInt64(RoastPitProtocolPolicy.batchDelayMS)*1_000_000) }
+            let burned=RealtimeProtocol.bool(response["burned"]) ?? false; successes += 1; reporter(.attempt); reporter(.success(mode.cookedItem)); reporter(.log("🔥 \(mode.label) #\(successes)/\(target) • \(burned ? "queimou" : "cozido") • servidor confirmou")); if successes < target { try await Task.sleep(nanoseconds:UInt64(RoastPitProtocolPolicy.batchDelayMS)*1_000_000) }
         }
         return EngineRunResult(successes:successes,completedGoal:true,stoppedSafely:false,stopReason:nil)
     }
