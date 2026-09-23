@@ -1104,6 +1104,7 @@ final class AppStore: ObservableObject {
                     shard: shard,
                     bootstrap: bootstrap,
                     fishingBait: selectedFishingBait,
+                    roastMode: selectedRoastMode,
                     reporter: engineReporter(runID: runID)
                 )
                 phaseEngine = replacement
@@ -1220,6 +1221,7 @@ final class AppStore: ObservableObject {
                 shard: shard,
                 bootstrap: bankBootstrap,
                 fishingBait: selectedFishingBait,
+                    roastMode: selectedRoastMode,
                 reporter: engineReporter(runID: runID)
             )
             activeEngine = bankEngine
@@ -1268,6 +1270,7 @@ final class AppStore: ObservableObject {
                 shard: shard,
                 bootstrap: activityBootstrap,
                 fishingBait: selectedFishingBait,
+                    roastMode: selectedRoastMode,
                 reporter: engineReporter(runID: runID)
             )
             phaseEngine = activityEngine
@@ -1641,20 +1644,6 @@ final class AppStore: ObservableObject {
             activeShard = selectedShard
             await importSocketTrace()
 
-            if mode == .roastPit {
-                state = .syncing
-                statusMessage = "🔥 Preparando Roast Pit"
-                stats.lastEvent = "Roast Pit • \(selectedRoastMode.label)"
-                updateContinuedProcessingProgress(forceTitleUpdate: true)
-                let result = try await AutomationEngine.runRoastPitHTTP(cookie: cookie, shard: selectedShard, mode: selectedRoastMode, goal: runGoal, reporter: engineReporter(runID: runID))
-                stats.successes = result.successes
-                activity = nil
-                state = result.completedGoal ? .completed : .failed
-                statusMessage = result.completedGoal ? "Meta do Roast Pit concluída" : "Roast Pit interrompido"
-                finishContinuedProcessing(success: result.completedGoal, reason: result.completedGoal ? "meta concluída" : "Roast Pit interrompido")
-                return
-            }
-
             log("Servidor NA selecionado automaticamente: \(connection.serverName) (\(selectedShard)) • carga \(connection.populationLabel) • fila \(connection.queueLength)")
 
             var engine = AutomationEngine(
@@ -1663,6 +1652,7 @@ final class AppStore: ObservableObject {
                 shard: selectedShard,
                 bootstrap: bootstrap,
                 fishingBait: selectedFishingBait,
+                    roastMode: selectedRoastMode,
                 reporter: engineReporter(runID: runID)
             )
             activeEngine = engine
@@ -1719,6 +1709,7 @@ final class AppStore: ObservableObject {
                     shard: selectedShard,
                     bootstrap: activityBootstrap,
                     fishingBait: selectedFishingBait,
+                    roastMode: selectedRoastMode,
                     reporter: engineReporter(runID: runID)
                 )
                 engine = activityEngine
@@ -1795,6 +1786,7 @@ final class AppStore: ObservableObject {
                     shard: selectedShard,
                     bootstrap: activityBootstrap,
                     fishingBait: selectedFishingBait,
+                    roastMode: selectedRoastMode,
                     reporter: engineReporter(runID: runID)
                 )
                 engine = activityEngine
@@ -2311,6 +2303,7 @@ final class AppStore: ObservableObject {
                     shard: shard,
                     bootstrap: bootstrap,
                     fishingBait: selectedFishingBait,
+                    roastMode: selectedRoastMode,
                     reporter: engineReporter(runID: runID)
                 )
                 activeEngine = engine
@@ -2582,6 +2575,7 @@ final class AppStore: ObservableObject {
                     shard: shard,
                     bootstrap: recoveryBootstrap,
                     fishingBait: selectedFishingBait,
+                    roastMode: selectedRoastMode,
                     reporter: engineReporter(runID: runID)
                 )
                 activeEngine = recoveryEngine

@@ -1180,64 +1180,170 @@ public struct KintTanyPixelReferenceView: View {
 }
 
 struct RoastPitSelectorSheet: View {
-    let selected: RoastPitMode
-    let onSelect: (RoastPitMode) -> Void
+    @State private var choice: RoastPitMode
+    let onStart: (RoastPitMode) -> Void
     let onCancel: () -> Void
 
+    init(
+        selected: RoastPitMode,
+        onStart: @escaping (RoastPitMode) -> Void,
+        onCancel: @escaping () -> Void
+    ) {
+        _choice = State(initialValue: selected)
+        self.onStart = onStart
+        self.onCancel = onCancel
+    }
+
     private let columns = [
-        GridItem(.flexible(), spacing: 10),
-        GridItem(.flexible(), spacing: 10)
+        GridItem(.flexible(), spacing: 9),
+        GridItem(.flexible(), spacing: 9),
+        GridItem(.flexible(), spacing: 9)
     ]
 
     var body: some View {
-        NavigationStack {
-            VStack(alignment: .leading, spacing: 14) {
-                Text("Escolha o alimento que será assado automaticamente.")
-                    .font(.subheadline)
-                    .foregroundStyle(.secondary)
+        ZStack {
+            Color(red: 0.40, green: 0.42, blue: 0.45)
+                .ignoresSafeArea()
 
-                LazyVGrid(columns: columns, spacing: 10) {
+            VStack(spacing: 11) {
+                HStack {
+                    Color.clear.frame(width: 38, height: 38)
+                    Spacer()
+                    Text("Roast Pit")
+                        .font(.system(size: 23, weight: .heavy, design: .rounded))
+                        .foregroundStyle(.white)
+                        .shadow(color: .black.opacity(0.55), radius: 0, x: 1, y: 2)
+                    Spacer()
+                    Button(action: onCancel) {
+                        Image(systemName: "xmark")
+                            .font(.system(size: 18, weight: .black))
+                            .foregroundStyle(.white)
+                            .frame(width: 38, height: 38)
+                            .background(Color(red: 0.28, green: 0.30, blue: 0.34))
+                            .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
+                            .overlay(RoundedRectangle(cornerRadius: 8).stroke(.black.opacity(0.85), lineWidth: 2))
+                    }
+                    .buttonStyle(.plain)
+                }
+
+                Divider().overlay(Color.black.opacity(0.5))
+
+                Text("Escolha o que assar. Cada unidade usa 1 Wood. Cada ciclo leva 10 segundos.")
+                    .font(.system(size: 13.5, weight: .bold, design: .rounded))
+                    .foregroundStyle(Color.white.opacity(0.82))
+                    .frame(maxWidth: .infinity, alignment: .leading)
+
+                LazyVGrid(columns: columns, spacing: 9) {
                     ForEach(RoastPitMode.allCases) { roast in
                         Button {
-                            onSelect(roast)
+                            choice = roast
                         } label: {
-                            HStack(spacing: 8) {
-                                Image(systemName: roast == .chicken ? "bird.fill" : "fish.fill")
-                                    .frame(width: 22)
-                                VStack(alignment: .leading, spacing: 2) {
-                                    Text(roast.label)
-                                        .font(.headline)
-                                    Text("Cooking Lv. \(roast.minCookingLevel)")
-                                        .font(.caption)
-                                        .foregroundStyle(.secondary)
-                                }
-                                Spacer(minLength: 0)
-                                if roast == selected {
-                                    Image(systemName: "checkmark.circle.fill")
-                                        .foregroundStyle(.green)
-                                }
+                            VStack(spacing: 5) {
+                                officialSprite(roast)
+                                    .frame(width: 42, height: 36)
+                                Text(roast.label)
+                                    .font(.system(size: 12.5, weight: .heavy, design: .rounded))
+                                    .foregroundStyle(choice == roast ? .white : Color.white.opacity(0.72))
+                                    .lineLimit(1)
+                                    .minimumScaleFactor(0.72)
+                                Text("Lv. \(roast.minCookingLevel)")
+                                    .font(.system(size: 10.5, weight: .bold, design: .rounded))
+                                    .foregroundStyle(Color.white.opacity(0.48))
                             }
-                            .padding(12)
-                            .frame(maxWidth: .infinity, minHeight: 64, alignment: .leading)
-                            .background(.thinMaterial, in: RoundedRectangle(cornerRadius: 12, style: .continuous))
+                            .frame(maxWidth: .infinity, minHeight: 88)
+                            .background(
+                                LinearGradient(
+                                    colors: choice == roast
+                                        ? [Color(red: 0.29, green: 0.31, blue: 0.35), Color(red: 0.20, green: 0.22, blue: 0.25)]
+                                        : [Color(red: 0.20, green: 0.22, blue: 0.25), Color(red: 0.14, green: 0.15, blue: 0.18)],
+                                    startPoint: .top,
+                                    endPoint: .bottom
+                                )
+                            )
+                            .clipShape(RoundedRectangle(cornerRadius: 9, style: .continuous))
+                            .overlay(
+                                RoundedRectangle(cornerRadius: 9)
+                                    .stroke(choice == roast ? Color.white.opacity(0.7) : Color.black.opacity(0.88), lineWidth: choice == roast ? 2 : 1.5)
+                            )
                         }
                         .buttonStyle(.plain)
                     }
                 }
 
-                Label("Cada unidade usa 1 Wood e o resultado é confirmado pelo servidor.", systemImage: "flame.fill")
-                    .font(.footnote)
-                    .foregroundStyle(.secondary)
+                VStack(spacing: 7) {
+                    HStack {
+                        Text(choice.label)
+                            .font(.system(size: 16, weight: .heavy, design: .rounded))
+                            .foregroundStyle(.white)
+                        Spacer()
+                        Text("Cooking Lv. \(choice.minCookingLevel)")
+                            .font(.system(size: 12, weight: .bold, design: .rounded))
+                            .foregroundStyle(Color.white.opacity(0.72))
+                    }
 
-                Spacer(minLength: 0)
+                    HStack(spacing: 12) {
+                        officialSprite(choice)
+                            .frame(width: 58, height: 52)
+                            .padding(5)
+                            .background(Color.black.opacity(0.18))
+                            .clipShape(RoundedRectangle(cornerRadius: 8))
+                        VStack(alignment: .leading, spacing: 4) {
+                            Label("1 Wood por unidade", systemImage: "tree.fill")
+                            Label("10 segundos por ciclo", systemImage: "timer")
+                            Text("Resultado confirmado pelo servidor")
+                        }
+                        .font(.system(size: 11.5, weight: .semibold))
+                        .foregroundStyle(Color.white.opacity(0.76))
+                        Spacer()
+                    }
+                }
+                .padding(12)
+                .background(Color(red: 0.08, green: 0.09, blue: 0.11))
+                .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
+                .overlay(RoundedRectangle(cornerRadius: 10).stroke(Color.black, lineWidth: 2))
+
+                Button {
+                    onStart(choice)
+                } label: {
+                    Text("ASSAR")
+                        .font(.system(size: 17, weight: .heavy, design: .rounded))
+                        .foregroundStyle(.white)
+                        .frame(maxWidth: .infinity, minHeight: 50)
+                        .background(
+                            LinearGradient(
+                                colors: [Color(red: 0.28, green: 0.63, blue: 0.43), Color(red: 0.18, green: 0.44, blue: 0.30)],
+                                startPoint: .top,
+                                endPoint: .bottom
+                            )
+                        )
+                        .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
+                        .overlay(RoundedRectangle(cornerRadius: 10).stroke(Color.black.opacity(0.9), lineWidth: 2))
+                }
+                .buttonStyle(.plain)
             }
             .padding(18)
-            .navigationTitle("Roast Pit")
-            .navigationBarTitleDisplayMode(.inline)
-            .toolbar {
-                ToolbarItem(placement: .cancellationAction) {
-                    Button("Cancelar", action: onCancel)
-                }
+        }
+    }
+
+    @ViewBuilder
+    private func officialSprite(_ roast: RoastPitMode) -> some View {
+        AsyncImage(url: roast.iconURL) { phase in
+            switch phase {
+            case .success(let image):
+                image
+                    .resizable()
+                    .interpolation(.high)
+                    .scaledToFit()
+            case .failure:
+                Image(systemName: roast == .chicken ? "bird.fill" : "fish.fill")
+                    .resizable()
+                    .scaledToFit()
+                    .foregroundStyle(Color.white.opacity(0.55))
+            case .empty:
+                ProgressView()
+                    .tint(.white)
+            @unknown default:
+                EmptyView()
             }
         }
     }
@@ -1282,7 +1388,7 @@ struct ReplicaDashboardHost: View {
         .sheet(isPresented: $showRoastSelector) {
             RoastPitSelectorSheet(
                 selected: app.selectedRoastMode,
-                onSelect: { roast in
+                onStart: { roast in
                     app.selectedRoastMode = roast
                     showRoastSelector = false
                     start(.roastPit)
@@ -1291,7 +1397,7 @@ struct ReplicaDashboardHost: View {
                     showRoastSelector = false
                 }
             )
-            .presentationDetents([.medium])
+            .presentationDetents([.fraction(0.62)])
             .presentationDragIndicator(.visible)
         }
         .confirmationDialog("Isca da pesca", isPresented: $showFishingSelector, titleVisibility: .visible) {

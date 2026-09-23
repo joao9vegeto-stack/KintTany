@@ -285,17 +285,91 @@ struct WildGroundBagPolicy {
 
 enum RoastPitMode: String, CaseIterable, Codable, Identifiable {
     case herring, trout, bass, tuna, swordfish, chicken
+
     var id: String { rawValue }
     var label: String { rawValue.prefix(1).uppercased() + rawValue.dropFirst() }
-    var rawItem: String { switch self { case .herring: return "fish"; case .trout: return "fish_trout"; case .bass: return "fish_bass"; case .tuna: return "fish_tuna"; case .swordfish: return "fish_swordfish"; case .chicken: return "raw_chicken" } }
-    var cookedItem: String { switch self { case .herring: return "cooked_fish_meat"; case .trout: return "cooked_trout"; case .bass: return "cooked_bass"; case .tuna: return "cooked_tuna"; case .swordfish: return "cooked_swordfish"; case .chicken: return "cooked_chicken" } }
-    var minCookingLevel: Int { switch self { case .herring, .chicken: return 1; case .trout: return 6; case .bass: return 13; case .tuna: return 20; case .swordfish: return 28 } }
+
+    var rawItem: String {
+        switch self {
+        case .herring: return "fish"
+        case .trout: return "fish_trout"
+        case .bass: return "fish_bass"
+        case .tuna: return "fish_tuna"
+        case .swordfish: return "fish_swordfish"
+        case .chicken: return "raw_chicken"
+        }
+    }
+
+    var cookedItem: String {
+        switch self {
+        case .herring: return "cooked_fish_meat"
+        case .trout: return "cooked_trout"
+        case .bass: return "cooked_bass"
+        case .tuna: return "cooked_tuna"
+        case .swordfish: return "cooked_swordfish"
+        case .chicken: return "cooked_chicken"
+        }
+    }
+
+    var minCookingLevel: Int {
+        switch self {
+        case .herring, .chicken: return 1
+        case .trout: return 6
+        case .bass: return 13
+        case .tuna: return 20
+        case .swordfish: return 28
+        }
+    }
+
+    /// Official inventory sprite paths extracted from the supplied game client.
+    var iconPath: String {
+        switch self {
+        case .herring: return "/assets/hud/resources/fish.png"
+        case .trout: return "/assets/hud/resources/fish_trout.png"
+        case .bass: return "/assets/hud/resources/fish_bass.png"
+        case .tuna: return "/assets/hud/resources/fish_tuna.png"
+        case .swordfish: return "/assets/hud/resources/fish_swordfish.png"
+        case .chicken: return "/assets/hud/resources/rawchicken.png"
+        }
+    }
+
+    var iconURL: URL? {
+        URL(string: "https://us.kintara.com" + iconPath)
+    }
 }
+
 struct RoastPitProtocolPolicy {
     static let endpoint = "/api/auth/grant-cook-xp"
     static let batchDelayMS = 10_000
     static let proximityRetryMS = 700
-    static func body(mode: RoastPitMode, fleet: String, shardID: Int?) -> [String: Any] { var body:[String:Any] = ["mode":mode.rawValue,"fleet":fleet]; if let shardID { body["shardId"]=shardID }; return body }
+
+    // Official client tutorial points "Cook Your Catch" at Pond tile 18,34.
+    // Pond wire coordinates use the same 19.5 grid offset already validated by
+    // Feather fishing, so this tile is (-1.5, 14.5) in Presence coordinates.
+    static let pondGridOffset = 19.5
+    static let tutorialPitColumn = 18
+    static let tutorialPitRow = 34
+
+    /// Cardinal approach candidates around the official Roast Pit tutorial tile.
+    /// The server validates _lastPresencePos, so HTTP cooking is only attempted
+    /// after a real Presence walk and a short propagation grace period.
+    static var approachPositions: [Position] {
+        [
+            (18, 33), (17, 34), (19, 34), (18, 35),
+            (18, 32), (16, 34), (20, 34), (18, 36)
+        ].map { col, row in
+            Position(
+                x: Double(col) - pondGridOffset,
+                z: Double(row) - pondGridOffset
+            )
+        }
+    }
+
+    static func body(mode: RoastPitMode, fleet: String, shardID: Int?) -> [String: Any] {
+        var body: [String: Any] = ["mode": mode.rawValue, "fleet": fleet]
+        if let shardID { body["shardId"] = shardID }
+        return body
+    }
 }
 
 struct GatherTimingPolicy {
@@ -1331,6 +1405,7 @@ actor AutomationEngine {
     private let reporter: Reporter
     private let http: KintaraHTTPClient
     private let fishingBait: FishingBait
+    private let roastMode: RoastPitMode
 
     private var region: String
     private var serverRegion: String?
@@ -1485,12 +1560,14 @@ actor AutomationEngine {
         shard: String,
         bootstrap: PresenceBootstrap,
         fishingBait: FishingBait = .feather,
+        roastMode: RoastPitMode = .trout,
         reporter: @escaping Reporter
     ) {
         self.socket = socket
         self.cookie = cookie
         self.shard = shard
         self.fishingBait = fishingBait
+        self.roastMode = roastMode
         self.reporter = reporter
         self.http = KintaraHTTPClient(cookie: cookie, shard: shard)
         self.gatherKnowledge = GatherKnowledgeStore()
@@ -1592,16 +1669,91 @@ actor AutomationEngine {
         return max(carried, confirmed.carried)
     }
 
-    static func runRoastPitHTTP(cookie: String, shard: String, mode: RoastPitMode, goal: Int, reporter: @escaping Reporter) async throws -> EngineRunResult {
-        let client = KintaraHTTPClient(cookie: cookie, shard: shard); let target=max(1,goal); let before=try await client.backpackState()
-        let raw=max(0,RealtimeProtocol.int(before.backpack[mode.rawItem]) ?? 0), wood=max(0,RealtimeProtocol.int(before.backpack["wood"]) ?? 0)
-        guard raw >= target else { throw EngineError.missingRequiredItem("\(mode.label) \(raw)/\(target)") }; guard wood >= target else { throw EngineError.missingRequiredItem("Wood \(wood)/\(target)") }
-        reporter(.log("🔥 Roast Pit • \(mode.label) • meta \(target) • 1 Wood/ciclo • Cooking mínimo \(mode.minCookingLevel)")); var successes=0
-        while successes < target { try Task.checkCancellation(); reporter(.state(.acting,"Roast Pit • \(mode.label) #\(successes+1)/\(target)")); var response:[String:Any]
-            do { response=try await client.grantCook(mode:mode) } catch HTTPError.response(_,let message,_) where message=="not_at_roast_pit" { try await Task.sleep(nanoseconds:UInt64(RoastPitProtocolPolicy.proximityRetryMS)*1_000_000); response=try await client.grantCook(mode:mode) }
-            let burned=RealtimeProtocol.bool(response["burned"]) ?? false; successes += 1; reporter(.attempt); reporter(.success(mode.cookedItem)); reporter(.log("🔥 \(mode.label) #\(successes)/\(target) • \(burned ? "queimou" : "cozido") • servidor confirmou")); if successes < target { try await Task.sleep(nanoseconds:UInt64(RoastPitProtocolPolicy.batchDelayMS)*1_000_000) }
+    private func runRoastPit(goal: Int) async throws {
+        let target = max(1, goal)
+
+        reporter(.state(.syncing, "Sincronizando The Pond"))
+        guard try await waitForRegion("pond", timeoutMS: 6_000) else {
+            throw EngineError.regionNotConfirmed("pond")
         }
-        return EngineRunResult(successes:successes,completedGoal:true,stoppedSafely:false,stopReason:nil)
+        region = "pond"
+
+        let before = try await http.backpackState()
+        let raw = max(0, RealtimeProtocol.int(before.backpack[roastMode.rawItem]) ?? 0)
+        let wood = max(0, RealtimeProtocol.int(before.backpack["wood"]) ?? 0)
+        guard raw >= target else {
+            throw EngineError.missingRequiredItem("\(roastMode.label) \(raw)/\(target)")
+        }
+        guard wood >= target else {
+            throw EngineError.missingRequiredItem("Wood \(wood)/\(target)")
+        }
+
+        reporter(.log("🔥 Roast Pit • \(roastMode.label) • meta \(target) • 1 Wood/ciclo • Cooking mínimo \(roastMode.minCookingLevel)"))
+        reporter(.diagnostic("[ROAST] cliente oficial: tutorial Pond tile=\(RoastPitProtocolPolicy.tutorialPitColumn),\(RoastPitProtocolPolicy.tutorialPitRow) • Presence offset=\(RoastPitProtocolPolicy.pondGridOffset)"))
+
+        let hb = Task { [weak self] in await self?.heartbeat() }
+        defer { hb.cancel() }
+
+        var confirmedApproach: Position?
+        var nextCandidateIndex = 0
+
+        while successes < target {
+            try Task.checkCancellation()
+            reporter(.state(.acting, "Roast Pit • \(roastMode.label) #\(successes + 1)/\(target)"))
+
+            var response: [String: Any]?
+
+            if confirmedApproach != nil {
+                do {
+                    response = try await http.grantCook(mode: roastMode)
+                } catch HTTPError.response(_, let message, _) where message == "not_at_roast_pit" {
+                    reporter(.diagnostic("[ROAST] servidor perdeu proximidade • reposicionando pelo Presence"))
+                    confirmedApproach = nil
+                }
+            }
+
+            if response == nil {
+                let approaches = RoastPitProtocolPolicy.approachPositions
+                var found = false
+
+                for offset in 0..<approaches.count {
+                    let index = (nextCandidateIndex + offset) % approaches.count
+                    let candidate = approaches[index]
+                    reporter(.state(.moving, "Indo até o Roast Pit"))
+                    reporter(.log("🔥 Roast Pit • aproximando pelo Presence • posição \(String(format: "%.1f", candidate.x)),\(String(format: "%.1f", candidate.z))"))
+                    try await walk(to: candidate, maxSeconds: 45, status: "Indo até o Roast Pit")
+                    try await sleep(RoastPitProtocolPolicy.proximityRetryMS)
+
+                    do {
+                        let granted = try await http.grantCook(mode: roastMode)
+                        response = granted
+                        confirmedApproach = candidate
+                        nextCandidateIndex = index
+                        found = true
+                        reporter(.diagnostic("[ROAST] proximidade autoritativa confirmada no candidato #\(index + 1)"))
+                        break
+                    } catch HTTPError.response(_, let message, _) where message == "not_at_roast_pit" {
+                        reporter(.diagnostic("[ROAST] candidato #\(index + 1) rejeitado por not_at_roast_pit; tentando adjacência seguinte"))
+                        continue
+                    }
+                }
+
+                guard found, response != nil else {
+                    throw EngineError.roastPitNotReachable
+                }
+            }
+
+            let burned = RealtimeProtocol.bool(response?["burned"]) ?? false
+            successes += 1
+            reporter(.attempt)
+            reporter(.success(roastMode.cookedItem))
+            reporter(.state(.cooldown, "Assado \(successes)/\(target)"))
+            reporter(.log("🔥 \(roastMode.label) #\(successes)/\(target) • \(burned ? "queimou" : "cozido") • servidor confirmou"))
+
+            if successes < target {
+                try await sleep(RoastPitProtocolPolicy.batchDelayMS)
+            }
+        }
     }
 
     func prepareIdentity() async {
@@ -1746,7 +1898,7 @@ actor AutomationEngine {
         case .fishing:
             try await runFishing(goal: goal)
         case .roastPit:
-            throw EngineError.unsupportedMode("Roast Pit uses authoritative HTTP runner")
+            try await runRoastPit(goal: goal)
         case .chicken:
             try await runChicken(goal: goal)
         case .zombie, .dragon:
@@ -7005,6 +7157,7 @@ enum EngineError: LocalizedError {
     case insufficientFishingBait(String, have: Int, need: Int)
     case unsupportedFishingBait(String)
     case unsupportedMode(String)
+    case roastPitNotReachable
     case fishingPresenceStalled(successes: Int)
 
     var errorDescription: String? {
@@ -7027,6 +7180,7 @@ enum EngineError: LocalizedError {
         case .insufficientFishingBait(let bait, let have, let need): return "Isca insuficiente: \(bait) \(have)/\(need)"
         case .unsupportedFishingBait(let bait): return "Automação ainda não validada para \(bait)"
         case .unsupportedMode(let mode): return mode
+        case .roastPitNotReachable: return "Não foi possível confirmar proximidade com o Roast Pit"
         case .fishingPresenceStalled(let successes): return "Presence de pesca sem fish_bite após falha global • progresso \(successes)"
         }
     }

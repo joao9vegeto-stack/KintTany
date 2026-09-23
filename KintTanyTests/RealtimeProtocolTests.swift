@@ -4,8 +4,27 @@ import XCTest
 
 final class RealtimeProtocolTests: XCTestCase {
     func testRoastPitProtocolContract() {
-        XCTAssertEqual(RoastPitProtocolPolicy.endpoint, "/api/auth/grant-cook-xp"); XCTAssertEqual(RoastPitProtocolPolicy.batchDelayMS, 10_000); XCTAssertEqual(RoastPitProtocolPolicy.proximityRetryMS, 700); XCTAssertEqual(RoastPitMode.trout.rawItem, "fish_trout"); XCTAssertEqual(RoastPitMode.trout.cookedItem, "cooked_trout"); XCTAssertEqual(RoastPitMode.trout.minCookingLevel, 6)
-        let body=RoastPitProtocolPolicy.body(mode:.trout,fleet:"us",shardID:4); XCTAssertEqual(body["mode"] as? String,"trout"); XCTAssertEqual(body["fleet"] as? String,"us"); XCTAssertEqual(body["shardId"] as? Int,4)
+        XCTAssertEqual(RoastPitProtocolPolicy.endpoint, "/api/auth/grant-cook-xp")
+        XCTAssertEqual(RoastPitProtocolPolicy.batchDelayMS, 10_000)
+        XCTAssertEqual(RoastPitProtocolPolicy.proximityRetryMS, 700)
+        XCTAssertEqual(RoastPitProtocolPolicy.tutorialPitColumn, 18)
+        XCTAssertEqual(RoastPitProtocolPolicy.tutorialPitRow, 34)
+        XCTAssertEqual(RoastPitProtocolPolicy.pondGridOffset, 19.5)
+
+        let firstApproach = RoastPitProtocolPolicy.approachPositions.first
+        XCTAssertEqual(firstApproach?.x, -1.5)
+        XCTAssertEqual(firstApproach?.z, 13.5)
+
+        XCTAssertEqual(RoastPitMode.trout.rawItem, "fish_trout")
+        XCTAssertEqual(RoastPitMode.trout.cookedItem, "cooked_trout")
+        XCTAssertEqual(RoastPitMode.trout.minCookingLevel, 6)
+        XCTAssertEqual(RoastPitMode.trout.iconPath, "/assets/hud/resources/fish_trout.png")
+        XCTAssertEqual(RoastPitMode.chicken.iconPath, "/assets/hud/resources/rawchicken.png")
+
+        let body = RoastPitProtocolPolicy.body(mode: .trout, fleet: "us", shardID: 4)
+        XCTAssertEqual(body["mode"] as? String, "trout")
+        XCTAssertEqual(body["fleet"] as? String, "us")
+        XCTAssertEqual(body["shardId"] as? Int, 4)
     }
 
     func testQueuePingUsesDocumentedEventName() throws {
