@@ -505,10 +505,21 @@ struct KintActivityGridBackground: View {
 struct KintActivitySprite: View {
     let activity: KintActivity
     var body: some View {
-        KintResourceImage.image(activity.assetName)
-            .resizable()
-            .interpolation(.high)
-            .scaledToFit()
+        Group {
+            if activity == .roastPit {
+                Image(systemName: "flame.fill")
+                    .resizable()
+                    .scaledToFit()
+                    .symbolRenderingMode(.hierarchical)
+                    .foregroundStyle(Color.orange)
+                    .padding(4)
+            } else {
+                KintResourceImage.image(activity.assetName)
+                    .resizable()
+                    .interpolation(.high)
+                    .scaledToFit()
+            }
+        }
     }
 }
 
@@ -998,12 +1009,14 @@ private struct KintTanyDesignCanvas<AvatarContent: View>: View {
     private var header: some View {
         Group {
             HStack(spacing: 7) {
-                KintResourceImage.image("KintOnlineDot")
-                    .resizable()
-                    .scaledToFit()
-                    .frame(width: 15, height: 15)
-                    .saturation(state.isOnline ? 1 : 0)
-                    .opacity(state.isOnline ? 1 : 0.5)
+                Circle()
+                    .fill(state.isOnline ? Color.green : Color.gray.opacity(0.55))
+                    .frame(width: 12, height: 12)
+                    .overlay(
+                        Circle()
+                            .stroke(Color.black.opacity(state.isOnline ? 0.28 : 0.18), lineWidth: 0.7)
+                    )
+                    .shadow(color: state.isOnline ? Color.green.opacity(0.35) : .clear, radius: 2)
                 Text(state.isOnline ? "ONLINE" : "OFFLINE")
                     .font(KintTanyTheme.bodyFont(14))
                 Spacer()
@@ -1166,6 +1179,70 @@ public struct KintTanyPixelReferenceView: View {
     }
 }
 
+struct RoastPitSelectorSheet: View {
+    let selected: RoastPitMode
+    let onSelect: (RoastPitMode) -> Void
+    let onCancel: () -> Void
+
+    private let columns = [
+        GridItem(.flexible(), spacing: 10),
+        GridItem(.flexible(), spacing: 10)
+    ]
+
+    var body: some View {
+        NavigationStack {
+            VStack(alignment: .leading, spacing: 14) {
+                Text("Escolha o alimento que será assado automaticamente.")
+                    .font(.subheadline)
+                    .foregroundStyle(.secondary)
+
+                LazyVGrid(columns: columns, spacing: 10) {
+                    ForEach(RoastPitMode.allCases) { roast in
+                        Button {
+                            onSelect(roast)
+                        } label: {
+                            HStack(spacing: 8) {
+                                Image(systemName: roast == .chicken ? "bird.fill" : "fish.fill")
+                                    .frame(width: 22)
+                                VStack(alignment: .leading, spacing: 2) {
+                                    Text(roast.label)
+                                        .font(.headline)
+                                    Text("Cooking Lv. \(roast.minCookingLevel)")
+                                        .font(.caption)
+                                        .foregroundStyle(.secondary)
+                                }
+                                Spacer(minLength: 0)
+                                if roast == selected {
+                                    Image(systemName: "checkmark.circle.fill")
+                                        .foregroundStyle(.green)
+                                }
+                            }
+                            .padding(12)
+                            .frame(maxWidth: .infinity, minHeight: 64, alignment: .leading)
+                            .background(.thinMaterial, in: RoundedRectangle(cornerRadius: 12, style: .continuous))
+                        }
+                        .buttonStyle(.plain)
+                    }
+                }
+
+                Label("Cada unidade usa 1 Wood e o resultado é confirmado pelo servidor.", systemImage: "flame.fill")
+                    .font(.footnote)
+                    .foregroundStyle(.secondary)
+
+                Spacer(minLength: 0)
+            }
+            .padding(18)
+            .navigationTitle("Roast Pit")
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .cancellationAction) {
+                    Button("Cancelar", action: onCancel)
+                }
+            }
+        }
+    }
+}
+
 @MainActor
 struct ReplicaDashboardHost: View {
     @EnvironmentObject private var app: AppStore
@@ -1202,10 +1279,21 @@ struct ReplicaDashboardHost: View {
         } message: {
             Text("Defina qualquer meta entre 1 e 100000. A alteração fica bloqueada durante uma atividade ativa.")
         }
-        .confirmationDialog("O que assar", isPresented: $showRoastSelector, titleVisibility: .visible) {
-            ForEach(RoastPitMode.allCases) { roast in Button(roast.label) { app.selectedRoastMode = roast; start(.roastPit) } }
-            Button("Cancelar", role: .cancel) {}
-        } message: { Text("Cada unidade consome 1 Wood; o resultado é confirmado pelo servidor.") }
+        .sheet(isPresented: $showRoastSelector) {
+            RoastPitSelectorSheet(
+                selected: app.selectedRoastMode,
+                onSelect: { roast in
+                    app.selectedRoastMode = roast
+                    showRoastSelector = false
+                    start(.roastPit)
+                },
+                onCancel: {
+                    showRoastSelector = false
+                }
+            )
+            .presentationDetents([.medium])
+            .presentationDragIndicator(.visible)
+        }
         .confirmationDialog("Isca da pesca", isPresented: $showFishingSelector, titleVisibility: .visible) {
             baitButton(.feather)
             baitButton(.trout)
