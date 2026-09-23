@@ -1822,8 +1822,7 @@ actor AutomationEngine {
                let serverCookingXP = RealtimeProtocol.int(xp["cooking"]) {
                 cookingXPTotal = max(0, serverCookingXP)
             } else if let playerID,
-                      let refreshed = try? await http.skillXP(playerID: playerID, skill: "cooking"),
-                      let refreshed {
+                      let refreshed = try? await http.skillXP(playerID: playerID, skill: "cooking") {
                 cookingXPTotal = max(0, refreshed)
             }
 
