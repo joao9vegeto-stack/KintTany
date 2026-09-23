@@ -20,6 +20,7 @@ final class RealtimeProtocolTests: XCTestCase {
         XCTAssertEqual(RoastPitMode.trout.minCookingLevel, 6)
         XCTAssertEqual(RoastPitMode.trout.iconPath, "/assets/hud/resources/fish_trout.png")
         XCTAssertEqual(RoastPitMode.chicken.iconPath, "/assets/hud/resources/rawchicken.png")
+        XCTAssertEqual(AutomationEngine.bootstrap(for: .roastPit).region, "pond")
 
         let body = RoastPitProtocolPolicy.body(mode: .trout, fleet: "us", shardID: 4)
         XCTAssertEqual(body["mode"] as? String, "trout")

@@ -1202,36 +1202,40 @@ struct RoastPitSelectorSheet: View {
 
     var body: some View {
         ZStack {
-            Color(red: 0.40, green: 0.42, blue: 0.45)
+            KintTanyTheme.surface
+                .ignoresSafeArea()
+            KintResourceImage.image("KintPaperTexture")
+                .resizable(resizingMode: .tile)
+                .opacity(0.40)
                 .ignoresSafeArea()
 
-            VStack(spacing: 11) {
+            VStack(spacing: 12) {
                 HStack {
                     Color.clear.frame(width: 38, height: 38)
                     Spacer()
                     Text("Roast Pit")
-                        .font(.system(size: 23, weight: .heavy, design: .rounded))
-                        .foregroundStyle(.white)
-                        .shadow(color: .black.opacity(0.55), radius: 0, x: 1, y: 2)
+                        .font(KintTanyTheme.titleFont(22, weight: .medium))
+                        .foregroundStyle(KintTanyTheme.ink)
+                        .kintEmbossedText()
                     Spacer()
                     Button(action: onCancel) {
                         Image(systemName: "xmark")
-                            .font(.system(size: 18, weight: .black))
-                            .foregroundStyle(.white)
+                            .font(.system(size: 16, weight: .bold))
+                            .foregroundStyle(KintTanyTheme.ink)
                             .frame(width: 38, height: 38)
-                            .background(Color(red: 0.28, green: 0.30, blue: 0.34))
-                            .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
-                            .overlay(RoundedRectangle(cornerRadius: 8).stroke(.black.opacity(0.85), lineWidth: 2))
+                            .background(KintTanyTheme.surface.opacity(0.96))
+                            .kintRaised(radius: 10)
                     }
                     .buttonStyle(.plain)
                 }
 
-                Divider().overlay(Color.black.opacity(0.5))
+                KintDivider()
 
-                Text("Escolha o que assar. Cada unidade usa 1 Wood. Cada ciclo leva 10 segundos.")
-                    .font(.system(size: 13.5, weight: .bold, design: .rounded))
-                    .foregroundStyle(Color.white.opacity(0.82))
+                Text("Escolha o alimento. Cada unidade usa 1 Wood e cada ciclo leva 10 segundos.")
+                    .font(KintTanyTheme.bodyFont(13, weight: .medium))
+                    .foregroundStyle(KintTanyTheme.mutedInk)
                     .frame(maxWidth: .infinity, alignment: .leading)
+                    .lineLimit(2)
 
                 LazyVGrid(columns: columns, spacing: 9) {
                     ForEach(RoastPitMode.allCases) { roast in
@@ -1240,84 +1244,97 @@ struct RoastPitSelectorSheet: View {
                         } label: {
                             VStack(spacing: 5) {
                                 officialSprite(roast)
-                                    .frame(width: 42, height: 36)
+                                    .frame(width: 43, height: 37)
                                 Text(roast.label)
-                                    .font(.system(size: 12.5, weight: .heavy, design: .rounded))
-                                    .foregroundStyle(choice == roast ? .white : Color.white.opacity(0.72))
+                                    .font(KintTanyTheme.bodyFont(12.2, weight: .medium))
+                                    .foregroundStyle(KintTanyTheme.ink)
                                     .lineLimit(1)
                                     .minimumScaleFactor(0.72)
                                 Text("Lv. \(roast.minCookingLevel)")
-                                    .font(.system(size: 10.5, weight: .bold, design: .rounded))
-                                    .foregroundStyle(Color.white.opacity(0.48))
+                                    .font(KintTanyTheme.bodyFont(10.2, weight: .medium))
+                                    .foregroundStyle(KintTanyTheme.mutedInk)
                             }
                             .frame(maxWidth: .infinity, minHeight: 88)
                             .background(
-                                LinearGradient(
-                                    colors: choice == roast
-                                        ? [Color(red: 0.29, green: 0.31, blue: 0.35), Color(red: 0.20, green: 0.22, blue: 0.25)]
-                                        : [Color(red: 0.20, green: 0.22, blue: 0.25), Color(red: 0.14, green: 0.15, blue: 0.18)],
-                                    startPoint: .top,
-                                    endPoint: .bottom
-                                )
+                                RoundedRectangle(cornerRadius: 11, style: .continuous)
+                                    .fill(
+                                        choice == roast
+                                            ? KintTanyTheme.terracotta.opacity(0.13)
+                                            : KintTanyTheme.surface.opacity(0.92)
+                                    )
                             )
-                            .clipShape(RoundedRectangle(cornerRadius: 9, style: .continuous))
                             .overlay(
-                                RoundedRectangle(cornerRadius: 9)
-                                    .stroke(choice == roast ? Color.white.opacity(0.7) : Color.black.opacity(0.88), lineWidth: choice == roast ? 2 : 1.5)
+                                RoundedRectangle(cornerRadius: 11, style: .continuous)
+                                    .stroke(
+                                        choice == roast
+                                            ? KintTanyTheme.terracotta.opacity(0.80)
+                                            : KintTanyTheme.surfaceShadow.opacity(0.46),
+                                        lineWidth: choice == roast ? 1.5 : 0.8
+                                    )
                             )
+                            .shadow(color: KintTanyTheme.surfaceHighlight.opacity(0.92), radius: 1.8, x: -1.2, y: -1.2)
+                            .shadow(color: KintTanyTheme.surfaceShadow.opacity(0.58), radius: 2.2, x: 1.5, y: 1.7)
                         }
                         .buttonStyle(.plain)
                     }
                 }
 
-                VStack(spacing: 7) {
-                    HStack {
-                        Text(choice.label)
-                            .font(.system(size: 16, weight: .heavy, design: .rounded))
-                            .foregroundStyle(.white)
-                        Spacer()
-                        Text("Cooking Lv. \(choice.minCookingLevel)")
-                            .font(.system(size: 12, weight: .bold, design: .rounded))
-                            .foregroundStyle(Color.white.opacity(0.72))
-                    }
-
-                    HStack(spacing: 12) {
-                        officialSprite(choice)
-                            .frame(width: 58, height: 52)
-                            .padding(5)
-                            .background(Color.black.opacity(0.18))
-                            .clipShape(RoundedRectangle(cornerRadius: 8))
-                        VStack(alignment: .leading, spacing: 4) {
-                            Label("1 Wood por unidade", systemImage: "tree.fill")
-                            Label("10 segundos por ciclo", systemImage: "timer")
-                            Text("Resultado confirmado pelo servidor")
+                KintInsetPanel(cornerRadius: 12) {
+                    VStack(spacing: 8) {
+                        HStack {
+                            Text(choice.label)
+                                .font(KintTanyTheme.titleFont(16.5, weight: .medium))
+                                .foregroundStyle(KintTanyTheme.ink)
+                            Spacer()
+                            Text("Cooking Lv. \(choice.minCookingLevel)")
+                                .font(KintTanyTheme.bodyFont(11.5, weight: .medium))
+                                .foregroundStyle(KintTanyTheme.mutedInk)
                         }
-                        .font(.system(size: 11.5, weight: .semibold))
-                        .foregroundStyle(Color.white.opacity(0.76))
-                        Spacer()
+
+                        HStack(spacing: 12) {
+                            officialSprite(choice)
+                                .frame(width: 60, height: 53)
+                                .padding(5)
+                                .background(KintTanyTheme.surfaceHighlight.opacity(0.45))
+                                .clipShape(RoundedRectangle(cornerRadius: 9))
+
+                            VStack(alignment: .leading, spacing: 4) {
+                                Label("1 Wood por unidade", systemImage: "tree.fill")
+                                Label("10 segundos por ciclo", systemImage: "timer")
+                                Text("Banco preparado automaticamente antes do Pond")
+                            }
+                            .font(KintTanyTheme.bodyFont(11.2, weight: .medium))
+                            .foregroundStyle(KintTanyTheme.mutedInk)
+
+                            Spacer(minLength: 0)
+                        }
                     }
+                    .padding(12)
                 }
-                .padding(12)
-                .background(Color(red: 0.08, green: 0.09, blue: 0.11))
-                .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
-                .overlay(RoundedRectangle(cornerRadius: 10).stroke(Color.black, lineWidth: 2))
+                .frame(minHeight: 116)
 
                 Button {
                     onStart(choice)
                 } label: {
-                    Text("ASSAR")
-                        .font(.system(size: 17, weight: .heavy, design: .rounded))
-                        .foregroundStyle(.white)
-                        .frame(maxWidth: .infinity, minHeight: 50)
-                        .background(
-                            LinearGradient(
-                                colors: [Color(red: 0.28, green: 0.63, blue: 0.43), Color(red: 0.18, green: 0.44, blue: 0.30)],
-                                startPoint: .top,
-                                endPoint: .bottom
-                            )
-                        )
-                        .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
-                        .overlay(RoundedRectangle(cornerRadius: 10).stroke(Color.black.opacity(0.9), lineWidth: 2))
+                    ZStack {
+                        RoundedRectangle(cornerRadius: 12, style: .continuous)
+                            .fill(KintTanyTheme.terracotta)
+                        KintResourceImage.image("KintButtonTexture")
+                            .resizable(resizingMode: .tile)
+                            .opacity(0.28)
+                            .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
+                        Text("ASSAR")
+                            .font(KintTanyTheme.titleFont(17.5, weight: .medium))
+                            .foregroundStyle(KintTanyTheme.surfaceHighlight)
+                            .shadow(color: KintTanyTheme.terracottaShadow.opacity(0.9), radius: 0.7, x: 0, y: 1)
+                    }
+                    .frame(maxWidth: .infinity, minHeight: 52)
+                    .overlay(
+                        RoundedRectangle(cornerRadius: 12)
+                            .stroke(KintTanyTheme.terracottaShadow.opacity(0.70), lineWidth: 1)
+                    )
+                    .shadow(color: KintTanyTheme.surfaceShadow.opacity(0.65), radius: 2.6, x: 1.7, y: 2)
+                    .shadow(color: KintTanyTheme.surfaceHighlight.opacity(0.9), radius: 1.5, x: -1, y: -1)
                 }
                 .buttonStyle(.plain)
             }
@@ -1338,10 +1355,10 @@ struct RoastPitSelectorSheet: View {
                 Image(systemName: roast == .chicken ? "bird.fill" : "fish.fill")
                     .resizable()
                     .scaledToFit()
-                    .foregroundStyle(Color.white.opacity(0.55))
+                    .foregroundStyle(KintTanyTheme.mutedInk)
             case .empty:
                 ProgressView()
-                    .tint(.white)
+                    .tint(KintTanyTheme.terracotta)
             @unknown default:
                 EmptyView()
             }

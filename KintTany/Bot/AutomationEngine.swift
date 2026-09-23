@@ -1669,6 +1669,74 @@ actor AutomationEngine {
         return max(carried, confirmed.carried)
     }
 
+    /// Roast Pit uses the same proven transactional pattern as Fishing:
+    /// World -> bank_shop -> World, then AppStore closes that Presence and opens
+    /// a fresh Pond Presence on the same shard. Only the exact amount required
+    /// for this goal is exposed in the activity region.
+    func prepareRoastPitLoadoutFromWorld(goal: Int) async throws {
+        let wanted = max(1, goal)
+
+        guard try await waitForRegion("world", timeoutMS: 5_000) else {
+            throw EngineError.regionNotConfirmed("world")
+        }
+
+        var food = try await http.itemLocationCounts(type: roastMode.rawItem)
+        var wood = try await http.itemLocationCounts(type: "wood")
+        let foodTotal = food.carried + food.bank
+        let woodTotal = wood.carried + wood.bank
+
+        guard foodTotal >= wanted else {
+            throw EngineError.missingRequiredItem("\(roastMode.label) \(foodTotal)/\(wanted)")
+        }
+        guard woodTotal >= wanted else {
+            throw EngineError.missingRequiredItem("Wood \(woodTotal)/\(wanted)")
+        }
+
+        reporter(.log("🔥 Preflight Roast Pit • \(roastMode.label) total=\(foodTotal) • Wood total=\(woodTotal) • meta=\(wanted)"))
+
+        if food.carried < wanted || wood.carried < wanted {
+            reporter(.state(.syncing, "🏦 Preparando Roast Pit no banco"))
+            try await ensureWorldBankAccess(reason: "Roast Pit • \(roastMode.label) + Wood")
+
+            if food.carried < wanted {
+                _ = try await http.ensureCarriedItem(
+                    type: roastMode.rawItem,
+                    quantity: wanted,
+                    preferHotbar: false
+                )
+            }
+
+            if wood.carried < wanted {
+                _ = try await http.ensureCarriedItem(
+                    type: "wood",
+                    quantity: wanted,
+                    preferHotbar: false
+                )
+            }
+
+            food = try await http.itemLocationCounts(type: roastMode.rawItem)
+            wood = try await http.itemLocationCounts(type: "wood")
+
+            guard food.carried >= wanted else {
+                throw EngineError.missingRequiredItem("\(roastMode.label) carregada \(food.carried)/\(wanted)")
+            }
+            guard wood.carried >= wanted else {
+                throw EngineError.missingRequiredItem("Wood carregada \(wood.carried)/\(wanted)")
+            }
+
+            reporter(.log("🏦 Roast Pit • retirado do banco: \(roastMode.label) \(food.carried)/\(wanted) + Wood \(wood.carried)/\(wanted) ✅"))
+            try await leaveBankShopToWorld(reason: "Roast Pit preparado")
+        } else {
+            reporter(.log("🔥 Roast Pit • materiais já carregados: \(roastMode.label) \(food.carried)/\(wanted) + Wood \(wood.carried)/\(wanted) ✅"))
+        }
+
+        guard try await waitForRegion("world", timeoutMS: 5_000) else {
+            throw EngineError.regionNotConfirmed("world")
+        }
+
+        reporter(.log("🔥 Preflight Roast Pit concluído • Presence World pronta para handoff ao Pond"))
+    }
+
     private func runRoastPit(goal: Int) async throws {
         let target = max(1, goal)
 
@@ -1678,14 +1746,16 @@ actor AutomationEngine {
         }
         region = "pond"
 
-        let before = try await http.backpackState()
-        let raw = max(0, RealtimeProtocol.int(before.backpack[roastMode.rawItem]) ?? 0)
-        let wood = max(0, RealtimeProtocol.int(before.backpack["wood"]) ?? 0)
-        guard raw >= target else {
-            throw EngineError.missingRequiredItem("\(roastMode.label) \(raw)/\(target)")
+        // AppStore already completed World/bank_shop preflight. Re-read the
+        // actual carried slots here; flat counters are not authoritative for
+        // banked/carry location and caused Build 105 to report false 0/N.
+        let rawCounts = try await http.itemLocationCounts(type: roastMode.rawItem)
+        let woodCounts = try await http.itemLocationCounts(type: "wood")
+        guard rawCounts.carried >= target else {
+            throw EngineError.missingRequiredItem("\(roastMode.label) carregada \(rawCounts.carried)/\(target)")
         }
-        guard wood >= target else {
-            throw EngineError.missingRequiredItem("Wood \(wood)/\(target)")
+        guard woodCounts.carried >= target else {
+            throw EngineError.missingRequiredItem("Wood carregada \(woodCounts.carried)/\(target)")
         }
 
         reporter(.log("🔥 Roast Pit • \(roastMode.label) • meta \(target) • 1 Wood/ciclo • Cooking mínimo \(roastMode.minCookingLevel)"))

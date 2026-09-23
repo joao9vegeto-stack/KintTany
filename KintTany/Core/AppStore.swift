@@ -1621,10 +1621,10 @@ final class AppStore: ObservableObject {
             // correta. Esse é o ciclo que funcionou nas builds estáveis e evita tentar
             // World→Eldergrove na Presence recém-usada pelo banco.
             let bootstrap: PresenceBootstrap
-            if mode == .fishing {
-                // Fishing always starts with a safe World Presence for the
-                // transactional rod+bait bank preflight. A fresh activity
-                // Presence is opened only after World/bank_shop/World completes.
+            if mode == .fishing || mode == .roastPit {
+                // Fishing and Roast Pit start with a safe World Presence for
+                // transactional bank preflight. A fresh activity Presence is
+                // opened only after World/bank_shop/World completes.
                 bootstrap = PresenceBootstrap(region: "world", position: Position(x: 22.5, z: -3.5))
             } else {
                 bootstrap = AutomationEngine.bootstrapForRun(
@@ -1670,6 +1670,63 @@ final class AppStore: ObservableObject {
 
             await engine.prepareIdentity()
             guard activeRunID == runID else { return }
+
+            if mode == .roastPit {
+                state = .syncing
+                statusMessage = "🔥 Preparando alimento e Wood no banco"
+                stats.lastEvent = "preflight Roast Pit • World/bank_shop"
+                updateContinuedProcessingProgress(forceTitleUpdate: true)
+
+                try await engine.prepareRoastPitLoadoutFromWorld(goal: runGoal)
+                guard activeRunID == runID, !terminalFailureHandled else { return }
+
+                diagnostic("[ROAST] preflight World concluído • encerrando Presence bancária antes do Pond")
+                receiverTask?.cancel()
+                receiverTask = nil
+                activeEngine = nil
+                connected = false
+                await socket.close()
+                await importSocketTrace()
+                guard activeRunID == runID else { return }
+
+                let activityBootstrap = AutomationEngine.bootstrap(for: .roastPit)
+                state = .connecting
+                statusMessage = "Conectando ao Pond"
+                stats.lastEvent = "handoff Roast Pit • pond"
+                updateContinuedProcessingProgress()
+
+                let activityStream = try await socket.connect(
+                    session: session,
+                    shard: selectedShard,
+                    bootstrap: activityBootstrap
+                )
+                await importSocketTrace()
+                guard activeRunID == runID else { return }
+
+                let activityEngine = AutomationEngine(
+                    socket: socket,
+                    cookie: cookie,
+                    shard: selectedShard,
+                    bootstrap: activityBootstrap,
+                    fishingBait: selectedFishingBait,
+                    roastMode: selectedRoastMode,
+                    reporter: engineReporter(runID: runID)
+                )
+                engine = activityEngine
+                activeEngine = activityEngine
+                receiverTask = await makeReceiverTask(
+                    stream: activityStream,
+                    engine: activityEngine,
+                    mode: mode,
+                    runID: runID
+                )
+                connected = true
+                state = .syncing
+                statusMessage = "Sincronizando Roast Pit no Pond"
+                log("🔥 Presence World encerrada • nova Presence pond aberta no mesmo shard \(selectedShard)")
+                await activityEngine.prepareIdentity()
+                guard activeRunID == runID else { return }
+            }
 
             if mode == .fishing {
                 state = .syncing
