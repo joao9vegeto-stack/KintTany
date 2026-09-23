@@ -589,6 +589,12 @@ struct ActivityStats: Codable {
     var gatherRecoveriesBackground = 0
     var gatherProofMisses = 0
     var kills = 0
+    var roastCycleRemaining = 0
+    var roastCooked = 0
+    var roastBurned = 0
+    var roastLastXPGained = 0
+    var roastSessionXPGained = 0
+    var roastCookingXPTotal = 0
     var startedAt: Date?
     var lastEvent = ""
 }
@@ -1313,6 +1319,10 @@ final class AppStore: ObservableObject {
             log("Sessão • erros estruturais \(stats.sessionErrors)")
         }
         log(String(format: "⚡ Ritmo médio • %.2f/min", finalRate))
+        if mode == .roastPit {
+            log("🔥 Roast Pit • ciclos \(stats.successes)/\(sessionGoal) • cozidos \(stats.roastCooked) • queimados \(stats.roastBurned)")
+            log("📈 Cooking XP • ganho na sessão +\(stats.roastSessionXPGained) • total final \(stats.roastCookingXPTotal)")
+        }
         if mode.isGathering {
             log("Gather • recoveries internos \(stats.gatherRecoveries) (FG \(stats.gatherRecoveriesForeground) / BG \(stats.gatherRecoveriesBackground)) • proof misses \(stats.gatherProofMisses)")
         }
@@ -2744,6 +2754,9 @@ final class AppStore: ObservableObject {
             updateContinuedProcessingProgress()
 
         case .log(let message):
+            if activity == .roastPit, message.hasPrefix("🎣 Spots do servidor:") {
+                break
+            }
             log(message)
 
         case .diagnostic(let message):
@@ -2764,6 +2777,33 @@ final class AppStore: ObservableObject {
             continuedProgressSubunit = 0
             stats.lastEvent = detail ?? "sucesso"
             if let detail { log("✅ \(detail) • \(stats.successes)/\(sessionGoal)") }
+            updateContinuedProcessingProgress(forceTitleUpdate: true)
+
+        case .roastCountdown(let mode, let cycle, let goal, let secondsRemaining):
+            stats.roastCycleRemaining = secondsRemaining
+            state = .cooldown
+            statusMessage = "🔥 \(mode.label) • \(secondsRemaining)s • ciclo \(cycle)/\(goal)"
+            stats.lastEvent = secondsRemaining > 0
+                ? "assando • \(secondsRemaining)s"
+                : "confirmando resultado"
+            updateContinuedProcessingProgress()
+
+        case .roastResult(let mode, let cycle, let goal, let burned, let xpGained, let cookingXPTotal, let cookedCount, let burnedCount):
+            stats.successes = max(stats.successes, cycle)
+            stats.roastCycleRemaining = 0
+            stats.roastCooked = cookedCount
+            stats.roastBurned = burnedCount
+            stats.roastLastXPGained = xpGained
+            stats.roastSessionXPGained += xpGained
+            stats.roastCookingXPTotal = cookingXPTotal
+            continuedProgressSubunit = 0
+            state = .acting
+            statusMessage = burned
+                ? "🔥 Queimou • +0 XP • Cooking \(cookingXPTotal)"
+                : "✅ Assado • +\(xpGained) XP • Cooking \(cookingXPTotal)"
+            stats.lastEvent = burned
+                ? "\(mode.label) queimou • +0 XP"
+                : "\(mode.label) assado • +\(xpGained) XP"
             updateContinuedProcessingProgress(forceTitleUpdate: true)
 
         case .gatherSuccess(let detail, let absolute):

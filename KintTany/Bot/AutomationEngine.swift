@@ -7,6 +7,8 @@ enum EngineEvent {
     case target(String?)
     case attempt
     case success(String?)
+    case roastCountdown(mode: RoastPitMode, cycle: Int, goal: Int, secondsRemaining: Int)
+    case roastResult(mode: RoastPitMode, cycle: Int, goal: Int, burned: Bool, xpGained: Int, cookingXPTotal: Int, cookedCount: Int, burnedCount: Int)
     case gatherSuccess(String?, absolute: Int)
     case failure(String)
     case fatal(String)
@@ -1746,9 +1748,6 @@ actor AutomationEngine {
         }
         region = "pond"
 
-        // AppStore already completed World/bank_shop preflight. Re-read the
-        // actual carried slots here; flat counters are not authoritative for
-        // banked/carry location and caused Build 105 to report false 0/N.
         let rawCounts = try await http.itemLocationCounts(type: roastMode.rawItem)
         let woodCounts = try await http.itemLocationCounts(type: "wood")
         guard rawCounts.carried >= target else {
@@ -1758,70 +1757,100 @@ actor AutomationEngine {
             throw EngineError.missingRequiredItem("Wood carregada \(woodCounts.carried)/\(target)")
         }
 
-        reporter(.log("🔥 Roast Pit • \(roastMode.label) • meta \(target) • 1 Wood/ciclo • Cooking mínimo \(roastMode.minCookingLevel)"))
-        reporter(.diagnostic("[ROAST] cliente oficial: tutorial Pond tile=\(RoastPitProtocolPolicy.tutorialPitColumn),\(RoastPitProtocolPolicy.tutorialPitRow) • Presence offset=\(RoastPitProtocolPolicy.pondGridOffset)"))
+        var cookingXPTotal = 0
+        if let playerID {
+            cookingXPTotal = (try? await http.skillXP(playerID: playerID, skill: "cooking")) ?? 0
+        }
+
+        reporter(.log("🔥 Roast Pit iniciado • \(roastMode.label) • meta \(target) • Cooking Lv. mínimo \(roastMode.minCookingLevel) • Cooking XP inicial \(cookingXPTotal)"))
 
         let hb = Task { [weak self] in await self?.heartbeat() }
         defer { hb.cancel() }
 
         var confirmedApproach: Position?
-        var nextCandidateIndex = 0
+        var candidateIndex = 0
+        var cookedCount = 0
+        var burnedCount = 0
 
         while successes < target {
             try Task.checkCancellation()
-            reporter(.state(.acting, "Roast Pit • \(roastMode.label) #\(successes + 1)/\(target)"))
+            let cycle = successes + 1
 
-            var response: [String: Any]?
-
-            if confirmedApproach != nil {
-                do {
-                    response = try await http.grantCook(mode: roastMode)
-                } catch HTTPError.response(_, let message, _) where message == "not_at_roast_pit" {
-                    reporter(.diagnostic("[ROAST] servidor perdeu proximidade • reposicionando pelo Presence"))
-                    confirmedApproach = nil
-                }
+            if confirmedApproach == nil {
+                let candidate = RoastPitProtocolPolicy.approachPositions[candidateIndex % RoastPitProtocolPolicy.approachPositions.count]
+                reporter(.state(.moving, "Indo até o Roast Pit"))
+                try await walk(to: candidate, maxSeconds: 45, status: "Indo até o Roast Pit")
+                try await sleep(RoastPitProtocolPolicy.proximityRetryMS)
             }
 
-            if response == nil {
-                let approaches = RoastPitProtocolPolicy.approachPositions
-                var found = false
+            // The official client schedules one batch every 10 seconds. Expose
+            // that exact window to the HUD instead of a generic "cooldown".
+            for second in stride(from: 10, through: 1, by: -1) {
+                try Task.checkCancellation()
+                reporter(.roastCountdown(
+                    mode: roastMode,
+                    cycle: cycle,
+                    goal: target,
+                    secondsRemaining: second
+                ))
+                try await sleep(1_000)
+            }
+            reporter(.roastCountdown(
+                mode: roastMode,
+                cycle: cycle,
+                goal: target,
+                secondsRemaining: 0
+            ))
 
-                for offset in 0..<approaches.count {
-                    let index = (nextCandidateIndex + offset) % approaches.count
-                    let candidate = approaches[index]
-                    reporter(.state(.moving, "Indo até o Roast Pit"))
-                    reporter(.log("🔥 Roast Pit • aproximando pelo Presence • posição \(String(format: "%.1f", candidate.x)),\(String(format: "%.1f", candidate.z))"))
-                    try await walk(to: candidate, maxSeconds: 45, status: "Indo até o Roast Pit")
-                    try await sleep(RoastPitProtocolPolicy.proximityRetryMS)
-
-                    do {
-                        let granted = try await http.grantCook(mode: roastMode)
-                        response = granted
-                        confirmedApproach = candidate
-                        nextCandidateIndex = index
-                        found = true
-                        reporter(.diagnostic("[ROAST] proximidade autoritativa confirmada no candidato #\(index + 1)"))
-                        break
-                    } catch HTTPError.response(_, let message, _) where message == "not_at_roast_pit" {
-                        reporter(.diagnostic("[ROAST] candidato #\(index + 1) rejeitado por not_at_roast_pit; tentando adjacência seguinte"))
-                        continue
-                    }
+            var response: [String: Any]
+            do {
+                response = try await http.grantCook(mode: roastMode)
+                if confirmedApproach == nil {
+                    confirmedApproach = RoastPitProtocolPolicy.approachPositions[candidateIndex % RoastPitProtocolPolicy.approachPositions.count]
+                    reporter(.diagnostic("[ROAST] proximidade autoritativa confirmada no candidato #\(candidateIndex + 1)"))
                 }
-
-                guard found, response != nil else {
-                    throw EngineError.roastPitNotReachable
-                }
+            } catch HTTPError.response(_, let message, _) where message == "not_at_roast_pit" {
+                confirmedApproach = nil
+                candidateIndex = (candidateIndex + 1) % RoastPitProtocolPolicy.approachPositions.count
+                reporter(.log("🔥 Roast Pit • posição rejeitada pelo servidor • reposicionando antes de repetir o ciclo \(cycle)/\(target)"))
+                continue
             }
 
-            let burned = RealtimeProtocol.bool(response?["burned"]) ?? false
+            let burned = RealtimeProtocol.bool(response["burned"]) ?? false
+            let previousCookingXP = cookingXPTotal
+            if let xp = response["xp"] as? [String: Any],
+               let serverCookingXP = RealtimeProtocol.int(xp["cooking"]) {
+                cookingXPTotal = max(0, serverCookingXP)
+            } else if let playerID,
+                      let refreshed = try? await http.skillXP(playerID: playerID, skill: "cooking"),
+                      let refreshed {
+                cookingXPTotal = max(0, refreshed)
+            }
+
+            let xpGained = burned ? 0 : max(0, cookingXPTotal - previousCookingXP)
+            if burned {
+                burnedCount += 1
+            } else {
+                cookedCount += 1
+            }
+
             successes += 1
             reporter(.attempt)
-            reporter(.success(roastMode.cookedItem))
-            reporter(.state(.cooldown, "Assado \(successes)/\(target)"))
-            reporter(.log("🔥 \(roastMode.label) #\(successes)/\(target) • \(burned ? "queimou" : "cozido") • servidor confirmou"))
+            reporter(.roastResult(
+                mode: roastMode,
+                cycle: successes,
+                goal: target,
+                burned: burned,
+                xpGained: xpGained,
+                cookingXPTotal: cookingXPTotal,
+                cookedCount: cookedCount,
+                burnedCount: burnedCount
+            ))
 
-            if successes < target {
-                try await sleep(RoastPitProtocolPolicy.batchDelayMS)
+            if burned {
+                reporter(.log("🔥 Ciclo \(successes)/\(target) • \(roastMode.label) QUEIMOU • +0 Cooking XP • Cooking XP total \(cookingXPTotal) • cozidos \(cookedCount) • queimados \(burnedCount)"))
+            } else {
+                reporter(.log("✅ Ciclo \(successes)/\(target) • \(roastMode.label) assado • +\(xpGained) Cooking XP • Cooking XP total \(cookingXPTotal) • cozidos \(cookedCount) • queimados \(burnedCount)"))
             }
         }
     }
@@ -7290,17 +7319,21 @@ private struct KintaraHTTPClient {
         try await post("/api/auth/alchemist-potion-buy", body: ["potionType": type, "qty": max(1, quantity)])
     }
 
-    func combatXP(playerID: Int) async throws -> Int? {
+    func skillXP(playerID: Int, skill: String) async throws -> Int? {
         let response = try await get("/api/auth/player-stats?playerId=\(playerID)")
-        if let xp = response["skillXp"] as? [String: Any], let value = RealtimeProtocol.int(xp["combat"]) {
+        if let xp = response["skillXp"] as? [String: Any], let value = RealtimeProtocol.int(xp[skill]) {
             return max(0, value)
         }
         if let data = response["data"] as? [String: Any],
            let xp = data["skillXp"] as? [String: Any],
-           let value = RealtimeProtocol.int(xp["combat"]) {
+           let value = RealtimeProtocol.int(xp[skill]) {
             return max(0, value)
         }
         return nil
+    }
+
+    func combatXP(playerID: Int) async throws -> Int? {
+        try await skillXP(playerID: playerID, skill: "combat")
     }
 
     func totalResource(_ backpack: [String: Any], type: String) -> Int {

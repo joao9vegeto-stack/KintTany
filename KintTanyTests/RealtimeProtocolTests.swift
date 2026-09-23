@@ -7,6 +7,8 @@ final class RealtimeProtocolTests: XCTestCase {
         XCTAssertEqual(RoastPitProtocolPolicy.endpoint, "/api/auth/grant-cook-xp")
         XCTAssertEqual(RoastPitProtocolPolicy.batchDelayMS, 10_000)
         XCTAssertEqual(RoastPitProtocolPolicy.proximityRetryMS, 700)
+        XCTAssertEqual(RoastPitMode.trout.rawItem, "fish_trout")
+        XCTAssertEqual(RoastPitMode.trout.cookedItem, "cooked_trout")
         XCTAssertEqual(RoastPitProtocolPolicy.tutorialPitColumn, 18)
         XCTAssertEqual(RoastPitProtocolPolicy.tutorialPitRow, 34)
         XCTAssertEqual(RoastPitProtocolPolicy.pondGridOffset, 19.5)

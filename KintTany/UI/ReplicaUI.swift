@@ -1244,7 +1244,7 @@ struct RoastPitSelectorSheet: View {
                         } label: {
                             VStack(spacing: 5) {
                                 officialSprite(roast)
-                                    .frame(width: 43, height: 37)
+                                    .frame(width: 36, height: 30)
                                 Text(roast.label)
                                     .font(KintTanyTheme.bodyFont(12.2, weight: .medium))
                                     .foregroundStyle(KintTanyTheme.ink)
@@ -1254,7 +1254,7 @@ struct RoastPitSelectorSheet: View {
                                     .font(KintTanyTheme.bodyFont(10.2, weight: .medium))
                                     .foregroundStyle(KintTanyTheme.mutedInk)
                             }
-                            .frame(maxWidth: .infinity, minHeight: 88)
+                            .frame(maxWidth: .infinity, minHeight: 70)
                             .background(
                                 RoundedRectangle(cornerRadius: 11, style: .continuous)
                                     .fill(
@@ -1293,7 +1293,7 @@ struct RoastPitSelectorSheet: View {
 
                         HStack(spacing: 12) {
                             officialSprite(choice)
-                                .frame(width: 60, height: 53)
+                                .frame(width: 48, height: 42)
                                 .padding(5)
                                 .background(KintTanyTheme.surfaceHighlight.opacity(0.45))
                                 .clipShape(RoundedRectangle(cornerRadius: 9))
@@ -1311,7 +1311,7 @@ struct RoastPitSelectorSheet: View {
                     }
                     .padding(12)
                 }
-                .frame(minHeight: 116)
+                .frame(minHeight: 94)
 
                 Button {
                     onStart(choice)
@@ -1328,7 +1328,7 @@ struct RoastPitSelectorSheet: View {
                             .foregroundStyle(KintTanyTheme.surfaceHighlight)
                             .shadow(color: KintTanyTheme.terracottaShadow.opacity(0.9), radius: 0.7, x: 0, y: 1)
                     }
-                    .frame(maxWidth: .infinity, minHeight: 52)
+                    .frame(maxWidth: .infinity, minHeight: 44)
                     .overlay(
                         RoundedRectangle(cornerRadius: 12)
                             .stroke(KintTanyTheme.terracottaShadow.opacity(0.70), lineWidth: 1)
@@ -1338,7 +1338,7 @@ struct RoastPitSelectorSheet: View {
                 }
                 .buttonStyle(.plain)
             }
-            .padding(18)
+            .padding(12)
         }
     }
 
@@ -1414,7 +1414,7 @@ struct ReplicaDashboardHost: View {
                     showRoastSelector = false
                 }
             )
-            .presentationDetents([.fraction(0.62)])
+            .presentationDetents([.fraction(0.50)])
             .presentationDragIndicator(.visible)
         }
         .confirmationDialog("Isca da pesca", isPresented: $showFishingSelector, titleVisibility: .visible) {
@@ -1540,7 +1540,12 @@ struct ReplicaDashboardHost: View {
             .trimmingCharacters(in: .whitespacesAndNewlines)
             .capitalized
         let rate = currentMode == nil ? "0.00/min" : app.formattedRatePerMinute()
-        let status = currentMode == nil ? app.state.label : app.displayStatusMessage
+        let status: String
+        if currentMode == .roastPit, app.stats.roastCycleRemaining > 0 {
+            status = "🔥 \(app.stats.roastCycleRemaining)s • XP \(app.stats.roastCookingXPTotal)"
+        } else {
+            status = currentMode == nil ? app.state.label : app.displayStatusMessage
+        }
 
         dashboard = KintTanyDashboardState(
             isOnline: app.connected,
