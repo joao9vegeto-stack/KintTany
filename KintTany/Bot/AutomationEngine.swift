@@ -9,6 +9,9 @@ enum EngineEvent {
     case success(String?)
     case roastCountdown(mode: RoastPitMode, cycle: Int, goal: Int, secondsRemaining: Int)
     case roastResult(mode: RoastPitMode, cycle: Int, goal: Int, burned: Bool, xpGained: Int, cookingXPTotal: Int, cookedCount: Int, burnedCount: Int)
+    case smithCountdown(recipe: BlacksmithRecipe, completed: Int, goal: Int, secondsRemaining: Int)
+    case smithResult(recipe: BlacksmithRecipe, completed: Int, goal: Int, produced: Int, xpGained: Int, smithingXPTotal: Int)
+    case repairResult(target: RepairTarget, durabilityAfter: Int, costs: [String: Int])
     case gatherSuccess(String?, absolute: Int)
     case failure(String)
     case fatal(String)
@@ -340,6 +343,215 @@ enum RoastPitMode: String, CaseIterable, Codable, Identifiable {
     }
 }
 
+
+enum BlacksmithPanelMode: String, CaseIterable, Identifiable {
+    case smelt, forge, repair
+    var id: String { rawValue }
+    var label: String {
+        switch self {
+        case .smelt: return "SMELT"
+        case .forge: return "FORGE"
+        case .repair: return "REPAIR"
+        }
+    }
+}
+
+struct BlacksmithRecipe: Identifiable, Equatable {
+    let id: String
+    let result: String
+    let label: String
+    let materials: [String: Int]
+    let smithingLevel: Int
+    let stackable: Bool
+    let iconPath: String
+    let panel: BlacksmithPanelMode
+    var iconURL: URL? { URL(string: "https://us.kintara.com" + iconPath) }
+
+    static let copperIngot = BlacksmithRecipe(id: "copper_ingot", result: "copper_ingot", label: "Copper Ingot", materials: ["stone": 10, "coal": 5], smithingLevel: 0, stackable: true, iconPath: "/assets/hud/resources/copperingot.png", panel: .smelt)
+    static let ironIngot = BlacksmithRecipe(id: "iron_ingot", result: "iron_ore", label: "Iron Ingot", materials: ["metal": 6, "coal": 6], smithingLevel: 0, stackable: true, iconPath: "/assets/hud/resources/ironingot.png", panel: .smelt)
+    static let silverIngot = BlacksmithRecipe(id: "silver_ingot", result: "silver_ingot", label: "Silver Ingot", materials: ["silver_ore": 4, "coal": 8], smithingLevel: 0, stackable: true, iconPath: "/assets/hud/resources/silveringot.png", panel: .smelt)
+    static let copperAxe = BlacksmithRecipe(id: "copper_axe", result: "copper_axe", label: "Copper Axe", materials: ["copper_ingot": 20, "wood": 400], smithingLevel: 0, stackable: false, iconPath: "/assets/hud/tools/copperaxe.png", panel: .forge)
+    static let copperSword = BlacksmithRecipe(id: "copper_sword", result: "copper_sword", label: "Copper Sword", materials: ["copper_ingot": 25, "wood": 600], smithingLevel: 3, stackable: false, iconPath: "/assets/hud/tools/coppersword.png", panel: .forge)
+    static let copperPickaxe = BlacksmithRecipe(id: "copper_pickaxe", result: "copper_pickaxe", label: "Copper Pickaxe", materials: ["copper_ingot": 28, "wood": 850], smithingLevel: 7, stackable: false, iconPath: "/assets/hud/tools/copperpickaxe.png", panel: .forge)
+    static let ironAxe = BlacksmithRecipe(id: "iron_axe", result: "tool_axe_l2", label: "Iron Axe", materials: ["iron_ore": 40, "wood": 1000], smithingLevel: 10, stackable: false, iconPath: "/assets/hud/tools/ironaxe.png", panel: .forge)
+    static let ironSword = BlacksmithRecipe(id: "iron_sword", result: "wild_sword_l2", label: "Iron Sword", materials: ["iron_ore": 55, "wood": 1300], smithingLevel: 13, stackable: false, iconPath: "/assets/hud/tools/ironsword.png", panel: .forge)
+    static let ironPickaxe = BlacksmithRecipe(id: "iron_pickaxe", result: "tool_pickaxe_l2", label: "Iron Pickaxe", materials: ["iron_ore": 60, "wood": 1600], smithingLevel: 17, stackable: false, iconPath: "/assets/hud/tools/ironpickaxe.png", panel: .forge)
+    static let silverAxe = BlacksmithRecipe(id: "silver_axe", result: "silver_axe", label: "Silver Axe", materials: ["silver_ingot": 80, "wood": 2000], smithingLevel: 20, stackable: false, iconPath: "/assets/hud/tools/silveraxe.png", panel: .forge)
+    static let silverSword = BlacksmithRecipe(id: "silver_sword", result: "silver_sword", label: "Silver Sword", materials: ["silver_ingot": 90, "wood": 2500], smithingLevel: 23, stackable: false, iconPath: "/assets/hud/tools/silversword.png", panel: .forge)
+    static let silverPickaxe = BlacksmithRecipe(id: "silver_pickaxe", result: "silver_pickaxe", label: "Silver Pickaxe", materials: ["silver_ingot": 100, "wood": 3000], smithingLevel: 27, stackable: false, iconPath: "/assets/hud/tools/silverpickaxe.png", panel: .forge)
+
+    static let smeltRecipes = [copperIngot, ironIngot, silverIngot]
+    static let forgeRecipes = [copperAxe, copperSword, copperPickaxe, ironAxe, ironSword, ironPickaxe, silverAxe, silverSword, silverPickaxe]
+}
+
+struct RepairTarget: Identifiable, Equatable {
+    let slotKind: String
+    let slotIdx: Int
+    let type: String
+    let iid: String?
+    let durability: Int
+    let maxDurability: Int
+    var id: String { "\(slotKind):\(slotIdx):\(iid ?? type)" }
+    var label: String { BlacksmithProtocolPolicy.toolLabel(type) }
+    var iconURL: URL? { URL(string: "https://us.kintara.com" + BlacksmithProtocolPolicy.toolIconPath(type)) }
+}
+
+enum BlacksmithSelection: Equatable {
+    case smith(BlacksmithRecipe)
+    case repair(RepairTarget)
+}
+
+struct BlacksmithProtocolPolicy {
+    static let smithEndpoint = "/api/auth/blacksmith-smith"
+    static let repairEndpoint = "/api/auth/blacksmith-repair"
+    static let region = "blacksmith_shop"
+    static let smithSecondsPerUnit = 1
+    static let frostmereGridOffset = 19.5
+    static let entranceTileColumn = 22
+    static let entranceTileRow = 20
+    static let interiorPosition = Position(x: 2, z: 0)
+    static let repairMaxDurability = 4_000
+    static let repairCostFactor = 0.6
+    static let repairableToolTypes: Set<String> = ["tool_pickaxe_l2","tool_axe_l2","wild_sword_l2","copper_pickaxe","copper_axe","copper_sword","silver_pickaxe","silver_axe","silver_sword"]
+
+    static var frostmereEntrancePosition: Position {
+        Position(x: Double(entranceTileColumn) - frostmereGridOffset, z: Double(entranceTileRow) - frostmereGridOffset)
+    }
+
+    static func smithBody(recipe: String, quantity: Int, fleet: String, shardID: Int?) -> [String: Any] {
+        var body: [String: Any] = ["recipe": recipe, "quantity": max(1, quantity), "fleet": fleet]
+        if let shardID { body["shardId"] = shardID }
+        return body
+    }
+
+    static func repairBody(slotKind: String, slotIdx: Int, fleet: String, shardID: Int?) -> [String: Any] {
+        var body: [String: Any] = ["slotKind": slotKind, "slotIdx": slotIdx, "fleet": fleet]
+        if let shardID { body["shardId"] = shardID }
+        return body
+    }
+
+    static func recipeForResult(_ type: String) -> BlacksmithRecipe? {
+        BlacksmithRecipe.forgeRecipes.first { $0.result == type }
+    }
+
+    static func repairMaterialCosts(type: String, missingDurability: Int) -> [String: Int] {
+        guard let recipe = recipeForResult(type), missingDurability > 0 else { return [:] }
+        let fraction = Double(missingDurability) / Double(repairMaxDurability)
+        var costs: [String: Int] = [:]
+        for (material, quantity) in recipe.materials {
+            costs[material] = max(1, Int(ceil(Double(quantity) * repairCostFactor * fraction)))
+        }
+        return costs
+    }
+
+    static func repairTargets(in backpack: [String: Any]) -> [RepairTarget] {
+        var result: [RepairTarget] = []
+        func scan(_ value: Any?, slotKind: String) {
+            guard let slots = value as? [Any] else { return }
+            for idx in slots.indices {
+                guard let slot = slots[idx] as? [String: Any] else { continue }
+                let type = (slot["t"] as? String) ?? (slot["type"] as? String) ?? ""
+                guard repairableToolTypes.contains(type) else { continue }
+                let count = RealtimeProtocol.int(slot["n"] ?? slot["count"]) ?? 1
+                guard count > 0 else { continue }
+                let durability = max(0, min(repairMaxDurability, RealtimeProtocol.int(slot["d"] ?? slot["durability"]) ?? repairMaxDurability))
+                guard durability < repairMaxDurability else { continue }
+                let rawIID = slot["iid"]
+                let iid: String?
+                if let text = rawIID as? String { iid = text }
+                else if let number = rawIID as? NSNumber { iid = number.stringValue }
+                else { iid = nil }
+                result.append(RepairTarget(slotKind: slotKind, slotIdx: idx, type: type, iid: iid, durability: durability, maxDurability: repairMaxDurability))
+            }
+        }
+        scan(backpack["hotbar"], slotKind: "hot")
+        scan(backpack["invSlots"], slotKind: "inv")
+        return result.sorted {
+            let lm = $0.maxDurability - $0.durability
+            let rm = $1.maxDurability - $1.durability
+            if lm != rm { return lm > rm }
+            if $0.slotKind != $1.slotKind { return $0.slotKind < $1.slotKind }
+            return $0.slotIdx < $1.slotIdx
+        }
+    }
+
+    static func currentTarget(_ target: RepairTarget, in backpack: [String: Any]) -> RepairTarget? {
+        repairTargets(in: backpack).first {
+            $0.slotKind == target.slotKind && $0.slotIdx == target.slotIdx && $0.type == target.type &&
+            (target.iid == nil || $0.iid == target.iid)
+        }
+    }
+
+    static func slotDurability(_ target: RepairTarget, in backpack: [String: Any]) -> Int? {
+        let key = target.slotKind == "hot" ? "hotbar" : "invSlots"
+        guard let slots = backpack[key] as? [Any], slots.indices.contains(target.slotIdx),
+              let slot = slots[target.slotIdx] as? [String: Any] else { return nil }
+        let type = (slot["t"] as? String) ?? (slot["type"] as? String) ?? ""
+        guard type == target.type else { return nil }
+        return max(0, min(repairMaxDurability, RealtimeProtocol.int(slot["d"] ?? slot["durability"]) ?? repairMaxDurability))
+    }
+
+    static func toolLabel(_ type: String) -> String {
+        switch type {
+        case "tool_pickaxe_l2": return "Iron Pickaxe"
+        case "tool_axe_l2": return "Iron Axe"
+        case "wild_sword_l2": return "Iron Sword"
+        case "copper_pickaxe": return "Copper Pickaxe"
+        case "copper_axe": return "Copper Axe"
+        case "copper_sword": return "Copper Sword"
+        case "silver_pickaxe": return "Silver Pickaxe"
+        case "silver_axe": return "Silver Axe"
+        case "silver_sword": return "Silver Sword"
+        default: return type
+        }
+    }
+
+    static func toolIconPath(_ type: String) -> String {
+        switch type {
+        case "tool_pickaxe_l2": return "/assets/hud/tools/ironpickaxe.png"
+        case "tool_axe_l2": return "/assets/hud/tools/ironaxe.png"
+        case "wild_sword_l2": return "/assets/hud/tools/ironsword.png"
+        case "copper_pickaxe": return "/assets/hud/tools/copperpickaxe.png"
+        case "copper_axe": return "/assets/hud/tools/copperaxe.png"
+        case "copper_sword": return "/assets/hud/tools/coppersword.png"
+        case "silver_pickaxe": return "/assets/hud/tools/silverpickaxe.png"
+        case "silver_axe": return "/assets/hud/tools/silveraxe.png"
+        case "silver_sword": return "/assets/hud/tools/silversword.png"
+        default: return "/assets/hud/tools/hammer.png"
+        }
+    }
+
+    static func materialLabel(_ type: String) -> String {
+        switch type {
+        case "metal": return "Iron Ore"
+        case "wood": return "Wood"
+        case "coal": return "Coal"
+        case "stone": return "Stone"
+        case "copper_ingot": return "Copper Ingot"
+        case "iron_ore": return "Iron Ingot"
+        case "silver_ore": return "Silver Ore"
+        case "silver_ingot": return "Silver Ingot"
+        default: return type
+        }
+    }
+
+    static func serverErrorMessage(code: String, payload: [String: Any]?) -> String {
+        switch code {
+        case "missing_base_tool":
+            return "Servidor não encontrou a ferramenta-base (missing_base_tool). Nenhuma cadeia local foi presumida."
+        case "smithing_level_required":
+            return "Smithing \(RealtimeProtocol.int(payload?["need"]) ?? 0) necessário (smithing_level_required)"
+        case "missing_materials": return "Servidor não confirmou os materiais (missing_materials)"
+        case "inventory_full": return "Inventário cheio (inventory_full)"
+        case "smith_grant_failed": return "Servidor não conseguiu entregar o item forjado (smith_grant_failed)"
+        case "already_full": return "A ferramenta já está com durabilidade máxima (already_full)"
+        case "not_repairable": return "Item não reparável pelo servidor (not_repairable)"
+        case "bad_slot": return "Slot de Repair não é mais válido (bad_slot)"
+        default: return code
+        }
+    }
+}
+
 struct RoastPitProtocolPolicy {
     static let endpoint = "/api/auth/grant-cook-xp"
     static let batchDelayMS = 10_000
@@ -432,7 +644,7 @@ struct BankItemSelectionPolicy {
 /// opcionais só são copiados quando vieram do snapshot autoritativo de `/me`.
 struct BackpackSavePayloadPolicy {
     static let resourceKeys = [
-        "wood", "stone", "coal", "metal", "silver_ore", "cacti", "gold", "fish",
+        "wood", "stone", "coal", "metal", "copper_ingot", "iron_ore", "silver_ore", "silver_ingot", "cacti", "gold", "fish",
         "cooked_fish_meat", "raw_chicken", "cooked_chicken",
         "potion_health", "potion_health_l2", "potion_shield", "potion_strength", "potion_poison"
     ]
@@ -853,7 +1065,7 @@ struct ActivityToolPolicy {
         case .silver: return ["silver_pickaxe", "tool_pickaxe_l2", "copper_pickaxe"]
         case .cacti: return ["silver_axe", "tool_axe_l2"]
         case .fishing: return ["tool_fishing_rod"]
-        case .roastPit, .chicken, .zombie, .dragon: return []
+        case .roastPit, .blacksmith, .chicken, .zombie, .dragon: return []
         }
     }
 
@@ -864,7 +1076,7 @@ struct ActivityToolPolicy {
         case .silver: return "copper_pickaxe"
         case .cacti: return "tool_axe_l2"
         case .fishing: return "tool_fishing_rod"
-        case .roastPit, .chicken, .zombie, .dragon: return nil
+        case .roastPit, .blacksmith, .chicken, .zombie, .dragon: return nil
         }
     }
 
@@ -1408,6 +1620,7 @@ actor AutomationEngine {
     private let http: KintaraHTTPClient
     private let fishingBait: FishingBait
     private let roastMode: RoastPitMode
+    private let blacksmithSelection: BlacksmithSelection
 
     private var region: String
     private var serverRegion: String?
@@ -1563,6 +1776,7 @@ actor AutomationEngine {
         bootstrap: PresenceBootstrap,
         fishingBait: FishingBait = .feather,
         roastMode: RoastPitMode = .trout,
+        blacksmithSelection: BlacksmithSelection = .smith(.copperIngot),
         reporter: @escaping Reporter
     ) {
         self.socket = socket
@@ -1570,6 +1784,7 @@ actor AutomationEngine {
         self.shard = shard
         self.fishingBait = fishingBait
         self.roastMode = roastMode
+        self.blacksmithSelection = blacksmithSelection
         self.reporter = reporter
         self.http = KintaraHTTPClient(cookie: cookie, shard: shard)
         self.gatherKnowledge = GatherKnowledgeStore()
@@ -1596,7 +1811,7 @@ actor AutomationEngine {
         switch mode {
         case .tree:
             return PresenceBootstrap(region: "eldergrove", position: Position(x: -6.5, z: -18.5))
-        case .iron:
+        case .iron, .blacksmith:
             return PresenceBootstrap(region: "frostmere", position: Position(x: 5.5, z: -18.5))
         case .silver, .cacti:
             return PresenceBootstrap(region: "desert", position: GatherRegionPolicy.startPosition(for: mode))
@@ -1630,6 +1845,11 @@ actor AutomationEngine {
             return PresenceBootstrap(region: "world", position: Position(x: 22.5, z: -3.5))
         }
         return bootstrap(for: mode)
+    }
+
+    static func blacksmithRepairTargets(cookie: String) async throws -> [RepairTarget] {
+        let state = try await KintaraHTTPClient(cookie: cookie).backpackState()
+        return BlacksmithProtocolPolicy.repairTargets(in: state.backpack)
     }
 
     static func gatherToolPreflightDisposition(for mode: ActivityMode, cookie: String) async -> GatherToolPreflightDisposition {
@@ -1854,6 +2074,105 @@ actor AutomationEngine {
         }
     }
 
+
+    func prepareBlacksmithLoadoutFromWorld(goal: Int) async throws {
+        guard try await waitForRegion("world", timeoutMS: 5_000) else { throw EngineError.regionNotConfirmed("world") }
+        var required: [String: Int] = [:]
+        switch blacksmithSelection {
+        case .smith(let recipe):
+            let quantity = max(1, goal)
+            for (material, perUnit) in recipe.materials { required[material] = perUnit * quantity }
+            reporter(.log("⚒️ Preflight • \(recipe.label) ×\(quantity) • \(required.sorted { $0.key < $1.key }.map { "\(BlacksmithProtocolPolicy.materialLabel($0.key)) \($0.value)" }.joined(separator: " • "))"))
+        case .repair(let target):
+            let state = try await http.backpackState()
+            guard let current = BlacksmithProtocolPolicy.currentTarget(target, in: state.backpack) else { throw EngineError.blacksmithRepairTargetChanged }
+            required = BlacksmithProtocolPolicy.repairMaterialCosts(type: current.type, missingDurability: current.maxDurability - current.durability)
+            reporter(.log("🔧 Repair preflight • \(current.label) • \(current.durability)/\(current.maxDurability)"))
+        }
+        var bankNeeded=false
+        for (material, quantity) in required {
+            let c=try await http.itemLocationCounts(type: material)
+            guard c.carried+c.bank >= quantity else { throw EngineError.missingRequiredItem("\(BlacksmithProtocolPolicy.materialLabel(material)) \(c.carried+c.bank)/\(quantity)") }
+            if c.carried < quantity { bankNeeded=true }
+        }
+        if bankNeeded {
+            try await ensureWorldBankAccess(reason: "Frostmere Smith")
+            for (material, quantity) in required {
+                let c=try await http.itemLocationCounts(type: material)
+                if c.carried < quantity { _=try await http.ensureCarriedItem(type: material, quantity: quantity, preferHotbar: false) }
+                let verified=try await http.itemLocationCounts(type: material)
+                guard verified.carried >= quantity else { throw EngineError.missingRequiredItem("\(BlacksmithProtocolPolicy.materialLabel(material)) carregado \(verified.carried)/\(quantity)") }
+            }
+            try await leaveBankShopToWorld(reason: "Frostmere Smith preparado")
+        }
+        guard try await waitForRegion("world", timeoutMS: 5_000) else { throw EngineError.regionNotConfirmed("world") }
+        reporter(.log("⚒️ Preflight Frostmere Smith concluído"))
+    }
+
+    private func enterFrostmereSmith() async throws {
+        guard try await waitForRegion("frostmere", timeoutMS: 6_000) else { throw EngineError.regionNotConfirmed("frostmere") }
+        reporter(.state(.moving, "Indo ao Frostmere Smith"))
+        try await walk(to: BlacksmithProtocolPolicy.frostmereEntrancePosition, maxSeconds: 45, status: "Indo ao Frostmere Smith")
+        try await setRegion(BlacksmithProtocolPolicy.region, at: BlacksmithProtocolPolicy.interiorPosition)
+        guard try await waitForRegion(BlacksmithProtocolPolicy.region, timeoutMS: 6_000) else { throw EngineError.regionNotConfirmed(BlacksmithProtocolPolicy.region) }
+        reporter(.log("⚒️ Frostmere Smith confirmado • blacksmith_shop"))
+    }
+
+    private func runBlacksmith(goal: Int) async throws {
+        try await enterFrostmereSmith()
+        switch blacksmithSelection {
+        case .repair(let selected):
+            let before=try await http.backpackState()
+            guard let target=BlacksmithProtocolPolicy.currentTarget(selected, in: before.backpack) else { throw EngineError.blacksmithRepairTargetChanged }
+            let expected=BlacksmithProtocolPolicy.repairMaterialCosts(type: target.type, missingDurability: target.maxDurability-target.durability)
+            reporter(.attempt)
+            do {
+                let response=try await http.blacksmithRepair(target: target)
+                let refreshed=try await http.backpackState()
+                let after=BlacksmithProtocolPolicy.slotDurability(target, in: refreshed.backpack) ?? target.maxDurability
+                let costs=Self.intDictionary(response["costs"]) ?? expected
+                successes=1
+                reporter(.repairResult(target: target, durabilityAfter: after, costs: costs))
+                reporter(.log("✅ Repair • \(target.label) • \(target.durability)→\(after)/\(target.maxDurability)"))
+            } catch HTTPError.response(_, let code, let payload) {
+                throw EngineError.blacksmithFailure(BlacksmithProtocolPolicy.serverErrorMessage(code: code, payload: payload))
+            }
+        case .smith(let recipe):
+            let target=max(1,goal)
+            var xpTotal=0
+            if let playerID { xpTotal=(try? await http.skillXP(playerID: playerID, skill: "smithing")) ?? 0 }
+            reporter(.log("⚒️ \(recipe.label) • meta \(target) • Smithing mínimo \(recipe.smithingLevel) • XP inicial \(xpTotal)"))
+            let hb=Task { [weak self] in await self?.heartbeat() }
+            defer { hb.cancel() }
+            while successes < target {
+                try Task.checkCancellation()
+                let cycle=successes+1
+                reporter(.smithCountdown(recipe: recipe, completed: successes, goal: target, secondsRemaining: 1))
+                try await sleep(1_000)
+                reporter(.smithCountdown(recipe: recipe, completed: successes, goal: target, secondsRemaining: 0))
+                reporter(.attempt)
+                let response:[String:Any]
+                do { response=try await http.blacksmithSmith(recipe: recipe.id, quantity: 1) }
+                catch HTTPError.response(_, let code, let payload) { throw EngineError.blacksmithFailure(BlacksmithProtocolPolicy.serverErrorMessage(code: code, payload: payload)) }
+                let prev=xpTotal
+                if let xp=response["xp"] as? [String:Any], let v=RealtimeProtocol.int(xp["smithing"]) { xpTotal=max(0,v) }
+                else if let playerID, let v=try? await http.skillXP(playerID: playerID, skill: "smithing") { xpTotal=max(0,v) }
+                let gained=max(0,xpTotal-prev)
+                let produced=max(1,RealtimeProtocol.int(response["resultQty"]) ?? 1)
+                successes+=1
+                reporter(.smithResult(recipe: recipe, completed: successes, goal: target, produced: produced, xpGained: gained, smithingXPTotal: xpTotal))
+                reporter(.log("✅ Ciclo \(cycle)/\(target) • \(recipe.label) ×\(produced) • +\(gained) Smithing XP • total \(xpTotal)"))
+            }
+        }
+    }
+
+    private static func intDictionary(_ value: Any?) -> [String:Int]? {
+        guard let raw=value as? [String:Any] else { return nil }
+        var out:[String:Int]=[:]
+        for (k,v) in raw { if let n=RealtimeProtocol.int(v) { out[k]=n } }
+        return out
+    }
+
     func prepareIdentity() async {
         do {
             let me = try await http.get("/api/auth/me")
@@ -1997,6 +2316,8 @@ actor AutomationEngine {
             try await runFishing(goal: goal)
         case .roastPit:
             try await runRoastPit(goal: goal)
+        case .blacksmith:
+            try await runBlacksmith(goal: goal)
         case .chicken:
             try await runChicken(goal: goal)
         case .zombie, .dragon:
@@ -7257,6 +7578,8 @@ enum EngineError: LocalizedError {
     case unsupportedMode(String)
     case roastPitNotReachable
     case fishingPresenceStalled(successes: Int)
+    case blacksmithRepairTargetChanged
+    case blacksmithFailure(String)
 
     var errorDescription: String? {
         switch self {
@@ -7280,6 +7603,8 @@ enum EngineError: LocalizedError {
         case .unsupportedMode(let mode): return mode
         case .roastPitNotReachable: return "Não foi possível confirmar proximidade com o Roast Pit"
         case .fishingPresenceStalled(let successes): return "Presence de pesca sem fish_bite após falha global • progresso \(successes)"
+        case .blacksmithRepairTargetChanged: return "Ferramenta escolhida para Repair mudou de slot ou já não precisa de reparo"
+        case .blacksmithFailure(let detail): return "Frostmere Smith: \(detail)"
         }
     }
 }
@@ -7309,6 +7634,14 @@ private struct KintaraHTTPClient {
     }
 
     func grantCook(mode: RoastPitMode) async throws -> [String: Any] { try await post(RoastPitProtocolPolicy.endpoint, body: RoastPitProtocolPolicy.body(mode: mode, fleet: fleet, shardID: shardID)) }
+
+    func blacksmithSmith(recipe: String, quantity: Int) async throws -> [String: Any] {
+        try await post(BlacksmithProtocolPolicy.smithEndpoint, body: BlacksmithProtocolPolicy.smithBody(recipe: recipe, quantity: quantity, fleet: fleet, shardID: shardID))
+    }
+
+    func blacksmithRepair(target: RepairTarget) async throws -> [String: Any] {
+        try await post(BlacksmithProtocolPolicy.repairEndpoint, body: BlacksmithProtocolPolicy.repairBody(slotKind: target.slotKind, slotIdx: target.slotIdx, fleet: fleet, shardID: shardID))
+    }
 
     func consumePotion(_ type: String) async throws -> [String: Any] {
         try await post("/api/auth/consume-potion", body: ["type": type])
@@ -7955,6 +8288,7 @@ private extension ActivityMode {
         case .zombie: return "Zumbi"
         case .dragon: return "Dragão"
         case .roastPit: return "Roast Pit"
+        case .blacksmith: return "Frostmere Smith"
         }
     }
 }
