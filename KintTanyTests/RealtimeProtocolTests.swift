@@ -8,6 +8,9 @@ final class RealtimeProtocolTests: XCTestCase {
         XCTAssertEqual(BlacksmithProtocolPolicy.smithEndpoint, "/api/auth/blacksmith-smith")
         XCTAssertEqual(BlacksmithProtocolPolicy.repairEndpoint, "/api/auth/blacksmith-repair")
         XCTAssertEqual(BlacksmithProtocolPolicy.smithSecondsPerUnit, 1)
+        XCTAssertEqual(BlacksmithProtocolPolicy.batchQuantities, [1, 5, 10])
+        XCTAssertEqual(BlacksmithProtocolPolicy.normalizedBatchQuantity(5), 5)
+        XCTAssertEqual(BlacksmithProtocolPolicy.normalizedBatchQuantity(7), 1)
         XCTAssertEqual(BlacksmithProtocolPolicy.region, "blacksmith_shop")
         XCTAssertEqual(BlacksmithProtocolPolicy.frostmereEntrancePosition.x, 2.5)
         XCTAssertEqual(BlacksmithProtocolPolicy.frostmereEntrancePosition.z, 0.5)
@@ -24,6 +27,10 @@ final class RealtimeProtocolTests: XCTestCase {
         XCTAssertEqual(BlacksmithRecipe.ironPickaxe.result, "tool_pickaxe_l2")
         XCTAssertEqual(BlacksmithRecipe.silverPickaxe.materials["silver_ingot"], 100)
         XCTAssertEqual(BlacksmithRecipe.silverPickaxe.materials["wood"], 3000)
+
+        let silverTen = BlacksmithProtocolPolicy.smithMaterialCosts(recipe: .silverIngot, quantity: 10)
+        XCTAssertEqual(silverTen["coal"], 80)
+        XCTAssertEqual(silverTen["silver_ore"], 40)
 
         let body = BlacksmithProtocolPolicy.smithBody(recipe: "silver_pickaxe", quantity: 5, fleet: "us", shardID: 4)
         XCTAssertEqual(body["recipe"] as? String, "silver_pickaxe")

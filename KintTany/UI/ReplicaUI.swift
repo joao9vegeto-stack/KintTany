@@ -89,19 +89,22 @@ public struct KintLocationSummary: Hashable, Sendable {
     public var resources: Int
     public var mobs: Int
     public var lastEvent: String
+    public var details: [String]
 
     public init(
         region: String,
         position: String,
         resources: Int,
         mobs: Int,
-        lastEvent: String
+        lastEvent: String,
+        details: [String] = []
     ) {
         self.region = region
         self.position = position
         self.resources = resources
         self.mobs = mobs
         self.lastEvent = lastEvent
+        self.details = details
     }
 }
 
@@ -537,7 +540,7 @@ struct KintExactActivityGrid: View {
     @Binding var selected: KintActivity
     let didSelect: (KintActivity) -> Void
     private let top: [KintActivity] = [.wood, .coal, .stone, .ironOre, .silverOre, .cacti]
-    private let bottom: [KintActivity] = [.fishing, .roastPit, .blacksmith, .chicken, .zombie, .dragon]
+    private let bottom: [KintActivity] = [.fishing, .chicken, .zombie, .dragon]
 
     var body: some View {
         ZStack {
@@ -683,27 +686,32 @@ struct KintLocationPanel: View {
     let location: KintLocationSummary
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 4.1) {
+        VStack(alignment: .leading, spacing: 2.2) {
             KintResourceImage.image(KintRegionArtwork.assetName(for: location.region))
                 .resizable()
                 .interpolation(.high)
                 .scaledToFit()
-                .frame(width: 62, height: 42)
+                .frame(width: 50, height: 28)
                 .frame(maxWidth: .infinity, alignment: .center)
-                .padding(.bottom, 1)
 
             telemetryLine("Região \(location.region)")
             telemetryLine("Posição \(location.position)")
-            telemetryLine("Recursos \(location.resources)")
-            telemetryLine("Mobs \(location.mobs)")
+
+            if location.details.isEmpty {
+                telemetryLine("Recursos \(location.resources)")
+                telemetryLine("Mobs \(location.mobs)")
+            } else {
+                ForEach(Array(location.details.prefix(3).enumerated()), id: \.offset) { _, detail in
+                    telemetryLine(detail)
+                }
+            }
 
             Text("Último evento \(location.lastEvent)")
-                .font(KintTanyTheme.bodyFont(9.7))
+                .font(KintTanyTheme.bodyFont(8.9))
                 .foregroundStyle(KintTanyTheme.ink)
-                .lineLimit(2)
-                .minimumScaleFactor(0.68)
+                .lineLimit(location.details.isEmpty ? 2 : 1)
+                .minimumScaleFactor(0.55)
                 .allowsTightening(true)
-                .fixedSize(horizontal: false, vertical: true)
         }
         .foregroundStyle(KintTanyTheme.ink)
         .kintEmbossedText()
@@ -711,11 +719,48 @@ struct KintLocationPanel: View {
 
     private func telemetryLine(_ value: String) -> some View {
         Text(value)
-            .font(KintTanyTheme.bodyFont(10.2))
+            .font(KintTanyTheme.bodyFont(9.2))
             .lineLimit(1)
-            .minimumScaleFactor(0.56)
+            .minimumScaleFactor(0.48)
             .allowsTightening(true)
             .frame(maxWidth: .infinity, alignment: .leading)
+    }
+}
+
+struct KintServiceShortcuts: View {
+    @Binding var selected: KintActivity
+    let didSelect: (KintActivity) -> Void
+
+    var body: some View {
+        HStack(spacing: 5) {
+            shortcut(.roastPit, label: "Roast")
+            shortcut(.blacksmith, label: "Smith")
+        }
+    }
+
+    private func shortcut(_ activity: KintActivity, label: String) -> some View {
+        Button {
+            selected = activity
+            didSelect(activity)
+        } label: {
+            HStack(spacing: 3) {
+                KintActivitySprite(activity: activity)
+                    .frame(width: 13, height: 13)
+                Text(label)
+                    .font(KintTanyTheme.bodyFont(7.4, weight: .medium))
+                    .lineLimit(1)
+                    .minimumScaleFactor(0.7)
+            }
+            .foregroundStyle(KintTanyTheme.ink)
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
+            .background(selected == activity ? KintTanyTheme.terracotta.opacity(0.13) : KintTanyTheme.surface.opacity(0.78))
+            .clipShape(RoundedRectangle(cornerRadius: 7, style: .continuous))
+            .overlay(
+                RoundedRectangle(cornerRadius: 7, style: .continuous)
+                    .stroke(KintTanyTheme.surfaceShadow.opacity(0.48), lineWidth: 0.7)
+            )
+        }
+        .buttonStyle(.plain)
     }
 }
 
@@ -1125,8 +1170,15 @@ private struct KintTanyDesignCanvas<AvatarContent: View>: View {
                 .position(x: 254, y: 420)
 
             KintLocationPanel(location: state.location)
-                .frame(width: 112, height: 174, alignment: .topLeading)
-                .position(x: 314, y: 420)
+                .frame(width: 112, height: 148, alignment: .topLeading)
+                .position(x: 314, y: 407)
+
+            KintServiceShortcuts(
+                selected: $state.selectedActivity,
+                didSelect: actions.selectActivity
+            )
+            .frame(width: 112, height: 30)
+            .position(x: 314, y: 498)
 
             KintDivider()
                 .frame(width: 350)
@@ -1205,150 +1257,120 @@ struct RoastPitSelectorSheet: View {
     }
 
     private let columns = [
-        GridItem(.flexible(), spacing: 9),
-        GridItem(.flexible(), spacing: 9),
-        GridItem(.flexible(), spacing: 9)
+        GridItem(.flexible(), spacing: 6),
+        GridItem(.flexible(), spacing: 6),
+        GridItem(.flexible(), spacing: 6)
     ]
 
     var body: some View {
         ZStack {
-            KintTanyTheme.surface
-                .ignoresSafeArea()
+            KintTanyTheme.surface.ignoresSafeArea()
             KintResourceImage.image("KintPaperTexture")
                 .resizable(resizingMode: .tile)
                 .opacity(0.40)
                 .ignoresSafeArea()
 
-            VStack(spacing: 12) {
+            VStack(spacing: 7) {
                 HStack {
-                    Color.clear.frame(width: 38, height: 38)
+                    Color.clear.frame(width: 32, height: 32)
                     Spacer()
                     Text("Roast Pit")
-                        .font(KintTanyTheme.titleFont(22, weight: .medium))
+                        .font(KintTanyTheme.titleFont(19, weight: .medium))
                         .foregroundStyle(KintTanyTheme.ink)
                         .kintEmbossedText()
                     Spacer()
                     Button(action: onCancel) {
                         Image(systemName: "xmark")
-                            .font(.system(size: 16, weight: .bold))
+                            .font(.system(size: 14, weight: .bold))
                             .foregroundStyle(KintTanyTheme.ink)
-                            .frame(width: 38, height: 38)
+                            .frame(width: 32, height: 32)
                             .background(KintTanyTheme.surface.opacity(0.96))
-                            .kintRaised(radius: 10)
+                            .kintRaised(radius: 9)
                     }
                     .buttonStyle(.plain)
                 }
 
-                KintDivider()
-
-                Text("Escolha o alimento. Cada unidade usa 1 Wood e cada ciclo leva 10 segundos.")
-                    .font(KintTanyTheme.bodyFont(13, weight: .medium))
+                Text("1 Wood por unidade • 10 segundos por ciclo")
+                    .font(KintTanyTheme.bodyFont(10.5, weight: .medium))
                     .foregroundStyle(KintTanyTheme.mutedInk)
                     .frame(maxWidth: .infinity, alignment: .leading)
-                    .lineLimit(2)
 
-                LazyVGrid(columns: columns, spacing: 9) {
+                LazyVGrid(columns: columns, spacing: 6) {
                     ForEach(RoastPitMode.allCases) { roast in
-                        Button {
-                            choice = roast
-                        } label: {
-                            VStack(spacing: 5) {
+                        Button { choice = roast } label: {
+                            VStack(spacing: 2) {
                                 officialSprite(roast)
-                                    .frame(width: 36, height: 30)
+                                    .frame(width: 28, height: 22)
                                 Text(roast.label)
-                                    .font(KintTanyTheme.bodyFont(12.2, weight: .medium))
+                                    .font(KintTanyTheme.bodyFont(10.4, weight: .medium))
                                     .foregroundStyle(KintTanyTheme.ink)
                                     .lineLimit(1)
                                     .minimumScaleFactor(0.72)
                                 Text("Lv. \(roast.minCookingLevel)")
-                                    .font(KintTanyTheme.bodyFont(10.2, weight: .medium))
+                                    .font(KintTanyTheme.bodyFont(8.8, weight: .medium))
                                     .foregroundStyle(KintTanyTheme.mutedInk)
                             }
-                            .frame(maxWidth: .infinity, minHeight: 70)
+                            .frame(maxWidth: .infinity, minHeight: 51)
                             .background(
-                                RoundedRectangle(cornerRadius: 11, style: .continuous)
-                                    .fill(
-                                        choice == roast
-                                            ? KintTanyTheme.terracotta.opacity(0.13)
-                                            : KintTanyTheme.surface.opacity(0.92)
-                                    )
+                                RoundedRectangle(cornerRadius: 9, style: .continuous)
+                                    .fill(choice == roast ? KintTanyTheme.terracotta.opacity(0.13) : KintTanyTheme.surface.opacity(0.92))
                             )
                             .overlay(
-                                RoundedRectangle(cornerRadius: 11, style: .continuous)
-                                    .stroke(
-                                        choice == roast
-                                            ? KintTanyTheme.terracotta.opacity(0.80)
-                                            : KintTanyTheme.surfaceShadow.opacity(0.46),
-                                        lineWidth: choice == roast ? 1.5 : 0.8
-                                    )
+                                RoundedRectangle(cornerRadius: 9, style: .continuous)
+                                    .stroke(choice == roast ? KintTanyTheme.terracotta.opacity(0.80) : KintTanyTheme.surfaceShadow.opacity(0.46), lineWidth: choice == roast ? 1.4 : 0.7)
                             )
-                            .shadow(color: KintTanyTheme.surfaceHighlight.opacity(0.92), radius: 1.8, x: -1.2, y: -1.2)
-                            .shadow(color: KintTanyTheme.surfaceShadow.opacity(0.58), radius: 2.2, x: 1.5, y: 1.7)
                         }
                         .buttonStyle(.plain)
                     }
                 }
 
-                KintInsetPanel(cornerRadius: 12) {
-                    VStack(spacing: 8) {
-                        HStack {
-                            Text(choice.label)
-                                .font(KintTanyTheme.titleFont(16.5, weight: .medium))
-                                .foregroundStyle(KintTanyTheme.ink)
-                            Spacer()
-                            Text("Cooking Lv. \(choice.minCookingLevel)")
-                                .font(KintTanyTheme.bodyFont(11.5, weight: .medium))
-                                .foregroundStyle(KintTanyTheme.mutedInk)
-                        }
+                KintInsetPanel(cornerRadius: 10) {
+                    HStack(spacing: 9) {
+                        officialSprite(choice)
+                            .frame(width: 36, height: 31)
+                            .padding(4)
+                            .background(KintTanyTheme.surfaceHighlight.opacity(0.45))
+                            .clipShape(RoundedRectangle(cornerRadius: 8))
 
-                        HStack(spacing: 12) {
-                            officialSprite(choice)
-                                .frame(width: 48, height: 42)
-                                .padding(5)
-                                .background(KintTanyTheme.surfaceHighlight.opacity(0.45))
-                                .clipShape(RoundedRectangle(cornerRadius: 9))
-
-                            VStack(alignment: .leading, spacing: 4) {
-                                Label("1 Wood por unidade", systemImage: "tree.fill")
-                                Label("10 segundos por ciclo", systemImage: "timer")
-                                Text("Banco preparado automaticamente antes do Pond")
+                        VStack(alignment: .leading, spacing: 2) {
+                            HStack {
+                                Text(choice.label)
+                                    .font(KintTanyTheme.titleFont(13.5, weight: .medium))
+                                Spacer()
+                                Text("Cooking Lv. \(choice.minCookingLevel)")
+                                    .font(KintTanyTheme.bodyFont(9.2, weight: .medium))
+                                    .foregroundStyle(KintTanyTheme.mutedInk)
                             }
-                            .font(KintTanyTheme.bodyFont(11.2, weight: .medium))
-                            .foregroundStyle(KintTanyTheme.mutedInk)
-
-                            Spacer(minLength: 0)
+                            Text("1 Wood • 10s • banco automático antes do Pond")
+                                .font(KintTanyTheme.bodyFont(9.5, weight: .medium))
+                                .foregroundStyle(KintTanyTheme.mutedInk)
+                                .lineLimit(1)
+                                .minimumScaleFactor(0.72)
                         }
                     }
-                    .padding(12)
+                    .foregroundStyle(KintTanyTheme.ink)
+                    .padding(9)
                 }
-                .frame(minHeight: 94)
+                .frame(minHeight: 61)
 
-                Button {
-                    onStart(choice)
-                } label: {
+                Button { onStart(choice) } label: {
                     ZStack {
-                        RoundedRectangle(cornerRadius: 12, style: .continuous)
+                        RoundedRectangle(cornerRadius: 11, style: .continuous)
                             .fill(KintTanyTheme.terracotta)
                         KintResourceImage.image("KintButtonTexture")
                             .resizable(resizingMode: .tile)
                             .opacity(0.28)
-                            .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
+                            .clipShape(RoundedRectangle(cornerRadius: 11, style: .continuous))
                         Text("ASSAR")
-                            .font(KintTanyTheme.titleFont(17.5, weight: .medium))
+                            .font(KintTanyTheme.titleFont(16, weight: .medium))
                             .foregroundStyle(KintTanyTheme.surfaceHighlight)
-                            .shadow(color: KintTanyTheme.terracottaShadow.opacity(0.9), radius: 0.7, x: 0, y: 1)
                     }
-                    .frame(maxWidth: .infinity, minHeight: 44)
-                    .overlay(
-                        RoundedRectangle(cornerRadius: 12)
-                            .stroke(KintTanyTheme.terracottaShadow.opacity(0.70), lineWidth: 1)
-                    )
-                    .shadow(color: KintTanyTheme.surfaceShadow.opacity(0.65), radius: 2.6, x: 1.7, y: 2)
-                    .shadow(color: KintTanyTheme.surfaceHighlight.opacity(0.9), radius: 1.5, x: -1, y: -1)
+                    .frame(maxWidth: .infinity, minHeight: 40)
                 }
                 .buttonStyle(.plain)
             }
-            .padding(12)
+            .padding(.horizontal, 12)
+            .padding(.vertical, 8)
         }
     }
 
@@ -1357,18 +1379,14 @@ struct RoastPitSelectorSheet: View {
         AsyncImage(url: roast.iconURL) { phase in
             switch phase {
             case .success(let image):
-                image
-                    .resizable()
-                    .interpolation(.high)
-                    .scaledToFit()
+                image.resizable().interpolation(.high).scaledToFit()
             case .failure:
                 Image(systemName: roast == .chicken ? "bird.fill" : "fish.fill")
                     .resizable()
                     .scaledToFit()
                     .foregroundStyle(KintTanyTheme.mutedInk)
             case .empty:
-                ProgressView()
-                    .tint(KintTanyTheme.terracotta)
+                ProgressView().tint(KintTanyTheme.terracotta)
             @unknown default:
                 EmptyView()
             }
@@ -1376,13 +1394,15 @@ struct RoastPitSelectorSheet: View {
     }
 }
 
-
 struct BlacksmithSelectorSheet: View {
     @State private var panel: BlacksmithPanelMode = .smelt
     @State private var recipe: BlacksmithRecipe = .copperIngot
     @State private var repairTarget: RepairTarget?
     @State private var repairTargets: [RepairTarget] = []
     @State private var loadingRepairs = false
+    @State private var batchQuantity = 1
+
+    private let batchOptions = BlacksmithProtocolPolicy.batchQuantities
 
     let loadRepairTargets: () async -> [RepairTarget]
     let onStart: (BlacksmithSelection) -> Void
@@ -1444,13 +1464,17 @@ struct BlacksmithSelectorSheet: View {
                 }
                 .scrollIndicators(.hidden)
 
+                if panel != .repair {
+                    batchSelector
+                }
+
                 selectionSummary
 
                 Button {
                     if panel == .repair {
                         if let repairTarget { onStart(.repair(repairTarget)) }
                     } else {
-                        onStart(.smith(recipe))
+                        onStart(.smith(recipe, batch: batchQuantity))
                     }
                 } label: {
                     Text(panel == .repair ? "REPARAR" : (panel == .smelt ? "FUNDIR" : "FORJAR"))
@@ -1470,6 +1494,29 @@ struct BlacksmithSelectorSheet: View {
 
     private var recipes: [BlacksmithRecipe] {
         panel == .smelt ? BlacksmithRecipe.smeltRecipes : BlacksmithRecipe.forgeRecipes
+    }
+
+    private var batchMaterials: [String: Int] {
+        BlacksmithProtocolPolicy.smithMaterialCosts(recipe: recipe, quantity: batchQuantity)
+    }
+
+    private var batchSelector: some View {
+        HStack(spacing: 7) {
+            Text("Lote")
+                .font(KintTanyTheme.bodyFont(11.2, weight: .semibold))
+                .foregroundStyle(KintTanyTheme.mutedInk)
+            ForEach(batchOptions, id: \.self) { quantity in
+                Button("×\(quantity)") {
+                    batchQuantity = quantity
+                }
+                .font(KintTanyTheme.bodyFont(11.5, weight: .semibold))
+                .foregroundStyle(batchQuantity == quantity ? KintTanyTheme.surfaceHighlight : KintTanyTheme.ink)
+                .frame(maxWidth: .infinity, minHeight: 31)
+                .background(batchQuantity == quantity ? KintTanyTheme.terracotta : KintTanyTheme.surface.opacity(0.92))
+                .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
+                .buttonStyle(.plain)
+            }
+        }
     }
 
     private var recipeGrid: some View {
@@ -1567,7 +1614,7 @@ struct BlacksmithSelectorSheet: View {
                 VStack(alignment: .leading, spacing: 4) {
                     Text(recipe.label)
                         .font(KintTanyTheme.bodyFont(12.5, weight: .semibold))
-                    Text(recipe.materials.sorted { $0.key < $1.key }.map { "\(BlacksmithProtocolPolicy.materialLabel($0.key)) \($0.value)" }.joined(separator: " • "))
+                    Text("Necessário ×\(batchQuantity): " + batchMaterials.sorted { $0.key < $1.key }.map { "\(BlacksmithProtocolPolicy.materialLabel($0.key)) \($0.value)" }.joined(separator: " • "))
                     Text("1 segundo por unidade • banco automático")
                 }
                 .font(KintTanyTheme.bodyFont(10.8, weight: .medium))
@@ -1656,7 +1703,7 @@ struct ReplicaDashboardHost: View {
                     showRoastSelector = false
                 }
             )
-            .presentationDetents([.fraction(0.50)])
+            .presentationDetents([.fraction(0.44)])
             .presentationDragIndicator(.visible)
         }
         .sheet(isPresented: $showBlacksmithSelector) {
@@ -1669,7 +1716,7 @@ struct ReplicaDashboardHost: View {
                 },
                 onCancel: { showBlacksmithSelector = false }
             )
-            .presentationDetents([.fraction(0.68)])
+            .presentationDetents([.fraction(0.72)])
             .presentationDragIndicator(.visible)
         }
         .confirmationDialog("Isca da pesca", isPresented: $showFishingSelector, titleVisibility: .visible) {
@@ -1796,6 +1843,20 @@ struct ReplicaDashboardHost: View {
             .trimmingCharacters(in: .whitespacesAndNewlines)
             .capitalized
         let rate = currentMode == nil ? "0.00/min" : app.formattedRatePerMinute()
+
+        var telemetryDetails: [String] = []
+        let showSmithTelemetry = currentMode == .blacksmith ||
+            (!app.stats.smithRecipeLabel.isEmpty && (app.stats.smithProduced > 0 || app.stats.smithLastInventoryTotal > 0))
+        if showSmithTelemetry {
+            telemetryDetails.append("Lote ×\(app.stats.smithBatchSize) • \(app.stats.smithRecipeLabel)")
+            if !app.stats.smithRequiredSummary.isEmpty {
+                telemetryDetails.append("Precisa \(app.stats.smithRequiredSummary)")
+            }
+            if !app.stats.smithBankRemainingSummary.isEmpty {
+                telemetryDetails.append("Banco \(app.stats.smithBankRemainingSummary)")
+            }
+        }
+
         let status: String
         if currentMode == .roastPit, app.stats.roastCycleRemaining > 0 {
             status = "🔥 \(app.stats.roastCycleRemaining)s • XP \(app.stats.roastCookingXPTotal)"
@@ -1830,7 +1891,8 @@ struct ReplicaDashboardHost: View {
                 position: String(format: "%.1f, %.1f", app.player.position.x, app.player.position.z),
                 resources: app.resourceCount,
                 mobs: app.mobCount,
-                lastEvent: lastEvent
+                lastEvent: lastEvent,
+                details: telemetryDetails
             ),
             session: .init(
                 target: target,

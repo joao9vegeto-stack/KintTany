@@ -9,8 +9,10 @@ enum EngineEvent {
     case success(String?)
     case roastCountdown(mode: RoastPitMode, cycle: Int, goal: Int, secondsRemaining: Int)
     case roastResult(mode: RoastPitMode, cycle: Int, goal: Int, burned: Bool, xpGained: Int, cookingXPTotal: Int, cookedCount: Int, burnedCount: Int)
-    case smithCountdown(recipe: BlacksmithRecipe, completed: Int, goal: Int, secondsRemaining: Int)
-    case smithResult(recipe: BlacksmithRecipe, completed: Int, goal: Int, produced: Int, xpGained: Int, smithingXPTotal: Int)
+    case smithPreflight(recipe: BlacksmithRecipe, batch: Int, required: [String: Int])
+    case smithBank(recipe: BlacksmithRecipe, batch: Int, withdrawn: [String: Int], remaining: [String: Int])
+    case smithCountdown(recipe: BlacksmithRecipe, completed: Int, goal: Int, batch: Int, secondsRemaining: Int)
+    case smithResult(recipe: BlacksmithRecipe, completed: Int, goal: Int, produced: Int, inventoryTotal: Int, xpGained: Int, smithingXPTotal: Int)
     case repairResult(target: RepairTarget, durabilityAfter: Int, costs: [String: Int])
     case gatherSuccess(String?, absolute: Int)
     case failure(String)
@@ -397,7 +399,7 @@ struct RepairTarget: Identifiable, Equatable {
 }
 
 enum BlacksmithSelection: Equatable {
-    case smith(BlacksmithRecipe)
+    case smith(BlacksmithRecipe, batch: Int)
     case repair(RepairTarget)
 }
 
@@ -406,6 +408,21 @@ struct BlacksmithProtocolPolicy {
     static let repairEndpoint = "/api/auth/blacksmith-repair"
     static let region = "blacksmith_shop"
     static let smithSecondsPerUnit = 1
+    static let batchQuantities = [1, 5, 10]
+
+    static func normalizedBatchQuantity(_ value: Int) -> Int {
+        batchQuantities.contains(value) ? value : 1
+    }
+
+    static func smithMaterialCosts(recipe: BlacksmithRecipe, quantity: Int) -> [String: Int] {
+        let units = normalizedBatchQuantity(quantity)
+        var costs: [String: Int] = [:]
+        for (material, perUnit) in recipe.materials {
+            costs[material] = perUnit * units
+        }
+        return costs
+    }
+
     static let frostmereGridOffset = 19.5
     static let entranceTileColumn = 22
     static let entranceTileRow = 20
@@ -1776,7 +1793,7 @@ actor AutomationEngine {
         bootstrap: PresenceBootstrap,
         fishingBait: FishingBait = .feather,
         roastMode: RoastPitMode = .trout,
-        blacksmithSelection: BlacksmithSelection = .smith(.copperIngot),
+        blacksmithSelection: BlacksmithSelection = .smith(.copperIngot, batch: 1),
         reporter: @escaping Reporter
     ) {
         self.socket = socket
@@ -2077,11 +2094,18 @@ actor AutomationEngine {
 
     func prepareBlacksmithLoadoutFromWorld(goal: Int) async throws {
         guard try await waitForRegion("world", timeoutMS: 5_000) else { throw EngineError.regionNotConfirmed("world") }
+
         var required: [String: Int] = [:]
+        var smithRecipe: BlacksmithRecipe?
+        var smithBatch = 1
+
         switch blacksmithSelection {
-        case .smith(let recipe):
-            let quantity = max(1, goal)
-            for (material, perUnit) in recipe.materials { required[material] = perUnit * quantity }
+        case .smith(let recipe, let selectedBatch):
+            let quantity = BlacksmithProtocolPolicy.normalizedBatchQuantity(selectedBatch)
+            smithRecipe = recipe
+            smithBatch = quantity
+            required = BlacksmithProtocolPolicy.smithMaterialCosts(recipe: recipe, quantity: quantity)
+            reporter(.smithPreflight(recipe: recipe, batch: quantity, required: required))
             reporter(.log("⚒️ Preflight • \(recipe.label) ×\(quantity) • \(required.sorted { $0.key < $1.key }.map { "\(BlacksmithProtocolPolicy.materialLabel($0.key)) \($0.value)" }.joined(separator: " • "))"))
         case .repair(let target):
             let state = try await http.backpackState()
@@ -2089,22 +2113,48 @@ actor AutomationEngine {
             required = BlacksmithProtocolPolicy.repairMaterialCosts(type: current.type, missingDurability: current.maxDurability - current.durability)
             reporter(.log("🔧 Repair preflight • \(current.label) • \(current.durability)/\(current.maxDurability)"))
         }
-        var bankNeeded=false
+
+        var bankNeeded = false
         for (material, quantity) in required {
-            let c=try await http.itemLocationCounts(type: material)
-            guard c.carried+c.bank >= quantity else { throw EngineError.missingRequiredItem("\(BlacksmithProtocolPolicy.materialLabel(material)) \(c.carried+c.bank)/\(quantity)") }
-            if c.carried < quantity { bankNeeded=true }
+            let counts = try await http.itemLocationCounts(type: material)
+            guard counts.carried + counts.bank >= quantity else {
+                throw EngineError.missingRequiredItem("\(BlacksmithProtocolPolicy.materialLabel(material)) \(counts.carried + counts.bank)/\(quantity)")
+            }
+            if counts.carried < quantity { bankNeeded = true }
         }
+
         if bankNeeded {
             try await ensureWorldBankAccess(reason: "Frostmere Smith")
-            for (material, quantity) in required {
-                let c=try await http.itemLocationCounts(type: material)
-                if c.carried < quantity { _=try await http.ensureCarriedItem(type: material, quantity: quantity, preferHotbar: false) }
-                let verified=try await http.itemLocationCounts(type: material)
-                guard verified.carried >= quantity else { throw EngineError.missingRequiredItem("\(BlacksmithProtocolPolicy.materialLabel(material)) carregado \(verified.carried)/\(quantity)") }
+        }
+
+        var withdrawn: [String: Int] = [:]
+        var remaining: [String: Int] = [:]
+
+        for (material, quantity) in required.sorted(by: { $0.key < $1.key }) {
+            let before = try await http.itemLocationCounts(type: material)
+            if before.carried < quantity {
+                _ = try await http.ensureCarriedItem(type: material, quantity: quantity, preferHotbar: false)
             }
+
+            let verified = try await http.itemLocationCounts(type: material)
+            guard verified.carried >= quantity else {
+                throw EngineError.missingRequiredItem("\(BlacksmithProtocolPolicy.materialLabel(material)) carregado \(verified.carried)/\(quantity)")
+            }
+
+            let moved = max(0, verified.carried - before.carried)
+            withdrawn[material] = moved
+            remaining[material] = verified.bank
+            reporter(.log("🏦 \(BlacksmithProtocolPolicy.materialLabel(material)) • retirado \(moved) • banco restante \(verified.bank)"))
+        }
+
+        if let smithRecipe {
+            reporter(.smithBank(recipe: smithRecipe, batch: smithBatch, withdrawn: withdrawn, remaining: remaining))
+        }
+
+        if bankNeeded {
             try await leaveBankShopToWorld(reason: "Frostmere Smith preparado")
         }
+
         guard try await waitForRegion("world", timeoutMS: 5_000) else { throw EngineError.regionNotConfirmed("world") }
         reporter(.log("⚒️ Preflight Frostmere Smith concluído"))
     }
@@ -2122,46 +2172,80 @@ actor AutomationEngine {
         try await enterFrostmereSmith()
         switch blacksmithSelection {
         case .repair(let selected):
-            let before=try await http.backpackState()
-            guard let target=BlacksmithProtocolPolicy.currentTarget(selected, in: before.backpack) else { throw EngineError.blacksmithRepairTargetChanged }
-            let expected=BlacksmithProtocolPolicy.repairMaterialCosts(type: target.type, missingDurability: target.maxDurability-target.durability)
+            let before = try await http.backpackState()
+            guard let target = BlacksmithProtocolPolicy.currentTarget(selected, in: before.backpack) else { throw EngineError.blacksmithRepairTargetChanged }
+            let expected = BlacksmithProtocolPolicy.repairMaterialCosts(type: target.type, missingDurability: target.maxDurability - target.durability)
             reporter(.attempt)
             do {
-                let response=try await http.blacksmithRepair(target: target)
-                let refreshed=try await http.backpackState()
-                let after=BlacksmithProtocolPolicy.slotDurability(target, in: refreshed.backpack) ?? target.maxDurability
-                let costs=Self.intDictionary(response["costs"]) ?? expected
-                successes=1
+                let response = try await http.blacksmithRepair(target: target)
+                let refreshed = try await http.backpackState()
+                let after = BlacksmithProtocolPolicy.slotDurability(target, in: refreshed.backpack) ?? target.maxDurability
+                let costs = Self.intDictionary(response["costs"]) ?? expected
+                successes = 1
                 reporter(.repairResult(target: target, durabilityAfter: after, costs: costs))
                 reporter(.log("✅ Repair • \(target.label) • \(target.durability)→\(after)/\(target.maxDurability)"))
             } catch HTTPError.response(_, let code, let payload) {
                 throw EngineError.blacksmithFailure(BlacksmithProtocolPolicy.serverErrorMessage(code: code, payload: payload))
             }
-        case .smith(let recipe):
-            let target=max(1,goal)
-            var xpTotal=0
-            if let playerID { xpTotal=(try? await http.skillXP(playerID: playerID, skill: "smithing")) ?? 0 }
-            reporter(.log("⚒️ \(recipe.label) • meta \(target) • Smithing mínimo \(recipe.smithingLevel) • XP inicial \(xpTotal)"))
-            let hb=Task { [weak self] in await self?.heartbeat() }
+
+        case .smith(let recipe, let selectedBatch):
+            let target = BlacksmithProtocolPolicy.normalizedBatchQuantity(selectedBatch)
+            var xpTotal = 0
+            if let playerID {
+                xpTotal = (try? await http.skillXP(playerID: playerID, skill: "smithing")) ?? 0
+            }
+
+            reporter(.log("⚒️ \(recipe.label) • lote ×\(target) • Smithing mínimo \(recipe.smithingLevel) • XP inicial \(xpTotal)"))
+            let hb = Task { [weak self] in await self?.heartbeat() }
             defer { hb.cancel() }
+
             while successes < target {
                 try Task.checkCancellation()
-                let cycle=successes+1
-                reporter(.smithCountdown(recipe: recipe, completed: successes, goal: target, secondsRemaining: 1))
-                try await sleep(1_000)
-                reporter(.smithCountdown(recipe: recipe, completed: successes, goal: target, secondsRemaining: 0))
+
+                let remainingUnits = target - successes
+                // O cliente oficial agrupa Smelt stackable em uma única chamada,
+                // mas Forge entrega ferramentas individualmente dentro do lote.
+                let requestQuantity = recipe.stackable ? remainingUnits : 1
+                let waitSeconds = max(1, BlacksmithProtocolPolicy.smithSecondsPerUnit * requestQuantity)
+
+                for seconds in stride(from: waitSeconds, through: 1, by: -1) {
+                    reporter(.smithCountdown(recipe: recipe, completed: successes, goal: target, batch: target, secondsRemaining: seconds))
+                    try await sleep(1_000)
+                }
+                reporter(.smithCountdown(recipe: recipe, completed: successes, goal: target, batch: target, secondsRemaining: 0))
                 reporter(.attempt)
-                let response:[String:Any]
-                do { response=try await http.blacksmithSmith(recipe: recipe.id, quantity: 1) }
-                catch HTTPError.response(_, let code, let payload) { throw EngineError.blacksmithFailure(BlacksmithProtocolPolicy.serverErrorMessage(code: code, payload: payload)) }
-                let prev=xpTotal
-                if let xp=response["xp"] as? [String:Any], let v=RealtimeProtocol.int(xp["smithing"]) { xpTotal=max(0,v) }
-                else if let playerID, let v=try? await http.skillXP(playerID: playerID, skill: "smithing") { xpTotal=max(0,v) }
-                let gained=max(0,xpTotal-prev)
-                let produced=max(1,RealtimeProtocol.int(response["resultQty"]) ?? 1)
-                successes+=1
-                reporter(.smithResult(recipe: recipe, completed: successes, goal: target, produced: produced, xpGained: gained, smithingXPTotal: xpTotal))
-                reporter(.log("✅ Ciclo \(cycle)/\(target) • \(recipe.label) ×\(produced) • +\(gained) Smithing XP • total \(xpTotal)"))
+
+                let response: [String: Any]
+                do {
+                    response = try await http.blacksmithSmith(recipe: recipe.id, quantity: requestQuantity)
+                } catch HTTPError.response(_, let code, let payload) {
+                    throw EngineError.blacksmithFailure(BlacksmithProtocolPolicy.serverErrorMessage(code: code, payload: payload))
+                }
+
+                let previousXP = xpTotal
+                if let xp = response["xp"] as? [String: Any],
+                   let value = RealtimeProtocol.int(xp["smithing"]) {
+                    xpTotal = max(0, value)
+                } else if let playerID,
+                          let value = try? await http.skillXP(playerID: playerID, skill: "smithing") {
+                    xpTotal = max(0, value)
+                }
+
+                let gained = max(0, xpTotal - previousXP)
+                let produced = max(1, RealtimeProtocol.int(response["resultQty"]) ?? requestQuantity)
+                successes = min(target, successes + produced)
+                let inventoryTotal = (try? await http.itemLocationCounts(type: recipe.result).carried) ?? 0
+
+                reporter(.smithResult(
+                    recipe: recipe,
+                    completed: successes,
+                    goal: target,
+                    produced: produced,
+                    inventoryTotal: inventoryTotal,
+                    xpGained: gained,
+                    smithingXPTotal: xpTotal
+                ))
+                reporter(.log("✅ \(recipe.label) • +\(produced) • inventário \(inventoryTotal) • +\(gained) Smithing XP • XP total \(xpTotal) • \(successes)/\(target)"))
             }
         }
     }
@@ -7802,8 +7886,10 @@ private struct KintaraHTTPClient {
         let hotbar = state.backpack["hotbar"] as? [Any] ?? []
         let inv = state.backpack["invSlots"] as? [Any] ?? []
         let bank = state.backpack["bankSlots"] as? [Any] ?? []
+        let slotted = InventoryLoadoutAllocator.carriedCount(type: type, hotbar: hotbar, inventory: inv)
+        let flat = max(0, RealtimeProtocol.int(state.backpack[type]) ?? 0)
         return ItemLocationCounts(
-            carried: InventoryLoadoutAllocator.carriedCount(type: type, hotbar: hotbar, inventory: inv),
+            carried: max(slotted, flat),
             bank: slotCount(bank, type: type)
         )
     }

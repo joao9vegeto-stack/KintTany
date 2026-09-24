@@ -606,6 +606,11 @@ struct ActivityStats: Codable {
     var smithSessionXPGained = 0
     var smithingXPTotal = 0
     var smithRepairs = 0
+    var smithBatchSize = 1
+    var smithRecipeLabel = ""
+    var smithRequiredSummary = ""
+    var smithBankRemainingSummary = ""
+    var smithLastInventoryTotal = 0
     var startedAt: Date?
     var lastEvent = ""
 }
@@ -630,7 +635,7 @@ final class AppStore: ObservableObject {
     @Published var mobCount = 0
     @Published var selectedFishingBait: FishingBait = .feather
     @Published var selectedRoastMode: RoastPitMode = .trout
-    @Published var selectedBlacksmith: BlacksmithSelection = .smith(.copperIngot)
+    @Published var selectedBlacksmith: BlacksmithSelection = .smith(.copperIngot, batch: 1)
     @Published private(set) var characterProfile = CharacterProfile()
     @Published private(set) var characterProfileLoading = false
     @Published private(set) var characterProfileError: String?
@@ -725,6 +730,18 @@ final class AppStore: ObservableObject {
         )
     }
 
+    private func resolvedSessionGoal(for mode: ActivityMode) -> Int {
+        if mode == .blacksmith {
+            switch selectedBlacksmith {
+            case .smith(_, let batch):
+                return BlacksmithProtocolPolicy.normalizedBatchQuantity(batch)
+            case .repair:
+                return 1
+            }
+        }
+        return min(100_000, max(1, goal))
+    }
+
     func start(_ mode: ActivityMode) {
         // Single-flight: um segundo toque nunca cancela e substitui uma sessão que
         // ainda está fechando. Isso elimina corrida entre socket/engine antiga e nova.
@@ -745,9 +762,8 @@ final class AppStore: ObservableObject {
             return
         }
 
-        if mode == .blacksmith, case .repair = selectedBlacksmith { goal = 1 }
         goal = min(100_000, max(1, goal))
-        sessionGoal = goal
+        sessionGoal = resolvedSessionGoal(for: mode)
 
         let runID = UUID()
         activeRunID = runID
@@ -1558,7 +1574,7 @@ final class AppStore: ObservableObject {
         }
 
         goal = min(100_000, max(1, goal))
-        sessionGoal = goal
+        sessionGoal = resolvedSessionGoal(for: mode)
         let runGoal = sessionGoal
         realtimeFailureMessage = nil
         terminalFailureHandled = false
@@ -2889,23 +2905,49 @@ final class AppStore: ObservableObject {
                 : "\(mode.label) assado • +\(xpGained) XP"
             updateContinuedProcessingProgress(forceTitleUpdate: true)
 
-        case .smithCountdown(let recipe, let completed, let goal, let secondsRemaining):
+        case .smithPreflight(let recipe, let batch, let required):
+            stats.smithBatchSize = batch
+            stats.smithRecipeLabel = recipe.label
+            stats.smithRequiredSummary = required.sorted { $0.key < $1.key }
+                .map { "\(BlacksmithProtocolPolicy.materialLabel($0.key)) \($0.value)" }
+                .joined(separator: " • ")
+            statusMessage = "⚒️ \(recipe.label) ×\(batch) • preparando recursos"
+            stats.lastEvent = "Precisa • \(stats.smithRequiredSummary)"
+            updateContinuedProcessingProgress()
+
+        case .smithBank(let recipe, let batch, let withdrawn, let remaining):
+            stats.smithBatchSize = batch
+            stats.smithRecipeLabel = recipe.label
+            stats.smithBankRemainingSummary = remaining.sorted { $0.key < $1.key }
+                .map { "\(BlacksmithProtocolPolicy.materialLabel($0.key)) \($0.value)" }
+                .joined(separator: " • ")
+            let withdrawnText = withdrawn
+                .filter { $0.value > 0 }
+                .sorted { $0.key < $1.key }
+                .map { "\(BlacksmithProtocolPolicy.materialLabel($0.key)) \($0.value)" }
+                .joined(separator: " • ")
+            stats.lastEvent = withdrawnText.isEmpty ? "Banco • sem saque necessário" : "Saque • \(withdrawnText)"
+            updateContinuedProcessingProgress()
+
+        case .smithCountdown(let recipe, let completed, let goal, let batch, let secondsRemaining):
             stats.smithCycleRemaining = secondsRemaining
+            stats.smithBatchSize = batch
             state = .cooldown
-            statusMessage = "⚒️ \(recipe.label) • \(secondsRemaining)s • ciclo \(completed + 1)/\(goal)"
+            statusMessage = "⚒️ \(recipe.label) ×\(batch) • \(secondsRemaining)s • \(completed)/\(goal)"
             stats.lastEvent = secondsRemaining > 0 ? "forjando • \(secondsRemaining)s" : "confirmando resultado"
             updateContinuedProcessingProgress()
 
-        case .smithResult(let recipe, let completed, let goal, let produced, let xpGained, let smithingXPTotal):
+        case .smithResult(let recipe, let completed, let goal, let produced, let inventoryTotal, let xpGained, let smithingXPTotal):
             stats.successes = max(stats.successes, completed)
             stats.smithCycleRemaining = 0
             stats.smithProduced += produced
             stats.smithLastXPGained = xpGained
             stats.smithSessionXPGained += xpGained
             stats.smithingXPTotal = smithingXPTotal
+            stats.smithLastInventoryTotal = inventoryTotal
             state = .acting
-            statusMessage = "✅ \(recipe.label) ×\(produced) • +\(xpGained) XP • Smithing \(smithingXPTotal)"
-            stats.lastEvent = "\(recipe.label) produzido • \(completed)/\(goal)"
+            statusMessage = "✅ \(recipe.label) +\(produced) • Inv \(inventoryTotal) • +\(xpGained) XP"
+            stats.lastEvent = "Inv \(recipe.label) \(inventoryTotal) • \(completed)/\(goal)"
             updateContinuedProcessingProgress(forceTitleUpdate: true)
 
         case .repairResult(let target, let durabilityAfter, let costs):
