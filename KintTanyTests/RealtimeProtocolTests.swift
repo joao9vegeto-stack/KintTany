@@ -3,6 +3,46 @@ import XCTest
 @testable import KintTany
 
 final class RealtimeProtocolTests: XCTestCase {
+
+    func testBlacksmithProtocolContractMatchesCapturedClient() {
+        XCTAssertEqual(BlacksmithProtocolPolicy.smithEndpoint, "/api/auth/blacksmith-smith")
+        XCTAssertEqual(BlacksmithProtocolPolicy.repairEndpoint, "/api/auth/blacksmith-repair")
+        XCTAssertEqual(BlacksmithProtocolPolicy.smithSecondsPerUnit, 1)
+        XCTAssertEqual(BlacksmithProtocolPolicy.region, "blacksmith_shop")
+        XCTAssertEqual(BlacksmithProtocolPolicy.frostmereEntrancePosition.x, 2.5)
+        XCTAssertEqual(BlacksmithProtocolPolicy.frostmereEntrancePosition.z, 0.5)
+        XCTAssertEqual(AutomationEngine.bootstrap(for: .blacksmith).region, "frostmere")
+
+        XCTAssertEqual(BlacksmithRecipe.copperIngot.materials["stone"], 10)
+        XCTAssertEqual(BlacksmithRecipe.copperIngot.materials["coal"], 5)
+        XCTAssertEqual(BlacksmithRecipe.ironIngot.materials["metal"], 6)
+        XCTAssertEqual(BlacksmithRecipe.ironIngot.materials["coal"], 6)
+        XCTAssertEqual(BlacksmithRecipe.silverIngot.materials["silver_ore"], 4)
+        XCTAssertEqual(BlacksmithRecipe.silverIngot.materials["coal"], 8)
+        XCTAssertEqual(BlacksmithRecipe.ironAxe.result, "tool_axe_l2")
+        XCTAssertEqual(BlacksmithRecipe.ironSword.result, "wild_sword_l2")
+        XCTAssertEqual(BlacksmithRecipe.ironPickaxe.result, "tool_pickaxe_l2")
+        XCTAssertEqual(BlacksmithRecipe.silverPickaxe.materials["silver_ingot"], 100)
+        XCTAssertEqual(BlacksmithRecipe.silverPickaxe.materials["wood"], 3000)
+
+        let body = BlacksmithProtocolPolicy.smithBody(recipe: "silver_pickaxe", quantity: 5, fleet: "us", shardID: 4)
+        XCTAssertEqual(body["recipe"] as? String, "silver_pickaxe")
+        XCTAssertEqual(body["quantity"] as? Int, 5)
+        XCTAssertEqual(body["fleet"] as? String, "us")
+        XCTAssertEqual(body["shardId"] as? Int, 4)
+        XCTAssertNil(body["baseTool"])
+
+        let repair = BlacksmithProtocolPolicy.repairBody(slotKind: "hot", slotIdx: 2, fleet: "us", shardID: 4)
+        XCTAssertEqual(repair["slotKind"] as? String, "hot")
+        XCTAssertEqual(repair["slotIdx"] as? Int, 2)
+        XCTAssertEqual(repair["fleet"] as? String, "us")
+        XCTAssertEqual(repair["shardId"] as? Int, 4)
+
+        let halfIronAxe = BlacksmithProtocolPolicy.repairMaterialCosts(type: "tool_axe_l2", missingDurability: 2000)
+        XCTAssertEqual(halfIronAxe["iron_ore"], 12)
+        XCTAssertEqual(halfIronAxe["wood"], 300)
+    }
+
     func testRoastPitProtocolContract() {
         XCTAssertEqual(RoastPitProtocolPolicy.endpoint, "/api/auth/grant-cook-xp")
         XCTAssertEqual(RoastPitProtocolPolicy.batchDelayMS, 10_000)
