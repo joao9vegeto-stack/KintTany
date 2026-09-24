@@ -32,6 +32,13 @@ final class RealtimeProtocolTests: XCTestCase {
         XCTAssertEqual(silverTen["coal"], 80)
         XCTAssertEqual(silverTen["silver_ore"], 40)
 
+        XCTAssertEqual(BlacksmithProtocolPolicy.smithOutputUnits(batch: 1, cycles: 100), 100)
+        XCTAssertEqual(BlacksmithProtocolPolicy.smithOutputUnits(batch: 5, cycles: 100), 500)
+        XCTAssertEqual(BlacksmithProtocolPolicy.smithOutputUnits(batch: 10, cycles: 100), 1000)
+        let silverHundredByFive = BlacksmithProtocolPolicy.smithMaterialCosts(recipe: .silverIngot, batch: 5, cycles: 100)
+        XCTAssertEqual(silverHundredByFive["coal"], 4_000)
+        XCTAssertEqual(silverHundredByFive["silver_ore"], 2_000)
+
         let body = BlacksmithProtocolPolicy.smithBody(recipe: "silver_pickaxe", quantity: 5, fleet: "us", shardID: 4)
         XCTAssertEqual(body["recipe"] as? String, "silver_pickaxe")
         XCTAssertEqual(body["quantity"] as? Int, 5)
@@ -1362,6 +1369,9 @@ final class RealtimeProtocolTests: XCTestCase {
         XCTAssertEqual(CharacterSkillStats.level(fromTotalXP: 479), 1)
         XCTAssertEqual(CharacterSkillStats.level(fromTotalXP: 480), 2)
         XCTAssertEqual(CharacterSkillStats.progressWithinLevel(fromTotalXP: 0), 0, accuracy: 0.0001)
+        XCTAssertEqual(CharacterSkillStats.progressWithinLevel(fromTotalXP: 480), 0, accuracy: 0.0001)
+        XCTAssertGreaterThan(CharacterSkillStats.progressWithinLevel(fromTotalXP: 600), 0)
+        XCTAssertLessThan(CharacterSkillStats.progressWithinLevel(fromTotalXP: 600), 1)
     }
 
     func testCharacterTotalLevelUsesFiveOfficialAverageSkills() {

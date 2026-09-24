@@ -423,6 +423,19 @@ struct BlacksmithProtocolPolicy {
         return costs
     }
 
+    static func smithOutputUnits(batch: Int, cycles: Int) -> Int {
+        normalizedBatchQuantity(batch) * max(1, cycles)
+    }
+
+    static func smithMaterialCosts(recipe: BlacksmithRecipe, batch: Int, cycles: Int) -> [String: Int] {
+        let units = smithOutputUnits(batch: batch, cycles: cycles)
+        var costs: [String: Int] = [:]
+        for (material, perUnit) in recipe.materials {
+            costs[material] = perUnit * units
+        }
+        return costs
+    }
+
     static let frostmereGridOffset = 19.5
     static let entranceTileColumn = 22
     static let entranceTileRow = 20
@@ -2095,18 +2108,20 @@ actor AutomationEngine {
     func prepareBlacksmithLoadoutFromWorld(goal: Int) async throws {
         guard try await waitForRegion("world", timeoutMS: 5_000) else { throw EngineError.regionNotConfirmed("world") }
 
+        let cycles = max(1, goal)
         var required: [String: Int] = [:]
         var smithRecipe: BlacksmithRecipe?
         var smithBatch = 1
 
         switch blacksmithSelection {
         case .smith(let recipe, let selectedBatch):
-            let quantity = BlacksmithProtocolPolicy.normalizedBatchQuantity(selectedBatch)
+            let batch = BlacksmithProtocolPolicy.normalizedBatchQuantity(selectedBatch)
             smithRecipe = recipe
-            smithBatch = quantity
-            required = BlacksmithProtocolPolicy.smithMaterialCosts(recipe: recipe, quantity: quantity)
-            reporter(.smithPreflight(recipe: recipe, batch: quantity, required: required))
-            reporter(.log("⚒️ Preflight • \(recipe.label) ×\(quantity) • \(required.sorted { $0.key < $1.key }.map { "\(BlacksmithProtocolPolicy.materialLabel($0.key)) \($0.value)" }.joined(separator: " • "))"))
+            smithBatch = batch
+            required = BlacksmithProtocolPolicy.smithMaterialCosts(recipe: recipe, batch: batch, cycles: cycles)
+            let outputUnits = BlacksmithProtocolPolicy.smithOutputUnits(batch: batch, cycles: cycles)
+            reporter(.smithPreflight(recipe: recipe, batch: batch, required: required))
+            reporter(.log("⚒️ Preflight • \(recipe.label) • meta \(cycles) × lote \(batch) = \(outputUnits) itens • \(required.sorted { $0.key < $1.key }.map { "\(BlacksmithProtocolPolicy.materialLabel($0.key)) \($0.value)" }.joined(separator: " • "))"))
         case .repair(let target):
             let state = try await http.backpackState()
             guard let current = BlacksmithProtocolPolicy.currentTarget(target, in: state.backpack) else { throw EngineError.blacksmithRepairTargetChanged }
@@ -2189,30 +2204,30 @@ actor AutomationEngine {
             }
 
         case .smith(let recipe, let selectedBatch):
-            let target = BlacksmithProtocolPolicy.normalizedBatchQuantity(selectedBatch)
+            let target = max(1, goal)
+            let batch = BlacksmithProtocolPolicy.normalizedBatchQuantity(selectedBatch)
+            let expectedOutput = BlacksmithProtocolPolicy.smithOutputUnits(batch: batch, cycles: target)
             var xpTotal = 0
             if let playerID {
                 xpTotal = (try? await http.skillXP(playerID: playerID, skill: "smithing")) ?? 0
             }
 
-            reporter(.log("⚒️ \(recipe.label) • lote ×\(target) • Smithing mínimo \(recipe.smithingLevel) • XP inicial \(xpTotal)"))
+            reporter(.log("⚒️ \(recipe.label) • meta \(target) ciclos • lote ×\(batch) • produção prevista \(expectedOutput) • Smithing mínimo \(recipe.smithingLevel) • XP inicial \(xpTotal)"))
             let hb = Task { [weak self] in await self?.heartbeat() }
             defer { hb.cancel() }
 
             while successes < target {
                 try Task.checkCancellation()
 
-                let remainingUnits = target - successes
-                // O cliente oficial agrupa Smelt stackable em uma única chamada,
-                // mas Forge entrega ferramentas individualmente dentro do lote.
-                let requestQuantity = recipe.stackable ? remainingUnits : 1
+                let cycle = successes + 1
+                let requestQuantity = batch
                 let waitSeconds = max(1, BlacksmithProtocolPolicy.smithSecondsPerUnit * requestQuantity)
 
                 for seconds in stride(from: waitSeconds, through: 1, by: -1) {
-                    reporter(.smithCountdown(recipe: recipe, completed: successes, goal: target, batch: target, secondsRemaining: seconds))
+                    reporter(.smithCountdown(recipe: recipe, completed: successes, goal: target, batch: batch, secondsRemaining: seconds))
                     try await sleep(1_000)
                 }
-                reporter(.smithCountdown(recipe: recipe, completed: successes, goal: target, batch: target, secondsRemaining: 0))
+                reporter(.smithCountdown(recipe: recipe, completed: successes, goal: target, batch: batch, secondsRemaining: 0))
                 reporter(.attempt)
 
                 let response: [String: Any]
@@ -2233,7 +2248,7 @@ actor AutomationEngine {
 
                 let gained = max(0, xpTotal - previousXP)
                 let produced = max(1, RealtimeProtocol.int(response["resultQty"]) ?? requestQuantity)
-                successes = min(target, successes + produced)
+                successes += 1
                 let inventoryTotal = (try? await http.itemLocationCounts(type: recipe.result).carried) ?? 0
 
                 reporter(.smithResult(
@@ -2245,7 +2260,7 @@ actor AutomationEngine {
                     xpGained: gained,
                     smithingXPTotal: xpTotal
                 ))
-                reporter(.log("✅ \(recipe.label) • +\(produced) • inventário \(inventoryTotal) • +\(gained) Smithing XP • XP total \(xpTotal) • \(successes)/\(target)"))
+                reporter(.log("✅ Ciclo \(cycle)/\(target) • \(recipe.label) ×\(produced) • inventário \(inventoryTotal) • +\(gained) Smithing XP • XP total \(xpTotal)"))
             }
         }
     }

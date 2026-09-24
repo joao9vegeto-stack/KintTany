@@ -71,15 +71,18 @@ public struct KintSkill: Identifiable, Hashable, Sendable {
     public var name: String
     public var value: Int
     public var maximum: Int
+    public var progressFraction: Double
 
-    public init(name: String, value: Int, maximum: Int = 40) {
+    public init(name: String, value: Int, maximum: Int = 40, progressFraction: Double? = nil) {
         self.name = name
         self.value = value
         self.maximum = max(1, maximum)
+        let fallback = Double(value) / Double(max(1, maximum))
+        self.progressFraction = min(1, max(0, progressFraction ?? fallback))
     }
 
     public var fraction: Double {
-        min(1, max(0, Double(value) / Double(maximum)))
+        progressFraction
     }
 }
 
@@ -732,35 +735,26 @@ struct KintServiceShortcuts: View {
     let didSelect: (KintActivity) -> Void
 
     var body: some View {
-        HStack(spacing: 5) {
-            shortcut(.roastPit, label: "Roast")
-            shortcut(.blacksmith, label: "Smith")
+        HStack(spacing: 18) {
+            shortcut(.roastPit)
+            shortcut(.blacksmith)
         }
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
     }
 
-    private func shortcut(_ activity: KintActivity, label: String) -> some View {
+    private func shortcut(_ activity: KintActivity) -> some View {
         Button {
             selected = activity
             didSelect(activity)
         } label: {
-            HStack(spacing: 3) {
-                KintActivitySprite(activity: activity)
-                    .frame(width: 13, height: 13)
-                Text(label)
-                    .font(KintTanyTheme.bodyFont(7.4, weight: .medium))
-                    .lineLimit(1)
-                    .minimumScaleFactor(0.7)
-            }
-            .foregroundStyle(KintTanyTheme.ink)
-            .frame(maxWidth: .infinity, maxHeight: .infinity)
-            .background(selected == activity ? KintTanyTheme.terracotta.opacity(0.13) : KintTanyTheme.surface.opacity(0.78))
-            .clipShape(RoundedRectangle(cornerRadius: 7, style: .continuous))
-            .overlay(
-                RoundedRectangle(cornerRadius: 7, style: .continuous)
-                    .stroke(KintTanyTheme.surfaceShadow.opacity(0.48), lineWidth: 0.7)
-            )
+            KintActivitySprite(activity: activity)
+                .frame(width: 21, height: 21)
+                .frame(width: 34, height: 28)
+                .contentShape(Rectangle())
+                .opacity(selected == activity ? 1.0 : 0.88)
         }
         .buttonStyle(.plain)
+        .accessibilityLabel(activity.title)
     }
 }
 
@@ -1404,6 +1398,7 @@ struct BlacksmithSelectorSheet: View {
 
     private let batchOptions = BlacksmithProtocolPolicy.batchQuantities
 
+    let sessionGoal: Int
     let loadRepairTargets: () async -> [RepairTarget]
     let onStart: (BlacksmithSelection) -> Void
     let onCancel: () -> Void
@@ -1496,8 +1491,16 @@ struct BlacksmithSelectorSheet: View {
         panel == .smelt ? BlacksmithRecipe.smeltRecipes : BlacksmithRecipe.forgeRecipes
     }
 
-    private var batchMaterials: [String: Int] {
-        BlacksmithProtocolPolicy.smithMaterialCosts(recipe: recipe, quantity: batchQuantity)
+    private var normalizedSessionGoal: Int {
+        max(1, sessionGoal)
+    }
+
+    private var totalOutputUnits: Int {
+        BlacksmithProtocolPolicy.smithOutputUnits(batch: batchQuantity, cycles: normalizedSessionGoal)
+    }
+
+    private var totalMaterials: [String: Int] {
+        BlacksmithProtocolPolicy.smithMaterialCosts(recipe: recipe, batch: batchQuantity, cycles: normalizedSessionGoal)
     }
 
     private var batchSelector: some View {
@@ -1614,8 +1617,9 @@ struct BlacksmithSelectorSheet: View {
                 VStack(alignment: .leading, spacing: 4) {
                     Text(recipe.label)
                         .font(KintTanyTheme.bodyFont(12.5, weight: .semibold))
-                    Text("Necessário ×\(batchQuantity): " + batchMaterials.sorted { $0.key < $1.key }.map { "\(BlacksmithProtocolPolicy.materialLabel($0.key)) \($0.value)" }.joined(separator: " • "))
-                    Text("1 segundo por unidade • banco automático")
+                    Text("Meta \(normalizedSessionGoal) × lote \(batchQuantity) = \(totalOutputUnits) itens")
+                    Text("Necessário: " + totalMaterials.sorted { $0.key < $1.key }.map { "\(BlacksmithProtocolPolicy.materialLabel($0.key)) \($0.value)" }.joined(separator: " • "))
+                    Text("1 segundo por unidade • \(batchQuantity)s por ciclo • banco automático")
                 }
                 .font(KintTanyTheme.bodyFont(10.8, weight: .medium))
                 .foregroundStyle(KintTanyTheme.ink)
@@ -1708,6 +1712,7 @@ struct ReplicaDashboardHost: View {
         }
         .sheet(isPresented: $showBlacksmithSelector) {
             BlacksmithSelectorSheet(
+                sessionGoal: app.goal,
                 loadRepairTargets: { await app.loadBlacksmithRepairTargets() },
                 onStart: { selection in
                     app.selectedBlacksmith = selection
@@ -1877,12 +1882,12 @@ struct ReplicaDashboardHost: View {
             rateText: rate,
             statusText: status,
             skills: [
-                .init(name: "Combat", value: skillStats.level(for: .combat)),
-                .init(name: "Wood", value: skillStats.level(for: .woodcutting)),
-                .init(name: "Mining", value: skillStats.level(for: .mining)),
-                .init(name: "Fishing", value: skillStats.level(for: .fishing)),
-                .init(name: "Cooking", value: skillStats.level(for: .cooking)),
-                .init(name: "Smithing", value: skillStats.level(for: .smithing)),
+                .init(name: "Combat", value: skillStats.level(for: .combat), progressFraction: skillStats.progress(for: .combat)),
+                .init(name: "Wood", value: skillStats.level(for: .woodcutting), progressFraction: skillStats.progress(for: .woodcutting)),
+                .init(name: "Mining", value: skillStats.level(for: .mining), progressFraction: skillStats.progress(for: .mining)),
+                .init(name: "Fishing", value: skillStats.level(for: .fishing), progressFraction: skillStats.progress(for: .fishing)),
+                .init(name: "Cooking", value: skillStats.level(for: .cooking), progressFraction: skillStats.progress(for: .cooking)),
+                .init(name: "Smithing", value: skillStats.level(for: .smithing), progressFraction: skillStats.progress(for: .smithing)),
             ],
             totalLevel: app.characterProfile.totalLevel,
             totalLevelMaximum: CharacterSkillStats.maxLevel,

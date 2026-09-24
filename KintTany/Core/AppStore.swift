@@ -731,14 +731,11 @@ final class AppStore: ObservableObject {
     }
 
     private func resolvedSessionGoal(for mode: ActivityMode) -> Int {
-        if mode == .blacksmith {
-            switch selectedBlacksmith {
-            case .smith(_, let batch):
-                return BlacksmithProtocolPolicy.normalizedBatchQuantity(batch)
-            case .repair:
-                return 1
-            }
+        if mode == .blacksmith, case .repair = selectedBlacksmith {
+            return 1
         }
+        // Para Smith/Smelt, a meta continua sendo o número de ciclos escolhido
+        // pelo usuário. O lote (×1/×5/×10) multiplica cada ciclo, não substitui a meta.
         return min(100_000, max(1, goal))
     }
 

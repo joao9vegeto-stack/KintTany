@@ -9,10 +9,10 @@
  <linearGradient id="stroke" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#f4f0ea"/><stop offset=".55" stop-color="#c7beb4"/><stop offset="1" stop-color="#a89d91"/></linearGradient>
 </defs>
 <g filter="url(#soft)" fill="none" stroke-linecap="round" stroke-linejoin="round">
- <path d="M8 42 L31 15 L54 42 L77 15 L100 42 L123 15 L146 42 L169 15 L192 42 L215 15 L238 42" stroke="#8f8377" stroke-opacity=".62" stroke-width="4.4"/>
- <path d="M8 40.2 L31 13.2 L54 40.2 L77 13.2 L100 40.2 L123 13.2 L146 40.2 L169 13.2 L192 40.2 L215 13.2 L238 40.2" stroke="url(#stroke)" stroke-width="2.25"/>
- <path d="M8 116 L31 88 L54 116 L77 88 L100 116 L123 88 L146 116 L169 88 L192 116 L215 88 L238 116" stroke="#8f8377" stroke-opacity=".58" stroke-width="4.2"/>
- <path d="M8 114.2 L31 86.2 L54 114.2 L77 86.2 L100 114.2 L123 86.2 L146 114.2 L169 86.2 L192 114.2 L215 86.2 L238 114.2" stroke="url(#stroke)" stroke-width="2.15"/>
+ <path d="M2 42 L20.5 15 L41 42 L61.5 15 L82 42 L102.5 15 L123 42 L143.5 15 L164 42 L184.5 15 L205 42 L225.5 15 L244 42" stroke="#8f8377" stroke-opacity=".62" stroke-width="4.4"/>
+ <path d="M2 40.2 L20.5 13.2 L41 40.2 L61.5 13.2 L82 40.2 L102.5 13.2 L123 40.2 L143.5 13.2 L164 40.2 L184.5 13.2 L205 40.2 L225.5 13.2 L244 40.2" stroke="url(#stroke)" stroke-width="2.25"/>
+ <path d="M2 116 L30.75 88 L61.5 116 L92.25 88 L123 116 L153.75 88 L184.5 116 L215.25 88 L244 116" stroke="#8f8377" stroke-opacity=".58" stroke-width="4.2"/>
+ <path d="M2 114.2 L30.75 86.2 L61.5 114.2 L92.25 86.2 L123 114.2 L153.75 86.2 L184.5 114.2 L215.25 86.2 L244 114.2" stroke="url(#stroke)" stroke-width="2.15"/>
 </g>
 <path d="M10 164 H236" stroke="#eee9e2" stroke-opacity=".34" stroke-width="1"/>
 </svg>
