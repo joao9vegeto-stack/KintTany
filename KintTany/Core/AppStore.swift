@@ -4,7 +4,7 @@ import UIKit
 import BackgroundTasks
 
 enum ActivityMode: String, CaseIterable, Codable, Identifiable {
-    case tree, coal, stone, iron, silver, cacti, fishing, roastPit, chicken, zombie, dragon
+    case tree, coal, stone, iron, silver, cacti, fishing, roastPit, blacksmith, chicken, zombie, dragon
 
     var id: String { rawValue }
 
@@ -18,6 +18,7 @@ enum ActivityMode: String, CaseIterable, Codable, Identifiable {
         case .cacti: "Cacti"
         case .fishing: "Fishing"
         case .roastPit: "Roast Pit"
+        case .blacksmith: "Frostmere Smith"
         case .chicken: "Chicken"
         case .zombie: "Zombie"
         case .dragon: "Dragon"
@@ -34,6 +35,7 @@ enum ActivityMode: String, CaseIterable, Codable, Identifiable {
         case .cacti: "Cacti"
         case .fishing: "Pesca"
         case .roastPit: "Roast Pit"
+        case .blacksmith: "Frostmere Smith"
         case .chicken: "Galinha"
         case .zombie: "Zumbi"
         case .dragon: "Dragão"
@@ -50,6 +52,7 @@ enum ActivityMode: String, CaseIterable, Codable, Identifiable {
         case .cacti: "leaf.fill"
         case .fishing: "fish.fill"
         case .roastPit: "flame.fill"
+        case .blacksmith: "hammer.fill"
         case .chicken: "bird.fill"
         case .zombie: "figure.walk"
         case .dragon: "flame.fill"
@@ -66,6 +69,7 @@ enum ActivityMode: String, CaseIterable, Codable, Identifiable {
         case .cacti: .green
         case .fishing: .cyan
         case .roastPit: .orange
+        case .blacksmith: .gray
         case .chicken: .yellow
         case .zombie: .mint
         case .dragon: .red
@@ -180,6 +184,7 @@ enum ContinuedActivityStatusFormatter {
         case .cacti: return "Coletando Cacti nas Dunes"
         case .fishing: return "Preparando pesca"
         case .roastPit: return "Assando no Roast Pit"
+        case .blacksmith: return "Trabalhando no Frostmere Smith"
         case .chicken: return "Combatendo galinha"
         case .zombie: return state == .recovering ? "Saindo do combate com segurança" : "Em combate com zumbi"
         case .dragon: return state == .recovering ? "Saindo do combate com segurança" : "Em combate com dragão"
@@ -595,6 +600,12 @@ struct ActivityStats: Codable {
     var roastLastXPGained = 0
     var roastSessionXPGained = 0
     var roastCookingXPTotal = 0
+    var smithCycleRemaining = 0
+    var smithProduced = 0
+    var smithLastXPGained = 0
+    var smithSessionXPGained = 0
+    var smithingXPTotal = 0
+    var smithRepairs = 0
     var startedAt: Date?
     var lastEvent = ""
 }
@@ -619,6 +630,7 @@ final class AppStore: ObservableObject {
     @Published var mobCount = 0
     @Published var selectedFishingBait: FishingBait = .feather
     @Published var selectedRoastMode: RoastPitMode = .trout
+    @Published var selectedBlacksmith: BlacksmithSelection = .smith(.copperIngot)
     @Published private(set) var characterProfile = CharacterProfile()
     @Published private(set) var characterProfileLoading = false
     @Published private(set) var characterProfileError: String?
@@ -733,6 +745,7 @@ final class AppStore: ObservableObject {
             return
         }
 
+        if mode == .blacksmith, case .repair = selectedBlacksmith { goal = 1 }
         goal = min(100_000, max(1, goal))
         sessionGoal = goal
 
@@ -1111,6 +1124,7 @@ final class AppStore: ObservableObject {
                     bootstrap: bootstrap,
                     fishingBait: selectedFishingBait,
                     roastMode: selectedRoastMode,
+                    blacksmithSelection: selectedBlacksmith,
                     reporter: engineReporter(runID: runID)
                 )
                 phaseEngine = replacement
@@ -1228,6 +1242,7 @@ final class AppStore: ObservableObject {
                 bootstrap: bankBootstrap,
                 fishingBait: selectedFishingBait,
                     roastMode: selectedRoastMode,
+                blacksmithSelection: selectedBlacksmith,
                 reporter: engineReporter(runID: runID)
             )
             activeEngine = bankEngine
@@ -1277,6 +1292,7 @@ final class AppStore: ObservableObject {
                 bootstrap: activityBootstrap,
                 fishingBait: selectedFishingBait,
                     roastMode: selectedRoastMode,
+                blacksmithSelection: selectedBlacksmith,
                 reporter: engineReporter(runID: runID)
             )
             phaseEngine = activityEngine
@@ -1323,6 +1339,10 @@ final class AppStore: ObservableObject {
             log("🔥 Roast Pit • ciclos \(stats.successes)/\(sessionGoal) • cozidos \(stats.roastCooked) • queimados \(stats.roastBurned)")
             log("📈 Cooking XP • ganho na sessão +\(stats.roastSessionXPGained) • total final \(stats.roastCookingXPTotal)")
         }
+        if mode == .blacksmith {
+            log("⚒️ Frostmere Smith • ciclos \(stats.successes)/\(sessionGoal) • itens \(stats.smithProduced) • repairs \(stats.smithRepairs)")
+            log("📈 Smithing XP • ganho +\(stats.smithSessionXPGained) • total \(stats.smithingXPTotal)")
+        }
         if mode.isGathering {
             log("Gather • recoveries internos \(stats.gatherRecoveries) (FG \(stats.gatherRecoveriesForeground) / BG \(stats.gatherRecoveriesBackground)) • proof misses \(stats.gatherProofMisses)")
         }
@@ -1366,6 +1386,7 @@ final class AppStore: ObservableObject {
             value.hasPrefix("[QUEUE]") ||
             value.hasPrefix("[SERVER]") ||
             value.hasPrefix("[BANK]") ||
+            value.hasPrefix("[SMITH]") ||
             value.hasPrefix("[GATHER][TIMING]") ||
             value.hasPrefix("[BG]") ||
             value.hasPrefix("[WARN]") ||
@@ -1457,6 +1478,12 @@ final class AppStore: ObservableObject {
 
     func storeCharacterArtwork(_ image: UIImage) {
         characterArtwork = image
+    }
+
+    func loadBlacksmithRepairTargets() async -> [RepairTarget] {
+        guard let cookie = session.cookie, !cookie.isEmpty else { return [] }
+        do { return try await AutomationEngine.blacksmithRepairTargets(cookie: cookie) }
+        catch { diagnostic("[SMITH] Repair targets falhou • \(error.localizedDescription)"); return [] }
     }
 
     func refreshDailyQuests() async {
@@ -1631,8 +1658,8 @@ final class AppStore: ObservableObject {
             // correta. Esse é o ciclo que funcionou nas builds estáveis e evita tentar
             // World→Eldergrove na Presence recém-usada pelo banco.
             let bootstrap: PresenceBootstrap
-            if mode == .fishing || mode == .roastPit {
-                // Fishing and Roast Pit start with a safe World Presence for
+            if mode == .fishing || mode == .roastPit || mode == .blacksmith {
+                // Fishing, Roast Pit and Frostmere Smith start with a safe World Presence for
                 // transactional bank preflight. A fresh activity Presence is
                 // opened only after World/bank_shop/World completes.
                 bootstrap = PresenceBootstrap(region: "world", position: Position(x: 22.5, z: -3.5))
@@ -1663,6 +1690,7 @@ final class AppStore: ObservableObject {
                 bootstrap: bootstrap,
                 fishingBait: selectedFishingBait,
                     roastMode: selectedRoastMode,
+                blacksmithSelection: selectedBlacksmith,
                 reporter: engineReporter(runID: runID)
             )
             activeEngine = engine
@@ -1720,6 +1748,7 @@ final class AppStore: ObservableObject {
                     bootstrap: activityBootstrap,
                     fishingBait: selectedFishingBait,
                     roastMode: selectedRoastMode,
+                    blacksmithSelection: selectedBlacksmith,
                     reporter: engineReporter(runID: runID)
                 )
                 engine = activityEngine
@@ -1734,6 +1763,56 @@ final class AppStore: ObservableObject {
                 state = .syncing
                 statusMessage = "Sincronizando Roast Pit no Pond"
                 log("🔥 Presence World encerrada • nova Presence pond aberta no mesmo shard \(selectedShard)")
+                await activityEngine.prepareIdentity()
+                guard activeRunID == runID else { return }
+            }
+
+
+            if mode == .blacksmith {
+                state = .syncing
+                statusMessage = "⚒️ Preparando Frostmere Smith no banco"
+                stats.lastEvent = "preflight Frostmere Smith • World/bank_shop"
+                updateContinuedProcessingProgress(forceTitleUpdate: true)
+
+                try await engine.prepareBlacksmithLoadoutFromWorld(goal: runGoal)
+                guard activeRunID == runID, !terminalFailureHandled else { return }
+
+                diagnostic("[SMITH] preflight World concluído • encerrando Presence bancária antes de Frostmere")
+                receiverTask?.cancel()
+                receiverTask = nil
+                activeEngine = nil
+                connected = false
+                await socket.close()
+                await importSocketTrace()
+                guard activeRunID == runID else { return }
+
+                let activityBootstrap = AutomationEngine.bootstrap(for: .blacksmith)
+                state = .connecting
+                statusMessage = "Conectando a Frostmere"
+                stats.lastEvent = "handoff Frostmere Smith • frostmere"
+                updateContinuedProcessingProgress()
+
+                let activityStream = try await socket.connect(session: session, shard: selectedShard, bootstrap: activityBootstrap)
+                await importSocketTrace()
+                guard activeRunID == runID else { return }
+
+                let activityEngine = AutomationEngine(
+                    socket: socket,
+                    cookie: cookie,
+                    shard: selectedShard,
+                    bootstrap: activityBootstrap,
+                    fishingBait: selectedFishingBait,
+                    roastMode: selectedRoastMode,
+                    blacksmithSelection: selectedBlacksmith,
+                    reporter: engineReporter(runID: runID)
+                )
+                engine = activityEngine
+                activeEngine = activityEngine
+                receiverTask = await makeReceiverTask(stream: activityStream, engine: activityEngine, mode: mode, runID: runID)
+                connected = true
+                state = .syncing
+                statusMessage = "Sincronizando Frostmere Smith"
+                log("⚒️ Presence World encerrada • nova Presence frostmere aberta no mesmo shard \(selectedShard)")
                 await activityEngine.prepareIdentity()
                 guard activeRunID == runID else { return }
             }
@@ -1777,6 +1856,7 @@ final class AppStore: ObservableObject {
                     bootstrap: activityBootstrap,
                     fishingBait: selectedFishingBait,
                     roastMode: selectedRoastMode,
+                    blacksmithSelection: selectedBlacksmith,
                     reporter: engineReporter(runID: runID)
                 )
                 engine = activityEngine
@@ -1854,6 +1934,7 @@ final class AppStore: ObservableObject {
                     bootstrap: activityBootstrap,
                     fishingBait: selectedFishingBait,
                     roastMode: selectedRoastMode,
+                    blacksmithSelection: selectedBlacksmith,
                     reporter: engineReporter(runID: runID)
                 )
                 engine = activityEngine
@@ -2371,6 +2452,7 @@ final class AppStore: ObservableObject {
                     bootstrap: bootstrap,
                     fishingBait: selectedFishingBait,
                     roastMode: selectedRoastMode,
+                    blacksmithSelection: selectedBlacksmith,
                     reporter: engineReporter(runID: runID)
                 )
                 activeEngine = engine
@@ -2643,6 +2725,7 @@ final class AppStore: ObservableObject {
                     bootstrap: recoveryBootstrap,
                     fishingBait: selectedFishingBait,
                     roastMode: selectedRoastMode,
+                    blacksmithSelection: selectedBlacksmith,
                     reporter: engineReporter(runID: runID)
                 )
                 activeEngine = recoveryEngine
@@ -2804,6 +2887,35 @@ final class AppStore: ObservableObject {
             stats.lastEvent = burned
                 ? "\(mode.label) queimou • +0 XP"
                 : "\(mode.label) assado • +\(xpGained) XP"
+            updateContinuedProcessingProgress(forceTitleUpdate: true)
+
+        case .smithCountdown(let recipe, let completed, let goal, let secondsRemaining):
+            stats.smithCycleRemaining = secondsRemaining
+            state = .cooldown
+            statusMessage = "⚒️ \(recipe.label) • \(secondsRemaining)s • ciclo \(completed + 1)/\(goal)"
+            stats.lastEvent = secondsRemaining > 0 ? "forjando • \(secondsRemaining)s" : "confirmando resultado"
+            updateContinuedProcessingProgress()
+
+        case .smithResult(let recipe, let completed, let goal, let produced, let xpGained, let smithingXPTotal):
+            stats.successes = max(stats.successes, completed)
+            stats.smithCycleRemaining = 0
+            stats.smithProduced += produced
+            stats.smithLastXPGained = xpGained
+            stats.smithSessionXPGained += xpGained
+            stats.smithingXPTotal = smithingXPTotal
+            state = .acting
+            statusMessage = "✅ \(recipe.label) ×\(produced) • +\(xpGained) XP • Smithing \(smithingXPTotal)"
+            stats.lastEvent = "\(recipe.label) produzido • \(completed)/\(goal)"
+            updateContinuedProcessingProgress(forceTitleUpdate: true)
+
+        case .repairResult(let target, let durabilityAfter, let costs):
+            stats.successes = max(stats.successes, 1)
+            stats.smithRepairs += 1
+            stats.smithCycleRemaining = 0
+            state = .acting
+            statusMessage = "✅ \(target.label) reparado • \(durabilityAfter)/\(target.maxDurability)"
+            let costText = costs.sorted { $0.key < $1.key }.map { "\(BlacksmithProtocolPolicy.materialLabel($0.key)) -\($0.value)" }.joined(separator: " • ")
+            stats.lastEvent = costText.isEmpty ? "Repair concluído" : "Repair • \(costText)"
             updateContinuedProcessingProgress(forceTitleUpdate: true)
 
         case .gatherSuccess(let detail, let absolute):
