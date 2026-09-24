@@ -32,12 +32,22 @@ final class RealtimeProtocolTests: XCTestCase {
         XCTAssertEqual(silverTen["coal"], 80)
         XCTAssertEqual(silverTen["silver_ore"], 40)
 
-        XCTAssertEqual(BlacksmithProtocolPolicy.smithOutputUnits(batch: 1, cycles: 100), 100)
-        XCTAssertEqual(BlacksmithProtocolPolicy.smithOutputUnits(batch: 5, cycles: 100), 500)
-        XCTAssertEqual(BlacksmithProtocolPolicy.smithOutputUnits(batch: 10, cycles: 100), 1000)
-        let silverHundredByFive = BlacksmithProtocolPolicy.smithMaterialCosts(recipe: .silverIngot, batch: 5, cycles: 100)
+        XCTAssertEqual(BlacksmithProtocolPolicy.smithSessionGoal(recipe: .silverIngot, batch: 5, smeltGoal: 100), 100)
+        XCTAssertEqual(BlacksmithProtocolPolicy.smithOutputUnits(recipe: .silverIngot, batch: 1, smeltGoal: 100), 100)
+        XCTAssertEqual(BlacksmithProtocolPolicy.smithOutputUnits(recipe: .silverIngot, batch: 5, smeltGoal: 100), 500)
+        XCTAssertEqual(BlacksmithProtocolPolicy.smithOutputUnits(recipe: .silverIngot, batch: 10, smeltGoal: 100), 1000)
+
+        let silverHundredByFive = BlacksmithProtocolPolicy.smithMaterialCosts(recipe: .silverIngot, batch: 5, smeltGoal: 100)
         XCTAssertEqual(silverHundredByFive["coal"], 4_000)
         XCTAssertEqual(silverHundredByFive["silver_ore"], 2_000)
+
+        XCTAssertEqual(BlacksmithProtocolPolicy.smithSessionGoal(recipe: .copperAxe, batch: 1, smeltGoal: 100), 1)
+        XCTAssertEqual(BlacksmithProtocolPolicy.smithSessionGoal(recipe: .copperAxe, batch: 5, smeltGoal: 100), 5)
+        XCTAssertEqual(BlacksmithProtocolPolicy.smithSessionGoal(recipe: .copperAxe, batch: 10, smeltGoal: 100), 10)
+        XCTAssertEqual(BlacksmithProtocolPolicy.smithOutputUnits(recipe: .copperAxe, batch: 5, smeltGoal: 100), 5)
+        let fiveCopperAxes = BlacksmithProtocolPolicy.smithMaterialCosts(recipe: .copperAxe, batch: 5, smeltGoal: 100)
+        XCTAssertEqual(fiveCopperAxes["copper_ingot"], 100)
+        XCTAssertEqual(fiveCopperAxes["wood"], 2_000)
 
         let body = BlacksmithProtocolPolicy.smithBody(recipe: "silver_pickaxe", quantity: 5, fleet: "us", shardID: 4)
         XCTAssertEqual(body["recipe"] as? String, "silver_pickaxe")

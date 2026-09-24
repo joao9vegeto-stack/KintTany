@@ -635,7 +635,7 @@ final class AppStore: ObservableObject {
     @Published var mobCount = 0
     @Published var selectedFishingBait: FishingBait = .feather
     @Published var selectedRoastMode: RoastPitMode = .trout
-    @Published var selectedBlacksmith: BlacksmithSelection = .smith(.copperIngot, batch: 1)
+    @Published var selectedBlacksmith: BlacksmithSelection = .smith(.copperIngot, batch: 1, smeltGoal: 100)
     @Published private(set) var characterProfile = CharacterProfile()
     @Published private(set) var characterProfileLoading = false
     @Published private(set) var characterProfileError: String?
@@ -731,12 +731,19 @@ final class AppStore: ObservableObject {
     }
 
     private func resolvedSessionGoal(for mode: ActivityMode) -> Int {
-        if mode == .blacksmith, case .repair = selectedBlacksmith {
+        guard mode == .blacksmith else {
+            return min(100_000, max(1, goal))
+        }
+        switch selectedBlacksmith {
+        case .smith(let recipe, let batch, let smeltGoal):
+            return BlacksmithProtocolPolicy.smithSessionGoal(
+                recipe: recipe,
+                batch: batch,
+                smeltGoal: smeltGoal
+            )
+        case .repair:
             return 1
         }
-        // Para Smith/Smelt, a meta continua sendo o número de ciclos escolhido
-        // pelo usuário. O lote (×1/×5/×10) multiplica cada ciclo, não substitui a meta.
-        return min(100_000, max(1, goal))
     }
 
     func start(_ mode: ActivityMode) {

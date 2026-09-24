@@ -735,26 +735,47 @@ struct KintServiceShortcuts: View {
     let didSelect: (KintActivity) -> Void
 
     var body: some View {
-        HStack(spacing: 18) {
-            shortcut(.roastPit)
-            shortcut(.blacksmith)
+        HStack(spacing: 6) {
+            shortcut(.roastPit, title: "Roast Pit")
+            shortcut(.blacksmith, title: "Frostmere Smith")
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
     }
 
-    private func shortcut(_ activity: KintActivity) -> some View {
+    private func shortcut(_ activity: KintActivity, title: String) -> some View {
         Button {
             selected = activity
             didSelect(activity)
         } label: {
-            KintActivitySprite(activity: activity)
-                .frame(width: 21, height: 21)
-                .frame(width: 34, height: 28)
-                .contentShape(Rectangle())
-                .opacity(selected == activity ? 1.0 : 0.88)
+            VStack(spacing: 2) {
+                KintActivitySprite(activity: activity)
+                    .frame(width: 22, height: 20)
+                Text(title)
+                    .font(KintTanyTheme.bodyFont(7.1, weight: .medium))
+                    .foregroundStyle(KintTanyTheme.ink)
+                    .lineLimit(2)
+                    .multilineTextAlignment(.center)
+                    .minimumScaleFactor(0.72)
+                    .allowsTightening(true)
+            }
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
+            .padding(.horizontal, 2)
+            .background(
+                RoundedRectangle(cornerRadius: 8, style: .continuous)
+                    .fill(selected == activity ? KintTanyTheme.terracotta.opacity(0.12) : KintTanyTheme.surface.opacity(0.72))
+            )
+            .overlay(
+                RoundedRectangle(cornerRadius: 8, style: .continuous)
+                    .stroke(
+                        selected == activity
+                            ? KintTanyTheme.terracotta.opacity(0.78)
+                            : KintTanyTheme.surfaceShadow.opacity(0.42),
+                        lineWidth: selected == activity ? 1.0 : 0.65
+                    )
+            )
         }
         .buttonStyle(.plain)
-        .accessibilityLabel(activity.title)
+        .accessibilityLabel(title)
     }
 }
 
@@ -1164,15 +1185,15 @@ private struct KintTanyDesignCanvas<AvatarContent: View>: View {
                 .position(x: 254, y: 420)
 
             KintLocationPanel(location: state.location)
-                .frame(width: 112, height: 148, alignment: .topLeading)
-                .position(x: 314, y: 407)
+                .frame(width: 112, height: 124, alignment: .topLeading)
+                .position(x: 314, y: 395)
 
             KintServiceShortcuts(
                 selected: $state.selectedActivity,
                 didSelect: actions.selectActivity
             )
-            .frame(width: 112, height: 30)
-            .position(x: 314, y: 498)
+            .frame(width: 112, height: 50)
+            .position(x: 314, y: 485)
 
             KintDivider()
                 .frame(width: 350)
@@ -1395,10 +1416,10 @@ struct BlacksmithSelectorSheet: View {
     @State private var repairTargets: [RepairTarget] = []
     @State private var loadingRepairs = false
     @State private var batchQuantity = 1
+    @State private var smeltGoalText = "100"
 
     private let batchOptions = BlacksmithProtocolPolicy.batchQuantities
 
-    let sessionGoal: Int
     let loadRepairTargets: () async -> [RepairTarget]
     let onStart: (BlacksmithSelection) -> Void
     let onCancel: () -> Void
@@ -1461,6 +1482,9 @@ struct BlacksmithSelectorSheet: View {
 
                 if panel != .repair {
                     batchSelector
+                    if panel == .smelt {
+                        smeltGoalSelector
+                    }
                 }
 
                 selectionSummary
@@ -1469,7 +1493,11 @@ struct BlacksmithSelectorSheet: View {
                     if panel == .repair {
                         if let repairTarget { onStart(.repair(repairTarget)) }
                     } else {
-                        onStart(.smith(recipe, batch: batchQuantity))
+                        onStart(.smith(
+                            recipe,
+                            batch: batchQuantity,
+                            smeltGoal: panel == .smelt ? normalizedSmeltGoal : 1
+                        ))
                     }
                 } label: {
                     Text(panel == .repair ? "REPARAR" : (panel == .smelt ? "FUNDIR" : "FORJAR"))
@@ -1491,16 +1519,26 @@ struct BlacksmithSelectorSheet: View {
         panel == .smelt ? BlacksmithRecipe.smeltRecipes : BlacksmithRecipe.forgeRecipes
     }
 
-    private var normalizedSessionGoal: Int {
-        max(1, sessionGoal)
+    private var normalizedSmeltGoal: Int {
+        BlacksmithProtocolPolicy.normalizedSmeltGoal(
+            Int(smeltGoalText.trimmingCharacters(in: .whitespacesAndNewlines)) ?? 100
+        )
     }
 
     private var totalOutputUnits: Int {
-        BlacksmithProtocolPolicy.smithOutputUnits(batch: batchQuantity, cycles: normalizedSessionGoal)
+        BlacksmithProtocolPolicy.smithOutputUnits(
+            recipe: recipe,
+            batch: batchQuantity,
+            smeltGoal: normalizedSmeltGoal
+        )
     }
 
     private var totalMaterials: [String: Int] {
-        BlacksmithProtocolPolicy.smithMaterialCosts(recipe: recipe, batch: batchQuantity, cycles: normalizedSessionGoal)
+        BlacksmithProtocolPolicy.smithMaterialCosts(
+            recipe: recipe,
+            batch: batchQuantity,
+            smeltGoal: normalizedSmeltGoal
+        )
     }
 
     private var batchSelector: some View {
@@ -1520,6 +1558,56 @@ struct BlacksmithSelectorSheet: View {
                 .buttonStyle(.plain)
             }
         }
+    }
+
+    private var smeltGoalSelector: some View {
+        HStack(spacing: 7) {
+            Text("Meta")
+                .font(KintTanyTheme.bodyFont(11.2, weight: .semibold))
+                .foregroundStyle(KintTanyTheme.mutedInk)
+
+            Button {
+                adjustSmeltGoal(by: -10)
+            } label: {
+                Image(systemName: "minus")
+                    .font(.system(size: 11, weight: .bold))
+                    .frame(width: 31, height: 31)
+            }
+            .buttonStyle(.plain)
+            .foregroundStyle(KintTanyTheme.ink)
+            .background(KintTanyTheme.surface.opacity(0.92))
+            .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
+
+            TextField("100", text: $smeltGoalText)
+                .keyboardType(.numberPad)
+                .multilineTextAlignment(.center)
+                .font(KintTanyTheme.bodyFont(12.2, weight: .semibold))
+                .foregroundStyle(KintTanyTheme.ink)
+                .frame(maxWidth: .infinity, minHeight: 31)
+                .background(KintTanyTheme.surface.opacity(0.92))
+                .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
+                .overlay(
+                    RoundedRectangle(cornerRadius: 8, style: .continuous)
+                        .stroke(KintTanyTheme.terracotta.opacity(0.48), lineWidth: 0.8)
+                )
+
+            Button {
+                adjustSmeltGoal(by: 10)
+            } label: {
+                Image(systemName: "plus")
+                    .font(.system(size: 11, weight: .bold))
+                    .frame(width: 31, height: 31)
+            }
+            .buttonStyle(.plain)
+            .foregroundStyle(KintTanyTheme.ink)
+            .background(KintTanyTheme.surface.opacity(0.92))
+            .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
+        }
+    }
+
+    private func adjustSmeltGoal(by delta: Int) {
+        let next = min(100_000, max(1, normalizedSmeltGoal + delta))
+        smeltGoalText = String(next)
     }
 
     private var recipeGrid: some View {
@@ -1617,9 +1705,15 @@ struct BlacksmithSelectorSheet: View {
                 VStack(alignment: .leading, spacing: 4) {
                     Text(recipe.label)
                         .font(KintTanyTheme.bodyFont(12.5, weight: .semibold))
-                    Text("Meta \(normalizedSessionGoal) × lote \(batchQuantity) = \(totalOutputUnits) itens")
-                    Text("Necessário: " + totalMaterials.sorted { $0.key < $1.key }.map { "\(BlacksmithProtocolPolicy.materialLabel($0.key)) \($0.value)" }.joined(separator: " • "))
-                    Text("1 segundo por unidade • \(batchQuantity)s por ciclo • banco automático")
+                    if panel == .smelt {
+                        Text("Meta \(normalizedSmeltGoal) × lote \(batchQuantity) = \(totalOutputUnits) itens")
+                        Text("Necessário: " + totalMaterials.sorted { $0.key < $1.key }.map { "\(BlacksmithProtocolPolicy.materialLabel($0.key)) \($0.value)" }.joined(separator: " • "))
+                        Text("\(batchQuantity)s por ciclo • banco automático")
+                    } else {
+                        Text("Forge ×\(batchQuantity) = \(totalOutputUnits) ferramentas")
+                        Text("Necessário: " + totalMaterials.sorted { $0.key < $1.key }.map { "\(BlacksmithProtocolPolicy.materialLabel($0.key)) \($0.value)" }.joined(separator: " • "))
+                        Text("1 segundo por ferramenta • banco automático")
+                    }
                 }
                 .font(KintTanyTheme.bodyFont(10.8, weight: .medium))
                 .foregroundStyle(KintTanyTheme.ink)
@@ -1712,7 +1806,6 @@ struct ReplicaDashboardHost: View {
         }
         .sheet(isPresented: $showBlacksmithSelector) {
             BlacksmithSelectorSheet(
-                sessionGoal: app.goal,
                 loadRepairTargets: { await app.loadBlacksmithRepairTargets() },
                 onStart: { selection in
                     app.selectedBlacksmith = selection
@@ -1721,7 +1814,7 @@ struct ReplicaDashboardHost: View {
                 },
                 onCancel: { showBlacksmithSelector = false }
             )
-            .presentationDetents([.fraction(0.72)])
+            .presentationDetents([.fraction(0.78)])
             .presentationDragIndicator(.visible)
         }
         .confirmationDialog("Isca da pesca", isPresented: $showFishingSelector, titleVisibility: .visible) {

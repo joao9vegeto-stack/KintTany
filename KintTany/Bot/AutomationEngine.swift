@@ -399,7 +399,7 @@ struct RepairTarget: Identifiable, Equatable {
 }
 
 enum BlacksmithSelection: Equatable {
-    case smith(BlacksmithRecipe, batch: Int)
+    case smith(BlacksmithRecipe, batch: Int, smeltGoal: Int)
     case repair(RepairTarget)
 }
 
@@ -423,12 +423,27 @@ struct BlacksmithProtocolPolicy {
         return costs
     }
 
-    static func smithOutputUnits(batch: Int, cycles: Int) -> Int {
-        normalizedBatchQuantity(batch) * max(1, cycles)
+    static func normalizedSmeltGoal(_ value: Int) -> Int {
+        min(100_000, max(1, value))
     }
 
-    static func smithMaterialCosts(recipe: BlacksmithRecipe, batch: Int, cycles: Int) -> [String: Int] {
-        let units = smithOutputUnits(batch: batch, cycles: cycles)
+    /// Smelt: a meta pertence ao próprio HUD e representa ciclos; o lote multiplica
+    /// cada ciclo. Forge: o lote é a quantidade final total (1/5/10).
+    static func smithSessionGoal(recipe: BlacksmithRecipe, batch: Int, smeltGoal: Int) -> Int {
+        recipe.stackable
+            ? normalizedSmeltGoal(smeltGoal)
+            : normalizedBatchQuantity(batch)
+    }
+
+    static func smithOutputUnits(recipe: BlacksmithRecipe, batch: Int, smeltGoal: Int) -> Int {
+        let normalizedBatch = normalizedBatchQuantity(batch)
+        return recipe.stackable
+            ? normalizedBatch * normalizedSmeltGoal(smeltGoal)
+            : normalizedBatch
+    }
+
+    static func smithMaterialCosts(recipe: BlacksmithRecipe, batch: Int, smeltGoal: Int) -> [String: Int] {
+        let units = smithOutputUnits(recipe: recipe, batch: batch, smeltGoal: smeltGoal)
         var costs: [String: Int] = [:]
         for (material, perUnit) in recipe.materials {
             costs[material] = perUnit * units
@@ -1806,7 +1821,7 @@ actor AutomationEngine {
         bootstrap: PresenceBootstrap,
         fishingBait: FishingBait = .feather,
         roastMode: RoastPitMode = .trout,
-        blacksmithSelection: BlacksmithSelection = .smith(.copperIngot, batch: 1),
+        blacksmithSelection: BlacksmithSelection = .smith(.copperIngot, batch: 1, smeltGoal: 100),
         reporter: @escaping Reporter
     ) {
         self.socket = socket
@@ -2108,20 +2123,36 @@ actor AutomationEngine {
     func prepareBlacksmithLoadoutFromWorld(goal: Int) async throws {
         guard try await waitForRegion("world", timeoutMS: 5_000) else { throw EngineError.regionNotConfirmed("world") }
 
-        let cycles = max(1, goal)
         var required: [String: Int] = [:]
         var smithRecipe: BlacksmithRecipe?
         var smithBatch = 1
 
         switch blacksmithSelection {
-        case .smith(let recipe, let selectedBatch):
+        case .smith(let recipe, let selectedBatch, let selectedSmeltGoal):
             let batch = BlacksmithProtocolPolicy.normalizedBatchQuantity(selectedBatch)
+            let sessionGoal = BlacksmithProtocolPolicy.smithSessionGoal(
+                recipe: recipe,
+                batch: batch,
+                smeltGoal: selectedSmeltGoal
+            )
+            let totalUnits = BlacksmithProtocolPolicy.smithOutputUnits(
+                recipe: recipe,
+                batch: batch,
+                smeltGoal: selectedSmeltGoal
+            )
             smithRecipe = recipe
             smithBatch = batch
-            required = BlacksmithProtocolPolicy.smithMaterialCosts(recipe: recipe, batch: batch, cycles: cycles)
-            let outputUnits = BlacksmithProtocolPolicy.smithOutputUnits(batch: batch, cycles: cycles)
+            required = BlacksmithProtocolPolicy.smithMaterialCosts(
+                recipe: recipe,
+                batch: batch,
+                smeltGoal: selectedSmeltGoal
+            )
             reporter(.smithPreflight(recipe: recipe, batch: batch, required: required))
-            reporter(.log("⚒️ Preflight • \(recipe.label) • meta \(cycles) × lote \(batch) = \(outputUnits) itens • \(required.sorted { $0.key < $1.key }.map { "\(BlacksmithProtocolPolicy.materialLabel($0.key)) \($0.value)" }.joined(separator: " • "))"))
+            if recipe.stackable {
+                reporter(.log("⚒️ Preflight • \(recipe.label) • meta \(sessionGoal) × lote \(batch) = \(totalUnits) itens • \(required.sorted { $0.key < $1.key }.map { "\(BlacksmithProtocolPolicy.materialLabel($0.key)) \($0.value)" }.joined(separator: " • "))"))
+            } else {
+                reporter(.log("⚒️ Preflight • \(recipe.label) • lote ×\(batch) = \(totalUnits) ferramentas • \(required.sorted { $0.key < $1.key }.map { "\(BlacksmithProtocolPolicy.materialLabel($0.key)) \($0.value)" }.joined(separator: " • "))"))
+            }
         case .repair(let target):
             let state = try await http.backpackState()
             guard let current = BlacksmithProtocolPolicy.currentTarget(target, in: state.backpack) else { throw EngineError.blacksmithRepairTargetChanged }
@@ -2203,16 +2234,29 @@ actor AutomationEngine {
                 throw EngineError.blacksmithFailure(BlacksmithProtocolPolicy.serverErrorMessage(code: code, payload: payload))
             }
 
-        case .smith(let recipe, let selectedBatch):
-            let target = max(1, goal)
+        case .smith(let recipe, let selectedBatch, let selectedSmeltGoal):
             let batch = BlacksmithProtocolPolicy.normalizedBatchQuantity(selectedBatch)
-            let expectedOutput = BlacksmithProtocolPolicy.smithOutputUnits(batch: batch, cycles: target)
+            let target = BlacksmithProtocolPolicy.smithSessionGoal(
+                recipe: recipe,
+                batch: batch,
+                smeltGoal: selectedSmeltGoal
+            )
+            let expectedOutput = BlacksmithProtocolPolicy.smithOutputUnits(
+                recipe: recipe,
+                batch: batch,
+                smeltGoal: selectedSmeltGoal
+            )
             var xpTotal = 0
             if let playerID {
                 xpTotal = (try? await http.skillXP(playerID: playerID, skill: "smithing")) ?? 0
             }
 
-            reporter(.log("⚒️ \(recipe.label) • meta \(target) ciclos • lote ×\(batch) • produção prevista \(expectedOutput) • Smithing mínimo \(recipe.smithingLevel) • XP inicial \(xpTotal)"))
+            if recipe.stackable {
+                reporter(.log("⚒️ \(recipe.label) • meta \(target) ciclos • lote ×\(batch) • produção prevista \(expectedOutput) • Smithing mínimo \(recipe.smithingLevel) • XP inicial \(xpTotal)"))
+            } else {
+                reporter(.log("⚒️ \(recipe.label) • Forge ×\(batch) • total \(expectedOutput) ferramentas • Smithing mínimo \(recipe.smithingLevel) • XP inicial \(xpTotal)"))
+            }
+
             let hb = Task { [weak self] in await self?.heartbeat() }
             defer { hb.cancel() }
 
@@ -2220,7 +2264,10 @@ actor AutomationEngine {
                 try Task.checkCancellation()
 
                 let cycle = successes + 1
-                let requestQuantity = batch
+                // Smelt respeita o lote por chamada (1/5/10). Forge volta à
+                // semântica original: cada chamada produz uma ferramenta e o
+                // seletor 1/5/10 define somente quantas ferramentas serão feitas.
+                let requestQuantity = recipe.stackable ? batch : 1
                 let waitSeconds = max(1, BlacksmithProtocolPolicy.smithSecondsPerUnit * requestQuantity)
 
                 for seconds in stride(from: waitSeconds, through: 1, by: -1) {
