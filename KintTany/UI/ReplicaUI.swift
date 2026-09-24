@@ -12,6 +12,7 @@ public enum KintActivity: String, CaseIterable, Identifiable, Sendable {
     case cacti
     case fishing
     case roastPit
+    case blacksmith
     case chicken
     case zombie
     case dragon
@@ -29,6 +30,7 @@ public enum KintActivity: String, CaseIterable, Identifiable, Sendable {
         case .cacti: "Cacti"
         case .fishing: "Pesca"
         case .roastPit: "Roast Pit"
+        case .blacksmith: "Frostmere Smith"
         case .chicken: "Galinha"
         case .zombie: "Zumbi"
         case .dragon: "Dragão"
@@ -46,6 +48,7 @@ public enum KintActivity: String, CaseIterable, Identifiable, Sendable {
         case .cacti: "KintCacti"
         case .fishing: "KintFishing"
         case .roastPit: "KintFishing"
+        case .blacksmith: "KintStone"
         case .chicken: "KintChicken"
         case .zombie: "KintZombie"
         case .dragon: "KintDragon"
@@ -513,6 +516,13 @@ struct KintActivitySprite: View {
                     .symbolRenderingMode(.hierarchical)
                     .foregroundStyle(Color.orange)
                     .padding(4)
+            } else if activity == .blacksmith {
+                Image(systemName: "hammer.fill")
+                    .resizable()
+                    .scaledToFit()
+                    .symbolRenderingMode(.hierarchical)
+                    .foregroundStyle(KintTanyTheme.ink)
+                    .padding(4)
             } else {
                 KintResourceImage.image(activity.assetName)
                     .resizable()
@@ -527,7 +537,7 @@ struct KintExactActivityGrid: View {
     @Binding var selected: KintActivity
     let didSelect: (KintActivity) -> Void
     private let top: [KintActivity] = [.wood, .coal, .stone, .ironOre, .silverOre, .cacti]
-    private let bottom: [KintActivity] = [.fishing, .roastPit, .chicken, .zombie, .dragon]
+    private let bottom: [KintActivity] = [.fishing, .roastPit, .blacksmith, .chicken, .zombie, .dragon]
 
     var body: some View {
         ZStack {
@@ -1366,6 +1376,237 @@ struct RoastPitSelectorSheet: View {
     }
 }
 
+
+struct BlacksmithSelectorSheet: View {
+    @State private var panel: BlacksmithPanelMode = .smelt
+    @State private var recipe: BlacksmithRecipe = .copperIngot
+    @State private var repairTarget: RepairTarget?
+    @State private var repairTargets: [RepairTarget] = []
+    @State private var loadingRepairs = false
+
+    let loadRepairTargets: () async -> [RepairTarget]
+    let onStart: (BlacksmithSelection) -> Void
+    let onCancel: () -> Void
+
+    private let columns = [
+        GridItem(.flexible(), spacing: 8),
+        GridItem(.flexible(), spacing: 8),
+        GridItem(.flexible(), spacing: 8)
+    ]
+
+    var body: some View {
+        ZStack {
+            KintTanyTheme.surface.ignoresSafeArea()
+            KintResourceImage.image("KintPaperTexture")
+                .resizable(resizingMode: .tile)
+                .opacity(0.40)
+                .ignoresSafeArea()
+
+            VStack(spacing: 10) {
+                HStack {
+                    Color.clear.frame(width: 38, height: 38)
+                    Spacer()
+                    Text("Frostmere Smith")
+                        .font(KintTanyTheme.titleFont(21, weight: .medium))
+                        .foregroundStyle(KintTanyTheme.ink)
+                        .kintEmbossedText()
+                    Spacer()
+                    Button(action: onCancel) {
+                        Image(systemName: "xmark")
+                            .font(.system(size: 16, weight: .bold))
+                            .foregroundStyle(KintTanyTheme.ink)
+                            .frame(width: 38, height: 38)
+                            .background(KintTanyTheme.surface.opacity(0.96))
+                            .kintRaised(radius: 10)
+                    }
+                    .buttonStyle(.plain)
+                }
+
+                HStack(spacing: 8) {
+                    ForEach(BlacksmithPanelMode.allCases) { mode in
+                        Button(mode.label) {
+                            panel = mode
+                            if mode == .smelt, !BlacksmithRecipe.smeltRecipes.contains(recipe) { recipe = .copperIngot }
+                            if mode == .forge, !BlacksmithRecipe.forgeRecipes.contains(recipe) { recipe = .copperAxe }
+                            if mode == .repair { Task { await refreshRepairs() } }
+                        }
+                        .font(KintTanyTheme.bodyFont(12.2, weight: .semibold))
+                        .foregroundStyle(panel == mode ? KintTanyTheme.surfaceHighlight : KintTanyTheme.ink)
+                        .frame(maxWidth: .infinity, minHeight: 34)
+                        .background(panel == mode ? KintTanyTheme.terracotta : KintTanyTheme.surface.opacity(0.92))
+                        .clipShape(RoundedRectangle(cornerRadius: 9))
+                        .buttonStyle(.plain)
+                    }
+                }
+
+                ScrollView {
+                    if panel == .repair { repairList } else { recipeGrid }
+                }
+                .scrollIndicators(.hidden)
+
+                selectionSummary
+
+                Button {
+                    if panel == .repair {
+                        if let repairTarget { onStart(.repair(repairTarget)) }
+                    } else {
+                        onStart(.smith(recipe))
+                    }
+                } label: {
+                    Text(panel == .repair ? "REPARAR" : (panel == .smelt ? "FUNDIR" : "FORJAR"))
+                        .font(KintTanyTheme.titleFont(16.5, weight: .medium))
+                        .foregroundStyle(KintTanyTheme.surfaceHighlight)
+                        .frame(maxWidth: .infinity, minHeight: 43)
+                        .background(KintTanyTheme.terracotta)
+                        .clipShape(RoundedRectangle(cornerRadius: 12))
+                }
+                .buttonStyle(.plain)
+                .disabled(panel == .repair && repairTarget == nil)
+                .opacity(panel == .repair && repairTarget == nil ? 0.45 : 1)
+            }
+            .padding(12)
+        }
+    }
+
+    private var recipes: [BlacksmithRecipe] {
+        panel == .smelt ? BlacksmithRecipe.smeltRecipes : BlacksmithRecipe.forgeRecipes
+    }
+
+    private var recipeGrid: some View {
+        LazyVGrid(columns: columns, spacing: 8) {
+            ForEach(recipes) { item in
+                Button { recipe = item } label: {
+                    VStack(spacing: 4) {
+                        officialImage(item.iconURL).frame(width: 34, height: 30)
+                        Text(item.label)
+                            .font(KintTanyTheme.bodyFont(10.8, weight: .medium))
+                            .foregroundStyle(KintTanyTheme.ink)
+                            .lineLimit(2)
+                            .minimumScaleFactor(0.72)
+                        Text(item.smithingLevel == 0 ? "Lv. livre" : "Smithing \(item.smithingLevel)")
+                            .font(KintTanyTheme.bodyFont(9.3, weight: .medium))
+                            .foregroundStyle(KintTanyTheme.mutedInk)
+                    }
+                    .frame(maxWidth: .infinity, minHeight: 72)
+                    .background(recipe == item ? KintTanyTheme.terracotta.opacity(0.13) : KintTanyTheme.surface.opacity(0.92))
+                    .overlay(
+                        RoundedRectangle(cornerRadius: 10)
+                            .stroke(recipe == item ? KintTanyTheme.terracotta.opacity(0.82) : KintTanyTheme.surfaceShadow.opacity(0.45), lineWidth: recipe == item ? 1.5 : 0.8)
+                    )
+                    .clipShape(RoundedRectangle(cornerRadius: 10))
+                }
+                .buttonStyle(.plain)
+            }
+        }
+    }
+
+    @ViewBuilder
+    private var repairList: some View {
+        if loadingRepairs {
+            ProgressView("Lendo ferramentas...")
+                .tint(KintTanyTheme.terracotta)
+                .padding(.top, 18)
+        } else if repairTargets.isEmpty {
+            Text("Nenhuma ferramenta reparável desgastada no Hotbar/Backpack.")
+                .font(KintTanyTheme.bodyFont(12, weight: .medium))
+                .foregroundStyle(KintTanyTheme.mutedInk)
+                .frame(maxWidth: .infinity)
+                .padding(.vertical, 20)
+        } else {
+            LazyVStack(spacing: 7) {
+                ForEach(repairTargets) { target in
+                    Button { repairTarget = target } label: {
+                        HStack(spacing: 10) {
+                            officialImage(target.iconURL).frame(width: 34, height: 34)
+                            VStack(alignment: .leading, spacing: 2) {
+                                Text(target.label)
+                                    .font(KintTanyTheme.bodyFont(12.5, weight: .semibold))
+                                    .foregroundStyle(KintTanyTheme.ink)
+                                Text("\(target.slotKind.uppercased()) \(target.slotIdx) • \(target.durability)/\(target.maxDurability)")
+                                    .font(KintTanyTheme.bodyFont(10.4, weight: .medium))
+                                    .foregroundStyle(KintTanyTheme.mutedInk)
+                            }
+                            Spacer()
+                            if repairTarget?.id == target.id {
+                                Image(systemName: "checkmark.circle.fill")
+                                    .foregroundStyle(KintTanyTheme.terracotta)
+                            }
+                        }
+                        .padding(8)
+                        .background(repairTarget?.id == target.id ? KintTanyTheme.terracotta.opacity(0.11) : KintTanyTheme.surface.opacity(0.88))
+                        .clipShape(RoundedRectangle(cornerRadius: 10))
+                    }
+                    .buttonStyle(.plain)
+                }
+            }
+        }
+    }
+
+    @ViewBuilder
+    private var selectionSummary: some View {
+        KintInsetPanel(cornerRadius: 11) {
+            if panel == .repair {
+                if let target = repairTarget {
+                    let costs = BlacksmithProtocolPolicy.repairMaterialCosts(type: target.type, missingDurability: target.maxDurability - target.durability)
+                    VStack(alignment: .leading, spacing: 4) {
+                        Text("Repair • \(target.label)")
+                            .font(KintTanyTheme.bodyFont(12.5, weight: .semibold))
+                        Text("Durabilidade: \(target.durability) → \(target.maxDurability)")
+                        Text(costs.sorted { $0.key < $1.key }.map { "\(BlacksmithProtocolPolicy.materialLabel($0.key)) \($0.value)" }.joined(separator: " • "))
+                    }
+                    .font(KintTanyTheme.bodyFont(10.8, weight: .medium))
+                    .foregroundStyle(KintTanyTheme.ink)
+                    .padding(10)
+                } else {
+                    Text("Escolha uma ferramenta desgastada.")
+                        .font(KintTanyTheme.bodyFont(11.5, weight: .medium))
+                        .foregroundStyle(KintTanyTheme.mutedInk)
+                        .padding(10)
+                }
+            } else {
+                VStack(alignment: .leading, spacing: 4) {
+                    Text(recipe.label)
+                        .font(KintTanyTheme.bodyFont(12.5, weight: .semibold))
+                    Text(recipe.materials.sorted { $0.key < $1.key }.map { "\(BlacksmithProtocolPolicy.materialLabel($0.key)) \($0.value)" }.joined(separator: " • "))
+                    Text("1 segundo por unidade • banco automático")
+                }
+                .font(KintTanyTheme.bodyFont(10.8, weight: .medium))
+                .foregroundStyle(KintTanyTheme.ink)
+                .padding(10)
+            }
+        }
+        .frame(minHeight: 64)
+    }
+
+    @ViewBuilder
+    private func officialImage(_ url: URL?) -> some View {
+        AsyncImage(url: url) { phase in
+            switch phase {
+            case .success(let image):
+                image.resizable().interpolation(.high).scaledToFit()
+            case .failure:
+                Image(systemName: "hammer.fill").resizable().scaledToFit().foregroundStyle(KintTanyTheme.mutedInk)
+            case .empty:
+                ProgressView().tint(KintTanyTheme.terracotta)
+            @unknown default:
+                EmptyView()
+            }
+        }
+    }
+
+    @MainActor
+    private func refreshRepairs() async {
+        loadingRepairs = true
+        let targets = await loadRepairTargets()
+        repairTargets = targets
+        if let current = repairTarget, targets.contains(where: { $0.id == current.id }) {
+        } else {
+            repairTarget = targets.first
+        }
+        loadingRepairs = false
+    }
+}
+
 @MainActor
 struct ReplicaDashboardHost: View {
     @EnvironmentObject private var app: AppStore
@@ -1380,6 +1621,7 @@ struct ReplicaDashboardHost: View {
     @State private var goalDraft = ""
     @State private var showFishingSelector = false
     @State private var showRoastSelector = false
+    @State private var showBlacksmithSelector = false
 
     var body: some View {
         KintTanyDashboardView(
@@ -1415,6 +1657,19 @@ struct ReplicaDashboardHost: View {
                 }
             )
             .presentationDetents([.fraction(0.50)])
+            .presentationDragIndicator(.visible)
+        }
+        .sheet(isPresented: $showBlacksmithSelector) {
+            BlacksmithSelectorSheet(
+                loadRepairTargets: { await app.loadBlacksmithRepairTargets() },
+                onStart: { selection in
+                    app.selectedBlacksmith = selection
+                    showBlacksmithSelector = false
+                    start(.blacksmith)
+                },
+                onCancel: { showBlacksmithSelector = false }
+            )
+            .presentationDetents([.fraction(0.68)])
             .presentationDragIndicator(.visible)
         }
         .confirmationDialog("Isca da pesca", isPresented: $showFishingSelector, titleVisibility: .visible) {
@@ -1460,6 +1715,7 @@ struct ReplicaDashboardHost: View {
                 case .cacti: start(.cacti)
                 case .fishing: showFishingSelector = true
                 case .roastPit: showRoastSelector = true
+                case .blacksmith: showBlacksmithSelector = true
                 case .chicken: start(.chicken)
                 case .zombie: start(.zombie)
                 case .dragon: start(.dragon)
@@ -1543,6 +1799,8 @@ struct ReplicaDashboardHost: View {
         let status: String
         if currentMode == .roastPit, app.stats.roastCycleRemaining > 0 {
             status = "🔥 \(app.stats.roastCycleRemaining)s • XP \(app.stats.roastCookingXPTotal)"
+        } else if currentMode == .blacksmith, app.stats.smithCycleRemaining > 0 {
+            status = "⚒️ \(app.stats.smithCycleRemaining)s • XP \(app.stats.smithingXPTotal)"
         } else {
             status = currentMode == nil ? app.state.label : app.displayStatusMessage
         }
@@ -1596,6 +1854,7 @@ struct ReplicaDashboardHost: View {
         case .cacti: .cacti
         case .fishing: .fishing
         case .roastPit: .roastPit
+        case .blacksmith: .blacksmith
         case .chicken: .chicken
         case .zombie: .zombie
         case .dragon: .dragon
