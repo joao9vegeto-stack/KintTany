@@ -688,6 +688,7 @@ final class AppStore: ObservableObject {
     private var legacyBackgroundTask: UIBackgroundTaskIdentifier = .invalid
     private var lastContinuedTitleSuccesses = -1
     private var lastContinuedPublicStatus = ""
+    private var lastContinuedTitleUpdateAt: Date?
 
     private var continuedTaskIdentifierPrefix: String {
         let bundleID = Bundle.main.bundleIdentifier ?? "com.joaopedro.kinttany"
@@ -2853,7 +2854,11 @@ final class AppStore: ObservableObject {
             state = newState
             statusMessage = message
             stats.lastEvent = newState.rawValue
-            if changed { advanceContinuedProcessingSubprogress() }
+            // Gathering subprogress comes from authoritative h/hm wear below.
+            // Generic UI state changes must not fake work for the scheduler.
+            if changed, activity?.isGathering != true {
+                advanceContinuedProcessingSubprogress()
+            }
             updateContinuedProcessingProgress()
 
         case .log(let message):
@@ -2974,6 +2979,16 @@ final class AppStore: ObservableObject {
             if let detail { log("✅ \(detail) • \(stats.successes)/\(sessionGoal)") }
             updateContinuedProcessingProgress(forceTitleUpdate: true)
 
+        case .gatherProgress(let h, let hm):
+            // Build 113: while a tree/rock is partially worn, expose that real
+            // server-authoritative progress to BGContinuedProcessingTask instead
+            // of advancing by a token +1 per UI event.
+            continuedProgressSubunit = max(
+                continuedProgressSubunit,
+                GatherProgressPolicy.continuedSubunit(h: h, hm: hm)
+            )
+            updateContinuedProcessingProgress()
+
         case .failure(let reason):
             stats.failures += 1
             stats.lastEvent = reason
@@ -3021,13 +3036,17 @@ final class AppStore: ObservableObject {
         case .confirmedHit:
             stats.confirmedHits += 1
             stats.lastEvent = "hit confirmado por ACK"
-            advanceContinuedProcessingSubprogress()
+            if activity?.isGathering != true {
+                advanceContinuedProcessingSubprogress()
+            }
             updateContinuedProcessingProgress()
 
         case .stateConfirmedHit:
             stats.stateConfirmedHits += 1
             stats.lastEvent = "hit correlacionado por estado"
-            advanceContinuedProcessingSubprogress()
+            if activity?.isGathering != true {
+                advanceContinuedProcessingSubprogress()
+            }
             updateContinuedProcessingProgress()
 
         case .hitAckTimeout:
@@ -3150,6 +3169,7 @@ final class AppStore: ObservableObject {
         continuedProgressSubunit = 0
         lastContinuedTitleSuccesses = -1
         lastContinuedPublicStatus = ""
+        lastContinuedTitleUpdateAt = nil
         lastScenePhaseKey = nil
         backgroundEnteredAt = UIApplication.shared.applicationState == .background ? .now : nil
         accumulatedBackgroundSeconds = 0
@@ -3356,8 +3376,10 @@ final class AppStore: ObservableObject {
               let backgroundTask = continuedTaskObject as? BGContinuedProcessingTask
         else { return }
 
-        // Progresso interno continua granular; o texto mostrado pelo sistema
-        // usa a mesma fonte visível do card da atividade no app.
+        // Build 113: progress is cheap and updated whenever authoritative work
+        // advances. The Dynamic Island/title surface is deliberately throttled:
+        // repeatedly calling updateTitle for every preparing/waiting state was
+        // unnecessary work on MainActor while iOS was already scheduling BG.
         let goalUnits = Int64(max(1, sessionGoal))
         let total = goalUnits * 100
         let successBase = Int64(min(max(0, stats.successes), max(1, sessionGoal))) * 100
@@ -3369,11 +3391,13 @@ final class AppStore: ObservableObject {
         let publicStatus = displayStatusMessage
         let successChanged = lastContinuedTitleSuccesses != stats.successes
         let statusChanged = lastContinuedPublicStatus != publicStatus
+        let now = Date()
+        let statusRefreshDue = statusChanged && (
+            lastContinuedTitleUpdateAt == nil ||
+            now.timeIntervalSince(lastContinuedTitleUpdateAt ?? .distantPast) >= 4.0
+        )
 
-        // A superfície do sistema deve acompanhar o mesmo texto que o card do
-        // app. Cada mudança visível relevante atualiza o título; não há mais
-        // formatter genérico que substitua "Peixe #N • fisgada em ...".
-        guard forceTitleUpdate || successChanged || statusChanged else { return }
+        guard forceTitleUpdate || successChanged || statusRefreshDue else { return }
 
         backgroundTask.updateTitle(
             "Kintarabot • \(mode.localizedTitle)",
@@ -3381,6 +3405,7 @@ final class AppStore: ObservableObject {
         )
         lastContinuedTitleSuccesses = stats.successes
         lastContinuedPublicStatus = publicStatus
+        lastContinuedTitleUpdateAt = now
     }
 
     private func finishContinuedProcessing(success: Bool, reason: String) {
@@ -3419,6 +3444,7 @@ final class AppStore: ObservableObject {
         continuedTaskIdentifier = nil
         continuedTaskSubmissionAttempt = 0
         continuedProgressSubunit = 0
+        lastContinuedTitleUpdateAt = nil
         endLegacyBackgroundTask()
     }
 

@@ -15,6 +15,7 @@ enum EngineEvent {
     case smithResult(recipe: BlacksmithRecipe, completed: Int, goal: Int, produced: Int, inventoryTotal: Int, xpGained: Int, smithingXPTotal: Int)
     case repairResult(target: RepairTarget, durabilityAfter: Int, costs: [String: Int])
     case gatherSuccess(String?, absolute: Int)
+    case gatherProgress(h: Int, hm: Int)
     case failure(String)
     case fatal(String)
     case hitSent
@@ -628,6 +629,18 @@ struct RoastPitProtocolPolicy {
         var body: [String: Any] = ["mode": mode.rawValue, "fleet": fleet]
         if let shardID { body["shardId"] = shardID }
         return body
+    }
+}
+
+struct GatherProgressPolicy {
+    /// Converts the authoritative wear of the current resource into the 0...99
+    /// subunit used by BGContinuedProcessingTask. A completed resource is still
+    /// committed only by gatherSuccess, so partial wear can never over-count.
+    static func continuedSubunit(h: Int, hm: Int) -> Int {
+        guard hm > 0 else { return 0 }
+        let clampedH = min(max(0, h), hm)
+        if clampedH >= hm { return 99 }
+        return min(98, max(0, Int((Double(clampedH) / Double(hm) * 99.0).rounded(.down))))
     }
 }
 
@@ -1719,6 +1732,10 @@ actor AutomationEngine {
 
     private var currentGatherSignature: String?
     private var currentGatherKind: String?
+    /// Último frame de ação de gather aceito como estado ativo. O heartbeat de
+    /// Presence precisa repetir este frame, e não um pos vazio que equivale a
+    /// limpar chop/mine enquanto o iOS atrasa a task em background.
+    private var activeGatherAction: [String: Any]?
     private var currentGatherKeys = Set<String>()
     private var harvestProof = ""
     private var harvestProofSerial = 0
@@ -2935,6 +2952,7 @@ actor AutomationEngine {
 
     private func clearAction() async throws {
         activeFishingAction = nil
+        activeGatherAction = nil
         position.y = 0.25
         try await sendPosition(moving: false)
     }
@@ -3016,6 +3034,11 @@ actor AutomationEngine {
                 // e podia cancelar silenciosamente a pesca antes do fish_bite.
                 if let action = activeFishingAction {
                     try await sendPosition(moving: false, action: action)
+                } else if let action = activeGatherAction {
+                    // Build 113: no BG heartbeat is allowed to clear an in-flight
+                    // chop/mine. Re-send only the latest authoritative action
+                    // frame; no catch-up/burst and no extra hit is generated.
+                    try await sendPosition(moving: false, action: action)
                 } else {
                     try await sendPosition(moving: false)
                 }
@@ -3041,7 +3064,11 @@ actor AutomationEngine {
 
     private func runGather(mode: ActivityMode, goal: Int) async throws {
         activeGatherMode = mode
-        defer { activeGatherMode = nil }
+        activeGatherAction = nil
+        defer {
+            activeGatherAction = nil
+            activeGatherMode = nil
+        }
         // Build 62: ordinary Gathering reaches this point with its tool already
         // materialized before Presence; Dunes keeps its dedicated preflight.
         // The tool still must be authoritatively present before any action.
@@ -3585,6 +3612,7 @@ actor AutomationEngine {
 
     private func harvest(seed: GatherSeed, mode: ActivityMode, handshakeTries: Int) async throws -> HarvestResult {
         let kind = seed.kind
+        activeGatherAction = nil
         currentGatherSignature = seed.signature
         currentGatherKind = kind
         currentGatherKeys = Set(seed.keys)
@@ -3623,6 +3651,11 @@ actor AutomationEngine {
             return (Int(parts.first ?? "0") ?? 0, Int(parts.dropFirst().first ?? "0") ?? 0)
         }
 
+        func sendGatherFrame(_ action: [String: Any]) async throws {
+            activeGatherAction = action
+            try await sendPosition(moving: false, action: action)
+        }
+
         func sendProfile(_ second: Bool, progressive: Bool) async throws {
             if safeStopReason != nil { return }
             var maxSchedulerDelayMS = 0
@@ -3641,7 +3674,7 @@ actor AutomationEngine {
                     if index > 0 { try await waitRelative(gap) }
                     guard try await maySendGatherAction(for: mode) else { return }
                     position.y = 0.25 + delta
-                    try await sendPosition(moving: false, action: ["act": "chop", "eq": tool])
+                    try await sendGatherFrame(["act": "chop", "eq": tool])
                 }
             } else {
                 let tile = targetTile()
@@ -3658,7 +3691,7 @@ actor AutomationEngine {
                         let shape = Self.mineMP1[index] / shapeMax
                         let value = min(1, mineProgress + max(0, next - mineProgress) * shape)
                         position.y = 0.25 + Self.mineY1[index]
-                        try await sendPosition(moving: false, action: ["act": "mine", "eq": tool, "mc": tile.0, "mr": tile.1, "mp": value])
+                        try await sendGatherFrame(["act": "mine", "eq": tool, "mc": tile.0, "mr": tile.1, "mp": value])
                         mineProgress = max(mineProgress, value)
                     }
                 } else {
@@ -3667,7 +3700,7 @@ actor AutomationEngine {
                         guard try await maySendGatherAction(for: mode) else { return }
                         mineProgress = max(mineProgress, mpProfile[index])
                         position.y = 0.25 + yProfile[index % yProfile.count]
-                        try await sendPosition(moving: false, action: ["act": "mine", "eq": tool, "mc": tile.0, "mr": tile.1, "mp": mineProgress])
+                        try await sendGatherFrame(["act": "mine", "eq": tool, "mc": tile.0, "mr": tile.1, "mp": mineProgress])
                     }
                 }
             }
@@ -3789,6 +3822,9 @@ actor AutomationEngine {
                 if handshake != .timeout { break }
 
                 if attempt == 2 {
+                    // Reset explícito do handshake: impedir que o heartbeat
+                    // ressuscite o frame anterior durante esta janela.
+                    activeGatherAction = nil
                     position.y = 0.25
                     try await sendPosition(moving: false)
                     try await sleep(90)
@@ -4010,6 +4046,9 @@ actor AutomationEngine {
         }
         if changed {
             harvestWearSerial += 1
+            if harvestHM < 99 {
+                reporter(.gatherProgress(h: harvestH, hm: harvestHM))
+            }
             if gatherTraceFirstProgressAtMS == nil {
                 gatherTraceFirstProgressAtMS = nowMS
                 if let sent = gatherTraceHitSentAtMS {

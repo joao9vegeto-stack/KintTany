@@ -4,6 +4,15 @@ import XCTest
 
 final class RealtimeProtocolTests: XCTestCase {
 
+    func testBuild113GatherPartialWearMapsToContinuedProgressWithoutOvercount() {
+        XCTAssertEqual(GatherProgressPolicy.continuedSubunit(h: 0, hm: 6), 0)
+        XCTAssertEqual(GatherProgressPolicy.continuedSubunit(h: 3, hm: 6), 49)
+        XCTAssertEqual(GatherProgressPolicy.continuedSubunit(h: 5, hm: 6), 82)
+        XCTAssertEqual(GatherProgressPolicy.continuedSubunit(h: 6, hm: 6), 99)
+        XCTAssertEqual(GatherProgressPolicy.continuedSubunit(h: 7, hm: 6), 99)
+        XCTAssertEqual(GatherProgressPolicy.continuedSubunit(h: 3, hm: 0), 0)
+    }
+
     func testBlacksmithProtocolContractMatchesCapturedClient() {
         XCTAssertEqual(BlacksmithProtocolPolicy.smithEndpoint, "/api/auth/blacksmith-smith")
         XCTAssertEqual(BlacksmithProtocolPolicy.repairEndpoint, "/api/auth/blacksmith-repair")
