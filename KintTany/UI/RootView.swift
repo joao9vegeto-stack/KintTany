@@ -114,7 +114,15 @@ struct RootView: View {
             HStack(spacing: 14) {
                 Group {
                     if app.hasSession, let cookie = app.authenticatedCookieForCharacter, !cookie.isEmpty {
-                        CharacterVoxel3DView(appearance: app.characterProfile.appearance)
+                        ZStack {
+                            if let image = app.characterArtwork {
+                                Image(uiImage: image)
+                                    .resizable()
+                                    .scaledToFit()
+                                    .allowsHitTesting(false)
+                            }
+                            CharacterOfficial3DView(cookie: cookie)
+                        }
                     } else {
                         ZStack {
                             RoundedRectangle(cornerRadius: 18, style: .continuous)
@@ -683,6 +691,185 @@ private struct DailyQuestsView: View {
     }
 }
 
+/// Build 114: the visible avatar is rendered by Kintara's own outfit renderer.
+/// This deliberately avoids native replicas of cosmetics. GLB models, textures,
+/// sprites, shaders and procedural cosmetics all come from /play?embed=outfit.
+private struct CharacterOfficial3DView: UIViewRepresentable {
+    let cookie: String
+
+    func makeCoordinator() -> Coordinator { Coordinator() }
+
+    func makeUIView(context: Context) -> WKWebView {
+        let controller = WKUserContentController()
+        controller.add(context.coordinator, name: Coordinator.handlerName)
+        controller.addUserScript(WKUserScript(
+            source: Coordinator.bridgeScript,
+            injectionTime: .atDocumentStart,
+            forMainFrameOnly: true
+        ))
+
+        let configuration = WKWebViewConfiguration()
+        configuration.websiteDataStore = .nonPersistent()
+        configuration.userContentController = controller
+
+        let webView = WKWebView(frame: .zero, configuration: configuration)
+        webView.isOpaque = false
+        webView.backgroundColor = .clear
+        webView.scrollView.backgroundColor = .clear
+        webView.scrollView.isScrollEnabled = false
+        webView.scrollView.bounces = false
+        webView.scrollView.contentInsetAdjustmentBehavior = .never
+        webView.allowsBackForwardNavigationGestures = false
+
+        context.coordinator.webView = webView
+        context.coordinator.loadIfNeeded(cookie: cookie)
+        return webView
+    }
+
+    func updateUIView(_ webView: WKWebView, context: Context) {
+        context.coordinator.loadIfNeeded(cookie: cookie)
+    }
+
+    static func dismantleUIView(_ webView: WKWebView, coordinator: Coordinator) {
+        webView.stopLoading()
+        webView.configuration.userContentController.removeScriptMessageHandler(forName: Coordinator.handlerName)
+    }
+
+    final class Coordinator: NSObject, WKScriptMessageHandler {
+        static let handlerName = "kintaraOfficialAvatar"
+        static let bridgeScript = """
+        (() => {
+          if (window.__kintaraIOSOfficialAvatarBridge) return;
+          window.__kintaraIOSOfficialAvatarBridge = true;
+
+          const notifyReady = () => {
+            try {
+              window.webkit.messageHandlers.kintaraOfficialAvatar.postMessage({ t: 'ready' });
+            } catch (_) {}
+          };
+
+          window.addEventListener('message', (event) => {
+            const value = event && event.data;
+            if (value && value.t === 'kintara_outfit_embed_ready') notifyReady();
+          });
+
+          document.addEventListener('DOMContentLoaded', () => {
+            const poll = setInterval(() => {
+              const canvas = document.querySelector('#kintara-dash-outfit-letter canvas');
+              if (canvas && canvas.width >= 64 && canvas.height >= 64) {
+                clearInterval(poll);
+                notifyReady();
+              }
+            }, 120);
+            setTimeout(() => clearInterval(poll), 12000);
+          }, { once: true });
+        })();
+        """
+
+        weak var webView: WKWebView?
+        private var loadedCookie: String?
+        private var interactionEnabled = false
+
+        func loadIfNeeded(cookie rawCookie: String) {
+            guard loadedCookie != rawCookie,
+                  let webView,
+                  let cookie = Self.makeSessionCookie(rawCookie),
+                  let url = URL(string: "https://kintara.com/play?embed=outfit")
+            else { return }
+
+            loadedCookie = rawCookie
+            interactionEnabled = false
+
+            webView.configuration.websiteDataStore.httpCookieStore.setCookie(cookie) { [weak webView] in
+                var request = URLRequest(url: url)
+                request.cachePolicy = .reloadIgnoringLocalCacheData
+                webView?.load(request)
+            }
+        }
+
+        func userContentController(_ userContentController: WKUserContentController, didReceive message: WKScriptMessage) {
+            guard let body = message.body as? [String: Any],
+                  body["t"] as? String == "ready"
+            else { return }
+            enableOfficialInteraction()
+        }
+
+        private func enableOfficialInteraction() {
+            guard let webView, !interactionEnabled else { return }
+            interactionEnabled = true
+
+            // Kintara intentionally disables pointer events in dashboard embed mode.
+            // Re-enable only the official outfit viewport/canvas so its own pointer
+            // swipe handler rotates the exact renderer instead of us reproducing it.
+            let script = """
+            (() => {
+              const id = 'kinttany-official-avatar-touch';
+              let style = document.getElementById(id);
+              if (!style) {
+                style = document.createElement('style');
+                style.id = id;
+                style.textContent = `
+                  html, body {
+                    background: transparent !important;
+                    overflow: hidden !important;
+                    margin: 0 !important;
+                    padding: 0 !important;
+                  }
+                  #kintara-dash-outfit-view,
+                  #kintara-dash-outfit-letter,
+                  #kintara-dash-outfit-letter .kintara-outfit__viewport,
+                  #kintara-dash-outfit-letter canvas {
+                    pointer-events: auto !important;
+                    touch-action: none !important;
+                    -webkit-user-select: none !important;
+                    user-select: none !important;
+                  }
+                  #kintara-dash-outfit-letter canvas {
+                    cursor: grab !important;
+                  }
+                `;
+                document.head.appendChild(style);
+              }
+
+              const canvas = document.querySelector('#kintara-dash-outfit-letter canvas');
+              if (canvas) {
+                canvas.style.setProperty('pointer-events', 'auto', 'important');
+                canvas.style.setProperty('touch-action', 'none', 'important');
+              }
+              return !!canvas;
+            })();
+            """
+            webView.evaluateJavaScript(script) { [weak self] result, _ in
+                guard result as? Bool != true else { return }
+                self?.interactionEnabled = false
+                DispatchQueue.main.asyncAfter(deadline: .now() + 0.20) {
+                    self?.enableOfficialInteraction()
+                }
+            }
+        }
+
+        private static func makeSessionCookie(_ raw: String) -> HTTPCookie? {
+            let pair = raw.split(separator: ";", maxSplits: 1).first.map(String.init) ?? raw
+            let parts = pair.split(separator: "=", maxSplits: 1).map(String.init)
+            guard parts.count == 2,
+                  parts[0] == "kintara_session",
+                  !parts[1].isEmpty
+            else { return nil }
+
+            return HTTPCookie(properties: [
+                .domain: ".kintara.com",
+                .path: "/",
+                .name: parts[0],
+                .value: parts[1],
+                .secure: "TRUE"
+            ])
+        }
+    }
+}
+
+// Legacy SceneKit renderer retained only as dead compatibility code while Build 114
+// migrates the visible avatar to CharacterOfficial3DView. It is never used by the UI.
+
 struct CharacterVoxel3DView: UIViewRepresentable {
     let appearance: CharacterAppearance
 
@@ -1101,9 +1288,19 @@ private struct CharacterStatsView: View {
                         HStack(spacing: 14) {
                             ZStack {
                                 RoundedRectangle(cornerRadius: 14).fill(KintTanyTheme.surface.opacity(0.75))
-                                if app.hasSession {
-                                    CharacterVoxel3DView(appearance: app.characterProfile.appearance)
-                                        .scaleEffect(1.28).padding(-16)
+                                if app.hasSession,
+                                   let cookie = app.authenticatedCookieForCharacter,
+                                   !cookie.isEmpty {
+                                    ZStack {
+                                        if let image = app.characterArtwork {
+                                            Image(uiImage: image)
+                                                .resizable()
+                                                .scaledToFit()
+                                                .allowsHitTesting(false)
+                                        }
+                                        CharacterOfficial3DView(cookie: cookie)
+                                    }
+                                    .scaleEffect(1.28).padding(-16)
                                 } else {
                                     Image(systemName: "person.crop.square").font(.system(size: 34)).foregroundStyle(KintTanyTheme.mutedInk)
                                 }
