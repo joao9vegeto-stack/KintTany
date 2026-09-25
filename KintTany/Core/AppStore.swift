@@ -438,9 +438,6 @@ enum CharacterProfilePayloadParser {
 
         let outfit = (me["outfit"] as? [String: Any])
             ?? (player["outfit"] as? [String: Any])
-            ?? (meta["outfit"] as? [String: Any])
-            ?? (me["appearance"] as? [String: Any])
-            ?? (player["appearance"] as? [String: Any])
             ?? [:]
         let skillXP = (statsRoot["skillXp"] as? [String: Any])
             ?? (meta["skillXp"] as? [String: Any])
@@ -467,31 +464,31 @@ enum CharacterProfilePayloadParser {
 
     private static func appearance(_ object: [String: Any]) -> CharacterAppearance {
         CharacterAppearance(
-            outfitSchema: int(object["outfitSchema"] ?? object["schema"]) ?? 15,
-            hat: int(object["hat"] ?? object["hatId"] ?? object["hatIndex"]) ?? 0,
-            top: int(object["top"] ?? object["topId"] ?? object["topIndex"]) ?? 0,
-            pants: int(object["pants"] ?? object["pantsId"] ?? object["pantsIndex"]) ?? 0,
-            shoe: int(object["shoe"] ?? object["shoeId"] ?? object["shoeIndex"]) ?? 0,
-            skinTone: int(object["skinTone"] ?? object["skin"] ?? object["skinIndex"]) ?? 1,
-            hatFX: string(object["hatFx"] ?? object["hatFX"] ?? object["hat_fx"] ?? object["headFx"] ?? object["headFX"] ?? object["hatCosmetic"]),
-            torsoDecal: string(object["torsoDecal"] ?? object["torso_decal"]),
-            pantsPattern: string(object["pantsPattern"] ?? object["pants_pattern"]),
-            shoeFX: string(object["shoeFx"] ?? object["shoeFX"] ?? object["shoe_fx"]),
-            topFX: string(object["topFx"] ?? object["topFX"] ?? object["top_fx"]),
-            pantsFX: string(object["pantsFx"] ?? object["pantsFX"] ?? object["pants_fx"]),
+            outfitSchema: int(object["outfitSchema"]) ?? 15,
+            hat: int(object["hat"]) ?? 0,
+            top: int(object["top"]) ?? 0,
+            pants: int(object["pants"]) ?? 0,
+            shoe: int(object["shoe"]) ?? 0,
+            skinTone: int(object["skinTone"]) ?? 1,
+            hatFX: string(object["hatFx"]),
+            torsoDecal: string(object["torsoDecal"]),
+            pantsPattern: string(object["pantsPattern"]),
+            shoeFX: string(object["shoeFx"]),
+            topFX: string(object["topFx"]),
+            pantsFX: string(object["pantsFx"]),
             aura: string(object["aura"]),
             cape: string(object["cape"]),
             glasses: string(object["glasses"]),
-            shoeCosmetic: string(object["shoeCosmetic"] ?? object["shoe_cosmetic"]),
-            faceMask: string(object["faceMask"] ?? object["face_mask"]),
+            shoeCosmetic: string(object["shoeCosmetic"]),
+            faceMask: string(object["faceMask"]),
             wings: string(object["wings"]),
-            handProp: string(object["handProp"] ?? object["hand_prop"]),
-            eyeFX: string(object["eyeFx"] ?? object["eyeFX"] ?? object["eye_fx"]),
-            hatColor: int(object["hatC"] ?? object["hatColor"] ?? object["hat_color"]),
-            topColor: int(object["topC"] ?? object["topColor"] ?? object["top_color"]),
-            pantsColor: int(object["pantsC"] ?? object["pantsColor"] ?? object["pants_color"]),
-            strapColor: int(object["strapC"] ?? object["strapColor"] ?? object["strap_color"]),
-            shoeColor: int(object["shoeC"] ?? object["shoeColor"] ?? object["shoe_color"])
+            handProp: string(object["handProp"]),
+            eyeFX: string(object["eyeFx"]),
+            hatColor: int(object["hatC"]),
+            topColor: int(object["topC"]),
+            pantsColor: int(object["pantsC"]),
+            strapColor: int(object["strapC"]),
+            shoeColor: int(object["shoeC"])
         )
     }
 
@@ -1491,8 +1488,6 @@ final class AppStore: ObservableObject {
                 characterArtwork = nil
             }
             characterProfile = refreshedProfile
-            let appearance = refreshedProfile.appearance
-            diagnostic("[PROFILE] outfit atualizado • schema=\(appearance.outfitSchema) • hat=\(appearance.hat) • hatFx=\(appearance.hatFX ?? "-") • top=\(appearance.top) • topFx=\(appearance.topFX ?? "-")")
             if characterProfile.skills.loaded {
                 characterProfileError = nil
             }
@@ -1504,10 +1499,6 @@ final class AppStore: ObservableObject {
 
     func storeCharacterArtwork(_ image: UIImage) {
         characterArtwork = image
-    }
-
-    func invalidateCharacterArtwork() {
-        characterArtwork = nil
     }
 
     func loadBlacksmithRepairTargets() async -> [RepairTarget] {

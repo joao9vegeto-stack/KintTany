@@ -1831,17 +1831,11 @@ struct ReplicaDashboardHost: View {
 
     @ViewBuilder
     private var avatarView: some View {
-        if app.hasSession, let artwork = app.characterArtwork {
-            Image(uiImage: artwork)
-                .resizable()
-                .interpolation(.high)
-                .scaledToFit()
-                .padding(4)
-                .accessibilityLabel("Render oficial do personagem da conta conectada")
-        } else if app.hasSession {
-            ProgressView()
-                .tint(KintTanyTheme.terracotta)
-                .accessibilityLabel("Carregando render oficial do personagem")
+        if app.hasSession {
+            CharacterVoxel3DView(appearance: app.characterProfile.appearance)
+                .scaleEffect(1.42)
+                .padding(-20)
+                .accessibilityLabel("Personagem da conta conectada")
         } else {
             Image(systemName: "person.crop.square")
                 .resizable()
