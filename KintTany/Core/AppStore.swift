@@ -1506,6 +1506,10 @@ final class AppStore: ObservableObject {
         characterArtwork = image
     }
 
+    func invalidateCharacterArtwork() {
+        characterArtwork = nil
+    }
+
     func loadBlacksmithRepairTargets() async -> [RepairTarget] {
         guard let cookie = session.cookie, !cookie.isEmpty else { return [] }
         do { return try await AutomationEngine.blacksmithRepairTargets(cookie: cookie) }

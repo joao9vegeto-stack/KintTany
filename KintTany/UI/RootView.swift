@@ -78,10 +78,12 @@ struct RootView: View {
         .onChange(of: scenePhase) { _, newPhase in
             app.handleScenePhase(newPhase)
             if newPhase == .active {
+                app.invalidateCharacterArtwork()
                 Task { await app.refreshCharacterProfile(force: true) }
             }
         }
         .task {
+            app.invalidateCharacterArtwork()
             await app.refreshCharacterProfile(force: true)
         }
     }
@@ -116,8 +118,12 @@ struct RootView: View {
 
             HStack(spacing: 14) {
                 Group {
-                    if app.hasSession, let cookie = app.authenticatedCookieForCharacter, !cookie.isEmpty {
-                        CharacterVoxel3DView(appearance: app.characterProfile.appearance)
+                    if app.hasSession, let artwork = app.characterArtwork {
+                        Image(uiImage: artwork)
+                            .resizable()
+                            .interpolation(.high)
+                            .scaledToFit()
+                            .accessibilityLabel("Render oficial do personagem da conta conectada")
                     } else {
                         ZStack {
                             RoundedRectangle(cornerRadius: 18, style: .continuous)
@@ -1148,9 +1154,12 @@ private struct CharacterStatsView: View {
                         HStack(spacing: 14) {
                             ZStack {
                                 RoundedRectangle(cornerRadius: 14).fill(KintTanyTheme.surface.opacity(0.75))
-                                if app.hasSession {
-                                    CharacterVoxel3DView(appearance: app.characterProfile.appearance)
-                                        .scaleEffect(1.28).padding(-16)
+                                if app.hasSession, let artwork = app.characterArtwork {
+                                    Image(uiImage: artwork)
+                                        .resizable()
+                                        .interpolation(.high)
+                                        .scaledToFit()
+                                        .padding(2)
                                 } else {
                                     Image(systemName: "person.crop.square").font(.system(size: 34)).foregroundStyle(KintTanyTheme.mutedInk)
                                 }
@@ -1365,7 +1374,35 @@ private struct CharacterArtworkCaptureView: UIViewRepresentable {
             (() => {
               const canvas = document.querySelector('#kintara-dash-outfit-letter canvas');
               if (!canvas || canvas.width < 64 || canvas.height < 64) return null;
-              try { return canvas.toDataURL('image/png'); } catch (_) { return null; }
+              try {
+                const ctx = canvas.getContext('2d');
+                if (!ctx) return canvas.toDataURL('image/png');
+                const w = canvas.width, h = canvas.height;
+                const pixels = ctx.getImageData(0, 0, w, h).data;
+                let minX = w, minY = h, maxX = -1, maxY = -1;
+                for (let y = 0; y < h; y++) {
+                  for (let x = 0; x < w; x++) {
+                    const a = pixels[(y * w + x) * 4 + 3];
+                    if (a > 2) {
+                      if (x < minX) minX = x;
+                      if (y < minY) minY = y;
+                      if (x > maxX) maxX = x;
+                      if (y > maxY) maxY = y;
+                    }
+                  }
+                }
+                if (maxX < minX || maxY < minY) return canvas.toDataURL('image/png');
+                const pad = 4;
+                minX = Math.max(0, minX - pad); minY = Math.max(0, minY - pad);
+                maxX = Math.min(w - 1, maxX + pad); maxY = Math.min(h - 1, maxY + pad);
+                const out = document.createElement('canvas');
+                out.width = maxX - minX + 1; out.height = maxY - minY + 1;
+                const outCtx = out.getContext('2d');
+                outCtx.drawImage(canvas, minX, minY, out.width, out.height, 0, 0, out.width, out.height);
+                return out.toDataURL('image/png');
+              } catch (_) {
+                try { return canvas.toDataURL('image/png'); } catch (_) { return null; }
+              }
             })();
             """
             webView.evaluateJavaScript(script) { [weak self] result, _ in
