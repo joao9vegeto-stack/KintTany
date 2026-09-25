@@ -1831,20 +1831,11 @@ struct ReplicaDashboardHost: View {
 
     @ViewBuilder
     private var avatarView: some View {
-        if app.hasSession,
-           let cookie = app.authenticatedCookieForCharacter,
-           !cookie.isEmpty {
-            // Build 115: this is the REAL production avatar card.
-            // Render Kintara's own /play?embed=outfit canvas here; never the
-            // SceneKit replica. displayScale only frames the official viewport.
-            CharacterOfficial3DView(cookie: cookie, displayScale: 1.72)
-                .accessibilityLabel("Personagem oficial da conta conectada")
-        } else if app.hasSession, let image = app.characterArtwork {
-            // Fallback is also produced by Kintara's official renderer.
-            Image(uiImage: image)
-                .resizable()
-                .scaledToFit()
-                .accessibilityLabel("Personagem oficial da conta conectada")
+        if app.hasSession {
+            CharacterVoxel3DView(appearance: app.characterProfile.appearance)
+                .scaleEffect(1.42)
+                .padding(-20)
+                .accessibilityLabel("Personagem da conta conectada")
         } else {
             Image(systemName: "person.crop.square")
                 .resizable()

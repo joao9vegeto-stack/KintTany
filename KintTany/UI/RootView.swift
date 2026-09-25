@@ -80,6 +80,9 @@ struct RootView: View {
         }
         .task {
             await app.refreshCharacterProfile()
+            // Build 116: load the exact captured cosmetic pack into the bot's
+            // own memory. The visible avatar remains the native SceneKit renderer.
+            OfficialCosmeticPack.shared.preload()
         }
     }
 
@@ -114,15 +117,7 @@ struct RootView: View {
             HStack(spacing: 14) {
                 Group {
                     if app.hasSession, let cookie = app.authenticatedCookieForCharacter, !cookie.isEmpty {
-                        ZStack {
-                            if let image = app.characterArtwork {
-                                Image(uiImage: image)
-                                    .resizable()
-                                    .scaledToFit()
-                                    .allowsHitTesting(false)
-                            }
-                            CharacterOfficial3DView(cookie: cookie)
-                        }
+                        CharacterVoxel3DView(appearance: app.characterProfile.appearance)
                     } else {
                         ZStack {
                             RoundedRectangle(cornerRadius: 18, style: .continuous)
@@ -691,200 +686,6 @@ private struct DailyQuestsView: View {
     }
 }
 
-/// Build 114: the visible avatar is rendered by Kintara's own outfit renderer.
-/// This deliberately avoids native replicas of cosmetics. GLB models, textures,
-/// sprites, shaders and procedural cosmetics all come from /play?embed=outfit.
-struct CharacterOfficial3DView: UIViewRepresentable {
-    let cookie: String
-    let displayScale: CGFloat
-
-    init(cookie: String, displayScale: CGFloat = 1.0) {
-        self.cookie = cookie
-        self.displayScale = max(0.75, min(2.25, displayScale))
-    }
-
-    func makeCoordinator() -> Coordinator { Coordinator(displayScale: displayScale) }
-
-    func makeUIView(context: Context) -> WKWebView {
-        let controller = WKUserContentController()
-        controller.add(context.coordinator, name: Coordinator.handlerName)
-        controller.addUserScript(WKUserScript(
-            source: Coordinator.bridgeScript,
-            injectionTime: .atDocumentStart,
-            forMainFrameOnly: true
-        ))
-
-        let configuration = WKWebViewConfiguration()
-        configuration.websiteDataStore = .nonPersistent()
-        configuration.userContentController = controller
-
-        let webView = WKWebView(frame: .zero, configuration: configuration)
-        webView.isOpaque = false
-        webView.backgroundColor = .clear
-        webView.scrollView.backgroundColor = .clear
-        webView.scrollView.isScrollEnabled = false
-        webView.scrollView.bounces = false
-        webView.scrollView.contentInsetAdjustmentBehavior = .never
-        webView.allowsBackForwardNavigationGestures = false
-
-        context.coordinator.webView = webView
-        context.coordinator.loadIfNeeded(cookie: cookie)
-        return webView
-    }
-
-    func updateUIView(_ webView: WKWebView, context: Context) {
-        context.coordinator.loadIfNeeded(cookie: cookie)
-    }
-
-    static func dismantleUIView(_ webView: WKWebView, coordinator: Coordinator) {
-        webView.stopLoading()
-        webView.configuration.userContentController.removeScriptMessageHandler(forName: Coordinator.handlerName)
-    }
-
-    final class Coordinator: NSObject, WKScriptMessageHandler {
-        static let handlerName = "kintaraOfficialAvatar"
-        static let bridgeScript = """
-        (() => {
-          if (window.__kintaraIOSOfficialAvatarBridge) return;
-          window.__kintaraIOSOfficialAvatarBridge = true;
-
-          const notifyReady = () => {
-            try {
-              window.webkit.messageHandlers.kintaraOfficialAvatar.postMessage({ t: 'ready' });
-            } catch (_) {}
-          };
-
-          window.addEventListener('message', (event) => {
-            const value = event && event.data;
-            if (value && value.t === 'kintara_outfit_embed_ready') notifyReady();
-          });
-
-          document.addEventListener('DOMContentLoaded', () => {
-            const poll = setInterval(() => {
-              const canvas = document.querySelector('#kintara-dash-outfit-letter canvas');
-              if (canvas && canvas.width >= 64 && canvas.height >= 64) {
-                clearInterval(poll);
-                notifyReady();
-              }
-            }, 120);
-            setTimeout(() => clearInterval(poll), 12000);
-          }, { once: true });
-        })();
-        """
-
-        weak var webView: WKWebView?
-        private var loadedCookie: String?
-        private var interactionEnabled = false
-        private let displayScale: CGFloat
-
-        init(displayScale: CGFloat) {
-            self.displayScale = displayScale
-        }
-
-        func loadIfNeeded(cookie rawCookie: String) {
-            guard loadedCookie != rawCookie,
-                  let webView,
-                  let cookie = Self.makeSessionCookie(rawCookie),
-                  let url = URL(string: "https://kintara.com/play?embed=outfit")
-            else { return }
-
-            loadedCookie = rawCookie
-            interactionEnabled = false
-
-            webView.configuration.websiteDataStore.httpCookieStore.setCookie(cookie) { [weak webView] in
-                var request = URLRequest(url: url)
-                request.cachePolicy = .reloadIgnoringLocalCacheData
-                webView?.load(request)
-            }
-        }
-
-        func userContentController(_ userContentController: WKUserContentController, didReceive message: WKScriptMessage) {
-            guard let body = message.body as? [String: Any],
-                  body["t"] as? String == "ready"
-            else { return }
-            enableOfficialInteraction()
-        }
-
-        private func enableOfficialInteraction() {
-            guard let webView, !interactionEnabled else { return }
-            interactionEnabled = true
-
-            // Kintara intentionally disables pointer events in dashboard embed mode.
-            // Re-enable only the official outfit viewport/canvas so its own pointer
-            // swipe handler rotates the exact renderer instead of us reproducing it.
-            let script = """
-            (() => {
-              const id = 'kinttany-official-avatar-touch';
-              let style = document.getElementById(id);
-              if (!style) {
-                style = document.createElement('style');
-                style.id = id;
-                style.textContent = `
-                  html, body {
-                    background: transparent !important;
-                    overflow: hidden !important;
-                    margin: 0 !important;
-                    padding: 0 !important;
-                  }
-                  #kintara-dash-outfit-view,
-                  #kintara-dash-outfit-letter,
-                  #kintara-dash-outfit-letter .kintara-outfit__viewport,
-                  #kintara-dash-outfit-letter canvas {
-                    pointer-events: auto !important;
-                    touch-action: none !important;
-                    -webkit-user-select: none !important;
-                    user-select: none !important;
-                  }
-                  #kintara-dash-outfit-letter {
-                    transform: scale((displayScale)) !important;
-                    transform-origin: 50% 50% !important;
-                  }
-                  #kintara-dash-outfit-letter canvas {
-                    cursor: grab !important;
-                  }
-                `;
-                document.head.appendChild(style);
-              }
-
-              const canvas = document.querySelector('#kintara-dash-outfit-letter canvas');
-              if (canvas) {
-                canvas.style.setProperty('pointer-events', 'auto', 'important');
-                canvas.style.setProperty('touch-action', 'none', 'important');
-              }
-              return !!canvas;
-            })();
-            """
-            webView.evaluateJavaScript(script) { [weak self] result, _ in
-                guard result as? Bool != true else { return }
-                self?.interactionEnabled = false
-                DispatchQueue.main.asyncAfter(deadline: .now() + 0.20) {
-                    self?.enableOfficialInteraction()
-                }
-            }
-        }
-
-        private static func makeSessionCookie(_ raw: String) -> HTTPCookie? {
-            let pair = raw.split(separator: ";", maxSplits: 1).first.map(String.init) ?? raw
-            let parts = pair.split(separator: "=", maxSplits: 1).map(String.init)
-            guard parts.count == 2,
-                  parts[0] == "kintara_session",
-                  !parts[1].isEmpty
-            else { return nil }
-
-            return HTTPCookie(properties: [
-                .domain: ".kintara.com",
-                .path: "/",
-                .name: parts[0],
-                .value: parts[1],
-                .secure: "TRUE"
-            ])
-        }
-    }
-}
-
-// Legacy SceneKit renderer retained only as dead compatibility code while Build 114
-// migrates the visible avatar to CharacterOfficial3DView. It is never used by the UI.
-
 struct CharacterVoxel3DView: UIViewRepresentable {
     let appearance: CharacterAppearance
 
@@ -1118,63 +919,88 @@ struct CharacterVoxel3DView: UIViewRepresentable {
             }
         }
 
-        // Season 1 reward caps are server hat ids 54/55. They are not part of the
-        // legacy 0...9 pc_hatHolder table, so render them explicitly.
+        // CURRENT Kintara client asset, ported from season1BuildCapImpl.
+        // This is not a visual approximation: dimensions, transforms, segment counts,
+        // colors and the procedural cap decal match the client source.
         if a.hat == 54 || a.hat == 55 {
+            let goldVariant = a.hat == 55
+            let primaryHex = goldVariant ? 0xD9A83C : 0x241546
+            let accentHex = goldVariant ? 0x3D2A7D : 0xD9A83C
             let holder = SCNNode()
-            holder.name = "pc_season1HatHolder"
-            holder.position = SCNVector3(0, Float(sc(1.115)) + yOffset, 0)
+            holder.name = goldVariant ? "pc_season1GoldCap" : "pc_season1Cap"
+            holder.position = SCNVector3(0, Float(sc(1.12)) + yOffset, 0)
             root.addChildNode(holder)
 
-            let goldVariant = a.hat == 55
-            let crownColor = Self.kintaraColor(goldVariant ? 0xD9A83C : 0x3D2A7D)
-            let crownDark = Self.kintaraColor(goldVariant ? 0xA87A22 : 0x241546)
-            let accentColor = Self.kintaraColor(goldVariant ? 0x3D2A7D : 0xD9A83C)
-            let crownMat = mat(crownColor)
-            let darkMat = mat(crownDark)
-            let accentMat = mat(accentColor, constant: true)
+            let primary = mat(Self.kintaraColor(primaryHex))
+            let accent = mat(Self.kintaraColor(accentHex))
 
-            // Low-poly rounded crown, matching the official Season 1 cap silhouette.
-            let crownGeo = SCNSphere(radius: sc(0.285))
-            crownGeo.segmentCount = 14
-            crownGeo.materials = [crownMat]
-            let crown = SCNNode(geometry: crownGeo)
-            crown.name = "pc_season1HatCrown"
-            crown.scale = SCNVector3(1.34, 0.58, 1.20)
-            crown.position = SCNVector3(0, Float(sc(0.035)), Float(sc(-0.005)))
-            crown.eulerAngles.x = -0.05
-            crown.renderingOrder = 2
-            holder.addChildNode(crown)
+            let domeGeometry = Self.kintaraSpherePatch(
+                radius: sc(0.253),
+                widthSegments: 26,
+                heightSegments: 14,
+                thetaLength: .pi / 2
+            )
+            domeGeometry.materials = [primary]
+            let dome = SCNNode(geometry: domeGeometry)
+            dome.position = SCNVector3(0, Float(sc(-0.07)), 0)
+            dome.scale = SCNVector3(1.06, 0.95, 1.05)
+            dome.renderingOrder = 1
+            holder.addChildNode(dome)
 
-            // Dark lower band keeps the crown visually separated from the head.
-            part(0.405, 0.038, 0.405, 0, -0.075, -0.005, darkMat, parent: holder, local: true)
+            let outlineHex = Self.kintaraDarkenedHex(primaryHex, factor: 0.42)
+            let domeOutlineGeometry = Self.kintaraSpherePatch(
+                radius: sc(0.253 + outlineExp),
+                widthSegments: 26,
+                heightSegments: 14,
+                thetaLength: .pi / 2
+            )
+            let domeOutlineMat = mat(Self.kintaraColor(outlineHex), constant: true)
+            domeOutlineMat.cullMode = .front
+            domeOutlineGeometry.materials = [domeOutlineMat]
+            let domeOutline = SCNNode(geometry: domeOutlineGeometry)
+            domeOutline.renderingOrder = -1
+            dome.addChildNode(domeOutline)
 
-            // Forward brim with a thin accent line.
-            let brim = part(0.40, 0.035, 0.235, 0, -0.065, 0.205, crownMat, parent: holder, local: true)
-            brim.eulerAngles.x = -0.10
-            let trim = part(0.405, 0.014, 0.240, 0, -0.050, 0.210, accentMat, parent: holder, local: true)
-            trim.eulerAngles.x = -0.10
+            let topButton = SCNSphere(radius: sc(0.029))
+            topButton.segmentCount = 10
+            topButton.materials = [accent]
+            let buttonNode = SCNNode(geometry: topButton)
+            buttonNode.position = SCNVector3(0, Float(sc(0.168)), 0)
+            buttonNode.renderingOrder = 1
+            holder.addChildNode(buttonNode)
 
-            // The official item is the championship violet/gold S1 cap. Reuse the
-            // same laurel numeral artwork already used by the Season 1 shirt.
-            let plane = SCNPlane(width: sc(0.205), height: sc(0.145))
+            let brim1 = part(0.4, 0.03, 0.15, 0, -0.045, 0.175, primary, parent: holder, local: true)
+            brim1.eulerAngles.x = 0.15
+            let brim2 = part(0.4, 0.028, 0.115, 0, -0.076, 0.3035, primary, parent: holder, local: true)
+            brim2.eulerAngles.x = 0.30
+            let brimTrim = part(0.4, 0.03, 0.03, 0, -0.098, 0.373, accent, parent: holder, local: true)
+            brimTrim.eulerAngles.x = 0.30
+
+            let decalGeometry = Self.kintaraCylinderSector(
+                topRadius: sc(0.34),
+                bottomRadius: sc(0.40),
+                height: sc(0.08),
+                radialSegments: 18,
+                thetaStart: -0.384,
+                thetaLength: 0.767
+            )
             let decalMat = SCNMaterial()
-            let decal = Self.kintaraSeasonOneEmblem(gold: goldVariant)
-            decalMat.diffuse.contents = decal
-            decalMat.ambient.contents = decal
+            let decalImage = Self.kintaraSeasonOneCapDecal(gold: goldVariant)
+            decalMat.diffuse.contents = decalImage
+            decalMat.ambient.contents = decalImage
             decalMat.lightingModel = .constant
             decalMat.isDoubleSided = true
             decalMat.transparencyMode = .aOne
-            plane.materials = [decalMat]
-            let badge = SCNNode(geometry: plane)
-            badge.name = "pc_season1HatBadge"
-            badge.position = SCNVector3(0, Float(sc(0.035)), Float(sc(0.286)))
-            badge.eulerAngles.x = -0.08
-            badge.renderingOrder = 7
-            holder.addChildNode(badge)
+            decalMat.writesToDepthBuffer = false
+            decalGeometry.materials = [decalMat]
+            let decal = SCNNode(geometry: decalGeometry)
+            decal.name = goldVariant ? "pc_season1GoldCapDecal" : "pc_season1CapDecal"
+            decal.position = SCNVector3(0, Float(sc(0.05)), Float(sc(-0.13)))
+            decal.renderingOrder = 2
+            holder.addChildNode(decal)
         }
 
-        // Exact Season 1 chest overlay: 0.32 plane at torso depth*0.5*1.04 + .012.
+        // Exact Season 1 chest overlay: 0.32 plane at torso depth*0.5*1.04 + 0.012.
         if isSeason {
             let plane = SCNPlane(width: sc(0.32), height: sc(0.32))
             let em = SCNMaterial()
@@ -1210,6 +1036,166 @@ struct CharacterVoxel3DView: UIViewRepresentable {
         UIColor(red:CGFloat((value >> 16) & 255)/255,
                 green:CGFloat((value >> 8) & 255)/255,
                 blue:CGFloat(value & 255)/255,alpha:1)
+    }
+
+    private static func kintaraDarkenedHex(_ hex: Int, factor: CGFloat) -> Int {
+        let r = Int(CGFloat((hex >> 16) & 0xFF) * factor)
+        let g = Int(CGFloat((hex >> 8) & 0xFF) * factor)
+        let b = Int(CGFloat(hex & 0xFF) * factor)
+        return (r << 16) | (g << 8) | b
+    }
+
+    // THREE.SphereGeometry(radius, 26, 14, 0, 2π, 0, π/2), ported 1:1.
+    private static func kintaraSpherePatch(
+        radius: CGFloat,
+        widthSegments: Int,
+        heightSegments: Int,
+        thetaLength: CGFloat
+    ) -> SCNGeometry {
+        var vertices: [SCNVector3] = []
+        var normals: [SCNVector3] = []
+        var texcoords: [CGPoint] = []
+        var indices: [UInt32] = []
+
+        for iy in 0...heightSegments {
+            let v = CGFloat(iy) / CGFloat(heightSegments)
+            let theta = v * thetaLength
+            for ix in 0...widthSegments {
+                let u = CGFloat(ix) / CGFloat(widthSegments)
+                let phi = u * .pi * 2
+                let x = -radius * cos(phi) * sin(theta)
+                let y = radius * cos(theta)
+                let z = radius * sin(phi) * sin(theta)
+                vertices.append(SCNVector3(Float(x), Float(y), Float(z)))
+                let len = max(0.000001, sqrt(x*x + y*y + z*z))
+                normals.append(SCNVector3(Float(x/len), Float(y/len), Float(z/len)))
+                texcoords.append(CGPoint(x: u, y: 1 - v))
+            }
+        }
+        let row = widthSegments + 1
+        for iy in 0..<heightSegments {
+            for ix in 0..<widthSegments {
+                let a = UInt32(iy * row + ix)
+                let b = UInt32((iy + 1) * row + ix)
+                let c = UInt32((iy + 1) * row + ix + 1)
+                let d = UInt32(iy * row + ix + 1)
+                indices.append(contentsOf: [a,b,d, b,c,d])
+            }
+        }
+        let sources = [
+            SCNGeometrySource(vertices: vertices),
+            SCNGeometrySource(normals: normals),
+            SCNGeometrySource(textureCoordinates: texcoords)
+        ]
+        let data = indices.withUnsafeBytes { Data($0) }
+        let element = SCNGeometryElement(
+            data: data,
+            primitiveType: .triangles,
+            primitiveCount: indices.count / 3,
+            bytesPerIndex: MemoryLayout<UInt32>.size
+        )
+        return SCNGeometry(sources: sources, elements: [element])
+    }
+
+    // THREE.CylinderGeometry(.34,.4,.08,18,1,true,-.384,.767), ported 1:1.
+    private static func kintaraCylinderSector(
+        topRadius: CGFloat,
+        bottomRadius: CGFloat,
+        height: CGFloat,
+        radialSegments: Int,
+        thetaStart: CGFloat,
+        thetaLength: CGFloat
+    ) -> SCNGeometry {
+        var vertices: [SCNVector3] = []
+        var normals: [SCNVector3] = []
+        var texcoords: [CGPoint] = []
+        var indices: [UInt32] = []
+        let slope = (bottomRadius - topRadius) / max(height, 0.000001)
+
+        for row in 0...1 {
+            let v = CGFloat(row)
+            let radius = row == 0 ? topRadius : bottomRadius
+            let y = height * (0.5 - v)
+            for ix in 0...radialSegments {
+                let u = CGFloat(ix) / CGFloat(radialSegments)
+                let theta = thetaStart + u * thetaLength
+                let sinT = sin(theta), cosT = cos(theta)
+                vertices.append(SCNVector3(Float(radius * sinT), Float(y), Float(radius * cosT)))
+                let nx = sinT, ny = slope, nz = cosT
+                let len = max(0.000001, sqrt(nx*nx + ny*ny + nz*nz))
+                normals.append(SCNVector3(Float(nx/len), Float(ny/len), Float(nz/len)))
+                texcoords.append(CGPoint(x: u, y: 1 - v))
+            }
+        }
+        let rowSize = radialSegments + 1
+        for ix in 0..<radialSegments {
+            let a = UInt32(ix)
+            let b = UInt32(rowSize + ix)
+            let c = UInt32(rowSize + ix + 1)
+            let d = UInt32(ix + 1)
+            indices.append(contentsOf: [a,b,d, b,c,d])
+        }
+        let sources = [
+            SCNGeometrySource(vertices: vertices),
+            SCNGeometrySource(normals: normals),
+            SCNGeometrySource(textureCoordinates: texcoords)
+        ]
+        let data = indices.withUnsafeBytes { Data($0) }
+        let element = SCNGeometryElement(
+            data: data,
+            primitiveType: .triangles,
+            primitiveCount: indices.count / 3,
+            bytesPerIndex: MemoryLayout<UInt32>.size
+        )
+        return SCNGeometry(sources: sources, elements: [element])
+    }
+
+    // Current-client season1MakeCapDecalTexture, ported from the captured bundle.
+    private static func kintaraSeasonOneCapDecal(gold: Bool) -> UIImage {
+        let size = CGSize(width: 256, height: 128)
+        let format = UIGraphicsImageRendererFormat()
+        format.scale = 1
+        format.opaque = false
+        return UIGraphicsImageRenderer(size: size, format: format).image { renderer in
+            let c = renderer.cgContext
+            c.clear(CGRect(origin: .zero, size: size))
+
+            let ornament = gold ? kintaraColor(0x3D2A7D) : kintaraColor(0xD9A83C)
+            c.setFillColor(ornament.cgColor)
+            for side: CGFloat in [-1, 1] {
+                let x = 128 + side * 116
+                c.saveGState()
+                c.translateBy(x: x, y: 64)
+                c.rotate(by: side * 0.5)
+                c.fillEllipse(in: CGRect(x: -8, y: -35, width: 16, height: 38))
+                c.fillEllipse(in: CGRect(x: -8, y: 3, width: 16, height: 38))
+                c.restoreGState()
+            }
+
+            let font = UIFont(name: "Verdana-Bold", size: 116)
+                ?? UIFont.systemFont(ofSize: 116, weight: .bold)
+            let textFill = gold ? kintaraColor(0x241546) : kintaraColor(0xF2E3B3)
+            let stroke = kintaraColor(0x140B26)
+            let paragraph = NSMutableParagraphStyle()
+            paragraph.alignment = .center
+
+            let attrs: [NSAttributedString.Key: Any] = [
+                .font: font,
+                .foregroundColor: textFill,
+                .strokeColor: stroke,
+                .strokeWidth: -10.0,
+                .paragraphStyle: paragraph
+            ]
+            let text = NSString(string: "S1")
+            let bounds = text.size(withAttributes: attrs)
+            let rect = CGRect(
+                x: 128 - bounds.width / 2,
+                y: 68 - bounds.height / 2,
+                width: bounds.width,
+                height: bounds.height
+            )
+            text.draw(in: rect, withAttributes: attrs)
+        }
     }
 
     private static func kintaraSeasonOneTee(gold: Bool) -> UIImage {
@@ -1303,19 +1289,9 @@ private struct CharacterStatsView: View {
                         HStack(spacing: 14) {
                             ZStack {
                                 RoundedRectangle(cornerRadius: 14).fill(KintTanyTheme.surface.opacity(0.75))
-                                if app.hasSession,
-                                   let cookie = app.authenticatedCookieForCharacter,
-                                   !cookie.isEmpty {
-                                    ZStack {
-                                        if let image = app.characterArtwork {
-                                            Image(uiImage: image)
-                                                .resizable()
-                                                .scaledToFit()
-                                                .allowsHitTesting(false)
-                                        }
-                                        CharacterOfficial3DView(cookie: cookie)
-                                    }
-                                    .scaleEffect(1.28).padding(-16)
+                                if app.hasSession {
+                                    CharacterVoxel3DView(appearance: app.characterProfile.appearance)
+                                        .scaleEffect(1.28).padding(-16)
                                 } else {
                                     Image(systemName: "person.crop.square").font(.system(size: 34)).foregroundStyle(KintTanyTheme.mutedInk)
                                 }
