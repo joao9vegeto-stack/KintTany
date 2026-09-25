@@ -928,8 +928,8 @@ struct CharacterVoxel3DView: UIViewRepresentable {
             holder.position = SCNVector3(0, Float(sc(1.12)) + yOffset, 0)
             root.addChildNode(holder)
 
-            let primary = mat(primaryHex)
-            let accent = mat(accentHex)
+            let primary = mat(Self.kintaraColor(primaryHex))
+            let accent = mat(Self.kintaraColor(accentHex))
 
             let domeGeometry = Self.kintaraSpherePatch(
                 radius: sc(0.253),
@@ -951,7 +951,7 @@ struct CharacterVoxel3DView: UIViewRepresentable {
                 heightSegments: 14,
                 thetaLength: .pi / 2
             )
-            let domeOutlineMat = mat(outlineHex, constant: true)
+            let domeOutlineMat = mat(Self.kintaraColor(outlineHex), constant: true)
             domeOutlineMat.cullMode = .front
             domeOutlineGeometry.materials = [domeOutlineMat]
             let domeOutline = SCNNode(geometry: domeOutlineGeometry)
