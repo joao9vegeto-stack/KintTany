@@ -916,6 +916,62 @@ struct CharacterVoxel3DView: UIViewRepresentable {
             }
         }
 
+        // Season 1 reward caps are server hat ids 54/55. They are not part of the
+        // legacy 0...9 pc_hatHolder table, so render them explicitly.
+        if a.hat == 54 || a.hat == 55 {
+            let holder = SCNNode()
+            holder.name = "pc_season1HatHolder"
+            holder.position = SCNVector3(0, Float(sc(1.115)) + yOffset, 0)
+            root.addChildNode(holder)
+
+            let goldVariant = a.hat == 55
+            let crownColor = Self.kintaraColor(goldVariant ? 0xD9A83C : 0x3D2A7D)
+            let crownDark = Self.kintaraColor(goldVariant ? 0xA87A22 : 0x241546)
+            let accentColor = Self.kintaraColor(goldVariant ? 0x3D2A7D : 0xD9A83C)
+            let crownMat = mat(crownColor)
+            let darkMat = mat(crownDark)
+            let accentMat = mat(accentColor, constant: true)
+
+            // Low-poly rounded crown, matching the official Season 1 cap silhouette.
+            let crownGeo = SCNSphere(radius: sc(0.285))
+            crownGeo.segmentCount = 14
+            crownGeo.materials = [crownMat]
+            let crown = SCNNode(geometry: crownGeo)
+            crown.name = "pc_season1HatCrown"
+            crown.scale = SCNVector3(1.34, 0.58, 1.20)
+            crown.position = SCNVector3(0, Float(sc(0.035)), Float(sc(-0.005)))
+            crown.eulerAngles.x = -0.05
+            crown.renderingOrder = 2
+            holder.addChildNode(crown)
+
+            // Dark lower band keeps the crown visually separated from the head.
+            part(0.405, 0.038, 0.405, 0, -0.075, -0.005, darkMat, parent: holder, local: true)
+
+            // Forward brim with a thin accent line.
+            let brim = part(0.40, 0.035, 0.235, 0, -0.065, 0.205, crownMat, parent: holder, local: true)
+            brim.eulerAngles.x = -0.10
+            let trim = part(0.405, 0.014, 0.240, 0, -0.050, 0.210, accentMat, parent: holder, local: true)
+            trim.eulerAngles.x = -0.10
+
+            // The official item is the championship violet/gold S1 cap. Reuse the
+            // same laurel numeral artwork already used by the Season 1 shirt.
+            let plane = SCNPlane(width: sc(0.205), height: sc(0.145))
+            let decalMat = SCNMaterial()
+            let decal = Self.kintaraSeasonOneEmblem(gold: goldVariant)
+            decalMat.diffuse.contents = decal
+            decalMat.ambient.contents = decal
+            decalMat.lightingModel = .constant
+            decalMat.isDoubleSided = true
+            decalMat.transparencyMode = .aOne
+            plane.materials = [decalMat]
+            let badge = SCNNode(geometry: plane)
+            badge.name = "pc_season1HatBadge"
+            badge.position = SCNVector3(0, Float(sc(0.035)), Float(sc(0.286)))
+            badge.eulerAngles.x = -0.08
+            badge.renderingOrder = 7
+            holder.addChildNode(badge)
+        }
+
         // Exact Season 1 chest overlay: 0.32 plane at torso depth*0.5*1.04 + .012.
         if isSeason {
             let plane = SCNPlane(width: sc(0.32), height: sc(0.32))
