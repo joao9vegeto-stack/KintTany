@@ -694,10 +694,16 @@ private struct DailyQuestsView: View {
 /// Build 114: the visible avatar is rendered by Kintara's own outfit renderer.
 /// This deliberately avoids native replicas of cosmetics. GLB models, textures,
 /// sprites, shaders and procedural cosmetics all come from /play?embed=outfit.
-private struct CharacterOfficial3DView: UIViewRepresentable {
+struct CharacterOfficial3DView: UIViewRepresentable {
     let cookie: String
+    let displayScale: CGFloat
 
-    func makeCoordinator() -> Coordinator { Coordinator() }
+    init(cookie: String, displayScale: CGFloat = 1.0) {
+        self.cookie = cookie
+        self.displayScale = max(0.75, min(2.25, displayScale))
+    }
+
+    func makeCoordinator() -> Coordinator { Coordinator(displayScale: displayScale) }
 
     func makeUIView(context: Context) -> WKWebView {
         let controller = WKUserContentController()
@@ -769,6 +775,11 @@ private struct CharacterOfficial3DView: UIViewRepresentable {
         weak var webView: WKWebView?
         private var loadedCookie: String?
         private var interactionEnabled = false
+        private let displayScale: CGFloat
+
+        init(displayScale: CGFloat) {
+            self.displayScale = displayScale
+        }
 
         func loadIfNeeded(cookie rawCookie: String) {
             guard loadedCookie != rawCookie,
@@ -823,6 +834,10 @@ private struct CharacterOfficial3DView: UIViewRepresentable {
                     touch-action: none !important;
                     -webkit-user-select: none !important;
                     user-select: none !important;
+                  }
+                  #kintara-dash-outfit-letter {
+                    transform: scale((displayScale)) !important;
+                    transform-origin: 50% 50% !important;
                   }
                   #kintara-dash-outfit-letter canvas {
                     cursor: grab !important;
