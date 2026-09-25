@@ -77,9 +77,12 @@ struct RootView: View {
         }
         .onChange(of: scenePhase) { _, newPhase in
             app.handleScenePhase(newPhase)
+            if newPhase == .active {
+                Task { await app.refreshCharacterProfile(force: true) }
+            }
         }
         .task {
-            await app.refreshCharacterProfile()
+            await app.refreshCharacterProfile(force: true)
         }
     }
 
@@ -876,9 +879,27 @@ struct CharacterVoxel3DView: UIViewRepresentable {
             part(sh.0,sh.1,sh.2, 0.012,anchor,z,shoeMat,parent:legR,local:true)
         }
 
-        // Exact base hat assets captured from pc_hatHolder.
-        if a.hat > 0 && a.hat <= 9 {
+        // Headwear: the base numeric hat selects the primitive silhouette, while
+        // newer rewards can override it through hatFx without changing the base id.
+        // Keep both paths so old 0...9 outfits and current seasonal cosmetics work.
+        let normalizedHatFX = (a.hatFX ?? "")
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+            .lowercased()
+            .replacingOccurrences(of: "_", with: "")
+            .replacingOccurrences(of: "-", with: "")
+        let seasonOneHat = a.hat == 54 || a.hat == 55 ||
+            normalizedHatFX == "season1" ||
+            normalizedHatFX == "season1gold" ||
+            normalizedHatFX == "s1" ||
+            normalizedHatFX == "s1gold" ||
+            normalizedHatFX.contains("season1")
+        let seasonOneHatGold = a.hat == 55 || normalizedHatFX.contains("gold")
+
+        // Exact legacy base hat assets captured from pc_hatHolder.
+        // A cosmetic FX replaces the base geometry instead of stacking on top of it.
+        if a.hat > 0 && a.hat <= 9 && !seasonOneHat {
             let holder = SCNNode()
+            holder.name = "pc_hatHolder"
             holder.position = SCNVector3(0,Float(sc(1.12)) + yOffset,0)
             root.addChildNode(holder)
             func hp(_ w: CGFloat,_ h: CGFloat,_ d: CGFloat,_ x: CGFloat,_ y: CGFloat,_ z: CGFloat,
@@ -916,60 +937,63 @@ struct CharacterVoxel3DView: UIViewRepresentable {
             }
         }
 
-        // Season 1 reward caps are server hat ids 54/55. They are not part of the
-        // legacy 0...9 pc_hatHolder table, so render them explicitly.
-        if a.hat == 54 || a.hat == 55 {
+        // Season 1 cap. Current client can expose it either as dedicated hat ids
+        // 54/55 or as hatFx on top of a legacy cap id. Both resolve here.
+        if seasonOneHat {
             let holder = SCNNode()
             holder.name = "pc_season1HatHolder"
-            holder.position = SCNVector3(0, Float(sc(1.115)) + yOffset, 0)
+            holder.position = SCNVector3(0, Float(sc(1.108)) + yOffset, 0)
             root.addChildNode(holder)
 
-            let goldVariant = a.hat == 55
-            let crownColor = Self.kintaraColor(goldVariant ? 0xD9A83C : 0x3D2A7D)
-            let crownDark = Self.kintaraColor(goldVariant ? 0xA87A22 : 0x241546)
-            let accentColor = Self.kintaraColor(goldVariant ? 0x3D2A7D : 0xD9A83C)
-            let crownMat = mat(crownColor)
-            let darkMat = mat(crownDark)
-            let accentMat = mat(accentColor, constant: true)
+            let violet = Self.kintaraColor(0x241546)
+            let violetMid = Self.kintaraColor(0x35206B)
+            let violetLight = Self.kintaraColor(0x443080)
+            let gold = Self.kintaraColor(0xD9A83C)
+            let goldDark = Self.kintaraColor(0x9D6E20)
 
-            // Low-poly rounded crown, matching the official Season 1 cap silhouette.
+            let crownPrimary = seasonOneHatGold ? gold : violetMid
+            let crownSecondary = seasonOneHatGold ? goldDark : violet
+            let accent = seasonOneHatGold ? violetMid : gold
+
             let crownGeo = SCNSphere(radius: sc(0.285))
-            crownGeo.segmentCount = 14
-            crownGeo.materials = [crownMat]
+            crownGeo.segmentCount = 18
+            crownGeo.materials = [mat(crownPrimary)]
             let crown = SCNNode(geometry: crownGeo)
             crown.name = "pc_season1HatCrown"
-            crown.scale = SCNVector3(1.34, 0.58, 1.20)
-            crown.position = SCNVector3(0, Float(sc(0.035)), Float(sc(-0.005)))
-            crown.eulerAngles.x = -0.05
+            crown.scale = SCNVector3(1.34, 0.57, 1.23)
+            crown.position = SCNVector3(0, Float(sc(0.030)), Float(sc(-0.015)))
+            crown.eulerAngles = SCNVector3(-0.08, 0, 0.03)
             crown.renderingOrder = 2
             holder.addChildNode(crown)
 
-            // Dark lower band keeps the crown visually separated from the head.
-            part(0.405, 0.038, 0.405, 0, -0.075, -0.005, darkMat, parent: holder, local: true)
+            // Rear/lower dark band visible in the official cap.
+            part(0.410, 0.045, 0.410, 0, -0.080, -0.010, mat(crownSecondary), parent: holder, local: true)
 
-            // Forward brim with a thin accent line.
-            let brim = part(0.40, 0.035, 0.235, 0, -0.065, 0.205, crownMat, parent: holder, local: true)
-            brim.eulerAngles.x = -0.10
-            let trim = part(0.405, 0.014, 0.240, 0, -0.050, 0.210, accentMat, parent: holder, local: true)
-            trim.eulerAngles.x = -0.10
+            // Gold side stripe and forward brim.
+            part(0.405, 0.020, 0.035, 0, -0.040, 0.205, mat(accent, constant: true), parent: holder, local: true)
+            let brim = part(0.39, 0.032, 0.235, 0, -0.072, 0.220, mat(accent), parent: holder, local: true)
+            brim.eulerAngles.x = -0.12
+            part(0.32, 0.012, 0.205, 0, -0.086, 0.214, mat(seasonOneHatGold ? violet : goldDark, constant: true), parent: holder, local: true)
 
-            // The official item is the championship violet/gold S1 cap. Reuse the
-            // same laurel numeral artwork already used by the Season 1 shirt.
-            let plane = SCNPlane(width: sc(0.205), height: sc(0.145))
-            let decalMat = SCNMaterial()
-            let decal = Self.kintaraSeasonOneEmblem(gold: goldVariant)
-            decalMat.diffuse.contents = decal
-            decalMat.ambient.contents = decal
-            decalMat.lightingModel = .constant
-            decalMat.isDoubleSided = true
-            decalMat.transparencyMode = .aOne
-            plane.materials = [decalMat]
-            let badge = SCNNode(geometry: plane)
-            badge.name = "pc_season1HatBadge"
-            badge.position = SCNVector3(0, Float(sc(0.035)), Float(sc(0.286)))
-            badge.eulerAngles.x = -0.08
-            badge.renderingOrder = 7
+            // S1 mark on the front/top slope.
+            let markPlane = SCNPlane(width: sc(0.185), height: sc(0.115))
+            let markMat = SCNMaterial()
+            let mark = Self.kintaraSeasonOneHatMark(gold: seasonOneHatGold)
+            markMat.diffuse.contents = mark
+            markMat.ambient.contents = mark
+            markMat.lightingModel = .constant
+            markMat.isDoubleSided = true
+            markMat.transparencyMode = .aOne
+            markPlane.materials = [markMat]
+            let badge = SCNNode(geometry: markPlane)
+            badge.name = "pc_season1HatMark"
+            badge.position = SCNVector3(Float(sc(-0.060)), Float(sc(0.095)), Float(sc(0.270)))
+            badge.eulerAngles = SCNVector3(-0.28, 0, -0.08)
+            badge.renderingOrder = 8
             holder.addChildNode(badge)
+
+            // Small gold side tab seen on the connected-profile model.
+            part(0.075, 0.022, 0.030, -0.205, -0.018, 0.105, mat(accent, constant: true), parent: holder, local: true)
         }
 
         // Exact Season 1 chest overlay: 0.32 plane at torso depth*0.5*1.04 + .012.
@@ -1021,6 +1045,29 @@ struct CharacterVoxel3DView: UIViewRepresentable {
             c.drawLinearGradient(g,start:.zero,end:CGPoint(x:0,y:256),options:[])
             c.setFillColor((gold ? kintaraColor(0x3D2A7D) : kintaraColor(0xD9A83C)).cgColor)
             c.fill(CGRect(x:0,y:244,width:64,height:6))
+        }
+    }
+
+    private static func kintaraSeasonOneHatMark(gold: Bool) -> UIImage {
+        UIGraphicsImageRenderer(size: CGSize(width: 256, height: 160)).image { renderer in
+            let c = renderer.cgContext
+            c.clear(CGRect(x: 0, y: 0, width: 256, height: 160))
+            let primary = gold ? kintaraColor(0x3D2A7D) : kintaraColor(0xF0D27A)
+            let shadow = gold ? kintaraColor(0x241546) : kintaraColor(0x8E651F)
+            let paragraph = NSMutableParagraphStyle()
+            paragraph.alignment = .center
+            let attrsShadow: [NSAttributedString.Key: Any] = [
+                .font: UIFont.systemFont(ofSize: 86, weight: .black),
+                .foregroundColor: shadow,
+                .paragraphStyle: paragraph
+            ]
+            let attrs: [NSAttributedString.Key: Any] = [
+                .font: UIFont.systemFont(ofSize: 86, weight: .black),
+                .foregroundColor: primary,
+                .paragraphStyle: paragraph
+            ]
+            NSString(string: "S1").draw(in: CGRect(x: 7, y: 18, width: 242, height: 120), withAttributes: attrsShadow)
+            NSString(string: "S1").draw(in: CGRect(x: 2, y: 12, width: 242, height: 120), withAttributes: attrs)
         }
     }
 
