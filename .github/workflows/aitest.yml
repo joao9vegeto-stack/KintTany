@@ -1,0 +1,144 @@
+name: AItest SDK XCTest + IPA
+
+on:
+  push:
+    branches: [AItest]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    if: github.event_name == 'workflow_dispatch' || github.event.head_commit.message != 'AItest: import swift-ai-sdk 0.3.0'
+    runs-on: macos-26
+    timeout-minutes: 60
+
+    steps:
+      - name: Checkout AItest
+        uses: actions/checkout@v4
+        with:
+          ref: AItest
+          fetch-depth: 1
+
+      - name: Import swift-ai-sdk 0.3.0 into clean branch
+        shell: bash
+        run: |
+          set -euo pipefail
+          cp .github/workflows/aitest.yml /tmp/aitest.yml
+
+          rm -rf /tmp/swift-ai-sdk-src /tmp/swift-ai-sdk.zip
+          mkdir -p /tmp/swift-ai-sdk-src
+          curl -L --fail --retry 3 \
+            https://github.com/zaidmukaddam/swift-ai-sdk/archive/refs/tags/0.3.0.zip \
+            -o /tmp/swift-ai-sdk.zip
+          unzip -q /tmp/swift-ai-sdk.zip -d /tmp/swift-ai-sdk-src
+          SRC_DIR="$(find /tmp/swift-ai-sdk-src -mindepth 1 -maxdepth 1 -type d | head -n 1)"
+          test -f "$SRC_DIR/Package.swift"
+          test -d "$SRC_DIR/Sources"
+          test -d "$SRC_DIR/Apps"
+          test -d "$SRC_DIR/Examples"
+
+          find . -mindepth 1 -maxdepth 1 ! -name .git -exec rm -rf {} +
+          cp -R "$SRC_DIR"/. .
+          mkdir -p .github/workflows
+          cp /tmp/aitest.yml .github/workflows/aitest.yml
+
+          echo "Imported source root:"
+          ls -la
+          echo "Apps:"
+          ls -la Apps
+
+      - name: Toolchain
+        shell: bash
+        run: |
+          set -euo pipefail
+          xcodebuild -version
+          swift --version
+
+      - name: Install XcodeGen
+        shell: bash
+        run: |
+          set -euo pipefail
+          if ! command -v xcodegen >/dev/null 2>&1; then
+            brew install xcodegen
+          fi
+          xcodegen --version
+
+      - name: Resolve Swift package
+        shell: bash
+        run: |
+          set -euo pipefail
+          swift package resolve
+
+      - name: XCTest
+        shell: bash
+        run: |
+          set -euo pipefail
+          swift test --parallel
+
+      - name: Generate Apps Xcode project
+        shell: bash
+        run: |
+          set -euo pipefail
+          cd Apps
+          xcodegen generate
+          test -d SwiftAIApps.xcodeproj
+          xcodebuild -list -project SwiftAIApps.xcodeproj
+
+      - name: Build StreamTextDemo for iPhoneOS
+        shell: bash
+        run: |
+          set -euo pipefail
+          xcodebuild \
+            -project Apps/SwiftAIApps.xcodeproj \
+            -scheme StreamTextDemo \
+            -configuration Release \
+            -sdk iphoneos \
+            -destination 'generic/platform=iOS' \
+            -derivedDataPath "$GITHUB_WORKSPACE/build/DerivedData" \
+            CODE_SIGNING_ALLOWED=NO \
+            CODE_SIGNING_REQUIRED=NO \
+            CODE_SIGN_IDENTITY="" \
+            build
+
+          APP_PATH="$(find "$GITHUB_WORKSPACE/build/DerivedData/Build/Products/Release-iphoneos" -maxdepth 1 -type d -name 'StreamTextDemo.app' -print -quit)"
+          test -n "$APP_PATH"
+          test -d "$APP_PATH"
+          echo "APP_PATH=$APP_PATH" >> "$GITHUB_ENV"
+
+      - name: Commit imported SDK to AItest
+        shell: bash
+        run: |
+          set -euo pipefail
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add -A
+          if git diff --cached --quiet; then
+            echo "No source changes to commit."
+          else
+            git commit -m "AItest: import swift-ai-sdk 0.3.0"
+            git push origin HEAD:AItest
+          fi
+
+      - name: Package unsigned IPA
+        shell: bash
+        run: |
+          set -euo pipefail
+          rm -rf "$RUNNER_TEMP/Payload"
+          mkdir -p "$RUNNER_TEMP/Payload"
+          cp -R "$APP_PATH" "$RUNNER_TEMP/Payload/"
+          (
+            cd "$RUNNER_TEMP"
+            zip -qry "$GITHUB_WORKSPACE/SwiftAIApps-AItest.ipa" Payload
+          )
+          test -s "$GITHUB_WORKSPACE/SwiftAIApps-AItest.ipa"
+          ls -lh "$GITHUB_WORKSPACE/SwiftAIApps-AItest.ipa"
+
+      - name: Upload IPA
+        uses: actions/upload-artifact@v4
+        with:
+          name: SwiftAIApps-AItest-IPA
+          path: SwiftAIApps-AItest.ipa
+          if-no-files-found: error
+          retention-days: 30
