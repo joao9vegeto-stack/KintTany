@@ -1015,55 +1015,19 @@ struct CharacterVoxel3DView: UIViewRepresentable {
             torso.renderingOrder = 4
         }
 
-        // Match the captured Kintara renderer rather than illuminating the
-        // model like a flat front-facing portrait. Kintara's gameplay camera
-        // uses CAM_OFF=(20,20,20). Relative to a player facing the camera this
-        // is a 35.264° downward isometric view. Keep x=0 here so the default
-        // card is a straight-on character portrait while preserving the exact
-        // gameplay elevation; horizontal dragging still rotates the native rig.
-        let previewCenter = SCNVector3(0, 1.58, 0)
-
-        // Kintara outfit/world lighting: white ambient + warm key + cool fill.
-        let ambient = SCNLight()
-        ambient.type = .ambient
-        ambient.intensity = 880
-        ambient.color = UIColor.white
-        let ambientNode = SCNNode()
-        ambientNode.light = ambient
-        scene.rootNode.addChildNode(ambientNode)
-
-        let key = SCNLight()
-        key.type = .directional
-        key.intensity = 1000
-        key.color = Self.kintaraColor(0xFFF8F0)
-        let keyNode = SCNNode()
-        keyNode.light = key
-        keyNode.position = SCNVector3(4, 14, 10)
-        keyNode.look(at: previewCenter)
+        let ambient = SCNLight(); ambient.type = .ambient; ambient.intensity = 780
+        ambient.color = UIColor(white:0.94,alpha:1)
+        let ambientNode = SCNNode(); ambientNode.light = ambient; scene.rootNode.addChildNode(ambientNode)
+        let key = SCNLight(); key.type = .directional; key.intensity = 420; key.color = UIColor.white
+        let keyNode = SCNNode(); keyNode.light = key; keyNode.eulerAngles = SCNVector3(-0.55,-0.65,0)
         scene.rootNode.addChildNode(keyNode)
 
-        let fill = SCNLight()
-        fill.type = .directional
-        fill.intensity = 420
-        fill.color = Self.kintaraColor(0xC8D8F0)
-        let fillNode = SCNNode()
-        fillNode.light = fill
-        fillNode.position = SCNVector3(-8, 6, -4)
-        fillNode.look(at: previewCenter)
-        scene.rootNode.addChildNode(fillNode)
-
         let camera = SCNCamera()
-        camera.usesOrthographicProjection = true
-        camera.orthographicScale = 3.95
-        camera.zNear = 0.1
-        camera.zFar = 100
-
-        let cameraNode = SCNNode()
-        cameraNode.camera = camera
-        // World CAM_OFF (20,20,20) rotated into the character's facing frame:
-        // horizontal distance sqrt(20²+20²)=28.284271.
-        cameraNode.position = SCNVector3(0, 20, 28.284271)
-        cameraNode.look(at: previewCenter)
+        camera.usesOrthographicProjection = true; camera.orthographicScale = 3.95
+        camera.zNear = 0.1; camera.zFar = 100
+        let cameraNode = SCNNode(); cameraNode.camera = camera
+        cameraNode.position = SCNVector3(0,2.02,7.0)
+        cameraNode.look(at: SCNVector3(0,1.88,0))
         scene.rootNode.addChildNode(cameraNode)
         return scene
     }
