@@ -10,7 +10,7 @@ permissions:
 
 jobs:
   build:
-    if: github.event_name == 'workflow_dispatch' || github.event.head_commit.message != 'AItest: import swift-ai-sdk 0.3.0'
+    if: github.event_name == 'workflow_dispatch' || github.event.head_commit.message != 'AItest import swift-ai-sdk 0.3.0'
     runs-on: macos-26
     timeout-minutes: 60
 
