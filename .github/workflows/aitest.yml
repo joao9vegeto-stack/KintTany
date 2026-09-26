@@ -71,7 +71,7 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          swift test --parallel
+          swift test
 
       - name: Generate Apps Xcode project
         shell: bash
