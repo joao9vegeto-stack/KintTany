@@ -1,0 +1,30 @@
+---
+title: Media overview
+description: Image generation, speech synthesis, transcription, and video generation.
+icon: Images
+---
+
+Swift AI exposes a small protocol and one top-level function for each media
+capability. Pick the capability you need; provider-specific model types plug
+into the same call.
+
+<Cards>
+  <Card title="Image generation" href="/docs/image-generation" description="Generate and edit images with OpenAI, fal, Luma, or Replicate." />
+  <Card title="Speech generation" href="/docs/speech-generation" description="Synthesize audio with OpenAI, ElevenLabs, LMNT, Hume, Deepgram, or Sarvam." />
+  <Card title="Transcription" href="/docs/transcription" description="Transcribe audio with seven built-in provider models." />
+  <Card title="Video generation" href="/docs/video-generation" description="Create video with xAI or Luma, including image-to-video." />
+</Cards>
+
+All four functions are `async throws`, retry transient failures by default,
+and accept `providerOptions` for native settings that do not belong in the
+shared API.
+
+```swift
+let image = try await generateImage(model: imageModel, prompt: prompt)
+let audio = try await generateSpeech(model: speechModel, text: text)
+let text = try await transcribe(model: transcriptionModel, audio: data, mediaType: "audio/mpeg")
+let video = try await generateVideo(model: videoModel, prompt: prompt)
+```
+
+See [media providers](/docs/providers/media) for the provider-by-provider
+view.

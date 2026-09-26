@@ -1,0 +1,191 @@
+---
+title: xAI
+description: Grok over the Responses API, typed live search, image/speech/video generation, and realtime voice.
+---
+
+```swift
+let model = XaiModel("grok-4.5")          // Responses API
+let chat  = XaiModel.chat("grok-3")       // legacy chat wire
+```
+
+Key from `XAI_API_KEY`; base URL `https://api.x.ai/v1`.
+
+## Features
+
+- Tools, structured output, vision, streamed reasoning, citations as
+  `StreamPart.source`, and cached-token usage.
+- Prefer the `web_search` / `x_search` [server-side tools](#server-side-tools)
+  for search. xAI has **deprecated Live Search** (the `search_parameters`
+  body field), and requests that use it can return a "Live search is
+  deprecated" error. `XaiModel.SearchParameters` still serializes that
+  field for legacy callers, but new code should reach for the tools, which
+  carry the same image/video filters.
+
+```swift
+let legacy = XaiModel.SearchParameters(
+  mode: .auto,
+  returnCitations: true,
+  fromDate: "2026-07-01",
+  maxSearchResults: 10,
+  sources: [.web(country: "US"), .x(includedHandles: ["xai"]), .news(), .rss(links: ["https://…"])]
+)
+```
+
+Per-source filters mirror the tool options:
+`.web(country:excludedWebsites:allowedWebsites:safeSearch:enableImageSearch:enableImageUnderstanding:)`,
+`.x(includedHandles:excludedHandles:postFavoriteCount:postViewCount:enableVideoUnderstanding:)`,
+`.news(country:excludedWebsites:safeSearch:)`, and `.rss(links:)` (xAI
+currently honors a single RSS link).
+
+The unified `topK` reaches Grok's `top_k` on the chat wire; `min_p` and
+other sampling extras (`logprobs`, `topLogprobs`, `parallel_function_calling`)
+ride `providerOptions`.
+
+## Server-side tools
+
+On the Responses API, xAI can run tools for you. Pass the typed builders
+under `XaiModel.Tools` in `tools:` — the calls and results stream back as
+provider-executed parts, and citations as `.source`:
+
+```swift
+let result = try await generateText(
+  model: XaiModel("grok-4.5"),
+  prompt: "What did xAI announce this week?",
+  tools: [
+    XaiModel.Tools.webSearch(allowedDomains: ["x.ai"]),
+    XaiModel.Tools.xSearch(allowedXHandles: ["xai"], fromDate: "2026-07-01"),
+    XaiModel.Tools.codeExecution(),
+  ]
+)
+```
+
+Builders: `webSearch`, `xSearch`, `codeExecution`,
+`fileSearch(vectorStoreIds:)`, `mcpServer(serverUrl:)`, `viewImage`,
+`viewXVideo`. `SearchParameters` above is the older `search_parameters`
+knob; `Tools` is the provider-executed path that surfaces each call and
+its result.
+
+### Multi-agent
+
+`grok-4.20-multi-agent` runs a research swarm server-side. It's just a
+model id plus the three server-side tools — pass them by whatever names
+you want to reference in `activeTools`:
+
+```swift
+let result = streamText(
+  model: XaiModel("grok-4.20-multi-agent"),
+  system: "You are a research assistant in multi-agent mode.",
+  prompt: "What shipped across the AI labs this week?",
+  tools: [
+    XaiModel.Tools.webSearch(name: "xai_web_search"),
+    XaiModel.Tools.xSearch(name: "xai_x_search"),
+    XaiModel.Tools.codeExecution(name: "xai_code_execution"),
+  ],
+  toolChoice: .auto,
+  activeTools: ["xai_web_search", "xai_x_search", "xai_code_execution"]
+)
+```
+
+Each builder's `name:` sets the tool name the calls and results carry, so
+`activeTools` lines up with it. The agents' searches and code runs stream
+back as provider-executed `.toolCall` / `.toolResult` parts.
+
+## Models
+
+- The `reasoning` parameter maps to `reasoning.effort` (`.minimal`
+  coerces to `low`, `.xhigh` to `high`).
+- `grok-4.20` date-stamped `-reasoning` / `-non-reasoning` variants have
+  behavior baked into the model id, so the parameter is not sent for
+  them.
+
+### Current lineup
+
+As of July 2026, newest first:
+
+| Model | Notes |
+| --- | --- |
+| `grok-4.5` | Newest flagship (July 2026) |
+| `grok-4.3` | April 2026 |
+| `grok-4.20-reasoning` / `-non-reasoning` / `-multi-agent` | Fixed-behavior variants (plus `-beta` builds) |
+| `grok-4.1-fast-reasoning` / `-non-reasoning` | Fast tier |
+| `grok-voice-think-fast-1.0` | Realtime voice |
+| `grok-imagine-video-1.5`, `grok-imagine-image` | Video and image generation |
+| `grok-tts`, `grok-stt` | Speech in and out |
+
+## Deferred and compaction
+
+`XaiModel.chat(...)` can run a completion in the background: `deferred`
+submits the request and polls `/v1/chat/deferred-completion/{id}` until it
+lands.
+
+```swift
+let model = XaiModel.chat("grok-4.5")
+let done = try await model.submitDeferredCompletion(
+  LanguageModelRequest(messages: [.user("Summarize the news.")], maxOutputTokens: 1024)
+)
+done.text        // final assistant text
+done.usage       // token counts
+```
+
+On the Responses API, `compactResponse(previousResponseID:)` compacts a
+stored response's context and returns the new response, and
+`retrieveResponse(_:)` / `deleteResponse(_:)` read back or remove a stored
+response by id.
+
+## Beyond text
+
+| Surface | Entry point |
+| --- | --- |
+| [Image generation](/docs/image-generation) | `XaiImageModel("grok-imagine-image")` — generations and edits |
+| [Speech generation](/docs/speech-generation) | `XaiSpeechModel("grok-tts")` |
+| [Transcription](/docs/transcription) | `XaiTranscriptionModel("grok-stt")` |
+| [Video generation](/docs/video-generation) | `XaiVideoModel("grok-imagine-video-1.5")` — `generateVideos`, `editVideo`, `extendVideo` |
+| [Realtime voice](/docs/realtime) | `XaiRealtimeModel("grok-voice-latest")` |
+
+## Platform APIs
+
+Typed clients wrap the rest of the REST surface:
+
+- `XaiFilesClient`: `upload` (with `expiresAfter`), `list` (paging and
+  `filter`), `get`, `update`, `download`, `delete` on `/v1/files`.
+- `XaiBatchClient`: `create`, `get`, `list`, `requests`, `addRequests`,
+  `results`, `cancel` on `/v1/batches`.
+- `XaiModelsClient`: `/v1/models` plus the richer `language-models`,
+  `image-generation-models`, and `video-generation-models` catalogs, which
+  add modalities, pricing, fingerprints, and aliases.
+- `XaiPlatformClient`: `apiKeyInfo()`, `tokenizeText(_:model:)`, SIP phone
+  numbers (`/v2/phone-numbers`), in-call `referCall` / `hangUpCall`, and the
+  `tts/voices` and `custom-voices` catalogs.
+- `XaiCollectionsClient`: collection and document management plus search.
+
+### Collections span two services
+
+Collection *management* lives on `https://management-api.x.ai/v1` and needs a
+**Management API key**; only search runs on `https://api.x.ai/v1` with the
+usual `XAI_API_KEY`. The client holds both and routes each call itself:
+
+```swift
+let collections = XaiCollectionsClient()   // XAI_MANAGEMENT_API_KEY + XAI_API_KEY
+
+let id = try await collections.create(name: "Filings", description: "SEC")
+try await collections.addDocument(collectionID: id, fileID: uploaded.id)
+let hits = try await collections.search(
+  query: "revenue guidance",
+  source: ["collection_ids": .array([.string(id)])]
+)
+```
+
+If `managementAPIKey` is omitted it falls back to `apiKey`, which works only
+when one key carries both scopes. `list`, `listDocuments`, `document`,
+`documents` (batch get), `update`, `regenerateIndices`, and `removeDocument`
+round out the surface, and every management call accepts `teamID:`.
+
+Files, Batch, and deferred completions all store data server-side, so
+Zero Data Retention teams get a 403/400 from them — those accounts are
+limited to the streaming chat and Responses paths.
+
+Two documented endpoints are not wrapped: chunked upload
+(`/v1/files:initialize` + `:uploadChunks`) and the request body for
+`PUT /v1/files/{id}`, because xAI's reference lists the routes without
+payload fields. `XaiFilesClient.update(_:body:)` takes a raw `JSONValue` so
+you can send the documented shape once it is published.

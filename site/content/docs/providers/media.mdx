@@ -1,0 +1,56 @@
+---
+title: Media providers
+description: Provider index for image, speech, transcription, and video models.
+---
+
+Media models are first-class provider types, not language-model wrappers. Each
+conforms to one focused protocol and plugs into its matching top-level
+function.
+
+## Image generation
+
+| Provider | Model type |
+| --- | --- |
+| [OpenAI](/docs/providers/openai) | `OpenAIImageModel` |
+| [fal](/docs/providers/fal) | `FalImageModel` |
+| [Luma](/docs/providers/luma) | `LumaImageModel` |
+| [Replicate](/docs/providers/replicate) | `ReplicateImageModel` |
+
+See [image generation](/docs/image-generation) for the shared API.
+
+## Speech generation
+
+| Provider | Model type |
+| --- | --- |
+| [OpenAI](/docs/providers/openai) | `OpenAISpeechModel` |
+| [ElevenLabs](/docs/providers/elevenlabs) | `ElevenLabsSpeechModel` |
+| [LMNT](/docs/providers/lmnt) | `LMNTSpeechModel` |
+| [Hume](/docs/providers/hume) | `HumeSpeechModel` |
+| [Deepgram](/docs/providers/deepgram) | `DeepgramSpeechModel` |
+| [Sarvam](/docs/providers/sarvam) | `SarvamSpeechModel` |
+
+See [speech generation](/docs/speech-generation) for the shared API.
+
+## Transcription
+
+| Provider | Model type |
+| --- | --- |
+| [OpenAI](/docs/providers/openai) | `OpenAITranscriptionModel` |
+| [ElevenLabs](/docs/providers/elevenlabs) | `ElevenLabsTranscriptionModel` |
+| [Deepgram](/docs/providers/deepgram) | `DeepgramTranscriptionModel` |
+| [AssemblyAI](/docs/providers/assemblyai) | `AssemblyAITranscriptionModel` |
+| [Rev.ai](/docs/providers/rev-ai) | `RevAITranscriptionModel` |
+| [Gladia](/docs/providers/gladia) | `GladiaTranscriptionModel` |
+| [Sarvam](/docs/providers/sarvam) | `SarvamTranscriptionModel` |
+
+See [transcription](/docs/transcription) for the shared API. Groq-hosted
+Whisper also works through `OpenAITranscriptionModel` with Groq's base URL.
+
+## Video generation
+
+| Provider | Model type |
+| --- | --- |
+| [xAI](/docs/providers/xai) | `XaiVideoModel` |
+| [Luma](/docs/providers/luma) | `LumaVideoModel` |
+
+See [video generation](/docs/video-generation) for the shared API.
