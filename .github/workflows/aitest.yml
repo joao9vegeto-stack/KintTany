@@ -6,11 +6,10 @@ on:
   workflow_dispatch:
 
 permissions:
-  contents: write
+  contents: read
 
 jobs:
-  test_and_import:
-    if: github.event_name == 'workflow_dispatch' || github.event.head_commit.message != 'AItest import swift-ai-sdk 0.3.0'
+  test:
     runs-on: macos-15
     timeout-minutes: 60
 
@@ -20,30 +19,6 @@ jobs:
         with:
           ref: AItest
           fetch-depth: 1
-
-      - name: Import swift-ai-sdk 0.3.0 into clean branch
-        shell: bash
-        run: |
-          set -euo pipefail
-          cp .github/workflows/aitest.yml /tmp/aitest.yml
-
-          rm -rf /tmp/swift-ai-sdk-src /tmp/swift-ai-sdk.zip
-          mkdir -p /tmp/swift-ai-sdk-src
-          curl -L --fail --retry 3 \
-            https://github.com/zaidmukaddam/swift-ai-sdk/archive/refs/tags/0.3.0.zip \
-            -o /tmp/swift-ai-sdk.zip
-          unzip -q /tmp/swift-ai-sdk.zip -d /tmp/swift-ai-sdk-src
-          SRC_DIR="$(find /tmp/swift-ai-sdk-src -mindepth 1 -maxdepth 1 -type d | head -n 1)"
-          test -f "$SRC_DIR/Package.swift"
-          test -d "$SRC_DIR/Sources"
-          test -d "$SRC_DIR/Apps"
-          test -d "$SRC_DIR/Examples"
-
-          find . -mindepth 1 -maxdepth 1 ! -name .git -exec rm -rf {} +
-          cp -R "$SRC_DIR"/. .
-          rm -rf .github/workflows
-          mkdir -p .github/workflows
-          cp /tmp/aitest.yml .github/workflows/aitest.yml
 
       - name: Select Xcode 16.4 for XCTest
         shell: bash
@@ -83,24 +58,13 @@ jobs:
           test -d SwiftAIApps.xcodeproj
           xcodebuild -list -project SwiftAIApps.xcodeproj
 
-      - name: Commit imported SDK to AItest
-        shell: bash
-        run: |
-          set -euo pipefail
-          git config user.name "github-actions[bot]"
-          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git add -A
-          git commit -m "AItest import swift-ai-sdk 0.3.0"
-          git push origin HEAD:AItest
-
   build_ipa:
-    needs: test_and_import
-    if: github.event_name == 'workflow_dispatch' || github.event.head_commit.message != 'AItest import swift-ai-sdk 0.3.0'
+    needs: test
     runs-on: macos-26
     timeout-minutes: 60
 
     steps:
-      - name: Checkout populated AItest
+      - name: Checkout AItest
         uses: actions/checkout@v4
         with:
           ref: AItest
