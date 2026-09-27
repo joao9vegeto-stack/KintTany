@@ -1,56 +1,32 @@
-# KintTany iOS
+# Qwen3-Coder — branch isolada
 
-## Versão atual
+Esta branch foi criada do zero em termos de conteúdo para executar o Quick Start oficial do Qwen3-Coder sem alterar nenhuma outra branch do repositório.
 
-**KintTany v2.0 (build 20)**.
+## O que há aqui
 
+- `qwen3_coder_quickstart.py`: exemplo executável baseado no Quick Start oficial.
+- `requirements.txt`: dependências declaradas pelo repositório oficial Qwen3-Coder.
+- `requirements-quickstart.txt`: dependências mínimas para o exemplo com Transformers.
+- `setup.sh`: cria um ambiente virtual e instala as dependências.
+- `.github/workflows/qwen3-coder.yml`: valida a instalação mínima e a sintaxe sem baixar os pesos do modelo.
 
-Projeto iOS nativo Swift/SwiftUI.
+## Instalação rápida
 
-## Fluxo oficial sem Mac
+```bash
+chmod +x setup.sh
+./setup.sh
+source .venv/bin/activate
+python qwen3_coder_quickstart.py "Escreva uma função Swift para ordenar um array."
+```
 
-O repositório contém dois pipelines de compilação remota:
+Por padrão o script usa `Qwen/Qwen3-Coder-Next`.
 
-- `codemagic.yaml` — fluxo mais simples para compilar e baixar pelo iPhone usando Codemagic;
-- `.github/workflows/ios.yml` — pipeline equivalente no GitHub Actions.
+Para instalar também as dependências completas declaradas pelo repositório oficial, incluindo `vllm`:
 
-Nenhum dos dois exige Mac ou Xcode local.
-Cada push ou pull request executa, em um runner macOS do GitHub:
+```bash
+./setup.sh --full
+```
 
-1. seleção da toolchain Xcode disponível;
-2. XCTest no simulador iOS;
-3. build `iphoneos` sem assinatura;
-4. geração de `KintTany-unsigned.ipa` e `KintTany.app`;
-5. upload dos arquivos na aba **Actions → Artifacts**.
+## Observação importante
 
-Assim, o projeto pode ser compilado e baixado inteiramente pelo navegador do
-iPhone. Nenhuma etapa fundamental exige abrir o projeto no Xcode localmente.
-
-## IPA assinado
-
-Sem Secrets de assinatura, o workflow sempre gera o artefato não assinado para
-o fluxo posterior de sideload. Para gerar também `KintTany.ipa` assinado,
-configure no GitHub Actions os Secrets:
-
-- `IOS_DISTRIBUTION_CERTIFICATE_BASE64`: certificado `.p12` em Base64;
-- `IOS_DISTRIBUTION_CERTIFICATE_PASSWORD`;
-- `IOS_PROVISIONING_PROFILE_BASE64`: perfil `.mobileprovision` em Base64;
-- `APPLE_TEAM_ID`;
-- `KEYCHAIN_PASSWORD` (opcional; há valor temporário para o runner).
-
-O certificado, o perfil e as credenciais nunca são incluídos no repositório ou
-nos artefatos não assinados.
-
-Não inclua cookies, chaves privadas, carteiras ou arquivos `.env` no projeto.
-
-
-## Codemagic
-
-1. Suba o conteúdo desta pasta para a raiz do repositório GitHub.
-2. Conecte esse repositório ao Codemagic.
-3. Selecione a branch `main` e toque em **Check for configuration files**.
-4. O workflow **KintTany iOS - Unsigned IPA** será encontrado a partir de `codemagic.yaml`.
-5. Inicie o build. O runner Mac executará XCTest, compilará para `iphoneos` e publicará `KintTany-unsigned.ipa`.
-6. Baixe o artifact diretamente pelo navegador do iPhone e assine-o pelo seu fluxo de sideload.
-
-O workflow do Codemagic usa Xcode 26.5 em Mac mini M2 e não requer certificado Apple para o artifact sem assinatura.
+O Quick Start oficial é Python/PyTorch/Transformers, não um projeto Swift/iOS. O modelo é grande e o uso local exige hardware compatível. O workflow desta branch verifica a instalação mínima e os imports, mas não baixa nem executa os pesos completos do modelo em um runner comum do GitHub Actions.
