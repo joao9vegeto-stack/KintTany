@@ -35,6 +35,20 @@ jobs:
           test -d "$SRC/Tests"
           find . -mindepth 1 -maxdepth 1 ! -name .git -exec rm -rf {} +
           cp -R "$SRC"/. .
+
+          # Xcode 27 runner compatibility: this release's test helper references
+          # Transcript.Segment.custom, which is absent from the installed SDK.
+          # The @unknown default below preserves equivalent diagnostic behavior.
+          python3 - <<'PY'
+          from pathlib import Path
+          p = Path("Tests/SwiftAgentTests/FoundationModelsToolSearchE2ETests.swift")
+          s = p.read_text()
+          s = s.replace('''            case .custom(let custom):
+                return ["\\(indent)<custom> \\(custom)"]
+''', '')
+          p.write_text(s)
+          PY
+
           rm -rf .github/workflows
           mkdir -p .github/workflows
           cp /tmp/aitest.yml .github/workflows/aitest.yml
