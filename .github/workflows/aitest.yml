@@ -1,255 +1,37 @@
-name: AItest SwiftAgent XCTest + IPA
+name: SwiftPilot iOS Build
 
 on:
   push:
-    branches: [AItest]
+    branches:
+      - AItest
+      - 'agent/**'
   workflow_dispatch:
 
 permissions:
-  contents: write
+  contents: read
 
 jobs:
-  import_test:
-    if: github.event_name == 'workflow_dispatch' || github.event.head_commit.message != 'AItest import SwiftAgent 2.0.1'
+  build:
     runs-on: xcode-27
-    timeout-minutes: 60
+    timeout-minutes: 45
     steps:
       - uses: actions/checkout@v4
-        with:
-          ref: AItest
-          fetch-depth: 1
-
-      - name: Replace branch with SwiftAgent 2.0.1
-        shell: bash
-        run: |
-          set -euo pipefail
-          cp .github/workflows/aitest.yml /tmp/aitest.yml
-          rm -rf /tmp/swiftagent /tmp/swiftagent.zip
-          curl -L --fail --retry 3 https://github.com/1amageek/SwiftAgent/archive/refs/tags/2.0.1.zip -o /tmp/swiftagent.zip
-          mkdir -p /tmp/swiftagent
-          unzip -q /tmp/swiftagent.zip -d /tmp/swiftagent
-          SRC="$(find /tmp/swiftagent -mindepth 1 -maxdepth 1 -type d | head -n1)"
-          test -f "$SRC/README.md"
-          test -f "$SRC/Package.swift"
-          test -d "$SRC/Sources"
-          test -d "$SRC/Tests"
-          find . -mindepth 1 -maxdepth 1 ! -name .git -exec rm -rf {} +
-          cp -R "$SRC"/. .
-
-          # Xcode 27 runner compatibility: this release's test helper references
-          # Transcript.Segment.custom, which is absent from the installed SDK.
-          # The @unknown default below preserves equivalent diagnostic behavior.
-          sed -i '' '/case \.custom(let custom):/,+1d' Tests/SwiftAgentTests/FoundationModelsToolSearchE2ETests.swift
-
-          rm -rf .github/workflows
-          mkdir -p .github/workflows
-          cp /tmp/aitest.yml .github/workflows/aitest.yml
-
-      - name: Install pinned Swift 6.4 toolchain
-        run: scripts/install-swift-ci.sh
-
-      - name: Swift version
-        run: swift --version
-
-      - name: Resolve dependencies
-        run: swift package resolve
-
-      - name: XCTest
-        shell: bash
-        run: |
-          set -o pipefail
-          swift test --disable-sandbox --no-parallel || {
-            echo "First XCTest pass failed; retrying once to distinguish timing flake from a real failure."
-            swift test --disable-sandbox --no-parallel
-          }
-
-      - name: Create iOS demo following README
-        shell: bash
-        run: |
-          set -euo pipefail
-          mkdir -p Apps/SwiftAgentDemo
-          cat > Apps/project.yml <<'YAML'
-          name: SwiftAgentDemo
-          options:
-            bundleIdPrefix: com.joaopedro
-            deploymentTarget:
-              iOS: "26.0"
-          packages:
-            SwiftAgent:
-              path: ..
-          targets:
-            SwiftAgentDemo:
-              type: application
-              platform: iOS
-              sources:
-                - SwiftAgentDemo
-              settings:
-                base:
-                  PRODUCT_BUNDLE_IDENTIFIER: com.joaopedro.swiftagentdemo
-                  GENERATE_INFOPLIST_FILE: YES
-                  SWIFT_VERSION: "6.2"
-                  TARGETED_DEVICE_FAMILY: "1,2"
-              dependencies:
-                - package: SwiftAgent
-                  product: SwiftAgent
-          YAML
-          cat > Apps/SwiftAgentDemo/SwiftAgentDemoApp.swift <<'SWIFT'
-          import SwiftUI
-          import SwiftAgent
-          import FoundationModels
-
-          @main
-          struct SwiftAgentDemoApp: App {
-              var body: some Scene {
-                  WindowGroup { ContentView() }
-              }
-          }
-
-          struct ChatMessage: Identifiable {
-              enum Role: Equatable { case user, assistant }
-              let id = UUID()
-              let role: Role
-              let content: String
-          }
-
-          @MainActor
-          @Observable
-          final class ChatModel {
-              var messages: [ChatMessage] = []
-              var inputText = ""
-              var isResponding = false
-              var errorMessage: String?
-              private let conversation: Conversation
-
-              init() {
-                  let session = LanguageModelSession(model: SystemLanguageModel.default, tools: []) {
-                      Instructions("You are a helpful assistant. Reply in the same language as the user.")
-                  }
-                  conversation = Conversation(languageModelSession: session) {
-                      GenerateText<String>()
-                  }
-              }
-
-              func send() {
-                  let text = inputText.trimmingCharacters(in: .whitespacesAndNewlines)
-                  guard !text.isEmpty, !isResponding else { return }
-                  inputText = ""
-                  errorMessage = nil
-                  messages.append(ChatMessage(role: .user, content: text))
-                  isResponding = true
-                  Task {
-                      do {
-                          let response = try await conversation.send(text)
-                          messages.append(ChatMessage(role: .assistant, content: response.content))
-                      } catch {
-                          errorMessage = error.localizedDescription
-                      }
-                      isResponding = false
-                  }
-              }
-          }
-
-          struct ContentView: View {
-              @State private var model = ChatModel()
-
-              var body: some View {
-                  NavigationStack {
-                      VStack(spacing: 0) {
-                          if model.messages.isEmpty {
-                              ContentUnavailableView("SwiftAgent", systemImage: "brain.head.profile",
-                                  description: Text("Converse com o modelo local do Foundation Models."))
-                                  .frame(maxHeight: .infinity)
-                          } else {
-                              ScrollView {
-                                  LazyVStack(spacing: 12) {
-                                      ForEach(model.messages) { message in
-                                          HStack {
-                                              if message.role == .assistant { Spacer(minLength: 0) }
-                                              Text(message.content)
-                                                  .textSelection(.enabled)
-                                                  .padding(12)
-                                                  .background(message.role == .user ? Color.accentColor : Color.secondary.opacity(0.16))
-                                                  .foregroundStyle(message.role == .user ? Color.white : Color.primary)
-                                                  .clipShape(RoundedRectangle(cornerRadius: 16))
-                                              if message.role == .user { Spacer(minLength: 0) }
-                                          }
-                                      }
-                                      if model.isResponding {
-                                          HStack { ProgressView(); Text("Pensando…"); Spacer() }
-                                      }
-                                  }.padding()
-                              }
-                          }
-                          if let error = model.errorMessage {
-                              Text(error).font(.footnote).foregroundStyle(.red).padding(.horizontal)
-                          }
-                          HStack(alignment: .bottom, spacing: 10) {
-                              TextField("Mensagem", text: $model.inputText, axis: .vertical)
-                                  .lineLimit(1...5).textFieldStyle(.roundedBorder)
-                                  .onSubmit { model.send() }
-                              Button(action: model.send) {
-                                  Image(systemName: "arrow.up.circle.fill").font(.system(size: 30))
-                              }
-                              .disabled(model.inputText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || model.isResponding)
-                          }.padding().background(.bar)
-                      }
-                      .navigationTitle("SwiftAgent 2.0.1")
-                      .navigationBarTitleDisplayMode(.inline)
-                  }
-              }
-          }
-          SWIFT
-
-      - name: Install XcodeGen and generate project
-        run: |
-          brew install xcodegen
-          cd Apps
-          xcodegen generate
-          xcodebuild -list -project SwiftAgentDemo.xcodeproj
-
-      - name: Commit clean SwiftAgent branch
-        shell: bash
-        run: |
-          set -euo pipefail
-          git config user.name "github-actions[bot]"
-          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git add -A
-          if git diff --cached --quiet; then
-            echo "SwiftAgent tree already committed; continuing."
-          else
-            git commit -m "AItest import SwiftAgent 2.0.1"
-            git push origin HEAD:AItest
-          fi
-
-  build_ipa:
-    needs: import_test
-    if: github.event_name == 'workflow_dispatch' || github.event.head_commit.message != 'AItest import SwiftAgent 2.0.1'
-    runs-on: xcode-27
-    timeout-minutes: 60
-    steps:
-      - uses: actions/checkout@v4
-        with:
-          ref: AItest
-          fetch-depth: 1
-
-      - name: Install pinned Swift 6.4 toolchain
-        run: scripts/install-swift-ci.sh
-
+      - name: Xcode version
+        run: xcodebuild -version
       - name: Install XcodeGen
         run: brew install xcodegen
-
-      - name: Generate project
+      - name: Generate Xcode project
         run: |
           cd Apps
           xcodegen generate
-
-      - name: Build iPhoneOS app
+          xcodebuild -list -project SwiftPilot.xcodeproj
+      - name: Build for iPhoneOS
         shell: bash
         run: |
           set -euo pipefail
           xcodebuild \
-            -project Apps/SwiftAgentDemo.xcodeproj \
-            -scheme SwiftAgentDemo \
+            -project Apps/SwiftPilot.xcodeproj \
+            -scheme SwiftPilot \
             -configuration Release \
             -sdk iphoneos \
             -destination 'generic/platform=iOS' \
@@ -257,24 +39,31 @@ jobs:
             CODE_SIGNING_ALLOWED=NO \
             CODE_SIGNING_REQUIRED=NO \
             CODE_SIGN_IDENTITY="" \
-            build
-          APP="$(find "$GITHUB_WORKSPACE/build/DerivedData/Build/Products/Release-iphoneos" -maxdepth 1 -type d -name 'SwiftAgentDemo.app' -print -quit)"
+            build | tee "$GITHUB_WORKSPACE/xcodebuild.log"
+          APP="$(find "$GITHUB_WORKSPACE/build/DerivedData/Build/Products/Release-iphoneos" -maxdepth 1 -type d -name 'SwiftPilot.app' -print -quit)"
           test -d "$APP"
           echo "APP_PATH=$APP" >> "$GITHUB_ENV"
-
-      - name: Package IPA
+      - name: Package unsigned IPA
         shell: bash
         run: |
           set -euo pipefail
+          SHORT_SHA="$(git rev-parse --short HEAD)"
           mkdir -p "$RUNNER_TEMP/Payload"
           cp -R "$APP_PATH" "$RUNNER_TEMP/Payload/"
-          (cd "$RUNNER_TEMP" && zip -qry "$GITHUB_WORKSPACE/SwiftAgent-AItest.ipa" Payload)
-          test -s "$GITHUB_WORKSPACE/SwiftAgent-AItest.ipa"
-          ls -lh "$GITHUB_WORKSPACE/SwiftAgent-AItest.ipa"
-
+          IPA="$GITHUB_WORKSPACE/SwiftPilot-$SHORT_SHA.ipa"
+          (cd "$RUNNER_TEMP" && zip -qry "$IPA" Payload)
+          test -s "$IPA"
+          ls -lh "$IPA"
       - uses: actions/upload-artifact@v4
         with:
-          name: SwiftAgent-AItest-IPA
-          path: SwiftAgent-AItest.ipa
+          name: SwiftPilot-IPA
+          path: SwiftPilot-*.ipa
           if-no-files-found: error
           retention-days: 30
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: SwiftPilot-build-log
+          path: xcodebuild.log
+          if-no-files-found: ignore
+          retention-days: 7
