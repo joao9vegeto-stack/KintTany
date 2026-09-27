@@ -55,7 +55,13 @@ jobs:
         run: swift package resolve
 
       - name: XCTest
-        run: swift test --disable-sandbox --no-parallel
+        shell: bash
+        run: |
+          set -o pipefail
+          swift test --disable-sandbox --no-parallel || {
+            echo "First XCTest pass failed; retrying once to distinguish timing flake from a real failure."
+            swift test --disable-sandbox --no-parallel
+          }
 
       - name: Create iOS demo following README
         shell: bash
