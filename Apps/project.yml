@@ -1,23 +1,21 @@
-name: SwiftAgentDemo
+name: SwiftPilot
 options:
   bundleIdPrefix: com.joaopedro
   deploymentTarget:
-    iOS: "26.0"
-packages:
-  SwiftAgent:
-    path: ..
+    iOS: "17.0"
 targets:
-  SwiftAgentDemo:
+  SwiftPilot:
     type: application
     platform: iOS
     sources:
-      - SwiftAgentDemo
+      - SwiftPilot
     settings:
       base:
-        PRODUCT_BUNDLE_IDENTIFIER: com.joaopedro.swiftagentdemo
+        PRODUCT_BUNDLE_IDENTIFIER: com.joaopedro.swiftpilot
+        PRODUCT_NAME: SwiftPilot
         GENERATE_INFOPLIST_FILE: YES
-        SWIFT_VERSION: "6.2"
+        INFOPLIST_KEY_CFBundleDisplayName: SwiftPilot
+        SWIFT_VERSION: "6.0"
+        SWIFT_STRICT_CONCURRENCY: minimal
         TARGETED_DEVICE_FAMILY: "1,2"
-    dependencies:
-      - package: SwiftAgent
-        product: SwiftAgent
+        CODE_SIGN_STYLE: Automatic
