@@ -1,4 +1,5 @@
 import Foundation
+import AVFoundation
 import SwiftUI
 import UIKit
 import BackgroundTasks
@@ -615,6 +616,302 @@ struct ActivityStats: Codable {
     var lastEvent = ""
 }
 
+private final class BackgroundAudioRuntime: @unchecked Sendable {
+    struct Snapshot {
+        let runningFlag: Bool
+        let engineRunning: Bool
+        let playerPlaying: Bool
+        let route: String
+
+        var active: Bool {
+            runningFlag && engineRunning && playerPlaying
+        }
+
+        var summary: String {
+            "active=\(active ? "sim" : "não") • engine=\(engineRunning ? "sim" : "não") • player=\(playerPlaying ? "sim" : "não") • route=\(route)"
+        }
+    }
+
+    private let engine = AVAudioEngine()
+    private let player = AVAudioPlayerNode()
+    private let format: AVAudioFormat
+    private let loopBuffer: AVAudioPCMBuffer
+    private var prepared = false
+    private var running = false
+    private var observerTokens: [NSObjectProtocol] = []
+    private var eventSink: ((String) -> Void)?
+
+    init() {
+        let sampleRate = 44_100.0
+        let format = AVAudioFormat(standardFormatWithSampleRate: sampleRate, channels: 1)!
+        self.format = format
+
+        let frames = AVAudioFrameCount(sampleRate)
+        let buffer = AVAudioPCMBuffer(pcmFormat: format, frameCapacity: frames)!
+        buffer.frameLength = frames
+
+        // Real non-zero PCM. Kept extremely quiet so the background-runtime
+        // experiment remains unobtrusive while still being genuine playback.
+        if let channel = buffer.floatChannelData?[0] {
+            let amplitude: Float = 0.0005
+            let frequency = 220.0
+            for index in 0..<Int(frames) {
+                let phase = 2.0 * Double.pi * frequency * Double(index) / sampleRate
+                channel[index] = amplitude * Float(sin(phase))
+            }
+        }
+        self.loopBuffer = buffer
+    }
+
+    deinit {
+        removeObservers()
+    }
+
+    func start(onEvent: @escaping (String) -> Void) throws {
+        eventSink = onEvent
+        installObserversIfNeeded()
+
+        if running, engine.isRunning, player.isPlaying {
+            emit("start ignorado • já ativo • \(snapshot().summary)")
+            return
+        }
+
+        try activateSessionAndEngine(reason: "start")
+        emit("ATIVO • AVAudioSession=playback • AVAudioEngine loop PCM real • \(snapshot().summary)")
+    }
+
+    private func activateSessionAndEngine(reason: String) throws {
+        let session = AVAudioSession.sharedInstance()
+        try session.setCategory(.playback, mode: .default, options: [.mixWithOthers])
+        try session.setActive(true)
+
+        if !prepared {
+            engine.attach(player)
+            engine.connect(player, to: engine.mainMixerNode, format: format)
+            engine.mainMixerNode.outputVolume = 1.0
+            engine.prepare()
+            prepared = true
+        }
+
+        if !engine.isRunning {
+            try engine.start()
+        }
+
+        if !player.isPlaying {
+            player.stop()
+            player.scheduleBuffer(loopBuffer, at: nil, options: [.loops], completionHandler: nil)
+            player.play()
+        }
+
+        running = true
+        emit("runtime confirmado • motivo=\(reason) • \(snapshot().summary)")
+    }
+
+    func ensureActive(reason: String) -> Bool {
+        let before = snapshot()
+        if before.active { return true }
+
+        do {
+            try activateSessionAndEngine(reason: reason)
+            emit("RECUPERADO • motivo=\(reason) • antes={\(before.summary)} • depois={\(snapshot().summary)}")
+            return snapshot().active
+        } catch {
+            emit("FALHA recovery • motivo=\(reason) • \(error.localizedDescription) • estado={\(snapshot().summary)}")
+            return false
+        }
+    }
+
+    func stop() {
+        let before = snapshot()
+        guard running || engine.isRunning || player.isPlaying else {
+            removeObservers()
+            eventSink = nil
+            return
+        }
+
+        player.stop()
+        engine.stop()
+        running = false
+
+        do {
+            try AVAudioSession.sharedInstance().setActive(
+                false,
+                options: [.notifyOthersOnDeactivation]
+            )
+        } catch {
+            emit("WARN ao desativar AVAudioSession • \(error.localizedDescription)")
+        }
+
+        emit("INATIVO • antes={\(before.summary)}")
+        removeObservers()
+        eventSink = nil
+    }
+
+    func snapshot() -> Snapshot {
+        let route = AVAudioSession.sharedInstance().currentRoute.outputs
+            .map { output in
+                let port = output.portType.rawValue
+                let name = output.portName.replacingOccurrences(of: " • ", with: " ")
+                return "\(port):\(name)"
+            }
+            .joined(separator: ",")
+        return Snapshot(
+            runningFlag: running,
+            engineRunning: engine.isRunning,
+            playerPlaying: player.isPlaying,
+            route: route.isEmpty ? "sem-output" : route
+        )
+    }
+
+    var isActive: Bool { snapshot().active }
+
+    private func installObserversIfNeeded() {
+        guard observerTokens.isEmpty else { return }
+
+        let center = NotificationCenter.default
+        let session = AVAudioSession.sharedInstance()
+
+        observerTokens.append(
+            center.addObserver(
+                forName: AVAudioSession.interruptionNotification,
+                object: session,
+                queue: .main
+            ) { [weak self] notification in
+                self?.handleInterruption(notification)
+            }
+        )
+
+        observerTokens.append(
+            center.addObserver(
+                forName: AVAudioSession.routeChangeNotification,
+                object: session,
+                queue: .main
+            ) { [weak self] notification in
+                self?.handleRouteChange(notification)
+            }
+        )
+
+        observerTokens.append(
+            center.addObserver(
+                forName: AVAudioSession.mediaServicesWereLostNotification,
+                object: session,
+                queue: .main
+            ) { [weak self] _ in
+                self?.emit("MEDIA SERVICES LOST • \(self?.snapshot().summary ?? "estado indisponível")")
+            }
+        )
+
+        observerTokens.append(
+            center.addObserver(
+                forName: AVAudioSession.mediaServicesWereResetNotification,
+                object: session,
+                queue: .main
+            ) { [weak self] _ in
+                guard let self else { return }
+                self.prepared = false
+                self.running = false
+                self.emit("MEDIA SERVICES RESET • tentando reconstruir runtime")
+                _ = self.ensureActive(reason: "media-services-reset")
+            }
+        )
+
+        observerTokens.append(
+            center.addObserver(
+                forName: .AVAudioEngineConfigurationChange,
+                object: engine,
+                queue: .main
+            ) { [weak self] _ in
+                guard let self else { return }
+                self.emit("ENGINE CONFIG CHANGE • \(self.snapshot().summary)")
+                _ = self.ensureActive(reason: "engine-config-change")
+            }
+        )
+    }
+
+    private func handleInterruption(_ notification: Notification) {
+        guard let raw = notification.userInfo?[AVAudioSessionInterruptionTypeKey] as? UInt,
+              let type = AVAudioSession.InterruptionType(rawValue: raw)
+        else {
+            emit("INTERRUPÇÃO desconhecida • \(snapshot().summary)")
+            return
+        }
+
+        switch type {
+        case .began:
+            emit("INTERRUPÇÃO começou • \(snapshot().summary)")
+        case .ended:
+            let rawOptions = notification.userInfo?[AVAudioSessionInterruptionOptionKey] as? UInt ?? 0
+            let options = AVAudioSession.InterruptionOptions(rawValue: rawOptions)
+            emit("INTERRUPÇÃO terminou • shouldResume=\(options.contains(.shouldResume) ? "sim" : "não") • \(snapshot().summary)")
+            _ = ensureActive(reason: "interruption-ended")
+        @unknown default:
+            emit("INTERRUPÇÃO tipo futuro • \(snapshot().summary)")
+        }
+    }
+
+    private func handleRouteChange(_ notification: Notification) {
+        let raw = notification.userInfo?[AVAudioSessionRouteChangeReasonKey] as? UInt ?? 0
+        let reason = AVAudioSession.RouteChangeReason(rawValue: raw)
+        emit("ROUTE CHANGE • reason=\(reason.map { String($0.rawValue) } ?? "?") • \(snapshot().summary)")
+        if running {
+            _ = ensureActive(reason: "route-change")
+        }
+    }
+
+    private func removeObservers() {
+        let center = NotificationCenter.default
+        observerTokens.forEach { center.removeObserver($0) }
+        observerTokens.removeAll()
+    }
+
+    private func emit(_ message: String) {
+        eventSink?("[BG][AUDIO] \(message)")
+    }
+}
+
+private final class BGHeadlessGate: @unchecked Sendable {
+    struct BufferedLine: Sendable {
+        let date: Date
+        let value: String
+        let visible: Bool
+    }
+
+    private let lock = NSLock()
+    private var enabledValue = false
+    private var suppressVisualEventsValue = false
+    private var bufferedLines: [BufferedLine] = []
+
+    func set(enabled: Bool, suppressVisualEvents: Bool) {
+        lock.lock()
+        enabledValue = enabled
+        suppressVisualEventsValue = enabled && suppressVisualEvents
+        lock.unlock()
+    }
+
+    func snapshot() -> (enabled: Bool, suppressVisualEvents: Bool) {
+        lock.lock()
+        defer { lock.unlock() }
+        return (enabledValue, suppressVisualEventsValue)
+    }
+
+    func buffer(_ value: String, visible: Bool, at date: Date = .now) {
+        lock.lock()
+        bufferedLines.append(BufferedLine(date: date, value: value, visible: visible))
+        if bufferedLines.count > 6_000 {
+            bufferedLines.removeFirst(bufferedLines.count - 5_000)
+        }
+        lock.unlock()
+    }
+
+    func drain() -> [BufferedLine] {
+        lock.lock()
+        defer { lock.unlock() }
+        let copy = bufferedLines
+        bufferedLines.removeAll(keepingCapacity: true)
+        return copy
+    }
+}
+
 @MainActor
 final class AppStore: ObservableObject {
     @Published var activity: ActivityMode?
@@ -689,6 +986,14 @@ final class AppStore: ObservableObject {
     private var lastContinuedTitleSuccesses = -1
     private var lastContinuedPublicStatus = ""
     private var lastContinuedTitleUpdateAt: Date?
+
+    // Build 123 BG Headless: intentionally non-published.
+    private let bgHeadlessGate = BGHeadlessGate()
+    private var bgHeadlessActive = false
+
+    // Build 124: independent runtime experiment. No gather/proof/socket logic
+    // depends on this object.
+    private let backgroundAudioRuntime = BackgroundAudioRuntime()
 
     private var continuedTaskIdentifierPrefix: String {
         let bundleID = Bundle.main.bundleIdentifier ?? "com.joaopedro.kinttany"
@@ -778,6 +1083,16 @@ final class AppStore: ObservableObject {
         // colocado em segundo plano.
         prepareContinuedProcessing(for: mode)
 
+        do {
+            try backgroundAudioRuntime.start { [weak self] message in
+                Task { @MainActor [weak self] in
+                    self?.diagnostic(message)
+                }
+            }
+        } catch {
+            diagnostic("[BG][AUDIO] FALHA ao iniciar • \(error.localizedDescription)")
+        }
+
         task = Task { [weak self] in
             guard let self else { return }
             await self.run(mode, runID: runID)
@@ -857,6 +1172,9 @@ final class AppStore: ObservableObject {
 
     private func completeRunCleanup(runID: UUID) {
         guard activeRunID == runID else { return }
+
+        backgroundAudioRuntime.stop()
+
         receiverTask?.cancel()
         traceTask?.cancel()
         receiverTask = nil
@@ -880,14 +1198,38 @@ final class AppStore: ObservableObject {
     /// remains ordered by the engine but can be coalesced/delayed by iOS without
     /// delaying ACK ingestion, movement or action frames.
     private func engineReporter(runID: UUID) -> AutomationEngine.Reporter {
-        { [weak self] event in
-            // Build 101: gather TRACE is hot-path telemetry only. Do not enqueue
-            // one MainActor task per hit/proof/progress/ACK while backgrounded.
-            // The authoritative gather state still stays inside AutomationEngine.
+        let gate = bgHeadlessGate
+        return { [weak self] event in
             if case .diagnostic(let value) = event,
                value.hasPrefix("[GATHER][TRACE]") {
                 return
             }
+
+            let bg = gate.snapshot()
+            if bg.enabled {
+                switch event {
+                case .log(let value):
+                    gate.buffer(value, visible: true)
+                    return
+                case .diagnostic(let value):
+                    gate.buffer(value, visible: false)
+                    return
+                default:
+                    break
+                }
+
+                // Safe gathering keeps authoritative counters/progress/failures,
+                // but drops MainActor-only presentation chatter entirely.
+                if bg.suppressVisualEvents {
+                    switch event {
+                    case .state, .target, .player, .world:
+                        return
+                    default:
+                        break
+                    }
+                }
+            }
+
             Task { @MainActor [weak self] in
                 self?.handleEngineEvent(event, runID: runID)
             }
@@ -1378,6 +1720,11 @@ final class AppStore: ObservableObject {
     }
 
     func log(_ value: String) {
+        if bgHeadlessActive {
+            bgHeadlessGate.buffer(value, visible: true)
+            return
+        }
+
         let line = timestamped(value)
         logs.append(line)
         diagnosticLogs.append(line)
@@ -1390,6 +1737,12 @@ final class AppStore: ObservableObject {
         // autenticação e erros úteis; payloads IN/OUT e detalhes internos da
         // engine continuam fora da interface.
         guard shouldKeepDiagnostic(value) else { return }
+
+        if bgHeadlessActive {
+            bgHeadlessGate.buffer(value, visible: false)
+            return
+        }
+
         diagnosticLogs.append(timestamped(value))
         if diagnosticLogs.count > 10_000 {
             diagnosticLogs.removeFirst(diagnosticLogs.count - 10_000)
@@ -1423,6 +1776,34 @@ final class AppStore: ObservableObject {
         }
 
         return false
+    }
+
+    private func flushBGHeadlessLogs() {
+        let buffered = bgHeadlessGate.drain()
+        guard !buffered.isEmpty else { return }
+
+        var visibleLines: [String] = []
+        var fullLines: [String] = []
+        visibleLines.reserveCapacity(buffered.count)
+        fullLines.reserveCapacity(buffered.count)
+
+        for item in buffered {
+            let line = timestamped(item.value, at: item.date)
+            if item.visible {
+                visibleLines.append(line)
+                fullLines.append(line)
+            } else if shouldKeepDiagnostic(item.value) {
+                fullLines.append(line)
+            }
+        }
+
+        if !visibleLines.isEmpty {
+            logs.append(contentsOf: visibleLines)
+        }
+        if !fullLines.isEmpty {
+            diagnosticLogs.append(contentsOf: fullLines)
+        }
+        trimLogs()
     }
 
     func clearDiagnosticLogs() {
@@ -3124,6 +3505,19 @@ final class AppStore: ObservableObject {
         case .background:
             if backgroundEnteredAt == nil { backgroundEnteredAt = .now }
             guard activity != nil else { return }
+
+            let safeGather = activity?.isGathering == true && activity?.isDunesGathering != true
+            bgHeadlessActive = true
+            bgHeadlessGate.set(enabled: true, suppressVisualEvents: safeGather)
+            diagnostic("[BG][HEADLESS] ATIVO • UI/SceneKit/WebKit fora da hierarquia • logs bufferizados • eventos visuais \(safeGather ? "suprimidos no gathering seguro" : "preservados por segurança")")
+
+            let audioSnapshot = backgroundAudioRuntime.snapshot()
+            diagnostic("[BG][AUDIO] entrada BG • \(audioSnapshot.summary)")
+            if !audioSnapshot.active {
+                let recovered = backgroundAudioRuntime.ensureActive(reason: "scene-background")
+                diagnostic("[BG][AUDIO] recovery na entrada BG • sucesso=\(recovered ? "sim" : "não") • \(backgroundAudioRuntime.snapshot().summary)")
+            }
+
             if continuedTaskObject != nil {
                 diagnostic("[BG] App em segundo plano • Continued Processing ATIVA • realtime preservado")
             } else if continuedTaskRequested {
@@ -3139,6 +3533,15 @@ final class AppStore: ObservableObject {
                 accumulatedBackgroundSeconds += max(0, Date.now.timeIntervalSince(enteredAt))
                 backgroundEnteredAt = nil
             }
+
+            bgHeadlessActive = false
+            bgHeadlessGate.set(enabled: false, suppressVisualEvents: false)
+            flushBGHeadlessLogs()
+            diagnostic("[BG][HEADLESS] INATIVO • UI reconstruída no foreground")
+            if activity != nil {
+                diagnostic("[BG][AUDIO] retorno FG • \(backgroundAudioRuntime.snapshot().summary)")
+            }
+
             if activity != nil {
                 if continuedTaskObject != nil {
                     diagnostic("[BG] App em primeiro plano • Continued Processing continua ativa")
@@ -3489,10 +3892,44 @@ final class AppStore: ObservableObject {
             return
         }
 
+        // Build 125: safe non-Dunes gathering has a second, independently active
+        // background execution source. Continued Processing expiration is no
+        // longer terminal when genuine audio playback is still alive. We complete
+        // the expired BGContinuedProcessingTask correctly, detach its bookkeeping
+        // and leave engine/receiver/Presence untouched.
+        if activity?.isGathering == true, activity?.isDunesGathering != true {
+            let before = backgroundAudioRuntime.snapshot()
+            let audioAlive = before.active || backgroundAudioRuntime.ensureActive(reason: "continued-processing-expiration")
+            let after = backgroundAudioRuntime.snapshot()
+
+            diagnostic("[BG][AUDIO] CP expirou • antes={\(before.summary)} • depois={\(after.summary)} • continuidade=\(audioAlive ? "sim" : "não")")
+
+            if audioAlive {
+                continuedTaskActivationWatchdog?.cancel()
+                continuedTaskActivationWatchdog = nil
+                continuedTaskObject = nil
+                continuedTaskRequested = false
+                continuedTaskMode = activity
+                continuedTaskIdentifier = nil
+                continuedTaskSubmissionAttempt = 0
+                continuedProgressSubunit = 0
+                lastContinuedTitleUpdateAt = nil
+
+                backgroundTask.expirationHandler = nil
+                backgroundTask.setTaskCompleted(success: false)
+                endLegacyBackgroundTask()
+
+                diagnostic("[BG] Continued Processing encerrou • gathering seguro PRESERVADO pelo runtime de áudio • Presence/engine mantidas")
+                return
+            }
+
+            diagnostic("[BG] Continued Processing encerrou e áudio não permaneceu ativo • aplicando encerramento seguro existente")
+        }
+
         // O mesmo callback é usado pelo sistema para expiração real e para um
         // encerramento solicitado pela superfície de Continued Processing.
-        // A API não informa qual dos dois ocorreu; trate-o como cancelamento
-        // externo neutro, preservando exatamente o cleanup seguro existente.
+        // A API não informa qual dos dois ocorreu; sem uma segunda fonte real de
+        // runtime, preserve o cleanup seguro existente.
         requestedStopReason = .backgroundExpiration
         terminalFailureHandled = true
         continuedTaskActivationWatchdog?.cancel()
@@ -3644,7 +4081,11 @@ final class AppStore: ObservableObject {
     }
 
     private func timestamped(_ value: String) -> String {
-        "\(Date.now.formatted(date: .omitted, time: .standard))  \(value)"
+        timestamped(value, at: .now)
+    }
+
+    private func timestamped(_ value: String, at date: Date) -> String {
+        "\(date.formatted(date: .omitted, time: .standard))  \(value)"
     }
 
     private func trimLogs() {

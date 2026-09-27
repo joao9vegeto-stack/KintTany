@@ -11,6 +11,7 @@ struct RootView: View {
     @State private var showFullLog = false
     @State private var showCharacterStats = false
     @State private var showDailyQuests = false
+    @State private var backgroundVisualsSuspended = false
     @FocusState private var goalFieldFocused: Bool
 
     private let columns = [
@@ -20,25 +21,32 @@ struct RootView: View {
 
     var body: some View {
         ZStack {
-            ReplicaDashboardHost(
-                showLogin: $showLogin,
-                showFullLog: $showFullLog,
-                showCharacterStats: $showCharacterStats,
-                showDailyQuests: $showDailyQuests
-            )
-            .environmentObject(app)
+            if backgroundVisualsSuspended {
+                // BG Headless: this physically removes ReplicaUI, SCNView and
+                // hidden WKWebView from the live hierarchy while backgrounded.
+                Color.clear
+                    .ignoresSafeArea()
+            } else {
+                ReplicaDashboardHost(
+                    showLogin: $showLogin,
+                    showFullLog: $showFullLog,
+                    showCharacterStats: $showCharacterStats,
+                    showDailyQuests: $showDailyQuests
+                )
+                .environmentObject(app)
 
-            if app.hasSession,
-               app.characterArtwork == nil,
-               let cookie = app.authenticatedCookieForCharacter,
-               !cookie.isEmpty {
-                CharacterArtworkCaptureView(cookie: cookie) { image in
-                    app.storeCharacterArtwork(image)
+                if app.hasSession,
+                   app.characterArtwork == nil,
+                   let cookie = app.authenticatedCookieForCharacter,
+                   !cookie.isEmpty {
+                    CharacterArtworkCaptureView(cookie: cookie) { image in
+                        app.storeCharacterArtwork(image)
+                    }
+                    .frame(width: 220, height: 260)
+                    .opacity(0.001)
+                    .allowsHitTesting(false)
+                    .accessibilityHidden(true)
                 }
-                .frame(width: 220, height: 260)
-                .opacity(0.001)
-                .allowsHitTesting(false)
-                .accessibilityHidden(true)
             }
         }
         .preferredColorScheme(.light)
@@ -76,7 +84,18 @@ struct RootView: View {
             }
         }
         .onChange(of: scenePhase) { _, newPhase in
-            app.handleScenePhase(newPhase)
+            switch newPhase {
+            case .background:
+                backgroundVisualsSuspended = true
+                app.handleScenePhase(newPhase)
+            case .active:
+                app.handleScenePhase(newPhase)
+                backgroundVisualsSuspended = false
+            case .inactive:
+                app.handleScenePhase(newPhase)
+            @unknown default:
+                app.handleScenePhase(newPhase)
+            }
         }
         .task {
             await app.refreshCharacterProfile()

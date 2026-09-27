@@ -1732,10 +1732,6 @@ actor AutomationEngine {
 
     private var currentGatherSignature: String?
     private var currentGatherKind: String?
-    /// Último frame de ação de gather aceito como estado ativo. O heartbeat de
-    /// Presence precisa repetir este frame, e não um pos vazio que equivale a
-    /// limpar chop/mine enquanto o iOS atrasa a task em background.
-    private var activeGatherAction: [String: Any]?
     private var currentGatherKeys = Set<String>()
     private var harvestProof = ""
     private var harvestProofSerial = 0
@@ -2952,7 +2948,6 @@ actor AutomationEngine {
 
     private func clearAction() async throws {
         activeFishingAction = nil
-        activeGatherAction = nil
         position.y = 0.25
         try await sendPosition(moving: false)
     }
@@ -3032,12 +3027,7 @@ actor AutomationEngine {
                 // o heartbeat precisa continuar enviando act=fish + fc/fr/fph.
                 // Um pos sem act equivale ao clearAct() usado pelo cliente Node
                 // e podia cancelar silenciosamente a pesca antes do fish_bite.
-                if let action = activeFishingAction {
-                    try await sendPosition(moving: false, action: action)
-                } else if let action = activeGatherAction {
-                    // Build 113: no BG heartbeat is allowed to clear an in-flight
-                    // chop/mine. Re-send only the latest authoritative action
-                    // frame; no catch-up/burst and no extra hit is generated.
+                if region == "pond", let action = activeFishingAction {
                     try await sendPosition(moving: false, action: action)
                 } else {
                     try await sendPosition(moving: false)
@@ -3064,10 +3054,8 @@ actor AutomationEngine {
 
     private func runGather(mode: ActivityMode, goal: Int) async throws {
         activeGatherMode = mode
-        activeGatherAction = nil
         defer {
-            activeGatherAction = nil
-            activeGatherMode = nil
+                activeGatherMode = nil
         }
         // Build 62: ordinary Gathering reaches this point with its tool already
         // materialized before Presence; Dunes keeps its dedicated preflight.
@@ -3612,7 +3600,6 @@ actor AutomationEngine {
 
     private func harvest(seed: GatherSeed, mode: ActivityMode, handshakeTries: Int) async throws -> HarvestResult {
         let kind = seed.kind
-        activeGatherAction = nil
         currentGatherSignature = seed.signature
         currentGatherKind = kind
         currentGatherKeys = Set(seed.keys)
@@ -3623,10 +3610,6 @@ actor AutomationEngine {
         harvestHM = 99
         harvestLoot = nil
         harvestClearSeen = false
-        gatherTraceHitSentAtMS = nil
-        gatherTraceFirstProofAtMS = nil
-        gatherTraceFirstProgressAtMS = nil
-        gatherTraceTarget = seed.targetKey
 
         let tool = activeGatherToolType ?? ActivityToolPolicy.requiredTool(for: mode) ?? (kind == "tree" ? "tool_axe" : "tool_pickaxe")
         try await equip(tool)
@@ -3651,11 +3634,6 @@ actor AutomationEngine {
             return (Int(parts.first ?? "0") ?? 0, Int(parts.dropFirst().first ?? "0") ?? 0)
         }
 
-        func sendGatherFrame(_ action: [String: Any]) async throws {
-            activeGatherAction = action
-            try await sendPosition(moving: false, action: action)
-        }
-
         func sendProfile(_ second: Bool, progressive: Bool) async throws {
             if safeStopReason != nil { return }
             var maxSchedulerDelayMS = 0
@@ -3674,7 +3652,7 @@ actor AutomationEngine {
                     if index > 0 { try await waitRelative(gap) }
                     guard try await maySendGatherAction(for: mode) else { return }
                     position.y = 0.25 + delta
-                    try await sendGatherFrame(["act": "chop", "eq": tool])
+                    try await sendPosition(moving: false, action: ["act": "chop", "eq": tool])
                 }
             } else {
                 let tile = targetTile()
@@ -3691,7 +3669,7 @@ actor AutomationEngine {
                         let shape = Self.mineMP1[index] / shapeMax
                         let value = min(1, mineProgress + max(0, next - mineProgress) * shape)
                         position.y = 0.25 + Self.mineY1[index]
-                        try await sendGatherFrame(["act": "mine", "eq": tool, "mc": tile.0, "mr": tile.1, "mp": value])
+                        try await sendPosition(moving: false, action: ["act": "mine", "eq": tool, "mc": tile.0, "mr": tile.1, "mp": value])
                         mineProgress = max(mineProgress, value)
                     }
                 } else {
@@ -3700,7 +3678,7 @@ actor AutomationEngine {
                         guard try await maySendGatherAction(for: mode) else { return }
                         mineProgress = max(mineProgress, mpProfile[index])
                         position.y = 0.25 + yProfile[index % yProfile.count]
-                        try await sendGatherFrame(["act": "mine", "eq": tool, "mc": tile.0, "mr": tile.1, "mp": mineProgress])
+                        try await sendPosition(moving: false, action: ["act": "mine", "eq": tool, "mc": tile.0, "mr": tile.1, "mp": mineProgress])
                     }
                 }
             }
@@ -3709,11 +3687,6 @@ actor AutomationEngine {
                gatherLastTimingDiagnosticAt == 0 || nowMS - gatherLastTimingDiagnosticAt >= GatherTimingPolicy.timingDiagnosticCooldownMS {
                 gatherLastTimingDiagnosticAt = nowMS
                 reporter(.diagnostic("[GATHER][TIMING] scheduler atrasou até \(maxSchedulerDelayMS)ms • perfil preservado com espaçamento relativo • nenhuma rajada enviada"))
-            }
-            if maxSchedulerDelayMS > 0,
-               gatherTraceLastSchedulerReportAtMS == 0 || nowMS - gatherTraceLastSchedulerReportAtMS >= 5_000 {
-                gatherTraceLastSchedulerReportAtMS = nowMS
-                reporter(.diagnostic("[GATHER][TRACE] scheduler • alvo=\(seed.targetKey) • drift_max=\(maxSchedulerDelayMS)ms • perfil=\(kind)"))
             }
         }
 
@@ -3731,10 +3704,6 @@ actor AutomationEngine {
             totalHits += 1
             reporter(.hitSent)
             lastHitAt = nowMS
-            gatherTraceHitSentAtMS = lastHitAt
-            gatherTraceFirstProofAtMS = nil
-            gatherTraceFirstProgressAtMS = nil
-            reporter(.diagnostic("[GATHER][TRACE] hit enviado • alvo=\(seed.targetKey) • h=\(harvestH)/\(harvestHM < 99 ? String(harvestHM) : "?")"))
         }
 
         func waitForAck(proofBefore: Int, wearBefore: Int, hBefore: Int, timeoutMS: Int) async throws -> HarvestAck {
@@ -3746,12 +3715,7 @@ actor AutomationEngine {
                 return nil
             }
 
-            if let immediate = inspect() {
-                let elapsed = gatherTraceHitSentAtMS.map { max(0, Int((nowMS - $0).rounded())) } ?? -1
-                reporter(.diagnostic("[GATHER][TRACE] ACK imediato • alvo=\(seed.targetKey) • total=\(elapsed)ms • h=\(harvestH)/\(harvestHM)"))
-                return immediate
-            }
-            let ackWaitStartedAt = nowMS
+            if let immediate = inspect() { return immediate }
             let deadline = nowMS + Double(timeoutMS)
             var eventSerial = await gatherEventGate.serial
             while nowMS < deadline {
@@ -3759,19 +3723,11 @@ actor AutomationEngine {
                 let remaining = max(1, Int(deadline - nowMS))
                 let signaled = try await gatherEventGate.wait(after: eventSerial, timeoutMS: remaining)
                 eventSerial = await gatherEventGate.serial
-                if let state = inspect() {
-                    let elapsed = gatherTraceHitSentAtMS.map { max(0, Int((nowMS - $0).rounded())) } ?? -1
-                    reporter(.diagnostic("[GATHER][TRACE] ACK aceito • alvo=\(seed.targetKey) • total=\(elapsed)ms • espera=\(max(0, Int((nowMS - ackWaitStartedAt).rounded())))ms • h=\(harvestH)/\(harvestHM)"))
-                    return state
-                }
+                if let state = inspect() { return state }
                 if !signaled { break }
             }
 
-            if let final = inspect() {
-                let elapsed = gatherTraceHitSentAtMS.map { max(0, Int((nowMS - $0).rounded())) } ?? -1
-                reporter(.diagnostic("[GATHER][TRACE] ACK no limite • alvo=\(seed.targetKey) • total=\(elapsed)ms • espera=\(max(0, Int((nowMS - ackWaitStartedAt).rounded())))ms • h=\(harvestH)/\(harvestHM)"))
-                return final
-            }
+            if let final = inspect() { return final }
 
             // Proof e wear podem chegar em mensagens separadas. Em vez de polling
             // de 20 ms (sensível ao scheduler em background), aguarde diretamente
@@ -3784,14 +3740,8 @@ actor AutomationEngine {
                     after: beforeGrace,
                     timeoutMS: GatherTimingPolicy.eventGraceMS
                 )
-                if let graceState = inspect() {
-                    let elapsed = gatherTraceHitSentAtMS.map { max(0, Int((nowMS - $0).rounded())) } ?? -1
-                    reporter(.diagnostic("[GATHER][TRACE] ACK grace • alvo=\(seed.targetKey) • total=\(elapsed)ms • h=\(harvestH)/\(harvestHM)"))
-                    return graceState
-                }
+                if let graceState = inspect() { return graceState }
             }
-            let elapsed = gatherTraceHitSentAtMS.map { max(0, Int((nowMS - $0).rounded())) } ?? -1
-            reporter(.diagnostic("[GATHER][TRACE] ACK timeout • alvo=\(seed.targetKey) • total=\(elapsed)ms • espera=\(max(0, Int((nowMS - ackWaitStartedAt).rounded())))ms • h=\(harvestH)/\(harvestHM)"))
             return .timeout
         }
 
@@ -3822,9 +3772,6 @@ actor AutomationEngine {
                 if handshake != .timeout { break }
 
                 if attempt == 2 {
-                    // Reset explícito do handshake: impedir que o heartbeat
-                    // ressuscite o frame anterior durante esta janela.
-                    activeGatherAction = nil
                     position.y = 0.25
                     try await sendPosition(moving: false)
                     try await sleep(90)
@@ -3877,10 +3824,6 @@ actor AutomationEngine {
             let ack = try await waitForAck(proofBefore: proofBefore, wearBefore: wearBefore, hBefore: hBefore, timeoutMS: 1_400)
             if ack == .felled { break }
             if ack != .accepted {
-                let elapsed = gatherTraceHitSentAtMS.map { max(0, Int((nowMS - $0).rounded())) } ?? -1
-                let proofMS = gatherTraceFirstProofAtMS.flatMap { sent in gatherTraceHitSentAtMS.map { max(0, Int((sent - $0).rounded())) } } ?? -1
-                let progressMS = gatherTraceFirstProgressAtMS.flatMap { seen in gatherTraceHitSentAtMS.map { max(0, Int((seen - $0).rounded())) } } ?? -1
-                reporter(.diagnostic("[GATHER][TRACE] ACK incompleto • alvo=\(seed.targetKey) • total=\(elapsed)ms • proof=\(proofMS)ms • progresso=\(progressMS)ms • h=\(harvestH)/\(harvestHM)"))
                 reporter(.diagnostic("[GATHER] hit sem proof+wear fresco h=\(harvestH) hm=\(harvestHM)"))
                 break
             }
