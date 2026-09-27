@@ -3030,14 +3030,19 @@ actor AutomationEngine {
     private func heartbeat() async {
         while !Task.isCancelled {
             do {
-                try await sleep(3_000)
+                // Build 128: the captured official Trout client repeats the active
+                // fish action roughly every 2.5 s. Outside an active fishing cast
+                // retain the established 3 s heartbeat used by other activities.
+                let intervalMS = activeFishingAction == nil
+                    ? 3_000
+                    : FishingRecoveryPolicy.fishingHeartbeatMS
+                try await sleep(intervalMS)
                 if Task.isCancelled { return }
 
-                // Paridade com Presence._sendPos() da v5.2: durante um cast,
-                // o heartbeat precisa continuar enviando act=fish + fc/fr/fph.
-                // Um pos sem act equivale ao clearAct() usado pelo cliente Node
-                // e podia cancelar silenciosamente a pesca antes do fish_bite.
-                if region == "pond", let action = activeFishingAction {
+                // A fishing action must survive in BOTH Pond and ElderGrove.
+                // The previous region == "pond" gate caused Trout heartbeats to
+                // send a plain pos frame, which implicitly cleared the cast.
+                if let action = activeFishingAction {
                     try await sendPosition(moving: false, action: action)
                 } else {
                     try await sendPosition(moving: false)
@@ -4825,9 +4830,32 @@ actor AutomationEngine {
             guard fishTargetStillValid(target, generation: generation) else { continue }
 
             try await sendFishingPhase(target, phase: 1)
-            try await sleep(180)
+            let phase1SentAt = nowMS
+
+            // Manual Trout capture (Build 128 baseline):
+            // fph=1 -> fph=2 ~= 2.35-2.60 s and fph=1 -> grant ~= 3.80 s.
+            // The previous 180 ms + 220 ms sequence reached the grant almost
+            // ten times too early and the server rejected it as fish_action_too_fast.
+            try await sleep(FishingRecoveryPolicy.phase1ToPhase2MS)
+
+            guard fishTargetStillValid(target, generation: generation) else {
+                try? await clearAction()
+                fishingStats.spotChanged += 1
+                reporter(.failure("Peixe #\(fishNumber) • \(targetLabel) • spot mudou antes da fase 2"))
+                recordFishTargetFailure(target, reason: "spot mudou antes da fase 2")
+                try await sleep(650)
+                continue
+            }
+
             try await sendFishingPhase(target, phase: 2)
-            try await sleep(220)
+            let phase2SentAt = nowMS
+            let grantDeadline = FishingRecoveryPolicy.grantDeadlineMS(
+                phase1SentAt: phase1SentAt,
+                phase2SentAt: phase2SentAt
+            )
+            if nowMS < grantDeadline {
+                try await sleep(Int(ceil(grantDeadline - nowMS)))
+            }
 
             guard fishTargetStillValid(target, generation: generation) else {
                 try? await clearAction()
@@ -4859,6 +4887,10 @@ actor AutomationEngine {
                         reporter(.log("⚠️ fish_action_stale #\(fishingStats.staleRejects) • conferindo inventário e ressincronizando Pond"))
                         await verifyFishingInventoryAfterStale()
                         try await recoverFishingAfterStale(stand: fishingStand)
+                    } else if FishingRecoveryPolicy.isTooFast(reason) {
+                        reporter(.failure("Peixe #\(fishNumber) • \(targetLabel) • fish_action_too_fast"))
+                        reporter(.diagnostic("[FISH] servidor recusou timing mesmo após cadência capturada • preservando spot e aguardando estado autoritativo"))
+                        try await sleep(FishingRecoveryPolicy.staleRecoveryMS)
                     } else {
                         reporter(.failure("Peixe #\(fishNumber) • \(targetLabel) • \(reason)"))
                         try await sleep(FishingRecoveryPolicy.staleRecoveryMS)
@@ -4895,6 +4927,10 @@ actor AutomationEngine {
                     reporter(.log("⚠️ fish_action_stale #\(fishingStats.staleRejects) • conferindo inventário e aguardando novo estado do spot"))
                     await verifyFishingInventoryAfterStale()
                     try await recoverFishingAfterStale(stand: fishingStand)
+                } else if FishingRecoveryPolicy.isTooFast(reason) {
+                    reporter(.failure("Peixe #\(fishNumber) • \(targetLabel) • confirmação falhou: fish_action_too_fast"))
+                    reporter(.diagnostic("[FISH] timing recusado pelo servidor após cadência capturada • aguardando antes de novo cast"))
+                    try await sleep(FishingRecoveryPolicy.staleRecoveryMS)
                 } else {
                     reporter(.failure("Peixe #\(fishNumber) • \(targetLabel) • confirmação falhou: \(reason)"))
                     try await sleep(FishingRecoveryPolicy.staleRecoveryMS)
@@ -7565,12 +7601,33 @@ struct FishingRecoveryPolicy {
     static let biteScheduleTimeoutMS: Double = 3_500
     static let betweenCatchMS = 4_800
     static let staleRecoveryMS = 4_500
+
+    // Build 128: values measured from four successful manual Trout catches in
+    // the official client. fph=1 -> fph=2 ranged ~2.35-2.60 s; fph=1 -> grant
+    // stayed ~3.80 s. Keep a minimum 1.30 s after phase 2 as a conservative
+    // guard against scheduler jitter.
+    static let fishingHeartbeatMS = 2_500
+    static let phase1ToPhase2MS = 2_500
+    static let phase1ToGrantMS: Double = 3_800
+    static let phase2ToGrantMinimumMS: Double = 1_300
+
     /// Paridade direta com fishing-bot.js v5.2: diferenças >5 s priorizam o
     /// spot com maior TTL antes da distância.
     static let ttlPriorityDifferenceMS: Double = 5_000
 
+    static func grantDeadlineMS(phase1SentAt: Double, phase2SentAt: Double) -> Double {
+        max(
+            phase1SentAt + phase1ToGrantMS,
+            phase2SentAt + phase2ToGrantMinimumMS
+        )
+    }
+
     static func isStale(_ text: String) -> Bool {
         text.range(of: "fish_action_stale", options: [.caseInsensitive, .diacriticInsensitive]) != nil
+    }
+
+    static func isTooFast(_ text: String) -> Bool {
+        text.range(of: "fish_action_too_fast", options: [.caseInsensitive, .diacriticInsensitive]) != nil
     }
 }
 

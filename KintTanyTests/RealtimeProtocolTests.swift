@@ -293,6 +293,32 @@ final class RealtimeProtocolTests: XCTestCase {
         XCTAssertFalse(FishingRecoveryPolicy.isStale("no_bite"))
     }
 
+    func testBuild128TroutTimingMatchesSuccessfulManualCapture() {
+        XCTAssertEqual(FishingRecoveryPolicy.fishingHeartbeatMS, 2_500)
+        XCTAssertEqual(FishingRecoveryPolicy.phase1ToPhase2MS, 2_500)
+        XCTAssertEqual(FishingRecoveryPolicy.phase1ToGrantMS, 3_800)
+        XCTAssertEqual(FishingRecoveryPolicy.phase2ToGrantMinimumMS, 1_300)
+
+        XCTAssertEqual(
+            FishingRecoveryPolicy.grantDeadlineMS(
+                phase1SentAt: 10_000,
+                phase2SentAt: 12_500
+            ),
+            13_800
+        )
+        XCTAssertEqual(
+            FishingRecoveryPolicy.grantDeadlineMS(
+                phase1SentAt: 10_000,
+                phase2SentAt: 13_200
+            ),
+            14_500
+        )
+
+        XCTAssertTrue(FishingRecoveryPolicy.isTooFast("fish_action_too_fast"))
+        XCTAssertTrue(FishingRecoveryPolicy.isTooFast("grant failed: FISH_ACTION_TOO_FAST"))
+        XCTAssertFalse(FishingRecoveryPolicy.isTooFast("fish_action_stale"))
+    }
+
     func testGatherRetryPolicyDefersPureProofMissWithoutFailureStreak() {
         var policy = GatherRetryPolicy()
         policy.deferProofMiss(signature: "tree:3,26", nowMS: 1_000)
