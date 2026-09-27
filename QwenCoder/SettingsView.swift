@@ -7,36 +7,56 @@ struct SettingsView: View {
     var body: some View {
         NavigationStack {
             Form {
+                Section("Hugging Face") {
+                    if settings.requiresAuthentication {
+                        Label(
+                            settings.apiKey.isEmpty ? "Token necessário" : "Token configurado",
+                            systemImage: settings.apiKey.isEmpty ? "exclamationmark.triangle.fill" : "checkmark.circle.fill"
+                        )
+                        .foregroundStyle(settings.apiKey.isEmpty ? .orange : .green)
+
+                        SecureField("Token HF (hf_…)", text: $settings.apiKey)
+                            .textInputAutocapitalization(.never)
+                            .autocorrectionDisabled()
+
+                        Link(
+                            "Criar ou copiar token na Hugging Face",
+                            destination: URL(string: "https://huggingface.co/settings/tokens")!
+                        )
+
+                        Text("O roteador da Hugging Face exige autenticação. Uma conta gratuita recebe créditos mensais limitados para Inference Providers.")
+                            .font(.footnote)
+                            .foregroundStyle(.secondary)
+                    }
+                }
+
                 Section("Servidor") {
                     TextField("Endpoint", text: $settings.endpoint)
-                        .textInputAutocapitalization(.never)
-                        .autocorrectionDisabled()
-
-                    SecureField("API key / token", text: $settings.apiKey)
                         .textInputAutocapitalization(.never)
                         .autocorrectionDisabled()
 
                     TextField("Modelo", text: $settings.model)
                         .textInputAutocapitalization(.never)
                         .autocorrectionDisabled()
-                }
 
-                Section("Prompt do sistema") {
-                    TextEditor(text: $settings.systemPrompt)
-                        .frame(minHeight: 140)
-                }
-
-                Section("Qwen3-Coder") {
-                    LabeledContent("Padrão", value: "30B-A3B-Instruct")
-                    Text("O app fala com qualquer endpoint compatível com a API OpenAI. Para Hugging Face, cole um token no campo acima. Para vLLM/SGLang próprio, troque o endpoint.")
+                    Text("Você também pode usar um servidor próprio vLLM/SGLang/OpenAI-compatible. Nesse caso, o token pode ficar vazio se o seu servidor não exigir autenticação.")
                         .font(.footnote)
                         .foregroundStyle(.secondary)
                 }
 
+                Section("Prompt do sistema") {
+                    TextEditor(text: $settings.systemPrompt)
+                        .frame(minHeight: 130)
+                }
+
+                Section("Qwen3-Coder") {
+                    LabeledContent("Modelo", value: "30B-A3B-Instruct")
+                    LabeledContent("Conexão", value: settings.isReadyForChat ? "Pronta" : "Falta configurar")
+                }
+
                 Section {
-                    Button("Restaurar padrão") {
-                        settings.endpoint = "https://router.huggingface.co/v1"
-                        settings.model = "Qwen/Qwen3-Coder-30B-A3B-Instruct"
+                    Button("Restaurar Hugging Face + Qwen3-Coder") {
+                        settings.restoreHuggingFaceDefaults()
                     }
                 }
             }
@@ -44,6 +64,7 @@ struct SettingsView: View {
             .toolbar {
                 ToolbarItem(placement: .confirmationAction) {
                     Button("OK") { dismiss() }
+                        .disabled(!settings.isReadyForChat)
                 }
             }
         }

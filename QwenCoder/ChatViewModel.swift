@@ -14,6 +14,11 @@ final class ChatViewModel: ObservableObject {
         let prompt = input.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !prompt.isEmpty, !isGenerating else { return }
 
+        guard settings.isReadyForChat else {
+            errorMessage = ChatServiceError.authenticationRequired.localizedDescription
+            return
+        }
+
         input = ""
         errorMessage = nil
 
@@ -43,7 +48,7 @@ final class ChatViewModel: ObservableObject {
 
                 if let index = messages.firstIndex(where: { $0.id == assistantID }),
                    messages[index].content.isEmpty {
-                    messages[index].content = "Sem conteúdo retornado pelo servidor."
+                    messages[index].content = "O servidor encerrou a resposta sem retornar texto."
                 }
             } catch {
                 if let index = messages.firstIndex(where: { $0.id == assistantID }) {
@@ -66,6 +71,10 @@ final class ChatViewModel: ObservableObject {
     func clear() {
         stop()
         messages.removeAll()
+        errorMessage = nil
+    }
+
+    func clearError() {
         errorMessage = nil
     }
 }

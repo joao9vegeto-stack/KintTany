@@ -17,6 +17,11 @@ final class ChatService {
                         throw ChatServiceError.invalidEndpoint
                     }
 
+                    if trimmed.lowercased().contains("router.huggingface.co"),
+                       apiKey.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                        throw ChatServiceError.authenticationRequired
+                    }
+
                     var apiMessages: [APIChatMessage] = []
                     if !systemPrompt.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
                         apiMessages.append(.init(role: "system", content: systemPrompt))
@@ -36,11 +41,14 @@ final class ChatService {
                     request.httpMethod = "POST"
                     request.setValue("application/json", forHTTPHeaderField: "Content-Type")
                     request.setValue("text/event-stream", forHTTPHeaderField: "Accept")
-                    if !apiKey.isEmpty {
-                        request.setValue("Bearer \(apiKey)", forHTTPHeaderField: "Authorization")
+
+                    let cleanKey = apiKey.trimmingCharacters(in: .whitespacesAndNewlines)
+                    if !cleanKey.isEmpty {
+                        request.setValue("Bearer \(cleanKey)", forHTTPHeaderField: "Authorization")
                     }
+
                     request.httpBody = try JSONEncoder().encode(payload)
-                    request.timeoutInterval = 120
+                    request.timeoutInterval = 180
 
                     let (bytes, response) = try await URLSession.shared.bytes(for: request)
                     guard let http = response as? HTTPURLResponse else {
@@ -48,12 +56,16 @@ final class ChatService {
                     }
 
                     guard (200...299).contains(http.statusCode) else {
-                        var body = ""
-                        for try await line in bytes.lines {
-                            body += line
-                            if body.count > 2000 { break }
+                        switch http.statusCode {
+                        case 401:
+                            throw ChatServiceError.authenticationRequired
+                        case 402, 429:
+                            throw ChatServiceError.creditsUnavailable
+                        case 403:
+                            throw ChatServiceError.forbidden
+                        default:
+                            throw ChatServiceError.badStatus(http.statusCode)
                         }
-                        throw ChatServiceError.badStatus(http.statusCode, body)
                     }
 
                     for try await line in bytes.lines {

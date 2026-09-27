@@ -18,12 +18,20 @@ struct ContentView: View {
                 }
 
                 if let error = viewModel.errorMessage {
-                    Text(error)
-                        .font(.footnote)
-                        .foregroundStyle(.red)
-                        .frame(maxWidth: .infinity, alignment: .leading)
-                        .padding(.horizontal)
-                        .padding(.top, 8)
+                    HStack(alignment: .top, spacing: 10) {
+                        Image(systemName: "exclamationmark.triangle.fill")
+                        Text(error)
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                        Button {
+                            viewModel.clearError()
+                        } label: {
+                            Image(systemName: "xmark.circle.fill")
+                        }
+                    }
+                    .font(.footnote)
+                    .foregroundStyle(.red)
+                    .padding(.horizontal)
+                    .padding(.top, 8)
                 }
 
                 composer
@@ -49,6 +57,12 @@ struct ContentView: View {
             .sheet(isPresented: $showSettings) {
                 SettingsView()
                     .environmentObject(settings)
+                    .interactiveDismissDisabled(!settings.isReadyForChat)
+            }
+            .onAppear {
+                if !settings.isReadyForChat {
+                    showSettings = true
+                }
             }
         }
     }
@@ -56,16 +70,17 @@ struct ContentView: View {
     private var statusHeader: some View {
         HStack(spacing: 8) {
             Circle()
-                .fill(settings.apiKey.isEmpty ? Color.orange : Color.green)
+                .fill(settings.isReadyForChat ? Color.green : Color.orange)
                 .frame(width: 8, height: 8)
 
             VStack(alignment: .leading, spacing: 2) {
                 Text(settings.model)
                     .font(.caption.weight(.semibold))
                     .lineLimit(1)
-                Text(settings.apiKey.isEmpty
-                     ? "Configure um token ou endpoint sem autenticação"
-                     : settings.endpoint)
+
+                Text(settings.isReadyForChat
+                     ? settings.endpoint
+                     : "Configuração necessária antes de conversar")
                     .font(.caption2)
                     .foregroundStyle(.secondary)
                     .lineLimit(1)
@@ -90,12 +105,14 @@ struct ContentView: View {
             Text("Qwen3-Coder no iPhone")
                 .font(.title3.bold())
 
-            Text("Pergunte sobre Swift, SwiftUI, bugs, arquitetura, scripts ou qualquer outro código.")
+            Text(settings.isReadyForChat
+                 ? "Pergunte sobre Swift, SwiftUI, bugs, arquitetura, scripts ou qualquer outro código."
+                 : "Configure a conexão primeiro. O app não enviará mensagens sem uma conexão válida.")
                 .multilineTextAlignment(.center)
                 .foregroundStyle(.secondary)
                 .padding(.horizontal, 34)
 
-            if settings.apiKey.isEmpty {
+            if !settings.isReadyForChat {
                 Button("Configurar conexão") {
                     showSettings = true
                 }
@@ -146,13 +163,17 @@ struct ContentView: View {
                 .buttonStyle(.borderedProminent)
             } else {
                 Button {
-                    viewModel.send(using: settings)
+                    if settings.isReadyForChat {
+                        viewModel.send(using: settings)
+                    } else {
+                        showSettings = true
+                    }
                 } label: {
-                    Image(systemName: "arrow.up")
+                    Image(systemName: settings.isReadyForChat ? "arrow.up" : "gearshape.fill")
                         .frame(width: 42, height: 42)
                 }
                 .buttonStyle(.borderedProminent)
-                .disabled(viewModel.input.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+                .disabled(viewModel.input.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty && settings.isReadyForChat)
             }
         }
         .padding()

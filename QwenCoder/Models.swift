@@ -37,17 +37,26 @@ struct StreamEnvelope: Decodable {
 
 enum ChatServiceError: LocalizedError {
     case invalidEndpoint
-    case badStatus(Int, String)
+    case authenticationRequired
+    case forbidden
+    case creditsUnavailable
+    case badStatus(Int)
     case malformedResponse
 
     var errorDescription: String? {
         switch self {
         case .invalidEndpoint:
-            return "Endpoint inválido."
-        case .badStatus(let code, let body):
-            return "Servidor respondeu HTTP \(code): \(body)"
+            return "Endpoint inválido. Confira a URL em Configurações."
+        case .authenticationRequired:
+            return "A Hugging Face recusou a conexão porque não há um token válido. Abra Configurações e cole um token HF."
+        case .forbidden:
+            return "O token não tem acesso a esta solicitação. Confira o token ou o provedor selecionado."
+        case .creditsUnavailable:
+            return "O provedor recusou a inferência por falta de créditos disponíveis. Tente outro provedor/endpoint."
+        case .badStatus(let code):
+            return "O servidor respondeu HTTP \(code). Confira endpoint, modelo e credenciais."
         case .malformedResponse:
-            return "Resposta do servidor em formato inesperado."
+            return "O servidor respondeu em um formato inesperado."
         }
     }
 }

@@ -1,14 +1,14 @@
 # Qwen Coder iOS
 
-Aplicativo iOS nativo em SwiftUI para conversar com Qwen3-Coder através de um endpoint OpenAI-compatible.
+Aplicativo iOS nativo em SwiftUI para conversar com o Qwen3-Coder por um endpoint OpenAI-compatible.
 
-## Modelo padrão
-- Qwen/Qwen3-Coder-30B-A3B-Instruct
+## Padrão
+- Endpoint: `https://router.huggingface.co/v1`
+- Modelo: `Qwen/Qwen3-Coder-30B-A3B-Instruct:preferred`
 
-## Endpoint padrão
-- https://router.huggingface.co/v1
+O roteador da Hugging Face exige um token de usuário. O app abre a configuração automaticamente quando o token ainda não foi informado e não envia requisições sem autenticação.
 
-Você também pode apontar para qualquer servidor vLLM/SGLang/OpenAI-compatible, inclusive um servidor próprio.
+Também é possível usar um endpoint próprio vLLM/SGLang/OpenAI-compatible, com ou sem autenticação.
 
 ## Build
-O workflow `.github/workflows/ios.yml` gera um IPA unsigned próprio para sideload/reassinatura.
+O workflow `.github/workflows/ios.yml` gera um IPA unsigned para sideload/reassinatura.
