@@ -135,8 +135,12 @@ jobs:
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           git add -A
-          git commit -m "AItest import SwiftAgent 2.0.1"
-          git push origin HEAD:AItest
+          if git diff --cached --quiet; then
+            echo "SwiftAgent tree already committed; continuing."
+          else
+            git commit -m "AItest import SwiftAgent 2.0.1"
+            git push origin HEAD:AItest
+          fi
 
   build_ipa:
     needs: import_test
