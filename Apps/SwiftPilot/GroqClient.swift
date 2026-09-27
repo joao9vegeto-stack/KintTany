@@ -1,5 +1,6 @@
 import Foundation
 
+@MainActor
 struct GroqClient {
     let apiKey: String
     let model: String
