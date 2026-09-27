@@ -1,0 +1,36 @@
+name: QwenCoder
+
+options:
+  bundleIdPrefix: com.joaopedro
+  deploymentTarget:
+    iOS: "17.0"
+
+targets:
+  QwenCoder:
+    type: application
+    platform: iOS
+    sources:
+      - path: QwenCoder
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: com.joaopedro.qwencoder
+        PRODUCT_NAME: QwenCoder
+        SWIFT_VERSION: 5.0
+        TARGETED_DEVICE_FAMILY: "1"
+        CODE_SIGNING_ALLOWED: NO
+        CODE_SIGNING_REQUIRED: NO
+        CODE_SIGN_IDENTITY: ""
+        DEVELOPMENT_TEAM: ""
+    info:
+      path: QwenCoder/Info.plist
+      properties:
+        CFBundleDisplayName: Qwen Coder
+        UILaunchScreen: {}
+        UIApplicationSceneManifest:
+          UIApplicationSupportsMultipleScenes: false
+        NSLocalNetworkUsageDescription: "Permite conectar o app a um servidor Qwen3-Coder na sua rede local."
+        NSAppTransportSecurity:
+          NSAllowsArbitraryLoads: true
+          NSAllowsLocalNetworking: true
+        UISupportedInterfaceOrientations:
+          - UIInterfaceOrientationPortrait
