@@ -98,6 +98,35 @@ enum ActivityMode: String, CaseIterable, Codable, Identifiable {
     }
 }
 
+enum ActivitySessionPolicy {
+    static func freshStats(at date: Date = .now) -> ActivityStats {
+        ActivityStats(startedAt: date)
+    }
+}
+
+enum BackgroundRuntimePolicy {
+    /// Build 127: once genuine audio runtime is alive, expiry of a system
+    /// background lease is no longer a reason to terminate any KintTany mode.
+    /// Full-loot protection remains owned by the activity engine itself.
+    static func preservesExecution(mode _: ActivityMode, audioAlive: Bool) -> Bool {
+        audioAlive
+    }
+
+    static func shouldRearmContinuedProcessing(
+        hasActivity: Bool,
+        hasContinuedTask: Bool,
+        continuedTaskRequested: Bool,
+        appIsActive: Bool,
+        audioAlive: Bool
+    ) -> Bool {
+        hasActivity &&
+        !hasContinuedTask &&
+        !continuedTaskRequested &&
+        appIsActive &&
+        audioAlive
+    }
+}
+
 
 enum FishingBait: String, CaseIterable, Codable, Identifiable {
     // rawValue is a UI/persistence identifier, not a presumed server item id.
@@ -963,11 +992,11 @@ final class AppStore: ObservableObject {
 
     // MARK: - Execução em segundo plano
     //
-    // iOS 26 introduziu BGContinuedProcessingTask exatamente para trabalhos
-    // iniciados por uma ação explícita do usuário que precisam continuar quando
-    // o app sai do primeiro plano. O Kintarabot inicia uma atividade com um toque
-    // e possui progresso mensurável (sucessos/meta), então a engine pode permanecer
-    // ativa, inclusive usando rede, enquanto o sistema mantiver a tarefa contínua.
+    // iOS 26 introduziu BGContinuedProcessingTask para trabalhos iniciados por
+    // uma ação explícita do usuário. Desde a Build 127, o runtime de áudio real é
+    // a fonte principal de continuidade observada em BG; Continued Processing
+    // permanece como integração/progresso do sistema e superfície da Dynamic Island.
+    // Se o CP expirar mas o áudio continuar vivo, a engine/Presence permanecem ativas.
     //
     // O objeto é mantido como AnyObject para que o projeto continue com deployment
     // target iOS 17; o cast para BGContinuedProcessingTask só ocorre dentro de
@@ -994,8 +1023,9 @@ final class AppStore: ObservableObject {
     private let bgHeadlessGate = BGHeadlessGate()
     private var bgHeadlessActive = false
 
-    // Build 124: independent runtime experiment. No gather/proof/socket logic
-    // depends on this object.
+    // Build 124 criou o runtime real; Build 127 o promove a autoridade de
+    // continuidade em BG para todos os modos. Protocolos de gather/proof/socket
+    // continuam intocados; apenas a decisão de preservar/encerrar usa este estado.
     private let backgroundAudioRuntime = BackgroundAudioRuntime()
 
     private var continuedTaskIdentifierPrefix: String {
@@ -1077,6 +1107,11 @@ final class AppStore: ObservableObject {
 
         goal = min(100_000, max(1, goal))
         sessionGoal = resolvedSessionGoal(for: mode)
+
+        // Build 127: Continued Processing must never inherit counters from the
+        // previous activity (e.g. Dragão 52/100 -> Carvão 52/500).
+        // Freeze a fresh session before submitting the new CP request.
+        stats = ActivitySessionPolicy.freshStats()
 
         let runID = UUID()
         activeRunID = runID
@@ -1977,7 +2012,6 @@ final class AppStore: ObservableObject {
 
         activity = mode
         state = .connecting
-        stats = ActivityStats(startedAt: .now)
         connected = false
         currentTarget = nil
         resourceCount = 0
@@ -3493,10 +3527,10 @@ final class AppStore: ObservableObject {
 
     // MARK: - Background runtime
 
-    /// Recebe as transições do SwiftUI. No iOS 26, a tarefa contínua é a fonte
-    /// principal de runtime em segundo plano. `beginBackgroundTask` é apenas uma
-    /// ponte/fallback curta caso o scheduler contínuo ainda não tenha entregue o
-    /// handler ou em sistemas anteriores.
+    /// Recebe as transições do SwiftUI. Na Build 127, áudio real mantém o runtime
+    /// quando disponível; Continued Processing fornece integração/progresso do
+    /// sistema e pode ser rearmado ao voltar ao foreground. `beginBackgroundTask`
+    /// permanece somente como ponte curta.
     func handleScenePhase(_ phase: ScenePhase) {
         let phaseKey: String
         switch phase {
@@ -3557,6 +3591,7 @@ final class AppStore: ObservableObject {
                 } else {
                     diagnostic("[BG] App em primeiro plano • engine continua na mesma sessão")
                 }
+                rearmContinuedProcessingForActiveSessionIfNeeded()
             }
             endLegacyBackgroundTask()
 
@@ -3566,6 +3601,36 @@ final class AppStore: ObservableObject {
         @unknown default:
             break
         }
+    }
+
+    private func rearmContinuedProcessingForActiveSessionIfNeeded() {
+        guard #available(iOS 26.0, *), let mode = activity else { return }
+
+        let audioSnapshot = backgroundAudioRuntime.snapshot()
+        let shouldRearm = BackgroundRuntimePolicy.shouldRearmContinuedProcessing(
+            hasActivity: true,
+            hasContinuedTask: continuedTaskObject != nil,
+            continuedTaskRequested: continuedTaskRequested,
+            appIsActive: UIApplication.shared.applicationState == .active,
+            audioAlive: audioSnapshot.active
+        )
+        guard shouldRearm else { return }
+
+        // This is the same engine/run. Never reset stats, socket, target catalog
+        // or sessionGoal here; only request a fresh system CP surface.
+        continuedTaskMode = mode
+        continuedTaskIdentifier = nil
+        continuedTaskSubmissionAttempt = 0
+        lastContinuedTitleSuccesses = -1
+        lastContinuedPublicStatus = ""
+        lastContinuedTitleUpdateAt = nil
+
+        diagnostic("[BG] Rearmando Continued Processing para sessão existente • \(mode.localizedTitle) • \(stats.successes)/\(max(1, sessionGoal)) • áudio ativo")
+        submitContinuedProcessingAttempt(
+            for: mode,
+            requestedGoal: min(100_000, max(1, sessionGoal)),
+            attempt: 1
+        )
     }
 
     private func prepareContinuedProcessing(for mode: ActivityMode) {
@@ -3872,10 +3937,43 @@ final class AppStore: ObservableObject {
             return
         }
 
-        // Se a task expirar durante uma queda de rede no Wild, não destrua a
-        // única tentativa de recuperação existente. Enquanto o callback ainda
-        // receber runtime, mantenha a reconexão; se o iOS matar o processo depois
-        // disso não existe comando offline capaz de garantir a saída.
+        // Build 127: audio is the runtime authority for every mode. CP expiry
+        // only removes the system/Dynamic Island lease; it no longer forces an
+        // activity to stop when genuine playback is still alive.
+        if let currentMode = activity {
+            let before = backgroundAudioRuntime.snapshot()
+            let audioAlive = before.active || backgroundAudioRuntime.ensureActive(reason: "continued-processing-expiration")
+            let after = backgroundAudioRuntime.snapshot()
+
+            diagnostic("[BG][AUDIO] CP expirou • antes={\(before.summary)} • depois={\(after.summary)} • continuidade=\(audioAlive ? "sim" : "não")")
+
+            if BackgroundRuntimePolicy.preservesExecution(mode: currentMode, audioAlive: audioAlive) {
+                continuedTaskActivationWatchdog?.cancel()
+                continuedTaskActivationWatchdog = nil
+                continuedTaskObject = nil
+                continuedTaskRequested = false
+                continuedTaskMode = currentMode
+                continuedTaskIdentifier = nil
+                continuedTaskSubmissionAttempt = 0
+                lastContinuedTitleUpdateAt = nil
+
+                backgroundTask.expirationHandler = nil
+                backgroundTask.setTaskCompleted(success: false)
+                endLegacyBackgroundTask()
+
+                if currentMode.requiresSafeExit {
+                    diagnostic("[BG] Continued Processing encerrou • sessão full-loot PRESERVADA pelo áudio • proteções HP/térmica/rede permanecem ativas")
+                } else {
+                    diagnostic("[BG] Continued Processing encerrou • sessão PRESERVADA pelo runtime de áudio • Presence/engine mantidas")
+                }
+                return
+            }
+
+            diagnostic("[BG] Continued Processing encerrou e áudio não permaneceu ativo • aplicando política segura de encerramento")
+        }
+
+        // Without genuine audio runtime, retain the existing full-loot fallback:
+        // preserve emergency reconnection or cooperatively exit to a safe region.
         if activity?.requiresSafeExit == true, connectionRecoveryRequested {
             if requestedStopReason == nil { requestedStopReason = .backgroundExpiration }
             state = .recovering
@@ -3883,13 +3981,11 @@ final class AppStore: ObservableObject {
             stats.lastEvent = activity?.isDunesGathering == true
                 ? "encerramento externo durante reconexão Dunes"
                 : "encerramento externo durante reconexão Wild"
-            diagnostic("[BG] Encerramento externo recebido durante queda de conexão em região de risco • preservando reconexão de emergência enquanto houver runtime")
+            diagnostic("[BG] Encerramento externo sem áudio durante queda de conexão em região de risco • preservando reconexão de emergência")
             updateContinuedProcessingProgress(forceTitleUpdate: true)
             return
         }
 
-        // Wild combat usa encerramento cooperativo enquanto o callback ainda tem
-        // runtime: parar novos hits -> safe camp -> combat timer 0 -> World.
         if activity?.requiresSafeExit == true, connected, let activeEngine {
             if requestedStopReason == nil { requestedStopReason = .backgroundExpiration }
             let reason = requestedStopReason ?? .backgroundExpiration
@@ -3898,52 +3994,18 @@ final class AppStore: ObservableObject {
             }
             state = .recovering
             statusMessage = activity?.isDunesGathering == true
-                ? "Continued Processing encerrada • saída para The Shores"
-                : "Continued Processing encerrada • saída imediata para o World"
-            stats.lastEvent = "saída de emergência por encerramento externo"
+                ? "Runtime de áudio indisponível • saída para The Shores"
+                : "Runtime de áudio indisponível • saída imediata para o World"
+            stats.lastEvent = "saída de emergência por perda do runtime"
             updateContinuedProcessingProgress(forceTitleUpdate: true)
-            diagnostic("[BG] Encerramento externo recebido em região de risco • saída segura cooperativa solicitada")
+            diagnostic("[BG] CP e áudio indisponíveis em região de risco • saída segura cooperativa solicitada")
             return
-        }
-
-        // Build 125: safe non-Dunes gathering has a second, independently active
-        // background execution source. Continued Processing expiration is no
-        // longer terminal when genuine audio playback is still alive. We complete
-        // the expired BGContinuedProcessingTask correctly, detach its bookkeeping
-        // and leave engine/receiver/Presence untouched.
-        if activity?.isGathering == true, activity?.isDunesGathering != true {
-            let before = backgroundAudioRuntime.snapshot()
-            let audioAlive = before.active || backgroundAudioRuntime.ensureActive(reason: "continued-processing-expiration")
-            let after = backgroundAudioRuntime.snapshot()
-
-            diagnostic("[BG][AUDIO] CP expirou • antes={\(before.summary)} • depois={\(after.summary)} • continuidade=\(audioAlive ? "sim" : "não")")
-
-            if audioAlive {
-                continuedTaskActivationWatchdog?.cancel()
-                continuedTaskActivationWatchdog = nil
-                continuedTaskObject = nil
-                continuedTaskRequested = false
-                continuedTaskMode = activity
-                continuedTaskIdentifier = nil
-                continuedTaskSubmissionAttempt = 0
-                continuedProgressSubunit = 0
-                lastContinuedTitleUpdateAt = nil
-
-                backgroundTask.expirationHandler = nil
-                backgroundTask.setTaskCompleted(success: false)
-                endLegacyBackgroundTask()
-
-                diagnostic("[BG] Continued Processing encerrou • gathering seguro PRESERVADO pelo runtime de áudio • Presence/engine mantidas")
-                return
-            }
-
-            diagnostic("[BG] Continued Processing encerrou e áudio não permaneceu ativo • aplicando encerramento seguro existente")
         }
 
         // O mesmo callback é usado pelo sistema para expiração real e para um
         // encerramento solicitado pela superfície de Continued Processing.
-        // A API não informa qual dos dois ocorreu; sem uma segunda fonte real de
-        // runtime, preserve o cleanup seguro existente.
+        // A API não informa qual ocorreu. Se também não há runtime de áudio,
+        // preserve o cleanup terminal existente para atividades não full-loot.
         requestedStopReason = .backgroundExpiration
         terminalFailureHandled = true
         continuedTaskActivationWatchdog?.cancel()
@@ -4033,20 +4095,30 @@ final class AppStore: ObservableObject {
         }
 
         diagnostic("[WARN] Janela curta de background esgotada sem Continued Processing ativa")
-        guard activity != nil else { return }
+        guard let currentMode = activity else { return }
 
-        if activity?.requiresSafeExit == true, connected, let activeEngine {
+        let before = backgroundAudioRuntime.snapshot()
+        let audioAlive = before.active || backgroundAudioRuntime.ensureActive(reason: "legacy-background-expiration")
+        let after = backgroundAudioRuntime.snapshot()
+        diagnostic("[BG][AUDIO] Janela curta expirou • antes={\(before.summary)} • depois={\(after.summary)} • continuidade=\(audioAlive ? "sim" : "não")")
+
+        if BackgroundRuntimePolicy.preservesExecution(mode: currentMode, audioAlive: audioAlive) {
+            diagnostic("[BG] Janela curta UIKit encerrou • sessão PRESERVADA pelo runtime de áudio • \(currentMode.localizedTitle)")
+            return
+        }
+
+        if currentMode.requiresSafeExit, connected, let activeEngine {
             if requestedStopReason == nil { requestedStopReason = .backgroundExpiration }
             let reason = requestedStopReason ?? .backgroundExpiration
             Task.detached(priority: .userInitiated) {
                 await activeEngine.requestSafeStop(reason: reason)
             }
             state = .recovering
-            statusMessage = activity?.isDunesGathering == true
-                ? "Background expirando • saída para The Shores"
-                : "Background expirando • saída imediata para o World"
-            stats.lastEvent = "saída de emergência por background"
-            let region = activity?.isDunesGathering == true ? "Dunes" : "Wild"
+            statusMessage = currentMode.isDunesGathering
+                ? "Background e áudio indisponíveis • saída para The Shores"
+                : "Background e áudio indisponíveis • saída imediata para o World"
+            stats.lastEvent = "saída de emergência por perda do runtime"
+            let region = currentMode.isDunesGathering ? "Dunes" : "Wild"
             diagnostic("[BG] Runtime curto esgotou em \(region) • emergency-exit solicitado")
             return
         }

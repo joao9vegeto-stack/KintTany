@@ -24,6 +24,73 @@ final class RealtimeProtocolTests: XCTestCase {
         XCTAssertEqual(GatherProgressPolicy.publicStatus(h: 3, hm: 99), "Progresso 3/?")
     }
 
+    func testBuild127FreshSessionStatsNeverInheritPreviousProgress() {
+        let now = Date(timeIntervalSince1970: 1_234)
+        let fresh = ActivitySessionPolicy.freshStats(at: now)
+        XCTAssertEqual(fresh.successes, 0)
+        XCTAssertEqual(fresh.attempts, 0)
+        XCTAssertEqual(fresh.failures, 0)
+        XCTAssertEqual(fresh.startedAt, now)
+    }
+
+    func testBuild127AudioPreservesEveryActivityAfterContinuedProcessingExpires() {
+        for mode in ActivityMode.allCases {
+            XCTAssertTrue(
+                BackgroundRuntimePolicy.preservesExecution(mode: mode, audioAlive: true),
+                "\(mode.rawValue) must remain alive while genuine audio runtime is alive"
+            )
+            XCTAssertFalse(
+                BackgroundRuntimePolicy.preservesExecution(mode: mode, audioAlive: false),
+                "\(mode.rawValue) must fall back to its safe shutdown policy without audio runtime"
+            )
+        }
+    }
+
+    func testBuild127ContinuedProcessingRearmRequiresLiveForegroundSession() {
+        XCTAssertTrue(BackgroundRuntimePolicy.shouldRearmContinuedProcessing(
+            hasActivity: true,
+            hasContinuedTask: false,
+            continuedTaskRequested: false,
+            appIsActive: true,
+            audioAlive: true
+        ))
+        XCTAssertFalse(BackgroundRuntimePolicy.shouldRearmContinuedProcessing(
+            hasActivity: false,
+            hasContinuedTask: false,
+            continuedTaskRequested: false,
+            appIsActive: true,
+            audioAlive: true
+        ))
+        XCTAssertFalse(BackgroundRuntimePolicy.shouldRearmContinuedProcessing(
+            hasActivity: true,
+            hasContinuedTask: true,
+            continuedTaskRequested: false,
+            appIsActive: true,
+            audioAlive: true
+        ))
+        XCTAssertFalse(BackgroundRuntimePolicy.shouldRearmContinuedProcessing(
+            hasActivity: true,
+            hasContinuedTask: false,
+            continuedTaskRequested: true,
+            appIsActive: true,
+            audioAlive: true
+        ))
+        XCTAssertFalse(BackgroundRuntimePolicy.shouldRearmContinuedProcessing(
+            hasActivity: true,
+            hasContinuedTask: false,
+            continuedTaskRequested: false,
+            appIsActive: false,
+            audioAlive: true
+        ))
+        XCTAssertFalse(BackgroundRuntimePolicy.shouldRearmContinuedProcessing(
+            hasActivity: true,
+            hasContinuedTask: false,
+            continuedTaskRequested: false,
+            appIsActive: true,
+            audioAlive: false
+        ))
+    }
+
     func testBlacksmithProtocolContractMatchesCapturedClient() {
         XCTAssertEqual(BlacksmithProtocolPolicy.smithEndpoint, "/api/auth/blacksmith-smith")
         XCTAssertEqual(BlacksmithProtocolPolicy.repairEndpoint, "/api/auth/blacksmith-repair")
