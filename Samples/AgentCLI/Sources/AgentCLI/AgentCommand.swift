@@ -1,0 +1,212 @@
+//
+//  AgentCommand.swift
+//  AgentCLI
+//
+//  Created by SwiftAgent on 2025/01/17.
+//
+
+import Foundation
+import ArgumentParser
+import SwiftAgent
+import AgentTools
+
+@main
+struct AgentCommand: AsyncParsableCommand {
+    static let configuration = CommandConfiguration(
+        commandName: "agent",
+        abstract: "SwiftAgent CLI - AI Agent powered by OpenAI and Claude",
+        version: "2.0.0",
+        subcommands: [Chat.self, Code.self, Research.self],
+        defaultSubcommand: Chat.self
+    )
+}
+
+// MARK: - Shared Options
+
+struct GlobalOptions: ParsableArguments {
+    @Flag(name: .shortAndLong, help: "Enable verbose logging")
+    var verbose: Bool = false
+
+    @Option(name: .long, help: "OpenAI API key (or set OPENAI_API_KEY)")
+    var apiKey: String?
+
+    @Option(name: .shortAndLong, help: "Model to use (gpt-4.1, gpt-4.1-mini, gpt-4.1-nano, o3, o3-mini, o4-mini)")
+    var model: String = "gpt-4.1"
+
+    @Option(name: .shortAndLong, help: "Working directory for file operations")
+    var workingDir: String?
+
+    func createConfiguration() throws -> AgentConfiguration {
+        let key = apiKey ?? ProcessInfo.processInfo.environment["OPENAI_API_KEY"]
+        guard let apiKey = key, !apiKey.isEmpty else {
+            throw ValidationError("OpenAI API key required. Set OPENAI_API_KEY or use --api-key")
+        }
+
+        return AgentConfiguration(
+            apiKey: apiKey,
+            model: model,
+            verbose: verbose,
+            workingDirectory: workingDir ?? FileManager.default.currentDirectoryPath
+        )
+    }
+}
+
+// MARK: - Chat Command
+
+extension AgentCommand {
+    struct Chat: AsyncParsableCommand {
+        static let configuration = CommandConfiguration(
+            commandName: "chat",
+            abstract: "Start an interactive chat session"
+        )
+
+        @OptionGroup var options: GlobalOptions
+
+        @Argument(help: "Initial message (optional, starts interactive mode if omitted)")
+        var message: String?
+
+        mutating func run() async throws {
+            let config = try options.createConfiguration()
+
+            if options.verbose {
+                print("Starting chat with model: \(config.model)")
+            }
+
+            if let message = message {
+                // Single message mode
+                print("Assistant: ", terminator: "")
+                let session = ChatSessionFactory.createSession(configuration: config)
+                _ = try await ChatAgent()
+                    .session(session)
+                    .run(message)
+            } else {
+                // Interactive mode via stdin loop. Conversation requires Prompt input; this sample
+                // keeps the CLI task contract string-based.
+                print("SwiftAgent Chat (type 'exit' to quit)")
+                print("Model: \(config.model)")
+                print("---")
+                let languageModelSession = ChatSessionFactory.createSession(configuration: config)
+                while true {
+                    print("You: ", terminator: "")
+                    guard let input = readLine() else { break }
+                    let trimmed = input.trimmingCharacters(in: .whitespacesAndNewlines)
+                    if trimmed == "exit" { break }
+                    guard !trimmed.isEmpty else { continue }
+                    print("Assistant: ", terminator: "")
+                    _ = try await ChatAgent()
+                        .session(languageModelSession)
+                        .run(trimmed)
+                }
+            }
+        }
+    }
+}
+
+// MARK: - Code Command
+
+extension AgentCommand {
+    struct Code: AsyncParsableCommand {
+        static let configuration = CommandConfiguration(
+            commandName: "code",
+            abstract: "Coding assistant with file and command access"
+        )
+
+        @OptionGroup var options: GlobalOptions
+
+        @Argument(help: "Coding task or question")
+        var task: String?
+
+        mutating func run() async throws {
+            let config = try options.createConfiguration()
+
+            if options.verbose {
+                print("Starting coding assistant with model: \(config.model)")
+                print("Working directory: \(config.workingDirectory)")
+            }
+
+            if let task = task {
+                // Single task mode
+                print("---")
+                _ = try await CodingAgent(configuration: config).run(task)
+            } else {
+                // Interactive mode via stdin loop. The coding step accepts string tasks.
+                print("SwiftAgent Coding Assistant (type 'exit' to quit)")
+                print("Model: \(config.model)")
+                print("Working directory: \(config.workingDirectory)")
+                print("---")
+                while true {
+                    print("Task: ", terminator: "")
+                    guard let input = readLine() else { break }
+                    let trimmed = input.trimmingCharacters(in: .whitespacesAndNewlines)
+                    if trimmed == "exit" { break }
+                    guard !trimmed.isEmpty else { continue }
+                    _ = try await CodingAgent(configuration: config).run(trimmed)
+                }
+                _ = config.createSession(
+                    instructions: Instructions {
+                        "You are an expert coding assistant."
+                    }
+                )
+            }
+        }
+    }
+}
+
+// MARK: - Research Command (Claude-powered)
+
+extension AgentCommand {
+    struct Research: AsyncParsableCommand {
+        static let configuration = CommandConfiguration(
+            commandName: "research",
+            abstract: "Research a topic with structured output (powered by Claude)"
+        )
+
+        @Flag(name: .shortAndLong, help: "Enable verbose logging")
+        var verbose: Bool = false
+
+        @Option(name: .long, help: "Anthropic API key (or set ANTHROPIC_API_KEY)")
+        var apiKey: String?
+
+        @Option(name: .shortAndLong, help: "Claude model identifier")
+        var model: String = "claude-sonnet-4-5-20250929"
+
+        @Option(name: .shortAndLong, help: "Working directory for file operations")
+        var workingDir: String?
+
+        @Argument(help: "Research topic or question")
+        var topic: String
+
+        @Flag(name: .long, help: "Output raw JSON instead of formatted text")
+        var json: Bool = false
+
+        mutating func run() async throws {
+            let key = apiKey ?? ProcessInfo.processInfo.environment["ANTHROPIC_API_KEY"]
+            guard let anthropicKey = key, !anthropicKey.isEmpty else {
+                throw ValidationError("Anthropic API key required. Set ANTHROPIC_API_KEY or use --api-key")
+            }
+
+            let config = ClaudeResearchConfiguration(
+                apiKey: anthropicKey,
+                modelName: model,
+                verbose: verbose,
+                workingDirectory: workingDir ?? FileManager.default.currentDirectoryPath
+            )
+
+            if verbose {
+                print("Starting research with Claude model: \(model)")
+                print("Working directory: \(config.workingDirectory)")
+            }
+
+            if json {
+                let result = try await ResearchAgent(configuration: config).run(topic)
+                let encoder = JSONEncoder()
+                encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
+                let data = try encoder.encode(result)
+                print(String(data: data, encoding: .utf8)!)
+            } else {
+                let output = try await ResearchAgentText(configuration: config).run(topic)
+                print(output)
+            }
+        }
+    }
+}

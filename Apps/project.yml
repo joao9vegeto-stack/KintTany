@@ -1,0 +1,23 @@
+name: SwiftAgentDemo
+options:
+  bundleIdPrefix: com.joaopedro
+  deploymentTarget:
+    iOS: "26.0"
+packages:
+  SwiftAgent:
+    path: ..
+targets:
+  SwiftAgentDemo:
+    type: application
+    platform: iOS
+    sources:
+      - SwiftAgentDemo
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: com.joaopedro.swiftagentdemo
+        GENERATE_INFOPLIST_FILE: YES
+        SWIFT_VERSION: "6.2"
+        TARGETED_DEVICE_FAMILY: "1,2"
+    dependencies:
+      - package: SwiftAgent
+        product: SwiftAgent
