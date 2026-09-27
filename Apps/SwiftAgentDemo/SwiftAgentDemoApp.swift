@@ -30,7 +30,7 @@ final class ChatModel {
             Instructions("You are a helpful assistant. Reply in the same language as the user.")
         }
         conversation = Conversation(languageModelSession: session) {
-            GenerateText { (input: String) in Prompt(input) }
+            GenerateText<String>()
         }
     }
 
