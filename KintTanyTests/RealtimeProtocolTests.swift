@@ -13,6 +13,17 @@ final class RealtimeProtocolTests: XCTestCase {
         XCTAssertEqual(GatherProgressPolicy.continuedSubunit(h: 3, hm: 0), 0)
     }
 
+    func testBuild126DynamicIslandGatherSubtitleTracksAuthoritativeWear() {
+        XCTAssertEqual(GatherProgressPolicy.publicStatus(h: 1, hm: 6), "Progresso 1/6")
+        XCTAssertEqual(GatherProgressPolicy.publicStatus(h: 2, hm: 6), "Progresso 2/6")
+        XCTAssertEqual(GatherProgressPolicy.publicStatus(h: 3, hm: 6), "Progresso 3/6")
+        XCTAssertEqual(GatherProgressPolicy.publicStatus(h: 4, hm: 6), "Progresso 4/6")
+        XCTAssertEqual(GatherProgressPolicy.publicStatus(h: 5, hm: 6), "Progresso 5/6")
+        XCTAssertEqual(GatherProgressPolicy.publicStatus(h: 6, hm: 6), "Progresso 6/6")
+        XCTAssertEqual(GatherProgressPolicy.publicStatus(h: 7, hm: 6), "Progresso 6/6")
+        XCTAssertEqual(GatherProgressPolicy.publicStatus(h: 3, hm: 99), "Progresso 3/?")
+    }
+
     func testBlacksmithProtocolContractMatchesCapturedClient() {
         XCTAssertEqual(BlacksmithProtocolPolicy.smithEndpoint, "/api/auth/blacksmith-smith")
         XCTAssertEqual(BlacksmithProtocolPolicy.repairEndpoint, "/api/auth/blacksmith-repair")

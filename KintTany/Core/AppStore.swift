@@ -979,6 +979,9 @@ final class AppStore: ObservableObject {
     private var continuedTaskActivationWatchdog: Task<Void, Never>?
     private var continuedTaskSubmissionAttempt = 0
     private var continuedProgressSubunit = 0
+    // Build 126: Dynamic Island gather wear is kept in a non-published lane.
+    // This lets BG show 1/6...6/6 without waking SwiftUI/headless visuals.
+    private var continuedGatherStatus: String?
     private var lastScenePhaseKey: String?
     private var backgroundEnteredAt: Date?
     private var accumulatedBackgroundSeconds: TimeInterval = 0
@@ -3361,14 +3364,18 @@ final class AppStore: ObservableObject {
             updateContinuedProcessingProgress(forceTitleUpdate: true)
 
         case .gatherProgress(let h, let hm):
-            // Build 113: while a tree/rock is partially worn, expose that real
-            // server-authoritative progress to BGContinuedProcessingTask instead
-            // of advancing by a token +1 per UI event.
+            // Build 126: this event is authoritative and is intentionally allowed
+            // through the BG headless gate. Keep its public text out of @Published
+            // statusMessage so SwiftUI remains frozen, while the Dynamic Island
+            // can still follow the live wear counter 1/6...6/6.
+            continuedGatherStatus = GatherProgressPolicy.publicStatus(h: h, hm: hm)
             continuedProgressSubunit = max(
                 continuedProgressSubunit,
                 GatherProgressPolicy.continuedSubunit(h: h, hm: hm)
             )
-            updateContinuedProcessingProgress()
+            updateContinuedProcessingProgress(
+                forceTitleUpdate: lastScenePhaseKey == "background"
+            )
 
         case .failure(let reason):
             stats.failures += 1
@@ -3570,6 +3577,7 @@ final class AppStore: ObservableObject {
         continuedTaskIdentifier = nil
         continuedTaskSubmissionAttempt = 0
         continuedProgressSubunit = 0
+        continuedGatherStatus = nil
         lastContinuedTitleSuccesses = -1
         lastContinuedPublicStatus = ""
         lastContinuedTitleUpdateAt = nil
@@ -3791,7 +3799,12 @@ final class AppStore: ObservableObject {
         backgroundTask.progress.completedUnitCount = completed
 
         guard let mode = activity ?? continuedTaskMode else { return }
-        let publicStatus = displayStatusMessage
+        let publicStatus: String
+        if mode.isGathering, let continuedGatherStatus {
+            publicStatus = continuedGatherStatus
+        } else {
+            publicStatus = displayStatusMessage
+        }
         let successChanged = lastContinuedTitleSuccesses != stats.successes
         let statusChanged = lastContinuedPublicStatus != publicStatus
         let now = Date()
@@ -3847,6 +3860,7 @@ final class AppStore: ObservableObject {
         continuedTaskIdentifier = nil
         continuedTaskSubmissionAttempt = 0
         continuedProgressSubunit = 0
+        continuedGatherStatus = nil
         lastContinuedTitleUpdateAt = nil
         endLegacyBackgroundTask()
     }

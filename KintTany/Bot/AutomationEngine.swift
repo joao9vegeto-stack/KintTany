@@ -642,6 +642,16 @@ struct GatherProgressPolicy {
         if clampedH >= hm { return 99 }
         return min(98, max(0, Int((Double(clampedH) / Double(hm) * 99.0).rounded(.down))))
     }
+
+    /// Build 126: text shown by BGContinuedProcessingTask is derived from the
+    /// same authoritative wear packet as the fractional NSProgress value.
+    static func publicStatus(h: Int, hm: Int) -> String {
+        guard hm > 0, hm < 99 else {
+            return "Progresso \(max(0, h))/?"
+        }
+        let clampedH = min(max(0, h), hm)
+        return "Progresso \(clampedH)/\(hm)"
+    }
 }
 
 struct GatherTimingPolicy {
