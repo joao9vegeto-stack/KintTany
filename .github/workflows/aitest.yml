@@ -1,4 +1,4 @@
-name: AItest SDK XCTest + IPA
+name: AItest SwiftAgent XCTest + IPA
 
 on:
   push:
@@ -6,103 +6,157 @@ on:
   workflow_dispatch:
 
 permissions:
-  contents: read
+  contents: write
 
 jobs:
-  test:
-    runs-on: macos-15
+  import_test:
+    if: github.event_name == 'workflow_dispatch' || github.event.head_commit.message != 'AItest import SwiftAgent 2.0.1'
+    runs-on: macos-26
     timeout-minutes: 60
-
     steps:
-      - name: Checkout AItest
-        uses: actions/checkout@v4
+      - uses: actions/checkout@v4
         with:
           ref: AItest
           fetch-depth: 1
 
-      - name: Select Xcode 16.4 for XCTest
+      - name: Replace branch with SwiftAgent 2.0.1
         shell: bash
         run: |
           set -euo pipefail
-          sudo xcode-select -s /Applications/Xcode_16.4.app/Contents/Developer
+          cp .github/workflows/aitest.yml /tmp/aitest.yml
+          rm -rf /tmp/swiftagent /tmp/swiftagent.zip
+          curl -L --fail --retry 3 https://github.com/1amageek/SwiftAgent/archive/refs/tags/2.0.1.zip -o /tmp/swiftagent.zip
+          mkdir -p /tmp/swiftagent
+          unzip -q /tmp/swiftagent.zip -d /tmp/swiftagent
+          SRC="$(find /tmp/swiftagent -mindepth 1 -maxdepth 1 -type d | head -n1)"
+          test -f "$SRC/README.md"
+          test -f "$SRC/Package.swift"
+          test -d "$SRC/Sources"
+          test -d "$SRC/Tests"
+          find . -mindepth 1 -maxdepth 1 ! -name .git -exec rm -rf {} +
+          cp -R "$SRC"/. .
+          rm -rf .github/workflows
+          mkdir -p .github/workflows
+          cp /tmp/aitest.yml .github/workflows/aitest.yml
+
+      - name: Select Xcode 26.0.1
+        run: |
+          sudo xcode-select -s /Applications/Xcode_26.0.1.app/Contents/Developer
           xcodebuild -version
           swift --version
 
-      - name: Install XcodeGen
-        shell: bash
-        run: |
-          set -euo pipefail
-          if ! command -v xcodegen >/dev/null 2>&1; then
-            brew install xcodegen
-          fi
-          xcodegen --version
-
-      - name: Resolve Swift package
-        shell: bash
-        run: |
-          set -euo pipefail
-          swift package resolve
+      - name: Resolve dependencies
+        run: swift package resolve
 
       - name: XCTest
-        shell: bash
-        run: |
-          set -euo pipefail
-          swift test
+        run: swift test --disable-sandbox --no-parallel
 
-      - name: Generate Apps Xcode project
+      - name: Create iOS demo following README
         shell: bash
         run: |
           set -euo pipefail
+          mkdir -p Apps/SwiftAgentDemo
+          cat > Apps/project.yml <<'YAML'
+          name: SwiftAgentDemo
+          options:
+            bundleIdPrefix: com.joaopedro
+            deploymentTarget:
+              iOS: "26.0"
+          packages:
+            SwiftAgent:
+              path: ..
+          targets:
+            SwiftAgentDemo:
+              type: application
+              platform: iOS
+              sources:
+                - SwiftAgentDemo
+              settings:
+                base:
+                  PRODUCT_BUNDLE_IDENTIFIER: com.joaopedro.swiftagentdemo
+                  GENERATE_INFOPLIST_FILE: YES
+                  SWIFT_VERSION: "6.2"
+                  TARGETED_DEVICE_FAMILY: "1,2"
+              dependencies:
+                - package: SwiftAgent
+                  product: SwiftAgent
+          YAML
+          cat > Apps/SwiftAgentDemo/SwiftAgentDemoApp.swift <<'SWIFT'
+          import SwiftUI
+          import SwiftAgent
+          import FoundationModels
+
+          @main
+          struct SwiftAgentDemoApp: App {
+              var body: some Scene {
+                  WindowGroup { ContentView() }
+              }
+          }
+
+          struct ContentView: View {
+              var body: some View {
+                  VStack(spacing: 18) {
+                      Image(systemName: "brain.head.profile")
+                          .font(.system(size: 64))
+                      Text("SwiftAgent 2.0.1")
+                          .font(.largeTitle.bold())
+                      Text("FoundationModels • iOS 26+")
+                          .foregroundStyle(.secondary)
+                      Text("SwiftAgent integrado com sucesso.")
+                  }
+                  .padding()
+              }
+          }
+          SWIFT
+
+      - name: Install XcodeGen and generate project
+        run: |
+          brew install xcodegen
           cd Apps
           xcodegen generate
-          test -d SwiftAIApps.xcodeproj
-          xcodebuild -list -project SwiftAIApps.xcodeproj
+          xcodebuild -list -project SwiftAgentDemo.xcodeproj
+
+      - name: Commit clean SwiftAgent branch
+        shell: bash
+        run: |
+          set -euo pipefail
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add -A
+          git commit -m "AItest import SwiftAgent 2.0.1"
+          git push origin HEAD:AItest
 
   build_ipa:
-    needs: test
+    needs: import_test
+    if: github.event_name == 'workflow_dispatch' || github.event.head_commit.message != 'AItest import SwiftAgent 2.0.1'
     runs-on: macos-26
     timeout-minutes: 60
-
     steps:
-      - name: Checkout AItest
-        uses: actions/checkout@v4
+      - uses: actions/checkout@v4
         with:
           ref: AItest
           fetch-depth: 1
 
       - name: Select Xcode 26.0.1
-        shell: bash
         run: |
-          set -euo pipefail
           sudo xcode-select -s /Applications/Xcode_26.0.1.app/Contents/Developer
           xcodebuild -version
-          swift --version
 
       - name: Install XcodeGen
-        shell: bash
-        run: |
-          set -euo pipefail
-          if ! command -v xcodegen >/dev/null 2>&1; then
-            brew install xcodegen
-          fi
-          xcodegen --version
+        run: brew install xcodegen
 
-      - name: Generate Apps Xcode project
-        shell: bash
+      - name: Generate project
         run: |
-          set -euo pipefail
           cd Apps
           xcodegen generate
-          test -d SwiftAIApps.xcodeproj
-          xcodebuild -list -project SwiftAIApps.xcodeproj
 
-      - name: Build StreamTextDemo for iPhoneOS
+      - name: Build iPhoneOS app
         shell: bash
         run: |
           set -euo pipefail
           xcodebuild \
-            -project Apps/SwiftAIApps.xcodeproj \
-            -scheme StreamTextDemo \
+            -project Apps/SwiftAgentDemo.xcodeproj \
+            -scheme SwiftAgentDemo \
             -configuration Release \
             -sdk iphoneos \
             -destination 'generic/platform=iOS' \
@@ -111,30 +165,23 @@ jobs:
             CODE_SIGNING_REQUIRED=NO \
             CODE_SIGN_IDENTITY="" \
             build
+          APP="$(find "$GITHUB_WORKSPACE/build/DerivedData/Build/Products/Release-iphoneos" -maxdepth 1 -type d -name 'SwiftAgentDemo.app' -print -quit)"
+          test -d "$APP"
+          echo "APP_PATH=$APP" >> "$GITHUB_ENV"
 
-          APP_PATH="$(find "$GITHUB_WORKSPACE/build/DerivedData/Build/Products/Release-iphoneos" -maxdepth 1 -type d -name 'StreamTextDemo.app' -print -quit)"
-          test -n "$APP_PATH"
-          test -d "$APP_PATH"
-          echo "APP_PATH=$APP_PATH" >> "$GITHUB_ENV"
-
-      - name: Package unsigned IPA
+      - name: Package IPA
         shell: bash
         run: |
           set -euo pipefail
-          rm -rf "$RUNNER_TEMP/Payload"
           mkdir -p "$RUNNER_TEMP/Payload"
           cp -R "$APP_PATH" "$RUNNER_TEMP/Payload/"
-          (
-            cd "$RUNNER_TEMP"
-            zip -qry "$GITHUB_WORKSPACE/SwiftAIApps-AItest.ipa" Payload
-          )
-          test -s "$GITHUB_WORKSPACE/SwiftAIApps-AItest.ipa"
-          ls -lh "$GITHUB_WORKSPACE/SwiftAIApps-AItest.ipa"
+          (cd "$RUNNER_TEMP" && zip -qry "$GITHUB_WORKSPACE/SwiftAgent-AItest.ipa" Payload)
+          test -s "$GITHUB_WORKSPACE/SwiftAgent-AItest.ipa"
+          ls -lh "$GITHUB_WORKSPACE/SwiftAgent-AItest.ipa"
 
-      - name: Upload IPA
-        uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v4
         with:
-          name: SwiftAIApps-AItest-IPA
-          path: SwiftAIApps-AItest.ipa
+          name: SwiftAgent-AItest-IPA
+          path: SwiftAgent-AItest.ipa
           if-no-files-found: error
           retention-days: 30
