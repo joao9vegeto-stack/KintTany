@@ -977,12 +977,12 @@ final class RealtimeProtocolTests: XCTestCase {
         XCTAssertTrue(DunesCheckpointPolicy.exposureLimitReached(startedAtMS: 1_000, nowMS: 181_000))
     }
 
-    func testBuild76DunesToolInstanceChoosesLowestPositiveDurabilityAmongCarriedCopies() throws {
+    func testBuild76DunesToolInstanceNowChoosesLowestSafeDurabilityAcrossCarriedAndBank() throws {
         let backpack: [String: Any] = [
             "hotbar": [
                 ["t": "copper_pickaxe", "n": 1, "d": 2_200, "iid": "copper-high"],
                 ["t": "copper_pickaxe", "n": 1, "d": 800, "iid": "copper-low"],
-                ["t": "copper_pickaxe", "n": 1, "d": 0, "iid": "copper-broken"]
+                ["t": "copper_pickaxe", "n": 1, "d": 87, "iid": "copper-worn"]
             ],
             "invSlots": [
                 ["t": "copper_pickaxe", "n": 1, "d": 1_400, "iid": "copper-mid"]
@@ -993,12 +993,12 @@ final class RealtimeProtocolTests: XCTestCase {
         ]
 
         let selected = try XCTUnwrap(DunesToolInstancePolicy.preferredInstance(in: backpack, type: "copper_pickaxe"))
-        XCTAssertTrue(selected.isCarried)
-        XCTAssertEqual(selected.iid, "copper-low")
-        XCTAssertEqual(selected.durability, 800)
-        XCTAssertEqual(selected.sourceKey, "hotbar")
-        XCTAssertEqual(selected.sourceIndex, 1)
-        XCTAssertNil(selected.bankIndex)
+        XCTAssertFalse(selected.isCarried)
+        XCTAssertEqual(selected.iid, "copper-bank")
+        XCTAssertEqual(selected.durability, 300)
+        XCTAssertEqual(selected.sourceKey, "bankSlots")
+        XCTAssertEqual(selected.sourceIndex, 0)
+        XCTAssertEqual(selected.bankIndex, 0)
     }
 
     func testBuild76DunesToolInstanceUsesLowestPositiveDurabilityBankCopyWhenNoneCarried() throws {
@@ -1051,7 +1051,7 @@ final class RealtimeProtocolTests: XCTestCase {
         XCTAssertFalse(DunesExitSurvivalPolicy.survived(
             expectedLifeEpoch: 8, observedLifeEpoch: 9, hp: 100, toolStillCarried: false
         ))
-        XCTAssertFalse(DunesExitSurvivalPolicy.survived(
+        XCTAssertTrue(DunesExitSurvivalPolicy.survived(
             expectedLifeEpoch: 8, observedLifeEpoch: 8, hp: 100, toolStillCarried: false
         ))
     }

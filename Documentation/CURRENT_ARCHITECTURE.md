@@ -32,6 +32,7 @@ Fishing, Roast Pit e Frostmere Smith usam STOP cooperativo: uma operação já e
 - No banco, ferramentas compatíveis seguras são escolhidas por menor durabilidade primeiro, preservando as melhores para depois.
 - Ferramenta gasta é bancadas e outra cópia segura é carregada; a meta da sessão continua.
 - Ausência da ferramenta em The Shores não é prova isolada de morte. Morte exige lifeEpoch/HP autoritativo; sem evidência suficiente o resultado é inconclusivo.
+- Respawn confirmado nas Dunes não encerra automaticamente a meta: até 3 vezes por sessão o progresso é preservado, o bot reconstrói BANK-FIRST/loadout no World e retorna às Dunes. Sem ferramenta >100 ele permanece seguro e encerra com progresso preservado.
 - Checkpoints, HP 100 no World, dano externo, calor, saída The Shores e proteção de recursos permanecem ativos.
 
 ## Fluxo

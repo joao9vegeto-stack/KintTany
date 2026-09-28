@@ -1587,6 +1587,7 @@ final class AppStore: ObservableObject {
     ) async throws -> EngineRunResult {
         var phaseEngine = initialEngine
         var completedBeforePhase = stats.successes
+        var deathRecoveries = 0
 
         while completedBeforePhase < runGoal {
             guard activeRunID == runID, activity == mode, !terminalFailureHandled else {
@@ -1612,7 +1613,38 @@ final class AppStore: ObservableObject {
                 )
             }
             engineRunTask = child
-            let phaseResult = try await child.value
+            let phaseResult: EngineRunResult
+            var recoveringFromDeath = false
+            do {
+                phaseResult = try await child.value
+            } catch let EngineError.dunesDeathDuringExit(detail) {
+                engineRunTask = nil
+                await importSocketTrace()
+                await Task.yield()
+                guard activeRunID == runID, activity == mode else { throw CancellationError() }
+
+                deathRecoveries += 1
+                guard deathRecoveries <= 3 else {
+                    throw EngineError.dunesDeathDuringExit(
+                        "limite de 3 respawns automáticos atingido • última evidência: \(detail)"
+                    )
+                }
+
+                recoveringFromDeath = true
+                let preserved = max(completedBeforePhase, stats.successes)
+                stats.successes = preserved
+                state = .recovering
+                statusMessage = "Respawn detectado • reconstruindo loadout"
+                stats.lastEvent = "Dunes • respawn #\(deathRecoveries)"
+                log("💀 Dunes • morte autoritativamente confirmada • respawn #\(deathRecoveries)/3 • progresso \(preserved)/\(runGoal) preservado")
+                log("💀 Evidência: \(detail)")
+                phaseResult = EngineRunResult(
+                    successes: max(0, preserved - phaseStart),
+                    completedGoal: false,
+                    stoppedSafely: true,
+                    stopReason: .dunesCheckpoint
+                )
+            }
             engineRunTask = nil
             await importSocketTrace()
             await Task.yield()
@@ -1646,7 +1678,9 @@ final class AppStore: ObservableObject {
             // A engine acabou de sair por The Shores e já confirmou que não foi
             // respawn por morte. Só agora liberamos a Presence e protegemos loot.
             let checkpointTrigger: String
-            if resumableSafeExit {
+            if recoveringFromDeath {
+                checkpointTrigger = "respawn confirmado"
+            } else if resumableSafeExit {
                 checkpointTrigger = DunesCheckpointContinuationPolicy.triggerLabel(for: phaseResult.stopReason)
             } else {
                 checkpointTrigger = "\(DunesCheckpointPolicy.successInterval) sucessos"
@@ -1654,8 +1688,18 @@ final class AppStore: ObservableObject {
             if phaseResult.stopReason == .dunesDangerSafety {
                 log("🛡️ Dunes • dano externo sobrevivido • progresso \(total)/\(runGoal) preservado • convertendo fuga em checkpoint recuperável")
             }
-            log("🏦 Dunes CHECKPOINT \(total)/\(runGoal) • gatilho=\(checkpointTrigger) • The Shores + sobrevivência confirmadas • protegendo recursos no banco")
-            await closeDunesPresenceAfterConfirmedShores()
+            if recoveringFromDeath {
+                log("🔄 Dunes • respawn confirmado • reconstruindo BANK-FIRST + ferramenta + HP antes de reentrar • \(total)/\(runGoal)")
+                receiverTask?.cancel()
+                receiverTask = nil
+                activeEngine = nil
+                connected = false
+                await socket.close()
+                await importSocketTrace()
+            } else {
+                log("🏦 Dunes CHECKPOINT \(total)/\(runGoal) • gatilho=\(checkpointTrigger) • The Shores + sobrevivência confirmadas • protegendo recursos no banco")
+                await closeDunesPresenceAfterConfirmedShores()
+            }
             guard activeRunID == runID, activity == mode else { throw CancellationError() }
 
             dunesPresencePhase = .preflightSafe
@@ -1686,7 +1730,24 @@ final class AppStore: ObservableObject {
             receiverTask = await makeReceiverTask(stream: bankStream, engine: bankEngine, mode: mode, runID: runID)
             connected = true
             await bankEngine.prepareIdentity()
-            let loadout = try await bankEngine.prepareDunesLoadoutFromWorld(for: mode)
+            let loadout: (tool: String, healthPotionPlus: Int, toolIdentity: DunesToolInstanceIdentity, lifeEpoch: Int)
+            do {
+                loadout = try await bankEngine.prepareDunesLoadoutFromWorld(for: mode)
+            } catch let EngineError.gatherLoadoutNotReady(detail) {
+                log("🧰 Dunes • \(detail) • progresso \(total)/\(runGoal) preservado no World/Bank")
+                receiverTask?.cancel()
+                receiverTask = nil
+                activeEngine = nil
+                connected = false
+                await socket.close()
+                await importSocketTrace()
+                return EngineRunResult(
+                    successes: total,
+                    completedGoal: false,
+                    stoppedSafely: true,
+                    stopReason: .dunesToolRotation
+                )
+            }
             dunesExpectedTool = loadout.toolIdentity
             dunesExpectedLifeEpoch = loadout.lifeEpoch
             player.lifeEpoch = max(player.lifeEpoch, loadout.lifeEpoch)
