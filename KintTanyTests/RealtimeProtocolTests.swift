@@ -1575,7 +1575,7 @@ final class RealtimeProtocolTests: XCTestCase {
         XCTAssertFalse(DunesToolInstancePolicy.shouldRotateBeforeNextTarget(durability: 111, mode: .silver))
     }
 
-    func testV40MissingToolAloneDoesNotProveDunesDeath() {
+    func testV40Build5LifeEpochAloneDoesNotProveDunesDeath() {
         XCTAssertEqual(
             DunesExitSurvivalPolicy.classify(
                 expectedLifeEpoch: 2,
@@ -1588,9 +1588,18 @@ final class RealtimeProtocolTests: XCTestCase {
         XCTAssertEqual(
             DunesExitSurvivalPolicy.classify(
                 expectedLifeEpoch: 2,
-                observedLifeEpoch: 2,
-                hp: 79,
-                toolStillCarried: false
+                observedLifeEpoch: 3,
+                hp: 100,
+                toolStillCarried: true
+            ),
+            .survived
+        )
+        XCTAssertEqual(
+            DunesExitSurvivalPolicy.classify(
+                expectedLifeEpoch: 2,
+                observedLifeEpoch: 3,
+                hp: nil,
+                toolStillCarried: true
             ),
             .survived
         )
@@ -1602,6 +1611,22 @@ final class RealtimeProtocolTests: XCTestCase {
                 toolStillCarried: false
             ),
             .died
+        )
+        XCTAssertEqual(
+            DunesExitSurvivalPolicy.classify(
+                expectedLifeEpoch: 2,
+                observedLifeEpoch: 3,
+                hp: nil,
+                toolStillCarried: false
+            ),
+            .inconclusive
+        )
+    }
+
+    func testV40Build5EmergencyDunesExitCanRepresentConfirmedRespawn() {
+        XCTAssertEqual(
+            EmergencyDunesExitResult.respawnConfirmed("tool lost after full-loot"),
+            .respawnConfirmed("tool lost after full-loot")
         )
     }
 
