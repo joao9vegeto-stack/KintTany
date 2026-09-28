@@ -1713,4 +1713,55 @@ final class RealtimeProtocolTests: XCTestCase {
         )
     }
 
+    func testV40Build3WorldHPRequiresRealtimeRevisionAfterWorldEntry() {
+        XCTAssertFalse(
+            DunesWorldHPPolicy.isFreshRealtimeWorldConfirmation(
+                revision: 5,
+                minimumRevision: 5,
+                region: "world"
+            )
+        )
+        XCTAssertFalse(
+            DunesWorldHPPolicy.isFreshRealtimeWorldConfirmation(
+                revision: 6,
+                minimumRevision: 5,
+                region: "desert"
+            )
+        )
+        XCTAssertTrue(
+            DunesWorldHPPolicy.isFreshRealtimeWorldConfirmation(
+                revision: 6,
+                minimumRevision: 5,
+                region: "WORLD"
+            )
+        )
+    }
+
+    func testV40Build3UnexpectedDunesDropStillRequiresHTTPCorroboration() {
+        XCTAssertTrue(
+            DunesSnapshotHPPolicy.requiresHTTPConfirmation(
+                currentHP: 100,
+                snapshotHP: 70,
+                conservativeHP: 100,
+                region: "desert"
+            )
+        )
+        XCTAssertFalse(
+            DunesSnapshotHPPolicy.requiresHTTPConfirmation(
+                currentHP: 100,
+                snapshotHP: 99,
+                conservativeHP: 100,
+                region: "desert"
+            )
+        )
+        XCTAssertFalse(
+            DunesSnapshotHPPolicy.requiresHTTPConfirmation(
+                currentHP: 100,
+                snapshotHP: 70,
+                conservativeHP: 100,
+                region: "world"
+            )
+        )
+    }
+
 }

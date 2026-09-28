@@ -1014,13 +1014,24 @@ struct OwnVitalsPolicy {
 
 struct DunesSnapshotHPPolicy {
     /// Heat normal pode chegar um pouco fora de fase com o relógio local.
-    /// Quedas de snapshot além desta margem são confirmadas em `/me` antes de
-    /// substituir HP local. `pvit` próprio continua imediato para não mascarar PvP.
+    /// Quedas além desta margem precisam de confirmação HTTP antes de
+    /// substituir HP local. Isso vale tanto para snap quanto para pvit próprio.
     static let heatToleranceHP = DunesDamageSafetyPolicy.toleranceHP
 
     static func requiresHTTPConfirmation(currentHP: Int, snapshotHP: Int, conservativeHP: Int, region: String) -> Bool {
         guard GatherRegionPolicy.isDunesRegion(region), snapshotHP < currentHP else { return false }
         return DunesDamageSafetyPolicy.isUnexpectedDamage(observedHP: snapshotHP, conservativeHP: conservativeHP)
+    }
+}
+
+struct DunesWorldHPPolicy {
+    static func isFreshRealtimeWorldConfirmation(
+        revision: Int,
+        minimumRevision: Int,
+        region: String?
+    ) -> Bool {
+        revision > minimumRevision
+            && region?.trimmingCharacters(in: .whitespacesAndNewlines).lowercased() == "world"
     }
 }
 
@@ -1819,6 +1830,7 @@ actor AutomationEngine {
     private var equipment: String?
     private var playerID: Int?
     private var playerHP = 100
+    private var inheritedPlayerHPWasProvided = false
     private var playerShield = 0
 
     /// Region of the latest authoritative snapshot that actually contained the
@@ -1854,7 +1866,9 @@ actor AutomationEngine {
     private var dunesHeatBaselineHP = 100
     private var lastTrustedOwnHPAtMS: Double?
     private var lastTrustedOwnHPRegion: String?
+    private var lastTrustedOwnHPSource: String?
     private var ownHPRevision = 0
+    private var realtimeOwnHPRevision = 0
     private var activeGatherMode: ActivityMode?
     private var activeDunesToolIdentity: DunesToolInstanceIdentity?
     private var dunesUnexpectedDamageDetail: String?
@@ -1964,6 +1978,7 @@ actor AutomationEngine {
         fishingBait: FishingBait = .feather,
         roastMode: RoastPitMode = .trout,
         blacksmithSelection: BlacksmithSelection = .smith(.copperIngot, batch: 1, smeltGoal: 100),
+        inheritedPlayerHP: Int? = nil,
         reporter: @escaping Reporter
     ) {
         self.socket = socket
@@ -1978,6 +1993,10 @@ actor AutomationEngine {
         self.region = bootstrap.region
         self.position = bootstrap.position
         self.lifeEpoch = max(1, bootstrap.lifeEpoch)
+        if let inheritedPlayerHP {
+            self.playerHP = max(0, min(100, inheritedPlayerHP))
+            self.inheritedPlayerHPWasProvided = true
+        }
         self.gatherPositionMemory = gatherKnowledge.positionSnapshot(region: bootstrap.region)
     }
 
@@ -2476,14 +2495,26 @@ actor AutomationEngine {
             let me = try await http.get("/api/auth/me")
             if let player = me["player"] as? [String: Any], let id = RealtimeProtocol.int(player["id"]) {
                 playerID = id
-                if let hp = RealtimeProtocol.int(player["php"] ?? player["hp"]) { playerHP = hp }
-                reporter(.diagnostic("[PLAYER] /api/auth/me confirmou playerId=\(id) • HP=\(playerHP)"))
+                if let hp = RealtimeProtocol.int(player["php"] ?? player["hp"]) {
+                    let bounded = max(0, min(100, hp))
+                    if !inheritedPlayerHPWasProvided, realtimeOwnHPRevision == 0 {
+                        playerHP = bounded
+                    }
+                    reporter(.diagnostic("[PLAYER] /api/auth/me confirmou playerId=\(id) • HP HTTP=\(bounded) • referência apenas; realtime ainda é a autoridade de reentrada Dunes"))
+                } else {
+                    reporter(.diagnostic("[PLAYER] /api/auth/me confirmou playerId=\(id) • HP ausente"))
+                }
             } else {
                 reporter(.diagnostic("[PLAYER] /api/auth/me não trouxe player.id; confirmações by=self ficarão conservadoras"))
             }
         } catch {
             reporter(.diagnostic("[PLAYER] /api/auth/me falhou: \(error.localizedDescription)"))
         }
+    }
+
+    func latestTrustedHPForHandoff() -> Int? {
+        guard realtimeOwnHPRevision > 0 else { return nil }
+        return max(0, min(100, playerHP))
     }
 
 func makeRecoveryProgressAnchor(for mode: ActivityMode) async -> ActivityRecoveryAnchor? {
@@ -2657,7 +2688,7 @@ func makeRecoveryProgressAnchor(for mode: ActivityMode) async -> ActivityRecover
             }
 
         case "pvit":
-            ingestPlayerVitals(packet)
+            await ingestPlayerVitals(packet)
 
         case "wild_mb_ack":
             ingestWildVitals(packet)
@@ -2979,7 +3010,11 @@ func makeRecoveryProgressAnchor(for mode: ActivityMode) async -> ActivityRecover
         ))
     }
 
-    private func recordTrustedOwnHP(_ hp: Int, regionHint: String? = nil) {
+    private func recordTrustedOwnHP(
+        _ hp: Int,
+        regionHint: String? = nil,
+        source: String
+    ) {
         let previousHP = playerHP
         let trustedRegion = (regionHint ?? serverRegion ?? region)
             .trimmingCharacters(in: .whitespacesAndNewlines)
@@ -2996,17 +3031,20 @@ func makeRecoveryProgressAnchor(for mode: ActivityMode) async -> ActivityRecover
             if DunesDamageSafetyPolicy.isUnexpectedDamage(observedHP: hp, conservativeHP: conservativeBefore),
                activeGatherMode?.isDunesGathering == true,
                safeStopReason == nil {
-                dunesUnexpectedDamageDetail = "HP \(previousHP)→\(hp) • térmico esperado≈\(conservativeBefore)"
+                dunesUnexpectedDamageDetail = "HP \(previousHP)→\(hp) • térmico esperado≈\(conservativeBefore) • fonte=\(source)"
                 safeStopReason = .dunesDangerSafety
                 reporter(.state(.recovering, "Dano externo nas Dunes • saída imediata"))
                 reporter(.log("🚨 Proteção das Dunes • queda de HP incompatível com calor • \(dunesUnexpectedDamageDetail ?? "-") • coleta bloqueada • saída imediata para The Shores"))
             }
         }
 
-        playerHP = hp
+        playerHP = max(0, min(100, hp))
         ownHPRevision += 1
+        realtimeOwnHPRevision += 1
         lastTrustedOwnHPAtMS = timestamp
         lastTrustedOwnHPRegion = trustedRegion
+        lastTrustedOwnHPSource = source
+        reporter(.diagnostic("[HP][AUTH] realtime aceito • fonte=\(source) • região=\(trustedRegion) • HP \(previousHP)→\(playerHP) • rev=\(realtimeOwnHPRevision)"))
 
         guard GatherRegionPolicy.isDunesRegion(trustedRegion) else { return }
         guard let baseline = dunesHeatBaselineAtMS else {
@@ -3036,7 +3074,7 @@ func makeRecoveryProgressAnchor(for mode: ActivityMode) async -> ActivityRecover
         guard DunesSnapshotHPPolicy.requiresHTTPConfirmation(
             currentHP: playerHP, snapshotHP: hp, conservativeHP: conservative, region: trustedRegion
         ) else {
-            recordTrustedOwnHP(hp, regionHint: trustedRegion)
+            recordTrustedOwnHP(hp, regionHint: trustedRegion, source: source)
             return
         }
         let revision = ownHPRevision
@@ -3054,14 +3092,27 @@ func makeRecoveryProgressAnchor(for mode: ActivityMode) async -> ActivityRecover
             }
             if let player = me["player"] as? [String: Any],
                let authoritativeHP = RealtimeProtocol.int(player["php"] ?? player["hp"]) {
-                reporter(.diagnostic("[DUNES][HP] snapshot=\(hp) • /me=\(authoritativeHP) • fonte=\(source)"))
-                recordTrustedOwnHP(authoritativeHP, regionHint: trustedRegion)
+                reporter(.diagnostic("[DUNES][HP] observado=\(hp) • /me=\(authoritativeHP) • fonte=\(source)"))
+                if authoritativeHP > hp + DunesDamageSafetyPolicy.toleranceHP {
+                    reporter(.log("⚠️ Dunes • HP baixo \(hp) via \(source) rejeitado após /me=\(authoritativeHP) • fuga por falso drop evitada"))
+                }
+                recordTrustedOwnHP(
+                    authoritativeHP,
+                    regionHint: trustedRegion,
+                    source: "\(source)+/me"
+                )
                 return
             }
         } catch {
             reporter(.diagnostic("[DUNES][HP] /me indisponível • fail-safe aceita HP baixo • \(error.localizedDescription)"))
         }
-        if ownHPRevision == revision { recordTrustedOwnHP(hp, regionHint: trustedRegion) }
+        if ownHPRevision == revision {
+            recordTrustedOwnHP(
+                hp,
+                regionHint: trustedRegion,
+                source: "\(source)-failsafe-sem-/me"
+            )
+        }
     }
 
     private func hasRecentTrustedDunesHP(maxAgeMS: Double = 5_000) -> Bool {
@@ -3072,12 +3123,18 @@ func makeRecoveryProgressAnchor(for mode: ActivityMode) async -> ActivityRecover
         return nowMS - at <= maxAgeMS
     }
 
-    private func ingestPlayerVitals(_ packet: [String: Any]) {
+    private func ingestPlayerVitals(_ packet: [String: Any]) async {
         let packetPlayerID = RealtimeProtocol.int(packet["pid"] ?? packet["id"])
         guard OwnVitalsPolicy.shouldApplyPvit(packetPlayerID: packetPlayerID, playerID: playerID) else { return }
         let previousHP = playerHP
         let previousShield = playerShield
-        if let hp = RealtimeProtocol.int(packet["php"]) { recordTrustedOwnHP(hp) }
+        if let hp = RealtimeProtocol.int(packet["php"]) {
+            await recordSnapshotOwnHP(
+                hp,
+                source: "pvit-own",
+                regionHint: serverRegion ?? region
+            )
+        }
         if let shield = RealtimeProtocol.int(packet["wsh"]) { playerShield = shield }
         if let le = RealtimeProtocol.int(packet["le"]), le > lifeEpoch { lifeEpoch = le }
         if region.hasPrefix("wild"), (playerHP < previousHP || playerShield < previousShield) {
@@ -4718,8 +4775,9 @@ func makeRecoveryProgressAnchor(for mode: ActivityMode) async -> ActivityRecover
                 reporter(.log("🏦 Dunes FULL-LOOT • \(finalTool.bank)x \(selectedName) protegida(s) no banco ✅"))
             }
             reporter(.log("❤️‍🔥 Preflight Dunes • Health Potion+ carregadas: \(healthPotionPlus.carried)/\(DunesHeatSafetyPolicy.carriedHealthPotionPlusTarget)"))
+            let realtimeRevisionBeforeWorldEntry = realtimeOwnHPRevision
             try await leaveBankShopToWorld(reason: "preflight Dunes concluído")
-            try await recoverDunesHPInWorldBeforeEntry()
+            try await recoverDunesHPInWorldBeforeEntry(afterRealtimeRevision: realtimeRevisionBeforeWorldEntry)
             return (selected, healthPotionPlus.carried, exposed.identity, lifeEpoch)
         } catch {
             try? await leaveBankShopToWorld(reason: "preflight Dunes abortado")
@@ -4729,21 +4787,52 @@ func makeRecoveryProgressAnchor(for mode: ActivityMode) async -> ActivityRecover
 
     /// Build 93: the World regeneration zone is a safe checkpoint stage.
     /// Do not re-enter Dunes until HP=100 is observed authoritatively.
-    private func recoverDunesHPInWorldBeforeEntry() async throws {
+    private func recoverDunesHPInWorldBeforeEntry(afterRealtimeRevision minimumRevision: Int) async throws {
         guard try await waitForRegion("world", timeoutMS: 5_000) else {
             throw EngineError.regionNotConfirmed("world para regeneração")
         }
 
-        // Build 94: do not make an unnecessary trip when the authoritative
-        // World Presence already confirms full HP. playerHP is only updated by
-        // trusted pvit/snapshot or the /me confirmation path.
+        // Build 3: never treat the engine's default/inherited/HTTP-only HP as a
+        // fresh World confirmation. A new realtime vital from this World Presence
+        // must arrive after the bank→World transition.
+        reporter(.log("❤️ World • aguardando HP realtime novo antes de liberar reentrada nas Dunes"))
+        let confirmationDeadline = nowMS + 6_000
+        var lastProbeAt: Double = 0
+        while nowMS < confirmationDeadline {
+            try Task.checkCancellation()
+            if DunesWorldHPPolicy.isFreshRealtimeWorldConfirmation(
+                revision: realtimeOwnHPRevision,
+                minimumRevision: minimumRevision,
+                region: lastTrustedOwnHPRegion
+            ) {
+                break
+            }
+            if nowMS - lastProbeAt >= 600 {
+                lastProbeAt = nowMS
+                try await sendPosition(moving: false, full: true)
+            }
+            try await sleep(80)
+        }
+
+        guard DunesWorldHPPolicy.isFreshRealtimeWorldConfirmation(
+            revision: realtimeOwnHPRevision,
+            minimumRevision: minimumRevision,
+            region: lastTrustedOwnHPRegion
+        ) else {
+            throw EngineError.gatherLoadoutNotReady(
+                "HP realtime do World não foi confirmado após a saída do banco; reentrada nas Dunes bloqueada"
+            )
+        }
+
+        let source = lastTrustedOwnHPSource ?? "realtime"
+        reporter(.log("❤️ HP realtime confirmado • \(playerHP)/100 • fonte=\(source) • World"))
         if DunesWorldRecoveryPolicy.isRecovered(hp: playerHP) {
             reporter(.log("❤️ HP real confirmado • \(playerHP)/100 • regeneração dispensada"))
             return
         }
 
         reporter(.state(.recovering, "Recuperando HP no World"))
-        reporter(.log("❤️ HP real confirmado • \(playerHP)/100 • recuperação necessária"))
+        reporter(.log("❤️ HP realtime \(playerHP)/100 • recuperação necessária"))
         reporter(.log("💚 Dunes CHECKPOINT • indo à zona segura de regeneração no World"))
         try await walk(
             to: DunesWorldRecoveryPolicy.safePoint,
@@ -4760,25 +4849,25 @@ func makeRecoveryProgressAnchor(for mode: ActivityMode) async -> ActivityRecover
                 throw EngineError.regionNotConfirmed("world durante regeneração")
             }
 
-            if DunesWorldRecoveryPolicy.isRecovered(hp: playerHP) {
-                reporter(.log("💚 HP real confirmado • \(playerHP)/100 • retorno às Dunes liberado"))
+            if DunesWorldRecoveryPolicy.isRecovered(hp: playerHP),
+               lastTrustedOwnHPRegion == "world",
+               realtimeOwnHPRevision > minimumRevision {
+                reporter(.log("💚 HP realtime confirmado • \(playerHP)/100 • fonte=\(lastTrustedOwnHPSource ?? "realtime") • retorno às Dunes liberado"))
                 return
             }
 
             if playerHP != lastReportedHP {
                 lastReportedHP = playerHP
-                reporter(.log("❤️ Regeneração • HP real \(playerHP)/100"))
-                reporter(.diagnostic("[DUNES][RECOVERY] zona World • HP autoritativo=\(playerHP)/100"))
+                reporter(.log("❤️ Regeneração • HP realtime \(playerHP)/100 • fonte=\(lastTrustedOwnHPSource ?? "aguardando")"))
+                reporter(.diagnostic("[DUNES][RECOVERY] zona World • HP realtime=\(playerHP)/100 • rev=\(realtimeOwnHPRevision)"))
             }
 
-            // A posição fica parada dentro da área; heartbeats/snapshots são a
-            // fonte da confirmação. Não sintetize HP e não use poção.
-            try await sendPosition(moving: false)
+            try await sendPosition(moving: false, full: true)
             try await sleep(500)
         }
 
         throw EngineError.gatherLoadoutNotReady(
-            "HP não chegou a 100/100 na zona de regeneração do World; reentrada nas Dunes bloqueada"
+            "HP realtime não chegou a 100/100 na zona de regeneração do World; reentrada nas Dunes bloqueada"
         )
     }
 

@@ -52,3 +52,12 @@ GitHub Actions em `macos-26` executa XCTest, build `iphoneos`, valida configura�
 - A iid que acabou de disparar rotação preventiva é excluída explicitamente daquela seleção.
 - A cópia carregada é validada pela iid realmente retirada, sem ser confundida com uma cópia de menor durabilidade ainda no banco.
 - STOP é autoridade global da sessão Dunes. Em World/Bank/The Shores nenhum novo `desert` pode ser aberto após STOP; se o toque competir com uma reconexão, a nova Presence é fechada antes de qualquer coleta.
+
+
+## v4.0 Build 3 — autoridade de HP nas Dunes
+
+- Engines novas podem herdar o último HP realtime conhecido para não voltar visualmente a 100 por default, mas herança não conta como confirmação fresca.
+- A reentrada nas Dunes só é liberada após uma vital realtime nova da Presence World, posterior à transição bank_shop→World.
+- `/api/auth/me` continua útil para playerId e para corroborar um drop suspeito, mas seu HP isolado não satisfaz o gate realtime de reentrada.
+- Drops inesperados de HP vindos de `pvit` próprio passam pela mesma confirmação HTTP já usada por snapshots suspeitos; divergência é registrada e o drop baixo não dispara fuga.
+- Logs de HP agora registram fonte e revisão autoritativa para diagnosticar futuras divergências sem adivinhar.

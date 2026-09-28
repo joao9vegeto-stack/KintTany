@@ -1693,6 +1693,7 @@ final class AppStore: ObservableObject {
 
             let total = max(stats.successes, phaseStart + phaseResult.successes)
             stats.successes = total
+            let checkpointHPHandoff = await phaseEngine.latestTrustedHPForHandoff()
 
             if requestedStopReason == .user || phaseResult.stopReason == .user {
                 log("STOP confirmado após saída segura das Dunes • progresso \(total)/\(runGoal) preservado • checkpoint não será reaberto")
@@ -1786,8 +1787,9 @@ final class AppStore: ObservableObject {
                 shard: shard,
                 bootstrap: bankBootstrap,
                 fishingBait: selectedFishingBait,
-                    roastMode: selectedRoastMode,
+                roastMode: selectedRoastMode,
                 blacksmithSelection: selectedBlacksmith,
+                inheritedPlayerHP: checkpointHPHandoff,
                 reporter: engineReporter(runID: runID)
             )
             activeEngine = bankEngine
@@ -1818,6 +1820,7 @@ final class AppStore: ObservableObject {
             dunesExpectedTool = loadout.toolIdentity
             dunesExpectedLifeEpoch = loadout.lifeEpoch
             player.lifeEpoch = max(player.lifeEpoch, loadout.lifeEpoch)
+            let reentryHPHandoff = await bankEngine.latestTrustedHPForHandoff()
             let toolName = ActivityToolPolicy.displayName(loadout.tool)
             log("🏦 Dunes CHECKPOINT • recursos protegidos no banco • \(toolName) única mantida ✅")
             if loadout.healthPotionPlus > 0 {
@@ -1892,8 +1895,9 @@ final class AppStore: ObservableObject {
                 shard: shard,
                 bootstrap: activityBootstrap,
                 fishingBait: selectedFishingBait,
-                    roastMode: selectedRoastMode,
+                roastMode: selectedRoastMode,
                 blacksmithSelection: selectedBlacksmith,
+                inheritedPlayerHP: reentryHPHandoff,
                 reporter: engineReporter(runID: runID)
             )
             phaseEngine = activityEngine
@@ -2517,8 +2521,10 @@ final class AppStore: ObservableObject {
             if GatherPresenceHandoffPolicy.requiresFreshActivityPresence(after: gatherPreflight),
                case .needsWorld(let tool) = gatherPreflight {
                 var name = ActivityToolPolicy.displayName(tool)
+                var initialDunesHPHandoff: Int?
                 if mode.isDunesGathering {
                     let dunesLoadout = try await engine.prepareDunesLoadoutFromWorld(for: mode)
+                    initialDunesHPHandoff = await engine.latestTrustedHPForHandoff()
                     dunesExpectedTool = dunesLoadout.toolIdentity
                     dunesExpectedLifeEpoch = dunesLoadout.lifeEpoch
                     player.lifeEpoch = max(player.lifeEpoch, dunesLoadout.lifeEpoch)
@@ -2574,6 +2580,7 @@ final class AppStore: ObservableObject {
                     fishingBait: selectedFishingBait,
                     roastMode: selectedRoastMode,
                     blacksmithSelection: selectedBlacksmith,
+                    inheritedPlayerHP: initialDunesHPHandoff,
                     reporter: engineReporter(runID: runID)
                 )
                 engine = activityEngine
