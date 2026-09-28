@@ -314,14 +314,20 @@ struct DunesExitSurvivalPolicy {
         // even when lifeEpoch advanced during reconnect.
         if toolStillCarried { return .survived }
 
-        // During a Dunes exit there is no bank/tool rotation between exposure
-        // and verification. A positive respawn HP together with loss of the
-        // exposed physical tool is therefore the compound full-loot signal.
-        if let hp, hp > 0 { return .died }
+        // lifeEpoch is not death evidence by itself. It becomes useful only
+        // when combined with loss of the exact exposed physical tool and a
+        // positive post-transition HP, which is the respawn/full-loot shape.
+        if let observedLifeEpoch,
+           observedLifeEpoch > expectedLifeEpoch,
+           let hp,
+           hp > 0 {
+            return .died
+        }
 
-        // lifeEpoch alone is intentionally ignored for death classification.
-        _ = expectedLifeEpoch
-        _ = observedLifeEpoch
+        // Positive HP with no epoch transition remains survival-compatible even
+        // if an auxiliary inventory lookup temporarily misses the tool.
+        if let hp, hp > 0 { return .survived }
+
         return .inconclusive
     }
 
