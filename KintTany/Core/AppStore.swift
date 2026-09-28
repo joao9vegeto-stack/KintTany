@@ -3332,9 +3332,10 @@ final class AppStore: ObservableObject {
                     log("🔁 Conexão restaurada no \(shard) • prioridade absoluta: confirmar The Shores")
 
                     _ = try await engine.runEmergencyDunesExit(
-                        reason: "perda de conexão",
+                        reason: requestedStopReason == .user ? "STOP após perda de conexão" : "perda de conexão",
                         expectedTool: dunesExpectedTool,
-                        expectedLifeEpoch: dunesExpectedLifeEpoch
+                        expectedLifeEpoch: dunesExpectedLifeEpoch,
+                        allowInconclusiveSurvivalAfterConfirmedShores: requestedStopReason == .user
                     )
                     await closeDunesPresenceAfterConfirmedShores()
                     terminalFailureHandled = true
@@ -3429,6 +3430,25 @@ final class AppStore: ObservableObject {
                    mode.isDunesGathering {
                     await handleConfirmedDunesDeath(mode: mode, detail: detail)
                     return false
+                }
+
+                if let engineError = error as? EngineError,
+                   case .dunesExitSurvivalUnconfirmed(let detail) = engineError,
+                   mode.isDunesGathering,
+                   requestedStopReason == .user {
+                    terminalFailureHandled = true
+                    connectionRecoveryRequested = false
+                    connectionRecoveryDetail = nil
+                    currentTarget = nil
+                    activity = nil
+                    state = .cancelled
+                    statusMessage = "STOP • The Shores alcançada"
+                    stats.lastEvent = "STOP encerrado após Shores inconclusiva"
+                    log("🛑 STOP • The Shores alcançada; verificação auxiliar inconclusiva (\(detail)) • nenhuma nova Presence desert será aberta")
+                    logSessionSummary(mode: mode, outcome: "STOP • SHORES")
+                    finishContinuedProcessing(success: false, reason: "STOP após The Shores")
+                    await socket.close()
+                    return true
                 }
 
                 let disconnectDetail = await socket.disconnectReason()
