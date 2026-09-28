@@ -4878,9 +4878,16 @@ func makeRecoveryProgressAnchor(for mode: ActivityMode) async -> ActivityRecover
             if let best = ActivityToolPolicy.bestSelection(in: state.backpack, for: mode), best.carried >= 1 {
                 activeGatherToolType = best.type
                 if mode.isDunesGathering {
-                    activeDunesToolIdentity = DunesToolInstancePolicy
-                        .preferredInstance(in: state.backpack, type: best.type)?
-                        .identity
+                    guard let carried = DunesToolInstancePolicy.carriedInstance(
+                        in: state.backpack,
+                        type: best.type,
+                        preferredIID: nil
+                    ) else {
+                        throw EngineError.gatherLoadoutNotReady(
+                            "\(ActivityToolPolicy.displayName(best.type)) carregada sem identidade física confirmável"
+                        )
+                    }
+                    activeDunesToolIdentity = carried.identity
                 }
                 reporter(.log("🧰 Preflight • \(ActivityToolPolicy.displayName(best.type)) carregada ✅"))
                 return
