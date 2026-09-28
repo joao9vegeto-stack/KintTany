@@ -2,7 +2,7 @@
 
 ## Versão atual
 
-**KintTany v2.0 (build 20)**.
+**KintTany v4.0 (build 1)**.
 
 
 Projeto iOS nativo Swift/SwiftUI.
@@ -48,7 +48,7 @@ Não inclua cookies, chaves privadas, carteiras ou arquivos `.env` no projeto.
 
 1. Suba o conteúdo desta pasta para a raiz do repositório GitHub.
 2. Conecte esse repositório ao Codemagic.
-3. Selecione a branch `main` e toque em **Check for configuration files**.
+3. Selecione a branch `main6` e toque em **Check for configuration files**.
 4. O workflow **KintTany iOS - Unsigned IPA** será encontrado a partir de `codemagic.yaml`.
 5. Inicie o build. O runner Mac executará XCTest, compilará para `iphoneos` e publicará `KintTany-unsigned.ipa`.
 6. Baixe o artifact diretamente pelo navegador do iPhone e assine-o pelo seu fluxo de sideload.

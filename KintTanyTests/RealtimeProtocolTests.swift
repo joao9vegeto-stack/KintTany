@@ -1549,4 +1549,80 @@ final class RealtimeProtocolTests: XCTestCase {
         XCTAssertTrue(profile.skills.loaded)
     }
 
+    func testV40DunesToolRotationUsesLowestSafeDurability() {
+        let backpack: [String: Any] = [
+            "hotbar": [
+                ["t": "tool_axe_l2", "iid": "worn", "d": 87],
+                ["t": "tool_axe_l2", "iid": "safe", "d": 366]
+            ],
+            "invSlots": [NSNull()],
+            "bankSlots": [
+                ["t": "silver_axe", "iid": "best", "d": 118],
+                ["t": "tool_axe_l2", "iid": "great", "d": 2100]
+            ]
+        ]
+        let selected = DunesToolInstancePolicy.preferredCompatibleInstance(in: backpack, for: .cacti)
+        XCTAssertEqual(selected?.iid, "best")
+        XCTAssertEqual(selected?.durability, 118)
+        XCTAssertFalse(DunesToolInstancePolicy.isSafeDurability(100))
+        XCTAssertTrue(DunesToolInstancePolicy.isSafeDurability(101))
+    }
+
+    func testV40DunesToolRotationStopsBeforeCrossingFloor() {
+        XCTAssertTrue(DunesToolInstancePolicy.shouldRotateBeforeNextTarget(durability: 106, mode: .cacti))
+        XCTAssertFalse(DunesToolInstancePolicy.shouldRotateBeforeNextTarget(durability: 107, mode: .cacti))
+        XCTAssertTrue(DunesToolInstancePolicy.shouldRotateBeforeNextTarget(durability: 110, mode: .silver))
+        XCTAssertFalse(DunesToolInstancePolicy.shouldRotateBeforeNextTarget(durability: 111, mode: .silver))
+    }
+
+    func testV40MissingToolAloneDoesNotProveDunesDeath() {
+        XCTAssertEqual(
+            DunesExitSurvivalPolicy.classify(
+                expectedLifeEpoch: 2,
+                observedLifeEpoch: nil,
+                hp: nil,
+                toolStillCarried: false
+            ),
+            .inconclusive
+        )
+        XCTAssertEqual(
+            DunesExitSurvivalPolicy.classify(
+                expectedLifeEpoch: 2,
+                observedLifeEpoch: 2,
+                hp: 79,
+                toolStillCarried: false
+            ),
+            .survived
+        )
+        XCTAssertEqual(
+            DunesExitSurvivalPolicy.classify(
+                expectedLifeEpoch: 2,
+                observedLifeEpoch: 3,
+                hp: 100,
+                toolStillCarried: false
+            ),
+            .died
+        )
+    }
+
+    func testV40SafeModesDeclareSameShardRealtimeRecovery() {
+        XCTAssertTrue(ActivityMode.fishing.resumesAfterSafeRealtimeLoss)
+        XCTAssertTrue(ActivityMode.roastPit.resumesAfterSafeRealtimeLoss)
+        XCTAssertTrue(ActivityMode.blacksmith.resumesAfterSafeRealtimeLoss)
+        XCTAssertTrue(ActivityMode.chicken.resumesAfterSafeRealtimeLoss)
+        XCTAssertFalse(ActivityMode.silver.resumesAfterSafeRealtimeLoss)
+        XCTAssertFalse(ActivityMode.dragon.resumesAfterSafeRealtimeLoss)
+    }
+
+    func testV40HeadlessAndAtomicStopCapabilities() {
+        XCTAssertTrue(ActivityMode.blacksmith.supportsBackgroundHeadless)
+        XCTAssertTrue(ActivityMode.roastPit.supportsBackgroundHeadless)
+        XCTAssertTrue(ActivityMode.fishing.supportsBackgroundHeadless)
+        XCTAssertFalse(ActivityMode.silver.supportsBackgroundHeadless)
+        XCTAssertTrue(ActivityMode.blacksmith.supportsAtomicStop)
+        XCTAssertTrue(ActivityMode.roastPit.supportsAtomicStop)
+        XCTAssertTrue(ActivityMode.fishing.supportsAtomicStop)
+        XCTAssertFalse(ActivityMode.chicken.supportsAtomicStop)
+    }
+
 }

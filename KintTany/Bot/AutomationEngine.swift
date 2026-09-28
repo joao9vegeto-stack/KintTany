@@ -37,6 +37,7 @@ enum EngineStopReason: Equatable {
     case dunesCheckpoint
     case dunesHeatSafety
     case dunesDangerSafety
+    case dunesToolRotation
 }
 
 enum EmergencyWildExitResult: Equatable {
@@ -102,7 +103,7 @@ struct DunesCheckpointContinuationPolicy {
     /// be confirmed. Once The Shores + exposed tool are confirmed, reuse the
     /// normal protected checkpoint pipeline (bank → World HP recovery → Dunes).
     static func shouldResumeAfterSafeExit(_ reason: EngineStopReason?) -> Bool {
-        reason == .dunesCheckpoint || reason == .dunesDangerSafety
+        reason == .dunesCheckpoint || reason == .dunesDangerSafety || reason == .dunesToolRotation
     }
 
     static func triggerLabel(for reason: EngineStopReason?) -> String {
@@ -111,6 +112,8 @@ struct DunesCheckpointContinuationPolicy {
             return "dano externo sobrevivido"
         case .dunesCheckpoint:
             return "180s de exposição"
+        case .dunesToolRotation:
+            return "rotação preventiva de ferramenta"
         default:
             return "checkpoint seguro"
         }
@@ -143,38 +146,77 @@ struct DunesToolInstanceSelection: Equatable {
 }
 
 struct DunesToolInstancePolicy {
+    static let durabilityFloor = 100
+
+    static func requiredReserve(for mode: ActivityMode) -> Int {
+        switch mode {
+        case .cacti: return 6
+        case .silver: return 10
+        default: return 10
+        }
+    }
+
+    static func isSafeDurability(_ durability: Int?) -> Bool {
+        guard let durability else { return false }
+        return durability > durabilityFloor
+    }
+
+    static func shouldRotateBeforeNextTarget(durability: Int?, mode: ActivityMode) -> Bool {
+        guard let durability else { return true }
+        return durability - requiredReserve(for: mode) <= durabilityFloor
+    }
+
+    private static func candidates(
+        in backpack: [String: Any],
+        sourceKey: String,
+        acceptedTypes: Set<String>
+    ) -> [DunesToolInstanceSelection] {
+        guard let slots = backpack[sourceKey] as? [Any] else { return [] }
+        return slots.enumerated().compactMap { index, raw in
+            guard let slot = raw as? [String: Any],
+                  let type = slot["t"] as? String,
+                  acceptedTypes.contains(type)
+            else { return nil }
+
+            let durability = RealtimeProtocol.int(slot["d"] ?? slot["durability"])
+            guard isSafeDurability(durability) else { return nil }
+            return DunesToolInstanceSelection(
+                type: type,
+                iid: SaveBackpackConflictPolicy.normalizedIID(slot["iid"]),
+                durability: durability,
+                sourceKey: sourceKey,
+                sourceIndex: index
+            )
+        }
+    }
+
+    private static func best(_ values: [DunesToolInstanceSelection]) -> DunesToolInstanceSelection? {
+        values.sorted { lhs, rhs in
+            let ld = lhs.durability ?? Int.max
+            let rd = rhs.durability ?? Int.max
+            if ld != rd { return ld < rd }
+            if lhs.type != rhs.type { return lhs.type < rhs.type }
+            if lhs.sourceKey != rhs.sourceKey { return lhs.sourceKey < rhs.sourceKey }
+            return lhs.sourceIndex < rhs.sourceIndex
+        }.first
+    }
+
     static func preferredInstance(in backpack: [String: Any], type: String) -> DunesToolInstanceSelection? {
-        func candidates(in sourceKey: String) -> [DunesToolInstanceSelection] {
-            guard let slots = backpack[sourceKey] as? [Any] else { return [] }
-            return slots.enumerated().compactMap { index, raw in
-                guard let slot = raw as? [String: Any], slot["t"] as? String == type else { return nil }
-                let durability = RealtimeProtocol.int(slot["d"] ?? slot["durability"])
-                // A confirmed zero/negative durability is not intentionally exposed
-                // to a full-loot realm. Unknown durability remains eligible.
-                if let durability, durability <= 0 { return nil }
-                return DunesToolInstanceSelection(
-                    type: type,
-                    iid: SaveBackpackConflictPolicy.normalizedIID(slot["iid"]),
-                    durability: durability,
-                    sourceKey: sourceKey,
-                    sourceIndex: index
-                )
-            }
-        }
+        best(
+            candidates(in: backpack, sourceKey: "hotbar", acceptedTypes: [type]) +
+            candidates(in: backpack, sourceKey: "invSlots", acceptedTypes: [type]) +
+            candidates(in: backpack, sourceKey: "bankSlots", acceptedTypes: [type])
+        )
+    }
 
-        func best(_ values: [DunesToolInstanceSelection]) -> DunesToolInstanceSelection? {
-            values.sorted { lhs, rhs in
-                let ld = lhs.durability ?? Int.max
-                let rd = rhs.durability ?? Int.max
-                if ld != rd { return ld < rd }
-                if lhs.sourceKey != rhs.sourceKey { return lhs.sourceKey < rhs.sourceKey }
-                return lhs.sourceIndex < rhs.sourceIndex
-            }.first
-        }
-
-        let carried = candidates(in: "hotbar") + candidates(in: "invSlots")
-        if let selected = best(carried) { return selected }
-        return best(candidates(in: "bankSlots"))
+    static func preferredCompatibleInstance(in backpack: [String: Any], for mode: ActivityMode) -> DunesToolInstanceSelection? {
+        let accepted = Set(ActivityToolPolicy.acceptedTools(for: mode))
+        guard !accepted.isEmpty else { return nil }
+        return best(
+            candidates(in: backpack, sourceKey: "hotbar", acceptedTypes: accepted) +
+            candidates(in: backpack, sourceKey: "invSlots", acceptedTypes: accepted) +
+            candidates(in: backpack, sourceKey: "bankSlots", acceptedTypes: accepted)
+        )
     }
 }
 
@@ -191,6 +233,12 @@ struct BankDepositPreservationPolicy {
     }
 }
 
+enum DunesExitSurvivalClassification: Equatable {
+    case survived
+    case died
+    case inconclusive
+}
+
 struct DunesExitSurvivalPolicy {
     static func toolStillCarried(_ selected: DunesToolInstanceIdentity, in backpack: [String: Any]) -> Bool {
         for key in ["hotbar", "invSlots"] {
@@ -200,14 +248,27 @@ struct DunesExitSurvivalPolicy {
                 if let iid = selected.iid {
                     if SaveBackpackConflictPolicy.normalizedIID(slot["iid"]) == iid { return true }
                 } else {
-                    // Build 76 guarantees one carried instance before Dunes entry.
-                    // Without iid, type presence is safer than durability equality
-                    // because durability legitimately changes while gathering.
                     return true
                 }
             }
         }
         return false
+    }
+
+    static func classify(
+        expectedLifeEpoch: Int,
+        observedLifeEpoch: Int?,
+        hp: Int?,
+        toolStillCarried: Bool
+    ) -> DunesExitSurvivalClassification {
+        if let observedLifeEpoch, observedLifeEpoch > expectedLifeEpoch { return .died }
+        if let hp, hp <= 0 { return .died }
+
+        // v4.0: a tool may legitimately have been rotated/broken. Its absence is
+        // not proof of full-loot death. Fresh positive life/HP evidence is enough.
+        if observedLifeEpoch != nil || hp != nil { return .survived }
+        if toolStillCarried { return .survived }
+        return .inconclusive
     }
 
     static func survived(
@@ -216,9 +277,12 @@ struct DunesExitSurvivalPolicy {
         hp: Int?,
         toolStillCarried: Bool
     ) -> Bool {
-        if let observedLifeEpoch, observedLifeEpoch > expectedLifeEpoch { return false }
-        if let hp, hp <= 0 { return false }
-        return toolStillCarried
+        classify(
+            expectedLifeEpoch: expectedLifeEpoch,
+            observedLifeEpoch: observedLifeEpoch,
+            hp: hp,
+            toolStillCarried: toolStillCarried
+        ) == .survived
     }
 }
 
@@ -1675,6 +1739,18 @@ struct EngineRunResult {
     let stopReason: EngineStopReason?
 }
 
+enum ActivityRecoveryMetric: Sendable {
+    case itemIncrease(type: String)
+    case itemDecrease(type: String)
+    case repair(slotKind: String, slotIdx: Int, type: String, iid: String?, maxDurability: Int)
+}
+
+struct ActivityRecoveryAnchor: Sendable {
+    let metric: ActivityRecoveryMetric
+    let baseline: Int
+    let unitsPerSuccess: Int
+}
+
 /// The protocol engine owns one serial actor, independent from SwiftUI's main
 /// actor. Socket ingestion, ACK gates, movement and action profiles therefore
 /// continue to make progress while iOS deprioritizes UI work in background.
@@ -2062,7 +2138,13 @@ actor AutomationEngine {
 
         while successes < target {
             try Task.checkCancellation()
+            if safeStopReason != nil {
+                safeStopCompleted = true
+                break
+            }
             let cycle = successes + 1
+            let displayCycle = gatherSuccessOffset + cycle
+            let displayGoal = gatherDisplayGoal ?? target
 
             if confirmedApproach == nil {
                 let candidate = RoastPitProtocolPolicy.approachPositions[candidateIndex % RoastPitProtocolPolicy.approachPositions.count]
@@ -2077,16 +2159,16 @@ actor AutomationEngine {
                 try Task.checkCancellation()
                 reporter(.roastCountdown(
                     mode: roastMode,
-                    cycle: cycle,
-                    goal: target,
+                    cycle: displayCycle,
+                    goal: displayGoal,
                     secondsRemaining: second
                 ))
                 try await sleep(1_000)
             }
             reporter(.roastCountdown(
                 mode: roastMode,
-                cycle: cycle,
-                goal: target,
+                cycle: displayCycle,
+                    goal: displayGoal,
                 secondsRemaining: 0
             ))
 
@@ -2125,8 +2207,8 @@ actor AutomationEngine {
             reporter(.attempt)
             reporter(.roastResult(
                 mode: roastMode,
-                cycle: successes,
-                goal: target,
+                cycle: gatherSuccessOffset + successes,
+                goal: displayGoal,
                 burned: burned,
                 xpGained: xpGained,
                 cookingXPTotal: cookingXPTotal,
@@ -2135,9 +2217,9 @@ actor AutomationEngine {
             ))
 
             if burned {
-                reporter(.log("🔥 Ciclo \(successes)/\(target) • \(roastMode.label) QUEIMOU • +0 Cooking XP • Cooking XP total \(cookingXPTotal) • cozidos \(cookedCount) • queimados \(burnedCount)"))
+                reporter(.log("🔥 Ciclo \(gatherSuccessOffset + successes)/\(displayGoal) • \(roastMode.label) QUEIMOU • +0 Cooking XP • Cooking XP total \(cookingXPTotal) • cozidos \(cookedCount) • queimados \(burnedCount)"))
             } else {
-                reporter(.log("✅ Ciclo \(successes)/\(target) • \(roastMode.label) assado • +\(xpGained) Cooking XP • Cooking XP total \(cookingXPTotal) • cozidos \(cookedCount) • queimados \(burnedCount)"))
+                reporter(.log("✅ Ciclo \(gatherSuccessOffset + successes)/\(displayGoal) • \(roastMode.label) assado • +\(xpGained) Cooking XP • Cooking XP total \(cookingXPTotal) • cozidos \(cookedCount) • queimados \(burnedCount)"))
             }
         }
     }
@@ -2259,16 +2341,15 @@ actor AutomationEngine {
 
         case .smith(let recipe, let selectedBatch, let selectedSmeltGoal):
             let batch = BlacksmithProtocolPolicy.normalizedBatchQuantity(selectedBatch)
-            let target = BlacksmithProtocolPolicy.smithSessionGoal(
+            let originalTarget = BlacksmithProtocolPolicy.smithSessionGoal(
                 recipe: recipe,
                 batch: batch,
                 smeltGoal: selectedSmeltGoal
             )
-            let expectedOutput = BlacksmithProtocolPolicy.smithOutputUnits(
-                recipe: recipe,
-                batch: batch,
-                smeltGoal: selectedSmeltGoal
-            )
+            let target = min(originalTarget, max(1, goal))
+            let requestUnits = recipe.stackable ? batch : 1
+            let expectedOutput = target * requestUnits
+            let displayGoal = gatherDisplayGoal ?? originalTarget
             var xpTotal = 0
             if let playerID {
                 xpTotal = (try? await http.skillXP(playerID: playerID, skill: "smithing")) ?? 0
@@ -2285,8 +2366,13 @@ actor AutomationEngine {
 
             while successes < target {
                 try Task.checkCancellation()
+                if safeStopReason != nil {
+                    safeStopCompleted = true
+                    break
+                }
 
                 let cycle = successes + 1
+                let displayCycle = gatherSuccessOffset + cycle
                 // Smelt respeita o lote por chamada (1/5/10). Forge volta à
                 // semântica original: cada chamada produz uma ferramenta e o
                 // seletor 1/5/10 define somente quantas ferramentas serão feitas.
@@ -2294,10 +2380,10 @@ actor AutomationEngine {
                 let waitSeconds = max(1, BlacksmithProtocolPolicy.smithSecondsPerUnit * requestQuantity)
 
                 for seconds in stride(from: waitSeconds, through: 1, by: -1) {
-                    reporter(.smithCountdown(recipe: recipe, completed: successes, goal: target, batch: batch, secondsRemaining: seconds))
+                    reporter(.smithCountdown(recipe: recipe, completed: gatherSuccessOffset + successes, goal: displayGoal, batch: batch, secondsRemaining: seconds))
                     try await sleep(1_000)
                 }
-                reporter(.smithCountdown(recipe: recipe, completed: successes, goal: target, batch: batch, secondsRemaining: 0))
+                reporter(.smithCountdown(recipe: recipe, completed: gatherSuccessOffset + successes, goal: displayGoal, batch: batch, secondsRemaining: 0))
                 reporter(.attempt)
 
                 let response: [String: Any]
@@ -2323,14 +2409,14 @@ actor AutomationEngine {
 
                 reporter(.smithResult(
                     recipe: recipe,
-                    completed: successes,
-                    goal: target,
+                    completed: gatherSuccessOffset + successes,
+                    goal: displayGoal,
                     produced: produced,
                     inventoryTotal: inventoryTotal,
                     xpGained: gained,
                     smithingXPTotal: xpTotal
                 ))
-                reporter(.log("✅ Ciclo \(cycle)/\(target) • \(recipe.label) ×\(produced) • inventário \(inventoryTotal) • +\(gained) Smithing XP • XP total \(xpTotal)"))
+                reporter(.log("✅ Ciclo \(displayCycle)/\(displayGoal) • \(recipe.label) ×\(produced) • inventário \(inventoryTotal) • +\(gained) Smithing XP • XP total \(xpTotal)"))
             }
         }
     }
@@ -2354,6 +2440,93 @@ actor AutomationEngine {
             }
         } catch {
             reporter(.diagnostic("[PLAYER] /api/auth/me falhou: \(error.localizedDescription)"))
+        }
+    }
+
+func makeRecoveryProgressAnchor(for mode: ActivityMode) async -> ActivityRecoveryAnchor? {
+        switch mode {
+        case .blacksmith:
+            switch blacksmithSelection {
+            case .smith(let recipe, let selectedBatch, _):
+                let quantity = recipe.stackable
+                    ? BlacksmithProtocolPolicy.normalizedBatchQuantity(selectedBatch)
+                    : 1
+                guard let counts = try? await http.itemLocationCounts(type: recipe.result) else { return nil }
+                return ActivityRecoveryAnchor(
+                    metric: .itemIncrease(type: recipe.result),
+                    baseline: counts.carried + counts.bank,
+                    unitsPerSuccess: max(1, quantity)
+                )
+            case .repair(let target):
+                guard let state = try? await http.backpackState(),
+                      let current = BlacksmithProtocolPolicy.currentTarget(target, in: state.backpack)
+                else { return nil }
+                return ActivityRecoveryAnchor(
+                    metric: .repair(
+                        slotKind: current.slotKind,
+                        slotIdx: current.slotIdx,
+                        type: current.type,
+                        iid: current.iid,
+                        maxDurability: current.maxDurability
+                    ),
+                    baseline: current.durability,
+                    unitsPerSuccess: 1
+                )
+            }
+
+        case .roastPit:
+            guard let counts = try? await http.itemLocationCounts(type: roastMode.rawItem) else { return nil }
+            return ActivityRecoveryAnchor(
+                metric: .itemDecrease(type: roastMode.rawItem),
+                baseline: counts.carried + counts.bank,
+                unitsPerSuccess: 1
+            )
+
+        case .fishing:
+            let catchType: String?
+            switch fishingBait {
+            case .feather: catchType = "fish"
+            case .trout: catchType = "fish_trout"
+            case .bass, .tuna, .squid: catchType = nil
+            }
+            guard let catchType,
+                  let counts = try? await http.itemLocationCounts(type: catchType)
+            else { return nil }
+            return ActivityRecoveryAnchor(
+                metric: .itemIncrease(type: catchType),
+                baseline: counts.carried + counts.bank,
+                unitsPerSuccess: 1
+            )
+
+        default:
+            return nil
+        }
+    }
+
+    func inferredCompletedSuccesses(from anchor: ActivityRecoveryAnchor) async -> Int? {
+        switch anchor.metric {
+        case .itemIncrease(let type):
+            guard let counts = try? await http.itemLocationCounts(type: type) else { return nil }
+            let current = counts.carried + counts.bank
+            return max(0, current - anchor.baseline) / max(1, anchor.unitsPerSuccess)
+
+        case .itemDecrease(let type):
+            guard let counts = try? await http.itemLocationCounts(type: type) else { return nil }
+            let current = counts.carried + counts.bank
+            return max(0, anchor.baseline - current) / max(1, anchor.unitsPerSuccess)
+
+        case .repair(let slotKind, let slotIdx, let type, let iid, let maxDurability):
+            guard let state = try? await http.backpackState() else { return nil }
+            let target = RepairTarget(
+                slotKind: slotKind,
+                slotIdx: slotIdx,
+                type: type,
+                iid: iid,
+                durability: anchor.baseline,
+                maxDurability: maxDurability
+            )
+            let durability = BlacksmithProtocolPolicy.slotDurability(target, in: state.backpack) ?? 0
+            return durability >= maxDurability ? 1 : 0
         }
     }
 
@@ -2462,6 +2635,7 @@ actor AutomationEngine {
         case .dunesCheckpoint: label = "checkpoint adaptativo das Dunes"
         case .dunesHeatSafety: label = "proteção contra calor das Dunes"
         case .dunesDangerSafety: label = "dano não-térmico detectado nas Dunes"
+        case .dunesToolRotation: label = "rotação preventiva de ferramenta nas Dunes"
         }
         reporter(.diagnostic("[STATE] safe-stop solicitado • motivo=\(label)"))
     }
@@ -3160,6 +3334,15 @@ actor AutomationEngine {
         while successes < goal {
             try Task.checkCancellation()
             if safeStopReason != nil { break }
+            if mode.isDunesGathering,
+               let exposed = activeDunesToolIdentity,
+               DunesToolInstancePolicy.shouldRotateBeforeNextTarget(durability: exposed.durability, mode: mode) {
+                safeStopReason = .dunesToolRotation
+                let d = exposed.durability.map(String.init) ?? "?"
+                reporter(.state(.recovering, "Ferramenta perto do piso • saindo para rotação"))
+                reporter(.log("🧰 Dunes • ferramenta d=\(d) não inicia novo alvo • piso >\(DunesToolInstancePolicy.durabilityFloor) + reserva \(DunesToolInstancePolicy.requiredReserve(for: mode)) • saindo para The Shores e rotacionando no banco"))
+                break
+            }
             if try await enforceDunesHeatSafetyIfNeeded(mode: mode) == false { break }
             if let dunesExposureStartedAtMS,
                DunesCheckpointPolicy.exposureLimitReached(startedAtMS: dunesExposureStartedAtMS, nowMS: nowMS) {
@@ -3274,6 +3457,17 @@ actor AutomationEngine {
                     reporter(.log("📦 Marcador de recurso • \(mode.displayName) • \(resourceMarker)"))
                 }
                 if mode.isDunesGathering {
+                    if let exposed = activeDunesToolIdentity, let durability = exposed.durability {
+                        let nextDurability = max(0, durability - max(1, result.hm))
+                        activeDunesToolIdentity = DunesToolInstanceIdentity(
+                            type: exposed.type,
+                            iid: exposed.iid,
+                            durability: nextDurability
+                        )
+                        if let updated = activeDunesToolIdentity {
+                            reporter(.dunesExposure(tool: updated, lifeEpoch: lifeEpoch))
+                        }
+                    }
                     reporter(.diagnostic("[DUNES] alvo confirmado • kind=\(seed.kind) • keys=\(seed.keys.joined(separator: ",")) • loot=\(result.loot ?? "-")"))
                 }
                 try await sleep(280)
@@ -3313,6 +3507,7 @@ actor AutomationEngine {
             case .dunesCheckpoint: reason = "checkpoint por 180s de exposição"
             case .dunesHeatSafety: reason = "proteção térmica"
             case .dunesDangerSafety: reason = "dano não-térmico / risco externo"
+            case .dunesToolRotation: reason = "rotação preventiva de ferramenta"
             case .backgroundExpiration: reason = "encerramento externo"
             case .user: reason = "STOP"
             case .connectionLoss: reason = "perda de conexão"
@@ -3353,19 +3548,32 @@ actor AutomationEngine {
                 let observedHP = RealtimeProtocol.int(player?["php"] ?? player?["hp"] ?? me["php"] ?? me["hp"])
                 let toolPresent = DunesExitSurvivalPolicy.toolStillCarried(expectedTool, in: backpack)
 
-                guard DunesExitSurvivalPolicy.survived(
+                let classification = DunesExitSurvivalPolicy.classify(
                     expectedLifeEpoch: expectedLifeEpoch,
                     observedLifeEpoch: observedEpoch,
                     hp: observedHP,
                     toolStillCarried: toolPresent
-                ) else {
-                    let iidLabel = expectedTool.iid == nil ? "sem-iid" : "iid-confirmável"
+                )
+                let iidLabel = expectedTool.iid == nil ? "sem-iid" : "iid-confirmável"
+                switch classification {
+                case .died:
                     throw EngineError.dunesDeathDuringExit(
-                        "Shores recebida, mas sobrevivência falhou • lifeEpoch=\(observedEpoch.map(String.init) ?? "?") esperado<=\(expectedLifeEpoch) • HP=\(observedHP.map(String.init) ?? "?") • ferramenta \(iidLabel)=\(toolPresent ? "presente" : "ausente")"
+                        "Shores/respawn com evidência autoritativa de morte • lifeEpoch=\(observedEpoch.map(String.init) ?? "?") esperado<=\(expectedLifeEpoch) • HP=\(observedHP.map(String.init) ?? "?") • ferramenta \(iidLabel)=\(toolPresent ? "presente" : "ausente")"
                     )
+                case .inconclusive:
+                    lastError = EngineError.dunesExitSurvivalUnconfirmed(
+                        "Shores recebida sem lifeEpoch/HP suficiente • ferramenta \(iidLabel)=\(toolPresent ? "presente" : "ausente") • ausência da ferramenta não prova morte"
+                    )
+                    if attempt < 3 { try await sleep(250) }
+                    continue
+                case .survived:
+                    if toolPresent {
+                        reporter(.log("🛡️ Sobrevivência confirmada em The Shores • lifeEpoch=\(observedEpoch.map(String.init) ?? String(lifeEpoch)) • ferramenta exposta preservada ✅"))
+                    } else {
+                        reporter(.log("🛡️ Sobrevivência confirmada em The Shores por vida/HP autoritativos • ferramenta ausente não classificada como morte"))
+                    }
+                    return
                 }
-                reporter(.log("🛡️ Sobrevivência confirmada em The Shores • lifeEpoch=\(observedEpoch.map(String.init) ?? String(lifeEpoch)) • ferramenta exposta preservada ✅"))
-                return
             } catch let error as EngineError {
                 switch error {
                 case .dunesDeathDuringExit:
@@ -4368,7 +4576,7 @@ actor AutomationEngine {
         lifeEpoch: Int
     ) {
         guard DunesWorldPreflightPolicy.requiresWorldBankService(for: mode),
-              let fallback = ActivityToolPolicy.requiredTool(for: mode)
+              ActivityToolPolicy.requiredTool(for: mode) != nil
         else {
             throw EngineError.bankTransitionFailed("preflight Dunes solicitado para atividade incompatível")
         }
@@ -4380,49 +4588,60 @@ actor AutomationEngine {
         try await ensureWorldBankAccess(reason: "preflight Dunes")
         do {
             let initial = try await http.backpackState()
-            guard let best = ActivityToolPolicy.bestSelection(in: initial.backpack, for: mode) else {
-                throw EngineError.missingRequiredItem(ActivityToolPolicy.displayName(fallback))
-            }
 
-            let selected = best.type
-            let selectedName = ActivityToolPolicy.displayName(selected)
-            let selectedInitialTotal = best.carried + best.bank
-            guard let selectedInstance = DunesToolInstancePolicy.preferredInstance(in: initial.backpack, type: selected) else {
-                throw EngineError.missingRequiredItem(selectedName)
-            }
-
-            if !selectedInstance.isCarried {
-                let carried = try await http.ensureCarriedItem(
-                    type: selected,
-                    quantity: 1,
-                    preferHotbar: true,
-                    preferredBankIndex: selectedInstance.bankIndex
-                )
-                guard carried >= 1 else { throw EngineError.missingRequiredItem(selectedName) }
-            }
-
+            // 0/6 Health Potion+ remains explicitly allowed. If any already exist
+            // in bank they may be loaded, but lack of Potion+ never blocks Dunes.
             _ = try await http.ensurePotionLoadout(targets: [
                 DunesHeatSafetyPolicy.healthPotionPlusType: DunesHeatSafetyPolicy.carriedHealthPotionPlusTarget
             ])
 
-            // Health Potion+ is preserved by type because it is a consumable stack.
-            // The gathering tool is preserved by exact physical identity; every
-            // duplicate of the same tool type is banked before entering full-loot.
+            // Bank every exposed tool first. This guarantees a worn copy (<=100)
+            // is parked instead of accidentally satisfying a generic "1 carried"
+            // check when a healthier copy exists in bank.
             let keep: Set<String> = [DunesHeatSafetyPolicy.healthPotionPlusType]
             let deposit = try await http.depositAllBankFirstInventory(
                 preservingTypes: keep,
-                preservingTool: selectedInstance.identity,
+                preservingTool: nil,
                 preserveCombatLoadout: false
             )
             guard deposit.unresolved.isEmpty else {
                 throw EngineError.bankDepositFailed(deposit.unresolved.sorted().joined(separator: ", "))
             }
-
             for (type, quantity) in deposit.confirmed.sorted(by: { $0.key < $1.key }) {
                 reporter(.log("🏦 Dunes BANK-FIRST • \(quantity)x \(prettyItem(type)) → banco ✅"))
             }
             for detail in deposit.diagnostics {
                 reporter(.diagnostic("[DUNES][BANK] \(detail)"))
+            }
+
+            let bankedState = try await http.backpackState()
+            guard let selectedInstance = DunesToolInstancePolicy.preferredCompatibleInstance(
+                in: bankedState.backpack,
+                for: mode
+            ) else {
+                let family = mode == .cacti ? "Axe" : "Pickaxe"
+                throw EngineError.gatherLoadoutNotReady(
+                    "Sem \(family) compatível com durabilidade >\(DunesToolInstancePolicy.durabilityFloor)"
+                )
+            }
+
+            let selected = selectedInstance.type
+            let selectedName = ActivityToolPolicy.displayName(selected)
+            let selectedInitialTotal = ItemConservationPolicy.total(type: selected, in: initial.backpack)
+
+            let carried = try await http.ensureCarriedItem(
+                type: selected,
+                quantity: 1,
+                preferHotbar: true,
+                preferredBankIndex: selectedInstance.bankIndex
+            )
+            guard carried >= 1 else { throw EngineError.missingRequiredItem(selectedName) }
+
+            let finalState = try await http.backpackState()
+            guard let exposed = DunesToolInstancePolicy.preferredInstance(in: finalState.backpack, type: selected),
+                  exposed.isCarried
+            else {
+                throw EngineError.gatherLoadoutNotReady("\(selectedName) segura não ficou carregada")
             }
 
             let finalTool = try await http.itemLocationCounts(type: selected)
@@ -4440,19 +4659,16 @@ actor AutomationEngine {
 
             let healthPotionPlus = try await http.itemLocationCounts(type: DunesHeatSafetyPolicy.healthPotionPlusType)
             activeGatherToolType = selected
-            let durabilityLabel = selectedInstance.durability.map(String.init) ?? "?"
-            let duplicatesProtected = deposit.confirmed[selected] ?? 0
-            reporter(.log("🧰 Preflight Dunes • \(selectedName) carregada ✅ • d=\(durabilityLabel) • instâncias expostas=1"))
-            if duplicatesProtected > 0 {
-                reporter(.log("🏦 Dunes FULL-LOOT • \(duplicatesProtected)x \(selectedName) duplicada(s) protegida(s) no banco ✅"))
+            let durabilityLabel = exposed.durability.map(String.init) ?? "?"
+            reporter(.log("🧰 Preflight Dunes • \(selectedName) carregada ✅ • d=\(durabilityLabel) • piso de rotação >\(DunesToolInstancePolicy.durabilityFloor) • instâncias expostas=1"))
+            if finalTool.bank > 0 {
+                reporter(.log("🏦 Dunes FULL-LOOT • \(finalTool.bank)x \(selectedName) protegida(s) no banco ✅"))
             }
             reporter(.log("❤️‍🔥 Preflight Dunes • Health Potion+ carregadas: \(healthPotionPlus.carried)/\(DunesHeatSafetyPolicy.carriedHealthPotionPlusTarget)"))
             try await leaveBankShopToWorld(reason: "preflight Dunes concluído")
             try await recoverDunesHPInWorldBeforeEntry()
-            return (selected, healthPotionPlus.carried, selectedInstance.identity, lifeEpoch)
+            return (selected, healthPotionPlus.carried, exposed.identity, lifeEpoch)
         } catch {
-            // Ainda não entramos em full-loot. Tente abandonar o bank_shop antes
-            // de propagar a falha, sem mascarar o erro original.
             try? await leaveBankShopToWorld(reason: "preflight Dunes abortado")
             throw error
         }
@@ -4697,6 +4913,10 @@ actor AutomationEngine {
 
         while successes < goal {
             try Task.checkCancellation()
+            if safeStopReason != nil {
+                safeStopCompleted = true
+                break
+            }
             reporter(.state(.searching, "Procurando spot de pesca"))
             guard let target = selectFishTarget() else {
                 reporter(.target(nil))
@@ -5301,8 +5521,10 @@ actor AutomationEngine {
                 successes += 1
                 reporter(.kill)
                 reporter(.success(nil))
-                reporter(.state(.cooldown, "Galinha \(successes)/\(goal) concluída"))
-                reporter(.log("✅ Galinha derrotada • \(successes)/\(goal) • hits confirmados=\(acceptedHits)"))
+                let displaySuccesses = gatherSuccessOffset + successes
+                let displayGoal = gatherDisplayGoal ?? goal
+                reporter(.state(.cooldown, "Galinha \(displaySuccesses)/\(displayGoal) concluída"))
+                reporter(.log("✅ Galinha derrotada • \(displaySuccesses)/\(displayGoal) • hits confirmados=\(acceptedHits)"))
                 try await sleep(450)
             } else {
                 reporter(.failure("galinha não teve morte confirmada"))

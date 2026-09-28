@@ -94,7 +94,29 @@ enum ActivityMode: String, CaseIterable, Codable, Identifiable {
     }
 
     var isExperimental: Bool {
-        isDunesGathering
+        false
+    }
+
+    /// v4.0: safe activities reuse the same proven same-shard Presence recovery
+    /// instead of terminating when the realtime transport blips.
+    var resumesAfterSafeRealtimeLoss: Bool {
+        switch self {
+        case .fishing, .roastPit, .blacksmith, .chicken:
+            return true
+        default:
+            return false
+        }
+    }
+
+    /// UI can be fully headless in background whenever the activity does not
+    /// require live full-loot safety presentation.
+    var supportsBackgroundHeadless: Bool {
+        !requiresSafeExit
+    }
+
+    /// STOP waits for the in-flight server transaction to settle before teardown.
+    var supportsAtomicStop: Bool {
+        self == .fishing || self == .roastPit || self == .blacksmith
     }
 }
 
@@ -1185,9 +1207,23 @@ final class AppStore: ObservableObject {
             return
         }
 
-        // Não-Wild também possui `engineRunTask` independente. Cancelá-la é
-        // obrigatório para que STOP de Fishing/Gathering não deixe uma sessão
-        // fantasma prendendo o single-flight após a UI voltar a idle.
+        // v4.0: transactional safe modes finish/reconcile the operation already
+        // in flight, but never start a new cycle after STOP.
+        if activity?.supportsAtomicStop == true, connected, let activeEngine {
+            Task.detached(priority: .userInitiated) {
+                await activeEngine.requestSafeStop(reason: .user)
+            }
+            state = .recovering
+            statusMessage = "STOP • finalizando operação atual"
+            stats.lastEvent = "STOP atômico solicitado"
+            updateContinuedProcessingProgress(forceTitleUpdate: true)
+            if !silent {
+                log("STOP solicitado • concluindo/reconciliando somente a operação em andamento antes de fechar")
+            }
+            return
+        }
+
+        // Demais modos seguros usam cancelamento imediato.
         terminalFailureHandled = true
         engineRunTask?.cancel()
         task?.cancel()
@@ -1260,7 +1296,7 @@ final class AppStore: ObservableObject {
                 // but drops MainActor-only presentation chatter entirely.
                 if bg.suppressVisualEvents {
                     switch event {
-                    case .state, .target, .player, .world:
+                    case .state, .target, .player, .world, .roastCountdown, .smithCountdown:
                         return
                     default:
                         break
@@ -2405,8 +2441,8 @@ final class AppStore: ObservableObject {
                     initialEngine: runEngine,
                     runGoal: runGoal
                 )
-            } else if mode == .fishing, selectedFishingBait == .trout {
-                result = try await runFishingWithPresenceRecovery(
+            } else if mode.resumesAfterSafeRealtimeLoss {
+                result = try await runSafeModeWithPresenceRecovery(
                     mode: mode,
                     runID: runID,
                     shard: selectedShard,
@@ -2477,13 +2513,26 @@ final class AppStore: ObservableObject {
                     log("🚨 Proteção Dunes concluída — dano não-térmico interrompeu a coleta e a sobrevivência foi confirmada")
                     logSessionSummary(mode: mode, outcome: "RISCO EXTERNO • SAÍDA SEGURA")
                     finishContinuedProcessing(success: false, reason: "dano não-térmico detectado nas Dunes")
+                case .dunesToolRotation:
+                    statusMessage = "Sem ferramenta Dunes com durabilidade >100"
+                    stats.lastEvent = "rotação de ferramenta indisponível"
+                    log("🧰 Dunes • nenhuma ferramenta compatível com durabilidade >100 • progresso \(stats.successes)/\(sessionGoal) preservado")
+                    logSessionSummary(mode: mode, outcome: "SEM FERRAMENTA SEGURA")
+                    finishContinuedProcessing(success: false, reason: "sem ferramenta Dunes com durabilidade segura")
                 case .user, .none:
-                    statusMessage = "Atividade encerrada com segurança"
+                    statusMessage = mode.supportsAtomicStop
+                        ? "Atividade encerrada após operação atual"
+                        : "Atividade encerrada com segurança"
                     stats.lastEvent = "atividade cancelada pelo usuário"
-                    let destination = mode.isDunesGathering ? "The Shores" : "World"
-                    log("STOP confirmado — \(destination) seguro e nenhuma nova ação será enviada")
-                    logSessionSummary(mode: mode, outcome: "STOP SEGURO")
-                    finishContinuedProcessing(success: false, reason: "interrompida com saída segura")
+                    if mode.supportsAtomicStop {
+                        log("STOP confirmado • operação em andamento reconciliada • nenhuma nova operação será iniciada")
+                        logSessionSummary(mode: mode, outcome: "STOP ATÔMICO")
+                    } else {
+                        let destination = mode.isDunesGathering ? "The Shores" : "World"
+                        log("STOP confirmado — \(destination) seguro e nenhuma nova ação será enviada")
+                        logSessionSummary(mode: mode, outcome: "STOP SEGURO")
+                    }
+                    finishContinuedProcessing(success: false, reason: "interrompida com segurança")
                 }
             } else if Task.isCancelled {
                 state = .cancelled
@@ -2736,6 +2785,12 @@ final class AppStore: ObservableObject {
             return
         }
 
+        if mode.resumesAfterSafeRealtimeLoss {
+            requestSafeConnectionRecovery(reason: reason, runID: runID)
+            await socket.close()
+            return
+        }
+
         terminalFailureHandled = true
         realtimeFailureMessage = reason
         connected = false
@@ -2778,6 +2833,197 @@ final class AppStore: ObservableObject {
         engineRunTask?.cancel()
         task?.cancel()
         await socket.close()
+    }
+
+    private func requestSafeConnectionRecovery(reason: String, runID: UUID) {
+        guard activeRunID == runID,
+              let mode = activity,
+              mode.resumesAfterSafeRealtimeLoss,
+              !terminalFailureHandled else { return }
+
+        if !connectionRecoveryRequested {
+            connectionRecoveryDetail = reason
+            diagnostic("[WARN] \(reason) • \(mode.localizedTitle): retomada segura no mesmo shard solicitada")
+            log("⚠️ Conexão perdida em \(mode.localizedTitle) • progresso confirmado preservado • reconectando no mesmo shard")
+        }
+        connectionRecoveryRequested = true
+        connected = false
+        state = .recovering
+        statusMessage = "Conexão perdida • retomando \(mode.localizedTitle)"
+        stats.lastEvent = "reconexão segura • \(mode.localizedTitle)"
+        updateContinuedProcessingProgress(forceTitleUpdate: true)
+        engineRunTask?.cancel()
+        receiverTask?.cancel()
+    }
+
+    private func runSafeModeWithPresenceRecovery(
+        mode: ActivityMode,
+        runID: UUID,
+        shard: String,
+        cookie: String,
+        initialEngine: AutomationEngine,
+        runGoal: Int
+    ) async throws -> EngineRunResult {
+        var phaseEngine = initialEngine
+        var completedBeforePhase = stats.successes
+        var recoveryCount = 0
+        let started = Date()
+        let recoveryDeadline: TimeInterval = 300
+        let anchor = await phaseEngine.makeRecoveryProgressAnchor(for: mode)
+
+        while completedBeforePhase < runGoal {
+            guard activeRunID == runID, activity == mode, !terminalFailureHandled else {
+                throw CancellationError()
+            }
+
+            if requestedStopReason == .user {
+                return EngineRunResult(
+                    successes: completedBeforePhase,
+                    completedGoal: false,
+                    stoppedSafely: true,
+                    stopReason: .user
+                )
+            }
+
+            let remaining = max(1, runGoal - completedBeforePhase)
+            do {
+                let engineForPhase = phaseEngine
+                let offset = completedBeforePhase
+                let child = Task.detached(priority: .userInitiated) {
+                    try await engineForPhase.run(
+                        mode: mode,
+                        goal: remaining,
+                        successOffset: offset,
+                        displayGoal: runGoal
+                    )
+                }
+                engineRunTask = child
+                let phaseResult = try await child.value
+                engineRunTask = nil
+                await importSocketTrace()
+                await Task.yield()
+                guard activeRunID == runID, activity == mode else { throw CancellationError() }
+
+                let total = max(stats.successes, completedBeforePhase + phaseResult.successes)
+                stats.successes = total
+                return EngineRunResult(
+                    successes: total,
+                    completedGoal: total >= runGoal,
+                    stoppedSafely: phaseResult.stoppedSafely,
+                    stopReason: phaseResult.stopReason
+                )
+            } catch let EngineError.fishingPresenceStalled(phaseSuccesses) {
+                engineRunTask = nil
+                completedBeforePhase = max(stats.successes, completedBeforePhase + phaseSuccesses)
+                stats.successes = completedBeforePhase
+                connectionRecoveryRequested = true
+                connectionRecoveryDetail = "Presence de pesca sem fish_bite autoritativo"
+                log("🔄 Pesca • Presence estagnada • progresso \(completedBeforePhase)/\(runGoal) preservado • renovando no mesmo shard")
+            } catch is CancellationError {
+                engineRunTask = nil
+                guard connectionRecoveryRequested,
+                      activeRunID == runID,
+                      activity == mode,
+                      !terminalFailureHandled
+                else { throw CancellationError() }
+            } catch {
+                engineRunTask = nil
+                let disconnectDetail = await socket.disconnectReason()
+                guard connectionRecoveryRequested || disconnectDetail != nil else { throw error }
+                if !connectionRecoveryRequested {
+                    requestSafeConnectionRecovery(
+                        reason: disconnectDetail.map { "Conexão realtime perdida: \($0)" } ?? error.localizedDescription,
+                        runID: runID
+                    )
+                }
+            }
+
+            guard Date().timeIntervalSince(started) < recoveryDeadline else {
+                throw EngineError.regionNotConfirmed("realtime não recuperou em \(Int(recoveryDeadline))s")
+            }
+
+            recoveryCount += 1
+            let waitSeconds = min(6.0, 1.0 + Double(max(0, recoveryCount - 1)) * 0.5)
+            receiverTask?.cancel()
+            receiverTask = nil
+            activeEngine = nil
+            connected = false
+            await socket.close()
+            try await Task.sleep(for: .seconds(waitSeconds))
+
+            guard activeRunID == runID, activity == mode, !terminalFailureHandled else {
+                throw CancellationError()
+            }
+
+            let bootstrap = AutomationEngine.bootstrap(for: mode, fishingBait: selectedFishingBait)
+            state = .connecting
+            statusMessage = "Reconectando \(mode.localizedTitle)"
+            stats.lastEvent = "recovery realtime #\(recoveryCount)"
+            updateContinuedProcessingProgress(forceTitleUpdate: true)
+
+            do {
+                let stream = try await socket.connect(session: session, shard: shard, bootstrap: bootstrap)
+                let replacement = AutomationEngine(
+                    socket: socket,
+                    cookie: cookie,
+                    shard: shard,
+                    bootstrap: bootstrap,
+                    fishingBait: selectedFishingBait,
+                    roastMode: selectedRoastMode,
+                    blacksmithSelection: selectedBlacksmith,
+                    reporter: engineReporter(runID: runID)
+                )
+                phaseEngine = replacement
+                activeEngine = replacement
+                receiverTask = await makeReceiverTask(stream: stream, engine: replacement, mode: mode, runID: runID)
+                connected = true
+                await replacement.prepareIdentity()
+
+                if let anchor,
+                   let inferred = await replacement.inferredCompletedSuccesses(from: anchor) {
+                    let reconciled = min(runGoal, max(stats.successes, inferred))
+                    if reconciled > stats.successes {
+                        let delta = reconciled - stats.successes
+                        stats.successes = reconciled
+                        if mode == .blacksmith {
+                            switch selectedBlacksmith {
+                            case .smith(let recipe, let batch, _):
+                                let units = recipe.stackable ? BlacksmithProtocolPolicy.normalizedBatchQuantity(batch) : 1
+                                stats.smithProduced += delta * units
+                            case .repair:
+                                stats.smithRepairs = max(stats.smithRepairs, reconciled)
+                            }
+                        }
+                        log("✅ Recovery autoritativo • servidor confirmou +\(delta) operação(ões) durante a queda • progresso \(reconciled)/\(runGoal)")
+                    }
+                }
+
+                completedBeforePhase = stats.successes
+                connectionRecoveryRequested = false
+                connectionRecoveryDetail = nil
+                state = .syncing
+                statusMessage = "\(mode.localizedTitle) • Presence recuperada"
+                updateContinuedProcessingProgress(forceTitleUpdate: true)
+                log("✅ \(mode.localizedTitle) • nova Presence \(bootstrap.region) ativa no mesmo shard \(shard) • retomando em \(completedBeforePhase)/\(runGoal)")
+
+                if requestedStopReason == .user {
+                    return EngineRunResult(
+                        successes: completedBeforePhase,
+                        completedGoal: false,
+                        stoppedSafely: true,
+                        stopReason: .user
+                    )
+                }
+            } catch {
+                await importSocketTrace()
+                connectionRecoveryRequested = true
+                connectionRecoveryDetail = error.localizedDescription
+                diagnostic("[WARN] Recovery \(mode.localizedTitle) #\(recoveryCount) falhou: \(error.localizedDescription)")
+                continue
+            }
+        }
+
+        return EngineRunResult(successes: completedBeforePhase, completedGoal: true, stoppedSafely: false, stopReason: nil)
     }
 
     /// Somente perdas reais do transporte chegam aqui. Recoveries de harvest,
@@ -3314,11 +3560,14 @@ final class AppStore: ObservableObject {
                 : "confirmando resultado"
             updateContinuedProcessingProgress()
 
-        case .roastResult(let mode, let cycle, let goal, let burned, let xpGained, let cookingXPTotal, let cookedCount, let burnedCount):
+        case .roastResult(let mode, let cycle, let goal, let burned, let xpGained, let cookingXPTotal, _, _):
             stats.successes = max(stats.successes, cycle)
             stats.roastCycleRemaining = 0
-            stats.roastCooked = cookedCount
-            stats.roastBurned = burnedCount
+            // Replacement engines restart their local counters after a realtime
+            // recovery. Session counters are therefore accumulated here instead
+            // of trusting phase-local totals.
+            stats.roastCooked += burned ? 0 : 1
+            stats.roastBurned += burned ? 1 : 0
             stats.roastLastXPGained = xpGained
             stats.roastSessionXPGained += xpGained
             stats.roastCookingXPTotal = cookingXPTotal
@@ -3435,6 +3684,12 @@ final class AppStore: ObservableObject {
                 return
             }
 
+            if currentMode.resumesAfterSafeRealtimeLoss {
+                requestSafeConnectionRecovery(reason: reason, runID: runID)
+                Task { [weak self] in await self?.socket.close() }
+                return
+            }
+
             terminalFailureHandled = true
             realtimeFailureMessage = reason
             connected = false
@@ -3547,10 +3802,10 @@ final class AppStore: ObservableObject {
             if backgroundEnteredAt == nil { backgroundEnteredAt = .now }
             guard activity != nil else { return }
 
-            let safeGather = activity?.isGathering == true && activity?.isDunesGathering != true
+            let headlessSafe = activity?.supportsBackgroundHeadless == true
             bgHeadlessActive = true
-            bgHeadlessGate.set(enabled: true, suppressVisualEvents: safeGather)
-            diagnostic("[BG][HEADLESS] ATIVO • UI/SceneKit/WebKit fora da hierarquia • logs bufferizados • eventos visuais \(safeGather ? "suprimidos no gathering seguro" : "preservados por segurança")")
+            bgHeadlessGate.set(enabled: true, suppressVisualEvents: headlessSafe)
+            diagnostic("[BG][HEADLESS] ATIVO • UI/SceneKit/WebKit fora da hierarquia • logs bufferizados • eventos visuais \(headlessSafe ? "suprimidos em atividade segura" : "preservados por segurança")")
 
             let audioSnapshot = backgroundAudioRuntime.snapshot()
             diagnostic("[BG][AUDIO] entrada BG • \(audioSnapshot.summary)")

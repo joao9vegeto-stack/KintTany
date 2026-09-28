@@ -255,6 +255,14 @@ public enum KintReplicaSizingMode: Equatable, Sendable {
     case fill
 }
 
+enum KintBuildInfo {
+    static var display: String {
+        let version = (Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String) ?? "?"
+        let build = (Bundle.main.object(forInfoDictionaryKey: "CFBundleVersion") as? String) ?? "?"
+        return "v\(version)(\(build))"
+    }
+}
+
 public enum KintTanyTheme {
     public static let canvasSize = CGSize(width: 390, height: 760)
 
@@ -1093,7 +1101,10 @@ private struct KintTanyDesignCanvas<AvatarContent: View>: View {
                 Text("KintTany")
                     .font(KintTanyTheme.titleFont(24))
                 Spacer()
-                Color.clear.frame(width: 82, height: 1)
+                Text(KintBuildInfo.display)
+                    .font(KintTanyTheme.bodyFont(11, weight: .semibold))
+                    .monospacedDigit()
+                    .frame(width: 82, alignment: .trailing)
             }
             .foregroundStyle(KintTanyTheme.ink)
             .kintEmbossedText()
