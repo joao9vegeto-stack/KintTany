@@ -1364,9 +1364,10 @@ final class AppStore: ObservableObject {
         }
     }
 
-    /// Last line of defense for every terminal path reached while a Wild
-    /// engine still exists. Returning from this method means the server either
-    /// confirmed World/death or the emergency reconnect loop took ownership.
+    /// Wild operational failures are recovery boundaries, never session endings.
+    /// The current Presence first proves a safe World/respawn boundary; then a
+    /// fresh World Presence rebuilds BANK-FIRST, sword, potions and vitals and
+    /// continues the exact same session goal/progress.
     private func containWildTerminalFailure(
         mode: ActivityMode,
         runID: UUID,
@@ -1375,10 +1376,12 @@ final class AppStore: ObservableObject {
         engine: AutomationEngine,
         failure: String
     ) async {
-        diagnostic("[WILD][FAILSAFE] \(failure) • bloqueando encerramento dentro da Wilderness")
+        guard activeRunID == runID, activity == mode, mode.isWildCombat else { return }
+
+        diagnostic("[WILD][FAILSAFE] \(failure) • convertendo falha operacional em recovery contínuo")
         state = .recovering
-        statusMessage = "Falha detectada • saindo da Wilderness com segurança"
-        stats.lastEvent = "failsafe Wild • retorno ao World"
+        statusMessage = "Falha detectada • recuperando fluxo do combate"
+        stats.lastEvent = "failsafe Wild • recovery contínuo"
         updateContinuedProcessingProgress(forceTitleUpdate: true)
 
         do {
@@ -1387,46 +1390,45 @@ final class AppStore: ObservableObject {
                 reason: "falha operacional: \(failure)"
             )
             await importSocketTrace()
-            terminalFailureHandled = true
-            connected = false
-            currentTarget = nil
-            activity = nil
-            state = .failed
-            stats.sessionErrors += 1
+
+            guard activeRunID == runID, activity == mode else { return }
 
             switch outcome {
-            case .worldSafe:
-                statusMessage = "Falha encerrada com World seguro"
-                stats.lastEvent = "falha operacional • World confirmado"
-                log("🛡️ Falha operacional contida • World confirmado antes de liberar a conexão")
-                log("Falha: \(failure) • combate interrompido com saída segura")
-                logSessionSummary(mode: mode, outcome: "FALHA • WORLD SEGURO")
-                finishContinuedProcessing(success: false, reason: "falha contida após World confirmado")
-            case .alreadyWorld:
-                statusMessage = "Falha encerrada fora da Wilderness"
-                stats.lastEvent = "falha operacional • já estava no World"
-                log("🛡️ Falha operacional contida • estado autoritativo confirmou personagem fora da Wilderness")
-                log("Falha: \(failure) • conexão liberada fora do Wild")
-                logSessionSummary(mode: mode, outcome: "FALHA • FORA DO WILD")
-                finishContinuedProcessing(success: false, reason: "falha contida fora da Wilderness")
-            case .respawnConfirmed:
-                statusMessage = "Falha encerrada após respawn confirmado"
-                stats.lastEvent = "falha operacional • respawn confirmado"
-                log("♻️ Falha operacional contida • respawn autoritativo confirmado antes de liberar a conexão")
-                log("Falha: \(failure) • personagem já reapareceu no World")
-                logSessionSummary(mode: mode, outcome: "FALHA • RESPAWN CONFIRMADO")
-                finishContinuedProcessing(success: false, reason: "falha contida após respawn confirmado")
+            case .worldSafe, .alreadyWorld, .respawnConfirmed:
+                connectionRecoveryRequested = true
+                connectionRecoveryDetail = "falha operacional contida em World seguro: \(failure)"
+                state = .recovering
+                statusMessage = "World seguro • reconstruindo combate"
+                stats.lastEvent = "Wild • World seguro após falha"
+                log("🛡️ Falha operacional contida • World/respawn seguro confirmado • progresso \(stats.successes)/\(sessionGoal) preservado")
+                log("🔄 \(mode.localizedTitle) • reconstruindo BANK-FIRST, espada, poções e vitais para continuar a mesma meta")
+                _ = await recoverWildAfterUnexpectedDisconnect(
+                    mode: mode,
+                    runID: runID,
+                    shard: shard,
+                    cookie: cookie,
+                    confirmedWorldBoundary: true
+                )
+
             case .dead:
-                statusMessage = "Servidor confirmou morte"
-                stats.lastEvent = "morte autoritativamente confirmada"
-                log("💀 Falha: \(failure) • servidor confirmou morte antes da saída")
-                logSessionSummary(mode: mode, outcome: "MORTE CONFIRMADA")
-                finishContinuedProcessing(success: false, reason: "morte confirmada")
+                connectionRecoveryRequested = true
+                connectionRecoveryDetail = "morte observada durante falha operacional; aguardando respawn"
+                state = .recovering
+                statusMessage = "Morte detectada • aguardando respawn"
+                stats.lastEvent = "Wild • aguardando respawn"
+                log("💀 Wild • morte observada durante falha operacional • progresso \(stats.successes)/\(sessionGoal) preservado • aguardando respawn para continuar")
+                await socket.close()
+                _ = await recoverWildAfterUnexpectedDisconnect(
+                    mode: mode,
+                    runID: runID,
+                    shard: shard,
+                    cookie: cookie
+                )
             }
         } catch {
-            diagnostic("[WILD][FAILSAFE] saída na Presence atual não confirmou: \(error.localizedDescription) • iniciando reconexão de emergência")
+            diagnostic("[WILD][FAILSAFE] fronteira segura não confirmou na Presence atual: \(error.localizedDescription) • recovery por reconexão assumirá o fluxo")
             requestWildConnectionRecovery(
-                reason: "Falha operacional no Wild; reconectando exclusivamente para confirmar World",
+                reason: "Falha operacional no Wild; reconectando para confirmar World/respawn e continuar a meta",
                 runID: runID
             )
             await socket.close()
@@ -3830,7 +3832,8 @@ final class AppStore: ObservableObject {
         mode: ActivityMode,
         runID: UUID,
         shard: String,
-        cookie: String
+        cookie: String,
+        confirmedWorldBoundary: Bool = false
     ) async -> Bool {
         guard activeRunID == runID, mode.isWildCombat else { return false }
         guard !connectionRecoveryInProgress else { return false }
@@ -3843,8 +3846,12 @@ final class AppStore: ObservableObject {
         await socket.close()
 
         var attempt = 0
+        var worldBoundaryAlreadyConfirmed = confirmedWorldBoundary
 
-        // Build 6: network loss or a confirmed death is a recovery boundary, not
+        // Build 7: a safe World boundary reached by the operational failsafe can
+        // jump directly to reconstruction. Do not bootstrap a fake Wild recovery
+        // Presence after the server already confirmed that the player is safe.
+        // Network loss or a confirmed death remains a recovery boundary, not
         // a terminal session outcome. Keep retrying while this run is still the
         // active one. A user STOP still waits for the same safe World boundary.
         while activeRunID == runID,
@@ -3859,57 +3866,66 @@ final class AppStore: ObservableObject {
             updateContinuedProcessingProgress(forceTitleUpdate: true)
             diagnostic("[NET] Recovery Wild • \(shard) • tentativa \(attempt) • progresso=\(stats.successes)/\(sessionGoal)")
 
-            let recoveryRegion = player.region.lowercased().hasPrefix("wild") ? player.region : "wild"
-            let recoveryBootstrap = PresenceBootstrap(
-                region: recoveryRegion,
-                position: player.position,
-                lifeEpoch: max(1, player.lifeEpoch)
-            )
-
             do {
-                let stream = try await socket.connect(session: session, shard: shard, bootstrap: recoveryBootstrap)
-                await importSocketTrace()
-                guard activeRunID == runID, activity == mode else { return false }
+                let outcome: EmergencyWildExitResult
 
-                let recoveryEngine = AutomationEngine(
-                    socket: socket,
-                    cookie: cookie,
-                    shard: shard,
-                    bootstrap: recoveryBootstrap,
-                    fishingBait: selectedFishingBait,
-                    roastMode: selectedRoastMode,
-                    blacksmithSelection: selectedBlacksmith,
-                    reporter: engineReporter(runID: runID)
-                )
-                activeEngine = recoveryEngine
-                await recoveryEngine.prepareIdentity()
+                if worldBoundaryAlreadyConfirmed {
+                    worldBoundaryAlreadyConfirmed = false
+                    outcome = .alreadyWorld
+                    diagnostic("[WILD][RECOVERY] World já confirmado pela Presence anterior • pulando bootstrap Wild de verificação")
+                    log("🛡️ Wild recovery • World seguro já confirmado • reconstruindo fluxo sem reabrir Wilderness prematuramente")
+                } else {
+                    let recoveryRegion = player.region.lowercased().hasPrefix("wild") ? player.region : "wild"
+                    let recoveryBootstrap = PresenceBootstrap(
+                        region: recoveryRegion,
+                        position: player.position,
+                        lifeEpoch: max(1, player.lifeEpoch)
+                    )
 
-                receiverTask?.cancel()
-                receiverTask = await makeReceiverTask(
-                    stream: stream,
-                    engine: recoveryEngine,
-                    mode: mode,
-                    runID: runID,
-                    notifyUnexpectedEnd: false
-                )
+                    let stream = try await socket.connect(session: session, shard: shard, bootstrap: recoveryBootstrap)
+                    await importSocketTrace()
+                    guard activeRunID == runID, activity == mode else { return false }
 
-                connected = true
-                statusMessage = "Reconectado • confirmando sobrevivência/respawn"
-                updateContinuedProcessingProgress(forceTitleUpdate: true)
-                log("🔁 Conexão Wild restaurada no \(shard) • confirmando World/respawn antes de retomar")
+                    let recoveryEngine = AutomationEngine(
+                        socket: socket,
+                        cookie: cookie,
+                        shard: shard,
+                        bootstrap: recoveryBootstrap,
+                        fishingBait: selectedFishingBait,
+                        roastMode: selectedRoastMode,
+                        blacksmithSelection: selectedBlacksmith,
+                        reporter: engineReporter(runID: runID)
+                    )
+                    activeEngine = recoveryEngine
+                    await recoveryEngine.prepareIdentity()
 
-                let outcome = try await recoveryEngine.runEmergencyWildExit(
-                    mode: mode,
-                    reason: requestedStopReason == .user ? "STOP após recovery" : "recovery de sessão"
-                )
+                    receiverTask?.cancel()
+                    receiverTask = await makeReceiverTask(
+                        stream: stream,
+                        engine: recoveryEngine,
+                        mode: mode,
+                        runID: runID,
+                        notifyUnexpectedEnd: false
+                    )
 
-                receiverTask?.cancel()
-                receiverTask = nil
-                activeEngine = nil
-                connected = false
-                await importSocketTrace()
-                await socket.close()
-                await importSocketTrace()
+                    connected = true
+                    statusMessage = "Reconectado • confirmando sobrevivência/respawn"
+                    updateContinuedProcessingProgress(forceTitleUpdate: true)
+                    log("🔁 Conexão Wild restaurada no \(shard) • confirmando World/respawn antes de retomar")
+
+                    outcome = try await recoveryEngine.runEmergencyWildExit(
+                        mode: mode,
+                        reason: requestedStopReason == .user ? "STOP após recovery" : "recovery de sessão"
+                    )
+
+                    receiverTask?.cancel()
+                    receiverTask = nil
+                    activeEngine = nil
+                    connected = false
+                    await importSocketTrace()
+                    await socket.close()
+                    await importSocketTrace()
+                }
 
                 if WildRecoveryContinuationPolicy.shouldKeepWaitingForRespawn(after: outcome) {
                     connectionRecoveryRequested = true
