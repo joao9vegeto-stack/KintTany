@@ -2800,8 +2800,34 @@ final class AppStore: ObservableObject {
             guard activeRunID == runID else { return }
             if let engineError = error as? EngineError,
                case .dunesDeathDuringExit(let detail) = engineError,
-               mode.isDunesGathering {
-                await handleConfirmedDunesDeath(mode: mode, detail: detail)
+               mode.isDunesGathering,
+               let shard = activeShard {
+                log("💀 Dunes • respawn/full-loot confirmado fora do checkpoint • \(detail) • progresso \(stats.successes)/\(runGoal) preservado")
+                requestGatherConnectionRecovery(
+                    reason: "respawn/full-loot confirmado: \(detail)",
+                    runID: runID
+                )
+                await socket.close()
+                _ = await recoverGatherAfterUnexpectedDisconnect(
+                    mode: mode,
+                    runID: runID,
+                    shard: shard,
+                    cookie: cookie,
+                    runGoal: runGoal
+                )
+                return
+            }
+            if let engineError = error as? EngineError,
+               case .playerDead = engineError,
+               mode.isWildCombat,
+               let shard = activeShard {
+                log("💀 \(mode.localizedTitle) • morte detectada • aguardando respawn autoritativo para continuar \(stats.successes)/\(runGoal)")
+                requestWildConnectionRecovery(
+                    reason: "morte detectada no Wild • aguardando respawn",
+                    runID: runID
+                )
+                await socket.close()
+                _ = await recoverWildAfterUnexpectedDisconnect(mode: mode, runID: runID, shard: shard, cookie: cookie)
                 return
             }
             if mode.isWildCombat, connectionRecoveryRequested, let shard = activeShard {
@@ -3437,10 +3463,13 @@ final class AppStore: ObservableObject {
         await socket.close()
 
         let started = Date()
-        let recoveryDeadline: TimeInterval = mode.isDunesGathering ? 900 : 300
+        let recoveryDeadline: TimeInterval = 300
         var attempt = 0
 
-        while Date().timeIntervalSince(started) < recoveryDeadline {
+        // Build 6: an active full-loot Dunes session has no client-side recovery
+        // deadline. If connectivity is absent we keep the session/progress alive
+        // and retry until the server is reachable (or the user explicitly STOPs).
+        while mode.isDunesGathering || Date().timeIntervalSince(started) < recoveryDeadline {
             guard activeRunID == runID,
                   activity == mode,
                   !terminalFailureHandled,
@@ -3754,16 +3783,19 @@ final class AppStore: ObservableObject {
         let lower = reason.lowercased()
         let worldVerification = lower.contains("world") && lower.contains("confirma")
         let degradedPresence = lower.contains("presence degradada") || lower.contains("hits consecutivos")
+        let deathRecovery = lower.contains("morte") || lower.contains("respawn")
 
         if !connectionRecoveryRequested {
             connectionRecoveryDetail = reason
             diagnostic("[WARN] \(reason) • Wilderness: reconexão de emergência solicitada")
-            if worldVerification {
+            if deathRecovery {
+                log("💀 Morte/respawn em verificação no Wild • ataques suspensos • progresso preservado • recovery continuará até reconstruir o fluxo")
+            } else if worldVerification {
                 log("🔎 Saída para World sem confirmação • nenhum novo ataque será enviado • verificando região por reconexão")
             } else if degradedPresence {
                 log("⚠️ Presence degradada no Wild • ataques suspensos • reconectando para confirmar estado e sair com segurança")
             } else {
-                log("⚠️ Conexão perdida no Wild • nenhum novo ataque será enviado • aguardando rede para retornar ao World")
+                log("⚠️ Conexão perdida no Wild • nenhum novo ataque será enviado • aguardando rede para retornar ao World e continuar a meta")
             }
         }
         connectionRecoveryRequested = true
@@ -3771,6 +3803,8 @@ final class AppStore: ObservableObject {
         state = .recovering
         if requestedStopReason == .user {
             statusMessage = "STOP • aguardando rede para saída segura"
+        } else if deathRecovery {
+            statusMessage = "Aguardando respawn • sessão preservada"
         } else if worldVerification {
             statusMessage = "Verificando saída para World"
         } else if degradedPresence {
@@ -3801,32 +3835,34 @@ final class AppStore: ObservableObject {
         receiverTask = nil
         await socket.close()
 
-        let started = Date()
-        // Keep trying while a realistic temporary outage may recover. iOS can
-        // still expire the Continued Processing task; no client can send a safe
-        // exit while the device has no network at all.
-        let recoveryDeadline: TimeInterval = 900
         var attempt = 0
-        let lastKnownRegion = player.region.hasPrefix("wild") ? player.region : "wild"
-        let recoveryBootstrap = PresenceBootstrap(
-            region: lastKnownRegion,
-            position: player.position,
-            lifeEpoch: max(1, player.lifeEpoch)
-        )
 
-        while Date().timeIntervalSince(started) < recoveryDeadline {
-            guard activeRunID == runID else { return false }
+        // Build 6: network loss or a confirmed death is a recovery boundary, not
+        // a terminal session outcome. Keep retrying while this run is still the
+        // active one. A user STOP still waits for the same safe World boundary.
+        while activeRunID == runID,
+              activity == mode,
+              !terminalFailureHandled {
             attempt += 1
             state = .recovering
-            statusMessage = "Reconectando para saída segura • tentativa \(attempt)"
-            stats.lastEvent = "reconexão de emergência \(attempt)"
+            statusMessage = requestedStopReason == .user
+                ? "STOP • recuperando World seguro"
+                : "Reconectando Wild • tentativa \(attempt)"
+            stats.lastEvent = "recovery Wild \(attempt)"
             updateContinuedProcessingProgress(forceTitleUpdate: true)
-            diagnostic("[NET] Reconexão de emergência Wild • \(shard) • tentativa \(attempt)")
+            diagnostic("[NET] Recovery Wild • \(shard) • tentativa \(attempt) • progresso=\(stats.successes)/\(sessionGoal)")
+
+            let recoveryRegion = player.region.lowercased().hasPrefix("wild") ? player.region : "wild"
+            let recoveryBootstrap = PresenceBootstrap(
+                region: recoveryRegion,
+                position: player.position,
+                lifeEpoch: max(1, player.lifeEpoch)
+            )
 
             do {
                 let stream = try await socket.connect(session: session, shard: shard, bootstrap: recoveryBootstrap)
                 await importSocketTrace()
-                guard activeRunID == runID else { return false }
+                guard activeRunID == runID, activity == mode else { return false }
 
                 let recoveryEngine = AutomationEngine(
                     socket: socket,
@@ -3851,83 +3887,280 @@ final class AppStore: ObservableObject {
                 )
 
                 connected = true
-                statusMessage = "Reconectado • saindo do Wild com segurança"
+                statusMessage = "Reconectado • confirmando sobrevivência/respawn"
                 updateContinuedProcessingProgress(forceTitleUpdate: true)
-                log("🔁 Conexão restaurada no \(shard) • prioridade absoluta: retornar ao World")
+                log("🔁 Conexão Wild restaurada no \(shard) • confirmando World/respawn antes de retomar")
 
-                let outcome = try await recoveryEngine.runEmergencyWildExit(mode: mode)
+                let outcome = try await recoveryEngine.runEmergencyWildExit(
+                    mode: mode,
+                    reason: requestedStopReason == .user ? "STOP após recovery" : "recovery de sessão"
+                )
+
                 receiverTask?.cancel()
                 receiverTask = nil
+                activeEngine = nil
+                connected = false
+                await importSocketTrace()
+                await socket.close()
                 await importSocketTrace()
 
+                if WildRecoveryContinuationPolicy.shouldKeepWaitingForRespawn(after: outcome) {
+                    connectionRecoveryRequested = true
+                    connectionRecoveryDetail = "morte observada; respawn ainda não confirmado"
+                    state = .recovering
+                    statusMessage = "Morte detectada • aguardando respawn"
+                    stats.lastEvent = "Wild • aguardando respawn"
+                    log("💀 Wild • morte observada, mas respawn ainda não confirmou HP positivo • progresso \(stats.successes)/\(sessionGoal) preservado • tentando novamente")
+                    let wait = min(6.0, 1.5 + Double(attempt) * 0.5)
+                    try? await Task.sleep(nanoseconds: UInt64(wait * 1_000_000_000))
+                    continue
+                }
+
+                guard WildRecoveryContinuationPolicy.shouldResume(after: outcome) else {
+                    connectionRecoveryRequested = true
+                    continue
+                }
+
                 switch outcome {
-                case .worldSafe:
-                    connected = false
-                    currentTarget = nil
-                    activity = nil
-                    state = .cancelled
-                    statusMessage = "Conexão recuperada • World seguro"
-                    stats.lastEvent = "World seguro após reconexão"
-                    log("✅ Reconexão de emergência concluída • World confirmado • sessão encerrada sem novos ataques")
-                    logSessionSummary(mode: mode, outcome: "RECONEXÃO SEGURA")
-                    finishContinuedProcessing(success: false, reason: "conexão recuperada com saída segura")
-                    connectionRecoveryRequested = false
-                    connectionRecoveryDetail = nil
-                    return true
-
+                case .respawnConfirmed:
+                    log("♻️ Wild • respawn confirmado • reconstruindo banco, espada, poções e vitais • sessão continuará em \(stats.successes)/\(sessionGoal)")
                 case .alreadyWorld:
-                    connected = false
+                    log("🛡️ Wild • personagem vivo já estava no World • sessão continuará em \(stats.successes)/\(sessionGoal)")
+                case .worldSafe:
+                    log("🛡️ Wild • saída segura para World confirmada após recovery • sessão continuará em \(stats.successes)/\(sessionGoal)")
+                case .dead:
+                    break
+                }
+
+                if requestedStopReason == .user {
+                    connectionRecoveryRequested = false
+                    connectionRecoveryDetail = nil
                     currentTarget = nil
                     activity = nil
                     state = .cancelled
-                    statusMessage = "Reconectado • personagem já estava no World"
-                    stats.lastEvent = "World confirmado após reconexão"
-                    log("✅ Reconexão confirmou que o personagem já estava no World • sessão encerrada")
-                    logSessionSummary(mode: mode, outcome: "RECONEXÃO • WORLD")
-                    finishContinuedProcessing(success: false, reason: "reconexão confirmou World")
+                    statusMessage = "Atividade encerrada com segurança"
+                    stats.lastEvent = "STOP • World seguro após recovery"
+                    log("STOP confirmado • World/respawn seguro confirmado • nenhuma nova ação será enviada")
+                    logSessionSummary(mode: mode, outcome: "STOP SEGURO")
+                    finishContinuedProcessing(success: false, reason: "STOP seguro após recovery Wild")
+                    return true
+                }
+
+                let preserved = stats.successes
+                if preserved >= sessionGoal {
                     connectionRecoveryRequested = false
                     connectionRecoveryDetail = nil
-                    return true
-
-                case .dead:
-                    terminalFailureHandled = true
-                    connected = false
                     currentTarget = nil
                     activity = nil
-                    state = .failed
-                    statusMessage = "Reconectado, mas o servidor confirmou morte"
-                    stats.sessionErrors += 1
-                    log("💀 Reconexão concluída, porém o servidor já confirmou a morte antes da saída segura")
-                    logSessionSummary(mode: mode, outcome: "MORTE APÓS QUEDA")
-                    finishContinuedProcessing(success: false, reason: "morte confirmada após queda de conexão")
+                    state = .completed
+                    statusMessage = "Meta concluída"
+                    updateContinuedProcessingProgress(forceTitleUpdate: true)
+                    log("✅ Meta concluída: \(preserved)/\(sessionGoal) • confirmada após recovery Wild")
+                    logSessionSummary(mode: mode, outcome: "META CONCLUÍDA APÓS RECOVERY")
+                    finishContinuedProcessing(success: true, reason: "meta concluída após recovery Wild")
+                    return true
+                }
+
+                // Start a completely fresh World Presence on the same shard.
+                // runWild will re-run BANK-FIRST, select/equip the best sword,
+                // replenish potions/vitals and enter Wilderness again.
+                let worldBootstrap = AutomationEngine.bootstrap(for: mode)
+                state = .connecting
+                statusMessage = "Recovery concluído • reconstruindo combate"
+                stats.lastEvent = "Wild recovery • World/bank"
+                updateContinuedProcessingProgress(forceTitleUpdate: true)
+
+                let worldStream = try await socket.connect(
+                    session: session,
+                    shard: shard,
+                    bootstrap: worldBootstrap
+                )
+                await importSocketTrace()
+                guard activeRunID == runID, activity == mode else { return false }
+
+                let resumedEngine = AutomationEngine(
+                    socket: socket,
+                    cookie: cookie,
+                    shard: shard,
+                    bootstrap: worldBootstrap,
+                    fishingBait: selectedFishingBait,
+                    roastMode: selectedRoastMode,
+                    blacksmithSelection: selectedBlacksmith,
+                    reporter: engineReporter(runID: runID)
+                )
+                activeEngine = resumedEngine
+                receiverTask = await makeReceiverTask(
+                    stream: worldStream,
+                    engine: resumedEngine,
+                    mode: mode,
+                    runID: runID
+                )
+                connected = true
+                await resumedEngine.prepareIdentity()
+
+                connectionRecoveryRequested = false
+                connectionRecoveryDetail = nil
+                state = .syncing
+                statusMessage = "\(mode.localizedTitle) • retomando \(preserved)/\(sessionGoal)"
+                stats.lastEvent = "Wild • sessão retomada"
+                updateContinuedProcessingProgress(forceTitleUpdate: true)
+                log("✅ Wild recovery concluído • nova Presence World no mesmo shard \(shard) • retomando meta em \(preserved)/\(sessionGoal)")
+
+                let remaining = max(1, sessionGoal - preserved)
+                let child = Task.detached(priority: .userInitiated) {
+                    try await resumedEngine.run(mode: mode, goal: remaining)
+                }
+                engineRunTask = child
+
+                do {
+                    let phaseResult = try await child.value
+                    engineRunTask = nil
+                    await importSocketTrace()
+                    await Task.yield()
+                    guard activeRunID == runID, activity == mode else { return false }
+
+                    stats.successes = max(stats.successes, preserved + phaseResult.successes)
+
+                    if phaseResult.completedGoal || stats.successes >= sessionGoal {
+                        receiverTask?.cancel()
+                        receiverTask = nil
+                        activeEngine = nil
+                        connected = false
+                        await socket.close()
+                        await importSocketTrace()
+                        connectionRecoveryRequested = false
+                        connectionRecoveryDetail = nil
+                        currentTarget = nil
+                        activity = nil
+                        state = .completed
+                        statusMessage = "Meta concluída"
+                        updateContinuedProcessingProgress(forceTitleUpdate: true)
+                        log("✅ Meta concluída: \(stats.successes)/\(sessionGoal) • combate retomado após recovery")
+                        logSessionSummary(mode: mode, outcome: "META CONCLUÍDA APÓS RECOVERY")
+                        finishContinuedProcessing(success: true, reason: "meta concluída após recovery Wild")
+                        return true
+                    }
+
+                    if phaseResult.stoppedSafely,
+                       phaseResult.stopReason == .user || requestedStopReason == .user {
+                        receiverTask?.cancel()
+                        receiverTask = nil
+                        activeEngine = nil
+                        connected = false
+                        await socket.close()
+                        await importSocketTrace()
+                        connectionRecoveryRequested = false
+                        connectionRecoveryDetail = nil
+                        currentTarget = nil
+                        activity = nil
+                        state = .cancelled
+                        statusMessage = "Atividade encerrada com segurança"
+                        stats.lastEvent = "STOP seguro após retomada Wild"
+                        logSessionSummary(mode: mode, outcome: "STOP SEGURO")
+                        finishContinuedProcessing(success: false, reason: "STOP seguro após retomada Wild")
+                        return true
+                    }
+
+                    // No terminal condition was requested and the goal remains:
+                    // treat this as another recoverable boundary instead of
+                    // silently ending the user's session.
+                    connectionRecoveryRequested = true
+                    connectionRecoveryDetail = "engine Wild encerrou antes da meta"
+                    log("🔄 Wild • engine encerrou antes da meta sem STOP • progresso \(stats.successes)/\(sessionGoal) preservado • retomando recovery")
+                    receiverTask?.cancel()
+                    receiverTask = nil
+                    activeEngine = nil
+                    connected = false
+                    await socket.close()
+                    continue
+                } catch is CancellationError {
+                    engineRunTask = nil
+                    await importSocketTrace()
+                    if connectionRecoveryRequested,
+                       activeRunID == runID,
+                       activity == mode {
+                        receiverTask?.cancel()
+                        receiverTask = nil
+                        activeEngine = nil
+                        connected = false
+                        await socket.close()
+                        continue
+                    }
+                    return false
+                } catch {
+                    engineRunTask = nil
+                    await importSocketTrace()
+
+                    if let engineError = error as? EngineError,
+                       case .playerDead = engineError {
+                        log("💀 Wild • morte detectada durante retomada • progresso \(stats.successes)/\(sessionGoal) preservado • aguardando respawn")
+                        connectionRecoveryRequested = true
+                        connectionRecoveryDetail = "morte detectada durante retomada"
+                        receiverTask?.cancel()
+                        receiverTask = nil
+                        activeEngine = nil
+                        connected = false
+                        await socket.close()
+                        continue
+                    }
+
+                    let disconnectDetail = await socket.disconnectReason()
+                    let isClosedSocket: Bool
+                    if let socketError = error as? SocketError, case .notConnected = socketError {
+                        isClosedSocket = true
+                    } else {
+                        isClosedSocket = false
+                    }
+                    if connectionRecoveryRequested || disconnectDetail != nil || isClosedSocket {
+                        connectionRecoveryRequested = true
+                        connectionRecoveryDetail = disconnectDetail ?? error.localizedDescription
+                        receiverTask?.cancel()
+                        receiverTask = nil
+                        activeEngine = nil
+                        connected = false
+                        await socket.close()
+                        continue
+                    }
+
+                    // True operational failure with a healthy transport still
+                    // goes through the existing Wild safety firewall.
+                    await containWildTerminalFailure(
+                        mode: mode,
+                        runID: runID,
+                        shard: shard,
+                        cookie: cookie,
+                        engine: resumedEngine,
+                        failure: error.localizedDescription
+                    )
                     return false
                 }
             } catch is CancellationError {
+                if activeRunID == runID,
+                   activity == mode,
+                   connectionRecoveryRequested {
+                    receiverTask?.cancel()
+                    receiverTask = nil
+                    activeEngine = nil
+                    connected = false
+                    await socket.close()
+                    continue
+                }
                 return false
             } catch {
                 await importSocketTrace()
                 receiverTask?.cancel()
                 receiverTask = nil
+                activeEngine = nil
                 connected = false
+                connectionRecoveryRequested = true
+                connectionRecoveryDetail = error.localizedDescription
                 await socket.close()
-                let elapsed = Int(Date().timeIntervalSince(started))
-                diagnostic("[WARN] Reconexão Wild tentativa \(attempt) falhou após \(elapsed)s: \(error.localizedDescription)")
                 let wait = min(6.0, 1.5 + Double(attempt) * 0.5)
+                diagnostic("[WARN] Recovery Wild tentativa \(attempt) falhou: \(error.localizedDescription) • sessão permanece ativa")
                 try? await Task.sleep(nanoseconds: UInt64(wait * 1_000_000_000))
             }
         }
 
-        terminalFailureHandled = true
-        realtimeFailureMessage = connectionRecoveryDetail ?? "Conexão realtime perdida no Wild"
-        connected = false
-        currentTarget = nil
-        activity = nil
-        state = .failed
-        statusMessage = "Não foi possível reconectar para saída segura"
-        stats.sessionErrors += 1
-        log("🛑 Reconexão de emergência expirou após 15 minutos • não foi possível confirmar World seguro")
-        logSessionSummary(mode: mode, outcome: "FALHA DE RECONEXÃO")
-        finishContinuedProcessing(success: false, reason: "reconexão de emergência expirou")
         return false
     }
 

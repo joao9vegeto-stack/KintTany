@@ -43,7 +43,23 @@ enum EngineStopReason: Equatable {
 enum EmergencyWildExitResult: Equatable {
     case worldSafe
     case alreadyWorld
+    case respawnConfirmed
     case dead
+}
+
+struct WildRecoveryContinuationPolicy {
+    static func shouldResume(after outcome: EmergencyWildExitResult) -> Bool {
+        switch outcome {
+        case .worldSafe, .alreadyWorld, .respawnConfirmed:
+            return true
+        case .dead:
+            return false
+        }
+    }
+
+    static func shouldKeepWaitingForRespawn(after outcome: EmergencyWildExitResult) -> Bool {
+        outcome == .dead
+    }
 }
 
 enum EmergencyDunesExitResult: Equatable {
@@ -2775,6 +2791,10 @@ func makeRecoveryProgressAnchor(for mode: ActivityMode) async -> ActivityRecover
     /// RC3 emergency path used only after an unexpected Presence loss in Wild.
     /// It never resumes combat: after authoritative state arrives, its sole goal
     /// is to confirm death/World or leave Wilderness through the normal safe path.
+    /// Build 6 emergency boundary after an unexpected Presence loss in Wild.
+    /// This recovery engine never resumes attacks itself. It confirms whether the
+    /// player survived, reached World, or actually died and respawned; AppStore
+    /// then starts a fresh World preflight and continues the same session goal.
     func runEmergencyWildExit(
         mode: ActivityMode,
         reason: String = "reconexão de emergência"
@@ -2783,18 +2803,37 @@ func makeRecoveryProgressAnchor(for mode: ActivityMode) async -> ActivityRecover
         reporter(.state(.recovering, "Sincronizando estado para saída segura"))
 
         let syncDeadline = nowMS + 8_000
+        var sawDeadHP = playerHP <= 0
+
         while nowMS < syncDeadline {
             try Task.checkCancellation()
-            if playerHP <= 0 { return .dead }
+            if playerHP <= 0 { sawDeadHP = true }
+
             if let authoritative = serverRegion?.lowercased(), !authoritative.isEmpty {
                 if !authoritative.hasPrefix("wild") {
-                    reporter(.log("✅ Estado autoritativo • região=\(authoritative) • personagem fora da Wilderness"))
-                    return .alreadyWorld
+                    region = authoritative
+                    if playerHP > 0 {
+                        if sawDeadHP {
+                            reporter(.log("♻️ Respawn autoritativo confirmado • região=\(authoritative) • HP \(playerHP) • sessão poderá continuar"))
+                            return .respawnConfirmed
+                        }
+                        reporter(.log("✅ Estado autoritativo • região=\(authoritative) • personagem vivo fora da Wilderness"))
+                        return .alreadyWorld
+                    }
+                    // Region already left Wild but vitals still show the death
+                    // transition. Keep listening inside the same sync window for
+                    // the positive respawn HP instead of declaring terminal loss.
+                } else {
+                    region = authoritative
+                    if playerHP > 0 { break }
                 }
-                region = authoritative
-                break
             }
             try await sleep(80)
+        }
+
+        if sawDeadHP && playerHP <= 0 {
+            reporter(.log("💀 Morte observada no Wild • respawn ainda não confirmou HP positivo • mantendo recovery ativo"))
+            return .dead
         }
 
         guard let authoritative = serverRegion?.lowercased(), authoritative.hasPrefix("wild") else {
@@ -2808,7 +2847,7 @@ func makeRecoveryProgressAnchor(for mode: ActivityMode) async -> ActivityRecover
         lastCombatActivityAt = recoveredAt
         lastCombatDamageAt = recoveredAt
         safeStopReason = .connectionLoss
-        reporter(.log("🛡️ Wilderness confirmada após \(reason) • nenhum ataque será retomado • iniciando saída segura"))
+        reporter(.log("🛡️ Wilderness confirmada após \(reason) • nenhum ataque será retomado nesta Presence • iniciando saída segura"))
 
         try await moveToWildSafeCamp(reason: reason)
         guard playerHP > 0 else { return .dead }
@@ -3672,11 +3711,14 @@ func makeRecoveryProgressAnchor(for mode: ActivityMode) async -> ActivityRecover
         guard let expectedTool else {
             throw EngineError.dunesExitSurvivalUnconfirmed("ferramenta exposta sem identidade")
         }
-        if lifeEpoch > expectedLifeEpoch {
-            throw EngineError.dunesDeathDuringExit("lifeEpoch \(expectedLifeEpoch)→\(lifeEpoch)")
-        }
 
+        // Build 6: Presence recreation can advance the in-memory lifeEpoch even
+        // when the player is alive. Never classify death from that counter alone.
+        // The authoritative /me evidence below must corroborate the transition.
         var lastError: Error?
+        var compoundDeathEvidenceCount = 0
+        var lastCompoundDeathDetail: String?
+
         for attempt in 1...3 {
             do {
                 let me = try await http.get("/api/auth/me")
@@ -3697,20 +3739,35 @@ func makeRecoveryProgressAnchor(for mode: ActivityMode) async -> ActivityRecover
                 let iidLabel = expectedTool.iid == nil ? "sem-iid" : "iid-confirmável"
                 switch classification {
                 case .died:
-                    throw EngineError.dunesDeathDuringExit(
-                        "Shores/respawn com evidência autoritativa de morte • lifeEpoch=\(observedEpoch.map(String.init) ?? "?") esperado<=\(expectedLifeEpoch) • HP=\(observedHP.map(String.init) ?? "?") • ferramenta \(iidLabel)=\(toolPresent ? "presente" : "ausente")"
-                    )
-                case .inconclusive:
+                    let detail = "Shores/respawn com evidência composta • lifeEpoch=\(observedEpoch.map(String.init) ?? "?") esperado<=\(expectedLifeEpoch) • HP=\(observedHP.map(String.init) ?? "?") • ferramenta \(iidLabel)=\(toolPresent ? "presente" : "ausente")"
+                    compoundDeathEvidenceCount += 1
+                    lastCompoundDeathDetail = detail
+
+                    // A single inventory miss is not enough: the Build 4 field
+                    // log proved that lifeEpoch may move while the player and the
+                    // exact pickaxe survive. Require the same compound shape in
+                    // at least two authoritative /me reads.
+                    if compoundDeathEvidenceCount >= 2 {
+                        throw EngineError.dunesDeathDuringExit(detail)
+                    }
                     lastError = EngineError.dunesExitSurvivalUnconfirmed(
-                        "Shores recebida sem lifeEpoch/HP suficiente • ferramenta \(iidLabel)=\(toolPresent ? "presente" : "ausente") • ausência da ferramenta não prova morte"
+                        "evidência de respawn ainda não repetida (\(compoundDeathEvidenceCount)/2) • \(detail)"
                     )
                     if attempt < 3 { try await sleep(250) }
                     continue
+
+                case .inconclusive:
+                    lastError = EngineError.dunesExitSurvivalUnconfirmed(
+                        "Shores recebida sem vida/HP/ferramenta suficientes • ferramenta \(iidLabel)=\(toolPresent ? "presente" : "ausente") • lifeEpoch isolado não prova morte"
+                    )
+                    if attempt < 3 { try await sleep(250) }
+                    continue
+
                 case .survived:
                     if toolPresent {
                         reporter(.log("🛡️ Sobrevivência confirmada em The Shores • lifeEpoch=\(observedEpoch.map(String.init) ?? String(lifeEpoch)) • ferramenta exposta preservada ✅"))
                     } else {
-                        reporter(.log("🛡️ Sobrevivência confirmada em The Shores por vida/HP autoritativos • ferramenta ausente não classificada como morte"))
+                        reporter(.log("🛡️ Sobrevivência confirmada em The Shores por HP autoritativo • ferramenta ausente em leitura auxiliar não classificada como morte"))
                     }
                     return
                 }
@@ -3725,6 +3782,10 @@ func makeRecoveryProgressAnchor(for mode: ActivityMode) async -> ActivityRecover
                 lastError = error
             }
             if attempt < 3 { try await sleep(250) }
+        }
+
+        if compoundDeathEvidenceCount >= 2, let detail = lastCompoundDeathDetail {
+            throw EngineError.dunesDeathDuringExit(detail)
         }
         throw EngineError.dunesExitSurvivalUnconfirmed(lastError?.localizedDescription ?? "/api/auth/me indisponível")
     }

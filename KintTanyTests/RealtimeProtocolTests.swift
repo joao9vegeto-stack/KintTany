@@ -1630,6 +1630,27 @@ final class RealtimeProtocolTests: XCTestCase {
         )
     }
 
+
+    func testV40Build6WildRecoveryContinuesAfterSafeWorldOrRespawn() {
+        XCTAssertTrue(WildRecoveryContinuationPolicy.shouldResume(after: .worldSafe))
+        XCTAssertTrue(WildRecoveryContinuationPolicy.shouldResume(after: .alreadyWorld))
+        XCTAssertTrue(WildRecoveryContinuationPolicy.shouldResume(after: .respawnConfirmed))
+        XCTAssertFalse(WildRecoveryContinuationPolicy.shouldResume(after: .dead))
+        XCTAssertTrue(WildRecoveryContinuationPolicy.shouldKeepWaitingForRespawn(after: .dead))
+    }
+
+    func testV40Build6DunesLifeEpochAdvanceWithSameToolIsSurvival() {
+        XCTAssertEqual(
+            DunesExitSurvivalPolicy.classify(
+                expectedLifeEpoch: 2,
+                observedLifeEpoch: 3,
+                hp: 100,
+                toolStillCarried: true
+            ),
+            .survived
+        )
+    }
+
     func testV40SafeModesDeclareSameShardRealtimeRecovery() {
         XCTAssertTrue(ActivityMode.fishing.resumesAfterSafeRealtimeLoss)
         XCTAssertTrue(ActivityMode.roastPit.resumesAfterSafeRealtimeLoss)
