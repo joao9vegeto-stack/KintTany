@@ -1342,6 +1342,12 @@ final class AppStore: ObservableObject {
         }
     }
 
+    enum WildRecoveryOwnershipPolicy {
+        static func shouldStartNewRecoveryOwner(recoveryAlreadyInProgress: Bool) -> Bool {
+            !recoveryAlreadyInProgress
+        }
+    }
+
     /// Consume the socket stream on the cooperative executor rather than on
     /// SwiftUI's MainActor. Socket trace is already imported by traceTask at a
     /// controlled cadence, so it is not mirrored once per realtime packet here.
@@ -1365,18 +1371,20 @@ final class AppStore: ObservableObject {
     }
 
     /// Wild operational failures are recovery boundaries, never session endings.
-    /// The current Presence first proves a safe World/respawn boundary; then a
-    /// fresh World Presence rebuilds BANK-FIRST, sword, potions and vitals and
-    /// continues the exact same session goal/progress.
+    /// If this is called from inside the existing recovery owner, it only proves
+    /// the safe boundary and returns ownership to that same loop. It must never
+    /// recursively launch a second recovery while connectionRecoveryInProgress.
+    @discardableResult
     private func containWildTerminalFailure(
         mode: ActivityMode,
         runID: UUID,
         shard: String,
         cookie: String,
         engine: AutomationEngine,
-        failure: String
-    ) async {
-        guard activeRunID == runID, activity == mode, mode.isWildCombat else { return }
+        failure: String,
+        resumeSessionAfterBoundary: Bool = true
+    ) async -> Bool {
+        guard activeRunID == runID, activity == mode, mode.isWildCombat else { return false }
 
         diagnostic("[WILD][FAILSAFE] \(failure) • convertendo falha operacional em recovery contínuo")
         state = .recovering
@@ -1391,7 +1399,7 @@ final class AppStore: ObservableObject {
             )
             await importSocketTrace()
 
-            guard activeRunID == runID, activity == mode else { return }
+            guard activeRunID == runID, activity == mode else { return false }
 
             switch outcome {
             case .worldSafe, .alreadyWorld, .respawnConfirmed:
@@ -1402,13 +1410,22 @@ final class AppStore: ObservableObject {
                 stats.lastEvent = "Wild • World seguro após falha"
                 log("🛡️ Falha operacional contida • World/respawn seguro confirmado • progresso \(stats.successes)/\(sessionGoal) preservado")
                 log("🔄 \(mode.localizedTitle) • reconstruindo BANK-FIRST, espada, poções e vitais para continuar a mesma meta")
-                _ = await recoverWildAfterUnexpectedDisconnect(
-                    mode: mode,
-                    runID: runID,
-                    shard: shard,
-                    cookie: cookie,
-                    confirmedWorldBoundary: true
-                )
+
+                if resumeSessionAfterBoundary &&
+                   WildRecoveryOwnershipPolicy.shouldStartNewRecoveryOwner(
+                       recoveryAlreadyInProgress: connectionRecoveryInProgress
+                   ) {
+                    _ = await recoverWildAfterUnexpectedDisconnect(
+                        mode: mode,
+                        runID: runID,
+                        shard: shard,
+                        cookie: cookie,
+                        confirmedWorldBoundary: true
+                    )
+                } else if connectionRecoveryInProgress {
+                    diagnostic("[WILD][RECOVERY] fronteira World confirmada dentro do recovery ativo • devolvendo controle ao owner atual")
+                }
+                return true
 
             case .dead:
                 connectionRecoveryRequested = true
@@ -1417,13 +1434,22 @@ final class AppStore: ObservableObject {
                 statusMessage = "Morte detectada • aguardando respawn"
                 stats.lastEvent = "Wild • aguardando respawn"
                 log("💀 Wild • morte observada durante falha operacional • progresso \(stats.successes)/\(sessionGoal) preservado • aguardando respawn para continuar")
-                await socket.close()
-                _ = await recoverWildAfterUnexpectedDisconnect(
-                    mode: mode,
-                    runID: runID,
-                    shard: shard,
-                    cookie: cookie
-                )
+
+                if resumeSessionAfterBoundary &&
+                   WildRecoveryOwnershipPolicy.shouldStartNewRecoveryOwner(
+                       recoveryAlreadyInProgress: connectionRecoveryInProgress
+                   ) {
+                    await socket.close()
+                    _ = await recoverWildAfterUnexpectedDisconnect(
+                        mode: mode,
+                        runID: runID,
+                        shard: shard,
+                        cookie: cookie
+                    )
+                } else if connectionRecoveryInProgress {
+                    diagnostic("[WILD][RECOVERY] morte observada dentro do recovery ativo • owner atual aguardará o respawn")
+                }
+                return false
             }
         } catch {
             diagnostic("[WILD][FAILSAFE] fronteira segura não confirmou na Presence atual: \(error.localizedDescription) • recovery por reconexão assumirá o fluxo")
@@ -1432,12 +1458,21 @@ final class AppStore: ObservableObject {
                 runID: runID
             )
             await socket.close()
-            _ = await recoverWildAfterUnexpectedDisconnect(
-                mode: mode,
-                runID: runID,
-                shard: shard,
-                cookie: cookie
-            )
+
+            if resumeSessionAfterBoundary &&
+               WildRecoveryOwnershipPolicy.shouldStartNewRecoveryOwner(
+                   recoveryAlreadyInProgress: connectionRecoveryInProgress
+               ) {
+                _ = await recoverWildAfterUnexpectedDisconnect(
+                    mode: mode,
+                    runID: runID,
+                    shard: shard,
+                    cookie: cookie
+                )
+            } else if connectionRecoveryInProgress {
+                diagnostic("[WILD][RECOVERY] falha de saída dentro do recovery ativo • owner atual continuará a reconexão")
+            }
+            return false
         }
     }
 
@@ -4145,17 +4180,36 @@ final class AppStore: ObservableObject {
                         continue
                     }
 
-                    // True operational failure with a healthy transport still
-                    // goes through the existing Wild safety firewall.
-                    await containWildTerminalFailure(
+                    // Build 8: this catch already runs inside the single Wild
+                    // recovery owner. Prove a safe boundary, then continue THIS
+                    // loop. Never call a second recoverWild... from inside it.
+                    let confirmedWorldBoundary = await containWildTerminalFailure(
                         mode: mode,
                         runID: runID,
                         shard: shard,
                         cookie: cookie,
                         engine: resumedEngine,
-                        failure: error.localizedDescription
+                        failure: error.localizedDescription,
+                        resumeSessionAfterBoundary: false
                     )
-                    return false
+
+                    guard activeRunID == runID, activity == mode else { return false }
+                    connectionRecoveryRequested = true
+                    connectionRecoveryDetail = confirmedWorldBoundary
+                        ? "falha operacional contida; World confirmado dentro do recovery"
+                        : "falha operacional durante recovery; reconexão continuará"
+                    receiverTask?.cancel()
+                    receiverTask = nil
+                    activeEngine = nil
+                    connected = false
+                    await socket.close()
+                    worldBoundaryAlreadyConfirmed = confirmedWorldBoundary
+                    diagnostic(
+                        confirmedWorldBoundary
+                            ? "[WILD][RECOVERY] owner preservado • World confirmado • reconstruindo mesma sessão"
+                            : "[WILD][RECOVERY] owner preservado • retomando verificação de rede/respawn"
+                    )
+                    continue
                 }
             } catch is CancellationError {
                 if activeRunID == runID,

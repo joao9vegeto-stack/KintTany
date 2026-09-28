@@ -1639,6 +1639,20 @@ final class RealtimeProtocolTests: XCTestCase {
         XCTAssertTrue(WildRecoveryContinuationPolicy.shouldKeepWaitingForRespawn(after: .dead))
     }
 
+
+    func testV40Build8WildRecoveryHasSingleOwnerAndRejectsNestedOwner() {
+        XCTAssertTrue(
+            AppStore.WildRecoveryOwnershipPolicy.shouldStartNewRecoveryOwner(
+                recoveryAlreadyInProgress: false
+            )
+        )
+        XCTAssertFalse(
+            AppStore.WildRecoveryOwnershipPolicy.shouldStartNewRecoveryOwner(
+                recoveryAlreadyInProgress: true
+            )
+        )
+    }
+
     func testV40Build6DunesLifeEpochAdvanceWithSameToolIsSurvival() {
         XCTAssertEqual(
             DunesExitSurvivalPolicy.classify(
