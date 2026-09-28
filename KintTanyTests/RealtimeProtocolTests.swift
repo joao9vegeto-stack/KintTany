@@ -1625,4 +1625,92 @@ final class RealtimeProtocolTests: XCTestCase {
         XCTAssertFalse(ActivityMode.chicken.supportsAtomicStop)
     }
 
+    func testV40Build2SilverRotationRejects108AndUses4000Copy() throws {
+        let backpack: [String: Any] = [
+            "hotbar": [NSNull()],
+            "invSlots": [NSNull()],
+            "bankSlots": [
+                ["t": "tool_pickaxe_l2", "iid": "worn-108", "d": 108],
+                ["t": "tool_pickaxe_l2", "iid": "fresh-a", "d": 4000],
+                ["t": "tool_pickaxe_l2", "iid": "fresh-b", "d": 4000]
+            ]
+        ]
+
+        XCTAssertEqual(DunesToolInstancePolicy.minimumEntryDurability(for: .silver), 111)
+        XCTAssertFalse(DunesToolInstancePolicy.isEligibleForEntry(108, mode: .silver))
+        XCTAssertTrue(DunesToolInstancePolicy.isEligibleForEntry(111, mode: .silver))
+
+        let selected = try XCTUnwrap(
+            DunesToolInstancePolicy.preferredCompatibleEntryInstance(
+                in: backpack,
+                for: .silver,
+                excludingIID: "worn-108"
+            )
+        )
+        XCTAssertEqual(selected.durability, 4000)
+        XCTAssertNotEqual(selected.iid, "worn-108")
+    }
+
+    func testV40Build2CactiEntryReserveIs107AndStillUsesLowestEligibleCopy() throws {
+        let backpack: [String: Any] = [
+            "hotbar": [NSNull()],
+            "invSlots": [NSNull()],
+            "bankSlots": [
+                ["t": "tool_axe_l2", "iid": "worn-106", "d": 106],
+                ["t": "tool_axe_l2", "iid": "next-118", "d": 118],
+                ["t": "tool_axe_l2", "iid": "fresh-4000", "d": 4000]
+            ]
+        ]
+
+        XCTAssertEqual(DunesToolInstancePolicy.minimumEntryDurability(for: .cacti), 107)
+        let selected = try XCTUnwrap(
+            DunesToolInstancePolicy.preferredCompatibleEntryInstance(in: backpack, for: .cacti)
+        )
+        XCTAssertEqual(selected.iid, "next-118")
+        XCTAssertEqual(selected.durability, 118)
+    }
+
+    func testV40Build2RotatedIIDIsExplicitlyExcludedEvenIfOtherwiseEligible() throws {
+        let backpack: [String: Any] = [
+            "hotbar": [NSNull()],
+            "invSlots": [NSNull()],
+            "bankSlots": [
+                ["t": "tool_pickaxe_l2", "iid": "just-rotated", "d": 500],
+                ["t": "tool_pickaxe_l2", "iid": "other", "d": 700]
+            ]
+        ]
+        let selected = try XCTUnwrap(
+            DunesToolInstancePolicy.preferredCompatibleEntryInstance(
+                in: backpack,
+                for: .silver,
+                excludingIID: "just-rotated"
+            )
+        )
+        XCTAssertEqual(selected.iid, "other")
+        XCTAssertEqual(selected.durability, 700)
+    }
+
+    func testV40Build2DunesStopPolicyNeverRequiresReentryFromSafeCheckpointPhase() {
+        XCTAssertTrue(
+            DunesStopPolicy.canFinishWithoutDunesReentry(mode: .silver, phase: .preflightSafe)
+        )
+        XCTAssertFalse(
+            DunesStopPolicy.canFinishWithoutDunesReentry(mode: .silver, phase: .fullLootOrEntering)
+        )
+        XCTAssertTrue(
+            DunesStopPolicy.requiresCooperativeShoresExit(
+                mode: .silver,
+                phase: .fullLootOrEntering,
+                connected: true
+            )
+        )
+        XCTAssertFalse(
+            DunesStopPolicy.requiresCooperativeShoresExit(
+                mode: .silver,
+                phase: .preflightSafe,
+                connected: true
+            )
+        )
+    }
+
 }

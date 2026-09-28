@@ -44,3 +44,11 @@ A suíte XCTest cobre contratos de protocolo, gathering/proof/wear, Dunes, banco
 ## Distribuição
 
 GitHub Actions em `macos-26` executa XCTest, build `iphoneos`, valida configuração de background e publica o IPA não assinado. A versão visível no canto superior direito vem de `CFBundleShortVersionString(CFBundleVersion)`, por exemplo `v4.0(1)`.
+
+
+## v4.0 Build 2 — correção do loop Dunes observado em log
+
+- A ferramenta escolhida para reentrada precisa sobreviver ao próximo alvo inteiro: Silver exige durabilidade mínima 111 e Cacti 107.
+- A iid que acabou de disparar rotação preventiva é excluída explicitamente daquela seleção.
+- A cópia carregada é validada pela iid realmente retirada, sem ser confundida com uma cópia de menor durabilidade ainda no banco.
+- STOP é autoridade global da sessão Dunes. Em World/Bank/The Shores nenhum novo `desert` pode ser aberto após STOP; se o toque competir com uma reconexão, a nova Presence é fechada antes de qualquer coleta.

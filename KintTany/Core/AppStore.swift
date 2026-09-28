@@ -606,6 +606,20 @@ struct DunesPresenceSafetyPolicy {
     }
 }
 
+struct DunesStopPolicy {
+    static func requiresCooperativeShoresExit(
+        mode: ActivityMode,
+        phase: DunesPresencePhase,
+        connected: Bool
+    ) -> Bool {
+        mode.isDunesGathering && connected && phase == .fullLootOrEntering
+    }
+
+    static func canFinishWithoutDunesReentry(mode: ActivityMode, phase: DunesPresencePhase) -> Bool {
+        mode.isDunesGathering && phase != .fullLootOrEntering
+    }
+}
+
 struct DunesCheckpointPolicy {
     /// Build 78: protect full-loot resources after at most 25 successful nodes,
     /// but never remain continuously exposed for more than three minutes.
@@ -1188,20 +1202,38 @@ final class AppStore: ObservableObject {
             return
         }
 
+        // Build 2: if a Dunes checkpoint is already in World/Bank/The Shores,
+        // STOP is authoritative at the session level. Do not send it only to the
+        // temporary bank engine and, above all, never create another Desert Presence.
+        if let stoppedMode,
+           DunesStopPolicy.canFinishWithoutDunesReentry(mode: stoppedMode, phase: dunesPresencePhase) {
+            state = .recovering
+            statusMessage = "STOP • encerrando em área segura"
+            stats.lastEvent = "STOP global • sem reentrada Dunes"
+            updateContinuedProcessingProgress(forceTitleUpdate: true)
+            if !silent {
+                log("STOP registrado em fase segura das Dunes • nenhuma nova Presence desert será aberta")
+            }
+            return
+        }
+
         // Em regiões full-loot o STOP é cooperativo. A engine deixa de criar
         // novas ações e confirma World/The Shores antes de liberar a Presence.
-        if activity?.requiresSafeExit == true, connected, let activeEngine {
+        if let stoppedMode,
+           stoppedMode.requiresSafeExit,
+           connected,
+           let activeEngine {
             Task.detached(priority: .userInitiated) {
                 await activeEngine.requestSafeStop(reason: .user)
             }
             state = .recovering
-            statusMessage = stoppedMode?.isDunesGathering == true
+            statusMessage = stoppedMode.isDunesGathering
                 ? "Saindo das Dunes com segurança"
                 : "Saindo do combate com segurança"
             stats.lastEvent = "safe stop solicitado"
             updateContinuedProcessingProgress(forceTitleUpdate: true)
             if !silent {
-                let region = stoppedMode?.isDunesGathering == true ? "Dunes" : "Wilderness"
+                let region = stoppedMode.isDunesGathering ? "Dunes" : "Wilderness"
                 log("STOP solicitado — encerrando \(region) com segurança antes de fechar a conexão")
             }
             return
@@ -1593,6 +1625,15 @@ final class AppStore: ObservableObject {
             guard activeRunID == runID, activity == mode, !terminalFailureHandled else {
                 throw CancellationError()
             }
+            if requestedStopReason == .user {
+                log("STOP confirmado no orquestrador Dunes • progresso \(completedBeforePhase)/\(runGoal) preservado • sem nova reentrada")
+                return EngineRunResult(
+                    successes: completedBeforePhase,
+                    completedGoal: false,
+                    stoppedSafely: true,
+                    stopReason: .user
+                )
+            }
             let phaseGoal = DunesCheckpointPolicy.phaseGoal(totalGoal: runGoal, completed: completedBeforePhase)
             guard phaseGoal > 0 else {
                 return EngineRunResult(successes: completedBeforePhase, completedGoal: true, stoppedSafely: false, stopReason: nil)
@@ -1653,6 +1694,16 @@ final class AppStore: ObservableObject {
             let total = max(stats.successes, phaseStart + phaseResult.successes)
             stats.successes = total
 
+            if requestedStopReason == .user || phaseResult.stopReason == .user {
+                log("STOP confirmado após saída segura das Dunes • progresso \(total)/\(runGoal) preservado • checkpoint não será reaberto")
+                return EngineRunResult(
+                    successes: total,
+                    completedGoal: false,
+                    stoppedSafely: true,
+                    stopReason: .user
+                )
+            }
+
             let resumableSafeExit = phaseResult.stoppedSafely
                 && DunesCheckpointContinuationPolicy.shouldResumeAfterSafeExit(phaseResult.stopReason)
             if phaseResult.stoppedSafely && !resumableSafeExit {
@@ -1688,6 +1739,10 @@ final class AppStore: ObservableObject {
             if phaseResult.stopReason == .dunesDangerSafety {
                 log("🛡️ Dunes • dano externo sobrevivido • progresso \(total)/\(runGoal) preservado • convertendo fuga em checkpoint recuperável")
             }
+            let rotatedToolIID = phaseResult.stopReason == .dunesToolRotation ? dunesExpectedTool?.iid : nil
+            if let rotatedToolIID {
+                diagnostic("[DUNES][TOOL] iid recusada nesta rotação=\(rotatedToolIID)")
+            }
             if recoveringFromDeath {
                 log("🔄 Dunes • respawn confirmado • reconstruindo BANK-FIRST + ferramenta + HP antes de reentrar • \(total)/\(runGoal)")
                 receiverTask?.cancel()
@@ -1703,6 +1758,15 @@ final class AppStore: ObservableObject {
             guard activeRunID == runID, activity == mode else { throw CancellationError() }
 
             dunesPresencePhase = .preflightSafe
+            if requestedStopReason == .user {
+                log("STOP confirmado em The Shores/World antes do banco • progresso \(total)/\(runGoal) preservado")
+                return EngineRunResult(
+                    successes: total,
+                    completedGoal: false,
+                    stoppedSafely: true,
+                    stopReason: .user
+                )
+            }
             // A ferramenta e o lifeEpoch acabaram de sobreviver ao checkpoint.
             // Preserve-os durante a fase segura do banco para cobrir a janela da
             // próxima abertura `desert`; a nova engine atualizará a exposição.
@@ -1732,7 +1796,10 @@ final class AppStore: ObservableObject {
             await bankEngine.prepareIdentity()
             let loadout: (tool: String, healthPotionPlus: Int, toolIdentity: DunesToolInstanceIdentity, lifeEpoch: Int)
             do {
-                loadout = try await bankEngine.prepareDunesLoadoutFromWorld(for: mode)
+                loadout = try await bankEngine.prepareDunesLoadoutFromWorld(
+                    for: mode,
+                    excludingToolIID: rotatedToolIID
+                )
             } catch let EngineError.gatherLoadoutNotReady(detail) {
                 log("🧰 Dunes • \(detail) • progresso \(total)/\(runGoal) preservado no World/Bank")
                 receiverTask?.cancel()
@@ -1759,6 +1826,16 @@ final class AppStore: ObservableObject {
                 log("⚠️ Checkpoint • sem Health Potion+ • próximo lote usa piso de \(DunesHeatSafetyPolicy.minimumSafeHP) HP")
             }
 
+            if requestedStopReason == .user {
+                log("STOP confirmado após BANK-FIRST • World seguro • progresso \(total)/\(runGoal) preservado • Desert NÃO será reaberta")
+                return EngineRunResult(
+                    successes: total,
+                    completedGoal: false,
+                    stoppedSafely: true,
+                    stopReason: .user
+                )
+            }
+
             receiverTask?.cancel()
             receiverTask = nil
             activeEngine = nil
@@ -1768,6 +1845,15 @@ final class AppStore: ObservableObject {
             guard activeRunID == runID, activity == mode else { throw CancellationError() }
 
             let activityBootstrap = AutomationEngine.bootstrap(for: mode)
+            if requestedStopReason == .user {
+                log("STOP confirmado antes da nova Presence desert • progresso \(total)/\(runGoal) preservado")
+                return EngineRunResult(
+                    successes: total,
+                    completedGoal: false,
+                    stoppedSafely: true,
+                    stopReason: .user
+                )
+            }
             dunesPresencePhase = .fullLootOrEntering
             state = .connecting
             statusMessage = "Checkpoint concluído • reentrando nas Dunes"
@@ -1782,6 +1868,23 @@ final class AppStore: ObservableObject {
             )
             await importSocketTrace()
             guard activeRunID == runID, activity == mode else { throw CancellationError() }
+
+            if requestedStopReason == .user {
+                receiverTask?.cancel()
+                receiverTask = nil
+                activeEngine = nil
+                connected = false
+                await socket.close()
+                await importSocketTrace()
+                dunesPresencePhase = .preflightSafe
+                log("STOP venceu corrida de reconexão • nova Presence desert fechada antes de coletar • progresso \(total)/\(runGoal) preservado")
+                return EngineRunResult(
+                    successes: total,
+                    completedGoal: false,
+                    stoppedSafely: true,
+                    stopReason: .user
+                )
+            }
 
             let activityEngine = AutomationEngine(
                 socket: socket,

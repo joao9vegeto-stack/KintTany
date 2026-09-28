@@ -161,6 +161,15 @@ struct DunesToolInstancePolicy {
         return durability > durabilityFloor
     }
 
+    static func minimumEntryDurability(for mode: ActivityMode) -> Int {
+        durabilityFloor + requiredReserve(for: mode) + 1
+    }
+
+    static func isEligibleForEntry(_ durability: Int?, mode: ActivityMode) -> Bool {
+        guard let durability else { return false }
+        return durability >= minimumEntryDurability(for: mode)
+    }
+
     static func shouldRotateBeforeNextTarget(durability: Int?, mode: ActivityMode) -> Bool {
         guard let durability else { return true }
         return durability - requiredReserve(for: mode) <= durabilityFloor
@@ -169,7 +178,9 @@ struct DunesToolInstancePolicy {
     private static func candidates(
         in backpack: [String: Any],
         sourceKey: String,
-        acceptedTypes: Set<String>
+        acceptedTypes: Set<String>,
+        minimumDurability: Int? = nil,
+        excludingIID: String? = nil
     ) -> [DunesToolInstanceSelection] {
         guard let slots = backpack[sourceKey] as? [Any] else { return [] }
         return slots.enumerated().compactMap { index, raw in
@@ -180,9 +191,12 @@ struct DunesToolInstancePolicy {
 
             let durability = RealtimeProtocol.int(slot["d"] ?? slot["durability"])
             guard isSafeDurability(durability) else { return nil }
+            if let minimumDurability, (durability ?? 0) < minimumDurability { return nil }
+            let iid = SaveBackpackConflictPolicy.normalizedIID(slot["iid"])
+            if let excludingIID, iid == excludingIID { return nil }
             return DunesToolInstanceSelection(
                 type: type,
-                iid: SaveBackpackConflictPolicy.normalizedIID(slot["iid"]),
+                iid: iid,
                 durability: durability,
                 sourceKey: sourceKey,
                 sourceIndex: index
@@ -217,6 +231,35 @@ struct DunesToolInstancePolicy {
             candidates(in: backpack, sourceKey: "invSlots", acceptedTypes: accepted) +
             candidates(in: backpack, sourceKey: "bankSlots", acceptedTypes: accepted)
         )
+    }
+
+    static func preferredCompatibleEntryInstance(
+        in backpack: [String: Any],
+        for mode: ActivityMode,
+        excludingIID: String? = nil
+    ) -> DunesToolInstanceSelection? {
+        let accepted = Set(ActivityToolPolicy.acceptedTools(for: mode))
+        guard !accepted.isEmpty else { return nil }
+        let minimum = minimumEntryDurability(for: mode)
+        return best(
+            candidates(in: backpack, sourceKey: "hotbar", acceptedTypes: accepted, minimumDurability: minimum, excludingIID: excludingIID) +
+            candidates(in: backpack, sourceKey: "invSlots", acceptedTypes: accepted, minimumDurability: minimum, excludingIID: excludingIID) +
+            candidates(in: backpack, sourceKey: "bankSlots", acceptedTypes: accepted, minimumDurability: minimum, excludingIID: excludingIID)
+        )
+    }
+
+    static func carriedInstance(
+        in backpack: [String: Any],
+        type: String,
+        preferredIID: String?
+    ) -> DunesToolInstanceSelection? {
+        var values =
+            candidates(in: backpack, sourceKey: "hotbar", acceptedTypes: [type]) +
+            candidates(in: backpack, sourceKey: "invSlots", acceptedTypes: [type])
+        if let preferredIID {
+            values = values.filter { $0.iid == preferredIID }
+        }
+        return best(values)
     }
 }
 
@@ -4569,7 +4612,10 @@ func makeRecoveryProgressAnchor(for mode: ActivityMode) async -> ActivityRecover
     /// loads up to six Health Potion+, banks every other bankable carried item,
     /// verifies tool conservation, and returns to World before AppStore closes
     /// this Presence and opens a fresh `desert` Presence on the same shard.
-    func prepareDunesLoadoutFromWorld(for mode: ActivityMode) async throws -> (
+    func prepareDunesLoadoutFromWorld(
+        for mode: ActivityMode,
+        excludingToolIID: String? = nil
+    ) async throws -> (
         tool: String,
         healthPotionPlus: Int,
         toolIdentity: DunesToolInstanceIdentity,
@@ -4615,13 +4661,15 @@ func makeRecoveryProgressAnchor(for mode: ActivityMode) async -> ActivityRecover
             }
 
             let bankedState = try await http.backpackState()
-            guard let selectedInstance = DunesToolInstancePolicy.preferredCompatibleInstance(
+            guard let selectedInstance = DunesToolInstancePolicy.preferredCompatibleEntryInstance(
                 in: bankedState.backpack,
-                for: mode
+                for: mode,
+                excludingIID: excludingToolIID
             ) else {
                 let family = mode == .cacti ? "Axe" : "Pickaxe"
+                let minimum = DunesToolInstancePolicy.minimumEntryDurability(for: mode)
                 throw EngineError.gatherLoadoutNotReady(
-                    "Sem \(family) compatível com durabilidade >\(DunesToolInstancePolicy.durabilityFloor)"
+                    "Sem \(family) compatível com durabilidade >=\(minimum) para iniciar outro alvo"
                 )
             }
 
@@ -4638,10 +4686,15 @@ func makeRecoveryProgressAnchor(for mode: ActivityMode) async -> ActivityRecover
             guard carried >= 1 else { throw EngineError.missingRequiredItem(selectedName) }
 
             let finalState = try await http.backpackState()
-            guard let exposed = DunesToolInstancePolicy.preferredInstance(in: finalState.backpack, type: selected),
-                  exposed.isCarried
+            guard let exposed = DunesToolInstancePolicy.carriedInstance(
+                in: finalState.backpack,
+                type: selected,
+                preferredIID: selectedInstance.iid
+            ),
+                  exposed.isCarried,
+                  DunesToolInstancePolicy.isEligibleForEntry(exposed.durability, mode: mode)
             else {
-                throw EngineError.gatherLoadoutNotReady("\(selectedName) segura não ficou carregada")
+                throw EngineError.gatherLoadoutNotReady("\(selectedName) segura não ficou carregada com reserva suficiente")
             }
 
             let finalTool = try await http.itemLocationCounts(type: selected)
@@ -4660,7 +4713,7 @@ func makeRecoveryProgressAnchor(for mode: ActivityMode) async -> ActivityRecover
             let healthPotionPlus = try await http.itemLocationCounts(type: DunesHeatSafetyPolicy.healthPotionPlusType)
             activeGatherToolType = selected
             let durabilityLabel = exposed.durability.map(String.init) ?? "?"
-            reporter(.log("🧰 Preflight Dunes • \(selectedName) carregada ✅ • d=\(durabilityLabel) • piso de rotação >\(DunesToolInstancePolicy.durabilityFloor) • instâncias expostas=1"))
+            reporter(.log("🧰 Preflight Dunes • \(selectedName) carregada ✅ • d=\(durabilityLabel) • entrada mínima=\(DunesToolInstancePolicy.minimumEntryDurability(for: mode)) • piso final >\(DunesToolInstancePolicy.durabilityFloor) • instâncias expostas=1"))
             if finalTool.bank > 0 {
                 reporter(.log("🏦 Dunes FULL-LOOT • \(finalTool.bank)x \(selectedName) protegida(s) no banco ✅"))
             }
