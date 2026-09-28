@@ -1409,6 +1409,13 @@ final class AppStore: ObservableObject {
                 log("Falha: \(failure) • conexão liberada fora do Wild")
                 logSessionSummary(mode: mode, outcome: "FALHA • FORA DO WILD")
                 finishContinuedProcessing(success: false, reason: "falha contida fora da Wilderness")
+            case .respawnConfirmed:
+                statusMessage = "Falha encerrada após respawn confirmado"
+                stats.lastEvent = "falha operacional • respawn confirmado"
+                log("♻️ Falha operacional contida • respawn autoritativo confirmado antes de liberar a conexão")
+                log("Falha: \(failure) • personagem já reapareceu no World")
+                logSessionSummary(mode: mode, outcome: "FALHA • RESPAWN CONFIRMADO")
+                finishContinuedProcessing(success: false, reason: "falha contida após respawn confirmado")
             case .dead:
                 statusMessage = "Servidor confirmou morte"
                 stats.lastEvent = "morte autoritativamente confirmada"
