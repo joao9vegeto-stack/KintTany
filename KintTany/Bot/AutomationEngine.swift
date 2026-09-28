@@ -49,6 +49,7 @@ enum EmergencyWildExitResult: Equatable {
 enum EmergencyDunesExitResult: Equatable {
     case shoresSafe
     case alreadySafe
+    case respawnConfirmed(String)
 }
 
 struct FishingNumberingPolicy {
@@ -304,13 +305,23 @@ struct DunesExitSurvivalPolicy {
         hp: Int?,
         toolStillCarried: Bool
     ) -> DunesExitSurvivalClassification {
-        if let observedLifeEpoch, observedLifeEpoch > expectedLifeEpoch { return .died }
+        // Build 5: lifeEpoch changes during Presence recreation are diagnostic
+        // only. They must never, by themselves, classify a full-loot death.
         if let hp, hp <= 0 { return .died }
 
-        // v4.0: a tool may legitimately have been rotated/broken. Its absence is
-        // not proof of full-loot death. Fresh positive life/HP evidence is enough.
-        if observedLifeEpoch != nil || hp != nil { return .survived }
+        // The exact physical tool is the strongest survival proof available
+        // after an emergency exit. If it is still carried, the player survived
+        // even when lifeEpoch advanced during reconnect.
         if toolStillCarried { return .survived }
+
+        // During a Dunes exit there is no bank/tool rotation between exposure
+        // and verification. A positive respawn HP together with loss of the
+        // exposed physical tool is therefore the compound full-loot signal.
+        if let hp, hp > 0 { return .died }
+
+        // lifeEpoch alone is intentionally ignored for death classification.
+        _ = expectedLifeEpoch
+        _ = observedLifeEpoch
         return .inconclusive
     }
 
@@ -2841,6 +2852,9 @@ func makeRecoveryProgressAnchor(for mode: ActivityMode) async -> ActivityRecover
                                 expectedLifeEpoch: expectedLifeEpoch ?? lifeEpoch,
                                 expectedTool: expectedTool ?? activeDunesToolIdentity
                             )
+                        } catch let EngineError.dunesDeathDuringExit(detail) {
+                            reporter(.log("💀 Dunes • respawn/full-loot confirmado após reconexão • \(detail)"))
+                            return .respawnConfirmed(detail)
                         } catch let EngineError.dunesExitSurvivalUnconfirmed(detail) {
                             guard DunesEmergencyExitPolicy.mayCloseOnInconclusiveSurvival(
                                 stopRequested: allowInconclusiveSurvivalAfterConfirmedShores
@@ -2860,14 +2874,19 @@ func makeRecoveryProgressAnchor(for mode: ActivityMode) async -> ActivityRecover
             throw EngineError.regionNotConfirmed("estado autoritativo das Dunes após reconexão")
         }
         if safeStopReason == nil { safeStopReason = .connectionLoss }
-        try await exitDunesToShores(
-            reason: reason,
-            expectedTool: expectedTool,
-            expectedLifeEpoch: expectedLifeEpoch,
-            allowInconclusiveSurvivalAfterConfirmedShores: allowInconclusiveSurvivalAfterConfirmedShores
-        )
-        safeStopCompleted = true
-        return .shoresSafe
+        do {
+            try await exitDunesToShores(
+                reason: reason,
+                expectedTool: expectedTool,
+                expectedLifeEpoch: expectedLifeEpoch,
+                allowInconclusiveSurvivalAfterConfirmedShores: allowInconclusiveSurvivalAfterConfirmedShores
+            )
+            safeStopCompleted = true
+            return .shoresSafe
+        } catch let EngineError.dunesDeathDuringExit(detail) {
+            reporter(.log("💀 Dunes • respawn/full-loot confirmado durante saída de emergência • \(detail)"))
+            return .respawnConfirmed(detail)
+        }
     }
 
     // MARK: - Common state
