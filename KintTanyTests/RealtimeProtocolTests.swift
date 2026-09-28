@@ -1764,4 +1764,43 @@ final class RealtimeProtocolTests: XCTestCase {
         )
     }
 
+    func testV40Build4DunesIdentityUsesCarriedToolEvenWhenBankHasLowerDurabilityCopy() throws {
+        let backpack: [String: Any] = [
+            "hotbar": [
+                ["t": "tool_pickaxe_l2", "iid": "carried-4000", "d": 4000]
+            ],
+            "invSlots": [NSNull()],
+            "bankSlots": [
+                ["t": "tool_pickaxe_l2", "iid": "bank-102", "d": 102],
+                ["t": "tool_pickaxe_l2", "iid": "bank-4000", "d": 4000]
+            ]
+        ]
+
+        let carried = try XCTUnwrap(
+            DunesToolInstancePolicy.carriedInstance(
+                in: backpack,
+                type: "tool_pickaxe_l2",
+                preferredIID: nil
+            )
+        )
+        XCTAssertEqual(carried.iid, "carried-4000")
+        XCTAssertEqual(carried.durability, 4000)
+        XCTAssertTrue(carried.isCarried)
+
+        let acrossAllLocations = try XCTUnwrap(
+            DunesToolInstancePolicy.preferredInstance(in: backpack, type: "tool_pickaxe_l2")
+        )
+        XCTAssertEqual(acrossAllLocations.iid, "bank-102")
+        XCTAssertFalse(acrossAllLocations.isCarried)
+    }
+
+    func testV40Build4StopMayCloseAfterConfirmedShoresWhenAuxiliaryCheckIsInconclusive() {
+        XCTAssertTrue(
+            DunesEmergencyExitPolicy.mayCloseOnInconclusiveSurvival(stopRequested: true)
+        )
+        XCTAssertFalse(
+            DunesEmergencyExitPolicy.mayCloseOnInconclusiveSurvival(stopRequested: false)
+        )
+    }
+
 }
