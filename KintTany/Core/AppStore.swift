@@ -3202,8 +3202,8 @@ final class AppStore: ObservableObject {
         if !connectionRecoveryRequested {
             connectionRecoveryDetail = reason
             if dunesExitOnly {
-                diagnostic("[WARN] \(reason) • Dunes: reconexão exclusiva para saída solicitada")
-                log("⚠️ Conexão perdida nas Dunes • nenhuma coleta será retomada • reconectando apenas para sair em The Shores")
+                diagnostic("[WARN] \(reason) • Dunes: reconexão de segurança antes da retomada")
+                log("⚠️ Conexão perdida nas Dunes • pausando coleta • primeiro confirmará The Shores/respawn e depois retomará a mesma meta")
             } else {
                 diagnostic("[WARN] \(reason) • Gathering: retomada no mesmo shard solicitada")
                 log("⚠️ Conexão perdida durante a coleta • progresso preservado • reconectando para continuar a meta")
@@ -3219,6 +3219,203 @@ final class AppStore: ObservableObject {
         updateContinuedProcessingProgress(forceTitleUpdate: true)
         engineRunTask?.cancel()
         receiverTask?.cancel()
+    }
+
+    private func continueDunesSessionAfterEmergencyBoundary(
+        mode: ActivityMode,
+        runID: UUID,
+        shard: String,
+        cookie: String,
+        runGoal: Int,
+        outcome: EmergencyDunesExitResult,
+        recoveryEngine: AutomationEngine
+    ) async throws -> EngineRunResult {
+        guard activeRunID == runID, activity == mode, mode.isDunesGathering else {
+            throw CancellationError()
+        }
+
+        let preserved = stats.successes
+        let inheritedHP = await recoveryEngine.latestTrustedHPForHandoff()
+
+        switch outcome {
+        case .respawnConfirmed(let detail):
+            state = .recovering
+            statusMessage = "Respawn confirmado • reconstruindo fluxo"
+            stats.lastEvent = "Dunes • respawn confirmado após reconexão"
+            log("💀 Dunes • respawn/full-loot confirmado após queda • \(detail)")
+            log("🔄 Dunes • progresso \(preserved)/\(runGoal) preservado • reconstruindo banco, ferramenta e HP para continuar")
+        case .alreadySafe, .shoresSafe:
+            state = .recovering
+            statusMessage = "The Shores segura • retomando sessão"
+            stats.lastEvent = "Dunes • sobrevivência confirmada após reconexão"
+            log("🛡️ Dunes • sobrevivência confirmada após queda • progresso \(preserved)/\(runGoal) preservado • sessão continuará")
+        }
+
+        receiverTask?.cancel()
+        receiverTask = nil
+        activeEngine = nil
+        connected = false
+        await socket.close()
+        await importSocketTrace()
+        dunesPresencePhase = .preflightSafe
+
+        if requestedStopReason == .user {
+            return EngineRunResult(
+                successes: preserved,
+                completedGoal: false,
+                stoppedSafely: true,
+                stopReason: .user
+            )
+        }
+        if preserved >= runGoal {
+            return EngineRunResult(
+                successes: preserved,
+                completedGoal: true,
+                stoppedSafely: false,
+                stopReason: nil
+            )
+        }
+
+        state = .connecting
+        statusMessage = "Recovery Dunes • protegendo e reconstruindo loadout"
+        stats.lastEvent = "recovery Dunes • World/bank"
+        updateContinuedProcessingProgress(forceTitleUpdate: true)
+
+        let bankBootstrap = DunesWorldPreflightPolicy.bankBootstrap
+        let bankStream = try await socket.connect(session: session, shard: shard, bootstrap: bankBootstrap)
+        await importSocketTrace()
+        guard activeRunID == runID, activity == mode else { throw CancellationError() }
+
+        let bankEngine = AutomationEngine(
+            socket: socket,
+            cookie: cookie,
+            shard: shard,
+            bootstrap: bankBootstrap,
+            fishingBait: selectedFishingBait,
+            roastMode: selectedRoastMode,
+            blacksmithSelection: selectedBlacksmith,
+            inheritedPlayerHP: inheritedHP,
+            reporter: engineReporter(runID: runID)
+        )
+        activeEngine = bankEngine
+        receiverTask = await makeReceiverTask(
+            stream: bankStream,
+            engine: bankEngine,
+            mode: mode,
+            runID: runID
+        )
+        connected = true
+        await bankEngine.prepareIdentity()
+
+        let loadout: (tool: String, healthPotionPlus: Int, toolIdentity: DunesToolInstanceIdentity, lifeEpoch: Int)
+        do {
+            loadout = try await bankEngine.prepareDunesLoadoutFromWorld(for: mode)
+        } catch let EngineError.gatherLoadoutNotReady(detail) {
+            log("🧰 Dunes recovery • \(detail) • progresso \(preserved)/\(runGoal) preservado no World/Bank")
+            receiverTask?.cancel()
+            receiverTask = nil
+            activeEngine = nil
+            connected = false
+            await socket.close()
+            await importSocketTrace()
+            return EngineRunResult(
+                successes: preserved,
+                completedGoal: false,
+                stoppedSafely: true,
+                stopReason: .dunesToolRotation
+            )
+        }
+
+        dunesExpectedTool = loadout.toolIdentity
+        dunesExpectedLifeEpoch = loadout.lifeEpoch
+        player.lifeEpoch = max(player.lifeEpoch, loadout.lifeEpoch)
+        let reentryHP = await bankEngine.latestTrustedHPForHandoff()
+        let toolName = ActivityToolPolicy.displayName(loadout.tool)
+        log("🏦 Dunes recovery • BANK-FIRST concluído • \(toolName) pronta • HP World confirmado • retomando \(preserved)/\(runGoal)")
+
+        if requestedStopReason == .user {
+            receiverTask?.cancel()
+            receiverTask = nil
+            activeEngine = nil
+            connected = false
+            await socket.close()
+            await importSocketTrace()
+            return EngineRunResult(
+                successes: preserved,
+                completedGoal: false,
+                stoppedSafely: true,
+                stopReason: .user
+            )
+        }
+
+        receiverTask?.cancel()
+        receiverTask = nil
+        activeEngine = nil
+        connected = false
+        await socket.close()
+        await importSocketTrace()
+
+        let activityBootstrap = AutomationEngine.bootstrap(for: mode)
+        dunesPresencePhase = .fullLootOrEntering
+        state = .connecting
+        statusMessage = "Recovery concluído • reentrando nas Dunes"
+        stats.lastEvent = "Dunes recovery • nova Presence desert"
+        updateContinuedProcessingProgress(forceTitleUpdate: true)
+
+        let activityStream = try await socket.connect(
+            session: session,
+            shard: shard,
+            bootstrap: activityBootstrap
+        )
+        await importSocketTrace()
+        guard activeRunID == runID, activity == mode else { throw CancellationError() }
+
+        if requestedStopReason == .user {
+            await socket.close()
+            dunesPresencePhase = .preflightSafe
+            return EngineRunResult(
+                successes: preserved,
+                completedGoal: false,
+                stoppedSafely: true,
+                stopReason: .user
+            )
+        }
+
+        let activityEngine = AutomationEngine(
+            socket: socket,
+            cookie: cookie,
+            shard: shard,
+            bootstrap: activityBootstrap,
+            fishingBait: selectedFishingBait,
+            roastMode: selectedRoastMode,
+            blacksmithSelection: selectedBlacksmith,
+            inheritedPlayerHP: reentryHP,
+            reporter: engineReporter(runID: runID)
+        )
+        activeEngine = activityEngine
+        receiverTask = await makeReceiverTask(
+            stream: activityStream,
+            engine: activityEngine,
+            mode: mode,
+            runID: runID
+        )
+        connected = true
+        connectionRecoveryRequested = false
+        connectionRecoveryDetail = nil
+        state = .syncing
+        statusMessage = "Dunes recuperada • retomando coleta"
+        stats.lastEvent = "Dunes • coleta retomada após recovery"
+        await activityEngine.prepareIdentity()
+        log("✅ Dunes recovery concluído • nova Presence desert no mesmo shard \(shard) • retomando em \(preserved)/\(runGoal)")
+
+        return try await runDunesCheckpointed(
+            mode: mode,
+            runID: runID,
+            shard: shard,
+            cookie: cookie,
+            initialEngine: activityEngine,
+            runGoal: runGoal
+        )
     }
 
     @discardableResult
@@ -3314,48 +3511,88 @@ final class AppStore: ObservableObject {
                 )
                 await engine.prepareIdentity()
 
-                // A Presence anterior caiu em região full-loot. Nesta sessão de
-                // recovery é proibido voltar a minerar/cortar: a única operação
-                // aceita é descobrir o estado autoritativo e confirmar Shores.
+                // Full-loot recovery is a safety boundary, not a terminal
+                // session outcome. Confirm Shores/respawn first, then rebuild
+                // World/bank loadout and continue the same session goal.
                 if mode.isDunesGathering {
                     connected = true
                     state = .recovering
-                    statusMessage = "Reconectado • saindo das Dunes"
-                    stats.lastEvent = "saída de emergência das Dunes"
+                    statusMessage = "Reconectado • verificando The Shores/respawn"
+                    stats.lastEvent = "Dunes • recovery de segurança"
                     updateContinuedProcessingProgress(forceTitleUpdate: true)
-                    log("🔁 Conexão restaurada no \(shard) • prioridade absoluta: confirmar The Shores")
+                    log("🔁 Conexão restaurada no \(shard) • prioridade: confirmar sobrevivência/respawn antes de retomar")
 
-                    _ = try await engine.runEmergencyDunesExit(
+                    let outcome = try await engine.runEmergencyDunesExit(
                         reason: requestedStopReason == .user ? "STOP após perda de conexão" : "perda de conexão",
                         expectedTool: dunesExpectedTool,
                         expectedLifeEpoch: dunesExpectedLifeEpoch,
                         allowInconclusiveSurvivalAfterConfirmedShores: requestedStopReason == .user
                     )
-                    await closeDunesPresenceAfterConfirmedShores()
-                    terminalFailureHandled = true
                     connectionRecoveryRequested = false
                     connectionRecoveryDetail = nil
-                    currentTarget = nil
-                    activity = nil
 
-                    if stats.successes >= runGoal, requestedStopReason == nil {
+                    let result = try await continueDunesSessionAfterEmergencyBoundary(
+                        mode: mode,
+                        runID: runID,
+                        shard: shard,
+                        cookie: cookie,
+                        runGoal: runGoal,
+                        outcome: outcome,
+                        recoveryEngine: engine
+                    )
+                    stats.successes = max(stats.successes, result.successes)
+
+                    if result.completedGoal || stats.successes >= runGoal {
+                        await closeDunesPresenceAfterConfirmedShores()
+                        connectionRecoveryRequested = false
+                        connectionRecoveryDetail = nil
+                        currentTarget = nil
+                        activity = nil
                         state = .completed
-                        statusMessage = "Meta concluída • The Shores segura"
-                        stats.lastEvent = "meta concluída e Shores confirmada"
-                        log("✅ Reconexão confirmou The Shores após a meta • sessão encerrada com segurança")
-                        logSessionSummary(mode: mode, outcome: "META CONCLUÍDA • THE SHORES")
-                        finishContinuedProcessing(success: true, reason: "meta concluída com The Shores confirmada")
-                    } else {
-                        let requested = requestedStopReason
-                        state = requested == nil ? .failed : .cancelled
-                        statusMessage = "The Shores segura • coleta encerrada"
-                        stats.lastEvent = "The Shores confirmada após reconexão"
-                        if requested == nil { stats.sessionErrors += 1 }
-                        log("✅ Reconexão de emergência concluída • The Shores confirmada • nenhuma coleta foi retomada")
-                        logSessionSummary(mode: mode, outcome: requested == nil ? "CONEXÃO PERDIDA • SHORES SEGURA" : "STOP • SHORES SEGURA")
-                        finishContinuedProcessing(success: false, reason: "The Shores confirmada após reconexão")
+                        statusMessage = "Meta concluída"
+                        stats.lastEvent = "meta concluída após recovery Dunes"
+                        updateContinuedProcessingProgress(forceTitleUpdate: true)
+                        log("✅ Meta concluída: \(stats.successes)/\(runGoal) • sessão Dunes continuou após recovery")
+                        logSessionSummary(mode: mode, outcome: "META CONCLUÍDA APÓS RECOVERY")
+                        finishContinuedProcessing(success: true, reason: "meta concluída após recovery Dunes")
+                        return true
                     }
-                    return true
+
+                    if result.stoppedSafely {
+                        receiverTask?.cancel()
+                        receiverTask = nil
+                        activeEngine = nil
+                        connected = false
+                        await socket.close()
+                        await importSocketTrace()
+                        connectionRecoveryRequested = false
+                        connectionRecoveryDetail = nil
+                        currentTarget = nil
+                        activity = nil
+                        state = .cancelled
+                        switch result.stopReason {
+                        case .user:
+                            statusMessage = "Atividade encerrada com segurança"
+                            stats.lastEvent = "STOP após recovery Dunes"
+                            log("STOP confirmado • recovery terminou em área segura • nenhuma nova ação será enviada")
+                            logSessionSummary(mode: mode, outcome: "STOP SEGURO")
+                            finishContinuedProcessing(success: false, reason: "STOP seguro após recovery")
+                        case .dunesToolRotation:
+                            statusMessage = "Sem ferramenta Dunes segura"
+                            stats.lastEvent = "recovery sem ferramenta segura"
+                            log("🧰 Dunes • recovery não encontrou ferramenta compatível segura • progresso \(stats.successes)/\(runGoal) preservado")
+                            logSessionSummary(mode: mode, outcome: "SEM FERRAMENTA SEGURA")
+                            finishContinuedProcessing(success: false, reason: "sem ferramenta Dunes segura")
+                        default:
+                            statusMessage = "Recovery Dunes encerrado em segurança"
+                            stats.lastEvent = "recovery Dunes encerrado"
+                            logSessionSummary(mode: mode, outcome: "RECOVERY ENCERRADO EM SEGURANÇA")
+                            finishContinuedProcessing(success: false, reason: "recovery Dunes encerrado")
+                        }
+                        return true
+                    }
+
+                    throw EngineError.gatherEndedBeforeGoal
                 }
 
                 connected = true
@@ -3422,8 +3659,11 @@ final class AppStore: ObservableObject {
                 if let engineError = error as? EngineError,
                    case .dunesDeathDuringExit(let detail) = engineError,
                    mode.isDunesGathering {
-                    await handleConfirmedDunesDeath(mode: mode, detail: detail)
-                    return false
+                    log("💀 Dunes • respawn detectado durante recovery • \(detail) • sessão permanece ativa")
+                    connectionRecoveryRequested = true
+                    connectionRecoveryDetail = "respawn durante recovery: \(detail)"
+                    await socket.close()
+                    continue
                 }
 
                 if let engineError = error as? EngineError,
