@@ -1665,19 +1665,13 @@ final class AppStore: ObservableObject {
                 guard activeRunID == runID, activity == mode else { throw CancellationError() }
 
                 deathRecoveries += 1
-                guard deathRecoveries <= 3 else {
-                    throw EngineError.dunesDeathDuringExit(
-                        "limite de 3 respawns automáticos atingido • última evidência: \(detail)"
-                    )
-                }
-
                 recoveringFromDeath = true
                 let preserved = max(completedBeforePhase, stats.successes)
                 stats.successes = preserved
                 state = .recovering
                 statusMessage = "Respawn detectado • reconstruindo loadout"
                 stats.lastEvent = "Dunes • respawn #\(deathRecoveries)"
-                log("💀 Dunes • morte autoritativamente confirmada • respawn #\(deathRecoveries)/3 • progresso \(preserved)/\(runGoal) preservado")
+                log("💀 Dunes • respawn/full-loot confirmado • recovery #\(deathRecoveries) • progresso \(preserved)/\(runGoal) preservado • sessão continuará")
                 log("💀 Evidência: \(detail)")
                 phaseResult = EngineRunResult(
                     successes: max(0, preserved - phaseStart),
