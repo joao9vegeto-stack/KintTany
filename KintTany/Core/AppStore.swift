@@ -1348,6 +1348,24 @@ final class AppStore: ObservableObject {
         }
     }
 
+    enum DunesReconnectPolicy {
+        static let immediateAttemptLimit = 3
+
+        static func entersCooldown(afterFailedAttempt attempt: Int) -> Bool {
+            attempt >= immediateAttemptLimit
+        }
+
+        static func retryDelaySeconds(afterFailedAttempt attempt: Int) -> Double {
+            switch max(1, attempt) {
+            case 1: return 2
+            case 2: return 4
+            case 3: return 60
+            case 4: return 120
+            default: return 300
+            }
+        }
+    }
+
     /// Consume the socket stream on the cooperative executor rather than on
     /// SwiftUI's MainActor. Socket trace is already imported by traceTask at a
     /// controlled cadence, so it is not mirrored once per realtime packet here.
@@ -1476,9 +1494,9 @@ final class AppStore: ObservableObject {
         }
     }
 
-    /// Dunes East has heat, hostile players and full-loot death. A terminal
-    /// path may not release its Presence until the engine has crossed the
-    /// supported north portal and stabilized two authoritative beach snapshots.
+    /// Dunes East has heat, hostile players and full-loot death. Operational
+    /// failures are recovery boundaries: once The Shores is confirmed, rebuild
+    /// World/BANK-FIRST/loadout and continue the exact same session progress.
     private func containDunesTerminalFailure(
         mode: ActivityMode,
         runID: UUID,
@@ -1487,39 +1505,96 @@ final class AppStore: ObservableObject {
         engine: AutomationEngine,
         failure: String
     ) async {
-        diagnostic("[DUNES][FAILSAFE] \(failure) • bloqueando encerramento dentro das Dunes")
+        guard activeRunID == runID, activity == mode, mode.isDunesGathering else { return }
+
+        diagnostic("[DUNES][FAILSAFE] \(failure) • convertendo falha operacional em recovery contínuo")
         state = .recovering
         statusMessage = "Falha detectada • saindo para The Shores"
         stats.lastEvent = "failsafe Dunes • retorno a The Shores"
         updateContinuedProcessingProgress(forceTitleUpdate: true)
 
         do {
-            _ = try await engine.runEmergencyDunesExit(
+            let outcome = try await engine.runEmergencyDunesExit(
                 reason: "falha operacional: \(failure)",
                 expectedTool: dunesExpectedTool,
-                expectedLifeEpoch: dunesExpectedLifeEpoch
+                expectedLifeEpoch: dunesExpectedLifeEpoch,
+                allowInconclusiveSurvivalAfterConfirmedShores: true
             )
-            await closeDunesPresenceAfterConfirmedShores()
-            terminalFailureHandled = true
-            currentTarget = nil
-            activity = nil
-            state = .failed
-            statusMessage = "Falha encerrada com The Shores segura"
-            stats.sessionErrors += 1
-            stats.lastEvent = "falha operacional • The Shores confirmada"
-            log("🛡️ Falha operacional contida • The Shores confirmada antes de liberar a conexão")
-            log("Falha: \(failure) • coleta interrompida com saída segura")
-            logSessionSummary(mode: mode, outcome: "FALHA • THE SHORES SEGURA")
-            finishContinuedProcessing(success: false, reason: "falha contida após The Shores confirmada")
-        } catch {
-            if let engineError = error as? EngineError,
-               case .dunesDeathDuringExit(let detail) = engineError {
-                await handleConfirmedDunesDeath(mode: mode, detail: detail)
+            await importSocketTrace()
+            guard activeRunID == runID, activity == mode else { return }
+
+            let result = try await continueDunesSessionAfterEmergencyBoundary(
+                mode: mode,
+                runID: runID,
+                shard: shard,
+                cookie: cookie,
+                runGoal: sessionGoal,
+                outcome: outcome,
+                recoveryEngine: engine
+            )
+            stats.successes = max(stats.successes, result.successes)
+
+            if result.completedGoal || stats.successes >= sessionGoal {
+                await closeDunesPresenceAfterConfirmedShores()
+                connectionRecoveryRequested = false
+                connectionRecoveryDetail = nil
+                currentTarget = nil
+                activity = nil
+                state = .completed
+                statusMessage = "Meta concluída"
+                stats.lastEvent = "meta concluída após failsafe Dunes"
+                updateContinuedProcessingProgress(forceTitleUpdate: true)
+                log("✅ Meta concluída: \(stats.successes)/\(sessionGoal) • Dunes continuou após falha operacional")
+                logSessionSummary(mode: mode, outcome: "META CONCLUÍDA APÓS RECOVERY")
+                finishContinuedProcessing(success: true, reason: "meta concluída após recovery Dunes")
                 return
             }
-            diagnostic("[DUNES][FAILSAFE] saída na Presence atual não confirmou: \(error.localizedDescription) • iniciando reconexão exclusiva para saída")
+
+            if result.stoppedSafely {
+                receiverTask?.cancel()
+                receiverTask = nil
+                activeEngine = nil
+                connected = false
+                await socket.close()
+                await importSocketTrace()
+                connectionRecoveryRequested = false
+                connectionRecoveryDetail = nil
+                currentTarget = nil
+                activity = nil
+                state = .cancelled
+
+                if result.stopReason == .user {
+                    statusMessage = "Atividade encerrada com segurança"
+                    stats.lastEvent = "STOP após recovery Dunes"
+                    log("STOP confirmado • recovery terminou em área segura • nenhuma nova ação será enviada")
+                    logSessionSummary(mode: mode, outcome: "STOP SEGURO")
+                    finishContinuedProcessing(success: false, reason: "STOP seguro após recovery")
+                } else {
+                    statusMessage = "Recovery Dunes encerrado em World seguro"
+                    stats.lastEvent = "recovery sem loadout seguro"
+                    log("🧰 Dunes • não há loadout seguro para reentrada • progresso \(stats.successes)/\(sessionGoal) preservado")
+                    logSessionSummary(mode: mode, outcome: "SEM LOADOUT SEGURO")
+                    finishContinuedProcessing(success: false, reason: "sem loadout Dunes seguro")
+                }
+                return
+            }
+
             requestGatherConnectionRecovery(
-                reason: "Falha operacional nas Dunes; reconectando exclusivamente para confirmar The Shores",
+                reason: "Recovery Dunes terminou antes da meta; mantendo sessão e reconstruindo fluxo",
+                runID: runID
+            )
+            await socket.close()
+            _ = await recoverGatherAfterUnexpectedDisconnect(
+                mode: mode,
+                runID: runID,
+                shard: shard,
+                cookie: cookie,
+                runGoal: sessionGoal
+            )
+        } catch {
+            diagnostic("[DUNES][FAILSAFE] fronteira The Shores não confirmou na Presence atual: \(error.localizedDescription) • recovery por reconexão assumirá o fluxo")
+            requestGatherConnectionRecovery(
+                reason: "Falha operacional nas Dunes; reconectando para confirmar The Shores e continuar a meta",
                 runID: runID
             )
             await socket.close()
@@ -1542,7 +1617,7 @@ final class AppStore: ObservableObject {
         await socket.close()
         await importSocketTrace()
         connected = false
-        diagnostic("[DUNES] Presence encerrada somente após The Shores + sobrevivência autoritativamente confirmadas")
+        diagnostic("[DUNES] Presence encerrada somente após The Shores autoritativamente confirmada • validação de sobrevivência/loadout continua no World/Bank quando necessário")
     }
 
     private func handleConfirmedDunesDeath(mode: ActivityMode, detail: String) async {
@@ -3316,9 +3391,9 @@ final class AppStore: ObservableObject {
             log("🔄 Dunes • progresso \(preserved)/\(runGoal) preservado • reconstruindo banco, ferramenta e HP para continuar")
         case .alreadySafe, .shoresSafe:
             state = .recovering
-            statusMessage = "The Shores segura • retomando sessão"
-            stats.lastEvent = "Dunes • sobrevivência confirmada após reconexão"
-            log("🛡️ Dunes • sobrevivência confirmada após queda • progresso \(preserved)/\(runGoal) preservado • sessão continuará")
+            statusMessage = "The Shores confirmada • reconstruindo sessão"
+            stats.lastEvent = "Dunes • fronteira Shores confirmada após reconexão"
+            log("🛡️ Dunes • The Shores confirmada após queda • progresso \(preserved)/\(runGoal) preservado • World/BANK-FIRST validará e reconstruirá o fluxo")
         }
 
         receiverTask?.cancel()
@@ -3599,7 +3674,9 @@ final class AppStore: ObservableObject {
                         reason: requestedStopReason == .user ? "STOP após perda de conexão" : "perda de conexão",
                         expectedTool: dunesExpectedTool,
                         expectedLifeEpoch: dunesExpectedLifeEpoch,
-                        allowInconclusiveSurvivalAfterConfirmedShores: requestedStopReason == .user
+                        // Two fresh Shores snapshots stop the Desert reconnect cycle.
+                        // HP/tool ambiguity is resolved in World/BANK-FIRST before reentry.
+                        allowInconclusiveSurvivalAfterConfirmedShores: true
                     )
                     connectionRecoveryRequested = false
                     connectionRecoveryDetail = nil
@@ -3792,7 +3869,15 @@ final class AppStore: ObservableObject {
                 await socket.close()
                 let elapsed = Int(Date().timeIntervalSince(started))
                 diagnostic("[WARN] Reconexão Gathering tentativa \(attempt) falhou após \(elapsed)s: \(error.localizedDescription)")
-                let wait = min(6.0, 1.0 + Double(attempt) * 0.5)
+                let wait = DunesReconnectPolicy.retryDelaySeconds(afterFailedAttempt: attempt)
+                if mode.isDunesGathering,
+                   DunesReconnectPolicy.entersCooldown(afterFailedAttempt: attempt) {
+                    state = .recovering
+                    statusMessage = "Recovery Dunes em espera • sessão preservada"
+                    stats.lastEvent = "Dunes • backoff após \(attempt) tentativas"
+                    updateContinuedProcessingProgress(forceTitleUpdate: true)
+                    log("⏸️ Dunes recovery • \(attempt) tentativas consecutivas sem fronteira segura • pausa de \(Int(wait))s antes de nova verificação • progresso \(stats.successes)/\(runGoal) preservado")
+                }
                 try? await Task.sleep(nanoseconds: UInt64(wait * 1_000_000_000))
             }
         }

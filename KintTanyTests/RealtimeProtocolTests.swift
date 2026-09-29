@@ -1856,11 +1856,23 @@ final class RealtimeProtocolTests: XCTestCase {
 
     func testV40Build4StopMayCloseAfterConfirmedShoresWhenAuxiliaryCheckIsInconclusive() {
         XCTAssertTrue(
-            DunesEmergencyExitPolicy.mayCloseOnInconclusiveSurvival(stopRequested: true)
+            DunesEmergencyExitPolicy.mayUseConfirmedShoresBoundary(allowInconclusive: true)
         )
         XCTAssertFalse(
-            DunesEmergencyExitPolicy.mayCloseOnInconclusiveSurvival(stopRequested: false)
+            DunesEmergencyExitPolicy.mayUseConfirmedShoresBoundary(allowInconclusive: false)
         )
+    }
+
+    func testV40Build9DunesReconnectStormUsesThreeImmediateAttemptsThenBackoff() {
+        XCTAssertEqual(AppStore.DunesReconnectPolicy.immediateAttemptLimit, 3)
+        XCTAssertFalse(AppStore.DunesReconnectPolicy.entersCooldown(afterFailedAttempt: 2))
+        XCTAssertTrue(AppStore.DunesReconnectPolicy.entersCooldown(afterFailedAttempt: 3))
+        XCTAssertEqual(AppStore.DunesReconnectPolicy.retryDelaySeconds(afterFailedAttempt: 1), 2)
+        XCTAssertEqual(AppStore.DunesReconnectPolicy.retryDelaySeconds(afterFailedAttempt: 2), 4)
+        XCTAssertEqual(AppStore.DunesReconnectPolicy.retryDelaySeconds(afterFailedAttempt: 3), 60)
+        XCTAssertEqual(AppStore.DunesReconnectPolicy.retryDelaySeconds(afterFailedAttempt: 4), 120)
+        XCTAssertEqual(AppStore.DunesReconnectPolicy.retryDelaySeconds(afterFailedAttempt: 5), 300)
+        XCTAssertEqual(AppStore.DunesReconnectPolicy.retryDelaySeconds(afterFailedAttempt: 30), 300)
     }
 
 }

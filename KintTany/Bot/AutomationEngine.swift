@@ -1069,8 +1069,11 @@ struct DunesWorldHPPolicy {
 }
 
 struct DunesEmergencyExitPolicy {
-    static func mayCloseOnInconclusiveSurvival(stopRequested: Bool) -> Bool {
-        stopRequested
+    /// Two fresh Shores snapshots are an authoritative region boundary. When
+    /// approved by the caller, auxiliary HP/tool ambiguity is deferred to the
+    /// World/BANK-FIRST rebuild instead of reopening Desert.
+    static func mayUseConfirmedShoresBoundary(allowInconclusive: Bool) -> Bool {
+        allowInconclusive
     }
 }
 
@@ -2901,10 +2904,10 @@ func makeRecoveryProgressAnchor(for mode: ActivityMode) async -> ActivityRecover
                             reporter(.log("💀 Dunes • respawn/full-loot confirmado após reconexão • \(detail)"))
                             return .respawnConfirmed(detail)
                         } catch let EngineError.dunesExitSurvivalUnconfirmed(detail) {
-                            guard DunesEmergencyExitPolicy.mayCloseOnInconclusiveSurvival(
-                                stopRequested: allowInconclusiveSurvivalAfterConfirmedShores
+                            guard DunesEmergencyExitPolicy.mayUseConfirmedShoresBoundary(
+                                allowInconclusive: allowInconclusiveSurvivalAfterConfirmedShores
                             ) else { throw EngineError.dunesExitSurvivalUnconfirmed(detail) }
-                            reporter(.log("🛑 STOP • The Shores confirmada por snapshots • verificação auxiliar inconclusiva (\(detail)) • encerrando sem reabrir Desert"))
+                            reporter(.log("🛡️ RECOVERY/STOP • The Shores confirmada por snapshots • verificação auxiliar inconclusiva (\(detail)) • encerrando sem reabrir Desert"))
                         }
                     }
                     reporter(.log("✅ Estado autoritativo • região=\(authoritative) • personagem fora das Dunes"))
@@ -3849,10 +3852,10 @@ func makeRecoveryProgressAnchor(for mode: ActivityMode) async -> ActivityRecover
                 try await verifyDunesExitSurvival(expectedLifeEpoch: expectedLifeEpoch, expectedTool: expectedTool)
                 reporter(.log("🛡️ Dunes • personagem já está em The Shores • snapshots + sobrevivência confirmados"))
             } catch let EngineError.dunesExitSurvivalUnconfirmed(detail) {
-                guard DunesEmergencyExitPolicy.mayCloseOnInconclusiveSurvival(
-                    stopRequested: allowInconclusiveSurvivalAfterConfirmedShores
+                guard DunesEmergencyExitPolicy.mayUseConfirmedShoresBoundary(
+                    allowInconclusive: allowInconclusiveSurvivalAfterConfirmedShores
                 ) else { throw EngineError.dunesExitSurvivalUnconfirmed(detail) }
-                reporter(.log("🛑 STOP • The Shores confirmada por snapshots • verificação auxiliar inconclusiva (\(detail)) • encerrando sem reabrir Desert"))
+                reporter(.log("🛡️ RECOVERY/STOP • The Shores confirmada por snapshots • verificação auxiliar inconclusiva (\(detail)) • encerrando sem reabrir Desert"))
             }
             return
         }
@@ -3895,10 +3898,10 @@ func makeRecoveryProgressAnchor(for mode: ActivityMode) async -> ActivityRecover
                         try await verifyDunesExitSurvival(expectedLifeEpoch: expectedLifeEpoch, expectedTool: expectedTool)
                         reporter(.log("✅ The Shores confirmada • 2 snapshots + sobrevivência + ferramenta preservada • Presence pronta para encerramento"))
                     } catch let EngineError.dunesExitSurvivalUnconfirmed(detail) {
-                        guard DunesEmergencyExitPolicy.mayCloseOnInconclusiveSurvival(
-                            stopRequested: allowInconclusiveSurvivalAfterConfirmedShores
+                        guard DunesEmergencyExitPolicy.mayUseConfirmedShoresBoundary(
+                            allowInconclusive: allowInconclusiveSurvivalAfterConfirmedShores
                         ) else { throw EngineError.dunesExitSurvivalUnconfirmed(detail) }
-                        reporter(.log("🛑 STOP • The Shores confirmada por 2 snapshots • verificação auxiliar inconclusiva (\(detail)) • encerrando sem nova reconexão Desert"))
+                        reporter(.log("🛡️ RECOVERY/STOP • The Shores confirmada por 2 snapshots • verificação auxiliar inconclusiva (\(detail)) • encerrando sem nova reconexão Desert"))
                     }
                     return
                 }
