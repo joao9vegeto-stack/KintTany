@@ -1816,6 +1816,33 @@ struct RealmMobRespawnPolicy {
     static let magmaBruteMS: Double = 90_000
 }
 
+struct CombatTimerDamagePolicy {
+    static func shouldReset(
+        region: String,
+        previousHP: Int,
+        previousShield: Int,
+        currentHP: Int,
+        currentShield: Int
+    ) -> Bool {
+        let hpDrop = max(0, previousHP - currentHP)
+        let shieldDrop = max(0, previousShield - currentShield)
+        guard hpDrop > 0 || shieldDrop > 0 else { return false }
+
+        // Dunes heat is environmental: 1 HP each 10 s, bypassing shield.
+        // It cannot restart the game's combat/logout window.
+        let normalized = region.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        if normalized.hasPrefix("desert"), shieldDrop == 0, hpDrop == 1 {
+            return false
+        }
+        return true
+    }
+}
+
+struct EmberRealmExitPolicy {
+    static let portalPosition = Position(x: -9.5, z: 19.5)       // col 10,row 39
+    static let shoresArrivalPosition = Position(x: -9.5, z: -18.5) // beach col 10,row 1
+}
+
 struct CombatMobProfile {
     let region: String
     let targetType: String
@@ -3051,7 +3078,8 @@ func makeRecoveryProgressAnchor(for mode: ActivityMode) async -> ActivityRecover
             )
             reporter(.log("🏖️ Giant Scorpion • The Shores confirmada • fronteira segura pronta para reconstrução no World"))
         } else {
-            reporter(.log("🏕️ Magma Brute • Safe Zone Emberstone + combat timer confirmados • fronteira segura pronta para reconstrução no World"))
+            try await exitEmberToShores(reason: reason)
+            reporter(.log("🏖️ Magma Brute • The Shores confirmada • fronteira segura pronta para reconstrução no World"))
         }
         return .worldSafe
     }
@@ -3269,7 +3297,15 @@ func makeRecoveryProgressAnchor(for mode: ActivityMode) async -> ActivityRecover
             await ingestWildMobs(wild)
         }
 
-        if isMobCombatRegion(serverRegion ?? region), (playerHP < previousHP || playerShield < previousShield) {
+        let combatDamageRegion = serverRegion ?? region
+        if isMobCombatRegion(combatDamageRegion),
+           CombatTimerDamagePolicy.shouldReset(
+                region: combatDamageRegion,
+                previousHP: previousHP,
+                previousShield: previousShield,
+                currentHP: playerHP,
+                currentShield: playerShield
+           ) {
             let timestamp = nowMS
             lastCombatActivityAt = timestamp
             lastCombatDamageAt = timestamp
@@ -3415,7 +3451,14 @@ func makeRecoveryProgressAnchor(for mode: ActivityMode) async -> ActivityRecover
         }
         if let shield = RealtimeProtocol.int(packet["wsh"]) { playerShield = shield }
         if let le = RealtimeProtocol.int(packet["le"]), le > lifeEpoch { lifeEpoch = le }
-        if isMobCombatRegion(region), (playerHP < previousHP || playerShield < previousShield) {
+        if isMobCombatRegion(region),
+           CombatTimerDamagePolicy.shouldReset(
+                region: region,
+                previousHP: previousHP,
+                previousShield: previousShield,
+                currentHP: playerHP,
+                currentShield: playerShield
+           ) {
             let timestamp = nowMS
             lastCombatActivityAt = timestamp
             lastCombatDamageAt = timestamp
@@ -3435,7 +3478,14 @@ func makeRecoveryProgressAnchor(for mode: ActivityMode) async -> ActivityRecover
         if let hp = RealtimeProtocol.int(packet["php"]) { playerHP = hp }
         if let shield = RealtimeProtocol.int(packet["wsh"]) { playerShield = shield }
         if let le = RealtimeProtocol.int(packet["le"]), le > lifeEpoch { lifeEpoch = le }
-        if isMobCombatRegion(region), (playerHP < previousHP || playerShield < previousShield) {
+        if isMobCombatRegion(region),
+           CombatTimerDamagePolicy.shouldReset(
+                region: region,
+                previousHP: previousHP,
+                previousShield: previousShield,
+                currentHP: playerHP,
+                currentShield: playerShield
+           ) {
             let timestamp = nowMS
             lastCombatActivityAt = timestamp
             lastCombatDamageAt = timestamp
@@ -6088,7 +6138,7 @@ func makeRecoveryProgressAnchor(for mode: ActivityMode) async -> ActivityRecover
             if let reason = try await confirmedPotionResupplyReason(mode: mode, includeStrengthWhileBuffed: true) {
                 if mode.isRealmMobCombat {
                     safeStopReason = .combatSupplies
-                    reporter(.log("🧪 \(mode.displayName) • \(reason) • encerrando em fronteira segura em vez de inventar rota de reposição"))
+                    reporter(.log("🧪 \(mode.displayName) • \(reason) • iniciando ciclo seguro região → The Shores → World → banco → retorno; sessão/meta preservadas"))
                     break
                 }
                 try await combatWorldServiceTrip(
@@ -6106,7 +6156,7 @@ func makeRecoveryProgressAnchor(for mode: ActivityMode) async -> ActivityRecover
             if let reason = try await confirmedPotionResupplyReason(mode: mode, includeStrengthWhileBuffed: true) {
                 if mode.isRealmMobCombat {
                     safeStopReason = .combatSupplies
-                    reporter(.log("🧪 \(mode.displayName) • \(reason) após pré-combate • saída segura solicitada"))
+                    reporter(.log("🧪 \(mode.displayName) • \(reason) após pré-combate • reposição contínua solicitada; sessão/meta preservadas"))
                     break
                 }
                 try await combatWorldServiceTrip(
@@ -6552,7 +6602,7 @@ func makeRecoveryProgressAnchor(for mode: ActivityMode) async -> ActivityRecover
                 if mode.isRealmMobCombat {
                     if let resupplyReason {
                         safeStopReason = .combatSupplies
-                        reporter(.log("🧪 \(mode.displayName) • \(resupplyReason) • encerrando em área segura antes da próxima luta"))
+                        reporter(.log("🧪 \(mode.displayName) • \(resupplyReason) • iniciando reposição World/banco antes da próxima luta; sessão continuará"))
                         break
                     }
                     if !drops.bankable.isEmpty {
@@ -6590,8 +6640,22 @@ func makeRecoveryProgressAnchor(for mode: ActivityMode) async -> ActivityRecover
 
         // Nunca entregue a Presence para o AppStore fechar enquanto ainda existe
         // combat tag. Meta e STOP cooperativo passam pela mesma saída segura.
-        if safeStopReason != nil {
-            let reason = emergencyBackgroundExitRequested ? "expiração de background" : "STOP seguro"
+        if let stopReason = safeStopReason {
+            let reason: String
+            if emergencyBackgroundExitRequested {
+                reason = "expiração de background"
+            } else {
+                switch stopReason {
+                case .combatSupplies: reason = "reposição de suprimentos"
+                case .user: reason = "STOP seguro"
+                case .connectionLoss: reason = "perda de conexão"
+                case .backgroundExpiration: reason = "expiração de background"
+                case .dunesCheckpoint: reason = "checkpoint"
+                case .dunesHeatSafety: reason = "proteção térmica"
+                case .dunesDangerSafety: reason = "risco externo"
+                case .dunesToolRotation: reason = "rotação de ferramenta"
+                }
+            }
             try await finalizeCombatSessionSafely(mode: mode, reason: reason)
             safeStopCompleted = true
         } else if successes >= goal {
@@ -7226,7 +7290,7 @@ func makeRecoveryProgressAnchor(for mode: ActivityMode) async -> ActivityRecover
         if safeStopReason != nil { return false }
         if mode.isRealmMobCombat {
             safeStopReason = .combatSupplies
-            reporter(.log("🛑 \(mode.displayName) • reposição exige sair da região; encerrando esta sessão em segurança"))
+            reporter(.log("🛑 \(mode.displayName) • reposição exige World/banco; progresso preservado e retorno automático à mesma meta"))
             return false
         }
         try await combatWorldServiceTrip(
@@ -7260,8 +7324,57 @@ func makeRecoveryProgressAnchor(for mode: ActivityMode) async -> ActivityRecover
 
     /// Aguarda 10 s desde o último hit confirmado/dano. Novo dano reinicia o
     /// countdown. Isso protege itens antes de Wild→World e antes do socket fechar.
+    private func exitEmberToShores(reason: String) async throws {
+        let authoritative = (serverRegion ?? region).lowercased()
+        if authoritative == "beach" {
+            region = "beach"
+            reporter(.log("🏖️ Emberstone • The Shores já confirmada"))
+            return
+        }
+        guard authoritative == "ember" else {
+            throw EngineError.regionNotConfirmed("saída Emberstone→The Shores exige ember/beach")
+        }
+
+        reporter(.state(.moving, "Saindo da Emberstone para The Shores"))
+        reporter(.log("🌋 Emberstone • \(reason) • portal sul oficial col=10,row=39"))
+        try await walk(to: EmberRealmExitPolicy.portalPosition, maxSeconds: 55, status: "Cruzando portal sul da Emberstone")
+
+        for probe in 1...3 {
+            let serialBefore = regionSnapshotSerial
+            try await setRegion("beach", at: EmberRealmExitPolicy.shoresArrivalPosition)
+            guard try await waitForRegion("beach", timeoutMS: 5_000) else {
+                reporter(.diagnostic("[EMBER] The Shores sem ACK/snapshot • probe \(probe)/3"))
+                continue
+            }
+            let firstDeadline = nowMS + 5_000
+            while nowMS < firstDeadline {
+                try Task.checkCancellation()
+                if lastSnapshotRegion == "beach", regionSnapshotSerial > serialBefore { break }
+                try await sleep(80)
+            }
+            guard lastSnapshotRegion == "beach", regionSnapshotSerial > serialBefore else {
+                reporter(.diagnostic("[EMBER] beach ACK sem snapshot novo • probe \(probe)/3"))
+                continue
+            }
+            let firstSnapshot = regionSnapshotSerial
+            try await sendPosition(moving: false, full: true)
+            let stableDeadline = nowMS + 5_000
+            while nowMS < stableDeadline {
+                try Task.checkCancellation()
+                if lastSnapshotRegion == "beach", regionSnapshotSerial > firstSnapshot {
+                    region = "beach"
+                    reporter(.log("✅ Emberstone → The Shores confirmada por 2 snapshots autoritativos"))
+                    return
+                }
+                try await sleep(80)
+            }
+            reporter(.diagnostic("[EMBER] snapshot beach não estabilizou • probe \(probe)/3"))
+        }
+        throw EngineError.regionNotConfirmed("The Shores após saída da Emberstone")
+    }
+
     private func waitForCombatSafetyWindow(reason: String) async throws {
-        reporter(.state(.cooldown, "Aguardando combat timer • \(reason)"))
+        reporter(.state(.cooldown, "Aguardando janela de combate • \(reason)"))
         var lastShown = Int.max
 
         while true {
@@ -7273,9 +7386,9 @@ func makeRecoveryProgressAnchor(for mode: ActivityMode) async -> ActivityRecover
             if remaining != lastShown {
                 lastShown = remaining
                 if remaining > 0 {
-                    reporter(.log("⏳ Combat timer • \(remaining)s • \(reason)"))
+                    reporter(.log("⏳ Janela de combate • \(remaining)s • \(reason)"))
                 } else {
-                    reporter(.log("🟢 Combat timer • 0s • saída/desconexão segura liberada"))
+                    reporter(.log("🟢 Janela de combate • 0s • saída/desconexão segura liberada"))
                 }
             }
 
@@ -7292,7 +7405,8 @@ func makeRecoveryProgressAnchor(for mode: ActivityMode) async -> ActivityRecover
 
         let authoritative = (serverRegion ?? region).lowercased()
         if mode == .scorpion, authoritative == "desert" {
-            reporter(.state(.recovering, reason == "meta concluída" ? "Meta concluída • saindo para The Shores" : "Saindo das Dunes com segurança"))
+            let isResupply = reason == "reposição de suprimentos"
+            reporter(.state(.recovering, isResupply ? "Reposição • saindo para The Shores" : (reason == "meta concluída" ? "Meta concluída • saindo para The Shores" : "Saindo das Dunes com segurança")))
             reporter(.log("🦂 Giant Scorpion • saída segura iniciada • motivo=\(reason)"))
             try await moveToWildSafeCamp(reason: reason)
             try await waitForCombatSafetyWindow(reason: reason)
@@ -7308,12 +7422,18 @@ func makeRecoveryProgressAnchor(for mode: ActivityMode) async -> ActivityRecover
         }
 
         if mode == .magmaBrute, authoritative == "ember" {
-            reporter(.state(.recovering, reason == "meta concluída" ? "Meta concluída • recuando à Safe Zone" : "Recuando à Safe Zone da Emberstone"))
+            let isResupply = reason == "reposição de suprimentos"
+            reporter(.state(.recovering, isResupply ? "Reposição • saindo para The Shores" : (reason == "meta concluída" ? "Meta concluída • saindo para The Shores" : "Saindo da Emberstone com segurança")))
             reporter(.log("🌋 Magma Brute • saída segura iniciada • motivo=\(reason)"))
             try await moveToWildSafeCamp(reason: reason)
             try await waitForCombatSafetyWindow(reason: reason)
-            reporter(.state(.cooldown, "Safe Zone Emberstone • pronto para encerrar"))
-            reporter(.log("🏕️ Safe Zone Emberstone confirmada • combat timer zerado • Presence pronta para encerrar"))
+            try await exitEmberToShores(reason: reason)
+            reporter(.state(.cooldown, "The Shores segura • fronteira confirmada"))
+            if isResupply {
+                reporter(.log("🔄 Magma Brute • The Shores confirmada • seguindo para World/banco e retorno automático"))
+            } else {
+                reporter(.log("🏖️ The Shores confirmada • Magma Brute em segurança"))
+            }
             return
         }
 
@@ -7351,10 +7471,11 @@ func makeRecoveryProgressAnchor(for mode: ActivityMode) async -> ActivityRecover
             return
         }
         if mode == .magmaBrute, authoritative == "ember" {
-            reporter(.state(.recovering, "Background expirando • Safe Zone Emberstone"))
+            reporter(.state(.recovering, "Background expirando • saída Emberstone→The Shores"))
             try await moveToWildSafeCamp(reason: "expiração de background")
             try await waitForCombatSafetyWindow(reason: "expiração de background")
-            reporter(.state(.cooldown, "Safe Zone Emberstone • expiração concluída"))
+            try await exitEmberToShores(reason: "expiração de background")
+            reporter(.state(.cooldown, "The Shores segura • expiração concluída"))
             return
         }
         if !(region.hasPrefix("wild") || serverRegion?.hasPrefix("wild") == true) {

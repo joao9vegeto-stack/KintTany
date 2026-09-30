@@ -2848,12 +2848,12 @@ final class AppStore: ObservableObject {
                requestedStopReason != .user,
                let shard = activeShard {
                 connectionRecoveryRequested = true
-                connectionRecoveryDetail = "reposição de suprimentos em fronteira segura"
+                connectionRecoveryDetail = "reposição contínua após fronteira segura"
                 state = .recovering
                 statusMessage = "\(mode.localizedTitle) • reabastecendo no World"
-                stats.lastEvent = "realm combat • reposição World/banco"
+                stats.lastEvent = "realm combat • Shores→World→banco→retorno"
                 updateContinuedProcessingProgress(forceTitleUpdate: true)
-                log("🔄 \(mode.localizedTitle) • suprimento chegou a zero • progresso \(stats.successes)/\(runGoal) preservado • indo ao World repor e voltar à mesma meta")
+                log("🔄 \(mode.localizedTitle) • suprimento chegou a zero • sessão NÃO encerra • progresso \(stats.successes)/\(runGoal) preservado • indo ao World repor e voltar à mesma meta")
                 _ = await recoverWildAfterUnexpectedDisconnect(
                     mode: mode,
                     runID: runID,
@@ -4113,8 +4113,8 @@ final class AppStore: ObservableObject {
                 if worldBoundaryAlreadyConfirmed {
                     worldBoundaryAlreadyConfirmed = false
                     outcome = .alreadyWorld
-                    diagnostic("[WILD][RECOVERY] World já confirmado pela Presence anterior • pulando bootstrap Wild de verificação")
-                    log("🛡️ Wild recovery • World seguro já confirmado • reconstruindo fluxo sem reabrir Wilderness prematuramente")
+                    diagnostic("[COMBAT][RECOVERY] fronteira segura já confirmada pela Presence anterior • indo direto ao World de serviço")
+                    log("🛡️ Combate • fronteira segura confirmada • reconstruindo World/banco e retornando à atividade")
                 } else {
                     let currentRegion = player.region.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
                     let recoveryRegion: String
@@ -4381,9 +4381,9 @@ final class AppStore: ObservableObject {
                        mode.isRealmMobCombat,
                        requestedStopReason != .user {
                         connectionRecoveryRequested = true
-                        connectionRecoveryDetail = "nova reposição em fronteira segura"
+                        connectionRecoveryDetail = "nova reposição contínua"
                         worldBoundaryAlreadyConfirmed = true
-                        log("🔄 \(mode.localizedTitle) • nova reposição necessária • \(stats.successes)/\(sessionGoal) preservado • voltando ao World sem encerrar")
+                        log("🔄 \(mode.localizedTitle) • nova reposição necessária • \(stats.successes)/\(sessionGoal) preservado • Shores → World → banco → retorno, sem encerrar")
                         receiverTask?.cancel()
                         receiverTask = nil
                         activeEngine = nil

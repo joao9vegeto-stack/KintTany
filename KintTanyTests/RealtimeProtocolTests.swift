@@ -289,6 +289,20 @@ final class RealtimeProtocolTests: XCTestCase {
         XCTAssertEqual(CombatMobProfile.profile(for: .magmaBrute).authoritativeHP, 150)
     }
 
+    func testBuild13DunesHeatDoesNotRestartCombatWindow() {
+        XCTAssertFalse(CombatTimerDamagePolicy.shouldReset(region: "desert", previousHP: 91, previousShield: 95, currentHP: 90, currentShield: 95))
+        XCTAssertTrue(CombatTimerDamagePolicy.shouldReset(region: "desert", previousHP: 91, previousShield: 95, currentHP: 91, currentShield: 65))
+        XCTAssertTrue(CombatTimerDamagePolicy.shouldReset(region: "desert", previousHP: 91, previousShield: 0, currentHP: 70, currentShield: 0))
+        XCTAssertTrue(CombatTimerDamagePolicy.shouldReset(region: "ember", previousHP: 91, previousShield: 0, currentHP: 90, currentShield: 0))
+    }
+
+    func testBuild13EmberExitMatchesCurrentClientPortal() {
+        XCTAssertEqual(EmberRealmExitPolicy.portalPosition.x, -9.5)
+        XCTAssertEqual(EmberRealmExitPolicy.portalPosition.z, 19.5)
+        XCTAssertEqual(EmberRealmExitPolicy.shoresArrivalPosition.x, -9.5)
+        XCTAssertEqual(EmberRealmExitPolicy.shoresArrivalPosition.z, -18.5)
+    }
+
     func testBuild12_2RealmMobsShareCombatRecoveryOwnerAndWorldRebuild() {
         XCTAssertTrue(ActivityMode.zombie.usesCombatRecoveryOwner)
         XCTAssertTrue(ActivityMode.dragon.usesCombatRecoveryOwner)
