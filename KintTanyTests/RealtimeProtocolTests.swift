@@ -289,6 +289,21 @@ final class RealtimeProtocolTests: XCTestCase {
         XCTAssertEqual(CombatMobProfile.profile(for: .magmaBrute).authoritativeHP, 150)
     }
 
+    func testBuild11ScorpionUsesOnlyValidDunesHPConsumables() {
+        XCTAssertFalse(DesertCombatConsumablePolicy.ordinaryHealthPotionAllowed(for: .scorpion))
+        XCTAssertFalse(DesertCombatConsumablePolicy.requiresHPConsumableToEnter(.scorpion))
+        XCTAssertEqual(
+            DesertCombatConsumablePolicy.validHPConsumables(for: .scorpion),
+            ["potion_health_l2", "cacti"]
+        )
+        XCTAssertTrue(DesertCombatConsumablePolicy.ordinaryHealthPotionAllowed(for: .magmaBrute))
+        XCTAssertEqual(DesertCombatConsumablePolicy.validHPConsumables(for: .magmaBrute), ["potion_health"])
+        XCTAssertEqual(DunesHeatSafetyPolicy.minimumSafeHP, 70)
+        XCTAssertTrue(DunesHeatSafetyPolicy.requiresRecovery(hp: 70, mode: .scorpion))
+        XCTAssertFalse(DunesHeatSafetyPolicy.requiresRecovery(hp: 71, mode: .scorpion))
+        XCTAssertTrue(DunesHeatSafetyPolicy.requiresRecovery(hp: 70, mode: .silver))
+    }
+
     func testConfirmedHarvestHitDecodesWithoutCountingItAsSuccess() throws {
         let data = try RealtimeProtocol.harvestHit(
             region: "eldergrove", kind: "rock", keys: ["33,9"], hasCoal: false, proof: "proof"

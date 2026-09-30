@@ -1088,7 +1088,7 @@ struct DunesHeatSafetyPolicy {
     static let carriedHealthPotionPlusTarget = 6
 
     static func requiresRecovery(hp: Int, mode: ActivityMode) -> Bool {
-        mode.isDunesGathering && hp <= minimumSafeHP
+        (mode.isDunesGathering || mode == .scorpion) && hp <= minimumSafeHP
     }
 
     static func estimatedHP(baselineHP: Int, elapsedMS: Double) -> Int {
@@ -1789,6 +1789,25 @@ struct CombatAckCadence {
             ackStreak = 0
             cooldownMS = min(Self.maxWildMS, cooldownMS + Self.missIncrementMS)
         }
+    }
+}
+
+struct DesertCombatConsumablePolicy {
+    static let cactiType = "cacti"
+    static let cactiCarryTarget = 6
+
+    static func ordinaryHealthPotionAllowed(for mode: ActivityMode) -> Bool {
+        mode != .scorpion
+    }
+
+    static func validHPConsumables(for mode: ActivityMode) -> [String] {
+        mode == .scorpion
+            ? [DunesHeatSafetyPolicy.healthPotionPlusType, cactiType]
+            : ["potion_health"]
+    }
+
+    static func requiresHPConsumableToEnter(_ mode: ActivityMode) -> Bool {
+        mode != .scorpion
     }
 }
 
@@ -5934,7 +5953,7 @@ func makeRecoveryProgressAnchor(for mode: ActivityMode) async -> ActivityRecover
         } else {
             // Wilderness mantém integralmente o fluxo comprovado v4.0 Build 9.
             try await refreshPotionStock(logSummary: true)
-            let initialResupplyReason = localPotionZeroReason(includeStrengthWhileBuffed: true)
+            let initialResupplyReason = localPotionZeroReason(mode: mode, includeStrengthWhileBuffed: true)
             if let reason = initialResupplyReason {
                 reporter(.log("🧪 Reposição necessária antes do combate • \(reason)"))
             }
@@ -5959,7 +5978,7 @@ func makeRecoveryProgressAnchor(for mode: ActivityMode) async -> ActivityRecover
 
             // Se uma categoria chegou a zero entre encontros, faça UMA viagem ao
             // World, complete 6/6/6 e retorne pela mesma Presence.
-            if let reason = try await confirmedPotionResupplyReason(includeStrengthWhileBuffed: true) {
+            if let reason = try await confirmedPotionResupplyReason(mode: mode, includeStrengthWhileBuffed: true) {
                 if mode.isRealmMobCombat {
                     safeStopReason = .combatSupplies
                     reporter(.log("🧪 \(mode.displayName) • \(reason) • encerrando em fronteira segura em vez de inventar rota de reposição"))
@@ -5977,7 +5996,7 @@ func makeRecoveryProgressAnchor(for mode: ActivityMode) async -> ActivityRecover
             // regra de "vitais baixos" durante o alvo, que na v2.4 é estritamente
             // HP<=50 E shield==0.
             try await prepareWildVitalsBeforeNewTarget(mode: mode)
-            if let reason = try await confirmedPotionResupplyReason(includeStrengthWhileBuffed: true) {
+            if let reason = try await confirmedPotionResupplyReason(mode: mode, includeStrengthWhileBuffed: true) {
                 if mode.isRealmMobCombat {
                     safeStopReason = .combatSupplies
                     reporter(.log("🧪 \(mode.displayName) • \(reason) após pré-combate • saída segura solicitada"))
@@ -6070,6 +6089,23 @@ func makeRecoveryProgressAnchor(for mode: ActivityMode) async -> ActivityRecover
 
             while swing <= 30 {
                 try Task.checkCancellation()
+
+                // Same thermal gate used by Silver/Cacti gathering. Heat bypasses
+                // shield, so effective HP is not enough: Scorpion must react to
+                // the Desert HP floor before every new sword swing.
+                if mode == .scorpion {
+                    let conservativeHP = min(playerHP, estimatedDunesHPFromMonotonicClock())
+                    if DunesHeatSafetyPolicy.requiresRecovery(hp: conservativeHP, mode: mode) {
+                        reporter(.log("❤️‍🔥 Scorpion • piso térmico atingido • HP servidor=\(playerHP) • conservador=\(conservativeHP) • usando apenas Potion+/Cacti"))
+                        try await recoverScorpionVitals(preFight: false)
+                        if safeStopReason != nil {
+                            safeStopInterruptedTarget = true
+                            break
+                        }
+                        continue
+                    }
+                }
+
                 if safeStopReason != nil {
                     safeStopInterruptedTarget = true
                     break
@@ -6084,7 +6120,7 @@ func makeRecoveryProgressAnchor(for mode: ActivityMode) async -> ActivityRecover
                 // Estoque zerou no meio do encontro: preserve o índice do mob,
                 // espere o combat timer ficar seguro, reabasteça 6/6/6 no World e
                 // tente reassumir EXATAMENTE o mesmo target ao voltar.
-                if let reason = localPotionZeroReason(includeStrengthWhileBuffed: false) {
+                if let reason = localPotionZeroReason(mode: mode, includeStrengthWhileBuffed: false) {
                     let resumed = try await resupplyLockedWildTarget(
                         mode: mode,
                         targetIndex: target.index,
@@ -6398,7 +6434,7 @@ func makeRecoveryProgressAnchor(for mode: ActivityMode) async -> ActivityRecover
                     break
                 }
 
-                let resupplyReason = try await confirmedPotionResupplyReason(includeStrengthWhileBuffed: true)
+                let resupplyReason = try await confirmedPotionResupplyReason(mode: mode, includeStrengthWhileBuffed: true)
                 if mode.isRealmMobCombat {
                     if let resupplyReason {
                         safeStopReason = .combatSupplies
@@ -6635,7 +6671,7 @@ func makeRecoveryProgressAnchor(for mode: ActivityMode) async -> ActivityRecover
 
         // Se alguma poção já está em zero, não entre num ciclo de recovery sem
         // suprimento. Saia de forma segura, reponha e tente o mesmo mob.
-        if let reason = try await confirmedPotionResupplyReason(includeStrengthWhileBuffed: true) {
+        if let reason = try await confirmedPotionResupplyReason(mode: mode, includeStrengthWhileBuffed: true) {
             return try await resupplyLockedWildTarget(
                 mode: mode,
                 targetIndex: targetIndex,
@@ -6649,7 +6685,7 @@ func makeRecoveryProgressAnchor(for mode: ActivityMode) async -> ActivityRecover
 
         // Uma das doses usadas no recovery pode ter zerado a categoria. Nesse
         // caso reabasteça antes de voltar a atacar o alvo travado.
-        if let reason = try await confirmedPotionResupplyReason(includeStrengthWhileBuffed: true) {
+        if let reason = try await confirmedPotionResupplyReason(mode: mode, includeStrengthWhileBuffed: true) {
             return try await resupplyLockedWildTarget(
                 mode: mode,
                 targetIndex: targetIndex,
@@ -6675,9 +6711,12 @@ func makeRecoveryProgressAnchor(for mode: ActivityMode) async -> ActivityRecover
         return true
     }
 
-    private func localPotionZeroReason(includeStrengthWhileBuffed: Bool) -> String? {
+    private func localPotionZeroReason(mode: ActivityMode? = nil, includeStrengthWhileBuffed: Bool) -> String? {
         var reasons: [String] = []
-        if potionStock.health <= 0 { reasons.append("❤️ Vida") }
+        let resolvedMode = mode ?? activeCombatMode
+        if resolvedMode != .scorpion, potionStock.health <= 0 {
+            reasons.append("❤️ Vida")
+        }
         if potionStock.shield <= 0 { reasons.append("🛡️ Escudo") }
         if potionStock.strength <= 0 && (includeStrengthWhileBuffed || strengthBuffSeconds() <= 2) {
             reasons.append("💪 Força")
@@ -6685,12 +6724,13 @@ func makeRecoveryProgressAnchor(for mode: ActivityMode) async -> ActivityRecover
         return reasons.isEmpty ? nil : reasons.joined(separator: " + ")
     }
 
-    /// Confirma o zero com /me antes de gastar uma viagem ao World. Isso evita
-    /// sair do Wild por contador local desatualizado após ACK de poção.
-    private func confirmedPotionResupplyReason(includeStrengthWhileBuffed: Bool) async throws -> String? {
-        guard localPotionZeroReason(includeStrengthWhileBuffed: includeStrengthWhileBuffed) != nil else { return nil }
+    private func confirmedPotionResupplyReason(
+        mode: ActivityMode? = nil,
+        includeStrengthWhileBuffed: Bool
+    ) async throws -> String? {
+        guard localPotionZeroReason(mode: mode, includeStrengthWhileBuffed: includeStrengthWhileBuffed) != nil else { return nil }
         try await refreshPotionStock(logSummary: false)
-        return localPotionZeroReason(includeStrengthWhileBuffed: includeStrengthWhileBuffed)
+        return localPotionZeroReason(mode: mode, includeStrengthWhileBuffed: includeStrengthWhileBuffed)
     }
 
     private func selectBestCarriedCombatWeapon() async throws {
@@ -6718,14 +6758,122 @@ func makeRecoveryProgressAnchor(for mode: ActivityMode) async -> ActivityRecover
         reporter(.log("⚔️ Melhor espada disponível carregada • \(best.type) • tier \(best.tier) ✅"))
     }
 
-    /// Build 10 preflight for Scorpion/Brute: perform the exact same proven
-    /// BANK-FIRST + best-sword + potion preparation while still in World.
-    /// AppStore then tears this Presence down and opens a fresh Presence directly
-    /// in the authoritative realm, matching the stable Dunes handoff architecture.
-    func prepareRealmCombatLoadoutFromWorld() async throws {
+    func prepareRealmCombatLoadoutFromWorld(for mode: ActivityMode) async throws {
+        if mode == .scorpion {
+            try await prepareScorpionCombatLoadoutFromWorld()
+            return
+        }
         try await refreshPotionStock(logSummary: true)
-        let reason = localPotionZeroReason(includeStrengthWhileBuffed: true)
+        let reason = localPotionZeroReason(mode: mode, includeStrengthWhileBuffed: true)
         try await prepareWorldCombatSession(resupplyReason: reason)
+    }
+
+    private func prepareScorpionCombatLoadoutFromWorld() async throws {
+        guard try await waitForRegion("world", timeoutMS: 5_000) else {
+            throw EngineError.regionNotConfirmed("world")
+        }
+
+        reporter(.state(.moving, "Protegendo inventário para Giant Scorpion"))
+        try await ensureWorldBankAccess(reason: "preflight Giant Scorpion")
+        do {
+            try await ensureBestCombatWeaponFromWorld()
+
+            _ = try await http.ensurePotionLoadout(targets: [
+                DunesHeatSafetyPolicy.healthPotionPlusType: DunesHeatSafetyPolicy.carriedHealthPotionPlusTarget,
+                "potion_shield": targetShieldPotions,
+                "potion_strength": targetStrengthPotions
+            ])
+
+            let cactiCounts = try await http.itemLocationCounts(type: DesertCombatConsumablePolicy.cactiType)
+            if cactiCounts.carried < DesertCombatConsumablePolicy.cactiCarryTarget, cactiCounts.bank > 0 {
+                _ = try await http.ensureCarriedItem(
+                    type: DesertCombatConsumablePolicy.cactiType,
+                    quantity: DesertCombatConsumablePolicy.cactiCarryTarget,
+                    preferHotbar: true
+                )
+            }
+
+            let keep: Set<String> = [
+                DunesHeatSafetyPolicy.healthPotionPlusType,
+                DesertCombatConsumablePolicy.cactiType,
+                "potion_shield",
+                "potion_strength",
+                activeCombatWeaponType
+            ]
+            let deposit = try await http.depositAllBankFirstInventory(
+                preservingTypes: keep,
+                preservingTool: nil,
+                preserveCombatLoadout: false
+            )
+            guard deposit.unresolved.isEmpty else {
+                throw EngineError.bankDepositFailed(deposit.unresolved.sorted().joined(separator: ", "))
+            }
+            for (type, quantity) in deposit.confirmed.sorted(by: { $0.key < $1.key }) {
+                reporter(.log("🏦 Scorpion BANK-FIRST • \(quantity)x \(prettyItem(type)) → banco ✅"))
+            }
+
+            try await ensureScorpionCombatSupplies()
+            try await refreshPotionStock(logSummary: false)
+            let cactiFinal = try await http.itemLocationCounts(type: DesertCombatConsumablePolicy.cactiType)
+            reporter(.log("❤️‍🔥 Scorpion • Potion+ \(potionStock.healthPlus) • Cacti \(cactiFinal.carried) • Health Potion comum não exigida"))
+
+            let realtimeRevisionBeforeWorldEntry = realtimeOwnHPRevision
+            try await leaveBankShopToWorld(reason: "preflight Giant Scorpion concluído")
+            try await recoverDunesHPInWorldBeforeEntry(afterRealtimeRevision: realtimeRevisionBeforeWorldEntry)
+        } catch {
+            try? await leaveBankShopToWorld(reason: "preflight Giant Scorpion abortado")
+            throw error
+        }
+    }
+
+    private func ensureScorpionCombatSupplies() async throws {
+        _ = try await http.ensurePotionLoadout(targets: [
+            "potion_shield": targetShieldPotions,
+            "potion_strength": targetStrengthPotions,
+            DunesHeatSafetyPolicy.healthPotionPlusType: DunesHeatSafetyPolicy.carriedHealthPotionPlusTarget
+        ])
+        try await refreshPotionStock(logSummary: false)
+
+        let snapshot = try await http.backpackState()
+        let bp = snapshot.backpack
+        let needShield = max(0, targetShieldPotions - potionStock.shield)
+        let needStrength = max(0, targetStrengthPotions - potionStock.strength)
+        let requiredStone = needShield * 50
+        let requiredCoal = needStrength * 40
+        let totalStone = http.totalResource(bp, type: "stone")
+        let totalCoal = http.totalResource(bp, type: "coal")
+
+        var shortages: [String] = []
+        if totalStone < requiredStone { shortages.append("Escudo: precisa \(requiredStone) stone, disponível \(totalStone)") }
+        if totalCoal < requiredCoal { shortages.append("Força: precisa \(requiredCoal) coal, disponível \(totalCoal)") }
+        if !shortages.isEmpty { throw EngineError.combatSupplyFailed(shortages.joined(separator: " | ")) }
+
+        for (type, target) in [("potion_shield", targetShieldPotions), ("potion_strength", targetStrengthPotions)] {
+            var guardCount = 0
+            while currentPotionStock(type) < target && guardCount < target + 4 {
+                try Task.checkCancellation()
+                guardCount += 1
+                let before = currentPotionStock(type)
+                let response = try await http.alchemistPotionBuy(type: type, quantity: 1)
+                guard RealtimeProtocol.bool(response["ok"]) != false, response["error"] == nil else {
+                    throw EngineError.combatSupplyFailed("\(prettyItem(type)) recusada pelo Alquimista")
+                }
+                _ = try await http.ensurePotionLoadout(targets: [type: target])
+                try await refreshPotionStock(logSummary: false)
+                let after = currentPotionStock(type)
+                reporter(.log("🧪 Scorpion • \(prettyItem(type)) • \(before) → \(after)/\(target)"))
+                if after <= before { throw EngineError.combatSupplyFailed("\(prettyItem(type)) comprada, mas não ficou carregada") }
+            }
+        }
+
+        guard potionStock.shield >= targetShieldPotions,
+              potionStock.strength >= targetStrengthPotions else {
+            throw EngineError.combatSupplyFailed("loadout Scorpion incompleto")
+        }
+
+        shieldMechanicUnavailable = false
+        shieldConfirmFailureStreak = 0
+        reporter(.log("🎒 Scorpion • 🛡️ \(potionStock.shield) • 💪 \(potionStock.strength) • Potion+ \(potionStock.healthPlus) • Health comum dispensada"))
     }
 
     /// Preparação BANK-FIRST da v5.2.1. Toda entrada inicial no Wild passa aqui:
@@ -7176,6 +7324,11 @@ func makeRecoveryProgressAnchor(for mode: ActivityMode) async -> ActivityRecover
     }
 
     private func recoverVitals(mode: ActivityMode, preFight: Bool) async throws {
+        if mode == .scorpion {
+            try await recoverScorpionVitals(preFight: preFight)
+            return
+        }
+
         let limits = wildCombatLimits(mode)
         let hpGoal = preFight ? limits.preFightHP : max(80, limits.potionHP)
         let shieldGoal = preFight ? limits.preFightShield : max(50, limits.shieldHP)
@@ -7269,6 +7422,117 @@ func makeRecoveryProgressAnchor(for mode: ActivityMode) async -> ActivityRecover
         throw EngineError.potionRecoveryFailed("timeout • HP \(playerHP)/\(hpGoal) • shield \(playerShield)/\(shieldGoal)")
     }
 
+    private func recoverScorpionVitals(preFight: Bool) async throws {
+        let limits = wildCombatLimits(.scorpion)
+        let shieldGoal = preFight ? limits.preFightShield : max(50, limits.shieldHP)
+        let deadline = nowMS + Double(preFight ? 20_000 : 16_000)
+
+        try await refreshPotionStock(logSummary: false)
+        reporter(.log("❤️‍🔥 Recovery Scorpion • HP \(playerHP) • piso >\(DunesHeatSafetyPolicy.minimumSafeHP) • shield \(playerShield)/\(shieldGoal) • Potion+ \(potionStock.healthPlus) • Cacti \(potionStock.cacti)"))
+
+        while nowMS < deadline {
+            try Task.checkCancellation()
+            if emergencyBackgroundExitRequested { return }
+            guard playerHP > 0 else { throw EngineError.playerDead }
+
+            let conservativeHP = min(playerHP, estimatedDunesHPFromMonotonicClock())
+            if conservativeHP <= DunesHeatSafetyPolicy.minimumSafeHP {
+                let before = playerHP
+                var consumedType: String?
+
+                if potionStock.healthPlus > 0,
+                   try await consumePotion(DunesHeatSafetyPolicy.healthPotionPlusType) {
+                    consumedType = DunesHeatSafetyPolicy.healthPotionPlusType
+                } else if potionStock.cacti > 0,
+                          try await consumePotion(DesertCombatConsumablePolicy.cactiType) {
+                    consumedType = DesertCombatConsumablePolicy.cactiType
+                }
+
+                if let consumedType {
+                    let confirmed = try await driveDunesCombatHealTicks(type: consumedType, beforeDoseHP: before)
+                    if confirmed {
+                        dunesHeatBaselineAtMS = nowMS
+                        dunesHeatBaselineHP = playerHP
+                        let label = consumedType == DesertCombatConsumablePolicy.cactiType ? "Cacti" : "Health Potion+"
+                        reporter(.log("✅ \(label) confirmada • HP \(before) → \(playerHP)"))
+                        continue
+                    }
+                } else {
+                    reporter(.log("ℹ️ Giant Scorpion • sem Health Potion+ / Cacti • entrada é permitida, mas HP chegou ao piso seguro"))
+                }
+
+                safeStopReason = .combatSupplies
+                reporter(.state(.recovering, "HP no limite das Dunes • saindo para The Shores"))
+                return
+            }
+
+            if !shieldMechanicUnavailable, playerShield < shieldGoal, potionStock.shield > 0 {
+                let before = playerShield
+                if try await consumePotion("potion_shield") {
+                    reporter(.log("🛡️ Poção de escudo aceita • shield antes \(before)"))
+                    try await driveShieldPotionTicks(goal: shieldGoal, before: before)
+                    if playerShield <= before {
+                        shieldConfirmFailureStreak += 1
+                        if shieldConfirmFailureStreak >= 2 { shieldMechanicUnavailable = true }
+                    } else {
+                        shieldConfirmFailureStreak = 0
+                    }
+                    continue
+                }
+            }
+
+            if playerShield >= shieldGoal || shieldMechanicUnavailable {
+                reporter(.log("✅ Recovery Scorpion suficiente • HP \(playerHP) • shield \(playerShield)"))
+                try await equip(activeCombatWeaponType)
+                return
+            }
+
+            try await refreshPotionStock(logSummary: false)
+            if potionStock.shield <= 0 && !shieldMechanicUnavailable {
+                safeStopReason = .combatSupplies
+                reporter(.log("🛑 Giant Scorpion • Shield Potion esgotada • saída segura solicitada"))
+                return
+            }
+            try await sleep(250)
+        }
+
+        if playerHP > DunesHeatSafetyPolicy.minimumSafeHP &&
+           (playerShield >= shieldGoal || shieldMechanicUnavailable) {
+            try await equip(activeCombatWeaponType)
+            return
+        }
+
+        safeStopReason = .combatSupplies
+        reporter(.log("🛑 Recovery Scorpion não atingiu margem segura • HP \(playerHP) • shield \(playerShield)"))
+    }
+
+    private func driveDunesCombatHealTicks(type: String, beforeDoseHP: Int) async throws -> Bool {
+        let isCacti = type == DesertCombatConsumablePolicy.cactiType
+        let ticks = isCacti ? 1 : 5
+        let step = isCacti ? 20 : 10
+        let maximumAfterDose = min(100, beforeDoseHP + ticks * step)
+
+        try await sleep(650)
+        for _ in 0..<ticks {
+            try Task.checkCancellation()
+            guard playerHP > 0 else { throw EngineError.playerDead }
+            if playerHP >= maximumAfterDose || playerHP >= DunesHeatSafetyPolicy.recoveryGoalHP { break }
+            let before = playerHP
+            let proposed = min(maximumAfterDose, min(100, before + step))
+            try await sendPosition(moving: false, action: ["php": proposed])
+            try await sleep(35)
+            try await sendPosition(moving: false, action: ["php": proposed])
+
+            let tickDeadline = nowMS + 1_100
+            while nowMS < tickDeadline, playerHP <= before {
+                try Task.checkCancellation()
+                try await sleep(60)
+            }
+            if playerHP <= before { break }
+        }
+        return playerHP > beforeDoseHP
+    }
+
     @discardableResult
     private func ensureStrengthReady(targetName: String, force: Bool = false) async throws -> Bool {
         let seconds = strengthBuffSeconds()
@@ -7308,15 +7572,17 @@ func makeRecoveryProgressAnchor(for mode: ActivityMode) async -> ActivityRecover
             "potion_health": max(0, RealtimeProtocol.int(bp["potion_health"]) ?? 0),
             "potion_health_l2": max(0, RealtimeProtocol.int(bp["potion_health_l2"]) ?? 0),
             "potion_shield": max(0, RealtimeProtocol.int(bp["potion_shield"]) ?? 0),
-            "potion_strength": max(0, RealtimeProtocol.int(bp["potion_strength"]) ?? 0)
+            "potion_strength": max(0, RealtimeProtocol.int(bp["potion_strength"]) ?? 0),
+            "cacti": max(0, RealtimeProtocol.int(bp["cacti"]) ?? 0)
         ]
         potionStock.health = carriedPotionCount(bp, type: "potion_health")
         potionStock.healthPlus = carriedPotionCount(bp, type: "potion_health_l2")
         potionStock.shield = carriedPotionCount(bp, type: "potion_shield")
         potionStock.strength = carriedPotionCount(bp, type: "potion_strength")
+        potionStock.cacti = carriedPotionCount(bp, type: "cacti")
         potionStockLoaded = true
         if logSummary {
-            reporter(.log("🎒 Poções carregadas • ❤️ \(potionStock.health) • 🛡️ \(potionStock.shield) • 💪 \(potionStock.strength)"))
+            reporter(.log("🎒 Consumíveis • ❤️ \(potionStock.health) • ❤️‍🔥+ \(potionStock.healthPlus) • 🌵 \(potionStock.cacti) • 🛡️ \(potionStock.shield) • 💪 \(potionStock.strength)"))
         }
     }
 
@@ -7341,6 +7607,7 @@ func makeRecoveryProgressAnchor(for mode: ActivityMode) async -> ActivityRecover
         case "potion_health_l2": potionStock.healthPlus = max(0, potionStock.healthPlus - 1)
         case "potion_shield": potionStock.shield = max(0, potionStock.shield - 1)
         case "potion_strength": potionStock.strength = max(0, potionStock.strength - 1)
+        case "cacti": potionStock.cacti = max(0, potionStock.cacti - 1)
         default: break
         }
         if let current = potionPersistentCounts[type] {
@@ -7354,6 +7621,7 @@ func makeRecoveryProgressAnchor(for mode: ActivityMode) async -> ActivityRecover
         case "potion_health_l2": potionStock.healthPlus
         case "potion_shield": potionStock.shield
         case "potion_strength": potionStock.strength
+        case "cacti": potionStock.cacti
         default: 0
         }
     }
@@ -7370,7 +7638,7 @@ func makeRecoveryProgressAnchor(for mode: ActivityMode) async -> ActivityRecover
         lastPotionAt = nowMS
 
         if persistentPotionTransport {
-            return try await consumePotionHTTP(type)
+            return try await consumeConsumableHTTP(type)
         }
 
         let previousEquipment = equipment
@@ -7388,7 +7656,7 @@ func makeRecoveryProgressAnchor(for mode: ActivityMode) async -> ActivityRecover
             equipment = previousEquipment
             try? await sendPosition(moving: false)
             reporter(.diagnostic("[POTION] Presence send falhou para \(type): \(error.localizedDescription); tentando endpoint persistente"))
-            return try await consumePotionHTTP(type)
+            return try await consumeConsumableHTTP(type)
         }
 
         let deadline = nowMS + 3_200
@@ -7429,7 +7697,7 @@ func makeRecoveryProgressAnchor(for mode: ActivityMode) async -> ActivityRecover
             if (potionPersistentCounts[type] ?? 0) > 0 {
                 persistentPotionTransport = true
                 reporter(.diagnostic("[POTION] Presence hotbar dessincronizada; transporte persistente ativado"))
-                return try await consumePotionHTTP(type)
+                return try await consumeConsumableHTTP(type)
             }
             return false
         }
@@ -7459,7 +7727,7 @@ func makeRecoveryProgressAnchor(for mode: ActivityMode) async -> ActivityRecover
             persistentPotionTransport = true
             reporter(.diagnostic("[POTION] 2 timeouts de drink_ack para \(type) com /me inalterado • transporte persistente ativado"))
             reporter(.log("🔁 \(prettyItem(type)) • Presence instável; usando consumo persistente confirmado pelo servidor"))
-            let consumed = try await consumePotionHTTP(type)
+            let consumed = try await consumeConsumableHTTP(type)
             if consumed { potionAckTimeoutStreak[type] = 0 }
             return consumed
         }
@@ -7468,11 +7736,14 @@ func makeRecoveryProgressAnchor(for mode: ActivityMode) async -> ActivityRecover
         return false
     }
 
-    private func consumePotionHTTP(_ type: String) async throws -> Bool {
+    private func consumeConsumableHTTP(_ type: String) async throws -> Bool {
         do {
-            let response = try await http.consumePotion(type)
+            let response = type == DesertCombatConsumablePolicy.cactiType
+                ? try await http.eatFood(type)
+                : try await http.consumePotion(type)
             guard RealtimeProtocol.bool(response["ok"]) != false, response["error"] == nil else {
-                reporter(.log("⚠️ \(prettyItem(type)) recusada pelo endpoint persistente"))
+                let reason = (response["error"] as? String) ?? "rejected"
+                reporter(.log("⚠️ \(prettyItem(type)) recusado • \(reason)"))
                 return false
             }
             potionAckTimeoutStreak[type] = 0
@@ -7556,8 +7827,13 @@ func makeRecoveryProgressAnchor(for mode: ActivityMode) async -> ActivityRecover
         case .dragon:
             return WildCombatLimits(potionHP: 88, shieldHP: 72, retreatHP: 68, preFightHP: 95, preFightShield: 90)
         case .scorpion:
-            // Client: tail hit is high damage and Dunes heat bypasses shield.
-            return WildCombatLimits(potionHP: 90, shieldHP: 80, retreatHP: 72, preFightHP: 98, preFightShield: 90)
+            return WildCombatLimits(
+                potionHP: DunesHeatSafetyPolicy.minimumSafeHP + 1,
+                shieldHP: 80,
+                retreatHP: DunesHeatSafetyPolicy.minimumSafeHP,
+                preFightHP: DunesHeatSafetyPolicy.minimumSafeHP + 1,
+                preFightShield: 90
+            )
         case .magmaBrute:
             // Client: 8-tile pounce/aggro; enter each target with a strong buffer.
             return WildCombatLimits(potionHP: 90, shieldHP: 80, retreatHP: 72, preFightHP: 98, preFightShield: 90)
@@ -8366,6 +8642,7 @@ private struct PotionStock {
     var healthPlus = 0
     var shield = 0
     var strength = 0
+    var cacti = 0
 }
 
 private struct CombatXPResult {
@@ -8533,6 +8810,12 @@ private struct KintaraHTTPClient {
 
     func consumePotion(_ type: String) async throws -> [String: Any] {
         try await post("/api/auth/consume-potion", body: ["type": type])
+    }
+
+    func eatFood(_ type: String) async throws -> [String: Any] {
+        var body: [String: Any] = ["type": type, "fleet": fleet]
+        if let shardID { body["shardId"] = shardID }
+        return try await post("/api/auth/eat-food", body: body)
     }
 
     func alchemistPotionBuy(type: String, quantity: Int = 1) async throws -> [String: Any] {

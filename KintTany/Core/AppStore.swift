@@ -2492,7 +2492,7 @@ final class AppStore: ObservableObject {
                 stats.lastEvent = "preflight combate • World/bank_shop"
                 updateContinuedProcessingProgress(forceTitleUpdate: true)
 
-                try await engine.prepareRealmCombatLoadoutFromWorld()
+                try await engine.prepareRealmCombatLoadoutFromWorld(for: mode)
                 guard activeRunID == runID, !terminalFailureHandled else { return }
 
                 diagnostic("[COMBAT] preflight World concluído • encerrando Presence bancária antes de \(mode.localizedTitle)")
