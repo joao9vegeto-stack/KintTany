@@ -5,7 +5,7 @@ import UIKit
 import BackgroundTasks
 
 enum ActivityMode: String, CaseIterable, Codable, Identifiable {
-    case tree, coal, stone, iron, silver, cacti, fishing, roastPit, blacksmith, chicken, zombie, dragon
+    case tree, coal, stone, iron, silver, cacti, fishing, roastPit, blacksmith, chicken, zombie, dragon, scorpion, magmaBrute
 
     var id: String { rawValue }
 
@@ -23,6 +23,8 @@ enum ActivityMode: String, CaseIterable, Codable, Identifiable {
         case .chicken: "Chicken"
         case .zombie: "Zombie"
         case .dragon: "Dragon"
+        case .scorpion: "Giant Scorpion"
+        case .magmaBrute: "Magma Brute"
         }
     }
 
@@ -40,6 +42,8 @@ enum ActivityMode: String, CaseIterable, Codable, Identifiable {
         case .chicken: "Galinha"
         case .zombie: "Zumbi"
         case .dragon: "Dragão"
+        case .scorpion: "Giant Scorpion"
+        case .magmaBrute: "Magma Brute"
         }
     }
 
@@ -57,6 +61,8 @@ enum ActivityMode: String, CaseIterable, Codable, Identifiable {
         case .chicken: "bird.fill"
         case .zombie: "figure.walk"
         case .dragon: "flame.fill"
+        case .scorpion: "ant.fill"
+        case .magmaBrute: "flame.circle.fill"
         }
     }
 
@@ -74,11 +80,24 @@ enum ActivityMode: String, CaseIterable, Codable, Identifiable {
         case .chicken: .yellow
         case .zombie: .mint
         case .dragon: .red
+        case .scorpion: .orange
+        case .magmaBrute: .red
         }
     }
 
+    /// Wilderness combat keeps the proven v4.0 recovery owner.
     var isWildCombat: Bool {
         self == .zombie || self == .dragon
+    }
+
+    /// Build 10: server-authoritative mob packs outside Wilderness.
+    /// They reuse wm_ev/snap.wildMobs but have their own safe regions.
+    var isRealmMobCombat: Bool {
+        self == .scorpion || self == .magmaBrute
+    }
+
+    var isMobCombat: Bool {
+        isWildCombat || isRealmMobCombat
     }
 
     var isGathering: Bool {
@@ -90,7 +109,7 @@ enum ActivityMode: String, CaseIterable, Codable, Identifiable {
     }
 
     var requiresSafeExit: Bool {
-        isWildCombat || isDunesGathering
+        isMobCombat || isDunesGathering
     }
 
     var isExperimental: Bool {
@@ -240,6 +259,8 @@ enum ContinuedActivityStatusFormatter {
         case .chicken: return "Combatendo galinha"
         case .zombie: return state == .recovering ? "Saindo do combate com segurança" : "Em combate com zumbi"
         case .dragon: return state == .recovering ? "Saindo do combate com segurança" : "Em combate com dragão"
+        case .scorpion: return state == .recovering ? "Saindo das Dunes com segurança" : "Em combate com Giant Scorpion"
+        case .magmaBrute: return state == .recovering ? "Recuando para a Safe Zone" : "Em combate com Magma Brute"
         }
     }
 }
@@ -2064,7 +2085,7 @@ final class AppStore: ObservableObject {
         if mode.isGathering {
             log("Gather • recoveries internos \(stats.gatherRecoveries) (FG \(stats.gatherRecoveriesForeground) / BG \(stats.gatherRecoveriesBackground)) • proof misses \(stats.gatherProofMisses)")
         }
-        if mode == .chicken || mode.isWildCombat {
+        if mode == .chicken || mode.isMobCombat {
             let statePart = stats.stateConfirmedHits > 0 ? " • por estado \(stats.stateConfirmedHits)" : ""
             log("Combate • hits enviados \(stats.hits) • hits ACK \(stats.confirmedHits)\(statePart) • ACK timeout \(stats.hitAckTimeouts) (FG \(stats.hitAckTimeoutsForeground) / BG \(stats.hitAckTimeoutsBackground)) • kills \(stats.kills)")
             if mode.isWildCombat {
@@ -2414,7 +2435,7 @@ final class AppStore: ObservableObject {
             // correta. Esse é o ciclo que funcionou nas builds estáveis e evita tentar
             // World→Eldergrove na Presence recém-usada pelo banco.
             let bootstrap: PresenceBootstrap
-            if mode == .fishing || mode == .roastPit || mode == .blacksmith {
+            if mode == .fishing || mode == .roastPit || mode == .blacksmith || mode.isRealmMobCombat {
                 // Fishing, Roast Pit and Frostmere Smith start with a safe World Presence for
                 // transactional bank preflight. A fresh activity Presence is
                 // opened only after World/bank_shop/World completes.
@@ -2464,6 +2485,64 @@ final class AppStore: ObservableObject {
 
             await engine.prepareIdentity()
             guard activeRunID == runID else { return }
+
+            if mode.isRealmMobCombat {
+                state = .syncing
+                statusMessage = "⚔️ Preparando espada, banco e poções"
+                stats.lastEvent = "preflight combate • World/bank_shop"
+                updateContinuedProcessingProgress(forceTitleUpdate: true)
+
+                try await engine.prepareRealmCombatLoadoutFromWorld()
+                guard activeRunID == runID, !terminalFailureHandled else { return }
+
+                diagnostic("[COMBAT] preflight World concluído • encerrando Presence bancária antes de \(mode.localizedTitle)")
+                receiverTask?.cancel()
+                receiverTask = nil
+                activeEngine = nil
+                connected = false
+                await socket.close()
+                await importSocketTrace()
+                guard activeRunID == runID else { return }
+
+                let activityBootstrap = AutomationEngine.bootstrap(for: mode)
+                state = .connecting
+                statusMessage = "Conectando a \(mode.localizedTitle)"
+                stats.lastEvent = "handoff combate • \(activityBootstrap.region)"
+                updateContinuedProcessingProgress()
+
+                let activityStream = try await socket.connect(
+                    session: session,
+                    shard: selectedShard,
+                    bootstrap: activityBootstrap
+                )
+                await importSocketTrace()
+                guard activeRunID == runID else { return }
+
+                let activityEngine = AutomationEngine(
+                    socket: socket,
+                    cookie: cookie,
+                    shard: selectedShard,
+                    bootstrap: activityBootstrap,
+                    fishingBait: selectedFishingBait,
+                    roastMode: selectedRoastMode,
+                    blacksmithSelection: selectedBlacksmith,
+                    reporter: engineReporter(runID: runID)
+                )
+                engine = activityEngine
+                activeEngine = activityEngine
+                receiverTask = await makeReceiverTask(
+                    stream: activityStream,
+                    engine: activityEngine,
+                    mode: mode,
+                    runID: runID
+                )
+                connected = true
+                state = .syncing
+                statusMessage = "Sincronizando \(mode.localizedTitle)"
+                log("⚔️ Presence World encerrada • nova Presence \(activityBootstrap.region) aberta no mesmo shard \(selectedShard)")
+                await activityEngine.prepareIdentity()
+                guard activeRunID == runID else { return }
+            }
 
             if mode == .roastPit {
                 state = .syncing
@@ -2803,6 +2882,12 @@ final class AppStore: ObservableObject {
                     log("🧰 Dunes • nenhuma ferramenta compatível com durabilidade >100 • progresso \(stats.successes)/\(sessionGoal) preservado")
                     logSessionSummary(mode: mode, outcome: "SEM FERRAMENTA SEGURA")
                     finishContinuedProcessing(success: false, reason: "sem ferramenta Dunes com durabilidade segura")
+                case .combatSupplies:
+                    statusMessage = "Suprimentos de combate esgotados • área segura confirmada"
+                    stats.lastEvent = "combate encerrado por suprimentos"
+                    log("🧪 \(mode.localizedTitle) • suprimentos insuficientes • atividade encerrada somente após fronteira segura")
+                    logSessionSummary(mode: mode, outcome: "SUPRIMENTOS ESGOTADOS • SAÍDA SEGURA")
+                    finishContinuedProcessing(success: false, reason: "suprimentos de combate esgotados")
                 case .user, .none:
                     statusMessage = mode.supportsAtomicStop
                         ? "Atividade encerrada após operação atual"

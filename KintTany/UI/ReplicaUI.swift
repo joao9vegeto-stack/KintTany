@@ -16,6 +16,8 @@ public enum KintActivity: String, CaseIterable, Identifiable, Sendable {
     case chicken
     case zombie
     case dragon
+    case scorpion
+    case magmaBrute
 
     public var id: String { rawValue }
 
@@ -34,6 +36,8 @@ public enum KintActivity: String, CaseIterable, Identifiable, Sendable {
         case .chicken: "Galinha"
         case .zombie: "Zumbi"
         case .dragon: "Dragão"
+        case .scorpion: "Scorpion"
+        case .magmaBrute: "Magma Brute"
         }
     }
 
@@ -52,6 +56,8 @@ public enum KintActivity: String, CaseIterable, Identifiable, Sendable {
         case .chicken: "KintChicken"
         case .zombie: "KintZombie"
         case .dragon: "KintDragon"
+        case .scorpion: "KintCacti"
+        case .magmaBrute: "KintStone"
         }
     }
 
@@ -551,7 +557,7 @@ struct KintExactActivityGrid: View {
     @Binding var selected: KintActivity
     let didSelect: (KintActivity) -> Void
     private let top: [KintActivity] = [.wood, .coal, .stone, .ironOre, .silverOre, .cacti]
-    private let bottom: [KintActivity] = [.fishing, .chicken, .zombie, .dragon]
+    private let bottom: [KintActivity] = [.fishing, .chicken, .zombie, .dragon, .scorpion, .magmaBrute]
 
     var body: some View {
         ZStack {
@@ -1875,6 +1881,8 @@ struct ReplicaDashboardHost: View {
                 case .chicken: start(.chicken)
                 case .zombie: start(.zombie)
                 case .dragon: start(.dragon)
+                case .scorpion: start(.scorpion)
+                case .magmaBrute: start(.magmaBrute)
                 }
             },
             togglePause: {
@@ -2029,6 +2037,8 @@ struct ReplicaDashboardHost: View {
         case .chicken: .chicken
         case .zombie: .zombie
         case .dragon: .dragon
+        case .scorpion: .scorpion
+        case .magmaBrute: .magmaBrute
         }
     }
 }

@@ -271,6 +271,24 @@ final class RealtimeProtocolTests: XCTestCase {
         XCTAssertEqual(w["a"] as? String, "hit")
     }
 
+    func testBuild10ScorpionAndBruteReuseAuthoritativeWildMobWire() throws {
+        let p = Position(x: -9.5, z: -18.5)
+        let scorpion = try RealtimeProtocol.wildHit(region: "desert", index: 4, lifeEpoch: 2, position: p)
+        let brute = try RealtimeProtocol.wildHit(region: "ember", index: 1, lifeEpoch: 2, position: Position(x: -9.5, z: 17.5))
+        let s = try XCTUnwrap(JSONSerialization.jsonObject(with: scorpion) as? [String: Any])
+        let b = try XCTUnwrap(JSONSerialization.jsonObject(with: brute) as? [String: Any])
+        XCTAssertEqual(s["t"] as? String, "wm_ev")
+        XCTAssertEqual(s["region"] as? String, "desert")
+        XCTAssertEqual(s["i"] as? Int, 4)
+        XCTAssertEqual(b["t"] as? String, "wm_ev")
+        XCTAssertEqual(b["region"] as? String, "ember")
+        XCTAssertEqual(b["i"] as? Int, 1)
+        XCTAssertEqual(AutomationEngine.bootstrap(for: .scorpion).region, "desert")
+        XCTAssertEqual(AutomationEngine.bootstrap(for: .magmaBrute).region, "ember")
+        XCTAssertEqual(CombatMobProfile.profile(for: .scorpion).authoritativeHP, 200)
+        XCTAssertEqual(CombatMobProfile.profile(for: .magmaBrute).authoritativeHP, 150)
+    }
+
     func testConfirmedHarvestHitDecodesWithoutCountingItAsSuccess() throws {
         let data = try RealtimeProtocol.harvestHit(
             region: "eldergrove", kind: "rock", keys: ["33,9"], hasCoal: false, proof: "proof"
@@ -363,11 +381,21 @@ final class RealtimeProtocolTests: XCTestCase {
         XCTAssertFalse(ActivityMode.chicken.isGathering)
         XCTAssertFalse(ActivityMode.zombie.isGathering)
         XCTAssertFalse(ActivityMode.dragon.isGathering)
+        XCTAssertFalse(ActivityMode.scorpion.isGathering)
+        XCTAssertFalse(ActivityMode.magmaBrute.isGathering)
     }
 
     func testWildCombatModesRequireSafeStop() {
         XCTAssertTrue(ActivityMode.zombie.isWildCombat)
         XCTAssertTrue(ActivityMode.dragon.isWildCombat)
+        XCTAssertFalse(ActivityMode.scorpion.isWildCombat)
+        XCTAssertFalse(ActivityMode.magmaBrute.isWildCombat)
+        XCTAssertTrue(ActivityMode.scorpion.isRealmMobCombat)
+        XCTAssertTrue(ActivityMode.magmaBrute.isRealmMobCombat)
+        XCTAssertTrue(ActivityMode.scorpion.isMobCombat)
+        XCTAssertTrue(ActivityMode.magmaBrute.isMobCombat)
+        XCTAssertTrue(ActivityMode.scorpion.requiresSafeExit)
+        XCTAssertTrue(ActivityMode.magmaBrute.requiresSafeExit)
         XCTAssertFalse(ActivityMode.tree.isWildCombat)
         XCTAssertFalse(ActivityMode.coal.isWildCombat)
         XCTAssertFalse(ActivityMode.stone.isWildCombat)

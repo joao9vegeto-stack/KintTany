@@ -38,6 +38,7 @@ enum EngineStopReason: Equatable {
     case dunesHeatSafety
     case dunesDangerSafety
     case dunesToolRotation
+    case combatSupplies
 }
 
 enum EmergencyWildExitResult: Equatable {
@@ -1293,7 +1294,7 @@ struct ActivityToolPolicy {
         case .silver: return ["silver_pickaxe", "tool_pickaxe_l2", "copper_pickaxe"]
         case .cacti: return ["silver_axe", "tool_axe_l2"]
         case .fishing: return ["tool_fishing_rod"]
-        case .roastPit, .blacksmith, .chicken, .zombie, .dragon: return []
+        case .roastPit, .blacksmith, .chicken, .zombie, .dragon, .scorpion, .magmaBrute: return []
         }
     }
 
@@ -1304,7 +1305,7 @@ struct ActivityToolPolicy {
         case .silver: return "copper_pickaxe"
         case .cacti: return "tool_axe_l2"
         case .fishing: return "tool_fishing_rod"
-        case .roastPit, .blacksmith, .chicken, .zombie, .dragon: return nil
+        case .roastPit, .blacksmith, .chicken, .zombie, .dragon, .scorpion, .magmaBrute: return nil
         }
     }
 
@@ -1791,6 +1792,55 @@ struct CombatAckCadence {
     }
 }
 
+struct CombatMobProfile {
+    let region: String
+    let targetType: String
+    let entryPosition: Position
+    let safePosition: Position
+    let authoritativeHP: Int
+
+    static func profile(for mode: ActivityMode) -> CombatMobProfile {
+        switch mode {
+        case .dragon:
+            return CombatMobProfile(
+                region: "wild",
+                targetType: "dragon",
+                entryPosition: Position(x: 0.5, z: 23.5),
+                safePosition: Position(x: 0.5, z: 22.5),
+                authoritativeHP: 75
+            )
+        case .scorpion:
+            // Current client: Dunes East = realm desert, 9 Giant Scorpions,
+            // 200 HP, grounded melee adjacency, 20 s respawn.
+            return CombatMobProfile(
+                region: "desert",
+                targetType: "scorpion",
+                entryPosition: Position(x: -9.5, z: -18.5),
+                safePosition: Position(x: -9.5, z: -18.5),
+                authoritativeHP: 200
+            )
+        case .magmaBrute:
+            // Current client: Emberstone = realm ember, 3 Brutes,
+            // 150 HP, 8-tile aggro/pounce, same wm_ev combat pipeline.
+            return CombatMobProfile(
+                region: "ember",
+                targetType: "magma_brute",
+                entryPosition: Position(x: -9.5, z: 17.5),
+                safePosition: Position(x: -9.5, z: 17.5),
+                authoritativeHP: 150
+            )
+        default:
+            return CombatMobProfile(
+                region: "wild",
+                targetType: "zombie",
+                entryPosition: Position(x: 0.5, z: 23.5),
+                safePosition: Position(x: 0.5, z: 22.5),
+                authoritativeHP: 100
+            )
+        }
+    }
+}
+
 struct WildCombatSafetyPolicy {
     let emergencyEffectiveHP: Int
     let finisherEffectiveHP: Int
@@ -1807,7 +1857,7 @@ struct WildCombatSafetyPolicy {
     static let dragonRequiredDamageQuietMS: Double = 3_000
 
     static func policy(for mode: ActivityMode) -> WildCombatSafetyPolicy {
-        if mode == .dragon {
+        if mode == .dragon || mode == .magmaBrute || mode == .scorpion {
             return WildCombatSafetyPolicy(
                 emergencyEffectiveHP: 160,
                 finisherEffectiveHP: 175,
@@ -2006,6 +2056,7 @@ actor AutomationEngine {
     private var safeStopReason: EngineStopReason?
     private var activeGatherToolType: String?
     private var activeCombatWeaponType = "wild_sword"
+    private var activeCombatMode: ActivityMode?
     private var safeStopCompleted = false
 
     private var emergencyBackgroundExitRequested: Bool {
@@ -2067,6 +2118,10 @@ actor AutomationEngine {
             return PresenceBootstrap(region: "eldergrove", position: Position(x: 22.5, z: -3.5))
         case .fishing, .zombie, .dragon:
             return PresenceBootstrap(region: "world", position: Position(x: 22.5, z: -3.5))
+        case .scorpion:
+            return PresenceBootstrap(region: "desert", position: CombatMobProfile.profile(for: .scorpion).entryPosition)
+        case .magmaBrute:
+            return PresenceBootstrap(region: "ember", position: CombatMobProfile.profile(for: .magmaBrute).entryPosition)
         case .roastPit:
             return PresenceBootstrap(region: "pond", position: Position(x: -1.5, z: -1.5))
         }
@@ -2700,7 +2755,21 @@ func makeRecoveryProgressAnchor(for mode: ActivityMode) async -> ActivityRecover
             if packet["a"] as? String == "hit", isSelf(packet["by"]), let index = RealtimeProtocol.int(packet["i"]) {
                 wildHitSerial += 1
                 lastCombatActivityAt = nowMS
-                let killedType: String? = RealtimeProtocol.int(packet["dr"]) == 1 ? "dragon" : (RealtimeProtocol.int(packet["zm"]) == 1 ? "zombie" : nil)
+                let activeRegion = (serverRegion ?? region).lowercased()
+                let killedType: String?
+                if RealtimeProtocol.int(packet["dr"]) == 1 {
+                    killedType = "dragon"
+                } else if RealtimeProtocol.int(packet["zm"]) == 1 {
+                    killedType = "zombie"
+                } else if activeRegion == "desert",
+                          RealtimeProtocol.int(packet["sc"] ?? packet["scp"] ?? packet["kill"]) == 1 {
+                    killedType = "scorpion"
+                } else if activeRegion == "ember",
+                          RealtimeProtocol.int(packet["mb"] ?? packet["br"] ?? packet["kill"]) == 1 {
+                    killedType = "magma_brute"
+                } else {
+                    killedType = nil
+                }
                 lastWildHit = WildHitAck(serial: wildHitSerial, index: index, killedType: killedType)
                 reporter(.diagnostic("[COMBAT] wm_ev hit confirmado i=\(index)\(killedType.map { " kill=\($0)" } ?? "")"))
             }
@@ -2752,6 +2821,7 @@ func makeRecoveryProgressAnchor(for mode: ActivityMode) async -> ActivityRecover
         case .dunesHeatSafety: label = "proteção contra calor das Dunes"
         case .dunesDangerSafety: label = "dano não-térmico detectado nas Dunes"
         case .dunesToolRotation: label = "rotação preventiva de ferramenta nas Dunes"
+        case .combatSupplies: label = "suprimentos de combate esgotados"
         }
         reporter(.diagnostic("[STATE] safe-stop solicitado • motivo=\(label)"))
     }
@@ -2779,7 +2849,7 @@ func makeRecoveryProgressAnchor(for mode: ActivityMode) async -> ActivityRecover
             try await runBlacksmith(goal: goal)
         case .chicken:
             try await runChicken(goal: goal)
-        case .zombie, .dragon:
+        case .zombie, .dragon, .scorpion, .magmaBrute:
             try await runWild(mode: mode, goal: goal)
         }
 
@@ -3073,7 +3143,7 @@ func makeRecoveryProgressAnchor(for mode: ActivityMode) async -> ActivityRecover
             await ingestWildMobs(wild)
         }
 
-        if (serverRegion ?? region).hasPrefix("wild"), (playerHP < previousHP || playerShield < previousShield) {
+        if isMobCombatRegion(serverRegion ?? region), (playerHP < previousHP || playerShield < previousShield) {
             let timestamp = nowMS
             lastCombatActivityAt = timestamp
             lastCombatDamageAt = timestamp
@@ -3219,7 +3289,7 @@ func makeRecoveryProgressAnchor(for mode: ActivityMode) async -> ActivityRecover
         }
         if let shield = RealtimeProtocol.int(packet["wsh"]) { playerShield = shield }
         if let le = RealtimeProtocol.int(packet["le"]), le > lifeEpoch { lifeEpoch = le }
-        if region.hasPrefix("wild"), (playerHP < previousHP || playerShield < previousShield) {
+        if isMobCombatRegion(region), (playerHP < previousHP || playerShield < previousShield) {
             let timestamp = nowMS
             lastCombatActivityAt = timestamp
             lastCombatDamageAt = timestamp
@@ -3239,7 +3309,7 @@ func makeRecoveryProgressAnchor(for mode: ActivityMode) async -> ActivityRecover
         if let hp = RealtimeProtocol.int(packet["php"]) { playerHP = hp }
         if let shield = RealtimeProtocol.int(packet["wsh"]) { playerShield = shield }
         if let le = RealtimeProtocol.int(packet["le"]), le > lifeEpoch { lifeEpoch = le }
-        if region.hasPrefix("wild"), (playerHP < previousHP || playerShield < previousShield) {
+        if isMobCombatRegion(region), (playerHP < previousHP || playerShield < previousShield) {
             let timestamp = nowMS
             lastCombatActivityAt = timestamp
             lastCombatDamageAt = timestamp
@@ -3693,6 +3763,7 @@ func makeRecoveryProgressAnchor(for mode: ActivityMode) async -> ActivityRecover
             case .backgroundExpiration: reason = "encerramento externo"
             case .user: reason = "STOP"
             case .connectionLoss: reason = "perda de conexão"
+            case .some(.combatSupplies): reason = "suprimentos de combate esgotados"
             case .none: reason = "meta concluída"
             }
             try await exitDunesToShores(reason: reason)
@@ -5836,7 +5907,10 @@ func makeRecoveryProgressAnchor(for mode: ActivityMode) async -> ActivityRecover
     // MARK: - Wilderness combat
 
     private func runWild(mode: ActivityMode, goal: Int) async throws {
-        let targetType = mode == .dragon ? "dragon" : "zombie"
+        let profile = CombatMobProfile.profile(for: mode)
+        let targetType = profile.targetType
+        activeCombatMode = mode
+        defer { activeCombatMode = nil }
 
         // XP precisa de baseline antes da primeira kill para que o ganho por mob e
         // o acumulado da sessão sejam calculados sem adivinhação.
@@ -5844,28 +5918,36 @@ func makeRecoveryProgressAnchor(for mode: ActivityMode) async -> ActivityRecover
 
         if safeStopReason != nil {
             safeStopCompleted = true
-            reporter(.state(.cancelled, "STOP concluído em World seguro"))
+            reporter(.state(.cancelled, "STOP concluído em área segura"))
             return
         }
 
-        // RC3 / Node v5.2.1: toda sessão Wild passa pelo banco ANTES de entrar,
-        // mesmo quando 6/6/6 já está carregado. Isso reduz o valor exposto se a
-        // rede desaparecer completamente, situação em que nenhum comando pode ser
-        // enviado até a conexão voltar. Depois, reponha somente se necessário.
-        try await refreshPotionStock(logSummary: true)
-        let initialResupplyReason = localPotionZeroReason(includeStrengthWhileBuffed: true)
-        if let reason = initialResupplyReason {
-            reporter(.log("🧪 Reposição necessária antes do combate • \(reason)"))
-        }
-        try await prepareWorldCombatSession(resupplyReason: initialResupplyReason)
-        if safeStopReason != nil {
-            safeStopCompleted = true
-            reporter(.state(.cancelled, "Encerrado em World seguro"))
-            return
-        }
+        if mode.isRealmMobCombat {
+            let authoritative = (serverRegion ?? region).lowercased()
+            guard authoritative == profile.region else {
+                throw EngineError.regionNotConfirmed(profile.region)
+            }
+            try await selectBestCarriedCombatWeapon()
+            try await equip(activeCombatWeaponType)
+            try await refreshPotionStock(logSummary: true)
+            reporter(.log("⚔️ \(mode.displayName) • \(profile.region) confirmado • usando pipeline wm_ev autoritativo"))
+        } else {
+            // Wilderness mantém integralmente o fluxo comprovado v4.0 Build 9.
+            try await refreshPotionStock(logSummary: true)
+            let initialResupplyReason = localPotionZeroReason(includeStrengthWhileBuffed: true)
+            if let reason = initialResupplyReason {
+                reporter(.log("🧪 Reposição necessária antes do combate • \(reason)"))
+            }
+            try await prepareWorldCombatSession(resupplyReason: initialResupplyReason)
+            if safeStopReason != nil {
+                safeStopCompleted = true
+                reporter(.state(.cancelled, "Encerrado em World seguro"))
+                return
+            }
 
-        try await enterWildernessFromWorld()
-        try await refreshPotionStock(logSummary: true)
+            try await enterWildernessFromWorld()
+            try await refreshPotionStock(logSummary: true)
+        }
 
         let hb = Task { [weak self] in await self?.heartbeat() }
         defer { hb.cancel() }
@@ -5878,6 +5960,11 @@ func makeRecoveryProgressAnchor(for mode: ActivityMode) async -> ActivityRecover
             // Se uma categoria chegou a zero entre encontros, faça UMA viagem ao
             // World, complete 6/6/6 e retorne pela mesma Presence.
             if let reason = try await confirmedPotionResupplyReason(includeStrengthWhileBuffed: true) {
+                if mode.isRealmMobCombat {
+                    safeStopReason = .combatSupplies
+                    reporter(.log("🧪 \(mode.displayName) • \(reason) • encerrando em fronteira segura em vez de inventar rota de reposição"))
+                    break
+                }
                 try await combatWorldServiceTrip(
                     drops: [:],
                     resupplyReason: reason,
@@ -5891,6 +5978,11 @@ func makeRecoveryProgressAnchor(for mode: ActivityMode) async -> ActivityRecover
             // HP<=50 E shield==0.
             try await prepareWildVitalsBeforeNewTarget(mode: mode)
             if let reason = try await confirmedPotionResupplyReason(includeStrengthWhileBuffed: true) {
+                if mode.isRealmMobCombat {
+                    safeStopReason = .combatSupplies
+                    reporter(.log("🧪 \(mode.displayName) • \(reason) após pré-combate • saída segura solicitada"))
+                    break
+                }
                 try await combatWorldServiceTrip(
                     drops: [:],
                     resupplyReason: reason,
@@ -5900,14 +5992,11 @@ func makeRecoveryProgressAnchor(for mode: ActivityMode) async -> ActivityRecover
                 continue
             }
 
-            let zombieCount = wildMobs.values.filter { $0.alive && $0.type == "zombie" }.count
-            let dragonCount = wildMobs.values.filter { $0.alive && $0.type == "dragon" }.count
-            if zombieCount + dragonCount > 0 {
-                let signature = "z\(zombieCount)-d\(dragonCount)"
-                if signature != lastWildAvailabilitySignature {
-                    lastWildAvailabilitySignature = signature
-                    reporter(.log("👹 Wilderness • Zumbis disponíveis=\(zombieCount) • Dragões disponíveis=\(dragonCount)"))
-                }
+            let targetCount = wildMobs.values.filter { $0.alive && $0.type == targetType }.count
+            let signature = "\(profile.region):\(targetType):\(targetCount)"
+            if signature != lastWildAvailabilitySignature {
+                lastWildAvailabilitySignature = signature
+                reporter(.log("👹 \(mode.displayName) • disponíveis=\(targetCount) • região=\(profile.region)"))
             }
 
             reporter(.state(.searching, "Procurando \(mode.displayName.lowercased())"))
@@ -6079,7 +6168,7 @@ func makeRecoveryProgressAnchor(for mode: ActivityMode) async -> ActivityRecover
                 let wildSnapshotBefore = wildSnapshotSerial
                 let hpBeforeSwing = current.hp
                 let sentAt = nowMS
-                let hit = try RealtimeProtocol.wildHit(region: "wild", index: current.index, lifeEpoch: lifeEpoch, position: position)
+                let hit = try RealtimeProtocol.wildHit(region: profile.region, index: current.index, lifeEpoch: lifeEpoch, position: position)
                 try await socket.send(hit)
                 reporter(.hitSent)
                 reporter(.state(.waitingResult, "Hit \(swing) • aguardando confirmação"))
@@ -6143,12 +6232,18 @@ func makeRecoveryProgressAnchor(for mode: ActivityMode) async -> ActivityRecover
                     acceptedHits += 1
                     reporter(.confirmedHit)
                     try await sleep(280)
-                    let refreshedHP = wildMobs[current.index]?.hp
-                    let hpLabel = ack.killedType == targetType ? "0" : (refreshedHP.map { String($0) } ?? "?")
+                    let refreshed = wildMobs[current.index]
+                    let refreshedHP = refreshed?.hp
+                    let explicitKill = ack.killedType == targetType
+                    let realmStateKill = mode.isRealmMobCombat && (refreshedHP.map { $0 <= 0 } ?? true)
+                    let hpLabel = (explicitKill || realmStateKill) ? "0" : (refreshedHP.map { String($0) } ?? "?")
                     reporter(.target("\(targetName) • HP \(hpLabel)"))
                     reporter(.state(.acting, "Hit \(swing) confirmado • \(targetName)"))
                     reporter(.log("⚔️ \(targetName) • Hit \(swing) confirmado • alvo HP \(hpLabel) • você HP \(playerHP) + shield \(playerShield) • força \(strengthBuffSeconds())s"))
-                    if ack.killedType == targetType {
+                    if explicitKill || realmStateKill {
+                        if realmStateKill && !explicitKill {
+                            reporter(.diagnostic("[COMBAT] kill \(targetType) confirmado por wm_ev próprio + estado autoritativo HP0/despawn"))
+                        }
                         killed = true
                         break
                     }
@@ -6275,10 +6370,10 @@ func makeRecoveryProgressAnchor(for mode: ActivityMode) async -> ActivityRecover
 
                 if safeStopReason != nil {
                     if emergencyBackgroundExitRequested {
-                        reporter(.diagnostic("[BG] Expiração durante coleta de loot • depósito adiado • priorizando World"))
+                        reporter(.diagnostic("[BG] Expiração durante coleta de loot • depósito adiado • priorizando fronteira segura"))
                         break
                     }
-                    if !drops.bankable.isEmpty {
+                    if !drops.bankable.isEmpty && !mode.isRealmMobCombat {
                         try await combatWorldServiceTrip(
                             drops: drops.bankable,
                             resupplyReason: nil,
@@ -6292,7 +6387,7 @@ func makeRecoveryProgressAnchor(for mode: ActivityMode) async -> ActivityRecover
                 // Meta final: primeiro proteja drops bancáveis, respeitando o
                 // combat timer de 10 s, e permaneça no World. Não reentra no Wild.
                 if successes >= goal {
-                    if !drops.bankable.isEmpty {
+                    if !drops.bankable.isEmpty && !mode.isRealmMobCombat {
                         try await combatWorldServiceTrip(
                             drops: drops.bankable,
                             resupplyReason: nil,
@@ -6304,7 +6399,16 @@ func makeRecoveryProgressAnchor(for mode: ActivityMode) async -> ActivityRecover
                 }
 
                 let resupplyReason = try await confirmedPotionResupplyReason(includeStrengthWhileBuffed: true)
-                if !drops.bankable.isEmpty || resupplyReason != nil {
+                if mode.isRealmMobCombat {
+                    if let resupplyReason {
+                        safeStopReason = .combatSupplies
+                        reporter(.log("🧪 \(mode.displayName) • \(resupplyReason) • encerrando em área segura antes da próxima luta"))
+                        break
+                    }
+                    if !drops.bankable.isEmpty {
+                        reporter(.log("🎒 \(mode.displayName) • drops mantidos carregados até a fronteira segura; sem viagem artificial ao World entre kills"))
+                    }
+                } else if !drops.bankable.isEmpty || resupplyReason != nil {
                     try await combatWorldServiceTrip(
                         drops: drops.bankable,
                         resupplyReason: resupplyReason,
@@ -6313,7 +6417,7 @@ func makeRecoveryProgressAnchor(for mode: ActivityMode) async -> ActivityRecover
                     )
                 }
 
-                try await sleep(mode == .dragon ? 1_200 : 900)
+                try await sleep(mode == .dragon ? 1_200 : (mode == .magmaBrute ? 1_000 : 900))
             } else if safeStopInterruptedTarget || safeStopReason != nil {
                 reporter(.state(.recovering, "Saindo do combate com segurança"))
                 reporter(.log("🛑 STOP recebido • nenhum novo ataque será iniciado • iniciando saída segura"))
@@ -6554,8 +6658,9 @@ func makeRecoveryProgressAnchor(for mode: ActivityMode) async -> ActivityRecover
             )
         }
 
+        let expectedType = CombatMobProfile.profile(for: mode).targetType
         guard let sameTarget = wildMobs[targetIndex], sameTarget.alive,
-              sameTarget.type == (mode == .dragon ? "dragon" : "zombie")
+              sameTarget.type == expectedType
         else {
             reporter(.target(nil))
             return false
@@ -6611,6 +6716,16 @@ func makeRecoveryProgressAnchor(for mode: ActivityMode) async -> ActivityRecover
         guard carried >= 1 else { throw EngineError.missingRequiredItem(best.type) }
         activeCombatWeaponType = best.type
         reporter(.log("⚔️ Melhor espada disponível carregada • \(best.type) • tier \(best.tier) ✅"))
+    }
+
+    /// Build 10 preflight for Scorpion/Brute: perform the exact same proven
+    /// BANK-FIRST + best-sword + potion preparation while still in World.
+    /// AppStore then tears this Presence down and opens a fresh Presence directly
+    /// in the authoritative realm, matching the stable Dunes handoff architecture.
+    func prepareRealmCombatLoadoutFromWorld() async throws {
+        try await refreshPotionStock(logSummary: true)
+        let reason = localPotionZeroReason(includeStrengthWhileBuffed: true)
+        try await prepareWorldCombatSession(resupplyReason: reason)
     }
 
     /// Preparação BANK-FIRST da v5.2.1. Toda entrada inicial no Wild passa aqui:
@@ -6818,6 +6933,11 @@ func makeRecoveryProgressAnchor(for mode: ActivityMode) async -> ActivityRecover
         reporter(.log("🧪 Estoque zerado • \(reason) • mantendo \(targetName) #\(targetIndex) travado"))
         try await moveToWildSafeCamp(reason: "reposição \(targetName)")
         if safeStopReason != nil { return false }
+        if mode.isRealmMobCombat {
+            safeStopReason = .combatSupplies
+            reporter(.log("🛑 \(mode.displayName) • reposição exige sair da região; encerrando esta sessão em segurança"))
+            return false
+        }
         try await combatWorldServiceTrip(
             drops: [:],
             resupplyReason: reason,
@@ -6826,7 +6946,7 @@ func makeRecoveryProgressAnchor(for mode: ActivityMode) async -> ActivityRecover
         )
         if safeStopReason != nil { return false }
 
-        let expectedType = mode == .dragon ? "dragon" : "zombie"
+        let expectedType = CombatMobProfile.profile(for: mode).targetType
         let deadline = nowMS + 5_000
         while nowMS < deadline {
             try Task.checkCancellation()
@@ -6879,6 +6999,33 @@ func makeRecoveryProgressAnchor(for mode: ActivityMode) async -> ActivityRecover
             return
         }
 
+        let authoritative = (serverRegion ?? region).lowercased()
+        if mode == .scorpion, authoritative == "desert" {
+            reporter(.state(.recovering, reason == "meta concluída" ? "Meta concluída • saindo para The Shores" : "Saindo das Dunes com segurança"))
+            reporter(.log("🦂 Giant Scorpion • saída segura iniciada • motivo=\(reason)"))
+            try await moveToWildSafeCamp(reason: reason)
+            try await waitForCombatSafetyWindow(reason: reason)
+            try await exitDunesToShores(
+                reason: reason,
+                expectedTool: nil,
+                expectedLifeEpoch: lifeEpoch,
+                allowInconclusiveSurvivalAfterConfirmedShores: true
+            )
+            reporter(.state(.cooldown, "The Shores segura • pronto para encerrar"))
+            reporter(.log("🏖️ The Shores confirmada • combate com Giant Scorpion encerrado"))
+            return
+        }
+
+        if mode == .magmaBrute, authoritative == "ember" {
+            reporter(.state(.recovering, reason == "meta concluída" ? "Meta concluída • recuando à Safe Zone" : "Recuando à Safe Zone da Emberstone"))
+            reporter(.log("🌋 Magma Brute • saída segura iniciada • motivo=\(reason)"))
+            try await moveToWildSafeCamp(reason: reason)
+            try await waitForCombatSafetyWindow(reason: reason)
+            reporter(.state(.cooldown, "Safe Zone Emberstone • pronto para encerrar"))
+            reporter(.log("🏕️ Safe Zone Emberstone confirmada • combat timer zerado • Presence pronta para encerrar"))
+            return
+        }
+
         if region.hasPrefix("wild") || serverRegion?.hasPrefix("wild") == true {
             reporter(.state(.recovering, reason == "meta concluída" ? "Meta concluída • ficando em segurança" : "Saindo do combate com segurança"))
             let elapsed = max(0, nowMS - lastCombatActivityAt)
@@ -6898,6 +7045,27 @@ func makeRecoveryProgressAnchor(for mode: ActivityMode) async -> ActivityRecover
     /// Move directly toward the Wild exit while the combat timer elapses, then
     /// request World with short repeated probes and require server confirmation.
     private func finalizeEmergencyBackgroundExit(mode: ActivityMode) async throws {
+        let authoritative = (serverRegion ?? region).lowercased()
+        if mode == .scorpion, authoritative == "desert" {
+            reporter(.state(.recovering, "Background expirando • saída para The Shores"))
+            try await moveToWildSafeCamp(reason: "expiração de background")
+            try await waitForCombatSafetyWindow(reason: "expiração de background")
+            try await exitDunesToShores(
+                reason: "expiração de background",
+                expectedTool: nil,
+                expectedLifeEpoch: lifeEpoch,
+                allowInconclusiveSurvivalAfterConfirmedShores: true
+            )
+            reporter(.state(.cooldown, "The Shores segura • expiração concluída"))
+            return
+        }
+        if mode == .magmaBrute, authoritative == "ember" {
+            reporter(.state(.recovering, "Background expirando • Safe Zone Emberstone"))
+            try await moveToWildSafeCamp(reason: "expiração de background")
+            try await waitForCombatSafetyWindow(reason: "expiração de background")
+            reporter(.state(.cooldown, "Safe Zone Emberstone • expiração concluída"))
+            return
+        }
         if !(region.hasPrefix("wild") || serverRegion?.hasPrefix("wild") == true) {
             reporter(.state(.cooldown, "World seguro • expiração concluída"))
             reporter(.log("🏠 Expiração de background • personagem já estava fora da Wilderness"))
@@ -6947,7 +7115,12 @@ func makeRecoveryProgressAnchor(for mode: ActivityMode) async -> ActivityRecover
 
     private func resolveCombatXPAfterKill(mode: ActivityMode, before: Int?) async -> CombatXPResult? {
         let start = combatXPStart
-        let expectedNormal = mode == .dragon ? 75 : 50
+        let expectedNormal: Int
+        switch mode {
+        case .dragon: expectedNormal = 75
+        case .scorpion, .magmaBrute: expectedNormal = 0
+        default: expectedNormal = 50
+        }
         let deadline = nowMS + 1_500
 
         if let before {
@@ -6985,13 +7158,18 @@ func makeRecoveryProgressAnchor(for mode: ActivityMode) async -> ActivityRecover
     }
 
     private func moveToWildSafeCamp(reason: String) async throws {
-        // SAFE_CAMP da v5.2.1: col 25,row 47 -> world (0.5,22.5), faixa sem
-        // spawn de mobs usada para recuperação defensiva.
-        let safeCamp = Position(x: 0.5, z: 22.5)
+        let profile = CombatMobProfile.profile(for: activeCombatMode ?? .zombie)
+        let safeCamp = profile.safePosition
+        let destination: String
+        switch activeCombatMode {
+        case .scorpion: destination = "Dunes East • Shores Gate Safe Zone"
+        case .magmaBrute: destination = "Emberstone • southern Safe Zone"
+        default: destination = "Wilderness SAFE_CAMP 25,47"
+        }
         if hypot(position.x - safeCamp.x, position.z - safeCamp.z) > 0.8 {
             reporter(.state(.moving, "Recuando para área segura"))
-            reporter(.log("🏕️ Área segura • motivo=\(reason) • destino 25,47"))
-            try await walk(to: safeCamp, maxSeconds: 35, status: "🛡️ Recuando para área segura • \(reason)")
+            reporter(.log("🏕️ Área segura • motivo=\(reason) • destino \(destination)"))
+            try await walk(to: safeCamp, maxSeconds: activeCombatMode?.isRealmMobCombat == true ? 55 : 35, status: "🛡️ Recuando para área segura • \(reason)")
         }
         try await sendPosition(moving: false)
         try await sleep(450)
@@ -7374,10 +7552,18 @@ func makeRecoveryProgressAnchor(for mode: ActivityMode) async -> ActivityRecover
     }
 
     private func wildCombatLimits(_ mode: ActivityMode) -> WildCombatLimits {
-        if mode == .dragon {
+        switch mode {
+        case .dragon:
             return WildCombatLimits(potionHP: 88, shieldHP: 72, retreatHP: 68, preFightHP: 95, preFightShield: 90)
+        case .scorpion:
+            // Client: tail hit is high damage and Dunes heat bypasses shield.
+            return WildCombatLimits(potionHP: 90, shieldHP: 80, retreatHP: 72, preFightHP: 98, preFightShield: 90)
+        case .magmaBrute:
+            // Client: 8-tile pounce/aggro; enter each target with a strong buffer.
+            return WildCombatLimits(potionHP: 90, shieldHP: 80, retreatHP: 72, preFightHP: 98, preFightShield: 90)
+        default:
+            return WildCombatLimits(potionHP: 75, shieldHP: 45, retreatHP: 45, preFightHP: 90, preFightShield: 60)
         }
-        return WildCombatLimits(potionHP: 75, shieldHP: 45, retreatHP: 45, preFightHP: 90, preFightShield: 60)
     }
 
     private func enterWildernessFromWorld() async throws {
@@ -7675,20 +7861,25 @@ func makeRecoveryProgressAnchor(for mode: ActivityMode) async -> ActivityRecover
     }
 
     private func ingestWildMobs(_ array: [[String: Any]]) async {
-        guard region.hasPrefix("wild") || serverRegion?.hasPrefix("wild") == true else { return }
+        let authoritativeRegion = (serverRegion ?? region).lowercased()
+        guard isMobCombatRegion(authoritativeRegion) else { return }
         var next: [Int: LiveMob] = [:]
         for (arrayIndex, mob) in array.enumerated() {
             let index = RealtimeProtocol.int(mob["i"]) ?? arrayIndex
             let type: String
-            if let d = RealtimeProtocol.int(mob["d"]) {
+            if authoritativeRegion == "ember" {
+                type = "magma_brute"
+            } else if authoritativeRegion == "desert" {
+                type = "scorpion"
+            } else if let d = RealtimeProtocol.int(mob["d"]) {
                 type = d == 1 ? "dragon" : "zombie"
             } else if let previous = wildMobs[index] {
                 type = previous.type
             } else {
                 continue
             }
-            let hp = RealtimeProtocol.int(mob["lv"])
-            guard let pos = mobPosition(mob, offset: -24.5) else { continue }
+            let hp = RealtimeProtocol.int(mob["lv"] ?? mob["hp"] ?? mob["health"])
+            guard let pos = mobPosition(mob, offset: authoritativeRegion.hasPrefix("wild") ? -24.5 : -19.5) else { continue }
             next[index] = LiveMob(index: index, type: type, hp: hp, position: pos, alive: (hp ?? 1) > 0)
         }
         wildMobs = next
@@ -7709,13 +7900,25 @@ func makeRecoveryProgressAnchor(for mode: ActivityMode) async -> ActivityRecover
         try await sleep(450)
     }
 
+    private func isMobCombatRegion(_ value: String) -> Bool {
+        let normalized = value.lowercased()
+        return normalized.hasPrefix("wild") || normalized == "ember" || normalized == "desert"
+    }
+
     private func moveWildAdjacent(to mob: LiveMob) async throws {
         if chebyshevDistance(to: mob.position) <= 1 { return }
         let dx = position.x - mob.position.x
         let dz = position.z - mob.position.z
         let len = max(0.001, hypot(dx, dz))
         let target = Position(x: mob.position.x + dx / len * 0.75, z: mob.position.z + dz / len * 0.75)
-        let label = mob.type == "dragon" ? "Dragão" : (mob.type == "zombie" ? "Zumbi" : mob.type.capitalized)
+        let label: String
+        switch mob.type {
+        case "dragon": label = "Dragão"
+        case "zombie": label = "Zumbi"
+        case "scorpion": label = "Giant Scorpion"
+        case "magma_brute": label = "Magma Brute"
+        default: label = mob.type.capitalized
+        }
         try await walk(to: target, maxSeconds: 30, status: "Aproximando do \(label) #\(mob.index)")
         position.ry = atan2(mob.position.x - position.x, mob.position.z - position.z)
         try await sendPosition(moving: false)
@@ -8974,6 +9177,8 @@ private extension ActivityMode {
         case .chicken: return "Galinha"
         case .zombie: return "Zumbi"
         case .dragon: return "Dragão"
+        case .scorpion: return "Giant Scorpion"
+        case .magmaBrute: return "Magma Brute"
         case .roastPit: return "Roast Pit"
         case .blacksmith: return "Frostmere Smith"
         }
