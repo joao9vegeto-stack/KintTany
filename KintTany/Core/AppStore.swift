@@ -687,6 +687,7 @@ struct ActivityStats: Codable {
     var gatherRecoveriesBackground = 0
     var gatherProofMisses = 0
     var kills = 0
+    var bruteHorns = 0
     var roastCycleRemaining = 0
     var roastCooked = 0
     var roastBurned = 0
@@ -2105,6 +2106,9 @@ final class AppStore: ObservableObject {
             if mode.usesCombatRecoveryOwner {
                 log("Poções • drink_ack timeout \(stats.potionAckTimeouts) (FG \(stats.potionAckTimeoutsForeground) / BG \(stats.potionAckTimeoutsBackground))")
             }
+        }
+        if mode == .magmaBrute {
+            log("🎁 Brute Horn • total obtido nesta meta: \(stats.bruteHorns)")
         }
         log("Background • \(backgroundState)")
     }
@@ -4343,7 +4347,12 @@ final class AppStore: ObservableObject {
 
                 let remaining = max(1, sessionGoal - preserved)
                 let child = Task.detached(priority: .userInitiated) {
-                    try await resumedEngine.run(mode: mode, goal: remaining)
+                    try await resumedEngine.run(
+                        mode: mode,
+                        goal: remaining,
+                        successOffset: preserved,
+                        displayGoal: self.sessionGoal
+                    )
                 }
                 engineRunTask = child
 
@@ -4578,6 +4587,14 @@ final class AppStore: ObservableObject {
             stats.lastEvent = detail ?? "sucesso"
             if let detail { log("✅ \(detail) • \(stats.successes)/\(sessionGoal)") }
             updateContinuedProcessingProgress(forceTitleUpdate: true)
+
+        case .bankableDrop(let type, let quantity):
+            guard quantity > 0 else { break }
+            if type == "brute_horn" {
+                stats.bruteHorns += quantity
+                stats.lastEvent = "Brute Horn total \(stats.bruteHorns)"
+                log("🎁 Brute Horn • total obtido nesta meta: \(stats.bruteHorns)")
+            }
 
         case .roastCountdown(let mode, let cycle, let goal, let secondsRemaining):
             stats.roastCycleRemaining = secondsRemaining

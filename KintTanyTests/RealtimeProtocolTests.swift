@@ -289,6 +289,14 @@ final class RealtimeProtocolTests: XCTestCase {
         XCTAssertEqual(CombatMobProfile.profile(for: .magmaBrute).authoritativeHP, 150)
     }
 
+    func testBuild14RealmResupplyReusesPresenceAndCombatProgressStaysGlobal() {
+        XCTAssertTrue(RealmCombatResupplyPolicy.reusesCurrentPresence)
+        XCTAssertEqual(CombatProgressDisplayPolicy.completed(local: 1, offset: 19), 20)
+        XCTAssertEqual(CombatProgressDisplayPolicy.completed(local: 2, offset: 19), 21)
+        XCTAssertEqual(CombatProgressDisplayPolicy.goal(localGoal: 31, displayGoal: 50), 50)
+        XCTAssertEqual(CombatProgressDisplayPolicy.goal(localGoal: 31, displayGoal: nil), 31)
+    }
+
     func testBuild13DunesHeatDoesNotRestartCombatWindow() {
         XCTAssertFalse(CombatTimerDamagePolicy.shouldReset(region: "desert", previousHP: 91, previousShield: 95, currentHP: 90, currentShield: 95))
         XCTAssertTrue(CombatTimerDamagePolicy.shouldReset(region: "desert", previousHP: 91, previousShield: 95, currentHP: 91, currentShield: 65))

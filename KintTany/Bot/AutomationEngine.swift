@@ -7,6 +7,7 @@ enum EngineEvent {
     case target(String?)
     case attempt
     case success(String?)
+    case bankableDrop(type: String, quantity: Int)
     case roastCountdown(mode: RoastPitMode, cycle: Int, goal: Int, secondsRemaining: Int)
     case roastResult(mode: RoastPitMode, cycle: Int, goal: Int, burned: Bool, xpGained: Int, cookingXPTotal: Int, cookedCount: Int, burnedCount: Int)
     case smithPreflight(recipe: BlacksmithRecipe, batch: Int, required: [String: Int])
@@ -73,6 +74,20 @@ struct FishingNumberingPolicy {
     static func publicFishNumber(successes: Int) -> Int {
         max(1, successes + 1)
     }
+}
+
+struct CombatProgressDisplayPolicy {
+    static func completed(local: Int, offset: Int) -> Int {
+        max(0, offset) + max(0, local)
+    }
+
+    static func goal(localGoal: Int, displayGoal: Int?) -> Int {
+        max(1, displayGoal ?? localGoal)
+    }
+}
+
+struct RealmCombatResupplyPolicy {
+    static let reusesCurrentPresence = true
 }
 
 enum GatherToolPreflightDisposition: Equatable {
@@ -6137,9 +6152,12 @@ func makeRecoveryProgressAnchor(for mode: ActivityMode) async -> ActivityRecover
             // World, complete 6/6/6 e retorne pela mesma Presence.
             if let reason = try await confirmedPotionResupplyReason(mode: mode, includeStrengthWhileBuffed: true) {
                 if mode.isRealmMobCombat {
-                    safeStopReason = .combatSupplies
-                    reporter(.log("🧪 \(mode.displayName) • \(reason) • iniciando ciclo seguro região → The Shores → World → banco → retorno; sessão/meta preservadas"))
-                    break
+                    reporter(.log("🧪 \(mode.displayName) • \(reason) • reposição planejada na MESMA Presence; região → The Shores → World/banco → retorno"))
+                    try await realmCombatWorldServiceTrip(
+                        mode: mode,
+                        reasonLabel: "reposição entre combates"
+                    )
+                    continue
                 }
                 try await combatWorldServiceTrip(
                     drops: [:],
@@ -6153,11 +6171,25 @@ func makeRecoveryProgressAnchor(for mode: ActivityMode) async -> ActivityRecover
             // regra de "vitais baixos" durante o alvo, que na v2.4 é estritamente
             // HP<=50 E shield==0.
             try await prepareWildVitalsBeforeNewTarget(mode: mode)
+
+            if mode.isRealmMobCombat, safeStopReason == .combatSupplies {
+                safeStopReason = nil
+                try await realmCombatWorldServiceTrip(
+                    mode: mode,
+                    reasonLabel: "reposição após recuperação de vitais"
+                )
+                continue
+            }
+            if safeStopReason != nil { break }
+
             if let reason = try await confirmedPotionResupplyReason(mode: mode, includeStrengthWhileBuffed: true) {
                 if mode.isRealmMobCombat {
-                    safeStopReason = .combatSupplies
-                    reporter(.log("🧪 \(mode.displayName) • \(reason) após pré-combate • reposição contínua solicitada; sessão/meta preservadas"))
-                    break
+                    reporter(.log("🧪 \(mode.displayName) • \(reason) após pré-combate • repondo na MESMA Presence"))
+                    try await realmCombatWorldServiceTrip(
+                        mode: mode,
+                        reasonLabel: "reposição após pré-combate"
+                    )
+                    continue
                 }
                 try await combatWorldServiceTrip(
                     drops: [:],
@@ -6507,6 +6539,14 @@ func makeRecoveryProgressAnchor(for mode: ActivityMode) async -> ActivityRecover
                     registerRealmMobDeath(index: target.index, mode: mode, source: "kill autoritativa do bot")
                 }
                 successes += 1
+                let displaySuccesses = CombatProgressDisplayPolicy.completed(
+                    local: successes,
+                    offset: gatherSuccessOffset
+                )
+                let displayGoal = CombatProgressDisplayPolicy.goal(
+                    localGoal: goal,
+                    displayGoal: gatherDisplayGoal
+                )
                 reporter(.kill)
                 reporter(.success(nil))
 
@@ -6542,7 +6582,7 @@ func makeRecoveryProgressAnchor(for mode: ActivityMode) async -> ActivityRecover
                     reporter(.diagnostic("[BG] Expiração detectada durante pós-kill • pulando XP/loot e saindo imediatamente"))
                     break
                 }
-                reporter(.state(.cooldown, "\(mode.displayName) \(successes)/\(goal) concluído"))
+                reporter(.state(.cooldown, "\(mode.displayName) \(displaySuccesses)/\(displayGoal) concluído"))
 
                 let xp = await resolveCombatXPAfterKill(mode: mode, before: targetXPStart)
                 if emergencyBackgroundExitRequested {
@@ -6555,7 +6595,7 @@ func makeRecoveryProgressAnchor(for mode: ActivityMode) async -> ActivityRecover
                 } else {
                     xpText = " • XP aguardando confirmação do servidor"
                 }
-                reporter(.log("✅ \(targetName) derrotado • \(successes)/\(goal) • hits aceitos=\(acceptedHits)\(xpText)"))
+                reporter(.log("✅ \(targetName) derrotado • \(displaySuccesses)/\(displayGoal) • hits aceitos=\(acceptedHits)\(xpText)"))
 
                 let immediateGroundBagProbe = await immediateGroundBagTask?.value
                 let drops = try await collectWildDrops(
@@ -6567,6 +6607,9 @@ func makeRecoveryProgressAnchor(for mode: ActivityMode) async -> ActivityRecover
                     immediateGroundBagProbe: immediateGroundBagProbe,
                     grantBaseline: grantBaseline
                 )
+                for (type, quantity) in drops.bankable where quantity > 0 {
+                    reporter(.bankableDrop(type: type, quantity: quantity))
+                }
 
                 if safeStopReason != nil {
                     if emergencyBackgroundExitRequested {
@@ -6601,12 +6644,15 @@ func makeRecoveryProgressAnchor(for mode: ActivityMode) async -> ActivityRecover
                 let resupplyReason = try await confirmedPotionResupplyReason(mode: mode, includeStrengthWhileBuffed: true)
                 if mode.isRealmMobCombat {
                     if let resupplyReason {
-                        safeStopReason = .combatSupplies
-                        reporter(.log("🧪 \(mode.displayName) • \(resupplyReason) • iniciando reposição World/banco antes da próxima luta; sessão continuará"))
-                        break
+                        reporter(.log("🧪 \(mode.displayName) • \(resupplyReason) • saída segura + banco na MESMA Presence; progresso \(displaySuccesses)/\(displayGoal)"))
+                        try await realmCombatWorldServiceTrip(
+                            mode: mode,
+                            reasonLabel: "reposição de poções"
+                        )
+                        continue
                     }
                     if !drops.bankable.isEmpty {
-                        reporter(.log("🎒 \(mode.displayName) • drops mantidos carregados até a fronteira segura; sem viagem artificial ao World entre kills"))
+                        reporter(.log("🎒 \(mode.displayName) • drops mantidos carregados até a próxima reposição/fronteira; sem viagem artificial ao World entre kills"))
                     }
                 } else if !drops.bankable.isEmpty || resupplyReason != nil {
                     try await combatWorldServiceTrip(
@@ -6860,6 +6906,15 @@ func makeRecoveryProgressAnchor(for mode: ActivityMode) async -> ActivityRecover
         let limits = wildCombatLimits(mode)
         if mode == .scorpion, playerHP < limits.preFightHP {
             try await recoverScorpionVitals(preFight: false)
+            if safeStopReason == .combatSupplies {
+                safeStopReason = nil
+                return try await resupplyLockedWildTarget(
+                    mode: mode,
+                    targetIndex: targetIndex,
+                    targetName: targetName,
+                    reason: "vitais/consumíveis do Giant Scorpion"
+                )
+            }
             if safeStopReason != nil { return false }
         }
 
@@ -7215,6 +7270,74 @@ func makeRecoveryProgressAnchor(for mode: ActivityMode) async -> ActivityRecover
         reporter(.log("📦 Recursos restantes • 🪵 Madeira \(remainingWood) • 🪨 Pedra \(remainingStone) • ⚫ Carvão \(remainingCoal)"))
     }
 
+    /// Build 14: reposição planejada de Scorpion/Magma segue o princípio
+    /// comprovado do Dragon: a conexão continua aberta e somente a região muda.
+    /// Novo queue/presence handshake fica reservado para falha real de transporte.
+    private func realmCombatWorldServiceTrip(
+        mode: ActivityMode,
+        reasonLabel: String
+    ) async throws {
+        guard mode.isRealmMobCombat else {
+            throw EngineError.combatSupplyFailed("serviço realm solicitado para modo incompatível")
+        }
+        let profile = CombatMobProfile.profile(for: mode)
+        let authoritative = (serverRegion ?? region).trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+
+        if authoritative == profile.region {
+            reporter(.state(.recovering, "Reposição • saindo de \(mode.displayName) com segurança"))
+            try await moveToWildSafeCamp(reason: reasonLabel)
+            try await waitForCombatSafetyWindow(reason: reasonLabel)
+
+            if mode == .scorpion {
+                try await exitDunesToShores(
+                    reason: reasonLabel,
+                    expectedTool: nil,
+                    expectedLifeEpoch: lifeEpoch,
+                    allowInconclusiveSurvivalAfterConfirmedShores: true
+                )
+            } else {
+                try await exitEmberToShores(reason: reasonLabel)
+            }
+        } else if authoritative != "beach" && authoritative != "world" && authoritative != BankShopProtocolPolicy.region {
+            throw EngineError.regionNotConfirmed("fronteira realm para reposição")
+        }
+
+        if (serverRegion ?? region).lowercased() != "world" {
+            reporter(.state(.syncing, "The Shores → World • mesma Presence"))
+            try await setRegion(
+                "world",
+                at: Position(
+                    x: BankShopProtocolPolicy.worldEntranceX,
+                    z: BankShopProtocolPolicy.worldEntranceZ
+                )
+            )
+            guard try await waitForRegion("world", timeoutMS: 6_000) else {
+                throw EngineError.regionNotConfirmed("world após The Shores")
+            }
+        }
+
+        reporter(.log("🔄 \(mode.displayName) • World confirmado sem novo queue/presence handshake • banco/reposição na conexão atual"))
+        try await prepareRealmCombatLoadoutFromWorld(for: mode)
+
+        guard (serverRegion ?? region).lowercased() == "world" else {
+            throw EngineError.regionNotConfirmed("world após reposição realm")
+        }
+
+        wildMobs.removeAll()
+        realmMobRespawns.removeAll()
+        lastWildAvailabilitySignature = ""
+        reporter(.state(.syncing, "Retornando a \(mode.displayName) • mesma Presence"))
+        try await setRegion(profile.region, at: profile.entryPosition)
+        guard try await waitForRegion(profile.region, timeoutMS: 14_000) else {
+            throw EngineError.regionNotConfirmed(profile.region)
+        }
+
+        try await selectBestCarriedCombatWeapon()
+        try await equip(activeCombatWeaponType)
+        try await refreshPotionStock(logSummary: true)
+        reporter(.log("↩️ \(mode.displayName) • \(profile.region) confirmado na MESMA Presence • meta global preservada"))
+    }
+
     /// Viagem única para banco/reposição. Antes de sair do Wild, sempre respeita
     /// o combat timer. Em meta final pode permanecer no World; durante a sessão
     /// retorna ao Wild usando a mesma Presence.
@@ -7286,20 +7409,23 @@ func makeRecoveryProgressAnchor(for mode: ActivityMode) async -> ActivityRecover
     ) async throws -> Bool {
         reporter(.state(.recovering, "Reabastecendo • mantendo \(targetName)"))
         reporter(.log("🧪 Estoque zerado • \(reason) • mantendo \(targetName) #\(targetIndex) travado"))
-        try await moveToWildSafeCamp(reason: "reposição \(targetName)")
-        if safeStopReason != nil { return false }
         if mode.isRealmMobCombat {
-            safeStopReason = .combatSupplies
-            reporter(.log("🛑 \(mode.displayName) • reposição exige World/banco; progresso preservado e retorno automático à mesma meta"))
-            return false
+            if safeStopReason == .combatSupplies { safeStopReason = nil }
+            try await realmCombatWorldServiceTrip(
+                mode: mode,
+                reasonLabel: "reposição mantendo \(targetName)"
+            )
+        } else {
+            try await moveToWildSafeCamp(reason: "reposição \(targetName)")
+            if safeStopReason != nil { return false }
+            try await combatWorldServiceTrip(
+                drops: [:],
+                resupplyReason: reason,
+                returnToWild: true,
+                reasonLabel: "reposição mantendo \(targetName)"
+            )
+            if safeStopReason != nil { return false }
         }
-        try await combatWorldServiceTrip(
-            drops: [:],
-            resupplyReason: reason,
-            returnToWild: true,
-            reasonLabel: "reposição mantendo \(targetName)"
-        )
-        if safeStopReason != nil { return false }
 
         let expectedType = CombatMobProfile.profile(for: mode).targetType
         let deadline = nowMS + 5_000
