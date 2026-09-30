@@ -4392,7 +4392,7 @@ final class AppStore: ObservableObject {
                         connectionRecoveryRequested = true
                         connectionRecoveryDetail = "nova reposição contínua"
                         worldBoundaryAlreadyConfirmed = true
-                        log("🔄 \(mode.localizedTitle) • nova reposição necessária • \(stats.successes)/\(sessionGoal) preservado • Shores → World → banco → retorno, sem encerrar")
+                        log("🔄 \(mode.localizedTitle) • reposição necessária • \(stats.successes)/\(sessionGoal) preservado • Shores segura → World/banco → retorno; recovery de erro não será usado")
                         receiverTask?.cancel()
                         receiverTask = nil
                         activeEngine = nil

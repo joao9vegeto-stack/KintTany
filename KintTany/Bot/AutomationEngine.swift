@@ -87,7 +87,60 @@ struct CombatProgressDisplayPolicy {
 }
 
 struct RealmCombatResupplyPolicy {
-    static let reusesCurrentPresence = true
+    // The official client returns Shores -> Pond; there is no normal direct
+    // Shores -> World transition. Build 15 therefore uses a clean, controlled
+    // World service boundary only when supplies truly require it.
+    static let reusesCurrentPresence = false
+}
+
+struct RealmCombatEfficiencyPolicy {
+    static let swordDamage = 36
+    static let incomingDamageBudgetPerSwing = 42
+    static let safetyBuffer = 30
+    static let readyEffectiveHP = 160
+
+    static func hitsRemaining(targetHP: Int) -> Int {
+        guard targetHP > 0 else { return 0 }
+        return Int(ceil(Double(targetHP) / Double(swordDamage)))
+    }
+
+    static func canFinish(
+        mode: ActivityMode,
+        targetHP: Int?,
+        playerHP: Int,
+        shield: Int,
+        conservativeHP: Int? = nil
+    ) -> Bool {
+        guard mode.isRealmMobCombat, let targetHP, targetHP > 0 else { return false }
+        let hits = hitsRemaining(targetHP: targetHP)
+        guard hits > 0, hits <= 3 else { return false }
+
+        if mode == .scorpion {
+            let dunesHP = conservativeHP ?? playerHP
+            guard dunesHP > DunesHeatSafetyPolicy.minimumSafeHP + 3 else { return false }
+        } else {
+            guard playerHP >= 60 else { return false }
+        }
+
+        let required = hits * incomingDamageBudgetPerSwing + safetyBuffer
+        return max(0, playerHP) + max(0, shield) >= required
+    }
+
+    static func readyForNextTarget(
+        mode: ActivityMode,
+        playerHP: Int,
+        shield: Int,
+        conservativeHP: Int? = nil
+    ) -> Bool {
+        guard mode.isRealmMobCombat else { return false }
+        if mode == .scorpion {
+            let dunesHP = conservativeHP ?? playerHP
+            guard dunesHP > DunesHeatSafetyPolicy.minimumSafeHP + 3, playerHP >= 75 else { return false }
+        } else if playerHP < 85 {
+            return false
+        }
+        return max(0, playerHP) + max(0, shield) >= readyEffectiveHP
+    }
 }
 
 enum GatherToolPreflightDisposition: Equatable {
@@ -6148,16 +6201,13 @@ func makeRecoveryProgressAnchor(for mode: ActivityMode) async -> ActivityRecover
             if safeStopReason != nil { break }
             guard playerHP > 0 else { throw EngineError.playerDead }
 
-            // Se uma categoria chegou a zero entre encontros, faça UMA viagem ao
-            // World, complete 6/6/6 e retorne pela mesma Presence.
+            // Entre encontros, estoque zerado em Realm vira uma única fronteira
+            // de serviço. Não tentamos o atalho inválido Shores -> World.
             if let reason = try await confirmedPotionResupplyReason(mode: mode, includeStrengthWhileBuffed: true) {
                 if mode.isRealmMobCombat {
-                    reporter(.log("🧪 \(mode.displayName) • \(reason) • reposição planejada na MESMA Presence; região → The Shores → World/banco → retorno"))
-                    try await realmCombatWorldServiceTrip(
-                        mode: mode,
-                        reasonLabel: "reposição entre combates"
-                    )
-                    continue
+                    safeStopReason = .combatSupplies
+                    reporter(.log("🧪 \(mode.displayName) • \(reason) • reposição necessária ENTRE mobs; saindo uma vez para Shores e entregando ao World/banco"))
+                    break
                 }
                 try await combatWorldServiceTrip(
                     drops: [:],
@@ -6172,24 +6222,13 @@ func makeRecoveryProgressAnchor(for mode: ActivityMode) async -> ActivityRecover
             // HP<=50 E shield==0.
             try await prepareWildVitalsBeforeNewTarget(mode: mode)
 
-            if mode.isRealmMobCombat, safeStopReason == .combatSupplies {
-                safeStopReason = nil
-                try await realmCombatWorldServiceTrip(
-                    mode: mode,
-                    reasonLabel: "reposição após recuperação de vitais"
-                )
-                continue
-            }
             if safeStopReason != nil { break }
 
             if let reason = try await confirmedPotionResupplyReason(mode: mode, includeStrengthWhileBuffed: true) {
                 if mode.isRealmMobCombat {
-                    reporter(.log("🧪 \(mode.displayName) • \(reason) após pré-combate • repondo na MESMA Presence"))
-                    try await realmCombatWorldServiceTrip(
-                        mode: mode,
-                        reasonLabel: "reposição após pré-combate"
-                    )
-                    continue
+                    safeStopReason = .combatSupplies
+                    reporter(.log("🧪 \(mode.displayName) • \(reason) após pré-combate • fronteira limpa para World/banco"))
+                    break
                 }
                 try await combatWorldServiceTrip(
                     drops: [:],
@@ -6310,21 +6349,30 @@ func makeRecoveryProgressAnchor(for mode: ActivityMode) async -> ActivityRecover
                 target = live
                 lastTargetPosition = live.position
 
-                // Estoque zerou no meio do encontro: preserve o índice do mob,
-                // espere o combat timer ficar seguro, reabasteça 6/6/6 no World e
-                // tente reassumir EXATAMENTE o mesmo target ao voltar.
+                // Build 15: estoque zerado NÃO abandona um Realm mob que já pode
+                // ser finalizado com margem. Mata o alvo atual primeiro; banco só
+                // acontece entre mobs. Se ainda faltam muitos hits, sai com segurança.
                 if let reason = localPotionZeroReason(mode: mode, includeStrengthWhileBuffed: false) {
-                    let resumed = try await resupplyLockedWildTarget(
-                        mode: mode,
-                        targetIndex: target.index,
-                        targetName: targetName,
-                        reason: reason
-                    )
-                    if !resumed {
-                        targetLostDuringRecovery = true
+                    if mode.isRealmMobCombat, canFinishRealmTarget(mode: mode, targetHP: target.hp) {
+                        reporter(.log("🎯 \(targetName) • \(reason) zerado, mas alvo pode ser finalizado com segurança • HP alvo \(target.hp.map(String.init) ?? "?") • você \(playerHP)+\(playerShield) • banco adiado até após a kill"))
+                    } else if mode.isRealmMobCombat {
+                        safeStopReason = .combatSupplies
+                        safeStopInterruptedTarget = true
+                        reporter(.log("🧪 \(targetName) • \(reason) zerado e margem insuficiente para finalizar • saída segura; nenhum novo alvo será escolhido antes da reposição"))
                         break
+                    } else {
+                        let resumed = try await resupplyLockedWildTarget(
+                            mode: mode,
+                            targetIndex: target.index,
+                            targetName: targetName,
+                            reason: reason
+                        )
+                        if !resumed {
+                            targetLostDuringRecovery = true
+                            break
+                        }
+                        continue
                     }
-                    continue
                 }
 
                 // v5.2.1 defensive layer: separate from the user's general
@@ -6644,12 +6692,9 @@ func makeRecoveryProgressAnchor(for mode: ActivityMode) async -> ActivityRecover
                 let resupplyReason = try await confirmedPotionResupplyReason(mode: mode, includeStrengthWhileBuffed: true)
                 if mode.isRealmMobCombat {
                     if let resupplyReason {
-                        reporter(.log("🧪 \(mode.displayName) • \(resupplyReason) • saída segura + banco na MESMA Presence; progresso \(displaySuccesses)/\(displayGoal)"))
-                        try await realmCombatWorldServiceTrip(
-                            mode: mode,
-                            reasonLabel: "reposição de poções"
-                        )
-                        continue
+                        safeStopReason = .combatSupplies
+                        reporter(.log("🧪 \(mode.displayName) • \(resupplyReason) • alvo já concluído em \(displaySuccesses)/\(displayGoal); agora sim saindo para reposição"))
+                        break
                     }
                     if !drops.bankable.isEmpty {
                         reporter(.log("🎒 \(mode.displayName) • drops mantidos carregados até a próxima reposição/fronteira; sem viagem artificial ao World entre kills"))
@@ -6712,6 +6757,13 @@ func makeRecoveryProgressAnchor(for mode: ActivityMode) async -> ActivityRecover
     private func prepareWildVitalsBeforeNewTarget(mode: ActivityMode) async throws {
         let limits = wildCombatLimits(mode)
         guard playerHP > 0 else { throw EngineError.playerDead }
+
+        if mode.isRealmMobCombat, realmReadyForNextTarget(mode: mode) {
+            emergencyVitalDrop = false
+            reporter(.diagnostic("[COMBAT] \(mode.displayName) • vitais efetivos suficientes para próximo alvo • HP \(playerHP) + shield \(playerShield)"))
+            return
+        }
+
         guard playerHP < limits.preFightHP || playerShield < limits.preFightShield else { return }
 
         reporter(.state(.recovering, "Preparando vitais antes do próximo alvo"))
@@ -6744,8 +6796,42 @@ func makeRecoveryProgressAnchor(for mode: ActivityMode) async -> ActivityRecover
         max(0, playerHP) + max(0, playerShield)
     }
 
+    private func canFinishRealmTarget(mode: ActivityMode, targetHP: Int?) -> Bool {
+        let conservativeHP = mode == .scorpion
+            ? min(playerHP, estimatedDunesHPFromMonotonicClock())
+            : playerHP
+        return RealmCombatEfficiencyPolicy.canFinish(
+            mode: mode,
+            targetHP: targetHP,
+            playerHP: playerHP,
+            shield: playerShield,
+            conservativeHP: conservativeHP
+        )
+    }
+
+    private func realmReadyForNextTarget(mode: ActivityMode) -> Bool {
+        let conservativeHP = mode == .scorpion
+            ? min(playerHP, estimatedDunesHPFromMonotonicClock())
+            : playerHP
+        return RealmCombatEfficiencyPolicy.readyForNextTarget(
+            mode: mode,
+            playerHP: playerHP,
+            shield: playerShield,
+            conservativeHP: conservativeHP
+        )
+    }
+
     private func shouldUsePreventiveWildRecovery(mode: ActivityMode, targetHP: Int?) -> Bool {
         let policy = WildCombatSafetyPolicy.policy(for: mode)
+
+        if mode.isRealmMobCombat {
+            // A queda de vitais é um sinal, não uma ordem eterna. Se o estado
+            // ATUAL já permite terminar em <=3 golpes com margem, não recue.
+            if canFinishRealmTarget(mode: mode, targetHP: targetHP) { return false }
+            return effectiveVitals <= policy.emergencyEffectiveHP
+                || (emergencyVitalDrop && effectiveVitals < policy.finisherEffectiveHP)
+        }
+
         let finishing = (targetHP ?? Int.max) <= 25
         return emergencyVitalDrop
             || effectiveVitals <= policy.emergencyEffectiveHP
@@ -6815,9 +6901,14 @@ func makeRecoveryProgressAnchor(for mode: ActivityMode) async -> ActivityRecover
         }
 
         let recoveryFloor = mode == .dragon ? 180 : 145
-        let needsRecovery = playerHP < policy.postKillSafeHP
-            || playerShield < policy.postKillSafeShield
-            || effectiveVitals < recoveryFloor
+        let needsRecovery: Bool
+        if mode.isRealmMobCombat {
+            needsRecovery = !realmReadyForNextTarget(mode: mode)
+        } else {
+            needsRecovery = playerHP < policy.postKillSafeHP
+                || playerShield < policy.postKillSafeShield
+                || effectiveVitals < recoveryFloor
+        }
 
         if needsRecovery {
             if emergencyBackgroundExitRequested { return }
@@ -6835,6 +6926,7 @@ func makeRecoveryProgressAnchor(for mode: ActivityMode) async -> ActivityRecover
                     try await sleep(600)
                 }
             }
+            if safeStopReason != nil { return }
         }
 
         if mode == .dragon {
@@ -6928,7 +7020,22 @@ func makeRecoveryProgressAnchor(for mode: ActivityMode) async -> ActivityRecover
         }
         if safeStopReason != nil { return false }
 
+        if mode.isRealmMobCombat,
+           let sameTarget = wildMobs[targetIndex],
+           sameTarget.alive,
+           canFinishRealmTarget(mode: mode, targetHP: sameTarget.hp) {
+            reporter(.log("🎯 \(targetName) • margem suficiente para concluir sem nova poção • HP alvo \(sameTarget.hp.map(String.init) ?? "?") • retornando ao alvo antes de pensar em banco"))
+            try await moveWildAdjacent(to: sameTarget)
+            try await equip(activeCombatWeaponType)
+            return true
+        }
+
         if let reason = try await confirmedPotionResupplyReason(mode: mode, includeStrengthWhileBuffed: true) {
+            if mode.isRealmMobCombat {
+                safeStopReason = .combatSupplies
+                reporter(.log("🧪 \(targetName) • \(reason) zerado e alvo não cabe na margem segura • reposição será feita após saída protegida"))
+                return false
+            }
             return try await resupplyLockedWildTarget(
                 mode: mode,
                 targetIndex: targetIndex,
@@ -6940,7 +7047,22 @@ func makeRecoveryProgressAnchor(for mode: ActivityMode) async -> ActivityRecover
         try await recoverVitals(mode: mode, preFight: preFightRecovery)
         if safeStopReason != nil { return false }
 
+        if mode.isRealmMobCombat,
+           let sameTarget = wildMobs[targetIndex],
+           sameTarget.alive,
+           canFinishRealmTarget(mode: mode, targetHP: sameTarget.hp) {
+            reporter(.log("🎯 \(targetName) • recovery suficiente para finalizar • HP alvo \(sameTarget.hp.map(String.init) ?? "?") • sem viagem ao banco no meio da luta"))
+            try await moveWildAdjacent(to: sameTarget)
+            try await equip(activeCombatWeaponType)
+            return true
+        }
+
         if let reason = try await confirmedPotionResupplyReason(mode: mode, includeStrengthWhileBuffed: true) {
+            if mode.isRealmMobCombat {
+                safeStopReason = .combatSupplies
+                reporter(.log("🧪 \(targetName) • \(reason) zerado após recovery • saída segura para reposição"))
+                return false
+            }
             return try await resupplyLockedWildTarget(
                 mode: mode,
                 targetIndex: targetIndex,
@@ -7280,62 +7402,8 @@ func makeRecoveryProgressAnchor(for mode: ActivityMode) async -> ActivityRecover
         guard mode.isRealmMobCombat else {
             throw EngineError.combatSupplyFailed("serviço realm solicitado para modo incompatível")
         }
-        let profile = CombatMobProfile.profile(for: mode)
-        let authoritative = (serverRegion ?? region).trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
-
-        if authoritative == profile.region {
-            reporter(.state(.recovering, "Reposição • saindo de \(mode.displayName) com segurança"))
-            try await moveToWildSafeCamp(reason: reasonLabel)
-            try await waitForCombatSafetyWindow(reason: reasonLabel)
-
-            if mode == .scorpion {
-                try await exitDunesToShores(
-                    reason: reasonLabel,
-                    expectedTool: nil,
-                    expectedLifeEpoch: lifeEpoch,
-                    allowInconclusiveSurvivalAfterConfirmedShores: true
-                )
-            } else {
-                try await exitEmberToShores(reason: reasonLabel)
-            }
-        } else if authoritative != "beach" && authoritative != "world" && authoritative != BankShopProtocolPolicy.region {
-            throw EngineError.regionNotConfirmed("fronteira realm para reposição")
-        }
-
-        if (serverRegion ?? region).lowercased() != "world" {
-            reporter(.state(.syncing, "The Shores → World • mesma Presence"))
-            try await setRegion(
-                "world",
-                at: Position(
-                    x: BankShopProtocolPolicy.worldEntranceX,
-                    z: BankShopProtocolPolicy.worldEntranceZ
-                )
-            )
-            guard try await waitForRegion("world", timeoutMS: 6_000) else {
-                throw EngineError.regionNotConfirmed("world após The Shores")
-            }
-        }
-
-        reporter(.log("🔄 \(mode.displayName) • World confirmado sem novo queue/presence handshake • banco/reposição na conexão atual"))
-        try await prepareRealmCombatLoadoutFromWorld(for: mode)
-
-        guard (serverRegion ?? region).lowercased() == "world" else {
-            throw EngineError.regionNotConfirmed("world após reposição realm")
-        }
-
-        wildMobs.removeAll()
-        realmMobRespawns.removeAll()
-        lastWildAvailabilitySignature = ""
-        reporter(.state(.syncing, "Retornando a \(mode.displayName) • mesma Presence"))
-        try await setRegion(profile.region, at: profile.entryPosition)
-        guard try await waitForRegion(profile.region, timeoutMS: 14_000) else {
-            throw EngineError.regionNotConfirmed(profile.region)
-        }
-
-        try await selectBestCarriedCombatWeapon()
-        try await equip(activeCombatWeaponType)
-        try await refreshPotionStock(logSummary: true)
-        reporter(.log("↩️ \(mode.displayName) • \(profile.region) confirmado na MESMA Presence • meta global preservada"))
+        safeStopReason = .combatSupplies
+        reporter(.log("🧪 \(mode.displayName) • \(reasonLabel) • fronteira de reposição registrada; nenhum atalho Shores→World será enviado"))
     }
 
     /// Viagem única para banco/reposição. Antes de sair do Wild, sempre respeita
@@ -7410,11 +7478,9 @@ func makeRecoveryProgressAnchor(for mode: ActivityMode) async -> ActivityRecover
         reporter(.state(.recovering, "Reabastecendo • mantendo \(targetName)"))
         reporter(.log("🧪 Estoque zerado • \(reason) • mantendo \(targetName) #\(targetIndex) travado"))
         if mode.isRealmMobCombat {
-            if safeStopReason == .combatSupplies { safeStopReason = nil }
-            try await realmCombatWorldServiceTrip(
-                mode: mode,
-                reasonLabel: "reposição mantendo \(targetName)"
-            )
+            safeStopReason = .combatSupplies
+            reporter(.log("🧪 \(targetName) • reposição Realm exige fronteira de serviço; alvo atual só será abandonado se não houver margem segura para terminá-lo"))
+            return false
         } else {
             try await moveToWildSafeCamp(reason: "reposição \(targetName)")
             if safeStopReason != nil { return false }
@@ -7763,6 +7829,9 @@ func makeRecoveryProgressAnchor(for mode: ActivityMode) async -> ActivityRecover
             }
 
             if playerHP < hpGoal {
+                if mode == .magmaBrute {
+                    try await moveToRealmCombatRecoveryLane(mode: mode, reason: "HP abaixo da meta de recovery")
+                }
                 if potionStock.health > 0 {
                     let before = playerHP
                     if try await consumePotion("potion_health") {
@@ -7775,15 +7844,29 @@ func makeRecoveryProgressAnchor(for mode: ActivityMode) async -> ActivityRecover
                             return
                         case .noAuthoritativeGain:
                             reporter(.log("⚠️ Poção de vida consumida, mas pvit/snapshot não confirmou aumento de HP • novas doses bloqueadas nesta recuperação"))
+                            if mode.isRealmMobCombat {
+                                safeStopReason = .combatSupplies
+                                reporter(.log("🧪 \(mode.displayName) • HP não confirmou na região de combate • World/regeneração será usado sem classificar como falha operacional"))
+                                return
+                            }
                             throw EngineError.potionRecoveryFailed("poção de vida sem efeito autoritativo • HP permaneceu \(playerHP); nenhuma segunda dose foi consumida")
                         }
                     }
+                } else if mode.isRealmMobCombat {
+                    safeStopReason = .combatSupplies
+                    reporter(.log("🧪 \(mode.displayName) • Health Potion chegou a 0 com HP \(playerHP)/\(hpGoal) • World/regeneração necessário"))
+                    return
                 } else if playerHP <= limits.retreatHP {
                     throw EngineError.potionRecoveryFailed("sem poção de vida com HP crítico \(playerHP)")
                 }
             }
 
             if !shieldMechanicUnavailable, playerShield < shieldGoal {
+                if potionStock.shield <= 0, mode.isRealmMobCombat {
+                    safeStopReason = .combatSupplies
+                    reporter(.log("🧪 \(mode.displayName) • Shield Potion chegou a 0 com shield \(playerShield)/\(shieldGoal) • reposição imediata, sem esperar timeout"))
+                    return
+                }
                 if potionStock.shield > 0 {
                     let before = playerShield
                     if try await consumePotion("potion_shield") {
@@ -7827,6 +7910,11 @@ func makeRecoveryProgressAnchor(for mode: ActivityMode) async -> ActivityRecover
         if playerHP >= hpGoal && (playerShield >= shieldGoal || (shieldMechanicUnavailable && mode != .dragon)) {
             reporter(.log("✅ Recuperação concluída no limite • HP \(playerHP) • shield \(playerShield)"))
             try await equip(activeCombatWeaponType)
+            return
+        }
+        if mode.isRealmMobCombat {
+            safeStopReason = .combatSupplies
+            reporter(.log("🧪 \(mode.displayName) • recovery não atingiu a margem no tempo previsto • seguindo para World/banco sem recovery de erro"))
             return
         }
         throw EngineError.potionRecoveryFailed("timeout • HP \(playerHP)/\(hpGoal) • shield \(playerShield)/\(shieldGoal)")

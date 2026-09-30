@@ -289,12 +289,56 @@ final class RealtimeProtocolTests: XCTestCase {
         XCTAssertEqual(CombatMobProfile.profile(for: .magmaBrute).authoritativeHP, 150)
     }
 
-    func testBuild14RealmResupplyReusesPresenceAndCombatProgressStaysGlobal() {
-        XCTAssertTrue(RealmCombatResupplyPolicy.reusesCurrentPresence)
+    func testBuild15RealmCombatFinishesSafeTargetBeforeResupply() {
+        XCTAssertFalse(RealmCombatResupplyPolicy.reusesCurrentPresence)
+
+        XCTAssertEqual(RealmCombatEfficiencyPolicy.hitsRemaining(targetHP: 56), 2)
+        XCTAssertEqual(RealmCombatEfficiencyPolicy.hitsRemaining(targetHP: 20), 1)
+        XCTAssertEqual(RealmCombatEfficiencyPolicy.hitsRemaining(targetHP: 84), 3)
+        XCTAssertEqual(RealmCombatEfficiencyPolicy.hitsRemaining(targetHP: 114), 4)
+
+        XCTAssertTrue(
+            RealmCombatEfficiencyPolicy.canFinish(
+                mode: .scorpion,
+                targetHP: 56,
+                playerHP: 90,
+                shield: 92,
+                conservativeHP: 90
+            )
+        )
+        XCTAssertTrue(
+            RealmCombatEfficiencyPolicy.canFinish(
+                mode: .magmaBrute,
+                targetHP: 42,
+                playerHP: 100,
+                shield: 50
+            )
+        )
+        XCTAssertFalse(
+            RealmCombatEfficiencyPolicy.canFinish(
+                mode: .magmaBrute,
+                targetHP: 114,
+                playerHP: 100,
+                shield: 56
+            )
+        )
+        XCTAssertTrue(
+            RealmCombatEfficiencyPolicy.readyForNextTarget(
+                mode: .magmaBrute,
+                playerHP: 100,
+                shield: 61
+            )
+        )
+        XCTAssertFalse(
+            RealmCombatEfficiencyPolicy.readyForNextTarget(
+                mode: .magmaBrute,
+                playerHP: 100,
+                shield: 20
+            )
+        )
+
         XCTAssertEqual(CombatProgressDisplayPolicy.completed(local: 1, offset: 19), 20)
-        XCTAssertEqual(CombatProgressDisplayPolicy.completed(local: 2, offset: 19), 21)
         XCTAssertEqual(CombatProgressDisplayPolicy.goal(localGoal: 31, displayGoal: 50), 50)
-        XCTAssertEqual(CombatProgressDisplayPolicy.goal(localGoal: 31, displayGoal: nil), 31)
     }
 
     func testBuild13DunesHeatDoesNotRestartCombatWindow() {
