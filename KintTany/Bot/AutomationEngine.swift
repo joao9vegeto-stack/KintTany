@@ -2135,6 +2135,10 @@ actor AutomationEngine {
         self.gatherPositionMemory = gatherKnowledge.positionSnapshot(region: bootstrap.region)
     }
 
+    static var combatWorldBootstrap: PresenceBootstrap {
+        PresenceBootstrap(region: "world", position: Position(x: 22.5, z: -3.5))
+    }
+
     static func bootstrap(for mode: ActivityMode, fishingBait: FishingBait) -> PresenceBootstrap {
         guard mode == .fishing else { return bootstrap(for: mode) }
         switch fishingBait {
@@ -2971,6 +2975,84 @@ func makeRecoveryProgressAnchor(for mode: ActivityMode) async -> ActivityRecover
         try await waitForCombatSafetyWindow(reason: reason)
         guard playerHP > 0 else { return .dead }
         try await exitWildToWorld(reason: reason)
+        return .worldSafe
+    }
+
+    func runEmergencyRealmMobExit(
+        mode: ActivityMode,
+        reason: String = "reconexão de emergência"
+    ) async throws -> EmergencyWildExitResult {
+        guard mode.isRealmMobCombat else {
+            return try await runEmergencyWildExit(mode: mode, reason: reason)
+        }
+
+        let profile = CombatMobProfile.profile(for: mode)
+        reporter(.state(.recovering, "Sincronizando estado de \(mode.displayName)"))
+        let syncDeadline = nowMS + 8_000
+        var sawDeadHP = playerHP <= 0
+
+        while nowMS < syncDeadline {
+            try Task.checkCancellation()
+            if playerHP <= 0 { sawDeadHP = true }
+
+            if let authoritative = serverRegion?.lowercased(), !authoritative.isEmpty {
+                region = authoritative
+                if authoritative != profile.region {
+                    if playerHP > 0 {
+                        if sawDeadHP {
+                            reporter(.log("♻️ \(mode.displayName) • respawn autoritativo confirmado • região=\(authoritative) • HP \(playerHP)"))
+                            return .respawnConfirmed
+                        }
+                        reporter(.log("✅ \(mode.displayName) • personagem vivo já está fora de \(profile.region) • região=\(authoritative)"))
+                        return .alreadyWorld
+                    }
+                } else if playerHP > 0 {
+                    break
+                }
+            }
+            try await sleep(80)
+        }
+
+        if sawDeadHP && playerHP <= 0 {
+            reporter(.log("💀 \(mode.displayName) • morte observada • respawn ainda não confirmou HP positivo"))
+            return .dead
+        }
+
+        guard let authoritative = serverRegion?.lowercased(), authoritative == profile.region else {
+            if playerHP > 0,
+               let authoritative = serverRegion?.lowercased(),
+               !authoritative.isEmpty,
+               authoritative != profile.region {
+                return .alreadyWorld
+            }
+            throw EngineError.regionNotConfirmed("estado autoritativo de \(profile.region) após reconexão")
+        }
+        guard playerHP > 0 else { return .dead }
+
+        // Same conservative discipline used by Zombie/Dragon: after a partially
+        // offline combat window, restart the 10 s safety timer instead of guessing.
+        let recoveredAt = nowMS
+        lastCombatActivityAt = recoveredAt
+        lastCombatDamageAt = recoveredAt
+        safeStopReason = .connectionLoss
+        reporter(.log("🛡️ \(mode.displayName) confirmado após \(reason) • ataques suspensos • alcançando fronteira segura antes de reconstruir World/BANK-FIRST"))
+
+        try await moveToWildSafeCamp(reason: reason)
+        guard playerHP > 0 else { return .dead }
+        try await waitForCombatSafetyWindow(reason: reason)
+        guard playerHP > 0 else { return .dead }
+
+        if mode == .scorpion {
+            try await exitDunesToShores(
+                reason: reason,
+                expectedTool: nil,
+                expectedLifeEpoch: lifeEpoch,
+                allowInconclusiveSurvivalAfterConfirmedShores: true
+            )
+            reporter(.log("🏖️ Giant Scorpion • The Shores confirmada • fronteira segura pronta para reconstrução no World"))
+        } else {
+            reporter(.log("🏕️ Magma Brute • Safe Zone Emberstone + combat timer confirmados • fronteira segura pronta para reconstrução no World"))
+        }
         return .worldSafe
     }
 

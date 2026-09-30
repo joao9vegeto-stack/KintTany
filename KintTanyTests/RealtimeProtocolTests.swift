@@ -289,6 +289,17 @@ final class RealtimeProtocolTests: XCTestCase {
         XCTAssertEqual(CombatMobProfile.profile(for: .magmaBrute).authoritativeHP, 150)
     }
 
+    func testBuild12_2RealmMobsShareCombatRecoveryOwnerAndWorldRebuild() {
+        XCTAssertTrue(ActivityMode.zombie.usesCombatRecoveryOwner)
+        XCTAssertTrue(ActivityMode.dragon.usesCombatRecoveryOwner)
+        XCTAssertTrue(ActivityMode.scorpion.usesCombatRecoveryOwner)
+        XCTAssertTrue(ActivityMode.magmaBrute.usesCombatRecoveryOwner)
+
+        XCTAssertEqual(AutomationEngine.combatWorldBootstrap.region, "world")
+        XCTAssertEqual(AutomationEngine.bootstrap(for: .scorpion).region, "desert")
+        XCTAssertEqual(AutomationEngine.bootstrap(for: .magmaBrute).region, "ember")
+    }
+
     func testBuild12RealmMobRespawnTimersAndRecoveryLaneMatchClient() {
         XCTAssertEqual(RealmMobRespawnPolicy.giantScorpionMS, 20_000)
         XCTAssertEqual(RealmMobRespawnPolicy.magmaBruteMS, 90_000)

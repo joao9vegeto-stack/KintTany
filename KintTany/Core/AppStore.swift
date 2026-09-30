@@ -100,6 +100,12 @@ enum ActivityMode: String, CaseIterable, Codable, Identifiable {
         isWildCombat || isRealmMobCombat
     }
 
+    /// Build 12.2: Zombie/Dragon/Scorpion/Magma Brute share one session
+    /// continuation/reconnection owner. Only realm boundary and mob rules differ.
+    var usesCombatRecoveryOwner: Bool {
+        isMobCombat
+    }
+
     var isGathering: Bool {
         self == .tree || self == .stone || self == .coal || self == .iron || self == .silver || self == .cacti
     }
@@ -1423,7 +1429,7 @@ final class AppStore: ObservableObject {
         failure: String,
         resumeSessionAfterBoundary: Bool = true
     ) async -> Bool {
-        guard activeRunID == runID, activity == mode, mode.isWildCombat else { return false }
+        guard activeRunID == runID, activity == mode, mode.usesCombatRecoveryOwner else { return false }
 
         diagnostic("[WILD][FAILSAFE] \(failure) • convertendo falha operacional em recovery contínuo")
         state = .recovering
@@ -1432,10 +1438,18 @@ final class AppStore: ObservableObject {
         updateContinuedProcessingProgress(forceTitleUpdate: true)
 
         do {
-            let outcome = try await engine.runEmergencyWildExit(
-                mode: mode,
-                reason: "falha operacional: \(failure)"
-            )
+            let outcome: EmergencyWildExitResult
+            if mode.isRealmMobCombat {
+                outcome = try await engine.runEmergencyRealmMobExit(
+                    mode: mode,
+                    reason: "falha operacional: \(failure)"
+                )
+            } else {
+                outcome = try await engine.runEmergencyWildExit(
+                    mode: mode,
+                    reason: "falha operacional: \(failure)"
+                )
+            }
             await importSocketTrace()
 
             guard activeRunID == runID, activity == mode else { return false }
@@ -2088,7 +2102,7 @@ final class AppStore: ObservableObject {
         if mode == .chicken || mode.isMobCombat {
             let statePart = stats.stateConfirmedHits > 0 ? " • por estado \(stats.stateConfirmedHits)" : ""
             log("Combate • hits enviados \(stats.hits) • hits ACK \(stats.confirmedHits)\(statePart) • ACK timeout \(stats.hitAckTimeouts) (FG \(stats.hitAckTimeoutsForeground) / BG \(stats.hitAckTimeoutsBackground)) • kills \(stats.kills)")
-            if mode.isWildCombat {
+            if mode.usesCombatRecoveryOwner {
                 log("Poções • drink_ack timeout \(stats.potionAckTimeouts) (FG \(stats.potionAckTimeoutsForeground) / BG \(stats.potionAckTimeoutsBackground))")
             }
         }
@@ -2828,6 +2842,28 @@ final class AppStore: ObservableObject {
             // terminal state in case MainActor still has telemetry queued.
             stats.successes = max(stats.successes, result.successes)
 
+            if mode.isRealmMobCombat,
+               result.stoppedSafely,
+               result.stopReason == .combatSupplies,
+               requestedStopReason != .user,
+               let shard = activeShard {
+                connectionRecoveryRequested = true
+                connectionRecoveryDetail = "reposição de suprimentos em fronteira segura"
+                state = .recovering
+                statusMessage = "\(mode.localizedTitle) • reabastecendo no World"
+                stats.lastEvent = "realm combat • reposição World/banco"
+                updateContinuedProcessingProgress(forceTitleUpdate: true)
+                log("🔄 \(mode.localizedTitle) • suprimento chegou a zero • progresso \(stats.successes)/\(runGoal) preservado • indo ao World repor e voltar à mesma meta")
+                _ = await recoverWildAfterUnexpectedDisconnect(
+                    mode: mode,
+                    runID: runID,
+                    shard: shard,
+                    cookie: cookie,
+                    confirmedWorldBoundary: true
+                )
+                return
+            }
+
             if let reason = realtimeFailureMessage {
                 connected = false
                 currentTarget = nil
@@ -2932,7 +2968,7 @@ final class AppStore: ObservableObject {
         } catch is CancellationError {
             await importSocketTrace()
             guard activeRunID == runID else { return }
-            if mode.isWildCombat, connectionRecoveryRequested, let shard = activeShard {
+            if mode.usesCombatRecoveryOwner, connectionRecoveryRequested, let shard = activeShard {
                 _ = await recoverWildAfterUnexpectedDisconnect(mode: mode, runID: runID, shard: shard, cookie: cookie)
                 return
             }
@@ -2948,7 +2984,7 @@ final class AppStore: ObservableObject {
                 )
                 return
             }
-            if mode.isWildCombat, let activeEngine, let shard = activeShard {
+            if mode.usesCombatRecoveryOwner, let activeEngine, let shard = activeShard {
                 await containWildTerminalFailure(
                     mode: mode,
                     runID: runID,
@@ -3023,7 +3059,7 @@ final class AppStore: ObservableObject {
             }
             if let engineError = error as? EngineError,
                case .playerDead = engineError,
-               mode.isWildCombat,
+               mode.usesCombatRecoveryOwner,
                let shard = activeShard {
                 log("💀 \(mode.localizedTitle) • morte detectada • aguardando respawn autoritativo para continuar \(stats.successes)/\(runGoal)")
                 requestWildConnectionRecovery(
@@ -3034,7 +3070,7 @@ final class AppStore: ObservableObject {
                 _ = await recoverWildAfterUnexpectedDisconnect(mode: mode, runID: runID, shard: shard, cookie: cookie)
                 return
             }
-            if mode.isWildCombat, connectionRecoveryRequested, let shard = activeShard {
+            if mode.usesCombatRecoveryOwner, connectionRecoveryRequested, let shard = activeShard {
                 _ = await recoverWildAfterUnexpectedDisconnect(mode: mode, runID: runID, shard: shard, cookie: cookie)
                 return
             }
@@ -3082,7 +3118,7 @@ final class AppStore: ObservableObject {
             // RC3.4: um World sem ACK pode já ter sido aplicado pelo servidor.
             // Reconecte no mesmo shard e deixe snapshot autoritativo decidir se
             // já estamos em World ou se ainda é preciso concluir safe-exit.
-            if mode.isWildCombat,
+            if mode.usesCombatRecoveryOwner,
                let engineError = error as? EngineError,
                case .worldExitUnconfirmed = engineError,
                let shard = activeShard {
@@ -3101,7 +3137,7 @@ final class AppStore: ObservableObject {
             // combat, confirm authoritative state and leave through World. If
             // that cannot be completed on this socket, the existing emergency
             // reconnect becomes the only owner of teardown/recovery.
-            if mode.isWildCombat, let activeEngine, let shard = activeShard {
+            if mode.usesCombatRecoveryOwner, let activeEngine, let shard = activeShard {
                 await containWildTerminalFailure(
                     mode: mode,
                     runID: runID,
@@ -3160,7 +3196,7 @@ final class AppStore: ObservableObject {
         // RC3: em Wilderness uma queda real de rede não encerra a proteção de
         // imediato. Congela a engine antiga e tenta recuperar a mesma Presence
         // no mesmo shard exclusivamente para voltar ao World com segurança.
-        if mode.isWildCombat {
+        if mode.usesCombatRecoveryOwner {
             requestWildConnectionRecovery(reason: reason, runID: runID)
             await socket.close()
             return
@@ -3992,7 +4028,7 @@ final class AppStore: ObservableObject {
     /// Receive/heartbeat callbacks only request recovery; the parent run Task is
     /// the single owner of the reconnect loop, preventing double reconnects.
     private func requestWildConnectionRecovery(reason: String, runID: UUID) {
-        guard activeRunID == runID, activity?.isWildCombat == true, !terminalFailureHandled else { return }
+        guard activeRunID == runID, activity?.usesCombatRecoveryOwner == true, !terminalFailureHandled else { return }
 
         let lower = reason.lowercased()
         let worldVerification = lower.contains("world") && lower.contains("confirma")
@@ -4001,15 +4037,15 @@ final class AppStore: ObservableObject {
 
         if !connectionRecoveryRequested {
             connectionRecoveryDetail = reason
-            diagnostic("[WARN] \(reason) • Wilderness: reconexão de emergência solicitada")
+            diagnostic("[WARN] \(reason) • combate: reconexão de emergência solicitada")
             if deathRecovery {
-                log("💀 Morte/respawn em verificação no Wild • ataques suspensos • progresso preservado • recovery continuará até reconstruir o fluxo")
+                log("💀 Morte/respawn em verificação no combate • ataques suspensos • progresso preservado • recovery continuará até reconstruir o fluxo")
             } else if worldVerification {
                 log("🔎 Saída para World sem confirmação • nenhum novo ataque será enviado • verificando região por reconexão")
             } else if degradedPresence {
-                log("⚠️ Presence degradada no Wild • ataques suspensos • reconectando para confirmar estado e sair com segurança")
+                log("⚠️ Presence degradada no combate • ataques suspensos • reconectando para confirmar estado e sair com segurança")
             } else {
-                log("⚠️ Conexão perdida no Wild • nenhum novo ataque será enviado • aguardando rede para retornar ao World e continuar a meta")
+                log("⚠️ Conexão perdida no combate • nenhum novo ataque será enviado • aguardando rede para retornar ao World e continuar a meta")
             }
         }
         connectionRecoveryRequested = true
@@ -4040,7 +4076,7 @@ final class AppStore: ObservableObject {
         cookie: String,
         confirmedWorldBoundary: Bool = false
     ) async -> Bool {
-        guard activeRunID == runID, mode.isWildCombat else { return false }
+        guard activeRunID == runID, mode.usesCombatRecoveryOwner else { return false }
         guard !connectionRecoveryInProgress else { return false }
         connectionRecoveryInProgress = true
         defer { connectionRecoveryInProgress = false }
@@ -4080,7 +4116,16 @@ final class AppStore: ObservableObject {
                     diagnostic("[WILD][RECOVERY] World já confirmado pela Presence anterior • pulando bootstrap Wild de verificação")
                     log("🛡️ Wild recovery • World seguro já confirmado • reconstruindo fluxo sem reabrir Wilderness prematuramente")
                 } else {
-                    let recoveryRegion = player.region.lowercased().hasPrefix("wild") ? player.region : "wild"
+                    let currentRegion = player.region.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+                    let recoveryRegion: String
+                    if mode.isRealmMobCombat {
+                        let expectedRegion = AutomationEngine.bootstrap(for: mode).region
+                        recoveryRegion = (currentRegion == expectedRegion || currentRegion == "world" || currentRegion == "beach")
+                            ? currentRegion
+                            : expectedRegion
+                    } else {
+                        recoveryRegion = currentRegion.hasPrefix("wild") ? player.region : "wild"
+                    }
                     let recoveryBootstrap = PresenceBootstrap(
                         region: recoveryRegion,
                         position: player.position,
@@ -4118,10 +4163,17 @@ final class AppStore: ObservableObject {
                     updateContinuedProcessingProgress(forceTitleUpdate: true)
                     log("🔁 Conexão Wild restaurada no \(shard) • confirmando World/respawn antes de retomar")
 
-                    outcome = try await recoveryEngine.runEmergencyWildExit(
-                        mode: mode,
-                        reason: requestedStopReason == .user ? "STOP após recovery" : "recovery de sessão"
-                    )
+                    if mode.isRealmMobCombat {
+                        outcome = try await recoveryEngine.runEmergencyRealmMobExit(
+                            mode: mode,
+                            reason: requestedStopReason == .user ? "STOP após recovery" : "recovery de sessão"
+                        )
+                    } else {
+                        outcome = try await recoveryEngine.runEmergencyWildExit(
+                            mode: mode,
+                            reason: requestedStopReason == .user ? "STOP após recovery" : "recovery de sessão"
+                        )
+                    }
 
                     receiverTask?.cancel()
                     receiverTask = nil
@@ -4192,7 +4244,7 @@ final class AppStore: ObservableObject {
                 // Start a completely fresh World Presence on the same shard.
                 // runWild will re-run BANK-FIRST, select/equip the best sword,
                 // replenish potions/vitals and enter Wilderness again.
-                let worldBootstrap = AutomationEngine.bootstrap(for: mode)
+                let worldBootstrap = AutomationEngine.combatWorldBootstrap
                 state = .connecting
                 statusMessage = "Recovery concluído • reconstruindo combate"
                 stats.lastEvent = "Wild recovery • World/bank"
@@ -4206,7 +4258,7 @@ final class AppStore: ObservableObject {
                 await importSocketTrace()
                 guard activeRunID == runID, activity == mode else { return false }
 
-                let resumedEngine = AutomationEngine(
+                let worldEngine = AutomationEngine(
                     socket: socket,
                     cookie: cookie,
                     shard: shard,
@@ -4216,15 +4268,70 @@ final class AppStore: ObservableObject {
                     blacksmithSelection: selectedBlacksmith,
                     reporter: engineReporter(runID: runID)
                 )
-                activeEngine = resumedEngine
+                activeEngine = worldEngine
                 receiverTask = await makeReceiverTask(
                     stream: worldStream,
-                    engine: resumedEngine,
+                    engine: worldEngine,
                     mode: mode,
                     runID: runID
                 )
                 connected = true
-                await resumedEngine.prepareIdentity()
+                await worldEngine.prepareIdentity()
+
+                var resumedEngine = worldEngine
+                if mode.isRealmMobCombat {
+                    state = .syncing
+                    statusMessage = "\(mode.localizedTitle) • repondo no World"
+                    stats.lastEvent = "realm combat • BANK-FIRST/reposição"
+                    updateContinuedProcessingProgress(forceTitleUpdate: true)
+                    log("🏦 \(mode.localizedTitle) • fronteira segura confirmada • reconstruindo loadout no World sem encerrar a sessão")
+
+                    try await worldEngine.prepareRealmCombatLoadoutFromWorld(for: mode)
+                    guard activeRunID == runID, activity == mode else { return false }
+
+                    receiverTask?.cancel()
+                    receiverTask = nil
+                    activeEngine = nil
+                    connected = false
+                    await socket.close()
+                    await importSocketTrace()
+
+                    let activityBootstrap = AutomationEngine.bootstrap(for: mode)
+                    state = .connecting
+                    statusMessage = "Reposição concluída • retornando a \(mode.localizedTitle)"
+                    stats.lastEvent = "realm combat • retornando \(activityBootstrap.region)"
+                    updateContinuedProcessingProgress(forceTitleUpdate: true)
+
+                    let activityStream = try await socket.connect(
+                        session: session,
+                        shard: shard,
+                        bootstrap: activityBootstrap
+                    )
+                    await importSocketTrace()
+                    guard activeRunID == runID, activity == mode else { return false }
+
+                    let activityEngine = AutomationEngine(
+                        socket: socket,
+                        cookie: cookie,
+                        shard: shard,
+                        bootstrap: activityBootstrap,
+                        fishingBait: selectedFishingBait,
+                        roastMode: selectedRoastMode,
+                        blacksmithSelection: selectedBlacksmith,
+                        reporter: engineReporter(runID: runID)
+                    )
+                    activeEngine = activityEngine
+                    receiverTask = await makeReceiverTask(
+                        stream: activityStream,
+                        engine: activityEngine,
+                        mode: mode,
+                        runID: runID
+                    )
+                    connected = true
+                    await activityEngine.prepareIdentity()
+                    resumedEngine = activityEngine
+                    log("↩️ \(mode.localizedTitle) • reposição concluída • nova Presence \(activityBootstrap.region) no mesmo shard \(shard) • meta preservada \(preserved)/\(sessionGoal)")
+                }
 
                 connectionRecoveryRequested = false
                 connectionRecoveryDetail = nil
@@ -4267,6 +4374,22 @@ final class AppStore: ObservableObject {
                         logSessionSummary(mode: mode, outcome: "META CONCLUÍDA APÓS RECOVERY")
                         finishContinuedProcessing(success: true, reason: "meta concluída após recovery Wild")
                         return true
+                    }
+
+                    if phaseResult.stoppedSafely,
+                       phaseResult.stopReason == .combatSupplies,
+                       mode.isRealmMobCombat,
+                       requestedStopReason != .user {
+                        connectionRecoveryRequested = true
+                        connectionRecoveryDetail = "nova reposição em fronteira segura"
+                        worldBoundaryAlreadyConfirmed = true
+                        log("🔄 \(mode.localizedTitle) • nova reposição necessária • \(stats.successes)/\(sessionGoal) preservado • voltando ao World sem encerrar")
+                        receiverTask?.cancel()
+                        receiverTask = nil
+                        activeEngine = nil
+                        connected = false
+                        await socket.close()
+                        continue
                     }
 
                     if phaseResult.stoppedSafely,
@@ -4577,7 +4700,7 @@ final class AppStore: ObservableObject {
             // Heartbeat send failure is a transport failure. In Wild it must
             // enter the same emergency-reconnect state machine as a receive-loop
             // close; cancelling the parent here would prevent the eventual safe exit.
-            if currentMode.isWildCombat {
+            if currentMode.usesCombatRecoveryOwner {
                 requestWildConnectionRecovery(reason: reason, runID: runID)
                 Task { [weak self] in await self?.socket.close() }
                 return
