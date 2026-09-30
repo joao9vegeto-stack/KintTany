@@ -1811,12 +1811,19 @@ struct DesertCombatConsumablePolicy {
     }
 }
 
+struct RealmMobRespawnPolicy {
+    static let giantScorpionMS: Double = 20_000
+    static let magmaBruteMS: Double = 90_000
+}
+
 struct CombatMobProfile {
     let region: String
     let targetType: String
     let entryPosition: Position
     let safePosition: Position
+    let combatRecoveryPosition: Position?
     let authoritativeHP: Int
+    let respawnMS: Double?
 
     static func profile(for mode: ActivityMode) -> CombatMobProfile {
         switch mode {
@@ -1826,7 +1833,9 @@ struct CombatMobProfile {
                 targetType: "dragon",
                 entryPosition: Position(x: 0.5, z: 23.5),
                 safePosition: Position(x: 0.5, z: 22.5),
-                authoritativeHP: 75
+                combatRecoveryPosition: nil,
+                authoritativeHP: 75,
+                respawnMS: nil
             )
         case .scorpion:
             // Current client: Dunes East = realm desert, 9 Giant Scorpions,
@@ -1836,7 +1845,9 @@ struct CombatMobProfile {
                 targetType: "scorpion",
                 entryPosition: Position(x: -9.5, z: -18.5),
                 safePosition: Position(x: -9.5, z: -18.5),
-                authoritativeHP: 200
+                combatRecoveryPosition: nil,
+                authoritativeHP: 200,
+                respawnMS: RealmMobRespawnPolicy.giantScorpionMS
             )
         case .magmaBrute:
             // Current client: Emberstone = realm ember, 3 Brutes,
@@ -1846,7 +1857,9 @@ struct CombatMobProfile {
                 targetType: "magma_brute",
                 entryPosition: Position(x: -9.5, z: 17.5),
                 safePosition: Position(x: -9.5, z: 17.5),
-                authoritativeHP: 150
+                combatRecoveryPosition: Position(x: -9.5, z: 14.5),
+                authoritativeHP: 150,
+                respawnMS: RealmMobRespawnPolicy.magmaBruteMS
             )
         default:
             return CombatMobProfile(
@@ -1854,7 +1867,9 @@ struct CombatMobProfile {
                 targetType: "zombie",
                 entryPosition: Position(x: 0.5, z: 23.5),
                 safePosition: Position(x: 0.5, z: 22.5),
-                authoritativeHP: 100
+                combatRecoveryPosition: nil,
+                authoritativeHP: 100,
+                respawnMS: nil
             )
         }
     }
@@ -2031,6 +2046,14 @@ actor AutomationEngine {
     private var wildGrantSerial = 0
     private var recentWildGrants: [WildGrant] = []
     private var lastWildAvailabilitySignature = ""
+
+    private struct RealmMobRespawnWatch {
+        let diedAtMS: Double
+        let dueAtMS: Double
+        let source: String
+    }
+    private var realmMobRespawns: [Int: RealmMobRespawnWatch] = [:]
+    private var lastRealmRespawnWaitSignature = ""
 
     // MARK: Wilderness potions / defensive recovery (ported from Node v5.2.1)
     // HP/Shield remain server-authoritative. Potion ticks only PROPOSE php/wsh in
@@ -2855,6 +2878,8 @@ func makeRecoveryProgressAnchor(for mode: ActivityMode) async -> ActivityRecover
         gatherSuccessOffset = max(0, successOffset)
         gatherDisplayGoal = displayGoal
         safeStopCompleted = false
+        realmMobRespawns.removeAll()
+        lastRealmRespawnWaitSignature = ""
         try Task.checkCancellation()
 
         switch mode {
@@ -6022,7 +6047,11 @@ func makeRecoveryProgressAnchor(for mode: ActivityMode) async -> ActivityRecover
             let candidates = wildMobs.values.filter { $0.alive && $0.type == targetType }
             guard var target = nearestMob(in: candidates) else {
                 reporter(.target(nil))
-                try await sleep(900)
+                if mode.isRealmMobCombat {
+                    try await waitForAuthoritativeRealmMobRespawn(mode: mode)
+                } else {
+                    try await sleep(900)
+                }
                 continue
             }
 
@@ -6342,6 +6371,9 @@ func makeRecoveryProgressAnchor(for mode: ActivityMode) async -> ActivityRecover
             }
 
             if killed {
+                if mode.isRealmMobCombat {
+                    registerRealmMobDeath(index: target.index, mode: mode, source: "kill autoritativa do bot")
+                }
                 successes += 1
                 reporter(.kill)
                 reporter(.success(nil))
@@ -6492,7 +6524,19 @@ func makeRecoveryProgressAnchor(for mode: ActivityMode) async -> ActivityRecover
 
         reporter(.state(.recovering, "Preparando vitais antes do próximo alvo"))
         reporter(.log("🛡️ Pré-combate • HP \(playerHP)/\(limits.preFightHP) • shield \(playerShield)/\(limits.preFightShield)"))
-        try await moveToWildSafeCamp(reason: "pré-combate")
+
+        if mode == .scorpion, playerHP < limits.preFightHP {
+            // Cura HP antes de entrar em qualquer pen/safe-zone. The Shores não
+            // é uma área de combate e nunca recebe ticks sintéticos de poção.
+            try await recoverScorpionVitals(preFight: false)
+            if safeStopReason != nil { return }
+        }
+
+        if mode == .magmaBrute, playerHP < limits.preFightHP {
+            try await moveToRealmCombatRecoveryLane(mode: mode, reason: "pré-combate")
+        } else {
+            try await moveToWildSafeCamp(reason: "pré-combate")
+        }
         try await recoverVitals(mode: mode, preFight: true)
     }
 
@@ -6666,11 +6710,23 @@ func makeRecoveryProgressAnchor(for mode: ActivityMode) async -> ActivityRecover
         reporter(.state(.recovering, "Recuando • mantendo \(targetName)"))
         let reasonText = reasonLabel ?? "vitais baixos"
         reporter(.log("🏃 \(reasonText) • mantendo \(targetName) travado • HP \(playerHP) + shield \(playerShield)"))
-        try await moveToWildSafeCamp(reason: "\(targetName) • \(reasonText)")
+
+        let limits = wildCombatLimits(mode)
+        if mode == .scorpion, playerHP < limits.preFightHP {
+            try await recoverScorpionVitals(preFight: false)
+            if safeStopReason != nil { return false }
+        }
+
+        if mode == .magmaBrute, playerHP < limits.preFightHP {
+            try await moveToRealmCombatRecoveryLane(
+                mode: mode,
+                reason: "\(targetName) • \(reasonText)"
+            )
+        } else {
+            try await moveToWildSafeCamp(reason: "\(targetName) • \(reasonText)")
+        }
         if safeStopReason != nil { return false }
 
-        // Se alguma poção já está em zero, não entre num ciclo de recovery sem
-        // suprimento. Saia de forma segura, reponha e tente o mesmo mob.
         if let reason = try await confirmedPotionResupplyReason(mode: mode, includeStrengthWhileBuffed: true) {
             return try await resupplyLockedWildTarget(
                 mode: mode,
@@ -6683,8 +6739,6 @@ func makeRecoveryProgressAnchor(for mode: ActivityMode) async -> ActivityRecover
         try await recoverVitals(mode: mode, preFight: preFightRecovery)
         if safeStopReason != nil { return false }
 
-        // Uma das doses usadas no recovery pode ter zerado a categoria. Nesse
-        // caso reabasteça antes de voltar a atacar o alvo travado.
         if let reason = try await confirmedPotionResupplyReason(mode: mode, includeStrengthWhileBuffed: true) {
             return try await resupplyLockedWildTarget(
                 mode: mode,
@@ -6763,9 +6817,16 @@ func makeRecoveryProgressAnchor(for mode: ActivityMode) async -> ActivityRecover
             try await prepareScorpionCombatLoadoutFromWorld()
             return
         }
+
         try await refreshPotionStock(logSummary: true)
         let reason = localPotionZeroReason(mode: mode, includeStrengthWhileBuffed: true)
+        let realtimeRevisionBeforePreflight = realtimeOwnHPRevision
         try await prepareWorldCombatSession(resupplyReason: reason)
+
+        if mode == .magmaBrute {
+            reporter(.log("💚 Magma Brute • recuperação no World antes da Emberstone; Health Potion não será gasta na safe camp"))
+            try await recoverDunesHPInWorldBeforeEntry(afterRealtimeRevision: realtimeRevisionBeforePreflight)
+        }
     }
 
     private func prepareScorpionCombatLoadoutFromWorld() async throws {
@@ -7303,6 +7364,26 @@ func makeRecoveryProgressAnchor(for mode: ActivityMode) async -> ActivityRecover
             reporter(.diagnostic("[XP] Kill confirmada, mas delta Combat XP ainda 0; esperado normal ~\(expectedNormal)"))
         }
         return CombatXPResult(gain: gain, sessionGain: sessionGain, total: total)
+    }
+
+    private func moveToRealmCombatRecoveryLane(mode: ActivityMode, reason: String) async throws {
+        let profile = CombatMobProfile.profile(for: mode)
+        guard let recovery = profile.combatRecoveryPosition else {
+            try await moveToWildSafeCamp(reason: reason)
+            return
+        }
+
+        reporter(.state(.moving, "Recuando para faixa de recovery com combate"))
+        reporter(.log("🧪 \(mode.displayName) • recovery fora da safe camp • motivo=\(reason)"))
+        if hypot(position.x - recovery.x, position.z - recovery.z) > 0.8 {
+            try await walk(
+                to: recovery,
+                maxSeconds: 35,
+                status: "Recuando para zona onde poções têm tick autoritativo"
+            )
+        }
+        try await sendPosition(moving: false, full: true)
+        try await sleep(450)
     }
 
     private func moveToWildSafeCamp(reason: String) async throws {
@@ -8158,6 +8239,33 @@ func makeRecoveryProgressAnchor(for mode: ActivityMode) async -> ActivityRecover
             guard let pos = mobPosition(mob, offset: authoritativeRegion.hasPrefix("wild") ? -24.5 : -19.5) else { continue }
             next[index] = LiveMob(index: index, type: type, hp: hp, position: pos, alive: (hp ?? 1) > 0)
         }
+        if let mode = activeCombatMode, mode.isRealmMobCombat {
+            let profile = CombatMobProfile.profile(for: mode)
+            let observedAt = nowMS
+
+            for (index, previous) in wildMobs where previous.alive && previous.type == profile.targetType {
+                let current = next[index]
+                if current == nil || current?.alive == false || (current?.hp ?? 1) <= 0 {
+                    if realmMobRespawns[index] == nil, let respawnMS = profile.respawnMS {
+                        realmMobRespawns[index] = RealmMobRespawnWatch(
+                            diedAtMS: observedAt,
+                            dueAtMS: observedAt + respawnMS,
+                            source: "snapshot"
+                        )
+                        reporter(.diagnostic("[RESPAWN] \(profile.targetType) #\(index) morreu/despawnou • timer \(Int(respawnMS / 1_000))s iniciado"))
+                    }
+                }
+            }
+
+            for (index, current) in next where current.alive && current.type == profile.targetType {
+                if let watch = realmMobRespawns.removeValue(forKey: index) {
+                    let elapsed = max(0, observedAt - watch.diedAtMS) / 1_000
+                    reporter(.log("✅ \(mode.displayName) #\(index) respawn confirmado por snapshot • \(String(format: "%.1f", elapsed))s após morte observada"))
+                    lastRealmRespawnWaitSignature = ""
+                }
+            }
+        }
+
         wildMobs = next
         wildSnapshotSerial += 1
         await wildStateEventGate.signal()
@@ -8198,6 +8306,69 @@ func makeRecoveryProgressAnchor(for mode: ActivityMode) async -> ActivityRecover
         try await walk(to: target, maxSeconds: 30, status: "Aproximando do \(label) #\(mob.index)")
         position.ry = atan2(mob.position.x - position.x, mob.position.z - position.z)
         try await sendPosition(moving: false)
+    }
+
+    private func registerRealmMobDeath(index: Int, mode: ActivityMode, source: String) {
+        guard mode.isRealmMobCombat,
+              let respawnMS = CombatMobProfile.profile(for: mode).respawnMS
+        else { return }
+
+        let observedAt = nowMS
+        if let existing = realmMobRespawns[index], existing.dueAtMS > observedAt { return }
+
+        realmMobRespawns[index] = RealmMobRespawnWatch(
+            diedAtMS: observedAt,
+            dueAtMS: observedAt + respawnMS,
+            source: source
+        )
+        reporter(.log("⏳ \(mode.displayName) #\(index) • respawn previsto em \(Int(respawnMS / 1_000))s • confirmação final será pelo snapshot"))
+    }
+
+    private func waitForAuthoritativeRealmMobRespawn(mode: ActivityMode) async throws {
+        guard mode.isRealmMobCombat else {
+            try await sleep(900)
+            return
+        }
+
+        guard let next = realmMobRespawns.min(by: { $0.value.dueAtMS < $1.value.dueAtMS }) else {
+            let signature = "\(mode.displayName):unknown"
+            if signature != lastRealmRespawnWaitSignature {
+                lastRealmRespawnWaitSignature = signature
+                reporter(.state(.cooldown, "Aguardando respawn autoritativo"))
+                reporter(.log("⏳ \(mode.displayName) • nenhum alvo vivo e horário da morte desconhecido • aguardando snapshot sem inventar timer"))
+            }
+            let serial = await wildStateEventGate.serial
+            _ = try await wildStateEventGate.wait(after: serial, timeoutMS: 3_000)
+            return
+        }
+
+        let index = next.key
+        let watch = next.value
+        let remainingMS = watch.dueAtMS - nowMS
+        if remainingMS > 0 {
+            let remainingSeconds = max(1, Int(ceil(remainingMS / 1_000)))
+            let signature = "\(mode.displayName):\(index):\(remainingSeconds / 5)"
+            if signature != lastRealmRespawnWaitSignature {
+                lastRealmRespawnWaitSignature = signature
+                reporter(.state(.cooldown, "Respawn em ~\(remainingSeconds)s"))
+                reporter(.log("⏳ \(mode.displayName) #\(index) • próximo respawn previsto em ~\(remainingSeconds)s"))
+            }
+            let serial = await wildStateEventGate.serial
+            _ = try await wildStateEventGate.wait(
+                after: serial,
+                timeoutMS: Int(min(5_000.0, max(100.0, remainingMS)))
+            )
+            return
+        }
+
+        let signature = "\(mode.displayName):\(index):due"
+        if signature != lastRealmRespawnWaitSignature {
+            lastRealmRespawnWaitSignature = signature
+            reporter(.state(.cooldown, "Janela de respawn atingida"))
+            reporter(.log("⏱️ \(mode.displayName) #\(index) • timer previsto atingido • aguardando snapshot autoritativo"))
+        }
+        let serial = await wildStateEventGate.serial
+        _ = try await wildStateEventGate.wait(after: serial, timeoutMS: 3_000)
     }
 
     // MARK: - Parsing / helpers

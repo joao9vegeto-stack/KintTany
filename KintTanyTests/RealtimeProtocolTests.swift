@@ -289,6 +289,15 @@ final class RealtimeProtocolTests: XCTestCase {
         XCTAssertEqual(CombatMobProfile.profile(for: .magmaBrute).authoritativeHP, 150)
     }
 
+    func testBuild12RealmMobRespawnTimersAndRecoveryLaneMatchClient() {
+        XCTAssertEqual(RealmMobRespawnPolicy.giantScorpionMS, 20_000)
+        XCTAssertEqual(RealmMobRespawnPolicy.magmaBruteMS, 90_000)
+        XCTAssertEqual(CombatMobProfile.profile(for: .scorpion).respawnMS, 20_000)
+        XCTAssertEqual(CombatMobProfile.profile(for: .magmaBrute).respawnMS, 90_000)
+        XCTAssertEqual(CombatMobProfile.profile(for: .magmaBrute).combatRecoveryPosition?.x ?? 0, -9.5)
+        XCTAssertEqual(CombatMobProfile.profile(for: .magmaBrute).combatRecoveryPosition?.z ?? 0, 14.5)
+    }
+
     func testBuild11ScorpionUsesOnlyValidDunesHPConsumables() {
         XCTAssertFalse(DesertCombatConsumablePolicy.ordinaryHealthPotionAllowed(for: .scorpion))
         XCTAssertFalse(DesertCombatConsumablePolicy.requiresHPConsumableToEnter(.scorpion))
