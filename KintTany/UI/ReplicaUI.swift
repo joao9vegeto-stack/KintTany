@@ -56,8 +56,8 @@ public enum KintActivity: String, CaseIterable, Identifiable, Sendable {
         case .chicken: "KintChicken"
         case .zombie: "KintZombie"
         case .dragon: "KintDragon"
-        case .scorpion: "KintCacti"
-        case .magmaBrute: "KintStone"
+        case .scorpion: "KintScorpion"
+        case .magmaBrute: "KintMagmaBrute"
         }
     }
 
