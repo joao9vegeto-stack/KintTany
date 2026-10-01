@@ -1049,6 +1049,7 @@ final class AppStore: ObservableObject {
     private var connectionRecoveryRequested = false
     private var connectionRecoveryDetail: String?
     private var connectionRecoveryInProgress = false
+    private var combatSessionXPBaseline: Int?
     private var activeShard: String?
     private var dunesPresencePhase: DunesPresencePhase = .inactive
     private var dunesExpectedTool: DunesToolInstanceIdentity?
@@ -2361,6 +2362,7 @@ final class AppStore: ObservableObject {
         connectionRecoveryRequested = false
         connectionRecoveryDetail = nil
         connectionRecoveryInProgress = false
+        combatSessionXPBaseline = nil
         activeShard = nil
         dunesPresencePhase = mode.isDunesGathering ? .preflightSafe : .inactive
         dunesExpectedTool = nil
@@ -2950,6 +2952,9 @@ final class AppStore: ObservableObject {
             } else if result.completedGoal {
                 if mode.isDunesGathering {
                     await closeDunesPresenceAfterConfirmedShores()
+                }
+                if mode == .magmaBrute, let shard = activeShard {
+                    await finalizeRealmCombatGoalBanking(mode: mode, runID: runID, shard: shard, cookie: cookie)
                 }
                 state = .completed
                 statusMessage = "Meta concluída"
@@ -4073,6 +4078,48 @@ final class AppStore: ObservableObject {
     }
 
     @discardableResult
+    private func finalizeRealmCombatGoalBanking(
+        mode: ActivityMode,
+        runID: UUID,
+        shard: String,
+        cookie: String
+    ) async {
+        guard mode == .magmaBrute, activeRunID == runID, activity == mode else { return }
+
+        receiverTask?.cancel()
+        receiverTask = nil
+        activeEngine = nil
+        connected = false
+        await socket.close()
+        await importSocketTrace()
+
+        do {
+            let bootstrap = AutomationEngine.combatWorldBootstrap
+            let stream = try await socket.connect(session: session, shard: shard, bootstrap: bootstrap)
+            await importSocketTrace()
+            guard activeRunID == runID, activity == mode else { return }
+            let engine = AutomationEngine(
+                socket: socket,
+                cookie: cookie,
+                shard: shard,
+                bootstrap: bootstrap,
+                fishingBait: selectedFishingBait,
+                roastMode: selectedRoastMode,
+                blacksmithSelection: selectedBlacksmith,
+                reporter: engineReporter(runID: runID)
+            )
+            activeEngine = engine
+            receiverTask = await makeReceiverTask(stream: stream, engine: engine, mode: mode, runID: runID, notifyUnexpectedEnd: false)
+            connected = true
+            await engine.prepareIdentity()
+            try await engine.finalizeRealmCombatDropsFromWorld(for: mode)
+            log("🏦 Magma Brute • Brute Horn restante protegido no banco antes do encerramento")
+        } catch {
+            diagnostic("[WARN] Depósito final Brute Horn falhou: \(error.localizedDescription)")
+            log("⚠️ Magma Brute • meta concluída, mas depósito final de Brute Horn não confirmou: \(error.localizedDescription)")
+        }
+    }
+
     private func recoverWildAfterUnexpectedDisconnect(
         mode: ActivityMode,
         runID: UUID,
@@ -4351,7 +4398,8 @@ final class AppStore: ObservableObject {
                         mode: mode,
                         goal: remaining,
                         successOffset: preserved,
-                        displayGoal: self.sessionGoal
+                        displayGoal: self.sessionGoal,
+                        combatXPStartOverride: self.combatSessionXPBaseline
                     )
                 }
                 engineRunTask = child
@@ -4372,6 +4420,9 @@ final class AppStore: ObservableObject {
                         connected = false
                         await socket.close()
                         await importSocketTrace()
+                        if mode == .magmaBrute {
+                            await finalizeRealmCombatGoalBanking(mode: mode, runID: runID, shard: shard, cookie: cookie)
+                        }
                         connectionRecoveryRequested = false
                         connectionRecoveryDetail = nil
                         currentTarget = nil
@@ -4594,6 +4645,12 @@ final class AppStore: ObservableObject {
                 stats.bruteHorns += quantity
                 stats.lastEvent = "Brute Horn total \(stats.bruteHorns)"
                 log("🎁 Brute Horn • total obtido nesta meta: \(stats.bruteHorns)")
+            }
+
+        case .combatXPBaseline(let value):
+            if combatSessionXPBaseline == nil {
+                combatSessionXPBaseline = value
+                diagnostic("[XP] baseline da meta preservado • \(value)")
             }
 
         case .roastCountdown(let mode, let cycle, let goal, let secondsRemaining):

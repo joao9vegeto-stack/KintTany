@@ -341,6 +341,24 @@ final class RealtimeProtocolTests: XCTestCase {
         XCTAssertEqual(CombatProgressDisplayPolicy.goal(localGoal: 31, displayGoal: 50), 50)
     }
 
+    func testBuild16RealmEfficiencyAndWorldRecoveryPolicy() {
+        XCTAssertEqual(RealmCombatEfficiencyPolicy.readyEffectiveHP, 150)
+        XCTAssertTrue(
+            RealmCombatEfficiencyPolicy.readyForNextTarget(
+                mode: .scorpion,
+                playerHP: 93,
+                shield: 66,
+                conservativeHP: 93
+            )
+        )
+        XCTAssertTrue(DunesWorldRecoveryPolicy.realmCombatCanReenter(mode: .scorpion, hp: 87))
+        XCTAssertFalse(DunesWorldRecoveryPolicy.realmCombatCanReenter(mode: .scorpion, hp: 70))
+        XCTAssertTrue(DunesWorldRecoveryPolicy.realmCombatCanReenter(mode: .magmaBrute, hp: 85))
+        XCTAssertGreaterThanOrEqual(DunesWorldRecoveryPolicy.recoveryPoints.count, 4)
+        XCTAssertFalse(RealmCombatEfficiencyPolicy.shouldRenewStrength(targetHP: 6, buffSeconds: 2, stock: 2))
+        XCTAssertTrue(RealmCombatEfficiencyPolicy.shouldRenewStrength(targetHP: 56, buffSeconds: 2, stock: 2))
+    }
+
     func testBuild13DunesHeatDoesNotRestartCombatWindow() {
         XCTAssertFalse(CombatTimerDamagePolicy.shouldReset(region: "desert", previousHP: 91, previousShield: 95, currentHP: 90, currentShield: 95))
         XCTAssertTrue(CombatTimerDamagePolicy.shouldReset(region: "desert", previousHP: 91, previousShield: 95, currentHP: 91, currentShield: 65))

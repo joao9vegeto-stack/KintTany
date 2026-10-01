@@ -8,6 +8,7 @@ enum EngineEvent {
     case attempt
     case success(String?)
     case bankableDrop(type: String, quantity: Int)
+    case combatXPBaseline(Int)
     case roastCountdown(mode: RoastPitMode, cycle: Int, goal: Int, secondsRemaining: Int)
     case roastResult(mode: RoastPitMode, cycle: Int, goal: Int, burned: Bool, xpGained: Int, cookingXPTotal: Int, cookedCount: Int, burnedCount: Int)
     case smithPreflight(recipe: BlacksmithRecipe, batch: Int, required: [String: Int])
@@ -97,7 +98,19 @@ struct RealmCombatEfficiencyPolicy {
     static let swordDamage = 36
     static let incomingDamageBudgetPerSwing = 42
     static let safetyBuffer = 30
-    static let readyEffectiveHP = 160
+    static let readyEffectiveHP = 150
+    static let scorpionWorldReentryHP = 75
+    static let magmaWorldReentryHP = 85
+
+    static func safeWorldReentryHP(for mode: ActivityMode) -> Int {
+        mode == .scorpion ? scorpionWorldReentryHP : magmaWorldReentryHP
+    }
+
+    static func shouldRenewStrength(targetHP: Int?, buffSeconds: Int, stock: Int) -> Bool {
+        guard stock > 0, buffSeconds <= 2 else { return false }
+        guard let targetHP, targetHP > 0 else { return true }
+        return targetHP > swordDamage
+    }
 
     static func hitsRemaining(targetHP: Int) -> Int {
         guard targetHP > 0 else { return 0 }
@@ -176,11 +189,21 @@ struct DunesWorldPreflightPolicy {
 /// the World origin; use an interior point rather than an observed edge.
 struct DunesWorldRecoveryPolicy {
     static let safePoint = Position(x: 0.5, z: 0.5)
+    static let recoveryPoints: [Position] = [
+        Position(x: 0.5, z: 0.5),
+        Position(x: -3.5, z: 1.5),
+        Position(x: 2.5, z: 4.5),
+        Position(x: -3.5, z: 3.5)
+    ]
     static let requiredHP = 100
     static let timeoutMS: Double = 45_000
+    static let realmProbeBeforeSafeFallbackMS: Double = 12_000
 
-    static func isRecovered(hp: Int) -> Bool {
-        hp >= requiredHP
+    static func isRecovered(hp: Int) -> Bool { hp >= requiredHP }
+
+    static func realmCombatCanReenter(mode: ActivityMode, hp: Int) -> Bool {
+        guard mode.isRealmMobCombat else { return false }
+        return hp >= RealmCombatEfficiencyPolicy.safeWorldReentryHP(for: mode)
     }
 }
 
@@ -2971,11 +2994,13 @@ func makeRecoveryProgressAnchor(for mode: ActivityMode) async -> ActivityRecover
         mode: ActivityMode,
         goal: Int,
         successOffset: Int = 0,
-        displayGoal: Int? = nil
+        displayGoal: Int? = nil,
+        combatXPStartOverride: Int? = nil
     ) async throws -> EngineRunResult {
         successes = 0
         gatherSuccessOffset = max(0, successOffset)
         gatherDisplayGoal = displayGoal
+        combatXPStart = combatXPStartOverride
         safeStopCompleted = false
         realmMobRespawns.removeAll()
         lastRealmRespawnWaitSignature = ""
@@ -5219,16 +5244,17 @@ func makeRecoveryProgressAnchor(for mode: ActivityMode) async -> ActivityRecover
         }
     }
 
-    /// Build 93: the World regeneration zone is a safe checkpoint stage.
-    /// Do not re-enter Dunes until HP=100 is observed authoritatively.
-    private func recoverDunesHPInWorldBeforeEntry(afterRealtimeRevision minimumRevision: Int) async throws {
+    /// Build 16: authoritative World recovery stays on the same Presence.
+    /// Gathering still requires 100/100. Realm combat may resume from a fresh,
+    /// authoritative HP above its safety floor after probing known healing points.
+    private func recoverDunesHPInWorldBeforeEntry(
+        afterRealtimeRevision minimumRevision: Int,
+        realmCombatMode: ActivityMode? = nil
+    ) async throws {
         guard try await waitForRegion("world", timeoutMS: 5_000) else {
             throw EngineError.regionNotConfirmed("world para regeneração")
         }
 
-        // Build 3: never treat the engine's default/inherited/HTTP-only HP as a
-        // fresh World confirmation. A new realtime vital from this World Presence
-        // must arrive after the bank→World transition.
         reporter(.log("❤️ World • aguardando HP realtime novo antes de liberar reentrada nas Dunes"))
         let confirmationDeadline = nowMS + 6_000
         var lastProbeAt: Double = 0
@@ -5238,9 +5264,7 @@ func makeRecoveryProgressAnchor(for mode: ActivityMode) async -> ActivityRecover
                 revision: realtimeOwnHPRevision,
                 minimumRevision: minimumRevision,
                 region: lastTrustedOwnHPRegion
-            ) {
-                break
-            }
+            ) { break }
             if nowMS - lastProbeAt >= 600 {
                 lastProbeAt = nowMS
                 try await sendPosition(moving: false, full: true)
@@ -5258,8 +5282,7 @@ func makeRecoveryProgressAnchor(for mode: ActivityMode) async -> ActivityRecover
             )
         }
 
-        let source = lastTrustedOwnHPSource ?? "realtime"
-        reporter(.log("❤️ HP realtime confirmado • \(playerHP)/100 • fonte=\(source) • World"))
+        reporter(.log("❤️ HP realtime confirmado • \(playerHP)/100 • fonte=\(lastTrustedOwnHPSource ?? "realtime") • World"))
         if DunesWorldRecoveryPolicy.isRecovered(hp: playerHP) {
             reporter(.log("❤️ HP real confirmado • \(playerHP)/100 • regeneração dispensada"))
             return
@@ -5267,16 +5290,13 @@ func makeRecoveryProgressAnchor(for mode: ActivityMode) async -> ActivityRecover
 
         reporter(.state(.recovering, "Recuperando HP no World"))
         reporter(.log("❤️ HP realtime \(playerHP)/100 • recuperação necessária"))
-        reporter(.log("💚 Dunes CHECKPOINT • indo à zona segura de regeneração no World"))
-        try await walk(
-            to: DunesWorldRecoveryPolicy.safePoint,
-            maxSeconds: 35,
-            status: "Indo à zona de regeneração"
-        )
-        try await sendPosition(moving: false, full: true)
+        reporter(.log("💚 World recovery • mesma Presence • reconnect não será usado como tentativa de cura"))
 
         let deadline = nowMS + DunesWorldRecoveryPolicy.timeoutMS
+        let started = nowMS
         var lastReportedHP = -1
+        var pointIndex = 0
+
         while nowMS < deadline {
             try Task.checkCancellation()
             guard (serverRegion ?? region).lowercased() == "world" else {
@@ -5286,18 +5306,49 @@ func makeRecoveryProgressAnchor(for mode: ActivityMode) async -> ActivityRecover
             if DunesWorldRecoveryPolicy.isRecovered(hp: playerHP),
                lastTrustedOwnHPRegion == "world",
                realtimeOwnHPRevision > minimumRevision {
-                reporter(.log("💚 HP realtime confirmado • \(playerHP)/100 • fonte=\(lastTrustedOwnHPSource ?? "realtime") • retorno às Dunes liberado"))
+                reporter(.log("💚 HP realtime confirmado • \(playerHP)/100 • retorno liberado"))
                 return
             }
 
             if playerHP != lastReportedHP {
                 lastReportedHP = playerHP
                 reporter(.log("❤️ Regeneração • HP realtime \(playerHP)/100 • fonte=\(lastTrustedOwnHPSource ?? "aguardando")"))
-                reporter(.diagnostic("[DUNES][RECOVERY] zona World • HP realtime=\(playerHP)/100 • rev=\(realtimeOwnHPRevision)"))
+                reporter(.diagnostic("[DUNES][RECOVERY] World • HP realtime=\(playerHP)/100 • rev=\(realtimeOwnHPRevision)"))
             }
 
-            try await sendPosition(moving: false, full: true)
-            try await sleep(500)
+            if let realmCombatMode,
+               nowMS - started >= DunesWorldRecoveryPolicy.realmProbeBeforeSafeFallbackMS,
+               DunesWorldRecoveryPolicy.realmCombatCanReenter(mode: realmCombatMode, hp: playerHP) {
+                reporter(.log("✅ \(realmCombatMode.displayName) • HP World \(playerHP)/100 autoritativo e seguro • reentrada liberada sem reconnect"))
+                return
+            }
+
+            let point = DunesWorldRecoveryPolicy.recoveryPoints[pointIndex % DunesWorldRecoveryPolicy.recoveryPoints.count]
+            if hypot(position.x - point.x, position.z - point.z) > 0.8 {
+                reporter(.log("💚 World recovery • ponto \((pointIndex % DunesWorldRecoveryPolicy.recoveryPoints.count) + 1)/\(DunesWorldRecoveryPolicy.recoveryPoints.count) • mesma Presence"))
+                try await walk(to: point, maxSeconds: 12, status: "Indo à zona de regeneração")
+                try await sendPosition(moving: false, full: true)
+            }
+
+            let baseline = playerHP
+            let pointDeadline = min(deadline, nowMS + 3_000)
+            while nowMS < pointDeadline {
+                try Task.checkCancellation()
+                if DunesWorldRecoveryPolicy.isRecovered(hp: playerHP) {
+                    reporter(.log("💚 HP realtime confirmado • \(playerHP)/100 • retorno liberado"))
+                    return
+                }
+                if playerHP > baseline { break }
+                try await sendPosition(moving: false, full: true)
+                try await sleep(500)
+            }
+            pointIndex += 1
+        }
+
+        if let realmCombatMode,
+           DunesWorldRecoveryPolicy.realmCombatCanReenter(mode: realmCombatMode, hp: playerHP) {
+            reporter(.log("✅ \(realmCombatMode.displayName) • regen não chegou a 100, mas HP \(playerHP)/100 segue seguro • seguindo sem reconnect"))
+            return
         }
 
         throw EngineError.gatherLoadoutNotReady(
@@ -6203,7 +6254,10 @@ func makeRecoveryProgressAnchor(for mode: ActivityMode) async -> ActivityRecover
 
             // Entre encontros, estoque zerado em Realm vira uma única fronteira
             // de serviço. Não tentamos o atalho inválido Shores -> World.
-            if let reason = try await confirmedPotionResupplyReason(mode: mode, includeStrengthWhileBuffed: true) {
+            if let reason = try await confirmedPotionResupplyReason(
+                mode: mode,
+                includeStrengthWhileBuffed: !mode.isRealmMobCombat
+            ) {
                 if mode.isRealmMobCombat {
                     safeStopReason = .combatSupplies
                     reporter(.log("🧪 \(mode.displayName) • \(reason) • reposição necessária ENTRE mobs; saindo uma vez para Shores e entregando ao World/banco"))
@@ -6224,7 +6278,10 @@ func makeRecoveryProgressAnchor(for mode: ActivityMode) async -> ActivityRecover
 
             if safeStopReason != nil { break }
 
-            if let reason = try await confirmedPotionResupplyReason(mode: mode, includeStrengthWhileBuffed: true) {
+            if let reason = try await confirmedPotionResupplyReason(
+                mode: mode,
+                includeStrengthWhileBuffed: !mode.isRealmMobCombat
+            ) {
                 if mode.isRealmMobCombat {
                     safeStopReason = .combatSupplies
                     reporter(.log("🧪 \(mode.displayName) • \(reason) após pré-combate • fronteira limpa para World/banco"))
@@ -6419,7 +6476,15 @@ func makeRecoveryProgressAnchor(for mode: ActivityMode) async -> ActivityRecover
 
                 // Strength v5.2: renova antes do próximo swing. Se já acabou e o
                 // estoque também zerou, a próxima iteração aciona resupply mantendo target.
-                if strengthBuffSeconds() <= 2, potionStock.strength > 0 {
+                let currentStrengthSeconds = strengthBuffSeconds()
+                let shouldRenewStrength = mode.isRealmMobCombat
+                    ? RealmCombatEfficiencyPolicy.shouldRenewStrength(
+                        targetHP: target.hp,
+                        buffSeconds: currentStrengthSeconds,
+                        stock: potionStock.strength
+                    )
+                    : (currentStrengthSeconds <= 2 && potionStock.strength > 0)
+                if shouldRenewStrength {
                     _ = try await ensureStrengthReady(targetName: targetName, force: true)
                 }
 
@@ -6689,7 +6754,10 @@ func makeRecoveryProgressAnchor(for mode: ActivityMode) async -> ActivityRecover
                     break
                 }
 
-                let resupplyReason = try await confirmedPotionResupplyReason(mode: mode, includeStrengthWhileBuffed: true)
+                let resupplyReason = try await confirmedPotionResupplyReason(
+                mode: mode,
+                includeStrengthWhileBuffed: !mode.isRealmMobCombat
+            )
                 if mode.isRealmMobCombat {
                     if let resupplyReason {
                         safeStopReason = .combatSupplies
@@ -7135,6 +7203,32 @@ func makeRecoveryProgressAnchor(for mode: ActivityMode) async -> ActivityRecover
         reporter(.log("⚔️ Melhor espada disponível carregada • \(best.type) • tier \(best.tier) ✅"))
     }
 
+    func finalizeRealmCombatDropsFromWorld(for mode: ActivityMode) async throws {
+        guard mode == .magmaBrute else { return }
+        guard try await waitForRegion("world", timeoutMS: 5_000) else {
+            throw EngineError.regionNotConfirmed("world para depósito final do Magma Brute")
+        }
+        let counts = try await http.itemLocationCounts(type: "brute_horn")
+        guard counts.carried > 0 else {
+            reporter(.log("🏦 Magma Brute • depósito final • nenhum Brute Horn carregado"))
+            return
+        }
+        try await ensureWorldBankAccess(reason: "depósito final Brute Horn")
+        do {
+            let result = try await http.depositIntoBank(["brute_horn": counts.carried])
+            if let moved = result.confirmed["brute_horn"], moved > 0 {
+                reporter(.log("🏦 Magma Brute • depósito final • \(moved)x Brute Horn → banco ✅"))
+            }
+            guard result.unresolved.isEmpty else {
+                throw EngineError.bankDepositFailed(result.unresolved.joined(separator: ", "))
+            }
+            try await leaveBankShopToWorld(reason: "depósito final Brute Horn concluído")
+        } catch {
+            try? await leaveBankShopToWorld(reason: "depósito final Brute Horn abortado")
+            throw error
+        }
+    }
+
     func prepareRealmCombatLoadoutFromWorld(for mode: ActivityMode) async throws {
         if mode == .scorpion {
             try await prepareScorpionCombatLoadoutFromWorld()
@@ -7148,7 +7242,7 @@ func makeRecoveryProgressAnchor(for mode: ActivityMode) async -> ActivityRecover
 
         if mode == .magmaBrute {
             reporter(.log("💚 Magma Brute • recuperação no World antes da Emberstone; Health Potion não será gasta na safe camp"))
-            try await recoverDunesHPInWorldBeforeEntry(afterRealtimeRevision: realtimeRevisionBeforePreflight)
+            try await recoverDunesHPInWorldBeforeEntry(afterRealtimeRevision: realtimeRevisionBeforePreflight, realmCombatMode: mode)
         }
     }
 
@@ -7203,7 +7297,7 @@ func makeRecoveryProgressAnchor(for mode: ActivityMode) async -> ActivityRecover
 
             let realtimeRevisionBeforeWorldEntry = realtimeOwnHPRevision
             try await leaveBankShopToWorld(reason: "preflight Giant Scorpion concluído")
-            try await recoverDunesHPInWorldBeforeEntry(afterRealtimeRevision: realtimeRevisionBeforeWorldEntry)
+            try await recoverDunesHPInWorldBeforeEntry(afterRealtimeRevision: realtimeRevisionBeforeWorldEntry, realmCombatMode: .scorpion)
         } catch {
             try? await leaveBankShopToWorld(reason: "preflight Giant Scorpion abortado")
             throw error
@@ -7709,8 +7803,13 @@ func makeRecoveryProgressAnchor(for mode: ActivityMode) async -> ActivityRecover
         do {
             if let xp = try await http.combatXP(playerID: playerID) {
                 combatXPTotal = xp
-                combatXPStart = xp
-                reporter(.log("📈 Combat XP inicial • \(xp)"))
+                if combatXPStart == nil {
+                    combatXPStart = xp
+                    reporter(.combatXPBaseline(xp))
+                    reporter(.log("📈 Combat XP inicial • \(xp)"))
+                } else {
+                    reporter(.log("📈 Combat XP atual • \(xp) • baseline da meta preservado em \(combatXPStart ?? xp)"))
+                }
             }
         } catch {
             reporter(.diagnostic("[XP] player-stats inicial falhou: \(error.localizedDescription)"))
@@ -7922,11 +8021,11 @@ func makeRecoveryProgressAnchor(for mode: ActivityMode) async -> ActivityRecover
 
     private func recoverScorpionVitals(preFight: Bool) async throws {
         let limits = wildCombatLimits(.scorpion)
-        let shieldGoal = preFight ? limits.preFightShield : max(50, limits.shieldHP)
+        let legacyShieldGoal = preFight ? limits.preFightShield : max(50, limits.shieldHP)
         let deadline = nowMS + Double(preFight ? 20_000 : 16_000)
 
         try await refreshPotionStock(logSummary: false)
-        reporter(.log("❤️‍🔥 Recovery Scorpion • HP \(playerHP) • piso >\(DunesHeatSafetyPolicy.minimumSafeHP) • shield \(playerShield)/\(shieldGoal) • Potion+ \(potionStock.healthPlus) • Cacti \(potionStock.cacti)"))
+        reporter(.log("❤️‍🔥 Recovery Scorpion • HP \(playerHP) • piso >\(DunesHeatSafetyPolicy.minimumSafeHP) • shield \(playerShield) • Potion+ \(potionStock.healthPlus) • Cacti \(potionStock.cacti)"))
 
         while nowMS < deadline {
             try Task.checkCancellation()
@@ -7937,7 +8036,6 @@ func makeRecoveryProgressAnchor(for mode: ActivityMode) async -> ActivityRecover
             if conservativeHP <= DunesHeatSafetyPolicy.minimumSafeHP {
                 let before = playerHP
                 var consumedType: String?
-
                 if potionStock.healthPlus > 0,
                    try await consumePotion(DunesHeatSafetyPolicy.healthPotionPlusType) {
                     consumedType = DunesHeatSafetyPolicy.healthPotionPlusType
@@ -7945,30 +8043,38 @@ func makeRecoveryProgressAnchor(for mode: ActivityMode) async -> ActivityRecover
                           try await consumePotion(DesertCombatConsumablePolicy.cactiType) {
                     consumedType = DesertCombatConsumablePolicy.cactiType
                 }
-
                 if let consumedType {
                     let confirmed = try await driveDunesCombatHealTicks(type: consumedType, beforeDoseHP: before)
                     if confirmed {
                         dunesHeatBaselineAtMS = nowMS
                         dunesHeatBaselineHP = playerHP
-                        let label = consumedType == DesertCombatConsumablePolicy.cactiType ? "Cacti" : "Health Potion+"
-                        reporter(.log("✅ \(label) confirmada • HP \(before) → \(playerHP)"))
+                        reporter(.log("✅ \(consumedType == DesertCombatConsumablePolicy.cactiType ? "Cacti" : "Health Potion+") confirmada • HP \(before) → \(playerHP)"))
                         continue
                     }
-                } else {
-                    reporter(.log("ℹ️ Giant Scorpion • sem Health Potion+ / Cacti • entrada é permitida, mas HP chegou ao piso seguro"))
                 }
-
                 safeStopReason = .combatSupplies
                 reporter(.state(.recovering, "HP no limite das Dunes • saindo para The Shores"))
                 return
             }
 
-            if !shieldMechanicUnavailable, playerShield < shieldGoal, potionStock.shield > 0 {
+            if RealmCombatEfficiencyPolicy.readyForNextTarget(
+                mode: .scorpion,
+                playerHP: playerHP,
+                shield: playerShield,
+                conservativeHP: conservativeHP
+            ) {
+                reporter(.log("✅ Recovery Scorpion suficiente por reserva efetiva • HP \(playerHP) + shield \(playerShield)"))
+                try await equip(activeCombatWeaponType)
+                return
+            }
+
+            if !shieldMechanicUnavailable, potionStock.shield > 0 {
+                let requiredShield = max(0, RealmCombatEfficiencyPolicy.readyEffectiveHP - playerHP)
+                let dynamicGoal = min(legacyShieldGoal, max(playerShield + 10, requiredShield))
                 let before = playerShield
                 if try await consumePotion("potion_shield") {
-                    reporter(.log("🛡️ Poção de escudo aceita • shield antes \(before)"))
-                    try await driveShieldPotionTicks(goal: shieldGoal, before: before)
+                    reporter(.log("🛡️ Poção de escudo aceita • shield antes \(before) • meta dinâmica \(dynamicGoal)"))
+                    try await driveShieldPotionTicks(goal: dynamicGoal, before: before)
                     if playerShield <= before {
                         shieldConfirmFailureStreak += 1
                         if shieldConfirmFailureStreak >= 2 { shieldMechanicUnavailable = true }
@@ -7979,23 +8085,22 @@ func makeRecoveryProgressAnchor(for mode: ActivityMode) async -> ActivityRecover
                 }
             }
 
-            if playerShield >= shieldGoal || shieldMechanicUnavailable {
-                reporter(.log("✅ Recovery Scorpion suficiente • HP \(playerHP) • shield \(playerShield)"))
-                try await equip(activeCombatWeaponType)
-                return
-            }
-
             try await refreshPotionStock(logSummary: false)
             if potionStock.shield <= 0 && !shieldMechanicUnavailable {
                 safeStopReason = .combatSupplies
-                reporter(.log("🛑 Giant Scorpion • Shield Potion esgotada • saída segura solicitada"))
+                reporter(.log("🛑 Giant Scorpion • Shield Potion esgotada e reserva efetiva insuficiente • saída segura solicitada"))
                 return
             }
             try await sleep(250)
         }
 
-        if playerHP > DunesHeatSafetyPolicy.minimumSafeHP &&
-           (playerShield >= shieldGoal || shieldMechanicUnavailable) {
+        let conservativeHP = min(playerHP, estimatedDunesHPFromMonotonicClock())
+        if RealmCombatEfficiencyPolicy.readyForNextTarget(
+            mode: .scorpion,
+            playerHP: playerHP,
+            shield: playerShield,
+            conservativeHP: conservativeHP
+        ) || shieldMechanicUnavailable {
             try await equip(activeCombatWeaponType)
             return
         }
