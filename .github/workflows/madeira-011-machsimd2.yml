@@ -1,8 +1,8 @@
-name: Madeira 0.1.1 D3D9 + Mach SIMD Alias Fix v2
+name: Madeira 0.1.1 D3D9 + Atomic Alias Fix
 
 on:
   push:
-    branches: [madeira011-machsimd2]
+    branches: [madeira011-atomicfix]
   workflow_dispatch:
 
 permissions:
@@ -183,6 +183,233 @@ jobs:
           shasum -a 256 -c work/before-d3d11-arm64ec.sha256
           shasum -a 256 -c work/before-d3d11-i386.sha256
 
+      - name: Build anonymous-alias atomic helper
+        shell: bash
+        run: |
+          set -euxo pipefail
+          mkdir -p work
+          cat > work/atomic-alias-helper.S <<'ASM'
+          .text
+          .p2align 2
+          .arch armv8.1-a+lse
+          .globl _madeira_atomic_alias_helper
+          _madeira_atomic_alias_helper:
+              // Inputs from bus_handler alias trampoline:
+              //   x19 = ucontext_t *
+              //   w22 = faulting ARM64 instruction
+              //   x2  = writable alias address
+              //
+              // Cover the complete 32/64-bit release/exclusive/LSE families
+              // that Madeira's own ios_emulate_store_rel() understands.
+              // Unknown encodings tail-branch back to the official plain-store
+              // emulator; sentinel branch is patched after assembly.
+
+              // LSE RMW mask: LDADD/LDCLR/LDEOR/LDSET/SWP
+              mov     w8, #0xfc00
+              movk    w8, #0x3f20, lsl #16
+              and     w9, w22, w8
+
+              mov     w10, #0
+              movk    w10, #0x3820, lsl #16
+              cmp     w9, w10
+              b.eq    .Lop_add
+
+              mov     w10, #0x1000
+              movk    w10, #0x3820, lsl #16
+              cmp     w9, w10
+              b.eq    .Lop_clr
+
+              mov     w10, #0x2000
+              movk    w10, #0x3820, lsl #16
+              cmp     w9, w10
+              b.eq    .Lop_eor
+
+              mov     w10, #0x3000
+              movk    w10, #0x3820, lsl #16
+              cmp     w9, w10
+              b.eq    .Lop_set
+
+              mov     w10, #0x8000
+              movk    w10, #0x3820, lsl #16
+              cmp     w9, w10
+              b.eq    .Lop_swp
+
+              // STXR/STLXR, 32/64-bit.
+              mov     w8, #0xfc00
+              movk    w8, #0x3fe0, lsl #16
+              and     w9, w22, w8
+              mov     w10, #0xfc00
+              movk    w10, #0x0800, lsl #16
+              cmp     w9, w10
+              b.eq    .Lstxr
+              mov     w10, #0x7c00
+              movk    w10, #0x0800, lsl #16
+              cmp     w9, w10
+              b.eq    .Lstxr
+
+              // STLR/STLLR, 32/64-bit.
+              mov     w8, #0xfc00
+              movk    w8, #0x3fff, lsl #16
+              and     w9, w22, w8
+              mov     w10, #0xfc00
+              movk    w10, #0x089f, lsl #16
+              cmp     w9, w10
+              b.eq    .Lstlr
+              mov     w10, #0x7c00
+              movk    w10, #0x089f, lsl #16
+              cmp     w9, w10
+              b.eq    .Lstlr
+
+              b       .Lfallback
+
+          .Lop_add:
+              mov     w15, #0
+              b       .Lrmw
+          .Lop_clr:
+              mov     w15, #1
+              b       .Lrmw
+          .Lop_eor:
+              mov     w15, #2
+              b       .Lrmw
+          .Lop_set:
+              mov     w15, #3
+              b       .Lrmw
+          .Lop_swp:
+              mov     w15, #4
+
+          .Lrmw:
+              ldr     x8, [x19, #0x30]
+              add     x8, x8, #0x10
+              ubfx    w9, w22, #16, #5
+              and     w10, w22, #0x1f
+              cmp     w9, #31
+              b.eq    .Lrmw_src_zero
+              ldr     x11, [x8, x9, lsl #3]
+              b       .Lrmw_src_ready
+          .Lrmw_src_zero:
+              mov     x11, xzr
+          .Lrmw_src_ready:
+              ubfx    w9, w22, #30, #2
+              cmp     w9, #2
+              b.eq    .Lrmw32
+              cmp     w9, #3
+              b.eq    .Lrmw64
+              b       .Lfallback
+
+          .Lrmw32:
+              cmp     w15, #0
+              b.eq    .Ladd32
+              cmp     w15, #1
+              b.eq    .Lclr32
+              cmp     w15, #2
+              b.eq    .Leor32
+              cmp     w15, #3
+              b.eq    .Lset32
+              swpal   w11, w12, [x2]
+              b       .Lrmw_done
+          .Ladd32:
+              ldaddal w11, w12, [x2]
+              b       .Lrmw_done
+          .Lclr32:
+              ldclral w11, w12, [x2]
+              b       .Lrmw_done
+          .Leor32:
+              ldeoral w11, w12, [x2]
+              b       .Lrmw_done
+          .Lset32:
+              ldsetal w11, w12, [x2]
+              b       .Lrmw_done
+
+          .Lrmw64:
+              cmp     w15, #0
+              b.eq    .Ladd64
+              cmp     w15, #1
+              b.eq    .Lclr64
+              cmp     w15, #2
+              b.eq    .Leor64
+              cmp     w15, #3
+              b.eq    .Lset64
+              swpal   x11, x12, [x2]
+              b       .Lrmw_done
+          .Ladd64:
+              ldaddal x11, x12, [x2]
+              b       .Lrmw_done
+          .Lclr64:
+              ldclral x11, x12, [x2]
+              b       .Lrmw_done
+          .Leor64:
+              ldeoral x11, x12, [x2]
+              b       .Lrmw_done
+          .Lset64:
+              ldsetal x11, x12, [x2]
+
+          .Lrmw_done:
+              cmp     w10, #31
+              b.eq    .Lhandled
+              str     x12, [x8, x10, lsl #3]
+              b       .Lhandled
+
+          .Lstxr:
+              ldr     x8, [x19, #0x30]
+              add     x8, x8, #0x10
+              and     w10, w22, #0x1f
+              cmp     w10, #31
+              b.eq    .Lstxr_zero
+              ldr     x11, [x8, x10, lsl #3]
+              b       .Lstxr_src
+          .Lstxr_zero:
+              mov     x11, xzr
+          .Lstxr_src:
+              ubfx    w9, w22, #30, #2
+              cmp     w9, #2
+              b.eq    .Lstxr32
+              cmp     w9, #3
+              b.ne    .Lfallback
+              str     x11, [x2]
+              b       .Lstxr_status
+          .Lstxr32:
+              str     w11, [x2]
+          .Lstxr_status:
+              ubfx    w9, w22, #16, #5
+              cmp     w9, #31
+              b.eq    .Lhandled
+              str     xzr, [x8, x9, lsl #3]
+              b       .Lhandled
+
+          .Lstlr:
+              ldr     x8, [x19, #0x30]
+              add     x8, x8, #0x10
+              and     w10, w22, #0x1f
+              cmp     w10, #31
+              b.eq    .Lstlr_zero
+              ldr     x11, [x8, x10, lsl #3]
+              b       .Lstlr_src
+          .Lstlr_zero:
+              mov     x11, xzr
+          .Lstlr_src:
+              ubfx    w9, w22, #30, #2
+              cmp     w9, #2
+              b.eq    .Lstlr32
+              cmp     w9, #3
+              b.ne    .Lfallback
+              str     x11, [x2]
+              b       .Lhandled
+          .Lstlr32:
+              str     w11, [x2]
+
+          .Lhandled:
+              ret
+
+          .Lfallback:
+              .inst   0xdeadbeef
+          ASM
+
+          xcrun clang -target arm64-apple-ios18.0 -march=armv8.1-a+lse             -c work/atomic-alias-helper.S -o work/atomic-alias-helper.o
+          xcrun llvm-objcopy -O binary --only-section=__text             work/atomic-alias-helper.o work/atomic-alias-helper.bin
+          test -s work/atomic-alias-helper.bin
+          xcrun llvm-objdump -d work/atomic-alias-helper.o | tee work/atomic-alias-helper-disasm.txt
+          ls -l work/atomic-alias-helper.bin
+
       - name: Patch official 0.1.1 BUS handler for anonymous JIT aliases
         shell: bash
         run: |
@@ -195,12 +422,13 @@ jobs:
           xcrun dwarfdump --uuid "$DYLIB" | tee work/runtime-uuid.txt
           grep -qi '577C5C66-A7E8-359A-9301-546A52513969' work/runtime-uuid.txt
 
-          python3 - "$DYLIB" work/patch-report.txt <<'PY'
+          python3 - "$DYLIB" work/patch-report.txt work/atomic-alias-helper.bin <<'PY'
           from pathlib import Path
           import hashlib, struct, sys
 
           path = Path(sys.argv[1])
           report = Path(sys.argv[2])
+          helper = bytearray(Path(sys.argv[3]).read_bytes())
           data = bytearray(path.read_bytes())
 
           # Exact official Madeira 0.1.1 (LC_UUID 577C5C66-...)
@@ -223,6 +451,8 @@ jobs:
 
           hook_off = 0x83af3c
           cave_off = 0x1c67608
+          helper_off = 0x2104aa4
+          helper_capacity = 880
 
           def word(off):
               return struct.unpack_from("<I", data, off)[0]
@@ -244,57 +474,102 @@ jobs:
 
           before = hashlib.sha256(data).hexdigest()
 
-          # bus_handler+0x430: b 0x1c67608
-          struct.pack_into("<I", data, hook_off, 0x1450b1b3)
+          # Ensure the large padding area lives inside an executable Mach-O segment.
+          magic, = struct.unpack_from("<I", data, 0)
+          if magic != 0xfeedfacf:
+              raise SystemExit(f"unexpected Mach-O magic 0x{magic:08x}")
+          ncmds, = struct.unpack_from("<I", data, 16)
+          off = 32
+          helper_seg = None
+          for _ in range(ncmds):
+              cmd, cmdsize = struct.unpack_from("<II", data, off)
+              if cmd == 0x19:  # LC_SEGMENT_64
+                  segname = bytes(data[off+8:off+24]).split(b"\\0",1)[0].decode("ascii","ignore")
+                  vmaddr, vmsize, fileoff, filesize = struct.unpack_from("<QQQQ", data, off+24)
+                  maxprot, initprot = struct.unpack_from("<ii", data, off+56)
+                  if fileoff <= helper_off and helper_off + len(helper) <= fileoff + filesize:
+                      helper_seg = (segname, vmaddr, fileoff, initprot)
+                      break
+              off += cmdsize
+          if not helper_seg or not (helper_seg[3] & 4):
+              raise SystemExit(f"atomic helper padding is not inside an executable segment: {helper_seg}")
+          segname, vmaddr, fileoff, initprot = helper_seg
+          helper_va = vmaddr + (helper_off - fileoff)
+          if helper_va != helper_off:
+              raise SystemExit(f"expected 1:1 __TEXT file/vm mapping, got helper_va=0x{helper_va:x}")
+          if len(helper) > helper_capacity:
+              raise SystemExit(f"atomic helper is {len(helper)} bytes, capacity is {helper_capacity}")
+          if any(data[helper_off:helper_off+helper_capacity]):
+              raise SystemExit("atomic helper padding is no longer all-zero in official 0.1.1")
 
+          def enc_b(src, target, link=False):
+              d = target - src
+              if d % 4: raise SystemExit(f"unaligned branch {src:x}->{target:x}")
+              imm = d // 4
+              if not (-(1<<25) <= imm < (1<<25)):
+                  raise SystemExit(f"branch out of range {src:x}->{target:x}")
+              return (0x94000000 if link else 0x14000000) | (imm & 0x03ffffff)
+
+          # Patch the helper's single fallback sentinel to tail-branch to the
+          # official plain-store emulator. This preserves every non-atomic
+          # encoding's original behavior.
+          sentinel = struct.pack("<I", 0xdeadbeef)
+          hits = [i for i in range(0, len(helper)-3, 4) if helper[i:i+4] == sentinel]
+          if len(hits) != 1:
+              raise SystemExit(f"expected one atomic-helper sentinel, got {hits}")
+          fb_off = hits[0]
+          struct.pack_into("<I", helper, fb_off, enc_b(helper_va + fb_off, 0x83ae80, False))
+          data[helper_off:helper_off+len(helper)] = helper
+
+          # bus_handler+0x430: b 0x1c67608
+          struct.pack_into("<I", data, hook_off, enc_b(hook_off, cave_off, False))
+
+          # Compact alias trampoline:
+          # - resolve RX guest alias -> RW alias
+          # - gather official ucontext/insn state
+          # - BL the generic release/exclusive/LSE helper
+          # - helper RETURNS only when it handled the write, so jump directly
+          #   to Madeira's official PC+4/fixup success tail
+          # - helper tail-branches to ios_emulate_store for all other stores
+          # - no-alias path replays the one overwritten official instruction
           stub = [
-              0xaa1903e0, # 0x1c67608 mov x0,x25            ; fault address
-              0x97ae90d5, # 0x1c6760c bl  0x80b960         ; ios_jit_anon_alias_lookup
-              0xb4000120, # 0x1c67610 cbz x0,0x1c67634     ; not an alias -> original path
-              0xaa0003e2, # 0x1c67614 mov x2,x0             ; rw_addr
-              0xaa1a03f8, # 0x1c67618 mov x24,x26           ; match official success path state
-              0xf90057f6, # 0x1c6761c str x22,[sp,#0xa8]    ; preserve is_exec flag
-              0xaa1b03fa, # 0x1c67620 mov x26,x27           ; preserve faulting PC
-              0xf9401a68, # 0x1c67624 ldr x8,[x19,#0x30]
-              0xf9408908, # 0x1c67628 ldr x8,[x8,#0x110]
-              0xb9400116, # 0x1c6762c ldr w22,[x8]           ; faulting ARM64 store instruction
-              0x17af4e14, # 0x1c67630 b 0x83ae80            ; existing ios_emulate_store path
-              0x4f00e400, # 0x1c67634 movi v0.16b,#0        ; replay overwritten official insn
-              0x17af4e42, # 0x1c67638 b 0x83af40            ; continue untouched generic path
+              0xaa1903e0, # mov x0,x25
+              0x97ae90d5, # bl ios_jit_anon_alias_lookup @ 0x80b960
+              0xb4000140, # cbz x0, local no-alias replay (index 12)
+              0xaa0003e2, # mov x2,x0 (rw_addr)
+              0xaa1a03f8, # mov x24,x26
+              0xf90057f6, # str x22,[sp,#0xa8]
+              0xaa1b03fa, # mov x26,x27
+              0xf9401a68, # ldr x8,[x19,#0x30]
+              0xf9408908, # ldr x8,[x8,#0x110]
+              0xb9400116, # ldr w22,[x8] (faulting insn)
+              enc_b(cave_off + 10*4, helper_va, True), # bl generic atomic helper
+              enc_b(cave_off + 11*4, 0x83ae90, False), # handled -> official success tail
+              0x4f00e400, # no alias: replay movi v0.16b,#0
+              enc_b(cave_off + 13*4, 0x83af40, False), # continue untouched path
           ]
           for i, w in enumerate(stub):
               struct.pack_into("<I", data, cave_off + i * 4, w)
-          # Last cave word stays the original NOP.
-          if word(cave_off + 13*4) != 0xd503201f:
-              raise SystemExit("final cave guard changed unexpectedly")
+
+          # Verify the exact two current blockers decode into supported classes.
+          for insn in (0xb8f50314, 0xc80afec9):
+              if insn == 0xb8f50314 and (insn & 0x3f20fc00) != 0x38200000:
+                  raise SystemExit("LDADDAL blocker mask self-check failed")
+              if insn == 0xc80afec9 and (insn & 0x3fe0fc00) not in (0x0800fc00,0x08007c00):
+                  raise SystemExit("STLXR blocker mask self-check failed")
 
           path.write_bytes(data)
           check = path.read_bytes()
 
-          expected = {
-              hook_off: 0x1450b1b3,
-              cave_off + 0*4: 0xaa1903e0,
-              cave_off + 1*4: 0x97ae90d5,
-              cave_off + 2*4: 0xb4000120,
-              cave_off + 3*4: 0xaa0003e2,
-              cave_off + 4*4: 0xaa1a03f8,
-              cave_off + 5*4: 0xf90057f6,
-              cave_off + 6*4: 0xaa1b03fa,
-              cave_off + 7*4: 0xf9401a68,
-              cave_off + 8*4: 0xf9408908,
-              cave_off + 9*4: 0xb9400116,
-              cave_off + 10*4: 0x17af4e14,
-              cave_off + 11*4: 0x4f00e400,
-              cave_off + 12*4: 0x17af4e42,
-              cave_off + 13*4: 0xd503201f,
-          }
-          for off, w in expected.items():
-              got = struct.unpack_from("<I", check, off)[0]
+          # Strong post-write verification.
+          if struct.unpack_from("<I", check, hook_off)[0] != enc_b(hook_off, cave_off, False):
+              raise SystemExit("alias hook post-write verification failed")
+          for i,w in enumerate(stub):
+              got=struct.unpack_from("<I",check,cave_off+i*4)[0]
               if got != w:
-                  raise SystemExit(
-                      f"post-write verification failed at 0x{off:x}: "
-                      f"expected 0x{w:08x}, got 0x{got:08x}"
-                  )
+                  raise SystemExit(f"alias trampoline verify failed at word {i}: {got:08x} != {w:08x}")
+          if check[helper_off:helper_off+len(helper)] != helper:
+              raise SystemExit("atomic helper post-write bytes mismatch")
 
           after = hashlib.sha256(check).hexdigest()
           with report.open("a") as fp:
@@ -302,7 +577,9 @@ jobs:
               fp.write("runtime source: official v0.1.1 Madeira.debug.dylib\n")
               fp.write("hook: bus_handler generic outside-pool entry 0x83af3c -> code cave 0x1c67608\n")
               fp.write("alias resolver: ios_jit_anon_alias_lookup @ 0x80b960\n")
-              fp.write("store emulator reused: official ios_emulate_store @ 0x841d24\n")
+              fp.write("store emulator reused for fallback: official ios_emulate_store @ 0x841d24\n")
+              fp.write(f"atomic helper: executable padding @ 0x{helper_va:x}, {len(helper)} bytes\n")
+              fp.write("atomic coverage: STLR/STLLR + STXR/STLXR + LDADD/LDCLR/LDEOR/LDSET/SWP (32/64-bit)\n")
               fp.write("no-alias fallback: original 0.1.1 instruction replay + resume at 0x83af40\n")
               fp.write(f"Madeira.debug.dylib sha256 before: {before}\n")
               fp.write(f"Madeira.debug.dylib sha256 after:  {after}\n")
@@ -466,18 +743,18 @@ jobs:
 
           (
             cd work/unpack
-            ditto -c -k --sequesterRsrc --keepParent Payload ../Madeira-0.1.1-D3D9-MachSIMD2.ipa
+            ditto -c -k --sequesterRsrc --keepParent Payload ../Madeira-0.1.1-D3D9-AtomicAlias.ipa
           )
 
-          shasum -a 256 work/Madeira-0.1.1-D3D9-MachSIMD2.ipa | tee -a work/patch-report.txt
-          ls -lh work/Madeira-0.1.1-D3D9-MachSIMD2.ipa
+          shasum -a 256 work/Madeira-0.1.1-D3D9-AtomicAlias.ipa | tee -a work/patch-report.txt
+          ls -lh work/Madeira-0.1.1-D3D9-AtomicAlias.ipa
 
-      - name: Upload Madeira 0.1.1 D3D9 + Mach SIMD fix v2
+      - name: Upload Madeira 0.1.1 D3D9 + Atomic Alias fix
         uses: actions/upload-artifact@v4
         with:
-          name: Madeira-0.1.1-D3D9-MachSIMD2
+          name: Madeira-0.1.1-D3D9-AtomicAlias
           path: |
-            work/Madeira-0.1.1-D3D9-MachSIMD2.ipa
+            work/Madeira-0.1.1-D3D9-AtomicAlias.ipa
             work/patch-report.txt
             work/dxmt_command.metallib
             work/final-entitlements.plist
@@ -487,5 +764,7 @@ jobs:
             work/mach-simd-hook-disasm.txt
             work/mach-simd-cave-a-disasm.txt
             work/mach-simd-cave-b-disasm.txt
+            work/atomic-alias-helper.S
+            work/atomic-alias-helper-disasm.txt
           compression-level: 0
           if-no-files-found: error
