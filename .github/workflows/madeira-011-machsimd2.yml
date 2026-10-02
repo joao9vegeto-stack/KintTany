@@ -1,0 +1,491 @@
+name: Madeira 0.1.1 D3D9 + Mach SIMD Alias Fix v2
+
+on:
+  push:
+    branches: [madeira011-machsimd2]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  patch:
+    runs-on: macos-26
+    timeout-minutes: 45
+    steps:
+      - name: Prepare Metal toolchain
+        shell: bash
+        run: |
+          set -euxo pipefail
+          xcodebuild -version
+          if ! xcrun --sdk iphoneos --find metal >/dev/null 2>&1; then
+            xcodebuild -downloadComponent MetalToolchain
+          fi
+          xcrun --sdk iphoneos --find metal
+          xcrun --sdk iphoneos metal --version || true
+
+      - name: Download official Madeira 0.1.1 and exact DXMT source
+        shell: bash
+        run: |
+          set -euxo pipefail
+          mkdir -p work
+          curl -fL --retry 5 --retry-all-errors             https://github.com/willfaust/Madeira/releases/download/v0.1.1/Madeira-0.1.1.ipa             -o work/Madeira-0.1.1-official.ipa
+          echo "045aeb8fd4c71c2e6a78fb4511f94c56f8ed7af14c47a3b0ea2937a4fc8bfcee  work/Madeira-0.1.1-official.ipa" | shasum -a 256 -c -
+          curl -fL --retry 5 --retry-all-errors             https://raw.githubusercontent.com/willfaust/dxmt/a5e0cd3d41bf248fd1c030a2e1c515ba3522f4ef/src/dxmt/dxmt_command.metal             -o work/dxmt_command.metal
+
+      - name: Compile only the replacement D3D9 metallib for iPhoneOS Metal 3.2
+        shell: bash
+        run: |
+          set -euxo pipefail
+          METAL="$(xcrun --sdk iphoneos --find metal)"
+          METALLIB="$(xcrun --sdk iphoneos --find metallib)"
+          "$METAL" -std=metal3.2 -mios-version-min=18.0 -Os             -c work/dxmt_command.metal -o work/dxmt_command.air
+          "$METALLIB" work/dxmt_command.air -o work/dxmt_command.metallib
+          test "$(dd if=work/dxmt_command.metallib bs=1 count=4 2>/dev/null)" = "MTLB"
+          shasum -a 256 work/dxmt_command.metallib
+
+      - name: Patch ONLY i386-windows d3d9-emulated.dll
+        shell: bash
+        run: |
+          set -euxo pipefail
+          rm -rf work/unpack
+          mkdir -p work/unpack
+          ditto -x -k work/Madeira-0.1.1-official.ipa work/unpack
+
+          APP="work/unpack/Payload/Madeira.app"
+          TARGET="$APP/i386-windows/d3d9-emulated.dll"
+          test -f "$TARGET"
+
+          # Preserve the entitlements carried by the official 0.1.1 release.
+          /usr/bin/codesign -d --entitlements :- "$APP" > work/original-entitlements.plist 2>/dev/null
+          plutil -lint work/original-entitlements.plist
+
+          # Guard that the files we promised not to touch remain byte-identical.
+          shasum -a 256 "$APP/Madeira.debug.dylib" > work/before-main-dylib.sha256
+          shasum -a 256 "$APP/arm64ec-windows/d3d11.dll" > work/before-d3d11-arm64ec.sha256
+          shasum -a 256 "$APP/i386-windows/d3d11.dll" > work/before-d3d11-i386.sha256
+
+          python3 - "$TARGET" work/dxmt_command.metallib work/patch-report.txt <<'PY'
+          from pathlib import Path
+          import struct, sys, hashlib
+
+          target = Path(sys.argv[1])
+          new = Path(sys.argv[2]).read_bytes()
+          report = Path(sys.argv[3])
+
+          def fail(msg):
+              raise SystemExit("PATCH ERROR: " + msg)
+
+          if new[:4] != b"MTLB" or len(new) < 32:
+              fail("replacement metallib invalid")
+          if struct.unpack_from("<Q", new, 16)[0] != len(new):
+              fail("replacement metallib header length mismatch")
+
+          data = bytearray(target.read_bytes())
+          markers = (
+              b"clear_texture_1d_uint",
+              b"fs_blit_quad",
+              b"vs_present_quad",
+              b"cs_clear_buffer_uint",
+          )
+
+          candidates = []
+          pos = 0
+          while True:
+              p = data.find(b"MTLB", pos)
+              if p < 0:
+                  break
+              if p + 24 <= len(data):
+                  sz = struct.unpack_from("<Q", data, p + 16)[0]
+                  if 128 <= sz <= 16 * 1024 * 1024 and p + sz <= len(data):
+                      blob = data[p:p+sz]
+                      score = sum(m in blob for m in markers)
+                      if score:
+                          candidates.append((score, p, sz))
+              pos = p + 4
+
+          exact = [x for x in candidates if x[0] == 4]
+          if len(exact) != 1:
+              fail(f"expected exactly one exact dxmt_command metallib in d3d9-emulated.dll, got {exact}")
+
+          score, blob_off, old_len = exact[0]
+          if len(new) > old_len:
+              fail(f"replacement ({len(new)}) exceeds embedded blob ({old_len})")
+
+          # xxd emits an unsigned-int length next to the byte array.
+          needle = struct.pack("<I", old_len)
+          hits = []
+          p = 0
+          while True:
+              q = data.find(needle, p)
+              if q < 0:
+                  break
+              if not (blob_off <= q < blob_off + old_len):
+                  hits.append(q)
+              p = q + 1
+          if not hits:
+              fail("dxmt_command_len not found")
+          hits.sort(key=lambda q: abs(q - (blob_off + old_len)))
+          len_off = hits[0]
+          if len(hits) > 1 and abs(hits[0]-(blob_off+old_len)) == abs(hits[1]-(blob_off+old_len)):
+              fail(f"ambiguous dxmt_command_len: {hits[:8]}")
+
+          old_blob = bytes(data[blob_off:blob_off+old_len])
+          old_sha = hashlib.sha256(old_blob).hexdigest()
+          before_file_sha = hashlib.sha256(data).hexdigest()
+          new_sha = hashlib.sha256(new).hexdigest()
+
+          data[blob_off:blob_off+len(new)] = new
+          if len(new) < old_len:
+              data[blob_off+len(new):blob_off+old_len] = b"\0" * (old_len-len(new))
+          struct.pack_into("<I", data, len_off, len(new))
+          target.write_bytes(data)
+
+          check = target.read_bytes()
+          if check[blob_off:blob_off+4] != b"MTLB":
+              fail("post-write MTLB magic mismatch")
+          if struct.unpack_from("<Q", check, blob_off+16)[0] != len(new):
+              fail("post-write MTLB header length mismatch")
+          if struct.unpack_from("<I", check, len_off)[0] != len(new):
+              fail("post-write dxmt_command_len mismatch")
+          if hashlib.sha256(check[blob_off:blob_off+len(new)]).hexdigest() != new_sha:
+              fail("post-write replacement hash mismatch")
+
+          after_file_sha = hashlib.sha256(check).hexdigest()
+          lines = [
+              "Madeira 0.1.1 surgical D3D9 Metal patch",
+              "official release tag: v0.1.1",
+              "official release commit: ca3183ea3dfb0fd706aff1bea2abb871b5d27aec",
+              "official IPA sha256: 045aeb8fd4c71c2e6a78fb4511f94c56f8ed7af14c47a3b0ea2937a4fc8bfcee",
+              "DXMT source commit: a5e0cd3d41bf248fd1c030a2e1c515ba3522f4ef",
+              "ONLY patched payload: i386-windows/d3d9-emulated.dll",
+              f"embedded dxmt_command offset: 0x{blob_off:x}",
+              f"embedded dxmt_command length word offset: 0x{len_off:x}",
+              f"old metallib bytes: {old_len}",
+              f"new metallib bytes: {len(new)}",
+              f"old metallib sha256: {old_sha}",
+              f"new metallib sha256: {new_sha}",
+              f"d3d9-emulated.dll sha256 before: {before_file_sha}",
+              f"d3d9-emulated.dll sha256 after: {after_file_sha}",
+              "compiler target: iphoneos / Metal language 3.2 / iOS deployment 18.0",
+              "Madeira.debug.dylib: official 0.1.1 at this stage; patched in the following Alias BUS step",
+              "arm64ec-windows/d3d11.dll: UNCHANGED",
+              "i386-windows/d3d11.dll: UNCHANGED",
+              "FEX/Wine payloads: UNCHANGED; one targeted bus_handler hook is applied to Madeira.debug.dylib in the following step",
+          ]
+          txt = "\n".join(lines) + "\n"
+          report.write_text(txt)
+          print(txt)
+          PY
+
+          # Prove the untouched files stayed untouched.
+          shasum -a 256 -c work/before-main-dylib.sha256
+          shasum -a 256 -c work/before-d3d11-arm64ec.sha256
+          shasum -a 256 -c work/before-d3d11-i386.sha256
+
+      - name: Patch official 0.1.1 BUS handler for anonymous JIT aliases
+        shell: bash
+        run: |
+          set -euxo pipefail
+          APP="work/unpack/Payload/Madeira.app"
+          DYLIB="$APP/Madeira.debug.dylib"
+          test -f "$DYLIB"
+
+          echo "=== official 0.1.1 runtime identity before patch ==="
+          xcrun dwarfdump --uuid "$DYLIB" | tee work/runtime-uuid.txt
+          grep -qi '577C5C66-A7E8-359A-9301-546A52513969' work/runtime-uuid.txt
+
+          python3 - "$DYLIB" work/patch-report.txt <<'PY'
+          from pathlib import Path
+          import hashlib, struct, sys
+
+          path = Path(sys.argv[1])
+          report = Path(sys.argv[2])
+          data = bytearray(path.read_bytes())
+
+          # Exact official Madeira 0.1.1 (LC_UUID 577C5C66-...)
+          #
+          # Root cause from the user's Expendabros log:
+          # bus_handler recognizes writes through the PRIMARY RX pool, but its
+          # outside-pool path does not try ios_jit_anon_alias_lookup().  FEX's
+          # runtime code buffer therefore reaches the guest AV/redelivery path
+          # even though a live RW alias exists.
+          #
+          # Minimal fix:
+          #   - hook only bus_handler's generic outside-pool entry at 0x83af3c;
+          #   - use an existing 14-NOP __TEXT code cave at 0x1c67608;
+          #   - if ios_jit_anon_alias_lookup(fault) returns an RW alias, feed it
+          #     into the EXISTING official ios_emulate_store call path;
+          #   - if there is no alias, replay the one overwritten instruction and
+          #     resume the original 0.1.1 path unchanged.
+          #
+          # No store decoder is reimplemented here.
+
+          hook_off = 0x83af3c
+          cave_off = 0x1c67608
+
+          def word(off):
+              return struct.unpack_from("<I", data, off)[0]
+
+          expected_hook = 0x4f00e400  # movi v0.16b,#0
+          if word(hook_off) != expected_hook:
+              raise SystemExit(
+                  f"ALIAS BUS PATCH ERROR: hook 0x{hook_off:x} expected "
+                  f"0x{expected_hook:08x}, got 0x{word(hook_off):08x}"
+              )
+
+          for i in range(14):
+              off = cave_off + i * 4
+              if word(off) != 0xd503201f:
+                  raise SystemExit(
+                      f"ALIAS BUS PATCH ERROR: cave word {i} at 0x{off:x} "
+                      f"is 0x{word(off):08x}, expected NOP"
+                  )
+
+          before = hashlib.sha256(data).hexdigest()
+
+          # bus_handler+0x430: b 0x1c67608
+          struct.pack_into("<I", data, hook_off, 0x1450b1b3)
+
+          stub = [
+              0xaa1903e0, # 0x1c67608 mov x0,x25            ; fault address
+              0x97ae90d5, # 0x1c6760c bl  0x80b960         ; ios_jit_anon_alias_lookup
+              0xb4000120, # 0x1c67610 cbz x0,0x1c67634     ; not an alias -> original path
+              0xaa0003e2, # 0x1c67614 mov x2,x0             ; rw_addr
+              0xaa1a03f8, # 0x1c67618 mov x24,x26           ; match official success path state
+              0xf90057f6, # 0x1c6761c str x22,[sp,#0xa8]    ; preserve is_exec flag
+              0xaa1b03fa, # 0x1c67620 mov x26,x27           ; preserve faulting PC
+              0xf9401a68, # 0x1c67624 ldr x8,[x19,#0x30]
+              0xf9408908, # 0x1c67628 ldr x8,[x8,#0x110]
+              0xb9400116, # 0x1c6762c ldr w22,[x8]           ; faulting ARM64 store instruction
+              0x17af4e14, # 0x1c67630 b 0x83ae80            ; existing ios_emulate_store path
+              0x4f00e400, # 0x1c67634 movi v0.16b,#0        ; replay overwritten official insn
+              0x17af4e42, # 0x1c67638 b 0x83af40            ; continue untouched generic path
+          ]
+          for i, w in enumerate(stub):
+              struct.pack_into("<I", data, cave_off + i * 4, w)
+          # Last cave word stays the original NOP.
+          if word(cave_off + 13*4) != 0xd503201f:
+              raise SystemExit("final cave guard changed unexpectedly")
+
+          path.write_bytes(data)
+          check = path.read_bytes()
+
+          expected = {
+              hook_off: 0x1450b1b3,
+              cave_off + 0*4: 0xaa1903e0,
+              cave_off + 1*4: 0x97ae90d5,
+              cave_off + 2*4: 0xb4000120,
+              cave_off + 3*4: 0xaa0003e2,
+              cave_off + 4*4: 0xaa1a03f8,
+              cave_off + 5*4: 0xf90057f6,
+              cave_off + 6*4: 0xaa1b03fa,
+              cave_off + 7*4: 0xf9401a68,
+              cave_off + 8*4: 0xf9408908,
+              cave_off + 9*4: 0xb9400116,
+              cave_off + 10*4: 0x17af4e14,
+              cave_off + 11*4: 0x4f00e400,
+              cave_off + 12*4: 0x17af4e42,
+              cave_off + 13*4: 0xd503201f,
+          }
+          for off, w in expected.items():
+              got = struct.unpack_from("<I", check, off)[0]
+              if got != w:
+                  raise SystemExit(
+                      f"post-write verification failed at 0x{off:x}: "
+                      f"expected 0x{w:08x}, got 0x{got:08x}"
+                  )
+
+          after = hashlib.sha256(check).hexdigest()
+          with report.open("a") as fp:
+              fp.write("\nMadeira 0.1.1 anonymous-JIT-alias BUS fix\n")
+              fp.write("runtime source: official v0.1.1 Madeira.debug.dylib\n")
+              fp.write("hook: bus_handler generic outside-pool entry 0x83af3c -> code cave 0x1c67608\n")
+              fp.write("alias resolver: ios_jit_anon_alias_lookup @ 0x80b960\n")
+              fp.write("store emulator reused: official ios_emulate_store @ 0x841d24\n")
+              fp.write("no-alias fallback: original 0.1.1 instruction replay + resume at 0x83af40\n")
+              fp.write(f"Madeira.debug.dylib sha256 before: {before}\n")
+              fp.write(f"Madeira.debug.dylib sha256 after:  {after}\n")
+          print("Madeira.debug.dylib SHA256 before:", before)
+          print("Madeira.debug.dylib SHA256 after: ", after)
+          PY
+
+          # Human-readable control-flow proof from the actual patched binary.
+          xcrun llvm-objdump -d --start-address=0x83af30 --stop-address=0x83af50 "$DYLIB"             | tee work/alias-bus-hook-disasm.txt
+          xcrun llvm-objdump -d --start-address=0x1c67608 --stop-address=0x1c67640 "$DYLIB"             | tee work/alias-bus-cave-disasm.txt
+
+      - name: Patch Mach alias decoder for Q register-offset stores
+        shell: bash
+        run: |
+          set -euxo pipefail
+          APP="work/unpack/Payload/Madeira.app"
+          DYLIB="$APP/Madeira.debug.dylib"
+
+          python3 - "$DYLIB" work/patch-report.txt <<'PY'
+          from pathlib import Path
+          import hashlib, struct, sys
+
+          path = Path(sys.argv[1])
+          report = Path(sys.argv[2])
+          data = bytearray(path.read_bytes())
+
+          def word(off):
+              return struct.unpack_from("<I", data, off)[0]
+
+          # This is intentionally attached to the *undecoded-store* edge in
+          # the official v0.1.1 Mach exception decoder.  The latest phone log
+          # showed >82k protection faults generated by:
+          #   0x3ca74a70 / 0x3cb84a70
+          # which are Q-register SIMD stores with register-offset addressing.
+          #
+          # The BSD/SIGBUS path can emulate these via ios_emulate_store(), but
+          # the task-level Mach decoder lacks this encoding. Unique addresses
+          # therefore fall through to SIGBUS and make progress; once the same
+          # (pc,addr) repeats three times, Mach's guest-delivery debounce turns
+          # it into c0000005 and the process dies after 2000 redeliveries.
+          #
+          # Fix only that missing Mach family.  We copy the 128-bit Q register
+          # from the NEON snapshot already fetched by the official exception
+          # thread to the already-resolved RW alias, then jump into Madeira's
+          # existing successful-emulation tail (note_write, W^X accounting,
+          # PC += 4).  No JIT allocator/FEX/Wine payload is changed.
+
+          hook = 0x844f30
+          cave_a = 0x1c68688   # 14 official NOPs before sha256_block_armv8
+          cave_b = 0x1c6a6cc   # 13 official NOPs before sha512_block_armv8
+
+          # The AliasBUS patch already applied earlier in this workflow does
+          # not touch any of these bytes.
+          if word(hook) != 0xf000fa08:
+              raise SystemExit(
+                  f"MACH SIMD PATCH ERROR: hook expected adrp 0xf000fa08, got 0x{word(hook):08x}"
+              )
+          for base, count in ((cave_a,14),(cave_b,13)):
+              for i in range(count):
+                  if word(base+i*4) != 0xd503201f:
+                      raise SystemExit(
+                          f"MACH SIMD PATCH ERROR: cave 0x{base:x}+{i*4:#x} "
+                          f"is 0x{word(base+i*4):08x}, expected NOP"
+                      )
+
+          before=hashlib.sha256(data).hexdigest()
+
+          # 0x844f30: b cave_a
+          struct.pack_into("<I",data,hook,0x14508dd6)
+
+          # cave_a:
+          #   require successful ARM_NEON_STATE64 fetch (kr at sp+0x128 == 0)
+          #   recognize Q SIMD/FP register-offset STORE:
+          #       top[31:21] == 0x1e5  and bits[11:10] == 2
+          #     (covers the proven 0x3ca74a70 / 0x3cb84a70 family)
+          #   rt = insn & 31
+          #   src = sp+0x170 + rt*16  (official NEON snapshot)
+          #   copy 16 bytes to x19    (official resolved RW alias)
+          #   continue at official emulated-store success tail 0x849b4c.
+          #
+          # Conditional fallbacks land in cave_b+8, which replays the exact
+          # overwritten official instruction and resumes at 0x844f34.
+          a=[
+              0xb9412be8, # ldr w8,[sp,#0x128]        ; NEON thread_get_state kr
+              0x35010248, # cbnz w8,cave_b+8
+              0xb94903e8, # ldr w8,[sp,#0x900]        ; faulting instruction
+              0x53157d09, # lsr w9,w8,#21
+              0x7107953f, # cmp w9,#0x1e5
+              0x540101c1, # b.ne cave_b+8
+              0x12160509, # and w9,w8,#0xc00
+              0x7120013f, # cmp w9,#0x800
+              0x54010161, # b.ne cave_b+8
+              0x12001108, # and w8,w8,#0x1f          ; Rt/Q register
+              0x9105c3e9, # add x9,sp,#0x170         ; ARM_NEON_STATE64
+              0x8b285129, # add x9,x9,w8,uxtw #4    ; &Q[rt]
+              0xa9402d2a, # ldp x10,x11,[x9]         ; 128-bit vector
+              0x14000804, # b cave_b
+          ]
+          b=[
+              0xa9002e6a, # stp x10,x11,[x19]         ; write via RW alias
+              0x17af7d1f, # b 0x849b4c                ; official success tail
+              0xf000fa08, # fallback: replay adrp x8,0x2787000
+              0x17af6a17, # b 0x844f34                ; resume official undecoded path
+          ]
+          for i,w in enumerate(a):
+              struct.pack_into("<I",data,cave_a+i*4,w)
+          for i,w in enumerate(b):
+              struct.pack_into("<I",data,cave_b+i*4,w)
+
+          path.write_bytes(data)
+          check=path.read_bytes()
+          expected={hook:0x14508dd6}
+          expected.update({cave_a+i*4:w for i,w in enumerate(a)})
+          expected.update({cave_b+i*4:w for i,w in enumerate(b)})
+          for off,w in expected.items():
+              got=struct.unpack_from("<I",check,off)[0]
+              if got!=w:
+                  raise SystemExit(
+                      f"MACH SIMD PATCH VERIFY ERROR at 0x{off:x}: "
+                      f"expected 0x{w:08x}, got 0x{got:08x}"
+                  )
+
+          after=hashlib.sha256(check).hexdigest()
+          with report.open("a") as fp:
+              fp.write("\nMadeira 0.1.1 Mach anonymous-alias SIMD fix\n")
+              fp.write("trigger: official store-undecoded edge @ 0x844f30\n")
+              fp.write("handled family: 128-bit SIMD/FP Q register-offset stores (proven 3ca74a70 / 3cb84a70)\n")
+              fp.write("NEON source: official Mach ARM_NEON_STATE64 snapshot at sp+0x170\n")
+              fp.write("destination: official resolved anonymous RW alias in x19\n")
+              fp.write("success continuation: official emulation tail @ 0x849b4c (note_write + W^X + PC advance)\n")
+              fp.write("fallback: exact official undecoded path @ 0x844f34\n")
+              fp.write(f"Madeira.debug.dylib sha256 before Mach patch: {before}\n")
+              fp.write(f"Madeira.debug.dylib sha256 after Mach patch:  {after}\n")
+          print("Mach SIMD patch SHA256 before:",before)
+          print("Mach SIMD patch SHA256 after: ",after)
+          PY
+
+          xcrun llvm-objdump -d --start-address=0x844f20 --stop-address=0x844f40 "$DYLIB"             | tee work/mach-simd-hook-disasm.txt
+          xcrun llvm-objdump -d --start-address=0x1c68688 --stop-address=0x1c686c0 "$DYLIB"             | tee work/mach-simd-cave-a-disasm.txt
+          xcrun llvm-objdump -d --start-address=0x1c6a6cc --stop-address=0x1c6a710 "$DYLIB"             | tee work/mach-simd-cave-b-disasm.txt
+
+          # Static assertions on the control flow shown by the disassembler.
+          grep -qi '1c68688' work/mach-simd-hook-disasm.txt
+          grep -qi 'stp.*x10.*x11.*x19' work/mach-simd-cave-b-disasm.txt
+          grep -qi '849b4c' work/mach-simd-cave-b-disasm.txt
+
+      - name: Re-sign patched runtime and outer official 0.1.1 app
+        shell: bash
+        run: |
+          set -euxo pipefail
+          APP="work/unpack/Payload/Madeira.app"
+
+          # Two files differ from the official 0.1.1 payload:
+          #   1) i386-windows/d3d9-emulated.dll (Metal 3.2 command library)
+          #   2) Madeira.debug.dylib (Alias BUS fallback + Mach Q-register store fix)
+          /usr/bin/codesign --force --sign - --timestamp=none "$APP/Madeira.debug.dylib"
+          /usr/bin/codesign --force --sign - --timestamp=none             --entitlements work/original-entitlements.plist "$APP"
+          /usr/bin/codesign --verify --deep --strict --verbose=2 "$APP"
+
+          /usr/bin/codesign -d --entitlements :- "$APP" 2>/dev/null             | tee work/final-entitlements.plist
+
+          (
+            cd work/unpack
+            ditto -c -k --sequesterRsrc --keepParent Payload ../Madeira-0.1.1-D3D9-MachSIMD2.ipa
+          )
+
+          shasum -a 256 work/Madeira-0.1.1-D3D9-MachSIMD2.ipa | tee -a work/patch-report.txt
+          ls -lh work/Madeira-0.1.1-D3D9-MachSIMD2.ipa
+
+      - name: Upload Madeira 0.1.1 D3D9 + Mach SIMD fix v2
+        uses: actions/upload-artifact@v4
+        with:
+          name: Madeira-0.1.1-D3D9-MachSIMD2
+          path: |
+            work/Madeira-0.1.1-D3D9-MachSIMD2.ipa
+            work/patch-report.txt
+            work/dxmt_command.metallib
+            work/final-entitlements.plist
+            work/runtime-uuid.txt
+            work/alias-bus-hook-disasm.txt
+            work/alias-bus-cave-disasm.txt
+            work/mach-simd-hook-disasm.txt
+            work/mach-simd-cave-a-disasm.txt
+            work/mach-simd-cave-b-disasm.txt
+          compression-level: 0
+          if-no-files-found: error
