@@ -404,8 +404,41 @@ jobs:
               .inst   0xdeadbeef
           ASM
 
-          xcrun clang -target arm64-apple-ios18.0 -march=armv8.1-a+lse             -c work/atomic-alias-helper.S -o work/atomic-alias-helper.o
-          xcrun llvm-objcopy -O binary --only-section=__text             work/atomic-alias-helper.o work/atomic-alias-helper.bin
+          SDKROOT="$(xcrun --sdk iphoneos --show-sdk-path)"
+          xcrun clang -target arm64-apple-ios18.0 -isysroot "$SDKROOT" -march=armv8.1-a+lse -c work/atomic-alias-helper.S -o work/atomic-alias-helper.o
+          python3 - work/atomic-alias-helper.o work/atomic-alias-helper.bin <<'PY'
+          from pathlib import Path
+          import struct, sys
+          src=Path(sys.argv[1]).read_bytes()
+          if struct.unpack_from("<I",src,0)[0] != 0xfeedfacf:
+              raise SystemExit("atomic helper object is not Mach-O 64")
+          ncmds=struct.unpack_from("<I",src,16)[0]
+          p=32
+          found=None
+          for _ in range(ncmds):
+              cmd,cmdsize=struct.unpack_from("<II",src,p)
+              if cmd == 0x19:
+                  nsects=struct.unpack_from("<I",src,p+64)[0]
+                  sp=p+72
+                  for _ in range(nsects):
+                      sect=src[sp:sp+16].split(b"\\0",1)[0]
+                      size=struct.unpack_from("<Q",src,sp+40)[0]
+                      off=struct.unpack_from("<I",src,sp+48)[0]
+                      if sect == b"__text":
+                          found=(off,size)
+                          break
+                      sp += 80
+              if found: break
+              p += cmdsize
+          if not found:
+              raise SystemExit("__text section not found in helper object")
+          off,size=found
+          blob=src[off:off+size]
+          if len(blob) != size or not blob:
+              raise SystemExit("invalid helper __text range")
+          Path(sys.argv[2]).write_bytes(blob)
+          print(f"extracted helper __text offset=0x{off:x} bytes={size}")
+          PY
           test -s work/atomic-alias-helper.bin
           xcrun llvm-objdump -d work/atomic-alias-helper.o | tee work/atomic-alias-helper-disasm.txt
           ls -l work/atomic-alias-helper.bin
