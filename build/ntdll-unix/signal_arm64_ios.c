@@ -1285,6 +1285,141 @@ void ios_dump_guest_callers( const char *tag, unsigned long long x28 )
 /* Signal-safe 32/64-bit CAS core, shared semantics with the BSD alias path.
  * Caller establishes full alias coverage. FP/LR encodings deliberately
  * decline: Darwin's __x array contains only x0..x28. No Wine logging here. */
+
+/* MadeiraJon 2026-10-02: LSE read-modify-write operations that fault only
+ * because FEX is writing through the executable view of a dual-mapped JIT
+ * page. The RW alias names the same physical bytes.  seq_cst is stronger
+ * than all acquire/release variants of these instructions.
+ *
+ * Covered: LDADD/LDCLR/LDEOR/LDSET, B/H/W/X. */
+static int ios_mach_emulate_lse_rmw(uint32_t insn, uintptr_t rw_addr, uint64_t gpr[29])
+{
+    uint32_t op = insn & 0x3f20fc00u;
+    unsigned size_lg2, width, rs, rt, family;
+    uint64_t in, old = 0;
+
+    if      (op == 0x38200000u) family = 0; /* LDADD */
+    else if (op == 0x38201000u) family = 1; /* LDCLR */
+    else if (op == 0x38202000u) family = 2; /* LDEOR */
+    else if (op == 0x38203000u) family = 3; /* LDSET */
+    else return 0;
+
+    size_lg2 = (insn >> 30) & 3;
+    width = 1u << size_lg2;
+    rs = (insn >> 16) & 31;
+    rt = insn & 31;
+
+    /* state.__x passed here contains x0..x28 only. */
+    if ((rs >= 29 && rs != 31) || (rt >= 29 && rt != 31)) return 0;
+    if (!rw_addr || (rw_addr & (width - 1))) return 0;
+
+    in = rs == 31 ? 0 : gpr[rs];
+
+#define MADEIRAJON_LSE_OP(type) do { \
+    type *p = (type *)rw_addr; \
+    type v = (type)in; \
+    switch (family) { \
+    case 0: old = __atomic_fetch_add(p, v, __ATOMIC_SEQ_CST); break; \
+    case 1: old = __atomic_fetch_and(p, (type)~v, __ATOMIC_SEQ_CST); break; \
+    case 2: old = __atomic_fetch_xor(p, v, __ATOMIC_SEQ_CST); break; \
+    default: old = __atomic_fetch_or(p, v, __ATOMIC_SEQ_CST); break; \
+    } \
+} while (0)
+
+    switch (size_lg2)
+    {
+    case 0: MADEIRAJON_LSE_OP(uint8_t);  break;
+    case 1: MADEIRAJON_LSE_OP(uint16_t); break;
+    case 2: MADEIRAJON_LSE_OP(uint32_t); break;
+    default: MADEIRAJON_LSE_OP(uint64_t); break;
+    }
+#undef MADEIRAJON_LSE_OP
+
+    if (rt != 31) gpr[rt] = old; /* ZR discards the old value */
+    return 1;
+}
+
+/* MadeiraJon 2026-10-02: FEX's unaligned-atomic fallback can execute
+ * LDAXR/STLXR against an RX alias. The load succeeds; the exclusive store
+ * faults. Replay only the observed/provable fallback shape: a nearby matching
+ * LDXR/LDAXR must have loaded the expected value into the same register that
+ * STLXR uses as Ws. Then a compare-exchange on the RW alias preserves the
+ * useful exclusive-store success/failure contract without blindly storing. */
+static int ios_mach_emulate_store_exclusive(uint32_t insn, uintptr_t fault_pc,
+                                             uintptr_t rw_addr, uint64_t gpr[29])
+{
+    unsigned size_lg2, width, rs, rn, rt, back;
+    uint64_t expected, desired;
+    int matched = 0, ok = 0;
+
+    if ((insn & 0x3fe07c00u) != 0x08007c00u) return 0; /* STXR/STLXR */
+    size_lg2 = (insn >> 30) & 3;
+    width = 1u << size_lg2;
+    rs = (insn >> 16) & 31; /* Ws status; FEX fallback keeps old value here */
+    rn = (insn >> 5) & 31;
+    rt = insn & 31;         /* value to store */
+
+    if (rs >= 29 || (rt >= 29 && rt != 31)) return 0;
+    if (!rw_addr || (rw_addr & (width - 1)) || fault_pc < 16) return 0;
+
+    for (back = 1; back <= 4; back++)
+    {
+        uint32_t prev = 0;
+        mach_vm_size_t got = 0;
+        if (mach_vm_read_overwrite(mach_task_self(),
+                (mach_vm_address_t)(fault_pc - 4 * back), 4,
+                (mach_vm_address_t)&prev, &got) != KERN_SUCCESS || got != 4)
+            continue;
+        if ((prev & 0x3fe07c00u) == 0x08407c00u && /* LDXR/LDAXR */
+            ((prev >> 30) & 3) == size_lg2 &&
+            ((prev >> 5) & 31) == rn &&
+            (prev & 31) == rs)
+        {
+            matched = 1;
+            break;
+        }
+    }
+    if (!matched) return 0;
+
+    expected = gpr[rs];
+    desired = rt == 31 ? 0 : gpr[rt];
+
+    switch (size_lg2)
+    {
+    case 0:
+    {
+        uint8_t e = (uint8_t)expected;
+        ok = __atomic_compare_exchange_n((uint8_t *)rw_addr, &e, (uint8_t)desired,
+                                         0, __ATOMIC_SEQ_CST, __ATOMIC_SEQ_CST);
+        break;
+    }
+    case 1:
+    {
+        uint16_t e = (uint16_t)expected;
+        ok = __atomic_compare_exchange_n((uint16_t *)rw_addr, &e, (uint16_t)desired,
+                                         0, __ATOMIC_SEQ_CST, __ATOMIC_SEQ_CST);
+        break;
+    }
+    case 2:
+    {
+        uint32_t e = (uint32_t)expected;
+        ok = __atomic_compare_exchange_n((uint32_t *)rw_addr, &e, (uint32_t)desired,
+                                         0, __ATOMIC_SEQ_CST, __ATOMIC_SEQ_CST);
+        break;
+    }
+    default:
+    {
+        uint64_t e = expected;
+        ok = __atomic_compare_exchange_n((uint64_t *)rw_addr, &e, desired,
+                                         0, __ATOMIC_SEQ_CST, __ATOMIC_SEQ_CST);
+        break;
+    }
+    }
+
+    gpr[rs] = ok ? 0 : 1; /* Ws result: zero = store succeeded */
+    return 1;
+}
+
 static int ios_mach_emulate_cas(uint32_t insn, uintptr_t rw_addr, uint64_t gpr[29])
 {
     unsigned rs, rt, width;
@@ -3065,7 +3200,7 @@ static void *ios_mach_exception_thread( void *arg )
                 if (rw_addr && (uintptr_t)fault_pc >= 0x100000000ULL)
                 {
                     uint32_t insn; ios_fault_read_insn( (uint64_t)(uintptr_t)fault_pc, &insn );  /* ml982 */
-                    int emulated = 0;
+                    int emulated = 0, recognized = 0;
                     /* STP (SIMD&FP, signed offset, 128-bit Q): 10 101 1 1 0 0 0 imm7 Rt2 Rn Rt
                      *   pattern bits 31-22: 10 1011 1000  → top10 = 0x2B8 (= bits 31..22)
                      *   So mask 0xFFC00000 = top10. Match 0x2B8 << 22 = 0xAE000000? Hmm.
@@ -3473,6 +3608,29 @@ static void *ios_mach_exception_thread( void *arg )
                     }
                     
 
+                    /* MadeiraJon: device logs prove these are real alias writes:
+                     * 0xb8f50314 and 0xb8e40304 are LDADD-family instructions.
+                     * Unaligned members are recognized but deliberately left to
+                     * the existing STATUS_DATATYPE_MISALIGNMENT -> FEX path. */
+                    else if ((insn & 0x3F20FC00u) == 0x38200000u ||
+                             (insn & 0x3F20FC00u) == 0x38201000u ||
+                             (insn & 0x3F20FC00u) == 0x38202000u ||
+                             (insn & 0x3F20FC00u) == 0x38203000u)
+                    {
+                        static unsigned lse_logs;
+                        recognized = 1;
+                        if (ios_mach_emulate_lse_rmw(insn, rw_addr, state.__x))
+                        {
+                            emulated = 1;
+                            if (lse_logs++ < 16)
+                                dprintf(STDERR_FILENO,
+                                    "[lse-rmw-emul] insn=0x%08x pc=0x%llx addr=0x%llx rw=0x%llx\n",
+                                    insn, (unsigned long long)fault_pc,
+                                    (unsigned long long)fault_addr,
+                                    (unsigned long long)rw_addr);
+                        }
+                    }
+
                     /* iOS-Madeira ml626: SWP{A}{L}{B,H} — ATOMIC SWAP.
                      *
                      * Encoding (atomic memory operation, o3=1 opc=000):
@@ -3501,6 +3659,7 @@ static void *ios_mach_exception_thread( void *arg )
                      * blocker justifies — add families when they actually appear. */
                     else if ((insn & 0x3F20FC00) == 0x38208000)
                     {
+                        recognized = 1;
                         int size_lg2 = (insn >> 30) & 0x3;
                         int rs = (insn >> 16) & 0x1f;   /* value to store  */
                         int rt = insn & 0x1f;           /* old value lands here */
@@ -3565,6 +3724,27 @@ static void *ios_mach_exception_thread( void *arg )
                             }
                         }
                     }
+                    /* MadeiraJon: after an unaligned SWP is delivered to FEX,
+                     * its fallback uses LDAXR/STLXR. The load can read RX, but
+                     * the store faults on RX. Service the proven exclusive pair
+                     * atomically through the existing RW alias. */
+                    if (!emulated && (insn & 0x3FE07C00u) == 0x08007C00u)
+                    {
+                        static unsigned excl_logs;
+                        if (ios_mach_emulate_store_exclusive(insn,
+                                (uintptr_t)fault_pc, rw_addr, state.__x))
+                        {
+                            emulated = 1;
+                            if (excl_logs++ < 16)
+                                dprintf(STDERR_FILENO,
+                                    "[exclusive-store-emul] insn=0x%08x pc=0x%llx addr=0x%llx rw=0x%llx status=w%d\n",
+                                    insn, (unsigned long long)fault_pc,
+                                    (unsigned long long)fault_addr,
+                                    (unsigned long long)rw_addr,
+                                    (insn >> 16) & 31);
+                        }
+                    }
+
                     /* FEX's native backpatch lock uses CASAL on the pool RX
                      * view. Handle it before Mach-to-guest delivery; otherwise
                      * a host-runtime fault escapes into the guest's VEH.
@@ -3591,7 +3771,7 @@ static void *ios_mach_exception_thread( void *arg )
                      * in this decode list — every such miss previously cost a full
                      * run to name (ml349's STRB-reg took one). Print the insn so
                      * the next gap is a one-line diagnosis. Capped. */
-                    if (!emulated)
+                    if (!emulated && !recognized)
                     {
                         static int undecoded_n;
                         if (undecoded_n < 8)
