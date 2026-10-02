@@ -265,6 +265,123 @@ jobs:
           print(extra)
           PY
 
+      - name: Patch BUS writes to anonymous JIT aliases
+        shell: bash
+        run: |
+          set -euxo pipefail
+          APP="work/unpack/Payload/Madeira.app"
+          DYLIB="$APP/Madeira.debug.dylib"
+          test -f "$DYLIB"
+
+          python3 - "$DYLIB" work/patch-report.txt <<'PY'
+          from pathlib import Path
+          import hashlib, sys
+
+          path = Path(sys.argv[1])
+          report = Path(sys.argv[2])
+          data = bytearray(path.read_bytes())
+
+          # madeira-log(8): BUS write at guest alias 0x4037002c0 loops 2000x.
+          # The Mach exception path already resolves anonymous JIT aliases with
+          # ios_jit_anon_alias_lookup(), but bus_handler's data-write path only
+          # recognizes the primary RX pool. Extend that path to anon aliases.
+          #
+          # Madeira v0.1.0 exact offsets/symbols:
+          #   bus_handler                0x828b3c
+          #   ios_jit_anon_alias_lookup  0x7f9a60
+          #   ios_emulate_store          0x82fd54
+          #
+          # Redirect the three out-of-primary-pool tests to a small trampoline
+          # placed over the old fatal-path diagnostics at 0x82916c. The stub:
+          #   lookup(fault)
+          #   if no alias -> original AV path
+          #   emulate_store(ctx, insn, rw_alias)
+          #   if success -> existing PC+4/fixup/return path
+          #   else -> original AV path
+          guards = {
+              0x828e6c: bytes.fromhex("170800b4"), # cbz x23, 0x828f6c
+              0x828e74: bytes.fromhex("c3070054"), # b.lo 0x828f6c
+              0x828e7c: bytes.fromhex("89070054"), # b.ls 0x828f6c
+              0x828ebc: bytes.fromhex("80150034"), # cbz w0, 0x82916c (existing)
+              0x82916c: bytes.fromhex("28fa00b0"), # old diagnostic code
+          }
+          for off, expected in guards.items():
+              got = bytes(data[off:off+4])
+              if got != expected:
+                  raise SystemExit(
+                      f"BUS-ALIAS PATCH ERROR at 0x{off:x}: "
+                      f"expected {expected.hex()}, got {got.hex()}"
+                  )
+
+          before = hashlib.sha256(data).hexdigest()
+
+          # Out-of-primary-pool -> alias trampoline.
+          data[0x828e6c:0x828e70] = bytes.fromhex("171800b4") # cbz x23,0x82916c
+          data[0x828e74:0x828e78] = bytes.fromhex("c3170054") # b.lo 0x82916c
+          data[0x828e7c:0x828e80] = bytes.fromhex("89170054") # b.ls 0x82916c
+
+          stub = {
+              0x82916c: "e00319aa", # mov x0,x25 (fault)
+              0x829170: "3c42ff97", # bl ios_jit_anon_alias_lookup
+              0x829174: "c0efffb4", # cbz x0,0x828f6c
+              0x829178: "e20300aa", # mov x2,x0 (rw_addr)
+              0x82917c: "f8031aaa", # mov x24,x26 (preserve success-tail expectation)
+              0x829180: "fa031baa", # mov x26,x27
+              0x829184: "681a40f9", # ldr x8,[x19,#0x30]
+              0x829188: "088940f9", # ldr x8,[x8,#0x110] (faulting PC)
+              0x82918c: "160140b9", # ldr w22,[x8] (instruction)
+              0x829190: "e00313aa", # mov x0,x19 (ucontext)
+              0x829194: "e10316aa", # mov x1,x22 (insn)
+              0x829198: "ef1a0094", # bl ios_emulate_store
+              0x82919c: "80eeff34", # cbz w0,0x828f6c
+              0x8291a0: "48ffff17", # b 0x828ec0 existing success tail
+          }
+          for off, hx in stub.items():
+              data[off:off+4] = bytes.fromhex(hx)
+          for off in range(0x8291a4, 0x8291e0, 4):
+              data[off:off+4] = bytes.fromhex("1f2003d5") # nop
+
+          path.write_bytes(data)
+          check = path.read_bytes()
+
+          # Strong post-write guards.
+          verifies = {
+              0x828e6c:"171800b4", 0x828e74:"c3170054", 0x828e7c:"89170054",
+              0x82916c:"e00319aa", 0x829170:"3c42ff97", 0x829174:"c0efffb4",
+              0x829178:"e20300aa", 0x82917c:"f8031aaa", 0x829180:"fa031baa",
+              0x829184:"681a40f9", 0x829188:"088940f9", 0x82918c:"160140b9",
+              0x829190:"e00313aa", 0x829194:"e10316aa", 0x829198:"ef1a0094",
+              0x82919c:"80eeff34", 0x8291a0:"48ffff17",
+          }
+          for off,hx in verifies.items():
+              if check[off:off+4] != bytes.fromhex(hx):
+                  raise SystemExit(f"BUS-ALIAS post-write verification failed at 0x{off:x}")
+
+          after = hashlib.sha256(check).hexdigest()
+          extra = (
+              "\nBUS anonymous-JIT-alias write patch:\n"
+              "symptom: 2000 identical redeliveries at pc=0x1662e63b0 "
+              "fault=0x4037002c0, then process termination\n"
+              "root cause: bus_handler handled primary JIT RX only; anon alias "
+              "lookup existed only in the Mach exception path\n"
+              "change: route out-of-pool BUS writes through "
+              "ios_jit_anon_alias_lookup + ios_emulate_store\n"
+              f"dylib sha256 before BUS patch: {before}\n"
+              f"dylib sha256 after BUS patch: {after}\n"
+          )
+          report.write_text(report.read_text() + extra)
+          print(extra)
+          PY
+
+          # Verify the exact control flow using the runner's objdump if present.
+          if command -v llvm-objdump >/dev/null 2>&1; then
+            llvm-objdump -d --start-address=0x828e50 --stop-address=0x8291e0 "$DYLIB"               | tee work/bus-alias-disasm.txt
+            grep -q 'bl.*0x7f9a60' work/bus-alias-disasm.txt
+            grep -q 'bl.*0x82fd54' work/bus-alias-disasm.txt
+          else
+            echo "llvm-objdump unavailable; byte-level verification already passed"               | tee work/bus-alias-disasm.txt
+          fi
+
       - name: Re-sign bundle ad-hoc and package IPA
         shell: bash
         run: |
@@ -284,21 +401,22 @@ jobs:
             exit 1
           fi
 
-          rm -f work/Madeira-0.1.0-MSL32-RWalias-JITfix.ipa
+          rm -f work/Madeira-0.1.0-MSL32-RWalias-BUSalias.ipa
           (
             cd work/unpack
-            ditto -c -k --sequesterRsrc --keepParent Payload ../Madeira-0.1.0-MSL32-RWalias-JITfix.ipa
+            ditto -c -k --sequesterRsrc --keepParent Payload ../Madeira-0.1.0-MSL32-RWalias-BUSalias.ipa
           )
-          shasum -a 256 work/Madeira-0.1.0-MSL32-RWalias-JITfix.ipa | tee -a work/patch-report.txt
-          ls -lh work/Madeira-0.1.0-MSL32-RWalias-JITfix.ipa
+          shasum -a 256 work/Madeira-0.1.0-MSL32-RWalias-BUSalias.ipa | tee -a work/patch-report.txt
+          ls -lh work/Madeira-0.1.0-MSL32-RWalias-BUSalias.ipa
 
       - name: Upload patched IPA
         uses: actions/upload-artifact@v4
         with:
-          name: Madeira-0.1.0-MSL32-RWalias-JITfix
+          name: Madeira-0.1.0-MSL32-RWalias-BUSalias
           path: |
-            work/Madeira-0.1.0-MSL32-RWalias-JITfix.ipa
+            work/Madeira-0.1.0-MSL32-RWalias-BUSalias.ipa
             work/patch-report.txt
             work/dxmt_command.metallib
+            work/bus-alias-disasm.txt
           compression-level: 0
           if-no-files-found: error
