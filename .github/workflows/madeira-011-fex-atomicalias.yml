@@ -479,14 +479,25 @@ jobs:
           p=Path(sys.argv[1])
           s=p.read_text()
 
-          anchor='''  FEX::Windows::Allocator::SetupHooks(NtDll);
-          FEX::Windows::UnixLib::Init(NtDll);
-          '''
-          if anchor not in s:
-              raise SystemExit("FEX patch anchor missing")
+          # C-linkage is required because IosMonoBridge.cpp defines this export
+          # inside extern "C". Put the declaration at namespace scope, not
+          # inside BTCpuProcessInit.
+          decl_anchor = "extern \"C\" uintptr_t ios_fex_jit_pool_end;\n"
+          if decl_anchor not in s:
+              raise SystemExit("FEX declaration anchor missing")
+          s = s.replace(
+              decl_anchor,
+              decl_anchor + 'extern "C" void BTCpuIosSetMonoBridge(uint64_t BridgeAddr);\n',
+              1,
+          )
 
-          replacement='''  FEX::Windows::Allocator::SetupHooks(NtDll);
-          FEX::Windows::UnixLib::Init(NtDll);
+          # Insert after the existing FEX unixlib initialization. Use a
+          # one-line anchor so YAML/heredoc whitespace cannot change matching.
+          anchor = "  FEX::Windows::UnixLib::Init(NtDll);\n"
+          if anchor not in s:
+              raise SystemExit("FEX init anchor missing")
+
+          replacement='''  FEX::Windows::UnixLib::Init(NtDll);
 
           #ifdef FEX_IOS_HOST
             /*
