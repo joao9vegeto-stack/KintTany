@@ -20,7 +20,9 @@ jobs:
           ditto -x -k Madeira.ipa unpack
           DYLIB="unpack/Payload/Madeira.app/Madeira.debug.dylib"
           xcrun nm -an "$DYLIB" | grep -E 'ios_emulate_store(_rel)?$|ios_jit_anon_alias_lookup$|bus_handler$' | tee symbols.txt
-          xcrun llvm-objdump -d --start-address=0x83ae40 --stop-address=0x83af80 "$DYLIB" | tee bus.txt
+          xcrun llvm-objdump -d --start-address=0x83ae40 --stop-address=0x83b380 "$DYLIB" | tee bus.txt
+          xcrun llvm-objdump -d --start-address=0x841d00 --stop-address=0x842c00 "$DYLIB" | tee store.txt
+          xcrun nm -an "$DYLIB" | awk '$1 >= "0000000000841c00" && $1 <= "0000000000843000" {print}' | tee near-store-symbols.txt
           python3 - "$DYLIB" <<'PY' | tee caves.txt
           from pathlib import Path
           import struct, sys
@@ -45,3 +47,5 @@ jobs:
             symbols.txt
             bus.txt
             caves.txt
+            store.txt
+            near-store-symbols.txt
