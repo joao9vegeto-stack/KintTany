@@ -6,100 +6,110 @@ on:
   workflow_dispatch:
 
 jobs:
-  inspect-and-patch:
+  patch-ipa:
     runs-on: macos-15
     timeout-minutes: 30
     steps:
-      - name: Checkout CI harness
+      - name: Checkout madeiratest harness
         uses: actions/checkout@v4
 
-      - name: Clone upstream Madeira source
+      - name: Clone original Madeira source
         run: |
-          git clone --depth 1 https://github.com/willfaust/Madeira.git upstream-Madeira
-          echo "UPSTREAM=$(git -C upstream-Madeira rev-parse HEAD)"
-          sed -n '495,535p' upstream-Madeira/app/Madeira/StikJITHelper.swift
+          git clone --depth 1 --branch v0.1.0 https://github.com/willfaust/Madeira.git Madeira-upstream
+          echo "UPSTREAM_TAG=$(git -C Madeira-upstream rev-parse HEAD)"
+          grep -n -A 14 -B 8 'rwAddr = 0x7000000000' Madeira-upstream/app/Madeira/StikJITHelper.swift
 
-      - name: Download official Madeira IPA
+      - name: Record equivalent source patch
+        run: |
+          cp Madeira-upstream/app/Madeira/StikJITHelper.swift StikJITHelper.before.swift
+          python3 - <<'PY'
+          from pathlib import Path
+          p = Path("Madeira-upstream/app/Madeira/StikJITHelper.swift")
+          s = p.read_text()
+          old = "        rwAddr = 0x7000000000\n"
+          new = (
+              "        // madeiratest / no-EVA: do not seed vm_remap at 448 GB.\n"
+              "        // With VM_FLAGS_ANYWHERE a zero hint lets XNU choose a valid low-VA hole.\n"
+              "        rwAddr = 0\n"
+          )
+          if s.count(old) != 1:
+              raise SystemExit(f"expected exactly one production rwAddr high-VA assignment, found {s.count(old)}")
+          p.write_text(s.replace(old, new))
+          PY
+          diff -u StikJITHelper.before.swift Madeira-upstream/app/Madeira/StikJITHelper.swift > madeira-noeva-source.patch || true
+          cat madeira-noeva-source.patch
+
+      - name: Download official Madeira 0.1.0 IPA
         run: |
           curl -fL --retry 3 -o Madeira-original.ipa \
             https://github.com/willfaust/Madeira/releases/download/v0.1.0/Madeira-0.1.0.ipa
-          shasum -a 256 Madeira-original.ipa
+          echo "29054bb5d167382f004ba3ae04d3995e31070e67f4c0acf7eb4f180280f93335  Madeira-original.ipa" | shasum -a 256 -c -
+          rm -rf ipa
           unzip -q Madeira-original.ipa -d ipa
-          find ipa/Payload/Madeira.app -maxdepth 2 -type f -print0 | \
-            xargs -0 file > app-files.txt
-          cat app-files.txt
+          test -f ipa/Payload/Madeira.app/Madeira.debug.dylib
 
-      - name: Locate compiled Madeira implementation
-        run: |
-          set -e
-          APP=ipa/Payload/Madeira.app
-          : > candidates.txt
-          while IFS= read -r -d '' f; do
-            if grep -aFq "vm_remap failed:" "$f" 2>/dev/null; then
-              echo "$f" | tee -a candidates.txt
-            fi
-          done < <(find "$APP" -type f -print0)
-          echo "=== candidates ==="
-          cat candidates.txt
-          test -s candidates.txt
-          BIN="$(head -n1 candidates.txt)"
-          echo "$BIN" > target-bin.txt
-          echo "TARGET=$BIN"
-          file "$BIN"
-          strings -a "$BIN" | grep -n -E "vm_remap failed|ml977: RX=|Allocating .*JIT pool|no early pool placeholder" \
-            > strings-hits.txt || true
-          cat strings-hits.txt
-
-      - name: Disassemble actual target
-        run: |
-          BIN="$(cat target-bin.txt)"
-          nm -m "$BIN" > nm.txt || true
-          otool -tvV "$BIN" > disasm.txt
-          echo "=== vm_remap references ==="
-          grep -n -B 35 -A 50 "vm_remap" disasm.txt | head -n 1200 > vm-remap-context.txt || true
-          cat vm-remap-context.txt
-          echo "=== likely 448GB materialization ==="
-          grep -n -E -B 20 -A 50 "0x7000000000|0x70|#0x70|#112" disasm.txt | head -n 2000 > constant-context.txt || true
-          cat constant-context.txt
-
-      - name: Scan AArch64 constant-building instructions
+      - name: Patch compiled no-EVA vm_remap hint
         run: |
           python3 - <<'PY'
           from pathlib import Path
-          import struct, re
-          p=Path(Path("target-bin.txt").read_text().strip())
-          b=p.read_bytes()
-          out=[]
-          # Decode MOVZ/MOVN/MOVK wide-immediate instructions and report pieces
-          # which can participate in constructing 0x7000000000.
-          for off in range(0, len(b)-4, 4):
-              ins=struct.unpack_from("<I",b,off)[0]
-              if (ins & 0x1f800000) == 0x12800000:
-                  sf=(ins>>31)&1
-                  opc=(ins>>29)&3
-                  hw=(ins>>21)&3
-                  imm16=(ins>>5)&0xffff
-                  rd=ins&31
-                  if sf and (imm16 in (0x70,0x7000,0x7) or (imm16 << (16*hw)) == 0x7000000000):
-                      out.append((off,ins,sf,opc,hw,imm16,rd))
-          text="\n".join("file_off=0x%x ins=0x%08x opc=%d hw=%d imm=0x%x rd=x%d"%(
-              off,ins,opc,hw,imm,rd) for off,ins,sf,opc,hw,imm,rd in out)
-          print(text or "NO WIDE-IMM CANDIDATES")
-          Path("wide-imm-hits.txt").write_text(text+"\n")
+          import struct
+
+          p = Path("ipa/Payload/Madeira.app/Madeira.debug.dylib")
+          data = bytearray(p.read_bytes())
+
+          # Madeira 0.1.0 / StikJITHelper.allocatePool:
+          # 0x604530: mov x8, #0x7000000000
+          # 0x604534: str x8, [x19, #0x1f80]  -> rwAddr
+          # Patch ONLY the first instruction to: mov x8, #0
+          off = 0x604530
+          original = bytes.fromhex("08 0e c0 d2")  # 0xd2c00e08
+          patched  = bytes.fromhex("08 00 80 d2")  # 0xd2800008
+
+          got = bytes(data[off:off+4])
+          print(f"offset 0x{off:x}: before={got.hex(' ')}")
+          if got != original:
+              raise SystemExit(
+                  f"binary guard failed at 0x{off:x}: expected {original.hex(' ')}, got {got.hex(' ')}"
+              )
+
+          data[off:off+4] = patched
+          p.write_bytes(data)
+          print(f"offset 0x{off:x}: after ={patched.hex(' ')}")
           PY
 
-      - name: Upload diagnostics
+          otool -tvV ipa/Payload/Madeira.app/Madeira.debug.dylib | \
+            awk '$1=="0000000000604530"{print; found=1} END{exit !found}' | tee patched-instruction.txt
+          grep -q 'mov.*#0x0' patched-instruction.txt
+
+      - name: Re-sign bundle ad hoc while preserving app entitlements
+        run: |
+          APP=ipa/Payload/Madeira.app
+          /usr/bin/codesign -d --entitlements :- "$APP" > original-entitlements.plist 2>/dev/null || true
+          echo "=== original entitlements ==="
+          cat original-entitlements.plist || true
+
+          /usr/bin/codesign --force --sign - "$APP/Madeira.debug.dylib"
+          if plutil -lint original-entitlements.plist >/dev/null 2>&1; then
+            /usr/bin/codesign --force --sign - --entitlements original-entitlements.plist "$APP"
+          else
+            /usr/bin/codesign --force --sign - "$APP"
+          fi
+          /usr/bin/codesign --verify --deep --strict --verbose=2 "$APP"
+
+      - name: Package test IPA
+        run: |
+          rm -f "Madeira no EVA Test.ipa"
+          (
+            cd ipa
+            /usr/bin/zip -qry "../Madeira no EVA Test.ipa" Payload
+          )
+          shasum -a 256 "Madeira no EVA Test.ipa" | tee Madeira-noEVA-Test.sha256
+          unzip -l "Madeira no EVA Test.ipa" | head -n 20
+
+      - name: Upload IPA artifact
         uses: actions/upload-artifact@v4
         with:
-          name: Madeira-diagnostics-2
-          path: |
-            app-files.txt
-            candidates.txt
-            target-bin.txt
-            disasm.txt
-            nm.txt
-            strings-hits.txt
-            vm-remap-context.txt
-            constant-context.txt
-            wide-imm-hits.txt
-          if-no-files-found: warn
+          name: Madeira-noEVA-Test
+          path: Madeira no EVA Test.ipa
+          if-no-files-found: error
+          compression-level: 0
