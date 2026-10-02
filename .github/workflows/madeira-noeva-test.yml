@@ -16,7 +16,7 @@ jobs:
       - name: Clone upstream Madeira source
         run: |
           git clone --depth 1 https://github.com/willfaust/Madeira.git upstream-Madeira
-          git -C upstream-Madeira rev-parse HEAD
+          echo "UPSTREAM=$(git -C upstream-Madeira rev-parse HEAD)"
           sed -n '495,535p' upstream-Madeira/app/Madeira/StikJITHelper.swift
 
       - name: Download official Madeira IPA
@@ -25,53 +25,81 @@ jobs:
             https://github.com/willfaust/Madeira/releases/download/v0.1.0/Madeira-0.1.0.ipa
           shasum -a 256 Madeira-original.ipa
           unzip -q Madeira-original.ipa -d ipa
-          file ipa/Payload/Madeira.app/Madeira
+          find ipa/Payload/Madeira.app -maxdepth 2 -type f -print0 | \
+            xargs -0 file > app-files.txt
+          cat app-files.txt
 
-      - name: Inspect vm_remap call sites and 448GB constant
+      - name: Locate compiled Madeira implementation
         run: |
-          BIN=ipa/Payload/Madeira.app/Madeira
+          set -e
+          APP=ipa/Payload/Madeira.app
+          : > candidates.txt
+          while IFS= read -r -d '' f; do
+            if grep -aFq "vm_remap failed:" "$f" 2>/dev/null; then
+              echo "$f" | tee -a candidates.txt
+            fi
+          done < <(find "$APP" -type f -print0)
+          echo "=== candidates ==="
+          cat candidates.txt
+          test -s candidates.txt
+          BIN="$(head -n1 candidates.txt)"
+          echo "$BIN" > target-bin.txt
+          echo "TARGET=$BIN"
+          file "$BIN"
+          strings -a "$BIN" | grep -n -E "vm_remap failed|ml977: RX=|Allocating .*JIT pool|no early pool placeholder" \
+            > strings-hits.txt || true
+          cat strings-hits.txt
+
+      - name: Disassemble actual target
+        run: |
+          BIN="$(cat target-bin.txt)"
           nm -m "$BIN" > nm.txt || true
           otool -tvV "$BIN" > disasm.txt
           echo "=== vm_remap references ==="
-          grep -n -B 20 -A 20 "vm_remap" disasm.txt | head -n 400 || true
-          echo "=== 0x70 shifted constants ==="
-          grep -n -E -B 12 -A 24 "0x70|#112" disasm.txt | grep -E -B 12 -A 24 "lsl|movz|movk|vm_remap" | head -n 800 || true
-          strings -a "$BIN" | grep -n -E "vm_remap failed|ml977: RX=|Allocating .*JIT pool" > strings-hits.txt || true
+          grep -n -B 35 -A 50 "vm_remap" disasm.txt | head -n 1200 > vm-remap-context.txt || true
+          cat vm-remap-context.txt
+          echo "=== likely 448GB materialization ==="
+          grep -n -E -B 20 -A 50 "0x7000000000|0x70|#0x70|#112" disasm.txt | head -n 2000 > constant-context.txt || true
+          cat constant-context.txt
 
-      - name: Find likely MOVZ 0x70 LSL 32 instructions
+      - name: Scan AArch64 constant-building instructions
         run: |
           python3 - <<'PY'
           from pathlib import Path
-          import struct
-          p=Path("ipa/Payload/Madeira.app/Madeira")
+          import struct, re
+          p=Path(Path("target-bin.txt").read_text().strip())
           b=p.read_bytes()
-          hits=[]
-          # AArch64 MOVZ (64-bit): sf=1 opc=10 fixed=100101, mask 0x7f800000 = 0x52800000,
-          # 64-bit form has bit31 set. Decode imm16 + hw.
+          out=[]
+          # Decode MOVZ/MOVN/MOVK wide-immediate instructions and report pieces
+          # which can participate in constructing 0x7000000000.
           for off in range(0, len(b)-4, 4):
               ins=struct.unpack_from("<I",b,off)[0]
-              if (ins & 0x7f800000) == 0x52800000 and (ins>>31)&1:
+              if (ins & 0x1f800000) == 0x12800000:
+                  sf=(ins>>31)&1
+                  opc=(ins>>29)&3
                   hw=(ins>>21)&3
                   imm16=(ins>>5)&0xffff
                   rd=ins&31
-                  val=imm16 << (16*hw)
-                  if val == 0x7000000000:
-                      hits.append((off,ins,rd,hw,imm16))
-          print("MOVZ hits for 0x7000000000:", len(hits))
-          for h in hits:
-              print("file_off=0x%x ins=0x%08x rd=x%d hw=%d imm=0x%x"%h)
-          Path("movz-hits.txt").write_text("\n".join(
-              "file_off=0x%x ins=0x%08x rd=x%d hw=%d imm=0x%x"%h for h in hits
-          )+"\n")
+                  if sf and (imm16 in (0x70,0x7000,0x7) or (imm16 << (16*hw)) == 0x7000000000):
+                      out.append((off,ins,sf,opc,hw,imm16,rd))
+          text="\n".join("file_off=0x%x ins=0x%08x opc=%d hw=%d imm=0x%x rd=x%d"%(
+              off,ins,opc,hw,imm,rd) for off,ins,sf,opc,hw,imm,rd in out)
+          print(text or "NO WIDE-IMM CANDIDATES")
+          Path("wide-imm-hits.txt").write_text(text+"\n")
           PY
 
       - name: Upload diagnostics
         uses: actions/upload-artifact@v4
         with:
-          name: Madeira-diagnostics
+          name: Madeira-diagnostics-2
           path: |
+            app-files.txt
+            candidates.txt
+            target-bin.txt
             disasm.txt
             nm.txt
-            movz-hits.txt
             strings-hits.txt
+            vm-remap-context.txt
+            constant-context.txt
+            wide-imm-hits.txt
           if-no-files-found: warn
