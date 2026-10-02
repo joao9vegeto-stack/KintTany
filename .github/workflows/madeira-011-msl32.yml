@@ -1,0 +1,229 @@
+name: Madeira 0.1.1 MSL 3.2 Patch
+
+on:
+  push:
+    branches: [madeira011-msl32]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  patch:
+    runs-on: macos-26
+    timeout-minutes: 45
+    steps:
+      - name: Prepare Metal toolchain
+        shell: bash
+        run: |
+          set -euxo pipefail
+          xcodebuild -version
+          xcrun --sdk iphoneos --show-sdk-path
+          if ! xcrun --sdk iphoneos --find metal >/dev/null 2>&1; then
+            xcodebuild -downloadComponent MetalToolchain
+          fi
+          xcrun --sdk iphoneos --find metal
+          xcrun --sdk iphoneos metal --version || true
+
+      - name: Download exact Madeira 0.1.1 release and DXMT shader
+        shell: bash
+        run: |
+          set -euxo pipefail
+          mkdir -p work
+          curl -fL --retry 5 --retry-all-errors             https://github.com/willfaust/Madeira/releases/download/v0.1.1/Madeira-0.1.1.ipa             -o work/Madeira-0.1.1-base.ipa
+          echo "045aeb8fd4c71c2e6a78fb4511f94c56f8ed7af14c47a3b0ea2937a4fc8bfcee  work/Madeira-0.1.1-base.ipa" | shasum -a 256 -c -
+          curl -fL --retry 5 --retry-all-errors             https://raw.githubusercontent.com/willfaust/dxmt/a5e0cd3d41bf248fd1c030a2e1c515ba3522f4ef/src/dxmt/dxmt_command.metal             -o work/dxmt_command.metal
+
+      - name: Recompile DXMT internal command library for iPhoneOS Metal 3.2
+        shell: bash
+        run: |
+          set -euxo pipefail
+          METAL="$(xcrun --sdk iphoneos --find metal)"
+          METALLIB="$(xcrun --sdk iphoneos --find metallib)"
+          "$METAL" -std=metal3.2 -mios-version-min=18.0 -Os             -c work/dxmt_command.metal -o work/dxmt_command.air
+          "$METALLIB" work/dxmt_command.air -o work/dxmt_command.metallib
+          test "$(dd if=work/dxmt_command.metallib bs=1 count=4 2>/dev/null)" = "MTLB"
+          ls -lh work/dxmt_command.metallib
+          shasum -a 256 work/dxmt_command.metallib
+
+      - name: Patch only embedded DXMT command metallibs
+        shell: bash
+        run: |
+          set -euxo pipefail
+          rm -rf work/unpack
+          mkdir -p work/unpack
+          ditto -x -k work/Madeira-0.1.1-base.ipa work/unpack
+          APP="work/unpack/Payload/Madeira.app"
+          test -d "$APP"
+
+          # Preserve exactly the entitlements carried by the official 0.1.1 IPA.
+          /usr/bin/codesign -d --entitlements :- "$APP" > work/original-entitlements.plist 2>/dev/null
+          plutil -lint work/original-entitlements.plist
+
+          python3 - "$APP" work/dxmt_command.metallib work/patch-report.txt <<'PY'
+          from pathlib import Path
+          import struct, sys, hashlib
+
+          app = Path(sys.argv[1])
+          new_path = Path(sys.argv[2])
+          report_path = Path(sys.argv[3])
+          new = new_path.read_bytes()
+
+          def fail(msg):
+              raise SystemExit("PATCH ERROR: " + msg)
+
+          if new[:4] != b"MTLB" or len(new) < 32:
+              fail("new metallib is invalid")
+          if struct.unpack_from("<Q", new, 16)[0] != len(new):
+              fail("new metallib header size does not match file length")
+
+          markers = (
+              b"clear_texture_1d_uint",
+              b"fs_blit_quad",
+              b"vs_present_quad",
+              b"cs_clear_buffer_uint",
+          )
+          candidates = []
+          for path in app.rglob("*"):
+              if not path.is_file():
+                  continue
+              try:
+                  b = path.read_bytes()
+              except Exception:
+                  continue
+              pos = 0
+              while True:
+                  p = b.find(b"MTLB", pos)
+                  if p < 0:
+                      break
+                  if p + 24 <= len(b):
+                      sz = struct.unpack_from("<Q", b, p+16)[0]
+                      if 128 <= sz <= 16*1024*1024 and p + sz <= len(b):
+                          chunk = b[p:p+sz]
+                          score = sum(m in chunk for m in markers)
+                          if score:
+                              candidates.append((score, path, p, sz))
+                  pos = p + 4
+
+          candidates.sort(key=lambda x:(x[0], x[3]), reverse=True)
+          if not candidates:
+              fail("no embedded DXMT command metallib found")
+
+          # Patch all exact copies of dxmt_command. This covers both the
+          # i386 D3D9 path seen in the user's Expendabros log and the
+          # corresponding ARM64EC/native frontends, without touching unrelated
+          # metallibs.
+          targets = [x for x in candidates if x[0] == 4 and x[3] >= len(new)]
+          if not targets:
+              fail("no exact DXMT command-library copy large enough for replacement")
+
+          new_sha = hashlib.sha256(new).hexdigest()
+          report = [
+              "Madeira 0.1.1 targeted Metal compatibility patch",
+              "official release commit: ca3183ea3dfb0fd706aff1bea2abb871b5d27aec",
+              "official IPA sha256: 045aeb8fd4c71c2e6a78fb4511f94c56f8ed7af14c47a3b0ea2937a4fc8bfcee",
+              "DXMT source commit: a5e0cd3d41bf248fd1c030a2e1c515ba3522f4ef",
+              f"replacement metallib bytes: {len(new)}",
+              f"replacement metallib sha256: {new_sha}",
+              "compiler: iphoneos / Metal language 3.2 / iOS deployment 18.0",
+              "JIT allocator: UNCHANGED from official Madeira 0.1.1",
+              "FEX/Wine/exception handlers: UNCHANGED from official Madeira 0.1.1",
+              "",
+              "patched copies:",
+          ]
+
+          for score, target, blob_off, old_len in targets:
+              data = bytearray(target.read_bytes())
+              if data[blob_off:blob_off+4] != b"MTLB":
+                  fail(f"{target}: target lost MTLB magic")
+              if len(new) > old_len:
+                  fail(f"{target}: replacement ({len(new)}) exceeds embedded blob ({old_len})")
+
+              # xxd emits a uint dxmt_command_len next to the embedded array.
+              needle = struct.pack("<I", old_len)
+              hits = []
+              p = 0
+              while True:
+                  q = data.find(needle, p)
+                  if q < 0:
+                      break
+                  if not (blob_off <= q < blob_off + old_len):
+                      hits.append(q)
+                  p = q + 1
+              if not hits:
+                  fail(f"{target}: dxmt_command_len word not found")
+              hits.sort(key=lambda q: abs(q - (blob_off + old_len)))
+              len_off = hits[0]
+              if len(hits) > 1:
+                  d0 = abs(hits[0] - (blob_off + old_len))
+                  d1 = abs(hits[1] - (blob_off + old_len))
+                  if d0 == d1:
+                      fail(f"{target}: ambiguous dxmt_command_len locations")
+
+              old_blob = bytes(data[blob_off:blob_off+old_len])
+              old_sha = hashlib.sha256(old_blob).hexdigest()
+
+              data[blob_off:blob_off+len(new)] = new
+              if len(new) < old_len:
+                  data[blob_off+len(new):blob_off+old_len] = b"\0" * (old_len-len(new))
+              struct.pack_into("<I", data, len_off, len(new))
+              target.write_bytes(data)
+
+              check = target.read_bytes()
+              if check[blob_off:blob_off+4] != b"MTLB":
+                  fail(f"{target}: post-write MTLB magic mismatch")
+              if struct.unpack_from("<Q", check, blob_off+16)[0] != len(new):
+                  fail(f"{target}: post-write MTLB size mismatch")
+              if struct.unpack_from("<I", check, len_off)[0] != len(new):
+                  fail(f"{target}: post-write dxmt_command_len mismatch")
+              if hashlib.sha256(check[blob_off:blob_off+len(new)]).hexdigest() != new_sha:
+                  fail(f"{target}: post-write hash mismatch")
+
+              rel = target.relative_to(app)
+              report.append(
+                  f"- {rel}: score={score}/4 off=0x{blob_off:x} len_off=0x{len_off:x} "
+                  f"old_bytes={old_len} old_sha256={old_sha}"
+              )
+
+          report += ["", "all detected command-library candidates:"]
+          for score, path, off, size in candidates[:30]:
+              report.append(f"- score={score}/4 {path.relative_to(app)} off=0x{off:x} bytes={size}")
+
+          txt = "\n".join(report) + "\n"
+          report_path.write_text(txt)
+          print(txt)
+          PY
+
+      - name: Re-sign official 0.1.1 bundle and package IPA
+        shell: bash
+        run: |
+          set -euxo pipefail
+          APP="work/unpack/Payload/Madeira.app"
+
+          # Only PE/DXMT payload bytes were changed. Keep nested Mach-O binaries
+          # untouched and re-seal the outer app with the release's own effective
+          # entitlements.
+          /usr/bin/codesign --force --sign - --timestamp=none             --entitlements work/original-entitlements.plist "$APP"
+          /usr/bin/codesign --verify --deep --strict --verbose=2 "$APP"
+
+          echo "=== final entitlements ==="
+          /usr/bin/codesign -d --entitlements :- "$APP" 2>/dev/null | tee work/final-entitlements.plist
+
+          (
+            cd work/unpack
+            ditto -c -k --sequesterRsrc --keepParent Payload ../Madeira-0.1.1-MSL32.ipa
+          )
+          shasum -a 256 work/Madeira-0.1.1-MSL32.ipa | tee -a work/patch-report.txt
+          ls -lh work/Madeira-0.1.1-MSL32.ipa
+
+      - name: Upload patched Madeira 0.1.1
+        uses: actions/upload-artifact@v4
+        with:
+          name: Madeira-0.1.1-MSL32
+          path: |
+            work/Madeira-0.1.1-MSL32.ipa
+            work/patch-report.txt
+            work/dxmt_command.metallib
+            work/final-entitlements.plist
+          compression-level: 0
+          if-no-files-found: error
