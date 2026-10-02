@@ -58,6 +58,19 @@ jobs:
           APP="work/unpack/Payload/Madeira.app"
           test -d "$APP"
 
+          # Preserve the entitlements that are actually signed into the official
+          # release. Do NOT sign with the source Madeira.entitlements file: it
+          # requests allow-jit, but the shipped iOS app's effective signature
+          # intentionally contains only increased-memory-limit + get-task-allow.
+          /usr/bin/codesign -d --entitlements :- "$APP" > work/original-entitlements.plist 2>/dev/null
+          plutil -lint work/original-entitlements.plist
+          /usr/libexec/PlistBuddy -c 'Print :com.apple.developer.kernel.increased-memory-limit' work/original-entitlements.plist | grep -qx true
+          /usr/libexec/PlistBuddy -c 'Print :get-task-allow' work/original-entitlements.plist | grep -qx true
+          if /usr/libexec/PlistBuddy -c 'Print :com.apple.security.cs.allow-jit' work/original-entitlements.plist >/dev/null 2>&1; then
+            echo "ERROR: official release unexpectedly contains allow-jit entitlement"
+            exit 1
+          fi
+
           python3 - "$APP" work/dxmt_command.metallib work/patch-report.txt <<'PY'
           from pathlib import Path
           import struct, sys, hashlib
@@ -257,28 +270,34 @@ jobs:
         run: |
           set -euxo pipefail
           APP="work/unpack/Payload/Madeira.app"
-          # Re-sign nested Mach-O code if the original package contains any
-          # independently signed nested dylibs/frameworks, then sign the app.
-          find "$APP" -type f \( -name '*.dylib' -o -perm -111 \) -print0 | while IFS= read -r -d '' f; do
-            if codesign -d "$f" >/dev/null 2>&1; then
-              codesign --force --sign - --timestamp=none "$f" || true
-            fi
-          done
-          codesign --force --sign - --timestamp=none             --entitlements work/Madeira.entitlements "$APP"
-          codesign --verify --deep --strict "$APP"
+
+          # Match the signing path of the earlier no-EVA tracker build that
+          # successfully reported CS_DEBUGGED=SET under StikDebug.
+          /usr/bin/codesign --force --sign - --timestamp=none "$APP/Madeira.debug.dylib"
+          /usr/bin/codesign --force --sign - --timestamp=none             --entitlements work/original-entitlements.plist "$APP"
+          /usr/bin/codesign --verify --deep --strict --verbose=2 "$APP"
+
+          echo "=== final app entitlements ==="
+          /usr/bin/codesign -d --entitlements :- "$APP" 2>/dev/null | tee work/final-entitlements.plist
+          if grep -q 'com.apple.security.cs.allow-jit' work/final-entitlements.plist; then
+            echo "ERROR: allow-jit leaked back into final IPA"
+            exit 1
+          fi
+
+          rm -f work/Madeira-0.1.0-MSL32-RWalias-JITfix.ipa
           (
             cd work/unpack
-            ditto -c -k --sequesterRsrc --keepParent Payload ../Madeira-0.1.0-MSL32-patched.ipa
+            ditto -c -k --sequesterRsrc --keepParent Payload ../Madeira-0.1.0-MSL32-RWalias-JITfix.ipa
           )
-          shasum -a 256 work/Madeira-0.1.0-MSL32-patched.ipa | tee -a work/patch-report.txt
-          ls -lh work/Madeira-0.1.0-MSL32-patched.ipa
+          shasum -a 256 work/Madeira-0.1.0-MSL32-RWalias-JITfix.ipa | tee -a work/patch-report.txt
+          ls -lh work/Madeira-0.1.0-MSL32-RWalias-JITfix.ipa
 
       - name: Upload patched IPA
         uses: actions/upload-artifact@v4
         with:
-          name: Madeira-0.1.0-MSL32-patched
+          name: Madeira-0.1.0-MSL32-RWalias-JITfix
           path: |
-            work/Madeira-0.1.0-MSL32-patched.ipa
+            work/Madeira-0.1.0-MSL32-RWalias-JITfix.ipa
             work/patch-report.txt
             work/dxmt_command.metallib
           compression-level: 0
