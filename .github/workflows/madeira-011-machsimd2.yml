@@ -421,7 +421,7 @@ jobs:
                   nsects=struct.unpack_from("<I",src,p+64)[0]
                   sp=p+72
                   for _ in range(nsects):
-                      sect=src[sp:sp+16].split(b"\\0",1)[0]
+                      sect=src[sp:sp+16].rstrip(bytes([0]))
                       size=struct.unpack_from("<Q",src,sp+40)[0]
                       off=struct.unpack_from("<I",src,sp+48)[0]
                       if sect == b"__text":
@@ -517,7 +517,7 @@ jobs:
           for _ in range(ncmds):
               cmd, cmdsize = struct.unpack_from("<II", data, off)
               if cmd == 0x19:  # LC_SEGMENT_64
-                  segname = bytes(data[off+8:off+24]).split(b"\\0",1)[0].decode("ascii","ignore")
+                  segname = bytes(data[off+8:off+24]).rstrip(bytes([0])).decode("ascii","ignore")
                   vmaddr, vmsize, fileoff, filesize = struct.unpack_from("<QQQQ", data, off+24)
                   maxprot, initprot = struct.unpack_from("<ii", data, off+56)
                   if fileoff <= helper_off and helper_off + len(helper) <= fileoff + filesize:
