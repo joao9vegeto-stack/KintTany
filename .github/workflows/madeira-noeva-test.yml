@@ -1,4 +1,4 @@
-name: Madeira no-EVA test
+name: Madeira no-EVA tracker test
 
 on:
   push:
@@ -13,31 +13,14 @@ jobs:
       - name: Checkout madeiratest harness
         uses: actions/checkout@v4
 
-      - name: Clone original Madeira source
+      - name: Clone upstream sources for guards
         run: |
           git clone --depth 1 --branch v0.1.0 https://github.com/willfaust/Madeira.git Madeira-upstream
-          echo "UPSTREAM_TAG=$(git -C Madeira-upstream rev-parse HEAD)"
-          grep -n -A 14 -B 8 'rwAddr = 0x7000000000' Madeira-upstream/app/Madeira/StikJITHelper.swift
-
-      - name: Record equivalent source patch
-        run: |
-          cp Madeira-upstream/app/Madeira/StikJITHelper.swift StikJITHelper.before.swift
-          python3 - <<'PY'
-          from pathlib import Path
-          p = Path("Madeira-upstream/app/Madeira/StikJITHelper.swift")
-          s = p.read_text()
-          old = "        rwAddr = 0x7000000000\n"
-          new = (
-              "        // madeiratest / no-EVA: do not seed vm_remap at 448 GB.\n"
-              "        // With VM_FLAGS_ANYWHERE a zero hint lets XNU choose a valid low-VA hole.\n"
-              "        rwAddr = 0\n"
-          )
-          if s.count(old) != 1:
-              raise SystemExit(f"expected exactly one production rwAddr high-VA assignment, found {s.count(old)}")
-          p.write_text(s.replace(old, new))
-          PY
-          diff -u StikJITHelper.before.swift Madeira-upstream/app/Madeira/StikJITHelper.swift > madeira-noeva-source.patch || true
-          cat madeira-noeva-source.patch
+          git clone --depth 1 --branch ios-port-2607 https://github.com/willfaust/FEX.git FEX-upstream
+          echo "MADEIRA=$(git -C Madeira-upstream rev-parse HEAD)"
+          echo "FEX=$(git -C FEX-upstream rev-parse HEAD)"
+          grep -n -A 12 -B 8 'rwAddr = 0x7000000000' Madeira-upstream/app/Madeira/StikJITHelper.swift
+          grep -n -A 35 -B 8 'void InvalidationTracker::HandleImageMap' FEX-upstream/Source/Windows/Common/InvalidationTracker.cpp | head -n 80
 
       - name: Download official Madeira 0.1.0 IPA
         run: |
@@ -47,47 +30,65 @@ jobs:
           rm -rf ipa
           unzip -q Madeira-original.ipa -d ipa
           test -f ipa/Payload/Madeira.app/Madeira.debug.dylib
+          test -f ipa/Payload/Madeira.app/arm64ec-windows/xtajit64.dll
 
-      - name: Patch compiled no-EVA vm_remap hint
+      - name: Apply no-EVA RW alias patch
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+          p = Path("ipa/Payload/Madeira.app/Madeira.debug.dylib")
+          data = bytearray(p.read_bytes())
+          off = 0x604530
+          old = bytes.fromhex("08 0e c0 d2")  # mov x8,#0x7000000000
+          new = bytes.fromhex("08 00 80 d2")  # mov x8,#0
+          got = bytes(data[off:off+4])
+          print(f"Madeira.debug.dylib 0x{off:x}: {got.hex(' ')} -> {new.hex(' ')}")
+          if got != old:
+              raise SystemExit(f"no-EVA binary guard failed: expected {old.hex(' ')}, got {got.hex(' ')}")
+          data[off:off+4] = new
+          p.write_bytes(data)
+          PY
+
+      - name: Apply InvalidationTracker re-entrancy test patch
         run: |
           python3 - <<'PY'
           from pathlib import Path
           import struct
 
-          p = Path("ipa/Payload/Madeira.app/Madeira.debug.dylib")
+          p = Path("ipa/Payload/Madeira.app/arm64ec-windows/xtajit64.dll")
           data = bytearray(p.read_bytes())
 
-          # Madeira 0.1.0 / StikJITHelper.allocatePool:
-          # 0x604530: mov x8, #0x7000000000
-          # 0x604534: str x8, [x19, #0x1f80]  -> rwAddr
-          # Patch ONLY the first instruction to: mov x8, #0
-          off = 0x604530
-          original = bytes.fromhex("08 0e c0 d2")  # 0xd2c00e08
-          patched  = bytes.fromhex("08 00 80 d2")  # 0xd2800008
-
-          got = bytes(data[off:off+4])
-          print(f"offset 0x{off:x}: before={got.hex(' ')}")
-          if got != original:
-              raise SystemExit(
-                  f"binary guard failed at 0x{off:x}: expected {original.hex(' ')}, got {got.hex(' ')}"
-              )
-
-          data[off:off+4] = patched
+          # FEX InvalidationTracker::HandleImageMap owns IntervalsLock at this+0x30.
+          # The device log parks on tracker+0x38, which is the first condition
+          # variable inside libc++ shared_mutex. The lock is held across
+          # IntervalList::Insert and the [iOS-xins] logger; either path may
+          # allocate and re-enter memory notification. For this diagnostic IPA,
+          # bypass ONLY this function's lock/unlock pair. Other InvalidationTracker
+          # paths retain their normal synchronization.
+          patches = {
+              0x12be44: bytes.fromhex("fe 1c 02 94"),  # bl __shared_mutex_base::unlock
+              0x12be70: bytes.fromhex("c0 1c 02 94"),  # bl __shared_mutex_base::lock
+          }
+          nop = bytes.fromhex("1f 20 03 d5")
+          for off, old in patches.items():
+              got = bytes(data[off:off+4])
+              print(f"xtajit64.dll 0x{off:x}: {got.hex(' ')} -> {nop.hex(' ')}")
+              if got != old:
+                  raise SystemExit(f"tracker binary guard failed at 0x{off:x}: expected {old.hex(' ')}, got {got.hex(' ')}")
+              data[off:off+4] = nop
           p.write_bytes(data)
-          print(f"offset 0x{off:x}: after ={patched.hex(' ')}")
           PY
 
-          otool -tvV ipa/Payload/Madeira.app/Madeira.debug.dylib | \
-            awk '$1=="0000000000604530"{print; found=1} END{exit !found}' | tee patched-instruction.txt
-          grep -q 'mov.*#0x0' patched-instruction.txt
+          /usr/local/swift/usr/bin/llvm-objdump -d \
+            --start-address=0x18012be38 --stop-address=0x18012be80 \
+            ipa/Payload/Madeira.app/arm64ec-windows/xtajit64.dll | tee tracker-patch-disasm.txt
+          grep -q '18012be44: d503201f.*nop' tracker-patch-disasm.txt
+          grep -q '18012be70: d503201f.*nop' tracker-patch-disasm.txt
 
-      - name: Re-sign bundle ad hoc while preserving app entitlements
+      - name: Re-sign bundle ad hoc
         run: |
           APP=ipa/Payload/Madeira.app
           /usr/bin/codesign -d --entitlements :- "$APP" > original-entitlements.plist 2>/dev/null || true
-          echo "=== original entitlements ==="
-          cat original-entitlements.plist || true
-
           /usr/bin/codesign --force --sign - "$APP/Madeira.debug.dylib"
           if plutil -lint original-entitlements.plist >/dev/null 2>&1; then
             /usr/bin/codesign --force --sign - --entitlements original-entitlements.plist "$APP"
@@ -96,20 +97,23 @@ jobs:
           fi
           /usr/bin/codesign --verify --deep --strict --verbose=2 "$APP"
 
-      - name: Package test IPA
+      - name: Package patched IPA
         run: |
-          rm -f "Madeira no EVA Test.ipa"
+          rm -f "Madeira noEVA Tracker Test.ipa"
           (
             cd ipa
-            /usr/bin/zip -qry "../Madeira no EVA Test.ipa" Payload
+            /usr/bin/zip -qry "../Madeira noEVA Tracker Test.ipa" Payload
           )
-          shasum -a 256 "Madeira no EVA Test.ipa" | tee Madeira-noEVA-Test.sha256
-          unzip -l "Madeira no EVA Test.ipa" | head -n 20
+          shasum -a 256 "Madeira noEVA Tracker Test.ipa" | tee Madeira-noEVA-Tracker-Test.sha256
+          ls -lh "Madeira noEVA Tracker Test.ipa"
 
-      - name: Upload IPA artifact
+      - name: Upload test artifact
         uses: actions/upload-artifact@v4
         with:
-          name: Madeira-noEVA-Test
-          path: Madeira no EVA Test.ipa
+          name: Madeira-noEVA-Tracker-Test
+          path: |
+            Madeira noEVA Tracker Test.ipa
+            Madeira-noEVA-Tracker-Test.sha256
+            tracker-patch-disasm.txt
           if-no-files-found: error
           compression-level: 0
