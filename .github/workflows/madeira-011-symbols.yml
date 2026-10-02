@@ -1,0 +1,29 @@
+name: Madeira 0.1.1 Symbol Probe
+
+on:
+  push:
+    branches: [madeira011-atomicfix]
+  workflow_dispatch:
+
+jobs:
+  probe:
+    runs-on: macos-26
+    steps:
+      - name: Download official Madeira 0.1.1
+        shell: bash
+        run: |
+          set -euxo pipefail
+          curl -fL --retry 5 --retry-all-errors \
+            https://github.com/willfaust/Madeira/releases/download/v0.1.1/Madeira-0.1.1.ipa \
+            -o Madeira.ipa
+          mkdir unpack
+          ditto -x -k Madeira.ipa unpack
+          DYLIB="unpack/Payload/Madeira.app/Madeira.debug.dylib"
+          xcrun nm -an "$DYLIB" | grep -E 'ios_emulate_store(_rel)?$|ios_jit_anon_alias_lookup$|bus_handler$' | tee symbols.txt
+          xcrun llvm-objdump -d --start-address=0x83ae40 --stop-address=0x83af80 "$DYLIB" | tee bus.txt
+      - uses: actions/upload-artifact@v4
+        with:
+          name: symbols
+          path: |
+            symbols.txt
+            bus.txt
