@@ -79,11 +79,20 @@ jobs:
           p.write_bytes(data)
           PY
 
-          /usr/local/swift/usr/bin/llvm-objdump -d \
-            --start-address=0x18012be38 --stop-address=0x18012be80 \
-            ipa/Payload/Madeira.app/arm64ec-windows/xtajit64.dll | tee tracker-patch-disasm.txt
-          grep -q '18012be44: d503201f.*nop' tracker-patch-disasm.txt
-          grep -q '18012be70: d503201f.*nop' tracker-patch-disasm.txt
+          python3 - <<'PY'
+          from pathlib import Path
+          p = Path("ipa/Payload/Madeira.app/arm64ec-windows/xtajit64.dll")
+          b = p.read_bytes()
+          lines = []
+          for off in (0x12be44, 0x12be70):
+              got = b[off:off+4]
+              line = f"0x{off:x}: {got.hex(' ')}"
+              print(line)
+              lines.append(line)
+              if got != bytes.fromhex("1f 20 03 d5"):
+                  raise SystemExit(f"NOP verification failed at 0x{off:x}")
+          Path("tracker-patch-disasm.txt").write_text("\\n".join(lines) + "\\n")
+          PY
 
       - name: Re-sign bundle ad hoc
         run: |
