@@ -1359,6 +1359,78 @@ struct EquipmentSelection: Equatable {
     let bank: Int
 }
 
+struct RealmCombatWeaponCandidate: Equatable {
+    let type: String
+    let tier: Int
+    let durability: Int
+    let carried: Bool
+    let bankIndex: Int?
+}
+
+struct RealmCombatWeaponPolicy {
+    static let minimumTier = 3
+    static let minimumObservedDamage = 30
+    static let defaultDurability = BlacksmithProtocolPolicy.repairMaxDurability
+
+    static func minimumDurabilityForTarget(_ mode: ActivityMode) -> Int {
+        mode == .scorpion ? 8 : 7
+    }
+
+    static func durability(_ slot: [String: Any]) -> Int {
+        max(0, RealtimeProtocol.int(slot["d"] ?? slot["durability"]) ?? defaultDurability)
+    }
+
+    static func candidates(in backpack: [String: Any]) -> [RealmCombatWeaponCandidate] {
+        var result: [RealmCombatWeaponCandidate] = []
+
+        func scan(_ raw: Any?, carried: Bool, bank: Bool) {
+            guard let slots = raw as? [Any] else { return }
+            for index in slots.indices {
+                guard let slot = slots[index] as? [String: Any],
+                      let type = slot["t"] as? String,
+                      EquipmentTierPolicy.family(of: type) == .sword else { continue }
+                let tier = EquipmentTierPolicy.tier(of: type)
+                guard tier >= minimumTier else { continue }
+                result.append(
+                    RealmCombatWeaponCandidate(
+                        type: type,
+                        tier: tier,
+                        durability: durability(slot),
+                        carried: carried,
+                        bankIndex: bank ? index : nil
+                    )
+                )
+            }
+        }
+
+        scan(backpack["hotbar"], carried: true, bank: false)
+        scan(backpack["invSlots"], carried: true, bank: false)
+        scan(backpack["bankSlots"], carried: false, bank: true)
+
+        return result.sorted {
+            if $0.tier != $1.tier { return $0.tier > $1.tier }
+            if $0.durability != $1.durability { return $0.durability > $1.durability }
+            if $0.carried != $1.carried { return $0.carried && !$1.carried }
+            return $0.type < $1.type
+        }
+    }
+
+    static func bestUsable(
+        in backpack: [String: Any],
+        mode: ActivityMode,
+        carriedOnly: Bool = false
+    ) -> RealmCombatWeaponCandidate? {
+        let minimum = minimumDurabilityForTarget(mode)
+        return candidates(in: backpack).first {
+            (!carriedOnly || $0.carried) && $0.durability >= minimum
+        }
+    }
+
+    static func isCombatDamageSafe(_ observedDamage: Int) -> Bool {
+        observedDamage >= minimumObservedDamage
+    }
+}
+
 /// O cliente atual possui famílias Starter/Copper/Iron/Silver. IDs novos podem
 /// variar entre famílias, então a seleção não fica presa a uma lista incompleta:
 /// reconhecemos a classe pelo próprio type e priorizamos o maior tier observado.
@@ -6362,12 +6434,27 @@ func makeRecoveryProgressAnchor(for mode: ActivityMode) async -> ActivityRecover
             }
             target = approachedTarget
             reporter(.target("\(targetName) • HP \(target.hp.map { String($0) } ?? "?")"))
-            reporter(.attempt)
-
             let targetXPStart = combatXPTotal
 
             // Baselines autoritativos usados somente para associar recompensa à kill atual.
             let backpackBefore = try? await http.backpackState()
+
+            if mode.isRealmMobCombat {
+                guard let backpack = backpackBefore?.backpack,
+                      let realmWeapon = realmCombatWeaponReadyForTarget(mode: mode, backpack: backpack) else {
+                    safeStopReason = .combatSupplies
+                    reporter(.log("🛑 \(mode.displayName) • espada tier 3+ ausente ou sem durabilidade para outro alvo • nenhum novo golpe será enviado"))
+                    break
+                }
+                if realmWeapon.type != activeCombatWeaponType {
+                    activeCombatWeaponType = realmWeapon.type
+                    reporter(.log("⚔️ \(mode.displayName) • arma Realm atualizada antes do alvo • \(realmWeapon.type) • tier \(realmWeapon.tier) • durabilidade \(realmWeapon.durability)"))
+                } else {
+                    reporter(.diagnostic("[WEAPON] Realm • \(realmWeapon.type) • tier=\(realmWeapon.tier) • d=\(realmWeapon.durability) • alvo=\(targetName)"))
+                }
+            }
+
+            reporter(.attempt)
             let groundBagBaseline = try? await http.groundBagIDs(shardID: shardNumber)
             let grantBaseline = wildGrantSerial
 
@@ -6611,6 +6698,19 @@ func makeRecoveryProgressAnchor(for mode: ActivityMode) async -> ActivityRecover
                         }
                         killed = true
                         break
+                    }
+
+                    if mode.isRealmMobCombat,
+                       let beforeHP = hpBeforeSwing,
+                       let afterHP = refreshedHP {
+                        let observedDamage = max(0, beforeHP - afterHP)
+                        if observedDamage > 0,
+                           !RealmCombatWeaponPolicy.isCombatDamageSafe(observedDamage) {
+                            safeStopReason = .combatSupplies
+                            safeStopInterruptedTarget = true
+                            reporter(.log("🚨 \(mode.displayName) • dano da espada caiu para \(observedDamage) por hit (esperado >=\(RealmCombatWeaponPolicy.minimumObservedDamage)) • possível quebra/troca de arma • interrompendo novos golpes e saindo com segurança"))
+                            break
+                        }
                     }
                 } else if let stateHP = stateCorrelatedHP {
                     consecutiveAckTimeouts = 0
@@ -6888,6 +6988,9 @@ func makeRecoveryProgressAnchor(for mode: ActivityMode) async -> ActivityRecover
     }
 
     private func canFinishRealmTarget(mode: ActivityMode, targetHP: Int?) -> Bool {
+        guard EquipmentTierPolicy.tier(of: activeCombatWeaponType) >= RealmCombatWeaponPolicy.minimumTier else {
+            return false
+        }
         let conservativeHP = mode == .scorpion
             ? min(playerHP, estimatedDunesHPFromMonotonicClock())
             : playerHP
@@ -7211,6 +7314,56 @@ func makeRecoveryProgressAnchor(for mode: ActivityMode) async -> ActivityRecover
         reporter(.log("⚔️ Arma selecionada • \(best.type) • tier \(best.tier)"))
     }
 
+    private func ensureRealmCombatWeaponFromWorld(mode: ActivityMode) async throws {
+        var state = try await http.backpackState()
+        let minimum = RealmCombatWeaponPolicy.minimumDurabilityForTarget(mode)
+
+        if let carried = RealmCombatWeaponPolicy.bestUsable(
+            in: state.backpack,
+            mode: mode,
+            carriedOnly: true
+        ) {
+            activeCombatWeaponType = carried.type
+            reporter(.log("⚔️ \(mode.displayName) • espada Realm pronta • \(carried.type) • tier \(carried.tier) • durabilidade \(carried.durability)"))
+            return
+        }
+
+        guard let candidate = RealmCombatWeaponPolicy.bestUsable(
+            in: state.backpack,
+            mode: mode,
+            carriedOnly: false
+        ) else {
+            throw EngineError.missingRequiredItem(
+                "espada tier \(RealmCombatWeaponPolicy.minimumTier)+ com durabilidade >=\(minimum) para \(mode.displayName)"
+            )
+        }
+
+        if !candidate.carried, let bankIndex = candidate.bankIndex {
+            state = try await http.replaceCarriedItemFromBank(type: candidate.type, bankIndex: bankIndex)
+        }
+
+        guard let carried = RealmCombatWeaponPolicy.bestUsable(
+            in: state.backpack,
+            mode: mode,
+            carriedOnly: true
+        ) else {
+            throw EngineError.missingRequiredItem(
+                "espada Realm segura não materializou antes de \(mode.displayName)"
+            )
+        }
+
+        activeCombatWeaponType = carried.type
+        reporter(.log("⚔️ \(mode.displayName) • espada Realm carregada • \(carried.type) • tier \(carried.tier) • durabilidade \(carried.durability) ✅"))
+    }
+
+    private func realmCombatWeaponReadyForTarget(mode: ActivityMode, backpack: [String: Any]) -> RealmCombatWeaponCandidate? {
+        RealmCombatWeaponPolicy.bestUsable(
+            in: backpack,
+            mode: mode,
+            carriedOnly: true
+        )
+    }
+
     private func ensureBestCombatWeaponFromWorld() async throws {
         let state = try await http.backpackState()
         guard let best = EquipmentTierPolicy.bestSelection(in: state.backpack, family: .sword, minimumTier: 1) else {
@@ -7261,7 +7414,7 @@ func makeRecoveryProgressAnchor(for mode: ActivityMode) async -> ActivityRecover
         try await refreshPotionStock(logSummary: true)
         let reason = localPotionZeroReason(mode: mode, includeStrengthWhileBuffed: true)
         let realtimeRevisionBeforePreflight = realtimeOwnHPRevision
-        try await prepareWorldCombatSession(resupplyReason: reason)
+        try await prepareWorldCombatSession(resupplyReason: reason, realmMode: mode)
 
         if mode == .magmaBrute {
             reporter(.log("💚 Magma Brute • recuperação no World antes da Emberstone; Health Potion não será gasta na safe camp"))
@@ -7277,7 +7430,7 @@ func makeRecoveryProgressAnchor(for mode: ActivityMode) async -> ActivityRecover
         reporter(.state(.moving, "Protegendo inventário para Giant Scorpion"))
         try await ensureWorldBankAccess(reason: "preflight Giant Scorpion")
         do {
-            try await ensureBestCombatWeaponFromWorld()
+            try await ensureRealmCombatWeaponFromWorld(mode: .scorpion)
 
             _ = try await http.ensurePotionLoadout(targets: [
                 DunesHeatSafetyPolicy.healthPotionPlusType: DunesHeatSafetyPolicy.carriedHealthPotionPlusTarget,
@@ -7380,14 +7533,21 @@ func makeRecoveryProgressAnchor(for mode: ActivityMode) async -> ActivityRecover
     /// Preparação BANK-FIRST da v5.2.1. Toda entrada inicial no Wild passa aqui:
     /// primeiro protege recursos comuns materializados em invSlots e só depois
     /// completa poções, quando necessário. Itens especiais nunca entram na allowlist.
-    private func prepareWorldCombatSession(resupplyReason: String?) async throws {
+    private func prepareWorldCombatSession(
+        resupplyReason: String?,
+        realmMode: ActivityMode? = nil
+    ) async throws {
         if serverRegion?.lowercased().hasPrefix("wild") == true || region.hasPrefix("wild") {
             throw EngineError.combatSupplyFailed("preparação de combate solicitada fora do World")
         }
         reporter(.state(.moving, "Protegendo inventário no banco"))
         try await ensureWorldBankAccess(reason: "BANK-FIRST")
         try await performCombatBankFirstSafety()
-        try await ensureBestCombatWeaponFromWorld()
+        if let realmMode {
+            try await ensureRealmCombatWeaponFromWorld(mode: realmMode)
+        } else {
+            try await ensureBestCombatWeaponFromWorld()
+        }
         if resupplyReason != nil {
             try await ensureCombatSupplies()
         } else {
@@ -7953,8 +8113,11 @@ func makeRecoveryProgressAnchor(for mode: ActivityMode) async -> ActivityRecover
             if playerHP < hpGoal {
                 if mode == .magmaBrute {
                     try await moveToRealmCombatRecoveryLane(mode: mode, reason: "HP abaixo da meta de recovery")
+                    if playerHP >= hpGoal {
+                        reporter(.log("❤️ Magma Brute • HP recuperou para \(playerHP)/\(hpGoal) durante reposicionamento • Potion Health não será consumida"))
+                    }
                 }
-                if potionStock.health > 0 {
+                if playerHP < hpGoal, potionStock.health > 0 {
                     let before = playerHP
                     if try await consumePotion("potion_health") {
                         usedAny = true
@@ -9749,6 +9912,46 @@ private struct KintaraHTTPClient {
             return try await backpackState()
         }
         return state
+    }
+
+    @discardableResult
+    func replaceCarriedItemFromBank(type: String, bankIndex: Int) async throws -> BackpackState {
+        let state = try await backpackState()
+        var backpack = state.backpack
+        var bank = backpack["bankSlots"] as? [Any] ?? []
+        guard bank.indices.contains(bankIndex),
+              let bankItem = bank[bankIndex] as? [String: Any],
+              bankItem["t"] as? String == type else {
+            throw HTTPError.server("realm_weapon_bank_candidate_changed")
+        }
+
+        for key in ["hotbar", "invSlots"] {
+            var slots = backpack[key] as? [Any] ?? []
+            if let carriedIndex = slots.firstIndex(where: { raw in
+                guard let slot = raw as? [String: Any] else { return false }
+                return slot["t"] as? String == type
+            }) {
+                let worn = slots[carriedIndex]
+                slots[carriedIndex] = bankItem
+                bank[bankIndex] = worn
+                backpack[key] = slots
+                backpack["bankSlots"] = bank
+                _ = try await saveBackpack(
+                    backpack,
+                    baseSeq: state.stateSeq,
+                    operation: "realm-weapon-swap:\(type):bankSlot=\(bankIndex)"
+                )
+                return try await backpackState()
+            }
+        }
+
+        _ = try await ensureCarriedItem(
+            type: type,
+            quantity: 1,
+            preferHotbar: true,
+            preferredBankIndex: bankIndex
+        )
+        return try await backpackState()
     }
 
     func itemLocationCounts(type: String) async throws -> ItemLocationCounts {

@@ -341,6 +341,42 @@ final class RealtimeProtocolTests: XCTestCase {
         XCTAssertEqual(CombatProgressDisplayPolicy.goal(localGoal: 31, displayGoal: 50), 50)
     }
 
+    func testBuild18RealmWeaponSafetyPolicy() {
+        let backpack: [String: Any] = [
+            "hotbar": [
+                ["t": "wild_sword", "d": 4000],
+                ["t": "wild_sword_l2", "d": 5]
+            ],
+            "invSlots": [],
+            "bankSlots": [
+                ["t": "wild_sword_l2", "d": 125],
+                ["t": "silver_sword", "d": 40]
+            ]
+        ]
+
+        let magma = RealmCombatWeaponPolicy.bestUsable(
+            in: backpack,
+            mode: .magmaBrute,
+            carriedOnly: false
+        )
+        XCTAssertEqual(magma?.type, "silver_sword")
+        XCTAssertEqual(magma?.tier, 4)
+        XCTAssertEqual(magma?.durability, 40)
+        XCTAssertFalse(magma?.carried ?? true)
+
+        XCTAssertNil(
+            RealmCombatWeaponPolicy.bestUsable(
+                in: backpack,
+                mode: .magmaBrute,
+                carriedOnly: true
+            )
+        )
+        XCTAssertEqual(RealmCombatWeaponPolicy.minimumDurabilityForTarget(.magmaBrute), 7)
+        XCTAssertEqual(RealmCombatWeaponPolicy.minimumDurabilityForTarget(.scorpion), 8)
+        XCTAssertFalse(RealmCombatWeaponPolicy.isCombatDamageSafe(15))
+        XCTAssertTrue(RealmCombatWeaponPolicy.isCombatDamageSafe(36))
+    }
+
     func testBuild17CapturedHealthSavePayloadAndConfirmation() {
         let body = HealthSavePayloadPolicy.makeBody(
             hp: 97,
