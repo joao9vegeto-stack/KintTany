@@ -71,7 +71,7 @@ mkdir -p "$ROOT/wine/build-macos"
 if [ ! -f "$ROOT/wine/build-macos/config.status" ]; then
 (
   cd "$ROOT/wine/build-macos"
-  ../configure     --without-x --without-vulkan --without-freetype --without-gnutls     --without-gstreamer --without-cups --without-gphoto --without-sane     --without-opencl --without-pcap --without-pcsclite --without-usb     --without-mingw --disable-tests
+  ../configure     --without-x --without-vulkan --without-freetype --without-gnutls     --without-gstreamer --without-cups --without-gphoto --without-sane     --without-opencl --without-pcap --without-pcsclite --without-usb     --disable-tests
 )
 fi
 make -C "$ROOT/wine/build-macos" -j"$JOBS"
