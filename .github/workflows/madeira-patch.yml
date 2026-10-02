@@ -247,16 +247,7 @@ jobs:
               raise SystemExit("JIT PATCH ERROR: post-write instruction mismatch")
           after = hashlib.sha256(check).hexdigest()
 
-          extra = f"""
-JIT RW-alias non-EVA patch:
-target: Madeira.debug.dylib
-file/text offset: 0x{off:x}
-old instruction: {old.hex()} (mov x8,#0x7000000000)
-new instruction: {new.hex()} (mov x8,#0)
-reason: both supplied device logs reached RX allocation then failed vm_remap with KERN_NO_SPACE=3; latest log has extended-virtual-addressing=false and RX=0x148000000 at pool=512
-dylib sha256 before: {before}
-dylib sha256 after: {after}
-"""
+          extra = f"""JIT RW-alias non-EVA patch:\ntarget: Madeira.debug.dylib\nfile/text offset: 0x{off:x}\nold instruction: {old.hex()} (mov x8,#0x7000000000)\nnew instruction: {new.hex()} (mov x8,#0)\nreason: both supplied device logs reached RX allocation then failed vm_remap with KERN_NO_SPACE=3; latest log has extended-virtual-addressing=false and RX=0x148000000 at pool=512\ndylib sha256 before: {before}\ndylib sha256 after: {after}\n"""
           report.write_text(report.read_text() + extra)
           print(extra)
           PY
