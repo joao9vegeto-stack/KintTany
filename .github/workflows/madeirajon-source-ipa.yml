@@ -1,0 +1,44 @@
+name: MadeiraJon source IPA
+
+on:
+  push:
+    branches:
+      - MadeiraJon
+    paths:
+      - 'build/**'
+      - 'app/**'
+      - 'ci/**'
+      - '.github/workflows/madeirajon-source-ipa.yml'
+      - '.gitmodules'
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: macos-26
+    timeout-minutes: 360
+
+    steps:
+      - name: Checkout MadeiraJon source
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 2
+          submodules: recursive
+
+      - name: Build corrected Madeira IPA entirely from repository sources
+        shell: bash
+        run: |
+          set -o pipefail
+          bash ci/build-madeirajon.sh 2>&1 | tee build-madeirajon-ci.log
+
+      - name: Upload MadeiraJon IPA
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: MadeiraJon-0.1.1-Source
+          path: |
+            out/*
+            build-madeirajon-ci.log
+          compression-level: 0
+          if-no-files-found: warn
