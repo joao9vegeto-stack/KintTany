@@ -40,6 +40,23 @@ jobs:
               else:
                   i+=4
           PY
+          python3 - "$DYLIB" <<'PY' | tee zero-caves.txt
+          from pathlib import Path
+          import sys
+          b=Path(sys.argv[1]).read_bytes()
+          i=0
+          limit=min(len(b),0x2200000)
+          while i<limit:
+              if b[i]==0:
+                  j=i
+                  while j<limit and b[j]==0: j+=1
+                  n=j-i
+                  if n>=96:
+                      print(f"zero 0x{i:x} bytes={n}")
+                  i=j
+              else:i+=1
+          PY
+
       - uses: actions/upload-artifact@v4
         with:
           name: symbols
@@ -49,3 +66,4 @@ jobs:
             caves.txt
             store.txt
             near-store-symbols.txt
+            zero-caves.txt
