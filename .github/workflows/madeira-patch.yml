@@ -320,25 +320,43 @@ jobs:
           data[0x828e74:0x828e78] = bytes.fromhex("c3170054") # b.lo 0x82916c
           data[0x828e7c:0x828e80] = bytes.fromhex("89170054") # b.ls 0x82916c
 
+          # madeira-log(9) exposed the next layer: the guest alias writes are
+          # FP/SIMD register-offset stores such as:
+          #   0x3ca74a70  str q16,[x19,w7,uxtw]
+          #   0x3cb84a70  str q16,[x19,w24,uxtw]
+          # ios_emulate_store already decodes these, but only when its
+          # thread-local ios_neon_valid flag is set. In bus_handler we receive a
+          # real Darwin signal ucontext (including NEON state), yet the TLV was
+          # never marked valid, so the decoder returned 0 and the same writes
+          # were redelivered tens of thousands of times.
+          #
+          # Set the TLV on this signal-handling thread before resolving the anon
+          # alias. Mach exception threads keep their own independent TLV.
           stub = {
-              0x82916c: "e00319aa", # mov x0,x25 (fault)
-              0x829170: "3c42ff97", # bl ios_jit_anon_alias_lookup
-              0x829174: "c0efffb4", # cbz x0,0x828f6c
-              0x829178: "e20300aa", # mov x2,x0 (rw_addr)
-              0x82917c: "f8031aaa", # mov x24,x26 (preserve success-tail expectation)
-              0x829180: "fa031baa", # mov x26,x27
-              0x829184: "681a40f9", # ldr x8,[x19,#0x30]
-              0x829188: "088940f9", # ldr x8,[x8,#0x110] (faulting PC)
-              0x82918c: "160140b9", # ldr w22,[x8] (instruction)
-              0x829190: "e00313aa", # mov x0,x19 (ucontext)
-              0x829194: "e10316aa", # mov x1,x22 (insn)
-              0x829198: "ef1a0094", # bl ios_emulate_store
-              0x82919c: "80eeff34", # cbz w0,0x828f6c
-              0x8291a0: "48ffff17", # b 0x828ec0 existing success tail
+              0x82916c: "40e60090", # adrp x0, ios_neon_valid TLV descriptor page
+              0x829170: "00601e91", # add  x0,x0,#0x798
+              0x829174: "090040f9", # ldr  x9,[x0] (TLV bootstrap)
+              0x829178: "20013fd6", # blr  x9 -> x0 = thread-local int*
+              0x82917c: "29008052", # mov  w9,#1
+              0x829180: "090000b9", # str  w9,[x0] (ios_neon_valid=1)
+              0x829184: "e00319aa", # mov x0,x25 (fault)
+              0x829188: "3642ff97", # bl ios_jit_anon_alias_lookup
+              0x82918c: "00efffb4", # cbz x0,0x828f6c
+              0x829190: "e20300aa", # mov x2,x0 (rw_addr)
+              0x829194: "f8031aaa", # mov x24,x26 (preserve success-tail expectation)
+              0x829198: "fa031baa", # mov x26,x27
+              0x82919c: "681a40f9", # ldr x8,[x19,#0x30]
+              0x8291a0: "088940f9", # ldr x8,[x8,#0x110] (faulting PC)
+              0x8291a4: "160140b9", # ldr w22,[x8] (instruction)
+              0x8291a8: "e00313aa", # mov x0,x19 (signal ucontext)
+              0x8291ac: "e10316aa", # mov x1,x22 (insn)
+              0x8291b0: "e91a0094", # bl ios_emulate_store
+              0x8291b4: "c0edff34", # cbz w0,0x828f6c
+              0x8291b8: "42ffff17", # b 0x828ec0 existing PC+4/fixup success tail
           }
           for off, hx in stub.items():
               data[off:off+4] = bytes.fromhex(hx)
-          for off in range(0x8291a4, 0x8291e0, 4):
+          for off in range(0x8291bc, 0x8291e0, 4):
               data[off:off+4] = bytes.fromhex("1f2003d5") # nop
 
           path.write_bytes(data)
@@ -347,11 +365,13 @@ jobs:
           # Strong post-write guards.
           verifies = {
               0x828e6c:"171800b4", 0x828e74:"c3170054", 0x828e7c:"89170054",
-              0x82916c:"e00319aa", 0x829170:"3c42ff97", 0x829174:"c0efffb4",
-              0x829178:"e20300aa", 0x82917c:"f8031aaa", 0x829180:"fa031baa",
-              0x829184:"681a40f9", 0x829188:"088940f9", 0x82918c:"160140b9",
-              0x829190:"e00313aa", 0x829194:"e10316aa", 0x829198:"ef1a0094",
-              0x82919c:"80eeff34", 0x8291a0:"48ffff17",
+              0x82916c:"40e60090", 0x829170:"00601e91", 0x829174:"090040f9",
+              0x829178:"20013fd6", 0x82917c:"29008052", 0x829180:"090000b9",
+              0x829184:"e00319aa", 0x829188:"3642ff97", 0x82918c:"00efffb4",
+              0x829190:"e20300aa", 0x829194:"f8031aaa", 0x829198:"fa031baa",
+              0x82919c:"681a40f9", 0x8291a0:"088940f9", 0x8291a4:"160140b9",
+              0x8291a8:"e00313aa", 0x8291ac:"e10316aa", 0x8291b0:"e91a0094",
+              0x8291b4:"c0edff34", 0x8291b8:"42ffff17",
           }
           for off,hx in verifies.items():
               if check[off:off+4] != bytes.fromhex(hx):
@@ -365,7 +385,8 @@ jobs:
               "root cause: bus_handler handled primary JIT RX only; anon alias "
               "lookup existed only in the Mach exception path\n"
               "change: route out-of-pool BUS writes through "
-              "ios_jit_anon_alias_lookup + ios_emulate_store\n"
+              "ios_jit_anon_alias_lookup + ios_emulate_store; mark the signal "
+              "ucontext NEON state valid so FP/SIMD alias stores are emulated\n"
               f"dylib sha256 before BUS patch: {before}\n"
               f"dylib sha256 after BUS patch: {after}\n"
           )
@@ -401,20 +422,20 @@ jobs:
             exit 1
           fi
 
-          rm -f work/Madeira-0.1.0-MSL32-RWalias-BUSalias.ipa
+          rm -f work/Madeira-0.1.0-MSL32-RWalias-NEONalias.ipa
           (
             cd work/unpack
-            ditto -c -k --sequesterRsrc --keepParent Payload ../Madeira-0.1.0-MSL32-RWalias-BUSalias.ipa
+            ditto -c -k --sequesterRsrc --keepParent Payload ../Madeira-0.1.0-MSL32-RWalias-NEONalias.ipa
           )
-          shasum -a 256 work/Madeira-0.1.0-MSL32-RWalias-BUSalias.ipa | tee -a work/patch-report.txt
-          ls -lh work/Madeira-0.1.0-MSL32-RWalias-BUSalias.ipa
+          shasum -a 256 work/Madeira-0.1.0-MSL32-RWalias-NEONalias.ipa | tee -a work/patch-report.txt
+          ls -lh work/Madeira-0.1.0-MSL32-RWalias-NEONalias.ipa
 
       - name: Upload patched IPA
         uses: actions/upload-artifact@v4
         with:
-          name: Madeira-0.1.0-MSL32-RWalias-BUSalias
+          name: Madeira-0.1.0-MSL32-RWalias-NEONalias
           path: |
-            work/Madeira-0.1.0-MSL32-RWalias-BUSalias.ipa
+            work/Madeira-0.1.0-MSL32-RWalias-NEONalias.ipa
             work/patch-report.txt
             work/dxmt_command.metallib
             work/bus-alias-disasm.txt
