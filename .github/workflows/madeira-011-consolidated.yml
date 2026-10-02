@@ -1,0 +1,323 @@
+name: Madeira 0.1.1 Consolidated Expendabros Fix
+
+on:
+  push:
+    branches: [madeira011-consolidated]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  patch:
+    runs-on: macos-26
+    timeout-minutes: 45
+    steps:
+      - name: Prepare Metal toolchain
+        shell: bash
+        run: |
+          set -euxo pipefail
+          xcodebuild -version
+          if ! xcrun --sdk iphoneos --find metal >/dev/null 2>&1; then
+            xcodebuild -downloadComponent MetalToolchain
+          fi
+          xcrun --sdk iphoneos --find metal
+          xcrun --sdk iphoneos metal --version || true
+
+      - name: Download official Madeira 0.1.1 and exact DXMT source
+        shell: bash
+        run: |
+          set -euxo pipefail
+          mkdir -p work
+          curl -fL --retry 5 --retry-all-errors             https://github.com/willfaust/Madeira/releases/download/v0.1.1/Madeira-0.1.1.ipa             -o work/Madeira-0.1.1-official.ipa
+          echo "045aeb8fd4c71c2e6a78fb4511f94c56f8ed7af14c47a3b0ea2937a4fc8bfcee  work/Madeira-0.1.1-official.ipa" | shasum -a 256 -c -
+          curl -fL --retry 5 --retry-all-errors             https://raw.githubusercontent.com/willfaust/dxmt/a5e0cd3d41bf248fd1c030a2e1c515ba3522f4ef/src/dxmt/dxmt_command.metal             -o work/dxmt_command.metal
+
+      - name: Compile D3D9 command library for iPhoneOS Metal 3.2
+        shell: bash
+        run: |
+          set -euxo pipefail
+          METAL="$(xcrun --sdk iphoneos --find metal)"
+          METALLIB="$(xcrun --sdk iphoneos --find metallib)"
+          "$METAL" -std=metal3.2 -mios-version-min=18.0 -Os             -c work/dxmt_command.metal -o work/dxmt_command.air
+          "$METALLIB" work/dxmt_command.air -o work/dxmt_command.metallib
+          test "$(dd if=work/dxmt_command.metallib bs=1 count=4 2>/dev/null)" = "MTLB"
+          shasum -a 256 work/dxmt_command.metallib
+
+      - name: Unpack and patch official 0.1.1
+        shell: bash
+        run: |
+          set -euxo pipefail
+          rm -rf work/unpack
+          mkdir -p work/unpack
+          ditto -x -k work/Madeira-0.1.1-official.ipa work/unpack
+
+          APP="work/unpack/Payload/Madeira.app"
+          TARGET="$APP/i386-windows/d3d9-emulated.dll"
+          DYLIB="$APP/Madeira.debug.dylib"
+          test -f "$TARGET"
+          test -f "$DYLIB"
+
+          /usr/bin/codesign -d --entitlements :- "$APP" > work/original-entitlements.plist 2>/dev/null
+          plutil -lint work/original-entitlements.plist
+          xcrun dwarfdump --uuid "$DYLIB" | tee work/runtime-uuid.txt
+          grep -qi '577C5C66-A7E8-359A-9301-546A52513969' work/runtime-uuid.txt
+
+          python3 - "$APP" "$TARGET" "$DYLIB" work/dxmt_command.metallib work/patch-report.txt <<'PY'
+          from pathlib import Path
+          import struct, sys, hashlib
+
+          app = Path(sys.argv[1])
+          target = Path(sys.argv[2])
+          dylib = Path(sys.argv[3])
+          new = Path(sys.argv[4]).read_bytes()
+          report = Path(sys.argv[5])
+
+          def fail(msg):
+              raise SystemExit("PATCH ERROR: " + msg)
+
+          # ---------- 1) D3D9 / Metal 3.2 ----------
+          if new[:4] != b"MTLB" or len(new) < 32:
+              fail("replacement metallib invalid")
+          if struct.unpack_from("<Q", new, 16)[0] != len(new):
+              fail("replacement metallib header length mismatch")
+
+          data = bytearray(target.read_bytes())
+          markers = (
+              b"clear_texture_1d_uint",
+              b"fs_blit_quad",
+              b"vs_present_quad",
+              b"cs_clear_buffer_uint",
+          )
+          candidates=[]
+          pos=0
+          while True:
+              p=data.find(b"MTLB",pos)
+              if p<0: break
+              if p+24<=len(data):
+                  sz=struct.unpack_from("<Q",data,p+16)[0]
+                  if 128<=sz<=16*1024*1024 and p+sz<=len(data):
+                      blob=data[p:p+sz]
+                      score=sum(m in blob for m in markers)
+                      if score: candidates.append((score,p,sz))
+              pos=p+4
+
+          exact=[x for x in candidates if x[0]==4]
+          if len(exact)!=1:
+              fail(f"expected exactly one DXMT command metallib in d3d9-emulated.dll, got {exact}")
+          _,blob_off,old_len=exact[0]
+          if len(new)>old_len:
+              fail(f"replacement {len(new)} > embedded {old_len}")
+
+          needle=struct.pack("<I",old_len)
+          hits=[]
+          p=0
+          while True:
+              q=data.find(needle,p)
+              if q<0: break
+              if not (blob_off<=q<blob_off+old_len): hits.append(q)
+              p=q+1
+          if not hits: fail("dxmt_command_len not found")
+          hits.sort(key=lambda q:abs(q-(blob_off+old_len)))
+          len_off=hits[0]
+
+          old_blob_sha=hashlib.sha256(data[blob_off:blob_off+old_len]).hexdigest()
+          d3d9_before=hashlib.sha256(data).hexdigest()
+          new_sha=hashlib.sha256(new).hexdigest()
+          data[blob_off:blob_off+len(new)]=new
+          if len(new)<old_len:
+              data[blob_off+len(new):blob_off+old_len]=b"\0"*(old_len-len(new))
+          struct.pack_into("<I",data,len_off,len(new))
+          target.write_bytes(data)
+
+          chk=target.read_bytes()
+          if chk[blob_off:blob_off+4]!=b"MTLB": fail("MTLB magic mismatch after write")
+          if struct.unpack_from("<Q",chk,blob_off+16)[0]!=len(new): fail("MTLB size mismatch")
+          if struct.unpack_from("<I",chk,len_off)[0]!=len(new): fail("dxmt_command_len mismatch")
+          if hashlib.sha256(chk[blob_off:blob_off+len(new)]).hexdigest()!=new_sha:
+              fail("replacement metallib hash mismatch")
+          d3d9_after=hashlib.sha256(chk).hexdigest()
+
+          # ---------- 2) Madeira.debug.dylib consolidated runtime fixes ----------
+          r = bytearray(dylib.read_bytes())
+          def word(off):
+              return struct.unpack_from("<I",r,off)[0]
+          def put(off,w):
+              struct.pack_into("<I",r,off,w)
+
+          runtime_before=hashlib.sha256(r).hexdigest()
+
+          # 2a) Anonymous JIT alias -> existing ios_emulate_store path.
+          hook_off=0x83af3c
+          cave_off=0x1c67608
+          if word(hook_off)!=0x4f00e400:
+              fail(f"alias hook guard failed: 0x{word(hook_off):08x}")
+          for i in range(14):
+              if word(cave_off+i*4)!=0xd503201f:
+                  fail(f"alias cave guard failed @0x{cave_off+i*4:x}")
+
+          put(hook_off,0x1450b1b3)
+          alias_stub=[
+              0xaa1903e0,0x97ae90d5,0xb4000120,0xaa0003e2,
+              0xaa1a03f8,0xf90057f6,0xaa1b03fa,0xf9401a68,
+              0xf9408908,0xb9400116,0x17af4e14,0x4f00e400,
+              0x17af4e42,0xd503201f,
+          ]
+          for i,w in enumerate(alias_stub): put(cave_off+i*4,w)
+
+          # 2b) Mach decoder: Q/SIMD register-offset stores
+          #     0x3ca74a70 / 0x3cb84a70 seen in the earlier crash storm.
+          hook=0x844f30
+          cave_a=0x1c68688
+          cave_b=0x1c6a6cc
+          if word(hook)!=0xf000fa08:
+              fail(f"Mach SIMD hook guard failed: 0x{word(hook):08x}")
+          for base,count in ((cave_a,14),(cave_b,13)):
+              for i in range(count):
+                  if word(base+i*4)!=0xd503201f:
+                      fail(f"Mach SIMD cave guard failed @0x{base+i*4:x}")
+
+          put(hook,0x14508dd6)
+          simd_a=[
+              0xb9412be8,0x35010248,0xb94903e8,0x53157d09,
+              0x7107953f,0x540101c1,0x12160509,0x7120013f,
+              0x54010161,0x12001108,0x9105c3e9,0x8b285129,
+              0xa9402d2a,0x14000804,
+          ]
+          simd_b=[
+              0xa9002e6a,0x17af7d1f,0xf000fa08,0x17af6a17,
+          ]
+          for i,w in enumerate(simd_a): put(cave_a+i*4,w)
+          for i,w in enumerate(simd_b): put(cave_b+i*4,w)
+
+          # 2c) Latest log: atomics on a live anonymous alias after ~50 presents.
+          #     0xb8f50314 = observed LSE LDADD-family op.
+          #     0xc80afec9 = observed exclusive-store op.
+          #
+          # ios_emulate_store's normal return-0 tail is redirected to a tiny
+          # exact-word helper. CAS already completed before 0x84214c; only its
+          # first-eight diagnostic log is bypassed to reuse that dead block.
+          return0=0x841f98
+          epilogue=0x841f9c
+          cas_log_gate=0x84214c
+          atomic_helper=0x842150
+          stxr_cave=0x1c6a6dc
+
+          guards={
+              return0:0x52800000,
+              epilogue:0x17ffffb4,
+              cas_log_gate:0x54ffe8ec,
+              atomic_helper:0xd000e3c9,
+              atomic_helper+0x48:0x17ffff34,
+          }
+          for off,exp in guards.items():
+              if word(off)!=exp:
+                  fail(f"atomic guard failed @0x{off:x}: expected 0x{exp:08x} got 0x{word(off):08x}")
+          for off in range(stxr_cave,stxr_cave+5*4,4):
+              if word(off)!=0xd503201f:
+                  fail(f"atomic STXR cave guard failed @0x{off:x}")
+
+          put(return0,0x1400006e)      # b 0x842150
+          put(cas_log_gate,0x17ffff47) # b 0x841e68 (skip diagnostic-only CAS log)
+          atomic_h=[
+              0x52806289,0x72b71ea9,0x6b09011f,0x54000100,
+              0x529fd929,0x72b90149,0x6b09011f,0x54000041,
+              0x1450a15b,0x52800000,0x17ffff89,0xf9401809,
+              0xb940b92a,0xb8ea004b,0xb900b12b,0x17ffff37,
+          ]
+          for i,w in enumerate(atomic_h): put(atomic_helper+i*4,w)
+          atomic_s=[
+              0xf9401809,0xf9402d2a,0xf900004a,0xb900613f,0x17af5ddf,
+          ]
+          for i,w in enumerate(atomic_s): put(stxr_cave+i*4,w)
+
+          dylib.write_bytes(r)
+          rr=dylib.read_bytes()
+
+          verifies={
+              hook_off:0x1450b1b3,
+              hook:0x14508dd6,
+              return0:0x1400006e,
+              cas_log_gate:0x17ffff47,
+          }
+          verifies.update({cave_off+i*4:w for i,w in enumerate(alias_stub)})
+          verifies.update({cave_a+i*4:w for i,w in enumerate(simd_a)})
+          verifies.update({cave_b+i*4:w for i,w in enumerate(simd_b)})
+          verifies.update({atomic_helper+i*4:w for i,w in enumerate(atomic_h)})
+          verifies.update({stxr_cave+i*4:w for i,w in enumerate(atomic_s)})
+          for off,exp in verifies.items():
+              got=struct.unpack_from("<I",rr,off)[0]
+              if got!=exp:
+                  fail(f"runtime verify failed @0x{off:x}: expected 0x{exp:08x} got 0x{got:08x}")
+
+          runtime_after=hashlib.sha256(rr).hexdigest()
+
+          lines=[
+              "Madeira 0.1.1 consolidated Expendabros patch",
+              "official release commit: ca3183ea3dfb0fd706aff1bea2abb871b5d27aec",
+              "official IPA sha256: 045aeb8fd4c71c2e6a78fb4511f94c56f8ed7af14c47a3b0ea2937a4fc8bfcee",
+              "runtime LC_UUID: 577C5C66-A7E8-359A-9301-546A52513969",
+              "",
+              "1) ONLY D3D9 payload patched: i386-windows/d3d9-emulated.dll",
+              f"   embedded metallib off=0x{blob_off:x} old_len={old_len} new_len={len(new)}",
+              f"   old metallib sha256={old_blob_sha}",
+              f"   new metallib sha256={new_sha}",
+              f"   d3d9 sha256 before={d3d9_before}",
+              f"   d3d9 sha256 after ={d3d9_after}",
+              "   compiler=iphoneos Metal 3.2 iOS 18.0",
+              "",
+              "2) Madeira.debug.dylib runtime fixes, all on official 0.1.1:",
+              "   - anon JIT alias BUS routing -> official ios_emulate_store path",
+              "   - Mach Q/SIMD register-offset stores 0x3ca74a70 / 0x3cb84a70",
+              "   - observed LSE atomic 0xb8f50314 -> hardware LDADDAL on RW alias",
+              "   - observed exclusive store 0xc80afec9 -> RW store + saved status=0",
+              f"   runtime sha256 before={runtime_before}",
+              f"   runtime sha256 after ={runtime_after}",
+              "",
+              "Unchanged: FEX PE payloads, Wine PE payloads, D3D11 payloads, JIT allocator from official 0.1.1.",
+          ]
+          report.write_text("\n".join(lines)+"\n")
+          print("\n".join(lines))
+          PY
+
+          # Prove the final binary shape from the file that will actually be signed.
+          xcrun llvm-objdump -d --start-address=0x83af30 --stop-address=0x83af50 "$DYLIB" | tee work/alias-bus.txt
+          xcrun llvm-objdump -d --start-address=0x844f20 --stop-address=0x844f40 "$DYLIB" | tee work/mach-simd.txt
+          xcrun llvm-objdump -d --start-address=0x842140 --stop-address=0x84219c "$DYLIB" | tee work/atomic-helper.txt
+          xcrun llvm-objdump -d --start-address=0x1c6a6cc --stop-address=0x1c6a700 "$DYLIB" | tee work/atomic-cave.txt
+          grep -qi 'ldaddal' work/atomic-helper.txt
+          grep -qi 'str.*wzr' work/atomic-cave.txt
+
+      - name: Re-sign and package
+        shell: bash
+        run: |
+          set -euxo pipefail
+          APP="work/unpack/Payload/Madeira.app"
+
+          /usr/bin/codesign --force --sign - --timestamp=none "$APP/Madeira.debug.dylib"
+          /usr/bin/codesign --force --sign - --timestamp=none             --entitlements work/original-entitlements.plist "$APP"
+          /usr/bin/codesign --verify --deep --strict --verbose=2 "$APP"
+          /usr/bin/codesign -d --entitlements :- "$APP" 2>/dev/null | tee work/final-entitlements.plist
+
+          (
+            cd work/unpack
+            ditto -c -k --sequesterRsrc --keepParent Payload ../Madeira-0.1.1-Consolidated.ipa
+          )
+          shasum -a 256 work/Madeira-0.1.1-Consolidated.ipa | tee -a work/patch-report.txt
+          ls -lh work/Madeira-0.1.1-Consolidated.ipa
+
+      - name: Upload consolidated IPA
+        uses: actions/upload-artifact@v4
+        with:
+          name: Madeira-0.1.1-Consolidated
+          path: |
+            work/Madeira-0.1.1-Consolidated.ipa
+            work/patch-report.txt
+            work/runtime-uuid.txt
+            work/final-entitlements.plist
+            work/alias-bus.txt
+            work/mach-simd.txt
+            work/atomic-helper.txt
+            work/atomic-cave.txt
+          compression-level: 0
+          if-no-files-found: error
