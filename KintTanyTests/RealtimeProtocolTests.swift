@@ -341,6 +341,42 @@ final class RealtimeProtocolTests: XCTestCase {
         XCTAssertEqual(CombatProgressDisplayPolicy.goal(localGoal: 31, displayGoal: 50), 50)
     }
 
+    func testBuild17CapturedHealthSavePayloadAndConfirmation() {
+        let body = HealthSavePayloadPolicy.makeBody(
+            hp: 97,
+            wildShield: 59,
+            lifeEpoch: 3,
+            fleet: "us",
+            shardID: 2
+        )
+        XCTAssertEqual(body["hp"] as? Int, 97)
+        XCTAssertEqual(body["wildShield"] as? Int, 59)
+        XCTAssertEqual(body["le"] as? Int, 3)
+        XCTAssertEqual(body["fleet"] as? String, "us")
+        XCTAssertEqual(body["shardId"] as? Int, 2)
+
+        XCTAssertEqual(
+            HealthSavePayloadPolicy.confirmedHP(from: [
+                "ok": true,
+                "meta": ["hp": 97]
+            ]),
+            97
+        )
+        XCTAssertEqual(
+            HealthSavePayloadPolicy.confirmedHP(from: [
+                "ok": true,
+                "meta": ["hp": 100]
+            ]),
+            100
+        )
+        XCTAssertNil(
+            HealthSavePayloadPolicy.confirmedHP(from: [
+                "ok": true,
+                "meta": ["wildShield": 59]
+            ])
+        )
+    }
+
     func testBuild16RealmEfficiencyAndWorldRecoveryPolicy() {
         XCTAssertEqual(RealmCombatEfficiencyPolicy.readyEffectiveHP, 150)
         XCTAssertTrue(

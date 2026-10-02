@@ -1226,6 +1226,40 @@ enum HealthPotionEffectResult: Equatable {
     case interrupted
 }
 
+/// Build 17: captured official client contract for health persistence.
+/// After drink/drink_ack, the browser persists each heal tick through
+/// POST /api/auth/save-hp with HP + shield + lifeEpoch + fleet/shard.
+struct HealthSavePayloadPolicy {
+    static func makeBody(
+        hp: Int,
+        wildShield: Int,
+        lifeEpoch: Int,
+        fleet: String,
+        shardID: Int?
+    ) -> [String: Any] {
+        var body: [String: Any] = [
+            "hp": max(0, min(100, hp)),
+            "wildShield": max(0, min(100, wildShield)),
+            "le": max(1, lifeEpoch),
+            "fleet": fleet
+        ]
+        if let shardID { body["shardId"] = shardID }
+        return body
+    }
+
+    static func confirmedHP(from response: [String: Any]) -> Int? {
+        if let meta = response["meta"] as? [String: Any],
+           let hp = RealtimeProtocol.int(meta["hp"]) {
+            return max(0, min(100, hp))
+        }
+        if let player = response["player"] as? [String: Any],
+           let hp = RealtimeProtocol.int(player["php"] ?? player["hp"]) {
+            return max(0, min(100, hp))
+        }
+        return nil
+    }
+}
+
 struct HealthPotionEffectPolicy {
     static func result(before: Int, after: Int, interrupted: Bool) -> HealthPotionEffectResult {
         if interrupted { return .interrupted }
@@ -4268,7 +4302,7 @@ func makeRecoveryProgressAnchor(for mode: ActivityMode) async -> ActivityRecover
         if currentPotionStock(type) > 0 {
             let before = playerHP
             if try await consumePotion(type) {
-                reporter(.log("❤️‍🔥 Calor das Dunes • Health Potion+ aceita com HP \(before) • aguardando pvit/snapshot"))
+                reporter(.log("❤️‍🔥 Calor das Dunes • Health Potion+ aceita com HP \(before) • aplicando save-hp autoritativo"))
                 let confirmed = try await driveDunesHealthPotionPlusTicks(beforeDoseHP: before)
                 if confirmed, playerHP > DunesHeatSafetyPolicy.minimumSafeHP {
                     dunesHeatBaselineAtMS = nowMS
@@ -4303,26 +4337,15 @@ func makeRecoveryProgressAnchor(for mode: ActivityMode) async -> ActivityRecover
     }
 
     private func driveDunesHealthPotionPlusTicks(beforeDoseHP: Int) async throws -> Bool {
-        let maximumAfterDose = min(100, beforeDoseHP + 50)
-        try await sleep(650)
-        for _ in 0..<5 {
-            try Task.checkCancellation()
-            guard playerHP > 0 else { throw EngineError.playerDead }
-            if playerHP >= maximumAfterDose || playerHP >= DunesHeatSafetyPolicy.recoveryGoalHP { break }
-            let beforeTick = playerHP
-            let proposed = min(maximumAfterDose, min(100, beforeTick + 10))
-            try await sendPosition(moving: false, action: ["php": proposed])
-            try await sleep(35)
-            try await sendPosition(moving: false, action: ["php": proposed])
-
-            let deadline = nowMS + 1_100
-            while nowMS < deadline, playerHP <= beforeTick {
-                try Task.checkCancellation()
-                try await sleep(60)
-            }
-            if playerHP <= beforeTick { break }
-        }
-        return playerHP > beforeDoseHP
+        let result = try await applyAuthoritativeHealthPotionTicks(
+            type: DunesHeatSafetyPolicy.healthPotionPlusType,
+            goal: DunesHeatSafetyPolicy.recoveryGoalHP,
+            beforeDoseHP: beforeDoseHP,
+            maximumGain: 50,
+            step: 10,
+            initialDelayMS: 650
+        )
+        return result == .confirmed && playerHP > beforeDoseHP
     }
 
     private func harvestWithRecovery(seed: GatherSeed, mode: ActivityMode) async throws -> HarvestResult {
@@ -7935,20 +7958,20 @@ func makeRecoveryProgressAnchor(for mode: ActivityMode) async -> ActivityRecover
                     let before = playerHP
                     if try await consumePotion("potion_health") {
                         usedAny = true
-                        reporter(.log("❤️ Poção de vida aceita • HP antes \(before) • aguardando pvit/snapshot"))
+                        reporter(.log("❤️ Poção de vida aceita • HP antes \(before) • aplicando save-hp autoritativo do cliente oficial"))
                         switch try await driveHealthPotionTicks(goal: hpGoal, beforeDoseHP: before) {
                         case .confirmed:
                             continue
                         case .interrupted:
                             return
                         case .noAuthoritativeGain:
-                            reporter(.log("⚠️ Poção de vida consumida, mas pvit/snapshot não confirmou aumento de HP • novas doses bloqueadas nesta recuperação"))
+                            reporter(.log("⚠️ Poção de vida consumida, mas save-hp não confirmou aumento de HP • novas doses bloqueadas nesta recuperação"))
                             if mode.isRealmMobCombat {
                                 safeStopReason = .combatSupplies
                                 reporter(.log("🧪 \(mode.displayName) • HP não confirmou na região de combate • World/regeneração será usado sem classificar como falha operacional"))
                                 return
                             }
-                            throw EngineError.potionRecoveryFailed("poção de vida sem efeito autoritativo • HP permaneceu \(playerHP); nenhuma segunda dose foi consumida")
+                            throw EngineError.potionRecoveryFailed("poção de vida sem confirmação de save-hp • HP permaneceu \(playerHP); nenhuma segunda dose foi consumida")
                         }
                     }
                 } else if mode.isRealmMobCombat {
@@ -8110,28 +8133,32 @@ func makeRecoveryProgressAnchor(for mode: ActivityMode) async -> ActivityRecover
     }
 
     private func driveDunesCombatHealTicks(type: String, beforeDoseHP: Int) async throws -> Bool {
-        let isCacti = type == DesertCombatConsumablePolicy.cactiType
-        let ticks = isCacti ? 1 : 5
-        let step = isCacti ? 20 : 10
-        let maximumAfterDose = min(100, beforeDoseHP + ticks * step)
+        if type != DesertCombatConsumablePolicy.cactiType {
+            let result = try await applyAuthoritativeHealthPotionTicks(
+                type: type,
+                goal: DunesHeatSafetyPolicy.recoveryGoalHP,
+                beforeDoseHP: beforeDoseHP,
+                maximumGain: 50,
+                step: 10,
+                initialDelayMS: 650
+            )
+            return result == .confirmed && playerHP > beforeDoseHP
+        }
 
+        // Cacti is food, not a health potion. Keep its captured one-shot path
+        // separate until a dedicated client capture proves a save-hp sequence.
+        let maximumAfterDose = min(100, beforeDoseHP + 20)
         try await sleep(650)
-        for _ in 0..<ticks {
-            try Task.checkCancellation()
-            guard playerHP > 0 else { throw EngineError.playerDead }
-            if playerHP >= maximumAfterDose || playerHP >= DunesHeatSafetyPolicy.recoveryGoalHP { break }
-            let before = playerHP
-            let proposed = min(maximumAfterDose, min(100, before + step))
-            try await sendPosition(moving: false, action: ["php": proposed])
-            try await sleep(35)
-            try await sendPosition(moving: false, action: ["php": proposed])
+        let before = playerHP
+        let proposed = min(maximumAfterDose, min(100, before + 20))
+        try await sendPosition(moving: false, action: ["php": proposed])
+        try await sleep(35)
+        try await sendPosition(moving: false, action: ["php": proposed])
 
-            let tickDeadline = nowMS + 1_100
-            while nowMS < tickDeadline, playerHP <= before {
-                try Task.checkCancellation()
-                try await sleep(60)
-            }
-            if playerHP <= before { break }
+        let tickDeadline = nowMS + 1_100
+        while nowMS < tickDeadline, playerHP <= before {
+            try Task.checkCancellation()
+            try await sleep(60)
         }
         return playerHP > beforeDoseHP
     }
@@ -8361,33 +8388,83 @@ func makeRecoveryProgressAnchor(for mode: ActivityMode) async -> ActivityRecover
         }
     }
 
-    private func driveHealthPotionTicks(goal: Int, beforeDoseHP: Int) async throws -> HealthPotionEffectResult {
-        try await sleep(1_250)
+    private func applyAuthoritativeHealthPotionTicks(
+        type: String,
+        goal: Int,
+        beforeDoseHP: Int,
+        maximumGain: Int,
+        step: Int = 10,
+        initialDelayMS: Int = 1_700
+    ) async throws -> HealthPotionEffectResult {
+        let maximumAfterDose = min(100, beforeDoseHP + max(0, maximumGain))
+        let target = min(100, max(beforeDoseHP, min(goal, maximumAfterDose)))
+
+        try await sleep(initialDelayMS)
         if emergencyBackgroundExitRequested { return .interrupted }
-        for _ in 0..<10 {
+
+        var confirmedProgress = false
+        var guardCount = 0
+        while playerHP < target, playerHP < maximumAfterDose, guardCount < 10 {
             try Task.checkCancellation()
             if emergencyBackgroundExitRequested { return .interrupted }
             guard playerHP > 0 else { throw EngineError.playerDead }
-            if playerHP >= goal || playerHP >= 100 { break }
-            let before = playerHP
-            let proposed = min(100, before + 10)
-            try await sendPosition(moving: false, action: ["php": proposed])
-            try await sleep(35)
-            try await sendPosition(moving: false, action: ["php": proposed])
+            guardCount += 1
 
-            let deadline = nowMS + 1_100
-            while nowMS < deadline, playerHP <= before {
-                try Task.checkCancellation()
-                if emergencyBackgroundExitRequested { return .interrupted }
-                try await sleep(60)
+            let before = playerHP
+            let proposed = min(maximumAfterDose, min(100, before + max(1, step)))
+            let response = try await http.saveHP(
+                hp: proposed,
+                wildShield: playerShield,
+                lifeEpoch: lifeEpoch
+            )
+            guard RealtimeProtocol.bool(response["ok"]) != false, response["error"] == nil else {
+                reporter(.log("⚠️ \(prettyItem(type)) • save-hp recusado pelo servidor"))
+                break
             }
-            reporter(.log("❤️ Tick de vida • \(before) → \(playerHP)\(playerHP <= before ? " (sem confirmação)" : "")"))
-            if playerHP >= goal { break }
+            guard let confirmed = HealthSavePayloadPolicy.confirmedHP(from: response) else {
+                reporter(.log("⚠️ \(prettyItem(type)) • save-hp respondeu sem meta.hp autoritativo"))
+                break
+            }
+
+            let bounded = max(0, min(100, confirmed))
+            if bounded > before {
+                playerHP = bounded
+                ownHPRevision += 1
+                lastTrustedOwnHPAtMS = nowMS
+                lastTrustedOwnHPRegion = (serverRegion ?? region).lowercased()
+                lastTrustedOwnHPSource = "save-hp"
+                confirmedProgress = true
+                reporter(.diagnostic("[HP][AUTH] save-hp aceito • \(type) • HP \(before)→\(playerHP) • shield=\(playerShield) • le=\(lifeEpoch)"))
+                reporter(.log("❤️ Tick de vida confirmado pelo servidor • \(before) → \(playerHP)"))
+                reporter(.player(position, hp: playerHP, shield: playerShield, region: region))
+
+                // Paridade com a captura oficial: após o save-hp confirmado,
+                // publique o mesmo HP na Presence. O HTTP é a autoridade da cura;
+                // o realtime passa a ser sincronização, não condição para aceitar o tick.
+                try await sendPosition(
+                    moving: false,
+                    action: ["eq": type, "php": playerHP, "wsh": playerShield]
+                )
+            } else {
+                reporter(.log("⚠️ \(prettyItem(type)) • save-hp não avançou HP • \(before) → \(bounded)"))
+                break
+            }
+
+            if playerHP >= target || playerHP >= maximumAfterDose { break }
+            try await sleep(550)
         }
-        return HealthPotionEffectPolicy.result(
-            before: beforeDoseHP,
-            after: playerHP,
-            interrupted: emergencyBackgroundExitRequested
+
+        if emergencyBackgroundExitRequested { return .interrupted }
+        return confirmedProgress ? .confirmed : .noAuthoritativeGain
+    }
+
+    private func driveHealthPotionTicks(goal: Int, beforeDoseHP: Int) async throws -> HealthPotionEffectResult {
+        try await applyAuthoritativeHealthPotionTicks(
+            type: "potion_health",
+            goal: goal,
+            beforeDoseHP: beforeDoseHP,
+            maximumGain: 50,
+            step: 10
         )
     }
 
@@ -9503,6 +9580,19 @@ private struct KintaraHTTPClient {
 
     func consumePotion(_ type: String) async throws -> [String: Any] {
         try await post("/api/auth/consume-potion", body: ["type": type])
+    }
+
+    func saveHP(hp: Int, wildShield: Int, lifeEpoch: Int) async throws -> [String: Any] {
+        try await post(
+            "/api/auth/save-hp",
+            body: HealthSavePayloadPolicy.makeBody(
+                hp: hp,
+                wildShield: wildShield,
+                lifeEpoch: lifeEpoch,
+                fleet: fleet,
+                shardID: shardID
+            )
+        )
     }
 
     func eatFood(_ type: String) async throws -> [String: Any] {
