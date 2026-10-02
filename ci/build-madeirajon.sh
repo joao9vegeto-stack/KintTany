@@ -74,7 +74,8 @@ if [ ! -f "$ROOT/wine/build-macos/config.status" ]; then
   ../configure     --without-x --without-vulkan --without-freetype --without-gnutls     --without-gstreamer --without-cups --without-gphoto --without-sane     --without-opencl --without-pcap --without-pcsclite --without-usb     --disable-tests
 )
 fi
-make -C "$ROOT/wine/build-macos" -j"$JOBS" tools/widl/widl tools/winebuild/winebuild\nmake -C "$ROOT/wine/build-macos" -j"$JOBS" include
+make -C "$ROOT/wine/build-macos" -j"$JOBS" tools/widl/widl tools/winebuild/winebuild
+make -C "$ROOT/wine/build-macos" -j"$JOBS" include
 
 say "Configure ARM64EC Wine generated-header tree"
 mkdir -p "$ROOT/wine/build-arm64ec"
