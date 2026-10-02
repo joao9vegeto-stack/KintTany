@@ -200,6 +200,67 @@ jobs:
 
           PY
 
+      - name: Patch JIT RW alias for non-EVA devices
+        shell: bash
+        run: |
+          set -euxo pipefail
+          APP="work/unpack/Payload/Madeira.app"
+          DYLIB="$APP/Madeira.debug.dylib"
+          test -f "$DYLIB"
+          python3 - "$DYLIB" work/patch-report.txt <<'PY'
+          from pathlib import Path
+          import struct, sys, hashlib
+
+          path = Path(sys.argv[1])
+          report = Path(sys.argv[2])
+          data = bytearray(path.read_bytes())
+
+          # Madeira v0.1.0, release commit 3ccbf9b...:
+          # StikJITHelper.allocatePool() unconditionally seeds rwAddr with
+          # 0x7000000000 (448 GiB) before vm_remap(VM_FLAGS_ANYWHERE).
+          # On the user's non-EVA process that high address is outside the
+          # usable VA map and vm_remap returns KERN_NO_SPACE (3), even when
+          # the RX pool itself lands correctly in a low hole.
+          #
+          # Exact instruction at __TEXT+0x604530:
+          #   d2c00e08  mov x8, #0x7000000000
+          # Replace only that instruction with:
+          #   d2800008  mov x8, #0
+          # so VM_FLAGS_ANYWHERE starts from the normal low address space.
+          # The executable window is already held and RX is already mapped,
+          # so the kernel cannot overlap either.
+          off = 0x604530
+          old = bytes.fromhex("080ec0d2")
+          new = bytes.fromhex("080080d2")
+
+          if data[off:off+4] != old:
+              raise SystemExit(
+                  f"JIT PATCH ERROR: unexpected instruction at 0x{off:x}: "
+                  f"{data[off:off+4].hex()} expected {old.hex()}"
+              )
+
+          before = hashlib.sha256(data).hexdigest()
+          data[off:off+4] = new
+          path.write_bytes(data)
+          check = path.read_bytes()
+          if check[off:off+4] != new:
+              raise SystemExit("JIT PATCH ERROR: post-write instruction mismatch")
+          after = hashlib.sha256(check).hexdigest()
+
+          extra = f"""
+JIT RW-alias non-EVA patch:
+target: Madeira.debug.dylib
+file/text offset: 0x{off:x}
+old instruction: {old.hex()} (mov x8,#0x7000000000)
+new instruction: {new.hex()} (mov x8,#0)
+reason: both supplied device logs reached RX allocation then failed vm_remap with KERN_NO_SPACE=3; latest log has extended-virtual-addressing=false and RX=0x148000000 at pool=512
+dylib sha256 before: {before}
+dylib sha256 after: {after}
+"""
+          report.write_text(report.read_text() + extra)
+          print(extra)
+          PY
+
       - name: Re-sign bundle ad-hoc and package IPA
         shell: bash
         run: |
