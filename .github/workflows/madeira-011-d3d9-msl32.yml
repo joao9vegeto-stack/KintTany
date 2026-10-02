@@ -152,26 +152,28 @@ jobs:
               fail("post-write replacement hash mismatch")
 
           after_file_sha = hashlib.sha256(check).hexdigest()
-          txt = f"""Madeira 0.1.1 surgical D3D9 Metal patch
-official release tag: v0.1.1
-official release commit: ca3183ea3dfb0fd706aff1bea2abb871b5d27aec
-official IPA sha256: 045aeb8fd4c71c2e6a78fb4511f94c56f8ed7af14c47a3b0ea2937a4fc8bfcee
-DXMT source commit: a5e0cd3d41bf248fd1c030a2e1c515ba3522f4ef
-ONLY patched payload: i386-windows/d3d9-emulated.dll
-embedded dxmt_command offset: 0x{blob_off:x}
-embedded dxmt_command length word offset: 0x{len_off:x}
-old metallib bytes: {old_len}
-new metallib bytes: {len(new)}
-old metallib sha256: {old_sha}
-new metallib sha256: {new_sha}
-d3d9-emulated.dll sha256 before: {before_file_sha}
-d3d9-emulated.dll sha256 after: {after_file_sha}
-compiler target: iphoneos / Metal language 3.2 / iOS deployment 18.0
-Madeira.debug.dylib: UNCHANGED
-arm64ec-windows/d3d11.dll: UNCHANGED
-i386-windows/d3d11.dll: UNCHANGED
-JIT/FEX/Wine/exception handlers: UNCHANGED from official 0.1.1
-"""
+          lines = [
+              "Madeira 0.1.1 surgical D3D9 Metal patch",
+              "official release tag: v0.1.1",
+              "official release commit: ca3183ea3dfb0fd706aff1bea2abb871b5d27aec",
+              "official IPA sha256: 045aeb8fd4c71c2e6a78fb4511f94c56f8ed7af14c47a3b0ea2937a4fc8bfcee",
+              "DXMT source commit: a5e0cd3d41bf248fd1c030a2e1c515ba3522f4ef",
+              "ONLY patched payload: i386-windows/d3d9-emulated.dll",
+              f"embedded dxmt_command offset: 0x{blob_off:x}",
+              f"embedded dxmt_command length word offset: 0x{len_off:x}",
+              f"old metallib bytes: {old_len}",
+              f"new metallib bytes: {len(new)}",
+              f"old metallib sha256: {old_sha}",
+              f"new metallib sha256: {new_sha}",
+              f"d3d9-emulated.dll sha256 before: {before_file_sha}",
+              f"d3d9-emulated.dll sha256 after: {after_file_sha}",
+              "compiler target: iphoneos / Metal language 3.2 / iOS deployment 18.0",
+              "Madeira.debug.dylib: UNCHANGED",
+              "arm64ec-windows/d3d11.dll: UNCHANGED",
+              "i386-windows/d3d11.dll: UNCHANGED",
+              "JIT/FEX/Wine/exception handlers: UNCHANGED from official 0.1.1",
+          ]
+          txt = "\n".join(lines) + "\n"
           report.write_text(txt)
           print(txt)
           PY
