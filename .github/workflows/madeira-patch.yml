@@ -42,7 +42,7 @@ jobs:
           set -euxo pipefail
           METAL="$(xcrun --sdk iphoneos --find metal)"
           METALLIB="$(xcrun --sdk iphoneos --find metallib)"
-          "$METAL" -std=ios-metal3.2 -mios-version-min=18.0 -Os             -c work/dxmt_command.metal -o work/dxmt_command.air
+          "$METAL" -std=metal3.2 -mios-version-min=18.0 -Os             -c work/dxmt_command.metal -o work/dxmt_command.air
           "$METALLIB" work/dxmt_command.air -o work/dxmt_command.metallib
           test "$(dd if=work/dxmt_command.metallib bs=1 count=4 2>/dev/null)" = "MTLB"
           ls -lh work/dxmt_command.metallib
