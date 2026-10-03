@@ -49,7 +49,7 @@ jobs:
           from pathlib import Path
           import re
           root=Path("wine/include")
-          todo=["shobjidl.idl","oleidl.idl","propidl.idl","oaidl.idl","objidl.idl","objidlbase.idl","unknwn.idl","wtypes.idl","wtypesbase.idl"]
+          todo=["shobjidl.idl","shldisp.idl","exdisp.idl","oleidl.idl","propidl.idl","oaidl.idl","objidl.idl","objidlbase.idl","unknwn.idl","wtypes.idl","wtypesbase.idl"]
           seen=set()
           while todo:
               name=todo.pop()
