@@ -45,9 +45,28 @@ jobs:
           )
           make -C wine/build-macos -j4 tools/widl/widl tools/winebuild/winebuild
           make -C wine/build-macos -j4 include
-          make -C wine/build-macos -j4 \
-            include/objidlbase.h include/objidl.h include/unknwn.h \
-            include/wtypesbase.h include/wtypes.h include/shobjidl.h
+          python3 <<'PY' > /tmp/wine-idl-headers.txt
+          from pathlib import Path
+          import re
+          root=Path("wine/include")
+          todo=["shobjidl.idl","oleidl.idl","propidl.idl","oaidl.idl","objidl.idl","objidlbase.idl","unknwn.idl","wtypes.idl","wtypesbase.idl"]
+          seen=set()
+          while todo:
+              name=todo.pop()
+              if name in seen:
+                  continue
+              p=root/name
+              if not p.exists():
+                  continue
+              seen.add(name)
+              txt=p.read_text(errors="ignore")
+              todo += re.findall(r'\\bimport\\s+"([^"]+\\.idl)"', txt)
+          for name in sorted(seen):
+              print("include/"+Path(name).stem+".h")
+          PY
+          mapfile -t WINE_IDL_HEADERS < /tmp/wine-idl-headers.txt
+          printf 'IDL header target: %s\\n' "${WINE_IDL_HEADERS[@]}"
+          make -C wine/build-macos -j4 "${WINE_IDL_HEADERS[@]}"
 
           rm -rf research/freetype
           git clone --depth 1 --branch VER-2-13-3 https://github.com/freetype/freetype.git research/freetype
