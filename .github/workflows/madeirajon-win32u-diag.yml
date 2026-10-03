@@ -60,7 +60,7 @@ jobs:
                   continue
               seen.add(name)
               txt=p.read_text(errors="ignore")
-              todo += re.findall(r'\\bimport\\s+"([^"]+\\.idl)"', txt)
+              todo += re.findall(r'\bimport\s+"([^"]+\.idl)"', txt)
           for name in sorted(seen):
               print("include/"+Path(name).stem+".h")
           PY
