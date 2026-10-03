@@ -103,6 +103,13 @@ rm -rf "$ROOT/research/freetype"
 git clone --depth 1 --branch VER-2-13-3 https://github.com/freetype/freetype.git "$ROOT/research/freetype"
 bash "$ROOT/build/freetype-ios/build.sh"
 
+say "Patch FEX ARM64EC-only diagnostics out of the native iOS static target"
+git -C "$ROOT/FEX" diff --quiet || { echo "FEX dirty before CI patch" >&2; git -C "$ROOT/FEX" status --short; exit 1; }
+git -C "$ROOT/FEX" apply --check "$ROOT/ci/fex-ios-static.patch"
+git -C "$ROOT/FEX" apply "$ROOT/ci/fex-ios-static.patch"
+git -C "$ROOT/FEX" diff --check
+git -C "$ROOT/FEX" diff -- FEXCore/Source/Interface/Core/Core.cpp | tee "$OUT/fex-ios-static.patch-applied.txt"
+
 say "Build FEX iOS core from pinned source"
 bash "$ROOT/build/fex-ios/build.sh"
 test -f "$ROOT/FEX/build-ios/FEXCore/Source/libFEXCore.a"

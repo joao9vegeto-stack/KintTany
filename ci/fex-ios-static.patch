@@ -1,0 +1,20 @@
+diff --git a/FEXCore/Source/Interface/Core/Core.cpp b/FEXCore/Source/Interface/Core/Core.cpp
+--- a/FEXCore/Source/Interface/Core/Core.cpp
++++ b/FEXCore/Source/Interface/Core/Core.cpp
+@@ -1485,6 +1485,7 @@ uintptr_t ContextImpl::CompileBlock(FEXCore::Core::CpuStateFrame* Frame, uint64_t
+   /* iOS-Madeira ml316: report ExitToX64 FFS bypasses (native short-circuit of an EC target
+    * reached via its x64 fast-forward sequence -- preserves the x4/x5 varargs contract that
+    * the emulation round trip destroys; see Module.S). Same change-detection pattern as
+    * [cb-entry] below: CompileBlock runs often enough to notice promptly. */
++#ifdef FEX_IOS_HOST
+   {
+     static uint64_t FfsLastCount = 0;
+     static uint32_t FfsReports = 0;
+@@ -1514,6 +1515,7 @@ uintptr_t ContextImpl::CompileBlock(FEXCore::Core::CpuStateFrame* Frame, uint64_t
+                         IosCbEntryLog[4], IosCbEntryLog[5], IosCbEntryLog[7]);
+     }
+   }
++#endif
+ 
+   /* iOS-Madeira: refuse to compile obviously-invalid guest RIPs. After a
+    * NULL-vtable virtual call (`call [rax+8]` with rax=0), control flow
