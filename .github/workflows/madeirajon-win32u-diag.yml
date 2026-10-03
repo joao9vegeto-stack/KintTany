@@ -1,0 +1,63 @@
+name: MadeiraJon win32u diagnostic
+
+on:
+  push:
+    branches: [MadeiraJon]
+    paths:
+      - '.github/workflows/madeirajon-win32u-diag.yml'
+
+permissions:
+  contents: read
+
+jobs:
+  diag:
+    runs-on: macos-26
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+      - name: Diagnose win32u source build
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          brew install bison flex llvm cmake ninja xz
+          export PATH="$(brew --prefix bison)/bin:$(brew --prefix flex)/bin:$(brew --prefix llvm)/bin:$PATH"
+
+          mkdir -p toolchains .madeirajon-work
+          MINGW_TAR=".madeirajon-work/llvm-mingw.tar.xz"
+          MINGW_DIR="$PWD/toolchains/llvm-mingw-20260421-ucrt-macos-universal"
+          curl -fL --retry 5 --retry-all-errors \
+            "https://github.com/mstorsjo/llvm-mingw/releases/download/20260421/llvm-mingw-20260421-ucrt-macos-universal.tar.xz" \
+            -o "$MINGW_TAR"
+          echo "bd85a3975723815cef28dbbd2ca2cb0c926f6b348a12a0453f39f7af273cb3f7  $MINGW_TAR" | shasum -a 256 -c -
+          tar -C toolchains -xf "$MINGW_TAR"
+          export PATH="$MINGW_DIR/bin:$PATH"
+
+          mkdir -p wine/build-macos
+          (
+            cd wine/build-macos
+            ../configure --enable-archs=aarch64 --with-mingw=llvm-mingw \
+              --without-x --without-vulkan --without-freetype --without-gnutls \
+              --without-gstreamer --without-cups --without-gphoto --without-sane \
+              --without-opencl --without-pcap --without-pcsclite --without-usb \
+              --disable-tests
+          )
+          make -C wine/build-macos -j4 tools/widl/widl tools/winebuild/winebuild
+          make -C wine/build-macos -j4 include
+
+          rm -rf research/freetype
+          git clone --depth 1 --branch VER-2-13-3 https://github.com/freetype/freetype.git research/freetype
+          bash build/freetype-ios/build.sh
+
+          set +e
+          bash build/win32u-unix/build.sh
+          rc=$?
+          set -e
+          echo "WIN32U_RC=$rc"
+          for f in build/win32u-unix/obj/*.err; do
+            [ -s "$f" ] || continue
+            echo "===== $f ====="
+            cat "$f"
+          done
+          exit "$rc"
