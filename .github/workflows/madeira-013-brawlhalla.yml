@@ -1,4 +1,4 @@
-name: Madeira 0.1.1 Consolidated LSE RMW
+name: Madeira 0.1.3 Brawlhalla DebugObject Fix
 
 on:
   push:
@@ -11,32 +11,29 @@ permissions:
 jobs:
   build:
     runs-on: macos-26
-    timeout-minutes: 180
+    timeout-minutes: 120
 
     steps:
-      - name: Checkout Madeira overlay
+      - name: Checkout consolidated overlay
         uses: actions/checkout@v4
         with:
           fetch-depth: 1
 
-      - name: Build, test and package source-corrected Madeira
+      - name: Build corrected Madeira 0.1.3 IPA
         shell: bash
         run: |
           set -o pipefail
           mkdir -p work
-          bash ci/build-consolidated.sh 2>&1 | tee work/ci.log
+          bash ci/build-013-brawlhalla.sh 2>&1 | tee work/ci.log
 
-      - name: Upload IPA, explicit artifact ZIP and reports
+      - name: Upload corrected IPA
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: Madeira-0.1.1-Consolidated-LSE
+          name: Madeira-0.1.3-Brawlhalla-DebugObjectFix
           path: |
             work/output/*
             work/build-report.txt
-            work/test-results.txt
             work/ci.log
-            work/d3d9-report.txt
-            work/xcodebuild.log
           compression-level: 0
           if-no-files-found: warn
