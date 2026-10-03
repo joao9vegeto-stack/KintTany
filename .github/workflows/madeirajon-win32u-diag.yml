@@ -45,6 +45,9 @@ jobs:
           )
           make -C wine/build-macos -j4 tools/widl/widl tools/winebuild/winebuild
           make -C wine/build-macos -j4 include
+          make -C wine/build-macos -j4 \
+            include/objidlbase.h include/objidl.h include/unknwn.h \
+            include/wtypesbase.h include/wtypes.h include/shobjidl.h
 
           rm -rf research/freetype
           git clone --depth 1 --branch VER-2-13-3 https://github.com/freetype/freetype.git research/freetype
