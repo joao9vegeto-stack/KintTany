@@ -12,7 +12,7 @@ WINE_SHA="4f5b19718f4de88ecc5cb0dc08b119497a67ba8f"
 OFFICIAL_IPA_SHA="71e900cbc140778bd6fa67c1062821981ed98e6bfb674d853cfeefd6d242e1c0"
 VCREDIST_SHA="cc0ff0eb1dc3f5188ae6300faef32bf5beeba4bdd6e8e445a9184072096b713b"
 LLVM_MINGW_SHA="bd85a3975723815cef28dbbd2ca2cb0c926f6b348a12a0453f39f7af273cb3f7"
-IPA_NAME="Madeira-0.1.3-Madsync-Actual.ipa"
+IPA_NAME="Madeira-0.1.3-JITAlias-WaitWake.ipa"
 
 mkdir -p "$WORK" "$OUT"
 : > "$REPORT"
@@ -38,7 +38,7 @@ if [ "$JOBS" -gt 8 ]; then JOBS=8; fi
 record "base=Madeira v0.1.3"
 record "upstream=$UPSTREAM_SHA"
 record "wine=$WINE_SHA"
-record "strategy=official IPA + AIR FullChain + VC runtime + ProcessDebugObjectHandle guard + actual madsync_enabled default + non-Steam Steam-env cleanup"
+record "strategy=official IPA + AIR FullChain + VC runtime + ProcessDebugObjectHandle guard + actual madsync + non-Steam Steam-env cleanup + PE RtlWaitOnAddress JIT-alias canonicalization"
 record "jobs=$JOBS"
 record "xcode=$(xcodebuild -version | tr '\n' ' ')"
 
@@ -57,6 +57,112 @@ git -C "$SRC" checkout --detach "$UPSTREAM_SHA"
 git -C "$SRC" submodule update --init wine
 test "$(git -C "$SRC" rev-parse HEAD)" = "$UPSTREAM_SHA"
 test "$(git -C "$SRC/wine" rev-parse HEAD)" = "$WINE_SHA"
+
+say "Patch PE ntdll WaitOnAddress/WakeAddress to canonicalize JIT aliases"
+python3 - "$SRC/wine/dlls/ntdll/sync.c" <<'PY' | tee -a "$REPORT"
+import pathlib, sys
+p=pathlib.Path(sys.argv[1])
+t=p.read_text()
+marker='futex-alias-canon rev=clayton-1'
+if marker in t:
+    raise SystemExit("alias patch marker already present in pristine Wine source")
+
+needle='''static struct futex_queue *get_futex_queue( const void *addr )
+{
+    ULONG_PTR val = (ULONG_PTR)addr;
+'''
+insert='''static const char ios_futex_alias_canon_marker[] __attribute__((used)) =
+    "futex-alias-canon rev=clayton-1";
+
+/* madeira-log(9): the same logical Win32 wait word can be reached through the
+ * JIT pool RX view or its RW alias.  RtlWaitOnAddress keys its waiter table by
+ * the raw virtual address, so RX wait + RW wake becomes a permanently lost
+ * wake even though both VAs name the same physical bytes.  The unix-side alias
+ * probe already knows the authoritative RW view.  Canonicalise ONLY mapped JIT
+ * aliases; ordinary addresses are untouched. */
+static const void *ios_futex_canonical_addr( const void *addr )
+{
+    struct ios_jit_alias_probe_params pp;
+    static LONG logged;
+
+    if (!addr) return addr;
+    memset( &pp, 0, sizeof(pp) );
+    pp.size = sizeof(pp);
+    pp.version = 1;
+    pp.addr = (ULONG64)(ULONG_PTR)addr;
+    WINE_UNIX_CALL( unix_ios_jit_alias_probe, &pp );
+    if (pp.rw && pp.rw != (ULONG64)(ULONG_PTR)addr)
+    {
+        if (InterlockedIncrement( &logged ) <= 32)
+            ERR( "[futex-alias] canonical %p -> %p slot=%u base=%s end=%s\\n",
+                 addr, (void *)(ULONG_PTR)pp.rw, pp.slot,
+                 wine_dbgstr_longlong(pp.base), wine_dbgstr_longlong(pp.end) );
+        return (const void *)(ULONG_PTR)pp.rw;
+    }
+    return addr;
+}
+
+static struct futex_queue *get_futex_queue( const void *addr )
+{
+    ULONG_PTR val = (ULONG_PTR)addr;
+'''
+if t.count(needle)!=1: raise SystemExit(f"helper insertion anchor count={t.count(needle)}")
+t=t.replace(needle,insert)
+
+old='''{
+    struct futex_queue *queue = get_futex_queue( addr );
+    struct futex_entry entry;
+    NTSTATUS ret;
+'''
+new='''{
+    struct futex_queue *queue;
+    struct futex_entry entry;
+    NTSTATUS ret;
+
+    addr = ios_futex_canonical_addr( addr );
+    queue = get_futex_queue( addr );
+'''
+if t.count(old)!=1: raise SystemExit(f"RtlWaitOnAddress anchor count={t.count(old)}")
+t=t.replace(old,new,1)
+
+old='''{
+    struct futex_queue *queue = get_futex_queue( addr );
+    struct futex_entry *entry, *next;
+    unsigned int count = 0;
+'''
+new='''{
+    struct futex_queue *queue;
+    struct futex_entry *entry, *next;
+    unsigned int count = 0;
+
+    addr = ios_futex_canonical_addr( addr );
+    queue = get_futex_queue( addr );
+'''
+if t.count(old)!=1: raise SystemExit(f"RtlWakeAddressAll anchor count={t.count(old)}")
+t=t.replace(old,new,1)
+
+old='''{
+    struct futex_queue *queue = get_futex_queue( addr );
+    struct futex_entry *entry;
+    DWORD tid = 0;
+'''
+new='''{
+    struct futex_queue *queue;
+    struct futex_entry *entry;
+    DWORD tid = 0;
+
+    addr = ios_futex_canonical_addr( addr );
+    queue = get_futex_queue( addr );
+'''
+if t.count(old)!=1: raise SystemExit(f"RtlWakeAddressSingle anchor count={t.count(old)}")
+t=t.replace(old,new,1)
+
+p.write_text(t)
+if t.count('ios_futex_canonical_addr( addr )') != 3:
+    raise SystemExit("expected exactly three runtime canonicalization calls")
+print("source-patch=PASS RtlWaitOnAddress + WakeAll + WakeSingle canonicalize JIT aliases to RW")
+print("source-marker="+marker)
+PY
 
 say "Install exact llvm-mingw recorded by Madeira"
 mkdir -p "$SRC/toolchains"
@@ -82,6 +188,20 @@ for mod in "${WINE_DLL_NAMES[@]}"; do
   echo "Building Wine ARM64EC module: $mod.dll"
   make -C "$B/dlls/$mod" -j"$JOBS"
 done
+
+say "Build patched ARM64EC PE ntdll"
+make -C "$B/dlls/ntdll" -j"$JOBS"
+NTDLL="$B/dlls/ntdll/arm64ec-windows/ntdll.dll"
+test -s "$NTDLL"
+strings "$NTDLL" | grep -F "futex-alias-canon rev=clayton-1" | tee -a "$REPORT"
+python3 - "$NTDLL" <<'PY' | tee -a "$REPORT"
+import hashlib,struct,sys
+p=sys.argv[1]; d=open(p,'rb').read(); pe=struct.unpack_from('<I',d,0x3c)[0]
+if d[pe:pe+4] != b'PE\0\0': raise SystemExit("patched ntdll: invalid PE")
+m=struct.unpack_from('<H',d,pe+4)[0]
+if m not in (0x8664,0xA641): raise SystemExit(f"patched ntdll machine={m:#x}")
+print(f"patched-ntdll=PASS machine={m:#x} sha256={hashlib.sha256(d).hexdigest()} size={len(d)}")
+PY
 
 MSI="$B/dlls/msi/arm64ec-windows/msi.dll"
 MSCMS="$B/dlls/mscms/arm64ec-windows/mscms.dll"
@@ -270,8 +390,9 @@ for off,want in checks.items():
 print("native-patch-after-codesign=PASS debug-object + actual-madsync-enabled + Steam-env-clean")
 PY
 
-say "Inject the complete Adobe AIR Wine DLL chain into the ARM64EC farm"
+say "Inject patched ntdll and the complete Adobe AIR Wine DLL chain into the ARM64EC farm"
 mkdir -p "$APP/arm64ec-windows"
+cp "$NTDLL"    "$APP/arm64ec-windows/ntdll.dll"
 cp "$MSI"      "$APP/arm64ec-windows/msi.dll"
 cp "$MSCMS"    "$APP/arm64ec-windows/mscms.dll"
 cp "$CABINET"  "$APP/arm64ec-windows/cabinet.dll"
@@ -279,6 +400,8 @@ cp "$SXS"      "$APP/arm64ec-windows/sxs.dll"
 cp "$MSPATCHA" "$APP/arm64ec-windows/mspatcha.dll"
 cp "$ODBCCP32" "$APP/arm64ec-windows/odbccp32.dll"
 
+test -s "$APP/arm64ec-windows/ntdll.dll"
+strings "$APP/arm64ec-windows/ntdll.dll" | grep -F "futex-alias-canon rev=clayton-1" | tee -a "$REPORT"
 AIR_WINE_DLLS=(msi.dll mscms.dll cabinet.dll sxs.dll mspatcha.dll odbccp32.dll)
 for name in "${AIR_WINE_DLLS[@]}"; do
   test -s "$APP/arm64ec-windows/$name"
@@ -378,6 +501,7 @@ python3 - "$APP" <<'PY' | tee -a "$REPORT"
 import hashlib, pathlib, struct, sys
 app=pathlib.Path(sys.argv[1])
 wine_modules=[
+ app/'arm64ec-windows'/'ntdll.dll',
  app/'arm64ec-windows'/'msi.dll',
  app/'arm64ec-windows'/'mscms.dll',
  app/'arm64ec-windows'/'cabinet.dll',
