@@ -64,9 +64,9 @@ jobs:
           for name in sorted(seen):
               print("include/"+Path(name).stem+".h")
           PY
-          mapfile -t WINE_IDL_HEADERS < /tmp/wine-idl-headers.txt
-          printf 'IDL header target: %s\\n' "${WINE_IDL_HEADERS[@]}"
-          make -C wine/build-macos -j4 "${WINE_IDL_HEADERS[@]}"
+          cat /tmp/wine-idl-headers.txt
+          WINE_IDL_HEADERS="$(cat /tmp/wine-idl-headers.txt)"
+          make -C wine/build-macos -j4 $WINE_IDL_HEADERS
 
           rm -rf research/freetype
           git clone --depth 1 --branch VER-2-13-3 https://github.com/freetype/freetype.git research/freetype
