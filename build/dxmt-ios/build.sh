@@ -25,6 +25,47 @@ LLVM_INCLUDES="-I$LLVM_BUILD/include -I$LLVM_SRC/include"
 AIRCONV_DEFS="-D_FILE_OFFSET_BITS=64 -D__STDC_CONSTANT_MACROS -D__STDC_FORMAT_MACROS -D__STDC_LIMIT_MACROS"
 CXX_FLAGS="-std=c++20 -fno-exceptions -fno-rtti"
 
+# The DXMT pin still counts directories from its former research/dxmt
+# location. Rewrite all affected native winemetal includes for the current
+# superproject layout; keep this idempotent for local incremental builds.
+python3 - "$REPO_ROOT" <<'PY'
+from pathlib import Path
+import sys
+root = Path(sys.argv[1])
+directory = root / "dxmt/src/winemetal/unix"
+fixes = [
+    ('"../../../../../build/madeira_cfg.h"', '"../../../../build/madeira_cfg.h"'),
+    ('"../../../../remote-metal/', '"../../../../research/remote-metal/'),
+]
+files = ["winemetal_unix.c", "wmt_remote_client.h", "wmt_remote_pack.h"]
+if not (root / "build/madeira_cfg.h").is_file():
+    raise SystemExit("build/madeira_cfg.h missing")
+if not (root / "research/remote-metal/protocol.h").is_file():
+    raise SystemExit("research/remote-metal/protocol.h missing")
+for name in files:
+    path = directory / name
+    s = path.read_text()
+    for old, new in fixes:
+        s = s.replace(old, new)
+    path.write_text(s)
+for name in files:
+    s = (directory / name).read_text()
+    for old, _ in fixes:
+        if old in s:
+            raise SystemExit(f"old winemetal include remains in {name}: {old}")
+PY
+
+# Meson normally turns these three Metal sources into AIR byte arrays consumed
+# directly by airconv_context.cpp. Reproduce that generator chain for iOS.
+mkdir -p "$BUILD_DIR/shader-headers"
+for shader in air_msad air_samplepos air_tessellation; do
+    xcrun -sdk macosx metal -o "$BUILD_DIR/shader-headers/$shader.air" \
+        -c "$DXMT_SRC/airconv/shaders/$shader.metal" \
+        -std=metal3.1 --target=air64-apple-macos14.0
+    xxd -n "$shader" -i "$BUILD_DIR/shader-headers/$shader.air" \
+        "$BUILD_DIR/shader-headers/$shader.h"
+done
+
 # MADEIRA (WOW64_DESIGN.md section 8, `dxmt_madeira_native`): the D3D9
 # frontend and its DXMT substrate, compiled as NATIVE iOS-arm64 code into this
 # same archive.  Nothing about that code needs to be x86 (section 8 premise),
