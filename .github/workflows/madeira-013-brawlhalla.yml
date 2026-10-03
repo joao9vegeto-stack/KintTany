@@ -1,4 +1,4 @@
-name: Madeira 0.1.3 Brawlhalla DebugObject Fix
+name: Madeira 0.1.3 Actual Madsync Fix
 
 on:
   push:
@@ -30,7 +30,7 @@ jobs:
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: Madeira-0.1.3-Brawlhalla-DebugObjectFix
+          name: Madeira-0.1.3-Madsync-Actual
           path: |
             work/output/*
             work/build-report.txt

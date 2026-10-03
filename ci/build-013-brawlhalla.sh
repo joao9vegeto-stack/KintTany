@@ -12,7 +12,7 @@ WINE_SHA="4f5b19718f4de88ecc5cb0dc08b119497a67ba8f"
 OFFICIAL_IPA_SHA="71e900cbc140778bd6fa67c1062821981ed98e6bfb674d853cfeefd6d242e1c0"
 VCREDIST_SHA="cc0ff0eb1dc3f5188ae6300faef32bf5beeba4bdd6e8e445a9184072096b713b"
 LLVM_MINGW_SHA="bd85a3975723815cef28dbbd2ca2cb0c926f6b348a12a0453f39f7af273cb3f7"
-IPA_NAME="Madeira-0.1.3-Madsync-SteamClean.ipa"
+IPA_NAME="Madeira-0.1.3-Madsync-Actual.ipa"
 
 mkdir -p "$WORK" "$OUT"
 : > "$REPORT"
@@ -38,7 +38,7 @@ if [ "$JOBS" -gt 8 ]; then JOBS=8; fi
 record "base=Madeira v0.1.3"
 record "upstream=$UPSTREAM_SHA"
 record "wine=$WINE_SHA"
-record "strategy=official IPA + AIR FullChain + VC runtime + ProcessDebugObjectHandle guard + madsync default + non-Steam Steam-env cleanup"
+record "strategy=official IPA + AIR FullChain + VC runtime + ProcessDebugObjectHandle guard + actual madsync_enabled default + non-Steam Steam-env cleanup"
 record "jobs=$JOBS"
 record "xcode=$(xcodebuild -version | tr '\n' ' ')"
 
@@ -145,12 +145,13 @@ d=bytearray(p.read_bytes())
 PATCH_SITE=0x9552ac
 CAVE=0x247fef8
 
-# madeira-log(7): a plain non-Steam x64 game (Pokemon Anil / mkxp-z) never
-# reached its first frame and the main Wine thread parked in os_sync_wait_on_address
-# while the default engine was fastsync.  Make madsync the default only when
-# neither sync key is configured; explicit inproc-sync=0 / fastsync choices still
-# keep their original semantics.
+# madeira-log(8) proved the previous sync patch touched the standalone
+# madeira_cfg_sync_engine copy, but wineserver's madsync_enabled has the config
+# logic inlined and therefore stayed disabled.  Patch the ACTUAL branch in
+# _madsync_enabled: with inproc-sync absent, go directly to its ENABLED path.
+# Explicit inproc-sync=0 still follows the original disabled path.
 MADSYNC_DEFAULT_SITE=0x1a3f4
+MADSYNC_ENABLED_SITE=0x9a55c4
 
 # Upstream v0.1.3 deliberately publishes Thumper's Steam identity to generic
 # launches.  For a non-Steam direct executable this contaminates the guest
@@ -186,7 +187,9 @@ if u32(PATCH_SITE) != 0xB4000073:
 if d[CAVE:CAVE+0x20] != b"\0"*0x20:
     raise SystemExit("inter-section trampoline space is not empty")
 if u32(MADSYNC_DEFAULT_SITE) != 0x1A9F1508:
-    raise SystemExit(f"unexpected madsync-default instruction {u32(MADSYNC_DEFAULT_SITE):#010x}")
+    raise SystemExit(f"unexpected standalone sync-engine instruction {u32(MADSYNC_DEFAULT_SITE):#010x}")
+if u32(MADSYNC_ENABLED_SITE) != 0x34000360:
+    raise SystemExit(f"unexpected madsync_enabled branch {u32(MADSYNC_ENABLED_SITE):#010x}")
 if u32(STEAM_FALLBACK_SITE) != 0xF000FD20:
     raise SystemExit(f"unexpected Steam fallback instruction {u32(STEAM_FALLBACK_SITE):#010x}")
 if u32(STEAM_CLEAN_TAIL_SITE) != 0xF000FD21:
@@ -205,10 +208,15 @@ code=[
 put32(PATCH_SITE,enc_b(PATCH_SITE,CAVE))
 for i,ins in enumerate(code): put32(CAVE+i*4,ins)
 
-# csinc w8,w8,wzr,ne -> csel w8,w8,wzr,ne:
-#   cfg absent: default engine 1 (fastsync) -> 0 (madsync)
-#   explicit inproc-sync=0: remains 2 (Wine standard)
-put32(MADSYNC_DEFAULT_SITE,0x1A9F1108)
+# Keep the standalone helper untouched; madeira-log(8) proved it is not the
+# copy used by wineserver's madsync_enabled.
+put32(MADSYNC_DEFAULT_SITE,0x1A9F1508)
+
+# _madsync_enabled @ 0x9a55c4:
+#   old: cbz w0, 0x9a5630  -> absent inproc-sync falls into fastsync/disabled
+#   new: cbz w0, 0x9a5660  -> absent inproc-sync reaches ENABLED
+# Encoding is verified against the exact official 0.1.3 dylib above.
+put32(MADSYNC_ENABLED_SITE,0x340004E0)
 
 # Generic/non-Steam fallback now reuses the existing three-unset sequence at
 # 0x14270.  Skip its Dock-only diagnostic line after the unsets, then continue
@@ -224,14 +232,16 @@ if struct.unpack_from("<I",e,PATCH_SITE)[0] != 0x146CAB13:
 expected=[0xB40000D3,0xF140427F,0x540000A2,0x528000A0,0x72B80000,0x179354D7,0x179354EA,0x179354E7]
 got=[struct.unpack_from("<I",e,CAVE+i*4)[0] for i in range(8)]
 if got != expected: raise SystemExit("trampoline read-back mismatch")
-if struct.unpack_from("<I",e,MADSYNC_DEFAULT_SITE)[0] != 0x1A9F1108:
-    raise SystemExit("madsync-default patch read-back mismatch")
+if struct.unpack_from("<I",e,MADSYNC_DEFAULT_SITE)[0] != 0x1A9F1508:
+    raise SystemExit("standalone sync helper was unexpectedly changed")
+if struct.unpack_from("<I",e,MADSYNC_ENABLED_SITE)[0] != 0x340004E0:
+    raise SystemExit("actual madsync_enabled patch read-back mismatch")
 if struct.unpack_from("<I",e,STEAM_FALLBACK_SITE)[0] != 0x17FFFFA0:
     raise SystemExit("Steam fallback branch read-back mismatch")
 if struct.unpack_from("<I",e,STEAM_CLEAN_TAIL_SITE)[0] != 0x1400006C:
     raise SystemExit("Steam cleanup-tail branch read-back mismatch")
 print("native-patch=PASS ProcessDebugObjectHandle ret_len low-page guard")
-print("sync-default=PASS cfg-absent selects madsync; explicit sync choices preserved")
+print("sync-default=PASS actual _madsync_enabled: absent inproc-sync enters ENABLED path; explicit inproc-sync=0 preserved")
 print("steam-env-clean=PASS generic launch unsets SteamAppPath/SteamGameId/SteamAppId")
 print(f"native-dylib-patched-sha256={hashlib.sha256(e).hexdigest()}")
 PY
@@ -248,7 +258,8 @@ expected=[0xB40000D3,0xF140427F,0x540000A2,0x528000A0,0x72B80000,0x179354D7,0x17
 got=[struct.unpack_from("<I",d,0x247fef8+i*4)[0] for i in range(8)]
 if got != expected: raise SystemExit("native trampoline lost after codesign")
 checks={
-    0x1a3f4:0x1A9F1108,
+    0x1a3f4:0x1A9F1508,
+    0x9a55c4:0x340004E0,
     0x143f0:0x17FFFFA0,
     0x14294:0x1400006C,
 }
@@ -256,7 +267,7 @@ for off,want in checks.items():
     got=struct.unpack_from("<I",d,off)[0]
     if got != want:
         raise SystemExit(f"native runtime patch lost after codesign at {off:#x}: {got:#010x} != {want:#010x}")
-print("native-patch-after-codesign=PASS debug-object + madsync-default + Steam-env-clean")
+print("native-patch-after-codesign=PASS debug-object + actual-madsync-enabled + Steam-env-clean")
 PY
 
 say "Inject the complete Adobe AIR Wine DLL chain into the ARM64EC farm"
