@@ -123,9 +123,52 @@ if "#ifdef FEX_IOS_HOST" in segment:
 s = s[:begin] + "#ifdef FEX_IOS_HOST\n" + segment + "#endif\n\n" + s[end:]
 p.write_text(s)
 PY
+
+python3 - "$ROOT/FEX/FEXCore/Source/Utils/ArchHelpers/Arm64.cpp" <<'PY'
+from pathlib import Path
+import sys
+
+p=Path(sys.argv[1])
+s=p.read_text()
+old='''  MEMORY_BASIC_INFORMATION mbi {};
+  const char* type = "?";
+  if (VirtualQuery(reinterpret_cast<LPCVOID>(GPRs[AddressReg]), &mbi, sizeof(mbi))) {
+    type = mbi.Type == MEM_IMAGE ? "MEM_IMAGE" : mbi.Type == MEM_MAPPED ? "MEM_MAPPED" : "MEM_PRIVATE";
+  }
+  LogMan::Msg::EFmt("[caspal128] MISALIGNED-UNSUPPORTED Size={} addrReg=x{} addr={:#x} misalign={} "
+                    "crosses16B={} | region base={} size={:#x} prot={:#x} type={} state={:#x}",
+                    Size, AddressReg, GPRs[AddressReg], GPRs[AddressReg] & 15,
+                    (GPRs[AddressReg] & 15) ? "yes" : "no", mbi.BaseAddress, mbi.RegionSize,
+                    mbi.Protect, type, mbi.State);
+'''
+new='''#ifdef _WIN32
+  MEMORY_BASIC_INFORMATION mbi {};
+  const char* type = "?";
+  if (VirtualQuery(reinterpret_cast<LPCVOID>(GPRs[AddressReg]), &mbi, sizeof(mbi))) {
+    type = mbi.Type == MEM_IMAGE ? "MEM_IMAGE" : mbi.Type == MEM_MAPPED ? "MEM_MAPPED" : "MEM_PRIVATE";
+  }
+  LogMan::Msg::EFmt("[caspal128] MISALIGNED-UNSUPPORTED Size={} addrReg=x{} addr={:#x} misalign={} "
+                    "crosses16B={} | region base={} size={:#x} prot={:#x} type={} state={:#x}",
+                    Size, AddressReg, GPRs[AddressReg], GPRs[AddressReg] & 15,
+                    (GPRs[AddressReg] & 15) ? "yes" : "no", mbi.BaseAddress, mbi.RegionSize,
+                    mbi.Protect, type, mbi.State);
+#else
+  LogMan::Msg::EFmt("[caspal128] MISALIGNED-UNSUPPORTED Size={} addrReg=x{} addr={:#x} misalign={} "
+                    "crosses16B={} | host-region-query=unavailable",
+                    Size, AddressReg, GPRs[AddressReg], GPRs[AddressReg] & 15,
+                    (GPRs[AddressReg] & 15) ? "yes" : "no");
+#endif
+'''
+if old not in s:
+    raise SystemExit("FEX CASPAL Windows-only diagnostic block not found")
+s=s.replace(old,new,1)
+p.write_text(s)
+PY
+
 git -C "$ROOT/FEX" diff --check
-git -C "$ROOT/FEX" diff -- FEXCore/Source/Interface/Core/Core.cpp | tee "$OUT/fex-ios-static-patch-applied.txt"
+git -C "$ROOT/FEX" diff -- FEXCore/Source/Interface/Core/Core.cpp FEXCore/Source/Utils/ArchHelpers/Arm64.cpp | tee "$OUT/fex-ios-static-patch-applied.txt"
 grep -Fq "#ifdef FEX_IOS_HOST" "$ROOT/FEX/FEXCore/Source/Interface/Core/Core.cpp"
+grep -Fq "host-region-query=unavailable" "$ROOT/FEX/FEXCore/Source/Utils/ArchHelpers/Arm64.cpp"
 
 say "Build FEX iOS core from pinned source"
 bash "$ROOT/build/fex-ios/build.sh"
