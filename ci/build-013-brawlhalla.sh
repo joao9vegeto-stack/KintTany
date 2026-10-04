@@ -15,7 +15,7 @@ VCREDIST_SHA="cc0ff0eb1dc3f5188ae6300faef32bf5beeba4bdd6e8e445a9184072096b713b"
 LLVM_MINGW_SHA="bd85a3975723815cef28dbbd2ca2cb0c926f6b348a12a0453f39f7af273cb3f7"
 MESA_VERSION="26.2.3"
 MESA_MSVC_SHA="3f3613adb43cfd0f2e665ce2400b130c275f0b3317cb3a05566320a3a67589ed"
-IPA_NAME="Madeira-0.1.3-Injustice-Fight-Load-Fix.ipa"
+IPA_NAME="Madeira-0.1.3-Injustice-R6025-Fix.ipa"
 
 mkdir -p "$WORK" "$OUT"
 : > "$REPORT"
@@ -41,7 +41,7 @@ if [ "$JOBS" -gt 8 ]; then JOBS=8; fi
 record "base=Madeira v0.1.3"
 record "upstream=$UPSTREAM_SHA"
 record "wine=$WINE_SHA"
-record "strategy=official IPA + AIR FullChain + VC runtime + ProcessDebugObjectHandle guard + actual madsync + non-Steam Steam-env cleanup + FEX InvalidationTracker heap relocation + ARM64EC image-map dedupe + Mesa x64 WGL/llvmpipe fallback + Ruby/MSVCRT __pioinfo PE-pool mirror + software compositor on-present only + touch-controls visible/early XInput slot + 32-bit D3D9 native-first fallback + WOW64 1MiB section lifetime quarantine"
+record "strategy=official IPA + AIR FullChain + VC runtime + ProcessDebugObjectHandle guard + actual madsync + non-Steam Steam-env cleanup + FEX InvalidationTracker heap relocation + ARM64EC image-map dedupe + Mesa x64 WGL/llvmpipe fallback + Ruby/MSVCRT __pioinfo PE-pool mirror + software compositor on-present only + touch-controls visible/early XInput slot + 32-bit D3D9 native-first fallback + WOW64 1MiB section lifetime quarantine with corrected file_view size offset"
 record "jobs=$JOBS"
 record "xcode=$(xcodebuild -version | tr '\n' ' ')"
 
@@ -558,7 +558,7 @@ WOW64_SECTION_UNMAP_SITE=0x97ea4c
 WOW64_SECTION_UNMAP_CAVE=0x247ff18
 WOW64_SECTION_UNMAP_CAVE_SIZE=0x38
 WOW64_SECTION_MARKER_SITE=0x247ff60
-WOW64_SECTION_MARKER=b"clayton-11 wow64-1m-section-quarantine"
+WOW64_SECTION_MARKER=b"clayton-13 wow64-1m-size-offset-fix"
 
 def u32(off): return struct.unpack_from("<I",d,off)[0]
 def put32(off,v): struct.pack_into("<I",d,off,v)
@@ -671,7 +671,7 @@ put32(TOUCH_SLOT_OPTIN_SITE,0xD503201F)  # nop: no MADEIRA_PAD_EARLY_SLOT opt-in
 put32(TOUCH_SLOT_ARG_SITE,0x52800020)    # mov w0,#1: touch-capable player 1
 put32(TOUCH_VISIBLE_SITE,0x52800020)     # mov w0,#1: controls.visible = true at begin()
 
-# clayton-11 section-lifetime quarantine at _unmap_view_of_section+0xe4.
+# clayton-13 correction to the section-lifetime quarantine at _unmap_view_of_section+0xe4.
 # At the patch site x19=view, x8=view->base, w10=view->protect, x18=guest TEB.
 # Preserve the original VPROT_SYSTEM branch first. Then quarantine ONLY:
 #   - exact 1 MiB view
@@ -683,7 +683,7 @@ put32(TOUCH_VISIBLE_SITE,0x52800020)     # mov w0,#1: controls.visible = true at
 q=WOW64_SECTION_UNMAP_CAVE
 qcode=[
     enc_tbnz_w(10,9,q+0x00,q+0x30),      # original VPROT_SYSTEM -> system path
-    0xF940166B,                           # ldr x11,[x19,#0x28] (view->size)
+    0xF940126B,                           # ldr x11,[x19,#0x20] (view->size; rb_entry=0x18, base=+0x18, size=+0x20, protect=+0x28)
     0xF144017F,                           # cmp x11,#0x100,lsl#12 (1 MiB)
     enc_bcond(1,q+0x0c,q+0x34),           # b.ne normal
     enc_tbnz_w(10,24,q+0x10,q+0x34),      # SEC_IMAGE -> normal
@@ -742,7 +742,7 @@ print("sync-default=PASS actual _madsync_enabled: absent inproc-sync enters ENAB
 print("steam-env-clean=PASS generic launch unsets SteamAppPath/SteamGameId/SteamAppId")
 print("direct-surface=PASS rev=clayton-12 software compositor is created by actual software presents, not Metal window geometry")
 print("touch-input=PASS rev=clayton-9 overlay visible at session start + early player-1 XInput reservation")
-print("wow64-section-quarantine=PASS rev=clayton-11 exact-1MiB non-image/non-placeholder same-window sections retained for pseudo-process lifetime")
+print("wow64-section-quarantine=PASS rev=clayton-13 corrected file_view->size offset (+0x20); exact-1MiB non-image/non-placeholder same-window sections retained")
 print(f"native-dylib-patched-sha256={hashlib.sha256(e).hexdigest()}")
 PY
 
@@ -776,8 +776,8 @@ for off,want in checks.items():
         raise SystemExit(f"native runtime patch lost after codesign at {off:#x}: {got:#010x} != {want:#010x}")
 if b"[winios] clayton-12 software compositor on present only\n" not in d:
     raise SystemExit("clayton-12 runtime marker lost after codesign")
-if b"clayton-11 wow64-1m-section-quarantine" not in d:
-    raise SystemExit("clayton-11 runtime marker lost after codesign")
+if b"clayton-13 wow64-1m-size-offset-fix" not in d:
+    raise SystemExit("clayton-13 runtime marker lost after codesign")
 print("native-patch-after-codesign=PASS debug-object + madsync + Steam-env-clean + software-present compositor + touch-controls/XInput + WOW64 section quarantine")
 PY
 
