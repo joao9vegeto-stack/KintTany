@@ -75,20 +75,12 @@ s=sig.read_text()
 helper_marker="pioinfo-sync-helper rev=clayton-6"
 if helper_marker in s:
     raise SystemExit("clayton-6 helper already present in pristine ntdll")
-old='''void *__attribute__((naked)) xlate_ios_jit_rev( void *ptr )
-{
-    asm( ".seh_proc \\"#xlate_ios_jit_rev\\"\\n\\t"
-         ".seh_endprologue\\n\\t"
-         "cbz x0, 1f\\n\\t"                                 /* NULL → return NULL */
-         "adrp x16, p_ios_jit_reverse_translate_addr\\n\\t"
-         "ldr x16, [x16, #:lo12:p_ios_jit_reverse_translate_addr]\\n\\t"
-         "cbz x16, 1f\\n\\t"                                /* fn-ptr unset → identity */
-         "br x16\\n\\t"                                     /* tail-call unix fn */
-         "1: ret\\n\\t"
-         ".seh_endproc" );
-}
+anchor='''
+
+void *arm64ec_redirect_ptr( HMODULE module, void *ptr, const IMAGE_ARM64EC_METADATA *metadata )
 '''
-new=old+'''
+helper='''
+
 /* clayton-6: keep one pointer-valued image global coherent in both Madeira
  * views. Callers may run from either view, so reverse first (pool -> PE), then
  * forward (PE -> pool) if reverse was identity. */
@@ -110,9 +102,9 @@ void * CDECL __wine_ios_sync_pointer( void **slot, void *value )
     return peer;
 }
 '''
-if s.count(old)!=1:
-    raise SystemExit(f"xlate_ios_jit_rev anchor count={s.count(old)}")
-s=s.replace(old,new,1)
+if s.count(anchor)!=1:
+    raise SystemExit(f"arm64ec_redirect_ptr anchor count={s.count(anchor)}")
+s=s.replace(anchor, helper+anchor, 1)
 sig.write_text(s)
 
 sp=spec.read_text()
