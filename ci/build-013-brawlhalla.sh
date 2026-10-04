@@ -60,6 +60,7 @@ git clone --no-tags https://github.com/willfaust/Madeira.git "$SRC"
 git -C "$SRC" checkout --detach "$UPSTREAM_SHA"
 git -C "$SRC" submodule update --init wine FEX dxmt
 git -C "$SRC/FEX" submodule update --init --recursive
+git -C "$SRC/dxmt" submodule update --init --recursive
 test "$(git -C "$SRC" rev-parse HEAD)" = "$UPSTREAM_SHA"
 test "$(git -C "$SRC/wine" rev-parse HEAD)" = "$WINE_SHA"
 test "$(git -C "$SRC/FEX" rev-parse HEAD)" = "$FEX_SHA"
