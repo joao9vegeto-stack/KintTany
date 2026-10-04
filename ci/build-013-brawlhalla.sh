@@ -15,7 +15,7 @@ VCREDIST_SHA="cc0ff0eb1dc3f5188ae6300faef32bf5beeba4bdd6e8e445a9184072096b713b"
 LLVM_MINGW_SHA="bd85a3975723815cef28dbbd2ca2cb0c926f6b348a12a0453f39f7af273cb3f7"
 MESA_VERSION="26.2.3"
 MESA_MSVC_SHA="3f3613adb43cfd0f2e665ce2400b130c275f0b3317cb3a05566320a3a67589ed"
-IPA_NAME="Madeira-0.1.3-Controls-D3D9-Fix.ipa"
+IPA_NAME="Madeira-0.1.3-Injustice-Fight-Load-Fix.ipa"
 
 mkdir -p "$WORK" "$OUT"
 : > "$REPORT"
@@ -41,7 +41,7 @@ if [ "$JOBS" -gt 8 ]; then JOBS=8; fi
 record "base=Madeira v0.1.3"
 record "upstream=$UPSTREAM_SHA"
 record "wine=$WINE_SHA"
-record "strategy=official IPA + AIR FullChain + VC runtime + ProcessDebugObjectHandle guard + actual madsync + non-Steam Steam-env cleanup + FEX InvalidationTracker heap relocation + ARM64EC image-map dedupe + Mesa x64 WGL/llvmpipe fallback + Ruby/MSVCRT __pioinfo PE-pool mirror + direct software-surface compositor + direct compositor creation gate + touch-controls visible/early XInput slot + 32-bit D3D9 native-first fallback"
+record "strategy=official IPA + AIR FullChain + VC runtime + ProcessDebugObjectHandle guard + actual madsync + non-Steam Steam-env cleanup + FEX InvalidationTracker heap relocation + ARM64EC image-map dedupe + Mesa x64 WGL/llvmpipe fallback + Ruby/MSVCRT __pioinfo PE-pool mirror + software compositor on-present only + touch-controls visible/early XInput slot + 32-bit D3D9 native-first fallback + WOW64 1MiB section lifetime quarantine"
 record "jobs=$JOBS"
 record "xcode=$(xcodebuild -version | tr '\n' ' ')"
 
@@ -535,7 +535,7 @@ DIRECT_COMPOSITOR_GATE_SITE=0x1f6d4
 DIRECT_COMPOSITOR_CONTINUE=0x1f708
 DIRECT_SURFACE_LOG_SITE=0x20fb195
 DIRECT_SURFACE_LOG_OLD=b"[winios] desktop mode: window-surface compositing ENABLED\n"
-DIRECT_SURFACE_LOG_NEW=b"[winios] clayton-8 direct compositor path ENABLED\n"
+DIRECT_SURFACE_LOG_NEW=b"[winios] clayton-12 software compositor on present only\n"
 
 # clayton-9: Pokemon Anil / Left 4 Dead logs prove raw touch reaches Wine as
 # mouse input while the library touch overlay is hidden and player 1 is not
@@ -544,6 +544,21 @@ DIRECT_SURFACE_LOG_NEW=b"[winios] clayton-8 direct compositor path ENABLED\n"
 TOUCH_SLOT_OPTIN_SITE=0x403c80
 TOUCH_SLOT_ARG_SITE=0x4526e0
 TOUCH_VISIBLE_SITE=0x579020
+
+# clayton-11: Injustice fight-load UAF.
+# The tested run unmaps 0x43c680000..0x43c780000 on RenderingThread, then the
+# main thread reads 0x43c6d0000 ~43.6s later. This is a 1 MiB section inside
+# the process's 4 GiB WoW64 host window. There are only 16 unique exact-1MiB
+# section ranges in the whole run (~16 MiB total), despite >2400 repeated
+# notifications. Keep only exact-1MiB, non-image, non-placeholder section
+# views whose upper 32 bits match x18/TEB's WoW64 window. Report unmap success
+# but leave the view alive until pseudo-process teardown. 64-bit mappings,
+# images/DLLs, placeholders, and all other sizes follow the pristine path.
+WOW64_SECTION_UNMAP_SITE=0x97ea4c
+WOW64_SECTION_UNMAP_CAVE=0x247ff18
+WOW64_SECTION_UNMAP_CAVE_SIZE=0x38
+WOW64_SECTION_MARKER_SITE=0x247ff60
+WOW64_SECTION_MARKER=b"clayton-11 wow64-1m-section-quarantine"
 
 def u32(off): return struct.unpack_from("<I",d,off)[0]
 def put32(off,v): struct.pack_into("<I",d,off,v)
@@ -565,6 +580,13 @@ def enc_bcond(cond,pc,target):
     imm=delta//4
     if not (-(1<<18)<=imm<(1<<18)): raise SystemExit("B.cond out of range")
     return 0x54000000 | ((imm & 0x7ffff)<<5) | cond
+def enc_tbnz_w(rt,bit,pc,target):
+    delta=target-pc
+    if delta%4: raise SystemExit("unaligned TBNZ target")
+    imm=delta//4
+    if not (-(1<<13)<=imm<(1<<13)): raise SystemExit("TBNZ out of range")
+    if not (0 <= bit < 32): raise SystemExit("TBNZ bit out of range")
+    return 0x37000000 | ((bit & 0x1f)<<19) | ((imm & 0x3fff)<<5) | rt
 
 if u32(PATCH_SITE) != 0xB4000073:
     raise SystemExit(f"unexpected patch-site instruction {u32(PATCH_SITE):#010x}")
@@ -592,6 +614,12 @@ if u32(TOUCH_SLOT_ARG_SITE) != 0xB9425E60:
     raise SystemExit(f"unexpected touch reserve argument load {u32(TOUCH_SLOT_ARG_SITE):#010x}")
 if u32(TOUCH_VISIBLE_SITE) != 0x12000100:
     raise SystemExit(f"unexpected touch-controls visible assignment {u32(TOUCH_VISIBLE_SITE):#010x}")
+if u32(WOW64_SECTION_UNMAP_SITE) != 0x3748034A:
+    raise SystemExit(f"unexpected NtUnmapViewOfSection system-view branch {u32(WOW64_SECTION_UNMAP_SITE):#010x}")
+if d[WOW64_SECTION_UNMAP_CAVE:WOW64_SECTION_UNMAP_CAVE+WOW64_SECTION_UNMAP_CAVE_SIZE] != b"\0"*WOW64_SECTION_UNMAP_CAVE_SIZE:
+    raise SystemExit("WOW64 section-quarantine cave is not zero-filled")
+if d[WOW64_SECTION_MARKER_SITE:WOW64_SECTION_MARKER_SITE+len(WOW64_SECTION_MARKER)] != b"\0"*len(WOW64_SECTION_MARKER):
+    raise SystemExit("WOW64 section-quarantine marker space is not zero-filled")
 
 code=[
     enc_cbz_x(19,CAVE,CAVE+0x18),
@@ -622,10 +650,11 @@ put32(MADSYNC_ENABLED_SITE,0x340004E0)
 put32(STEAM_FALLBACK_SITE,enc_b(STEAM_FALLBACK_SITE,0x14270))
 put32(STEAM_CLEAN_TAIL_SITE,enc_b(STEAM_CLEAN_TAIL_SITE,0x14444))
 
-# Keep the direct Wine surface and geometry callbacks enabled. clayton-7 proved
-# they now deliver changing game frames all the way into winios_surface_present.
+# Software renderer: allow pCreateWindowSurface so Pokemon/mkxp-z can present.
+# Keep the pristine frame/geometry gate so a D3D9 Metal game (Injustice/L4D)
+# does not get the green GDI compositor layered above its healthy Metal view.
 put32(DIRECT_SURFACE_REGISTER_SITE,0xD503201F)
-put32(DIRECT_SURFACE_FRAME_SITE,0xD503201F)
+put32(DIRECT_SURFACE_FRAME_SITE,0x34000228)
 
 # Final missing link: bypass only winios_ensure_compositor's desktop-env probe.
 # At 0x1f6d4 the pristine binary starts loading "MADEIRA_DESKTOP". Branch
@@ -641,6 +670,36 @@ d[DIRECT_SURFACE_LOG_SITE:DIRECT_SURFACE_LOG_SITE+len(DIRECT_SURFACE_LOG_OLD)] =
 put32(TOUCH_SLOT_OPTIN_SITE,0xD503201F)  # nop: no MADEIRA_PAD_EARLY_SLOT opt-in required
 put32(TOUCH_SLOT_ARG_SITE,0x52800020)    # mov w0,#1: touch-capable player 1
 put32(TOUCH_VISIBLE_SITE,0x52800020)     # mov w0,#1: controls.visible = true at begin()
+
+# clayton-11 section-lifetime quarantine at _unmap_view_of_section+0xe4.
+# At the patch site x19=view, x8=view->base, w10=view->protect, x18=guest TEB.
+# Preserve the original VPROT_SYSTEM branch first. Then quarantine ONLY:
+#   - exact 1 MiB view
+#   - not SEC_IMAGE (bit 24)
+#   - not VPROT_PLACEHOLDER (bit 10)
+#   - view base and TEB share the same upper 32 bits (same 4 GiB WoW64 window)
+# Success path jumps to 0x97eb68, which sets STATUS_SUCCESS and unlocks
+# virtual_mutex without server-unmap/delete_view. Normal/system paths are exact.
+q=WOW64_SECTION_UNMAP_CAVE
+qcode=[
+    enc_tbnz_w(10,9,q+0x00,q+0x30),      # original VPROT_SYSTEM -> system path
+    0xF940166B,                           # ldr x11,[x19,#0x28] (view->size)
+    0xF144017F,                           # cmp x11,#0x100,lsl#12 (1 MiB)
+    enc_bcond(1,q+0x0c,q+0x34),           # b.ne normal
+    enc_tbnz_w(10,24,q+0x10,q+0x34),      # SEC_IMAGE -> normal
+    enc_tbnz_w(10,10,q+0x14,q+0x34),      # VPROT_PLACEHOLDER -> normal
+    0xD360FD0C,                           # lsr x12,x8,#32
+    0xD360FE4D,                           # lsr x13,x18,#32
+    0xEB0D019F,                           # cmp x12,x13
+    enc_bcond(1,q+0x24,q+0x34),           # b.ne normal
+    enc_b(q+0x28,0x97eb68),               # quarantine: success + unlock
+    0xD503201F,                           # padding
+    enc_b(q+0x30,0x97eab4),               # pristine VPROT_SYSTEM path
+    enc_b(q+0x34,0x97ea50),               # pristine normal unmap path
+]
+put32(WOW64_SECTION_UNMAP_SITE,enc_b(WOW64_SECTION_UNMAP_SITE,q))
+for i,ins in enumerate(qcode): put32(q+i*4,ins)
+d[WOW64_SECTION_MARKER_SITE:WOW64_SECTION_MARKER_SITE+len(WOW64_SECTION_MARKER)] = WOW64_SECTION_MARKER
 
 p.write_bytes(d)
 
@@ -660,8 +719,8 @@ if struct.unpack_from("<I",e,STEAM_CLEAN_TAIL_SITE)[0] != 0x1400006C:
     raise SystemExit("Steam cleanup-tail branch read-back mismatch")
 if struct.unpack_from("<I",e,DIRECT_SURFACE_REGISTER_SITE)[0] != 0xD503201F:
     raise SystemExit("direct-surface register gate patch mismatch")
-if struct.unpack_from("<I",e,DIRECT_SURFACE_FRAME_SITE)[0] != 0xD503201F:
-    raise SystemExit("direct-surface frame gate patch mismatch")
+if struct.unpack_from("<I",e,DIRECT_SURFACE_FRAME_SITE)[0] != 0x34000228:
+    raise SystemExit("direct-surface frame gate was not restored")
 if struct.unpack_from("<I",e,DIRECT_COMPOSITOR_GATE_SITE)[0] != enc_b(DIRECT_COMPOSITOR_GATE_SITE,DIRECT_COMPOSITOR_CONTINUE):
     raise SystemExit("direct-compositor creation gate patch mismatch")
 if DIRECT_SURFACE_LOG_NEW not in e:
@@ -674,11 +733,16 @@ for off,want in {
     got=struct.unpack_from("<I",e,off)[0]
     if got != want:
         raise SystemExit(f"touch-input patch mismatch at {off:#x}: {got:#010x} != {want:#010x}")
+if struct.unpack_from("<I",e,WOW64_SECTION_UNMAP_SITE)[0] != enc_b(WOW64_SECTION_UNMAP_SITE,WOW64_SECTION_UNMAP_CAVE):
+    raise SystemExit("WOW64 section-quarantine entry branch mismatch")
+if e[WOW64_SECTION_MARKER_SITE:WOW64_SECTION_MARKER_SITE+len(WOW64_SECTION_MARKER)] != WOW64_SECTION_MARKER:
+    raise SystemExit("WOW64 section-quarantine runtime marker missing")
 print("native-patch=PASS ProcessDebugObjectHandle ret_len low-page guard")
 print("sync-default=PASS actual _madsync_enabled: absent inproc-sync enters ENABLED path; explicit inproc-sync=0 preserved")
 print("steam-env-clean=PASS generic launch unsets SteamAppPath/SteamGameId/SteamAppId")
-print("direct-surface=PASS rev=clayton-8 pCreateWindowSurface + window-frame + compositor creation enabled without setting MADEIRA_DESKTOP")
+print("direct-surface=PASS rev=clayton-12 software compositor is created by actual software presents, not Metal window geometry")
 print("touch-input=PASS rev=clayton-9 overlay visible at session start + early player-1 XInput reservation")
+print("wow64-section-quarantine=PASS rev=clayton-11 exact-1MiB non-image/non-placeholder same-window sections retained for pseudo-process lifetime")
 print(f"native-dylib-patched-sha256={hashlib.sha256(e).hexdigest()}")
 PY
 
@@ -699,19 +763,22 @@ checks={
     0x143f0:0x17FFFFA0,
     0x14294:0x1400006C,
     0x1bf28a4:0xD503201F,
-    0x1bf3d40:0xD503201F,
+    0x1bf3d40:0x34000228,
     0x1f6d4:0x1400000D,
     0x403c80:0xD503201F,
     0x4526e0:0x52800020,
     0x579020:0x52800020,
+    0x97ea4c:0x146C0533,
 }
 for off,want in checks.items():
     got=struct.unpack_from("<I",d,off)[0]
     if got != want:
         raise SystemExit(f"native runtime patch lost after codesign at {off:#x}: {got:#010x} != {want:#010x}")
-if b"[winios] clayton-8 direct compositor path ENABLED\n" not in d:
-    raise SystemExit("clayton-8 runtime marker lost after codesign")
-print("native-patch-after-codesign=PASS debug-object + actual-madsync-enabled + Steam-env-clean + direct-software-surface + compositor-gate + touch-controls/XInput")
+if b"[winios] clayton-12 software compositor on present only\n" not in d:
+    raise SystemExit("clayton-12 runtime marker lost after codesign")
+if b"clayton-11 wow64-1m-section-quarantine" not in d:
+    raise SystemExit("clayton-11 runtime marker lost after codesign")
+print("native-patch-after-codesign=PASS debug-object + madsync + Steam-env-clean + software-present compositor + touch-controls/XInput + WOW64 section quarantine")
 PY
 
 say "Patch 32-bit D3D9 default to native ARM64 first, preserving emulated fallback"
