@@ -816,8 +816,8 @@ WOW64_SECTION_MARKER=b"clayton-14 injustice-exact-view-quarantine"
 # translated instruction. All other faults fall back to pristine bus_handler.
 INJUSTICE_HOLE_SITE=0x994334
 INJUSTICE_HOLE_CAVE=0x247ff90
-INJUSTICE_HOLE_CAVE_SIZE=0x40
-INJUSTICE_HOLE_MARKER_SITE=0x247ffd0
+INJUSTICE_HOLE_CAVE_SIZE=0x48
+INJUSTICE_HOLE_MARKER_SITE=0x247ffd8
 INJUSTICE_HOLE_MARKER=b"clayton-26 injustice-guest-hole-heal"
 MPROTECT_STUB=0x1fb0550
 BUS_UNREADABLE_NORMAL=0x994338
@@ -1028,22 +1028,24 @@ d[WOW64_SECTION_MARKER_SITE:WOW64_SECTION_MARKER_SITE+len(WOW64_SECTION_MARKER)]
 # handler turns the C0000005 into the visible MSVC R6025 dialog.
 h=INJUSTICE_HOLE_CAVE
 hcode=[
-    enc_cbz_w(11,h+0x00,BUS_READABLE_PATH), # read probe succeeded -> pristine readable path
-    0xF9400E88,                              # ldr x8,[x20,#0x18] = siginfo->si_addr
-    0x52A2AAE9,                              # mov w9,#0x15570000
-    0x6B09011F,                              # cmp w8,w9 (guest offset)
-    enc_bcond(1,h+0x10,BUS_UNREADABLE_NORMAL), # b.ne -> pristine unreadable path
-    0xD360FD0A,                              # lsr x10,x8,#32 (WoW64 host window id)
-    0xF100115F,                              # cmp x10,#4
-    enc_bcond(3,h+0x1c,BUS_UNREADABLE_NORMAL), # b.lo
-    0xF1001D5F,                              # cmp x10,#7
-    enc_bcond(2,h+0x24,BUS_UNREADABLE_NORMAL), # b.hs (accept only 4,5,6)
-    0xAA0803E0,                              # mov x0,x8 (region base)
-    0xB27107E1,                              # mov x1,#0x18000
-    0x52800062,                              # mov w2,#3 (PROT_READ|PROT_WRITE)
-    enc_bl(h+0x34,MPROTECT_STUB),            # mprotect(base,0x18000,RW)
-    enc_cbnz_w(0,h+0x38,BUS_UNREADABLE_NORMAL), # failure -> honest original AV
-    enc_b(h+0x3c,BUS_RESUME_PATH),           # success -> fix x18 + return/retry
+    enc_cbnz_w(11,h+0x00,h+0x08),            # unreadable probe -> compatibility checks
+    enc_b(h+0x04,BUS_READABLE_PATH),          # readable probe -> pristine path (long B)
+    0xF9400E88,                               # ldr x8,[x20,#0x18] = siginfo->si_addr
+    0x52A2AAE9,                               # mov w9,#0x15570000
+    0x6B09011F,                               # cmp w8,w9 (guest offset)
+    enc_bcond(1,h+0x14,h+0x44),               # b.ne -> local normal stub
+    0xD360FD0A,                               # lsr x10,x8,#32 (WoW64 host window id)
+    0xF100115F,                               # cmp x10,#4
+    enc_bcond(3,h+0x20,h+0x44),               # b.lo -> normal
+    0xF1001D5F,                               # cmp x10,#7
+    enc_bcond(2,h+0x28,h+0x44),               # b.hs -> normal (accept only 4,5,6)
+    0xAA0803E0,                               # mov x0,x8 (region base)
+    0xB27107E1,                               # mov x1,#0x18000
+    0x52800062,                               # mov w2,#3 (PROT_READ|PROT_WRITE)
+    enc_bl(h+0x38,MPROTECT_STUB),             # mprotect(base,0x18000,RW)
+    enc_cbnz_w(0,h+0x3c,h+0x44),              # failure -> local normal stub
+    enc_b(h+0x40,BUS_RESUME_PATH),            # success -> fix x18 + return/retry
+    enc_b(h+0x44,BUS_UNREADABLE_NORMAL),      # pristine unreadable path
 ]
 put32(INJUSTICE_HOLE_SITE,enc_b(INJUSTICE_HOLE_SITE,h))
 for i,ins in enumerate(hcode): put32(h+i*4,ins)
@@ -1106,19 +1108,21 @@ if struct.unpack_from("<I",e,INJUSTICE_HOLE_SITE)[0] != enc_b(INJUSTICE_HOLE_SIT
 if e[INJUSTICE_HOLE_MARKER_SITE:INJUSTICE_HOLE_MARKER_SITE+len(INJUSTICE_HOLE_MARKER)] != INJUSTICE_HOLE_MARKER:
     raise SystemExit("Injustice guest-hole runtime marker missing")
 expected_h=[
-    enc_cbz_w(11,INJUSTICE_HOLE_CAVE+0x00,BUS_READABLE_PATH),
+    enc_cbnz_w(11,INJUSTICE_HOLE_CAVE+0x00,INJUSTICE_HOLE_CAVE+0x08),
+    enc_b(INJUSTICE_HOLE_CAVE+0x04,BUS_READABLE_PATH),
     0xF9400E88,0x52A2AAE9,0x6B09011F,
-    enc_bcond(1,INJUSTICE_HOLE_CAVE+0x10,BUS_UNREADABLE_NORMAL),
+    enc_bcond(1,INJUSTICE_HOLE_CAVE+0x14,INJUSTICE_HOLE_CAVE+0x44),
     0xD360FD0A,0xF100115F,
-    enc_bcond(3,INJUSTICE_HOLE_CAVE+0x1c,BUS_UNREADABLE_NORMAL),
+    enc_bcond(3,INJUSTICE_HOLE_CAVE+0x20,INJUSTICE_HOLE_CAVE+0x44),
     0xF1001D5F,
-    enc_bcond(2,INJUSTICE_HOLE_CAVE+0x24,BUS_UNREADABLE_NORMAL),
+    enc_bcond(2,INJUSTICE_HOLE_CAVE+0x28,INJUSTICE_HOLE_CAVE+0x44),
     0xAA0803E0,0xB27107E1,0x52800062,
-    enc_bl(INJUSTICE_HOLE_CAVE+0x34,MPROTECT_STUB),
-    enc_cbnz_w(0,INJUSTICE_HOLE_CAVE+0x38,BUS_UNREADABLE_NORMAL),
-    enc_b(INJUSTICE_HOLE_CAVE+0x3c,BUS_RESUME_PATH),
+    enc_bl(INJUSTICE_HOLE_CAVE+0x38,MPROTECT_STUB),
+    enc_cbnz_w(0,INJUSTICE_HOLE_CAVE+0x3c,INJUSTICE_HOLE_CAVE+0x44),
+    enc_b(INJUSTICE_HOLE_CAVE+0x40,BUS_RESUME_PATH),
+    enc_b(INJUSTICE_HOLE_CAVE+0x44,BUS_UNREADABLE_NORMAL),
 ]
-got_h=[struct.unpack_from("<I",e,INJUSTICE_HOLE_CAVE+i*4)[0] for i in range(16)]
+got_h=[struct.unpack_from("<I",e,INJUSTICE_HOLE_CAVE+i*4)[0] for i in range(18)]
 if got_h != expected_h:
     raise SystemExit("Injustice guest-hole trampoline read-back mismatch")
 print("native-patch=PASS ProcessDebugObjectHandle ret_len low-page guard")
