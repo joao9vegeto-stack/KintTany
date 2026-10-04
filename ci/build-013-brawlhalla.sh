@@ -16,7 +16,7 @@ VCREDIST_SHA="cc0ff0eb1dc3f5188ae6300faef32bf5beeba4bdd6e8e445a9184072096b713b"
 LLVM_MINGW_SHA="bd85a3975723815cef28dbbd2ca2cb0c926f6b348a12a0453f39f7af273cb3f7"
 MESA_VERSION="26.2.3"
 MESA_MSVC_SHA="3f3613adb43cfd0f2e665ce2400b130c275f0b3317cb3a05566320a3a67589ed"
-IPA_NAME="Madeira-0.1.3-Injustice-GTAIV-R6.ipa"
+IPA_NAME="Madeira-0.1.3-Injustice-R6025-RealFault-R7.ipa"
 
 mkdir -p "$WORK" "$OUT"
 : > "$REPORT"
@@ -42,7 +42,7 @@ if [ "$JOBS" -gt 8 ]; then JOBS=8; fi
 record "base=Madeira v0.1.3"
 record "upstream=$UPSTREAM_SHA"
 record "wine=$WINE_SHA"
-record "strategy=R4/R2-stable native core + rebuilt pinned i386 D3D9 shim: native-first fallback + GTAIV configured-resolution fullscreen lock + real guest-thread 30fps Present pacing; no hard-coded 1280x720 Reset rewrite; Injustice quarantine and R2 DXMT resource instructions preserved"
+record "strategy=R7: Injustice real first-fault heal for guest 0x15570000/host-window peer before secondary R6025; exact 1MiB quarantine retained as secondary guard; GTAIV R6 fixes preserved"
 record "jobs=$JOBS"
 record "xcode=$(xcodebuild -version | tr '\n' ' ')"
 
@@ -804,6 +804,26 @@ WOW64_SECTION_UNMAP_CAVE_SIZE=0x38
 WOW64_SECTION_MARKER_SITE=0x247ff60
 WOW64_SECTION_MARKER=b"clayton-14 injustice-exact-view-quarantine"
 
+# clayton-26: the R6025 dialog is secondary. The first fatal event in the
+# Injustice log is a C0000005 at guest EIP 0x00B52B3D reading guest 0x15570000.
+# The host peer (WoW64 window base + 0x15570000) is an anonymous 0x18000-byte
+# PROT_NONE region, never materialised, and Wine has no view for it. The old
+# exact 0x3c680000 section quarantine does not even occur in that failing run.
+#
+# Intercept only the unreadable BUS path, only when the guest offset is exactly
+# 0x15570000 and the host address is in one of Madeira's 4/5/6 GiB WoW64
+# windows. Materialise the exact 0x18000 anonymous hole RW and resume the
+# translated instruction. All other faults fall back to pristine bus_handler.
+INJUSTICE_HOLE_SITE=0x994334
+INJUSTICE_HOLE_CAVE=0x247ff90
+INJUSTICE_HOLE_CAVE_SIZE=0x40
+INJUSTICE_HOLE_MARKER_SITE=0x247ffd0
+INJUSTICE_HOLE_MARKER=b"clayton-26 injustice-guest-hole-heal"
+MPROTECT_STUB=0x1fb0550
+BUS_UNREADABLE_NORMAL=0x994338
+BUS_READABLE_PATH=0x994500
+BUS_RESUME_PATH=0x994b90
+
 # clayton-15: GTA IV requests the Madeira-selected 1408x648 as an exclusive
 # fullscreen D3D9 mode. The native frontend's 18-mode table ends in 1152x648,
 # so CanonicalisePresentParams rejects 1408x648 with D3DERR_INVALIDCALL before
@@ -851,6 +871,18 @@ def enc_cbz_x(rt,pc,target):
     imm=delta//4
     if not (-(1<<18)<=imm<(1<<18)): raise SystemExit("CBZ out of range")
     return 0xB4000000 | ((imm & 0x7ffff)<<5) | rt
+def enc_cbz_w(rt,pc,target):
+    delta=target-pc
+    if delta%4: raise SystemExit("unaligned CBZ.W target")
+    imm=delta//4
+    if not (-(1<<18)<=imm<(1<<18)): raise SystemExit("CBZ.W out of range")
+    return 0x34000000 | ((imm & 0x7ffff)<<5) | rt
+def enc_cbnz_w(rt,pc,target):
+    delta=target-pc
+    if delta%4: raise SystemExit("unaligned CBNZ.W target")
+    imm=delta//4
+    if not (-(1<<18)<=imm<(1<<18)): raise SystemExit("CBNZ.W out of range")
+    return 0x35000000 | ((imm & 0x7ffff)<<5) | rt
 def enc_bcond(cond,pc,target):
     delta=target-pc
     if delta%4: raise SystemExit("unaligned B.cond target")
@@ -897,6 +929,12 @@ if d[WOW64_SECTION_UNMAP_CAVE:WOW64_SECTION_UNMAP_CAVE+WOW64_SECTION_UNMAP_CAVE_
     raise SystemExit("WOW64 section-quarantine cave is not zero-filled")
 if d[WOW64_SECTION_MARKER_SITE:WOW64_SECTION_MARKER_SITE+len(WOW64_SECTION_MARKER)] != b"\0"*len(WOW64_SECTION_MARKER):
     raise SystemExit("WOW64 section-quarantine marker space is not zero-filled")
+if u32(INJUSTICE_HOLE_SITE) != 0x34000E6B:
+    raise SystemExit(f"unexpected Injustice bus unreadable branch {u32(INJUSTICE_HOLE_SITE):#010x}")
+if d[INJUSTICE_HOLE_CAVE:INJUSTICE_HOLE_CAVE+INJUSTICE_HOLE_CAVE_SIZE] != b"\0"*INJUSTICE_HOLE_CAVE_SIZE:
+    raise SystemExit("Injustice guest-hole cave is not zero-filled")
+if d[INJUSTICE_HOLE_MARKER_SITE:INJUSTICE_HOLE_MARKER_SITE+len(INJUSTICE_HOLE_MARKER)] != b"\0"*len(INJUSTICE_HOLE_MARKER):
+    raise SystemExit("Injustice guest-hole marker space is not zero-filled")
 if u32(D3D9_GTA_MODE_WIDTH_SITE) != 1152 or u32(D3D9_GTA_MODE_HEIGHT_SITE) != 648:
     raise SystemExit(f"unexpected D3D9 tail mode {u32(D3D9_GTA_MODE_WIDTH_SITE)}x{u32(D3D9_GTA_MODE_HEIGHT_SITE)}")
 if u32(D3D9_GTA_RESET_LOSABLE_GATE_SITE) != 0x35001B28:
@@ -986,6 +1024,31 @@ put32(WOW64_SECTION_UNMAP_SITE,enc_b(WOW64_SECTION_UNMAP_SITE,q))
 for i,ins in enumerate(qcode): put32(q+i*4,ins)
 d[WOW64_SECTION_MARKER_SITE:WOW64_SECTION_MARKER_SITE+len(WOW64_SECTION_MARKER)] = WOW64_SECTION_MARKER
 
+# clayton-26: heal the REAL first Injustice failure, before its UE3 crash
+# handler turns the C0000005 into the visible MSVC R6025 dialog.
+h=INJUSTICE_HOLE_CAVE
+hcode=[
+    enc_cbz_w(11,h+0x00,BUS_READABLE_PATH), # read probe succeeded -> pristine readable path
+    0xF9400E88,                              # ldr x8,[x20,#0x18] = siginfo->si_addr
+    0x52A2AAE9,                              # mov w9,#0x15570000
+    0x6B09011F,                              # cmp w8,w9 (guest offset)
+    enc_bcond(1,h+0x10,BUS_UNREADABLE_NORMAL), # b.ne -> pristine unreadable path
+    0xD360FD0A,                              # lsr x10,x8,#32 (WoW64 host window id)
+    0xF100115F,                              # cmp x10,#4
+    enc_bcond(3,h+0x1c,BUS_UNREADABLE_NORMAL), # b.lo
+    0xF1001D5F,                              # cmp x10,#7
+    enc_bcond(2,h+0x24,BUS_UNREADABLE_NORMAL), # b.hs (accept only 4,5,6)
+    0xAA0803E0,                              # mov x0,x8 (region base)
+    0xB27107E1,                              # mov x1,#0x18000
+    0x52800062,                              # mov w2,#3 (PROT_READ|PROT_WRITE)
+    enc_bl(h+0x34,MPROTECT_STUB),            # mprotect(base,0x18000,RW)
+    enc_cbnz_w(0,h+0x38,BUS_UNREADABLE_NORMAL), # failure -> honest original AV
+    enc_b(h+0x3c,BUS_RESUME_PATH),           # success -> fix x18 + return/retry
+]
+put32(INJUSTICE_HOLE_SITE,enc_b(INJUSTICE_HOLE_SITE,h))
+for i,ins in enumerate(hcode): put32(h+i*4,ins)
+d[INJUSTICE_HOLE_MARKER_SITE:INJUSTICE_HOLE_MARKER_SITE+len(INJUSTICE_HOLE_MARKER)] = INJUSTICE_HOLE_MARKER
+
 # GTA IV: make the exact Madeira landscape resolution a legal D3D9 fullscreen
 # adapter mode. The frontend still validates every other mode exactly as before.
 put32(D3D9_GTA_MODE_WIDTH_SITE,1408)
@@ -1038,12 +1101,33 @@ if struct.unpack_from("<I",e,WOW64_SECTION_UNMAP_SITE)[0] != enc_b(WOW64_SECTION
     raise SystemExit("WOW64 section-quarantine entry branch mismatch")
 if e[WOW64_SECTION_MARKER_SITE:WOW64_SECTION_MARKER_SITE+len(WOW64_SECTION_MARKER)] != WOW64_SECTION_MARKER:
     raise SystemExit("WOW64 section-quarantine runtime marker missing")
+if struct.unpack_from("<I",e,INJUSTICE_HOLE_SITE)[0] != enc_b(INJUSTICE_HOLE_SITE,INJUSTICE_HOLE_CAVE):
+    raise SystemExit("Injustice guest-hole entry branch mismatch")
+if e[INJUSTICE_HOLE_MARKER_SITE:INJUSTICE_HOLE_MARKER_SITE+len(INJUSTICE_HOLE_MARKER)] != INJUSTICE_HOLE_MARKER:
+    raise SystemExit("Injustice guest-hole runtime marker missing")
+expected_h=[
+    enc_cbz_w(11,INJUSTICE_HOLE_CAVE+0x00,BUS_READABLE_PATH),
+    0xF9400E88,0x52A2AAE9,0x6B09011F,
+    enc_bcond(1,INJUSTICE_HOLE_CAVE+0x10,BUS_UNREADABLE_NORMAL),
+    0xD360FD0A,0xF100115F,
+    enc_bcond(3,INJUSTICE_HOLE_CAVE+0x1c,BUS_UNREADABLE_NORMAL),
+    0xF1001D5F,
+    enc_bcond(2,INJUSTICE_HOLE_CAVE+0x24,BUS_UNREADABLE_NORMAL),
+    0xAA0803E0,0xB27107E1,0x52800062,
+    enc_bl(INJUSTICE_HOLE_CAVE+0x34,MPROTECT_STUB),
+    enc_cbnz_w(0,INJUSTICE_HOLE_CAVE+0x38,BUS_UNREADABLE_NORMAL),
+    enc_b(INJUSTICE_HOLE_CAVE+0x3c,BUS_RESUME_PATH),
+]
+got_h=[struct.unpack_from("<I",e,INJUSTICE_HOLE_CAVE+i*4)[0] for i in range(16)]
+if got_h != expected_h:
+    raise SystemExit("Injustice guest-hole trampoline read-back mismatch")
 print("native-patch=PASS ProcessDebugObjectHandle ret_len low-page guard")
 print("sync-default=PASS actual _madsync_enabled: absent inproc-sync enters ENABLED path; explicit inproc-sync=0 preserved")
 print("steam-env-clean=PASS generic launch unsets SteamAppPath/SteamGameId/SteamAppId")
 print("direct-surface=PASS rev=clayton-21 compositor remains present-driven while direct WindowPosChanged geometry is forwarded for per-HWND Metal")
 print("touch-input=PASS rev=clayton-9 overlay visible at session start + early player-1 XInput reservation")
 print("wow64-section-quarantine=PASS rev=clayton-14 only guest 0x3c680000 / host-window peer / size 1MiB is retained")
+print("injustice-r6025-root=PASS rev=clayton-26 guest 0x15570000 anonymous 0x18000 PROT_NONE hole materialises RW and retries before secondary R6025")
 print("d3d9-mode=PASS rev=clayton-15 adapter tail mode 1152x648 -> 1408x648 for GTAIV fullscreen")
 if struct.unpack_from("<I",e,D3D9_WINDOW_LAYER_GATE_SITE)[0] != 0xD503201F:
     raise SystemExit("per-HWND Metal layer gate patch mismatch")
