@@ -15,7 +15,7 @@ VCREDIST_SHA="cc0ff0eb1dc3f5188ae6300faef32bf5beeba4bdd6e8e445a9184072096b713b"
 LLVM_MINGW_SHA="bd85a3975723815cef28dbbd2ca2cb0c926f6b348a12a0453f39f7af273cb3f7"
 MESA_VERSION="26.2.3"
 MESA_MSVC_SHA="3f3613adb43cfd0f2e665ce2400b130c275f0b3317cb3a05566320a3a67589ed"
-IPA_NAME="Madeira-0.1.3-Injustice-R6025-Fix.ipa"
+IPA_NAME="Madeira-0.1.3-Injustice-GTAIV-Compat.ipa"
 
 mkdir -p "$WORK" "$OUT"
 : > "$REPORT"
@@ -41,7 +41,7 @@ if [ "$JOBS" -gt 8 ]; then JOBS=8; fi
 record "base=Madeira v0.1.3"
 record "upstream=$UPSTREAM_SHA"
 record "wine=$WINE_SHA"
-record "strategy=official IPA + AIR FullChain + VC runtime + ProcessDebugObjectHandle guard + actual madsync + non-Steam Steam-env cleanup + FEX InvalidationTracker heap relocation + ARM64EC image-map dedupe + Mesa x64 WGL/llvmpipe fallback + Ruby/MSVCRT __pioinfo PE-pool mirror + software compositor on-present only + touch-controls visible/early XInput slot + 32-bit D3D9 native-first fallback + WOW64 1MiB section lifetime quarantine with corrected file_view size offset"
+record "strategy=official IPA + AIR FullChain + VC runtime + ProcessDebugObjectHandle guard + actual madsync + non-Steam Steam-env cleanup + FEX InvalidationTracker heap relocation + ARM64EC image-map dedupe + Mesa x64 WGL/llvmpipe fallback + Ruby/MSVCRT __pioinfo PE-pool mirror + software compositor on-present only + touch-controls visible/early XInput slot + 32-bit D3D9 native-first fallback + exact Injustice fight-load view quarantine + GTAIV 1408x648 D3D9 mode"
 record "jobs=$JOBS"
 record "xcode=$(xcodebuild -version | tr '\n' ' ')"
 
@@ -558,7 +558,14 @@ WOW64_SECTION_UNMAP_SITE=0x97ea4c
 WOW64_SECTION_UNMAP_CAVE=0x247ff18
 WOW64_SECTION_UNMAP_CAVE_SIZE=0x38
 WOW64_SECTION_MARKER_SITE=0x247ff60
-WOW64_SECTION_MARKER=b"clayton-13 wow64-1m-size-offset-fix"
+WOW64_SECTION_MARKER=b"clayton-14 injustice-exact-view-quarantine"
+
+# clayton-15: GTA IV requests the Madeira-selected 1408x648 as an exclusive
+# fullscreen D3D9 mode. The native frontend's 18-mode table ends in 1152x648,
+# so CanonicalisePresentParams rejects 1408x648 with D3DERR_INVALIDCALL before
+# a Metal device can exist. Replace only that unique last mode with 1408x648.
+D3D9_GTA_MODE_WIDTH_SITE=0x22a47fc
+D3D9_GTA_MODE_HEIGHT_SITE=0x22a4800
 
 def u32(off): return struct.unpack_from("<I",d,off)[0]
 def put32(off,v): struct.pack_into("<I",d,off,v)
@@ -620,6 +627,8 @@ if d[WOW64_SECTION_UNMAP_CAVE:WOW64_SECTION_UNMAP_CAVE+WOW64_SECTION_UNMAP_CAVE_
     raise SystemExit("WOW64 section-quarantine cave is not zero-filled")
 if d[WOW64_SECTION_MARKER_SITE:WOW64_SECTION_MARKER_SITE+len(WOW64_SECTION_MARKER)] != b"\0"*len(WOW64_SECTION_MARKER):
     raise SystemExit("WOW64 section-quarantine marker space is not zero-filled")
+if u32(D3D9_GTA_MODE_WIDTH_SITE) != 1152 or u32(D3D9_GTA_MODE_HEIGHT_SITE) != 648:
+    raise SystemExit(f"unexpected D3D9 tail mode {u32(D3D9_GTA_MODE_WIDTH_SITE)}x{u32(D3D9_GTA_MODE_HEIGHT_SITE)}")
 
 code=[
     enc_cbz_x(19,CAVE,CAVE+0x18),
@@ -671,35 +680,35 @@ put32(TOUCH_SLOT_OPTIN_SITE,0xD503201F)  # nop: no MADEIRA_PAD_EARLY_SLOT opt-in
 put32(TOUCH_SLOT_ARG_SITE,0x52800020)    # mov w0,#1: touch-capable player 1
 put32(TOUCH_VISIBLE_SITE,0x52800020)     # mov w0,#1: controls.visible = true at begin()
 
-# clayton-13 correction to the section-lifetime quarantine at _unmap_view_of_section+0xe4.
-# At the patch site x19=view, x8=view->base, w10=view->protect, x18=guest TEB.
-# Preserve the original VPROT_SYSTEM branch first. Then quarantine ONLY:
-#   - exact 1 MiB view
-#   - not SEC_IMAGE (bit 24)
-#   - not VPROT_PLACEHOLDER (bit 10)
-#   - view base and TEB share the same upper 32 bits (same 4 GiB WoW64 window)
-# Success path jumps to 0x97eb68, which sets STATUS_SUCCESS and unlocks
-# virtual_mutex without server-unmap/delete_view. Normal/system paths are exact.
+# clayton-14: keep ONLY the exact fight-load view proven stale by the
+# successful Injustice run: guest 0x3c680000 -> host 0x43c680000, size 1 MiB.
+# The previous 1MiB-wide filter was intentionally conservative but can retain
+# unrelated mappings. This exact-address filter preserves normal lifetime for
+# every other view and therefore avoids contaminating startup / C++ objects.
 q=WOW64_SECTION_UNMAP_CAVE
 qcode=[
     enc_tbnz_w(10,9,q+0x00,q+0x30),      # original VPROT_SYSTEM -> system path
-    0xF940126B,                           # ldr x11,[x19,#0x20] (view->size; rb_entry=0x18, base=+0x18, size=+0x20, protect=+0x28)
+    0xF940126B,                           # ldr x11,[x19,#0x20] (view->size)
     0xF144017F,                           # cmp x11,#0x100,lsl#12 (1 MiB)
     enc_bcond(1,q+0x0c,q+0x34),           # b.ne normal
-    enc_tbnz_w(10,24,q+0x10,q+0x34),      # SEC_IMAGE -> normal
-    enc_tbnz_w(10,10,q+0x14,q+0x34),      # VPROT_PLACEHOLDER -> normal
     0xD360FD0C,                           # lsr x12,x8,#32
     0xD360FE4D,                           # lsr x13,x18,#32
     0xEB0D019F,                           # cmp x12,x13
-    enc_bcond(1,q+0x24,q+0x34),           # b.ne normal
-    enc_b(q+0x28,0x97eb68),               # quarantine: success + unlock
-    0xD503201F,                           # padding
+    enc_bcond(1,q+0x1c,q+0x34),           # b.ne normal
+    0x52A78D0C,                           # movz w12,#0x3c68,lsl#16
+    0x6B0C011F,                           # cmp w8,w12 (guest low32 == 0x3c680000?)
+    enc_bcond(1,q+0x28,q+0x34),           # b.ne local normal path (B.cond range-safe)
+    enc_b(q+0x2c,0x97eb68),               # exact match -> long B to success + unlock
     enc_b(q+0x30,0x97eab4),               # pristine VPROT_SYSTEM path
-    enc_b(q+0x34,0x97ea50),               # pristine normal unmap path
+    enc_b(q+0x34,0x97ea50),               # pristine normal path
 ]
 put32(WOW64_SECTION_UNMAP_SITE,enc_b(WOW64_SECTION_UNMAP_SITE,q))
 for i,ins in enumerate(qcode): put32(q+i*4,ins)
 d[WOW64_SECTION_MARKER_SITE:WOW64_SECTION_MARKER_SITE+len(WOW64_SECTION_MARKER)] = WOW64_SECTION_MARKER
+
+# GTA IV: make the exact Madeira landscape resolution a legal D3D9 fullscreen
+# adapter mode. The frontend still validates every other mode exactly as before.
+put32(D3D9_GTA_MODE_WIDTH_SITE,1408)
 
 p.write_bytes(d)
 
@@ -742,7 +751,8 @@ print("sync-default=PASS actual _madsync_enabled: absent inproc-sync enters ENAB
 print("steam-env-clean=PASS generic launch unsets SteamAppPath/SteamGameId/SteamAppId")
 print("direct-surface=PASS rev=clayton-12 software compositor is created by actual software presents, not Metal window geometry")
 print("touch-input=PASS rev=clayton-9 overlay visible at session start + early player-1 XInput reservation")
-print("wow64-section-quarantine=PASS rev=clayton-13 corrected file_view->size offset (+0x20); exact-1MiB non-image/non-placeholder same-window sections retained")
+print("wow64-section-quarantine=PASS rev=clayton-14 only guest 0x3c680000 / host-window peer / size 1MiB is retained")
+print("d3d9-mode=PASS rev=clayton-15 adapter tail mode 1152x648 -> 1408x648 for GTAIV fullscreen")
 print(f"native-dylib-patched-sha256={hashlib.sha256(e).hexdigest()}")
 PY
 
@@ -769,6 +779,8 @@ checks={
     0x4526e0:0x52800020,
     0x579020:0x52800020,
     0x97ea4c:0x146C0533,
+    0x22a47fc:1408,
+    0x22a4800:648,
 }
 for off,want in checks.items():
     got=struct.unpack_from("<I",d,off)[0]
@@ -776,8 +788,8 @@ for off,want in checks.items():
         raise SystemExit(f"native runtime patch lost after codesign at {off:#x}: {got:#010x} != {want:#010x}")
 if b"[winios] clayton-12 software compositor on present only\n" not in d:
     raise SystemExit("clayton-12 runtime marker lost after codesign")
-if b"clayton-13 wow64-1m-size-offset-fix" not in d:
-    raise SystemExit("clayton-13 runtime marker lost after codesign")
+if b"clayton-14 injustice-exact-view-quarantine" not in d:
+    raise SystemExit("clayton-14 runtime marker lost after codesign")
 print("native-patch-after-codesign=PASS debug-object + madsync + Steam-env-clean + software-present compositor + touch-controls/XInput + WOW64 section quarantine")
 PY
 
