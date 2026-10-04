@@ -112,11 +112,17 @@ export PATH="$MINGW_DIR/bin:$PATH"
 test -x "$MINGW_DIR/bin/arm64ec-w64-mingw32-clang"
 
 say "Build patched ARM64EC FEX module"
-(
-  cd "$SRC"
-  bash build/fex-arm64ec/build.sh
-)
-PATCHED_FEX="$SRC/FEX/build-arm64ec/Bin/libarm64ecfex.dll"
+FEX_BUILD="$SRC/FEX/build-arm64ec"
+rm -rf "$FEX_BUILD"
+cmake -S "$SRC/FEX" -B "$FEX_BUILD" \
+  -DCMAKE_BUILD_TYPE=Release \
+  -DCMAKE_TOOLCHAIN_FILE="$SRC/FEX/Data/CMake/toolchain_mingw.cmake" \
+  -DMINGW_TRIPLE=arm64ec-w64-mingw32 \
+  -DENABLE_FEX_ALLOCATOR=ON -DENABLE_JEMALLOC_GLIBC_ALLOC=ON -DENABLE_OFFLINE_RUNTIME=ON \
+  -DBUILD_FEXCONFIG=ON -DENABLE_CLANG_THUNKS=ON -DENABLE_CCACHE=ON \
+  -DBUILD_TESTING=OFF -DBUILD_THUNKS=OFF -DENABLE_ASSERTIONS=OFF
+cmake --build "$FEX_BUILD" --target arm64ecfex -j"$JOBS"
+PATCHED_FEX="$FEX_BUILD/Bin/libarm64ecfex.dll"
 test -s "$PATCHED_FEX"
 strings "$PATCHED_FEX" | grep -F "invalidation-tracker-heap rev=clayton-2" | tee -a "$REPORT"
 python3 - "$PATCHED_FEX" <<'PY' | tee -a "$REPORT"
