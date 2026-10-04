@@ -16,7 +16,7 @@ VCREDIST_SHA="cc0ff0eb1dc3f5188ae6300faef32bf5beeba4bdd6e8e445a9184072096b713b"
 LLVM_MINGW_SHA="bd85a3975723815cef28dbbd2ca2cb0c926f6b348a12a0453f39f7af273cb3f7"
 MESA_VERSION="26.2.3"
 MESA_MSVC_SHA="3f3613adb43cfd0f2e665ce2400b130c275f0b3317cb3a05566320a3a67589ed"
-IPA_NAME="Madeira-0.1.3-Injustice-GTAIV-R8.ipa"
+IPA_NAME="Madeira-0.1.3-Injustice-GTAIV-R8.1.ipa"
 
 mkdir -p "$WORK" "$OUT"
 : > "$REPORT"
@@ -42,7 +42,7 @@ if [ "$JOBS" -gt 8 ]; then JOBS=8; fi
 record "base=Madeira v0.1.3"
 record "upstream=$UPSTREAM_SHA"
 record "wine=$WINE_SHA"
-record "strategy=R8: preserve R7 Injustice first-fault heal; GTAIV log-driven rollback of unsafe forced Reset/pacing/hard-coded mode while retaining native D3D9 + per-HWND Metal path"
+record "strategy=R8.1: preserve R7 Injustice heal; GTAIV keeps application-owned Reset and official mode table; guard the exact DXMT FlushDrawBatch Copy-blit wild Texture pointer proven by the R6 log; per-HWND Metal path retained"
 record "jobs=$JOBS"
 record "xcode=$(xcodebuild -version | tr '\n' ' ')"
 
@@ -794,6 +794,27 @@ D3D9_GTA_RESET_LOSABLE_GATE_SITE=0x1aade04
 # inside the same window/compositor that the screenshot actually shows.
 D3D9_WINDOW_LAYER_GATE_SITE=0x1c724
 
+# clayton-27 / R8.1: the R6 GTA log does not merely stall. Its first fatal
+# native event is inside MTLD3D9Device::FlushDrawBatch's Copy-blit walker:
+#   ldr x8,[x25]          ; PendingBlitOp::src_tex wrapper
+#   ldr x26,[x8,#0x40]    ; Texture::allocation
+# with x8=0x7369642e72696100 ("\0air.dis..." as bytes), an impossible host
+# object pointer. The destination path has the same unchecked dereference.
+# Madeira's launch address map is below 64 GiB, so reject only NULL or a
+# wrapper with any bit >=36 set, skip that one corrupt blit, and keep the
+# render loop alive. The caves sit in zero padding at the end of __TEXT,
+# after __oslogstring and before the next segment.
+GTA_BLIT_SRC_SITE=0x1ad7bb8
+GTA_BLIT_DST_SITE=0x1ad7bec
+GTA_BLIT_SRC_CONT=0x1ad7bc0
+GTA_BLIT_DST_CONT=0x1ad7bf4
+GTA_BLIT_SKIP=0x1ad7c84
+GTA_BLIT_SRC_CAVE=0x2481220
+GTA_BLIT_DST_CAVE=0x2481260
+GTA_BLIT_CAVE_END=0x24812a0
+GTA_BLIT_MARKER_SITE=0x24812b0
+GTA_BLIT_MARKER=b"clayton-27 gtaiv-dxmt-blit-pointer-guard"
+
 # clayton-20: R3's binary-port of the DXMT CPU-cache experiment is removed.
 # Injustice was stable in R2 and regressed to R6025 only after R3. Keep all
 # DXMT resource-option instructions pristine while retaining the GTA window fix.
@@ -818,6 +839,12 @@ def enc_cbz_x(rt,pc,target):
     imm=delta//4
     if not (-(1<<18)<=imm<(1<<18)): raise SystemExit("CBZ out of range")
     return 0xB4000000 | ((imm & 0x7ffff)<<5) | rt
+def enc_cbnz_x(rt,pc,target):
+    delta=target-pc
+    if delta%4: raise SystemExit("unaligned CBNZ.X target")
+    imm=delta//4
+    if not (-(1<<18)<=imm<(1<<18)): raise SystemExit("CBNZ.X out of range")
+    return 0xB5000000 | ((imm & 0x7ffff)<<5) | rt
 def enc_cbz_w(rt,pc,target):
     delta=target-pc
     if delta%4: raise SystemExit("unaligned CBZ.W target")
@@ -888,6 +915,14 @@ if u32(D3D9_GTA_RESET_LOSABLE_GATE_SITE) != 0x35001B28:
     raise SystemExit(f"unexpected D3D9 Reset losable-resource gate {u32(D3D9_GTA_RESET_LOSABLE_GATE_SITE):#010x}")
 if u32(D3D9_WINDOW_LAYER_GATE_SITE) != 0x34000780:
     raise SystemExit(f"unexpected Metal per-window branch gate {u32(D3D9_WINDOW_LAYER_GATE_SITE):#010x}")
+if u32(GTA_BLIT_SRC_SITE) != 0xF9400328 or u32(GTA_BLIT_SRC_SITE+4) != 0xF940211A:
+    raise SystemExit(f"unexpected D3D9 Copy source dereference {u32(GTA_BLIT_SRC_SITE):#010x} {u32(GTA_BLIT_SRC_SITE+4):#010x}")
+if u32(GTA_BLIT_DST_SITE) != 0xF9400728 or u32(GTA_BLIT_DST_SITE+4) != 0xF940211A:
+    raise SystemExit(f"unexpected D3D9 Copy destination dereference {u32(GTA_BLIT_DST_SITE):#010x} {u32(GTA_BLIT_DST_SITE+4):#010x}")
+if d[GTA_BLIT_SRC_CAVE:GTA_BLIT_CAVE_END] != b"\0"*(GTA_BLIT_CAVE_END-GTA_BLIT_SRC_CAVE):
+    raise SystemExit("GTA D3D9 blit guard cave is not zero-filled")
+if d[GTA_BLIT_MARKER_SITE:GTA_BLIT_MARKER_SITE+len(GTA_BLIT_MARKER)] != b"\0"*len(GTA_BLIT_MARKER):
+    raise SystemExit("GTA D3D9 blit guard marker space is not zero-filled")
 
 code=[
     enc_cbz_x(19,CAVE,CAVE+0x18),
@@ -1007,6 +1042,43 @@ d[INJUSTICE_HOLE_MARKER_SITE:INJUSTICE_HOLE_MARKER_SITE+len(INJUSTICE_HOLE_MARKE
 # both desktop and direct-game sessions enter the existing per-window path.
 put32(D3D9_WINDOW_LAYER_GATE_SITE,0xD503201F)
 
+# R8.1 exact native crash guard. Both trampolines replay the original wrapper
+# load, reject only NULL / >=64-GiB impossible wrapper addresses, then replay
+# the original allocation load. A valid pointer returns immediately after the
+# two overwritten instructions. A corrupt pointer marks the blit pass active
+# and rejoins the existing Copy-case tail, skipping only this poisoned op.
+src=GTA_BLIT_SRC_CAVE
+src_skip=src+0x1c
+src_code=[
+    0xF9400328,                               # ldr x8,[x25]
+    enc_cbz_x(8,src+0x04,src_skip),
+    0xD364FD09,                               # lsr x9,x8,#36
+    enc_cbnz_x(9,src+0x0c,src_skip),
+    0xF940211A,                               # ldr x26,[x8,#0x40]
+    enc_cbz_x(26,src+0x14,src_skip),
+    enc_b(src+0x18,GTA_BLIT_SRC_CONT),
+    0x5280005B,                               # mov w27,#2 (Blit)
+    enc_b(src+0x20,GTA_BLIT_SKIP),
+]
+dst=GTA_BLIT_DST_CAVE
+dst_skip=dst+0x1c
+dst_code=[
+    0xF9400728,                               # ldr x8,[x25,#8]
+    enc_cbz_x(8,dst+0x04,dst_skip),
+    0xD364FD09,                               # lsr x9,x8,#36
+    enc_cbnz_x(9,dst+0x0c,dst_skip),
+    0xF940211A,                               # ldr x26,[x8,#0x40]
+    enc_cbz_x(26,dst+0x14,dst_skip),
+    enc_b(dst+0x18,GTA_BLIT_DST_CONT),
+    0x5280005B,                               # mov w27,#2 (Blit)
+    enc_b(dst+0x20,GTA_BLIT_SKIP),
+]
+put32(GTA_BLIT_SRC_SITE,enc_b(GTA_BLIT_SRC_SITE,src))
+put32(GTA_BLIT_DST_SITE,enc_b(GTA_BLIT_DST_SITE,dst))
+for i,ins in enumerate(src_code): put32(src+i*4,ins)
+for i,ins in enumerate(dst_code): put32(dst+i*4,ins)
+d[GTA_BLIT_MARKER_SITE:GTA_BLIT_MARKER_SITE+len(GTA_BLIT_MARKER)] = GTA_BLIT_MARKER
+
 # clayton-20: no DXMT resource-cache binary rewriting here. R2's original
 # instructions are intentionally preserved to restore Injustice stability.
 
@@ -1050,6 +1122,12 @@ if struct.unpack_from("<I",e,INJUSTICE_HOLE_SITE)[0] != enc_b(INJUSTICE_HOLE_SIT
     raise SystemExit("Injustice guest-hole entry branch mismatch")
 if e[INJUSTICE_HOLE_MARKER_SITE:INJUSTICE_HOLE_MARKER_SITE+len(INJUSTICE_HOLE_MARKER)] != INJUSTICE_HOLE_MARKER:
     raise SystemExit("Injustice guest-hole runtime marker missing")
+if struct.unpack_from("<I",e,GTA_BLIT_SRC_SITE)[0] != enc_b(GTA_BLIT_SRC_SITE,GTA_BLIT_SRC_CAVE):
+    raise SystemExit("GTA D3D9 Copy source guard entry branch mismatch")
+if struct.unpack_from("<I",e,GTA_BLIT_DST_SITE)[0] != enc_b(GTA_BLIT_DST_SITE,GTA_BLIT_DST_CAVE):
+    raise SystemExit("GTA D3D9 Copy destination guard entry branch mismatch")
+if e[GTA_BLIT_MARKER_SITE:GTA_BLIT_MARKER_SITE+len(GTA_BLIT_MARKER)] != GTA_BLIT_MARKER:
+    raise SystemExit("GTA D3D9 blit pointer guard runtime marker missing")
 expected_h=[
     enc_cbnz_w(11,INJUSTICE_HOLE_CAVE+0x00,INJUSTICE_HOLE_CAVE+0x08),
     enc_b(INJUSTICE_HOLE_CAVE+0x04,BUS_READABLE_PATH),
@@ -1081,6 +1159,7 @@ if struct.unpack_from("<I",e,D3D9_WINDOW_LAYER_GATE_SITE)[0] != 0xD503201F:
 print("d3d9-reset=PASS R8 official losable-resource Reset guard preserved; no unsafe forced reset")
 print("gta-window-metal=PASS rev=clayton-18 DXMT uses Winios per-HWND CAMetalLayer in direct-game sessions")
 print("gta-window-geometry=PASS rev=clayton-21 direct-mode WindowPosChanged forwards the client rect to the per-HWND Metal layer")
+print("gta-dxmt-blit-guard=PASS rev=clayton-27 exact FlushDrawBatch Copy source/destination dereferences reject impossible >=64GiB wrapper pointers and skip only the poisoned op")
 print("dxmt-cpu-cache=REVERTED rev=clayton-20 R3 experiment removed; R2-stable resource-option instructions preserved")
 print(f"native-dylib-patched-sha256={hashlib.sha256(e).hexdigest()}")
 PY
@@ -1127,7 +1206,17 @@ if b"[winios] clayton-12 software compositor on present only\n" not in d:
     raise SystemExit("clayton-12 runtime marker lost after codesign")
 if b"clayton-14 injustice-exact-view-quarantine" not in d:
     raise SystemExit("clayton-14 runtime marker lost after codesign")
-print("native-patch-after-codesign=PASS debug-object + madsync + Steam-env-clean + software-present compositor + direct window geometry + touch-controls/XInput + WOW64 section quarantine + per-HWND Metal; R3 DXMT cache experiment absent")
+if b"clayton-27 gtaiv-dxmt-blit-pointer-guard" not in d:
+    raise SystemExit("clayton-27 GTA blit pointer guard marker lost after codesign")
+# Entry branches after signing (absolute targets are deterministic in the official image).
+def enc_b(pc,target):
+    delta=target-pc
+    return 0x14000000 | ((delta//4) & 0x03ffffff)
+if struct.unpack_from("<I",d,0x1ad7bb8)[0] != enc_b(0x1ad7bb8,0x2481220):
+    raise SystemExit("GTA Copy source guard lost after codesign")
+if struct.unpack_from("<I",d,0x1ad7bec)[0] != enc_b(0x1ad7bec,0x2481260):
+    raise SystemExit("GTA Copy destination guard lost after codesign")
+print("native-patch-after-codesign=PASS debug-object + madsync + Steam-env-clean + software-present compositor + direct window geometry + touch-controls/XInput + WOW64 section quarantine + per-HWND Metal + GTA DXMT blit pointer guard; R3 DXMT cache experiment absent")
 PY
 
 say "Install rebuilt GTA-aware i386 D3D9 shim"
