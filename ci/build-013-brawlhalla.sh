@@ -15,7 +15,7 @@ VCREDIST_SHA="cc0ff0eb1dc3f5188ae6300faef32bf5beeba4bdd6e8e445a9184072096b713b"
 LLVM_MINGW_SHA="bd85a3975723815cef28dbbd2ca2cb0c926f6b348a12a0453f39f7af273cb3f7"
 MESA_VERSION="26.2.3"
 MESA_MSVC_SHA="3f3613adb43cfd0f2e665ce2400b130c275f0b3317cb3a05566320a3a67589ed"
-IPA_NAME="Madeira-0.1.3-FEX-MaxInst1-FirstPixels.ipa"
+IPA_NAME="Madeira-0.1.3-Ruby-Pioinfo-Sync-Fix.ipa"
 
 mkdir -p "$WORK" "$OUT"
 : > "$REPORT"
@@ -41,7 +41,7 @@ if [ "$JOBS" -gt 8 ]; then JOBS=8; fi
 record "base=Madeira v0.1.3"
 record "upstream=$UPSTREAM_SHA"
 record "wine=$WINE_SHA"
-record "strategy=official IPA + AIR FullChain + VC runtime + ProcessDebugObjectHandle guard + actual madsync + non-Steam Steam-env cleanup + FEX InvalidationTracker heap relocation + ARM64EC image-map dedupe + Mesa x64 WGL/llvmpipe fallback + FEX MaxInst=1 first-pixels diagnostic"
+record "strategy=official IPA + AIR FullChain + VC runtime + ProcessDebugObjectHandle guard + actual madsync + non-Steam Steam-env cleanup + FEX InvalidationTracker heap relocation + ARM64EC image-map dedupe + Mesa x64 WGL/llvmpipe fallback + Ruby/MSVCRT __pioinfo PE-pool mirror"
 record "jobs=$JOBS"
 record "xcode=$(xcodebuild -version | tr '\n' ' ')"
 
@@ -63,53 +63,137 @@ test "$(git -C "$SRC" rev-parse HEAD)" = "$UPSTREAM_SHA"
 test "$(git -C "$SRC/wine" rev-parse HEAD)" = "$WINE_SHA"
 test "$(git -C "$SRC/FEX" rev-parse HEAD)" = "$FEX_SHA"
 
-say "Force one-instruction FEX blocks for first-pixels correctness diagnostic"
-python3 - "$SRC/FEX/FEXCore/Source/Interface/Config/Config.json.in" "$SRC/FEX/Source/Windows/ARM64EC/Module.cpp" <<'PY' | tee -a "$REPORT"
+
+say "Patch ARM64EC Wine CRT __pioinfo dual-view publication for Ruby"
+python3 - "$SRC/wine/dlls/ntdll/signal_arm64ec.c" "$SRC/wine/dlls/ntdll/ntdll.spec" "$SRC/wine/dlls/msvcrt/file.c" <<'PY' | tee -a "$REPORT"
 import pathlib, sys
-cfg=pathlib.Path(sys.argv[1])
-mod=pathlib.Path(sys.argv[2])
+sig=pathlib.Path(sys.argv[1])
+spec=pathlib.Path(sys.argv[2])
+crt=pathlib.Path(sys.argv[3])
 
-c=cfg.read_text()
-old='''      "MaxInst": {
-        "Type": "int32",
-        "Default": "5000",'''
-new='''      "MaxInst": {
-        "Type": "int32",
-        "Default": "1",'''
-if c.count(old) != 1:
-    raise SystemExit(f"MaxInst default anchor count={c.count(old)}")
+s=sig.read_text()
+helper_marker="pioinfo-sync-helper rev=clayton-6"
+if helper_marker in s:
+    raise SystemExit("clayton-6 helper already present in pristine ntdll")
+old='''void *__attribute__((naked)) xlate_ios_jit_rev( void *ptr )
+{
+    asm( ".seh_proc \\"#xlate_ios_jit_rev\\"\\n\\t"
+         ".seh_endprologue\\n\\t"
+         "cbz x0, 1f\\n\\t"                                 /* NULL → return NULL */
+         "adrp x16, p_ios_jit_reverse_translate_addr\\n\\t"
+         "ldr x16, [x16, #:lo12:p_ios_jit_reverse_translate_addr]\\n\\t"
+         "cbz x16, 1f\\n\\t"                                /* fn-ptr unset → identity */
+         "br x16\\n\\t"                                     /* tail-call unix fn */
+         "1: ret\\n\\t"
+         ".seh_endproc" );
+}
+'''
+new=old+'''
+/* clayton-6: keep one pointer-valued image global coherent in both Madeira
+ * views. Callers may run from either view, so reverse first (pool -> PE), then
+ * forward (PE -> pool) if reverse was identity. */
+static const char ios_pioinfo_sync_helper_marker[] __attribute__((used)) =
+    "pioinfo-sync-helper rev=clayton-6";
+
+void * CDECL __wine_ios_sync_pointer( void **slot, void *value )
+{
+    void *peer;
+
+    if (!slot) return NULL;
+    InterlockedExchangePointer( (void *volatile *)slot, value );
+
+    peer = xlate_ios_jit_rev( slot );
+    if (!peer || peer == slot) peer = xlate_ios_jit( slot );
+
+    if (peer && peer != slot)
+        InterlockedExchangePointer( (void *volatile *)peer, value );
+    return peer;
+}
+'''
+if s.count(old)!=1:
+    raise SystemExit(f"xlate_ios_jit_rev anchor count={s.count(old)}")
+s=s.replace(old,new,1)
+sig.write_text(s)
+
+sp=spec.read_text()
+old='''@ extern -private -arch=arm64,arm64ec p_ios_jit_reverse_translate_addr
+'''
+new=old+'''@ cdecl -private -arch=arm64ec __wine_ios_sync_pointer(ptr ptr)
+'''
+if sp.count(old)!=1:
+    raise SystemExit(f"ntdll.spec reverse-hook anchor count={sp.count(old)}")
+sp=sp.replace(old,new,1)
+spec.write_text(sp)
+
+c=crt.read_text()
+marker="[pioinfo-sync] rev=clayton-6"
+if marker in c:
+    raise SystemExit("clayton-6 msvcrt marker already present in pristine source")
+
+old='''ioinfo * MSVCRT___pioinfo[MSVCRT_MAX_FILES/MSVCRT_FD_BLOCK_SIZE] = { 0 };
+'''
+new=old+'''
+#ifdef __arm64ec__
+/* Private ntdll ARM64EC helper added by clayton-6. */
+extern void * CDECL __wine_ios_sync_pointer( void **slot, void *value );
+#endif
+'''
+if c.count(old)!=1:
+    raise SystemExit(f"__pioinfo declaration anchor count={c.count(old)}")
 c=c.replace(old,new,1)
-cfg.write_text(c)
 
-m=mod.read_text()
-marker="[first-pixels] rev=clayton-5"
-if marker in m:
-    raise SystemExit("clayton-5 marker already present in pristine FEX source")
-old='''  FEXCore::Config::ReloadMetaLayer();
-  FEX::Windows::Logging::Init();'''
-new='''  FEXCore::Config::ReloadMetaLayer();
-  FEX::Windows::Logging::Init();
-#ifdef FEX_IOS_HOST
-  /* clayton-5: correctness probe for the Ruby crash seen after Mesa finally
-   * reaches a real OpenGL context. The failing translation executes a memory
-   * load with host x8=0 while exception reconstruction shows the guest RAX is
-   * valid. MaxInst=1 forces guest state materialization at every instruction,
-   * trading all performance for correctness so we can prove/disprove stale
-   * JIT register state before touching Ruby, Mesa or the game again. */
-  FEX_CONFIG_OPT(FirstPixelsMaxInst, MAXINST);
-  LogMan::Msg::EFmt("[first-pixels] rev=clayton-5 MaxInst={} mode=one-instruction-blocks",
-                    FirstPixelsMaxInst());
-#endif'''
-if m.count(old) != 1:
-    raise SystemExit(f"Module config/log anchor count={m.count(old)}")
-m=m.replace(old,new,1)
-mod.write_text(m)
+old='''    if(InterlockedCompareExchangePointer((void**)&MSVCRT___pioinfo[fd/MSVCRT_FD_BLOCK_SIZE], block, NULL))
+    {
+        if (ioinfo_is_crit_init(&block[0]))
+        {
+            for(i = 0; i < MSVCRT_FD_BLOCK_SIZE; ++i)
+                DeleteCriticalSection(&block[i].crit);
+        }
+        free(block);
+    }
+    return TRUE;
+'''
+new='''    {
+        const int block_index = fd / MSVCRT_FD_BLOCK_SIZE;
+        ioinfo *winner;
 
-if '"Default": "1"' not in c or marker not in m:
-    raise SystemExit("clayton-5 source verification failed")
-print("fex-maxinst1-source=PASS rev=clayton-5 default=1")
+        winner = InterlockedCompareExchangePointer((void**)&MSVCRT___pioinfo[block_index], block, NULL);
+        if (winner)
+        {
+            if (ioinfo_is_crit_init(&block[0]))
+            {
+                for(i = 0; i < MSVCRT_FD_BLOCK_SIZE; ++i)
+                    DeleteCriticalSection(&block[i].crit);
+            }
+            free(block);
+        }
+        else winner = block;
+
+#ifdef __arm64ec__
+        {
+            void *slot = &MSVCRT___pioinfo[block_index];
+            void *peer = __wine_ios_sync_pointer((void **)slot, winner);
+            static LONG sync_count;
+            LONG n = InterlockedIncrement(&sync_count);
+
+            if (n <= 16)
+                ERR("[pioinfo-sync] rev=clayton-6 #%ld fd=%d block=%d slot=%p peer=%p value=%p\\n",
+                    n, fd, block_index, slot, peer, winner);
+        }
+#endif
+    }
+    return TRUE;
+'''
+if c.count(old)!=1:
+    raise SystemExit(f"alloc_pioinfo_block publication anchor count={c.count(old)}")
+c=c.replace(old,new,1)
+crt.write_text(c)
+
+if helper_marker not in s or "__wine_ios_sync_pointer" not in sp or marker not in c:
+    raise SystemExit("clayton-6 source verification failed")
+print("wine-pioinfo-source=PASS rev=clayton-6")
+print("wine-pioinfo-cause=Ruby direct __pioinfo data import vs msvcrt JIT-pool data")
 PY
-
 
 say "Patch FEX InvalidationTracker storage out of the executable JIT-pool image"
 python3 - "$SRC/FEX/Source/Windows/ARM64EC/Module.cpp" <<'PY' | tee -a "$REPORT"
@@ -306,6 +390,18 @@ tar -C "$SRC/toolchains" -xf "$MINGW_TAR"
 export PATH="$MINGW_DIR/bin:$PATH"
 test -x "$MINGW_DIR/bin/arm64ec-w64-mingw32-clang"
 
+say "Verify FEX diagnostic rollback: normal block limit restored"
+python3 - "$SRC/FEX/FEXCore/Source/Interface/Config/Config.json.in" <<'PY' | tee -a "$REPORT"
+import pathlib,sys
+t=pathlib.Path(sys.argv[1]).read_text()
+needle='''      "MaxInst": {
+        "Type": "int32",
+        "Default": "5000",'''
+if t.count(needle) != 1:
+    raise SystemExit("FEX MaxInst is not restored to upstream 5000")
+print("fex-maxinst=5000 PASS (clayton-5 diagnostic removed)")
+PY
+
 say "Build patched ARM64EC FEX module"
 FEX_BUILD="$SRC/FEX/build-arm64ec"
 rm -rf "$FEX_BUILD"
@@ -347,19 +443,21 @@ mkdir -p "$B"
 )
 
 say "Build the complete Wine system-DLL chain required by Brawlhalla Adobe AIR"
-WINE_DLL_NAMES=(msi mscms cabinet sxs mspatcha odbccp32)
+WINE_DLL_NAMES=(ntdll msvcrt msi mscms cabinet sxs mspatcha odbccp32)
 for mod in "${WINE_DLL_NAMES[@]}"; do
   echo "Building Wine ARM64EC module: $mod.dll"
   make -C "$B/dlls/$mod" -j"$JOBS"
 done
 
+NTDLL="$B/dlls/ntdll/arm64ec-windows/ntdll.dll"
+MSVCRT="$B/dlls/msvcrt/arm64ec-windows/msvcrt.dll"
 MSI="$B/dlls/msi/arm64ec-windows/msi.dll"
 MSCMS="$B/dlls/mscms/arm64ec-windows/mscms.dll"
 CABINET="$B/dlls/cabinet/arm64ec-windows/cabinet.dll"
 SXS="$B/dlls/sxs/arm64ec-windows/sxs.dll"
 MSPATCHA="$B/dlls/mspatcha/arm64ec-windows/mspatcha.dll"
 ODBCCP32="$B/dlls/odbccp32/arm64ec-windows/odbccp32.dll"
-WINE_DLL_PATHS=("$MSI" "$MSCMS" "$CABINET" "$SXS" "$MSPATCHA" "$ODBCCP32")
+WINE_DLL_PATHS=("$NTDLL" "$MSVCRT" "$MSI" "$MSCMS" "$CABINET" "$SXS" "$MSPATCHA" "$ODBCCP32")
 
 for p in "${WINE_DLL_PATHS[@]}"; do
   test -s "$p"
@@ -569,9 +667,11 @@ for pth in sys.argv[1:]:
 print("mesa-runtime-status=READY (x64 WGL; llvmpipe is Mesa's software fallback)")
 PY
 
-say "Inject patched FEX plus the complete Adobe AIR Wine DLL chain into the ARM64EC farm"
+say "Inject patched FEX, Ruby CRT coherence fix, and Adobe AIR Wine DLL chain into the ARM64EC farm"
 mkdir -p "$APP/arm64ec-windows"
 cp "$PATCHED_FEX" "$APP/arm64ec-windows/xtajit64.dll"
+cp "$NTDLL"    "$APP/arm64ec-windows/ntdll.dll"
+cp "$MSVCRT"   "$APP/arm64ec-windows/msvcrt.dll"
 cp "$MSI"      "$APP/arm64ec-windows/msi.dll"
 cp "$MSCMS"    "$APP/arm64ec-windows/mscms.dll"
 cp "$CABINET"  "$APP/arm64ec-windows/cabinet.dll"
@@ -591,7 +691,12 @@ cp "$MESA_GALLIUM" "$APP/arm64ec-windows/libgallium_wgl.dll"
 test -s "$APP/arm64ec-windows/xtajit64.dll"
 strings "$APP/arm64ec-windows/xtajit64.dll" | grep -F "invalidation-tracker-heap rev=clayton-2" | tee -a "$REPORT"
 strings "$APP/arm64ec-windows/xtajit64.dll" | grep -F "image-map-dedupe rev=clayton-4" | tee -a "$REPORT"
-strings "$APP/arm64ec-windows/xtajit64.dll" | grep -F "[first-pixels] rev=clayton-5" | tee -a "$REPORT"
+if strings "$APP/arm64ec-windows/xtajit64.dll" | grep -F "[first-pixels] rev=clayton-5" >/dev/null; then
+  echo "unexpected clayton-5 MaxInst diagnostic survived" >&2
+  exit 1
+fi
+strings "$APP/arm64ec-windows/msvcrt.dll" | grep -F "[pioinfo-sync] rev=clayton-6" | tee -a "$REPORT"
+strings "$APP/arm64ec-windows/ntdll.dll" | grep -F "pioinfo-sync-helper rev=clayton-6" | tee -a "$REPORT"
 test -s "$APP/arm64ec-windows/opengl32.dll"
 test -s "$APP/arm64ec-windows/libgallium_wgl.dll"
 python3 - "$APP/arm64ec-windows/opengl32.dll" "$APP/arm64ec-windows/libgallium_wgl.dll" <<'PY' | tee -a "$REPORT"
