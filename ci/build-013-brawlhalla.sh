@@ -16,7 +16,7 @@ VCREDIST_SHA="cc0ff0eb1dc3f5188ae6300faef32bf5beeba4bdd6e8e445a9184072096b713b"
 LLVM_MINGW_SHA="bd85a3975723815cef28dbbd2ca2cb0c926f6b348a12a0453f39f7af273cb3f7"
 MESA_VERSION="26.2.3"
 MESA_MSVC_SHA="3f3613adb43cfd0f2e665ce2400b130c275f0b3317cb3a05566320a3a67589ed"
-IPA_NAME="Madeira-0.1.3-Injustice-R6025-RealFault-R7.ipa"
+IPA_NAME="Madeira-0.1.3-Injustice-GTAIV-R8.ipa"
 
 mkdir -p "$WORK" "$OUT"
 : > "$REPORT"
@@ -42,7 +42,7 @@ if [ "$JOBS" -gt 8 ]; then JOBS=8; fi
 record "base=Madeira v0.1.3"
 record "upstream=$UPSTREAM_SHA"
 record "wine=$WINE_SHA"
-record "strategy=R7: Injustice real first-fault heal for guest 0x15570000/host-window peer before secondary R6025; exact 1MiB quarantine retained as secondary guard; GTAIV R6 fixes preserved"
+record "strategy=R8: preserve R7 Injustice first-fault heal; GTAIV log-driven rollback of unsafe forced Reset/pacing/hard-coded mode while retaining native D3D9 + per-HWND Metal path"
 record "jobs=$JOBS"
 record "xcode=$(xcodebuild -version | tr '\n' ' ')"
 
@@ -432,21 +432,10 @@ anchor='''/* -------------------------------------------------------------------
  * Reset / ResetEx
  * ------------------------------------------------------------------------ */
 '''
-helper=r'''/* clayton-23/24: GTA IV compatibility is kept in the 32-bit shim, where the
- * real Win32 HWND and the application's own Present call both exist.
- *
- * The R5 host-side experiment rewrote Reset to a hard-coded 1280x720, which
- * split the 1280x720 backbuffer from GTA's still-800x600 Win32 client.  Keep
- * the resolution selected by Madeira instead: the successful initial
- * CreateDevice already copied that configured extent into device_extra, so
- * every later GTA reset is pinned back to that exact per-session extent and
- * the Win32 window is restyled/resized before the native Reset sees it.
- *
- * R5 also proved DXMT's display-sync / afterMinimumDuration path does not
- * throttle the guest caller: GTA reached >600k Present calls in ~75 seconds.
- * GTA IV's loading code is frame-count sensitive, so pace the GUEST Present
- * call itself at ~30 fps after its first mode reset.  This is GTAIV.exe-only;
- * Injustice and every other D3D9 title keep their existing timing. */
+helper=r'''/* R8 GTA IV correction: keep detection in the 32-bit shim only for targeted
+ * diagnostics. The R6 log disproved forced mode conversion and guest-side
+ * Present sleeping: GTA must own its Reset parameters so RT/DS resources stay
+ * coherent and the game's normal loading transition can complete. */
 static int
 d3d9shim_is_gtaiv(void)
 {
@@ -469,38 +458,14 @@ d3d9shim_is_gtaiv(void)
         --base;
     if (!_stricmp(base, "GTAIV.exe")) {
         InterlockedExchange(&cached, 1);
-        d3d9shim_log_once("[gtaiv-r6] clayton-23 detected GTAIV.exe");
+        d3d9shim_log_once("[gtaiv-r8] detected GTAIV.exe; native Reset parameters remain application-owned");
         return 1;
     }
     InterlockedExchange(&cached, -1);
     return 0;
 }
 
-static LONG gtaiv_present_pacing;
-static ULONGLONG gtaiv_next_present_ms;
 
-static void
-d3d9shim_gtaiv_pace_present(void)
-{
-    ULONGLONG now, target;
-    DWORD sleep_ms;
-
-    if (!InterlockedCompareExchange(&gtaiv_present_pacing, 0, 0))
-        return;
-
-    now = GetTickCount64();
-    target = gtaiv_next_present_ms;
-    if (!target || now > target + 250)
-        target = now;
-    target += 33; /* 30.3 fps; guest-visible pacing, not only display pacing. */
-    if (target > now) {
-        sleep_ms = (DWORD)(target - now);
-        if (sleep_ms)
-            Sleep(sleep_ms);
-    }
-    now = GetTickCount64();
-    gtaiv_next_present_ms = target > now ? target : now;
-}
 
 '''
 if t.count(anchor)!=1:
@@ -518,27 +483,15 @@ new='''    device_window = parameters->hDeviceWindow;
     if (!device_window && extra)
         device_window = extra->focus_window;
 
-    /* GTA's menu asks to fall back to 800x600 windowed and later to a second
-     * windowed size.  On Madeira that destroys the configured display shape.
-     * Pin those resets to the INITIAL successful CreateDevice extent -- which
-     * is the resolution the user selected in Madeira for this launch. */
+    /* R8: pass GTA's requested mode through unchanged. R6 forced the
+     * backbuffer to Madeira's launch size while GTA kept an 800x600 depth
+     * surface, producing the exact RT/DS mismatch in the R6 device log.
+     * Window geometry still follows the successful native Reset below. */
     if (d3d9shim_is_gtaiv() && extra
-        && extra->backbuffer_width && extra->backbuffer_height
         && (parameters->Windowed
             || parameters->BackBufferWidth != extra->backbuffer_width
-            || parameters->BackBufferHeight != extra->backbuffer_height)) {
-        parameters->BackBufferWidth = extra->backbuffer_width;
-        parameters->BackBufferHeight = extra->backbuffer_height;
-        parameters->Windowed = FALSE;
-        parameters->FullScreen_RefreshRateInHz = 0;
-        parameters->PresentationInterval = D3DPRESENT_INTERVAL_ONE;
-        d3d9shim_window_enter_fullscreen(dev, device_window,
-                                         parameters->BackBufferWidth,
-                                         parameters->BackBufferHeight);
-        InterlockedExchange(&gtaiv_present_pacing, 1);
-        gtaiv_next_present_ms = 0;
-        d3d9shim_log_once("[gtaiv-r6] clayton-23 Reset pinned to Madeira launch resolution; clayton-24 guest Present pacing enabled");
-    }
+            || parameters->BackBufferHeight != extra->backbuffer_height))
+        d3d9shim_log_once("[gtaiv-r8] Reset passed through unchanged to keep render-target/depth-stencil dimensions coherent");
 
     /* Same ordering rule as CreateDevice: a zero extent is filled from the
      * client rect, so push the cache first. */
@@ -553,8 +506,6 @@ old='''    hr = has_flags ? (HRESULT)p.present_ex.ret : (HRESULT)p.present.ret;
     return hr;
 '''
 new='''    hr = has_flags ? (HRESULT)p.present_ex.ret : (HRESULT)p.present.ret;
-    if (SUCCEEDED(hr) && d3d9shim_is_gtaiv())
-        d3d9shim_gtaiv_pace_present();
     d3d9shim_unlock(dev);
     return hr;
 '''
@@ -565,16 +516,16 @@ custom.write_text(t)
 
 for marker in (
     "clayton-25 default: native ARM64 first",
-    "[gtaiv-r6] clayton-23 detected GTAIV.exe",
-    "clayton-24 guest Present pacing enabled",
+    "[gtaiv-r8] detected GTAIV.exe; native Reset parameters remain application-owned",
+    "[gtaiv-r8] Reset passed through unchanged to keep render-target/depth-stencil dimensions coherent",
 ):
     if marker not in main.read_text() + custom.read_text():
         raise SystemExit("missing source marker: "+marker)
-print("d3d9shim-source=PASS clayton-23 configured-resolution lock + clayton-24 guest Present pacing + clayton-25 native-first")
+print("d3d9shim-source=PASS R8 GTA Reset pass-through + no guest Present sleep + clayton-25 native-first")
 PY
 
 say "Configure minimal i386 Wine build tree for the rebuilt D3D9 shim"
-I386_B="$SRC/wine/build-i386-r6"
+I386_B="$SRC/wine/build-i386-r8"
 rm -rf "$I386_B"
 mkdir -p "$I386_B"
 (
@@ -589,8 +540,8 @@ make -C "$I386_B/dlls/user32" -j"$JOBS"
 make -C "$I386_B/dlls/gdi32" -j"$JOBS"
 
 say "Build only the pinned DXMT i386 d3d9shim target"
-DXMT_BUILD="$SRC/dxmt/build-pe-i386-r6"
-DXMT_CROSS="$WORK/dxmt-cross-i386-r6.txt"
+DXMT_BUILD="$SRC/dxmt/build-pe-i386-r8"
+DXMT_CROSS="$WORK/dxmt-cross-i386-r8.txt"
 rm -rf "$DXMT_BUILD"
 cat > "$DXMT_CROSS" <<EOF
 [binaries]
@@ -617,13 +568,13 @@ EOF
 )
 D3D9_R6_RAW="$(find "$DXMT_BUILD" -type f -path '*/d3d9shim/d3d9shim.dll' -print -quit)"
 test -n "$D3D9_R6_RAW" && test -s "$D3D9_R6_RAW"
-PATCHED_D3D9_SHIM="$WORK/d3d9shim-r6.dll"
+PATCHED_D3D9_SHIM="$WORK/d3d9shim-r8.dll"
 "$MINGW_DIR/bin/i686-w64-mingw32-strip" --strip-debug -o "$PATCHED_D3D9_SHIM" "$D3D9_R6_RAW"
 test -s "$PATCHED_D3D9_SHIM"
-strings "$PATCHED_D3D9_SHIM" | grep -F "[gtaiv-r6] clayton-23 detected GTAIV.exe" | tee -a "$REPORT"
-strings "$PATCHED_D3D9_SHIM" | grep -F "clayton-24 guest Present pacing enabled" | tee -a "$REPORT"
+strings "$PATCHED_D3D9_SHIM" | grep -F "[gtaiv-r8] detected GTAIV.exe; native Reset parameters remain application-owned" | tee -a "$REPORT"
+strings "$PATCHED_D3D9_SHIM" | grep -F "[gtaiv-r8] Reset passed through unchanged to keep render-target/depth-stencil dimensions coherent" | tee -a "$REPORT"
 strings "$PATCHED_D3D9_SHIM" | grep -F "clayton-25 default: native ARM64 first" | tee -a "$REPORT"
-"$MINGW_DIR/bin/llvm-objdump" -p "$PATCHED_D3D9_SHIM" | grep -E 'GetModuleFileNameA|GetTickCount64|Sleep|SetWindowPos' | tee -a "$REPORT"
+"$MINGW_DIR/bin/llvm-objdump" -p "$PATCHED_D3D9_SHIM" | grep -E 'GetModuleFileNameA|SetWindowPos' | tee -a "$REPORT"
 record "d3d9shim-r6-sha256=$(shasum -a 256 "$PATCHED_D3D9_SHIM" | awk '{print $1}')"
 
 say "Verify FEX diagnostic rollback: normal block limit restored"
@@ -824,17 +775,13 @@ BUS_UNREADABLE_NORMAL=0x994338
 BUS_READABLE_PATH=0x994500
 BUS_RESUME_PATH=0x994b90
 
-# clayton-15: GTA IV requests the Madeira-selected 1408x648 as an exclusive
-# fullscreen D3D9 mode. The native frontend's 18-mode table ends in 1152x648,
-# so CanonicalisePresentParams rejects 1408x648 with D3DERR_INVALIDCALL before
-# a Metal device can exist. Replace only that unique last mode with 1408x648.
+# R8: preserve the official D3D9 mode table and Reset safety gate. The R6
+# device log proves the forced 1280x720 Reset left GTA's depth-stencil at
+# 800x600, and bypassing the losable-resource guard allowed an inconsistent
+# resource set to survive into the asynchronous encoder. The per-HWND Metal
+# path below remains enabled; only the unsafe mode/Reset overrides are removed.
 D3D9_GTA_MODE_WIDTH_SITE=0x22a47fc
 D3D9_GTA_MODE_HEIGHT_SITE=0x22a4800
-# clayton-17: GTA IV gets past CreateDevice on CI41, but its later non-Ex
-# Reset returns D3DERR_INVALIDCALL (0x8876086c) because DXMT rejects Reset
-# while m_losableResourceCount is nonzero. The GTA log shows this exact HRESULT
-# immediately after the 800x600 -> 640x480 reset sequence. Let Reset continue;
-# the shim invalidates its children after a successful native reset.
 D3D9_GTA_RESET_LOSABLE_GATE_SITE=0x1aade04
 
 # clayton-18: GTA IV now creates and resets the native D3D9 device, and its
@@ -1051,15 +998,11 @@ put32(INJUSTICE_HOLE_SITE,enc_b(INJUSTICE_HOLE_SITE,h))
 for i,ins in enumerate(hcode): put32(h+i*4,ins)
 d[INJUSTICE_HOLE_MARKER_SITE:INJUSTICE_HOLE_MARKER_SITE+len(INJUSTICE_HOLE_MARKER)] = INJUSTICE_HOLE_MARKER
 
-# GTA IV: make the exact Madeira landscape resolution a legal D3D9 fullscreen
-# adapter mode. The frontend still validates every other mode exactly as before.
-put32(D3D9_GTA_MODE_WIDTH_SITE,1408)
-# cbnz w8, failure -> nop: do not reject GTA IV Reset solely because the
-# non-Ex device still reports losable resources at the mode transition.
-put32(D3D9_GTA_RESET_LOSABLE_GATE_SITE,0xD503201F)
+# R8: DO NOT rewrite the adapter-mode table and DO NOT bypass the native
+# losable-resource Reset guard. Both locations were validated pristine above.
 
-# GTA IV's Wine client/compositor exists and follows its 1408x648 -> 800x600
-# mode changes. Keep DXMT's CAMetalLayer in that SAME hwnd instead of returning
+# GTA IV's Wine client/compositor exists and follows its mode changes. Keep
+# DXMT's CAMetalLayer in that SAME hwnd instead of returning
 # the unrelated fullscreen singleton. NOP the cbz after madeira_desktop_mode():
 # both desktop and direct-game sessions enter the existing per-window path.
 put32(D3D9_WINDOW_LAYER_GATE_SITE,0xD503201F)
@@ -1132,10 +1075,10 @@ print("direct-surface=PASS rev=clayton-21 compositor remains present-driven whil
 print("touch-input=PASS rev=clayton-9 overlay visible at session start + early player-1 XInput reservation")
 print("wow64-section-quarantine=PASS rev=clayton-14 only guest 0x3c680000 / host-window peer / size 1MiB is retained")
 print("injustice-r6025-root=PASS rev=clayton-26 guest 0x15570000 anonymous 0x18000 PROT_NONE hole materialises RW and retries before secondary R6025")
-print("d3d9-mode=PASS rev=clayton-15 adapter tail mode 1152x648 -> 1408x648 for GTAIV fullscreen")
+print("d3d9-mode=PASS R8 official adapter tail mode 1152x648 preserved; no hard-coded GTA resolution")
 if struct.unpack_from("<I",e,D3D9_WINDOW_LAYER_GATE_SITE)[0] != 0xD503201F:
     raise SystemExit("per-HWND Metal layer gate patch mismatch")
-print("d3d9-reset=PASS rev=clayton-17 GTAIV non-Ex Reset bypasses only the losable-resource reject gate")
+print("d3d9-reset=PASS R8 official losable-resource Reset guard preserved; no unsafe forced reset")
 print("gta-window-metal=PASS rev=clayton-18 DXMT uses Winios per-HWND CAMetalLayer in direct-game sessions")
 print("gta-window-geometry=PASS rev=clayton-21 direct-mode WindowPosChanged forwards the client rect to the per-HWND Metal layer")
 print("dxmt-cpu-cache=REVERTED rev=clayton-20 R3 experiment removed; R2-stable resource-option instructions preserved")
@@ -1165,9 +1108,9 @@ checks={
     0x4526e0:0x52800020,
     0x579020:0x52800020,
     0x97ea4c:0x146C0533,
-    0x22a47fc:1408,
+    0x22a47fc:1152,
     0x22a4800:648,
-    0x1aade04:0xD503201F,
+    0x1aade04:0x35001B28,
     0x1c724:0xD503201F,
     # clayton-20: verify the five R3 DXMT cache sites remain pristine.
     0xa55ef0:0xD2800005,
@@ -1196,8 +1139,8 @@ cp "$PATCHED_D3D9_SHIM" "$D3D9_SHIM"
 python3 - "$D3D9_DLL" "$D3D9_SHIM" <<'PY' | tee -a "$REPORT"
 import hashlib, pathlib, struct, subprocess, sys
 markers=[
- b"[gtaiv-r6] clayton-23 detected GTAIV.exe",
- b"clayton-24 guest Present pacing enabled",
+ b"[gtaiv-r8] detected GTAIV.exe; native Reset parameters remain application-owned",
+ b"[gtaiv-r8] Reset passed through unchanged to keep render-target/depth-stencil dimensions coherent",
  b"clayton-25 default: native ARM64 first",
 ]
 for raw in sys.argv[1:]:
@@ -1209,8 +1152,8 @@ for raw in sys.argv[1:]:
         raise SystemExit(f"{p.name}: expected i386")
     for m in markers:
         if m not in d: raise SystemExit(f"{p.name}: missing marker {m!r}")
-    print(f"d3d9-r6={p.name} sha256={hashlib.sha256(d).hexdigest()} size={len(d)}")
-print("d3d9-r6=PASS source-rebuilt shim; GTAIV keeps Madeira launch resolution and guest Present is actually paced; native-first fallback preserved")
+    print(f"d3d9-r8={p.name} sha256={hashlib.sha256(d).hexdigest()} size={len(d)}")
+print("d3d9-r8=PASS source-rebuilt shim; GTAIV Reset is application-owned, RT/DS coherence restored, guest Present sleep removed; native-first fallback preserved")
 PY
 
 say "Fetch pinned Mesa3D x64 WGL runtime for OpenGL software fallback"
