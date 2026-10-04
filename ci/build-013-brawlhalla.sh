@@ -15,7 +15,7 @@ VCREDIST_SHA="cc0ff0eb1dc3f5188ae6300faef32bf5beeba4bdd6e8e445a9184072096b713b"
 LLVM_MINGW_SHA="bd85a3975723815cef28dbbd2ca2cb0c926f6b348a12a0453f39f7af273cb3f7"
 MESA_VERSION="26.2.3"
 MESA_MSVC_SHA="3f3613adb43cfd0f2e665ce2400b130c275f0b3317cb3a05566320a3a67589ed"
-IPA_NAME="Madeira-0.1.3-Mesa-LLVMPipe-OpenGL.ipa"
+IPA_NAME="Madeira-0.1.3-FEX-MaxInst1-FirstPixels.ipa"
 
 mkdir -p "$WORK" "$OUT"
 : > "$REPORT"
@@ -41,7 +41,7 @@ if [ "$JOBS" -gt 8 ]; then JOBS=8; fi
 record "base=Madeira v0.1.3"
 record "upstream=$UPSTREAM_SHA"
 record "wine=$WINE_SHA"
-record "strategy=official IPA + AIR FullChain + VC runtime + ProcessDebugObjectHandle guard + actual madsync + non-Steam Steam-env cleanup + FEX InvalidationTracker heap relocation + ARM64EC image-map dedupe + Mesa x64 WGL/llvmpipe fallback"
+record "strategy=official IPA + AIR FullChain + VC runtime + ProcessDebugObjectHandle guard + actual madsync + non-Steam Steam-env cleanup + FEX InvalidationTracker heap relocation + ARM64EC image-map dedupe + Mesa x64 WGL/llvmpipe fallback + FEX MaxInst=1 first-pixels diagnostic"
 record "jobs=$JOBS"
 record "xcode=$(xcodebuild -version | tr '\n' ' ')"
 
@@ -62,6 +62,54 @@ git -C "$SRC/FEX" submodule update --init --recursive
 test "$(git -C "$SRC" rev-parse HEAD)" = "$UPSTREAM_SHA"
 test "$(git -C "$SRC/wine" rev-parse HEAD)" = "$WINE_SHA"
 test "$(git -C "$SRC/FEX" rev-parse HEAD)" = "$FEX_SHA"
+
+say "Force one-instruction FEX blocks for first-pixels correctness diagnostic"
+python3 - "$SRC/FEX/FEXCore/Source/Interface/Config/Config.json.in" "$SRC/FEX/Source/Windows/ARM64EC/Module.cpp" <<'PY' | tee -a "$REPORT"
+import pathlib, sys
+cfg=pathlib.Path(sys.argv[1])
+mod=pathlib.Path(sys.argv[2])
+
+c=cfg.read_text()
+old='''      "MaxInst": {
+        "Type": "int32",
+        "Default": "5000",'''
+new='''      "MaxInst": {
+        "Type": "int32",
+        "Default": "1",'''
+if c.count(old) != 1:
+    raise SystemExit(f"MaxInst default anchor count={c.count(old)}")
+c=c.replace(old,new,1)
+cfg.write_text(c)
+
+m=mod.read_text()
+marker="[first-pixels] rev=clayton-5"
+if marker in m:
+    raise SystemExit("clayton-5 marker already present in pristine FEX source")
+old='''  FEXCore::Config::ReloadMetaLayer();
+  FEX::Windows::Logging::Init();'''
+new='''  FEXCore::Config::ReloadMetaLayer();
+  FEX::Windows::Logging::Init();
+#ifdef FEX_IOS_HOST
+  /* clayton-5: correctness probe for the Ruby crash seen after Mesa finally
+   * reaches a real OpenGL context. The failing translation executes a memory
+   * load with host x8=0 while exception reconstruction shows the guest RAX is
+   * valid. MaxInst=1 forces guest state materialization at every instruction,
+   * trading all performance for correctness so we can prove/disprove stale
+   * JIT register state before touching Ruby, Mesa or the game again. */
+  FEX_CONFIG_OPT(FirstPixelsMaxInst, MAXINST);
+  LogMan::Msg::EFmt("[first-pixels] rev=clayton-5 MaxInst={} mode=one-instruction-blocks",
+                    FirstPixelsMaxInst());
+#endif'''
+if m.count(old) != 1:
+    raise SystemExit(f"Module config/log anchor count={m.count(old)}")
+m=m.replace(old,new,1)
+mod.write_text(m)
+
+if '"Default": "1"' not in c or marker not in m:
+    raise SystemExit("clayton-5 source verification failed")
+print("fex-maxinst1-source=PASS rev=clayton-5 default=1")
+PY
+
 
 say "Patch FEX InvalidationTracker storage out of the executable JIT-pool image"
 python3 - "$SRC/FEX/Source/Windows/ARM64EC/Module.cpp" <<'PY' | tee -a "$REPORT"
@@ -543,6 +591,7 @@ cp "$MESA_GALLIUM" "$APP/arm64ec-windows/libgallium_wgl.dll"
 test -s "$APP/arm64ec-windows/xtajit64.dll"
 strings "$APP/arm64ec-windows/xtajit64.dll" | grep -F "invalidation-tracker-heap rev=clayton-2" | tee -a "$REPORT"
 strings "$APP/arm64ec-windows/xtajit64.dll" | grep -F "image-map-dedupe rev=clayton-4" | tee -a "$REPORT"
+strings "$APP/arm64ec-windows/xtajit64.dll" | grep -F "[first-pixels] rev=clayton-5" | tee -a "$REPORT"
 test -s "$APP/arm64ec-windows/opengl32.dll"
 test -s "$APP/arm64ec-windows/libgallium_wgl.dll"
 python3 - "$APP/arm64ec-windows/opengl32.dll" "$APP/arm64ec-windows/libgallium_wgl.dll" <<'PY' | tee -a "$REPORT"
