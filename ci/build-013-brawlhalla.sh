@@ -15,7 +15,7 @@ VCREDIST_SHA="cc0ff0eb1dc3f5188ae6300faef32bf5beeba4bdd6e8e445a9184072096b713b"
 LLVM_MINGW_SHA="bd85a3975723815cef28dbbd2ca2cb0c926f6b348a12a0453f39f7af273cb3f7"
 MESA_VERSION="26.2.3"
 MESA_MSVC_SHA="3f3613adb43cfd0f2e665ce2400b130c275f0b3317cb3a05566320a3a67589ed"
-IPA_NAME="Madeira-0.1.3-Direct-Software-Surface-v2.ipa"
+IPA_NAME="Madeira-0.1.3-Controls-D3D9-Fix.ipa"
 
 mkdir -p "$WORK" "$OUT"
 : > "$REPORT"
@@ -41,7 +41,7 @@ if [ "$JOBS" -gt 8 ]; then JOBS=8; fi
 record "base=Madeira v0.1.3"
 record "upstream=$UPSTREAM_SHA"
 record "wine=$WINE_SHA"
-record "strategy=official IPA + AIR FullChain + VC runtime + ProcessDebugObjectHandle guard + actual madsync + non-Steam Steam-env cleanup + FEX InvalidationTracker heap relocation + ARM64EC image-map dedupe + Mesa x64 WGL/llvmpipe fallback + Ruby/MSVCRT __pioinfo PE-pool mirror + direct software-surface compositor + direct compositor creation gate"
+record "strategy=official IPA + AIR FullChain + VC runtime + ProcessDebugObjectHandle guard + actual madsync + non-Steam Steam-env cleanup + FEX InvalidationTracker heap relocation + ARM64EC image-map dedupe + Mesa x64 WGL/llvmpipe fallback + Ruby/MSVCRT __pioinfo PE-pool mirror + direct software-surface compositor + direct compositor creation gate + touch-controls visible/early XInput slot + 32-bit D3D9 native-first fallback"
 record "jobs=$JOBS"
 record "xcode=$(xcodebuild -version | tr '\n' ' ')"
 
@@ -537,6 +537,14 @@ DIRECT_SURFACE_LOG_SITE=0x20fb195
 DIRECT_SURFACE_LOG_OLD=b"[winios] desktop mode: window-surface compositing ENABLED\n"
 DIRECT_SURFACE_LOG_NEW=b"[winios] clayton-8 direct compositor path ENABLED\n"
 
+# clayton-9: Pokemon Anil / Left 4 Dead logs prove raw touch reaches Wine as
+# mouse input while the library touch overlay is hidden and player 1 is not
+# reserved early. Show the existing control layout at session start and reserve
+# a neutral XInput slot before the game enumerates controllers.
+TOUCH_SLOT_OPTIN_SITE=0x403c80
+TOUCH_SLOT_ARG_SITE=0x4526e0
+TOUCH_VISIBLE_SITE=0x579020
+
 def u32(off): return struct.unpack_from("<I",d,off)[0]
 def put32(off,v): struct.pack_into("<I",d,off,v)
 def enc_b(pc,target):
@@ -578,6 +586,12 @@ if u32(DIRECT_COMPOSITOR_GATE_SITE) != 0xD000FDC0:
     raise SystemExit(f"unexpected direct-compositor gate {u32(DIRECT_COMPOSITOR_GATE_SITE):#010x}")
 if d[DIRECT_SURFACE_LOG_SITE:DIRECT_SURFACE_LOG_SITE+len(DIRECT_SURFACE_LOG_OLD)] != DIRECT_SURFACE_LOG_OLD:
     raise SystemExit("unexpected direct-surface log literal")
+if u32(TOUCH_SLOT_OPTIN_SITE) != 0x360024E0:
+    raise SystemExit(f"unexpected touch early-slot opt-in branch {u32(TOUCH_SLOT_OPTIN_SITE):#010x}")
+if u32(TOUCH_SLOT_ARG_SITE) != 0xB9425E60:
+    raise SystemExit(f"unexpected touch reserve argument load {u32(TOUCH_SLOT_ARG_SITE):#010x}")
+if u32(TOUCH_VISIBLE_SITE) != 0x12000100:
+    raise SystemExit(f"unexpected touch-controls visible assignment {u32(TOUCH_VISIBLE_SITE):#010x}")
 
 code=[
     enc_cbz_x(19,CAVE,CAVE+0x18),
@@ -623,6 +637,11 @@ put32(DIRECT_COMPOSITOR_GATE_SITE,enc_b(DIRECT_COMPOSITOR_GATE_SITE,DIRECT_COMPO
 d[DIRECT_SURFACE_LOG_SITE:DIRECT_SURFACE_LOG_SITE+len(DIRECT_SURFACE_LOG_OLD)] = \
     DIRECT_SURFACE_LOG_NEW + b"\0" * (len(DIRECT_SURFACE_LOG_OLD)-len(DIRECT_SURFACE_LOG_NEW))
 
+# Touch controls / XInput session bootstrap.
+put32(TOUCH_SLOT_OPTIN_SITE,0xD503201F)  # nop: no MADEIRA_PAD_EARLY_SLOT opt-in required
+put32(TOUCH_SLOT_ARG_SITE,0x52800020)    # mov w0,#1: touch-capable player 1
+put32(TOUCH_VISIBLE_SITE,0x52800020)     # mov w0,#1: controls.visible = true at begin()
+
 p.write_bytes(d)
 
 e=p.read_bytes()
@@ -647,10 +666,19 @@ if struct.unpack_from("<I",e,DIRECT_COMPOSITOR_GATE_SITE)[0] != enc_b(DIRECT_COM
     raise SystemExit("direct-compositor creation gate patch mismatch")
 if DIRECT_SURFACE_LOG_NEW not in e:
     raise SystemExit("direct-surface runtime marker missing")
+for off,want in {
+    TOUCH_SLOT_OPTIN_SITE:0xD503201F,
+    TOUCH_SLOT_ARG_SITE:0x52800020,
+    TOUCH_VISIBLE_SITE:0x52800020,
+}.items():
+    got=struct.unpack_from("<I",e,off)[0]
+    if got != want:
+        raise SystemExit(f"touch-input patch mismatch at {off:#x}: {got:#010x} != {want:#010x}")
 print("native-patch=PASS ProcessDebugObjectHandle ret_len low-page guard")
 print("sync-default=PASS actual _madsync_enabled: absent inproc-sync enters ENABLED path; explicit inproc-sync=0 preserved")
 print("steam-env-clean=PASS generic launch unsets SteamAppPath/SteamGameId/SteamAppId")
 print("direct-surface=PASS rev=clayton-8 pCreateWindowSurface + window-frame + compositor creation enabled without setting MADEIRA_DESKTOP")
+print("touch-input=PASS rev=clayton-9 overlay visible at session start + early player-1 XInput reservation")
 print(f"native-dylib-patched-sha256={hashlib.sha256(e).hexdigest()}")
 PY
 
@@ -673,6 +701,9 @@ checks={
     0x1bf28a4:0xD503201F,
     0x1bf3d40:0xD503201F,
     0x1f6d4:0x1400000D,
+    0x403c80:0xD503201F,
+    0x4526e0:0x52800020,
+    0x579020:0x52800020,
 }
 for off,want in checks.items():
     got=struct.unpack_from("<I",d,off)[0]
@@ -680,7 +711,50 @@ for off,want in checks.items():
         raise SystemExit(f"native runtime patch lost after codesign at {off:#x}: {got:#010x} != {want:#010x}")
 if b"[winios] clayton-8 direct compositor path ENABLED\n" not in d:
     raise SystemExit("clayton-8 runtime marker lost after codesign")
-print("native-patch-after-codesign=PASS debug-object + actual-madsync-enabled + Steam-env-clean + direct-software-surface + compositor-gate")
+print("native-patch-after-codesign=PASS debug-object + actual-madsync-enabled + Steam-env-clean + direct-software-surface + compositor-gate + touch-controls/XInput")
+PY
+
+say "Patch 32-bit D3D9 default to native ARM64 first, preserving emulated fallback"
+D3D9_DLL="$APP/i386-windows/d3d9.dll"
+D3D9_SHIM="$APP/i386-windows/d3d9shim.dll"
+test -s "$D3D9_DLL" && test -s "$D3D9_SHIM"
+python3 - "$D3D9_DLL" "$D3D9_SHIM" <<'PY' | tee -a "$REPORT"
+import hashlib, pathlib, sys
+
+OFF=0x17A6
+# Direct3DCreate9 forwarding gate, pristine:
+#   and eax,-3 ; cmp eax,1 ; jne native
+# modes 1(DEFAULT) and 3(EMULATED) therefore both forwarded.
+# clayton-10:
+#   cmp eax,3 ; nop*3 ; jne native
+# mode 1 now tries native; mode 3 remains explicit emulated; mode 2 remains
+# explicit native. If default/native creation fails, the existing mode==1
+# fallback below still flips to 3 and retries d3d9-emulated.dll.
+OLD=bytes.fromhex("83 e0 fd 83 f8 01 75 15")
+NEW=bytes.fromhex("83 f8 03 90 90 90 75 15")
+OLD_LOG=(b"[d3d9] MADEIRA_D3D9 unset: forwarding to d3d9-emulated.dll "
+         b"(Documents/madeira-d3d9.txt = native selects the native ARM64 frontend)")
+NEW_LOG=b"[d3d9] clayton-10 default: native ARM64 first; emulated fallback on native create failure"
+
+for raw in sys.argv[1:]:
+    p=pathlib.Path(raw)
+    d=bytearray(p.read_bytes())
+    if d[OFF:OFF+len(OLD)] != OLD:
+        raise SystemExit(f"{p.name}: unexpected D3D9 dispatch bytes {d[OFF:OFF+len(OLD)].hex()}")
+    if d.count(OLD_LOG) != 1:
+        raise SystemExit(f"{p.name}: default D3D9 log anchor count={d.count(OLD_LOG)}")
+    d[OFF:OFF+len(NEW)] = NEW
+    pos=d.index(OLD_LOG)
+    d[pos:pos+len(OLD_LOG)] = NEW_LOG + b"\0"*(len(OLD_LOG)-len(NEW_LOG))
+    p.write_bytes(d)
+    e=p.read_bytes()
+    if e[OFF:OFF+len(NEW)] != NEW:
+        raise SystemExit(f"{p.name}: D3D9 dispatch read-back mismatch")
+    if NEW_LOG not in e:
+        raise SystemExit(f"{p.name}: clayton-10 runtime marker missing")
+    print(f"d3d9-native-first={p.name} rev=clayton-10 sha256={hashlib.sha256(e).hexdigest()} size={len(e)}")
+
+print("d3d9-native-first=PASS default native-first + existing mode=1 fallback; explicit emulated/native preserved")
 PY
 
 say "Fetch pinned Mesa3D x64 WGL runtime for OpenGL software fallback"
