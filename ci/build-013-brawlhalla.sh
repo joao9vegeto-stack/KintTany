@@ -13,7 +13,9 @@ FEX_SHA="26859e184ad90f0e811d7f8bbd943a4b1573a2c3"
 OFFICIAL_IPA_SHA="71e900cbc140778bd6fa67c1062821981ed98e6bfb674d853cfeefd6d242e1c0"
 VCREDIST_SHA="cc0ff0eb1dc3f5188ae6300faef32bf5beeba4bdd6e8e445a9184072096b713b"
 LLVM_MINGW_SHA="bd85a3975723815cef28dbbd2ca2cb0c926f6b348a12a0453f39f7af273cb3f7"
-IPA_NAME="Madeira-0.1.3-ImageMap-Dedupe-Fix.ipa"
+MESA_VERSION="26.2.3"
+MESA_MSVC_SHA="3f3613adb43cfd0f2e665ce2400b130c275f0b3317cb3a05566320a3a67589ed"
+IPA_NAME="Madeira-0.1.3-Mesa-LLVMPipe-OpenGL.ipa"
 
 mkdir -p "$WORK" "$OUT"
 : > "$REPORT"
@@ -39,12 +41,12 @@ if [ "$JOBS" -gt 8 ]; then JOBS=8; fi
 record "base=Madeira v0.1.3"
 record "upstream=$UPSTREAM_SHA"
 record "wine=$WINE_SHA"
-record "strategy=official IPA + AIR FullChain + VC runtime + ProcessDebugObjectHandle guard + actual madsync + non-Steam Steam-env cleanup + FEX InvalidationTracker heap relocation + ARM64EC image-map dedupe"
+record "strategy=official IPA + AIR FullChain + VC runtime + ProcessDebugObjectHandle guard + actual madsync + non-Steam Steam-env cleanup + FEX InvalidationTracker heap relocation + ARM64EC image-map dedupe + Mesa x64 WGL/llvmpipe fallback"
 record "jobs=$JOBS"
 record "xcode=$(xcodebuild -version | tr '\n' ' ')"
 
 say "Install minimal deterministic prerequisites"
-brew install bison flex cabextract xz pkg-config cmake ccache
+brew install bison flex cabextract xz pkg-config cmake ccache p7zip
 export PATH="$(brew --prefix bison)/bin:$(brew --prefix flex)/bin:$PATH"
 hash -r
 bison --version | head -1 | tee -a "$REPORT"
@@ -490,6 +492,35 @@ for off,want in checks.items():
 print("native-patch-after-codesign=PASS debug-object + actual-madsync-enabled + Steam-env-clean")
 PY
 
+say "Fetch pinned Mesa3D x64 WGL runtime for OpenGL software fallback"
+MESA_7Z="$WORK/mesa3d-$MESA_VERSION-release-msvc.7z"
+MESA_DIR="$WORK/mesa3d-$MESA_VERSION-msvc"
+curl -fL --retry 5 --retry-all-errors \
+  "https://github.com/pal1000/mesa-dist-win/releases/download/$MESA_VERSION/mesa3d-$MESA_VERSION-release-msvc.7z" \
+  -o "$MESA_7Z"
+echo "$MESA_MSVC_SHA  $MESA_7Z" | shasum -a 256 -c -
+rm -rf "$MESA_DIR"
+mkdir -p "$MESA_DIR"
+7z x -y "$MESA_7Z" "-o$MESA_DIR" >/dev/null
+
+MESA_GL="$(find "$MESA_DIR" -type f -path '*/x64/opengl32.dll' -print -quit)"
+MESA_GALLIUM="$(find "$MESA_DIR" -type f -path '*/x64/libgallium_wgl.dll' -print -quit)"
+test -n "$MESA_GL" && test -s "$MESA_GL"
+test -n "$MESA_GALLIUM" && test -s "$MESA_GALLIUM"
+
+python3 - "$MESA_GL" "$MESA_GALLIUM" <<'PY' | tee -a "$REPORT"
+import hashlib, pathlib, struct, sys
+for pth in sys.argv[1:]:
+    p=pathlib.Path(pth); d=p.read_bytes()
+    if d[:2] != b'MZ': raise SystemExit(f"{p.name}: not PE")
+    pe=struct.unpack_from('<I',d,0x3c)[0]
+    if d[pe:pe+4] != b'PE\0\0': raise SystemExit(f"{p.name}: invalid PE")
+    machine=struct.unpack_from('<H',d,pe+4)[0]
+    if machine != 0x8664: raise SystemExit(f"{p.name}: expected x86-64 PE, got {machine:#x}")
+    print(f"mesa-runtime={p.name} machine={machine:#x} sha256={hashlib.sha256(d).hexdigest()} size={len(d)}")
+print("mesa-runtime-status=READY (x64 WGL; llvmpipe is Mesa's software fallback)")
+PY
+
 say "Inject patched FEX plus the complete Adobe AIR Wine DLL chain into the ARM64EC farm"
 mkdir -p "$APP/arm64ec-windows"
 cp "$PATCHED_FEX" "$APP/arm64ec-windows/xtajit64.dll"
@@ -500,9 +531,30 @@ cp "$SXS"      "$APP/arm64ec-windows/sxs.dll"
 cp "$MSPATCHA" "$APP/arm64ec-windows/mspatcha.dll"
 cp "$ODBCCP32" "$APP/arm64ec-windows/odbccp32.dll"
 
+# madeira-log(20261004-013724): mkxp-z now reaches SDL window creation but
+# Wine's iOS opengl32 unix side is intentionally a GL-absent stub. Replace only
+# the OpenGL runtime with Mesa's native x64 WGL loader + Gallium megadriver.
+# FEX executes these x64 PE DLLs; Mesa falls back to llvmpipe when no usable
+# hardware OpenGL/D3D12 path exists. This is explicitly a "first pixels"
+# compatibility path, not a performance solution.
+cp "$MESA_GL"      "$APP/arm64ec-windows/opengl32.dll"
+cp "$MESA_GALLIUM" "$APP/arm64ec-windows/libgallium_wgl.dll"
+
 test -s "$APP/arm64ec-windows/xtajit64.dll"
 strings "$APP/arm64ec-windows/xtajit64.dll" | grep -F "invalidation-tracker-heap rev=clayton-2" | tee -a "$REPORT"
 strings "$APP/arm64ec-windows/xtajit64.dll" | grep -F "image-map-dedupe rev=clayton-4" | tee -a "$REPORT"
+test -s "$APP/arm64ec-windows/opengl32.dll"
+test -s "$APP/arm64ec-windows/libgallium_wgl.dll"
+python3 - "$APP/arm64ec-windows/opengl32.dll" "$APP/arm64ec-windows/libgallium_wgl.dll" <<'PY' | tee -a "$REPORT"
+import hashlib, pathlib, struct, sys
+for pth in sys.argv[1:]:
+    p=pathlib.Path(pth); d=p.read_bytes()
+    pe=struct.unpack_from('<I',d,0x3c)[0]
+    machine=struct.unpack_from('<H',d,pe+4)[0]
+    if machine != 0x8664: raise SystemExit(f"bundled {p.name}: not x64 ({machine:#x})")
+    print(f"bundled-mesa={p.name} sha256={hashlib.sha256(d).hexdigest()} size={len(d)}")
+print("bundled-mesa-status=PASS")
+PY
 AIR_WINE_DLLS=(msi.dll mscms.dll cabinet.dll sxs.dll mspatcha.dll odbccp32.dll)
 for name in "${AIR_WINE_DLLS[@]}"; do
   test -s "$APP/arm64ec-windows/$name"
