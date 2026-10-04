@@ -13,7 +13,7 @@ FEX_SHA="26859e184ad90f0e811d7f8bbd943a4b1573a2c3"
 OFFICIAL_IPA_SHA="71e900cbc140778bd6fa67c1062821981ed98e6bfb674d853cfeefd6d242e1c0"
 VCREDIST_SHA="cc0ff0eb1dc3f5188ae6300faef32bf5beeba4bdd6e8e445a9184072096b713b"
 LLVM_MINGW_SHA="bd85a3975723815cef28dbbd2ca2cb0c926f6b348a12a0453f39f7af273cb3f7"
-IPA_NAME="Madeira-0.1.3-ImageMap-SingleLock-Fix.ipa"
+IPA_NAME="Madeira-0.1.3-ImageMap-Dedupe-Fix.ipa"
 
 mkdir -p "$WORK" "$OUT"
 : > "$REPORT"
@@ -39,7 +39,7 @@ if [ "$JOBS" -gt 8 ]; then JOBS=8; fi
 record "base=Madeira v0.1.3"
 record "upstream=$UPSTREAM_SHA"
 record "wine=$WINE_SHA"
-record "strategy=official IPA + AIR FullChain + VC runtime + ProcessDebugObjectHandle guard + actual madsync + non-Steam Steam-env cleanup + FEX InvalidationTracker heap relocation + ARM64EC iOS ImageMap single-lock"
+record "strategy=official IPA + AIR FullChain + VC runtime + ProcessDebugObjectHandle guard + actual madsync + non-Steam Steam-env cleanup + FEX InvalidationTracker heap relocation + ARM64EC image-map dedupe"
 record "jobs=$JOBS"
 record "xcode=$(xcodebuild -version | tr '\n' ' ')"
 
@@ -62,7 +62,7 @@ test "$(git -C "$SRC/wine" rev-parse HEAD)" = "$WINE_SHA"
 test "$(git -C "$SRC/FEX" rev-parse HEAD)" = "$FEX_SHA"
 
 say "Patch FEX InvalidationTracker storage out of the executable JIT-pool image"
-python3 - "$SRC/FEX/Source/Windows/ARM64EC/Module.cpp" "$SRC/FEX/Source/Windows/Common/InvalidationTracker.cpp" <<'PY' | tee -a "$REPORT"
+python3 - "$SRC/FEX/Source/Windows/ARM64EC/Module.cpp" <<'PY' | tee -a "$REPORT"
 import pathlib, sys
 p=pathlib.Path(sys.argv[1])
 t=p.read_text()
@@ -100,77 +100,150 @@ if marker not in t:
 print("fex-source-patch=PASS InvalidationTracker std::optional inline storage -> heap unique_ptr")
 print("fex-source-marker="+marker)
 
-# madeira-log(20261004-003435): the duplicate loader notification for sechost.dll
-# enters InvalidationTracker::HandleImageMap, successfully inserts/logs the first
-# executable section, but never returns to NotifyImageMap (the following
-# [img-map] ml710 line is absent). The function currently lock/unlocks
-# IntervalsLock once PER executable section. Keep synchronization intact, but on
-# ARM64EC/iOS hold ONE unique lock across the section-registration loop. This
-# removes the exact second reacquire where the run parks without reverting to
-# the unsafe earlier experiment that removed IntervalsLock entirely.
-q=pathlib.Path(sys.argv[2])
-u=q.read_text()
-map_marker="[img-ilock] rev=clayton-3"
-if map_marker in u:
-    raise SystemExit("image-map single-lock marker already present in pristine FEX source")
+# madeira-log(20261004-010551): clayton-3 conclusively disproved the
+# "second IntervalsLock reacquire" theory. The normal NtMapViewOfSection path
+# already registered BOTH sechost.dll executable sections successfully, then
+# Wine's later arm64ec_notify_image_map called NotifyImageMap for the SAME base.
+# That fallback re-entered InvalidationTracker::HandleImageMap and parked during
+# the redundant second registration. Fix the cause: remember images fully
+# handled by the normal path and make NotifyImageMap intervals-only fallback
+# skip an address that is already registered. Use a fixed atomic table so the
+# dedupe path itself cannot allocate or take another mutex.
+t=p.read_text()
+dedupe_marker="image-map-dedupe rev=clayton-4"
+if dedupe_marker in t:
+    raise SystemExit("image-map dedupe marker already present in pristine FEX source")
 
-old='''  uint64_t LastExecutableSectionEnd = 0;
+old='''void HandleImageMap(uint64_t Address, bool MainImage = false) {
+  fextl::string ModulePath = FEX::Windows::GetSectionFilePath(Address);
+  fextl::string ModuleName = fextl::string {FEX::Windows::BaseName(ModulePath)};
+  InvalidationTracker->HandleImageMap(ModuleName, Address);
+  ImageTracker->HandleImageMap(ModulePath, Address, MainImage);
+}'''
+new='''#ifdef FEX_IOS_HOST
+static const char ios_image_map_dedupe_marker[] __attribute__((used)) =
+  "image-map-dedupe rev=clayton-4";
+static std::atomic<uint64_t> IOSRegisteredImageMaps[256] {};
 
-  for (auto* Section = SectionsBegin; Section != SectionsEnd; Section++) {
-    if (Section->Characteristics & IMAGE_SCN_MEM_EXECUTE) {
-      std::unique_lock Lock(IntervalsLock);
+static bool IOSImageMapIsRegistered(uint64_t Address) {
+  if (!Address) return false;
+  for (auto& Slot : IOSRegisteredImageMaps) {
+    if (Slot.load(std::memory_order_acquire) == Address) return true;
+  }
+  return false;
+}
 
-      uint64_t SectionBase = Address + Section->VirtualAddress;'''
-new='''  uint64_t LastExecutableSectionEnd = 0;
-
-#if defined(FEX_IOS_HOST) && defined(ARCHITECTURE_arm64ec)
-  /* iOS/ARM64EC: one lock acquisition per image instead of one per executable
-   * section. madeira-log(20261004-003435) reaches the first section of the
-   * duplicate sechost.dll registration and parks before the next section.
-   * The tracker now lives on the normal heap (clayton-2), so keep the lock and
-   * remove only the failing intra-image reacquire. */
-  {
-    std::unique_lock ImageMapLock(IntervalsLock);
-    static std::atomic<uint32_t> ImageMapLockCount {0};
-    const auto ImageMapN = ImageMapLockCount.fetch_add(1, std::memory_order_relaxed) + 1;
-    if (ImageMapN <= 64) {
-      LogMan::Msg::EFmt("[img-ilock] rev=clayton-3 #{} tracker={} module={} base={:#x} mode=one-lock-per-image",
-                        ImageMapN, static_cast<void*>(this), Name, Address);
+static void IOSImageMapMarkRegistered(uint64_t Address) {
+  if (!Address) return;
+  for (auto& Slot : IOSRegisteredImageMaps) {
+    uint64_t Value = Slot.load(std::memory_order_acquire);
+    if (Value == Address) return;
+    if (!Value) {
+      uint64_t Expected = 0;
+      if (Slot.compare_exchange_strong(Expected, Address, std::memory_order_acq_rel,
+                                       std::memory_order_acquire) || Expected == Address) {
+        return;
+      }
     }
+  }
+  LogMan::Msg::EFmt("[img-dedupe] rev=clayton-4 registry FULL base={:#x}", Address);
+}
+
+static void IOSImageMapForget(uint64_t Address) {
+  if (!Address) return;
+  for (auto& Slot : IOSRegisteredImageMaps) {
+    uint64_t Expected = Address;
+    if (Slot.compare_exchange_strong(Expected, 0, std::memory_order_acq_rel,
+                                     std::memory_order_acquire)) {
+      return;
+    }
+  }
+}
 #endif
 
-  for (auto* Section = SectionsBegin; Section != SectionsEnd; Section++) {
-    if (Section->Characteristics & IMAGE_SCN_MEM_EXECUTE) {
-#if !(defined(FEX_IOS_HOST) && defined(ARCHITECTURE_arm64ec))
-      std::unique_lock Lock(IntervalsLock);
+void HandleImageMap(uint64_t Address, bool MainImage = false) {
+  fextl::string ModulePath = FEX::Windows::GetSectionFilePath(Address);
+  fextl::string ModuleName = fextl::string {FEX::Windows::BaseName(ModulePath)};
+  InvalidationTracker->HandleImageMap(ModuleName, Address);
+  ImageTracker->HandleImageMap(ModulePath, Address, MainImage);
+#ifdef FEX_IOS_HOST
+  IOSImageMapMarkRegistered(Address);
 #endif
+}'''
+if t.count(old)!=1:
+    raise SystemExit(f"HandleImageMap anchor count={t.count(old)}")
+t=t.replace(old,new,1)
 
-      uint64_t SectionBase = Address + Section->VirtualAddress;'''
-if u.count(old)!=1:
-    raise SystemExit(f"HandleImageMap lock anchor count={u.count(old)}")
-u=u.replace(old,new,1)
-
-old='''    }
+old='''extern "C" void NotifyImageMap(void* Address) {
+  if (!InvalidationTracker || !Address) {
+    return;
   }
 
-  FEX_CONFIG_OPT(MonoHacks, MONOHACKS);'''
-new='''    }
+  static std::atomic<uint32_t> Count {0};
+  const auto N = ++Count;
+
+  fextl::string ModulePath = FEX::Windows::GetSectionFilePath(reinterpret_cast<uint64_t>(Address));
+  fextl::string ModuleName = fextl::string {FEX::Windows::BaseName(ModulePath)};
+  InvalidationTracker->HandleImageMap(ModuleName, reinterpret_cast<uint64_t>(Address));
+
+  if (N <= 64) {
+    LogMan::Msg::EFmt("[img-map] ml710 #{} intervals-only {} base={}", N, ModuleName, Address);
+  }
+}'''
+new='''extern "C" void NotifyImageMap(void* Address) {
+  if (!InvalidationTracker || !Address) {
+    return;
   }
 
-#if defined(FEX_IOS_HOST) && defined(ARCHITECTURE_arm64ec)
-  } // ImageMapLock: release before Mono/config and any later tracker work
+  static std::atomic<uint32_t> Count {0};
+  const auto N = ++Count;
+  const auto MapAddress = reinterpret_cast<uint64_t>(Address);
+
+#ifdef FEX_IOS_HOST
+  /* This is a FALLBACK for loader notifications missed by the syscall path,
+   * not a second registration path. madeira-log(20261004-010551) proved the
+   * duplicate sechost registration can park forever before guest execution. */
+  if (IOSImageMapIsRegistered(MapAddress)) {
+    if (N <= 64) {
+      LogMan::Msg::EFmt("[img-dedupe] rev=clayton-4 #{} SKIP already-registered base={:#x}", N, MapAddress);
+    }
+    return;
+  }
 #endif
 
-  FEX_CONFIG_OPT(MonoHacks, MONOHACKS);'''
-if u.count(old)!=1:
-    raise SystemExit(f"HandleImageMap loop-tail anchor count={u.count(old)}")
-u=u.replace(old,new,1)
+  fextl::string ModulePath = FEX::Windows::GetSectionFilePath(MapAddress);
+  fextl::string ModuleName = fextl::string {FEX::Windows::BaseName(ModulePath)};
+  InvalidationTracker->HandleImageMap(ModuleName, MapAddress);
+#ifdef FEX_IOS_HOST
+  IOSImageMapMarkRegistered(MapAddress);
+#endif
 
-q.write_text(u)
-if map_marker not in u:
-    raise SystemExit("image-map single-lock marker missing after source patch")
-print("fex-source-patch=PASS ARM64EC/iOS HandleImageMap one IntervalsLock acquisition per image")
-print("fex-source-marker="+map_marker)
+  if (N <= 64) {
+    LogMan::Msg::EFmt("[img-map] ml710 #{} intervals-only fallback {} base={}", N, ModuleName, Address);
+  }
+}'''
+if t.count(old)!=1:
+    raise SystemExit(f"NotifyImageMap anchor count={t.count(old)}")
+t=t.replace(old,new,1)
+
+old='''void HandleImageUnmap(uint64_t Address, uint64_t Size) {
+  ImageTracker->HandleImageUnmap(Address, Size);
+}'''
+new='''void HandleImageUnmap(uint64_t Address, uint64_t Size) {
+  ImageTracker->HandleImageUnmap(Address, Size);
+#ifdef FEX_IOS_HOST
+  IOSImageMapForget(Address);
+#endif
+}'''
+if t.count(old)!=1:
+    raise SystemExit(f"HandleImageUnmap anchor count={t.count(old)}")
+t=t.replace(old,new,1)
+
+p.write_text(t)
+if dedupe_marker not in t:
+    raise SystemExit("image-map dedupe marker missing after source patch")
+print("fex-source-patch=PASS duplicate loader image-map notifications are skipped after normal registration")
+print("fex-source-marker="+dedupe_marker)
 PY
 
 say "Install exact llvm-mingw recorded by Madeira"
@@ -204,7 +277,7 @@ cmake --build "$FEX_BUILD" --target arm64ecfex -j"$JOBS"
 PATCHED_FEX="$FEX_BUILD/Bin/libarm64ecfex.dll"
 test -s "$PATCHED_FEX"
 strings "$PATCHED_FEX" | grep -F "invalidation-tracker-heap rev=clayton-2" | tee -a "$REPORT"
-strings "$PATCHED_FEX" | grep -F "[img-ilock] rev=clayton-3" | tee -a "$REPORT"
+strings "$PATCHED_FEX" | grep -F "image-map-dedupe rev=clayton-4" | tee -a "$REPORT"
 python3 - "$PATCHED_FEX" <<'PY' | tee -a "$REPORT"
 import hashlib,struct,sys
 p=sys.argv[1]; d=open(p,'rb').read()
@@ -429,7 +502,7 @@ cp "$ODBCCP32" "$APP/arm64ec-windows/odbccp32.dll"
 
 test -s "$APP/arm64ec-windows/xtajit64.dll"
 strings "$APP/arm64ec-windows/xtajit64.dll" | grep -F "invalidation-tracker-heap rev=clayton-2" | tee -a "$REPORT"
-strings "$APP/arm64ec-windows/xtajit64.dll" | grep -F "[img-ilock] rev=clayton-3" | tee -a "$REPORT"
+strings "$APP/arm64ec-windows/xtajit64.dll" | grep -F "image-map-dedupe rev=clayton-4" | tee -a "$REPORT"
 AIR_WINE_DLLS=(msi.dll mscms.dll cabinet.dll sxs.dll mspatcha.dll odbccp32.dll)
 for name in "${AIR_WINE_DLLS[@]}"; do
   test -s "$APP/arm64ec-windows/$name"
