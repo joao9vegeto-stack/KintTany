@@ -15,7 +15,7 @@ VCREDIST_SHA="cc0ff0eb1dc3f5188ae6300faef32bf5beeba4bdd6e8e445a9184072096b713b"
 LLVM_MINGW_SHA="bd85a3975723815cef28dbbd2ca2cb0c926f6b348a12a0453f39f7af273cb3f7"
 MESA_VERSION="26.2.3"
 MESA_MSVC_SHA="3f3613adb43cfd0f2e665ce2400b130c275f0b3317cb3a05566320a3a67589ed"
-IPA_NAME="Madeira-0.1.3-Direct-Software-Surface.ipa"
+IPA_NAME="Madeira-0.1.3-Direct-Software-Surface-v2.ipa"
 
 mkdir -p "$WORK" "$OUT"
 : > "$REPORT"
@@ -41,7 +41,7 @@ if [ "$JOBS" -gt 8 ]; then JOBS=8; fi
 record "base=Madeira v0.1.3"
 record "upstream=$UPSTREAM_SHA"
 record "wine=$WINE_SHA"
-record "strategy=official IPA + AIR FullChain + VC runtime + ProcessDebugObjectHandle guard + actual madsync + non-Steam Steam-env cleanup + FEX InvalidationTracker heap relocation + ARM64EC image-map dedupe + Mesa x64 WGL/llvmpipe fallback + Ruby/MSVCRT __pioinfo PE-pool mirror + direct software-surface compositor"
+record "strategy=official IPA + AIR FullChain + VC runtime + ProcessDebugObjectHandle guard + actual madsync + non-Steam Steam-env cleanup + FEX InvalidationTracker heap relocation + ARM64EC image-map dedupe + Mesa x64 WGL/llvmpipe fallback + Ruby/MSVCRT __pioinfo PE-pool mirror + direct software-surface compositor + direct compositor creation gate"
 record "jobs=$JOBS"
 record "xcode=$(xcodebuild -version | tr '\n' ' ')"
 
@@ -521,18 +521,21 @@ MADSYNC_ENABLED_SITE=0x9a55c4
 STEAM_FALLBACK_SITE=0x143f0
 STEAM_CLEAN_TAIL_SITE=0x14294
 
-# clayton-7: the direct-game path deliberately leaves Wine GDI window
-# surfaces offscreen because ordinary games are expected to present through
-# DXMT/Metal. Pokemon Anil is now running through Mesa/llvmpipe and actively
-# paints its 512x384 frames into those Wine surfaces, so the game is audible
-# but invisible. Enable ONLY the two compositor gates: surface registration
-# and per-window geometry forwarding. We do NOT set MADEIRA_DESKTOP, so direct
-# input semantics and the Game.exe launch route remain unchanged.
+# clayton-8: madeira-log(20261004-055107) proves clayton-7 reached the
+# Objective-C presentation entry point: surface_flush and winios_surface_present
+# fire continuously with changing frame signatures. But there are ZERO
+# "compositor attached", "compositor layout" or "layer created" lines.
+# Source inspection shows the final blocker: winios_ensure_compositor() has its
+# OWN MADEIRA_DESKTOP-only return gate. Open that gate without setting the env
+# itself, so direct-game input/launch semantics remain direct while the already
+# arriving software frames finally get a UIView/CALayer.
 DIRECT_SURFACE_REGISTER_SITE=0x1bf28a4
 DIRECT_SURFACE_FRAME_SITE=0x1bf3d40
+DIRECT_COMPOSITOR_GATE_SITE=0x1f6d4
+DIRECT_COMPOSITOR_CONTINUE=0x1f708
 DIRECT_SURFACE_LOG_SITE=0x20fb195
 DIRECT_SURFACE_LOG_OLD=b"[winios] desktop mode: window-surface compositing ENABLED\n"
-DIRECT_SURFACE_LOG_NEW=b"[winios] clayton-7 direct software surface ENABLED\n"
+DIRECT_SURFACE_LOG_NEW=b"[winios] clayton-8 direct compositor path ENABLED\n"
 
 def u32(off): return struct.unpack_from("<I",d,off)[0]
 def put32(off,v): struct.pack_into("<I",d,off,v)
@@ -571,6 +574,8 @@ if u32(DIRECT_SURFACE_REGISTER_SITE) != 0x34000128:
     raise SystemExit(f"unexpected direct-surface register gate {u32(DIRECT_SURFACE_REGISTER_SITE):#010x}")
 if u32(DIRECT_SURFACE_FRAME_SITE) != 0x34000228:
     raise SystemExit(f"unexpected direct-surface frame gate {u32(DIRECT_SURFACE_FRAME_SITE):#010x}")
+if u32(DIRECT_COMPOSITOR_GATE_SITE) != 0xD000FDC0:
+    raise SystemExit(f"unexpected direct-compositor gate {u32(DIRECT_COMPOSITOR_GATE_SITE):#010x}")
 if d[DIRECT_SURFACE_LOG_SITE:DIRECT_SURFACE_LOG_SITE+len(DIRECT_SURFACE_LOG_OLD)] != DIRECT_SURFACE_LOG_OLD:
     raise SystemExit("unexpected direct-surface log literal")
 
@@ -603,10 +608,18 @@ put32(MADSYNC_ENABLED_SITE,0x340004E0)
 put32(STEAM_FALLBACK_SITE,enc_b(STEAM_FALLBACK_SITE,0x14270))
 put32(STEAM_CLEAN_TAIL_SITE,enc_b(STEAM_CLEAN_TAIL_SITE,0x14444))
 
-# Two surgical NOPs turn the already-shipped desktop compositor plumbing on
-# for a direct game. This does not flip the cached desktop-mode flag itself.
+# Keep the direct Wine surface and geometry callbacks enabled. clayton-7 proved
+# they now deliver changing game frames all the way into winios_surface_present.
 put32(DIRECT_SURFACE_REGISTER_SITE,0xD503201F)
 put32(DIRECT_SURFACE_FRAME_SITE,0xD503201F)
+
+# Final missing link: bypass only winios_ensure_compositor's desktop-env probe.
+# At 0x1f6d4 the pristine binary starts loading "MADEIRA_DESKTOP". Branch
+# directly to the code that creates/finds the UIWindow and compositor instead.
+# This does NOT modify the environment variable, so ContentView/direct input
+# still sees a normal direct-game session.
+put32(DIRECT_COMPOSITOR_GATE_SITE,enc_b(DIRECT_COMPOSITOR_GATE_SITE,DIRECT_COMPOSITOR_CONTINUE))
+
 d[DIRECT_SURFACE_LOG_SITE:DIRECT_SURFACE_LOG_SITE+len(DIRECT_SURFACE_LOG_OLD)] = \
     DIRECT_SURFACE_LOG_NEW + b"\0" * (len(DIRECT_SURFACE_LOG_OLD)-len(DIRECT_SURFACE_LOG_NEW))
 
@@ -630,12 +643,14 @@ if struct.unpack_from("<I",e,DIRECT_SURFACE_REGISTER_SITE)[0] != 0xD503201F:
     raise SystemExit("direct-surface register gate patch mismatch")
 if struct.unpack_from("<I",e,DIRECT_SURFACE_FRAME_SITE)[0] != 0xD503201F:
     raise SystemExit("direct-surface frame gate patch mismatch")
+if struct.unpack_from("<I",e,DIRECT_COMPOSITOR_GATE_SITE)[0] != enc_b(DIRECT_COMPOSITOR_GATE_SITE,DIRECT_COMPOSITOR_CONTINUE):
+    raise SystemExit("direct-compositor creation gate patch mismatch")
 if DIRECT_SURFACE_LOG_NEW not in e:
     raise SystemExit("direct-surface runtime marker missing")
 print("native-patch=PASS ProcessDebugObjectHandle ret_len low-page guard")
 print("sync-default=PASS actual _madsync_enabled: absent inproc-sync enters ENABLED path; explicit inproc-sync=0 preserved")
 print("steam-env-clean=PASS generic launch unsets SteamAppPath/SteamGameId/SteamAppId")
-print("direct-surface=PASS rev=clayton-7 pCreateWindowSurface + window-frame forwarding enabled without MADEIRA_DESKTOP")
+print("direct-surface=PASS rev=clayton-8 pCreateWindowSurface + window-frame + compositor creation enabled without setting MADEIRA_DESKTOP")
 print(f"native-dylib-patched-sha256={hashlib.sha256(e).hexdigest()}")
 PY
 
@@ -657,14 +672,15 @@ checks={
     0x14294:0x1400006C,
     0x1bf28a4:0xD503201F,
     0x1bf3d40:0xD503201F,
+    0x1f6d4:0x1400000D,
 }
 for off,want in checks.items():
     got=struct.unpack_from("<I",d,off)[0]
     if got != want:
         raise SystemExit(f"native runtime patch lost after codesign at {off:#x}: {got:#010x} != {want:#010x}")
-if b"[winios] clayton-7 direct software surface ENABLED\n" not in d:
-    raise SystemExit("clayton-7 runtime marker lost after codesign")
-print("native-patch-after-codesign=PASS debug-object + actual-madsync-enabled + Steam-env-clean + direct-software-surface")
+if b"[winios] clayton-8 direct compositor path ENABLED\n" not in d:
+    raise SystemExit("clayton-8 runtime marker lost after codesign")
+print("native-patch-after-codesign=PASS debug-object + actual-madsync-enabled + Steam-env-clean + direct-software-surface + compositor-gate")
 PY
 
 say "Fetch pinned Mesa3D x64 WGL runtime for OpenGL software fallback"
