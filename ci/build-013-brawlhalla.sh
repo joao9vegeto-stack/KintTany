@@ -110,7 +110,7 @@ sig.write_text(s)
 sp=spec.read_text()
 old='''@ extern -private -arch=arm64,arm64ec p_ios_jit_reverse_translate_addr
 '''
-new=old+'''@ cdecl -private -arch=arm64ec __wine_ios_sync_pointer(ptr ptr)
+new=old+'''@ cdecl -arch=arm64ec __wine_ios_sync_pointer(ptr ptr)
 '''
 if sp.count(old)!=1:
     raise SystemExit(f"ntdll.spec reverse-hook anchor count={sp.count(old)}")
