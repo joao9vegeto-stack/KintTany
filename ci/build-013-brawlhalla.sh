@@ -15,7 +15,7 @@ VCREDIST_SHA="cc0ff0eb1dc3f5188ae6300faef32bf5beeba4bdd6e8e445a9184072096b713b"
 LLVM_MINGW_SHA="bd85a3975723815cef28dbbd2ca2cb0c926f6b348a12a0453f39f7af273cb3f7"
 MESA_VERSION="26.2.3"
 MESA_MSVC_SHA="3f3613adb43cfd0f2e665ce2400b130c275f0b3317cb3a05566320a3a67589ed"
-IPA_NAME="Madeira-0.1.3-Injustice-GTAIV-Compat.ipa"
+IPA_NAME="Madeira-0.1.3-Injustice-GTAIV-R2.ipa"
 
 mkdir -p "$WORK" "$OUT"
 : > "$REPORT"
@@ -41,7 +41,7 @@ if [ "$JOBS" -gt 8 ]; then JOBS=8; fi
 record "base=Madeira v0.1.3"
 record "upstream=$UPSTREAM_SHA"
 record "wine=$WINE_SHA"
-record "strategy=official IPA + AIR FullChain + VC runtime + ProcessDebugObjectHandle guard + actual madsync + non-Steam Steam-env cleanup + FEX InvalidationTracker heap relocation + ARM64EC image-map dedupe + Mesa x64 WGL/llvmpipe fallback + Ruby/MSVCRT __pioinfo PE-pool mirror + software compositor on-present only + touch-controls visible/early XInput slot + 32-bit D3D9 native-first fallback + exact Injustice fight-load view quarantine + GTAIV 1408x648 D3D9 mode"
+record "strategy=official IPA + AIR FullChain + VC runtime + ProcessDebugObjectHandle guard + actual madsync + non-Steam Steam-env cleanup + FEX InvalidationTracker heap relocation + ARM64EC image-map dedupe + Mesa x64 WGL/llvmpipe fallback + Ruby/MSVCRT __pioinfo PE-pool mirror + software compositor on-present only + touch-controls visible/early XInput slot + 32-bit D3D9 native-first Create9+Create9Ex fallback + exact Injustice fight-load view quarantine + GTAIV 1408x648 D3D9 mode + GTAIV Reset losable-resource compatibility
 record "jobs=$JOBS"
 record "xcode=$(xcodebuild -version | tr '\n' ' ')"
 
@@ -566,6 +566,12 @@ WOW64_SECTION_MARKER=b"clayton-14 injustice-exact-view-quarantine"
 # a Metal device can exist. Replace only that unique last mode with 1408x648.
 D3D9_GTA_MODE_WIDTH_SITE=0x22a47fc
 D3D9_GTA_MODE_HEIGHT_SITE=0x22a4800
+# clayton-17: GTA IV gets past CreateDevice on CI41, but its later non-Ex
+# Reset returns D3DERR_INVALIDCALL (0x8876086c) because DXMT rejects Reset
+# while m_losableResourceCount is nonzero. The GTA log shows this exact HRESULT
+# immediately after the 800x600 -> 640x480 reset sequence. Let Reset continue;
+# the shim invalidates its children after a successful native reset.
+D3D9_GTA_RESET_LOSABLE_GATE_SITE=0x1aade04
 
 def u32(off): return struct.unpack_from("<I",d,off)[0]
 def put32(off,v): struct.pack_into("<I",d,off,v)
@@ -629,6 +635,8 @@ if d[WOW64_SECTION_MARKER_SITE:WOW64_SECTION_MARKER_SITE+len(WOW64_SECTION_MARKE
     raise SystemExit("WOW64 section-quarantine marker space is not zero-filled")
 if u32(D3D9_GTA_MODE_WIDTH_SITE) != 1152 or u32(D3D9_GTA_MODE_HEIGHT_SITE) != 648:
     raise SystemExit(f"unexpected D3D9 tail mode {u32(D3D9_GTA_MODE_WIDTH_SITE)}x{u32(D3D9_GTA_MODE_HEIGHT_SITE)}")
+if u32(D3D9_GTA_RESET_LOSABLE_GATE_SITE) != 0x35001B28:
+    raise SystemExit(f"unexpected D3D9 Reset losable-resource gate {u32(D3D9_GTA_RESET_LOSABLE_GATE_SITE):#010x}")
 
 code=[
     enc_cbz_x(19,CAVE,CAVE+0x18),
@@ -709,6 +717,9 @@ d[WOW64_SECTION_MARKER_SITE:WOW64_SECTION_MARKER_SITE+len(WOW64_SECTION_MARKER)]
 # GTA IV: make the exact Madeira landscape resolution a legal D3D9 fullscreen
 # adapter mode. The frontend still validates every other mode exactly as before.
 put32(D3D9_GTA_MODE_WIDTH_SITE,1408)
+# cbnz w8, failure -> nop: do not reject GTA IV Reset solely because the
+# non-Ex device still reports losable resources at the mode transition.
+put32(D3D9_GTA_RESET_LOSABLE_GATE_SITE,0xD503201F)
 
 p.write_bytes(d)
 
@@ -753,6 +764,7 @@ print("direct-surface=PASS rev=clayton-12 software compositor is created by actu
 print("touch-input=PASS rev=clayton-9 overlay visible at session start + early player-1 XInput reservation")
 print("wow64-section-quarantine=PASS rev=clayton-14 only guest 0x3c680000 / host-window peer / size 1MiB is retained")
 print("d3d9-mode=PASS rev=clayton-15 adapter tail mode 1152x648 -> 1408x648 for GTAIV fullscreen")
+print("d3d9-reset=PASS rev=clayton-17 GTAIV non-Ex Reset bypasses only the losable-resource reject gate")
 print(f"native-dylib-patched-sha256={hashlib.sha256(e).hexdigest()}")
 PY
 
@@ -781,6 +793,7 @@ checks={
     0x97ea4c:0x146C0533,
     0x22a47fc:1408,
     0x22a4800:648,
+    0x1aade04:0xD503201F,
 }
 for off,want in checks.items():
     got=struct.unpack_from("<I",d,off)[0]
@@ -800,40 +813,41 @@ test -s "$D3D9_DLL" && test -s "$D3D9_SHIM"
 python3 - "$D3D9_DLL" "$D3D9_SHIM" <<'PY' | tee -a "$REPORT"
 import hashlib, pathlib, sys
 
-OFF=0x17A6
-# Direct3DCreate9 forwarding gate, pristine:
-#   and eax,-3 ; cmp eax,1 ; jne native
-# modes 1(DEFAULT) and 3(EMULATED) therefore both forwarded.
-# clayton-10:
-#   cmp eax,3 ; nop*3 ; jne native
-# mode 1 now tries native; mode 3 remains explicit emulated; mode 2 remains
-# explicit native. If default/native creation fails, the existing mode==1
-# fallback below still flips to 3 and retries d3d9-emulated.dll.
-OLD=bytes.fromhex("83 e0 fd 83 f8 01 75 15")
-NEW=bytes.fromhex("83 f8 03 90 90 90 75 15")
+# clayton-16: CI41 only changed Direct3DCreate9. Direct3DCreate9Ex still had
+# the pristine DEFAULT-forwarding gate, so titles entering D3D9 through Ex
+# silently stayed on d3d9-emulated.dll. Injustice's CI41 run never bound the
+# d3d9shim unix table and its arena stayed at 0 MB before the same R6025.
+# Patch both creation entry points to native-first while preserving the
+# existing mode==DEFAULT fallback to d3d9-emulated.dll if native creation fails.
+GATES=[
+    (0x17A6, bytes.fromhex("83 e0 fd 83 f8 01 75 15"), bytes.fromhex("83 f8 03 90 90 90 75 15"), "Create9"),
+    (0x19EE, bytes.fromhex("83 e0 fd 83 f8 01 75 1e"), bytes.fromhex("83 f8 03 90 90 90 75 1e"), "Create9Ex"),
+]
 OLD_LOG=(b"[d3d9] MADEIRA_D3D9 unset: forwarding to d3d9-emulated.dll "
          b"(Documents/madeira-d3d9.txt = native selects the native ARM64 frontend)")
-NEW_LOG=b"[d3d9] clayton-10 default: native ARM64 first; emulated fallback on native create failure"
+NEW_LOG=b"[d3d9] clayton-16 default: native ARM64 first for Create9+Create9Ex; emulated fallback on native create failure"
 
 for raw in sys.argv[1:]:
     p=pathlib.Path(raw)
     d=bytearray(p.read_bytes())
-    if d[OFF:OFF+len(OLD)] != OLD:
-        raise SystemExit(f"{p.name}: unexpected D3D9 dispatch bytes {d[OFF:OFF+len(OLD)].hex()}")
+    for off,old,new,label in GATES:
+        if d[off:off+len(old)] != old:
+            raise SystemExit(f"{p.name}: unexpected {label} dispatch bytes {d[off:off+len(old)].hex()}")
+        d[off:off+len(new)] = new
     if d.count(OLD_LOG) != 1:
         raise SystemExit(f"{p.name}: default D3D9 log anchor count={d.count(OLD_LOG)}")
-    d[OFF:OFF+len(NEW)] = NEW
     pos=d.index(OLD_LOG)
     d[pos:pos+len(OLD_LOG)] = NEW_LOG + b"\0"*(len(OLD_LOG)-len(NEW_LOG))
     p.write_bytes(d)
     e=p.read_bytes()
-    if e[OFF:OFF+len(NEW)] != NEW:
-        raise SystemExit(f"{p.name}: D3D9 dispatch read-back mismatch")
+    for off,old,new,label in GATES:
+        if e[off:off+len(new)] != new:
+            raise SystemExit(f"{p.name}: {label} dispatch read-back mismatch")
     if NEW_LOG not in e:
-        raise SystemExit(f"{p.name}: clayton-10 runtime marker missing")
-    print(f"d3d9-native-first={p.name} rev=clayton-10 sha256={hashlib.sha256(e).hexdigest()} size={len(e)}")
+        raise SystemExit(f"{p.name}: clayton-16 runtime marker missing")
+    print(f"d3d9-native-first={p.name} rev=clayton-16 create9+create9ex sha256={hashlib.sha256(e).hexdigest()} size={len(e)}")
 
-print("d3d9-native-first=PASS default native-first + existing mode=1 fallback; explicit emulated/native preserved")
+print("d3d9-native-first=PASS rev=clayton-16 Create9 + Create9Ex native-first with existing DEFAULT fallback; explicit emulated/native preserved")
 PY
 
 say "Fetch pinned Mesa3D x64 WGL runtime for OpenGL software fallback"
