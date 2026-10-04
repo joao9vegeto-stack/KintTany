@@ -15,7 +15,7 @@ VCREDIST_SHA="cc0ff0eb1dc3f5188ae6300faef32bf5beeba4bdd6e8e445a9184072096b713b"
 LLVM_MINGW_SHA="bd85a3975723815cef28dbbd2ca2cb0c926f6b348a12a0453f39f7af273cb3f7"
 MESA_VERSION="26.2.3"
 MESA_MSVC_SHA="3f3613adb43cfd0f2e665ce2400b130c275f0b3317cb3a05566320a3a67589ed"
-IPA_NAME="Madeira-0.1.3-Injustice-GTAIV-R2.ipa"
+IPA_NAME="Madeira-0.1.3-Injustice-GTAIV-R3.ipa"
 
 mkdir -p "$WORK" "$OUT"
 : > "$REPORT"
@@ -41,7 +41,7 @@ if [ "$JOBS" -gt 8 ]; then JOBS=8; fi
 record "base=Madeira v0.1.3"
 record "upstream=$UPSTREAM_SHA"
 record "wine=$WINE_SHA"
-record "strategy=official IPA + AIR FullChain + VC runtime + ProcessDebugObjectHandle guard + actual madsync + non-Steam Steam-env cleanup + FEX InvalidationTracker heap relocation + ARM64EC image-map dedupe + Mesa x64 WGL/llvmpipe fallback + Ruby/MSVCRT __pioinfo PE-pool mirror + software compositor on-present only + touch-controls visible/early XInput slot + 32-bit D3D9 native-first Create9+Create9Ex fallback + exact Injustice fight-load view quarantine + GTAIV 1408x648 D3D9 mode + GTAIV Reset losable-resource compatibility"
+record "strategy=official IPA + AIR FullChain + VC runtime + ProcessDebugObjectHandle guard + actual madsync + non-Steam Steam-env cleanup + FEX InvalidationTracker heap relocation + ARM64EC image-map dedupe + Mesa x64 WGL/llvmpipe fallback + Ruby/MSVCRT __pioinfo PE-pool mirror + software compositor on-present only + touch-controls visible/early XInput slot + 32-bit D3D9 native-first Create9+Create9Ex fallback + exact Injustice fight-load view quarantine + GTAIV 1408x648 D3D9 mode + GTAIV Reset losable-resource compatibility + per-HWND Metal presentation + DXMT cached CPU resources"
 record "jobs=$JOBS"
 record "xcode=$(xcodebuild -version | tr '\n' ' ')"
 
@@ -573,6 +573,32 @@ D3D9_GTA_MODE_HEIGHT_SITE=0x22a4800
 # the shim invalidates its children after a successful native reset.
 D3D9_GTA_RESET_LOSABLE_GATE_SITE=0x1aade04
 
+# clayton-18: GTA IV now creates and resets the native D3D9 device, and its
+# Present loop runs, but the visible Wine client stays white. The log proves
+# Winios has a real hwnd=0x20030 compositor while DXMT never creates the
+# per-HWND CAMetalLayer. In direct-game mode IOSDisplayShim instead returns
+# the fullscreen singleton layer, so the later 800x600 window/reset is split
+# from the layer that receives Metal. Force the already-shipped per-window
+# branch: it calls winios_metal_layer_for_hwnd(hwnd), so Metal is attached
+# inside the same window/compositor that the screenshot actually shows.
+D3D9_WINDOW_LAYER_GATE_SITE=0x1c724
+
+# clayton-19: port the substance of willfaust/dxmt ml1178 to the already
+# linked native DXMT without relinking the app. DXMT marks CPU-written dynamic
+# resources WriteCombined; under FEX x86 TSO, ordinary integer stores become
+# release stores and write-combined mappings serialize badly. Clear Metal's
+# CPU-cache-mode mask (low 4 option bits) at every local resource-options path
+# touched by upstream ml1178. The tiny trampolines live in unused __TEXT bytes.
+DXMT_CACHE_CAVE=0x247ffa0
+DXMT_CACHE_CAVE_SIZE=0x30
+DXMT_CACHE_MARKER_SITE=0x247ffd0
+DXMT_CACHE_MARKER=b"clayton-18-gta-window-clayton-19-cache"
+DXMT_BUF_NOCOPY_SITE=0xa55ef0
+DXMT_BUF_LENGTH_SITE=0xa55f3c
+DXMT_TEX_OPTIONS_SITE=0xa539dc
+DXMT_HEAP_SIZE_SITE=0xa603b4
+DXMT_HEAP_BUF_SITE=0xa60428
+
 def u32(off): return struct.unpack_from("<I",d,off)[0]
 def put32(off,v): struct.pack_into("<I",d,off,v)
 def enc_b(pc,target):
@@ -581,6 +607,12 @@ def enc_b(pc,target):
     imm=delta//4
     if not (-(1<<25)<=imm<(1<<25)): raise SystemExit("B out of range")
     return 0x14000000 | (imm & 0x03ffffff)
+def enc_bl(pc,target):
+    delta=target-pc
+    if delta%4: raise SystemExit("unaligned BL target")
+    imm=delta//4
+    if not (-(1<<25)<=imm<(1<<25)): raise SystemExit("BL out of range")
+    return 0x94000000 | (imm & 0x03ffffff)
 def enc_cbz_x(rt,pc,target):
     delta=target-pc
     if delta%4: raise SystemExit("unaligned CBZ target")
@@ -637,6 +669,21 @@ if u32(D3D9_GTA_MODE_WIDTH_SITE) != 1152 or u32(D3D9_GTA_MODE_HEIGHT_SITE) != 64
     raise SystemExit(f"unexpected D3D9 tail mode {u32(D3D9_GTA_MODE_WIDTH_SITE)}x{u32(D3D9_GTA_MODE_HEIGHT_SITE)}")
 if u32(D3D9_GTA_RESET_LOSABLE_GATE_SITE) != 0x35001B28:
     raise SystemExit(f"unexpected D3D9 Reset losable-resource gate {u32(D3D9_GTA_RESET_LOSABLE_GATE_SITE):#010x}")
+if u32(D3D9_WINDOW_LAYER_GATE_SITE) != 0x34000780:
+    raise SystemExit(f"unexpected Metal per-window branch gate {u32(D3D9_WINDOW_LAYER_GATE_SITE):#010x}")
+for off,want,label in [
+    (DXMT_BUF_NOCOPY_SITE,0xD2800005,"newBuffer bytes-no-copy deallocator"),
+    (DXMT_BUF_LENGTH_SITE,0xAA0403E3,"newBuffer length options move"),
+    (DXMT_TEX_OPTIONS_SITE,0xAA1303E0,"texture descriptor receiver move"),
+    (DXMT_HEAP_SIZE_SITE,0x94554B03,"heap size query call"),
+    (DXMT_HEAP_BUF_SITE,0x94554E0E,"heap buffer call"),
+]:
+    if u32(off) != want:
+        raise SystemExit(f"unexpected DXMT ml1178 patch anchor {label} at {off:#x}: {u32(off):#010x}")
+if d[DXMT_CACHE_CAVE:DXMT_CACHE_CAVE+DXMT_CACHE_CAVE_SIZE] != b"\0"*DXMT_CACHE_CAVE_SIZE:
+    raise SystemExit("DXMT cache trampoline cave is not zero-filled")
+if d[DXMT_CACHE_MARKER_SITE:DXMT_CACHE_MARKER_SITE+len(DXMT_CACHE_MARKER)] != b"\0"*len(DXMT_CACHE_MARKER):
+    raise SystemExit("DXMT cache marker area is not zero-filled")
 
 code=[
     enc_cbz_x(19,CAVE,CAVE+0x18),
@@ -721,6 +768,50 @@ put32(D3D9_GTA_MODE_WIDTH_SITE,1408)
 # non-Ex device still reports losable resources at the mode transition.
 put32(D3D9_GTA_RESET_LOSABLE_GATE_SITE,0xD503201F)
 
+# GTA IV's Wine client/compositor exists and follows its 1408x648 -> 800x600
+# mode changes. Keep DXMT's CAMetalLayer in that SAME hwnd instead of returning
+# the unrelated fullscreen singleton. NOP the cbz after madeira_desktop_mode():
+# both desktop and direct-game sessions enter the existing per-window path.
+put32(D3D9_WINDOW_LAYER_GATE_SITE,0xD503201F)
+
+# DXMT ml1178-equivalent binary patch. MTLResourceCPUCacheModeMask is the low
+# four bits; clear them immediately before Metal consumes resource options.
+# Direct one-instruction case: mov x3,x4 -> and x3,x4,#~0xf.
+put32(DXMT_BUF_LENGTH_SITE,0x927CEC83)
+
+# The other four sites need one/two instructions more than their original
+# straight-line sequence. Branch through a verified empty __TEXT cave.
+cc=DXMT_CACHE_CAVE
+# newBufferWithBytesNoCopy: preserve deallocator=NULL while clearing x4 options.
+put32(DXMT_BUF_NOCOPY_SITE,enc_b(DXMT_BUF_NOCOPY_SITE,cc+0x00))
+for i,ins in enumerate([
+    0x927CEC84,                           # and x4,x4,#~0xf
+    0xD2800005,                           # mov x5,#0
+    enc_b(cc+0x08,DXMT_BUF_NOCOPY_SITE+4),
+]): put32(cc+0x00+i*4,ins)
+# fill_texture_descriptor: x2 holds info->options; restore x0=descriptor.
+put32(DXMT_TEX_OPTIONS_SITE,enc_b(DXMT_TEX_OPTIONS_SITE,cc+0x0c))
+for i,ins in enumerate([
+    0x927CEC42,                           # and x2,x2,#~0xf
+    0xAA1303E0,                           # mov x0,x19
+    enc_b(cc+0x14,DXMT_TEX_OPTIONS_SITE+4),
+]): put32(cc+0x0c+i*4,ins)
+# heapBufferSizeAndAlign: x3 is options, then execute the original objc call.
+put32(DXMT_HEAP_SIZE_SITE,enc_b(DXMT_HEAP_SIZE_SITE,cc+0x18))
+for i,ins in enumerate([
+    0x927CEC63,                           # and x3,x3,#~0xf
+    enc_bl(cc+0x1c,0x1fb2fc0),
+    enc_b(cc+0x20,DXMT_HEAP_SIZE_SITE+4),
+]): put32(cc+0x18+i*4,ins)
+# heap newBufferAtOffset: same x3 options rule.
+put32(DXMT_HEAP_BUF_SITE,enc_b(DXMT_HEAP_BUF_SITE,cc+0x24))
+for i,ins in enumerate([
+    0x927CEC63,
+    enc_bl(cc+0x28,0x1fb3c60),
+    enc_b(cc+0x2c,DXMT_HEAP_BUF_SITE+4),
+]): put32(cc+0x24+i*4,ins)
+d[DXMT_CACHE_MARKER_SITE:DXMT_CACHE_MARKER_SITE+len(DXMT_CACHE_MARKER)] = DXMT_CACHE_MARKER
+
 p.write_bytes(d)
 
 e=p.read_bytes()
@@ -764,7 +855,13 @@ print("direct-surface=PASS rev=clayton-12 software compositor is created by actu
 print("touch-input=PASS rev=clayton-9 overlay visible at session start + early player-1 XInput reservation")
 print("wow64-section-quarantine=PASS rev=clayton-14 only guest 0x3c680000 / host-window peer / size 1MiB is retained")
 print("d3d9-mode=PASS rev=clayton-15 adapter tail mode 1152x648 -> 1408x648 for GTAIV fullscreen")
+if struct.unpack_from("<I",e,D3D9_WINDOW_LAYER_GATE_SITE)[0] != 0xD503201F:
+    raise SystemExit("per-HWND Metal layer gate patch mismatch")
+if e[DXMT_CACHE_MARKER_SITE:DXMT_CACHE_MARKER_SITE+len(DXMT_CACHE_MARKER)] != DXMT_CACHE_MARKER:
+    raise SystemExit("DXMT cache runtime marker missing")
 print("d3d9-reset=PASS rev=clayton-17 GTAIV non-Ex Reset bypasses only the losable-resource reject gate")
+print("gta-window-metal=PASS rev=clayton-18 DXMT uses Winios per-HWND CAMetalLayer in direct-game sessions")
+print("dxmt-cpu-cache=PASS rev=clayton-19 upstream ml1178 equivalent: local Metal resources clear CPU WriteCombined mode")
 print(f"native-dylib-patched-sha256={hashlib.sha256(e).hexdigest()}")
 PY
 
@@ -794,6 +891,12 @@ checks={
     0x22a47fc:1408,
     0x22a4800:648,
     0x1aade04:0xD503201F,
+    0x1c724:0xD503201F,
+    0xa55ef0:0x1468A82C,
+    0xa55f3c:0x927CEC83,
+    0xa539dc:0x1468B174,
+    0xa603b4:0x14687F01,
+    0xa60428:0x14687EE7,
 }
 for off,want in checks.items():
     got=struct.unpack_from("<I",d,off)[0]
@@ -803,7 +906,14 @@ if b"[winios] clayton-12 software compositor on present only\n" not in d:
     raise SystemExit("clayton-12 runtime marker lost after codesign")
 if b"clayton-14 injustice-exact-view-quarantine" not in d:
     raise SystemExit("clayton-14 runtime marker lost after codesign")
-print("native-patch-after-codesign=PASS debug-object + madsync + Steam-env-clean + software-present compositor + touch-controls/XInput + WOW64 section quarantine")
+if b"clayton-18-gta-window-clayton-19-cache" not in d:
+    raise SystemExit("clayton-18/19 runtime marker lost after codesign")
+cache_words=[0x927CEC84,0xD2800005,0x179757D3,0x927CEC42,0xAA1303E0,0x17974E8B,
+             0x927CEC63,0x97ECCC01,0x179780FE,0x927CEC63,0x97ECCF26,0x17978118]
+got=[struct.unpack_from("<I",d,0x247ffa0+i*4)[0] for i in range(len(cache_words))]
+if got != cache_words:
+    raise SystemExit("clayton-19 DXMT cache trampoline lost after codesign")
+print("native-patch-after-codesign=PASS debug-object + madsync + Steam-env-clean + software-present compositor + touch-controls/XInput + WOW64 section quarantine + per-HWND Metal + DXMT cached CPU resources")
 PY
 
 say "Patch 32-bit D3D9 default to native ARM64 first, preserving emulated fallback"
