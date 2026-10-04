@@ -16,8 +16,8 @@ src = Path(sys.argv[1])
 info = src / "ios" / "Info.plist.in"
 s = info.read_text()
 s = s.replace("<string>Tsubomi</string>", "<string>VitaJoN</string>")
-s = s.replace("<string>0.47.0</string>", "<string>0.47.8</string>", 1)
-s = s.replace("<string>470</string>", "<string>478</string>", 1)
+s = s.replace("<string>0.47.0</string>", "<string>0.47.9</string>", 1)
+s = s.replace("<string>470</string>", "<string>479</string>", 1)
 info.write_text(s)
 
 state = src / "vita3k" / "config" / "include" / "config" / "state.h"
@@ -792,6 +792,7 @@ new_branch = '''        } else {
             const bool full_row_reinterpret =
                 native_store_col == 0
                 && start_sourced_line == 0
+                && half_index == 0
                 && width == ratio * src_pixel_stride
                 && height <= info.height;
 
@@ -880,7 +881,7 @@ new_branch = '''        } else {
                     .scaled_store_h = height,
                     .ratio = ratio,
                     .half_index = half_index,
-                    .interleave = 0u
+                    .interleave = 1u
                 };
 
                 cmd_buffer.bindPipeline(vk::PipelineBindPoint::eCompute, reinterpret_pipeline);
@@ -916,7 +917,7 @@ new_branch = '''        } else {
                     casted->reinterpret_buffer.buffer, casted->texture.image,
                     vk::ImageLayout::eTransferDstOptimal, to_image);
 
-                LOG_INFO_ONCE("VitaJoN compute typeless path active: {}x{} store={} ratio={} interleave=0",
+                LOG_INFO_ONCE("VitaJoN 0.47.9 typeless word-stream path active: {}x{} store={} ratio={} interleave=1",
                     width, height, src_pixel_stride, ratio);
             } else {
                 // Keep the corrected direct-byte path only for genuine cropped/offset reads.
@@ -1091,11 +1092,16 @@ void main() {
         ys = pc.scaled_store_h - 1u;
 
     const uint src_row_words = pc.scaled_store_w * pc.ratio;
+    // A 64-bit render-target texel viewed as 32-bit texels is a contiguous
+    // word stream: output x=0 consumes word 0, x=1 consumes word 1, then the
+    // next source texel. Build 478 incorrectly kept half_index constant, which
+    // duplicated the first 32-bit word of every 64-bit texel and produced the
+    // purple/speckled Uncharted output seen on device.
     const uint word_idx = (pc.interleave != 0u) ? (x % pc.ratio) : pc.half_index;
     dst[y * pc.out_width + x] =
         src[ys * src_row_words + s * pc.ratio + word_idx];
 }
 ''')
 
-print("VitaJoN 0.47.6 compute typeless renderer patch applied")
+print("VitaJoN 0.47.9 contiguous typeless word-stream renderer patch applied")
 PY
