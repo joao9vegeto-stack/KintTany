@@ -15,7 +15,7 @@ VCREDIST_SHA="cc0ff0eb1dc3f5188ae6300faef32bf5beeba4bdd6e8e445a9184072096b713b"
 LLVM_MINGW_SHA="bd85a3975723815cef28dbbd2ca2cb0c926f6b348a12a0453f39f7af273cb3f7"
 MESA_VERSION="26.2.3"
 MESA_MSVC_SHA="3f3613adb43cfd0f2e665ce2400b130c275f0b3317cb3a05566320a3a67589ed"
-IPA_NAME="Madeira-0.1.3-Injustice-GTAIV-R4.ipa"
+IPA_NAME="Madeira-0.1.3-Injustice-GTAIV-R5.ipa"
 
 mkdir -p "$WORK" "$OUT"
 : > "$REPORT"
@@ -41,7 +41,7 @@ if [ "$JOBS" -gt 8 ]; then JOBS=8; fi
 record "base=Madeira v0.1.3"
 record "upstream=$UPSTREAM_SHA"
 record "wine=$WINE_SHA"
-record "strategy=official IPA + AIR FullChain + VC runtime + ProcessDebugObjectHandle guard + actual madsync + non-Steam Steam-env cleanup + FEX InvalidationTracker heap relocation + ARM64EC image-map dedupe + Mesa x64 WGL/llvmpipe fallback + Ruby/MSVCRT __pioinfo PE-pool mirror + software compositor on-present only + touch-controls visible/early XInput slot + 32-bit D3D9 native-first Create9+Create9Ex fallback + exact Injustice fight-load view quarantine + GTAIV 1408x648 D3D9 mode + GTAIV Reset losable-resource compatibility + per-HWND Metal presentation + direct-mode window geometry; R3 DXMT cache experiment reverted to R2-stable instructions"
+record "strategy=official IPA + AIR FullChain + VC runtime + ProcessDebugObjectHandle guard + actual madsync + non-Steam Steam-env cleanup + FEX InvalidationTracker heap relocation + ARM64EC image-map dedupe + Mesa x64 WGL/llvmpipe fallback + Ruby/MSVCRT __pioinfo PE-pool mirror + software compositor on-present only + touch-controls visible/early XInput slot + 32-bit D3D9 native-first Create9+Create9Ex fallback + exact Injustice fight-load view quarantine + GTAIV 1408x648 D3D9 mode + GTAIV Reset compatibility + per-HWND Metal presentation + direct-mode window geometry + GTAIV 1280x720 fullscreen reset normalization + interval-two loading cap; R3 DXMT cache experiment reverted to R2-stable instructions"
 record "jobs=$JOBS"
 record "xcode=$(xcodebuild -version | tr '\n' ' ')"
 
@@ -573,6 +573,26 @@ D3D9_GTA_MODE_HEIGHT_SITE=0x22a4800
 # the shim invalidates its children after a successful native reset.
 D3D9_GTA_RESET_LOSABLE_GATE_SITE=0x1aade04
 
+# clayton-22: R4 finally renders GTA IV, which exposed two independent facts
+# hidden by the earlier white screen:
+#   (1) the game resets 1280x720 fullscreen -> 800x600 windowed, then later
+#       1280x720 windowed, leaving the title/border path visible;
+#   (2) on the infinite mission load it is not deadlocked at all -- the native
+#       Ex swapchain blasts millions of Presents while waiters=0.  The later
+#       1280x720 reset also asks PresentationInterval=DEFAULT, and the iOS layer
+#       does not provide a blocking vblank to the calling thread.
+# Normalize only the two GTA-shaped WINDOWED reset widths (800 or 1280) to the
+# already-proven 1280x720 fullscreen mode and D3DPRESENT_INTERVAL_TWO.  DXMT
+# turns interval TWO into an explicit minimum-present duration, giving GTA the
+# 30-ish FPS loading cap it needs instead of relying on the non-blocking layer
+# vsync.  This hook runs before the Ex/non-Ex split, so GTA's Device9Ex path is
+# covered; the original m_isEx load is replayed before returning.
+D3D9_GTA_RESET_NORMALIZE_SITE=0x1aaddf8
+D3D9_GTA_RESET_NORMALIZE_CAVE=0x247ffa0
+D3D9_GTA_RESET_NORMALIZE_CAVE_SIZE=0x60
+D3D9_GTA_RESET_NORMALIZE_MARKER_SITE=0x247fffc
+D3D9_GTA_RESET_NORMALIZE_MARKER=b"R5GT"
+
 # clayton-18: GTA IV now creates and resets the native D3D9 device, and its
 # Present loop runs, but the visible Wine client stays white. The log proves
 # Winios has a real hwnd=0x20030 compositor while DXMT never creates the
@@ -657,6 +677,10 @@ if u32(D3D9_GTA_MODE_WIDTH_SITE) != 1152 or u32(D3D9_GTA_MODE_HEIGHT_SITE) != 64
     raise SystemExit(f"unexpected D3D9 tail mode {u32(D3D9_GTA_MODE_WIDTH_SITE)}x{u32(D3D9_GTA_MODE_HEIGHT_SITE)}")
 if u32(D3D9_GTA_RESET_LOSABLE_GATE_SITE) != 0x35001B28:
     raise SystemExit(f"unexpected D3D9 Reset losable-resource gate {u32(D3D9_GTA_RESET_LOSABLE_GATE_SITE):#010x}")
+if u32(D3D9_GTA_RESET_NORMALIZE_SITE) != 0x394BE288:
+    raise SystemExit(f"unexpected GTA Reset m_isEx load {u32(D3D9_GTA_RESET_NORMALIZE_SITE):#010x}")
+if d[D3D9_GTA_RESET_NORMALIZE_CAVE:D3D9_GTA_RESET_NORMALIZE_CAVE+D3D9_GTA_RESET_NORMALIZE_CAVE_SIZE] != b"\0"*D3D9_GTA_RESET_NORMALIZE_CAVE_SIZE:
+    raise SystemExit("GTA Reset normalization cave is not zero-filled")
 if u32(D3D9_WINDOW_LAYER_GATE_SITE) != 0x34000780:
     raise SystemExit(f"unexpected Metal per-window branch gate {u32(D3D9_WINDOW_LAYER_GATE_SITE):#010x}")
 
@@ -745,9 +769,41 @@ d[WOW64_SECTION_MARKER_SITE:WOW64_SECTION_MARKER_SITE+len(WOW64_SECTION_MARKER)]
 # GTA IV: make the exact Madeira landscape resolution a legal D3D9 fullscreen
 # adapter mode. The frontend still validates every other mode exactly as before.
 put32(D3D9_GTA_MODE_WIDTH_SITE,1408)
-# cbnz w8, failure -> nop: do not reject GTA IV Reset solely because the
-# non-Ex device still reports losable resources at the mode transition.
+# cbnz w8, failure -> nop: retain the R4 non-Ex compatibility path.
 put32(D3D9_GTA_RESET_LOSABLE_GATE_SITE,0xD503201F)
+
+# GTA R5 Reset normalizer. pPresentationParameters is x21 here. The R4 log has
+# exactly two mode transitions: 800x600 windowed/IMMEDIATE and 1280x720
+# windowed/DEFAULT. Both are converted to 1280x720 fullscreen with interval
+# TWO. The width test keeps this away from unrelated windowed resets, and the
+# original ldrb w8,[x20,#0x2f8] is replayed before returning to the pristine
+# tbnz m_isEx instruction.
+gta_reset_code=[
+    0xB9402AA8, # ldr  w8,[x21,#0x28]   Windowed
+    0x340001C8, # cbz  w8,out
+    0xB94002A8, # ldr  w8,[x21]         width
+    0x710C811F, # cmp  w8,#800
+    0x54000080, # b.eq apply (+0x10 -> cave+0x20)
+    0x7114011F, # cmp  w8,#1280
+    0x54000121, # b.ne out
+    0x14000001, # b    apply
+    0x5280A008, # mov  w8,#1280
+    0xB90002A8, # str  w8,[x21]
+    0x52805A08, # mov  w8,#720
+    0xB90006A8, # str  w8,[x21,#4]
+    0xB9002ABF, # str  wzr,[x21,#0x28]  Windowed=FALSE
+    0x52800048, # mov  w8,#2            D3DPRESENT_INTERVAL_TWO
+    0xB9003EA8, # str  w8,[x21,#0x3c]
+    0x394BE288, # ldrb w8,[x20,#0x2f8]  replay pristine m_isEx load
+    enc_b(D3D9_GTA_RESET_NORMALIZE_CAVE+0x40,D3D9_GTA_RESET_NORMALIZE_SITE+4),
+]
+# The compact width-only discriminator is deliberate: the observed GTA pair is
+# 800x600 and 1280x720, while Injustice never enters this windowed reset path.
+# Keep the rest of the 0x60-byte cave zero except the 4-byte build marker.
+put32(D3D9_GTA_RESET_NORMALIZE_SITE,enc_b(D3D9_GTA_RESET_NORMALIZE_SITE,D3D9_GTA_RESET_NORMALIZE_CAVE))
+for i,ins in enumerate(gta_reset_code):
+    put32(D3D9_GTA_RESET_NORMALIZE_CAVE+i*4,ins)
+d[D3D9_GTA_RESET_NORMALIZE_MARKER_SITE:D3D9_GTA_RESET_NORMALIZE_MARKER_SITE+len(D3D9_GTA_RESET_NORMALIZE_MARKER)] = D3D9_GTA_RESET_NORMALIZE_MARKER
 
 # GTA IV's Wine client/compositor exists and follows its 1408x648 -> 800x600
 # mode changes. Keep DXMT's CAMetalLayer in that SAME hwnd instead of returning
@@ -803,7 +859,12 @@ print("wow64-section-quarantine=PASS rev=clayton-14 only guest 0x3c680000 / host
 print("d3d9-mode=PASS rev=clayton-15 adapter tail mode 1152x648 -> 1408x648 for GTAIV fullscreen")
 if struct.unpack_from("<I",e,D3D9_WINDOW_LAYER_GATE_SITE)[0] != 0xD503201F:
     raise SystemExit("per-HWND Metal layer gate patch mismatch")
-print("d3d9-reset=PASS rev=clayton-17 GTAIV non-Ex Reset bypasses only the losable-resource reject gate")
+if struct.unpack_from("<I",e,D3D9_GTA_RESET_NORMALIZE_SITE)[0] != enc_b(D3D9_GTA_RESET_NORMALIZE_SITE,D3D9_GTA_RESET_NORMALIZE_CAVE):
+    raise SystemExit("GTA Reset normalization entry branch mismatch")
+if e[D3D9_GTA_RESET_NORMALIZE_MARKER_SITE:D3D9_GTA_RESET_NORMALIZE_MARKER_SITE+len(D3D9_GTA_RESET_NORMALIZE_MARKER)] != D3D9_GTA_RESET_NORMALIZE_MARKER:
+    raise SystemExit("GTA Reset normalization marker missing")
+print("d3d9-reset=PASS rev=clayton-17 GTAIV non-Ex Reset compatibility retained")
+print("gta-reset-normalize=PASS rev=clayton-22 windowed width 800/1280 -> fullscreen 1280x720 + D3DPRESENT_INTERVAL_TWO")
 print("gta-window-metal=PASS rev=clayton-18 DXMT uses Winios per-HWND CAMetalLayer in direct-game sessions")
 print("gta-window-geometry=PASS rev=clayton-21 direct-mode WindowPosChanged forwards the client rect to the per-HWND Metal layer")
 print("dxmt-cpu-cache=REVERTED rev=clayton-20 R3 experiment removed; R2-stable resource-option instructions preserved")
@@ -836,6 +897,7 @@ checks={
     0x22a47fc:1408,
     0x22a4800:648,
     0x1aade04:0xD503201F,
+    0x1aaddf8:0x1427486A,
     0x1c724:0xD503201F,
     # clayton-20: verify the five R3 DXMT cache sites remain pristine.
     0xa55ef0:0xD2800005,
@@ -852,7 +914,17 @@ if b"[winios] clayton-12 software compositor on present only\n" not in d:
     raise SystemExit("clayton-12 runtime marker lost after codesign")
 if b"clayton-14 injustice-exact-view-quarantine" not in d:
     raise SystemExit("clayton-14 runtime marker lost after codesign")
-print("native-patch-after-codesign=PASS debug-object + madsync + Steam-env-clean + software-present compositor + direct window geometry + touch-controls/XInput + WOW64 section quarantine + per-HWND Metal; R3 DXMT cache experiment absent")
+if d[0x247fffc:0x2480000] != b"R5GT":
+    raise SystemExit("clayton-22 GTA Reset marker lost after codesign")
+gta_expected=[
+    0xB9402AA8,0x340001C8,0xB94002A8,0x710C811F,0x54000080,0x7114011F,0x54000121,0x14000001,
+    0x5280A008,0xB90002A8,0x52805A08,0xB90006A8,0xB9002ABF,0x52800048,0xB9003EA8,0x394BE288,
+    0x17D8B787,
+]
+got=[struct.unpack_from("<I",d,0x247ffa0+i*4)[0] for i in range(len(gta_expected))]
+if got != gta_expected:
+    raise SystemExit(f"clayton-22 GTA Reset cave lost after codesign: {got}")
+print("native-patch-after-codesign=PASS debug-object + madsync + Steam-env-clean + software-present compositor + direct window geometry + touch-controls/XInput + WOW64 section quarantine + per-HWND Metal + GTA fullscreen/30fps Reset normalization; R3 DXMT cache experiment absent")
 PY
 
 say "Patch 32-bit D3D9 default to native ARM64 first, preserving emulated fallback"
