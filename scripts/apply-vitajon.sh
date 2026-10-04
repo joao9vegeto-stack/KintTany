@@ -16,8 +16,8 @@ src = Path(sys.argv[1])
 info = src / "ios" / "Info.plist.in"
 s = info.read_text()
 s = s.replace("<string>Tsubomi</string>", "<string>VitaJoN</string>")
-s = s.replace("<string>0.47.0</string>", "<string>0.47.9</string>", 1)
-s = s.replace("<string>470</string>", "<string>479</string>", 1)
+s = s.replace("<string>0.47.0</string>", "<string>0.48.0</string>", 1)
+s = s.replace("<string>470</string>", "<string>480</string>", 1)
 info.write_text(s)
 
 state = src / "vita3k" / "config" / "include" / "config" / "state.h"
@@ -518,7 +518,8 @@ new = """            // copy the image to the buffer
                 vk::PipelineStageFlagBits::eTransfer,
                 vk::PipelineStageFlagBits::eTransfer, {}, {}, transfer_write_to_read, {});
 
-            LOG_INFO_ONCE("VitaJoN typeless transfer barriers active: image->buffer->image synchronized");
+            LOG_INFO_ONCE("VitaJoN 0.48.0 Android-4098 direct typeless byte path active: requested={}x{} bpp={} cached={}x{} bpp={} stride={}",
+                width, height, bytes_per_pixel_requested, info.width, info.height, bytes_per_pixel_in_store, stride_bytes);
 
             // then the buffer to the image
             const uint32_t dst_pixel_stride = (stride_bytes / bytes_per_pixel_requested) * state.res_multiplier;
@@ -617,491 +618,73 @@ uniform.write_text(s)
 print("VitaJoN Vita3K+ typeless synchronization and Uncharted shader fixes applied")
 PY
 
-
-# VitaJoN 0.47.6: replace Tsubomi's typeless buffer reinterpret with the
-# Vita3K+ compute-deinterleave path. This is intentionally applied after the
-# previous compatibility patches so it supersedes the old image->buffer->image
-# reinterpret rather than layering another tweak on top of it.
+# VitaJoN 0.48.0: match Vita3K+/4098 surface selection before the typeless cast.
+# Uncharted reuses/overlaps color-surface address ranges with different formats and
+# strides. Tsubomi previously tested only the nearest lower-address cache entry.
 python3 - "$SRC" <<'PY'
 from pathlib import Path
 import sys
 
 src = Path(sys.argv[1])
-
-hdr = src / "vita3k" / "renderer" / "include" / "renderer" / "vulkan" / "surface_cache.h"
-s = hdr.read_text()
-
-old = """struct CastedTexture {
-    vkutil::Image texture;
-    // only used if an image to image copy is not possible
-    vkutil::Buffer transition_buffer;
-    uint64_t scene_timestamp = 0;
-"""
-new = """struct CastedTexture {
-    vkutil::Image texture;
-    // only used if an image to image copy is not possible
-    vkutil::Buffer transition_buffer;
-    // compute-deinterleaved output used by typeless 64->32 bit reinterpretation
-    vkutil::Buffer reinterpret_buffer;
-    uint64_t scene_timestamp = 0;
-"""
-if old not in s:
-    raise SystemExit("CastedTexture anchor not found")
-s = s.replace(old, new, 1)
-
-old = """struct SurfaceRetrieveResult {
-    vk::ImageView view;
-    vkutil::Image *base_image;
-};
-
-class VKSurfaceCache {
-"""
-new = """struct SurfaceRetrieveResult {
-    vk::ImageView view;
-    vkutil::Image *base_image;
-};
-
-struct ReinterpretPushConstants {
-    uint32_t out_width;
-    uint32_t out_height;
-    uint32_t scaled_store_w;
-    uint32_t scaled_store_h;
-    uint32_t ratio;
-    uint32_t half_index;
-    uint32_t interleave;
-};
-
-class VKSurfaceCache {
-"""
-if old not in s:
-    raise SystemExit("ReinterpretPushConstants anchor not found")
-s = s.replace(old, new, 1)
-
-old = """    void destroy_surface(ColorSurfaceCacheInfo &info);
-    void destroy_surface(DepthStencilSurfaceCacheInfo &info);
-    vk::ImageView retrieve_sampled_view(ColorSurfaceCacheInfo &info, vk::Format format,
-        const vk::ComponentMapping &components);
-
-public:
-"""
-new = """    void destroy_surface(ColorSurfaceCacheInfo &info);
-    void destroy_surface(DepthStencilSurfaceCacheInfo &info);
-    vk::ImageView retrieve_sampled_view(ColorSurfaceCacheInfo &info, vk::Format format,
-        const vk::ComponentMapping &components);
-
-    vk::ShaderModule reinterpret_shader = nullptr;
-    vk::DescriptorSetLayout reinterpret_desc_layout = nullptr;
-    vk::PipelineLayout reinterpret_pipeline_layout = nullptr;
-    vk::Pipeline reinterpret_pipeline = nullptr;
-    vk::DescriptorPool reinterpret_desc_pool = nullptr;
-    std::vector<vk::DescriptorSet> reinterpret_desc_sets;
-    uint32_t reinterpret_desc_idx = 0;
-    void ensure_reinterpret_pipeline();
-
-public:
-"""
-if old not in s:
-    raise SystemExit("reinterpret pipeline member anchor not found")
-s = s.replace(old, new, 1)
-hdr.write_text(s)
-
 surface = src / "vita3k" / "renderer" / "src" / "vulkan" / "surface_cache.cpp"
 s = surface.read_text()
 
-# Destroy the new buffer with each casted texture.
-old = """    for (auto &casted : info.casted_textures) {
-        destroy_queue.add_buffer(casted.transition_buffer);
-        destroy_queue.add_image(casted.texture);
+old = """    ColorSurfaceCacheInfo &info = *ite->second;
+
+    if ((base_format == SCE_GXM_COLOR_BASE_FORMAT_U8U8U8 || info.format == SCE_GXM_COLOR_BASE_FORMAT_U8U8U8)
+        && base_format != info.format)
+        // don't even try to match u8u8u8 with something else
+        return std::nullopt;
+
+    if (tiling != info.tiling || info.stride_bytes != stride_bytes) {
+        // if the tiling is different, also don't try to match them
+        // about the strides, I've yet to see a case where the byte stride is different
+        LOG_WARN_ONCE("Surface-as-texture miss (tiling/stride): texture=0x{:X} tiling={}/{} stride={}/{}",
+            address, static_cast<int>(tiling), static_cast<int>(info.tiling), stride_bytes, info.stride_bytes);
+        return std::nullopt;
     }
 """
-new = """    for (auto &casted : info.casted_textures) {
-        destroy_queue.add_buffer(casted.transition_buffer);
-        destroy_queue.add_buffer(casted.reinterpret_buffer);
-        destroy_queue.add_image(casted.texture);
-    }
-"""
-if s.count(old) < 1:
-    raise SystemExit("destroy_surface casted anchor not found")
-s = s.replace(old, new, 1)
 
-old = """        for (auto &casted : info.casted_textures) {
-            casted.transition_buffer.destroy();
-            casted.texture.destroy();
-        }
-"""
-new = """        for (auto &casted : info.casted_textures) {
-            casted.transition_buffer.destroy();
-            casted.reinterpret_buffer.destroy();
-            casted.texture.destroy();
-        }
-"""
-if old not in s:
-    raise SystemExit("cleanup casted anchor not found")
-s = s.replace(old, new, 1)
-
-# Destroy the global compute objects during renderer cleanup.
-anchor = """    color_address_lookup.clear();
-    depth_address_lookup.clear();
-    stencil_address_lookup.clear();
-"""
-insert = """    if (reinterpret_pipeline) {
-        state.device.destroy(reinterpret_pipeline);
-        state.device.destroy(reinterpret_pipeline_layout);
-        state.device.destroy(reinterpret_desc_layout);
-        state.device.destroy(reinterpret_desc_pool);
-        state.device.destroy(reinterpret_shader);
-        reinterpret_pipeline = nullptr;
-        reinterpret_desc_sets.clear();
-    }
-
-    color_address_lookup.clear();
-    depth_address_lookup.clear();
-    stencil_address_lookup.clear();
-"""
-if anchor not in s:
-    raise SystemExit("cleanup pipeline anchor not found")
-s = s.replace(anchor, insert, 1)
-
-# Replace only the typeless branch inside retrieve_color_surface_as_texture.
-start_marker = '''        } else {
-            LOG_INFO_ONCE("Game is doing typeless copies");
-'''
-end_marker = '''        }
-        casted->texture.transition_to(cmd_buffer, vkutil::ImageLayout::SampledImage);
-'''
-start = s.find(start_marker)
-if start == -1:
-    raise SystemExit("typeless branch start not found")
-end = s.find(end_marker, start)
-if end == -1:
-    raise SystemExit("typeless branch end not found")
-
-new_branch = '''        } else {
-            LOG_INFO_ONCE("Game is doing typeless copies via VitaJoN compute deinterleave");
-
-            const uint32_t ratio = bytes_per_pixel_in_store / bytes_per_pixel_requested;
-            if (ratio == 0 || (bytes_per_pixel_in_store % bytes_per_pixel_requested) != 0)
-                return std::nullopt;
-
-            const uint32_t native_byte_offset = data_delta % stride_bytes;
-            const uint32_t sub_texel_byte = native_byte_offset % bytes_per_pixel_in_store;
-            const uint32_t native_store_col = native_byte_offset / bytes_per_pixel_in_store;
-            const uint32_t src_pixel_stride = static_cast<uint32_t>((info.stride_bytes / bytes_per_pixel_in_store) * state.res_multiplier);
-            const uint32_t half_index = sub_texel_byte / bytes_per_pixel_requested;
-
-            const bool full_row_reinterpret =
-                native_store_col == 0
-                && start_sourced_line == 0
-                && half_index == 0
-                && width == ratio * src_pixel_stride
-                && height <= info.height;
-
-            if (full_row_reinterpret) {
-                ensure_reinterpret_pipeline();
-
-                const vk::DeviceSize src_size =
-                    static_cast<vk::DeviceSize>(src_pixel_stride) * bytes_per_pixel_in_store * align(height, 4)
-                    + bytes_per_pixel_in_store;
-                const vk::DeviceSize dst_size =
-                    static_cast<vk::DeviceSize>(width) * bytes_per_pixel_requested * align(height, 4)
-                    + bytes_per_pixel_requested;
-
-                if (!casted->transition_buffer.buffer || casted->transition_buffer.size < src_size) {
-                    state.frame().destroy_queue.add_buffer(casted->transition_buffer);
-                    casted->transition_buffer = vkutil::Buffer(src_size);
-                    casted->transition_buffer.init_buffer(vk::BufferUsageFlagBits::eTransferDst | vk::BufferUsageFlagBits::eStorageBuffer);
-                }
-                if (!casted->reinterpret_buffer.buffer || casted->reinterpret_buffer.size < dst_size) {
-                    state.frame().destroy_queue.add_buffer(casted->reinterpret_buffer);
-                    casted->reinterpret_buffer = vkutil::Buffer(dst_size);
-                    casted->reinterpret_buffer.init_buffer(vk::BufferUsageFlagBits::eTransferSrc | vk::BufferUsageFlagBits::eStorageBuffer);
-                }
-
-                vk::ImageMemoryBarrier pre_dump{
-                    .srcAccessMask = vk::AccessFlagBits::eColorAttachmentWrite | vk::AccessFlagBits::eShaderWrite,
-                    .dstAccessMask = vk::AccessFlagBits::eTransferRead,
-                    .oldLayout = vk::ImageLayout::eGeneral,
-                    .newLayout = vk::ImageLayout::eGeneral,
-                    .srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED,
-                    .dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED,
-                    .image = info.texture.image,
-                    .subresourceRange = vkutil::color_subresource_range
-                };
-                cmd_buffer.pipelineBarrier(
-                    vk::PipelineStageFlagBits::eColorAttachmentOutput | vk::PipelineStageFlagBits::eFragmentShader,
-                    vk::PipelineStageFlagBits::eTransfer, {}, {}, {}, pre_dump);
-
-                vk::BufferImageCopy dump{
-                    .bufferOffset = 0,
-                    .bufferRowLength = src_pixel_stride,
-                    .bufferImageHeight = height,
-                    .imageSubresource = vkutil::color_subresource_layer,
-                    .imageOffset = { 0, 0, 0 },
-                    .imageExtent = { info.width, height, 1 }
-                };
-                cmd_buffer.copyImageToBuffer(
-                    info.texture.image, vk::ImageLayout::eGeneral,
-                    casted->transition_buffer.buffer, dump);
-
-                vk::BufferMemoryBarrier to_compute{
-                    .srcAccessMask = vk::AccessFlagBits::eTransferWrite,
-                    .dstAccessMask = vk::AccessFlagBits::eShaderRead,
-                    .srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED,
-                    .dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED,
-                    .buffer = casted->transition_buffer.buffer,
-                    .offset = 0,
-                    .size = VK_WHOLE_SIZE
-                };
-                cmd_buffer.pipelineBarrier(
-                    vk::PipelineStageFlagBits::eTransfer,
-                    vk::PipelineStageFlagBits::eComputeShader, {}, {}, to_compute, {});
-
-                vk::DescriptorSet dset = reinterpret_desc_sets[reinterpret_desc_idx];
-                reinterpret_desc_idx = (reinterpret_desc_idx + 1) % static_cast<uint32_t>(reinterpret_desc_sets.size());
-
-                vk::DescriptorBufferInfo src_bi{ casted->transition_buffer.buffer, 0, VK_WHOLE_SIZE };
-                vk::DescriptorBufferInfo dst_bi{ casted->reinterpret_buffer.buffer, 0, VK_WHOLE_SIZE };
-                std::array<vk::WriteDescriptorSet, 2> writes;
-                writes[0] = vk::WriteDescriptorSet{
-                    .dstSet = dset, .dstBinding = 0, .dstArrayElement = 0,
-                    .descriptorType = vk::DescriptorType::eStorageBuffer
-                };
-                writes[0].setBufferInfo(src_bi);
-                writes[1] = vk::WriteDescriptorSet{
-                    .dstSet = dset, .dstBinding = 1, .dstArrayElement = 0,
-                    .descriptorType = vk::DescriptorType::eStorageBuffer
-                };
-                writes[1].setBufferInfo(dst_bi);
-                state.device.updateDescriptorSets(writes, {});
-
-                ReinterpretPushConstants pc{
-                    .out_width = width,
-                    .out_height = height,
-                    .scaled_store_w = src_pixel_stride,
-                    .scaled_store_h = height,
-                    .ratio = ratio,
-                    .half_index = half_index,
-                    .interleave = 1u
-                };
-
-                cmd_buffer.bindPipeline(vk::PipelineBindPoint::eCompute, reinterpret_pipeline);
-                cmd_buffer.bindDescriptorSets(
-                    vk::PipelineBindPoint::eCompute, reinterpret_pipeline_layout, 0, dset, {});
-                cmd_buffer.pushConstants(
-                    reinterpret_pipeline_layout, vk::ShaderStageFlagBits::eCompute,
-                    0, sizeof(pc), &pc);
-                cmd_buffer.dispatch((width + 7u) / 8u, (height + 7u) / 8u, 1);
-
-                vk::BufferMemoryBarrier to_copy{
-                    .srcAccessMask = vk::AccessFlagBits::eShaderWrite,
-                    .dstAccessMask = vk::AccessFlagBits::eTransferRead,
-                    .srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED,
-                    .dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED,
-                    .buffer = casted->reinterpret_buffer.buffer,
-                    .offset = 0,
-                    .size = VK_WHOLE_SIZE
-                };
-                cmd_buffer.pipelineBarrier(
-                    vk::PipelineStageFlagBits::eComputeShader,
-                    vk::PipelineStageFlagBits::eTransfer, {}, {}, to_copy, {});
-
-                vk::BufferImageCopy to_image{
-                    .bufferOffset = 0,
-                    .bufferRowLength = width,
-                    .bufferImageHeight = height,
-                    .imageSubresource = vkutil::color_subresource_layer,
-                    .imageOffset = { 0, 0, 0 },
-                    .imageExtent = { width, height, 1 }
-                };
-                cmd_buffer.copyBufferToImage(
-                    casted->reinterpret_buffer.buffer, casted->texture.image,
-                    vk::ImageLayout::eTransferDstOptimal, to_image);
-
-                LOG_INFO_ONCE("VitaJoN 0.47.9 typeless word-stream path active: {}x{} store={} ratio={} interleave=1",
-                    width, height, src_pixel_stride, ratio);
-            } else {
-                // Keep the corrected direct-byte path only for genuine cropped/offset reads.
-                const uint32_t scaled_store_col =
-                    static_cast<uint32_t>((native_byte_offset / bytes_per_pixel_in_store) * state.res_multiplier);
-                const uint32_t src_byte_offset =
-                    scaled_store_col * bytes_per_pixel_in_store + sub_texel_byte;
-                const uint32_t dst_pixel_stride = src_pixel_stride * ratio;
-                const vk::DeviceSize buffer_size =
-                    static_cast<vk::DeviceSize>(src_pixel_stride) * bytes_per_pixel_in_store * align(height, 4)
-                    + src_byte_offset + bytes_per_pixel_in_store;
-
-                if (!casted->transition_buffer.buffer || casted->transition_buffer.size < buffer_size) {
-                    state.frame().destroy_queue.add_buffer(casted->transition_buffer);
-                    casted->transition_buffer = vkutil::Buffer(buffer_size);
-                    casted->transition_buffer.init_buffer(
-                        vk::BufferUsageFlagBits::eTransferDst | vk::BufferUsageFlagBits::eTransferSrc);
-                }
-
-                vk::BufferImageCopy copy{
-                    .bufferOffset = 0,
-                    .bufferRowLength = src_pixel_stride,
-                    .bufferImageHeight = height,
-                    .imageSubresource = vkutil::color_subresource_layer,
-                    .imageOffset = { 0, static_cast<int32_t>(start_sourced_line), 0 },
-                    .imageExtent = { info.width, height, 1 }
-                };
-
-                vk::ImageMemoryBarrier img_barrier{
-                    .srcAccessMask = vk::AccessFlagBits::eColorAttachmentWrite | vk::AccessFlagBits::eShaderWrite,
-                    .dstAccessMask = vk::AccessFlagBits::eTransferRead,
-                    .oldLayout = vk::ImageLayout::eGeneral,
-                    .newLayout = vk::ImageLayout::eGeneral,
-                    .srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED,
-                    .dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED,
-                    .image = info.texture.image,
-                    .subresourceRange = vkutil::color_subresource_range
-                };
-                cmd_buffer.pipelineBarrier(
-                    vk::PipelineStageFlagBits::eColorAttachmentOutput | vk::PipelineStageFlagBits::eFragmentShader,
-                    vk::PipelineStageFlagBits::eTransfer, {}, {}, {}, img_barrier);
-                cmd_buffer.copyImageToBuffer(
-                    info.texture.image, vk::ImageLayout::eGeneral,
-                    casted->transition_buffer.buffer, copy);
-
-                vk::BufferMemoryBarrier buf_barrier{
-                    .srcAccessMask = vk::AccessFlagBits::eTransferWrite,
-                    .dstAccessMask = vk::AccessFlagBits::eTransferRead,
-                    .srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED,
-                    .dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED,
-                    .buffer = casted->transition_buffer.buffer,
-                    .offset = 0,
-                    .size = VK_WHOLE_SIZE
-                };
-                cmd_buffer.pipelineBarrier(
-                    vk::PipelineStageFlagBits::eTransfer,
-                    vk::PipelineStageFlagBits::eTransfer, {}, {}, buf_barrier, {});
-
-                copy.setBufferOffset(src_byte_offset)
-                    .setBufferRowLength(dst_pixel_stride)
-                    .setImageOffset({ 0, 0, 0 })
-                    .setImageExtent({ width, height, 1 });
-                cmd_buffer.copyBufferToImage(
-                    casted->transition_buffer.buffer, casted->texture.image,
-                    vk::ImageLayout::eTransferDstOptimal, copy);
+new = """    // Vita3K+ Uncharted parity: several cached surfaces may overlap the same
+    // guest address. Prefer an overlapping surface with the exact texture
+    // tiling + byte stride instead of assuming the nearest lower address is it.
+    if (tiling != ite->second->tiling || ite->second->stride_bytes != stride_bytes) {
+        auto match = ite;
+        bool found_layout_match = false;
+        while (true) {
+            if ((match->first + match->second->total_bytes) > address
+                && match->second->tiling == tiling
+                && match->second->stride_bytes == stride_bytes) {
+                ite = match;
+                found_layout_match = true;
+                LOG_INFO_ONCE("VitaJoN 0.48.0 selected overlapping surface by stride/tiling: texture=0x{:X} surface=0x{:X} stride={}",
+                    address, ite->first, stride_bytes);
+                break;
             }
-'''
-s = s[:start] + new_branch + s[end:]
-surface.write_text(s)
+            if (match == color_address_lookup.begin())
+                break;
+            --match;
+        }
 
-# Add the compute-pipeline constructor at the end of surface_cache.cpp.
-s = surface.read_text()
-ns = "} // namespace renderer::vulkan"
-if ns not in s:
-    raise SystemExit("surface_cache namespace end not found")
-
-impl = r'''
-void VKSurfaceCache::ensure_reinterpret_pipeline() {
-    if (reinterpret_pipeline)
-        return;
-
-    const fs::path shader_path =
-        state.static_assets / "shaders-builtin/vulkan" / "surface_cast_reinterpret.comp.spv";
-    reinterpret_shader = vkutil::load_shader(state.device, shader_path);
-
-    std::array<vk::DescriptorSetLayoutBinding, 2> bindings{};
-    for (uint32_t i = 0; i < 2; ++i) {
-        bindings[i] = vk::DescriptorSetLayoutBinding{
-            .binding = i,
-            .descriptorType = vk::DescriptorType::eStorageBuffer,
-            .descriptorCount = 1,
-            .stageFlags = vk::ShaderStageFlagBits::eCompute
-        };
+        if (!found_layout_match) {
+            LOG_WARN_ONCE("Surface-as-texture miss (tiling/stride): texture=0x{:X} requested tiling={} stride={}",
+                address, static_cast<int>(tiling), stride_bytes);
+            return std::nullopt;
+        }
     }
 
-    vk::DescriptorSetLayoutCreateInfo layout_info{};
-    layout_info.setBindings(bindings);
-    reinterpret_desc_layout = state.device.createDescriptorSetLayout(layout_info);
+    ColorSurfaceCacheInfo &info = *ite->second;
 
-    vk::PushConstantRange push_range{
-        .stageFlags = vk::ShaderStageFlagBits::eCompute,
-        .offset = 0,
-        .size = sizeof(ReinterpretPushConstants)
-    };
-    vk::PipelineLayoutCreateInfo pl_info{};
-    pl_info.setSetLayouts(reinterpret_desc_layout);
-    pl_info.setPushConstantRanges(push_range);
-    reinterpret_pipeline_layout = state.device.createPipelineLayout(pl_info);
+    if ((base_format == SCE_GXM_COLOR_BASE_FORMAT_U8U8U8 || info.format == SCE_GXM_COLOR_BASE_FORMAT_U8U8U8)
+        && base_format != info.format)
+        // don't even try to match u8u8u8 with something else
+        return std::nullopt;
+"""
 
-    vk::PipelineShaderStageCreateInfo stage{
-        .stage = vk::ShaderStageFlagBits::eCompute,
-        .module = reinterpret_shader,
-        .pName = "main"
-    };
-    vk::ComputePipelineCreateInfo pipeline_info{
-        .stage = stage,
-        .layout = reinterpret_pipeline_layout
-    };
-    reinterpret_pipeline = state.device.createComputePipeline(nullptr, pipeline_info).value;
-
-    constexpr uint32_t NB_SETS = 256;
-    vk::DescriptorPoolSize pool_size{
-        vk::DescriptorType::eStorageBuffer, 2 * NB_SETS
-    };
-    vk::DescriptorPoolCreateInfo pool_info{ .maxSets = NB_SETS };
-    pool_info.setPoolSizes(pool_size);
-    reinterpret_desc_pool = state.device.createDescriptorPool(pool_info);
-
-    std::vector<vk::DescriptorSetLayout> layouts(NB_SETS, reinterpret_desc_layout);
-    vk::DescriptorSetAllocateInfo alloc_info{ .descriptorPool = reinterpret_desc_pool };
-    alloc_info.setSetLayouts(layouts);
-    reinterpret_desc_sets = state.device.allocateDescriptorSets(alloc_info);
-    reinterpret_desc_idx = 0;
-
-    LOG_INFO("VitaJoN typeless compute pipeline created");
-}
-
-'''
-s = s.replace(ns, impl + ns, 1)
+if old not in s:
+    raise SystemExit("VitaJoN 0.48.0 surface selection anchor not found")
+s = s.replace(old, new, 1)
 surface.write_text(s)
 
-shader = src / "vita3k" / "shaders-builtin" / "vulkan" / "surface_cast_reinterpret.comp"
-shader.write_text(r'''#version 450
-
-layout(local_size_x = 8, local_size_y = 8) in;
-
-layout(push_constant) uniform PushConstants {
-    uint out_width;
-    uint out_height;
-    uint scaled_store_w;
-    uint scaled_store_h;
-    uint ratio;
-    uint half_index;
-    uint interleave;
-} pc;
-
-layout(set = 0, binding = 0, std430) readonly buffer SrcBuffer { uint src[]; };
-layout(set = 0, binding = 1, std430) writeonly buffer DstBuffer { uint dst[]; };
-
-void main() {
-    const uint x = gl_GlobalInvocationID.x;
-    const uint y = gl_GlobalInvocationID.y;
-    if (x >= pc.out_width || y >= pc.out_height)
-        return;
-
-    uint s = x / pc.ratio;
-    if (s >= pc.scaled_store_w)
-        s = pc.scaled_store_w - 1u;
-
-    uint ys = y;
-    if (ys >= pc.scaled_store_h)
-        ys = pc.scaled_store_h - 1u;
-
-    const uint src_row_words = pc.scaled_store_w * pc.ratio;
-    // A 64-bit render-target texel viewed as 32-bit texels is a contiguous
-    // word stream: output x=0 consumes word 0, x=1 consumes word 1, then the
-    // next source texel. Build 478 incorrectly kept half_index constant, which
-    // duplicated the first 32-bit word of every 64-bit texel and produced the
-    // purple/speckled Uncharted output seen on device.
-    const uint word_idx = (pc.interleave != 0u) ? (x % pc.ratio) : pc.half_index;
-    dst[y * pc.out_width + x] =
-        src[ys * src_row_words + s * pc.ratio + word_idx];
-}
-''')
-
-print("VitaJoN 0.47.9 contiguous typeless word-stream renderer patch applied")
+print("VitaJoN 0.48.0 Android-4098 typeless parity + overlap surface selection applied")
 PY

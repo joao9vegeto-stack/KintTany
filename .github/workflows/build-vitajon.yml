@@ -56,13 +56,6 @@ jobs:
           cmake --version
           glslangValidator --version
 
-      - name: Compile Vita3K+ typeless compute shader
-        working-directory: source
-        run: |
-          test -f vita3k/shaders-builtin/vulkan/surface_cast_reinterpret.comp
-          glslangValidator -V             vita3k/shaders-builtin/vulkan/surface_cast_reinterpret.comp             -o vita3k/shaders-builtin/vulkan/surface_cast_reinterpret.comp.spv
-          test -s vita3k/shaders-builtin/vulkan/surface_cast_reinterpret.comp.spv
-
       - name: Apply Tsubomi iOS universal-JIT patch
         working-directory: source
         run: |
