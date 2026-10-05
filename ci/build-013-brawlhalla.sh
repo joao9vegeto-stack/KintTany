@@ -16,7 +16,7 @@ VCREDIST_SHA="cc0ff0eb1dc3f5188ae6300faef32bf5beeba4bdd6e8e445a9184072096b713b"
 LLVM_MINGW_SHA="bd85a3975723815cef28dbbd2ca2cb0c926f6b348a12a0453f39f7af273cb3f7"
 MESA_VERSION="26.2.3"
 MESA_MSVC_SHA="3f3613adb43cfd0f2e665ce2400b130c275f0b3317cb3a05566320a3a67589ed"
-IPA_NAME="Madeira-0.1.3-Injustice-GTAIV-R8.4.ipa"
+IPA_NAME="Madeira-0.1.3-Injustice-GTAIV-R8.5.ipa"
 
 mkdir -p "$WORK" "$OUT"
 : > "$REPORT"
@@ -42,7 +42,7 @@ if [ "$JOBS" -gt 8 ]; then JOBS=8; fi
 record "base=Madeira v0.1.3"
 record "upstream=$UPSTREAM_SHA"
 record "wine=$WINE_SHA"
-record "strategy=R8.4: freeze the user-validated clayton-29 Injustice path byte-for-byte; GTA keeps application-owned 800x600 Reset/RT-DS coherence, restores only the Win32 presentation window to the 1408x648 launch extent after native Reset, and restores GTA-only ~60fps guest Present pacing to stop the million-Present loading spin; preserve R8.3 mode + R8.2 Reset gate + R8.1 blit guard"
+record "strategy=R8.5: freeze the user-validated clayton-29 Injustice path and the R8.4 GTA D3D/window/pacing path byte-for-byte; fix the Negligent Lite ASI loader by making PE32 low-base images always stay in the WoW64 guest-window path instead of depending on a fragile current-process machine check that fired ml936 immediately before optiprojects.asi c000007b"
 record "jobs=$JOBS"
 record "xcode=$(xcodebuild -version | tr '\n' ' ')"
 
@@ -887,6 +887,19 @@ BUS_UNREADABLE_NORMAL=0x994338
 BUS_READABLE_PATH=0x994500
 BUS_RESUME_PATH=0x994b90
 
+# R8.5 / Negligent Lite: immediately before plugins\\optiprojects.asi
+# returns STATUS_INVALID_IMAGE_FORMAT, the native loader logs ml936 for a
+# low-base image even though GTAIV.exe is a PE32 WoW64 process. The source
+# intends PE32 low-base images to remain in the per-process 4GB guest window,
+# but currently also depends on current->process already reporting i386 during
+# get_image_params(). Make that decision from the image itself: PE32 skips the
+# session-wide ml936 relocation; PE32+ keeps the pristine relocation path.
+NEGLIGENT_PE_MAGIC_CMP_SITE=0x8ab168
+NEGLIGENT_PE32_BRANCH_SITE=0x8ab16c
+NEGLIGENT_PE64_FALLTHROUGH_SITE=0x8ab170
+NEGLIGENT_PE32_SKIP_TARGET=0x8ab0e4
+NEGLIGENT_LOWBASE_RELOC_TARGET=0x8ab190
+
 # R8.3: the latest GTA log never reaches Reset. Madeira launches GTA at
 # 1408x648, but DXMT's adapter list does not advertise that exact fullscreen
 # mode, so CreateDevice rejects it four times with D3DERR_INVALIDCALL before
@@ -1023,6 +1036,12 @@ if d[INJUSTICE_HOLE_CAVE:INJUSTICE_HOLE_CAVE+INJUSTICE_HOLE_CAVE_SIZE] != b"\0"*
     raise SystemExit("Injustice guest-hole cave is not zero-filled")
 if d[INJUSTICE_HOLE_MARKER_SITE:INJUSTICE_HOLE_MARKER_SITE+len(INJUSTICE_HOLE_MARKER)] != b"\0"*len(INJUSTICE_HOLE_MARKER):
     raise SystemExit("Injustice guest-hole marker space is not zero-filled")
+if u32(NEGLIGENT_PE_MAGIC_CMP_SITE) != 0x71042DBF:
+    raise SystemExit(f"unexpected low-base PE magic cmp {u32(NEGLIGENT_PE_MAGIC_CMP_SITE):#010x}")
+if u32(NEGLIGENT_PE32_BRANCH_SITE) != 0x54000121:
+    raise SystemExit(f"unexpected PE32/WoW64 low-base branch {u32(NEGLIGENT_PE32_BRANCH_SITE):#010x}")
+if u32(NEGLIGENT_PE64_FALLTHROUGH_SITE) != 0xB001A4CD:
+    raise SystemExit(f"unexpected low-base current-process probe entry {u32(NEGLIGENT_PE64_FALLTHROUGH_SITE):#010x}")
 if u32(D3D9_GTA_MODE_WIDTH_SITE) != 1152 or u32(D3D9_GTA_MODE_HEIGHT_SITE) != 648:
     raise SystemExit(f"unexpected D3D9 tail mode {u32(D3D9_GTA_MODE_WIDTH_SITE)}x{u32(D3D9_GTA_MODE_HEIGHT_SITE)}")
 if u32(D3D9_GTA_RESET_LOSABLE_GATE_SITE) != 0x35001B28:
@@ -1147,6 +1166,17 @@ put32(INJUSTICE_HOLE_SITE,enc_b(INJUSTICE_HOLE_SITE,h))
 for i,ins in enumerate(hcode): put32(h+i*4,ins)
 d[INJUSTICE_HOLE_MARKER_SITE:INJUSTICE_HOLE_MARKER_SITE+len(INJUSTICE_HOLE_MARKER)] = INJUSTICE_HOLE_MARKER
 
+# R8.5: PE32 low-base images belong to the WoW64 guest window regardless of
+# whether the wineserver 'current' process object has finished publishing its
+# i386 machine field at this exact loader call. PE32 -> skip ml936; non-PE32 ->
+# jump directly to the original low-base relocation block. This changes only
+# the two control-flow instructions; the old process-machine probe becomes
+# unreachable and all image bytes/relocations remain handled by Wine.
+put32(NEGLIGENT_PE32_BRANCH_SITE,
+      enc_bcond(0,NEGLIGENT_PE32_BRANCH_SITE,NEGLIGENT_PE32_SKIP_TARGET))
+put32(NEGLIGENT_PE64_FALLTHROUGH_SITE,
+      enc_b(NEGLIGENT_PE64_FALLTHROUGH_SITE,NEGLIGENT_LOWBASE_RELOC_TARGET))
+
 # R8.3: advertise the exact 1408x648 fullscreen mode requested by the current
 # GTA launch profile before CreateDevice. Keep dimensions app-owned afterwards.
 put32(D3D9_GTA_MODE_WIDTH_SITE,1408)
@@ -1269,6 +1299,11 @@ print("direct-surface=PASS rev=clayton-21 compositor remains present-driven whil
 print("touch-input=PASS rev=clayton-9 overlay visible at session start + early player-1 XInput reservation")
 print("wow64-section-quarantine=PASS rev=clayton-14 only guest 0x3c680000 / host-window peer / size 1MiB is retained")
 print("injustice-fight-load=PASS rev=clayton-29 dynamic guest 0x1xxxxxxx WoW64 hole heals one 16KB page at a time; other address classes remain pristine")
+if struct.unpack_from("<I",e,NEGLIGENT_PE32_BRANCH_SITE)[0] != enc_bcond(0,NEGLIGENT_PE32_BRANCH_SITE,NEGLIGENT_PE32_SKIP_TARGET):
+    raise SystemExit("Negligent PE32 low-base skip branch read-back mismatch")
+if struct.unpack_from("<I",e,NEGLIGENT_PE64_FALLTHROUGH_SITE)[0] != enc_b(NEGLIGENT_PE64_FALLTHROUGH_SITE,NEGLIGENT_LOWBASE_RELOC_TARGET):
+    raise SystemExit("Negligent non-PE32 low-base relocation branch read-back mismatch")
+print("negligent-loader=PASS R8.5 PE32 low-base images stay in the WoW64 guest-window path; PE32+ retains ml936 relocation")
 print("d3d9-mode=PASS R8.3 adapter tail mode 1152x648 -> 1408x648 so current GTA fullscreen CreateDevice is valid; no post-create backbuffer rewrite")
 if struct.unpack_from("<I",e,D3D9_WINDOW_LAYER_GATE_SITE)[0] != 0xD503201F:
     raise SystemExit("per-HWND Metal layer gate patch mismatch")
@@ -1305,6 +1340,9 @@ checks={
     0x4526e0:0x52800020,
     0x579020:0x52800020,
     0x97ea4c:0x146C0533,
+    # R8.5 Negligent Lite low-base PE loader: PE32 skips ml936; PE32+ keeps it.
+    0x8ab16c:0x54FFFBC0,
+    0x8ab170:0x14000008,
     0x22a47fc:1408,
     0x22a4800:648,
     0x1aade04:0xD503201F,
@@ -1338,7 +1376,7 @@ if struct.unpack_from("<I",d,0x1ad7bb8)[0] != enc_b(0x1ad7bb8,0x2481220):
     raise SystemExit("GTA Copy source guard lost after codesign")
 if struct.unpack_from("<I",d,0x1ad7bec)[0] != enc_b(0x1ad7bec,0x2481260):
     raise SystemExit("GTA Copy destination guard lost after codesign")
-print("native-patch-after-codesign=PASS debug-object + madsync + Steam-env-clean + software-present compositor + direct window geometry + touch-controls/XInput + WOW64 exact section quarantine + Injustice dynamic one-page heal + per-HWND Metal + GTA 1408x648 adapter mode + losable Reset gate + DXMT blit pointer guard; R3 DXMT cache experiment absent")
+print("native-patch-after-codesign=PASS debug-object + madsync + Steam-env-clean + software-present compositor + direct window geometry + touch-controls/XInput + WOW64 exact section quarantine + Injustice dynamic one-page heal + Negligent PE32 low-base loader + per-HWND Metal + GTA 1408x648 adapter mode + losable Reset gate + DXMT blit pointer guard; R3 DXMT cache experiment absent")
 PY
 
 say "Install rebuilt GTA-aware i386 D3D9 shim"
