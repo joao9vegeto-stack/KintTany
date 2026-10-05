@@ -15,7 +15,7 @@ cp "$ROOT/config/VitaJoN.entitlements" "$SRC/ios/VitaJoN.entitlements"
 UPSTREAM_4098_COMMITS=(
   1861db65e7b13cd64604bcd68986b5bd9ba0a495
   85556014db0f2e157d8ded6127cb891015489203
-  ecee6842
+  ecee68421c0a32eb4a5741d5df9b6cc461934a24
   bbd5c3624a06572fe4f16f67564f53a7540e1f42
 )
 for sha in "${UPSTREAM_4098_COMMITS[@]}"; do
