@@ -1401,10 +1401,11 @@ PY
 python3 - "$SRC" <<'PY'
 from pathlib import Path
 import sys
+
 p = Path(sys.argv[1]) / "ios" / "src" / "UpstreamMain.cpp"
 s = p.read_text()
 
-repls = [
+pairs = [
 ("""            case SDL_EVENT_TERMINATING:
                 app_terminating = true;
                 running = false;
@@ -1431,32 +1432,20 @@ repls = [
                 running = false;
                 break;
 """),
-("""        if (auto request = emuenv->take_app_launch_request()) {
-            // In-process relaunch (LoadExec) is not supported yet on iOS.
-            LOG_WARN("Title requested relaunch of '{}'; stopping instead.", request->self_path);
-            running = false;
-        }
-
-        if (!session_controller.is_running())
+("""        if (!session_controller.is_running())
             running = false;
 """,
-"""        if (auto request = emuenv->take_app_launch_request()) {
-            // In-process relaunch (LoadExec) is not supported yet on iOS.
-            LOG_WARN("Title requested relaunch of '{}'; stopping instead.", request->self_path);
-            LOG_WARN("iOS session exit trigger: guest LoadExec request");
-            running = false;
-        }
-
-        if (!session_controller.is_running()) {
+"""        if (!session_controller.is_running()) {
             LOG_WARN("iOS session exit trigger: AppSessionController no longer running");
             running = false;
         }
-""")
+"""),
 ]
-for old,new in repls:
+for old, new in pairs:
     if s.count(old) != 1:
-        raise SystemExit("session-exit diagnostic anchor mismatch")
-    s = s.replace(old,new,1)
+        raise SystemExit(f"session-exit diagnostic anchor mismatch: {old.splitlines()[0]}")
+    s = s.replace(old, new, 1)
+
 p.write_text(s)
 print("VitaJoN 0.48.3 session exit diagnostics applied")
 PY
