@@ -1087,7 +1087,7 @@ c = must_replace(
     "    target_include_directories(Vita3KiOS PRIVATE include)\n",
     '    target_include_directories(Vita3KiOS PRIVATE include "${VITA3K_IOS_MOLTENVK_INCLUDE_DIR}")\n',
     "MoltenVK include path",
-    1,
+    2,
 )
 cmake.write_text(c)
 
