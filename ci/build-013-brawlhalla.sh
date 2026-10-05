@@ -16,7 +16,7 @@ VCREDIST_SHA="cc0ff0eb1dc3f5188ae6300faef32bf5beeba4bdd6e8e445a9184072096b713b"
 LLVM_MINGW_SHA="bd85a3975723815cef28dbbd2ca2cb0c926f6b348a12a0453f39f7af273cb3f7"
 MESA_VERSION="26.2.3"
 MESA_MSVC_SHA="3f3613adb43cfd0f2e665ce2400b130c275f0b3317cb3a05566320a3a67589ed"
-IPA_NAME="Madeira-0.1.3-Injustice-GTAIV-R8.3.ipa"
+IPA_NAME="Madeira-0.1.3-Injustice-GTAIV-R8.4.ipa"
 
 mkdir -p "$WORK" "$OUT"
 : > "$REPORT"
@@ -42,7 +42,7 @@ if [ "$JOBS" -gt 8 ]; then JOBS=8; fi
 record "base=Madeira v0.1.3"
 record "upstream=$UPSTREAM_SHA"
 record "wine=$WINE_SHA"
-record "strategy=R8.3: GTA adds the exact 1408x648 fullscreen adapter mode requested by this device before CreateDevice; Injustice replaces address whack-a-mole with a constrained one-page heal for dynamic 0x1xxxxxxx WoW64 holes; preserve R8.2 Reset gate + R8.1 DXMT blit guard"
+record "strategy=R8.4: freeze the user-validated clayton-29 Injustice path byte-for-byte; GTA keeps application-owned 800x600 Reset/RT-DS coherence, restores only the Win32 presentation window to the 1408x648 launch extent after native Reset, and restores GTA-only ~60fps guest Present pacing to stop the million-Present loading spin; preserve R8.3 mode + R8.2 Reset gate + R8.1 blit guard"
 record "jobs=$JOBS"
 record "xcode=$(xcodebuild -version | tr '\n' ' ')"
 
@@ -432,10 +432,21 @@ anchor='''/* -------------------------------------------------------------------
  * Reset / ResetEx
  * ------------------------------------------------------------------------ */
 '''
-helper=r'''/* R8 GTA IV correction: keep detection in the 32-bit shim only for targeted
- * diagnostics. The R6 log disproved forced mode conversion and guest-side
- * Present sleeping: GTA must own its Reset parameters so RT/DS resources stay
- * coherent and the game's normal loading transition can complete. */
+helper=r'''/* R8.4 GTA IV correction. The R8.3 device log proves two separate facts:
+ * (1) CreateDevice at Madeira's 1408x648 launch extent succeeds, then GTA
+ *     deliberately Reset()s to an 800x600 WINDOWED backbuffer. Keep that D3D
+ *     Reset completely application-owned so render-target/depth-stencil sizes
+ *     remain coherent; only restore the Win32 presentation window afterwards.
+ * (2) without guest-side pacing GTA reaches ~1.5 million Present calls while
+ *     only a tiny fraction of frames perform real draw work. Pace GTA's guest
+ *     Present near 60 fps, after releasing the shim device lock. No Injustice
+ *     code path reaches these GTAIV.exe-only helpers. */
+static LONG gtaiv_present_pacing;
+static LONG gtaiv_visual_restore_pending;
+static ULONGLONG gtaiv_next_present_ms;
+static UINT gtaiv_launch_width;
+static UINT gtaiv_launch_height;
+
 static int
 d3d9shim_is_gtaiv(void)
 {
@@ -458,13 +469,65 @@ d3d9shim_is_gtaiv(void)
         --base;
     if (!_stricmp(base, "GTAIV.exe")) {
         InterlockedExchange(&cached, 1);
-        d3d9shim_log_once("[gtaiv-r8] detected GTAIV.exe; native Reset parameters remain application-owned");
+        d3d9shim_log_once("[gtaiv-r84] GTAIV.exe detected; D3D Reset stays application-owned");
         return 1;
     }
     InterlockedExchange(&cached, -1);
     return 0;
 }
 
+static void
+d3d9shim_gtaiv_pace_present(void)
+{
+    ULONGLONG now, target;
+    DWORD sleep_ms;
+
+    if (!InterlockedCompareExchange(&gtaiv_present_pacing, 0, 0))
+        return;
+    now = GetTickCount64();
+    target = gtaiv_next_present_ms;
+    if (!target || now > target + 250)
+        target = now;
+    target += 17; /* ~58.8 fps guest pacing. */
+    if (target > now) {
+        sleep_ms = (DWORD)(target - now);
+        if (sleep_ms)
+            Sleep(sleep_ms);
+    }
+    now = GetTickCount64();
+    gtaiv_next_present_ms = target > now ? target : now;
+}
+
+static void
+d3d9shim_gtaiv_restore_window(HWND window)
+{
+    RECT rc;
+    LONG style, ex_style;
+    UINT width = gtaiv_launch_width;
+    UINT height = gtaiv_launch_height;
+
+    if (!window || !width || !height || !IsWindow(window))
+        return;
+
+    style = GetWindowLongW(window, GWL_STYLE);
+    ex_style = GetWindowLongW(window, GWL_EXSTYLE);
+    if (GetClientRect(window, &rc)
+        && (UINT)(rc.right - rc.left) == width
+        && (UINT)(rc.bottom - rc.top) == height
+        && !(style & (WS_CAPTION | WS_THICKFRAME))) {
+        d3d9shim_window_push(window, 0);
+        return;
+    }
+
+    /* Presentation-only repair. D3DPRESENT_PARAMETERS remains untouched. */
+    style = (style | WS_POPUP | WS_SYSMENU) & ~(WS_CAPTION | WS_THICKFRAME);
+    ex_style &= ~(WS_EX_WINDOWEDGE | WS_EX_CLIENTEDGE);
+    SetWindowLongW(window, GWL_STYLE, style);
+    SetWindowLongW(window, GWL_EXSTYLE, ex_style);
+    SetWindowPos(window, HWND_TOP, 0, 0, (int)width, (int)height,
+                 SWP_FRAMECHANGED | SWP_NOACTIVATE | SWP_SHOWWINDOW);
+    d3d9shim_window_push(window, 0);
+}
 
 
 '''
@@ -483,15 +546,20 @@ new='''    device_window = parameters->hDeviceWindow;
     if (!device_window && extra)
         device_window = extra->focus_window;
 
-    /* R8: pass GTA's requested mode through unchanged. R6 forced the
-     * backbuffer to Madeira's launch size while GTA kept an 800x600 depth
-     * surface, producing the exact RT/DS mismatch in the R6 device log.
-     * Window geometry still follows the successful native Reset below. */
+    /* Save the successful CreateDevice extent before on_device_reset() updates
+     * extra to GTA's later 800x600 windowed request. Do not rewrite any D3D
+     * parameter: native Reset still receives exactly what GTA requested. */
     if (d3d9shim_is_gtaiv() && extra
         && (parameters->Windowed
             || parameters->BackBufferWidth != extra->backbuffer_width
-            || parameters->BackBufferHeight != extra->backbuffer_height))
-        d3d9shim_log_once("[gtaiv-r8] Reset passed through unchanged to keep render-target/depth-stencil dimensions coherent");
+            || parameters->BackBufferHeight != extra->backbuffer_height)) {
+        if (!gtaiv_launch_width || !gtaiv_launch_height) {
+            gtaiv_launch_width = extra->backbuffer_width;
+            gtaiv_launch_height = extra->backbuffer_height;
+        }
+        InterlockedExchange(&gtaiv_visual_restore_pending, 1);
+        d3d9shim_log_once("[gtaiv-r84] mode-changing Reset passed through unchanged; presentation window restores only after native success");
+    }
 
     /* Same ordering rule as CreateDevice: a zero extent is filled from the
      * client rect, so push the cache first. */
@@ -501,12 +569,53 @@ if t.count(old)!=1:
     raise SystemExit(f"custom_reset window anchor count={t.count(old)}")
 t=t.replace(old,new,1)
 
+old='''    if (SUCCEEDED(hr)) {
+        /* A Reset destroys and recreates the implicit chain and its back
+         * buffers, so every cached child identity is stale: drop them and let
+         * the next GetBackBuffer / GetSwapChain resolve fresh handles. */
+        d3d9shim_device_invalidate_children(dev);
+        d3d9shim_window_on_device_reset(dev, parameters);
+    }
+    d3d9shim_unlock(dev);
+    return hr;
+}
+'''
+new='''    if (SUCCEEDED(hr)) {
+        /* A Reset destroys and recreates the implicit chain and its back
+         * buffers, so every cached child identity is stale: drop them and let
+         * the next GetBackBuffer / GetSwapChain resolve fresh handles. */
+        d3d9shim_device_invalidate_children(dev);
+        d3d9shim_window_on_device_reset(dev, parameters);
+        if (d3d9shim_is_gtaiv()
+            && InterlockedExchange(&gtaiv_visual_restore_pending, 0)) {
+            d3d9shim_gtaiv_restore_window(device_window);
+            gtaiv_next_present_ms = 0;
+            InterlockedExchange(&gtaiv_present_pacing, 1);
+            d3d9shim_log_once("[gtaiv-r84] launch window restored after Reset; guest Present pacing enabled near 60 fps");
+        }
+    } else if (d3d9shim_is_gtaiv()) {
+        InterlockedExchange(&gtaiv_visual_restore_pending, 0);
+    }
+    d3d9shim_unlock(dev);
+    return hr;
+}
+'''
+if t.count(old)!=1:
+    raise SystemExit(f"custom_reset success anchor count={t.count(old)}")
+t=t.replace(old,new,1)
+
 old='''    hr = has_flags ? (HRESULT)p.present_ex.ret : (HRESULT)p.present.ret;
     d3d9shim_unlock(dev);
     return hr;
 '''
 new='''    hr = has_flags ? (HRESULT)p.present_ex.ret : (HRESULT)p.present.ret;
     d3d9shim_unlock(dev);
+    /* Restore only presentation geometry and sleep only after releasing the
+     * device lock. The D3D backbuffer/depth-stencil remain GTA-owned. */
+    if (SUCCEEDED(hr) && d3d9shim_is_gtaiv()) {
+        d3d9shim_gtaiv_restore_window(window);
+        d3d9shim_gtaiv_pace_present();
+    }
     return hr;
 '''
 if t.count(old)!=1:
@@ -516,16 +625,17 @@ custom.write_text(t)
 
 for marker in (
     "clayton-25 default: native ARM64 first",
-    "[gtaiv-r8] detected GTAIV.exe; native Reset parameters remain application-owned",
-    "[gtaiv-r8] Reset passed through unchanged to keep render-target/depth-stencil dimensions coherent",
+    "[gtaiv-r84] GTAIV.exe detected; D3D Reset stays application-owned",
+    "[gtaiv-r84] mode-changing Reset passed through unchanged; presentation window restores only after native success",
+    "[gtaiv-r84] launch window restored after Reset; guest Present pacing enabled near 60 fps",
 ):
     if marker not in main.read_text() + custom.read_text():
         raise SystemExit("missing source marker: "+marker)
-print("d3d9shim-source=PASS R8 GTA Reset pass-through + no guest Present sleep + clayton-25 native-first")
+print("d3d9shim-source=PASS R8.4 app-owned GTA Reset + launch-window-only restore + ~60fps guest Present pacing; clayton-25 native-first")
 PY
 
 say "Configure minimal i386 Wine build tree for the rebuilt D3D9 shim"
-I386_B="$SRC/wine/build-i386-r8"
+I386_B="$SRC/wine/build-i386-r84"
 rm -rf "$I386_B"
 mkdir -p "$I386_B"
 (
@@ -540,8 +650,8 @@ make -C "$I386_B/dlls/user32" -j"$JOBS"
 make -C "$I386_B/dlls/gdi32" -j"$JOBS"
 
 say "Build only the pinned DXMT i386 d3d9shim target"
-DXMT_BUILD="$SRC/dxmt/build-pe-i386-r8"
-DXMT_CROSS="$WORK/dxmt-cross-i386-r8.txt"
+DXMT_BUILD="$SRC/dxmt/build-pe-i386-r84"
+DXMT_CROSS="$WORK/dxmt-cross-i386-r84.txt"
 rm -rf "$DXMT_BUILD"
 cat > "$DXMT_CROSS" <<EOF
 [binaries]
@@ -568,13 +678,14 @@ EOF
 )
 D3D9_R6_RAW="$(find "$DXMT_BUILD" -type f -path '*/d3d9shim/d3d9shim.dll' -print -quit)"
 test -n "$D3D9_R6_RAW" && test -s "$D3D9_R6_RAW"
-PATCHED_D3D9_SHIM="$WORK/d3d9shim-r8.dll"
+PATCHED_D3D9_SHIM="$WORK/d3d9shim-r84.dll"
 "$MINGW_DIR/bin/i686-w64-mingw32-strip" --strip-debug -o "$PATCHED_D3D9_SHIM" "$D3D9_R6_RAW"
 test -s "$PATCHED_D3D9_SHIM"
-strings "$PATCHED_D3D9_SHIM" | grep -F "[gtaiv-r8] detected GTAIV.exe; native Reset parameters remain application-owned" | tee -a "$REPORT"
-strings "$PATCHED_D3D9_SHIM" | grep -F "[gtaiv-r8] Reset passed through unchanged to keep render-target/depth-stencil dimensions coherent" | tee -a "$REPORT"
+strings "$PATCHED_D3D9_SHIM" | grep -F "[gtaiv-r84] GTAIV.exe detected; D3D Reset stays application-owned" | tee -a "$REPORT"
+strings "$PATCHED_D3D9_SHIM" | grep -F "[gtaiv-r84] mode-changing Reset passed through unchanged; presentation window restores only after native success" | tee -a "$REPORT"
+strings "$PATCHED_D3D9_SHIM" | grep -F "[gtaiv-r84] launch window restored after Reset; guest Present pacing enabled near 60 fps" | tee -a "$REPORT"
 strings "$PATCHED_D3D9_SHIM" | grep -F "clayton-25 default: native ARM64 first" | tee -a "$REPORT"
-"$MINGW_DIR/bin/llvm-objdump" -p "$PATCHED_D3D9_SHIM" | grep -E 'GetModuleFileNameA|SetWindowPos' | tee -a "$REPORT"
+"$MINGW_DIR/bin/llvm-objdump" -p "$PATCHED_D3D9_SHIM" | grep -E 'GetModuleFileNameA|GetTickCount64|Sleep|GetClientRect|SetWindowLongW|SetWindowPos' | tee -a "$REPORT"
 record "d3d9shim-r6-sha256=$(shasum -a 256 "$PATCHED_D3D9_SHIM" | awk '{print $1}')"
 
 say "Verify FEX diagnostic rollback: normal block limit restored"
@@ -1239,8 +1350,9 @@ cp "$PATCHED_D3D9_SHIM" "$D3D9_SHIM"
 python3 - "$D3D9_DLL" "$D3D9_SHIM" <<'PY' | tee -a "$REPORT"
 import hashlib, pathlib, struct, subprocess, sys
 markers=[
- b"[gtaiv-r8] detected GTAIV.exe; native Reset parameters remain application-owned",
- b"[gtaiv-r8] Reset passed through unchanged to keep render-target/depth-stencil dimensions coherent",
+ b"[gtaiv-r84] GTAIV.exe detected; D3D Reset stays application-owned",
+ b"[gtaiv-r84] mode-changing Reset passed through unchanged; presentation window restores only after native success",
+ b"[gtaiv-r84] launch window restored after Reset; guest Present pacing enabled near 60 fps",
  b"clayton-25 default: native ARM64 first",
 ]
 for raw in sys.argv[1:]:
@@ -1252,8 +1364,8 @@ for raw in sys.argv[1:]:
         raise SystemExit(f"{p.name}: expected i386")
     for m in markers:
         if m not in d: raise SystemExit(f"{p.name}: missing marker {m!r}")
-    print(f"d3d9-r8={p.name} sha256={hashlib.sha256(d).hexdigest()} size={len(d)}")
-print("d3d9-r8=PASS source-rebuilt shim; GTAIV Reset is application-owned, RT/DS coherence restored, guest Present sleep removed; native-first fallback preserved")
+    print(f"d3d9-r84={p.name} sha256={hashlib.sha256(d).hexdigest()} size={len(d)}")
+print("d3d9-r84=PASS source-rebuilt shim; GTAIV D3D Reset remains app-owned, Win32 launch geometry restores independently, guest Present paced near 60fps, native-first fallback preserved")
 PY
 
 say "Fetch pinned Mesa3D x64 WGL runtime for OpenGL software fallback"
