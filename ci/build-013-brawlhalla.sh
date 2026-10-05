@@ -16,7 +16,7 @@ VCREDIST_SHA="cc0ff0eb1dc3f5188ae6300faef32bf5beeba4bdd6e8e445a9184072096b713b"
 LLVM_MINGW_SHA="bd85a3975723815cef28dbbd2ca2cb0c926f6b348a12a0453f39f7af273cb3f7"
 MESA_VERSION="26.2.3"
 MESA_MSVC_SHA="3f3613adb43cfd0f2e665ce2400b130c275f0b3317cb3a05566320a3a67589ed"
-IPA_NAME="Madeira-0.1.3-Injustice-GTAIV-R8.2.ipa"
+IPA_NAME="Madeira-0.1.3-Injustice-GTAIV-R8.3.ipa"
 
 mkdir -p "$WORK" "$OUT"
 : > "$REPORT"
@@ -42,7 +42,7 @@ if [ "$JOBS" -gt 8 ]; then JOBS=8; fi
 record "base=Madeira v0.1.3"
 record "upstream=$UPSTREAM_SHA"
 record "wine=$WINE_SHA"
-record "strategy=R8.2: preserve R8.1 DXMT blit guard and app-owned GTA Reset parameters; heal both exact Injustice fight-load anonymous holes proven by the new log; restore only GTA native losable-resource Reset gate bypass to eliminate DD3D80/0x8876086c"
+record "strategy=R8.3: GTA adds the exact 1408x648 fullscreen adapter mode requested by this device before CreateDevice; Injustice replaces address whack-a-mole with a constrained one-page heal for dynamic 0x1xxxxxxx WoW64 holes; preserve R8.2 Reset gate + R8.1 DXMT blit guard"
 record "jobs=$JOBS"
 record "xcode=$(xcodebuild -version | tr '\n' ' ')"
 
@@ -755,32 +755,34 @@ WOW64_SECTION_UNMAP_CAVE_SIZE=0x38
 WOW64_SECTION_MARKER_SITE=0x247ff60
 WOW64_SECTION_MARKER=b"clayton-14 injustice-exact-view-quarantine"
 
-# clayton-28 / R8.2: the new fight-load log proves clayton-26 was too narrow.
-# The first exact hole (guest 0x15570000, host peer +0x18000) is survived, then
-# the SAME guest EIP 0x00B52B3D later reads guest 0x1c100000, another anonymous
-# never-resident PROT_NONE mapping, this time 0x80000 bytes. That second read is
-# the C0000005 immediately preceding Injustice's visible General protection fault.
+# clayton-29 / R8.3: R8.2 disproved exact-address healing. The fight-load
+# fault moved again, now to guest 0x17f80000 / host 0x417f80000, while keeping
+# the same translated fault instruction (0xb8bfc304) and the same signature:
+# anonymous, PROT_NONE, never-resident, no Wine view. The earlier runs used
+# 0x15570000 and 0x1c100000, so the offset is allocator-dependent.
 #
-# Heal ONLY those two proven low-32 guest offsets, and only inside Madeira's
-# 4/5/6-GiB WoW64 host windows. The 0x400000004 base-reservation fault seen only
-# after the game's crash remains untouched. A fresh zero cave is used because
-# the old 0x48-byte clayton-26 cave cannot hold two exact cases safely.
+# Keep this deliberately narrow: only the unreadable BUS path, only a WoW64
+# host window id 4/5/6, and only guest addresses whose top nibble is 0x1
+# (0x10000000..0x1fffffff). Materialise ONE iOS 16KB page RW and retry. This
+# avoids blessing the whole variable-size reservation and leaves unrelated
+# PROT_NONE faults to pristine Wine handling.
 INJUSTICE_HOLE_SITE=0x994334
 INJUSTICE_HOLE_CAVE=0x2481300
-INJUSTICE_HOLE_CAVE_SIZE=0x60
+INJUSTICE_HOLE_CAVE_SIZE=0x48
 INJUSTICE_HOLE_MARKER_SITE=0x2481380
-INJUSTICE_HOLE_MARKER=b"clayton-28 injustice-two-hole-heal"
+INJUSTICE_HOLE_MARKER=b"clayton-29 injustice-dynamic-hole-heal"
 MPROTECT_STUB=0x1fb0550
 BUS_UNREADABLE_NORMAL=0x994338
 BUS_READABLE_PATH=0x994500
 BUS_RESUME_PATH=0x994b90
 
-# R8.2: keep the official D3D9 mode table and keep GTA's Reset parameters
-# application-owned. The new GTA log is now decisive about the remaining gate:
-# Reset first succeeds at 800x600 and 640x480, then GTA itself raises DD3D80
-# "D3D reset failed" with HRESULT 0x8876086c (D3DERR_INVALIDCALL). Restore ONLY
-# the native losable-resource reject-gate bypass used by the earlier working
-# GTA path; do not restore forced 1280x720, hard-coded mode injection or Present sleep.
+# R8.3: the latest GTA log never reaches Reset. Madeira launches GTA at
+# 1408x648, but DXMT's adapter list does not advertise that exact fullscreen
+# mode, so CreateDevice rejects it four times with D3DERR_INVALIDCALL before
+# rendering starts. Preserve application-owned Create/Reset parameters and add
+# the missing exact mode by replacing the unused 1152x648 tail entry with
+# 1408x648. Keep the R8.2 native losable-resource Reset-gate bypass for the
+# later mode transition; do not force backbuffer dimensions after creation.
 D3D9_GTA_MODE_WIDTH_SITE=0x22a47fc
 D3D9_GTA_MODE_HEIGHT_SITE=0x22a4800
 D3D9_GTA_RESET_LOSABLE_GATE_SITE=0x1aade04
@@ -1007,43 +1009,36 @@ put32(WOW64_SECTION_UNMAP_SITE,enc_b(WOW64_SECTION_UNMAP_SITE,q))
 for i,ins in enumerate(qcode): put32(q+i*4,ins)
 d[WOW64_SECTION_MARKER_SITE:WOW64_SECTION_MARKER_SITE+len(WOW64_SECTION_MARKER)] = WOW64_SECTION_MARKER
 
-# clayton-28: heal BOTH exact Injustice fight-load holes proven by the logs.
-# Preserve the original readable path, require the same WoW64 host-window band,
-# then dispatch by low32 guest address to an exact mprotect size. Everything
-# else falls through to the pristine unreadable BUS path.
+# clayton-29: heal the allocator-dependent Injustice guest hole one 16KB page
+# at a time. w11 is the failed mach_vm_read probe; x20+0x18 is si_addr.
 h=INJUSTICE_HOLE_CAVE
 hcode=[
-    enc_cbnz_w(11,h+0x00,h+0x08),             # unreadable probe -> exact compatibility checks
+    enc_cbnz_w(11,h+0x00,h+0x08),             # unreadable probe -> constrained compatibility checks
     enc_b(h+0x04,BUS_READABLE_PATH),           # readable probe -> pristine path
     0xF9400E88,                                # ldr x8,[x20,#0x18] = siginfo->si_addr
     0xD360FD0A,                                # lsr x10,x8,#32 (WoW64 host window id)
     0xF100115F,                                # cmp x10,#4
-    enc_bcond(3,h+0x14,h+0x5c),                # b.lo -> normal
+    enc_bcond(3,h+0x14,h+0x44),                # b.lo -> normal
     0xF1001D5F,                                # cmp x10,#7
-    enc_bcond(2,h+0x1c,h+0x5c),                # b.hs -> normal (accept only 4,5,6)
-    0x52A2AAE9,                                # mov w9,#0x15570000
-    0x6B09011F,                                # cmp w8,w9
-    enc_bcond(0,h+0x28,h+0x3c),                # b.eq hole #1
-    0x52A38209,                                # mov w9,#0x1c100000
-    0x6B09011F,                                # cmp w8,w9
-    enc_bcond(0,h+0x34,h+0x44),                # b.eq hole #2
-    enc_b(h+0x38,h+0x5c),                      # neither exact hole -> normal
-    0xB27107E1,                                # hole #1: mov x1,#0x18000
-    enc_b(h+0x40,h+0x48),                      # common mprotect
-    0xD2A00101,                                # hole #2: mov x1,#0x80000
-    0xAA0803E0,                                # mov x0,x8 (region base)
+    enc_bcond(2,h+0x1c,h+0x44),                # b.hs -> normal (accept only 4,5,6)
+    0x531C7D09,                                # lsr w9,w8,#28 (guest low32 top nibble)
+    0x7100053F,                                # cmp w9,#1
+    enc_bcond(1,h+0x28,h+0x44),                # b.ne -> normal
+    0xAA0803E0,                                # mov x0,x8 (observed faults are page/region aligned)
+    0xD2880001,                                # mov x1,#0x4000 (one iOS 16KB page)
     0x52800062,                                # mov w2,#3 (PROT_READ|PROT_WRITE)
-    enc_bl(h+0x50,MPROTECT_STUB),              # mprotect(base,exact_size,RW)
-    enc_cbnz_w(0,h+0x54,h+0x5c),               # failure -> pristine normal
-    enc_b(h+0x58,BUS_RESUME_PATH),              # success -> fix x18 + retry instruction
-    enc_b(h+0x5c,BUS_UNREADABLE_NORMAL),        # pristine unreadable path
+    enc_bl(h+0x38,MPROTECT_STUB),              # materialise only the faulting page
+    enc_cbnz_w(0,h+0x3c,h+0x44),               # mprotect failure -> pristine normal
+    enc_b(h+0x40,BUS_RESUME_PATH),              # success -> fix x18 + retry instruction
+    enc_b(h+0x44,BUS_UNREADABLE_NORMAL),        # pristine unreadable path
 ]
 put32(INJUSTICE_HOLE_SITE,enc_b(INJUSTICE_HOLE_SITE,h))
 for i,ins in enumerate(hcode): put32(h+i*4,ins)
 d[INJUSTICE_HOLE_MARKER_SITE:INJUSTICE_HOLE_MARKER_SITE+len(INJUSTICE_HOLE_MARKER)] = INJUSTICE_HOLE_MARKER
 
-# R8.2: preserve the official adapter-mode table and GTA's requested Reset
-# parameters, but bypass ONLY the native losable-resource INVALIDCALL gate.
+# R8.3: advertise the exact 1408x648 fullscreen mode requested by the current
+# GTA launch profile before CreateDevice. Keep dimensions app-owned afterwards.
+put32(D3D9_GTA_MODE_WIDTH_SITE,1408)
 put32(D3D9_GTA_RESET_LOSABLE_GATE_SITE,0xD503201F)
 
 # GTA IV's Wine client/compositor exists and follows its mode changes. Keep
@@ -1142,33 +1137,28 @@ expected_h=[
     enc_cbnz_w(11,INJUSTICE_HOLE_CAVE+0x00,INJUSTICE_HOLE_CAVE+0x08),
     enc_b(INJUSTICE_HOLE_CAVE+0x04,BUS_READABLE_PATH),
     0xF9400E88,0xD360FD0A,0xF100115F,
-    enc_bcond(3,INJUSTICE_HOLE_CAVE+0x14,INJUSTICE_HOLE_CAVE+0x5c),
+    enc_bcond(3,INJUSTICE_HOLE_CAVE+0x14,INJUSTICE_HOLE_CAVE+0x44),
     0xF1001D5F,
-    enc_bcond(2,INJUSTICE_HOLE_CAVE+0x1c,INJUSTICE_HOLE_CAVE+0x5c),
-    0x52A2AAE9,0x6B09011F,
-    enc_bcond(0,INJUSTICE_HOLE_CAVE+0x28,INJUSTICE_HOLE_CAVE+0x3c),
-    0x52A38209,0x6B09011F,
-    enc_bcond(0,INJUSTICE_HOLE_CAVE+0x34,INJUSTICE_HOLE_CAVE+0x44),
-    enc_b(INJUSTICE_HOLE_CAVE+0x38,INJUSTICE_HOLE_CAVE+0x5c),
-    0xB27107E1,
-    enc_b(INJUSTICE_HOLE_CAVE+0x40,INJUSTICE_HOLE_CAVE+0x48),
-    0xD2A00101,0xAA0803E0,0x52800062,
-    enc_bl(INJUSTICE_HOLE_CAVE+0x50,MPROTECT_STUB),
-    enc_cbnz_w(0,INJUSTICE_HOLE_CAVE+0x54,INJUSTICE_HOLE_CAVE+0x5c),
-    enc_b(INJUSTICE_HOLE_CAVE+0x58,BUS_RESUME_PATH),
-    enc_b(INJUSTICE_HOLE_CAVE+0x5c,BUS_UNREADABLE_NORMAL),
+    enc_bcond(2,INJUSTICE_HOLE_CAVE+0x1c,INJUSTICE_HOLE_CAVE+0x44),
+    0x531C7D09,0x7100053F,
+    enc_bcond(1,INJUSTICE_HOLE_CAVE+0x28,INJUSTICE_HOLE_CAVE+0x44),
+    0xAA0803E0,0xD2880001,0x52800062,
+    enc_bl(INJUSTICE_HOLE_CAVE+0x38,MPROTECT_STUB),
+    enc_cbnz_w(0,INJUSTICE_HOLE_CAVE+0x3c,INJUSTICE_HOLE_CAVE+0x44),
+    enc_b(INJUSTICE_HOLE_CAVE+0x40,BUS_RESUME_PATH),
+    enc_b(INJUSTICE_HOLE_CAVE+0x44,BUS_UNREADABLE_NORMAL),
 ]
-got_h=[struct.unpack_from("<I",e,INJUSTICE_HOLE_CAVE+i*4)[0] for i in range(24)]
+got_h=[struct.unpack_from("<I",e,INJUSTICE_HOLE_CAVE+i*4)[0] for i in range(18)]
 if got_h != expected_h:
-    raise SystemExit("Injustice guest-hole trampoline read-back mismatch")
+    raise SystemExit("Injustice dynamic guest-hole trampoline read-back mismatch")
 print("native-patch=PASS ProcessDebugObjectHandle ret_len low-page guard")
 print("sync-default=PASS actual _madsync_enabled: absent inproc-sync enters ENABLED path; explicit inproc-sync=0 preserved")
 print("steam-env-clean=PASS generic launch unsets SteamAppPath/SteamGameId/SteamAppId")
 print("direct-surface=PASS rev=clayton-21 compositor remains present-driven while direct WindowPosChanged geometry is forwarded for per-HWND Metal")
 print("touch-input=PASS rev=clayton-9 overlay visible at session start + early player-1 XInput reservation")
 print("wow64-section-quarantine=PASS rev=clayton-14 only guest 0x3c680000 / host-window peer / size 1MiB is retained")
-print("injustice-fight-load=PASS rev=clayton-28 exact guest holes 0x15570000/0x18000 and 0x1c100000/0x80000 materialise RW; all other PROT_NONE mappings remain pristine")
-print("d3d9-mode=PASS R8.2 official adapter tail mode 1152x648 preserved; no hard-coded GTA resolution")
+print("injustice-fight-load=PASS rev=clayton-29 dynamic guest 0x1xxxxxxx WoW64 hole heals one 16KB page at a time; other address classes remain pristine")
+print("d3d9-mode=PASS R8.3 adapter tail mode 1152x648 -> 1408x648 so current GTA fullscreen CreateDevice is valid; no post-create backbuffer rewrite")
 if struct.unpack_from("<I",e,D3D9_WINDOW_LAYER_GATE_SITE)[0] != 0xD503201F:
     raise SystemExit("per-HWND Metal layer gate patch mismatch")
 if struct.unpack_from("<I",e,D3D9_GTA_RESET_LOSABLE_GATE_SITE)[0] != 0xD503201F:
@@ -1204,7 +1194,7 @@ checks={
     0x4526e0:0x52800020,
     0x579020:0x52800020,
     0x97ea4c:0x146C0533,
-    0x22a47fc:1152,
+    0x22a47fc:1408,
     0x22a4800:648,
     0x1aade04:0xD503201F,
     0x1c724:0xD503201F,
@@ -1223,8 +1213,8 @@ if b"[winios] clayton-12 software compositor on present only\n" not in d:
     raise SystemExit("clayton-12 runtime marker lost after codesign")
 if b"clayton-14 injustice-exact-view-quarantine" not in d:
     raise SystemExit("clayton-14 runtime marker lost after codesign")
-if b"clayton-28 injustice-two-hole-heal" not in d:
-    raise SystemExit("clayton-28 Injustice two-hole heal marker lost after codesign")
+if b"clayton-29 injustice-dynamic-hole-heal" not in d:
+    raise SystemExit("clayton-29 Injustice dynamic-hole heal marker lost after codesign")
 if b"clayton-27 gtaiv-dxmt-blit-pointer-guard" not in d:
     raise SystemExit("clayton-27 GTA blit pointer guard marker lost after codesign")
 # Entry branches after signing (absolute targets are deterministic in the official image).
@@ -1232,12 +1222,12 @@ def enc_b(pc,target):
     delta=target-pc
     return 0x14000000 | ((delta//4) & 0x03ffffff)
 if struct.unpack_from("<I",d,0x994334)[0] != enc_b(0x994334,0x2481300):
-    raise SystemExit("Injustice two-hole heal entry branch lost after codesign")
+    raise SystemExit("Injustice dynamic-hole heal entry branch lost after codesign")
 if struct.unpack_from("<I",d,0x1ad7bb8)[0] != enc_b(0x1ad7bb8,0x2481220):
     raise SystemExit("GTA Copy source guard lost after codesign")
 if struct.unpack_from("<I",d,0x1ad7bec)[0] != enc_b(0x1ad7bec,0x2481260):
     raise SystemExit("GTA Copy destination guard lost after codesign")
-print("native-patch-after-codesign=PASS debug-object + madsync + Steam-env-clean + software-present compositor + direct window geometry + touch-controls/XInput + WOW64 exact section quarantine + Injustice two-hole heal + per-HWND Metal + GTA losable Reset gate + DXMT blit pointer guard; R3 DXMT cache experiment absent")
+print("native-patch-after-codesign=PASS debug-object + madsync + Steam-env-clean + software-present compositor + direct window geometry + touch-controls/XInput + WOW64 exact section quarantine + Injustice dynamic one-page heal + per-HWND Metal + GTA 1408x648 adapter mode + losable Reset gate + DXMT blit pointer guard; R3 DXMT cache experiment absent")
 PY
 
 say "Install rebuilt GTA-aware i386 D3D9 shim"
