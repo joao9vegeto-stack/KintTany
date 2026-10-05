@@ -34,8 +34,8 @@ src = Path(sys.argv[1])
 info = src / "ios" / "Info.plist.in"
 s = info.read_text()
 s = s.replace("<string>Tsubomi</string>", "<string>VitaJoN</string>")
-s = s.replace("<string>0.47.0</string>", "<string>0.48.2</string>", 1)
-s = s.replace("<string>470</string>", "<string>482</string>", 1)
+s = s.replace("<string>0.47.0</string>", "<string>0.48.3</string>", 1)
+s = s.replace("<string>470</string>", "<string>483</string>", 1)
 info.write_text(s)
 
 state = src / "vita3k" / "config" / "include" / "config" / "state.h"
@@ -1061,5 +1061,339 @@ s = s.replace(old, new, 1)
 texture.write_text(s)
 
 print("VitaJoN 0.48.2 MoltenVK PVRTC staging workaround applied")
+PY
+
+# VitaJoN 0.48.3: keep the 482 correctness fix without paying the software
+# PVRTC decompression cost. MoltenVK advertises PVRTC1 on Apple GPUs, but its
+# Vulkan buffer->image staging path is documented to produce malformed PVRTC
+# content. Route PVRTC1 uploads through the underlying Metal texture instead.
+# PVRTCII remains on Vita3K's software decoder because Metal exposes PVRTC1.
+python3 - "$SRC" <<'PY'
+from pathlib import Path
+import sys
+
+src = Path(sys.argv[1])
+
+def must_replace(text, old, new, label, count=1):
+    n = text.count(old)
+    if n != count:
+        raise SystemExit(f"{label}: expected {count}, found {n}")
+    return text.replace(old, new, count)
+
+cmake = src / "ios" / "CMakeLists.txt"
+c = cmake.read_text()
+c = must_replace(
+    c,
+    "    target_include_directories(Vita3KiOS PRIVATE include)\n",
+    '    target_include_directories(Vita3KiOS PRIVATE include "${VITA3K_IOS_MOLTENVK_INCLUDE_DIR}")\n',
+    "MoltenVK include path",
+    1,
+)
+cmake.write_text(c)
+
+texture = src / "vita3k" / "renderer" / "src" / "vulkan" / "texture.cpp"
+t = texture.read_text()
+old_482 = """    // powerVR only
+    const vk::FormatProperties pvrt_support = state.physical_device.getFormatProperties(vk::Format::ePvrtc12BppUnormBlockIMG);
+    support_pvrt = static_cast<bool>(pvrt_support.optimalTilingFeatures & vk::FormatFeatureFlagBits::eSampledImage);
+#ifdef VITA3K_PLATFORM_IOS
+    // MoltenVK limitation: PVRTC content copied from a staging buffer into an
+    // optimal-tiled VkImage can be malformed. VKTextureCache uploads textures
+    // through a TransferSrc staging buffer, so do not use native PVRTC here.
+    // TextureCache::upload_texture will transparently decompress PVRT/PVRTII
+    // to RGBA8 using Vita3K's software decoder instead.
+    if (support_pvrt) {
+        LOG_INFO("iOS/MoltenVK: native PVRTC disabled; using software PVRT -> RGBA8 decompression");
+        support_pvrt = false;
+    }
+#endif
+"""
+new_483 = """    // powerVR only
+    const vk::FormatProperties pvrt_support = state.physical_device.getFormatProperties(vk::Format::ePvrtc12BppUnormBlockIMG);
+    support_pvrt = static_cast<bool>(pvrt_support.optimalTilingFeatures & vk::FormatFeatureFlagBits::eSampledImage);
+#ifdef VITA3K_PLATFORM_IOS
+    if (support_pvrt)
+        LOG_INFO("iOS/MoltenVK: PVRTC1 supported; using direct Metal compressed uploads (Vulkan staging bypassed)");
+#endif
+"""
+t = must_replace(t, old_482, new_483, "replace 482 PVRTC fallback")
+
+ns_anchor = "namespace renderer::vulkan {\n"
+bridge_decl = """#ifdef VITA3K_PLATFORM_IOS
+extern "C" bool vita3k_ios_upload_pvrtc_metal(
+    VkImage image, VkQueue queue, uint32_t mip_level, uint32_t array_slice,
+    uint32_t width, uint32_t height, const void *bytes);
+#endif
+
+"""
+if bridge_decl not in t:
+    t = must_replace(t, ns_anchor, ns_anchor + "\n" + bridge_decl, "PVRTC bridge declaration")
+
+fmt_anchor = """    vk::Format vk_format = texture::translate_format(base_format);
+    if (gxm::is_bcn_format(base_format) && !support_dxt)
+        // texture will be decompressed
+        vk_format = bcn_to_rgba8(vk_format);
+    if (gxm_texture.gamma_mode)
+        vk_format = linear_to_srgb(vk_format);
+"""
+fmt_new = """    vk::Format vk_format = texture::translate_format(base_format);
+#ifdef VITA3K_PLATFORM_IOS
+    const bool direct_pvrtc1 = support_pvrt
+        && (base_format == SCE_GXM_TEXTURE_BASE_FORMAT_PVRT2BPP
+            || base_format == SCE_GXM_TEXTURE_BASE_FORMAT_PVRT4BPP);
+    if (direct_pvrtc1) {
+        if (base_format == SCE_GXM_TEXTURE_BASE_FORMAT_PVRT2BPP)
+            vk_format = gxm_texture.gamma_mode
+                ? vk::Format::ePvrtc12BppSrgbBlockIMG
+                : vk::Format::ePvrtc12BppUnormBlockIMG;
+        else
+            vk_format = gxm_texture.gamma_mode
+                ? vk::Format::ePvrtc14BppSrgbBlockIMG
+                : vk::Format::ePvrtc14BppUnormBlockIMG;
+    } else
+#endif
+    {
+        if (gxm::is_bcn_format(base_format) && !support_dxt)
+            // texture will be decompressed
+            vk_format = bcn_to_rgba8(vk_format);
+        if (gxm_texture.gamma_mode)
+            vk_format = linear_to_srgb(vk_format);
+    }
+"""
+t = must_replace(t, fmt_anchor, fmt_new, "PVRTC image format")
+
+upload_anchor = """void VKTextureCache::upload_texture_impl(SceGxmTextureBaseFormat base_format, uint32_t width, uint32_t height,
+    uint32_t mip_index, const void *pixels, int face, uint32_t pixels_per_stride) {
+    if (!is_texture_transfer_ready)
+        prepare_staging_buffer();
+
+    vkutil::Image &image = current_texture->texture;
+    TextureStagingBuffer &staging_buffer = staging_buffers[staging_idx];
+
+    if (face > 0)
+        face--;
+"""
+upload_new = """void VKTextureCache::upload_texture_impl(SceGxmTextureBaseFormat base_format, uint32_t width, uint32_t height,
+    uint32_t mip_index, const void *pixels, int face, uint32_t pixels_per_stride) {
+#ifdef VITA3K_PLATFORM_IOS
+    const bool direct_pvrtc1 = support_pvrt
+        && (base_format == SCE_GXM_TEXTURE_BASE_FORMAT_PVRT2BPP
+            || base_format == SCE_GXM_TEXTURE_BASE_FORMAT_PVRT4BPP);
+    if (direct_pvrtc1) {
+        const uint32_t slice = face > 0 ? static_cast<uint32_t>(face - 1) : 0u;
+        const bool ok = vita3k_ios_upload_pvrtc_metal(
+            static_cast<VkImage>(current_texture->texture.image),
+            static_cast<VkQueue>(state.general_queue),
+            mip_index, slice, width, height, pixels);
+        if (!ok) {
+            LOG_ERROR("iOS direct Metal PVRTC upload failed: {}x{} mip={} slice={}",
+                width, height, mip_index, slice);
+        } else {
+            LOG_INFO_ONCE("VitaJoN 0.48.3 direct Metal PVRTC1 upload active");
+        }
+        ios_direct_pvrtc_active = true;
+        return;
+    }
+#endif
+
+    if (!is_texture_transfer_ready)
+        prepare_staging_buffer();
+
+    vkutil::Image &image = current_texture->texture;
+    TextureStagingBuffer &staging_buffer = staging_buffers[staging_idx];
+
+    if (face > 0)
+        face--;
+"""
+t = must_replace(t, upload_anchor, upload_new, "direct PVRTC upload")
+
+done_anchor = """void VKTextureCache::upload_done() {
+    // transition the texture back to read only
+"""
+done_new = """void VKTextureCache::upload_done() {
+#ifdef VITA3K_PLATFORM_IOS
+    if (ios_direct_pvrtc_active) {
+        current_texture->texture.layout = vkutil::ImageLayout::SampledImage;
+        ios_direct_pvrtc_active = false;
+        cmd_buffer = nullptr;
+        is_texture_transfer_ready = false;
+        return;
+    }
+#endif
+    // transition the texture back to read only
+"""
+t = must_replace(t, done_anchor, done_new, "direct PVRTC upload_done")
+texture.write_text(t)
+
+types = src / "vita3k" / "renderer" / "include" / "renderer" / "vulkan" / "types.h"
+h = types.read_text()
+member_anchor = """    bool is_texture_transfer_ready = false;
+
+    VKTextureCache(VKState &state);
+"""
+member_new = """    bool is_texture_transfer_ready = false;
+#ifdef VITA3K_PLATFORM_IOS
+    bool ios_direct_pvrtc_active = false;
+#endif
+
+    VKTextureCache(VKState &state);
+"""
+h = must_replace(h, member_anchor, member_new, "PVRTC active member")
+types.write_text(h)
+
+cache = src / "vita3k" / "renderer" / "src" / "texture" / "cache.cpp"
+k = cache.read_text()
+pvrt_case = """        case SCE_GXM_TEXTURE_BASE_FORMAT_PVRT2BPP:
+        case SCE_GXM_TEXTURE_BASE_FORMAT_PVRT4BPP:
+        case SCE_GXM_TEXTURE_BASE_FORMAT_PVRTII2BPP:
+        case SCE_GXM_TEXTURE_BASE_FORMAT_PVRTII4BPP:
+            if (support_pvrt) {
+                LOG_INFO_ONCE("Your device support SCE_GXM_TEXTURE_BASE_FORMAT_PVRT");
+                break;
+            }
+            if (!is_swizzled)
+                LOG_ERROR_ONCE("Unhandled non-swizzled PVRT format, please report it to the developers");
+
+            texture_data_decompressed.resize(pixels_per_stride * memory_height * 4);
+            // this actually also unswizzles the texture
+            decompress_compressed_texture(base_format, texture_data_decompressed.data(), pixels, pixels_per_stride, memory_height);
+            bytes_per_pixel = 4;
+            bpp = 32;
+            upload_format = SCE_GXM_TEXTURE_BASE_FORMAT_U8U8U8U8;
+            pixels = texture_data_decompressed.data();
+            break;
+"""
+pvrt_case_new = """        case SCE_GXM_TEXTURE_BASE_FORMAT_PVRT2BPP:
+        case SCE_GXM_TEXTURE_BASE_FORMAT_PVRT4BPP:
+        case SCE_GXM_TEXTURE_BASE_FORMAT_PVRTII2BPP:
+        case SCE_GXM_TEXTURE_BASE_FORMAT_PVRTII4BPP:
+#ifdef VITA3K_PLATFORM_IOS
+            if (support_pvrt
+                && (base_format == SCE_GXM_TEXTURE_BASE_FORMAT_PVRT2BPP
+                    || base_format == SCE_GXM_TEXTURE_BASE_FORMAT_PVRT4BPP)) {
+                LOG_INFO_ONCE("iOS: PVRTC1 stays compressed for direct Metal upload");
+                break;
+            }
+#else
+            if (support_pvrt) {
+                LOG_INFO_ONCE("Your device support SCE_GXM_TEXTURE_BASE_FORMAT_PVRT");
+                break;
+            }
+#endif
+            if (!is_swizzled)
+                LOG_ERROR_ONCE("Unhandled non-swizzled PVRT format, please report it to the developers");
+
+            texture_data_decompressed.resize(pixels_per_stride * memory_height * 4);
+            // this actually also unswizzles the texture
+            decompress_compressed_texture(base_format, texture_data_decompressed.data(), pixels, pixels_per_stride, memory_height);
+            bytes_per_pixel = 4;
+            bpp = 32;
+            upload_format = SCE_GXM_TEXTURE_BASE_FORMAT_U8U8U8U8;
+            pixels = texture_data_decompressed.data();
+            break;
+"""
+k = must_replace(k, pvrt_case, pvrt_case_new, "PVRT generic decode split")
+cache.write_text(k)
+
+frontend = src / "ios" / "src" / "NativeFrontend.mm"
+n = frontend.read_text()
+include_anchor = """#import <AVFoundation/AVFoundation.h>
+#import <GameController/GameController.h>
+#import <QuartzCore/QuartzCore.h>
+"""
+include_new = """#import <AVFoundation/AVFoundation.h>
+#import <GameController/GameController.h>
+#import <Metal/Metal.h>
+#import <QuartzCore/QuartzCore.h>
+#include <MoltenVK/vk_mvk_moltenvk.h>
+"""
+n = must_replace(n, include_anchor, include_new, "Metal/MoltenVK includes")
+
+bridge_impl = r'''
+
+extern "C" bool vita3k_ios_upload_pvrtc_metal(
+    VkImage image, VkQueue queue, uint32_t mip_level, uint32_t array_slice,
+    uint32_t width, uint32_t height, const void *bytes) {
+    @autoreleasepool {
+        if (!image || !queue || !bytes || width == 0 || height == 0)
+            return false;
+
+        id<MTLTexture> destination = nil;
+        vkGetMTLTextureMVK(image, &destination);
+        if (!destination)
+            return false;
+
+        const MTLRegion region = MTLRegionMake2D(0, 0, width, height);
+
+        if (destination.storageMode != MTLStorageModePrivate) {
+            [destination replaceRegion:region
+                           mipmapLevel:mip_level
+                                 slice:array_slice
+                             withBytes:bytes
+                           bytesPerRow:0
+                         bytesPerImage:0];
+            return true;
+        }
+
+        id<MTLDevice> device = destination.device;
+        if (!device)
+            return false;
+
+        MTLTextureDescriptor *desc =
+            [MTLTextureDescriptor texture2DDescriptorWithPixelFormat:destination.pixelFormat
+                                                               width:width
+                                                              height:height
+                                                           mipmapped:NO];
+        desc.storageMode = MTLStorageModeShared;
+        desc.usage = MTLTextureUsageShaderRead;
+
+        id<MTLTexture> staging = [device newTextureWithDescriptor:desc];
+        if (!staging)
+            return false;
+
+        [staging replaceRegion:region
+                   mipmapLevel:0
+                         slice:0
+                     withBytes:bytes
+                   bytesPerRow:0
+                 bytesPerImage:0];
+
+        id<MTLCommandQueue> mtl_queue = nil;
+        vkGetMTLCommandQueueMVK(queue, &mtl_queue);
+        if (!mtl_queue)
+            return false;
+
+        id<MTLCommandBuffer> command_buffer = [mtl_queue commandBuffer];
+        if (!command_buffer)
+            return false;
+        id<MTLBlitCommandEncoder> blit = [command_buffer blitCommandEncoder];
+        if (!blit)
+            return false;
+
+        [blit copyFromTexture:staging
+                 sourceSlice:0
+                 sourceLevel:0
+                sourceOrigin:MTLOriginMake(0, 0, 0)
+                  sourceSize:MTLSizeMake(width, height, 1)
+                   toTexture:destination
+            destinationSlice:array_slice
+            destinationLevel:mip_level
+           destinationOrigin:MTLOriginMake(0, 0, 0)];
+        [blit endEncoding];
+
+        [command_buffer addCompletedHandler:^(__unused id<MTLCommandBuffer> cb) {
+            (void)staging;
+        }];
+        [command_buffer commit];
+        return true;
+    }
+}
+'''
+if "vita3k_ios_upload_pvrtc_metal(" in n:
+    raise SystemExit("PVRTC bridge implementation already present")
+n += bridge_impl
+frontend.write_text(n)
+
+print("VitaJoN 0.48.3 native Metal PVRTC1 fast path applied")
 PY
 
