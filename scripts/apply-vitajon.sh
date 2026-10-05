@@ -7,6 +7,24 @@ ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 test -d "$SRC/ios"
 cp "$ROOT/config/VitaJoN.entitlements" "$SRC/ios/VitaJoN.entitlements"
 
+
+# VitaJoN 0.48.1: bring the pinned Tsubomi core up to the exact renderer/GXM
+# fixes present in official Vita3K Android build 4098 (bbd5c362), before
+# applying the iOS frontend adaptations below. These four commits are the
+# graphics/runtime-relevant delta after the Tsubomi pin.
+UPSTREAM_4098_COMMITS=(
+  1861db65e7b13cd64604bcd68986b5bd9ba0a495
+  85556014db0f2e157d8ded6127cb891015489203
+  ecee6842
+  bbd5c3624a06572fe4f16f67564f53a7540e1f42
+)
+for sha in "${UPSTREAM_4098_COMMITS[@]}"; do
+  git -C "$SRC" fetch --quiet --no-tags https://github.com/Vita3K/Vita3K.git "$sha"
+  git -C "$SRC" cherry-pick --no-commit "$sha"
+done
+git -C "$SRC" diff --check
+echo "VitaJoN: official Android 4098 core delta applied"
+
 python3 - "$SRC" <<'PY'
 from pathlib import Path
 import sys
@@ -16,8 +34,8 @@ src = Path(sys.argv[1])
 info = src / "ios" / "Info.plist.in"
 s = info.read_text()
 s = s.replace("<string>Tsubomi</string>", "<string>VitaJoN</string>")
-s = s.replace("<string>0.47.0</string>", "<string>0.48.0</string>", 1)
-s = s.replace("<string>470</string>", "<string>480</string>", 1)
+s = s.replace("<string>0.47.0</string>", "<string>0.48.1</string>", 1)
+s = s.replace("<string>470</string>", "<string>481</string>", 1)
 info.write_text(s)
 
 state = src / "vita3k" / "config" / "include" / "config" / "state.h"
@@ -688,3 +706,316 @@ surface.write_text(s)
 
 print("VitaJoN 0.48.0 Android-4098 typeless parity + overlap surface selection applied")
 PY
+
+# VitaJoN 0.48.1: remove experimental 476-480 renderer guesses that are NOT
+# present in Android build 4098. Keep only iOS-specific synchronization and the
+# byte-covered partial-typeless allowance required to reach the stock 4098
+# 64-bit-render-target -> 32-bit-texture path under MoltenVK.
+python3 - "$SRC" <<'PY'
+from pathlib import Path
+import sys
+
+src = Path(sys.argv[1])
+
+def must_replace(text, old, new, label, count=1):
+    n = text.count(old)
+    if n != count:
+        raise SystemExit(f"{label}: expected {count}, found {n}")
+    return text.replace(old, new, count)
+
+# 1) Restore the exact SceGxmColorSurface representation used by official 4098.
+types = src / "vita3k" / "renderer" / "include" / "renderer" / "gxm_types.h"
+t = types.read_text()
+custom_surface = """    struct {
+        uint32_t disabled : 1;
+        uint32_t downscale : 1;
+        uint32_t gamma : 2;
+        uint32_t clip_x_min : 12;
+        uint32_t clip_y_min : 12;
+        uint32_t : 4;
+    };
+    uint16_t width;
+    uint16_t height;
+    uint32_t strideInPixels;
+    Ptr<void> data;
+    SceGxmColorFormat colorFormat;
+    SceGxmColorSurfaceType surfaceType;
+    uint32_t clip_x_max : 12;
+    uint32_t clip_y_max : 12;
+    uint32_t : 8;
+    // opaque end
+"""
+stock_surface = """    struct {
+        uint32_t disabled : 1;
+        uint32_t downscale : 1;
+        uint32_t gamma : 2;
+        uint32_t : 28;
+    };
+    uint32_t width;
+    uint32_t height;
+    uint32_t strideInPixels;
+    Ptr<void> data;
+    SceGxmColorFormat colorFormat;
+    SceGxmColorSurfaceType surfaceType;
+    // opaque end
+"""
+t = must_replace(t, custom_surface, stock_surface, "restore SceGxmColorSurface")
+types.write_text(t)
+
+gxm = src / "vita3k" / "modules" / "SceGxm" / "SceGxm.cpp"
+g = gxm.read_text()
+custom_get_clip = """EXPORT(void, sceGxmColorSurfaceGetClip, const SceGxmColorSurface *surface, uint32_t *xMin, uint32_t *yMin, uint32_t *xMax, uint32_t *yMax) {
+    TRACY_FUNC(sceGxmColorSurfaceGetClip, surface, xMin, yMin, xMax, yMax);
+    assert(surface);
+    if (xMin)
+        *xMin = surface->clip_x_min;
+    if (yMin)
+        *yMin = surface->clip_y_min;
+    if (xMax)
+        *xMax = surface->clip_x_max;
+    if (yMax)
+        *yMax = surface->clip_y_max;
+}
+"""
+stock_get_clip = """EXPORT(void, sceGxmColorSurfaceGetClip, const SceGxmColorSurface *surface, uint32_t *xMin, uint32_t *yMin, uint32_t *xMax, uint32_t *yMax) {
+    TRACY_FUNC(sceGxmColorSurfaceGetClip, surface, xMin, yMin, xMax, yMax);
+    assert(surface);
+    UNIMPLEMENTED();
+}
+"""
+g = must_replace(g, custom_get_clip, stock_get_clip, "restore GetClip")
+
+custom_init = """    surface->downscale = scaleMode == SCE_GXM_COLOR_SURFACE_SCALE_MSAA_DOWNSCALE;
+    surface->width = static_cast<uint16_t>(width);
+    surface->height = static_cast<uint16_t>(height);
+    surface->clip_x_max = width - 1;
+    surface->clip_y_max = height - 1;
+    surface->strideInPixels = strideInPixels;
+"""
+stock_init = """    surface->downscale = scaleMode == SCE_GXM_COLOR_SURFACE_SCALE_MSAA_DOWNSCALE;
+    surface->width = width;
+    surface->height = height;
+    surface->strideInPixels = strideInPixels;
+"""
+g = must_replace(g, custom_init, stock_init, "restore ColorSurfaceInit")
+
+custom_set_clip = """EXPORT(void, sceGxmColorSurfaceSetClip, SceGxmColorSurface *surface, uint32_t xMin, uint32_t yMin, uint32_t xMax, uint32_t yMax) {
+    TRACY_FUNC(sceGxmColorSurfaceSetClip, surface, xMin, yMin, xMax, yMax);
+    assert(surface);
+    surface->clip_x_min = xMin;
+    surface->clip_y_min = yMin;
+    surface->clip_x_max = xMax;
+    surface->clip_y_max = yMax;
+}
+"""
+stock_set_clip = """EXPORT(void, sceGxmColorSurfaceSetClip, SceGxmColorSurface *surface, uint32_t xMin, uint32_t yMin, uint32_t xMax, uint32_t yMax) {
+    TRACY_FUNC(sceGxmColorSurfaceSetClip, surface, xMin, yMin, xMax, yMax);
+    assert(surface);
+    UNIMPLEMENTED();
+}
+"""
+g = must_replace(g, custom_set_clip, stock_set_clip, "restore SetClip")
+
+# 2) Android 4098 returns UNSUPPORTED for invalid cube address modes. Builds
+# 476-480 coerced them to CLAMP, changing game-visible GXM behavior.
+for axis in ("U", "V"):
+    member = axis.lower() + "addr_mode"
+    custom = f"""    if (!verify_texture_mode(texture, mode)) {{
+        if ((texture->type << 29) == SCE_GXM_TEXTURE_CUBE || (texture->type << 29) == SCE_GXM_TEXTURE_CUBE_ARBITRARY) {{
+            LOG_WARN_ONCE("Cube texture {axis} addr mode {{}} unsupported - coercing to CLAMP", fmt::underlying(mode));
+            texture->{member} = SCE_GXM_TEXTURE_ADDR_CLAMP;
+            return 0;
+        }}
+        return RET_ERROR(SCE_GXM_ERROR_UNSUPPORTED);
+    }}
+
+    texture->{member} = mode;
+    return 0;
+"""
+    stock = f"""    if (!verify_texture_mode(texture, mode))
+        return RET_ERROR(SCE_GXM_ERROR_UNSUPPORTED);
+
+    texture->{member} = mode;
+    return 0;
+"""
+    g = must_replace(g, custom, stock, f"restore cube {axis} mode")
+gxm.write_text(g)
+
+# 3) Restore official 4098 surface-cache semantics. The iOS-only transfer
+# barriers are retained, but format selection, cache entry selection and final
+# image layout must match the working Android core.
+surface = src / "vita3k" / "renderer" / "src" / "vulkan" / "surface_cache.cpp"
+v = surface.read_text()
+
+custom_format = """            casted->texture.width = width;
+            casted->texture.height = height;
+
+            auto store_is_f16 = [](SceGxmColorBaseFormat f) {
+                return f == SCE_GXM_COLOR_BASE_FORMAT_F16
+                    || f == SCE_GXM_COLOR_BASE_FORMAT_F16F16
+                    || f == SCE_GXM_COLOR_BASE_FORMAT_F16F16F16F16;
+            };
+
+            auto force_unsigned_reinterpret_format = [](vk::Format fmt) {
+                switch (fmt) {
+                case vk::Format::eR8Snorm: return vk::Format::eR8Unorm;
+                case vk::Format::eR8G8Snorm: return vk::Format::eR8G8Unorm;
+                case vk::Format::eR8G8B8A8Snorm: return vk::Format::eR8G8B8A8Unorm;
+                case vk::Format::eR16Snorm: return vk::Format::eR16Unorm;
+                case vk::Format::eR16G16Snorm: return vk::Format::eR16G16Unorm;
+                case vk::Format::eR16G16B16A16Snorm: return vk::Format::eR16G16B16A16Unorm;
+                case vk::Format::eR8Sint: return vk::Format::eR8Uint;
+                case vk::Format::eR8G8Sint: return vk::Format::eR8G8Uint;
+                case vk::Format::eR8G8B8A8Sint: return vk::Format::eR8G8B8A8Uint;
+                default: return fmt;
+                }
+            };
+
+            casted->texture.format = (bytes_per_pixel_requested != bytes_per_pixel_in_store && store_is_f16(info.format))
+                ? force_unsigned_reinterpret_format(vk_format)
+                : vk_format;
+
+            // find the swizzle we need to apply
+"""
+stock_format = """            casted->texture.width = width;
+            casted->texture.height = height;
+            casted->texture.format = vk_format;
+
+            // find the swizzle we need to apply
+"""
+v = must_replace(v, custom_format, stock_format, "restore cast format")
+
+custom_select = """    // Vita3K+ Uncharted parity: several cached surfaces may overlap the same
+    // guest address. Prefer an overlapping surface with the exact texture
+    // tiling + byte stride instead of assuming the nearest lower address is it.
+    if (tiling != ite->second->tiling || ite->second->stride_bytes != stride_bytes) {
+        auto match = ite;
+        bool found_layout_match = false;
+        while (true) {
+            if ((match->first + match->second->total_bytes) > address
+                && match->second->tiling == tiling
+                && match->second->stride_bytes == stride_bytes) {
+                ite = match;
+                found_layout_match = true;
+                LOG_INFO_ONCE("VitaJoN 0.48.0 selected overlapping surface by stride/tiling: texture=0x{:X} surface=0x{:X} stride={}",
+                    address, ite->first, stride_bytes);
+                break;
+            }
+            if (match == color_address_lookup.begin())
+                break;
+            --match;
+        }
+
+        if (!found_layout_match) {
+            LOG_WARN_ONCE("Surface-as-texture miss (tiling/stride): texture=0x{:X} requested tiling={} stride={}",
+                address, static_cast<int>(tiling), stride_bytes);
+            return std::nullopt;
+        }
+    }
+
+    ColorSurfaceCacheInfo &info = *ite->second;
+
+    if ((base_format == SCE_GXM_COLOR_BASE_FORMAT_U8U8U8 || info.format == SCE_GXM_COLOR_BASE_FORMAT_U8U8U8)
+        && base_format != info.format)
+        // don't even try to match u8u8u8 with something else
+        return std::nullopt;
+"""
+stock_select = """    ColorSurfaceCacheInfo &info = *ite->second;
+
+    if ((base_format == SCE_GXM_COLOR_BASE_FORMAT_U8U8U8 || info.format == SCE_GXM_COLOR_BASE_FORMAT_U8U8U8)
+        && base_format != info.format)
+        // don't even try to match u8u8u8 with something else
+        return std::nullopt;
+
+    if (tiling != info.tiling || info.stride_bytes != stride_bytes) {
+        // if the tiling is different, also don't try to match them
+        // about the strides, I've yet to see a case where the byte stride is different
+        LOG_WARN_ONCE("Surface-as-texture miss (tiling/stride): texture=0x{:X} tiling={}/{} stride={}/{}",
+            address, static_cast<int>(tiling), static_cast<int>(info.tiling), stride_bytes, info.stride_bytes);
+        return std::nullopt;
+    }
+"""
+v = must_replace(v, custom_select, stock_select, "restore surface selection")
+
+# Builds 476-480 changed this casted texture to SampledImage. Android 4098
+# leaves it in ColorAttachmentReadWrite after the transfer.
+v = must_replace(
+    v,
+    "        casted->texture.transition_to(cmd_buffer, vkutil::ImageLayout::SampledImage);",
+    "        casted->texture.transition_to(cmd_buffer, vkutil::ImageLayout::ColorAttachmentReadWrite);",
+    "restore casted final layout",
+)
+surface.write_text(v)
+
+# 4) Remove speculative shader behavior changes not present in build 4098.
+spirv = src / "vita3k" / "shader" / "src" / "spirv_recompiler.cpp"
+p = spirv.read_text()
+custom_banks = """    // Create register banks. Vita hardware starts these predictably; leaving
+    // SPIR-V Private storage undefined creates device-dependent garbage.
+    auto make_zeroed_bank = [&](spv::Id arr_type, const char *name) {
+        return b.createVariable(spv::NoPrecision, spv::StorageClassPrivate, arr_type, name, b.makeNullConstant(arr_type));
+    };
+
+    spv_params.ins = make_zeroed_bank(pa_arr_type, "pa");
+    spv_params.uniforms = make_zeroed_bank(sa_arr_type, "sa");
+    spv_params.internals = make_zeroed_bank(i_arr_type, "internals");
+    spv_params.temps = make_zeroed_bank(temp_arr_type, "r");
+    spv_params.predicates = make_zeroed_bank(pred_arr_type, "p");
+    spv_params.indexes = make_zeroed_bank(index_arr_type, "idx");
+    spv_params.outs = make_zeroed_bank(o_arr_type, "outs");
+"""
+stock_banks = """    // Create register banks
+    spv_params.ins = b.createVariable(spv::NoPrecision, spv::StorageClassPrivate, pa_arr_type, "pa");
+    spv_params.uniforms = b.createVariable(spv::NoPrecision, spv::StorageClassPrivate, sa_arr_type, "sa");
+    spv_params.internals = b.createVariable(spv::NoPrecision, spv::StorageClassPrivate, i_arr_type, "internals");
+    spv_params.temps = b.createVariable(spv::NoPrecision, spv::StorageClassPrivate, temp_arr_type, "r");
+    spv_params.predicates = b.createVariable(spv::NoPrecision, spv::StorageClassPrivate, pred_arr_type, "p");
+    spv_params.indexes = b.createVariable(spv::NoPrecision, spv::StorageClassPrivate, index_arr_type, "idx");
+    spv_params.outs = b.createVariable(spv::NoPrecision, spv::StorageClassPrivate, o_arr_type, "outs");
+"""
+p = must_replace(p, custom_banks, stock_banks, "restore private register banks")
+spirv.write_text(p)
+
+alu = src / "vita3k" / "shader" / "src" / "translator" / "alu.cpp"
+a = alu.read_text()
+dual_guess = """        if (result != spv::NoResult && m_b.getNumComponents(result) == 1) {
+            result = postprocess_dot_result_for_store(m_b, result, write_mask_dest);
+        }
+
+"""
+a = must_replace(a, dual_guess, "", "remove DUAL guess")
+alu.write_text(a)
+
+uniform = src / "vita3k" / "shader" / "include" / "shader" / "uniform_block.h"
+u = uniform.read_text()
+custom_uniforms = """struct RenderFragUniformBlock {
+    float back_disabled = 0.0f;
+    float front_disabled = 0.0f;
+    float writing_mask = 0.0f;
+    float use_raw_image = 0.0f;
+    float res_multiplier = 1.0f;
+};
+"""
+stock_uniforms = """struct RenderFragUniformBlock {
+    float back_disabled;
+    float front_disabled;
+    float writing_mask;
+    float use_raw_image;
+    float res_multiplier;
+};
+"""
+u = must_replace(u, custom_uniforms, stock_uniforms, "restore fragment uniforms")
+uniform.write_text(u)
+
+# Force shader cache invalidation after replacing the 480 translator behavior
+# and adding official 4098 fconv_type=0 semantics.
+cache = src / "vita3k" / "shader" / "include" / "shader" / "spirv_recompiler.h"
+c = cache.read_text()
+c = must_replace(c, "static constexpr uint32_t CURRENT_VERSION = 14;",
+                 "static constexpr uint32_t CURRENT_VERSION = 15;",
+                 "bump shader cache")
+cache.write_text(c)
+
+print("VitaJoN 0.48.1 clean Android-4098 parity normalization applied")
+PY
+
