@@ -34,8 +34,8 @@ src = Path(sys.argv[1])
 info = src / "ios" / "Info.plist.in"
 s = info.read_text()
 s = s.replace("<string>Tsubomi</string>", "<string>VitaJoN</string>")
-s = s.replace("<string>0.47.0</string>", "<string>0.48.1</string>", 1)
-s = s.replace("<string>470</string>", "<string>481</string>", 1)
+s = s.replace("<string>0.47.0</string>", "<string>0.48.2</string>", 1)
+s = s.replace("<string>470</string>", "<string>482</string>", 1)
 info.write_text(s)
 
 state = src / "vita3k" / "config" / "include" / "config" / "state.h"
@@ -1017,5 +1017,49 @@ c = must_replace(c, "static constexpr uint32_t CURRENT_VERSION = 14;",
 cache.write_text(c)
 
 print("VitaJoN 0.48.1 clean Android-4098 parity normalization applied")
+PY
+
+# VitaJoN 0.48.2: MoltenVK explicitly documents that PVRTC image contents
+# uploaded through a Vulkan staging buffer are malformed. Vita3K's texture
+# cache uses exactly a TransferSrc staging buffer for texture uploads, and the
+# 481 device log proves Apple/MoltenVK advertises PVRTC so Vita3K selects that
+# native path ("Your device support SCE_GXM_TEXTURE_BASE_FORMAT_PVRT").
+# Android/Turnip does not have this MoltenVK limitation. Force the already
+# existing Vita3K software PVRT decompressor on iOS so uploads become RGBA8.
+python3 - "$SRC" <<'PY'
+from pathlib import Path
+import sys
+
+src = Path(sys.argv[1])
+texture = src / "vita3k" / "renderer" / "src" / "vulkan" / "texture.cpp"
+s = texture.read_text()
+
+old = """    // powerVR only
+    const vk::FormatProperties pvrt_support = state.physical_device.getFormatProperties(vk::Format::ePvrtc12BppUnormBlockIMG);
+    support_pvrt = static_cast<bool>(pvrt_support.optimalTilingFeatures & vk::FormatFeatureFlagBits::eSampledImage);
+"""
+
+new = """    // powerVR only
+    const vk::FormatProperties pvrt_support = state.physical_device.getFormatProperties(vk::Format::ePvrtc12BppUnormBlockIMG);
+    support_pvrt = static_cast<bool>(pvrt_support.optimalTilingFeatures & vk::FormatFeatureFlagBits::eSampledImage);
+#ifdef VITA3K_PLATFORM_IOS
+    // MoltenVK limitation: PVRTC content copied from a staging buffer into an
+    // optimal-tiled VkImage can be malformed. VKTextureCache uploads textures
+    // through a TransferSrc staging buffer, so do not use native PVRTC here.
+    // TextureCache::upload_texture will transparently decompress PVRT/PVRTII
+    // to RGBA8 using Vita3K's software decoder instead.
+    if (support_pvrt) {
+        LOG_INFO("iOS/MoltenVK: native PVRTC disabled; using software PVRT -> RGBA8 decompression");
+        support_pvrt = false;
+    }
+#endif
+"""
+
+if s.count(old) != 1:
+    raise SystemExit(f"PVRTC capability anchor count={s.count(old)}")
+s = s.replace(old, new, 1)
+texture.write_text(s)
+
+print("VitaJoN 0.48.2 MoltenVK PVRTC staging workaround applied")
 PY
 
