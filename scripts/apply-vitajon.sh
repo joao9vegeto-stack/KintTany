@@ -1397,3 +1397,67 @@ frontend.write_text(n)
 print("VitaJoN 0.48.3 native Metal PVRTC1 fast path applied")
 PY
 
+# VitaJoN 0.48.3: make an unexpected return to the library diagnosable.
+python3 - "$SRC" <<'PY'
+from pathlib import Path
+import sys
+p = Path(sys.argv[1]) / "ios" / "src" / "UpstreamMain.cpp"
+s = p.read_text()
+
+repls = [
+("""            case SDL_EVENT_TERMINATING:
+                app_terminating = true;
+                running = false;
+                break;
+""",
+"""            case SDL_EVENT_TERMINATING:
+                LOG_WARN("iOS session exit trigger: SDL_EVENT_TERMINATING");
+                app_terminating = true;
+                running = false;
+                break;
+"""),
+("""            case SDL_EVENT_QUIT:
+            case SDL_EVENT_WINDOW_CLOSE_REQUESTED:
+                // In-game menu "Quit Game" pushes SDL_EVENT_QUIT: end the
+                // session and fall back to the library.
+                running = false;
+                break;
+""",
+"""            case SDL_EVENT_QUIT:
+            case SDL_EVENT_WINDOW_CLOSE_REQUESTED:
+                // In-game menu "Quit Game" pushes SDL_EVENT_QUIT: end the
+                // session and fall back to the library.
+                LOG_WARN("iOS session exit trigger: SDL event {}", static_cast<unsigned>(event.type));
+                running = false;
+                break;
+"""),
+("""        if (auto request = emuenv->take_app_launch_request()) {
+            // In-process relaunch (LoadExec) is not supported yet on iOS.
+            LOG_WARN("Title requested relaunch of '{}'; stopping instead.", request->self_path);
+            running = false;
+        }
+
+        if (!session_controller.is_running())
+            running = false;
+""",
+"""        if (auto request = emuenv->take_app_launch_request()) {
+            // In-process relaunch (LoadExec) is not supported yet on iOS.
+            LOG_WARN("Title requested relaunch of '{}'; stopping instead.", request->self_path);
+            LOG_WARN("iOS session exit trigger: guest LoadExec request");
+            running = false;
+        }
+
+        if (!session_controller.is_running()) {
+            LOG_WARN("iOS session exit trigger: AppSessionController no longer running");
+            running = false;
+        }
+""")
+]
+for old,new in repls:
+    if s.count(old) != 1:
+        raise SystemExit("session-exit diagnostic anchor mismatch")
+    s = s.replace(old,new,1)
+p.write_text(s)
+print("VitaJoN 0.48.3 session exit diagnostics applied")
+PY
+
