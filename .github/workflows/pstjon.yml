@@ -1,0 +1,163 @@
+name: PsTJon iOS
+
+on:
+  push:
+    branches: [PsTJon]
+  workflow_dispatch:
+
+concurrency:
+  group: pstjon-ios
+  cancel-in-progress: true
+
+jobs:
+  build:
+    runs-on: macos-15-arm64
+    timeout-minutes: 360
+    env:
+      IOS_DEPLOYMENT_TARGET: "17.4"
+      RPCS3_IOS_SHA: "1e66014e99ce501569c087d853a3fb21430449bc"
+      MOLTENVK_VERSION: "1.4.2"
+      FFMPEG_VERSION: "8.1.1"
+      OFFICIAL_IPA_SHA256: "e017a90947c3058f2c55b33d8a177be6591157afcdcdd97c7725b15e9ec1b625"
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Select Xcode 26 and toolchain
+        run: |
+          set -euxo pipefail
+          xcode_apps=(/Applications/Xcode_26*.app)
+          if [[ ! -d "${xcode_apps[0]}" ]]; then
+            echo "::error::Xcode 26 not found"
+            ls -1 /Applications | grep '^Xcode' || true
+            exit 1
+          fi
+          selected_xcode="${xcode_apps[${#xcode_apps[@]}-1]}"
+          sudo xcode-select --switch "${selected_xcode}/Contents/Developer"
+          brew list ninja >/dev/null 2>&1 || brew install ninja
+          brew list cmake >/dev/null 2>&1 || brew install cmake
+          brew list pkg-config >/dev/null 2>&1 || brew install pkg-config
+          xcodebuild -version
+          xcrun --sdk iphoneos --show-sdk-version
+          xcrun --sdk iphoneos --show-sdk-path
+          clang --version
+
+      - name: Fetch RPCS3 ios-port
+        run: |
+          set -euxo pipefail
+          git clone --filter=blob:none https://github.com/XITRIX/rpcs3.git rpcs3-src
+          cd rpcs3-src
+          git checkout "$RPCS3_IOS_SHA"
+          git submodule update --init --recursive --depth 1
+          git rev-parse HEAD
+
+      - name: Fetch MoltenVK
+        run: |
+          set -euxo pipefail
+          mkdir -p deps/mvk
+          curl -L --fail --retry 4 "https://github.com/KhronosGroup/MoltenVK/releases/download/v${MOLTENVK_VERSION}/MoltenVK-ios.tar" -o deps/MoltenVK-ios.tar
+          tar -xf deps/MoltenVK-ios.tar -C deps/mvk
+          MVK_INCLUDE="$(find "$PWD/deps/mvk" -type d -path '*/MoltenVK/include' -print -quit)"
+          test -n "$MVK_INCLUDE"
+          MVK_ROOT="${MVK_INCLUDE%/MoltenVK/include}"
+          test -f "$MVK_ROOT/MoltenVK/static/MoltenVK.xcframework/ios-arm64/libMoltenVK.a"
+          echo "RPCS3_MOLTENVK_ROOT=$MVK_ROOT" >> "$GITHUB_ENV"
+
+      - name: Build FFmpeg 8.1.1 for iOS
+        run: |
+          set -euxo pipefail
+          mkdir -p deps/ffmpeg-src deps/ffmpeg-ios
+          curl -L --fail --retry 4 "https://ffmpeg.org/releases/ffmpeg-${FFMPEG_VERSION}.tar.xz" -o deps/ffmpeg.tar.xz
+          tar -xf deps/ffmpeg.tar.xz -C deps/ffmpeg-src --strip-components=1
+          SDKROOT="$(xcrun --sdk iphoneos --show-sdk-path)"
+          CC="$(xcrun --sdk iphoneos -f clang)"
+          CXX="$(xcrun --sdk iphoneos -f clang++)"
+          cd deps/ffmpeg-src
+          ./configure \
+            --prefix="$GITHUB_WORKSPACE/deps/ffmpeg-ios" \
+            --target-os=darwin --arch=arm64 --cc="$CC" --cxx="$CXX" --sysroot="$SDKROOT" \
+            --enable-cross-compile --enable-pic --disable-shared --enable-static \
+            --disable-programs --disable-doc --disable-debug --disable-autodetect \
+            --extra-cflags="-arch arm64 -miphoneos-version-min=${IOS_DEPLOYMENT_TARGET}" \
+            --extra-cxxflags="-arch arm64 -miphoneos-version-min=${IOS_DEPLOYMENT_TARGET}" \
+            --extra-ldflags="-arch arm64 -miphoneos-version-min=${IOS_DEPLOYMENT_TARGET} -isysroot $SDKROOT"
+          make -j3
+          make install
+          test -f "$GITHUB_WORKSPACE/deps/ffmpeg-ios/lib/libavcodec.a"
+          echo "RPCS3_FFMPEG_ROOT=$GITHUB_WORKSPACE/deps/ffmpeg-ios" >> "$GITHUB_ENV"
+
+      - name: Build native llvm-tblgen
+        run: |
+          set -euxo pipefail
+          LLVM_SRC="$GITHUB_WORKSPACE/rpcs3-src/3rdparty/llvm/llvm/llvm"
+          cmake -S "$LLVM_SRC" -B llvm-host -G Ninja \
+            -DCMAKE_BUILD_TYPE=Release -DLLVM_TARGETS_TO_BUILD=AArch64 \
+            -DLLVM_INCLUDE_TESTS=OFF -DLLVM_INCLUDE_EXAMPLES=OFF \
+            -DLLVM_INCLUDE_BENCHMARKS=OFF -DLLVM_INCLUDE_DOCS=OFF
+          cmake --build llvm-host --target llvm-tblgen -j3
+          echo "LLVM_NATIVE_TOOL_DIR=$GITHUB_WORKSPACE/llvm-host/bin" >> "$GITHUB_ENV"
+
+      - name: Configure RPCS3Core for iPhone
+        run: |
+          set -euxo pipefail
+          SDKROOT="$(xcrun --sdk iphoneos --show-sdk-path)"
+          cmake -S rpcs3-src -B build-ios -G Ninja \
+            -DCMAKE_BUILD_TYPE=Release -DCMAKE_SYSTEM_NAME=iOS -DCMAKE_OSX_SYSROOT="$SDKROOT" \
+            -DCMAKE_OSX_ARCHITECTURES=arm64 -DCMAKE_OSX_DEPLOYMENT_TARGET="$IOS_DEPLOYMENT_TARGET" \
+            -DCMAKE_TRY_COMPILE_TARGET_TYPE=STATIC_LIBRARY -DRPCS3_FRONTEND=IOS -DUSE_VULKAN=ON \
+            -DWITH_LLVM=ON -DBUILD_LLVM=ON -DSTATIC_LINK_LLVM=ON -DLLVM_TARGETS_TO_BUILD=AArch64 \
+            -DLLVM_NATIVE_TOOL_DIR="$LLVM_NATIVE_TOOL_DIR" -DRPCS3_MOLTENVK_ROOT="$RPCS3_MOLTENVK_ROOT" \
+            -DRPCS3_FFMPEG_ROOT="$RPCS3_FFMPEG_ROOT"
+
+      - name: Build RPCS3Core
+        run: |
+          set -euxo pipefail
+          cmake --build build-ios --target RPCS3Core -j3
+          CORE="$(find build-ios -type f -name 'libRPCS3Core.dylib' -print -quit)"
+          test -n "$CORE"
+          file "$CORE"
+          lipo -info "$CORE"
+          cp "$CORE" "$GITHUB_WORKSPACE/libRPCS3Core.dylib"
+
+      - name: Repack official RPCS3 shell
+        run: |
+          set -euxo pipefail
+          curl -L --fail --retry 4 "https://github.com/XITRIX/RPCS3-iOS-Releases/releases/download/v0.10.1/RPCS3.ipa" -o RPCS3-official.ipa
+          echo "$OFFICIAL_IPA_SHA256  RPCS3-official.ipa" | shasum -a 256 -c -
+          rm -rf package && mkdir package
+          ditto -x -k RPCS3-official.ipa package
+          APP="package/Payload/RPCS3.app"
+          test "$(/usr/libexec/PlistBuddy -c 'Print :CFBundleIdentifier' "$APP/Info.plist")" = "com.xitrix.RPCS3"
+          cp libRPCS3Core.dylib "$APP/Frameworks/libRPCS3Core.dylib"
+          rm -rf "$APP/_CodeSignature"
+          rm -f "$APP/embedded.mobileprovision"
+          codesign --force --sign - "$APP/Frameworks/libRPCS3Core.dylib"
+          codesign --force --sign - --entitlements PsTJon.entitlements "$APP"
+          codesign -d --entitlements :- "$APP" 2>&1 | tee pstjon-entitlements.txt
+          (
+            cd package
+            ditto -c -k --sequesterRsrc --keepParent Payload "$GITHUB_WORKSPACE/PsTJon.ipa"
+          )
+          shasum -a 256 PsTJon.ipa
+
+      - name: Build report
+        run: |
+          {
+            echo "PsTJon"
+            echo "RPCS3 ios-port: $RPCS3_IOS_SHA"
+            echo "Shell bundle id: com.xitrix.RPCS3"
+            echo "MoltenVK: $MOLTENVK_VERSION"
+            echo "FFmpeg: $FFMPEG_VERSION"
+            echo "Core: $(shasum -a 256 libRPCS3Core.dylib | awk '{print $1}')"
+            echo "IPA: $(shasum -a 256 PsTJon.ipa | awk '{print $1}')"
+          } > PsTJon-build.txt
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: PsTJon-IPA
+          path: |
+            PsTJon.ipa
+            PsTJon-build.txt
+            pstjon-entitlements.txt
+          if-no-files-found: error
+          compression-level: 0
