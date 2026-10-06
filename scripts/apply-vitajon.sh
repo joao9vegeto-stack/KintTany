@@ -35,8 +35,8 @@ src = Path(sys.argv[1])
 info = src / "ios" / "Info.plist.in"
 s = info.read_text()
 s = s.replace("<string>Tsubomi</string>", "<string>VitaJoN</string>")
-s = s.replace("<string>0.47.0</string>", "<string>0.48.7</string>", 1)
-s = s.replace("<string>470</string>", "<string>487</string>", 1)
+s = s.replace("<string>0.47.0</string>", "<string>0.48.8</string>", 1)
+s = s.replace("<string>470</string>", "<string>488</string>", 1)
 info.write_text(s)
 
 state = src / "vita3k" / "config" / "include" / "config" / "state.h"
@@ -180,7 +180,10 @@ new = """    if (session_settings)
     if (launch_request->app_path == "PCSA00029") {
         auto &current = emuenv->cfg.current_config;
         current.resolution_multiplier = 1.0f;
-        current.high_accuracy = true;
+        // MoltenVK #2281 / Vita3K #4109 verified the patched Apple
+        // framebuffer-fetch path with high-accuracy OFF. Keeping HA on after
+        // bypassing interlock only disables the texture-viewport fast path.
+        current.high_accuracy = false;
         current.vitajon_coherent_metal_fetch = true;
         current.disable_surface_sync = false;
         // Build 484 proved the unmapped iOS staging-readback path can serialize
@@ -196,7 +199,7 @@ new = """    if (session_settings)
         // began stuttering. Let Vita3K's deferred pipeline path compile those
         // off the render thread instead of blocking gameplay.
         current.async_pipeline_compilation = true;
-        LOG_INFO("VitaJoN Uncharted profile: res=1x high_accuracy=true surface_sync=true memory=double-buffer aniso=1 filter=Nearest async=true");
+        LOG_INFO("VitaJoN Uncharted profile: res=1x high_accuracy=false(Metal-fetch exact path) surface_sync=true memory=double-buffer aniso=1 filter=Nearest async=true");
     }
 
     IOSFrameHost frame_host(window);
@@ -1622,5 +1625,238 @@ c = must_replace(c, "static constexpr uint32_t CURRENT_VERSION = 15;",
 cache.write_text(c)
 
 print("VitaJoN 0.48.7 coherent Metal framebuffer-fetch activation fix applied")
+PY
+
+# VitaJoN 0.48.8: remove the two remaining iOS-only hot paths exposed by the
+# 487 full-session trace.
+#
+# 1. Follow MoltenVK #2281 exactly: patched framebuffer fetch + high-accuracy
+#    OFF, retaining Vita3K's normal by-region dependency. This enables the
+#    upstream texture-viewport fast path while programmable blending still uses
+#    coherent Metal [[color(n)]] reads.
+# 2. StikDebug prevents mprotect-based texture dirty tracking, so Tsubomi hashes
+#    every cached texture on every bind. For PCSA00029 only, large non-YUV
+#    textures are hashed at most once per emulated frame. YUV/video and small
+#    dynamic textures retain every-bind checking.
+python3 - "$SRC" <<'PY'
+from pathlib import Path
+import sys
+
+src = Path(sys.argv[1])
+
+def must_replace(text, old, new, label, count=1):
+    n = text.count(old)
+    if n != count:
+        raise SystemExit(f"{label}: expected {count}, found {n}")
+    return text.replace(old, new, count)
+
+# Explicitly reset the texture viewport flag on every renderer launch. The 487
+# log said "texture viewport disabled" but then entered retrieve_sampled_view
+# 282 times; leaving a previous value untouched makes that state impossible to
+# reason about across the launcher -> uncharted.self in-process relaunch.
+renderer = src / "vita3k" / "renderer" / "src" / "vulkan" / "renderer.cpp"
+r = renderer.read_text()
+old = """    // texture viewport is faster but not entirely accurate
+    if (support_standard_layout && !use_high_accuracy) {
+        LOG_INFO("The Vulkan renderer is using texture viewport for better performance");
+        features.use_texture_viewport = true;
+    } else if (use_high_accuracy) {
+        LOG_INFO("High accuracy enabled: texture viewport disabled");
+    }
+"""
+new = """    // texture viewport is faster but not entirely accurate. Reset explicitly:
+    // the iOS frontend can relaunch eboot -> game SELF in-process.
+    features.use_texture_viewport = false;
+    if (support_standard_layout && !use_high_accuracy) {
+        features.use_texture_viewport = true;
+        LOG_INFO("The Vulkan renderer is using texture viewport for better performance");
+    } else if (use_high_accuracy) {
+        LOG_INFO("High accuracy enabled: texture viewport disabled");
+    }
+    LOG_INFO("VitaJoN texture viewport effective state: {}", features.use_texture_viewport);
+"""
+r = must_replace(r, old, new, "explicit texture viewport state")
+
+# Mark the texture cache for the Uncharted-specific frame hash policy.
+anchor = """    const bool vitajon_coherent_metal_fetch = cfg.current_config.vitajon_coherent_metal_fetch;
+    LOG_INFO("VitaJoN framebuffer-fetch selector: enabled={} app_path='{}'",
+        vitajon_coherent_metal_fetch, game_id);
+"""
+replacement = """    const bool vitajon_coherent_metal_fetch = cfg.current_config.vitajon_coherent_metal_fetch;
+    texture_cache.vitajon_frame_hash_dedupe = vitajon_coherent_metal_fetch;
+    LOG_INFO("VitaJoN framebuffer-fetch selector: enabled={} app_path='{}'",
+        vitajon_coherent_metal_fetch, game_id);
+    if (texture_cache.vitajon_frame_hash_dedupe)
+        LOG_INFO("VitaJoN Uncharted texture hashing: large non-YUV textures checked at most once per frame");
+"""
+r = must_replace(r, anchor, replacement, "Uncharted texture-cache flag")
+renderer.write_text(r)
+
+# Restore Vita3K's stock by-region barrier. The MoltenVK report explicitly
+# states no Vita3K-side change is needed; the patched SPIRV-Cross lowering is
+# enough. 487 skipped this barrier unnecessarily.
+scene = src / "vita3k" / "renderer" / "src" / "vulkan" / "scene.cpp"
+q = scene.read_text()
+custom = """    if (context.state.features.direct_fragcolor && fragment_program_gxp.is_frag_color_used()) {
+        // The fragment shader is using programmable blending with a subpass
+        // input. Generic Vulkan needs the by-region self-dependency barrier.
+#if defined(VITA3K_PLATFORM_IOS)
+        // VitaJoN's patched MoltenVK lowers this exact color0/input0 alias to
+        // Metal framebuffer fetch. Metal guarantees raster-ordered access to
+        // [[color(0)]], including overlapping fragments within a draw. Keeping
+        // the Vulkan image barrier here makes stock MoltenVK split the Metal
+        // render pass, throwing away tile memory and is catastrophic in
+        // Uncharted's effect-heavy combat scenes.
+        LOG_INFO_ONCE("VitaJoN: tile-local Metal framebuffer fetch; per-draw color barrier skipped");
+#else
+        vk::ImageMemoryBarrier barrier{
+            .srcAccessMask = vk::AccessFlagBits::eColorAttachmentWrite,
+            .dstAccessMask = vk::AccessFlagBits::eInputAttachmentRead,
+            .oldLayout = vk::ImageLayout::eGeneral,
+            .newLayout = vk::ImageLayout::eGeneral,
+            .srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED,
+            .dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED,
+            .image = context.current_color_base_image->image,
+            .subresourceRange = vkutil::color_subresource_range
+        };
+        context.render_cmd.pipelineBarrier(vk::PipelineStageFlagBits::eColorAttachmentOutput, vk::PipelineStageFlagBits::eFragmentShader,
+            vk::DependencyFlagBits::eByRegion, {}, {}, barrier);
+#endif
+    } else if (context.state.features.support_shader_interlock
+"""
+stock = """    if (context.state.features.direct_fragcolor && fragment_program_gxp.is_frag_color_used()) {
+        // the fragment shader is using programmable blending with a subpass input
+        vk::ImageMemoryBarrier barrier{
+            .srcAccessMask = vk::AccessFlagBits::eColorAttachmentWrite,
+            .dstAccessMask = vk::AccessFlagBits::eInputAttachmentRead,
+            .oldLayout = vk::ImageLayout::eGeneral,
+            .newLayout = vk::ImageLayout::eGeneral,
+            .srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED,
+            .dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED,
+            .image = context.current_color_base_image->image,
+            .subresourceRange = vkutil::color_subresource_range
+        };
+        context.render_cmd.pipelineBarrier(vk::PipelineStageFlagBits::eColorAttachmentOutput, vk::PipelineStageFlagBits::eFragmentShader,
+            vk::DependencyFlagBits::eByRegion, {}, {}, barrier);
+    } else if (context.state.features.support_shader_interlock
+"""
+q = must_replace(q, custom, stock, "restore stock programmable-blend barrier")
+scene.write_text(q)
+
+# Add a per-frame hash stamp to texture cache entries. Tsubomi previously had
+# a scene-level version of this optimization; 488 scopes a more conservative
+# version to PCSA00029, only for >=64 KiB non-YUV textures.
+header = src / "vita3k" / "renderer" / "include" / "renderer" / "texture_cache.h"
+h = header.read_text()
+h = must_replace(h,
+"""struct TextureCacheInfo {
+    uint64_t hash = 0;
+    SceGxmTexture texture;""",
+"""struct TextureCacheInfo {
+    uint64_t hash = 0;
+    uint64_t last_hashed_frame = 0;
+    SceGxmTexture texture;""",
+"texture frame stamp")
+h = must_replace(h,
+"""    uint64_t current_scene_timestamp = 0;
+    YUVConversionCache yuv_conversion_cache;""",
+"""    uint64_t current_scene_timestamp = 0;
+    uint64_t current_frame_timestamp = 0;
+    bool vitajon_frame_hash_dedupe = false;
+    YUVConversionCache yuv_conversion_cache;""",
+"texture-cache runtime flags")
+header.write_text(h)
+
+context = src / "vita3k" / "renderer" / "src" / "vulkan" / "context.cpp"
+x = context.read_text()
+x = must_replace(x,
+"""    context.scene_timestamp++;
+    context.state.texture_cache.current_scene_timestamp = context.scene_timestamp;
+""",
+"""    context.scene_timestamp++;
+    context.state.texture_cache.current_scene_timestamp = context.scene_timestamp;
+    context.state.texture_cache.current_frame_timestamp = context.frame_timestamp;
+""",
+"texture frame timestamp")
+context.write_text(x)
+
+cache = src / "vita3k" / "renderer" / "src" / "texture" / "cache.cpp"
+c = cache.read_text()
+c = must_replace(c,
+"""void TextureCache::cache_and_bind_texture(const SceGxmTexture &gxm_texture, MemState &mem) {
+    R_PROFILE(__func__);
+
+    size_t index = 0;""",
+"""void TextureCache::cache_and_bind_texture(const SceGxmTexture &gxm_texture, MemState &mem) {
+    R_PROFILE(__func__);
+
+    const SceGxmTextureBaseFormat base_format = gxm::get_base_format(gxm::get_format(gxm_texture));
+    size_t index = 0;""",
+"texture base format")
+
+new_hash = """        info->use_hash = should_use_hash;
+        if (info->use_hash) {
+            if (import_textures || export_textures)
+                info->hash = hash_texture_nostride(gxm_texture, mem);
+            else
+                // the xor 1 is to make sure it won't be the same as hash_texture_nostride
+                info->hash = hash_texture_data(gxm_texture, info->texture_size, mem) ^ 1;
+        }
+"""
+new_hash_repl = """        info->use_hash = should_use_hash;
+        if (info->use_hash) {
+            if (import_textures || export_textures)
+                info->hash = hash_texture_nostride(gxm_texture, mem);
+            else
+                // the xor 1 is to make sure it won't be the same as hash_texture_nostride
+                info->hash = hash_texture_data(gxm_texture, info->texture_size, mem) ^ 1;
+            info->last_hashed_frame = current_frame_timestamp;
+        }
+"""
+c = must_replace(c, new_hash, new_hash_repl, "initial texture hash stamp")
+
+cached = """        if (info->use_hash) {
+            // Hash on every bind, exactly like desktop. A once-per-scene
+            // dedupe was tried here for iOS and could serve stale texture
+            // content when guest CPU writes race the renderer.
+            const uint64_t previous_hash = info->hash;
+            if (import_textures || export_textures)
+                info->hash = hash_texture_nostride(gxm_texture, mem);
+            else
+                info->hash = hash_texture_data(gxm_texture, info->texture_size, mem) ^ 1;
+
+            upload = previous_hash != info->hash;
+        } else {
+"""
+cached_repl = """        if (info->use_hash) {
+            const bool vitajon_large_static_candidate =
+                vitajon_frame_hash_dedupe
+                && current_frame_timestamp != 0
+                && info->texture_size >= 64 * 1024
+                && !gxm::is_yuv_format(base_format);
+
+            if (vitajon_large_static_candidate
+                && info->last_hashed_frame == current_frame_timestamp) {
+                // iOS cannot use the Android/desktop mprotect dirty path while
+                // StikDebug is attached. Avoid re-reading the same large
+                // texture multiple times in one emulated frame.
+                upload = false;
+                LOG_INFO_ONCE("VitaJoN: per-frame large-texture hash dedupe active (>=64 KiB, YUV excluded)");
+            } else {
+                const uint64_t previous_hash = info->hash;
+                if (import_textures || export_textures)
+                    info->hash = hash_texture_nostride(gxm_texture, mem);
+                else
+                    info->hash = hash_texture_data(gxm_texture, info->texture_size, mem) ^ 1;
+
+                upload = previous_hash != info->hash;
+                info->last_hashed_frame = current_frame_timestamp;
+            }
+        } else {
+"""
+c = must_replace(c, cached, cached_repl, "cached texture hash policy")
+cache.write_text(c)
+
+print("VitaJoN 0.48.8 Uncharted final performance path applied")
 PY
 
