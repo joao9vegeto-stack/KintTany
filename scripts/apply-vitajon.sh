@@ -35,8 +35,8 @@ src = Path(sys.argv[1])
 info = src / "ios" / "Info.plist.in"
 s = info.read_text()
 s = s.replace("<string>Tsubomi</string>", "<string>VitaJoN</string>")
-s = s.replace("<string>0.47.0</string>", "<string>0.48.5</string>", 1)
-s = s.replace("<string>470</string>", "<string>485</string>", 1)
+s = s.replace("<string>0.47.0</string>", "<string>0.48.6</string>", 1)
+s = s.replace("<string>470</string>", "<string>486</string>", 1)
 info.write_text(s)
 
 state = src / "vita3k" / "config" / "include" / "config" / "state.h"
@@ -1493,5 +1493,127 @@ p = p.replace(old, new, 1)
 pipeline.write_text(p)
 
 print("VitaJoN 0.48.5 Uncharted performance pass applied")
+PY
+
+# VitaJoN 0.48.6: Apple coherent framebuffer-fetch fast path.
+#
+# The 485 full-session video/log proves the remaining collapse is scene-load
+# dependent: no unmapped surface readbacks are running, memory headroom stays
+# healthy, yet combat/transparent-effects scenes fall to 1-2 FPS while the
+# renderer is using VK_EXT_fragment_shader_interlock. On Apple GPUs MoltenVK
+# translates that path through Raster Order Groups + storage-image traffic.
+#
+# MoltenVK issue #2281 / Vita3K issue #4109 document a better Apple-native
+# route: SPIRV-Cross can lower a subpassLoad that aliases the color attachment
+# to Metal framebuffer fetch ([[color(n)]]) when
+# use_framebuffer_fetch_subpasses is enabled. The custom MoltenVK built by the
+# VitaJoN workflow enables exactly that option. For PCSA00029, keep the rest of
+# "high accuracy" (notably texture viewport remains disabled), but use the
+# coherent framebuffer-fetch path instead of shader interlock.
+python3 - "$SRC" <<'PY'
+from pathlib import Path
+import sys
+
+src = Path(sys.argv[1])
+
+def must_replace(text, old, new, label, count=1):
+    n = text.count(old)
+    if n != count:
+        raise SystemExit(f"{label}: expected {count}, found {n}")
+    return text.replace(old, new, count)
+
+renderer = src / "vita3k" / "renderer" / "src" / "vulkan" / "renderer.cpp"
+r = renderer.read_text()
+old = """    // shader interlock is more accurate but slower
+    if (features.support_shader_interlock && use_high_accuracy) {
+        LOG_INFO("Using shader interlock for accurate framebuffer fetch emulation");
+    } else {
+        // We use subpass input to get something similar to direct fragcolor access (there is no difference for the shader)
+        features.direct_fragcolor = true;
+        features.support_shader_interlock = false;
+    }
+"""
+new = """#if defined(VITA3K_PLATFORM_IOS)
+    // VitaJoN's MoltenVK is patched to lower the color input attachment to
+    // Metal framebuffer fetch ([[color(0)]]) on Apple GPUs. That gives
+    // coherent programmable blending without the much heavier storage-image
+    // shader-interlock path.
+    const bool vitajon_coherent_metal_fetch = (game_id == "PCSA00029");
+#else
+    const bool vitajon_coherent_metal_fetch = false;
+#endif
+
+    // shader interlock is more accurate but slower on generic Vulkan drivers.
+    // On VitaJoN/iOS Uncharted, the patched Metal framebuffer-fetch path has
+    // the same required ordering while staying tile-local.
+    if (features.support_shader_interlock && use_high_accuracy && !vitajon_coherent_metal_fetch) {
+        LOG_INFO("Using shader interlock for accurate framebuffer fetch emulation");
+    } else {
+        // We use subpass input to get direct fragcolor access.
+        features.direct_fragcolor = true;
+        features.support_shader_interlock = false;
+        if (vitajon_coherent_metal_fetch)
+            LOG_INFO("VitaJoN: coherent Metal framebuffer fetch active; shader interlock bypassed");
+    }
+"""
+r = must_replace(r, old, new, "late_init framebuffer-fetch selection")
+renderer.write_text(r)
+
+scene = src / "vita3k" / "renderer" / "src" / "vulkan" / "scene.cpp"
+q = scene.read_text()
+old = """    if (context.state.features.direct_fragcolor && fragment_program_gxp.is_frag_color_used()) {
+        // the fragment shader is using programmable blending with a subpass input
+        vk::ImageMemoryBarrier barrier{
+            .srcAccessMask = vk::AccessFlagBits::eColorAttachmentWrite,
+            .dstAccessMask = vk::AccessFlagBits::eInputAttachmentRead,
+            .oldLayout = vk::ImageLayout::eGeneral,
+            .newLayout = vk::ImageLayout::eGeneral,
+            .srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED,
+            .dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED,
+            .image = context.current_color_base_image->image,
+            .subresourceRange = vkutil::color_subresource_range
+        };
+        context.render_cmd.pipelineBarrier(vk::PipelineStageFlagBits::eColorAttachmentOutput, vk::PipelineStageFlagBits::eFragmentShader,
+            vk::DependencyFlagBits::eByRegion, {}, {}, barrier);
+    } else if (context.state.features.support_shader_interlock
+"""
+new = """    if (context.state.features.direct_fragcolor && fragment_program_gxp.is_frag_color_used()) {
+        // The fragment shader is using programmable blending with a subpass
+        // input. Generic Vulkan needs the by-region self-dependency barrier.
+#if defined(VITA3K_PLATFORM_IOS)
+        // VitaJoN's patched MoltenVK lowers this exact color0/input0 alias to
+        // Metal framebuffer fetch. Metal guarantees raster-ordered access to
+        // [[color(0)]], including overlapping fragments within a draw. Keeping
+        // the Vulkan image barrier here makes stock MoltenVK split the Metal
+        // render pass, throwing away tile memory and is catastrophic in
+        // Uncharted's effect-heavy combat scenes.
+        LOG_INFO_ONCE("VitaJoN: tile-local Metal framebuffer fetch; per-draw color barrier skipped");
+#else
+        vk::ImageMemoryBarrier barrier{
+            .srcAccessMask = vk::AccessFlagBits::eColorAttachmentWrite,
+            .dstAccessMask = vk::AccessFlagBits::eInputAttachmentRead,
+            .oldLayout = vk::ImageLayout::eGeneral,
+            .newLayout = vk::ImageLayout::eGeneral,
+            .srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED,
+            .dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED,
+            .image = context.current_color_base_image->image,
+            .subresourceRange = vkutil::color_subresource_range
+        };
+        context.render_cmd.pipelineBarrier(vk::PipelineStageFlagBits::eColorAttachmentOutput, vk::PipelineStageFlagBits::eFragmentShader,
+            vk::DependencyFlagBits::eByRegion, {}, {}, barrier);
+#endif
+    } else if (context.state.features.support_shader_interlock
+"""
+q = must_replace(q, old, new, "scene programmable-blend barrier")
+scene.write_text(q)
+
+cache = src / "vita3k" / "shader" / "include" / "shader" / "spirv_recompiler.h"
+c = cache.read_text()
+c = must_replace(c, "static constexpr uint32_t CURRENT_VERSION = 15;",
+                 "static constexpr uint32_t CURRENT_VERSION = 16;",
+                 "shader cache version")
+cache.write_text(c)
+
+print("VitaJoN 0.48.6 coherent Metal framebuffer-fetch fast path applied")
 PY
 

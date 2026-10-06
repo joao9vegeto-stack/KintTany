@@ -79,14 +79,45 @@ jobs:
           restore-keys: |
             vitajon-vcpkg-ios-${{ runner.os }}-
 
-      - name: Install pinned MoltenVK
+      - name: Build patched MoltenVK 1.4.2
         working-directory: source
         run: |
-          mkdir -p build-deps/moltenvk
-          curl --fail --location --retry 3             --output build-deps/MoltenVK-ios.tar             https://github.com/KhronosGroup/MoltenVK/releases/download/v1.4.2/MoltenVK-ios.tar
-          echo "b5d947b1660e6e9fed40b9cd2387e160aaab9e80b775c0cef7e14059405178c1  build-deps/MoltenVK-ios.tar" | shasum -a 256 --check
-          tar -xf build-deps/MoltenVK-ios.tar -C build-deps/moltenvk
-          MVK_ROOT="$PWD/build-deps/moltenvk/MoltenVK/MoltenVK"
+          rm -rf build-deps/moltenvk-src
+          git clone --depth 1 --branch v1.4.2 https://github.com/KhronosGroup/MoltenVK.git build-deps/moltenvk-src
+
+          python3 - <<'PY'
+          from pathlib import Path
+
+          p = Path("build-deps/moltenvk-src/MoltenVK/MoltenVK/GPUObjects/MVKPipeline.mm")
+          s = p.read_text()
+          old = """		shaderConfig.options.mslOptions.input_attachment_is_ds_attachment = _inputAttachmentIsDSAttachment;
+          """
+          new = """		shaderConfig.options.mslOptions.input_attachment_is_ds_attachment = _inputAttachmentIsDSAttachment;
+
+          		// VitaJoN / Vita3K programmable blending: its input attachment 0
+          		// aliases color attachment 0. SPIRV-Cross can map subpassLoad to
+          		// Metal's coherent framebuffer fetch ([[color(0)]]), avoiding the
+          		// stale texture/storage-image path and keeping tile memory local.
+          		// This is the focused Vita3K case described in MoltenVK #2281.
+          		if (getPhysicalDevice()->getMTLDeviceCapabilities().isAppleGPU && !_inputAttachmentIsDSAttachment) {
+          			shaderConfig.options.mslOptions.use_framebuffer_fetch_subpasses = true;
+          		}
+          """
+          if s.count(old) != 1:
+              raise SystemExit(f"MoltenVK framebuffer-fetch anchor count={s.count(old)}")
+          p.write_text(s.replace(old, new, 1))
+          print("Patched MoltenVK 1.4.2 for coherent Apple framebuffer fetch")
+          PY
+
+          (
+            cd build-deps/moltenvk-src
+            ./fetchDependencies --ios
+            make ios MVK_CONFIG_LOG_LEVEL=1
+          )
+
+          MVK_ROOT="$PWD/build-deps/moltenvk-src/Package/Latest/MoltenVK"
+          test -f "$MVK_ROOT/static/MoltenVK.xcframework/ios-arm64/libMoltenVK.a"
+          test -f "$MVK_ROOT/include/MoltenVK/vk_mvk_moltenvk.h"
           echo "VITA3K_IOS_MOLTENVK_LIBRARY=$MVK_ROOT/static/MoltenVK.xcframework/ios-arm64/libMoltenVK.a" >> "$GITHUB_ENV"
           echo "VITA3K_IOS_MOLTENVK_INCLUDE_DIR=$MVK_ROOT/include" >> "$GITHUB_ENV"
 
