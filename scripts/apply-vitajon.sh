@@ -35,8 +35,8 @@ src = Path(sys.argv[1])
 info = src / "ios" / "Info.plist.in"
 s = info.read_text()
 s = s.replace("<string>Tsubomi</string>", "<string>VitaJoN</string>")
-s = s.replace("<string>0.47.0</string>", "<string>0.49.1</string>", 1)
-s = s.replace("<string>470</string>", "<string>491</string>", 1)
+s = s.replace("<string>0.47.0</string>", "<string>0.49.2</string>", 1)
+s = s.replace("<string>470</string>", "<string>492</string>", 1)
 info.write_text(s)
 
 state = src / "vita3k" / "config" / "include" / "config" / "state.h"
@@ -2448,4 +2448,79 @@ c = must_replace(c, old_helper, new_helper, "491 disable texture fault tracking"
 cache.write_text(c)
 
 print("VitaJoN 0.49.1 no-Surface-Sync/no-mapping + no-fault iOS profile applied")
+PY
+
+
+# VitaJoN 0.49.2 / build 492: cooperative ARM hint scheduling on iOS.
+#
+# The 491 device trace isolates the combat cliff trigger from StikDebug,
+# Surface Sync and memory mapping. Exactly when Havok activates, the main
+# PCSA00029 thread and both HavokWorkerThread instances converge on the same
+# hot guest code (0x810210D2); one worker was sampled there 18 times.
+#
+# Dynarmic is configured with hook_hint_instructions=true, but Vita3K treats
+# A32 YIELD and WFE exceptions as no-ops. On iOS that lets guest spin/barrier
+# loops monopolize host cores instead of yielding to the renderer and peer
+# guest workers. Preserve desktop behavior and make the ARM scheduling hints
+# cooperative only on iOS.
+python3 - "$SRC" <<'PY'
+from pathlib import Path
+import sys
+
+src = Path(sys.argv[1])
+p = src / "vita3k" / "cpu" / "src" / "dynarmic_cpu.cpp"
+s = p.read_text()
+
+include_old = """#include <optional>
+#include <string>
+"""
+include_new = """#include <optional>
+#include <string>
+#include <thread>
+"""
+if s.count(include_old) != 1:
+    raise SystemExit(f"492 thread include anchor count={s.count(include_old)}")
+s = s.replace(include_old, include_new, 1)
+
+old = """        case Dynarmic::A32::Exception::PreloadDataWithIntentToWrite:
+        case Dynarmic::A32::Exception::PreloadData:
+        case Dynarmic::A32::Exception::PreloadInstruction:
+        case Dynarmic::A32::Exception::SendEvent:
+        case Dynarmic::A32::Exception::SendEventLocal:
+        case Dynarmic::A32::Exception::WaitForEvent:
+            break;
+        case Dynarmic::A32::Exception::Yield:
+            break;
+"""
+new = """        case Dynarmic::A32::Exception::PreloadDataWithIntentToWrite:
+        case Dynarmic::A32::Exception::PreloadData:
+        case Dynarmic::A32::Exception::PreloadInstruction:
+        case Dynarmic::A32::Exception::SendEvent:
+        case Dynarmic::A32::Exception::SendEventLocal:
+            break;
+        case Dynarmic::A32::Exception::WaitForEvent:
+#if defined(VITA3K_PLATFORM_IOS)
+            // WFE is a low-power scheduling hint. Vita3K has no event-register
+            // emulation here, so blocking would be unsafe, but treating it as
+            // a NOP lets guest spin barriers monopolize a host core.
+            std::this_thread::yield();
+            LOG_INFO_ONCE("VitaJoN 0.49.2: ARM WFE -> cooperative host yield active");
+#endif
+            break;
+        case Dynarmic::A32::Exception::Yield:
+#if defined(VITA3K_PLATFORM_IOS)
+            // Respect the guest scheduler hint. This is especially important
+            // for Uncharted's Havok workers, which enter a three-thread
+            // barrier/spin path when ragdoll/combat starts.
+            std::this_thread::yield();
+            LOG_INFO_ONCE("VitaJoN 0.49.2: ARM YIELD -> cooperative host yield active");
+#endif
+            break;
+"""
+if s.count(old) != 1:
+    raise SystemExit(f"492 ARM hint anchor count={s.count(old)}")
+s = s.replace(old, new, 1)
+
+p.write_text(s)
+print("VitaJoN 0.49.2 cooperative ARM YIELD/WFE scheduling applied")
 PY
