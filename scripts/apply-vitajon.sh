@@ -35,8 +35,8 @@ src = Path(sys.argv[1])
 info = src / "ios" / "Info.plist.in"
 s = info.read_text()
 s = s.replace("<string>Tsubomi</string>", "<string>VitaJoN</string>")
-s = s.replace("<string>0.47.0</string>", "<string>0.48.8</string>", 1)
-s = s.replace("<string>470</string>", "<string>488</string>", 1)
+s = s.replace("<string>0.47.0</string>", "<string>0.48.9</string>", 1)
+s = s.replace("<string>470</string>", "<string>489</string>", 1)
 info.write_text(s)
 
 state = src / "vita3k" / "config" / "include" / "config" / "state.h"
@@ -180,10 +180,11 @@ new = """    if (session_settings)
     if (launch_request->app_path == "PCSA00029") {
         auto &current = emuenv->cfg.current_config;
         current.resolution_multiplier = 1.0f;
-        // MoltenVK #2281 / Vita3K #4109 verified the patched Apple
-        // framebuffer-fetch path with high-accuracy OFF. Keeping HA on after
-        // bypassing interlock only disables the texture-viewport fast path.
-        current.high_accuracy = false;
+        // Build 488 proved the texture-viewport shortcut is not correct for
+        // Uncharted: the video shows large black/garbled rectangles as soon as
+        // high accuracy is disabled. Keep the coherent Metal framebuffer-fetch
+        // fix, but return surface sampling to the accurate path.
+        current.high_accuracy = true;
         current.vitajon_coherent_metal_fetch = true;
         current.disable_surface_sync = false;
         // Build 484 proved the unmapped iOS staging-readback path can serialize
@@ -199,7 +200,7 @@ new = """    if (session_settings)
         // began stuttering. Let Vita3K's deferred pipeline path compile those
         // off the render thread instead of blocking gameplay.
         current.async_pipeline_compilation = true;
-        LOG_INFO("VitaJoN Uncharted profile: res=1x high_accuracy=false(Metal-fetch exact path) surface_sync=true memory=double-buffer aniso=1 filter=Nearest async=true");
+        LOG_INFO("VitaJoN Uncharted profile: res=1x high_accuracy=true surface_sync=true memory=double-buffer aniso=1 filter=Nearest async=true");
     }
 
     IOSFrameHost frame_host(window);
@@ -1858,5 +1859,116 @@ c = must_replace(c, cached, cached_repl, "cached texture hash policy")
 cache.write_text(c)
 
 print("VitaJoN 0.48.8 Uncharted final performance path applied")
+PY
+
+# VitaJoN 0.48.9: revert 488's visual shortcuts and attack the remaining iOS
+# DoubleBuffer hot path without sacrificing correctness.
+#
+# The 488 video proves high_accuracy=false/texture viewport corrupts PCSA00029,
+# while FPS still reaches 1. Therefore both 488 shortcuts are removed:
+#  - texture viewport stays OFF via high accuracy
+#  - per-frame texture-hash dedupe is disabled
+#
+# The remaining platform-specific divergence is DoubleBuffer on iOS: StikDebug
+# prevents mprotect dirty tracking, so Tsubomi copies the same CPU-authored
+# vertex/index/storage data into the MoltenVK mirror on every access. Replace
+# blind recopies with content comparison: unchanged buffers are not rewritten,
+# changed buffers are copied exactly as before. Shader-store buffers keep their
+# existing GPU-owned handling.
+python3 - "$SRC" <<'PY'
+from pathlib import Path
+import sys
+
+src = Path(sys.argv[1])
+
+def must_replace(text, old, new, label, count=1):
+    n = text.count(old)
+    if n != count:
+        raise SystemExit(f"{label}: expected {count}, found {n}")
+    return text.replace(old, new, count)
+
+renderer = src / "vita3k" / "renderer" / "src" / "vulkan" / "renderer.cpp"
+r = renderer.read_text()
+
+# 488 added a PCSA00029 hash shortcut. Disable it: the new video contains stale/
+# black texture regions and the shortcut did not improve the 1 FPS collapse.
+r = must_replace(
+    r,
+    "texture_cache.vitajon_frame_hash_dedupe = vitajon_coherent_metal_fetch;",
+    "texture_cache.vitajon_frame_hash_dedupe = false;",
+    "disable 488 texture hash shortcut",
+)
+
+r = must_replace(
+    r,
+    """    if (texture_cache.vitajon_frame_hash_dedupe)
+        LOG_INFO("VitaJoN Uncharted texture hashing: large non-YUV textures checked at most once per frame");
+""",
+    """    if (vitajon_coherent_metal_fetch)
+        LOG_INFO("VitaJoN Uncharted texture hashing: stock every-bind validation restored");
+""",
+    "texture hash log",
+)
+
+# Small non-shader-store mapped buffers previously memcpy'd on every bind.
+old_small = """        temp_buffer.extra = ~0;
+
+        memcpy(temp_buffer.mapped_location, Ptr<void>(addr).get(mem), size);
+        return &temp_buffer;
+"""
+new_small = """        temp_buffer.extra = ~0;
+
+        const uint8_t *guest_data = reinterpret_cast<const uint8_t *>(Ptr<void>(addr).get(mem));
+#if defined(VITA3K_PLATFORM_IOS)
+        // StikDebug prevents mprotect dirty tracking. Preserve exact behaviour
+        // while avoiding a host write when the mirror already contains the
+        // current guest bytes.
+        if (size < 256 || memcmp(temp_buffer.mapped_location, guest_data, size) != 0)
+            memcpy(temp_buffer.mapped_location, guest_data, size);
+#else
+        memcpy(temp_buffer.mapped_location, guest_data, size);
+#endif
+        return &temp_buffer;
+"""
+r = must_replace(r, old_small, new_small, "small DoubleBuffer copy elision")
+
+old_large = """    // copy back the data as it was non-existent or dirty
+    memcpy(it->second.mapped_location, Ptr<void>(addr).get(mem), size);
+
+    return &it->second;
+"""
+new_large = """    // Copy back CPU-authored data as it was non-existent or dirty. On iOS,
+    // mprotect dirty tracking is unavailable while the JIT debugger is
+    // attached; Tsubomi used to memcpy this mirror on every access. Compare
+    // first so static vertex/index/storage data does not generate repeated
+    // host writes. Shader-store buffers retain the GPU-owned path above.
+    const uint8_t *guest_data = reinterpret_cast<const uint8_t *>(Ptr<void>(addr).get(mem));
+#if defined(VITA3K_PLATFORM_IOS)
+    if (state.can_mprotect_buffer_trapping || always_trap
+        || size < 256
+        || memcmp(it->second.mapped_location, guest_data, size) != 0) {
+        memcpy(it->second.mapped_location, guest_data, size);
+    }
+#else
+    memcpy(it->second.mapped_location, guest_data, size);
+#endif
+
+    return &it->second;
+"""
+r = must_replace(r, old_large, new_large, "large DoubleBuffer copy elision")
+
+# Make the effective 489 path explicit in the log.
+anchor = """    can_mprotect_buffer_trapping = false;
+    LOG_INFO("iOS: fault-based buffer trapping disabled (traps are debugger-delivered); always re-syncing double-buffered data");
+"""
+replacement = """    can_mprotect_buffer_trapping = false;
+    LOG_INFO("iOS: fault-based buffer trapping disabled (traps are debugger-delivered)");
+    LOG_INFO("VitaJoN 0.48.9: DoubleBuffer content-compare copy elision active");
+"""
+r = must_replace(r, anchor, replacement, "DoubleBuffer log")
+
+renderer.write_text(r)
+
+print("VitaJoN 0.48.9 accurate textures + DoubleBuffer copy-elision applied")
 PY
 
