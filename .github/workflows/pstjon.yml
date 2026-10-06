@@ -51,6 +51,29 @@ jobs:
           git submodule update --init --recursive --depth 1
           git rev-parse HEAD
 
+      - name: Apply iOS compiler compatibility fixes
+        run: |
+          set -euxo pipefail
+          python3 - <<'PY'
+          from pathlib import Path
+
+          p = Path("rpcs3-src/rpcs3/Emu/Cell/PPUDisAsm.h")
+          s = p.read_text()
+          old = 'default: fmt::throw_exception("Unreachable");\n\t\t}'
+          new = 'default: fmt::throw_exception("Unreachable");\n\t\t}\n\t\t__builtin_unreachable();'
+          if old not in s:
+              raise SystemExit("PPUDisAsm pattern not found")
+          p.write_text(s.replace(old, new, 1))
+
+          p = Path("rpcs3-src/rpcs3/Emu/Cell/SPUThread.h")
+          s = p.read_text()
+          old = 'default:\n\t\t\tfmt::throw_exception("Unexpected slice value (%d)", slice);\n\t\t}'
+          new = 'default:\n\t\t\tfmt::throw_exception("Unexpected slice value (%d)", slice);\n\t\t}\n\t\t__builtin_unreachable();'
+          if old not in s:
+              raise SystemExit("SPUThread pattern not found")
+          p.write_text(s.replace(old, new, 1))
+          PY
+
       - name: Fetch MoltenVK
         run: |
           set -euxo pipefail
