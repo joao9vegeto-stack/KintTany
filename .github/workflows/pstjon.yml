@@ -320,6 +320,146 @@ jobs:
           p.write_text(s)
           PY
 
+      - name: Apply PsTJon v5 Ascension correctness, bounds and haptics
+        run: |
+          set -euxo pipefail
+          python3 - <<'PY'
+          from pathlib import Path
+
+          # v4 forced two user troubleshooting settings off in an attempt to
+          # improve speed. The test proved that was a correctness regression:
+          # audio improved, but Ascension's textures became corrupted. Remove
+          # that title override and respect the user's existing config again.
+          p = Path("rpcs3-src/rpcs3/Emu/System.cpp")
+          s = p.read_text()
+          injected = '''#ifdef RPCS3_IOS
+          \t\t\tif (m_title_id == "BCUS98232")
+          \t\t\t{
+          \t\t\t\tconst bool had_cpu_blit = g_cfg.video.force_cpu_blit_processing.get();
+          \t\t\t\tconst bool had_sync_memory = g_cfg.video.disable_async_host_memory_manager.get();
+          \t\t\t\tg_cfg.video.force_cpu_blit_processing.set(false);
+          \t\t\t\tg_cfg.video.disable_async_host_memory_manager.set(false);
+          \t\t\t\tsys_log.notice("PsTJon v4 Ascension performance policy: Force CPU Blit %d->0, Disable Async Memory Manager %d->0", had_cpu_blit, had_sync_memory);
+          \t\t\t}
+          #endif
+
+          '''
+          if injected not in s:
+              raise SystemExit("v4 performance override not found")
+          p.write_text(s.replace(injected, '', 1))
+
+          # Fix the actual NV3089 bounds hole exposed by the v4 crash.
+          # Upstream validates only dst_offset + 1 byte and source data_length,
+          # but later dereferences dst_address + out_offset and
+          # src_address + in_offset. Validate the complete ranges before a
+          # CPU/GPU blit is allowed to touch guest RSX memory.
+          p = Path("rpcs3-src/rpcs3/Emu/RSX/NV47/HW/nv3089.cpp")
+          s = p.read_text()
+
+          old = '''\t\t\tu32 src_address = 0;
+          \t\t\tconst u32 dst_address = get_address(dst_offset, dst_dma, 1); // TODO: Add size
+          '''
+          new = '''\t\t\tu32 src_address = 0;
+          \t\t\tconst u64 dst_required64 =
+          \t\t\t\tstatic_cast<u64>(out_offset) +
+          \t\t\t\tstatic_cast<u64>(out_pitch) * (clip_h ? clip_h - 1 : 0) +
+          \t\t\t\tstatic_cast<u64>(clip_w) * out_bpp;
+          \t\t\tconst u32 dst_address = dst_required64 && dst_required64 <= UINT32_MAX
+          \t\t\t\t? get_address(dst_offset, dst_dma, static_cast<u32>(dst_required64))
+          \t\t\t\t: 0;
+          '''
+          if old not in s:
+              raise SystemExit("NV3089 destination size-check pattern not found")
+          s = s.replace(old, new, 1)
+
+          old = '''\t\t\t\tif (src_address = get_address(src_offset, src_dma, data_length); !src_address)
+          '''
+          new = '''\t\t\t\tconst u64 src_required64 = static_cast<u64>(in_offset) + data_length;
+          \t\t\t\tif (src_required64 > UINT32_MAX ||
+          \t\t\t\t\t!(src_address = get_address(src_offset, src_dma, static_cast<u32>(src_required64))))
+          '''
+          count = s.count(old)
+          if count != 2:
+              raise SystemExit(f"expected 2 NV3089 source size-check patterns, found {count}")
+          s = s.replace(old, new)
+          p.write_text(s)
+
+          # The core is demonstrably receiving Ascension's motor commands, but
+          # the stock 0.10.1 shell did not produce physical feedback in v4.
+          # Keep the normal ABI feedback path and add a title-scoped iPhone
+          # tactile fallback on non-zero rumble edges.
+          p = Path("rpcs3-src/rpcs3/ios/RPCS3IOSPlatform.mm")
+          s = p.read_text()
+          anchor = '''#include <dispatch/dispatch.h>
+
+          '''
+          addition = '''#include <dispatch/dispatch.h>
+
+          extern "C" void pstjon_ios_haptic_pulse(uint8_t large_motor, uint8_t small_motor) noexcept
+          {
+          #if TARGET_OS_OSX || TARGET_OS_VISION
+          \t(void)large_motor;
+          \t(void)small_motor;
+          #else
+          \tif (!large_motor && !small_motor)
+          \t{
+          \t\treturn;
+          \t}
+
+          \tconst uint8_t strength = large_motor > small_motor ? large_motor : small_motor;
+          \tconst UIImpactFeedbackStyle style =
+          \t\tstrength >= 170 ? UIImpactFeedbackStyleHeavy :
+          \t\tstrength >= 80 ? UIImpactFeedbackStyleMedium :
+          \t\tUIImpactFeedbackStyleLight;
+          \tconst CGFloat intensity = 0.25 + (0.75 * (static_cast<CGFloat>(strength) / 255.0));
+
+          \tdispatch_async(dispatch_get_main_queue(), ^
+          \t{
+          \t\t@autoreleasepool
+          \t\t{
+          \t\t\tUIImpactFeedbackGenerator* generator = [[UIImpactFeedbackGenerator alloc] initWithStyle:style];
+          \t\t\t[generator prepare];
+          \t\t\t[generator impactOccurredWithIntensity:intensity];
+          \t\t\t[generator release];
+          \t\t}
+          \t});
+          #endif
+          }
+
+          '''
+          if anchor not in s:
+              raise SystemExit("RPCS3IOSPlatform dispatch include anchor not found")
+          s = s.replace(anchor, addition, 1)
+          p.write_text(s)
+
+          p = Path("rpcs3-src/rpcs3/Emu/Io/IOS/IOSPadHandler.cpp")
+          s = p.read_text()
+          include_anchor = '#include "util/logs.hpp"\n\nLOG_CHANNEL(ios_pad_log, "iOS Pad");\n'
+          include_new = '#include "util/logs.hpp"\n#include "Emu/System.h"\n\nextern "C" void pstjon_ios_haptic_pulse(unsigned char large_motor, unsigned char small_motor) noexcept;\n\nLOG_CHANNEL(ios_pad_log, "iOS Pad");\n'
+          if include_anchor not in s:
+              raise SystemExit("IOSPadHandler v4 include anchor not found")
+          s = s.replace(include_anchor, include_new, 1)
+
+          old = '''\t\tif (previous != packed && (previous != 0 || packed != 0))
+          \t\t{
+          \t\t\tios_pad_log.notice("PsTJon v4 rumble p%u: large=%u small=%u", device->player_id + 1, large_motor, small_motor);
+          \t\t}
+          '''
+          new = '''\t\tif (previous != packed && (previous != 0 || packed != 0))
+          \t\t{
+          \t\t\tios_pad_log.notice("PsTJon v5 rumble p%u: large=%u small=%u", device->player_id + 1, large_motor, small_motor);
+          \t\t\tif (device->player_id == 0 && packed != 0 && Emu.GetTitleID() == "BCUS98232")
+          \t\t\t{
+          \t\t\t\tpstjon_ios_haptic_pulse(large_motor, small_motor);
+          \t\t\t}
+          \t\t}
+          '''
+          if old not in s:
+              raise SystemExit("IOSPadHandler rumble body anchor not found")
+          s = s.replace(old, new, 1)
+          p.write_text(s)
+          PY
+
       - name: Fetch MoltenVK
         run: |
           set -euxo pipefail
@@ -434,7 +574,7 @@ jobs:
       - name: Build report
         run: |
           {
-            echo "PsTJon v4 - audio performance rumble"
+            echo "PsTJon v5 - Ascension bounds texture audio haptics"
             echo "RPCS3 ios-port: $RPCS3_IOS_SHA"
             echo "Shell bundle id: com.xitrix.RPCS3"
             echo "MoltenVK: $MOLTENVK_VERSION"
@@ -445,7 +585,7 @@ jobs:
 
       - uses: actions/upload-artifact@v4
         with:
-          name: PsTJon-v4-IPA
+          name: PsTJon-v5-IPA
           path: |
             PsTJon.ipa
             PsTJon-build.txt
