@@ -17,6 +17,7 @@ UPSTREAM_4098_COMMITS=(
   85556014db0f2e157d8ded6127cb891015489203
   ecee68421c0a32eb4a5741d5df9b6cc461934a24
   bbd5c3624a06572fe4f16f67564f53a7540e1f42
+  83b80c8f57e1f5ef0b8e56d79652e4aec6e0e21a
 )
 for sha in "${UPSTREAM_4098_COMMITS[@]}"; do
   git -C "$SRC" fetch --quiet --no-tags https://github.com/Vita3K/Vita3K.git "$sha"
@@ -34,8 +35,8 @@ src = Path(sys.argv[1])
 info = src / "ios" / "Info.plist.in"
 s = info.read_text()
 s = s.replace("<string>Tsubomi</string>", "<string>VitaJoN</string>")
-s = s.replace("<string>0.47.0</string>", "<string>0.48.4</string>", 1)
-s = s.replace("<string>470</string>", "<string>484</string>", 1)
+s = s.replace("<string>0.47.0</string>", "<string>0.48.5</string>", 1)
+s = s.replace("<string>470</string>", "<string>485</string>", 1)
 info.write_text(s)
 
 state = src / "vita3k" / "config" / "include" / "config" / "state.h"
@@ -177,17 +178,20 @@ new = """    if (session_settings)
         current.resolution_multiplier = 1.0f;
         current.high_accuracy = true;
         current.disable_surface_sync = false;
-        // iOS cannot use DoubleBuffer's normal mprotect dirty tracking while
-        // the sideload/JIT debugger is attached. In 483 that forced every
-        // mapped vertex/uniform/index buffer to be recopied on access and the
-        // device log shows the title degrading from ~60 FPS to single digits.
-        // Keep surface sync, but use the dedicated unmapped iOS staging-readback
-        // path instead of DoubleBuffer.
-        current.memory_mapping = "disabled";
+        // Build 484 proved the unmapped iOS staging-readback path can serialize
+        // GPU -> CPU surface synchronization hard enough to pin gameplay at
+        // ~1 FPS under combat load. Return to DoubleBuffer: surface copies stay
+        // GPU-visible instead of forcing a per-scene staging readback + CPU
+        // memcpy. Keep surface sync enabled because Uncharted is known to crash
+        // when it is disabled.
+        current.memory_mapping = "double-buffer";
         current.anisotropic_filtering = 1;
         current.screen_filter = "Nearest";
-        current.async_pipeline_compilation = false;
-        LOG_INFO("VitaJoN Uncharted profile: res=1x high_accuracy=true surface_sync=true memory=disabled(iOS staging-readback) aniso=1 filter=Nearest async=false");
+        // New pipelines appeared exactly when the recorded combat session
+        // began stuttering. Let Vita3K's deferred pipeline path compile those
+        // off the render thread instead of blocking gameplay.
+        current.async_pipeline_compilation = true;
+        LOG_INFO("VitaJoN Uncharted profile: res=1x high_accuracy=true surface_sync=true memory=double-buffer aniso=1 filter=Nearest async=true");
     }
 
     IOSFrameHost frame_host(window);
@@ -1454,5 +1458,40 @@ for old, new in pairs:
 
 p.write_text(s)
 print("VitaJoN 0.48.3 session exit diagnostics applied")
+PY
+
+# VitaJoN 0.48.5: performance pass derived from the 484 full-session video/log.
+# Keep the corrected PVRTC Metal upload and Android-4098 renderer parity, but
+# avoid over-subscribing the 6-core iPhone CPU while compiling pipelines.
+python3 - "$SRC" <<'PY'
+from pathlib import Path
+import sys
+
+src = Path(sys.argv[1])
+
+pipeline = src / "vita3k" / "renderer" / "src" / "vulkan" / "pipeline_cache.cpp"
+p = pipeline.read_text()
+old = """#ifdef VITA3K_PLATFORM_IOS
+    // The first boot of a title in each app process pays the full
+    // SPIR-V -> MSL -> Metal binary cost for every pipeline while draws are
+    // skipped (the white-screen wait). The 6-core A-series chips land on two
+    // workers with the desktop table; give the burst more parallelism.
+    nb_worker_threads = std::max(nb_worker_threads, 4);
+#endif
+"""
+new = """#ifdef VITA3K_PLATFORM_IOS
+    // Keep Vita3K's upstream CPU-count heuristic on iOS. A 6-core Apple CPU
+    // selects two workers; forcing four compiler workers competes with the
+    // emulator's CPU/GPU submission threads exactly when Uncharted streams in
+    // new combat shaders.
+    LOG_INFO("iOS async pipeline compiler using upstream worker heuristic: {} threads", nb_worker_threads);
+#endif
+"""
+if p.count(old) != 1:
+    raise SystemExit(f"iOS async-worker anchor count={p.count(old)}")
+p = p.replace(old, new, 1)
+pipeline.write_text(p)
+
+print("VitaJoN 0.48.5 Uncharted performance pass applied")
 PY
 
