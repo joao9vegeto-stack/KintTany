@@ -34,8 +34,8 @@ src = Path(sys.argv[1])
 info = src / "ios" / "Info.plist.in"
 s = info.read_text()
 s = s.replace("<string>Tsubomi</string>", "<string>VitaJoN</string>")
-s = s.replace("<string>0.47.0</string>", "<string>0.48.3</string>", 1)
-s = s.replace("<string>470</string>", "<string>483</string>", 1)
+s = s.replace("<string>0.47.0</string>", "<string>0.48.4</string>", 1)
+s = s.replace("<string>470</string>", "<string>484</string>", 1)
 info.write_text(s)
 
 state = src / "vita3k" / "config" / "include" / "config" / "state.h"
@@ -177,11 +177,17 @@ new = """    if (session_settings)
         current.resolution_multiplier = 1.0f;
         current.high_accuracy = true;
         current.disable_surface_sync = false;
-        current.memory_mapping = "double-buffer";
+        // iOS cannot use DoubleBuffer's normal mprotect dirty tracking while
+        // the sideload/JIT debugger is attached. In 483 that forced every
+        // mapped vertex/uniform/index buffer to be recopied on access and the
+        // device log shows the title degrading from ~60 FPS to single digits.
+        // Keep surface sync, but use the dedicated unmapped iOS staging-readback
+        // path instead of DoubleBuffer.
+        current.memory_mapping = "disabled";
         current.anisotropic_filtering = 1;
         current.screen_filter = "Nearest";
         current.async_pipeline_compilation = false;
-        LOG_INFO("VitaJoN Uncharted profile: res=1x high_accuracy=true surface_sync=true memory=double-buffer aniso=1 filter=Nearest async=false");
+        LOG_INFO("VitaJoN Uncharted profile: res=1x high_accuracy=true surface_sync=true memory=disabled(iOS staging-readback) aniso=1 filter=Nearest async=false");
     }
 
     IOSFrameHost frame_host(window);
