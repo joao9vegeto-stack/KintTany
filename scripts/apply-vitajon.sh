@@ -35,8 +35,8 @@ src = Path(sys.argv[1])
 info = src / "ios" / "Info.plist.in"
 s = info.read_text()
 s = s.replace("<string>Tsubomi</string>", "<string>VitaJoN</string>")
-s = s.replace("<string>0.47.0</string>", "<string>0.49.0</string>", 1)
-s = s.replace("<string>470</string>", "<string>490</string>", 1)
+s = s.replace("<string>0.47.0</string>", "<string>0.49.1</string>", 1)
+s = s.replace("<string>470</string>", "<string>491</string>", 1)
 info.write_text(s)
 
 state = src / "vita3k" / "config" / "include" / "config" / "state.h"
@@ -186,21 +186,23 @@ new = """    if (session_settings)
         // fix, but return surface sampling to the accurate path.
         current.high_accuracy = true;
         current.vitajon_coherent_metal_fetch = true;
-        current.disable_surface_sync = false;
-        // Build 484 proved the unmapped iOS staging-readback path can serialize
-        // GPU -> CPU surface synchronization hard enough to pin gameplay at
-        // ~1 FPS under combat load. Return to DoubleBuffer: surface copies stay
-        // GPU-visible instead of forcing a per-scene staging readback + CPU
-        // memcpy. Keep surface sync enabled because Uncharted is known to crash
-        // when it is disabled.
-        current.memory_mapping = "double-buffer";
+        // 491: the full 490 trace shows renderer back-pressure beginning at the
+        // first cliff enemy while Surface Sync is active. Modern Vita3K reports
+        // the same 8-12 FPS class regression with Surface Sync enabled. Unlike
+        // 484, do not pair unmapped memory with staging readback: disable both
+        // Surface Sync and host memory mapping so there is no GPU->CPU
+        // waitForFences/readback loop and no DoubleBuffer resync hot path.
+        // High Accuracy + coherent Metal framebuffer fetch + the typeless
+        // surface fixes remain enabled to preserve the corrected visuals.
+        current.disable_surface_sync = true;
+        current.memory_mapping = "disabled";
         current.anisotropic_filtering = 1;
         current.screen_filter = "Nearest";
         // New pipelines appeared exactly when the recorded combat session
         // began stuttering. Let Vita3K's deferred pipeline path compile those
         // off the render thread instead of blocking gameplay.
         current.async_pipeline_compilation = true;
-        LOG_INFO("VitaJoN Uncharted profile: res=1x high_accuracy=true surface_sync=true memory=double-buffer aniso=1 filter=Nearest async=true");
+        LOG_INFO("VitaJoN Uncharted profile: res=1x high_accuracy=true surface_sync=false memory=disabled aniso=1 filter=Nearest async=true");
     }
 
     IOSFrameHost frame_host(window);
@@ -2339,3 +2341,111 @@ pipeline.write_text(p)
 print("VitaJoN 0.49.0 adaptive dirty tracking + pipeline crash guard applied")
 PY
 
+
+
+# VitaJoN 0.49.1 / build 491: remove the two iOS fault-tracking regressions
+# exposed by the 490 full-session trace.
+#
+# The 490 video/log has two distinct stages:
+#   * gameplay degrades while Surface Sync is active;
+#   * after P_TRACED drops, 490 enables mprotect dirty tracking and the first
+#     handled access-violation arrives immediately, followed by 0-1 FPS and
+#     black/stale regions.
+#
+# P_TRACED is therefore not a valid safety gate for page-fault tracking on this
+# iOS/JIT path. Keep all fault-based buffer/texture tracking disabled on iOS.
+# PCSA00029 now uses no Surface Sync + disabled memory mapping, so correctness
+# is provided by High Accuracy, coherent Metal framebuffer fetch and the
+# typeless/surface-cache fixes rather than host page traps or GPU readbacks.
+python3 - "$SRC" <<'PY'
+from pathlib import Path
+import sys
+
+src = Path(sys.argv[1])
+
+def must_replace(text, old, new, label, count=1):
+    n = text.count(old)
+    if n != count:
+        raise SystemExit(f"{label}: expected {count}, found {n}")
+    return text.replace(old, new, count)
+
+renderer = src / "vita3k" / "renderer" / "src" / "vulkan" / "renderer.cpp"
+r = renderer.read_text()
+
+old_late = """    can_mprotect_buffer_trapping = !vitajon_ios_debugger_attached_renderer();
+    if (can_mprotect_buffer_trapping)
+        LOG_INFO("VitaJoN 0.49.0: StikDebug already detached; DoubleBuffer dirty-page tracking active");
+    else
+        LOG_INFO("VitaJoN 0.49.0: StikDebug still attached; DoubleBuffer content-compare fallback active until detach");
+"""
+new_late = """    can_mprotect_buffer_trapping = false;
+    LOG_INFO("VitaJoN 0.49.1: iOS fault-based buffer trapping hard-disabled");
+"""
+r = must_replace(r, old_late, new_late, "491 disable late buffer trapping")
+
+old_access = """#if defined(VITA3K_PLATFORM_IOS)
+    // Once StikDebug detaches, P_TRACED drops but the JIT entitlement remains
+    // usable through CS_DEBUGGED. Switch from O(buffer-size) memcmp on every
+    // access back to Vita3K's normal page-dirty mechanism at that moment.
+    if (!state.can_mprotect_buffer_trapping && !vitajon_ios_debugger_attached_renderer()) {
+        state.can_mprotect_buffer_trapping = true;
+        // Existing entries were created without protection. Force one
+        // re-sync/protect pass before trusting their clean flag.
+        for (auto &[_, buffer] : trapped_buffers)
+            buffer.dirty = true;
+        LOG_INFO_ONCE("VitaJoN 0.49.0: StikDebug detached; DoubleBuffer dirty-page tracking enabled");
+    }
+    const uint32_t trap_page_size = state.can_mprotect_buffer_trapping
+        ? static_cast<uint32_t>(mem.host_page_size)
+        : static_cast<uint32_t>(KiB(4));
+#else
+    const uint32_t trap_page_size = KiB(4);
+#endif
+    const bool is_buffer_small = (size < 3 * trap_page_size);
+"""
+new_access = """    // iOS/JIT: never promote to mprotect tracking. Build 490 proved that
+    // P_TRACED dropping does not make guest protection faults cheap/safe.
+    const uint32_t trap_page_size = KiB(4);
+    const bool is_buffer_small = (size < 3 * trap_page_size);
+"""
+r = must_replace(r, old_access, new_access, "491 remove adaptive buffer promotion")
+renderer.write_text(r)
+
+cache = src / "vita3k" / "renderer" / "src" / "texture" / "cache.cpp"
+c = cache.read_text()
+
+old_helper = """static bool vitajon_ios_texture_fault_tracking_safe() {
+    // Poll at most twice per second until detach, then the result is permanent.
+    static bool detached = false;
+    static auto next_check = std::chrono::steady_clock::time_point{};
+    if (detached)
+        return true;
+
+    const auto now = std::chrono::steady_clock::now();
+    if (now < next_check)
+        return false;
+    next_check = now + std::chrono::milliseconds(500);
+
+    struct kinfo_proc info{};
+    std::size_t size = sizeof(info);
+    int mib[4] = { CTL_KERN, KERN_PROC, KERN_PROC_PID, getpid() };
+    const bool attached = sysctl(mib, 4, &info, &size, nullptr, 0) == 0
+        && (info.kp_proc.p_flag & P_TRACED) != 0;
+    detached = !attached;
+    if (detached)
+        LOG_INFO_ONCE("VitaJoN 0.49.0: StikDebug detached; texture dirty-page tracking enabled");
+    return detached;
+}
+"""
+new_helper = """static bool vitajon_ios_texture_fault_tracking_safe() {
+    // Never use mprotect texture invalidation on iOS/JIT. Build 490 observed
+    // protection traps immediately after P_TRACED dropped, so that signal is
+    // not a sufficient safety condition.
+    return false;
+}
+"""
+c = must_replace(c, old_helper, new_helper, "491 disable texture fault tracking")
+cache.write_text(c)
+
+print("VitaJoN 0.49.1 no-Surface-Sync/no-mapping + no-fault iOS profile applied")
+PY
