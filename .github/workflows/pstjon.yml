@@ -216,6 +216,110 @@ jobs:
           p.write_text(s)
           PY
 
+      - name: Apply PsTJon v4 audio, performance and rumble fixes
+        run: |
+          set -euxo pipefail
+          python3 - <<'PY'
+          from pathlib import Path
+
+          # Audio: the 0.10.1 Swift shell does not post the newer custom
+          # RPCS3AudioSessionDidActivate/WillDeactivate notifications expected
+          # by the current ios-port core. Mirror UIKit app lifecycle directly so
+          # RemoteIO can actually call AudioOutputUnitStart.
+          p = Path("rpcs3-src/rpcs3/ios/RPCS3IOSPlatform.mm")
+          s = p.read_text()
+          old = '''\trpcs3::ios::graphics_lifecycle_state().set_active(false);
+          \tios_graphics_log.notice("Vulkan submissions suspended and GPU work drained before backgrounding");'''
+          new = '''\trpcs3::ios::graphics_lifecycle_state().set_active(false);
+          \trpcs3::ios::audio_session_state().set_active(false);
+          \tios_graphics_log.notice("Vulkan submissions suspended and GPU work drained before backgrounding");'''
+          if old not in s:
+              raise SystemExit("audio willResignActive pattern not found")
+          s = s.replace(old, new, 1)
+
+          old = '''\trpcs3::ios::graphics_lifecycle_state().set_active(true);
+          \tios_graphics_log.notice("Vulkan submissions resumed; next frame will refresh the swapchain");'''
+          new = '''\trpcs3::ios::graphics_lifecycle_state().set_active(true);
+          \trpcs3::ios::audio_session_state().set_active(true);
+          \tios_graphics_log.notice("Vulkan submissions resumed; next frame will refresh the swapchain");'''
+          if old not in s:
+              raise SystemExit("audio didBecomeActive pattern not found")
+          s = s.replace(old, new, 1)
+
+          old = '''\t\t\tgraphics_lifecycle_state().set_active(UIApplication.sharedApplication.applicationState == UIApplicationStateActive);
+          \t\t});'''
+          new = '''\t\t\tconst bool active = UIApplication.sharedApplication.applicationState == UIApplicationStateActive;
+          \t\t\tgraphics_lifecycle_state().set_active(active);
+          \t\t\taudio_session_state().set_active(active);
+          \t\t});'''
+          if old not in s:
+              raise SystemExit("audio initial activation pattern not found")
+          s = s.replace(old, new, 1)
+          p.write_text(s)
+
+          # Performance: the previous diagnostic config still had two expensive
+          # troubleshooting settings enabled. v3 now contains the RSX safety
+          # net itself, so Ascension no longer needs CPU blits. Restore the
+          # asynchronous host-memory manager as well. Do this title-specifically
+          # after config/database fixups, so the user's global configuration and
+          # every other game remain untouched.
+          p = Path("rpcs3-src/rpcs3/Emu/System.cpp")
+          s = p.read_text()
+          old = '''\t\t\t// Force audio provider
+          \t\t\tif (m_path.ends_with("vsh.self"sv))'''
+          new = '''#ifdef RPCS3_IOS
+          \t\t\tif (m_title_id == "BCUS98232")
+          \t\t\t{
+          \t\t\t\tconst bool had_cpu_blit = g_cfg.video.force_cpu_blit_processing.get();
+          \t\t\t\tconst bool had_sync_memory = g_cfg.video.disable_async_host_memory_manager.get();
+          \t\t\t\tg_cfg.video.force_cpu_blit_processing.set(false);
+          \t\t\t\tg_cfg.video.disable_async_host_memory_manager.set(false);
+          \t\t\t\tsys_log.notice("PsTJon v4 Ascension performance policy: Force CPU Blit %d->0, Disable Async Memory Manager %d->0", had_cpu_blit, had_sync_memory);
+          \t\t\t}
+          #endif
+
+          \t\t\t// Force audio provider
+          \t\t\tif (m_path.ends_with("vsh.self"sv))'''
+          if old not in s:
+              raise SystemExit("System.cpp performance insertion pattern not found")
+          s = s.replace(old, new, 1)
+          p.write_text(s)
+
+          # Rumble observability: preserve the existing ABI path and log only
+          # changes in motor output. This tells us whether Ascension is issuing
+          # vibration and whether the remaining issue is in the 0.10.1 shell's
+          # CoreHaptics bridge, without spamming every pad poll.
+          p = Path("rpcs3-src/rpcs3/Emu/Io/IOS/IOSPadHandler.cpp")
+          s = p.read_text()
+          old = '#include "Emu/Io/pad_config.h"\n'
+          new = '#include "Emu/Io/pad_config.h"\n#include "util/logs.hpp"\n\nLOG_CHANNEL(ios_pad_log, "iOS Pad");\n'
+          if old not in s:
+              raise SystemExit("IOSPadHandler include pattern not found")
+          s = s.replace(old, new, 1)
+
+          old = '''\tconst u8 large_motor = device->config->get_large_motor_speed(pad->m_vibrate_motors);
+          \tconst u8 small_motor = device->config->get_small_motor_speed(pad->m_vibrate_motors);
+          \trpcs3::ios::shared_pad_feedback().update(device->player_id, large_motor, small_motor);'''
+          new = '''\tconst u8 large_motor = device->config->get_large_motor_speed(pad->m_vibrate_motors);
+          \tconst u8 small_motor = device->config->get_small_motor_speed(pad->m_vibrate_motors);
+          \trpcs3::ios::shared_pad_feedback().update(device->player_id, large_motor, small_motor);
+
+          \tstatic std::array<std::atomic<u16>, rpcs3::ios::pad_player_count> s_last_feedback{};
+          \tif (device->player_id < s_last_feedback.size())
+          \t{
+          \t\tconst u16 packed = static_cast<u16>(large_motor) | (static_cast<u16>(small_motor) << 8);
+          \t\tconst u16 previous = s_last_feedback[device->player_id].exchange(packed, std::memory_order_relaxed);
+          \t\tif (previous != packed && (previous != 0 || packed != 0))
+          \t\t{
+          \t\t\tios_pad_log.notice("PsTJon v4 rumble p%u: large=%u small=%u", device->player_id + 1, large_motor, small_motor);
+          \t\t}
+          \t}'''
+          if old not in s:
+              raise SystemExit("IOSPadHandler rumble pattern not found")
+          s = s.replace(old, new, 1)
+          p.write_text(s)
+          PY
+
       - name: Fetch MoltenVK
         run: |
           set -euxo pipefail
@@ -330,7 +434,7 @@ jobs:
       - name: Build report
         run: |
           {
-            echo "PsTJon v3 - Ascension RSX safety"
+            echo "PsTJon v4 - audio performance rumble"
             echo "RPCS3 ios-port: $RPCS3_IOS_SHA"
             echo "Shell bundle id: com.xitrix.RPCS3"
             echo "MoltenVK: $MOLTENVK_VERSION"
@@ -341,7 +445,7 @@ jobs:
 
       - uses: actions/upload-artifact@v4
         with:
-          name: PsTJon-v3-IPA
+          name: PsTJon-v4-IPA
           path: |
             PsTJon.ipa
             PsTJon-build.txt
