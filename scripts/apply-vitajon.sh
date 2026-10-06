@@ -35,12 +35,16 @@ src = Path(sys.argv[1])
 info = src / "ios" / "Info.plist.in"
 s = info.read_text()
 s = s.replace("<string>Tsubomi</string>", "<string>VitaJoN</string>")
-s = s.replace("<string>0.47.0</string>", "<string>0.48.6</string>", 1)
-s = s.replace("<string>470</string>", "<string>486</string>", 1)
+s = s.replace("<string>0.47.0</string>", "<string>0.48.7</string>", 1)
+s = s.replace("<string>470</string>", "<string>487</string>", 1)
 info.write_text(s)
 
 state = src / "vita3k" / "config" / "include" / "config" / "state.h"
 s = state.read_text()
+old = "bool high_accuracy = false;"
+if old not in s:
+    raise SystemExit("high accuracy default anchor not found")
+s = s.replace(old, old + "\n        bool vitajon_coherent_metal_fetch = false;", 1)
 old = "float resolution_multiplier = 1.0f;"
 if old not in s:
     raise SystemExit("resolution default anchor not found")
@@ -177,6 +181,7 @@ new = """    if (session_settings)
         auto &current = emuenv->cfg.current_config;
         current.resolution_multiplier = 1.0f;
         current.high_accuracy = true;
+        current.vitajon_coherent_metal_fetch = true;
         current.disable_surface_sync = false;
         // Build 484 proved the unmapped iOS staging-readback path can serialize
         // GPU -> CPU surface synchronization hard enough to pin gameplay at
@@ -1538,7 +1543,9 @@ new = """#if defined(VITA3K_PLATFORM_IOS)
     // Metal framebuffer fetch ([[color(0)]]) on Apple GPUs. That gives
     // coherent programmable blending without the much heavier storage-image
     // shader-interlock path.
-    const bool vitajon_coherent_metal_fetch = (game_id == "PCSA00029");
+    const bool vitajon_coherent_metal_fetch = cfg.current_config.vitajon_coherent_metal_fetch;
+    LOG_INFO("VitaJoN framebuffer-fetch selector: enabled={} app_path='{}'",
+        vitajon_coherent_metal_fetch, game_id);
 #else
     const bool vitajon_coherent_metal_fetch = false;
 #endif
@@ -1610,10 +1617,10 @@ scene.write_text(q)
 cache = src / "vita3k" / "shader" / "include" / "shader" / "spirv_recompiler.h"
 c = cache.read_text()
 c = must_replace(c, "static constexpr uint32_t CURRENT_VERSION = 15;",
-                 "static constexpr uint32_t CURRENT_VERSION = 16;",
+                 "static constexpr uint32_t CURRENT_VERSION = 17;",
                  "shader cache version")
 cache.write_text(c)
 
-print("VitaJoN 0.48.6 coherent Metal framebuffer-fetch fast path applied")
+print("VitaJoN 0.48.7 coherent Metal framebuffer-fetch activation fix applied")
 PY
 
