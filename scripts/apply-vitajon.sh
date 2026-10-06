@@ -2045,11 +2045,9 @@ new_late = """    can_mprotect_buffer_trapping = !vitajon_ios_debugger_attached_
 """
 r = must_replace(r, old_late, new_late, "adaptive late-init buffer tracking")
 
-old_start = """TrappedBuffer *BufferTrapping::access_buffer(Address addr, uint32_t size, MemState &mem, bool always_trap, bool cover_everything) {
-    const bool is_buffer_small = (size < 3 * KiB(4));
+old_start = """    const bool is_buffer_small = (size < 3 * KiB(4));
 """
-new_start = """TrappedBuffer *BufferTrapping::access_buffer(Address addr, uint32_t size, MemState &mem, bool always_trap, bool cover_everything) {
-#if defined(VITA3K_PLATFORM_IOS)
+new_start = """#if defined(VITA3K_PLATFORM_IOS)
     // Once StikDebug detaches, P_TRACED drops but the JIT entitlement remains
     // usable through CS_DEBUGGED. Switch from O(buffer-size) memcmp on every
     // access back to Vita3K's normal page-dirty mechanism at that moment.
