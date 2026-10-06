@@ -72,6 +72,14 @@ jobs:
           if old not in s:
               raise SystemExit("SPUThread pattern not found")
           p.write_text(s.replace(old, new, 1))
+
+          p = Path("rpcs3-src/rpcs3/util/atomic.cpp")
+          s = p.read_text()
+          old = 'fmt::throw_exception("Thread semaphore limit (65535) reached in atomic wait.");\n}'
+          new = 'fmt::throw_exception("Thread semaphore limit (65535) reached in atomic wait.");\n\t__builtin_unreachable();\n}'
+          if old not in s:
+              raise SystemExit("atomic.cpp pattern not found")
+          p.write_text(s.replace(old, new, 1))
           PY
 
       - name: Fetch MoltenVK
