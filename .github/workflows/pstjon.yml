@@ -114,6 +114,87 @@ jobs:
           p.write_text(s)
           PY
 
+      - name: Apply PsTJon Ascension RSX safety fixes
+        run: |
+          set -euxo pipefail
+          python3 - <<'PY'
+          from pathlib import Path
+
+          # Ascension's CopyLocalMemory asserts are continueable only by returning
+          # from the rejected copy. Generic Stub PPU Traps=1 skips the trap and
+          # lets invalid source/destination offsets flow into NV3089 instead.
+          p = Path("rpcs3-src/rpcs3/Emu/Cell/PPUThread.cpp")
+          s = p.read_text()
+          old = '''void ppu_trap(ppu_thread& ppu, u64 addr)
+          {
+          \tensure((addr & (~u64{0xffff'ffff} | 0x3)) == 0);
+          \tppu.cia = static_cast<u32>(addr);
+
+          \tu32 add = static_cast<u32>(g_cfg.core.stub_ppu_traps) * 4;
+          '''
+          new = '''void ppu_trap(ppu_thread& ppu, u64 addr)
+          {
+          \tensure((addr & (~u64{0xffff'ffff} | 0x3)) == 0);
+          \tppu.cia = static_cast<u32>(addr);
+
+          #ifdef RPCS3_IOS
+          \t// PsTJon / God of War: Ascension (BCUS98232 1.12)
+          \t// These traps are bounds assertions inside CopyLocalMemory. Skipping
+          \t// one instruction makes the guest continue the invalid 4 MiB copy,
+          \t// eventually feeding out-of-range local-memory offsets to NV3089.
+          \t// Return from the rejected copy instead, preserving valid copies.
+          \tif (Emu.GetTitleID() == "BCUS98232" &&
+          \t\t(addr == 0x003a27d0 || addr == 0x003a2878 || addr == 0x003a28cc))
+          \t{
+          \t\tppu_log.error("PsTJon: Ascension rejected invalid CopyLocalMemory at 0x%x; returning to LR=0x%x", addr, ppu.lr);
+          \t\tppu.cia = static_cast<u32>(ppu.lr);
+          \t\treturn;
+          \t}
+          #endif
+
+          \tu32 add = static_cast<u32>(g_cfg.core.stub_ppu_traps) * 4;
+          '''
+          if old not in s:
+              raise SystemExit("PPU trap insertion pattern not found")
+          p.write_text(s.replace(old, new, 1))
+
+          # Second safety net: if a malformed Ascension local-memory blit still
+          # reaches NV3089, discard that transfer instead of repeatedly invoking
+          # FIFO recovery until the queue is declared dead.
+          p = Path("rpcs3-src/rpcs3/Emu/RSX/NV47/HW/nv3089.cpp")
+          s = p.read_text()
+          include_old = '#include "Emu/RSX/Utils/image_utils.hpp"\n'
+          include_new = '#include "Emu/RSX/Utils/image_utils.hpp"\n#ifdef RPCS3_IOS\n#include "Emu/System.h"\n#endif\n'
+          if include_old not in s:
+              raise SystemExit("nv3089 include pattern not found")
+          s = s.replace(include_old, include_new, 1)
+
+          old = '''\t\t\t\tif (src_address = get_address(src_offset, src_dma, data_length); !src_address)
+          \t\t\t\t{
+          \t\t\t\t\trsx_log.error("NV3089_IMAGE_IN_SIZE: Unmapped src_address for in block transfer (src_offset=0x%x, src_dma=0x%x, data_length=0x%x)", src_offset, src_dma, data_length);
+          \t\t\t\t\tRSX(ctx)->recover_fifo();
+          \t\t\t\t\treturn { false, src_info, dst_info };
+          \t\t\t\t}
+          '''
+          new = '''\t\t\t\tif (src_address = get_address(src_offset, src_dma, data_length); !src_address)
+          \t\t\t\t{
+          \t\t\t\t\trsx_log.error("NV3089_IMAGE_IN_SIZE: Unmapped src_address for in block transfer (src_offset=0x%x, src_dma=0x%x, data_length=0x%x)", src_offset, src_dma, data_length);
+          #ifdef RPCS3_IOS
+          \t\t\t\t\tif (Emu.GetTitleID() == "BCUS98232" && src_dma == CELL_GCM_CONTEXT_DMA_MEMORY_FRAME_BUFFER)
+          \t\t\t\t\t{
+          \t\t\t\t\t\trsx_log.error("PsTJon: dropping invalid Ascension local-memory blit instead of poisoning FIFO recovery");
+          \t\t\t\t\t\treturn { false, src_info, dst_info };
+          \t\t\t\t\t}
+          #endif
+          \t\t\t\t\tRSX(ctx)->recover_fifo();
+          \t\t\t\t\treturn { false, src_info, dst_info };
+          \t\t\t\t}
+          '''
+          if old not in s:
+              raise SystemExit("nv3089 block-transfer pattern not found")
+          p.write_text(s.replace(old, new, 1))
+          PY
+
       - name: Fetch MoltenVK
         run: |
           set -euxo pipefail
@@ -228,7 +309,7 @@ jobs:
       - name: Build report
         run: |
           {
-            echo "PsTJon"
+            echo "PsTJon v2 - Ascension RSX safety"
             echo "RPCS3 ios-port: $RPCS3_IOS_SHA"
             echo "Shell bundle id: com.xitrix.RPCS3"
             echo "MoltenVK: $MOLTENVK_VERSION"
@@ -239,7 +320,7 @@ jobs:
 
       - uses: actions/upload-artifact@v4
         with:
-          name: PsTJon-IPA
+          name: PsTJon-v2-IPA
           path: |
             PsTJon.ipa
             PsTJon-build.txt
