@@ -35,8 +35,8 @@ src = Path(sys.argv[1])
 info = src / "ios" / "Info.plist.in"
 s = info.read_text()
 s = s.replace("<string>Tsubomi</string>", "<string>VitaJoN</string>")
-s = s.replace("<string>0.47.0</string>", "<string>0.48.9</string>", 1)
-s = s.replace("<string>470</string>", "<string>489</string>", 1)
+s = s.replace("<string>0.47.0</string>", "<string>0.49.0</string>", 1)
+s = s.replace("<string>470</string>", "<string>490</string>", 1)
 info.write_text(s)
 
 state = src / "vita3k" / "config" / "include" / "config" / "state.h"
@@ -1970,5 +1970,374 @@ r = must_replace(r, anchor, replacement, "DoubleBuffer log")
 renderer.write_text(r)
 
 print("VitaJoN 0.48.9 accurate textures + DoubleBuffer copy-elision applied")
+PY
+
+# VitaJoN 0.49.0: the 489 full-session trace finally separates the two
+# remaining issues:
+#
+# 1. Performance: 489's memcmp-before-memcpy fallback can escape 1 FPS, but it
+#    still scans the same DoubleBuffer and texture bytes on every bind. Tsubomi
+#    already has the correct dirty-page mechanism; it was disabled on iOS under
+#    the assumption that StikDebug stays attached. The iOS frontend itself says
+#    the opposite: after the permanent JIT region pool is prepared, StikDebug
+#    may detach and P_TRACED drops while CS_DEBUGGED remains set. Detect that
+#    transition and only then re-enable mprotect dirty tracking for large
+#    DoubleBuffer buffers and texture cache entries. While the debugger is
+#    attached, keep the exact 489 safe fallback.
+#
+# 2. Crash: the 489 log ends with an uncaught
+#    vk::Device::createGraphicsPipeline: ErrorInitializationFailed. Convert
+#    pipeline-creation exceptions into a failed-pipeline sentinel instead of
+#    allowing an async compiler thread to terminate the entire app.
+python3 - "$SRC" <<'PY'
+from pathlib import Path
+import sys
+
+src = Path(sys.argv[1])
+
+def must_replace(text, old, new, label, count=1):
+    n = text.count(old)
+    if n != count:
+        raise SystemExit(f"{label}: expected {count}, found {n}")
+    return text.replace(old, new, count)
+
+# ---------------------------------------------------------------------------
+# Adaptive iOS dirty-page tracking for DoubleBuffer.
+# ---------------------------------------------------------------------------
+renderer = src / "vita3k" / "renderer" / "src" / "vulkan" / "renderer.cpp"
+r = renderer.read_text()
+
+ios_block = """#if defined(VITA3K_PLATFORM_IOS)
+// MoltenVK is linked statically on iOS; there is no loader library for the
+// dynamic dispatcher to dlopen, so resolve everything from this entry point.
+extern "C" VKAPI_ATTR PFN_vkVoidFunction VKAPI_CALL vkGetInstanceProcAddr(VkInstance instance, const char *pName);
+#endif
+"""
+ios_block_new = """#if defined(VITA3K_PLATFORM_IOS)
+#include <os/proc.h>
+#include <sys/sysctl.h>
+#include <unistd.h>
+
+// MoltenVK is linked statically on iOS; there is no loader library for the
+// dynamic dispatcher to dlopen, so resolve everything from this entry point.
+extern "C" VKAPI_ATTR PFN_vkVoidFunction VKAPI_CALL vkGetInstanceProcAddr(VkInstance instance, const char *pName);
+
+static bool vitajon_ios_debugger_attached_renderer() {
+    struct kinfo_proc info{};
+    std::size_t size = sizeof(info);
+    int mib[4] = { CTL_KERN, KERN_PROC, KERN_PROC_PID, getpid() };
+    return sysctl(mib, 4, &info, &size, nullptr, 0) == 0
+        && (info.kp_proc.p_flag & P_TRACED) != 0;
+}
+#endif
+"""
+r = must_replace(r, ios_block, ios_block_new, "renderer debugger helper")
+
+old_late = """    can_mprotect_buffer_trapping = false;
+    LOG_INFO("iOS: fault-based buffer trapping disabled (traps are debugger-delivered)");
+    LOG_INFO("VitaJoN 0.48.9: DoubleBuffer content-compare copy elision active");
+"""
+new_late = """    can_mprotect_buffer_trapping = !vitajon_ios_debugger_attached_renderer();
+    if (can_mprotect_buffer_trapping)
+        LOG_INFO("VitaJoN 0.49.0: StikDebug already detached; DoubleBuffer dirty-page tracking active");
+    else
+        LOG_INFO("VitaJoN 0.49.0: StikDebug still attached; DoubleBuffer content-compare fallback active until detach");
+"""
+r = must_replace(r, old_late, new_late, "adaptive late-init buffer tracking")
+
+old_start = """TrappedBuffer *BufferTrapping::access_buffer(Address addr, uint32_t size, MemState &mem, bool always_trap, bool cover_everything) {
+    const bool is_buffer_small = (size < 3 * KiB(4));
+"""
+new_start = """TrappedBuffer *BufferTrapping::access_buffer(Address addr, uint32_t size, MemState &mem, bool always_trap, bool cover_everything) {
+#if defined(VITA3K_PLATFORM_IOS)
+    // Once StikDebug detaches, P_TRACED drops but the JIT entitlement remains
+    // usable through CS_DEBUGGED. Switch from O(buffer-size) memcmp on every
+    // access back to Vita3K's normal page-dirty mechanism at that moment.
+    if (!state.can_mprotect_buffer_trapping && !vitajon_ios_debugger_attached_renderer()) {
+        state.can_mprotect_buffer_trapping = true;
+        // Existing entries were created without protection. Force one
+        // re-sync/protect pass before trusting their clean flag.
+        for (auto &[_, buffer] : trapped_buffers)
+            buffer.dirty = true;
+        LOG_INFO_ONCE("VitaJoN 0.49.0: StikDebug detached; DoubleBuffer dirty-page tracking enabled");
+    }
+    const uint32_t trap_page_size = state.can_mprotect_buffer_trapping
+        ? static_cast<uint32_t>(mem.host_page_size)
+        : static_cast<uint32_t>(KiB(4));
+#else
+    const uint32_t trap_page_size = KiB(4);
+#endif
+    const bool is_buffer_small = (size < 3 * trap_page_size);
+"""
+r = must_replace(r, old_start, new_start, "adaptive access_buffer start")
+
+old_align = """        if (cover_everything) {
+            aligned_addr = align_down(addr, KiB(4));
+            aligned_size = align(addr + size, KiB(4)) - aligned_addr;
+        } else {
+            aligned_addr = align(addr, KiB(4));
+            aligned_size = align_down(addr + size - aligned_addr, KiB(4));
+        }
+        add_protect(mem, aligned_addr, aligned_size, MemPerm::ReadOnly, [it](Address addr, bool write) {
+"""
+new_align = """        if (cover_everything) {
+            aligned_addr = align_down(addr, trap_page_size);
+            aligned_size = align(addr + size, trap_page_size) - aligned_addr;
+        } else {
+            aligned_addr = align(addr, trap_page_size);
+            aligned_size = align_down(addr + size - aligned_addr, trap_page_size);
+        }
+        if (aligned_size > 0)
+            add_protect(mem, aligned_addr, aligned_size, MemPerm::ReadOnly, [it](Address addr, bool write) {
+"""
+r = must_replace(r, old_align, new_align, "host-page-size buffer protection")
+
+old_lambda_end = """            it->second.dirty = true;
+            return true;
+        });
+    }
+
+    // Copy back CPU-authored data as it was non-existent or dirty. On iOS,
+"""
+new_lambda_end = """                it->second.dirty = true;
+                return true;
+            });
+    }
+
+    // Copy back CPU-authored data as it was non-existent or dirty. On iOS,
+"""
+r = must_replace(r, old_lambda_end, new_lambda_end, "buffer protect indentation")
+
+renderer.write_text(r)
+
+# ---------------------------------------------------------------------------
+# Adaptive iOS dirty-page tracking for the texture cache. 488's "once per
+# frame" shortcut was wrong because guest CPU writes can occur within a frame.
+# This uses the upstream exact invalidation model once the debugger is gone.
+# ---------------------------------------------------------------------------
+cache = src / "vita3k" / "renderer" / "src" / "texture" / "cache.cpp"
+c = cache.read_text()
+
+include_anchor = """#include <algorithm>
+#include <cstring>
+#include <numeric>
+"""
+include_repl = """#include <algorithm>
+#include <chrono>
+#include <cstring>
+#include <numeric>
+#if defined(VITA3K_PLATFORM_IOS)
+#include <os/proc.h>
+#include <sys/sysctl.h>
+#include <unistd.h>
+#endif
+"""
+c = must_replace(c, include_anchor, include_repl, "texture debugger includes")
+
+ns_anchor = """namespace renderer {
+namespace texture {
+"""
+ns_repl = """namespace renderer {
+
+#if defined(VITA3K_PLATFORM_IOS)
+static bool vitajon_ios_texture_fault_tracking_safe() {
+    // Poll at most twice per second until detach, then the result is permanent.
+    static bool detached = false;
+    static auto next_check = std::chrono::steady_clock::time_point{};
+    if (detached)
+        return true;
+
+    const auto now = std::chrono::steady_clock::now();
+    if (now < next_check)
+        return false;
+    next_check = now + std::chrono::milliseconds(500);
+
+    struct kinfo_proc info{};
+    std::size_t size = sizeof(info);
+    int mib[4] = { CTL_KERN, KERN_PROC, KERN_PROC_PID, getpid() };
+    const bool attached = sysctl(mib, 4, &info, &size, nullptr, 0) == 0
+        && (info.kp_proc.p_flag & P_TRACED) != 0;
+    detached = !attached;
+    if (detached)
+        LOG_INFO_ONCE("VitaJoN 0.49.0: StikDebug detached; texture dirty-page tracking enabled");
+    return detached;
+}
+#endif
+
+namespace texture {
+"""
+c = must_replace(c, ns_anchor, ns_repl, "texture debugger helper")
+
+old_force_hash = """#ifdef VITA3K_PLATFORM_IOS
+        // Never use fault-based texture invalidation on iOS, even when the
+        // config carries hashless-texture-cache from a desktop install: with
+        // StikDebug attached, every protection fault stops the whole process
+        // through the debug link, which is the observed multi-second stall
+        // pattern. Hashing costs a little CPU per bind but never traps.
+        if (!should_use_hash) {
+            should_use_hash = true;
+            LOG_INFO_ONCE("iOS texture cache forces hash-based invalidation (hashless-texture-cache ignored)");
+        }
+#endif
+"""
+new_force_hash = """#ifdef VITA3K_PLATFORM_IOS
+        // While StikDebug is attached, protection faults are debugger-delivered
+        // and are too expensive/unreliable. After detach, use Vita3K's stock
+        // large-texture dirty-page path instead of hashing the complete texture
+        // on every bind.
+        if (!should_use_hash && !vitajon_ios_texture_fault_tracking_safe()) {
+            should_use_hash = true;
+            LOG_INFO_ONCE("iOS texture cache temporarily uses hash invalidation while StikDebug is attached");
+        }
+#endif
+"""
+c = must_replace(c, old_force_hash, new_force_hash, "adaptive initial texture invalidation")
+
+cached_anchor = """        configure = false;
+        if (info->use_hash) {
+            const bool vitajon_large_static_candidate =
+"""
+cached_repl = """        configure = false;
+#if defined(VITA3K_PLATFORM_IOS)
+        // Entries created before debugger detach started in hash mode. Promote
+        // eligible large textures to the stock protected/dirty mode lazily,
+        // forcing one upload so the protected range and GPU copy are coherent.
+        if (info->use_hash
+            && use_protect
+            && vitajon_ios_texture_fault_tracking_safe()
+            && info->texture_size >= mem.host_page_size * 4) {
+            range_protect_begin = align(gxm_texture.data_addr << 2, mem.host_page_size);
+            range_protect_end = align_down((gxm_texture.data_addr << 2) + info->texture_size, mem.host_page_size);
+            if (range_protect_end > range_protect_begin
+                && range_protect_end - range_protect_begin >= mem.host_page_size * 4) {
+                info->use_hash = false;
+                info->dirty = true;
+                LOG_INFO_ONCE("VitaJoN 0.49.0: cached large textures promoted from hashing to dirty-page tracking");
+            }
+        }
+#endif
+        if (info->use_hash) {
+            const bool vitajon_large_static_candidate =
+"""
+c = must_replace(c, cached_anchor, cached_repl, "promote cached textures after detach")
+
+cache.write_text(c)
+
+# ---------------------------------------------------------------------------
+# Keep a single bad MoltenVK pipeline from killing the whole iOS process.
+# ---------------------------------------------------------------------------
+pipeline = src / "vita3k" / "renderer" / "src" / "vulkan" / "pipeline_cache.cpp"
+p = pipeline.read_text()
+
+ns = """namespace renderer::vulkan {
+
+// Size of the record containing what is needed for the pipeline construction (what is after is dynamic state)
+"""
+ns_new = """namespace renderer::vulkan {
+
+static vk::Pipeline vitajon_pipeline_sentinel(uint64_t value) {
+    return std::bit_cast<vk::Pipeline, uint64_t>(value);
+}
+static vk::Pipeline vitajon_pipeline_compiling() {
+    return vitajon_pipeline_sentinel(~0ULL);
+}
+static vk::Pipeline vitajon_pipeline_failed() {
+    return vitajon_pipeline_sentinel(~1ULL);
+}
+
+// Size of the record containing what is needed for the pipeline construction (what is after is dynamic state)
+"""
+p = must_replace(p, ns, ns_new, "pipeline sentinels")
+
+old_thread = """        vk::Pipeline pipeline = compile_pipeline(request->type, request->render_pass, *request->vertex_program_gxm, *request->fragment_program_gxm, *request->get_record(), request->hints, mem);
+        *request->pipeline = pipeline;
+"""
+new_thread = """        vk::Pipeline pipeline = compile_pipeline(request->type, request->render_pass, *request->vertex_program_gxm, *request->fragment_program_gxm, *request->get_record(), request->hints, mem);
+        *request->pipeline = pipeline ? pipeline : vitajon_pipeline_failed();
+"""
+p = must_replace(p, old_thread, new_thread, "async failed pipeline sentinel")
+
+old_create = """    const auto result = state.device.createGraphicsPipeline(pipeline_cache, pipeline_info);
+    if (result.result != vk::Result::eSuccess) {
+        LOG_CRITICAL("Failed to create pipeline.");
+        return nullptr;
+    }
+
+    return result.value;
+"""
+new_create = """    try {
+        const auto result = state.device.createGraphicsPipeline(pipeline_cache, pipeline_info);
+        if (result.result != vk::Result::eSuccess) {
+            LOG_ERROR("VitaJoN: graphics pipeline creation returned {}", vk::to_string(result.result));
+            return nullptr;
+        }
+        return result.value;
+    } catch (const std::exception &e) {
+        // MoltenVK can throw vk::SystemError (e.g. ErrorInitializationFailed)
+        // from an async compiler worker. Do not let that unwind out of the
+        // thread and terminate the whole application.
+        LOG_ERROR("VitaJoN: graphics pipeline creation failed safely: {}", e.what());
+        return nullptr;
+    } catch (...) {
+        LOG_ERROR("VitaJoN: graphics pipeline creation failed safely with unknown exception");
+        return nullptr;
+    }
+"""
+p = must_replace(p, old_create, new_create, "pipeline exception guard")
+
+old_local = """    // can't use constexpr because of apple clang...
+    const vk::Pipeline pipeline_compiling = std::bit_cast<vk::Pipeline, uint64_t>(~0ULL);
+    // if the pipeline is in the pipeline cache, we can expect its creation time to be almost instantaneous
+"""
+new_local = """    const vk::Pipeline pipeline_compiling = vitajon_pipeline_compiling();
+    const vk::Pipeline pipeline_failed = vitajon_pipeline_failed();
+    // if the pipeline is in the pipeline cache, we can expect its creation time to be almost instantaneous
+"""
+p = must_replace(p, old_local, new_local, "pipeline local sentinels")
+
+old_lookup = """        if (it->second != nullptr) {
+            if (it->second == pipeline_compiling)
+                // pipeline is still compiling
+                return nullptr;
+            else
+                return it->second;
+        }
+"""
+new_lookup = """        if (it->second != nullptr) {
+            if (it->second == pipeline_compiling || it->second == pipeline_failed)
+                // pipeline is still compiling, or MoltenVK rejected it. In the
+                // latter case, skip this draw instead of retrying every frame.
+                return nullptr;
+            else
+                return it->second;
+        }
+"""
+p = must_replace(p, old_lookup, new_lookup, "failed pipeline lookup")
+
+old_sync_store = """        it->second = result;
+
+        return result;
+"""
+new_sync_store = """        it->second = result ? result : pipeline_failed;
+
+        return result;
+"""
+p = must_replace(p, old_sync_store, new_sync_store, "sync failed pipeline sentinel")
+
+old_cleanup = """    for (auto &[hash, pipeline] : pipelines)
+        state.device.destroy(pipeline);
+    pipelines.clear();
+"""
+new_cleanup = """    for (auto &[hash, pipeline] : pipelines) {
+        if (pipeline && pipeline != vitajon_pipeline_compiling() && pipeline != vitajon_pipeline_failed())
+            state.device.destroy(pipeline);
+    }
+    pipelines.clear();
+"""
+p = must_replace(p, old_cleanup, new_cleanup, "pipeline sentinel cleanup")
+
+pipeline.write_text(p)
+
+print("VitaJoN 0.49.0 adaptive dirty tracking + pipeline crash guard applied")
 PY
 
