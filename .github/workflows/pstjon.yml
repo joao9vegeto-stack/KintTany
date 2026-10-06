@@ -122,22 +122,14 @@ jobs:
           python3 rpcs3/ios/tests/run-vk-image-pool-tests.py
           python3 rpcs3/ios/tests/run-vk-memory-pressure-tests.py
 
-      - name: Apply PsTJon v6 Ascension modern-core policy
+      - name: Apply PsTJon v7 Ascension stability, audio and haptics
         run: |
           set -euxo pipefail
           python3 - <<'PY'
           from pathlib import Path
 
-          # The old v3/v5 title hacks intercepted malformed NV3089 commands and
-          # returned without normal FIFO recovery. The v5 test proved this can
-          # leave stale texture state alive until texture_cache::upload_texture()
-          # dereferences the same invalid local-memory offset. v6 deliberately
-          # carries none of those RSX overrides and uses the rebased ios-port.
-          #
-          # On modern upstream, Vulkan GC is separated from async DMA and the
-          # Ascension tearing regression no longer needs CPU Blit as a workaround.
-          # Restore the fast production paths only for BCUS98232 after per-title
-          # settings/database fixups have run.
+          # Keep the v6 fast-path choices. The new work below fixes the observed
+          # faults without reintroducing the broad v3/v5 blit suppression.
           p = Path("rpcs3-src/rpcs3/Emu/System.cpp")
           s = p.read_text()
           old = '''\t\t\t// Force audio provider
@@ -149,7 +141,7 @@ jobs:
           \t\t\t\tconst bool had_sync_memory = g_cfg.video.disable_async_host_memory_manager.get();
           \t\t\t\tg_cfg.video.force_cpu_blit_processing.set(false);
           \t\t\t\tg_cfg.video.disable_async_host_memory_manager.set(false);
-          \t\t\t\tsys_log.notice("PsTJon v6 Ascension modern-core policy: Force CPU Blit %d->0, Disable Async Memory Manager %d->0", had_cpu_blit, had_sync_memory);
+          \t\t\t\tsys_log.notice("PsTJon v7 Ascension policy: Force CPU Blit %d->0, Disable Async Memory Manager %d->0", had_cpu_blit, had_sync_memory);
           \t\t\t}
           #endif
 
@@ -158,7 +150,204 @@ jobs:
           if old not in s:
               raise SystemExit("System.cpp Ascension policy insertion pattern not found")
           p.write_text(s.replace(old, new, 1))
+
+          # Audio: the official 0.10.1 shell never posts the custom audio-session
+          # notifications expected by the current core. Tie RemoteIO activity to
+          # the same UIKit lifecycle already used by graphics.
+          p = Path("rpcs3-src/rpcs3/ios/RPCS3IOSPlatform.mm")
+          s = p.read_text()
+
+          old = '''\trpcs3::ios::graphics_lifecycle_state().set_active(false);
+          \tios_graphics_log.notice("Vulkan submissions suspended and GPU work drained before backgrounding");'''
+          new = '''\trpcs3::ios::graphics_lifecycle_state().set_active(false);
+          \trpcs3::ios::audio_session_state().set_active(false);
+          \tios_graphics_log.notice("Vulkan submissions suspended and GPU work drained before backgrounding");'''
+          if old not in s:
+              raise SystemExit("audio willResignActive pattern not found")
+          s = s.replace(old, new, 1)
+
+          old = '''\trpcs3::ios::graphics_lifecycle_state().set_active(true);
+          \tios_graphics_log.notice("Vulkan submissions resumed; next frame will refresh the swapchain");'''
+          new = '''\trpcs3::ios::graphics_lifecycle_state().set_active(true);
+          \trpcs3::ios::audio_session_state().set_active(true);
+          \tios_graphics_log.notice("Vulkan submissions resumed; next frame will refresh the swapchain");'''
+          if old not in s:
+              raise SystemExit("audio didBecomeActive pattern not found")
+          s = s.replace(old, new, 1)
+
+          old = '''\t\t\tgraphics_lifecycle_state().set_active(UIApplication.sharedApplication.applicationState == UIApplicationStateActive);
+          \t\t});'''
+          new = '''\t\t\tconst bool active = UIApplication.sharedApplication.applicationState == UIApplicationStateActive;
+          \t\t\tgraphics_lifecycle_state().set_active(active);
+          \t\t\taudio_session_state().set_active(active);
+          \t\t});'''
+          if old not in s:
+              raise SystemExit("audio initial activation pattern not found")
+          s = s.replace(old, new, 1)
+
+          # The stock shell also does not turn the core's rumble feedback into
+          # physical iPhone feedback. Preserve the ABI path and add a very small
+          # title-scoped UIKit fallback only on non-zero motor edges.
+          anchor = '''#include <dispatch/dispatch.h>
+
+          '''
+          haptic = '''#include <dispatch/dispatch.h>
+
+          extern "C" void pstjon_ios_haptic_pulse(uint8_t large_motor, uint8_t small_motor) noexcept
+          {
+          #if TARGET_OS_OSX || TARGET_OS_VISION
+          \t(void)large_motor;
+          \t(void)small_motor;
+          #else
+          \tif (!large_motor && !small_motor)
+          \t{
+          \t\treturn;
+          \t}
+          \tconst uint8_t strength = large_motor > small_motor ? large_motor : small_motor;
+          \tconst UIImpactFeedbackStyle style =
+          \t\tstrength >= 170 ? UIImpactFeedbackStyleHeavy :
+          \t\tstrength >= 80 ? UIImpactFeedbackStyleMedium :
+          \t\tUIImpactFeedbackStyleLight;
+          \tconst CGFloat intensity = 0.20 + (0.80 * (static_cast<CGFloat>(strength) / 255.0));
+          \tdispatch_async(dispatch_get_main_queue(), ^
+          \t{
+          \t\t@autoreleasepool
+          \t\t{
+          \t\t\tUIImpactFeedbackGenerator* generator = [[UIImpactFeedbackGenerator alloc] initWithStyle:style];
+          \t\t\t[generator prepare];
+          \t\t\t[generator impactOccurredWithIntensity:intensity];
+          \t\t\t[generator release];
+          \t\t}
+          \t});
+          #endif
+          }
+
+          '''
+          if anchor not in s:
+              raise SystemExit("haptic insertion anchor not found")
+          s = s.replace(anchor, haptic, 1)
+          p.write_text(s)
+
+          p = Path("rpcs3-src/rpcs3/Emu/Io/IOS/IOSPadHandler.cpp")
+          s = p.read_text()
+          old = '#include "Emu/Io/pad_config.h"\n'
+          new = '#include "Emu/Io/pad_config.h"\n#include "Emu/System.h"\n#include "util/logs.hpp"\n#include <array>\n#include <atomic>\n\nextern "C" void pstjon_ios_haptic_pulse(unsigned char large_motor, unsigned char small_motor) noexcept;\n\nLOG_CHANNEL(ios_pad_log, "iOS Pad");\n'
+          if old not in s:
+              raise SystemExit("IOSPadHandler include pattern not found")
+          s = s.replace(old, new, 1)
+
+          old = '''\tconst u8 large_motor = device->config->get_large_motor_speed(pad->m_vibrate_motors);
+          \tconst u8 small_motor = device->config->get_small_motor_speed(pad->m_vibrate_motors);
+          \trpcs3::ios::shared_pad_feedback().update(device->player_id, large_motor, small_motor);'''
+          new = '''\tconst u8 large_motor = device->config->get_large_motor_speed(pad->m_vibrate_motors);
+          \tconst u8 small_motor = device->config->get_small_motor_speed(pad->m_vibrate_motors);
+          \trpcs3::ios::shared_pad_feedback().update(device->player_id, large_motor, small_motor);
+
+          \tstatic std::array<std::atomic<u16>, rpcs3::ios::pad_player_count> s_last_feedback{};
+          \tif (device->player_id < s_last_feedback.size())
+          \t{
+          \t\tconst u16 packed = static_cast<u16>(large_motor) | (static_cast<u16>(small_motor) << 8);
+          \t\tconst u16 previous = s_last_feedback[device->player_id].exchange(packed, std::memory_order_relaxed);
+          \t\tif (previous != packed && (previous != 0 || packed != 0))
+          \t\t{
+          \t\t\tios_pad_log.notice("PsTJon v7 rumble p%u: large=%u small=%u", device->player_id + 1, large_motor, small_motor);
+          \t\t\tif (device->player_id == 0 && packed != 0 && Emu.GetTitleID() == "BCUS98232")
+          \t\t\t{
+          \t\t\t\tpstjon_ios_haptic_pulse(large_motor, small_motor);
+          \t\t\t}
+          \t\t}
+          \t}'''
+          if old not in s:
+              raise SystemExit("IOSPadHandler rumble pattern not found")
+          p.write_text(s.replace(old, new, 1))
+
+          # Crash containment: v6 showed valid blits until the guest began
+          # emitting local-memory destinations beyond the 256 MiB RSX window
+          # (0x10b40680/0x10f40680), ending in an unmapped host write. Validate
+          # ONLY the destination span for Ascension; do not touch source-range
+          # semantics, which was the over-broad part of v5.
+          p = Path("rpcs3-src/rpcs3/Emu/RSX/NV47/HW/nv3089.cpp")
+          s = p.read_text()
+          inc = '#include "Emu/RSX/Utils/image_utils.hpp"\n'
+          inc_new = '#include "Emu/RSX/Utils/image_utils.hpp"\n#ifdef RPCS3_IOS\n#include "Emu/System.h"\n#endif\n'
+          if inc not in s:
+              raise SystemExit("NV3089 include anchor not found")
+          s = s.replace(inc, inc_new, 1)
+
+          old = '''\t\t\tu32 src_address = 0;
+          \t\t\tconst u32 dst_address = get_address(dst_offset, dst_dma, 1); // TODO: Add size
+          '''
+          new = '''\t\t\tu32 src_address = 0;
+          \t\t\tu32 dst_address = 0;
+          #ifdef RPCS3_IOS
+          \t\t\tif (Emu.GetTitleID() == "BCUS98232" && dst_dma == CELL_GCM_CONTEXT_DMA_MEMORY_FRAME_BUFFER)
+          \t\t\t{
+          \t\t\t\tconst u64 dst_required64 =
+          \t\t\t\t\tstatic_cast<u64>(out_offset) +
+          \t\t\t\t\tstatic_cast<u64>(out_pitch) * (clip_h ? clip_h - 1 : 0) +
+          \t\t\t\t\tstatic_cast<u64>(clip_w) * out_bpp;
+          \t\t\t\tif (dst_required64 && dst_required64 <= UINT32_MAX)
+          \t\t\t\t{
+          \t\t\t\t\tdst_address = get_address(dst_offset, dst_dma, static_cast<u32>(dst_required64));
+          \t\t\t\t}
+          \t\t\t}
+          \t\t\telse
+          #endif
+          \t\t\t{
+          \t\t\t\tdst_address = get_address(dst_offset, dst_dma, 1);
+          \t\t\t}
+          '''
+          if old not in s:
+              raise SystemExit("NV3089 destination-check pattern not found")
+          p.write_text(s.replace(old, new, 1))
+
+          # Memory pressure: on unified-memory iOS, the generic desktop heuristic
+          # was downgrading a >100% Vulkan allocator from fatal/severe back to
+          # moderate because the device-wide budget still looked large. v6 then
+          # reached 129% / 1265 MiB before the crash. Never downgrade allocator
+          # overcommit below severe on iOS, and use one fatal reclamation tier
+          # once both allocator load and process headroom are critical.
+          p = Path("rpcs3-src/rpcs3/Emu/RSX/VK/VKResourceManager.cpp")
+          s = p.read_text()
+          anchor = '''\t\t\t\telse if (local_memory_available > mem_threshold_2)                                   // Enough to hold basic resources like textures, buffers, etc
+          \t\t\t\t{
+          \t\t\t\t\t// At least 512MB left, do not overreact
+          \t\t\t\t\tload_severity = rsx::problem_severity::moderate;
+          \t\t\t\t}
+
+          \t\t\t\tif (load_severity >= rsx::problem_severity::moderate)
+          '''
+          patched = '''\t\t\t\telse if (local_memory_available > mem_threshold_2)                                   // Enough to hold basic resources like textures, buffers, etc
+          \t\t\t\t{
+          \t\t\t\t\t// At least 512MB left, do not overreact
+          \t\t\t\t\tload_severity = rsx::problem_severity::moderate;
+          \t\t\t\t}
+
+          #ifdef RPCS3_IOS
+          \t\t\t\tif (vmm_load >= 120.f && process_headroom <= rpcs3::ios::process_headroom_severe_enter)
+          \t\t\t\t{
+          \t\t\t\t\tload_severity = rsx::problem_severity::fatal;
+          \t\t\t\t}
+          \t\t\t\telse if (vmm_load >= 100.f && load_severity < rsx::problem_severity::severe)
+          \t\t\t\t{
+          \t\t\t\t\tload_severity = rsx::problem_severity::severe;
+          \t\t\t\t}
+          #endif
+
+          \t\t\t\tif (load_severity >= rsx::problem_severity::moderate)
+          '''
+          if anchor not in s:
+              raise SystemExit("VK memory-severity anchor not found")
+          p.write_text(s.replace(anchor, patched, 1))
           PY
+
+          cd rpcs3-src
+          python3 rpcs3/ios/tests/run-vk-image-pool-tests.py
+          python3 rpcs3/ios/tests/run-vk-memory-pressure-tests.py
+          grep -q 'PsTJon v7 Ascension policy' rpcs3/Emu/System.cpp
+          grep -q 'pstjon_ios_haptic_pulse' rpcs3/ios/RPCS3IOSPlatform.mm
+          grep -q 'dst_required64' rpcs3/Emu/RSX/NV47/HW/nv3089.cpp
+          grep -q 'vmm_load >= 120.f' rpcs3/Emu/RSX/VK/VKResourceManager.cpp
 
       - name: Fetch MoltenVK
         run: |
@@ -274,7 +463,7 @@ jobs:
       - name: Build report
         run: |
           {
-            echo "PsTJon v6 - modern ios-port Ascension Vulkan reset"
+            echo "PsTJon v7 - Ascension crash memory audio haptics"
             echo "RPCS3 ios-port: $RPCS3_IOS_SHA"
             echo "Shell bundle id: com.xitrix.RPCS3"
             echo "MoltenVK: $MOLTENVK_VERSION"
@@ -285,7 +474,7 @@ jobs:
 
       - uses: actions/upload-artifact@v4
         with:
-          name: PsTJon-v6-IPA
+          name: PsTJon-v7-IPA
           path: |
             PsTJon.ipa
             PsTJon-build.txt
