@@ -62,7 +62,7 @@ diff --git a/src/kosmickrisp/bridge/mtl_device.m b/src/kosmickrisp/bridge/mtl_de
 diff --git a/src/kosmickrisp/vulkan/kk_bo.c b/src/kosmickrisp/vulkan/kk_bo.c
 --- a/src/kosmickrisp/vulkan/kk_bo.c
 +++ b/src/kosmickrisp/vulkan/kk_bo.c
-@@ -14,9 +14,24 @@
+@@ -14,8 +14,23 @@
  #include "util/u_memory.h"
  
  #if DETECT_OS_APPLE
