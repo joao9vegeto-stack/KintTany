@@ -122,7 +122,7 @@ jobs:
           python3 rpcs3/ios/tests/run-vk-image-pool-tests.py
           python3 rpcs3/ios/tests/run-vk-memory-pressure-tests.py
 
-      - name: Apply PsTJon v11 Ascension FIFO 1K safe iounmap and 30 FPS profile
+      - name: Apply PsTJon v12 Ascension precise GET baseline, audio and haptics
         run: |
           set -euxo pipefail
           python3 - <<'PY'
@@ -146,19 +146,11 @@ jobs:
           \t\t\t\tg_cfg.video.force_cpu_blit_processing.set(false);
           \t\t\t\tg_cfg.video.disable_async_host_memory_manager.set(false);
           \t\t\t\tg_cfg.core.rsx_fifo_accuracy.set(rsx_fifo_mode::atomic_ordered);
-          \t\t\t\t// Ascension recycles/unmaps RSX IO aggressively. Keep the
-          \t\t\t\t// original RPCS3-sized read-ahead window and expose the
-          \t\t\t\t// execution position without the mobile GET deferral.
           \t\t\t\tg_cfg.ios_experimental.fifo_cache_size.set(ios_fifo_cache_size::_1_kib);
           \t\t\t\tg_cfg.ios_experimental.fifo_idle_mode.set(ios_fifo_idle_mode::yield);
           \t\t\t\tg_cfg.ios_experimental.deferred_get_publishing.set(ios_experimental_mode::disabled);
           \t\t\t\tg_cfg.video.driver_wakeup_delay.set(0);
-          \t\t\t\tg_cfg.video.shadermode.set(shader_mode::async_recompiler);
-          \t\t\t\tg_cfg.video.shader_precision.set(gpu_preset_level::high);
-          \t\t\t\tg_cfg.video.frame_limit.set(frame_limit_type::_30);
-          \t\t\t\tg_cfg.video.output_scaling.set(output_scaling_mode::bilinear);
-          \t\t\t\tg_cfg.video.write_color_buffers.set(true);
-          \t\t\t\tsys_log.notice("PsTJon v11 Ascension policy: CPU Blit %d->0, Async Memory Manager %d->active, Ordered & Atomic, FIFO 1KiB/yield, deferred GET off, wake %u->0, Async Recompiler, High precision, WCB, 30 FPS",
+          \t\t\t\tsys_log.notice("PsTJon v12 Ascension precise-GET policy: CPU Blit %d->0, Async Memory Manager %d->active, Ordered & Atomic, FIFO 1KiB/yield, deferred GET off, wake %u->0, v9 renderer profile preserved",
           \t\t\t\t\thad_cpu_blit, had_sync_memory, had_wakeup_delay);
           \t\t\t}
           #endif
@@ -167,6 +159,68 @@ jobs:
           \t\t\tif (m_path.ends_with("vsh.self"sv))'''
           if old not in s:
               raise SystemExit("System.cpp Ascension policy insertion pattern not found")
+          p.write_text(s.replace(old, new, 1))
+
+          # v12 root fix: v9/v10/v11 all ran 1 KiB/yield/deferred-off,
+          # so read-ahead size was not the distinguishing factor. The guest-visible
+          # GET still used the prefetched cache frontier whenever cache data existed.
+          # For BCUS98232 only, publish the actually executed FIFO position instead.
+          # This delays guest reuse/unmap until commands are consumed without
+          # serializing sys_rsx_context_iounmap or touching NV3089.
+          p = Path("rpcs3-src/rpcs3/Emu/RSX/RSXFIFO.h")
+          s = p.read_text()
+          old = '''\t\t\tu32 m_cache_line_count = 8;
+          \t\t\tbool m_deferred_get_publishing = false;
+          \t\t\tbool m_fifo_idle_wfe = false;
+          '''
+          new = '''\t\t\tu32 m_cache_line_count = 8;
+          \t\t\tbool m_deferred_get_publishing = false;
+          \t\t\tbool m_fifo_idle_wfe = false;
+          \t\t\tbool m_precise_get_publishing = false;
+          '''
+          if old not in s:
+              raise SystemExit("RSXFIFO.h precise GET member anchor not found")
+          s = s.replace(old, new, 1)
+
+          old = '''\t\t\tu32 get_sync_position() const
+          \t\t\t{
+          \t\t\t\treturn m_fifo_pos - m_cache_addr <= m_cache_size ? m_cache_addr + m_cache_size : m_fifo_pos;
+          \t\t\t}
+          '''
+          new = '''\t\t\tu32 get_sync_position() const
+          \t\t\t{
+          \t\t\t\t// Ascension aggressively recycles RSX IO mappings. Do not
+          \t\t\t\t// advertise prefetched commands as executed for this title.
+          \t\t\t\tif (m_precise_get_publishing)
+          \t\t\t\t{
+          \t\t\t\t\treturn m_fifo_pos;
+          \t\t\t\t}
+          \t\t\t\treturn m_fifo_pos - m_cache_addr <= m_cache_size ? m_cache_addr + m_cache_size : m_fifo_pos;
+          \t\t\t}
+          '''
+          if old not in s:
+              raise SystemExit("RSXFIFO.h get_sync_position anchor not found")
+          p.write_text(s.replace(old, new, 1))
+
+          p = Path("rpcs3-src/rpcs3/Emu/RSX/RSXFIFO.cpp")
+          s = p.read_text()
+          old = '''#ifdef RPCS3_IOS
+          \t\t\tconst auto& policy = rpcs3::ios::get_experimental_policy();
+          \t\t\tm_cache_line_count = policy.fifo_cache_bytes / 128;
+          \t\t\tm_deferred_get_publishing = policy.deferred_get_publishing;
+          \t\t\tm_fifo_idle_wfe = policy.fifo_idle_wfe;
+          #endif
+          '''
+          new = '''#ifdef RPCS3_IOS
+          \t\t\tconst auto& policy = rpcs3::ios::get_experimental_policy();
+          \t\t\tm_cache_line_count = policy.fifo_cache_bytes / 128;
+          \t\t\tm_deferred_get_publishing = policy.deferred_get_publishing;
+          \t\t\tm_fifo_idle_wfe = policy.fifo_idle_wfe;
+          \t\t\tm_precise_get_publishing = Emu.GetTitleID() == "BCUS98232";
+          #endif
+          '''
+          if old not in s:
+              raise SystemExit("RSXFIFO.cpp constructor policy anchor not found")
           p.write_text(s.replace(old, new, 1))
 
           # Audio: keep the v7 lifecycle bridge proven healthy by the v8 log.
@@ -264,7 +318,7 @@ jobs:
           \t\tconst u16 previous = s_last_feedback[device->player_id].exchange(packed, std::memory_order_relaxed);
           \t\tif (previous != packed && (previous != 0 || packed != 0))
           \t\t{
-          \t\t\tios_pad_log.notice("PsTJon v11 rumble p%u: large=%u small=%u", device->player_id + 1, large_motor, small_motor);
+          \t\t\tios_pad_log.notice("PsTJon v12 rumble p%u: large=%u small=%u", device->player_id + 1, large_motor, small_motor);
           \t\t\tif (device->player_id == 0 && packed != 0 && Emu.GetTitleID() == "BCUS98232")
           \t\t\t{
           \t\t\t\tpstjon_ios_haptic_pulse(large_motor, small_motor);
@@ -275,80 +329,8 @@ jobs:
               raise SystemExit("IOSPadHandler rumble pattern not found")
           p.write_text(s.replace(old, new, 1))
 
-          # v11: serialize destructive IO unmaps against the RSX frontend
-          # without holding the VM writer lock while waiting for RSX to pause.
-          # Also discard prefetched FIFO bytes and publish the true executed GET
-          # before the translation entries are destroyed.
-          p = Path("rpcs3-src/rpcs3/Emu/Cell/lv2/sys_rsx.cpp")
-          s = p.read_text()
-          old = '''\tvm::writer_lock rlock;
-
-          \tstd::scoped_lock lock(render->sys_rsx_mtx);
-
-          \tfor (const u64 end = (io >>= 20) + (size >>= 20); io < end;)
-          '''
-          new = '''\t// Stop RSX before taking the VM writer lock. The opposite order
-          \t// can deadlock if RSX needs VM access while acknowledging pause.
-          \trsx::eng_lock fifo_lock(render);
-          \tvm::writer_lock rlock;
-
-          \t// Drop prefetched commands and publish the actual execution
-          \t// position before invalidating their IO translations.
-          \tif (render->fifo_ctrl)
-          \t{
-          \t\trender->fifo_ctrl->invalidate_cache();
-          \t\trender->fifo_ctrl->sync_get_force();
-          \t}
-
-          \tstd::scoped_lock lock(render->sys_rsx_mtx);
-
-          \tfor (const u64 end = (io >>= 20) + (size >>= 20); io < end;)
-          '''
-          if old not in s:
-              raise SystemExit("sys_rsx_context_iounmap synchronization anchor not found")
-          p.write_text(s.replace(old, new, 1))
-
-          # Universal JIT is healthy and used only a fraction of its 1024 MiB
-          # arena in every PsTJon trace. Universal preparation touches executable
-          # pages, so cap the shell's 1024 MiB request at 512 MiB and return that
-          # physical headroom to the renderer.
-          p = Path("rpcs3-src/Utilities/JITIOS.cpp")
-          s = p.read_text()
-          old = '''u32 process_expanded_jit_arena_capacity() noexcept
-          {
-          \tconst char* const value = std::getenv(expanded_jit_arena_environment);
-          \treturn value ? rpcs3::ios::jit::parse_expanded_arena_capacity(value) : 0;
-          }
-          '''
-          new = '''u32 process_expanded_jit_arena_capacity() noexcept
-          {
-          \tconst char* const value = std::getenv(expanded_jit_arena_environment);
-          \tif (!value)
-          \t{
-          \t\treturn 0;
-          \t}
-          \tconst u32 requested = rpcs3::ios::jit::parse_expanded_arena_capacity(value);
-          \treturn requested != std::numeric_limits<u32>::max() && requested > 512 ? 512 : requested;
-          }
-          '''
-          if old not in s:
-              raise SystemExit("JIT arena capacity anchor not found")
-          p.write_text(s.replace(old, new, 1))
-
-          # The A19 Pro exposes 11.7 GiB unified memory. Reinvest the 512 MiB
-          # saved above into Vulkan's pressure ceiling: 2.0 -> 2.5 GiB. This is
-          # deliberately conservative; process-headroom pressure still wins and
-          # the v7 severe/fatal reclaim policy remains active.
-          p = Path("rpcs3-src/rpcs3/Emu/RSX/VK/vkutils/VRAMBudgetPolicy.h")
-          s = p.read_text()
-          old = 'inline constexpr std::uint64_t ios_vram_budget_max = 2048 * vram_budget_mib;'
-          new = 'inline constexpr std::uint64_t ios_vram_budget_max = 2560 * vram_budget_mib;'
-          if old not in s:
-              raise SystemExit("iOS VRAM budget anchor not found")
-          p.write_text(s.replace(old, new, 1))
-
-          # Keep the v7 iOS unified-memory safety. It prevents allocator
-          # overcommit from being downgraded after 100%.
+          # Keep the v7 iOS unified-memory safety. It was not involved in the v8
+          # fatal, but prevents the allocator from being downgraded after 100%.
           p = Path("rpcs3-src/rpcs3/Emu/RSX/VK/VKResourceManager.cpp")
           s = p.read_text()
           anchor = '''\t\t\t\telse if (local_memory_available > mem_threshold_2)                                   // Enough to hold basic resources like textures, buffers, etc
@@ -386,19 +368,13 @@ jobs:
           cd rpcs3-src
           python3 rpcs3/ios/tests/run-vk-image-pool-tests.py
           python3 rpcs3/ios/tests/run-vk-memory-pressure-tests.py
-          grep -q 'PsTJon v11 Ascension policy' rpcs3/Emu/System.cpp
+          grep -q 'PsTJon v12 Ascension precise-GET policy' rpcs3/Emu/System.cpp
           grep -q 'fifo_cache_size.set(ios_fifo_cache_size::_1_kib)' rpcs3/Emu/System.cpp
           grep -q 'fifo_idle_mode.set(ios_fifo_idle_mode::yield)' rpcs3/Emu/System.cpp
           grep -q 'deferred_get_publishing.set(ios_experimental_mode::disabled)' rpcs3/Emu/System.cpp
-          grep -q 'shadermode.set(shader_mode::async_recompiler)' rpcs3/Emu/System.cpp
-          grep -q 'shader_precision.set(gpu_preset_level::high)' rpcs3/Emu/System.cpp
-          grep -q 'frame_limit.set(frame_limit_type::_30)' rpcs3/Emu/System.cpp
-          grep -q 'rsx::eng_lock fifo_lock(render)' rpcs3/Emu/Cell/lv2/sys_rsx.cpp
-          grep -q 'render->fifo_ctrl->invalidate_cache();' rpcs3/Emu/Cell/lv2/sys_rsx.cpp
-          grep -q 'render->fifo_ctrl->sync_get_force();' rpcs3/Emu/Cell/lv2/sys_rsx.cpp
-          grep -q 'requested > 512 ? 512 : requested' Utilities/JITIOS.cpp
-          grep -q 'ios_vram_budget_max = 2560' rpcs3/Emu/RSX/VK/vkutils/VRAMBudgetPolicy.h
-          grep -q 'deferred_get_publishing.set(ios_experimental_mode::disabled)' rpcs3/Emu/System.cpp
+          grep -q 'm_precise_get_publishing = Emu.GetTitleID() == "BCUS98232"' rpcs3/Emu/RSX/RSXFIFO.cpp
+          grep -q 'if (m_precise_get_publishing)' rpcs3/Emu/RSX/RSXFIFO.h
+          test -z "$(git diff -- rpcs3/Emu/Cell/lv2/sys_rsx.cpp)"
           grep -q 'rsx_fifo_accuracy.set(rsx_fifo_mode::atomic_ordered)' rpcs3/Emu/System.cpp
           grep -q 'driver_wakeup_delay.set(0)' rpcs3/Emu/System.cpp
           grep -q 'pstjon_ios_haptic_pulse' rpcs3/ios/RPCS3IOSPlatform.mm
@@ -520,7 +496,7 @@ jobs:
       - name: Build report
         run: |
           {
-            echo "PsTJon v11 - Ascension FIFO 1KiB yield safe iounmap 512MiB JIT 2560MiB Vulkan 30FPS"
+            echo "PsTJon v12 - Ascension v9 baseline + executed FIFO GET"
             echo "RPCS3 ios-port: $RPCS3_IOS_SHA"
             echo "Shell bundle id: com.xitrix.RPCS3"
             echo "MoltenVK: $MOLTENVK_VERSION"
@@ -531,7 +507,7 @@ jobs:
 
       - uses: actions/upload-artifact@v4
         with:
-          name: PsTJon-v11-IPA
+          name: PsTJon-v12-IPA
           path: |
             PsTJon.ipa
             PsTJon-build.txt
