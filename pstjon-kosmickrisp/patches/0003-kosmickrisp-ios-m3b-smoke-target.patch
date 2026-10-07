@@ -1,11 +1,7 @@
 diff --git a/src/kosmickrisp/meson.build b/src/kosmickrisp/meson.build
 --- a/src/kosmickrisp/meson.build
 +++ b/src/kosmickrisp/meson.build
-@@ -12,7 +12,25 @@
- executable(
-     'kosmicomp',
-     files('kosmicomp.c'),
-     dependencies : [idep_nir, idep_vtn, idep_vulkan_runtime_headers, idep_vulkan_util_headers],
+@@ -16,3 +16,21 @@ executable(
      link_with: [libkk],
      link_args: ['-Wl,-undefined,dynamic_lookup'],
  )
