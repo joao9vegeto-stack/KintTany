@@ -1,0 +1,342 @@
+name: PsTJon KosmicKrisp M3A
+
+on:
+  push:
+    branches: [PsTJon-KosmicKrisp]
+    paths:
+      - ".github/workflows/pstjon-kosmickrisp-m3.yml"
+      - "pstjon-kosmickrisp/patches/0001-kosmickrisp-ios-m2.patch"
+      - "pstjon-kosmickrisp/patches/0002-kosmickrisp-ios-m3-metal-wsi.patch"
+      - "pstjon-kosmickrisp/m3/**"
+  workflow_dispatch:
+
+concurrency:
+  group: pstjon-kosmickrisp-m3
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  kosmickrisp-ios-metal-wsi:
+    name: M3A - KosmicKrisp iOS Metal WSI compile
+    runs-on: macos-26
+    timeout-minutes: 180
+    env:
+      MESA_KOSMICKRISP_SHA: "bfe063f723d436e5cdef8a98f058d4e44a64810c"
+      MESA_PRIMARY_URL: "https://gitlab.freedesktop.org/mesa/mesa.git"
+      MESA_MIRROR_URL: "https://github.com/Kenji-NX/mesa.git"
+      MESON_VERSION: "1.9.1"
+      LLVM_FORMULA: "llvm@20"
+      SPIRV_LLVM_TRANSLATOR_SHA: "e328468fd329342f1f60c12fdd19cc0faaa88f32"
+      SPIRV_LLVM_TRANSLATOR_URL: "https://github.com/KhronosGroup/SPIRV-LLVM-Translator.git"
+      IOS_DEPLOYMENT_TARGET: "17.4"
+
+    steps:
+      - name: Checkout PsTJon KosmicKrisp branch
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Verify immutable PsTJon v13 ancestry
+        run: |
+          set -euxo pipefail
+          git cat-file -e f0944f0957bae61793679e5b3330ccfd2b53d005^{commit}
+          git merge-base --is-ancestor f0944f0957bae61793679e5b3330ccfd2b53d005 HEAD
+          git diff --exit-code f0944f0957bae61793679e5b3330ccfd2b53d005 HEAD -- .github/workflows/pstjon.yml
+          echo "M3 branch head: $(git rev-parse HEAD)"
+          echo "Immutable v13 baseline: f0944f0957bae61793679e5b3330ccfd2b53d005"
+
+      - name: Verify Xcode and iPhoneOS SDK
+        run: |
+          set -euxo pipefail
+          test "$(uname -m)" = "arm64"
+          xcodebuild -version
+          xcrun --sdk iphoneos --show-sdk-version
+          xcrun --sdk iphoneos --show-sdk-path
+          xcrun --sdk iphoneos clang --version
+
+      - name: Install reproducible host build prerequisites
+        run: |
+          set -euxo pipefail
+          brew update
+          for pkg in cmake pkg-config libclc "$LLVM_FORMULA" spirv-tools ninja; do
+            brew list "$pkg" >/dev/null 2>&1 || brew install "$pkg"
+          done
+
+          python3 -m venv "$GITHUB_WORKSPACE/venv"
+          source "$GITHUB_WORKSPACE/venv/bin/activate"
+          python -m pip install --upgrade pip
+          python -m pip install "meson==${MESON_VERSION}" mako packaging pyyaml
+
+          LLVM_PREFIX="$(brew --prefix "$LLVM_FORMULA")"
+          TRANSLATOR_PREFIX="$GITHUB_WORKSPACE/deps/spirv-llvm-translator-20"
+          rm -rf "$GITHUB_WORKSPACE/spirv-llvm-translator-src" "$GITHUB_WORKSPACE/spirv-llvm-translator-build" "$TRANSLATOR_PREFIX"
+
+          git clone --filter=blob:none --no-checkout "$SPIRV_LLVM_TRANSLATOR_URL" "$GITHUB_WORKSPACE/spirv-llvm-translator-src"
+          git -C "$GITHUB_WORKSPACE/spirv-llvm-translator-src" fetch --depth=1 origin "$SPIRV_LLVM_TRANSLATOR_SHA"
+          git -C "$GITHUB_WORKSPACE/spirv-llvm-translator-src" checkout --detach "$SPIRV_LLVM_TRANSLATOR_SHA"
+          test "$(git -C "$GITHUB_WORKSPACE/spirv-llvm-translator-src" rev-parse HEAD)" = "$SPIRV_LLVM_TRANSLATOR_SHA"
+
+          cmake -S "$GITHUB_WORKSPACE/spirv-llvm-translator-src" -B "$GITHUB_WORKSPACE/spirv-llvm-translator-build" -G Ninja \
+            -DCMAKE_BUILD_TYPE=Release \
+            -DCMAKE_INSTALL_PREFIX="$TRANSLATOR_PREFIX" \
+            -DLLVM_DIR="$LLVM_PREFIX/lib/cmake/llvm" \
+            -DLLVM_SPIRV_INCLUDE_TESTS=OFF \
+            -DBUILD_SHARED_LIBS=OFF \
+            -DLLVM_LINK_LLVM_DYLIB=OFF
+          cmake --build "$GITHUB_WORKSPACE/spirv-llvm-translator-build" --target LLVMSPIRVLib llvm-spirv -j3
+          cmake --install "$GITHUB_WORKSPACE/spirv-llvm-translator-build"
+
+          test -f "$TRANSLATOR_PREFIX/lib/libLLVMSPIRVLib.a"
+          test "$(PKG_CONFIG_PATH="$TRANSLATOR_PREFIX/lib/pkgconfig" pkg-config --modversion LLVMSPIRVLib)" = "20.1.0.0"
+
+          echo "$LLVM_PREFIX/bin" >> "$GITHUB_PATH"
+          echo "$TRANSLATOR_PREFIX/bin" >> "$GITHUB_PATH"
+          echo "HOST_LDFLAGS=-L$TRANSLATOR_PREFIX/lib -L$LLVM_PREFIX/lib" >> "$GITHUB_ENV"
+          echo "HOST_CPPFLAGS=-I$TRANSLATOR_PREFIX/include -I$LLVM_PREFIX/include" >> "$GITHUB_ENV"
+          echo "HOST_PKG_CONFIG_PATH=$TRANSLATOR_PREFIX/lib/pkgconfig:$LLVM_PREFIX/lib/pkgconfig:$(brew --prefix libclc)/lib/pkgconfig:$(brew --prefix spirv-tools)/lib/pkgconfig" >> "$GITHUB_ENV"
+
+      - name: Fetch exact Mesa and apply iOS M2 plus M3 WSI patches
+        run: |
+          set -euxo pipefail
+          rm -rf mesa-src
+          if git clone --filter=blob:none --no-checkout "$MESA_PRIMARY_URL" mesa-src; then
+            echo "official GitLab" | tee mesa-source.txt
+          else
+            rm -rf mesa-src
+            git clone --filter=blob:none --no-checkout "$MESA_MIRROR_URL" mesa-src
+            echo "synchronized GitHub mirror fallback" | tee mesa-source.txt
+          fi
+
+          git -C mesa-src fetch --depth=1 origin "$MESA_KOSMICKRISP_SHA"
+          git -C mesa-src checkout --detach "$MESA_KOSMICKRISP_SHA"
+          test "$(git -C mesa-src rev-parse HEAD)" = "$MESA_KOSMICKRISP_SHA"
+
+          for patch in             "$GITHUB_WORKSPACE/pstjon-kosmickrisp/patches/0001-kosmickrisp-ios-m2.patch"             "$GITHUB_WORKSPACE/pstjon-kosmickrisp/patches/0002-kosmickrisp-ios-m3-metal-wsi.patch"; do
+            git -C mesa-src apply --check "$patch"
+            git -C mesa-src apply "$patch"
+          done
+
+          grep -q "'ios'" mesa-src/meson.options
+          grep -q "with_platform_ios" mesa-src/meson.build
+          grep -q "TARGET_OS_IOS" mesa-src/src/kosmickrisp/bridge/mtl_device.m
+          grep -q "with_platform_macos or with_platform_ios" mesa-src/src/vulkan/meson.build
+          grep -q "with_platform_macos or with_platform_ios" mesa-src/src/vulkan/wsi/meson.build
+          git -C mesa-src diff --check
+          git -C mesa-src diff --stat | tee M3-patch-stat.txt
+          git -C mesa-src diff > M3-applied.patch
+
+      - name: Build native KosmicKrisp shader tools
+        run: |
+          set -euxo pipefail
+          source "$GITHUB_WORKSPACE/venv/bin/activate"
+          export LDFLAGS="$HOST_LDFLAGS"
+          export CPPFLAGS="$HOST_CPPFLAGS"
+          export PKG_CONFIG_PATH="$HOST_PKG_CONFIG_PATH"
+
+          rm -rf build-host host-tools
+          meson setup build-host mesa-src \
+            --buildtype=release \
+            -Dplatforms=macos \
+            -Dvulkan-drivers=kosmickrisp \
+            -Dgallium-drivers= \
+            -Dopengl=false \
+            -Dzstd=disabled \
+            -Dmesa-clc=enabled \
+            -Dprecomp-compiler=enabled \
+            --prefer-static
+
+          meson compile -C build-host mesa_clc vtn_bindgen2 kk_clc
+
+          mkdir -p host-tools/bin
+          cp build-host/src/compiler/clc/mesa_clc host-tools/bin/
+          cp build-host/src/compiler/spirv/vtn_bindgen2 host-tools/bin/
+          cp build-host/src/kosmickrisp/clc/kk_clc host-tools/bin/
+          chmod +x host-tools/bin/*
+          host-tools/bin/mesa_clc --help >/dev/null 2>&1 || true
+          file host-tools/bin/* | tee M3-host-tools.txt
+
+      - name: Create arm64-apple-ios cross toolchain
+        run: |
+          set -euxo pipefail
+          mkdir -p toolchain
+
+          cat > toolchain/ios-clang <<'EOF'
+          #!/bin/bash
+          set -euo pipefail
+          SDKROOT="$(xcrun --sdk iphoneos --show-sdk-path)"
+          exec xcrun --sdk iphoneos clang -target arm64-apple-ios17.4 -isysroot "$SDKROOT" "$@"
+          EOF
+
+          cat > toolchain/ios-clangxx <<'EOF'
+          #!/bin/bash
+          set -euo pipefail
+          SDKROOT="$(xcrun --sdk iphoneos --show-sdk-path)"
+          exec xcrun --sdk iphoneos clang++ -target arm64-apple-ios17.4 -isysroot "$SDKROOT" "$@"
+          EOF
+
+          cat > toolchain/ios-ar <<'EOF'
+          #!/bin/bash
+          set -euo pipefail
+          exec xcrun --sdk iphoneos ar "$@"
+          EOF
+
+          cat > toolchain/ios-strip <<'EOF'
+          #!/bin/bash
+          set -euo pipefail
+          exec xcrun --sdk iphoneos strip "$@"
+          EOF
+
+          chmod +x toolchain/*
+
+          cat > ios-arm64.cross <<EOF
+          [binaries]
+          c = '$GITHUB_WORKSPACE/toolchain/ios-clang'
+          cpp = '$GITHUB_WORKSPACE/toolchain/ios-clangxx'
+          objc = '$GITHUB_WORKSPACE/toolchain/ios-clang'
+          ar = '$GITHUB_WORKSPACE/toolchain/ios-ar'
+          strip = '$GITHUB_WORKSPACE/toolchain/ios-strip'
+
+          [host_machine]
+          system = 'darwin'
+          cpu_family = 'aarch64'
+          cpu = 'arm64'
+          endian = 'little'
+
+          [properties]
+          needs_exe_wrapper = true
+          EOF
+
+          cat ios-arm64.cross
+          "$GITHUB_WORKSPACE/toolchain/ios-clang" -dM -E -x c /dev/null | grep -E '__ENVIRONMENT_IPHONE_OS_VERSION_MIN_REQUIRED__|__arm64__' | tee M3-target-macros.txt
+
+      - name: Configure KosmicKrisp iOS Metal WSI
+        run: |
+          set -euxo pipefail
+          source "$GITHUB_WORKSPACE/venv/bin/activate"
+
+          unset LDFLAGS CPPFLAGS PKG_CONFIG_PATH
+          export PATH="$GITHUB_WORKSPACE/host-tools/bin:$PATH"
+
+          rm -rf build-ios
+          meson setup build-ios mesa-src \
+            --cross-file "$GITHUB_WORKSPACE/ios-arm64.cross" \
+            --buildtype=release \
+            --wrap-mode=nodownload \
+            -Dplatforms=ios \
+            -Dvulkan-drivers=kosmickrisp \
+            -Dgallium-drivers= \
+            -Dopengl=false \
+            -Dzstd=disabled \
+            -Dmesa-clc=system \
+            -Dprecomp-compiler=system \
+            -Dllvm=disabled \
+            -Dspirv-tools=disabled \
+            --prefer-static
+
+          grep -E "Host machine cpu family|Host machine system|Vulkan Drivers|Platforms|LLVM" build-ios/meson-logs/meson-log.txt | tail -80 | tee M3-config-summary.txt || true
+
+      - name: Build KosmicKrisp iOS Metal WSI archives
+        run: |
+          set -euxo pipefail
+          source "$GITHUB_WORKSPACE/venv/bin/activate"
+          export PATH="$GITHUB_WORKSPACE/host-tools/bin:$PATH"
+
+          ninja -C build-ios src/vulkan/wsi/libvulkan_wsi.a src/kosmickrisp/vulkan/libkk.a
+
+          KK_ARCHIVE="$GITHUB_WORKSPACE/build-ios/src/kosmickrisp/vulkan/libkk.a"
+          WSI_ARCHIVE="$GITHUB_WORKSPACE/build-ios/src/vulkan/wsi/libvulkan_wsi.a"
+          test -f "$KK_ARCHIVE"
+          test -f "$WSI_ARCHIVE"
+          cp "$KK_ARCHIVE" libkk-kosmickrisp-ios-arm64-wsi.a
+          cp "$WSI_ARCHIVE" libwsi-metal-ios-arm64.a
+
+          file libkk-kosmickrisp-ios-arm64-wsi.a libwsi-metal-ios-arm64.a | tee M3-file.txt
+          {
+            lipo -info libkk-kosmickrisp-ios-arm64-wsi.a
+            lipo -info libwsi-metal-ios-arm64.a
+          } | tee M3-lipo.txt
+          grep -q "arm64" M3-lipo.txt
+
+          nm -g libkk-kosmickrisp-ios-arm64-wsi.a > M3-symbols.txt
+          grep -E "vk_icdGetInstanceProcAddr|kk_GetInstanceProcAddr" M3-symbols.txt | tee M3-vulkan-entrypoints.txt
+          grep -q "vk_icdGetInstanceProcAddr" M3-vulkan-entrypoints.txt
+
+          nm -g libwsi-metal-ios-arm64.a > M3-wsi-symbols.txt
+          grep -E "wsi_metal_init_wsi|wsi_CreateMetalSurfaceEXT" M3-wsi-symbols.txt | tee M3-metal-entrypoints.txt
+          grep -q "wsi_metal_init_wsi" M3-metal-entrypoints.txt
+
+      - name: Prove Metal WSI object targets iOS not macOS
+        run: |
+          set -euxo pipefail
+          rm -rf M3-inspect
+          mkdir M3-inspect
+          cd M3-inspect
+          xcrun --sdk iphoneos ar -x ../libwsi-metal-ios-arm64.a
+
+          OBJ="$(find . -type f \( -name '*metal_layer*.o' -o -name '*metal.c.o' \) -print -quit)"
+          test -n "$OBJ"
+          file "$OBJ" | tee ../M3-object-file.txt
+          xcrun vtool -show-build "$OBJ" | tee ../M3-build-version.txt
+          grep -E -qi "platform[[:space:]]+IOS|platform[[:space:]]+2" ../M3-build-version.txt
+
+          if grep -R -a -E "/Applications/Xcode[^ ]*/Platforms/MacOSX|MacOSX\.sdk" . >/dev/null 2>&1; then
+            echo "Unexpected macOS SDK marker in Metal WSI target objects" >&2
+            exit 1
+          fi
+
+      - name: Write M3A WSI compile manifest and hashes
+        if: success()
+        run: |
+          set -euxo pipefail
+          source "$GITHUB_WORKSPACE/venv/bin/activate"
+          {
+            echo "PsTJon / KosmicKrisp M3A"
+            echo "Scope: arm64-apple-ios KosmicKrisp + Metal WSI compile proof; no RPCS3 integration."
+            echo "KintTany commit: $GITHUB_SHA"
+            echo "PsTJon v13 baseline: f0944f0957bae61793679e5b3330ccfd2b53d005"
+            echo "Mesa/KosmicKrisp commit: $MESA_KOSMICKRISP_SHA"
+            echo "SPIR-V LLVM Translator commit: $SPIRV_LLVM_TRANSLATOR_SHA"
+            echo "Meson: $(meson --version)"
+            echo "LLVM: $(llvm-config --version)"
+            echo "Xcode: $(xcodebuild -version | tr '\n' ' ')"
+            echo "iPhoneOS SDK: $(xcrun --sdk iphoneos --show-sdk-version)"
+            echo "Deployment target: iOS $IOS_DEPLOYMENT_TARGET"
+            echo "Platform selection: ios"
+            echo "WSI status: VK_USE_PLATFORM_METAL_EXT + CAMetalLayer sources enabled for iOS"
+            echo "Next gate: M3B minimal iPhone CAMetalLayer surface/swapchain app"
+          } | tee M3-build.txt
+
+          shasum -a 256             libkk-kosmickrisp-ios-arm64-wsi.a             libwsi-metal-ios-arm64.a             pstjon-kosmickrisp/patches/0001-kosmickrisp-ios-m2.patch             pstjon-kosmickrisp/patches/0002-kosmickrisp-ios-m3-metal-wsi.patch             | tee M3-sha256.txt
+
+      - name: Upload M3A WSI evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: PsTJon-KK-m03a-ios-metal-wsi
+          path: |
+            libkk-kosmickrisp-ios-arm64-wsi.a
+            libwsi-metal-ios-arm64.a
+            M3-build.txt
+            M3-sha256.txt
+            M3-patch-stat.txt
+            M3-applied.patch
+            M3-host-tools.txt
+            M3-target-macros.txt
+            M3-config-summary.txt
+            M3-file.txt
+            M3-lipo.txt
+            M3-symbols.txt
+            M3-vulkan-entrypoints.txt
+            M3-wsi-symbols.txt
+            M3-metal-entrypoints.txt
+            M3-object-file.txt
+            M3-build-version.txt
+            mesa-source.txt
+            ios-arm64.cross
+            build-ios/meson-logs/
+            pstjon-kosmickrisp/patches/0001-kosmickrisp-ios-m2.patch
+            pstjon-kosmickrisp/patches/0002-kosmickrisp-ios-m3-metal-wsi.patch
+          if-no-files-found: warn
+          compression-level: 0
