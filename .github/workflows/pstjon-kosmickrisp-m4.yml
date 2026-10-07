@@ -505,6 +505,7 @@ jobs:
           python -m pip install "meson==${MESON_VERSION}" mako packaging pyyaml
 
           LLVM_PREFIX="$(brew --prefix "$LLVM_FORMULA")"
+          export PATH="$LLVM_PREFIX/bin:$PATH"
           TRANSLATOR_PREFIX="$GITHUB_WORKSPACE/deps/spirv-llvm-translator-20"
           rm -rf "$GITHUB_WORKSPACE/spirv-llvm-translator-src" "$GITHUB_WORKSPACE/spirv-llvm-translator-build" "$TRANSLATOR_PREFIX"
           git clone --filter=blob:none --no-checkout "$SPIRV_LLVM_TRANSLATOR_URL" "$GITHUB_WORKSPACE/spirv-llvm-translator-src"
