@@ -122,7 +122,7 @@ jobs:
           python3 rpcs3/ios/tests/run-vk-image-pool-tests.py
           python3 rpcs3/ios/tests/run-vk-memory-pressure-tests.py
 
-      - name: Apply PsTJon v7 Ascension stability, audio and haptics
+      - name: Apply PsTJon v8 Ascension FIFO containment, audio and haptics
         run: |
           set -euxo pipefail
           python3 - <<'PY'
@@ -141,7 +141,7 @@ jobs:
           \t\t\t\tconst bool had_sync_memory = g_cfg.video.disable_async_host_memory_manager.get();
           \t\t\t\tg_cfg.video.force_cpu_blit_processing.set(false);
           \t\t\t\tg_cfg.video.disable_async_host_memory_manager.set(false);
-          \t\t\t\tsys_log.notice("PsTJon v7 Ascension policy: Force CPU Blit %d->0, Disable Async Memory Manager %d->0", had_cpu_blit, had_sync_memory);
+          \t\t\t\tsys_log.notice("PsTJon v8 Ascension policy: Force CPU Blit %d->0, Disable Async Memory Manager %d->0", had_cpu_blit, had_sync_memory);
           \t\t\t}
           #endif
 
@@ -250,7 +250,7 @@ jobs:
           \t\tconst u16 previous = s_last_feedback[device->player_id].exchange(packed, std::memory_order_relaxed);
           \t\tif (previous != packed && (previous != 0 || packed != 0))
           \t\t{
-          \t\t\tios_pad_log.notice("PsTJon v7 rumble p%u: large=%u small=%u", device->player_id + 1, large_motor, small_motor);
+          \t\t\tios_pad_log.notice("PsTJon v8 rumble p%u: large=%u small=%u", device->player_id + 1, large_motor, small_motor);
           \t\t\tif (device->player_id == 0 && packed != 0 && Emu.GetTitleID() == "BCUS98232")
           \t\t\t{
           \t\t\t\tpstjon_ios_haptic_pulse(large_motor, small_motor);
@@ -299,6 +299,42 @@ jobs:
           '''
           if old not in s:
               raise SystemExit("NV3089 destination-check pattern not found")
+          s = s.replace(old, new, 1)
+
+          # v7 proved that the destination-range guard works: there was no host
+          # access violation and no iOS/Vulkan pressure event. However the
+          # generic unmapped-destination path immediately called recover_fifo().
+          # Ascension then fed a run of syntactically valid but semantically
+          # invalid local-memory blits, so recovery repeated until RPCS3 killed
+          # the RSX thread with "Dead FIFO commands queue state".
+          #
+          # v3 already proved that consuming this exact invalid destination blit
+          # lets Ascension pass the scene. Unlike v3/v5, v8 changes ONLY this
+          # title-scoped destination failure. Source validation and every valid
+          # blit remain on the modern upstream path.
+          old = '''\t\t\tif (!dst_address)
+          \t\t\t{
+          \t\t\t\trsx_log.error("NV3089_IMAGE_IN_SIZE: Unmapped dst_address (dst_offset=0x%x, dst_dma=0x%x)", dst_offset, dst_dma);
+          \t\t\t\tRSX(ctx)->recover_fifo();
+          \t\t\t\treturn { false, src_info, dst_info };
+          \t\t\t}
+          '''
+          new = '''\t\t\tif (!dst_address)
+          \t\t\t{
+          \t\t\t\trsx_log.error("NV3089_IMAGE_IN_SIZE: Unmapped dst_address (dst_offset=0x%x, dst_dma=0x%x)", dst_offset, dst_dma);
+          #ifdef RPCS3_IOS
+          \t\t\t\tif (Emu.GetTitleID() == "BCUS98232" && dst_dma == CELL_GCM_CONTEXT_DMA_MEMORY_FRAME_BUFFER)
+          \t\t\t\t{
+          \t\t\t\t\trsx_log.error("PsTJon v8: discarded invalid Ascension local-memory destination blit without FIFO recovery");
+          \t\t\t\t\treturn { false, src_info, dst_info };
+          \t\t\t\t}
+          #endif
+          \t\t\t\tRSX(ctx)->recover_fifo();
+          \t\t\t\treturn { false, src_info, dst_info };
+          \t\t\t}
+          '''
+          if old not in s:
+              raise SystemExit("NV3089 unmapped destination recovery pattern not found")
           p.write_text(s.replace(old, new, 1))
 
           # Memory pressure: on unified-memory iOS, the generic desktop heuristic
@@ -344,9 +380,10 @@ jobs:
           cd rpcs3-src
           python3 rpcs3/ios/tests/run-vk-image-pool-tests.py
           python3 rpcs3/ios/tests/run-vk-memory-pressure-tests.py
-          grep -q 'PsTJon v7 Ascension policy' rpcs3/Emu/System.cpp
+          grep -q 'PsTJon v8 Ascension policy' rpcs3/Emu/System.cpp
           grep -q 'pstjon_ios_haptic_pulse' rpcs3/ios/RPCS3IOSPlatform.mm
           grep -q 'dst_required64' rpcs3/Emu/RSX/NV47/HW/nv3089.cpp
+          grep -q 'PsTJon v8: discarded invalid Ascension local-memory destination blit without FIFO recovery' rpcs3/Emu/RSX/NV47/HW/nv3089.cpp
           grep -q 'vmm_load >= 120.f' rpcs3/Emu/RSX/VK/VKResourceManager.cpp
 
       - name: Fetch MoltenVK
@@ -463,7 +500,7 @@ jobs:
       - name: Build report
         run: |
           {
-            echo "PsTJon v7 - Ascension crash memory audio haptics"
+            echo "PsTJon v8 - Ascension destination FIFO containment audio haptics"
             echo "RPCS3 ios-port: $RPCS3_IOS_SHA"
             echo "Shell bundle id: com.xitrix.RPCS3"
             echo "MoltenVK: $MOLTENVK_VERSION"
@@ -474,7 +511,7 @@ jobs:
 
       - uses: actions/upload-artifact@v4
         with:
-          name: PsTJon-v7-IPA
+          name: PsTJon-v8-IPA
           path: |
             PsTJon.ipa
             PsTJon-build.txt
