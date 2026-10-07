@@ -122,7 +122,7 @@ diff --git a/src/kosmickrisp/vulkan/kk_bo.c b/src/kosmickrisp/vulkan/kk_bo.c
  
     *addr = (void *)dst_addr;
  #endif /* DETECT_OS_APPLE */
-@@ -130,20 +146,21 @@
+@@ -130,21 +146,22 @@
  VkResult
  kk_bo_unmap(struct kk_device *dev, struct kk_bo *bo, void *addr, bool reserved)
  {
