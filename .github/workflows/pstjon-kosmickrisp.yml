@@ -70,7 +70,7 @@ jobs:
           python3 -m venv "$GITHUB_WORKSPACE/venv"
           source "$GITHUB_WORKSPACE/venv/bin/activate"
           python -m pip install --upgrade pip
-          python -m pip install "meson==\${MESON_VERSION}" mako packaging pyyaml
+          python -m pip install "meson==${MESON_VERSION}" mako packaging pyyaml
 
           LLVM_PREFIX="$(brew --prefix "$LLVM_FORMULA")"
           echo "$LLVM_PREFIX/bin" >> "$GITHUB_PATH"
