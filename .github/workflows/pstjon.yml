@@ -122,17 +122,17 @@ jobs:
           python3 rpcs3/ios/tests/run-vk-image-pool-tests.py
           python3 rpcs3/ios/tests/run-vk-memory-pressure-tests.py
 
-      - name: Apply PsTJon v13 Ascension local-VRAM guard, precise GET and performance
+      - name: Apply PsTJon v14 Ascension symmetric copy-cascade guard and precise GET
         run: |
           set -euxo pipefail
           python3 - <<'PY'
           from pathlib import Path
 
-          # v12 proved precise FIFO GET is required: it passed the first cutscene
-          # and several minutes of gameplay with no FIFO desync. Preserve it.
-          # The remaining crash is a separate, measured local-VRAM overflow:
-          # Ascension allocates 0x0f900000 local bytes, then its failing
-          # CopyLocalMemory path emits 1024x1024 ARGB blits that cross that end.
+          # v12 is the known-good cutscene baseline: precise FIFO GET plus
+          # Accurate RSX reservation access enabled. v13 disabled accurate RSX
+          # reservations while testing performance and regressed before the next
+          # cutscene, so v14 restores v12 accuracy exactly. The remaining
+          # CopyLocalMemory failure is handled below without changing FIFO policy.
           p = Path("rpcs3-src/rpcs3/Emu/System.cpp")
           s = p.read_text()
           old = '''\t\t\t// Force audio provider
@@ -146,13 +146,13 @@ jobs:
           \t\t\t\tconst bool had_accurate_rsx_res = g_cfg.core.rsx_accurate_res_access.get();
           \t\t\t\tg_cfg.video.force_cpu_blit_processing.set(false);
           \t\t\t\tg_cfg.video.disable_async_host_memory_manager.set(false);
-          \t\t\t\tg_cfg.core.rsx_accurate_res_access.set(false);
+          \t\t\t\tg_cfg.core.rsx_accurate_res_access.set(true);
           \t\t\t\tg_cfg.core.rsx_fifo_accuracy.set(rsx_fifo_mode::atomic_ordered);
           \t\t\t\tg_cfg.ios_experimental.fifo_cache_size.set(ios_fifo_cache_size::_1_kib);
           \t\t\t\tg_cfg.ios_experimental.fifo_idle_mode.set(ios_fifo_idle_mode::yield);
           \t\t\t\tg_cfg.ios_experimental.deferred_get_publishing.set(ios_experimental_mode::disabled);
           \t\t\t\tg_cfg.video.driver_wakeup_delay.set(0);
-          \t\t\t\tsys_log.notice("PsTJon v13 Ascension precise-GET/performance policy: CPU Blit %d->0, Async Memory Manager %d->active, Accurate RSX reservation %d->0, Ordered & Atomic, FIFO 1KiB/yield, deferred GET off, wake %u->0",
+          \t\t\t\tsys_log.notice("PsTJon v14 Ascension v12-accuracy + precise-GET policy: CPU Blit %d->0, Async Memory Manager %d->active, Accurate RSX reservation %d->1, Ordered & Atomic, FIFO 1KiB/yield, deferred GET off, wake %u->0",
           \t\t\t\t\thad_cpu_blit, had_sync_memory, had_accurate_rsx_res, had_wakeup_delay);
           \t\t\t}
           #endif
@@ -163,7 +163,7 @@ jobs:
               raise SystemExit("System.cpp Ascension policy insertion pattern not found")
           p.write_text(s.replace(old, new, 1))
 
-          # v12 precise-GET fix retained in v13: v9/v10/v11 all ran 1 KiB/yield/deferred-off,
+          # v12 precise-GET fix retained in v14: v9/v10/v11 all ran 1 KiB/yield/deferred-off,
           # so read-ahead size was not the distinguishing factor. The guest-visible
           # GET still used the prefetched cache frontier whenever cache data existed.
           # For BCUS98232 only, publish the actually executed FIFO position instead.
@@ -225,13 +225,17 @@ jobs:
               raise SystemExit("RSXFIFO.cpp constructor policy anchor not found")
           p.write_text(s.replace(old, new, 1))
 
-          # v13 crash guard: do not resurrect the broad v7/v8 range filter.
-          # Guard only the exact pathological 4 MiB local-copy signature observed
-          # in the v12 log. The game allocates 0x0f900000 local bytes; the first
-          # fatal command starts at 0x0f729180 with 4096-byte pitch and 1024x1024
-          # ARGB footprint, reaching the unmapped 0xcf900000 boundary. Consuming
-          # only these impossible commands avoids recover_fifo() and leaves all
-          # normal blits, source validation and cutscene traffic untouched.
+          # v14 crash containment, derived from the v13 log:
+          # v13 caught destination overflow, but only after get_address(dst, 1)
+          # had already emitted an error for every invalid command. More
+          # importantly, returning before source validation let the same malformed
+          # 4 MiB CopyLocalMemory cascade advance until src_offset=0xffdb5e00,
+          # where upstream recover_fifo() killed the RSX thread. Detect the exact
+          # 1024x1024 ARGB local-to-local block-copy signature BEFORE either
+          # get_address() call. Once an out-of-range member starts the cascade,
+          # consume subsequent members of that same contiguous signature until a
+          # different transfer signature appears. This also avoids tens of
+          # thousands of Local RSX offset log entries.
           p = Path("rpcs3-src/rpcs3/Emu/RSX/NV47/HW/nv3089.cpp")
           s = p.read_text()
           inc = '#include "Emu/RSX/Utils/image_utils.hpp"\n'
@@ -251,31 +255,61 @@ jobs:
           \t\t\t}
           '''
           new = '''\t\t\tu32 src_address = 0;
-          \t\t\tconst u32 dst_address = get_address(dst_offset, dst_dma, 1); // TODO: Add size
 
           #ifdef RPCS3_IOS
-          \t\t\tif (Emu.GetTitleID() == "BCUS98232" &&
+          \t\t\tstatic bool s_ascension_bad_copy_cascade = false;
+          \t\t\tstatic u32 s_ascension_bad_copy_count = 0;
+          \t\t\tconst bool ascension_copy_signature =
+          \t\t\t\tEmu.GetTitleID() == "BCUS98232" &&
+          \t\t\t\tsrc_dma == CELL_GCM_CONTEXT_DMA_MEMORY_FRAME_BUFFER &&
           \t\t\t\tdst_dma == CELL_GCM_CONTEXT_DMA_MEMORY_FRAME_BUFFER &&
+          \t\t\t\tis_block_transfer &&
           \t\t\t\tin_w == 1024 && in_h == 1024 &&
-          \t\t\t\tout_pitch == 4096 && out_bpp == 4)
+          \t\t\t\tclip_w == 1024 && clip_h == 1024 &&
+          \t\t\t\tin_pitch == 4096 && out_pitch == 4096 &&
+          \t\t\t\tin_bpp == 4 && out_bpp == 4;
+
+          \t\t\tif (ascension_copy_signature)
           \t\t\t{
           \t\t\t\tconstexpr u64 ascension_local_size = 0x0f900000ull;
+          \t\t\t\tconstexpr u64 ascension_copy_bytes = 0x00400000ull;
+          \t\t\t\tconst u64 src_begin = static_cast<u64>(src_offset);
           \t\t\t\tconst u64 dst_begin = static_cast<u64>(dst_offset) + out_offset;
-          \t\t\t\tconst u64 dst_bytes =
-          \t\t\t\t\tstatic_cast<u64>(out_pitch) * (clip_h ? clip_h - 1 : 0) +
-          \t\t\t\t\tstatic_cast<u64>(clip_w) * out_bpp;
-          \t\t\t\tif (dst_bytes && (dst_begin >= ascension_local_size || dst_bytes > ascension_local_size - dst_begin))
+          \t\t\t\tconst bool src_oob =
+          \t\t\t\t\tsrc_begin >= ascension_local_size ||
+          \t\t\t\t\tascension_copy_bytes > ascension_local_size - src_begin;
+          \t\t\t\tconst bool dst_oob =
+          \t\t\t\t\tdst_begin >= ascension_local_size ||
+          \t\t\t\t\tascension_copy_bytes > ascension_local_size - dst_begin;
+
+          \t\t\t\tif (s_ascension_bad_copy_cascade || src_oob || dst_oob)
           \t\t\t\t{
-          \t\t\t\t\tstatic u32 s_ignored_oob_blits = 0;
-          \t\t\t\t\tconst u32 ignored = ++s_ignored_oob_blits;
-          \t\t\t\t\tif (ignored <= 4 || !(ignored & 63))
+          \t\t\t\t\tif (!s_ascension_bad_copy_cascade)
           \t\t\t\t\t{
-          \t\t\t\t\t\trsx_log.error("PsTJon v13: consumed Ascension OOB local blit #%u dst=0x%x", ignored, dst_offset);
+          \t\t\t\t\t\ts_ascension_bad_copy_cascade = true;
+          \t\t\t\t\t\ts_ascension_bad_copy_count = 0;
+          \t\t\t\t\t\trsx_log.error("PsTJon v14: entering Ascension malformed local-copy cascade src=0x%x dst=0x%x src_oob=%d dst_oob=%d",
+          \t\t\t\t\t\t\tsrc_offset, dst_offset, src_oob, dst_oob);
+          \t\t\t\t\t}
+
+          \t\t\t\t\tconst u32 ignored = ++s_ascension_bad_copy_count;
+          \t\t\t\t\tif (ignored <= 4 || !(ignored & 1023))
+          \t\t\t\t\t{
+          \t\t\t\t\t\trsx_log.error("PsTJon v14: consumed malformed Ascension local copy #%u src=0x%x dst=0x%x",
+          \t\t\t\t\t\t\tignored, src_offset, dst_offset);
           \t\t\t\t\t}
           \t\t\t\t\treturn { false, src_info, dst_info };
           \t\t\t\t}
           \t\t\t}
+          \t\t\telse if (s_ascension_bad_copy_cascade)
+          \t\t\t{
+          \t\t\t\trsx_log.notice("PsTJon v14: Ascension malformed local-copy cascade ended after %u commands", s_ascension_bad_copy_count);
+          \t\t\t\ts_ascension_bad_copy_cascade = false;
+          \t\t\t\ts_ascension_bad_copy_count = 0;
+          \t\t\t}
           #endif
+
+          \t\t\tconst u32 dst_address = get_address(dst_offset, dst_dma, 1); // TODO: Add size
 
           \t\t\tif (!dst_address)
           \t\t\t{
@@ -383,7 +417,7 @@ jobs:
           \t\tconst u16 previous = s_last_feedback[device->player_id].exchange(packed, std::memory_order_relaxed);
           \t\tif (previous != packed && (previous != 0 || packed != 0))
           \t\t{
-          \t\t\tios_pad_log.notice("PsTJon v13 rumble p%u: large=%u small=%u", device->player_id + 1, large_motor, small_motor);
+          \t\t\tios_pad_log.notice("PsTJon v14 rumble p%u: large=%u small=%u", device->player_id + 1, large_motor, small_motor);
           \t\t\tif (device->player_id == 0 && packed != 0 && Emu.GetTitleID() == "BCUS98232")
           \t\t\t{
           \t\t\t\tpstjon_ios_haptic_pulse(large_motor, small_motor);
@@ -433,8 +467,8 @@ jobs:
           cd rpcs3-src
           python3 rpcs3/ios/tests/run-vk-image-pool-tests.py
           python3 rpcs3/ios/tests/run-vk-memory-pressure-tests.py
-          grep -q 'PsTJon v13 Ascension precise-GET/performance policy' rpcs3/Emu/System.cpp
-          grep -q 'rsx_accurate_res_access.set(false)' rpcs3/Emu/System.cpp
+          grep -q 'PsTJon v14 Ascension v12-accuracy + precise-GET policy' rpcs3/Emu/System.cpp
+          grep -q 'rsx_accurate_res_access.set(true)' rpcs3/Emu/System.cpp
           grep -q 'fifo_cache_size.set(ios_fifo_cache_size::_1_kib)' rpcs3/Emu/System.cpp
           grep -q 'fifo_idle_mode.set(ios_fifo_idle_mode::yield)' rpcs3/Emu/System.cpp
           grep -q 'deferred_get_publishing.set(ios_experimental_mode::disabled)' rpcs3/Emu/System.cpp
@@ -446,8 +480,11 @@ jobs:
           grep -q 'pstjon_ios_haptic_pulse' rpcs3/ios/RPCS3IOSPlatform.mm
           grep -q 'vmm_load >= 120.f' rpcs3/Emu/RSX/VK/VKResourceManager.cpp
           grep -q 'constexpr u64 ascension_local_size = 0x0f900000ull' rpcs3/Emu/RSX/NV47/HW/nv3089.cpp
-          grep -q 'PsTJon v13: consumed Ascension OOB local blit' rpcs3/Emu/RSX/NV47/HW/nv3089.cpp
-          ! grep -E -q 'PsTJon v(3|4|5|7|8)|discarded invalid Ascension|dst_required64' rpcs3/Emu/RSX/NV47/HW/nv3089.cpp
+          grep -q 'constexpr u64 ascension_copy_bytes = 0x00400000ull' rpcs3/Emu/RSX/NV47/HW/nv3089.cpp
+          grep -q 's_ascension_bad_copy_cascade' rpcs3/Emu/RSX/NV47/HW/nv3089.cpp
+          grep -q 'PsTJon v14: entering Ascension malformed local-copy cascade' rpcs3/Emu/RSX/NV47/HW/nv3089.cpp
+          grep -q 'const u32 dst_address = get_address' rpcs3/Emu/RSX/NV47/HW/nv3089.cpp
+          ! grep -E -q 'PsTJon v(3|4|5|7|8|13): consumed|discarded invalid Ascension|dst_required64' rpcs3/Emu/RSX/NV47/HW/nv3089.cpp
 
       - name: Fetch MoltenVK
         run: |
@@ -563,7 +600,7 @@ jobs:
       - name: Build report
         run: |
           {
-            echo "PsTJon v13 - Ascension precise GET + local VRAM overflow guard + faster reservations"
+            echo "PsTJon v14 - Ascension v12 accuracy + symmetric local-copy cascade containment"
             echo "RPCS3 ios-port: $RPCS3_IOS_SHA"
             echo "Shell bundle id: com.xitrix.RPCS3"
             echo "MoltenVK: $MOLTENVK_VERSION"
@@ -574,7 +611,7 @@ jobs:
 
       - uses: actions/upload-artifact@v4
         with:
-          name: PsTJon-v13-IPA
+          name: PsTJon-v14-IPA
           path: |
             PsTJon.ipa
             PsTJon-build.txt
