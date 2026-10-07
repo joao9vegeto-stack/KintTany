@@ -1,0 +1,62 @@
+diff --git a/meson.options b/meson.options
+index 1f08d708e2f..d3f9d4a46a1 100644
+--- a/meson.options
++++ b/meson.options
+@@ -12,7 +12,7 @@ option(
+   type : 'array',
+   value : ['auto'],
+   choices : [
+-    'auto', 'x11', 'wayland', 'haiku', 'android', 'windows', 'macos',
++    'auto', 'x11', 'wayland', 'haiku', 'android', 'windows', 'macos', 'ios',
+   ],
+   description : 'window systems to support. If this is set to `auto`, all ' +
+                 'platforms applicable will be enabled.'
+diff --git a/meson.build b/meson.build
+index 570e329120d..1386381395c 100644
+--- a/meson.build
++++ b/meson.build
+@@ -494,6 +494,12 @@ with_platform_wayland = _platforms.contains('wayland')
+ with_platform_haiku = _platforms.contains('haiku')
+ with_platform_windows = _platforms.contains('windows')
+ with_platform_macos = _platforms.contains('macos')
++with_platform_ios = _platforms.contains('ios')
++
++if with_platform_ios and host_machine.system() != 'darwin'
++  error('The iOS platform requires a Darwin target toolchain')
++endif
++
+ 
+ with_gfxstream_emulated_android = with_gfxstream_vk and with_platform_android and host_machine.system() == 'linux'
+ if with_gfxstream_emulated_android
+diff --git a/src/kosmickrisp/bridge/mtl_device.m b/src/kosmickrisp/bridge/mtl_device.m
+index 85f6b53eb84..9d61f47de76 100644
+--- a/src/kosmickrisp/bridge/mtl_device.m
++++ b/src/kosmickrisp/bridge/mtl_device.m
+@@ -12,6 +12,7 @@
+ #include <Metal/MTLCaptureManager.h>
+ #include <Metal/MTLDevice.h>
++#include <TargetConditionals.h>
+ 
+ /* Device creation */
+ mtl_device *
+@@ -20,6 +21,13 @@ mtl_device_create()
+    mtl_device *device = nil;
+ 
+    @autoreleasepool {
++#if TARGET_OS_IOS
++      id<MTLDevice> system_device = MTLCreateSystemDefaultDevice();
++      if (system_device && [system_device supportsFamily:MTLGPUFamilyMetal4]) {
++         device = (mtl_device *)[system_device retain];
++      }
++#else
+       NSArray<id<MTLDevice>> *devs = [MTLCopyAllDevices() autorelease];
+       uint32_t device_count = [devs count];
+       
+@@ -29,6 +37,7 @@ mtl_device_create()
+             break;
+          }
+       }
++#endif
+    }
+ 
+    return device;
