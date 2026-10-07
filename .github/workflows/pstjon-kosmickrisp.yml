@@ -1,0 +1,201 @@
+name: PsTJon KosmicKrisp M1
+
+on:
+  push:
+    branches: [PsTJon-KosmicKrisp]
+    paths:
+      - ".github/workflows/pstjon-kosmickrisp.yml"
+  workflow_dispatch:
+
+concurrency:
+  group: pstjon-kosmickrisp-m1
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  kosmickrisp-macos-smoke:
+    name: M1 - KosmicKrisp macOS arm64
+    runs-on: macos-26
+    timeout-minutes: 180
+    env:
+      MESA_KOSMICKRISP_SHA: "bfe063f723d436e5cdef8a98f058d4e44a64810c"
+      MESA_PRIMARY_URL: "https://gitlab.freedesktop.org/mesa/mesa.git"
+      MESA_MIRROR_URL: "https://github.com/Kenji-NX/mesa.git"
+      MESON_VERSION: "1.9.1"
+      LLVM_FORMULA: "llvm@20"
+
+    steps:
+      - name: Checkout PsTJon KosmicKrisp control branch
+        uses: actions/checkout@v4
+
+      - name: Verify immutable PsTJon v13 ancestry
+        run: |
+          set -euxo pipefail
+          test "$(git rev-parse HEAD^)" = "f0944f0957bae61793679e5b3330ccfd2b53d005"
+          git diff --exit-code f0944f0957bae61793679e5b3330ccfd2b53d005 -- .github/workflows/pstjon.yml
+          echo "Branch head: $(git rev-parse HEAD)"
+          echo "Baseline v13: f0944f0957bae61793679e5b3330ccfd2b53d005"
+
+      - name: Verify Apple Silicon and Metal 4 host
+        run: |
+          set -euxo pipefail
+          test "$(uname -m)" = "arm64"
+          sw_vers
+          uname -a
+          xcodebuild -version
+          xcrun --sdk macosx --show-sdk-version
+          system_profiler SPDisplaysDataType || true
+
+      - name: Install pinned build prerequisites
+        run: |
+          set -euxo pipefail
+          brew update
+          for pkg in cmake pkg-config libclc "$LLVM_FORMULA" spirv-tools vulkan-tools; do
+            brew list "$pkg" >/dev/null 2>&1 || brew install "$pkg"
+          done
+
+          if brew info spirv-llvm-translator@20 >/dev/null 2>&1; then
+            brew list spirv-llvm-translator@20 >/dev/null 2>&1 || brew install spirv-llvm-translator@20
+            echo "SPIRV_LLVM_TRANSLATOR_FORMULA=spirv-llvm-translator@20" >> "$GITHUB_ENV"
+          else
+            brew list spirv-llvm-translator >/dev/null 2>&1 || brew install spirv-llvm-translator
+            echo "SPIRV_LLVM_TRANSLATOR_FORMULA=spirv-llvm-translator" >> "$GITHUB_ENV"
+          fi
+
+          python3 -m venv "$GITHUB_WORKSPACE/venv"
+          source "$GITHUB_WORKSPACE/venv/bin/activate"
+          python -m pip install --upgrade pip
+          python -m pip install "meson==\${MESON_VERSION}" mako packaging pyyaml
+
+          LLVM_PREFIX="$(brew --prefix "$LLVM_FORMULA")"
+          echo "$LLVM_PREFIX/bin" >> "$GITHUB_PATH"
+          echo "LDFLAGS=-L$LLVM_PREFIX/lib" >> "$GITHUB_ENV"
+          echo "CPPFLAGS=-I$LLVM_PREFIX/include" >> "$GITHUB_ENV"
+          echo "PKG_CONFIG_PATH=$LLVM_PREFIX/lib/pkgconfig:$(brew --prefix libclc)/lib/pkgconfig:$(brew --prefix spirv-tools)/lib/pkgconfig" >> "$GITHUB_ENV"
+
+      - name: Fetch exact Mesa KosmicKrisp revision
+        run: |
+          set -euxo pipefail
+          rm -rf mesa-src
+          if git clone --filter=blob:none --no-checkout "$MESA_PRIMARY_URL" mesa-src; then
+            echo "official GitLab" | tee mesa-source.txt
+          else
+            rm -rf mesa-src
+            git clone --filter=blob:none --no-checkout "$MESA_MIRROR_URL" mesa-src
+            echo "synchronized GitHub mirror fallback" | tee mesa-source.txt
+          fi
+          cd mesa-src
+          git fetch --depth=1 origin "$MESA_KOSMICKRISP_SHA"
+          git checkout --detach "$MESA_KOSMICKRISP_SHA"
+          test "$(git rev-parse HEAD)" = "$MESA_KOSMICKRISP_SHA"
+          git log -1 --format='%H%n%ci%n%s'
+          grep -q "KosmicKrisp" docs/drivers/kosmickrisp.rst
+          grep -q "Metal 4" docs/drivers/kosmickrisp.rst
+          grep -q "No iOS support is present as of now" docs/drivers/kosmickrisp.rst
+
+      - name: Record dependency versions
+        run: |
+          set -euxo pipefail
+          source "$GITHUB_WORKSPACE/venv/bin/activate"
+          {
+            echo "M1 PsTJon / KosmicKrisp macOS build manifest"
+            echo "KintTany commit: $GITHUB_SHA"
+            echo "PsTJon v13 baseline: f0944f0957bae61793679e5b3330ccfd2b53d005"
+            echo "Mesa/KosmicKrisp commit: $MESA_KOSMICKRISP_SHA"
+            echo "Mesa source: $(cat mesa-source.txt)"
+            echo "Host arch: $(uname -m)"
+            echo "macOS: $(sw_vers -productVersion) ($(sw_vers -buildVersion))"
+            echo "Xcode: $(xcodebuild -version | tr '\n' ' ')"
+            echo "SDK: $(xcrun --sdk macosx --show-sdk-version)"
+            echo "Meson: $(meson --version)"
+            echo "CMake: $(cmake --version | head -1)"
+            echo "LLVM: $(llvm-config --version)"
+            echo "SPIR-V LLVM translator formula: \${SPIRV_LLVM_TRANSLATOR_FORMULA}"
+            echo "SPIR-V tools: $(spirv-as --version | head -1)"
+            echo "Vulkan tools: $(vulkaninfo --version 2>&1 | head -1 || true)"
+          } | tee M1-build.txt
+
+      - name: Configure KosmicKrisp exactly as Mesa documents
+        run: |
+          set -euxo pipefail
+          source "$GITHUB_WORKSPACE/venv/bin/activate"
+          meson setup build mesa-src \
+            --buildtype=debug \
+            -Dplatforms=macos \
+            -Dvulkan-drivers=kosmickrisp \
+            -Dgallium-drivers= \
+            -Dopengl=false \
+            -Dzstd=disabled \
+            --prefer-static
+
+      - name: Build KosmicKrisp
+        run: |
+          set -euxo pipefail
+          source "$GITHUB_WORKSPACE/venv/bin/activate"
+          meson compile -C build
+          find build -type f \( -name '*kosmickrisp*' -o -name 'libvulkan_*.dylib' -o -name '*icd*.json' \) -print | sort | tee M1-products.txt
+          test -n "$(find build -type f -name 'libvulkan_kosmickrisp*.dylib' -print -quit)"
+
+      - name: Install to isolated staging root
+        run: |
+          set -euxo pipefail
+          source "$GITHUB_WORKSPACE/venv/bin/activate"
+          rm -rf install-root
+          meson install -C build --destdir "$GITHUB_WORKSPACE/install-root"
+          find install-root -type f | sort | tee M1-install-files.txt
+          find install-root -type f -name '*kosmickrisp*.dylib' -exec file {} \; | tee M1-file.txt
+          grep -q 'arm64' M1-file.txt
+
+      - name: Vulkan smoke test on Apple GPU
+        run: |
+          set -euxo pipefail
+          ICD_JSON="$(find build install-root -type f \( -name '*kosmickrisp*icd*.json' -o -name '*kosmickrisp*.json' \) -print -quit)"
+          test -n "$ICD_JSON"
+          echo "KosmicKrisp ICD: $ICD_JSON" | tee M1-icd.txt
+          cat "$ICD_JSON" | tee M1-icd-json.txt
+
+          export VK_DRIVER_FILES="$PWD/$ICD_JSON"
+          export VK_ICD_FILENAMES="$PWD/$ICD_JSON"
+          vulkaninfo --summary 2>&1 | tee M1-vulkaninfo.txt
+
+          grep -E -qi 'Kosmic|Krisp|Apple' M1-vulkaninfo.txt
+          ! grep -E -qi 'ERROR_INCOMPATIBLE_DRIVER|vkCreateInstance failed|No Vulkan devices found' M1-vulkaninfo.txt
+
+      - name: Capture M1 capability snapshot
+        if: success()
+        run: |
+          set -euxo pipefail
+          ICD_JSON="$(find build install-root -type f \( -name '*kosmickrisp*icd*.json' -o -name '*kosmickrisp*.json' \) -print -quit)"
+          export VK_DRIVER_FILES="$PWD/$ICD_JSON"
+          export VK_ICD_FILENAMES="$PWD/$ICD_JSON"
+          vulkaninfo > M1-vulkaninfo-full.txt 2>&1
+          {
+            echo
+            echo "Build result: PASS"
+            echo "Scope: M1 only; no RPCS3/iOS integration was performed."
+            echo "Next gate: M2 cross-compile arm64-apple-ios without WSI."
+          } >> M1-build.txt
+          shasum -a 256 "$(find build -type f -name 'libvulkan_kosmickrisp*.dylib' -print -quit)" | tee M1-sha256.txt
+
+      - name: Upload M1 evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: PsTJon-KK-m01-macos
+          path: |
+            M1-build.txt
+            M1-products.txt
+            M1-install-files.txt
+            M1-file.txt
+            M1-icd.txt
+            M1-icd-json.txt
+            M1-vulkaninfo.txt
+            M1-vulkaninfo-full.txt
+            M1-sha256.txt
+            mesa-source.txt
+            build/meson-logs/
+            install-root/
+          if-no-files-found: warn
+          compression-level: 0
