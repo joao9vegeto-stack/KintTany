@@ -1,0 +1,29 @@
+diff --git a/src/vulkan/meson.build b/src/vulkan/meson.build
+--- a/src/vulkan/meson.build
++++ b/src/vulkan/meson.build
+@@ -68,11 +68,13 @@ if with_platform_windows
+   vulkan_wsi_list += '-DVK_USE_PLATFORM_WIN32_KHR'
+ endif
+ if with_platform_macos
+   vulkan_wsi_list += '-DVK_USE_PLATFORM_MACOS_MVK'
++endif
++if with_platform_macos or with_platform_ios
+   vulkan_wsi_list += '-DVK_USE_PLATFORM_METAL_EXT'
+   vulkan_wsi_deps += dependency(
+     'appleframeworks',
+     modules : ['QuartzCore', 'Metal']
+   )
+ endif
+ 
+diff --git a/src/vulkan/wsi/meson.build b/src/vulkan/wsi/meson.build
+--- a/src/vulkan/wsi/meson.build
++++ b/src/vulkan/wsi/meson.build
+@@ -34,7 +34,7 @@ else
+   files_vulkan_wsi += files('wsi_common_headless.c')
+ endif
+ 
+-if with_platform_macos
++if with_platform_macos or with_platform_ios
+   files_vulkan_wsi += files('wsi_common_metal.c', 'wsi_common_metal_layer.m')
+ endif
+ 
