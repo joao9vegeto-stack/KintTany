@@ -17,7 +17,7 @@ diff --git a/src/kosmickrisp/meson.build b/src/kosmickrisp/meson.build
 +    files('kk_ios_smoke.m'),
 +    include_directories : [inc_include, inc_src],
 +    link_whole : [libkk],
-+    dependencies : [kk_ios_smoke_frameworks],
++    dependencies : [idep_vulkan_wsi_defines, kk_ios_smoke_frameworks],
 +    objc_args : ['-Wno-unguarded-availability-new'],
 +    link_args : ['-Wl,-undefined,dynamic_lookup'],
 +    build_by_default : false,
