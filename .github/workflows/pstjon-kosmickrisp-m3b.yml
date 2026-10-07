@@ -1,0 +1,409 @@
+name: PsTJon KosmicKrisp M3B
+
+on:
+  push:
+    branches: [PsTJon-KosmicKrisp]
+    paths:
+      - ".github/workflows/pstjon-kosmickrisp-m3b.yml"
+      - "pstjon-kosmickrisp/patches/0001-kosmickrisp-ios-m2.patch"
+      - "pstjon-kosmickrisp/patches/0002-kosmickrisp-ios-m3-metal-wsi.patch"
+      - "pstjon-kosmickrisp/patches/0003-kosmickrisp-ios-m3b-smoke-target.patch"
+      - "pstjon-kosmickrisp/m3b/**"
+  workflow_dispatch:
+
+concurrency:
+  group: pstjon-kosmickrisp-m3b
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  kosmickrisp-ios-metal-wsi-smoke:
+    name: M3B - KosmicKrisp iOS Metal WSI device smoke IPA
+    runs-on: macos-26
+    timeout-minutes: 180
+    env:
+      MESA_KOSMICKRISP_SHA: "bfe063f723d436e5cdef8a98f058d4e44a64810c"
+      MESA_PRIMARY_URL: "https://gitlab.freedesktop.org/mesa/mesa.git"
+      MESA_MIRROR_URL: "https://github.com/Kenji-NX/mesa.git"
+      MESON_VERSION: "1.9.1"
+      LLVM_FORMULA: "llvm@20"
+      SPIRV_LLVM_TRANSLATOR_SHA: "e328468fd329342f1f60c12fdd19cc0faaa88f32"
+      SPIRV_LLVM_TRANSLATOR_URL: "https://github.com/KhronosGroup/SPIRV-LLVM-Translator.git"
+      IOS_DEPLOYMENT_TARGET: "17.4"
+
+    steps:
+      - name: Checkout PsTJon KosmicKrisp branch
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Verify immutable PsTJon v13 ancestry
+        run: |
+          set -euxo pipefail
+          git cat-file -e f0944f0957bae61793679e5b3330ccfd2b53d005^{commit}
+          git merge-base --is-ancestor f0944f0957bae61793679e5b3330ccfd2b53d005 HEAD
+          git diff --exit-code f0944f0957bae61793679e5b3330ccfd2b53d005 HEAD -- .github/workflows/pstjon.yml
+          echo "M3 branch head: $(git rev-parse HEAD)"
+          echo "Immutable v13 baseline: f0944f0957bae61793679e5b3330ccfd2b53d005"
+
+      - name: Verify Xcode and iPhoneOS SDK
+        run: |
+          set -euxo pipefail
+          test "$(uname -m)" = "arm64"
+          xcodebuild -version
+          xcrun --sdk iphoneos --show-sdk-version
+          xcrun --sdk iphoneos --show-sdk-path
+          xcrun --sdk iphoneos clang --version
+
+      - name: Install reproducible host build prerequisites
+        run: |
+          set -euxo pipefail
+          brew update
+          for pkg in cmake pkg-config libclc "$LLVM_FORMULA" spirv-tools ninja; do
+            brew list "$pkg" >/dev/null 2>&1 || brew install "$pkg"
+          done
+
+          python3 -m venv "$GITHUB_WORKSPACE/venv"
+          source "$GITHUB_WORKSPACE/venv/bin/activate"
+          python -m pip install --upgrade pip
+          python -m pip install "meson==${MESON_VERSION}" mako packaging pyyaml
+
+          LLVM_PREFIX="$(brew --prefix "$LLVM_FORMULA")"
+          TRANSLATOR_PREFIX="$GITHUB_WORKSPACE/deps/spirv-llvm-translator-20"
+          rm -rf "$GITHUB_WORKSPACE/spirv-llvm-translator-src" "$GITHUB_WORKSPACE/spirv-llvm-translator-build" "$TRANSLATOR_PREFIX"
+
+          git clone --filter=blob:none --no-checkout "$SPIRV_LLVM_TRANSLATOR_URL" "$GITHUB_WORKSPACE/spirv-llvm-translator-src"
+          git -C "$GITHUB_WORKSPACE/spirv-llvm-translator-src" fetch --depth=1 origin "$SPIRV_LLVM_TRANSLATOR_SHA"
+          git -C "$GITHUB_WORKSPACE/spirv-llvm-translator-src" checkout --detach "$SPIRV_LLVM_TRANSLATOR_SHA"
+          test "$(git -C "$GITHUB_WORKSPACE/spirv-llvm-translator-src" rev-parse HEAD)" = "$SPIRV_LLVM_TRANSLATOR_SHA"
+
+          cmake -S "$GITHUB_WORKSPACE/spirv-llvm-translator-src" -B "$GITHUB_WORKSPACE/spirv-llvm-translator-build" -G Ninja \
+            -DCMAKE_BUILD_TYPE=Release \
+            -DCMAKE_INSTALL_PREFIX="$TRANSLATOR_PREFIX" \
+            -DLLVM_DIR="$LLVM_PREFIX/lib/cmake/llvm" \
+            -DLLVM_SPIRV_INCLUDE_TESTS=OFF \
+            -DBUILD_SHARED_LIBS=OFF \
+            -DLLVM_LINK_LLVM_DYLIB=OFF
+          cmake --build "$GITHUB_WORKSPACE/spirv-llvm-translator-build" --target LLVMSPIRVLib llvm-spirv -j3
+          cmake --install "$GITHUB_WORKSPACE/spirv-llvm-translator-build"
+
+          test -f "$TRANSLATOR_PREFIX/lib/libLLVMSPIRVLib.a"
+          test "$(PKG_CONFIG_PATH="$TRANSLATOR_PREFIX/lib/pkgconfig" pkg-config --modversion LLVMSPIRVLib)" = "20.1.0.0"
+
+          echo "$LLVM_PREFIX/bin" >> "$GITHUB_PATH"
+          echo "$TRANSLATOR_PREFIX/bin" >> "$GITHUB_PATH"
+          echo "HOST_LDFLAGS=-L$TRANSLATOR_PREFIX/lib -L$LLVM_PREFIX/lib" >> "$GITHUB_ENV"
+          echo "HOST_CPPFLAGS=-I$TRANSLATOR_PREFIX/include -I$LLVM_PREFIX/include" >> "$GITHUB_ENV"
+          echo "HOST_PKG_CONFIG_PATH=$TRANSLATOR_PREFIX/lib/pkgconfig:$LLVM_PREFIX/lib/pkgconfig:$(brew --prefix libclc)/lib/pkgconfig:$(brew --prefix spirv-tools)/lib/pkgconfig" >> "$GITHUB_ENV"
+
+      - name: Fetch exact Mesa and apply M2/M3A/M3B patches
+        run: |
+          set -euxo pipefail
+          rm -rf mesa-src
+          if git clone --filter=blob:none --no-checkout "$MESA_PRIMARY_URL" mesa-src; then
+            echo "official GitLab" | tee mesa-source.txt
+          else
+            rm -rf mesa-src
+            git clone --filter=blob:none --no-checkout "$MESA_MIRROR_URL" mesa-src
+            echo "synchronized GitHub mirror fallback" | tee mesa-source.txt
+          fi
+
+          git -C mesa-src fetch --depth=1 origin "$MESA_KOSMICKRISP_SHA"
+          git -C mesa-src checkout --detach "$MESA_KOSMICKRISP_SHA"
+          test "$(git -C mesa-src rev-parse HEAD)" = "$MESA_KOSMICKRISP_SHA"
+
+          for patch in             "$GITHUB_WORKSPACE/pstjon-kosmickrisp/patches/0001-kosmickrisp-ios-m2.patch"             "$GITHUB_WORKSPACE/pstjon-kosmickrisp/patches/0002-kosmickrisp-ios-m3-metal-wsi.patch"             "$GITHUB_WORKSPACE/pstjon-kosmickrisp/patches/0003-kosmickrisp-ios-m3b-smoke-target.patch"; do
+            git -C mesa-src apply --check "$patch"
+            git -C mesa-src apply "$patch"
+          done
+
+          cp "$GITHUB_WORKSPACE/pstjon-kosmickrisp/m3b/kk_ios_smoke.m"              "$GITHUB_WORKSPACE/mesa-src/src/kosmickrisp/kk_ios_smoke.m"
+          cat > "$GITHUB_WORKSPACE/mesa-src/src/kosmickrisp/kk_ios_smoke_build.h" <<EOF
+          #define KK_KINTTANY_SHA "$GITHUB_SHA"
+          #define KK_MESA_SHA "$MESA_KOSMICKRISP_SHA"
+          EOF
+
+          grep -q "'ios'" mesa-src/meson.options
+          grep -q "with_platform_ios" mesa-src/meson.build
+          grep -q "TARGET_OS_IOS" mesa-src/src/kosmickrisp/bridge/mtl_device.m
+          grep -q "with_platform_macos or with_platform_ios" mesa-src/src/vulkan/meson.build
+          grep -q "with_platform_macos or with_platform_ios" mesa-src/src/vulkan/wsi/meson.build
+          grep -q "kk-ios-smoke" mesa-src/src/kosmickrisp/meson.build
+          test -f mesa-src/src/kosmickrisp/kk_ios_smoke.m
+          git -C mesa-src diff --check
+          git -C mesa-src diff --stat | tee M3-patch-stat.txt
+          git -C mesa-src diff > M3-applied.patch
+
+      - name: Build native KosmicKrisp shader tools
+        run: |
+          set -euxo pipefail
+          source "$GITHUB_WORKSPACE/venv/bin/activate"
+          export LDFLAGS="$HOST_LDFLAGS"
+          export CPPFLAGS="$HOST_CPPFLAGS"
+          export PKG_CONFIG_PATH="$HOST_PKG_CONFIG_PATH"
+
+          rm -rf build-host host-tools
+          meson setup build-host mesa-src \
+            --buildtype=release \
+            -Dplatforms=macos \
+            -Dvulkan-drivers=kosmickrisp \
+            -Dgallium-drivers= \
+            -Dopengl=false \
+            -Dzstd=disabled \
+            -Dmesa-clc=enabled \
+            -Dprecomp-compiler=enabled \
+            --prefer-static
+
+          meson compile -C build-host mesa_clc vtn_bindgen2 kk_clc
+
+          mkdir -p host-tools/bin
+          cp build-host/src/compiler/clc/mesa_clc host-tools/bin/
+          cp build-host/src/compiler/spirv/vtn_bindgen2 host-tools/bin/
+          cp build-host/src/kosmickrisp/clc/kk_clc host-tools/bin/
+          chmod +x host-tools/bin/*
+          host-tools/bin/mesa_clc --help >/dev/null 2>&1 || true
+          file host-tools/bin/* | tee M3-host-tools.txt
+
+      - name: Create arm64-apple-ios cross toolchain
+        run: |
+          set -euxo pipefail
+          mkdir -p toolchain
+
+          cat > toolchain/ios-clang <<'EOF'
+          #!/bin/bash
+          set -euo pipefail
+          SDKROOT="$(xcrun --sdk iphoneos --show-sdk-path)"
+          exec xcrun --sdk iphoneos clang -target arm64-apple-ios17.4 -isysroot "$SDKROOT" "$@"
+          EOF
+
+          cat > toolchain/ios-clangxx <<'EOF'
+          #!/bin/bash
+          set -euo pipefail
+          SDKROOT="$(xcrun --sdk iphoneos --show-sdk-path)"
+          exec xcrun --sdk iphoneos clang++ -target arm64-apple-ios17.4 -isysroot "$SDKROOT" "$@"
+          EOF
+
+          cat > toolchain/ios-ar <<'EOF'
+          #!/bin/bash
+          set -euo pipefail
+          exec xcrun --sdk iphoneos ar "$@"
+          EOF
+
+          cat > toolchain/ios-strip <<'EOF'
+          #!/bin/bash
+          set -euo pipefail
+          exec xcrun --sdk iphoneos strip "$@"
+          EOF
+
+          chmod +x toolchain/*
+
+          cat > ios-arm64.cross <<EOF
+          [binaries]
+          c = '$GITHUB_WORKSPACE/toolchain/ios-clang'
+          cpp = '$GITHUB_WORKSPACE/toolchain/ios-clangxx'
+          objc = '$GITHUB_WORKSPACE/toolchain/ios-clang'
+          ar = '$GITHUB_WORKSPACE/toolchain/ios-ar'
+          strip = '$GITHUB_WORKSPACE/toolchain/ios-strip'
+
+          [host_machine]
+          system = 'darwin'
+          cpu_family = 'aarch64'
+          cpu = 'arm64'
+          endian = 'little'
+
+          [properties]
+          needs_exe_wrapper = true
+          EOF
+
+          cat ios-arm64.cross
+          "$GITHUB_WORKSPACE/toolchain/ios-clang" -dM -E -x c /dev/null | grep -E '__ENVIRONMENT_IPHONE_OS_VERSION_MIN_REQUIRED__|__arm64__' | tee M3-target-macros.txt
+
+      - name: Configure KosmicKrisp iOS Metal WSI
+        run: |
+          set -euxo pipefail
+          source "$GITHUB_WORKSPACE/venv/bin/activate"
+
+          unset LDFLAGS CPPFLAGS PKG_CONFIG_PATH
+          export PATH="$GITHUB_WORKSPACE/host-tools/bin:$PATH"
+
+          rm -rf build-ios
+          meson setup build-ios mesa-src \
+            --cross-file "$GITHUB_WORKSPACE/ios-arm64.cross" \
+            --buildtype=release \
+            --wrap-mode=nodownload \
+            -Dplatforms=ios \
+            -Dvulkan-drivers=kosmickrisp \
+            -Dgallium-drivers= \
+            -Dopengl=false \
+            -Dzstd=disabled \
+            -Dmesa-clc=system \
+            -Dprecomp-compiler=system \
+            -Dllvm=disabled \
+            -Dspirv-tools=disabled \
+            --prefer-static
+
+          grep -E "Host machine cpu family|Host machine system|Vulkan Drivers|Platforms|LLVM" build-ios/meson-logs/meson-log.txt | tail -80 | tee M3-config-summary.txt || true
+
+      - name: Build and validate M3B iPhone smoke executable
+        run: |
+          set -euxo pipefail
+          source "$GITHUB_WORKSPACE/venv/bin/activate"
+          export PATH="$GITHUB_WORKSPACE/host-tools/bin:$PATH"
+
+          meson compile -C build-ios kk-ios-smoke
+
+          SMOKE="$GITHUB_WORKSPACE/build-ios/src/kosmickrisp/kk-ios-smoke"
+          test -f "$SMOKE"
+          cp "$SMOKE" KosmicKrispM3B
+
+          file KosmicKrispM3B | tee M3B-file.txt
+          lipo -info KosmicKrispM3B | tee M3B-lipo.txt
+          grep -q "arm64" M3B-lipo.txt
+
+          xcrun vtool -show-build KosmicKrispM3B | tee M3B-build-version.txt
+          grep -E -qi "platform[[:space:]]+IOS|platform[[:space:]]+2" M3B-build-version.txt
+
+          nm -g KosmicKrispM3B > M3B-symbols.txt
+          grep -E "vk_icdGetInstanceProcAddr|kk_GetInstanceProcAddr" M3B-symbols.txt | tee M3B-vulkan-entrypoints.txt
+          grep -q "vk_icdGetInstanceProcAddr" M3B-vulkan-entrypoints.txt
+
+          otool -L KosmicKrispM3B | tee M3B-otool.txt
+          if grep -E -q "/opt/homebrew|/usr/local|MacOSX[.]sdk" M3B-otool.txt; then
+            echo "Unexpected host/macOS dependency in M3B executable" >&2
+            exit 1
+          fi
+
+          strings KosmicKrispM3B | grep -F "$GITHUB_SHA" | head -1 | tee M3B-embedded-build.txt
+          strings KosmicKrispM3B | grep -F "$MESA_KOSMICKRISP_SHA" | head -1 | tee -a M3B-embedded-build.txt
+
+      - name: Package ad-hoc M3B smoke IPA
+        run: |
+          set -euxo pipefail
+          rm -rf M3B-package
+          APP="$GITHUB_WORKSPACE/M3B-package/Payload/KosmicKrispM3B.app"
+          mkdir -p "$APP"
+
+          cp KosmicKrispM3B "$APP/KosmicKrispM3B"
+          chmod 755 "$APP/KosmicKrispM3B"
+
+          cat > "$APP/Info.plist" <<'EOF'
+          <?xml version="1.0" encoding="UTF-8"?>
+          <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+          <plist version="1.0">
+          <dict>
+            <key>CFBundleDevelopmentRegion</key><string>pt_BR</string>
+            <key>CFBundleDisplayName</key><string>KosmicKrisp M3B</string>
+            <key>CFBundleExecutable</key><string>KosmicKrispM3B</string>
+            <key>CFBundleIdentifier</key><string>com.joaopedro.pstjon.kosmickrisp.m3b</string>
+            <key>CFBundleInfoDictionaryVersion</key><string>6.0</string>
+            <key>CFBundleName</key><string>KosmicKrispM3B</string>
+            <key>CFBundlePackageType</key><string>APPL</string>
+            <key>CFBundleShortVersionString</key><string>0.3.2</string>
+            <key>CFBundleVersion</key><string>1</string>
+            <key>LSRequiresIPhoneOS</key><true/>
+            <key>MinimumOSVersion</key><string>17.4</string>
+            <key>UIDeviceFamily</key><array><integer>1</integer></array>
+            <key>UILaunchScreen</key><dict/>
+            <key>UIFileSharingEnabled</key><true/>
+            <key>LSSupportsOpeningDocumentsInPlace</key><true/>
+            <key>UIRequiresFullScreen</key><true/>
+            <key>UISupportedInterfaceOrientations</key>
+            <array>
+              <string>UIInterfaceOrientationPortrait</string>
+              <string>UIInterfaceOrientationLandscapeLeft</string>
+              <string>UIInterfaceOrientationLandscapeRight</string>
+            </array>
+          </dict>
+          </plist>
+          EOF
+
+          plutil -lint "$APP/Info.plist"
+          codesign --force --sign - --timestamp=none "$APP"
+          codesign --verify --deep --strict --verbose=2 "$APP"
+          codesign -d --entitlements :- "$APP" 2>&1 | tee M3B-entitlements.txt
+
+          (
+            cd "$GITHUB_WORKSPACE/M3B-package"
+            ditto -c -k --sequesterRsrc --keepParent Payload               "$GITHUB_WORKSPACE/PsTJon-KK-m03b-smoke.ipa"
+          )
+          ditto -c -k --sequesterRsrc --keepParent             PsTJon-KK-m03b-smoke.ipa PsTJon-KK-m03b-smoke-IPA.zip
+
+          unzip -l PsTJon-KK-m03b-smoke.ipa | tee M3B-ipa-contents.txt
+          test -n "$(unzip -l PsTJon-KK-m03b-smoke.ipa | grep 'Payload/KosmicKrispM3B.app/KosmicKrispM3B')"
+
+      - name: Write M3B manifest, capability gate and hashes
+        run: |
+          set -euxo pipefail
+          source "$GITHUB_WORKSPACE/venv/bin/activate"
+
+          {
+            echo "PsTJon / KosmicKrisp M3B"
+            echo "Scope: standalone real-iPhone Vulkan direct-ICD + VK_EXT_metal_surface + VK_KHR_swapchain smoke app."
+            echo "Not RPCS3 integration. Not an Ascension performance build."
+            echo "KintTany commit: $GITHUB_SHA"
+            echo "PsTJon v13 baseline: f0944f0957bae61793679e5b3330ccfd2b53d005"
+            echo "Mesa/KosmicKrisp commit: $MESA_KOSMICKRISP_SHA"
+            echo "SPIR-V LLVM Translator commit: $SPIRV_LLVM_TRANSLATOR_SHA"
+            echo "Meson: $(meson --version)"
+            echo "LLVM: $(llvm-config --version)"
+            echo "Xcode: $(xcodebuild -version | tr '\n' ' ')"
+            echo "iPhoneOS SDK: $(xcrun --sdk iphoneos --show-sdk-version)"
+            echo "Deployment target: iOS $IOS_DEPLOYMENT_TARGET"
+            echo "Presentation mode requested by smoke app: VK_PRESENT_MODE_FIFO_KHR"
+            echo "displaySyncEnabled: intentionally not called on iOS; property is macOS-only."
+            echo "App lifecycle coverage: background destroys swapchain; foreground recreates; resize recreates."
+            echo "Device proof required: install IPA and run continuous presentation on a physical iPhone."
+          } | tee M3B-build.txt
+
+          {
+            echo "M3B compile-time capability gate"
+            echo "arm64 iOS executable: PASS"
+            echo "direct KosmicKrisp ICD symbol: PASS"
+            echo "Metal WSI sources: PASS"
+            echo "VK_EXT_metal_surface runtime: PENDING DEVICE"
+            echo "VK_KHR_swapchain runtime: PENDING DEVICE"
+            echo "CAMetalLayer acquire/present: PENDING DEVICE"
+            echo "foreground/background: PENDING DEVICE"
+            echo "rotation/resize: PENDING DEVICE"
+            echo "10-minute present/leak test: PENDING DEVICE"
+          } | tee M3B-capability-matrix.txt
+
+          shasum -a 256             KosmicKrispM3B             PsTJon-KK-m03b-smoke.ipa             PsTJon-KK-m03b-smoke-IPA.zip             pstjon-kosmickrisp/m3b/kk_ios_smoke.m             pstjon-kosmickrisp/patches/0001-kosmickrisp-ios-m2.patch             pstjon-kosmickrisp/patches/0002-kosmickrisp-ios-m3-metal-wsi.patch             pstjon-kosmickrisp/patches/0003-kosmickrisp-ios-m3b-smoke-target.patch             | tee M3B-sha256sums.txt
+
+      - name: Upload M3B IPA and evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: PsTJon-KK-m03b-smoke-IPA
+          path: |
+            PsTJon-KK-m03b-smoke.ipa
+            PsTJon-KK-m03b-smoke-IPA.zip
+            KosmicKrispM3B
+            M3B-build.txt
+            M3B-capability-matrix.txt
+            M3B-sha256sums.txt
+            M3B-entitlements.txt
+            M3B-file.txt
+            M3B-lipo.txt
+            M3B-build-version.txt
+            M3B-symbols.txt
+            M3B-vulkan-entrypoints.txt
+            M3B-otool.txt
+            M3B-embedded-build.txt
+            M3B-ipa-contents.txt
+            M3-patch-stat.txt
+            M3-applied.patch
+            M3-host-tools.txt
+            M3-target-macros.txt
+            M3-config-summary.txt
+            mesa-source.txt
+            ios-arm64.cross
+            build-ios/meson-logs/
+            pstjon-kosmickrisp/m3b/kk_ios_smoke.m
+            pstjon-kosmickrisp/patches/0001-kosmickrisp-ios-m2.patch
+            pstjon-kosmickrisp/patches/0002-kosmickrisp-ios-m3-metal-wsi.patch
+            pstjon-kosmickrisp/patches/0003-kosmickrisp-ios-m3b-smoke-target.patch
+          if-no-files-found: warn
+          compression-level: 0
