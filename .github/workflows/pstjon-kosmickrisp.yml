@@ -1,11 +1,6 @@
 name: PsTJon KosmicKrisp M2
 
 on:
-  push:
-    branches: [PsTJon-KosmicKrisp]
-    paths:
-      - ".github/workflows/pstjon-kosmickrisp.yml"
-      - "pstjon-kosmickrisp/**"
   workflow_dispatch:
 
 concurrency:
