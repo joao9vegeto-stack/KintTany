@@ -1,7 +1,7 @@
 diff --git a/src/kosmickrisp/meson.build b/src/kosmickrisp/meson.build
 --- a/src/kosmickrisp/meson.build
 +++ b/src/kosmickrisp/meson.build
-@@ -16,3 +16,21 @@ executable(
+@@ -16,3 +16,22 @@ executable(
      link_with: [libkk],
      link_args: ['-Wl,-undefined,dynamic_lookup'],
  )
@@ -9,7 +9,7 @@ diff --git a/src/kosmickrisp/meson.build b/src/kosmickrisp/meson.build
 +if with_platform_ios
 +  kk_ios_smoke_frameworks = dependency(
 +    'appleframeworks',
-+    modules : ['UIKit', 'Foundation', 'QuartzCore', 'Metal'],
++    modules : ['UIKit', 'Foundation', 'QuartzCore', 'Metal', 'CoreGraphics'],
 +  )
 +
 +  executable(
@@ -19,6 +19,7 @@ diff --git a/src/kosmickrisp/meson.build b/src/kosmickrisp/meson.build
 +    link_whole : [libkk],
 +    dependencies : [kk_deps, kk_ios_smoke_frameworks],
 +    objc_args : ['-Wno-unguarded-availability-new'],
++    link_args : ['-Wl,-undefined,dynamic_lookup'],
 +    build_by_default : false,
 +    install : false,
 +  )
