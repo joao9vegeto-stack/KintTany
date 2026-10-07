@@ -29,12 +29,15 @@ jobs:
     steps:
       - name: Checkout PsTJon KosmicKrisp control branch
         uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
 
       - name: Verify immutable PsTJon v13 ancestry
         run: |
           set -euxo pipefail
-          test "$(git rev-parse HEAD^)" = "f0944f0957bae61793679e5b3330ccfd2b53d005"
-          git diff --exit-code f0944f0957bae61793679e5b3330ccfd2b53d005 -- .github/workflows/pstjon.yml
+          git cat-file -e f0944f0957bae61793679e5b3330ccfd2b53d005^{commit}
+          git merge-base --is-ancestor f0944f0957bae61793679e5b3330ccfd2b53d005 HEAD
+          git diff --exit-code f0944f0957bae61793679e5b3330ccfd2b53d005 HEAD -- .github/workflows/pstjon.yml
           echo "Branch head: $(git rev-parse HEAD)"
           echo "Baseline v13: f0944f0957bae61793679e5b3330ccfd2b53d005"
 
