@@ -122,14 +122,17 @@ jobs:
           python3 rpcs3/ios/tests/run-vk-image-pool-tests.py
           python3 rpcs3/ios/tests/run-vk-memory-pressure-tests.py
 
-      - name: Apply PsTJon v8 Ascension FIFO containment, audio and haptics
+      - name: Apply PsTJon v9 Ascension FIFO synchronization, audio and haptics
         run: |
           set -euxo pipefail
           python3 - <<'PY'
           from pathlib import Path
 
-          # Keep the v6 fast-path choices. The new work below fixes the observed
-          # faults without reintroducing the broad v3/v5 blit suppression.
+          # v8 proved that post-facto NV3089 suppression is the wrong layer:
+          # thousands of destination commands were discarded, textures degraded,
+          # and the next invalid source still entered recover_fifo(). Restore the
+          # modern upstream blit decoder completely and prevent the command-stream
+          # desync earlier by restoring precise FIFO GET publication for Ascension.
           p = Path("rpcs3-src/rpcs3/Emu/System.cpp")
           s = p.read_text()
           old = '''\t\t\t// Force audio provider
@@ -139,9 +142,14 @@ jobs:
           \t\t\t{
           \t\t\t\tconst bool had_cpu_blit = g_cfg.video.force_cpu_blit_processing.get();
           \t\t\t\tconst bool had_sync_memory = g_cfg.video.disable_async_host_memory_manager.get();
+          \t\t\t\tconst u32 had_wakeup_delay = g_cfg.video.driver_wakeup_delay.get();
           \t\t\t\tg_cfg.video.force_cpu_blit_processing.set(false);
           \t\t\t\tg_cfg.video.disable_async_host_memory_manager.set(false);
-          \t\t\t\tsys_log.notice("PsTJon v8 Ascension policy: Force CPU Blit %d->0, Disable Async Memory Manager %d->0", had_cpu_blit, had_sync_memory);
+          \t\t\t\tg_cfg.core.rsx_fifo_accuracy.set(rsx_fifo_mode::atomic_ordered);
+          \t\t\t\tg_cfg.ios_experimental.deferred_get_publishing.set(ios_experimental_mode::disabled);
+          \t\t\t\tg_cfg.video.driver_wakeup_delay.set(0);
+          \t\t\t\tsys_log.notice("PsTJon v9 Ascension FIFO policy: Force CPU Blit %d->0, Disable Async Memory Manager %d->0, Ordered & Atomic forced, Deferred FIFO GET disabled, Driver Wake-Up Delay %u->0",
+          \t\t\t\t\thad_cpu_blit, had_sync_memory, had_wakeup_delay);
           \t\t\t}
           #endif
 
@@ -151,9 +159,7 @@ jobs:
               raise SystemExit("System.cpp Ascension policy insertion pattern not found")
           p.write_text(s.replace(old, new, 1))
 
-          # Audio: the official 0.10.1 shell never posts the custom audio-session
-          # notifications expected by the current core. Tie RemoteIO activity to
-          # the same UIKit lifecycle already used by graphics.
+          # Audio: keep the v7 lifecycle bridge proven healthy by the v8 log.
           p = Path("rpcs3-src/rpcs3/ios/RPCS3IOSPlatform.mm")
           s = p.read_text()
 
@@ -185,9 +191,7 @@ jobs:
               raise SystemExit("audio initial activation pattern not found")
           s = s.replace(old, new, 1)
 
-          # The stock shell also does not turn the core's rumble feedback into
-          # physical iPhone feedback. Preserve the ABI path and add a very small
-          # title-scoped UIKit fallback only on non-zero motor edges.
+          # Keep title-scoped physical iPhone haptics from v7/v8.
           anchor = '''#include <dispatch/dispatch.h>
 
           '''
@@ -250,7 +254,7 @@ jobs:
           \t\tconst u16 previous = s_last_feedback[device->player_id].exchange(packed, std::memory_order_relaxed);
           \t\tif (previous != packed && (previous != 0 || packed != 0))
           \t\t{
-          \t\t\tios_pad_log.notice("PsTJon v8 rumble p%u: large=%u small=%u", device->player_id + 1, large_motor, small_motor);
+          \t\t\tios_pad_log.notice("PsTJon v9 rumble p%u: large=%u small=%u", device->player_id + 1, large_motor, small_motor);
           \t\t\tif (device->player_id == 0 && packed != 0 && Emu.GetTitleID() == "BCUS98232")
           \t\t\t{
           \t\t\t\tpstjon_ios_haptic_pulse(large_motor, small_motor);
@@ -261,88 +265,8 @@ jobs:
               raise SystemExit("IOSPadHandler rumble pattern not found")
           p.write_text(s.replace(old, new, 1))
 
-          # Crash containment: v6 showed valid blits until the guest began
-          # emitting local-memory destinations beyond the 256 MiB RSX window
-          # (0x10b40680/0x10f40680), ending in an unmapped host write. Validate
-          # ONLY the destination span for Ascension; do not touch source-range
-          # semantics, which was the over-broad part of v5.
-          p = Path("rpcs3-src/rpcs3/Emu/RSX/NV47/HW/nv3089.cpp")
-          s = p.read_text()
-          inc = '#include "Emu/RSX/Utils/image_utils.hpp"\n'
-          inc_new = '#include "Emu/RSX/Utils/image_utils.hpp"\n#ifdef RPCS3_IOS\n#include "Emu/System.h"\n#endif\n'
-          if inc not in s:
-              raise SystemExit("NV3089 include anchor not found")
-          s = s.replace(inc, inc_new, 1)
-
-          old = '''\t\t\tu32 src_address = 0;
-          \t\t\tconst u32 dst_address = get_address(dst_offset, dst_dma, 1); // TODO: Add size
-          '''
-          new = '''\t\t\tu32 src_address = 0;
-          \t\t\tu32 dst_address = 0;
-          #ifdef RPCS3_IOS
-          \t\t\tif (Emu.GetTitleID() == "BCUS98232" && dst_dma == CELL_GCM_CONTEXT_DMA_MEMORY_FRAME_BUFFER)
-          \t\t\t{
-          \t\t\t\tconst u64 dst_required64 =
-          \t\t\t\t\tstatic_cast<u64>(out_offset) +
-          \t\t\t\t\tstatic_cast<u64>(out_pitch) * (clip_h ? clip_h - 1 : 0) +
-          \t\t\t\t\tstatic_cast<u64>(clip_w) * out_bpp;
-          \t\t\t\tif (dst_required64 && dst_required64 <= UINT32_MAX)
-          \t\t\t\t{
-          \t\t\t\t\tdst_address = get_address(dst_offset, dst_dma, static_cast<u32>(dst_required64));
-          \t\t\t\t}
-          \t\t\t}
-          \t\t\telse
-          #endif
-          \t\t\t{
-          \t\t\t\tdst_address = get_address(dst_offset, dst_dma, 1);
-          \t\t\t}
-          '''
-          if old not in s:
-              raise SystemExit("NV3089 destination-check pattern not found")
-          s = s.replace(old, new, 1)
-
-          # v7 proved that the destination-range guard works: there was no host
-          # access violation and no iOS/Vulkan pressure event. However the
-          # generic unmapped-destination path immediately called recover_fifo().
-          # Ascension then fed a run of syntactically valid but semantically
-          # invalid local-memory blits, so recovery repeated until RPCS3 killed
-          # the RSX thread with "Dead FIFO commands queue state".
-          #
-          # v3 already proved that consuming this exact invalid destination blit
-          # lets Ascension pass the scene. Unlike v3/v5, v8 changes ONLY this
-          # title-scoped destination failure. Source validation and every valid
-          # blit remain on the modern upstream path.
-          old = '''\t\t\tif (!dst_address)
-          \t\t\t{
-          \t\t\t\trsx_log.error("NV3089_IMAGE_IN_SIZE: Unmapped dst_address (dst_offset=0x%x, dst_dma=0x%x)", dst_offset, dst_dma);
-          \t\t\t\tRSX(ctx)->recover_fifo();
-          \t\t\t\treturn { false, src_info, dst_info };
-          \t\t\t}
-          '''
-          new = '''\t\t\tif (!dst_address)
-          \t\t\t{
-          \t\t\t\trsx_log.error("NV3089_IMAGE_IN_SIZE: Unmapped dst_address (dst_offset=0x%x, dst_dma=0x%x)", dst_offset, dst_dma);
-          #ifdef RPCS3_IOS
-          \t\t\t\tif (Emu.GetTitleID() == "BCUS98232" && dst_dma == CELL_GCM_CONTEXT_DMA_MEMORY_FRAME_BUFFER)
-          \t\t\t\t{
-          \t\t\t\t\trsx_log.error("PsTJon v8: discarded invalid Ascension local-memory destination blit without FIFO recovery");
-          \t\t\t\t\treturn { false, src_info, dst_info };
-          \t\t\t\t}
-          #endif
-          \t\t\t\tRSX(ctx)->recover_fifo();
-          \t\t\t\treturn { false, src_info, dst_info };
-          \t\t\t}
-          '''
-          if old not in s:
-              raise SystemExit("NV3089 unmapped destination recovery pattern not found")
-          p.write_text(s.replace(old, new, 1))
-
-          # Memory pressure: on unified-memory iOS, the generic desktop heuristic
-          # was downgrading a >100% Vulkan allocator from fatal/severe back to
-          # moderate because the device-wide budget still looked large. v6 then
-          # reached 129% / 1265 MiB before the crash. Never downgrade allocator
-          # overcommit below severe on iOS, and use one fatal reclamation tier
-          # once both allocator load and process headroom are critical.
+          # Keep the v7 iOS unified-memory safety. It was not involved in the v8
+          # fatal, but prevents the allocator from being downgraded after 100%.
           p = Path("rpcs3-src/rpcs3/Emu/RSX/VK/VKResourceManager.cpp")
           s = p.read_text()
           anchor = '''\t\t\t\telse if (local_memory_available > mem_threshold_2)                                   // Enough to hold basic resources like textures, buffers, etc
@@ -380,11 +304,14 @@ jobs:
           cd rpcs3-src
           python3 rpcs3/ios/tests/run-vk-image-pool-tests.py
           python3 rpcs3/ios/tests/run-vk-memory-pressure-tests.py
-          grep -q 'PsTJon v8 Ascension policy' rpcs3/Emu/System.cpp
+          grep -q 'PsTJon v9 Ascension FIFO policy' rpcs3/Emu/System.cpp
+          grep -q 'deferred_get_publishing.set(ios_experimental_mode::disabled)' rpcs3/Emu/System.cpp
+          grep -q 'rsx_fifo_accuracy.set(rsx_fifo_mode::atomic_ordered)' rpcs3/Emu/System.cpp
+          grep -q 'driver_wakeup_delay.set(0)' rpcs3/Emu/System.cpp
           grep -q 'pstjon_ios_haptic_pulse' rpcs3/ios/RPCS3IOSPlatform.mm
-          grep -q 'dst_required64' rpcs3/Emu/RSX/NV47/HW/nv3089.cpp
-          grep -q 'PsTJon v8: discarded invalid Ascension local-memory destination blit without FIFO recovery' rpcs3/Emu/RSX/NV47/HW/nv3089.cpp
           grep -q 'vmm_load >= 120.f' rpcs3/Emu/RSX/VK/VKResourceManager.cpp
+          test -z "$(git diff -- rpcs3/Emu/RSX/NV47/HW/nv3089.cpp)"
+          ! grep -R -q 'PsTJon v8: discarded invalid Ascension' rpcs3/Emu/RSX/NV47/HW/nv3089.cpp
 
       - name: Fetch MoltenVK
         run: |
@@ -500,7 +427,7 @@ jobs:
       - name: Build report
         run: |
           {
-            echo "PsTJon v8 - Ascension destination FIFO containment audio haptics"
+            echo "PsTJon v9 - Ascension precise FIFO GET audio haptics"
             echo "RPCS3 ios-port: $RPCS3_IOS_SHA"
             echo "Shell bundle id: com.xitrix.RPCS3"
             echo "MoltenVK: $MOLTENVK_VERSION"
@@ -511,7 +438,7 @@ jobs:
 
       - uses: actions/upload-artifact@v4
         with:
-          name: PsTJon-v8-IPA
+          name: PsTJon-v9-IPA
           path: |
             PsTJon.ipa
             PsTJon-build.txt
