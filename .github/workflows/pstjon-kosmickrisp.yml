@@ -1,22 +1,23 @@
-name: PsTJon KosmicKrisp M1
+name: PsTJon KosmicKrisp M2
 
 on:
   push:
     branches: [PsTJon-KosmicKrisp]
     paths:
       - ".github/workflows/pstjon-kosmickrisp.yml"
+      - "pstjon-kosmickrisp/**"
   workflow_dispatch:
 
 concurrency:
-  group: pstjon-kosmickrisp-m1
+  group: pstjon-kosmickrisp-m2
   cancel-in-progress: true
 
 permissions:
   contents: read
 
 jobs:
-  kosmickrisp-macos-smoke:
-    name: M1 - KosmicKrisp macOS arm64
+  kosmickrisp-ios-static:
+    name: M2 - KosmicKrisp arm64 iOS static
     runs-on: macos-26
     timeout-minutes: 180
     env:
@@ -27,9 +28,10 @@ jobs:
       LLVM_FORMULA: "llvm@20"
       SPIRV_LLVM_TRANSLATOR_SHA: "e328468fd329342f1f60c12fdd19cc0faaa88f32"
       SPIRV_LLVM_TRANSLATOR_URL: "https://github.com/KhronosGroup/SPIRV-LLVM-Translator.git"
+      IOS_DEPLOYMENT_TARGET: "17.4"
 
     steps:
-      - name: Checkout PsTJon KosmicKrisp control branch
+      - name: Checkout PsTJon KosmicKrisp branch
         uses: actions/checkout@v4
         with:
           fetch-depth: 0
@@ -40,24 +42,23 @@ jobs:
           git cat-file -e f0944f0957bae61793679e5b3330ccfd2b53d005^{commit}
           git merge-base --is-ancestor f0944f0957bae61793679e5b3330ccfd2b53d005 HEAD
           git diff --exit-code f0944f0957bae61793679e5b3330ccfd2b53d005 HEAD -- .github/workflows/pstjon.yml
-          echo "Branch head: $(git rev-parse HEAD)"
-          echo "Baseline v13: f0944f0957bae61793679e5b3330ccfd2b53d005"
+          echo "M2 branch head: $(git rev-parse HEAD)"
+          echo "Immutable v13 baseline: f0944f0957bae61793679e5b3330ccfd2b53d005"
 
-      - name: Verify Apple Silicon and Metal 4 host
+      - name: Verify Xcode and iPhoneOS SDK
         run: |
           set -euxo pipefail
           test "$(uname -m)" = "arm64"
-          sw_vers
-          uname -a
           xcodebuild -version
-          xcrun --sdk macosx --show-sdk-version
-          system_profiler SPDisplaysDataType || true
+          xcrun --sdk iphoneos --show-sdk-version
+          xcrun --sdk iphoneos --show-sdk-path
+          xcrun --sdk iphoneos clang --version
 
-      - name: Install pinned build prerequisites
+      - name: Install reproducible host build prerequisites
         run: |
           set -euxo pipefail
           brew update
-          for pkg in cmake pkg-config libclc "$LLVM_FORMULA" spirv-tools vulkan-tools; do
+          for pkg in cmake pkg-config libclc "$LLVM_FORMULA" spirv-tools ninja; do
             brew list "$pkg" >/dev/null 2>&1 || brew install "$pkg"
           done
 
@@ -69,6 +70,7 @@ jobs:
           LLVM_PREFIX="$(brew --prefix "$LLVM_FORMULA")"
           TRANSLATOR_PREFIX="$GITHUB_WORKSPACE/deps/spirv-llvm-translator-20"
           rm -rf "$GITHUB_WORKSPACE/spirv-llvm-translator-src" "$GITHUB_WORKSPACE/spirv-llvm-translator-build" "$TRANSLATOR_PREFIX"
+
           git clone --filter=blob:none --no-checkout "$SPIRV_LLVM_TRANSLATOR_URL" "$GITHUB_WORKSPACE/spirv-llvm-translator-src"
           git -C "$GITHUB_WORKSPACE/spirv-llvm-translator-src" fetch --depth=1 origin "$SPIRV_LLVM_TRANSLATOR_SHA"
           git -C "$GITHUB_WORKSPACE/spirv-llvm-translator-src" checkout --detach "$SPIRV_LLVM_TRANSLATOR_SHA"
@@ -83,17 +85,17 @@ jobs:
             -DLLVM_LINK_LLVM_DYLIB=OFF
           cmake --build "$GITHUB_WORKSPACE/spirv-llvm-translator-build" --target LLVMSPIRVLib llvm-spirv -j3
           cmake --install "$GITHUB_WORKSPACE/spirv-llvm-translator-build"
+
           test -f "$TRANSLATOR_PREFIX/lib/libLLVMSPIRVLib.a"
-          test -f "$TRANSLATOR_PREFIX/lib/pkgconfig/LLVMSPIRVLib.pc"
           test "$(PKG_CONFIG_PATH="$TRANSLATOR_PREFIX/lib/pkgconfig" pkg-config --modversion LLVMSPIRVLib)" = "20.1.0.0"
 
           echo "$LLVM_PREFIX/bin" >> "$GITHUB_PATH"
           echo "$TRANSLATOR_PREFIX/bin" >> "$GITHUB_PATH"
-          echo "LDFLAGS=-L$TRANSLATOR_PREFIX/lib -L$LLVM_PREFIX/lib" >> "$GITHUB_ENV"
-          echo "CPPFLAGS=-I$TRANSLATOR_PREFIX/include -I$LLVM_PREFIX/include" >> "$GITHUB_ENV"
-          echo "PKG_CONFIG_PATH=$TRANSLATOR_PREFIX/lib/pkgconfig:$LLVM_PREFIX/lib/pkgconfig:$(brew --prefix libclc)/lib/pkgconfig:$(brew --prefix spirv-tools)/lib/pkgconfig" >> "$GITHUB_ENV"
+          echo "HOST_LDFLAGS=-L$TRANSLATOR_PREFIX/lib -L$LLVM_PREFIX/lib" >> "$GITHUB_ENV"
+          echo "HOST_CPPFLAGS=-I$TRANSLATOR_PREFIX/include -I$LLVM_PREFIX/include" >> "$GITHUB_ENV"
+          echo "HOST_PKG_CONFIG_PATH=$TRANSLATOR_PREFIX/lib/pkgconfig:$LLVM_PREFIX/lib/pkgconfig:$(brew --prefix libclc)/lib/pkgconfig:$(brew --prefix spirv-tools)/lib/pkgconfig" >> "$GITHUB_ENV"
 
-      - name: Fetch exact Mesa KosmicKrisp revision
+      - name: Fetch exact Mesa and apply iOS M2 port patch
         run: |
           set -euxo pipefail
           rm -rf mesa-src
@@ -104,135 +106,220 @@ jobs:
             git clone --filter=blob:none --no-checkout "$MESA_MIRROR_URL" mesa-src
             echo "synchronized GitHub mirror fallback" | tee mesa-source.txt
           fi
-          cd mesa-src
-          git fetch --depth=1 origin "$MESA_KOSMICKRISP_SHA"
-          git checkout --detach "$MESA_KOSMICKRISP_SHA"
-          test "$(git rev-parse HEAD)" = "$MESA_KOSMICKRISP_SHA"
-          git log -1 --format='%H%n%ci%n%s'
-          grep -q "KosmicKrisp" docs/drivers/kosmickrisp.rst
-          grep -q "Metal 4" docs/drivers/kosmickrisp.rst
-          grep -q "No iOS support is present as of now" docs/drivers/kosmickrisp.rst
 
-      - name: Record dependency versions
+          git -C mesa-src fetch --depth=1 origin "$MESA_KOSMICKRISP_SHA"
+          git -C mesa-src checkout --detach "$MESA_KOSMICKRISP_SHA"
+          test "$(git -C mesa-src rev-parse HEAD)" = "$MESA_KOSMICKRISP_SHA"
+
+          git -C mesa-src apply --check "$GITHUB_WORKSPACE/pstjon-kosmickrisp/patches/0001-kosmickrisp-ios-m2.patch"
+          git -C mesa-src apply "$GITHUB_WORKSPACE/pstjon-kosmickrisp/patches/0001-kosmickrisp-ios-m2.patch"
+
+          grep -q "'ios'" mesa-src/meson.options
+          grep -q "with_platform_ios" mesa-src/meson.build
+          grep -q "TARGET_OS_IOS" mesa-src/src/kosmickrisp/bridge/mtl_device.m
+          git -C mesa-src diff --check
+          git -C mesa-src diff --stat | tee M2-patch-stat.txt
+          git -C mesa-src diff > M2-applied.patch
+
+      - name: Build native KosmicKrisp shader tools
         run: |
           set -euxo pipefail
           source "$GITHUB_WORKSPACE/venv/bin/activate"
-          {
-            echo "M1 PsTJon / KosmicKrisp macOS build manifest"
-            echo "KintTany commit: $GITHUB_SHA"
-            echo "PsTJon v13 baseline: f0944f0957bae61793679e5b3330ccfd2b53d005"
-            echo "Mesa/KosmicKrisp commit: $MESA_KOSMICKRISP_SHA"
-            echo "Mesa source: $(cat mesa-source.txt)"
-            echo "Host arch: $(uname -m)"
-            echo "macOS: $(sw_vers -productVersion) ($(sw_vers -buildVersion))"
-            echo "Xcode: $(xcodebuild -version | tr '\n' ' ')"
-            echo "SDK: $(xcrun --sdk macosx --show-sdk-version)"
-            echo "Meson: $(meson --version)"
-            echo "CMake: $(cmake --version | head -1)"
-            echo "LLVM: $(llvm-config --version)"
-            echo "SPIR-V LLVM translator: $SPIRV_LLVM_TRANSLATOR_SHA (LLVMSPIRVLib $(pkg-config --modversion LLVMSPIRVLib))"
-            echo "SPIR-V tools: $(spirv-as --version | head -1)"
-            echo "Vulkan tools: $(vulkaninfo --version 2>&1 | head -1 || true)"
-          } | tee M1-build.txt
+          export LDFLAGS="$HOST_LDFLAGS"
+          export CPPFLAGS="$HOST_CPPFLAGS"
+          export PKG_CONFIG_PATH="$HOST_PKG_CONFIG_PATH"
 
-      - name: Configure KosmicKrisp exactly as Mesa documents
-        run: |
-          set -euxo pipefail
-          source "$GITHUB_WORKSPACE/venv/bin/activate"
-          meson setup build mesa-src \
-            --buildtype=debug \
+          rm -rf build-host host-tools
+          meson setup build-host mesa-src \
+            --buildtype=release \
             -Dplatforms=macos \
             -Dvulkan-drivers=kosmickrisp \
             -Dgallium-drivers= \
             -Dopengl=false \
             -Dzstd=disabled \
+            -Dmesa-clc=enabled \
+            -Dprecomp-compiler=enabled \
             --prefer-static
 
-      - name: Build KosmicKrisp
+          meson compile -C build-host mesa_clc vtn_bindgen2 kk_clc
+
+          mkdir -p host-tools/bin
+          cp build-host/src/compiler/clc/mesa_clc host-tools/bin/
+          cp build-host/src/compiler/spirv/vtn_bindgen2 host-tools/bin/
+          cp build-host/src/kosmickrisp/clc/kk_clc host-tools/bin/
+          chmod +x host-tools/bin/*
+          host-tools/bin/mesa_clc --help >/dev/null 2>&1 || true
+          file host-tools/bin/* | tee M2-host-tools.txt
+
+      - name: Create arm64-apple-ios cross toolchain
+        run: |
+          set -euxo pipefail
+          mkdir -p toolchain
+
+          cat > toolchain/ios-clang <<'EOF'
+          #!/bin/bash
+          set -euo pipefail
+          SDKROOT="$(xcrun --sdk iphoneos --show-sdk-path)"
+          exec xcrun --sdk iphoneos clang -target arm64-apple-ios17.4 -isysroot "$SDKROOT" "$@"
+          EOF
+
+          cat > toolchain/ios-clangxx <<'EOF'
+          #!/bin/bash
+          set -euo pipefail
+          SDKROOT="$(xcrun --sdk iphoneos --show-sdk-path)"
+          exec xcrun --sdk iphoneos clang++ -target arm64-apple-ios17.4 -isysroot "$SDKROOT" "$@"
+          EOF
+
+          cat > toolchain/ios-ar <<'EOF'
+          #!/bin/bash
+          set -euo pipefail
+          exec xcrun --sdk iphoneos ar "$@"
+          EOF
+
+          cat > toolchain/ios-strip <<'EOF'
+          #!/bin/bash
+          set -euo pipefail
+          exec xcrun --sdk iphoneos strip "$@"
+          EOF
+
+          chmod +x toolchain/*
+
+          cat > ios-arm64.cross <<EOF
+          [binaries]
+          c = '$GITHUB_WORKSPACE/toolchain/ios-clang'
+          cpp = '$GITHUB_WORKSPACE/toolchain/ios-clangxx'
+          objc = '$GITHUB_WORKSPACE/toolchain/ios-clang'
+          ar = '$GITHUB_WORKSPACE/toolchain/ios-ar'
+          strip = '$GITHUB_WORKSPACE/toolchain/ios-strip'
+
+          [host_machine]
+          system = 'darwin'
+          cpu_family = 'aarch64'
+          cpu = 'arm64'
+          endian = 'little'
+
+          [properties]
+          needs_exe_wrapper = true
+          EOF
+
+          cat ios-arm64.cross
+          "$GITHUB_WORKSPACE/toolchain/ios-clang" -dM -E -x c /dev/null | grep -E '__ENVIRONMENT_IPHONE_OS_VERSION_MIN_REQUIRED__|__arm64__' | tee M2-target-macros.txt
+
+      - name: Configure KosmicKrisp for iOS without WSI
         run: |
           set -euxo pipefail
           source "$GITHUB_WORKSPACE/venv/bin/activate"
-          meson compile -C build
-          find build -type f \( -name '*kosmickrisp*' -o -name 'libvulkan_*.dylib' -o -name '*icd*.json' \) -print | sort | tee M1-products.txt
-          test -n "$(find build -type f -name 'libvulkan_kosmickrisp*.dylib' -print -quit)"
 
-      - name: Install to isolated staging root
+          unset LDFLAGS CPPFLAGS PKG_CONFIG_PATH
+          export PATH="$GITHUB_WORKSPACE/host-tools/bin:$PATH"
+
+          rm -rf build-ios
+          meson setup build-ios mesa-src \
+            --cross-file "$GITHUB_WORKSPACE/ios-arm64.cross" \
+            --buildtype=release \
+            --wrap-mode=nodownload \
+            -Dplatforms=ios \
+            -Dvulkan-drivers=kosmickrisp \
+            -Dgallium-drivers= \
+            -Dopengl=false \
+            -Dzstd=disabled \
+            -Dmesa-clc=system \
+            -Dprecomp-compiler=system \
+            -Dllvm=disabled \
+            -Dspirv-tools=disabled \
+            --prefer-static
+
+          grep -E "Host machine cpu family|Host machine system|Vulkan Drivers|Platforms|LLVM" build-ios/meson-logs/meson-log.txt | tail -80 | tee M2-config-summary.txt || true
+
+      - name: Build static KosmicKrisp iOS archive
         run: |
           set -euxo pipefail
           source "$GITHUB_WORKSPACE/venv/bin/activate"
-          rm -rf install-root
-          meson install -C build --destdir "$GITHUB_WORKSPACE/install-root"
-          find install-root -type f | sort | tee M1-install-files.txt
-          find install-root -type f -name '*kosmickrisp*.dylib' -exec file {} \; | tee M1-file.txt
-          grep -q 'arm64' M1-file.txt
+          export PATH="$GITHUB_WORKSPACE/host-tools/bin:$PATH"
 
-      - name: Vulkan smoke test on Apple GPU
+          ninja -C build-ios src/kosmickrisp/vulkan/libkk.a
+
+          KK_ARCHIVE="$GITHUB_WORKSPACE/build-ios/src/kosmickrisp/vulkan/libkk.a"
+          test -f "$KK_ARCHIVE"
+          cp "$KK_ARCHIVE" libkk-kosmickrisp-ios-arm64.a
+
+          file libkk-kosmickrisp-ios-arm64.a | tee M2-file.txt
+          lipo -info libkk-kosmickrisp-ios-arm64.a | tee M2-lipo.txt
+          grep -q "arm64" M2-lipo.txt
+
+          nm -g libkk-kosmickrisp-ios-arm64.a > M2-symbols.txt
+          grep -E "vk_icdGetInstanceProcAddr|kk_GetInstanceProcAddr" M2-symbols.txt | tee M2-vulkan-entrypoints.txt
+          grep -q "vk_icdGetInstanceProcAddr" M2-vulkan-entrypoints.txt
+
+      - name: Prove archive objects target iOS not macOS
         run: |
           set -euxo pipefail
-          ICD_JSON="$(find build install-root -type f \( -name '*kosmickrisp*icd*.json' -o -name '*kosmickrisp*.json' \) -print -quit)"
-          test -n "$ICD_JSON"
-          echo "KosmicKrisp ICD: $ICD_JSON" | tee M1-icd.txt
-          cat "$ICD_JSON" | tee M1-icd-json.txt
+          rm -rf M2-inspect
+          mkdir M2-inspect
+          cd M2-inspect
+          xcrun --sdk iphoneos ar -x ../libkk-kosmickrisp-ios-arm64.a
 
-          export VK_DRIVER_FILES="$PWD/$ICD_JSON"
-          export VK_ICD_FILENAMES="$PWD/$ICD_JSON"
+          OBJ="$(find . -type f -name '*.o' -print -quit)"
+          test -n "$OBJ"
+          file "$OBJ" | tee ../M2-object-file.txt
+          xcrun vtool -show-build "$OBJ" | tee ../M2-build-version.txt
+          grep -E -qi "platform[[:space:]]+IOS|platform[[:space:]]+2" ../M2-build-version.txt
 
-          GPU_INFO="$(system_profiler SPDisplaysDataType 2>/dev/null || true)"
-          printf '%s\n' "$GPU_INFO" > M1-gpu-info.txt
-          if ! printf '%s\n' "$GPU_INFO" | grep -E -qi 'Chipset Model:|Metal Support:'; then
-            echo "SKIP: GitHub-hosted macOS arm64 runner exposes no usable GPU device." | tee M1-vulkaninfo.txt
-            echo "M1_RUNTIME_SMOKE=deferred-no-gpu" >> "$GITHUB_ENV"
-            exit 0
+          if grep -R -a -E "/Applications/Xcode[^ ]*/Platforms/MacOSX|MacOSX\\.sdk" . >/dev/null 2>&1; then
+            echo "Unexpected macOS SDK marker in target objects" >&2
+            exit 1
           fi
 
-          vulkaninfo --summary 2>&1 | tee M1-vulkaninfo.txt
-          grep -E -qi 'Kosmic|Krisp|Apple' M1-vulkaninfo.txt
-          ! grep -E -qi 'ERROR_INCOMPATIBLE_DRIVER|vkCreateInstance failed|No Vulkan devices found' M1-vulkaninfo.txt
-          echo "M1_RUNTIME_SMOKE=pass" >> "$GITHUB_ENV"
-
-      - name: Capture M1 capability snapshot
+      - name: Write M2 build manifest and hashes
         if: success()
         run: |
           set -euxo pipefail
-          ICD_JSON="$(find build install-root -type f \( -name '*kosmickrisp*icd*.json' -o -name '*kosmickrisp*.json' \) -print -quit)"
-          export VK_DRIVER_FILES="$PWD/$ICD_JSON"
-          export VK_ICD_FILENAMES="$PWD/$ICD_JSON"
-          if [ "${M1_RUNTIME_SMOKE:-}" = "pass" ]; then
-            vulkaninfo > M1-vulkaninfo-full.txt 2>&1
-          else
-            {
-              echo "Runtime Vulkan capability enumeration deferred."
-              echo "Reason: hosted macOS runner did not expose a GPU to KosmicKrisp."
-              echo "The installed driver and ICD were still validated as arm64 artifacts."
-            } > M1-vulkaninfo-full.txt
-          fi
+          source "$GITHUB_WORKSPACE/venv/bin/activate"
           {
-            echo
-            echo "Build/install result: PASS"
-            echo "Runtime smoke: ${M1_RUNTIME_SMOKE:-deferred-no-gpu}"
-            echo "Scope: M1 only; no RPCS3/iOS integration was performed."
-            echo "Next gate: M2 cross-compile arm64-apple-ios without WSI."
-          } >> M1-build.txt
-          shasum -a 256 "$(find build -type f -name 'libvulkan_kosmickrisp*.dylib' -print -quit)" | tee M1-sha256.txt
+            echo "PsTJon / KosmicKrisp M2"
+            echo "Scope: arm64-apple-ios static driver archive; no WSI, no RPCS3 integration, no IPA."
+            echo "KintTany commit: $GITHUB_SHA"
+            echo "PsTJon v13 baseline: f0944f0957bae61793679e5b3330ccfd2b53d005"
+            echo "Mesa/KosmicKrisp commit: $MESA_KOSMICKRISP_SHA"
+            echo "SPIR-V LLVM Translator commit: $SPIRV_LLVM_TRANSLATOR_SHA"
+            echo "Meson: $(meson --version)"
+            echo "LLVM: $(llvm-config --version)"
+            echo "Xcode: $(xcodebuild -version | tr '\\n' ' ')"
+            echo "iPhoneOS SDK: $(xcrun --sdk iphoneos --show-sdk-version)"
+            echo "Deployment target: iOS $IOS_DEPLOYMENT_TARGET"
+            echo "Platform selection: ios (not macos)"
+            echo "WSI status: intentionally not implemented in M2"
+            echo "Next gate: M3 CAMetalLayer surface/swapchain minimal iPhone app"
+          } | tee M2-build.txt
 
-      - name: Upload M1 evidence
+          shasum -a 256 \
+            libkk-kosmickrisp-ios-arm64.a \
+            pstjon-kosmickrisp/patches/0001-kosmickrisp-ios-m2.patch \
+            | tee M2-sha256.txt
+
+      - name: Upload M2 evidence
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: PsTJon-KK-m01-macos
+          name: PsTJon-KK-m02-ios-static
           path: |
-            M1-build.txt
-            M1-products.txt
-            M1-install-files.txt
-            M1-file.txt
-            M1-icd.txt
-            M1-icd-json.txt
-            M1-vulkaninfo.txt
-            M1-vulkaninfo-full.txt
-            M1-gpu-info.txt
-            M1-sha256.txt
+            libkk-kosmickrisp-ios-arm64.a
+            M2-build.txt
+            M2-sha256.txt
+            M2-patch-stat.txt
+            M2-applied.patch
+            M2-host-tools.txt
+            M2-target-macros.txt
+            M2-config-summary.txt
+            M2-file.txt
+            M2-lipo.txt
+            M2-symbols.txt
+            M2-vulkan-entrypoints.txt
+            M2-object-file.txt
+            M2-build-version.txt
             mesa-source.txt
-            build/meson-logs/
-            install-root/
+            ios-arm64.cross
+            build-ios/meson-logs/
+            pstjon-kosmickrisp/patches/0001-kosmickrisp-ios-m2.patch
           if-no-files-found: warn
           compression-level: 0
