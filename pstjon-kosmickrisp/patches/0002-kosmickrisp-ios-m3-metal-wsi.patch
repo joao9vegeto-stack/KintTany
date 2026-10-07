@@ -27,3 +27,38 @@ diff --git a/src/vulkan/wsi/meson.build b/src/vulkan/wsi/meson.build
    files_vulkan_wsi += files('wsi_common_metal.c', 'wsi_common_metal_layer.m')
  endif
  
+
+diff --git a/src/vulkan/wsi/wsi_common_metal_layer.m b/src/vulkan/wsi/wsi_common_metal_layer.m
+--- a/src/vulkan/wsi/wsi_common_metal_layer.m
++++ b/src/vulkan/wsi/wsi_common_metal_layer.m
+@@ -9,6 +9,7 @@
+ 
+ #import <QuartzCore/CAMetalLayer.h>
+ #import <Metal/Metal.h>
++#import <TargetConditionals.h>
+ 
+ void
+ wsi_metal_layer_size(const CAMetalLayer *metal_layer,
+@@ -139,7 +140,12 @@ void
+ wsi_metal_layer_set_immediate(const CAMetalLayer *metal_layer,
+                               bool enable_immediate)
+ {
++#if TARGET_OS_OSX
+    metal_layer.displaySyncEnabled = !enable_immediate;
++#else
++   (void)metal_layer;
++   (void)enable_immediate;
++#endif
+ }
+ 
+ VkResult
+@@ -170,7 +176,9 @@ wsi_metal_layer_configure(const CAMetalLayer *metal_layer,
+       metal_layer.maximumDrawableCount = image_count;
+       metal_layer.drawableSize = (CGSize){.width = width, .height = height};
+       metal_layer.opaque = enable_opaque;
++#if TARGET_OS_OSX
+       metal_layer.displaySyncEnabled = !enable_immediate;
++#endif
+       metal_layer.pixelFormat = metal_format;
+ 
+       metal_layer.colorspace = cg_color_space;
