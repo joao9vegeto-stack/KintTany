@@ -749,6 +749,122 @@ jobs:
           p.write_text(s)
           print("M5.1 Volk-to-VMA dispatch bridge PASS")
           PY
+          # M5.2: keep KosmicKrisp shader preload inside the iOS memory envelope.
+          # RPCS3's generic preload path bypasses Shader Compiler Threads and fans
+          # out to every host thread. On Metal this can consume the entire process
+          # headroom while restoring an old Vulkan shader cache.
+          python3 - <<'PY'
+          import os
+          from pathlib import Path
+
+          mesa_sha = os.environ["MESA_KOSMICKRISP_SHA"]
+
+          # 1) Serialize the disk shader preload for the direct Metal provider.
+          p = Path("rpcs3-src/rpcs3/Emu/RSX/rsx_cache.h")
+          s = p.read_text()
+          old = """			uint nb_workers = g_cfg.video.renderer == video_renderer::vulkan ? utils::get_thread_count() : 1;
+          """
+          new = """#ifdef RPCS3_VULKAN_PROVIDER_KOSMICKRISP
+          			// Metal compiler jobs are memory-heavy on iOS. The generic Vulkan
+          			// path fans out to every host thread and can trigger jetsam while
+          			// preloading a large disk shader cache.
+          			uint nb_workers = 1;
+          			rsx_log.notice("PsTJon M5.2: KosmicKrisp disk shader preload limited to 1 worker");
+          #else
+          			uint nb_workers = g_cfg.video.renderer == video_renderer::vulkan ? utils::get_thread_count() : 1;
+          #endif
+          """
+          if s.count(old) != 1:
+              raise SystemExit("M5.2 rsx shader preload worker anchor mismatch")
+          p.write_text(s.replace(old, new, 1))
+
+          # 2) Keep the initial Vulkan pipe-compiler pool conservative as well.
+          p = Path("rpcs3-src/rpcs3/Emu/RSX/VK/VKGSRender.cpp")
+          s = p.read_text()
+          old = """	const int preferred_compiler_threads = g_cfg.video.shader_compiler_threads_count == 0
+          		? utils::get_thread_count()                   // We spawn the initial pipe compiler with all threads during the boot sequence by default.
+          		: g_cfg.video.shader_compiler_threads_count;  // Respect user override if set
+
+          	spirv::initialize_compiler_context();
+          """
+          new = """	int preferred_compiler_threads = g_cfg.video.shader_compiler_threads_count == 0
+          		? utils::get_thread_count()
+          		: g_cfg.video.shader_compiler_threads_count;
+
+          #ifdef RPCS3_VULKAN_PROVIDER_KOSMICKRISP
+          	if (g_cfg.video.shader_compiler_threads_count == 0)
+          	{
+          		preferred_compiler_threads = 1;
+          		rsx_log.notice("PsTJon M5.2: KosmicKrisp bootstrap pipeline compiler limited to 1 worker");
+          	}
+          #endif
+
+          	spirv::initialize_compiler_context();
+          """
+          if s.count(old) != 1:
+              raise SystemExit("M5.2 VK bootstrap compiler anchor mismatch")
+          s = s.replace(old, new, 1)
+
+          # 3) Do not bulk-preload the legacy MoltenVK Vulkan shader set. Raw RSX
+          # shaders remain shared; compiled pipeline metadata gets a KK namespace.
+          old_cache = """	m_shaders_cache = std::make_unique<vk::shader_cache>(*m_prog_buffer, "vulkan", "v1.95");
+          """
+          new_cache = f"""#ifdef RPCS3_VULKAN_PROVIDER_KOSMICKRISP
+          	m_shaders_cache = std::make_unique<vk::shader_cache>(
+          		*m_prog_buffer, "vulkan-kosmickrisp", "v1.95-{mesa_sha}");
+          	rsx_log.notice("PsTJon M5.2: using provider-separated KosmicKrisp shader cache namespace");
+          #else
+          	m_shaders_cache = std::make_unique<vk::shader_cache>(*m_prog_buffer, "vulkan", "v1.95");
+          #endif
+          """
+          if s.count(old_cache) != 1:
+              raise SystemExit("M5.2 shader cache namespace anchor mismatch")
+          p.write_text(s.replace(old_cache, new_cache, 1))
+
+          # 4) The M4 provider-separated driver cache format string was left
+          # literal. Replace the entire return statement with a stable provider/
+          # Mesa-version directory; the cache header already validates GPU ID/UUID.
+          p = Path("rpcs3-src/rpcs3/Emu/RSX/VK/vkutils/device.cpp")
+          s = p.read_text()
+          needle = "shaders_cache/vulkan/{}/{}/ios-{}/gpu-{:04x}-{:04x}/vk_pipeline_cache.bin"
+          if s.count(needle) != 1:
+              raise SystemExit(f"M5.2 pipeline cache literal count mismatch: {s.count(needle)}")
+          at = s.index(needle)
+          stmt_start = s.rfind("return", max(0, at - 1000), at)
+          stmt_end = s.find(";", at)
+          if stmt_start < 0 or stmt_end < 0:
+              raise SystemExit("M5.2 pipeline cache return statement not found")
+          line_start = s.rfind("\n", 0, stmt_start) + 1
+          indent = s[line_start:stmt_start]
+          replacement = (
+              f'return root + "shaders_cache/vulkan/kosmickrisp/{mesa_sha}/'
+              'vk_pipeline_cache.bin";'
+          )
+          s = s[:stmt_start] + replacement + s[stmt_end + 1:]
+          if needle in s:
+              raise SystemExit("M5.2 unresolved pipeline cache placeholders remain")
+          p.write_text(s)
+
+          checks = {
+              "rpcs3-src/rpcs3/Emu/RSX/rsx_cache.h":
+                  "PsTJon M5.2: KosmicKrisp disk shader preload limited to 1 worker",
+              "rpcs3-src/rpcs3/Emu/RSX/VK/VKGSRender.cpp":
+                  "PsTJon M5.2: using provider-separated KosmicKrisp shader cache namespace",
+              "rpcs3-src/rpcs3/Emu/RSX/VK/vkutils/device.cpp":
+                  f"shaders_cache/vulkan/kosmickrisp/{mesa_sha}/vk_pipeline_cache.bin",
+          }
+          for file, expected in checks.items():
+              text = Path(file).read_text()
+              if text.count(expected) != 1:
+                  raise SystemExit(f"M5.2 verification failed for {file}: {expected}")
+
+          print("M5.2 shader memory/cache stability patch PASS")
+          PY
+          grep -q 'KosmicKrisp disk shader preload limited to 1 worker' rpcs3-src/rpcs3/Emu/RSX/rsx_cache.h
+          grep -q 'KosmicKrisp bootstrap pipeline compiler limited to 1 worker' rpcs3-src/rpcs3/Emu/RSX/VK/VKGSRender.cpp
+          grep -q 'vulkan-kosmickrisp' rpcs3-src/rpcs3/Emu/RSX/VK/VKGSRender.cpp
+          grep -q "shaders_cache/vulkan/kosmickrisp/$MESA_KOSMICKRISP_SHA/vk_pipeline_cache.bin" rpcs3-src/rpcs3/Emu/RSX/VK/vkutils/device.cpp
+          ! grep -q 'shaders_cache/vulkan/{}/{}/ios-{}/gpu-{:04x}-{:04x}' rpcs3-src/rpcs3/Emu/RSX/VK/vkutils/device.cpp
           grep -q 'allocatorInfo.pVulkanFunctions = &vma_vulkan_functions' rpcs3-src/rpcs3/Emu/RSX/VK/vkutils/memory.cpp
           grep -q 'PsTJon M5 VMA dispatch: vmaCreateAllocator complete' rpcs3-src/rpcs3/Emu/RSX/VK/vkutils/memory.cpp
           grep -q 'RPCS3_VULKAN_PROVIDER_KOSMICKRISP)' rpcs3-src/rpcs3/Emu/RSX/VK/vkutils/device.cpp
@@ -1029,14 +1145,14 @@ jobs:
           codesign -d --entitlements :- "$APP" 2>&1 | tee pstjon-entitlements.txt
           (
             cd package
-            ditto -c -k --sequesterRsrc --keepParent Payload "$GITHUB_WORKSPACE/PsTJon-KK-M5.1.ipa"
+            ditto -c -k --sequesterRsrc --keepParent Payload "$GITHUB_WORKSPACE/PsTJon-KK-M5.2.ipa"
           )
-          shasum -a 256 PsTJon-KK-M5.1.ipa
+          shasum -a 256 PsTJon-KK-M5.2.ipa
 
       - name: Build report
         run: |
           {
-            echo "PsTJon M5.1 - Volk-to-VMA direct ICD boot fix on preserved v13"
+            echo "PsTJon M5.2 - KosmicKrisp shader-preload memory stability on preserved v13"
             echo "RPCS3 ios-port: $RPCS3_IOS_SHA"
             echo "Shell bundle id: com.xitrix.RPCS3"
             echo "Vulkan provider: KOSMICKRISP"
@@ -1044,15 +1160,15 @@ jobs:
             echo "Volk: $VOLK_SHA"
             echo "FFmpeg: $FFMPEG_VERSION"
             echo "Core: $(shasum -a 256 libRPCS3Core.dylib | awk '{print $1}')"
-            echo "IPA: $(shasum -a 256 PsTJon-KK-M5.1.ipa | awk '{print $1}')"
-          } > PsTJon-KK-M5.1-build.txt
+            echo "IPA: $(shasum -a 256 PsTJon-KK-M5.2.ipa | awk '{print $1}')"
+          } > PsTJon-KK-M5.2-build.txt
 
       - uses: actions/upload-artifact@v4
         with:
-          name: PsTJon-KK-m05-1-vma-boot-IPA
+          name: PsTJon-KK-m05-2-shader-memory-IPA
           path: |
-            PsTJon-KK-M5.1.ipa
-            PsTJon-KK-M5.1-build.txt
+            PsTJon-KK-M5.2.ipa
+            PsTJon-KK-M5.2-build.txt
             pstjon-entitlements.txt
             M5-rpcs3-patch-stat.txt
             M4-mesa-patch-stat.txt
