@@ -1,4 +1,5 @@
 name: PsTJon KosmicKrisp M5
+# runner-retry: fresh-run-after-macos-queue-failure
 
 on:
   push:
