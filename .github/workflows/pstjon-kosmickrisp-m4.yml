@@ -167,7 +167,7 @@ jobs:
           \t\t\t\tg_cfg.video.force_cpu_blit_processing.set(false);
           \t\t\t\tg_cfg.video.disable_async_host_memory_manager.set(false);
           \t\t\t\tg_cfg.core.rsx_accurate_res_access.set(false);
-\t\t\t\tg_cfg.video.disable_zcull_queries.set(true);
+          \t\t\t\tg_cfg.video.disable_zcull_queries.set(true);
           \t\t\t\tg_cfg.core.rsx_fifo_accuracy.set(rsx_fifo_mode::atomic_ordered);
           \t\t\t\tg_cfg.ios_experimental.fifo_cache_size.set(ios_fifo_cache_size::_1_kib);
           \t\t\t\tg_cfg.ios_experimental.fifo_idle_mode.set(ios_fifo_idle_mode::yield);
@@ -454,7 +454,7 @@ jobs:
           cd rpcs3-src
           python3 rpcs3/ios/tests/run-vk-image-pool-tests.py
           python3 rpcs3/ios/tests/run-vk-memory-pressure-tests.py
-          grep -q 'PsTJon v13 Ascension precise-GET/performance policy' rpcs3/Emu/System.cpp
+          grep -q 'PsTJon M5.4 Ascension/KosmicKrisp policy' rpcs3/Emu/System.cpp
           grep -q 'rsx_accurate_res_access.set(false)' rpcs3/Emu/System.cpp
           grep -q 'disable_zcull_queries.set(true)' rpcs3/Emu/System.cpp
           grep -q 'fifo_cache_size.set(ios_fifo_cache_size::_1_kib)' rpcs3/Emu/System.cpp
