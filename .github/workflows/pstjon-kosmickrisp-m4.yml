@@ -484,6 +484,118 @@ jobs:
           PY
           python3 -m py_compile /tmp/apply_m4.py
           python3 /tmp/apply_m4.py --rpcs3 rpcs3-src
+
+          # Keep Apple/Metal support provider-neutral: MoltenVK private headers and
+          # layer settings must never be required by the KosmicKrisp provider.
+          python3 - <<'PY'
+          from pathlib import Path
+
+          h = Path("rpcs3-src/rpcs3/Emu/RSX/VK/vkutils/instance.h")
+          hs = h.read_text()
+          old = """#ifdef __APPLE__
+          #include <MoltenVK/mvk_vulkan.h>
+          #include <MoltenVK/mvk_private_api.h>
+          #endif
+          """
+          new = """#if defined(__APPLE__) && !defined(RPCS3_VULKAN_PROVIDER_KOSMICKRISP)
+          #include <MoltenVK/mvk_vulkan.h>
+          #include <MoltenVK/mvk_private_api.h>
+          #endif
+          """
+          if hs.count(old) != 1:
+              raise SystemExit("M4 instance.h MoltenVK guard anchor mismatch")
+          h.write_text(hs.replace(old, new, 1))
+
+          p = Path("rpcs3-src/rpcs3/Emu/RSX/VK/vkutils/instance.cpp")
+          ps = p.read_text()
+
+          old = """#ifdef __APPLE__
+          		// Declare MVK variables here to ensure the lifetime within the entire scope
+          		const VkBool32 setting_true = VK_TRUE;
+          		const int32_t setting_fast_math = g_cfg.video.disable_msl_fast_math.get() ? MVK_CONFIG_FAST_MATH_NEVER : MVK_CONFIG_FAST_MATH_ON_DEMAND;
+          		bool portability_enumeration_enabled = false;
+
+          		std::vector<VkLayerSettingEXT> mvk_settings;
+          		VkLayerSettingsCreateInfoEXT mvk_layer_settings_create_info{};
+          #endif
+          """
+          new = """#ifdef __APPLE__
+          		bool portability_enumeration_enabled = false;
+          #endif
+
+          #if defined(__APPLE__) && !defined(RPCS3_VULKAN_PROVIDER_KOSMICKRISP)
+          		// MoltenVK-only layer settings. KosmicKrisp is a separate Vulkan ICD.
+          		const VkBool32 setting_true = VK_TRUE;
+          		const int32_t setting_fast_math = g_cfg.video.disable_msl_fast_math.get() ? MVK_CONFIG_FAST_MATH_NEVER : MVK_CONFIG_FAST_MATH_ON_DEMAND;
+          		std::vector<VkLayerSettingEXT> mvk_settings;
+          		VkLayerSettingsCreateInfoEXT mvk_layer_settings_create_info{};
+          #endif
+          """
+          if ps.count(old) != 1:
+              raise SystemExit("M4 instance.cpp MVK declaration guard anchor mismatch")
+          ps = ps.replace(old, new, 1)
+
+          old = """			if (support.is_supported(VK_EXT_LAYER_SETTINGS_EXTENSION_NAME))
+          			{
+          				extensions.push_back(VK_EXT_LAYER_SETTINGS_EXTENSION_NAME);
+
+          				mvk_settings.push_back(VkLayerSettingEXT{ kMVKMoltenVKDriverLayerName, "MVK_CONFIG_RESUME_LOST_DEVICE", VK_LAYER_SETTING_TYPE_BOOL32_EXT, 1, &setting_true });
+          				mvk_settings.push_back(VkLayerSettingEXT{ kMVKMoltenVKDriverLayerName, "MVK_CONFIG_FAST_MATH_ENABLED", VK_LAYER_SETTING_TYPE_INT32_EXT, 1, &setting_fast_math });
+
+          				mvk_layer_settings_create_info.sType = VK_STRUCTURE_TYPE_LAYER_SETTINGS_CREATE_INFO_EXT;
+          				mvk_layer_settings_create_info.pNext = next_info;
+          				mvk_layer_settings_create_info.settingCount = static_cast<uint32_t>(mvk_settings.size());
+          				mvk_layer_settings_create_info.pSettings = mvk_settings.data();
+
+          				next_info = &mvk_layer_settings_create_info;
+          			}
+          """
+          new = """#if !defined(RPCS3_VULKAN_PROVIDER_KOSMICKRISP)
+          			if (support.is_supported(VK_EXT_LAYER_SETTINGS_EXTENSION_NAME))
+          			{
+          				extensions.push_back(VK_EXT_LAYER_SETTINGS_EXTENSION_NAME);
+
+          				mvk_settings.push_back(VkLayerSettingEXT{ kMVKMoltenVKDriverLayerName, "MVK_CONFIG_RESUME_LOST_DEVICE", VK_LAYER_SETTING_TYPE_BOOL32_EXT, 1, &setting_true });
+          				mvk_settings.push_back(VkLayerSettingEXT{ kMVKMoltenVKDriverLayerName, "MVK_CONFIG_FAST_MATH_ENABLED", VK_LAYER_SETTING_TYPE_INT32_EXT, 1, &setting_fast_math });
+
+          				mvk_layer_settings_create_info.sType = VK_STRUCTURE_TYPE_LAYER_SETTINGS_CREATE_INFO_EXT;
+          				mvk_layer_settings_create_info.pNext = next_info;
+          				mvk_layer_settings_create_info.settingCount = static_cast<uint32_t>(mvk_settings.size());
+          				mvk_layer_settings_create_info.pSettings = mvk_settings.data();
+
+          				next_info = &mvk_layer_settings_create_info;
+          			}
+          #endif
+          """
+          if ps.count(old) != 1:
+              raise SystemExit("M4 instance.cpp MVK layer-settings guard anchor mismatch")
+          p.write_text(ps.replace(old, new, 1))
+
+          # Fail early if another MoltenVK-specific dependency exists elsewhere in
+          # the Vulkan backend. This runs before Mesa/LLVM/RPCS3 heavy builds.
+          root = Path("rpcs3-src/rpcs3/Emu/RSX/VK")
+          tokens = ("<MoltenVK/", "kMVK", "MVK_CONFIG_", "VK_MVK", "mvk_private_api", "mvk_vulkan")
+          hits = []
+          for src in root.rglob("*"):
+              if not src.is_file() or src.suffix.lower() not in {".h", ".hpp", ".c", ".cc", ".cpp", ".m", ".mm"}:
+                  continue
+              for lineno, line in enumerate(src.read_text(errors="ignore").splitlines(), 1):
+                  if any(token in line for token in tokens):
+                      hits.append((src.as_posix(), lineno, line.strip()))
+          allowed = {
+              "rpcs3-src/rpcs3/Emu/RSX/VK/vkutils/instance.h",
+              "rpcs3-src/rpcs3/Emu/RSX/VK/vkutils/instance.cpp",
+          }
+          unexpected = [x for x in hits if x[0] not in allowed]
+          if unexpected:
+              raise SystemExit("Unexpected MoltenVK residue(s):\n" + "\n".join(map(str, unexpected)))
+          guard = "#if defined(__APPLE__) && !defined(RPCS3_VULKAN_PROVIDER_KOSMICKRISP)"
+          if guard not in h.read_text() or guard not in p.read_text():
+              raise SystemExit("KosmicKrisp/MoltenVK provider boundary guard missing")
+          print("MoltenVK residue audit PASS")
+          for hit in hits:
+              print(hit)
+          PY
           grep -q 'RPCS3_VULKAN_PROVIDER "MOLTENVK"' rpcs3-src/3rdparty/CMakeLists.txt
           grep -q 'RPCS3_VULKAN_PROVIDER_KOSMICKRISP' rpcs3-src/rpcs3/Emu/RSX/VK/VulkanAPI.h
           grep -q 'volkInitializeCustom' rpcs3-src/rpcs3/Emu/RSX/VK/vkutils/instance.cpp
@@ -632,8 +744,9 @@ jobs:
           test -f "$KK_DYLIB"
           mkdir -p "$GITHUB_WORKSPACE/deps/kosmickrisp-ios/lib" "$GITHUB_WORKSPACE/deps/kosmickrisp-ios/include"
           cp "$KK_DYLIB" "$GITHUB_WORKSPACE/deps/kosmickrisp-ios/lib/libKosmicKrisp.dylib"
-          cp -R "$GITHUB_WORKSPACE/mesa-src/include/vulkan" "$GITHUB_WORKSPACE/deps/kosmickrisp-ios/include/"
-          cp -R "$GITHUB_WORKSPACE/mesa-src/include/vk_video" "$GITHUB_WORKSPACE/deps/kosmickrisp-ios/include/"
+          # Package the complete Mesa public include tree so transitive Vulkan,
+          # vk_video and future public header dependencies are present as one SDK.
+          cp -R "$GITHUB_WORKSPACE/mesa-src/include/." "$GITHUB_WORKSPACE/deps/kosmickrisp-ios/include/"
 
           file "$KK_DYLIB" | tee M4-kosmickrisp-file.txt
           lipo -info "$KK_DYLIB" | tee M4-kosmickrisp-lipo.txt
