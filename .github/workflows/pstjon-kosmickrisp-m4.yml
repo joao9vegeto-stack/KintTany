@@ -1122,6 +1122,126 @@ jobs:
           grep -q 'M5.5: Ascension KosmicKrisp pipeline misses compile inline' rpcs3-src/rpcs3/Emu/RSX/VK/VKGSRender.cpp
           grep -q 'result == VK_ERROR_INVALID_SHADER_NV' rpcs3-src/rpcs3/Emu/RSX/VK/VKProgramPipeline.cpp
           grep -q 'M5.5: rejected KosmicKrisp graphics pipeline left on interpreter fallback' rpcs3-src/rpcs3/Emu/RSX/VK/VKPipelineCompiler.cpp
+          # M5.6: M5.5 proved that compiling a Metal pipeline inline on the
+          # RSX thread creates 0.4-1.6 s stalls. Keep the one-worker boot preload,
+          # return new runtime misses to the one-worker async compiler, and do
+          # not render an incomplete miss through the KK Shader Interpreter.
+          # Also force strict texture flushing for Ascension/KK because this title
+          # repeatedly aliases framebuffer-backed texture memory through NV3089.
+          python3 - <<'PY'
+          from pathlib import Path
+
+          # A) Ascension/KK runtime misses: asynchronous again. The worker pool is
+          # already constrained to one worker by M5.2.
+          p = Path("rpcs3-src/rpcs3/Emu/RSX/VK/VKGSRender.cpp")
+          s = p.read_text()
+
+          old = """#ifdef RPCS3_VULKAN_PROVIDER_KOSMICKRISP
+          \t\tif (Emu.GetTitleID() == "BCUS98232" && shadermode == shader_mode::async_with_interpreter)
+          \t\t{
+          \t\t\tcompile_async = false;
+          \t\t\tstatic bool s_logged_inline_misses = false;
+          \t\t\tif (!s_logged_inline_misses)
+          \t\t\t{
+          \t\t\t\ts_logged_inline_misses = true;
+          \t\t\t\trsx_log.notice("PsTJon M5.5: Ascension KosmicKrisp pipeline misses compile inline; boot-preloaded cache retained");
+          \t\t\t}
+          \t\t}
+          #endif
+          """
+          new = """#ifdef RPCS3_VULKAN_PROVIDER_KOSMICKRISP
+          \t\tif (Emu.GetTitleID() == "BCUS98232" && shadermode == shader_mode::async_with_interpreter)
+          \t\t{
+          \t\t\tcompile_async = true;
+          \t\t\tstatic bool s_logged_async_misses = false;
+          \t\t\tif (!s_logged_async_misses)
+          \t\t\t{
+          \t\t\t\ts_logged_async_misses = true;
+          \t\t\t\trsx_log.notice("PsTJon M5.6: Ascension KosmicKrisp runtime pipeline misses use 1-worker async compilation");
+          \t\t\t}
+          \t\t}
+          #endif
+          """
+          if s.count(old) != 1:
+              raise SystemExit(f"M5.6 async-miss policy anchor mismatch: {s.count(old)}")
+          s = s.replace(old, new, 1)
+
+          # Consume the cache-miss flag as usual, but on Ascension/KK never feed
+          # a not-yet-compiled program through the generic Shader Interpreter.
+          # Returning false uses RPCS3's existing no-program draw-skip path.
+          old = """\t\tif (m_prog_buffer->check_cache_missed())
+          \t\t{
+          """
+          new = """\t\tconst bool pipeline_cache_missed = m_prog_buffer->check_cache_missed();
+
+          #ifdef RPCS3_VULKAN_PROVIDER_KOSMICKRISP
+          \t\tif (!m_program && Emu.GetTitleID() == "BCUS98232" &&
+          \t\t\tshadermode == shader_mode::async_with_interpreter)
+          \t\t{
+          \t\t\tstatic bool s_logged_pending_skip = false;
+          \t\t\tif (!s_logged_pending_skip)
+          \t\t\t{
+          \t\t\t\ts_logged_pending_skip = true;
+          \t\t\t\trsx_log.notice("PsTJon M5.6: pending KosmicKrisp pipeline draw skipped until compiled");
+          \t\t\t}
+          \t\t\tm_vs_binding_table = nullptr;
+          \t\t\tm_fs_binding_table = nullptr;
+          \t\t\treturn false;
+          \t\t}
+          #endif
+
+          \t\tif (pipeline_cache_missed)
+          \t\t{
+          """
+          if s.count(old) != 1:
+              raise SystemExit(f"M5.6 cache-miss skip anchor mismatch: {s.count(old)}")
+          p.write_text(s.replace(old, new, 1))
+
+          # B) Ascension framebuffer/texture aliasing correctness. Strict texture
+          # flushing makes superseded framebuffer-backed texture regions flush
+          # instead of taking the generic skip-flush fast path.
+          p = Path("rpcs3-src/rpcs3/Emu/System.cpp")
+          s = p.read_text()
+          old = """\t\t\t\tg_cfg.video.disable_zcull_queries.set(true);
+          \t\t\t\tg_cfg.core.rsx_fifo_accuracy.set(rsx_fifo_mode::atomic_ordered);
+          """
+          new = """\t\t\t\tg_cfg.video.disable_zcull_queries.set(true);
+          \t\t\t\tg_cfg.video.strict_texture_flushing.set(true);
+          \t\t\t\tsys_log.notice("PsTJon M5.6: Ascension KosmicKrisp strict texture flushing enabled for framebuffer/texture aliasing");
+          \t\t\t\tg_cfg.core.rsx_fifo_accuracy.set(rsx_fifo_mode::atomic_ordered);
+          """
+          if s.count(old) != 1:
+              raise SystemExit(f"M5.6 strict-texture policy anchor mismatch: {s.count(old)}")
+          p.write_text(s.replace(old, new, 1))
+
+          checks = {
+              "rpcs3-src/rpcs3/Emu/RSX/VK/VKGSRender.cpp": [
+                  "PsTJon M5.6: Ascension KosmicKrisp runtime pipeline misses use 1-worker async compilation",
+                  "PsTJon M5.6: pending KosmicKrisp pipeline draw skipped until compiled",
+                  "compile_async = true;",
+                  "const bool pipeline_cache_missed",
+              ],
+              "rpcs3-src/rpcs3/Emu/System.cpp": [
+                  "g_cfg.video.strict_texture_flushing.set(true);",
+                  "PsTJon M5.6: Ascension KosmicKrisp strict texture flushing enabled",
+              ],
+          }
+          for file, needles in checks.items():
+              text = Path(file).read_text()
+              missing = [x for x in needles if x not in text]
+              if missing:
+                  raise SystemExit(f"M5.6 verification failed for {file}: {missing}")
+
+          if "PsTJon M5.5: Ascension KosmicKrisp pipeline misses compile inline" in Path(
+              "rpcs3-src/rpcs3/Emu/RSX/VK/VKGSRender.cpp").read_text():
+              raise SystemExit("M5.6 stale inline compile policy remains")
+
+          print("M5.6 nonblocking pipeline + strict texture correctness PASS")
+          PY
+          grep -q 'M5.6: Ascension KosmicKrisp runtime pipeline misses use 1-worker async compilation' rpcs3-src/rpcs3/Emu/RSX/VK/VKGSRender.cpp
+          grep -q 'M5.6: pending KosmicKrisp pipeline draw skipped until compiled' rpcs3-src/rpcs3/Emu/RSX/VK/VKGSRender.cpp
+          grep -q 'strict_texture_flushing.set(true)' rpcs3-src/rpcs3/Emu/System.cpp
+          ! grep -q 'M5.5: Ascension KosmicKrisp pipeline misses compile inline' rpcs3-src/rpcs3/Emu/RSX/VK/VKGSRender.cpp
           grep -q 'allocatorInfo.pVulkanFunctions = &vma_vulkan_functions' rpcs3-src/rpcs3/Emu/RSX/VK/vkutils/memory.cpp
           grep -q 'PsTJon M5 VMA dispatch: vmaCreateAllocator complete' rpcs3-src/rpcs3/Emu/RSX/VK/vkutils/memory.cpp
           grep -q 'RPCS3_VULKAN_PROVIDER_KOSMICKRISP)' rpcs3-src/rpcs3/Emu/RSX/VK/vkutils/device.cpp
@@ -1402,14 +1522,14 @@ jobs:
           codesign -d --entitlements :- "$APP" 2>&1 | tee pstjon-entitlements.txt
           (
             cd package
-            ditto -c -k --sequesterRsrc --keepParent Payload "$GITHUB_WORKSPACE/PsTJon-KK-M5.5.ipa"
+            ditto -c -k --sequesterRsrc --keepParent Payload "$GITHUB_WORKSPACE/PsTJon-KK-M5.6.ipa"
           )
-          shasum -a 256 PsTJon-KK-M5.5.ipa
+          shasum -a 256 PsTJon-KK-M5.6.ipa
 
       - name: Build report
         run: |
           {
-            echo "PsTJon M5.5 - inline Ascension shader misses + invalid-shader interpreter fallback on preserved v13"
+            echo "PsTJon M5.6 - nonblocking Ascension pipelines + strict texture correctness on preserved v13"
             echo "RPCS3 ios-port: $RPCS3_IOS_SHA"
             echo "Shell bundle id: com.xitrix.RPCS3"
             echo "Vulkan provider: KOSMICKRISP"
@@ -1417,15 +1537,15 @@ jobs:
             echo "Volk: $VOLK_SHA"
             echo "FFmpeg: $FFMPEG_VERSION"
             echo "Core: $(shasum -a 256 libRPCS3Core.dylib | awk '{print $1}')"
-            echo "IPA: $(shasum -a 256 PsTJon-KK-M5.5.ipa | awk '{print $1}')"
-          } > PsTJon-KK-M5.5-build.txt
+            echo "IPA: $(shasum -a 256 PsTJon-KK-M5.6.ipa | awk '{print $1}')"
+          } > PsTJon-KK-M5.6-build.txt
 
       - uses: actions/upload-artifact@v4
         with:
-          name: PsTJon-KK-m05-5-inline-fallback-IPA
+          name: PsTJon-KK-m05-6-async-strict-texture-IPA
           path: |
-            PsTJon-KK-M5.5.ipa
-            PsTJon-KK-M5.5-build.txt
+            PsTJon-KK-M5.6.ipa
+            PsTJon-KK-M5.6-build.txt
             pstjon-entitlements.txt
             M5-rpcs3-patch-stat.txt
             M4-mesa-patch-stat.txt
