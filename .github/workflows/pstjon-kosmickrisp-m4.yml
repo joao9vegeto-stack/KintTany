@@ -1431,6 +1431,49 @@ jobs:
           grep -q 'M5.8: Ascension Disable MLAA patch suppressed' rpcs3-src/Utilities/bin_patch.cpp
           grep -q 'PsTJon M5.8 correctness-first:' rpcs3-src/rpcs3/Emu/System.cpp
           ! grep -q 'M5.7 NV3089 bounded local blit' rpcs3-src/rpcs3/Emu/RSX/NV47/HW/nv3089.cpp
+          # M5.9 physical-test regression: restore user MLAA patch (RPCS3 #17179).
+          python3 - <<'PY'
+          from pathlib import Path
+          
+          # Physical M5.8: almost entirely black with only lights/UI visible.
+          # M5.8 deliberately suppressed "Disable MLAA", and the M5.8 log proves
+          # the suppression happened. RPCS3 #17179 documents a deterministic
+          # black-screen race in Ascension when this patch is disabled.
+          # #15639 concerns an unrelated chapter-16 texture defect: it was
+          # incorrect to generalize it into a universal no-MLAA policy.
+          # Restore the USER-ENABLED patch rather than injecting a blind new
+          # patch, and preserve CPU blit / precise reservation / v13 GET.
+          p = Path("rpcs3-src/Utilities/bin_patch.cpp")
+          s = p.read_text()
+          marker = "PsTJon M5.8: Ascension Disable MLAA patch suppressed after physical visual-corruption test; saved patch configuration untouched"
+          if s.count(marker) != 1:
+              raise SystemExit("M5.9 cannot find exact M5.8 MLAA suppression")
+          start = s.rfind("#ifdef RPCS3_IOS", 0, s.index(marker))
+          end = s.find("#endif", s.index(marker))
+          if start < 0 or end < 0:
+              raise SystemExit("M5.9 cannot bracket prior conditional")
+          block = s[start:end+len("#endif")]
+          if 'serial == "BCUS98232" && description == "Disable MLAA"' not in block or "continue;" not in block:
+              raise SystemExit("M5.9 unexpected patch-selection content")
+          s = s[:start] + s[end+len("#endif"):]
+          p.write_text(s)
+          assert "PsTJon M5.8: Ascension Disable MLAA patch suppressed" not in s
+          assert 'if (config_values.enabled)' in s
+          assert "patch_engine::apply(" in s
+          # Ensure the game bootstrap retains the correctness-first CPU blit and
+          # accurate RSX reservations, and the overbroad M5.7 clip stays removed.
+          p = Path("rpcs3-src/rpcs3/Emu/System.cpp")
+          system = p.read_text()
+          assert "force_cpu_blit_processing.set(true);" in system
+          assert "disable_async_host_memory_manager.set(true);" in system
+          assert "rsx_accurate_res_access.set(true);" in system
+          nv = Path("rpcs3-src/rpcs3/Emu/RSX/NV47/HW/nv3089.cpp").read_text()
+          assert "PsTJon M5.7 NV3089 bounded local blit" not in nv
+          assert "PsTJon v13: consumed Ascension OOB local blit" in nv
+          print("M5.9 Ascension MLAA race fix: user patch restored; CPU blit / v13 safeguards preserved PASS")
+          PY
+          ! grep -q 'PsTJon M5.8: Ascension Disable MLAA patch suppressed' rpcs3-src/Utilities/bin_patch.cpp
+          grep -q 'if (config_values.enabled)' rpcs3-src/Utilities/bin_patch.cpp
           grep -q 'allocatorInfo.pVulkanFunctions = &vma_vulkan_functions' rpcs3-src/rpcs3/Emu/RSX/VK/vkutils/memory.cpp
           grep -q 'PsTJon M5 VMA dispatch: vmaCreateAllocator complete' rpcs3-src/rpcs3/Emu/RSX/VK/vkutils/memory.cpp
           grep -q 'RPCS3_VULKAN_PROVIDER_KOSMICKRISP)' rpcs3-src/rpcs3/Emu/RSX/VK/vkutils/device.cpp
@@ -1711,14 +1754,14 @@ jobs:
           codesign -d --entitlements :- "$APP" 2>&1 | tee pstjon-entitlements.txt
           (
             cd package
-            ditto -c -k --sequesterRsrc --keepParent Payload "$GITHUB_WORKSPACE/PsTJon-KK-M5.8.ipa"
+            ditto -c -k --sequesterRsrc --keepParent Payload "$GITHUB_WORKSPACE/PsTJon-KK-M5.9.ipa"
           )
-          shasum -a 256 PsTJon-KK-M5.8.ipa
+          shasum -a 256 PsTJon-KK-M5.9.ipa
 
       - name: Build report
         run: |
           {
-            echo "PsTJon M5.8 - disable faulty Ascension MLAA patch + CPU blit + synchronized RSX memory + rollback M5.7 guard"
+            echo "PsTJon M5.9 - restore Ascension MLAA fix for black-screen race; retain CPU blit, RSX coherence, v13 protections"
             echo "RPCS3 ios-port: $RPCS3_IOS_SHA"
             echo "Shell bundle id: com.xitrix.RPCS3"
             echo "Vulkan provider: KOSMICKRISP"
@@ -1726,15 +1769,15 @@ jobs:
             echo "Volk: $VOLK_SHA"
             echo "FFmpeg: $FFMPEG_VERSION"
             echo "Core: $(shasum -a 256 libRPCS3Core.dylib | awk '{print $1}')"
-            echo "IPA: $(shasum -a 256 PsTJon-KK-M5.8.ipa | awk '{print $1}')"
-          } > PsTJon-KK-M5.8-build.txt
+            echo "IPA: $(shasum -a 256 PsTJon-KK-M5.9.ipa | awk '{print $1}')"
+          } > PsTJon-KK-M5.9-build.txt
 
       - uses: actions/upload-artifact@v4
         with:
-          name: PsTJon-KK-m05-8-MLAA-CPU-coherence-IPA
+          name: PsTJon-KK-m05-9-MLAA-race-fix-IPA
           path: |
-            PsTJon-KK-M5.8.ipa
-            PsTJon-KK-M5.8-build.txt
+            PsTJon-KK-M5.9.ipa
+            PsTJon-KK-M5.9-build.txt
             pstjon-entitlements.txt
             M5-rpcs3-patch-stat.txt
             M4-mesa-patch-stat.txt
