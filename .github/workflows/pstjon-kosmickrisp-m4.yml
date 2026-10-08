@@ -1357,6 +1357,8 @@ jobs:
           if start < 0 or end < 0 or "rows_fit" not in s[start:end] or "return { false, src_info, dst_info }" not in s[start:end]:
               raise SystemExit("M5.8 cannot safely remove M5.7 guard")
           s = s[:start] + s[end + len("#endif"):]
+          # The deleted guard left a tab-only blank line; git diff --check rejects it.
+          s = "\n".join(line.rstrip(" \t") for line in s.split("\n"))
           old = "u16 clip_h = std::min(REGS(ctx)->blit_engine_clip_height(), out_h);"
           if s.count(old) != 1:
               raise SystemExit("M5.8 clip_h rollback anchor mismatch")
