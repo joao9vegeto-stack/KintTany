@@ -1,4 +1,4 @@
-name: PsTJon KosmicKrisp M4
+name: PsTJon KosmicKrisp M5
 
 on:
   push:
@@ -6,7 +6,7 @@ on:
   workflow_dispatch:
 
 concurrency:
-  group: pstjon-kosmickrisp-m4
+  group: pstjon-kosmickrisp-m5
   cancel-in-progress: true
 
 jobs:
@@ -39,7 +39,7 @@ jobs:
           git cat-file -e f0944f0957bae61793679e5b3330ccfd2b53d005^{commit}
           git merge-base --is-ancestor f0944f0957bae61793679e5b3330ccfd2b53d005 HEAD
           git diff --exit-code f0944f0957bae61793679e5b3330ccfd2b53d005 HEAD -- .github/workflows/pstjon.yml
-          echo "M4 branch head: $(git rev-parse HEAD)"
+          echo "M5 branch head: $(git rev-parse HEAD)"
           echo "Immutable v13 baseline: f0944f0957bae61793679e5b3330ccfd2b53d005"
 
       - name: Select Xcode 26 and toolchain
@@ -579,13 +579,135 @@ jobs:
           for hit in hits:
               print(hit)
           PY
+          # M5: fix Apple driver classification for KosmicKrisp and add
+          # crash-localization checkpoints after VkDevice creation.
+          python3 - <<'PY'
+          from pathlib import Path
+
+          p = Path("rpcs3-src/rpcs3/Emu/RSX/VK/vkutils/device.cpp")
+          s = p.read_text()
+
+          old_vendor = """#ifdef __APPLE__
+          		// moltenVK currently returns DRIVER_ID_MOLTENVK (0).
+          		// For now, assume the vendor is moltenVK on Apple devices.
+          		return driver_vendor::MVK;
+          #endif
+          """
+          new_vendor = """#if defined(__APPLE__) && !defined(RPCS3_VULKAN_PROVIDER_KOSMICKRISP)
+          		// MoltenVK reports DRIVER_ID_MOLTENVK (0) on Apple platforms.
+          		return driver_vendor::MVK;
+          #endif
+          """
+          if s.count(old_vendor) != 1:
+              raise SystemExit("M5 Apple driver-vendor anchor mismatch")
+          s = s.replace(old_vendor, new_vendor, 1)
+
+          reg = """#ifdef RPCS3_IOS
+          		rpcs3::ios::graphics_lifecycle_state().register_device(this, [](void* context)
+          		{
+          			auto* device = static_cast<render_device*>(context);
+          			const VkResult result = vkDeviceWaitIdle(*device);
+          			if (result != VK_SUCCESS)
+          				rsx_log.error("iOS graphics background drain failed: %d", static_cast<int>(result));
+          		});
+          #endif
+          """
+          reg_new = """#ifdef RPCS3_IOS
+          		rsx_log.notice("PsTJon M5 checkpoint 1: before graphics lifecycle registration");
+          		rpcs3::ios::graphics_lifecycle_state().register_device(this, [](void* context)
+          		{
+          			auto* device = static_cast<render_device*>(context);
+          			const VkResult result = vkDeviceWaitIdle(*device);
+          			if (result != VK_SUCCESS)
+          				rsx_log.error("iOS graphics background drain failed: %d", static_cast<int>(result));
+          		});
+          		rsx_log.notice("PsTJon M5 checkpoint 2: graphics lifecycle registered");
+          #endif
+          """
+          if s.count(reg) != 1:
+              raise SystemExit("M5 lifecycle registration anchor mismatch")
+          s = s.replace(reg, reg_new, 1)
+
+          old_queues = """		// Initialize queues
+          		vkGetDeviceQueue(dev, graphics_queue_idx, 0, &m_graphics_queue);
+          		vkGetDeviceQueue(dev, transfer_queue_idx, transfer_queue_sub_index, &m_transfer_queue);
+
+          		if (present_queue_idx != umax)
+          		{
+          			vkGetDeviceQueue(dev, present_queue_idx, 0, &m_present_queue);
+          		}
+
+          		memory_map = vk::get_memory_mapping(pdev);
+          		m_formats_support = vk::get_optimal_tiling_supported_formats(pdev);
+          """
+          new_queues = """		// Initialize queues
+          		rsx_log.notice("PsTJon M5 checkpoint 3: loading Vulkan queue handles");
+          		vkGetDeviceQueue(dev, graphics_queue_idx, 0, &m_graphics_queue);
+          		vkGetDeviceQueue(dev, transfer_queue_idx, transfer_queue_sub_index, &m_transfer_queue);
+
+          		if (present_queue_idx != umax)
+          		{
+          			vkGetDeviceQueue(dev, present_queue_idx, 0, &m_present_queue);
+          		}
+          		rsx_log.notice("PsTJon M5 checkpoint 4: Vulkan queue handles loaded");
+
+          		rsx_log.notice("PsTJon M5 checkpoint 5: querying Vulkan memory map");
+          		memory_map = vk::get_memory_mapping(pdev);
+          		rsx_log.notice("PsTJon M5 checkpoint 6: Vulkan memory map ready");
+          		m_formats_support = vk::get_optimal_tiling_supported_formats(pdev);
+          		rsx_log.notice("PsTJon M5 checkpoint 7: Vulkan format capabilities ready");
+          """
+          if s.count(old_queues) != 1:
+              raise SystemExit("M5 queue/memory anchor mismatch")
+          s = s.replace(old_queues, new_queues, 1)
+
+          old_alloc = """		if (g_cfg.video.disable_vulkan_mem_allocator)
+          		{
+          			m_allocator = std::make_unique<vk::mem_allocator_vk>(*this, pdev);
+          		}
+          		else
+          		{
+          			m_allocator = std::make_unique<vk::mem_allocator_vma>(*this, pdev, pdev);
+          		}
+          """
+          new_alloc = """		rsx_log.notice("PsTJon M5 checkpoint 8: creating Vulkan allocator");
+          		if (g_cfg.video.disable_vulkan_mem_allocator)
+          		{
+          			m_allocator = std::make_unique<vk::mem_allocator_vk>(*this, pdev);
+          		}
+          		else
+          		{
+          			m_allocator = std::make_unique<vk::mem_allocator_vma>(*this, pdev, pdev);
+          		}
+          		rsx_log.notice("PsTJon M5 checkpoint 9: Vulkan allocator ready");
+          """
+          if s.count(old_alloc) != 1:
+              raise SystemExit("M5 allocator anchor mismatch")
+          s = s.replace(old_alloc, new_alloc, 1)
+
+          old_cache = """		memory_map.device_local_total_bytes = vram_pressure_limit;
+          		create_pipeline_cache();
+          """
+          new_cache = """		memory_map.device_local_total_bytes = vram_pressure_limit;
+          		rsx_log.notice("PsTJon M5 checkpoint 10: creating provider-separated pipeline cache");
+          		create_pipeline_cache();
+          		rsx_log.notice("PsTJon M5 checkpoint 11: render device initialization complete");
+          """
+          if s.count(old_cache) != 1:
+              raise SystemExit("M5 pipeline-cache anchor mismatch")
+          s = s.replace(old_cache, new_cache, 1)
+
+          p.write_text(s)
+          PY
+          grep -q 'RPCS3_VULKAN_PROVIDER_KOSMICKRISP)' rpcs3-src/rpcs3/Emu/RSX/VK/vkutils/device.cpp
+          grep -q 'PsTJon M5 checkpoint 11: render device initialization complete' rpcs3-src/rpcs3/Emu/RSX/VK/vkutils/device.cpp
           grep -q 'RPCS3_VULKAN_PROVIDER "MOLTENVK"' rpcs3-src/3rdparty/CMakeLists.txt
           grep -q 'RPCS3_VULKAN_PROVIDER_KOSMICKRISP' rpcs3-src/rpcs3/Emu/RSX/VK/VulkanAPI.h
           grep -q 'volkInitializeCustom' rpcs3-src/rpcs3/Emu/RSX/VK/vkutils/instance.cpp
           grep -q 'volkLoadDevice' rpcs3-src/rpcs3/Emu/RSX/VK/vkutils/device.cpp
           grep -q 'shaders_cache/vulkan' rpcs3-src/rpcs3/Emu/RSX/VK/vkutils/device.cpp
           git -C rpcs3-src diff --check
-          git -C rpcs3-src diff --stat | tee M4-rpcs3-patch-stat.txt
+          git -C rpcs3-src diff --stat | tee M5-rpcs3-patch-stat.txt
 
       - name: Build pinned KosmicKrisp iOS Metal provider
         run: |
@@ -855,14 +977,14 @@ jobs:
           codesign -d --entitlements :- "$APP" 2>&1 | tee pstjon-entitlements.txt
           (
             cd package
-            ditto -c -k --sequesterRsrc --keepParent Payload "$GITHUB_WORKSPACE/PsTJon-KK-M4.ipa"
+            ditto -c -k --sequesterRsrc --keepParent Payload "$GITHUB_WORKSPACE/PsTJon-KK-M5.ipa"
           )
-          shasum -a 256 PsTJon-KK-M4.ipa
+          shasum -a 256 PsTJon-KK-M5.ipa
 
       - name: Build report
         run: |
           {
-            echo "PsTJon M4 - experimental KosmicKrisp provider integration on preserved v13"
+            echo "PsTJon M5 - first RPCS3 title boot smoke on KosmicKrisp, preserved v13"
             echo "RPCS3 ios-port: $RPCS3_IOS_SHA"
             echo "Shell bundle id: com.xitrix.RPCS3"
             echo "Vulkan provider: KOSMICKRISP"
@@ -870,17 +992,17 @@ jobs:
             echo "Volk: $VOLK_SHA"
             echo "FFmpeg: $FFMPEG_VERSION"
             echo "Core: $(shasum -a 256 libRPCS3Core.dylib | awk '{print $1}')"
-            echo "IPA: $(shasum -a 256 PsTJon-KK-M4.ipa | awk '{print $1}')"
-          } > PsTJon-KK-M4-build.txt
+            echo "IPA: $(shasum -a 256 PsTJon-KK-M5.ipa | awk '{print $1}')"
+          } > PsTJon-KK-M5-build.txt
 
       - uses: actions/upload-artifact@v4
         with:
-          name: PsTJon-KK-m04-provider-IPA
+          name: PsTJon-KK-m05-boot-smoke-IPA
           path: |
-            PsTJon-KK-M4.ipa
-            PsTJon-KK-M4-build.txt
+            PsTJon-KK-M5.ipa
+            PsTJon-KK-M5-build.txt
             pstjon-entitlements.txt
-            M4-rpcs3-patch-stat.txt
+            M5-rpcs3-patch-stat.txt
             M4-mesa-patch-stat.txt
             M4-kosmickrisp-file.txt
             M4-kosmickrisp-lipo.txt
