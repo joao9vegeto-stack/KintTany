@@ -490,6 +490,9 @@ jobs:
           python3 - <<'PY'
           from pathlib import Path
 
+          provider_guard = "#if !defined(RPCS3_VULKAN_PROVIDER_KOSMICKRISP)"
+          apple_provider_guard = "#if defined(__APPLE__) && !defined(RPCS3_VULKAN_PROVIDER_KOSMICKRISP)"
+
           h = Path("rpcs3-src/rpcs3/Emu/RSX/VK/vkutils/instance.h")
           hs = h.read_text()
           old = """#ifdef __APPLE__
@@ -509,67 +512,40 @@ jobs:
           p = Path("rpcs3-src/rpcs3/Emu/RSX/VK/vkutils/instance.cpp")
           ps = p.read_text()
 
-          old = """#ifdef __APPLE__
-          		// Declare MVK variables here to ensure the lifetime within the entire scope
-          		const VkBool32 setting_true = VK_TRUE;
-          		const int32_t setting_fast_math = g_cfg.video.disable_msl_fast_math.get() ? MVK_CONFIG_FAST_MATH_NEVER : MVK_CONFIG_FAST_MATH_ON_DEMAND;
-          		bool portability_enumeration_enabled = false;
+          # Guard only the MVK-specific declarations, leaving Apple portability
+          # enumeration available to both MoltenVK and KosmicKrisp.
+          first_decl = "\t\tconst VkBool32 setting_true = VK_TRUE;"
+          last_decl = "\t\tVkLayerSettingsCreateInfoEXT mvk_layer_settings_create_info{};"
+          if ps.count(first_decl) != 1 or ps.count(last_decl) != 1:
+              raise SystemExit("M4 MVK declaration line anchor mismatch")
+          ps = ps.replace(first_decl, provider_guard + "\n" + first_decl, 1)
+          ps = ps.replace(last_decl, last_decl + "\n#endif", 1)
 
-          		std::vector<VkLayerSettingEXT> mvk_settings;
-          		VkLayerSettingsCreateInfoEXT mvk_layer_settings_create_info{};
-          #endif
-          """
-          new = """#ifdef __APPLE__
-          		bool portability_enumeration_enabled = false;
-          #endif
-
-          #if defined(__APPLE__) && !defined(RPCS3_VULKAN_PROVIDER_KOSMICKRISP)
-          		// MoltenVK-only layer settings. KosmicKrisp is a separate Vulkan ICD.
-          		const VkBool32 setting_true = VK_TRUE;
-          		const int32_t setting_fast_math = g_cfg.video.disable_msl_fast_math.get() ? MVK_CONFIG_FAST_MATH_NEVER : MVK_CONFIG_FAST_MATH_ON_DEMAND;
-          		std::vector<VkLayerSettingEXT> mvk_settings;
-          		VkLayerSettingsCreateInfoEXT mvk_layer_settings_create_info{};
-          #endif
-          """
-          if ps.count(old) != 1:
-              raise SystemExit("M4 instance.cpp MVK declaration guard anchor mismatch")
-          ps = ps.replace(old, new, 1)
-
-          old = """			if (support.is_supported(VK_EXT_LAYER_SETTINGS_EXTENSION_NAME))
-          			{
-          				extensions.push_back(VK_EXT_LAYER_SETTINGS_EXTENSION_NAME);
-
-          				mvk_settings.push_back(VkLayerSettingEXT{ kMVKMoltenVKDriverLayerName, "MVK_CONFIG_RESUME_LOST_DEVICE", VK_LAYER_SETTING_TYPE_BOOL32_EXT, 1, &setting_true });
-          				mvk_settings.push_back(VkLayerSettingEXT{ kMVKMoltenVKDriverLayerName, "MVK_CONFIG_FAST_MATH_ENABLED", VK_LAYER_SETTING_TYPE_INT32_EXT, 1, &setting_fast_math });
-
-          				mvk_layer_settings_create_info.sType = VK_STRUCTURE_TYPE_LAYER_SETTINGS_CREATE_INFO_EXT;
-          				mvk_layer_settings_create_info.pNext = next_info;
-          				mvk_layer_settings_create_info.settingCount = static_cast<uint32_t>(mvk_settings.size());
-          				mvk_layer_settings_create_info.pSettings = mvk_settings.data();
-
-          				next_info = &mvk_layer_settings_create_info;
-          			}
-          """
-          new = """#if !defined(RPCS3_VULKAN_PROVIDER_KOSMICKRISP)
-          			if (support.is_supported(VK_EXT_LAYER_SETTINGS_EXTENSION_NAME))
-          			{
-          				extensions.push_back(VK_EXT_LAYER_SETTINGS_EXTENSION_NAME);
-
-          				mvk_settings.push_back(VkLayerSettingEXT{ kMVKMoltenVKDriverLayerName, "MVK_CONFIG_RESUME_LOST_DEVICE", VK_LAYER_SETTING_TYPE_BOOL32_EXT, 1, &setting_true });
-          				mvk_settings.push_back(VkLayerSettingEXT{ kMVKMoltenVKDriverLayerName, "MVK_CONFIG_FAST_MATH_ENABLED", VK_LAYER_SETTING_TYPE_INT32_EXT, 1, &setting_fast_math });
-
-          				mvk_layer_settings_create_info.sType = VK_STRUCTURE_TYPE_LAYER_SETTINGS_CREATE_INFO_EXT;
-          				mvk_layer_settings_create_info.pNext = next_info;
-          				mvk_layer_settings_create_info.settingCount = static_cast<uint32_t>(mvk_settings.size());
-          				mvk_layer_settings_create_info.pSettings = mvk_settings.data();
-
-          				next_info = &mvk_layer_settings_create_info;
-          			}
-          #endif
-          """
-          if ps.count(old) != 1:
-              raise SystemExit("M4 instance.cpp MVK layer-settings guard anchor mismatch")
-          p.write_text(ps.replace(old, new, 1))
+          # Guard the complete MoltenVK layer-settings block by structure rather
+          # than by formatting, so upstream/provider edits cannot invalidate it.
+          lines = ps.splitlines()
+          needle = "if (support.is_supported(VK_EXT_LAYER_SETTINGS_EXTENSION_NAME))"
+          starts = [i for i, line in enumerate(lines) if needle in line]
+          if len(starts) != 1:
+              raise SystemExit(f"M4 MVK layer-settings block count mismatch: {len(starts)}")
+          start = starts[0]
+          depth = 0
+          opened = False
+          end = None
+          for i in range(start, len(lines)):
+              depth += lines[i].count("{")
+              if lines[i].count("{"):
+                  opened = True
+              depth -= lines[i].count("}")
+              if opened and depth == 0:
+                  end = i
+                  break
+          if end is None:
+              raise SystemExit("M4 MVK layer-settings closing brace not found")
+          lines.insert(end + 1, "#endif")
+          lines.insert(start, provider_guard)
+          ps = "\n".join(lines) + "\n"
+          p.write_text(ps)
 
           # Fail early if another MoltenVK-specific dependency exists elsewhere in
           # the Vulkan backend. This runs before Mesa/LLVM/RPCS3 heavy builds.
@@ -589,9 +565,16 @@ jobs:
           unexpected = [x for x in hits if x[0] not in allowed]
           if unexpected:
               raise SystemExit("Unexpected MoltenVK residue(s):\n" + "\n".join(map(str, unexpected)))
-          guard = "#if defined(__APPLE__) && !defined(RPCS3_VULKAN_PROVIDER_KOSMICKRISP)"
-          if guard not in h.read_text() or guard not in p.read_text():
-              raise SystemExit("KosmicKrisp/MoltenVK provider boundary guard missing")
+
+          final_h = h.read_text()
+          final_p = p.read_text()
+          if apple_provider_guard not in final_h:
+              raise SystemExit("KosmicKrisp/MoltenVK header boundary guard missing")
+          if final_p.count(provider_guard) < 2:
+              raise SystemExit("KosmicKrisp/MoltenVK source boundary guards missing")
+          if final_p.count("bool portability_enumeration_enabled = false;") != 1:
+              raise SystemExit("Apple portability enumeration state corrupted")
+
           print("MoltenVK residue audit PASS")
           for hit in hits:
               print(hit)
