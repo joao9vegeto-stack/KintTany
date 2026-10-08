@@ -984,6 +984,144 @@ jobs:
           grep -q 'm_shader_interpreter.init' rpcs3-src/rpcs3/Emu/RSX/VK/VKGSRender.cpp
           ! grep -q 'M5.3: KosmicKrisp bypassing eager shader-interpreter preload' rpcs3-src/rpcs3/Emu/RSX/VK/VKGSRender.cpp
           ! grep -q 'g_cfg.video.shadermode.set(shadermode)' rpcs3-src/rpcs3/Emu/RSX/VK/VKGSRender.cpp
+          # M5.5: keep the proven M5.4 interpreter fallback, but stop
+          # compiling normal Ascension pipeline misses in the background. The
+          # provider-specific disk cache still preloads at boot with one worker.
+          # New misses compile inline; only driver-rejected pipelines stay on the
+          # Shader Interpreter. This prevents the runtime queue from accumulating
+          # Metal compiler work and turns VK_ERROR_INVALID_SHADER_NV into a local
+          # fallback instead of a fatal RSX termination.
+          python3 - <<'PY'
+          from pathlib import Path
+
+          # A) Ascension + KosmicKrisp: compile cache misses inline while keeping
+          # async_with_interpreter semantics for the rejected-pipeline fallback.
+          p = Path("rpcs3-src/rpcs3/Emu/RSX/VK/VKGSRender.cpp")
+          s = p.read_text()
+
+          inc = '#include "stdafx.h"\n'
+          inc_new = '#include "stdafx.h"\n#ifdef RPCS3_VULKAN_PROVIDER_KOSMICKRISP\n#include "Emu/System.h"\n#endif\n'
+          if s.count(inc) != 1:
+              raise SystemExit(f"M5.5 VKGSRender include anchor mismatch: {s.count(inc)}")
+          s = s.replace(inc, inc_new, 1)
+
+          old = """		std::tie(m_program, m_vertex_prog, m_fragment_prog) = m_prog_buffer->get_graphics_pipeline(
+          			&m_program_cache_hint,
+          			vertex_program,
+          			fragment_program,
+          			m_pipeline_properties,
+          			shadermode != shader_mode::recompiler, true);
+          """
+          new = """		bool compile_async = shadermode != shader_mode::recompiler;
+          #ifdef RPCS3_VULKAN_PROVIDER_KOSMICKRISP
+          		if (Emu.GetTitleID() == "BCUS98232" && shadermode == shader_mode::async_with_interpreter)
+          		{
+          			compile_async = false;
+          			static bool s_logged_inline_misses = false;
+          			if (!s_logged_inline_misses)
+          			{
+          				s_logged_inline_misses = true;
+          				rsx_log.notice("PsTJon M5.5: Ascension KosmicKrisp pipeline misses compile inline; boot-preloaded cache retained");
+          			}
+          		}
+          #endif
+
+          		std::tie(m_program, m_vertex_prog, m_fragment_prog) = m_prog_buffer->get_graphics_pipeline(
+          			&m_program_cache_hint,
+          			vertex_program,
+          			fragment_program,
+          			m_pipeline_properties,
+          			compile_async, true);
+          """
+          if s.count(old) != 1:
+              raise SystemExit(f"M5.5 load_program compile policy anchor mismatch: {s.count(old)}")
+          p.write_text(s.replace(old, new, 1))
+
+          # B) A graphics shader rejected by KosmicKrisp must not call
+          # die_with_error. Leave the VkPipeline null so the compiler can signal
+          # failure to ProgramStateCache and async_with_interpreter can render the
+          # draw through the already-initialized Shader Interpreter.
+          p = Path("rpcs3-src/rpcs3/Emu/RSX/VK/VKProgramPipeline.cpp")
+          s = p.read_text()
+          old = """			if (is_graphics_pipe)
+          			{
+          				VkGraphicsPipelineCreateInfo create_info = *p_graphics_info;
+          				create_info.layout = m_pipeline_layout;
+          				CHECK_RESULT(vkCreateGraphicsPipelines(m_device, pipeline_cache, 1, &create_info, nullptr, &m_pipeline));
+          			}
+          """
+          new = """			if (is_graphics_pipe)
+          			{
+          				VkGraphicsPipelineCreateInfo create_info = *p_graphics_info;
+          				create_info.layout = m_pipeline_layout;
+          				const VkResult result = vkCreateGraphicsPipelines(m_device, pipeline_cache, 1, &create_info, nullptr, &m_pipeline);
+          #ifdef RPCS3_VULKAN_PROVIDER_KOSMICKRISP
+          				if (result == VK_ERROR_INVALID_SHADER_NV)
+          				{
+          					m_pipeline = VK_NULL_HANDLE;
+          					rsx_log.error("PsTJon M5.5: KosmicKrisp rejected graphics shader; retaining Shader Interpreter fallback");
+          					return *this;
+          				}
+          #endif
+          				CHECK_RESULT(result);
+          			}
+          """
+          if s.count(old) != 1:
+              raise SystemExit(f"M5.5 graphics pipeline result anchor mismatch: {s.count(old)}")
+          p.write_text(s.replace(old, new, 1))
+
+          # C) Convert the null pipeline above into a failed compiler result. The
+          # existing ProgramStateCache callback deliberately leaves its null
+          # placeholder in place, so the same rejected key is not compiled over
+          # and over again and load_program falls back to the interpreter.
+          p = Path("rpcs3-src/rpcs3/Emu/RSX/VK/VKPipelineCompiler.cpp")
+          s = p.read_text()
+          old = """		auto program = std::make_unique<glsl::program>(*m_device, create_info, vs_inputs, fs_inputs);
+          		program->link(m_pipeline_cache, flags & SEPARATE_SHADER_OBJECTS);
+          		return program;
+          """
+          new = """		auto program = std::make_unique<glsl::program>(*m_device, create_info, vs_inputs, fs_inputs);
+          		program->link(m_pipeline_cache, flags & SEPARATE_SHADER_OBJECTS);
+          #ifdef RPCS3_VULKAN_PROVIDER_KOSMICKRISP
+          		if (program->value() == VK_NULL_HANDLE)
+          		{
+          			rsx_log.warning("PsTJon M5.5: rejected KosmicKrisp graphics pipeline left on interpreter fallback");
+          			return {};
+          		}
+          #endif
+          		return program;
+          """
+          if s.count(old) != 1:
+              raise SystemExit(f"M5.5 pipeline compiler anchor mismatch: {s.count(old)}")
+          p.write_text(s.replace(old, new, 1))
+
+          required = {
+              "rpcs3-src/rpcs3/Emu/RSX/VK/VKGSRender.cpp": [
+                  "PsTJon M5.5: Ascension KosmicKrisp pipeline misses compile inline; boot-preloaded cache retained",
+                  "compile_async = false;",
+                  'Emu.GetTitleID() == "BCUS98232"',
+                  "PsTJon M5.4: KosmicKrisp Shader Interpreter fallback kept; eager preload skipped",
+              ],
+              "rpcs3-src/rpcs3/Emu/RSX/VK/VKProgramPipeline.cpp": [
+                  "result == VK_ERROR_INVALID_SHADER_NV",
+                  "PsTJon M5.5: KosmicKrisp rejected graphics shader; retaining Shader Interpreter fallback",
+              ],
+              "rpcs3-src/rpcs3/Emu/RSX/VK/VKPipelineCompiler.cpp": [
+                  "program->value() == VK_NULL_HANDLE",
+                  "PsTJon M5.5: rejected KosmicKrisp graphics pipeline left on interpreter fallback",
+              ],
+          }
+          for file, needles in required.items():
+              text = Path(file).read_text()
+              missing = [x for x in needles if x not in text]
+              if missing:
+                  raise SystemExit(f"M5.5 verification failed for {file}: {missing}")
+
+          print("M5.5 inline miss + invalid-shader interpreter fallback PASS")
+          PY
+          grep -q 'M5.5: Ascension KosmicKrisp pipeline misses compile inline' rpcs3-src/rpcs3/Emu/RSX/VK/VKGSRender.cpp
+          grep -q 'result == VK_ERROR_INVALID_SHADER_NV' rpcs3-src/rpcs3/Emu/RSX/VK/VKProgramPipeline.cpp
+          grep -q 'M5.5: rejected KosmicKrisp graphics pipeline left on interpreter fallback' rpcs3-src/rpcs3/Emu/RSX/VK/VKPipelineCompiler.cpp
           grep -q 'allocatorInfo.pVulkanFunctions = &vma_vulkan_functions' rpcs3-src/rpcs3/Emu/RSX/VK/vkutils/memory.cpp
           grep -q 'PsTJon M5 VMA dispatch: vmaCreateAllocator complete' rpcs3-src/rpcs3/Emu/RSX/VK/vkutils/memory.cpp
           grep -q 'RPCS3_VULKAN_PROVIDER_KOSMICKRISP)' rpcs3-src/rpcs3/Emu/RSX/VK/vkutils/device.cpp
@@ -1264,14 +1402,14 @@ jobs:
           codesign -d --entitlements :- "$APP" 2>&1 | tee pstjon-entitlements.txt
           (
             cd package
-            ditto -c -k --sequesterRsrc --keepParent Payload "$GITHUB_WORKSPACE/PsTJon-KK-M5.4.ipa"
+            ditto -c -k --sequesterRsrc --keepParent Payload "$GITHUB_WORKSPACE/PsTJon-KK-M5.5.ipa"
           )
-          shasum -a 256 PsTJon-KK-M5.4.ipa
+          shasum -a 256 PsTJon-KK-M5.5.ipa
 
       - name: Build report
         run: |
           {
-            echo "PsTJon M5.4 - interpreter-correct demand shaders + Ascension ZCULL safety on preserved v13"
+            echo "PsTJon M5.5 - inline Ascension shader misses + invalid-shader interpreter fallback on preserved v13"
             echo "RPCS3 ios-port: $RPCS3_IOS_SHA"
             echo "Shell bundle id: com.xitrix.RPCS3"
             echo "Vulkan provider: KOSMICKRISP"
@@ -1279,15 +1417,15 @@ jobs:
             echo "Volk: $VOLK_SHA"
             echo "FFmpeg: $FFMPEG_VERSION"
             echo "Core: $(shasum -a 256 libRPCS3Core.dylib | awk '{print $1}')"
-            echo "IPA: $(shasum -a 256 PsTJon-KK-M5.4.ipa | awk '{print $1}')"
-          } > PsTJon-KK-M5.4-build.txt
+            echo "IPA: $(shasum -a 256 PsTJon-KK-M5.5.ipa | awk '{print $1}')"
+          } > PsTJon-KK-M5.5-build.txt
 
       - uses: actions/upload-artifact@v4
         with:
-          name: PsTJon-KK-m05-4-interpreter-zcull-IPA
+          name: PsTJon-KK-m05-5-inline-fallback-IPA
           path: |
-            PsTJon-KK-M5.4.ipa
-            PsTJon-KK-M5.4-build.txt
+            PsTJon-KK-M5.5.ipa
+            PsTJon-KK-M5.5-build.txt
             pstjon-entitlements.txt
             M5-rpcs3-patch-stat.txt
             M4-mesa-patch-stat.txt
