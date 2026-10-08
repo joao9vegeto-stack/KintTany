@@ -1339,6 +1339,96 @@ jobs:
           grep -q 'M5.7 NV3089 bounded local blit' rpcs3-src/rpcs3/Emu/RSX/NV47/HW/nv3089.cpp
           ! grep -q 'pending KosmicKrisp pipeline draw skipped' rpcs3-src/rpcs3/Emu/RSX/VK/VKGSRender.cpp
           grep -q 'strict_texture_flushing.set(false)' rpcs3-src/rpcs3/Emu/System.cpp
+          # M5.8: M5.7 physical log + upstream Ascension #15639/#17879 correctness regression.
+          python3 - <<'PY'
+          from pathlib import Path
+          
+          # M5.7's arbitrary framebuffer limit zeroed over 20,000 requested blits
+          # in the physical log and converted an already damaged guest into a broken
+          # scene. Remove that additional guard completely, keep v13's narrowly
+          # scoped pre-existing OOB signature and all source-address checks intact.
+          p = Path("rpcs3-src/rpcs3/Emu/RSX/NV47/HW/nv3089.cpp")
+          s = p.read_text()
+          marker = "PsTJon M5.7 NV3089 bounded local blit"
+          if s.count(marker) != 1:
+              raise SystemExit(f"M5.8 unsafe M5.7 guard anchor mismatch: {s.count(marker)}")
+          start = s.rfind("#if defined(RPCS3_IOS) && defined(RPCS3_VULKAN_PROVIDER_KOSMICKRISP)", 0, s.index(marker))
+          end = s.find("#endif", s.index(marker))
+          if start < 0 or end < 0 or "rows_fit" not in s[start:end] or "return { false, src_info, dst_info }" not in s[start:end]:
+              raise SystemExit("M5.8 cannot safely remove M5.7 guard")
+          s = s[:start] + s[end + len("#endif"):]
+          old = "u16 clip_h = std::min(REGS(ctx)->blit_engine_clip_height(), out_h);"
+          if s.count(old) != 1:
+              raise SystemExit("M5.8 clip_h rollback anchor mismatch")
+          s = s.replace(old, "const " + old, 1)
+          if marker in s or "rows_fit" in s or s.count("PsTJon v13: consumed Ascension OOB local blit") != 1:
+              raise SystemExit("M5.8 NV3089 guard rollback inconsistent")
+          p.write_text(s)
+          
+          # Recorded in physical M5.7 log as actually applied: Disable MLAA, while
+          # RPCS3 issue #15639 identifies exactly that Ascension patch as causing
+          # corruption. Exclude only this title + this named patch; do not alter the
+          # user's stored patch configuration or other titles' patch settings.
+          p = Path("rpcs3-src/Utilities/bin_patch.cpp")
+          s = p.read_text()
+          old = """\tfor (const auto& [description, patch] : container.patch_info_map)
+          \t{
+          \t\t// Find out if this patch is enabled"""
+          new = """\tfor (const auto& [description, patch] : container.patch_info_map)
+          \t{
+          #ifdef RPCS3_IOS
+          \t\tif (serial == "BCUS98232" && description == "Disable MLAA")
+          \t\t{
+          \t\t\tstatic bool warned = false;
+          \t\t\tif (!warned)
+          \t\t\t{
+          \t\t\t\twarned = true;
+          \t\t\t\tpatch_log.warning("PsTJon M5.8: Ascension Disable MLAA patch suppressed after physical visual-corruption test; saved patch configuration untouched");
+          \t\t\t}
+          \t\t\tcontinue;
+          \t\t}
+          #endif
+          \t\t// Find out if this patch is enabled"""
+          if s.count(old) != 1:
+              raise SystemExit(f"M5.8 patch-selection anchor mismatch: {s.count(old)}")
+          s = s.replace(old,new,1)
+          p.write_text(s)
+          
+          # RPCS3 issue #17879 confirms CPU blit fixes Ascension Vulkan tearing.
+          # Prefer deterministic CPU copies and synchronized memory management to
+          # performance, while keeping v13 FIFO exact-GET, audio and haptics untouched.
+          p = Path("rpcs3-src/rpcs3/Emu/System.cpp")
+          s = p.read_text()
+          changes = [
+              ("g_cfg.video.force_cpu_blit_processing.set(false);", "g_cfg.video.force_cpu_blit_processing.set(true);"),
+              ("g_cfg.video.disable_async_host_memory_manager.set(false);", "g_cfg.video.disable_async_host_memory_manager.set(true);"),
+              ("g_cfg.core.rsx_accurate_res_access.set(false);", "g_cfg.core.rsx_accurate_res_access.set(true);"),
+              ('PsTJon M5.4 Ascension/KosmicKrisp policy: CPU Blit %d->0, Async Memory Manager %d->active, Accurate RSX reservation %d->0, ZCULL HW queries off, Ordered & Atomic, FIFO 1KiB/yield, deferred GET off, wake %u->0',
+               'PsTJon M5.8 correctness-first: CPU Blit %d->1, Async Memory Manager %d->sync, Accurate RSX reservation %d->1, ZCULL HW queries off, Ordered & Atomic, FIFO 1KiB/yield, deferred GET off, wake %u->0')
+          ]
+          for old, new in changes:
+              if s.count(old) != 1:
+                  raise SystemExit(f"M5.8 policy anchor mismatch: {old[:95]} count={s.count(old)}")
+              s = s.replace(old,new,1)
+          p.write_text(s)
+          
+          # Static regression gates: patch scope cannot affect a different title,
+          # GPU blit cannot accidentally be re-enabled, and the M5.7 global gate
+          # must not be resurrected; the specific v13 guard stays.
+          assert 'serial == "BCUS98232" && description == "Disable MLAA"' in Path("rpcs3-src/Utilities/bin_patch.cpp").read_text()
+          assert 'PsTJon M5.8: Ascension Disable MLAA patch suppressed' in Path("rpcs3-src/Utilities/bin_patch.cpp").read_text()
+          assert "force_cpu_blit_processing.set(true);" in Path("rpcs3-src/rpcs3/Emu/System.cpp").read_text()
+          assert "disable_async_host_memory_manager.set(true);" in Path("rpcs3-src/rpcs3/Emu/System.cpp").read_text()
+          assert "rsx_accurate_res_access.set(true);" in Path("rpcs3-src/rpcs3/Emu/System.cpp").read_text()
+          assert "m_precise_get_publishing = Emu.GetTitleID()" in Path("rpcs3-src/rpcs3/Emu/RSX/RSXFIFO.cpp").read_text()
+          assert "PsTJon v13: consumed Ascension OOB local blit" in Path("rpcs3-src/rpcs3/Emu/RSX/NV47/HW/nv3089.cpp").read_text()
+          assert "PsTJon M5.7 NV3089 bounded local blit" not in Path("rpcs3-src/rpcs3/Emu/RSX/NV47/HW/nv3089.cpp").read_text()
+          assert "strict_texture_flushing.set(false);" in Path("rpcs3-src/rpcs3/Emu/System.cpp").read_text()
+          print("M5.8 MLAA patch scope, CPU blit, reservation, memory coherence, invalid global guard removal: PASS")
+          PY
+          grep -q 'M5.8: Ascension Disable MLAA patch suppressed' rpcs3-src/Utilities/bin_patch.cpp
+          grep -q 'PsTJon M5.8 correctness-first:' rpcs3-src/rpcs3/Emu/System.cpp
+          ! grep -q 'M5.7 NV3089 bounded local blit' rpcs3-src/rpcs3/Emu/RSX/NV47/HW/nv3089.cpp
           grep -q 'allocatorInfo.pVulkanFunctions = &vma_vulkan_functions' rpcs3-src/rpcs3/Emu/RSX/VK/vkutils/memory.cpp
           grep -q 'PsTJon M5 VMA dispatch: vmaCreateAllocator complete' rpcs3-src/rpcs3/Emu/RSX/VK/vkutils/memory.cpp
           grep -q 'RPCS3_VULKAN_PROVIDER_KOSMICKRISP)' rpcs3-src/rpcs3/Emu/RSX/VK/vkutils/device.cpp
@@ -1619,14 +1709,14 @@ jobs:
           codesign -d --entitlements :- "$APP" 2>&1 | tee pstjon-entitlements.txt
           (
             cd package
-            ditto -c -k --sequesterRsrc --keepParent Payload "$GITHUB_WORKSPACE/PsTJon-KK-M5.7.ipa"
+            ditto -c -k --sequesterRsrc --keepParent Payload "$GITHUB_WORKSPACE/PsTJon-KK-M5.8.ipa"
           )
-          shasum -a 256 PsTJon-KK-M5.7.ipa
+          shasum -a 256 PsTJon-KK-M5.8.ipa
 
       - name: Build report
         run: |
           {
-            echo "PsTJon M5.7 - bounded Ascension NV3089 + interpreter on pending shaders + strict flush rollback"
+            echo "PsTJon M5.8 - disable faulty Ascension MLAA patch + CPU blit + synchronized RSX memory + rollback M5.7 guard"
             echo "RPCS3 ios-port: $RPCS3_IOS_SHA"
             echo "Shell bundle id: com.xitrix.RPCS3"
             echo "Vulkan provider: KOSMICKRISP"
@@ -1634,15 +1724,15 @@ jobs:
             echo "Volk: $VOLK_SHA"
             echo "FFmpeg: $FFMPEG_VERSION"
             echo "Core: $(shasum -a 256 libRPCS3Core.dylib | awk '{print $1}')"
-            echo "IPA: $(shasum -a 256 PsTJon-KK-M5.7.ipa | awk '{print $1}')"
-          } > PsTJon-KK-M5.7-build.txt
+            echo "IPA: $(shasum -a 256 PsTJon-KK-M5.8.ipa | awk '{print $1}')"
+          } > PsTJon-KK-M5.8-build.txt
 
       - uses: actions/upload-artifact@v4
         with:
-          name: PsTJon-KK-m05-7-bounded-blit-interpreter-IPA
+          name: PsTJon-KK-m05-8-MLAA-CPU-coherence-IPA
           path: |
-            PsTJon-KK-M5.7.ipa
-            PsTJon-KK-M5.7-build.txt
+            PsTJon-KK-M5.8.ipa
+            PsTJon-KK-M5.8-build.txt
             pstjon-entitlements.txt
             M5-rpcs3-patch-stat.txt
             M4-mesa-patch-stat.txt
