@@ -684,6 +684,73 @@ jobs:
           p.write_text(out)
           print("M5 structural boot diagnostics PASS")
           PY
+          # M5.1: VMA uses dynamic Vulkan function loading when VK_NO_PROTOTYPES
+          # is enabled. Feed it Volk's initialized proc-address dispatch explicitly.
+          python3 - <<'PY'
+          from pathlib import Path
+
+          p = Path("rpcs3-src/rpcs3/Emu/RSX/VK/vkutils/memory.cpp")
+          s = p.read_text()
+
+          anchor = """		allocatorInfo.vulkanApiVersion = VK_API_VERSION_1_2;
+
+          		VkPhysicalDeviceMemoryProperties memory_properties;
+          """
+          replacement = """		allocatorInfo.vulkanApiVersion = VK_API_VERSION_1_2;
+
+          #ifdef RPCS3_VULKAN_PROVIDER_KOSMICKRISP
+          		// VK_NO_PROTOTYPES makes VMA use dynamic Vulkan function loading.
+          		// KosmicKrisp is a direct ICD provider, so VMA must receive the
+          		// already initialized Volk proc-address entry points explicitly.
+          		VmaVulkanFunctions vma_vulkan_functions{};
+          		vma_vulkan_functions.vkGetInstanceProcAddr = vkGetInstanceProcAddr;
+          		vma_vulkan_functions.vkGetDeviceProcAddr = vkGetDeviceProcAddr;
+          		ensure(vma_vulkan_functions.vkGetInstanceProcAddr);
+          		ensure(vma_vulkan_functions.vkGetDeviceProcAddr);
+          		allocatorInfo.pVulkanFunctions = &vma_vulkan_functions;
+          		rsx_log.notice("PsTJon M5 VMA dispatch: Volk proc-address bridge ready");
+          #endif
+
+          		VkPhysicalDeviceMemoryProperties memory_properties;
+          """
+          if s.count(anchor) != 1:
+              raise SystemExit("M5.1 VMA dispatch anchor mismatch")
+          s = s.replace(anchor, replacement, 1)
+
+          create_anchor = """		CHECK_RESULT(vmaCreateAllocator(&allocatorInfo, &m_allocator));
+
+          		// Allow fastest possible allocation on start
+          """
+          create_replacement = """#ifdef RPCS3_VULKAN_PROVIDER_KOSMICKRISP
+          		rsx_log.notice("PsTJon M5 VMA dispatch: entering vmaCreateAllocator");
+          #endif
+          		CHECK_RESULT(vmaCreateAllocator(&allocatorInfo, &m_allocator));
+          #ifdef RPCS3_VULKAN_PROVIDER_KOSMICKRISP
+          		rsx_log.notice("PsTJon M5 VMA dispatch: vmaCreateAllocator complete");
+          #endif
+
+          		// Allow fastest possible allocation on start
+          """
+          if s.count(create_anchor) != 1:
+              raise SystemExit("M5.1 vmaCreateAllocator anchor mismatch")
+          s = s.replace(create_anchor, create_replacement, 1)
+
+          required = [
+              "vma_vulkan_functions.vkGetInstanceProcAddr = vkGetInstanceProcAddr;",
+              "vma_vulkan_functions.vkGetDeviceProcAddr = vkGetDeviceProcAddr;",
+              "allocatorInfo.pVulkanFunctions = &vma_vulkan_functions;",
+              "PsTJon M5 VMA dispatch: entering vmaCreateAllocator",
+              "PsTJon M5 VMA dispatch: vmaCreateAllocator complete",
+          ]
+          missing = [x for x in required if s.count(x) != 1]
+          if missing:
+              raise SystemExit("M5.1 VMA bridge verification failed: " + repr(missing))
+
+          p.write_text(s)
+          print("M5.1 Volk-to-VMA dispatch bridge PASS")
+          PY
+          grep -q 'allocatorInfo.pVulkanFunctions = &vma_vulkan_functions' rpcs3-src/rpcs3/Emu/RSX/VK/vkutils/memory.cpp
+          grep -q 'PsTJon M5 VMA dispatch: vmaCreateAllocator complete' rpcs3-src/rpcs3/Emu/RSX/VK/vkutils/memory.cpp
           grep -q 'RPCS3_VULKAN_PROVIDER_KOSMICKRISP)' rpcs3-src/rpcs3/Emu/RSX/VK/vkutils/device.cpp
           grep -q 'PsTJon M5 checkpoint 11: render device initialization complete' rpcs3-src/rpcs3/Emu/RSX/VK/vkutils/device.cpp
           grep -q 'RPCS3_VULKAN_PROVIDER "MOLTENVK"' rpcs3-src/3rdparty/CMakeLists.txt
@@ -962,14 +1029,14 @@ jobs:
           codesign -d --entitlements :- "$APP" 2>&1 | tee pstjon-entitlements.txt
           (
             cd package
-            ditto -c -k --sequesterRsrc --keepParent Payload "$GITHUB_WORKSPACE/PsTJon-KK-M5.ipa"
+            ditto -c -k --sequesterRsrc --keepParent Payload "$GITHUB_WORKSPACE/PsTJon-KK-M5.1.ipa"
           )
-          shasum -a 256 PsTJon-KK-M5.ipa
+          shasum -a 256 PsTJon-KK-M5.1.ipa
 
       - name: Build report
         run: |
           {
-            echo "PsTJon M5 - first RPCS3 title boot smoke on KosmicKrisp, preserved v13"
+            echo "PsTJon M5.1 - Volk-to-VMA direct ICD boot fix on preserved v13"
             echo "RPCS3 ios-port: $RPCS3_IOS_SHA"
             echo "Shell bundle id: com.xitrix.RPCS3"
             echo "Vulkan provider: KOSMICKRISP"
@@ -977,15 +1044,15 @@ jobs:
             echo "Volk: $VOLK_SHA"
             echo "FFmpeg: $FFMPEG_VERSION"
             echo "Core: $(shasum -a 256 libRPCS3Core.dylib | awk '{print $1}')"
-            echo "IPA: $(shasum -a 256 PsTJon-KK-M5.ipa | awk '{print $1}')"
-          } > PsTJon-KK-M5-build.txt
+            echo "IPA: $(shasum -a 256 PsTJon-KK-M5.1.ipa | awk '{print $1}')"
+          } > PsTJon-KK-M5.1-build.txt
 
       - uses: actions/upload-artifact@v4
         with:
-          name: PsTJon-KK-m05-boot-smoke-IPA
+          name: PsTJon-KK-m05-1-vma-boot-IPA
           path: |
-            PsTJon-KK-M5.ipa
-            PsTJon-KK-M5-build.txt
+            PsTJon-KK-M5.1.ipa
+            PsTJon-KK-M5.1-build.txt
             pstjon-entitlements.txt
             M5-rpcs3-patch-stat.txt
             M4-mesa-patch-stat.txt
