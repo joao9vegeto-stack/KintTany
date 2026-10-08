@@ -167,12 +167,13 @@ jobs:
           \t\t\t\tg_cfg.video.force_cpu_blit_processing.set(false);
           \t\t\t\tg_cfg.video.disable_async_host_memory_manager.set(false);
           \t\t\t\tg_cfg.core.rsx_accurate_res_access.set(false);
+\t\t\t\tg_cfg.video.disable_zcull_queries.set(true);
           \t\t\t\tg_cfg.core.rsx_fifo_accuracy.set(rsx_fifo_mode::atomic_ordered);
           \t\t\t\tg_cfg.ios_experimental.fifo_cache_size.set(ios_fifo_cache_size::_1_kib);
           \t\t\t\tg_cfg.ios_experimental.fifo_idle_mode.set(ios_fifo_idle_mode::yield);
           \t\t\t\tg_cfg.ios_experimental.deferred_get_publishing.set(ios_experimental_mode::disabled);
           \t\t\t\tg_cfg.video.driver_wakeup_delay.set(0);
-          \t\t\t\tsys_log.notice("PsTJon v13 Ascension precise-GET/performance policy: CPU Blit %d->0, Async Memory Manager %d->active, Accurate RSX reservation %d->0, Ordered & Atomic, FIFO 1KiB/yield, deferred GET off, wake %u->0",
+          \t\t\t\tsys_log.notice("PsTJon M5.4 Ascension/KosmicKrisp policy: CPU Blit %d->0, Async Memory Manager %d->active, Accurate RSX reservation %d->0, ZCULL HW queries off, Ordered & Atomic, FIFO 1KiB/yield, deferred GET off, wake %u->0",
           \t\t\t\t\thad_cpu_blit, had_sync_memory, had_accurate_rsx_res, had_wakeup_delay);
           \t\t\t}
           #endif
@@ -455,6 +456,7 @@ jobs:
           python3 rpcs3/ios/tests/run-vk-memory-pressure-tests.py
           grep -q 'PsTJon v13 Ascension precise-GET/performance policy' rpcs3/Emu/System.cpp
           grep -q 'rsx_accurate_res_access.set(false)' rpcs3/Emu/System.cpp
+          grep -q 'disable_zcull_queries.set(true)' rpcs3/Emu/System.cpp
           grep -q 'fifo_cache_size.set(ios_fifo_cache_size::_1_kib)' rpcs3/Emu/System.cpp
           grep -q 'fifo_idle_mode.set(ios_fifo_idle_mode::yield)' rpcs3/Emu/System.cpp
           grep -q 'deferred_get_publishing.set(ios_experimental_mode::disabled)' rpcs3/Emu/System.cpp
@@ -866,54 +868,122 @@ jobs:
           grep -q 'vulkan-kosmickrisp' rpcs3-src/rpcs3/Emu/RSX/VK/VKGSRender.cpp
           grep -q "shaders_cache/vulkan/kosmickrisp/$MESA_KOSMICKRISP_SHA/vk_pipeline_cache.bin" rpcs3-src/rpcs3/Emu/RSX/VK/vkutils/device.cpp
           ! grep -q 'shaders_cache/vulkan/{}/{}/ios-{}/gpu-{:04x}-{:04x}' rpcs3-src/rpcs3/Emu/RSX/VK/vkutils/device.cpp
-          # M5.3: KosmicKrisp/Metal cannot afford the eager Vulkan shader-
-          # interpreter prewarm on iOS. In the default async+interpreter mode,
-          # VKShaderInterpreter::preload builds a large cross-product of render
-          # states and interpreter variants before the title can run. That
-          # consumes process headroom even with a single pipe-compiler worker.
-          # Prefer demand-driven async recompilation for this experimental
-          # provider; explicit interpreter-only mode remains untouched.
+          # M5.4: keep Shader Interpreter runtime correctness while avoiding
+          # the eager cross-product prewarm which exhausted iOS headroom.
+          # Also honor Disable ZCull Occlusion Queries before the Vulkan backend
+          # schedules a hardware query, avoiding KosmicKrisp's fixed global
+          # occlusion-query table path on Ascension.
           python3 - <<'PY'
           from pathlib import Path
 
           p = Path("rpcs3-src/rpcs3/Emu/RSX/VK/VKGSRender.cpp")
           s = p.read_text()
 
-          old = """	const auto shadermode = g_cfg.video.shadermode.get();
-
-          	if (shadermode == shader_mode::async_with_interpreter || shadermode == shader_mode::interpreter_only)
-          """
-          new = """	auto shadermode = g_cfg.video.shadermode.get();
-
-          #ifdef RPCS3_VULKAN_PROVIDER_KOSMICKRISP
-          	if (shadermode == shader_mode::async_with_interpreter)
+          # A) Preserve instruction buffers, interpreter init and lazy fallback;
+          # skip only the eager preload for async+interpreter on KosmicKrisp.
+          old = """	if (g_cfg.video.shadermode == shader_mode::async_with_interpreter ||
+          		g_cfg.video.shadermode == shader_mode::interpreter_only)
           	{
-          		shadermode = shader_mode::async_recompiler;
-          		g_cfg.video.shadermode.set(shadermode);
-          		rsx_log.notice("PsTJon M5.3: KosmicKrisp bypassing eager shader-interpreter preload; using demand-driven Async Recompiler");
+          		std::unique_ptr<rsx::shader_loading_dialog> dlg = m_overlay_manager
+          			? std::make_unique<rsx::shader_loading_dialog_native>(this)
+          			: std::make_unique<rsx::shader_loading_dialog>();
+          		m_shader_interpreter.preload(dlg.get());
+          		dlg->close();
           	}
+          """
+          new = """	if (g_cfg.video.shadermode == shader_mode::async_with_interpreter ||
+          		g_cfg.video.shadermode == shader_mode::interpreter_only)
+          	{
+          #ifdef RPCS3_VULKAN_PROVIDER_KOSMICKRISP
+          		if (g_cfg.video.shadermode == shader_mode::async_with_interpreter)
+          		{
+          			rsx_log.notice("PsTJon M5.4: KosmicKrisp Shader Interpreter fallback kept; eager preload skipped");
+          		}
+          		else
           #endif
-
-          	if (shadermode == shader_mode::async_with_interpreter || shadermode == shader_mode::interpreter_only)
+          		{
+          			std::unique_ptr<rsx::shader_loading_dialog> dlg = m_overlay_manager
+          				? std::make_unique<rsx::shader_loading_dialog_native>(this)
+          				: std::make_unique<rsx::shader_loading_dialog>();
+          			m_shader_interpreter.preload(dlg.get());
+          			dlg->close();
+          		}
+          	}
           """
           if s.count(old) != 1:
-              raise SystemExit(f"M5.3 shader-mode anchor mismatch: {s.count(old)}")
-
+              raise SystemExit(f"M5.4 interpreter preload anchor mismatch: {s.count(old)}")
           s = s.replace(old, new, 1)
 
-          required = [
-              "PsTJon M5.3: KosmicKrisp bypassing eager shader-interpreter preload; using demand-driven Async Recompiler",
-              "shadermode = shader_mode::async_recompiler;",
+          # B) Keep begin/end bookkeeping valid, but never arm a Vulkan
+          # occlusion task when RPCS3's compatibility option disabled ZCULL.
+          old = """void VKGSRender::begin_occlusion_query(rsx::reports::occlusion_query_info* query)
+          {
+          	ensure(!m_occlusion_query_active);
+
+          	query->result = 0;
+          	//query->sync_timestamp = get_system_time();
+          	m_active_query_info = query;
+          	m_occlusion_query_active = true;
+          	m_current_command_buffer->flags |= vk::command_buffer::cb_load_occluson_task;
+          }
+          """
+          new = """void VKGSRender::begin_occlusion_query(rsx::reports::occlusion_query_info* query)
+          {
+          	ensure(!m_occlusion_query_active);
+
+          	query->result = 0;
+          	//query->sync_timestamp = get_system_time();
+          	m_active_query_info = query;
+          	m_occlusion_query_active = true;
+
+          	if (g_cfg.video.disable_zcull_queries)
+          	{
+          #ifdef RPCS3_VULKAN_PROVIDER_KOSMICKRISP
+          		static bool s_logged_disabled_zcull = false;
+          		if (!s_logged_disabled_zcull)
+          		{
+          			s_logged_disabled_zcull = true;
+          			rsx_log.notice("PsTJon M5.4: hardware ZCULL queries bypassed; zero-result compatibility path active");
+          		}
+          #endif
+          		return;
+          	}
+
+          	m_current_command_buffer->flags |= vk::command_buffer::cb_load_occluson_task;
+          }
+          """
+          if s.count(old) != 1:
+              raise SystemExit(f"M5.4 occlusion begin anchor mismatch: {s.count(old)}")
+          s = s.replace(old, new, 1)
+
+          forbidden = [
+              "PsTJon M5.3: KosmicKrisp bypassing eager shader-interpreter preload",
               "g_cfg.video.shadermode.set(shadermode);",
+              "shadermode = shader_mode::async_recompiler;",
           ]
-          missing = [x for x in required if s.count(x) != 1]
+          present = [x for x in forbidden if x in s]
+          if present:
+              raise SystemExit("M5.4 found stale M5.3 runtime mutation: " + repr(present))
+
+          required = [
+              "PsTJon M5.4: KosmicKrisp Shader Interpreter fallback kept; eager preload skipped",
+              "PsTJon M5.4: hardware ZCULL queries bypassed; zero-result compatibility path active",
+              "m_shader_interpreter.init(*m_device);",
+              "m_vertex_instructions_buffer.create",
+              "m_fragment_instructions_buffer.create",
+          ]
+          missing = [x for x in required if s.count(x) < 1]
           if missing:
-              raise SystemExit("M5.3 verification failed: " + repr(missing))
+              raise SystemExit("M5.4 verification failed: " + repr(missing))
 
           p.write_text(s)
-          print("M5.3 demand-driven KosmicKrisp shader policy PASS")
+          print("M5.4 interpreter correctness + ZCULL query bypass PASS")
           PY
-          grep -q 'M5.3: KosmicKrisp bypassing eager shader-interpreter preload' rpcs3-src/rpcs3/Emu/RSX/VK/VKGSRender.cpp
+          grep -q 'M5.4: KosmicKrisp Shader Interpreter fallback kept; eager preload skipped' rpcs3-src/rpcs3/Emu/RSX/VK/VKGSRender.cpp
+          grep -q 'M5.4: hardware ZCULL queries bypassed; zero-result compatibility path active' rpcs3-src/rpcs3/Emu/RSX/VK/VKGSRender.cpp
+          grep -q 'm_shader_interpreter.init' rpcs3-src/rpcs3/Emu/RSX/VK/VKGSRender.cpp
+          ! grep -q 'M5.3: KosmicKrisp bypassing eager shader-interpreter preload' rpcs3-src/rpcs3/Emu/RSX/VK/VKGSRender.cpp
+          ! grep -q 'g_cfg.video.shadermode.set(shadermode)' rpcs3-src/rpcs3/Emu/RSX/VK/VKGSRender.cpp
           grep -q 'allocatorInfo.pVulkanFunctions = &vma_vulkan_functions' rpcs3-src/rpcs3/Emu/RSX/VK/vkutils/memory.cpp
           grep -q 'PsTJon M5 VMA dispatch: vmaCreateAllocator complete' rpcs3-src/rpcs3/Emu/RSX/VK/vkutils/memory.cpp
           grep -q 'RPCS3_VULKAN_PROVIDER_KOSMICKRISP)' rpcs3-src/rpcs3/Emu/RSX/VK/vkutils/device.cpp
@@ -1194,14 +1264,14 @@ jobs:
           codesign -d --entitlements :- "$APP" 2>&1 | tee pstjon-entitlements.txt
           (
             cd package
-            ditto -c -k --sequesterRsrc --keepParent Payload "$GITHUB_WORKSPACE/PsTJon-KK-M5.3.ipa"
+            ditto -c -k --sequesterRsrc --keepParent Payload "$GITHUB_WORKSPACE/PsTJon-KK-M5.4.ipa"
           )
-          shasum -a 256 PsTJon-KK-M5.3.ipa
+          shasum -a 256 PsTJon-KK-M5.4.ipa
 
       - name: Build report
         run: |
           {
-            echo "PsTJon M5.3 - demand-driven KosmicKrisp shader compilation on preserved v13"
+            echo "PsTJon M5.4 - interpreter-correct demand shaders + Ascension ZCULL safety on preserved v13"
             echo "RPCS3 ios-port: $RPCS3_IOS_SHA"
             echo "Shell bundle id: com.xitrix.RPCS3"
             echo "Vulkan provider: KOSMICKRISP"
@@ -1209,15 +1279,15 @@ jobs:
             echo "Volk: $VOLK_SHA"
             echo "FFmpeg: $FFMPEG_VERSION"
             echo "Core: $(shasum -a 256 libRPCS3Core.dylib | awk '{print $1}')"
-            echo "IPA: $(shasum -a 256 PsTJon-KK-M5.3.ipa | awk '{print $1}')"
-          } > PsTJon-KK-M5.3-build.txt
+            echo "IPA: $(shasum -a 256 PsTJon-KK-M5.4.ipa | awk '{print $1}')"
+          } > PsTJon-KK-M5.4-build.txt
 
       - uses: actions/upload-artifact@v4
         with:
-          name: PsTJon-KK-m05-3-demand-shaders-IPA
+          name: PsTJon-KK-m05-4-interpreter-zcull-IPA
           path: |
-            PsTJon-KK-M5.3.ipa
-            PsTJon-KK-M5.3-build.txt
+            PsTJon-KK-M5.4.ipa
+            PsTJon-KK-M5.4-build.txt
             pstjon-entitlements.txt
             M5-rpcs3-patch-stat.txt
             M4-mesa-patch-stat.txt
