@@ -633,6 +633,7 @@ jobs:
           mkdir -p "$GITHUB_WORKSPACE/deps/kosmickrisp-ios/lib" "$GITHUB_WORKSPACE/deps/kosmickrisp-ios/include"
           cp "$KK_DYLIB" "$GITHUB_WORKSPACE/deps/kosmickrisp-ios/lib/libKosmicKrisp.dylib"
           cp -R "$GITHUB_WORKSPACE/mesa-src/include/vulkan" "$GITHUB_WORKSPACE/deps/kosmickrisp-ios/include/"
+          cp -R "$GITHUB_WORKSPACE/mesa-src/include/vk_video" "$GITHUB_WORKSPACE/deps/kosmickrisp-ios/include/"
 
           file "$KK_DYLIB" | tee M4-kosmickrisp-file.txt
           lipo -info "$KK_DYLIB" | tee M4-kosmickrisp-lipo.txt
