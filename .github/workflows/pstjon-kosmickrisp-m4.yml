@@ -1242,6 +1242,103 @@ jobs:
           grep -q 'M5.6: pending KosmicKrisp pipeline draw skipped until compiled' rpcs3-src/rpcs3/Emu/RSX/VK/VKGSRender.cpp
           grep -q 'strict_texture_flushing.set(true)' rpcs3-src/rpcs3/Emu/System.cpp
           ! grep -q 'M5.5: Ascension KosmicKrisp pipeline misses compile inline' rpcs3-src/rpcs3/Emu/RSX/VK/VKGSRender.cpp
+          # M5.7 physical test: bounded local VRAM copy + present pending shader via interpreter.
+          python3 - <<'PY'
+          # M5.7: v13's original guard only covered 1024x1024 blits. The M5.6
+          # physical run failed at 0xcf900000 on a 1024x336 local-framebuffer blit.
+          # Cap the write height to the actual Ascension local allocation; valid rows
+          # MUST be copied rather than throwing away the entire transfer.
+          from pathlib import Path
+          p = Path("rpcs3-src/rpcs3/Emu/RSX/NV47/HW/nv3089.cpp")
+          s = p.read_text()
+          old = "const u16 clip_h = std::min(REGS(ctx)->blit_engine_clip_height(), out_h);"
+          if s.count(old) != 1:
+              raise SystemExit("M5.7 clip-height mutability anchor failed")
+          s = s.replace(old, "u16 clip_h = std::min(REGS(ctx)->blit_engine_clip_height(), out_h);", 1)
+          anchor = "const u32 src_line_length = (std::min<u32>(in_w,"
+          if s.count(anchor) != 1:
+              raise SystemExit("M5.7 NV3089 local-bound insertion anchor failed")
+          guard = """#if defined(RPCS3_IOS) && defined(RPCS3_VULKAN_PROVIDER_KOSMICKRISP)
+                      // Guard every local-framebuffer destination for Ascension, not only
+                      // the old 1024x1024 signature. The title allocated 0x0f900000 bytes,
+                      // but its RSX local blits can request writes beyond that mapping.
+                      if (Emu.GetTitleID() == "BCUS98232" &&
+                          dst_dma == CELL_GCM_CONTEXT_DMA_MEMORY_FRAME_BUFFER)
+                      {
+                          constexpr u64 ascension_local_size = 0x0f900000ull;
+                          const u64 dst_start = static_cast<u64>(dst_offset) +
+                              static_cast<u64>(out_x) * out_bpp +
+                              static_cast<u64>(out_pitch) * out_y;
+                          const u64 row_bytes = static_cast<u64>(clip_w) * out_bpp;
+                          const u64 remaining = dst_start < ascension_local_size
+                              ? ascension_local_size - dst_start : 0;
+                          const u64 rows_fit = remaining >= row_bytes && out_pitch
+                              ? 1 + (remaining - row_bytes) / out_pitch : 0;
+          
+                          if (rows_fit < clip_h)
+                          {
+                              static u32 s_m57_clipped_blits = 0;
+                              const u32 count = ++s_m57_clipped_blits;
+                              if (count <= 10 || !(count & 63))
+                              {
+                                  rsx_log.error("PsTJon M5.7 NV3089 bounded local blit #%u dst=0x%x pitch=%u requested_rows=%u safe_rows=%llu",
+                                      count, dst_offset, out_pitch, clip_h, rows_fit);
+                              }
+                              if (!rows_fit)
+                              {
+                                  return { false, src_info, dst_info };
+                              }
+                              clip_h = static_cast<u16>(rows_fit);
+                          }
+                      }
+          #endif
+          
+                      """
+          s = s.replace(anchor, guard + anchor, 1)
+          p.write_text(s)
+          # Do not skip draws just because the one-worker pipeline has not finished:
+          # RPCS3's original async_with_interpreter path renders the fallback until ready.
+          p = Path("rpcs3-src/rpcs3/Emu/RSX/VK/VKGSRender.cpp")
+          s = p.read_text()
+          marker = "PsTJon M5.6: pending KosmicKrisp pipeline draw skipped until compiled"
+          if s.count(marker) != 1:
+              raise SystemExit("M5.7 missing-draw policy anchor failed")
+          at = s.index(marker)
+          start = s.rfind("#ifdef RPCS3_VULKAN_PROVIDER_KOSMICKRISP", 0, at)
+          end = s.find("#endif", at)
+          if start < 0 or end < 0 or "return false;" not in s[start:end]:
+              raise SystemExit("M5.7 cannot safely remove M5.6 early skip")
+          s = s[:start] + s[end+len("#endif"):]
+          if marker in s or "const bool pipeline_cache_missed" not in s:
+              raise SystemExit("M5.7 interpreter fallback validation failed")
+          p.write_text(s)
+          # Strict texture flushing did not repair corruption, while the test's Vulkan
+          # budget reached 143%. Restore pre-M5.6 policy for this title, while retaining
+          # the authoritative write-color-buffer and precise FIFO policies.
+          p = Path("rpcs3-src/rpcs3/Emu/System.cpp")
+          s = p.read_text()
+          old = 'g_cfg.video.strict_texture_flushing.set(true);'
+          if s.count(old) != 1:
+              raise SystemExit("M5.7 strict flush revert anchor failed")
+          s = s.replace(old, 'g_cfg.video.strict_texture_flushing.set(false);', 1)
+          old = "PsTJon M5.6: Ascension KosmicKrisp strict texture flushing enabled for framebuffer/texture aliasing"
+          if s.count(old) != 1:
+              raise SystemExit("M5.7 strict flush notice anchor failed")
+          s = s.replace(old, "PsTJon M5.7: strict texture flushing disabled after 143 percent Vulkan pressure; bounded local blit enabled", 1)
+          p.write_text(s)
+          # Regression checks, including the exact failure signature from the physical test.
+          assert (0x0f900000 - 0x0f896600 - 4096) // 4096 + 1 == 105
+          assert (0x0f900000 - 0x0f896280 - 4096) // 4096 + 1 == 105
+          assert "PsTJon M5.7 NV3089 bounded local blit" in Path("rpcs3-src/rpcs3/Emu/RSX/NV47/HW/nv3089.cpp").read_text()
+          assert 'clip_h = static_cast<u16>(rows_fit)' in Path("rpcs3-src/rpcs3/Emu/RSX/NV47/HW/nv3089.cpp").read_text()
+          assert "pending KosmicKrisp pipeline draw skipped" not in Path("rpcs3-src/rpcs3/Emu/RSX/VK/VKGSRender.cpp").read_text()
+          assert "compile_async = true;" in Path("rpcs3-src/rpcs3/Emu/RSX/VK/VKGSRender.cpp").read_text()
+          assert "strict_texture_flushing.set(false);" in Path("rpcs3-src/rpcs3/Emu/System.cpp").read_text()
+          print("M5.7 bounded NV3089, preserved async interpreter and strict-flush rollback PASS")
+          PY
+          grep -q 'M5.7 NV3089 bounded local blit' rpcs3-src/rpcs3/Emu/RSX/NV47/HW/nv3089.cpp
+          ! grep -q 'pending KosmicKrisp pipeline draw skipped' rpcs3-src/rpcs3/Emu/RSX/VK/VKGSRender.cpp
+          grep -q 'strict_texture_flushing.set(false)' rpcs3-src/rpcs3/Emu/System.cpp
           grep -q 'allocatorInfo.pVulkanFunctions = &vma_vulkan_functions' rpcs3-src/rpcs3/Emu/RSX/VK/vkutils/memory.cpp
           grep -q 'PsTJon M5 VMA dispatch: vmaCreateAllocator complete' rpcs3-src/rpcs3/Emu/RSX/VK/vkutils/memory.cpp
           grep -q 'RPCS3_VULKAN_PROVIDER_KOSMICKRISP)' rpcs3-src/rpcs3/Emu/RSX/VK/vkutils/device.cpp
@@ -1522,14 +1619,14 @@ jobs:
           codesign -d --entitlements :- "$APP" 2>&1 | tee pstjon-entitlements.txt
           (
             cd package
-            ditto -c -k --sequesterRsrc --keepParent Payload "$GITHUB_WORKSPACE/PsTJon-KK-M5.6.ipa"
+            ditto -c -k --sequesterRsrc --keepParent Payload "$GITHUB_WORKSPACE/PsTJon-KK-M5.7.ipa"
           )
-          shasum -a 256 PsTJon-KK-M5.6.ipa
+          shasum -a 256 PsTJon-KK-M5.7.ipa
 
       - name: Build report
         run: |
           {
-            echo "PsTJon M5.6 - nonblocking Ascension pipelines + strict texture correctness on preserved v13"
+            echo "PsTJon M5.7 - bounded Ascension NV3089 + interpreter on pending shaders + strict flush rollback"
             echo "RPCS3 ios-port: $RPCS3_IOS_SHA"
             echo "Shell bundle id: com.xitrix.RPCS3"
             echo "Vulkan provider: KOSMICKRISP"
@@ -1537,15 +1634,15 @@ jobs:
             echo "Volk: $VOLK_SHA"
             echo "FFmpeg: $FFMPEG_VERSION"
             echo "Core: $(shasum -a 256 libRPCS3Core.dylib | awk '{print $1}')"
-            echo "IPA: $(shasum -a 256 PsTJon-KK-M5.6.ipa | awk '{print $1}')"
-          } > PsTJon-KK-M5.6-build.txt
+            echo "IPA: $(shasum -a 256 PsTJon-KK-M5.7.ipa | awk '{print $1}')"
+          } > PsTJon-KK-M5.7-build.txt
 
       - uses: actions/upload-artifact@v4
         with:
-          name: PsTJon-KK-m05-6-async-strict-texture-IPA
+          name: PsTJon-KK-m05-7-bounded-blit-interpreter-IPA
           path: |
-            PsTJon-KK-M5.6.ipa
-            PsTJon-KK-M5.6-build.txt
+            PsTJon-KK-M5.7.ipa
+            PsTJon-KK-M5.7-build.txt
             pstjon-entitlements.txt
             M5-rpcs3-patch-stat.txt
             M4-mesa-patch-stat.txt
