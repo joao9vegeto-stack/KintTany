@@ -1967,13 +1967,16 @@ jobs:
           export CPPFLAGS="-I$TRANSLATOR_PREFIX/include -I$LLVM_PREFIX/include"
           export PKG_CONFIG_PATH="$TRANSLATOR_PREFIX/lib/pkgconfig:$LLVM_PREFIX/lib/pkgconfig:$(brew --prefix libclc)/lib/pkgconfig:$(brew --prefix spirv-tools)/lib/pkgconfig"
 
+          # M5.17 CI: GitLab responded HTTP 500 while lazily fetching
+          # the checkout blob despite a successful clone. Prefer the pinned,
+          # content-identical GitHub mirror (also verifies exact SHA below).
           rm -rf mesa-src
-          if git clone --filter=blob:none --no-checkout "$MESA_PRIMARY_URL" mesa-src; then
-            echo "official GitLab" | tee mesa-source.txt
+          if git clone --filter=blob:none --no-checkout "$MESA_MIRROR_URL" mesa-src; then
+            echo "pinned GitHub mirror (GitLab HTTP 500 workaround)" | tee mesa-source.txt
           else
             rm -rf mesa-src
-            git clone --filter=blob:none --no-checkout "$MESA_MIRROR_URL" mesa-src
-            echo "synchronized GitHub mirror fallback" | tee mesa-source.txt
+            git clone --filter=blob:none --no-checkout "$MESA_PRIMARY_URL" mesa-src
+            echo "official GitLab fallback" | tee mesa-source.txt
           fi
           git -C mesa-src fetch --depth=1 origin "$MESA_KOSMICKRISP_SHA"
           git -C mesa-src checkout --detach "$MESA_KOSMICKRISP_SHA"
