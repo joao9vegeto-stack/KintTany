@@ -1824,6 +1824,41 @@ jobs:
           PY
           grep -q 'M5.15: BCUS98232 v1.12 Disable MLAA selected' rpcs3-src/Utilities/bin_patch.cpp
           grep -q 'mlaafix-m515' rpcs3-src/rpcs3/Emu/RSX/VK/VKGSRender.cpp
+          # M5.16: keep shader cache on a new epoch following Metal math semantics change.
+          python3 - <<'PY'
+          from pathlib import Path
+          import os
+          mesa=os.environ["MESA_KOSMICKRISP_SHA"]
+          # Metal math/compiler semantics differ from every previous build.
+          # Do not reload prior driver binaries or translated shader cache.
+          p=Path("rpcs3-src/rpcs3/Emu/RSX/VK/VKGSRender.cpp")
+          s=p.read_text()
+          old=f'"v1.95-{mesa}-mlaafix-m515"'
+          new=f'"v1.95-{mesa}-mlaafix-m516-metalprecise"'
+          if s.count(old)!=1: raise SystemExit("M5.16 RSX shader cache epoch anchor mismatch")
+          p.write_text(s.replace(old,new,1))
+          p=Path("rpcs3-src/rpcs3/Emu/RSX/VK/vkutils/device.cpp")
+          s=p.read_text()
+          old=f'"shaders_cache/vulkan/kosmickrisp/{mesa}/m515/vk_pipeline_cache.bin"'
+          new=f'"shaders_cache/vulkan/kosmickrisp/{mesa}/m516-metalprecise/vk_pipeline_cache.bin"'
+          if s.count(old)!=1: raise SystemExit("M5.16 pipeline cache epoch anchor mismatch")
+          p.write_text(s.replace(old,new,1))
+          # Verify exact upstream controls, which the M5.15 log confirmed:
+          # Disable MLAA actually applied; renderer=KOSMICKRISP; WCB=RCB=1;
+          # 100% native render scale, Ultra, v13 precise FIFO preserved.
+          system=Path("rpcs3-src/rpcs3/Emu/System.cpp").read_text()
+          assert "g_cfg.video.read_color_buffers.set(true)" in system
+          assert "g_cfg.video.write_color_buffers.set(true)" in system
+          assert "g_cfg.video.strict_rendering_mode.set(true)" in system
+          assert "g_cfg.video.resolution_scale_percent.set(100)" in system
+          assert "g_cfg.video.shadermode.set(shader_mode::async_with_interpreter)" in system
+          assert "PsTJon M5.15: BCUS98232 v1.12 Disable MLAA selected" in Path("rpcs3-src/Utilities/bin_patch.cpp").read_text()
+          assert "m_precise_get_publishing = Emu.GetTitleID()" in Path("rpcs3-src/rpcs3/Emu/RSX/RSXFIFO.cpp").read_text()
+          assert "PsTJon v13: consumed Ascension OOB local blit" in Path("rpcs3-src/rpcs3/Emu/RSX/NV47/HW/nv3089.cpp").read_text()
+          print("M5.16 distinct shader/pipeline cache and v13/MLAA policies preserved")
+          
+          PY
+          grep -q 'm516-metalprecise' rpcs3-src/rpcs3/Emu/RSX/VK/vkutils/device.cpp
           grep -q 'allocatorInfo.pVulkanFunctions = &vma_vulkan_functions' rpcs3-src/rpcs3/Emu/RSX/VK/vkutils/memory.cpp
           grep -q 'PsTJon M5 VMA dispatch: vmaCreateAllocator complete' rpcs3-src/rpcs3/Emu/RSX/VK/vkutils/memory.cpp
           grep -q 'RPCS3_VULKAN_PROVIDER_KOSMICKRISP)' rpcs3-src/rpcs3/Emu/RSX/VK/vkutils/device.cpp
@@ -1890,6 +1925,42 @@ jobs:
             git -C mesa-src apply "$patch"
           done
           python3 /tmp/apply_m4.py --mesa mesa-src
+          # M5.16: KosmicKrisp Metal 4 backend math correctness, not another RPCS3 config guess.
+          python3 - <<'PY'
+          from pathlib import Path
+          p=Path("mesa-src/src/kosmickrisp/vulkan/kk_shader.c")
+          s=p.read_text()
+          # The pinned Metal 4 provider *unconditionally* compiled ALL RSX
+          # fragment/vertex/compute-derived MSL libraries with FAST math. That
+          # remained the case even though RPCS3 reports Shader Precision=Ultra.
+          # On iOS/A19 this may violate the ordered fog/lighting/nan semantics.
+          # Enforce SAFE math and precise FP functions in the Metal library compiler,
+          # not just in the RSX SPIR-V producer; leave macOS provider unchanged.
+          needle='#include "kosmickrisp/compiler/nir_to_msl.h"'
+          assert s.count(needle)==1, "M5.16 KosmicKrisp include anchor mismatch"
+          defs='''#if defined(__ENVIRONMENT_IPHONE_OS_VERSION_MIN_REQUIRED__)
+          // PsTJon M5.16: preserve Vulkan fragment/vertex/compute FP semantics on iOS.
+          #define PSTJON_KK_METAL_MATH_MODE MTL_MATH_MODE_SAFE
+          #define PSTJON_KK_METAL_FP_FUNCTIONS MTL_MATH_FLOATING_POINT_FUNCTIONS_PRECISE
+          #else
+          #define PSTJON_KK_METAL_MATH_MODE MTL_MATH_MODE_FAST
+          #define PSTJON_KK_METAL_FP_FUNCTIONS MTL_MATH_FLOATING_POINT_FUNCTIONS_FAST
+          #endif
+          '''
+          s=s.replace(needle,needle+"\\n\\n"+defs,1)
+          pair="MTL_MATH_MODE_FAST, MTL_MATH_FLOATING_POINT_FUNCTIONS_FAST);"
+          if s.count(pair)!=3:
+              raise SystemExit(f"M5.16 expected three Metal-library compiler sites, found {s.count(pair)}")
+          s=s.replace(pair,"PSTJON_KK_METAL_MATH_MODE, PSTJON_KK_METAL_FP_FUNCTIONS);")
+          assert s.count("PSTJON_KK_METAL_MATH_MODE, PSTJON_KK_METAL_FP_FUNCTIONS);")==3
+          assert s.count("MTL_MATH_MODE_SAFE")==1
+          assert s.count("MTL_MATH_FLOATING_POINT_FUNCTIONS_PRECISE")==1
+          assert "MTL_MATH_MODE_FAST, MTL_MATH_FLOATING_POINT_FUNCTIONS_FAST);" not in s
+          p.write_text(s)
+          print("M5.16 pinned Mesa/Metal math semantics for iOS: SAFE+PRECISE applied to 3 Metal-library compile sites")
+          
+          PY
+          grep -q 'PSTJON_KK_METAL_MATH_MODE' mesa-src/src/kosmickrisp/vulkan/kk_shader.c
           git -C mesa-src diff --check
           git -C mesa-src diff --stat | tee M4-mesa-patch-stat.txt
 
@@ -2104,14 +2175,14 @@ jobs:
           codesign -d --entitlements :- "$APP" 2>&1 | tee pstjon-entitlements.txt
           (
             cd package
-            ditto -c -k --sequesterRsrc --keepParent Payload "$GITHUB_WORKSPACE/PsTJon-KK-M5.15.ipa"
+            ditto -c -k --sequesterRsrc --keepParent Payload "$GITHUB_WORKSPACE/PsTJon-KK-M5.16.ipa"
           )
-          shasum -a 256 PsTJon-KK-M5.15.ipa
+          shasum -a 256 PsTJon-KK-M5.16.ipa
 
       - name: Build report
         run: |
           {
-            echo "PsTJon M5.15 - enable hash-verified Disable MLAA for Ascension 1.12 and isolate shader/pipeline cache"
+            echo "PsTJon M5.16 - fix hardcoded KosmicKrisp Metal FAST math for iOS (SAFE+PRECISE shaders) and fresh cache"
             echo "RPCS3 ios-port: $RPCS3_IOS_SHA"
             echo "Shell bundle id: com.xitrix.RPCS3"
             echo "Vulkan provider: KOSMICKRISP"
@@ -2119,15 +2190,15 @@ jobs:
             echo "Volk: $VOLK_SHA"
             echo "FFmpeg: $FFMPEG_VERSION"
             echo "Core: $(shasum -a 256 libRPCS3Core.dylib | awk '{print $1}')"
-            echo "IPA: $(shasum -a 256 PsTJon-KK-M5.15.ipa | awk '{print $1}')"
-          } > PsTJon-KK-M5.15-build.txt
+            echo "IPA: $(shasum -a 256 PsTJon-KK-M5.16.ipa | awk '{print $1}')"
+          } > PsTJon-KK-M5.16-build.txt
 
       - uses: actions/upload-artifact@v4
         with:
-          name: PsTJon-KK-m05-15-mlaafix-cache-IPA
+          name: PsTJon-KK-m05-16-metal-precise-math-IPA
           path: |
-            PsTJon-KK-M5.15.ipa
-            PsTJon-KK-M5.15-build.txt
+            PsTJon-KK-M5.16.ipa
+            PsTJon-KK-M5.16-build.txt
             pstjon-entitlements.txt
             M5-rpcs3-patch-stat.txt
             M4-mesa-patch-stat.txt
