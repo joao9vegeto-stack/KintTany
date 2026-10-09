@@ -2649,78 +2649,53 @@ jobs:
           grep -q "M5.26 PRINCE_INTERPRETER_ROLLBACK" rpcs3-src/rpcs3/Emu/RSX/VK/VKGSRender.cpp
           git -C rpcs3-src diff --check
 
-          # M5.28: physical BLUS30401 M5.27 remained black despite all 41
-          # RSX_TEX sampled descriptors reporting valid=1/view=1 and ReBAR=0.
-          # Earlier diagnostic measured gcmfmt before format_ex was populated,
-          # invalidating that field. Fix logging, and USE RPCS3's existing
-          # screenshot GPU->host readback to sample the actual pre-present image
-          # at bounded frame intervals, with no file writes or overlay pollution.
-          # Pixel samples localize black to pre-presentation versus WSI.
-          # Preserve standard async pipelines and v13/Ascension policy.
+          # M5.28 FIX: use unique tokens rather than brittle whitespace anchors.
+          # Physical M5.27 remained black with ReBAR off and valid texture
+          # descriptor handles. Read actual pre-present GPU pixels at four
+          # fixed frames using the preexisting screen capture code and fix
+          # reported texture format (M5.27 logged it before assignment).
           python3 - <<'PY'
           from pathlib import Path
 
           p=Path("rpcs3-src/rpcs3/Emu/RSX/VK/VKDraw.cpp")
           s=p.read_text()
-          old='''          				rsx_log.notice("PsTJon M5.27 RSX_TEX: upload=%u slot=%u valid=%u view=%u gcmfmt=%u uploadctx=%u invalid_total=%u missing_view_total=%u",
-          					m527_uploads, i, static_cast<u32>(valid),
-          					static_cast<u32>(!!sampler_state->image_handle),
-          					static_cast<u32>(sampler_state->format_ex.format()),
-          					static_cast<u32>(sampler_state->upload_context),
-          					m527_invalid, m527_no_view);'''
-          new='''          				const auto* probe_image = sampler_state->image_handle
-          					? sampler_state->image_handle->image() : nullptr;
-          				// M5.28: source texture format, not the descriptor's
-          				// as-yet-uninitialized format_ex (which logged zero).
-          				rsx_log.notice("PsTJon M5.28 RSX_TEX_FORMAT: upload=%u slot=%u valid=%u view=%u gcmfmt=%u vkfmt=%u dims=%ux%u uploadctx=%u invalid_total=%u missing_view_total=%u",
-          					m527_uploads, i, static_cast<u32>(valid),
-          					static_cast<u32>(!!sampler_state->image_handle),
-          					static_cast<u32>(tex.format_ex().format()),
-          					probe_image ? static_cast<u32>(probe_image->format()) : 0u,
-          					probe_image ? probe_image->width() : 0u,
-          					probe_image ? probe_image->height() : 0u,
-          					static_cast<u32>(sampler_state->upload_context),
-          					m527_invalid, m527_no_view);'''
-          if s.count(old)!=1: raise SystemExit("M5.28 RSX_TEX original expected once, found "+str(s.count(old)))
-          s=s.replace(old,new,1)
+          fmt='static_cast<u32>(sampler_state->format_ex.format()),'
+          msg='PsTJon M5.27 RSX_TEX: upload=%u slot=%u valid=%u view=%u gcmfmt=%u uploadctx=%u invalid_total=%u missing_view_total=%u'
+          assert s.count(fmt)==1, f"M5.28 format marker {s.count(fmt)}"
+          assert s.count(msg)==1, f"M5.28 log marker {s.count(msg)}"
+          s=s.replace(fmt,'''static_cast<u32>(tex.format_ex().format()),
+          					sampler_state->image_handle ? static_cast<u32>(sampler_state->image_handle->image()->format()) : 0u,
+          					sampler_state->image_handle ? sampler_state->image_handle->image()->width() : 0u,
+          					sampler_state->image_handle ? sampler_state->image_handle->image()->height() : 0u,''',1)
+          s=s.replace(msg,'PsTJon M5.28 RSX_TEX_FORMAT: upload=%u slot=%u valid=%u view=%u gcmfmt=%u vkfmt=%u image_w=%u image_h=%u uploadctx=%u invalid_total=%u missing_view_total=%u',1)
           p.write_text(s)
-          
+
           p=Path("rpcs3-src/rpcs3/Emu/RSX/VK/VKPresent.cpp")
           s=p.read_text()
-          inc='#include "stdafx.h"\n'
-          if s.count(inc)!=1: raise SystemExit("M5.28 VKPresent include anchor")
-          s=s.replace(inc,inc+'#ifdef RPCS3_VULKAN_PROVIDER_KOSMICKRISP\n#include "Emu/System.h"\n#endif\n',1)
-          old='''	const bool need_media_capture = user_asked_for_screenshot || user_is_recording;'''
-          new='''#ifdef RPCS3_VULKAN_PROVIDER_KOSMICKRISP
-          	// M5.28: GPU readback at bounded presentation intervals, using
-          	// the existing screenshot copy path, before WSI/upscaling.
-          	// Never invoke when another game is active.
-          	static u32 m528_prince_flip_count = 0;
-          	const bool m528_probe = Emu.GetTitleID() == "BLUS30401" &&
-          		([&]{
-          			++m528_prince_flip_count;
-          			return m528_prince_flip_count == 1 || m528_prince_flip_count == 60 ||
-          				m528_prince_flip_count == 180 || m528_prince_flip_count == 480;
-          		}());
+          inc='#include "stdafx.h"'
+          assert s.count(inc)==1, f"M5.28 VKPresent header {s.count(inc)}"
+          s=s.replace(inc,inc+'\n#ifdef RPCS3_VULKAN_PROVIDER_KOSMICKRISP\n#include "Emu/System.h"\n#endif',1)
+          needle='const bool need_media_capture = user_asked_for_screenshot || user_is_recording;'
+          assert s.count(needle)==1, f"M5.28 capture condition {s.count(needle)}"
+          s=s.replace(needle,'''#ifdef RPCS3_VULKAN_PROVIDER_KOSMICKRISP
+          	static u32 m528_frame_counter = 0;
+          	const bool m528_is_prince = Emu.GetTitleID() == "BLUS30401";
+          	if (m528_is_prince) ++m528_frame_counter;
+          	const bool m528_probe = m528_is_prince &&
+          		(m528_frame_counter == 1 || m528_frame_counter == 60 ||
+          		 m528_frame_counter == 180 || m528_frame_counter == 480);
           #else
           	const bool m528_probe = false;
           #endif
-          	const bool need_media_capture = user_asked_for_screenshot || user_is_recording || m528_probe;'''
-          if s.count(old)!=1: raise SystemExit("M5.28 flip capture-flag anchor")
-          s=s.replace(old,new,1)
-          old='''		const bool is_bgra = image_to_copy->format() == VK_FORMAT_B8G8R8A8_UNORM;
+          	const bool need_media_capture = user_asked_for_screenshot || user_is_recording || m528_probe;''',1)
+          needle='const bool is_bgra = image_to_copy->format() == VK_FORMAT_B8G8R8A8_UNORM;'
+          assert s.count(needle)==1, f"M5.28 image format anchor {s.count(needle)}"
+          s=s.replace(needle,needle+'''
 
-          		if (user_asked_for_screenshot)'''
-          new='''		const bool is_bgra = image_to_copy->format() == VK_FORMAT_B8G8R8A8_UNORM;
-
-          #ifdef RPCS3_VULKAN_PROVIDER_KOSMICKKRISP
-          #error M5.28 guard typo; do not release this
-          #endif
           #ifdef RPCS3_VULKAN_PROVIDER_KOSMICKRISP
           		if (m528_probe && buffer_width && buffer_height)
           		{
-          			// Pixel payload is from the GPU before final scaling
-          			// and swapchain. RGB/BGR order does not affect luma sum.
+          			// This is GPU image data before swapchain presentation.
           			u32 sampled = 0, black = 0;
           			u64 rgb_sum = 0;
           			const u32 dx = std::max(1u, buffer_width / 80u);
@@ -2729,47 +2704,32 @@ jobs:
           			{
           				for (u32 x = buffer_width / 8u; x < buffer_width * 7u / 8u; x += dx)
           				{
-          					const usz offset = (static_cast<usz>(y) * buffer_width + x) * 4u;
-          					if (offset + 2u >= sshot_frame.size()) continue;
-          					const u32 rgb = static_cast<u32>(sshot_frame[offset])
-          						+ sshot_frame[offset + 1u] + sshot_frame[offset + 2u];
+          					const usz o = (static_cast<usz>(y) * buffer_width + x) * 4u;
+          					if (o + 2u >= sshot_frame.size()) continue;
+          					const u32 sum = static_cast<u32>(sshot_frame[o])
+          						+ sshot_frame[o + 1u] + sshot_frame[o + 2u];
           					++sampled;
-          					rgb_sum += rgb;
-          					if (rgb <= 30u) ++black;
+          					rgb_sum += sum;
+          					if (sum <= 30u) ++black;
           				}
           			}
-          			rsx_log.notice("PsTJon M5.28 GPU_PREFLIP: frame=%u sampled=%u black=%u black_pct=%u rgb_average=%u width=%u height=%u vkfmt=%u",
-          				m528_prince_flip_count, sampled, black,
+          			rsx_log.notice("PsTJon M5.28 GPU_PREFLIP frame=%u samples=%u black=%u black_pct=%u rgb_sum_mean=%u size=%ux%u format=%u",
+          				m528_frame_counter, sampled, black,
           				sampled ? (black * 100u / sampled) : 0u,
           				sampled ? static_cast<u32>(rgb_sum / sampled) : 0u,
           				buffer_width, buffer_height, static_cast<u32>(image_to_copy->format()));
           		}
-          #endif
-          		if (user_asked_for_screenshot)'''
-          # Remove no-op / typo-guard in authored template before emitting.
-          new=new.replace('''#ifdef RPCS3_VULKAN_PROVIDER_KOSMICKKRISP
-          #error M5.28 guard typo; do not release this
-          #endif
-          ''','')
-          if s.count(old)!=1: raise SystemExit("M5.28 image readback anchor "+str(s.count(old)))
-          s=s.replace(old,new,1)
-          old='''		else
-          		{
-          			m_frame->present_frame(std::move(sshot_frame), buffer_width * 4, buffer_width, buffer_height, is_bgra);
-          		}'''
-          new='''		else if (user_is_recording)
-          		{
-          			m_frame->present_frame(std::move(sshot_frame), buffer_width * 4, buffer_width, buffer_height, is_bgra);
-          		}'''
-          if s.count(old)!=1: raise SystemExit("M5.28 capture-only dispatch anchor mismatch")
-          s=s.replace(old,new,1)
+          #endif''',1)
+          needle='m_frame->present_frame(std::move(sshot_frame), buffer_width * 4, buffer_width, buffer_height, is_bgra);'
+          assert s.count(needle)==1, f"M5.28 record frame marker {s.count(needle)}"
+          s=s.replace(needle,'if (user_is_recording) '+needle,1)
+          assert "M5.28 GPU_PREFLIP" in s
+          assert "M5.28 RSX_TEX_FORMAT" in Path("rpcs3-src/rpcs3/Emu/RSX/VK/VKDraw.cpp").read_text()
           p.write_text(s)
-          assert "M5.28 GPU_PREFLIP" in s and "M5.28 RSX_TEX_FORMAT" in Path("rpcs3-src/rpcs3/Emu/RSX/VK/VKDraw.cpp").read_text()
-          print("M5.28 bounded actual Vulkan GPU pre-present pixel readback + corrected GCM/VK texture formats: PASS")
+          print("M5.28 deterministic pre-present GPU pixel diagnostics + actual texture formats applied")
           PY
           grep -q 'M5.28 GPU_PREFLIP' rpcs3-src/rpcs3/Emu/RSX/VK/VKPresent.cpp
           grep -q 'M5.28 RSX_TEX_FORMAT' rpcs3-src/rpcs3/Emu/RSX/VK/VKDraw.cpp
-          grep -q 'M5.27 PRINCE_TEXTURE_UPLOAD' rpcs3-src/rpcs3/Emu/System.cpp
           git -C rpcs3-src diff --check
 
           rm -rf build-kk-host kk-host-tools
