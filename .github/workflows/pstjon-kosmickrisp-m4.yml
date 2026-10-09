@@ -2030,6 +2030,76 @@ jobs:
           
           PY
           grep -q 'M5.19 V13_RENDER_PROFILE:' rpcs3-src/rpcs3/Emu/System.cpp
+          grep -q 'allocatorInfo.pVulkanFunctions = &vma_vulkan_functions' rpcs3-src/rpcs3/Emu/RSX/VK/vkutils/memory.cpp
+          grep -q 'PsTJon M5 VMA dispatch: vmaCreateAllocator complete' rpcs3-src/rpcs3/Emu/RSX/VK/vkutils/memory.cpp
+          grep -q 'RPCS3_VULKAN_PROVIDER_KOSMICKRISP)' rpcs3-src/rpcs3/Emu/RSX/VK/vkutils/device.cpp
+          grep -q 'PsTJon M5 checkpoint 11: render device initialization complete' rpcs3-src/rpcs3/Emu/RSX/VK/vkutils/device.cpp
+          grep -q 'RPCS3_VULKAN_PROVIDER "MOLTENVK"' rpcs3-src/3rdparty/CMakeLists.txt
+          grep -q 'RPCS3_VULKAN_PROVIDER_KOSMICKRISP' rpcs3-src/rpcs3/Emu/RSX/VK/VulkanAPI.h
+          grep -q 'volkInitializeCustom' rpcs3-src/rpcs3/Emu/RSX/VK/vkutils/instance.cpp
+          grep -q 'volkLoadDevice' rpcs3-src/rpcs3/Emu/RSX/VK/vkutils/device.cpp
+          grep -q 'shaders_cache/vulkan' rpcs3-src/rpcs3/Emu/RSX/VK/vkutils/device.cpp
+          git -C rpcs3-src diff --check
+          git -C rpcs3-src diff --stat | tee M5-rpcs3-patch-stat.txt
+
+      - name: Build pinned KosmicKrisp iOS Metal provider
+        run: |
+          set -euxo pipefail
+          for pkg in cmake pkg-config libclc "$LLVM_FORMULA" spirv-tools ninja; do
+            brew list "$pkg" >/dev/null 2>&1 || brew install "$pkg"
+          done
+
+          python3 -m venv "$GITHUB_WORKSPACE/kk-venv"
+          source "$GITHUB_WORKSPACE/kk-venv/bin/activate"
+          python -m pip install --upgrade pip
+          python -m pip install "meson==${MESON_VERSION}" mako packaging pyyaml
+
+          LLVM_PREFIX="$(brew --prefix "$LLVM_FORMULA")"
+          export PATH="$LLVM_PREFIX/bin:$PATH"
+          TRANSLATOR_PREFIX="$GITHUB_WORKSPACE/deps/spirv-llvm-translator-20"
+          rm -rf "$GITHUB_WORKSPACE/spirv-llvm-translator-src" "$GITHUB_WORKSPACE/spirv-llvm-translator-build" "$TRANSLATOR_PREFIX"
+          git clone --filter=blob:none --no-checkout "$SPIRV_LLVM_TRANSLATOR_URL" "$GITHUB_WORKSPACE/spirv-llvm-translator-src"
+          git -C "$GITHUB_WORKSPACE/spirv-llvm-translator-src" fetch --depth=1 origin "$SPIRV_LLVM_TRANSLATOR_SHA"
+          git -C "$GITHUB_WORKSPACE/spirv-llvm-translator-src" checkout --detach "$SPIRV_LLVM_TRANSLATOR_SHA"
+          test "$(git -C "$GITHUB_WORKSPACE/spirv-llvm-translator-src" rev-parse HEAD)" = "$SPIRV_LLVM_TRANSLATOR_SHA"
+
+          cmake -S "$GITHUB_WORKSPACE/spirv-llvm-translator-src" -B "$GITHUB_WORKSPACE/spirv-llvm-translator-build" -G Ninja \
+            -DCMAKE_BUILD_TYPE=Release \
+            -DCMAKE_INSTALL_PREFIX="$TRANSLATOR_PREFIX" \
+            -DLLVM_DIR="$LLVM_PREFIX/lib/cmake/llvm" \
+            -DLLVM_SPIRV_INCLUDE_TESTS=OFF \
+            -DBUILD_SHARED_LIBS=OFF \
+            -DLLVM_LINK_LLVM_DYLIB=OFF
+          cmake --build "$GITHUB_WORKSPACE/spirv-llvm-translator-build" --target LLVMSPIRVLib llvm-spirv -j3
+          cmake --install "$GITHUB_WORKSPACE/spirv-llvm-translator-build"
+          test -f "$TRANSLATOR_PREFIX/lib/libLLVMSPIRVLib.a"
+
+          export LDFLAGS="-L$TRANSLATOR_PREFIX/lib -L$LLVM_PREFIX/lib"
+          export CPPFLAGS="-I$TRANSLATOR_PREFIX/include -I$LLVM_PREFIX/include"
+          export PKG_CONFIG_PATH="$TRANSLATOR_PREFIX/lib/pkgconfig:$LLVM_PREFIX/lib/pkgconfig:$(brew --prefix libclc)/lib/pkgconfig:$(brew --prefix spirv-tools)/lib/pkgconfig"
+
+          # M5.17 CI: GitLab responded HTTP 500 while lazily fetching
+          # the checkout blob despite a successful clone. Prefer the pinned,
+          # content-identical GitHub mirror (also verifies exact SHA below).
+          rm -rf mesa-src
+          if git clone --filter=blob:none --no-checkout "$MESA_MIRROR_URL" mesa-src; then
+            echo "pinned GitHub mirror (GitLab HTTP 500 workaround)" | tee mesa-source.txt
+          else
+            rm -rf mesa-src
+            git clone --filter=blob:none --no-checkout "$MESA_PRIMARY_URL" mesa-src
+            echo "official GitLab fallback" | tee mesa-source.txt
+          fi
+          git -C mesa-src fetch --depth=1 origin "$MESA_KOSMICKRISP_SHA"
+          git -C mesa-src checkout --detach "$MESA_KOSMICKRISP_SHA"
+          test "$(git -C mesa-src rev-parse HEAD)" = "$MESA_KOSMICKRISP_SHA"
+          for patch in \
+            "$GITHUB_WORKSPACE/pstjon-kosmickrisp/patches/0001-kosmickrisp-ios-m2.patch" \
+            "$GITHUB_WORKSPACE/pstjon-kosmickrisp/patches/0002-kosmickrisp-ios-m3-metal-wsi.patch"; do
+            git -C mesa-src apply --check "$patch"
+            git -C mesa-src apply "$patch"
+          done
+          python3 /tmp/apply_m4.py --mesa mesa-src
+          # M5.20 Metal attachment probe runs only after mesa-src is checked out.
           # M5.20: preserve Metal4 tile attachments on iOS and isolate native pipeline cache.
           python3 - <<'PY'
           from pathlib import Path
@@ -2100,75 +2170,7 @@ jobs:
           
           PY
           grep -q 'PsTJon M5.20: iOS A19 Metal4 render-target preservation probe' mesa-src/src/kosmickrisp/vulkan/kk_cmd_buffer.c
-          grep -q 'allocatorInfo.pVulkanFunctions = &vma_vulkan_functions' rpcs3-src/rpcs3/Emu/RSX/VK/vkutils/memory.cpp
-          grep -q 'PsTJon M5 VMA dispatch: vmaCreateAllocator complete' rpcs3-src/rpcs3/Emu/RSX/VK/vkutils/memory.cpp
-          grep -q 'RPCS3_VULKAN_PROVIDER_KOSMICKRISP)' rpcs3-src/rpcs3/Emu/RSX/VK/vkutils/device.cpp
-          grep -q 'PsTJon M5 checkpoint 11: render device initialization complete' rpcs3-src/rpcs3/Emu/RSX/VK/vkutils/device.cpp
-          grep -q 'RPCS3_VULKAN_PROVIDER "MOLTENVK"' rpcs3-src/3rdparty/CMakeLists.txt
-          grep -q 'RPCS3_VULKAN_PROVIDER_KOSMICKRISP' rpcs3-src/rpcs3/Emu/RSX/VK/VulkanAPI.h
-          grep -q 'volkInitializeCustom' rpcs3-src/rpcs3/Emu/RSX/VK/vkutils/instance.cpp
-          grep -q 'volkLoadDevice' rpcs3-src/rpcs3/Emu/RSX/VK/vkutils/device.cpp
-          grep -q 'shaders_cache/vulkan' rpcs3-src/rpcs3/Emu/RSX/VK/vkutils/device.cpp
-          git -C rpcs3-src diff --check
-          git -C rpcs3-src diff --stat | tee M5-rpcs3-patch-stat.txt
 
-      - name: Build pinned KosmicKrisp iOS Metal provider
-        run: |
-          set -euxo pipefail
-          for pkg in cmake pkg-config libclc "$LLVM_FORMULA" spirv-tools ninja; do
-            brew list "$pkg" >/dev/null 2>&1 || brew install "$pkg"
-          done
-
-          python3 -m venv "$GITHUB_WORKSPACE/kk-venv"
-          source "$GITHUB_WORKSPACE/kk-venv/bin/activate"
-          python -m pip install --upgrade pip
-          python -m pip install "meson==${MESON_VERSION}" mako packaging pyyaml
-
-          LLVM_PREFIX="$(brew --prefix "$LLVM_FORMULA")"
-          export PATH="$LLVM_PREFIX/bin:$PATH"
-          TRANSLATOR_PREFIX="$GITHUB_WORKSPACE/deps/spirv-llvm-translator-20"
-          rm -rf "$GITHUB_WORKSPACE/spirv-llvm-translator-src" "$GITHUB_WORKSPACE/spirv-llvm-translator-build" "$TRANSLATOR_PREFIX"
-          git clone --filter=blob:none --no-checkout "$SPIRV_LLVM_TRANSLATOR_URL" "$GITHUB_WORKSPACE/spirv-llvm-translator-src"
-          git -C "$GITHUB_WORKSPACE/spirv-llvm-translator-src" fetch --depth=1 origin "$SPIRV_LLVM_TRANSLATOR_SHA"
-          git -C "$GITHUB_WORKSPACE/spirv-llvm-translator-src" checkout --detach "$SPIRV_LLVM_TRANSLATOR_SHA"
-          test "$(git -C "$GITHUB_WORKSPACE/spirv-llvm-translator-src" rev-parse HEAD)" = "$SPIRV_LLVM_TRANSLATOR_SHA"
-
-          cmake -S "$GITHUB_WORKSPACE/spirv-llvm-translator-src" -B "$GITHUB_WORKSPACE/spirv-llvm-translator-build" -G Ninja \
-            -DCMAKE_BUILD_TYPE=Release \
-            -DCMAKE_INSTALL_PREFIX="$TRANSLATOR_PREFIX" \
-            -DLLVM_DIR="$LLVM_PREFIX/lib/cmake/llvm" \
-            -DLLVM_SPIRV_INCLUDE_TESTS=OFF \
-            -DBUILD_SHARED_LIBS=OFF \
-            -DLLVM_LINK_LLVM_DYLIB=OFF
-          cmake --build "$GITHUB_WORKSPACE/spirv-llvm-translator-build" --target LLVMSPIRVLib llvm-spirv -j3
-          cmake --install "$GITHUB_WORKSPACE/spirv-llvm-translator-build"
-          test -f "$TRANSLATOR_PREFIX/lib/libLLVMSPIRVLib.a"
-
-          export LDFLAGS="-L$TRANSLATOR_PREFIX/lib -L$LLVM_PREFIX/lib"
-          export CPPFLAGS="-I$TRANSLATOR_PREFIX/include -I$LLVM_PREFIX/include"
-          export PKG_CONFIG_PATH="$TRANSLATOR_PREFIX/lib/pkgconfig:$LLVM_PREFIX/lib/pkgconfig:$(brew --prefix libclc)/lib/pkgconfig:$(brew --prefix spirv-tools)/lib/pkgconfig"
-
-          # M5.17 CI: GitLab responded HTTP 500 while lazily fetching
-          # the checkout blob despite a successful clone. Prefer the pinned,
-          # content-identical GitHub mirror (also verifies exact SHA below).
-          rm -rf mesa-src
-          if git clone --filter=blob:none --no-checkout "$MESA_MIRROR_URL" mesa-src; then
-            echo "pinned GitHub mirror (GitLab HTTP 500 workaround)" | tee mesa-source.txt
-          else
-            rm -rf mesa-src
-            git clone --filter=blob:none --no-checkout "$MESA_PRIMARY_URL" mesa-src
-            echo "official GitLab fallback" | tee mesa-source.txt
-          fi
-          git -C mesa-src fetch --depth=1 origin "$MESA_KOSMICKRISP_SHA"
-          git -C mesa-src checkout --detach "$MESA_KOSMICKRISP_SHA"
-          test "$(git -C mesa-src rev-parse HEAD)" = "$MESA_KOSMICKRISP_SHA"
-          for patch in \
-            "$GITHUB_WORKSPACE/pstjon-kosmickrisp/patches/0001-kosmickrisp-ios-m2.patch" \
-            "$GITHUB_WORKSPACE/pstjon-kosmickrisp/patches/0002-kosmickrisp-ios-m3-metal-wsi.patch"; do
-            git -C mesa-src apply --check "$patch"
-            git -C mesa-src apply "$patch"
-          done
-          python3 /tmp/apply_m4.py --mesa mesa-src
           # M5.16: KosmicKrisp Metal 4 backend math correctness, not another RPCS3 config guess.
           python3 - <<'PY'
           from pathlib import Path
