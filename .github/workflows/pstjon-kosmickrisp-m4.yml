@@ -1572,6 +1572,72 @@ jobs:
           PY
           grep -q 'M5.11: Ascension RCB=1 WCB=1' rpcs3-src/rpcs3/Emu/System.cpp
           grep -q 'maximum_pipeline_cache_data_size = 320ull' rpcs3-src/rpcs3/Emu/RSX/VK/vkutils/device.cpp
+          # M5.12: native framebuffer dimensions and pipeline/interpreter telemetry.
+          python3 - <<'PY'
+          from pathlib import Path
+          # Physical M5.11 evidence: WCB=1, RCB=1 and DP3 Ultra are already
+          # confirmed in the log, and the RSX ran 15-30 fps until clean shutdown.
+          # This is NOT a shader-compile crash and toggling MLAA/RCB has failed.
+          # The video shows a very dark 3D G-buffer but bright UI/lights.
+          # M5.11 runs at 75% fractional render scale with strict rendering disabled;
+          # Ascension does framebuffer feedback and postprocess with expected local
+          # 720p dimensions. Use native image dimensions and strict render-pass
+          # ordering to isolate scaling/attachment alias correctness.
+          p=Path("rpcs3-src/rpcs3/Emu/System.cpp")
+          s=p.read_text()
+          anchor='g_cfg.video.read_color_buffers.set(true);'
+          if s.count(anchor)!=1:
+              raise SystemExit("M5.12 Ascension policy anchor changed")
+          s=s.replace(anchor,'''// M5.12: validate postprocessing at true PS3 framebuffer dimensions.
+                          g_cfg.video.resolution_scale_percent.set(100);
+                          g_cfg.video.strict_rendering_mode.set(true);
+                          sys_log.notice("PsTJon M5.12: native 720p render scale and strict render ordering enabled for Ascension");
+                          '''+anchor,1)
+          p.write_text(s)
+          
+          # Instrument native-vs-interpreter draw routing; after ten blind M5
+          # revisions this is a measurable gate to distinguish invalid compiled
+          # SPIR-V/Metal from a broken Shader Interpreter fallback.
+          p=Path("rpcs3-src/rpcs3/Emu/RSX/VK/VKGSRender.cpp")
+          s=p.read_text()
+          anchor='const bool is_interpreter = !m_program;'
+          if s.count(anchor)!=1:
+              raise SystemExit("M5.12 interpreter decision anchor changed")
+          s=s.replace(anchor,anchor+'''
+          #ifdef RPCS3_VULKAN_PROVIDER_KOSMICKRISP
+                      if (Emu.GetTitleID() == "BCUS98232")
+                      {
+                          // RSX owns program selection; counters are RSX-thread local.
+                          static u32 s_fallback = 0;
+                          static u32 s_native = 0;
+                          u32& tally = is_interpreter ? s_fallback : s_native;
+                          ++tally;
+                          if (tally == 1 || (tally & (tally - 1)) == 0)
+                          {
+                              rsx_log.notice("PsTJon M5.12 program selection: interpreter=%u compiled=%u", s_fallback, s_native);
+                          }
+                      }
+          #endif
+          ''',1)
+          p.write_text(s)
+          # Static regression gates: scoped mutation of BCUS98232,
+          # preserved WCB+RCB, shader prec, v13 GET and other services.
+          system=Path("rpcs3-src/rpcs3/Emu/System.cpp").read_text()
+          vk=Path("rpcs3-src/rpcs3/Emu/RSX/VK/VKGSRender.cpp").read_text()
+          assert system.count('resolution_scale_percent.set(100)')==1
+          assert system.count('strict_rendering_mode.set(true)')==1
+          assert 'read_color_buffers.set(true)' in system
+          assert 'write_color_buffers.set(true)' in system
+          assert "PsTJon M5.12: native 720p" in system
+          assert 'PsTJon M5.12 program selection' in vk
+          assert 'm_shader_interpreter.get(' in vk
+          assert 'compile_async = true;' in vk
+          assert 'm_precise_get_publishing = Emu.GetTitleID()' in Path("rpcs3-src/rpcs3/Emu/RSX/RSXFIFO.cpp").read_text()
+          assert 'PsTJon v13: consumed Ascension OOB local blit' in Path("rpcs3-src/rpcs3/Emu/RSX/NV47/HW/nv3089.cpp").read_text()
+          print("M5.12 render-scale and strict rendering + pipeline telemetry gates PASS")
+          PY
+          grep -q 'M5.12: native 720p' rpcs3-src/rpcs3/Emu/System.cpp
+          grep -q 'M5.12 program selection' rpcs3-src/rpcs3/Emu/RSX/VK/VKGSRender.cpp
           grep -q 'allocatorInfo.pVulkanFunctions = &vma_vulkan_functions' rpcs3-src/rpcs3/Emu/RSX/VK/vkutils/memory.cpp
           grep -q 'PsTJon M5 VMA dispatch: vmaCreateAllocator complete' rpcs3-src/rpcs3/Emu/RSX/VK/vkutils/memory.cpp
           grep -q 'RPCS3_VULKAN_PROVIDER_KOSMICKRISP)' rpcs3-src/rpcs3/Emu/RSX/VK/vkutils/device.cpp
@@ -1852,14 +1918,14 @@ jobs:
           codesign -d --entitlements :- "$APP" 2>&1 | tee pstjon-entitlements.txt
           (
             cd package
-            ditto -c -k --sequesterRsrc --keepParent Payload "$GITHUB_WORKSPACE/PsTJon-KK-M5.11.ipa"
+            ditto -c -k --sequesterRsrc --keepParent Payload "$GITHUB_WORKSPACE/PsTJon-KK-M5.12.ipa"
           )
-          shasum -a 256 PsTJon-KK-M5.11.ipa
+          shasum -a 256 PsTJon-KK-M5.12.ipa
 
       - name: Build report
         run: |
           {
-            echo "PsTJon M5.11 - Ascension Read Color Buffers and persist verified KosmicKrisp pipeline cache"
+            echo "PsTJon M5.12 - 720p native scale, strict framebuffer ordering, measured interpreter/native draw routing"
             echo "RPCS3 ios-port: $RPCS3_IOS_SHA"
             echo "Shell bundle id: com.xitrix.RPCS3"
             echo "Vulkan provider: KOSMICKRISP"
@@ -1867,15 +1933,15 @@ jobs:
             echo "Volk: $VOLK_SHA"
             echo "FFmpeg: $FFMPEG_VERSION"
             echo "Core: $(shasum -a 256 libRPCS3Core.dylib | awk '{print $1}')"
-            echo "IPA: $(shasum -a 256 PsTJon-KK-M5.11.ipa | awk '{print $1}')"
-          } > PsTJon-KK-M5.11-build.txt
+            echo "IPA: $(shasum -a 256 PsTJon-KK-M5.12.ipa | awk '{print $1}')"
+          } > PsTJon-KK-M5.12-build.txt
 
       - uses: actions/upload-artifact@v4
         with:
-          name: PsTJon-KK-m05-11-rcb-pipeline-cache-IPA
+          name: PsTJon-KK-m05-12-native-scale-strict-IPA
           path: |
-            PsTJon-KK-M5.11.ipa
-            PsTJon-KK-M5.11-build.txt
+            PsTJon-KK-M5.12.ipa
+            PsTJon-KK-M5.12-build.txt
             pstjon-entitlements.txt
             M5-rpcs3-patch-stat.txt
             M4-mesa-patch-stat.txt
