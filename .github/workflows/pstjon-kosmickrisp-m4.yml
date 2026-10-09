@@ -1947,7 +1947,7 @@ jobs:
           #define PSTJON_KK_METAL_FP_FUNCTIONS MTL_MATH_FLOATING_POINT_FUNCTIONS_FAST
           #endif
           '''
-          s=s.replace(needle,needle+"\\n\\n"+defs,1)
+          s=s.replace(needle,needle+"\n\n"+defs,1)
           pair="MTL_MATH_MODE_FAST, MTL_MATH_FLOATING_POINT_FUNCTIONS_FAST);"
           if s.count(pair)!=3:
               raise SystemExit(f"M5.16 expected three Metal-library compiler sites, found {s.count(pair)}")
