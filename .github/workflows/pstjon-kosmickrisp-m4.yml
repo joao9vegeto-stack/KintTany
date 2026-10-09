@@ -1479,18 +1479,10 @@ jobs:
           from pathlib import Path
           p=Path("rpcs3-src/rpcs3/Emu/RSX/VK/VKGSRender.cpp")
           s=p.read_text()
-          a='''\t\tif (g_cfg.video.disable_zcull_queries)
-          \t\t{
-          #ifdef RPCS3_VULKAN_PROVIDER_KOSMICKRISP
-          \t\t\tstatic bool s_logged_disabled_zcull = false;'''
-          b='''\t\tif (g_cfg.video.disable_zcull_queries)
-          \t\t{
-          #ifdef RPCS3_VULKAN_PROVIDER_KOSMICKRISP
-          \t\t\t// No real query: keep Ascension's conditional geometry visible.
-          \t\t\tif (Emu.GetTitleID() == "BCUS98232") query->result = 1;
-          \t\t\tstatic bool s_logged_disabled_zcull = false;'''
-          if s.count(a)!=1: raise SystemExit("M5.10 ZCULL anchor mismatch")
-          s=s.replace(a,b,1).replace("PsTJon M5.4: hardware ZCULL queries bypassed; zero-result compatibility path active","PsTJon M5.10: disabled ZCULL, visible-result fallback for Ascension",1)
+          marker="static bool s_logged_disabled_zcull = false;"
+          if s.count(marker)!=1: raise SystemExit("M5.10 unique ZCULL marker mismatch")
+          s=s.replace(marker, 'if (Emu.GetTitleID() == "BCUS98232") query->result = 1;\n\t\t\t'+marker, 1)
+          s=s.replace("PsTJon M5.4: hardware ZCULL queries bypassed; zero-result compatibility path active","PsTJon M5.10: disabled ZCULL, visible-result fallback for Ascension",1)
           p.write_text(s)
           p=Path("rpcs3-src/rpcs3/Emu/System.cpp")
           s=p.read_text()
