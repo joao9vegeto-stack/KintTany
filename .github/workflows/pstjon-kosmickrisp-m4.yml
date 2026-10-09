@@ -2171,6 +2171,83 @@ jobs:
           PY
           grep -q 'PsTJon M5.20: iOS A19 Metal4 render-target preservation probe' mesa-src/src/kosmickrisp/vulkan/kk_cmd_buffer.c
 
+          # M5.21: A/B the exact visually working v12 effective graphics/upload
+          # profile WITH KosmicKrisp Metal4 and M5.20 attachment preservation.
+          # Restore one coherent control profile, not another broad driver hack.
+          # Retain v13 precise GET/local-VRAM guard, provider, audio/haptics,
+          # MLAA patches and iOS Metal4 attachment-store patch unchanged.
+          python3 - <<'PY'
+          from pathlib import Path
+          import os
+          p=Path("rpcs3-src/rpcs3/Emu/System.cpp")
+          s=p.read_text()
+          # M5.10 left five iOS fastpaths disabled even after M5.19 purported
+          # to restore v13. The actual working v12 log resolves dma_copy=1,
+          # hybrid_hash=1, swap=1, restart=1, precomputed=1, rather than zero.
+          fastpaths=(
+              "dma_copy_specialization",
+              "texture_hash_hybrid",
+              "neon_byte_swap",
+              "neon_primitive_restart",
+              "precomputed_indices",
+          )
+          for name in fastpaths:
+              old=f"g_cfg.ios_experimental.{name}.set(ios_experimental_mode::disabled);"
+              new=f"g_cfg.ios_experimental.{name}.set(ios_experimental_mode::automatic);"
+              if s.count(old)!=1:
+                  raise SystemExit(f"M5.21 expected one disabled iOS fastpath {name}, found {s.count(old)}")
+              s=s.replace(old,new,1)
+          # M5.19 additionally disabled color writes and lowered shader
+          # precision. Both disagree with the effective v12 physical boot log.
+          start=s.index("// PsTJon v13 control profile")
+          end=s.index('sys_log.notice("PsTJon M5.19 V13_RENDER_PROFILE:',start)
+          block=s[start:end]
+          for old,new in (
+              ("g_cfg.video.write_color_buffers.set(false);",
+               "g_cfg.video.write_color_buffers.set(true);"),
+              ("g_cfg.video.shader_precision.set(gpu_preset_level::high);",
+               "g_cfg.video.shader_precision.set(gpu_preset_level::ultra);"),
+          ):
+              if block.count(old)!=1:
+                  raise SystemExit(f"M5.21 v12 graphics baseline anchor mismatch: {old}")
+              block=block.replace(old,new,1)
+          s=s[:start]+block+s[end:]
+          old="PsTJon M5.19 V13_RENDER_PROFILE: RCB=0 WCB=0 RDB=0 WDB=0 CPU_blit=0 async_memory=1 accurate_res=0 strict_render=0 strict_texture=0 scale=75 shader_precision=HIGH, provider=KOSMICKRISP"
+          new="PsTJon M5.21 V12_RENDER_PROFILE: RCB=0 WCB=1 RDB=0 WDB=0 CPU_blit=0 async_memory=1 accurate_res=0 strict_render=0 strict_texture=0 scale=75 shader_precision=ULTRA, provider=KOSMICKRISP"
+          if s.count(old)!=1: raise SystemExit("M5.21 v12 profile runtime log anchor mismatch")
+          s=s.replace(old,new,1)
+          p.write_text(s)
+          # A/B must recompile with the changed format/precision/upload policy.
+          mesa=os.environ["MESA_KOSMICKRISP_SHA"]
+          p=Path("rpcs3-src/rpcs3/Emu/RSX/VK/VKGSRender.cpp")
+          s=p.read_text()
+          old=f'"v1.95-{mesa}-m520-metal-store-preserve"'
+          new=f'"v1.95-{mesa}-m521-v12-effective-profile"'
+          if s.count(old)!=1: raise SystemExit("M5.21 RSX shader cache anchor mismatch")
+          p.write_text(s.replace(old,new,1))
+          p=Path("rpcs3-src/rpcs3/Emu/RSX/VK/vkutils/device.cpp")
+          s=p.read_text()
+          old=f'"shaders_cache/vulkan/kosmickrisp/{mesa}/m520-metal-store-preserve/vk_pipeline_cache.bin"'
+          new=f'"shaders_cache/vulkan/kosmickrisp/{mesa}/m521-v12-effective-profile/vk_pipeline_cache.bin"'
+          if s.count(old)!=1: raise SystemExit("M5.21 Vulkan pipeline cache anchor mismatch")
+          p.write_text(s.replace(old,new,1))
+          system=Path("rpcs3-src/rpcs3/Emu/System.cpp").read_text()
+          assert 'PsTJon M5.21 V12_RENDER_PROFILE: RCB=0 WCB=1' in system
+          assert 'g_cfg.video.shader_precision.set(gpu_preset_level::ultra)' in system
+          assert 'g_cfg.video.write_color_buffers.set(true)' in system
+          assert 'g_cfg.video.read_color_buffers.set(false)' in system
+          for name in fastpaths:
+              assert f"g_cfg.ios_experimental.{name}.set(ios_experimental_mode::automatic);" in system
+          assert 'm_precise_get_publishing = Emu.GetTitleID()' in Path("rpcs3-src/rpcs3/Emu/RSX/RSXFIFO.cpp").read_text()
+          assert 'PsTJon v13: consumed Ascension OOB local blit' in Path("rpcs3-src/rpcs3/Emu/RSX/NV47/HW/nv3089.cpp").read_text()
+          assert "PsTJon M5.15: BCUS98232 v1.12 Disable MLAA selected" in Path("rpcs3-src/Utilities/bin_patch.cpp").read_text()
+          assert "PsTJon M5.20: iOS A19 Metal4 render-target preservation probe." in Path("mesa-src/src/kosmickrisp/vulkan/kk_cmd_buffer.c").read_text()
+          print("M5.21 A/B v12-effective graphics+upload baseline, isolated KosmicKrisp caches, v13 and M5.20 preservation: PASS")
+          PY
+          grep -q 'M5.21 V12_RENDER_PROFILE:' rpcs3-src/rpcs3/Emu/System.cpp
+          grep -q 'm521-v12-effective-profile' rpcs3-src/rpcs3/Emu/RSX/VK/vkutils/device.cpp
+          git -C rpcs3-src diff --check
+
           # M5.16: KosmicKrisp Metal 4 backend math correctness, not another RPCS3 config guess.
           python3 - <<'PY'
           from pathlib import Path
@@ -2421,13 +2498,13 @@ jobs:
           codesign -d --entitlements :- "$APP" 2>&1 | tee pstjon-entitlements.txt
           (
             cd package
-            ditto -c -k --sequesterRsrc --keepParent Payload "$GITHUB_WORKSPACE/PsTJon-KK-M5.20.ipa"
+            ditto -c -k --sequesterRsrc --keepParent Payload "$GITHUB_WORKSPACE/PsTJon-KK-M5.21.ipa"
           )
-          shasum -a 256 PsTJon-KK-M5.20.ipa
+          shasum -a 256 PsTJon-KK-M5.21.ipa
       - name: Build report
         run: |
           {
-            echo "PsTJon M5.20 - correct iOS Metal 4 attachment retention probe with unchanged v13 profile"
+            echo "PsTJon M5.21 - A/B verified v12 graphics and uploads with KosmicKrisp Metal4 M5.20"
             echo "RPCS3 ios-port: $RPCS3_IOS_SHA"
             echo "Shell bundle id: com.xitrix.RPCS3"
             echo "Vulkan provider: KOSMICKRISP"
@@ -2435,15 +2512,15 @@ jobs:
             echo "Volk: $VOLK_SHA"
             echo "FFmpeg: $FFMPEG_VERSION"
             echo "Core: $(shasum -a 256 libRPCS3Core.dylib | awk '{print $1}')"
-            echo "IPA: $(shasum -a 256 PsTJon-KK-M5.20.ipa | awk '{print $1}')"
-          } > PsTJon-KK-M5.20-build.txt
+            echo "IPA: $(shasum -a 256 PsTJon-KK-M5.21.ipa | awk '{print $1}')"
+          } > PsTJon-KK-M5.21-build.txt
 
       - uses: actions/upload-artifact@v4
         with:
-          name: PsTJon-KK-m05-20-metal-attachment-store-IPA
+          name: PsTJon-KK-m05-21-v12-effective-profile-IPA
           path: |
-            PsTJon-KK-M5.20.ipa
-            PsTJon-KK-M5.20-build.txt
+            PsTJon-KK-M5.21.ipa
+            PsTJon-KK-M5.21-build.txt
             pstjon-entitlements.txt
             M5-rpcs3-patch-stat.txt
             M4-mesa-patch-stat.txt
