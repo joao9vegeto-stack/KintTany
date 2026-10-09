@@ -1,56 +1,71 @@
-# KintTany iOS
+# SpotiJon — Android
 
-## Versão atual
+Branch **SpotiJon** of **joao9vegeto-stack/KintTany**, isolated from every iOS branch.
 
-**KintTany v2.0 (build 20)**.
+## What was done
 
+The user provided `Sonora-1.1.1-unsigned.ipa` (iOS, `com.daniel.sonora`).
+The archive has SwiftUI ARM64 binaries, two JavaScript YouTube stream
+resolver files, localized strings, and design assets, **not the original
+Swift source**. It cannot be recompiled as an APK.
 
-Projeto iOS nativo Swift/SwiftUI.
+The Android deliverable is an **initial functional Android adaptation**, NOT
+a bytecode translation or a faithful pixel-for-pixel port. To retain the
+features identified in the IPA, the build compiles a pinned open-source
+native Android YouTube Music implementation (Metrolist v13.3.0), adds a
+SpotiJon launcher identity, and exposes its playback, queue, search,
+background audio, offline caching and library features.
 
-## Fluxo oficial sem Mac
+Missing Sonora-specific implementation: SwiftUI visual parity, Sonora's
+proprietary stream solver, exact AutoMix/BPM engine, app-level import of
+Sonora data, and its original authentication state. No unsupported
+claim of exact feature parity should be made.
 
-O repositório contém dois pipelines de compilação remota:
+## Git isolation and one-commit build
 
-- `codemagic.yaml` — fluxo mais simples para compilar e baixar pelo iPhone usando Codemagic;
-- `.github/workflows/ios.yml` — pipeline equivalente no GitHub Actions.
+This branch is a *fresh clean tree* with just SpotiJon Android files;
+all KintTany iOS files/workflows are absent. The branch is squashed to one
+commit relative to main, with no modifications to other branches.
 
-Nenhum dos dois exige Mac ou Xcode local.
-Cada push ou pull request executa, em um runner macOS do GitHub:
+The mobile launcher is advertised using a direct, independent Android
+intent filter, while the upstream mobile launcher aliases and Android TV
+filter are preserved. The upstream aliases made naive checks misleading. GitHub Actions
+validates both an APK signature and a home-screen launchable activity.
 
-1. seleção da toolchain Xcode disponível;
-2. XCTest no simulador iOS;
-3. build `iphoneos` sem assinatura;
-4. geração de `KintTany-unsigned.ipa` e `KintTany.app`;
-5. upload dos arquivos na aba **Actions → Artifacts**.
+## Reproducible build
 
-Assim, o projeto pode ser compilado e baixado inteiramente pelo navegador do
-iPhone. Nenhuma etapa fundamental exige abrir o projeto no Xcode localmente.
+GitHub Actions workflow `.github/workflows/build-spotijon-android.yml`
+fetches the fixed upstream commit
+`89060fca00f2f8849e9f6b0c2b9ddb799f102c8e`
+from [MetrolistGroup/Metrolist](https://github.com/MetrolistGroup/Metrolist),
+runs `scripts/brand.sh` and uses Gradle to build
+`:app:assembleFossDebug`.
 
-## IPA assinado
+Application ID: `com.spotijon.music`, display name: **SpotiJon**.
+The release is a DEBUG-signed APK, installable without a Google Play account.
+The signing key is generated on the GitHub-hosted runner, so future builds
+may require uninstalling before installing an APK signed with a different key.
 
-Sem Secrets de assinatura, o workflow sempre gera o artefato não assinado para
-o fluxo posterior de sideload. Para gerar também `KintTany.ipa` assinado,
-configure no GitHub Actions os Secrets:
+The **FOSS** debug flavor is used with a distinct SpotiJon Android application ID. A physical Android device
+has not been tested from this repository.
 
-- `IOS_DISTRIBUTION_CERTIFICATE_BASE64`: certificado `.p12` em Base64;
-- `IOS_DISTRIBUTION_CERTIFICATE_PASSWORD`;
-- `IOS_PROVISIONING_PROFILE_BASE64`: perfil `.mobileprovision` em Base64;
-- `APPLE_TEAM_ID`;
-- `KEYCHAIN_PASSWORD` (opcional; há valor temporário para o runner).
+## Open source and attribution
 
-O certificado, o perfil e as credenciais nunca são incluídos no repositório ou
-nos artefatos não assinados.
+This repository contains only original branding/build scripts, not a copy of
+Metrolist source. Metrolist is distributed under the **GNU GPL-3.0**; its
+corresponding Android source is checked out at the pinned commit above when
+the APK is built. Redistribution must preserve the GPL-3.0 attribution and
+source availability. Source and license:
+[Metrolist 13.3.0](https://github.com/MetrolistGroup/Metrolist/tree/v13.3.0).
 
-Não inclua cookies, chaves privadas, carteiras ou arquivos `.env` no projeto.
+No code/assets were copied from the compiled Sonora IPA. Any new Sonora-derived
+feature must be implemented and tested separately.
 
+## Build and artifact
 
-## Codemagic
+Open **Actions → SpotiJon Android APK** on branch `SpotiJon`. Successful
+runs publish **SpotiJon-Android-APK**, containing the installable APK,
+its SHA-256 and Android package information.
 
-1. Suba o conteúdo desta pasta para a raiz do repositório GitHub.
-2. Conecte esse repositório ao Codemagic.
-3. Selecione a branch `main` e toque em **Check for configuration files**.
-4. O workflow **KintTany iOS - Unsigned IPA** será encontrado a partir de `codemagic.yaml`.
-5. Inicie o build. O runner Mac executará XCTest, compilará para `iphoneos` e publicará `KintTany-unsigned.ipa`.
-6. Baixe o artifact diretamente pelo navegador do iPhone e assine-o pelo seu fluxo de sideload.
-
-O workflow do Codemagic usa Xcode 26.5 em Mac mini M2 e não requer certificado Apple para o artifact sem assinatura.
+The app's streaming relies on unofficial YouTube Music interfaces and may
+be affected by service changes, geographic restrictions or authentication.

@@ -1,0 +1,113 @@
+name: SpotiJon Android APK
+
+on:
+  push:
+    branches:
+      - SpotiJon
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: spotijon-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  build:
+    name: Build and validate SpotiJon APK
+    runs-on: ubuntu-24.04
+    timeout-minutes: 95
+
+    steps:
+      - name: Checkout isolated SpotiJon branch
+        uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
+      - name: Checkout pinned Android playback implementation
+        uses: actions/checkout@v4
+        with:
+          repository: MetrolistGroup/Metrolist
+          ref: 89060fca00f2f8849e9f6b0c2b9ddb799f102c8e
+          path: upstream
+          submodules: recursive
+          persist-credentials: false
+
+      - name: Set up Java 21
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '21'
+
+      - name: Set up Android SDK API 36
+        uses: android-actions/setup-android@v4
+        with:
+          packages: 'platform-tools platforms;android-36 build-tools;36.0.0'
+          log-accepted-android-sdk-licenses: 'false'
+
+      - name: Generate required Android protobuf sources
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y protobuf-compiler
+          cd upstream/app
+          bash generate_proto.sh
+
+      - name: Apply isolated SpotiJon branding
+        run: |
+          bash scripts/brand.sh upstream
+          test -f upstream/app/src/main/res/drawable/spotijon_foreground.xml
+          grep -q 'SpotiJon' scripts/brand.sh
+          grep -Fq 'applicationId = "com.spotijon.music"' upstream/app/build.gradle.kts
+          grep -Fq '>SpotiJon<' upstream/app/src/main/res/values/app_name.xml
+
+      - name: Set up Gradle
+        uses: gradle/actions/setup-gradle@v4
+
+      - name: Generate Android debug signing key
+        run: |
+          mkdir -p "$HOME/.android"
+          if [ ! -f "$HOME/.android/debug.keystore" ]; then
+            keytool -genkeypair -keystore "$HOME/.android/debug.keystore" \
+              -storepass android -keypass android -alias androiddebugkey \
+              -keyalg RSA -keysize 2048 -validity 10000 \
+              -dname "CN=SpotiJon Debug,O=SpotiJon,C=BR"
+          fi
+          cp "$HOME/.android/debug.keystore" upstream/app/persistent-debug.keystore
+          test -s upstream/app/persistent-debug.keystore
+
+      - name: Compile signed debug APK from Android source
+        working-directory: upstream
+        env:
+          PULL_REQUEST: 'true'
+          GITHUB_EVENT_NAME: pull_request
+        run: |
+          chmod +x gradlew
+          ./gradlew --no-daemon --console=plain --max-workers=2 :app:assembleFossDebug -x lint
+
+      - name: Verify package, signature, launcher and APK integrity
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p output
+          mapfile -t apks < <(find upstream/app/build/outputs/apk/foss/debug -maxdepth 1 -type f -name '*.apk')
+          test "${#apks[@]}" -eq 1
+          cp "${apks[0]}" output/SpotiJon-Android-v0.1.apk
+          BT="${ANDROID_HOME}/build-tools/36.0.0"
+          "${BT}/apksigner" verify --verbose output/SpotiJon-Android-v0.1.apk
+          "${BT}/aapt" dump badging output/SpotiJon-Android-v0.1.apk | tee output/badging.txt
+          grep -F "package: name='com.spotijon.music'" output/badging.txt
+          grep -F "application-label:'SpotiJon'" output/badging.txt
+          grep -q '^launchable-activity:' output/badging.txt
+          echo "Mobile launcher verified"
+          sha256sum output/SpotiJon-Android-v0.1.apk | tee output/SHA256SUMS.txt
+          test "$(stat -c%s output/SpotiJon-Android-v0.1.apk)" -gt 10000000
+
+      - name: Publish APK artifact even if validation fails
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: SpotiJon-Android-APK
+          path: output/
+          retention-days: 30
+          if-no-files-found: warn
