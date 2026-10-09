@@ -2637,7 +2637,7 @@ jobs:
           		}
           #endif
           		if (!sampler_state->validate())'''
-          if s.count(anchor)!=1:raise SystemExit("M5.27 VKDraw texture upload anchor mismatch: "+str(s.count(anchor)))
+          if s.count(anchor)!=2:raise SystemExit("M5.27 VKDraw expected fragment and vertex texture upload paths: "+str(s.count(anchor)))
           s=s.replace(anchor,add,1)
           p.write_text(s)
           assert "M5.27 RSX_TEX" in s
