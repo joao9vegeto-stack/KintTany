@@ -1749,6 +1749,81 @@ jobs:
           PY
           grep -q 'M5.14 regression rollback:' rpcs3-src/rpcs3/Emu/System.cpp
           ! grep -q 'g_cfg.video.shadermode.set(shader_mode::interpreter_only)' rpcs3-src/rpcs3/Emu/System.cpp
+          # M5.15: enforce missing Ascension MLAA patch and isolate stale Metal shader caches.
+          python3 - <<'PY'
+          from pathlib import Path
+          import os
+          # M5.14 physical logs: user patch_config had only three active patches:
+          # Disable Motion Blur, Disable Depth of Field, Disable Mesh Trimming.
+          # The critical "Disable MLAA" was NOT applied. Upstream RPCS3 #17179
+          # documents a launch/race black-screen without this exact patch.
+          # M5.9 only removed an accidental suppression of the patch, but it did
+          # NOT enable it. Make the BCUS98232/01.12 PPU patch effective whenever
+          # the game's official patch catalog contains it.
+          p=Path("rpcs3-src/Utilities/bin_patch.cpp")
+          s=p.read_text()
+          old='''\t\t\t\t\t\t\tconst patch_config_values& config_values = patch_config[main_key].patch_info_map[description].titles[title][serial][app_version];
+          
+          \t\t\t\t\t\t\tapp_versions[app_version] = config_values;'''
+          new='''\t\t\t\t\t\t\tpatch_config_values config_values = patch_config[main_key].patch_info_map[description].titles[title][serial][app_version];
+          #ifdef RPCS3_IOS
+          \t\t\t\t\t\t\t// Force the known-safe per-title startup workaround; never affect
+          \t\t\t\t\t\t\t// other game versions or unrelated patches. The patch is only
+          \t\t\t\t\t\t\t// enabled if its authoritative PPU-hash definition is loaded.
+          \t\t\t\t\t\t\tif (main_key == "PPU-3a0b43e4a5f4bfea64f53612ee7c5d990f88129c" &&
+          \t\t\t\t\t\t\t    description == "Disable MLAA" && serial == "BCUS98232" &&
+          \t\t\t\t\t\t\t    app_version == "01.12")
+          \t\t\t\t\t\t\t{
+          \t\t\t\t\t\t\t\tconfig_values.enabled = true;
+          \t\t\t\t\t\t\t\tpatch_log.notice("PsTJon M5.15: BCUS98232 v1.12 Disable MLAA selected from actual catalog (race-condition fix)");
+          \t\t\t\t\t\t\t}
+          #endif
+          \t\t\t\t\t\t\tapp_versions[app_version] = config_values;'''
+          if s.count(old)!=1:
+              raise SystemExit(f"M5.15 patch catalog anchor count mismatch: {s.count(old)}")
+          s=s.replace(old,new,1)
+          p.write_text(s)
+          
+          # Unique cache epoch for this GAME/PROVIDER experiment.
+          # Old shader binaries and Metal pipelines have been reused across M5.5-
+          # M5.14 despite incompatible runtime graphics policies. Do not wipe the
+          # user's original cache: isolate the new shader cache namespace and the
+          # VkPipelineCache persistence file for reproducible cold shader recompiles.
+          mesa=os.environ["MESA_KOSMICKRISP_SHA"]
+          p=Path("rpcs3-src/rpcs3/Emu/RSX/VK/VKGSRender.cpp")
+          s=p.read_text()
+          old=f'"v1.95-{mesa}"'
+          new=f'"v1.95-{mesa}-mlaafix-m515"'
+          if s.count(old)!=1:
+              raise SystemExit(f"M5.15 RSX shader namespace mismatch: {s.count(old)}")
+          s=s.replace(old,new,1)
+          p.write_text(s)
+          
+          p=Path("rpcs3-src/rpcs3/Emu/RSX/VK/vkutils/device.cpp")
+          s=p.read_text()
+          old=f'"shaders_cache/vulkan/kosmickrisp/{mesa}/vk_pipeline_cache.bin"'
+          new=f'"shaders_cache/vulkan/kosmickrisp/{mesa}/m515/vk_pipeline_cache.bin"'
+          if s.count(old)!=1:
+              raise SystemExit(f"M5.15 Vulkan pipeline cache namespace mismatch: {s.count(old)}")
+          s=s.replace(old,new,1)
+          p.write_text(s)
+          
+          # Early gate: verify that this release actually selects the intended
+          # PPU patch (when the patch definition is present), not just a commented
+          # toggled setting; other patches and original source stay untouched.
+          patch_src=Path("rpcs3-src/Utilities/bin_patch.cpp").read_text()
+          assert "M5.15: BCUS98232 v1.12 Disable MLAA selected" in patch_src
+          assert "app_version == \"01.12\"" in patch_src
+          assert "config_values.enabled = true;" in patch_src
+          assert 'v1.95-'+mesa+'-mlaafix-m515' in Path("rpcs3-src/rpcs3/Emu/RSX/VK/VKGSRender.cpp").read_text()
+          assert 'kosmickrisp/'+mesa+'/m515/vk_pipeline_cache.bin' in Path("rpcs3-src/rpcs3/Emu/RSX/VK/vkutils/device.cpp").read_text()
+          assert 'g_cfg.video.shadermode.set(shader_mode::async_with_interpreter)' in Path("rpcs3-src/rpcs3/Emu/System.cpp").read_text()
+          assert 'm_precise_get_publishing = Emu.GetTitleID()' in Path("rpcs3-src/rpcs3/Emu/RSX/RSXFIFO.cpp").read_text()
+          assert "PsTJon v13: consumed Ascension OOB local blit" in Path("rpcs3-src/rpcs3/Emu/RSX/NV47/HW/nv3089.cpp").read_text()
+          print("M5.15 hash-scoped MLAA patch selection + shader caches isolated + v13 preserved PASS")
+          PY
+          grep -q 'M5.15: BCUS98232 v1.12 Disable MLAA selected' rpcs3-src/Utilities/bin_patch.cpp
+          grep -q 'mlaafix-m515' rpcs3-src/rpcs3/Emu/RSX/VK/VKGSRender.cpp
           grep -q 'allocatorInfo.pVulkanFunctions = &vma_vulkan_functions' rpcs3-src/rpcs3/Emu/RSX/VK/vkutils/memory.cpp
           grep -q 'PsTJon M5 VMA dispatch: vmaCreateAllocator complete' rpcs3-src/rpcs3/Emu/RSX/VK/vkutils/memory.cpp
           grep -q 'RPCS3_VULKAN_PROVIDER_KOSMICKRISP)' rpcs3-src/rpcs3/Emu/RSX/VK/vkutils/device.cpp
@@ -2029,14 +2104,14 @@ jobs:
           codesign -d --entitlements :- "$APP" 2>&1 | tee pstjon-entitlements.txt
           (
             cd package
-            ditto -c -k --sequesterRsrc --keepParent Payload "$GITHUB_WORKSPACE/PsTJon-KK-M5.14.ipa"
+            ditto -c -k --sequesterRsrc --keepParent Payload "$GITHUB_WORKSPACE/PsTJon-KK-M5.15.ipa"
           )
-          shasum -a 256 PsTJon-KK-M5.14.ipa
+          shasum -a 256 PsTJon-KK-M5.15.ipa
 
       - name: Build report
         run: |
           {
-            echo "PsTJon M5.14 - restore compiled RSX shader pipeline to fix Santa Monica progress regression; preserve framebuffer and v13 guards"
+            echo "PsTJon M5.15 - enable hash-verified Disable MLAA for Ascension 1.12 and isolate shader/pipeline cache"
             echo "RPCS3 ios-port: $RPCS3_IOS_SHA"
             echo "Shell bundle id: com.xitrix.RPCS3"
             echo "Vulkan provider: KOSMICKRISP"
@@ -2044,15 +2119,15 @@ jobs:
             echo "Volk: $VOLK_SHA"
             echo "FFmpeg: $FFMPEG_VERSION"
             echo "Core: $(shasum -a 256 libRPCS3Core.dylib | awk '{print $1}')"
-            echo "IPA: $(shasum -a 256 PsTJon-KK-M5.14.ipa | awk '{print $1}')"
-          } > PsTJon-KK-M5.14-build.txt
+            echo "IPA: $(shasum -a 256 PsTJon-KK-M5.15.ipa | awk '{print $1}')"
+          } > PsTJon-KK-M5.15-build.txt
 
       - uses: actions/upload-artifact@v4
         with:
-          name: PsTJon-KK-m05-14-restore-async-pipelines-IPA
+          name: PsTJon-KK-m05-15-mlaafix-cache-IPA
           path: |
-            PsTJon-KK-M5.14.ipa
-            PsTJon-KK-M5.14-build.txt
+            PsTJon-KK-M5.15.ipa
+            PsTJon-KK-M5.15-build.txt
             pstjon-entitlements.txt
             M5-rpcs3-patch-stat.txt
             M4-mesa-patch-stat.txt
