@@ -1955,6 +1955,81 @@ jobs:
           print("M5.18 live file presence audit installed")
           
           PY
+          # M5.19: restore verified pre-KosmicKrisp PsTJon v13 renderer settings in same KK core.
+          python3 - <<'PY'
+          from pathlib import Path
+          import os
+          # PsTJon v13 on MoltenVK was the user's last visually readable
+          # Ascension baseline. The M5 branch changed the render profile
+          # successively (CPU blit, RCB/WCB, strict ordering, native resolution,
+          # host-memory handling). Do a SINGLE controlled profile rollback while
+          # keeping the newly ported KosmicKrisp Vulkan backend and v13 guards.
+          #
+          # The title's config may still be the M5.15 replacement. Apply after
+          # resolve_experimental_policy(), so the device sees the known v13
+          # profile regardless of that on-disk configuration. Other titles and
+          # other branches are unaffected.
+          p=Path("rpcs3-src/rpcs3/Emu/System.cpp")
+          s=p.read_text()
+          anchor='\t\t\trpcs3::ios::resolve_experimental_policy();'
+          if s.count(anchor)!=1:
+              raise SystemExit(f"M5.19 v13 late-policy anchor changed: {s.count(anchor)}")
+          rollback=r'''
+          			if (m_title_id == "BCUS98232")
+          			{
+          				// PsTJon v13 control profile, applied after config/fixup;
+          				// unlike the first M5 attempts this is not a random tweak.
+          				g_cfg.video.force_cpu_blit_processing.set(false);
+          				g_cfg.video.disable_async_host_memory_manager.set(false);
+          				g_cfg.core.rsx_accurate_res_access.set(false);
+          				g_cfg.video.disable_zcull_queries.set(true);
+          				g_cfg.video.read_color_buffers.set(false);
+          				g_cfg.video.write_color_buffers.set(false);
+          				g_cfg.video.read_depth_buffer.set(false);
+          				g_cfg.video.write_depth_buffer.set(false);
+          				g_cfg.video.strict_rendering_mode.set(false);
+          				g_cfg.video.strict_texture_flushing.set(false);
+          				g_cfg.video.resolution_scale_percent.set(75);
+          				g_cfg.video.shader_precision.set(gpu_preset_level::high);
+          				g_cfg.video.shadermode.set(shader_mode::async_with_interpreter);
+          				sys_log.notice("PsTJon M5.19 V13_RENDER_PROFILE: RCB=0 WCB=0 RDB=0 WDB=0 CPU_blit=0 async_memory=1 accurate_res=0 strict_render=0 strict_texture=0 scale=75 shader_precision=HIGH, provider=KOSMICKRISP");
+          			}
+          '''
+          s=s.replace(anchor,anchor+"\n"+rollback,1)
+          p.write_text(s)
+          # New shader/pipeline cache namespace prevents previous M5 framebuffer
+          # policy and precision permutations contaminating this comparison.
+          mesa=os.environ["MESA_KOSMICKRISP_SHA"]
+          p=Path("rpcs3-src/rpcs3/Emu/RSX/VK/VKGSRender.cpp")
+          s=p.read_text()
+          old=f'"v1.95-{mesa}-m517-feedback-fallback"'
+          new=f'"v1.95-{mesa}-m519-v13-render-profile"'
+          if s.count(old)!=1:raise SystemExit("M5.19 shader namespace anchor")
+          p.write_text(s.replace(old,new,1))
+          p=Path("rpcs3-src/rpcs3/Emu/RSX/VK/vkutils/device.cpp")
+          s=p.read_text()
+          old=f'"shaders_cache/vulkan/kosmickrisp/{mesa}/m517-feedback-fallback/vk_pipeline_cache.bin"'
+          new=f'"shaders_cache/vulkan/kosmickrisp/{mesa}/m519-v13-render-profile/vk_pipeline_cache.bin"'
+          if s.count(old)!=1:raise SystemExit("M5.19 pipeline cache namespace anchor")
+          p.write_text(s.replace(old,new,1))
+          # Gates: v13 FIFO + v13 narrow local VRAM guard remain, no changes to
+          # driver selection, audio, haptics, and patch engine selection.
+          sys=Path("rpcs3-src/rpcs3/Emu/System.cpp").read_text()
+          assert "PsTJon M5.19 V13_RENDER_PROFILE:" in sys
+          assert "g_cfg.video.read_color_buffers.set(false)" in sys
+          assert "g_cfg.video.write_color_buffers.set(false)" in sys
+          assert "g_cfg.video.resolution_scale_percent.set(75)" in sys
+          assert "g_cfg.video.force_cpu_blit_processing.set(false)" in sys
+          assert "g_cfg.video.disable_async_host_memory_manager.set(false)" in sys
+          assert "g_cfg.video.strict_rendering_mode.set(false)" in sys
+          assert "g_cfg.video.shadermode.set(shader_mode::async_with_interpreter)" in sys
+          assert 'm_precise_get_publishing = Emu.GetTitleID()' in Path("rpcs3-src/rpcs3/Emu/RSX/RSXFIFO.cpp").read_text()
+          assert "PsTJon v13: consumed Ascension OOB local blit" in Path("rpcs3-src/rpcs3/Emu/RSX/NV47/HW/nv3089.cpp").read_text()
+          assert "m519-v13-render-profile" in Path("rpcs3-src/rpcs3/Emu/RSX/VK/vkutils/device.cpp").read_text()
+          print("M5.19 V13 default render profile reinstated for KosmicKrisp; v13 RSX/audio preserved PASS")
+          
+          PY
+          grep -q 'M5.19 V13_RENDER_PROFILE:' rpcs3-src/rpcs3/Emu/System.cpp
           grep -q 'allocatorInfo.pVulkanFunctions = &vma_vulkan_functions' rpcs3-src/rpcs3/Emu/RSX/VK/vkutils/memory.cpp
           grep -q 'PsTJon M5 VMA dispatch: vmaCreateAllocator complete' rpcs3-src/rpcs3/Emu/RSX/VK/vkutils/memory.cpp
           grep -q 'RPCS3_VULKAN_PROVIDER_KOSMICKRISP)' rpcs3-src/rpcs3/Emu/RSX/VK/vkutils/device.cpp
@@ -2274,35 +2349,13 @@ jobs:
           codesign -d --entitlements :- "$APP" 2>&1 | tee pstjon-entitlements.txt
           (
             cd package
-            ditto -c -k --sequesterRsrc --keepParent Payload "$GITHUB_WORKSPACE/PsTJon-KK-M5.18.ipa"
+            ditto -c -k --sequesterRsrc --keepParent Payload "$GITHUB_WORKSPACE/PsTJon-KK-M5.19.ipa"
           )
-          shasum -a 256 PsTJon-KK-M5.18.ipa
-          # Byte-identical upstream MoltenVK control; no local v13 or M5 changes.
-          # Unlike KK, it uses original source, so compare as an indicator only.
-          cp RPCS3-official.ipa PsTJon-M5.18-MoltenVK-Controle.ipa
-          echo "$OFFICIAL_IPA_SHA256  PsTJon-M5.18-MoltenVK-Controle.ipa" | shasum -a 256 -c -
-          shasum -a 256 PsTJon-M5.18-MoltenVK-Controle.ipa
-
+          shasum -a 256 PsTJon-KK-M5.19.ipa
       - name: Build report
         run: |
-          cat > PsTJon-M5.18-TESTE-COMPARATIVO.txt <<'EOF'
-          M5.18 — Diagnostico comparativo, 2026-10-09
-          IPA KK M5.18: usa as mesmas politicas graficas da M5.17, com auditoria VFS adicional.
-          No log do jogo, procurar "PsTJon M5.18 asset audit: ... PRESENT/MISSING".
-          IPA MoltenVK Controle: RPCS3-iOS oficial 0.10.1; SHA-256 igual ao upstream.
-          ATENCAO: o controle oficial nao contem as protecoes e alteracoes customizadas da v13.
-          A comparacao indica suspeitos, mas NAO isola somente o driver.
-          Ambos usam o mesmo bundle id com.xitrix.RPCS3. Fazer backup de saves,
-          jogos e configs antes de trocar de instalacao. Nao desinstalar sem backup.
-          Testar a mesma cena e os mesmos dados v1.12 nos dois motores.
-          Se KK ruim e MoltenVK correto, investigar KosmicKrisp/MSL/Vulkan.
-          Se ambos ruins, investigar dump Lite, assets, patch, config ou RSX comum.
-          CELL_ENOENT em arquivos patch-MP e *.PATCH pode ser fallback normal.
-          Patch Disable MLAA ja estava aplicado na M5.17.
-          Config e patch_config M5.15 permanecem sem alteracoes.
-          EOF
           {
-            echo "PsTJon M5.18 - VFS integrity audit and MoltenVK reference control"
+            echo "PsTJon M5.19 - restore known pre-KosmicKrisp v13 title render profile with new Metal driver"
             echo "RPCS3 ios-port: $RPCS3_IOS_SHA"
             echo "Shell bundle id: com.xitrix.RPCS3"
             echo "Vulkan provider: KOSMICKRISP"
@@ -2310,19 +2363,15 @@ jobs:
             echo "Volk: $VOLK_SHA"
             echo "FFmpeg: $FFMPEG_VERSION"
             echo "Core: $(shasum -a 256 libRPCS3Core.dylib | awk '{print $1}')"
-            echo "IPA: $(shasum -a 256 PsTJon-KK-M5.18.ipa | awk '{print $1}')"
-            echo "MoltenVK Controle: $(shasum -a 256 PsTJon-M5.18-MoltenVK-Controle.ipa | awk '{print $1}')"
-            echo "A/B: unchanged M5.17 KK graphics vs stock 0.10.1 MoltenVK"
-          } > PsTJon-KK-M5.18-build.txt
+            echo "IPA: $(shasum -a 256 PsTJon-KK-M5.19.ipa | awk '{print $1}')"
+          } > PsTJon-KK-M5.19-build.txt
 
       - uses: actions/upload-artifact@v4
         with:
-          name: PsTJon-KK-m05-18-graphic-bisect-IPA
+          name: PsTJon-KK-m05-19-v13-graphic-rollback-IPA
           path: |
-            PsTJon-KK-M5.18.ipa
-            PsTJon-M5.18-MoltenVK-Controle.ipa
-            PsTJon-M5.18-TESTE-COMPARATIVO.txt
-            PsTJon-KK-M5.18-build.txt
+            PsTJon-KK-M5.19.ipa
+            PsTJon-KK-M5.19-build.txt
             pstjon-entitlements.txt
             M5-rpcs3-patch-stat.txt
             M4-mesa-patch-stat.txt
