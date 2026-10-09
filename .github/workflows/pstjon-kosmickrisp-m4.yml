@@ -2520,6 +2520,62 @@ jobs:
           grep -q 'M5.25 RSX_RT' rpcs3-src/rpcs3/Emu/RSX/VK/VKGSRender.cpp
           git -C rpcs3-src diff --check
 
+          # M5.26: physical M5.25 test confirmed only a performance regression.
+          # Undo forced Prince interpreter and evaluate disabled-ZCull visibility
+          # under the existing KosmicKrisp no-hardware-query safety policy.
+          # The M5.10 fallback incorrectly set visible=1 only for Ascension.
+          # Prince instead returned 0 despite hardware queries being disabled.
+          python3 - <<'PY'
+          from pathlib import Path
+
+          p=Path("rpcs3-src/rpcs3/Emu/RSX/VK/VKGSRender.cpp")
+          s=p.read_text()
+          old="""\tconst auto shadermode = pstjon_m525_prince_probe
+          \t\t? shader_mode::interpreter_only : configured_shadermode;"""
+          new="""\t// M5.26: revert costly interpreter-only A/B for BLUS30401.
+          \tconst auto shadermode = configured_shadermode;"""
+          if s.count(old)!=1: raise SystemExit("M5.26 expected exactly one M5.25 Prince interpreter override: "+str(s.count(old)))
+          s=s.replace(old,new,1)
+          old='"PsTJon M5.25 PRINCE_FRAGMENT_AB: BLUS30401 lazy Shader Interpreter only; does not alter other games or shader preload"'
+          new='"PsTJon M5.26 PRINCE_INTERPRETER_ROLLBACK: BLUS30401 restored normal configured shader mode; bounded RT/pipeline instrumentation retained"'
+          if s.count(old)!=1: raise SystemExit("M5.26 Prince mode log anchor mismatch")
+          s=s.replace(old,new,1)
+
+          old='if (Emu.GetTitleID() == "BCUS98232") query->result = 1;'
+          new="""// M5.26 PRINCE_ZCULL_VISIBLE: when hardware ZCULL queries are
+          \t\t\t// intentionally disabled, a hardcoded invisible result can
+          \t\t\t// cull all geometry. Extend the existing title-specific
+          \t\t\t// visible-result fallback to Prince without touching other games.
+          \t\t\tconst bool m526_visible = Emu.GetTitleID() == "BCUS98232" ||
+          \t\t\t\tEmu.GetTitleID() == "BLUS30401";
+          \t\t\tif (m526_visible) query->result = 1;
+          \t\t\tif (Emu.GetTitleID() == "BLUS30401")
+          \t\t\t{
+          \t\t\t\tstatic u32 m526_query_count = 0;
+          \t\t\t\t++m526_query_count;
+          \t\t\t\tif (m526_query_count <= 16 ||
+          \t\t\t\t\t((m526_query_count & (m526_query_count - 1)) == 0 && m526_query_count <= 2048))
+          \t\t\t\t{
+          \t\t\t\t\trsx_log.notice("PsTJon M5.26 PRINCE_ZCULL_VISIBLE: probe=%u fallback_result=%u hardware_query=0", m526_query_count, static_cast<u32>(query->result));
+          \t\t\t\t}
+          \t\t\t}"""
+          if s.count(old)!=1: raise SystemExit("M5.26 M5.10 ZCull exception anchor mismatch: "+str(s.count(old)))
+          s=s.replace(old,new,1)
+          assert s.count("M5.26 PRINCE_ZCULL_VISIBLE") == 2
+          assert "const auto shadermode = configured_shadermode;" in s
+          assert "shader_mode::interpreter_only : configured_shadermode" not in s
+          assert s.count('Emu.GetTitleID() == "BLUS30401"') >= 4
+          assert "M5.25 RSX_RT" in s and "M5.25 RSX_PIPE" in s
+          assert 'm_current_command_buffer->flags |= vk::command_buffer::cb_load_occluson_task;' in s
+          assert 'if (g_cfg.video.disable_zcull_queries)' in s
+          p.write_text(s)
+          print("M5.26 Prince normal async shader restored; disabled-ZCull visible=1 fallback scoped to Prince; bounded query/RT/pipeline logs PASS")
+          PY
+          grep -q 'M5.26 PRINCE_ZCULL_VISIBLE' rpcs3-src/rpcs3/Emu/RSX/VK/VKGSRender.cpp
+          grep -q 'M5.26 PRINCE_INTERPRETER_ROLLBACK' rpcs3-src/rpcs3/Emu/RSX/VK/VKGSRender.cpp
+          ! grep -q 'shader_mode::interpreter_only : configured_shadermode' rpcs3-src/rpcs3/Emu/RSX/VK/VKGSRender.cpp
+          git -C rpcs3-src diff --check
+
           rm -rf build-kk-host kk-host-tools
           meson setup build-kk-host mesa-src \
             --buildtype=release \
