@@ -2030,6 +2030,76 @@ jobs:
           
           PY
           grep -q 'M5.19 V13_RENDER_PROFILE:' rpcs3-src/rpcs3/Emu/System.cpp
+          # M5.20: preserve Metal4 tile attachments on iOS and isolate native pipeline cache.
+          python3 - <<'PY'
+          from pathlib import Path
+          
+          # M5.19 physical log: V13_RENDER_PROFILE logged three times, GPU
+          # successfully rendered >65k compiled draw selections, no Dead FIFO,
+          # no VK_ERROR, but the floor/geometry continued black in the same scene.
+          # This isolates the persistent defect to output preservation / Metal
+          # pipeline semantics, not user data or the v13 config.
+          #
+          # In the pinned KosmicKrisp Metal4 driver, the translated VK storeOp
+          # can discard an attachment at an encoder boundary. The PS3 uses
+          # many consecutive framebuffer passes and render-target feedback.
+          # M5.20 isolates attachment-store preservation, using STORE (and
+          # STORE_AND_MULTISAMPLE_RESOLVE where resolve is requested). Do not
+          # change load ops, shader math, index data, depth comparisons,
+          # framebuffer format mappings, FIFO, or any BCUS98232 game patches.
+          p=Path("mesa-src/src/kosmickrisp/vulkan/kk_cmd_buffer.c")
+          s=p.read_text()
+          anchor='''    force_store |= render->force_attachment_store;
+          
+              for (uint32_t i = 0; i < render->color_att_count; i++) {'''
+          new='''    force_store |= render->force_attachment_store;
+          #if defined(__ENVIRONMENT_IPHONE_OS_VERSION_MIN_REQUIRED__)
+              // PsTJon M5.20: iOS A19 Metal4 render-target preservation probe.
+              // Vulkan permits retaining attachments when storeOp is DONT_CARE;
+              // preserving their contents is essential to test whether Metal4
+              // incorrectly drops PS3 framebuffer feedback between encoders.
+              // Cost: more tile stores; intentionally correctness before FPS.
+              force_store = true;
+          #endif
+          
+              for (uint32_t i = 0; i < render->color_att_count; i++) {'''
+          if s.count(anchor)!=1:
+              raise SystemExit(f"M5.20 Mesa attachment-store anchor mismatch: {s.count(anchor)}")
+          s=s.replace(anchor,new,1)
+          assert s.count("PsTJon M5.20: iOS A19 Metal4 render-target preservation probe")==1
+          assert "kk_get_attachment_store_op(" in s
+          assert "MTL_STORE_ACTION_STORE_AND_MULTISAMPLE_RESOLVE" in s
+          assert "MTL_STORE_ACTION_STORE" in s
+          p.write_text(s)
+          print("M5.20 KosmicKrisp Metal4 iOS attachment preservation enabled; normal load/resolve path retained")
+          
+          # Stale Metal pipelines from M5.19 or earlier must not contaminate
+          # this Metal encoder experiment.
+          import os
+          mesa=os.environ["MESA_KOSMICKRISP_SHA"]
+          p=Path("rpcs3-src/rpcs3/Emu/RSX/VK/VKGSRender.cpp")
+          s=p.read_text()
+          old=f'"v1.95-{mesa}-m519-v13-render-profile"'
+          new=f'"v1.95-{mesa}-m520-metal-store-preserve"'
+          if s.count(old)!=1:raise SystemExit("M5.20 shader cache anchor mismatch")
+          p.write_text(s.replace(old,new,1))
+          p=Path("rpcs3-src/rpcs3/Emu/RSX/VK/vkutils/device.cpp")
+          s=p.read_text()
+          old=f'"shaders_cache/vulkan/kosmickrisp/{mesa}/m519-v13-render-profile/vk_pipeline_cache.bin"'
+          new=f'"shaders_cache/vulkan/kosmickrisp/{mesa}/m520-metal-store-preserve/vk_pipeline_cache.bin"'
+          if s.count(old)!=1:raise SystemExit("M5.20 pipeline cache anchor mismatch")
+          p.write_text(s.replace(old,new,1))
+          system=Path("rpcs3-src/rpcs3/Emu/System.cpp").read_text()
+          assert 'PsTJon M5.19 V13_RENDER_PROFILE:' in system
+          assert 'g_cfg.video.resolution_scale_percent.set(75)' in system
+          assert 'g_cfg.video.read_color_buffers.set(false)' in system
+          assert 'g_cfg.video.write_color_buffers.set(false)' in system
+          assert 'm_precise_get_publishing = Emu.GetTitleID()' in Path("rpcs3-src/rpcs3/Emu/RSX/RSXFIFO.cpp").read_text()
+          assert 'PsTJon v13: consumed Ascension OOB local blit' in Path("rpcs3-src/rpcs3/Emu/RSX/NV47/HW/nv3089.cpp").read_text()
+          print("M5.20 v13 profile/FIFO, MLAA and audio/haptics preserved; only Metal store and cache epochs changed")
+          
+          PY
+          grep -q 'PsTJon M5.20: iOS A19 Metal4 render-target preservation probe' mesa-src/src/kosmickrisp/vulkan/kk_cmd_buffer.c
           grep -q 'allocatorInfo.pVulkanFunctions = &vma_vulkan_functions' rpcs3-src/rpcs3/Emu/RSX/VK/vkutils/memory.cpp
           grep -q 'PsTJon M5 VMA dispatch: vmaCreateAllocator complete' rpcs3-src/rpcs3/Emu/RSX/VK/vkutils/memory.cpp
           grep -q 'RPCS3_VULKAN_PROVIDER_KOSMICKRISP)' rpcs3-src/rpcs3/Emu/RSX/VK/vkutils/device.cpp
@@ -2349,13 +2419,13 @@ jobs:
           codesign -d --entitlements :- "$APP" 2>&1 | tee pstjon-entitlements.txt
           (
             cd package
-            ditto -c -k --sequesterRsrc --keepParent Payload "$GITHUB_WORKSPACE/PsTJon-KK-M5.19.ipa"
+            ditto -c -k --sequesterRsrc --keepParent Payload "$GITHUB_WORKSPACE/PsTJon-KK-M5.20.ipa"
           )
-          shasum -a 256 PsTJon-KK-M5.19.ipa
+          shasum -a 256 PsTJon-KK-M5.20.ipa
       - name: Build report
         run: |
           {
-            echo "PsTJon M5.19 - restore known pre-KosmicKrisp v13 title render profile with new Metal driver"
+            echo "PsTJon M5.20 - correct iOS Metal 4 attachment retention probe with unchanged v13 profile"
             echo "RPCS3 ios-port: $RPCS3_IOS_SHA"
             echo "Shell bundle id: com.xitrix.RPCS3"
             echo "Vulkan provider: KOSMICKRISP"
@@ -2363,15 +2433,15 @@ jobs:
             echo "Volk: $VOLK_SHA"
             echo "FFmpeg: $FFMPEG_VERSION"
             echo "Core: $(shasum -a 256 libRPCS3Core.dylib | awk '{print $1}')"
-            echo "IPA: $(shasum -a 256 PsTJon-KK-M5.19.ipa | awk '{print $1}')"
-          } > PsTJon-KK-M5.19-build.txt
+            echo "IPA: $(shasum -a 256 PsTJon-KK-M5.20.ipa | awk '{print $1}')"
+          } > PsTJon-KK-M5.20-build.txt
 
       - uses: actions/upload-artifact@v4
         with:
-          name: PsTJon-KK-m05-19-v13-graphic-rollback-IPA
+          name: PsTJon-KK-m05-20-metal-attachment-store-IPA
           path: |
-            PsTJon-KK-M5.19.ipa
-            PsTJon-KK-M5.19-build.txt
+            PsTJon-KK-M5.20.ipa
+            PsTJon-KK-M5.20-build.txt
             pstjon-entitlements.txt
             M5-rpcs3-patch-stat.txt
             M4-mesa-patch-stat.txt
