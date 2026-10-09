@@ -2576,6 +2576,79 @@ jobs:
           ! grep -q 'shader_mode::interpreter_only : configured_shadermode' rpcs3-src/rpcs3/Emu/RSX/VK/VKGSRender.cpp
           git -C rpcs3-src diff --check
 
+          # M5.27: new hypothesis from BLUS30401 M5.26 runtime and Mesa
+          # KosmicKrisp/iOS source review: the pinned Vulkan provider advertises
+          # 8192MiB unified BAR, and RPCS3 selects Re-BAR for fragment/texture
+          # uploads. Rule out GPU-visible BAR mapping/coherency errors before
+          # blaming shaders, since compiled+interpreted pipelines both render
+          # the same black scenery. Only BLUS30401 gets conservative host-coherent
+          # upload heaps. Add bounded texture binding validation telemetry.
+          # This deliberately does NOT change Ascension, render targets,
+          # attachments, MLAA, ZCULL, shader precision, or caching.
+          python3 - <<'PY'
+          from pathlib import Path
+          p=Path("rpcs3-src/rpcs3/Emu/System.cpp")
+          s=p.read_text()
+          anchor="\t\t\trpcs3::ios::resolve_experimental_policy();"
+          assert s.count(anchor)==1, "M5.27 expected unique late-policy anchor"
+          addition=r'''
+                      // M5.27: title-isolated diagnostic/compatibility path for
+                      // KosmicKrisp unified BAR texture uploads. Probe coherency
+                      // with cached host-visible memory rather than GPU BAR.
+                      #if defined(RPCS3_VULKAN_PROVIDER_KOSMICKRISP)
+                      if (m_title_id == "BLUS30401")
+                      {
+                          const bool prior_rebar = g_cfg.video.vk.use_rebar_upload_heap.get();
+                          g_cfg.video.vk.use_rebar_upload_heap.set(false);
+                          sys_log.notice("PsTJon M5.27 PRINCE_TEXTURE_UPLOAD: BLUS30401 conservative host-coherent GPU upload; ReBAR %d->0 (M5.26 ZCull unchanged)", prior_rebar);
+                      }
+                      #endif
+          '''
+          s=s.replace(anchor,anchor+"\n"+addition,1)
+          p.write_text(s)
+          assert "PRINCE_TEXTURE_UPLOAD" in s
+          assert 'm_title_id == "BLUS30401"' in s
+
+          p=Path("rpcs3-src/rpcs3/Emu/RSX/VK/VKDraw.cpp")
+          s=p.read_text()
+          anchor='#include "VKGSRender.h"\n'
+          assert s.count(anchor)==1, "M5.27 VKDraw include anchor"
+          s=s.replace(anchor,anchor+'#ifdef RPCS3_VULKAN_PROVIDER_KOSMICKRISP\n#include "Emu/System.h"\n#endif\n',1)
+          anchor='''		*sampler_state = m_texture_cache.upload_texture(*m_current_command_buffer, tex, m_rtts);
+          		if (!sampler_state->validate())'''
+          add='''		*sampler_state = m_texture_cache.upload_texture(*m_current_command_buffer, tex, m_rtts);
+          #ifdef RPCS3_VULKAN_PROVIDER_KOSMICKRISP
+          		if (Emu.GetTitleID() == "BLUS30401")
+          		{
+          			static u32 m527_uploads = 0, m527_invalid = 0, m527_no_view = 0;
+          			++m527_uploads;
+          			const bool valid = sampler_state->validate();
+          			if (!valid) ++m527_invalid;
+          			if (!sampler_state->image_handle) ++m527_no_view;
+          			if (m527_uploads <= 32 || ((m527_uploads & (m527_uploads - 1)) == 0 && m527_uploads <= 16384))
+          			{
+          				rsx_log.notice("PsTJon M5.27 RSX_TEX: upload=%u slot=%u valid=%u view=%u gcmfmt=%u uploadctx=%u invalid_total=%u missing_view_total=%u",
+          					m527_uploads, i, static_cast<u32>(valid),
+          					static_cast<u32>(!!sampler_state->image_handle),
+          					static_cast<u32>(sampler_state->format_ex.format()),
+          					static_cast<u32>(sampler_state->upload_context),
+          					m527_invalid, m527_no_view);
+          			}
+          		}
+          #endif
+          		if (!sampler_state->validate())'''
+          if s.count(anchor)!=1:raise SystemExit("M5.27 VKDraw texture upload anchor mismatch: "+str(s.count(anchor)))
+          s=s.replace(anchor,add,1)
+          p.write_text(s)
+          assert "M5.27 RSX_TEX" in s
+          print("M5.27 Prince ReBAR-off A/B and bounded Vulkan texture descriptor diagnostics PASS")
+          PY
+          grep -q "M5.27 PRINCE_TEXTURE_UPLOAD" rpcs3-src/rpcs3/Emu/System.cpp
+          grep -q "M5.27 RSX_TEX" rpcs3-src/rpcs3/Emu/RSX/VK/VKDraw.cpp
+          grep -q "M5.26 PRINCE_ZCULL_VISIBLE" rpcs3-src/rpcs3/Emu/RSX/VK/VKGSRender.cpp
+          grep -q "M5.26 PRINCE_INTERPRETER_ROLLBACK" rpcs3-src/rpcs3/Emu/RSX/VK/VKGSRender.cpp
+          git -C rpcs3-src diff --check
+
           rm -rf build-kk-host kk-host-tools
           meson setup build-kk-host mesa-src \
             --buildtype=release \
