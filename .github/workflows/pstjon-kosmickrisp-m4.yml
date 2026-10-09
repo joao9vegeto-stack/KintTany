@@ -2285,7 +2285,11 @@ jobs:
               "pstjon_kk_m522_metal_validation",
               "TARGET_OS_IOS",
           ):
-              assert s.count(v)==1, (v,s.count(v))
+              if v == "TARGET_OS_IOS":
+                  # The existing iOS port already uses the macro.
+                  assert s.count(v) >= 2, (v,s.count(v))
+              else:
+                  assert s.count(v) == 1, (v,s.count(v))
           p.write_text(s)
           # Explicit runtime marker lets the physical log prove this specific
           # diagnostic build, not merely an artifact name / successful CI.
