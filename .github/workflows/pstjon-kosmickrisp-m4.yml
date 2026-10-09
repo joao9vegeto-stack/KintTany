@@ -1474,6 +1474,49 @@ jobs:
           PY
           ! grep -q 'PsTJon M5.8: Ascension Disable MLAA patch suppressed' rpcs3-src/Utilities/bin_patch.cpp
           grep -q 'if (config_values.enabled)' rpcs3-src/Utilities/bin_patch.cpp
+          # M5.10: verify real-device dark scene is not caused by disabled zero-ZCULL and experimental upload paths.
+          python3 - <<'PY'
+          from pathlib import Path
+          p=Path("rpcs3-src/rpcs3/Emu/RSX/VK/VKGSRender.cpp")
+          s=p.read_text()
+          a='''\t\tif (g_cfg.video.disable_zcull_queries)
+          \t\t{
+          #ifdef RPCS3_VULKAN_PROVIDER_KOSMICKRISP
+          \t\t\tstatic bool s_logged_disabled_zcull = false;'''
+          b='''\t\tif (g_cfg.video.disable_zcull_queries)
+          \t\t{
+          #ifdef RPCS3_VULKAN_PROVIDER_KOSMICKRISP
+          \t\t\t// No real query: keep Ascension's conditional geometry visible.
+          \t\t\tif (Emu.GetTitleID() == "BCUS98232") query->result = 1;
+          \t\t\tstatic bool s_logged_disabled_zcull = false;'''
+          if s.count(a)!=1: raise SystemExit("M5.10 ZCULL anchor mismatch")
+          s=s.replace(a,b,1).replace("PsTJon M5.4: hardware ZCULL queries bypassed; zero-result compatibility path active","PsTJon M5.10: disabled ZCULL, visible-result fallback for Ascension",1)
+          p.write_text(s)
+          p=Path("rpcs3-src/rpcs3/Emu/System.cpp")
+          s=p.read_text()
+          a='''\t\t\t\tg_cfg.video.force_cpu_blit_processing.set(true);
+          \t\t\t\tg_cfg.video.disable_async_host_memory_manager.set(true);'''
+          b='''\t\t\t\tg_cfg.video.force_cpu_blit_processing.set(true);
+          \t\t\t\t// M5.10: eliminate speculative iOS fast uploads and hashes from this title.
+          \t\t\t\tg_cfg.ios_experimental.dma_copy_specialization.set(ios_experimental_mode::disabled);
+          \t\t\t\tg_cfg.ios_experimental.texture_hash_hybrid.set(ios_experimental_mode::disabled);
+          \t\t\t\tg_cfg.ios_experimental.neon_byte_swap.set(ios_experimental_mode::disabled);
+          \t\t\t\tg_cfg.ios_experimental.neon_primitive_restart.set(ios_experimental_mode::disabled);
+          \t\t\t\tg_cfg.ios_experimental.precomputed_indices.set(ios_experimental_mode::disabled);
+          \t\t\t\tsys_log.notice("PsTJon M5.10 graphics baseline: generic DMA, full texture hash, scalar vertex and byte-swaps");
+          \t\t\t\tg_cfg.video.disable_async_host_memory_manager.set(true);'''
+          if s.count(a)!=1:raise SystemExit("M5.10 graphics setting anchor mismatch")
+          s=s.replace(a,b,1)
+          p.write_text(s)
+          assert 'query->result = 1' in Path("rpcs3-src/rpcs3/Emu/RSX/VK/VKGSRender.cpp").read_text()
+          assert "PsTJon M5.10 graphics baseline" in s
+          assert "g_cfg.core.rsx_accurate_res_access.set(true)" in s
+          assert "m_precise_get_publishing = Emu.GetTitleID()" in Path("rpcs3-src/rpcs3/Emu/RSX/RSXFIFO.cpp").read_text()
+          assert "PsTJon v13: consumed Ascension OOB local blit" in Path("rpcs3-src/rpcs3/Emu/RSX/NV47/HW/nv3089.cpp").read_text()
+          assert "PsTJon M5.8: Ascension Disable MLAA patch suppressed" not in Path("rpcs3-src/Utilities/bin_patch.cpp").read_text()
+          print("M5.10 ZCULL and generic transfer correctness gates PASS")
+          PY
+          grep -q 'M5.10 graphics baseline' rpcs3-src/rpcs3/Emu/System.cpp
           grep -q 'allocatorInfo.pVulkanFunctions = &vma_vulkan_functions' rpcs3-src/rpcs3/Emu/RSX/VK/vkutils/memory.cpp
           grep -q 'PsTJon M5 VMA dispatch: vmaCreateAllocator complete' rpcs3-src/rpcs3/Emu/RSX/VK/vkutils/memory.cpp
           grep -q 'RPCS3_VULKAN_PROVIDER_KOSMICKRISP)' rpcs3-src/rpcs3/Emu/RSX/VK/vkutils/device.cpp
@@ -1754,14 +1797,14 @@ jobs:
           codesign -d --entitlements :- "$APP" 2>&1 | tee pstjon-entitlements.txt
           (
             cd package
-            ditto -c -k --sequesterRsrc --keepParent Payload "$GITHUB_WORKSPACE/PsTJon-KK-M5.9.ipa"
+            ditto -c -k --sequesterRsrc --keepParent Payload "$GITHUB_WORKSPACE/PsTJon-KK-M5.10.ipa"
           )
-          shasum -a 256 PsTJon-KK-M5.9.ipa
+          shasum -a 256 PsTJon-KK-M5.10.ipa
 
       - name: Build report
         run: |
           {
-            echo "PsTJon M5.9 - restore Ascension MLAA fix for black-screen race; retain CPU blit, RSX coherence, v13 protections"
+            echo "PsTJon M5.10 - restore no-query geometry visibility and generic graphics uploads"
             echo "RPCS3 ios-port: $RPCS3_IOS_SHA"
             echo "Shell bundle id: com.xitrix.RPCS3"
             echo "Vulkan provider: KOSMICKRISP"
@@ -1769,15 +1812,15 @@ jobs:
             echo "Volk: $VOLK_SHA"
             echo "FFmpeg: $FFMPEG_VERSION"
             echo "Core: $(shasum -a 256 libRPCS3Core.dylib | awk '{print $1}')"
-            echo "IPA: $(shasum -a 256 PsTJon-KK-M5.9.ipa | awk '{print $1}')"
-          } > PsTJon-KK-M5.9-build.txt
+            echo "IPA: $(shasum -a 256 PsTJon-KK-M5.10.ipa | awk '{print $1}')"
+          } > PsTJon-KK-M5.10-build.txt
 
       - uses: actions/upload-artifact@v4
         with:
-          name: PsTJon-KK-m05-9-MLAA-race-fix-IPA
+          name: PsTJon-KK-m05-10-generic-uploads-visible-zcull-IPA
           path: |
-            PsTJon-KK-M5.9.ipa
-            PsTJon-KK-M5.9-build.txt
+            PsTJon-KK-M5.10.ipa
+            PsTJon-KK-M5.10-build.txt
             pstjon-entitlements.txt
             M5-rpcs3-patch-stat.txt
             M4-mesa-patch-stat.txt
