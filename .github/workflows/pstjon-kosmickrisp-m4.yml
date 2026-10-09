@@ -2248,6 +2248,62 @@ jobs:
           grep -q 'm521-v12-effective-profile' rpcs3-src/rpcs3/Emu/RSX/VK/vkutils/device.cpp
           git -C rpcs3-src diff --check
 
+          # M5.22 diagnostic ONLY — deliberate load/store poisoning.
+          # Apple-supported Metal API validation marks contents of images
+          # affected by DONT_CARE load/store actions with obvious colors.
+          # This is deliberately NOT a graphics correctness claim and does
+          # not modify game configuration, RSX shaders, resources, or FIFO.
+          # Objective-C +load constructor runs when libKosmicKrisp.dylib is
+          # loaded, before KosmicKrisp requests its MTLDevice on iOS.
+          python3 - <<'PY'
+          from pathlib import Path
+          p=Path("mesa-src/src/kosmickrisp/bridge/mtl_device.m")
+          s=p.read_text()
+          anchor="#include <Metal/MTLDevice.h>"
+          patch=r"""
+          #include <stdlib.h>
+          #if TARGET_OS_IOS
+          // M5.22: Apple Metal Validation load/store forensic build.
+          // Deliberately poison ignored load/store contents to find invalid
+          // render-target reuse. Do not ship enabled in production.
+          __attribute__((constructor))
+          static void pstjon_kk_m522_metal_validation(void)
+          {
+             setenv("MTL_DEBUG_LAYER", "1", 1);
+             setenv("MTL_DEBUG_LAYER_ERROR_MODE", "nslog", 1);
+             setenv("MTL_DEBUG_LAYER_VALIDATE_LOAD_ACTIONS", "1", 1);
+             setenv("MTL_DEBUG_LAYER_VALIDATE_STORE_ACTIONS", "1", 1);
+          }
+          #endif
+          """
+          if s.count(anchor)!=1:raise SystemExit("M5.22 Metal device include anchor mismatch")
+          s=s.replace(anchor,anchor+"\n"+patch,1)
+          for v in (
+              "MTL_DEBUG_LAYER_VALIDATE_LOAD_ACTIONS",
+              "MTL_DEBUG_LAYER_VALIDATE_STORE_ACTIONS",
+              "MTL_DEBUG_LAYER_ERROR_MODE",
+              "pstjon_kk_m522_metal_validation",
+              "TARGET_OS_IOS",
+          ):
+              assert s.count(v)==1, (v,s.count(v))
+          p.write_text(s)
+          # Explicit runtime marker lets the physical log prove this specific
+          # diagnostic build, not merely an artifact name / successful CI.
+          p=Path("rpcs3-src/rpcs3/Emu/System.cpp")
+          s=p.read_text()
+          anchor="PsTJon M5.21 V12_RENDER_PROFILE: RCB=0 WCB=1"
+          if s.count(anchor)!=1:raise SystemExit("M5.22 marker insertion count")
+          s=s.replace(anchor,
+              "PsTJon M5.22 METAL_LOAD_STORE_VALIDATION: Apple load/store poison enabled; "
+              +anchor,1)
+          p.write_text(s)
+          print("M5.22 Apple Metal load/store diagnostic gates PASS")
+          PY
+          grep -q 'pstjon_kk_m522_metal_validation' mesa-src/src/kosmickrisp/bridge/mtl_device.m
+          grep -q 'M5.22 METAL_LOAD_STORE_VALIDATION:' rpcs3-src/rpcs3/Emu/System.cpp
+          git -C mesa-src diff --check
+          git -C rpcs3-src diff --check
+
           # M5.16: KosmicKrisp Metal 4 backend math correctness, not another RPCS3 config guess.
           python3 - <<'PY'
           from pathlib import Path
@@ -2498,13 +2554,13 @@ jobs:
           codesign -d --entitlements :- "$APP" 2>&1 | tee pstjon-entitlements.txt
           (
             cd package
-            ditto -c -k --sequesterRsrc --keepParent Payload "$GITHUB_WORKSPACE/PsTJon-KK-M5.21.ipa"
+            ditto -c -k --sequesterRsrc --keepParent Payload "$GITHUB_WORKSPACE/PsTJon-KK-M5.22.ipa"
           )
-          shasum -a 256 PsTJon-KK-M5.21.ipa
+          shasum -a 256 PsTJon-KK-M5.22.ipa
       - name: Build report
         run: |
           {
-            echo "PsTJon M5.21 - A/B verified v12 graphics and uploads with KosmicKrisp Metal4 M5.20"
+            echo "PsTJon M5.22 - Apple Metal load/store diagnostic; no claimed visual fix"
             echo "RPCS3 ios-port: $RPCS3_IOS_SHA"
             echo "Shell bundle id: com.xitrix.RPCS3"
             echo "Vulkan provider: KOSMICKRISP"
@@ -2512,15 +2568,15 @@ jobs:
             echo "Volk: $VOLK_SHA"
             echo "FFmpeg: $FFMPEG_VERSION"
             echo "Core: $(shasum -a 256 libRPCS3Core.dylib | awk '{print $1}')"
-            echo "IPA: $(shasum -a 256 PsTJon-KK-M5.21.ipa | awk '{print $1}')"
-          } > PsTJon-KK-M5.21-build.txt
+            echo "IPA: $(shasum -a 256 PsTJon-KK-M5.22.ipa | awk '{print $1}')"
+          } > PsTJon-KK-M5.22-build.txt
 
       - uses: actions/upload-artifact@v4
         with:
-          name: PsTJon-KK-m05-21-v12-effective-profile-IPA
+          name: PsTJon-KK-m05-22-metal-load-store-diagnostic-IPA
           path: |
-            PsTJon-KK-M5.21.ipa
-            PsTJon-KK-M5.21-build.txt
+            PsTJon-KK-M5.22.ipa
+            PsTJon-KK-M5.22-build.txt
             pstjon-entitlements.txt
             M5-rpcs3-patch-stat.txt
             M4-mesa-patch-stat.txt
