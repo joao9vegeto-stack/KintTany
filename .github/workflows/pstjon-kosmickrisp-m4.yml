@@ -1859,6 +1859,66 @@ jobs:
           
           PY
           grep -q 'm516-metalprecise' rpcs3-src/rpcs3/Emu/RSX/VK/vkutils/device.cpp
+          # M5.17: isolate Metal4 Vulkan framebuffer feedback loop on iOS.
+          python3 - <<'PY'
+          from pathlib import Path
+          import os
+          # Physical M5.16 data: MLAA correctly applied, correct 720p, WCB+RCB,
+          # native compiled shaders / safe Metal FP, yet the scene remains black.
+          # EXT_attachment_feedback_loop_layout is explicitly advertised by the
+          # experimental Metal 4 Vulkan provider on iOS, and selected by RPCS3.
+          # RSX has simultaneous framebuffer writes and sampled framebuffer reads;
+          # an incorrect tile-feedback implementation can produce zeros/stale
+          # pixels instead of render targets (dark scene and corrupt textures).
+          # Diagnostic M5.17: test the standard RPCS3 FBO-copy fallback by
+          # refusing just this optional optimization, only for KK on iOS.
+          # This is NOT changing game patches, precision, FIFO, or framebuffer policy.
+          p=Path("rpcs3-src/rpcs3/Emu/RSX/VK/vkutils/device.cpp")
+          s=p.read_text()
+          old="\t\toptional_features_support.framebuffer_loops   = !!fbo_loops_info.attachmentFeedbackLoopLayout;"
+          new='''\t\toptional_features_support.framebuffer_loops   = !!fbo_loops_info.attachmentFeedbackLoopLayout;
+          #if defined(RPCS3_IOS) && defined(RPCS3_VULKAN_PROVIDER_KOSMICKRISP)
+          \t\t// M5.17: Keep attachments off native Metal4 tile-feedback until its
+          \t\t// attachment read-after-write guarantees are verified on A19 Pro.
+          \t\t// RPCS3 will use the established framebuffer-copy compatibility path.
+          \t\toptional_features_support.framebuffer_loops = false;
+          #endif'''
+          if s.count(old)!=1:
+              raise SystemExit(f"M5.17 framebuffer feedback optional feature anchor mismatch: {s.count(old)}")
+          s=s.replace(old,new,1)
+          p.write_text(s)
+          # Change both driver and emulated RSX shader cache epoch, as the
+          # framebuffer loop path modifies pipeline state and texture reads.
+          mesa=os.environ["MESA_KOSMICKRISP_SHA"]
+          p=Path("rpcs3-src/rpcs3/Emu/RSX/VK/VKGSRender.cpp")
+          s=p.read_text()
+          old=f'"v1.95-{mesa}-mlaafix-m516-metalprecise"'
+          new=f'"v1.95-{mesa}-m517-feedback-fallback"'
+          if s.count(old)!=1: raise SystemExit("M5.17 shader cache namespace anchor mismatch")
+          p.write_text(s.replace(old,new,1))
+          p=Path("rpcs3-src/rpcs3/Emu/RSX/VK/vkutils/device.cpp")
+          s=p.read_text()
+          old=f'"shaders_cache/vulkan/kosmickrisp/{mesa}/m516-metalprecise/vk_pipeline_cache.bin"'
+          new=f'"shaders_cache/vulkan/kosmickrisp/{mesa}/m517-feedback-fallback/vk_pipeline_cache.bin"'
+          if s.count(old)!=1: raise SystemExit("M5.17 Vulkan cache namespace anchor mismatch")
+          p.write_text(s.replace(old,new,1))
+          # Fail-closed if another backend or original v13 logic is altered.
+          vk=Path("rpcs3-src/rpcs3/Emu/RSX/VK/vkutils/device.cpp").read_text()
+          sys=Path("rpcs3-src/rpcs3/Emu/System.cpp").read_text()
+          assert '#if defined(RPCS3_IOS) && defined(RPCS3_VULKAN_PROVIDER_KOSMICKRISP)' in vk
+          assert "optional_features_support.framebuffer_loops = false;" in vk
+          assert "M5.17: Keep attachments off native Metal4 tile-feedback" in vk
+          assert "m517-feedback-fallback" in vk
+          assert "m517-feedback-fallback" in Path("rpcs3-src/rpcs3/Emu/RSX/VK/VKGSRender.cpp").read_text()
+          assert "g_cfg.video.read_color_buffers.set(true);" in sys
+          assert "g_cfg.video.write_color_buffers.set(true);" in sys
+          assert "g_cfg.video.shadermode.set(shader_mode::async_with_interpreter)" in sys
+          assert "g_cfg.video.force_cpu_blit_processing.set(true)" in sys
+          assert "m_precise_get_publishing = Emu.GetTitleID()" in Path("rpcs3-src/rpcs3/Emu/RSX/RSXFIFO.cpp").read_text()
+          assert "PsTJon v13: consumed Ascension OOB local blit" in Path("rpcs3-src/rpcs3/Emu/RSX/NV47/HW/nv3089.cpp").read_text()
+          print("M5.17 KosmicKrisp iOS optional FBO feedback disabled; shader epoch isolated; v13 and patches retained PASS")
+          PY
+          grep -q 'M5.17: Keep attachments off native Metal4 tile-feedback' rpcs3-src/rpcs3/Emu/RSX/VK/vkutils/device.cpp
           grep -q 'allocatorInfo.pVulkanFunctions = &vma_vulkan_functions' rpcs3-src/rpcs3/Emu/RSX/VK/vkutils/memory.cpp
           grep -q 'PsTJon M5 VMA dispatch: vmaCreateAllocator complete' rpcs3-src/rpcs3/Emu/RSX/VK/vkutils/memory.cpp
           grep -q 'RPCS3_VULKAN_PROVIDER_KOSMICKRISP)' rpcs3-src/rpcs3/Emu/RSX/VK/vkutils/device.cpp
@@ -2175,14 +2235,14 @@ jobs:
           codesign -d --entitlements :- "$APP" 2>&1 | tee pstjon-entitlements.txt
           (
             cd package
-            ditto -c -k --sequesterRsrc --keepParent Payload "$GITHUB_WORKSPACE/PsTJon-KK-M5.16.ipa"
+            ditto -c -k --sequesterRsrc --keepParent Payload "$GITHUB_WORKSPACE/PsTJon-KK-M5.17.ipa"
           )
-          shasum -a 256 PsTJon-KK-M5.16.ipa
+          shasum -a 256 PsTJon-KK-M5.17.ipa
 
       - name: Build report
         run: |
           {
-            echo "PsTJon M5.16 - fix hardcoded KosmicKrisp Metal FAST math for iOS (SAFE+PRECISE shaders) and fresh cache"
+            echo "PsTJon M5.17 - A19 Pro Metal4 framebuffer feedback-copy fallback isolation; preserve precise shaders, v13 and MLAA"
             echo "RPCS3 ios-port: $RPCS3_IOS_SHA"
             echo "Shell bundle id: com.xitrix.RPCS3"
             echo "Vulkan provider: KOSMICKRISP"
@@ -2190,15 +2250,15 @@ jobs:
             echo "Volk: $VOLK_SHA"
             echo "FFmpeg: $FFMPEG_VERSION"
             echo "Core: $(shasum -a 256 libRPCS3Core.dylib | awk '{print $1}')"
-            echo "IPA: $(shasum -a 256 PsTJon-KK-M5.16.ipa | awk '{print $1}')"
-          } > PsTJon-KK-M5.16-build.txt
+            echo "IPA: $(shasum -a 256 PsTJon-KK-M5.17.ipa | awk '{print $1}')"
+          } > PsTJon-KK-M5.17-build.txt
 
       - uses: actions/upload-artifact@v4
         with:
-          name: PsTJon-KK-m05-16-metal-precise-math-IPA
+          name: PsTJon-KK-m05-17-feedback-loop-isolation-IPA
           path: |
-            PsTJon-KK-M5.16.ipa
-            PsTJon-KK-M5.16-build.txt
+            PsTJon-KK-M5.17.ipa
+            PsTJon-KK-M5.17-build.txt
             pstjon-entitlements.txt
             M5-rpcs3-patch-stat.txt
             M4-mesa-patch-stat.txt
