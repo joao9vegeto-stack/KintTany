@@ -1919,6 +1919,42 @@ jobs:
           print("M5.17 KosmicKrisp iOS optional FBO feedback disabled; shader epoch isolated; v13 and patches retained PASS")
           PY
           grep -q 'M5.17: Keep attachments off native Metal4 tile-feedback' rpcs3-src/rpcs3/Emu/RSX/VK/vkutils/device.cpp
+          # M5.18: read-only physical asset VFS check at game boot.
+          python3 - <<'PY'
+          from pathlib import Path
+          p=Path("rpcs3-src/rpcs3/Emu/System.cpp")
+          src=p.read_text()
+          anchor="\t\t\trpcs3::ios::resolve_experimental_policy();"
+          assert src.count(anchor)==1
+          extension=r"""
+                      if (m_title_id == "BCUS98232")
+                      {
+                          // M5.18: report observed files; missing optional patches
+                          // do not prove data corruption. This is read-only.
+                          for (const char* guest_path : {
+                              "/dev_bdvd/PS3_GAME/USRDIR/INTRO/BOOT0_EN.GTF",
+                              "/dev_bdvd/PS3_GAME/USRDIR/INTRO/BOOT0.GTF",
+                              "/dev_bdvd/PS3_GAME/USRDIR/GAME.PSARC",
+                              "/dev_bdvd/PS3_GAME/USRDIR/GENERAL.STREAMS",
+                              "/dev_bdvd/PS3_GAME/USRDIR/GOATHECA00.STREAMS",
+                              "/dev_bdvd/PS3_GAME/USRDIR/WAD/PS3_BE/R_HERO00.WAD",
+                              "/dev_bdvd/PS3_GAME/USRDIR/WAD/PS3_BE/HECABAS.TS",
+                              "/dev_hdd0/game/BCUS98232/USRDIR/GAME.PSARC"
+                          })
+                          {
+                              const std::string host = vfs::get(guest_path);
+                              sys_log.notice("PsTJon M5.18 asset audit: %s %s", guest_path,
+                                  (!host.empty() && fs::is_file(host)) ? "PRESENT" : "MISSING");
+                          }
+                          sys_log.notice("PsTJon M5.18 asset audit finished (absence may be optional)");
+                      }
+          """
+          src=src.replace(anchor,anchor+"\n"+extension,1)
+          assert 'M5.18 asset audit finished' in src
+          p.write_text(src)
+          print("M5.18 live file presence audit installed")
+          
+          PY
           grep -q 'allocatorInfo.pVulkanFunctions = &vma_vulkan_functions' rpcs3-src/rpcs3/Emu/RSX/VK/vkutils/memory.cpp
           grep -q 'PsTJon M5 VMA dispatch: vmaCreateAllocator complete' rpcs3-src/rpcs3/Emu/RSX/VK/vkutils/memory.cpp
           grep -q 'RPCS3_VULKAN_PROVIDER_KOSMICKRISP)' rpcs3-src/rpcs3/Emu/RSX/VK/vkutils/device.cpp
@@ -2238,14 +2274,35 @@ jobs:
           codesign -d --entitlements :- "$APP" 2>&1 | tee pstjon-entitlements.txt
           (
             cd package
-            ditto -c -k --sequesterRsrc --keepParent Payload "$GITHUB_WORKSPACE/PsTJon-KK-M5.17.ipa"
+            ditto -c -k --sequesterRsrc --keepParent Payload "$GITHUB_WORKSPACE/PsTJon-KK-M5.18.ipa"
           )
-          shasum -a 256 PsTJon-KK-M5.17.ipa
+          shasum -a 256 PsTJon-KK-M5.18.ipa
+          # Byte-identical upstream MoltenVK control; no local v13 or M5 changes.
+          # Unlike KK, it uses original source, so compare as an indicator only.
+          cp RPCS3-official.ipa PsTJon-M5.18-MoltenVK-Controle.ipa
+          echo "$OFFICIAL_IPA_SHA256  PsTJon-M5.18-MoltenVK-Controle.ipa" | shasum -a 256 -c -
+          shasum -a 256 PsTJon-M5.18-MoltenVK-Controle.ipa
 
       - name: Build report
         run: |
+          cat > PsTJon-M5.18-TESTE-COMPARATIVO.txt <<'EOF'
+          M5.18 — Diagnostico comparativo, 2026-10-09
+          IPA KK M5.18: usa as mesmas politicas graficas da M5.17, com auditoria VFS adicional.
+          No log do jogo, procurar "PsTJon M5.18 asset audit: ... PRESENT/MISSING".
+          IPA MoltenVK Controle: RPCS3-iOS oficial 0.10.1; SHA-256 igual ao upstream.
+          ATENCAO: o controle oficial nao contem as protecoes e alteracoes customizadas da v13.
+          A comparacao indica suspeitos, mas NAO isola somente o driver.
+          Ambos usam o mesmo bundle id com.xitrix.RPCS3. Fazer backup de saves,
+          jogos e configs antes de trocar de instalacao. Nao desinstalar sem backup.
+          Testar a mesma cena e os mesmos dados v1.12 nos dois motores.
+          Se KK ruim e MoltenVK correto, investigar KosmicKrisp/MSL/Vulkan.
+          Se ambos ruins, investigar dump Lite, assets, patch, config ou RSX comum.
+          CELL_ENOENT em arquivos patch-MP e *.PATCH pode ser fallback normal.
+          Patch Disable MLAA ja estava aplicado na M5.17.
+          Config e patch_config M5.15 permanecem sem alteracoes.
+          EOF
           {
-            echo "PsTJon M5.17 - A19 Pro Metal4 framebuffer feedback-copy fallback isolation; preserve precise shaders, v13 and MLAA"
+            echo "PsTJon M5.18 - VFS integrity audit and MoltenVK reference control"
             echo "RPCS3 ios-port: $RPCS3_IOS_SHA"
             echo "Shell bundle id: com.xitrix.RPCS3"
             echo "Vulkan provider: KOSMICKRISP"
@@ -2253,15 +2310,19 @@ jobs:
             echo "Volk: $VOLK_SHA"
             echo "FFmpeg: $FFMPEG_VERSION"
             echo "Core: $(shasum -a 256 libRPCS3Core.dylib | awk '{print $1}')"
-            echo "IPA: $(shasum -a 256 PsTJon-KK-M5.17.ipa | awk '{print $1}')"
-          } > PsTJon-KK-M5.17-build.txt
+            echo "IPA: $(shasum -a 256 PsTJon-KK-M5.18.ipa | awk '{print $1}')"
+            echo "MoltenVK Controle: $(shasum -a 256 PsTJon-M5.18-MoltenVK-Controle.ipa | awk '{print $1}')"
+            echo "A/B: unchanged M5.17 KK graphics vs stock 0.10.1 MoltenVK"
+          } > PsTJon-KK-M5.18-build.txt
 
       - uses: actions/upload-artifact@v4
         with:
-          name: PsTJon-KK-m05-17-feedback-loop-isolation-IPA
+          name: PsTJon-KK-m05-18-graphic-bisect-IPA
           path: |
-            PsTJon-KK-M5.17.ipa
-            PsTJon-KK-M5.17-build.txt
+            PsTJon-KK-M5.18.ipa
+            PsTJon-M5.18-MoltenVK-Controle.ipa
+            PsTJon-M5.18-TESTE-COMPARATIVO.txt
+            PsTJon-KK-M5.18-build.txt
             pstjon-entitlements.txt
             M5-rpcs3-patch-stat.txt
             M4-mesa-patch-stat.txt
