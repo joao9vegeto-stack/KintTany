@@ -2294,7 +2294,7 @@ jobs:
           #endif
           """
           assert "pstjon_m523_metal_roundtrip" not in s
-          s=s.replace(needle,needle+"\\n"+diagnostic,1)
+          s=s.replace(needle,needle+"\n"+diagnostic,1)
           p.write_text(s)
           print("M5.23 Metal RGBA8 canary inserted; runtime result required")
           PY
