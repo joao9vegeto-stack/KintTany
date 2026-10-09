@@ -2415,6 +2415,111 @@ jobs:
           git -C mesa-src diff --check
           git -C mesa-src diff --stat | tee M4-mesa-patch-stat.txt
 
+          # M5.25: targeted graphics A/B following BLUS30401 verified
+          # empty shader-cache repro. The Prince was black even after
+          # recompilation and WCB and hardware-ZCull isolation. For BLUS30401
+          # only, force lazy RSX Shader Interpreter at load_program (not in the
+          # global config): avoids eager preload/large shader warm-up on iOS.
+          # Record bounded framebuffer layout + shader selection telemetry.
+          # This is a diagnosis, not a claimed framebuffer correctness fix.
+          python3 - <<'PY'
+          from pathlib import Path
+          p=Path("rpcs3-src/rpcs3/Emu/RSX/VK/VKGSRender.cpp")
+          s=p.read_text()
+          old="""bool VKGSRender::load_program()
+          {
+          	const auto shadermode = g_cfg.video.shadermode.get();"""
+          new="""bool VKGSRender::load_program()
+          {
+          	const auto configured_shadermode = g_cfg.video.shadermode.get();
+          #ifdef RPCS3_VULKAN_PROVIDER_KOSMICKRISP
+          	const bool pstjon_m525_prince_probe = Emu.GetTitleID() == "BLUS30401";
+          	// M5.25 PRINCE_FRAGMENT_AB: interpreted RSX shader A/B, lazy init;
+          	// normal Async+Interpreter boot avoids eager shader preload.
+          	const auto shadermode = pstjon_m525_prince_probe
+          		? shader_mode::interpreter_only : configured_shadermode;
+          	if (pstjon_m525_prince_probe)
+          	{
+          		static bool s_probe_announced = false;
+          		if (!s_probe_announced)
+          		{
+          			s_probe_announced = true;
+          			rsx_log.notice("PsTJon M5.25 PRINCE_FRAGMENT_AB: BLUS30401 lazy Shader Interpreter only; does not alter other games or shader preload");
+          		}
+          	}
+          #else
+          	const auto shadermode = configured_shadermode;
+          #endif"""
+          if s.count(old)!=1: raise SystemExit("M5.25 load_program anchor mismatch: "+str(s.count(old)))
+          s=s.replace(old,new,1)
+          old="""	return m_program != nullptr;
+          }
+
+          void VKGSRender::load_program_env()"""
+          new="""#ifdef RPCS3_VULKAN_PROVIDER_KOSMICKRISP
+          	if (Emu.GetTitleID() == "BLUS30401")
+          	{
+          		static u32 probe_program_count = 0;
+          		++probe_program_count;
+          		if (probe_program_count <= 24 ||
+          		    ((probe_program_count & (probe_program_count - 1)) == 0 && probe_program_count <= 4096))
+          		{
+          			rsx_log.notice("PsTJon M5.25 RSX_PIPE probe=%u available=%u interpreter=%u colors=%u fp_ctrl=0x%x",
+          				probe_program_count,
+          				static_cast<u32>(m_program != nullptr),
+          				static_cast<u32>(m_program && m_shader_interpreter.is_interpreter(m_program)),
+          				static_cast<u32>(m_draw_buffers.size()),
+          				static_cast<u32>(current_fragment_program.ctrl));
+          		}
+          	}
+          #endif
+          	return m_program != nullptr;
+          }
+
+          void VKGSRender::load_program_env()"""
+          if s.count(old)!=1: raise SystemExit("M5.25 pipeline telemetry anchor mismatch: "+str(s.count(old)))
+          s=s.replace(old,new,1)
+          old="""	m_draw_fbo->add_ref();
+
+          	set_viewport();
+          	set_scissor(clipped_scissor);"""
+          new="""	m_draw_fbo->add_ref();
+
+          #ifdef RPCS3_VULKAN_PROVIDER_KOSMICKRISP
+          	if (Emu.GetTitleID() == "BLUS30401")
+          	{
+          		static u32 probe_rt_count = 0;
+          		++probe_rt_count;
+          		if (probe_rt_count <= 24 ||
+          		    ((probe_rt_count & (probe_rt_count - 1)) == 0 && probe_rt_count <= 4096))
+          		{
+          			rsx_log.notice("PsTJon M5.25 RSX_RT probe=%u extent=%ux%u target=%u color0=0x%x pitch0=%u depth=0x%x colors=%u images=%u pass_key=0x%llx",
+          				probe_rt_count,
+          				static_cast<u32>(m_framebuffer_layout.width),
+          				static_cast<u32>(m_framebuffer_layout.height),
+          				static_cast<u32>(m_framebuffer_layout.target),
+          				static_cast<u32>(m_framebuffer_layout.color_addresses[0]),
+          				static_cast<u32>(m_framebuffer_layout.actual_color_pitch[0]),
+          				static_cast<u32>(m_framebuffer_layout.zeta_address),
+          				static_cast<u32>(m_draw_buffers.size()),
+          				static_cast<u32>(m_fbo_images.size()),
+          				static_cast<unsigned long long>(m_current_renderpass_key));
+          		}
+          	}
+          #endif
+          	set_viewport();
+          	set_scissor(clipped_scissor);"""
+          if s.count(old)!=1: raise SystemExit("M5.25 framebuffer telemetry anchor mismatch: "+str(s.count(old)))
+          s=s.replace(old,new,1)
+          if s.count("M5.25 PRINCE_FRAGMENT_AB")!=2 or "M5.25 RSX_RT" not in s or "M5.25 RSX_PIPE" not in s: raise SystemExit("M5.25 markers failed")
+          p.write_text(s)
+          print("M5.25 Prince lazy interpreter A/B + bounded RSX pipeline/render-target telemetry PASS")
+          PY
+          grep -q 'M5.25 PRINCE_FRAGMENT_AB' rpcs3-src/rpcs3/Emu/RSX/VK/VKGSRender.cpp
+          grep -q 'M5.25 RSX_PIPE' rpcs3-src/rpcs3/Emu/RSX/VK/VKGSRender.cpp
+          grep -q 'M5.25 RSX_RT' rpcs3-src/rpcs3/Emu/RSX/VK/VKGSRender.cpp
+          git -C rpcs3-src diff --check
+
           rm -rf build-kk-host kk-host-tools
           meson setup build-kk-host mesa-src \
             --buildtype=release \
