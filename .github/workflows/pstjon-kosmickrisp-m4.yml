@@ -1638,6 +1638,62 @@ jobs:
           PY
           grep -q 'M5.12: native 720p' rpcs3-src/rpcs3/Emu/System.cpp
           grep -q 'M5.12 program selection' rpcs3-src/rpcs3/Emu/RSX/VK/VKGSRender.cpp
+          # M5.13: shader-mode A/B after physical M5.12 proved nearly every draw native.
+          python3 - <<'PY'
+          from pathlib import Path
+          # M5.12 physical test: 65,536+ native compiled render-program draws but
+          # only 13 interpreter selections. Scene still dark with both color buffers
+          # and strict rendering enabled. Therefore the draw-skip/async shader
+          # hypotheses are NOT supported. This build is a controlled A/B isolation
+          # of compiled RSX fragment shader translation vs KosmicKrisp/Metal4
+          # resource binding. Do not alter framebuffer/blit/ZCULL policies again.
+          p=Path("rpcs3-src/rpcs3/Emu/System.cpp")
+          s=p.read_text()
+          old='g_cfg.video.read_color_buffers.set(true);'
+          new='''// M5.13: diagnostic: force only RSX Shader Interpreter, not compiled
+                          // game fragment shaders. This deliberately prioritizes
+                          // correctness isolation over FPS for BCUS98232 only.
+                          g_cfg.video.shadermode.set(shader_mode::interpreter_only);
+                          sys_log.warning("PsTJon M5.13 RSX shader A/B: interpreter-only for BCUS98232; lower FPS expected");
+                          g_cfg.video.read_color_buffers.set(true);'''
+          if s.count(old)!=1:
+              raise SystemExit(f"M5.13 system shader-mode anchor mismatch: {s.count(old)}")
+          s=s.replace(old,new,1)
+          p.write_text(s)
+          
+          # Preloading every interpreter renderpass combination is expensive on iOS.
+          # The previous M5.4 optimization already correctly keeps lazy interpreter
+          # creation for async+interpreter. Extend this only to the BCUS98232 A/B
+          # diagnostic mode, without changing other games or normal providers.
+          p=Path("rpcs3-src/rpcs3/Emu/RSX/VK/VKGSRender.cpp")
+          s=p.read_text()
+          old='if (g_cfg.video.shadermode == shader_mode::async_with_interpreter)\n'
+          new='''if (g_cfg.video.shadermode == shader_mode::async_with_interpreter ||
+                              (g_cfg.video.shadermode == shader_mode::interpreter_only && Emu.GetTitleID() == "BCUS98232"))
+          '''
+          if s.count(old)!=1:
+              raise SystemExit(f"M5.13 lazy-interpreter anchor mismatch {s.count(old)}")
+          s=s.replace(old,new,1)
+          p.write_text(s)
+          
+          system=Path("rpcs3-src/rpcs3/Emu/System.cpp").read_text()
+          render=Path("rpcs3-src/rpcs3/Emu/RSX/VK/VKGSRender.cpp").read_text()
+          assert 'shadermode.set(shader_mode::interpreter_only)' in system
+          assert 'PsTJon M5.13 RSX shader A/B:' in system
+          assert 'Emu.GetTitleID() == "BCUS98232"' in render
+          assert 'm_shader_interpreter.get(' in render
+          assert 'PsTJon M5.12 program selection:' in render
+          assert 'read_color_buffers.set(true)' in system
+          assert 'write_color_buffers.set(true)' in system
+          assert 'resolution_scale_percent.set(100)' in system
+          assert 'strict_rendering_mode.set(true)' in system
+          assert 'm_precise_get_publishing = Emu.GetTitleID()' in Path("rpcs3-src/rpcs3/Emu/RSX/RSXFIFO.cpp").read_text()
+          assert 'PsTJon v13: consumed Ascension OOB local blit' in Path("rpcs3-src/rpcs3/Emu/RSX/NV47/HW/nv3089.cpp").read_text()
+          assert 'PsTJon M5.8: Ascension Disable MLAA patch suppressed' not in Path("rpcs3-src/Utilities/bin_patch.cpp").read_text()
+          print("M5.13 RSX interpreter vs native KosmicKrisp isolation gates PASS")
+          PY
+          grep -q 'PsTJon M5.13 RSX shader A/B:' rpcs3-src/rpcs3/Emu/System.cpp
+          grep -q 'M5.13 RSX interpreter vs native' <<< 'M5.13 RSX interpreter vs native'
           grep -q 'allocatorInfo.pVulkanFunctions = &vma_vulkan_functions' rpcs3-src/rpcs3/Emu/RSX/VK/vkutils/memory.cpp
           grep -q 'PsTJon M5 VMA dispatch: vmaCreateAllocator complete' rpcs3-src/rpcs3/Emu/RSX/VK/vkutils/memory.cpp
           grep -q 'RPCS3_VULKAN_PROVIDER_KOSMICKRISP)' rpcs3-src/rpcs3/Emu/RSX/VK/vkutils/device.cpp
@@ -1918,14 +1974,14 @@ jobs:
           codesign -d --entitlements :- "$APP" 2>&1 | tee pstjon-entitlements.txt
           (
             cd package
-            ditto -c -k --sequesterRsrc --keepParent Payload "$GITHUB_WORKSPACE/PsTJon-KK-M5.12.ipa"
+            ditto -c -k --sequesterRsrc --keepParent Payload "$GITHUB_WORKSPACE/PsTJon-KK-M5.13.ipa"
           )
-          shasum -a 256 PsTJon-KK-M5.12.ipa
+          shasum -a 256 PsTJon-KK-M5.13.ipa
 
       - name: Build report
         run: |
           {
-            echo "PsTJon M5.12 - 720p native scale, strict framebuffer ordering, measured interpreter/native draw routing"
+            echo "PsTJon M5.13 - isolate native RSX shader translation vs KosmicKrisp Metal iOS, interpreter-only BCUS98232"
             echo "RPCS3 ios-port: $RPCS3_IOS_SHA"
             echo "Shell bundle id: com.xitrix.RPCS3"
             echo "Vulkan provider: KOSMICKRISP"
@@ -1933,15 +1989,15 @@ jobs:
             echo "Volk: $VOLK_SHA"
             echo "FFmpeg: $FFMPEG_VERSION"
             echo "Core: $(shasum -a 256 libRPCS3Core.dylib | awk '{print $1}')"
-            echo "IPA: $(shasum -a 256 PsTJon-KK-M5.12.ipa | awk '{print $1}')"
-          } > PsTJon-KK-M5.12-build.txt
+            echo "IPA: $(shasum -a 256 PsTJon-KK-M5.13.ipa | awk '{print $1}')"
+          } > PsTJon-KK-M5.13-build.txt
 
       - uses: actions/upload-artifact@v4
         with:
-          name: PsTJon-KK-m05-12-native-scale-strict-IPA
+          name: PsTJon-KK-m05-13-rsx-interpreter-isolation-IPA
           path: |
-            PsTJon-KK-M5.12.ipa
-            PsTJon-KK-M5.12-build.txt
+            PsTJon-KK-M5.13.ipa
+            PsTJon-KK-M5.13-build.txt
             pstjon-entitlements.txt
             M5-rpcs3-patch-stat.txt
             M4-mesa-patch-stat.txt
