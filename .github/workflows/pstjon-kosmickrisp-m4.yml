@@ -2119,10 +2119,10 @@ jobs:
           # framebuffer format mappings, FIFO, or any BCUS98232 game patches.
           p=Path("mesa-src/src/kosmickrisp/vulkan/kk_cmd_buffer.c")
           s=p.read_text()
-          anchor='''    force_store |= render->force_attachment_store;
+          anchor='''   force_store |= render->force_attachment_store;
           
-              for (uint32_t i = 0; i < render->color_att_count; i++) {'''
-          new='''    force_store |= render->force_attachment_store;
+             for (uint32_t i = 0; i < render->color_att_count; i++) {'''
+          new='''   force_store |= render->force_attachment_store;
           #if defined(__ENVIRONMENT_IPHONE_OS_VERSION_MIN_REQUIRED__)
               // PsTJon M5.20: iOS A19 Metal4 render-target preservation probe.
               // Vulkan permits retaining attachments when storeOp is DONT_CARE;
@@ -2132,7 +2132,7 @@ jobs:
               force_store = true;
           #endif
           
-              for (uint32_t i = 0; i < render->color_att_count; i++) {'''
+             for (uint32_t i = 0; i < render->color_att_count; i++) {'''
           if s.count(anchor)!=1:
               raise SystemExit(f"M5.20 Mesa attachment-store anchor mismatch: {s.count(anchor)}")
           s=s.replace(anchor,new,1)
