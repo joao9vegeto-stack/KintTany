@@ -3459,6 +3459,110 @@ jobs:
           git -C rpcs3-src diff --check
           git -C mesa-src diff --check
 
+          # M6.3: user M6.2.2 test: BCUS98232 first recovered graphics,
+          # then GPU query starvation (697 forced hard sync), CopyLocalMemory
+          # invalid transfers and final Dead FIFO in nv3089/read_barrier.
+          # Keep the new hardware ZCull correct-image path. Increase only
+          # Ascension's RSX software query-slot headroom 2048 -> 4096, with
+          # queue pressure threshold 1792 -> 3584. Both are <= pinned KK
+          # 65536-entry hardware occlusion table. Other game policies retain
+          # 2048 slots and 1792 threshold, including NPUB30424.
+          # BLUS30401 froze at gameplay; trial a single costly depth
+          # read/write round-trip rollback to NPUB30632's more efficient
+          # handling. Strict TEXTURE flush and real ZCull remain in place.
+          python3 - <<'PY'
+          from pathlib import Path
+
+          hdr=Path("rpcs3-src/rpcs3/Emu/RSX/RSXZCULL.h")
+          src=Path("rpcs3-src/rpcs3/Emu/RSX/RSXZCULL.cpp")
+          h=hdr.read_text()
+          c=src.read_text()
+
+          old='occlusion_query_count = 2048,'
+          assert h.count(old)==1, "M6.3 RSXZCULL enum count anchor"
+          h=h.replace(old,'''#ifdef RPCS3_IOS
+                              occlusion_query_count = 4096,
+          #else
+                              occlusion_query_count = 2048,
+          #endif''',1)
+          old='std::array<occlusion_query_info, 2048> m_occlusion_query_data = {};'
+          assert h.count(old)==1, "M6.3 static ZCull array anchor"
+          h=h.replace(old,'std::array<occlusion_query_info, occlusion_query_count> m_occlusion_query_data = {};',1)
+          hdr.write_text(h)
+
+          include='#include "stdafx.h"'
+          assert c.count(include)==1, "M6.3 RSXZCULL.cpp include anchor"
+          c=c.replace(include,include+'''
+          #ifdef RPCS3_IOS
+          #include "Emu/System.h"
+          #endif''',1)
+
+          old='''for (auto& query : m_occlusion_query_data)
+                          {
+                              m_free_occlusion_pool.push(&query);
+                          }'''
+          # Normalize whitespace but retain one exact constructor-only block.
+          assert 'for (auto& query : m_occlusion_query_data)' in c
+          old='''\t\t\tfor (auto& query : m_occlusion_query_data)
+          \t\t\t{
+          \t\t\t\tm_free_occlusion_pool.push(&query);
+          \t\t\t}'''
+          assert c.count(old)==1, "M6.3 query slot constructor anchor"
+          new='''\t\t\tu32 m63_capacity = 2048;
+          #ifdef RPCS3_IOS
+          \t\t\tif (Emu.GetTitleID() == "BCUS98232")
+          \t\t\t{
+          \t\t\t\tm63_capacity = 4096;
+          \t\t\t\trsx_log.notice("PsTJon M6.3 ASCENSION_ZCULL_HEADROOM: software query slots=4096 (other titles=2048)");
+          \t\t\t}
+          #endif
+          \t\t\tfor (u32 i = 0; i < m63_capacity; ++i)
+          \t\t\t{
+          \t\t\t\tm_free_occlusion_pool.push(&m_occlusion_query_data[i]);
+          \t\t\t}'''
+          c=c.replace(old,new,1)
+
+          old='if (hint || ptimer->async_tasks_pending + 0u >= max_safe_queue_depth)'
+          assert c.count(old)==1, "M6.3 ZCull safe queue threshold anchor"
+          c=c.replace(old,'''u32 m63_queue_threshold = max_safe_queue_depth;
+          #ifdef RPCS3_IOS
+                          if (Emu.GetTitleID() == "BCUS98232")
+                              m63_queue_threshold = 3584;
+          #endif
+                          if (hint || ptimer->async_tasks_pending + 0u >= m63_queue_threshold)''',1)
+          assert 'm63_queue_threshold = 3584' in c
+          src.write_text(c)
+
+          # Only the BLUS30401 legacy M5.31 depth round-trip was new;
+          # NPUB30632 had good visuals with it OFF. Preserve color writes,
+          # strict texture flush and actual hardware query results.
+          sys=Path("rpcs3-src/rpcs3/Emu/System.cpp")
+          t=sys.read_text()
+          signature='''g_cfg.video.read_depth_buffer.set(true);
+                              g_cfg.video.write_depth_buffer.set(true);'''
+          assert t.count(signature)==1, "M6.3 exact BLUS depth-roundtrip anchor"
+          t=t.replace(signature,'''g_cfg.video.read_depth_buffer.set(false);
+                              g_cfg.video.write_depth_buffer.set(false);
+                              sys_log.notice("PsTJon M6.3 BLUS_DEPTH_AB: depth R/W 1->0 after near-zero gameplay FPS; strict texture flush and hardware ZCull preserved");''',1)
+          assert 'M6.2 ASCENSION_LATE_ZCULL' in t
+          assert 'M6.2 PRINCE_SYNC_ROLLBACK' in t
+          assert 'M6.1 NPUB_QUERY_ORDER_FIX' in t
+          sys.write_text(t)
+
+          # Regression validation in generated upstream files.
+          assert '#ifdef RPCS3_IOS' in h
+          assert 'std::array<occlusion_query_info, occlusion_query_count>' in h
+          assert 'm63_capacity = 4096;' in c
+          assert 'm63_queue_threshold = 3584;' in c
+          assert 'BLUS_DEPTH_AB' in t
+          assert 'g_cfg.video.disable_zcull_queries.set(false);' in t
+          print("M6.3 Ascension scoped query headroom 4096/3584 + BLUS depth roundtrip A/B: PASS")
+          PY
+          grep -q 'M6.3 ASCENSION_ZCULL_HEADROOM' rpcs3-src/rpcs3/Emu/RSX/RSXZCULL.cpp
+          grep -q 'M6.3 BLUS_DEPTH_AB' rpcs3-src/rpcs3/Emu/System.cpp
+          git -C rpcs3-src diff --check
+          git -C mesa-src diff --check
+
           rm -rf build-kk-host kk-host-tools
           meson setup build-kk-host mesa-src \
             --buildtype=release \
@@ -3670,13 +3774,13 @@ jobs:
           codesign -d --entitlements :- "$APP" 2>&1 | tee pstjon-entitlements.txt
           (
             cd package
-            ditto -c -k --sequesterRsrc --keepParent Payload "$GITHUB_WORKSPACE/PsTJon-KK-M6.2.2.ipa"
+            ditto -c -k --sequesterRsrc --keepParent Payload "$GITHUB_WORKSPACE/PsTJon-KK-M6.3.ipa"
           )
-          shasum -a 256 PsTJon-KK-M6.2.2.ipa
+          shasum -a 256 PsTJon-KK-M6.3.ipa
       - name: Build report
         run: |
           {
-            echo "PsTJon M6.2 - late Ascension hardware ZCull actual activation, Prince 2008 relaxed-ZCull regression rollback, BLUS30401 strict-render-only FPS A/B; 30 FPS NOT validated"
+            echo "PsTJon M6.3 - isolated Ascension 4096 software ZCull slots and 3584 queue-pressure threshold; BLUS30401 depth R/W A/B; NPUB games unchanged; FPS must be physically tested"
             echo "RPCS3 ios-port: $RPCS3_IOS_SHA"
             echo "Shell bundle id: com.xitrix.RPCS3"
             echo "Vulkan provider: KOSMICKRISP"
@@ -3684,15 +3788,15 @@ jobs:
             echo "Volk: $VOLK_SHA"
             echo "FFmpeg: $FFMPEG_VERSION"
             echo "Core: $(shasum -a 256 libRPCS3Core.dylib | awk '{print $1}')"
-            echo "IPA: $(shasum -a 256 PsTJon-KK-M6.2.2.ipa | awk '{print $1}')"
-          } > PsTJon-KK-M6.2.2-build.txt
+            echo "IPA: $(shasum -a 256 PsTJon-KK-M6.3.ipa | awk '{print $1}')"
+          } > PsTJon-KK-M6.3-build.txt
 
       - uses: actions/upload-artifact@v4
         with:
-          name: PsTJon-KK-m06-2-2-ascension-zcull-prince-rollback-IPA
+          name: PsTJon-KK-m06-3-zcull-headroom-blus-depth-IPA
           path: |
-            PsTJon-KK-M6.2.2.ipa
-            PsTJon-KK-M6.2.2-build.txt
+            PsTJon-KK-M6.3.ipa
+            PsTJon-KK-M6.3-build.txt
             pstjon-entitlements.txt
             M5-rpcs3-patch-stat.txt
             M4-mesa-patch-stat.txt
@@ -3709,16 +3813,16 @@ jobs:
 
       # Best-effort direct release asset: accessible on iPhone without
       # extracting the Actions ZIP. Artifact step above stays authoritative.
-      - name: Publish direct M6.2.2 IPA
+      - name: Publish direct M6.3 IPA
         if: success()
         continue-on-error: true
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
           set -euxo pipefail
-          gh release create pstjon-kk-m6.2.2 PsTJon-KK-M6.2.2.ipa \
+          gh release create pstjon-kk-m6.3 PsTJon-KK-M6.3.ipa \
             --target "$GITHUB_SHA" \
-            --title "PsTJon KosmicKrisp M6.2.2" \
-            --notes "Experimental M6.2: activate Ascension hardware ZCull at effective late-profile stage; revert Prince 2008 relaxed ZCull white-screen regression; BLUS30401 strict-render A/B with full depth/texture safeguards; preserve digital NPUB30632 working visuals. No 30fps claims." \
+            --title "PsTJon KosmicKrisp M6.3" \
+            --notes "Experimental M6.3: Ascension 4096 virtual ZCull slots and higher safe-queue pressure threshold to reduce 697 hard-sync warnings, BLUS30401 depth round-trip performance A/B, Prince 2008/digital Forgotten Sands preserved. No physical FPS guarantee." \
             --latest=false
-          gh release view pstjon-kk-m6.2.2 --json url,assets
+          gh release view pstjon-kk-m6.3 --json url,assets
