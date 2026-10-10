@@ -3658,6 +3658,75 @@ jobs:
           git -C rpcs3-src diff --check
           git -C mesa-src diff --check
 
+          # M6.5: physical M6.3.1 Dante's Inferno BLUS30405 boss fight.
+          # Gameplay briefly approached 30fps, but framebuffer darkened in
+          # boss scene and vkCreateQueryPool failed VK_ERROR_OUT_OF_HOST_MEMORY.
+          # RPCS3 Vulkan allocates FULL configured slot count per VkQueryPool,
+          # and the default manager drops completed pools rather than reusing.
+          # For this title only, keep actual HW occlusion and shader/graphics
+          # parity; allocate pools in modest 256-query chunks and recycle
+          # completed pools after normal GPU-safe deferred destruction.
+          # Preserve every other game's pool policy, including Prince 2008
+          # 256-query behavior, Ascension 4096 ZCull slots and NV3089 guard,
+          # and both Forgotten Sands graphic policies.
+          python3 - <<'PY'
+          from pathlib import Path
+          vk=Path("rpcs3-src/rpcs3/Emu/RSX/VK/VKGSRender.cpp")
+          s=vk.read_text()
+          old='Emu.GetTitleID() == "NPUB30424" ? 256 : OCCLUSION_MAX_POOL_SIZE'
+          new='(Emu.GetTitleID() == "NPUB30424" || Emu.GetTitleID() == "BLUS30405") ? 256 : OCCLUSION_MAX_POOL_SIZE'
+          assert s.count(old)==1, "M6.5 expected M5.34 pool sizing anchor"
+          s=s.replace(old,new,1)
+          assert s.count(new)==1
+          vk.write_text(s)
+
+          p=Path("rpcs3-src/rpcs3/Emu/RSX/VK/VKQueryPool.cpp")
+          s=p.read_text()
+          inc='#include "VKGSRender.h"'
+          assert s.count(inc)==1, "M6.5 VKQueryPool include anchor"
+          s=s.replace(inc,inc+'''
+          #ifdef RPCS3_IOS
+          #include "Emu/System.h"
+          #endif''',1)
+
+          # Only Dante opts into REUSE instead of the default delete+recreate.
+          old='''if (!vk::force_reuse_query_pools())
+          '''
+          assert s.count(old)==1, "M6.5 pool reuse function anchor"
+          s=s.replace(old,'''bool m65_reuse_dante = false;
+          #ifdef RPCS3_IOS
+                          m65_reuse_dante = (Emu.GetTitleID() == "BLUS30405");
+          #endif
+                          if (!vk::force_reuse_query_pools() && !m65_reuse_dante)
+          ''',1)
+
+          # Confirm pool size and count when game actually runs. Avoid per-
+          # frame logging: emit first 8 and every 64th fresh allocation.
+          old='''const u32 count = ::size32(query_slot_status);
+          '''
+          assert s.count(old)==1, "M6.5 new pool allocation anchor"
+          s=s.replace(old,'''const u32 count = ::size32(query_slot_status);
+          #ifdef RPCS3_IOS
+                                          if (Emu.GetTitleID() == "BLUS30405")
+                                          {
+                                              static u32 m65_new_pool_count = 0;
+                                              const u32 n = ++m65_new_pool_count;
+                                              if (n <= 8 || (n % 64) == 0)
+                                                  rsx_log.notice("PsTJon M6.5 DANTE_OQ_ALLOC: new_pool=%u entries=%u recycle_completed=1", n, count);
+                                          }
+          #endif
+          ''',1)
+          assert 'M6.5 DANTE_OQ_ALLOC' in s
+          assert 'm65_reuse_dante' in s
+          p.write_text(s)
+          print("M6.5 Dante scoped hardware query allocation=256 + deferred-safe released pool reuse PASS")
+          PY
+          grep -q 'BLUS30405") ? 256 : OCCLUSION_MAX_POOL_SIZE' rpcs3-src/rpcs3/Emu/RSX/VK/VKGSRender.cpp
+          grep -q 'M6.5 DANTE_OQ_ALLOC' rpcs3-src/rpcs3/Emu/RSX/VK/VKQueryPool.cpp
+          grep -q 'm65_reuse_dante' rpcs3-src/rpcs3/Emu/RSX/VK/VKQueryPool.cpp
+          git -C rpcs3-src diff --check
+          git -C mesa-src diff --check
+
           rm -rf build-kk-host kk-host-tools
           meson setup build-kk-host mesa-src \
             --buildtype=release \
@@ -3869,13 +3938,13 @@ jobs:
           codesign -d --entitlements :- "$APP" 2>&1 | tee pstjon-entitlements.txt
           (
             cd package
-            ditto -c -k --sequesterRsrc --keepParent Payload "$GITHUB_WORKSPACE/PsTJon-KK-M6.4.ipa"
+            ditto -c -k --sequesterRsrc --keepParent Payload "$GITHUB_WORKSPACE/PsTJon-KK-M6.5.ipa"
           )
-          shasum -a 256 PsTJon-KK-M6.4.ipa
+          shasum -a 256 PsTJon-KK-M6.5.ipa
       - name: Build report
         run: |
           {
-            echo "PsTJon M6.4 - BCUS98232 narrow 4MiB local-source OOB transfer guard at NV3089, BLUS30401 restore last gameplay-reaching strict+depth profile; real ZCull and other games preserved"
+            echo "PsTJon M6.5 - scope BLUS30405 Vulkan occlusion query pools to 256 entries and recycle released pools after prior VK_ERROR_OUT_OF_HOST_MEMORY boss crash; M6.4 Ascension/Prince policies retained"
             echo "RPCS3 ios-port: $RPCS3_IOS_SHA"
             echo "Shell bundle id: com.xitrix.RPCS3"
             echo "Vulkan provider: KOSMICKRISP"
@@ -3883,15 +3952,15 @@ jobs:
             echo "Volk: $VOLK_SHA"
             echo "FFmpeg: $FFMPEG_VERSION"
             echo "Core: $(shasum -a 256 libRPCS3Core.dylib | awk '{print $1}')"
-            echo "IPA: $(shasum -a 256 PsTJon-KK-M6.4.ipa | awk '{print $1}')"
-          } > PsTJon-KK-M6.4-build.txt
+            echo "IPA: $(shasum -a 256 PsTJon-KK-M6.5.ipa | awk '{print $1}')"
+          } > PsTJon-KK-M6.5-build.txt
 
       - uses: actions/upload-artifact@v4
         with:
-          name: PsTJon-KK-m06-4-blus-rollback-ascension-src-guard-IPA
+          name: PsTJon-KK-m06-5-dante-query-reuse-IPA
           path: |
-            PsTJon-KK-M6.4.ipa
-            PsTJon-KK-M6.4-build.txt
+            PsTJon-KK-M6.5.ipa
+            PsTJon-KK-M6.5-build.txt
             pstjon-entitlements.txt
             M5-rpcs3-patch-stat.txt
             M4-mesa-patch-stat.txt
@@ -3908,16 +3977,16 @@ jobs:
 
       # Best-effort direct release asset: accessible on iPhone without
       # extracting the Actions ZIP. Artifact step above stays authoritative.
-      - name: Publish direct M6.4 IPA
+      - name: Publish direct M6.5 IPA
         if: success()
         continue-on-error: true
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
           set -euxo pipefail
-          gh release create pstjon-kk-m6.4 PsTJon-KK-M6.4.ipa \
+          gh release create pstjon-kk-m6.5 PsTJon-KK-M6.5.ipa \
             --target "$GITHUB_SHA" \
-            --title "PsTJon KosmicKrisp M6.4" \
-            --notes "Experimental M6.4: Guard exact invalid Ascension 4MiB source-local NV3089 copies prior to guest DMA read, revert BLUS30401 strict-render and depth settings that regressed to Ubisoft loading freeze, preserve hardware ZCull and all other game profiles. Device testing required." \
+            --title "PsTJon KosmicKrisp M6.5" \
+            --notes "Experimental M6.5: Dante BLUS30405 vkCreateQueryPool VK_ERROR_OUT_OF_HOST_MEMORY mitigation using 256-query pools and safe deferred pool reuse. Retains M6.4 Ascension local-source DMA guard, Prince 2008 and Forgotten Sands policies. Physical FPS and crash regression tests required." \
             --latest=false
-          gh release view pstjon-kk-m6.4 --json url,assets
+          gh release view pstjon-kk-m6.5 --json url,assets
