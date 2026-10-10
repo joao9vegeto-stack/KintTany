@@ -3731,6 +3731,95 @@ jobs:
           git -C rpcs3-src diff --check
           git -C mesa-src diff --check
 
+          # M6.6: physical BCUS98232 M6.5.1 scene transition.
+          # Error RSX write unmapped 0xcf900000 = local_mem_base
+          # (0xc0000000) + actual 0x0f900000 RSX allocation limit.
+          # 962 OOB local offsets and multiple huge copies precede the
+          # crash. Upstream NV3089 checks destination with get_address(...,1)
+          # yet CPU blit writes N rows without rechecking final row.
+          # Add 64-bit COMPLETE SPAN checks before the source read_barrier
+          # and before creation of unchecked vm::_ptr write pointers.
+          # Narrow to Ascension, local DMA, 2D copies with unit scale.
+          # Other games and their HW ZCull/graphics policies untouched.
+          python3 - <<'PY'
+          from pathlib import Path
+          p=Path("rpcs3-src/rpcs3/Emu/RSX/NV47/HW/nv3089.cpp")
+          s=p.read_text()
+          needle='''\t\t\tconst u32 src_line_length = (std::min<u32>(in_w, in_x + static_cast<u32>(std::ceil(clip_w / scale_x))) * in_bpp);
+          '''
+          assert s.count(needle)==1, "M6.6 upstream NV3089 local-span anchor"
+          guard=r'''
+          #ifdef RPCS3_IOS
+                      if (Emu.GetTitleID() == "BCUS98232" &&
+                          REGS(ctx)->blit_engine_context_surface() == blit_engine::context_surface::surface2d &&
+                          fcmp(scale_x, 1.f) && fcmp(scale_y, 1.f))
+                      {
+                          // Actual PS3 local VRAM allocation is 0xf900000, not
+                          // a whole 256MiB. Use u64 for every offset/addition.
+                          // get_address(dst_offset, dst_dma, 1) in upstream
+                          // checks just the first byte, then linear_copy
+                          // proceeds row-by-row without a full bounds test.
+                          constexpr u64 m66_local_bound = 0x0f900000ull;
+                          if (dst_dma == CELL_GCM_CONTEXT_DMA_MEMORY_FRAME_BUFFER)
+                          {
+                              const u64 start = static_cast<u64>(dst_offset) +
+                                  static_cast<u64>(out_y + clip_y) * out_pitch +
+                                  static_cast<u64>(out_x + clip_x) * out_bpp;
+                              const u64 count = static_cast<u64>(clip_h - 1) * out_pitch +
+                                  static_cast<u64>(clip_w) * out_bpp;
+                              if (!count || start >= m66_local_bound || count > m66_local_bound - start)
+                              {
+                                  static u32 m66_dropped_dst = 0;
+                                  const u32 n = ++m66_dropped_dst;
+                                  if (n <= 8 || !(n & 63))
+                                      rsx_log.error("PsTJon M6.6 ASCENSION_DST_SPAN: skipped unmapped local write #%u offset=0x%x begin=0x%llx bytes=0x%llx bound=0x%llx",
+                                          n, dst_offset, static_cast<unsigned long long>(start),
+                                          static_cast<unsigned long long>(count), static_cast<unsigned long long>(m66_local_bound));
+                                  return { false, src_info, dst_info };
+                              }
+                          }
+                          if (src_dma == CELL_GCM_CONTEXT_DMA_MEMORY_FRAME_BUFFER)
+                          {
+                              const u64 start = static_cast<u64>(src_offset) +
+                                  static_cast<u64>(in_y) * in_pitch +
+                                  static_cast<u64>(in_x) * in_bpp;
+                              const u64 rows = std::min<u64>(in_h, clip_h);
+                              const u64 bytes = static_cast<u64>(clip_w) * in_bpp;
+                              const u64 count = (rows ? (rows - 1) * in_pitch : 0) + bytes;
+                              if (!rows || !count || start >= m66_local_bound || count > m66_local_bound - start)
+                              {
+                                  static u32 m66_dropped_src = 0;
+                                  const u32 n = ++m66_dropped_src;
+                                  if (n <= 8 || !(n & 63))
+                                      rsx_log.error("PsTJon M6.6 ASCENSION_SRC_SPAN: skipped unmapped local read #%u offset=0x%x begin=0x%llx bytes=0x%llx bound=0x%llx",
+                                          n, src_offset, static_cast<unsigned long long>(start),
+                                          static_cast<unsigned long long>(count), static_cast<unsigned long long>(m66_local_bound));
+                                  return { false, src_info, dst_info };
+                              }
+                          }
+                      }
+          #endif
+          '''
+          s=s.replace(needle,needle+guard,1)
+          assert "M6.6 ASCENSION_DST_SPAN" in s and "M6.6 ASCENSION_SRC_SPAN" in s
+          assert "M6.4 ASCENSION_SOURCE_OOB_GUARD" in s
+          assert "PsTJon v13: consumed Ascension OOB local blit" in s
+          p.write_text(s)
+          # Actual registered copy from RSX last-frame dump:
+          # 0xf62d000 + 4096*286 + 4096 = 0xf74c000 VALID,
+          # 0xf98a100 + 4*32 = 0xf98a180 INVALID.
+          bound=0x0f900000
+          assert 0x0f62d000 + 4096*286 + 4096 < bound
+          assert 0x0f98a100 + 32*4 > bound
+          # Unexpected dimension overflow must not wrap because u64 used.
+          assert 0xffffffff + 4096*1024 > bound
+          print("M6.6: full 64-bit 2D local RSX source/destination span guard PASS")
+          PY
+          grep -q 'M6.6 ASCENSION_DST_SPAN' rpcs3-src/rpcs3/Emu/RSX/NV47/HW/nv3089.cpp
+          grep -q 'M6.6 ASCENSION_SRC_SPAN' rpcs3-src/rpcs3/Emu/RSX/NV47/HW/nv3089.cpp
+          git -C rpcs3-src diff --check
+          git -C mesa-src diff --check
+
           rm -rf build-kk-host kk-host-tools
           meson setup build-kk-host mesa-src \
             --buildtype=release \
@@ -3942,13 +4031,13 @@ jobs:
           codesign -d --entitlements :- "$APP" 2>&1 | tee pstjon-entitlements.txt
           (
             cd package
-            ditto -c -k --sequesterRsrc --keepParent Payload "$GITHUB_WORKSPACE/PsTJon-KK-M6.5.1.ipa"
+            ditto -c -k --sequesterRsrc --keepParent Payload "$GITHUB_WORKSPACE/PsTJon-KK-M6.6.ipa"
           )
-          shasum -a 256 PsTJon-KK-M6.5.1.ipa
+          shasum -a 256 PsTJon-KK-M6.6.ipa
       - name: Build report
         run: |
           {
-            echo "PsTJon M6.5 - scope BLUS30405 Vulkan occlusion query pools to 256 entries and recycle released pools after prior VK_ERROR_OUT_OF_HOST_MEMORY boss crash; M6.4 Ascension/Prince policies retained"
+            echo "PsTJon M6.6 - BCUS98232 full 64-bit local RSX 2D blit source and destination span guards to avoid RSX write exactly at unmapped 0xcf900000; preserve M6.5.1 Dante and previous title policies"
             echo "RPCS3 ios-port: $RPCS3_IOS_SHA"
             echo "Shell bundle id: com.xitrix.RPCS3"
             echo "Vulkan provider: KOSMICKRISP"
@@ -3956,15 +4045,15 @@ jobs:
             echo "Volk: $VOLK_SHA"
             echo "FFmpeg: $FFMPEG_VERSION"
             echo "Core: $(shasum -a 256 libRPCS3Core.dylib | awk '{print $1}')"
-            echo "IPA: $(shasum -a 256 PsTJon-KK-M6.5.1.ipa | awk '{print $1}')"
-          } > PsTJon-KK-M6.5.1-build.txt
+            echo "IPA: $(shasum -a 256 PsTJon-KK-M6.6.ipa | awk '{print $1}')"
+          } > PsTJon-KK-M6.6-build.txt
 
       - uses: actions/upload-artifact@v4
         with:
-          name: PsTJon-KK-m06-5-1-dante-query-reuse-IPA
+          name: PsTJon-KK-m06-6-ascension-2d-span-guard-IPA
           path: |
-            PsTJon-KK-M6.5.1.ipa
-            PsTJon-KK-M6.5.1-build.txt
+            PsTJon-KK-M6.6.ipa
+            PsTJon-KK-M6.6-build.txt
             pstjon-entitlements.txt
             M5-rpcs3-patch-stat.txt
             M4-mesa-patch-stat.txt
@@ -3981,16 +4070,16 @@ jobs:
 
       # Best-effort direct release asset: accessible on iPhone without
       # extracting the Actions ZIP. Artifact step above stays authoritative.
-      - name: Publish direct M6.5.1 IPA
+      - name: Publish direct M6.6 IPA
         if: success()
         continue-on-error: true
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
           set -euxo pipefail
-          gh release create pstjon-kk-m6.5.1 PsTJon-KK-M6.5.1.ipa \
+          gh release create pstjon-kk-m6.6 PsTJon-KK-M6.6.ipa \
             --target "$GITHUB_SHA" \
-            --title "PsTJon KosmicKrisp M6.5.1" \
-            --notes "Experimental M6.5: Dante BLUS30405 vkCreateQueryPool VK_ERROR_OUT_OF_HOST_MEMORY mitigation using 256-query pools and safe deferred pool reuse. Retains M6.4 Ascension local-source DMA guard, Prince 2008 and Forgotten Sands policies. Physical FPS and crash regression tests required." \
+            --title "PsTJon KosmicKrisp M6.6" \
+            --notes "Experimental M6.6: Ascension RSX NV3089 full local-memory read/write span checks for unit-scale 2D copies after unmapped write at 0xcf900000, preserving hardware ZCull and other games. Retains M6.5.1 Dante query-pool reuse. Physical graphics/FPS/crash validation required." \
             --latest=false
-          gh release view pstjon-kk-m6.5.1 --json url,assets
+          gh release view pstjon-kk-m6.6 --json url,assets
