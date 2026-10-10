@@ -3745,9 +3745,11 @@ jobs:
           from pathlib import Path
           p=Path("rpcs3-src/rpcs3/Emu/RSX/NV47/HW/nv3089.cpp")
           s=p.read_text()
-          needle='''\t\t\tconst u32 src_line_length = (std::min<u32>(in_w, in_x + static_cast<u32>(std::ceil(clip_w / scale_x))) * in_bpp);
-          '''
-          assert s.count(needle)==1, "M6.6 upstream NV3089 local-span anchor"
+          # M5.7 inserted its destination height-clamp immediately before
+          # this unchanged original expression. Match its unique lexical
+          # head, not the obsolete pre-M5.7 indentation or trailing newline.
+          needle='const u32 src_line_length = (std::min<u32>(in_w,'
+          assert s.count(needle)==1, "M6.6.1 post-M5.7 NV3089 local-span anchor"
           guard=r'''
           #ifdef RPCS3_IOS
                       if (Emu.GetTitleID() == "BCUS98232" &&
@@ -4031,9 +4033,9 @@ jobs:
           codesign -d --entitlements :- "$APP" 2>&1 | tee pstjon-entitlements.txt
           (
             cd package
-            ditto -c -k --sequesterRsrc --keepParent Payload "$GITHUB_WORKSPACE/PsTJon-KK-M6.6.ipa"
+            ditto -c -k --sequesterRsrc --keepParent Payload "$GITHUB_WORKSPACE/PsTJon-KK-M6.6.1.ipa"
           )
-          shasum -a 256 PsTJon-KK-M6.6.ipa
+          shasum -a 256 PsTJon-KK-M6.6.1.ipa
       - name: Build report
         run: |
           {
@@ -4045,15 +4047,15 @@ jobs:
             echo "Volk: $VOLK_SHA"
             echo "FFmpeg: $FFMPEG_VERSION"
             echo "Core: $(shasum -a 256 libRPCS3Core.dylib | awk '{print $1}')"
-            echo "IPA: $(shasum -a 256 PsTJon-KK-M6.6.ipa | awk '{print $1}')"
-          } > PsTJon-KK-M6.6-build.txt
+            echo "IPA: $(shasum -a 256 PsTJon-KK-M6.6.1.ipa | awk '{print $1}')"
+          } > PsTJon-KK-M6.6.1-build.txt
 
       - uses: actions/upload-artifact@v4
         with:
-          name: PsTJon-KK-m06-6-ascension-2d-span-guard-IPA
+          name: PsTJon-KK-m06-6-1-ascension-2d-span-guard-IPA
           path: |
-            PsTJon-KK-M6.6.ipa
-            PsTJon-KK-M6.6-build.txt
+            PsTJon-KK-M6.6.1.ipa
+            PsTJon-KK-M6.6.1-build.txt
             pstjon-entitlements.txt
             M5-rpcs3-patch-stat.txt
             M4-mesa-patch-stat.txt
@@ -4070,16 +4072,16 @@ jobs:
 
       # Best-effort direct release asset: accessible on iPhone without
       # extracting the Actions ZIP. Artifact step above stays authoritative.
-      - name: Publish direct M6.6 IPA
+      - name: Publish direct M6.6.1 IPA
         if: success()
         continue-on-error: true
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
           set -euxo pipefail
-          gh release create pstjon-kk-m6.6 PsTJon-KK-M6.6.ipa \
+          gh release create pstjon-kk-m6.6.1 PsTJon-KK-M6.6.1.ipa \
             --target "$GITHUB_SHA" \
-            --title "PsTJon KosmicKrisp M6.6" \
+            --title "PsTJon KosmicKrisp M6.6.1" \
             --notes "Experimental M6.6: Ascension RSX NV3089 full local-memory read/write span checks for unit-scale 2D copies after unmapped write at 0xcf900000, preserving hardware ZCull and other games. Retains M6.5.1 Dante query-pool reuse. Physical graphics/FPS/crash validation required." \
             --latest=false
-          gh release view pstjon-kk-m6.6 --json url,assets
+          gh release view pstjon-kk-m6.6.1 --json url,assets
