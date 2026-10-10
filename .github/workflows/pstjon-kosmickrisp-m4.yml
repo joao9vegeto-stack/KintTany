@@ -2975,6 +2975,71 @@ jobs:
           grep -q 'M5.30 GPU_ALPHA' rpcs3-src/rpcs3/Emu/RSX/VK/VKPresent.cpp
           git -C rpcs3-src diff --check
 
+          # M5.33: NPUB30632 Forgotten Sands digital physical-test A/B:
+          # First boot: WCB=0, ZCull enabled => vkCreateQueryPool OODM crash.
+          # Second boot: WCB=1, ZCull disabled => runs, but scene black.
+          # M5.26 all-visible fallback excluded this title, therefore
+          # disabled queries could still hide geometry with result=0.
+          # Keep BLUS30401 settings (including M5.31) unchanged. Add only
+          # digital NPUB30632 policy and bounded preflip telemetry to compare
+          # the SAME graphics path. NPUB30424 safety remains unchanged.
+          python3 - <<'PY'
+          from pathlib import Path
+          p=Path("rpcs3-src/rpcs3/Emu/System.cpp")
+          s=p.read_text()
+          anchor='sys_log.notice("PsTJon M5.32 NPUB_OQ_SAFETY: NPUB30424 hardware ZCull %d->disabled; retain all-visible fallback; KK fixed occlusion query table 32768 entries", static_cast<int>(!prior));'
+          assert s.count(anchor)==1, "M5.33 M5.32 boot-policy anchor mismatch"
+          idx=s.index(anchor)
+          endif=s.find("#endif",idx)
+          assert endif>idx and endif-idx<200, "M5.33 expected contiguous scoped M5.32 guard"
+          patch="""#if defined(RPCS3_VULKAN_PROVIDER_KOSMICKRISP)
+                      // M5.33 NPUB30632_CROSS_RELEASE: digital Forgotten Sands
+                      // reproduces the BLUS query-pool failure with ZCull on.
+                      // Replay the proven no-crash startup settings and avoid
+                      // zero-visibility fallback; no global graphics change.
+                      if (m_title_id == "NPUB30632")
+                      {
+                          const bool before_oq = g_cfg.video.disable_zcull_queries.get();
+                          const bool before_wcb = g_cfg.video.write_color_buffers.get();
+                          g_cfg.video.disable_zcull_queries.set(true);
+                          g_cfg.video.write_color_buffers.set(true);
+                          sys_log.notice("PsTJon M5.33 NPUB30632_CROSS_RELEASE: DisableZCull %d->1 WriteColorBuffers %d->1; NPUB=1 BLUS profile remains unchanged",
+                              before_oq, before_wcb);
+                      }
+          #endif
+          """
+          s=s[:endif+len("#endif")]+"\n"+patch+s[endif+len("#endif"):]
+          assert s.count("M5.33 NPUB30632_CROSS_RELEASE")==2
+          p.write_text(s)
+
+          p=Path("rpcs3-src/rpcs3/Emu/RSX/VK/VKGSRender.cpp")
+          s=p.read_text()
+          needle='Emu.GetTitleID() == "NPUB30424";'
+          assert s.count(needle)==1, "M5.33 M5.32 visibility list anchor mismatch"
+          s=s.replace(needle,'Emu.GetTitleID() == "NPUB30424" ||\n\t\t\t\tEmu.GetTitleID() == "NPUB30632";',1)
+          needle='if (Emu.GetTitleID() == "NPUB30424")'
+          assert s.count(needle)==1, "M5.33 NPUB bypass telemetry anchor mismatch"
+          s=s.replace(needle,'if (Emu.GetTitleID() == "NPUB30424" || Emu.GetTitleID() == "NPUB30632")',1)
+          assert 'if (m526_visible) query->result = 1;' in s
+          p.write_text(s)
+
+          p=Path("rpcs3-src/rpcs3/Emu/RSX/VK/VKPresent.cpp")
+          s=p.read_text()
+          needle='Emu.GetTitleID() == "BLUS30401"'
+          n=s.count(needle)
+          assert 3<=n<=12, f"M5.33 unexpected BLUS GPU probe conditions: {n}"
+          s=s.replace(needle,'(Emu.GetTitleID() == "BLUS30401" || Emu.GetTitleID() == "NPUB30632")')
+          assert s.count('Emu.GetTitleID() == "NPUB30632"')==n
+          assert "M5.30 GPU_ALPHA" in s and "M5.28 GPU_PREFLIP" in s
+          p.write_text(s)
+          print(f"M5.33: NPUB30632 no-crash settings + all-visible ZCull fallback + bounded GPU preflip probes ({n} sites); BLUS profile, Dante, Ascension unchanged")
+          PY
+          grep -q 'M5.33 NPUB30632_CROSS_RELEASE' rpcs3-src/rpcs3/Emu/System.cpp
+          grep -q 'Emu.GetTitleID() == "NPUB30632"' rpcs3-src/rpcs3/Emu/RSX/VK/VKGSRender.cpp
+          grep -q 'PsTJon M5.30 GPU_ALPHA' rpcs3-src/rpcs3/Emu/RSX/VK/VKPresent.cpp
+          grep -q 'PsTJon M5.31 PRINCE_DEPTH_ROUNDTRIP' rpcs3-src/rpcs3/Emu/System.cpp
+          git -C rpcs3-src diff --check
+
           rm -rf build-kk-host kk-host-tools
           meson setup build-kk-host mesa-src \
             --buildtype=release \
