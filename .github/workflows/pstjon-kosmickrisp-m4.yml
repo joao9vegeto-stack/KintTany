@@ -2908,6 +2908,73 @@ jobs:
           grep -q 'M5.28 GPU_PREFLIP' rpcs3-src/rpcs3/Emu/RSX/VK/VKPresent.cpp
           git -C rpcs3-src diff --check
 
+          # M5.32: Multi-title evidence, NOT another global graphics toggle:
+          # - BLUS30401 black opaque in GPU preflip even with strict flush.
+          # - BLUS30405/Dante renders correctly but stutters.
+          # - NPUB30424/Prince (2008) renders textures and cutscenes but
+          #   crashed at vkCreateQueryPool after RSX issued ZCULL reports.
+          # - pinned KK query table is hard-limited to 32768 occlusion slots.
+          # Only prevent NPUB30424 from consuming expensive Metal/Vulkan
+          # occlusion pools, with visible=1 fallback (not invisible=0!).
+          # Do not change Dante, Ascension, Forgotten Sands or shaders.
+          python3 - <<'PY'
+          from pathlib import Path
+          p=Path("rpcs3-src/rpcs3/Emu/System.cpp")
+          s=p.read_text()
+          begin=s.index('PsTJon M5.31 PRINCE_DEPTH_ROUNDTRIP')
+          assert begin>0
+          close=s.find('#endif',begin)
+          assert close>begin
+          guard="""#if defined(RPCS3_VULKAN_PROVIDER_KOSMICKRISP)
+                      // M5.32 NPUB_OQ_SAFETY: Prince of Persia (2008),
+                      // not Forgotten Sands, has a reproducible dynamic
+                      // vkCreateQueryPool VK_ERROR_OUT_OF_DEVICE_MEMORY
+                      // at the beginning of gameplay on the pinned KK driver.
+                      if (m_title_id == "NPUB30424")
+                      {
+                          const bool prior = g_cfg.video.disable_zcull_queries.get();
+                          g_cfg.video.disable_zcull_queries.set(true);
+                          sys_log.notice("PsTJon M5.32 NPUB_OQ_SAFETY: NPUB30424 hardware ZCull %d->disabled; retain all-visible fallback; KK fixed occlusion query table 32768 entries", static_cast<int>(!prior));
+                      }
+          #endif
+          """
+          s=s[:close+len('#endif')]+"\n"+guard+s[close+len('#endif'):]
+          assert s.count('M5.32 NPUB_OQ_SAFETY')==2
+          p.write_text(s)
+
+          p=Path("rpcs3-src/rpcs3/Emu/RSX/VK/VKGSRender.cpp")
+          s=p.read_text()
+          needle='''const bool m526_visible = Emu.GetTitleID() == "BCUS98232" ||
+          				Emu.GetTitleID() == "BLUS30401";'''
+          assert s.count(needle)==1, "M5.32 expected exact M5.26 visible fallback"
+          repl='''const bool m526_visible = Emu.GetTitleID() == "BCUS98232" ||
+          				Emu.GetTitleID() == "BLUS30401" ||
+          				Emu.GetTitleID() == "NPUB30424";'''
+          s=s.replace(needle,repl,1)
+          needle='''if (m526_visible) query->result = 1;'''
+          assert s.count(needle)==1
+          s=s.replace(needle,needle+'''
+          			if (Emu.GetTitleID() == "NPUB30424")
+          			{
+          				static u32 m532_oq_bypasses = 0;
+          				++m532_oq_bypasses;
+          				if (m532_oq_bypasses <= 16 ||
+          					((m532_oq_bypasses & (m532_oq_bypasses - 1)) == 0 && m532_oq_bypasses <= 16384))
+          				{
+          					rsx_log.notice("PsTJon M5.32 NPUB_OQ_BYPASS: count=%u fallback_visible=%u hardware_query=0",
+          						m532_oq_bypasses, static_cast<u32>(query->result));
+          				}
+          			}''',1)
+          assert 'M5.32 NPUB_OQ_BYPASS' in s
+          p.write_text(s)
+          print("M5.32: NPUB30424-only hardware occlusion-query bypass with correct all-visible result; all other titles unchanged")
+          PY
+          grep -q 'M5.32 NPUB_OQ_SAFETY' rpcs3-src/rpcs3/Emu/System.cpp
+          grep -q 'M5.32 NPUB_OQ_BYPASS' rpcs3-src/rpcs3/Emu/RSX/VK/VKGSRender.cpp
+          grep -q 'M5.31 PRINCE_DEPTH_ROUNDTRIP' rpcs3-src/rpcs3/Emu/System.cpp
+          grep -q 'M5.30 GPU_ALPHA' rpcs3-src/rpcs3/Emu/RSX/VK/VKPresent.cpp
+          git -C rpcs3-src diff --check
+
           rm -rf build-kk-host kk-host-tools
           meson setup build-kk-host mesa-src \
             --buildtype=release \
