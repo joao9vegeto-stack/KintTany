@@ -3564,6 +3564,100 @@ jobs:
           git -C rpcs3-src diff --check
           git -C mesa-src diff --check
 
+          # M6.4 - physical M6.3.1 regression:
+          # BLUS30401 freezes on Ubisoft loading splash at 0 displayed FPS,
+          # CPU ~80% and RSX ~0%. Restore the last profile which reached
+          # gameplay (M6.1.1): strict rendering ON, read/write depth ON;
+          # keep hardware queries/strict texture coherency ON.
+          # BCUS98232: still 404 forced ZCull syncs and 966 guest-side
+          # CopyLocalMemory errors, eventually failing in NV3089.cpp:241
+          # read_barrier on an invalid *SOURCE* local copy.
+          # v13 narrow 1024x1024/4096B guard handled destination only.
+          # Extend it to local SOURCE bound within the *same* 4MiB signature.
+          # Do not widen other blits, JIT, timeouts, FIFO, GPU, or game profile.
+          python3 - <<'PY'
+          from pathlib import Path
+          p=Path("rpcs3-src/rpcs3/Emu/System.cpp")
+          s=p.read_text()
+          # The M6.2 BLUS strict toggle is applied in a title-scoped policy
+          # before the existing M5.31 depth-roundtrip logger.
+          idx=s.index('sys_log.notice("PsTJon M6.2 BLUS_STRICT_AB:')
+          block=s[idx-210:idx]
+          old='g_cfg.video.strict_rendering_mode.set(false);'
+          assert block.count(old)==1, "M6.4 BLUS strict mode insertion anchor"
+          s=s[:idx-210]+block.replace(old,'g_cfg.video.strict_rendering_mode.set(true);',1)+s[idx:]
+          s=s.replace('PsTJon M6.2 BLUS_STRICT_AB: strict_render=%d->0, preserve strict_texture_flush=1 depth_roundtrip=1 HW_ZCull=1',
+              'PsTJon M6.4 BLUS_STRICT_ROLLBACK: strict_render=%d->1, match last gameplay-reaching M6.1.1 profile',1)
+
+          # The M6.3 BLUS depth experiment is a different, later policy;
+          # restore both read and write on this title only.
+          idx=s.index('sys_log.notice("PsTJon M6.3 BLUS_DEPTH_AB:')
+          block=s[idx-240:idx]
+          r='g_cfg.video.read_depth_buffer.set(false);'
+          w='g_cfg.video.write_depth_buffer.set(false);'
+          assert block.count(r)==1 and block.count(w)==1, "M6.4 BLUS late depth mode insertion anchors"
+          block=block.replace(r,'g_cfg.video.read_depth_buffer.set(true);',1).replace(w,'g_cfg.video.write_depth_buffer.set(true);',1)
+          s=s[:idx-240]+block+s[idx:]
+          s=s.replace('PsTJon M6.3 BLUS_DEPTH_AB: depth R/W 1->0 after near-zero gameplay FPS; strict texture flush and hardware ZCull preserved',
+              'PsTJon M6.4 BLUS_DEPTH_ROLLBACK: depth R/W restored to 1 after M6.3.1 Ubisoft loading stall',1)
+
+          for needle in ('M6.4 BLUS_STRICT_ROLLBACK','M6.4 BLUS_DEPTH_ROLLBACK',
+                         'M6.2 ASCENSION_LATE_ZCULL','M6.1 NPUB_QUERY_ORDER_FIX',
+                         'M6.2 PRINCE_SYNC_ROLLBACK'):
+              assert s.count(needle)==1, f"M6.4 missing preserved policy: {needle}"
+          p.write_text(s)
+
+          # Apply a narrow source-local out-of-bounds guard *inside the same*
+          # v13 signature condition (BCUS98232 / local dst / 1024 square /
+          # ARGB / out_pitch=4096), not an arbitrary range-wide filter.
+          p=Path("rpcs3-src/rpcs3/Emu/RSX/NV47/HW/nv3089.cpp")
+          s=p.read_text()
+          a=s.index('constexpr u64 ascension_local_size = 0x0f900000ull;')
+          b=s.index('#endif',a)
+          guard=s[a:b]
+          assert 'in_w == 1024 && in_h == 1024' in s[max(0,a-320):a]
+          assert 'dst_bytes > ascension_local_size - dst_begin' in guard
+          tail='''\t\t\t}
+          '''
+          assert guard.rstrip().endswith('}'), "M6.4 v13 local destination scope"
+          source='''\t\t\t\t// M6.4: the same pathological 4MiB operation can read
+          \t\t\t\t// outside local VRAM even when its destination is valid.
+          \t\t\t\t// Exact src DMA and 4096-byte input pitch are required.
+          \t\t\t\tif (src_dma == CELL_GCM_CONTEXT_DMA_MEMORY_FRAME_BUFFER &&
+          \t\t\t\t\tin_pitch == 4096 && in_bpp == 4)
+          \t\t\t\t{
+          \t\t\t\t\tconst u64 src_begin = static_cast<u64>(src_offset) + in_offset;
+          \t\t\t\t\tconst u64 src_bytes =
+          \t\t\t\t\t\tstatic_cast<u64>(in_pitch) * (clip_h ? clip_h - 1 : 0) +
+          \t\t\t\t\t\tstatic_cast<u64>(clip_w) * in_bpp;
+          \t\t\t\t\tif (src_bytes && (src_begin >= ascension_local_size ||
+          \t\t\t\t\t\tsrc_bytes > ascension_local_size - src_begin))
+          \t\t\t\t\t{
+          \t\t\t\t\t\tstatic u32 s_ignored_source_oob = 0;
+          \t\t\t\t\t\tconst u32 n = ++s_ignored_source_oob;
+          \t\t\t\t\t\tif (n <= 4 || !(n & 63))
+          \t\t\t\t\t\t\trsx_log.error("PsTJon M6.4 ASCENSION_SOURCE_OOB_GUARD: skipped exact 4MiB invalid local source #%u offset=0x%x src_begin=0x%llx",
+          \t\t\t\t\t\t\t\tn, src_offset, static_cast<unsigned long long>(src_begin));
+          \t\t\t\t\t\treturn { false, src_info, dst_info };
+          \t\t\t\t\t}
+          \t\t\t\t}
+          '''
+          # Inject right before the closing brace for the v13 guarded operation.
+          i=guard.rfind('\t\t\t}')
+          assert i>=0 and guard[i:].strip()=='}', "M6.4 exact source insertion location"
+          guard=guard[:i]+source+guard[i:]
+          s=s[:a]+guard+s[b:]
+          assert s.count('M6.4 ASCENSION_SOURCE_OOB_GUARD')==1
+          assert s.count('PsTJon v13: consumed Ascension OOB local blit')==1
+          p.write_text(s)
+          print("M6.4: BLUS last gameplay-reaching profile restored, Ascension 4MiB local SOURCE bound checked before read_barrier: PASS")
+          PY
+          grep -q 'M6.4 BLUS_STRICT_ROLLBACK' rpcs3-src/rpcs3/Emu/System.cpp
+          grep -q 'M6.4 BLUS_DEPTH_ROLLBACK' rpcs3-src/rpcs3/Emu/System.cpp
+          grep -q 'M6.4 ASCENSION_SOURCE_OOB_GUARD' rpcs3-src/rpcs3/Emu/RSX/NV47/HW/nv3089.cpp
+          git -C rpcs3-src diff --check
+          git -C mesa-src diff --check
+
           rm -rf build-kk-host kk-host-tools
           meson setup build-kk-host mesa-src \
             --buildtype=release \
@@ -3775,13 +3869,13 @@ jobs:
           codesign -d --entitlements :- "$APP" 2>&1 | tee pstjon-entitlements.txt
           (
             cd package
-            ditto -c -k --sequesterRsrc --keepParent Payload "$GITHUB_WORKSPACE/PsTJon-KK-M6.3.1.ipa"
+            ditto -c -k --sequesterRsrc --keepParent Payload "$GITHUB_WORKSPACE/PsTJon-KK-M6.4.ipa"
           )
-          shasum -a 256 PsTJon-KK-M6.3.1.ipa
+          shasum -a 256 PsTJon-KK-M6.4.ipa
       - name: Build report
         run: |
           {
-            echo "PsTJon M6.3 - isolated Ascension 4096 software ZCull slots and 3584 queue-pressure threshold; BLUS30401 depth R/W A/B; NPUB games unchanged; FPS must be physically tested"
+            echo "PsTJon M6.4 - BCUS98232 narrow 4MiB local-source OOB transfer guard at NV3089, BLUS30401 restore last gameplay-reaching strict+depth profile; real ZCull and other games preserved"
             echo "RPCS3 ios-port: $RPCS3_IOS_SHA"
             echo "Shell bundle id: com.xitrix.RPCS3"
             echo "Vulkan provider: KOSMICKRISP"
@@ -3789,15 +3883,15 @@ jobs:
             echo "Volk: $VOLK_SHA"
             echo "FFmpeg: $FFMPEG_VERSION"
             echo "Core: $(shasum -a 256 libRPCS3Core.dylib | awk '{print $1}')"
-            echo "IPA: $(shasum -a 256 PsTJon-KK-M6.3.1.ipa | awk '{print $1}')"
-          } > PsTJon-KK-M6.3.1-build.txt
+            echo "IPA: $(shasum -a 256 PsTJon-KK-M6.4.ipa | awk '{print $1}')"
+          } > PsTJon-KK-M6.4-build.txt
 
       - uses: actions/upload-artifact@v4
         with:
-          name: PsTJon-KK-m06-3-1-zcull-headroom-blus-depth-IPA
+          name: PsTJon-KK-m06-4-blus-rollback-ascension-src-guard-IPA
           path: |
-            PsTJon-KK-M6.3.1.ipa
-            PsTJon-KK-M6.3.1-build.txt
+            PsTJon-KK-M6.4.ipa
+            PsTJon-KK-M6.4-build.txt
             pstjon-entitlements.txt
             M5-rpcs3-patch-stat.txt
             M4-mesa-patch-stat.txt
@@ -3814,16 +3908,16 @@ jobs:
 
       # Best-effort direct release asset: accessible on iPhone without
       # extracting the Actions ZIP. Artifact step above stays authoritative.
-      - name: Publish direct M6.3.1 IPA
+      - name: Publish direct M6.4 IPA
         if: success()
         continue-on-error: true
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
           set -euxo pipefail
-          gh release create pstjon-kk-m6.3.1 PsTJon-KK-M6.3.1.ipa \
+          gh release create pstjon-kk-m6.4 PsTJon-KK-M6.4.ipa \
             --target "$GITHUB_SHA" \
-            --title "PsTJon KosmicKrisp M6.3.1" \
-            --notes "Experimental M6.3: Ascension 4096 virtual ZCull slots and higher safe-queue pressure threshold to reduce 697 hard-sync warnings, BLUS30401 depth round-trip performance A/B, Prince 2008/digital Forgotten Sands preserved. No physical FPS guarantee." \
+            --title "PsTJon KosmicKrisp M6.4" \
+            --notes "Experimental M6.4: Guard exact invalid Ascension 4MiB source-local NV3089 copies prior to guest DMA read, revert BLUS30401 strict-render and depth settings that regressed to Ubisoft loading freeze, preserve hardware ZCull and all other game profiles. Device testing required." \
             --latest=false
-          gh release view pstjon-kk-m6.3.1 --json url,assets
+          gh release view pstjon-kk-m6.4 --json url,assets
