@@ -3167,6 +3167,118 @@ jobs:
           grep -q 'M5.35 KK_PIPELINE_WORKERS' rpcs3-src/rpcs3/Emu/RSX/VK/VKGSRender.cpp
           git -C rpcs3-src diff --check
 
+          # M6.0 visual parity A/B for BCUS98232, BLUS30401, NPUB30632:
+          # Reuse the M5.34 query allocator that preserved Prince 2008 visuals
+          # and avoided query-pool crashes. Leave WCB/depth/shaders untouched;
+          # capture real allocator capacity and per-120-frame present timings.
+          python3 - <<'PY'
+          from pathlib import Path
+          sysp=Path("rpcs3-src/rpcs3/Emu/System.cpp")
+          s=sysp.read_text()
+          a='unsetenv("PSTJON_KK_OQ64K");'
+          assert s.count(a)==1 and 'M5.34 NPUB30424_OQ_RESTORE' in s
+          new='''if (m_title_id == "BCUS98232" ||
+                              m_title_id == "BLUS30401" ||
+                              m_title_id == "NPUB30632")
+                          {
+                              const bool old_z = g_cfg.video.disable_zcull_queries.get();
+                              const bool old_w = g_cfg.video.write_color_buffers.get();
+                              g_cfg.video.disable_zcull_queries.set(false);
+                              setenv("PSTJON_KK_OQ64K", "1", 1);
+                              sys_log.notice("PsTJon M6.0 OQ_PARITY: title=%s DisableZCull %d->0 WCB=%d unchanged KKcap=65536",
+                                  m_title_id, old_z, old_w);
+                          }
+                          else
+                          {
+                              unsetenv("PSTJON_KK_OQ64K");
+                          }'''
+          s=s.replace(a,new,1)
+          sysp.write_text(s)
+
+          rp=Path("rpcs3-src/rpcs3/Emu/RSX/VK/VKGSRender.cpp")
+          s=rp.read_text()
+          old='Emu.GetTitleID() == "NPUB30424" ? 256 : OCCLUSION_MAX_POOL_SIZE'
+          new='''(Emu.GetTitleID() == "NPUB30424" ||
+                          Emu.GetTitleID() == "BLUS30401" ||
+                          Emu.GetTitleID() == "NPUB30632" ||
+                          Emu.GetTitleID() == "BCUS98232") ? 256 : OCCLUSION_MAX_POOL_SIZE'''
+          assert s.count(old)==1
+          s=s.replace(old,new,1)
+          assert 'PsTJon M5.35 KK_PIPELINE_WORKERS' in s
+          rp.write_text(s)
+
+          dp=Path("mesa-src/src/kosmickrisp/vulkan/kk_device.c")
+          s=dp.read_text()
+          old='m534_oq_capacity);'
+          assert s.count(old)==1 and 'PSTJON_KK_OQ64K' in s
+          if '#include <stdio.h>' not in s:
+              assert '#include ' in s
+              s=s.replace('#include ','#include <stdio.h>\n#include ',1)
+          s=s.replace(old,'''m534_oq_capacity);
+          fprintf(stderr, "PsTJon M6.0 KK_OQ_CAPACITY wanted=%u actual=%u result=%d\\n",
+              m534_oq_capacity, dev->occlusion_queries.max_alloc, (int)result);''',1)
+          dp.write_text(s)
+
+          pp=Path("rpcs3-src/rpcs3/Emu/RSX/VK/VKPresent.cpp")
+          s=pp.read_text()
+          if '#include <chrono>' not in s:
+              assert s.count('#include "stdafx.h"')==1
+              s=s.replace('#include "stdafx.h"','#include "stdafx.h"\n#include <chrono>',1)
+          old='const bool need_media_capture = user_asked_for_screenshot || user_is_recording || m528_probe;'
+          assert s.count(old)==1
+          instrumentation='''#ifdef RPCS3_VULKAN_PROVIDER_KOSMICKRISP
+                      // CPU-side present cadence, not GPU execution time.
+                      {
+                          using clock = std::chrono::steady_clock;
+                          static auto last = clock::now();
+                          static std::string last_title;
+                          static u32 n = 0, peak = 0, slow33 = 0, slow50 = 0;
+                          static u64 sum = 0;
+                          const auto now = clock::now();
+                          const auto title = Emu.GetTitleID();
+                          if (title != last_title)
+                          {
+                              last_title = title;
+                              n = peak = slow33 = slow50 = 0;
+                              sum = 0;
+                          }
+                          else if (title == "NPUB30424" || title == "BCUS98232" ||
+                              title == "BLUS30401" || title == "NPUB30632")
+                          {
+                              const auto delta = std::chrono::duration_cast<std::chrono::microseconds>(now-last).count();
+                              if (delta > 0 && delta < 500000)
+                              {
+                                  const u32 us = static_cast<u32>(delta);
+                                  ++n;
+                                  sum += us;
+                                  if (us > peak) peak = us;
+                                  if (us > 33333) ++slow33;
+                                  if (us > 50000) ++slow50;
+                                  if (n == 120)
+                                  {
+                                      rsx_log.notice("PsTJon M6.0 PRESENT_TIMING title=%s frames=%u mean_us=%u peak_us=%u slow33=%u slow50=%u",
+                                          title, n, static_cast<u32>(sum/n), peak, slow33, slow50);
+                                      n = peak = slow33 = slow50 = 0;
+                                      sum = 0;
+                                  }
+                              }
+                          }
+                          last = now;
+                      }
+          #endif
+          '''
+          s=s.replace(old,instrumentation+old,1)
+          assert "M5.28 GPU_PREFLIP" in s
+          pp.write_text(s)
+          assert "M5.34 KK_OQ_ALLOC_FAIL" in Path("mesa-src/src/kosmickrisp/vulkan/kk_query_pool.c").read_text()
+          print("M6.0: 3-title scoped query parity + capacity and frame instrumentation: PASS")
+          PY
+          grep -q 'M6.0 OQ_PARITY' rpcs3-src/rpcs3/Emu/System.cpp
+          grep -q 'M6.0 PRESENT_TIMING' rpcs3-src/rpcs3/Emu/RSX/VK/VKPresent.cpp
+          grep -q 'M6.0 KK_OQ_CAPACITY' mesa-src/src/kosmickrisp/vulkan/kk_device.c
+          git -C rpcs3-src diff --check
+          git -C mesa-src diff --check
+
           rm -rf build-kk-host kk-host-tools
           meson setup build-kk-host mesa-src \
             --buildtype=release \
@@ -3378,13 +3490,13 @@ jobs:
           codesign -d --entitlements :- "$APP" 2>&1 | tee pstjon-entitlements.txt
           (
             cd package
-            ditto -c -k --sequesterRsrc --keepParent Payload "$GITHUB_WORKSPACE/PsTJon-KK-M5.35.ipa"
+            ditto -c -k --sequesterRsrc --keepParent Payload "$GITHUB_WORKSPACE/PsTJon-KK-M6.0.ipa"
           )
-          shasum -a 256 PsTJon-KK-M5.35.ipa
+          shasum -a 256 PsTJon-KK-M6.0.ipa
       - name: Build report
         run: |
           {
-            echo "PsTJon M5.35 - NPUB30424 two-worker pipeline compilation A/B; M5.34 ZCull and all other title profiles retained; physical FPS validation required"
+            echo "PsTJon M6.0 - query allocator parity A/B for Ascension and Forgotten Sands BLUS/NPUB; CPU-side present cadence telemetry; 30 FPS NOT validated"
             echo "RPCS3 ios-port: $RPCS3_IOS_SHA"
             echo "Shell bundle id: com.xitrix.RPCS3"
             echo "Vulkan provider: KOSMICKRISP"
@@ -3392,15 +3504,15 @@ jobs:
             echo "Volk: $VOLK_SHA"
             echo "FFmpeg: $FFMPEG_VERSION"
             echo "Core: $(shasum -a 256 libRPCS3Core.dylib | awk '{print $1}')"
-            echo "IPA: $(shasum -a 256 PsTJon-KK-M5.35.ipa | awk '{print $1}')"
-          } > PsTJon-KK-M5.35-build.txt
+            echo "IPA: $(shasum -a 256 PsTJon-KK-M6.0.ipa | awk '{print $1}')"
+          } > PsTJon-KK-M6.0-build.txt
 
       - uses: actions/upload-artifact@v4
         with:
-          name: PsTJon-KK-m05-35-prince-pipeline-2w-IPA
+          name: PsTJon-KK-m06-00-zcull-parity-IPA
           path: |
-            PsTJon-KK-M5.35.ipa
-            PsTJon-KK-M5.35-build.txt
+            PsTJon-KK-M6.0.ipa
+            PsTJon-KK-M6.0-build.txt
             pstjon-entitlements.txt
             M5-rpcs3-patch-stat.txt
             M4-mesa-patch-stat.txt
@@ -3417,16 +3529,16 @@ jobs:
 
       # Best-effort direct release asset: accessible on iPhone without
       # extracting the Actions ZIP. Artifact step above stays authoritative.
-      - name: Publish direct M5.35 IPA
+      - name: Publish direct M6.0 IPA
         if: success()
         continue-on-error: true
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
           set -euxo pipefail
-          gh release create pstjon-kk-m5.35 PsTJon-KK-M5.35.ipa \
+          gh release create pstjon-kk-m6.0 PsTJon-KK-M6.0.ipa \
             --target "$GITHUB_SHA" \
-            --title "PsTJon KosmicKrisp M5.35" \
-            --notes "Experimental PsTJon/RPCS3 KosmicKrisp on iOS. NPUB30424 only: two pipeline compiler workers for A/B performance validation. M5.34 hardware ZCull preserved; all other games unchanged." \
+            --title "PsTJon KosmicKrisp M6.0" \
+            --notes "Experimental M6.0: scope ZCull hardware queries+64K allocator to Ascension and both Forgotten Sands variants, preserve M5.35 Prince 2008, log CPU-side present intervals; physical graphics/FPS test required." \
             --latest=false
-          gh release view pstjon-kk-m5.35 --json url,assets
+          gh release view pstjon-kk-m6.0 --json url,assets
