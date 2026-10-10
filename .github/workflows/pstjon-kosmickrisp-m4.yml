@@ -3406,7 +3406,7 @@ jobs:
           # Actual late v13 boot graphics policy, not early M5.4 or M6.0.1.
           marker="// PsTJon v13 control profile"
           a=s.index(marker)
-          b=s.index('sys_log.notice("PsTJon M5.19 V13_RENDER_PROFILE:',a)
+          b=s.index('sys_log.notice("PsTJon M5.21 V12_RENDER_PROFILE:',a)
           late=s[a:b]
           old="g_cfg.video.disable_zcull_queries.set(true);"
           assert late.count(old)==1, "M6.2 late Ascension ZCull anchor changed"
@@ -3669,9 +3669,9 @@ jobs:
           codesign -d --entitlements :- "$APP" 2>&1 | tee pstjon-entitlements.txt
           (
             cd package
-            ditto -c -k --sequesterRsrc --keepParent Payload "$GITHUB_WORKSPACE/PsTJon-KK-M6.2.ipa"
+            ditto -c -k --sequesterRsrc --keepParent Payload "$GITHUB_WORKSPACE/PsTJon-KK-M6.2.1.ipa"
           )
-          shasum -a 256 PsTJon-KK-M6.2.ipa
+          shasum -a 256 PsTJon-KK-M6.2.1.ipa
       - name: Build report
         run: |
           {
@@ -3683,15 +3683,15 @@ jobs:
             echo "Volk: $VOLK_SHA"
             echo "FFmpeg: $FFMPEG_VERSION"
             echo "Core: $(shasum -a 256 libRPCS3Core.dylib | awk '{print $1}')"
-            echo "IPA: $(shasum -a 256 PsTJon-KK-M6.2.ipa | awk '{print $1}')"
-          } > PsTJon-KK-M6.2-build.txt
+            echo "IPA: $(shasum -a 256 PsTJon-KK-M6.2.1.ipa | awk '{print $1}')"
+          } > PsTJon-KK-M6.2.1-build.txt
 
       - uses: actions/upload-artifact@v4
         with:
-          name: PsTJon-KK-m06-2-ascension-zcull-prince-rollback-IPA
+          name: PsTJon-KK-m06-2-1-ascension-zcull-prince-rollback-IPA
           path: |
-            PsTJon-KK-M6.2.ipa
-            PsTJon-KK-M6.2-build.txt
+            PsTJon-KK-M6.2.1.ipa
+            PsTJon-KK-M6.2.1-build.txt
             pstjon-entitlements.txt
             M5-rpcs3-patch-stat.txt
             M4-mesa-patch-stat.txt
@@ -3708,16 +3708,16 @@ jobs:
 
       # Best-effort direct release asset: accessible on iPhone without
       # extracting the Actions ZIP. Artifact step above stays authoritative.
-      - name: Publish direct M6.2 IPA
+      - name: Publish direct M6.2.1 IPA
         if: success()
         continue-on-error: true
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
           set -euxo pipefail
-          gh release create pstjon-kk-m6.2 PsTJon-KK-M6.2.ipa \
+          gh release create pstjon-kk-m6.2.1 PsTJon-KK-M6.2.1.ipa \
             --target "$GITHUB_SHA" \
-            --title "PsTJon KosmicKrisp M6.2" \
+            --title "PsTJon KosmicKrisp M6.2.1" \
             --notes "Experimental M6.2: activate Ascension hardware ZCull at effective late-profile stage; revert Prince 2008 relaxed ZCull white-screen regression; BLUS30401 strict-render A/B with full depth/texture safeguards; preserve digital NPUB30632 working visuals. No 30fps claims." \
             --latest=false
-          gh release view pstjon-kk-m6.2 --json url,assets
+          gh release view pstjon-kk-m6.2.1 --json url,assets
