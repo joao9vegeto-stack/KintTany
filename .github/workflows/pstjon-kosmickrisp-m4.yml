@@ -3538,11 +3538,12 @@ jobs:
           # strict texture flush and actual hardware query results.
           sys=Path("rpcs3-src/rpcs3/Emu/System.cpp")
           t=sys.read_text()
-          signature='''g_cfg.video.read_depth_buffer.set(true);
-                              g_cfg.video.write_depth_buffer.set(true);'''
-          assert t.count(signature)==1, "M6.3 exact BLUS depth-roundtrip anchor"
-          t=t.replace(signature,'''g_cfg.video.read_depth_buffer.set(false);
-                              g_cfg.video.write_depth_buffer.set(false);
+          r='g_cfg.video.read_depth_buffer.set(true);'
+          w='g_cfg.video.write_depth_buffer.set(true);'
+          assert t.count(r)==1 and t.count(w)==1, "M6.3.1 BLUS depth setters missing"
+          assert 0 < t.index(w)-t.index(r) < 100, "M6.3.1 read and write depth must be adjacent"
+          t=t.replace(r,'g_cfg.video.read_depth_buffer.set(false);',1)
+          t=t.replace(w,'''g_cfg.video.write_depth_buffer.set(false);
                               sys_log.notice("PsTJon M6.3 BLUS_DEPTH_AB: depth R/W 1->0 after near-zero gameplay FPS; strict texture flush and hardware ZCull preserved");''',1)
           assert 'M6.2 ASCENSION_LATE_ZCULL' in t
           assert 'M6.2 PRINCE_SYNC_ROLLBACK' in t
@@ -3774,9 +3775,9 @@ jobs:
           codesign -d --entitlements :- "$APP" 2>&1 | tee pstjon-entitlements.txt
           (
             cd package
-            ditto -c -k --sequesterRsrc --keepParent Payload "$GITHUB_WORKSPACE/PsTJon-KK-M6.3.ipa"
+            ditto -c -k --sequesterRsrc --keepParent Payload "$GITHUB_WORKSPACE/PsTJon-KK-M6.3.1.ipa"
           )
-          shasum -a 256 PsTJon-KK-M6.3.ipa
+          shasum -a 256 PsTJon-KK-M6.3.1.ipa
       - name: Build report
         run: |
           {
@@ -3788,15 +3789,15 @@ jobs:
             echo "Volk: $VOLK_SHA"
             echo "FFmpeg: $FFMPEG_VERSION"
             echo "Core: $(shasum -a 256 libRPCS3Core.dylib | awk '{print $1}')"
-            echo "IPA: $(shasum -a 256 PsTJon-KK-M6.3.ipa | awk '{print $1}')"
-          } > PsTJon-KK-M6.3-build.txt
+            echo "IPA: $(shasum -a 256 PsTJon-KK-M6.3.1.ipa | awk '{print $1}')"
+          } > PsTJon-KK-M6.3.1-build.txt
 
       - uses: actions/upload-artifact@v4
         with:
-          name: PsTJon-KK-m06-3-zcull-headroom-blus-depth-IPA
+          name: PsTJon-KK-m06-3-1-zcull-headroom-blus-depth-IPA
           path: |
-            PsTJon-KK-M6.3.ipa
-            PsTJon-KK-M6.3-build.txt
+            PsTJon-KK-M6.3.1.ipa
+            PsTJon-KK-M6.3.1-build.txt
             pstjon-entitlements.txt
             M5-rpcs3-patch-stat.txt
             M4-mesa-patch-stat.txt
@@ -3813,16 +3814,16 @@ jobs:
 
       # Best-effort direct release asset: accessible on iPhone without
       # extracting the Actions ZIP. Artifact step above stays authoritative.
-      - name: Publish direct M6.3 IPA
+      - name: Publish direct M6.3.1 IPA
         if: success()
         continue-on-error: true
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
           set -euxo pipefail
-          gh release create pstjon-kk-m6.3 PsTJon-KK-M6.3.ipa \
+          gh release create pstjon-kk-m6.3.1 PsTJon-KK-M6.3.1.ipa \
             --target "$GITHUB_SHA" \
-            --title "PsTJon KosmicKrisp M6.3" \
+            --title "PsTJon KosmicKrisp M6.3.1" \
             --notes "Experimental M6.3: Ascension 4096 virtual ZCull slots and higher safe-queue pressure threshold to reduce 697 hard-sync warnings, BLUS30401 depth round-trip performance A/B, Prince 2008/digital Forgotten Sands preserved. No physical FPS guarantee." \
             --latest=false
-          gh release view pstjon-kk-m6.3 --json url,assets
+          gh release view pstjon-kk-m6.3.1 --json url,assets
