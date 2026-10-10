@@ -3338,8 +3338,10 @@ jobs:
           # and sample late gameplay rather than only startup/loading screens.
           present_path=Path("rpcs3-src/rpcs3/Emu/RSX/VK/VKPresent.cpp")
           s=present_path.read_text()
-          original='const bool m528_is_prince = Emu.GetTitleID() == "BLUS30401";'
-          assert s.count(original)==1, "M6.1 original preflip title selector changed"
+          # M5.33 already rewrites every BLUS30401 predicate to include
+          # NPUB30632. Match the GENERATED code, not the old M5.28 anchor.
+          original='const bool m528_is_prince = (Emu.GetTitleID() == "BLUS30401" || Emu.GetTitleID() == "NPUB30632");'
+          assert s.count(original)==1, "M6.1.1 expected post-M5.33 preflip selector"
           newer='''static std::string m61_preflip_previous_title;
                               const auto m61_preflip_title = Emu.GetTitleID();
                               if (m61_preflip_title != m61_preflip_previous_title)
@@ -3353,12 +3355,24 @@ jobs:
           s=s.replace(original,newer,1)
           # NPUB30632 was already captured by M5.33 through separate title
           # rewrite; the OR is harmless and preserves that original intent.
-          original='m528_frame_counter == 900'
-          assert s.count(original)==1, "M6.1 expected M5.29/30 frame-900 preflip anchor"
-          s=s.replace(original,'''(m528_frame_counter == 900 ||
-                                       m528_frame_counter == 1800 ||
-                                       m528_frame_counter == 2400 ||
-                                       m528_frame_counter == 3600)''',1)
+          # M5.29 switched the capture scheduler to valid-present frames.
+          # Reset this counter on title switches, not only the obsolete M5.28
+          # frame counter, and extend selected GAMEPLAY milestones.
+          original='static u32 m529_valid_present_count = 0;'
+          assert s.count(original)==1, "M6.1.1 M5.29 valid-present declaration mismatch"
+          s=s.replace(original,original+'''
+                              static std::string m61_preflip_previous_valid_title;
+                              if (m61_preflip_previous_valid_title != Emu.GetTitleID())
+                              {
+                                  m61_preflip_previous_valid_title = Emu.GetTitleID();
+                                  m529_valid_present_count = 0;
+                              }''',1)
+          original='m529_valid_present_count == 1800'
+          assert s.count(original)==1, "M6.1.1 expected M5.29 valid-present 1800-sample"
+          s=s.replace(original,'''(m529_valid_present_count == 1800 ||
+                                       m529_valid_present_count == 2400 ||
+                                       m529_valid_present_count == 3600 ||
+                                       m529_valid_present_count == 4800)''',1)
           assert s.count("M5.28 GPU_PREFLIP")==1
           assert s.count('m61_preflip_previous_title')==3
           present_path.write_text(s)
@@ -3583,9 +3597,9 @@ jobs:
           codesign -d --entitlements :- "$APP" 2>&1 | tee pstjon-entitlements.txt
           (
             cd package
-            ditto -c -k --sequesterRsrc --keepParent Payload "$GITHUB_WORKSPACE/PsTJon-KK-M6.1.ipa"
+            ditto -c -k --sequesterRsrc --keepParent Payload "$GITHUB_WORKSPACE/PsTJon-KK-M6.1.1.ipa"
           )
-          shasum -a 256 PsTJon-KK-M6.1.ipa
+          shasum -a 256 PsTJon-KK-M6.1.1.ipa
       - name: Build report
         run: |
           {
@@ -3597,15 +3611,15 @@ jobs:
             echo "Volk: $VOLK_SHA"
             echo "FFmpeg: $FFMPEG_VERSION"
             echo "Core: $(shasum -a 256 libRPCS3Core.dylib | awk '{print $1}')"
-            echo "IPA: $(shasum -a 256 PsTJon-KK-M6.1.ipa | awk '{print $1}')"
-          } > PsTJon-KK-M6.1-build.txt
+            echo "IPA: $(shasum -a 256 PsTJon-KK-M6.1.1.ipa | awk '{print $1}')"
+          } > PsTJon-KK-M6.1.1-build.txt
 
       - uses: actions/upload-artifact@v4
         with:
-          name: PsTJon-KK-m06-1-zcull-order-render-fps-IPA
+          name: PsTJon-KK-m06-1-1-zcull-order-render-fps-IPA
           path: |
-            PsTJon-KK-M6.1.ipa
-            PsTJon-KK-M6.1-build.txt
+            PsTJon-KK-M6.1.1.ipa
+            PsTJon-KK-M6.1.1-build.txt
             pstjon-entitlements.txt
             M5-rpcs3-patch-stat.txt
             M4-mesa-patch-stat.txt
@@ -3622,16 +3636,16 @@ jobs:
 
       # Best-effort direct release asset: accessible on iPhone without
       # extracting the Actions ZIP. Artifact step above stays authoritative.
-      - name: Publish direct M6.1 IPA
+      - name: Publish direct M6.1.1 IPA
         if: success()
         continue-on-error: true
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
           set -euxo pipefail
-          gh release create pstjon-kk-m6.1 PsTJon-KK-M6.1.ipa \
+          gh release create pstjon-kk-m6.1.1 PsTJon-KK-M6.1.1.ipa \
             --target "$GITHUB_SHA" \
-            --title "PsTJon KosmicKrisp M6.1" \
+            --title "PsTJon KosmicKrisp M6.1.1" \
             --notes "Experimental M6.1: fix NPUB30632 late ZCull disable, Prince 2008 relaxed synchronization A/B and Ascension preflip sampling. Retains BLUS30401 visible scene. Physical visual and FPS tests required." \
             --latest=false
-          gh release view pstjon-kk-m6.1 --json url,assets
+          gh release view pstjon-kk-m6.1.1 --json url,assets
