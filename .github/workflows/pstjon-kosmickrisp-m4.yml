@@ -3040,6 +3040,104 @@ jobs:
           grep -q 'PsTJon M5.31 PRINCE_DEPTH_ROUNDTRIP' rpcs3-src/rpcs3/Emu/System.cpp
           git -C rpcs3-src diff --check
 
+          # M5.34 - physical NPUB30424 cross-profile four-log matrix:
+          # A) M5.30 session #2 WCB=0, disableZCull=0 -> graphics good,
+          #    vkCreateQueryPool => VK_ERROR_OUT_OF_DEVICE_MEMORY.
+          # B) M5.32/M5.33.1 WCB=0, disabled-ZCull=1 -> no Vulkan OODM,
+          #    but visuals dark (despite forced visible query result).
+          # C) WCB=1, disabled-ZCull=1 -> dark, no Vulkan OODM.
+          # D) Process JIT/VRAM pressure budget unchanged (2048MiB).
+          # Restore hardware occlusion for NPUB30424 ONLY, cap physical KK
+          # query table at 65536 16-bit-compatible entries for THIS boot,
+          # reduce NPUB per-pool reservation granularity to 256 entries,
+          # instrument the actual failure cause before VkResult remapping.
+          # Other games (Ascension, Dante, BLUS30401, NPUB30632) unchanged.
+          python3 - <<'PY'
+          from pathlib import Path
+          p=Path("rpcs3-src/rpcs3/Emu/System.cpp")
+          s=p.read_text()
+          assert s.count('#include "stdafx.h"')==1
+          s=s.replace('#include "stdafx.h"','#include "stdafx.h"\n#include <stdlib.h>',1)
+          a=s.index('if (m_title_id == "NPUB30424")')
+          b=s.find('#endif',a)
+          assert 0<b-a<1200, "M5.34 NPUB30424 scope changed"
+          chunk=s[a:b]
+          old='''const bool prior = g_cfg.video.disable_zcull_queries.get();
+                          g_cfg.video.disable_zcull_queries.set(true);
+                          sys_log.notice("PsTJon M5.32 NPUB_OQ_SAFETY: NPUB30424 hardware ZCull %d->disabled; retain all-visible fallback; KK fixed occlusion query table 32768 entries", static_cast<int>(!prior));'''
+          new='''const bool prior = g_cfg.video.disable_zcull_queries.get();
+                          const bool prior_wcb = g_cfg.video.write_color_buffers.get();
+                          g_cfg.video.disable_zcull_queries.set(false);
+                          g_cfg.video.write_color_buffers.set(false);
+                          setenv("PSTJON_KK_OQ64K", "1", 1);
+                          sys_log.notice("PsTJon M5.34 NPUB30424_OQ_RESTORE: WCB %d->0 DisableZCull %d->0; KK query table 32768->65536; physical good-texture settings restored", prior_wcb, prior);'''
+          assert chunk.count(old)==1, "M5.34 missing M5.32 NPUB guard"
+          chunk=chunk.replace(old,new,1)
+          # Environment must be reset between successive game boots.
+          chunk=chunk.replace('''                      }
+          ''','''                      }
+                      else
+                      {
+                          unsetenv("PSTJON_KK_OQ64K");
+                      }
+          ''',1)
+          s=s[:a]+chunk+s[b:]
+          assert 'M5.34 NPUB30424_OQ_RESTORE' in s
+          p.write_text(s)
+
+          p=Path("rpcs3-src/rpcs3/Emu/RSX/VK/VKGSRender.cpp")
+          s=p.read_text()
+          needle='''std::make_unique<vk::query_pool_manager>(*m_device, VK_QUERY_TYPE_OCCLUSION, OCCLUSION_MAX_POOL_SIZE)'''
+          assert s.count(needle)==1, "M5.34 unique RPCS3 occlusion pool manager"
+          s=s.replace(needle,'''std::make_unique<vk::query_pool_manager>(*m_device, VK_QUERY_TYPE_OCCLUSION,
+          		Emu.GetTitleID() == "NPUB30424" ? 256 : OCCLUSION_MAX_POOL_SIZE)''',1)
+          assert 'M5.32 NPUB_OQ_BYPASS' in s
+          p.write_text(s)
+
+          p=Path("mesa-src/src/kosmickrisp/vulkan/kk_device.c")
+          s=p.read_text()
+          call='result = kk_query_table_init(dev, &dev->occlusion_queries,'
+          end_arg='KK_MAX_OCCLUSION_QUERIES);'
+          assert s.count(call)==1, f"M5.34 expected KK occlusion table init, got {s.count(call)}"
+          assert s.count(end_arg)==1, f"M5.34 expected KK capacity argument, got {s.count(end_arg)}"
+          pre='''/* M5.34 NPUB30424 only: 16-bit query remap allows 65536 entries.
+          * All other titles retain the unmodified 32768 cap. */
+          const char *m534_oq = debug_get_option("PSTJON_KK_OQ64K", NULL);
+          const uint32_t m534_oq_capacity =
+          (m534_oq && m534_oq[0] == '1' && m534_oq[1] == 0)
+          ? 65536u : KK_MAX_OCCLUSION_QUERIES;
+          '''
+          s=s.replace(call,pre+call,1).replace(end_arg,'m534_oq_capacity);',1)
+          assert 'PSTJON_KK_OQ64K' in s
+          p.write_text(s)
+
+          p=Path("mesa-src/src/kosmickrisp/vulkan/kk_query_pool.c")
+          s=p.read_text()
+          include='#include "kk_query_table.h"'
+          assert s.count(include)==1, "M5.34 KK query table include anchor"
+          s=s.replace(include,include+'\n#include <stdio.h>',1)
+          scope='kk_query_table_add(dev, &dev->occlusion_queries, zero, &index);'
+          i=s.index(scope)
+          old_return='return vk_error(dev, VK_ERROR_OUT_OF_DEVICE_MEMORY);'
+          assert s[i:].count(old_return)>=1, "M5.34 no OQ query-table error return"
+          message='''fprintf(stderr,
+          "PsTJon M5.34 KK_OQ_ALLOC_FAIL requested=%u reserved=%u next=%u free=%u cap=%u result=%d\\n",
+          pool->vk.query_count, pool->oq.queries,
+          dev->occlusion_queries.next_query, dev->occlusion_queries.free_count,
+          dev->occlusion_queries.max_alloc, (int)result);
+          return result;'''
+          s=s[:i]+s[i:].replace(old_return,message,1)
+          assert 'M5.34 KK_OQ_ALLOC_FAIL' in s
+          p.write_text(s)
+          print("M5.34: NPUB30424 hardware ZCull/WCB-off+256-slot Vulkan pools+64K KK query table, error provenance; all other titles preserved")
+          PY
+          grep -q 'M5.34 NPUB30424_OQ_RESTORE' rpcs3-src/rpcs3/Emu/System.cpp
+          grep -q 'PSTJON_KK_OQ64K' mesa-src/src/kosmickrisp/vulkan/kk_device.c
+          grep -q 'M5.34 KK_OQ_ALLOC_FAIL' mesa-src/src/kosmickrisp/vulkan/kk_query_pool.c
+          grep -q 'M5.33 NPUB30632_CROSS_RELEASE' rpcs3-src/rpcs3/Emu/System.cpp
+          git -C rpcs3-src diff --check
+          git -C mesa-src diff --check
+
           rm -rf build-kk-host kk-host-tools
           meson setup build-kk-host mesa-src \
             --buildtype=release \
