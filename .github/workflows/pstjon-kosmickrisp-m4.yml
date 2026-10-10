@@ -3386,6 +3386,78 @@ jobs:
           git -C rpcs3-src diff --check
           git -C mesa-src diff --check
 
+          # M6.2 physical M6.1.1 regression fixes, across four isolated games.
+          # BCUS98232: M6.0.1 early query enable was silently overwritten
+          # by an older late M5.19 v13 profile, as proved by the effective
+          # config dumping Disable ZCull Occlusion Queries: TRUE despite
+          # OQ_PARITY announcing off. Apply the test *after* that late override.
+          # NPUB30424: restore M5.35 exact relaxed-ZCull=false, because
+          # M6.1.1 experimental relaxed=true caused white gameplay after load
+          # and apparent RSX stop. Keep the known good real-hardware queries.
+          # BLUS30401: has visuals but 9.9 FPS and ghosting; test ONLY
+          # disabling strict_rendering_mode (still WCB/RCB, strict texture
+          # flushing, depth round-trip and hardware occlusion enabled).
+          # NPUB30632: leave its visually correct, ghost-free profile alone.
+          python3 - <<'PY'
+          from pathlib import Path
+          p=Path("rpcs3-src/rpcs3/Emu/System.cpp")
+          s=p.read_text()
+
+          # Actual late v13 boot graphics policy, not early M5.4 or M6.0.1.
+          marker="// PsTJon v13 control profile"
+          a=s.index(marker)
+          b=s.index('sys_log.notice("PsTJon M5.19 V13_RENDER_PROFILE:',a)
+          late=s[a:b]
+          old="g_cfg.video.disable_zcull_queries.set(true);"
+          assert late.count(old)==1, "M6.2 late Ascension ZCull anchor changed"
+          late=late.replace(old,'''g_cfg.video.disable_zcull_queries.set(false);
+                              // M6.2: late post-configuration ZCull activation,
+                              // after the M5.19 profile previously overwrote M6.0.1.
+                              sys_log.notice("PsTJon M6.2 ASCENSION_LATE_ZCULL: hardware queries enabled, previous M5.19 disable removed");''',1)
+          s=s[:a]+late+s[b:]
+          assert s.count("M6.2 ASCENSION_LATE_ZCULL")==1
+
+          # Only the recent M6.1 AB opted Prince 2008 into relaxed query
+          # synchronization; restore the M5.35 behavior that loaded saves.
+          assert s.count('g_cfg.video.relaxed_zcull_sync.set(true);')==1, "M6.2 unexpected relaxed ZCull setters"
+          s=s.replace('g_cfg.video.relaxed_zcull_sync.set(true);','g_cfg.video.relaxed_zcull_sync.set(false);',1)
+          oldlog='PsTJon M6.1 PRINCE_RELAXED_ZCULL_AB: prior=%d now=1, preserve HW occlusion; compare hard-sync warnings'
+          newlog='PsTJon M6.2 PRINCE_SYNC_ROLLBACK: prior=%d now=0; M5.35 hardware ZCull restored after white-screen regression'
+          assert s.count(oldlog)==1, "M6.2 M6.1 Prince telemetry anchor changed"
+          s=s.replace(oldlog,newlog,1)
+
+          # BLUS30401 is still strict-mode TRUE in the effective M6.1.1
+          # profile, while NPUB30632 (visually correct without ghosting) uses
+          # strict-mode FALSE. A/B just this expensive switch for the disc
+          # title, keeping existing depth and texture hazard safeguards.
+          log='sys_log.notice("PsTJon M5.31 PRINCE_DEPTH_ROUNDTRIP:'
+          assert s.count(log)==1, "M6.2 M5.31 depth policy logger anchor changed"
+          pre='''const bool m62_old_strict = g_cfg.video.strict_rendering_mode.get();
+                              g_cfg.video.strict_rendering_mode.set(false);
+                              sys_log.notice("PsTJon M6.2 BLUS_STRICT_AB: strict_render=%d->0, preserve strict_texture_flush=1 depth_roundtrip=1 HW_ZCull=1", m62_old_strict);
+                              '''
+          s=s.replace(log,pre+log,1)
+          assert s.count('M6.2 BLUS_STRICT_AB')==1
+          assert "M6.1 NPUB_QUERY_ORDER_FIX" in s
+          assert "M5.34 NPUB30424_OQ_RESTORE" in s
+          assert "M6.0.1 OQ_PARITY" in s
+          p.write_text(s)
+
+          # Key regression gates: all patches must remain scoped by title.
+          start=s.index('if (m_title_id == "NPUB30632")')
+          finish=s.find('#endif',start)
+          assert 'g_cfg.video.disable_zcull_queries.set(false);' in s[start:finish]
+          assert 'M6.2 PRINCE_SYNC_ROLLBACK' in s
+          assert 'M6.2 ASCENSION_LATE_ZCULL' in s
+          assert 'M6.2 BLUS_STRICT_AB' in s
+          print("M6.2 late-ZCull Ascension activation, NPUB30424 M5.35 sync rollback, BLUS strict-only A/B: PASS")
+          PY
+          grep -q 'M6.2 ASCENSION_LATE_ZCULL' rpcs3-src/rpcs3/Emu/System.cpp
+          grep -q 'M6.2 PRINCE_SYNC_ROLLBACK' rpcs3-src/rpcs3/Emu/System.cpp
+          grep -q 'M6.2 BLUS_STRICT_AB' rpcs3-src/rpcs3/Emu/System.cpp
+          git -C rpcs3-src diff --check
+          git -C mesa-src diff --check
+
           rm -rf build-kk-host kk-host-tools
           meson setup build-kk-host mesa-src \
             --buildtype=release \
@@ -3597,13 +3669,13 @@ jobs:
           codesign -d --entitlements :- "$APP" 2>&1 | tee pstjon-entitlements.txt
           (
             cd package
-            ditto -c -k --sequesterRsrc --keepParent Payload "$GITHUB_WORKSPACE/PsTJon-KK-M6.1.1.ipa"
+            ditto -c -k --sequesterRsrc --keepParent Payload "$GITHUB_WORKSPACE/PsTJon-KK-M6.2.ipa"
           )
-          shasum -a 256 PsTJon-KK-M6.1.1.ipa
+          shasum -a 256 PsTJon-KK-M6.2.ipa
       - name: Build report
         run: |
           {
-            echo "PsTJon M6.1 - fix digital Forgotten Sands late ZCull override, Prince 2008 relaxed query sync A/B, extend Ascension preflip diagnostics; 30 FPS NOT validated"
+            echo "PsTJon M6.2 - late Ascension hardware ZCull actual activation, Prince 2008 relaxed-ZCull regression rollback, BLUS30401 strict-render-only FPS A/B; 30 FPS NOT validated"
             echo "RPCS3 ios-port: $RPCS3_IOS_SHA"
             echo "Shell bundle id: com.xitrix.RPCS3"
             echo "Vulkan provider: KOSMICKRISP"
@@ -3611,15 +3683,15 @@ jobs:
             echo "Volk: $VOLK_SHA"
             echo "FFmpeg: $FFMPEG_VERSION"
             echo "Core: $(shasum -a 256 libRPCS3Core.dylib | awk '{print $1}')"
-            echo "IPA: $(shasum -a 256 PsTJon-KK-M6.1.1.ipa | awk '{print $1}')"
-          } > PsTJon-KK-M6.1.1-build.txt
+            echo "IPA: $(shasum -a 256 PsTJon-KK-M6.2.ipa | awk '{print $1}')"
+          } > PsTJon-KK-M6.2-build.txt
 
       - uses: actions/upload-artifact@v4
         with:
-          name: PsTJon-KK-m06-1-1-zcull-order-render-fps-IPA
+          name: PsTJon-KK-m06-2-ascension-zcull-prince-rollback-IPA
           path: |
-            PsTJon-KK-M6.1.1.ipa
-            PsTJon-KK-M6.1.1-build.txt
+            PsTJon-KK-M6.2.ipa
+            PsTJon-KK-M6.2-build.txt
             pstjon-entitlements.txt
             M5-rpcs3-patch-stat.txt
             M4-mesa-patch-stat.txt
@@ -3636,16 +3708,16 @@ jobs:
 
       # Best-effort direct release asset: accessible on iPhone without
       # extracting the Actions ZIP. Artifact step above stays authoritative.
-      - name: Publish direct M6.1.1 IPA
+      - name: Publish direct M6.2 IPA
         if: success()
         continue-on-error: true
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
           set -euxo pipefail
-          gh release create pstjon-kk-m6.1.1 PsTJon-KK-M6.1.1.ipa \
+          gh release create pstjon-kk-m6.2 PsTJon-KK-M6.2.ipa \
             --target "$GITHUB_SHA" \
-            --title "PsTJon KosmicKrisp M6.1.1" \
-            --notes "Experimental M6.1: fix NPUB30632 late ZCull disable, Prince 2008 relaxed synchronization A/B and Ascension preflip sampling. Retains BLUS30401 visible scene. Physical visual and FPS tests required." \
+            --title "PsTJon KosmicKrisp M6.2" \
+            --notes "Experimental M6.2: activate Ascension hardware ZCull at effective late-profile stage; revert Prince 2008 relaxed ZCull white-screen regression; BLUS30401 strict-render A/B with full depth/texture safeguards; preserve digital NPUB30632 working visuals. No 30fps claims." \
             --latest=false
-          gh release view pstjon-kk-m6.1.1 --json url,assets
+          gh release view pstjon-kk-m6.2 --json url,assets
