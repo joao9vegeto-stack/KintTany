@@ -2991,7 +2991,7 @@ jobs:
           assert s.count(anchor)==1, "M5.33 M5.32 boot-policy anchor mismatch"
           idx=s.index(anchor)
           endif=s.find("#endif",idx)
-          assert endif>idx and endif-idx<200, "M5.33 expected contiguous scoped M5.32 guard"
+          assert endif>=idx+len(anchor) and endif-(idx+len(anchor))<120, "M5.33 expected contiguous scoped M5.32 guard"
           patch="""#if defined(RPCS3_VULKAN_PROVIDER_KOSMICKRISP)
                       // M5.33 NPUB30632_CROSS_RELEASE: digital Forgotten Sands
                       // reproduces the BLUS query-pool failure with ZCull on.
