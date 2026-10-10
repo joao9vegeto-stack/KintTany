@@ -3673,9 +3673,13 @@ jobs:
           from pathlib import Path
           vk=Path("rpcs3-src/rpcs3/Emu/RSX/VK/VKGSRender.cpp")
           s=vk.read_text()
-          old='Emu.GetTitleID() == "NPUB30424" ? 256 : OCCLUSION_MAX_POOL_SIZE'
-          new='(Emu.GetTitleID() == "NPUB30424" || Emu.GetTitleID() == "BLUS30405") ? 256 : OCCLUSION_MAX_POOL_SIZE'
-          assert s.count(old)==1, "M6.5 expected M5.34 pool sizing anchor"
+          # M6.0.1 has ALREADY expanded the M5.34 NPUB30424 predicate
+          # to include BLUS30401, NPUB30632 and BCUS98232.
+          # Match the unique final suffix rather than the obsolete M5.34
+          # exact predicate, then append only BLUS30405 (Dante).
+          old='Emu.GetTitleID() == "BCUS98232") ? 256 : OCCLUSION_MAX_POOL_SIZE'
+          new='Emu.GetTitleID() == "BCUS98232" || Emu.GetTitleID() == "BLUS30405") ? 256 : OCCLUSION_MAX_POOL_SIZE'
+          assert s.count(old)==1, "M6.5.1 expected post-M6.0.1 pool sizing anchor"
           s=s.replace(old,new,1)
           assert s.count(new)==1
           vk.write_text(s)
@@ -3938,9 +3942,9 @@ jobs:
           codesign -d --entitlements :- "$APP" 2>&1 | tee pstjon-entitlements.txt
           (
             cd package
-            ditto -c -k --sequesterRsrc --keepParent Payload "$GITHUB_WORKSPACE/PsTJon-KK-M6.5.ipa"
+            ditto -c -k --sequesterRsrc --keepParent Payload "$GITHUB_WORKSPACE/PsTJon-KK-M6.5.1.ipa"
           )
-          shasum -a 256 PsTJon-KK-M6.5.ipa
+          shasum -a 256 PsTJon-KK-M6.5.1.ipa
       - name: Build report
         run: |
           {
@@ -3952,15 +3956,15 @@ jobs:
             echo "Volk: $VOLK_SHA"
             echo "FFmpeg: $FFMPEG_VERSION"
             echo "Core: $(shasum -a 256 libRPCS3Core.dylib | awk '{print $1}')"
-            echo "IPA: $(shasum -a 256 PsTJon-KK-M6.5.ipa | awk '{print $1}')"
-          } > PsTJon-KK-M6.5-build.txt
+            echo "IPA: $(shasum -a 256 PsTJon-KK-M6.5.1.ipa | awk '{print $1}')"
+          } > PsTJon-KK-M6.5.1-build.txt
 
       - uses: actions/upload-artifact@v4
         with:
-          name: PsTJon-KK-m06-5-dante-query-reuse-IPA
+          name: PsTJon-KK-m06-5-1-dante-query-reuse-IPA
           path: |
-            PsTJon-KK-M6.5.ipa
-            PsTJon-KK-M6.5-build.txt
+            PsTJon-KK-M6.5.1.ipa
+            PsTJon-KK-M6.5.1-build.txt
             pstjon-entitlements.txt
             M5-rpcs3-patch-stat.txt
             M4-mesa-patch-stat.txt
@@ -3977,16 +3981,16 @@ jobs:
 
       # Best-effort direct release asset: accessible on iPhone without
       # extracting the Actions ZIP. Artifact step above stays authoritative.
-      - name: Publish direct M6.5 IPA
+      - name: Publish direct M6.5.1 IPA
         if: success()
         continue-on-error: true
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
           set -euxo pipefail
-          gh release create pstjon-kk-m6.5 PsTJon-KK-M6.5.ipa \
+          gh release create pstjon-kk-m6.5.1 PsTJon-KK-M6.5.1.ipa \
             --target "$GITHUB_SHA" \
-            --title "PsTJon KosmicKrisp M6.5" \
+            --title "PsTJon KosmicKrisp M6.5.1" \
             --notes "Experimental M6.5: Dante BLUS30405 vkCreateQueryPool VK_ERROR_OUT_OF_HOST_MEMORY mitigation using 256-query pools and safe deferred pool reuse. Retains M6.4 Ascension local-source DMA guard, Prince 2008 and Forgotten Sands policies. Physical FPS and crash regression tests required." \
             --latest=false
-          gh release view pstjon-kk-m6.5 --json url,assets
+          gh release view pstjon-kk-m6.5.1 --json url,assets
