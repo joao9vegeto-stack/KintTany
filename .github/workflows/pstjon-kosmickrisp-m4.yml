@@ -2868,6 +2868,46 @@ jobs:
           grep -q 'M5.30 GPU_ALPHA' rpcs3-src/rpcs3/Emu/RSX/VK/VKPresent.cpp
           git -C rpcs3-src diff --check
 
+          # M5.31: physical Prince M5.30 proves GPU preflip black opaque pixels
+          # (frame 180 4022/4080 opaque black; frame 480 3514/4080).
+          # Neither strict texture flush nor ReBAR nor ZCull nor shader
+          # interpreter repaired the scene. Vulkan depth/stencil image
+          # VK_FORMAT_D32_SFLOAT_S8_UINT (130) is sampled repeatedly in the
+          # failing game's RSX_TEX_FORMAT records; color BGRA8 (44) is
+          # alternated with depth. Enable full depth guest<->GPU round-trip
+          # coherency only on BLUS30401 (read + write depth), preserving the
+          # original KosmicKrisp and other titles. This is an A/B test of a
+          # previously untested correctness path; may reduce throughput.
+          python3 - <<'PY'
+          from pathlib import Path
+          p = Path("rpcs3-src/rpcs3/Emu/System.cpp")
+          s = p.read_text()
+          anchor='sys_log.notice("PsTJon M5.30 PRINCE_STRICT_FLUSH: BLUS30401 strict_texture_flushing %d->1; KK framebuffer->texture hazards", m530_before_strict);'
+          assert s.count(anchor)==1, "M5.31 unexpected System policy location"
+          change=r"""
+                          // M5.31 PRINCE_DEPTH_ROUNDTRIP: game uploads both
+                          // depth-stencil (VK_FORMAT_D32_SFLOAT_S8_UINT) and
+                          // color-backed resources from the same RSX frame.
+                          // Preserve depth surface contents in guest RSX
+                          // memory when sampled, rather than allowing the
+                          // generic no-depth-transfer fast path.
+                          const bool m531_read_before = g_cfg.video.read_depth_buffer.get();
+                          const bool m531_write_before = g_cfg.video.write_depth_buffer.get();
+                          g_cfg.video.read_depth_buffer.set(true);
+                          g_cfg.video.write_depth_buffer.set(true);
+                          sys_log.notice("PsTJon M5.31 PRINCE_DEPTH_ROUNDTRIP: BLUS30401 read_depth %d->1 write_depth %d->1; strict_flush=1 zcull unchanged",
+                              m531_read_before, m531_write_before);
+          """
+          s=s.replace(anchor,anchor+"\n"+change,1)
+          assert s.count("M5.31 PRINCE_DEPTH_ROUNDTRIP")==2
+          p.write_text(s)
+          print("M5.31: BLUS30401 depth read/write round-trip enabled, preserving existing GPU_ALPHA + GPU_PREFLIP diagnostics")
+          PY
+          grep -q 'M5.31 PRINCE_DEPTH_ROUNDTRIP' rpcs3-src/rpcs3/Emu/System.cpp
+          grep -q 'M5.30 GPU_ALPHA' rpcs3-src/rpcs3/Emu/RSX/VK/VKPresent.cpp
+          grep -q 'M5.28 GPU_PREFLIP' rpcs3-src/rpcs3/Emu/RSX/VK/VKPresent.cpp
+          git -C rpcs3-src diff --check
+
           rm -rf build-kk-host kk-host-tools
           meson setup build-kk-host mesa-src \
             --buildtype=release \
