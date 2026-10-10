@@ -2732,6 +2732,81 @@ jobs:
           grep -q 'M5.28 RSX_TEX_FORMAT' rpcs3-src/rpcs3/Emu/RSX/VK/VKDraw.cpp
           git -C rpcs3-src diff --check
 
+          # M5.29: M5.28 real GPU preflip probe produced ZERO logs,
+          # even while RSX_TEX_FORMAT and ZCull logs confirmed the binary
+          # was loaded. Instrument unconditional flips and display-source
+          # selection, then sample four VALID pre-present images (not four
+          # arbitrary flip numbers, which may have image_to_flip == nullptr).
+          # This avoids guessing whether black is from Metal presentation,
+          # an empty framebuffer, or invalid shader/texture data.
+          python3 - <<'PY'
+          from pathlib import Path
+          p=Path("rpcs3-src/rpcs3/Emu/RSX/VK/VKPresent.cpp")
+          s=p.read_text()
+          anchor='void VKGSRender::flip(const rsx::display_flip_info_t& info)\n{'
+          assert s.count(anchor)==1, "M5.29 flip entry mismatch"
+          addition='''void VKGSRender::flip(const rsx::display_flip_info_t& info)
+          {
+          #ifdef RPCS3_VULKAN_PROVIDER_KOSMICKRISP
+          	if (Emu.GetTitleID() == "BLUS30401")
+          	{
+          		static u32 m529_flip_count = 0;
+          		++m529_flip_count;
+          		if (m529_flip_count <= 16 || (m529_flip_count <= 4096 &&
+          		    ((m529_flip_count & (m529_flip_count - 1)) == 0)))
+          		{
+          			rsx_log.notice("PsTJon M5.29 FLIP_GATE: count=%u skip=%u buffer=%u draws=%u buffer_count=%u swapchain_unavailable=%u",
+          				m529_flip_count, static_cast<u32>(info.skip_frame),
+          				static_cast<u32>(info.buffer), static_cast<u32>(info.stats.draw_calls),
+          				static_cast<u32>(display_buffers_count), static_cast<u32>(swapchain_unavailable));
+          		}
+          	}
+          #endif'''
+          s=s.replace(anchor,addition,1)
+          anchor='image_to_flip = get_present_source(&present_info, avconfig);'
+          assert s.count(anchor)==1, "M5.29 present source anchor mismatch"
+          s=s.replace(anchor,anchor+'''
+          #ifdef RPCS3_VULKAN_PROVIDER_KOSMICKRISP
+          		if (Emu.GetTitleID() == "BLUS30401")
+          		{
+          			static u32 m529_sources = 0, m529_missing = 0;
+          			++m529_sources;
+          			if (!image_to_flip) ++m529_missing;
+          			if (m529_sources <= 16 || (m529_sources <= 4096 &&
+          			    ((m529_sources & (m529_sources - 1)) == 0)))
+          			{
+          				rsx_log.notice("PsTJon M5.29 SOURCE_GATE: count=%u image=%u missing=%u width=%u height=%u pitch=%u",
+          					m529_sources, static_cast<u32>(image_to_flip != nullptr),
+          					m529_missing, buffer_width, buffer_height, buffer_pitch);
+          			}
+          		}
+          #endif''',1)
+          anchor='''const bool m528_probe = m528_is_prince &&
+          		(m528_frame_counter == 1 || m528_frame_counter == 60 ||
+          		 m528_frame_counter == 180 || m528_frame_counter == 480);'''
+          assert s.count(anchor)==1, "M5.29 existing sample scheduler anchor mismatch"
+          s=s.replace(anchor,'''// M5.29: only count flips with actual GPU image data.
+          	// The M5.28 frame schedule never produced a GPU_PREFLIP
+          	// event in the 21:23:27 physical device log.
+          	static u32 m529_valid_present_count = 0;
+          	if (m528_is_prince && image_to_flip) ++m529_valid_present_count;
+          	const bool m528_probe = m528_is_prince && image_to_flip &&
+          		(m529_valid_present_count == 1 || m529_valid_present_count == 60 ||
+          		 m529_valid_present_count == 180 || m529_valid_present_count == 480 ||
+          		 m529_valid_present_count == 900 || m529_valid_present_count == 1800);''',1)
+          old='''m528_frame_counter, sampled, black,'''
+          assert s.count(old)==1, "M5.29 GPU_PRELFIP counter mismatch"
+          s=s.replace(old,'''m529_valid_present_count, sampled, black,''',1)
+          assert "M5.29 FLIP_GATE" in s and "M5.29 SOURCE_GATE" in s
+          assert "M5.28 GPU_PREFLIP" in s and "M5.28 RSX_TEX_FORMAT" in Path("rpcs3-src/rpcs3/Emu/RSX/VK/VKDraw.cpp").read_text()
+          p.write_text(s)
+          print("M5.29 unconditional flip/source gates and valid-image-only GPU pixel readback installed")
+          PY
+          grep -q 'M5.29 FLIP_GATE' rpcs3-src/rpcs3/Emu/RSX/VK/VKPresent.cpp
+          grep -q 'M5.29 SOURCE_GATE' rpcs3-src/rpcs3/Emu/RSX/VK/VKPresent.cpp
+          grep -q 'M5.28 GPU_PREFLIP' rpcs3-src/rpcs3/Emu/RSX/VK/VKPresent.cpp
+          git -C rpcs3-src diff --check
+
           rm -rf build-kk-host kk-host-tools
           meson setup build-kk-host mesa-src \
             --buildtype=release \
