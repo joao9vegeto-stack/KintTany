@@ -2807,6 +2807,67 @@ jobs:
           grep -q 'M5.28 GPU_PREFLIP' rpcs3-src/rpcs3/Emu/RSX/VK/VKPresent.cpp
           git -C rpcs3-src diff --check
 
+          # M5.30: The physical M5.29 test proved valid preflip source images
+          # are already black on the GPU (98% black at sample 180); this is
+          # before swapchain presentation. Test missing framebuffer -> texture
+          # synchronization using RPCS3's existing strict-flush correctness
+          # path, isolating the change to BLUS30401. Ascension stays unchanged.
+          # Add alpha-channel pixel readback so a failed visual test still
+          # distinguishes transparent-black surfaces from missing RGB data.
+          python3 - <<'PY'
+          from pathlib import Path
+          p=Path("rpcs3-src/rpcs3/Emu/System.cpp")
+          s=p.read_text()
+          needle='g_cfg.video.vk.use_rebar_upload_heap.set(false);'
+          assert s.count(needle)==1, f"M5.30 ReBAR anchor: {s.count(needle)}"
+          s=s.replace(needle,needle+'''
+                          // M5.30 BLUS30401: force full framebuffer/texture
+                          // coherency when KosmicKrisp reuses render targets.
+                          const bool m530_before_strict = g_cfg.video.strict_texture_flushing.get();
+                          g_cfg.video.strict_texture_flushing.set(true);
+                          sys_log.notice("PsTJon M5.30 PRINCE_STRICT_FLUSH: BLUS30401 strict_texture_flushing %d->1; KK framebuffer->texture hazards", m530_before_strict);''',1)
+          assert 'M5.30 PRINCE_STRICT_FLUSH' in s
+          p.write_text(s)
+
+          p=Path("rpcs3-src/rpcs3/Emu/RSX/VK/VKPresent.cpp")
+          s=p.read_text()
+          needle='''rsx_log.notice("PsTJon M5.28 GPU_PREFLIP frame=%u samples=%u black=%u black_pct=%u rgb_sum_mean=%u size=%ux%u format=%u",'''
+          assert s.count(needle)==1, f"M5.30 preflip anchor {s.count(needle)}"
+          addition='''// M5.30: interrogate the exact SAME GPU-copied image,
+                          // before swapchain presentation, including alpha.
+                          // This is a bounded diagnostic, only six selected
+                          // frames and only on BLUS30401.
+                          u32 alpha_zero = 0, alpha_opaque = 0;
+                          u32 dark_opaque = 0, colored_transparent = 0;
+                          const u32 m530_dx = std::max(1u, buffer_width / 80u);
+                          const u32 m530_dy = std::max(1u, buffer_height / 80u);
+                          for (u32 y = buffer_height / 8u; y < buffer_height * 7u / 8u; y += m530_dy)
+                          {
+                              for (u32 x = buffer_width / 8u; x < buffer_width * 7u / 8u; x += m530_dx)
+                              {
+                                  const usz off = (static_cast<usz>(y) * buffer_width + x) * 4u;
+                                  if (off + 3u >= sshot_frame.size()) continue;
+                                  const u32 csum = static_cast<u32>(sshot_frame[off]) + sshot_frame[off + 1u] + sshot_frame[off + 2u];
+                                  const u32 alpha = sshot_frame[off + 3u];
+                                  if (alpha == 0u) ++alpha_zero;
+                                  if (alpha == 255u) ++alpha_opaque;
+                                  if (csum <= 30u && alpha == 255u) ++dark_opaque;
+                                  if (csum > 30u && alpha == 0u) ++colored_transparent;
+                              }
+                          }
+                          rsx_log.notice("PsTJon M5.30 GPU_ALPHA: frame=%u samples=%u alpha_zero=%u alpha_opaque=%u dark_opaque=%u colored_transparent=%u",
+                              m529_valid_present_count, sampled, alpha_zero, alpha_opaque,
+                              dark_opaque, colored_transparent);
+                          '''
+          s=s.replace(needle,addition+needle,1)
+          assert 'M5.30 GPU_ALPHA' in s
+          p.write_text(s)
+          print("M5.30: BLUS30401 strict framebuffer texture flushing plus GPU alpha/RGB readback")
+          PY
+          grep -q 'M5.30 PRINCE_STRICT_FLUSH' rpcs3-src/rpcs3/Emu/System.cpp
+          grep -q 'M5.30 GPU_ALPHA' rpcs3-src/rpcs3/Emu/RSX/VK/VKPresent.cpp
+          git -C rpcs3-src diff --check
+
           rm -rf build-kk-host kk-host-tools
           meson setup build-kk-host mesa-src \
             --buildtype=release \
