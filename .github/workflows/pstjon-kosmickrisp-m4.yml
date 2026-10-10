@@ -6,6 +6,9 @@ on:
     branches: [PsTJon-KosmicKrisp]
   workflow_dispatch:
 
+permissions:
+  contents: write
+
 concurrency:
   group: pstjon-kosmickrisp-m5
   cancel-in-progress: true
@@ -3138,6 +3141,32 @@ jobs:
           git -C rpcs3-src diff --check
           git -C mesa-src diff --check
 
+          # M5.35: NPUB30424 M5.34 physical test kept correct textures,
+          # had no query-pool crash, but logged eight blocking Vulkan pipeline
+          # compilations totaling 3.43 s (max 668 ms).
+          # Only this title tries two pipeline compiler workers. Preserve the
+          # one-worker disk preload and every other game's one-worker policy.
+          python3 - <<'PY'
+          from pathlib import Path
+          p = Path("rpcs3-src/rpcs3/Emu/RSX/VK/VKGSRender.cpp")
+          s = p.read_text()
+          old_count = "preferred_compiler_threads = 1;"
+          old_log = 'rsx_log.notice("PsTJon M5.2: KosmicKrisp bootstrap pipeline compiler limited to 1 worker");'
+          assert s.count(old_count) == 1, "M5.35 expected exactly one old KK worker assignment"
+          assert s.count(old_log) == 1, "M5.35 expected exactly one old KK worker log"
+          s = s.replace(old_count,
+              'preferred_compiler_threads = Emu.GetTitleID() == "NPUB30424" ? 2 : 1;', 1)
+          s = s.replace(old_log,
+              'rsx_log.notice("PsTJon M5.35 KK_PIPELINE_WORKERS: TitleID=%s workers=%d (disk preload remains 1)", Emu.GetTitleID(), preferred_compiler_threads);', 1)
+          assert 'Emu.GetTitleID() == "NPUB30424" ? 2 : 1' in s
+          assert "M5.34 NPUB30424_OQ_RESTORE" in Path("rpcs3-src/rpcs3/Emu/System.cpp").read_text()
+          assert "PSTJON_KK_OQ64K" in Path("mesa-src/src/kosmickrisp/vulkan/kk_device.c").read_text()
+          p.write_text(s)
+          print("M5.35: NPUB30424 2 pipeline workers; other titles + disk preload remain 1; ZCull untouched: PASS")
+          PY
+          grep -q 'M5.35 KK_PIPELINE_WORKERS' rpcs3-src/rpcs3/Emu/RSX/VK/VKGSRender.cpp
+          git -C rpcs3-src diff --check
+
           rm -rf build-kk-host kk-host-tools
           meson setup build-kk-host mesa-src \
             --buildtype=release \
@@ -3349,13 +3378,13 @@ jobs:
           codesign -d --entitlements :- "$APP" 2>&1 | tee pstjon-entitlements.txt
           (
             cd package
-            ditto -c -k --sequesterRsrc --keepParent Payload "$GITHUB_WORKSPACE/PsTJon-KK-M5.24.ipa"
+            ditto -c -k --sequesterRsrc --keepParent Payload "$GITHUB_WORKSPACE/PsTJon-KK-M5.35.ipa"
           )
-          shasum -a 256 PsTJon-KK-M5.24.ipa
+          shasum -a 256 PsTJon-KK-M5.35.ipa
       - name: Build report
         run: |
           {
-            echo "PsTJon M5.24 - Metal GPU render-pass attachment store diagnostic; no claimed visual fix"
+            echo "PsTJon M5.35 - NPUB30424 two-worker pipeline compilation A/B; M5.34 ZCull and all other title profiles retained; physical FPS validation required"
             echo "RPCS3 ios-port: $RPCS3_IOS_SHA"
             echo "Shell bundle id: com.xitrix.RPCS3"
             echo "Vulkan provider: KOSMICKRISP"
@@ -3363,15 +3392,15 @@ jobs:
             echo "Volk: $VOLK_SHA"
             echo "FFmpeg: $FFMPEG_VERSION"
             echo "Core: $(shasum -a 256 libRPCS3Core.dylib | awk '{print $1}')"
-            echo "IPA: $(shasum -a 256 PsTJon-KK-M5.24.ipa | awk '{print $1}')"
-          } > PsTJon-KK-M5.24-build.txt
+            echo "IPA: $(shasum -a 256 PsTJon-KK-M5.35.ipa | awk '{print $1}')"
+          } > PsTJon-KK-M5.35-build.txt
 
       - uses: actions/upload-artifact@v4
         with:
-          name: PsTJon-KK-m05-24-metal-gpu-render-test-IPA
+          name: PsTJon-KK-m05-35-prince-pipeline-2w-IPA
           path: |
-            PsTJon-KK-M5.24.ipa
-            PsTJon-KK-M5.24-build.txt
+            PsTJon-KK-M5.35.ipa
+            PsTJon-KK-M5.35-build.txt
             pstjon-entitlements.txt
             M5-rpcs3-patch-stat.txt
             M4-mesa-patch-stat.txt
@@ -3385,3 +3414,19 @@ jobs:
             M4-driver-otool.txt
           if-no-files-found: error
           compression-level: 0
+
+      # Best-effort direct release asset: accessible on iPhone without
+      # extracting the Actions ZIP. Artifact step above stays authoritative.
+      - name: Publish direct M5.35 IPA
+        if: success()
+        continue-on-error: true
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euxo pipefail
+          gh release create pstjon-kk-m5.35 PsTJon-KK-M5.35.ipa \
+            --target "$GITHUB_SHA" \
+            --title "PsTJon KosmicKrisp M5.35" \
+            --notes "Experimental PsTJon/RPCS3 KosmicKrisp on iOS. NPUB30424 only: two pipeline compiler workers for A/B performance validation. M5.34 hardware ZCull preserved; all other games unchanged." \
+            --latest=false
+          gh release view pstjon-kk-m5.35 --json url,assets
