@@ -3282,6 +3282,96 @@ jobs:
           git -C rpcs3-src diff --check
           git -C mesa-src diff --check
 
+          # M6.1 - physical test diagnostics (4 games in a single log/video):
+          # NPUB30632: M6.0.1 set hardware ZCull ON but the older M5.33
+          # block later set it OFF again, matching the remaining dark scene.
+          # BLUS30401: ZCull actually stayed ON and the scene became visible.
+          # BCUS98232: changing camera position toggles the damaged scene;
+          # capture additional pre-present pixels without changing render policy.
+          # NPUB30424: 112 "Out of free occlusion slots. Forcing hard sync"
+          # warnings; A/B relaxed synchronization for THIS title only,
+          # preserving real ZCull, WCB and the 64K/256 allocation.
+          python3 - <<'PY'
+          from pathlib import Path
+          system_path=Path("rpcs3-src/rpcs3/Emu/System.cpp")
+          s=system_path.read_text()
+          needle='if (m_title_id == "NPUB30632")'
+          assert s.count(needle)==1, f"M6.1 digital Prince profile count={s.count(needle)}"
+          i=s.index(needle)
+          end=s.find('#endif',i)
+          assert 0<end-i<1600, "M6.1 NPUB30632 policy guard changed"
+          digital=s[i:end]
+          old='g_cfg.video.disable_zcull_queries.set(true);'
+          assert digital.count(old)==1, "M6.1 expected one late M5.33 ZCull-disable"
+          digital=digital.replace(old,'''g_cfg.video.disable_zcull_queries.set(false);
+                              // Physical M6.0.1: late M5.33 override erroneously
+                              // cancelled OQ_PARITY; hardware queries are required
+                              // for the BLUS30401-like rendering path.''',1)
+          old_log='PsTJon M5.33 NPUB30632_CROSS_RELEASE: DisableZCull %d->1 WriteColorBuffers %d->1; NPUB=1 BLUS profile remains unchanged'
+          new_log='PsTJon M6.1 NPUB_QUERY_ORDER_FIX: DisableZCull %d->0 WriteColorBuffers %d->1; real hardware query retained'
+          assert digital.count(old_log)==1, "M6.1 expected M5.33 NPUB policy log"
+          digital=digital.replace(old_log,new_log,1)
+          s=s[:i]+digital+s[end:]
+          assert 'PsTJon M6.0.1 OQ_PARITY' in s
+
+          # A/B Prince 2008 forced hard ZCull synchronization. No other game's
+          # query results or synchronization policy may be modified.
+          anchor='if (m_title_id == "NPUB30424")'
+          assert s.count(anchor)==1, "M6.1 NPUB30424 policy insertion anchor"
+          i=s.index(anchor)
+          end=s.find('#endif',i)
+          assert 0<end-i<1600, "M6.1 NPUB30424 block changed"
+          prince=s[i:end]
+          needle='setenv("PSTJON_KK_OQ64K", "1", 1);'
+          assert prince.count(needle)==1
+          prince=prince.replace(needle,needle+'''
+                              const bool old_relaxed_zcull = g_cfg.video.relaxed_zcull_sync.get();
+                              g_cfg.video.relaxed_zcull_sync.set(true);
+                              sys_log.notice("PsTJon M6.1 PRINCE_RELAXED_ZCULL_AB: prior=%d now=1, preserve HW occlusion; compare hard-sync warnings", old_relaxed_zcull);''',1)
+          s=s[:i]+prince+s[end:]
+          assert s.count("M6.1 PRINCE_RELAXED_ZCULL_AB")==1
+          system_path.write_text(s)
+
+          # Extend existing sparse GPU preflip probes to Ascension, where
+          # moving the camera can change incorrect texture/lighting content.
+          # Keep the original BLUS diagnostic, reset probe counts per title,
+          # and sample late gameplay rather than only startup/loading screens.
+          present_path=Path("rpcs3-src/rpcs3/Emu/RSX/VK/VKPresent.cpp")
+          s=present_path.read_text()
+          original='const bool m528_is_prince = Emu.GetTitleID() == "BLUS30401";'
+          assert s.count(original)==1, "M6.1 original preflip title selector changed"
+          newer='''static std::string m61_preflip_previous_title;
+                              const auto m61_preflip_title = Emu.GetTitleID();
+                              if (m61_preflip_title != m61_preflip_previous_title)
+                              {
+                                  m61_preflip_previous_title = m61_preflip_title;
+                                  m528_frame_counter = 0;
+                              }
+                              const bool m528_is_prince = (m61_preflip_title == "BLUS30401" ||
+                                  m61_preflip_title == "NPUB30632" ||
+                                  m61_preflip_title == "BCUS98232");'''
+          s=s.replace(original,newer,1)
+          # NPUB30632 was already captured by M5.33 through separate title
+          # rewrite; the OR is harmless and preserves that original intent.
+          original='m528_frame_counter == 900'
+          assert s.count(original)==1, "M6.1 expected M5.29/30 frame-900 preflip anchor"
+          s=s.replace(original,'''(m528_frame_counter == 900 ||
+                                       m528_frame_counter == 1800 ||
+                                       m528_frame_counter == 2400 ||
+                                       m528_frame_counter == 3600)''',1)
+          assert s.count("M5.28 GPU_PREFLIP")==1
+          assert s.count('m61_preflip_previous_title')==3
+          present_path.write_text(s)
+          assert Path("mesa-src/src/kosmickrisp/vulkan/kk_device.c").read_text().count('PSTJON_KK_OQ64K')>=1
+          assert 'M5.34 KK_OQ_ALLOC_FAIL' in Path("mesa-src/src/kosmickrisp/vulkan/kk_query_pool.c").read_text()
+          print("M6.1: NPUB late-ZCull order FIX, Prince relaxed-ZCull A/B, Ascension/Prince GPU preflip diagnostics PASS")
+          PY
+          grep -q 'M6.1 NPUB_QUERY_ORDER_FIX' rpcs3-src/rpcs3/Emu/System.cpp
+          grep -q 'M6.1 PRINCE_RELAXED_ZCULL_AB' rpcs3-src/rpcs3/Emu/System.cpp
+          grep -q 'm61_preflip_previous_title' rpcs3-src/rpcs3/Emu/RSX/VK/VKPresent.cpp
+          git -C rpcs3-src diff --check
+          git -C mesa-src diff --check
+
           rm -rf build-kk-host kk-host-tools
           meson setup build-kk-host mesa-src \
             --buildtype=release \
@@ -3493,13 +3583,13 @@ jobs:
           codesign -d --entitlements :- "$APP" 2>&1 | tee pstjon-entitlements.txt
           (
             cd package
-            ditto -c -k --sequesterRsrc --keepParent Payload "$GITHUB_WORKSPACE/PsTJon-KK-M6.0.1.ipa"
+            ditto -c -k --sequesterRsrc --keepParent Payload "$GITHUB_WORKSPACE/PsTJon-KK-M6.1.ipa"
           )
-          shasum -a 256 PsTJon-KK-M6.0.1.ipa
+          shasum -a 256 PsTJon-KK-M6.1.ipa
       - name: Build report
         run: |
           {
-            echo "PsTJon M6.0.1 - query allocator parity A/B for Ascension and Forgotten Sands BLUS/NPUB; CPU-side present cadence telemetry; 30 FPS NOT validated"
+            echo "PsTJon M6.1 - fix digital Forgotten Sands late ZCull override, Prince 2008 relaxed query sync A/B, extend Ascension preflip diagnostics; 30 FPS NOT validated"
             echo "RPCS3 ios-port: $RPCS3_IOS_SHA"
             echo "Shell bundle id: com.xitrix.RPCS3"
             echo "Vulkan provider: KOSMICKRISP"
@@ -3507,15 +3597,15 @@ jobs:
             echo "Volk: $VOLK_SHA"
             echo "FFmpeg: $FFMPEG_VERSION"
             echo "Core: $(shasum -a 256 libRPCS3Core.dylib | awk '{print $1}')"
-            echo "IPA: $(shasum -a 256 PsTJon-KK-M6.0.1.ipa | awk '{print $1}')"
-          } > PsTJon-KK-M6.0.1-build.txt
+            echo "IPA: $(shasum -a 256 PsTJon-KK-M6.1.ipa | awk '{print $1}')"
+          } > PsTJon-KK-M6.1-build.txt
 
       - uses: actions/upload-artifact@v4
         with:
-          name: PsTJon-KK-m06-00-zcull-parity-IPA
+          name: PsTJon-KK-m06-1-zcull-order-render-fps-IPA
           path: |
-            PsTJon-KK-M6.0.1.ipa
-            PsTJon-KK-M6.0.1-build.txt
+            PsTJon-KK-M6.1.ipa
+            PsTJon-KK-M6.1-build.txt
             pstjon-entitlements.txt
             M5-rpcs3-patch-stat.txt
             M4-mesa-patch-stat.txt
@@ -3532,16 +3622,16 @@ jobs:
 
       # Best-effort direct release asset: accessible on iPhone without
       # extracting the Actions ZIP. Artifact step above stays authoritative.
-      - name: Publish direct M6.0.1 IPA
+      - name: Publish direct M6.1 IPA
         if: success()
         continue-on-error: true
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
           set -euxo pipefail
-          gh release create pstjon-kk-m6.0.1 PsTJon-KK-M6.0.1.ipa \
+          gh release create pstjon-kk-m6.1 PsTJon-KK-M6.1.ipa \
             --target "$GITHUB_SHA" \
-            --title "PsTJon KosmicKrisp M6.0.1" \
-            --notes "Experimental M6.0.1: scope ZCull hardware queries+64K allocator to Ascension and both Forgotten Sands variants, preserve M5.35 Prince 2008, log CPU-side present intervals; physical graphics/FPS test required." \
+            --title "PsTJon KosmicKrisp M6.1" \
+            --notes "Experimental M6.1: fix NPUB30632 late ZCull disable, Prince 2008 relaxed synchronization A/B and Ascension preflip sampling. Retains BLUS30401 visible scene. Physical visual and FPS tests required." \
             --latest=false
-          gh release view pstjon-kk-m6.0.1 --json url,assets
+          gh release view pstjon-kk-m6.1 --json url,assets
