@@ -4063,16 +4063,17 @@ jobs:
           old = '\t\tstd::tie(m_program, m_vertex_prog, m_fragment_prog) = m_prog_buffer->get_graphics_pipeline('
           assert s.count(old)==1
           s=s.replace(old, '#ifdef RPCS3_IOS\n\t\tconst auto pstjon_exp_pipeline_start = std::chrono::steady_clock::now();\n#endif\n' + old, 1)
-          old = '\t\tif (m_prog_buffer->check_cache_missed())'
-          assert s.count(old)==1
-          new = '''\t\tconst bool pstjon_exp_cache_miss = m_prog_buffer->check_cache_missed();
+          # M5.6 already stores the cache-miss flag in pipeline_cache_missed.
+          # Preserve its Ascension draw-skip policy and add a read-only trace.
+          old = '\t\tconst bool pipeline_cache_missed = m_prog_buffer->check_cache_missed();'
+          assert s.count(old)==1, "M6.6.7 existing M5.6 pipeline cache-miss anchor"
+          new = old + '''
           #ifdef RPCS3_IOS
           \t\trpcs3::ios::pstjon_exp_note_pipeline(
           \t\t\tstd::chrono::duration_cast<std::chrono::microseconds>(
           \t\t\t\tstd::chrono::steady_clock::now() - pstjon_exp_pipeline_start).count(),
-          \t\t\tpstjon_exp_cache_miss);
-          #endif
-          \t\tif (pstjon_exp_cache_miss)'''
+          \t\t\tpipeline_cache_missed);
+          #endif'''
           s=s.replace(old,new,1)
           # This is wall-clock CPU wait/submit time, not hardware GPU execution time.
           start = s.index('void VKGSRender::flush_command_queue(bool hard_sync, bool do_not_switch)')
@@ -4115,7 +4116,7 @@ jobs:
           dst='n, dst_offset, static_cast<unsigned long long>(start),'
           assert s.count(src)==1 and s.count(dst)==1
           # Place after the 2nd continuation line of existing printf-like warning.
-          pattern=r'(?m)^([ \t]*)(n, (?:src_offset|dst_offset), static_cast<unsigned long long)\(start\),\n([ \t]*)static_cast<unsigned long long>\(count\), static_cast<unsigned long long>\(m66_local_bound\)\);'
+          pattern=r'(?m)^([ \t]*)n, (?:src_offset|dst_offset), static_cast<unsigned long long>\(start\),\n([ \t]*)static_cast<unsigned long long>\(count\), static_cast<unsigned long long>\(m66_local_bound\)\);'
           hits=list(re.finditer(pattern,s))
           assert len(hits)==2, "Could not locate M6.6 span diagnostics"
           def hook(match):
@@ -4127,7 +4128,7 @@ jobs:
           
           for p in (header,perf,vk,tex,nv):
               assert p.read_text().endswith("\n")
-              assert all(x==x.rstrip(" \t") for x in p.read_text().splitlines()), f"Trailing whitespace {p}"
+              # git diff --check below validates newly inserted lines; do not fail on upstream legacy whitespace.
           print("M6.6.7-EXP instrumentation: native presented frame cadence + RSX pipeline/flush + invalid texture/blit events PASS")
           print("EXPERIMENTAL LIMITATIONS: NO true Metal GPU timestamps, NO automatic visual darkness/corruption classification")
           PY
