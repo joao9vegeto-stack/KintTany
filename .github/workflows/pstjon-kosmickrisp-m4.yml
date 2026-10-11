@@ -3807,9 +3807,303 @@ jobs:
           # C++ rejected the leading if at nv3089.cpp:199.
           # M6.6.3: strip trailing whitespace from injected C++ lines,
           # including the blank guard terminator (diff --check line 197).
+          # M6.6.4: M6.6.3 still creates an indentation-only line
+          # from the M5.7 text before the expression; git diff --check
+          # detects whitespace on line 197 despite trimming guard itself.
+          # Normalize ALL generated C++ lines (not just the snippet),
+          # preserving source order and newlines, then verify both guards
+          # are before the full original expression and no whitespace-only
+          # line remains. This changes no executable logic.
           guard='\n'.join(line.rstrip() for line in guard.split('\n'))
           s=s.replace(needle,guard+needle,1)
-          assert "M6.6 ASCENSION_DST_SPAN" in s and "M6.6 ASCENSION_SRC_SPAN" in s
+          s='\n'.join(line.rstrip() for line in s.splitlines())+'\n'
+          import re
+          expr='const u32 src_line_length = (std::min<u32>(in_w,'
+          p_d=s.index('M6.6 ASCENSION_DST_SPAN')
+          p_e=s.index(expr)
+          assert p_d < p_e and '#endif' in s[p_d:p_e], "M6.6.4 injection must precede complete src_line_length expression"
+          assert not re.search(r'(?m)^[ \t]+
+          # Actual registered copy from RSX last-frame dump:
+          # 0xf62d000 + 4096*286 + 4096 = 0xf74c000 VALID,
+          # 0xf98a100 + 4*32 = 0xf98a180 INVALID.
+          bound=0x0f900000
+          assert 0x0f62d000 + 4096*286 + 4096 < bound
+          assert 0x0f98a100 + 32*4 > bound
+          # Unexpected dimension overflow must not wrap because u64 used.
+          assert 0xffffffff + 4096*1024 > bound
+          print("M6.6: full 64-bit 2D local RSX source/destination span guard PASS")
+          PY
+          grep -q 'M6.6 ASCENSION_DST_SPAN' rpcs3-src/rpcs3/Emu/RSX/NV47/HW/nv3089.cpp
+          grep -q 'M6.6 ASCENSION_SRC_SPAN' rpcs3-src/rpcs3/Emu/RSX/NV47/HW/nv3089.cpp
+          git -C rpcs3-src diff --check
+          git -C mesa-src diff --check
+
+          rm -rf build-kk-host kk-host-tools
+          meson setup build-kk-host mesa-src \
+            --buildtype=release \
+            -Dplatforms=macos \
+            -Dvulkan-drivers=kosmickrisp \
+            -Dgallium-drivers= \
+            -Dopengl=false \
+            -Dzstd=disabled \
+            -Dmesa-clc=enabled \
+            -Dprecomp-compiler=enabled \
+            --prefer-static
+          meson compile -C build-kk-host mesa_clc vtn_bindgen2 kk_clc
+          mkdir -p kk-host-tools/bin
+          cp build-kk-host/src/compiler/clc/mesa_clc kk-host-tools/bin/
+          cp build-kk-host/src/compiler/spirv/vtn_bindgen2 kk-host-tools/bin/
+          cp build-kk-host/src/kosmickrisp/clc/kk_clc kk-host-tools/bin/
+          chmod +x kk-host-tools/bin/*
+
+          mkdir -p kk-toolchain
+          cat > kk-toolchain/ios-clang <<'EOF'
+          #!/bin/bash
+          set -euo pipefail
+          SDKROOT="$(xcrun --sdk iphoneos --show-sdk-path)"
+          exec xcrun --sdk iphoneos clang -target arm64-apple-ios17.4 -isysroot "$SDKROOT" "$@"
+          EOF
+          cat > kk-toolchain/ios-clangxx <<'EOF'
+          #!/bin/bash
+          set -euo pipefail
+          SDKROOT="$(xcrun --sdk iphoneos --show-sdk-path)"
+          exec xcrun --sdk iphoneos clang++ -target arm64-apple-ios17.4 -isysroot "$SDKROOT" "$@"
+          EOF
+          cat > kk-toolchain/ios-ar <<'EOF'
+          #!/bin/bash
+          set -euo pipefail
+          exec xcrun --sdk iphoneos ar "$@"
+          EOF
+          cat > kk-toolchain/ios-strip <<'EOF'
+          #!/bin/bash
+          set -euo pipefail
+          exec xcrun --sdk iphoneos strip "$@"
+          EOF
+          chmod +x kk-toolchain/*
+          cat > kk-ios-arm64.cross <<EOF
+          [binaries]
+          c = '$GITHUB_WORKSPACE/kk-toolchain/ios-clang'
+          cpp = '$GITHUB_WORKSPACE/kk-toolchain/ios-clangxx'
+          objc = '$GITHUB_WORKSPACE/kk-toolchain/ios-clang'
+          ar = '$GITHUB_WORKSPACE/kk-toolchain/ios-ar'
+          strip = '$GITHUB_WORKSPACE/kk-toolchain/ios-strip'
+
+          [host_machine]
+          system = 'darwin'
+          cpu_family = 'aarch64'
+          cpu = 'arm64'
+          endian = 'little'
+
+          [properties]
+          needs_exe_wrapper = true
+          EOF
+
+          unset LDFLAGS CPPFLAGS PKG_CONFIG_PATH
+          export PATH="$GITHUB_WORKSPACE/kk-host-tools/bin:$PATH"
+          rm -rf build-kk-ios
+          meson setup build-kk-ios mesa-src \
+            --cross-file "$GITHUB_WORKSPACE/kk-ios-arm64.cross" \
+            --buildtype=release \
+            --wrap-mode=nodownload \
+            -Dplatforms=ios \
+            -Dvulkan-drivers=kosmickrisp \
+            -Dgallium-drivers= \
+            -Dopengl=false \
+            -Dzstd=disabled \
+            -Dmesa-clc=system \
+            -Dprecomp-compiler=system \
+            -Dllvm=disabled \
+            -Dspirv-tools=disabled \
+            --prefer-static
+
+          ninja -C build-kk-ios src/kosmickrisp/libKosmicKrisp.dylib
+          KK_DYLIB="$GITHUB_WORKSPACE/build-kk-ios/src/kosmickrisp/libKosmicKrisp.dylib"
+          test -f "$KK_DYLIB"
+          mkdir -p "$GITHUB_WORKSPACE/deps/kosmickrisp-ios/lib" "$GITHUB_WORKSPACE/deps/kosmickrisp-ios/include"
+          cp "$KK_DYLIB" "$GITHUB_WORKSPACE/deps/kosmickrisp-ios/lib/libKosmicKrisp.dylib"
+          # Package the complete Mesa public include tree so transitive Vulkan,
+          # vk_video and future public header dependencies are present as one SDK.
+          cp -R "$GITHUB_WORKSPACE/mesa-src/include/." "$GITHUB_WORKSPACE/deps/kosmickrisp-ios/include/"
+
+          file "$KK_DYLIB" | tee M4-kosmickrisp-file.txt
+          lipo -info "$KK_DYLIB" | tee M4-kosmickrisp-lipo.txt
+          xcrun vtool -show-build "$KK_DYLIB" | tee M4-kosmickrisp-build-version.txt
+          otool -D "$KK_DYLIB" | tee M4-kosmickrisp-id.txt
+          otool -L "$KK_DYLIB" | tee M4-kosmickrisp-otool.txt
+          nm -gU "$KK_DYLIB" | tee M4-kosmickrisp-symbols.txt
+          grep -q 'vk_icdGetInstanceProcAddr' M4-kosmickrisp-symbols.txt
+          grep -q '@loader_path/libKosmicKrisp.dylib' M4-kosmickrisp-id.txt
+          grep -E -qi 'platform[[:space:]]+IOS|platform[[:space:]]+2' M4-kosmickrisp-build-version.txt
+
+          rm -rf deps/volk
+          git clone --filter=blob:none --no-checkout https://github.com/zeux/volk.git deps/volk
+          git -C deps/volk fetch --depth=1 origin "$VOLK_SHA"
+          git -C deps/volk checkout --detach "$VOLK_SHA"
+          test "$(git -C deps/volk rev-parse HEAD)" = "$VOLK_SHA"
+          test -f deps/volk/volk.c
+          test -f deps/volk/volk.h
+
+          echo "RPCS3_KOSMICKRISP_ROOT=$GITHUB_WORKSPACE/deps/kosmickrisp-ios" >> "$GITHUB_ENV"
+          echo "RPCS3_VOLK_ROOT=$GITHUB_WORKSPACE/deps/volk" >> "$GITHUB_ENV"
+
+      - name: Build FFmpeg 8.1.1 for iOS
+        run: |
+          set -euxo pipefail
+          mkdir -p deps/ffmpeg-src deps/ffmpeg-ios
+          curl -L --fail --retry 4 "https://ffmpeg.org/releases/ffmpeg-${FFMPEG_VERSION}.tar.xz" -o deps/ffmpeg.tar.xz
+          tar -xf deps/ffmpeg.tar.xz -C deps/ffmpeg-src --strip-components=1
+          SDKROOT="$(xcrun --sdk iphoneos --show-sdk-path)"
+          CC="$(xcrun --sdk iphoneos -f clang)"
+          CXX="$(xcrun --sdk iphoneos -f clang++)"
+          cd deps/ffmpeg-src
+          ./configure \
+            --prefix="$GITHUB_WORKSPACE/deps/ffmpeg-ios" \
+            --target-os=darwin --arch=arm64 --cc="$CC" --cxx="$CXX" --sysroot="$SDKROOT" \
+            --enable-cross-compile --enable-pic --disable-shared --enable-static \
+            --disable-programs --disable-doc --disable-debug --disable-autodetect \
+            --extra-cflags="-arch arm64 -miphoneos-version-min=${IOS_DEPLOYMENT_TARGET}" \
+            --extra-cxxflags="-arch arm64 -miphoneos-version-min=${IOS_DEPLOYMENT_TARGET}" \
+            --extra-ldflags="-arch arm64 -miphoneos-version-min=${IOS_DEPLOYMENT_TARGET} -isysroot $SDKROOT"
+          make -j3
+          make install
+          test -f "$GITHUB_WORKSPACE/deps/ffmpeg-ios/lib/libavcodec.a"
+          echo "RPCS3_FFMPEG_ROOT=$GITHUB_WORKSPACE/deps/ffmpeg-ios" >> "$GITHUB_ENV"
+
+      - name: Build native llvm-tblgen
+        run: |
+          set -euxo pipefail
+          LLVM_SRC="$GITHUB_WORKSPACE/rpcs3-src/3rdparty/llvm/llvm/llvm"
+          cmake -S "$LLVM_SRC" -B llvm-host -G Ninja \
+            -DCMAKE_BUILD_TYPE=Release -DLLVM_TARGETS_TO_BUILD=AArch64 \
+            -DLLVM_INCLUDE_TESTS=OFF -DLLVM_INCLUDE_EXAMPLES=OFF \
+            -DLLVM_INCLUDE_BENCHMARKS=OFF -DLLVM_INCLUDE_DOCS=OFF
+          cmake --build llvm-host --target llvm-tblgen -j3
+          echo "LLVM_NATIVE_TOOL_DIR=$GITHUB_WORKSPACE/llvm-host/bin" >> "$GITHUB_ENV"
+
+      - name: Configure RPCS3Core for iPhone
+        run: |
+          set -euxo pipefail
+          SDKROOT="$(xcrun --sdk iphoneos --show-sdk-path)"
+          CC="$(xcrun --sdk iphoneos --find clang)"
+          CXX="$(xcrun --sdk iphoneos --find clang++)"
+          TARGET="arm64-apple-ios$IOS_DEPLOYMENT_TARGET"
+          CLANG_RESOURCE="$("$CC" --print-resource-dir)"
+          IOS_COMPILER_RT="$CLANG_RESOURCE/lib/darwin/libclang_rt.ios.a"
+          test -s "$IOS_COMPILER_RT"
+          cmake -S rpcs3-src -B build-ios -G Ninja \
+            -DCMAKE_BUILD_TYPE=Release -DCMAKE_SYSTEM_NAME=iOS -DCMAKE_SYSTEM_PROCESSOR=arm64 \
+            -DCMAKE_OSX_SYSROOT="$SDKROOT" -DCMAKE_OSX_ARCHITECTURES=arm64 \
+            -DCMAKE_OSX_DEPLOYMENT_TARGET="$IOS_DEPLOYMENT_TARGET" \
+            -DCMAKE_TRY_COMPILE_TARGET_TYPE=STATIC_LIBRARY \
+            -DCMAKE_C_COMPILER="$CC" -DCMAKE_CXX_COMPILER="$CXX" \
+            -DCMAKE_C_COMPILER_TARGET="$TARGET" -DCMAKE_CXX_COMPILER_TARGET="$TARGET" \
+            -DCMAKE_CXX_STANDARD_LIBRARIES="$IOS_COMPILER_RT" \
+            -DRPCS3_FRONTEND=IOS -DUSE_VULKAN=ON \
+            -DWITH_LLVM=ON -DBUILD_LLVM=ON -DSTATIC_LINK_LLVM=ON \
+            -DLLVM_NATIVE_TOOL_DIR="$LLVM_NATIVE_TOOL_DIR" \
+            -DLLVM_TABLEGEN="$LLVM_NATIVE_TOOL_DIR/llvm-tblgen" \
+            -DLLVM_INSTALL_TOOLCHAIN_ONLY=ON -DLLVM_BUILD_TOOLS=OFF \
+            -DLLVM_BUILD_UTILS=OFF -DLLVM_INCLUDE_UTILS=OFF \
+            -DLLVM_TARGETS_TO_BUILD=AArch64 -DLLVM_INCLUDE_TESTS=OFF \
+            -DLLVM_INCLUDE_EXAMPLES=OFF -DLLVM_INCLUDE_BENCHMARKS=OFF \
+            -DBUILD_RPCS3_TESTS=OFF -DRUN_RPCS3_TESTS=OFF \
+            -DHAVE_ACCEPT4=0 \
+            -DUSE_PRECOMPILED_HEADERS=OFF -DUSE_NATIVE_INSTRUCTIONS=OFF \
+            -DWITH_DISCORD_RPC=OFF -DWITH_FAUDIO=OFF \
+            -DRPCS3_VULKAN_PROVIDER=KOSMICKRISP \
+            -DRPCS3_KOSMICKRISP_ROOT="$RPCS3_KOSMICKRISP_ROOT" \
+            -DRPCS3_KOSMICKRISP_VERSION="$MESA_KOSMICKRISP_SHA" \
+            -DRPCS3_VOLK_ROOT="$RPCS3_VOLK_ROOT" \
+            -DRPCS3_FFMPEG_ROOT="$RPCS3_FFMPEG_ROOT"
+
+      - name: Build RPCS3Core
+        run: |
+          set -euxo pipefail
+          cmake --build build-ios --target RPCS3Core -j3
+          CORE="$(find build-ios -type f -name 'libRPCS3Core.dylib' -print -quit)"
+          test -n "$CORE"
+          file "$CORE"
+          lipo -info "$CORE"
+          cp "$CORE" "$GITHUB_WORKSPACE/libRPCS3Core.dylib"
+          ccache --show-stats || true
+
+      - name: Repack official RPCS3 shell
+        run: |
+          set -euxo pipefail
+          curl -L --fail --retry 4 "https://github.com/XITRIX/RPCS3-iOS-Releases/releases/download/v0.10.1/RPCS3.ipa" -o RPCS3-official.ipa
+          echo "$OFFICIAL_IPA_SHA256  RPCS3-official.ipa" | shasum -a 256 -c -
+          rm -rf package && mkdir package
+          ditto -x -k RPCS3-official.ipa package
+          APP="package/Payload/RPCS3.app"
+          test "$(/usr/libexec/PlistBuddy -c 'Print :CFBundleIdentifier' "$APP/Info.plist")" = "com.xitrix.RPCS3"
+          cp libRPCS3Core.dylib "$APP/Frameworks/libRPCS3Core.dylib"
+          cp "$RPCS3_KOSMICKRISP_ROOT/lib/libKosmicKrisp.dylib" "$APP/Frameworks/libKosmicKrisp.dylib"
+          otool -L "$APP/Frameworks/libRPCS3Core.dylib" | tee M4-core-otool.txt
+          otool -L "$APP/Frameworks/libKosmicKrisp.dylib" | tee M4-driver-otool.txt
+          grep -q '@loader_path/libKosmicKrisp.dylib' M4-core-otool.txt
+          rm -rf "$APP/_CodeSignature"
+          rm -f "$APP/embedded.mobileprovision"
+          codesign --force --sign - "$APP/Frameworks/libKosmicKrisp.dylib"
+          codesign --force --sign - "$APP/Frameworks/libRPCS3Core.dylib"
+          codesign --force --sign - --entitlements PsTJon.entitlements "$APP"
+          codesign -d --entitlements :- "$APP" 2>&1 | tee pstjon-entitlements.txt
+          (
+            cd package
+            ditto -c -k --sequesterRsrc --keepParent Payload "$GITHUB_WORKSPACE/PsTJon-KK-M6.6.4.ipa"
+          )
+          shasum -a 256 PsTJon-KK-M6.6.4.ipa
+      - name: Build report
+        run: |
+          {
+            echo "PsTJon M6.6 - BCUS98232 full 64-bit local RSX 2D blit source and destination span guards to avoid RSX write exactly at unmapped 0xcf900000; preserve M6.5.1 Dante and previous title policies"
+            echo "RPCS3 ios-port: $RPCS3_IOS_SHA"
+            echo "Shell bundle id: com.xitrix.RPCS3"
+            echo "Vulkan provider: KOSMICKRISP"
+            echo "Mesa/KosmicKrisp: $MESA_KOSMICKRISP_SHA"
+            echo "Volk: $VOLK_SHA"
+            echo "FFmpeg: $FFMPEG_VERSION"
+            echo "Core: $(shasum -a 256 libRPCS3Core.dylib | awk '{print $1}')"
+            echo "IPA: $(shasum -a 256 PsTJon-KK-M6.6.4.ipa | awk '{print $1}')"
+          } > PsTJon-KK-M6.6.4-build.txt
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: PsTJon-KK-m06-6-4-ascension-2d-span-guard-IPA
+          path: |
+            PsTJon-KK-M6.6.4.ipa
+            PsTJon-KK-M6.6.4-build.txt
+            pstjon-entitlements.txt
+            M5-rpcs3-patch-stat.txt
+            M4-mesa-patch-stat.txt
+            M4-kosmickrisp-file.txt
+            M4-kosmickrisp-lipo.txt
+            M4-kosmickrisp-build-version.txt
+            M4-kosmickrisp-id.txt
+            M4-kosmickrisp-otool.txt
+            M4-kosmickrisp-symbols.txt
+            M4-core-otool.txt
+            M4-driver-otool.txt
+          if-no-files-found: error
+          compression-level: 0
+
+      # Best-effort direct release asset: accessible on iPhone without
+      # extracting the Actions ZIP. Artifact step above stays authoritative.
+      - name: Publish direct M6.6.4 IPA
+        if: success()
+        continue-on-error: true
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euxo pipefail
+          gh release create pstjon-kk-m6.6.4 PsTJon-KK-M6.6.4.ipa \
+            --target "$GITHUB_SHA" \
+            --title "PsTJon KosmicKrisp M6.6.4" \
+            --notes "Experimental M6.6: Ascension RSX NV3089 full local-memory read/write span checks for unit-scale 2D copies after unmapped write at 0xcf900000, preserving hardware ZCull and other games. Retains M6.5.1 Dante query-pool reuse. Physical graphics/FPS/crash validation required." \
+            --latest=false
+          gh release view pstjon-kk-m6.6.4 --json url,assets
+,s), "M6.6.4 leftover whitespace-only generated lines"
+          assert s.count('M6.6 ASCENSION_DST_SPAN')==1
+          assert s.count('M6.6 ASCENSION_SRC_SPAN')==1
           assert "M6.4 ASCENSION_SOURCE_OOB_GUARD" in s
           assert "PsTJon v13: consumed Ascension OOB local blit" in s
           p.write_text(s)
@@ -4039,9 +4333,9 @@ jobs:
           codesign -d --entitlements :- "$APP" 2>&1 | tee pstjon-entitlements.txt
           (
             cd package
-            ditto -c -k --sequesterRsrc --keepParent Payload "$GITHUB_WORKSPACE/PsTJon-KK-M6.6.3.ipa"
+            ditto -c -k --sequesterRsrc --keepParent Payload "$GITHUB_WORKSPACE/PsTJon-KK-M6.6.4.ipa"
           )
-          shasum -a 256 PsTJon-KK-M6.6.3.ipa
+          shasum -a 256 PsTJon-KK-M6.6.4.ipa
       - name: Build report
         run: |
           {
@@ -4053,15 +4347,15 @@ jobs:
             echo "Volk: $VOLK_SHA"
             echo "FFmpeg: $FFMPEG_VERSION"
             echo "Core: $(shasum -a 256 libRPCS3Core.dylib | awk '{print $1}')"
-            echo "IPA: $(shasum -a 256 PsTJon-KK-M6.6.3.ipa | awk '{print $1}')"
-          } > PsTJon-KK-M6.6.3-build.txt
+            echo "IPA: $(shasum -a 256 PsTJon-KK-M6.6.4.ipa | awk '{print $1}')"
+          } > PsTJon-KK-M6.6.4-build.txt
 
       - uses: actions/upload-artifact@v4
         with:
-          name: PsTJon-KK-m06-6-3-ascension-2d-span-guard-IPA
+          name: PsTJon-KK-m06-6-4-ascension-2d-span-guard-IPA
           path: |
-            PsTJon-KK-M6.6.3.ipa
-            PsTJon-KK-M6.6.3-build.txt
+            PsTJon-KK-M6.6.4.ipa
+            PsTJon-KK-M6.6.4-build.txt
             pstjon-entitlements.txt
             M5-rpcs3-patch-stat.txt
             M4-mesa-patch-stat.txt
@@ -4078,16 +4372,16 @@ jobs:
 
       # Best-effort direct release asset: accessible on iPhone without
       # extracting the Actions ZIP. Artifact step above stays authoritative.
-      - name: Publish direct M6.6.3 IPA
+      - name: Publish direct M6.6.4 IPA
         if: success()
         continue-on-error: true
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
           set -euxo pipefail
-          gh release create pstjon-kk-m6.6.3 PsTJon-KK-M6.6.3.ipa \
+          gh release create pstjon-kk-m6.6.4 PsTJon-KK-M6.6.4.ipa \
             --target "$GITHUB_SHA" \
-            --title "PsTJon KosmicKrisp M6.6.3" \
+            --title "PsTJon KosmicKrisp M6.6.4" \
             --notes "Experimental M6.6: Ascension RSX NV3089 full local-memory read/write span checks for unit-scale 2D copies after unmapped write at 0xcf900000, preserving hardware ZCull and other games. Retains M6.5.1 Dante query-pool reuse. Physical graphics/FPS/crash validation required." \
             --latest=false
-          gh release view pstjon-kk-m6.6.3 --json url,assets
+          gh release view pstjon-kk-m6.6.4 --json url,assets
