@@ -4462,7 +4462,7 @@ jobs:
           assert s.count(old)>=1,"M6.7.1 no high-precision assignment"
           # Target only the LATE M5.21 policy, NOT earlier unrelated settings.
           a=s.index('// PsTJon v13 control profile')
-          b=s.index('sys_log.notice("PsTJon M6.7 PROFILE_AB:',a)
+          b=s.index('sys_log.notice("PsTJon M6.7 METAL_DIAGNOSTICS_OFF:',a)
           part=s[a:b]
           assert part.count(old)==1,"M6.7.1 Ascension late-profile shader assignment mismatch"
           part=part.replace(old,'g_cfg.video.shader_precision.set(gpu_preset_level::ultra);',1)
