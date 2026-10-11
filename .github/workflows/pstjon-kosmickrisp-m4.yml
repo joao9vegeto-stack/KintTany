@@ -3891,6 +3891,249 @@ jobs:
           git -C rpcs3-src diff --check
           git -C mesa-src diff --check
 
+          # M6.6.7-EXP instrument upstream after all M6.6.6 guards; no graphical behavior changes.
+          python3 - <<'PY'
+          from pathlib import Path
+          import re
+          import textwrap
+          
+          root = Path("rpcs3-src/rpcs3")
+          header = root / "ios/PsTJonExperimentalTelemetry.h"
+          assert not header.exists(), "Experimental header must be new"
+          header.write_text(textwrap.dedent("""\
+          #pragma once
+          // PsTJon M6.6.7-EXP: experimental instrumentation only.
+          // Measurements are in-process estimates, NOT Apple Metal HUD counters.
+          // No framebuffer readback, GPU timestamps or darkness classification yet.
+          #include <cstdint>
+          namespace rpcs3::ios {
+          void pstjon_exp_note_pipeline(std::uint64_t micros, bool cache_miss) noexcept;
+          void pstjon_exp_note_flush(std::uint64_t micros, bool hard_sync) noexcept;
+          void pstjon_exp_note_texture(std::uint32_t offset) noexcept;
+          void pstjon_exp_note_blit(std::uint64_t offset, std::uint64_t length, bool is_source) noexcept;
+          }
+          """))
+          
+          perf = root / "ios/RPCS3IOSPerformance.cpp"
+          s = perf.read_text()
+          old = '#include "RPCS3IOSPerformance.h"'
+          assert s.count(old) == 1
+          s = s.replace(old, old + '\n#include "PsTJonExperimentalTelemetry.h"\n#include "util/logs.hpp"', 1)
+          anchor = 'namespace\n{\nusing sample_clock = std::chrono::steady_clock;'
+          assert s.count(anchor) == 1
+          s = s.replace(anchor, 'LOG_CHANNEL(pstjon_exp_log, "PsTJon EXPERIMENTAL");\n\n' + anchor, 1)
+          anchor = 'performance_registry g_performance_registry;\n}'
+          assert s.count(anchor) == 1
+          extra = textwrap.dedent("""\
+          performance_registry g_performance_registry;
+          
+          // Experimental counters use lock-free atomics on RSX hot paths.
+          // The only log/footprint sampling occurs at most once every 3 seconds.
+          std::atomic<u64> exp_last_frame_ns{0};
+          std::atomic<u64> exp_last_report_ns{0};
+          std::atomic<u64> exp_frames{0};
+          std::atomic<u64> exp_frame_spikes{0};
+          std::atomic<u64> exp_frame_max_ns{0};
+          std::atomic<u64> exp_flushes{0};
+          std::atomic<u64> exp_hard_syncs{0};
+          std::atomic<u64> exp_slow_flushes{0};
+          std::atomic<u64> exp_flush_max_us{0};
+          std::atomic<u64> exp_pipeline_lookups{0};
+          std::atomic<u64> exp_pipeline_misses{0};
+          std::atomic<u64> exp_pipeline_max_us{0};
+          std::atomic<u64> exp_bad_textures{0};
+          std::atomic<u64> exp_bad_sources{0};
+          std::atomic<u64> exp_bad_destinations{0};
+          
+          void exp_update_max(std::atomic<u64>& target, u64 value) noexcept
+          {
+              u64 observed = target.load(std::memory_order_relaxed);
+              while (value > observed &&
+                  !target.compare_exchange_weak(observed, value, std::memory_order_relaxed)) {}
+          }
+          
+          void exp_present_pulse(u32 rsx_load) noexcept
+          {
+              using namespace std::chrono;
+              const u64 now = duration_cast<nanoseconds>(sample_clock::now().time_since_epoch()).count();
+              const u64 prev = exp_last_frame_ns.exchange(now, std::memory_order_relaxed);
+              if (prev && now > prev && now - prev < 10000000000ull)
+              {
+                  const u64 interval = now - prev;
+                  exp_update_max(exp_frame_max_ns, interval);
+                  if (interval > 50000000ull) exp_frame_spikes.fetch_add(1, std::memory_order_relaxed);
+              }
+              exp_frames.fetch_add(1, std::memory_order_relaxed);
+              u64 last = exp_last_report_ns.load(std::memory_order_relaxed);
+              if (!last)
+              {
+                  exp_last_report_ns.compare_exchange_strong(last, now, std::memory_order_relaxed);
+                  return;
+              }
+              if (now <= last || now - last < 3000000000ull ||
+                  !exp_last_report_ns.compare_exchange_strong(last, now, std::memory_order_relaxed))
+                  return;
+              const double sec = static_cast<double>(now - last) / 1e9;
+              const u64 frames = exp_frames.exchange(0, std::memory_order_relaxed);
+              const u64 spikes = exp_frame_spikes.exchange(0, std::memory_order_relaxed);
+              const u64 max_frame = exp_frame_max_ns.exchange(0, std::memory_order_relaxed);
+              const u64 flushes = exp_flushes.exchange(0, std::memory_order_relaxed);
+              const u64 hards = exp_hard_syncs.exchange(0, std::memory_order_relaxed);
+              const u64 slow_flushes = exp_slow_flushes.exchange(0, std::memory_order_relaxed);
+              const u64 max_flush = exp_flush_max_us.exchange(0, std::memory_order_relaxed);
+              const u64 lookups = exp_pipeline_lookups.exchange(0, std::memory_order_relaxed);
+              const u64 misses = exp_pipeline_misses.exchange(0, std::memory_order_relaxed);
+              const u64 max_pipeline = exp_pipeline_max_us.exchange(0, std::memory_order_relaxed);
+              const u64 footprint_mb = process_memory_footprint() / 1048576ull;
+              pstjon_exp_log.notice("EXPERIMENTAL M6.6.7-EXP fps_present=%.2f frame_max_ms=%.2f frame_spikes_50ms=%llu rsx_load_proxy=%u memory_footprint_mb=%llu flushes=%llu hard_syncs=%llu slow_flushes_30ms=%llu flush_max_ms=%.2f pipeline_lookups=%llu pipeline_misses=%llu pipeline_max_ms=%.2f texture_oob_total=%llu blit_src_oob_total=%llu blit_dst_oob_total=%llu",
+                  frames / sec, max_frame / 1e6, spikes, rsx_load,
+                  footprint_mb, flushes, hards, slow_flushes, max_flush / 1000.0,
+                  lookups, misses, max_pipeline / 1000.0,
+                  exp_bad_textures.load(std::memory_order_relaxed),
+                  exp_bad_sources.load(std::memory_order_relaxed),
+                  exp_bad_destinations.load(std::memory_order_relaxed));
+          }
+          """)
+          s = s.replace(anchor, extra + '}', 1)
+          old = '\tg_performance_registry.record_presented_frame(rsx_load);'
+          assert s.count(old) == 1
+          s = s.replace(old, old + '\n\texp_present_pulse(rsx_load);', 1)
+          anchor = 'u64 available_process_memory_headroom() noexcept'
+          assert s.count(anchor) == 1
+          functions = textwrap.dedent("""\
+          void pstjon_exp_note_pipeline(std::uint64_t micros, bool cache_miss) noexcept
+          {
+              exp_pipeline_lookups.fetch_add(1, std::memory_order_relaxed);
+              if (cache_miss) exp_pipeline_misses.fetch_add(1, std::memory_order_relaxed);
+              exp_update_max(exp_pipeline_max_us, micros);
+              if (micros > 100000)
+              {
+                  static std::atomic<u64> warnings{0};
+                  const u64 n = warnings.fetch_add(1, std::memory_order_relaxed) + 1;
+                  if (n <= 5 || !(n % 64))
+                      pstjon_exp_log.warning("EXPERIMENTAL pipeline_lookup_stall count=%llu elapsed_ms=%.2f cache_miss=%u",
+                          n, micros / 1000.0, cache_miss ? 1u : 0u);
+              }
+          }
+          
+          void pstjon_exp_note_flush(std::uint64_t micros, bool hard_sync) noexcept
+          {
+              exp_flushes.fetch_add(1, std::memory_order_relaxed);
+              if (hard_sync) exp_hard_syncs.fetch_add(1, std::memory_order_relaxed);
+              if (micros >= 30000) exp_slow_flushes.fetch_add(1, std::memory_order_relaxed);
+              exp_update_max(exp_flush_max_us, micros);
+              if (micros > 200000)
+              {
+                  static std::atomic<u64> warnings{0};
+                  const u64 n = warnings.fetch_add(1, std::memory_order_relaxed) + 1;
+                  if (n <= 5 || !(n % 64))
+                      pstjon_exp_log.warning("EXPERIMENTAL rsx_flush_stall count=%llu elapsed_ms=%.2f hard_sync=%u",
+                          n, micros / 1000.0, hard_sync ? 1u : 0u);
+              }
+          }
+          
+          void pstjon_exp_note_texture(std::uint32_t offset) noexcept
+          {
+              const u64 n = exp_bad_textures.fetch_add(1, std::memory_order_relaxed) + 1;
+              if (n <= 5 || !(n % 64))
+                  pstjon_exp_log.error("EXPERIMENTAL texture_address_invalid count=%llu offset=0x%x", n, offset);
+          }
+          
+          void pstjon_exp_note_blit(std::uint64_t offset, std::uint64_t length, bool is_source) noexcept
+          {
+              auto& counter = is_source ? exp_bad_sources : exp_bad_destinations;
+              const u64 n = counter.fetch_add(1, std::memory_order_relaxed) + 1;
+              if (n <= 5 || !(n % 64))
+                  pstjon_exp_log.error("EXPERIMENTAL rsx_blit_span_invalid kind=%s count=%llu offset=0x%llx length=0x%llx",
+                      is_source ? "source" : "destination", n, offset, length);
+          }
+          
+          """)
+          s = s.replace(anchor, functions + anchor, 1)
+          assert s.count("EXPERIMENTAL M6.6.7-EXP")==1
+          perf.write_text(s)
+          
+          vk = root / "Emu/RSX/VK/VKGSRender.cpp"
+          s = vk.read_text()
+          old = '#include "VKGSRender.h"'
+          assert s.count(old)==1
+          s=s.replace(old, old + '\n#ifdef RPCS3_IOS\n#include "ios/PsTJonExperimentalTelemetry.h"\n#include <chrono>\n#endif', 1)
+          # Sample the actual CPU time spent inside Vulkan pipeline cache lookup,
+          # without changing cache keys, shaders, render targets, or scheduling.
+          old = '\t\tstd::tie(m_program, m_vertex_prog, m_fragment_prog) = m_prog_buffer->get_graphics_pipeline('
+          assert s.count(old)==1
+          s=s.replace(old, '#ifdef RPCS3_IOS\n\t\tconst auto pstjon_exp_pipeline_start = std::chrono::steady_clock::now();\n#endif\n' + old, 1)
+          old = '\t\tif (m_prog_buffer->check_cache_missed())'
+          assert s.count(old)==1
+          new = '''\t\tconst bool pstjon_exp_cache_miss = m_prog_buffer->check_cache_missed();
+          #ifdef RPCS3_IOS
+          \t\trpcs3::ios::pstjon_exp_note_pipeline(
+          \t\t\tstd::chrono::duration_cast<std::chrono::microseconds>(
+          \t\t\t\tstd::chrono::steady_clock::now() - pstjon_exp_pipeline_start).count(),
+          \t\t\tpstjon_exp_cache_miss);
+          #endif
+          \t\tif (pstjon_exp_cache_miss)'''
+          s=s.replace(old,new,1)
+          # This is wall-clock CPU wait/submit time, not hardware GPU execution time.
+          start = s.index('void VKGSRender::flush_command_queue(bool hard_sync, bool do_not_switch)')
+          end = s.index('std::pair<volatile vk::host_data_t*, VkBuffer> VKGSRender::map_host_object_data()', start)
+          section = s[start:end]
+          old = 'void VKGSRender::flush_command_queue(bool hard_sync, bool do_not_switch)\n{'
+          assert section.count(old)==1
+          section=section.replace(old,old+'\n#ifdef RPCS3_IOS\n\tconst auto pstjon_exp_flush_start = std::chrono::steady_clock::now();\n#endif',1)
+          old = '\tm_current_command_buffer->begin();\n}'
+          assert section.count(old)==1
+          section=section.replace(old, '''\tm_current_command_buffer->begin();
+          #ifdef RPCS3_IOS
+          \trpcs3::ios::pstjon_exp_note_flush(
+          \t\tstd::chrono::duration_cast<std::chrono::microseconds>(
+          \t\t\tstd::chrono::steady_clock::now() - pstjon_exp_flush_start).count(), hard_sync);
+          #endif
+          }''',1)
+          s=s[:start]+section+s[end:]
+          assert s.count("pstjon_exp_note_flush(")==1 and s.count("pstjon_exp_note_pipeline(")==1
+          vk.write_text(s)
+          
+          # Count only guard-triggered invalid RSX resources already rejected by M6.6.6.
+          tex = root / "Emu/RSX/Common/texture_cache.h"
+          s=tex.read_text()
+          old='#include "Emu/System.h"\n#endif'
+          assert s.count(old)==1
+          s=s.replace(old, '#include "Emu/System.h"\n#include "ios/PsTJonExperimentalTelemetry.h"\n#endif',1)
+          needle='n, tex.offset(), static_cast<u32>(tex.location()));'
+          assert s.count(needle)==1
+          s=s.replace(needle,needle+'\n\t\t\t\t\trpcs3::ios::pstjon_exp_note_texture(tex.offset());',1)
+          assert s.count("pstjon_exp_note_texture(")==1
+          tex.write_text(s)
+          
+          nv = root / "Emu/RSX/NV47/HW/nv3089.cpp"
+          s=nv.read_text()
+          old='#include "nv3089.h"'
+          assert s.count(old)==1
+          s=s.replace(old,old+'\n#ifdef RPCS3_IOS\n#include "ios/PsTJonExperimentalTelemetry.h"\n#endif',1)
+          src='n, src_offset, static_cast<unsigned long long>(start),'
+          dst='n, dst_offset, static_cast<unsigned long long>(start),'
+          assert s.count(src)==1 and s.count(dst)==1
+          # Place after the 2nd continuation line of existing printf-like warning.
+          pattern=r'(?m)^([ \t]*)(n, (?:src_offset|dst_offset), static_cast<unsigned long long)\(start\),\n([ \t]*)static_cast<unsigned long long>\(count\), static_cast<unsigned long long>\(m66_local_bound\)\);'
+          hits=list(re.finditer(pattern,s))
+          assert len(hits)==2, "Could not locate M6.6 span diagnostics"
+          def hook(match):
+              label='true' if 'src_offset' in match.group(0) else 'false'
+              return match.group(0) + '\n' + match.group(1) + 'rpcs3::ios::pstjon_exp_note_blit(start, count, '+label+');'
+          s=re.sub(pattern,hook,s)
+          assert s.count("pstjon_exp_note_blit(")==2
+          nv.write_text(s)
+          
+          for p in (header,perf,vk,tex,nv):
+              assert p.read_text().endswith("\n")
+              assert all(x==x.rstrip(" \t") for x in p.read_text().splitlines()), f"Trailing whitespace {p}"
+          print("M6.6.7-EXP instrumentation: native presented frame cadence + RSX pipeline/flush + invalid texture/blit events PASS")
+          print("EXPERIMENTAL LIMITATIONS: NO true Metal GPU timestamps, NO automatic visual darkness/corruption classification")
+          PY
+          git -C rpcs3-src diff --check
+          grep -q 'EXPERIMENTAL M6.6.7-EXP' rpcs3-src/rpcs3/ios/RPCS3IOSPerformance.cpp
+
           rm -rf build-kk-host kk-host-tools
           meson setup build-kk-host mesa-src \
             --buildtype=release \
@@ -4102,13 +4345,17 @@ jobs:
           codesign -d --entitlements :- "$APP" 2>&1 | tee pstjon-entitlements.txt
           (
             cd package
-            ditto -c -k --sequesterRsrc --keepParent Payload "$GITHUB_WORKSPACE/PsTJon-KK-M6.6.6.ipa"
+            ditto -c -k --sequesterRsrc --keepParent Payload "$GITHUB_WORKSPACE/PsTJon-KK-M6.6.7-EXP.ipa"
           )
-          shasum -a 256 PsTJon-KK-M6.6.6.ipa
+          shasum -a 256 PsTJon-KK-M6.6.7-EXP.ipa
       - name: Build report
         run: |
           {
-            echo "PsTJon M6.6.6: Ascension invalid local sampled texture offset guard for fatal 0x10452d80, preserve all other title profiles and existing NV3089 safeguards"
+            echo "PsTJon M6.6.7-EXP: EXPERIMENTAL native diagnostic telemetry on M6.6.6 baseline; no shader or visual profile changes"
+            echo "EXP metrics: presented-frame cadence, frame stutters, process footprint, RSX estimated load, Vulkan cache lookup wall-time, command flush wall-time, invalid texture and DMA blit guard events"
+            echo "EXP NOT AVAILABLE: authoritative Metal GPU occupancy/time, GPU image readback, automatic black-frame or visual corruption detection"
+            echo "EXP logs: PsTJon EXPERIMENTAL channel in exported RPCS3 session logs, sampled once per 3 seconds and on throttled anomalies"
+            echo "Preserved M6.6.6 Ascension local sampled texture offset guard and NV3089 span guards"
             echo "RPCS3 ios-port: $RPCS3_IOS_SHA"
             echo "Shell bundle id: com.xitrix.RPCS3"
             echo "Vulkan provider: KOSMICKRISP"
@@ -4116,15 +4363,15 @@ jobs:
             echo "Volk: $VOLK_SHA"
             echo "FFmpeg: $FFMPEG_VERSION"
             echo "Core: $(shasum -a 256 libRPCS3Core.dylib | awk '{print $1}')"
-            echo "IPA: $(shasum -a 256 PsTJon-KK-M6.6.6.ipa | awk '{print $1}')"
-          } > PsTJon-KK-M6.6.6-build.txt
+            echo "IPA: $(shasum -a 256 PsTJon-KK-M6.6.7-EXP.ipa | awk '{print $1}')"
+          } > PsTJon-KK-M6.6.7-EXP-build.txt
 
       - uses: actions/upload-artifact@v4
         with:
-          name: PsTJon-KK-m06-6-6-ascension-texture-address-guard-IPA
+          name: PsTJon-KK-m06-6-7-EXPERIMENTAL-telemetry-IPA
           path: |
-            PsTJon-KK-M6.6.6.ipa
-            PsTJon-KK-M6.6.6-build.txt
+            PsTJon-KK-M6.6.7-EXP.ipa
+            PsTJon-KK-M6.6.7-EXP-build.txt
             pstjon-entitlements.txt
             M5-rpcs3-patch-stat.txt
             M4-mesa-patch-stat.txt
@@ -4148,7 +4395,7 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           set -euxo pipefail
-          gh release create pstjon-kk-m6.6.6 PsTJon-KK-M6.6.6.ipa \
+          gh release create pstjon-kk-m6.6.6 PsTJon-KK-M6.6.7-EXP.ipa \
             --target "$GITHUB_SHA" \
             --title "PsTJon KosmicKrisp M6.6.6" \
             --notes "Experimental M6.6.6: Ascension-only nonthrowing texture_cache local sampled image address checks for fatal offset 0x10452d80 in M6.6.5 physical test. Existing M6.6 NV3089 guard, Dante query pool policy and all other title profiles preserved. Physical validation required." \
