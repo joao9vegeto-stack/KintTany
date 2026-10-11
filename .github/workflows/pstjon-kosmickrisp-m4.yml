@@ -4166,6 +4166,61 @@ jobs:
           git -C rpcs3-src diff --check
           git -C mesa-src diff --check
 
+          python3 - <<'PY'
+          # M6.6.9-EXP: M6.6.8 real-device BCUS98232 log ended under
+          # 15 iOS fatal memory pressure warnings and invalid local-memory blit.
+          # It does NOT establish the native process's exact termination cause.
+          # One scoped correctness hypothesis: during fatal memory pressure,
+          # VKGSRender::on_vram_exhausted() enumerates enabled texture addresses
+          # with throwing rsx::get_address(offset,location). A stale enabled
+          # descriptor can bypass M6.6.6 upload-time guard and throw during
+          # emergency eviction. Use the canonical nonthrowing size=1 lookup on
+          # Ascension ONLY and ignore unmapped exclusions; retain valid refs,
+          # cache evictions, GPU synchronization, and all graphics policies.
+          from pathlib import Path
+          p=Path("rpcs3-src/rpcs3/Emu/RSX/VK/VKGSRender.cpp")
+          s=p.read_text()
+          old = '''\t\t\t\t\tconst auto addr = rsx::get_address(tex.offset(), tex.location());
+          \t\t\t\t\texclusion_list.insert(addr);'''
+          assert s.count(old)==1, "M6.6.9 fatal eviction texture lookup anchor mismatch"
+          new = '''#ifdef RPCS3_IOS
+          \t\t\t\t\tif (Emu.GetTitleID() == "BCUS98232")
+          \t\t\t\t\t{
+          \t\t\t\t\t\t// M6.6.9: do not turn emergency memory relief into
+          \t\t\t\t\t\t// a fatal RSX exception when a guest texture points
+          \t\t\t\t\t\t// beyond mapped local/main memory.
+          \t\t\t\t\t\tconst u32 safe_addr = rsx::get_address(tex.offset(), tex.location(), 1);
+          \t\t\t\t\t\tif (!safe_addr)
+          \t\t\t\t\t\t{
+          \t\t\t\t\t\t\tstatic u32 invalid_eviction_textures = 0;
+          \t\t\t\t\t\t\tconst u32 n = ++invalid_eviction_textures;
+          \t\t\t\t\t\t\tif (n <= 8 || !(n & 63))
+          \t\t\t\t\t\t\t\trsx_log.warning("PsTJon M6.6.9 ASCENSION_EVICT_INVALID_TEXTURE: ignored invalid cache exclusion #%u offset=0x%x location=0x%x",
+          \t\t\t\t\t\t\t\t\tn, tex.offset(), static_cast<u32>(tex.location()));
+          \t\t\t\t\t\t\tcontinue;
+          \t\t\t\t\t\t}
+          \t\t\t\t\t\texclusion_list.insert(safe_addr);
+          \t\t\t\t\t\tcontinue;
+          \t\t\t\t\t}
+          #endif
+          \t\t\t\t\tconst auto addr = rsx::get_address(tex.offset(), tex.location());
+          \t\t\t\t\texclusion_list.insert(addr);'''
+          s=s.replace(old,new,1)
+          assert s.count('PsTJon M6.6.9 ASCENSION_EVICT_INVALID_TEXTURE')==1
+          assert s.count('rsx::get_address(tex.offset(), tex.location(), 1);')==1
+          assert s.count(old)==1
+          assert s.count('Emu.GetTitleID() == "BCUS98232"')>=1
+          assert s.count('pstjon_exp_note_pipeline(')==1
+          assert s.count('pstjon_exp_note_flush(')==1
+          p.write_text(s)
+          assert 'M6.6 ASCENSION_DST_SPAN' in Path("rpcs3-src/rpcs3/Emu/RSX/NV47/HW/nv3089.cpp").read_text()
+          assert 'M6.6.6 ASCENSION_TEXTURE_OOB' in Path("rpcs3-src/rpcs3/Emu/RSX/Common/texture_cache.h").read_text()
+          print("M6.6.9: nonthrowing cache-eviction exclusions for Ascension only; previous ZCull 512, graphics, telemetry and NV3089 guards preserved PASS")
+          PY
+          grep -q 'M6.6.9 ASCENSION_EVICT_INVALID_TEXTURE' rpcs3-src/rpcs3/Emu/RSX/VK/VKGSRender.cpp
+          git -C rpcs3-src diff --check
+          git -C mesa-src diff --check
+
           rm -rf build-kk-host kk-host-tools
           meson setup build-kk-host mesa-src \
             --buildtype=release \
@@ -4377,13 +4432,13 @@ jobs:
           codesign -d --entitlements :- "$APP" 2>&1 | tee pstjon-entitlements.txt
           (
             cd package
-            ditto -c -k --sequesterRsrc --keepParent Payload "$GITHUB_WORKSPACE/PsTJon-KK-M6.6.8-EXP.ipa"
+            ditto -c -k --sequesterRsrc --keepParent Payload "$GITHUB_WORKSPACE/PsTJon-KK-M6.6.9-EXP.ipa"
           )
-          shasum -a 256 PsTJon-KK-M6.6.8-EXP.ipa
+          shasum -a 256 PsTJon-KK-M6.6.9-EXP.ipa
       - name: Build report
         run: |
           {
-            echo "PsTJon M6.6.8-EXP: BCUS98232-only 256->512 Vulkan occlusion query capacity A/B from M6.6.7 physical 2866 forced syncs; 4096 RSX software query slots unchanged; visual correctness and FPS unproven"
+            echo "PsTJon M6.6.9-EXP: protect Ascension VKGSRender fatal-pressure texture-cache eviction against stale invalid texture addresses; preserve prior 512 Vulkan query pool and native telemetry; physical outcome unproven"
             echo "EXP metrics: presented-frame cadence, frame stutters, process footprint, RSX estimated load, Vulkan cache lookup wall-time, command flush wall-time, invalid texture and DMA blit guard events"
             echo "EXP NOT AVAILABLE: authoritative Metal GPU occupancy/time, GPU image readback, automatic black-frame or visual corruption detection"
             echo "EXP logs: PsTJon EXPERIMENTAL channel in exported RPCS3 session logs, sampled once per 3 seconds and on throttled anomalies"
@@ -4395,15 +4450,15 @@ jobs:
             echo "Volk: $VOLK_SHA"
             echo "FFmpeg: $FFMPEG_VERSION"
             echo "Core: $(shasum -a 256 libRPCS3Core.dylib | awk '{print $1}')"
-            echo "IPA: $(shasum -a 256 PsTJon-KK-M6.6.8-EXP.ipa | awk '{print $1}')"
-          } > PsTJon-KK-M6.6.8-EXP-build.txt
+            echo "IPA: $(shasum -a 256 PsTJon-KK-M6.6.9-EXP.ipa | awk '{print $1}')"
+          } > PsTJon-KK-M6.6.9-EXP-build.txt
 
       - uses: actions/upload-artifact@v4
         with:
-          name: PsTJon-KK-m06-6-8-EXPERIMENTAL-zcull-512-IPA
+          name: PsTJon-KK-m06-6-9-EXPERIMENTAL-evict-guard-IPA
           path: |
-            PsTJon-KK-M6.6.8-EXP.ipa
-            PsTJon-KK-M6.6.8-EXP-build.txt
+            PsTJon-KK-M6.6.9-EXP.ipa
+            PsTJon-KK-M6.6.9-EXP-build.txt
             pstjon-entitlements.txt
             M5-rpcs3-patch-stat.txt
             M4-mesa-patch-stat.txt
@@ -4420,16 +4475,16 @@ jobs:
 
       # Best-effort direct release asset: accessible on iPhone without
       # extracting the Actions ZIP. Artifact step above stays authoritative.
-      - name: Publish direct M6.6.8-EXP IPA
+      - name: Publish direct M6.6.9-EXP IPA
         if: success()
         continue-on-error: true
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
           set -euxo pipefail
-          gh release create pstjon-kk-m6.6.8-exp PsTJon-KK-M6.6.8-EXP.ipa \
+          gh release create pstjon-kk-m6.6.9-exp PsTJon-KK-M6.6.9-EXP.ipa \
             --target "$GITHUB_SHA" \
-            --title "PsTJon KosmicKrisp M6.6.8-EXP" \
-            --notes "Experimental M6.6.8-EXP: Ascension Vulkan occlusion query capacity 256 to 512 as a single-variable performance A/B after M6.6.7 physical run 2866 forced hard syncs. Preserve 4096 software RSX slots, M6.6.6 texture address safety, M6.6 NV3089 guards and M6.6.7 native telemetry. All other TitleID rendering profiles unchanged. Monitor memory and FPS; physical validation required." \
+            --title "PsTJon KosmicKrisp M6.6.9-EXP" \
+            --notes "Experimental M6.6.9-EXP: BCUS98232 only. Emergency VKGSRender texture-cache eviction uses nonthrowing, mapping-validated RSX texture exclusion addresses to avoid a potential fatal exception under iOS pressure; retain existing cache eviction, Vulkan query capacity 512, full M6.6 RSX guards, M6.6.6 texture guard and M6.6.7 telemetry. No other title changes. Physical validation required." \
             --latest=false
-          gh release view pstjon-kk-m6.6.8-exp --json url,assets
+          gh release view pstjon-kk-m6.6.9-exp --json url,assets
