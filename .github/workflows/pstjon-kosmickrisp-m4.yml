@@ -4266,6 +4266,75 @@ jobs:
           git -C rpcs3-src diff --check
           git -C mesa-src diff --check
 
+          python3 - <<'PY'
+          # M6.6.11-EXP: systemic Ascension-only memory-lifetime experiment.
+          # Physical M6.6.10: 25 fatal memory alerts, 5.7GB footprint,
+          # mean FPS 25.6->12.9->5.3 as memory builds, even BEFORE the
+          # ~1,926 invalid local destination blits. Guest-invalid blits are
+          # downstream symptoms; keep guards, do not guess scene-specific offsets.
+          # Pinned RPCS3 only evicts cached unused shader-read textures when
+          # severity is already FATAL, after 2 x GPU full-sync and cache churn.
+          # A/B earlier bounded eviction at SEVERE every >=15s: preserve active
+          # texture exclusions and the original GPU-safe hard-sync+drain path.
+          # Other titles + shader pipeline + ZCull + resolution + MLAA unchanged.
+          from pathlib import Path
+          p=Path("rpcs3-src/rpcs3/Emu/RSX/VK/VKGSRender.cpp")
+          s=p.read_text()
+          start=s.index('bool VKGSRender::on_vram_exhausted(rsx::problem_severity severity)')
+          end=s.index('void VKGSRender::',start+len('bool VKGSRender::on_vram_exhausted(rsx::problem_severity severity)'))
+          part=s[start:end]
+          old='''\tbool texture_cache_relieved = false;
+          \tif (severity >= rsx::problem_severity::fatal)
+          \t{'''
+          new='''\tbool texture_cache_relieved = false;
+          #ifdef RPCS3_IOS
+          \t// M6.6.11: avoid waiting for fatal (<=512MiB iOS headroom)
+          \t// before evicting unused cached textures throughout BCUS98232.
+          \t// This intentionally makes no scene/offset-specific assumptions.
+          \t// GPU completed-fence sync and active RSX texture exclusions below
+          \t// remain REQUIRED to prevent use-after-free and black surfaces.
+          \tstatic auto m6611_next_preemptive = std::chrono::steady_clock::time_point{};
+          \tconst auto m6611_now = std::chrono::steady_clock::now();
+          \tconst bool m6611_preemptive =
+          \t\tEmu.GetTitleID() == "BCUS98232" &&
+          \t\tseverity == rsx::problem_severity::severe &&
+          \t\tm6611_now >= m6611_next_preemptive &&
+          \t\tm_texture_cache.is_overallocated();
+          \tif (m6611_preemptive)
+          \t{
+          \t\tm6611_next_preemptive = m6611_now + std::chrono::seconds(15);
+          \t\trsx_log.warning("PsTJon M6.6.11 ASCENSION_EARLY_EVICT: severe cache pressure; proactively sync+evict unused textures (15s cooldown), preserve active references");
+          \t}
+          #else
+          \tconstexpr bool m6611_preemptive = false;
+          #endif
+          \tif (severity >= rsx::problem_severity::fatal || m6611_preemptive)
+          \t{'''
+          assert part.count(old)==1, "M6.6.11 isolated on_vram_exhausted anchor mismatch"
+          part=part.replace(old,new,1)
+          assert part.count('m_texture_cache.evict_unused(exclusion_list)')==1
+          assert part.count('flush_command_queue(true, true);')==2
+          assert part.count('g_fxo->get<vk::driver_manager_thread>().drain();')==1
+          assert part.count('m_texture_cache.handle_memory_pressure(severity)')==1
+          assert part.count('rsx::get_address(tex.offset(), tex.location(), 1);')==1, "M6.6.9 safe exclusion must remain"
+          s=s[:start]+part+s[end:]
+          assert s.count('PsTJon M6.6.11 ASCENSION_EARLY_EVICT')==1
+          assert 'Emu.GetTitleID() == "BCUS98232" ? 512 : OCCLUSION_MAX_POOL_SIZE' in s
+          assert s.count('pstjon_exp_note_flush(')==1 and s.count('pstjon_exp_note_pipeline(')==1
+          p.write_text(s)
+          tex=Path("rpcs3-src/rpcs3/Emu/RSX/Common/texture_cache.h").read_text()
+          assert 'M6.6.10: fast reject' in tex
+          assert 'M6.6.6 ASCENSION_TEXTURE_OOB' in tex
+          nv=Path("rpcs3-src/rpcs3/Emu/RSX/NV47/HW/nv3089.cpp").read_text()
+          assert 'M6.6 ASCENSION_DST_SPAN' in nv and 'M6.6 ASCENSION_SRC_SPAN' in nv
+          system=Path("rpcs3-src/rpcs3/Emu/System.cpp").read_text()
+          assert 'M5.15: BCUS98232 v1.12 Disable MLAA selected' in system or 'M5.15: BCUS98232 v1.12 Disable MLAA' in Path("rpcs3-src/Utilities/bin_patch.cpp").read_text()
+          print("M6.6.11 EXP: Ascension-only proactive texture cache pressure management, preserve every other title and all correctness guards PASS")
+          PY
+          grep -q 'M6.6.11 ASCENSION_EARLY_EVICT' rpcs3-src/rpcs3/Emu/RSX/VK/VKGSRender.cpp
+          git -C rpcs3-src diff --check
+          git -C mesa-src diff --check
+
           rm -rf build-kk-host kk-host-tools
           meson setup build-kk-host mesa-src \
             --buildtype=release \
@@ -4477,13 +4546,13 @@ jobs:
           codesign -d --entitlements :- "$APP" 2>&1 | tee pstjon-entitlements.txt
           (
             cd package
-            ditto -c -k --sequesterRsrc --keepParent Payload "$GITHUB_WORKSPACE/PsTJon-KK-M6.6.10-EXP.ipa"
+            ditto -c -k --sequesterRsrc --keepParent Payload "$GITHUB_WORKSPACE/PsTJon-KK-M6.6.11-EXP.ipa"
           )
-          shasum -a 256 PsTJon-KK-M6.6.10-EXP.ipa
+          shasum -a 256 PsTJon-KK-M6.6.11-EXP.ipa
       - name: Build report
         run: |
           {
-            echo "PsTJon M6.6.10-EXP: BCUS98232 local texture offsets outside the dynamic RSX bound rejected before expensive get_address logging; preserve M6.6.9 memory eviction safety, M6.6.8 ZCull, M6.6.7 telemetry; graphics/FPS require physical comparison"
+            echo "PsTJon M6.6.11-EXP: systemic Ascension-only preemptive GPU-safe texture cache eviction during SEVERE memory pressure, <=once per 15s, before FATAL cascading thrash; preserves all previous correctness guards, ZCull and GPU visual configuration; physical A/B needed"
             echo "EXP metrics: presented-frame cadence, frame stutters, process footprint, RSX estimated load, Vulkan cache lookup wall-time, command flush wall-time, invalid texture and DMA blit guard events"
             echo "EXP NOT AVAILABLE: authoritative Metal GPU occupancy/time, GPU image readback, automatic black-frame or visual corruption detection"
             echo "EXP logs: PsTJon EXPERIMENTAL channel in exported RPCS3 session logs, sampled once per 3 seconds and on throttled anomalies"
@@ -4495,15 +4564,15 @@ jobs:
             echo "Volk: $VOLK_SHA"
             echo "FFmpeg: $FFMPEG_VERSION"
             echo "Core: $(shasum -a 256 libRPCS3Core.dylib | awk '{print $1}')"
-            echo "IPA: $(shasum -a 256 PsTJon-KK-M6.6.10-EXP.ipa | awk '{print $1}')"
-          } > PsTJon-KK-M6.6.10-EXP-build.txt
+            echo "IPA: $(shasum -a 256 PsTJon-KK-M6.6.11-EXP.ipa | awk '{print $1}')"
+          } > PsTJon-KK-M6.6.11-EXP-build.txt
 
       - uses: actions/upload-artifact@v4
         with:
-          name: PsTJon-KK-m06-6-10-EXPERIMENTAL-texture-fast-reject-IPA
+          name: PsTJon-KK-m06-6-11-EXPERIMENTAL-early-cache-reclaim-IPA
           path: |
-            PsTJon-KK-M6.6.10-EXP.ipa
-            PsTJon-KK-M6.6.10-EXP-build.txt
+            PsTJon-KK-M6.6.11-EXP.ipa
+            PsTJon-KK-M6.6.11-EXP-build.txt
             pstjon-entitlements.txt
             M5-rpcs3-patch-stat.txt
             M4-mesa-patch-stat.txt
@@ -4520,16 +4589,16 @@ jobs:
 
       # Best-effort direct release asset: accessible on iPhone without
       # extracting the Actions ZIP. Artifact step above stays authoritative.
-      - name: Publish direct M6.6.10-EXP IPA
+      - name: Publish direct M6.6.11-EXP IPA
         if: success()
         continue-on-error: true
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
           set -euxo pipefail
-          gh release create pstjon-kk-m6.6.10-exp PsTJon-KK-M6.6.10-EXP.ipa \
+          gh release create pstjon-kk-m6.6.11-exp PsTJon-KK-M6.6.11-EXP.ipa \
             --target "$GITHUB_SHA" \
-            --title "PsTJon KosmicKrisp M6.6.10-EXP" \
-            --notes "Experimental M6.6.10-EXP: Ascension-only fast rejection of invalid local texture offsets before noisy rsx::get_address fallback; all valid textures unchanged. Preserves M6.6.9 emergency cache safeguard, M6.6.8 Vulkan ZCull pool, M6.6.7 native telemetry, NV3089 protection and every other title profile. Does not fix the upstream source of invalid addresses. Physical FPS/visual validation required." \
+            --title "PsTJon KosmicKrisp M6.6.11-EXP" \
+            --notes "Experimental M6.6.11-EXP: systemic BCUS98232 memory-lifetime A/B. Proactive eviction of UNUSED cached textures under SEVERE pressure with 15s cooldown (rather than only at FATAL), preserving hardware-safe GPU synchronization and live texture exclusions; identical shader/scale/MLAA/ZCull and all other titles. Compare full-session memory footprint, fatal-pressure alerts, FPS and graphics against M6.6.10. Does not fix invalid guest blit root cause." \
             --latest=false
-          gh release view pstjon-kk-m6.6.10-exp --json url,assets
+          gh release view pstjon-kk-m6.6.11-exp --json url,assets
