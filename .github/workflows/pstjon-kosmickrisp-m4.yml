@@ -4221,6 +4221,51 @@ jobs:
           git -C rpcs3-src diff --check
           git -C mesa-src diff --check
 
+          python3 - <<'PY'
+          # M6.6.10-EXP: M6.6.9 physical session produced >700
+          # ASCENSION_TEXTURE_OOB counts and >960 ASCENSION_DST_SPAN counts.
+          # The existing nonthrowing get_address(...,1) protects the host but
+          # emits a costly RSX location failure on EVERY invalid texture probe;
+          # the failure count grows as texture quality collapses to ~8 FPS.
+          # Optimize only repeated INVALID local sampled texture handling:
+          # pre-check the same dynamic RSX local_mem_size bound as get_address()
+          # and preserve the original get_address call for EVERY valid offset.
+          # Existing {} skip, sparse diagnostic counters, NV3089 guards, ZCull
+          # behavior, memory reclamation, shaders, game profiles stay identical.
+          from pathlib import Path
+          p=Path("rpcs3-src/rpcs3/Emu/RSX/Common/texture_cache.h")
+          s=p.read_text()
+          old='\t\t\t\tattributes.address = rsx::get_address(tex.offset(), tex.location(), 1);'
+          new='''\t\t\t\t// M6.6.10: fast reject a provably invalid RSX LOCAL offset
+          \t\t\t\t// before get_address() prints a high-volume failure on
+          \t\t\t\t// every sampled-image probe. Dynamic bound, not 256MiB.
+          \t\t\t\t// Valid offsets still take the exact old address lookup.
+          \t\t\t\tconst u32 m6610_local_size = rsx::get_current_renderer()->local_mem_size;
+          \t\t\t\tattributes.address = tex.offset() >= m6610_local_size
+          \t\t\t\t\t? 0 : rsx::get_address(tex.offset(), tex.location(), 1);'''
+          assert s.count(old)==1, "M6.6.10 BCUS-only upload_texture prevalidation anchor"
+          assert s.count('Emu.GetTitleID() == "BCUS98232"')==1, "M6.6.6 TitleID scope unexpectedly changed"
+          assert s.count('rpcs3::ios::pstjon_exp_note_texture(tex.offset());')==1, "Experimental invalid texture counter must be preserved"
+          s=s.replace(old,new,1)
+          assert s.count('m6610_local_size')==2
+          assert s.count('M6.6.6 ASCENSION_TEXTURE_OOB')==1
+          assert s.count('rsx::get_address(tex.offset(), tex.location(), 1);')==1
+          assert s.count('rpcs3::ios::pstjon_exp_note_texture(tex.offset());')==1
+          s='\n'.join(x.rstrip() for x in s.splitlines())+'\n'
+          p.write_text(s)
+          # Keep prior changes in place; do NOT change codepaths for other games.
+          assert 'M6.6 ASCENSION_DST_SPAN' in Path("rpcs3-src/rpcs3/Emu/RSX/NV47/HW/nv3089.cpp").read_text()
+          vk=Path("rpcs3-src/rpcs3/Emu/RSX/VK/VKGSRender.cpp").read_text()
+          assert 'M6.6.9 ASCENSION_EVICT_INVALID_TEXTURE' in vk
+          assert 'Emu.GetTitleID() == "BCUS98232" ? 512 : OCCLUSION_MAX_POOL_SIZE' in vk
+          assert 'pstjon_exp_note_pipeline(' in vk and 'pstjon_exp_note_flush(' in vk
+          assert 0x0f8fffff < 0x0f900000 and 0x0fc76a00 > 0x0f900000
+          print("M6.6.10-EXP: BCUS local texture fast invalid rejection, valid paths/telemetry stable PASS")
+          PY
+          grep -q 'M6.6.10: fast reject' rpcs3-src/rpcs3/Emu/RSX/Common/texture_cache.h
+          git -C rpcs3-src diff --check
+          git -C mesa-src diff --check
+
           rm -rf build-kk-host kk-host-tools
           meson setup build-kk-host mesa-src \
             --buildtype=release \
@@ -4432,13 +4477,13 @@ jobs:
           codesign -d --entitlements :- "$APP" 2>&1 | tee pstjon-entitlements.txt
           (
             cd package
-            ditto -c -k --sequesterRsrc --keepParent Payload "$GITHUB_WORKSPACE/PsTJon-KK-M6.6.9-EXP.ipa"
+            ditto -c -k --sequesterRsrc --keepParent Payload "$GITHUB_WORKSPACE/PsTJon-KK-M6.6.10-EXP.ipa"
           )
-          shasum -a 256 PsTJon-KK-M6.6.9-EXP.ipa
+          shasum -a 256 PsTJon-KK-M6.6.10-EXP.ipa
       - name: Build report
         run: |
           {
-            echo "PsTJon M6.6.9-EXP: protect Ascension VKGSRender fatal-pressure texture-cache eviction against stale invalid texture addresses; preserve prior 512 Vulkan query pool and native telemetry; physical outcome unproven"
+            echo "PsTJon M6.6.10-EXP: BCUS98232 local texture offsets outside the dynamic RSX bound rejected before expensive get_address logging; preserve M6.6.9 memory eviction safety, M6.6.8 ZCull, M6.6.7 telemetry; graphics/FPS require physical comparison"
             echo "EXP metrics: presented-frame cadence, frame stutters, process footprint, RSX estimated load, Vulkan cache lookup wall-time, command flush wall-time, invalid texture and DMA blit guard events"
             echo "EXP NOT AVAILABLE: authoritative Metal GPU occupancy/time, GPU image readback, automatic black-frame or visual corruption detection"
             echo "EXP logs: PsTJon EXPERIMENTAL channel in exported RPCS3 session logs, sampled once per 3 seconds and on throttled anomalies"
@@ -4450,15 +4495,15 @@ jobs:
             echo "Volk: $VOLK_SHA"
             echo "FFmpeg: $FFMPEG_VERSION"
             echo "Core: $(shasum -a 256 libRPCS3Core.dylib | awk '{print $1}')"
-            echo "IPA: $(shasum -a 256 PsTJon-KK-M6.6.9-EXP.ipa | awk '{print $1}')"
-          } > PsTJon-KK-M6.6.9-EXP-build.txt
+            echo "IPA: $(shasum -a 256 PsTJon-KK-M6.6.10-EXP.ipa | awk '{print $1}')"
+          } > PsTJon-KK-M6.6.10-EXP-build.txt
 
       - uses: actions/upload-artifact@v4
         with:
-          name: PsTJon-KK-m06-6-9-EXPERIMENTAL-evict-guard-IPA
+          name: PsTJon-KK-m06-6-10-EXPERIMENTAL-texture-fast-reject-IPA
           path: |
-            PsTJon-KK-M6.6.9-EXP.ipa
-            PsTJon-KK-M6.6.9-EXP-build.txt
+            PsTJon-KK-M6.6.10-EXP.ipa
+            PsTJon-KK-M6.6.10-EXP-build.txt
             pstjon-entitlements.txt
             M5-rpcs3-patch-stat.txt
             M4-mesa-patch-stat.txt
@@ -4475,16 +4520,16 @@ jobs:
 
       # Best-effort direct release asset: accessible on iPhone without
       # extracting the Actions ZIP. Artifact step above stays authoritative.
-      - name: Publish direct M6.6.9-EXP IPA
+      - name: Publish direct M6.6.10-EXP IPA
         if: success()
         continue-on-error: true
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
           set -euxo pipefail
-          gh release create pstjon-kk-m6.6.9-exp PsTJon-KK-M6.6.9-EXP.ipa \
+          gh release create pstjon-kk-m6.6.10-exp PsTJon-KK-M6.6.10-EXP.ipa \
             --target "$GITHUB_SHA" \
-            --title "PsTJon KosmicKrisp M6.6.9-EXP" \
-            --notes "Experimental M6.6.9-EXP: BCUS98232 only. Emergency VKGSRender texture-cache eviction uses nonthrowing, mapping-validated RSX texture exclusion addresses to avoid a potential fatal exception under iOS pressure; retain existing cache eviction, Vulkan query capacity 512, full M6.6 RSX guards, M6.6.6 texture guard and M6.6.7 telemetry. No other title changes. Physical validation required." \
+            --title "PsTJon KosmicKrisp M6.6.10-EXP" \
+            --notes "Experimental M6.6.10-EXP: Ascension-only fast rejection of invalid local texture offsets before noisy rsx::get_address fallback; all valid textures unchanged. Preserves M6.6.9 emergency cache safeguard, M6.6.8 Vulkan ZCull pool, M6.6.7 native telemetry, NV3089 protection and every other title profile. Does not fix the upstream source of invalid addresses. Physical FPS/visual validation required." \
             --latest=false
-          gh release view pstjon-kk-m6.6.9-exp --json url,assets
+          gh release view pstjon-kk-m6.6.10-exp --json url,assets
