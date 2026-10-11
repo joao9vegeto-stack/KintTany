@@ -4135,6 +4135,37 @@ jobs:
           git -C rpcs3-src diff --check
           grep -q 'EXPERIMENTAL M6.6.7-EXP' rpcs3-src/rpcs3/ios/RPCS3IOSPerformance.cpp
 
+          python3 - <<'PY'
+          # M6.6.8-EXP: Ascension physical test on M6.6.7-EXP showed
+          # 2,866 "Out of free occlusion slots. Forcing hard sync" warnings,
+          # 60 severe memory-pressure events and no confirmed crash.
+          # M6.3 expanded CPU RSX ZCull slots to 4096 but M6.0.1 still caps
+          # Vulkan query manager to 256 on BCUS98232. Single-variable A/B:
+          # raise only the BCUS Vulkan capacity to 512, preserve real ZCull.
+          # Do not raise all titles or change shader, depth, FIFO, scale, or
+          # iOS experimental telemetry. Smaller first step minimizes OOM risk.
+          from pathlib import Path
+          p=Path("rpcs3-src/rpcs3/Emu/RSX/VK/VKGSRender.cpp")
+          s=p.read_text()
+          old='Emu.GetTitleID() == "BCUS98232" || Emu.GetTitleID() == "BLUS30405") ? 256 : OCCLUSION_MAX_POOL_SIZE'
+          new='Emu.GetTitleID() == "BLUS30405") ? 256 : (Emu.GetTitleID() == "BCUS98232" ? 512 : OCCLUSION_MAX_POOL_SIZE)'
+          assert s.count(old)==1, "M6.6.8 post-M6.5 final Vulkan pool capacity anchor mismatch"
+          s=s.replace(old,new,1)
+          assert s.count(new)==1, "M6.6.8 Ascension only Vulkan query capacity"
+          assert s.count('M6.6.7-EXP') >= 0
+          assert s.count('pstjon_exp_note_pipeline(')==1, "M6.6.7-EXP pipeline telemetry not preserved"
+          assert s.count('pstjon_exp_note_flush(')==1, "M6.6.7-EXP flush telemetry not preserved"
+          assert 'Emu.GetTitleID() == "NPUB30424"' in s
+          assert 'Emu.GetTitleID() == "BLUS30401"' in s
+          assert 'Emu.GetTitleID() == "NPUB30632"' in s
+          assert 'Emu.GetTitleID() == "BLUS30405"' in s
+          p.write_text(s)
+          print("M6.6.8-EXP: BCUS98232 Vulkan query capacity 256->512, all other title profiles unchanged PASS")
+          PY
+          grep -q 'M6.6.7-EXP' rpcs3-src/rpcs3/ios/RPCS3IOSPerformance.cpp
+          git -C rpcs3-src diff --check
+          git -C mesa-src diff --check
+
           rm -rf build-kk-host kk-host-tools
           meson setup build-kk-host mesa-src \
             --buildtype=release \
@@ -4346,13 +4377,13 @@ jobs:
           codesign -d --entitlements :- "$APP" 2>&1 | tee pstjon-entitlements.txt
           (
             cd package
-            ditto -c -k --sequesterRsrc --keepParent Payload "$GITHUB_WORKSPACE/PsTJon-KK-M6.6.7-EXP.ipa"
+            ditto -c -k --sequesterRsrc --keepParent Payload "$GITHUB_WORKSPACE/PsTJon-KK-M6.6.8-EXP.ipa"
           )
-          shasum -a 256 PsTJon-KK-M6.6.7-EXP.ipa
+          shasum -a 256 PsTJon-KK-M6.6.8-EXP.ipa
       - name: Build report
         run: |
           {
-            echo "PsTJon M6.6.7-EXP: EXPERIMENTAL native diagnostic telemetry on M6.6.6 baseline; no shader or visual profile changes"
+            echo "PsTJon M6.6.8-EXP: BCUS98232-only 256->512 Vulkan occlusion query capacity A/B from M6.6.7 physical 2866 forced syncs; 4096 RSX software query slots unchanged; visual correctness and FPS unproven"
             echo "EXP metrics: presented-frame cadence, frame stutters, process footprint, RSX estimated load, Vulkan cache lookup wall-time, command flush wall-time, invalid texture and DMA blit guard events"
             echo "EXP NOT AVAILABLE: authoritative Metal GPU occupancy/time, GPU image readback, automatic black-frame or visual corruption detection"
             echo "EXP logs: PsTJon EXPERIMENTAL channel in exported RPCS3 session logs, sampled once per 3 seconds and on throttled anomalies"
@@ -4364,15 +4395,15 @@ jobs:
             echo "Volk: $VOLK_SHA"
             echo "FFmpeg: $FFMPEG_VERSION"
             echo "Core: $(shasum -a 256 libRPCS3Core.dylib | awk '{print $1}')"
-            echo "IPA: $(shasum -a 256 PsTJon-KK-M6.6.7-EXP.ipa | awk '{print $1}')"
-          } > PsTJon-KK-M6.6.7-EXP-build.txt
+            echo "IPA: $(shasum -a 256 PsTJon-KK-M6.6.8-EXP.ipa | awk '{print $1}')"
+          } > PsTJon-KK-M6.6.8-EXP-build.txt
 
       - uses: actions/upload-artifact@v4
         with:
-          name: PsTJon-KK-m06-6-7-EXPERIMENTAL-telemetry-IPA
+          name: PsTJon-KK-m06-6-8-EXPERIMENTAL-zcull-512-IPA
           path: |
-            PsTJon-KK-M6.6.7-EXP.ipa
-            PsTJon-KK-M6.6.7-EXP-build.txt
+            PsTJon-KK-M6.6.8-EXP.ipa
+            PsTJon-KK-M6.6.8-EXP-build.txt
             pstjon-entitlements.txt
             M5-rpcs3-patch-stat.txt
             M4-mesa-patch-stat.txt
@@ -4389,16 +4420,16 @@ jobs:
 
       # Best-effort direct release asset: accessible on iPhone without
       # extracting the Actions ZIP. Artifact step above stays authoritative.
-      - name: Publish direct M6.6.6 IPA
+      - name: Publish direct M6.6.8-EXP IPA
         if: success()
         continue-on-error: true
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
           set -euxo pipefail
-          gh release create pstjon-kk-m6.6.6 PsTJon-KK-M6.6.7-EXP.ipa \
+          gh release create pstjon-kk-m6.6.8-exp PsTJon-KK-M6.6.8-EXP.ipa \
             --target "$GITHUB_SHA" \
-            --title "PsTJon KosmicKrisp M6.6.6" \
-            --notes "Experimental M6.6.6: Ascension-only nonthrowing texture_cache local sampled image address checks for fatal offset 0x10452d80 in M6.6.5 physical test. Existing M6.6 NV3089 guard, Dante query pool policy and all other title profiles preserved. Physical validation required." \
+            --title "PsTJon KosmicKrisp M6.6.8-EXP" \
+            --notes "Experimental M6.6.8-EXP: Ascension Vulkan occlusion query capacity 256 to 512 as a single-variable performance A/B after M6.6.7 physical run 2866 forced hard syncs. Preserve 4096 software RSX slots, M6.6.6 texture address safety, M6.6 NV3089 guards and M6.6.7 native telemetry. All other TitleID rendering profiles unchanged. Monitor memory and FPS; physical validation required." \
             --latest=false
-          gh release view pstjon-kk-m6.6.6 --json url,assets
+          gh release view pstjon-kk-m6.6.8-exp --json url,assets
