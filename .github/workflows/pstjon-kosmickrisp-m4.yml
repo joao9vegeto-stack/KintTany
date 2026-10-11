@@ -4335,6 +4335,112 @@ jobs:
           git -C rpcs3-src diff --check
           git -C mesa-src diff --check
 
+          python3 - <<'PY'
+          # M6.7-EXP: systemic rollback after full M5..M6.6.11 policy review.
+          # M6.6.11 physical log: no texture/span OOB in 38,916 lines, but
+          # 5.08fps/5862MiB, fatal iOS headroom 291MiB, GPU query hard sync,
+          # and up to 1833 pipeline misses per telemetry sample. Stronger
+          # evidence of expensive render-policy and allocator churn than guest OOB.
+          # M5.22 specifically said "Do not ship enabled in production" yet
+          # forced MTL_DEBUG_LAYER and load/store debugging into every later IPA.
+          # M5.21 forced ULTRA shader precision even on thermal-limited A19 GPU.
+          # M6.6.11 15-second preemptive full-fence eviction did not avoid fatal
+          # pressure; remove it without removing original FATAL cleanup.
+          # Keep proven visible color surfaces (WCB), original safeguards, MLAA
+          # startup patch, hardware ZCull, scaling, provider and other games.
+          from pathlib import Path
+          import os
+          mesa=os.environ["MESA_KOSMICKRISP_SHA"]
+          # A: remove persistent M5.22 forensic/debug Metal constructor globally;
+          # this restores upstream Metal device creation without environment poison.
+          p=Path("mesa-src/src/kosmickrisp/bridge/mtl_device.m")
+          s=p.read_text()
+          marker='static void pstjon_kk_m522_metal_validation(void)'
+          assert s.count(marker)==1,"M6.7 M5.22 forensic constructor missing"
+          a=s.rfind('#if TARGET_OS_IOS',0,s.index(marker))
+          b=s.find('#endif',s.index(marker))
+          assert a>=0 and b>a and b-a<1000, "M6.7 M5.22 block scope mismatch"
+          block=s[a:b+len('#endif')]
+          for name in ["MTL_DEBUG_LAYER","MTL_DEBUG_LAYER_VALIDATE_LOAD_ACTIONS","MTL_DEBUG_LAYER_VALIDATE_STORE_ACTIONS","pstjon_kk_m522_metal_validation"]:
+              assert name in block,name
+          s=s[:a]+s[b+len('#endif'):]
+          assert 'pstjon_kk_m522_metal_validation' not in s
+          assert 'MTL_DEBUG_LAYER_VALIDATE_LOAD_ACTIONS' not in s
+          p.write_text(s)
+          # B: lower Ascension-only RSX precision from ULTRA to HIGH. WCB and all
+          # texture/copy/RSX safety policies left untouched. Forced ultra came from
+          # M5.21 restored v12 profile; high is upstream-compatible safe preset.
+          p=Path("rpcs3-src/rpcs3/Emu/System.cpp")
+          s=p.read_text()
+          old='g_cfg.video.shader_precision.set(gpu_preset_level::ultra);'
+          assert s.count(old)==1, "M6.7 current effective precision override changed"
+          s=s.replace(old,'g_cfg.video.shader_precision.set(gpu_preset_level::high);',1)
+          old='PsTJon M5.22 METAL_LOAD_STORE_VALIDATION: Apple load/store poison enabled; '
+          assert s.count(old)==1,"M6.7 outdated M5.22 log marker mismatch"
+          s=s.replace(old,'PsTJon M6.7 METAL_DIAGNOSTICS_OFF: M5.22 test-only debug layer disabled; ',1)
+          old='PsTJon M5.21 V12_RENDER_PROFILE:'
+          assert s.count(old)==1, "M6.7 effective v12 profile log changed"
+          s=s.replace(old,'PsTJon M6.7 PROFILE_AB:',1)
+          old='scale=75 shader_precision=ULTRA'
+          assert s.count(old)==1,"M6.7 effective profile log precision changed"
+          s=s.replace(old,'scale=75 shader_precision=HIGH',1)
+          assert 'g_cfg.video.write_color_buffers.set(true);' in s
+          assert 'g_cfg.video.disable_zcull_queries.set(false);' in s
+          p.write_text(s)
+          # C: rollback ONLY the experimental M6.6.11 SEVERE full-fence eviction.
+          # Original fatal-pressure handling stays intact and M6.6.9 safe texture
+          # cache-exclusion guard still protects every reachable invalid address.
+          p=Path("rpcs3-src/rpcs3/Emu/RSX/VK/VKGSRender.cpp")
+          s=p.read_text()
+          entry=s.index('bool VKGSRender::on_vram_exhausted(rsx::problem_severity severity)')
+          end=s.index('void VKGSRender::',entry+1)
+          part=s[entry:end]
+          marker='// M6.6.11: avoid waiting for fatal'
+          assert part.count(marker)==1,"M6.7 M6.6.11 early eviction marker mismatch"
+          a=part.rfind('#ifdef RPCS3_IOS',0,part.index(marker))
+          b=part.find('#endif',part.index(marker))
+          assert 0<=a<b and b-a<2200,"M6.7 unsafe removal scope"
+          part=part[:a]+part[b+len('#endif'):]
+          old='if (severity >= rsx::problem_severity::fatal || m6611_preemptive)'
+          assert part.count(old)==1,"M6.7 m6611 eviction condition anchor"
+          part=part.replace(old,'if (severity >= rsx::problem_severity::fatal)',1)
+          assert 'm6611_preemptive' not in part
+          assert part.count('m_texture_cache.evict_unused(exclusion_list)')==1
+          assert part.count('flush_command_queue(true, true);')==2
+          assert part.count('g_fxo->get<vk::driver_manager_thread>().drain();')==1
+          assert 'M6.6.9 ASCENSION_EVICT_INVALID_TEXTURE' in part
+          s=s[:entry]+part+s[end:]
+          # D: fresh shader and pipeline namespaces when changing FP preset.
+          old=f'"v1.95-{mesa}-m521-v12-effective-profile"'
+          new=f'"v1.95-{mesa}-m67-no-debug-high-precision"'
+          assert s.count(old)==1,"M6.7 RSX shader cache namespace"
+          s=s.replace(old,new,1)
+          assert 'Emu.GetTitleID() == "BCUS98232" ? 512 : OCCLUSION_MAX_POOL_SIZE' in s
+          assert 'pstjon_exp_note_flush(' in s and 'pstjon_exp_note_pipeline(' in s
+          p.write_text(s)
+          p=Path("rpcs3-src/rpcs3/Emu/RSX/VK/vkutils/device.cpp")
+          s=p.read_text()
+          old=f'"shaders_cache/vulkan/kosmickrisp/{mesa}/m521-v12-effective-profile/vk_pipeline_cache.bin"'
+          new=f'"shaders_cache/vulkan/kosmickrisp/{mesa}/m67-no-debug-high-precision/vk_pipeline_cache.bin"'
+          assert s.count(old)==1, "M6.7 pipeline cache namespace"
+          p.write_text(s.replace(old,new,1))
+          # Keep previous safe guards and test-only telemetry, other titles unmodified.
+          nv=Path("rpcs3-src/rpcs3/Emu/RSX/NV47/HW/nv3089.cpp").read_text()
+          tex=Path("rpcs3-src/rpcs3/Emu/RSX/Common/texture_cache.h").read_text()
+          assert 'M6.6 ASCENSION_DST_SPAN' in nv and 'M6.6 ASCENSION_SRC_SPAN' in nv
+          assert 'M6.6.6 ASCENSION_TEXTURE_OOB' in tex and 'M6.6.10: fast reject' in tex
+          assert 'PsTJon M5.15: BCUS98232 v1.12 Disable MLAA' in Path("rpcs3-src/Utilities/bin_patch.cpp").read_text()
+          for fn in ["rpcs3-src/rpcs3/Emu/System.cpp","rpcs3-src/rpcs3/Emu/RSX/VK/VKGSRender.cpp","rpcs3-src/rpcs3/Emu/RSX/VK/vkutils/device.cpp","mesa-src/src/kosmickrisp/bridge/mtl_device.m"]:
+              p=Path(fn);p.write_text('\n'.join(x.rstrip() for x in p.read_text().splitlines())+'\n')
+          print("M6.7: removed inherited M5.22 Metal debug, scoped HIGH shader precision, reverted ineffective M6.6.11 preemptive full-GPU stalls, fresh caches; all M6 correctness guards and real ZCull preserved PASS")
+          PY
+          grep -q 'M6.7 METAL_DIAGNOSTICS_OFF' rpcs3-src/rpcs3/Emu/System.cpp
+          grep -q 'm67-no-debug-high-precision' rpcs3-src/rpcs3/Emu/RSX/VK/vkutils/device.cpp
+          ! grep -q 'MTL_DEBUG_LAYER_VALIDATE_LOAD_ACTIONS' mesa-src/src/kosmickrisp/bridge/mtl_device.m
+          ! grep -q 'm6611_preemptive' rpcs3-src/rpcs3/Emu/RSX/VK/VKGSRender.cpp
+          git -C rpcs3-src diff --check
+          git -C mesa-src diff --check
+
           rm -rf build-kk-host kk-host-tools
           meson setup build-kk-host mesa-src \
             --buildtype=release \
@@ -4546,13 +4652,13 @@ jobs:
           codesign -d --entitlements :- "$APP" 2>&1 | tee pstjon-entitlements.txt
           (
             cd package
-            ditto -c -k --sequesterRsrc --keepParent Payload "$GITHUB_WORKSPACE/PsTJon-KK-M6.6.11-EXP.ipa"
+            ditto -c -k --sequesterRsrc --keepParent Payload "$GITHUB_WORKSPACE/PsTJon-KK-M6.7-EXP.ipa"
           )
-          shasum -a 256 PsTJon-KK-M6.6.11-EXP.ipa
+          shasum -a 256 PsTJon-KK-M6.7-EXP.ipa
       - name: Build report
         run: |
           {
-            echo "PsTJon M6.6.11-EXP: systemic Ascension-only preemptive GPU-safe texture cache eviction during SEVERE memory pressure, <=once per 15s, before FATAL cascading thrash; preserves all previous correctness guards, ZCull and GPU visual configuration; physical A/B needed"
+            echo "PsTJon M6.7-EXP: systematic M5-M6 render-policy cleanup. Removed inherited test-only M5.22 Metal validation env, Ascension shader precision ULTRA->HIGH, rolled back failed M6.6.11 SEVERE full-GPU eviction; fatal eviction, validated WCB, ZCull, RSX guards, MLAA and other title profiles remain; fresh caches; physical validation required"
             echo "EXP metrics: presented-frame cadence, frame stutters, process footprint, RSX estimated load, Vulkan cache lookup wall-time, command flush wall-time, invalid texture and DMA blit guard events"
             echo "EXP NOT AVAILABLE: authoritative Metal GPU occupancy/time, GPU image readback, automatic black-frame or visual corruption detection"
             echo "EXP logs: PsTJon EXPERIMENTAL channel in exported RPCS3 session logs, sampled once per 3 seconds and on throttled anomalies"
@@ -4564,15 +4670,15 @@ jobs:
             echo "Volk: $VOLK_SHA"
             echo "FFmpeg: $FFMPEG_VERSION"
             echo "Core: $(shasum -a 256 libRPCS3Core.dylib | awk '{print $1}')"
-            echo "IPA: $(shasum -a 256 PsTJon-KK-M6.6.11-EXP.ipa | awk '{print $1}')"
-          } > PsTJon-KK-M6.6.11-EXP-build.txt
+            echo "IPA: $(shasum -a 256 PsTJon-KK-M6.7-EXP.ipa | awk '{print $1}')"
+          } > PsTJon-KK-M6.7-EXP-build.txt
 
       - uses: actions/upload-artifact@v4
         with:
-          name: PsTJon-KK-m06-6-11-EXPERIMENTAL-early-cache-reclaim-IPA
+          name: PsTJon-KK-m06-7-EXPERIMENTAL-global-render-profile-audit-IPA
           path: |
-            PsTJon-KK-M6.6.11-EXP.ipa
-            PsTJon-KK-M6.6.11-EXP-build.txt
+            PsTJon-KK-M6.7-EXP.ipa
+            PsTJon-KK-M6.7-EXP-build.txt
             pstjon-entitlements.txt
             M5-rpcs3-patch-stat.txt
             M4-mesa-patch-stat.txt
@@ -4589,16 +4695,16 @@ jobs:
 
       # Best-effort direct release asset: accessible on iPhone without
       # extracting the Actions ZIP. Artifact step above stays authoritative.
-      - name: Publish direct M6.6.11-EXP IPA
+      - name: Publish direct M6.7-EXP IPA
         if: success()
         continue-on-error: true
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
           set -euxo pipefail
-          gh release create pstjon-kk-m6.6.11-exp PsTJon-KK-M6.6.11-EXP.ipa \
+          gh release create pstjon-kk-m6.7-exp PsTJon-KK-M6.7-EXP.ipa \
             --target "$GITHUB_SHA" \
-            --title "PsTJon KosmicKrisp M6.6.11-EXP" \
-            --notes "Experimental M6.6.11-EXP: systemic BCUS98232 memory-lifetime A/B. Proactive eviction of UNUSED cached textures under SEVERE pressure with 15s cooldown (rather than only at FATAL), preserving hardware-safe GPU synchronization and live texture exclusions; identical shader/scale/MLAA/ZCull and all other titles. Compare full-session memory footprint, fatal-pressure alerts, FPS and graphics against M6.6.10. Does not fix invalid guest blit root cause." \
+            --title "PsTJon KosmicKrisp M6.7-EXP" \
+            --notes "Experimental M6.7-EXP: structural audit of M5-M6.6.11 inherited policies. Removed M5.22 production-inappropriate Apple Metal GPU validation constructor; Ascension shader precision ULTRA to HIGH; reverted M6.6.11 preemptive SEVERE GPU-fence cache eviction due to physical failure. Preserve FATAL safe cache cleanup, WCB visual correctness, RSX address guards, ZCull 512, MLAA patch, all other games. New shader and pipeline namespaces: initial cold shader compilation may stutter. Physical FPS, jaggies and crash outcome NOT guaranteed." \
             --latest=false
-          gh release view pstjon-kk-m6.6.11-exp --json url,assets
+          gh release view pstjon-kk-m6.7-exp --json url,assets
