@@ -3843,6 +3843,7 @@ jobs:
           git -C rpcs3-src diff --check
           git -C mesa-src diff --check
 
+          python3 - <<'PY'
           # M6.6.6 from physical M6.6.5 fatal in texture_cache.h:3096.
           # Nonthrowing address validation for BCUS98232 LOCAL sampled textures
           # preserves all known valid textures and other titles' original code path.
