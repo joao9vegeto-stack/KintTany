@@ -3802,7 +3802,10 @@ jobs:
                       }
           #endif
           '''
-          s=s.replace(needle,needle+guard,1)
+          # M6.6.2: place complete preprocessor block BEFORE the entire
+          # source expression. M6.6.1 inserted inside std::min<...> and
+          # C++ rejected the leading if at nv3089.cpp:199.
+          s=s.replace(needle,guard+needle,1)
           assert "M6.6 ASCENSION_DST_SPAN" in s and "M6.6 ASCENSION_SRC_SPAN" in s
           assert "M6.4 ASCENSION_SOURCE_OOB_GUARD" in s
           assert "PsTJon v13: consumed Ascension OOB local blit" in s
@@ -4033,9 +4036,9 @@ jobs:
           codesign -d --entitlements :- "$APP" 2>&1 | tee pstjon-entitlements.txt
           (
             cd package
-            ditto -c -k --sequesterRsrc --keepParent Payload "$GITHUB_WORKSPACE/PsTJon-KK-M6.6.1.ipa"
+            ditto -c -k --sequesterRsrc --keepParent Payload "$GITHUB_WORKSPACE/PsTJon-KK-M6.6.2.ipa"
           )
-          shasum -a 256 PsTJon-KK-M6.6.1.ipa
+          shasum -a 256 PsTJon-KK-M6.6.2.ipa
       - name: Build report
         run: |
           {
@@ -4047,15 +4050,15 @@ jobs:
             echo "Volk: $VOLK_SHA"
             echo "FFmpeg: $FFMPEG_VERSION"
             echo "Core: $(shasum -a 256 libRPCS3Core.dylib | awk '{print $1}')"
-            echo "IPA: $(shasum -a 256 PsTJon-KK-M6.6.1.ipa | awk '{print $1}')"
-          } > PsTJon-KK-M6.6.1-build.txt
+            echo "IPA: $(shasum -a 256 PsTJon-KK-M6.6.2.ipa | awk '{print $1}')"
+          } > PsTJon-KK-M6.6.2-build.txt
 
       - uses: actions/upload-artifact@v4
         with:
-          name: PsTJon-KK-m06-6-1-ascension-2d-span-guard-IPA
+          name: PsTJon-KK-m06-6-2-ascension-2d-span-guard-IPA
           path: |
-            PsTJon-KK-M6.6.1.ipa
-            PsTJon-KK-M6.6.1-build.txt
+            PsTJon-KK-M6.6.2.ipa
+            PsTJon-KK-M6.6.2-build.txt
             pstjon-entitlements.txt
             M5-rpcs3-patch-stat.txt
             M4-mesa-patch-stat.txt
@@ -4072,16 +4075,16 @@ jobs:
 
       # Best-effort direct release asset: accessible on iPhone without
       # extracting the Actions ZIP. Artifact step above stays authoritative.
-      - name: Publish direct M6.6.1 IPA
+      - name: Publish direct M6.6.2 IPA
         if: success()
         continue-on-error: true
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
           set -euxo pipefail
-          gh release create pstjon-kk-m6.6.1 PsTJon-KK-M6.6.1.ipa \
+          gh release create pstjon-kk-m6.6.2 PsTJon-KK-M6.6.2.ipa \
             --target "$GITHUB_SHA" \
-            --title "PsTJon KosmicKrisp M6.6.1" \
+            --title "PsTJon KosmicKrisp M6.6.2" \
             --notes "Experimental M6.6: Ascension RSX NV3089 full local-memory read/write span checks for unit-scale 2D copies after unmapped write at 0xcf900000, preserving hardware ZCull and other games. Retains M6.5.1 Dante query-pool reuse. Physical graphics/FPS/crash validation required." \
             --latest=false
-          gh release view pstjon-kk-m6.6.1 --json url,assets
+          gh release view pstjon-kk-m6.6.2 --json url,assets
