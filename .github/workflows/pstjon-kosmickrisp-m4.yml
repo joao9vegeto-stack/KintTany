@@ -4571,7 +4571,7 @@ jobs:
           assert s.count('force_store |= render->force_attachment_store;')==1
           assert s.count('kk_get_attachment_store_op(')>=2
           s=s.replace(old,new,1)
-          assert 'force_store = true;' not in s[s.index('void\\nkk_apply_attachment_store_ops'):s.index('void\\nkk_apply_attachment_store_ops')+2300]
+          assert 'force_store = true;' not in s[s.index('kk_apply_attachment_store_ops'):s.index('kk_apply_attachment_store_ops')+2300]
           assert s.count('force_store |= render->color_att_count > 0;')==1
           p.write_text(s)
           assert 'M6.6.9 ASCENSION_EVICT_INVALID_TEXTURE' in Path("rpcs3-src/rpcs3/Emu/RSX/VK/VKGSRender.cpp").read_text()
