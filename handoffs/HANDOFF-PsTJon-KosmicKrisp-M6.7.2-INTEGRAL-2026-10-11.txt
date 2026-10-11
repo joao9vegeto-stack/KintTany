@@ -1,0 +1,1368 @@
+HANDOFF TÉCNICO INTEGRAL — PsTJon / RPCS3 iOS / KosmicKrisp
+iPhone 17 Pro / Apple A19 Pro / God of War: Ascension BCUS98232 (v1.12)
+CONSOLIDAÇÃO: 11/10/2026, 20:29 BRT. UTC GitHub pode indicar 12/10.
+ABRANGÊNCIA: TODO O PROJETO M5 → M6.7.2-EXP, TODOS OS TESTES E
+DIAGNÓSTICOS DESTA CONVERSA + HANDOFF ANTERIOR COMPLETO NOS ANEXOS.
+ESTADO ATUAL: M6.7.2-EXP COM IPA PUBLICADO; SEM TESTE FÍSICO.
+ESTE PREFÁCIO/ADENDO SUBSTITUI QUALQUER "ÚLTIMA BUILD" MAIS ANTIGA
+MENCIONADA NO ANEXO HISTÓRICO AO FINAL.
+
+===========================================================================
+0) LEIA ISTO ANTES DE ALTERAR QUALQUER CÓDIGO
+===========================================================================
+OBJETIVO PRINCIPAL: rodar a CAMPANHA INTEIRA de God of War Ascension
+com visual correto, sem 1/4 correto + 3/4 borrados, sem texturas corrompidas,
+sem crash, com FPS estáveis próximos/pelo menos 30; somente depois discutir
+60 FPS. NÃO usar sub-resolução ou pular draw calls como "otimização"
+que esconda a imagem. Áudio, haptics, saves, update 1.12 e outras edições
+não devem regredir.
+
+EXIGÊNCIAS DO USUÁRIO:
+1. NÃO alterar main. Trabalhar APENAS no ramo PsTJon-KosmicKrisp.
+2. Um pacote coerente = UM commit = UM GitHub Actions. Se falhar, novo
+   commit e novo run são inevitáveis; NÃO esconder os runs falhos/cancelados.
+3. Acompanhar até conclusão, verificar GitHub Release / artifact, ENTREGAR
+   IPA DIRETO em link acessível no iPhone; SHA256, commit, workflow.
+4. Novo vídeo e/ou log físico do usuário = solicitação implícita de
+   analisar o retorno e realizar a build seguinte, sem esperar novo comando.
+   Questões puramente explicativas ou documentais NÃO pedem nova build.
+5. O usuário salientou explicitamente: NÃO corrigir cena por cena. O
+   Ascension tem muitas horas; a abordagem deve descobrir DEFEITOS GLOBAIS
+   RSX→Vulkan→KosmicKrisp→Metal, e fazer A/B controlado das causas.
+6. Segurança gráfica em primeiro lugar: preservar texturas e os guards
+   de endereçamento RSX; não prometer ganhos de FPS não medidos.
+7. O usuário tem APENAS um iPhone (17 Pro), sem Mac/PC/VPS para Xcode.
+8. Não inferir que um vídeo foi analisado visualmente se a extração de
+   frames falhou; informar tal limitação.
+9. Não confundir sucesso CI com correção física, ou RSX load proxy com
+   ocupação real da GPU Apple.
+10. Documentar regressões e evitar ficar aumentando buffers, timeouts,
+    pools, trabalhadores ou limpando caches sem fundamentação.
+
+===========================================================================
+1) CÓDIGO, REPOSITÓRIO, BRANCH E ÚLTIMA BUILD
+===========================================================================
+Repositório: https://github.com/joao9vegeto-stack/KintTany
+Branch única de desenvolvimento: PsTJon-KosmicKrisp
+Workflow YAML: .github/workflows/pstjon-kosmickrisp-m4.yml
+Um workflow extenso (~4.8k linhas) aplica patches a código fixado de
+RPCS3 e Mesa/KosmicKrisp com scripts Python inline ANTES de compilar.
+Conferir âncoras e sua ordem, pois a configuração final de Ascension
+SOBRESCREVE ajustes de patches anteriores.
+
+ÚLTIMO IPA confirmado: PsTJon-KK-M6.7.2-EXP.ipa
+Tag: pstjon-kk-m6.7.2-exp
+Branch build commit: 77575617c62b42d8dfee0c0c95daaa59ce8c7262
+Actions #93, run id 38180085344, SUCCESS, attempt 1.
+https://github.com/joao9vegeto-stack/KintTany/actions/runs/38180085344
+Release: https://github.com/joao9vegeto-stack/KintTany/releases/tag/pstjon-kk-m6.7.2-exp
+IPA:
+https://github.com/joao9vegeto-stack/KintTany/releases/download/pstjon-kk-m6.7.2-exp/PsTJon-KK-M6.7.2-EXP.ipa
+Asset state uploaded, size=31.166.090 bytes.
+SHA256=f380294285cac657051f34b6963d788f3a9758830f8f89a2725e4fb864fa394c
+ATENÇÃO: usuário ainda NÃO TESTOU M6.7.2 em hardware no fechamento
+desta documentação. NÃO tratar melhora do FPS como comprovada.
+
+Fixações no workflow:
+RPCS3 ios-port: XITRIX/rpcs3
+SHA 3ec23f1fef57071c808726f68121cfeb601eeb1e
+Mesa/KosmicKrisp bfe063f723d436e5cdef8a98f058d4e44a64810c
+SPIRV LLVM Translator e328468fd329342f1f60c12fdd19cc0faaa88f32
+Volk 0dc3ce00bf98b9f0b6fe708ca0f7eb74e2830173
+FFmpeg 8.1.1, LLVM 20, Xcode 26, macos-26, iOS target 17.4.
+Baseline imutável pré-port PsTJon v13, commit ancestral
+f0944f0957bae61793679e5b3330ccfd2b53d005.
+Usa port backend Vulkan→KosmicKrisp Metal4 para GPU da Apple;
+nenhum título deve passar por ajuste global indiscriminado.
+
+A documentação TXT foi salva numa branch SEPARADA
+PsTJon-HANDOFF-2026-10-11 para NÃO iniciar Actions de código; essa
+branch é documental e NÃO se deve usá-la para compilar. HEAD da branch
+de emulador no momento da escrita permanecia 77575617... .
+Se futuros commits ocorrerem depois desta data, conferir novamente
+o HEAD e releases: este arquivo será um snapshot histórico.
+
+===========================================================================
+2) LINHA DO TEMPO M5/M6 COMPLETA, RUNS, COMMITS, FALHAS
+===========================================================================
+Versões M5.34 a M6.6.5 resumidas a seguir, com análises anteriores,
+matriz multi-jogo, logs e caminhos técnicos preservados integralmente
+no documento histórico anexado ao FIM DESTE ARQUIVO.
+
+M5.34 #60 38027111330 SUCCESS
+  04ca7120494cdb40b860be777f55ea0ff96b8227
+  Restauração ZCull real Prince of Persia 2008, ligado ao diagnóstico
+  do port. Referência visual correta pré-port: v12/MoltenVK.
+M5.35 #61 38066219183 SUCCESS
+  5974066a3a8aef3b6bbbada7897a64fb6a787e40
+  A/B de worker shaders para Prince NPUB30424.
+M6.0 #62 38068273146 FAILED; M6.0.1 #63 38068760810 SUCCESS
+  cd7a2810237507c675dcecd9f39425a6d863c288
+  Tentativa de paridade ZCull real e telemetria frame/allocator.
+M6.1 #64 38072440337 CANCELLED; M6.1.1 #65 38072532462
+  SUCCESS d95fd282984180c60ed3b9cbe4298f7f5caf0b42
+  Reordenação de consultas em Prince, preflip diagnóstico.
+M6.2 #66 38074895322 CANCELLED; #67 38074945593 FAILED;
+  M6.2.2 #68 38075459334 SUCCESS
+  7c6f477c107ad32d99c3bd39090fc725296e0c8f
+  Ascension passa a usar consultas ZCull hardware de fato;
+  rollback NPUB30424 do experimento de sync que degradou.
+M6.3 #69 38082377954 CANCELLED; M6.3.1 #70 38082440086
+  SUCCESS 014bcf1a9b1174b73a297444dc9a847a0c79a7dc
+  Headroom de ZCull Ascension, BLUS depth A/B.
+M6.4 #71 38086941843 SUCCESS
+  29e7e3fda71277cd5e29ea140d7793803cfbf8d2
+  Proteção de transferências RSX locais de origem inválida.
+M6.5 #72 38088396634 FAILED; M6.5.1 #73 38088860628
+  SUCCESS 6b176498ff8de42f0f94e0e46e148461c76bbea4
+  ZCull query pool reservado Dante's Inferno, preservar outros.
+M6.6 #74 38095893098 FAILED
+M6.6.1 #75 38096275172 FAILED
+M6.6.2 #76 38097134152 FAILED
+M6.6.3 #77 38097553133 FAILED
+M6.6.4 #78 38098338014 FAILED
+  Todos os #74–#78 falharam CI (patch / YAML / formatação): NÃO
+  existem cinco IPAs comprovadamente funcionais dessas tentativas.
+M6.6.5 #79 38098521871 SUCCESS
+  a452cd92aa3fb82f87af2b1999f9f739e92279cf
+  Concluiu guard spans locais source/destination, sem ultrapassar
+  local_mem_size por pitch / altura / bytes por pixel; quando inválido,
+  a transferência é rejeitada, evitando acesso inseguro; isso NÃO
+  recria os pixels que deixam de ser escritos.
+
+M6.6.6: #80 38104894096 FAILED por Python heredoc; #81
+  38105251623 SUCCESS commit
+  cfa9aa1f4b11566f3d993103fea5f97693301da9
+  Proteção no carregamento de textura local com endereço inválido.
+  https://github.com/joao9vegeto-stack/KintTany/releases/download/pstjon-kk-m6.6.6/PsTJon-KK-M6.6.6.ipa
+  SHA256 30e0bb85723fcee241eec5124691aceebf7d175e92d381a462d31435515386db
+  Tama 31.163.637 bytes.
+
+M6.6.7-EXP: #82 38106647914 FAILED; #83 38107055866 SUCCESS
+  061eefc26d83f9c00b88762b138d5df8c7a4aa40
+  Telemetria M6.6.7: snapshots de frames apresentados (~3s),
+  FPS, max frame latency, flush/hard sync, pipeline lookup/misses,
+  foot print processo, RSX load proxy, guard eventos src/dst/texture.
+  Artifact GitHub Actions ID 11689924666, nome
+  PsTJon-KK-m06-6-7-EXPERIMENTAL-telemetry-IPA.
+  A busca atual não encontrou a tag de release direta
+  pstjon-kk-m6.6.7-exp; artifact confirmado em #83.
+
+M6.6.8-EXP: #84 38148703701 SUCCESS,
+  1a6d4006c3f55b028672cbee36a6b859cdbaccf9
+  Aumentou a capacidade pool Vulkan queries só Ascension 256→512.
+  Usuário: boss 10–16 FPS, texturas pixeladas/corrompidas, fechamento.
+  Log M6.6.8 tinha cerca de 2.096 "Out of free occlusion slots.
+  Forcing hard sync.", pressão iOS fatal, até ~5.5 GiB processo e
+  allocator >100%. Comparação com 2.866 eventos na M6.6.7 NÃO
+  demonstra ganho de 27%: sessões/duração/cena divergentes.
+  CopyLocalMemory dst e offsets RSX extrapolavam 0x0F900000;
+  proteção os pulou, mas impossibilitou completar dados do quadro.
+  Release:
+  https://github.com/joao9vegeto-stack/KintTany/releases/download/pstjon-kk-m6.6.8-exp/PsTJon-KK-M6.6.8-EXP.ipa
+  SHA256 1746758446fabdeb3b00b98c7b54d312225a31b526d5887b89d37ca36f780110
+
+M6.6.9-EXP: #85 38152617153 SUCCESS,
+  0395f13a0c013fb243b2ecdcf1201a9ce7edc1fd
+  Não-crashing rsx::get_address(...,1) na exclusão de texturas
+  durante expulsão emergencial sob pressão de memória, só BCUS98232.
+  Não fez otimização direta de FPS nem correção de texturas.
+  Teste físico: NÃO crashou, mas FPS muito baixo, serrilhado que
+  apareceu/desapareceu e corrupção séria avançando na campanha,
+  usuário fechou manualmente. Milhares de falhas de blit RSX.
+  Log M6.6.9 demonstrou centenas de operações ASCENSION_DST_SPAN
+  bloqueadas e ASCENSION_TEXTURE_OOB, não necessariamente causa
+  original; guarding é mecanismo de segurança e sintoma.
+  Release:
+  https://github.com/joao9vegeto-stack/KintTany/releases/download/pstjon-kk-m6.6.9-exp/PsTJon-KK-M6.6.9-EXP.ipa
+  SHA256 8118a589b2b1b3a841fd301a53c2ada42c5f90a24f8afcec9f6ce1c8c2fcbdf1
+
+M6.6.10-EXP: #86 38158518089 SUCCESS,
+  bf6f6993d6a40342efa41bc7eaca82044d3f411c
+  Pré-checagem de offsets de textura >= tamanho dinâmico da
+  memória local antes de rsx::get_address(...,1) para evitar custo
+  de log/consulta para endereços que certamente são inválidos.
+  Mantém o fluxo antigo para endereços válidos; NÃO corrige quem
+  gerou endereço errado. Visual parcialmente correto e 3/4 borrados
+  relatados em vídeos da série; alterações de textura cena-a-cena
+  criticadas pelo usuário.
+  Release:
+  https://github.com/joao9vegeto-stack/KintTany/releases/download/pstjon-kk-m6.6.10-exp/PsTJon-KK-M6.6.10-EXP.ipa
+  SHA256 e838ecb9cfc7fd07c3df3860da1d16a2d9a92440f95aef877ab78e86c008d7e8
+
+M6.6.11-EXP: #87 38164037522 SUCCESS
+  3034e6a693ad6e7d53e3200d25073844d728ffc4
+  Experimento de evicção antecipada de texturas NÃO USADAS durante
+  pressão SEVERE, uma vez a cada 15s, respeitando GPU fences; evento
+  ASCENSION_EARLY_EVICT. Na prática TESTE FÍSICO mostrou texturas
+  boas mas serrilhado e FPS muito baixo, encerramento inesperado.
+  Log fisico session-AF4104A3-2D3D-4B7E-BC56-C6BAA05DEAE4.log:
+  68 amostras FPS:
+  mediana 12.03; média 16.72; mínimo 4.21; quartil 25 ~6.44;
+  inicial footprint 2527MB; máximo 5862MB; falhas de consulta
+  pipeline até 2051 por amostra; textura OOB = 0, blit src/dst=0
+  nas amostras. Processo chegou a margem ~291 MiB, pressão fatal.
+  IMPORTANTÍSSIMO: FPS cai sem NENHUM endereço inválido, então
+  o problema é SISTÊMICO (custo render/cache/queries/compilações).
+  Mais importante que focar só no número do último blit inválido.
+  Release:
+  https://github.com/joao9vegeto-stack/KintTany/releases/download/pstjon-kk-m6.6.11-exp/PsTJon-KK-M6.6.11-EXP.ipa
+  SHA256 04c958bc1d633e403e31e0332f7d0f985cb1c30aef1d55bdfe5cbc499d1b1d3c
+
+M6.7-EXP: #88 38169058914 SUCCESS
+  3583d44ec1b36925cfd35f258072bc3f9ab447e0
+  PRIMEIRA AUDITORIA DO ACÚMULO DE PATCHES desde M5.
+  Remove construtor de debug iOS/Metal M5.22 (forçava env
+  MTL_DEBUG_LAYER, MTL_DEBUG_LAYER_VALIDATE_LOAD_ACTIONS/STORES);
+  o próprio patch M5.22 dizia "do not ship in production".
+  Reduziu precision de shader Ultra→High só para Ascension,
+  criou namespace shader/pipeline novo, reverteu M6.6.11
+  evicção antecipada SEVERE (retém cleanup FATAL), WCB/ZCull/guards
+  mantidos. Usuário notou FPS INJOGÁVEL, serrilhado e quadros onde
+  1/4 imagem correta + 3/4 borrados; compilar shaders acabou mas
+  problemas persistiram.
+  Log session-E62AB37D-4DD4-42FC-8EDC-A3F765643616(2).log:
+  246 amostras; FPS min 0.21, mediana 6.45, média 9.45, p75 9.13;
+  footprint máximo 5442MB; falhas pipeline em amostra até 7197,
+  vs até 2051 M6.6.11 (NÃO comparação da mesma cena/duração);
+  texture_oob=0, src/dst blits=0 nas amostras.
+  Volta a ocorrer pressão FATAL de memória e ZCull hard sync.
+  CONCLUSÃO: revisão piorou desempenho. Não continuar sub-reduzindo
+  precisão e descartando caches indiscriminadamente.
+  Release:
+  https://github.com/joao9vegeto-stack/KintTany/releases/download/pstjon-kk-m6.7-exp/PsTJon-KK-M6.7-EXP.ipa
+  SHA256 cee1ae7dfd8ccd3f0baf836f2183214d816039f2df18d8c422c48c66a630dc5f
+
+M6.7.1-EXP: #89 38176070912 FAILED (âncora Python);
+  #90 38176565825 SUCCESS
+  7026f4c8466c725011036ad9b5ff4448151a70a8
+  Restaurou Ultra + namespace warm shader cache equivalente à
+  M6.6.11; aumentou workers de compile pipeline ASYNC de 1→2 só
+  Ascension; silenciou repetitivo "Unknown driver vendor" em loop
+  do KosmicKrisp, que era custo desnecessário. Retém remoção do
+  M5.22 debug, WCB/ZCull e guards. Usuário: começou melhor mas
+  FPS oscilou, texturas corromperam, crashou. Relatou
+  1/4 da imagem renderizado e 3/4 borrados/corrompidos no vídeo.
+  Log session-A673046A-AAD7-4FE7-860A-BCA492B04EEE.log:
+  82 amostras; FPS mediana=13.12, média=14.88, mínimo=1.09;
+  footprint max=5754 MB; ~389 MiB headroom, Vulkan allocator
+  106% e internal ~1890 MiB. Vários avisos ZCull.
+  Últimas amostras mostram FPS de ~18→~13→9.88→6.92
+  com memória ~5.5–5.7 GB; pipeline_misses última=1662.
+  Falhas de src/dst spans aparecem SUBSEQUENTEMENTE aos períodos
+  de alta pressão e queda, indicando que não são condição
+  necessária ao início do colapso.
+  Pelos logs nas linhas ~38276-38319:
+    ASCENSION_DST_SPAN skipped ... #1 offset=0x0F65A080
+    bytes=0x400000 local bound=0x0F900000;
+    depois #64,#128,...,#960 e SRC_SPAN #1.
+    Repetição sequencial +0x400000 a cada destino indica
+    4 MiB copiadas em offsets consecutivos além da memória
+    física local alocada, não "jogo precisa só de mais shader".
+  DIAGNÓSTICO FATAL EFETIVO na linha ~39546:
+    "[1] RSX [0x0584894]: Thread terminated due to fatal error:
+     Verification failed (object: 0x0)
+     (in file rpcs3/rpcs3/Emu/RSX/VK/VKTexture.cpp:133[:3],
+      in function 'void vk::copy_image_to_buffer()')"
+  CORREÇÃO DA INTERPRETAÇÃO ANTERIOR: "object: 0x0" NÃO PROVA
+  ponteiro de textura nulo! Conferido no código PINNED XITRIX:
+    VKTexture.cpp:133
+    ensure((region.imageExtent.width + region.imageOffset.x)
+           <= src->width());
+  Logo falhou a VERIFICAÇÃO DE LARGURA DA REGIÃO COPIADA:
+  extensão horizontal+offset ultrapassa width() da imagem de
+  origem. A linha seguinte (#134) checa ALTURA. A linha
+  que falhou foi #133 (largura). A solução exige rastrear
+  CALLER, formato, mip, escala, offsets, subresource, origem,
+  destino e bounds; NÃO só inserir "if invalid return" ou
+  limitar a largura arbitrariamente pois isso pode produzir
+  justamente quadros incompletos e corrompidos.
+  O RSX dump registrava surface 1280x720 e pitches=5120;
+  perfil Ascension render_scale=75% pode ser uma HIPÓTESE
+  sobre dimensões diferentes entre superfície original
+  e imagem escalada, mas SEM medição de src.width() e region
+  NÃO há prova. Registrar esses parâmetros para a falha,
+  de modo barato e rate-limited, antes do ensure.
+  É o local de investigação mais concreto para o crash.
+  Release:
+  https://github.com/joao9vegeto-stack/KintTany/releases/download/pstjon-kk-m6.7.1-exp/PsTJon-KK-M6.7.1-EXP.ipa
+  SHA256 54dcf1af69bf226cc4f0b5f9954e8aadc3dc1d2549e015d5d45852689a841af0
+
+M6.7.2-EXP: #91 38179508994 CANCELLED, commit
+  f26d4bc11138857d9845244e70c82d92b3d2e362
+  #92 38179612381 FAILED (script pré-compilação, M5.20
+  force-store probe anchor whitespace mismatch), commit
+  76bc55f0dceded3830c426081567e4b309def48c
+  #93 38180085344 SUCCESS (release publicada), commit
+  77575617c62b42d8dfee0c0c95daaa59ce8c7262.
+  Muda driver Mesa KosmicKrisp Metal4:
+  antes M5.20 impunha "force_store = true" incondicional
+  para TODOS os passes; custo: tile memory STORE em passes
+  depth-only, elevado tráfego potencial na Apple GPU.
+  Agora "force_store |= render->color_att_count > 0" =
+  preserva sempre todos os COLOR ATTACHMENT passes (WCB visual
+  mantido); quando DEPTH-ONLY, respeita a política original
+  storeOp do Vulkan e os flags existentes force/resolve.
+  NÃO mexe em formato, recursos, shaders, FIFO ou escala.
+  Tenta reduzir bandwidth sem tornar imagem de cor negra.
+  SEM TESTE FÍSICO; melhora NÃO validada. NÃO corrige ainda
+  diretamente width OOB de VKTexture.cpp:133.
+  Release:
+  https://github.com/joao9vegeto-stack/KintTany/releases/download/pstjon-kk-m6.7.2-exp/PsTJon-KK-M6.7.2-EXP.ipa
+  SHA256 f380294285cac657051f34b6963d788f3a9758830f8f89a2725e4fb864fa394c
+
+IMPORTANTE TRANSPARÊNCIA: chamadas anteriores registraram MUITOS
+runs falhos por anchors/geração YAML; não afirmar "uma única
+tentativa" quando houve segunda ou terceira. CI #93 SUCCESS,
+mas 3 commits (#91→#93) compuseram o pacote M6.7.2 após ajustes.
+
+===========================================================================
+3) CORRELAÇÃO LOG × VÍDEO — O QUE FOI E NÃO FOI OBSERVADO
+===========================================================================
+Vídeos citados e/ou anexados no histórico (identificadores):
+- ScreenRecording_10-11-2026 17-35-23_1_compressed.mp4
+  teste M6.7, usuário descreveu 1/4 renderizado, restante borrado.
+- ScreenRecording_10-11-2026 18-57-41_1.mp4
+  último teste físico disponível da M6.7.1, com vídeo parcial, FPS
+  oscilando, corrupção de texturas e crash.
+- Vídeos/screen captures M6.6.8/M6.6.9/M6.6.10/M6.6.11 foram
+  discutidos em diversas mensagens; consultar anexos e conversas
+  originais para obter IDs completos.
+
+LOGS mais recentes:
+- session-AF4104A3-2D3D-4B7E-BC56-C6BAA05DEAE4.log: M6.6.11.
+- session-E62AB37D-4DD4-42FC-8EDC-A3F765643616(2).log: M6.7.
+- session-A673046A-AAD7-4FE7-860A-BCA492B04EEE.log: M6.7.1.
+- M6.6.8: session-494B0A6B-A19C-4A7A-B4B5-25C27BC9F885.log.
+- M6.6.9: RPCS3-BCUS98232-20261011-135309.txt e
+  session-D3F91B16-8759-4FA0-9EC9-52F0BCD8EDCD.log.
+
+No ambiente desta conversa a extração/inspeção programática
+do MP4 FALHOU por erro no runtime de arquivos. Portanto NÃO
+afirmar que uma imagem de determinado minuto foi visualmente
+verificada. A descrição de 1/4 válido + 3/4 borrados é observação
+do USUÁRIO, coerente mas AINDA NÃO demonstrada contra os campos
+de largura/altura/offset do log com timecodes exatos.
+Próximo agente: primeiro VER os frames físicos da gravação
+(disponível entre uploads), gerar storyboard com timestamps de
+início/1/4/3/4/crash e cruzar com telemetria/log por relógio.
+Se runtime Python/container inacessível, testar alternativa,
+mas nunca fabricar análise visual.
+Nunca confundir "foto com apenas quarto de imagem correta" com
+simples ausência de antialiasing; são problemas diferentes.
+
+===========================================================================
+4) CÓDIGO HERDADO, POLÍTICA EFETIVA E EXPERIMENTOS DO MENU
+===========================================================================
+Auditoria feita do workflow completo M5→M6:
+
+- M5.16: iOS KosmicKrisp MSL usa Metal SAFE MATH + PRECISE
+  floating-point functions, não matemática FAST. Pode custar FPS;
+  NÃO reverter sem teste e prova de equivalência visual.
+- M5.20: forçava STORE de attachments Metal em todos passes.
+  Própria documentação reconhece custo em bandwidth. M6.7.2
+  mantém forced store só quando COLOR attachments presentes.
+- M5.21: perfil de renderização V12 efetivo no BCUS,
+  RCB=0 WCB=1 RDB=0 WDB=0 CPU_blit=0
+  async_memory=1 accurate_res=0 strict_render=0
+  strict_texture_flushing=0 scale=75, shader_precision=ULTRA.
+- M5.22: construtor Metal com MTL_DEBUG_LAYER_VALIDATE_LOAD_ACTIONS,
+  STORE_ACTIONS, "do not ship in production". REMOVIDO NA M6.7,
+  não ressuscitar.
+- M5.15: "Disable MLAA" patch para Ascension 1.12 preservado.
+  Relacionado à perda de antialiasing e serrilhado; opcionalidade
+  e corretude devem ser avaliadas apenas com baseline estável;
+  NÃO confundir com os 3/4 borrados.
+- M6.6.8: ZCull Vulkan 512 queries Ascension; ainda há
+  "Out of free occlusion slots" com full hard sync em combate;
+  pool duplicado NÃO resolveu FPS global.
+- M6.6.9/10: texturas inválidas são ignoradas com contadores,
+  mantendo caminho original válido; NÃO foram reconstruídas.
+- M6.7.1: shader precision ULTRA restaurado, cached warm name
+  restabelecido, 2 workers compile para Ascension, outras
+  edições mantidas. Ainda FPS variável e muitos hard syncs.
+
+MENU EXPERIMENTAL RPCS3 iOS — capturas do usuário:
+  Screenshots iPhone 18:52–18:53:
+  SPU DMA "Specialize small DMA copies" Automatic ON.
+  RSX Textures "Hybrid large-texture hash" Automatic ON.
+  ARM64 uploads byte-swap Automatic ON.
+  ARM64 primitive restart Automatic ON.
+  Precomputed non-native indices Automatic ON.
+  Mobile SPU scheduling Automatic ON.
+  GETLLAR mobile backoff Automatic ON.
+  Expanded SPU scratch Automatic ON = 256 KiB vs original 8 KiB.
+  RSX FIFO read cache MANUAL 1 KiB (padrão experimental 4 KiB).
+  RSX FIFO idle wait MANUAL Yield (padrão experimental Wait for event).
+  Deferred FIFO GET publishing aparece Automatic, MAS Ascension
+  FORÇA "disabled" no System.cpp antes do boot.
+  Park RSX DMA waits Automatic ON.
+  Per-command-buffer Vulkan ring reclamation Automatic ON.
+  Estes toggles APENAS fazem efeito no próximo boot.
+
+Muito relevante: o código sob BCUS98232 em rpcs3/Emu/System.cpp
+SOBRESCREVE opções do usuário:
+  g_cfg.ios_experimental.fifo_cache_size.set(_1_kib);
+  g_cfg.ios_experimental.fifo_idle_mode.set(yield);
+  g_cfg.ios_experimental.deferred_get_publishing.set(disabled);
+  rsx_fifo_accuracy = Ordered & Atomic; driver wakeup delay 0;
+  uma guarda específica "precise GET" da v12 faz
+  FIFO_control::get_sync_position() publicar m_fifo_pos em
+  vez do frontier prefetched. Isso evitou FIFO desync na v12;
+  NÃO ligar deferred GET nem aumentar 4 KiB aleatoriamente.
+  Se fizer um A/B de read cache 1→4KiB ou Yield→WFE:
+  1 variável por commit, logs de CPU/RSX e corretude primeiro.
+
+Política efetiva confirmada pelos logs BCUS98232 M6.7:
+  RCB=0 WCB=1 RDB=0 WDB=0 CPU_blit=0 async_memory=1
+  accurate_res=0 strict_render=0 strict_texture=0
+  scale=75 shader_precision=HIGH (somente M6.7);
+  M6.7.1 e M6.7.2 voltaram a ULTRA.
+  Shader Mode "Async Recompiler with Shader Interpreter".
+  RSX FIFO cache 1024 bytes, wfe=0, deferred_get=0.
+  Os flags low-level "M5.8 correctness-first" no log são
+  mensagens históricas de patches; a configuração FINAL
+  após overrides prevalece.
+
+VÍDEO 1/4 CORRETO + 3/4 BORRADOS: possibilidades técnicas
+SEM CONFIRMAÇÃO visual/numérica:
+  * src.width menor que região.imageExtent.width + offset
+    em cópia Vulkan por escala/mip/quad layout/resolve
+    (confirmado somente que tal VERIFICAÇÃO falhou);
+  * readback de RT com stride/width guest distinto de
+    resolução escalada 75%;
+  * attachment partial store/load no Metal e layout/copy,
+    cache de textura/superfície evicto sob memória fatal.
+  NÃO concluir que a versão Lite seja a causa por nome/tamanho.
+
+===========================================================================
+5) VERSÃO LITE DO USUÁRIO — O QUE É CONHECIDO
+===========================================================================
+Jogo: "GOW.ASCENSION.LITE.PS3.BY.YT.@NandoGamingTestBR",
+~21GB, título BCUS98232, update 1.12; usuário informa que
+a edição remove apenas o MULTIPLAYER, mantendo campanha.
+Não houve documentação confiável de arquivos removidos e
+integridade do EBOOT/SELF; não afirmar modificações no executável.
+O log M5.18 emite ausências BOOT0_EN.GTF, BOOT0.GTF,
+GAME.PSARC, GENERAL.STREAMS, GOATHECA00.STREAMS,
+R_HERO00.WAD, HECABAS.TS etc, e avisa que ausência pode
+ser OPCIONAL; paths podem usar localizações alternativas.
+A instabilidade gráfica já é reproduzível e provada por
+verificações internas de Vulkan e memória; não é correto
+culpar a Lite sem A/B mesma versão integral/same settings.
+Se comparar, usar dump íntegro da MESMA edição/serial/
+update e same save; exigir provas, não baixar 20+GB agora.
+
+===========================================================================
+6) CAUSA MAIS IMPORTANTE: VKTexture.cpp:133 / DIMENSÕES DO COPY
+===========================================================================
+ATENÇÃO AO PRÓXIMO AGENTE:
+o fatal da M6.7.1 não é mera suspeita de jetsam!
+A thread RSX terminou explicitamente com:
+  Verification failed (object: 0x0)
+  (file rpcs3/Emu/RSX/VK/VKTexture.cpp:133[:3],
+   function 'void vk::copy_image_to_buffer()')
+Confira a linha 133 no COMMIT PINNED XITRIX:
+  ensure((region.imageExtent.width + region.imageOffset.x)
+      <= src->width());
+
+Essa checagem falha quando a cópia solicitada (offset horizontal
++ width) excede src.width. É um ASSERT que aborta a thread.
+A existência da string "object: 0x0" NÃO comprova src=null;
+evitar diagnóstico errado. Falhas de largura podem ser
+sintoma direto de escalonamento/descritor errado na cópia.
+Se houver 3/4 borrados, verificar formato e geometria:
+- Src VkImage dimensions (width,height,depth), mip/layer/format.
+- Region imageExtent.width/height/depth e imageOffset.x/y/z;
+  bufferRowLength, bufferImageHeight, bufferOffset.
+- Resolução RSX surface clip 1280×720 e color pitch 5120
+  capturada no dump; escala interna 75% no BCUS.
+- Histórico de locais que chamam copy_image_to_buffer e
+  se reaproveitam alocações de framebuffers, resolve/depth,
+  render target reads, GPU->CPU transfers ou gráficos
+  de tela inteira que poderiam estar escalados.
+- Validação deve ocorrer ANTES da chamada de cópia,
+  com log de baixa taxa dos operandos reais, TitleID,
+  resource ID/fence e call site. NÃO omitir ou clamp
+  sem entender se deveria ser criado src original sized.
+- Se operações NÃO deveriam ser válidas devido a região guest
+  inválida, demonstrar o caminho do dado com trace, não
+  maquiar a corrupção visual.
+- Correlacionar com o mesmo trecho que emitiu 4MiB blits
+  fora local RSX e a queda de memória; antes do crash
+  há ~960 destinos ignorados, 1 source ignorada.
+- A memória pressiona muito ANTES dos blits; portanto tanto
+  problemas de lifetime/pressão quanto extent need solving.
+- Hard sync ZCull não pode ser eliminado falsificando resultados;
+  investigar lifecycle e disponibilidade de pool, reduzir
+  exigência de query/encoder e otimizar pipeline com safety.
+
+===========================================================================
+7) MÉTRICAS/TELEMETRIA QUE REALMENTE MEDIMOS
+===========================================================================
+M6.6.11: 68 amostras; FPS mínimo 4.21, med 12.03, média 16.72,
+processo máx 5862MB, misses até 2051; local OOB=0.
+M6.7: 246 amostras; FPS mínimo 0.21, med 6.45, média 9.45,
+processo máx 5442MB, misses até 7197; local OOB=0.
+M6.7.1: 82 amostras; FPS mínimo 1.09, med 13.12, média 14.88,
+processo máx 5754MB; misses até 1662; em fim blits inválidos
+e crash VKTexture:133.
+Estas AMOSTRAS têm tamanhos, jogos/cenas e duração diferentes;
+NÃO equivalem a benchmark A/B pareado. Média por amostra
+não equivale a FPS agregado por tempo da mesma cena.
+"rsx_load_proxy=100" NÃO mede saturação Metal da GPU Apple.
+As queries de pipeline "pipeline_misses" medem seleção/
+compilação não disponíveis, não são necessariamente miss
+do cache Metal hardware. A telemetria atual não tem:
+- GPU Metal timestamp/occupancy real.
+- frames lidos GPU para analisar se a renderização ficou preta
+  ou parcialmente corrompida.
+- medição confiável do motivo final de jetsam do iOS no
+  caso de um fechamento sem stack nativo.
+- callback de qual imagem/mip está sendo lida no fatal 133.
+Essas lacunas são recomendação para instrumentação barata
+e informativa, NÃO para alterar aleatoriamente settings.
+
+===========================================================================
+8) MATRIZ MULTI-JOGO — NÃO REGREDIR OUTROS TÍTULOS
+===========================================================================
+BCUS98232 Ascension v1.12 (~21GB Lite) prioridade #1.
+Prince of Persia: The Sands of Time / Forgotten Sands
+  (2 edições; não confundir Serial/TitleID).
+Prince of Persia 2008 NPUB30424: hardware ZCull e renderização
+  foram corrigidos em M5.34 e testes avançaram o título.
+Dante's Inferno BLUS30405: ~30FPS em alguns trechos de
+  M6.3.1, durante boss quadro preto/queda de FPS/crash; em
+  M6.5.1 usuário viu problemas de material/estruturas.
+Castlevania: Lords of Shadow 2 e Sleeping Dogs NPUB30818:
+  veja detalhamento concreto nos ANEXOS HISTÓRICOS do
+  usuário já recuperados; NÃO aplicar patches exclusivos
+  do Ascension a todos.
+Qualquer otimização de shader/Metal compartilhada exige
+  matriz de regressão nas demais edições (render de cena,
+  combate, 3D, áudio, crash, FPS).
+Opções RCB, WCB, ZCull e shader policies por TitleID.
+
+===========================================================================
+9) PLANO PARA A PRÓXIMA ETAPA (APÓS TESTE M6.7.2)
+===========================================================================
+PASSO 1: receber log e vídeo físico M6.7.2. Reabrir Handoff;
+extrair frames de MP4; confrontar timestamps com logs.
+Comparar ao melhor trecho M6.7.1 onde texturas inicialmente
+eram boas. Exigir preservação visual, não só FPS.
+
+PASSO 2: investigar sistêmico vk::copy_image_to_buffer(), que
+falhou especificamente WIDTH bound: rastrear callers de
+VKTexture.cpp 133, coletar src dimensions, region image
+extent/offset, mip, formato, escala, pitch, local mapping.
+Instrumentar ASSERT com operandos via log rate-limited
+ou corrigir caller DEPOIS de demonstrar inconsistência.
+Testar nenhum acesso inválido em múltiplas áreas do jogo.
+
+PASSO 3: analisar coerência global entre renderScale75%,
+resolution_surface original 1280x720, framebuffers color/depth,
+mips e transfer region. A proporção borrada de tela NÃO
+é só antialiasing; não iniciar trocas de MLAA/resolução
+até pipeline color/depth/readback estar correta.
+
+PASSO 4: perfis de desempenho com problemas principais:
+  ~5–5.8GB footprint, pressure fatal, full GPU hard-sync
+  ZCull repetido, pipeline lookups/pipeline misses altos,
+  múltiplas transferências fora RSX local perto do crash.
+  Testar causa de acumulação (lifetime caches Vulkan, RT,
+  Metal4 private heaps, recycling sync, tile stores M5.20)
+  isoladamente, medindo diferença em MESMA cena.
+  M6.7.2 é A/B global de depth-only store. Não atribuir
+  ganho até teste físico.
+
+PASSO 5: se regredir, ROLLBACK rápido e explicado apenas
+  da alteração que causou regressão; não adicionar novos
+  patches em cima de patches comprovadamente ruins.
+  Criar baseline conhecido e testes mínimos para frame extent,
+  copy bounds, query lifecycle, shader math, RT feedback,
+  outros TitleIDs, CI anchor stability.
+  Avaliar manter M5.16 SAFE math por corretude antes de mudar.
+
+PASSO 6: não reabilitar deferred FIFO GET, não habilitar
+  WFE/fifo cache4k na mesma build; v12 precise GET é
+  invariante crítico. Testes de RSX FIFO devem ser novos
+  A/B isolados, só se GPU bottleneck encaminhado.
+
+PASSO 7: GitHub Actions única branch + commit, completar,
+  produzir IPA, hash e relatório REAL. Se sucesso no CI e
+  falha física, registrar sem exageros; usuário manda novos
+  vídeos/logs e agente continua automaticamente.
+
+OBSERVAÇÃO EXTRA: três tentativas CI de M6.7.2:
+  #91 cancelled, #92 fail YAML/script anchor e #93 success.
+  NÃO confundir commit #93 com alteração profunda de
+  renderizador; é correção do patch de string de M5.20.
+  Nunca substituir isto pela crença que M6.7.2 já corrigiu
+  VKTexture width abort.
+
+===========================================================================
+10) CONSULTAS ÚTEIS DE GITHUB E CONTINUIDADE
+===========================================================================
+Obter código mais recente:
+  GET https://api.github.com/repos/joao9vegeto-stack/KintTany/branches/PsTJon-KosmicKrisp
+  GET https://api.github.com/repos/joao9vegeto-stack/KintTany/contents/.github/workflows/pstjon-kosmickrisp-m4.yml?ref=PsTJon-KosmicKrisp
+  GET https://api.github.com/repos/joao9vegeto-stack/KintTany/actions/runs
+  GET https://api.github.com/repos/joao9vegeto-stack/KintTany/releases/tags/pstjon-kk-m6.7.2-exp
+  GET https://api.github.com/repos/XITRIX/rpcs3/contents/rpcs3/Emu/RSX/VK/VKTexture.cpp?ref=3ec23f1fef57071c808726f68121cfeb601eeb1e
+
+Sempre revisar o source e git diff gerado, incluindo
+config final de Shader Precision, Write Color Buffers,
+Read Color Buffers, strict rendering, accurate res, CPU Blit,
+ZCull, FIFO GET, render scale e mescla dos patches.
+Se tool conectar GitHub via functions.exec:
+  tools.mcp__GitHub__fetch_file({
+    repository_full_name:"joao9vegeto-stack/KintTany",
+    path:".github/workflows/pstjon-kosmickrisp-m4.yml",
+    ref:"PsTJon-KosmicKrisp"
+  })
+  tools.mcp__GitHub__update_file(...) somente branch correta.
+
+PRÓXIMO CHAT — TEXTO PRONTO:
+"Leia integralmente o HANDOFF-PsTJon-KosmicKrisp-M6.7.2-INTEGRAL-
+2026-10-11.txt. Não edite main. Branch única PsTJon-KosmicKrisp.
+Último IPA M6.7.2, Actions #93 SUCCESS, não testado. Continue
+a análise global do Ascension (RSX/Vulkan/Metal), principalmente
+o abort por região de cópia larga demais VKTexture.cpp:133
+e o defeito 1/4 correto + 3/4 borrado; jamais fazer remendos
+por cena. Quando eu enviar novo vídeo/log, correlacione tudo,
+execute build fundamentada em um pacote, acompanhe GitHub Actions
+até sucesso e me entregue IPA + hash + o que alterou."
+
+===========================================================================
+FIM DO ADENDO ATUALIZADO 11/10/2026 — M6.7.2
+A SEGUIR: CÓPIA INTEGRAL DO HANDOFF ANTERIOR (M5→M6.6.5)
+A DOCUMENTAÇÃO HISTÓRICA NÃO SUBSTITUI ESTE ESTADO ATUAL.
+===========================================================================
+
+
+ATUALIZAÇÃO ADICIONAL / LEITURA OBRIGATÓRIA (10/10/2026)
+HANDOFF INTEGRAL M6.6.5 + TESTES COMPLEMENTARES DA M6.5.1:
+CASTLEVANIA: LORDS OF SHADOW 2 e SLEEPING DOGS.
+
+Este arquivo incorpora SEM OMITIR a documentação anterior da M5.34 até a
+M6.6.5 (run #79), acrescida ao final das seções 14–18 com análise quantitativa
+nova do log de 168.106 linhas. As capturas novas foram tiradas com a M6.5.1,
+portanto NÃO constituem validação física da M6.6.5.
+STATUS GITHUB VERIFICADO: HEAD a452cd92aa3fb82f87af2b1999f9f739e92279cf;
+workflow #79 / 38098521871, SUCCESS; M6.6.5 IPA publicado.
+Nenhum novo commit/IPA foi gerado neste pedido de análise + HANDOFF.
+NÃO declarar confirmado um crash de Castlevania/Sleeping Dogs que o log NÃO
+registra: as sessões de gameplay terminam com parada explícita pelo frontend.
+
+HANDOFF TÉCNICO INTEGRAL — PsTJon / RPCS3 iOS / KosmicKrisp / iPhone 17 Pro
+Atualizado: 10/10/2026, horário do Brasil (os últimos runs aparecem em 11/10 UTC).
+ESTADO CONFIRMADO: M6.6.5 compilada, GitHub Actions #79 (38098521871) SUCCESS,
+commit a452cd92aa3fb82f87af2b1999f9f739e92279cf, IPA publicado.
+ATENÇÃO: M6.6.5 AINDA NÃO FOI TESTADA NO IPHONE. CI VERDE NÃO PROVA
+CORREÇÃO DE TEXTURAS, CRASH, DESEMPENHO OU 30 FPS.
+Documento incorpora o HANDOFF M5.34 usado no início deste chat e todas as
+mudanças, imagens, vídeos, logs, falhas do CI e resultados até a M6.6.5.
+
+==========================================================================
+0. PRIMEIRÍSSIMA INSTRUÇÃO PARA O PRÓXIMO AGENTE
+==========================================================================
+LEIA TODO ESTE HANDOFF ANTES DE ALTERAR QUALQUER CÓDIGO.
+O usuário possui apenas um iPhone e trabalha por GitHub Actions.
+Não entregar explicações ou planos no lugar de código e IPA quando solicitar
+continuar o desenvolvimento. Fazer uma correção fundamentada, UM commit/UM
+workflow por pacote, acompanhar até terminar, corrigir falhas reais e entregar
+IPA direto. Informar tentativas falhas transparentemente, nunca ocultá-las.
+NÃO editar a branch main. Branch do projeto: PsTJon-KosmicKrisp.
+O ÚLTIMO IPA EXISTENTE É A M6.6.5: ENTREGUE; AGUARDAR TESTE FÍSICO.
+Se o usuário enviar resultados dessa build, ANALISAR O NOVO VÍDEO E LOG ANTES
+DE PLANEJAR M6.7. Não repetir tentativas M6.6–M6.6.4 sem entender as falhas.
+
+==========================================================================
+1. OBJETIVO DO USUÁRIO / CRITÉRIOS DE ACEITAÇÃO
+==========================================================================
+Projeto: PsTJon, RPCS3 para iOS com backend experimental KosmicKrisp
+(tradução Vulkan -> Metal na GPU Apple), iPhone 17 Pro / A19 Pro, JIT ativo.
+Principal título: God of War: Ascension, TitleID BCUS98232.
+Meta: gráficos/texturas/iluminação corretos (comparáveis à v12 anterior ao
+KosmicKrisp), sem travamentos, >=30 FPS ESTÁVEIS durante gameplay e transições.
+60 FPS é objetivo POSTERIOR, não comprovado nem garantido pelo hardware.
+Manter compatibilidade com Prince of Persia (2008), duas edições de
+The Forgotten Sands, Dante's Inferno e outros jogos compatíveis.
+Não sacrificar imagem para melhorar FPS artificialmente.
+
+Regras fixas:
+- O usuário usa apenas iPhone, não tem Mac/PC/VPS para compilar/testar local.
+- Uma alteração coesa = 1 commit = 1 execução automática do workflow.
+- NÃO tocar main ou outras branches, trabalhar só em PsTJon-KosmicKrisp.
+- Corrigir eventuais falhas do Actions, mas cada correção exigirá novo commit
+  e consequentemente novo run; mostrar exatamente quais falharam.
+- Monitorar o Actions até terminar, NÃO abandonar o artifact.
+- IPA independente e diretamente acessível no iPhone, nome sem espaços.
+- Publicar também artifact e reportar commit, run, SHA-256 e alterações.
+- Ter build bem-sucedida NÃO é igual a jogo corrigido no aparelho.
+- Analisar dados de todos os títulos; não ficar focado só no Ascension ou num
+  dos Forgotten Sands. Fazer A/B isolado por TitleID quando possível.
+- Não reciclar reinstalação/limpeza de cache/WCB/ZCull off/shader interpreter
+  como solução sem novas evidências; são hipóteses extensivamente testadas.
+
+Fases acordadas: M5 boot e paridade inicial; M6 integridade gráfica e
+estabilidade; M7 desempenho >=30 FPS sustentados; M8 possível 60 FPS.
+Critérios formais de M9 devem ser recuperados do handoff original, se existir;
+não inventar plano de M9.
+
+==========================================================================
+2. REPOSITÓRIO, PINNED SOURCES E PONTO EXATO DE PARTIDA
+==========================================================================
+Repo: https://github.com/joao9vegeto-stack/KintTany
+Branch: PsTJon-KosmicKrisp
+Branch URL: https://github.com/joao9vegeto-stack/KintTany/tree/PsTJon-KosmicKrisp
+Workflow editado: .github/workflows/pstjon-kosmickrisp-m4.yml
+Workflow URL:
+https://github.com/joao9vegeto-stack/KintTany/blob/PsTJon-KosmicKrisp/.github/workflows/pstjon-kosmickrisp-m4.yml
+HEAD confirmado: a452cd92aa3fb82f87af2b1999f9f739e92279cf
+Commit: PsTJon M6.6.5: repair malformed M6.6.4 YAML and complete NV3089 preflight
+Workflow #79, ID 38098521871, run_attempt=1, COMPLETED SUCCESS.
+https://github.com/joao9vegeto-stack/KintTany/actions/runs/38098521871
+Artifact id: 11687380269
+Artifact: PsTJon-KK-m06-6-5-ascension-2d-span-guard-IPA
+Release tag: pstjon-kk-m6.6.5
+https://github.com/joao9vegeto-stack/KintTany/releases/tag/pstjon-kk-m6.6.5
+IPA: PsTJon-KK-M6.6.5.ipa
+Download direto VERIFICADO como asset uploaded:
+https://github.com/joao9vegeto-stack/KintTany/releases/download/pstjon-kk-m6.6.5/PsTJon-KK-M6.6.5.ipa
+Tamanho: 31.163.237 bytes
+SHA-256 registrado no asset da GitHub Release:
+09a0957c56ae88ca8830a9d510398e2c8a528a12c7f9b7c084f2d655652df76c
+Verificado via API GitHub: run concluído, job build sucesso, upload-artifact
+sucesso, Publish direct M6.6.5 IPA sucesso, asset state=uploaded.
+Observação: SHA-256 obtido de metadados do asset da release; não se está
+afirmando auditoria local do conteúdo binário após novo download.
+
+Base externa PINNED (segundo handoff M5.34, ainda usada neste workflow):
+  RPCS3 ios-port: 3ec23f1fef57071c808726f68121cfeb601eeb1e
+  Mesa / KosmicKrisp: bfe063f723d436e5cdef8a98f058d4e44a64810c
+  Volk: 0dc3ce00bf98b9f0b6fe708ca0f7eb74e2830173
+  FFmpeg: 8.1.1
+  Bundle ID shell: com.xitrix.RPCS3
+  Mac runner: macos-26, Xcode 26
+  Gráficos: RPCS3 Vulkan -> Volk provider KosmicKrisp -> Metal.
+  NÃO atribuir as builds recentes ao MoltenVK; MoltenVK era da linha v12.
+
+ARQUITETURA DO REPO: a fonte RPCS3/Mesa alterada NÃO está simplesmente
+commitada no repo. O workflow YAML (gigante, >4 mil linhas) baixa fontes
+pinned e aplica muitos patches via trechos Python inline, EM ORDEM.
+Quase todos os patches mais novos são acrescentados depois dos antigos.
+Essa ordem gera sobrescritas de configurações e altera âncoras lexicais.
+TODA mudança precisa atingir o código EFETIVO APÓS os patches anteriores.
+
+==========================================================================
+3. HISTÓRIA E BASE VISUAL — NÃO RECOMEÇAR DO ZERO
+==========================================================================
+ANTES DO KOSMICKRISP, v12 / MoltenVK: Ascension chegou a ter texturas,
+iluminação e cenários muito mais fiéis, comprovados em vídeos antigos,
+mas o FPS sofria colapso brutal após eventos do penhasco. Uma reinstalação
+posterior da v12 também mostrou áreas pretas, razão para não assumir que
+qualquer diferença venha só do driver; configurações e caches importam.
+A v13 pré-Port contém correções/guards de RSX, JIT e outros componentes.
+Preservar áudio, gameplay, controle, JIT, SPU, cutscenes e correções estáveis.
+
+M3: smoke Metal com >40 mil frames; M4: driver Vulkan/Metal injetado no
+shell iOS; M5: >=40 tentativas e muitos experimentos (WCB, ZCull off,
+caches, strict texture flush, shader interpreter etc.) NÃO resolveram as
+falhas gerais. M5.34 foi grande ponto de referência. NÃO regressar para
+uma solução universal de ZCull desligado: isso deixou vários cenários
+pretos/opacos. Diferenciar (1) render target preto antes do present,
+(2) corrupção e hazard de depth/color, (3) falta de queries / memory,
+(4) transferência de memória guest RSX, (5) pipelines e FPS.
+
+M5.34: NPUB30424 usou novamente ZCull real, passou a renderizar texturas
+corretamente; RPCS3 com pool 256 e KK tabela 65536 quando OQ64K ativa.
+M5.35: testou 2 workers de shader pipeline para NPUB30424; sem garantia
+30 FPS, log mostrou stalls de pipeline e frames instáveis. Iniciou entrega
+por GitHub Release direta (sem precisar extrair ZIP Actions no iPhone).
+
+==========================================================================
+4. MATRIZ DE JOGOS — VERSÕES NÃO SÃO INTERCAMBIÁVEIS
+==========================================================================
+A) GOD OF WAR ASCENSION — BCUS98232
+  ALVO PRINCIPAL.
+  M6.0.1/M6.1.1: cenário pode mudar de preto/corrompido para correto ao
+  mover minimamente a câmera. Isso sugere estado/passes/sincronização,
+  não somente texturas ausentes.
+  M6.2.2: ao corrigir a sobrescrita tardia de Disable ZCull, finalmente
+  houve cena NORMAL por alguns instantes; 7.6 FPS numa captura, depois
+  ~1.9 FPS, textura voltou escura e crash Dead FIFO ao transferir bloco
+  RSX NV3089. Centenas de syncs forçados e CopyLocalMemory errors.
+  M6.3.1: aumentou slots software 2048->4096 e threshold 1792->3584
+  APENAS BCUS; reduziu alguns bloqueios mas NÃO curou FPS/corrupção/crash.
+  M6.4: guard para fonte OOB em transferência local 1024x1024 antes do
+  read_barrier. Proposta de evitar um caso de Dead FIFO; NÃO validou
+  permanentemente.
+  M6.5.1: screenshot da transição mostra quadro de textura correta e logo
+  depois padrões multicoloridos/ruído e renderização errada. FPS 11.9,
+  27.8, 13.4, 2.0 nas capturas; crash em operação RSX e offset OOB.
+  Log RPCS3-BCUS98232-20261010-203503.txt: cerca de 977 mensagens
+  'Out of free occlusion slots. Forcing hard sync'; centenas de acessos
+  inválidos; pressão de memória Vulkan reportada ~147% do orçamento.
+  Falha específica observada: escrita em endereço emulado 0xcf900000,
+  limite VRAM local 0xc0000000 + 0x0f900000. Proteção parcial de altura
+  M5.7 e 1024 quadrada M6.4 NÃO interceptava necessariamente todo 2D.
+  M6.6.5 adiciona validação de extensão completa de origem/destino em u64
+  para transferências locais NV3089 2D escala 1 antes de ler/escrever.
+  ***NÃO TESTADA FISICAMENTE.***
+  FPS>=30 e estabilidade ainda NÃO atingidos. Problemas de memória e
+  sincronização ZCull podem existir INDEPENDENTEMENTE do span OOB.
+
+B) PRINCE OF PERSIA: THE FORGOTTEN SANDS — NPUB30632, DIGITAL
+  NÃO confundir com Prince (2008) NPUB30424 nem com disco BLUS30401.
+  Inicialmente cenário muito escuro com ZCull off. M6.0.1 anunciou ZCull
+  ON, mas perfil antigo M5.33 desligava novamente em fase tardia.
+  M6.1.1 corrigiu essa sobrescrita, e pela PRIMEIRA VEZ as texturas
+  ficaram corretas. No teste desta conversa foi relatado SEM ghosting
+  e com FPS ruim (captura 17.2 FPS). Outros trechos podem ter quedas.
+  Recomendação ATUAL de qual jogo manter: NPUB30632 DIGITAL; é a edição
+  que teve resultado mais consistente em chegar à gameplay. Não é
+  compatibilidade perfeita, não prometer FPS ou ausência de bugs.
+  M6.6.5 NÃO altera intencionalmente o perfil digital do Forgotten Sands.
+
+C) PRINCE OF PERSIA: THE FORGOTTEN SANDS — BLUS30401, DISCO
+  Não confundir com NPUB30632.
+  Antes M6: preto/opaco persistente. As capturas M5.29 mostravam pixels
+  pretos no framebuffer já ANTES da apresentação; flush, interpreter,
+  WCB, cache e desativar ZCull não corrigiram.
+  M6.0.1 com ZCull real finalmente renderizou cenas. M6.1.1 mostrou
+  cenário correto, mas ghosting e FPS extremamente baixo (9.9 FPS em
+  captura). Algumas versões chegaram à gameplay; outras ficaram
+  travadas no loading Ubisoft ou logo ao iniciar gameplay, com áudio
+  ainda tocando, 0 FPS e RSX 0.
+  M6.2.2 desativou apenas strict rendering; M6.3.1 testou desligar
+  leitura/escrita de depth, mas houve REGRESSÃO para loading congelado.
+  M6.4 restaurou strict rendering + depth R/W do último perfil que
+  chegara à gameplay. Não há comprovação de que o carregamento voltou
+  a funcionar de modo estável.
+  Se usuário quiser liberar espaço, RECOMENDADO EXCLUIR BLUS30401 e
+  manter NPUB30632 (preservar saves/dados próprios antes de remover).
+
+D) PRINCE OF PERSIA (2008) — NPUB30424
+  Título DIFERENTE de The Forgotten Sands.
+  M5.34: real ZCull e tabela maior restauraram texturas corretas.
+  M5.35: 2 workers pipeline neste jogo, restante 1; FPS ainda ruim e
+  instável, muita compilação/stalls, não chegou a >=30 sustentados.
+  M6.1.1: ZCull relaxed=true causou REGRESSÃO: tela branca e 0 FPS
+  depois de Load Game. M6.2.2 fez rollback relaxed=false, e o save
+  voltou a entrar na gameplay. Captura com ~20.9 FPS, queda persiste.
+  M6.5.1 e M6.6.5 não alteram intencionalmente NPUB30424.
+
+E) DANTE'S INFERNO — BLUS30405, update 1.04
+  M5.29 renderizava cenas complexas coerentemente com 6–31 FPS.
+  Na M6.3.1, PRIMEIRO trecho de gameplay chegou quase a 30 FPS, mas
+  primeira luta de chefe ficou preta/queda profunda e crashou com
+  VK_ERROR_OUT_OF_HOST_MEMORY em vkCreateQueryPool, query_pool.hpp:24.
+  O retorno 'Out of host memory' da Vulkan NÃO prova que toda RAM do
+  iPhone se esgotou; pode ser limite/alocador/recurso do driver.
+  M6.5.1: Dante somente passou a usar pools Vulkan menores (256 queries)
+  e reutilização de pools aposentados no fluxo de limpeza/deferência
+  segura, registrando 'PsTJon M6.5 DANTE_OQ_ALLOC'.
+  ***AINDA NÃO FOI TESTADO FISICAMENTE DANTE NA M6.5.1 OU M6.6.5.***
+  Cuidado: corrigir somente erro de alocação não prova resolver escurecimento
+  antes do crash. Evitar regressão de 30 FPS parciais.
+
+F) NARUTO ULTIMATE NINJA STORM DEMO — NPUB90107
+  Nas versões anteriores renderizava partes de gameplay perto de 30 FPS,
+  embora instável. Usar como referência de compatibilidade adicional.
+
+G) ISOs/PKGs PS2 Classics: ISO.BIN.EDAT de PS2 em pacote PS3 NÃO é um
+  jogo nativo com PPU/SPU ELF diretamente suportado pelo RPCS3; não
+  misturar resultados de boot com estes títulos nativos.
+
+==========================================================================
+5. LINHA DO TEMPO DE COMMITS E GITHUB ACTIONS M5.34 -> M6.6.5
+==========================================================================
+CONFIRMADO PELO GITHUB em 10/10 (BR) / 11/10 (UTC):
+   Run   Resultado  Build/objetivo                        GitHub run ID
+   #60   SUCCESS    M5.34 ZCull NPUB30424                 38027111330
+   #61   SUCCESS    M5.35 2 shader workers A/B            38066219183
+   #62   FAILURE    M6.0 policy injection                 38068273146
+   #63   SUCCESS    M6.0.1 ZCull 3 títulos/frametime      38068760810
+   #64   CANCELLED  M6.1                                   38072440337
+   #65   SUCCESS    M6.1.1 NPUB ZCull late-order fix      38072532462
+   #66   CANCELLED  M6.2                                   38074895322
+   #67   FAILURE    M6.2.1 anchor perfil M5.21/22        38074945593
+   #68   SUCCESS    M6.2.2 ZCull Ascension + rollback     38075459334
+   #69   CANCELLED  M6.3                                   38082377954
+   #70   SUCCESS    M6.3.1 query headroom 4096            38082440086
+   #71   SUCCESS    M6.4 source blit guard                38086941843
+   #72   FAILURE    M6.5 âncora seletor antigo            38088396634
+   #73   SUCCESS    M6.5.1 Dante query pools              38088860628
+   #74   FAILURE    M6.6 âncora antiga NV3089             38095893098
+   #75   FAILURE    M6.6.1 C++ expected expression:199    38096275172
+   #76   FAILURE    M6.6.2 git diff --check               38097134152
+   #77   FAILURE    M6.6.3 git diff --check whitespace    38097553133
+   #78   FAILURE    M6.6.4 YAML inválido, 0 jobs         38098338014
+   #79   SUCCESS    M6.6.5 patch+RPCS3Core+IPA+release   38098521871
+
+Commits exatos principais:
+  M5.34   04ca7120494cdb40b860be777f55ea0ff96b8227
+  M5.35   5974066a3a8aef3b6bbbada7897a64fb6a787e40
+  M6.0.1  cd7a2810237507c675dcecd9f39425a6d863c288
+  M6.1.1  d95fd282984180c60ed3b9cbe4298f7f5caf0b42
+  M6.2.2  7c6f477c107ad32d99c3bd39090fc725296e0c8f
+  M6.3.1  014bcf1a9b1174b73a297444dc9a847a0c79a7dc
+  M6.4    29e7e3fda71277cd5e29ea140d7793803cfbf8d2
+  M6.5.1  6b176498ff8de42f0f94e0e46e148461c76bbea4
+  M6.6    a0be4fb606818a828d7a4be9c73c50d28276efc4
+  M6.6.1  162d1d3be747cffb9de0fb2cf7926cfe268b1a0d
+  M6.6.2  6180b9f771ff4dc46bc3b1bfb049f1ade2f7041a
+  M6.6.3  8ba31930f7af371b4b3555da29102e076e477c73
+  M6.6.4  ce0b9fe73b13411f77d84b5a80128e907de137c2
+  M6.6.5  a452cd92aa3fb82f87af2b1999f9f739e92279cf
+
+ATENÇÃO: runs #74-78 foram ERROS DE GERAÇÃO/PATCH/C++/YAML, NÃO 5
+NOVOS CRASHES DO JOGO. #79 SUCCESS NA PRIMEIRA TENTATIVA desse commit.
+A GitHub Release M6.6.5 foi criada e o IPA direto foi publicado.
+
+==========================================================================
+6. RAIZ DAS 5 FALHAS DA SEQUÊNCIA M6.6 — NÃO REPETIR
+==========================================================================
+#74 M6.6: patch Python buscava linha inteira 'src_line_length' conforme
+código upstream original, mas o código gerado já sofrera alterações da M5.7.
+A validação abortou antes do RPCS3Core.
+
+#75 M6.6.1: corrigiu âncora lexical, mas inseriu bloco '#ifdef/if' NO MEIO
+DA expressão C++ em 'nv3089.cpp'; Clang erro 'expected expression' em
+nv3089.cpp:199:13, compilação do RPCS3Core abortada.
+
+#76 M6.6.2: inserção mudou para ANTES da expressão inteira. 'git diff
+--check' revelou uma linha só de whitespace no NV3089 gerado (line 197),
+parando build na aplicação de patches.
+
+#77 M6.6.3: tentou remover espaços apenas do bloco injetado, mas a linha
+de whitespace vinha também da junção com código pré-existente.
+'git diff --check' ainda falhou em nv3089.cpp:197: trailing whitespace.
+
+#78 M6.6.4: script ao tentar adicionar regex/assert foi truncado no meio
+da expressão Python, quebrando YAML: um trecho ficou fora do run:|, e o
+GitHub Actions criou run FAILURE SEM QUALQUER JOB. A primeira Release
+M6.6.4 nunca existiu. Isso foi defeito no YAML, não no emulador.
+
+#79 M6.6.5: truncou o texto espúrio após primeira declaração de release,
+restaurou corpo Python completo, saneou whitespace de TODAS as linhas
+do arquivo C++ gerado, verificou que bloco de checagem precede a
+expressão, compilou backend e RPCS3Core, publicou artifact e IPA na
+release. SUCCESS. A mensagem GitHub do commit fala em reparo do YAML.
+
+LIÇÃO OBRIGATÓRIA: preflight NO CONTEXTO EXATO DAS FONTES MODIFICADAS:
+  A) Simular a sequência das transformações dos scripts ANTES de commit.
+  B) Validar YAML (não permitir texto em indentação de nível 0 inesperado).
+  C) Gerar source real e executar 'git diff --check'.
+  D) Compilar/ao menos syntax-check do C++ alterado quando possível.
+  E) Buscar marcadores de TitleID e política EFETIVA no final dos patches.
+  F) Não introduzir Python triple quote/regex que rompa YAML run block.
+  G) Publicar IPA só depois que run e job realmente tiverem SUCCESS.
+
+==========================================================================
+7. M6.6.5 — O QUE ESTÁ DE FATO NO CÓDIGO
+==========================================================================
+Alteração do gerador de patches no workflow YAML (não um novo arquivo C++
+commitado diretamente):
+  rpcs3-src/rpcs3/Emu/RSX/NV47/HW/nv3089.cpp
+
+Adicionada guarda condicional SOMENTE se:
+  Emu.GetTitleID() == "BCUS98232"
+  blit_engine_context_surface == surface2d
+  scale_x == 1.0 e scale_y == 1.0
+  destino ou origem usam CELL_GCM_CONTEXT_DMA_MEMORY_FRAME_BUFFER
+
+Calcula extensão completa em u64:
+  dst_begin = dst_offset + (out_y+clip_y)*out_pitch + (out_x+clip_x)*out_bpp
+  dst_bytes = (clip_h-1)*out_pitch + clip_w*out_bpp
+  src_begin = src_offset + in_y*in_pitch + in_x*in_bpp
+  src_rows = min(in_h, clip_h)
+  src_bytes = (src_rows-1)*in_pitch + clip_w*in_bpp
+  VRAM bound = 0x0f900000
+
+Quando origem/destino local ultrapassam bound, devolve
+  {false, src_info, dst_info}
+com logs (primeiros 8 eventos + um a cada 64):
+  PsTJon M6.6 ASCENSION_DST_SPAN
+  PsTJon M6.6 ASCENSION_SRC_SPAN
+
+PRESERVADO: M5.7 height-clamp e guards anteriores, M6.4 source OOB para
+caso particular, query pool 4096 para Ascension, ZCull hardware ligado
+via política efetiva M6.2, M6.5.1 query recycling exclusivo Dante,
+políticas de ambos Forgotten Sands e Prince 2008.
+
+IMPORTANTE: Isto é mitigação experimental, NÃO prova que GPU/RSX agora
+produzem toda a imagem correta. Rejeitar um blit inválido pode evitar o
+crash mas deixar cenário escuro/incompleto se o jogo esperava o dado.
+Valor 0x0f900000 foi derivado do LOG DO JOGO; avaliar se há tamanho
+dinâmico de VRAM e casos legítimos não cobertos (ou spans calculados de
+modo conservador). NÃO ampliar cegamente limite para 256 MB.
+Uma queda de FPS por query starvation e alterações de attachments/texturas
+continua possível mesmo sem o acesso OOB.
+
+Código de referência: atualização externa XITRIX/rpcs3 em commit pinned,
+fonte nv3089.cpp. Âncora de inserção: BEFORE a expressão inteira
+'const u32 src_line_length = (std::min<u32>(in_w, ...'. Não inserir
+bloco de pré-processador no meio dessa expressão!
+
+==========================================================================
+8. TÉCNICAS JÁ COMPROVADAS / NÃO COMPROVADAS
+==========================================================================
+Comprovado pelos testes físicos:
+- ZCull OFF com visibility fallback causou áreas pretas em alguns jogos.
+- BLUS30401 e NPUB30632 já conseguiram renderizar cenários completos,
+  mas tempos por frame e bloqueios são críticos.
+- NPUB30424 volta à gameplay com relaxed ZCull=false.
+- Ascension desenhou cenários corretos por instantes com ZCull real;
+  ainda há corrupção de memória/quadros, low FPS e crash.
+- Dante 30 FPS aproximados em trechos M6.3.1; crash OOM pool no Boss.
+
+Apenas compilado, NÃO provado no hardware:
+- M6.5.1 Dante pool reuse evita VK_ERROR_OUT_OF_HOST_MEMORY na luta.
+- M6.6.5 span OOB evita crash Ascension e restaura texturas.
+- 30 FPS sustentados no Ascension ou Forgotten Sands.
+
+Métricas históricas:
+- M5.34: NPUB30424 8 bloqueios pipeline ~3.43 s; Ascension 6 bloqueios
+  ~2.36 s, mais compilação shader fragment ~132 ms.
+- M6.0.1 observações em um log: frames médios aproximados Ascension
+  ~38.6 ms / 25.9 equivalente; NPUB30632 ~34.7 ms / 28.8;
+  BLUS30401 ~50.5 ms / 19.8; NPUB30424 ~42.8 ms / 23.4.
+  Atenção: intervalos de apresentação NÃO são substitutos por FPS físico
+  medido no overlay; overlay mostrou até 9.9, 1.9 ou 2 FPS.
+- M6.2.2: 697 sincronizações ZCull forçadas no Ascension, Dead FIFO.
+- M6.3.1: 404 sincronizações ZCull, Dead FIFO novamente.
+- M6.5.1: log Ascension ~977 syncs e VRAM pressure ~147% budget.
+
+==========================================================================
+9. ARQUIVOS E VÍDEOS DISPONÍVEIS NESTA CONVERSA
+==========================================================================
+No contexto do chat atual apareceram, entre outros:
+- HANDOFF-PsTJon-KosmicKrisp-M5.34-2026-10-10(1).txt (handoff anterior)
+- session-M5.34 texturas boas, fps instável, sem crash.log
+- session-01FE7EF5-372D-4E98-90F2-196F0D802E47.log
+- session-3A83B99E-EBB0-4C23-9D19-2C6A803488FA.log
+- session-4F4E27AD-46CF-4563-ACFE-9401F5612775.log
+- session-79A964C5-DC42-4C63-93D2-C12984FE4360.log
+- session-C756E82C-5B8F-4117-8E97-08D8F2BD904E.log
+- session-D2E76BAC-B653-4F0D-A83B-06C05E2E7DB2.log
+- RPCS3-BLUS30405-20261010-182417.txt (~6.2 MB) Dante boss
+- RPCS3-BCUS98232-20261010-203503.txt (~3.3 MB) Ascension M6.5.1
+- ScreenRecording_10-10-2026 13-24-47_1.mp4
+- ScreenRecording_10-10-2026 14-13-46_1.mp4
+- ScreenRecording_10-10-2026 18-06-31_1.mp4
+- IMG_4646.jpeg, IMG_4648.jpeg, ... IMG_4667.png, e capturas de tela
+  dos testes do usuário, inclusive a lista Actions #74-77.
+
+ATENÇÃO EM OUTRO CHAT: anexos desta conversa podem não estar acessíveis
+automaticamente. O agente deve buscá-los pelo contexto/files, caso haja
+acesso, e pedir upload apenas se realmente necessário. NÃO fingir que leu
+um vídeo/log que não está disponível. O log de sessão pode conter VÁRIOS
+jogos: segmentar por TitleID efetivo e hora, não pelo nome genérico.
+
+==========================================================================
+10. PASSOS PRÁTICOS PARA O PRÓXIMO AGENTE
+==========================================================================
+PRIMEIRO, confirmar novamente status no GitHub: branch HEAD e releases.
+Não supor que a branch ainda está em a452cd92... se novo agente trabalhar.
+Se M6.6.5 não foi testada: pedir TESTE FÍSICO DE M6.6.5 Ascension em
+uma transição de área previamente defeituosa, vídeo com métricas e log.
+Observar os marcadores 'M6.6 ASCENSION_DST_SPAN/SRC_SPAN', se Dead FIFO
+sumiu, se as texturas ficaram boas e se o jogo progride, FPS/frametime,
+OQ sync forçado, CopyLocalMemory, RSX GPU memory pressure e outros crashes.
+Não prometer que resolverá só com o guard: se FPS continuar ruim, voltar a
+analisar query starvation, readbacks e sincronização de GPU e CPU.
+
+Testes subsequentes sugeridos (SEM obrigar o usuário a testar tudo de uma
+vez):
+  1) Ascension BCUS98232 M6.6.5 — trecho de transição corrompida/crash.
+  2) Dante BLUS30405 M6.6.5 — PRIMEIRA luta Boss em que OOM query pool.
+  3) Forgotten Sands NPUB30632 — preservar progresso/sem ghosting.
+  4) Prince 2008 NPUB30424 — regressão visual pós-load / FPS.
+  5) BLUS30401 SOMENTE se usuário o mantiver, pois preferiu excluir.
+
+O próximo trabalho (talvez M6.7, não criar até receber evidência) deve:
+- Priorizar correção das transferências RSX sem deixar frame incompleto.
+- Perfil exclusivo Ascension e telemetria efetiva de passes RT/resolve.
+- Detectar OOB e causa upstream, não apenas descartar requisições.
+- NÃO aumentar timeouts, não enganar FPS, não mudar várias opções globais.
+- Tratar backlog de consultas ZCull/CPU-GPU e uso de memória como trilhas
+  diferentes, correlacionadas, sem confundir com crash NV3089.
+- Só depois medir performance RSX/SPU/JIT/shaders/pipelines/frametime para
+  atingir 30 FPS sem comprometer fidelidade, e 60 FPS na fase posterior.
+
+==========================================================================
+11. COMO EDITAR E ACOMPANHAR COM O CONECTOR GITHUB
+==========================================================================
+O conector GitHub esteve conectado e foi utilizado com sucesso neste chat.
+Chamadas por functions.exec (scripts JS) via tools.mcp__GitHub__...:
+  tools.mcp__GitHub__fetch({url: "https://api.github.com/repos/joao9vegeto-stack/KintTany/branches/PsTJon-KosmicKrisp"})
+  tools.mcp__GitHub__fetch_file({repository_full_name: "joao9vegeto-stack/KintTany", path: ".github/workflows/pstjon-kosmickrisp-m4.yml", ref: "PsTJon-KosmicKrisp"})
+  tools.mcp__GitHub__update_file({repository_full_name: ..., path: ..., branch: "PsTJon-KosmicKrisp", sha: <file_blob_sha>, content: <complete_workflow_text>, message: "PsTJon Mx..."})
+  tools.mcp__GitHub__fetch({url: "https://api.github.com/repos/joao9vegeto-stack/KintTany/actions/runs"})
+  tools.mcp__GitHub__fetch_workflow_run_jobs({repo_full_name: ..., run_id: ...})
+  tools.mcp__GitHub__fetch_workflow_job_logs({repo_full_name: ..., job_id: ...})
+  tools.mcp__GitHub__fetch_workflow_run_artifacts({repo_full_name: ..., run_id: ...})
+  tools.mcp__GitHub__fetch({url: "https://api.github.com/repos/joao9vegeto-stack/KintTany/releases/tags/pstjon-kk-m6.6.5"})
+
+Antes de atualizar arquivo:
+- Verificar branch, sha HEAD, arquivo blob SHA, último run e se agente
+  paralelo está alterando a mesma branch.
+- Fetch workflow COMPLETO e editar em memória/arquivo local.
+- NÃO editar main, não criar branch alternativa sem pedido.
+- Validar scripts inline: trechos Python delimitados por PY, aspas,
+  contagem de anchors e #ifdef, ordenação, DIFF e YAML.
+- Evitar patches Python multiline do tipo re.search contendo '\n' errado
+  (origem direta do YAML inválido da M6.6.4).
+- Quando necessário usar git grep no clone do CI para verificar marcadores.
+- Um único update_file em pacote = 1 commit e push automático = 1 Actions.
+- Esperar conclusão, buscar jobs/logs se falhar; lançar novo commit apenas
+  corrigindo erro REAL e rastrear numeração. Sem esconder tentativas.
+- Depois do sucesso, verificar o .ipa real na GitHub Release (assets[]),
+  state=uploaded, tamanho, digest, tag e sha do workflow. Não inventar link
+  de sandbox quando não foi criado arquivo local correspondente.
+- GitHub Release oferece link direto ao .ipa no iPhone, sem descompactar ZIP.
+
+==========================================================================
+12. REFERÊNCIAS DE ARTIFACTS/RELEASES ÚTEIS
+==========================================================================
+M5.34: run #60 / 38027111330, IPA 31.158.629 B,
+  sha256 744df0be2baacb61f3d696bfb392712c642e3103c1796b4d1288d0d800940ce1
+M5.35: run #61 / 38066219183, tag pstjon-kk-m5.35,
+  sha256 1c8d5a7afd54d421a7c43528ea2d20b3689fb7bbdc3bdf89604e0b2f3ac4903e
+M6.0.1: run #63 / 38068760810, tag pstjon-kk-m6.0.1,
+  sha256 ecb7b46a6740d3df2b4d117c87929f479b6506a3ab5d65a4a1b01e4eb12f049d
+M6.1.1: run #65 / 38072532462, tag pstjon-kk-m6.1.1,
+  sha256 9f1e87a1d601020ce889825eb4a5976102884699c7d6c0bafb4fa553e808da22
+M6.2.2: run #68 / 38075459334, tag pstjon-kk-m6.2.2,
+  sha256 275877966d9b403a4cef132f177366a15bd3a419eaf25bc29dc01261760b41cc
+M6.3.1: run #70 / 38082440086, tag pstjon-kk-m6.3.1,
+  sha256 5929a3700c94f6afa974a831badb399f027e662de045e1b2c2874994308ffde9
+M6.4: run #71 / 38086941843, tag pstjon-kk-m6.4,
+  sha256 c75ec637dce403c77251deace65d8e0612446c831eb17592866e66d62e2d2c3d
+M6.5.1: run #73 / 38088860628, tag pstjon-kk-m6.5.1,
+  sha256 0d710b8132b9150f8e93ad0bb66e3fc022cac7394fc4709f5b4a7b825c586a48
+M6.6.5: run #79 / 38098521871, tag pstjon-kk-m6.6.5,
+  sha256 09a0957c56ae88ca8830a9d510398e2c8a528a12c7f9b7c084f2d655652df76c
+  ipa bytes 31.163.237; artifact 11687380269; STATUS SUCCESS e state uploaded.
+
+==========================================================================
+13. TEXTO SUGERIDO PARA O NOVO CHAT
+==========================================================================
+"Leia completamente o HANDOFF-PsTJon-KosmicKrisp-M6.6.5-2026-10-10.txt
+que anexei. Continue o desenvolvimento PsTJon/KosmicKrisp na branch
+PsTJon-KosmicKrisp do repo joao9vegeto-stack/KintTany, NÃO toque main.
+O último IPA válido foi M6.6.5 (Actions #79, success), com guard completo
+RSX NV3089 Ascension, AINDA SEM TESTE FÍSICO. Considere toda a matriz de
+jogos e o histórico de commits/patches falhos. Avalie o vídeo/log mais
+recente que eu enviar, identifique o defeito e faça uma correção por commit
+com apenas um workflow automático; acompanhe até completar e entregue IPA
+independente, link de release, SHA-256, commit e resumo. Não prometa FPS
+estáveis sem teste no iPhone. Priorize Ascension fiel, sem crash, >=30 FPS."
+
+==========================================================================
+14. NOVO LOTE DE TESTES — CASTLEVANIA E SLEEPING DOGS (M6.5.1)
+==========================================================================
+Data: recebido em 10/10/2026, após a compilação/entrega M6.6.5.
+IMPORTANTE: os testes foram FEITOS NA BUILD ANTIGA M6.5.1, como o usuário
+explicitamente informou. Não confundir a data de recebimento com a build.
+Origem PRINCIPAL: arquivo anexo
+  session-F3C1CF56-4FF4-4F2A-8A9E-6245C27D5AFB.log
+  Tamanho: 8,193,218 bytes; 168,106 linhas.
+  SHA-256 do log: 93c3e0653dd8fe0a4c356b42f86fa4274ba3e4134dc69d9968009e378ff03148
+Capturas anexas:
+  IMG_4668(1).jpeg — Sleeping Dogs; 19,9 FPS, CPU 55%, RSX 96%, 4,7 GB
+  IMG_4669(1).jpeg — Sleeping Dogs;  9,8 FPS, CPU 47%, RSX 97%, 4,6 GB
+Estas porcentagens de CPU/RSX são MEDIDAS DO OVERLAY DO RPCS3; o RSX
+não corresponde necessariamente à ocupação real medida pelo sistema de
+GPU/Metal do A19 Pro. Não afirmar isso como medidor da GPU física.
+
+IDs verificados pelo PRÓPRIO LOG, não por suposições:
+  NPUB31372 = Castlevania: Lords of Shadow 2
+  NPUB30818 = Sleeping Dogs™
+  GPU = Apple A19 Pro GPU; provider = KOSMICKRISP (Mesa pinned),
+  Vulkan 1.4.363 / driver 26.2.99.
+  JIT inicial = arena expandida 1024 MiB; não identifica problema de JIT.
+  Shader Mode: Async Recompiler with Shader Interpreter.
+  Write Color Buffers=false, Strict Rendering Mode=false,
+  Disable ZCull Occlusion Queries=false, Relaxed ZCULL Sync=false
+  em ambos os títulos (config efetiva impressa na inicialização).
+  ⚠ Não assumir que ajustes existentes para Ascension, Dante ou Prince
+  também estejam aplicados a Castlevania e Sleeping Dogs.
+
+Sequência REAL das tentativas dentro de UM log, índice da linha começando 1:
+  Linhas 135–496: tentativa de Castlevania sem RAP; erro NPDRM/SELF.
+  Linhas 497–879: tentativa de Sleeping Dogs sem RAP; erro NPDRM/SELF.
+  Linhas 880–20228: Castlevania executa e termina por solicitação normal.
+  Linhas 20229–165483: Sleeping Dogs executa e termina por solicitação normal.
+  Linhas 165484–168106: novo boot breve de Castlevania; parada normal.
+  Não usar a contagem de linhas como tempo real de gameplay.
+  O aplicativo e o núcleo continuam vivos entre as sessões.
+
+Observação do usuário:
+  - Castlevania: texturas boas; atingiu momentos perto dos 30 FPS, mas
+    com oscilações perceptíveis. Não há vídeo/overlay de Castlevania novo
+    que permita afirmar média sustentada ou FPS exato.
+  - Sleeping Dogs: texturas boas; FPS ruim e instável. Capturas objetivas:
+    19,9 e 9,8 FPS. São valores INSTANTÂNEOS, não médias do jogo.
+  - Usuário suspeitou crash sem lembrar em qual jogo.
+
+VEREDITO DE CRASH: nenhuma sessão de gameplay desse log contém
+'VK_ERROR_*', 'Assertion Failed! Vulkan' ou 'Thread terminated due to fatal'.
+As três sessões executadas encerram com
+'REQUESTED NONTERMINAL EMULATION STOP' / 'Stopping emulator...' /
+'Emulation stopped without shutting down RPCS3Core'.
+Portanto, NÃO HÁ CRASH DO RPCS3 COMPROVADO NESTE LOG.
+É possível que tenha ocorrido travamento percebido, perda de FPS ou
+encerramento não representado no arquivo, mas não inventar uma falha fatal.
+Os erros anteriores de licença e de atualização NÃO são crashes do RSX.
+
+==========================================================================
+15. MEDIÇÕES DE BLOQUEIO DE PIPELINE E RENDERIZAÇÃO (NOVO)
+==========================================================================
+O log registra tempos 'Guest clock excluded blocking Vulkan pipeline
+compilation: <microssegundos> us'. São bloqueios reais registrados pelo
+RPCS3, mas não são equivalentes a FPS médio ou perfis de GPU.
+
+Castlevania — sessão longa NPUB31372:
+  Nº bloqueios = 52
+  Soma dos tempos registrados = 32.274 segundos
+  Maior bloqueio = 1724.508 ms
+  Bloqueios >= 1000 ms = 15
+  Warnings ZCull de leitura inesperada = 0
+  Avisos pressão iOS moderada = 3
+  RSX 'Unknown driver vendor!' = 31
+  RSX 'Cache miss' = 15
+  Última pressão moderada: ~1529–1582 MiB headroom, allocator 68%,
+  com posterior recuperação a 'low' e 1794 MiB headroom.
+  Persistência do cache de pipelines: 175.671.112 bytes.
+  Não houve fatal Vulkan, nem query pool OOM, nem aviso hard-sync ZCull
+  dessa classe na sessão longa.
+
+Sleeping Dogs — sessão longa NPUB30818:
+  Nº bloqueios = 53
+  Soma dos tempos registrados = 41.937 segundos
+  Maior bloqueio = 4278.429 ms
+  Bloqueios >= 1000 ms = 22
+  Warnings '[Performance warning] Unexpected ZCULL read caused a hard sync'
+  = 26
+  Avisos pressão iOS moderada = 26
+  RSX 'Unknown driver vendor!' = 63
+  RSX 'Cache miss' = 22
+  Headroom observado aproximadamente 1287–1531 MiB, Vulkan allocator 56%,
+  alocações internas chegando a ~911 MiB (estes valores são dos avisos).
+  Persistência do cache de pipelines: 183.777.352 bytes.
+  Não houve VK_ERROR fatal nem crash no log, apesar da degradação gráfica/FPS.
+
+Castlevania — segundo boot breve:
+  Zero bloqueios da categoria acima, pois sessão curta/boot;
+  encerrada normalmente; NÃO usar como benchmark de FPS.
+
+PONTOS DE INTERPRETAÇÃO:
+  A primeira sessão de cada novo jogo realiza compilação PPU/SPU/RSX,
+  e há compilação bloqueante de pipelines MESMO APÓS boot.
+  A M5.2 mantém worker de compilação Vulkan limitado a 1 para jogos
+  gerais; a M5.35 fez teste de 2 workers só em NPUB30424.
+  O pico de 4278 ms em Sleeping Dogs e 1724 ms em Castlevania é
+  suficiente para causar engasgos notáveis independentemente do FPS
+  entre compilações.
+  As somas de 32 e 42 segundos NÃO devem ser interpretadas como
+  'tempo exato perdido de gameplay', apenas soma dos bloqueios registrados.
+  Após aquecimento de cache podem existir outros gargalos (ZCull, RSX,
+  sincronização de buffers, memória e RSX FIFO); não supor solução única.
+  NÃO forçar compilação de TODOS shaders na abertura sem dimensionar custo
+  ou compreender como o jogo gera novas variantes de pipelines.
+
+==========================================================================
+16. BUGS INDEPENDENTES ENCONTRADOS NESSE LOG
+==========================================================================
+1) Tentativa inicial de Castlevania: ausência do RAP exigido para NPDRM,
+   Failed to decrypt SELF (linhas 483–488). Após essa tentativa houve
+   execução real do jogo, então NÃO se trata de impedimento persistente.
+2) Tentativa inicial de Sleeping Dogs: ausência do RAP exigido para NPDRM,
+   Failed to decrypt SELF (linhas 846–851). Também houve boot real depois.
+3) Download/verificação de updates:
+   - NPUB30818: pacotes 01.01 (~1,011 GB) e 01.02 (~20,4 MB)
+     baixados e hashes verificados; a instalação 01.01 aborta com
+     'The selected package is not a PlayStation 3 game update'
+     (linha 100), então 01.02 NÃO é aplicada neste batch.
+   - NPUB31372: atualização 01.01 (~24 MB) baixada/verificada;
+     mesma falha de classificação/instalação (linhas 133, 20227, 168103).
+   - NÃO confundir com erro de shader, RAM ou crash do jogo.
+   - Vale investigar isoladamente a classificação de PKG patch/NPDRM
+     no instalador RPCS3 para iOS, mas NÃO misturar com correções de FPS
+     no mesmo commit.
+4) Avisos 'Unknown driver vendor!' para ambos os títulos durante jogo;
+   verificar definição de vendor/capabilities e se há slow fallback
+   antes de atribuir ao próprio Apple driver. Não são automaticamente
+   erros fatais, mas potencial sinal de caminho lento.
+5) AVISO: 'Vulkan submissions suspended/resumed' no log de app em
+   background também pode refletir alternância do usuário; não concluir
+   que STIKDEBUG morreu ou que o GPU travou sem correlação.
+
+==========================================================================
+17. PRIORIDADES PARA CONTINUIDADE / TESTE CONTROLADO
+==========================================================================
+OBJETIVO MAIS IMPORTANTE CONTINUA SENDO GOD OF WAR ASCENSION correto,
+sem crash, >=30 FPS sustentados. NÃO se perder apenas em Sleeping Dogs.
+
+A. M6.6.5 é a ÚLTIMA BUILD compilada/verificada (#79, SUCCESS), mas o
+   arquivo aqui analisado foi gerado pela M6.5.1. A próxima ação precisa
+   ser TESTE FÍSICO da M6.6.5 em Ascension. Verificar se a escrita em
+   0xCF900000 desapareceu, logging M6.6 DST_SPAN/SRC_SPAN, regressões
+   visuais e FPS; confirmar quando ocorre crash em transição de cena.
+
+B. Para NPUB31372/NPUB30818, caso se faça próxima build de diagnóstico:
+   1. Estender telemetria por TitleID: CPU present frametime, % >33.3ms,
+      >50ms, máximos, GPU fence wait, criação/custo de pipeline Vulkan,
+      ZCull sync reads e crescimento de Vulkan caches/allocations.
+   2. Comparar a PRIMEIRA e a SEGUNDA execução idênticas do mesmo save,
+      sem apagar cache e sem variar resolução/driver/configuração.
+   3. Investigar a programação de compilação pipeline (worker atual 1)
+      e preload priorizado a partir de chaves de pipeline observadas,
+      sem afirmar que aumentar workers ou precache total sempre melhora.
+   4. Para Sleeping Dogs, correlacionar os 26 hard-sync ZCull com quedas
+      e considerar uma correção bem delimitada SOMENTE para NPUB30818;
+      não desativar hardware queries globalmente (pode voltar cenário preto
+      em outros jogos).
+   5. Investigar tratamento 'Unknown driver vendor' nos code paths
+      Vulkan e configurações reais da Apple GPU.
+   6. Validar fps reais de 30 sustentados com gameplay de vários minutos,
+      pós-boot, pós-cache, transições de ambiente, efeitos climáticos e
+      combate — NÃO apenas um instante do overlay.
+   7. Tratar atualização PKG/RAP como bug separado de formato/licença
+      e não alterar a renderização por causa dele.
+
+C. Ascension: evitar mais builds globais de WCB, hard sync e interpretação
+   de shader. Ordem de prioridades pós-M6.6.5: memória local RSX segura,
+   ZCull válido, fidelidade de pass/depth/texture, perf M7.
+   Fazer inspeção e assert PRE-CI do código efetivo após todos os patches
+   antigos. O YAML continha âncoras trocadas e foi motivo dos runs #74-#78.
+
+D. Prince of Persia The Forgotten Sands: manter NPUB30632 (digital)
+   caso usuário precise manter apenas um; BLUS30401 apresentou bloqueios
+   repetidos no carregamento. Fazer backup dos saves antes de excluir.
+   Prince (2008) NPUB30424 e Dante BLUS30405: preservar últimos ganhos.
+
+E. Não interpretar esta sessão como demonstrativo de M6.6.5; toda
+   declaração de compatibilidade deve registrar BUILD/TITLEID/REGIÃO.
+
+==========================================================================
+18. INSTRUÇÃO ATUALIZADA PARA ABRIR OUTRO CHAT
+==========================================================================
+Cole / anexe este TXT integral e diga:
+
+"Continue PsTJon/RPCS3 iOS/KosmicKrisp a partir do HANDOFF integral
+M6.6.5 atualizado com Castlevania/Sleeping Dogs. Repo KintTany, branch
+PsTJon-KosmicKrisp, não tocar main. Último IPA M6.6.5 sucesso no #79,
+mas os novos dois jogos foram TESTADOS NA M6.5.1. Castlevania NPUB31372
+teve 52 bloqueios pipeline e Sleeping Dogs NPUB30818 53 + 26 hard sync
+ZCull, não existe crash fatal comprovado no log novo. Priorize a validação
+física da M6.6.5 no Ascension; depois prossiga com uma correção por commit,
+um workflow por pacote, acompanhe até o sucesso e entregue IPA direto com
+hash/commit. Não altere jogos com perfis visuais bons indiscriminadamente."
+
+==========================================================================
+FIM DO HANDOFF ATUALIZADO — M6.6.5 + TESTES EXTRA M6.5.1
+==========================================================================
