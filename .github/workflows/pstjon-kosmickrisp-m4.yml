@@ -4540,6 +4540,50 @@ jobs:
           git -C rpcs3-src diff --check
           git -C mesa-src diff --check
 
+          python3 - <<'PY'
+          # M6.7.2-EXP: systemic performance A/B: preserve M5.20
+          # COLOR attachment store (critical to visually working Ascension WCB)
+          # while no longer forcing stores for DEPTH-ONLY render passes.
+          # The unconditional M5.20 force_store=true was a forensic test
+          # preserved through M6.7.1. Depth-only Vulkan rendering has no color
+          # feedback. Respect upstream depth/stencil store ops instead; the
+          # upstream driver already forces stores for explicit resolve/LOAD/flags.
+          # No changes to shaders, guest address handling, GPU query results,
+          # CPU SPU/FIFO policies, image formats, color passes or resolution.
+          from pathlib import Path
+          p=Path("mesa-src/src/kosmickrisp/vulkan/kk_cmd_buffer.c")
+          s=p.read_text()
+          old='''              // PsTJon M5.20: iOS A19 Metal4 render-target preservation probe.
+                        // Vulkan permits retaining attachments when storeOp is DONT_CARE;
+                        // preserving their contents is essential to test whether Metal4
+                        // incorrectly drops PS3 framebuffer feedback between encoders.
+                        // Cost: more tile stores; intentionally correctness before FPS.
+                        force_store = true;'''
+          new='''              // M6.7.2: preserve M5.20 forced Metal stores wherever
+                        // COLOR attachments participate; keeps PS3 framebuffer feedback
+                        // that was recovered in earlier builds. For DEPTH-ONLY passes,
+                        // honor actual Vulkan depth/stencil storeOp and the existing
+                        // force_attachment_store/resolve requirements instead of
+                        // unconditionally writing tile memory after every pass.
+                        // Performance A/B; no shader, framebuffer or RSX changes.
+                        force_store |= render->color_att_count > 0;'''
+          assert s.count(old)==1, "M6.7.2 M5.20 force-store probe anchor changed"
+          assert s.count('force_store |= render->force_attachment_store;')==1
+          assert s.count('kk_get_attachment_store_op(')>=2
+          s=s.replace(old,new,1)
+          assert 'force_store = true;' not in s[s.index('void\\nkk_apply_attachment_store_ops'):s.index('void\\nkk_apply_attachment_store_ops')+2300]
+          assert s.count('force_store |= render->color_att_count > 0;')==1
+          p.write_text(s)
+          assert 'M6.6.9 ASCENSION_EVICT_INVALID_TEXTURE' in Path("rpcs3-src/rpcs3/Emu/RSX/VK/VKGSRender.cpp").read_text()
+          assert 'M6.6 ASCENSION_DST_SPAN' in Path("rpcs3-src/rpcs3/Emu/RSX/NV47/HW/nv3089.cpp").read_text()
+          assert 'M6.6.10: fast reject' in Path("rpcs3-src/rpcs3/Emu/RSX/Common/texture_cache.h").read_text()
+          assert 'M6.7.1 RESTORED_ULTRA_PROFILE' in Path("rpcs3-src/rpcs3/Emu/System.cpp").read_text()
+          print("M6.7.2: forced Metal stores retained for every color pass, depth-only passes now respect native Vulkan store operations; all M6 safeguards PASS")
+          PY
+          grep -q 'M6.7.2: preserve M5.20' mesa-src/src/kosmickrisp/vulkan/kk_cmd_buffer.c
+          git -C mesa-src diff --check
+          git -C rpcs3-src diff --check
+
           rm -rf build-kk-host kk-host-tools
           meson setup build-kk-host mesa-src \
             --buildtype=release \
@@ -4751,13 +4795,13 @@ jobs:
           codesign -d --entitlements :- "$APP" 2>&1 | tee pstjon-entitlements.txt
           (
             cd package
-            ditto -c -k --sequesterRsrc --keepParent Payload "$GITHUB_WORKSPACE/PsTJon-KK-M6.7.1-EXP.ipa"
+            ditto -c -k --sequesterRsrc --keepParent Payload "$GITHUB_WORKSPACE/PsTJon-KK-M6.7.2-EXP.ipa"
           )
-          shasum -a 256 PsTJon-KK-M6.7.1-EXP.ipa
+          shasum -a 256 PsTJon-KK-M6.7.2-EXP.ipa
       - name: Build report
         run: |
           {
-            echo "PsTJon M6.7.1-EXP: after M6.7 real regression (median 6.45FPS), restore prior ULTRA/warm shader cache, 2 bounded BCUS98232 Vulkan pipeline compiler workers, no-op vendor log spam removed; M6.7 debug removal preserved; original graphics, GPU-safe FATAL cleanup, RSX guards, WCB and ZCull unchanged; physical FPS/visual validation needed"
+            echo "PsTJon M6.7.2-EXP: systemic Metal4 bandwidth test: M5.20 forced store retained for all COLOR attachment passes, depth-only passes respect native Vulkan storeOp/resolve and preservation flags; M6.7.1 ULTRA and dual workers retained, no shader/cache changes, RSX guards, ZCull and other profiles unchanged. Real GPU speed and visual effect require device A/B."
             echo "EXP metrics: presented-frame cadence, frame stutters, process footprint, RSX estimated load, Vulkan cache lookup wall-time, command flush wall-time, invalid texture and DMA blit guard events"
             echo "EXP NOT AVAILABLE: authoritative Metal GPU occupancy/time, GPU image readback, automatic black-frame or visual corruption detection"
             echo "EXP logs: PsTJon EXPERIMENTAL channel in exported RPCS3 session logs, sampled once per 3 seconds and on throttled anomalies"
@@ -4769,15 +4813,15 @@ jobs:
             echo "Volk: $VOLK_SHA"
             echo "FFmpeg: $FFMPEG_VERSION"
             echo "Core: $(shasum -a 256 libRPCS3Core.dylib | awk '{print $1}')"
-            echo "IPA: $(shasum -a 256 PsTJon-KK-M6.7.1-EXP.ipa | awk '{print $1}')"
-          } > PsTJon-KK-M6.7.1-EXP-build.txt
+            echo "IPA: $(shasum -a 256 PsTJon-KK-M6.7.2-EXP.ipa | awk '{print $1}')"
+          } > PsTJon-KK-M6.7.2-EXP-build.txt
 
       - uses: actions/upload-artifact@v4
         with:
-          name: PsTJon-KK-m06-7-1-EXPERIMENTAL-pipeline-throughput-IPA
+          name: PsTJon-KK-m06-7-2-EXPERIMENTAL-depth-store-IPA
           path: |
-            PsTJon-KK-M6.7.1-EXP.ipa
-            PsTJon-KK-M6.7.1-EXP-build.txt
+            PsTJon-KK-M6.7.2-EXP.ipa
+            PsTJon-KK-M6.7.2-EXP-build.txt
             pstjon-entitlements.txt
             M5-rpcs3-patch-stat.txt
             M4-mesa-patch-stat.txt
@@ -4794,16 +4838,16 @@ jobs:
 
       # Best-effort direct release asset: accessible on iPhone without
       # extracting the Actions ZIP. Artifact step above stays authoritative.
-      - name: Publish direct M6.7.1-EXP IPA
+      - name: Publish direct M6.7.2-EXP IPA
         if: success()
         continue-on-error: true
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
           set -euxo pipefail
-          gh release create pstjon-kk-m6.7.1-exp PsTJon-KK-M6.7.1-EXP.ipa \
+          gh release create pstjon-kk-m6.7.2-exp PsTJon-KK-M6.7.2-EXP.ipa \
             --target "$GITHUB_SHA" \
-            --title "PsTJon KosmicKrisp M6.7.1-EXP" \
-            --notes "Experimental M6.7.1-EXP: M6.7 performance-regression mitigation. Restore Ascension ULTRA shader precision and reuse warm M6.6.11 shader/pipeline caches. Increase Ascension async Vulkan pipeline compilation workers 1->2 (Prince 2008 remains 2, other titles 1), so incomplete pipeline draw skips can complete sooner. Remove no-op Unknown driver vendor hot-loop logging specifically on KosmicKrisp. Retain M6.7 Metal debug cleanup, genuine Vulkan occlusion, WCB visuals, RSX guards, all other game profiles. Hardware FPS/visual improvement NOT yet verified." \
+            --title "PsTJon KosmicKrisp M6.7.2-EXP" \
+            --notes "Experimental M6.7.2-EXP: Single systemic Metal4 storage-policy A/B. Preserve forced stores for ALL COLOR-bearing renderpasses to keep previously fixed framebuffer feedback; depth-only passes respect original Vulkan storeOp and existing forced-store/resolve requirements instead of unconditional writes. Aims to reduce tile-memory traffic on A19. Keeps M6.7.1 restored ULTRA and dual compiler workers, safe RSX guards, hardware ZCull, WCB, shaders and shader caches unchanged. Physical FPS/artifact test required; no verified speedup yet." \
             --latest=false
-          gh release view pstjon-kk-m6.7.1-exp --json url,assets
+          gh release view pstjon-kk-m6.7.2-exp --json url,assets
