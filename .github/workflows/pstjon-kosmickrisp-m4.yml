@@ -4441,6 +4441,105 @@ jobs:
           git -C rpcs3-src diff --check
           git -C mesa-src diff --check
 
+          python3 - <<'PY'
+          # M6.7.1: M6.7 log (246 telemetry windows) measured median FPS
+          # 6.45 vs 12.03 in M6.6.11, repeated pipeline misses up to 7197/3s.
+          # M6.7 changed ULTRA -> HIGH and discarded warm shader cache namespace.
+          # Its async+interpreter path already skips not-yet-ready draws (M5.6).
+          # The Ascension shader compiler stayed at 1 runtime worker since M5.2,
+          # while M5.35 had already enabled 2 workers safely for NPUB30424.
+          # Restore the M6.6.11-known shader precision/cache, use 2 bounded
+          # compiler workers to reduce pending-draw lifetime (not an FPS promise).
+          # The Vulkan unknown vendor path in VKRenderTargets.h logs thousands
+          # of times per session but always falls through to identical flags;
+          # treat unknown as a no-extra-flags case ONLY for iOS KK provider.
+          from pathlib import Path
+          import os
+          mesa=os.environ["MESA_KOSMICKRISP_SHA"]
+          sys=Path("rpcs3-src/rpcs3/Emu/System.cpp")
+          s=sys.read_text()
+          old='g_cfg.video.shader_precision.set(gpu_preset_level::high);'
+          assert s.count(old)>=1,"M6.7.1 no high-precision assignment"
+          # Target only the LATE M5.21 policy, NOT earlier unrelated settings.
+          a=s.index('// PsTJon v13 control profile')
+          b=s.index('sys_log.notice("PsTJon M6.7 PROFILE_AB:',a)
+          part=s[a:b]
+          assert part.count(old)==1,"M6.7.1 Ascension late-profile shader assignment mismatch"
+          part=part.replace(old,'g_cfg.video.shader_precision.set(gpu_preset_level::ultra);',1)
+          s=s[:a]+part+s[b:]
+          oldlog='scale=75 shader_precision=HIGH'
+          assert s.count(oldlog)==1
+          s=s.replace(oldlog,'scale=75 shader_precision=ULTRA',1)
+          s=s.replace('PsTJon M6.7 PROFILE_AB:', 'PsTJon M6.7.1 RESTORED_ULTRA_PROFILE:',1)
+          assert 'g_cfg.video.write_color_buffers.set(true);' in s
+          assert 'g_cfg.video.disable_zcull_queries.set(false);' in s
+          sys.write_text(s)
+          # Restore warm M6.6.11 shader caches. Metal DEBUG env was purely
+          # runtime diagnostics, not a shader compiler semantic mode; Metal
+          # shader math remains SAFE/PRECISE as in M6.6.11.
+          vk=Path("rpcs3-src/rpcs3/Emu/RSX/VK/VKGSRender.cpp")
+          s=vk.read_text()
+          old=f'"v1.95-{mesa}-m67-no-debug-high-precision"'
+          new=f'"v1.95-{mesa}-m521-v12-effective-profile"'
+          assert s.count(old)==1,"M6.7.1 shader cache namespace mismatched"
+          s=s.replace(old,new,1)
+          old_workers='preferred_compiler_threads = Emu.GetTitleID() == "NPUB30424" ? 2 : 1;'
+          new_workers='preferred_compiler_threads = (Emu.GetTitleID() == "NPUB30424" || Emu.GetTitleID() == "BCUS98232") ? 2 : 1;'
+          assert s.count(old_workers)==1,"M6.7.1 preexisting M5.35 runtime compiler worker anchor"
+          s=s.replace(old_workers,new_workers,1)
+          s=s.replace('PsTJon M5.35 KK_PIPELINE_WORKERS: TitleID=%s workers=%d (disk preload remains 1)',
+                      'PsTJon M6.7.1 KK_PIPELINE_WORKERS: TitleID=%s workers=%d (BCUS98232=2; disk preload still 1)',1)
+          assert 'PsTJon M6.7.1 KK_PIPELINE_WORKERS' in s
+          assert 'M6.6.9 ASCENSION_EVICT_INVALID_TEXTURE' in s
+          assert 'pstjon_exp_note_pipeline(' in s and 'pstjon_exp_note_flush(' in s
+          vk.write_text(s)
+          dev=Path("rpcs3-src/rpcs3/Emu/RSX/VK/vkutils/device.cpp")
+          s=dev.read_text()
+          old=f'"shaders_cache/vulkan/kosmickrisp/{mesa}/m67-no-debug-high-precision/vk_pipeline_cache.bin"'
+          new=f'"shaders_cache/vulkan/kosmickrisp/{mesa}/m521-v12-effective-profile/vk_pipeline_cache.bin"'
+          assert s.count(old)==1,"M6.7.1 persisted Vulkan cache namespace"
+          dev.write_text(s.replace(old,new,1))
+          # Independent low-risk hot-path fix: on KosmicKrisp, unknown vendor
+          # uses EXACT SAME generic no-extra-flag behavior as the default
+          # fallthrough but does not spam logging on every surface allocation.
+          rt=Path("rpcs3-src/rpcs3/Emu/RSX/VK/VKRenderTargets.h")
+          s=rt.read_text()
+          old='''\t\t\tdefault:
+          \t\t\t\trsx_log.error("Unknown driver vendor!");
+          \t\t\t\t[[ fallthrough ]];'''
+          new='''#ifdef RPCS3_VULKAN_PROVIDER_KOSMICKRISP
+          \t\t\tcase driver_vendor::unknown:
+          \t\t\t\t// M6.7.1: unknown KosmicKrisp GPU vendor requires no
+          \t\t\t\t// special format workaround. Previously fell through
+          \t\t\t\t// with identical flags while spamming RSX errors.
+          \t\t\t\tbreak;
+          #endif
+          \t\t\tdefault:
+          \t\t\t\trsx_log.error("Unknown driver vendor!");
+          \t\t\t\t[[ fallthrough ]];'''
+          assert s.count(old)==1,"M6.7.1 Vulkan render-target unknown-vendor hotspot mismatch"
+          s=s.replace(old,new,1)
+          rt.write_text(s)
+          # Nothing visual is downgraded. Post-6.6 correctness and initial
+          # Metal diagnostic removal remain. Report signals in exported logs.
+          system=sys.read_text()
+          assert 'PsTJon M6.7 METAL_DIAGNOSTICS_OFF:' in system
+          assert 'PsTJon M6.7.1 RESTORED_ULTRA_PROFILE:' in system
+          assert 'g_cfg.video.resolution_scale_percent.set(75);' in system
+          assert 'M6.6.6 ASCENSION_TEXTURE_OOB' in Path("rpcs3-src/rpcs3/Emu/RSX/Common/texture_cache.h").read_text()
+          assert 'M6.6 ASCENSION_DST_SPAN' in Path("rpcs3-src/rpcs3/Emu/RSX/NV47/HW/nv3089.cpp").read_text()
+          assert 'M6.6.11 ASCENSION_EARLY_EVICT' not in vk.read_text()
+          assert 'MTL_DEBUG_LAYER_VALIDATE_LOAD_ACTIONS' not in Path("mesa-src/src/kosmickrisp/bridge/mtl_device.m").read_text()
+          for p in [sys,vk,dev,rt]:
+              p.write_text('\n'.join(line.rstrip() for line in p.read_text().splitlines())+'\n')
+          print("M6.7.1: restore Ultra and warm cache, 2 BCUS runtime compiler workers, no-op unknown-vendor logging fixed; previous Vulkan / RSX safety unchanged PASS")
+          PY
+          grep -q 'M6.7.1 RESTORED_ULTRA_PROFILE' rpcs3-src/rpcs3/Emu/System.cpp
+          grep -q 'M6.7.1 KK_PIPELINE_WORKERS' rpcs3-src/rpcs3/Emu/RSX/VK/VKGSRender.cpp
+          grep -q 'M6.7.1: unknown KosmicKrisp GPU vendor' rpcs3-src/rpcs3/Emu/RSX/VK/VKRenderTargets.h
+          git -C rpcs3-src diff --check
+          git -C mesa-src diff --check
+
           rm -rf build-kk-host kk-host-tools
           meson setup build-kk-host mesa-src \
             --buildtype=release \
@@ -4652,13 +4751,13 @@ jobs:
           codesign -d --entitlements :- "$APP" 2>&1 | tee pstjon-entitlements.txt
           (
             cd package
-            ditto -c -k --sequesterRsrc --keepParent Payload "$GITHUB_WORKSPACE/PsTJon-KK-M6.7-EXP.ipa"
+            ditto -c -k --sequesterRsrc --keepParent Payload "$GITHUB_WORKSPACE/PsTJon-KK-M6.7.1-EXP.ipa"
           )
-          shasum -a 256 PsTJon-KK-M6.7-EXP.ipa
+          shasum -a 256 PsTJon-KK-M6.7.1-EXP.ipa
       - name: Build report
         run: |
           {
-            echo "PsTJon M6.7-EXP: systematic M5-M6 render-policy cleanup. Removed inherited test-only M5.22 Metal validation env, Ascension shader precision ULTRA->HIGH, rolled back failed M6.6.11 SEVERE full-GPU eviction; fatal eviction, validated WCB, ZCull, RSX guards, MLAA and other title profiles remain; fresh caches; physical validation required"
+            echo "PsTJon M6.7.1-EXP: after M6.7 real regression (median 6.45FPS), restore prior ULTRA/warm shader cache, 2 bounded BCUS98232 Vulkan pipeline compiler workers, no-op vendor log spam removed; M6.7 debug removal preserved; original graphics, GPU-safe FATAL cleanup, RSX guards, WCB and ZCull unchanged; physical FPS/visual validation needed"
             echo "EXP metrics: presented-frame cadence, frame stutters, process footprint, RSX estimated load, Vulkan cache lookup wall-time, command flush wall-time, invalid texture and DMA blit guard events"
             echo "EXP NOT AVAILABLE: authoritative Metal GPU occupancy/time, GPU image readback, automatic black-frame or visual corruption detection"
             echo "EXP logs: PsTJon EXPERIMENTAL channel in exported RPCS3 session logs, sampled once per 3 seconds and on throttled anomalies"
@@ -4670,15 +4769,15 @@ jobs:
             echo "Volk: $VOLK_SHA"
             echo "FFmpeg: $FFMPEG_VERSION"
             echo "Core: $(shasum -a 256 libRPCS3Core.dylib | awk '{print $1}')"
-            echo "IPA: $(shasum -a 256 PsTJon-KK-M6.7-EXP.ipa | awk '{print $1}')"
-          } > PsTJon-KK-M6.7-EXP-build.txt
+            echo "IPA: $(shasum -a 256 PsTJon-KK-M6.7.1-EXP.ipa | awk '{print $1}')"
+          } > PsTJon-KK-M6.7.1-EXP-build.txt
 
       - uses: actions/upload-artifact@v4
         with:
-          name: PsTJon-KK-m06-7-EXPERIMENTAL-global-render-profile-audit-IPA
+          name: PsTJon-KK-m06-7-1-EXPERIMENTAL-pipeline-throughput-IPA
           path: |
-            PsTJon-KK-M6.7-EXP.ipa
-            PsTJon-KK-M6.7-EXP-build.txt
+            PsTJon-KK-M6.7.1-EXP.ipa
+            PsTJon-KK-M6.7.1-EXP-build.txt
             pstjon-entitlements.txt
             M5-rpcs3-patch-stat.txt
             M4-mesa-patch-stat.txt
@@ -4695,16 +4794,16 @@ jobs:
 
       # Best-effort direct release asset: accessible on iPhone without
       # extracting the Actions ZIP. Artifact step above stays authoritative.
-      - name: Publish direct M6.7-EXP IPA
+      - name: Publish direct M6.7.1-EXP IPA
         if: success()
         continue-on-error: true
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
           set -euxo pipefail
-          gh release create pstjon-kk-m6.7-exp PsTJon-KK-M6.7-EXP.ipa \
+          gh release create pstjon-kk-m6.7.1-exp PsTJon-KK-M6.7.1-EXP.ipa \
             --target "$GITHUB_SHA" \
-            --title "PsTJon KosmicKrisp M6.7-EXP" \
-            --notes "Experimental M6.7-EXP: structural audit of M5-M6.6.11 inherited policies. Removed M5.22 production-inappropriate Apple Metal GPU validation constructor; Ascension shader precision ULTRA to HIGH; reverted M6.6.11 preemptive SEVERE GPU-fence cache eviction due to physical failure. Preserve FATAL safe cache cleanup, WCB visual correctness, RSX address guards, ZCull 512, MLAA patch, all other games. New shader and pipeline namespaces: initial cold shader compilation may stutter. Physical FPS, jaggies and crash outcome NOT guaranteed." \
+            --title "PsTJon KosmicKrisp M6.7.1-EXP" \
+            --notes "Experimental M6.7.1-EXP: M6.7 performance-regression mitigation. Restore Ascension ULTRA shader precision and reuse warm M6.6.11 shader/pipeline caches. Increase Ascension async Vulkan pipeline compilation workers 1->2 (Prince 2008 remains 2, other titles 1), so incomplete pipeline draw skips can complete sooner. Remove no-op Unknown driver vendor hot-loop logging specifically on KosmicKrisp. Retain M6.7 Metal debug cleanup, genuine Vulkan occlusion, WCB visuals, RSX guards, all other game profiles. Hardware FPS/visual improvement NOT yet verified." \
             --latest=false
-          gh release view pstjon-kk-m6.7-exp --json url,assets
+          gh release view pstjon-kk-m6.7.1-exp --json url,assets
