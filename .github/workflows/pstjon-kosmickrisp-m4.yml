@@ -4553,20 +4553,8 @@ jobs:
           from pathlib import Path
           p=Path("mesa-src/src/kosmickrisp/vulkan/kk_cmd_buffer.c")
           s=p.read_text()
-          old='''              // PsTJon M5.20: iOS A19 Metal4 render-target preservation probe.
-                        // Vulkan permits retaining attachments when storeOp is DONT_CARE;
-                        // preserving their contents is essential to test whether Metal4
-                        // incorrectly drops PS3 framebuffer feedback between encoders.
-                        // Cost: more tile stores; intentionally correctness before FPS.
-                        force_store = true;'''
-          new='''              // M6.7.2: preserve M5.20 forced Metal stores wherever
-                        // COLOR attachments participate; keeps PS3 framebuffer feedback
-                        // that was recovered in earlier builds. For DEPTH-ONLY passes,
-                        // honor actual Vulkan depth/stencil storeOp and the existing
-                        // force_attachment_store/resolve requirements instead of
-                        // unconditionally writing tile memory after every pass.
-                        // Performance A/B; no shader, framebuffer or RSX changes.
-                        force_store |= render->color_att_count > 0;'''
+          old='force_store = true;'
+          new='force_store |= render->color_att_count > 0;'
           assert s.count(old)==1, "M6.7.2 M5.20 force-store probe anchor changed"
           assert s.count('force_store |= render->force_attachment_store;')==1
           assert s.count('kk_get_attachment_store_op(')>=2
@@ -4580,7 +4568,7 @@ jobs:
           assert 'M6.7.1 RESTORED_ULTRA_PROFILE' in Path("rpcs3-src/rpcs3/Emu/System.cpp").read_text()
           print("M6.7.2: forced Metal stores retained for every color pass, depth-only passes now respect native Vulkan store operations; all M6 safeguards PASS")
           PY
-          grep -q 'M6.7.2: preserve M5.20' mesa-src/src/kosmickrisp/vulkan/kk_cmd_buffer.c
+          grep -q 'force_store |= render->color_att_count > 0;' mesa-src/src/kosmickrisp/vulkan/kk_cmd_buffer.c
           git -C mesa-src diff --check
           git -C rpcs3-src diff --check
 
