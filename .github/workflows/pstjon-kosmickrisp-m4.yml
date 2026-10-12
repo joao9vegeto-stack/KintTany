@@ -4648,6 +4648,101 @@ jobs:
           git -C rpcs3-src diff --check
           git -C mesa-src diff --check
           
+          python3 - <<'PY'
+          # M6.7.4-EXP: Vulkan blitter transfer geometry correctness (ALL TITLES).
+          # VKTexture.cpp copy_image_to_buffer line 133 previously trapped when
+          # source.width < offset.x + copy.width. The fast copy path in blitter::
+          # scale_image returned BEFORE the existing slow-path bounds checks,
+          # including for typeless, scaled, offset copies; it could therefore hand
+          # an invalid rectangle to the Vulkan backend or abort with 'ensure'.
+          # Route such requests through the existing validated normalization path.
+          # A valid fast copy is entirely unchanged; preserve cache, shaders, Metal,
+          # game profiles, image scaling, draw coverage and memory policy.
+          from pathlib import Path
+          p=Path('rpcs3-src/rpcs3/Emu/RSX/VK/VKTexture.cpp')
+          s=p.read_text()
+          a=s.index('\tvoid blitter::scale_image(')
+          b=s.index('\n\t}',a)+3
+          part=s[a:b]
+          old='''\t\t\tif (src_w == dst_w)
+          \t\t\t{
+          \t\t\t\t// Final dimensions are a match
+          \t\t\t\tif (xfer_info.src_is_typeless || xfer_info.dst_is_typeless)'''
+          new='''\t\t\t// This optimized path used to skip the range checks later in
+          \t\t\t// this function and crash in VKTexture.cpp:133 when a typeless
+          \t\t\t// readback targeted a recycled/scaled image with a smaller extent.
+          \t\t\t// Never reinterpret PS3 coordinates as if they fit the actual
+          \t\t\t// Vulkan image. The checked general path may normalize dimensions.
+          \t\t\tconst bool src_copy_region_valid =
+          \t\t\t\tsrc_area.x1 >= 0 && src_area.y1 >= 0 &&
+          \t\t\t\tsrc_area.x2 > src_area.x1 && src_area.y2 > src_area.y1 &&
+          \t\t\t\tstatic_cast<u64>(src_area.x2) <= src->width() &&
+          \t\t\t\tstatic_cast<u64>(src_area.y2) <= src->height();
+          \t\t\tconst bool dst_copy_region_valid =
+          \t\t\t\tdst_area.x1 >= 0 && dst_area.y1 >= 0 &&
+          \t\t\t\tdst_area.x2 > dst_area.x1 && dst_area.y2 > dst_area.y1 &&
+          \t\t\t\tstatic_cast<u64>(dst_area.x2) <= dst->width() &&
+          \t\t\t\tstatic_cast<u64>(dst_area.y2) <= dst->height();
+          \t\t\tif (src_w == dst_w && src_copy_region_valid && dst_copy_region_valid)
+          \t\t\t{
+          \t\t\t\t// Final dimensions match and BOTH real Vulkan images contain
+          \t\t\t\t// the whole transfer. Keep the previous fast path unchanged.
+          \t\t\t\tif (xfer_info.src_is_typeless || xfer_info.dst_is_typeless)'''
+          assert part.count(old)==1,'M6.7.4 fast blitter anchor differs'
+          part=part.replace(old,new,1)
+          marker='''\t\t\t\treturn;
+          \t\t\t}
+          \t\t}'''
+          assert part.count(marker)>=1,'M6.7.4 fast blitter return missing'
+          old_after='''\t\t\t\treturn;
+          \t\t\t}
+          \t\t}
+          
+          \t\tif (xfer_info.src_is_typeless)'''
+          new_after='''\t\t\t\treturn;
+          \t\t\t}
+          \t\t\tif (src_w == dst_w && (!src_copy_region_valid || !dst_copy_region_valid))
+          \t\t\t{
+          \t\t\t\tstatic u32 incompatible_fast_rect_count = 0;
+          \t\t\t\tconst u32 n = ++incompatible_fast_rect_count;
+          \t\t\t\tif (n <= 8 || !(n & 63))
+          \t\t\t\t\trsx_log.warning("PsTJon M6.7.4 VK_COPY_GEOMETRY: invalid optimized transfer #%u src=(%d,%d)..(%d,%d) image=%ux%u dst=(%d,%d)..(%d,%d) image=%ux%u; using checked format/scaling path",
+          \t\t\t\t\t\tn, src_area.x1, src_area.y1, src_area.x2, src_area.y2, src->width(), src->height(),
+          \t\t\t\t\t\tdst_area.x1, dst_area.y1, dst_area.x2, dst_area.y2, dst->width(), dst->height());
+          \t\t\t}
+          \t\t}
+          
+          \t\tif (xfer_info.src_is_typeless)'''
+          assert part.count(old_after)==1,'M6.7.4 fallback insertion anchor differs'
+          part=part.replace(old_after,new_after,1)
+          assert part.count('src_copy_region_valid')>=3
+          assert part.count('VK_COPY_GEOMETRY')==1
+          assert 'Blit request denied because the source region does not fit!' in part
+          assert 'Blit request denied because the destination region does not fit!' in part
+          assert part.index('src_copy_region_valid') < part.index('vk::copy_image_typeless(cmd, src, dst, src_area, dst_area);')
+          s=s[:a]+part+s[b:]
+          p.write_text(s)
+          # Boundary test: exact image border allowed; one-pixel overflow,
+          # nonzero offsets, zero-width, and negatives rejected in fast path.
+          def fits(rect,dim):
+              x1,y1,x2,y2=rect
+              w,h=dim
+              return x1>=0 and y1>=0 and x2>x1 and y2>y1 and x2<=w and y2<=h
+          assert fits((0,0,960,540),(960,540))
+          assert fits((20,10,960,540),(960,540))
+          assert not fits((1,0,961,540),(960,540))
+          assert not fits((0,0,961,540),(960,540))
+          assert not fits((0,0,960,541),(960,540))
+          assert not fits((-1,0,900,540),(960,540))
+          assert not fits((20,20,20,100),(960,540))
+          assert fits((0,0,720,405),(720,405))
+          assert not fits((0,0,960,540),(720,405))
+          print('M6.7.4-EXP: all-title checked fast Vulkan copy, fallback to existing normalization, no valid image/path policy change PASS')
+          PY
+          grep -q 'M6.7.4 VK_COPY_GEOMETRY' rpcs3-src/rpcs3/Emu/RSX/VK/VKTexture.cpp
+          git -C rpcs3-src diff --check
+          git -C mesa-src diff --check
+          
           rm -rf build-kk-host kk-host-tools
           meson setup build-kk-host mesa-src \
             --buildtype=release \
@@ -4859,13 +4954,13 @@ jobs:
           codesign -d --entitlements :- "$APP" 2>&1 | tee pstjon-entitlements.txt
           (
             cd package
-            ditto -c -k --sequesterRsrc --keepParent Payload "$GITHUB_WORKSPACE/PsTJon-KK-M6.7.3-EXP.ipa"
+            ditto -c -k --sequesterRsrc --keepParent Payload "$GITHUB_WORKSPACE/PsTJon-KK-M6.7.4-EXP.ipa"
           )
-          shasum -a 256 PsTJon-KK-M6.7.3-EXP.ipa
+          shasum -a 256 PsTJon-KK-M6.7.4-EXP.ipa
       - name: Build report
         run: |
           {
-            echo "PsTJon M6.7.3-EXP: Ascension-only severe-pressure framebuffer/MSAA safe reclaim with full GPU fence and 30s throttle; invalidate framebuffer descriptor references after surface cleanup at nonfatal severities. M6.7.2 Metal store policy and M6.7.1 ULTRA/cache/workers unchanged; FPS, memory relief and visual effect require physical A/B."
+            echo "PsTJon M6.7.4-EXP: ALL-TITLE Vulkan blitter fast copy geometry check before transfer, real src/dst extents including offsets. Invalid fast transfers use the original checked typeless/scale normalization path; no size fabrication, silent clipping or change for valid transfers. Retains M6.7.3 pressure mitigation, M6.7.2 Metal store and original graphical settings. Physical FPS, image and memory remain UNVERIFIED."
             echo "EXP metrics: presented-frame cadence, frame stutters, process footprint, RSX estimated load, Vulkan cache lookup wall-time, command flush wall-time, invalid texture and DMA blit guard events"
             echo "EXP NOT AVAILABLE: authoritative Metal GPU occupancy/time, GPU image readback, automatic black-frame or visual corruption detection"
             echo "EXP logs: PsTJon EXPERIMENTAL channel in exported RPCS3 session logs, sampled once per 3 seconds and on throttled anomalies"
@@ -4877,15 +4972,15 @@ jobs:
             echo "Volk: $VOLK_SHA"
             echo "FFmpeg: $FFMPEG_VERSION"
             echo "Core: $(shasum -a 256 libRPCS3Core.dylib | awk '{print $1}')"
-            echo "IPA: $(shasum -a 256 PsTJon-KK-M6.7.3-EXP.ipa | awk '{print $1}')"
-          } > PsTJon-KK-M6.7.3-EXP-build.txt
+            echo "IPA: $(shasum -a 256 PsTJon-KK-M6.7.4-EXP.ipa | awk '{print $1}')"
+          } > PsTJon-KK-M6.7.4-EXP-build.txt
 
       - uses: actions/upload-artifact@v4
         with:
-          name: PsTJon-KK-m06-7-3-EXPERIMENTAL-surface-reclaim-IPA
+          name: PsTJon-KK-m06-7-4-EXPERIMENTAL-copy-geometry-IPA
           path: |
-            PsTJon-KK-M6.7.3-EXP.ipa
-            PsTJon-KK-M6.7.3-EXP-build.txt
+            PsTJon-KK-M6.7.4-EXP.ipa
+            PsTJon-KK-M6.7.4-EXP-build.txt
             pstjon-entitlements.txt
             M5-rpcs3-patch-stat.txt
             M4-mesa-patch-stat.txt
@@ -4902,16 +4997,16 @@ jobs:
 
       # Best-effort direct release asset: accessible on iPhone without
       # extracting the Actions ZIP. Artifact step above stays authoritative.
-      - name: Publish direct M6.7.3-EXP IPA
+      - name: Publish direct M6.7.4-EXP IPA
         if: success()
         continue-on-error: true
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
           set -euxo pipefail
-          gh release create pstjon-kk-m6.7.3-exp PsTJon-KK-M6.7.3-EXP.ipa \
+          gh release create pstjon-kk-m6.7.4-exp PsTJon-KK-M6.7.4-EXP.ipa \
             --target "$GITHUB_SHA" \
-            --title "PsTJon KosmicKrisp M6.7.3-EXP" \
-            --notes "Experimental M6.7.3-EXP: Ascension-only severe iOS memory pressure: fence+GPU drain followed by existing fatal-grade framebuffer/MSAA resolve cache reclaim (30s throttle); invalidate framebuffer samplers after any surface cleanup to avoid stale image-view reuse. M6.7.2 Metal color/depth store policy, restored Ultra, caches, shader workers and all other game profiles unchanged. Physical memory/FPS/visual A-B required; no stability improvement yet proven." \
+            --title "PsTJon KosmicKrisp M6.7.4-EXP" \
+            --notes "Experimental M6.7.4-EXP: ALL-TITLE Vulkan image transfer correctness. Fast blitter copies now validate both actual GPU image dimensions and offsets BEFORE transfer, otherwise use existing checked normalized path. Prevents unsafe out-of-range fast Vulkan copies without clamping, dropping valid draws or modifying shaders, resolution, ZCull and existing profiles. M6.7.3 conservative memory mitigation retained. Physical graphics and stability test required; no fix claimed yet." \
             --latest=false
-          gh release view pstjon-kk-m6.7.3-exp --json url,assets
+          gh release view pstjon-kk-m6.7.4-exp --json url,assets
