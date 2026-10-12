@@ -1,4 +1,4 @@
-name: PsTJon KosmicKrisp M5
+name: PsTJon KosmicKrisp M6.8.3
 # runner-retry: fresh-run-after-macos-queue-failure
 
 on:
@@ -5407,6 +5407,133 @@ jobs:
           git -C rpcs3-src diff --check
           git -C mesa-src diff --check
 
+          # M6.8.3: PSN PKG with Sony PATCH flag, true PS3 platform and exact Content ID.
+          # Log NPUA80918 01.04: UP9000-NPUA80918_00-GOWADIGITALVERS1,
+          # SHA-1/size verified, but original GD-only contract rejected it.
+          python3 - <<'PY'
+          from pathlib import Path
+          root=Path('rpcs3-src/rpcs3')
+          p=root/'ios/GamePatchContract.h'
+          s=p.read_text()
+          a=s.index('inline game_patch_validation_error validate_game_patch_contract(')
+          b=s.index('\n}',a)+2
+          repl=r'''// M6.8.3: Sony PSN Content ID: issuer(6)-title(9)_suffix.
+          inline bool game_patch_content_id_well_formed(std::string_view content_id)
+          {
+              if (content_id.size() < 17 || content_id[6] != '-' || content_id[16] != '_')
+                  return false;
+              for (unsigned i = 0; i < 6; ++i)
+              {
+                  const char c = content_id[i];
+                  if (i < 2 ? (c < 'A' || c > 'Z') : (c < '0' || c > '9'))
+                      return false;
+              }
+              for (unsigned i = 7; i < 16; ++i)
+              {
+                  const char c = content_id[i];
+                  if (!((c >= 'A' && c <= 'Z') || (c >= '0' && c <= '9')))
+                      return false;
+              }
+              return true;
+          }
+          
+          inline game_patch_validation_error validate_game_patch_contract(
+              std::string_view expected_title_id,
+              std::string_view package_title_id,
+              std::string_view category,
+              bool has_patch_flag,
+              std::string_view pkg_content_id = {})
+          {
+              if (expected_title_id.size() != 9 || !has_patch_flag)
+                  return game_patch_validation_error::invalid_patch;
+              const bool valid_header = game_patch_content_id_well_formed(pkg_content_id);
+              const std::string_view header_title = valid_header ? pkg_content_id.substr(7, 9) : std::string_view{};
+              if ((!package_title_id.empty() && package_title_id != expected_title_id) ||
+                  (valid_header && header_title != expected_title_id))
+                  return game_patch_validation_error::title_mismatch;
+              // Original disc update contract stays supported.
+              if (category == "GD" && package_title_id == expected_title_id)
+                  return game_patch_validation_error::none;
+              // Sony PSN update can lack PARAM.SFO or use HG rather than GD. Never
+              // accept it without PATCH and an exact, structured matching content ID.
+              if (valid_header && header_title == expected_title_id &&
+                  (category.empty() || category == "GD" || category == "HG"))
+                  return game_patch_validation_error::none;
+              return game_patch_validation_error::invalid_patch;
+          }'''
+          assert s[a:b]==s[a:b].strip('\n')
+          p.write_text(s[:a]+repl+s[b:])
+          p=root/'ios/GameLibrary.cpp'
+          s=p.read_text()
+          old='''switch (validate_game_patch_contract(
+          		expected_title_id, package_title_id, category, has_patch_flag))'''
+          new=r'''// M6.8.3 UPDATE_PKG_CONTRACT: 48-byte PKG title field is bounded.
+              const auto& header = reader.get_header();
+              const std::string_view field{header.title_id, sizeof(header.title_id)};
+              const auto pkg_content_id = field.substr(0, field.find('\0'));
+              const auto check = validate_game_patch_contract(
+                  expected_title_id, package_title_id, category, has_patch_flag, pkg_content_id);
+              sys_log.notice("PsTJon M6.8.3 UPDATE_PKG_CONTRACT: target=%s sfo=%s category=%s content_id=%s patch=%d outcome=%d",
+                  expected_title_id, package_title_id, category, pkg_content_id, has_patch_flag, static_cast<int>(check));
+              switch (check)'''
+          assert s.count(old)==1, 'M6.8.3 GameLibrary.cpp anchor mismatch'
+          s=s.replace(old,new,1)
+          assert 'PKG_PLATFORM_TYPE_PS3' in s and 'pkg_flag::PKG_FLAG_PATCH' in s
+          assert 'install_game_package(package_path, progress)' in s
+          p.write_text(s)
+          # Observability only for GPU-FENCED reclaim. Do not alter actual
+          # cache eviction behavior, ZCull, render target lifetime or KosmicKrisp.
+          p=root/'Emu/RSX/VK/VKGSRender.cpp'
+          s=p.read_text()
+          old='''// Reuse the fatal handler's existing fence+drain precondition;'''
+          new='''const auto m683_drain_start = std::chrono::steady_clock::now();
+                      // Reuse the fatal handler's existing fence+drain precondition;'''
+          assert s.count(old)==1, 'M6.8.3 reclaim timer anchor'
+          s=s.replace(old,new,1)
+          old='''rsx_log.warning("PsTJon M6.7.3 ASCENSION_SAFE_SURFACE_RECLAIM: severe iOS memory pressure; completed GPU work before MSAA/surface cache cleanup (30s throttle)");'''
+          new='''static u64 m683_safe_drains = 0; // RSX renderer thread
+                      const auto m683_drain_us = std::chrono::duration_cast<std::chrono::microseconds>(
+                          std::chrono::steady_clock::now() - m683_drain_start).count();
+                      rsx_log.warning("PsTJon M6.7.3 ASCENSION_SAFE_SURFACE_RECLAIM / M6.8.3 RECLAIM_GPU_DRAIN: gpu_drain_ms=%.3f count=%llu, 30s throttle maintained",
+                          m683_drain_us / 1000.0, ++m683_safe_drains);'''
+          assert s.count(old)==1, 'M6.8.3 reclaim exit anchor'
+          s=s.replace(old,new,1)
+          assert 'M6.8.2 NPUA_ASCENSION_QUERY_POOL' in s
+          p.write_text(s)
+          print('M6.8.3 contract + safely fenced drain instrumentation: SOURCE PASS')
+          PY
+          cat > /tmp/pstjon_m683_patch_tests.cpp <<'CPP'
+          #include "rpcs3/ios/GamePatchContract.h"
+          #include <cassert>
+          using namespace rpcs3::ios;
+          int main()
+          {
+              using e = game_patch_validation_error;
+              constexpr auto sony = "UP9000-NPUA80918_00-GOWADIGITALVERS1";
+              constexpr auto other = "UP9000-NPUB31372_00-OTHERGAME0000000";
+              assert(validate_game_patch_contract("NPUA80918", "", "", true, sony) == e::none);
+              assert(validate_game_patch_contract("NPUA80918", "", "HG", true, sony) == e::none);
+              assert(validate_game_patch_contract("NPUA80918", "NPUA80918", "GD", true, sony) == e::none);
+              assert(validate_game_patch_contract("BCUS98232", "BCUS98232", "GD", true) == e::none);
+              assert(validate_game_patch_contract("NPUA80918", "", "", false, sony) == e::invalid_patch);
+              assert(validate_game_patch_contract("NPUA80918", "", "DG", true, sony) == e::invalid_patch);
+              assert(validate_game_patch_contract("NPUA80918", "NPUA80918", "HG", true, "") == e::invalid_patch);
+              assert(validate_game_patch_contract("NPUA80918", "", "", true, other) == e::title_mismatch);
+              assert(validate_game_patch_contract("NPUA80918", "NPUB31372", "HG", true, sony) == e::title_mismatch);
+              assert(validate_game_patch_contract("NPUA80918", "", "", true, "UP9000-NPUA80918-00") == e::invalid_patch);
+              assert(validate_game_patch_contract("NPUA80918", "", "", true, "UP9000-NPUA80918X00-OTHER") == e::invalid_patch);
+          }
+          CPP
+          c++ -std=c++20 -Wall -Wextra -Werror -I rpcs3-src /tmp/pstjon_m683_patch_tests.cpp -o /tmp/pstjon_m683_patch_tests
+          /tmp/pstjon_m683_patch_tests
+          grep -q 'M6.8.3 UPDATE_PKG_CONTRACT' rpcs3-src/rpcs3/ios/GameLibrary.cpp
+          grep -q 'M6.8.3 RECLAIM_GPU_DRAIN' rpcs3-src/rpcs3/Emu/RSX/VK/VKGSRender.cpp
+          grep -q 'M6.8.1 ASCENSION_TYPELESS_PREFLIGHT' rpcs3-src/rpcs3/Emu/RSX/VK/VKTexture.cpp
+          grep -q 'm68_reuse_completed_ios' rpcs3-src/rpcs3/Emu/RSX/VK/VKQueryPool.cpp
+          git -C rpcs3-src diff --check
+          git -C mesa-src diff --check
+          echo 'M6.8.3: host patch tests PASS; graphics safety policy unchanged.'
+
           rm -rf build-kk-host kk-host-tools
           meson setup build-kk-host mesa-src \
             --buildtype=release \
@@ -5618,13 +5745,13 @@ jobs:
           codesign -d --entitlements :- "$APP" 2>&1 | tee pstjon-entitlements.txt
           (
             cd package
-            ditto -c -k --sequesterRsrc --keepParent Payload "$GITHUB_WORKSPACE/PsTJon-KK-M6.8.2-EXP.ipa"
+            ditto -c -k --sequesterRsrc --keepParent Payload "$GITHUB_WORKSPACE/PsTJon-KK-M6.8.3-EXP.ipa"
           )
-          shasum -a 256 PsTJon-KK-M6.8.2-EXP.ipa
+          shasum -a 256 PsTJon-KK-M6.8.3-EXP.ipa
       - name: Build report
         run: |
           {
-            echo "PsTJon M6.8.2-EXP based on fully successful M6.8.1. New NPUA80918 complete God of War Ascension APP_VER 01.00 gets Vulkan QueryPool512 instead of default, 4096/3584 software ZCull slots, scoped local memory and texture safety and pre-fatal GPU-fenced safe reclaim. Ultra precision/WCB/real ZCull/async interpreter fidelity profile scoped to NPUA only. BCUS98232 v1.12 EBOOT/MLAA binary patches are NOT copied. All M6.8.1 native Metal GPU callback timing, 6-stage CPU profiling, typeless full mip validation and safe GPU reuse preserved. No native 30/60 FPS or frame generation claimed before repeated physical tests."
+            echo "PsTJon M6.8.3-EXP: Sony PSN PS3 update Content ID validation tests; safe GPU drain timing (no forced changes to resource release). Based on fully successful M6.8.1. New NPUA80918 complete God of War Ascension APP_VER 01.00 gets Vulkan QueryPool512 instead of default, 4096/3584 software ZCull slots, scoped local memory and texture safety and pre-fatal GPU-fenced safe reclaim. Ultra precision/WCB/real ZCull/async interpreter fidelity profile scoped to NPUA only. BCUS98232 v1.12 EBOOT/MLAA binary patches are NOT copied. All M6.8.1 native Metal GPU callback timing, 6-stage CPU profiling, typeless full mip validation and safe GPU reuse preserved. No native 30/60 FPS or frame generation claimed before repeated physical tests."
             echo "EXP metrics: presented-frame cadence, frame stutters, process footprint, RSX estimated load, Vulkan cache lookup wall-time, command flush wall-time, invalid texture and DMA blit guard events"
             echo "EXP NOT AVAILABLE: authoritative Metal GPU occupancy/time, GPU image readback, automatic black-frame or visual corruption detection"
             echo "EXP logs: PsTJon EXPERIMENTAL channel in exported RPCS3 session logs, sampled once per 3 seconds and on throttled anomalies"
@@ -5636,16 +5763,60 @@ jobs:
             echo "Volk: $VOLK_SHA"
             echo "FFmpeg: $FFMPEG_VERSION"
             echo "Core: $(shasum -a 256 libRPCS3Core.dylib | awk '{print $1}')"
-            echo "IPA: $(shasum -a 256 PsTJon-KK-M6.8.2-EXP.ipa | awk '{print $1}')"
-          } > PsTJon-KK-M6.8.2-EXP-build.txt
+            echo "IPA: $(shasum -a 256 PsTJon-KK-M6.8.3-EXP.ipa | awk '{print $1}')"
+          } > PsTJon-KK-M6.8.3-EXP-build.txt
+
+          cp HANDOFF-PsTJon-KosmicKrisp-M0-M9-2026-10-12-M6.8.2-EXP.txt HANDOFF-PsTJon-KosmicKrisp-M0-M9-2026-10-12-M6.8.3-EXP.txt
+          cat >> HANDOFF-PsTJon-KosmicKrisp-M0-M9-2026-10-12-M6.8.3-EXP.txt <<'HANDOFF_M683'
+          
+          ===========================================================
+          M6.8.3-EXP 2026-10-12: update of prior handoff M0-M9
+          ===========================================================
+          Repo joao9vegeto-stack/KintTany, branch PsTJon-KosmicKrisp.
+          Base RPCS3 3ec23f1; KosmicKrisp bfe063f; shell v0.10.1.
+          Preserve all M0-M6.8.2 code and KosmicKrisp shader/Metal behavior.
+          Single commit, single workflow, CI artifact and iPhone-ready IPA.
+          
+          ROOT CAUSE P1: Sony PS3 PSN update 01.04 PKG had platform=PS3,
+          flag PATCH and content ID UP9000-NPUA80918_00-GOWADIGITALVERS1,
+          already verified using size and SHA1. Old GamePatchContract
+          required CATEGORY GD and nonempty SFO TITLE_ID, rejecting
+          genuine digital updates (some HG/empty SFO metadata). M6.8.3
+          now verifies the structured PKG Content ID and exact title,
+          requires PATCH, denies cross-game, DG base and bad Content IDs.
+          Still requires Sony package platform/validity and normal extraction.
+          Host C++20 smoke tests run before any IPA build.
+          
+          P2: record the duration of existing fully GPU-fenced safe
+          memory-pressure surface reclamation; retain 30-second throttle,
+          surface/texture lifetime, ZCull query pool 512 for NPUA80918,
+          all prior WCB/Ultra fidelity and valid typeless image copies.
+          Diagnostics do not imply a proven FPS improvement.
+          Physical M6.8.2 NPUA showed clearer textures but 4-12 FPS and
+          heavy surface overbudget warnings, memory pressure and RSX ZCull
+          sync. Preserve Accurate RSX Reservation ON in baseline testing.
+          Previous Santa Monica RSX semaphore timeouts appeared when OFF.
+          
+          PHYSICAL TESTS REQUIRED:
+          * Reopen Updates: attempt official 01.04-01.12 in order.
+          * Check installed version and no destructive overwrite of saves.
+          * Repeat 3 gameplay starts, benchmark same scene FPS, GPU completion.
+          * Obtain exact iOS JetsamEvent/.ips per terminated process.
+          * Investigate surface-cache lifetime/reclaim only with measurements.
+          * Do not claim 30/60 native or framegen stability as achieved.
+          
+          M0-M5 preserved. M6 ongoing graphics correctness/optimization.
+          M7-M9 unvalidated and not claimed completed.
+          HANDOFF_M683
+          test -s HANDOFF-PsTJon-KosmicKrisp-M0-M9-2026-10-12-M6.8.3-EXP.txt
 
       - uses: actions/upload-artifact@v4
         with:
-          name: PsTJon-KK-m06-8-2-EXPERIMENTAL-NPUA-ascension-IPA
+          name: PsTJon-KK-m06-8-3-EXPERIMENTAL-PSN-update-IPA
           path: |
-            PsTJon-KK-M6.8.2-EXP.ipa
-            PsTJon-KK-M6.8.2-EXP-build.txt
-            HANDOFF-PsTJon-KosmicKrisp-M0-M9-2026-10-12-M6.8.2-EXP.txt
+            PsTJon-KK-M6.8.3-EXP.ipa
+            PsTJon-KK-M6.8.3-EXP-build.txt
+            HANDOFF-PsTJon-KosmicKrisp-M0-M9-2026-10-12-M6.8.3-EXP.txt
             pstjon-entitlements.txt
             M5-rpcs3-patch-stat.txt
             M4-mesa-patch-stat.txt
@@ -5662,16 +5833,16 @@ jobs:
 
       # Best-effort direct release asset: accessible on iPhone without
       # extracting the Actions ZIP. Artifact step above stays authoritative.
-      - name: Publish direct M6.8.2-EXP IPA
+      - name: Publish direct M6.8.3-EXP IPA
         if: success()
         continue-on-error: true
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
           set -euxo pipefail
-          gh release create pstjon-kk-m6.8.2-exp PsTJon-KK-M6.8.2-EXP.ipa HANDOFF-PsTJon-KosmicKrisp-M0-M9-2026-10-12-M6.8.2-EXP.txt \
+          gh release create pstjon-kk-m6.8.3-exp PsTJon-KK-M6.8.3-EXP.ipa HANDOFF-PsTJon-KosmicKrisp-M0-M9-2026-10-12-M6.8.3-EXP.txt \
             --target "$GITHUB_SHA" \
-            --title "PsTJon KosmicKrisp M6.8.2-EXP" \
-            --notes "M6.8.2 experimental: explicit God of War Ascension NPUA80918 v1.00 support. Driver Vulkan occlusion query pools scoped to 512 (rather than unsafe large default), ZCull software 4096/3584, NPUA local RSX address guards and conservative GPU-fenced severe-pressure reclamation; fidelity Ultra/WCB/true ZCull/async shader fallback. M6.8.1 typeless geometry preflight and true Metal 4 GPU timing retained; BCUS-only 1.12 binary patches remain BCUS-only; Castlevania/Sleeping Dogs and other games unchanged. Target: visual correctness and native stable 30fps before testing real 60fps or separately labeled interpolated 60 presented frames. On-device tests are mandatory; not a claimed fix for menu corruption yet." \
+            --title "PsTJon KosmicKrisp M6.8.3-EXP" \
+            --notes "M6.8.3 experimental: PSN update installer recognizes valid Sony PATCH packages for NPUA80918 01.04 and newer with strict Content ID matching and unit tests; GPU-fenced reclaim diagnostics added. Prior M6.8.2 experimental: explicit God of War Ascension NPUA80918 v1.00 support. Driver Vulkan occlusion query pools scoped to 512 (rather than unsafe large default), ZCull software 4096/3584, NPUA local RSX address guards and conservative GPU-fenced severe-pressure reclamation; fidelity Ultra/WCB/true ZCull/async shader fallback. M6.8.1 typeless geometry preflight and true Metal 4 GPU timing retained; BCUS-only 1.12 binary patches remain BCUS-only; Castlevania/Sleeping Dogs and other games unchanged. Target: visual correctness and native stable 30fps before testing real 60fps or separately labeled interpolated 60 presented frames. On-device tests are mandatory; not a claimed fix for menu corruption yet." \
             --latest=false
-          gh release view pstjon-kk-m6.8.2-exp --json url,assets
+          gh release view pstjon-kk-m6.8.3-exp --json url,assets
