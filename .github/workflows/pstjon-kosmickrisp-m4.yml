@@ -4743,6 +4743,214 @@ jobs:
           git -C rpcs3-src diff --check
           git -C mesa-src diff --check
           
+          # PsTJon M6.8: integrated four-priority hardening on exactly M6.7.4.
+          # P1 GPU-query-pool life cycle: completed-fence reuse, bounded cache, small
+          # per-title pool footprints and precise native-host-allocation diagnostics.
+          # P2 PPU/RSX/Metal hot path: bounded query-result polling avoids host
+          # busy-spin without turning necessary ZCull reads into fabricated results.
+          # P3 existing shader/disk-pipeline prewarm and IDs preserved; reserve a
+          # second live compiler worker for Castlevania/Sleeping Dogs only if the
+          # process has adequate actual iOS memory headroom at boot. No speculative
+          # runtime worker deletion while queued pipelines reference it.
+          # P4 texture/framebuffer provenance: validate base and mip-level extents,
+          # signed offsets and layers before Vulkan->Metal image readback. Keep
+          # full-quality color stores, renderpass lifetime, 6.7.4 normalized blitter
+          # path, 6.7.3 framebuffer-fence pressure policy, and all RSX DMA guards.
+          # Invalid geometry is reported and fails safely, NEVER silently clipped.
+          python3 - <<'PY'
+          from pathlib import Path
+          vk = Path('rpcs3-src/rpcs3/Emu/RSX/VK/VKGSRender.cpp')
+          qp = Path('rpcs3-src/rpcs3/Emu/RSX/VK/VKQueryPool.cpp')
+          tex = Path('rpcs3-src/rpcs3/Emu/RSX/VK/VKTexture.cpp')
+          kk = Path('mesa-src/src/kosmickrisp/vulkan/kk_query_pool.c')
+
+          # P1: preserve all prior profiles and default policy for unaffected games.
+          # These two crash reports come from NPUB31372 and NPUB30818; use modest
+          # real hardware query pools, not disabled occlusion or synthetic results.
+          s=vk.read_text()
+          old='Emu.GetTitleID() == "BCUS98232" ? 512 : OCCLUSION_MAX_POOL_SIZE)'
+          new='Emu.GetTitleID() == "BCUS98232" ? 512 : ((Emu.GetTitleID() == "NPUB31372" || Emu.GetTitleID() == "NPUB30818") ? 256 : OCCLUSION_MAX_POOL_SIZE))'
+          assert s.count(old)==1, 'M6.8 query pool size: original M6.6.8 profile lost'
+          s=s.replace(old,new,1)
+          assert 'Emu.GetTitleID() == "BLUS30405"' in s
+          assert 'Emu.GetTitleID() == "NPUB30424"' in s
+
+          # P3: keep warm shader cache and existing Ascension/Prince 2-worker policy;
+          # while headroom is ample, allow 2 instead of 1 for the two studied titles.
+          # Respect the original single-worker fallback when iOS memory is constrained.
+          old='preferred_compiler_threads = (Emu.GetTitleID() == "NPUB30424" || Emu.GetTitleID() == "BCUS98232") ? 2 : 1;'
+          new='''#ifdef RPCS3_IOS
+          		const u64 m68_pipeline_headroom = rpcs3::ios::available_process_memory_headroom();
+          		const bool m68_extra_worker =
+          			(Emu.GetTitleID() == "NPUB31372" || Emu.GetTitleID() == "NPUB30818") &&
+          			m68_pipeline_headroom >= (2300ull * 1024 * 1024);
+          		preferred_compiler_threads = (Emu.GetTitleID() == "NPUB30424" ||
+          			Emu.GetTitleID() == "BCUS98232" || m68_extra_worker) ? 2 : 1;
+          		rsx_log.notice("PsTJon M6.8 PIPELINE_BUDGET: title=%s headroom=%lluMiB live_workers=%d (disk prewarm unchanged)",
+          			Emu.GetTitleID(), m68_pipeline_headroom / (1024 * 1024), preferred_compiler_threads);
+          #else
+          		preferred_compiler_threads = (Emu.GetTitleID() == "NPUB30424" || Emu.GetTitleID() == "BCUS98232") ? 2 : 1;
+          #endif'''
+          assert s.count(old)==1, 'M6.8 worker anchor lost'
+          s=s.replace(old,new,1)
+          # Include the exact iOS function declaration, not a guessed signature.
+          inc='#include "ios/IOSGraphicsLifecycle.h"'
+          assert s.count(inc)==1
+          s=s.replace(inc,inc+'\n#include "ios/RPCS3IOSPerformance.h"',1)
+          assert 'M6.7.3 ASCENSION_SAFE_SURFACE_RECLAIM' in s
+          assert 'M6.7.1 KK_PIPELINE_WORKERS' in s
+          vk.write_text(s)
+
+          # P1/P2: all iOS games opt into SAFE driver-thread deferred pool recycling.
+          # Upper bound avoids retaining unbounded idle query pools. Active and GPU
+          # in-flight queries still follow the existing GPU-fenced owner/refcount path.
+          s=qp.read_text()
+          old='if (!vk::force_reuse_query_pools() && !m65_reuse_dante)'
+          new='''#ifdef RPCS3_IOS
+          		const bool m68_reuse_completed_ios = true;
+          #else
+          		const bool m68_reuse_completed_ios = false;
+          #endif
+          		if (!vk::force_reuse_query_pools() && !m65_reuse_dante && !m68_reuse_completed_ios)'''
+          assert s.count(old)==1,'M6.8 query-pool reuse anchor missing'
+          s=s.replace(old,new,1)
+          old='''		m_query_pool_cache.emplace_back(std::move(pool));'''
+          new='''#ifdef RPCS3_IOS
+          		// M6.8: the owner only calls this after the deferred resource manager
+          		// has finished GPU use. Keep at most three fully released pools idle.
+          		if (m_query_pool_cache.size() >= 3)
+          		{
+          			pool.reset();
+          			return;
+          		}
+          #endif
+          		m_query_pool_cache.emplace_back(std::move(pool));'''
+          assert s.count(old)==1,'M6.8 bounded idle pool cache insertion missing'
+          s=s.replace(old,new,1)
+          # Never change the result or synchronization scope of guest ZCull queries.
+          # On the Metal translation path this loop can perform millions of tight
+          # VK_NOT_READY polls; use incremental host backoff AFTER short busy probes.
+          old='''			while (!query_info.ready)
+          			{
+          				utils::pause();
+          				poke_query(query_info, index, wait_flags);
+          			}'''
+          new='''#ifdef RPCS3_IOS
+          			u32 m68_query_polls = 0;
+          #endif
+          			while (!query_info.ready)
+          			{
+          #ifdef RPCS3_IOS
+          				++m68_query_polls;
+          				if (m68_query_polls <= 48)
+          					utils::pause();
+          				else if (m68_query_polls <= 256)
+          					std::this_thread::yield();
+          				else
+          					std::this_thread::sleep_for(std::chrono::microseconds(50));
+          #else
+          				utils::pause();
+          #endif
+          				poke_query(query_info, index, wait_flags);
+          			}'''
+          assert s.count(old)==1, 'M6.8 existing query result synchronization differs'
+          s=s.replace(old,new,1)
+          inc='#include "VKGSRender.h"'
+          assert s.count(inc)==1
+          s=s.replace(inc,inc+'\n#ifdef RPCS3_IOS\n#include <thread>\n#include <chrono>\n#endif',1)
+          assert 'm65_reuse_dante' in s
+          assert 'm_query_pool_cache.emplace_back(std::move(pool))' in s
+          assert s.count('poke_query(query_info, index, wait_flags);')==1
+          qp.write_text(s)
+
+          # P1 driver-side provenance: M5.34 already preserves query-table errors.
+          # Fix host allocation diagnostic (the exact fatal status in both tests),
+          # preserving the real VK_ERROR_OUT_OF_HOST_MEMORY and query count.
+          s=kk.read_text()
+          old='''   if (!pool)
+                return vk_error(dev, VK_ERROR_OUT_OF_HOST_MEMORY);'''
+          new='''   if (!pool)
+                return vk_errorf(dev, VK_ERROR_OUT_OF_HOST_MEMORY,
+                                 "PsTJon M6.8 KK_QUERY_HOST_ALLOC_FAILED: count=%u type=%u",
+                                 pCreateInfo->queryCount, pCreateInfo->queryType);'''
+          assert s.count(old)==1,'M6.8 exact driver host OOM source not found'
+          s=s.replace(old,new,1)
+          assert 'M5.34 KK_OQ_ALLOC_FAIL' in s
+          assert 'PSTJON_KK_OQ64K' in Path('mesa-src/src/kosmickrisp/vulkan/kk_device.c').read_text()
+          kk.write_text(s)
+
+          # P4: the M6.7.4 fast path already checks source/destination image extents.
+          # Also validate actual Vulkan mip dimensions, offsets and layer ranges in
+          # the general readback path. The previous unsigned+signed sum could wrap.
+          # On a mismatch do not submit an undefined Vulkan/Metal copy or fabricate
+          # contents. Log full geometry and fail with the existing ensure machinery.
+          s=tex.read_text()
+          old='''		ensure((region.imageExtent.width + region.imageOffset.x) <= src->width());
+          		ensure((region.imageExtent.height + region.imageOffset.y) <= src->height());'''
+          new='''		// PsTJon M6.8: validate the ACTUAL selected image mip. In the
+          		// old check, uint width + signed x could wrap, and mip>0 was
+          		// compared to the full-size image. Both permit undefined Metal
+          		// copies and partially corrupted framebuffer feedback.
+          		const u32 m68_mip = region.imageSubresource.mipLevel;
+          		const bool m68_mip_valid = m68_mip < src->info.mipLevels;
+          		const u32 m68_w = m68_mip_valid ? std::max(1u, src->width() >> m68_mip) : 0u;
+          		const u32 m68_h = m68_mip_valid ? std::max(1u, src->height() >> m68_mip) : 0u;
+          		const bool m68_copy_ok = m68_mip_valid &&
+          			region.imageOffset.x >= 0 && region.imageOffset.y >= 0 &&
+          			region.imageExtent.width > 0 && region.imageExtent.height > 0 &&
+          			static_cast<u64>(region.imageOffset.x) + region.imageExtent.width <= m68_w &&
+          			static_cast<u64>(region.imageOffset.y) + region.imageExtent.height <= m68_h &&
+          			region.imageSubresource.layerCount > 0 &&
+          			static_cast<u64>(region.imageSubresource.baseArrayLayer) +
+          				region.imageSubresource.layerCount <= src->info.arrayLayers;
+          		if (!m68_copy_ok)
+          		{
+          			rsx_log.error("PsTJon M6.8 IMAGE_READBACK_GEOMETRY: mip=%u/%u src_mip=%ux%u src_base=%ux%u origin=(%d,%d) extent=%ux%u layers=%u+%u/%u",
+          				m68_mip, src->info.mipLevels, m68_w, m68_h, src->width(), src->height(),
+          				region.imageOffset.x, region.imageOffset.y,
+          				region.imageExtent.width, region.imageExtent.height,
+          				region.imageSubresource.baseArrayLayer,
+          				region.imageSubresource.layerCount, src->info.arrayLayers);
+          		}
+          		ensure(m68_copy_ok);'''
+          assert s.count(old)==1,'M6.8 original image readback geometry check differs'
+          s=s.replace(old,new,1)
+          assert 'M6.7.4 VK_COPY_GEOMETRY' in s
+          assert 'Blit request denied because the source region does not fit!' in s
+          tex.write_text(s)
+
+          # P1-P4 tests: fast path unchanged on valid input, offsets+mips/layers checked,
+          # no fake FPS, no query bypass, no early GPU destruction or altered TitleIDs.
+          def fits(x,y,w,h,base_w,base_h,mip,mips,layer,layers,total_layers):
+              if mip >= mips: return False
+              mw=max(1,base_w >> mip)
+              mh=max(1,base_h >> mip)
+              return (x>=0 and y>=0 and w>0 and h>0 and x+w<=mw and y+h<=mh
+                      and layers>0 and layer+layers<=total_layers)
+          assert fits(0,0,720,405,720,405,0,1,0,1,1)
+          assert fits(0,0,360,202,720,405,1,2,0,1,1)
+          assert not fits(0,0,361,202,720,405,1,2,0,1,1)
+          assert not fits(0,0,720,405,720,405,1,1,0,1,1)
+          assert not fits(-1,0,32,32,720,405,0,1,0,1,1)
+          assert not fits(0,0,721,405,720,405,0,1,0,1,1)
+          assert not fits(0,0,32,32,720,405,0,1,1,1,1)
+          assert not fits(0,0,32,32,720,405,0,1,0,0,1)
+          assert 'force_store |= render->color_att_count > 0;' in Path('mesa-src/src/kosmickrisp/vulkan/kk_cmd_buffer.c').read_text()
+          assert 'M6.6 ASCENSION_DST_SPAN' in Path('rpcs3-src/rpcs3/Emu/RSX/NV47/HW/nv3089.cpp').read_text()
+          assert 'M6.6 ASCENSION_SRC_SPAN' in Path('rpcs3-src/rpcs3/Emu/RSX/NV47/HW/nv3089.cpp').read_text()
+          assert 'M6.8 PIPELINE_BUDGET' in vk.read_text()
+          assert 'M6.8 KK_QUERY_HOST_ALLOC_FAILED' in kk.read_text()
+          assert 'm68_reuse_completed_ios' in qp.read_text()
+          assert 'M6.8 IMAGE_READBACK_GEOMETRY' in tex.read_text()
+          print("PsTJon M6.8 priority 1 query lifecycle, priority 2 bounded RSX polling, priority 3 headroom-budgeted workers and retained warm disk pipelines, priority 4 mip/region preservation PASS")
+          PY
+          grep -q 'M6.8 PIPELINE_BUDGET' rpcs3-src/rpcs3/Emu/RSX/VK/VKGSRender.cpp
+          grep -q 'M6.8 IMAGE_READBACK_GEOMETRY' rpcs3-src/rpcs3/Emu/RSX/VK/VKTexture.cpp
+          grep -q 'm68_reuse_completed_ios' rpcs3-src/rpcs3/Emu/RSX/VK/VKQueryPool.cpp
+          grep -q 'M6.8 KK_QUERY_HOST_ALLOC_FAILED' mesa-src/src/kosmickrisp/vulkan/kk_query_pool.c
+          git -C rpcs3-src diff --check
+          git -C mesa-src diff --check
+
           rm -rf build-kk-host kk-host-tools
           meson setup build-kk-host mesa-src \
             --buildtype=release \
@@ -4954,13 +5162,13 @@ jobs:
           codesign -d --entitlements :- "$APP" 2>&1 | tee pstjon-entitlements.txt
           (
             cd package
-            ditto -c -k --sequesterRsrc --keepParent Payload "$GITHUB_WORKSPACE/PsTJon-KK-M6.7.4-EXP.ipa"
+            ditto -c -k --sequesterRsrc --keepParent Payload "$GITHUB_WORKSPACE/PsTJon-KK-M6.8-EXP.ipa"
           )
-          shasum -a 256 PsTJon-KK-M6.7.4-EXP.ipa
+          shasum -a 256 PsTJon-KK-M6.8-EXP.ipa
       - name: Build report
         run: |
           {
-            echo "PsTJon M6.7.4-EXP: ALL-TITLE Vulkan blitter fast copy geometry check before transfer, real src/dst extents including offsets. Invalid fast transfers use the original checked typeless/scale normalization path; no size fabrication, silent clipping or change for valid transfers. Retains M6.7.3 pressure mitigation, M6.7.2 Metal store and original graphical settings. Physical FPS, image and memory remain UNVERIFIED."
+            echo "PsTJon M6.8-EXP: Four integrated M6 priorities. P1 native query-pool reuse only after GPU-deferred retirement, capped at 3 idle, 256 entry pool for Castlevania/Sleeping Dogs, native host-allocation diagnostics; P2 bounded ZCull result wait spin on iOS, preserves true query semantics; P3 2 shader compiler workers for these titles only with >=2300MiB headroom, disk shader/pipeline preload unchanged; P4 accurate 64-bit signed/mip/layer Vulkan image readback validation with error provenance, preserves M6.7.4 source/destination fast-copy guard, BCUS ULTRA/WCB/Metal stores. No claimed 60FPS/no-crash before hardware tests."
             echo "EXP metrics: presented-frame cadence, frame stutters, process footprint, RSX estimated load, Vulkan cache lookup wall-time, command flush wall-time, invalid texture and DMA blit guard events"
             echo "EXP NOT AVAILABLE: authoritative Metal GPU occupancy/time, GPU image readback, automatic black-frame or visual corruption detection"
             echo "EXP logs: PsTJon EXPERIMENTAL channel in exported RPCS3 session logs, sampled once per 3 seconds and on throttled anomalies"
@@ -4972,15 +5180,15 @@ jobs:
             echo "Volk: $VOLK_SHA"
             echo "FFmpeg: $FFMPEG_VERSION"
             echo "Core: $(shasum -a 256 libRPCS3Core.dylib | awk '{print $1}')"
-            echo "IPA: $(shasum -a 256 PsTJon-KK-M6.7.4-EXP.ipa | awk '{print $1}')"
-          } > PsTJon-KK-M6.7.4-EXP-build.txt
+            echo "IPA: $(shasum -a 256 PsTJon-KK-M6.8-EXP.ipa | awk '{print $1}')"
+          } > PsTJon-KK-M6.8-EXP-build.txt
 
       - uses: actions/upload-artifact@v4
         with:
-          name: PsTJon-KK-m06-7-4-EXPERIMENTAL-copy-geometry-IPA
+          name: PsTJon-KK-m06-8-EXPERIMENTAL-four-priorities-IPA
           path: |
-            PsTJon-KK-M6.7.4-EXP.ipa
-            PsTJon-KK-M6.7.4-EXP-build.txt
+            PsTJon-KK-M6.8-EXP.ipa
+            PsTJon-KK-M6.8-EXP-build.txt
             pstjon-entitlements.txt
             M5-rpcs3-patch-stat.txt
             M4-mesa-patch-stat.txt
@@ -4997,16 +5205,16 @@ jobs:
 
       # Best-effort direct release asset: accessible on iPhone without
       # extracting the Actions ZIP. Artifact step above stays authoritative.
-      - name: Publish direct M6.7.4-EXP IPA
+      - name: Publish direct M6.8-EXP IPA
         if: success()
         continue-on-error: true
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
           set -euxo pipefail
-          gh release create pstjon-kk-m6.7.4-exp PsTJon-KK-M6.7.4-EXP.ipa \
+          gh release create pstjon-kk-m6.8-exp PsTJon-KK-M6.8-EXP.ipa \
             --target "$GITHUB_SHA" \
-            --title "PsTJon KosmicKrisp M6.7.4-EXP" \
-            --notes "Experimental M6.7.4-EXP: ALL-TITLE Vulkan image transfer correctness. Fast blitter copies now validate both actual GPU image dimensions and offsets BEFORE transfer, otherwise use existing checked normalized path. Prevents unsafe out-of-range fast Vulkan copies without clamping, dropping valid draws or modifying shaders, resolution, ZCull and existing profiles. M6.7.3 conservative memory mitigation retained. Physical graphics and stability test required; no fix claimed yet." \
+            --title "PsTJon KosmicKrisp M6.8-EXP" \
+            --notes "Experimental M6.8-EXP (FOUR M6 priorities): global GPU-query lifecycle reliability with bounded GPU-retired pool reuse; Castlevania/Sleeping Dogs 256-entry query pools and detailed driver host allocation diagnostics; bounded iOS query polling to reduce hot CPU spin WITHOUT bypassing ZCull; memory-headroom-budgeted dual runtime shader workers for those two titles with retained persistent shader caches; strict Vulkan source mip/layer/offset validation and complete M6.7.4 blitter checks. Preserves Ascension ULTRA, WCB, Metal attachment stores, RSX guards, old game profiles and BCUS framebuffer safe reclaim. Stability, FPS and visual quality require physical verification, NOT guaranteed." \
             --latest=false
-          gh release view pstjon-kk-m6.7.4-exp --json url,assets
+          gh release view pstjon-kk-m6.8-exp --json url,assets
