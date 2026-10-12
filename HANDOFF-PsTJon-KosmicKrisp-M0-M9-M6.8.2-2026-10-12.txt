@@ -1,0 +1,118 @@
+HANDOFF TÉCNICO — PsTJon/RPCS3 iOS/KosmicKrisp
+REVISÃO DE CONTINUIDADE M0–M9 E M6.8.2
+Data: 12/10/2026 — Brasil
+ENTREGA ANTECIPADA: solicitado entregar primeiro este TXT e só depois trabalhar/acompanhar a compilação M6.8.2.
+
+I. ESTADO REAL NA EMISSÃO
+Repositório: https://github.com/joao9vegeto-stack/KintTany
+Branch única DE IMPLEMENTAÇÃO: PsTJon-KosmicKrisp; main intocada.
+Branch documental isolada para este TXT: PsTJon-Handoff-M6.8.2. Sua criação NÃO inicia o workflow de implementação.
+Último commit de código já entregue: 8d0faf7128bc5e31b73ceb0b0bcb8be199a41bba
+M6.8.1-EXP = Actions #99 (38251816537) COMPLETED SUCCESS, Release confirmada.
+IPA M6.8.1:
+https://github.com/joao9vegeto-stack/KintTany/releases/download/pstjon-kk-m6.8.1-exp/PsTJon-KK-M6.8.1-EXP.ipa
+SHA256 confirmado: a82d17f4f25ad7ca3f9e0893a31d7e5152b63c288f115d192ed22f337795f8c1
+Tamanho: 31.168.335 bytes.
+Runs #97 e #98 da preparação M6.8.1 falharam por âncoras do patch de telemetria; #99 corrigiu e concluiu. Não inventar tentativa única.
+M6.8 = commit 54945d93b9113268b7e4277e673156c90dadf530 / run #96 (38199518717), SUCCESS.
+M6.7.4 = commit bd439aff38f9246438648d1b28f85b6671463b92 / run #95 (38193893092), SUCCESS.
+M6.8.2: PLANEJADA. Não declarar IPA, SHA, commit ou run concluídos antes de verificar GitHub.
+
+FONTES FIXADAS:
+RPCS3 fork XITRIX/rpcs3 SHA 3ec23f1fef57071c808726f68121cfeb601eeb1e.
+Mesa/KosmicKrisp Kenji-NX/mesa SHA bfe063f723d436e5cdef8a98f058d4e44a64810c.
+Baseline histórica PsTJon v13 f0944f0957bae61793679e5b3330ccfd2b53d005.
+CI: .github/workflows/pstjon-kosmickrisp-m4.yml; macos-26/Xcode 26; iOS arm64/deployment 17.4.
+M2 implementou KosmicKrisp em dylib, não como biblioteca estática do projeto original.
+
+II. MISSÃO INALTERADA
+Hardware físico do usuário: iPhone 17 Pro (A19 Pro), sem Mac/PC/VPS.
+Objetivo: emulador iOS fiel ao jogo PS3; KosmicKrisp Vulkan->Metal nativo, sem falsificar GPU, sem desligar ZCull real para inflar FPS.
+Prioridade ABSOLUTA: God of War: Ascension com quadro INTEIRO e CORRETO, texturas, geometria, iluminação, depth, postprocessing, color stores, audio RemoteIO, haptics, saves, controles, JIT.
+Proibido usar crop/skip/black fallback como falsa correção da corrupção de 1/4 de imagem e 3/4 borrados ou faixas.
+Meta M7: 30 FPS NATIVOS estáveis, sem quedas severas nem crash.
+Meta M8 posterior: até 60 FPS NATIVOS se temporização/física permitirem; alternativa 60 FPS APRESENTADOS por frame generation com base 30 nativa estável. Distinguir sempre FPS simulado x FPS apresentado.
+Manter Castlevania: Lords of Shadow 2, Sleeping Dogs, Dante's Inferno, Prince of Persia 2008 e Forgotten Sands funcionando ou claramente reportados como incompatíveis, sem regredir progresso.
+Entregar IPA direto via Actions e release, sem ZIP como única saída.
+
+III. DOIS TITLE IDs ASCENSION — NOVO DADO ESSENCIAL
+HISTÓRICO: BCUS98232 (jogo antes testado, descrito como edição Lite, update 1.12).
+NOVO: NPUA80918 (nova edição completa segundo o usuário; no log APP_VER 01.00, VERSION 01.01).
+Arquivo-fonte de evidência:
+session-D382B757-EFAC-43B8-B000-E9A4659185D7.log, 116954 linhas.
+Capturas: IMG_4719.png e IMG_4720.png.
+Log registra 3 BOOTS de NPUA80918, tela Santa Monica às vezes sem progredir, outro boot com menu quase preto a ~11.7 FPS e crash.
+Erro terminal efetivo desta sessão:
+VK_ERROR_OUT_OF_HOST_MEMORY na criação de Query Pool Vulkan, rpcs3/Emu/RSX/VK/vkutils/query_pool.hpp:24, thread RSX 0x056e000.
+O erro é DIFERENTE do VKTexture.cpp:158/ensure(m68_copy_ok) do teste BCUS com M6.8.
+Não deduzir jetsam ou RAM física exaurida apenas porque RPCS3 interpreta erro como Out of host memory. Driver pode falhar alocação de estrutura ou atingir tabela/limite interno de consultas; registrar a origem exata.
+No log M6.8: PsTJon M6.8 PIPELINE_BUDGET: title=NPUA80918 live_workers=1, headroom inicial aproximadamente 4546–4853MiB. Logo NPUA não herdou a política de dois workers BCUS de forma automática.
+Configuração custom NPUA tem precedência sobre banco. O arquivo mostrou em Used configuration:
+PPU LLVM e 2 PPU threads, SPU LLVM, SPU Block Size Mega, Preferred SPU Threads 6, FIFO Atomic, WCB=true, Resolution Scale 100%, Shader Precision Low, SPU XFloat Approximate.
+Confirmar em cada boot os valores finais do Used configuration; há alterações de configuração entre sessões.
+Log antes do crash contém comandos NV4097_GET_REPORT/CLEAR_REPORT_VALUE, sugerindo atividade de occlusion queries. Não comprova sozinho leak.
+Menu parcialmente preto também requer investigação independente: framebuffer aliases, renderpass preserve/resolve, color/depth, shaders, cópias typeless. Consertar Query Pool NÃO garante conserto visual.
+Captura de ~3.5GiB RAM ao redor do menu preto NÃO demonstra causa física de OOM.
+
+IV. M6.8.2 — IMPLEMENTAÇÃO PEDIDA, AINDA PENDENTE
+1. Reconhecer NPUA80918 como a mesma FAMÍLIA de jogo de BCUS98232 para políticas realmente compartilháveis, sem mentir Title ID ou aplicar patches de offsets/executável BCUS a NPUA. Auditar condicionais BCUS e identificar os que podem migrar; logar políticas efetivas por título.
+2. ATACAR QUERY POOLS: VKQueryPool.cpp, query_pool.hpp, KosmicKrisp kk_query_pool.c, kk_query_table.c. Medir creates, releases, reciclagem, referências/fences, slots de consulta e erro real de driver. Considerar capacity 512 no NPUA como experiência justificada a validar, respeitando limite de slots de driver e evitando cache excessivo.
+3. Reutilização de recursos SOMENTE após conclusão GPU. Não ignorar Vulkan error, não inventar consultas ZCull, não desativar ZCull indiscriminadamente, não destruir pools ativos.
+4. Corrupção/menu Santa Monica: analisar render target lifetime, imagens source/dest reais, mip/layer/offset, image alias/cache, renderpass color/depth stores, superfície correta e passagem entre cenas. Preservar guards M6.7.4 e preflight typeless M6.8.1 sem usar skipping como solução gráfica.
+5. Preservar correções Metal forced color stores, políticas Ultra BCUS válidas, RC/sampler, NV3089 spans e sincronização necessária. Diagnosticar efeito shader precision Low e configurações nova versão isoladamente.
+6. Não mexer em todos os perfis simultaneamente; cada pacote deve ser mensurável e não causar regressão Castlevania/Sleeping Dogs.
+7. Pré-compilação shaders/PPU/SPU, cache persistente por Title ID/provedor, medição de pipeline misses; não supor shader como causa única de FPS baixo.
+8. CI: Um pacote M6.8.2, um commit, workflow automático. Se falhar, corrigir a causa precisa em novo commit/run e DOCUMENTAR tentativas. Atenção ao textwrap.dedent/indentação causador das falhas M6.8.1 #97/#98.
+
+V. HISTÓRICO DAS ALTERAÇÕES RECENTES
+M6.7.3 BCUS98232: pressão grave de memória, FPS degradado, queries ZCull e faixas gráficas. Jetsam é hipótese, não comprovado sem .ips/JetsamEvent.
+M6.7.4: validação do fast blitter source/destination, evitando regiões inválidas sem clamping silencioso.
+M6.8: (P1) Query Pools limitados e reciclagem; (P2) polling RSX mais eficiente sem falsear ZCull; (P3) workers condicionados por headroom para Castlevania/Sleeping Dogs e perfis existentes; (P4) validação de geometria image readback. BCUS teve crash em VKTexture.cpp:158 após corrupção.
+M6.8.1: preflight de toda a cadeia de mipmaps/camadas em cópia typeless antes dos comandos GPU, métricas por estágio CPU e MTL4 completed command buffer GPUStartTime/GPUEndTime. Não afirmar sem teste físico que elimina corrupção, nem que mede PPU completa por quadro.
+NOVO M6.8 NPUA: crash query_pool.hpp:24, black menu, Santa Monica inconstante. Novo Title ID não contemplado por todos os condicionais BCUS.
+Castlevania NPUB31372: M6.8 apresentou fluidez subjetiva melhor e pico de ~60 FPS, mas mediana de telemetria ~32.49 FPS e quedas sob carga; FPS 60 contínuo ainda não demonstrado.
+Sleeping Dogs NPUB30818: em M6.7.3 mediana ~15 FPS e em captura M6.8 ~13.7–13.9 FPS; custo sustentado significativo independente de misses de shader.
+Não regredir a melhora do Castlevania ao tentar solucionar NPUA.
+
+VI. ETAPAS M0–M9, CONFORME PROJETO ORIGINAL E ADENDOS
+M0 — Congelar baseline visual PsTJon v12/v13/MoltenVK. Mesmo save/trecho/dispositivo/iOS/config, três cold boots, logs, vídeo e frame time. Estado: referencial histórico parcial, sem A/B físico completo para dois IDs.
+M1 — Build/pin upstream Mesa-KosmicKrisp macOS, smoke Vulkan, manifestos, Vulkan features reais, licenças. Estado: upstream fixado/compilável, auditoria de features incompleta.
+M2 — Crosscompile iOS ARM64 e símbolos/ABI/loader com dependências válidas. Estado: provider dylib funcional no CI; diverge do desenho estático original.
+M3 — WSI/CAMetalLayer, swapchain/present/foreground/background/resize/drawable perda, durabilidade 10min+ sem leak. Estado: funcional, validar stress de longo prazo.
+M4 — RPCS3 com provider KosmicKrisp selecionável e MoltenVK referência, caches por provider. Estado: KK integrado; alternância plena MoltenVK/KK no mesmo IPA não homologada.
+M5 — Boot/smoke de vários jogos sem features falsas, paridade inicial de framebuffer, ausência de validation ERROR. Estado: parcial, regressões entre jogos importantes.
+M6 — ASCENSION FIDELIDADE E ESTABILIDADE. Requer 3 cold boots + 30min gameplay, menu, cutscene, chefes/transições, nenhum crash/QueryPoolOOM/InvalidTexture, imagem 100% correta, áudio e haptics. BCUS e NPUA entram no gate. Estado: BLOQUEADO; M6.8.2 a implementar/testar.
+M7 — 30 FPS NATIVOS ESTÁVEIS. Instrumentar CPU PPU/SPU, RSX, pipeline, real GPU Metal, present, input, DMA, vértices/índices, alloc/reuse; almejar ~33.33ms/frame e 1% low pelo menos ~25 nas rotas representativas (excluindo compilação fria identificada). Otimização só sem violar M6. Estado: NÃO APROVADO.
+M8 — 60 FPS: A) 60 nativos se patches permitirem sem acelerar física, QTE, relógio, animação e áudio, frame time ~16.67ms; B) 60 apresentados via framegen quando 30 nativos realmente estáveis; testar MetalFX FrameInterpolator disponível no A19 Pro/SDK, motion vectors/depth/color, cadence, UI e latência, sem presumir suporte; distinguir rótulo de FPS. Estado: NÃO APROVADO.
+M9 — Homologação: campanha abrangente, saves, bosses, 30–60min com thermal, memory/queries, bateria, input, áudio/rumble, testes cruzados Prince/Forgotten Sands/Dante/Castlevania/Sleeping Dogs, release assinada, IPA/commit/run/SHA verificados. Estado: NÃO APROVADO.
+
+VII. SEIS FRENTES DE DESEMPENHO NÃO DEVEM SER ESQUECIDAS
+1) Tempo real por etapa PPU/SPU, RSX e Metal GPU — identificar gargalo >33.33/16.67ms, sem confundir RSX proxy com GPU.
+2) Churn render targets/texture views/pipelines — reduzir trabalho repetido comprovado sem descartar color/depth ainda usados.
+3) Esperas RSX/Vulkan — medir hard syncs/flushes, optimizar somente waits redundantes; preservar resultados ZCull reais.
+4) Buffers/texturas — reuso e liberação fence-safe sob pressão, orçamento de memória/fragmentação e Query Pool.
+5) Vértices/índices/DMA — medir upload, primitive conversion, upload ring, host mapping, span RSX 64bit.
+6) PPU/SPU caching — warmup e binary cache, evitar recompliar em sessões sem sacrificar validação correta.
+M6.8.1 começou instrumentação de partes disso, não concluiu todas as otimizações.
+
+VIII. TESTE FÍSICO M6.8.2, QUANDO IPa EXISTIR
+A) Fechar app completamente; 3 cold boots NPUA; depois warm boot no mesmo core; controle de config/versão.
+B) Boot Santa Monica/menu com imagem correta, cutscene, 30min gameplay com combate; capturar log e vídeo.
+C) Registrar timestamps FPS e frame time, memória+headroom, QueryPool create/destroy/alloc fail, pipeline misses, CPU_STAGE e METAL_GPU_COMPLETED.
+D) Verificar WCB, resolução, shader precision, ZCull e flags efetivas por NPUA; mesma cena entre runs.
+E) Repetir BCUS98232 para regressão; preservar Castlevania e investigar Sleeping Dogs.
+F) Não apagar saves, reinstalar, nem limpar caches para esconder problema; cache cold/warm só em teste A/B explícito.
+G) Resultado compilou? Isso NÃO prova que Ascension é jogável. Gate M6 deve ser confirmado por imagem e estabilidade real.
+
+IX. CONTINUIDADE E ENTREGA PENDENTES
+M6.8.2 código/commit: PENDENTE na emissão deste TXT.
+Actions M6.8.2: PENDENTE.
+Release/IPA M6.8.2: PENDENTE.
+SHA256 IPA M6.8.2: PENDENTE.
+Gate M6 fidelidade e estabilidade: NÃO APROVADO.
+Gate M7 30 FPS nativos: NÃO APROVADO.
+Gate M8 60 nativos/framegen: NÃO APROVADO.
+Gate M9 distribuição/homologação: NÃO APROVADO.
+Fontes históricas preservadas no projeto: HANDOFF-PsTJon-KosmicKrisp-M0-M9-2026-10-11-M6.7.4-EXP.txt (2240 linhas com histórico), e M6.7.2(1).txt (2055 linhas). Este é um ADENDO ATUALIZADO AUTÔNOMO, não substitui a documentação histórica.
+
+FIM — HANDOFF ANTECIPADO M6.8.2, SEM INVENTAR IPA.
