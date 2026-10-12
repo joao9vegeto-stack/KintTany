@@ -5099,8 +5099,9 @@ jobs:
           std::atomic<u64> m681_stage_max_us[6]{};'''
           assert s.count(needle)==1, 'M6.8.1 metrics declaration anchor'
           s=s.replace(needle,add,1)
-          needle='''               exp_bad_destinations.load(std::memory_order_relaxed));
-          '''
+          needle='exp_bad_destinations.load(std::memory_order_relaxed));'
+          # The base M6.6.7 telemetry is produced via textwrap.dedent,
+          # so never require the pre-dedent 15-space indentation here.
           assert s.count(needle)==1, 'M6.8.1 experimental telemetry pulse final anchor'
           add=needle+'''               static const char* names[6] = {"rtt", "pipeline_cpu", "vertex_index", "dma_alloc", "typeless", "spu_llvm"};
                          for (u32 i = 0; i < 6; ++i)
