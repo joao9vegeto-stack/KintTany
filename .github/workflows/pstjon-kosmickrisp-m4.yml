@@ -4572,6 +4572,82 @@ jobs:
           git -C mesa-src diff --check
           git -C rpcs3-src diff --check
 
+          python3 - <<'PY'
+          # M6.7.3-EXP: isolate the BCUS98232 out-of-memory failure observed on
+          # M6.7.2 (headroom 78 MiB, Vulkan allocator 118%, abrupt iOS exit).
+          # Earlier M6.6.11 accelerated ONLY texture eviction and did not avert
+          # fatal pressure. This experiment targets long-lived framebuffer / MSAA
+          # resolve images, whose expensive reclamation is normally fatal-only.
+          # At SEVERE pressure for Ascension, at most once/30s: finish GPU work,
+          # drain the driver, then request the existing fatal-level surface-cache
+          # reclaim, with the existing in-use/fence checks. Do NOT change healthy
+          # frame render/store policy, shaders, ZCull, game RAM or global quotas.
+          # Also invalidate framebuffer sampler references whenever surfaces were
+          # reclaimed, before returning at nonfatal severity (the old fatal-only
+          # invalidation otherwise leaves potentially stale cached image views).
+          from pathlib import Path
+          p=Path('rpcs3-src/rpcs3/Emu/RSX/VK/VKGSRender.cpp')
+          s=p.read_text()
+          a=s.index('bool VKGSRender::on_vram_exhausted(rsx::problem_severity severity)')
+          b=s.index('void VKGSRender::', a+8)
+          part=s[a:b]
+          anchor='\tbool surface_cache_relieved = false;\n\tconst auto mem_info = m_device->get_memory_mapping();'
+          assert part.count(anchor)==1, 'M6.7.3 surface cache entry mismatch'
+          inject='''\tbool surface_cache_relieved = false;
+          \tconst auto mem_info = m_device->get_memory_mapping();
+          #ifdef RPCS3_IOS
+          \tstatic auto m673_next_safe_reclaim = std::chrono::steady_clock::time_point{};
+          \tconst auto m673_now = std::chrono::steady_clock::now();
+          \tconst bool m673_early_surface_reclaim =
+          \t\tEmu.GetTitleID() == "BCUS98232" &&
+          \t\tseverity == rsx::problem_severity::severe &&
+          \t\tm673_now >= m673_next_safe_reclaim;
+          \tif (m673_early_surface_reclaim)
+          \t{
+          \t\tm673_next_safe_reclaim = m673_now + std::chrono::seconds(30);
+          \t\t// Reuse the fatal handler's existing fence+drain precondition;
+          \t\t// never evict active PS3 framebuffer references without a sync.
+          \t\tflush_command_queue(true, true);
+          \t\tg_fxo->get<vk::driver_manager_thread>().drain();
+          \t\trsx_log.warning("PsTJon M6.7.3 ASCENSION_SAFE_SURFACE_RECLAIM: severe iOS memory pressure; completed GPU work before MSAA/surface cache cleanup (30s throttle)");
+          \t}
+          \tconst auto m673_surface_severity = m673_early_surface_reclaim ? rsx::problem_severity::fatal : severity;
+          #else
+          \tconst auto m673_surface_severity = severity;
+          #endif'''
+          part=part.replace(anchor,inject,1)
+          old='m_rtts.handle_memory_pressure(*m_current_command_buffer, severity)'
+          assert part.count(old)==1, 'M6.7.3 surface pressure handler mismatch'
+          part=part.replace(old,'m_rtts.handle_memory_pressure(*m_current_command_buffer, m673_surface_severity)',1)
+          old='m_rtts.trim(*m_current_command_buffer, severity);'
+          assert part.count(old)==1, 'M6.7.3 trim pressure mismatch'
+          part=part.replace(old,'m_rtts.trim(*m_current_command_buffer, m673_surface_severity);',1)
+          early='''\tif (severity < rsx::problem_severity::fatal)
+          \t{
+          \t\treturn any_cache_relieved;
+          \t}
+          
+          '''
+          assert part.count(early)==1, 'M6.7.3 fatal-only sampler invalidate entry mismatch'
+          part=part.replace(early,'',1)
+          marker='\t// Imminent crash, full GPU sync is the least of our problems'
+          assert part.count(marker)==1, 'M6.7.3 return relocation target mismatch'
+          part=part.replace(marker,early+marker,1)
+          assert part.index('if (surface_cache_relieved)') < part.index('if (severity < rsx::problem_severity::fatal)')
+          assert 'M6.6.9 ASCENSION_EVICT_INVALID_TEXTURE' in part
+          assert part.count('flush_command_queue(true, true);')==3
+          s=s[:a]+part+s[b:]
+          p.write_text(s)
+          assert 'M6.7.3 ASCENSION_SAFE_SURFACE_RECLAIM' in p.read_text()
+          assert 'M6.7.1 KK_PIPELINE_WORKERS' in p.read_text()
+          assert 'M6.6 ASCENSION_DST_SPAN' in Path('rpcs3-src/rpcs3/Emu/RSX/NV47/HW/nv3089.cpp').read_text()
+          assert 'force_store |= render->color_att_count > 0;' in Path('mesa-src/src/kosmickrisp/vulkan/kk_cmd_buffer.c').read_text()
+          print('M6.7.3-EXP: controlled early framebuffer cleanup, correct sampler invalidation, and prior render policies preserved PASS')
+          PY
+          grep -q 'M6.7.3 ASCENSION_SAFE_SURFACE_RECLAIM' rpcs3-src/rpcs3/Emu/RSX/VK/VKGSRender.cpp
+          git -C rpcs3-src diff --check
+          git -C mesa-src diff --check
+          
           rm -rf build-kk-host kk-host-tools
           meson setup build-kk-host mesa-src \
             --buildtype=release \
@@ -4783,13 +4859,13 @@ jobs:
           codesign -d --entitlements :- "$APP" 2>&1 | tee pstjon-entitlements.txt
           (
             cd package
-            ditto -c -k --sequesterRsrc --keepParent Payload "$GITHUB_WORKSPACE/PsTJon-KK-M6.7.2-EXP.ipa"
+            ditto -c -k --sequesterRsrc --keepParent Payload "$GITHUB_WORKSPACE/PsTJon-KK-M6.7.3-EXP.ipa"
           )
-          shasum -a 256 PsTJon-KK-M6.7.2-EXP.ipa
+          shasum -a 256 PsTJon-KK-M6.7.3-EXP.ipa
       - name: Build report
         run: |
           {
-            echo "PsTJon M6.7.2-EXP: systemic Metal4 bandwidth test: M5.20 forced store retained for all COLOR attachment passes, depth-only passes respect native Vulkan storeOp/resolve and preservation flags; M6.7.1 ULTRA and dual workers retained, no shader/cache changes, RSX guards, ZCull and other profiles unchanged. Real GPU speed and visual effect require device A/B."
+            echo "PsTJon M6.7.3-EXP: Ascension-only severe-pressure framebuffer/MSAA safe reclaim with full GPU fence and 30s throttle; invalidate framebuffer descriptor references after surface cleanup at nonfatal severities. M6.7.2 Metal store policy and M6.7.1 ULTRA/cache/workers unchanged; FPS, memory relief and visual effect require physical A/B."
             echo "EXP metrics: presented-frame cadence, frame stutters, process footprint, RSX estimated load, Vulkan cache lookup wall-time, command flush wall-time, invalid texture and DMA blit guard events"
             echo "EXP NOT AVAILABLE: authoritative Metal GPU occupancy/time, GPU image readback, automatic black-frame or visual corruption detection"
             echo "EXP logs: PsTJon EXPERIMENTAL channel in exported RPCS3 session logs, sampled once per 3 seconds and on throttled anomalies"
@@ -4801,15 +4877,15 @@ jobs:
             echo "Volk: $VOLK_SHA"
             echo "FFmpeg: $FFMPEG_VERSION"
             echo "Core: $(shasum -a 256 libRPCS3Core.dylib | awk '{print $1}')"
-            echo "IPA: $(shasum -a 256 PsTJon-KK-M6.7.2-EXP.ipa | awk '{print $1}')"
-          } > PsTJon-KK-M6.7.2-EXP-build.txt
+            echo "IPA: $(shasum -a 256 PsTJon-KK-M6.7.3-EXP.ipa | awk '{print $1}')"
+          } > PsTJon-KK-M6.7.3-EXP-build.txt
 
       - uses: actions/upload-artifact@v4
         with:
-          name: PsTJon-KK-m06-7-2-EXPERIMENTAL-depth-store-IPA
+          name: PsTJon-KK-m06-7-3-EXPERIMENTAL-surface-reclaim-IPA
           path: |
-            PsTJon-KK-M6.7.2-EXP.ipa
-            PsTJon-KK-M6.7.2-EXP-build.txt
+            PsTJon-KK-M6.7.3-EXP.ipa
+            PsTJon-KK-M6.7.3-EXP-build.txt
             pstjon-entitlements.txt
             M5-rpcs3-patch-stat.txt
             M4-mesa-patch-stat.txt
@@ -4826,16 +4902,16 @@ jobs:
 
       # Best-effort direct release asset: accessible on iPhone without
       # extracting the Actions ZIP. Artifact step above stays authoritative.
-      - name: Publish direct M6.7.2-EXP IPA
+      - name: Publish direct M6.7.3-EXP IPA
         if: success()
         continue-on-error: true
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
           set -euxo pipefail
-          gh release create pstjon-kk-m6.7.2-exp PsTJon-KK-M6.7.2-EXP.ipa \
+          gh release create pstjon-kk-m6.7.3-exp PsTJon-KK-M6.7.3-EXP.ipa \
             --target "$GITHUB_SHA" \
-            --title "PsTJon KosmicKrisp M6.7.2-EXP" \
-            --notes "Experimental M6.7.2-EXP: Single systemic Metal4 storage-policy A/B. Preserve forced stores for ALL COLOR-bearing renderpasses to keep previously fixed framebuffer feedback; depth-only passes respect original Vulkan storeOp and existing forced-store/resolve requirements instead of unconditional writes. Aims to reduce tile-memory traffic on A19. Keeps M6.7.1 restored ULTRA and dual compiler workers, safe RSX guards, hardware ZCull, WCB, shaders and shader caches unchanged. Physical FPS/artifact test required; no verified speedup yet." \
+            --title "PsTJon KosmicKrisp M6.7.3-EXP" \
+            --notes "Experimental M6.7.3-EXP: Ascension-only severe iOS memory pressure: fence+GPU drain followed by existing fatal-grade framebuffer/MSAA resolve cache reclaim (30s throttle); invalidate framebuffer samplers after any surface cleanup to avoid stale image-view reuse. M6.7.2 Metal color/depth store policy, restored Ultra, caches, shader workers and all other game profiles unchanged. Physical memory/FPS/visual A-B required; no stability improvement yet proven." \
             --latest=false
-          gh release view pstjon-kk-m6.7.2-exp --json url,assets
+          gh release view pstjon-kk-m6.7.3-exp --json url,assets
