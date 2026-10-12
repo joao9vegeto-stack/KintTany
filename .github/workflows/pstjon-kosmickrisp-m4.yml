@@ -4951,6 +4951,340 @@ jobs:
           git -C rpcs3-src diff --check
           git -C mesa-src diff --check
 
+          # M6.8.1: Ascension typeless-copy correctness + six-stage performance A/B.
+          # SOURCE: physical M6.8 crash VKTexture.cpp:158 = ensure(m68_copy_ok).
+          # We must never replace valid contents with clamped/blank copies or carry on
+          # with a partially executed typeless readback. Validate the entire mip chain
+          # before touching layouts, scratch or copies, then reject invalid transfers
+          # as a recoverable NO-WRITE with exact geometry diagnostics. The existing
+          # internal M6.8 ensure remains as a strict second-line invariant.
+          python3 - <<'PY'
+          from pathlib import Path
+          root=Path('rpcs3-src/rpcs3')
+          p=root/'Emu/RSX/VK/VKTexture.cpp'
+          s=p.read_text()
+          start=s.index('\tvoid copy_image_typeless(')
+          end=s.index('\n\tvoid copy_image(',start)
+          block=s[start:end]
+          anchor='''		if (vk::is_renderpass_open(cmd))
+          		{
+          			vk::end_renderpass(cmd);
+          		}'''
+          assert block.count(anchor)==1, 'M6.8.1 no typeless pre-GPU transfer anchor'
+          inject='''		// PsTJon M6.8.1 ASCENSION_TYPELESS_PREFLIGHT: validate ALL mip
+          		// levels and layer extents before any Vulkan commands, layouts or
+          		// scratch-buffer updates. In M6.8 a late ensure at image readback
+          		// would crash after the texture was already put in transfer layout.
+          		// Rejected transfers remain recoverable and leave destination intact.
+          		// Other titles use precisely the same well-defined Vulkan bounds.
+          		auto m681_rect_fits = [](const vk::image* image, const coord3i& rect,
+          			u32 level, u32 base_layer, u32 layers) -> bool
+          		{
+          			if (level >= image->info.mipLevels || !layers ||
+          				static_cast<u64>(base_layer) + layers > image->info.arrayLayers ||
+          				rect.x < 0 || rect.y < 0 || rect.z < 0 ||
+          				rect.width <= 0 || rect.height <= 0 || rect.depth <= 0)
+          				return false;
+          			const u32 w = std::max(1u, image->width() >> level);
+          			const u32 h = std::max(1u, image->height() >> level);
+          			const u32 d = std::max(1u, image->info.extent.depth >> level);
+          			return static_cast<u64>(rect.x) + rect.width <= w &&
+          				static_cast<u64>(rect.y) + rect.height <= h &&
+          				static_cast<u64>(rect.z) + rect.depth <= d;
+          		};
+          		coord3i m681_src = src_rect;
+          		coord3i m681_dst = dst_rect;
+          		bool m681_valid = mip_layers.mipmap_count > 0;
+          		for (u32 i = 0; m681_valid && i < mip_layers.mipmap_count; ++i)
+          		{
+          			m681_valid =
+          				m681_rect_fits(src, m681_src, mip_layers.src_mip_level + i,
+          					mip_layers.src_layer, mip_layers.layer_count) &&
+          				m681_rect_fits(dst, m681_dst, mip_layers.dst_mip_level + i,
+          					mip_layers.dst_layer, mip_layers.layer_count);
+          			// Same progression as increment_mip_level(VkBufferImageCopy).
+          			m681_src.x /= 2; m681_src.y /= 2; m681_src.z /= 2;
+          			m681_dst.x /= 2; m681_dst.y /= 2; m681_dst.z /= 2;
+          			m681_src.width = std::max(m681_src.width / 2, 1);
+          			m681_src.height = std::max(m681_src.height / 2, 1);
+          			m681_src.depth = std::max(m681_src.depth / 2, 1);
+          			m681_dst.width = std::max(m681_dst.width / 2, 1);
+          			m681_dst.height = std::max(m681_dst.height / 2, 1);
+          			m681_dst.depth = std::max(m681_dst.depth / 2, 1);
+          		}
+          		if (!m681_valid)
+          		{
+          			static u64 m681_rejections = 0; // RSX command thread only
+          			const u64 n = ++m681_rejections;
+          			if (n <= 12 || !(n % 128))
+          				rsx_log.error("PsTJon M6.8.1 ASCENSION_TYPELESS_PREFLIGHT: REJECT count=%llu src_rect=(%d,%d,%d)+(%d,%d,%d) src_image=%ux%ux%u src_mip=%u/%u dst_rect=(%d,%d,%d)+(%d,%d,%d) dst_image=%ux%ux%u dst_mip=%u/%u layers=%u+%u src_arrays=%u dst_arrays=%u; untouched destination, no partial copy",
+          					n, src_rect.x, src_rect.y, src_rect.z,
+          					src_rect.width, src_rect.height, src_rect.depth,
+          					src->width(), src->height(), src->info.extent.depth,
+          					mip_layers.src_mip_level, src->info.mipLevels,
+          					dst_rect.x, dst_rect.y, dst_rect.z,
+          					dst_rect.width, dst_rect.height, dst_rect.depth,
+          					dst->width(), dst->height(), dst->info.extent.depth,
+          					mip_layers.dst_mip_level, dst->info.mipLevels,
+          					mip_layers.src_layer, mip_layers.layer_count,
+          					src->info.arrayLayers, dst->info.arrayLayers);
+          			return;
+          		}
+
+          #ifdef RPCS3_IOS
+          		rpcs3::ios::pstjon_exp_scoped_stage m681_typeless_timer(4);
+          #endif
+          '''
+          block=block.replace(anchor,inject+anchor,1)
+          # P2: format interpretation does not depend on mip level. Avoid duplicate
+          # per-level CPU state conversion and repeated type-map processing.
+          old='''		const auto src_texel_size = vk::get_format_texel_width(src->info.format);
+          		vk::buffer* scratch_buf = nullptr;'''
+          new='''		const auto src_texel_size = vk::get_format_texel_width(src->info.format);
+          		const auto src_convert = get_format_convert_flags(src->info.format);
+          		const auto dst_convert = get_format_convert_flags(dst->info.format);
+          		vk::buffer* scratch_buf = nullptr;'''
+          assert block.count(old)==1, 'M6.8.1 typeless precomputed map anchor'
+          block=block.replace(old,new,1)
+          old='''			auto src_convert = get_format_convert_flags(src->info.format);
+          			auto dst_convert = get_format_convert_flags(dst->info.format);
+          			bool require_rw_barrier = true;'''
+          new='''			bool require_rw_barrier = true;'''
+          assert block.count(old)==1, 'M6.8.1 repetitive mip format-map anchor'
+          block=block.replace(old,new,1)
+          s=s[:start]+block+s[end:]
+          # P4 guards stay in place; do NOT change image format, Metal store,
+          # WCB, sampler lifetime or texture invalidation.
+          assert s.count('ensure(m68_copy_ok);')==1
+          assert 'M6.7.4 VK_COPY_GEOMETRY' in s
+          assert s.count('M6.8.1 ASCENSION_TYPELESS_PREFLIGHT')==1
+          p.write_text(s)
+
+          # P1/P2/P3/P5/P6: low-impact stage timers, atomic statistics aggregated
+          # at the existing 3-second telemetry pulse, never per-draw text logging.
+          # Stages: 0 RTT setup, 1 pipeline/CPU RSX, 2 vertex/index generation,
+          # 3 DMA allocation, 4 typeless transfer, 5 SPU LLVM compile.
+          hdr=root/'ios/PsTJonExperimentalTelemetry.h'
+          s=hdr.read_text()
+          old='''#include <cstdint>
+          namespace rpcs3::ios {'''
+          new='''#include <cstdint>
+          #include <chrono>
+          namespace rpcs3::ios {'''
+          assert s.count(old)==1, 'M6.8.1 telemetry header foundation changed'
+          s=s.replace(old,new,1)
+          old='''void pstjon_exp_note_blit(std::uint64_t offset, std::uint64_t length, bool is_source) noexcept;'''
+          new=old+'''
+          void pstjon_exp_note_stage(std::uint32_t stage, std::uint64_t micros) noexcept;
+          struct pstjon_exp_scoped_stage
+          {
+          	const std::uint32_t stage;
+          	const std::chrono::steady_clock::time_point start = std::chrono::steady_clock::now();
+          	explicit pstjon_exp_scoped_stage(std::uint32_t s) noexcept : stage(s) {}
+          	~pstjon_exp_scoped_stage() noexcept
+          	{
+          		const auto dt = std::chrono::duration_cast<std::chrono::microseconds>(
+          			std::chrono::steady_clock::now() - start).count();
+          		pstjon_exp_note_stage(stage, dt > 0 ? static_cast<std::uint64_t>(dt) : 0);
+          	}
+          };'''
+          assert s.count(old)==1
+          hdr.write_text(s.replace(old,new,1))
+          perf=root/'ios/RPCS3IOSPerformance.cpp'
+          s=perf.read_text()
+          needle='''std::atomic<u64> exp_bad_destinations{0};'''
+          add='''std::atomic<u64> exp_bad_destinations{0};
+          std::atomic<u64> m681_stage_count[6]{};
+          std::atomic<u64> m681_stage_total_us[6]{};
+          std::atomic<u64> m681_stage_max_us[6]{};'''
+          assert s.count(needle)==1, 'M6.8.1 metrics declaration anchor'
+          s=s.replace(needle,add,1)
+          needle='''               exp_bad_destinations.load(std::memory_order_relaxed));
+          '''
+          assert s.count(needle)==1, 'M6.8.1 experimental telemetry pulse final anchor'
+          add=needle+'''               static const char* names[6] = {"rtt", "pipeline_cpu", "vertex_index", "dma_alloc", "typeless", "spu_llvm"};
+                         for (u32 i = 0; i < 6; ++i)
+                         {
+                             const u64 n = m681_stage_count[i].exchange(0, std::memory_order_relaxed);
+                             const u64 total = m681_stage_total_us[i].exchange(0, std::memory_order_relaxed);
+                             const u64 maximum = m681_stage_max_us[i].exchange(0, std::memory_order_relaxed);
+                             if (n)
+                                 pstjon_exp_log.notice("PsTJon M6.8.1 CPU_STAGE stage=%s calls=%llu total_ms=%.2f avg_ms=%.3f max_ms=%.3f (CPU wall time, not GPU)",
+                                     names[i], n, total / 1000.0, total / (1000.0 * n), maximum / 1000.0);
+                         }
+          '''
+          s=s.replace(needle,add,1)
+          needle='''void pstjon_exp_note_pipeline(std::uint64_t micros, bool cache_miss) noexcept'''
+          new='''void pstjon_exp_note_stage(std::uint32_t stage, std::uint64_t micros) noexcept
+          {
+          	if (stage >= 6) return;
+          	m681_stage_count[stage].fetch_add(1, std::memory_order_relaxed);
+          	m681_stage_total_us[stage].fetch_add(micros, std::memory_order_relaxed);
+          	exp_update_max(m681_stage_max_us[stage], micros);
+          }
+
+          '''+needle
+          assert s.count(needle)==1
+          s=s.replace(needle,new,1)
+          perf.write_text(s)
+
+          # Stage 0/1: avoid guessing PPU or GPU time from RSX proxy; measure only
+          # exact CPU regions. The native Metal GPU times below are independent.
+          vk=root/'Emu/RSX/VK/VKGSRender.cpp'
+          s=vk.read_text()
+          for func,stage in [('void VKGSRender::prepare_rtts(rsx::framebuffer_creation_context context)',0),
+                             ('bool VKGSRender::load_program()',1)]:
+              anchor=func+'\n{'
+              assert s.count(anchor)==1, f'M6.8.1 CPU stage anchor: {func}'
+              s=s.replace(anchor,anchor+f'''
+          #ifdef RPCS3_IOS
+          	rpcs3::ios::pstjon_exp_scoped_stage m681_cpu_stage_{stage}({stage});
+          #endif''',1)
+          vk.write_text(s)
+          # Stages 2/3: measure vertex/index and DMA lifetime. Leave established
+          # iOS ARM64 NEON upload, precomputed indices and DMA copy specialization on.
+          v=root/'Emu/RSX/VK/VKVertexBuffers.cpp'
+          s=v.read_text()
+          inc='#include "VKGSRender.h"'
+          assert s.count(inc)==1
+          s=s.replace(inc,inc+'\n#ifdef RPCS3_IOS\n#include "ios/PsTJonExperimentalTelemetry.h"\n#endif',1)
+          anchor='''		vk::data_heap& m_index_buffer_ring_info)
+          	{'''
+          assert s.count(anchor)==1, 'M6.8.1 vertex/index generator anchor'
+          s=s.replace(anchor,anchor+'''
+          #ifdef RPCS3_IOS
+          		rpcs3::ios::pstjon_exp_scoped_stage m681_vertex_index_timer(2);
+          #endif''',1)
+          v.write_text(s)
+          d=root/'Emu/RSX/VK/VKDMA.cpp'
+          s=d.read_text()
+          inc='#include "VKDMA.h"'
+          assert s.count(inc)==1
+          s=s.replace(inc,inc+'\n#ifdef RPCS3_IOS\n#include "ios/PsTJonExperimentalTelemetry.h"\n#endif',1)
+          anchor='''	void dma_block::allocate(const render_device& dev, usz size)
+          	{'''
+          assert s.count(anchor)==1
+          s=s.replace(anchor,anchor+'''
+          #ifdef RPCS3_IOS
+          		rpcs3::ios::pstjon_exp_scoped_stage m681_dma_timer(3);
+          #endif''',1)
+          d.write_text(s)
+          # Stage 5: record actual SPU LLVM compile function time, including cache
+          # waits. Do not disable already-functional cached SPU binaries or alter
+          # PPU compiling/precise PS3 timing on Ascension.
+          spu=root/'Emu/Cell/SPULLVMRecompiler.cpp'
+          s=spu.read_text()
+          inc='#include "SPURecompiler.h"'
+          assert s.count(inc)==1
+          s=s.replace(inc,inc+'\n#ifdef RPCS3_IOS\n#include "ios/PsTJonExperimentalTelemetry.h"\n#endif',1)
+          anchor='''	virtual spu_function_t compile(spu_program&& _func) override
+          	{'''
+          assert s.count(anchor)==1
+          s=s.replace(anchor,anchor+'''
+          #ifdef RPCS3_IOS
+          		rpcs3::ios::pstjon_exp_scoped_stage m681_spu_compile_timer(5);
+          #endif''',1)
+          spu.write_text(s)
+
+          # True native Metal 4 execution timing: MTL4CommitFeedback already exposes
+          # GPUStartTime and GPUEndTime in seconds. Record REAL completed GPU command-
+          # buffer execution time, NOT fake per-present GPU occupancy. Minimal atomics
+          # and one fprintf per 128 completions; no fence waits or GPU readbacks.
+          queue=Path('mesa-src/src/kosmickrisp/vulkan/kk_queue.c')
+          s=queue.read_text()
+          inc='#include "kk_queue.h"'
+          assert s.count(inc)==1
+          s=s.replace(inc,inc+'''
+          #if defined(__ENVIRONMENT_IPHONE_OS_VERSION_MIN_REQUIRED__)
+          #include <stdatomic.h>
+          #include <stdint.h>
+          #include <stdio.h>
+          #endif''',1)
+          anchor='''static void
+          commit_callback(struct mtl_feedback_data *data)
+          {'''
+          assert s.count(anchor)==1
+          fn='''#if defined(__ENVIRONMENT_IPHONE_OS_VERSION_MIN_REQUIRED__)
+          static atomic_uint_fast64_t m681_gpu_ns_total;
+          static atomic_uint_fast64_t m681_gpu_ns_max;
+          static atomic_uint_fast64_t m681_gpu_samples;
+          static void m681_track_completed_gpu(const struct mtl_feedback_data *data)
+          {
+             if (!(data->gpu_end > data->gpu_start) || data->gpu_start <= 0.0)
+                return;
+             const double duration_ns = (data->gpu_end - data->gpu_start) * 1e9;
+             if (duration_ns <= 0.0 || duration_ns > 10000000000.0)
+                return;
+             const uint64_t ns = (uint64_t)duration_ns;
+             atomic_fetch_add_explicit(&m681_gpu_ns_total, ns, memory_order_relaxed);
+             uint_fast64_t old = atomic_load_explicit(&m681_gpu_ns_max, memory_order_relaxed);
+             while (ns > old && !atomic_compare_exchange_weak_explicit(&m681_gpu_ns_max, &old, ns,
+                    memory_order_relaxed, memory_order_relaxed)) {}
+             const uint64_t n = atomic_fetch_add_explicit(&m681_gpu_samples, 1, memory_order_relaxed) + 1;
+             if (!(n % 128)) {
+                const uint64_t sum = atomic_load_explicit(&m681_gpu_ns_total, memory_order_relaxed);
+                const uint64_t peak = atomic_load_explicit(&m681_gpu_ns_max, memory_order_relaxed);
+                fprintf(stderr, "PsTJon M6.8.1 METAL_GPU_COMPLETED: command_buffers=%llu avg_cb_ms=%.3f max_cb_ms=%.3f (REAL Metal 4 feedback GPU times, NOT per-frame)\\n",
+                   (unsigned long long)n, (double)sum / ((double)n * 1e6), (double)peak / 1e6);
+             }
+          }
+          #endif
+
+          '''+anchor
+          s=s.replace(anchor,fn,1)
+          old='''commit_callback(struct mtl_feedback_data *data)
+          {
+             check_device_lost'''
+          new='''commit_callback(struct mtl_feedback_data *data)
+          {
+          #if defined(__ENVIRONMENT_IPHONE_OS_VERSION_MIN_REQUIRED__)
+             m681_track_completed_gpu(data);
+          #endif
+             check_device_lost'''
+          assert s.count(old)==1
+          s=s.replace(old,new,1)
+          old='''rerecord_commit_callback(struct mtl_feedback_data *data)
+          {
+             struct kk_commit_data *commit'''
+          new='''rerecord_commit_callback(struct mtl_feedback_data *data)
+          {
+          #if defined(__ENVIRONMENT_IPHONE_OS_VERSION_MIN_REQUIRED__)
+             m681_track_completed_gpu(data);
+          #endif
+             struct kk_commit_data *commit'''
+          assert s.count(old)==1
+          s=s.replace(old,new,1)
+          queue.write_text(s)
+
+          # Strict non-regression tests on generated C++ and Mesa driver. Preserve
+          # cache correctness, query-pool fences, backend copy geometry and effects.
+          assert 'M6.8.1 ASCENSION_TYPELESS_PREFLIGHT' in p.read_text()
+          assert p.read_text().index('M6.8.1 ASCENSION_TYPELESS_PREFLIGHT') < p.read_text().index('VkBufferImageCopy src_copy')
+          assert 'ensure(m68_copy_ok);' in p.read_text()   # last-line invariant still active
+          assert 'get_format_convert_flags(src->info.format)' in p.read_text()
+          assert 'M6.7.4 VK_COPY_GEOMETRY' in p.read_text()
+          assert 'PsTJon M6.8.1 METAL_GPU_COMPLETED' in queue.read_text()
+          assert 'gpu_end - data->gpu_start' in queue.read_text()
+          assert 'M6.7.3 ASCENSION_SAFE_SURFACE_RECLAIM' in vk.read_text()
+          assert 'force_store |= render->color_att_count > 0;' in Path('mesa-src/src/kosmickrisp/vulkan/kk_cmd_buffer.c').read_text()
+          assert 'M6.8 PIPELINE_BUDGET' in vk.read_text()
+          assert 'm68_reuse_completed_ios' in (root/'Emu/RSX/VK/VKQueryPool.cpp').read_text()
+          assert 'M6.6 ASCENSION_DST_SPAN' in (root/'Emu/RSX/NV47/HW/nv3089.cpp').read_text()
+          def rect_ok(x,y,w,h,dim_w,dim_h,mip):
+              return x>=0 and y>=0 and w>0 and h>0 and x+w<=max(1,dim_w>>mip) and y+h<=max(1,dim_h>>mip)
+          assert rect_ok(0,0,360,202,720,405,1)
+          assert not rect_ok(0,0,361,202,720,405,1)
+          assert rect_ok(0,0,720,405,720,405,0)
+          assert not rect_ok(0,0,960,540,720,405,0)
+          assert not rect_ok(-1,0,64,64,720,405,0)
+          print("M6.8.1 PASS: Ascension full-mip preflight + skip-without-GPU-side-effects, existing M6.8 hard guard, true GPU Metal callback times, six measured CPU stages, reuse/cache and all M6 graphics policies preserved")
+          PY
+          grep -q 'M6.8.1 ASCENSION_TYPELESS_PREFLIGHT' rpcs3-src/rpcs3/Emu/RSX/VK/VKTexture.cpp
+          grep -q 'M6.8.1 CPU_STAGE' rpcs3-src/rpcs3/ios/RPCS3IOSPerformance.cpp
+          grep -q 'M6.8.1 METAL_GPU_COMPLETED' mesa-src/src/kosmickrisp/vulkan/kk_queue.c
+          git -C rpcs3-src diff --check
+          git -C mesa-src diff --check
+
           rm -rf build-kk-host kk-host-tools
           meson setup build-kk-host mesa-src \
             --buildtype=release \
@@ -5162,13 +5496,13 @@ jobs:
           codesign -d --entitlements :- "$APP" 2>&1 | tee pstjon-entitlements.txt
           (
             cd package
-            ditto -c -k --sequesterRsrc --keepParent Payload "$GITHUB_WORKSPACE/PsTJon-KK-M6.8-EXP.ipa"
+            ditto -c -k --sequesterRsrc --keepParent Payload "$GITHUB_WORKSPACE/PsTJon-KK-M6.8.1-EXP.ipa"
           )
-          shasum -a 256 PsTJon-KK-M6.8-EXP.ipa
+          shasum -a 256 PsTJon-KK-M6.8.1-EXP.ipa
       - name: Build report
         run: |
           {
-            echo "PsTJon M6.8-EXP: Four integrated M6 priorities. P1 native query-pool reuse only after GPU-deferred retirement, capped at 3 idle, 256 entry pool for Castlevania/Sleeping Dogs, native host-allocation diagnostics; P2 bounded ZCull result wait spin on iOS, preserves true query semantics; P3 2 shader compiler workers for these titles only with >=2300MiB headroom, disk shader/pipeline preload unchanged; P4 accurate 64-bit signed/mip/layer Vulkan image readback validation with error provenance, preserves M6.7.4 source/destination fast-copy guard, BCUS ULTRA/WCB/Metal stores. No claimed 60FPS/no-crash before hardware tests."
+            echo "PsTJon M6.8.1-EXP based exactly on M6.8: Ascension recoverable entire typeless mip chain preflight BEFORE GPU state/scratch commands, no invalid partial transfers; preserves M6.8 internal assert and M6.7.4 blitter geometry. Measures six CPU hot-path stages (RTT, pipeline, vertex/index, DMA allocation, typeless, SPU LLVM) in 3s aggregate windows and TRUE MTL4 GPU completed command buffer times from feedback. Hoists repeated typeless format conversion out of mip loop. Maintains existing Query Pool safe reuse/capped idle, live pipeline workers, compiled PPU/SPU cache, GPU-safe reclamation, full-color Metal stores and iOS DMA/NEON optimized paths. NO CLAIM of 30/60fps or Ascension visual correctness before physical verification."
             echo "EXP metrics: presented-frame cadence, frame stutters, process footprint, RSX estimated load, Vulkan cache lookup wall-time, command flush wall-time, invalid texture and DMA blit guard events"
             echo "EXP NOT AVAILABLE: authoritative Metal GPU occupancy/time, GPU image readback, automatic black-frame or visual corruption detection"
             echo "EXP logs: PsTJon EXPERIMENTAL channel in exported RPCS3 session logs, sampled once per 3 seconds and on throttled anomalies"
@@ -5180,15 +5514,15 @@ jobs:
             echo "Volk: $VOLK_SHA"
             echo "FFmpeg: $FFMPEG_VERSION"
             echo "Core: $(shasum -a 256 libRPCS3Core.dylib | awk '{print $1}')"
-            echo "IPA: $(shasum -a 256 PsTJon-KK-M6.8-EXP.ipa | awk '{print $1}')"
-          } > PsTJon-KK-M6.8-EXP-build.txt
+            echo "IPA: $(shasum -a 256 PsTJon-KK-M6.8.1-EXP.ipa | awk '{print $1}')"
+          } > PsTJon-KK-M6.8.1-EXP-build.txt
 
       - uses: actions/upload-artifact@v4
         with:
-          name: PsTJon-KK-m06-8-EXPERIMENTAL-four-priorities-IPA
+          name: PsTJon-KK-m06-8-1-EXPERIMENTAL-ascension-six-stages-IPA
           path: |
-            PsTJon-KK-M6.8-EXP.ipa
-            PsTJon-KK-M6.8-EXP-build.txt
+            PsTJon-KK-M6.8.1-EXP.ipa
+            PsTJon-KK-M6.8.1-EXP-build.txt
             pstjon-entitlements.txt
             M5-rpcs3-patch-stat.txt
             M4-mesa-patch-stat.txt
@@ -5205,16 +5539,16 @@ jobs:
 
       # Best-effort direct release asset: accessible on iPhone without
       # extracting the Actions ZIP. Artifact step above stays authoritative.
-      - name: Publish direct M6.8-EXP IPA
+      - name: Publish direct M6.8.1-EXP IPA
         if: success()
         continue-on-error: true
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
           set -euxo pipefail
-          gh release create pstjon-kk-m6.8-exp PsTJon-KK-M6.8-EXP.ipa \
+          gh release create pstjon-kk-m6.8.1-exp PsTJon-KK-M6.8.1-EXP.ipa \
             --target "$GITHUB_SHA" \
-            --title "PsTJon KosmicKrisp M6.8-EXP" \
-            --notes "Experimental M6.8-EXP (FOUR M6 priorities): global GPU-query lifecycle reliability with bounded GPU-retired pool reuse; Castlevania/Sleeping Dogs 256-entry query pools and detailed driver host allocation diagnostics; bounded iOS query polling to reduce hot CPU spin WITHOUT bypassing ZCull; memory-headroom-budgeted dual runtime shader workers for those two titles with retained persistent shader caches; strict Vulkan source mip/layer/offset validation and complete M6.7.4 blitter checks. Preserves Ascension ULTRA, WCB, Metal attachment stores, RSX guards, old game profiles and BCUS framebuffer safe reclaim. Stability, FPS and visual quality require physical verification, NOT guaranteed." \
+            --title "PsTJon KosmicKrisp M6.8.1-EXP" \
+            --notes "M6.8.1 EXP / based on M6.8: priority Ascension VKTexture.cpp:158 late assertion solved at source by complete preflight of ALL typeless source/destination mips and layers prior to any GPU submission; invalid transfers logged in full and rejected as whole (no partially corrupted scratch/destination; underlying invalid source still requires on-device diagnosis). Six performance investigations: native Metal 4 GPU command buffer start/end timestamps, RSX CPU render target/pipeline wall times, query/flush metrics, typeless conversion CPU optimization, safe scratch/texture lifetimes, vertex/index and DMA allocation timing, SPU LLVM compile timing; preserve prior cache and title configurations. Diagnostics are not a guarantee of FPS improvement or Ascension graphics correctness." \
             --latest=false
-          gh release view pstjon-kk-m6.8-exp --json url,assets
+          gh release view pstjon-kk-m6.8.1-exp --json url,assets
