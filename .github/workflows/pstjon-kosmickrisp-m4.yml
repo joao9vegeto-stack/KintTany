@@ -5473,8 +5473,7 @@ jobs:
               const auto pkg_content_id = field.substr(0, field.find('\0'));
               const auto check = validate_game_patch_contract(
                   expected_title_id, package_title_id, category, has_patch_flag, pkg_content_id);
-              sys_log.notice("PsTJon M6.8.3 UPDATE_PKG_CONTRACT: target=%s sfo=%s category=%s content_id=%s patch=%d outcome=%d",
-                  expected_title_id, package_title_id, category, pkg_content_id, has_patch_flag, static_cast<int>(check));
+              /* PsTJon M6.8.3 UPDATE_PKG_CONTRACT: validated PSN Content ID and exact expected Title ID. */
               switch (check)'''
           assert s.count(old)==1, 'M6.8.3 GameLibrary.cpp anchor mismatch'
           s=s.replace(old,new,1)
