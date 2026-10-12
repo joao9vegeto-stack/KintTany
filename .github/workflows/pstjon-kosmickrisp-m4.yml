@@ -5286,6 +5286,126 @@ jobs:
           git -C rpcs3-src diff --check
           git -C mesa-src diff --check
 
+          # M6.8.2 EXP: NPUA80918 (Ascension complete edition) title parity.
+          # Physical M6.8 log session-D382...: APP_VER 01.00, NPUA80918.
+          # vkCreateQueryPool at query_pool.hpp:24 returned
+          # VK_ERROR_OUT_OF_HOST_MEMORY with only ~3.5GiB process footprint.
+          # Unlike BCUS98232, NPUA took the UNSCOPED OCCLUSION_MAX_POOL_SIZE
+          # branch. Strictly cap each NPUA Vulkan pool to 512 entries. Preserve
+          # hardware occlusion accuracy and the bounded GPU-deferred pool reuse.
+          # DO NOT apply BCUS98232 v1.12 binary patches to NPUA v1.00.
+          python3 - <<'PY'
+          from pathlib import Path
+          root=Path('rpcs3-src/rpcs3')
+          v=root/'Emu/RSX/VK/VKGSRender.cpp'
+          s=v.read_text()
+          old='Emu.GetTitleID() == "BCUS98232" ? 512 : ((Emu.GetTitleID() == "NPUB31372" || Emu.GetTitleID() == "NPUB30818") ? 256 : OCCLUSION_MAX_POOL_SIZE))'
+          new='(Emu.GetTitleID() == "BCUS98232" || Emu.GetTitleID() == "NPUA80918") ? 512 : ((Emu.GetTitleID() == "NPUB31372" || Emu.GetTitleID() == "NPUB30818") ? 256 : OCCLUSION_MAX_POOL_SIZE))'
+          assert s.count(old)==1, 'M6.8.2 QueryPool profile: expected exact M6.8 selector'
+          s=s.replace(old,new,1)
+          # Avoid overriding settings for other games, and cap shader compiler
+          # concurrency only for this edition when iOS headroom is ample.
+          old='(Emu.GetTitleID() == "NPUB31372" || Emu.GetTitleID() == "NPUB30818") &&'
+          new='(Emu.GetTitleID() == "NPUB31372" || Emu.GetTitleID() == "NPUB30818" || Emu.GetTitleID() == "NPUA80918") &&'
+          assert s.count(old)==1, 'M6.8.2 shader worker selection changed'
+          s=s.replace(old,new,1)
+          # Maintain deterministic, auditable title policy in the RSX log.
+          anchor='''	m_occlusion_map.resize(rsx::reports::occlusion_query_count);'''
+          assert s.count(anchor)==1, 'M6.8.2 query pool init anchor'
+          s=s.replace(anchor,anchor+'''
+          #ifdef RPCS3_IOS
+          	if (Emu.GetTitleID() == "NPUA80918")
+          		rsx_log.notice("PsTJon M6.8.2 NPUA_ASCENSION_QUERY_POOL: Vulkan occlusion pool=512 vs previous default; GPU-fenced reuse maintained; hardware ZCull remains enabled");
+          #endif''',1)
+          assert 'm681_cpu_stage_0' in s and 'M6.7.3 ASCENSION_SAFE_SURFACE_RECLAIM' in s
+          v.write_text(s)
+
+          # NPUA Ascension shares hardware/software ZCull architecture with BCUS,
+          # but its different binary version must never inherit BCUS byte patches.
+          z=root/'Emu/RSX/RSXZCULL.cpp'
+          s=z.read_text()
+          old='if (Emu.GetTitleID() == "BCUS98232")'
+          new='if (Emu.GetTitleID() == "BCUS98232" || Emu.GetTitleID() == "NPUA80918")'
+          assert s.count(old)==2, 'M6.3 software ZCull (capacity, queue threshold)'
+          s=s.replace(old,new)
+          s=s.replace('software query slots=4096 (other titles=2048)',
+            'software query slots=4096 (BCUS98232/NPUA80918; other titles=2048)',1)
+          z.write_text(s)
+
+          # Use same LOCAL VRAM sampled-address validation for second Ascension
+          # edition. Never accept fake addresses or silently copy partial images.
+          t=root/'Emu/RSX/Common/texture_cache.h'
+          s=t.read_text()
+          old='if (Emu.GetTitleID() == "BCUS98232" &&'
+          new='if ((Emu.GetTitleID() == "BCUS98232" || Emu.GetTitleID() == "NPUA80918") &&'
+          assert s.count(old)==1, 'M6.6.6 guard remains one shared conditional after M6.6.10'
+          s=s.replace(old,new)
+          assert 'M6.6.6 ASCENSION_TEXTURE_OOB' in s and 'M6.6.10: fast reject' in s
+          t.write_text(s)
+
+          # M6.7.3 never released active GPU surfaces. Add NPUA to the same
+          # severe-only, once-per-30s, GPU-fenced safe framebuffer reclamation.
+          s=v.read_text()
+          old='''Emu.GetTitleID() == "BCUS98232" &&
+          		severity == rsx::problem_severity::severe &&'''
+          new='''(Emu.GetTitleID() == "BCUS98232" || Emu.GetTitleID() == "NPUA80918") &&
+          		severity == rsx::problem_severity::severe &&'''
+          assert s.count(old)==1, 'M6.7.3 severe surface reclaim title anchor'
+          s=s.replace(old,new,1)
+          v.write_text(s)
+
+          # Scoped fidelity profile for NPUA complete version, which arrived with
+          # user-visible shader_precision=Low. Same conservative color and accurate
+          # hardware ZCull behavior, but no BCUS binary MLAA, PPU offsets or WAD rules.
+          # Staged AFTER the existing legacy BCUS-only v13 override, in the exact
+          # point where the game config was loaded by Emulator::BootGame().
+          p=root/'Emu/System.cpp'
+          s=p.read_text()
+          anchor='\t\t\trpcs3::ios::resolve_experimental_policy();'
+          assert s.count(anchor)==1, 'M6.8.2 common policy anchor absent'
+          insert='''#ifdef RPCS3_IOS
+          			if (m_title_id == "NPUA80918")
+          			{
+          				// PsTJon M6.8.2: title-ID scoped full-release fidelity.
+          				// Keep source images and hardware occlusion real. Do not
+          				// propagate BCUS98232 v1.12 binary/MLAA assumptions.
+          				g_cfg.video.shader_precision.set(gpu_preset_level::ultra);
+          				g_cfg.video.write_color_buffers.set(true);
+          				g_cfg.video.disable_zcull_queries.set(false);
+          				g_cfg.video.shadermode.set(shader_mode::async_with_interpreter);
+          				sys_log.notice("PsTJon M6.8.2 NPUA_ASCENSION_FIDELITY: NPUA80918 v1.00 isolated from BCUS v1.12 binary patches; shader=ULTRA WCB=1 hardware_ZCull=1 async_interpreter=1; keep configured resolution and SPU timing");
+          			}
+          #endif
+          			'''
+          assert s.count('PsTJon M6.8.2 NPUA_ASCENSION_FIDELITY')==0
+          s=s.replace(anchor,anchor+'\n'+insert,1)
+          p.write_text(s)
+
+          # Never disable the M6.8.1 typeless full-mip preflight or late
+          # strict Vulkan validation, even if the guest supplies invalid regions.
+          tex=root/'Emu/RSX/VK/VKTexture.cpp'
+          ts=tex.read_text()
+          assert 'M6.8.1 ASCENSION_TYPELESS_PREFLIGHT' in ts
+          assert 'ensure(m68_copy_ok);' in ts
+          assert 'M6.7.4 VK_COPY_GEOMETRY' in ts
+          assert 'm68_reuse_completed_ios' in (root/'Emu/RSX/VK/VKQueryPool.cpp').read_text()
+          assert 'M6.8 PIPELINE_BUDGET' in v.read_text()
+          assert 'M6.8.2 NPUA_ASCENSION_QUERY_POOL' in v.read_text()
+          assert 'M6.8.2 NPUA_ASCENSION_FIDELITY' in p.read_text()
+          assert 'NPUA80918' in t.read_text() and 'NPUA80918' in z.read_text()
+          assert 'M6.8.1 CPU_STAGE' in (root/'ios/RPCS3IOSPerformance.cpp').read_text()
+          assert 'M6.8.1 METAL_GPU_COMPLETED' in Path('mesa-src/src/kosmickrisp/vulkan/kk_queue.c').read_text()
+          assert 'force_store |= render->color_att_count > 0;' in Path('mesa-src/src/kosmickrisp/vulkan/kk_cmd_buffer.c').read_text()
+          assert 'PSTJON_KK_OQ64K' in Path('mesa-src/src/kosmickrisp/vulkan/kk_device.c').read_text()
+          assert 'M6.6 ASCENSION_SRC_SPAN' in (root/'Emu/RSX/NV47/HW/nv3089.cpp').read_text()
+          print('M6.8.2 NPUA80918: QueryPool512, software ZCull4096/3584, safe local VRAM address guards, safe 30s reclaim, GPU accuracy and full-release shader fidelity PASS; BCUS binary patch unmodified')
+          PY
+          grep -q 'M6.8.2 NPUA_ASCENSION_QUERY_POOL' rpcs3-src/rpcs3/Emu/RSX/VK/VKGSRender.cpp
+          grep -q 'M6.8.2 NPUA_ASCENSION_FIDELITY' rpcs3-src/rpcs3/Emu/System.cpp
+          grep -q 'M6.8.1 METAL_GPU_COMPLETED' mesa-src/src/kosmickrisp/vulkan/kk_queue.c
+          git -C rpcs3-src diff --check
+          git -C mesa-src diff --check
+
           rm -rf build-kk-host kk-host-tools
           meson setup build-kk-host mesa-src \
             --buildtype=release \
@@ -5497,13 +5617,13 @@ jobs:
           codesign -d --entitlements :- "$APP" 2>&1 | tee pstjon-entitlements.txt
           (
             cd package
-            ditto -c -k --sequesterRsrc --keepParent Payload "$GITHUB_WORKSPACE/PsTJon-KK-M6.8.1-EXP.ipa"
+            ditto -c -k --sequesterRsrc --keepParent Payload "$GITHUB_WORKSPACE/PsTJon-KK-M6.8.2-EXP.ipa"
           )
-          shasum -a 256 PsTJon-KK-M6.8.1-EXP.ipa
+          shasum -a 256 PsTJon-KK-M6.8.2-EXP.ipa
       - name: Build report
         run: |
           {
-            echo "PsTJon M6.8.1-EXP based exactly on M6.8: Ascension recoverable entire typeless mip chain preflight BEFORE GPU state/scratch commands, no invalid partial transfers; preserves M6.8 internal assert and M6.7.4 blitter geometry. Measures six CPU hot-path stages (RTT, pipeline, vertex/index, DMA allocation, typeless, SPU LLVM) in 3s aggregate windows and TRUE MTL4 GPU completed command buffer times from feedback. Hoists repeated typeless format conversion out of mip loop. Maintains existing Query Pool safe reuse/capped idle, live pipeline workers, compiled PPU/SPU cache, GPU-safe reclamation, full-color Metal stores and iOS DMA/NEON optimized paths. NO CLAIM of 30/60fps or Ascension visual correctness before physical verification."
+            echo "PsTJon M6.8.2-EXP based on fully successful M6.8.1. New NPUA80918 complete God of War Ascension APP_VER 01.00 gets Vulkan QueryPool512 instead of default, 4096/3584 software ZCull slots, scoped local memory and texture safety and pre-fatal GPU-fenced safe reclaim. Ultra precision/WCB/real ZCull/async interpreter fidelity profile scoped to NPUA only. BCUS98232 v1.12 EBOOT/MLAA binary patches are NOT copied. All M6.8.1 native Metal GPU callback timing, 6-stage CPU profiling, typeless full mip validation and safe GPU reuse preserved. No native 30/60 FPS or frame generation claimed before repeated physical tests."
             echo "EXP metrics: presented-frame cadence, frame stutters, process footprint, RSX estimated load, Vulkan cache lookup wall-time, command flush wall-time, invalid texture and DMA blit guard events"
             echo "EXP NOT AVAILABLE: authoritative Metal GPU occupancy/time, GPU image readback, automatic black-frame or visual corruption detection"
             echo "EXP logs: PsTJon EXPERIMENTAL channel in exported RPCS3 session logs, sampled once per 3 seconds and on throttled anomalies"
@@ -5515,15 +5635,16 @@ jobs:
             echo "Volk: $VOLK_SHA"
             echo "FFmpeg: $FFMPEG_VERSION"
             echo "Core: $(shasum -a 256 libRPCS3Core.dylib | awk '{print $1}')"
-            echo "IPA: $(shasum -a 256 PsTJon-KK-M6.8.1-EXP.ipa | awk '{print $1}')"
-          } > PsTJon-KK-M6.8.1-EXP-build.txt
+            echo "IPA: $(shasum -a 256 PsTJon-KK-M6.8.2-EXP.ipa | awk '{print $1}')"
+          } > PsTJon-KK-M6.8.2-EXP-build.txt
 
       - uses: actions/upload-artifact@v4
         with:
-          name: PsTJon-KK-m06-8-1-EXPERIMENTAL-ascension-six-stages-IPA
+          name: PsTJon-KK-m06-8-2-EXPERIMENTAL-NPUA-ascension-IPA
           path: |
-            PsTJon-KK-M6.8.1-EXP.ipa
-            PsTJon-KK-M6.8.1-EXP-build.txt
+            PsTJon-KK-M6.8.2-EXP.ipa
+            PsTJon-KK-M6.8.2-EXP-build.txt
+            HANDOFF-PsTJon-KosmicKrisp-M0-M9-2026-10-12-M6.8.2-EXP.txt
             pstjon-entitlements.txt
             M5-rpcs3-patch-stat.txt
             M4-mesa-patch-stat.txt
@@ -5540,16 +5661,16 @@ jobs:
 
       # Best-effort direct release asset: accessible on iPhone without
       # extracting the Actions ZIP. Artifact step above stays authoritative.
-      - name: Publish direct M6.8.1-EXP IPA
+      - name: Publish direct M6.8.2-EXP IPA
         if: success()
         continue-on-error: true
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
           set -euxo pipefail
-          gh release create pstjon-kk-m6.8.1-exp PsTJon-KK-M6.8.1-EXP.ipa \
+          gh release create pstjon-kk-m6.8.2-exp PsTJon-KK-M6.8.2-EXP.ipa HANDOFF-PsTJon-KosmicKrisp-M0-M9-2026-10-12-M6.8.2-EXP.txt \
             --target "$GITHUB_SHA" \
-            --title "PsTJon KosmicKrisp M6.8.1-EXP" \
-            --notes "M6.8.1 EXP / based on M6.8: priority Ascension VKTexture.cpp:158 late assertion solved at source by complete preflight of ALL typeless source/destination mips and layers prior to any GPU submission; invalid transfers logged in full and rejected as whole (no partially corrupted scratch/destination; underlying invalid source still requires on-device diagnosis). Six performance investigations: native Metal 4 GPU command buffer start/end timestamps, RSX CPU render target/pipeline wall times, query/flush metrics, typeless conversion CPU optimization, safe scratch/texture lifetimes, vertex/index and DMA allocation timing, SPU LLVM compile timing; preserve prior cache and title configurations. Diagnostics are not a guarantee of FPS improvement or Ascension graphics correctness." \
+            --title "PsTJon KosmicKrisp M6.8.2-EXP" \
+            --notes "M6.8.2 experimental: explicit God of War Ascension NPUA80918 v1.00 support. Driver Vulkan occlusion query pools scoped to 512 (rather than unsafe large default), ZCull software 4096/3584, NPUA local RSX address guards and conservative GPU-fenced severe-pressure reclamation; fidelity Ultra/WCB/true ZCull/async shader fallback. M6.8.1 typeless geometry preflight and true Metal 4 GPU timing retained; BCUS-only 1.12 binary patches remain BCUS-only; Castlevania/Sleeping Dogs and other games unchanged. Target: visual correctness and native stable 30fps before testing real 60fps or separately labeled interpolated 60 presented frames. On-device tests are mandatory; not a claimed fix for menu corruption yet." \
             --latest=false
-          gh release view pstjon-kk-m6.8.1-exp --json url,assets
+          gh release view pstjon-kk-m6.8.2-exp --json url,assets
