@@ -5377,8 +5377,9 @@ jobs:
           			}
           #endif
           			'''
+          # Drop trailing indent from the generated C++ #endif line before git diff --check.
           assert s.count('PsTJon M6.8.2 NPUA_ASCENSION_FIDELITY')==0
-          s=s.replace(anchor,anchor+'\n'+insert,1)
+          s=s.replace(anchor,anchor+'\n'+insert.rstrip(),1)
           p.write_text(s)
 
           # Never disable the M6.8.1 typeless full-mip preflight or late
