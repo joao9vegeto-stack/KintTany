@@ -5057,7 +5057,7 @@ jobs:
           # WCB, sampler lifetime or texture invalidation.
           assert s.count('ensure(m68_copy_ok);')==1
           assert 'M6.7.4 VK_COPY_GEOMETRY' in s
-          assert s.count('M6.8.1 ASCENSION_TYPELESS_PREFLIGHT')==1
+          assert s.count('M6.8.1 ASCENSION_TYPELESS_PREFLIGHT')>=2, 'header and diagnostics missing'
           p.write_text(s)
 
           # P1/P2/P3/P5/P6: low-impact stage timers, atomic statistics aggregated
