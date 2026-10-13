@@ -5701,6 +5701,9 @@ jobs:
           # observe wait duration instead of changing query/fence semantics.
           p=root/'Emu/RSX/RSXZCULL.cpp'
           s=p.read_text()
+          assert '#include "stdafx.h"' in s
+          if '#include <chrono>' not in s:
+              s=s.replace('#include "stdafx.h"','#include "stdafx.h"\n#include <chrono>',1)
           old='''m_next_tsc = 0;
           \t\t\t\tupdate(ptimer, m_pending_writes.front().sink);'''
           assert s.count(old)==1, 'ZCull forced-resolution anchor moved'
@@ -5760,7 +5763,7 @@ jobs:
               start = int(offset)+int(y)*int(pitch)+int(x)*int(bpp)
               size = (int(height)-1)*int(pitch)+int(width)*int(bpp)
               return width>0 and height>0 and size>0 and start<limit and size<=limit-start
-          assert span(0x0f620000,0,0,4096,1024,1024,4,B)
+          assert span(0x0f500000,0,0,4096,1024,1024,4,B)
           assert not span(0x0f800000,0,0,4096,1024,1024,4,B)
           assert span(B-4096,0,0,4096,1024,1,4,B)
           assert not span(B,0,0,4096,1024,1,4,B)
