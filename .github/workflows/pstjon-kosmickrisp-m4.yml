@@ -1,4 +1,4 @@
-name: PsTJon KosmicKrisp M6.8.3
+name: PsTJon KosmicKrisp M6.8.4
 # runner-retry: fresh-run-after-macos-queue-failure
 
 on:
@@ -5533,6 +5533,74 @@ jobs:
           git -C mesa-src diff --check
           echo 'M6.8.3: host patch tests PASS; graphics safety policy unchanged.'
 
+          # M6.8.4: preserve correct graphics; avoid preemptive FATAL framebuffer purge.
+          python3 - <<'PY_M684'
+          from pathlib import Path
+          p=Path('rpcs3-src/rpcs3/Emu/RSX/VK/VKGSRender.cpp')
+          s=p.read_text()
+          a=s.index('bool VKGSRender::on_vram_exhausted(rsx::problem_severity severity)')
+          b=s.index('void VKGSRender::',a+8)
+          x=s[a:b]
+          old='const bool m673_early_surface_reclaim ='
+          assert x.count(old)==1
+          x=x.replace(old,'''// NPUA full: retain regular SEVERE cleanup. Do not force
+          // FATAL surface eviction with ~1 GiB headroom (physical M6.8.3).
+          const u64 m684_headroom = rpcs3::ios::available_process_memory_headroom();
+          const bool m684_urgent = Emu.GetTitleID() != "NPUA80918" ||
+              m684_headroom <= (512ull * 1024 * 1024);
+          const bool m673_early_surface_reclaim =''',1)
+          old='severity == rsx::problem_severity::severe &&\n\t\tm673_now >= m673_next_safe_reclaim;'
+          assert x.count(old)==1
+          x=x.replace(old,'severity == rsx::problem_severity::severe &&\n\t\tm684_urgent &&\n\t\tm673_now >= m673_next_safe_reclaim;',1)
+          old='if (m673_early_surface_reclaim)\n\t{'
+          assert x.count(old)==1
+          x=x.replace(old,'''if (Emu.GetTitleID() == "NPUA80918" &&
+              severity == rsx::problem_severity::severe && !m684_urgent)
+          {
+              static auto m684_next_log = std::chrono::steady_clock::time_point{};
+              if (m673_now >= m684_next_log)
+              {
+                  m684_next_log = m673_now + std::chrono::seconds(30);
+                  rsx_log.warning("M6.8.4 SAFE_PRESSURE: deferring FATAL surface purge; headroom=%llu MiB", m684_headroom / (1024 * 1024));
+              }
+          }
+          if (m673_early_surface_reclaim)
+          {''',1)
+          old='texture_cache_relieved |= m_texture_cache.handle_memory_pressure(severity);'
+          assert x.count(old)==1
+          x=x.replace(old,'''#ifdef RPCS3_IOS
+          const bool m684_trace = Emu.GetTitleID() == "NPUA80918" && severity >= rsx::problem_severity::severe;
+          if (m684_trace) rsx_log.warning("M6.8.4 RSX_STALL_TRACE texture_begin");
+          #endif
+          texture_cache_relieved |= m_texture_cache.handle_memory_pressure(severity);
+          #ifdef RPCS3_IOS
+          if (m684_trace) rsx_log.warning("M6.8.4 RSX_STALL_TRACE texture_done");
+          #endif''',1)
+          old='if (m_rtts.handle_memory_pressure(*m_current_command_buffer, m673_surface_severity))'
+          assert x.count(old)==1
+          x=x.replace(old,'''#ifdef RPCS3_IOS
+          if (m684_trace) rsx_log.warning("M6.8.4 RSX_STALL_TRACE surface_begin");
+          #endif
+          if (m_rtts.handle_memory_pressure(*m_current_command_buffer, m673_surface_severity))''',1)
+          old='const bool any_cache_relieved = (texture_cache_relieved || surface_cache_relieved);'
+          assert x.count(old)==1
+          x=x.replace(old,'''#ifdef RPCS3_IOS
+          if (m684_trace) rsx_log.warning("M6.8.4 RSX_STALL_TRACE surface_done=%d", surface_cache_relieved);
+          #endif
+          const bool any_cache_relieved = (texture_cache_relieved || surface_cache_relieved);''',1)
+          assert x.count('M6.8.4 RSX_STALL_TRACE')==4
+          assert x.count('M6.8.4 SAFE_PRESSURE')==1
+          assert x.count('M6.8.3 RECLAIM_GPU_DRAIN')==1
+          s=s[:a]+x+s[b:]
+          p.write_text(s)
+          assert 'm68_reuse_completed_ios' in Path('rpcs3-src/rpcs3/Emu/RSX/VK/VKQueryPool.cpp').read_text()
+          assert 'M6.8.2 NPUA_ASCENSION_FIDELITY' in Path('rpcs3-src/rpcs3/Emu/System.cpp').read_text()
+          assert 'force_store |= render->color_att_count > 0;' in Path('mesa-src/src/kosmickrisp/vulkan/kk_cmd_buffer.c').read_text()
+          print("M6.8.4 safe iOS reclaim & RSX trace SOURCE PASS")
+          PY_M684
+          git -C rpcs3-src diff --check
+          grep -q 'M6.8.4 SAFE_PRESSURE' rpcs3-src/rpcs3/Emu/RSX/VK/VKGSRender.cpp
+
           rm -rf build-kk-host kk-host-tools
           meson setup build-kk-host mesa-src \
             --buildtype=release \
@@ -5744,12 +5812,13 @@ jobs:
           codesign -d --entitlements :- "$APP" 2>&1 | tee pstjon-entitlements.txt
           (
             cd package
-            ditto -c -k --sequesterRsrc --keepParent Payload "$GITHUB_WORKSPACE/PsTJon-KK-M6.8.3-EXP.ipa"
+            ditto -c -k --sequesterRsrc --keepParent Payload "$GITHUB_WORKSPACE/PsTJon-KK-M6.8.4-EXP.ipa"
           )
-          shasum -a 256 PsTJon-KK-M6.8.3-EXP.ipa
+          shasum -a 256 PsTJon-KK-M6.8.4-EXP.ipa
       - name: Build report
         run: |
           {
+            echo "PsTJon M6.8.4-EXP: NPUA80918 0-FPS stall mitigation; defer FATAL framebuffer purge at >512 MiB headroom, preserve normal SEVERE reclaim, and add RSX stall trace. No guaranteed 30fps claim." 
             echo "PsTJon M6.8.3-EXP: Sony PSN PS3 update Content ID validation tests; safe GPU drain timing (no forced changes to resource release). Based on fully successful M6.8.1. New NPUA80918 complete God of War Ascension APP_VER 01.00 gets Vulkan QueryPool512 instead of default, 4096/3584 software ZCull slots, scoped local memory and texture safety and pre-fatal GPU-fenced safe reclaim. Ultra precision/WCB/real ZCull/async interpreter fidelity profile scoped to NPUA only. BCUS98232 v1.12 EBOOT/MLAA binary patches are NOT copied. All M6.8.1 native Metal GPU callback timing, 6-stage CPU profiling, typeless full mip validation and safe GPU reuse preserved. No native 30/60 FPS or frame generation claimed before repeated physical tests."
             echo "EXP metrics: presented-frame cadence, frame stutters, process footprint, RSX estimated load, Vulkan cache lookup wall-time, command flush wall-time, invalid texture and DMA blit guard events"
             echo "EXP NOT AVAILABLE: authoritative Metal GPU occupancy/time, GPU image readback, automatic black-frame or visual corruption detection"
@@ -5762,11 +5831,11 @@ jobs:
             echo "Volk: $VOLK_SHA"
             echo "FFmpeg: $FFMPEG_VERSION"
             echo "Core: $(shasum -a 256 libRPCS3Core.dylib | awk '{print $1}')"
-            echo "IPA: $(shasum -a 256 PsTJon-KK-M6.8.3-EXP.ipa | awk '{print $1}')"
-          } > PsTJon-KK-M6.8.3-EXP-build.txt
+            echo "IPA: $(shasum -a 256 PsTJon-KK-M6.8.4-EXP.ipa | awk '{print $1}')"
+          } > PsTJon-KK-M6.8.4-EXP-build.txt
 
-          cp HANDOFF-PsTJon-KosmicKrisp-M0-M9-2026-10-12-M6.8.2-EXP.txt HANDOFF-PsTJon-KosmicKrisp-M0-M9-2026-10-12-M6.8.3-EXP.txt
-          cat >> HANDOFF-PsTJon-KosmicKrisp-M0-M9-2026-10-12-M6.8.3-EXP.txt <<'HANDOFF_M683'
+          cp HANDOFF-PsTJon-KosmicKrisp-M0-M9-2026-10-12-M6.8.2-EXP.txt HANDOFF-PsTJon-KosmicKrisp-M0-M9-2026-10-13-M6.8.4-EXP.txt
+          cat >> HANDOFF-PsTJon-KosmicKrisp-M0-M9-2026-10-13-M6.8.4-EXP.txt <<'HANDOFF_M683'
           
           ===========================================================
           M6.8.3-EXP 2026-10-12: update of prior handoff M0-M9
@@ -5807,15 +5876,28 @@ jobs:
           M0-M5 preserved. M6 ongoing graphics correctness/optimization.
           M7-M9 unvalidated and not claimed completed.
           HANDOFF_M683
-          test -s HANDOFF-PsTJon-KosmicKrisp-M0-M9-2026-10-12-M6.8.3-EXP.txt
+          cat >> HANDOFF-PsTJon-KosmicKrisp-M0-M9-2026-10-13-M6.8.4-EXP.txt <<'HANDOFF_M684'
+          
+          M6.8.4-EXP / 2026-10-13: NPUA80918 APP_VER=01.04 physical
+          recording (81.9 s), clear image but 13.8 -> 0 FPS at 20s,
+          severe iOS memory pressure (1007 MiB headroom / Vulkan 81%),
+          21 occlusion hard sync warnings, 292.8ms blocked compilation,
+          and RSX join stuck >18s. Root cause NOT conclusively proven.
+          Limit forced FATAL-level framebuffer reclaim to <=512 MiB
+          headroom on NPUA; keep ordinary SEVERE cleanup otherwise.
+          Include 4 stage markers M6.8.4 RSX_STALL_TRACE for diagnosis.
+          Ultra shader/WCB/true ZCull 512/KosmicKrisp unchanged.
+          No claim of native 30 or 60 FPS or frame generation.
+          HANDOFF_M684
+          test -s HANDOFF-PsTJon-KosmicKrisp-M0-M9-2026-10-13-M6.8.4-EXP.txt
 
       - uses: actions/upload-artifact@v4
         with:
-          name: PsTJon-KK-m06-8-3-EXPERIMENTAL-PSN-update-IPA
+          name: PsTJon-KK-m06-8-4-EXPERIMENTAL-RSX-pressure-IPA
           path: |
-            PsTJon-KK-M6.8.3-EXP.ipa
-            PsTJon-KK-M6.8.3-EXP-build.txt
-            HANDOFF-PsTJon-KosmicKrisp-M0-M9-2026-10-12-M6.8.3-EXP.txt
+            PsTJon-KK-M6.8.4-EXP.ipa
+            PsTJon-KK-M6.8.4-EXP-build.txt
+            HANDOFF-PsTJon-KosmicKrisp-M0-M9-2026-10-13-M6.8.4-EXP.txt
             pstjon-entitlements.txt
             M5-rpcs3-patch-stat.txt
             M4-mesa-patch-stat.txt
@@ -5839,9 +5921,9 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           set -euxo pipefail
-          gh release create pstjon-kk-m6.8.3-exp PsTJon-KK-M6.8.3-EXP.ipa HANDOFF-PsTJon-KosmicKrisp-M0-M9-2026-10-12-M6.8.3-EXP.txt \
+          gh release create pstjon-kk-m6.8.4-exp PsTJon-KK-M6.8.4-EXP.ipa HANDOFF-PsTJon-KosmicKrisp-M0-M9-2026-10-13-M6.8.4-EXP.txt \
             --target "$GITHUB_SHA" \
-            --title "PsTJon KosmicKrisp M6.8.3-EXP" \
-            --notes "M6.8.3 experimental: PSN update installer recognizes valid Sony PATCH packages for NPUA80918 01.04 and newer with strict Content ID matching and unit tests; GPU-fenced reclaim diagnostics added. Prior M6.8.2 experimental: explicit God of War Ascension NPUA80918 v1.00 support. Driver Vulkan occlusion query pools scoped to 512 (rather than unsafe large default), ZCull software 4096/3584, NPUA local RSX address guards and conservative GPU-fenced severe-pressure reclamation; fidelity Ultra/WCB/true ZCull/async shader fallback. M6.8.1 typeless geometry preflight and true Metal 4 GPU timing retained; BCUS-only 1.12 binary patches remain BCUS-only; Castlevania/Sleeping Dogs and other games unchanged. Target: visual correctness and native stable 30fps before testing real 60fps or separately labeled interpolated 60 presented frames. On-device tests are mandatory; not a claimed fix for menu corruption yet." \
+            --title "PsTJon KosmicKrisp M6.8.4-EXP" \
+            --notes "M6.8.4 experimental: full NPUA80918 0-FPS mitigation gates forced FATAL framebuffer eviction to <=512 MiB iOS headroom and adds RSX stall markers. Physical verification required; prior M6.8.3: PSN update installer recognizes valid Sony PATCH packages for NPUA80918 01.04 and newer with strict Content ID matching and unit tests; GPU-fenced reclaim diagnostics added. Prior M6.8.2 experimental: explicit God of War Ascension NPUA80918 v1.00 support. Driver Vulkan occlusion query pools scoped to 512 (rather than unsafe large default), ZCull software 4096/3584, NPUA local RSX address guards and conservative GPU-fenced severe-pressure reclamation; fidelity Ultra/WCB/true ZCull/async shader fallback. M6.8.1 typeless geometry preflight and true Metal 4 GPU timing retained; BCUS-only 1.12 binary patches remain BCUS-only; Castlevania/Sleeping Dogs and other games unchanged. Target: visual correctness and native stable 30fps before testing real 60fps or separately labeled interpolated 60 presented frames. On-device tests are mandatory; not a claimed fix for menu corruption yet." \
             --latest=false
-          gh release view pstjon-kk-m6.8.3-exp --json url,assets
+          gh release view pstjon-kk-m6.8.4-exp --json url,assets
