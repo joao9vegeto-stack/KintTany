@@ -1,4 +1,4 @@
-name: PsTJon KosmicKrisp M6.8.4
+name: PsTJon KosmicKrisp M6.8.5
 # runner-retry: fresh-run-after-macos-queue-failure
 
 on:
@@ -5601,6 +5601,181 @@ jobs:
           git -C rpcs3-src diff --check
           grep -q 'M6.8.4 SAFE_PRESSURE' rpcs3-src/rpcs3/Emu/RSX/VK/VKGSRender.cpp
 
+          # M6.8.5: controlled update on the effective generated RPCS3 sources.
+          # Physical NPUA80918 01.04 M6.8.4: OOB write 0xcf900000,
+          # output offsets > 0x0f900000, 947 occlusion sync warnings,
+          # 9700 diagnostic lines and intermittent half/quarter-frame blur.
+          # This change does NOT touch Metal attachment stores, shader precision,
+          # render target data, query pool reuse, asynchronous FIFO or resolution.
+          python3 - <<'PY_M685'
+          from pathlib import Path
+          from textwrap import dedent
+
+          root=Path('rpcs3-src/rpcs3')
+          p=root/'Emu/RSX/NV47/HW/nv3089.cpp'
+          s=p.read_text()
+          # M5-v13 recognizes a specific invalid blit in BCUS98232.
+          # M6.6 added full per-row source/dst guards, but restricted them
+          # to BCUS too. NPUA80918 uses the same local RSX address space.
+          # Use the actual renderer allocation instead of a guessed 256MiB.
+          marker='PsTJon M6.6 ASCENSION_DST_SPAN'
+          assert s.count(marker)==1, 'M6.6 destination guard not unique'
+          a=s.rfind('#ifdef RPCS3_IOS',0,s.index(marker))
+          b=s.index('#endif',s.index(marker))+len('#endif')
+          block=s[a:b]
+          old='if (Emu.GetTitleID() == "BCUS98232" &&'
+          new='if ((Emu.GetTitleID() == "BCUS98232" || Emu.GetTitleID() == "NPUA80918") &&'
+          assert block.count(old)==1, 'M6.6 title-specific guard moved'
+          block=block.replace(old,new,1)
+          old='constexpr u64 m66_local_bound = 0x0f900000ull;'
+          new='const u64 m66_local_bound = rsx::get_current_renderer()->local_mem_size; // M6.8.5 NV3089_REAL_LOCAL_SIZE'
+          assert block.count(old)==1, 'M6.6 hard-coded bound changed'
+          block=block.replace(old,new,1)
+          # Preserve the actual full-span check before any source read or
+          # destination write. Do not clamp, wrap or partially blit.
+          assert 'const u64 count = static_cast<u64>(clip_h - 1) * out_pitch +' in block
+          assert 'const u64 count = (rows ? (rows - 1) * in_pitch : 0) + bytes;' in block
+          assert block.index('ASCENSION_DST_SPAN') < block.index('ASCENSION_SRC_SPAN')
+          s=s[:a]+block+s[b:]
+          assert s.index('M6.8.5 NV3089_REAL_LOCAL_SIZE') < s.index('const u32 src_line_length')
+          assert 'M6.8.1 ASCENSION_TYPELESS_PREFLIGHT' not in s
+          p.write_text(s)
+
+          # M6.8.4 produced 9,700 RSX_STALL_TRACE lines within ~5.7 mins.
+          # Keep stage timing and counts while rate-limiting to one summary
+          # per 30 seconds. The handling itself remains unmodified.
+          p=root/'Emu/RSX/VK/VKGSRender.cpp'
+          s=p.read_text()
+          a=s.index('bool VKGSRender::on_vram_exhausted(rsx::problem_severity severity)')
+          b=s.index('void VKGSRender::',a+8)
+          block=s[a:b]
+          assert block.count('M6.8.4 RSX_STALL_TRACE')==4
+          marker='const bool m684_trace = Emu.GetTitleID() == "NPUA80918" && severity >= rsx::problem_severity::severe;'
+          assert block.count(marker)==1
+          block=block.replace(marker,marker+'''
+          const auto m685_pressure_start = std::chrono::steady_clock::now();
+          static u64 m685_pressure_calls = 0;
+          static u64 m685_pressure_max_us = 0;
+          static auto m685_next_report = std::chrono::steady_clock::time_point{};''',1)
+          for stage in ('texture_begin','texture_done','surface_begin','surface_done=%d'):
+              prefix='if (m684_trace) rsx_log.warning("M6.8.4 RSX_STALL_TRACE '+stage+'"'
+              assert block.count(prefix)==1, 'M6.8.4 event anchor missing '+stage
+              # Remove only the adjacent event log, preserve all source calls.
+              lines=block.splitlines(keepends=True)
+              found=[i for i,line in enumerate(lines) if prefix in line]
+              assert len(found)==1
+              lines.pop(found[0])
+              block=''.join(lines)
+          marker='const bool any_cache_relieved = (texture_cache_relieved || surface_cache_relieved);'
+          assert block.count(marker)==1
+          summary='''#ifdef RPCS3_IOS
+          if (m684_trace)
+          {
+              ++m685_pressure_calls;
+              const auto m685_now = std::chrono::steady_clock::now();
+              const auto m685_us = std::chrono::duration_cast<std::chrono::microseconds>(
+                  m685_now - m685_pressure_start).count();
+              if (static_cast<u64>(m685_us) > m685_pressure_max_us)
+                  m685_pressure_max_us = static_cast<u64>(m685_us);
+              if (m685_now >= m685_next_report)
+              {
+                  m685_next_report = m685_now + std::chrono::seconds(30);
+                  rsx_log.notice("PsTJon M6.8.5 RSX_PRESSURE_SUMMARY: calls=%llu max_ms=%.3f surface_relieved=%d headroom=%lluMiB",
+                      m685_pressure_calls, m685_pressure_max_us / 1000.0, surface_cache_relieved,
+                      rpcs3::ios::available_process_memory_headroom() / (1024 * 1024));
+                  m685_pressure_calls = 0;
+                  m685_pressure_max_us = 0;
+              }
+          }
+          #endif
+          '''
+          block=block.replace(marker,summary+marker,1)
+          assert 'M6.8.3 RECLAIM_GPU_DRAIN' in block
+          assert 'M6.8.4 SAFE_PRESSURE' in block
+          assert 'M6.8.4 RSX_STALL_TRACE' not in block
+          assert block.count('handle_memory_pressure(*m_current_command_buffer, m673_surface_severity)')==1
+          s=s[:a]+block+s[b:]
+          p.write_text(s)
+
+          # M6.3 software ZCull slot expansion may still be saturated;
+          # observe wait duration instead of changing query/fence semantics.
+          p=root/'Emu/RSX/RSXZCULL.cpp'
+          s=p.read_text()
+          old='''m_next_tsc = 0;
+          \t\t\t\tupdate(ptimer, m_pending_writes.front().sink);'''
+          assert s.count(old)==1, 'ZCull forced-resolution anchor moved'
+          new='''#ifdef RPCS3_IOS
+          \t\t\t\tconst bool m685_ascension_full = Emu.GetTitleID() == "NPUA80918";
+          \t\t\t\tconst auto m685_query_wait_start = std::chrono::steady_clock::now();
+          #endif
+          \t\t\t\tm_next_tsc = 0;
+          \t\t\t\tupdate(ptimer, m_pending_writes.front().sink);
+          #ifdef RPCS3_IOS
+          \t\t\t\tif (m685_ascension_full)
+          \t\t\t\t{
+          \t\t\t\t\tstatic u64 m685_forced_waits = 0;
+          \t\t\t\t\tstatic u64 m685_max_wait_us = 0;
+          \t\t\t\t\t++m685_forced_waits;
+          \t\t\t\t\tconst auto elapsed = std::chrono::duration_cast<std::chrono::microseconds>(
+          \t\t\t\t\t\tstd::chrono::steady_clock::now() - m685_query_wait_start).count();
+          \t\t\t\t\tif (static_cast<u64>(elapsed) > m685_max_wait_us)
+          \t\t\t\t\t\tm685_max_wait_us = static_cast<u64>(elapsed);
+          \t\t\t\t\tif ((m685_forced_waits & 255ull) == 0)
+          \t\t\t\t\t{
+          \t\t\t\t\t\trsx_log.notice("PsTJon M6.8.5 SOFTWARE_ZCULL_PRESSURE: waits=%llu max_ms=%.3f; hardware query results unchanged",
+          \t\t\t\t\t\t\tm685_forced_waits, m685_max_wait_us / 1000.0);
+          \t\t\t\t\t\tm685_max_wait_us = 0;
+          \t\t\t\t\t}
+          \t\t\t\t}
+          #endif'''
+          s=s.replace(old,new,1)
+          assert 'Emu.GetTitleID() == "NPUA80918"' in s
+          p.write_text(s)
+
+          # Cross-check the M5-M6 integration against the already-merged
+          # upstream blit/surface cache redesign (#19013). No duplicate
+          # surface-store implementation and no risky cherry-pick.
+          tex=(root/'Emu/RSX/VK/VKTexture.cpp').read_text()
+          qp=(root/'Emu/RSX/VK/VKQueryPool.cpp').read_text()
+          system=(root/'Emu/System.cpp').read_text()
+          mesa=Path('mesa-src/src/kosmickrisp/vulkan/kk_cmd_buffer.c').read_text()
+          assert 'M6.8.1 ASCENSION_TYPELESS_PREFLIGHT' in tex
+          assert 'M6.7.4 VK_COPY_GEOMETRY' in tex
+          assert 'm68_reuse_completed_ios' in qp
+          assert 'M6.8.2 NPUA_ASCENSION_FIDELITY' in system
+          assert 'g_cfg.video.write_color_buffers.set(true);' in system
+          assert 'g_cfg.video.disable_zcull_queries.set(false);' in system
+          assert 'force_store |= render->color_att_count > 0;' in mesa
+          assert 'M6.8.5 NV3089_REAL_LOCAL_SIZE' in (root/'Emu/RSX/NV47/HW/nv3089.cpp').read_text()
+          print('M6.8.5 generated-source audit PASS: exact title, dynamic local VRAM, query fences, typeless geometry and Metal color store preserved')
+          PY_M685
+
+          # Edge-case checks for full two-dimensional range, unsigned
+          # arithmetic, exact end-of-VRAM and the six invalid 16KiB strides
+          # in physical M6.8.4. A conservative guard must reject OOB, not
+          # map the missing memory nor truncate a blit.
+          python3 - <<'PY_M685_TEST'
+          B = 0x0f900000
+          def span(offset, x, y, pitch, width, height, bpp, limit):
+              start = int(offset)+int(y)*int(pitch)+int(x)*int(bpp)
+              size = (int(height)-1)*int(pitch)+int(width)*int(bpp)
+              return width>0 and height>0 and size>0 and start<limit and size<=limit-start
+          assert span(0x0f620000,0,0,4096,1024,1024,4,B)
+          assert not span(0x0f800000,0,0,4096,1024,1024,4,B)
+          assert span(B-4096,0,0,4096,1024,1,4,B)
+          assert not span(B,0,0,4096,1024,1,4,B)
+          for extra in range(0,0x18000,0x4000):
+              assert not span(B+extra,0,0,4096,1024,1,4,B)
+          assert not span(0xffffffff,0,0,4096,1024,1024,4,B)
+          assert not span(0,0,0,4096,1024,0,4,B)
+          print('M6.8.5 local 2D copy span edge tests PASS')
+          PY_M685_TEST
+          git -C rpcs3-src diff --check
+          git -C mesa-src diff --check
+          grep -q 'M6.8.5 NV3089_REAL_LOCAL_SIZE' rpcs3-src/rpcs3/Emu/RSX/NV47/HW/nv3089.cpp
+          grep -q 'M6.8.5 RSX_PRESSURE_SUMMARY' rpcs3-src/rpcs3/Emu/RSX/VK/VKGSRender.cpp
+          grep -q 'M6.8.5 SOFTWARE_ZCULL_PRESSURE' rpcs3-src/rpcs3/Emu/RSX/RSXZCULL.cpp
+
           rm -rf build-kk-host kk-host-tools
           meson setup build-kk-host mesa-src \
             --buildtype=release \
@@ -5812,12 +5987,13 @@ jobs:
           codesign -d --entitlements :- "$APP" 2>&1 | tee pstjon-entitlements.txt
           (
             cd package
-            ditto -c -k --sequesterRsrc --keepParent Payload "$GITHUB_WORKSPACE/PsTJon-KK-M6.8.4-EXP.ipa"
+            ditto -c -k --sequesterRsrc --keepParent Payload "$GITHUB_WORKSPACE/PsTJon-KK-M6.8.5-EXP.ipa"
           )
-          shasum -a 256 PsTJon-KK-M6.8.4-EXP.ipa
+          shasum -a 256 PsTJon-KK-M6.8.5-EXP.ipa
       - name: Build report
         run: |
           {
+            echo "PsTJon M6.8.5-EXP: validated complete Ascension NPUA local VRAM 2D copy spans using real allocation size, eliminated 9700 per-event pressure traces, aggregated pressure timing, sampled software ZCull waits and audited M5-M6 Vulkan/Metal fidelity. GPU/frametime measurement remains observational, 30 FPS not verified." 
             echo "PsTJon M6.8.4-EXP: NPUA80918 0-FPS stall mitigation; defer FATAL framebuffer purge at >512 MiB headroom, preserve normal SEVERE reclaim, and add RSX stall trace. No guaranteed 30fps claim." 
             echo "PsTJon M6.8.3-EXP: Sony PSN PS3 update Content ID validation tests; safe GPU drain timing (no forced changes to resource release). Based on fully successful M6.8.1. New NPUA80918 complete God of War Ascension APP_VER 01.00 gets Vulkan QueryPool512 instead of default, 4096/3584 software ZCull slots, scoped local memory and texture safety and pre-fatal GPU-fenced safe reclaim. Ultra precision/WCB/real ZCull/async interpreter fidelity profile scoped to NPUA only. BCUS98232 v1.12 EBOOT/MLAA binary patches are NOT copied. All M6.8.1 native Metal GPU callback timing, 6-stage CPU profiling, typeless full mip validation and safe GPU reuse preserved. No native 30/60 FPS or frame generation claimed before repeated physical tests."
             echo "EXP metrics: presented-frame cadence, frame stutters, process footprint, RSX estimated load, Vulkan cache lookup wall-time, command flush wall-time, invalid texture and DMA blit guard events"
@@ -5831,11 +6007,11 @@ jobs:
             echo "Volk: $VOLK_SHA"
             echo "FFmpeg: $FFMPEG_VERSION"
             echo "Core: $(shasum -a 256 libRPCS3Core.dylib | awk '{print $1}')"
-            echo "IPA: $(shasum -a 256 PsTJon-KK-M6.8.4-EXP.ipa | awk '{print $1}')"
-          } > PsTJon-KK-M6.8.4-EXP-build.txt
+            echo "IPA: $(shasum -a 256 PsTJon-KK-M6.8.5-EXP.ipa | awk '{print $1}')"
+          } > PsTJon-KK-M6.8.5-EXP-build.txt
 
-          cp HANDOFF-PsTJon-KosmicKrisp-M0-M9-2026-10-12-M6.8.2-EXP.txt HANDOFF-PsTJon-KosmicKrisp-M0-M9-2026-10-13-M6.8.4-EXP.txt
-          cat >> HANDOFF-PsTJon-KosmicKrisp-M0-M9-2026-10-13-M6.8.4-EXP.txt <<'HANDOFF_M683'
+          cp HANDOFF-PsTJon-KosmicKrisp-M0-M9-2026-10-12-M6.8.2-EXP.txt HANDOFF-PsTJon-KosmicKrisp-M0-M9-2026-10-13-M6.8.5-EXP.txt
+          cat >> HANDOFF-PsTJon-KosmicKrisp-M0-M9-2026-10-13-M6.8.5-EXP.txt <<'HANDOFF_M683'
           
           ===========================================================
           M6.8.3-EXP 2026-10-12: update of prior handoff M0-M9
@@ -5876,7 +6052,7 @@ jobs:
           M0-M5 preserved. M6 ongoing graphics correctness/optimization.
           M7-M9 unvalidated and not claimed completed.
           HANDOFF_M683
-          cat >> HANDOFF-PsTJon-KosmicKrisp-M0-M9-2026-10-13-M6.8.4-EXP.txt <<'HANDOFF_M684'
+          cat >> HANDOFF-PsTJon-KosmicKrisp-M0-M9-2026-10-13-M6.8.5-EXP.txt <<'HANDOFF_M684'
           
           M6.8.4-EXP / 2026-10-13: NPUA80918 APP_VER=01.04 physical
           recording (81.9 s), clear image but 13.8 -> 0 FPS at 20s,
@@ -5889,15 +6065,39 @@ jobs:
           Ultra shader/WCB/true ZCull 512/KosmicKrisp unchanged.
           No claim of native 30 or 60 FPS or frame generation.
           HANDOFF_M684
-          test -s HANDOFF-PsTJon-KosmicKrisp-M0-M9-2026-10-13-M6.8.4-EXP.txt
+          cat >> HANDOFF-PsTJon-KosmicKrisp-M0-M9-2026-10-13-M6.8.5-EXP.txt <<'HANDOFF_M685'
+          
+          M6.8.5 EXP: physical M6.8.4 NPUA80918 v01.04 advanced
+          ~5.7 minutes before unmapped writes beginning 0xcf900000;
+          horizontal/partial blur returned intermittently, 6-15 FPS.
+          Restore full source/destination span guard M6.6 to full NPUA,
+          checking actual local_mem_size; no VRAM expansion or clamping.
+          Do not claim invalid writes now produce valid pixels; observe
+          changes in dropped-blit counters and render target corruption.
+          Replace M6.8.4 9700 per-event diagnostic warnings with bounded
+          30s pressure summary and sample software query wait pressure.
+          Keep KosmicKrisp, shader ULTRA, WCB, REAL ZCull, bounded
+          Vulkan QueryPool with GPU-fenced reuse and earlier copy guards.
+          PR #19013 upstream surface-cache redesign is already ancestral;
+          do not cherry-pick or replace it. Audit local M5-M6 patches.
+          GPU pipeline 448MB cache hit/miss and GPU Metal timing must be
+          assessed with physical telemetry BEFORE changing cache caps,
+          CPU/RSX workers, query semantics or render target lifetimes.
+          Host tests demonstrate numeric range checks only; CI PASS does
+          not prove correct FPS, image or absence of runtime crash.
+          Next test: same NPUA 01.04 save/route, 10+ min including
+          blurred scene and prior failing scene; send video+log,
+          validate local source/dst warnings, ZCull waits and memory.
+          HANDOFF_M685
+          test -s HANDOFF-PsTJon-KosmicKrisp-M0-M9-2026-10-13-M6.8.5-EXP.txt
 
       - uses: actions/upload-artifact@v4
         with:
-          name: PsTJon-KK-m06-8-4-EXPERIMENTAL-RSX-pressure-IPA
+          name: PsTJon-KK-m06-8-5-EXPERIMENTAL-VRAM-ZCULL-IPA
           path: |
-            PsTJon-KK-M6.8.4-EXP.ipa
-            PsTJon-KK-M6.8.4-EXP-build.txt
-            HANDOFF-PsTJon-KosmicKrisp-M0-M9-2026-10-13-M6.8.4-EXP.txt
+            PsTJon-KK-M6.8.5-EXP.ipa
+            PsTJon-KK-M6.8.5-EXP-build.txt
+            HANDOFF-PsTJon-KosmicKrisp-M0-M9-2026-10-13-M6.8.5-EXP.txt
             pstjon-entitlements.txt
             M5-rpcs3-patch-stat.txt
             M4-mesa-patch-stat.txt
@@ -5914,16 +6114,16 @@ jobs:
 
       # Best-effort direct release asset: accessible on iPhone without
       # extracting the Actions ZIP. Artifact step above stays authoritative.
-      - name: Publish direct M6.8.3-EXP IPA
+      - name: Publish direct M6.8.5-EXP IPA
         if: success()
         continue-on-error: true
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
           set -euxo pipefail
-          gh release create pstjon-kk-m6.8.4-exp PsTJon-KK-M6.8.4-EXP.ipa HANDOFF-PsTJon-KosmicKrisp-M0-M9-2026-10-13-M6.8.4-EXP.txt \
+          gh release create pstjon-kk-m6.8.5-exp PsTJon-KK-M6.8.5-EXP.ipa HANDOFF-PsTJon-KosmicKrisp-M0-M9-2026-10-13-M6.8.5-EXP.txt \
             --target "$GITHUB_SHA" \
-            --title "PsTJon KosmicKrisp M6.8.4-EXP" \
-            --notes "M6.8.4 experimental: full NPUA80918 0-FPS mitigation gates forced FATAL framebuffer eviction to <=512 MiB iOS headroom and adds RSX stall markers. Physical verification required; prior M6.8.3: PSN update installer recognizes valid Sony PATCH packages for NPUA80918 01.04 and newer with strict Content ID matching and unit tests; GPU-fenced reclaim diagnostics added. Prior M6.8.2 experimental: explicit God of War Ascension NPUA80918 v1.00 support. Driver Vulkan occlusion query pools scoped to 512 (rather than unsafe large default), ZCull software 4096/3584, NPUA local RSX address guards and conservative GPU-fenced severe-pressure reclamation; fidelity Ultra/WCB/true ZCull/async shader fallback. M6.8.1 typeless geometry preflight and true Metal 4 GPU timing retained; BCUS-only 1.12 binary patches remain BCUS-only; Castlevania/Sleeping Dogs and other games unchanged. Target: visual correctness and native stable 30fps before testing real 60fps or separately labeled interpolated 60 presented frames. On-device tests are mandatory; not a claimed fix for menu corruption yet." \
+            --title "PsTJon KosmicKrisp M6.8.5-EXP" \
+            --notes "M6.8.5 experimental: complete Ascension NPUA80918 bounds-checked NV3089 2D LOCAL copies using true local size; reduce diagnostic hot-loop logging; instrument software ZCull wait pressure, preserve Ultra/WCB/KosmicKrisp, no verified stable 30FPS. Prior M6.8.4: full NPUA80918 0-FPS mitigation gates forced FATAL framebuffer eviction to <=512 MiB iOS headroom and adds RSX stall markers. Physical verification required; prior M6.8.3: PSN update installer recognizes valid Sony PATCH packages for NPUA80918 01.04 and newer with strict Content ID matching and unit tests; GPU-fenced reclaim diagnostics added. Prior M6.8.2 experimental: explicit God of War Ascension NPUA80918 v1.00 support. Driver Vulkan occlusion query pools scoped to 512 (rather than unsafe large default), ZCull software 4096/3584, NPUA local RSX address guards and conservative GPU-fenced severe-pressure reclamation; fidelity Ultra/WCB/true ZCull/async shader fallback. M6.8.1 typeless geometry preflight and true Metal 4 GPU timing retained; BCUS-only 1.12 binary patches remain BCUS-only; Castlevania/Sleeping Dogs and other games unchanged. Target: visual correctness and native stable 30fps before testing real 60fps or separately labeled interpolated 60 presented frames. On-device tests are mandatory; not a claimed fix for menu corruption yet." \
             --latest=false
-          gh release view pstjon-kk-m6.8.4-exp --json url,assets
+          gh release view pstjon-kk-m6.8.5-exp --json url,assets
