@@ -6007,7 +6007,7 @@ jobs:
           bp = root/'Utilities/bin_patch.cpp'
           s=bp.read_text()
           marker='''\t\tif (const auto yml_type = pair.second.Type(); yml_type != YAML::NodeType::Map)'''
-          assert s.count(marker)==1, 'Patch parser key type-check moved'
+          assert s.count(marker)>=2 and s.index(marker) < s.index('// Skip Anchors'), 'Main YAML map check must precede special Anchors key; later parser also has matching check'
           s=s.replace(marker,'''#ifdef RPCS3_IOS
           \t\t// M6.8.7 PATCH_ANCHORS_NULL: YAML::Node Null is valid
           \t\t// for an unused Anchors section in downloaded catalogs.
