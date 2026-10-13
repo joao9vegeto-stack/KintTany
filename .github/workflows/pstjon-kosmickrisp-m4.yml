@@ -1,4 +1,4 @@
-name: PsTJon KosmicKrisp M6.8.6
+name: PsTJon KosmicKrisp M6.8.7
 # runner-retry: fresh-run-after-macos-queue-failure
 
 on:
@@ -5933,6 +5933,136 @@ jobs:
           grep -q 'M6.8.6 NPUA_BOUNDED_RECLAIM' rpcs3-src/rpcs3/Emu/RSX/VK/VKResourceManager.cpp
           grep -q 'M6.8.6 NPUA_FATAL_SYNC' rpcs3-src/rpcs3/Emu/RSX/VK/VKGSRender.cpp
 
+          # M6.8.7 EXP - global Vulkan query allocator safety + official patch
+          # catalog YAML compatibility. Physical NPUB30830 01.01:
+          # vkCreateQueryPool returned VK_ERROR_OUT_OF_HOST_MEMORY; the
+          # still-default iOS fallback allowed enormous query pools, unlike
+          # the 256/512 pools already used for several other titles.
+          # Keep real hardware ZCull, query references, GPU fences, Metal
+          # framebuffer stores, precision and per-title configurations.
+          python3 - <<'PY_M687'
+          from pathlib import Path
+          root = Path('rpcs3-src')
+          vk = root/'rpcs3/Emu/RSX/VK/VKGSRender.cpp'
+          s = vk.read_text()
+          a = s.index('m_occlusion_query_manager = std::make_unique<vk::query_pool_manager>')
+          b = s.index(';', a)
+          clause = s[a:b]
+          assert clause.count(': OCCLUSION_MAX_POOL_SIZE') == 1, 'Global fallback pool selector changed'
+          assert 'NPUB31372' in clause and 'NPUA80918' in clause, 'Prior specialized pools must remain'
+          clause = clause.replace(': OCCLUSION_MAX_POOL_SIZE',
+              ': std::min<u32>(OCCLUSION_MAX_POOL_SIZE, 512u)',1)
+          s = s[:a] + clause + s[b:]
+          marker='m_occlusion_map.resize(rsx::reports::occlusion_query_count);'
+          assert s.count(marker)==1
+          s=s.replace(marker,marker+'''
+          #ifdef RPCS3_IOS
+          \tif (Emu.GetTitleID() == "NPUB30830")
+          \t\trsx_log.notice("PsTJon M6.8.7 DMC_QUERY_CAP: Vulkan pool <=512 entries; real hardware ZCull and deferred GPU lifetime unchanged");
+          #endif''',1)
+          vk.write_text(s)
+
+          # Observe pool allocation pressure at the actual construction
+          # site. Never return a fabricated query result, destroy a pool
+          # with live GPU refs, or ignore vkCreateQueryPool errors.
+          qp = root/'rpcs3/Emu/RSX/VK/VKQueryPool.cpp'
+          s=qp.read_text()
+          marker='''\t\t\t\tm_current_query_pool = std::make_unique<query_pool>(*owner, query_type, count);'''
+          assert s.count(marker)==1, 'Expected one creation site after M6.5'
+          replacement='''#ifdef RPCS3_IOS
+          \t\t\t\tstatic u64 m687_new_pools = 0;
+          \t\t\t\tconst u64 m687_n = ++m687_new_pools;
+          \t\t\t\tif (m687_n <= 8 || (m687_n % 32) == 0)
+          \t\t\t\t{
+          \t\t\t\t\trsx_log.warning("PsTJon M6.8.7 VULKAN_QUERY_CREATE: title=%s created=%llu size=%u in_flight=%llu idle=%llu; no query/result shortcuts",
+          \t\t\t\t\t\tEmu.GetTitleID(), m687_n, count, m_consumed_pools.size(), m_query_pool_cache.size());
+          \t\t\t\t}
+          #endif
+          \t\t\t\tm_current_query_pool = std::make_unique<query_pool>(*owner, query_type, count);'''
+          s=s.replace(marker,replacement,1)
+          # Prior completed refs might become available after the last
+          # cleanup. Collect them before creating another pool, using
+          # existing deferred manager ownership (no forced fence waits).
+          marker='''\tvoid query_pool_manager::reallocate_pool(vk::command_buffer& cmd)
+          \t{
+          \t\tif (m_current_query_pool)'''
+          assert s.count(marker)==1
+          s=s.replace(marker,''' \tvoid query_pool_manager::reallocate_pool(vk::command_buffer& cmd)
+          \t{
+          #ifdef RPCS3_IOS
+          \t\t// M6.8.7 VULKAN_QUERY_RECLAIM: release already completed
+          \t\t// pools via existing GPU-deferred GC, never live queries.
+          \t\trun_pool_cleanup();
+          #endif
+          \t\tif (m_current_query_pool)'''.replace(' \tvoid','\tvoid'),1)
+          assert 'm68_reuse_completed_ios' in s
+          assert 'm_query_pool_cache.size() >= 3' in s
+          assert 'VK_QUERY_RESULT_WAIT_BIT' in s
+          qp.write_text(s)
+
+          # YAML catalog: downloaded patch repository may contain
+          # "Anchors:" (YAML null). The original parser erroneously
+          # validates it as a Map before skipping the reserved key.
+          # Allow null/map Anchors and still reject malformed scalar/list.
+          bp = root/'Utilities/bin_patch.cpp'
+          s=bp.read_text()
+          marker='''\t\tif (const auto yml_type = pair.second.Type(); yml_type != YAML::NodeType::Map)'''
+          assert s.count(marker)==1, 'Patch parser key type-check moved'
+          s=s.replace(marker,'''#ifdef RPCS3_IOS
+          \t\t// M6.8.7 PATCH_ANCHORS_NULL: YAML::Node Null is valid
+          \t\t// for an unused Anchors section in downloaded catalogs.
+          \t\t// Skip it before the generic Map check, leaving every
+          \t\t// actual patch entry under strict Map validation.
+          \t\tif (main_key == patch_key::anchors &&
+          \t\t\t(pair.second.IsNull() || pair.second.IsMap()))
+          \t\t{
+          \t\t\tcontinue;
+          \t\t}
+          #endif
+          \t\tif (const auto yml_type = pair.second.Type(); yml_type != YAML::NodeType::Map)''',1)
+          assert 'M5.15: BCUS98232 v1.12 Disable MLAA selected' in s
+          bp.write_text(s)
+
+          # Source-state integration assertions for all previously
+          # confirmed graphics and safe query-lifetime behavior.
+          vk_text=vk.read_text()
+          assert 'M6.8.7 DMC_QUERY_CAP' in vk_text
+          assert 'std::min<u32>(OCCLUSION_MAX_POOL_SIZE, 512u)' in vk_text
+          assert 'M6.8.6 NPUA_FATAL_SYNC' in vk_text
+          assert 'M6.8.2 NPUA_ASCENSION_QUERY_POOL' in vk_text
+          assert 'M6.8.5 RSX_PRESSURE_SUMMARY' in vk_text
+          assert 'm68_reuse_completed_ios' in qp.read_text()
+          assert 'M6.8.7 VULKAN_QUERY_RECLAIM' in qp.read_text()
+          assert 'M6.8.7 VULKAN_QUERY_CREATE' in qp.read_text()
+          assert 'M6.8.7 PATCH_ANCHORS_NULL' in bp.read_text()
+          assert 'M6.8.2 NPUA_ASCENSION_FIDELITY' in (root/'rpcs3/Emu/System.cpp').read_text()
+          assert 'force_store |= render->color_att_count > 0;' in Path('mesa-src/src/kosmickrisp/vulkan/kk_cmd_buffer.c').read_text()
+          print('M6.8.7 source assertions PASS: global 512 query cap, GPU ownership, YAML null Anchors, Ascension fidelity')
+          PY_M687
+          git -C rpcs3-src diff --check
+          git -C mesa-src diff --check
+          # Assertion-only integration smoke checks. Compiling RPCS3Core
+          # below is mandatory: no mock may substitute for native ABI.
+          python3 - <<'PY_M687_TEST'
+          from pathlib import Path
+          p=Path('rpcs3-src/rpcs3/Emu/RSX/VK/VKGSRender.cpp').read_text()
+          a=p.index('m_occlusion_query_manager = std::make_unique<vk::query_pool_manager>')
+          b=p.index(';',a)
+          segment=p[a:b]
+          assert segment.count('OCCLUSION_MAX_POOL_SIZE')==1
+          assert 'NPUB30424' in segment and 'NPUB31372' in segment
+          assert 'NPUA80918' in segment and 'NPUB30818' in segment
+          assert 'std::min<u32>(OCCLUSION_MAX_POOL_SIZE, 512u)' in segment
+          q=Path('rpcs3-src/rpcs3/Emu/RSX/VK/VKQueryPool.cpp').read_text()
+          assert q.index('M6.8.7 VULKAN_QUERY_RECLAIM') < q.index('if (m_current_query_pool)',q.index('void query_pool_manager::reallocate_pool'))
+          assert q.count('std::make_unique<query_pool>(*owner, query_type, count)')==1
+          assert 'm_query_pool_cache.size() >= 3' in q
+          bp=Path('rpcs3-src/Utilities/bin_patch.cpp').read_text()
+          assert bp.index('M6.8.7 PATCH_ANCHORS_NULL') < bp.index('expected Map, found')
+          assert 'pair.second.IsNull() || pair.second.IsMap()' in bp
+          print('M6.8.7 integration checks PASS')
+          PY_M687_TEST
+
           rm -rf build-kk-host kk-host-tools
           meson setup build-kk-host mesa-src \
             --buildtype=release \
@@ -6144,12 +6274,13 @@ jobs:
           codesign -d --entitlements :- "$APP" 2>&1 | tee pstjon-entitlements.txt
           (
             cd package
-            ditto -c -k --sequesterRsrc --keepParent Payload "$GITHUB_WORKSPACE/PsTJon-KK-M6.8.6-EXP.ipa"
+            ditto -c -k --sequesterRsrc --keepParent Payload "$GITHUB_WORKSPACE/PsTJon-KK-M6.8.7-EXP.ipa"
           )
-          shasum -a 256 PsTJon-KK-M6.8.6-EXP.ipa
+          shasum -a 256 PsTJon-KK-M6.8.7-EXP.ipa
       - name: Build report
         run: |
           {
+            echo "PsTJon M6.8.7-EXP: globally cap oversized default iOS Vulkan occlusion pools at 512 (existing 256/512 title pools preserved), reclaim completed/deferred pools before new allocation, bound allocation telemetry, accept null/map Anchors in official patch YAML before generic strict validation. No query result fabrication, no unsafe fence bypass, no shader/Metal changes. HTTP frontend not modified; physical DmC/Ascension validation mandatory." 
             echo "PsTJon M6.8.6-EXP: physical A/B NPUA80918 v01.12 on M6.8.4 (8.745 median FPS, 379 occlusion hard-sync warnings, allocator 138 percent). Restore full-edition pre-M6.8.5 NV3089 blit behavior; add bounded moderate/severe reclaim for >768 MiB headroom, preserve all FATAL or critical pressure handlers; instrument actual fatal flush/drain, no shader/depth/Metal changes. Not a verified 30 FPS improvement." 
             echo "PsTJon M6.8.5-EXP: validated complete Ascension NPUA local VRAM 2D copy spans using real allocation size, eliminated 9700 per-event pressure traces, aggregated pressure timing, sampled software ZCull waits and audited M5-M6 Vulkan/Metal fidelity. GPU/frametime measurement remains observational, 30 FPS not verified." 
             echo "PsTJon M6.8.4-EXP: NPUA80918 0-FPS stall mitigation; defer FATAL framebuffer purge at >512 MiB headroom, preserve normal SEVERE reclaim, and add RSX stall trace. No guaranteed 30fps claim." 
@@ -6165,11 +6296,11 @@ jobs:
             echo "Volk: $VOLK_SHA"
             echo "FFmpeg: $FFMPEG_VERSION"
             echo "Core: $(shasum -a 256 libRPCS3Core.dylib | awk '{print $1}')"
-            echo "IPA: $(shasum -a 256 PsTJon-KK-M6.8.6-EXP.ipa | awk '{print $1}')"
-          } > PsTJon-KK-M6.8.6-EXP-build.txt
+            echo "IPA: $(shasum -a 256 PsTJon-KK-M6.8.7-EXP.ipa | awk '{print $1}')"
+          } > PsTJon-KK-M6.8.7-EXP-build.txt
 
-          cp HANDOFF-PsTJon-KosmicKrisp-M0-M9-2026-10-12-M6.8.2-EXP.txt HANDOFF-PsTJon-KosmicKrisp-M0-M9-2026-10-13-M6.8.6-EXP.txt
-          cat >> HANDOFF-PsTJon-KosmicKrisp-M0-M9-2026-10-13-M6.8.6-EXP.txt <<'HANDOFF_M683'
+          cp HANDOFF-PsTJon-KosmicKrisp-M0-M9-2026-10-12-M6.8.2-EXP.txt HANDOFF-PsTJon-KosmicKrisp-M0-M9-2026-10-13-M6.8.7-EXP.txt
+          cat >> HANDOFF-PsTJon-KosmicKrisp-M0-M9-2026-10-13-M6.8.7-EXP.txt <<'HANDOFF_M683'
           
           ===========================================================
           M6.8.3-EXP 2026-10-12: update of prior handoff M0-M9
@@ -6210,7 +6341,7 @@ jobs:
           M0-M5 preserved. M6 ongoing graphics correctness/optimization.
           M7-M9 unvalidated and not claimed completed.
           HANDOFF_M683
-          cat >> HANDOFF-PsTJon-KosmicKrisp-M0-M9-2026-10-13-M6.8.6-EXP.txt <<'HANDOFF_M684'
+          cat >> HANDOFF-PsTJon-KosmicKrisp-M0-M9-2026-10-13-M6.8.7-EXP.txt <<'HANDOFF_M684'
           
           M6.8.4-EXP / 2026-10-13: NPUA80918 APP_VER=01.04 physical
           recording (81.9 s), clear image but 13.8 -> 0 FPS at 20s,
@@ -6223,7 +6354,7 @@ jobs:
           Ultra shader/WCB/true ZCull 512/KosmicKrisp unchanged.
           No claim of native 30 or 60 FPS or frame generation.
           HANDOFF_M684
-          cat >> HANDOFF-PsTJon-KosmicKrisp-M0-M9-2026-10-13-M6.8.6-EXP.txt <<'HANDOFF_M685'
+          cat >> HANDOFF-PsTJon-KosmicKrisp-M0-M9-2026-10-13-M6.8.7-EXP.txt <<'HANDOFF_M685'
           
           M6.8.5 EXP: physical M6.8.4 NPUA80918 v01.04 advanced
           ~5.7 minutes before unmapped writes beginning 0xcf900000;
@@ -6247,7 +6378,7 @@ jobs:
           blurred scene and prior failing scene; send video+log,
           validate local source/dst warnings, ZCull waits and memory.
           HANDOFF_M685
-          cat >> HANDOFF-PsTJon-KosmicKrisp-M0-M9-2026-10-13-M6.8.6-EXP.txt <<'HANDOFF_M686'
+          cat >> HANDOFF-PsTJon-KosmicKrisp-M0-M9-2026-10-13-M6.8.7-EXP.txt <<'HANDOFF_M686'
           
           M6.8.6 EXP / 2026-10-13
           A/B SAME TITLE NPUA80918 v01.12 on M6.8.4 vs M6.8.5:
@@ -6269,15 +6400,42 @@ jobs:
           NPUA 01.12 save/route and preserve records of last stage.
           HANDLE CRITICAL AS A DIAGNOSTIC BUILD; don't disable GPU safety.
           HANDOFF_M686
-          test -s HANDOFF-PsTJon-KosmicKrisp-M0-M9-2026-10-13-M6.8.6-EXP.txt
+          cat >> HANDOFF-PsTJon-KosmicKrisp-M0-M9-2026-10-13-M6.8.7-EXP.txt <<'HANDOFF_M687'
+          
+          M6.8.7 EXP / 2026-10-13
+          Physical NPUB30830 01.01 DmC booted on M6.8.6 with actual
+          VK_ERROR_OUT_OF_HOST_MEMORY from vkCreateQueryPool in
+          vkutils/query_pool.hpp:24, without proof of a process-wide
+          full-RAM condition. Query pools for NPUA and known titles
+          were already capped 512/256; remaining iOS titles used the
+          very large upstream OCCLUSION_MAX_POOL_SIZE default.
+          Global non-specialized cap now <=512, preserves known smaller
+          pools, actual hardware ZCull and GPU-fenced query results.
+          Run existing deferred-consumed-pool cleanup before creating
+          another pool and instrument fresh pool creations (first 8,
+          every 32) with active consumed and idle cache counts. Idle
+          cache remains <=3; GPU-in-flight pools are NOT force-destroyed.
+          Also repair parser Utilities/bin_patch.cpp: downloaded YAML
+          Anchors: null is skipped BEFORE generic Map type validation.
+          Other non-map patch definitions still rejected; no forced
+          download or replacement of a user catalog, no reformatting
+          original YAML. Release contains official prebuilt iOS shell;
+          network stack/download UI were NOT modified, slow network
+          unproven. Source compile and one workflow pass do not prove
+          OOM permanently eliminated; test DmC NPUB30830 and all four
+          installed titles in controlled 10+min runs with logs and
+          verify no image regression. Preserve graphical fixes and
+          all other branches. 30/60FPS not achieved by this change.
+          HANDOFF_M687
+          test -s HANDOFF-PsTJon-KosmicKrisp-M0-M9-2026-10-13-M6.8.7-EXP.txt
 
       - uses: actions/upload-artifact@v4
         with:
-          name: PsTJon-KK-m06-8-6-EXPERIMENTAL-PRESSURE-IPA
+          name: PsTJon-KK-m06-8-7-EXPERIMENTAL-QUERY-POOL-STABILITY-IPA
           path: |
-            PsTJon-KK-M6.8.6-EXP.ipa
-            PsTJon-KK-M6.8.6-EXP-build.txt
-            HANDOFF-PsTJon-KosmicKrisp-M0-M9-2026-10-13-M6.8.6-EXP.txt
+            PsTJon-KK-M6.8.7-EXP.ipa
+            PsTJon-KK-M6.8.7-EXP-build.txt
+            HANDOFF-PsTJon-KosmicKrisp-M0-M9-2026-10-13-M6.8.7-EXP.txt
             pstjon-entitlements.txt
             M5-rpcs3-patch-stat.txt
             M4-mesa-patch-stat.txt
@@ -6301,9 +6459,9 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           set -euxo pipefail
-          gh release create pstjon-kk-m6.8.6-exp PsTJon-KK-M6.8.6-EXP.ipa HANDOFF-PsTJon-KosmicKrisp-M0-M9-2026-10-13-M6.8.6-EXP.txt \
+          gh release create pstjon-kk-m6.8.7-exp PsTJon-KK-M6.8.7-EXP.ipa HANDOFF-PsTJon-KosmicKrisp-M0-M9-2026-10-13-M6.8.7-EXP.txt \
             --target "$GITHUB_SHA" \
-            --title "PsTJon KosmicKrisp M6.8.6-EXP" \
-            --notes "M6.8.6 experimental: A/B verified NPUA80918 v01.12 baseline, restore pre-M6.8.5 full-edition blit flow, rate-limit repeated nonfatal memory reclaim only with >=768MiB process headroom, instrument actual fatal GPU flush/drain, preserve full fidelity and safety. No 30FPS claim, on-device tests required. Prior M6.8.5: complete Ascension NPUA80918 bounds-checked NV3089 2D LOCAL copies using true local size; reduce diagnostic hot-loop logging; instrument software ZCull wait pressure, preserve Ultra/WCB/KosmicKrisp, no verified stable 30FPS. Prior M6.8.4: full NPUA80918 0-FPS mitigation gates forced FATAL framebuffer eviction to <=512 MiB iOS headroom and adds RSX stall markers. Physical verification required; prior M6.8.3: PSN update installer recognizes valid Sony PATCH packages for NPUA80918 01.04 and newer with strict Content ID matching and unit tests; GPU-fenced reclaim diagnostics added. Prior M6.8.2 experimental: explicit God of War Ascension NPUA80918 v1.00 support. Driver Vulkan occlusion query pools scoped to 512 (rather than unsafe large default), ZCull software 4096/3584, NPUA local RSX address guards and conservative GPU-fenced severe-pressure reclamation; fidelity Ultra/WCB/true ZCull/async shader fallback. M6.8.1 typeless geometry preflight and true Metal 4 GPU timing retained; BCUS-only 1.12 binary patches remain BCUS-only; Castlevania/Sleeping Dogs and other games unchanged. Target: visual correctness and native stable 30fps before testing real 60fps or separately labeled interpolated 60 presented frames. On-device tests are mandatory; not a claimed fix for menu corruption yet." \
+            --title "PsTJon KosmicKrisp M6.8.7-EXP" \
+            --notes "M6.8.7 experimental: Global iOS QueryPool cap 512 with GPU-owned lifetime and creation counters; parser accepts YAML Anchors:null but still validates other patch keys. Existing M6.8.6 GPU fidelity preserved. Frontend network transport unchanged; crashes and 30FPS not yet verified on device. Prior M6.8.6: A/B verified NPUA80918 v01.12 baseline, restore pre-M6.8.5 full-edition blit flow, rate-limit repeated nonfatal memory reclaim only with >=768MiB process headroom, instrument actual fatal GPU flush/drain, preserve full fidelity and safety. No 30FPS claim, on-device tests required. Prior M6.8.5: complete Ascension NPUA80918 bounds-checked NV3089 2D LOCAL copies using true local size; reduce diagnostic hot-loop logging; instrument software ZCull wait pressure, preserve Ultra/WCB/KosmicKrisp, no verified stable 30FPS. Prior M6.8.4: full NPUA80918 0-FPS mitigation gates forced FATAL framebuffer eviction to <=512 MiB iOS headroom and adds RSX stall markers. Physical verification required; prior M6.8.3: PSN update installer recognizes valid Sony PATCH packages for NPUA80918 01.04 and newer with strict Content ID matching and unit tests; GPU-fenced reclaim diagnostics added. Prior M6.8.2 experimental: explicit God of War Ascension NPUA80918 v1.00 support. Driver Vulkan occlusion query pools scoped to 512 (rather than unsafe large default), ZCull software 4096/3584, NPUA local RSX address guards and conservative GPU-fenced severe-pressure reclamation; fidelity Ultra/WCB/true ZCull/async shader fallback. M6.8.1 typeless geometry preflight and true Metal 4 GPU timing retained; BCUS-only 1.12 binary patches remain BCUS-only; Castlevania/Sleeping Dogs and other games unchanged. Target: visual correctness and native stable 30fps before testing real 60fps or separately labeled interpolated 60 presented frames. On-device tests are mandatory; not a claimed fix for menu corruption yet." \
             --latest=false
-          gh release view pstjon-kk-m6.8.6-exp --json url,assets
+          gh release view pstjon-kk-m6.8.7-exp --json url,assets
