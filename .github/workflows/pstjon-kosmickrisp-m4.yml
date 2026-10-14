@@ -1,4 +1,4 @@
-name: PsTJon KosmicKrisp M6.8.7
+name: PsTJon KosmicKrisp M6.8.8
 # runner-retry: fresh-run-after-macos-queue-failure
 
 on:
@@ -6063,6 +6063,206 @@ jobs:
           print('M6.8.7 integration checks PASS')
           PY_M687_TEST
 
+          # M6.8.8 - source-level audit / safe global depilation (M4 -> M5 -> M6).
+          # No new per-title workarounds, no shader/color/depth changes, no
+          # extra render-target eviction, no fake ZCull or query returns.
+          python3 - <<'PY_M688'
+          from pathlib import Path
+          root=Path('rpcs3-src/rpcs3')
+          mesa=Path('mesa-src/src/kosmickrisp')
+
+          # M5.23/M5.24 independently useful GPU roundtrip canary was
+          # mistakenly shipped permanently as an Objective-C constructor:
+          # it creates a Metal device/queue/texture and WAITs on the GPU
+          # every launch. It has completed its forensic purpose. Remove
+          # only this isolated constructor, retaining the real Vulkan ->
+          # KosmicKrisp -> Metal path, all load/store and texture fixes.
+          p=mesa/'bridge/mtl_device.m'
+          t=p.read_text()
+          marker='static void pstjon_m523_metal_roundtrip(void)'
+          assert t.count(marker)==1, 'M5.23 standalone canary changed'
+          start=t.rfind('#if TARGET_OS_IOS',0,t.index(marker))
+          end=t.find('#endif',t.index(marker))
+          assert start>=0 and end>start and end-start<4500
+          block=t[start:end+len('#endif')]
+          for token in (marker,'[cb waitUntilCompleted]','PSTJON_M524_METAL_RENDER','newTextureWithDescriptor'):
+              assert token in block,token
+          t=t[:start]+t[end+len('#endif'):]
+          assert marker not in t and 'PSTJON_M524_METAL_RENDER' not in t
+          assert 'pstjon_kk_m522_metal_validation' not in t
+          p.write_text(t)
+          print('M6.8.8: removed unused synchronous Metal constructor canary')
+
+          # The M6.8.7 physical log printed >40,000 successful
+          # sys_event create/destroy/connect calls at WARNING level.
+          # Sample successful syscall entry logs 1/256 on iOS only:
+          # no guest syscall skipped, no event queue/port semantics
+          # altered, and all error paths and unread-event warnings kept.
+          targets={
+              'Emu/Cell/lv2/sys_event.cpp':(
+                  'sys_event_queue_create','sys_event_queue_destroy',
+                  'sys_event_port_create','sys_event_port_destroy',
+                  'sys_event_port_connect_local',
+                  'sys_event_port_disconnect'
+              ),
+              'Emu/Cell/lv2/sys_spu.cpp':(
+                  'sys_spu_thread_group_connect_event_all_threads',
+                  'sys_spu_thread_group_disconnect_event_all_threads'
+              ),
+          }
+          for relative,names in targets.items():
+              p=root/relative
+              t=p.read_text()
+              if '#include <atomic>' not in t:
+                  assert '#include "stdafx.h"' in t
+                  t=t.replace('#include "stdafx.h"','#include "stdafx.h"\n#include <atomic>',1)
+              for name in names:
+                  needle=f'.warning("{name}('
+                  at=t.find(needle)
+                  assert at>=0, f'{relative}:{name} not found'
+                  line_start=t.rfind('\n',0,at)+1
+                  line_end=t.find('\n',at)
+                  line=t[line_start:line_end]
+                  assert line.count('.warning(')==1 and line.rstrip().endswith(');'),name
+                  assert 'sys_event.warning' in line or 'sys_spu.warning' in line
+                  tab=line[:len(line)-len(line.lstrip())]
+                  replacement=(tab+'#ifdef RPCS3_IOS\n'
+                      +tab+f'static std::atomic<u64> m688_log_{name}{{0}};\n'
+                      +tab+f'if ((m688_log_{name}.fetch_add(1, std::memory_order_relaxed) & 255ull) == 0)\n'
+                      +tab+'#endif\n'+line)
+                  t=t[:line_start]+replacement+t[line_end:]
+              assert t.count('m688_log_')==len(names)*2
+              p.write_text(t)
+          print('M6.8.8: sampled 8 success-path warning callsites, preserved event operations and actual warnings')
+
+          # M6.8.6 bounded reclaim *only for NPUA80918*, yet the new
+          # DmC physical session shows nonfatal pressure at 1526MiB
+          # headroom and allocator ~56% immediately before RSX silence.
+          # Globalize conservatively: throttle ONLY moderate pressure
+          # scans for 100ms while >=1024MiB headroom, never severe/fatal.
+          # Preserve the renderer's exact existing recovery routine.
+          p=root/'Emu/RSX/VK/VKResourceManager.cpp'
+          t=p.read_text()
+          original='''if (Emu.GetTitleID() == "NPUA80918" &&
+          				load_severity < rsx::problem_severity::fatal &&
+          				rpcs3::ios::available_process_memory_headroom() >= (768ull * 1024 * 1024))'''
+          # Accept tabs from generated C++; match semantics, not whitespace.
+          import re
+          pattern=(r'if \(Emu\.GetTitleID\(\) == "NPUA80918" &&\s*'
+                   r'load_severity < rsx::problem_severity::fatal &&\s*'
+                   r'rpcs3::ios::available_process_memory_headroom\(\) >= '
+                   r'\(768ull \* 1024 \* 1024\)\)')
+          replacement=('if (load_severity == rsx::problem_severity::moderate &&\n'
+                      '\t\t\t\trpcs3::ios::available_process_memory_headroom() >= (1024ull * 1024 * 1024))')
+          t,count=re.subn(pattern,replacement,t)
+          assert count==1,'M6.8.6 NPUA-only throttling pattern moved'
+          t=t.replace('// M6.8.6 NPUA_BOUNDED_RECLAIM: avoid thousands of repeated',
+                      '// M6.8.8 GLOBAL_MODERATE_RECLAIM: avoid repeated',1)
+          t=t.replace('// trim scans per minute while >768 MiB process headroom.',
+                      '// scans at moderate pressure when >=1024 MiB headroom.',1)
+          t=t.replace('// Never defer FATAL, even when its allocator load is high.',
+                      '// Do not defer SEVERE or FATAL or low-headroom recovery.',1)
+          assert 'M6.8.8 GLOBAL_MODERATE_RECLAIM' in t
+          assert 'm686_next_reclaim = m686_now + std::chrono::milliseconds(100)' in t
+          assert t.count('vmm_handle_memory_pressure(load_severity);')==1
+          p.write_text(t)
+
+          # Global, bounded (2s) stage markers around the exact moderate
+          # texture and render-target reclaim. A stage_begin without
+          # corresponding stage_done pinpoints a blocking operation even
+          # if the RSX never emits another FPS sample. Never skip work.
+          p=root/'Emu/RSX/VK/VKGSRender.cpp'
+          t=p.read_text()
+          a=t.index('bool VKGSRender::on_vram_exhausted(rsx::problem_severity severity)')
+          b=t.index('void VKGSRender::',a+8)
+          body=t[a:b]
+          marker='texture_cache_relieved |= m_texture_cache.handle_memory_pressure(severity);'
+          assert body.count(marker)==1
+          instrumentation='''#ifdef RPCS3_IOS
+          	const auto m688_enter = std::chrono::steady_clock::now();
+          	static auto m688_next_trace = std::chrono::steady_clock::time_point{};
+          	const bool m688_trace = severity >= rsx::problem_severity::moderate &&
+          		m688_enter >= m688_next_trace;
+          	if (m688_trace)
+          	{
+          		m688_next_trace = m688_enter + std::chrono::seconds(2);
+          		rsx_log.notice("M6.8.8 GLOBAL_RECLAIM stage=texture_begin severity=%d", static_cast<int>(severity));
+          	}
+          #endif
+          '''
+          body=body.replace(marker,instrumentation+marker+'''
+          #ifdef RPCS3_IOS
+          	if (m688_trace)
+          		rsx_log.notice("M6.8.8 GLOBAL_RECLAIM stage=texture_done ms=%.3f",
+          			std::chrono::duration_cast<std::chrono::microseconds>(
+          				std::chrono::steady_clock::now()-m688_enter).count()/1000.0);
+          #endif
+          ''',1)
+          marker='if (m_rtts.handle_memory_pressure(*m_current_command_buffer, m673_surface_severity))'
+          assert body.count(marker)==1
+          body=body.replace(marker,'''#ifdef RPCS3_IOS
+          	if (m688_trace)
+          		rsx_log.notice("M6.8.8 GLOBAL_RECLAIM stage=surface_begin");
+          #endif
+          '''+marker,1)
+          marker='m_rtts.trim(*m_current_command_buffer, m673_surface_severity);'
+          assert body.count(marker)==1
+          body=body.replace(marker,'''#ifdef RPCS3_IOS
+          		if (m688_trace)
+          			rsx_log.notice("M6.8.8 GLOBAL_RECLAIM stage=trim_begin");
+          #endif
+          '''+marker,1)
+          marker='const bool any_cache_relieved = (texture_cache_relieved || surface_cache_relieved);'
+          assert body.count(marker)==1
+          body=body.replace(marker,'''#ifdef RPCS3_IOS
+          	if (m688_trace)
+          		rsx_log.notice("M6.8.8 GLOBAL_RECLAIM stage=surface_done total_ms=%.3f relieved=%d",
+          			std::chrono::duration_cast<std::chrono::microseconds>(
+          				std::chrono::steady_clock::now()-m688_enter).count()/1000.0,
+          			surface_cache_relieved);
+          #endif
+          '''+marker,1)
+          assert body.count('M6.8.8 GLOBAL_RECLAIM')==5
+          assert 'M6.8.6 NPUA_FATAL_SYNC' in body
+          assert 'M6.8.4 SAFE_PRESSURE' in body
+          assert body.count('m_rtts.handle_memory_pressure(*m_current_command_buffer, m673_surface_severity)')==1
+          assert body.count('m_texture_cache.handle_memory_pressure(severity)')==1
+          t=t[:a]+body+t[b:]
+          p.write_text(t)
+
+          # Fidelity/ABI invariants: keep all proven structural safeguards.
+          sys=(root/'Emu/System.cpp').read_text()
+          qp=(root/'Emu/RSX/VK/VKQueryPool.cpp').read_text()
+          tex=(root/'Emu/RSX/VK/VKTexture.cpp').read_text()
+          drv=(mesa/'vulkan/kk_cmd_buffer.c').read_text()
+          assert 'M6.8.2 NPUA_ASCENSION_FIDELITY' in sys
+          assert 'M6.7.4 VK_COPY_GEOMETRY' in tex
+          assert 'M6.8.1 ASCENSION_TYPELESS_PREFLIGHT' in tex
+          assert 'M6.8.7 VULKAN_QUERY_RECLAIM' in qp
+          assert 'm68_reuse_completed_ios' in qp
+          assert 'force_store |= render->color_att_count > 0;' in drv
+          assert 'M6.8.8 GLOBAL_MODERATE_RECLAIM' in (root/'Emu/RSX/VK/VKResourceManager.cpp').read_text()
+          assert 'M6.8.8 GLOBAL_RECLAIM' in p.read_text()
+          print('M6.8.8 GLOBAL M4-M6 audit PASS: no graphics-accuracy, query-lifetime or guest-sync relaxation')
+          PY_M688
+          git -C rpcs3-src diff --check
+          git -C mesa-src diff --check
+          test "$(grep -c 'm688_log_' rpcs3-src/rpcs3/Emu/Cell/lv2/sys_event.cpp)" -ge 12
+          ! grep -q 'pstjon_m523_metal_roundtrip' mesa-src/src/kosmickrisp/bridge/mtl_device.m
+          grep -q 'M6.8.8 GLOBAL_RECLAIM' rpcs3-src/rpcs3/Emu/RSX/VK/VKGSRender.cpp
+
+          # Boundary and incident-focused host tests; do not claim FPS.
+          python3 - <<'PY_M688_TEST'
+          def throttle(severity,headroom):
+              return severity=='moderate' and headroom>=1024
+          for h in (0,189,502,767,1023,1024,1526,4096):
+              assert not throttle('severe',h)
+              assert not throttle('fatal',h)
+              if h < 1024: assert not throttle('moderate',h)
+              else: assert throttle('moderate',h)
+          print('M6.8.8 pressure boundary tests PASS')
+          PY_M688_TEST
+
           rm -rf build-kk-host kk-host-tools
           meson setup build-kk-host mesa-src \
             --buildtype=release \
@@ -6274,12 +6474,13 @@ jobs:
           codesign -d --entitlements :- "$APP" 2>&1 | tee pstjon-entitlements.txt
           (
             cd package
-            ditto -c -k --sequesterRsrc --keepParent Payload "$GITHUB_WORKSPACE/PsTJon-KK-M6.8.7-EXP.ipa"
+            ditto -c -k --sequesterRsrc --keepParent Payload "$GITHUB_WORKSPACE/PsTJon-KK-M6.8.8-EXP.ipa"
           )
-          shasum -a 256 PsTJon-KK-M6.8.7-EXP.ipa
+          shasum -a 256 PsTJon-KK-M6.8.8-EXP.ipa
       - name: Build report
         run: |
           {
+            echo "PsTJon M6.8.8-EXP: M4-M6.8.7 audit. Removed obsolete synchronous M5.23 Metal launch canary, sampled eight high-frequency success-only LV2 event syscall warning logs, global moderate pressure bounded scans at >1024MiB only, 2s stage markers in RSX texture and surface cleanup; preserved ZCull, cache identity, GPU fences, WCB/Ultra, KosmicKrisp. Needs physical iPhone validation, no stable 30 FPS claim." 
             echo "PsTJon M6.8.7-EXP: globally cap oversized default iOS Vulkan occlusion pools at 512 (existing 256/512 title pools preserved), reclaim completed/deferred pools before new allocation, bound allocation telemetry, accept null/map Anchors in official patch YAML before generic strict validation. No query result fabrication, no unsafe fence bypass, no shader/Metal changes. HTTP frontend not modified; physical DmC/Ascension validation mandatory." 
             echo "PsTJon M6.8.6-EXP: physical A/B NPUA80918 v01.12 on M6.8.4 (8.745 median FPS, 379 occlusion hard-sync warnings, allocator 138 percent). Restore full-edition pre-M6.8.5 NV3089 blit behavior; add bounded moderate/severe reclaim for >768 MiB headroom, preserve all FATAL or critical pressure handlers; instrument actual fatal flush/drain, no shader/depth/Metal changes. Not a verified 30 FPS improvement." 
             echo "PsTJon M6.8.5-EXP: validated complete Ascension NPUA local VRAM 2D copy spans using real allocation size, eliminated 9700 per-event pressure traces, aggregated pressure timing, sampled software ZCull waits and audited M5-M6 Vulkan/Metal fidelity. GPU/frametime measurement remains observational, 30 FPS not verified." 
@@ -6296,11 +6497,11 @@ jobs:
             echo "Volk: $VOLK_SHA"
             echo "FFmpeg: $FFMPEG_VERSION"
             echo "Core: $(shasum -a 256 libRPCS3Core.dylib | awk '{print $1}')"
-            echo "IPA: $(shasum -a 256 PsTJon-KK-M6.8.7-EXP.ipa | awk '{print $1}')"
-          } > PsTJon-KK-M6.8.7-EXP-build.txt
+            echo "IPA: $(shasum -a 256 PsTJon-KK-M6.8.8-EXP.ipa | awk '{print $1}')"
+          } > PsTJon-KK-M6.8.8-EXP-build.txt
 
-          cp HANDOFF-PsTJon-KosmicKrisp-M0-M9-2026-10-12-M6.8.2-EXP.txt HANDOFF-PsTJon-KosmicKrisp-M0-M9-2026-10-13-M6.8.7-EXP.txt
-          cat >> HANDOFF-PsTJon-KosmicKrisp-M0-M9-2026-10-13-M6.8.7-EXP.txt <<'HANDOFF_M683'
+          cp HANDOFF-PsTJon-KosmicKrisp-M0-M9-2026-10-12-M6.8.2-EXP.txt HANDOFF-PsTJon-KosmicKrisp-M0-M9-2026-10-13-M6.8.8-EXP.txt
+          cat >> HANDOFF-PsTJon-KosmicKrisp-M0-M9-2026-10-13-M6.8.8-EXP.txt <<'HANDOFF_M683'
           
           ===========================================================
           M6.8.3-EXP 2026-10-12: update of prior handoff M0-M9
@@ -6341,7 +6542,7 @@ jobs:
           M0-M5 preserved. M6 ongoing graphics correctness/optimization.
           M7-M9 unvalidated and not claimed completed.
           HANDOFF_M683
-          cat >> HANDOFF-PsTJon-KosmicKrisp-M0-M9-2026-10-13-M6.8.7-EXP.txt <<'HANDOFF_M684'
+          cat >> HANDOFF-PsTJon-KosmicKrisp-M0-M9-2026-10-13-M6.8.8-EXP.txt <<'HANDOFF_M684'
           
           M6.8.4-EXP / 2026-10-13: NPUA80918 APP_VER=01.04 physical
           recording (81.9 s), clear image but 13.8 -> 0 FPS at 20s,
@@ -6354,7 +6555,7 @@ jobs:
           Ultra shader/WCB/true ZCull 512/KosmicKrisp unchanged.
           No claim of native 30 or 60 FPS or frame generation.
           HANDOFF_M684
-          cat >> HANDOFF-PsTJon-KosmicKrisp-M0-M9-2026-10-13-M6.8.7-EXP.txt <<'HANDOFF_M685'
+          cat >> HANDOFF-PsTJon-KosmicKrisp-M0-M9-2026-10-13-M6.8.8-EXP.txt <<'HANDOFF_M685'
           
           M6.8.5 EXP: physical M6.8.4 NPUA80918 v01.04 advanced
           ~5.7 minutes before unmapped writes beginning 0xcf900000;
@@ -6378,7 +6579,7 @@ jobs:
           blurred scene and prior failing scene; send video+log,
           validate local source/dst warnings, ZCull waits and memory.
           HANDOFF_M685
-          cat >> HANDOFF-PsTJon-KosmicKrisp-M0-M9-2026-10-13-M6.8.7-EXP.txt <<'HANDOFF_M686'
+          cat >> HANDOFF-PsTJon-KosmicKrisp-M0-M9-2026-10-13-M6.8.8-EXP.txt <<'HANDOFF_M686'
           
           M6.8.6 EXP / 2026-10-13
           A/B SAME TITLE NPUA80918 v01.12 on M6.8.4 vs M6.8.5:
@@ -6400,7 +6601,7 @@ jobs:
           NPUA 01.12 save/route and preserve records of last stage.
           HANDLE CRITICAL AS A DIAGNOSTIC BUILD; don't disable GPU safety.
           HANDOFF_M686
-          cat >> HANDOFF-PsTJon-KosmicKrisp-M0-M9-2026-10-13-M6.8.7-EXP.txt <<'HANDOFF_M687'
+          cat >> HANDOFF-PsTJon-KosmicKrisp-M0-M9-2026-10-13-M6.8.8-EXP.txt <<'HANDOFF_M687'
           
           M6.8.7 EXP / 2026-10-13
           Physical NPUB30830 01.01 DmC booted on M6.8.6 with actual
@@ -6427,15 +6628,47 @@ jobs:
           verify no image regression. Preserve graphical fixes and
           all other branches. 30/60FPS not achieved by this change.
           HANDOFF_M687
-          test -s HANDOFF-PsTJon-KosmicKrisp-M0-M9-2026-10-13-M6.8.7-EXP.txt
+          cat >> HANDOFF-PsTJon-KosmicKrisp-M0-M9-2026-10-13-M6.8.8-EXP.txt <<'HANDOFF_M688'
+
+          M6.8.8-EXP 2026-10-13: GLOBAL CODE DEPILATION AUDIT
+          M4 workflow ~895 lines, M6.8.7 ~6468 lines due sequential
+          Python patch generator; only effective final generated source
+          is ground truth. Pinned RPCS3 XITRIX 3ec23f1 / KosmicKrisp
+          Mesa bfe063f. M5.22 aggressive Metal debug constructor
+          already reverted in M6.7. M5.7 bad height clamp reverted
+          M5.8. M6.6.11 early synchronous eviction reverted M6.7.
+          M5.23/M5.24 Metal4 4x4 validation constructor was STILL
+          present and performed GPU waitUntilCompleted at every dylib
+          startup; removed now from production generated source.
+          DmC NPUB30830 M6.8.7 generated >40k normal sys_event
+          warning lines and thousands of SPU event warnings; sampled
+          only 8 successful entry callsites to 1/256 events on iOS.
+          Unread events, unexpected errors and syscall mechanics remain.
+          Global moderate memory cache cleanup rate-limited at 100ms
+          ONLY when >=1024MiB process headroom; severe and fatal ALWAYS
+          run, unlike the old NPUA-only policy which also delayed severe.
+          Global stage markers M6.8.8 GLOBAL_RECLAIM (texture_begin/done,
+          surface_begin, trim_begin, surface_done) sampled every 2s to
+          determine first blocked operation when frame output ceases.
+          Baselines unchanged: Metal attachment stores, Ultra/WCB for
+          Ascension, real ZCull, 512-pool and fence-safe recycling,
+          typo and span safeguards, KosmicKrisp provider, cache UUID.
+          No native 30 or 60 FPS or gameplay stability is proven yet.
+          Next: same saves / patches, 3x10m physical test for DmC,
+          Ascension v1.12, Castlevania and Sleeping Dogs. Compare
+          render correctness and last GLOBAL_RECLAIM marker if stalls.
+          M0-M6 still in progress; M7 30FPS, M8 60 native, M9
+          frame interpolation/integration pending. Do not merge M9.
+          HANDOFF_M688
+          test -s HANDOFF-PsTJon-KosmicKrisp-M0-M9-2026-10-13-M6.8.8-EXP.txt
 
       - uses: actions/upload-artifact@v4
         with:
-          name: PsTJon-KK-m06-8-7-EXPERIMENTAL-QUERY-POOL-STABILITY-IPA
+          name: PsTJon-KK-m06-8-8-GLOBAL-DEBLOAT-TRACING-IPA
           path: |
-            PsTJon-KK-M6.8.7-EXP.ipa
-            PsTJon-KK-M6.8.7-EXP-build.txt
-            HANDOFF-PsTJon-KosmicKrisp-M0-M9-2026-10-13-M6.8.7-EXP.txt
+            PsTJon-KK-M6.8.8-EXP.ipa
+            PsTJon-KK-M6.8.8-EXP-build.txt
+            HANDOFF-PsTJon-KosmicKrisp-M0-M9-2026-10-13-M6.8.8-EXP.txt
             pstjon-entitlements.txt
             M5-rpcs3-patch-stat.txt
             M4-mesa-patch-stat.txt
@@ -6452,16 +6685,16 @@ jobs:
 
       # Best-effort direct release asset: accessible on iPhone without
       # extracting the Actions ZIP. Artifact step above stays authoritative.
-      - name: Publish direct M6.8.6-EXP IPA
+      - name: Publish direct M6.8.8-EXP IPA
         if: success()
         continue-on-error: true
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
           set -euxo pipefail
-          gh release create pstjon-kk-m6.8.7-exp PsTJon-KK-M6.8.7-EXP.ipa HANDOFF-PsTJon-KosmicKrisp-M0-M9-2026-10-13-M6.8.7-EXP.txt \
+          gh release create pstjon-kk-m6.8.8-exp PsTJon-KK-M6.8.8-EXP.ipa HANDOFF-PsTJon-KosmicKrisp-M0-M9-2026-10-13-M6.8.8-EXP.txt \
             --target "$GITHUB_SHA" \
-            --title "PsTJon KosmicKrisp M6.8.7-EXP" \
-            --notes "M6.8.7 experimental: Global iOS QueryPool cap 512 with GPU-owned lifetime and creation counters; parser accepts YAML Anchors:null but still validates other patch keys. Existing M6.8.6 GPU fidelity preserved. Frontend network transport unchanged; crashes and 30FPS not yet verified on device. Prior M6.8.6: A/B verified NPUA80918 v01.12 baseline, restore pre-M6.8.5 full-edition blit flow, rate-limit repeated nonfatal memory reclaim only with >=768MiB process headroom, instrument actual fatal GPU flush/drain, preserve full fidelity and safety. No 30FPS claim, on-device tests required. Prior M6.8.5: complete Ascension NPUA80918 bounds-checked NV3089 2D LOCAL copies using true local size; reduce diagnostic hot-loop logging; instrument software ZCull wait pressure, preserve Ultra/WCB/KosmicKrisp, no verified stable 30FPS. Prior M6.8.4: full NPUA80918 0-FPS mitigation gates forced FATAL framebuffer eviction to <=512 MiB iOS headroom and adds RSX stall markers. Physical verification required; prior M6.8.3: PSN update installer recognizes valid Sony PATCH packages for NPUA80918 01.04 and newer with strict Content ID matching and unit tests; GPU-fenced reclaim diagnostics added. Prior M6.8.2 experimental: explicit God of War Ascension NPUA80918 v1.00 support. Driver Vulkan occlusion query pools scoped to 512 (rather than unsafe large default), ZCull software 4096/3584, NPUA local RSX address guards and conservative GPU-fenced severe-pressure reclamation; fidelity Ultra/WCB/true ZCull/async shader fallback. M6.8.1 typeless geometry preflight and true Metal 4 GPU timing retained; BCUS-only 1.12 binary patches remain BCUS-only; Castlevania/Sleeping Dogs and other games unchanged. Target: visual correctness and native stable 30fps before testing real 60fps or separately labeled interpolated 60 presented frames. On-device tests are mandatory; not a claimed fix for menu corruption yet." \
+            --title "PsTJon KosmicKrisp M6.8.8-EXP" \
+            --notes "M6.8.8 experimental: global M4-M6 cleanup removing obsolete synchronous M5.23 GPU canary, reducing LV2 event success-log volume, bounded moderate-only VRAM scans with >=1024MiB headroom, sampled RSX texture/surface reclaim stages. KosmicKrisp, shader precision, real ZCull, GPU fences and framebuffer stores preserved; iPhone gameplay validation required, not proven 30 FPS. Prior M6.8.7: Global iOS QueryPool cap 512 with GPU-owned lifetime and creation counters; parser accepts YAML Anchors:null but still validates other patch keys. Existing M6.8.6 GPU fidelity preserved. Frontend network transport unchanged; crashes and 30FPS not yet verified on device. Prior M6.8.6: A/B verified NPUA80918 v01.12 baseline, restore pre-M6.8.5 full-edition blit flow, rate-limit repeated nonfatal memory reclaim only with >=768MiB process headroom, instrument actual fatal GPU flush/drain, preserve full fidelity and safety. No 30FPS claim, on-device tests required. Prior M6.8.5: complete Ascension NPUA80918 bounds-checked NV3089 2D LOCAL copies using true local size; reduce diagnostic hot-loop logging; instrument software ZCull wait pressure, preserve Ultra/WCB/KosmicKrisp, no verified stable 30FPS. Prior M6.8.4: full NPUA80918 0-FPS mitigation gates forced FATAL framebuffer eviction to <=512 MiB iOS headroom and adds RSX stall markers. Physical verification required; prior M6.8.3: PSN update installer recognizes valid Sony PATCH packages for NPUA80918 01.04 and newer with strict Content ID matching and unit tests; GPU-fenced reclaim diagnostics added. Prior M6.8.2 experimental: explicit God of War Ascension NPUA80918 v1.00 support. Driver Vulkan occlusion query pools scoped to 512 (rather than unsafe large default), ZCull software 4096/3584, NPUA local RSX address guards and conservative GPU-fenced severe-pressure reclamation; fidelity Ultra/WCB/true ZCull/async shader fallback. M6.8.1 typeless geometry preflight and true Metal 4 GPU timing retained; BCUS-only 1.12 binary patches remain BCUS-only; Castlevania/Sleeping Dogs and other games unchanged. Target: visual correctness and native stable 30fps before testing real 60fps or separately labeled interpolated 60 presented frames. On-device tests are mandatory; not a claimed fix for menu corruption yet." \
             --latest=false
-          gh release view pstjon-kk-m6.8.7-exp --json url,assets
+          gh release view pstjon-kk-m6.8.8-exp --json url,assets
