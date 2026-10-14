@@ -1,5 +1,7 @@
-# M6.9 visual A/B candidate for the provided DmC NPUB30830 profile.
-# Only change: Bilinear -> MetalFX Spatial. Internal resolution remains 75%.
+# M6.9.1 DmC NPUB30830 validation profile.
+# M6.9.1 source A/B changes ARM64 SPU reservation waits globally; this config
+# keeps the settings from the user's physical M6.9 log unchanged.
+# Keep game options aligned with the user's physical M6.9 log.
 Core:
   PPU Decoder: Recompiler (LLVM)
   PPU Threads: 2
@@ -15,7 +17,7 @@ Core:
   SPU Reservation Busy Waiting Percentage 1: 100
   SPU Reservation Busy Waiting Enabled: false
   SPU GETLLAR Busy Waiting Percentage: 100
-  Disable SPU GETLLAR Spin Optimization: false
+  Disable SPU GETLLAR Spin Optimization: true
   SPU Debug: false
   MFC Debug: false
   Preferred SPU Threads: 0
@@ -145,7 +147,7 @@ Video:
   Allow Host GPU Labels: false
   Disable MSL Fast Math: false
   Disable Asynchronous Memory Manager: true
-  Output Scaling Mode: MetalFX Spatial
+  Output Scaling Mode: Bilinear
   Record With Overlays: true
   Disable Hardware Blending: false
   Disable Hardware ColorSpace Remapping: false
