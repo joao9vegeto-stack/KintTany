@@ -1,4 +1,4 @@
-name: PsTJon KosmicKrisp M6.9.1
+name: PsTJon KosmicKrisp M6.9.2
 # runner-retry: fresh-run-after-macos-queue-failure
 
 on:
@@ -4024,7 +4024,7 @@ jobs:
               const u64 misses = exp_pipeline_misses.exchange(0, std::memory_order_relaxed);
               const u64 max_pipeline = exp_pipeline_max_us.exchange(0, std::memory_order_relaxed);
               const u64 footprint_mb = process_memory_footprint() / 1048576ull;
-              pstjon_exp_log.notice("EXPERIMENTAL M6.9.1-EXP fps_present=%.2f frame_samples=%llu frametime_p50_ms=%.2f frametime_p95_ms=%.2f frametime_p99_ms=%.2f frame_max_ms=%.2f frame_spikes_50ms=%llu rsx_load_proxy=%u memory_footprint_mb=%llu flushes=%llu hard_syncs=%llu slow_flushes_30ms=%llu flush_max_ms=%.2f pipeline_lookups=%llu pipeline_misses=%llu pipeline_max_ms=%.2f texture_oob_total=%llu blit_src_oob_total=%llu blit_dst_oob_total=%llu",
+              pstjon_exp_log.notice("EXPERIMENTAL M6.9.2-EXP fps_present=%.2f frame_samples=%llu frametime_p50_ms=%.2f frametime_p95_ms=%.2f frametime_p99_ms=%.2f frame_max_ms=%.2f frame_spikes_50ms=%llu rsx_load_proxy=%u memory_footprint_mb=%llu flushes=%llu hard_syncs=%llu slow_flushes_30ms=%llu flush_max_ms=%.2f pipeline_lookups=%llu pipeline_misses=%llu pipeline_max_ms=%.2f texture_oob_total=%llu blit_src_oob_total=%llu blit_dst_oob_total=%llu",
                   frames / sec, frame_intervals, frame_p50_ms, frame_p95_ms, frame_p99_ms,
                   max_frame / 1e6, spikes, rsx_load,
                   footprint_mb, flushes, hards, slow_flushes, max_flush / 1000.0,
@@ -4090,7 +4090,7 @@ jobs:
           
           """)
           s = s.replace(anchor, functions + anchor, 1)
-          assert s.count("EXPERIMENTAL M6.9.1-EXP")==1
+          assert s.count("EXPERIMENTAL M6.9.2-EXP")==1
           perf.write_text(s)
           
           vk = root / "Emu/RSX/VK/VKGSRender.cpp"
@@ -4173,7 +4173,7 @@ jobs:
           print("EXPERIMENTAL LIMITATIONS: NO true Metal GPU timestamps, NO automatic visual darkness/corruption classification")
           PY
           git -C rpcs3-src diff --check
-          grep -q 'EXPERIMENTAL M6.9.1-EXP' rpcs3-src/rpcs3/ios/RPCS3IOSPerformance.cpp
+          grep -q 'EXPERIMENTAL M6.9.2-EXP' rpcs3-src/rpcs3/ios/RPCS3IOSPerformance.cpp
 
           python3 - <<'PY'
           # M6.6.8-EXP: Ascension physical test on M6.6.7-EXP showed
@@ -6303,66 +6303,122 @@ jobs:
           print('M6.8.8 pressure boundary tests PASS')
           PY_M688_TEST
 
-          # M6.9.1 framed-time integration and ARM64 reservation-WFE assertions.
-          python3 - <<'PY_M69_TEST'
+          # M6.9.2: physical AB rollback to run 114 (baseline SPU).
+          # Run 115 added DmC-specific scheduling and regressed gameplay.
+          # Run 116 used WFE waits on ARM64 and regressed further.
+          # Do NOT apply either patch; preserve pinned upstream busy_wait.
+          # Sample actual original wait cost without manipulating guest timing.
+          python3 - <<'PY_M692'
           from pathlib import Path
-          p=Path('rpcs3-src/rpcs3/ios/RPCS3IOSPerformance.cpp').read_text()
-          for marker in ('exp_frame_hist[11]', 'frametime_p50_ms', 'frametime_p95_ms',
-                         'frametime_p99_ms', 'frame_samples=%llu', 'EXPERIMENTAL M6.9.1-EXP'):
-              assert marker in p, marker
-          assert p.count('exp_frame_hist[bucket].fetch_add(1, std::memory_order_relaxed)') == 1
-          print('M6.9.1 frametime p50/p95/p99 integration PASS')
-          PY_M69_TEST
-          python3 - <<'PY_M691_PATCH'
-          from pathlib import Path
-          p=Path('rpcs3-src/rpcs3/Emu/Cell/SPUThread.cpp')
-          s=p.read_text()
-          getllar_old='''\t\t\t\t\t\t\t\telse
+          root=Path('rpcs3-src/rpcs3')
+          p=root/'Emu/Cell/SPUThread.cpp'
+          src=p.read_text()
+          getllar='''\t\t\t\t\t\t\t\telse
           #endif
           \t\t\t\t\t\t\t\t{
           \t\t\t\t\t\t\t\t\tbusy_wait(300);
           \t\t\t\t\t\t\t\t}'''
-          getllar_new='''\t\t\t\t\t\t\t#elif defined(ARCH_ARM64)
-          \t\t\t\t\t\t\t\tutils::spin_on_cacheline_once(vm::reservation_acquire(addr), +rtime, 100);
-          \t\t\t\t\t\t\t#else
-          \t\t\t\t\t\t\t\tbusy_wait(300);
-          \t\t\t\t\t\t\t#endif'''
-          event_old='''\t\t\t\telse
+          event='''\t\t\t\telse
           #endif
           \t\t\t\t{
           \t\t\t\t\tbusy_wait(300);
           \t\t\t\t}'''
-          event_new='''\t\t\t#elif defined(ARCH_ARM64)
-          \t\t\t\tutils::spin_on_cacheline_once(vm::reservation_acquire(raddr), +rtime, 100);
-          \t\t\t#else
-          \t\t\t\tbusy_wait(300);
-          \t\t\t#endif'''
-          assert s.count(getllar_old)==1, 'M6.9.1 GETLLAR reservation wait anchor'
-          assert s.count(event_old)==1, 'M6.9.1 RdEventStat reservation wait anchor'
-          s=s.replace(getllar_old,getllar_new,1).replace(event_old,event_new,1)
-          asm=Path('rpcs3-src/rpcs3/util/asm.hpp').read_text()
-          assert 'inline void spin_on_cacheline_once(const atomic_t<T, Align>& var, T old_value, u64 timeout_us)' in asm
-          assert 'wfe' in asm and 'ldaxr' in asm
-          p.write_text(s)
-          print('M6.9.1 ARM64 GETLLAR/RdEventStat cache-line WFE waits applied; x86/other paths preserved')
-          PY_M691_PATCH
-          python3 - <<'PY_M691_PROFILE'
-          from pathlib import Path
-          p=Path('PsTJon-KK-M6.9.1-NPUB30830-config.txt').read_text()
-          assert p.count('SPU loop detection: false') == 1
-          assert p.count('Disable SPU GETLLAR Spin Optimization: true') == 1
-          assert p.count('Disable Asynchronous Memory Manager: true') == 1
-          assert p.count('Output Scaling Mode: Bilinear') == 1
-          assert p.count('Resolution Scale: 75') == 1
-          src=Path('rpcs3-src/rpcs3/Emu/Cell/SPUThread.cpp')
-          s=src.read_text()
-          assert 'ios_dmc_spu_parallelism' not in s
-          assert s.count('utils::spin_on_cacheline_once(vm::reservation_acquire(addr), +rtime, 100);') == 1
-          assert s.count('utils::spin_on_cacheline_once(vm::reservation_acquire(raddr), +rtime, 100);') == 1
-          assert s.count('busy_wait(300);') >= 2
-          assert '#elif defined(ARCH_ARM64)' in s and 'if (utils::has_um_wait())' in s
-          print('M6.9.1 reservation waits: both ARM64 WFE sites present; x86/other fallbacks retained PASS')
-          PY_M691_PROFILE
+          assert src.count(getllar)==1, 'M6.9.2: GETLLAR upstream baseline changed'
+          assert src.count(event)==1, 'M6.9.2: RdEventStat upstream baseline changed'
+          assert 'ios_dmc_spu_parallelism' not in src
+          assert 'spin_on_cacheline_once(vm::reservation_acquire(addr), +rtime, 100)' not in src
+          assert 'spin_on_cacheline_once(vm::reservation_acquire(raddr), +rtime, 100)' not in src
+          inc='#include <span>'
+          assert src.count(inc)==1
+          src=src.replace(inc,inc+'\n#ifdef RPCS3_IOS\n#include <atomic>\n#include <chrono>\n#endif',1)
+          anchor='// LUTs for SPU instructions'
+          assert src.count(anchor)==1
+          profiler='''#ifdef RPCS3_IOS
+          // M6.9.2: diagnostic sampling on the ORIGINAL busy_wait.
+          // 1023/1024 executions call the untouched original function.
+          // The sampled one also calls it exactly once. Logging happens
+          // no more than once in five seconds per callsite.
+          template <bool Getllar, typename Callback>
+          static inline void m692_sample_original_spu_wait(Callback&& original_wait)
+          {
+              static thread_local u32 calls = 0;
+              if ((++calls & 1023u) != 0)
+              {
+                  original_wait();
+                  return;
+              }
+              using clock = std::chrono::steady_clock;
+              const auto start = clock::now();
+              original_wait();
+              const u64 duration_ns = static_cast<u64>(
+                  std::chrono::duration_cast<std::chrono::nanoseconds>(clock::now() - start).count());
+              static std::atomic<u64> probe_count{0}, sum_ns{0}, max_ns{0}, report_ns{0};
+              probe_count.fetch_add(1, std::memory_order_relaxed);
+              sum_ns.fetch_add(duration_ns, std::memory_order_relaxed);
+              u64 prev_max = max_ns.load(std::memory_order_relaxed);
+              while (duration_ns > prev_max &&
+                  !max_ns.compare_exchange_weak(prev_max, duration_ns, std::memory_order_relaxed)) {}
+              const u64 now_ns = static_cast<u64>(
+                  std::chrono::duration_cast<std::chrono::nanoseconds>(clock::now().time_since_epoch()).count());
+              u64 previous = report_ns.load(std::memory_order_relaxed);
+              if (!previous)
+              {
+                  report_ns.compare_exchange_strong(previous, now_ns, std::memory_order_relaxed);
+                  return;
+              }
+              if (now_ns > previous + 5000000000ull &&
+                  report_ns.compare_exchange_strong(previous, now_ns, std::memory_order_relaxed))
+              {
+                  const u64 n = probe_count.exchange(0, std::memory_order_relaxed);
+                  const u64 sum = sum_ns.exchange(0, std::memory_order_relaxed);
+                  const u64 maximum = max_ns.exchange(0, std::memory_order_relaxed);
+                  spu_log.notice("M6.9.2 GLOBAL_SPU_WAIT path=%s sampled_calls=%llu avg_ns=%llu max_ns=%llu sampling=1/1024 no_guest_semantics_change",
+                      Getllar ? "GETLLAR" : "RdEventStat", n, n ? sum/n : 0, maximum);
+              }
+          }
+          #endif
+
+          '''
+          src=src.replace(anchor,profiler+anchor,1)
+          # Existing original operation inside x64 fallback; always leave
+          # x86 monitor branch intact, no WFE or queue/yield change.
+          src=src.replace(getllar,getllar.replace(
+              '\t\t\t\t\t\t\t\t\tbusy_wait(300);',
+              '''#ifdef RPCS3_IOS
+          \t\t\t\t\t\t\t\t\tm692_sample_original_spu_wait<true>([&] { busy_wait(300); });
+          #else
+          \t\t\t\t\t\t\t\t\tbusy_wait(300);
+          #endif'''),1)
+          src=src.replace(event,event.replace(
+              '\t\t\t\t\tbusy_wait(300);',
+              '''#ifdef RPCS3_IOS
+          \t\t\t\t\tm692_sample_original_spu_wait<false>([&] { busy_wait(300); });
+          #else
+          \t\t\t\t\tbusy_wait(300);
+          #endif'''),1)
+          assert src.count('m692_sample_original_spu_wait<true>')==1
+          assert src.count('m692_sample_original_spu_wait<false>')==1
+          assert src.count('busy_wait(300);')==6
+          assert src.count('M6.9.2 GLOBAL_SPU_WAIT')==1
+          p.write_text(src)
+          # Preserve the existing M6.9 percentile telemetry in RSX.
+          perf=(root/'ios/RPCS3IOSPerformance.cpp').read_text()
+          for token in ('exp_frame_hist[11]','frametime_p50_ms','frametime_p95_ms','frametime_p99_ms'):
+              assert token in perf,token
+          assert 'M6.8.8 GLOBAL_RECLAIM' in (root/'Emu/RSX/VK/VKGSRender.cpp').read_text()
+          assert 'M6.8.2 NPUA_ASCENSION_FIDELITY' in (root/'Emu/System.cpp').read_text()
+          assert 'force_store |= render->color_att_count > 0;' in Path('mesa-src/src/kosmickrisp/vulkan/kk_cmd_buffer.c').read_text()
+          print('M6.9.2: run114 SPU strategy preserved, both original ARM64 waits lightly sampled, no title-specific code')
+          PY_M692
+          git -C rpcs3-src diff --check
+          git -C mesa-src diff --check
+          grep -q 'M6.9.2 GLOBAL_SPU_WAIT' rpcs3-src/rpcs3/Emu/Cell/SPUThread.cpp
+          ! grep -q 'ios_dmc_spu_parallelism' rpcs3-src/rpcs3/Emu/Cell/SPUThread.cpp
+          # Profile is a test aid; physical run114 left loop detection OFF.
+          test -s PsTJon-KK-M6.9.1-NPUB30830-config.txt
+          cp PsTJon-KK-M6.9.1-NPUB30830-config.txt PsTJon-KK-M6.9.2-NPUB30830-config.txt
+          grep -q 'SPU loop detection: false' PsTJon-KK-M6.9.2-NPUB30830-config.txt
+          grep -q 'Disable SPU GETLLAR Spin Optimization: true' PsTJon-KK-M6.9.2-NPUB30830-config.txt
 
           rm -rf build-kk-host kk-host-tools
           meson setup build-kk-host mesa-src \
@@ -6575,14 +6631,14 @@ jobs:
           codesign -d --entitlements :- "$APP" 2>&1 | tee pstjon-entitlements.txt
           (
             cd package
-            ditto -c -k --sequesterRsrc --keepParent Payload "$GITHUB_WORKSPACE/PsTJon-KK-M6.9.1-EXP.ipa"
+            ditto -c -k --sequesterRsrc --keepParent Payload "$GITHUB_WORKSPACE/PsTJon-KK-M6.9.2-EXP.ipa"
           )
-          shasum -a 256 PsTJon-KK-M6.9.1-EXP.ipa
-          test -s PsTJon-KK-M6.9.1-NPUB30830-config.txt
+          shasum -a 256 PsTJon-KK-M6.9.2-EXP.ipa
+          test -s PsTJon-KK-M6.9.2-NPUB30830-config.txt
       - name: Build report
         run: |
           {
-            echo "PsTJon M6.9.1-EXP: global ARM64 SPU reservation-wait A/B adapted from RPCS3 PR #18913. GETLLAR and RdEventStat use the existing cache-line LDAXR/WFE helper instead of blind busy_wait(300); x86 and other paths remain unchanged. Candidate requires physical validation; no stable 30 FPS claim."
+            echo "PsTJon M6.9.2-EXP: physical A/B run114 best, run115 DmC-specific scheduler and run116 ARM64 WFE both degraded gameplay. Restore original pinned SPU busy_wait(300) GETLLAR/RdEventStat, preserve all graphics, PPU, RSX and KosmicKrisp. Add global 1/1024 SPU wait sampling no more than one report/5s/site. Existing p50/p95/p99 frame telemetry retained. Native 30fps remains UNVERIFIED."
             echo "PsTJon M6.8.7-EXP: globally cap oversized default iOS Vulkan occlusion pools at 512 (existing 256/512 title pools preserved), reclaim completed/deferred pools before new allocation, bound allocation telemetry, accept null/map Anchors in official patch YAML before generic strict validation. No query result fabrication, no unsafe fence bypass, no shader/Metal changes. HTTP frontend not modified; physical DmC/Ascension validation mandatory." 
             echo "PsTJon M6.8.6-EXP: physical A/B NPUA80918 v01.12 on M6.8.4 (8.745 median FPS, 379 occlusion hard-sync warnings, allocator 138 percent). Restore full-edition pre-M6.8.5 NV3089 blit behavior; add bounded moderate/severe reclaim for >768 MiB headroom, preserve all FATAL or critical pressure handlers; instrument actual fatal flush/drain, no shader/depth/Metal changes. Not a verified 30 FPS improvement." 
             echo "PsTJon M6.8.5-EXP: validated complete Ascension NPUA local VRAM 2D copy spans using real allocation size, eliminated 9700 per-event pressure traces, aggregated pressure timing, sampled software ZCull waits and audited M5-M6 Vulkan/Metal fidelity. GPU/frametime measurement remains observational, 30 FPS not verified." 
@@ -6599,13 +6655,13 @@ jobs:
             echo "Volk: $VOLK_SHA"
             echo "FFmpeg: $FFMPEG_VERSION"
             echo "Core: $(shasum -a 256 libRPCS3Core.dylib | awk '{print $1}')"
-            echo "IPA: $(shasum -a 256 PsTJon-KK-M6.9.1-EXP.ipa | awk '{print $1}')"
-            echo "NPUB30830 config: $(shasum -a 256 PsTJon-KK-M6.9.1-NPUB30830-config.txt | awk '{print $1}')"
+            echo "IPA: $(shasum -a 256 PsTJon-KK-M6.9.2-EXP.ipa | awk '{print $1}')"
+            echo "NPUB30830 config: $(shasum -a 256 PsTJon-KK-M6.9.2-NPUB30830-config.txt | awk '{print $1}')"
             echo "Rollback checkpoint: pstjon-kk-m6.6.8-exp (1a6d4006c3f55b028672cbee36a6b859cdbaccf9)"
-          } > PsTJon-KK-M6.9.1-EXP-build.txt
+          } > PsTJon-KK-M6.9.2-EXP-build.txt
 
-          cp HANDOFF-PsTJon-KosmicKrisp-M0-M9-2026-10-12-M6.8.2-EXP.txt HANDOFF-PsTJon-KosmicKrisp-M0-M9-2026-10-14-M6.9.1-EXP.txt
-          cat >> HANDOFF-PsTJon-KosmicKrisp-M0-M9-2026-10-14-M6.9.1-EXP.txt <<'HANDOFF_M683'
+          cp HANDOFF-PsTJon-KosmicKrisp-M0-M9-2026-10-12-M6.8.2-EXP.txt HANDOFF-PsTJon-KosmicKrisp-M0-M9-2026-10-14-M6.9.2-EXP.txt
+          cat >> HANDOFF-PsTJon-KosmicKrisp-M0-M9-2026-10-14-M6.9.2-EXP.txt <<'HANDOFF_M683'
           
           ===========================================================
           M6.8.3-EXP 2026-10-12: update of prior handoff M0-M9
@@ -6646,7 +6702,7 @@ jobs:
           M0-M5 preserved. M6 ongoing graphics correctness/optimization.
           M7-M9 unvalidated and not claimed completed.
           HANDOFF_M683
-          cat >> HANDOFF-PsTJon-KosmicKrisp-M0-M9-2026-10-14-M6.9.1-EXP.txt <<'HANDOFF_M684'
+          cat >> HANDOFF-PsTJon-KosmicKrisp-M0-M9-2026-10-14-M6.9.2-EXP.txt <<'HANDOFF_M684'
           
           M6.8.4-EXP / 2026-10-13: NPUA80918 APP_VER=01.04 physical
           recording (81.9 s), clear image but 13.8 -> 0 FPS at 20s,
@@ -6659,7 +6715,7 @@ jobs:
           Ultra shader/WCB/true ZCull 512/KosmicKrisp unchanged.
           No claim of native 30 or 60 FPS or frame generation.
           HANDOFF_M684
-          cat >> HANDOFF-PsTJon-KosmicKrisp-M0-M9-2026-10-14-M6.9.1-EXP.txt <<'HANDOFF_M685'
+          cat >> HANDOFF-PsTJon-KosmicKrisp-M0-M9-2026-10-14-M6.9.2-EXP.txt <<'HANDOFF_M685'
           
           M6.8.5 EXP: physical M6.8.4 NPUA80918 v01.04 advanced
           ~5.7 minutes before unmapped writes beginning 0xcf900000;
@@ -6683,7 +6739,7 @@ jobs:
           blurred scene and prior failing scene; send video+log,
           validate local source/dst warnings, ZCull waits and memory.
           HANDOFF_M685
-          cat >> HANDOFF-PsTJon-KosmicKrisp-M0-M9-2026-10-14-M6.9.1-EXP.txt <<'HANDOFF_M686'
+          cat >> HANDOFF-PsTJon-KosmicKrisp-M0-M9-2026-10-14-M6.9.2-EXP.txt <<'HANDOFF_M686'
           
           M6.8.6 EXP / 2026-10-13
           A/B SAME TITLE NPUA80918 v01.12 on M6.8.4 vs M6.8.5:
@@ -6705,7 +6761,7 @@ jobs:
           NPUA 01.12 save/route and preserve records of last stage.
           HANDLE CRITICAL AS A DIAGNOSTIC BUILD; don't disable GPU safety.
           HANDOFF_M686
-          cat >> HANDOFF-PsTJon-KosmicKrisp-M0-M9-2026-10-14-M6.9.1-EXP.txt <<'HANDOFF_M687'
+          cat >> HANDOFF-PsTJon-KosmicKrisp-M0-M9-2026-10-14-M6.9.2-EXP.txt <<'HANDOFF_M687'
           
           M6.8.7 EXP / 2026-10-13
           Physical NPUB30830 01.01 DmC booted on M6.8.6 with actual
@@ -6732,7 +6788,7 @@ jobs:
           verify no image regression. Preserve graphical fixes and
           all other branches. 30/60FPS not achieved by this change.
           HANDOFF_M687
-          cat >> HANDOFF-PsTJon-KosmicKrisp-M0-M9-2026-10-14-M6.9.1-EXP.txt <<'HANDOFF_M688'
+          cat >> HANDOFF-PsTJon-KosmicKrisp-M0-M9-2026-10-14-M6.9.2-EXP.txt <<'HANDOFF_M688'
 
           M6.8.8-EXP 2026-10-13: GLOBAL CODE DEPILATION AUDIT
           M4 workflow ~895 lines, M6.8.7 ~6468 lines due sequential
@@ -6764,7 +6820,7 @@ jobs:
           M0-M6 still in progress; M7 30FPS, M8 60 native, M9
           frame interpolation/integration pending. Do not merge M9.
           HANDOFF_M688
-          cat >> HANDOFF-PsTJon-KosmicKrisp-M0-M9-2026-10-14-M6.9.1-EXP.txt <<'HANDOFF_M69'
+          cat >> HANDOFF-PsTJon-KosmicKrisp-M0-M9-2026-10-14-M6.9.2-EXP.txt <<'HANDOFF_M69'
 
           M6.9-EXP 2026-10-14: DmC NPUB30830 physical log audit and
           telemetry-only frametime percentile addition.
@@ -6800,7 +6856,7 @@ jobs:
           No claim of stable 30/60 FPS. Physical A/B on DmC and Ascension
           remains required; supplied log is DmC, not Ascension.
           HANDOFF_M69
-          cat >> HANDOFF-PsTJon-KosmicKrisp-M0-M9-2026-10-14-M6.9.1-EXP.txt <<'HANDOFF_M691'
+          cat >> HANDOFF-PsTJon-KosmicKrisp-M0-M9-2026-10-14-M6.9.2-EXP.txt <<'HANDOFF_M691'
 
           M6.9.1-EXP 2026-10-14: ARM64 reservation-wait A/B adapted from
           upstream RPCS3 PR #18913, replacing the speculative scheduler
@@ -6826,17 +6882,48 @@ jobs:
           It does not claim stable 30/60 FPS. Existing M6.9 frame telemetry and
           M6.8.8-to-M6.8.1 safeguards/fidelity changes remain.
           HANDOFF_M691
-          test -s HANDOFF-PsTJon-KosmicKrisp-M0-M9-2026-10-14-M6.9.1-EXP.txt
+          cat >> HANDOFF-PsTJon-KosmicKrisp-M0-M9-2026-10-14-M6.9.2-EXP.txt <<'HANDOFF_M692'
+          
+          M6.9.2-EXP 2026-10-14 — CONTROLLED GLOBAL SPU ROLLBACK
+          Three sibling commits on common M6.9 parent (2f6009b):
+          #114 5db77565 original SPU wait behaviour; best physical
+          DmC gameplay. #115 b34b7c6 iOS DmC-only scheduling changes;
+          worse. #116 e75da180 global ARM64 WFE replacing reservation
+          busy waits; worst. Their video/log evidence was contrasted.
+          All physical sessions had SPU loop detection false, GETLLAR
+          spin optimization disabled true, 75% bilinear, same 328MB
+          Vulkan cache. #114 was NOT testing loop detection ON in
+          the actual user's device. Do not call #115/#116 sequential
+          fixes; they are sibling commits and independent code paths.
+          M6.9.2 keeps current branch ancestry but fully removes
+          #116 WFE replacement by not applying it in generated source,
+          and does not adopt #115 title-specific scheduler.
+          Original pinned SPU GETLLAR and RdEventStat busy_wait(300)
+          callsites each execute unchanged; only global iOS sampling
+          on 1 in 1024 waits with <=1 summary per 5 seconds/site
+          added. Reports GLOBAL_SPU_WAIT sampled_calls, avg_ns, max_ns.
+          Samples are NOT total SPU busy time or a full CPU-vs-GPU
+          profiler; they supplement preserved six-stage CPU / RSX
+          and presented frametime p50/p95/p99 telemetry. No shader,
+          image/texture, ZCull, Vulkan query pool, KosmicKrisp Metal
+          driver, memory reclaim or user-specific gameplay change.
+          Restore baseline visual correctness; test DmC A/B matched
+          10 minute gameplay, Ascension and Castlevania regression,
+          keep identical settings and do not clear caches between
+          attempts. 30/60 FPS NOT PROVEN; M6 NOT completed, M7-M9
+          remain outstanding.
+          HANDOFF_M692
+          test -s HANDOFF-PsTJon-KosmicKrisp-M0-M9-2026-10-14-M6.9.2-EXP.txt
 
       - uses: actions/upload-artifact@v4
         with:
-          name: PsTJon-KK-M6.9.1-ARM64-RESERVATION-WFE-IPA
+          name: PsTJon-KK-M6.9.2-SPU-BASELINE-SAMPLED-IPA
           path: |
-            PsTJon-KK-M6.9.1-EXP.ipa
-            PsTJon-KK-M6.9.1-EXP-build.txt
-            PsTJon-KK-M6.9.1-NPUB30830-config.txt
+            PsTJon-KK-M6.9.2-EXP.ipa
+            PsTJon-KK-M6.9.2-EXP-build.txt
+            PsTJon-KK-M6.9.2-NPUB30830-config.txt
             M6.9.1-ROLLBACK-TO-M6.6.8.txt
-            HANDOFF-PsTJon-KosmicKrisp-M0-M9-2026-10-14-M6.9.1-EXP.txt
+            HANDOFF-PsTJon-KosmicKrisp-M0-M9-2026-10-14-M6.9.2-EXP.txt
             pstjon-entitlements.txt
             M5-rpcs3-patch-stat.txt
             M4-mesa-patch-stat.txt
@@ -6852,23 +6939,23 @@ jobs:
           compression-level: 0
 
       # Direct iPhone-ready release is required in addition to the Actions artifact.
-      - name: Publish direct M6.9.1-EXP IPA
+      - name: Publish direct M6.9.2-EXP IPA
         if: success()
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
           set -euxo pipefail
-          if gh release view pstjon-kk-m6.9.1-exp >/dev/null 2>&1; then
-            gh release upload pstjon-kk-m6.9.1-exp PsTJon-KK-M6.9.1-EXP.ipa PsTJon-KK-M6.9.1-NPUB30830-config.txt M6.9.1-ROLLBACK-TO-M6.6.8.txt HANDOFF-PsTJon-KosmicKrisp-M0-M9-2026-10-14-M6.9.1-EXP.txt --clobber
+          if gh release view pstjon-kk-m6.9.2-exp >/dev/null 2>&1; then
+            gh release upload pstjon-kk-m6.9.2-exp PsTJon-KK-M6.9.2-EXP.ipa PsTJon-KK-M6.9.2-NPUB30830-config.txt M6.9.1-ROLLBACK-TO-M6.6.8.txt HANDOFF-PsTJon-KosmicKrisp-M0-M9-2026-10-14-M6.9.2-EXP.txt --clobber
           else
-            gh release create pstjon-kk-m6.9.1-exp PsTJon-KK-M6.9.1-EXP.ipa PsTJon-KK-M6.9.1-NPUB30830-config.txt M6.9.1-ROLLBACK-TO-M6.6.8.txt HANDOFF-PsTJon-KosmicKrisp-M0-M9-2026-10-14-M6.9.1-EXP.txt \
+            gh release create pstjon-kk-m6.9.2-exp PsTJon-KK-M6.9.2-EXP.ipa PsTJon-KK-M6.9.2-NPUB30830-config.txt M6.9.1-ROLLBACK-TO-M6.6.8.txt HANDOFF-PsTJon-KosmicKrisp-M0-M9-2026-10-14-M6.9.2-EXP.txt \
               --target "$GITHUB_SHA" \
-              --title "PsTJon KosmicKrisp M6.9.1-EXP" \
-              --notes "M6.9.1 experimental global ARM64 SPU reservation-wait A/B adapted from RPCS3 PR #18913. GETLLAR and RdEventStat use the existing LDAXR/WFE cache-line helper instead of blind busy_wait(300); x86 and other paths remain unchanged. The config retains the user's logged settings. This is not a verified 30 FPS fix; physical iPhone validation required." \
+              --title "PsTJon KosmicKrisp M6.9.2-EXP" \
+              --notes "M6.9.2: restore the superior physical run114 original SPU waiting after run115 scheduler and run116 ARM64 WFE FPS regressions. Global sampled GETLLAR/RdEventStat busy-wait timing, original wait semantics, KosmicKrisp and graphics unchanged. Native stable 30fps not proven." \
               --latest=false
           fi
-          gh release edit pstjon-kk-m6.9.1-exp \
-            --title "PsTJon KosmicKrisp M6.9.1-EXP" \
-            --notes "M6.9.1 experimental global ARM64 SPU reservation-wait A/B adapted from RPCS3 PR #18913. GETLLAR and RdEventStat use the existing LDAXR/WFE cache-line helper instead of blind busy_wait(300); x86 and other paths remain unchanged. The config retains the user's logged settings. This is not a verified 30 FPS fix; physical iPhone validation required." \
+          gh release edit pstjon-kk-m6.9.2-exp \
+            --title "PsTJon KosmicKrisp M6.9.2-EXP" \
+            --notes "M6.9.2: restore the superior physical run114 original SPU waiting after run115 scheduler and run116 ARM64 WFE FPS regressions. Global sampled GETLLAR/RdEventStat busy-wait timing, original wait semantics, KosmicKrisp and graphics unchanged. Native stable 30fps not proven." \
             --latest=false
-          gh release view pstjon-kk-m6.9.1-exp --json url,assets
+          gh release view pstjon-kk-m6.9.2-exp --json url,assets
