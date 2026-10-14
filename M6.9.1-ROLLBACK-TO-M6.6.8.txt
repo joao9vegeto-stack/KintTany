@@ -1,4 +1,4 @@
-PsTJon-KosmicKrisp — exact M6.6.8 rollback checkpoint
+PsTJon-KosmicKrisp — exact M6.6.8 rollback checkpoint (M6.9.1)
 
 Existing immutable checkpoint tag:
   pstjon-kk-m6.6.8-exp
@@ -12,5 +12,5 @@ To restore the PsTJon-KosmicKrisp branch itself exactly to that source state:
 
 This rewrites only PsTJon-KosmicKrisp. It leaves main and every other branch
 untouched. The reset is intentionally explicit because later M6.6.9–M6.8.8
-commits contain fixes that cannot be removed by deleting only the M6.9
+commits contain fixes that cannot be removed by deleting only the M6.9.1
 telemetry file while still claiming an exact M6.6.8 source tree.
