@@ -4202,7 +4202,7 @@ jobs:
           p.write_text(s)
           print("M6.6.8-EXP: BCUS98232 Vulkan query capacity 256->512, all other title profiles unchanged PASS")
           PY
-          grep -q 'M6.9.1-EXP' rpcs3-src/rpcs3/ios/RPCS3IOSPerformance.cpp
+          grep -q 'EXPERIMENTAL M6.9.2-EXP' rpcs3-src/rpcs3/ios/RPCS3IOSPerformance.cpp
           git -C rpcs3-src diff --check
           git -C mesa-src diff --check
 
