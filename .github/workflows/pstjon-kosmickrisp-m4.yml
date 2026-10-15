@@ -6648,12 +6648,8 @@ jobs:
           assert s.count("maximum_pipeline_cache_data_size = 128 * 1024 * 1024;") == 1, "non-KK bound changed"
           assert "#if defined(RPCS3_IOS) && defined(RPCS3_VULKAN_PROVIDER_KOSMICKRISP)" in s
           s = s.replace(old, new, 1)
-          anchor = "\t\tm_pipeline_cache_path = get_pipeline_cache_path();"
-          assert s.count(anchor) == 1, "Vulkan pipeline cache initialization anchor changed"
-          s = s.replace(anchor, anchor + """
-          #if defined(RPCS3_IOS) && defined(RPCS3_VULKAN_PROVIDER_KOSMICKRISP)
-          		rsx_log.notice("PsTJohn1.1: iOS KosmicKrisp Vulkan pipeline cache persistence cap 512 MiB");
-          #endif""", 1)
+          # Do not require a fragile runtime-notice insertion anchor:
+          # the source-specific cache-size assertion above is the gate.
           for guard in ("pipeline_cache_uuid", "pipeline_cache_file_version", "pending.commit()", "maximum_pipeline_cache_data_size"):
               assert guard in s, f"Vulkan pipeline cache safety gate missing: {guard}"
           vk.write_text(s)
