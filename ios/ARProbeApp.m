@@ -8,6 +8,7 @@ extern void rsx_metal_backend_shutdown(void);
 extern void rsx_metal_backend_present(void);
 extern int ar_probe_vm_init(void);
 extern int ar_probe_guest_shader_compile(char *details, size_t cap);
+extern int ar_probe_m51_guest_textured_quad(unsigned swizzled, unsigned int pixels[4], unsigned *encoded, unsigned *guest_draws);
 extern void ar_probe_vm_shutdown(void);
 extern int ar_probe_rsx_clear_flip(unsigned cycle, unsigned int *expected, unsigned int *observed);
 extern int ar_probe_rsx_triangle(unsigned int *background, unsigned int *sample);
@@ -24,6 +25,7 @@ extern int ar_probe_rsx_texture_cache_mutation(unsigned swizzled,unsigned int ou
 @property(nonatomic,strong) UILabel *status;
 @property(nonatomic,assign) BOOL ready;
 @property(nonatomic,assign) BOOL shaderBusy;
+@property(nonatomic,assign) NSUInteger m51Attempts;
 @property(nonatomic,assign) NSUInteger successfulFrames;
 @property(nonatomic,assign) NSUInteger guestAttempts;
 @property(nonatomic,assign) NSUInteger indexedAttempts;
@@ -136,6 +138,25 @@ extern int ar_probe_rsx_texture_cache_mutation(unsigned swizzled,unsigned int ou
         [shaderButton.trailingAnchor constraintLessThanOrEqualToAnchor:controller.view.trailingAnchor constant:-16],
         [shaderButton.heightAnchor constraintEqualToConstant:46]
     ]];
+    /* M5.1: REAL RSX guest TEX0 rasterization; older buttons remain. */
+    UIButton *drawButton=[UIButton buttonWithType:UIButtonTypeSystem];
+    drawButton.translatesAutoresizingMaskIntoConstraints=NO;
+    [drawButton setTitle:@"M5.1 · DRAW RSX TEX0 real" forState:UIControlStateNormal];
+    [drawButton setTitleColor:[UIColor whiteColor] forState:UIControlStateNormal];
+    drawButton.backgroundColor=[[UIColor blackColor] colorWithAlphaComponent:0.82];
+    drawButton.titleLabel.font=[UIFont systemFontOfSize:14 weight:UIFontWeightSemibold];
+    drawButton.layer.cornerRadius=10;
+    [drawButton addTarget:self action:@selector(testM51GuestDraw:)
+         forControlEvents:UIControlEventTouchUpInside];
+    [controller.view addSubview:drawButton];
+    [NSLayoutConstraint activateConstraints:@[
+        [drawButton.centerXAnchor constraintEqualToAnchor:controller.view.centerXAnchor],
+        [drawButton.bottomAnchor constraintEqualToAnchor:shaderButton.topAnchor constant:-10],
+        [drawButton.widthAnchor constraintLessThanOrEqualToConstant:350],
+        [drawButton.leadingAnchor constraintGreaterThanOrEqualToAnchor:controller.view.leadingAnchor constant:16],
+        [drawButton.trailingAnchor constraintLessThanOrEqualToAnchor:controller.view.trailingAnchor constant:-16],
+        [drawButton.heightAnchor constraintEqualToConstant:46]
+    ]];
     self.window.rootViewController=controller;
     [self.window makeKeyAndVisible];
 
@@ -204,6 +225,35 @@ extern int ar_probe_rsx_texture_cache_mutation(unsigned swizzled,unsigned int ou
             }
         });
     });
+}
+
+/* M5.1: do not report OK from compilation alone. The test returns only
+ * after a real NV4097 guest pipeline draw and GPU four-point readback. */
+- (void)testM51GuestDraw:(UIButton *)sender {
+    (void)sender;
+    if(!self.ready || self.shaderBusy)return;
+    unsigned sw=(unsigned)((self.m51Attempts++ & 1u)!=0u);
+    unsigned int p[4]={0},encoded=0,guest=0;
+    self.status.text=@"M5.1: NV4097 → VP/FP TEX0 → GPU raster...";
+    const int rc=ar_probe_m51_guest_textured_quad(sw,p,&encoded,&guest);
+    if(!rc) {
+        self.status.text=[NSString stringWithFormat:
+            @"M5.1 RSX VP/FP TEX0 → Metal: OK\n"
+             "DRAW convidado: %u · GPU codificou: %u\n"
+             "Layout: %@ · 4 pixels distintos reais\n"
+             "%08X %08X %08X %08X\n"
+             "Aperte novamente: outro layout. SEM jogo.",
+             guest,encoded,sw?@"SWIZZLED":@"LINEAR",
+             p[0],p[1],p[2],p[3]];
+    }else{
+        self.status.text=[NSString stringWithFormat:
+            @"M5.1 RSX TEX0: FALHA %d\n"
+             "DRAW convidado: %u · GPU codificou: %u\n"
+             "Layout: %@\nPixels: %08X %08X %08X %08X\n"
+             "M5.0 e M4.10 permanecem disponíveis.",
+             rc,guest,encoded,sw?@"SWIZZLED":@"LINEAR",
+             p[0],p[1],p[2],p[3]];
+    }
 }
 
 /* A tap submits another actual on-screen GPU clear pass.
