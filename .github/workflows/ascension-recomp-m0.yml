@@ -1,10 +1,9 @@
-name: AscensionRecomp M4.10 - PS3 texture mutation coherence diagnostic
+name: AscensionRecomp M5.0 - native iOS RSX guest shader translation
 
 on:
   push:
     branches:
       - AscensionRecomp
-  workflow_dispatch:
 
 permissions:
   contents: read
@@ -44,12 +43,29 @@ jobs:
           cmake --version
           ninja --version || brew install ninja
           brew list --versions sdl2 >/dev/null 2>&1 || brew install sdl2
+          brew list --versions glslang >/dev/null 2>&1 || brew install glslang
+          brew list --versions spirv-cross >/dev/null 2>&1 || brew install spirv-cross
       - name: Fetch pinned ps3recomp source
         run: |
           set -euo pipefail
           git clone https://github.com/sp00nznet/ps3recomp.git upstream
           git -C upstream checkout a2c20108af45174dbb7d3e2f87f6acaaef09c6b4
           test "$(git -C upstream rev-parse HEAD)" = "a2c20108af45174dbb7d3e2f87f6acaaef09c6b4"
+      - name: M5.0 fetch pinned open source shader compiler sources
+        run: |
+          set -euo pipefail
+          mkdir -p ios-shader-deps/glslang ios-shader-deps/SPIRV-Cross
+          git -C ios-shader-deps/glslang init
+          git -C ios-shader-deps/glslang remote add origin https://github.com/KhronosGroup/glslang.git
+          git -C ios-shader-deps/glslang fetch --depth=1 origin 8a85691a0740d390761a1008b4696f57facd02c4
+          git -C ios-shader-deps/glslang checkout --detach FETCH_HEAD
+          test "$(git -C ios-shader-deps/glslang rev-parse HEAD)" = "8a85691a0740d390761a1008b4696f57facd02c4"
+          git -C ios-shader-deps/SPIRV-Cross init
+          git -C ios-shader-deps/SPIRV-Cross remote add origin https://github.com/KhronosGroup/SPIRV-Cross.git
+          git -C ios-shader-deps/SPIRV-Cross fetch --depth=1 origin 300681bbcb8365a8d1eacdacdbdd0249bbf1d6b1
+          git -C ios-shader-deps/SPIRV-Cross checkout --detach FETCH_HEAD
+          test "$(git -C ios-shader-deps/SPIRV-Cross rev-parse HEAD)" = "300681bbcb8365a8d1eacdacdbdd0249bbf1d6b1"
+          printf 'glslang %s\nSPIRV-Cross %s\n' "$(git -C ios-shader-deps/glslang rev-parse HEAD)" "$(git -C ios-shader-deps/SPIRV-Cross rev-parse HEAD)" > m50-deps-sha.txt
       - name: Compile Apple Silicon macOS static runtime (not an IPA)
         run: |
           set -euo pipefail
@@ -65,6 +81,18 @@ jobs:
           python3 upstream/tools/ppu_loader.py --help > m0-ppu-loader-help.txt
           python3 upstream/tools/ppu_lifter.py --help > m0-ppu-lifter-help.txt
           echo "M0 compila apenas o runtime macOS/ARM64, sem dados do jogo." > m0-status.txt
+      - name: M5.0 prove guest NV40 VP FP TEX0 decompiler and MSL translator on host
+        run: |
+          set -euo pipefail
+          cmake -S upstream -B build -G Ninja -DCMAKE_BUILD_TYPE=Release -DCMAKE_OSX_ARCHITECTURES=arm64 -DPS3RECOMP_BUILD_TESTS=OFF -DPS3RECOMP_RSX_VULKAN=OFF -DCMAKE_PREFIX_PATH="$(brew --prefix glslang);$(brew --prefix spirv-cross)" 2>&1 | tee m50-host-configure.log
+          cmake --build build --target test_shader_msl --parallel 4 2>&1 | tee m50-host-build.log
+          ./build/test_shader_msl -v 2>&1 | tee m50-host-shaders.log
+          grep -Fq '[PASS] TEX FP MSL' m50-host-shaders.log
+      - name: M5.0 run synthetic PPU LV2 integrated boot smoke
+        run: |
+          set -euo pipefail
+          cmake --build build --target ps3recomp_boot_smoke --parallel 4 2>&1 | tee m50-boot-build.log
+          ./build/ps3recomp_boot_smoke build/smoke/smoke.elf 2>&1 | tee m50-boot-smoke.log
       - name: M2 static PPU loader and lifter on a SYNTHETIC ELF (never game code)
         run: |
           set -euo pipefail
@@ -254,6 +282,7 @@ jobs:
           python3 tools/enable_ios_fixed_pipeline.py upstream ios/ARFixedFallback.metal
           python3 tools/enable_ios_rsx_texture_debug.py upstream
           python3 tools/enable_ios_cache_counters.py upstream
+          python3 tools/enable_ios_guest_shaders.py upstream
           cmake -S upstream -B build-ios-runtime -G Ninja \
             -DCMAKE_SYSTEM_NAME=iOS \
             -DCMAKE_OSX_SYSROOT=iphoneos \
@@ -264,6 +293,13 @@ jobs:
             -DPS3RECOMP_RSX_VULKAN=OFF 2>&1 | tee m38-ios-configure.log
           cmake --build build-ios-runtime --target ps3recomp_runtime --parallel 4 2>&1 | tee m38-ios-runtime.log
           test -s build-ios-runtime/libps3recomp_runtime.a
+          test "$(find build-ios-runtime -type f -name '*.a' ! -name 'libps3recomp_runtime.a' | wc -l | tr -d ' ')" -ge 5
+          find build-ios-runtime -type f -name '*.a' ! -name 'libps3recomp_runtime.a' -print0 |
+            xargs -0 /usr/bin/libtool -static -o build-ios-runtime/libAscensionRSXGuest-ios-arm64.a build-ios-runtime/libps3recomp_runtime.a
+          test -s build-ios-runtime/libAscensionRSXGuest-ios-arm64.a
+          xcrun nm -g build-ios-runtime/libAscensionRSXGuest-ios-arm64.a | grep -q '_rsx_hlsl_to_msl_available'
+          echo 'iPhoneOS library includes native glslang + SPIRV-Cross; physical VP/FP compile test required.' > m50-guest-shaders.log
+          shasum -a 256 build-ios-runtime/libAscensionRSXGuest-ios-arm64.a > m50-ios-shader-archive-sha256.txt
           xcrun lipo -info build-ios-runtime/libps3recomp_runtime.a | tee m38-lipo.txt
           shasum -a 256 build-ios-runtime/libps3recomp_runtime.a > m38-runtime-sha256.txt
           xcrun nm -g build-ios-runtime/libps3recomp_runtime.a > m39-metal-symbols.txt
@@ -282,9 +318,9 @@ jobs:
         run: |
           set -euo pipefail
           bash tools/build_ios_probe_ipa.sh 2>&1 | tee m41-build-ipa.log
-          test -s AscensionRecompProbe-0.4.10-unsigned.ipa
-          /usr/libexec/PlistBuddy -c 'Print CFBundleShortVersionString' ios-probe/Payload/AscensionRecompProbe.app/Info.plist | grep -Fx 0.4.10
-          /usr/bin/unzip -t AscensionRecompProbe-0.4.10-unsigned.ipa | tee m42-ipa-integrity.log
+          test -s AscensionRecompProbe-0.5.0-unsigned.ipa
+          /usr/libexec/PlistBuddy -c 'Print CFBundleShortVersionString' ios-probe/Payload/AscensionRecompProbe.app/Info.plist | grep -Fx 0.5.0
+          /usr/bin/unzip -t AscensionRecompProbe-0.5.0-unsigned.ipa | tee m42-ipa-integrity.log
           xcrun nm -g ios-probe/Payload/AscensionRecompProbe.app/AscensionRecompProbe | grep -E '(_rsx_metal_backend_present|_rsx_metal_backend_init|_OBJC_CLASS_\\$_ARMetalView)' > m42-runtime-link-symbols.txt || true
           grep -q _rsx_metal_backend_init m39-metal-symbols.txt
           echo 'M4.2: actual GPU clear + presentDrawable + waitUntilCompleted route linked in iOS app; requires on-device screenshot.' > m42-status.txt
@@ -312,7 +348,7 @@ jobs:
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: AscensionRecomp-M4.10-RSX-cache-coherency-evidence
+          name: AscensionRecomp-M5.0-native-RSX-guest-shader-evidence
           if-no-files-found: warn
           retention-days: 14
           path: |
@@ -401,7 +437,16 @@ jobs:
             m48-status.txt
             m49-status.txt
             m410-status.txt
-            AscensionRecompProbe-0.4.10-unsigned.ipa
+            m50-deps-sha.txt
+            m50-host-configure.log
+            m50-host-build.log
+            m50-host-shaders.log
+            m50-boot-build.log
+            m50-boot-smoke.log
+            m50-guest-shaders.log
+            m50-ios-shader-archive-sha256.txt
+            build-ios-runtime/libAscensionRSXGuest-ios-arm64.a
+            AscensionRecompProbe-0.5.0-unsigned.ipa
             m40-ios-layer-view.o
             build-ios-runtime/libps3recomp_runtime.a
             ios-ppu-core/libAscensionPPUCore-ios-arm64.a
