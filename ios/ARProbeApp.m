@@ -13,6 +13,7 @@ extern int ar_probe_rsx_triangle(unsigned int *background, unsigned int *sample)
 extern int ar_probe_rsx_fixed_stage(void);
 extern int ar_probe_rsx_dma_triangle(unsigned int *background,unsigned int *sample);
 extern int ar_probe_rsx_indexed_quad(unsigned use32,unsigned int *background,unsigned int *sample);
+extern int ar_probe_rsx_texture(void *layer,unsigned swizzled,unsigned int out_pixels[4]);
 
 @interface ARProbeDelegate : UIResponder <UIApplicationDelegate>
 @property(nonatomic,strong) UIWindow *window;
@@ -22,6 +23,7 @@ extern int ar_probe_rsx_indexed_quad(unsigned use32,unsigned int *background,uns
 @property(nonatomic,assign) NSUInteger successfulFrames;
 @property(nonatomic,assign) NSUInteger guestAttempts;
 @property(nonatomic,assign) NSUInteger indexedAttempts;
+@property(nonatomic,assign) NSUInteger textureAttempts;
 @end
 
 @implementation ARProbeDelegate
@@ -61,6 +63,13 @@ extern int ar_probe_rsx_indexed_quad(unsigned use32,unsigned int *background,uns
     [view addGestureRecognizer:tripleTap];
     [tap requireGestureRecognizerToFail:tripleTap];
     [doubleTap requireGestureRecognizerToFail:tripleTap];
+    UITapGestureRecognizer *fourTap=[[UITapGestureRecognizer alloc]
+                                    initWithTarget:self action:@selector(drawPS3Texture:)];
+    fourTap.numberOfTapsRequired=4;
+    [view addGestureRecognizer:fourTap];
+    [tap requireGestureRecognizerToFail:fourTap];
+    [doubleTap requireGestureRecognizerToFail:fourTap];
+    [tripleTap requireGestureRecognizerToFail:fourTap];
 
     UILabel *status=[[UILabel alloc] initWithFrame:CGRectZero];
     status.translatesAutoresizingMaskIntoConstraints=NO;
@@ -100,6 +109,7 @@ extern int ar_probe_rsx_indexed_quad(unsigned use32,unsigned int *background,uns
                                   "Segure 1s: TRIÂNGULO INLINE (M4.5)\n"
                                   "2 toques: TRIÂNGULO DMA da memória PS3\n"
                                   "3 toques: QUAD indexado 16/32 bits\n"
+                                  "4 toques: TEXTURA PS3 linear/swizzled\n"
                                   "Sem arquivos do jogo.";
             } else {
                 self.status.text=[NSString stringWithFormat:
@@ -218,6 +228,37 @@ extern int ar_probe_rsx_indexed_quad(unsigned use32,unsigned int *background,uns
            "Centro: 0x%08X Fundo: 0x%08X\n"
            "Testes anteriores preservados.",
            rc,use32?32u:16u,ar_probe_rsx_fixed_stage(),pixel,bg];
+    }
+}
+
+
+/* Four taps: check RSX A8R8G8B8 channel reorder/swizzle, a native
+ * Metal texture upload, actual fragment sampling and GPU readback.
+ * This deliberately does NOT claim arbitrary Ascension FP/VP support. */
+- (void)drawPS3Texture:(UITapGestureRecognizer *)gesture {
+    (void)gesture;
+    if(!self.ready)return;
+    unsigned swizzled=(unsigned)((self.textureAttempts++&1u)!=0);
+    unsigned int colors[4]={0};
+    int rc=ar_probe_rsx_texture((__bridge void *)self.metalView.layer,
+                                 swizzled,colors);
+    if(rc==0){
+        self.status.text=[NSString stringWithFormat:
+            @"TEXTURA PS3 → METAL: OK\n"
+             "A8R8G8B8 %@ → RGBA8\n"
+             "GPU amostrou 4 quadrantes diferentes\n"
+             "Pixels: %08X %08X %08X %08X\n"
+             "4 toques: alternar linear/swizzled",
+             swizzled?@"SWIZZLED":@"LINEAR",
+             colors[0],colors[1],colors[2],colors[3]];
+    }else{
+        self.status.text=[NSString stringWithFormat:
+            @"TESTE TEXTURA PS3: FALHA %d\n"
+             "Formato: %@\n"
+             "Leitura: %08X %08X %08X %08X\n"
+             "Demais testes RSX continuam disponíveis.",
+             rc,swizzled?@"SWIZZLED":@"LINEAR",
+             colors[0],colors[1],colors[2],colors[3]];
     }
 }
 

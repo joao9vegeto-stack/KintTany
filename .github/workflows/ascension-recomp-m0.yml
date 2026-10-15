@@ -1,4 +1,4 @@
-name: AscensionRecomp M4.7 - indexed u16 u32 PS3 GPU mesh
+name: AscensionRecomp M4.8 - RSX texture decode GPU sampling diagnostic
 
 on:
   push:
@@ -280,9 +280,9 @@ jobs:
         run: |
           set -euo pipefail
           bash tools/build_ios_probe_ipa.sh 2>&1 | tee m41-build-ipa.log
-          test -s AscensionRecompProbe-0.4.7-unsigned.ipa
-          /usr/libexec/PlistBuddy -c 'Print CFBundleShortVersionString' ios-probe/Payload/AscensionRecompProbe.app/Info.plist | grep -Fx 0.4.7
-          /usr/bin/unzip -t AscensionRecompProbe-0.4.7-unsigned.ipa | tee m42-ipa-integrity.log
+          test -s AscensionRecompProbe-0.4.8-unsigned.ipa
+          /usr/libexec/PlistBuddy -c 'Print CFBundleShortVersionString' ios-probe/Payload/AscensionRecompProbe.app/Info.plist | grep -Fx 0.4.8
+          /usr/bin/unzip -t AscensionRecompProbe-0.4.8-unsigned.ipa | tee m42-ipa-integrity.log
           xcrun nm -g ios-probe/Payload/AscensionRecompProbe.app/AscensionRecompProbe | grep -E '(_rsx_metal_backend_present|_rsx_metal_backend_init|_OBJC_CLASS_\\$_ARMetalView)' > m42-runtime-link-symbols.txt || true
           grep -q _rsx_metal_backend_init m39-metal-symbols.txt
           echo 'M4.2: actual GPU clear + presentDrawable + waitUntilCompleted route linked in iOS app; requires on-device screenshot.' > m42-status.txt
@@ -292,6 +292,8 @@ jobs:
           grep -q '_rsx_metal_backend_debug_fixed_probe_stage' m43-probe-linked-symbols.txt
           grep -q '_ar_probe_rsx_dma_triangle' m43-probe-linked-symbols.txt
           grep -q '_ar_probe_rsx_indexed_quad' m43-probe-linked-symbols.txt
+          grep -q '_ar_probe_rsx_texture' m43-probe-linked-symbols.txt
+          echo 'M4.8 synthetic PS3 A8R8G8B8 linear/swizzled decode -> actual Metal RGBA8 texture -> fragment sampling -> GPU 4-way readback and CAMetalLayer. Not guest fragment program support.' > m48-status.txt
           echo 'M4.7 indexes: actual NV4097 indexed two-triangle mesh from bounded PS3 big-endian u16/u32 buffers; hardware test pending.' > m47-status.txt
           echo 'M4.6 PS3 memory BE float4 vertex DMA via NV4097_DRAW_ARRAYS, expected magenta center pixel; requires hardware confirmation' > m46-status.txt
           echo 'Metal fixed pipeline MSL compiled on device; game shaders NOT supported without translator; user test needed' > m45-status.txt
@@ -302,7 +304,7 @@ jobs:
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: AscensionRecomp-M4.7-indexed-GPU-mesh-evidence
+          name: AscensionRecomp-M4.8-PS3-texture-Metal-evidence
           if-no-files-found: warn
           retention-days: 14
           path: |
@@ -388,7 +390,8 @@ jobs:
             m45-status.txt
             m46-status.txt
             m47-status.txt
-            AscensionRecompProbe-0.4.7-unsigned.ipa
+            m48-status.txt
+            AscensionRecompProbe-0.4.8-unsigned.ipa
             m40-ios-layer-view.o
             build-ios-runtime/libps3recomp_runtime.a
             ios-ppu-core/libAscensionPPUCore-ios-arm64.a
