@@ -6,6 +6,8 @@
 extern int rsx_metal_backend_init(unsigned int width, unsigned int height, const char* title);
 extern void rsx_metal_backend_shutdown(void);
 extern void rsx_metal_backend_present(void);
+extern int ar_probe_vm_init(void);
+extern void ar_probe_vm_shutdown(void);
 
 @interface ARProbeDelegate : UIResponder <UIApplicationDelegate>
 @property(nonatomic,strong) UIWindow *window;
@@ -52,12 +54,15 @@ extern void rsx_metal_backend_present(void);
 
     dispatch_async(dispatch_get_main_queue(), ^{
         BOOL attached=[self.metalView bindToPS3MetalBackend];
-        int initialized=attached ? rsx_metal_backend_init(960,540,"AscensionRecomp GPU Probe") : -1;
+        /* The test app has no game ELF; expose a genuine bounded scratch VM. */
+        int memory_ready=attached ? ar_probe_vm_init() : -1;
+        int initialized=memory_ready==0 ? rsx_metal_backend_init(960,540,"AscensionRecomp GPU Probe") : -1;
         self.ready=(initialized==0);
         if(self.ready) {
             rsx_metal_backend_present();
             self.status.text=@"Metal inicializado pelo backend RSX.\nTeste gráfico nativo — sem jogo PS3.\nNão é a IPA jogável do Ascension.";
         } else {
+            ar_probe_vm_shutdown();
             self.status.text=@"Falha ao inicializar o backend RSX→Metal.\nEnvie uma captura de tela para diagnóstico.";
         }
     });
@@ -68,6 +73,7 @@ extern void rsx_metal_backend_present(void);
     (void)app;
     if(self.ready) {
         rsx_metal_backend_shutdown();
+        ar_probe_vm_shutdown();
         self.ready=NO;
     }
 }

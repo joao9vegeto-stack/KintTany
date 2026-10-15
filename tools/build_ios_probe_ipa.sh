@@ -8,7 +8,7 @@ cp ios/Probe-Info.plist "$APP/Info.plist"
 xcrun --sdk iphoneos clang++ -target arm64-apple-ios17.0 \
     -isysroot "$SDK" -fobjc-arc -fmodules -stdlib=libc++ \
     -O2 -Wl,-dead_strip -I ios \
-    ios/ARMetalView.m ios/ARProbeApp.m \
+    ios/ARMetalView.m ios/ARProbeApp.m ios/ARProbeGuestVM.c \
     build-ios-runtime/libps3recomp_runtime.a \
     -framework UIKit -framework Foundation -framework QuartzCore \
     -framework Metal -framework CoreGraphics -framework CoreFoundation \
