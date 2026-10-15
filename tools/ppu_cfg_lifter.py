@@ -29,6 +29,7 @@ extern void ar_write32(u64,u32);
 extern void ar_write16(u64,uint16_t);
 extern void ar_write8(u64,uint8_t);
 extern int ar_guest_call(ppu_ctx*, u64);
+extern int ar_guest_syscall(ppu_ctx*);
 /* 0: return to guest LR; 1: tail dispatch; negative: host failure */
 static inline u32 ar_rotl32(u32 v, unsigned sh) {
     sh &= 31U; return sh ? (u32)((v<<sh) | (v>>(32U-sh))) : v;
@@ -134,6 +135,11 @@ def lift(words: list[int] | tuple[int, ...], base: int, name: str = 'ppu_sample'
                 hist['bclr' if xo==16 else 'bcctr']+=1
                 continue
             raise Unsupported(f'unsupported opcode19/{xo}')
+        if op==17:
+            if w!=0x44000002:raise Unsupported("unsupported syscall encoding")
+            e("if(ar_guest_syscall(c)) return -9;")
+            hist['sc']+=1
+            continue
         if op in (10,11):
             bf=(w>>23)&7;wide=bool((w>>21)&1)
             if op==11:

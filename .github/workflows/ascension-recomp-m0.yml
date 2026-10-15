@@ -1,4 +1,4 @@
-name: AscensionRecomp M2.9 - PS3 CRT TLS real-handler smoke
+name: AscensionRecomp M3.0 - PowerPC sc and explicit LV2 syscall ABI
 
 on:
   push:
@@ -203,12 +203,22 @@ jobs:
           file m29-tls-arm64.o | tee m29-object-info.log
           shasum -a 256 m29-tls-arm64.o > m29-checksums.txt
           echo 'M2.9 tested real semantics of generic PS3 TLS initialization on SYNTHETIC TLS. Real game ELF stays private.' > m29-status.txt
+      - name: M3.0 validate strict LV2 syscall 352 with synthetic PPU guest
+        run: |
+          set -euo pipefail
+          python3 tools/make_syscall_smoke.py --out m30-synthetic-sc.c
+          clang -std=c11 -O2 -Wall -Wextra -Werror -Wno-unused-label -Wno-unused-function -I upstream/runtime/ppu -I runtime m30-synthetic-sc.c runtime/ppu_bridge.c runtime/lv2_smoke.c tests/host_lv2_syscall.c -o m30-lv2-host
+          ./m30-lv2-host 2>&1 | tee m30-host-test.log
+          xcrun --sdk iphoneos clang -target arm64-apple-ios17.0 -std=c11 -O2 -I upstream/runtime/ppu -I runtime -c runtime/lv2_smoke.c -o m30-lv2-arm64.o
+          file m30-lv2-arm64.o | tee m30-object-info.log
+          shasum -a 256 m30-lv2-arm64.o > m30-checksums.txt
+          echo 'M3.0: PPU sc uses r11; missing LV2 syscalls are fatal to test bridge, syscall 352 writes actual PS3 guest-memory info.' > m30-status.txt
       - name: Upload M2 evidence - runtime + synthetic PPU proof
 
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: AscensionRecomp-M2.9-ppu-tls-evidence
+          name: AscensionRecomp-M3.0-lv2-syscall-evidence
           if-no-files-found: warn
           retention-days: 14
           path: |
@@ -258,6 +268,11 @@ jobs:
             m29-object-info.log
             m29-checksums.txt
             m29-status.txt
+            m30-host-test.log
+            m30-object-info.log
+            m30-checksums.txt
+            m30-status.txt
+            m30-lv2-arm64.o
             m29-tls-arm64.o
             m28-hle-bridge-arm64.o
             m26-elf-loader-arm64.o
