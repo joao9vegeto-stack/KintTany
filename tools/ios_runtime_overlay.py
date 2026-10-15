@@ -59,10 +59,56 @@ endif()'''
         content=content.replace(before,after,1)
     return content
 
+def patch_mach_vm(content: str) -> str:
+    """Use public iOS vm_region_64 when macOS-only mach_vm.h is unavailable.
+
+    The region query is NOT stubbed out: preserving real VM address
+    protection and mapping information is necessary for correctness.
+    """
+    replacements = [
+        (
+            '#  include <mach/mach_vm.h>',
+            '#  include <TargetConditionals.h>\n'
+            '#  if !TARGET_OS_IPHONE\n'
+            '#    include <mach/mach_vm.h>\n'
+            '#  endif'
+        ),
+        (
+            '    mach_vm_address_t a = (mach_vm_address_t)addr;\n'
+            '    mach_vm_size_t    sz = 0;',
+            '#if TARGET_OS_IPHONE\n'
+            '    vm_address_t a = (vm_address_t)addr;\n'
+            '    vm_size_t    sz = 0;\n'
+            '#else\n'
+            '    mach_vm_address_t a = (mach_vm_address_t)addr;\n'
+            '    mach_vm_size_t    sz = 0;\n'
+            '#endif'
+        ),
+        (
+            '    kern_return_t kr = mach_vm_region(mach_task_self(), &a, &sz, VM_REGION_BASIC_INFO_64,\n'
+            '                                      (vm_region_info_t)&info, &cnt, &name);',
+            '#if TARGET_OS_IPHONE\n'
+            '    kern_return_t kr = vm_region_64(mach_task_self(), &a, &sz, VM_REGION_BASIC_INFO_64,\n'
+            '                                    (vm_region_info_t)&info, &cnt, &name);\n'
+            '#else\n'
+            '    kern_return_t kr = mach_vm_region(mach_task_self(), &a, &sz, VM_REGION_BASIC_INFO_64,\n'
+            '                                      (vm_region_info_t)&info, &cnt, &name);\n'
+            '#endif'
+        )
+    ]
+    for before, after in replacements:
+        count=content.count(before)
+        if count!=1:
+            raise ValueError(f'Apple Mach region overlay anchor count {count}, expected 1: {before[:80]!r}')
+        content=content.replace(before,after,1)
+    return content
+
 if __name__=="__main__":
     a=argparse.ArgumentParser(description=__doc__)
     a.add_argument("cmake_file",type=Path)
     args=a.parse_args()
     src=args.cmake_file.read_text()
     args.cmake_file.write_text(patch(src))
-    print("Applied iOS-only CPU/SPU/LV2 CMake overlay to disposable pinned checkout.")
+    source = args.cmake_file.parent / "runtime/platform/win32_compat.c"
+    source.write_text(patch_mach_vm(source.read_text()))
+    print("Applied iOS CPU/SPU/LV2 CMake and vm_region_64 overlays in disposable pinned checkout.")
