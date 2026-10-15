@@ -1,4 +1,4 @@
-name: AscensionRecomp M2 - PPU static lift smoke and ARM64 runtime
+name: AscensionRecomp M2.1 - ARM64 native PPU probe
 
 on:
   push:
@@ -75,12 +75,22 @@ jobs:
           test -n "$(find m2-generated -name 'ppu_recomp*.cpp' -print -quit)"
           find m2-generated -name '*.cpp' -print0 | xargs -0 -n1 clang++ -std=c++20 -fsyntax-only -I m2-generated 2>&1 | tee m2-clang-syntax.log
           echo "M2: real ps3recomp loader -> lifter -> Clang C++ syntax validated on generated SYNTHETIC PPU ELF. Real Ascension code stays PRIVATE." > m2-status.txt
+      - name: M2.1 generate iOS ARM64 object from SYNTHETIC PowerPC code
+        run: |
+          set -euo pipefail
+          python3 tools/ppu_lift_probe.py m2-synthetic/EBOOT.ELF --start 0x10000 --count 16 --out m21-synthetic-ppu.c 2>&1 | tee m21-aot.log
+          xcrun --sdk iphoneos clang -target arm64-apple-ios17.0 -ffreestanding -fno-builtin -O2 -c m21-synthetic-ppu.c -o m21-synthetic-ppu-ios-arm64.o
+          test -s m21-synthetic-ppu-ios-arm64.o
+          file m21-synthetic-ppu-ios-arm64.o | tee m21-arch.log
+          file m21-synthetic-ppu-ios-arm64.o | grep -E 'Mach-O.*arm64'
+          shasum -a 256 m21-synthetic-ppu-ios-arm64.o | tee m21-object-sha256.txt
+          echo "M2.1: Generic AOT generated an iOS ARM64 Mach-O object from synthetic PPU code. Real Ascension ELF was analyzed privately, never uploaded." > m21-status.txt
       - name: Upload M2 evidence - runtime + synthetic PPU proof
 
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: AscensionRecomp-M2-synthetic-ppu-evidence
+          name: AscensionRecomp-M2.1-arm64-ppu-evidence
           if-no-files-found: warn
           retention-days: 14
           path: |
@@ -95,5 +105,10 @@ jobs:
             m2-lifter.log
             m2-clang-syntax.log
             m2-status.txt
+            m21-aot.log
+            m21-arch.log
+            m21-object-sha256.txt
+            m21-status.txt
+            m21-synthetic-ppu-ios-arm64.o
             m2-loader/*.json
             build/libps3recomp_runtime.a
