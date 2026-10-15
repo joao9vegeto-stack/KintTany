@@ -1,5 +1,5 @@
 #include <stdio.h>
-#include "ppu_tls.h"
+#include "../runtime/ppu_tls.h"
 #define CHECK(x) do{if(!(x)){fprintf(stderr,"TLS FAIL line %d %s\n",__LINE__,#x);return 2;}}while(0)
 int main(void){
  CHECK(ar_bridge_init(16u*1024u*1024u)==AR_OK);
