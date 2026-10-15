@@ -16,7 +16,7 @@ class BatchGateTests(unittest.TestCase):
             rows=[
                 {"start":"0x10000","end":"0x1000c"},
                 {"start":"0x10020","end":"0x10028"},
-                {"start":"0x10000","end":"0x10020"}
+                {"start":"0x1000c","end":"0x10020"}
             ]
             report=audit(p,rows,Path(td)/"generated")
             self.assertEqual(report["accepted_count"],2)
