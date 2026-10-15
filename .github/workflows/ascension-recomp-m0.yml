@@ -1,4 +1,4 @@
-name: AscensionRecomp M3.9 - iPhone Metal RSX backend compile
+name: AscensionRecomp M4.0 - UIKit CAMetalLayer presentation bridge
 
 on:
   push:
@@ -250,6 +250,7 @@ jobs:
           set -euo pipefail
           python3 tools/ios_runtime_overlay.py upstream/CMakeLists.txt
           python3 tools/enable_ios_offscreen_metal.py upstream/CMakeLists.txt
+          python3 tools/enable_ios_drawable_layer.py upstream
           cmake -S upstream -B build-ios-runtime -G Ninja \
             -DCMAKE_SYSTEM_NAME=iOS \
             -DCMAKE_OSX_SYSROOT=iphoneos \
@@ -265,6 +266,13 @@ jobs:
           xcrun nm -g build-ios-runtime/libps3recomp_runtime.a > m39-metal-symbols.txt
           grep -q '_rsx_metal_backend_init' m39-metal-symbols.txt
           grep -q '_rsx_metal_backend_shutdown' m39-metal-symbols.txt
+          grep -q '_rsx_metal_backend_set_ios_layer' m39-metal-symbols.txt
+          xcrun --sdk iphoneos clang -target arm64-apple-ios17.0 -fobjc-arc -fmodules -c ios/ARMetalView.m -o m40-ios-layer-view.o
+          xcrun nm -g m40-ios-layer-view.o > m40-ui-symbols.txt
+          grep -Fq '_OBJC_CLASS_$_ARMetalView' m40-ui-symbols.txt
+          file m40-ios-layer-view.o | tee m40-ui-arch.txt
+          shasum -a 256 m40-ios-layer-view.o > m40-ui-sha256.txt
+          echo 'M4.0: UIKit CAMetalLayer view and iOS RSX Metal bridge compiled, not runtime displayed or game-rendered.' > m40-status.txt
           echo 'iPhone ARM64 CPU/SPU/LV2+offscreen Metal compiled; no CAMetalLayer presenter/audio/input/IPA.' > m39-status.txt
           echo 'iOS CPU/SPU/LV2 build only. SDL2 input/audio and RSX Metal backend disabled until iOS adapters are implemented.' > m38-status.txt
       - name: Upload M2 evidence - runtime + synthetic PPU proof
@@ -272,7 +280,7 @@ jobs:
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: AscensionRecomp-M3.9-ios-offscreen-metal-evidence
+          name: AscensionRecomp-M4.0-ios-metal-drawable-evidence
           if-no-files-found: warn
           retention-days: 14
           path: |
@@ -340,6 +348,11 @@ jobs:
             m38-status.txt
             m39-metal-symbols.txt
             m39-status.txt
+            m40-ui-symbols.txt
+            m40-ui-arch.txt
+            m40-ui-sha256.txt
+            m40-status.txt
+            m40-ios-layer-view.o
             build-ios-runtime/libps3recomp_runtime.a
             ios-ppu-core/libAscensionPPUCore-ios-arm64.a
             ios-ppu-core/exports.txt
