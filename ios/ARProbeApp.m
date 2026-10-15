@@ -15,6 +15,9 @@ extern int ar_probe_m52_guest_texture_mutation(unsigned swizzled,
 extern int ar_probe_m53_guest_multipass(unsigned swizzled, unsigned int pixels[4],
     unsigned *phase, unsigned *guest_total, unsigned *metal_total,
     unsigned *surface_views, unsigned *new_uploads);
+extern int ar_probe_m54_guest_depth_occlusion(unsigned swizzled,
+    unsigned int pixels[4], unsigned *phase, unsigned *guest_total,
+    unsigned *metal_total, unsigned *depth_draws);
 extern void ar_probe_vm_shutdown(void);
 extern int ar_probe_rsx_clear_flip(unsigned cycle, unsigned int *expected, unsigned int *observed);
 extern int ar_probe_rsx_triangle(unsigned int *background, unsigned int *sample);
@@ -34,6 +37,7 @@ extern int ar_probe_rsx_texture_cache_mutation(unsigned swizzled,unsigned int ou
 @property(nonatomic,assign) NSUInteger m51Attempts;
 @property(nonatomic,assign) NSUInteger m52Attempts;
 @property(nonatomic,assign) NSUInteger m53Attempts;
+@property(nonatomic,assign) NSUInteger m54Attempts;
 @property(nonatomic,assign) NSUInteger successfulFrames;
 @property(nonatomic,assign) NSUInteger guestAttempts;
 @property(nonatomic,assign) NSUInteger indexedAttempts;
@@ -204,6 +208,25 @@ extern int ar_probe_rsx_texture_cache_mutation(unsigned swizzled,unsigned int ou
         [multipassButton.trailingAnchor constraintLessThanOrEqualToAnchor:controller.view.trailingAnchor constant:-16],
         [multipassButton.heightAnchor constraintEqualToConstant:46]
     ]];
+    /* M5.4: depth occlusion using actual NV40 guest shader draws. */
+    UIButton *depthButton=[UIButton buttonWithType:UIButtonTypeSystem];
+    depthButton.translatesAutoresizingMaskIntoConstraints=NO;
+    [depthButton setTitle:@"M5.4 · Profundidade RSX/Metal" forState:UIControlStateNormal];
+    [depthButton setTitleColor:[UIColor whiteColor] forState:UIControlStateNormal];
+    depthButton.backgroundColor=[[UIColor blackColor] colorWithAlphaComponent:0.82];
+    depthButton.titleLabel.font=[UIFont systemFontOfSize:14 weight:UIFontWeightSemibold];
+    depthButton.layer.cornerRadius=10;
+    [depthButton addTarget:self action:@selector(testM54DepthOcclusion:)
+                forControlEvents:UIControlEventTouchUpInside];
+    [controller.view addSubview:depthButton];
+    [NSLayoutConstraint activateConstraints:@[
+        [depthButton.centerXAnchor constraintEqualToAnchor:controller.view.centerXAnchor],
+        [depthButton.bottomAnchor constraintEqualToAnchor:multipassButton.topAnchor constant:-10],
+        [depthButton.widthAnchor constraintLessThanOrEqualToConstant:350],
+        [depthButton.leadingAnchor constraintGreaterThanOrEqualToAnchor:controller.view.leadingAnchor constant:16],
+        [depthButton.trailingAnchor constraintLessThanOrEqualToAnchor:controller.view.trailingAnchor constant:-16],
+        [depthButton.heightAnchor constraintEqualToConstant:46]
+    ]];
     self.window.rootViewController=controller;
     [self.window makeKeyAndVisible];
 
@@ -369,6 +392,37 @@ extern int ar_probe_rsx_texture_cache_mutation(unsigned swizzled,unsigned int ou
              "M5.2/M5.1/M4.10 continuam disponíveis.",
             rc,phase,sw?@"SWIZZLED":@"LINEAR",guest,metal,views,uploads,
             pixels[0],pixels[1],pixels[2],pixels[3]];
+    }
+}
+
+/* M5.4: occluded fragment must not overwrite prior colour; a closer
+ * fragment must overwrite it. All pixels are read after actual GPU work. */
+- (void)testM54DepthOcclusion:(UIButton *)sender {
+    (void)sender;
+    if(!self.ready || self.shaderBusy)return;
+    unsigned sw=(unsigned)((self.m54Attempts++ & 1u)!=0u);
+    unsigned int p[4]={0},phase=0,guest=0,metal=0,depth=0;
+    self.status.text=@"M5.4: 3 DRAWs com profundidade Z24S8...";
+    const int rc=ar_probe_m54_guest_depth_occlusion(
+          sw,p,&phase,&guest,&metal,&depth);
+    if(!rc) {
+        self.status.text=[NSString stringWithFormat:
+            @"M5.4 PROFUNDIDADE RSX: OK\n"
+             "Layout %@ · 3 quadros GPU verificados\n"
+             "DRAW RSX/Metal/depth: %u/%u/%u\n"
+             "Trás oculto: SIM · frente visível: SIM\n"
+             "Pixéis: %08X %08X %08X %08X\n"
+             "Aperte novamente para alternar layout.",
+             sw?@"SWIZZLED":@"LINEAR",guest,metal,depth,
+             p[0],p[1],p[2],p[3]];
+    } else {
+        self.status.text=[NSString stringWithFormat:
+            @"M5.4 PROFUNDIDADE: FALHA %d · fase %u\n"
+             "Layout %@ · DRAW RSX/Metal/depth %u/%u/%u\n"
+             "Pixéis: %08X %08X %08X %08X\n"
+             "M5.3/M5.2/M5.1/M4.10 seguem disponíveis.",
+             rc,phase,sw?@"SWIZZLED":@"LINEAR",guest,metal,depth,
+             p[0],p[1],p[2],p[3]];
     }
 }
 
