@@ -7,6 +7,8 @@
 #include "rsx_commands.h"
 #include "rsx_draw_engine.h"
 #include "rsx_metal_backend.h"
+extern int rsx_metal_backend_debug_fixed_probe_stage(void);
+int ar_probe_rsx_fixed_stage(void){return rsx_metal_backend_debug_fixed_probe_stage();}
 enum { AR_WIDTH = 960u, AR_HEIGHT = 540u, AR_GUEST_RT_OFFSET = 0x100000u };
 static const uint32_t ar_clear_colors[] = {
     0xffff5828u, /* orange / red */
@@ -83,6 +85,10 @@ int ar_probe_rsx_triangle(uint32_t *background, uint32_t *sample) {
      * exactly as in the pinned rsx_draw_engine's synthetic test fixture.
      * ATTR3 is a constant (disabled array) that the fixed fragment
      * shader returns as COLOR0, so no program decompiler is involved. */
+    rsx_draw_engine_method(NV4097_SET_COLOR_MASK,0x01010101u);
+    rsx_draw_engine_method(NV4097_SET_CULL_FACE_ENABLE,0u);
+    rsx_draw_engine_method(NV4097_SET_DEPTH_TEST_ENABLE,0u);
+    rsx_draw_engine_method(NV4097_SET_BLEND_ENABLE,0u);
     rsx_draw_engine_method(NV4097_SET_VERTEX_DATA_ARRAY_FORMAT, 
                            2u | (4u<<4) | (16u<<8));
     const float green[4]={0.10f,0.96f,0.28f,1.0f};

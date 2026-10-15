@@ -10,6 +10,7 @@ extern int ar_probe_vm_init(void);
 extern void ar_probe_vm_shutdown(void);
 extern int ar_probe_rsx_clear_flip(unsigned cycle, unsigned int *expected, unsigned int *observed);
 extern int ar_probe_rsx_triangle(unsigned int *background, unsigned int *sample);
+extern int ar_probe_rsx_fixed_stage(void);
 
 @interface ARProbeDelegate : UIResponder <UIApplicationDelegate>
 @property(nonatomic,strong) UIWindow *window;
@@ -147,9 +148,10 @@ extern int ar_probe_rsx_triangle(unsigned int *background, unsigned int *sample)
         self.status.text=[NSString stringWithFormat:
             @"GPU Metal continua inicializada.\n"
              "Triângulo NV4097 FALHOU: etapa %d\n"
+             "Metal pipeline: %d (0 nenhum, 1 MSL, 2 PSO, 3 draw)\n"
              "Fundo: 0x%08X · Centro: 0x%08X\n"
              "Envie este resultado para corrigirmos a renderização.",
-             result,bg,pixel];
+             result,ar_probe_rsx_fixed_stage(),bg,pixel];
     }
 }
 

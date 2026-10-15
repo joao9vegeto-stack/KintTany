@@ -1,4 +1,4 @@
-name: AscensionRecomp M4.4 - iPhone RSX triangle geometry raster probe
+name: AscensionRecomp M4.5 - native iOS fixed shader geometry pipeline
 
 on:
   push:
@@ -251,6 +251,7 @@ jobs:
           python3 tools/ios_runtime_overlay.py upstream/CMakeLists.txt
           python3 tools/enable_ios_offscreen_metal.py upstream/CMakeLists.txt
           python3 tools/enable_ios_drawable_layer.py upstream
+          python3 tools/enable_ios_fixed_pipeline.py upstream ios/ARFixedFallback.metal
           cmake -S upstream -B build-ios-runtime -G Ninja \
             -DCMAKE_SYSTEM_NAME=iOS \
             -DCMAKE_OSX_SYSROOT=iphoneos \
@@ -279,15 +280,17 @@ jobs:
         run: |
           set -euo pipefail
           bash tools/build_ios_probe_ipa.sh 2>&1 | tee m41-build-ipa.log
-          test -s AscensionRecompProbe-0.4.4-unsigned.ipa
-          /usr/libexec/PlistBuddy -c 'Print CFBundleShortVersionString' ios-probe/Payload/AscensionRecompProbe.app/Info.plist | grep -Fx 0.4.4
-          /usr/bin/unzip -t AscensionRecompProbe-0.4.4-unsigned.ipa | tee m42-ipa-integrity.log
+          test -s AscensionRecompProbe-0.4.5-unsigned.ipa
+          /usr/libexec/PlistBuddy -c 'Print CFBundleShortVersionString' ios-probe/Payload/AscensionRecompProbe.app/Info.plist | grep -Fx 0.4.5
+          /usr/bin/unzip -t AscensionRecompProbe-0.4.5-unsigned.ipa | tee m42-ipa-integrity.log
           xcrun nm -g ios-probe/Payload/AscensionRecompProbe.app/AscensionRecompProbe | grep -E '(_rsx_metal_backend_present|_rsx_metal_backend_init|_OBJC_CLASS_\\$_ARMetalView)' > m42-runtime-link-symbols.txt || true
           grep -q _rsx_metal_backend_init m39-metal-symbols.txt
           echo 'M4.2: actual GPU clear + presentDrawable + waitUntilCompleted route linked in iOS app; requires on-device screenshot.' > m42-status.txt
           xcrun nm -g ios-probe/Payload/AscensionRecompProbe.app/AscensionRecompProbe | tee m43-probe-linked-symbols.txt
           grep -q '_ar_probe_rsx_clear_flip' m43-probe-linked-symbols.txt
           grep -q '_ar_probe_rsx_triangle' m43-probe-linked-symbols.txt
+          grep -q '_rsx_metal_backend_debug_fixed_probe_stage' m43-probe-linked-symbols.txt
+          echo 'Metal fixed pipeline MSL compiled on device; game shaders NOT supported without translator; user test needed' > m45-status.txt
           echo 'Geometry proof: guest-like NV4097 INLINE_ARRAY -> fixed VS/PS pipeline -> framebuffer raster -> center pixel GPU readback. Requires device testing; not guest game shaders.' > m44-status.txt
           echo 'M4.3 synthetic RSX NV4097 register writes -> GPU engine clear & flip, readback check. On-device screenshot required.' > m43-status.txt
       - name: Upload M2 evidence - runtime + synthetic PPU proof
@@ -295,7 +298,7 @@ jobs:
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: AscensionRecomp-M4.4-NV4097-triangle-raster-evidence
+          name: AscensionRecomp-M4.5-native-fixed-pipeline-evidence
           if-no-files-found: warn
           retention-days: 14
           path: |
@@ -378,7 +381,8 @@ jobs:
             m43-probe-linked-symbols.txt
             m43-status.txt
             m44-status.txt
-            AscensionRecompProbe-0.4.4-unsigned.ipa
+            m45-status.txt
+            AscensionRecompProbe-0.4.5-unsigned.ipa
             m40-ios-layer-view.o
             build-ios-runtime/libps3recomp_runtime.a
             ios-ppu-core/libAscensionPPUCore-ios-arm64.a
