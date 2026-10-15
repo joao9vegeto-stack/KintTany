@@ -1,4 +1,4 @@
-name: AscensionRecomp M5.0.1 - native RSX guest shaders and headless PPU boot fix
+name: AscensionRecomp M5.0.2 - correct iPhoneOS glslang C++ header path
 
 on:
   push:
