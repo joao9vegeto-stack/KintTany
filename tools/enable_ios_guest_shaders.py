@@ -42,7 +42,7 @@ if(CMAKE_SYSTEM_NAME STREQUAL "iOS")
         message(FATAL_ERROR "M5.0 guest shader compiler libraries unavailable")
     endif()
     target_compile_definitions(ps3recomp_runtime PRIVATE PS3RECOMP_HAVE_MSL_TRANSLATION=1)
-    target_include_directories(ps3recomp_runtime PRIVATE "${AR_SHADER_DEPS}/SPIRV-Cross")
+    # rsx_shader_msl.cpp includes glslang/SPIRV/GlslangToSpv.h.\n    # SPIRV/ is a sibling of glslang/ inside the Khronos source checkout,\n    # so its parent ios-shader-deps must be an explicit include root.\n    target_include_directories(ps3recomp_runtime PRIVATE\n        "${AR_SHADER_DEPS}" "${AR_SHADER_DEPS}/SPIRV-Cross")
     target_link_libraries(ps3recomp_runtime PRIVATE
         glslang::glslang glslang::SPIRV spirv-cross-c)
     if(TARGET glslang::glslang-default-resource-limits)
