@@ -15,6 +15,7 @@ extern int ar_probe_rsx_dma_triangle(unsigned int *background,unsigned int *samp
 extern int ar_probe_rsx_indexed_quad(unsigned use32,unsigned int *background,unsigned int *sample);
 extern int ar_probe_rsx_texture(void *layer,unsigned swizzled,unsigned int out_pixels[4]);
 extern int ar_probe_rsx_texture_registers(unsigned swizzled,unsigned int out_pixels[4]);
+extern int ar_probe_rsx_texture_cache_mutation(unsigned swizzled,unsigned int out_pixels[4],unsigned *phase,unsigned *uploads,unsigned *replacements);
 
 @interface ARProbeDelegate : UIResponder <UIApplicationDelegate>
 @property(nonatomic,strong) UIWindow *window;
@@ -26,6 +27,7 @@ extern int ar_probe_rsx_texture_registers(unsigned swizzled,unsigned int out_pix
 @property(nonatomic,assign) NSUInteger indexedAttempts;
 @property(nonatomic,assign) NSUInteger textureAttempts;
 @property(nonatomic,assign) NSUInteger registerTextureAttempts;
+@property(nonatomic,assign) NSUInteger cacheMutationAttempts;
 @end
 
 @implementation ARProbeDelegate
@@ -96,6 +98,24 @@ extern int ar_probe_rsx_texture_registers(unsigned swizzled,unsigned int out_pix
         [status.widthAnchor constraintLessThanOrEqualToAnchor:controller.view.widthAnchor constant:-24]
     ]];
     self.status=status;
+    /* Visible hardware cache test button; all existing gesture probes stay. */
+    UIButton *cacheButton=[UIButton buttonWithType:UIButtonTypeSystem];
+    cacheButton.translatesAutoresizingMaskIntoConstraints=NO;
+    [cacheButton setTitle:@"M4.10 · Atualização do cache RSX" forState:UIControlStateNormal];
+    [cacheButton setTitleColor:[UIColor whiteColor] forState:UIControlStateNormal];
+    cacheButton.backgroundColor=[[UIColor blackColor] colorWithAlphaComponent:0.82];
+    cacheButton.titleLabel.font=[UIFont systemFontOfSize:14 weight:UIFontWeightSemibold];
+    cacheButton.layer.cornerRadius=10;
+    [cacheButton addTarget:self action:@selector(testRSXCache:) forControlEvents:UIControlEventTouchUpInside];
+    [controller.view addSubview:cacheButton];
+    [NSLayoutConstraint activateConstraints:@[
+        [cacheButton.centerXAnchor constraintEqualToAnchor:controller.view.centerXAnchor],
+        [cacheButton.bottomAnchor constraintEqualToAnchor:controller.view.safeAreaLayoutGuide.bottomAnchor constant:-20],
+        [cacheButton.leadingAnchor constraintGreaterThanOrEqualToAnchor:controller.view.leadingAnchor constant:16],
+        [cacheButton.trailingAnchor constraintLessThanOrEqualToAnchor:controller.view.trailingAnchor constant:-16],
+        [cacheButton.widthAnchor constraintLessThanOrEqualToConstant:350],
+        [cacheButton.heightAnchor constraintEqualToConstant:46]
+    ]];
     self.window.rootViewController=controller;
     [self.window makeKeyAndVisible];
 
@@ -300,6 +320,35 @@ extern int ar_probe_rsx_texture_registers(unsigned swizzled,unsigned int out_pix
              "M4.8 e anteriores preservados.",
              rc,swizzled?@"SWIZZLED":@"LINEAR",
              samples[0],samples[1],samples[2],samples[3]];
+    }
+}
+
+/* 3 GPU draws at identical guest texture address, with changed pixels
+ * each frame. Repeat the button to test swizzled after linear. */
+- (void)testRSXCache:(UIButton *)sender {
+    (void)sender;
+    if(!self.ready)return;
+    unsigned sw=(unsigned)((self.cacheMutationAttempts++&1u)!=0);
+    unsigned int samples[4]={0},phase=0,uploads=0,replacements=0;
+    const int rc=ar_probe_rsx_texture_cache_mutation(sw,samples,
+                                               &phase,&uploads,&replacements);
+    if(rc==0){
+        self.status.text=[NSString stringWithFormat:
+          @"CACHE RSX → GPU METAL: OK\n"
+           "Formato: %@ · mesmo endereço, 3 quadros\n"
+           "Uploads: %u  Substituições: %u\n"
+           "Pixels finais: %08X %08X %08X %08X\n"
+           "Repita para testar o outro layout",
+           sw?@"SWIZZLED":@"LINEAR",uploads,replacements,
+           samples[0],samples[1],samples[2],samples[3]];
+    } else {
+        self.status.text=[NSString stringWithFormat:
+          @"CACHE RSX → GPU: FALHA %d fase %u/3\n"
+           "Layout: %@ · uploads %u · substituições %u\n"
+           "Pixels: %08X %08X %08X %08X\n"
+           "M4.9 e testes anteriores preservados.",
+           rc,phase,sw?@"SWIZZLED":@"LINEAR",uploads,replacements,
+           samples[0],samples[1],samples[2],samples[3]];
     }
 }
 
