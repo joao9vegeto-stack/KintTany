@@ -53,6 +53,16 @@ class M23BranchTests(unittest.TestCase):
     def test_ctr_decrement_loop(self):
         run_c([li(3,0),addi(3,3,1),bc(16,0,-4),BLR],ctr=3,
               checks=['rc==0','ctx.gpr[3]==3','ctx.ctr==0'])
+    def test_conditional_bclr_taken_returns_to_caller(self):
+        beqlr=(19<<26)|(12<<21)|(2<<16)|(16<<1)
+        run_c([cmpwi(3,5),beqlr,li(3,99),BLR],regs={3:5},
+              checks=['rc==0','ctx.gpr[3]==5','ctx.cia==0x1234'])
+
+    def test_conditional_bclr_not_taken_falls_through(self):
+        beqlr=(19<<26)|(12<<21)|(2<<16)|(16<<1)
+        run_c([cmpwi(3,5),beqlr,li(3,99),BLR],regs={3:4},
+              checks=['rc==0','ctx.gpr[3]==99','ctx.cia==0x1234'])
+
     def test_bctr_external_tail(self):
         run_c([0x4e800420],ctr=0xbeef,checks=['rc==1','ctx.cia==0xbeef'])
     def test_external_b_tail(self):
