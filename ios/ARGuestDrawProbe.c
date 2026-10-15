@@ -10,6 +10,11 @@
 #include "rsx_test_programs.h"
 #include "rsx_texture_layout.h"
 
+/* Real NV4097 SET_STENCIL_MASK register. The pinned rsx_commands.h omits
+ * its symbolic definition but the pinned engine reads raw method 0x032C
+ * as rs->s_write_mask and Metal uses it for MTLStencilDescriptor.writeMask. */
+#define M55_NV4097_SET_STENCIL_MASK 0x0000032Cu
+
 extern uint8_t *vm_base;
 extern uint32_t ppu_vm_size;
 extern void ar_probe_m51_reset_draws(void);
@@ -62,6 +67,7 @@ static void m51_cleanup(void) {
     rsx_draw_engine_method(NV4097_SET_DEPTH_TEST_ENABLE,0u);
     rsx_draw_engine_method(NV4097_SET_DEPTH_MASK,0u);
     rsx_draw_engine_method(NV4097_SET_STENCIL_TEST_ENABLE,0u);
+    rsx_draw_engine_method(M55_NV4097_SET_STENCIL_MASK,0u);
     rsx_draw_engine_method(NV4097_SET_SURFACE_FORMAT,0x5u);
     rsx_draw_engine_method(NV4097_SET_VERTEX_DATA_ARRAY_FORMAT + 8u*4u,0u);
     rsx_draw_engine_set_guest_memory(NULL,NULL);
@@ -178,6 +184,10 @@ static int m51_guest_textured_quad_palette_ex(unsigned swizzled,
              * This path keeps the same guest NV40 shader and GPU colour RT. */
             rsx_draw_engine_method(NV4097_SET_DEPTH_TEST_ENABLE,0u);
             rsx_draw_engine_method(NV4097_SET_DEPTH_MASK,0u);
+            /* M5.5.1 device -528: register 0x032C was left ZERO, so
+             * pass 1's REPLACE did not write ref1; pass 3 EQUAL ref1
+             * then rejected all fragments. Explicitly permit 8 bits. */
+            rsx_draw_engine_method(M55_NV4097_SET_STENCIL_MASK,0xffu);
             rsx_draw_engine_method(NV4097_SET_STENCIL_TEST_ENABLE,1u);
             rsx_draw_engine_method(NV4097_SET_STENCIL_FUNC,
                                    depth_mode==3u ? 0x0207u : 0x0202u);
@@ -433,6 +443,10 @@ int ar_probe_m55_guest_stencil_mask(unsigned swizzled,
             *stencil_draws=ar_probe_m55_stencil_draws();
             return rc;
         }
+        /* Capture the real Metal counter on every path, including any
+         * pixel mismatch. M5.5.1 only updated it on success, misleadingly
+         * showing stencil=0 even when 3 GPU calls were recorded. */
+        *stencil_draws=ar_probe_m55_stencil_draws();
         if(guest!=1u||encoded!=1u) return -510-(int)i;
         for(unsigned q=0;q<4u;q++)
             if(pixels[q]!=m51_colors[(q+expected[i])&3u])
