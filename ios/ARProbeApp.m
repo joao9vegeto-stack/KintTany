@@ -9,6 +9,7 @@ extern void rsx_metal_backend_present(void);
 extern int ar_probe_vm_init(void);
 extern void ar_probe_vm_shutdown(void);
 extern int ar_probe_rsx_clear_flip(unsigned cycle, unsigned int *expected, unsigned int *observed);
+extern int ar_probe_rsx_triangle(unsigned int *background, unsigned int *sample);
 
 @interface ARProbeDelegate : UIResponder <UIApplicationDelegate>
 @property(nonatomic,strong) UIWindow *window;
@@ -39,6 +40,12 @@ extern int ar_probe_rsx_clear_flip(unsigned cycle, unsigned int *expected, unsig
     UITapGestureRecognizer *tap=[[UITapGestureRecognizer alloc]
                                  initWithTarget:self action:@selector(drawNextFrame:)];
     [view addGestureRecognizer:tap];
+    UILongPressGestureRecognizer *longPress=[[UILongPressGestureRecognizer alloc]
+                                           initWithTarget:self
+                                           action:@selector(drawTriangle:)];
+    longPress.minimumPressDuration=0.65;
+    [view addGestureRecognizer:longPress];
+    [tap requireGestureRecognizerToFail:longPress];
 
     UILabel *status=[[UILabel alloc] initWithFrame:CGRectZero];
     status.translatesAutoresizingMaskIntoConstraints=NO;
@@ -65,12 +72,24 @@ extern int ar_probe_rsx_clear_flip(unsigned cycle, unsigned int *expected, unsig
         int initialized=memory_ready==0 ? rsx_metal_backend_init(960,540,"AscensionRecomp GPU Probe") : -1;
         self.ready=(initialized==0);
         if(self.ready) {
-            rsx_metal_backend_present();
-            [self.metalView presentDiagnosticFrame:0 error:nil];
-            self.successfulFrames=1;
-            self.status.text=@"Referência Metal direta: AZUL\n"
-                              "Toque para testar comandos RSX NV4097\n"
-                              "Sem arquivos do jogo PS3.";
+            /* The preceding empty backend_present could race the direct
+             * Metal clear and leave BLACK on the first screen (seen in the
+             * user's M4.3 video). Never report blue without GPU completion. */
+            NSString *referenceError=nil;
+            BOOL referenceOK=[self.metalView presentDiagnosticFrame:0
+                                                             error:&referenceError];
+            if(referenceOK) {
+                self.successfulFrames=1;
+                self.status.text=@"Referência Metal direta: AZUL\n"
+                                  "Toque: limpar pelo RSX NV4097\n"
+                                  "Segure 1s: testar TRIÂNGULO pelo RSX\n"
+                                  "Sem arquivos do jogo PS3.";
+            } else {
+                self.status.text=[NSString stringWithFormat:
+                     @"A referência Metal falhou: %@\n"
+                      "Toque para tentar RSX NV4097.",
+                     referenceError ?: @"sem detalhes"];
+            }
         } else {
             ar_probe_vm_shutdown();
             self.status.text=@"Falha ao inicializar o backend RSX→Metal.\nEnvie uma captura de tela para diagnóstico.";
@@ -108,6 +127,29 @@ extern int ar_probe_rsx_clear_flip(unsigned cycle, unsigned int *expected, unsig
              "Etapa %d · Esperado: 0x%08X · Lido: 0x%08X\n"
              "Envie uma captura para diagnóstico.",
              rc, expected, observed];
+    }
+}
+
+
+/* Long press: independent geometry/shader/raster test, not the color clear. */
+- (void)drawTriangle:(UILongPressGestureRecognizer *)gesture {
+    if (gesture.state!=UIGestureRecognizerStateBegan || !self.ready) return;
+    unsigned int bg=0,pixel=0;
+    const int result=ar_probe_rsx_triangle(&bg,&pixel);
+    if(result==0) {
+        self.status.text=[NSString stringWithFormat:
+            @"NV4097 → triângulo → Metal: OK\n"
+             "Centro verde, fundo 0x%08X\n"
+             "Pixel central 0x%08X\n"
+             "Geometria sintética: sem jogo PS3.",
+             bg,pixel];
+    } else {
+        self.status.text=[NSString stringWithFormat:
+            @"GPU Metal continua inicializada.\n"
+             "Triângulo NV4097 FALHOU: etapa %d\n"
+             "Fundo: 0x%08X · Centro: 0x%08X\n"
+             "Envie este resultado para corrigirmos a renderização.",
+             result,bg,pixel];
     }
 }
 
