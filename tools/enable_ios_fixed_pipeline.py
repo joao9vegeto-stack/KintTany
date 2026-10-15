@@ -33,7 +33,7 @@ static id<MTLFunction> ar_fixed_msl(int is_vertex) {
     if source.count(old)!=1:raise ValueError('upstream shader gate shifted')
     source=source.replace(old,'''if(!s_dev||!vertex_stride)return 0;
     /* Exact upstream built-in fallback, never an arbitrary guest shader. */
-    const int fixed_pair=!s_guest_shaders &&
+    const int fixed_pair=
       strstr(vs_hlsl,"Out.col0 = input.a3;") &&
       strstr(vs_hlsl,"vp_posscale") &&
       strstr(ps_hlsl,"return input.col0;");

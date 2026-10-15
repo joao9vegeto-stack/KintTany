@@ -7,6 +7,7 @@ extern int rsx_metal_backend_init(unsigned int width, unsigned int height, const
 extern void rsx_metal_backend_shutdown(void);
 extern void rsx_metal_backend_present(void);
 extern int ar_probe_vm_init(void);
+extern int ar_probe_guest_shader_compile(char *details, size_t cap);
 extern void ar_probe_vm_shutdown(void);
 extern int ar_probe_rsx_clear_flip(unsigned cycle, unsigned int *expected, unsigned int *observed);
 extern int ar_probe_rsx_triangle(unsigned int *background, unsigned int *sample);
@@ -22,6 +23,7 @@ extern int ar_probe_rsx_texture_cache_mutation(unsigned swizzled,unsigned int ou
 @property(nonatomic,strong) ARMetalView *metalView;
 @property(nonatomic,strong) UILabel *status;
 @property(nonatomic,assign) BOOL ready;
+@property(nonatomic,assign) BOOL shaderBusy;
 @property(nonatomic,assign) NSUInteger successfulFrames;
 @property(nonatomic,assign) NSUInteger guestAttempts;
 @property(nonatomic,assign) NSUInteger indexedAttempts;
@@ -116,6 +118,24 @@ extern int ar_probe_rsx_texture_cache_mutation(unsigned swizzled,unsigned int ou
         [cacheButton.widthAnchor constraintLessThanOrEqualToConstant:350],
         [cacheButton.heightAnchor constraintEqualToConstant:46]
     ]];
+    /* M5.0: separate guest VP/FP shader compiler test; M4.10 stays intact. */
+    UIButton *shaderButton=[UIButton buttonWithType:UIButtonTypeSystem];
+    shaderButton.translatesAutoresizingMaskIntoConstraints=NO;
+    [shaderButton setTitle:@"M5.0 · Shaders RSX VP/FP" forState:UIControlStateNormal];
+    [shaderButton setTitleColor:[UIColor whiteColor] forState:UIControlStateNormal];
+    shaderButton.backgroundColor=[[UIColor blackColor] colorWithAlphaComponent:0.82];
+    shaderButton.titleLabel.font=[UIFont systemFontOfSize:14 weight:UIFontWeightSemibold];
+    shaderButton.layer.cornerRadius=10;
+    [shaderButton addTarget:self action:@selector(testGuestRSXShader:) forControlEvents:UIControlEventTouchUpInside];
+    [controller.view addSubview:shaderButton];
+    [NSLayoutConstraint activateConstraints:@[
+        [shaderButton.centerXAnchor constraintEqualToAnchor:controller.view.centerXAnchor],
+        [shaderButton.bottomAnchor constraintEqualToAnchor:cacheButton.topAnchor constant:-10],
+        [shaderButton.widthAnchor constraintLessThanOrEqualToConstant:350],
+        [shaderButton.leadingAnchor constraintGreaterThanOrEqualToAnchor:controller.view.leadingAnchor constant:16],
+        [shaderButton.trailingAnchor constraintLessThanOrEqualToAnchor:controller.view.trailingAnchor constant:-16],
+        [shaderButton.heightAnchor constraintEqualToConstant:46]
+    ]];
     self.window.rootViewController=controller;
     [self.window makeKeyAndVisible];
 
@@ -156,6 +176,35 @@ extern int ar_probe_rsx_texture_cache_mutation(unsigned swizzled,unsigned int ou
     return YES;
 }
 
+
+/* M5.0: NV40 guest microcode is decoded, lowered and compiled on the iPhone.
+ * Failures are shown; no draw/gameplay claim is made from shader compilation. */
+- (void)testGuestRSXShader:(UIButton *)sender {
+    if (!self.ready || self.shaderBusy) return;
+    self.shaderBusy=YES;
+    sender.enabled=NO;
+    self.status.text=@"M5.0: compilando VP/FP RSX originais sintéticos...\nSem dados comerciais.";
+    dispatch_async(dispatch_get_global_queue(QOS_CLASS_USER_INITIATED, 0), ^{
+        char report[256]={0};
+        int rc=ar_probe_guest_shader_compile(report,sizeof(report));
+        NSString *details=[NSString stringWithUTF8String:report];
+        dispatch_async(dispatch_get_main_queue(), ^{
+            self.shaderBusy=NO;
+            sender.enabled=YES;
+            if(rc==0) {
+                self.status.text=[NSString stringWithFormat:
+                    @"M5.0 VP/FP RSX → Metal: OK\n%@\n"
+                     "Microcódigo sintético; ainda NÃO roda Ascension.",
+                    details];
+            } else {
+                self.status.text=[NSString stringWithFormat:
+                    @"M5.0 SHADER RSX: FALHA %d\n%@\n"
+                     "M4.10 continua testável.",
+                    rc,details];
+            }
+        });
+    });
+}
 
 /* A tap submits another actual on-screen GPU clear pass.
  * Completion is checked; labels do not assert success on failed work. */
