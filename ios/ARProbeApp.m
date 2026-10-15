@@ -9,6 +9,9 @@ extern void rsx_metal_backend_present(void);
 extern int ar_probe_vm_init(void);
 extern int ar_probe_guest_shader_compile(char *details, size_t cap);
 extern int ar_probe_m51_guest_textured_quad(unsigned swizzled, unsigned int pixels[4], unsigned *encoded, unsigned *guest_draws, unsigned int shader_state[4]);
+extern int ar_probe_m52_guest_texture_mutation(unsigned swizzled,
+    unsigned int pixels[4], unsigned *failed_phase, unsigned *uploads,
+    unsigned *replacements, unsigned *guest_total, unsigned *metal_total);
 extern void ar_probe_vm_shutdown(void);
 extern int ar_probe_rsx_clear_flip(unsigned cycle, unsigned int *expected, unsigned int *observed);
 extern int ar_probe_rsx_triangle(unsigned int *background, unsigned int *sample);
@@ -26,6 +29,7 @@ extern int ar_probe_rsx_texture_cache_mutation(unsigned swizzled,unsigned int ou
 @property(nonatomic,assign) BOOL ready;
 @property(nonatomic,assign) BOOL shaderBusy;
 @property(nonatomic,assign) NSUInteger m51Attempts;
+@property(nonatomic,assign) NSUInteger m52Attempts;
 @property(nonatomic,assign) NSUInteger successfulFrames;
 @property(nonatomic,assign) NSUInteger guestAttempts;
 @property(nonatomic,assign) NSUInteger indexedAttempts;
@@ -157,6 +161,25 @@ extern int ar_probe_rsx_texture_cache_mutation(unsigned swizzled,unsigned int ou
         [drawButton.trailingAnchor constraintLessThanOrEqualToAnchor:controller.view.trailingAnchor constant:-16],
         [drawButton.heightAnchor constraintEqualToConstant:46]
     ]];
+    /* M5.2: three genuine guest draws and two live cache replacements. */
+    UIButton *mutationButton=[UIButton buttonWithType:UIButtonTypeSystem];
+    mutationButton.translatesAutoresizingMaskIntoConstraints=NO;
+    [mutationButton setTitle:@"M5.2 · TEXTURA dinâmica RSX" forState:UIControlStateNormal];
+    [mutationButton setTitleColor:[UIColor whiteColor] forState:UIControlStateNormal];
+    mutationButton.backgroundColor=[[UIColor blackColor] colorWithAlphaComponent:0.82];
+    mutationButton.titleLabel.font=[UIFont systemFontOfSize:14 weight:UIFontWeightSemibold];
+    mutationButton.layer.cornerRadius=10;
+    [mutationButton addTarget:self action:@selector(testM52TextureMutation:)
+             forControlEvents:UIControlEventTouchUpInside];
+    [controller.view addSubview:mutationButton];
+    [NSLayoutConstraint activateConstraints:@[
+        [mutationButton.centerXAnchor constraintEqualToAnchor:controller.view.centerXAnchor],
+        [mutationButton.bottomAnchor constraintEqualToAnchor:drawButton.topAnchor constant:-10],
+        [mutationButton.widthAnchor constraintLessThanOrEqualToConstant:350],
+        [mutationButton.leadingAnchor constraintGreaterThanOrEqualToAnchor:controller.view.leadingAnchor constant:16],
+        [mutationButton.trailingAnchor constraintLessThanOrEqualToAnchor:controller.view.trailingAnchor constant:-16],
+        [mutationButton.heightAnchor constraintEqualToConstant:46]
+    ]];
     self.window.rootViewController=controller;
     [self.window makeKeyAndVisible];
 
@@ -256,6 +279,39 @@ extern int ar_probe_rsx_texture_cache_mutation(unsigned swizzled,unsigned int ou
              rc,guest,encoded,sw?@"SWIZZLED":@"LINEAR",
              shader[1],shader[2],shader[0],shader[3],
              p[0],p[1],p[2],p[3]];
+    }
+}
+
+/* M5.2: three distinct PS3 guest writes to the same texture address,
+ * each displayed through the real guest FP TEX0 program and Metal readback.
+ * Retains all legacy gestures/buttons and requires measured hash replacements. */
+- (void)testM52TextureMutation:(UIButton *)sender {
+    (void)sender;
+    if (!self.ready || self.shaderBusy) return;
+    unsigned sw=(unsigned)((self.m52Attempts++ & 1u)!=0u);
+    unsigned int p[4]={0},phase=0,uploads=0,replacements=0,guest=0,metal=0;
+    self.status.text=@"M5.2: mutando textura PS3 entre 3 DRAWs convidados...";
+    const int rc=ar_probe_m52_guest_texture_mutation(
+       sw,p,&phase,&uploads,&replacements,&guest,&metal);
+    if(rc==0) {
+        self.status.text=[NSString stringWithFormat:
+            @"M5.2 TEX0 dinâmica → Metal: OK\n"
+             "Layout %@ · 3 quadros GPU verificados\n"
+             "DRAW convidado/Metal: %u / %u\n"
+             "Uploads: %u · substituições cache: %u\n"
+             "Últimos pixels: %08X %08X %08X %08X\n"
+             "Aperte novamente para alternar o layout.",
+             sw?@"SWIZZLED":@"LINEAR",guest,metal,
+             uploads,replacements,p[0],p[1],p[2],p[3]];
+    } else {
+        self.status.text=[NSString stringWithFormat:
+            @"M5.2 TEX0 dinâmica: FALHA %d · fase %u\n"
+             "Layout %@ · DRAW RSX/Metal %u / %u\n"
+             "Uploads %u · substituições %u\n"
+             "Pixels %08X %08X %08X %08X\n"
+             "M5.1 e M4.10 continuam disponíveis.",
+             rc,phase,sw?@"SWIZZLED":@"LINEAR",guest,metal,
+             uploads,replacements,p[0],p[1],p[2],p[3]];
     }
 }
 

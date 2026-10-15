@@ -16,6 +16,9 @@ extern void ar_probe_m51_reset_draws(void);
 extern uint32_t ar_probe_m51_encoded_draws(void);
 extern int ar_probe_m51_readback_quad(uint32_t out[4]);
 extern int ar_probe_m51_shader_state(uint32_t out[4]);
+extern void ar_probe_cache_reset(void);
+extern uint32_t ar_probe_cache_uploads(void);
+extern uint32_t ar_probe_cache_replacements(void);
 
 enum {
     M51_RT_OFFSET = 0x00100000u,
@@ -52,7 +55,7 @@ static void m51_cleanup(void) {
     rsx_draw_engine_set_guest_memory(NULL,NULL);
 }
 
-int ar_probe_m51_guest_textured_quad(unsigned swizzled,
+static int m51_guest_textured_quad_palette(unsigned swizzled, unsigned palette,
                                     uint32_t pixels[4], unsigned *encoded,
                                     unsigned *guest_draws, uint32_t shader_state[4]) {
     if (!pixels || !encoded || !guest_draws || !shader_state) return -101;
@@ -71,7 +74,7 @@ int ar_probe_m51_guest_textured_quad(unsigned swizzled,
     };
     uint8_t *texture=vm_base+M51_TEX_OFFSET;
     for (unsigned y=0;y<M51_TEX_H;y++) for(unsigned x=0;x<M51_TEX_W;x++) {
-        unsigned color=(x>=4u) + (y>=4u ? 2u : 0u);
+        unsigned color=((x>=4u) + (y>=4u ? 2u : 0u) + palette) & 3u;
         unsigned i=swizzled ? rsx_swizzle_offset(x,y,3u,3u) : y*M51_TEX_W+x;
         uint8_t *d=texture+i*4u;
         d[0]=colors[color][3]; d[1]=colors[color][0];
@@ -182,4 +185,58 @@ int ar_probe_m51_guest_textured_quad(unsigned swizzled,
         found |= 1u<<index;
     }
     return found==15u ? 0 : -125;
+}
+
+/* The M5.1 externally visible probe remains behavior-identical. M5.2 calls
+ * the same real NV4097 route with rotated guest memory pixels each frame. */
+int ar_probe_m51_guest_textured_quad(unsigned swizzled,
+                                    uint32_t pixels[4], unsigned *encoded,
+                                    unsigned *guest_draws, uint32_t shader_state[4]) {
+    return m51_guest_textured_quad_palette(swizzled,0u,pixels,encoded,
+                                          guest_draws,shader_state);
+}
+
+/* M5.2: one guest texture address, identical NV4097 registers, three
+ * DIFFERENT guest-memory contents, three real translated TEX0 GPU draws.
+ * The backend's existing per-frame content-hash logic MUST replace the Metal
+ * resource; it is not sufficient to pass an independent host compute sample.
+ * For each frame, check ORDERED GPU quadrants against rotated guest colors.
+ */
+int ar_probe_m52_guest_texture_mutation(unsigned swizzled,
+                          uint32_t pixels[4], unsigned *failed_phase,
+                          unsigned *uploads, unsigned *replacements,
+                          unsigned *guest_total, unsigned *metal_total) {
+    if (!pixels || !failed_phase || !uploads || !replacements ||
+        !guest_total || !metal_total) return -201;
+    *failed_phase=*uploads=*replacements=*guest_total=*metal_total=0;
+    memset(pixels,0,4u*sizeof(*pixels));
+    ar_probe_cache_reset();
+    for (unsigned phase=0;phase<3u;phase++) {
+        unsigned encoded=0, guest=0;
+        uint32_t shader[4]={0};
+        *failed_phase=phase+1u;
+        const int rc=m51_guest_textured_quad_palette(swizzled,phase,pixels,
+                                                     &encoded,&guest,shader);
+        *guest_total+=guest;
+        *metal_total+=encoded;
+        if (rc) {
+            *uploads=ar_probe_cache_uploads();
+            *replacements=ar_probe_cache_replacements();
+            return rc;
+        }
+        if (guest!=1u || encoded!=1u) return -210-(int)phase;
+        /* GPU readback is in top-left, top-right, bottom-left, bottom-right
+         * order. A rotated palette must be correct at each position, not
+         * merely contain the same four colors in some order. */
+        for (unsigned q=0;q<4u;q++)
+            if (pixels[q]!=m51_colors[(q+phase)&3u])
+                return -220-(int)(phase*4u+q);
+    }
+    *uploads=ar_probe_cache_uploads();
+    *replacements=ar_probe_cache_replacements();
+    if (*replacements<2u) return -240;
+    if (*uploads<2u) return -241;
+    if (*guest_total!=3u || *metal_total!=3u) return -242;
+    *failed_phase=0u;
+    return 0;
 }
