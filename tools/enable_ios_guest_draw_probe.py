@@ -35,7 +35,23 @@ int ar_probe_m51_readback_quad(u32 out[4]) {
 }
 
 '''
-    return s.replace(needle, helper + needle, 1)
+    residency = r'''/* Synthetic M5.1.3 introspection. This measures the real
+ * active dispatcher VP and guest FP bytes before cleanup, not a simulation. */
+int ar_probe_m51_shader_state(u32 out[4]) {
+    if (!out) return -1;
+    memset(out, 0, 4u*sizeof(u32));
+    if (!g.ready) return -2;
+    const u8 *vp = NULL, *fp = NULL;
+    u32 vi = 0, fs = 0;
+    out[0] = (u32)eng_guest_programs(&vp, &vi, &fp, &fs);
+    out[1] = vi;
+    out[2] = fs;
+    out[3] = rsx_dsp_reg(&g.rsx, 0x08E4u);
+    return 0;
+}
+
+'''
+    return s.replace(needle, helper + residency + needle, 1)
 
 def patch_metal(s):
     a = "    MTLWinding  winding;\n} EngPipeline;"
