@@ -1,0 +1,31 @@
+/* AscensionRecomp: single-threaded test-only PPU AOT dispatcher. */
+#ifndef AR_PPU_BRIDGE_H
+#define AR_PPU_BRIDGE_H
+#include <stdint.h>
+#include <stddef.h>
+#include "ppu_context.h"
+#ifdef __cplusplus
+extern "C" {
+#endif
+enum { AR_OK=0, AR_TAIL=1, AR_BAD_ARGS=-1, AR_MEM_FAULT=-2,
+       AR_UNRESOLVED=-3, AR_BUDGET=-4, AR_DEPTH=-5, AR_DUPLICATE=-6,
+       AR_NO_MEMORY=-7 };
+typedef int (*ar_ppu_fn)(ppu_context *);
+int ar_bridge_init(size_t);
+void ar_bridge_shutdown(void);
+int ar_register(uint32_t, ar_ppu_fn);
+int ar_run(ppu_context *, uint32_t, uint32_t);
+int ar_last_error(void);
+uint32_t ar_last_unresolved(void);
+size_t ar_registered_count(void);
+int ar_vm_load(uint64_t,const void *,size_t);
+int ar_vm_zero(uint64_t,size_t);
+uint8_t ar_read8(uint64_t); uint16_t ar_read16(uint64_t);
+uint32_t ar_read32(uint64_t); uint64_t ar_read64(uint64_t);
+void ar_write8(uint64_t,uint8_t); void ar_write16(uint64_t,uint16_t);
+void ar_write32(uint64_t,uint32_t); void ar_write64(uint64_t,uint64_t);
+int ar_guest_call(ppu_context *,uint64_t);
+#ifdef __cplusplus
+}
+#endif
+#endif

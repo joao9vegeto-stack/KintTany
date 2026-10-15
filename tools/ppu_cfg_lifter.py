@@ -15,12 +15,11 @@ from pathlib import Path
 class Unsupported(ValueError): pass
 
 PROLOGUE = r'''#include <stdint.h>
+#include "ppu_context.h"
+typedef ppu_context ppu_ctx;
 typedef uint64_t u64;
 typedef uint32_t u32;
 typedef int32_t s32;
-typedef struct {
-    u64 gpr[32]; u64 lr; u64 ctr; u64 cia; u32 cr; u32 xer;
-} ppu_ctx;
 extern u64 ar_read64(u64);
 extern u32 ar_read32(u64);
 extern uint16_t ar_read16(u64);
