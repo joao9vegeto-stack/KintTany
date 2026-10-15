@@ -59,7 +59,7 @@ u32 ar_probe_m51_encoded_draws(void) { return ar_m51_draws_encoded; }
     s_eng_pipe[slot].ar_m51_tex0 =
         strstr(ps_hlsl, "rsx_tex[0].Sample(") != NULL;
 """, 1)
-    a = "                 vertexStart:0 vertexCount:r->vertex_count];"
+    a = "vertexStart:0 vertexCount:r->vertex_count];"
     if s.count(a) != 1:
         raise ValueError("pinned draw encoding changed")
     s = s.replace(a, a + """
