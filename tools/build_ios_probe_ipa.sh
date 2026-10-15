@@ -25,7 +25,7 @@ test -s "$APP/AscensionRecompProbe"
 file "$APP/AscensionRecompProbe" | tee m41-executable-file.txt
 xcrun lipo -info "$APP/AscensionRecompProbe" | tee m41-executable-arch.txt
 /usr/libexec/PlistBuddy -c 'Print CFBundleIdentifier' "$APP/Info.plist"
-(cd ios-probe && zip -q -r ../AscensionRecompProbe-0.4.3-unsigned.ipa Payload)
-test -s AscensionRecompProbe-0.4.3-unsigned.ipa
-shasum -a 256 AscensionRecompProbe-0.4.3-unsigned.ipa > m41-ipa-sha256.txt
+(cd ios-probe && zip -q -r ../AscensionRecompProbe-0.4.4-unsigned.ipa Payload)
+test -s AscensionRecompProbe-0.4.4-unsigned.ipa
+shasum -a 256 AscensionRecompProbe-0.4.4-unsigned.ipa > m41-ipa-sha256.txt
 echo 'UNSIGNED DIAGNOSTIC APP: UIKit CAMetalLayer + real PS3Recomp Metal backend; NO GOWA GAME included' > m41-status.txt
