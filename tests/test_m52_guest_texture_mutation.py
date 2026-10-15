@@ -8,7 +8,8 @@ class GuestMutationTests(unittest.TestCase):
         for token in (
             "M51_TEX_OFFSET", "m51_guest_textured_quad_palette(swizzled,phase",
             "unsigned color=((x>=4u)", "+ palette) & 3u",
-            "rsx_draw_engine_method(NV4097_SET_TEXTURE_OFFSET,M51_TEX_OFFSET)",
+            "sample_surface ? M51_RT_OFFSET : M51_TEX_OFFSET",
+            "m51_guest_textured_quad_palette_ex(swizzled,palette,0u,M51_RT_OFFSET,",
             "rsx_draw_engine_method(NV4097_DRAW_INDEX_ARRAY",
             "ar_probe_m51_readback_quad(pixels)",
             "ar_probe_cache_reset()", "ar_probe_cache_uploads()",
