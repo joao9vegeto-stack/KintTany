@@ -1,4 +1,4 @@
-name: AscensionRecomp M2.5 - canonical PPU ABI and guest dispatch
+name: AscensionRecomp M2.6 - strict PPU image and OPD loader
 
 on:
   push:
@@ -154,12 +154,23 @@ jobs:
           grep -E 'Mach-O.*arm64' m25-arch.log
           shasum -a 256 m25-synthetic-ppu-arm64.o m25-guest-bridge-arm64.o > m25-checksums.txt
           echo 'M2.5 canonical ABI and guest dispatcher synthetic tests passed, no commercial game files.' > m25-status.txt
+      - name: M2.6 stage ELF64 image and OPD with ACTUAL upstream PPU ABI
+        run: |
+          set -euo pipefail
+          python3 tools/make_synthetic_ppu.py --out m26-synthetic/EBOOT.ELF
+          clang -std=c11 -O2 -Wall -Wextra -Werror -I upstream/runtime/ppu -I runtime runtime/ppu_bridge.c runtime/elf_image.c tests/host_elf_image.c -o m26-elf-test
+          ./m26-elf-test m26-synthetic/EBOOT.ELF 2>&1 | tee m26-host-test.log
+          xcrun --sdk iphoneos clang -target arm64-apple-ios17.0 -std=c11 -O2 -I upstream/runtime/ppu -I runtime -c runtime/elf_image.c -o m26-elf-loader-arm64.o
+          file m26-elf-loader-arm64.o | tee m26-object-info.log
+          grep -E 'Mach-O.*arm64' m26-object-info.log
+          shasum -a 256 m26-elf-loader-arm64.o > m26-checksums.txt
+          echo 'M2.6: validated synthetic ELF64 PPU segments, BSS and OPD/TOC; no commercial content.' > m26-status.txt
       - name: Upload M2 evidence - runtime + synthetic PPU proof
 
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: AscensionRecomp-M2.5-ppu-abi-bridge-evidence
+          name: AscensionRecomp-M2.6-elf-image-evidence
           if-no-files-found: warn
           retention-days: 14
           path: |
@@ -194,6 +205,11 @@ jobs:
             m25-arch.log
             m25-checksums.txt
             m25-status.txt
+            m26-host-test.log
+            m26-object-info.log
+            m26-checksums.txt
+            m26-status.txt
+            m26-elf-loader-arm64.o
             m25-synthetic-ppu-arm64.o
             m25-guest-bridge-arm64.o
             m24-registered-handlers.json
