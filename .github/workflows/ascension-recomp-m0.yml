@@ -1,4 +1,4 @@
-name: AscensionRecomp M5.0 - native iOS RSX guest shader translation
+name: AscensionRecomp M5.0.1 - native RSX guest shaders and headless PPU boot fix
 
 on:
   push:
@@ -51,6 +51,7 @@ jobs:
           git clone https://github.com/sp00nznet/ps3recomp.git upstream
           git -C upstream checkout a2c20108af45174dbb7d3e2f87f6acaaef09c6b4
           test "$(git -C upstream rev-parse HEAD)" = "a2c20108af45174dbb7d3e2f87f6acaaef09c6b4"
+          python3 tools/enable_macos_boot_smoke_null_backend.py upstream
       - name: M5.0 fetch pinned open source shader compiler sources
         run: |
           set -euo pipefail
