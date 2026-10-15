@@ -1,4 +1,4 @@
-name: AscensionRecomp M3.1 - import NID manifest generator
+name: AscensionRecomp M3.5 - PPU CFG boundary validation
 
 on:
   push:
