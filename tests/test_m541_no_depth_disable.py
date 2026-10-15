@@ -20,7 +20,7 @@ class NoDepthOverride(unittest.TestCase):
         path=f[begin:finish]
         self.assertEqual(path.count("NV4097_SET_DEPTH_TEST_ENABLE,0u"),1)
         self.assertRegex(path,r"if \(!depth_mode\)\s*rsx_draw_engine_method\(NV4097_SET_DEPTH_TEST_ENABLE,0u\)")
-        self.assertNotIn("\\n    rsx_draw_engine_method(NV4097_SET_DEPTH_TEST_ENABLE,0u);",path)
+        self.assertNotIn("    rsx_draw_engine_method(NV4097_SET_DEPTH_TEST_ENABLE,0u);",path.splitlines())
     def test_legacy_path_still_disables_depth(self):
         self.assertIn("if (!depth_mode)\n        rsx_draw_engine_method(NV4097_SET_DEPTH_TEST_ENABLE,0u);",SRC)
         self.assertIn("0.0f,0u,pixels,encoded,guest_draws,shader_state",SRC)
