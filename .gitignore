@@ -1,0 +1,33 @@
+# Codigo, assets e dados privados do jogo
+*.elf
+*.ELF
+EBOOT.BIN
+PS3_GAME/
+USRDIR/
+exdata/
+*.pkg
+*.rap
+*.rif
+*.edat
+*.iso
+*.ISO
+*.self
+*.sprx
+*.SPRX
+*.pup
+*.PUP
+# Analise local
+ascension-manifest.json
+private/
+game/
+input/
+out/
+generated/
+build/
+upstream/
+*.ipa
+*.app/
+*.a
+__pycache__/
+.pytest_cache/
+.DS_Store
