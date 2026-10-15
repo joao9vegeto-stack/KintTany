@@ -7,13 +7,16 @@
 #define MAX_DEPTH 64
 #define MAX_IMPORTS 2048
 #define MAX_HANDLERS 2048
+#define MAX_LV2_SYSCALLS 512
 static struct {uint32_t pc;ar_ppu_fn fn;} funcs[MAX_FUNCS];
 static size_t nfunc,mem_size;
 static struct {uint32_t stub,nid;} imports[MAX_IMPORTS];
 static size_t nimports;
 static struct {uint32_t nid;ar_hle_fn fn;} handlers[MAX_HANDLERS];
 static size_t nhandlers;
-static uint32_t missing_nid;
+static uint32_t missing_nid,missing_syscall;
+static struct {uint32_t number;ar_hle_fn fn;} syscalls[MAX_LV2_SYSCALLS];
+static size_t nsyscalls;
 static uint8_t *mem;
 static int fault;
 static uint32_t missing,budget,depth;
@@ -25,10 +28,28 @@ int ar_bridge_init(size_t n) {
   mem_size=n;return AR_OK;
 }
 void ar_bridge_shutdown(void){
-  free(mem);mem=0;mem_size=0;nfunc=0;nimports=0;nhandlers=0;missing_nid=0;fault=0;missing=0;budget=0;depth=0;
+  free(mem);mem=0;mem_size=0;nfunc=0;nimports=0;nhandlers=0;nsyscalls=0;missing_nid=0;missing_syscall=0;fault=0;missing=0;budget=0;depth=0;
 }
 int ar_last_error(void){return fault;}
 uint32_t ar_last_missing_nid(void){return missing_nid;}
+uint32_t ar_last_missing_syscall(void){return missing_syscall;}
+int ar_bind_syscall(uint32_t n,ar_hle_fn fn){
+ if(n>=1024||!fn||nsyscalls>=MAX_LV2_SYSCALLS)return AR_BAD_ARGS;
+ for(size_t i=0;i<nsyscalls;i++)if(syscalls[i].number==n)return AR_DUPLICATE;
+ syscalls[nsyscalls].number=n;syscalls[nsyscalls++].fn=fn;return AR_OK;
+}
+int ar_guest_syscall(ppu_context*c){
+ if(!c||!depth)return AR_BAD_ARGS;
+ uint64_t n=c->gpr[11];
+ if(n>=1024){missing_syscall=(uint32_t)n;fault=AR_MISSING_LV2;return AR_MISSING_LV2;}
+ for(size_t i=0;i<nsyscalls;i++)if(syscalls[i].number==n){
+  int rc=syscalls[i].fn(c);
+  if(fault)return fault;
+  if(rc){fault=AR_LV2_FAILURE;return AR_LV2_FAILURE;}
+  return AR_OK;
+ }
+ missing_syscall=(uint32_t)n;fault=AR_MISSING_LV2;return AR_MISSING_LV2;
+}
 int ar_bind_import(uint32_t stub,uint32_t nid){
  if(!stub||(stub&3)||!nid||nimports>=MAX_IMPORTS)return AR_BAD_ARGS;
  for(size_t i=0;i<nimports;i++)if(imports[i].stub==stub)return AR_DUPLICATE;
@@ -125,6 +146,6 @@ int ar_guest_call(ppu_context *c,uint64_t pc){
 }
 int ar_run(ppu_context *c,uint32_t pc,uint32_t ticks){
   if(!c||!pc||!ticks||!mem||depth)return AR_BAD_ARGS;
-  fault=0;missing=0;missing_nid=0;budget=ticks;
+  fault=0;missing=0;missing_nid=0;missing_syscall=0;budget=ticks;
   return dispatch(c,pc);
 }
