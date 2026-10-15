@@ -1,4 +1,4 @@
-name: AscensionRecomp M2.3 - PowerPC CFG native AOT validation
+name: AscensionRecomp M2.4 - PPU CFG and HLE registry gap audit
 
 on:
   push:
@@ -117,12 +117,37 @@ jobs:
           file m23-synthetic-arm64.o | grep -E 'Mach-O.*arm64'
           shasum -a 256 m23-synthetic-arm64.o | tee m23-object-sha256.txt
           echo 'M2.3: Native host branch/rotation tests and synthetic PPC64 -> iOS ARM64 object. No copyrighted inputs.' > m23-status.txt
+      - name: M2.4 inventory upstream HLE registrations and test synthetic gaps
+        run: |
+          set -euo pipefail
+          python3 upstream/tools/gen_hle_nids.py --all --out m24-public-hle-nids.cpp 2>&1 | tee m24-gen-hle.log
+          python3 tools/hle_coverage.py --registry-source m24-public-hle-nids.cpp --out m24-registered-handlers.json --dump-public-nids 2>&1 | tee m24-public-handlers.log
+          python3 - <<'PY'
+          import json
+          d=json.load(open("m24-registered-handlers.json"))
+          assert d["registered_count"]>25, "HLE registry unexpectedly small"
+          entries=list(d["handlers"])
+          samples=[
+              {"nid":entries[0],"library":"test_lib"},
+              {"nid":"0x00000000","library":"test_missing"}
+          ]
+          assert entries[0]!="0x00000000"
+          json.dump(samples,open("m24-synthetic-imports.json","w"))
+          PY
+          python3 tools/hle_coverage.py --registry-source m24-public-hle-nids.cpp --imports m24-synthetic-imports.json --out m24-synthetic-coverage.json 2>&1 | tee m24-coverage.log
+          python3 - <<'PY'
+          import json
+          d=json.load(open("m24-synthetic-coverage.json"))
+          assert d["registered_nids"]==1
+          assert d["not_registered_nids"]==1
+          PY
+          echo 'M2.4 HLE inventory generated from PINNED upstream. Import fixtures synthetic only, no game data or license.' > m24-status.txt
       - name: Upload M2 evidence - runtime + synthetic PPU proof
 
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: AscensionRecomp-M2.3-ppu-cfg-evidence
+          name: AscensionRecomp-M2.4-hle-gap-evidence
           if-no-files-found: warn
           retention-days: 14
           path: |
@@ -149,6 +174,12 @@ jobs:
             m23-object-architecture.log
             m23-object-sha256.txt
             m23-status.txt
+            m24-gen-hle.log
+            m24-public-handlers.log
+            m24-coverage.log
+            m24-status.txt
+            m24-registered-handlers.json
+            m24-synthetic-coverage.json
             m23-synthetic-out/report.json
             m23-synthetic-arm64.o
             m22-synthetic-out/audit.json
