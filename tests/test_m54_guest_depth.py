@@ -14,6 +14,7 @@ class ActualDepthContract(unittest.TestCase):
             "NV4097_SET_SURFACE_ZETA_OFFSET,M54_Z_OFFSET",
             "NV4097_SET_DEPTH_FUNC,0x0201u",
             "NV4097_SET_DEPTH_TEST_ENABLE,1u",
+            "if (!depth_mode)\n        rsx_draw_engine_method(NV4097_SET_DEPTH_TEST_ENABLE,0u);",
             "depth_mode ? 0xf1u : 0xf0u",
             "pixels[q]!=m51_colors[(q+expected[i])&3u]",
             "if(*depth_draws!=3u) return -440"):
@@ -37,6 +38,6 @@ class ActualDepthContract(unittest.TestCase):
                       "testM52TextureMutation:","testM51GuestDraw:","testRSXCache:"):
             self.assertIn(token,app)
         wf=(ROOT/".github/workflows/ascension-recomp-m0.yml").read_text()
-        self.assertIn("AscensionRecompProbe-0.5.5-unsigned.ipa",wf)
+        self.assertIn("AscensionRecompProbe-0.5.6-unsigned.ipa",wf)
         self.assertIn("m54-status.txt",wf)
 if __name__=="__main__": unittest.main()
