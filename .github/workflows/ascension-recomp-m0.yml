@@ -1,4 +1,4 @@
-name: AscensionRecomp M5.0.2 - correct iPhoneOS glslang C++ header path
+name: AscensionRecomp M5.0.3 - activate iPhoneOS glslang include root
 
 on:
   push:
