@@ -1,4 +1,4 @@
-name: AscensionRecomp M2.4 - PPU CFG and HLE registry gap audit
+name: AscensionRecomp M2.5 - canonical PPU ABI and guest dispatch
 
 on:
   push:
@@ -112,7 +112,7 @@ jobs:
               for f in fs:
                   out.write("int ppu_f_"+f.read_text().split("int ppu_f_",1)[1])
           PY
-          xcrun --sdk iphoneos clang -target arm64-apple-ios17.0 -ffreestanding -fno-builtin -O0 -c m23-synthetic-combined.c -o m23-synthetic-arm64.o
+          xcrun --sdk iphoneos clang -target arm64-apple-ios17.0 -ffreestanding -fno-builtin -O0 -I upstream/runtime/ppu -c m23-synthetic-combined.c -o m23-synthetic-arm64.o
           file m23-synthetic-arm64.o | tee m23-object-architecture.log
           file m23-synthetic-arm64.o | grep -E 'Mach-O.*arm64'
           shasum -a 256 m23-synthetic-arm64.o | tee m23-object-sha256.txt
@@ -142,12 +142,24 @@ jobs:
           assert d["not_registered_nids"]==1
           PY
           echo 'M2.4 HLE inventory generated from PINNED upstream. Import fixtures synthetic only, no game data or license.' > m24-status.txt
+      - name: M2.5 test complete PPU ABI and bounded nested guest dispatch
+        run: |
+          set -euo pipefail
+          python3 tools/make_dispatch_smoke.py --out m25-synthetic-dispatch.c
+          clang -std=c11 -O2 -Wall -Wextra -Werror -Wno-unused-label -Wno-unused-function -I upstream/runtime/ppu -I runtime m25-synthetic-dispatch.c runtime/ppu_bridge.c tests/host_ppu_bridge.c -o m25-host
+          ./m25-host 2>&1 | tee m25-host-test.log
+          xcrun --sdk iphoneos clang -target arm64-apple-ios17.0 -std=c11 -O2 -I upstream/runtime/ppu -I runtime -c m25-synthetic-dispatch.c -o m25-synthetic-ppu-arm64.o
+          xcrun --sdk iphoneos clang -target arm64-apple-ios17.0 -std=c11 -O2 -I upstream/runtime/ppu -I runtime -c runtime/ppu_bridge.c -o m25-guest-bridge-arm64.o
+          file m25-synthetic-ppu-arm64.o m25-guest-bridge-arm64.o | tee m25-arch.log
+          grep -E 'Mach-O.*arm64' m25-arch.log
+          shasum -a 256 m25-synthetic-ppu-arm64.o m25-guest-bridge-arm64.o > m25-checksums.txt
+          echo 'M2.5 canonical ABI and guest dispatcher synthetic tests passed, no commercial game files.' > m25-status.txt
       - name: Upload M2 evidence - runtime + synthetic PPU proof
 
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: AscensionRecomp-M2.4-hle-gap-evidence
+          name: AscensionRecomp-M2.5-ppu-abi-bridge-evidence
           if-no-files-found: warn
           retention-days: 14
           path: |
@@ -178,6 +190,12 @@ jobs:
             m24-public-handlers.log
             m24-coverage.log
             m24-status.txt
+            m25-host-test.log
+            m25-arch.log
+            m25-checksums.txt
+            m25-status.txt
+            m25-synthetic-ppu-arm64.o
+            m25-guest-bridge-arm64.o
             m24-registered-handlers.json
             m24-synthetic-coverage.json
             m23-synthetic-out/report.json

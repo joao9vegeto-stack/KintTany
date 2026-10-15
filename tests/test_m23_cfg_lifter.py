@@ -39,7 +39,7 @@ int main(void) {{
 }}
 '''
         (p/'probe.c').write_text(app)
-        cp=subprocess.run([compiler,'-std=c11','-O2',str(p/'probe.c'),'-o',str(p/'probe')],capture_output=True,text=True,timeout=20)
+        cp=subprocess.run([compiler,'-std=c11','-O2','-I',str(Path(__file__).resolve().parent/'fixtures'),str(p/'probe.c'),'-o',str(p/'probe')],capture_output=True,text=True,timeout=20)
         if cp.returncode:raise AssertionError('native compile failed: '+cp.stderr[:1300])
         result=subprocess.run([str(p/'probe')],capture_output=True,text=True,timeout=10)
         if result.returncode:raise AssertionError(f'native test failed exit={result.returncode} {result.stderr}')
