@@ -181,7 +181,13 @@ static int m51_guest_textured_quad_palette_ex(unsigned swizzled,
                                depth_mode ? 0xf1u : 0xf0u);
     rsx_draw_engine_method(NV4097_SET_COLOR_MASK,0x01010101u);
     rsx_draw_engine_method(NV4097_SET_CULL_FACE_ENABLE,0u);
-    rsx_draw_engine_method(NV4097_SET_DEPTH_TEST_ENABLE,0u);
+    /* M5.4.1: Do NOT silently disable depth after configuring Z24S8!
+     * Legacy M5.1-M5.3 still issue the exact old depth-disable command,
+     * whereas M5.4 must keep LESS+write enabled across all 3 draws.
+     * The prior unconditional write caused both LINEAR and SWIZZLED
+     * on-device phase-2 failure -424 and depth DRAW counter 0. */
+    if (!depth_mode)
+        rsx_draw_engine_method(NV4097_SET_DEPTH_TEST_ENABLE,0u);
     rsx_draw_engine_method(NV4097_SET_BLEND_ENABLE,0u);
 
     rsx_draw_engine_method(NV4097_SET_VERTEX_DATA_ARRAY_FORMAT,

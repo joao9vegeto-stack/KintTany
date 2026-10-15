@@ -37,4 +37,4 @@ class M51RealDrawTest(unittest.TestCase):
                       "drawPS3Texture:","drawRSXBoundTexture:"):
             self.assertIn(token,app)
         self.assertIn("testM51GuestDraw:",app)
-        self.assertIn("0.5.5-unsigned.ipa",(ROOT/"tools/build_ios_probe_ipa.sh").read_text())
+        self.assertIn("0.5.6-unsigned.ipa",(ROOT/"tools/build_ios_probe_ipa.sh").read_text())
