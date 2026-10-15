@@ -1,4 +1,4 @@
-name: PsTJohn1 1.0 - ARMSX3 ARM64 hybrid
+name: PsTJohn1 1.1 - cache persistence and SPU A/B
 # runner-retry: fresh-run-after-macos-queue-failure
 
 on:
@@ -10,7 +10,7 @@ permissions:
   contents: write
 
 concurrency:
-  group: pstjohn1-v1
+  group: pstjohn1-v1-1
   cancel-in-progress: true
 
 jobs:
@@ -6416,9 +6416,9 @@ jobs:
           ! grep -q 'ios_dmc_spu_parallelism' rpcs3-src/rpcs3/Emu/Cell/SPUThread.cpp
           # Profile is a test aid; physical run114 left loop detection OFF.
           test -s PsTJon-KK-M6.9.1-NPUB30830-config.txt
-          cp PsTJon-KK-M6.9.1-NPUB30830-config.txt PsTJohn1-1.0-NPUB30830-config.txt
-          grep -q 'SPU loop detection: false' PsTJohn1-1.0-NPUB30830-config.txt
-          grep -q 'Disable SPU GETLLAR Spin Optimization: true' PsTJohn1-1.0-NPUB30830-config.txt
+          cp PsTJon-KK-M6.9.1-NPUB30830-config.txt PsTJohn1-1.1-NPUB30830-config.txt
+          grep -q 'SPU loop detection: false' PsTJohn1-1.1-NPUB30830-config.txt
+          grep -q 'Disable SPU GETLLAR Spin Optimization: true' PsTJohn1-1.1-NPUB30830-config.txt
 
           rm -rf build-kk-host kk-host-tools
           meson setup build-kk-host mesa-src \
@@ -6611,8 +6611,61 @@ jobs:
           assert "(s_offset + in_stencil_size) - z_offset" in p.read_text()
           PY_PSTJOHN_ARM
           git -C rpcs3-src diff --check
-          git -C rpcs3-src diff --stat | tee PsTJohn1-1.0-core-diff-stat.txt
-          git -C rpcs3-src diff -- rpcs3/Emu/Cell/SPULLVMRecompiler.cpp rpcs3/Emu/RSX/VK/VKTexture.cpp > PsTJohn1-1.0-arm64-backport.patch
+          git -C rpcs3-src diff --stat | tee PsTJohn1-1.1-core-diff-stat.txt
+          git -C rpcs3-src diff -- rpcs3/Emu/Cell/SPULLVMRecompiler.cpp rpcs3/Emu/RSX/VK/VKTexture.cpp > PsTJohn1-1.1-arm64-backport.patch
+
+
+      - name: PsTJohn1.1 - controlled SPU rollback and bounded Vulkan cache persistence
+        run: |
+          set -euxo pipefail
+          python3 - <<'PY_PSTJOHN11'
+          from pathlib import Path
+          root = Path("rpcs3-src/rpcs3")
+          spu = root / "Emu/Cell/SPULLVMRecompiler.cpp"
+          s = spu.read_text()
+          # Isolate the only new LLVM optimizer pass from the on-device
+          # PsTJohn1 1.0 experiment; keep correct helper calling conventions.
+          inc = "#include <llvm/Transforms/InstCombine/InstCombine.h>\n"
+          add = "\t\tfpm.addPass(InstCombinePass());\n"
+          assert s.count(inc) == 1, "SPU InstCombine include anchor changed"
+          assert s.count(add) == 1, "SPU InstCombine pass anchor changed"
+          s = s.replace(inc, "", 1).replace(add, "", 1)
+          calling = "m_ir->CreateCall(m_test_state, {m_thread})->setCallingConv(m_test_state->getCallingConv());"
+          assert s.count(calling) == 2, "SPU call convention correction must remain"
+          assert "InstCombinePass()" not in s, "experimental SPU optimization is still enabled"
+          spu.write_text(s)
+          print("PsTJohn1.1: ARMSX3 SPU helper calling conventions retained; InstCombine A/B rolled back")
+
+          # Two DmC NPUB30830 runs ended with 445005164 / 443257476 byte
+          # Vulkan cache snapshots rejected by the old 320 MiB bound.
+          # Preserve existing file magic, UUID, version and atomic persistence.
+          # Increase only the compiled iOS KosmicKrisp provider's cap.
+          vk = root / "Emu/RSX/VK/vkutils/device.cpp"
+          s = vk.read_text()
+          old = "constexpr u64 maximum_pipeline_cache_data_size = 320ull * 1024 * 1024;"
+          new = "constexpr u64 maximum_pipeline_cache_data_size = 512ull * 1024 * 1024;"
+          assert s.count(old) == 1, "320 MiB provider-specific limit anchor changed"
+          assert s.count("maximum_pipeline_cache_data_size = 128 * 1024 * 1024;") == 1, "non-KK bound changed"
+          assert "#if defined(RPCS3_IOS) && defined(RPCS3_VULKAN_PROVIDER_KOSMICKRISP)" in s
+          s = s.replace(old, new, 1)
+          anchor = "\t\tm_pipeline_cache_path = get_pipeline_cache_path();"
+          assert s.count(anchor) == 1, "Vulkan pipeline cache initialization anchor changed"
+          s = s.replace(anchor, anchor + """
+          #if defined(RPCS3_IOS) && defined(RPCS3_VULKAN_PROVIDER_KOSMICKRISP)
+          		rsx_log.notice("PsTJohn1.1: iOS KosmicKrisp Vulkan pipeline cache persistence cap 512 MiB");
+          #endif""", 1)
+          for guard in ("pipeline_cache_uuid", "pipeline_cache_file_version", "pending.commit()", "maximum_pipeline_cache_data_size"):
+              assert guard in s, f"Vulkan pipeline cache safety gate missing: {guard}"
+          vk.write_text(s)
+          texture = (root / "Emu/RSX/VK/VKTexture.cpp").read_text()
+          assert texture.count("(s_offset + in_stencil_size) - z_offset") == 2, "Vulkan depth/stencil barriers regressed"
+          assert texture.count("const auto allocation_end = s_offset + in_stencil_size;") == 2
+          print("PsTJohn1.1: guarded 512 MiB cache persistence; Vulkan transfer checks retained")
+          PY_PSTJOHN11
+          git -C rpcs3-src diff --check
+          git -C rpcs3-src diff --stat | tee PsTJohn1-1.1-core-diff-stat.txt
+          git -C rpcs3-src diff -- rpcs3/Emu/Cell/SPULLVMRecompiler.cpp rpcs3/Emu/RSX/VK/VKTexture.cpp rpcs3/Emu/RSX/VK/vkutils/device.cpp > PsTJohn1-1.1-arm64-backport.patch
+          test -s PsTJohn1-1.1-arm64-backport.patch
 
       - name: Build FFmpeg 8.1.1 for iOS
         run: |
@@ -6717,10 +6770,10 @@ jobs:
           codesign -d --entitlements :- "$APP" 2>&1 | tee pstjon-entitlements.txt
           (
             cd package
-            ditto -c -k --sequesterRsrc --keepParent Payload "$GITHUB_WORKSPACE/PsTJohn1-1.0.ipa"
+            ditto -c -k --sequesterRsrc --keepParent Payload "$GITHUB_WORKSPACE/PsTJohn1-1.1.ipa"
           )
-          shasum -a 256 PsTJohn1-1.0.ipa
-          test -s PsTJohn1-1.0-NPUB30830-config.txt
+          shasum -a 256 PsTJohn1-1.1.ipa
+          test -s PsTJohn1-1.1-NPUB30830-config.txt
       - name: Build report
         run: |
           {
@@ -6741,13 +6794,13 @@ jobs:
             echo "Volk: $VOLK_SHA"
             echo "FFmpeg: $FFMPEG_VERSION"
             echo "Core: $(shasum -a 256 libRPCS3Core.dylib | awk '{print $1}')"
-            echo "IPA: $(shasum -a 256 PsTJohn1-1.0.ipa | awk '{print $1}')"
-            echo "NPUB30830 config: $(shasum -a 256 PsTJohn1-1.0-NPUB30830-config.txt | awk '{print $1}')"
+            echo "IPA: $(shasum -a 256 PsTJohn1-1.1.ipa | awk '{print $1}')"
+            echo "NPUB30830 config: $(shasum -a 256 PsTJohn1-1.1-NPUB30830-config.txt | awk '{print $1}')"
             echo "Rollback checkpoint: pstjon-kk-m6.6.8-exp (1a6d4006c3f55b028672cbee36a6b859cdbaccf9)"
-          } > PsTJohn1-1.0-build.txt
+          } > PsTJohn1-1.1-build.txt
 
-          cp HANDOFF-PsTJon-KosmicKrisp-M0-M9-2026-10-12-M6.8.2-EXP.txt PsTJohn1-1.0-HANDOFF.txt
-          cat >> PsTJohn1-1.0-HANDOFF.txt <<'HANDOFF_M683'
+          cp HANDOFF-PsTJon-KosmicKrisp-M0-M9-2026-10-12-M6.8.2-EXP.txt PsTJohn1-1.1-HANDOFF.txt
+          cat >> PsTJohn1-1.1-HANDOFF.txt <<'HANDOFF_M683'
           
           ===========================================================
           M6.8.3-EXP 2026-10-12: update of prior handoff M0-M9
@@ -6788,7 +6841,7 @@ jobs:
           M0-M5 preserved. M6 ongoing graphics correctness/optimization.
           M7-M9 unvalidated and not claimed completed.
           HANDOFF_M683
-          cat >> PsTJohn1-1.0-HANDOFF.txt <<'HANDOFF_M684'
+          cat >> PsTJohn1-1.1-HANDOFF.txt <<'HANDOFF_M684'
           
           M6.8.4-EXP / 2026-10-13: NPUA80918 APP_VER=01.04 physical
           recording (81.9 s), clear image but 13.8 -> 0 FPS at 20s,
@@ -6801,7 +6854,7 @@ jobs:
           Ultra shader/WCB/true ZCull 512/KosmicKrisp unchanged.
           No claim of native 30 or 60 FPS or frame generation.
           HANDOFF_M684
-          cat >> PsTJohn1-1.0-HANDOFF.txt <<'HANDOFF_M685'
+          cat >> PsTJohn1-1.1-HANDOFF.txt <<'HANDOFF_M685'
           
           M6.8.5 EXP: physical M6.8.4 NPUA80918 v01.04 advanced
           ~5.7 minutes before unmapped writes beginning 0xcf900000;
@@ -6825,7 +6878,7 @@ jobs:
           blurred scene and prior failing scene; send video+log,
           validate local source/dst warnings, ZCull waits and memory.
           HANDOFF_M685
-          cat >> PsTJohn1-1.0-HANDOFF.txt <<'HANDOFF_M686'
+          cat >> PsTJohn1-1.1-HANDOFF.txt <<'HANDOFF_M686'
           
           M6.8.6 EXP / 2026-10-13
           A/B SAME TITLE NPUA80918 v01.12 on M6.8.4 vs M6.8.5:
@@ -6847,7 +6900,7 @@ jobs:
           NPUA 01.12 save/route and preserve records of last stage.
           HANDLE CRITICAL AS A DIAGNOSTIC BUILD; don't disable GPU safety.
           HANDOFF_M686
-          cat >> PsTJohn1-1.0-HANDOFF.txt <<'HANDOFF_M687'
+          cat >> PsTJohn1-1.1-HANDOFF.txt <<'HANDOFF_M687'
           
           M6.8.7 EXP / 2026-10-13
           Physical NPUB30830 01.01 DmC booted on M6.8.6 with actual
@@ -6874,7 +6927,7 @@ jobs:
           verify no image regression. Preserve graphical fixes and
           all other branches. 30/60FPS not achieved by this change.
           HANDOFF_M687
-          cat >> PsTJohn1-1.0-HANDOFF.txt <<'HANDOFF_M688'
+          cat >> PsTJohn1-1.1-HANDOFF.txt <<'HANDOFF_M688'
 
           M6.8.8-EXP 2026-10-13: GLOBAL CODE DEPILATION AUDIT
           M4 workflow ~895 lines, M6.8.7 ~6468 lines due sequential
@@ -6906,7 +6959,7 @@ jobs:
           M0-M6 still in progress; M7 30FPS, M8 60 native, M9
           frame interpolation/integration pending. Do not merge M9.
           HANDOFF_M688
-          cat >> PsTJohn1-1.0-HANDOFF.txt <<'HANDOFF_M69'
+          cat >> PsTJohn1-1.1-HANDOFF.txt <<'HANDOFF_M69'
 
           M6.9-EXP 2026-10-14: DmC NPUB30830 physical log audit and
           telemetry-only frametime percentile addition.
@@ -6942,7 +6995,7 @@ jobs:
           No claim of stable 30/60 FPS. Physical A/B on DmC and Ascension
           remains required; supplied log is DmC, not Ascension.
           HANDOFF_M69
-          cat >> PsTJohn1-1.0-HANDOFF.txt <<'HANDOFF_M691'
+          cat >> PsTJohn1-1.1-HANDOFF.txt <<'HANDOFF_M691'
 
           M6.9.1-EXP 2026-10-14: ARM64 reservation-wait A/B adapted from
           upstream RPCS3 PR #18913, replacing the speculative scheduler
@@ -6968,7 +7021,7 @@ jobs:
           It does not claim stable 30/60 FPS. Existing M6.9 frame telemetry and
           M6.8.8-to-M6.8.1 safeguards/fidelity changes remain.
           HANDOFF_M691
-          cat >> PsTJohn1-1.0-HANDOFF.txt <<'HANDOFF_M692'
+          cat >> PsTJohn1-1.1-HANDOFF.txt <<'HANDOFF_M692'
           
           M6.9.2-EXP 2026-10-14 — CONTROLLED GLOBAL SPU ROLLBACK
           Three sibling commits on common M6.9 parent (2f6009b):
@@ -6999,19 +7052,52 @@ jobs:
           attempts. 30/60 FPS NOT PROVEN; M6 NOT completed, M7-M9
           remain outstanding.
           HANDOFF_M692
-          test -s PsTJohn1-1.0-HANDOFF.txt
+
+          cat >> PsTJohn1-1.1-HANDOFF.txt <<'HANDOFF_PSTJOHN11'
+
+          PsTJohn1 1.1 / 2026-10-15 — CONTROLLED STABILITY BUILD
+          Physical PsTJohn1 1.0 DmC NPUB30830 two logs:
+          loop detection ON: 89 telemetry windows; median 19.24 FPS,
+          median late 17.66, 55.1% windows below 20FPS, 4898MiB peak.
+          loop detection OFF: 99 windows, median 17.78 FPS,
+          median late 16.92, 65.7% below 20FPS, 4588MiB peak.
+          Workloads/scenes differ, so don't infer causal effect.
+          Both had flickering complaints and sustained 15-20FPS.
+          Vulkan pipeline cache snapshots 445005164 and 443257476 bytes
+          repeatedly rejected due provider-specific 320MiB cap.
+          On iOS+KosmicKrisp only, set cache cap 512MiB, preserving
+          128MiB cap for other drivers, header/UUID validation and
+          atomic save. Larger cache can increase memory load on
+          next boot and does NOT guarantee higher sustained FPS.
+          Isolate ARMSX3 SPU InstCombine (remove optimizer pass and
+          include). Keep the two upstream helper calling conventions,
+          VKTexture aligned depth/stencil allocation bounds (4),
+          depth/stencil transfer buffer barriers (2), KosmicKrisp,
+          shaders, ZCull, QueryPool, guest timing and SPU wait policy.
+          No extra title-specific gameplay patches; no global
+          aggressive render-target invalidation or GPU waits.
+          This is a controlled A/B diagnostic, not claimed GPU fix.
+          Next: on-device DmC matching scene/saves, loop detection
+          ON and OFF compared with prior builds, unchanged graphics
+          settings and caches. Confirm "pipeline cache saved" after
+          game exit; on next launch verify Vulkan cache restored.
+          If flicker persists, investigate render-target lifetime,
+          Metal/Vulkan GPU timings and framebuffer alias hazards.
+          Do not extrapolate FPS stability from successful CI.
+          HANDOFF_PSTJOHN11
+          test -s PsTJohn1-1.1-HANDOFF.txt
 
       - uses: actions/upload-artifact@v4
         with:
-          name: PsTJohn1-1.0-IPA
+          name: PsTJohn1-1.1-IPA
           path: |
-            PsTJohn1-1.0.ipa
-            PsTJohn1-1.0-core-diff-stat.txt
-            PsTJohn1-1.0-arm64-backport.patch
-            PsTJohn1-1.0-build.txt
-            PsTJohn1-1.0-NPUB30830-config.txt
+            PsTJohn1-1.1.ipa
+            PsTJohn1-1.1-core-diff-stat.txt
+            PsTJohn1-1.1-arm64-backport.patch
+            PsTJohn1-1.1-build.txt
+            PsTJohn1-1.1-NPUB30830-config.txt
             M6.9.1-ROLLBACK-TO-M6.6.8.txt
-            PsTJohn1-1.0-HANDOFF.txt
+            PsTJohn1-1.1-HANDOFF.txt
             pstjon-entitlements.txt
             M5-rpcs3-patch-stat.txt
             M4-mesa-patch-stat.txt
@@ -7027,23 +7113,23 @@ jobs:
           compression-level: 0
 
       # Direct iPhone-ready release is required in addition to the Actions artifact.
-      - name: Publish direct PsTJohn1 1.0 IPA
+      - name: Publish direct PsTJohn1 1.1 IPA
         if: success()
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
           set -euxo pipefail
-          if gh release view pstjohn1-1.0 >/dev/null 2>&1; then
-            gh release upload pstjohn1-1.0 PsTJohn1-1.0.ipa PsTJohn1-1.0-NPUB30830-config.txt M6.9.1-ROLLBACK-TO-M6.6.8.txt PsTJohn1-1.0-HANDOFF.txt PsTJohn1-1.0-arm64-backport.patch --clobber
+          if gh release view pstjohn1-1.1 >/dev/null 2>&1; then
+            gh release upload pstjohn1-1.1 PsTJohn1-1.1.ipa PsTJohn1-1.1-NPUB30830-config.txt M6.9.1-ROLLBACK-TO-M6.6.8.txt PsTJohn1-1.1-HANDOFF.txt PsTJohn1-1.1-arm64-backport.patch --clobber
           else
-            gh release create pstjohn1-1.0 PsTJohn1-1.0.ipa PsTJohn1-1.0-NPUB30830-config.txt M6.9.1-ROLLBACK-TO-M6.6.8.txt PsTJohn1-1.0-HANDOFF.txt PsTJohn1-1.0-arm64-backport.patch \
+            gh release create pstjohn1-1.1 PsTJohn1-1.1.ipa PsTJohn1-1.1-NPUB30830-config.txt M6.9.1-ROLLBACK-TO-M6.6.8.txt PsTJohn1-1.1-HANDOFF.txt PsTJohn1-1.1-arm64-backport.patch \
               --target "$GITHUB_SHA" \
-              --title "PsTJohn1 1.0 - ARMSX3 ARM64 hybrid" \
-              --notes "PsTJohn1 1.0: controlled backport from ARMSX3 of SPU LLVM InstCombine plus helper calling conventions (ab53473f), and Vulkan aligned depth/stencil transfer checks plus correct buffer barriers (07e477d2). Based on PsTJon M6.9.2, preserving run114 SPU waiting, KosmicKrisp, QueryPool, texture safeguards and existing settings. Build/CI are not proof of 30 FPS, stability or correct graphics; physical A/B required." \
+              --title "PsTJohn1 1.1 - cache persistence and SPU A/B" \
+              --notes "PsTJohn1 1.1: validated DmC loop detection ON/OFF traces show 15-20 sustained FPS, flickering and 443-445MB VkPipelineCache snapshots dropped by prior 320MiB cap. Raise persisted Vulkan cache cap only for iOS KosmicKrisp to 512 MiB while preserving checks, UUID and atomic save. Remove experimental SPU LLVM InstCombine to isolate potential graphics regression, retain ARM64 calling convention correction and ARMSX3 aligned Vulkan depth transfer checks/barriers. Keep baseline rendering, QueryPool, SPU wait policy, other branches untouched. Physical correctness and 30 FPS remain unproven." \
               --latest=false
           fi
-          gh release edit pstjohn1-1.0 \
-            --title "PsTJohn1 1.0 - ARMSX3 ARM64 hybrid" \
-            --notes "PsTJohn1 1.0: controlled backport from ARMSX3 of SPU LLVM InstCombine plus helper calling conventions (ab53473f), and Vulkan aligned depth/stencil transfer checks plus correct buffer barriers (07e477d2). Based on PsTJon M6.9.2, preserving run114 SPU waiting, KosmicKrisp, QueryPool, texture safeguards and existing settings. Build/CI are not proof of 30 FPS, stability or correct graphics; physical A/B required." \
+          gh release edit pstjohn1-1.1 \
+            --title "PsTJohn1 1.1 - cache persistence and SPU A/B" \
+            --notes "PsTJohn1 1.1: validated DmC loop detection ON/OFF traces show 15-20 sustained FPS, flickering and 443-445MB VkPipelineCache snapshots dropped by prior 320MiB cap. Raise persisted Vulkan cache cap only for iOS KosmicKrisp to 512 MiB while preserving checks, UUID and atomic save. Remove experimental SPU LLVM InstCombine to isolate potential graphics regression, retain ARM64 calling convention correction and ARMSX3 aligned Vulkan depth transfer checks/barriers. Keep baseline rendering, QueryPool, SPU wait policy, other branches untouched. Physical correctness and 30 FPS remain unproven." \
             --latest=false
-          gh release view pstjohn1-1.0 --json url,assets
+          gh release view pstjohn1-1.1 --json url,assets

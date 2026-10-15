@@ -1,0 +1,13 @@
+PsTJohn1 1.1 | ARM64/KosmicKrisp controlled stability build | 2026-10-15
+Branch: PsTJohn ONLY. One commit / one push-triggered workflow. Other branches untouched.
+Inputs: PsTJohn1 1.0 physical DmC NPUB30830 ON+OFF loop detection sessions.
+- Remove experimental SPU InstCombine pass/include added in 1.0; retain both ARM64 calling convention fixes.
+- Preserve four aligned Vulkan depth/stencil allocation checks and two corrected barriers.
+- iOS KosmicKrisp only: increase VkPipelineCache persistence cap from 320 to 512 MiB.
+  Empirical failing snapshots 445005164, 443257476 bytes. Keep 128 MiB default elsewhere.
+  Preserve magic/version/UUID/atomic write and guard against missing source anchors.
+- Add a runtime notice for the new pipeline cache cap and persist exact final source diff.
+- No forced ZCull, shader, frame timing, render target lifetime, audio or game-specific tweaks.
+Validation: source structural assertions + Xcode arm64 build + on-device A/B needed.
+Goal: flicker isolation, reduced repeated cold shader/pipeline compilation and improved diagnostics.
+Do not claim 30 FPS stability, better textures, or fixed GPU timing before iPhone testing.
