@@ -17,6 +17,9 @@ class M50NativeGuestShaderTest(unittest.TestCase):
         self.assertIn('PS3RECOMP_HAVE_MSL_TRANSLATION=1', cmake)
         self.assertIn('glslang::SPIRV spirv-cross-c',cmake)
         self.assertIn('"${AR_SHADER_DEPS}" "${AR_SHADER_DEPS}/SPIRV-Cross"',cmake)
+        # Ensure these are actual CMake lines, not escaped \\n inside a comment.
+        self.assertIn('    target_include_directories(ps3recomp_runtime PRIVATE\n',cmake)
+        self.assertNotIn('\\n    target_include_directories',cmake)
         self.assertIn('SPVC_MSL_PLATFORM_IOS',cpp)
         self.assertIn('SPVC_MSL_PLATFORM_MACOS',cpp)
     def test_real_microcode_to_shader_not_fixed_substitute(self):
