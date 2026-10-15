@@ -1,4 +1,4 @@
-name: AscensionRecomp M3.0 - PowerPC sc and explicit LV2 syscall ABI
+name: AscensionRecomp M3.1 - import NID manifest generator
 
 on:
   push:
@@ -213,12 +213,36 @@ jobs:
           file m30-lv2-arm64.o | tee m30-object-info.log
           shasum -a 256 m30-lv2-arm64.o > m30-checksums.txt
           echo 'M3.0: PPU sc uses r11; missing LV2 syscalls are fatal to test bridge, syscall 352 writes actual PS3 guest-memory info.' > m30-status.txt
+      - name: M3.1 generate guarded guest import binding from synthetic manifest
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          import json
+          src=[
+              {'stub':'0x10220','nid':'0x11223344','library':'sysPrxForUser'},
+              {'stub':'0x10260','nid':'0xAABBCCDD','library':'cellGcmSys'}
+          ]
+          json.dump(src,open('m31-synthetic-imports.json','w'))
+          PY
+          python3 tools/build_import_binder.py --imports m31-synthetic-imports.json --source m31-guest-imports.c --report m31-import-report.json | tee m31-import-generate.log
+          python3 - <<'PY'
+          import json
+          d=json.load(open('m31-import-report.json'))
+          assert d['stubs_validated']==2 and d['unique_nids']==2
+          PY
+          python3 tools/make_hle_smoke.py --out m31-synthetic-ppu.c
+          clang -std=c11 -O2 -Wall -Wextra -Werror -Wno-unused-label -Wno-unused-function -I upstream/runtime/ppu -I runtime m31-synthetic-ppu.c m31-guest-imports.c runtime/ppu_bridge.c tests/host_import_manifest.c -o m31-host
+          ./m31-host 2>&1 | tee m31-host-test.log
+          xcrun --sdk iphoneos clang -target arm64-apple-ios17.0 -std=c11 -O2 -I upstream/runtime/ppu -I runtime -c m31-guest-imports.c -o m31-manifest-arm64.o
+          file m31-manifest-arm64.o | tee m31-arm64-object.log
+          shasum -a 256 m31-manifest-arm64.o > m31-checksums.txt
+          echo 'M3.1: all import NID bindings generated with checked duplicates; CI synthetic only.' > m31-status.txt
       - name: Upload M2 evidence - runtime + synthetic PPU proof
 
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: AscensionRecomp-M3.0-lv2-syscall-evidence
+          name: AscensionRecomp-M3.1-import-binding-evidence
           if-no-files-found: warn
           retention-days: 14
           path: |
@@ -272,6 +296,13 @@ jobs:
             m30-object-info.log
             m30-checksums.txt
             m30-status.txt
+            m31-import-generate.log
+            m31-host-test.log
+            m31-arm64-object.log
+            m31-checksums.txt
+            m31-status.txt
+            m31-import-report.json
+            m31-manifest-arm64.o
             m30-lv2-arm64.o
             m29-tls-arm64.o
             m28-hle-bridge-arm64.o
