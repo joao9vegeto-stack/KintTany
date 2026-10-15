@@ -14,6 +14,7 @@ extern int ar_probe_rsx_fixed_stage(void);
 extern int ar_probe_rsx_dma_triangle(unsigned int *background,unsigned int *sample);
 extern int ar_probe_rsx_indexed_quad(unsigned use32,unsigned int *background,unsigned int *sample);
 extern int ar_probe_rsx_texture(void *layer,unsigned swizzled,unsigned int out_pixels[4]);
+extern int ar_probe_rsx_texture_registers(unsigned swizzled,unsigned int out_pixels[4]);
 
 @interface ARProbeDelegate : UIResponder <UIApplicationDelegate>
 @property(nonatomic,strong) UIWindow *window;
@@ -24,6 +25,7 @@ extern int ar_probe_rsx_texture(void *layer,unsigned swizzled,unsigned int out_p
 @property(nonatomic,assign) NSUInteger guestAttempts;
 @property(nonatomic,assign) NSUInteger indexedAttempts;
 @property(nonatomic,assign) NSUInteger textureAttempts;
+@property(nonatomic,assign) NSUInteger registerTextureAttempts;
 @end
 
 @implementation ARProbeDelegate
@@ -70,6 +72,14 @@ extern int ar_probe_rsx_texture(void *layer,unsigned swizzled,unsigned int out_p
     [tap requireGestureRecognizerToFail:fourTap];
     [doubleTap requireGestureRecognizerToFail:fourTap];
     [tripleTap requireGestureRecognizerToFail:fourTap];
+    UITapGestureRecognizer *fiveTap=[[UITapGestureRecognizer alloc]
+                  initWithTarget:self action:@selector(drawRSXBoundTexture:)];
+    fiveTap.numberOfTapsRequired=5;
+    [view addGestureRecognizer:fiveTap];
+    [tap requireGestureRecognizerToFail:fiveTap];
+    [doubleTap requireGestureRecognizerToFail:fiveTap];
+    [tripleTap requireGestureRecognizerToFail:fiveTap];
+    [fourTap requireGestureRecognizerToFail:fiveTap];
 
     UILabel *status=[[UILabel alloc] initWithFrame:CGRectZero];
     status.translatesAutoresizingMaskIntoConstraints=NO;
@@ -110,6 +120,7 @@ extern int ar_probe_rsx_texture(void *layer,unsigned swizzled,unsigned int out_p
                                   "2 toques: TRIÂNGULO DMA da memória PS3\n"
                                   "3 toques: QUAD indexado 16/32 bits\n"
                                   "4 toques: TEXTURA PS3 linear/swizzled\n"
+                                  "5 toques: TEXTURA por NV4097/cache/Metal\n"
                                   "Sem arquivos do jogo.";
             } else {
                 self.status.text=[NSString stringWithFormat:
@@ -259,6 +270,36 @@ extern int ar_probe_rsx_texture(void *layer,unsigned swizzled,unsigned int out_p
              "Demais testes RSX continuam disponíveis.",
              rc,swizzled?@"SWIZZLED":@"LINEAR",
              colors[0],colors[1],colors[2],colors[3]];
+    }
+}
+
+
+/* Five taps: vertex draw loads native RSX texture unit 0 from PS3 guest
+ * registers; the GPU samples the bound Metal object in an isolated
+ * compute diagnostic (NOT the game's RSX fragment program). */
+- (void)drawRSXBoundTexture:(UITapGestureRecognizer *)gesture {
+    (void)gesture;
+    if(!self.ready)return;
+    unsigned swizzled=(unsigned)((self.registerTextureAttempts++&1u)!=0);
+    unsigned int samples[4]={0,0,0,0};
+    int rc=ar_probe_rsx_texture_registers(swizzled,samples);
+    if(rc==0) {
+        self.status.text=[NSString stringWithFormat:
+            @"NV4097 → TEXTURA0 → METAL: OK\n"
+             "Origem: registrador RSX + cache/decoder\n"
+             "Formato: %@ · GPU amostrou vínculo real\n"
+             "Pixels: %08X %08X %08X %08X\n"
+             "Amostrador de diagnóstico, sem shader PS3",
+             swizzled?@"SWIZZLED":@"LINEAR",
+             samples[0],samples[1],samples[2],samples[3]];
+    } else {
+        self.status.text=[NSString stringWithFormat:
+            @"NV4097 TEXTURA0 FALHOU: %d\n"
+             "Formato: %@\n"
+             "Pixels: %08X %08X %08X %08X\n"
+             "M4.8 e anteriores preservados.",
+             rc,swizzled?@"SWIZZLED":@"LINEAR",
+             samples[0],samples[1],samples[2],samples[3]];
     }
 }
 
