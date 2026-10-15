@@ -268,3 +268,97 @@ int ar_probe_rsx_indexed_quad(unsigned use32, uint32_t *bg_out, uint32_t *pixel_
     if((pixel>>24)<240u||r<210u||g<160u||bb>110u)return -34;
     return 0;
 }
+
+/* M4.9: NV4097 texture registers -> engine cache/decode -> Metal texture
+ * binding on an ACTUAL PS3 register-file draw. A tiny host Metal compute
+ * diagnostic subsequently samples the resource recorded at that draw.
+ * It is NOT a guest fragment shader translation test.
+ */
+extern void rsx_metal_backend_debug_reset_texture_probe(void);
+extern int rsx_metal_backend_debug_sample_texture0(uint32_t rgba[4]);
+enum { AR_TEX_BIND_OFFSET=0x00280000u, AR_TEX_BIND_W=8u, AR_TEX_BIND_H=8u };
+static const uint32_t ar_tex_expected[4]={
+    0xffff0000u,0xff00ff00u,0xff0000ffu,0xffffff00u
+};
+int ar_probe_rsx_texture_registers(unsigned swizzled,uint32_t out[4]) {
+    if(out) memset(out,0,4*sizeof(uint32_t));
+    if(!rsx_draw_engine_enabled())return -61;
+    if(!vm_base || (uint64_t)AR_TEX_BIND_OFFSET+AR_TEX_BIND_W*AR_TEX_BIND_H*4u>ppu_vm_size)
+        return -62;
+    /* Four-quadrant PS3 A,R,G,B bytes in MAIN guest memory. */
+    uint8_t *guest=vm_base+AR_TEX_BIND_OFFSET;
+    const uint8_t rgba[4][4]={
+        {255,0,0,255},{0,255,0,255},{0,0,255,255},{255,255,0,255}
+    };
+    for(unsigned y=0;y<AR_TEX_BIND_H;y++)for(unsigned x=0;x<AR_TEX_BIND_W;x++){
+        unsigned q=(x>=4u)+(y>=4u?2u:0u);
+        unsigned pos=swizzled ? rsx_swizzle_offset(x,y,3u,3u)
+                              : y*AR_TEX_BIND_W+x;
+        uint8_t *dst=guest+4u*pos;
+        dst[0]=rgba[q][3];dst[1]=rgba[q][0];dst[2]=rgba[q][1];dst[3]=rgba[q][2];
+    }
+    /* Vertex DMA already validated M4.6; this triangle's actual DRAW forces
+     * texture upload/bind through RSX engine sink_bind_textures, tex unit 0. */
+    const float triangle[3][4]={
+        {-0.93f,-0.93f,0.f,1.f},{0.93f,-0.93f,0.f,1.f},
+        {0.0f,0.93f,0.f,1.f}
+    };
+    uint8_t *vbo=vm_base+AR_DMA_VERTEX_OFFSET;
+    for(unsigned v=0;v<3;v++)for(unsigned c=0;c<4;c++)
+        ar_write_be_float(vbo+v*16u+c*4u,triangle[v][c]);
+
+    rsx_draw_engine_set_guest_memory(ar_probe_guest_reader,NULL);
+    rsx_metal_backend_debug_reset_texture_probe();
+    /* M4.8's tested texture format, this time through real NV4097 state. */
+    rsx_draw_engine_method(NV4097_SET_TEXTURE_OFFSET,AR_TEX_BIND_OFFSET);
+    rsx_draw_engine_method(NV4097_SET_TEXTURE_FORMAT,
+           (1u<<16)|((swizzled?0x85u:0xA5u)<<8)|(2u<<4)|2u);
+    rsx_draw_engine_method(NV4097_SET_TEXTURE_ADDRESS,0x00030303u);
+    rsx_draw_engine_method(NV4097_SET_TEXTURE_CONTROL0,0x80000000u);
+    rsx_draw_engine_method(NV4097_SET_TEXTURE_CONTROL1,0x0000AAE4u);
+    rsx_draw_engine_method(NV4097_SET_TEXTURE_FILTER,0x01010000u);
+    rsx_draw_engine_method(NV4097_SET_TEXTURE_IMAGE_RECT,
+                            (AR_TEX_BIND_W<<16)|AR_TEX_BIND_H);
+    rsx_draw_engine_method(NV4097_SET_TEXTURE_CONTROL3,AR_TEX_BIND_W*4u);
+
+    rsx_draw_engine_method(NV4097_SET_CONTEXT_DMA_COLOR_A,
+                            CELL_GCM_CONTEXT_DMA_MEMORY_FRAME_BUFFER);
+    rsx_draw_engine_method(NV4097_SET_SURFACE_CLIP_HORIZONTAL,AR_WIDTH<<16);
+    rsx_draw_engine_method(NV4097_SET_SURFACE_CLIP_VERTICAL,AR_HEIGHT<<16);
+    rsx_draw_engine_method(NV4097_SET_SURFACE_FORMAT,0x5u);
+    rsx_draw_engine_method(NV4097_SET_SURFACE_PITCH_A,AR_WIDTH*4u);
+    rsx_draw_engine_method(NV4097_SET_SURFACE_COLOR_AOFFSET,AR_GUEST_RT_OFFSET);
+    rsx_draw_engine_method(NV4097_SET_SURFACE_COLOR_TARGET,
+                            CELL_GCM_SURFACE_TARGET_0);
+    rsx_draw_engine_method(NV4097_SET_COLOR_CLEAR_VALUE,0xff1d2634u);
+    rsx_draw_engine_method(NV4097_CLEAR_SURFACE,0xf0u);
+    rsx_draw_engine_method(NV4097_SET_COLOR_MASK,0x01010101u);
+    rsx_draw_engine_method(NV4097_SET_CULL_FACE_ENABLE,0u);
+    rsx_draw_engine_method(NV4097_SET_DEPTH_TEST_ENABLE,0u);
+    rsx_draw_engine_method(NV4097_SET_BLEND_ENABLE,0u);
+    rsx_draw_engine_method(NV4097_SET_VERTEX_DATA_ARRAY_FORMAT,
+                           2u|(4u<<4)|(16u<<8));
+    rsx_draw_engine_method(NV4097_SET_VERTEX_DATA_ARRAY_OFFSET,
+                           0x80000000u|AR_DMA_VERTEX_OFFSET);
+    const float gold[4]={0.95f,0.83f,0.18f,1.0f};
+    for(unsigned c=0;c<4;c++)
+        rsx_draw_engine_method(0x1c30u+c*4u,f32_word(gold[c]));
+    rsx_draw_engine_method(NV4097_SET_BEGIN_END,RSX_PRIMITIVE_TRIANGLES);
+    rsx_draw_engine_method(NV4097_DRAW_ARRAYS,(3u-1u)<<24);
+    rsx_draw_engine_method(NV4097_SET_BEGIN_END,0u);
+    rsx_draw_engine_set_display_buffer(0,RSX_LOCATION_LOCAL,AR_GUEST_RT_OFFSET,
+                             AR_WIDTH*4u,AR_WIDTH,AR_HEIGHT);
+    rsx_draw_engine_method(0xe944u,0u);
+    rsx_draw_engine_flush();
+    /* The GPU compute diagnostic MUST read the object attached to this
+     * draw by eng_encode_draw, NOT an independently uploaded texture. */
+    uint32_t actual[4]={0,0,0,0};
+    int probe=rsx_metal_backend_debug_sample_texture0(actual);
+    rsx_draw_engine_method(NV4097_SET_TEXTURE_CONTROL0,0u);
+    rsx_draw_engine_set_guest_memory(NULL,NULL);
+    if(out) memcpy(out,actual,sizeof(actual));
+    if(probe)return -70+probe;
+    for(unsigned q=0;q<4;q++)
+        if(actual[q]!=ar_tex_expected[q])return -80-(int)q;
+    return 0;
+}
