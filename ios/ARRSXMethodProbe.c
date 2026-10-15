@@ -200,3 +200,71 @@ int ar_probe_rsx_dma_triangle(uint32_t *background, uint32_t *sample) {
     if((pixel>>24)<240u || r<180u || g>140u || b<145u) return -24;
     return 0;
 }
+
+/* M4.7: Real NV4097 indexed-mesh probe: four BE DMA vertices + six BE
+ * indices forming two triangles. Alternates guest u16 and u32 formats.
+ * Data synthetic; no PS3 title executable or graphics included. */
+enum { AR_IDX_VBO=0x00220000u, AR_IDX_EBO=0x00240000u };
+static void ar_be_index(uint8_t *p,uint32_t idx,unsigned width) {
+    if(width==4u){ p[0]=(uint8_t)(idx>>24);p[1]=(uint8_t)(idx>>16);
+                   p[2]=(uint8_t)(idx>>8); p[3]=(uint8_t)idx; }
+    else { p[0]=(uint8_t)(idx>>8);p[1]=(uint8_t)idx; }
+}
+int ar_probe_rsx_indexed_quad(unsigned use32, uint32_t *bg_out, uint32_t *pixel_out) {
+    const uint32_t bg=0xff162b43u;
+    if(bg_out)*bg_out=bg;
+    if(pixel_out)*pixel_out=0;
+    if(!rsx_draw_engine_enabled())return -31;
+    if(!vm_base||(uint64_t)AR_IDX_VBO+64u>ppu_vm_size||
+       (uint64_t)AR_IDX_EBO+24u>ppu_vm_size)return -32;
+
+    const float xyzw[4][4]={
+      {-0.82f,-0.78f,0.f,1.f},{0.82f,-0.78f,0.f,1.f},
+      { 0.82f, 0.78f,0.f,1.f},{-0.82f,0.78f,0.f,1.f}
+    };
+    uint8_t *vbo=vm_base+AR_IDX_VBO;
+    for(unsigned i=0;i<4;i++)
+        for(unsigned c=0;c<4;c++)ar_write_be_float(vbo+i*16u+c*4u,xyzw[i][c]);
+    const uint32_t idx[6]={0,1,2,0,2,3};
+    const unsigned width=use32 ? 4u : 2u;
+    uint8_t *ebo=vm_base+AR_IDX_EBO;
+    for(unsigned i=0;i<6;i++)ar_be_index(ebo+i*width,idx[i],width);
+
+    rsx_draw_engine_set_guest_memory(ar_probe_guest_reader,NULL);
+    rsx_draw_engine_method(NV4097_SET_CONTEXT_DMA_COLOR_A,
+                           CELL_GCM_CONTEXT_DMA_MEMORY_FRAME_BUFFER);
+    rsx_draw_engine_method(NV4097_SET_SURFACE_CLIP_HORIZONTAL,AR_WIDTH<<16);
+    rsx_draw_engine_method(NV4097_SET_SURFACE_CLIP_VERTICAL,AR_HEIGHT<<16);
+    rsx_draw_engine_method(NV4097_SET_SURFACE_FORMAT,0x5u);
+    rsx_draw_engine_method(NV4097_SET_SURFACE_PITCH_A,AR_WIDTH*4u);
+    rsx_draw_engine_method(NV4097_SET_SURFACE_COLOR_AOFFSET,AR_GUEST_RT_OFFSET);
+    rsx_draw_engine_method(NV4097_SET_SURFACE_COLOR_TARGET,CELL_GCM_SURFACE_TARGET_0);
+    rsx_draw_engine_method(NV4097_SET_COLOR_CLEAR_VALUE,bg);
+    rsx_draw_engine_method(NV4097_CLEAR_SURFACE,0xf0u);
+    rsx_draw_engine_method(NV4097_SET_COLOR_MASK,0x01010101u);
+    rsx_draw_engine_method(NV4097_SET_CULL_FACE_ENABLE,0u);
+    rsx_draw_engine_method(NV4097_SET_DEPTH_TEST_ENABLE,0u);
+    rsx_draw_engine_method(NV4097_SET_BLEND_ENABLE,0u);
+    rsx_draw_engine_method(NV4097_SET_VERTEX_DATA_ARRAY_FORMAT,2u|(4u<<4)|(16u<<8));
+    rsx_draw_engine_method(NV4097_SET_VERTEX_DATA_ARRAY_OFFSET,0x80000000u|AR_IDX_VBO);
+    rsx_draw_engine_method(NV4097_SET_INDEX_ARRAY_ADDRESS,AR_IDX_EBO);
+    /* DMA nibble: 1=main; index type [11:4] 1=u16, 0=u32. */
+    rsx_draw_engine_method(NV4097_SET_INDEX_ARRAY_DMA,1u|(use32?0u:0x10u));
+    const float gold[4]={0.95f,0.83f,0.18f,1.f};
+    for(unsigned c=0;c<4;c++)
+        rsx_draw_engine_method(0x1c30u+c*4u,f32_word(gold[c]));
+    rsx_draw_engine_method(NV4097_SET_BEGIN_END,RSX_PRIMITIVE_TRIANGLES);
+    rsx_draw_engine_method(NV4097_DRAW_INDEX_ARRAY,(6u-1u)<<24);
+    rsx_draw_engine_method(NV4097_SET_BEGIN_END,0u);
+    rsx_draw_engine_set_display_buffer(0,RSX_LOCATION_LOCAL,AR_GUEST_RT_OFFSET,
+                                       AR_WIDTH*4u,AR_WIDTH,AR_HEIGHT);
+    rsx_draw_engine_method(0xe944u,0u);
+    rsx_draw_engine_flush();
+    const uint32_t pixel=rsx_draw_engine_readback_center();
+    rsx_draw_engine_set_guest_memory(NULL,NULL);
+    if(pixel_out)*pixel_out=pixel;
+    if(pixel==bg)return -33;
+    const unsigned r=(pixel>>16)&255u,g=(pixel>>8)&255u,bb=pixel&255u;
+    if((pixel>>24)<240u||r<210u||g<160u||bb>110u)return -34;
+    return 0;
+}

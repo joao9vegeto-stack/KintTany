@@ -12,6 +12,7 @@ extern int ar_probe_rsx_clear_flip(unsigned cycle, unsigned int *expected, unsig
 extern int ar_probe_rsx_triangle(unsigned int *background, unsigned int *sample);
 extern int ar_probe_rsx_fixed_stage(void);
 extern int ar_probe_rsx_dma_triangle(unsigned int *background,unsigned int *sample);
+extern int ar_probe_rsx_indexed_quad(unsigned use32,unsigned int *background,unsigned int *sample);
 
 @interface ARProbeDelegate : UIResponder <UIApplicationDelegate>
 @property(nonatomic,strong) UIWindow *window;
@@ -20,6 +21,7 @@ extern int ar_probe_rsx_dma_triangle(unsigned int *background,unsigned int *samp
 @property(nonatomic,assign) BOOL ready;
 @property(nonatomic,assign) NSUInteger successfulFrames;
 @property(nonatomic,assign) NSUInteger guestAttempts;
+@property(nonatomic,assign) NSUInteger indexedAttempts;
 @end
 
 @implementation ARProbeDelegate
@@ -53,6 +55,12 @@ extern int ar_probe_rsx_dma_triangle(unsigned int *background,unsigned int *samp
     doubleTap.numberOfTapsRequired=2;
     [view addGestureRecognizer:doubleTap];
     [tap requireGestureRecognizerToFail:doubleTap];
+    UITapGestureRecognizer *tripleTap=[[UITapGestureRecognizer alloc]
+                                    initWithTarget:self action:@selector(drawIndexedQuad:)];
+    tripleTap.numberOfTapsRequired=3;
+    [view addGestureRecognizer:tripleTap];
+    [tap requireGestureRecognizerToFail:tripleTap];
+    [doubleTap requireGestureRecognizerToFail:tripleTap];
 
     UILabel *status=[[UILabel alloc] initWithFrame:CGRectZero];
     status.translatesAutoresizingMaskIntoConstraints=NO;
@@ -91,6 +99,7 @@ extern int ar_probe_rsx_dma_triangle(unsigned int *background,unsigned int *samp
                                   "1 toque: limpar pelo RSX NV4097\n"
                                   "Segure 1s: TRIÂNGULO INLINE (M4.5)\n"
                                   "2 toques: TRIÂNGULO DMA da memória PS3\n"
+                                  "3 toques: QUAD indexado 16/32 bits\n"
                                   "Sem arquivos do jogo.";
             } else {
                 self.status.text=[NSString stringWithFormat:
@@ -184,6 +193,31 @@ extern int ar_probe_rsx_dma_triangle(unsigned int *background,unsigned int *samp
               "Fundo: 0x%08X · Centro: 0x%08X\n"
               "Testes M4.5 continuam disponíveis.",
               result,ar_probe_rsx_fixed_stage(),bg,center];
+    }
+}
+
+/* M4.7: indexed 4-vertex / 6-index quad; alternates u16 and u32. */
+- (void)drawIndexedQuad:(UITapGestureRecognizer *)gesture {
+    (void)gesture;
+    if(!self.ready)return;
+    unsigned use32=(unsigned)((self.indexedAttempts++ & 1u)!=0);
+    unsigned int bg=0,pixel=0;
+    const int rc=ar_probe_rsx_indexed_quad(use32,&bg,&pixel);
+    if(rc==0){
+        self.status.text=[NSString stringWithFormat:
+          @"NV4097 → ÍNDICES → Metal: OK\n"
+           "4 vértices, 6 índices %u-bit\n"
+           "2 triângulos formando quadrilátero dourado\n"
+           "Centro: 0x%08X Fundo: 0x%08X\n"
+           "3 toques novamente: alternar 16/32",
+           use32 ? 32u : 16u,pixel,bg];
+    } else {
+        self.status.text=[NSString stringWithFormat:
+          @"ÍNDICES NV4097: FALHA %d\n"
+           "Tipo: %u-bit Pipeline: %d\n"
+           "Centro: 0x%08X Fundo: 0x%08X\n"
+           "Testes anteriores preservados.",
+           rc,use32?32u:16u,ar_probe_rsx_fixed_stage(),pixel,bg];
     }
 }
 
