@@ -280,7 +280,7 @@ enum { AR_TEX_BIND_OFFSET=0x00280000u, AR_TEX_BIND_W=8u, AR_TEX_BIND_H=8u };
 static const uint32_t ar_tex_expected[4]={
     0xffff0000u,0xff00ff00u,0xff0000ffu,0xffffff00u
 };
-int ar_probe_rsx_texture_registers(unsigned swizzled,uint32_t out[4]) {
+static int ar_probe_rsx_texture_registers_palette(unsigned swizzled,unsigned palette,uint32_t out[4]) {
     if(out) memset(out,0,4*sizeof(uint32_t));
     if(!rsx_draw_engine_enabled())return -61;
     if(!vm_base || (uint64_t)AR_TEX_BIND_OFFSET+AR_TEX_BIND_W*AR_TEX_BIND_H*4u>ppu_vm_size)
@@ -292,10 +292,11 @@ int ar_probe_rsx_texture_registers(unsigned swizzled,uint32_t out[4]) {
     };
     for(unsigned y=0;y<AR_TEX_BIND_H;y++)for(unsigned x=0;x<AR_TEX_BIND_W;x++){
         unsigned q=(x>=4u)+(y>=4u?2u:0u);
+        unsigned color=(q+palette)&3u;
         unsigned pos=swizzled ? rsx_swizzle_offset(x,y,3u,3u)
                               : y*AR_TEX_BIND_W+x;
         uint8_t *dst=guest+4u*pos;
-        dst[0]=rgba[q][3];dst[1]=rgba[q][0];dst[2]=rgba[q][1];dst[3]=rgba[q][2];
+        dst[0]=rgba[color][3];dst[1]=rgba[color][0];dst[2]=rgba[color][1];dst[3]=rgba[color][2];
     }
     /* Vertex DMA already validated M4.6; this triangle's actual DRAW forces
      * texture upload/bind through RSX engine sink_bind_textures, tex unit 0. */
@@ -359,6 +360,41 @@ int ar_probe_rsx_texture_registers(unsigned swizzled,uint32_t out[4]) {
     if(out) memcpy(out,actual,sizeof(actual));
     if(probe)return -70+probe;
     for(unsigned q=0;q<4;q++)
-        if(actual[q]!=ar_tex_expected[q])return -80-(int)q;
+        if(actual[q]!=ar_tex_expected[(q+palette)&3u])return -80-(int)q;
+    return 0;
+}
+
+/* Existing public M4.9 behavior is unchanged. */
+int ar_probe_rsx_texture_registers(unsigned swizzled,uint32_t out[4]) {
+    return ar_probe_rsx_texture_registers_palette(swizzled,0u,out);
+}
+
+/* Mutate same PS3 address & registers across THREE NV4097 draws and flips.
+ * Every phase validates 4 GPU-sampled pixels; then verify that the
+ * engine actually replaced its cached texture on >=2 content changes. */
+extern void ar_probe_cache_reset(void);
+extern uint32_t ar_probe_cache_uploads(void);
+extern uint32_t ar_probe_cache_replacements(void);
+int ar_probe_rsx_texture_cache_mutation(unsigned swizzled,uint32_t out[4],
+                                       unsigned *phase,unsigned *uploads,
+                                       unsigned *replacements) {
+    if(out)memset(out,0,sizeof(uint32_t)*4);
+    if(phase)*phase=0;
+    if(uploads)*uploads=0;
+    if(replacements)*replacements=0;
+    if(!out)return -91;
+    ar_probe_cache_reset();
+    for(unsigned i=0;i<3;i++){
+        if(phase)*phase=i+1;
+        const int rc=ar_probe_rsx_texture_registers_palette(swizzled,i,out);
+        if(rc)return rc;
+    }
+    const unsigned up=ar_probe_cache_uploads();
+    const unsigned rep=ar_probe_cache_replacements();
+    if(uploads)*uploads=up;
+    if(replacements)*replacements=rep;
+    if(rep<2u)return -92;
+    if(up<2u)return -93;
+    if(phase)*phase=0;
     return 0;
 }

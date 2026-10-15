@@ -1,4 +1,4 @@
-name: AscensionRecomp M4.9 - NV4097 texture unit binding Metal GPU
+name: AscensionRecomp M4.10 - PS3 texture mutation coherence diagnostic
 
 on:
   push:
@@ -253,6 +253,7 @@ jobs:
           python3 tools/enable_ios_drawable_layer.py upstream
           python3 tools/enable_ios_fixed_pipeline.py upstream ios/ARFixedFallback.metal
           python3 tools/enable_ios_rsx_texture_debug.py upstream
+          python3 tools/enable_ios_cache_counters.py upstream
           cmake -S upstream -B build-ios-runtime -G Ninja \
             -DCMAKE_SYSTEM_NAME=iOS \
             -DCMAKE_OSX_SYSROOT=iphoneos \
@@ -281,9 +282,9 @@ jobs:
         run: |
           set -euo pipefail
           bash tools/build_ios_probe_ipa.sh 2>&1 | tee m41-build-ipa.log
-          test -s AscensionRecompProbe-0.4.9-unsigned.ipa
-          /usr/libexec/PlistBuddy -c 'Print CFBundleShortVersionString' ios-probe/Payload/AscensionRecompProbe.app/Info.plist | grep -Fx 0.4.9
-          /usr/bin/unzip -t AscensionRecompProbe-0.4.9-unsigned.ipa | tee m42-ipa-integrity.log
+          test -s AscensionRecompProbe-0.4.10-unsigned.ipa
+          /usr/libexec/PlistBuddy -c 'Print CFBundleShortVersionString' ios-probe/Payload/AscensionRecompProbe.app/Info.plist | grep -Fx 0.4.10
+          /usr/bin/unzip -t AscensionRecompProbe-0.4.10-unsigned.ipa | tee m42-ipa-integrity.log
           xcrun nm -g ios-probe/Payload/AscensionRecompProbe.app/AscensionRecompProbe | grep -E '(_rsx_metal_backend_present|_rsx_metal_backend_init|_OBJC_CLASS_\\$_ARMetalView)' > m42-runtime-link-symbols.txt || true
           grep -q _rsx_metal_backend_init m39-metal-symbols.txt
           echo 'M4.2: actual GPU clear + presentDrawable + waitUntilCompleted route linked in iOS app; requires on-device screenshot.' > m42-status.txt
@@ -296,6 +297,9 @@ jobs:
           grep -q '_ar_probe_rsx_texture' m43-probe-linked-symbols.txt
           grep -q '_ar_probe_rsx_texture_registers' m43-probe-linked-symbols.txt
           grep -q '_rsx_metal_backend_debug_sample_texture0' m43-probe-linked-symbols.txt
+          grep -q '_ar_probe_rsx_texture_cache_mutation' m43-probe-linked-symbols.txt
+          grep -q '_ar_probe_cache_replacements' m43-probe-linked-symbols.txt
+          echo 'M4.10: same PS3 texture address across 3 flips with 2 content hash cache replacements; each GPU sample must match rotated palette.' > m410-status.txt
           echo 'M4.9 NV4097 texture0 register -> PS3 texture decoder/cache -> bound draw Metal object -> GPU compute sample, two layouts; on-device test pending. Does NOT translate guest FP.' > m49-status.txt
           echo 'M4.8 synthetic PS3 A8R8G8B8 linear/swizzled decode -> actual Metal RGBA8 texture -> fragment sampling -> GPU 4-way readback and CAMetalLayer. Not guest fragment program support.' > m48-status.txt
           echo 'M4.7 indexes: actual NV4097 indexed two-triangle mesh from bounded PS3 big-endian u16/u32 buffers; hardware test pending.' > m47-status.txt
@@ -308,7 +312,7 @@ jobs:
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: AscensionRecomp-M4.9-RSX-texture-binding-evidence
+          name: AscensionRecomp-M4.10-RSX-cache-coherency-evidence
           if-no-files-found: warn
           retention-days: 14
           path: |
@@ -396,7 +400,8 @@ jobs:
             m47-status.txt
             m48-status.txt
             m49-status.txt
-            AscensionRecompProbe-0.4.9-unsigned.ipa
+            m410-status.txt
+            AscensionRecompProbe-0.4.10-unsigned.ipa
             m40-ios-layer-view.o
             build-ios-runtime/libps3recomp_runtime.a
             ios-ppu-core/libAscensionPPUCore-ios-arm64.a
