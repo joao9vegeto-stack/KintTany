@@ -120,3 +120,83 @@ int ar_probe_rsx_triangle(uint32_t *background, uint32_t *sample) {
     if(alpha<240u || g<195u || red>110u || blue>150u) return -14;
     return 0;
 }
+
+/* M4.6 — RSX vertex-DMA probe from bounds-checked, big-endian guest memory.
+ * This path differs fundamentally from INLINE_ARRAY: vertices are sourced
+ * through the genuine NV4097_SET_VERTEX_DATA_ARRAY_OFFSET DMA mechanism.
+ * All values are test-only. No executable or protected title data involved.
+ */
+extern uint8_t *vm_base;
+extern uint32_t ppu_vm_size;
+enum { AR_DMA_VERTEX_OFFSET = 0x00200000u, AR_DMA_VERTEX_BYTES = 48u };
+static const uint8_t *ar_probe_guest_reader(void *opaque, uint32_t location,
+                                            uint32_t offset, uint32_t bytes) {
+    (void)opaque;
+    if (location != RSX_LOCATION_MAIN && location != RSX_LOCATION_LOCAL) return NULL;
+    if (!vm_base || !bytes || (uint64_t)offset + bytes > ppu_vm_size) return NULL;
+    return vm_base + offset;
+}
+static void ar_write_be_float(uint8_t *dest, float number) {
+    uint32_t w=f32_word(number);
+    dest[0]=(uint8_t)(w>>24); dest[1]=(uint8_t)(w>>16);
+    dest[2]=(uint8_t)(w>>8); dest[3]=(uint8_t)w;
+}
+int ar_probe_rsx_dma_triangle(uint32_t *background, uint32_t *sample) {
+    const uint32_t bg=0xff18283du;
+    if(background) *background=bg;
+    if(sample) *sample=0;
+    if(!rsx_draw_engine_enabled()) return -21;
+    if(!vm_base || ppu_vm_size < AR_DMA_VERTEX_OFFSET+AR_DMA_VERTEX_BYTES)
+        return -22;
+
+    /* Three vertices in main guest memory, IEEE754 float32 in PS3 BE.
+     * Write exact words to exercise the real vertex fetch/conversion path. */
+    const float xyz[3][4]={{-0.88f,-0.85f,0.f,1.f},
+                            { 0.88f,-0.85f,0.f,1.f},
+                            { 0.00f, 0.85f,0.f,1.f}};
+    uint8_t *dest=vm_base+AR_DMA_VERTEX_OFFSET;
+    for(unsigned v=0;v<3;v++)
+        for(unsigned c=0;c<4;c++)
+            ar_write_be_float(dest+v*16u+c*4u,xyz[v][c]);
+
+    rsx_draw_engine_set_guest_memory(ar_probe_guest_reader,NULL);
+    rsx_draw_engine_method(NV4097_SET_CONTEXT_DMA_COLOR_A,
+                           CELL_GCM_CONTEXT_DMA_MEMORY_FRAME_BUFFER);
+    rsx_draw_engine_method(NV4097_SET_SURFACE_CLIP_HORIZONTAL,AR_WIDTH<<16);
+    rsx_draw_engine_method(NV4097_SET_SURFACE_CLIP_VERTICAL,AR_HEIGHT<<16);
+    rsx_draw_engine_method(NV4097_SET_SURFACE_FORMAT,0x5u);
+    rsx_draw_engine_method(NV4097_SET_SURFACE_PITCH_A,AR_WIDTH*4u);
+    rsx_draw_engine_method(NV4097_SET_SURFACE_COLOR_AOFFSET,AR_GUEST_RT_OFFSET);
+    rsx_draw_engine_method(NV4097_SET_SURFACE_COLOR_TARGET,CELL_GCM_SURFACE_TARGET_0);
+    rsx_draw_engine_method(NV4097_SET_COLOR_CLEAR_VALUE,bg);
+    rsx_draw_engine_method(NV4097_CLEAR_SURFACE,0xf0u);
+
+    rsx_draw_engine_method(NV4097_SET_COLOR_MASK,0x01010101u);
+    rsx_draw_engine_method(NV4097_SET_CULL_FACE_ENABLE,0u);
+    rsx_draw_engine_method(NV4097_SET_DEPTH_TEST_ENABLE,0u);
+    rsx_draw_engine_method(NV4097_SET_BLEND_ENABLE,0u);
+    rsx_draw_engine_method(NV4097_SET_VERTEX_DATA_ARRAY_FORMAT,
+                           2u|(4u<<4)|(16u<<8));
+    /* The RSX DMA high bit means MAIN memory. Unlike the inline probe,
+     * this forces the vertex fetch planner through eng_guest_ptr. */
+    rsx_draw_engine_method(NV4097_SET_VERTEX_DATA_ARRAY_OFFSET,
+                           0x80000000u|AR_DMA_VERTEX_OFFSET);
+    const float color[4]={0.96f,0.30f,0.82f,1.f}; /* magenta */
+    for(unsigned c=0;c<4;c++)
+        rsx_draw_engine_method(0x1c30u+c*4u,f32_word(color[c]));
+    rsx_draw_engine_method(NV4097_SET_BEGIN_END,RSX_PRIMITIVE_TRIANGLES);
+    rsx_draw_engine_method(NV4097_DRAW_ARRAYS,(3u-1u)<<24);
+    rsx_draw_engine_method(NV4097_SET_BEGIN_END,0u);
+
+    rsx_draw_engine_set_display_buffer(0,RSX_LOCATION_LOCAL,
+          AR_GUEST_RT_OFFSET,AR_WIDTH*4u,AR_WIDTH,AR_HEIGHT);
+    rsx_draw_engine_method(0xe944u,0u);
+    rsx_draw_engine_flush();
+    const uint32_t pixel=rsx_draw_engine_readback_center();
+    rsx_draw_engine_set_guest_memory(NULL,NULL);
+    if(sample) *sample=pixel;
+    if(pixel==bg) return -23;
+    const unsigned r=(pixel>>16)&255u, g=(pixel>>8)&255u,b=pixel&255u;
+    if((pixel>>24)<240u || r<180u || g>140u || b<145u) return -24;
+    return 0;
+}

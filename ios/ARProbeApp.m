@@ -11,6 +11,7 @@ extern void ar_probe_vm_shutdown(void);
 extern int ar_probe_rsx_clear_flip(unsigned cycle, unsigned int *expected, unsigned int *observed);
 extern int ar_probe_rsx_triangle(unsigned int *background, unsigned int *sample);
 extern int ar_probe_rsx_fixed_stage(void);
+extern int ar_probe_rsx_dma_triangle(unsigned int *background,unsigned int *sample);
 
 @interface ARProbeDelegate : UIResponder <UIApplicationDelegate>
 @property(nonatomic,strong) UIWindow *window;
@@ -47,6 +48,11 @@ extern int ar_probe_rsx_fixed_stage(void);
     longPress.minimumPressDuration=0.65;
     [view addGestureRecognizer:longPress];
     [tap requireGestureRecognizerToFail:longPress];
+    UITapGestureRecognizer *doubleTap=[[UITapGestureRecognizer alloc]
+                                     initWithTarget:self action:@selector(drawDMATriangle:)];
+    doubleTap.numberOfTapsRequired=2;
+    [view addGestureRecognizer:doubleTap];
+    [tap requireGestureRecognizerToFail:doubleTap];
 
     UILabel *status=[[UILabel alloc] initWithFrame:CGRectZero];
     status.translatesAutoresizingMaskIntoConstraints=NO;
@@ -82,9 +88,10 @@ extern int ar_probe_rsx_fixed_stage(void);
             if(referenceOK) {
                 self.successfulFrames=1;
                 self.status.text=@"Referência Metal direta: AZUL\n"
-                                  "Toque: limpar pelo RSX NV4097\n"
-                                  "Segure 1s: testar TRIÂNGULO pelo RSX\n"
-                                  "Sem arquivos do jogo PS3.";
+                                  "1 toque: limpar pelo RSX NV4097\n"
+                                  "Segure 1s: TRIÂNGULO INLINE (M4.5)\n"
+                                  "2 toques: TRIÂNGULO DMA da memória PS3\n"
+                                  "Sem arquivos do jogo.";
             } else {
                 self.status.text=[NSString stringWithFormat:
                      @"A referência Metal falhou: %@\n"
@@ -152,6 +159,31 @@ extern int ar_probe_rsx_fixed_stage(void);
              "Fundo: 0x%08X · Centro: 0x%08X\n"
              "Envie este resultado para corrigirmos a renderização.",
              result,ar_probe_rsx_fixed_stage(),bg,pixel];
+    }
+}
+
+
+/* Unlike M4.5's inline FIFO attributes, this fetches 3 PS3 big-endian
+ * float4 vertices from the bounds-checked virtual memory probe. */
+- (void)drawDMATriangle:(UITapGestureRecognizer *)tap {
+    (void)tap;
+    if (!self.ready) return;
+    unsigned int bg=0,center=0;
+    int result=ar_probe_rsx_dma_triangle(&bg,&center);
+    if(result==0) {
+        self.status.text=[NSString stringWithFormat:
+             @"NV4097 → DMA de vértices → Metal: OK\n"
+              "Memória PS3 BE → triângulo magenta\n"
+              "Fundo: 0x%08X · Centro: 0x%08X\n"
+              "Dados sintéticos, sem código do jogo.",
+              bg,center];
+    } else {
+        self.status.text=[NSString stringWithFormat:
+             @"DMA NV4097 falhou: etapa %d\n"
+              "Pipeline básico Metal: %d (0–3)\n"
+              "Fundo: 0x%08X · Centro: 0x%08X\n"
+              "Testes M4.5 continuam disponíveis.",
+              result,ar_probe_rsx_fixed_stage(),bg,center];
     }
 }
 
