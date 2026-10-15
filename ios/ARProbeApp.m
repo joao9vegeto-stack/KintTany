@@ -18,6 +18,9 @@ extern int ar_probe_m53_guest_multipass(unsigned swizzled, unsigned int pixels[4
 extern int ar_probe_m54_guest_depth_occlusion(unsigned swizzled,
     unsigned int pixels[4], unsigned *phase, unsigned *guest_total,
     unsigned *metal_total, unsigned *depth_draws);
+extern int ar_probe_m55_guest_stencil_mask(unsigned swizzled,
+    unsigned int pixels[4], unsigned *phase, unsigned *guest_total,
+    unsigned *metal_total, unsigned *stencil_draws);
 extern void ar_probe_vm_shutdown(void);
 extern int ar_probe_rsx_clear_flip(unsigned cycle, unsigned int *expected, unsigned int *observed);
 extern int ar_probe_rsx_triangle(unsigned int *background, unsigned int *sample);
@@ -38,6 +41,7 @@ extern int ar_probe_rsx_texture_cache_mutation(unsigned swizzled,unsigned int ou
 @property(nonatomic,assign) NSUInteger m52Attempts;
 @property(nonatomic,assign) NSUInteger m53Attempts;
 @property(nonatomic,assign) NSUInteger m54Attempts;
+@property(nonatomic,assign) NSUInteger m55Attempts;
 @property(nonatomic,assign) NSUInteger successfulFrames;
 @property(nonatomic,assign) NSUInteger guestAttempts;
 @property(nonatomic,assign) NSUInteger indexedAttempts;
@@ -226,6 +230,25 @@ extern int ar_probe_rsx_texture_cache_mutation(unsigned swizzled,unsigned int ou
         [depthButton.leadingAnchor constraintGreaterThanOrEqualToAnchor:controller.view.leadingAnchor constant:16],
         [depthButton.trailingAnchor constraintLessThanOrEqualToAnchor:controller.view.trailingAnchor constant:-16],
         [depthButton.heightAnchor constraintEqualToConstant:46]
+    ]];
+    /* M5.5: stencil ALWAYS/REPLACE, EQUAL reject, EQUAL accept. */
+    UIButton *stencilButton=[UIButton buttonWithType:UIButtonTypeSystem];
+    stencilButton.translatesAutoresizingMaskIntoConstraints=NO;
+    [stencilButton setTitle:@"M5.5 · Máscara STENCIL RSX" forState:UIControlStateNormal];
+    [stencilButton setTitleColor:[UIColor whiteColor] forState:UIControlStateNormal];
+    stencilButton.backgroundColor=[[UIColor blackColor] colorWithAlphaComponent:0.82];
+    stencilButton.titleLabel.font=[UIFont systemFontOfSize:14 weight:UIFontWeightSemibold];
+    stencilButton.layer.cornerRadius=10;
+    [stencilButton addTarget:self action:@selector(testM55StencilMask:)
+              forControlEvents:UIControlEventTouchUpInside];
+    [controller.view addSubview:stencilButton];
+    [NSLayoutConstraint activateConstraints:@[
+        [stencilButton.centerXAnchor constraintEqualToAnchor:controller.view.centerXAnchor],
+        [stencilButton.bottomAnchor constraintEqualToAnchor:depthButton.topAnchor constant:-10],
+        [stencilButton.widthAnchor constraintLessThanOrEqualToConstant:350],
+        [stencilButton.leadingAnchor constraintGreaterThanOrEqualToAnchor:controller.view.leadingAnchor constant:16],
+        [stencilButton.trailingAnchor constraintLessThanOrEqualToAnchor:controller.view.trailingAnchor constant:-16],
+        [stencilButton.heightAnchor constraintEqualToConstant:46]
     ]];
     self.window.rootViewController=controller;
     [self.window makeKeyAndVisible];
@@ -423,6 +446,37 @@ extern int ar_probe_rsx_texture_cache_mutation(unsigned swizzled,unsigned int ou
              "M5.3/M5.2/M5.1/M4.10 seguem disponíveis.",
              rc,phase,sw?@"SWIZZLED":@"LINEAR",guest,metal,depth,
              p[0],p[1],p[2],p[3]];
+    }
+}
+
+/* M5.5: real RSX stencil controls must persist and select GPU fragments
+ * correctly. A passing label requires three GPU readbacks, not only state. */
+- (void)testM55StencilMask:(UIButton *)sender {
+    (void)sender;
+    if(!self.ready || self.shaderBusy)return;
+    unsigned sw=(unsigned)((self.m55Attempts++ & 1u)!=0u);
+    unsigned int pixels[4]={0},phase=0,guest=0,metal=0,stencil=0;
+    self.status.text=@"M5.5: 3 DRAWs com stencil RSX...";
+    const int rc=ar_probe_m55_guest_stencil_mask(
+         sw,pixels,&phase,&guest,&metal,&stencil);
+    if(!rc) {
+        self.status.text=[NSString stringWithFormat:
+            @"M5.5 STENCIL RSX → Metal: OK\n"
+             "Layout %@ · 3 quadros GPU verificados\n"
+             "DRAW RSX/Metal/stencil: %u/%u/%u\n"
+             "Ref 2 oculto: SIM · ref 1 visível: SIM\n"
+             "Pixels: %08X %08X %08X %08X\n"
+             "Aperte novamente para alternar layout.",
+             sw?@"SWIZZLED":@"LINEAR",guest,metal,stencil,
+             pixels[0],pixels[1],pixels[2],pixels[3]];
+    } else {
+        self.status.text=[NSString stringWithFormat:
+            @"M5.5 STENCIL: FALHA %d · fase %u\n"
+             "Layout %@ · DRAW RSX/Metal/stencil: %u/%u/%u\n"
+             "Pixels: %08X %08X %08X %08X\n"
+             "M5.4/M5.3/M5.2/M5.1 continuam disponíveis.",
+             rc,phase,sw?@"SWIZZLED":@"LINEAR",guest,metal,stencil,
+             pixels[0],pixels[1],pixels[2],pixels[3]];
     }
 }
 

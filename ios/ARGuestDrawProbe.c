@@ -23,6 +23,8 @@ extern void ar_probe_m53_reset_views(void);
 extern uint32_t ar_probe_m53_surface_views(void);
 extern void ar_probe_m54_reset_depth_draws(void);
 extern uint32_t ar_probe_m54_depth_draws(void);
+extern void ar_probe_m55_reset_stencil_draws(void);
+extern uint32_t ar_probe_m55_stencil_draws(void);
 
 enum {
     M51_RT_OFFSET = 0x00100000u,
@@ -59,6 +61,7 @@ static void m51_cleanup(void) {
     rsx_draw_engine_method(NV4097_SET_TEXTURE_CONTROL0,0u);
     rsx_draw_engine_method(NV4097_SET_DEPTH_TEST_ENABLE,0u);
     rsx_draw_engine_method(NV4097_SET_DEPTH_MASK,0u);
+    rsx_draw_engine_method(NV4097_SET_STENCIL_TEST_ENABLE,0u);
     rsx_draw_engine_method(NV4097_SET_SURFACE_FORMAT,0x5u);
     rsx_draw_engine_method(NV4097_SET_VERTEX_DATA_ARRAY_FORMAT + 8u*4u,0u);
     rsx_draw_engine_set_guest_memory(NULL,NULL);
@@ -156,8 +159,8 @@ static int m51_guest_textured_quad_palette_ex(unsigned swizzled,
                            CELL_GCM_CONTEXT_DMA_MEMORY_FRAME_BUFFER);
     rsx_draw_engine_method(NV4097_SET_SURFACE_CLIP_HORIZONTAL,M51_WIDTH<<16);
     rsx_draw_engine_method(NV4097_SET_SURFACE_CLIP_VERTICAL,M51_HEIGHT<<16);
-    /* Depth Z24S8 is explicitly configured ONLY in the M5.4 depth probe.
-     * Older GPU paths keep their previously proven colour-only state. */
+    /* M5.4 uses depth_mode 1/2; M5.5 uses 3/4/5 for stencil.
+     * Both share real Metal Z24S8; all older probes keep depth_mode=0. */
     rsx_draw_engine_method(NV4097_SET_SURFACE_FORMAT,
                            depth_mode ? (0x5u | (2u<<5)) : 0x5u);
     if(depth_mode) {
@@ -169,6 +172,27 @@ static int m51_guest_textured_quad_palette_ex(unsigned swizzled,
         rsx_draw_engine_method(NV4097_SET_DEPTH_FUNC,0x0201u); /* LESS */
         rsx_draw_engine_method(NV4097_SET_DEPTH_MASK,1u);
         rsx_draw_engine_method(NV4097_SET_DEPTH_TEST_ENABLE,1u);
+        if(depth_mode>=3u) {
+            /* Test stencil independently from Z: ALWAYS writes stencil ref=1,
+             * EQUAL ref=2 rejects, EQUAL ref=1 accepts, with KEEP later.
+             * This path keeps the same guest NV40 shader and GPU colour RT. */
+            rsx_draw_engine_method(NV4097_SET_DEPTH_TEST_ENABLE,0u);
+            rsx_draw_engine_method(NV4097_SET_DEPTH_MASK,0u);
+            rsx_draw_engine_method(NV4097_SET_STENCIL_TEST_ENABLE,1u);
+            rsx_draw_engine_method(NV4097_SET_STENCIL_FUNC,
+                                   depth_mode==3u ? 0x0207u : 0x0202u);
+            rsx_draw_engine_method(NV4097_SET_STENCIL_FUNC_REF,
+                                   depth_mode==4u ? 2u : 1u);
+            rsx_draw_engine_method(NV4097_SET_STENCIL_FUNC_MASK,0xffu);
+            rsx_draw_engine_method(NV4097_SET_STENCIL_OP_FAIL,0x1e00u);
+            rsx_draw_engine_method(NV4097_SET_STENCIL_OP_ZFAIL,0x1e00u);
+            rsx_draw_engine_method(NV4097_SET_STENCIL_OP_ZPASS,
+                                   depth_mode==3u ? 0x1e01u : 0x1e00u);
+        } else {
+            rsx_draw_engine_method(NV4097_SET_STENCIL_TEST_ENABLE,0u);
+        }
+    } else {
+        rsx_draw_engine_method(NV4097_SET_STENCIL_TEST_ENABLE,0u);
     }
     rsx_draw_engine_method(NV4097_SET_SURFACE_PITCH_A,M51_WIDTH*4u);
     rsx_draw_engine_method(NV4097_SET_SURFACE_COLOR_AOFFSET,destination);
@@ -176,9 +200,10 @@ static int m51_guest_textured_quad_palette_ex(unsigned swizzled,
     rsx_draw_engine_method(NV4097_SET_COLOR_CLEAR_VALUE,0xff101820u);
     /* phase 1 clears both depth and colour; phases 2/3 MUST load
      * them unchanged or occlusion could not be tested. */
-    if (depth_mode!=2u)
+    if (depth_mode!=2u && depth_mode!=4u && depth_mode!=5u)
         rsx_draw_engine_method(NV4097_CLEAR_SURFACE,
-                               depth_mode ? 0xf1u : 0xf0u);
+                               depth_mode==3u ? 0xf2u :
+                               (depth_mode ? 0xf1u : 0xf0u));
     rsx_draw_engine_method(NV4097_SET_COLOR_MASK,0x01010101u);
     rsx_draw_engine_method(NV4097_SET_CULL_FACE_ENABLE,0u);
     /* M5.4.1: Do NOT silently disable depth after configuring Z24S8!
@@ -377,6 +402,45 @@ int ar_probe_m54_guest_depth_occlusion(unsigned swizzled,
     *depth_draws=ar_probe_m54_depth_draws();
     if(*depth_draws!=3u) return -440;
     if(*guest_total!=3u||*metal_total!=3u) return -441;
+    *phase=0u;
+    return 0;
+}
+
+/* M5.5: stencil colour write/occlusion on the ACTUAL NV40 shader and
+ * Metal depth+stencil attachment. The same Z24S8 address is kept across
+ * all three guest draws; only pass 1 clears stencil to zero. Mode 3:
+ * ALWAYS, reference 1, ZPASS REPLACE -> writes 1. Mode 4: EQUAL ref2
+ * must reject; mode 5: EQUAL ref1 must pass. Existing M5.1–M5.4 have
+ * unchanged depth_mode values (0,1,2). */
+int ar_probe_m55_guest_stencil_mask(unsigned swizzled,
+        uint32_t pixels[4], unsigned *phase,
+        unsigned *guest_total,unsigned *metal_total,unsigned *stencil_draws) {
+    if(!pixels||!phase||!guest_total||!metal_total||!stencil_draws) return -501;
+    *phase=*guest_total=*metal_total=*stencil_draws=0u;
+    memset(pixels,0,4u*sizeof(*pixels));
+    const unsigned palette[3]={0u,1u,2u};
+    const unsigned expected[3]={0u,0u,2u};
+    ar_probe_m55_reset_stencil_draws();
+    for(unsigned i=0;i<3u;i++) {
+        unsigned guest=0,encoded=0;
+        uint32_t shader[4]={0u};
+        *phase=i+1u;
+        const int rc=m51_guest_textured_quad_palette_ex(
+            swizzled,palette[i],0u,M51_RT_OFFSET,0.0f,
+            3u+i,pixels,&encoded,&guest,shader);
+        *guest_total+=guest; *metal_total+=encoded;
+        if(rc) {
+            *stencil_draws=ar_probe_m55_stencil_draws();
+            return rc;
+        }
+        if(guest!=1u||encoded!=1u) return -510-(int)i;
+        for(unsigned q=0;q<4u;q++)
+            if(pixels[q]!=m51_colors[(q+expected[i])&3u])
+                return -520-(int)(i*4u+q);
+    }
+    *stencil_draws=ar_probe_m55_stencil_draws();
+    if(*stencil_draws!=3u) return -540;
+    if(*guest_total!=3u||*metal_total!=3u) return -541;
     *phase=0u;
     return 0;
 }
