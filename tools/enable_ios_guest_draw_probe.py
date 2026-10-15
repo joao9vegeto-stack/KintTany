@@ -63,8 +63,12 @@ u32 ar_probe_m53_surface_views(void) { return ar_m53_surface_view_count; }
     if s.count(view_anchor) != 1:
         raise ValueError("pinned RTT GPU surface view selection changed")
     s=s.replace(view_anchor,
-        "            if (view) ar_m53_surface_view_count++;\\n" + view_anchor,1)
-    return s.replace(needle, helper + residency + native_views + needle, 1)
+        "            if (view) ar_m53_surface_view_count++;\n" + view_anchor,1)
+    early_anchor = "static u32 sink_bind_textures("
+    if s.count(early_anchor) != 1:
+        raise ValueError("pinned native RTT sampling entry changed")
+    s=s.replace(early_anchor, native_views + early_anchor,1)
+    return s.replace(needle, helper + residency + needle, 1)
 
 def patch_metal(s):
     a = "    MTLWinding  winding;\n} EngPipeline;"
