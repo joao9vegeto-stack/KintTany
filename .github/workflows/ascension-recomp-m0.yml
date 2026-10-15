@@ -1,4 +1,4 @@
-name: AscensionRecomp M5.0.3 - activate iPhoneOS glslang include root
+name: AscensionRecomp M5.0.4 - preserve entire native nm symbol stream
 
 on:
   push:
@@ -298,7 +298,10 @@ jobs:
           find build-ios-runtime -type f -name '*.a' ! -name 'libps3recomp_runtime.a' -print0 |
             xargs -0 /usr/bin/libtool -static -o build-ios-runtime/libAscensionRSXGuest-ios-arm64.a build-ios-runtime/libps3recomp_runtime.a
           test -s build-ios-runtime/libAscensionRSXGuest-ios-arm64.a
-          xcrun nm -g build-ios-runtime/libAscensionRSXGuest-ios-arm64.a | grep -q '_rsx_hlsl_to_msl_available'
+          # Consume nm output fully; grep -q closes the pipe early and LLVM nm aborts.
+          xcrun nm -g build-ios-runtime/libAscensionRSXGuest-ios-arm64.a |
+            grep -F '_rsx_hlsl_to_msl_available' > m50-ios-shader-availability-symbol.txt
+          test -s m50-ios-shader-availability-symbol.txt
           echo 'iPhoneOS library includes native glslang + SPIRV-Cross; physical VP/FP compile test required.' > m50-guest-shaders.log
           shasum -a 256 build-ios-runtime/libAscensionRSXGuest-ios-arm64.a > m50-ios-shader-archive-sha256.txt
           xcrun lipo -info build-ios-runtime/libps3recomp_runtime.a | tee m38-lipo.txt
@@ -446,6 +449,7 @@ jobs:
             m50-boot-smoke.log
             m50-guest-shaders.log
             m50-ios-shader-archive-sha256.txt
+            m50-ios-shader-availability-symbol.txt
             build-ios-runtime/libAscensionRSXGuest-ios-arm64.a
             AscensionRecompProbe-0.5.0-unsigned.ipa
             m40-ios-layer-view.o
