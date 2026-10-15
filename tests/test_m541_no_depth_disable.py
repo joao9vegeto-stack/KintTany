@@ -18,7 +18,10 @@ class NoDepthOverride(unittest.TestCase):
         finish=f.index("rsx_draw_engine_method(NV4097_DRAW_INDEX_ARRAY,")
         self.assertLess(begin,finish)
         path=f[begin:finish]
-        self.assertEqual(path.count("NV4097_SET_DEPTH_TEST_ENABLE,0u"),1)
+        self.assertEqual(path.count("NV4097_SET_DEPTH_TEST_ENABLE,0u"),2)
+        # Exactly two conditional disable paths: stencil-only and legacy.
+        self.assertRegex(path,r"if\(depth_mode>=3u\)\s*\{[\s\S]*?NV4097_SET_DEPTH_TEST_ENABLE,0u")
+        self.assertIn("if (!depth_mode)",path)
         self.assertRegex(path,r"if \(!depth_mode\)\s*rsx_draw_engine_method\(NV4097_SET_DEPTH_TEST_ENABLE,0u\)")
         self.assertNotIn("    rsx_draw_engine_method(NV4097_SET_DEPTH_TEST_ENABLE,0u);",path.splitlines())
     def test_legacy_path_still_disables_depth(self):
@@ -27,7 +30,7 @@ class NoDepthOverride(unittest.TestCase):
         self.assertIn("0.0f,0u,pixels,&encoded,&guest,shader",SRC)
     def test_m54_pass2_preserves_depth(self):
         for needle in ("const unsigned expected[3]={0u,0u,2u}",
-          "if (depth_mode!=2u)",
+          "if (depth_mode!=2u && depth_mode!=4u && depth_mode!=5u)",
           "NV4097_SET_SURFACE_ZETA_OFFSET,M54_Z_OFFSET",
           "NV4097_SET_DEPTH_FUNC,0x0201u",
           "if(*depth_draws!=3u) return -440"):
