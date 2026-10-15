@@ -15,6 +15,7 @@ extern uint32_t ppu_vm_size;
 extern void ar_probe_m51_reset_draws(void);
 extern uint32_t ar_probe_m51_encoded_draws(void);
 extern int ar_probe_m51_readback_quad(uint32_t out[4]);
+extern int ar_probe_m51_shader_state(uint32_t out[4]);
 
 enum {
     M51_RT_OFFSET = 0x00100000u,
@@ -53,8 +54,9 @@ static void m51_cleanup(void) {
 
 int ar_probe_m51_guest_textured_quad(unsigned swizzled,
                                     uint32_t pixels[4], unsigned *encoded,
-                                    unsigned *guest_draws) {
-    if (!pixels || !encoded || !guest_draws) return -101;
+                                    unsigned *guest_draws, uint32_t shader_state[4]) {
+    if (!pixels || !encoded || !guest_draws || !shader_state) return -101;
+    memset(shader_state,0,4u*sizeof(uint32_t));
     memset(pixels,0,4u*sizeof(*pixels));
     *encoded=0; *guest_draws=0;
     if (!rsx_draw_engine_enabled()) return -102;
@@ -110,10 +112,10 @@ int ar_probe_m51_guest_textured_quad(unsigned swizzled,
         uint32_t word=(uint32_t)vp[i*4u] |
           ((uint32_t)vp[i*4u+1]<<8) | ((uint32_t)vp[i*4u+2]<<16) |
           ((uint32_t)vp[i*4u+3]<<24);
-        rsx_draw_engine_method(NV4097_SET_TRANSFORM_PROGRAM,word);
+        rsx_draw_engine_method(NV4097_SET_TRANSFORM_PROGRAM+(i&3u)*4u,word);
     }
     rsx_draw_engine_method(NV4097_SET_TRANSFORM_PROGRAM_START,0u);
-    rsx_draw_engine_method(NV4097_SET_SHADER_PROGRAM,M51_FP_OFFSET|1u);
+    rsx_draw_engine_method(NV4097_SET_SHADER_PROGRAM,M51_FP_OFFSET|2u);
     rsx_draw_engine_method(NV4097_SET_SHADER_CONTROL,0x40u); /* FP32 export */
 
     rsx_draw_engine_method(NV4097_SET_TEXTURE_OFFSET,M51_TEX_OFFSET);
@@ -161,6 +163,7 @@ int ar_probe_m51_guest_textured_quad(unsigned swizzled,
     rsx_draw_engine_method(0xE944u,0u);
     rsx_draw_engine_flush();
 
+    ar_probe_m51_shader_state(shader_state);
     *guest_draws=rsx_draw_engine_guest_draws();
     *encoded=ar_probe_m51_encoded_draws();
     int read_rc=ar_probe_m51_readback_quad(pixels);

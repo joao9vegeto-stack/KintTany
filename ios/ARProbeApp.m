@@ -8,7 +8,7 @@ extern void rsx_metal_backend_shutdown(void);
 extern void rsx_metal_backend_present(void);
 extern int ar_probe_vm_init(void);
 extern int ar_probe_guest_shader_compile(char *details, size_t cap);
-extern int ar_probe_m51_guest_textured_quad(unsigned swizzled, unsigned int pixels[4], unsigned *encoded, unsigned *guest_draws);
+extern int ar_probe_m51_guest_textured_quad(unsigned swizzled, unsigned int pixels[4], unsigned *encoded, unsigned *guest_draws, unsigned int shader_state[4]);
 extern void ar_probe_vm_shutdown(void);
 extern int ar_probe_rsx_clear_flip(unsigned cycle, unsigned int *expected, unsigned int *observed);
 extern int ar_probe_rsx_triangle(unsigned int *background, unsigned int *sample);
@@ -233,25 +233,28 @@ extern int ar_probe_rsx_texture_cache_mutation(unsigned swizzled,unsigned int ou
     (void)sender;
     if(!self.ready || self.shaderBusy)return;
     unsigned sw=(unsigned)((self.m51Attempts++ & 1u)!=0u);
-    unsigned int p[4]={0},encoded=0,guest=0;
+    unsigned int p[4]={0},encoded=0,guest=0,shader[4]={0};
     self.status.text=@"M5.1: NV4097 → VP/FP TEX0 → GPU raster...";
-    const int rc=ar_probe_m51_guest_textured_quad(sw,p,&encoded,&guest);
+    const int rc=ar_probe_m51_guest_textured_quad(sw,p,&encoded,&guest,shader);
     if(!rc) {
         self.status.text=[NSString stringWithFormat:
             @"M5.1 RSX VP/FP TEX0 → Metal: OK\n"
              "DRAW convidado: %u · GPU codificou: %u\n"
              "Layout: %@ · 4 pixels distintos reais\n"
+             "VP %u · FP %u · carregado %u\n"
              "%08X %08X %08X %08X\n"
              "Aperte novamente: outro layout. SEM jogo.",
              guest,encoded,sw?@"SWIZZLED":@"LINEAR",
-             p[0],p[1],p[2],p[3]];
+             shader[1],shader[2],shader[0],p[0],p[1],p[2],p[3]];
     }else{
         self.status.text=[NSString stringWithFormat:
             @"M5.1 RSX TEX0: FALHA %d\n"
              "DRAW convidado: %u · GPU codificou: %u\n"
-             "Layout: %@\nPixels: %08X %08X %08X %08X\n"
+             "Layout: %@ · VP %u · FP %u · par %u\n"
+             "RegFP %08X\nPixels: %08X %08X %08X %08X\n"
              "M5.0 e M4.10 permanecem disponíveis.",
              rc,guest,encoded,sw?@"SWIZZLED":@"LINEAR",
+             shader[1],shader[2],shader[0],shader[3],
              p[0],p[1],p[2],p[3]];
     }
 }

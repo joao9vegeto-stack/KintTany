@@ -15,11 +15,11 @@ class M51RealDrawTest(unittest.TestCase):
         for token in (
             "rsx_test_vp_mov_out(vp,0", "rsx_test_vp_mov_out(vp+16,8",
             "rsx_test_fp_tex_r0_tc0(fp,0)", "NV4097_SET_TRANSFORM_PROGRAM",
-            "NV4097_SET_SHADER_PROGRAM,M51_FP_OFFSET|1u",
+            "NV4097_SET_SHADER_PROGRAM,M51_FP_OFFSET|2u",
             "NV4097_SET_VERTEX_DATA_ARRAY_OFFSET+8u*4u",
-            "NV4097_DRAW_INDEX_ARRAY", "rsx_draw_engine_guest_draws()",
+            "NV4097_SET_TRANSFORM_PROGRAM+(i&3u)*4u", "NV4097_DRAW_INDEX_ARRAY", "rsx_draw_engine_guest_draws()",
             "ar_probe_m51_encoded_draws()", "ar_probe_m51_readback_quad(pixels)",
-            "m51_cleanup();", "found==15u"):
+            "ar_probe_m51_shader_state(shader_state)", "m51_cleanup();", "found==15u"):
             self.assertIn(token,s)
         self.assertNotIn("newLibraryWithSource",s)
     def test_instrumentation_reads_real_guest_render_target(self):
@@ -37,4 +37,4 @@ class M51RealDrawTest(unittest.TestCase):
                       "drawPS3Texture:","drawRSXBoundTexture:"):
             self.assertIn(token,app)
         self.assertIn("testM51GuestDraw:",app)
-        self.assertIn("0.5.1-unsigned.ipa",(ROOT/"tools/build_ios_probe_ipa.sh").read_text())
+        self.assertIn("0.5.2-unsigned.ipa",(ROOT/"tools/build_ios_probe_ipa.sh").read_text())
