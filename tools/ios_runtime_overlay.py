@@ -35,8 +35,8 @@ else()
             'if(APPLE AND NOT CMAKE_SYSTEM_NAME STREQUAL "iOS")\n    target_link_libraries(ps3recomp_runtime PUBLIC'
         ),
         (
-            '    message(STATUS "  Metal:       RSX backend enabled (rsx_metal_backend.m)")\nendif()',
-            '''    message(STATUS "  Metal:       RSX backend enabled (rsx_metal_backend.m)")
+            '    message(STATUS "  Metal:        RSX backend enabled (rsx_metal_backend.m)")\nendif()',
+            '''    message(STATUS "  Metal:        RSX backend enabled (rsx_metal_backend.m)")
 endif()
 if(CMAKE_SYSTEM_NAME STREQUAL "iOS")
     target_link_libraries(ps3recomp_runtime PUBLIC
