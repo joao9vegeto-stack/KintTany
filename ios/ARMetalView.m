@@ -1,5 +1,6 @@
 #import "ARMetalView.h"
 #import <QuartzCore/CAMetalLayer.h>
+#import <Metal/Metal.h>
 extern int rsx_metal_backend_set_ios_layer(void *metal_layer);
 
 @implementation ARMetalView
@@ -25,4 +26,65 @@ extern int rsx_metal_backend_set_ios_layer(void *metal_layer);
     drawableLayer.drawableSize=CGSizeMake(self.bounds.size.width*scale,
                                           self.bounds.size.height*scale);
 }
+/* Tests the actual iPhone drawable path with a completed GPU command buffer.
+ * Produces a visibly colored frame; it deliberately does not issue RSX
+ * guest commands or claim Ascension textures are rendering. */
+- (BOOL)presentDiagnosticFrame:(NSUInteger)frame
+                         error:(NSString * _Nullable * _Nullable)error {
+    if (![NSThread isMainThread]) {
+        if (error) *error=@"A apresentação precisa ocorrer na thread principal.";
+        return NO;
+    }
+    CAMetalLayer *layer=(CAMetalLayer *)self.layer;
+    id<MTLDevice> device=layer.device;
+    if (!device) {
+        if (error) *error=@"O backend não atribuiu um dispositivo Metal ao layer.";
+        return NO;
+    }
+    if (layer.drawableSize.width < 1 || layer.drawableSize.height < 1) {
+        if (error) *error=@"O CAMetalLayer ainda está sem tamanho.";
+        return NO;
+    }
+    id<MTLCommandQueue> queue=[device newCommandQueue];
+    if (!queue) {
+        if (error) *error=@"Não foi possível criar a fila Metal.";
+        return NO;
+    }
+    id<CAMetalDrawable> drawable=[layer nextDrawable];
+    if (!drawable || !drawable.texture) {
+        if (error) *error=@"CAMetalLayer não entregou um drawable válido.";
+        return NO;
+    }
+    MTLRenderPassDescriptor *pass=[MTLRenderPassDescriptor renderPassDescriptor];
+    pass.colorAttachments[0].texture=drawable.texture;
+    pass.colorAttachments[0].loadAction=MTLLoadActionClear;
+    pass.colorAttachments[0].storeAction=MTLStoreActionStore;
+    const MTLClearColor colors[3]={
+        {0.04, 0.36, 0.70, 1.0},  /* vivid blue */
+        {0.03, 0.57, 0.41, 1.0},  /* green */
+        {0.47, 0.14, 0.68, 1.0}   /* purple */
+    };
+    pass.colorAttachments[0].clearColor=colors[frame % 3];
+    id<MTLCommandBuffer> buffer=[queue commandBuffer];
+    if (!buffer) {
+        if (error) *error=@"Não foi possível criar o command buffer Metal.";
+        return NO;
+    }
+    id<MTLRenderCommandEncoder> encoder=[buffer renderCommandEncoderWithDescriptor:pass];
+    if (!encoder) {
+        if (error) *error=@"Não foi possível abrir um render pass Metal.";
+        return NO;
+    }
+    [encoder endEncoding];
+    [buffer presentDrawable:drawable];
+    [buffer commit];
+    [buffer waitUntilCompleted];
+    if (buffer.status!=MTLCommandBufferStatusCompleted) {
+        if (error) *error=[NSString stringWithFormat:@"Falha no command buffer: %@",
+                            buffer.error.localizedDescription ?: @"sem detalhes"];
+        return NO;
+    }
+    return YES;
+}
+
 @end

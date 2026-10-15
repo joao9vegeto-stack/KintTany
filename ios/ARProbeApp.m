@@ -14,6 +14,7 @@ extern void ar_probe_vm_shutdown(void);
 @property(nonatomic,strong) ARMetalView *metalView;
 @property(nonatomic,strong) UILabel *status;
 @property(nonatomic,assign) BOOL ready;
+@property(nonatomic,assign) NSUInteger successfulFrames;
 @end
 
 @implementation ARProbeDelegate
@@ -33,6 +34,9 @@ extern void ar_probe_vm_shutdown(void);
         [view.bottomAnchor constraintEqualToAnchor:controller.view.bottomAnchor]
     ]];
     self.metalView=view;
+    UITapGestureRecognizer *tap=[[UITapGestureRecognizer alloc]
+                                 initWithTarget:self action:@selector(drawNextFrame:)];
+    [view addGestureRecognizer:tap];
 
     UILabel *status=[[UILabel alloc] initWithFrame:CGRectZero];
     status.translatesAutoresizingMaskIntoConstraints=NO;
@@ -60,13 +64,38 @@ extern void ar_probe_vm_shutdown(void);
         self.ready=(initialized==0);
         if(self.ready) {
             rsx_metal_backend_present();
-            self.status.text=@"Metal inicializado pelo backend RSX.\nTeste gráfico nativo — sem jogo PS3.\nNão é a IPA jogável do Ascension.";
+            [self drawNextFrame:nil];
         } else {
             ar_probe_vm_shutdown();
             self.status.text=@"Falha ao inicializar o backend RSX→Metal.\nEnvie uma captura de tela para diagnóstico.";
         }
     });
     return YES;
+}
+
+
+/* A tap submits another actual on-screen GPU clear pass.
+ * Completion is checked; labels do not assert success on failed work. */
+- (void)drawNextFrame:(UITapGestureRecognizer *)gesture {
+    (void)gesture;
+    if (!self.ready) return;
+    NSString *message=nil;
+    BOOL success=[self.metalView presentDiagnosticFrame:self.successfulFrames
+                                                  error:&message];
+    if (success) {
+        self.successfulFrames++;
+        self.status.text=[NSString stringWithFormat:
+            @"RSX→Metal: inicializado\n"
+             "GPU Metal: %lu quadro(s) apresentados\n"
+             "Toque para trocar a cor (azul / verde / roxo)\n"
+             "Diagnóstico sem jogo PS3",
+             (unsigned long)self.successfulFrames];
+    } else {
+        self.status.text=[NSString stringWithFormat:
+            @"RSX→Metal: inicializado, mas apresentação falhou.\n"
+             "Erro: %@\nEnvie esta tela para análise.",
+             message ?: @"desconhecido"];
+    }
 }
 
 - (void)applicationWillTerminate:(UIApplication*)app {
