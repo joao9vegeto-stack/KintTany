@@ -1,4 +1,4 @@
-name: AscensionRecomp M3.8 - iOS CPU SPU LV2 runtime cross-compile
+name: AscensionRecomp M3.9 - iPhone Metal RSX backend compile
 
 on:
   push:
@@ -249,6 +249,7 @@ jobs:
         run: |
           set -euo pipefail
           python3 tools/ios_runtime_overlay.py upstream/CMakeLists.txt
+          python3 tools/enable_ios_offscreen_metal.py upstream/CMakeLists.txt
           cmake -S upstream -B build-ios-runtime -G Ninja \
             -DCMAKE_SYSTEM_NAME=iOS \
             -DCMAKE_OSX_SYSROOT=iphoneos \
@@ -261,13 +262,17 @@ jobs:
           test -s build-ios-runtime/libps3recomp_runtime.a
           xcrun lipo -info build-ios-runtime/libps3recomp_runtime.a | tee m38-lipo.txt
           shasum -a 256 build-ios-runtime/libps3recomp_runtime.a > m38-runtime-sha256.txt
+          xcrun nm -g build-ios-runtime/libps3recomp_runtime.a > m39-metal-symbols.txt
+          grep -q '_rsx_metal_backend_init' m39-metal-symbols.txt
+          grep -q '_rsx_metal_backend_shutdown' m39-metal-symbols.txt
+          echo 'iPhone ARM64 CPU/SPU/LV2+offscreen Metal compiled; no CAMetalLayer presenter/audio/input/IPA.' > m39-status.txt
           echo 'iOS CPU/SPU/LV2 build only. SDL2 input/audio and RSX Metal backend disabled until iOS adapters are implemented.' > m38-status.txt
       - name: Upload M2 evidence - runtime + synthetic PPU proof
 
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: AscensionRecomp-M3.8-ios-spu-runtime-evidence
+          name: AscensionRecomp-M3.9-ios-offscreen-metal-evidence
           if-no-files-found: warn
           retention-days: 14
           path: |
@@ -333,6 +338,8 @@ jobs:
             m38-lipo.txt
             m38-runtime-sha256.txt
             m38-status.txt
+            m39-metal-symbols.txt
+            m39-status.txt
             build-ios-runtime/libps3recomp_runtime.a
             ios-ppu-core/libAscensionPPUCore-ios-arm64.a
             ios-ppu-core/exports.txt
