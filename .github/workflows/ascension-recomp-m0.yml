@@ -1,4 +1,4 @@
-name: AscensionRecomp M4.0 - UIKit CAMetalLayer presentation bridge
+name: AscensionRecomp M4.1 - iOS Metal diagnostic IPA
 
 on:
   push:
@@ -275,12 +275,17 @@ jobs:
           echo 'M4.0: UIKit CAMetalLayer view and iOS RSX Metal bridge compiled, not runtime displayed or game-rendered.' > m40-status.txt
           echo 'iPhone ARM64 CPU/SPU/LV2+offscreen Metal compiled; no CAMetalLayer presenter/audio/input/IPA.' > m39-status.txt
           echo 'iOS CPU/SPU/LV2 build only. SDL2 input/audio and RSX Metal backend disabled until iOS adapters are implemented.' > m38-status.txt
+      - name: M4.1 link native UIKit RSX Metal diagnostic application
+        run: |
+          set -euo pipefail
+          bash tools/build_ios_probe_ipa.sh 2>&1 | tee m41-build-ipa.log
+          test -s AscensionRecompProbe-0.4.1-unsigned.ipa
       - name: Upload M2 evidence - runtime + synthetic PPU proof
 
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: AscensionRecomp-M4.0-ios-metal-drawable-evidence
+          name: AscensionRecomp-M4.1-ios-renderer-probe-evidence
           if-no-files-found: warn
           retention-days: 14
           path: |
@@ -352,6 +357,12 @@ jobs:
             m40-ui-arch.txt
             m40-ui-sha256.txt
             m40-status.txt
+            m41-build-ipa.log
+            m41-executable-file.txt
+            m41-executable-arch.txt
+            m41-ipa-sha256.txt
+            m41-status.txt
+            AscensionRecompProbe-0.4.1-unsigned.ipa
             m40-ios-layer-view.o
             build-ios-runtime/libps3recomp_runtime.a
             ios-ppu-core/libAscensionPPUCore-ios-arm64.a
