@@ -1,4 +1,4 @@
-name: AscensionRecomp M2.6 - strict PPU image and OPD loader
+name: AscensionRecomp M2.7 - discover unlisted direct PPU callees
 
 on:
   push:
@@ -165,12 +165,31 @@ jobs:
           grep -E 'Mach-O.*arm64' m26-object-info.log
           shasum -a 256 m26-elf-loader-arm64.o > m26-checksums.txt
           echo 'M2.6: validated synthetic ELF64 PPU segments, BSS and OPD/TOC; no commercial content.' > m26-status.txt
+      - name: M2.7 recover direct PPU call targets not present in OPD manifest
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          from pathlib import Path
+          import json, struct
+          data=bytearray(Path("m26-synthetic/EBOOT.ELF").read_bytes())
+          struct.pack_into(">I", data, 0x1000+0x20, 0xf821ff91)
+          Path("m27-synthetic-call-elf.ELF").write_bytes(data)
+          Path("m27-known-opd.json").write_text(json.dumps([{"start":"0x10000"}]))
+          PY
+          python3 tools/recover_ppu_calls.py m27-synthetic-call-elf.ELF --functions m27-known-opd.json --out m27-candidates.json 2>&1 | tee m27-call-recovery.log
+          python3 - <<'PY'
+          import json
+          data=json.load(open("m27-candidates.json"))
+          assert data["recovered_not_in_opd"]==1, data
+          assert data["candidates"][0]["entry"]=="0x10020", data["candidates"]
+          PY
+          echo 'M2.7: Direct branch target recovery validates plausible prologues; real Ascension executable never enters CI.' > m27-status.txt
       - name: Upload M2 evidence - runtime + synthetic PPU proof
 
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: AscensionRecomp-M2.6-elf-image-evidence
+          name: AscensionRecomp-M2.7-ppu-call-recovery-evidence
           if-no-files-found: warn
           retention-days: 14
           path: |
@@ -209,6 +228,9 @@ jobs:
             m26-object-info.log
             m26-checksums.txt
             m26-status.txt
+            m27-call-recovery.log
+            m27-candidates.json
+            m27-status.txt
             m26-elf-loader-arm64.o
             m25-synthetic-ppu-arm64.o
             m25-guest-bridge-arm64.o
