@@ -1,0 +1,11 @@
+PsTJohn1 1.0 — ARM64 SPU + Vulkan alignment experimental hybrid
+Base clone: PsTJon-KosmicKrisp at 5e03f700684c4b99e4459aefc552d3c0a3f10b84
+New branch: PsTJohn only; other branches untouched.
+Workflow: .github/workflows/pstjon-kosmickrisp-m4.yml (only this workflow push trigger on PsTJohn)
+Architecture: XITRIX/rpcs3 iOS pinned core + KosmicKrisp pinned Vulkan/Metal.
+ARMSX3 upstream refs:
+  ab53473f78d8edd6a74d22c3cca123f95e87735a — SPU LLVM InstCombine + calling convention.
+  07e477d28b4ecd0b341cc35ccee89ceb2cd8fd19 — Vulkan compute DEPTH transfer alignment guards and barrier spans.
+No Android .so transplanted. Previous speculative ARM64 WFE wait optimization is explicitly excluded due physical regression.
+Safety: strict source anchors, source diff --check, one branch-scoped CI build, report patch and IPA artifacts.
+No proven FPS or image improvement before same-scene iPhone 17 Pro A/B benchmarks.
