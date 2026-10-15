@@ -16,6 +16,9 @@ class NativeRSXStencil(unittest.TestCase):
             "NV4097_SET_STENCIL_FUNC_REF,",
             "depth_mode==4u ? 2u : 1u",
             "NV4097_SET_STENCIL_FUNC_MASK,0xffu",
+            "M55_NV4097_SET_STENCIL_MASK 0x0000032Cu",
+            "rsx_draw_engine_method(M55_NV4097_SET_STENCIL_MASK,0xffu)",
+            "*stencil_draws=ar_probe_m55_stencil_draws();",
             "NV4097_SET_STENCIL_OP_ZPASS,",
             "depth_mode==3u ? 0x1e01u : 0x1e00u",
             "depth_mode==3u ? 0xf2u",
@@ -29,6 +32,7 @@ class NativeRSXStencil(unittest.TestCase):
            "u8 ar_m55_stencil",
            "ar_m55_stencil_draws_encoded",
            "rs->stencil_enable &&",
+           "rs->s_write_mask == 0xffu",
            "r->depth && eng_obj(r->depth)",
            "p->ar_m51_tex0 && p->ar_m55_stencil",
         ): self.assertIn(needle,OVER)
@@ -41,7 +45,7 @@ class NativeRSXStencil(unittest.TestCase):
         for needle in ("testM55StencilMask:","testM54DepthOcclusion:",
             "testM53Multipass:","testM52TextureMutation:","testM51GuestDraw:",
             "testRSXCache:"):self.assertIn(needle,APP)
-        self.assertIn("0.5.7-unsigned.ipa",
+        self.assertIn("0.5.8-unsigned.ipa",
             (ROOT/"tools/build_ios_probe_ipa.sh").read_text())
         wf=(ROOT/".github/workflows/ascension-recomp-m0.yml").read_text()
         self.assertIn("grep -q '_ar_probe_m55_guest_stencil_mask'",wf)

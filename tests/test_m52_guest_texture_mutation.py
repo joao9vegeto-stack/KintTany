@@ -30,8 +30,8 @@ class GuestMutationTests(unittest.TestCase):
         workflow=(ROOT/".github/workflows/ascension-recomp-m0.yml").read_text()
         self.assertIn("grep -q '_ar_probe_m52_guest_texture_mutation'",workflow)
         self.assertIn("M5.2: 3 guest FP TEX0 GPU draws",workflow)
-        self.assertIn("AscensionRecompProbe-0.5.7-unsigned.ipa",workflow)
-        self.assertIn("0.5.7-unsigned.ipa",
+        self.assertIn("AscensionRecompProbe-0.5.8-unsigned.ipa",workflow)
+        self.assertIn("0.5.8-unsigned.ipa",
                       (ROOT/"tools/build_ios_probe_ipa.sh").read_text())
 if __name__=="__main__":
     unittest.main()
