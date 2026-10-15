@@ -1,4 +1,4 @@
-name: AscensionRecomp M3.5 - PPU CFG boundary validation
+name: AscensionRecomp M3.6 - per-thread PPU identity semantics
 
 on:
   push:
