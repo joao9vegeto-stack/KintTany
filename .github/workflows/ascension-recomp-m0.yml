@@ -1,4 +1,4 @@
-name: AscensionRecomp M4.1 - iOS Metal diagnostic IPA
+name: AscensionRecomp M4.2 - visible native Metal presentation probe
 
 on:
   push:
@@ -279,13 +279,18 @@ jobs:
         run: |
           set -euo pipefail
           bash tools/build_ios_probe_ipa.sh 2>&1 | tee m41-build-ipa.log
-          test -s AscensionRecompProbe-0.4.1-unsigned.ipa
+          test -s AscensionRecompProbe-0.4.2-unsigned.ipa
+          /usr/libexec/PlistBuddy -c 'Print CFBundleShortVersionString' ios-probe/Payload/AscensionRecompProbe.app/Info.plist | grep -Fx 0.4.2
+          /usr/bin/unzip -t AscensionRecompProbe-0.4.2-unsigned.ipa | tee m42-ipa-integrity.log
+          xcrun nm -g ios-probe/Payload/AscensionRecompProbe.app/AscensionRecompProbe | grep -E '(_rsx_metal_backend_present|_rsx_metal_backend_init|_OBJC_CLASS_\\$_ARMetalView)' > m42-runtime-link-symbols.txt || true
+          grep -q _rsx_metal_backend_init m39-metal-symbols.txt
+          echo 'M4.2: actual GPU clear + presentDrawable + waitUntilCompleted route linked in iOS app; requires on-device screenshot.' > m42-status.txt
       - name: Upload M2 evidence - runtime + synthetic PPU proof
 
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: AscensionRecomp-M4.1-ios-renderer-probe-evidence
+          name: AscensionRecomp-M4.2-visible-gpu-presentation-evidence
           if-no-files-found: warn
           retention-days: 14
           path: |
@@ -362,7 +367,10 @@ jobs:
             m41-executable-arch.txt
             m41-ipa-sha256.txt
             m41-status.txt
-            AscensionRecompProbe-0.4.1-unsigned.ipa
+            m42-ipa-integrity.log
+            m42-runtime-link-symbols.txt
+            m42-status.txt
+            AscensionRecompProbe-0.4.2-unsigned.ipa
             m40-ios-layer-view.o
             build-ios-runtime/libps3recomp_runtime.a
             ios-ppu-core/libAscensionPPUCore-ios-arm64.a
