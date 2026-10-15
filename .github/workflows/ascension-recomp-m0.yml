@@ -1,4 +1,4 @@
-name: AscensionRecomp M2.2 - bounded PPU batch audit
+name: AscensionRecomp M2.3 - PowerPC CFG native AOT validation
 
 on:
   push:
@@ -98,12 +98,31 @@ jobs:
           file m22-synthetic-out/*.o | tee m22-arch.log
           shasum -a 256 m22-synthetic-out/*.o > m22-sha256.txt
           echo 'M2.2 synthetic bounded-AOT batch passed; private commercial code is not part of CI.' > m22-status.txt
+      - name: M2.3 CFG lifter and native iOS ARM64 object - synthetic code only
+        run: |
+          set -euo pipefail
+          python3 tools/ppu_cfg_lifter.py m2-synthetic/EBOOT.ELF --functions m22-synthetic-functions.json --output m23-synthetic-out 2>&1 | tee m23-lifter.log
+          python3 -c 'import json; x=json.load(open("m23-synthetic-out/report.json")); assert x["candidates"]==2 and x["functions_total"]==2'
+          python3 - <<'PY'
+          from pathlib import Path
+          fs=sorted(Path("m23-synthetic-out").glob("ppu_f_*.c"))
+          assert len(fs)==2, len(fs)
+          with open("m23-synthetic-combined.c","w") as out:
+              out.write(fs[0].read_text().split("int ppu_f_",1)[0])
+              for f in fs:
+                  out.write("int ppu_f_"+f.read_text().split("int ppu_f_",1)[1])
+          PY
+          xcrun --sdk iphoneos clang -target arm64-apple-ios17.0 -ffreestanding -fno-builtin -O0 -c m23-synthetic-combined.c -o m23-synthetic-arm64.o
+          file m23-synthetic-arm64.o | tee m23-object-architecture.log
+          file m23-synthetic-arm64.o | grep -E 'Mach-O.*arm64'
+          shasum -a 256 m23-synthetic-arm64.o | tee m23-object-sha256.txt
+          echo 'M2.3: Native host branch/rotation tests and synthetic PPC64 -> iOS ARM64 object. No copyrighted inputs.' > m23-status.txt
       - name: Upload M2 evidence - runtime + synthetic PPU proof
 
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: AscensionRecomp-M2.2-bounded-batch-evidence
+          name: AscensionRecomp-M2.3-ppu-cfg-evidence
           if-no-files-found: warn
           retention-days: 14
           path: |
@@ -126,6 +145,12 @@ jobs:
             m22-arch.log
             m22-sha256.txt
             m22-status.txt
+            m23-lifter.log
+            m23-object-architecture.log
+            m23-object-sha256.txt
+            m23-status.txt
+            m23-synthetic-out/report.json
+            m23-synthetic-arm64.o
             m22-synthetic-out/audit.json
             m22-synthetic-out/*.o
             m21-synthetic-ppu-ios-arm64.o

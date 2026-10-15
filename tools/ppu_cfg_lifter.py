@@ -1,0 +1,308 @@
+#!/usr/bin/env python3
+"""Strict experimental PowerPC64 CFG -> C AOT. No game code in this repository.
+
+Rejects unknown instructions and unsafe function ranges. Direct branches use
+function-local labels, remote branches return a tail-dispatch status, and
+linked calls use a host callback. NOT a full PPU/SPU/RSX implementation.
+"""
+from __future__ import annotations
+import argparse
+import json
+import struct
+from collections import Counter
+from pathlib import Path
+
+class Unsupported(ValueError): pass
+
+PROLOGUE = r'''#include <stdint.h>
+typedef uint64_t u64;
+typedef uint32_t u32;
+typedef int32_t s32;
+typedef struct {
+    u64 gpr[32]; u64 lr; u64 ctr; u64 cia; u32 cr; u32 xer;
+} ppu_ctx;
+extern u64 ar_read64(u64);
+extern u32 ar_read32(u64);
+extern uint16_t ar_read16(u64);
+extern uint8_t ar_read8(u64);
+extern void ar_write64(u64,u64);
+extern void ar_write32(u64,u32);
+extern void ar_write16(u64,uint16_t);
+extern void ar_write8(u64,uint8_t);
+extern int ar_guest_call(ppu_ctx*, u64);
+/* 0: return to guest LR; 1: tail dispatch; negative: host failure */
+static inline u32 ar_rotl32(u32 v, unsigned sh) {
+    sh &= 31U; return sh ? (u32)((v<<sh) | (v>>(32U-sh))) : v;
+}
+static inline u64 ar_rotl64(u64 v, unsigned sh) {
+    sh &= 63U; return sh ? ((v<<sh) | (v>>(64U-sh))) : v;
+}
+'''
+
+def sx(value: int, bits: int) -> int:
+    return value - (1 << bits) if value & (1 << (bits - 1)) else value
+
+def mask32(mb: int, me: int) -> int:
+    mask = 0
+    pos = mb
+    for _ in range(32):
+        mask |= 1 << (31-pos)
+        if pos == me: break
+        pos = (pos+1) % 32
+    return mask
+
+def mask64(mb: int, me: int) -> int:
+    mask = 0
+    pos = mb
+    for _ in range(64):
+        mask |= 1 << (63 - pos)
+        if pos == me: break
+        pos = (pos + 1) % 64
+    return mask
+
+def lift(words: list[int] | tuple[int, ...], base: int, name: str = 'ppu_sample') -> tuple[str,dict]:
+    if not words or len(words)>512 or base & 3:
+        raise Unsupported('invalid function length / address')
+    lines=[PROLOGUE, f'int {name}(ppu_ctx *c) {{']
+    hist=Counter()
+    addresses={base+4*i for i in range(len(words))}
+    def e(stmt: str):lines.append('    '+stmt)
+    def reg(i: int):return f'c->gpr[{i}]'
+    def addr_base(i: int):return reg(i) if i else '0ULL'
+    def record(expression: str, field: int=0):
+        offset=(7-field)*4
+        e(f'c->cr=(c->cr & ~(15U << {offset})) | (u32)((({expression}) | ((c->xer >> 31)&1U)) << {offset});')
+    def cmp_expr(lhs:str,rhs:str):
+        return f'(({lhs} < {rhs}) ? 8U : (({lhs} > {rhs}) ? 4U : 2U))'
+    def terminate_to(target: int | str, lk:bool, pc:int):
+        if lk:e(f'c->lr=0x{pc+4:x}ULL;')
+        if isinstance(target,int) and target in addresses:
+            e(f'goto L_{target:x};')
+        else:
+            val = f'0x{target:x}ULL' if isinstance(target,int) else target
+            if lk:e(f'if(ar_guest_call(c,{val})) return -3;')
+            else:e(f'c->cia={val}; return 1;')
+    for i,w in enumerate(words):
+        pc=base+4*i
+        op=(w>>26)&63
+        d=(w>>21)&31; a=(w>>16)&31; b=(w>>11)&31
+        imm=sx(w&0xffff,16)
+        e(f'L_{pc:x}: ;')
+        def branch_test(bo:int, bi:int, ctr_is_target=False):
+            parts=[]
+            if not (bo & 4):
+                if ctr_is_target:raise Unsupported('bcctr cannot decrement CTR')
+                e('c->ctr = c->ctr - 1ULL;')
+                parts.append('(c->ctr == 0ULL)' if bo & 2 else '(c->ctr != 0ULL)')
+            if not (bo & 16):
+                parts.append(f'(((c->cr >> {31-bi}) & 1U) == {1 if bo&8 else 0}U)')
+            return ' && '.join(parts) if parts else '1'
+        if op==16:
+            bo=(w>>21)&31; bi=(w>>16)&31
+            target=(sx(w&0xfffc,16) if w&2 else pc+sx(w&0xfffc,16))
+            lk=bool(w&1)
+            cond=branch_test(bo,bi)
+            hist['bc']+=1
+            if lk:e(f'c->lr=0x{pc+4:x}ULL;')
+            e(f'if ({cond}) {{')
+            # LR was set even when not taken; do not reset it in the branch.
+            if lk and target in addresses:
+                e(f'goto L_{target:x};')
+            elif lk:
+                e(f'if(ar_guest_call(c,0x{target:x}ULL)) return -3;')
+            else:
+                terminate_to(target,False,pc)
+            e('}')
+            continue
+        if op==18:
+            target=(sx(w&0x3fffffc,26) if w&2 else pc+sx(w&0x3fffffc,26))
+            terminate_to(target,bool(w&1),pc)
+            hist['b/bl']+=1
+            continue
+        if op==19:
+            xo=(w>>1)&1023; bo=(w>>21)&31;bi=(w>>16)&31;lk=bool(w&1)
+            if xo in (16,528):
+                cond=branch_test(bo,bi,ctr_is_target=(xo==528))
+                oldtarget='c->lr' if xo==16 else 'c->ctr'
+                e(f'u64 target_{i}={oldtarget};')
+                if lk:e(f'c->lr=0x{pc+4:x}ULL;')
+                e(f'if({cond}) {{')
+                if lk:e(f'if(ar_guest_call(c,target_{i})) return -3;')
+                elif xo==16 and (bo & 20)==20:
+                    e(f'c->cia=target_{i}; return 0;')
+                else:e(f'c->cia=target_{i}; return 1;')
+                e('}')
+                hist['bclr' if xo==16 else 'bcctr']+=1
+                continue
+            raise Unsupported(f'unsupported opcode19/{xo}')
+        if op in (10,11):
+            bf=(w>>23)&7;wide=bool((w>>21)&1)
+            if op==11:
+                lhs=f'(int64_t){reg(a)}' if wide else f'(s32)(u32){reg(a)}'
+                rhs=f'(int64_t){imm}'
+            else:
+                lhs=f'(u64){reg(a)}' if wide else f'(u32){reg(a)}'
+                rhs=f'(u64){w&0xffff}' if wide else f'(u32){w&0xffff}'
+            record(cmp_expr(lhs,rhs),bf)
+            hist['cmpi']+=1
+        elif op in (12,13):
+            e(f'u64 old_{i}={reg(a)};')
+            e(f'{reg(d)}=old_{i} + (u64)((int64_t){imm});')
+            e(f'c->xer=(c->xer & ~0x20000000U) | (({reg(d)} < old_{i}) ? 0x20000000U : 0U);')
+            if op==13:record(cmp_expr(f'(int64_t){reg(d)}','0LL'))
+            hist['addic']+=1
+        elif op in (14,15):
+            v=imm << (16 if op==15 else 0)
+            e(f'{reg(d)} = {addr_base(a)} + (u64)((int64_t){v});')
+            hist['addi/addis']+=1
+        elif op in (24,25,26,27):
+            v=(w&65535) << (16 if op in (25,27) else 0)
+            e(f'{reg(a)} = {reg(d)} {"|" if op in (24,25) else "^"} 0x{v:x}ULL;')
+            hist['ori/xori']+=1
+        elif op in (28,29):
+            v=(w&65535) << (16 if op==29 else 0)
+            e(f'{reg(a)} = {reg(d)} & 0x{v:x}ULL;')
+            record(cmp_expr(f'(s32)(u32){reg(a)}','0'))
+            hist['andi.']+=1
+        elif op==21:
+            sh=(w>>11)&31; mb=(w>>6)&31;me=(w>>1)&31
+            mask=mask32(mb,me)
+            e(f'{reg(a)}=(u64)(ar_rotl32((u32){reg(d)},{sh}) & 0x{mask:08x}U);')
+            if w&1:record(cmp_expr(f'(s32)(u32){reg(a)}','0'))
+            hist['rlwinm']+=1
+        elif op==30:
+            xo=(w>>2)&7
+            if xo not in (0,1,2,3):raise Unsupported(f'unsupported MD64 rotate form {xo}')
+            shift=((w>>11)&31) | ((w&2)<<4)
+            mask_at=((w>>6)&31) | (w&32)
+            if xo==0:mask=mask64(mask_at,63)
+            elif xo==1:mask=mask64(0,mask_at)
+            else:mask=mask64(mask_at,63-shift)
+            e(f'u64 rot_{i}=ar_rotl64({reg(d)}, {shift});')
+            if xo==3:
+                e(f'{reg(a)}=({reg(a)} & ~0x{mask:016x}ULL) | (rot_{i} & 0x{mask:016x}ULL);')
+            else:e(f'{reg(a)}=rot_{i} & 0x{mask:016x}ULL;')
+            if w&1:record(cmp_expr(f'(int64_t){reg(a)}','0LL'))
+            hist['md_rotate']+=1
+        elif op in (32,34,40,58):
+            fn={32:'ar_read32',34:'ar_read8',40:'ar_read16',58:'ar_read64'}[op]
+            if op==58:
+                if w&3:raise Unsupported('unsupported LD update/invalid form')
+                imm=sx(w&0xfffc,16)
+            e(f'{reg(d)}=(u64){fn}({addr_base(a)}+(u64)((int64_t){imm}));')
+            hist['load']+=1
+        elif op in (36,38,44,62,37):
+            width={36:32,38:8,44:16,62:64,37:32}[op]
+            if op==62:
+                if w&3 not in (0,1):raise Unsupported('unsupported STD DS form')
+                imm=sx(w&0xfffc,16)
+            update=op==37 or (op==62 and (w&3)==1)
+            if update and a==0:raise Unsupported('store-update with base zero')
+            e(f'u64 ea_{i}={addr_base(a)}+(u64)((int64_t){imm});')
+            e(f'ar_write{width}(ea_{i}, {reg(d)});')
+            if update:e(f'{reg(a)}=ea_{i};')
+            hist['store']+=1
+        elif op==31:
+            xo=(w>>1)&1023;rc=w&1
+            if xo in (0,32):
+                bf=(w>>23)&7;wide=bool((w>>21)&1)
+                if xo==0:
+                    lhs=f'(int64_t){reg(a)}' if wide else f'(s32)(u32){reg(a)}'
+                    rhs=f'(int64_t){reg(b)}' if wide else f'(s32)(u32){reg(b)}'
+                else:
+                    lhs=f'(u64){reg(a)}' if wide else f'(u32){reg(a)}'
+                    rhs=f'(u64){reg(b)}' if wide else f'(u32){reg(b)}'
+                record(cmp_expr(lhs,rhs),bf);hist['cmp']+=1
+            elif xo==986:
+                if rc:raise Unsupported('extsw. CR update unsupported')
+                e(f'{reg(a)}=(u64)(int64_t)(s32)(u32){reg(d)};');hist['extsw']+=1
+            elif xo==10:
+                e(f'u64 old_{i}={reg(a)};')
+                e(f'{reg(d)}=old_{i}+{reg(b)};')
+                e(f'c->xer=(c->xer & ~0x20000000U) | (({reg(d)} < old_{i}) ? 0x20000000U : 0U);')
+                if rc:record(cmp_expr(f'(int64_t){reg(d)}','0LL'))
+                hist['addc']+=1
+            elif xo in (444,266,40,28,316):
+                if xo==444:e(f'{reg(a)}={reg(d)} | {reg(b)};')
+                elif xo==28:e(f'{reg(a)}={reg(d)} & {reg(b)};')
+                elif xo==316:e(f'{reg(a)}={reg(d)} ^ {reg(b)};')
+                elif xo==266:e(f'{reg(d)}={reg(a)}+{reg(b)};')
+                elif xo==40:e(f'{reg(d)}={reg(b)}-{reg(a)};')
+                dest=a if xo in (444,28,316) else d
+                if rc:record(cmp_expr(f'(int64_t){reg(dest)}','0LL'))
+                hist['binary_xo']+=1
+            elif xo in (339,467):
+                spr=((w>>16)&31)|((w>>6)&0x3e0)
+                if spr not in (8,9):raise Unsupported(f'unsupported SPR {spr}')
+                attr='lr' if spr==8 else 'ctr'
+                if xo==339:e(f'{reg(d)}=c->{attr};')
+                else:e(f'c->{attr}={reg(d)};')
+                hist['mfspr/mtspr']+=1
+            else:raise Unsupported(f'unsupported opcode31/{xo}')
+        else:raise Unsupported(f'unsupported opcode{op}')
+    final=words[-1]
+    final_op=(final>>26)&63
+    terminal=(final_op==18 and not (final&1) or
+              final_op==19 and ((final>>1)&1023) in (16,528)
+              and ((final>>21)&31) in (20,21,22,23,28,29,30,31) and not (final&1))
+    if not terminal:raise Unsupported('function boundary lacks unconditional terminator')
+    lines.append('}')
+    return '\n'.join(lines)+'\n',dict(hist)
+
+class PPUImage:
+    def __init__(self,path:Path):
+        self.path=Path(path)
+        self.blob=self.path.read_bytes()
+        d=self.blob
+        if len(d)<64 or d[:7]!=b'\x7fELF\x02\x02\x01' or struct.unpack_from('>H',d,18)[0]!=21:
+            raise ValueError('not a PPU ELF64 big-endian')
+        pho=struct.unpack_from('>Q',d,32)[0];ps=struct.unpack_from('>H',d,54)[0];pn=struct.unpack_from('>H',d,56)[0]
+        if ps<56 or pn>256 or pho+pn*ps>len(d):raise ValueError('program headers invalid')
+        self.code=[]
+        for i in range(pn):
+            typ,flags,off,va,pa,filesz,ms,align=struct.unpack_from('>IIQQQQQQ',d,pho+i*ps)
+            if typ==1 and flags&1:
+                if off+filesz>len(d):raise ValueError('truncated PT_LOAD')
+                self.code.append((va,va+filesz,off))
+    def words(self,start,end):
+        if start>=end or start&3 or end&3 or end-start>512*4:
+            raise Unsupported('invalid or oversized function range')
+        for lo,hi,off in self.code:
+            if lo<=start and end<=hi:
+                return struct.unpack_from('>'+str((end-start)//4)+'I',self.blob,off+start-lo)
+        raise Unsupported('range outside executable PT_LOAD')
+
+def analyze_private(elf:Path,functions:list[dict],out:Path,max_output:int=8000):
+    image=PPUImage(elf);ok=[];fails=Counter();hist=Counter()
+    out.mkdir(parents=True,exist_ok=True)
+    for f in functions:
+        start,end=int(f['start'],0),int(f['end'],0)
+        try:
+            words=image.words(start,end)
+            source,cnt=lift(words,start,f'ppu_f_{start:08x}')
+            hist.update(cnt)
+            if len(ok)<max_output:
+                name=f'ppu_f_{start:08x}.c'
+                (out/name).write_text(source)
+                ok.append({'address':hex(start),'file':name,'instructions':len(words)})
+        except Unsupported as ex:
+            fails[str(ex).split(' at 0x')[0]]+=1
+    return {'schema':'ascension-recomp/ppu-cfg-prototype-v1',
+            'functions_total':len(functions),'candidates':len(ok),
+            'reason_counts':dict(fails.most_common()),'emitted_ops':dict(hist),
+            'note':'Experimental ISA subset; compile != semantic equivalence or game boot.'}
+
+def main():
+    p=argparse.ArgumentParser(description=__doc__)
+    p.add_argument('elf',type=Path)
+    p.add_argument('--functions',required=True,type=Path)
+    p.add_argument('--output',required=True,type=Path)
+    p.add_argument('--max-output',type=int,default=8000)
+    a=p.parse_args()
+    rows=json.loads(a.functions.read_text())
+    report=analyze_private(a.elf,rows,a.output,a.max_output)
+    (a.output/'report.json').write_text(json.dumps(report,indent=2)+'\n')
+    print('AOT CFG candidates:',report['candidates'],'/',report['functions_total'])
+    print('Rejected:',list(report['reason_counts'].items())[:10])
+
+if __name__=='__main__':main()
