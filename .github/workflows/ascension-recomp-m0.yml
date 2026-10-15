@@ -1,4 +1,4 @@
-name: AscensionRecomp M3.7 - iphoneos ARM64 PPU static library
+name: AscensionRecomp M3.8 - iOS CPU SPU LV2 runtime cross-compile
 
 on:
   push:
@@ -245,12 +245,29 @@ jobs:
           test -s ios-ppu-core/exports.txt
           test -s ios-ppu-core/SHA256.txt
           echo 'iOS device library built. No game bytes, NOT an IPA.' > m37-status.txt
+      - name: M3.8 cross-compile pinned PS3Recomp CPU SPU LV2 modules for iphoneos
+        run: |
+          set -euo pipefail
+          python3 tools/ios_runtime_overlay.py upstream/CMakeLists.txt
+          cmake -S upstream -B build-ios-runtime -G Ninja \
+            -DCMAKE_SYSTEM_NAME=iOS \
+            -DCMAKE_OSX_SYSROOT=iphoneos \
+            -DCMAKE_OSX_ARCHITECTURES=arm64 \
+            -DCMAKE_OSX_DEPLOYMENT_TARGET=17.0 \
+            -DCMAKE_BUILD_TYPE=Release \
+            -DPS3RECOMP_BUILD_TESTS=OFF \
+            -DPS3RECOMP_RSX_VULKAN=OFF 2>&1 | tee m38-ios-configure.log
+          cmake --build build-ios-runtime --target ps3recomp_runtime --parallel 4 2>&1 | tee m38-ios-runtime.log
+          test -s build-ios-runtime/libps3recomp_runtime.a
+          xcrun lipo -info build-ios-runtime/libps3recomp_runtime.a | tee m38-lipo.txt
+          shasum -a 256 build-ios-runtime/libps3recomp_runtime.a > m38-runtime-sha256.txt
+          echo 'iOS CPU/SPU/LV2 build only. SDL2 input/audio and RSX Metal backend disabled until iOS adapters are implemented.' > m38-status.txt
       - name: Upload M2 evidence - runtime + synthetic PPU proof
 
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: AscensionRecomp-M3.7-ios-ppu-static-evidence
+          name: AscensionRecomp-M3.8-ios-spu-runtime-evidence
           if-no-files-found: warn
           retention-days: 14
           path: |
@@ -311,6 +328,12 @@ jobs:
             m31-status.txt
             m37-ios-build.log
             m37-status.txt
+            m38-ios-configure.log
+            m38-ios-runtime.log
+            m38-lipo.txt
+            m38-runtime-sha256.txt
+            m38-status.txt
+            build-ios-runtime/libps3recomp_runtime.a
             ios-ppu-core/libAscensionPPUCore-ios-arm64.a
             ios-ppu-core/exports.txt
             ios-ppu-core/SHA256.txt
