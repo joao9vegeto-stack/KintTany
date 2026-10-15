@@ -5,10 +5,17 @@ SDK="$(xcrun --sdk iphoneos --show-sdk-path)"
 APP="ios-probe/Payload/AscensionRecompProbe.app"
 mkdir -p "$APP"
 cp ios/Probe-Info.plist "$APP/Info.plist"
+# Compile guest-like register writes with a C compiler to preserve the
+# public C ABI; clang++ treats .c inputs as C++ in its driver mode.
+xcrun --sdk iphoneos clang -target arm64-apple-ios17.0 -isysroot "$SDK" \
+    -std=c11 -O2 -I upstream/libs/video -I upstream/include \
+    -c ios/ARRSXMethodProbe.c -o ios-probe/ARRSXMethodProbe.o
+xcrun nm -g ios-probe/ARRSXMethodProbe.o | grep -q '_ar_probe_rsx_clear_flip'
 xcrun --sdk iphoneos clang++ -target arm64-apple-ios17.0 \
     -isysroot "$SDK" -fobjc-arc -fmodules -stdlib=libc++ \
     -O2 -Wl,-dead_strip -I ios -I upstream/libs/video -I upstream/include \
-    ios/ARMetalView.m ios/ARProbeApp.m ios/ARProbeGuestVM.c ios/ARRSXMethodProbe.c \
+    ios/ARMetalView.m ios/ARProbeApp.m ios/ARProbeGuestVM.c \
+    ios-probe/ARRSXMethodProbe.o \
     build-ios-runtime/libps3recomp_runtime.a \
     -framework UIKit -framework Foundation -framework QuartzCore \
     -framework Metal -framework CoreGraphics -framework CoreFoundation \
