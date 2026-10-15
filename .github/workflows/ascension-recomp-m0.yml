@@ -1,4 +1,4 @@
-name: AscensionRecomp M3.6 - per-thread PPU identity semantics
+name: AscensionRecomp M3.7 - iphoneos ARM64 PPU static library
 
 on:
   push:
@@ -237,12 +237,20 @@ jobs:
           file m31-manifest-arm64.o | tee m31-arm64-object.log
           shasum -a 256 m31-manifest-arm64.o > m31-checksums.txt
           echo 'M3.1: all import NID bindings generated with checked duplicates; CI synthetic only.' > m31-status.txt
+      - name: M3.7 build iphoneos ARM64 PPU core archive without game data
+        run: |
+          set -euo pipefail
+          bash tools/build_ios_ppu_core.sh 2>&1 | tee m37-ios-build.log
+          test -s ios-ppu-core/libAscensionPPUCore-ios-arm64.a
+          test -s ios-ppu-core/exports.txt
+          test -s ios-ppu-core/SHA256.txt
+          echo 'iOS device library built. No game bytes, NOT an IPA.' > m37-status.txt
       - name: Upload M2 evidence - runtime + synthetic PPU proof
 
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: AscensionRecomp-M3.1-import-binding-evidence
+          name: AscensionRecomp-M3.7-ios-ppu-static-evidence
           if-no-files-found: warn
           retention-days: 14
           path: |
@@ -301,6 +309,13 @@ jobs:
             m31-arm64-object.log
             m31-checksums.txt
             m31-status.txt
+            m37-ios-build.log
+            m37-status.txt
+            ios-ppu-core/libAscensionPPUCore-ios-arm64.a
+            ios-ppu-core/exports.txt
+            ios-ppu-core/SHA256.txt
+            ios-ppu-core/README.txt
+            ios-ppu-core/include/**
             m31-import-report.json
             m31-manifest-arm64.o
             m30-lv2-arm64.o
