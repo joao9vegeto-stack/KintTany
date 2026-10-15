@@ -128,7 +128,9 @@ def lift(words: list[int] | tuple[int, ...], base: int, name: str = 'ppu_sample'
                 if lk:e(f'c->lr=0x{pc+4:x}ULL;')
                 e(f'if({cond}) {{')
                 if lk:e(f'if(ar_guest_call(c,target_{i})) return -3;')
-                elif xo==16 and (bo & 20)==20:
+                elif xo==16:
+                    # Every taken BCLR without LK returns to guest LR, even
+                    # when the BO/BI condition is not unconditional.
                     e(f'c->cia=target_{i}; return 0;')
                 else:e(f'c->cia=target_{i}; return 1;')
                 e('}')
