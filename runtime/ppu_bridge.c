@@ -5,8 +5,15 @@
 #define MAX_FUNCS 8192
 #define MAX_MEM (128u*1024u*1024u)
 #define MAX_DEPTH 64
+#define MAX_IMPORTS 2048
+#define MAX_HANDLERS 2048
 static struct {uint32_t pc;ar_ppu_fn fn;} funcs[MAX_FUNCS];
 static size_t nfunc,mem_size;
+static struct {uint32_t stub,nid;} imports[MAX_IMPORTS];
+static size_t nimports;
+static struct {uint32_t nid;ar_hle_fn fn;} handlers[MAX_HANDLERS];
+static size_t nhandlers;
+static uint32_t missing_nid;
 static uint8_t *mem;
 static int fault;
 static uint32_t missing,budget,depth;
@@ -18,9 +25,20 @@ int ar_bridge_init(size_t n) {
   mem_size=n;return AR_OK;
 }
 void ar_bridge_shutdown(void){
-  free(mem);mem=0;mem_size=0;nfunc=0;fault=0;missing=0;budget=0;depth=0;
+  free(mem);mem=0;mem_size=0;nfunc=0;nimports=0;nhandlers=0;missing_nid=0;fault=0;missing=0;budget=0;depth=0;
 }
 int ar_last_error(void){return fault;}
+uint32_t ar_last_missing_nid(void){return missing_nid;}
+int ar_bind_import(uint32_t stub,uint32_t nid){
+ if(!stub||(stub&3)||!nid||nimports>=MAX_IMPORTS)return AR_BAD_ARGS;
+ for(size_t i=0;i<nimports;i++)if(imports[i].stub==stub)return AR_DUPLICATE;
+ imports[nimports].stub=stub;imports[nimports++].nid=nid;return AR_OK;
+}
+int ar_bind_hle(uint32_t nid,ar_hle_fn fn){
+ if(!nid||!fn||nhandlers>=MAX_HANDLERS)return AR_BAD_ARGS;
+ for(size_t i=0;i<nhandlers;i++)if(handlers[i].nid==nid)return AR_DUPLICATE;
+ handlers[nhandlers].nid=nid;handlers[nhandlers++].fn=fn;return AR_OK;
+}
 uint32_t ar_last_unresolved(void){return missing;}
 size_t ar_registered_count(void){return nfunc;}
 static int bounds(uint64_t a,size_t n){
@@ -64,6 +82,14 @@ static ar_ppu_fn lookup(uint64_t addr){
   for(size_t i=0;i<nfunc;i++)if(funcs[i].pc==addr)return funcs[i].fn;
   return 0;
 }
+static uint32_t import_nid(uint64_t stub){
+ for(size_t i=0;i<nimports;i++)if(imports[i].stub==stub)return imports[i].nid;
+ return 0;
+}
+static ar_hle_fn hle_handler(uint32_t nid){
+ for(size_t i=0;i<nhandlers;i++)if(handlers[i].nid==nid)return handlers[i].fn;
+ return 0;
+}
 static int dispatch(ppu_context *c,uint64_t pc){
   if(depth>=MAX_DEPTH){fault=AR_DEPTH;return AR_DEPTH;}
   depth++;int result=AR_OK;
@@ -71,7 +97,20 @@ static int dispatch(ppu_context *c,uint64_t pc){
     if(!budget){result=fault=AR_BUDGET;break;}
     budget--;
     ar_ppu_fn fn=lookup(pc);
-    if(!fn){missing=(uint32_t)pc;result=fault=AR_UNRESOLVED;break;}
+    if(!fn){
+      uint32_t nid=import_nid(pc);
+      if(nid){
+        ar_hle_fn hle=hle_handler(nid);
+        if(!hle){missing_nid=nid;result=fault=AR_MISSING_HLE;break;}
+        uint64_t saved_toc=c->gpr[2];
+        int rc=hle(c);
+        c->gpr[2]=saved_toc;
+        if(fault){result=fault;break;}
+        if(rc){result=fault=AR_HLE_FAILURE;break;}
+        c->cia=c->lr;result=AR_OK;break;
+      }
+      missing=(uint32_t)pc;result=fault=AR_UNRESOLVED;break;
+    }
     int status=fn(c);
     if(fault){result=fault;break;}
     if(status==AR_TAIL){pc=c->cia;continue;}
@@ -86,6 +125,6 @@ int ar_guest_call(ppu_context *c,uint64_t pc){
 }
 int ar_run(ppu_context *c,uint32_t pc,uint32_t ticks){
   if(!c||!pc||!ticks||!mem||depth)return AR_BAD_ARGS;
-  fault=0;missing=0;budget=ticks;
+  fault=0;missing=0;missing_nid=0;budget=ticks;
   return dispatch(c,pc);
 }

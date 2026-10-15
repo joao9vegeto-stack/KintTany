@@ -1,4 +1,4 @@
-name: AscensionRecomp M2.7 - discover unlisted direct PPU callees
+name: AscensionRecomp M2.8 - strict HLE NID guest ABI
 
 on:
   push:
@@ -184,12 +184,22 @@ jobs:
           assert data["candidates"][0]["entry"]=="0x10020", data["candidates"]
           PY
           echo 'M2.7: Direct branch target recovery validates plausible prologues; real Ascension executable never enters CI.' > m27-status.txt
+      - name: M2.8 bind guest import stub to HLE NID, reject missing handler
+        run: |
+          set -euo pipefail
+          python3 tools/make_hle_smoke.py --out m28-synthetic-guest.c
+          clang -std=c11 -O2 -Wall -Wextra -Werror -Wno-unused-label -Wno-unused-function -I upstream/runtime/ppu -I runtime m28-synthetic-guest.c runtime/ppu_bridge.c tests/host_hle_import.c -o m28-hle-host
+          ./m28-hle-host 2>&1 | tee m28-host-test.log
+          xcrun --sdk iphoneos clang -target arm64-apple-ios17.0 -std=c11 -O2 -I upstream/runtime/ppu -I runtime -c runtime/ppu_bridge.c -o m28-hle-bridge-arm64.o
+          file m28-hle-bridge-arm64.o | tee m28-object-info.log
+          shasum -a 256 m28-hle-bridge-arm64.o > m28-checksums.txt
+          echo 'M2.8: missing PS3 import NID fails closed; memory pointer + caller TOC validated on synthetic game-free smoke.' > m28-status.txt
       - name: Upload M2 evidence - runtime + synthetic PPU proof
 
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: AscensionRecomp-M2.7-ppu-call-recovery-evidence
+          name: AscensionRecomp-M2.8-strict-hle-import-evidence
           if-no-files-found: warn
           retention-days: 14
           path: |
@@ -231,6 +241,11 @@ jobs:
             m27-call-recovery.log
             m27-candidates.json
             m27-status.txt
+            m28-host-test.log
+            m28-object-info.log
+            m28-checksums.txt
+            m28-status.txt
+            m28-hle-bridge-arm64.o
             m26-elf-loader-arm64.o
             m25-synthetic-ppu-arm64.o
             m25-guest-bridge-arm64.o
