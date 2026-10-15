@@ -51,7 +51,20 @@ int ar_probe_m51_shader_state(u32 out[4]) {
 }
 
 '''
-    return s.replace(needle, helper + residency + needle, 1)
+    native_views = r'''/* M5.3: instrument ACTUAL GPU surface views, never a separate
+ * texture upload. Count only a successful view handle for a sampled
+ * previous RSX render target, not guest decode or compute fallback. */
+static u32 ar_m53_surface_view_count;
+void ar_probe_m53_reset_views(void) { ar_m53_surface_view_count=0; }
+u32 ar_probe_m53_surface_views(void) { return ar_m53_surface_view_count; }
+
+'''
+    view_anchor = "            textures[u] = view ? view : g.surfaces[sampled].handle;"
+    if s.count(view_anchor) != 1:
+        raise ValueError("pinned RTT GPU surface view selection changed")
+    s=s.replace(view_anchor,
+        "            if (view) ar_m53_surface_view_count++;\\n" + view_anchor,1)
+    return s.replace(needle, helper + residency + native_views + needle, 1)
 
 def patch_metal(s):
     a = "    MTLWinding  winding;\n} EngPipeline;"

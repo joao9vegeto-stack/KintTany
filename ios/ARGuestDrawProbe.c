@@ -19,6 +19,8 @@ extern int ar_probe_m51_shader_state(uint32_t out[4]);
 extern void ar_probe_cache_reset(void);
 extern uint32_t ar_probe_cache_uploads(void);
 extern uint32_t ar_probe_cache_replacements(void);
+extern void ar_probe_m53_reset_views(void);
+extern uint32_t ar_probe_m53_surface_views(void);
 
 enum {
     M51_RT_OFFSET = 0x00100000u,
@@ -26,6 +28,7 @@ enum {
     M51_VBO_OFFSET = 0x00290000u,
     M51_EBO_OFFSET = 0x002A0000u,
     M51_FP_OFFSET  = 0x002B0000u,
+    M53_RT_B_OFFSET = 0x00600000u,
     M51_WIDTH = 960u, M51_HEIGHT = 540u,
     M51_TEX_W = 8u, M51_TEX_H = 8u
 };
@@ -55,9 +58,16 @@ static void m51_cleanup(void) {
     rsx_draw_engine_set_guest_memory(NULL,NULL);
 }
 
-static int m51_guest_textured_quad_palette(unsigned swizzled, unsigned palette,
-                                    uint32_t pixels[4], unsigned *encoded,
-                                    unsigned *guest_draws, uint32_t shader_state[4]) {
+/* M5.3 uses exactly the same guest NV4097 VP/FP draw for both passes.
+ * sample_surface=0: texture from guest MAIN at M51_TEX_OFFSET.
+ * sample_surface=1: texture from a PREVIOUS RSX LOCAL render surface
+ * at M51_RT_OFFSET, not from host-injected pixels or a compute shader.
+ * All legacy M5.1/M5.2 calls use the same defaults as before. */
+static int m51_guest_textured_quad_palette_ex(unsigned swizzled,
+                            unsigned palette, unsigned sample_surface,
+                            uint32_t destination,
+                            uint32_t pixels[4], unsigned *encoded,
+                            unsigned *guest_draws, uint32_t shader_state[4]) {
     if (!pixels || !encoded || !guest_draws || !shader_state) return -101;
     memset(shader_state,0,4u*sizeof(uint32_t));
     memset(pixels,0,4u*sizeof(*pixels));
@@ -73,7 +83,7 @@ static int m51_guest_textured_quad_palette(unsigned swizzled, unsigned palette,
         {255,0,0,255}, {0,255,0,255}, {0,0,255,255}, {255,255,0,255}
     };
     uint8_t *texture=vm_base+M51_TEX_OFFSET;
-    for (unsigned y=0;y<M51_TEX_H;y++) for(unsigned x=0;x<M51_TEX_W;x++) {
+    if (!sample_surface) for (unsigned y=0;y<M51_TEX_H;y++) for(unsigned x=0;x<M51_TEX_W;x++) {
         unsigned color=((x>=4u) + (y>=4u ? 2u : 0u) + palette) & 3u;
         unsigned i=swizzled ? rsx_swizzle_offset(x,y,3u,3u) : y*M51_TEX_W+x;
         uint8_t *d=texture+i*4u;
@@ -121,16 +131,19 @@ static int m51_guest_textured_quad_palette(unsigned swizzled, unsigned palette,
     rsx_draw_engine_method(NV4097_SET_SHADER_PROGRAM,M51_FP_OFFSET|2u);
     rsx_draw_engine_method(NV4097_SET_SHADER_CONTROL,0x40u); /* FP32 export */
 
-    rsx_draw_engine_method(NV4097_SET_TEXTURE_OFFSET,M51_TEX_OFFSET);
+    rsx_draw_engine_method(NV4097_SET_TEXTURE_OFFSET,
+                            sample_surface ? M51_RT_OFFSET : M51_TEX_OFFSET);
     rsx_draw_engine_method(NV4097_SET_TEXTURE_FORMAT,
-        (1u<<16) | ((swizzled?0x85u:0xA5u)<<8) | (2u<<4) | 2u);
+        (1u<<16) | ((sample_surface ? 0xA5u : (swizzled?0x85u:0xA5u))<<8)
+                  | (2u<<4) | (sample_surface ? 1u : 2u));
     rsx_draw_engine_method(NV4097_SET_TEXTURE_ADDRESS,0x00030303u);
     rsx_draw_engine_method(NV4097_SET_TEXTURE_CONTROL0,0x80000000u);
     rsx_draw_engine_method(NV4097_SET_TEXTURE_CONTROL1,0x0000AAE4u);
     rsx_draw_engine_method(NV4097_SET_TEXTURE_FILTER,0x01010000u);
     rsx_draw_engine_method(NV4097_SET_TEXTURE_IMAGE_RECT,
-                           (M51_TEX_W<<16)|M51_TEX_H);
-    rsx_draw_engine_method(NV4097_SET_TEXTURE_CONTROL3,M51_TEX_W*4u);
+        sample_surface ? (M51_WIDTH<<16)|M51_HEIGHT : (M51_TEX_W<<16)|M51_TEX_H);
+    rsx_draw_engine_method(NV4097_SET_TEXTURE_CONTROL3,
+        sample_surface ? M51_WIDTH*4u : M51_TEX_W*4u);
 
     rsx_draw_engine_method(NV4097_SET_CONTEXT_DMA_COLOR_A,
                            CELL_GCM_CONTEXT_DMA_MEMORY_FRAME_BUFFER);
@@ -138,7 +151,7 @@ static int m51_guest_textured_quad_palette(unsigned swizzled, unsigned palette,
     rsx_draw_engine_method(NV4097_SET_SURFACE_CLIP_VERTICAL,M51_HEIGHT<<16);
     rsx_draw_engine_method(NV4097_SET_SURFACE_FORMAT,0x5u);
     rsx_draw_engine_method(NV4097_SET_SURFACE_PITCH_A,M51_WIDTH*4u);
-    rsx_draw_engine_method(NV4097_SET_SURFACE_COLOR_AOFFSET,M51_RT_OFFSET);
+    rsx_draw_engine_method(NV4097_SET_SURFACE_COLOR_AOFFSET,destination);
     rsx_draw_engine_method(NV4097_SET_SURFACE_COLOR_TARGET,CELL_GCM_SURFACE_TARGET_0);
     rsx_draw_engine_method(NV4097_SET_COLOR_CLEAR_VALUE,0xff101820u);
     rsx_draw_engine_method(NV4097_CLEAR_SURFACE,0xf0u);
@@ -162,7 +175,7 @@ static int m51_guest_textured_quad_palette(unsigned swizzled, unsigned palette,
     rsx_draw_engine_method(NV4097_SET_BEGIN_END,0u);
 
     rsx_draw_engine_set_display_buffer(0,RSX_LOCATION_LOCAL,
-        M51_RT_OFFSET,M51_WIDTH*4u,M51_WIDTH,M51_HEIGHT);
+        destination,M51_WIDTH*4u,M51_WIDTH,M51_HEIGHT);
     rsx_draw_engine_method(0xE944u,0u);
     rsx_draw_engine_flush();
 
@@ -185,6 +198,15 @@ static int m51_guest_textured_quad_palette(unsigned swizzled, unsigned palette,
         found |= 1u<<index;
     }
     return found==15u ? 0 : -125;
+}
+
+/* Compatibility wrapper: every tested legacy path remains guest MAIN
+ * texture sampling into the original render target. */
+static int m51_guest_textured_quad_palette(unsigned swizzled, unsigned palette,
+                                    uint32_t pixels[4], unsigned *encoded,
+                                    unsigned *guest_draws, uint32_t shader_state[4]) {
+    return m51_guest_textured_quad_palette_ex(swizzled,palette,0u,M51_RT_OFFSET,
+                                              pixels,encoded,guest_draws,shader_state);
 }
 
 /* The M5.1 externally visible probe remains behavior-identical. M5.2 calls
@@ -238,5 +260,53 @@ int ar_probe_m52_guest_texture_mutation(unsigned swizzled,
     if (*uploads<2u) return -241;
     if (*guest_total!=3u || *metal_total!=3u) return -242;
     *failed_phase=0u;
+    return 0;
+}
+ 
+/* M5.3: real RSX-to-RSX multipass. Pass A samples PS3 guest texture in
+ * MAIN and draws into LOCAL colour surface A. Pass B samples that SAME GPU
+ * render target A as TEX0 (through eng_surface_view) and writes to
+ * separate LOCAL colour surface B. Both are genuine translated VP/FP TEX0
+ * NV4097 indexed draws, not blits or host compute shaders. */
+int ar_probe_m53_guest_multipass(unsigned swizzled, uint32_t pixels[4],
+       unsigned *phase, unsigned *guest_total, unsigned *metal_total,
+       unsigned *surface_views, unsigned *new_uploads) {
+    if (!pixels || !phase || !guest_total || !metal_total ||
+        !surface_views || !new_uploads) return -301;
+    *phase=*guest_total=*metal_total=*surface_views=*new_uploads=0u;
+    memset(pixels,0,4u*sizeof(*pixels));
+    uint32_t shader[4]={0};
+    unsigned encoded=0,guest=0;
+    *phase=1u;
+    int rc=m51_guest_textured_quad_palette_ex(swizzled,0u,0u,M51_RT_OFFSET,
+                                              pixels,&encoded,&guest,shader);
+    *guest_total+=guest; *metal_total+=encoded;
+    if(rc) return rc;
+    if(guest!=1u || encoded!=1u) return -302;
+    for(unsigned q=0;q<4u;q++)
+        if(pixels[q]!=m51_colors[q]) return -310-(int)q;
+
+    /* Record ONLY the second pass's native surface-view bindings.
+     * A fallback decode of guest memory would produce zero views, FAIL. */
+    ar_probe_m53_reset_views();
+    ar_probe_cache_reset();
+    memset(shader,0,sizeof(shader));
+    encoded=guest=0u;
+    *phase=2u;
+    rc=m51_guest_textured_quad_palette_ex(swizzled,0u,1u,M53_RT_B_OFFSET,
+                                          pixels,&encoded,&guest,shader);
+    *guest_total+=guest; *metal_total+=encoded;
+    *surface_views=ar_probe_m53_surface_views();
+    *new_uploads=ar_probe_cache_uploads();
+    if(rc) return rc;
+    if(guest!=1u || encoded!=1u) return -303;
+    if(*surface_views<1u) return -304;
+    /* Sampling from the existing GPU surface must not upload its guest
+     * address into a new standalone texture in this second pass. */
+    if(*new_uploads!=0u) return -305;
+    for(unsigned q=0;q<4u;q++)
+        if(pixels[q]!=m51_colors[q]) return -320-(int)q;
+    if(*guest_total!=2u || *metal_total!=2u) return -330;
+    *phase=0u;
     return 0;
 }

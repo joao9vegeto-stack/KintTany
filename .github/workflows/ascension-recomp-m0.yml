@@ -1,4 +1,4 @@
-name: AscensionRecomp M5.2 - live guest TEX0 mutation through Metal renderer
+name: AscensionRecomp M5.3 - real RSX render target to guest TEX0 multipass
 
 on:
   push:
@@ -331,9 +331,9 @@ jobs:
         run: |
           set -euo pipefail
           bash tools/build_ios_probe_ipa.sh 2>&1 | tee m41-build-ipa.log
-          test -s AscensionRecompProbe-0.5.3-unsigned.ipa
-          /usr/libexec/PlistBuddy -c 'Print CFBundleShortVersionString' ios-probe/Payload/AscensionRecompProbe.app/Info.plist | grep -Fx 0.5.3
-          /usr/bin/unzip -t AscensionRecompProbe-0.5.3-unsigned.ipa | tee m42-ipa-integrity.log
+          test -s AscensionRecompProbe-0.5.4-unsigned.ipa
+          /usr/libexec/PlistBuddy -c 'Print CFBundleShortVersionString' ios-probe/Payload/AscensionRecompProbe.app/Info.plist | grep -Fx 0.5.4
+          /usr/bin/unzip -t AscensionRecompProbe-0.5.4-unsigned.ipa | tee m42-ipa-integrity.log
           xcrun nm -g ios-probe/Payload/AscensionRecompProbe.app/AscensionRecompProbe | grep -E '(_rsx_metal_backend_present|_rsx_metal_backend_init|_OBJC_CLASS_\\$_ARMetalView)' > m42-runtime-link-symbols.txt || true
           grep -q _rsx_metal_backend_init m39-metal-symbols.txt
           echo 'M4.2: actual GPU clear + presentDrawable + waitUntilCompleted route linked in iOS app; requires on-device screenshot.' > m42-status.txt
@@ -353,6 +353,9 @@ jobs:
           grep -q '_ar_probe_m51_encoded_draws' m43-probe-linked-symbols.txt
           grep -q '_ar_probe_m51_shader_state' m43-probe-linked-symbols.txt
           grep -q '_ar_probe_m52_guest_texture_mutation' m43-probe-linked-symbols.txt
+          grep -q '_ar_probe_m53_guest_multipass' m43-probe-linked-symbols.txt
+          grep -q '_ar_probe_m53_surface_views' m43-probe-linked-symbols.txt
+          echo 'M5.3: 2 RSX GPU guest draws; source A render target reused as TEX0 surface view in pass B; on-device test needed.' > m53-status.txt
           echo 'M5.2: 3 guest FP TEX0 GPU draws with live PS3 texture address mutation and >=2 hash cache replacements; iPhone proof required.' > m52-status.txt
           echo 'M5.1: real NV4097 VP o0/o7 + FP TEX0 + cache-bound texture; GPU raster and 4-point readback require ON-DEVICE verification.' > m51-status.txt
           echo 'M4.10: same PS3 texture address across 3 flips with 2 content hash cache replacements; each GPU sample must match rotated palette.' > m410-status.txt
@@ -368,7 +371,7 @@ jobs:
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: AscensionRecomp-M5.2-native-guest-TEX0-mutation-evidence
+          name: AscensionRecomp-M5.3-native-RSX-RTT-multipass-evidence
           if-no-files-found: warn
           retention-days: 14
           path: |
@@ -458,6 +461,7 @@ jobs:
             m49-status.txt
             m410-status.txt
             m513-nv40-host.log
+            m53-status.txt
             m52-status.txt
             m51-status.txt
             m50-deps-sha.txt
@@ -470,7 +474,7 @@ jobs:
             m50-ios-shader-archive-sha256.txt
             m50-ios-shader-availability-symbol.txt
             build-ios-runtime/libAscensionRSXGuest-ios-arm64.a
-            AscensionRecompProbe-0.5.3-unsigned.ipa
+            AscensionRecompProbe-0.5.4-unsigned.ipa
             m40-ios-layer-view.o
             build-ios-runtime/libps3recomp_runtime.a
             ios-ppu-core/libAscensionPPUCore-ios-arm64.a
