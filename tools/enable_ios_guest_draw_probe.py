@@ -74,7 +74,7 @@ def patch_metal(s):
     a = "    MTLWinding  winding;\n} EngPipeline;"
     if s.count(a) != 1:
         raise ValueError("pinned Metal PSO layout changed")
-    s = s.replace(a, "    MTLWinding  winding;\n    u8 ar_m51_tex0; /* synthetic probe: genuine translated fragment TEX0 */\n} EngPipeline;", 1)
+    s = s.replace(a, "    MTLWinding  winding;\n    u8 ar_m51_tex0; /* genuine translated fragment TEX0 */\n    u8 ar_m54_depth_less; /* genuine depth LESS + write pipeline */\n} EngPipeline;", 1)
     a = "static u32 s_eng_pipe_count;"
     if s.count(a) != 1:
         raise ValueError("pinned Metal PSO cache changed")
@@ -82,6 +82,9 @@ def patch_metal(s):
 static u32 ar_m51_draws_encoded;
 void ar_probe_m51_reset_draws(void) { ar_m51_draws_encoded = 0; }
 u32 ar_probe_m51_encoded_draws(void) { return ar_m51_draws_encoded; }
+static u32 ar_m54_depth_draws_encoded;
+void ar_probe_m54_reset_depth_draws(void) { ar_m54_depth_draws_encoded=0; }
+u32 ar_probe_m54_depth_draws(void) { return ar_m54_depth_draws_encoded; }
 """, 1)
     a = "    s_eng_pipe[slot].pso = pso;"
     if s.count(a) != 1:
@@ -91,6 +94,9 @@ u32 ar_probe_m51_encoded_draws(void) { return ar_m51_draws_encoded; }
      * The fixed pipeline can never satisfy this predicate. */
     s_eng_pipe[slot].ar_m51_tex0 =
         strstr(ps_hlsl, "rsx_tex[0].Sample(") != NULL;
+    /* A counted M5.4 draw has this particular guest depth pipeline. */
+    s_eng_pipe[slot].ar_m54_depth_less =
+        rs->depth_test && rs->depth_write && rs->depth_func == 0x0201u;
 """, 1)
     a = "vertexStart:0 vertexCount:r->vertex_count];"
     if s.count(a) != 1:
@@ -98,6 +104,9 @@ u32 ar_probe_m51_encoded_draws(void) { return ar_m51_draws_encoded; }
     s = s.replace(a, a + """
     if (p->ar_m51_tex0 && r->tex[0] && eng_obj(r->tex[0]))
         ar_m51_draws_encoded++;
+    if (p->ar_m51_tex0 && p->ar_m54_depth_less &&
+        r->depth && eng_obj(r->depth) && r->tex[0] && eng_obj(r->tex[0]))
+        ar_m54_depth_draws_encoded++;
 """, 1)
     return s
 

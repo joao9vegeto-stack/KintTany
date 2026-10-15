@@ -21,6 +21,8 @@ extern uint32_t ar_probe_cache_uploads(void);
 extern uint32_t ar_probe_cache_replacements(void);
 extern void ar_probe_m53_reset_views(void);
 extern uint32_t ar_probe_m53_surface_views(void);
+extern void ar_probe_m54_reset_depth_draws(void);
+extern uint32_t ar_probe_m54_depth_draws(void);
 
 enum {
     M51_RT_OFFSET = 0x00100000u,
@@ -29,6 +31,7 @@ enum {
     M51_EBO_OFFSET = 0x002A0000u,
     M51_FP_OFFSET  = 0x002B0000u,
     M53_RT_B_OFFSET = 0x00600000u,
+    M54_Z_OFFSET = 0x00C00000u,
     M51_WIDTH = 960u, M51_HEIGHT = 540u,
     M51_TEX_W = 8u, M51_TEX_H = 8u
 };
@@ -54,6 +57,9 @@ static void m51_cleanup(void) {
     rsx_draw_engine_method(NV4097_SET_SHADER_PROGRAM,0u);
     rsx_draw_engine_method(NV4097_SET_SHADER_CONTROL,0u);
     rsx_draw_engine_method(NV4097_SET_TEXTURE_CONTROL0,0u);
+    rsx_draw_engine_method(NV4097_SET_DEPTH_TEST_ENABLE,0u);
+    rsx_draw_engine_method(NV4097_SET_DEPTH_MASK,0u);
+    rsx_draw_engine_method(NV4097_SET_SURFACE_FORMAT,0x5u);
     rsx_draw_engine_method(NV4097_SET_VERTEX_DATA_ARRAY_FORMAT + 8u*4u,0u);
     rsx_draw_engine_set_guest_memory(NULL,NULL);
 }
@@ -66,6 +72,7 @@ static void m51_cleanup(void) {
 static int m51_guest_textured_quad_palette_ex(unsigned swizzled,
                             unsigned palette, unsigned sample_surface,
                             uint32_t destination,
+                            float vertex_z, unsigned depth_mode,
                             uint32_t pixels[4], unsigned *encoded,
                             unsigned *guest_draws, uint32_t shader_state[4]) {
     if (!pixels || !encoded || !guest_draws || !shader_state) return -101;
@@ -101,7 +108,7 @@ static int m51_guest_textured_quad_palette_ex(unsigned swizzled,
     };
     uint8_t *vbo=vm_base+M51_VBO_OFFSET;
     for(unsigned i=0;i<4;i++) for(unsigned c=0;c<8;c++)
-        m51_be32(vbo+i*32u+c*4u,m51_word(v[i][c]));
+        m51_be32(vbo+i*32u+c*4u,m51_word(c==2u?vertex_z:v[i][c]));
     const unsigned ix[6]={0,1,2,0,2,3};
     uint8_t *ebo=vm_base+M51_EBO_OFFSET;
     for(unsigned i=0;i<6;i++) {
@@ -149,12 +156,29 @@ static int m51_guest_textured_quad_palette_ex(unsigned swizzled,
                            CELL_GCM_CONTEXT_DMA_MEMORY_FRAME_BUFFER);
     rsx_draw_engine_method(NV4097_SET_SURFACE_CLIP_HORIZONTAL,M51_WIDTH<<16);
     rsx_draw_engine_method(NV4097_SET_SURFACE_CLIP_VERTICAL,M51_HEIGHT<<16);
-    rsx_draw_engine_method(NV4097_SET_SURFACE_FORMAT,0x5u);
+    /* Depth Z24S8 is explicitly configured ONLY in the M5.4 depth probe.
+     * Older GPU paths keep their previously proven colour-only state. */
+    rsx_draw_engine_method(NV4097_SET_SURFACE_FORMAT,
+                           depth_mode ? (0x5u | (2u<<5)) : 0x5u);
+    if(depth_mode) {
+        rsx_draw_engine_method(NV4097_SET_CONTEXT_DMA_ZETA,
+             CELL_GCM_CONTEXT_DMA_MEMORY_FRAME_BUFFER);
+        rsx_draw_engine_method(NV4097_SET_SURFACE_ZETA_OFFSET,M54_Z_OFFSET);
+        rsx_draw_engine_method(NV4097_SET_SURFACE_PITCH_Z,M51_WIDTH*4u);
+        rsx_draw_engine_method(NV4097_SET_ZSTENCIL_CLEAR_VALUE,0xffffff00u);
+        rsx_draw_engine_method(NV4097_SET_DEPTH_FUNC,0x0201u); /* LESS */
+        rsx_draw_engine_method(NV4097_SET_DEPTH_MASK,1u);
+        rsx_draw_engine_method(NV4097_SET_DEPTH_TEST_ENABLE,1u);
+    }
     rsx_draw_engine_method(NV4097_SET_SURFACE_PITCH_A,M51_WIDTH*4u);
     rsx_draw_engine_method(NV4097_SET_SURFACE_COLOR_AOFFSET,destination);
     rsx_draw_engine_method(NV4097_SET_SURFACE_COLOR_TARGET,CELL_GCM_SURFACE_TARGET_0);
     rsx_draw_engine_method(NV4097_SET_COLOR_CLEAR_VALUE,0xff101820u);
-    rsx_draw_engine_method(NV4097_CLEAR_SURFACE,0xf0u);
+    /* phase 1 clears both depth and colour; phases 2/3 MUST load
+     * them unchanged or occlusion could not be tested. */
+    if (depth_mode!=2u)
+        rsx_draw_engine_method(NV4097_CLEAR_SURFACE,
+                               depth_mode ? 0xf1u : 0xf0u);
     rsx_draw_engine_method(NV4097_SET_COLOR_MASK,0x01010101u);
     rsx_draw_engine_method(NV4097_SET_CULL_FACE_ENABLE,0u);
     rsx_draw_engine_method(NV4097_SET_DEPTH_TEST_ENABLE,0u);
@@ -206,7 +230,7 @@ static int m51_guest_textured_quad_palette(unsigned swizzled, unsigned palette,
                                     uint32_t pixels[4], unsigned *encoded,
                                     unsigned *guest_draws, uint32_t shader_state[4]) {
     return m51_guest_textured_quad_palette_ex(swizzled,palette,0u,M51_RT_OFFSET,
-                                              pixels,encoded,guest_draws,shader_state);
+                                              0.0f,0u,pixels,encoded,guest_draws,shader_state);
 }
 
 /* The M5.1 externally visible probe remains behavior-identical. M5.2 calls
@@ -279,7 +303,7 @@ int ar_probe_m53_guest_multipass(unsigned swizzled, uint32_t pixels[4],
     unsigned encoded=0,guest=0;
     *phase=1u;
     int rc=m51_guest_textured_quad_palette_ex(swizzled,0u,0u,M51_RT_OFFSET,
-                                              pixels,&encoded,&guest,shader);
+                                              0.0f,0u,pixels,&encoded,&guest,shader);
     *guest_total+=guest; *metal_total+=encoded;
     if(rc) return rc;
     if(guest!=1u || encoded!=1u) return -302;
@@ -294,7 +318,7 @@ int ar_probe_m53_guest_multipass(unsigned swizzled, uint32_t pixels[4],
     encoded=guest=0u;
     *phase=2u;
     rc=m51_guest_textured_quad_palette_ex(swizzled,0u,1u,M53_RT_B_OFFSET,
-                                          pixels,&encoded,&guest,shader);
+                                          0.0f,0u,pixels,&encoded,&guest,shader);
     *guest_total+=guest; *metal_total+=encoded;
     *surface_views=ar_probe_m53_surface_views();
     *new_uploads=ar_probe_cache_uploads();
@@ -307,6 +331,46 @@ int ar_probe_m53_guest_multipass(unsigned swizzled, uint32_t pixels[4],
     for(unsigned q=0;q<4u;q++)
         if(pixels[q]!=m51_colors[q]) return -320-(int)q;
     if(*guest_total!=2u || *metal_total!=2u) return -330;
+    *phase=0u;
+    return 0;
+}
+
+/* M5.4: genuine NV40 guest VP/FP TEX0 + persistent Z24S8 on Metal.
+ * Pass 1 writes the base quad at z=0.45 with LESS and depth writes ON.
+ * Pass 2 (z=0.85, palette +1) must fail the depth test: original pixels.
+ * Pass 3 (z=0.10, palette +2) must pass and overwrite colour/depth.
+ * Each pass reads GPU pixels from the real RSX target; two different colour
+ * palettes make "depth disabled" and "depth cleared each time" fail closed. */
+int ar_probe_m54_guest_depth_occlusion(unsigned swizzled,
+           uint32_t pixels[4], unsigned *phase,
+           unsigned *guest_total,unsigned *metal_total,unsigned *depth_draws) {
+    if(!pixels||!phase||!guest_total||!metal_total||!depth_draws) return -401;
+    *phase=*guest_total=*metal_total=*depth_draws=0u;
+    memset(pixels,0,4u*sizeof(*pixels));
+    const float depths[3]={0.45f,0.85f,0.10f};
+    const unsigned palettes[3]={0u,1u,2u};
+    const unsigned expected[3]={0u,0u,2u};
+    ar_probe_m54_reset_depth_draws();
+    for(unsigned i=0;i<3u;i++) {
+        unsigned guest=0u,encoded=0u;
+        uint32_t shader[4]={0u,0u,0u,0u};
+        *phase=i+1u;
+        const int rc=m51_guest_textured_quad_palette_ex(
+            swizzled,palettes[i],0u,M51_RT_OFFSET,depths[i],
+            i==0u ? 1u : 2u,pixels,&encoded,&guest,shader);
+        *guest_total+=guest; *metal_total+=encoded;
+        if(rc) {
+            *depth_draws=ar_probe_m54_depth_draws();
+            return rc;
+        }
+        if(guest!=1u||encoded!=1u) return -410-(int)i;
+        for(unsigned q=0;q<4u;q++)
+            if(pixels[q]!=m51_colors[(q+expected[i])&3u])
+                return -420-(int)(i*4u+q);
+    }
+    *depth_draws=ar_probe_m54_depth_draws();
+    if(*depth_draws!=3u) return -440;
+    if(*guest_total!=3u||*metal_total!=3u) return -441;
     *phase=0u;
     return 0;
 }
