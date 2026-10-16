@@ -1,4 +1,4 @@
-name: AscensionRecomp M6.7.5 - complete LV2 process-entry PT_TLS bootstrap
+name: AscensionRecomp M6.7.6 - PPC64 mtlr and safe blr return
 
 on:
   push:
@@ -199,6 +199,12 @@ jobs:
           clang -std=c11 -O2 -Wall -Wextra -Werror ios/ARPrivateELFProbe.c tests/host_m675_process_entry.c -o m675-entry-host
           ./m675-entry-host 2>&1 | tee m675-entry-host.log
           grep -Fxq 'M6.7.5 ELF PT_TLS process-entry ABI and negative tests PASS' m675-entry-host.log
+      - name: M6.7.6 check PPC LR restore, guarded blr and invalid returns
+        run: |
+          set -euo pipefail
+          clang -std=c11 -O2 -Wall -Wextra -Werror ios/ARPrivateELFProbe.c tests/host_m676_lr_return.c -o m676-lr-host
+          ./m676-lr-host 2>&1 | tee m676-lr-host.log
+          grep -Fxq 'M6.7.6 mtlr LR restore and guarded blr return PASS' m676-lr-host.log
       - name: M5.0 run synthetic PPU LV2 integrated boot smoke
         run: |
           set -euo pipefail
@@ -481,6 +487,7 @@ jobs:
            echo 'M6.7.3 safely identifies NID of a private firmware import; no HLE execution; iPhone validation required.' > m673-status.txt
            echo 'M6.7.4 sys_initialize_tls initialized in isolated guest memory, verified by synthetic host tests.' > m674-status.txt
            echo 'M6.7.5 sources process-entry r7-r10 from ELF PT_TLS, seeds r12 with PS3 page size and validates authentic guest CRT forwarding to TLS HLE; device result not yet observed.' > m675-status.txt
+           echo 'M6.7.6 adds exact PPC64 mtlr r0 + executable-verified blr, while older PPU48 interfaces preserve original unsupported behaviour.' > m676-status.txt
           echo 'M6.1 eight guest PPU steps, stack and branch; user title private; host synthetic only.' > m61-status.txt
           echo 'M6.0 strict PPU bootstrap: at most 4 imported ELF instructions; no actual game bytes bundled.' > m60-status.txt
           echo 'M5.9: on-device Files ELF inspection; no game data in CI or IPA.' > m59-status.txt
@@ -505,7 +512,7 @@ jobs:
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: AscensionRecomp-M6.7.5-LV2-process-entry-PT-TLS
+          name: AscensionRecomp-M6.7.6-mtlr-guarded-blr
           if-no-files-found: warn
           retention-days: 14
           path: |
@@ -640,6 +647,8 @@ jobs:
             m674-status.txt
             m675-entry-host.log
             m675-status.txt
+            m676-lr-host.log
+            m676-status.txt
             AscensionRecompProbe-0.6.14-unsigned.ipa
             m40-ios-layer-view.o
             build-ios-runtime/libps3recomp_runtime.a

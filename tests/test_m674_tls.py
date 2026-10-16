@@ -21,14 +21,14 @@ class TLS(unittest.TestCase):
             'return m672_core(d,len,info,out,trace,detail,NULL);'):
    self.assertIn(x,C)
  def test_report_and_ci(self):
-  for x in ('ASCENSIONRECOMP   ·   M6.7.5',
+  for x in ('ASCENSIONRECOMP   ·   M6.7.6',
             'ar_ppu_bootstrap_fortyeight_trace_m674(',
             'TLS HLE M6.7.5:',
             'sys_initialize_tls HLE executada'):
    self.assertIn(x,U)
   for x in ('tests/host_m674_tls.c',
             'm674-tls-host.log',
-            'AscensionRecomp-M6.7.5-LV2-process-entry-PT-TLS'):
+            'AscensionRecomp-M6.7.6-mtlr-guarded-blr'):
    self.assertIn(x,W)
-  self.assertIn('<string>69</string>',P)
+  self.assertIn('<string>70</string>',P)
 if __name__=="__main__":unittest.main()
