@@ -14,9 +14,10 @@ import os
 from pathlib import Path
 import sys
 
-EXPECTED_SHA256 = "5b8d37c8a1880a727ef7ca6e0b6ceaca245a6fc69e89b7125e4b744ba7be8bd3"
-ENTRY_PCS = (0x10200,0x10410,0x10534,0x107a4,0x52a7bc,0x52e118,
-             0x52e4f0,0x52e544,0x531a74,0x531cac,0x539a50)
+EXPECTED_SHA256 = "20daf960219012fcd45308bc02cd0ae514f31e40df0c8118c9906f897b04dd32"
+ENTRY_PCS = (
+    0x00010200, 0x00010380, 0x00010410, 0x00010534, 0x000107a4, 0x00010814, 0x00455eac, 0x00455f9c, 0x00455fa4, 0x00455fb8, 0x00525c00, 0x0052a710, 0x0052a78c, 0x0052a7bc, 0x0052e118, 0x0052e180, 0x0052e3b0, 0x0052e3f4, 0x0052e4f0, 0x0052e544, 0x00531a74, 0x00531cac, 0x00539998, 0x00539a50
+)
 EXPECTED_SYMBOLS = tuple(f"ar_game_ppu_{pc:08x}" for pc in ENTRY_PCS)
 
 
@@ -54,7 +55,7 @@ def main() -> int:
     out.chmod(0o600)
     with open(os.environ["GITHUB_ENV"],"a",encoding="utf-8") as stream:
         stream.write("ASCENSION_PRIVATE_AOT_C="+str(out)+"\n")
-    print("M7.8 owner AOT source SHA256 verified; 11 real native entries staged")
+    print("M7.9 owner AOT source SHA256 verified; 24 real native entries staged")
     return 0
 
 
@@ -62,5 +63,5 @@ if __name__ == "__main__":
     try:
         sys.exit(main())
     except (ValueError,KeyError) as exc:
-        print("M7.8 native AOT staging failed: "+str(exc),file=sys.stderr)
+        print("M7.9 native AOT staging failed: "+str(exc),file=sys.stderr)
         sys.exit(1)

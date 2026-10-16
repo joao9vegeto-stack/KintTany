@@ -57,3 +57,55 @@ int ar_sys_lwmutex_create(ppu_context *cpu){
  cpu->gpr[3]=0u; /* CELL_OK only after complete memory initialization */
  return AR_OK;
 }
+ 
+/* M7.9 genuine PS3 sysPrxForUser lightweight mutex lock/unlock.
+ * This supports only the original single-PPU-thread bootstrap fast path:
+ * no contention waiting, wake-up, owner migration or synthetic success.
+ * Each mutex must have been created during this guest process. */
+int ar_sys_lwmutex_lock(ppu_context *cpu){
+ if(!cpu)return AR_BAD_ARGS;
+ const uint64_t a=cpu->gpr[3];
+ if(!a||(a&7u)||a>UINT32_MAX-23u||cpu->thread_id==0||
+    cpu->thread_id>UINT32_MAX)return AR_BAD_ARGS;
+ unsigned i=0u;
+ for(;i<created;i++)if(entries[i].guest_address==(uint32_t)a)break;
+ if(i==created)return AR_BAD_ARGS;
+ const uint32_t owner=ar_read32(a),attr=ar_read32(a+8u);
+ const uint32_t count=ar_read32(a+12u);
+ if(ar_last_error()!=AR_OK)return AR_MEM_FAULT;
+ if(owner==AR_LW_FREE){
+    ar_write32(a,(uint32_t)cpu->thread_id);
+ }else if(owner==(uint32_t)cpu->thread_id && (attr&AR_LW_RECURSIVE) &&
+          count!=UINT32_MAX){
+    ar_write32(a+12u,count+1u);
+ }else if(owner==(uint32_t)cpu->thread_id){
+    cpu->gpr[3]=0x80010008u; /* CELL_EDEADLK */
+    return AR_OK;
+ }else{
+    /* There is no runnable PPU scheduler yet. Do NOT claim success. */
+    return AR_HLE_FAILURE;
+ }
+ if(ar_last_error()!=AR_OK)return AR_MEM_FAULT;
+ cpu->gpr[3]=0u;return AR_OK;
+}
+int ar_sys_lwmutex_unlock(ppu_context *cpu){
+ if(!cpu)return AR_BAD_ARGS;
+ const uint64_t a=cpu->gpr[3];
+ if(!a||(a&7u)||a>UINT32_MAX-23u||cpu->thread_id==0||
+    cpu->thread_id>UINT32_MAX)return AR_BAD_ARGS;
+ unsigned i=0u;
+ for(;i<created;i++)if(entries[i].guest_address==(uint32_t)a)break;
+ if(i==created)return AR_BAD_ARGS;
+ const uint32_t owner=ar_read32(a),recursive=ar_read32(a+12u);
+ const uint32_t waiters=ar_read32(a+4u);
+ if(ar_last_error()!=AR_OK)return AR_MEM_FAULT;
+ if(owner!=(uint32_t)cpu->thread_id){
+    cpu->gpr[3]=0x80010009u; /* CELL_EPERM */
+    return AR_OK;
+ }
+ if(recursive)ar_write32(a+12u,recursive-1u);
+ else if(waiters==0u)ar_write32(a,AR_LW_FREE);
+ else return AR_HLE_FAILURE; /* unlocking a contended lock needs LV2 wake */
+ if(ar_last_error()!=AR_OK)return AR_MEM_FAULT;
+ cpu->gpr[3]=0u;return AR_OK;
+}

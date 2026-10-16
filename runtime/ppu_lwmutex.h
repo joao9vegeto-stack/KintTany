@@ -5,5 +5,7 @@
 #include "ppu_bridge.h"
 void ar_lwmutex_reset(void);
 int ar_sys_lwmutex_create(ppu_context *cpu);
+int ar_sys_lwmutex_lock(ppu_context *cpu);
+int ar_sys_lwmutex_unlock(ppu_context *cpu);
 unsigned ar_lwmutex_created_count(void);
 #endif

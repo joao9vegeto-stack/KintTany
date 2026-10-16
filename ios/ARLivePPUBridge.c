@@ -177,10 +177,32 @@ int ar_m70_native_runtime_probe(const uint8_t*d,size_t len,
        out[15]|=128u; /* OS service bound */
  }
 
+ /* M7.9: bind ONLY authenticated PRX entries from the imported ELF.
+  * These are generic PS3 OS services, not interpreted game instructions. */
+ struct {uint32_t nid;ar_hle_fn handler;uint32_t bit;} m79_services[] = {
+    {0x350d454eu,ar_lv2_thread_get_id,0x100u},
+    {0x1573dc3fu,ar_sys_lwmutex_lock,0x200u},
+    {0x1bc200f4u,ar_sys_lwmutex_unlock,0x400u},
+ };
+ for(unsigned j=0;j<sizeof(m79_services)/sizeof(m79_services[0]);j++){
+    uint32_t imp[4]={0};char lib[48]={0};
+    const int found=ar_private_import_find_nid(
+      d,len,m79_services[j].nid,"sysPrxForUser",imp,lib);
+    if(found==0 && imp[0]==m79_services[j].nid && imp[1] &&
+       strcmp(lib,"sysPrxForUser")==0 &&
+       ar_bind_import(imp[1],imp[0])==AR_OK &&
+       ar_bind_hle(imp[0],m79_services[j].handler)==AR_OK){
+       out[15]|=m79_services[j].bit;
+    }
+ }
+
  /* This is the actual native AOT dispatcher, NOT the 48-step interpreter.
   * With no signed game AOT functions in the IPA it MUST return unresolved
   * rather than executing data as ARM64 or reporting boot success. */
- out[6]=(uint32_t)ar_run(&ctx,image.entry_code,128u);
+ /* 128 ticks remains the legacy test's exact budget. 4096 AOT ticks
+  * permit the verified multi-routine CRT prefix and fail bounded. */
+ if(out[5])out[6]=(uint32_t)ar_run(&ctx,image.entry_code,4096u);
+ else out[6]=(uint32_t)ar_run(&ctx,image.entry_code,128u);
  out[7]=ar_last_unresolved();
  /* In AOT mode this is the r13 reached by genuine recompiled guest
   * execution, not a separately invented HLE smoke result. The status
