@@ -1019,8 +1019,8 @@ extern int ar_probe_rsx_texture_cache_mutation(unsigned swizzled,unsigned int ou
         "Thread=%u · VM=%u · funções ARM64 AOT=%u\n"
         "Motivos: -1310 orçamento; -1311 ISA ausente; -1312 destino não executável;"
         " -1313 memória; -1314 HLE/indireto; -1315 HLE falhou.\n"
-        "INTERPRETAÇÃO NÃO É RECOMPILAÇÃO AOT: nenhuma função do jogo"
-        " foi gerada como código ARM64 assinado.\n",
+        "INTERPRETAÇÃO NÃO É RECOMPILAÇÃO AOT: esta trilha M7.2"
+        " é interpretada, independentemente do AOT compilado na M7.6.\n",
         execRC,(int)continuous[0],continuous[1],
         continuous[2],continuous[3],continuous[10],
         continuous[5],continuous[6],continuous[7],continuous[8],
@@ -1136,6 +1136,22 @@ extern int ar_probe_rsx_texture_cache_mutation(unsigned swizzled,unsigned int ou
          [extended appendString:
            @"TLS recusado: parâmetros, thread já inicializada ou leitura de memória inválida. Não houve sucesso artificial.\n"];
        [extended appendString:nativeText];
+       /* M7.6: AOT count is native signed function count, never interpreter
+        * steps. AR_UNRESOLVED -3 is genuine missing guest ARM64 coverage. */
+       if(native[5]>0u){
+         [extended appendFormat:
+           @"\nM7.6 — AOT ARM64 REAL / NPUA80918\n"
+            "Funções registradas=%u · resultado AOT=%d\n"
+            "Próxima função ARM64 ausente=0x%08X · r13 AOT=0x%08X\n"
+            "Entrada recompilada=0x%08X · bind PRX=%d / HLE=%d\n"
+            "Ainda não é gameplay; -3 significa função sem recompilação.\n",
+            native[5],(int)native[6],native[7],native[12],
+            native[1],(int)native[9],(int)native[10]];
+       } else {
+         [extended appendString:
+           @"\nM7.6 — AOT ARM64 NPUA80918 NÃO VINCULADO\n"
+            "Funções AOT=0; é necessário o módulo AOT durante o Actions.\n"];
+       }
        [extended appendString:continuousText];
        self.ppuReport=extended;
        self.ppuReportButton.enabled=YES;

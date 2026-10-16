@@ -1,4 +1,4 @@
-name: AscensionRecomp M7.5 - isolate native PPU AOT from TLS smoke
+name: AscensionRecomp M7.6 - native multi-block tail dispatch regression
 
 on:
   push:
@@ -246,6 +246,15 @@ jobs:
             tests/host_m75_aot_boot.c -o m75-aot-boot-host
           ./m75-aot-boot-host 2>&1 | tee m75-aot-boot-host.log
           grep -Fxq 'M7.5 signed AOT entry isolates TLS smoke and runs genuine guest HLE PASS' m75-aot-boot-host.log
+      - name: M7.6 ensure signed ARM64 AOT crosses guest basic blocks and HLE
+        run: |
+          set -euo pipefail
+          clang -std=c11 -O2 -Wall -Wextra -Werror \
+            -I upstream/runtime/ppu -I runtime \
+            runtime/ppu_bridge.c tests/host_m76_aot_tail.c -o m76-aot-tail-host
+          ./m76-aot-tail-host 2>&1 | tee m76-aot-tail-host.log
+          grep -Fxq 'M7.6 signed AOT multi-block tail dispatch HLE and unresolved PASS' m76-aot-tail-host.log
+          echo 'M7.6: generic multi-block native dispatcher proved. Real game AOT remains in user-owned offline package; public IPA AOT=0.' > m76-status.txt
       - name: M7.0 validate actual native ELF loader, import binder and AOT dispatcher
         run: |
           set -euo pipefail
@@ -757,6 +766,8 @@ jobs:
             m74-aot-host.log
             m74-arm64-symbols.txt
             m74-status.txt
+            m76-aot-tail-host.log
+            m76-status.txt
             m75-aot-boot-host.log
             AscensionRecompProbe-0.6.14-unsigned.ipa
             m40-ios-layer-view.o
