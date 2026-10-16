@@ -34,15 +34,18 @@ int main(void){
  for(unsigned i=0;i<8;i++)p32(d,0x14c+4*i,more[i]);
  p32(d,0x180,0x10000);p32(d,0x184,0x20010);
  if(ar_private_elf_inspect(d,sizeof d,info))return 1;
- if(ar_ppu_bootstrap_twentyfour(d,sizeof d,info,cpu))return 2;
+ int rc=ar_ppu_bootstrap_twentyfour(d,sizeof d,info,cpu);
+ if(rc){fprintf(stderr,"M6.3 sandbox first pass failed rc=%d steps=%u PC=%X word=%X\n",rc,cpu[0],cpu[8],cpu[7]);return 2;}
  if(cpu[0]!=24u||cpu[1]!=0x20010u||cpu[2]!=0x1006cu||
     cpu[3]!=0x10020u||cpu[4]!=0x07000ef0u||
-    cpu[5]!=11u||cpu[6]!=0x10020u||cpu[7]!=0x48000004u||cpu[8]!=0x10068u)return 3;
+    cpu[5]!=11u||cpu[6]!=0x10020u||cpu[7]!=0x48000004u||cpu[8]!=0x10068u){
+ fprintf(stderr,"M6.3 wrong final state steps=%u toc=%X PC=%X LR=%X SP=%X writes=%u gpr0=%X opcode=%X fetchPC=%X\n",cpu[0],cpu[1],cpu[2],cpu[3],cpu[4],cpu[5],cpu[6],cpu[7],cpu[8]);return 3;
+ }
  p32(d,0x14c,0xffffffffu);
- if(ar_ppu_bootstrap_twentyfour(d,sizeof d,info,cpu)!=-970||
+ if(ar_ppu_bootstrap_twentyfour(d,sizeof d,info,cpu)!=-990||
     cpu[0]!=16u||cpu[8]!=0x1004cu||cpu[7]!=0xffffffffu)return 4;
  p32(d,0x14c,more[0]);
  p32(d,0x12c,0xf8210101); /* invalid positive DS stack address */
- if(ar_ppu_bootstrap_twentyfour(d,sizeof d,info,cpu)!=-967)return 5;
+ if(ar_ppu_bootstrap_twentyfour(d,sizeof d,info,cpu)!=-987)return 5;
  puts("M6.3 PPU24 bounded continuation PASS");return 0;
 }
