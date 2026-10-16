@@ -23,14 +23,24 @@ xcrun --sdk iphoneos clang -target arm64-apple-ios17.0 -isysroot "$SDK" \
     -std=c11 -O2 -Wall -Wextra -Werror \
     -I upstream/runtime/ppu -I runtime \
     -c ios/ARLivePPUBridge.c -o ios-probe/ARLivePPUBridge.o
+xcrun --sdk iphoneos clang -target arm64-apple-ios17.0 -isysroot "$SDK" \
+    -std=c11 -O2 -Wall -Wextra -Werror \
+    -I upstream/runtime/ppu -I runtime \
+    -c ios/ARNativePPUContinuous.c -o ios-probe/ARNativePPUContinuous.o
+xcrun --sdk iphoneos clang -target arm64-apple-ios17.0 -isysroot "$SDK" \
+    -std=c11 -O2 -Wall -Wextra -Werror \
+    -I upstream/runtime/ppu -I runtime \
+    -c ios/ARLivePPUContinuous.c -o ios-probe/ARLivePPUContinuous.o
 xcrun nm -g ios-probe/ARLivePPUBridge.o | grep -q '_ar_m70_native_runtime_probe'
+xcrun nm -g ios-probe/ARLivePPUContinuous.o | grep -q '_ar_m71_private_continuous_probe'
 xcrun nm -g ios-probe/ARRSXMethodProbe.o | grep -q '_ar_probe_rsx_clear_flip'
 xcrun --sdk iphoneos clang++ -target arm64-apple-ios17.0 \
     -isysroot "$SDK" -fobjc-arc -fmodules -stdlib=libc++ \
     -O2 -Wl,-dead_strip -I ios -I upstream/libs/video -I upstream/include \
     ios/ARMetalView.m ios/ARProbeApp.m ios/ARShaderProbe.m ios/ARTextureProbe.m ios/ARProbeGuestVM.c \
     ios-probe/ARRSXMethodProbe.o ios-probe/ARGuestDrawProbe.o ios-probe/ARPrivateELFProbe.o \
-    ios-probe/ARLivePPUBridge.o \
+    ios-probe/ARLivePPUBridge.o ios-probe/ARLivePPUContinuous.o \
+    ios-probe/ARNativePPUContinuous.o \
     ios-ppu-core/libAscensionPPUCore-ios-arm64.a \
     build-ios-runtime/libAscensionRSXGuest-ios-arm64.a \
     -framework UIKit -framework Foundation -framework QuartzCore \
