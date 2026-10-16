@@ -1,4 +1,4 @@
-name: AscensionRecomp M6.0 - bounded real PPU bootstrap
+name: AscensionRecomp M6.1 - guest PPU stack and branch gate
 
 on:
   push:
@@ -131,6 +131,13 @@ jobs:
             ios/ARPrivateELFProbe.c tests/host_m60_ppu.c -o m60-host
           ./m60-host 2>&1 | tee m60-host.log
           grep -Fxq 'M6.0 PPU4 strict guest interpreter PASS' m60-host.log
+      - name: M6.1 verify synthetic bounded eight-step PPU
+        run: |
+          set -euo pipefail
+          clang -std=c11 -Wall -Wextra -Werror -O2 \
+            ios/ARPrivateELFProbe.c tests/host_m61_ppu.c -o m61-host
+          ./m61-host 2>&1 | tee m61-host.log
+          grep -Fxq 'M6.1 PPU8 stack and BL PASS' m61-host.log
       - name: M5.0 run synthetic PPU LV2 integrated boot smoke
         run: |
           set -euo pipefail
@@ -365,9 +372,9 @@ jobs:
         run: |
           set -euo pipefail
           bash tools/build_ios_probe_ipa.sh 2>&1 | tee m41-build-ipa.log
-          test -s AscensionRecompProbe-0.6.4-unsigned.ipa
-          /usr/libexec/PlistBuddy -c 'Print CFBundleShortVersionString' ios-probe/Payload/AscensionRecompProbe.app/Info.plist | grep -Fx 0.6.4
-          /usr/bin/unzip -t AscensionRecompProbe-0.6.4-unsigned.ipa | tee m42-ipa-integrity.log
+          test -s AscensionRecompProbe-0.6.5-unsigned.ipa
+          /usr/libexec/PlistBuddy -c 'Print CFBundleShortVersionString' ios-probe/Payload/AscensionRecompProbe.app/Info.plist | grep -Fx 0.6.5
+          /usr/bin/unzip -t AscensionRecompProbe-0.6.5-unsigned.ipa | tee m42-ipa-integrity.log
           xcrun nm -g ios-probe/Payload/AscensionRecompProbe.app/AscensionRecompProbe | grep -E '(_rsx_metal_backend_present|_rsx_metal_backend_init|_OBJC_CLASS_\\$_ARMetalView)' > m42-runtime-link-symbols.txt || true
           grep -q _rsx_metal_backend_init m39-metal-symbols.txt
           echo 'M4.2: actual GPU clear + presentDrawable + waitUntilCompleted route linked in iOS app; requires on-device screenshot.' > m42-status.txt
@@ -401,6 +408,8 @@ jobs:
           grep -q '_ar_probe_m58_alpha_draws' m43-probe-linked-symbols.txt
           grep -q '_ar_private_elf_inspect' m43-probe-linked-symbols.txt
           grep -q '_ar_ppu_bootstrap_four' m43-probe-linked-symbols.txt
+          grep -q '_ar_ppu_bootstrap_eight' m43-probe-linked-symbols.txt
+          echo 'M6.1 eight guest PPU steps, stack and branch; user title private; host synthetic only.' > m61-status.txt
           echo 'M6.0 strict PPU bootstrap: at most 4 imported ELF instructions; no actual game bytes bundled.' > m60-status.txt
           echo 'M5.9: on-device Files ELF inspection; no game data in CI or IPA.' > m59-status.txt
           echo 'M5.8.1: zero-alpha GREATER/LESS accepted fragments preserve RGB and alpha 00; screenshot showed exact q0=000000FF and q2=00FF0000 in phase 3. On-device phase 4 and 5 proof pending.' > m58-status.txt
@@ -424,7 +433,7 @@ jobs:
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: AscensionRecomp-M6.0-PPU-four-steps-evidence
+          name: AscensionRecomp-M6.1-PPU-eight-steps-evidence
           if-no-files-found: warn
           retention-days: 14
           path: |
@@ -524,6 +533,8 @@ jobs:
             m59-status.txt
             m60-host.log
             m60-status.txt
+            m61-host.log
+            m61-status.txt
             m55-status.txt
             m54-status.txt
             m53-status.txt
@@ -539,7 +550,7 @@ jobs:
             m50-ios-shader-archive-sha256.txt
             m50-ios-shader-availability-symbol.txt
             build-ios-runtime/libAscensionRSXGuest-ios-arm64.a
-            AscensionRecompProbe-0.6.4-unsigned.ipa
+            AscensionRecompProbe-0.6.5-unsigned.ipa
             m40-ios-layer-view.o
             build-ios-runtime/libps3recomp_runtime.a
             ios-ppu-core/libAscensionPPUCore-ios-arm64.a

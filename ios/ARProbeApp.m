@@ -7,6 +7,8 @@
 extern int ar_private_elf_inspect(const unsigned char*,size_t,unsigned int[5]);
 extern int ar_ppu_bootstrap_four(const unsigned char*,size_t,
                                 const unsigned int[5],unsigned int[4]);
+extern int ar_ppu_bootstrap_eight(const unsigned char*,size_t,
+                                 const unsigned int[5],unsigned int[6]);
 
 extern int rsx_metal_backend_init(unsigned int width, unsigned int height, const char* title);
 extern void rsx_metal_backend_shutdown(void);
@@ -700,19 +702,26 @@ extern int ar_probe_rsx_texture_cache_mutation(unsigned swizzled,unsigned int ou
    unsigned int cpu[4]={0};
    const int cpu_rc=ar_ppu_bootstrap_four(data.bytes,data.length,info,cpu);
    if(cpu_rc){
+      unsigned int eight[6]={0};
+   int rc8=ar_ppu_bootstrap_eight(data.bytes,data.length,info,eight);
+   if(rc8) {
       self.status.text=[NSString stringWithFormat:
-          @"M5.9 ELF VALIDADO. M6.0 PPU: FALHA %d (%u/4 instruções).\n"
-           "Execução interrompida com segurança.",cpu_rc,cpu[0]];
+         @"M5.9 ELF válido, M6.0 PPU 4/4 OK\n"
+          "M6.1 PPU FALHA %d (%u/8), parada segura.",rc8,eight[0]];
+      return;
+   }
+   if(eight[0]!=8||eight[1]!=0x83f2b0u||eight[2]!=0x10534u||
+      eight[3]!=0x10430u||eight[4]!=0x07000f90u||eight[5]!=2u) {
+      self.status.text=@"M6.1: estado PPU inesperado; interrupção segura.";
       return;
    }
    self.status.text=[NSString stringWithFormat:
-       @"M5.9 NPUA80918: ELF REAL VALIDADO\n"
-        "SHA256: OK · segmentos: %u\n"
-        "PPU entry: 0x%X · TOC: 0x%X\n"
-        "M6.0 PPU REAL: %u/4 instruções\n"
-        "R2=0x%X · próximo PC=0x%X\n"
-        "Parada controlada. Sem gameplay ou HLE.",
-       info[4],info[1],info[2],cpu[0],cpu[1],cpu[2]];
+      @"M5.9 NPUA80918: ELF VALIDADO\n"
+       "M6.0 PPU 4/4 · M6.1 PPU REAL 8/8: OK\n"
+       "TOC=0x%X · PC=0x%X · LR=0x%X\n"
+       "SP=0x%X · escritas stack=%u\n"
+       "Pilha isolada; sem HLE/SPU/gameplay.",
+      eight[1],eight[2],eight[3],eight[4],eight[5]];
  } @finally {
     if(scoped)[url stopAccessingSecurityScopedResource];
  }
