@@ -1,4 +1,4 @@
-name: AscensionRecomp M6.7.6 - PPC64 mtlr and safe blr return
+name: AscensionRecomp M7.0 - link native PPU runtime to private ELF loader
 
 on:
   push:
@@ -205,6 +205,16 @@ jobs:
           clang -std=c11 -O2 -Wall -Wextra -Werror ios/ARPrivateELFProbe.c tests/host_m676_lr_return.c -o m676-lr-host
           ./m676-lr-host 2>&1 | tee m676-lr-host.log
           grep -Fxq 'M6.7.6 mtlr LR restore and guarded blr return PASS' m676-lr-host.log
+      - name: M7.0 validate actual native ELF loader, import binder and AOT dispatcher
+        run: |
+          set -euo pipefail
+          clang -std=c11 -O2 -Wall -Wextra -Werror \
+            -I upstream/runtime/ppu -I runtime \
+            ios/ARLivePPUBridge.c ios/ARPrivateELFProbe.c \
+            runtime/ppu_bridge.c runtime/elf_image.c runtime/ppu_tls.c \
+            tests/host_m70_native_runtime.c -o m70-native-host
+          ./m70-native-host 2>&1 | tee m70-native-host.log
+          grep -Fxq 'M7.0 signed native PPU staging, real NID/HLE, and honest AOT unresolved PASS' m70-native-host.log
       - name: M5.0 run synthetic PPU LV2 integrated boot smoke
         run: |
           set -euo pipefail
@@ -477,6 +487,10 @@ jobs:
           grep -q '_ar_ppu_bootstrap_four' m43-probe-linked-symbols.txt
           grep -q '_ar_ppu_bootstrap_eight' m43-probe-linked-symbols.txt
           grep -q '_ar_ppu_bootstrap_sixteen' m43-probe-linked-symbols.txt
+          grep -q '_ar_m70_native_runtime_probe' m43-probe-linked-symbols.txt
+          grep -q '_ar_run' m43-probe-linked-symbols.txt
+          grep -q '_ar_load_elf_image' m43-probe-linked-symbols.txt
+          grep -q '_ar_sys_initialize_tls' m43-probe-linked-symbols.txt
           echo 'M6.2 bounded 16-step PPU nested stack + mflr, private guest ELF only on iPhone.' > m62-status.txt
           echo 'M6.3 private bounded 24-step PPU with strict PC/opcode failure; real title on device only.' > m63-status.txt
           echo 'M6.4 PowerPC rldicl 0x79040020 zero extends GPR8 to GPR4; 32 bounded guest steps, pending physical iPhone test.' > m64-status.txt
@@ -488,6 +502,7 @@ jobs:
            echo 'M6.7.4 sys_initialize_tls initialized in isolated guest memory, verified by synthetic host tests.' > m674-status.txt
            echo 'M6.7.5 sources process-entry r7-r10 from ELF PT_TLS, seeds r12 with PS3 page size and validates authentic guest CRT forwarding to TLS HLE; device result not yet observed.' > m675-status.txt
            echo 'M6.7.6 adds exact PPC64 mtlr r0 + executable-verified blr, while older PPU48 interfaces preserve original unsupported behaviour.' > m676-status.txt
+           echo 'M7.0 links real iOS ARM64 PPU AOT library into the application; imported ELF stages privately; unknown game functions correctly report UNRESOLVED (no AOT game bytes in IPA).' > m70-status.txt
           echo 'M6.1 eight guest PPU steps, stack and branch; user title private; host synthetic only.' > m61-status.txt
           echo 'M6.0 strict PPU bootstrap: at most 4 imported ELF instructions; no actual game bytes bundled.' > m60-status.txt
           echo 'M5.9: on-device Files ELF inspection; no game data in CI or IPA.' > m59-status.txt
@@ -512,7 +527,7 @@ jobs:
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: AscensionRecomp-M6.7.6-mtlr-guarded-blr
+          name: AscensionRecomp-M7.0-native-PPU-bridge
           if-no-files-found: warn
           retention-days: 14
           path: |
@@ -649,6 +664,8 @@ jobs:
             m675-status.txt
             m676-lr-host.log
             m676-status.txt
+            m70-native-host.log
+            m70-status.txt
             AscensionRecompProbe-0.6.14-unsigned.ipa
             m40-ios-layer-view.o
             build-ios-runtime/libps3recomp_runtime.a
