@@ -1,4 +1,4 @@
-name: AscensionRecomp M7.3 - private PRX import provenance at failing branch
+name: AscensionRecomp M7.4 - restore private signed native PPU AOT compilation
 
 on:
   push:
@@ -205,6 +205,37 @@ jobs:
           clang -std=c11 -O2 -Wall -Wextra -Werror ios/ARPrivateELFProbe.c tests/host_m676_lr_return.c -o m676-lr-host
           ./m676-lr-host 2>&1 | tee m676-lr-host.log
           grep -Fxq 'M6.7.6 mtlr LR restore and guarded blr return PASS' m676-lr-host.log
+      - name: M7.4 prove generated PPU AOT dispatcher not an interpreter
+        run: |
+          set -euo pipefail
+          python3 tests/m74_make_fixture.py m74-fixture.elf m74-functions.json
+          python3 tools/ppu_aot_build.py \
+            --elf m74-fixture.elf --functions m74-functions.json \
+            --output-dir m74-aot --require-entry 0x10000 | tee m74-aot.log
+          python3 - <<'PY'
+          import json
+          from pathlib import Path
+          report=json.loads(Path('m74-aot/aot-manifest.json').read_text())
+          assert report['generated_functions']==2 and report['rejected_functions']==0
+          raw=bytes.fromhex(report['source_sha256'])
+          Path('m74-aot/m74_digest.h').write_text(
+              '#define AR_M74_DIGEST {'+','.join('0x%02x'%b for b in raw)+'}\n')
+          PY
+          clang -std=c11 -O2 -Wall -Wextra -Werror -Wno-unused-label \
+            -I upstream/runtime/ppu -I runtime -I m74-aot \
+            runtime/ppu_bridge.c m74-aot/ascension_private_aot.c \
+            tests/host_m74_aot_native.c -o m74-aot-host
+          ./m74-aot-host 2>&1 | tee m74-aot-host.log
+          grep -Fxq 'M7.4 generated PPC functions executed as host-native AOT via dispatch PASS' m74-aot-host.log
+          sdk="$(xcrun --sdk iphoneos --show-sdk-path)"
+          xcrun --sdk iphoneos clang -target arm64-apple-ios17.0 -isysroot "$sdk" \
+            -std=c11 -O2 -Wall -Wextra -Werror -Wno-unused-label \
+            -I upstream/runtime/ppu -I runtime \
+            -c m74-aot/ascension_private_aot.c -o m74-synthetic-aot-arm64.o
+          xcrun nm -g m74-synthetic-aot-arm64.o | tee m74-arm64-symbols.txt
+          grep -q '_ar_private_aot_install_sha256' m74-arm64-symbols.txt
+          grep -q '_ar_game_ppu_00010000' m74-arm64-symbols.txt
+          echo 'Synthetic ARM64 AOT linked and executed on host; zero commercial game functions in public IPA.' > m74-status.txt
       - name: M7.0 validate actual native ELF loader, import binder and AOT dispatcher
         run: |
           set -euo pipefail
@@ -712,6 +743,10 @@ jobs:
             m72-status.txt
             m73-prx-host.log
             m73-status.txt
+            m74-aot.log
+            m74-aot-host.log
+            m74-arm64-symbols.txt
+            m74-status.txt
             AscensionRecompProbe-0.6.14-unsigned.ipa
             m40-ios-layer-view.o
             build-ios-runtime/libps3recomp_runtime.a

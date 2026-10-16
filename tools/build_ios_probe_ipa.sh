@@ -16,6 +16,18 @@ xcrun --sdk iphoneos clang -target arm64-apple-ios17.0 -isysroot "$SDK" \
 xcrun --sdk iphoneos clang -target arm64-apple-ios17.0 -isysroot "$SDK" \
     -std=c11 -O2 -Wall -Wextra -c ios/ARPrivateELFProbe.c \
     -o ios-probe/ARPrivateELFProbe.o
+# M7.4: compile game-derived AOT only in a PRIVATE local macOS build.
+# Public GitHub Actions never sets this variable or uploads private code.
+AOT_OBJECTS=()
+if [[ -n "${ASCENSION_PRIVATE_AOT_C:-}" ]]; then
+  test -f "$ASCENSION_PRIVATE_AOT_C"
+  xcrun --sdk iphoneos clang -target arm64-apple-ios17.0 -isysroot "$SDK" \
+      -std=c11 -O2 -Wall -Wextra -Werror -Wno-unused-label \
+      -I upstream/runtime/ppu -I runtime \
+      -c "$ASCENSION_PRIVATE_AOT_C" -o ios-probe/AscensionPrivateAOT.o
+  xcrun nm -g ios-probe/AscensionPrivateAOT.o | grep -q '_ar_private_aot_install_sha256'
+  AOT_OBJECTS+=(ios-probe/AscensionPrivateAOT.o)
+fi
 # Stage the native PPU bridge as an ARM64 object and link the prebuilt
 # IOS PPU core archive; never compile or bundle the user's PS3 ELF.
 test -s ios-ppu-core/libAscensionPPUCore-ios-arm64.a
@@ -41,6 +53,7 @@ xcrun --sdk iphoneos clang++ -target arm64-apple-ios17.0 \
     ios-probe/ARRSXMethodProbe.o ios-probe/ARGuestDrawProbe.o ios-probe/ARPrivateELFProbe.o \
     ios-probe/ARLivePPUBridge.o ios-probe/ARLivePPUContinuous.o \
     ios-probe/ARNativePPUContinuous.o \
+    "${AOT_OBJECTS[@]}" \
     ios-ppu-core/libAscensionPPUCore-ios-arm64.a \
     build-ios-runtime/libAscensionRSXGuest-ios-arm64.a \
     -framework UIKit -framework Foundation -framework QuartzCore \
