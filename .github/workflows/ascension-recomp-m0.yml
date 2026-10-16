@@ -1,4 +1,4 @@
-name: AscensionRecomp M5.7 - RSX native blend and mask GPU proof
+name: AscensionRecomp M5.8 - RSX guest fragment alpha test proof
 
 on:
   push:
@@ -347,9 +347,9 @@ jobs:
         run: |
           set -euo pipefail
           bash tools/build_ios_probe_ipa.sh 2>&1 | tee m41-build-ipa.log
-          test -s AscensionRecompProbe-0.6.0-unsigned.ipa
-          /usr/libexec/PlistBuddy -c 'Print CFBundleShortVersionString' ios-probe/Payload/AscensionRecompProbe.app/Info.plist | grep -Fx 0.6.0
-          /usr/bin/unzip -t AscensionRecompProbe-0.6.0-unsigned.ipa | tee m42-ipa-integrity.log
+          test -s AscensionRecompProbe-0.6.1-unsigned.ipa
+          /usr/libexec/PlistBuddy -c 'Print CFBundleShortVersionString' ios-probe/Payload/AscensionRecompProbe.app/Info.plist | grep -Fx 0.6.1
+          /usr/bin/unzip -t AscensionRecompProbe-0.6.1-unsigned.ipa | tee m42-ipa-integrity.log
           xcrun nm -g ios-probe/Payload/AscensionRecompProbe.app/AscensionRecompProbe | grep -E '(_rsx_metal_backend_present|_rsx_metal_backend_init|_OBJC_CLASS_\\$_ARMetalView)' > m42-runtime-link-symbols.txt || true
           grep -q _rsx_metal_backend_init m39-metal-symbols.txt
           echo 'M4.2: actual GPU clear + presentDrawable + waitUntilCompleted route linked in iOS app; requires on-device screenshot.' > m42-status.txt
@@ -379,6 +379,9 @@ jobs:
           grep -q '_ar_probe_m57_guest_blend_mask' m43-probe-linked-symbols.txt
           grep -q '_ar_probe_m57_blend_draws' m43-probe-linked-symbols.txt
           grep -q '_ar_probe_m57_red_mask_draws' m43-probe-linked-symbols.txt
+          grep -q '_ar_probe_m58_guest_alpha_test' m43-probe-linked-symbols.txt
+          grep -q '_ar_probe_m58_alpha_draws' m43-probe-linked-symbols.txt
+          echo 'M5.8: 5 guest/Metal GPU alpha-test draws, 4 translated discard PSOs; physical device proof pending.' > m58-status.txt
           echo 'M5.7 native GPU blending/RED mask: on-device proof required.' > m57-status.txt
           echo 'M5.6: 7 RSX/Metal GPU stencil bitmask passes (0F/F0 writes, FF/0F reads); native phone proof pending.' > m56-status.txt
           echo 'M5.5.2: fix physical iPhone phase-3 -528 by writing NV4097 0x032C stencil writeMask=0xff. Native GPU validation pending.' > m55-status.txt
@@ -399,7 +402,7 @@ jobs:
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: AscensionRecomp-M5.7-native-blending-evidence
+          name: AscensionRecomp-M5.8-native-alpha-test-evidence
           if-no-files-found: warn
           retention-days: 14
           path: |
@@ -493,6 +496,7 @@ jobs:
             m56-stencil-host.log
             m56-status.txt
             m57-status.txt
+            m58-status.txt
             m55-status.txt
             m54-status.txt
             m53-status.txt
@@ -508,7 +512,7 @@ jobs:
             m50-ios-shader-archive-sha256.txt
             m50-ios-shader-availability-symbol.txt
             build-ios-runtime/libAscensionRSXGuest-ios-arm64.a
-            AscensionRecompProbe-0.6.0-unsigned.ipa
+            AscensionRecompProbe-0.6.1-unsigned.ipa
             m40-ios-layer-view.o
             build-ios-runtime/libps3recomp_runtime.a
             ios-ppu-core/libAscensionPPUCore-ios-arm64.a
