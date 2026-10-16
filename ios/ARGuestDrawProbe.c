@@ -45,6 +45,8 @@ enum {
 static const uint32_t m51_colors[4] = {
     0xffff0000u, 0xff00ff00u, 0xff0000ffu, 0xffffff00u
 };
+/* M5.7 synchronous synthetic-only state; 0 preserves earlier GPU routes. */
+static unsigned m57_blend_mode;
 static uint32_t m51_word(float f) {
     uint32_t v=0; memcpy(&v, &f, sizeof(v)); return v;
 }
@@ -222,12 +224,14 @@ static int m51_guest_textured_quad_palette_ex(unsigned swizzled,
     /* phase 1 clears both depth and colour; phases 2/3 MUST load
      * them unchanged or occlusion could not be tested. */
     /* Only the FIRST pass of each probe may clear depth/stencil. */
-    if (depth_mode==0u || depth_mode==1u ||
-        depth_mode==3u || depth_mode==6u)
+    if ((depth_mode==0u || depth_mode==1u ||
+         depth_mode==3u || depth_mode==6u) &&
+        (!m57_blend_mode || m57_blend_mode==1u || depth_mode))
         rsx_draw_engine_method(NV4097_CLEAR_SURFACE,
                                (depth_mode==3u || depth_mode==6u) ? 0xf2u :
                                (depth_mode ? 0xf1u : 0xf0u));
-    rsx_draw_engine_method(NV4097_SET_COLOR_MASK,0x01010101u);
+    rsx_draw_engine_method(NV4097_SET_COLOR_MASK,
+              m57_blend_mode==3u ? 0x00010000u : 0x01010101u);
     rsx_draw_engine_method(NV4097_SET_CULL_FACE_ENABLE,0u);
     /* M5.4.1: Do NOT silently disable depth after configuring Z24S8!
      * Legacy M5.1-M5.3 still issue the exact old depth-disable command,
@@ -236,7 +240,14 @@ static int m51_guest_textured_quad_palette_ex(unsigned swizzled,
      * on-device phase-2 failure -424 and depth DRAW counter 0. */
     if (!depth_mode)
         rsx_draw_engine_method(NV4097_SET_DEPTH_TEST_ENABLE,0u);
-    rsx_draw_engine_method(NV4097_SET_BLEND_ENABLE,0u);
+    /* Guest RSX blending: phase2 ONE+ONE ADD, phase4 ZERO+ONE ADD. */
+    if(m57_blend_mode==2u || m57_blend_mode==4u) {
+        uint32_t sf=m57_blend_mode==2u?1u:0u;
+        rsx_draw_engine_method(NV4097_SET_BLEND_FUNC_SFACTOR,(sf<<16)|sf);
+        rsx_draw_engine_method(NV4097_SET_BLEND_FUNC_DFACTOR,0x00010001u);
+        rsx_draw_engine_method(NV4097_SET_BLEND_EQUATION,0x80068006u);
+        rsx_draw_engine_method(NV4097_SET_BLEND_ENABLE,1u);
+    } else rsx_draw_engine_method(NV4097_SET_BLEND_ENABLE,0u);
 
     rsx_draw_engine_method(NV4097_SET_VERTEX_DATA_ARRAY_FORMAT,
                            2u | (4u<<4) | (32u<<8));
@@ -265,6 +276,9 @@ static int m51_guest_textured_quad_palette_ex(unsigned swizzled,
     if(!*guest_draws)return -104;  /* fixed fallback is not evidence */
     if(!*encoded)return -105;      /* must bind compiled FP TEX0 at GPU draw */
     if(read_rc)return -110+read_rc;
+    /* Real blended results can have duplicate colours; exact per-pass
+     * readback checks are performed in the M5.7 outer GPU test. */
+    if(m57_blend_mode)return 0;
     /* Require the actual guest fragment program to sample four DISTINCT
      * expected texels, not return a constant/fixed shader or background.
      * Compare as a colour set so raster Y orientation is visible separately. */
@@ -504,4 +518,45 @@ int ar_probe_m56_guest_stencil_bitmasks(unsigned swizzled,
     if(*guest_total!=7u || *metal_total!=7u) return -661;
     *phase=0u;
     return 0;
+}
+
+/* Four translated guest VP/FP TEX0 GPU draws. Every ordered pixel
+ * is compared against exact blend/masked results; no host drawing. */
+extern void ar_probe_m57_reset_draws(void);
+extern uint32_t ar_probe_m57_blend_draws(void);
+extern uint32_t ar_probe_m57_red_mask_draws(void);
+int ar_probe_m57_guest_blend_mask(unsigned swizzled,uint32_t pixels[4],
+ unsigned *phase,unsigned *guest_total,unsigned *metal_total,
+ unsigned *blend_draws,unsigned *red_draws) {
+    if(!pixels||!phase||!guest_total||!metal_total||!blend_draws||!red_draws)return -701;
+    *phase=*guest_total=*metal_total=*blend_draws=*red_draws=0u;
+    memset(pixels,0,4u*sizeof(*pixels));
+    static const unsigned palette[4]={0u,1u,2u,3u};
+    static const uint32_t expected[4][4]={
+      {0xffff0000u,0xff00ff00u,0xff0000ffu,0xffffff00u},
+      {0xffffff00u,0xff00ffffu,0xffffffffu,0xffffff00u},
+      {0xff00ff00u,0xffffffffu,0xffffffffu,0xff00ff00u},
+      {0xff00ff00u,0xffffffffu,0xffffffffu,0xff00ff00u}
+    };
+    ar_probe_m57_reset_draws();
+    for(unsigned i=0;i<4u;i++) {
+        unsigned guest=0u,encoded=0u;
+        uint32_t shader[4]={0u};
+        *phase=i+1u;
+        m57_blend_mode=i+1u;
+        int rc=m51_guest_textured_quad_palette_ex(
+           swizzled,palette[i],0u,M51_RT_OFFSET,0.0f,0u,
+           pixels,&encoded,&guest,shader);
+        m57_blend_mode=0u; /* reset even on early failure */
+        *guest_total+=guest; *metal_total+=encoded;
+        *blend_draws=ar_probe_m57_blend_draws();
+        *red_draws=ar_probe_m57_red_mask_draws();
+        if(rc)return rc;
+        if(guest!=1u||encoded!=1u)return -710-(int)i;
+        for(unsigned q=0;q<4u;q++)
+            if(pixels[q]!=expected[i][q])return -720-(int)(i*4u+q);
+    }
+    if(*blend_draws!=2u||*red_draws!=1u)return -750;
+    if(*guest_total!=4u||*metal_total!=4u)return -751;
+    *phase=0u;return 0;
 }
