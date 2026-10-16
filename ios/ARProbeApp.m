@@ -2,6 +2,9 @@
 #import <UIKit/UIKit.h>
 #import <Metal/Metal.h>
 #import "ARMetalView.h"
+#import <UniformTypeIdentifiers/UniformTypeIdentifiers.h>
+#import <CommonCrypto/CommonDigest.h>
+extern int ar_private_elf_inspect(const unsigned char*,size_t,unsigned int[5]);
 
 extern int rsx_metal_backend_init(unsigned int width, unsigned int height, const char* title);
 extern void rsx_metal_backend_shutdown(void);
@@ -40,7 +43,7 @@ extern int ar_probe_rsx_texture(void *layer,unsigned swizzled,unsigned int out_p
 extern int ar_probe_rsx_texture_registers(unsigned swizzled,unsigned int out_pixels[4]);
 extern int ar_probe_rsx_texture_cache_mutation(unsigned swizzled,unsigned int out_pixels[4],unsigned *phase,unsigned *uploads,unsigned *replacements);
 
-@interface ARProbeDelegate : UIResponder <UIApplicationDelegate>
+@interface ARProbeDelegate : UIResponder <UIApplicationDelegate, UIDocumentPickerDelegate>
 @property(nonatomic,strong) UIWindow *window;
 @property(nonatomic,strong) ARMetalView *metalView;
 @property(nonatomic,strong) UILabel *status;
@@ -316,6 +319,25 @@ extern int ar_probe_rsx_texture_cache_mutation(unsigned swizzled,unsigned int ou
         [alphaButton.leadingAnchor constraintGreaterThanOrEqualToAnchor:controller.view.leadingAnchor constant:16],
         [alphaButton.trailingAnchor constraintLessThanOrEqualToAnchor:controller.view.trailingAnchor constant:-16],
         [alphaButton.heightAnchor constraintEqualToConstant:46]
+    ]];
+    /* M5.9: explicit private Files import; no title data in the IPA. */
+    UIButton *elfButton=[UIButton buttonWithType:UIButtonTypeSystem];
+    elfButton.translatesAutoresizingMaskIntoConstraints=NO;
+    [elfButton setTitle:@"M5.9 · Importar GOWA.ELF" forState:UIControlStateNormal];
+    [elfButton setTitleColor:UIColor.whiteColor forState:UIControlStateNormal];
+    elfButton.backgroundColor=[UIColor.blackColor colorWithAlphaComponent:0.82];
+    elfButton.titleLabel.font=[UIFont systemFontOfSize:14 weight:UIFontWeightSemibold];
+    elfButton.layer.cornerRadius=10;
+    [elfButton addTarget:self action:@selector(importM59ELF:)
+             forControlEvents:UIControlEventTouchUpInside];
+    [controller.view addSubview:elfButton];
+    [NSLayoutConstraint activateConstraints:@[
+      [elfButton.centerXAnchor constraintEqualToAnchor:controller.view.centerXAnchor],
+      [elfButton.bottomAnchor constraintEqualToAnchor:alphaButton.topAnchor constant:-10],
+      [elfButton.widthAnchor constraintLessThanOrEqualToConstant:350],
+      [elfButton.heightAnchor constraintEqualToConstant:46],
+      [elfButton.leadingAnchor constraintGreaterThanOrEqualToAnchor:controller.view.leadingAnchor constant:16],
+      [elfButton.trailingAnchor constraintLessThanOrEqualToAnchor:controller.view.trailingAnchor constant:-16]
     ]];
     self.window.rootViewController=controller;
     [self.window makeKeyAndVisible];
@@ -630,6 +652,63 @@ extern int ar_probe_rsx_texture_cache_mutation(unsigned swizzled,unsigned int ou
              rc,phase,sw?@"SWIZZLED":@"LINEAR",guest,metal,alpha,
              p[0],p[1],p[2],p[3]];
     }
+}
+/* Local read-only probe; data is temporary and never logged, persisted
+ * into app storage, uploaded or packaged with its compiled code. */
+- (void)importM59ELF:(UIButton*)sender {
+ (void)sender;
+ if(!self.ready||self.shaderBusy)return;
+ UIDocumentPickerViewController*picker=
+   [[UIDocumentPickerViewController alloc] initForOpeningContentTypes:@[UTTypeData] asCopy:YES];
+ picker.delegate=self;
+ [self.window.rootViewController presentViewController:picker animated:YES completion:nil];
+}
+- (void)documentPicker:(UIDocumentPickerViewController*)controller
+        didPickDocumentsAtURLs:(NSArray<NSURL*>*)urls {
+ (void)controller;
+ NSURL*url=urls.firstObject;if(!url)return;
+ BOOL scoped=[url startAccessingSecurityScopedResource];
+ @try {
+   NSError*err=nil;
+   NSNumber*size=[[[NSFileManager defaultManager]
+      attributesOfItemAtPath:url.path error:&err] objectForKey:NSFileSize];
+   if(err||!size||size.unsignedLongLongValue>32u*1024u*1024u){
+       self.status.text=@"M5.9: Arquivo indisponível ou maior que 32 MB.";return;
+   }
+   NSData*data=[NSData dataWithContentsOfURL:url
+       options:NSDataReadingMappedIfSafe error:&err];
+   if(err||!data){self.status.text=@"M5.9: Leitura falhou.";return;}
+   uint32_t info[5]={0};
+   int rc=ar_private_elf_inspect(data.bytes,data.length,info);
+   if(rc){
+       self.status.text=[NSString stringWithFormat:
+          @"M5.9: erro ELF %d. Use GOWA.ELF descriptografado.",rc];return;
+   }
+   unsigned char hash[CC_SHA256_DIGEST_LENGTH]={0};
+   CC_SHA256(data.bytes,(CC_LONG)data.length,hash);
+   static const unsigned char expected[32]={
+       0x4b,0xf7,0x5c,0x89,0x7b,0x82,0xd1,0xbe,
+       0xb2,0x55,0x14,0xcb,0xad,0xaf,0xf3,0xd0,
+       0x3e,0x1b,0x0c,0x7b,0xf8,0x49,0xfa,0x5d,
+       0x28,0x9b,0xe4,0xf9,0x18,0x34,0x62,0xb5};
+   if(data.length!=8717136u||memcmp(hash,expected,32)||
+       info[0]!=0x8283f8u||info[1]!=0x10410u||info[2]!=0x83f2b0u){
+       self.status.text=@"M5.9: ELF não corresponde à NPUA80918 validada.";return;
+   }
+   self.status.text=[NSString stringWithFormat:
+       @"M5.9 NPUA80918: ELF REAL VALIDADO\n"
+        "SHA256: OK · segmentos: %u\n"
+        "PPU entry: 0x%X · TOC: 0x%X\n"
+        "Primeiro opcode: %08X\n"
+        "Não executa gameplay. Próximo: runtime PPU/HLE/SPU.",
+       info[4],info[1],info[2],info[3]];
+ } @finally {
+    if(scoped)[url stopAccessingSecurityScopedResource];
+ }
+}
+- (void)documentPickerWasCancelled:(UIDocumentPickerViewController*)controller {
+ (void)controller;
+ self.status.text=@"M5.9 cancelado; M5.8.1 disponível.";
 }
 /* A tap submits another actual on-screen GPU clear pass.
  * Completion is checked; labels do not assert success on failed work. */
