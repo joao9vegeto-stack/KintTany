@@ -1,4 +1,4 @@
-name: AscensionRecomp M7.7 - authentic lwmutex NID and HLE
+name: AscensionRecomp M7.8 - link 11 real game PPU ARM64 AOT entries
 
 on:
   push:
@@ -242,7 +242,7 @@ jobs:
           clang -std=c11 -O2 -Wall -Wextra -Werror -DASCENSION_PRIVATE_AOT_LINKED \
             -I upstream/runtime/ppu -I runtime \
             ios/ARLivePPUBridge.c ios/ARPrivateELFProbe.c \
-            runtime/ppu_bridge.c runtime/elf_image.c runtime/ppu_tls.c runtime/ppu_lwmutex.c \
+            runtime/ppu_bridge.c runtime/elf_image.c runtime/ppu_tls.c runtime/ppu_lwmutex.c runtime/ppu_lv2_bootstrap.c \
             tests/host_m75_aot_boot.c -o m75-aot-boot-host
           ./m75-aot-boot-host 2>&1 | tee m75-aot-boot-host.log
           grep -Fxq 'M7.5 signed AOT entry isolates TLS smoke and runs genuine guest HLE PASS' m75-aot-boot-host.log
@@ -265,13 +265,23 @@ jobs:
           ./m77-lwmutex-host 2>&1 | tee m77-lwmutex-host.log
           grep -Fxq 'M7.7 lwmutex create guest BE ABI, validation, reset PASS' m77-lwmutex-host.log
           echo 'M7.7: sys_lwmutex_create generic HLE + exact PRX NID lookup; game AOT is NOT in the public IPA.' > m77-status.txt
+      - name: M7.8 verify native guest LV2 memory and monotonic time services
+        run: |
+          set -euo pipefail
+          clang -std=c11 -O2 -Wall -Wextra -Werror \
+            -I upstream/runtime/ppu -I runtime \
+            runtime/ppu_bridge.c runtime/ppu_lv2_bootstrap.c \
+            tests/host_m78_lv2_bootstrap.c -o m78-lv2-host
+          ./m78-lv2-host 2>&1 | tee m78-lv2-host.log
+          grep -Fxq 'M7.8 genuine native AOT LV2 memory/time guest ABI PASS' m78-lv2-host.log
+          python3 -m unittest discover -s tests -p test_m78_stage_aot.py -v 2>&1 | tee m78-stage-tests.log
       - name: M7.0 validate actual native ELF loader, import binder and AOT dispatcher
         run: |
           set -euo pipefail
           clang -std=c11 -O2 -Wall -Wextra -Werror \
             -I upstream/runtime/ppu -I runtime \
             ios/ARLivePPUBridge.c ios/ARPrivateELFProbe.c \
-            runtime/ppu_bridge.c runtime/elf_image.c runtime/ppu_tls.c runtime/ppu_lwmutex.c \
+            runtime/ppu_bridge.c runtime/elf_image.c runtime/ppu_tls.c runtime/ppu_lwmutex.c runtime/ppu_lv2_bootstrap.c \
             tests/host_m70_native_runtime.c -o m70-native-host
           ./m70-native-host 2>&1 | tee m70-native-host.log
           grep -Fxq 'M7.0 signed native PPU staging, real NID/HLE, and honest AOT unresolved PASS' m70-native-host.log
@@ -282,7 +292,7 @@ jobs:
             -I upstream/runtime/ppu -I runtime \
             ios/ARNativePPUContinuous.c ios/ARLivePPUContinuous.c \
             ios/ARPrivateELFProbe.c \
-            runtime/ppu_bridge.c runtime/elf_image.c runtime/ppu_tls.c runtime/ppu_lwmutex.c \
+            runtime/ppu_bridge.c runtime/elf_image.c runtime/ppu_tls.c runtime/ppu_lwmutex.c runtime/ppu_lv2_bootstrap.c \
             tests/host_m71_continuous.c -o m71-continuous-host
           ./m71-continuous-host 2>&1 | tee m71-continuous-host.log
           grep -Fxq 'M7.1 signed native PowerPC continuous 76-step, import TLS and fail-closed ISA PASS' m71-continuous-host.log
@@ -293,7 +303,7 @@ jobs:
             -I upstream/runtime/ppu -I runtime \
             ios/ARNativePPUContinuous.c ios/ARLivePPUContinuous.c \
             ios/ARPrivateELFProbe.c \
-            runtime/ppu_bridge.c runtime/elf_image.c runtime/ppu_tls.c runtime/ppu_lwmutex.c \
+            runtime/ppu_bridge.c runtime/elf_image.c runtime/ppu_tls.c runtime/ppu_lwmutex.c runtime/ppu_lv2_bootstrap.c \
             tests/host_m72_cr_branch.c -o m72-cr-branch-host
           ./m72-cr-branch-host 2>&1 | tee m72-cr-branch-host.log
           grep -Fxq 'M7.2 CR7 cmpld, signed/unsigned compare and conditional branches PASS' m72-cr-branch-host.log
@@ -304,7 +314,7 @@ jobs:
             -I upstream/runtime/ppu -I runtime \
             ios/ARNativePPUContinuous.c ios/ARLivePPUContinuous.c \
             ios/ARPrivateELFProbe.c \
-            runtime/ppu_bridge.c runtime/elf_image.c runtime/ppu_tls.c runtime/ppu_lwmutex.c \
+            runtime/ppu_bridge.c runtime/elf_image.c runtime/ppu_tls.c runtime/ppu_lwmutex.c runtime/ppu_lv2_bootstrap.c \
             tests/host_m73_import_discovery.c -o m73-prx-host
           ./m73-prx-host 2>&1 | tee m73-prx-host.log
           grep -Fxq 'M7.3 real second PRX stub library NID identified, unknown HLE blocked PASS' m73-prx-host.log
@@ -538,10 +548,21 @@ jobs:
           echo 'M4.0: UIKit CAMetalLayer view and iOS RSX Metal bridge compiled, not runtime displayed or game-rendered.' > m40-status.txt
           echo 'iPhone ARM64 CPU/SPU/LV2+offscreen Metal compiled; no CAMetalLayer presenter/audio/input/IPA.' > m39-status.txt
           echo 'iOS CPU/SPU/LV2 build only. SDL2 input/audio and RSX Metal backend disabled until iOS adapters are implemented.' > m38-status.txt
+      - name: M7.8 verify and stage exact owner-provided AOT before iOS linking
+        env:
+          ASCENSION_AOT_SOURCE_GZIP_B64: ${{ secrets.ASCENSION_AOT_SOURCE_GZIP_B64 }}
+        run: |
+          set -euo pipefail
+          python3 tools/stage_m78_aot.py 2>&1 | tee m78-aot-stage.log
+          grep -Fxq 'M7.8 owner AOT source SHA256 verified; 11 real native entries staged' m78-aot-stage.log
       - name: M4.1 link native UIKit RSX Metal diagnostic application
         run: |
           set -euo pipefail
           bash tools/build_ios_probe_ipa.sh 2>&1 | tee m41-build-ipa.log
+          test -s m78-aot-status.txt
+          grep -Fq '11 REAL PPU ARM64 functions verified' m78-aot-status.txt
+          test "$(grep -c '_ar_game_ppu_' m78-owner-aot-linked-symbols.txt)" -eq 11
+          echo 'M7.8: 11 real NPUA80918 ARM64 PPU entries IN IPA; on-device execution is pending' > m78-actions-status.txt
           test -s AscensionRecompProbe-0.6.14-unsigned.ipa
           /usr/libexec/PlistBuddy -c 'Print CFBundleShortVersionString' ios-probe/Payload/AscensionRecompProbe.app/Info.plist | grep -Fx 0.6.14
           /usr/bin/unzip -t AscensionRecompProbe-0.6.14-unsigned.ipa | tee m42-ipa-integrity.log
@@ -776,6 +797,13 @@ jobs:
             m74-aot-host.log
             m74-arm64-symbols.txt
             m74-status.txt
+            m78-aot-stage.log
+            m78-stage-tests.log
+            m78-lv2-host.log
+            m78-owner-aot-object-symbols.txt
+            m78-owner-aot-linked-symbols.txt
+            m78-aot-status.txt
+            m78-actions-status.txt
             m77-lwmutex-host.log
             m77-status.txt
             m76-aot-tail-host.log

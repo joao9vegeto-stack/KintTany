@@ -399,7 +399,7 @@ extern int ar_probe_rsx_texture_cache_mutation(unsigned swizzled,unsigned int ou
     [controller.view addSubview:panel];
     UILabel *header=[UILabel new];
     header.translatesAutoresizingMaskIntoConstraints=NO;
-    header.text=@"ASCENSIONRECOMP   ·   M7.7";
+    header.text=@"ASCENSIONRECOMP   ·   M7.8";
     header.textColor=[UIColor colorWithRed:0.73 green:0.87 blue:1 alpha:1];
     header.font=[UIFont systemFontOfSize:12 weight:UIFontWeightBold];
     header.textAlignment=NSTextAlignmentCenter;
@@ -453,7 +453,7 @@ extern int ar_probe_rsx_texture_cache_mutation(unsigned swizzled,unsigned int ou
         hint.font=[UIFont systemFontOfSize:13 weight:UIFontWeightMedium];
         hint.textColor=[UIColor colorWithWhite:0.83 alpha:1];
         hint.text=i==0 ?
-             @"NPUA80918 · M7.7: TLS e sys_lwmutex_create (NID confirmado). AOT real somente quando vinculado." :
+             @"NPUA80918 · M7.8: execução PPU ARM64 recompilada. Importar ELF e conferir funções AOT no relatório." :
              @"Diagnósticos RSX → Metal, do mais recente ao legado. Role para encontrar os testes anteriores.";
         [stack addArrangedSubview:hint];
         NSArray<UIButton *> *ordered=i==0 ? @[elfButton] : @[
@@ -1143,6 +1143,17 @@ extern int ar_probe_rsx_texture_cache_mutation(unsigned swizzled,unsigned int ou
            @"TLS recusado: parâmetros, thread já inicializada ou leitura de memória inválida. Não houve sucesso artificial.\n"];
        [extended appendString:nativeText];
        [extended appendString:lwMutexText];
+       if(native[5]>0u){
+         [extended appendFormat:
+           @"\nM7.8 — EXECUÇÃO DO ASCENSION RECOMPILADO ARM64\n"
+            "Funções nativas=%u · despacho=%d · próximo PC faltante=0x%08X\n"
+            "Import de tempo autenticado=%@ · HLE tempo vinculado=%@\n"
+            "Syscall LV2 0x160=implementado; início PS3 parcial, SEM gameplay.\n",
+            native[5],(int)native[6],native[7],
+            (native[15]&64u)?@"SIM":@"NÃO",
+            (native[15]&128u)?@"SIM":@"NÃO"];
+       }
+
        /* M7.6: AOT count is native signed function count, never interpreter
         * steps. AR_UNRESOLVED -3 is genuine missing guest ARM64 coverage. */
        if(native[5]>0u){
@@ -1196,7 +1207,7 @@ extern int ar_probe_rsx_texture_cache_mutation(unsigned swizzled,unsigned int ou
         "M6.7.6 PPU REAL 48/48: OK · TLS=%u\n"
         "PC=0x%X · CTR=0x%08X%08X\n"
         "stores=%u · indiretos=%u · sombra=%u\n"
-        "M7.7: sys_lwmutex_create reconhecido; AOT do Ascension ainda pendente.",
+        "M7.8: código ARM64 vinculado ao app; veja contagem AOT e PC pendente no relatório.",
         legacyState,old40State,tls48[0],cpu48[2],cpu48[18],cpu48[17],
         cpu48[5],cpu48[19],cpu48[15]];
   } @finally {

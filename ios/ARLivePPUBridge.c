@@ -15,6 +15,7 @@ extern int ar_private_aot_install_sha256(const unsigned char*,size_t);
 #include "elf_image.h"
 #include "../runtime/ppu_tls.h" /* explicit project header, not upstream ppu_tls.h */
 #include "../runtime/ppu_lwmutex.h"
+#include "../runtime/ppu_lv2_bootstrap.h"
 
 extern int ar_private_import_match(const uint8_t*,size_t,uint32_t,uint32_t[4],char[48]);
 extern int ar_private_import_find_nid(const uint8_t*,size_t,uint32_t,const char*,uint32_t[4],char[48]);
@@ -73,6 +74,7 @@ int ar_m70_native_runtime_probe(const uint8_t*d,size_t len,
  const int rcinit=ar_bridge_init(cap);
  if(rcinit){out[0]=(uint32_t)rcinit;return rcinit;}
  ar_lwmutex_reset(); /* new guest process: no stale sync objects */
+ ar_lv2_bootstrap_reset();
  ppu_context ctx;
  ppu_context_init(&ctx);
  ar_elf_image_result image={0};
@@ -157,10 +159,28 @@ int ar_m70_native_runtime_probe(const uint8_t*d,size_t len,
        out[15]|=32u; /* genuine HLE implementation now available */
  }
 
+ /* M7.8: OS ABI required by the authentic signed PPU startup path.
+  * sys_time_get_system_time import must be authenticated by its PRX table,
+  * never by blindly executing an address from guest registers.
+  * 0x160 is a PS3 LV2 syscall number, not a function address. */
+ if(ar_bind_syscall(0x160u,ar_lv2_user_memory_size)!=AR_OK){
+   ar_bridge_shutdown();return -30;
+ }
+ uint32_t tmimp[4]={0}; char tmlib[48]={0};
+ const int tmmatch=ar_private_import_find_nid(
+    d,len,0x8461e528u,"sysPrxForUser",tmimp,tmlib);
+ if(tmmatch==0 && tmimp[0]==0x8461e528u && tmimp[1] &&
+    strcmp(tmlib,"sysPrxForUser")==0){
+    out[15]|=64u; /* time import authenticated */
+    if(ar_bind_import(tmimp[1],tmimp[0])==AR_OK &&
+       ar_bind_hle(tmimp[0],ar_lv2_system_time)==AR_OK)
+       out[15]|=128u; /* OS service bound */
+ }
+
  /* This is the actual native AOT dispatcher, NOT the 48-step interpreter.
   * With no signed game AOT functions in the IPA it MUST return unresolved
   * rather than executing data as ARM64 or reporting boot success. */
- out[6]=(uint32_t)ar_run(&ctx,image.entry_code,128u);
+ out[6]=(uint32_t)ar_run(&ctx,image.entry_code,out[5] ? 4096u : 128u);
  out[7]=ar_last_unresolved();
  /* In AOT mode this is the r13 reached by genuine recompiled guest
   * execution, not a separately invented HLE smoke result. The status
