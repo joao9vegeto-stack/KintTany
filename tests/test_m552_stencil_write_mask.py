@@ -10,12 +10,14 @@ class StencilMaskFix(unittest.TestCase):
     def test_actual_write_mask_register_precedes_guest_draw(self):
         f=SRC[SRC.index("static int m51_guest_textured_quad_palette_ex("):
               SRC.index("static int m51_guest_textured_quad_palette(")]
-        mask=f.index("rsx_draw_engine_method(M55_NV4097_SET_STENCIL_MASK,0xffu)")
+        mask=f.index("rsx_draw_engine_method(M55_NV4097_SET_STENCIL_MASK,write_mask)")
         op=f.index("rsx_draw_engine_method(NV4097_SET_STENCIL_OP_ZPASS,")
         draw=f.index("rsx_draw_engine_method(NV4097_DRAW_INDEX_ARRAY")
         self.assertTrue(mask<op<draw)
         self.assertIn("#define M55_NV4097_SET_STENCIL_MASK 0x0000032Cu",SRC)
-        self.assertIn("depth_mode==3u ? 0x1e01u : 0x1e00u",f)
+        self.assertIn("always ? 0x1e01u : 0x1e00u",f)
+        self.assertIn("uint32_t write_mask=0xffu, read_mask=0xffu",f)
+        self.assertIn("unsigned always=(depth_mode==3u)",f)
     def test_native_metal_counter_requires_actual_mask(self):
         self.assertIn("rs->s_write_mask == 0xffu",OVER)
         self.assertIn("p->ar_m55_stencil",OVER)
