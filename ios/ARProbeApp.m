@@ -450,7 +450,7 @@ extern int ar_probe_rsx_texture_cache_mutation(unsigned swizzled,unsigned int ou
         hint.font=[UIFont systemFontOfSize:13 weight:UIFontWeightMedium];
         hint.textColor=[UIColor colorWithWhite:0.83 alpha:1];
         hint.text=i==0 ?
-             @"NPUA80918 · M7.1: execução PowerPC contínua no runtime nativo, sem JIT. AOT do Ascension ainda não incluído." :
+             @"NPUA80918 · M7.2: CPU PowerPC contínua com CR, comparações 32/64 bits e desvios condicionais. Sem JIT/AOT do jogo." :
              @"Diagnósticos RSX → Metal, do mais recente ao legado. Role para encontrar os testes anteriores.";
         [stack addArrangedSubview:hint];
         NSArray<UIButton *> *ordered=i==0 ? @[elfButton] : @[
@@ -1005,7 +1005,7 @@ extern int ar_probe_rsx_texture_cache_mutation(unsigned swizzled,unsigned int ou
     const int execRC=ar_m71_private_continuous_probe(
         data.bytes,data.length,detail48[8],4096u,continuous);
     NSString *continuousText=[NSString stringWithFormat:
-       @"\nM7.1 — EXECUÇÃO PPU CONTÍNUA (INTERPRETADOR NATIVO ASSINADO)\n"
+       @"\nM7.2 — EXECUÇÃO PPU CONTÍNUA + CR/BRANCH (INTERPRETADOR NATIVO ASSINADO)\n"
         "Preparação=%d · resultado guest=%d · passos=%u / orçamento 4096\n"
         "Último PC=0x%08X · opcode=0x%08X · PC anterior=0x%08X\n"
         "HLEs reais=%u · r13=0x%08X · LR=0x%08X · CTR=0x%08X\n"
@@ -1146,7 +1146,7 @@ extern int ar_probe_rsx_texture_cache_mutation(unsigned swizzled,unsigned int ou
         "M6.7.6 PPU REAL 48/48: OK · TLS=%u\n"
         "PC=0x%X · CTR=0x%08X%08X\n"
         "stores=%u · indiretos=%u · sombra=%u\n"
-        "M7.1 PPU: interpretação contínua com orçamento e motivos de parada; AOT ainda pendente.",
+        "M7.2 PPU: comparações CR e desvios condicionais; AOT completo ainda pendente.",
         legacyState,old40State,tls48[0],cpu48[2],cpu48[18],cpu48[17],
         cpu48[5],cpu48[19],cpu48[15]];
   } @finally {

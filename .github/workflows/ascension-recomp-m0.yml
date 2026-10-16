@@ -1,4 +1,4 @@
-name: AscensionRecomp M7.1 - signed guest PPU interpreter fallback with bounded execution
+name: AscensionRecomp M7.2 - complete signed PPC CR comparison and conditional branches
 
 on:
   push:
@@ -226,6 +226,17 @@ jobs:
             tests/host_m71_continuous.c -o m71-continuous-host
           ./m71-continuous-host 2>&1 | tee m71-continuous-host.log
           grep -Fxq 'M7.1 signed native PowerPC continuous 76-step, import TLS and fail-closed ISA PASS' m71-continuous-host.log
+      - name: M7.2 verify CR7 cmp and all conditional branch families
+        run: |
+          set -euo pipefail
+          clang -std=c11 -O2 -Wall -Wextra -Werror \
+            -I upstream/runtime/ppu -I runtime \
+            ios/ARNativePPUContinuous.c ios/ARLivePPUContinuous.c \
+            ios/ARPrivateELFProbe.c \
+            runtime/ppu_bridge.c runtime/elf_image.c runtime/ppu_tls.c \
+            tests/host_m72_cr_branch.c -o m72-cr-branch-host
+          ./m72-cr-branch-host 2>&1 | tee m72-cr-branch-host.log
+          grep -Fxq 'M7.2 CR7 cmpld, signed/unsigned compare and conditional branches PASS' m72-cr-branch-host.log
       - name: M5.0 run synthetic PPU LV2 integrated boot smoke
         run: |
           set -euo pipefail
@@ -517,6 +528,7 @@ jobs:
            echo 'M6.7.6 adds exact PPC64 mtlr r0 + executable-verified blr, while older PPU48 interfaces preserve original unsupported behaviour.' > m676-status.txt
            echo 'M7.0 links real iOS ARM64 PPU AOT library into the application; imported ELF stages privately; unknown game functions correctly report UNRESOLVED (no AOT game bytes in IPA).' > m70-status.txt
            echo 'M7.1 adds a signed, generic PowerPC interpretation fallback in the same native PPU guest VM with exact faults, bounded budget, natural verified HLE; NOT game AOT or boot.' > m71-status.txt
+           echo 'M7.2 adds PowerPC signed/unsigned cmp/cmpl/cmpi/cmpli, CR0-CR7 nibble updates, BC CTR+CR and conditional bclr/bcctr; no AOT false positives.' > m72-status.txt
           echo 'M6.1 eight guest PPU steps, stack and branch; user title private; host synthetic only.' > m61-status.txt
           echo 'M6.0 strict PPU bootstrap: at most 4 imported ELF instructions; no actual game bytes bundled.' > m60-status.txt
           echo 'M5.9: on-device Files ELF inspection; no game data in CI or IPA.' > m59-status.txt
@@ -541,7 +553,7 @@ jobs:
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: AscensionRecomp-M7.1-continuous-native-PPU
+          name: AscensionRecomp-M7.2-CR-conditional-branches
           if-no-files-found: warn
           retention-days: 14
           path: |
@@ -682,6 +694,8 @@ jobs:
             m70-status.txt
             m71-continuous-host.log
             m71-status.txt
+            m72-cr-branch-host.log
+            m72-status.txt
             AscensionRecompProbe-0.6.14-unsigned.ipa
             m40-ios-layer-view.o
             build-ios-runtime/libps3recomp_runtime.a

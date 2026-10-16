@@ -25,6 +25,45 @@ static void guest_cr0(ppu_context*c,uint64_t v){
                       ((c->xer>>31)&1u);
  c->cr=(c->cr&0x0fffffffu)|(value<<28);
 }
+/* M7.2: architecture-wide compares update ONLY the selected CR field.
+ * Each 4-bit nibble is LT,GT,EQ,SO, with BF0 in the top nibble. */
+static void guest_compare(ppu_context*c,unsigned bf,unsigned is_signed,
+                          unsigned wide,uint64_t lhs,uint64_t rhs){
+ unsigned cmp;
+ if(is_signed){
+   if(wide){
+     const int64_t a=(int64_t)lhs,b=(int64_t)rhs;
+     cmp=a<b?8u:(a>b?4u:2u);
+   }else{
+     const int32_t a=(int32_t)(uint32_t)lhs,b=(int32_t)(uint32_t)rhs;
+     cmp=a<b?8u:(a>b?4u:2u);
+   }
+ }else{
+   const uint64_t a=wide?lhs:(uint32_t)lhs;
+   const uint64_t b=wide?rhs:(uint32_t)rhs;
+   cmp=a<b?8u:(a>b?4u:2u);
+ }
+ cmp|=(unsigned)((c->xer>>31)&1u);
+ const unsigned shift=28u-4u*bf;
+ c->cr=(c->cr&~(15u<<shift))|(cmp<<shift);
+}
+/* BO bits: 0x10 suppresses CR check, 0x08 selects CR=true,
+ * 0x04 suppresses CTR decrement, 0x02 selects CTR==0.
+ * BI is numbered MSB-first across the 32-bit CR. */
+static int guest_branch_test(ppu_context*c,unsigned bo,unsigned bi,
+                             unsigned ctr_may_decrement,int*taken){
+ if(!(bo&4u)){
+   if(!ctr_may_decrement)return -1; /* bcctr decrement form is invalid */
+   c->ctr--;
+ }
+ const int count_ok=(bo&4u) ||
+            (((c->ctr!=0u)?1:0)!=((bo&2u)?1:0));
+ const int crbit=(int)((c->cr>>(31u-bi))&1u);
+ const int cond_ok=(bo&16u)||(crbit==((bo&8u)?1:0));
+ *taken=count_ok && cond_ok;
+ return 0;
+}
+
 /* Diagnostic fields:
  [0] steps, [1] final PC, [2] last opcode, [3] stop reason,
  [4] native HLE calls, [5] TLS r13, [6] CTR, [7] LR,
@@ -89,6 +128,11 @@ int ar_m71_signed_ppu_interpret(const uint8_t*d,size_t len,ppu_context*c,
    }else if(op==28u){ /* andi. includes CR0 update */
      c->gpr[ra]=c->gpr[rt]&(word&0xffffu);
      guest_cr0(c,c->gpr[ra]);
+   }else if(op==10u||op==11u){ /* cmpli / cmpi: unsigned/signed immediate */
+     if(word&0x00400000u){rc=-1311;break;} /* reserved bit 22 */
+     const unsigned bf=(word>>23)&7u,wide=(word>>21)&1u;
+     const uint64_t rhs=op==10u?(uint16_t)word:(uint64_t)(int64_t)(int16_t)word;
+     guest_compare(c,bf,op==11u,wide,c->gpr[ra],rhs);
    }else if(op==32u||op==58u){ /* lwz / ld */
      if(op==58u&&((word&3u)!=0u||!ra)){rc=-1311;break;}
      const uint64_t ea=(ra?c->gpr[ra]:0u)+
@@ -108,6 +152,24 @@ int ar_m71_signed_ppu_interpret(const uint8_t*d,size_t len,ppu_context*c,
      uint64_t val=0;
      if(ar_ppu_rldicl(word,c->gpr[rt],&val)){rc=-1311;break;}
      c->gpr[ra]=val;
+   }else if(op==31u &&
+             (((word>>1)&1023u)==0u || ((word>>1)&1023u)==32u)){
+     /* cmp / cmpl register, BF=CR field and L=64-bit selector. */
+     if(word&0x00400001u){rc=-1311;break;} /* reserved bit or Rc */
+     const unsigned bf=(word>>23)&7u,wide=(word>>21)&1u;
+     guest_compare(c,bf,((word>>1)&1023u)==0u,
+                   wide,c->gpr[ra],c->gpr[rb]);
+   }else if(op==16u){ /* bc / bcl: CR, CTR and AA/LK semantics */
+     const unsigned bo=(word>>21)&31u,bi=(word>>16)&31u;
+     int taken=0;
+     if(guest_branch_test(c,bo,bi,1u,&taken)){rc=-1311;break;}
+     if(word&1u)c->lr=next; /* LK applies even when branch not taken */
+     if(taken){
+       const int64_t delta=(int16_t)(word&0xfffcu);
+       const int64_t dest=(word&2u)?delta:((int64_t)pc+delta);
+       if(dest<0 || !executable(seg,used,(uint64_t)dest)){rc=-1312;break;}
+       next=(uint64_t)dest;out[14]++;
+     }
    }else if(op==18u){ /* b/bl + AA */
      int64_t delta=(int64_t)(word&0x03fffffcu);
      if(delta&0x02000000)delta-=0x04000000;
@@ -115,29 +177,35 @@ int ar_m71_signed_ppu_interpret(const uint8_t*d,size_t len,ppu_context*c,
      if(dest<0 || !executable(seg,used,(uint64_t)dest)){rc=-1312;break;}
      if(word&1u)c->lr=next;
      next=(uint64_t)dest;out[14]++;
-   }else if(op==19u && ((word>>1)&1023u)==16u){ /* blr */
-     if(word!=0x4e800020u){rc=-1311;break;}
+   }else if(op==19u && ((word>>1)&1023u)==16u){ /* bclr: CR and LR */
+     const unsigned bo=(word>>21)&31u,bi=(word>>16)&31u;
+     int taken=0;
+     if(guest_branch_test(c,bo,bi,1u,&taken)){rc=-1311;break;}
      const uint64_t target=c->lr&~UINT64_C(3);
-     if(!executable(seg,used,target)){rc=-1312;break;}
-     next=target;out[13]++;
-   }else if(op==19u && ((word>>1)&1023u)==528u){ /* bctr/bctrl */
-     if(word!=0x4e800420u && word!=0x4e800421u){rc=-1311;break;}
-     const uint64_t target=c->ctr&~UINT64_C(3);
-     if(executable(seg,used,target)){
-       if(word&1u)c->lr=next;
+     if(word&1u)c->lr=next; /* bclrl updates LR even if not taken */
+     if(taken){
+       if(!executable(seg,used,target)){rc=-1312;break;}
        next=target;out[13]++;
-     }else if((word&1u) && nid && c->gpr[12]==guest_stub &&
+     }
+   }else if(op==19u && ((word>>1)&1023u)==528u){ /* bcctr: CR and CTR */
+     const unsigned bo=(word>>21)&31u,bi=(word>>16)&31u;
+     int taken=0;
+     if(guest_branch_test(c,bo,bi,0u,&taken)){rc=-1311;break;}
+     const uint64_t target=c->ctr&~UINT64_C(3);
+     if(word&1u)c->lr=next;
+     if(taken && executable(seg,used,target)){
+       next=target;out[13]++;
+     }else if(taken && (word&1u) && word==0x4e800421u &&
+              nid && c->gpr[12]==guest_stub &&
               (uint32_t)c->ctr==ar_read32(guest_stub) &&
               (uint32_t)c->gpr[2]==ar_read32((uint64_t)guest_stub+4u) &&
               ar_last_error()==AR_OK){
-       /* In the real PS3 CRT the two code words have been loaded as an OPD.
-        * Call only the verified NID already bound to the native HLE table. */
-       c->lr=next;
+       /* Only the actual private PRX import can reach native TLS HLE. */
        const int hle=ar_run(c,guest_stub,32u);
        if(hle!=AR_OK){rc=-1315;fail_ea=(uint32_t)hle;break;}
        c->gpr[2]=toc;
        out[4]++;out[13]++;
-     }else{rc=-1314;fail_ea=target;break;}
+     }else if(taken){rc=-1314;fail_ea=target;break;}
    }else if(op==31u && ((word>>1)&1023u)==444u && !(word&1u)){
      c->gpr[ra]=c->gpr[rt]|c->gpr[rb]; /* or / mr */
    }else if(op==31u && ((word>>1)&1023u)==339u && !(word&1u)){
