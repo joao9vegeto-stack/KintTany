@@ -184,20 +184,31 @@ static int m51_guest_textured_quad_palette_ex(unsigned swizzled,
              * This path keeps the same guest NV40 shader and GPU colour RT. */
             rsx_draw_engine_method(NV4097_SET_DEPTH_TEST_ENABLE,0u);
             rsx_draw_engine_method(NV4097_SET_DEPTH_MASK,0u);
-            /* M5.5.1 device -528: register 0x032C was left ZERO, so
-             * pass 1's REPLACE did not write ref1; pass 3 EQUAL ref1
-             * then rejected all fragments. Explicitly permit 8 bits. */
-            rsx_draw_engine_method(M55_NV4097_SET_STENCIL_MASK,0xffu);
+            /* M5.5 always writes FF. M5.6 independently exercises write
+             * masks 0F/F0 and compare masks FF/0F, on real NV40 shaders. */
+            static const uint32_t m56_ref[7] = {
+                0xa5u,0xa5u,0x05u,0xb0u,0xb5u,0x05u,0x05u
+            };
+            uint32_t ref=(depth_mode==4u ? 2u : 1u);
+            uint32_t write_mask=0xffu, read_mask=0xffu;
+            unsigned always=(depth_mode==3u);
+            if(depth_mode>=6u && depth_mode<=12u) {
+                unsigned j=depth_mode-6u;
+                ref=m56_ref[j];
+                always=(j==0u || j==3u);
+                write_mask=(j==0u ? 0x0fu : (j==3u ? 0xf0u : 0xffu));
+                read_mask=(j==6u ? 0x0fu : 0xffu);
+            }
+            rsx_draw_engine_method(M55_NV4097_SET_STENCIL_MASK,write_mask);
             rsx_draw_engine_method(NV4097_SET_STENCIL_TEST_ENABLE,1u);
             rsx_draw_engine_method(NV4097_SET_STENCIL_FUNC,
-                                   depth_mode==3u ? 0x0207u : 0x0202u);
-            rsx_draw_engine_method(NV4097_SET_STENCIL_FUNC_REF,
-                                   depth_mode==4u ? 2u : 1u);
-            rsx_draw_engine_method(NV4097_SET_STENCIL_FUNC_MASK,0xffu);
+                                   always ? 0x0207u : 0x0202u);
+            rsx_draw_engine_method(NV4097_SET_STENCIL_FUNC_REF,ref);
+            rsx_draw_engine_method(NV4097_SET_STENCIL_FUNC_MASK,read_mask);
             rsx_draw_engine_method(NV4097_SET_STENCIL_OP_FAIL,0x1e00u);
             rsx_draw_engine_method(NV4097_SET_STENCIL_OP_ZFAIL,0x1e00u);
             rsx_draw_engine_method(NV4097_SET_STENCIL_OP_ZPASS,
-                                   depth_mode==3u ? 0x1e01u : 0x1e00u);
+                                   always ? 0x1e01u : 0x1e00u);
         } else {
             rsx_draw_engine_method(NV4097_SET_STENCIL_TEST_ENABLE,0u);
         }
@@ -210,9 +221,11 @@ static int m51_guest_textured_quad_palette_ex(unsigned swizzled,
     rsx_draw_engine_method(NV4097_SET_COLOR_CLEAR_VALUE,0xff101820u);
     /* phase 1 clears both depth and colour; phases 2/3 MUST load
      * them unchanged or occlusion could not be tested. */
-    if (depth_mode!=2u && depth_mode!=4u && depth_mode!=5u)
+    /* Only the FIRST pass of each probe may clear depth/stencil. */
+    if (depth_mode==0u || depth_mode==1u ||
+        depth_mode==3u || depth_mode==6u)
         rsx_draw_engine_method(NV4097_CLEAR_SURFACE,
-                               depth_mode==3u ? 0xf2u :
+                               (depth_mode==3u || depth_mode==6u) ? 0xf2u :
                                (depth_mode ? 0xf1u : 0xf0u));
     rsx_draw_engine_method(NV4097_SET_COLOR_MASK,0x01010101u);
     rsx_draw_engine_method(NV4097_SET_CULL_FACE_ENABLE,0u);
@@ -455,6 +468,40 @@ int ar_probe_m55_guest_stencil_mask(unsigned swizzled,
     *stencil_draws=ar_probe_m55_stencil_draws();
     if(*stencil_draws!=3u) return -540;
     if(*guest_total!=3u||*metal_total!=3u) return -541;
+    *phase=0u;
+    return 0;
+}
+
+/* M5.6: full-screen palette draws make every stencil bitmask result
+ * observable at four actual GPU pixels, not inferred from state alone.
+ * Z24S8 clears only once: 05 -> B5, masked compares reject/accept. */
+int ar_probe_m56_guest_stencil_bitmasks(unsigned swizzled,
+       uint32_t pixels[4], unsigned *phase, unsigned *guest_total,
+       unsigned *metal_total, unsigned *stencil_draws) {
+    if(!pixels||!phase||!guest_total||!metal_total||!stencil_draws) return -601;
+    *phase=*guest_total=*metal_total=*stencil_draws=0u;
+    memset(pixels,0,4u*sizeof(*pixels));
+    static const unsigned palette[7]={0u,1u,2u,3u,0u,1u,2u};
+    static const unsigned expected[7]={0u,0u,2u,3u,0u,0u,2u};
+    ar_probe_m55_reset_stencil_draws();
+    for(unsigned i=0;i<7u;i++) {
+        unsigned guest=0u, encoded=0u;
+        uint32_t shader[4]={0u};
+        *phase=i+1u;
+        int rc=m51_guest_textured_quad_palette_ex(
+            swizzled,palette[i],0u,M51_RT_OFFSET,0.0f,
+            6u+i,pixels,&encoded,&guest,shader);
+        *guest_total+=guest;
+        *metal_total+=encoded;
+        *stencil_draws=ar_probe_m55_stencil_draws();
+        if(rc) return rc;
+        if(guest!=1u || encoded!=1u) return -610-(int)i;
+        for(unsigned q=0;q<4u;q++)
+            if(pixels[q]!=m51_colors[(q+expected[i])&3u])
+                return -620-(int)(i*4u+q);
+    }
+    if(*stencil_draws!=7u) return -660;
+    if(*guest_total!=7u || *metal_total!=7u) return -661;
     *phase=0u;
     return 0;
 }

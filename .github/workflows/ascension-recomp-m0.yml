@@ -1,4 +1,4 @@
-name: AscensionRecomp M5.5.2 - enable RSX stencil write mask for real Metal REPLACE
+name: AscensionRecomp M5.6 - RSX stencil partial read/write GPU validation
 
 on:
   push:
@@ -105,6 +105,14 @@ jobs:
             -o m552-stencil-host
           ./m552-stencil-host 2>&1 | tee m552-stencil-host.log
           grep -Fxq 'M5.5.2 stencil mask register PASS' m552-stencil-host.log
+      - name: M5.6 verify independent NV4097 stencil read/write registers on host
+        run: |
+          set -euo pipefail
+          clang -std=c11 -O2 -Wall -Wextra -I upstream/include -I upstream/libs/video \
+            tests/host_m56_stencil_masks.c upstream/libs/video/rsx_dispatch.c \
+            -o m56-stencil-host
+          ./m56-stencil-host 2>&1 | tee m56-stencil-host.log
+          grep -Fxq 'M5.6 independent RSX stencil masks PASS' m56-stencil-host.log
       - name: M5.0 run synthetic PPU LV2 integrated boot smoke
         run: |
           set -euo pipefail
@@ -339,9 +347,9 @@ jobs:
         run: |
           set -euo pipefail
           bash tools/build_ios_probe_ipa.sh 2>&1 | tee m41-build-ipa.log
-          test -s AscensionRecompProbe-0.5.8-unsigned.ipa
-          /usr/libexec/PlistBuddy -c 'Print CFBundleShortVersionString' ios-probe/Payload/AscensionRecompProbe.app/Info.plist | grep -Fx 0.5.8
-          /usr/bin/unzip -t AscensionRecompProbe-0.5.8-unsigned.ipa | tee m42-ipa-integrity.log
+          test -s AscensionRecompProbe-0.5.9-unsigned.ipa
+          /usr/libexec/PlistBuddy -c 'Print CFBundleShortVersionString' ios-probe/Payload/AscensionRecompProbe.app/Info.plist | grep -Fx 0.5.9
+          /usr/bin/unzip -t AscensionRecompProbe-0.5.9-unsigned.ipa | tee m42-ipa-integrity.log
           xcrun nm -g ios-probe/Payload/AscensionRecompProbe.app/AscensionRecompProbe | grep -E '(_rsx_metal_backend_present|_rsx_metal_backend_init|_OBJC_CLASS_\\$_ARMetalView)' > m42-runtime-link-symbols.txt || true
           grep -q _rsx_metal_backend_init m39-metal-symbols.txt
           echo 'M4.2: actual GPU clear + presentDrawable + waitUntilCompleted route linked in iOS app; requires on-device screenshot.' > m42-status.txt
@@ -367,6 +375,8 @@ jobs:
           grep -q '_ar_probe_m54_depth_draws' m43-probe-linked-symbols.txt
           grep -q '_ar_probe_m55_guest_stencil_mask' m43-probe-linked-symbols.txt
           grep -q '_ar_probe_m55_stencil_draws' m43-probe-linked-symbols.txt
+          grep -q '_ar_probe_m56_guest_stencil_bitmasks' m43-probe-linked-symbols.txt
+          echo 'M5.6: 7 RSX/Metal GPU stencil bitmask passes (0F/F0 writes, FF/0F reads); native phone proof pending.' > m56-status.txt
           echo 'M5.5.2: fix physical iPhone phase-3 -528 by writing NV4097 0x032C stencil writeMask=0xff. Native GPU validation pending.' > m55-status.txt
           echo 'M5.4.1: fixed conditional depth enable — Z24S8 LESS must stay on until draw, video still required.' > m54-status.txt
           echo 'M5.3: 2 RSX GPU guest draws; source A render target reused as TEX0 surface view in pass B; on-device test needed.' > m53-status.txt
@@ -385,7 +395,7 @@ jobs:
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: AscensionRecomp-M5.5.2-native-RSX-stencil-evidence
+          name: AscensionRecomp-M5.6-native-stencil-bitmasks-evidence
           if-no-files-found: warn
           retention-days: 14
           path: |
@@ -476,6 +486,8 @@ jobs:
             m410-status.txt
             m513-nv40-host.log
             m552-stencil-host.log
+            m56-stencil-host.log
+            m56-status.txt
             m55-status.txt
             m54-status.txt
             m53-status.txt
@@ -491,7 +503,7 @@ jobs:
             m50-ios-shader-archive-sha256.txt
             m50-ios-shader-availability-symbol.txt
             build-ios-runtime/libAscensionRSXGuest-ios-arm64.a
-            AscensionRecompProbe-0.5.8-unsigned.ipa
+            AscensionRecompProbe-0.5.9-unsigned.ipa
             m40-ios-layer-view.o
             build-ios-runtime/libps3recomp_runtime.a
             ios-ppu-core/libAscensionPPUCore-ios-arm64.a
