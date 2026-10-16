@@ -74,7 +74,7 @@ def patch_metal(s):
     a = "    MTLWinding  winding;\n} EngPipeline;"
     if s.count(a) != 1:
         raise ValueError("pinned Metal PSO layout changed")
-    s = s.replace(a, "    MTLWinding  winding;\n    u8 ar_m51_tex0; /* genuine translated fragment TEX0 */\n    u8 ar_m54_depth_less; /* genuine depth LESS + write pipeline */\n    u8 ar_m55_stencil; /* guest RSX stencil test pipeline */\n    u8 ar_m57_blend; /* native blend */\n    u8 ar_m57_red_mask; /* R-only write */\n} EngPipeline;", 1)
+    s = s.replace(a, "    MTLWinding  winding;\n    u8 ar_m51_tex0; /* genuine translated fragment TEX0 */\n    u8 ar_m54_depth_less; /* genuine depth LESS + write pipeline */\n    u8 ar_m55_stencil; /* guest RSX stencil test pipeline */\n    u8 ar_m57_blend; /* native blend */\n    u8 ar_m57_red_mask; /* R-only write */\n    u8 ar_m58_alpha_test; /* actual translated FP discard */\n} EngPipeline;", 1)
     a = "static u32 s_eng_pipe_count;"
     if s.count(a) != 1:
         raise ValueError("pinned Metal PSO cache changed")
@@ -92,6 +92,9 @@ static u32 ar_m57_blend_draws_encoded, ar_m57_red_mask_draws_encoded;
 void ar_probe_m57_reset_draws(void) { ar_m57_blend_draws_encoded=ar_m57_red_mask_draws_encoded=0u; }
 u32 ar_probe_m57_blend_draws(void) { return ar_m57_blend_draws_encoded; }
 u32 ar_probe_m57_red_mask_draws(void) { return ar_m57_red_mask_draws_encoded; }
+static u32 ar_m58_alpha_draws_encoded;
+void ar_probe_m58_reset_alpha_draws(void) { ar_m58_alpha_draws_encoded=0u; }
+u32 ar_probe_m58_alpha_draws(void) { return ar_m58_alpha_draws_encoded; }
 """, 1)
     a = "    s_eng_pipe[slot].pso = pso;"
     if s.count(a) != 1:
@@ -116,6 +119,13 @@ u32 ar_probe_m57_red_mask_draws(void) { return ar_m57_red_mask_draws_encoded; }
             (rs->sf_rgb==0u && rs->sf_a==0u));
     s_eng_pipe[slot].ar_m57_red_mask =
         rs->color_mask==0x00010000u && !rs->blend_enable;
+    /* Confirm this PSO uses the translated fragment program that
+     * actually contains dynamic alpha comparison + GPU discard. */
+    s_eng_pipe[slot].ar_m58_alpha_test =
+        rs->alpha_test_enable &&
+        (rs->alpha_func==0x0204u || rs->alpha_func==0x0201u) &&
+        strstr(ps_hlsl, "fp_alpha.x") != NULL &&
+        strstr(ps_hlsl, "discard;") != NULL;
 """, 1)
     a = "vertexStart:0 vertexCount:r->vertex_count];"
     if s.count(a) != 1:
@@ -133,6 +143,9 @@ u32 ar_probe_m57_red_mask_draws(void) { return ar_m57_red_mask_draws_encoded; }
         ar_m57_blend_draws_encoded++;
     if(p->ar_m51_tex0 && p->ar_m57_red_mask && r->tex[0] && eng_obj(r->tex[0]))
         ar_m57_red_mask_draws_encoded++;
+    if(p->ar_m51_tex0 && p->ar_m58_alpha_test &&
+       r->tex[0] && eng_obj(r->tex[0]))
+        ar_m58_alpha_draws_encoded++;
 """, 1)
     return s
 

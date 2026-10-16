@@ -47,6 +47,9 @@ static const uint32_t m51_colors[4] = {
 };
 /* M5.7 synchronous synthetic-only state; 0 preserves earlier GPU routes. */
 static unsigned m57_blend_mode;
+/* M5.8 changes only the diagnostic synthetic guest TEX0 draw route.
+ * 0 = no alpha fixture; 1 = opaque baseline; 2..5 = alpha compare. */
+static unsigned m58_alpha_phase;
 static uint32_t m51_word(float f) {
     uint32_t v=0; memcpy(&v, &f, sizeof(v)); return v;
 }
@@ -69,6 +72,7 @@ static void m51_cleanup(void) {
     rsx_draw_engine_method(NV4097_SET_DEPTH_TEST_ENABLE,0u);
     rsx_draw_engine_method(NV4097_SET_DEPTH_MASK,0u);
     rsx_draw_engine_method(NV4097_SET_STENCIL_TEST_ENABLE,0u);
+    rsx_draw_engine_method(NV4097_SET_ALPHA_TEST_ENABLE,0u);
     rsx_draw_engine_method(M55_NV4097_SET_STENCIL_MASK,0u);
     rsx_draw_engine_method(NV4097_SET_SURFACE_FORMAT,0x5u);
     rsx_draw_engine_method(NV4097_SET_VERTEX_DATA_ARRAY_FORMAT + 8u*4u,0u);
@@ -105,7 +109,11 @@ static int m51_guest_textured_quad_palette_ex(unsigned swizzled,
         unsigned color=((x>=4u) + (y>=4u ? 2u : 0u) + palette) & 3u;
         unsigned i=swizzled ? rsx_swizzle_offset(x,y,3u,3u) : y*M51_TEX_W+x;
         uint8_t *d=texture+i*4u;
-        d[0]=colors[color][3]; d[1]=colors[color][0];
+        /* A channel in guest PS3 A8R8G8B8: M5.8 makes left-half
+         * transparent and right-half opaque (both memory layouts).
+         * Discarded fragments must NOT overwrite the previous surface. */
+        d[0]=m58_alpha_phase>=2u ? (x>=4u ? 255u : 0u) : colors[color][3];
+        d[1]=colors[color][0];
         d[2]=colors[color][1]; d[3]=colors[color][2];
     }
 
@@ -226,13 +234,26 @@ static int m51_guest_textured_quad_palette_ex(unsigned swizzled,
     /* Only the FIRST pass of each probe may clear depth/stencil. */
     if ((depth_mode==0u || depth_mode==1u ||
          depth_mode==3u || depth_mode==6u) &&
-        (!m57_blend_mode || m57_blend_mode==1u || depth_mode))
+        (!m57_blend_mode || m57_blend_mode==1u || depth_mode) &&
+        (!m58_alpha_phase || m58_alpha_phase==1u))
         rsx_draw_engine_method(NV4097_CLEAR_SURFACE,
                                (depth_mode==3u || depth_mode==6u) ? 0xf2u :
                                (depth_mode ? 0xf1u : 0xf0u));
     rsx_draw_engine_method(NV4097_SET_COLOR_MASK,
               m57_blend_mode==3u ? 0x00010000u : 0x01010101u);
     rsx_draw_engine_method(NV4097_SET_CULL_FACE_ENABLE,0u);
+    /* The actual guest alpha test is implemented in the translated FP.
+     * GREATER/LESS and the dynamic ref must gate RGBA pixel writes. */
+    if(m58_alpha_phase>=2u) {
+        static const uint32_t func[4]={0x0204u,0x0201u,0x0204u,0x0204u};
+        static const uint32_t ref[4]={128u,128u,255u,0u};
+        const unsigned i=m58_alpha_phase-2u;
+        rsx_draw_engine_method(NV4097_SET_ALPHA_FUNC,func[i]);
+        rsx_draw_engine_method(NV4097_SET_ALPHA_REF,ref[i]);
+        rsx_draw_engine_method(NV4097_SET_ALPHA_TEST_ENABLE,1u);
+    } else {
+        rsx_draw_engine_method(NV4097_SET_ALPHA_TEST_ENABLE,0u);
+    }
     /* M5.4.1: Do NOT silently disable depth after configuring Z24S8!
      * Legacy M5.1-M5.3 still issue the exact old depth-disable command,
      * whereas M5.4 must keep LESS+write enabled across all 3 draws.
@@ -279,6 +300,7 @@ static int m51_guest_textured_quad_palette_ex(unsigned swizzled,
     /* Real blended results can have duplicate colours; exact per-pass
      * readback checks are performed in the M5.7 outer GPU test. */
     if(m57_blend_mode)return 0;
+    if(m58_alpha_phase)return 0; /* M5.8 checks exact per-pass GPU pixels */
     /* Require the actual guest fragment program to sample four DISTINCT
      * expected texels, not return a constant/fixed shader or background.
      * Compare as a colour set so raster Y orientation is visible separately. */
@@ -559,4 +581,48 @@ int ar_probe_m57_guest_blend_mask(unsigned swizzled,uint32_t pixels[4],
     if(*blend_draws!=2u||*red_draws!=1u)return -750;
     if(*guest_total!=4u||*metal_total!=4u)return -751;
     *phase=0u;return 0;
+}
+
+/* M5.8 alpha testing through real NV4097 -> guest TEX0 shader -> Metal.
+ * Five phase GPU proof, each checks four ordered target pixels after flush:
+ * 1 opaque baseline, 2 GREATER 128, 3 LESS 128, 4 GREATER 255
+ * rejects everything, 5 GREATER 0 accepts only opaque fragments.
+ * All phases 2..5 preserve colour and depth/stencil targets from phase 1. */
+extern void ar_probe_m58_reset_alpha_draws(void);
+extern uint32_t ar_probe_m58_alpha_draws(void);
+int ar_probe_m58_guest_alpha_test(unsigned swizzled,uint32_t pixels[4],
+ unsigned *phase,unsigned *guest_total,unsigned *metal_total,
+ unsigned *alpha_draws) {
+    if(!pixels||!phase||!guest_total||!metal_total||!alpha_draws)return -801;
+    *phase=*guest_total=*metal_total=*alpha_draws=0u;
+    memset(pixels,0,4u*sizeof(*pixels));
+    static const unsigned palettes[5]={0u,1u,2u,3u,3u};
+    static const uint32_t expected[5][4]={
+      {0xffff0000u,0xff00ff00u,0xff0000ffu,0xffffff00u},
+      {0xffff0000u,0xff0000ffu,0xff0000ffu,0xffff0000u},
+      {0xff0000ffu,0xff0000ffu,0xffff0000u,0xffff0000u},
+      {0xff0000ffu,0xff0000ffu,0xffff0000u,0xffff0000u},
+      {0xff0000ffu,0xffff0000u,0xffff0000u,0xff0000ffu}
+    };
+    ar_probe_m58_reset_alpha_draws();
+    for(unsigned i=0;i<5u;i++) {
+        uint32_t shader[4]={0u};
+        unsigned guest=0u,encoded=0u;
+        *phase=i+1u;
+        m58_alpha_phase=i+1u;
+        const int rc=m51_guest_textured_quad_palette_ex(
+          swizzled,palettes[i],0u,M51_RT_OFFSET,0.0f,0u,
+          pixels,&encoded,&guest,shader);
+        m58_alpha_phase=0u; /* rollback fixture even on failed draw */
+        *guest_total+=guest;*metal_total+=encoded;
+        *alpha_draws=ar_probe_m58_alpha_draws();
+        if(rc)return rc;
+        if(guest!=1u||encoded!=1u)return -810-(int)i;
+        for(unsigned q=0;q<4u;q++)
+            if(pixels[q]!=expected[i][q])return -820-(int)(i*4u+q);
+    }
+    if(*alpha_draws!=4u)return -850;
+    if(*guest_total!=5u||*metal_total!=5u)return -851;
+    *phase=0u;
+    return 0;
 }

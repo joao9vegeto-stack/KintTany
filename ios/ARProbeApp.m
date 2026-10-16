@@ -27,6 +27,9 @@ extern int ar_probe_m56_guest_stencil_bitmasks(unsigned swizzled,
 extern int ar_probe_m57_guest_blend_mask(unsigned swizzled,unsigned int pixels[4],
     unsigned *phase,unsigned *guest_total,unsigned *metal_total,
     unsigned *blend_draws,unsigned *red_draws);
+extern int ar_probe_m58_guest_alpha_test(unsigned swizzled,unsigned int pixels[4],
+    unsigned *phase,unsigned *guest_total,unsigned *metal_total,
+    unsigned *alpha_draws);
 extern void ar_probe_vm_shutdown(void);
 extern int ar_probe_rsx_clear_flip(unsigned cycle, unsigned int *expected, unsigned int *observed);
 extern int ar_probe_rsx_triangle(unsigned int *background, unsigned int *sample);
@@ -50,6 +53,7 @@ extern int ar_probe_rsx_texture_cache_mutation(unsigned swizzled,unsigned int ou
 @property(nonatomic,assign) NSUInteger m55Attempts;
 @property(nonatomic,assign) NSUInteger m56Attempts;
 @property(nonatomic,assign) NSUInteger m57Attempts;
+@property(nonatomic,assign) NSUInteger m58Attempts;
 @property(nonatomic,assign) NSUInteger successfulFrames;
 @property(nonatomic,assign) NSUInteger guestAttempts;
 @property(nonatomic,assign) NSUInteger indexedAttempts;
@@ -294,6 +298,24 @@ extern int ar_probe_rsx_texture_cache_mutation(unsigned swizzled,unsigned int ou
         [blendButton.leadingAnchor constraintGreaterThanOrEqualToAnchor:controller.view.leadingAnchor constant:16],
         [blendButton.trailingAnchor constraintLessThanOrEqualToAnchor:controller.view.trailingAnchor constant:-16],
         [blendButton.heightAnchor constraintEqualToConstant:46]
+    ]];
+    UIButton *alphaButton=[UIButton buttonWithType:UIButtonTypeSystem];
+    alphaButton.translatesAutoresizingMaskIntoConstraints=NO;
+    [alphaButton setTitle:@"M5.8 · Transparência ALPHA RSX" forState:UIControlStateNormal];
+    [alphaButton setTitleColor:[UIColor whiteColor] forState:UIControlStateNormal];
+    alphaButton.backgroundColor=[[UIColor blackColor] colorWithAlphaComponent:0.82];
+    alphaButton.titleLabel.font=[UIFont systemFontOfSize:14 weight:UIFontWeightSemibold];
+    alphaButton.layer.cornerRadius=10;
+    [alphaButton addTarget:self action:@selector(testM58AlphaTest:)
+          forControlEvents:UIControlEventTouchUpInside];
+    [controller.view addSubview:alphaButton];
+    [NSLayoutConstraint activateConstraints:@[
+        [alphaButton.centerXAnchor constraintEqualToAnchor:controller.view.centerXAnchor],
+        [alphaButton.bottomAnchor constraintEqualToAnchor:blendButton.topAnchor constant:-10],
+        [alphaButton.widthAnchor constraintLessThanOrEqualToConstant:350],
+        [alphaButton.leadingAnchor constraintGreaterThanOrEqualToAnchor:controller.view.leadingAnchor constant:16],
+        [alphaButton.trailingAnchor constraintLessThanOrEqualToAnchor:controller.view.trailingAnchor constant:-16],
+        [alphaButton.heightAnchor constraintEqualToConstant:46]
     ]];
     self.window.rootViewController=controller;
     [self.window makeKeyAndVisible];
@@ -578,6 +600,34 @@ extern int ar_probe_rsx_texture_cache_mutation(unsigned swizzled,unsigned int ou
              "Pixels: %08X %08X %08X %08X\n"
              "M5.6/M5.5/M5.4 permanecem disponíveis.",
              rc,phase,sw?@"SWIZZLED":@"LINEAR",guest,metal,blend,masked,
+             p[0],p[1],p[2],p[3]];
+    }
+}
+- (void)testM58AlphaTest:(UIButton *)sender {
+    (void)sender;
+    if(!self.ready || self.shaderBusy)return;
+    unsigned sw=(unsigned)((self.m58Attempts++ & 1u)!=0u);
+    unsigned int p[4]={0},phase=0,guest=0,metal=0,alpha=0;
+    self.status.text=@"M5.8: 5 DRAWs com alpha GREATER/LESS...";
+    const int rc=ar_probe_m58_guest_alpha_test(
+       sw,p,&phase,&guest,&metal,&alpha);
+    if(!rc) {
+        self.status.text=[NSString stringWithFormat:
+            @"M5.8 ALPHA RSX → Metal: OK\n"
+             "Layout %@ · 5 quadros GPU verificados\n"
+             "DRAW RSX/Metal/alpha: %u/%u/%u\n"
+             "GREATER/LESS e refs 0/128/255: OK\n"
+             "Pixels: %08X %08X %08X %08X\n"
+             "Aperte novamente para alternar layout.",
+             sw?@"SWIZZLED":@"LINEAR",guest,metal,alpha,
+             p[0],p[1],p[2],p[3]];
+    } else {
+        self.status.text=[NSString stringWithFormat:
+            @"M5.8 ALPHA: FALHA %d · fase %u\n"
+             "Layout %@ · DRAW RSX/Metal/alpha %u/%u/%u\n"
+             "Pixels: %08X %08X %08X %08X\n"
+             "M5.7/M5.6/M5.5 permanecem disponíveis.",
+             rc,phase,sw?@"SWIZZLED":@"LINEAR",guest,metal,alpha,
              p[0],p[1],p[2],p[3]];
     }
 }
