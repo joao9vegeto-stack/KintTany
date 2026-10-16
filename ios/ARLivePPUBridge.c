@@ -7,7 +7,7 @@
 #include <string.h>
 #include "ppu_bridge.h"
 #include "elf_image.h"
-#include "ppu_tls.h"
+#include "../runtime/ppu_tls.h" /* explicit project header, not upstream ppu_tls.h */
 
 extern int ar_private_import_match(const uint8_t*,size_t,uint32_t,uint32_t[4],char[48]);
 
