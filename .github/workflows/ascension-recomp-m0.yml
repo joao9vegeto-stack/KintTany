@@ -1,4 +1,4 @@
-name: AscensionRecomp M7.4.3 - explicit private AOT linker mode
+name: AscensionRecomp M7.4.4 - macOS Bash empty AOT args correction
 
 on:
   push:
