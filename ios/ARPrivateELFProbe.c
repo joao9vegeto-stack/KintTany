@@ -54,6 +54,113 @@ int ar_private_elf_inspect(const uint8_t*d,size_t len,uint32_t info[5]){
  return 0;
 }
 
+/* M6.7.3: identify the NID of a checked guest firmware import trampoline.
+ * ET_EXEC proc_prx_param (PT 0x60000002) describes libstub tables.
+ * This is read-only metadata; it DOES NOT bind, execute or fabricate HLE.
+ * 0=matched, -1=no match, -2=invalid ELF/arguments,
+ * -3=absent PRX params, -4=malformed import metadata. */
+int ar_private_import_match(const uint8_t*d,size_t len,uint32_t code_va,
+                            uint32_t result[4],char library[48]){
+ if(!result||!library)return -2;
+ memset(result,0,4u*sizeof(*result));memset(library,0,48u);
+ uint32_t inspected[5]={0};
+ if(!code_va||ar_private_elf_inspect(d,len,inspected))return -2;
+ const uint64_t phoff=b64(d+32);
+ const unsigned phentsize=b16(d+54),phcount=b16(d+56);
+ segment ss[64]={0};unsigned used=0;
+ uint64_t prx_va=0;
+ for(unsigned i=0;i<phcount;i++){
+   const uint8_t*p=d+phoff+(uint64_t)i*phentsize;
+   const uint32_t type=b32(p);
+   if(type==1u){
+     const segment seg={b64(p+8),b64(p+16),b64(p+32),b64(p+40),b32(p+4)};
+     if(seg.mem && seg.size)ss[used++]=seg;
+   }else if(type==0x60000002u){
+     if(prx_va)return -4; /* ambiguous PRX parameter segments */
+     prx_va=b64(p+16);
+   }
+ }
+ if(!prx_va)return -3;
+ const uint8_t*hdr=lookup(d,len,ss,used,prx_va,32u,0);
+ if(!hdr||b32(hdr+4)!=0x1b434cecu)return -3;
+ const uint32_t first=b32(hdr+24),last=b32(hdr+28);
+ if(!first||last<=first||last-first>32768u)return -4;
+ typedef struct {
+   uint32_t nfunc,nid_va,stub_va,name_va;
+ } ar_libstub;
+ ar_libstub list[128]={0};unsigned nlibs=0;
+ uint32_t cursor=first;
+ while(cursor<last){
+   if(nlibs>=128u)return -4;
+   const uint8_t*q=lookup(d,len,ss,used,cursor,28u,0);
+   if(!q)return -4;
+   const unsigned stride=q[0];
+   if(stride<28u||stride>128u||stride>last-cursor)return -4;
+   list[nlibs].nfunc=b16(q+6);
+   list[nlibs].name_va=b32(q+16);
+   list[nlibs].nid_va=b32(q+20);
+   list[nlibs].stub_va=b32(q+24);
+   if(list[nlibs].nfunc>4096u)return -4;
+   nlibs++;
+   cursor+=stride;
+ }
+ if(cursor!=last)return -4;
+ result[3]=nlibs;
+ for(unsigned j=0;j<nlibs;j++){
+   const ar_libstub *entry=list+j;
+   if(!entry->nid_va||!entry->stub_va)continue;
+   unsigned count=entry->nfunc;
+   /* PSL1GHT/PRX images can encode nfunc=0; bound inferred spans. */
+   if(!count){
+     uint32_t closest_nid=UINT32_MAX,closest_stub=UINT32_MAX;
+     for(unsigned k=0;k<nlibs;k++){
+       if(list[k].nid_va>entry->nid_va&&
+          (!closest_nid||list[k].nid_va<closest_nid))
+          closest_nid=list[k].nid_va;
+       if(list[k].stub_va>entry->stub_va&&
+          (!closest_stub||list[k].stub_va<closest_stub))
+          closest_stub=list[k].stub_va;
+     }
+     if(closest_nid==UINT32_MAX)closest_nid=first;
+     if(closest_stub==UINT32_MAX)closest_stub=0u;
+     unsigned nid_count=(closest_nid>entry->nid_va &&
+                      (closest_nid-entry->nid_va)%4u==0u)
+                   ?(closest_nid-entry->nid_va)/4u:0u;
+     unsigned stub_count=(closest_stub>entry->stub_va &&
+                      (closest_stub-entry->stub_va)%4u==0u)
+                   ?(closest_stub-entry->stub_va)/4u:0u;
+     if(nid_count>4096u)nid_count=0u;
+     if(stub_count>4096u)stub_count=0u;
+     count=(nid_count&&stub_count)?(nid_count<stub_count?nid_count:stub_count):
+           (nid_count?nid_count:stub_count);
+   }
+   if(count>4096u)return -4;
+   for(unsigned i=0;i<count;i++){
+     const uint64_t addr=(uint64_t)entry->stub_va+4u*i;
+     const uint64_t nidaddr=(uint64_t)entry->nid_va+4u*i;
+     const uint8_t*pt=lookup(d,len,ss,used,addr,4u,0);
+     const uint8_t*pn=lookup(d,len,ss,used,nidaddr,4u,0);
+     if(!pt||!pn)return -4;
+     result[2]++;
+     if(b32(pt)!=code_va)continue;
+     result[0]=b32(pn);
+     result[1]=code_va;
+     /* A library name is optional, bounded and printable only. */
+     if(entry->name_va){
+       for(unsigned k=0;k<47u;k++){
+         const uint8_t*ch=lookup(d,len,ss,used,
+                                  (uint64_t)entry->name_va+k,1u,0);
+         if(!ch||!*ch)break;
+         if(*ch<0x20u||*ch>0x7eu)break;
+         library[k]=(char)*ch;
+       }
+     }
+     return 0;
+   }
+ }
+ return -1;
+}
+
 /* M6.0: no HLE/syscalls/stack/guest writes. Precisely four PowerPC64
  * instructions from an on-device, user-selected decrypted ELF.
  * This strict CPU probe is NOT a game boot or a general PPU emulator. */
@@ -710,6 +817,7 @@ static int m672_core(const uint8_t*d,size_t len,
   const uint64_t prior_r0=gpr[0];
   const uint64_t prior_r12=gpr[12];
   uint64_t load_va=0;
+  if(detail){detail[18]=(uint32_t)gpr[12];detail[19]=(uint32_t)(gpr[12]>>32);}
   out[7]=w;out[8]=pc;
   if(trace){
    unsigned ix=(trace[15]&3u);
