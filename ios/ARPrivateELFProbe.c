@@ -784,13 +784,61 @@ static uint32_t m672_region(const segment*s,unsigned n,uint64_t va,
  * The next branch is validated against ELF executable segments, and no
  * guest address becomes a native host pointer. Zero per-step stale EA. */
 /* M6.7: optional trace of bounded guest execution; no permission changes. */
+
+/* M6.7.4: real bounded main-thread TLS storage. PS3 guest pointers are
+ * only addressed through checked shadow mappings, never host pointers. */
+#define AR_TLS_START UINT64_C(0x0e000000)
+#define AR_TLS_SPACE 65536u
+#define AR_TLS_MAX 16384u
+static int ar_tls_read(const uint8_t*d,size_t len,const segment*s,unsigned n,
+ const m65_memory*m,const uint8_t*stack,uint64_t sb,const uint8_t*tls,
+ int ready,uint64_t va,unsigned width,uint64_t*out){
+ if(ready&&va>=AR_TLS_START&&within(va-AR_TLS_START,width,AR_TLS_SPACE)){
+   uint64_t v=0;
+   for(unsigned i=0;i<width;i++)v=(v<<8)|tls[(size_t)(va-AR_TLS_START)+i];
+   *out=v;return 0;
+ }
+ return m65_read_guest(d,len,s,n,m,stack,sb,va,width,out);
+}
+static int ar_tls_write(uint8_t*tls,int ready,uint64_t va,unsigned width,
+ uint64_t val){
+ if(!ready||va<AR_TLS_START||!within(va-AR_TLS_START,width,AR_TLS_SPACE))
+   return -1;
+ for(unsigned i=0;i<width;i++)
+   tls[(size_t)(va-AR_TLS_START)+i]=(uint8_t)(val>>(8u*(width-i-1u)));
+ return 0;
+}
+static int ar_tls_initialize(const uint8_t*d,size_t len,const segment*s,
+ unsigned n,const m65_memory*m,const uint8_t*stack,uint64_t sb,
+ uint8_t*tls,uint64_t gpr[32],uint32_t record[12]){
+ const uint64_t id=gpr[3],src=gpr[4],size=gpr[5],mem=gpr[6];
+ record[2]=(uint32_t)id;record[3]=(uint32_t)src;
+ record[4]=(uint32_t)size;record[5]=(uint32_t)mem;
+ if(gpr[13])return -1012;
+ if(!id||id>UINT32_MAX||src>UINT32_MAX||size>mem||mem>AR_TLS_MAX||
+    (size&&!src))return -1011;
+ for(uint64_t i=0;i<size;i++){
+   uint64_t value=0;
+   if(m65_read_guest(d,len,s,n,m,stack,sb,src+i,1u,&value))return -1013;
+   tls[i]=(uint8_t)value;
+ }
+ for(uint64_t i=size;i<mem;i++)tls[i]=0;
+ gpr[13]=AR_TLS_START+0x7000u;
+ gpr[3]=0; /* successful TLS image initialization (ABI CELL_OK) */
+ record[0]=1u;record[1]++;
+ record[6]=(uint32_t)gpr[13];record[7]=(uint32_t)size;
+ return 0;
+}
+
 static int m672_core(const uint8_t*d,size_t len,
                              const uint32_t info[5],uint32_t out[20],
-                             uint32_t trace[24],uint32_t detail[24]){
+                             uint32_t trace[24],uint32_t detail[24],
+                             uint32_t tls_record[12]){
  if(!d||!info||!out)return -980;
  memset(out,0,20*sizeof(*out));
  if(trace)memset(trace,0,24*sizeof(*trace));
  if(detail)memset(detail,0,24*sizeof(*detail));
+ if(tls_record)memset(tls_record,0,12*sizeof(*tls_record));
  uint32_t check[5]={0};
  if(ar_private_elf_inspect(d,len,check)||
     memcmp(info,check,sizeof(check)))return -981;
@@ -804,6 +852,8 @@ static int m672_core(const uint8_t*d,size_t len,
  }
  uint64_t gpr[32]={0};
  uint8_t stack[4096]={0};
+ uint8_t tls_buffer[AR_TLS_SPACE]={0};
+ int tls_ready=0;
  m65_memory guest={0};
  const uint64_t base=0x07000000u;
  gpr[1]=base+sizeof(stack);gpr[2]=info[2];
@@ -844,7 +894,7 @@ static int m672_core(const uint8_t*d,size_t len,
   }else if(op==32){
    const uint64_t va=(ra?gpr[ra]:0u)+(uint64_t)(int64_t)imm;
    uint64_t value=0;
-   if(m65_read_guest(d,len,ss,used,&guest,stack,base,va,4,&value)) {
+   if(ar_tls_read(d,len,ss,used,&guest,stack,base,tls_buffer,tls_ready,va,4,&value)) {
       out[10]=(uint32_t)va;out[16]=1u;return -1001;
    }
    load_va=va;gpr[rt]=value;
@@ -859,9 +909,11 @@ static int m672_core(const uint8_t*d,size_t len,
    if(!ra||(w&3u)>1u)return -986;
    int16_t ds=(int16_t)(w&0xfffcu);
    uint64_t va=gpr[ra]+(uint64_t)(int64_t)ds;
-   if(va<base||va>base+sizeof(stack)-8)return -987;
-   for(unsigned j=0;j<8;j++)
-      stack[(size_t)(va-base)+j]=(uint8_t)(gpr[rt]>>(56-8*j));
+   if(va>=base&&within(va-base,8u,sizeof(stack))){
+     for(unsigned j=0;j<8;j++)
+       stack[(size_t)(va-base)+j]=(uint8_t)(gpr[rt]>>(56-8*j));
+   }else if(!tls_record||ar_tls_write(tls_buffer,tls_ready,va,8u,gpr[rt]))
+     return -987;
    stores++;
    if((w&3u)==1u)gpr[ra]=va;
   }else if(op==18){
@@ -878,7 +930,7 @@ static int m672_core(const uint8_t*d,size_t len,
    const int16_t ds=(int16_t)(w&0xfffcu);
    const uint64_t va=gpr[ra]+(uint64_t)(int64_t)ds;
    uint64_t value=0;
-   if(m65_read_guest(d,len,ss,used,&guest,stack,base,va,8,&value)) {
+   if(ar_tls_read(d,len,ss,used,&guest,stack,base,tls_buffer,tls_ready,va,8,&value)) {
        out[10]=(uint32_t)va;out[16]=1u;return -1002;
    }
    load_va=va;gpr[rt]=value;
@@ -895,6 +947,9 @@ static int m672_core(const uint8_t*d,size_t len,
    if(va>=base&&within(va-base,4u,sizeof(stack))) {
        for(unsigned k=0;k<4u;k++)
           stack[(size_t)(va-base)+k]=(uint8_t)(v>>(24u-8u*k));
+   }else if(tls_record&&
+             !ar_tls_write(tls_buffer,tls_ready,va,4u,v)){
+     /* Authenticated guest TLS shadow, no host-pointer translation. */
    }else{
        const int rc=m65_store32(&guest,ss,used,va,v);
        if(rc) {
@@ -930,8 +985,28 @@ static int m672_core(const uint8_t*d,size_t len,
    const uint64_t dest=ctr&~UINT64_C(3);
    if(trace){trace[14]=pc;trace[5]=(uint32_t)gpr[0];
               trace[6]=(uint32_t)(gpr[0]>>32);}
-   if(dest>UINT32_MAX || !lookup(d,len,ss,used,dest,4,1))
-      return -1007; /* guest executable map validated */
+   if(dest>UINT32_MAX || !lookup(d,len,ss,used,dest,4,1)){
+      if(tls_record && w==0x4e800421u && gpr[12]<=UINT32_MAX &&
+         !tls_ready && gpr[0]==ctr){
+        uint32_t match[4]={0};char lib[48]={0};
+        const int recognized=ar_private_import_match(
+               d,len,(uint32_t)gpr[12],match,lib);
+        const uint8_t*stub=lookup(d,len,ss,used,gpr[12],8u,1u);
+        if(recognized==0 && match[0]==0x744680a2u &&
+           strcmp(lib,"sysPrxForUser")==0 && stub &&
+           b32(stub)==(uint32_t)ctr &&
+           b32(stub+4)==(uint32_t)gpr[2]){
+            const int rc=ar_tls_initialize(d,len,ss,used,&guest,stack,base,
+                                        tls_buffer,gpr,tls_record);
+            if(rc){tls_record[8]=(uint32_t)(-rc);return rc;}
+            tls_ready=1;lr=next;gpr[2]=info[2];
+            out[19]++;tls_record[10]=next;
+            pc=next;out[0]++;
+            continue; /* verified TLS initialized, return guest caller */
+        }
+      }
+      return -1007; /* other invalid jumps remain forbidden */
+   }
    if(w&1u)lr=next;
    next=(uint32_t)dest;
    out[19]++; /* indirect branches executed in this sandbox */
@@ -979,12 +1054,19 @@ static int m672_core(const uint8_t*d,size_t len,
 int ar_ppu_bootstrap_fortyeight_trace(const uint8_t*d,size_t len,
                              const uint32_t info[5],uint32_t out[20],
                              uint32_t trace[24]){
- return m672_core(d,len,info,out,trace,NULL);
+ return m672_core(d,len,info,out,trace,NULL,NULL);
 }
 int ar_ppu_bootstrap_fortyeight_trace_m672(const uint8_t*d,size_t len,
                              const uint32_t info[5],uint32_t out[20],
                              uint32_t trace[24],uint32_t detail[24]){
- return m672_core(d,len,info,out,trace,detail);
+ return m672_core(d,len,info,out,trace,detail,NULL);
+}
+/* New opt-in bounded TLS/HLE probe. Earlier APIs are unchanged. */
+int ar_ppu_bootstrap_fortyeight_trace_m674(const uint8_t*d,size_t len,
+                             const uint32_t info[5],uint32_t out[20],
+                             uint32_t trace[24],uint32_t detail[24],
+                             uint32_t tls_record[12]){
+ return m672_core(d,len,info,out,trace,detail,tls_record);
 }
 /* Preserve the M6.6 ABI and host regressions unchanged. */
 int ar_ppu_bootstrap_fortyeight(const uint8_t*d,size_t len,

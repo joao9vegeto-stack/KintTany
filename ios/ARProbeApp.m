@@ -25,6 +25,9 @@ extern int ar_ppu_bootstrap_fortyeight_trace(const unsigned char*,size_t,
                       const unsigned int[5],unsigned int[20],unsigned int[24]);
 extern int ar_ppu_bootstrap_fortyeight_trace_m672(const unsigned char*,size_t,
                       const unsigned int[5],unsigned int[20],unsigned int[24],unsigned int[24]);
+extern int ar_ppu_bootstrap_fortyeight_trace_m674(const unsigned char*,size_t,
+                      const unsigned int[5],unsigned int[20],unsigned int[24],
+                      unsigned int[24],unsigned int[12]);
 
 extern int rsx_metal_backend_init(unsigned int width, unsigned int height, const char* title);
 extern void rsx_metal_backend_shutdown(void);
@@ -390,7 +393,7 @@ extern int ar_probe_rsx_texture_cache_mutation(unsigned swizzled,unsigned int ou
     [controller.view addSubview:panel];
     UILabel *header=[UILabel new];
     header.translatesAutoresizingMaskIntoConstraints=NO;
-    header.text=@"ASCENSIONRECOMP   ·   M6.7.3";
+    header.text=@"ASCENSIONRECOMP   ·   M6.7.4";
     header.textColor=[UIColor colorWithRed:0.73 green:0.87 blue:1 alpha:1];
     header.font=[UIFont systemFontOfSize:12 weight:UIFontWeightBold];
     header.textAlignment=NSTextAlignmentCenter;
@@ -444,7 +447,7 @@ extern int ar_probe_rsx_texture_cache_mutation(unsigned swizzled,unsigned int ou
         hint.font=[UIFont systemFontOfSize:13 weight:UIFontWeightMedium];
         hint.textColor=[UIColor colorWithWhite:0.83 alpha:1];
         hint.text=i==0 ?
-             @"NPUA80918 · M6.7.3: até 48 instruções PPU, análise privada de importação/NID e destino protegido. Seu ELF não sai do iPhone." :
+             @"NPUA80918 · M6.7.4: bootstrap PPU com TLS real e HLE específico verificado; memória privada e diagnóstico copiável." :
              @"Diagnósticos RSX → Metal, do mais recente ao legado. Role para encontrar os testes anteriores.";
         [stack addArrangedSubview:hint];
         NSArray<UIButton *> *ordered=i==0 ? @[elfButton] : @[
@@ -971,10 +974,11 @@ extern int ar_probe_rsx_texture_cache_mutation(unsigned swizzled,unsigned int ou
     unsigned int cpu48[20]={0};
     unsigned int trace48[24]={0};
     unsigned int detail48[24]={0};
+    unsigned int tls48[12]={0};
     self.ppuReport=nil;
     self.ppuReportButton.enabled=NO;
-    const int rc48=ar_ppu_bootstrap_fortyeight_trace_m672(
-        data.bytes,data.length,info,cpu48,trace48,detail48);
+    const int rc48=ar_ppu_bootstrap_fortyeight_trace_m674(
+        data.bytes,data.length,info,cpu48,trace48,detail48,tls48);
     if(rc48){
        NSMutableString *recent=[NSMutableString string];
        for(unsigned i=0;i<4u && i<trace48[15];i++){
@@ -983,7 +987,7 @@ extern int ar_probe_rsx_texture_cache_mutation(unsigned swizzled,unsigned int ou
              i,trace48[16u+2u*slot],trace48[17u+2u*slot]];
        }
        self.ppuReport=[NSString stringWithFormat:
-          @"ASCENSIONRECOMP M6.7.3 / NPUA80918 / trace PPU privado\n"
+          @"ASCENSIONRECOMP M6.7.4 / NPUA80918 / trace PPU privado\n"
            "Resultado=%d · passos=%u/48 · PC=0x%08X · opcode=0x%08X\n"
            "CTR=0x%08X%08X · saltos indiretos=%u\n"
            "r0 atual=0x%08X%08X · alterações=%u\n"
@@ -1041,6 +1045,19 @@ extern int ar_probe_rsx_texture_cache_mutation(unsigned swizzled,unsigned int ou
             [extended appendString:
                 @"Nenhuma importação associada comprovada; não executar este destino.\n"];
        }
+       [extended appendFormat:
+        @"TLS HLE M6.7.4: inicializado=%u · chamadas=%u · motivo=%u\n"
+         "ABI: thread_id=0x%08X · seg=0x%08X · file=%u · mem=%u\n"
+         "TLS: r13=0x%08X · bytes copiados=%u · retorno PC=0x%08X\n",
+         tls48[0],tls48[1],tls48[8],
+         tls48[2],tls48[3],tls48[4],tls48[5],
+         tls48[6],tls48[7],tls48[10]];
+       if(tls48[0])
+         [extended appendString:
+           @"sys_initialize_tls HLE executada com imagem TLS copiada, BSS zerado e r13 configurado; não significa boot completo.\n"];
+       else if(rc48==-1011 || rc48==-1012 || rc48==-1013)
+         [extended appendString:
+           @"TLS recusado: parâmetros, thread já inicializada ou leitura de memória inválida. Não houve sucesso artificial.\n"];
        self.ppuReport=extended;
        self.ppuReportButton.enabled=YES;
        [self.ppuReportButton setTitle:@"Copiar diagnóstico PPU" forState:UIControlStateNormal];
@@ -1062,15 +1079,21 @@ extern int ar_probe_rsx_texture_cache_mutation(unsigned swizzled,unsigned int ou
            cpu48[7],faultDetail,trace48[0],trace48[1]];
        return;
     }
+    self.ppuReport=[NSString stringWithFormat:
+       @"ASCENSIONRECOMP M6.7.4 / NPUA80918\n"
+        "Resultado=0 · passos=%u/48 · sys_initialize_tls=%u · r13=0x%08X\n"
+        "TLS copiada=%u bytes; PPU48 ainda é um bootstrap limitado.\n",
+        cpu48[0],tls48[0],tls48[6],tls48[7]];
+    self.ppuReportButton.enabled=YES;
     self.status.text=[NSString stringWithFormat:
        @"M5.9 NPUA80918: ELF REAL VALIDADO\n"
         "%@\n"
         "%@\n"
-        "M6.6 PPU REAL 48/48: OK\n"
+        "M6.7.4 PPU REAL 48/48: OK · TLS=%u\n"
         "PC=0x%X · CTR=0x%08X%08X\n"
         "stores=%u · indiretos=%u · sombra=%u\n"
         "Execução limitada; SEM HLE/SPU/gameplay.",
-        legacyState,old40State,cpu48[2],cpu48[18],cpu48[17],
+        legacyState,old40State,tls48[0],cpu48[2],cpu48[18],cpu48[17],
         cpu48[5],cpu48[19],cpu48[15]];
   } @finally {
     if(scoped)[url stopAccessingSecurityScopedResource];
