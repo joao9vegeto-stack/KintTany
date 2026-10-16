@@ -393,7 +393,7 @@ extern int ar_probe_rsx_texture_cache_mutation(unsigned swizzled,unsigned int ou
     [controller.view addSubview:panel];
     UILabel *header=[UILabel new];
     header.translatesAutoresizingMaskIntoConstraints=NO;
-    header.text=@"ASCENSIONRECOMP   ·   M6.7.5";
+    header.text=@"ASCENSIONRECOMP   ·   M6.7.6";
     header.textColor=[UIColor colorWithRed:0.73 green:0.87 blue:1 alpha:1];
     header.font=[UIFont systemFontOfSize:12 weight:UIFontWeightBold];
     header.textAlignment=NSTextAlignmentCenter;
@@ -447,7 +447,7 @@ extern int ar_probe_rsx_texture_cache_mutation(unsigned swizzled,unsigned int ou
         hint.font=[UIFont systemFontOfSize:13 weight:UIFontWeightMedium];
         hint.textColor=[UIColor colorWithWhite:0.83 alpha:1];
         hint.text=i==0 ?
-             @"NPUA80918 · M6.7.5: entrada LV2 com PT_TLS real, HLE de TLS validada e CPU privado até 48 passos. ELF não sai do iPhone." :
+             @"NPUA80918 · M6.7.6: PT_TLS real e retorno PPC mtlr/blr verificado, com TLS e diagnósticos privados. ELF não sai do iPhone." :
              @"Diagnósticos RSX → Metal, do mais recente ao legado. Role para encontrar os testes anteriores.";
         [stack addArrangedSubview:hint];
         NSArray<UIButton *> *ordered=i==0 ? @[elfButton] : @[
@@ -987,7 +987,7 @@ extern int ar_probe_rsx_texture_cache_mutation(unsigned swizzled,unsigned int ou
              i,trace48[16u+2u*slot],trace48[17u+2u*slot]];
        }
        self.ppuReport=[NSString stringWithFormat:
-          @"ASCENSIONRECOMP M6.7.5 / NPUA80918 / trace PPU privado\n"
+          @"ASCENSIONRECOMP M6.7.6 / NPUA80918 / trace PPU privado\n"
            "Resultado=%d · passos=%u/48 · PC=0x%08X · opcode=0x%08X\n"
            "CTR=0x%08X%08X · saltos indiretos=%u\n"
            "r0 atual=0x%08X%08X · alterações=%u\n"
@@ -1046,20 +1046,25 @@ extern int ar_probe_rsx_texture_cache_mutation(unsigned swizzled,unsigned int ou
                 @"Nenhuma importação associada comprovada; não executar este destino.\n"];
        }
        [extended appendFormat:
-        @"TLS HLE M6.7.5: inicializado=%u · chamadas=%u · motivo=%u\n"
+        @"TLS HLE M6.7.6: inicializado=%u · chamadas=%u · motivo=%u\n"
          "ABI: thread_id=0x%08X · seg=0x%08X · file=%u · mem=%u\n"
          "TLS: r13=0x%08X · bytes copiados=%u · retorno PC=0x%08X\n"
-         "Entrada LV2: PT_TLS presente=%u · tamanho de página=0x%08X\n",
+         "Entrada LV2: PT_TLS presente=%u · tamanho de página=0x%08X\n"
+          "Último mtlr: PC=0x%08X · LR=0x%08X (retorno verificado por blr)\n",
          tls48[0],tls48[1],tls48[8],
          tls48[2],tls48[3],tls48[4],tls48[5],
-         tls48[6],tls48[7],tls48[10],tls48[9],tls48[11]];
+         tls48[6],tls48[7],tls48[10],tls48[9],tls48[11],
+          detail48[22],detail48[23]];
        if(tls48[0])
          [extended appendString:
            @"sys_initialize_tls HLE executada com imagem TLS copiada, BSS zerado e r13 configurado; não significa boot completo.\n"];
        else if(rc48==-1021)
          [extended appendString:
            @"Entrada ELF PT_TLS ausente/inválida ou fora dos limites; correção bloqueada com segurança.\n"];
-       else if(rc48==-1011 || rc48==-1012 || rc48==-1013)
+       else if(rc48==-1022 || rc48==-1024)
+          [extended appendString:
+            @"Retorno LR/blr bloqueado: endereço fora do código executável ou branch condicional não suportado.\n"];
+        else if(rc48==-1011 || rc48==-1012 || rc48==-1013)
          [extended appendString:
            @"TLS recusado: parâmetros, thread já inicializada ou leitura de memória inválida. Não houve sucesso artificial.\n"];
        self.ppuReport=extended;
@@ -1084,7 +1089,7 @@ extern int ar_probe_rsx_texture_cache_mutation(unsigned swizzled,unsigned int ou
        return;
     }
     self.ppuReport=[NSString stringWithFormat:
-       @"ASCENSIONRECOMP M6.7.5 / NPUA80918\n"
+       @"ASCENSIONRECOMP M6.7.6 / NPUA80918\n"
         "Resultado=0 · passos=%u/48 · sys_initialize_tls=%u · r13=0x%08X\n"
         "TLS copiada=%u bytes; PPU48 ainda é um bootstrap limitado.\n",
         cpu48[0],tls48[0],tls48[6],tls48[7]];
@@ -1093,7 +1098,7 @@ extern int ar_probe_rsx_texture_cache_mutation(unsigned swizzled,unsigned int ou
        @"M5.9 NPUA80918: ELF REAL VALIDADO\n"
         "%@\n"
         "%@\n"
-        "M6.7.5 PPU REAL 48/48: OK · TLS=%u\n"
+        "M6.7.6 PPU REAL 48/48: OK · TLS=%u\n"
         "PC=0x%X · CTR=0x%08X%08X\n"
         "stores=%u · indiretos=%u · sombra=%u\n"
         "Execução limitada; SEM HLE/SPU/gameplay.",

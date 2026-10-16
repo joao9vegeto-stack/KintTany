@@ -898,7 +898,8 @@ static int m672_core(const uint8_t*d,size_t len,
     tls_record[9]=has_tls;
     tls_record[11]=(uint32_t)gpr[12];
  }
- uint32_t pc=info[1],lr=0,stores=0,mflr=0;
+ uint32_t pc=info[1],stores=0,mflr=0;
+ uint64_t lr=0; /* real guest PPC64 link register, never a host address */
  uint64_t ctr=0;
  if(pc>0xffffff3fu||(pc&3))return -982;
  for(unsigned step=0;step<48;step++){
@@ -1010,15 +1011,30 @@ static int m672_core(const uint8_t*d,size_t len,
    const unsigned rb=(w>>11)&31u;
    gpr[ra]=gpr[rt]|gpr[rb];
   }else if(op==31 && ((w>>1)&1023u)==467u){
-   /* mtspr SPR,RS — Power ISA encoded SPR swaps two 5-bit fields.
-    * This bounded probe supports only mtctr (SPR=9).
-    * Do not silently treat mtlr / mtspr XER as mtctr. */
+   /* Exact mtspr SPR decoding: CTR=9, LR=8.
+    * For compatibility, older PPU48 probes still reject mtlr; the
+    * TLS-aware path implements the original guest LR restoration. */
    const unsigned spr_field=(w>>11)&1023u;
    const unsigned spr=((spr_field&31u)<<5)|(spr_field>>5);
-   if((w&1u) || spr!=9u)return -1006;
-   ctr=gpr[rt];out[17]=(uint32_t)ctr;out[18]=(uint32_t)(ctr>>32);
-   if(trace){trace[10]=pc;trace[11]=rt;trace[12]=(uint32_t)ctr;
-              trace[13]=(uint32_t)(ctr>>32);}
+   if((w&1u)||(spr!=8u && spr!=9u))return -1006;
+   if(spr==8u){
+      if(!tls_record)return -1006;
+      lr=gpr[rt];
+      if(detail){detail[22]=pc;detail[23]=(uint32_t)lr;}
+   }else{
+      ctr=gpr[rt];out[17]=(uint32_t)ctr;out[18]=(uint32_t)(ctr>>32);
+      if(trace){trace[10]=pc;trace[11]=rt;trace[12]=(uint32_t)ctr;
+                 trace[13]=(uint32_t)(ctr>>32);}
+   }
+  }else if(op==19 && ((w>>1)&1023u)==16u){
+   /* Exact unconditional blr, no conditional CR-dependent bclr and
+    * no conversion of guest PC into a host pointer. */
+   if(w!=0x4e800020u)return -1024;
+   if(!tls_record)return -1024;
+   const uint64_t target=lr&~UINT64_C(3);
+   if(target>UINT32_MAX || !lookup(d,len,ss,used,target,4u,1u))
+      return -1022;
+   next=(uint32_t)target;out[19]++;
   }else if(op==19 && ((w>>1)&1023u)==528u){
    /* bctr and bctrl only (unconditional BO=20, BI=0, BH=0).
     * Conditional CTR branches need CR modeling and remain unsupported. */
@@ -1079,7 +1095,10 @@ static int m672_core(const uint8_t*d,size_t len,
     }else{trace[8]=0;trace[9]=op;}
   }
   pc=next;out[0]++;
-  if(step==15u && (gpr[2]!=info[2]||stores!=9u||mflr!=1u||gpr[0]!=lr))return -996;
+  /* M6.2's exact 16-step fixture invariant belongs only to the
+    * legacy diagnostic ABI, not every new real CRT process. */
+   if(step==15u && !tls_record &&
+      (gpr[2]!=info[2]||stores!=9u||mflr!=1u||gpr[0]!=lr))return -996;
  }
  if(gpr[2]!=info[2])return -997;
  out[1]=(uint32_t)gpr[2];out[2]=pc;out[3]=lr;
