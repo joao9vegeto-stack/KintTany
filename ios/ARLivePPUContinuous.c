@@ -22,8 +22,14 @@ static uint64_t r64(const uint8_t*p){return ((uint64_t)r32(p)<<32)|r32(p+4);}
  10=last completed PC; 11=AOT registered; 12=import NID;
  13=verified imported stub; 14=thread id; 15=memory capacity.
  */
-int ar_m71_private_continuous_probe(const uint8_t*d,size_t len,
-                          uint32_t guest_stub,uint32_t budget,uint32_t out[16]){
+/* Preserve M7.1/M7.2 entry-point ABI. M7.3 only observes the
+ * actual failure state, without changing execution or faking HLE. */
+static int ar_continuous_core(const uint8_t*d,size_t len,
+       uint32_t guest_stub,uint32_t budget,uint32_t out[16],
+       uint32_t evidence[16],char library[48]){
+ if(evidence)memset(evidence,0,16u*sizeof(*evidence));
+ if(library)memset(library,0,48u);
+
  if(!out)return -1320;
  memset(out,0,sizeof(uint32_t)*16);
  if(!d||len<64u||memcmp(d,"\177ELF",4)||
@@ -87,6 +93,66 @@ int ar_m71_private_continuous_probe(const uint8_t*d,size_t len,
  out[1]=trace[0];out[2]=trace[1];out[3]=trace[2];out[4]=trace[3];
  out[5]=trace[4];out[6]=trace[5];out[7]=trace[7];out[8]=trace[6];
  out[9]=trace[11];out[10]=trace[12];
+ /* Only on a failed actual bctrl: examine the live r12 register.
+  * This resolves PRX import metadata for ANY imported guest stub,
+  * not just the one previously identified as sys_initialize_tls.
+  * Identifying a NID NEVER binds or calls an unknown firmware HLE. */
+ if(evidence && rc==-1314 && trace[2]==0x4e800421u){
+   const uint64_t stub=cpu.gpr[12];
+   evidence[0]=trace[1]; /* exact stopped guest PC */
+   evidence[1]=(uint32_t)stub;
+   evidence[2]=(uint32_t)cpu.ctr;
+   evidence[3]=(uint32_t)cpu.gpr[2];
+   evidence[11]=(uint32_t)cpu.gpr[3];
+   evidence[12]=(uint32_t)cpu.gpr[4];
+   evidence[13]=(uint32_t)cpu.gpr[5];
+   evidence[14]=(uint32_t)cpu.gpr[6];
+   evidence[15]=(uint32_t)cpu.gpr[0];
+   uint32_t match[4]={0};
+   char local_library[48]={0};
+   int status=-2;
+   if(stub!=0u && stub<=UINT32_MAX && (stub&3u)==0u)
+      status=ar_private_import_match(d,len,(uint32_t)stub,match,local_library);
+   evidence[6]=match[0];evidence[7]=(uint32_t)status;
+   evidence[9]=match[2];evidence[10]=match[3];
+   if(library && status==0)memcpy(library,local_library,48u);
+   /* Check that both descriptor-looking words actually reside in the
+    * file-backed executable guest ELF segment before reading them. */
+   const uint64_t off=r64(d+32);
+   const unsigned entrysize=r16(d+54),nentries=r16(d+56);
+   int code_staged=0;
+   if(stub<=UINT32_MAX && (uint64_t)entrysize*nentries<=len-off){
+     for(unsigned k=0;k<nentries;k++){
+       const uint8_t*ph=d+off+(uint64_t)k*entrysize;
+       if(r32(ph)!=1u || !(r32(ph+4)&1u))continue;
+       const uint64_t lo=r64(ph+16),sz=r64(ph+32);
+       if(stub>=lo && stub-lo<=sz && sz-(stub-lo)>=8u){
+          code_staged=1;break;
+       }
+     }
+   }
+   if(code_staged){
+     evidence[8]|=1u;
+     evidence[4]=ar_read32(stub);
+     evidence[5]=ar_read32(stub+4u);
+     if(ar_last_error()==AR_OK){
+       if(evidence[4]==(uint32_t)cpu.ctr)evidence[8]|=2u;
+       if(evidence[5]==(uint32_t)cpu.gpr[2])evidence[8]|=4u;
+     }
+   }
+   if(status==0 && match[1]==stub)evidence[8]|=8u;
+   if((evidence[8]&15u)==15u)evidence[8]|=16u;
+ }
  ar_bridge_shutdown();
  return 0; /* probe executed: its guest stop code is in out[0] */
+}
+int ar_m71_private_continuous_probe(const uint8_t*d,size_t len,
+                     uint32_t guest_stub,uint32_t budget,uint32_t out[16]){
+ return ar_continuous_core(d,len,guest_stub,budget,out,NULL,NULL);
+}
+int ar_m73_private_import_probe(const uint8_t*d,size_t len,
+                     uint32_t guest_stub,uint32_t budget,uint32_t out[16],
+                     uint32_t evidence[16],char library[48]){
+ if(!evidence||!library)return -1320;
+ return ar_continuous_core(d,len,guest_stub,budget,out,evidence,library);
 }
