@@ -879,7 +879,7 @@ extern int ar_probe_rsx_texture_cache_mutation(unsigned swizzled,unsigned int ou
        self.status.text=[NSString stringWithFormat:
           @"M5.9 NPUA80918: ELF REAL VALIDADO\n"
            "M6.2 PPU REAL 16/16: OK\n"
-           "M6.4 PARADA SEGURA M6.3 %d · %u/24\n"
+           "M6.3 PARADA SEGURA %d · %u/24\n"
            "PC=0x%X · opcode=0x%08X\n"
            "Sem HLE/SPU/gameplay; instrução não ignorada.",
            rc24,cpu24[0],cpu24[8],cpu24[7]];
