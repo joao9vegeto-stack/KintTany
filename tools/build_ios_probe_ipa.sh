@@ -13,12 +13,15 @@ xcrun --sdk iphoneos clang -target arm64-apple-ios17.0 -isysroot "$SDK" \
 xcrun --sdk iphoneos clang -target arm64-apple-ios17.0 -isysroot "$SDK" \
     -std=c11 -O2 -I upstream/libs/video -I upstream/include \
     -c ios/ARGuestDrawProbe.c -o ios-probe/ARGuestDrawProbe.o
+xcrun --sdk iphoneos clang -target arm64-apple-ios17.0 -isysroot "$SDK" \
+    -std=c11 -O2 -Wall -Wextra -c ios/ARPrivateELFProbe.c \
+    -o ios-probe/ARPrivateELFProbe.o
 xcrun nm -g ios-probe/ARRSXMethodProbe.o | grep -q '_ar_probe_rsx_clear_flip'
 xcrun --sdk iphoneos clang++ -target arm64-apple-ios17.0 \
     -isysroot "$SDK" -fobjc-arc -fmodules -stdlib=libc++ \
     -O2 -Wl,-dead_strip -I ios -I upstream/libs/video -I upstream/include \
     ios/ARMetalView.m ios/ARProbeApp.m ios/ARShaderProbe.m ios/ARTextureProbe.m ios/ARProbeGuestVM.c \
-    ios-probe/ARRSXMethodProbe.o ios-probe/ARGuestDrawProbe.o \
+    ios-probe/ARRSXMethodProbe.o ios-probe/ARGuestDrawProbe.o ios-probe/ARPrivateELFProbe.o \
     build-ios-runtime/libAscensionRSXGuest-ios-arm64.a \
     -framework UIKit -framework Foundation -framework QuartzCore \
     -framework Metal -framework CoreGraphics -framework CoreFoundation \
@@ -28,7 +31,7 @@ test -s "$APP/AscensionRecompProbe"
 file "$APP/AscensionRecompProbe" | tee m41-executable-file.txt
 xcrun lipo -info "$APP/AscensionRecompProbe" | tee m41-executable-arch.txt
 /usr/libexec/PlistBuddy -c 'Print CFBundleIdentifier' "$APP/Info.plist"
-(cd ios-probe && zip -q -r ../AscensionRecompProbe-0.6.2-unsigned.ipa Payload)
-test -s AscensionRecompProbe-0.6.2-unsigned.ipa
-shasum -a 256 AscensionRecompProbe-0.6.2-unsigned.ipa > m41-ipa-sha256.txt
+(cd ios-probe && zip -q -r ../AscensionRecompProbe-0.6.3-unsigned.ipa Payload)
+test -s AscensionRecompProbe-0.6.3-unsigned.ipa
+shasum -a 256 AscensionRecompProbe-0.6.3-unsigned.ipa > m41-ipa-sha256.txt
 echo 'UNSIGNED DIAGNOSTIC APP: UIKit CAMetalLayer + real PS3Recomp Metal backend; NO GOWA GAME included' > m41-status.txt
