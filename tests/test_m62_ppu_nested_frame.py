@@ -20,5 +20,5 @@ class Frame(unittest.TestCase):
   self.assertIn("M6.1 PPU REAL 8/8: OK",UI)
   self.assertIn("testM58AlphaTest:",UI)
   self.assertIn("m62-host.log",WORK)
-  self.assertIn("0.6.7-unsigned.ipa",WORK)
+  self.assertIn("0.6.8-unsigned.ipa",WORK)
 if __name__=="__main__":unittest.main()
