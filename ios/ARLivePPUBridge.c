@@ -6,11 +6,10 @@
 #include <stddef.h>
 #include <string.h>
 #include <CommonCrypto/CommonDigest.h>
-/* Optional, privately signed AOT module; absent from public CI/IPA. */
-#if defined(__APPLE__)
-extern int ar_private_aot_install_sha256(const unsigned char*,size_t) __attribute__((weak_import));
-#else
-extern int ar_private_aot_install_sha256(const unsigned char*,size_t) __attribute__((weak));
+/* A private, pre-signed AOT module is linked only in an explicit private
+ * build. No weak unresolved externs are allowed by the macOS/iOS linker. */
+#ifdef ASCENSION_PRIVATE_AOT_LINKED
+extern int ar_private_aot_install_sha256(const unsigned char*,size_t);
 #endif
 #include "ppu_bridge.h"
 #include "elf_image.h"
@@ -94,15 +93,15 @@ int ar_m70_native_runtime_probe(const uint8_t*d,size_t len,
  /* M7.4: register ONLY offline-recompiled, pre-signed game code for
   * the exact SHA256 of the privately imported ELF. A public diagnostic
   * IPA has no such symbol; its real game AOT count stays zero. */
- if(ar_private_aot_install_sha256){
-   if(len>UINT32_MAX){ar_bridge_shutdown();return -29;}
-   unsigned char digest[CC_SHA256_DIGEST_LENGTH];
-   if(!CC_SHA256(d,(CC_LONG)len,digest)){
-     ar_bridge_shutdown();return -29;
-   }
-   const int aot_rc=ar_private_aot_install_sha256(digest,sizeof(digest));
-   if(aot_rc!=AR_OK){ar_bridge_shutdown();return -29;}
+#ifdef ASCENSION_PRIVATE_AOT_LINKED
+ if(len>UINT32_MAX){ar_bridge_shutdown();return -29;}
+ unsigned char digest[CC_SHA256_DIGEST_LENGTH];
+ if(!CC_SHA256(d,(CC_LONG)len,digest)){
+   ar_bridge_shutdown();return -29;
  }
+ const int aot_rc=ar_private_aot_install_sha256(digest,sizeof(digest));
+ if(aot_rc!=AR_OK){ar_bridge_shutdown();return -29;}
+#endif
  out[5]=(uint32_t)ar_registered_count(); /* genuine linked game AOT only */
 
  /* Bind only the exact verified ELF PRX import identified by the private
