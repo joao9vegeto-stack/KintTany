@@ -702,26 +702,32 @@ extern int ar_probe_rsx_texture_cache_mutation(unsigned swizzled,unsigned int ou
    unsigned int cpu[4]={0};
    const int cpu_rc=ar_ppu_bootstrap_four(data.bytes,data.length,info,cpu);
    if(cpu_rc){
-      unsigned int eight[6]={0};
-   int rc8=ar_ppu_bootstrap_eight(data.bytes,data.length,info,eight);
-   if(rc8) {
       self.status.text=[NSString stringWithFormat:
-         @"M5.9 ELF válido, M6.0 PPU 4/4 OK\n"
-          "M6.1 PPU FALHA %d (%u/8), parada segura.",rc8,eight[0]];
+         @"M5.9 ELF VALIDADO; M6.0 PPU FALHA %d (%u/4).\n"
+          "CPU interrompida antes de M6.1.",cpu_rc,cpu[0]];
       return;
    }
-   if(eight[0]!=8||eight[1]!=0x83f2b0u||eight[2]!=0x10534u||
+   unsigned int eight[6]={0};
+   const int rc8=ar_ppu_bootstrap_eight(data.bytes,data.length,info,eight);
+   if(rc8) {
+      self.status.text=[NSString stringWithFormat:
+         @"M5.9 NPUA80918: ELF REAL VALIDADO\n"
+          "M6.0 PPU 4/4 OK · M6.1 PPU FALHA %d (%u/8).\n"
+          "Parada segura, sem HLE nem gameplay.",rc8,eight[0]];
+      return;
+   }
+   if(eight[0]!=8u||eight[1]!=0x83f2b0u||eight[2]!=0x10534u||
       eight[3]!=0x10430u||eight[4]!=0x07000f90u||eight[5]!=2u) {
-      self.status.text=@"M6.1: estado PPU inesperado; interrupção segura.";
+      self.status.text=@"M6.1: estado PPU inesperado; execução interrompida.";
       return;
    }
    self.status.text=[NSString stringWithFormat:
-      @"M5.9 NPUA80918: ELF VALIDADO\n"
-       "M6.0 PPU 4/4 · M6.1 PPU REAL 8/8: OK\n"
-       "TOC=0x%X · PC=0x%X · LR=0x%X\n"
-       "SP=0x%X · escritas stack=%u\n"
-       "Pilha isolada; sem HLE/SPU/gameplay.",
-      eight[1],eight[2],eight[3],eight[4],eight[5]];
+       @"M5.9 NPUA80918: ELF REAL VALIDADO\n"
+        "M6.0 PPU 4/4 · M6.1 PPU REAL 8/8: OK\n"
+        "TOC/r2=0x%X · PC=0x%X · LR=0x%X\n"
+        "SP=0x%X · stores=%u\n"
+        "Pilha privada. Ainda sem HLE/SPU/gameplay.",
+       eight[1],eight[2],eight[3],eight[4],eight[5]];
  } @finally {
     if(scoped)[url stopAccessingSecurityScopedResource];
  }
