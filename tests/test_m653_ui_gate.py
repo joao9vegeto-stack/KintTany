@@ -18,7 +18,7 @@ class GuestStackGate(unittest.TestCase):
   self.assertIn("legacyState,rc40,cpu40[0],cpu40[8],cpu40[7]",UI)
   self.assertIn("M6.5 PARADA SEGURA",UI)
   self.assertIn("EA=0x%X · base=0x%X · valor=0x%X",UI)
-  self.assertIn("ASCENSIONRECOMP   ·   M6.5.3",UI)
+  self.assertIn("ASCENSIONRECOMP   ·   M6.6",UI)
  def test_old_legacy_and_new_overlay_same_guest_fixture(self):
   for text in ("ar_ppu_bootstrap_thirtytwo(d,sizeof d,info,legacy)!=-995",
     "legacy[0]!=26u","legacy[7]!=0x93ab0000u",
@@ -28,7 +28,7 @@ class GuestStackGate(unittest.TestCase):
    self.assertIn(text,HOST)
   self.assertIn("m65_store32(&guest,ss,used,va,v)",C)
  def test_version(self):
-  self.assertIn("<string>0.6.11</string>",(R/"ios/Probe-Info.plist").read_text())
-  self.assertIn("0.6.11-unsigned.ipa",
+  self.assertIn("<string>0.6.12</string>",(R/"ios/Probe-Info.plist").read_text())
+  self.assertIn("0.6.12-unsigned.ipa",
      (R/".github/workflows/ascension-recomp-m0.yml").read_text())
 if __name__=="__main__":unittest.main()
