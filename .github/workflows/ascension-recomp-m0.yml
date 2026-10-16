@@ -1,4 +1,4 @@
-name: AscensionRecomp M6.5.3 - allow proven legacy -995 to reach bounded PPU40
+name: AscensionRecomp M6.6 - guest CTR mtctr and validated indirect PPU48
 
 on:
   push:
@@ -163,6 +163,12 @@ jobs:
           clang -std=c11 -O2 -Wall -Wextra -Werror ios/ARPrivateELFProbe.c tests/host_m65_guestmem.c -o m65-host
           ./m65-host 2>&1 | tee m65-host.log
           grep -Fxq 'M6.5 PPU40 private guest writable PT_LOAD PASS' m65-host.log
+      - name: M6.6 verify synthetic CTR mtctr and bounded indirect guest branch
+        run: |
+          set -euo pipefail
+          clang -std=c11 -Wall -Wextra -Werror -O2             ios/ARPrivateELFProbe.c tests/host_m66_ctr.c -o m66-host
+          ./m66-host 2>&1 | tee m66-host.log
+          grep -Fxq 'M6.6 PPU48 guarded mtctr and bctr PASS' m66-host.log
       - name: M5.0 run synthetic PPU LV2 integrated boot smoke
         run: |
           set -euo pipefail
@@ -397,9 +403,9 @@ jobs:
         run: |
           set -euo pipefail
           bash tools/build_ios_probe_ipa.sh 2>&1 | tee m41-build-ipa.log
-          test -s AscensionRecompProbe-0.6.11-unsigned.ipa
-          /usr/libexec/PlistBuddy -c 'Print CFBundleShortVersionString' ios-probe/Payload/AscensionRecompProbe.app/Info.plist | grep -Fx 0.6.11
-          /usr/bin/unzip -t AscensionRecompProbe-0.6.11-unsigned.ipa | tee m42-ipa-integrity.log
+          test -s AscensionRecompProbe-0.6.12-unsigned.ipa
+          /usr/libexec/PlistBuddy -c 'Print CFBundleShortVersionString' ios-probe/Payload/AscensionRecompProbe.app/Info.plist | grep -Fx 0.6.12
+          /usr/bin/unzip -t AscensionRecompProbe-0.6.12-unsigned.ipa | tee m42-ipa-integrity.log
           xcrun nm -g ios-probe/Payload/AscensionRecompProbe.app/AscensionRecompProbe | grep -E '(_rsx_metal_backend_present|_rsx_metal_backend_init|_OBJC_CLASS_\\$_ARMetalView)' > m42-runtime-link-symbols.txt || true
           grep -q _rsx_metal_backend_init m39-metal-symbols.txt
           echo 'M4.2: actual GPU clear + presentDrawable + waitUntilCompleted route linked in iOS app; requires on-device screenshot.' > m42-status.txt
@@ -439,6 +445,7 @@ jobs:
           echo 'M6.3 private bounded 24-step PPU with strict PC/opcode failure; real title on device only.' > m63-status.txt
           echo 'M6.4 PowerPC rldicl 0x79040020 zero extends GPR8 to GPR4; 32 bounded guest steps, pending physical iPhone test.' > m64-status.txt
           echo 'M6.5.3 fixes the UI gate: legacy -995 stw after PPU24 now replays via strict PPU40 guest PT_LOAD overlay. Other errors remain fail-closed. iPhone validation needed.' > m65-status.txt
+          echo 'M6.6 mtctr at real PC 0x669C2C, 38/40 screenshot. PPU48 records CTR and clears stale EA each step; commercial ELF verification only on iPhone.' > m66-status.txt
           echo 'M6.1 eight guest PPU steps, stack and branch; user title private; host synthetic only.' > m61-status.txt
           echo 'M6.0 strict PPU bootstrap: at most 4 imported ELF instructions; no actual game bytes bundled.' > m60-status.txt
           echo 'M5.9: on-device Files ELF inspection; no game data in CI or IPA.' > m59-status.txt
@@ -463,7 +470,7 @@ jobs:
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: AscensionRecomp-M6.5.3-PPU40-stack-gate-evidence
+          name: AscensionRecomp-M6.6-guest-CTR-PPU48-evidence
           if-no-files-found: warn
           retention-days: 14
           path: |
@@ -565,6 +572,8 @@ jobs:
             m60-status.txt
             m61-host.log
             m61-status.txt
+            m66-host.log
+            m66-status.txt
             m65-host.log
             m65-status.txt
             m64-host.log
@@ -588,7 +597,7 @@ jobs:
             m50-ios-shader-archive-sha256.txt
             m50-ios-shader-availability-symbol.txt
             build-ios-runtime/libAscensionRSXGuest-ios-arm64.a
-            AscensionRecompProbe-0.6.11-unsigned.ipa
+            AscensionRecompProbe-0.6.12-unsigned.ipa
             m40-ios-layer-view.o
             build-ios-runtime/libps3recomp_runtime.a
             ios-ppu-core/libAscensionPPUCore-ios-arm64.a

@@ -656,3 +656,155 @@ int ar_ppu_bootstrap_forty(const uint8_t*d,size_t len,
  out[15]=guest.used; /* distinct guest PT_LOAD shadow words */
  return 0;
 }
+
+/* M6.6 — strict CTR/mtspr and bounded PPU48 continuation.
+ * 0x7C0903A6 = mtctr r0 observed on private NPUA80918 at PC=0x669C2C.
+ * The next branch is validated against ELF executable segments, and no
+ * guest address becomes a native host pointer. Zero per-step stale EA. */
+int ar_ppu_bootstrap_fortyeight(const uint8_t*d,size_t len,
+                             const uint32_t info[5],uint32_t out[20]){
+ if(!d||!info||!out)return -980;
+ memset(out,0,20*sizeof(*out));
+ uint32_t check[5]={0};
+ if(ar_private_elf_inspect(d,len,check)||
+    memcmp(info,check,sizeof(check)))return -981;
+ segment ss[64]={0};unsigned used=0;
+ const uint64_t table=b64(d+32);unsigned phsize=b16(d+54),n=b16(d+56);
+ for(unsigned j=0;j<n;j++){
+  const uint8_t*p=d+table+(uint64_t)j*phsize;
+  if(b32(p)!=1)continue;
+  segment s={b64(p+8),b64(p+16),b64(p+32),b64(p+40),b32(p+4)};
+  if(s.mem&&s.size)ss[used++]=s;
+ }
+ uint64_t gpr[32]={0};
+ uint8_t stack[4096]={0};
+ m65_memory guest={0};
+ const uint64_t base=0x07000000u;
+ gpr[1]=base+sizeof(stack);gpr[2]=info[2];
+ uint32_t pc=info[1],lr=0,stores=0,mflr=0;
+ uint64_t ctr=0;
+ if(pc>0xffffff3fu||(pc&3))return -982;
+ for(unsigned step=0;step<48;step++){
+  const uint8_t*p=lookup(d,len,ss,used,pc,4,1);
+  if(!p){out[8]=pc;return -983;}
+  const uint32_t w=b32(p),op=w>>26;
+  out[7]=w;out[8]=pc;
+  /* Per-step diagnostics: never leak a previous memory EA when the
+   * CURRENT failing opcode is e.g. mtctr, bctr, or unknown. */
+  out[10]=out[11]=out[12]=0u;
+  out[16]=0u;out[17]=(uint32_t)ctr;out[18]=(uint32_t)(ctr>>32);
+  unsigned rt=(w>>21)&31,ra=(w>>16)&31;
+  int16_t imm=(int16_t)(w&0xffffu);
+  uint32_t next=pc+4;
+  if(op==14){
+   gpr[rt]=(ra?gpr[ra]:0u)+(uint64_t)(int64_t)imm;
+  }else if(op==15){
+   gpr[rt]=(ra?gpr[ra]:0u)+(((uint64_t)(int64_t)imm)<<16);
+  }else if(op==25){
+   gpr[ra]=gpr[rt]|((uint64_t)(w&0xffffu)<<16);
+  }else if(op==24){
+   gpr[ra]=gpr[rt]|(uint64_t)(w&0xffffu);
+  }else if(op==32){
+   const uint64_t va=(ra?gpr[ra]:0u)+(uint64_t)(int64_t)imm;
+   uint64_t value=0;
+   if(m65_read_guest(d,len,ss,used,&guest,stack,base,va,4,&value)) {
+      out[10]=(uint32_t)va;out[16]=1u;return -1001;
+   }
+   gpr[rt]=value;
+  }else if(op==62){
+   if(!ra||(w&3u)>1u)return -986;
+   int16_t ds=(int16_t)(w&0xfffcu);
+   uint64_t va=gpr[ra]+(uint64_t)(int64_t)ds;
+   if(va<base||va>base+sizeof(stack)-8)return -987;
+   for(unsigned j=0;j<8;j++)
+      stack[(size_t)(va-base)+j]=(uint8_t)(gpr[rt]>>(56-8*j));
+   stores++;
+   if((w&3u)==1u)gpr[ra]=va;
+  }else if(op==18){
+   if(w&2u)return -988; /* only relative branches */
+   int64_t delta=(int64_t)(w&0x03fffffcu);
+   if(delta&0x02000000)delta-=0x04000000;
+   const int64_t dest=(int64_t)pc+delta;
+   if(dest<0||dest>UINT32_MAX||
+      !lookup(d,len,ss,used,(uint32_t)dest,4,1))return -989;
+   if(w&1u)lr=next;
+   next=(uint32_t)dest;
+  }else if(op==58){
+   if(!ra||(w&3u)!=0u)return -991;
+   const int16_t ds=(int16_t)(w&0xfffcu);
+   const uint64_t va=gpr[ra]+(uint64_t)(int64_t)ds;
+   uint64_t value=0;
+   if(m65_read_guest(d,len,ss,used,&guest,stack,base,va,8,&value)) {
+       out[10]=(uint32_t)va;out[16]=1u;return -1002;
+   }
+   gpr[rt]=value;
+  }else if(op==36){
+   /* Exact device opcode 0x93AB0000: stw r29,0(r11).
+    * Permit stack OR writable guest PT_LOAD (including BSS), nothing else.
+    * Save the effective address for an accurate physical-device diagnosis. */
+   const uint64_t va=(ra?gpr[ra]:0u)+(uint64_t)(int64_t)imm;
+   const uint32_t v=(uint32_t)gpr[rt];
+   if(!ra||va>UINT32_MAX||(va&3u)){
+      out[10]=(uint32_t)va;out[11]=(uint32_t)gpr[ra];out[12]=v;
+      out[16]=1u;return -1003;
+   }
+   if(va>=base&&within(va-base,4u,sizeof(stack))) {
+       for(unsigned k=0;k<4u;k++)
+          stack[(size_t)(va-base)+k]=(uint8_t)(v>>(24u-8u*k));
+   }else{
+       const int rc=m65_store32(&guest,ss,used,va,v);
+       if(rc) {
+          out[10]=(uint32_t)va;out[11]=(uint32_t)gpr[ra];out[12]=v;
+          out[16]=1u;
+          return rc==-2 ? -1005 : -1004;
+       }
+   }
+   stores++;
+  }else if(op==30){
+   /* PowerPC MD-form rldicl, e.g. clrldi r4,r8,32 (0x79040020).
+    * Preserve exact GPR 64-bit masking, refuse other XO/Rc forms. */
+   uint64_t rotated=0;
+   if(ar_ppu_rldicl(w,gpr[rt],&rotated))return -998;
+   gpr[ra]=rotated;
+  }else if(op==31 && ((w>>1)&1023u)==444u && !(w&1u)){
+   const unsigned rb=(w>>11)&31u;
+   gpr[ra]=gpr[rt]|gpr[rb];
+  }else if(op==31 && ((w>>1)&1023u)==467u){
+   /* mtspr SPR,RS — Power ISA encoded SPR swaps two 5-bit fields.
+    * This bounded probe supports only mtctr (SPR=9).
+    * Do not silently treat mtlr / mtspr XER as mtctr. */
+   const unsigned spr_field=(w>>11)&1023u;
+   const unsigned spr=((spr_field&31u)<<5)|(spr_field>>5);
+   if((w&1u) || spr!=9u)return -1006;
+   ctr=gpr[rt];out[17]=(uint32_t)ctr;out[18]=(uint32_t)(ctr>>32);
+  }else if(op==19 && ((w>>1)&1023u)==528u){
+   /* bctr and bctrl only (unconditional BO=20, BI=0, BH=0).
+    * Conditional CTR branches need CR modeling and remain unsupported. */
+   if(w!=0x4e800420u && w!=0x4e800421u)return -1008;
+   const uint64_t dest=ctr&~UINT64_C(3);
+   if(dest>UINT32_MAX || !lookup(d,len,ss,used,dest,4,1))
+      return -1007; /* guest executable map validated */
+   if(w&1u)lr=next;
+   next=(uint32_t)dest;
+   out[19]++; /* indirect branches executed in this sandbox */
+  }else if(op==31 && ((w>>1)&1023u)==339u){
+   const unsigned spr_field=(w>>11)&1023u;
+   const unsigned spr=((spr_field&31u)<<5)|(spr_field>>5);
+   if((w&1u)|| (spr!=8u && spr!=9u))return -1009;
+   if(spr==8u){gpr[rt]=lr;mflr++;}
+   else gpr[rt]=ctr;
+  }else{
+   out[1]=w;return -990; /* unsupported opcode must fail */
+  }
+  pc=next;out[0]++;
+  if(step==15u && (gpr[2]!=info[2]||stores!=9u||mflr!=1u||gpr[0]!=lr))return -996;
+ }
+ if(gpr[2]!=info[2])return -997;
+ out[1]=(uint32_t)gpr[2];out[2]=pc;out[3]=lr;
+ out[4]=(uint32_t)gpr[1];out[5]=stores;out[6]=(uint32_t)gpr[0];
+ out[9]=(uint32_t)gpr[4];
+ out[13]=(uint32_t)gpr[12];out[14]=(uint32_t)gpr[13];
+ out[15]=guest.used; /* distinct guest PT_LOAD shadow words */
+ out[17]=(uint32_t)ctr;out[18]=(uint32_t)(ctr>>32);
+ return 0;
+}
