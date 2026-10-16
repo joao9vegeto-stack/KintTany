@@ -24,6 +24,9 @@ extern int ar_probe_m55_guest_stencil_mask(unsigned swizzled,
 extern int ar_probe_m56_guest_stencil_bitmasks(unsigned swizzled,
     unsigned int pixels[4], unsigned *phase, unsigned *guest_total,
     unsigned *metal_total, unsigned *stencil_draws);
+extern int ar_probe_m57_guest_blend_mask(unsigned swizzled,unsigned int pixels[4],
+    unsigned *phase,unsigned *guest_total,unsigned *metal_total,
+    unsigned *blend_draws,unsigned *red_draws);
 extern void ar_probe_vm_shutdown(void);
 extern int ar_probe_rsx_clear_flip(unsigned cycle, unsigned int *expected, unsigned int *observed);
 extern int ar_probe_rsx_triangle(unsigned int *background, unsigned int *sample);
@@ -46,6 +49,7 @@ extern int ar_probe_rsx_texture_cache_mutation(unsigned swizzled,unsigned int ou
 @property(nonatomic,assign) NSUInteger m54Attempts;
 @property(nonatomic,assign) NSUInteger m55Attempts;
 @property(nonatomic,assign) NSUInteger m56Attempts;
+@property(nonatomic,assign) NSUInteger m57Attempts;
 @property(nonatomic,assign) NSUInteger successfulFrames;
 @property(nonatomic,assign) NSUInteger guestAttempts;
 @property(nonatomic,assign) NSUInteger indexedAttempts;
@@ -272,6 +276,24 @@ extern int ar_probe_rsx_texture_cache_mutation(unsigned swizzled,unsigned int ou
         [maskButton.leadingAnchor constraintGreaterThanOrEqualToAnchor:controller.view.leadingAnchor constant:16],
         [maskButton.trailingAnchor constraintLessThanOrEqualToAnchor:controller.view.trailingAnchor constant:-16],
         [maskButton.heightAnchor constraintEqualToConstant:46]
+    ]];
+    UIButton *blendButton=[UIButton buttonWithType:UIButtonTypeSystem];
+    blendButton.translatesAutoresizingMaskIntoConstraints=NO;
+    [blendButton setTitle:@"M5.7 · Blend e máscaras RSX" forState:UIControlStateNormal];
+    [blendButton setTitleColor:[UIColor whiteColor] forState:UIControlStateNormal];
+    blendButton.backgroundColor=[[UIColor blackColor] colorWithAlphaComponent:0.82];
+    blendButton.titleLabel.font=[UIFont systemFontOfSize:14 weight:UIFontWeightSemibold];
+    blendButton.layer.cornerRadius=10;
+    [blendButton addTarget:self action:@selector(testM57BlendMask:)
+          forControlEvents:UIControlEventTouchUpInside];
+    [controller.view addSubview:blendButton];
+    [NSLayoutConstraint activateConstraints:@[
+        [blendButton.centerXAnchor constraintEqualToAnchor:controller.view.centerXAnchor],
+        [blendButton.bottomAnchor constraintEqualToAnchor:maskButton.topAnchor constant:-10],
+        [blendButton.widthAnchor constraintLessThanOrEqualToConstant:350],
+        [blendButton.leadingAnchor constraintGreaterThanOrEqualToAnchor:controller.view.leadingAnchor constant:16],
+        [blendButton.trailingAnchor constraintLessThanOrEqualToAnchor:controller.view.trailingAnchor constant:-16],
+        [blendButton.heightAnchor constraintEqualToConstant:46]
     ]];
     self.window.rootViewController=controller;
     [self.window makeKeyAndVisible];
@@ -533,6 +555,32 @@ extern int ar_probe_rsx_texture_cache_mutation(unsigned swizzled,unsigned int ou
     }
 }
 
+- (void)testM57BlendMask:(UIButton *)sender {
+    (void)sender;
+    if(!self.ready || self.shaderBusy)return;
+    unsigned sw=(unsigned)((self.m57Attempts++ & 1u)!=0u);
+    unsigned int p[4]={0},phase=0,guest=0,metal=0,blend=0,masked=0;
+    self.status.text=@"M5.7: 4 DRAWs com blend RSX...";
+    const int rc=ar_probe_m57_guest_blend_mask(sw,p,&phase,&guest,&metal,&blend,&masked);
+    if(!rc) {
+        self.status.text=[NSString stringWithFormat:
+            @"M5.7 BLEND RSX → Metal: OK\n"
+             "Layout %@ · 4 quadros GPU verificados\n"
+             "DRAW RSX/Metal/blend/red: %u/%u/%u/%u\n"
+             "ADD + máscara R + ZERO/ONE: OK\n"
+             "Pixels: %08X %08X %08X %08X\n"
+             "Aperte novamente para alternar layout.",
+             sw?@"SWIZZLED":@"LINEAR",guest,metal,blend,masked,p[0],p[1],p[2],p[3]];
+    } else {
+        self.status.text=[NSString stringWithFormat:
+            @"M5.7 BLEND: FALHA %d · fase %u\n"
+             "Layout %@ · DRAW RSX/Metal/blend/red %u/%u/%u/%u\n"
+             "Pixels: %08X %08X %08X %08X\n"
+             "M5.6/M5.5/M5.4 permanecem disponíveis.",
+             rc,phase,sw?@"SWIZZLED":@"LINEAR",guest,metal,blend,masked,
+             p[0],p[1],p[2],p[3]];
+    }
+}
 /* A tap submits another actual on-screen GPU clear pass.
  * Completion is checked; labels do not assert success on failed work. */
 - (void)drawNextFrame:(UITapGestureRecognizer *)gesture {

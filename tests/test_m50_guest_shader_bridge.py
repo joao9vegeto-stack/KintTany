@@ -43,7 +43,7 @@ class M50NativeGuestShaderTest(unittest.TestCase):
             self.assertIn(token,wf)
         self.assertIn('ar_probe_guest_shader_compile', app)
         self.assertIn('ARShaderProbe.m', sh)
-        self.assertIn('0.5.9-unsigned.ipa', sh)
+        self.assertIn('0.6.0-unsigned.ipa', sh)
         self.assertIn("grep -F '_rsx_hlsl_to_msl_available'",wf)
         self.assertNotIn("| grep -q '_rsx_hlsl_to_msl_available'",wf)
 

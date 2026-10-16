@@ -74,7 +74,7 @@ def patch_metal(s):
     a = "    MTLWinding  winding;\n} EngPipeline;"
     if s.count(a) != 1:
         raise ValueError("pinned Metal PSO layout changed")
-    s = s.replace(a, "    MTLWinding  winding;\n    u8 ar_m51_tex0; /* genuine translated fragment TEX0 */\n    u8 ar_m54_depth_less; /* genuine depth LESS + write pipeline */\n    u8 ar_m55_stencil; /* guest RSX stencil test pipeline */\n} EngPipeline;", 1)
+    s = s.replace(a, "    MTLWinding  winding;\n    u8 ar_m51_tex0; /* genuine translated fragment TEX0 */\n    u8 ar_m54_depth_less; /* genuine depth LESS + write pipeline */\n    u8 ar_m55_stencil; /* guest RSX stencil test pipeline */\n    u8 ar_m57_blend; /* native blend */\n    u8 ar_m57_red_mask; /* R-only write */\n} EngPipeline;", 1)
     a = "static u32 s_eng_pipe_count;"
     if s.count(a) != 1:
         raise ValueError("pinned Metal PSO cache changed")
@@ -88,6 +88,10 @@ u32 ar_probe_m54_depth_draws(void) { return ar_m54_depth_draws_encoded; }
 static u32 ar_m55_stencil_draws_encoded;
 void ar_probe_m55_reset_stencil_draws(void) { ar_m55_stencil_draws_encoded=0; }
 u32 ar_probe_m55_stencil_draws(void) { return ar_m55_stencil_draws_encoded; }
+static u32 ar_m57_blend_draws_encoded, ar_m57_red_mask_draws_encoded;
+void ar_probe_m57_reset_draws(void) { ar_m57_blend_draws_encoded=ar_m57_red_mask_draws_encoded=0u; }
+u32 ar_probe_m57_blend_draws(void) { return ar_m57_blend_draws_encoded; }
+u32 ar_probe_m57_red_mask_draws(void) { return ar_m57_red_mask_draws_encoded; }
 """, 1)
     a = "    s_eng_pipe[slot].pso = pso;"
     if s.count(a) != 1:
@@ -105,6 +109,13 @@ u32 ar_probe_m55_stencil_draws(void) { return ar_m55_stencil_draws_encoded; }
         && (rs->s_func_mask == 0xffu || rs->s_func_mask == 0x0fu)
         && (rs->s_write_mask == 0xffu || rs->s_write_mask == 0x0fu
             || rs->s_write_mask == 0xf0u);
+    s_eng_pipe[slot].ar_m57_blend =
+        rs->blend_enable && rs->eq_rgb==0x8006u && rs->eq_a==0x8006u
+        && rs->df_rgb==1u && rs->df_a==1u
+        && ((rs->sf_rgb==1u && rs->sf_a==1u) ||
+            (rs->sf_rgb==0u && rs->sf_a==0u));
+    s_eng_pipe[slot].ar_m57_red_mask =
+        rs->color_mask==0x00010000u && !rs->blend_enable;
 """, 1)
     a = "vertexStart:0 vertexCount:r->vertex_count];"
     if s.count(a) != 1:
@@ -118,6 +129,10 @@ u32 ar_probe_m55_stencil_draws(void) { return ar_m55_stencil_draws_encoded; }
     if (p->ar_m51_tex0 && p->ar_m55_stencil &&
         r->depth && eng_obj(r->depth) && r->tex[0] && eng_obj(r->tex[0]))
         ar_m55_stencil_draws_encoded++;
+    if(p->ar_m51_tex0 && p->ar_m57_blend && r->tex[0] && eng_obj(r->tex[0]))
+        ar_m57_blend_draws_encoded++;
+    if(p->ar_m51_tex0 && p->ar_m57_red_mask && r->tex[0] && eng_obj(r->tex[0]))
+        ar_m57_red_mask_draws_encoded++;
 """, 1)
     return s
 
