@@ -521,7 +521,8 @@ jobs:
           grep -q '_ar_ppu_bootstrap_eight' m43-probe-linked-symbols.txt
           grep -q '_ar_ppu_bootstrap_sixteen' m43-probe-linked-symbols.txt
           grep -q '_ar_m70_native_runtime_probe' m43-probe-linked-symbols.txt
-          grep -q '_ar_m71_private_continuous_probe' m43-probe-linked-symbols.txt
+          # The legacy M7.1 entry-point still passes host ABI regressions,
+          # but the linker dead-strips it when UIKit uses the M7.3 entry.
           grep -q '_ar_m73_private_import_probe' m43-probe-linked-symbols.txt
           grep -q '_ar_m71_signed_ppu_interpret' m43-probe-linked-symbols.txt
           grep -q '_ar_run' m43-probe-linked-symbols.txt

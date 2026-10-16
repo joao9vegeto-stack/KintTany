@@ -14,7 +14,7 @@ class M71(unittest.TestCase):
   for s in ("ARNativePPUContinuous.c","ARLivePPUContinuous.c",
             "ARNativePPUContinuous.o","ARLivePPUContinuous.o"):
    self.assertIn(s,BUILD)
-  for s in ("_ar_m71_private_continuous_probe",
+  for s in ("_ar_m73_private_import_probe",
             "_ar_m71_signed_ppu_interpret","host_m71_continuous.c",
             "m71-continuous-host.log"):
    self.assertIn(s,WORK)
