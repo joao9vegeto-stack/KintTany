@@ -1,4 +1,4 @@
-name: AscensionRecomp M7.4.2 - preserve legacy artifacts with native AOT
+name: AscensionRecomp M7.4.3 - explicit private AOT linker mode
 
 on:
   push:
