@@ -19,6 +19,8 @@ extern int ar_ppu_bootstrap_forty(const unsigned char*,size_t,
                                  const unsigned int[5],unsigned int[16]);
 extern int ar_ppu_bootstrap_fortyeight(const unsigned char*,size_t,
                                       const unsigned int[5],unsigned int[20]);
+extern int ar_ppu_bootstrap_fortyeight_trace(const unsigned char*,size_t,
+                      const unsigned int[5],unsigned int[20],unsigned int[24]);
 
 extern int rsx_metal_backend_init(unsigned int width, unsigned int height, const char* title);
 extern void rsx_metal_backend_shutdown(void);
@@ -63,6 +65,8 @@ extern int ar_probe_rsx_texture_cache_mutation(unsigned swizzled,unsigned int ou
 @property(nonatomic,strong) UILabel *status;
 @property(nonatomic,strong) UIScrollView *gameList;
 @property(nonatomic,strong) UIScrollView *graphicsList;
+@property(nonatomic,strong) UIButton *ppuReportButton;
+@property(nonatomic,copy) NSString *ppuReport;
 @property(nonatomic,assign) BOOL ready;
 @property(nonatomic,assign) BOOL shaderBusy;
 @property(nonatomic,assign) NSUInteger m51Attempts;
@@ -382,7 +386,7 @@ extern int ar_probe_rsx_texture_cache_mutation(unsigned swizzled,unsigned int ou
     [controller.view addSubview:panel];
     UILabel *header=[UILabel new];
     header.translatesAutoresizingMaskIntoConstraints=NO;
-    header.text=@"ASCENSIONRECOMP   ·   M6.6";
+    header.text=@"ASCENSIONRECOMP   ·   M6.7";
     header.textColor=[UIColor colorWithRed:0.73 green:0.87 blue:1 alpha:1];
     header.font=[UIFont systemFontOfSize:12 weight:UIFontWeightBold];
     header.textAlignment=NSTextAlignmentCenter;
@@ -410,6 +414,17 @@ extern int ar_probe_rsx_texture_cache_mutation(unsigned swizzled,unsigned int ou
         ]];
     }
     self.gameList=game; self.graphicsList=graphics; graphics.hidden=YES;
+    UIButton *reportButton=[UIButton buttonWithType:UIButtonTypeSystem];
+    [reportButton setTitle:@"Copiar diagnóstico PPU" forState:UIControlStateNormal];
+    [reportButton setTitleColor:UIColor.whiteColor forState:UIControlStateNormal];
+    reportButton.backgroundColor=[UIColor colorWithRed:0.14 green:0.23 blue:0.35 alpha:1];
+    reportButton.titleLabel.font=[UIFont systemFontOfSize:14 weight:UIFontWeightSemibold];
+    reportButton.layer.cornerRadius=11;
+    reportButton.enabled=NO;
+    [reportButton.heightAnchor constraintEqualToConstant:42].active=YES;
+    [reportButton addTarget:self action:@selector(copyPpuReport:)
+            forControlEvents:UIControlEventTouchUpInside];
+    self.ppuReportButton=reportButton;
     NSArray<UIScrollView *> *scrollers=@[game,graphics];
     for(NSUInteger i=0;i<scrollers.count;i++) {
         UIScrollView *scroll=scrollers[i];
@@ -425,7 +440,7 @@ extern int ar_probe_rsx_texture_cache_mutation(unsigned swizzled,unsigned int ou
         hint.font=[UIFont systemFontOfSize:13 weight:UIFontWeightMedium];
         hint.textColor=[UIColor colorWithWhite:0.83 alpha:1];
         hint.text=i==0 ?
-             @"NPUA80918 · M6.6: até 48 instruções PPU com registrador CTR, desvios indiretos validados e memória isolada. ELF privado no iPhone." :
+             @"NPUA80918 · M6.7: até 48 instruções PPU com rastreio de r0/CTR, desvio validado e relatório copiável. Seu ELF continua privado no iPhone." :
              @"Diagnósticos RSX → Metal, do mais recente ao legado. Role para encontrar os testes anteriores.";
         [stack addArrangedSubview:hint];
         NSArray<UIButton *> *ordered=i==0 ? @[elfButton] : @[
@@ -440,6 +455,7 @@ extern int ar_probe_rsx_texture_cache_mutation(unsigned swizzled,unsigned int ou
             [stack addArrangedSubview:button];
         }
         if(i==0) {
+            [stack addArrangedSubview:reportButton];
             UILabel *privacy=[UILabel new];
             privacy.numberOfLines=0;
             privacy.textAlignment=NSTextAlignmentCenter;
@@ -521,6 +537,12 @@ extern int ar_probe_rsx_texture_cache_mutation(unsigned swizzled,unsigned int ou
     BOOL showGame=sender.selectedSegmentIndex==0;
     self.gameList.hidden=!showGame;
     self.graphicsList.hidden=showGame;
+}
+- (void)copyPpuReport:(UIButton *)sender {
+    if(self.ppuReport.length==0)return;
+    UIPasteboard.generalPasteboard.string=self.ppuReport;
+    [sender setTitle:@"Relatório copiado · cole no chat"
+            forState:UIControlStateNormal];
 }
 - (void)testGuestRSXShader:(UIButton *)sender {
     if (!self.ready || self.shaderBusy) return;
@@ -943,8 +965,41 @@ extern int ar_probe_rsx_texture_cache_mutation(unsigned swizzled,unsigned int ou
                                    cpu40[0]] :
         @"M6.5 PPU REAL 40/40: OK";
     unsigned int cpu48[20]={0};
-    const int rc48=ar_ppu_bootstrap_fortyeight(data.bytes,data.length,info,cpu48);
+    unsigned int trace48[24]={0};
+    self.ppuReport=nil;
+    self.ppuReportButton.enabled=NO;
+    const int rc48=ar_ppu_bootstrap_fortyeight_trace(
+        data.bytes,data.length,info,cpu48,trace48);
     if(rc48){
+       NSMutableString *recent=[NSMutableString string];
+       for(unsigned i=0;i<4u && i<trace48[15];i++){
+          const unsigned slot=(trace48[15]-1u-i)&3u;
+          [recent appendFormat:@"passo recente -%u: PC=0x%08X opcode=0x%08X\n",
+             i,trace48[16u+2u*slot],trace48[17u+2u*slot]];
+       }
+       self.ppuReport=[NSString stringWithFormat:
+          @"ASCENSIONRECOMP M6.7 / NPUA80918 / trace PPU privado\n"
+           "Resultado=%d · passos=%u/48 · PC=0x%08X · opcode=0x%08X\n"
+           "CTR=0x%08X%08X · saltos indiretos=%u\n"
+           "r0 atual=0x%08X%08X · alterações=%u\n"
+           "Última alteração r0: PC=0x%08X opcode=0x%08X\n"
+           "r0 anterior=0x%08X · depois=0x%08X%08X\n"
+           "Tipo opcode última alteração=%u · EA se leitura=%08X\n"
+           "mtctr: PC=0x%08X · registrador-fonte=r%u\n"
+           "bctr/bctrl: PC=0x%08X · alvo CTR baixo=%08X\n"
+           "Indicador falha memória=%u · EA=0x%08X\n"
+           "%@"
+           "Dados são apenas registradores, PC e palavras de instrução; ELF não incluído.",
+           rc48,cpu48[0],cpu48[8],cpu48[7],
+           cpu48[18],cpu48[17],cpu48[19],
+           trace48[6],trace48[5],trace48[7],
+           trace48[0],trace48[1],
+           trace48[2],trace48[4],trace48[3],
+           trace48[9],trace48[8],
+           trace48[10],trace48[11],trace48[14],trace48[12],
+           cpu48[16],cpu48[10],recent];
+       self.ppuReportButton.enabled=YES;
+       [self.ppuReportButton setTitle:@"Copiar diagnóstico PPU" forState:UIControlStateNormal];
        NSString *faultDetail=cpu48[16]
           ? [NSString stringWithFormat:@"EA=0x%X · base=0x%X · valor=0x%X",
                 cpu48[10],cpu48[11],cpu48[12]]
@@ -957,9 +1012,10 @@ extern int ar_probe_rsx_texture_cache_mutation(unsigned swizzled,unsigned int ou
            "M6.6 PARADA SEGURA %d · %u/48\n"
            "PC=0x%X · opcode=0x%08X\n"
            "%@\n"
-           "Sem HLE/SPU ou gameplay.",
+           "Última escrita r0: PC=0x%X · word=%08X\n"
+           "Use «Copiar diagnóstico PPU» para enviar a trilha.",
            legacyState,old40State,rc48,cpu48[0],cpu48[8],
-           cpu48[7],faultDetail];
+           cpu48[7],faultDetail,trace48[0],trace48[1]];
        return;
     }
     self.status.text=[NSString stringWithFormat:

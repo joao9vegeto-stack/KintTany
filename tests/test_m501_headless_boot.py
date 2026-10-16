@@ -22,7 +22,7 @@ class CIHeadlessBoot(unittest.TestCase):
         self.assertIn('python3 tools/enable_macos_boot_smoke_null_backend.py upstream',w)
         self.assertIn('./build/ps3recomp_boot_smoke build/smoke/smoke.elf',w)
         self.assertIn('python3 tools/enable_ios_guest_shaders.py upstream',w)
-        self.assertIn('AscensionRecompProbe-0.6.12-unsigned.ipa',w)
+        self.assertIn('AscensionRecompProbe-0.6.13-unsigned.ipa',w)
 
 if __name__=='__main__':
     unittest.main()

@@ -41,6 +41,6 @@ class RealMultipass(unittest.TestCase):
             self.assertIn(v,app)
         w=(ROOT/".github/workflows/ascension-recomp-m0.yml").read_text()
         self.assertIn("'_ar_probe_m53_surface_views'",w)
-        self.assertIn("AscensionRecompProbe-0.6.12-unsigned.ipa",w)
+        self.assertIn("AscensionRecompProbe-0.6.13-unsigned.ipa",w)
 if __name__=="__main__":
     unittest.main()
