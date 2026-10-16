@@ -40,3 +40,18 @@ int ar_lv2_system_time(ppu_context *cpu){
  ++time_queries;
  return AR_OK;
 }
+
+/* M7.9 PS3 sysPrxForUser: sys_ppu_thread_get_id, NID 0x350D454E.
+ * The sole registered bootstrap PPU thread is created by ELF stage.
+ * Return the authenticated thread id through the guest BE uint64 pointer. */
+int ar_lv2_thread_get_id(ppu_context *cpu){
+ if(!cpu || !cpu->thread_id)return AR_BAD_ARGS;
+ const uint64_t ptr=cpu->gpr[3];
+ if(!ptr||(ptr&7u)||ptr>UINT32_MAX-7u)return AR_BAD_ARGS;
+ (void)ar_read8(ptr+7u);
+ if(ar_last_error()!=AR_OK)return AR_MEM_FAULT;
+ ar_write64(ptr,cpu->thread_id);
+ if(ar_last_error()!=AR_OK)return AR_MEM_FAULT;
+ cpu->gpr[3]=0u;
+ return AR_OK;
+}

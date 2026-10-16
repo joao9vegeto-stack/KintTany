@@ -21,7 +21,7 @@ class TLS(unittest.TestCase):
             'return m672_core(d,len,info,out,trace,detail,NULL);'):
    self.assertIn(x,C)
  def test_report_and_ci(self):
-  for x in ('ASCENSIONRECOMP   ·   M7.8',
+  for x in ('ASCENSIONRECOMP   ·   M7.9',
             'ar_ppu_bootstrap_fortyeight_trace_m674(',
             'TLS HLE M6.7.6:',
             'sys_initialize_tls HLE executada'):

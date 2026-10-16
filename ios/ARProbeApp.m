@@ -399,7 +399,7 @@ extern int ar_probe_rsx_texture_cache_mutation(unsigned swizzled,unsigned int ou
     [controller.view addSubview:panel];
     UILabel *header=[UILabel new];
     header.translatesAutoresizingMaskIntoConstraints=NO;
-    header.text=@"ASCENSIONRECOMP   ·   M7.8";
+    header.text=@"ASCENSIONRECOMP   ·   M7.9";
     header.textColor=[UIColor colorWithRed:0.73 green:0.87 blue:1 alpha:1];
     header.font=[UIFont systemFontOfSize:12 weight:UIFontWeightBold];
     header.textAlignment=NSTextAlignmentCenter;
@@ -453,7 +453,7 @@ extern int ar_probe_rsx_texture_cache_mutation(unsigned swizzled,unsigned int ou
         hint.font=[UIFont systemFontOfSize:13 weight:UIFontWeightMedium];
         hint.textColor=[UIColor colorWithWhite:0.83 alpha:1];
         hint.text=i==0 ?
-             @"NPUA80918 · M7.8: execução PPU ARM64 recompilada. Importar ELF e conferir funções AOT no relatório." :
+             @"NPUA80918 · M7.9: 24 entradas AOT ARM64. Importar ELF e verificar próxima rotina nativa." :
              @"Diagnósticos RSX → Metal, do mais recente ao legado. Role para encontrar os testes anteriores.";
         [stack addArrangedSubview:hint];
         NSArray<UIButton *> *ordered=i==0 ? @[elfButton] : @[
@@ -1145,6 +1145,17 @@ extern int ar_probe_rsx_texture_cache_mutation(unsigned swizzled,unsigned int ou
        [extended appendString:lwMutexText];
        if(native[5]>0u){
          [extended appendFormat:
+           @"\nM7.9 — SERVIÇOS DO INÍCIO AOT ARM64\n"
+            "Thread get-id=%@ · mutex lock=%@ · mutex unlock=%@\n"
+            "Todos são imports PS3 reais, vinculados por biblioteca/NID;\n"
+            "HLE disponível não prova que a chamada foi executada.\n",
+            (native[15]&0x100u)?@"VINCULADO":@"AUSENTE",
+            (native[15]&0x200u)?@"VINCULADO":@"AUSENTE",
+            (native[15]&0x400u)?@"VINCULADO":@"AUSENTE"];
+       }
+
+       if(native[5]>0u){
+         [extended appendFormat:
            @"\nM7.8 — EXECUÇÃO DO ASCENSION RECOMPILADO ARM64\n"
             "Funções nativas=%u · despacho=%d · próximo PC faltante=0x%08X\n"
             "Import de tempo autenticado=%@ · HLE tempo vinculado=%@\n"
@@ -1207,7 +1218,7 @@ extern int ar_probe_rsx_texture_cache_mutation(unsigned swizzled,unsigned int ou
         "M6.7.6 PPU REAL 48/48: OK · TLS=%u\n"
         "PC=0x%X · CTR=0x%08X%08X\n"
         "stores=%u · indiretos=%u · sombra=%u\n"
-        "M7.8: código ARM64 vinculado ao app; veja contagem AOT e PC pendente no relatório.",
+        "M7.9: código ARM64 recompilado vinculado; veja AOT e próximo PC no relatório.",
         legacyState,old40State,tls48[0],cpu48[2],cpu48[18],cpu48[17],
         cpu48[5],cpu48[19],cpu48[15]];
   } @finally {

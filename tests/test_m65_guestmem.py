@@ -33,7 +33,7 @@ class GuestMemory(unittest.TestCase):
      "ar_ppu_bootstrap_forty(data.bytes,data.length,info,cpu40)"):
    self.assertIn(t,C if "for(" in t else U)
   for t in ("M6.5 PARADA SEGURA","EA=0x%X · base=0x%X · valor=0x%X",
-    "M6.5 PPU REAL 40/40: OK","ASCENSIONRECOMP   ·   M7.8",
+    "M6.5 PPU REAL 40/40: OK","ASCENSIONRECOMP   ·   M7.9",
     "self.gameList.hidden=!showGame","self.graphicsList.hidden=showGame"):
    self.assertIn(t,U)
  def test_ci(self):

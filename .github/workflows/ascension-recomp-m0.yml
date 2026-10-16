@@ -1,4 +1,4 @@
-name: AscensionRecomp M7.8 - link 11 real game PPU ARM64 AOT entries
+name: AscensionRecomp M7.9 - 24 authentic game ARM64 AOT and thread mutex HLE
 
 on:
   push:
@@ -265,6 +265,16 @@ jobs:
           ./m77-lwmutex-host 2>&1 | tee m77-lwmutex-host.log
           grep -Fxq 'M7.7 lwmutex create guest BE ABI, validation, reset PASS' m77-lwmutex-host.log
           echo 'M7.7: sys_lwmutex_create generic HLE + exact PRX NID lookup; game AOT is NOT in the public IPA.' > m77-status.txt
+      - name: M7.9 verify genuine native HLE thread ID and mutex lifecycle
+        run: |
+          set -euo pipefail
+          clang -std=c11 -O2 -Wall -Wextra -Werror \
+            -I upstream/runtime/ppu -I runtime \
+            runtime/ppu_bridge.c runtime/ppu_lwmutex.c \
+            runtime/ppu_lv2_bootstrap.c tests/host_m79_native_services.c \
+            -o m79-native-hle-host
+          ./m79-native-hle-host 2>&1 | tee m79-native-hle-host.log
+          grep -Fxq 'M7.9 native AOT thread-ID, recursive lwmutex lock/unlock PASS' m79-native-hle-host.log
       - name: M7.8 verify native guest LV2 memory and monotonic time services
         run: |
           set -euo pipefail
@@ -548,21 +558,21 @@ jobs:
           echo 'M4.0: UIKit CAMetalLayer view and iOS RSX Metal bridge compiled, not runtime displayed or game-rendered.' > m40-status.txt
           echo 'iPhone ARM64 CPU/SPU/LV2+offscreen Metal compiled; no CAMetalLayer presenter/audio/input/IPA.' > m39-status.txt
           echo 'iOS CPU/SPU/LV2 build only. SDL2 input/audio and RSX Metal backend disabled until iOS adapters are implemented.' > m38-status.txt
-      - name: M7.8 verify and stage exact owner-provided AOT before iOS linking
+      - name: M7.9 verify and stage 24 real PPU AOT entries before iOS linking
         env:
           ASCENSION_AOT_SOURCE_GZIP_B64: ${{ secrets.ASCENSION_AOT_SOURCE_GZIP_B64 }}
         run: |
           set -euo pipefail
           python3 tools/stage_m78_aot.py 2>&1 | tee m78-aot-stage.log
-          grep -Fxq 'M7.8 owner AOT source SHA256 verified; 11 real native entries staged' m78-aot-stage.log
+          grep -Fxq 'M7.9 owner AOT source SHA256 verified; 24 real native entries staged' m78-aot-stage.log
       - name: M4.1 link native UIKit RSX Metal diagnostic application
         run: |
           set -euo pipefail
           bash tools/build_ios_probe_ipa.sh 2>&1 | tee m41-build-ipa.log
           test -s m78-aot-status.txt
-          grep -Fq '11 REAL PPU ARM64 functions verified' m78-aot-status.txt
-          test "$(grep -c '_ar_game_ppu_' m78-owner-aot-linked-symbols.txt)" -eq 11
-          echo 'M7.8: 11 real NPUA80918 ARM64 PPU entries IN IPA; on-device execution is pending' > m78-actions-status.txt
+          grep -Fq '24 REAL PPU ARM64 functions verified' m78-aot-status.txt
+          test "$(grep -c '_ar_game_ppu_' m78-owner-aot-linked-symbols.txt)" -eq 24
+          echo 'M7.9: 24 real NPUA80918 ARM64 PPU entries IN IPA; on-device execution is pending' > m78-actions-status.txt
           test -s AscensionRecompProbe-0.6.14-unsigned.ipa
           /usr/libexec/PlistBuddy -c 'Print CFBundleShortVersionString' ios-probe/Payload/AscensionRecompProbe.app/Info.plist | grep -Fx 0.6.14
           /usr/bin/unzip -t AscensionRecompProbe-0.6.14-unsigned.ipa | tee m42-ipa-integrity.log
@@ -798,6 +808,7 @@ jobs:
             m74-arm64-symbols.txt
             m74-status.txt
             m78-aot-stage.log
+            m79-native-hle-host.log
             m78-stage-tests.log
             m78-lv2-host.log
             m78-owner-aot-object-symbols.txt
