@@ -47,16 +47,16 @@ int main(void){
  p32(d,0x240,0x10000);p32(d,0x244,0x20010);
  p32(d,0x2a0,0xfeedface); /* immutable original backing at VA 0x20060 */
  if(ar_private_elf_inspect(d,sizeof d,info))return 1;
- /* synthetic: mflr r0 sets 0x10020, addi r0,r0,0x2c makes 0x1004c.
+ /* synthetic: mflr r0 sets 0x10020, ori r0,r0,0x6c makes 0x1006c.
   * ctr <- gpr0 at step 38; bctr step 39 jumps to prior executable
   * instruction 0x1004c, then 8 more bounded guest steps. */
- p32(d,0x180,0x3800002cu);
+ p32(d,0x180,0x6000006cu);
  p32(d,0x1a4,0x7c0903a6u); /* mtctr r0, exact iPhone opcode */
  p32(d,0x1a8,0x4e800420u); /* bctr, unconditional */
  int rc=ar_ppu_bootstrap_fortyeight(d,sizeof d,info,cpu);
- if(rc || cpu[0]!=48u||cpu[2]!=0x1006cu||cpu[3]!=0x10020u||
+ if(rc || cpu[0]!=48u||cpu[2]!=0x1008cu||cpu[3]!=0x10020u||
     cpu[5]!=17u||cpu[9]!=0xffffffffu||cpu[15]!=2u||
-    cpu[16]!=0u||cpu[17]!=0x1004cu||cpu[18]!=0u||
+    cpu[16]!=0u||cpu[17]!=0x1006cu||cpu[18]!=0u||
     cpu[19]!=1u){
    fprintf(stderr,"m66 first rc=%d steps=%u pc=%X lr=%X stores=%u ctr=%X indirect=%u\n",
       rc,cpu[0],cpu[2],cpu[3],cpu[5],cpu[17],cpu[19]);
@@ -68,10 +68,10 @@ int main(void){
     cpu[0]!=48u||cpu[3]!=0x100acu||cpu[19]!=1u)return 3;
  p32(d,0x1a8,0x4e800420u);
  /* Invalid CTR PC outside executable segment must fail closed. */
- p32(d,0x180,0x380000a4u); /* CTR=0x100c4, unmapped */
+ p32(d,0x180,0x600000e4u); /* CTR=0x100e4, unmapped */
  if(ar_ppu_bootstrap_fortyeight(d,sizeof d,info,cpu)!=-1007||
-    cpu[0]!=39u||cpu[8]!=0x100a8u||cpu[17]!=0x100c4u)return 4;
- p32(d,0x180,0x3800002cu);
+    cpu[0]!=39u||cpu[8]!=0x100a8u||cpu[17]!=0x100e4u)return 4;
+ p32(d,0x180,0x6000006cu);
  /* Unsupported conditional bcctr: CR is intentionally not modeled. */
  p32(d,0x1a8,0x4e000420u);
  if(ar_ppu_bootstrap_fortyeight(d,sizeof d,info,cpu)!=-1008||
