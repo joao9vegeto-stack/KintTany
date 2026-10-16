@@ -36,7 +36,7 @@ test -s ios-ppu-core/libAscensionPPUCore-ios-arm64.a
 xcrun --sdk iphoneos clang -target arm64-apple-ios17.0 -isysroot "$SDK" \
     -std=c11 -O2 -Wall -Wextra -Werror \
     -I upstream/runtime/ppu -I runtime \
-    "${AOT_COMPILE_DEFINES[@]}" \
+    ${AOT_COMPILE_DEFINES[@]+"${AOT_COMPILE_DEFINES[@]}"} \
     -c ios/ARLivePPUBridge.c -o ios-probe/ARLivePPUBridge.o
 xcrun --sdk iphoneos clang -target arm64-apple-ios17.0 -isysroot "$SDK" \
     -std=c11 -O2 -Wall -Wextra -Werror \
@@ -56,7 +56,7 @@ xcrun --sdk iphoneos clang++ -target arm64-apple-ios17.0 \
     ios-probe/ARRSXMethodProbe.o ios-probe/ARGuestDrawProbe.o ios-probe/ARPrivateELFProbe.o \
     ios-probe/ARLivePPUBridge.o ios-probe/ARLivePPUContinuous.o \
     ios-probe/ARNativePPUContinuous.o \
-    "${AOT_OBJECTS[@]}" \
+    ${AOT_OBJECTS[@]+"${AOT_OBJECTS[@]}"} \
     ios-ppu-core/libAscensionPPUCore-ios-arm64.a \
     build-ios-runtime/libAscensionRSXGuest-ios-arm64.a \
     -framework UIKit -framework Foundation -framework QuartzCore \
