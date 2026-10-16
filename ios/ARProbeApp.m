@@ -380,7 +380,7 @@ extern int ar_probe_rsx_texture_cache_mutation(unsigned swizzled,unsigned int ou
     [controller.view addSubview:panel];
     UILabel *header=[UILabel new];
     header.translatesAutoresizingMaskIntoConstraints=NO;
-    header.text=@"ASCENSIONRECOMP   ·   M6.5";
+    header.text=@"ASCENSIONRECOMP   ·   M6.5.3";
     header.textColor=[UIColor colorWithRed:0.73 green:0.87 blue:1 alpha:1];
     header.font=[UIFont systemFontOfSize:12 weight:UIFontWeightBold];
     header.textAlignment=NSTextAlignmentCenter;
@@ -423,7 +423,7 @@ extern int ar_probe_rsx_texture_cache_mutation(unsigned swizzled,unsigned int ou
         hint.font=[UIFont systemFontOfSize:13 weight:UIFontWeightMedium];
         hint.textColor=[UIColor colorWithWhite:0.83 alpha:1];
         hint.text=i==0 ?
-             @"NPUA80918 · M6.5: até 40 passos PPU reais com memória convidada isolada. Parada segura mostra PC, opcode e endereço." :
+             @"NPUA80918 · M6.5.3: até 40 passos PPU com memória isolada. Caso o M6.4 antigo pare em stw -995, a M6.5 testa o endereço com segurança." :
              @"Diagnósticos RSX → Metal, do mais recente ao legado. Role para encontrar os testes anteriores.";
         [stack addArrangedSubview:hint];
         NSArray<UIButton *> *ordered=i==0 ? @[elfButton] : @[
@@ -889,39 +889,50 @@ extern int ar_probe_rsx_texture_cache_mutation(unsigned swizzled,unsigned int ou
     /* Do not start extra PPU instructions before M6.3 24/24 succeeds. */
     unsigned int cpu32[10]={0};
     const int rc32=ar_ppu_bootstrap_thirtytwo(data.bytes,data.length,info,cpu32);
-    if(rc32){
+    /* M6.5.3: the old M6.4 interpreter is stack-ONLY. Its -995 on
+     * a valid stw must not block the NEW M6.5 guest PT_LOAD overlay.
+     * Permit ONLY the diagnosed write-restriction case after the
+     * proved 24-step checkpoint. Preserve all other fail-closed stops. */
+    const BOOL legacyStackOnlyStop =
+        rc32==-995 && cpu32[0]>=24u && (cpu32[7]>>26)==36u;
+    if(rc32 && !legacyStackOnlyStop){
        self.status.text=[NSString stringWithFormat:
           @"M5.9 NPUA80918: ELF REAL VALIDADO\n"
            "M6.3 PPU REAL 24/24: OK\n"
            "M6.4 PARADA SEGURA %d · %u/32\n"
            "PC=0x%X · opcode=0x%08X\n"
-           "Sem HLE/SPU/gameplay; nenhuma instrução ignorada.",
+           "M6.5 não iniciada: erro não é de memória convidada.",
            rc32,cpu32[0],cpu32[8],cpu32[7]];
        return;
     }
+    NSString *legacyState=legacyStackOnlyStop
+       ? [NSString stringWithFormat:@"M6.4 LEGADA: -995 (%u/32) · transferida à M6.5",
+                                    cpu32[0]]
+       : @"M6.4 PPU REAL 32/32: OK";
     unsigned int cpu40[16]={0};
     const int rc40=ar_ppu_bootstrap_forty(data.bytes,data.length,info,cpu40);
     if(rc40){
        self.status.text=[NSString stringWithFormat:
           @"M5.9 NPUA80918: ELF REAL VALIDADO\n"
-           "M6.3 24/24 · M6.4 32/32: OK\n"
+           "M6.3 PPU REAL 24/24: OK\n"
+           "%@\n"
            "M6.5 PARADA SEGURA %d · %u/40\n"
            "PC=0x%X · opcode=0x%08X\n"
            "EA=0x%X · base=0x%X · valor=0x%X\n"
            "Memória convidada limitada; SEM HLE/SPU/gameplay.",
-           rc40,cpu40[0],cpu40[8],cpu40[7],
+           legacyState,rc40,cpu40[0],cpu40[8],cpu40[7],
            cpu40[10],cpu40[11],cpu40[12]];
        return;
     }
     self.status.text=[NSString stringWithFormat:
           @"M5.9 NPUA80918: ELF REAL VALIDADO\n"
            "M6.3 PPU REAL 24/24: OK\n"
-           "M6.4 PPU REAL 32/32: OK\n"
+           "%@\n"
            "M6.5 PPU REAL 40/40: OK\n"
            "TOC=0x%X · PC=0x%X · LR=0x%X\n"
            "SP=0x%X · stores=%u · overlays=%u\n"
            "Execução limitada, SEM HLE/SPU ou gameplay.",
-           cpu40[1],cpu40[2],cpu40[3],
+           legacyState,cpu40[1],cpu40[2],cpu40[3],
            cpu40[4],cpu40[5],cpu40[15]];
   } @finally {
     if(scoped)[url stopAccessingSecurityScopedResource];

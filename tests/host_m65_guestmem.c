@@ -5,6 +5,8 @@
 extern int ar_private_elf_inspect(const uint8_t*,size_t,uint32_t[5]);
 extern int ar_ppu_bootstrap_forty(const uint8_t*,size_t,
                                    const uint32_t[5],uint32_t[16]);
+extern int ar_ppu_bootstrap_thirtytwo(const uint8_t*,size_t,
+                                   const uint32_t[5],uint32_t[10]);
 static void p16(uint8_t*d,int i,uint16_t x){d[i]=x>>8;d[i+1]=x;}
 static void p32(uint8_t*d,int i,uint32_t x){
  d[i]=x>>24;d[i+1]=x>>16;d[i+2]=x>>8;d[i+3]=x;
@@ -86,5 +88,19 @@ int main(void){
  p32(d,0x16c,tail[0]);
  p32(d,0x12c,0xf8210101); /* invalid positive DS stack address */
  if(ar_ppu_bootstrap_forty(d,sizeof d,info,cpu)!=-987)return 5;
+ p32(d,0x12c,program[8]);
+ /* Reproduce iPhone regression: legacy 32-step interpreter hits a
+  * guest PT_LOAD stw AFTER the 24-step checkpoint. Old path rejects
+  * it as -995. New PPU40 must succeed without native pointer writes. */
+ const uint32_t early[4]={0x39620050u,0x3ba01234u,
+                          0x93ab0000u,0x818b0000u};
+ for(unsigned i=0;i<4;i++)p32(d,0x16c+4*i,early[i]);
+ uint32_t legacy[10]={0};
+ if(ar_ppu_bootstrap_thirtytwo(d,sizeof d,info,legacy)!=-995||
+    legacy[0]!=26u||legacy[7]!=0x93ab0000u||
+    legacy[8]!=0x10074u)return 14;
+ if(ar_ppu_bootstrap_forty(d,sizeof d,info,cpu)!=0||
+    cpu[0]!=40u||cpu[13]!=0x1234u||cpu[15]<1u)return 15;
+ for(unsigned i=0;i<4;i++)p32(d,0x16c+4*i,tail[i]);
  puts("M6.5 PPU40 private guest writable PT_LOAD PASS");return 0;
 }
