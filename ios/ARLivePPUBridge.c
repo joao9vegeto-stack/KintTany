@@ -180,7 +180,7 @@ int ar_m70_native_runtime_probe(const uint8_t*d,size_t len,
  /* This is the actual native AOT dispatcher, NOT the 48-step interpreter.
   * With no signed game AOT functions in the IPA it MUST return unresolved
   * rather than executing data as ARM64 or reporting boot success. */
- out[6]=(uint32_t)ar_run(&ctx,image.entry_code,out[5] ? 4096u : 128u);
+ out[6]=(uint32_t)ar_run(&ctx,image.entry_code,128u);
  out[7]=ar_last_unresolved();
  /* In AOT mode this is the r13 reached by genuine recompiled guest
   * execution, not a separately invented HLE smoke result. The status
