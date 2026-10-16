@@ -80,6 +80,8 @@ extern int ar_probe_rsx_texture_cache_mutation(unsigned swizzled,unsigned int ou
 @property(nonatomic,strong) UIScrollView *graphicsList;
 @property(nonatomic,strong) UIButton *ppuReportButton;
 @property(nonatomic,copy) NSString *ppuReport;
+@property(nonatomic,copy) NSString *ppuSummary;
+@property(nonatomic,strong) UIButton *ppuAdvancedButton;
 @property(nonatomic,assign) BOOL ready;
 @property(nonatomic,assign) BOOL shaderBusy;
 @property(nonatomic,assign) NSUInteger m51Attempts;
@@ -399,7 +401,7 @@ extern int ar_probe_rsx_texture_cache_mutation(unsigned swizzled,unsigned int ou
     [controller.view addSubview:panel];
     UILabel *header=[UILabel new];
     header.translatesAutoresizingMaskIntoConstraints=NO;
-    header.text=@"ASCENSIONRECOMP   ·   M7.9";
+    header.text=@"ASCENSIONRECOMP   ·   M7.10";
     header.textColor=[UIColor colorWithRed:0.73 green:0.87 blue:1 alpha:1];
     header.font=[UIFont systemFontOfSize:12 weight:UIFontWeightBold];
     header.textAlignment=NSTextAlignmentCenter;
@@ -428,7 +430,7 @@ extern int ar_probe_rsx_texture_cache_mutation(unsigned swizzled,unsigned int ou
     }
     self.gameList=game; self.graphicsList=graphics; graphics.hidden=YES;
     UIButton *reportButton=[UIButton buttonWithType:UIButtonTypeSystem];
-    [reportButton setTitle:@"Copiar diagnóstico PPU" forState:UIControlStateNormal];
+    [reportButton setTitle:@"Copiar status AOT" forState:UIControlStateNormal];
     [reportButton setTitleColor:UIColor.whiteColor forState:UIControlStateNormal];
     reportButton.backgroundColor=[UIColor colorWithRed:0.14 green:0.23 blue:0.35 alpha:1];
     reportButton.titleLabel.font=[UIFont systemFontOfSize:14 weight:UIFontWeightSemibold];
@@ -438,6 +440,18 @@ extern int ar_probe_rsx_texture_cache_mutation(unsigned swizzled,unsigned int ou
     [reportButton addTarget:self action:@selector(copyPpuReport:)
             forControlEvents:UIControlEventTouchUpInside];
     self.ppuReportButton=reportButton;
+    UIButton *advancedButton=[UIButton buttonWithType:UIButtonTypeSystem];
+    [advancedButton setTitle:@"Diagnóstico avançado · M6/M7" forState:UIControlStateNormal];
+    [advancedButton setTitleColor:UIColor.whiteColor forState:UIControlStateNormal];
+    advancedButton.backgroundColor=[UIColor colorWithRed:0.12 green:0.18 blue:0.27 alpha:1];
+    advancedButton.titleLabel.font=[UIFont systemFontOfSize:13 weight:UIFontWeightMedium];
+    advancedButton.layer.cornerRadius=11;
+    [advancedButton.heightAnchor constraintEqualToConstant:40].active=YES;
+    advancedButton.enabled=NO;
+    advancedButton.accessibilityLabel=@"Copiar diagnóstico PPU completo e consultar detalhes";
+    [advancedButton addTarget:self action:@selector(openAdvancedPpuReport:)
+            forControlEvents:UIControlEventTouchUpInside];
+    self.ppuAdvancedButton=advancedButton;
     NSArray<UIScrollView *> *scrollers=@[game,graphics];
     for(NSUInteger i=0;i<scrollers.count;i++) {
         UIScrollView *scroll=scrollers[i];
@@ -453,7 +467,7 @@ extern int ar_probe_rsx_texture_cache_mutation(unsigned swizzled,unsigned int ou
         hint.font=[UIFont systemFontOfSize:13 weight:UIFontWeightMedium];
         hint.textColor=[UIColor colorWithWhite:0.83 alpha:1];
         hint.text=i==0 ?
-             @"NPUA80918 · M7.9: 24 entradas AOT ARM64. Importar ELF e verificar próxima rotina nativa." :
+             @"NPUA80918 · AOT ARM64 do Ascension. Importe o ELF para acompanhar a inicialização nativa." :
              @"Diagnósticos RSX → Metal, do mais recente ao legado. Role para encontrar os testes anteriores.";
         [stack addArrangedSubview:hint];
         NSArray<UIButton *> *ordered=i==0 ? @[elfButton] : @[
@@ -469,6 +483,7 @@ extern int ar_probe_rsx_texture_cache_mutation(unsigned swizzled,unsigned int ou
         }
         if(i==0) {
             [stack addArrangedSubview:reportButton];
+            [stack addArrangedSubview:advancedButton];
             UILabel *privacy=[UILabel new];
             privacy.numberOfLines=0;
             privacy.textAlignment=NSTextAlignmentCenter;
@@ -485,7 +500,7 @@ extern int ar_probe_rsx_texture_cache_mutation(unsigned swizzled,unsigned int ou
             [stack.widthAnchor constraintEqualToAnchor:scroll.frameLayoutGuide.widthAnchor]
         ]];
     }
-    [elfButton setTitle:@"Importar GOWA.ELF · testar PPU" forState:UIControlStateNormal];
+    [elfButton setTitle:@"Importar GOWA.ELF · executar AOT" forState:UIControlStateNormal];
     NSLayoutConstraint *height=[panel.heightAnchor
              constraintEqualToAnchor:controller.view.heightAnchor multiplier:0.60];
     height.priority=UILayoutPriorityDefaultHigh;
@@ -529,6 +544,11 @@ extern int ar_probe_rsx_texture_cache_mutation(unsigned swizzled,unsigned int ou
                                   "4 toques: TEXTURA PS3 linear/swizzled\n"
                                   "5 toques: TEXTURA por NV4097/cache/Metal\n"
                                   "Sem arquivos do jogo.";
+                self.status.text=@"ASCENSIONRECOMP · NPUA80918\n"
+                                  "M7.10 · recompilação ARM64 nativa\n"
+                                  "Importe GOWA.ELF para executar o código recompilado.\n"
+                                  "Inicialização parcial, ainda sem gameplay.\n"
+                                  "Ferramentas RSX estão na aba RSX / Metal.";
             } else {
                 self.status.text=[NSString stringWithFormat:
                      @"A referência Metal falhou: %@\n"
@@ -552,10 +572,45 @@ extern int ar_probe_rsx_texture_cache_mutation(unsigned swizzled,unsigned int ou
     self.graphicsList.hidden=showGame;
 }
 - (void)copyPpuReport:(UIButton *)sender {
-    if(self.ppuReport.length==0)return;
-    UIPasteboard.generalPasteboard.string=self.ppuReport;
-    [sender setTitle:@"Relatório copiado · cole no chat"
-            forState:UIControlStateNormal];
+    if(!self.ppuSummary.length)return;
+    UIPasteboard.generalPasteboard.string=self.ppuSummary;
+    [sender setTitle:@"Status AOT copiado · cole no chat" forState:UIControlStateNormal];
+}
+- (void)copyAdvancedPpuReport:(UIBarButtonItem *)sender {
+    (void)sender;
+    if(self.ppuReport.length)UIPasteboard.generalPasteboard.string=self.ppuReport;
+}
+- (void)closeAdvancedPpuReport:(UIBarButtonItem *)sender {
+    (void)sender;
+    [self.window.rootViewController dismissViewControllerAnimated:YES completion:nil];
+}
+- (void)openAdvancedPpuReport:(UIButton *)sender {
+    (void)sender;
+    if(!self.ppuReport.length)return;
+    UIViewController *page=[UIViewController new];
+    page.title=@"Diagnóstico avançado PPU";
+    page.view.backgroundColor=UIColor.systemBackgroundColor;
+    UITextView *details=[UITextView new];
+    details.translatesAutoresizingMaskIntoConstraints=NO;
+    details.editable=NO;
+    details.selectable=YES;
+    details.font=[UIFont monospacedSystemFontOfSize:12 weight:UIFontWeightRegular];
+    details.text=self.ppuReport;
+    [page.view addSubview:details];
+    [NSLayoutConstraint activateConstraints:@[
+      [details.topAnchor constraintEqualToAnchor:page.view.safeAreaLayoutGuide.topAnchor],
+      [details.leadingAnchor constraintEqualToAnchor:page.view.safeAreaLayoutGuide.leadingAnchor constant:12],
+      [details.trailingAnchor constraintEqualToAnchor:page.view.safeAreaLayoutGuide.trailingAnchor constant:-12],
+      [details.bottomAnchor constraintEqualToAnchor:page.view.safeAreaLayoutGuide.bottomAnchor]
+    ]];
+    page.navigationItem.leftBarButtonItem=[[UIBarButtonItem alloc]
+       initWithTitle:@"Fechar" style:UIBarButtonItemStylePlain target:self
+       action:@selector(closeAdvancedPpuReport:)];
+    page.navigationItem.rightBarButtonItem=[[UIBarButtonItem alloc]
+       initWithTitle:@"Copiar tudo" style:UIBarButtonItemStylePlain target:self
+       action:@selector(copyAdvancedPpuReport:)];
+    UINavigationController *nav=[[UINavigationController alloc] initWithRootViewController:page];
+    [self.window.rootViewController presentViewController:nav animated:YES completion:nil];
 }
 - (void)testGuestRSXShader:(UIButton *)sender {
     if (!self.ready || self.shaderBusy) return;
@@ -982,7 +1037,9 @@ extern int ar_probe_rsx_texture_cache_mutation(unsigned swizzled,unsigned int ou
     unsigned int detail48[24]={0};
     unsigned int tls48[12]={0};
     self.ppuReport=nil;
+    self.ppuSummary=nil;
     self.ppuReportButton.enabled=NO;
+    self.ppuAdvancedButton.enabled=NO;
     const int rc48=ar_ppu_bootstrap_fortyeight_trace_m674(
         data.bytes,data.length,info,cpu48,trace48,detail48,tls48);
 
@@ -1050,6 +1107,37 @@ extern int ar_probe_rsx_texture_cache_mutation(unsigned swizzled,unsigned int ou
         importEvidence[9],importEvidence[10],importEvidence[8],
         importEvidence[11],importEvidence[12],
         importEvidence[13],importEvidence[14]];
+    /* Primary status is derived ONLY from actual signed ARM64 guest
+     * AOT dispatch, not the older 48/108-step interpreter reports. */
+    uint32_t pendingImport[4]={0};
+    char pendingLibrary[48]={0};
+    int pendingMatch=((int)native[6]==-3 && native[7]) ?
+       ar_private_import_match(data.bytes,data.length,native[7],
+                               pendingImport,pendingLibrary) : -1;
+    NSString *pendingText=nil;
+    if((int)native[6]==-3 && pendingMatch==0){
+       pendingText=[NSString stringWithFormat:
+           @"Import PRX pendente: %s · NID=0x%08X\nStub=0x%08X",
+           pendingLibrary[0]?pendingLibrary:"(sem nome)",
+           pendingImport[0],native[7]];
+    } else if((int)native[6]==-3){
+       pendingText=[NSString stringWithFormat:
+           @"Próximo bloco sem ARM64: 0x%08X",native[7]];
+    } else {
+       pendingText=[NSString stringWithFormat:
+           @"Último resultado do despachante: %d",(int)native[6]];
+    }
+    self.ppuSummary=[NSString stringWithFormat:
+       @"ASCENSIONRECOMP M7.10 · NPUA80918\n"
+        "RECOMPILAÇÃO ESTÁTICA ARM64\n"
+        "Entradas AOT vinculadas: %u\n"
+        "ELF: %@ · entrada 0x%08X\n"
+        "Execução nativa: %d · TLS r13=0x%08X\n"
+        "%@\n"
+        "Estado: inicialização parcial, sem gameplay.\n"
+        "Diagnósticos legados: seção avançada.",
+        native[5],nativeRC==0?@"VALIDADO":@"FALHOU",
+        native[1],(int)native[6],native[12],pendingText];
     if((int)continuous[0]!=-1314 || continuous[3]!=0x4e800421u)
        importReport=@"\nM7.3: nenhuma chamada bctrl desconhecida detectada nesta execução.\n";
     continuousText=[continuousText stringByAppendingString:importReport];
@@ -1182,9 +1270,10 @@ extern int ar_probe_rsx_texture_cache_mutation(unsigned swizzled,unsigned int ou
             "Funções AOT=0; é necessário o módulo AOT durante o Actions.\n"];
        }
        [extended appendString:continuousText];
-       self.ppuReport=extended;
+       self.ppuReport=[NSString stringWithFormat:@"%@\n\n%@",self.ppuSummary,extended];
        self.ppuReportButton.enabled=YES;
-       [self.ppuReportButton setTitle:@"Copiar diagnóstico PPU" forState:UIControlStateNormal];
+       self.ppuAdvancedButton.enabled=YES;
+       [self.ppuReportButton setTitle:@"Copiar status AOT" forState:UIControlStateNormal];
        NSString *faultDetail=cpu48[16]
           ? [NSString stringWithFormat:@"EA=0x%X · base=0x%X · valor=0x%X",
                 cpu48[10],cpu48[11],cpu48[12]]
@@ -1201,6 +1290,7 @@ extern int ar_probe_rsx_texture_cache_mutation(unsigned swizzled,unsigned int ou
            "Use «Copiar diagnóstico PPU» para enviar a trilha.",
            legacyState,old40State,rc48,cpu48[0],cpu48[8],
            cpu48[7],faultDetail,trace48[0],trace48[1]];
+       self.status.text=self.ppuSummary;
        return;
     }
     self.ppuReport=[NSString stringWithFormat:
@@ -1210,6 +1300,9 @@ extern int ar_probe_rsx_texture_cache_mutation(unsigned swizzled,unsigned int ou
         cpu48[0],tls48[0],tls48[6],tls48[7]];
     self.ppuReport=[self.ppuReport stringByAppendingString:nativeText];
     self.ppuReport=[self.ppuReport stringByAppendingString:continuousText];
+    self.ppuReport=[NSString stringWithFormat:@"%@\n\n%@",self.ppuSummary,self.ppuReport];
+    self.ppuAdvancedButton.enabled=YES;
+    [self.ppuReportButton setTitle:@"Copiar status AOT" forState:UIControlStateNormal];
     self.ppuReportButton.enabled=YES;
     self.status.text=[NSString stringWithFormat:
        @"M5.9 NPUA80918: ELF REAL VALIDADO\n"
@@ -1221,6 +1314,7 @@ extern int ar_probe_rsx_texture_cache_mutation(unsigned swizzled,unsigned int ou
         "M7.9: código ARM64 recompilado vinculado; veja AOT e próximo PC no relatório.",
         legacyState,old40State,tls48[0],cpu48[2],cpu48[18],cpu48[17],
         cpu48[5],cpu48[19],cpu48[15]];
+    self.status.text=self.ppuSummary;
   } @finally {
     if(scoped)[url stopAccessingSecurityScopedResource];
  }
