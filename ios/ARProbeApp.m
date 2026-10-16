@@ -5,6 +5,7 @@
 #import <UniformTypeIdentifiers/UniformTypeIdentifiers.h>
 #import <CommonCrypto/CommonDigest.h>
 extern int ar_private_elf_inspect(const unsigned char*,size_t,unsigned int[5]);
+extern int ar_m70_native_runtime_probe(const unsigned char*,size_t,unsigned int,unsigned int[16]);
 extern int ar_private_import_match(const unsigned char*,size_t,unsigned int,
                                   unsigned int[4],char[48]);
 extern int ar_ppu_bootstrap_four(const unsigned char*,size_t,
@@ -447,7 +448,7 @@ extern int ar_probe_rsx_texture_cache_mutation(unsigned swizzled,unsigned int ou
         hint.font=[UIFont systemFontOfSize:13 weight:UIFontWeightMedium];
         hint.textColor=[UIColor colorWithWhite:0.83 alpha:1];
         hint.text=i==0 ?
-             @"NPUA80918 · M6.7.6: PT_TLS real e retorno PPC mtlr/blr verificado, com TLS e diagnósticos privados. ELF não sai do iPhone." :
+             @"NPUA80918 · M7.0: bootstrap PPU e ELF privado no runtime nativo. Código recompilado do Ascension ainda pendente." :
              @"Diagnósticos RSX → Metal, do mais recente ao legado. Role para encontrar os testes anteriores.";
         [stack addArrangedSubview:hint];
         NSArray<UIButton *> *ordered=i==0 ? @[elfButton] : @[
@@ -979,6 +980,24 @@ extern int ar_probe_rsx_texture_cache_mutation(unsigned swizzled,unsigned int ou
     self.ppuReportButton.enabled=NO;
     const int rc48=ar_ppu_bootstrap_fortyeight_trace_m674(
         data.bytes,data.length,info,cpu48,trace48,detail48,tls48);
+
+    unsigned int native[16]={0};
+    const int nativeRC=ar_m70_native_runtime_probe(
+       data.bytes,data.length,detail48[8],native);
+    NSString *nativeText=[NSString stringWithFormat:
+       @"\nM7.0 — RUNTIME PPU NATIVO (ELF privado)\n"
+       "Loader=%d · Entrada=0x%08X · TOC=0x%08X · segmentos=%u\n"
+       "Capacidade VM=%u · arquivo mapeado=%u · funções AOT=%u\n"
+       "Import PRX=%d · bind import=%d · bind HLE=%d\n"
+       "Teste HLE TLS nativa=%d · r13=0x%08X\n"
+       "Despacho AOT entrada=%d · primeiro PC sem função ARM64=0x%08X\n"
+       "Opcode inicial guest=0x%08X · evidências=0x%X\n"
+       "AR_UNRESOLVED=-3 significa que falta código do jogo recompilado.\n",
+       nativeRC,native[1],native[2],native[3],
+       native[4],native[13],native[5],
+       (int)native[8],(int)native[9],(int)native[10],
+       (int)native[11],native[12],
+       (int)native[6],native[7],native[14],native[15]];
     if(rc48){
        NSMutableString *recent=[NSMutableString string];
        for(unsigned i=0;i<4u && i<trace48[15];i++){
@@ -1067,6 +1086,7 @@ extern int ar_probe_rsx_texture_cache_mutation(unsigned swizzled,unsigned int ou
         else if(rc48==-1011 || rc48==-1012 || rc48==-1013)
          [extended appendString:
            @"TLS recusado: parâmetros, thread já inicializada ou leitura de memória inválida. Não houve sucesso artificial.\n"];
+       [extended appendString:nativeText];
        self.ppuReport=extended;
        self.ppuReportButton.enabled=YES;
        [self.ppuReportButton setTitle:@"Copiar diagnóstico PPU" forState:UIControlStateNormal];
@@ -1093,6 +1113,7 @@ extern int ar_probe_rsx_texture_cache_mutation(unsigned swizzled,unsigned int ou
         "Resultado=0 · passos=%u/48 · sys_initialize_tls=%u · r13=0x%08X\n"
         "TLS copiada=%u bytes; PPU48 ainda é um bootstrap limitado.\n",
         cpu48[0],tls48[0],tls48[6],tls48[7]];
+    self.ppuReport=[self.ppuReport stringByAppendingString:nativeText];
     self.ppuReportButton.enabled=YES;
     self.status.text=[NSString stringWithFormat:
        @"M5.9 NPUA80918: ELF REAL VALIDADO\n"
@@ -1101,7 +1122,7 @@ extern int ar_probe_rsx_texture_cache_mutation(unsigned swizzled,unsigned int ou
         "M6.7.6 PPU REAL 48/48: OK · TLS=%u\n"
         "PC=0x%X · CTR=0x%08X%08X\n"
         "stores=%u · indiretos=%u · sombra=%u\n"
-        "Execução limitada; SEM HLE/SPU/gameplay.",
+        "M7.0 PPU: TLS HLE comprovada; AOT completo do Ascension pendente.",
         legacyState,old40State,tls48[0],cpu48[2],cpu48[18],cpu48[17],
         cpu48[5],cpu48[19],cpu48[15]];
   } @finally {
