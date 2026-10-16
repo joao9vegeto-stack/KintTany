@@ -399,7 +399,7 @@ extern int ar_probe_rsx_texture_cache_mutation(unsigned swizzled,unsigned int ou
     [controller.view addSubview:panel];
     UILabel *header=[UILabel new];
     header.translatesAutoresizingMaskIntoConstraints=NO;
-    header.text=@"ASCENSIONRECOMP   ·   M6.7.6";
+    header.text=@"ASCENSIONRECOMP   ·   M7.7";
     header.textColor=[UIColor colorWithRed:0.73 green:0.87 blue:1 alpha:1];
     header.font=[UIFont systemFontOfSize:12 weight:UIFontWeightBold];
     header.textAlignment=NSTextAlignmentCenter;
@@ -453,7 +453,7 @@ extern int ar_probe_rsx_texture_cache_mutation(unsigned swizzled,unsigned int ou
         hint.font=[UIFont systemFontOfSize:13 weight:UIFontWeightMedium];
         hint.textColor=[UIColor colorWithWhite:0.83 alpha:1];
         hint.text=i==0 ?
-             @"NPUA80918 · M7.3: CPU contínua, CR e identificação automática da próxima importação PRX bloqueada. Sem AOT do jogo." :
+             @"NPUA80918 · M7.7: TLS e sys_lwmutex_create (NID confirmado). AOT real somente quando vinculado." :
              @"Diagnósticos RSX → Metal, do mais recente ao legado. Role para encontrar os testes anteriores.";
         [stack addArrangedSubview:hint];
         NSArray<UIButton *> *ordered=i==0 ? @[elfButton] : @[
@@ -1010,6 +1010,12 @@ extern int ar_probe_rsx_texture_cache_mutation(unsigned swizzled,unsigned int ou
     const int execRC=ar_m73_private_import_probe(
         data.bytes,data.length,detail48[8],4096u,continuous,
         importEvidence,discoveredLibrary);
+    NSString *lwMutexText=[NSString stringWithFormat:
+       @"\nM7.7 — HLE PS3 / sys_lwmutex_create (NID 0x2F85C0EF)\n"
+        "Import PRX reconhecido=%@ · HLE vinculado=%@\n"
+        "Mutex LV2 big-endian; serviço não equivale a gameplay.\n",
+        (native[15]&16u)?@"SIM":@"NÃO",
+        (native[15]&32u)?@"SIM":@"NÃO"];
     NSString *continuousText=[NSString stringWithFormat:
        @"\nM7.2 — EXECUÇÃO PPU CONTÍNUA + CR/BRANCH (INTERPRETADOR NATIVO ASSINADO)\n"
         "Preparação=%d · resultado guest=%d · passos=%u / orçamento 4096\n"
@@ -1136,6 +1142,7 @@ extern int ar_probe_rsx_texture_cache_mutation(unsigned swizzled,unsigned int ou
          [extended appendString:
            @"TLS recusado: parâmetros, thread já inicializada ou leitura de memória inválida. Não houve sucesso artificial.\n"];
        [extended appendString:nativeText];
+       [extended appendString:lwMutexText];
        /* M7.6: AOT count is native signed function count, never interpreter
         * steps. AR_UNRESOLVED -3 is genuine missing guest ARM64 coverage. */
        if(native[5]>0u){
@@ -1189,7 +1196,7 @@ extern int ar_probe_rsx_texture_cache_mutation(unsigned swizzled,unsigned int ou
         "M6.7.6 PPU REAL 48/48: OK · TLS=%u\n"
         "PC=0x%X · CTR=0x%08X%08X\n"
         "stores=%u · indiretos=%u · sombra=%u\n"
-        "M7.3 PPU: próxima importação PRX diagnosticada; AOT do Ascension ainda pendente.",
+        "M7.7: sys_lwmutex_create reconhecido; AOT do Ascension ainda pendente.",
         legacyState,old40State,tls48[0],cpu48[2],cpu48[18],cpu48[17],
         cpu48[5],cpu48[19],cpu48[15]];
   } @finally {

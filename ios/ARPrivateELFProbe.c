@@ -59,12 +59,15 @@ int ar_private_elf_inspect(const uint8_t*d,size_t len,uint32_t info[5]){
  * This is read-only metadata; it DOES NOT bind, execute or fabricate HLE.
  * 0=matched, -1=no match, -2=invalid ELF/arguments,
  * -3=absent PRX params, -4=malformed import metadata. */
-int ar_private_import_match(const uint8_t*d,size_t len,uint32_t code_va,
-                            uint32_t result[4],char library[48]){
+/* Shared bounded resolver for precise stub-by-PC and generic
+ * library+NID-to-stub linking. Never infer target from raw call registers. */
+static int ar_private_import_search(const uint8_t*d,size_t len,
+ uint32_t code_va,uint32_t target_nid,const char*target_library,
+ uint32_t result[4],char library[48]){
  if(!result||!library)return -2;
  memset(result,0,4u*sizeof(*result));memset(library,0,48u);
  uint32_t inspected[5]={0};
- if(!code_va||ar_private_elf_inspect(d,len,inspected))return -2;
+ if((!code_va&&!target_nid)||ar_private_elf_inspect(d,len,inspected))return -2;
  const uint64_t phoff=b64(d+32);
  const unsigned phentsize=b16(d+54),phcount=b16(d+56);
  segment ss[64]={0};unsigned used=0;
@@ -142,23 +145,44 @@ int ar_private_import_match(const uint8_t*d,size_t len,uint32_t code_va,
      const uint8_t*pn=lookup(d,len,ss,used,nidaddr,4u,0);
      if(!pt||!pn)return -4;
      result[2]++;
-     if(b32(pt)!=code_va)continue;
-     result[0]=b32(pn);
-     result[1]=code_va;
+     const uint32_t found_nid=b32(pn),found_stub=b32(pt);
+     if(target_nid){
+       if(found_nid!=target_nid)continue;
+       /* A bound NID must point to actual executable ELF file bytes. */
+       if(!found_stub || (found_stub&3u) ||
+          !lookup(d,len,ss,used,found_stub,8u,1u))continue;
+     }else if(found_stub!=code_va)continue;
      /* A library name is optional, bounded and printable only. */
+     char candidate[48]={0};
      if(entry->name_va){
        for(unsigned k=0;k<47u;k++){
          const uint8_t*ch=lookup(d,len,ss,used,
                                   (uint64_t)entry->name_va+k,1u,0);
          if(!ch||!*ch)break;
          if(*ch<0x20u||*ch>0x7eu)break;
-         library[k]=(char)*ch;
+         candidate[k]=(char)*ch;
        }
      }
+     if(target_library && strcmp(candidate,target_library))continue;
+     memcpy(library,candidate,48u);
+     result[0]=found_nid;result[1]=found_stub;
      return 0;
    }
  }
  return -1;
+}
+/* Existing exact-stub ABI untouched for M6.7/M7.3 diagnostics. */
+int ar_private_import_match(const uint8_t*d,size_t len,uint32_t code_va,
+                            uint32_t result[4],char library[48]){
+ return ar_private_import_search(d,len,code_va,0u,NULL,result,library);
+}
+/* M7.7: resolve a firmware NID by complete module name, independently
+ * of its address in a specific edition of the game. */
+int ar_private_import_find_nid(const uint8_t*d,size_t len,uint32_t nid,
+                               const char*module,uint32_t result[4],
+                               char library[48]){
+ if(!module||!module[0]||strlen(module)>47u)return -2;
+ return ar_private_import_search(d,len,0u,nid,module,result,library);
 }
 
 /* M6.0: no HLE/syscalls/stack/guest writes. Precisely four PowerPC64

@@ -14,8 +14,10 @@ extern int ar_private_aot_install_sha256(const unsigned char*,size_t);
 #include "ppu_bridge.h"
 #include "elf_image.h"
 #include "../runtime/ppu_tls.h" /* explicit project header, not upstream ppu_tls.h */
+#include "../runtime/ppu_lwmutex.h"
 
 extern int ar_private_import_match(const uint8_t*,size_t,uint32_t,uint32_t[4],char[48]);
+extern int ar_private_import_find_nid(const uint8_t*,size_t,uint32_t,const char*,uint32_t[4],char[48]);
 
 enum { AR_NATIVE_LIMIT=128u*1024u*1024u, AR_NATIVE_RESERVE=0x20000u };
 static uint16_t g16(const uint8_t*p){return (uint16_t)(((uint16_t)p[0]<<8)|p[1]);}
@@ -70,6 +72,7 @@ int ar_m70_native_runtime_probe(const uint8_t*d,size_t len,
  if(!tlsbase || tlsbase>=AR_NATIVE_LIMIT)return -27;
  const int rcinit=ar_bridge_init(cap);
  if(rcinit){out[0]=(uint32_t)rcinit;return rcinit;}
+ ar_lwmutex_reset(); /* new guest process: no stale sync objects */
  ppu_context ctx;
  ppu_context_init(&ctx);
  ar_elf_image_result image={0};
@@ -138,6 +141,20 @@ int ar_m70_native_runtime_probe(const uint8_t*d,size_t len,
           }
        }
     }
+ }
+
+ /* M7.7: discover lwmutex's PRX stub from this ELF's import tables;
+  * no game address is hardcoded. The NID is a verified system ABI.
+  * Service remains functional only when guest AOT actually invokes it. */
+ uint32_t lwimp[4]={0};char lwlib[48]={0};
+ const int lwmatch=ar_private_import_find_nid(
+    d,len,0x2f85c0efu,"sysPrxForUser",lwimp,lwlib);
+ if(lwmatch==0 && lwimp[0]==0x2f85c0efu && lwimp[1] &&
+    strcmp(lwlib,"sysPrxForUser")==0){
+    out[15]|=16u; /* import table matched and stub executable */
+    const int b=ar_bind_import(lwimp[1],lwimp[0]);
+    if(b==AR_OK && ar_bind_hle(lwimp[0],ar_sys_lwmutex_create)==AR_OK)
+       out[15]|=32u; /* genuine HLE implementation now available */
  }
 
  /* This is the actual native AOT dispatcher, NOT the 48-step interpreter.

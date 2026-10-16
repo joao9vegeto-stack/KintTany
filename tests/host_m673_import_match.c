@@ -42,6 +42,22 @@ int main(void){
  }
  rc=ar_private_import_match(d,sizeof(d),0x1007cu,out,name);
  if(rc||out[0]!=0x12345678u||out[2]!=2u)return 3;
+ /* Generic NID resolution must locate its executable guest stub,
+  * without a hardcoded edition-specific address or wrong-library match. */
+ p32(d,0x344,0x2f85c0efu);
+ p32(d,0x17c,0x39800000u);p32(d,0x180,0x658c0083u);
+ extern int ar_private_import_find_nid(const uint8_t*,size_t,uint32_t,
+                                       const char*,uint32_t[4],char[48]);
+ rc=ar_private_import_find_nid(d,sizeof(d),0x2f85c0efu,
+                               "sysPrxForUser",out,name);
+ if(rc||out[0]!=0x2f85c0efu||out[1]!=0x1007cu||
+    out[2]!=2u||strcmp(name,"sysPrxForUser"))return 20;
+ if(ar_private_import_find_nid(d,sizeof(d),0x2f85c0efu,
+                               "wrongLibrary",out,name)!=-1)return 21;
+ p32(d,0x364,0x20040u);
+ if(ar_private_import_find_nid(d,sizeof(d),0x2f85c0efu,
+                               "sysPrxForUser",out,name)!=-1)return 22;
+ p32(d,0x364,0x1007cu);p32(d,0x344,0x12345678u);
  rc=ar_private_import_match(d,sizeof(d),0x1008cu,out,name);
  if(rc!=-1||out[0]!=0u||out[2]!=2u)return 4;
  if(ar_private_import_match(d,sizeof(d),0x1006cu,NULL,name)!=-2)return 5;
