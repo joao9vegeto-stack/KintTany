@@ -9,6 +9,8 @@ extern int ar_ppu_bootstrap_four(const unsigned char*,size_t,
                                 const unsigned int[5],unsigned int[4]);
 extern int ar_ppu_bootstrap_eight(const unsigned char*,size_t,
                                  const unsigned int[5],unsigned int[6]);
+extern int ar_ppu_bootstrap_sixteen(const unsigned char*,size_t,
+                                   const unsigned int[5],unsigned int[7]);
 
 extern int rsx_metal_backend_init(unsigned int width, unsigned int height, const char* title);
 extern void rsx_metal_backend_shutdown(void);
@@ -721,13 +723,30 @@ extern int ar_probe_rsx_texture_cache_mutation(unsigned swizzled,unsigned int ou
       self.status.text=@"M6.1: estado PPU inesperado; execução interrompida.";
       return;
    }
+   unsigned int cpu16[7]={0};
+   const int rc16=ar_ppu_bootstrap_sixteen(data.bytes,data.length,info,cpu16);
+   if(rc16){
+      self.status.text=[NSString stringWithFormat:
+        @"M5.9 ELF VALIDADO · M6.0 4/4 · M6.1 8/8 OK\n"
+         "M6.2 PPU: FALHA %d (%u/16 instruções).\n"
+         "Parada segura. HLE/SPU não iniciados.",
+        rc16,cpu16[0]];
+      return;
+   }
+   if(cpu16[0]!=16u||cpu16[1]!=0x83f2b0u||
+      cpu16[2]!=0x10554u||cpu16[3]!=0x10430u||
+      cpu16[4]!=0x07000ef0u||cpu16[5]!=9u||
+      cpu16[6]!=0x10430u){
+      self.status.text=@"M6.2: registradores ou pilha divergentes. Parada segura.";
+      return;
+   }
    self.status.text=[NSString stringWithFormat:
-       @"M5.9 NPUA80918: ELF REAL VALIDADO\n"
-        "M6.0 PPU 4/4 · M6.1 PPU REAL 8/8: OK\n"
-        "TOC/r2=0x%X · PC=0x%X · LR=0x%X\n"
-        "SP=0x%X · stores=%u\n"
-        "Pilha privada. Ainda sem HLE/SPU/gameplay.",
-       eight[1],eight[2],eight[3],eight[4],eight[5]];
+        @"M5.9 NPUA80918: ELF REAL VALIDADO\n"
+         "M6.0 4/4 · M6.1 8/8 · M6.2 PPU REAL 16/16: OK\n"
+         "TOC=0x%X · PC=0x%X · LR=0x%X\n"
+         "SP=0x%X · stores=%u · mflr/r0=0x%X\n"
+         "Execução limitada, sem HLE/SPU ou gameplay.",
+        cpu16[1],cpu16[2],cpu16[3],cpu16[4],cpu16[5],cpu16[6]];
  } @finally {
     if(scoped)[url stopAccessingSecurityScopedResource];
  }
