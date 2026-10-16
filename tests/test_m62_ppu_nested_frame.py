@@ -17,7 +17,7 @@ class Frame(unittest.TestCase):
  def test_gates(self):
   self.assertIn("ar_ppu_bootstrap_sixteen(data.bytes,data.length,info,cpu16)",UI)
   self.assertIn("M6.2 PPU REAL 16/16: OK",UI)
-  self.assertIn("M6.1 8/8",UI)
+  self.assertIn("M6.1 PPU REAL 8/8: OK",UI)
   self.assertIn("testM58AlphaTest:",UI)
   self.assertIn("m62-host.log",WORK)
   self.assertIn("0.6.6-unsigned.ipa",WORK)
