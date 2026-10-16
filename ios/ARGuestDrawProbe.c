@@ -597,12 +597,18 @@ int ar_probe_m58_guest_alpha_test(unsigned swizzled,uint32_t pixels[4],
     *phase=*guest_total=*metal_total=*alpha_draws=0u;
     memset(pixels,0,4u*sizeof(*pixels));
     static const unsigned palettes[5]={0u,1u,2u,3u,3u};
+    /* M5.8.1 PHYSICAL iPhone evidence (LINEAR and SWIZZLED):
+     * -828, phase 3, q0=000000FF, q2=00FF0000. The GREATER->LESS
+     * switch is working: when alpha=0 PASSES LESS 128, the actual
+     * fragment writes RGBA including ZERO alpha. M5.8 expected FF
+     * alpha incorrectly. Preserve this ZERO alpha across rejected
+     * phase 4 and the left half of phase 5. */
     static const uint32_t expected[5][4]={
       {0xffff0000u,0xff00ff00u,0xff0000ffu,0xffffff00u},
       {0xffff0000u,0xff0000ffu,0xff0000ffu,0xffff0000u},
-      {0xff0000ffu,0xff0000ffu,0xffff0000u,0xffff0000u},
-      {0xff0000ffu,0xff0000ffu,0xffff0000u,0xffff0000u},
-      {0xff0000ffu,0xffff0000u,0xffff0000u,0xff0000ffu}
+      {0x000000ffu,0xff0000ffu,0x00ff0000u,0xffff0000u},
+      {0x000000ffu,0xff0000ffu,0x00ff0000u,0xffff0000u},
+      {0x000000ffu,0xffff0000u,0x00ff0000u,0xff0000ffu}
     };
     ar_probe_m58_reset_alpha_draws();
     for(unsigned i=0;i<5u;i++) {
