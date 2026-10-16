@@ -9,7 +9,7 @@ class Test(unittest.TestCase):
  def test_guard(self):
   for x in ("return -1007;","if(dest>UINT32_MAX || !lookup(d,len,ss,used,dest,4,1))",
             "return ar_ppu_bootstrap_fortyeight_trace(d,len,info,out,NULL);",
-            "int ar_ppu_bootstrap_fortyeight_trace_m672(", "return m672_core(d,len,info,out,trace,NULL);"):
+            "int ar_ppu_bootstrap_fortyeight_trace_m672(", "return m672_core(d,len,info,out,trace,NULL,NULL);"):
    self.assertIn(x,C)
  def test_snapshot(self):
   for x in ("const uint64_t prior_r12=gpr[12];","detail[0]=pc;detail[1]=w;",
@@ -17,11 +17,11 @@ class Test(unittest.TestCase):
             "m672_region(ss,used,va,4u,base"):
    self.assertIn(x,C)
  def test_ui_and_workflow(self):
-  for x in ("ASCENSIONRECOMP   ·   M6.7.3","Copiar diagnóstico PPU",
+  for x in ("ASCENSIONRECOMP   ·   M6.7.4","Copiar diagnóstico PPU",
             "ar_ppu_bootstrap_fortyeight_trace_m672(","r12 na leitura r0"):
    self.assertIn(x,U)
   for x in ("tests/host_m672_descriptor.c","m672-host.log","0.6.14-unsigned.ipa"):
    self.assertIn(x,W)
   self.assertIn("<string>0.6.14</string>",P)
-  self.assertIn("<string>67</string>",P)
+  self.assertIn("<string>68</string>",P)
 if __name__=="__main__":unittest.main()

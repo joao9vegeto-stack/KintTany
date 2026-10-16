@@ -1,4 +1,4 @@
-name: AscensionRecomp M6.7.3 - read-only firmware import NID lookup
+name: AscensionRecomp M6.7.4 - bounded TLS initialization
 
 on:
   push:
@@ -187,6 +187,12 @@ jobs:
           clang -std=c11 -O2 -Wall -Wextra -Werror ios/ARPrivateELFProbe.c tests/host_m673_import_match.c -o m673-import-host
           ./m673-import-host 2>&1 | tee m673-import-host.log
           grep -Fxq 'M6.7.3 private import metadata PASS' m673-import-host.log
+      - name: M6.7.4 test isolated TLS initialization
+        run: |
+          set -euo pipefail
+          clang -std=c11 -O2 -Wall -Wextra -Werror ios/ARPrivateELFProbe.c tests/host_m674_tls.c -o m674-tls-host
+          ./m674-tls-host 2>&1 | tee m674-tls-host.log
+          grep -Fxq 'M6.7.4 bounded sys_initialize_tls HLE and negative tests PASS' m674-tls-host.log
       - name: M5.0 run synthetic PPU LV2 integrated boot smoke
         run: |
           set -euo pipefail
@@ -467,6 +473,7 @@ jobs:
           echo 'M6.7 guest r0 register-writer provenance for real -1007 at PC 0x669C30, bctrl CTR=0x39800000; no unsafe branch or ELF upload.' > m67-status.txt
            echo 'M6.7.2 source r12 traced, bctrl guard unchanged; iPhone test pending.' > m672-status.txt
            echo 'M6.7.3 safely identifies NID of a private firmware import; no HLE execution; iPhone validation required.' > m673-status.txt
+           echo 'M6.7.4 sys_initialize_tls initialized in isolated guest memory, verified by synthetic host tests.' > m674-status.txt
           echo 'M6.1 eight guest PPU steps, stack and branch; user title private; host synthetic only.' > m61-status.txt
           echo 'M6.0 strict PPU bootstrap: at most 4 imported ELF instructions; no actual game bytes bundled.' > m60-status.txt
           echo 'M5.9: on-device Files ELF inspection; no game data in CI or IPA.' > m59-status.txt
@@ -491,7 +498,7 @@ jobs:
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: AscensionRecomp-M6.7.3-private-import-evidence
+          name: AscensionRecomp-M6.7.4-guest-TLS-HLE-evidence
           if-no-files-found: warn
           retention-days: 14
           path: |
@@ -622,6 +629,8 @@ jobs:
             build-ios-runtime/libAscensionRSXGuest-ios-arm64.a
             m673-import-host.log
             m673-status.txt
+            m674-tls-host.log
+            m674-status.txt
             AscensionRecompProbe-0.6.14-unsigned.ipa
             m40-ios-layer-view.o
             build-ios-runtime/libps3recomp_runtime.a
