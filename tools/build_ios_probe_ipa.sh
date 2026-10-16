@@ -46,6 +46,12 @@ xcrun --sdk iphoneos clang -target arm64-apple-ios17.0 -isysroot "$SDK" \
     -std=c11 -O2 -Wall -Wextra -Werror \
     -I upstream/runtime/ppu -I runtime \
     -c ios/ARLivePPUContinuous.c -o ios-probe/ARLivePPUContinuous.o
+# M7.7: compile the generic PS3 lightweight mutex HLE for the iPhone.
+# This is OS service logic, NOT game-derived translated code.
+xcrun --sdk iphoneos clang -target arm64-apple-ios17.0 -isysroot "$SDK" \
+    -std=c11 -O2 -Wall -Wextra -Werror \
+    -I upstream/runtime/ppu -I runtime \
+    -c runtime/ppu_lwmutex.c -o ios-probe/ppu_lwmutex.o
 xcrun nm -g ios-probe/ARLivePPUBridge.o | grep -q '_ar_m70_native_runtime_probe'
 xcrun nm -g ios-probe/ARLivePPUContinuous.o | grep -q '_ar_m71_private_continuous_probe'
 xcrun nm -g ios-probe/ARRSXMethodProbe.o | grep -q '_ar_probe_rsx_clear_flip'
@@ -55,7 +61,7 @@ xcrun --sdk iphoneos clang++ -target arm64-apple-ios17.0 \
     ios/ARMetalView.m ios/ARProbeApp.m ios/ARShaderProbe.m ios/ARTextureProbe.m ios/ARProbeGuestVM.c \
     ios-probe/ARRSXMethodProbe.o ios-probe/ARGuestDrawProbe.o ios-probe/ARPrivateELFProbe.o \
     ios-probe/ARLivePPUBridge.o ios-probe/ARLivePPUContinuous.o \
-    ios-probe/ARNativePPUContinuous.o \
+    ios-probe/ARNativePPUContinuous.o ios-probe/ppu_lwmutex.o \
     ${AOT_OBJECTS[@]+"${AOT_OBJECTS[@]}"} \
     ios-ppu-core/libAscensionPPUCore-ios-arm64.a \
     build-ios-runtime/libAscensionRSXGuest-ios-arm64.a \

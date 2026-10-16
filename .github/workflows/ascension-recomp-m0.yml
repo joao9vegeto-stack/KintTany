@@ -1,4 +1,4 @@
-name: AscensionRecomp M7.6 - native multi-block tail dispatch regression
+name: AscensionRecomp M7.7 - authentic lwmutex NID and HLE
 
 on:
   push:
@@ -242,7 +242,7 @@ jobs:
           clang -std=c11 -O2 -Wall -Wextra -Werror -DASCENSION_PRIVATE_AOT_LINKED \
             -I upstream/runtime/ppu -I runtime \
             ios/ARLivePPUBridge.c ios/ARPrivateELFProbe.c \
-            runtime/ppu_bridge.c runtime/elf_image.c runtime/ppu_tls.c \
+            runtime/ppu_bridge.c runtime/elf_image.c runtime/ppu_tls.c runtime/ppu_lwmutex.c \
             tests/host_m75_aot_boot.c -o m75-aot-boot-host
           ./m75-aot-boot-host 2>&1 | tee m75-aot-boot-host.log
           grep -Fxq 'M7.5 signed AOT entry isolates TLS smoke and runs genuine guest HLE PASS' m75-aot-boot-host.log
@@ -255,13 +255,23 @@ jobs:
           ./m76-aot-tail-host 2>&1 | tee m76-aot-tail-host.log
           grep -Fxq 'M7.6 signed AOT multi-block tail dispatch HLE and unresolved PASS' m76-aot-tail-host.log
           echo 'M7.6: generic multi-block native dispatcher proved. Real game AOT remains in user-owned offline package; public IPA AOT=0.' > m76-status.txt
+      - name: M7.7 verify PS3 lwmutex BE ABI, guest memory, and honest HLE
+        run: |
+          set -euo pipefail
+          clang -std=c11 -O2 -Wall -Wextra -Werror \
+            -I upstream/runtime/ppu -I runtime \
+            runtime/ppu_bridge.c runtime/ppu_lwmutex.c \
+            tests/host_m77_lwmutex.c -o m77-lwmutex-host
+          ./m77-lwmutex-host 2>&1 | tee m77-lwmutex-host.log
+          grep -Fxq 'M7.7 lwmutex create guest BE ABI, validation, reset PASS' m77-lwmutex-host.log
+          echo 'M7.7: sys_lwmutex_create generic HLE + exact PRX NID lookup; game AOT is NOT in the public IPA.' > m77-status.txt
       - name: M7.0 validate actual native ELF loader, import binder and AOT dispatcher
         run: |
           set -euo pipefail
           clang -std=c11 -O2 -Wall -Wextra -Werror \
             -I upstream/runtime/ppu -I runtime \
             ios/ARLivePPUBridge.c ios/ARPrivateELFProbe.c \
-            runtime/ppu_bridge.c runtime/elf_image.c runtime/ppu_tls.c \
+            runtime/ppu_bridge.c runtime/elf_image.c runtime/ppu_tls.c runtime/ppu_lwmutex.c \
             tests/host_m70_native_runtime.c -o m70-native-host
           ./m70-native-host 2>&1 | tee m70-native-host.log
           grep -Fxq 'M7.0 signed native PPU staging, real NID/HLE, and honest AOT unresolved PASS' m70-native-host.log
@@ -272,7 +282,7 @@ jobs:
             -I upstream/runtime/ppu -I runtime \
             ios/ARNativePPUContinuous.c ios/ARLivePPUContinuous.c \
             ios/ARPrivateELFProbe.c \
-            runtime/ppu_bridge.c runtime/elf_image.c runtime/ppu_tls.c \
+            runtime/ppu_bridge.c runtime/elf_image.c runtime/ppu_tls.c runtime/ppu_lwmutex.c \
             tests/host_m71_continuous.c -o m71-continuous-host
           ./m71-continuous-host 2>&1 | tee m71-continuous-host.log
           grep -Fxq 'M7.1 signed native PowerPC continuous 76-step, import TLS and fail-closed ISA PASS' m71-continuous-host.log
@@ -283,7 +293,7 @@ jobs:
             -I upstream/runtime/ppu -I runtime \
             ios/ARNativePPUContinuous.c ios/ARLivePPUContinuous.c \
             ios/ARPrivateELFProbe.c \
-            runtime/ppu_bridge.c runtime/elf_image.c runtime/ppu_tls.c \
+            runtime/ppu_bridge.c runtime/elf_image.c runtime/ppu_tls.c runtime/ppu_lwmutex.c \
             tests/host_m72_cr_branch.c -o m72-cr-branch-host
           ./m72-cr-branch-host 2>&1 | tee m72-cr-branch-host.log
           grep -Fxq 'M7.2 CR7 cmpld, signed/unsigned compare and conditional branches PASS' m72-cr-branch-host.log
@@ -294,7 +304,7 @@ jobs:
             -I upstream/runtime/ppu -I runtime \
             ios/ARNativePPUContinuous.c ios/ARLivePPUContinuous.c \
             ios/ARPrivateELFProbe.c \
-            runtime/ppu_bridge.c runtime/elf_image.c runtime/ppu_tls.c \
+            runtime/ppu_bridge.c runtime/elf_image.c runtime/ppu_tls.c runtime/ppu_lwmutex.c \
             tests/host_m73_import_discovery.c -o m73-prx-host
           ./m73-prx-host 2>&1 | tee m73-prx-host.log
           grep -Fxq 'M7.3 real second PRX stub library NID identified, unknown HLE blocked PASS' m73-prx-host.log
@@ -766,6 +776,8 @@ jobs:
             m74-aot-host.log
             m74-arm64-symbols.txt
             m74-status.txt
+            m77-lwmutex-host.log
+            m77-status.txt
             m76-aot-tail-host.log
             m76-status.txt
             m75-aot-boot-host.log
