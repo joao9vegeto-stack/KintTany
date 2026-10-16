@@ -875,7 +875,6 @@ extern int ar_probe_rsx_texture_cache_mutation(unsigned swizzled,unsigned int ou
     unsigned int cpu24[9]={0};
     const int rc24=ar_ppu_bootstrap_twentyfour(data.bytes,data.length,info,cpu24);
     if(rc24){
-       if(rc24){
        self.status.text=[NSString stringWithFormat:
           @"M5.9 NPUA80918: ELF REAL VALIDADO\n"
            "M6.2 PPU REAL 16/16: OK\n"
