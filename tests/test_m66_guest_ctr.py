@@ -34,7 +34,7 @@ class PowerPCCTR(unittest.TestCase):
     "rc40==-990 && cpu40[0]>=32u",
     "((cpu40[7]>>1)&1023u)==467u",
     "if(rc40 && !knownMtctrStop){",
-    "ar_ppu_bootstrap_fortyeight(data.bytes,data.length,info,cpu48)",
+    "ar_ppu_bootstrap_fortyeight_trace(",
     "M6.5 LEGADA: mtctr","M6.6 PARADA SEGURA",
     "M6.6 PPU REAL 48/48: OK",
     "CTR=0x%08X%08X",
