@@ -27,7 +27,8 @@ class M71(unittest.TestCase):
    self.assertIn(s,SETUP)
   for s in ("const uint32_t word=ar_read32(pc)",
             "executable(seg,used,pc)", "ar_run(c,guest_stub,32u)",
-            "if(word!=0x4e800020u)",
+            "guest_branch_test(c,bo,bi,1u,&taken)",
+            "const uint64_t target=c->lr&~UINT64_C(3);",
             "rc=-1311;break;", "rc=-1312;break;",
             "rc=-1313;", "rc=-1314;", "budget>8192u",
             "uint32_t out[16]"):
