@@ -477,3 +477,182 @@ int ar_ppu_bootstrap_thirtytwo(const uint8_t*d,size_t len,
  out[9]=(uint32_t)gpr[4]; /* visible proof of rldicl on synthetic 32-step fixture */
  return 0;
 }
+
+/* M6.5: bounded private guest-memory overlay, 128 aligned 32-bit writes.
+ * These are GUEST addresses (not native pointers). PT_LOAD permissions
+ * and p_memsz are checked before ANY write. Original GOWA.ELF bytes are
+ * immutable and never uploaded. PT_LOAD BSS bytes start at zero.
+ * Unknown pointers, misaligned accesses, exhausted overlay fail closed. */
+typedef struct {uint64_t address;uint32_t value;} m65_written_word;
+typedef struct {m65_written_word word[128];unsigned used;} m65_memory;
+static int m65_segment(const segment*s,unsigned count,uint64_t va,
+                       unsigned bytes,unsigned required) {
+ for(unsigned i=0;i<count;i++)
+  if((!required||(s[i].flags&required)==required)&&
+     va>=s[i].va && within(va-s[i].va,bytes,s[i].mem))return (int)i;
+ return -1;
+}
+static int m65_store32(m65_memory*m,const segment*s,unsigned count,
+                       uint64_t va,uint32_t value) {
+ if(!m||(va&3u)||m65_segment(s,count,va,4u,2u)<0)return -1;
+ for(unsigned j=0;j<m->used;j++)
+  if(m->word[j].address==va){m->word[j].value=value;return 0;}
+ if(m->used>=128u)return -2;
+ m->word[m->used].address=va;
+ m->word[m->used].value=value;
+ m->used++;
+ return 0;
+}
+static int m65_read_guest(const uint8_t*d,size_t len,const segment*s,
+                 unsigned count,const m65_memory*m,
+                 const uint8_t*stack,uint64_t stackbase,
+                 uint64_t va,unsigned bytes,uint64_t *result) {
+ if(!result||!bytes||bytes>8u||va>UINT32_MAX)return -1;
+ if(va>=stackbase&&within(va-stackbase,bytes,4096u)) {
+   uint64_t v=0;
+   for(unsigned i=0;i<bytes;i++)v=(v<<8)|stack[(size_t)(va-stackbase)+i];
+   *result=v;return 0;
+ }
+ const int ix=m65_segment(s,count,va,bytes,0u);
+ if(ix<0)return -2;
+ const segment*seg=s+ix;
+ uint64_t v=0;
+ for(unsigned k=0;k<bytes;k++){
+    const uint64_t a=va+k;
+    unsigned char byte=0;
+    const uint64_t relative=a-seg->va;
+    if(relative<seg->size){
+       const uint64_t off=seg->offset+relative;
+       if(off>=len)return -3;
+       byte=d[off];
+    }
+    for(unsigned j=0;j<m->used;j++)
+      if(a>=m->word[j].address && a-m->word[j].address<4u){
+        unsigned shift=(unsigned)(3u-(a-m->word[j].address))*8u;
+        byte=(uint8_t)(m->word[j].value>>shift);
+        break;
+      }
+    v=(v<<8)|byte;
+ }
+ *result=v;
+ return 0;
+}
+
+/* M6.5: PPU40 with PRIVATE sparse writable PT_LOAD overlay and BSS.
+ * Real device may stop before 40: failure reports PC/opcode/guest EA.
+ * No guest address is ever dereferenced as a native pointer. */
+int ar_ppu_bootstrap_forty(const uint8_t*d,size_t len,
+                             const uint32_t info[5],uint32_t out[16]){
+ if(!d||!info||!out)return -980;
+ memset(out,0,16*sizeof(*out));
+ uint32_t check[5]={0};
+ if(ar_private_elf_inspect(d,len,check)||
+    memcmp(info,check,sizeof(check)))return -981;
+ segment ss[64]={0};unsigned used=0;
+ const uint64_t table=b64(d+32);unsigned phsize=b16(d+54),n=b16(d+56);
+ for(unsigned j=0;j<n;j++){
+  const uint8_t*p=d+table+(uint64_t)j*phsize;
+  if(b32(p)!=1)continue;
+  segment s={b64(p+8),b64(p+16),b64(p+32),b64(p+40),b32(p+4)};
+  if(s.mem&&s.size)ss[used++]=s;
+ }
+ uint64_t gpr[32]={0};
+ uint8_t stack[4096]={0};
+ m65_memory guest={0};
+ const uint64_t base=0x07000000u;
+ gpr[1]=base+sizeof(stack);gpr[2]=info[2];
+ uint32_t pc=info[1],lr=0,stores=0,mflr=0;
+ if(pc>0xffffff5fu||(pc&3))return -982;
+ for(unsigned step=0;step<40;step++){
+  const uint8_t*p=lookup(d,len,ss,used,pc,4,1);
+  if(!p){out[8]=pc;return -983;}
+  const uint32_t w=b32(p),op=w>>26;
+  out[7]=w;out[8]=pc;
+  unsigned rt=(w>>21)&31,ra=(w>>16)&31;
+  int16_t imm=(int16_t)(w&0xffffu);
+  uint32_t next=pc+4;
+  if(op==14){
+   gpr[rt]=(ra?gpr[ra]:0u)+(uint64_t)(int64_t)imm;
+  }else if(op==15){
+   gpr[rt]=(ra?gpr[ra]:0u)+(((uint64_t)(int64_t)imm)<<16);
+  }else if(op==25){
+   gpr[ra]=gpr[rt]|((uint64_t)(w&0xffffu)<<16);
+  }else if(op==24){
+   gpr[ra]=gpr[rt]|(uint64_t)(w&0xffffu);
+  }else if(op==32){
+   const uint64_t va=(ra?gpr[ra]:0u)+(uint64_t)(int64_t)imm;
+   uint64_t value=0;
+   if(m65_read_guest(d,len,ss,used,&guest,stack,base,va,4,&value)) {
+      out[10]=(uint32_t)va;return -1001;
+   }
+   gpr[rt]=value;
+  }else if(op==62){
+   if(!ra||(w&3u)>1u)return -986;
+   int16_t ds=(int16_t)(w&0xfffcu);
+   uint64_t va=gpr[ra]+(uint64_t)(int64_t)ds;
+   if(va<base||va>base+sizeof(stack)-8)return -987;
+   for(unsigned j=0;j<8;j++)
+      stack[(size_t)(va-base)+j]=(uint8_t)(gpr[rt]>>(56-8*j));
+   stores++;
+   if((w&3u)==1u)gpr[ra]=va;
+  }else if(op==18){
+   if(w&2u)return -988; /* only relative branches */
+   int64_t delta=(int64_t)(w&0x03fffffcu);
+   if(delta&0x02000000)delta-=0x04000000;
+   const int64_t dest=(int64_t)pc+delta;
+   if(dest<0||dest>UINT32_MAX||
+      !lookup(d,len,ss,used,(uint32_t)dest,4,1))return -989;
+   if(w&1u)lr=next;
+   next=(uint32_t)dest;
+  }else if(op==58){
+   if(!ra||(w&3u)!=0u)return -991;
+   const int16_t ds=(int16_t)(w&0xfffcu);
+   const uint64_t va=gpr[ra]+(uint64_t)(int64_t)ds;
+   uint64_t value=0;
+   if(m65_read_guest(d,len,ss,used,&guest,stack,base,va,8,&value)) {
+       out[10]=(uint32_t)va;return -1002;
+   }
+   gpr[rt]=value;
+  }else if(op==36){
+   /* Exact device opcode 0x93AB0000: stw r29,0(r11).
+    * Permit stack OR writable guest PT_LOAD (including BSS), nothing else.
+    * Save the effective address for an accurate physical-device diagnosis. */
+   const uint64_t va=(ra?gpr[ra]:0u)+(uint64_t)(int64_t)imm;
+   const uint32_t v=(uint32_t)gpr[rt];
+   out[10]=(uint32_t)va;out[11]=(uint32_t)gpr[ra];out[12]=v;
+   if(!ra||va>UINT32_MAX||(va&3u))return -1003;
+   if(va>=base&&within(va-base,4u,sizeof(stack))) {
+       for(unsigned k=0;k<4u;k++)
+          stack[(size_t)(va-base)+k]=(uint8_t)(v>>(24u-8u*k));
+   }else{
+       const int rc=m65_store32(&guest,ss,used,va,v);
+       if(rc)return rc==-2 ? -1005 : -1004;
+   }
+   stores++;
+  }else if(op==30){
+   /* PowerPC MD-form rldicl, e.g. clrldi r4,r8,32 (0x79040020).
+    * Preserve exact GPR 64-bit masking, refuse other XO/Rc forms. */
+   uint64_t rotated=0;
+   if(ar_ppu_rldicl(w,gpr[rt],&rotated))return -998;
+   gpr[ra]=rotated;
+  }else if(op==31 && ((w>>1)&1023u)==444u && !(w&1u)){
+   const unsigned rb=(w>>11)&31u;
+   gpr[ra]=gpr[rt]|gpr[rb];
+  }else if(op==31 && ((w>>1)&1023u)==339u &&
+            ((w>>11)&1023u)==256u && !(w&1u)){
+   /* mflr rT, encoded SPR=8 => 0x100. No arbitrary SPR access. */
+   gpr[rt]=lr;mflr++;
+  }else{
+   out[1]=w;return -990; /* unsupported opcode must fail */
+  }
+  pc=next;out[0]++;
+  if(step==15u && (gpr[2]!=info[2]||stores!=9u||mflr!=1u||gpr[0]!=lr))return -996;
+ }
+ if(gpr[2]!=info[2])return -997;
+ out[1]=(uint32_t)gpr[2];out[2]=pc;out[3]=lr;
+ out[4]=(uint32_t)gpr[1];out[5]=stores;out[6]=(uint32_t)gpr[0];
+ out[9]=(uint32_t)gpr[4];
+ out[13]=(uint32_t)gpr[12];out[14]=(uint32_t)gpr[13];
+ out[15]=guest.used; /* distinct guest PT_LOAD shadow words */
+ return 0;
+}
