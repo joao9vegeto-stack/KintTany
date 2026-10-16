@@ -53,6 +53,8 @@ extern int ar_probe_rsx_texture_cache_mutation(unsigned swizzled,unsigned int ou
 @property(nonatomic,strong) UIWindow *window;
 @property(nonatomic,strong) ARMetalView *metalView;
 @property(nonatomic,strong) UILabel *status;
+@property(nonatomic,strong) UIScrollView *gameList;
+@property(nonatomic,strong) UIScrollView *graphicsList;
 @property(nonatomic,assign) BOOL ready;
 @property(nonatomic,assign) BOOL shaderBusy;
 @property(nonatomic,assign) NSUInteger m51Attempts;
@@ -345,6 +347,125 @@ extern int ar_probe_rsx_texture_cache_mutation(unsigned swizzled,unsigned int ou
       [elfButton.leadingAnchor constraintGreaterThanOrEqualToAnchor:controller.view.leadingAnchor constant:16],
       [elfButton.trailingAnchor constraintLessThanOrEqualToAnchor:controller.view.trailingAnchor constant:-16]
     ]];
+
+    /* M6.2.3 — UI ONLY. Original gestures, GOWA.ELF import, all
+     * handlers and the guest PPU / RSX engines remain unchanged.
+     * Remove the old, unscrollable button-to-button constraints and
+     * reparent the SAME buttons into two scrollable sections. */
+    NSArray<UIButton *> *buttons=@[
+        cacheButton,shaderButton,drawButton,mutationButton,multipassButton,
+        depthButton,stencilButton,maskButton,blendButton,alphaButton,elfButton];
+    NSMutableArray<NSLayoutConstraint *> *old=[NSMutableArray array];
+    for(NSLayoutConstraint *c in controller.view.constraints)
+        if([buttons containsObject:c.firstItem] ||
+           [buttons containsObject:c.secondItem]) [old addObject:c];
+    [NSLayoutConstraint deactivateConstraints:old];
+
+    status.font=[UIFont systemFontOfSize:13 weight:UIFontWeightMedium];
+    status.layer.cornerRadius=12;
+    status.layer.masksToBounds=YES;
+
+    UIView *panel=[UIView new];
+    panel.translatesAutoresizingMaskIntoConstraints=NO;
+    panel.backgroundColor=[[UIColor colorWithRed:0.035 green:0.06 blue:0.12 alpha:1]
+                              colorWithAlphaComponent:0.94];
+    panel.layer.cornerRadius=17;
+    panel.layer.masksToBounds=YES;
+    [controller.view addSubview:panel];
+    UILabel *header=[UILabel new];
+    header.translatesAutoresizingMaskIntoConstraints=NO;
+    header.text=@"ASCENSIONRECOMP   ·   M6.2.3";
+    header.textColor=[UIColor colorWithRed:0.73 green:0.87 blue:1 alpha:1];
+    header.font=[UIFont systemFontOfSize:12 weight:UIFontWeightBold];
+    header.textAlignment=NSTextAlignmentCenter;
+    [panel addSubview:header];
+    UISegmentedControl *tabs=[[UISegmentedControl alloc]
+                         initWithItems:@[@"Jogo / PPU", @"RSX / Metal"]];
+    tabs.translatesAutoresizingMaskIntoConstraints=NO;
+    tabs.selectedSegmentIndex=0;
+    tabs.selectedSegmentTintColor=[UIColor colorWithRed:0.11 green:0.42 blue:0.75 alpha:1];
+    [tabs setTitleTextAttributes:@{NSForegroundColorAttributeName:UIColor.whiteColor}
+                       forState:UIControlStateSelected];
+    [tabs addTarget:self action:@selector(arSwitchTab:)
+                forControlEvents:UIControlEventValueChanged];
+    [panel addSubview:tabs];
+    UIScrollView *game=[UIScrollView new],*graphics=[UIScrollView new];
+    for(UIScrollView *scroll in @[game,graphics]) {
+        scroll.translatesAutoresizingMaskIntoConstraints=NO;
+        scroll.alwaysBounceVertical=YES;
+        [panel addSubview:scroll];
+        [NSLayoutConstraint activateConstraints:@[
+          [scroll.topAnchor constraintEqualToAnchor:tabs.bottomAnchor constant:12],
+          [scroll.bottomAnchor constraintEqualToAnchor:panel.bottomAnchor constant:-12],
+          [scroll.leadingAnchor constraintEqualToAnchor:panel.leadingAnchor constant:12],
+          [scroll.trailingAnchor constraintEqualToAnchor:panel.trailingAnchor constant:-12]
+        ]];
+    }
+    self.gameList=game; self.graphicsList=graphics; graphics.hidden=YES;
+    NSArray<UIScrollView *> *scrollers=@[game,graphics];
+    for(NSUInteger i=0;i<scrollers.count;i++) {
+        UIScrollView *scroll=scrollers[i];
+        UIStackView *stack=[UIStackView new];
+        stack.translatesAutoresizingMaskIntoConstraints=NO;
+        stack.axis=UILayoutConstraintAxisVertical;
+        stack.alignment=UIStackViewAlignmentFill;
+        stack.spacing=10;
+        [scroll addSubview:stack];
+        UILabel *hint=[UILabel new];
+        hint.numberOfLines=0;
+        hint.textAlignment=NSTextAlignmentCenter;
+        hint.font=[UIFont systemFontOfSize:13 weight:UIFontWeightMedium];
+        hint.textColor=[UIColor colorWithWhite:0.83 alpha:1];
+        hint.text=i==0 ?
+             @"NPUA80918 · M6.2: PPU real 16/16. Execução limitada, sem HLE/SPU/gameplay. Importe o ELF privado abaixo." :
+             @"Diagnósticos RSX → Metal, do mais recente ao legado. Role para encontrar os testes anteriores.";
+        [stack addArrangedSubview:hint];
+        NSArray<UIButton *> *ordered=i==0 ? @[elfButton] : @[
+            alphaButton,blendButton,maskButton,stencilButton,depthButton,
+            multipassButton,mutationButton,drawButton,shaderButton,cacheButton];
+        for(UIButton *button in ordered) {
+            button.backgroundColor=i==0 ?
+                [UIColor colorWithRed:0.10 green:0.40 blue:0.73 alpha:1] :
+                [UIColor colorWithRed:0.11 green:0.18 blue:0.30 alpha:1];
+            button.titleLabel.adjustsFontSizeToFitWidth=YES;
+            button.titleLabel.minimumScaleFactor=0.76;
+            [stack addArrangedSubview:button];
+        }
+        if(i==0) {
+            UILabel *privacy=[UILabel new];
+            privacy.numberOfLines=0;
+            privacy.textAlignment=NSTextAlignmentCenter;
+            privacy.textColor=[UIColor colorWithWhite:0.64 alpha:1];
+            privacy.font=[UIFont systemFontOfSize:12];
+            privacy.text=@"O GOWA.ELF fica no iPhone e não é incluído na IPA ou enviado ao GitHub.";
+            [stack addArrangedSubview:privacy];
+        }
+        [NSLayoutConstraint activateConstraints:@[
+            [stack.leadingAnchor constraintEqualToAnchor:scroll.contentLayoutGuide.leadingAnchor],
+            [stack.trailingAnchor constraintEqualToAnchor:scroll.contentLayoutGuide.trailingAnchor],
+            [stack.topAnchor constraintEqualToAnchor:scroll.contentLayoutGuide.topAnchor],
+            [stack.bottomAnchor constraintEqualToAnchor:scroll.contentLayoutGuide.bottomAnchor],
+            [stack.widthAnchor constraintEqualToAnchor:scroll.frameLayoutGuide.widthAnchor]
+        ]];
+    }
+    [elfButton setTitle:@"Importar GOWA.ELF · testar PPU" forState:UIControlStateNormal];
+    NSLayoutConstraint *height=[panel.heightAnchor
+             constraintEqualToAnchor:controller.view.heightAnchor multiplier:0.60];
+    height.priority=UILayoutPriorityDefaultHigh;
+    [NSLayoutConstraint activateConstraints:@[
+        [panel.leadingAnchor constraintEqualToAnchor:controller.view.safeAreaLayoutGuide.leadingAnchor constant:12],
+        [panel.trailingAnchor constraintEqualToAnchor:controller.view.safeAreaLayoutGuide.trailingAnchor constant:-12],
+        [panel.bottomAnchor constraintEqualToAnchor:controller.view.safeAreaLayoutGuide.bottomAnchor constant:-12],
+        [panel.topAnchor constraintGreaterThanOrEqualToAnchor:status.bottomAnchor constant:12],
+        height,
+        [header.topAnchor constraintEqualToAnchor:panel.topAnchor constant:12],
+        [header.leadingAnchor constraintEqualToAnchor:panel.leadingAnchor constant:12],
+        [header.trailingAnchor constraintEqualToAnchor:panel.trailingAnchor constant:-12],
+        [tabs.topAnchor constraintEqualToAnchor:header.bottomAnchor constant:12],
+        [tabs.leadingAnchor constraintEqualToAnchor:panel.leadingAnchor constant:12],
+        [tabs.trailingAnchor constraintEqualToAnchor:panel.trailingAnchor constant:-12],
+        [tabs.heightAnchor constraintEqualToConstant:35]
+    ]];
     self.window.rootViewController=controller;
     [self.window makeKeyAndVisible];
 
@@ -388,6 +509,11 @@ extern int ar_probe_rsx_texture_cache_mutation(unsigned swizzled,unsigned int ou
 
 /* M5.0: NV40 guest microcode is decoded, lowered and compiled on the iPhone.
  * Failures are shown; no draw/gameplay claim is made from shader compilation. */
+- (void)arSwitchTab:(UISegmentedControl *)sender {
+    BOOL showGame=sender.selectedSegmentIndex==0;
+    self.gameList.hidden=!showGame;
+    self.graphicsList.hidden=showGame;
+}
 - (void)testGuestRSXShader:(UIButton *)sender {
     if (!self.ready || self.shaderBusy) return;
     self.shaderBusy=YES;
