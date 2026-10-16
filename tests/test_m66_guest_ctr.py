@@ -36,7 +36,7 @@ class PowerPCCTR(unittest.TestCase):
     "if(rc40 && !knownMtctrStop){",
     "ar_ppu_bootstrap_fortyeight_trace(",
     "M6.5 LEGADA: mtctr","M6.6 PARADA SEGURA",
-    "M6.7.4 PPU REAL 48/48: OK",
+    "M6.7.5 PPU REAL 48/48: OK",
     "CTR=0x%08X%08X",
     "ASCENSIONRECOMP   ·   M6.7"):
    self.assertIn(token,UI)
