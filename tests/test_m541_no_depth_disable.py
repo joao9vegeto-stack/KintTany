@@ -30,7 +30,8 @@ class NoDepthOverride(unittest.TestCase):
         self.assertIn("0.0f,0u,pixels,&encoded,&guest,shader",SRC)
     def test_m54_pass2_preserves_depth(self):
         for needle in ("const unsigned expected[3]={0u,0u,2u}",
-          "if (depth_mode!=2u && depth_mode!=4u && depth_mode!=5u)",
+          "depth_mode==0u || depth_mode==1u ||",
+          "depth_mode==3u || depth_mode==6u",
           "NV4097_SET_SURFACE_ZETA_OFFSET,M54_Z_OFFSET",
           "NV4097_SET_DEPTH_FUNC,0x0201u",
           "if(*depth_draws!=3u) return -440"):
