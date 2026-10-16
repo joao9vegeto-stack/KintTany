@@ -38,7 +38,7 @@ class PowerPCCTR(unittest.TestCase):
     "M6.5 LEGADA: mtctr","M6.6 PARADA SEGURA",
     "M6.6 PPU REAL 48/48: OK",
     "CTR=0x%08X%08X",
-    "ASCENSIONRECOMP   ·   M6.6"):
+    "ASCENSIONRECOMP   ·   M6.7"):
    self.assertIn(token,UI)
  def test_host_synthetic_and_version(self):
   for token in ("0x7c0903a6u","0x4e800420u","0x4e800421u",
@@ -46,6 +46,6 @@ class PowerPCCTR(unittest.TestCase):
     "M6.6 PPU48 guarded mtctr and bctr PASS"):
    self.assertIn(token,H)
   for token in ("m66-host.log","m66-status.txt",
-                "tests/host_m66_ctr.c","0.6.12-unsigned.ipa"):
+                "tests/host_m66_ctr.c","0.6.13-unsigned.ipa"):
    self.assertIn(token,W)
 if __name__=="__main__":unittest.main()

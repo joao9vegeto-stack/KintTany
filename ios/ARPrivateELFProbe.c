@@ -661,10 +661,13 @@ int ar_ppu_bootstrap_forty(const uint8_t*d,size_t len,
  * 0x7C0903A6 = mtctr r0 observed on private NPUA80918 at PC=0x669C2C.
  * The next branch is validated against ELF executable segments, and no
  * guest address becomes a native host pointer. Zero per-step stale EA. */
-int ar_ppu_bootstrap_fortyeight(const uint8_t*d,size_t len,
-                             const uint32_t info[5],uint32_t out[20]){
+/* M6.7: optional trace of bounded guest execution; no permission changes. */
+int ar_ppu_bootstrap_fortyeight_trace(const uint8_t*d,size_t len,
+                             const uint32_t info[5],uint32_t out[20],
+                             uint32_t trace[24]){
  if(!d||!info||!out)return -980;
  memset(out,0,20*sizeof(*out));
+ if(trace)memset(trace,0,24*sizeof(*trace));
  uint32_t check[5]={0};
  if(ar_private_elf_inspect(d,len,check)||
     memcmp(info,check,sizeof(check)))return -981;
@@ -688,7 +691,15 @@ int ar_ppu_bootstrap_fortyeight(const uint8_t*d,size_t len,
   const uint8_t*p=lookup(d,len,ss,used,pc,4,1);
   if(!p){out[8]=pc;return -983;}
   const uint32_t w=b32(p),op=w>>26;
+  const uint64_t prior_r0=gpr[0];
   out[7]=w;out[8]=pc;
+  if(trace){
+   unsigned ix=(trace[15]&3u);
+   trace[16u+2u*ix]=pc;
+   trace[17u+2u*ix]=w;
+   trace[15]++;
+   trace[5]=(uint32_t)gpr[0];trace[6]=(uint32_t)(gpr[0]>>32);
+  }
   /* Per-step diagnostics: never leak a previous memory EA when the
    * CURRENT failing opcode is e.g. mtctr, bctr, or unknown. */
   out[10]=out[11]=out[12]=0u;
@@ -777,11 +788,15 @@ int ar_ppu_bootstrap_fortyeight(const uint8_t*d,size_t len,
    const unsigned spr=((spr_field&31u)<<5)|(spr_field>>5);
    if((w&1u) || spr!=9u)return -1006;
    ctr=gpr[rt];out[17]=(uint32_t)ctr;out[18]=(uint32_t)(ctr>>32);
+   if(trace){trace[10]=pc;trace[11]=rt;trace[12]=(uint32_t)ctr;
+              trace[13]=(uint32_t)(ctr>>32);}
   }else if(op==19 && ((w>>1)&1023u)==528u){
    /* bctr and bctrl only (unconditional BO=20, BI=0, BH=0).
     * Conditional CTR branches need CR modeling and remain unsupported. */
    if(w!=0x4e800420u && w!=0x4e800421u)return -1008;
    const uint64_t dest=ctr&~UINT64_C(3);
+   if(trace){trace[14]=pc;trace[5]=(uint32_t)gpr[0];
+              trace[6]=(uint32_t)(gpr[0]>>32);}
    if(dest>UINT32_MAX || !lookup(d,len,ss,used,dest,4,1))
       return -1007; /* guest executable map validated */
    if(w&1u)lr=next;
@@ -796,6 +811,16 @@ int ar_ppu_bootstrap_fortyeight(const uint8_t*d,size_t len,
   }else{
    out[1]=w;return -990; /* unsupported opcode must fail */
   }
+  if(trace && gpr[0]!=prior_r0){
+    trace[0]=pc;trace[1]=w;trace[2]=(uint32_t)prior_r0;
+    trace[3]=(uint32_t)gpr[0];trace[4]=(uint32_t)(gpr[0]>>32);
+    trace[5]=(uint32_t)gpr[0];trace[6]=(uint32_t)(gpr[0]>>32);
+    trace[7]++;
+    if((op==32u || op==58u) && rt==0u){
+       trace[8]=(uint32_t)((ra?gpr[ra]:0u)+(uint64_t)(int64_t)imm);
+       trace[9]=op;
+    }else{trace[8]=0;trace[9]=op;}
+  }
   pc=next;out[0]++;
   if(step==15u && (gpr[2]!=info[2]||stores!=9u||mflr!=1u||gpr[0]!=lr))return -996;
  }
@@ -807,4 +832,10 @@ int ar_ppu_bootstrap_fortyeight(const uint8_t*d,size_t len,
  out[15]=guest.used; /* distinct guest PT_LOAD shadow words */
  out[17]=(uint32_t)ctr;out[18]=(uint32_t)(ctr>>32);
  return 0;
+}
+
+/* Preserve the M6.6 ABI and host regressions unchanged. */
+int ar_ppu_bootstrap_fortyeight(const uint8_t*d,size_t len,
+                          const uint32_t info[5],uint32_t out[20]){
+ return ar_ppu_bootstrap_fortyeight_trace(d,len,info,out,NULL);
 }
