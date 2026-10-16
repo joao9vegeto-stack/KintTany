@@ -657,17 +657,33 @@ int ar_ppu_bootstrap_forty(const uint8_t*d,size_t len,
  return 0;
 }
 
+/* M6.7.2: origin classification; guest addresses never become iOS pointers. */
+static uint32_t m672_region(const segment*s,unsigned n,uint64_t va,
+ unsigned bytes,uint64_t sb,uint32_t*flags){
+ if(flags)*flags=0;
+ if(va>=sb&&within(va-sb,bytes,4096u))return 1u;
+ const int i=m65_segment(s,n,va,bytes,0u);
+ if(i<0)return 0u;
+ const segment*t=s+i;
+ if(flags)*flags=t->flags;
+ const int disk=within(va-t->va,bytes,t->size);
+ return (t->flags&1u)?(disk?2u:5u):(disk?3u:4u);
+}
+/* Region tags 0=unmapped 1=stack 2=executable file 3=data file
+ * 4=nonexecuted BSS 5=executable BSS. Original p_flags separate. */
+
 /* M6.6 — strict CTR/mtspr and bounded PPU48 continuation.
  * 0x7C0903A6 = mtctr r0 observed on private NPUA80918 at PC=0x669C2C.
  * The next branch is validated against ELF executable segments, and no
  * guest address becomes a native host pointer. Zero per-step stale EA. */
 /* M6.7: optional trace of bounded guest execution; no permission changes. */
-int ar_ppu_bootstrap_fortyeight_trace(const uint8_t*d,size_t len,
+static int m672_core(const uint8_t*d,size_t len,
                              const uint32_t info[5],uint32_t out[20],
-                             uint32_t trace[24]){
+                             uint32_t trace[24],uint32_t detail[24]){
  if(!d||!info||!out)return -980;
  memset(out,0,20*sizeof(*out));
  if(trace)memset(trace,0,24*sizeof(*trace));
+ if(detail)memset(detail,0,24*sizeof(*detail));
  uint32_t check[5]={0};
  if(ar_private_elf_inspect(d,len,check)||
     memcmp(info,check,sizeof(check)))return -981;
@@ -692,6 +708,8 @@ int ar_ppu_bootstrap_fortyeight_trace(const uint8_t*d,size_t len,
   if(!p){out[8]=pc;return -983;}
   const uint32_t w=b32(p),op=w>>26;
   const uint64_t prior_r0=gpr[0];
+  const uint64_t prior_r12=gpr[12];
+  uint64_t load_va=0;
   out[7]=w;out[8]=pc;
   if(trace){
    unsigned ix=(trace[15]&3u);
@@ -721,7 +739,14 @@ int ar_ppu_bootstrap_fortyeight_trace(const uint8_t*d,size_t len,
    if(m65_read_guest(d,len,ss,used,&guest,stack,base,va,4,&value)) {
       out[10]=(uint32_t)va;out[16]=1u;return -1001;
    }
-   gpr[rt]=value;
+   load_va=va;gpr[rt]=value;
+   if(detail && ra==12u && (rt==0u || rt==2u)){
+     const unsigned i=rt==0u?8u:12u;
+     detail[i]=(uint32_t)va;detail[i+1u]=(uint32_t)value;
+     detail[i+2u]=m672_region(ss,used,va,4u,base,&detail[i+3u]);
+     if(rt==0u){detail[20]=(uint32_t)prior_r12;
+                 detail[21]=(uint32_t)(prior_r12>>32);}
+   }
   }else if(op==62){
    if(!ra||(w&3u)>1u)return -986;
    int16_t ds=(int16_t)(w&0xfffcu);
@@ -748,7 +773,7 @@ int ar_ppu_bootstrap_fortyeight_trace(const uint8_t*d,size_t len,
    if(m65_read_guest(d,len,ss,used,&guest,stack,base,va,8,&value)) {
        out[10]=(uint32_t)va;out[16]=1u;return -1002;
    }
-   gpr[rt]=value;
+   load_va=va;gpr[rt]=value;
   }else if(op==36){
    /* Exact device opcode 0x93AB0000: stw r29,0(r11).
     * Permit stack OR writable guest PT_LOAD (including BSS), nothing else.
@@ -811,6 +836,14 @@ int ar_ppu_bootstrap_fortyeight_trace(const uint8_t*d,size_t len,
   }else{
    out[1]=w;return -990; /* unsupported opcode must fail */
   }
+  if(detail && gpr[12]!=prior_r12){
+    detail[0]=pc;detail[1]=w;detail[2]=(uint32_t)prior_r12;
+    detail[3]=(uint32_t)gpr[12];detail[4]=(uint32_t)(gpr[12]>>32);
+    detail[5]++;detail[6]=op;detail[7]=(uint32_t)load_va;
+    detail[16]=detail[17]=0u;
+    if((op==32u||op==58u)&&rt==12u)
+      detail[16]=m672_region(ss,used,load_va,op==32u?4u:8u,base,&detail[17]);
+  }
   if(trace && gpr[0]!=prior_r0){
     trace[0]=pc;trace[1]=w;trace[2]=(uint32_t)prior_r0;
     trace[3]=(uint32_t)gpr[0];trace[4]=(uint32_t)(gpr[0]>>32);
@@ -834,6 +867,17 @@ int ar_ppu_bootstrap_fortyeight_trace(const uint8_t*d,size_t len,
  return 0;
 }
 
+/* Preserve both old exported APIs; extended diagnostics are opt-in. */
+int ar_ppu_bootstrap_fortyeight_trace(const uint8_t*d,size_t len,
+                             const uint32_t info[5],uint32_t out[20],
+                             uint32_t trace[24]){
+ return m672_core(d,len,info,out,trace,NULL);
+}
+int ar_ppu_bootstrap_fortyeight_trace_m672(const uint8_t*d,size_t len,
+                             const uint32_t info[5],uint32_t out[20],
+                             uint32_t trace[24],uint32_t detail[24]){
+ return m672_core(d,len,info,out,trace,detail);
+}
 /* Preserve the M6.6 ABI and host regressions unchanged. */
 int ar_ppu_bootstrap_fortyeight(const uint8_t*d,size_t len,
                           const uint32_t info[5],uint32_t out[20]){
