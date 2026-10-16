@@ -1,4 +1,4 @@
-name: AscensionRecomp M6.7 - PPU r0 provenance and copyable CTR diagnostics
+name: AscensionRecomp M6.7.2 - r12 descriptor provenance
 
 on:
   push:
@@ -175,6 +175,12 @@ jobs:
           clang -std=c11 -O2 -Wall -Wextra -Werror ios/ARPrivateELFProbe.c tests/host_m67_trace.c -o m67-host
           ./m67-host 2>&1 | tee m67-host.log
           grep -Fxq 'M6.7 bounded r0 provenance CTR trace PASS' m67-host.log
+      - name: M6.7.2 check r12 descriptor provenance
+        run: |
+          set -euo pipefail
+          clang -std=c11 -O2 -Wall -Wextra -Werror ios/ARPrivateELFProbe.c tests/host_m672_descriptor.c -o m672-host
+          ./m672-host 2>&1 | tee m672-host.log
+          grep -Fxq 'M6.7.2 r12 descriptor classification PASS' m672-host.log
       - name: M5.0 run synthetic PPU LV2 integrated boot smoke
         run: |
           set -euo pipefail
@@ -409,9 +415,9 @@ jobs:
         run: |
           set -euo pipefail
           bash tools/build_ios_probe_ipa.sh 2>&1 | tee m41-build-ipa.log
-          test -s AscensionRecompProbe-0.6.13-unsigned.ipa
-          /usr/libexec/PlistBuddy -c 'Print CFBundleShortVersionString' ios-probe/Payload/AscensionRecompProbe.app/Info.plist | grep -Fx 0.6.13
-          /usr/bin/unzip -t AscensionRecompProbe-0.6.13-unsigned.ipa | tee m42-ipa-integrity.log
+          test -s AscensionRecompProbe-0.6.14-unsigned.ipa
+          /usr/libexec/PlistBuddy -c 'Print CFBundleShortVersionString' ios-probe/Payload/AscensionRecompProbe.app/Info.plist | grep -Fx 0.6.14
+          /usr/bin/unzip -t AscensionRecompProbe-0.6.14-unsigned.ipa | tee m42-ipa-integrity.log
           xcrun nm -g ios-probe/Payload/AscensionRecompProbe.app/AscensionRecompProbe | grep -E '(_rsx_metal_backend_present|_rsx_metal_backend_init|_OBJC_CLASS_\\$_ARMetalView)' > m42-runtime-link-symbols.txt || true
           grep -q _rsx_metal_backend_init m39-metal-symbols.txt
           echo 'M4.2: actual GPU clear + presentDrawable + waitUntilCompleted route linked in iOS app; requires on-device screenshot.' > m42-status.txt
@@ -453,6 +459,7 @@ jobs:
           echo 'M6.5.3 fixes the UI gate: legacy -995 stw after PPU24 now replays via strict PPU40 guest PT_LOAD overlay. Other errors remain fail-closed. iPhone validation needed.' > m65-status.txt
           echo 'M6.6 mtctr at real PC 0x669C2C, 38/40 screenshot. PPU48 records CTR and clears stale EA each step; commercial ELF verification only on iPhone.' > m66-status.txt
           echo 'M6.7 guest r0 register-writer provenance for real -1007 at PC 0x669C30, bctrl CTR=0x39800000; no unsafe branch or ELF upload.' > m67-status.txt
+           echo 'M6.7.2 source r12 traced, bctrl guard unchanged; iPhone test pending.' > m672-status.txt
           echo 'M6.1 eight guest PPU steps, stack and branch; user title private; host synthetic only.' > m61-status.txt
           echo 'M6.0 strict PPU bootstrap: at most 4 imported ELF instructions; no actual game bytes bundled.' > m60-status.txt
           echo 'M5.9: on-device Files ELF inspection; no game data in CI or IPA.' > m59-status.txt
@@ -477,7 +484,7 @@ jobs:
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: AscensionRecomp-M6.7-r0-CTR-trace-evidence
+          name: AscensionRecomp-M6.7.2-r12-descriptor-evidence
           if-no-files-found: warn
           retention-days: 14
           path: |
@@ -606,7 +613,7 @@ jobs:
             m50-ios-shader-archive-sha256.txt
             m50-ios-shader-availability-symbol.txt
             build-ios-runtime/libAscensionRSXGuest-ios-arm64.a
-            AscensionRecompProbe-0.6.13-unsigned.ipa
+            AscensionRecompProbe-0.6.14-unsigned.ipa
             m40-ios-layer-view.o
             build-ios-runtime/libps3recomp_runtime.a
             ios-ppu-core/libAscensionPPUCore-ios-arm64.a

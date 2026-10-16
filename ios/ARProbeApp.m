@@ -21,6 +21,8 @@ extern int ar_ppu_bootstrap_fortyeight(const unsigned char*,size_t,
                                       const unsigned int[5],unsigned int[20]);
 extern int ar_ppu_bootstrap_fortyeight_trace(const unsigned char*,size_t,
                       const unsigned int[5],unsigned int[20],unsigned int[24]);
+extern int ar_ppu_bootstrap_fortyeight_trace_m672(const unsigned char*,size_t,
+                      const unsigned int[5],unsigned int[20],unsigned int[24],unsigned int[24]);
 
 extern int rsx_metal_backend_init(unsigned int width, unsigned int height, const char* title);
 extern void rsx_metal_backend_shutdown(void);
@@ -386,7 +388,7 @@ extern int ar_probe_rsx_texture_cache_mutation(unsigned swizzled,unsigned int ou
     [controller.view addSubview:panel];
     UILabel *header=[UILabel new];
     header.translatesAutoresizingMaskIntoConstraints=NO;
-    header.text=@"ASCENSIONRECOMP   ·   M6.7";
+    header.text=@"ASCENSIONRECOMP   ·   M6.7.2";
     header.textColor=[UIColor colorWithRed:0.73 green:0.87 blue:1 alpha:1];
     header.font=[UIFont systemFontOfSize:12 weight:UIFontWeightBold];
     header.textAlignment=NSTextAlignmentCenter;
@@ -440,7 +442,7 @@ extern int ar_probe_rsx_texture_cache_mutation(unsigned swizzled,unsigned int ou
         hint.font=[UIFont systemFontOfSize:13 weight:UIFontWeightMedium];
         hint.textColor=[UIColor colorWithWhite:0.83 alpha:1];
         hint.text=i==0 ?
-             @"NPUA80918 · M6.7: até 48 instruções PPU com rastreio de r0/CTR, desvio validado e relatório copiável. Seu ELF continua privado no iPhone." :
+             @"NPUA80918 · M6.7.2: até 48 instruções PPU; proveniência de r0/r12/CTR e mapeamento de leitura. ELF privado." :
              @"Diagnósticos RSX → Metal, do mais recente ao legado. Role para encontrar os testes anteriores.";
         [stack addArrangedSubview:hint];
         NSArray<UIButton *> *ordered=i==0 ? @[elfButton] : @[
@@ -966,10 +968,11 @@ extern int ar_probe_rsx_texture_cache_mutation(unsigned swizzled,unsigned int ou
         @"M6.5 PPU REAL 40/40: OK";
     unsigned int cpu48[20]={0};
     unsigned int trace48[24]={0};
+    unsigned int detail48[24]={0};
     self.ppuReport=nil;
     self.ppuReportButton.enabled=NO;
-    const int rc48=ar_ppu_bootstrap_fortyeight_trace(
-        data.bytes,data.length,info,cpu48,trace48);
+    const int rc48=ar_ppu_bootstrap_fortyeight_trace_m672(
+        data.bytes,data.length,info,cpu48,trace48,detail48);
     if(rc48){
        NSMutableString *recent=[NSMutableString string];
        for(unsigned i=0;i<4u && i<trace48[15];i++){
@@ -978,7 +981,7 @@ extern int ar_probe_rsx_texture_cache_mutation(unsigned swizzled,unsigned int ou
              i,trace48[16u+2u*slot],trace48[17u+2u*slot]];
        }
        self.ppuReport=[NSString stringWithFormat:
-          @"ASCENSIONRECOMP M6.7 / NPUA80918 / trace PPU privado\n"
+          @"ASCENSIONRECOMP M6.7.2 / NPUA80918 / trace PPU privado\n"
            "Resultado=%d · passos=%u/48 · PC=0x%08X · opcode=0x%08X\n"
            "CTR=0x%08X%08X · saltos indiretos=%u\n"
            "r0 atual=0x%08X%08X · alterações=%u\n"
@@ -998,6 +1001,24 @@ extern int ar_probe_rsx_texture_cache_mutation(unsigned swizzled,unsigned int ou
            trace48[9],trace48[8],
            trace48[10],trace48[11],trace48[14],trace48[12],
            cpu48[16],cpu48[10],recent];
+       NSMutableString *extended=[self.ppuReport mutableCopy];
+       [extended appendFormat:
+        @"\nr12 atual=0x%08X%08X · alterações=%u\n"
+         "Última mudança r12: PC=0x%08X opcode=0x%08X\n"
+         "r12 anterior=0x%08X depois=0x%08X%08X tipo=%u\n"
+         "r12 EA leitura=0x%08X regiao=%u flags=%u\n"
+         "lwz r0 via r12: EA=0x%08X valor=0x%08X regiao=%u flags=%u\n"
+         "lwz r2 via r12: EA=0x%08X valor=0x%08X regiao=%u flags=%u\n"
+         "r12 na leitura r0=0x%08X%08X\n"
+         "Regioes: 0=sem mapa 1=pilha 2=codigo ELF 3=dados ELF 4=BSS 5=BSS+X\n",
+         detail48[19],detail48[18],detail48[5],
+         detail48[0],detail48[1],
+         detail48[2],detail48[4],detail48[3],detail48[6],
+         detail48[7],detail48[16],detail48[17],
+         detail48[8],detail48[9],detail48[10],detail48[11],
+         detail48[12],detail48[13],detail48[14],detail48[15],
+         detail48[21],detail48[20]];
+       self.ppuReport=extended;
        self.ppuReportButton.enabled=YES;
        [self.ppuReportButton setTitle:@"Copiar diagnóstico PPU" forState:UIControlStateNormal];
        NSString *faultDetail=cpu48[16]
