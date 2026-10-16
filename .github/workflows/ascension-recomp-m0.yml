@@ -1,4 +1,4 @@
-name: AscensionRecomp M7.4.4 - macOS Bash empty AOT args correction
+name: AscensionRecomp M7.5 - isolate native PPU AOT from TLS smoke
 
 on:
   push:
@@ -236,6 +236,16 @@ jobs:
           grep -q '_ar_private_aot_install_sha256' m74-arm64-symbols.txt
           grep -q '_ar_game_ppu_00010000' m74-arm64-symbols.txt
           echo 'Synthetic ARM64 AOT linked and executed on host; zero commercial game functions in public IPA.' > m74-status.txt
+      - name: M7.5 verify native AOT startup uses clean TLS and authentic PRX HLE
+        run: |
+          set -euo pipefail
+          clang -std=c11 -O2 -Wall -Wextra -Werror -DASCENSION_PRIVATE_AOT_LINKED \
+            -I upstream/runtime/ppu -I runtime \
+            ios/ARLivePPUBridge.c ios/ARPrivateELFProbe.c \
+            runtime/ppu_bridge.c runtime/elf_image.c runtime/ppu_tls.c \
+            tests/host_m75_aot_boot.c -o m75-aot-boot-host
+          ./m75-aot-boot-host 2>&1 | tee m75-aot-boot-host.log
+          grep -Fxq 'M7.5 signed AOT entry isolates TLS smoke and runs genuine guest HLE PASS' m75-aot-boot-host.log
       - name: M7.0 validate actual native ELF loader, import binder and AOT dispatcher
         run: |
           set -euo pipefail
@@ -747,6 +757,7 @@ jobs:
             m74-aot-host.log
             m74-arm64-symbols.txt
             m74-status.txt
+            m75-aot-boot-host.log
             AscensionRecompProbe-0.6.14-unsigned.ipa
             m40-ios-layer-view.o
             build-ios-runtime/libps3recomp_runtime.a

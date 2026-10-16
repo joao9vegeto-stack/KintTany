@@ -120,15 +120,22 @@ int ar_m70_native_runtime_probe(const uint8_t*d,size_t len,
        if((int32_t)out[10]==AR_OK && have_tls && tls_file<=tls_mem &&
           tls_va<=UINT32_MAX &&
           ar_tls_configure(tlsbase,tlsbase+0x10000u)==AR_OK){
-          ctx.gpr[3]=ctx.thread_id;
-          ctx.gpr[4]=tls_va;
-          ctx.gpr[5]=tls_file;
-          ctx.gpr[6]=tls_mem;
-          ctx.lr=image.entry_code;
-          const int hlerr=ar_run(&ctx,guest_stub,32u);
-          out[11]=(uint32_t)hlerr;
-          out[12]=(uint32_t)ctx.gpr[13];
-          if(hlerr==AR_OK && ctx.gpr[13])out[15]|=4u;
+          /* M7.5: a legacy HLE smoke test must never mutate the real
+           * native AOT entry context or consume its only TLS allocation.
+           * When signed functions are present, let the ACTUAL compiled
+           * process entry call its own verified HLE normally. */
+          if(out[5]==0u){
+             ppu_context smoke=ctx;
+             smoke.gpr[3]=smoke.thread_id;
+             smoke.gpr[4]=tls_va;
+             smoke.gpr[5]=tls_file;
+             smoke.gpr[6]=tls_mem;
+             smoke.lr=image.entry_code;
+             const int hlerr=ar_run(&smoke,guest_stub,32u);
+             out[11]=(uint32_t)hlerr;
+             out[12]=(uint32_t)smoke.gpr[13];
+             if(hlerr==AR_OK && smoke.gpr[13])out[15]|=4u;
+          }
        }
     }
  }
@@ -138,6 +145,10 @@ int ar_m70_native_runtime_probe(const uint8_t*d,size_t len,
   * rather than executing data as ARM64 or reporting boot success. */
  out[6]=(uint32_t)ar_run(&ctx,image.entry_code,128u);
  out[7]=ar_last_unresolved();
+ /* In AOT mode this is the r13 reached by genuine recompiled guest
+  * execution, not a separately invented HLE smoke result. The status
+  * bit for the legacy smoke remains unset. */
+ if(out[5])out[12]=(uint32_t)ctx.gpr[13];
  if((int32_t)out[6]==AR_UNRESOLVED && out[7]==image.entry_code)
     out[15]|=8u;
  ar_bridge_shutdown();
