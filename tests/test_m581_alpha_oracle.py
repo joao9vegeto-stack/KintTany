@@ -30,10 +30,10 @@ class AlphaOracle(unittest.TestCase):
         return result
 
     def test_complete_five_phase_gpu_expected_values(self):
-        m=re.search(r'static const uint32_t expected\\[5\\]\\[4\\]=\\{(.*?)\\};',
+        m=re.search(r'static const uint32_t expected\[5\]\[4\]=\{(.*?)\};',
                     SOURCE,re.S)
         self.assertIsNotNone(m)
-        rows=re.findall(r'\\{([^{}]+)\\}',m.group(1))
+        rows=re.findall(r'\{([^{}]+)\}',m.group(1))
         self.assertEqual(len(rows),5)
         actual=[[int(x,16) for x in re.findall(r'0x([0-9a-fA-F]+)u',row)]
                 for row in rows]

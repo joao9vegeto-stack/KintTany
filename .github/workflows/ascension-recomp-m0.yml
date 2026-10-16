@@ -116,7 +116,7 @@ jobs:
       - name: M5.8.1 verify transparent alpha oracle against independent CPU specification
         run: |
           set -euo pipefail
-          python3 -m unittest tests/test_m581_alpha_oracle.py -v 2>&1 | tee m581-alpha-oracle.log
+          python3 -m unittest discover -s tests -p 'test_m581_alpha_oracle.py' -v 2>&1 | tee m581-alpha-oracle.log
       - name: M5.0 run synthetic PPU LV2 integrated boot smoke
         run: |
           set -euo pipefail
