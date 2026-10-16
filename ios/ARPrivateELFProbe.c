@@ -247,3 +247,105 @@ int ar_ppu_bootstrap_sixteen(const uint8_t*d,size_t len,
  out[4]=(uint32_t)gpr[1];out[5]=stores;out[6]=(uint32_t)gpr[0];
  return 0;
 }
+
+/* M6.3 private bounded PPU continuation, 24 instructions MAX.
+ * No guest code bundled or uploaded. On error out[7]=raw opcode,
+ * out[8]=PC; unsupported operations FAIL CLOSED. */
+int ar_ppu_bootstrap_twentyfour(const uint8_t*d,size_t len,
+                             const uint32_t info[5],uint32_t out[9]){
+ if(!d||!info||!out)return -980;
+ memset(out,0,9*sizeof(*out));
+ uint32_t check[5]={0};
+ if(ar_private_elf_inspect(d,len,check)||
+    memcmp(info,check,sizeof(check)))return -981;
+ segment ss[64]={0};unsigned used=0;
+ const uint64_t table=b64(d+32);unsigned phsize=b16(d+54),n=b16(d+56);
+ for(unsigned j=0;j<n;j++){
+  const uint8_t*p=d+table+(uint64_t)j*phsize;
+  if(b32(p)!=1)continue;
+  segment s={b64(p+8),b64(p+16),b64(p+32),b64(p+40),b32(p+4)};
+  if(s.mem&&s.size)ss[used++]=s;
+ }
+ uint64_t gpr[32]={0};
+ uint8_t stack[4096]={0};
+ const uint64_t base=0x07000000u;
+ gpr[1]=base+sizeof(stack);gpr[2]=info[2];
+ uint32_t pc=info[1],lr=0,stores=0,mflr=0;
+ if(pc>0xffffffbfu||(pc&3))return -982;
+ for(unsigned step=0;step<24;step++){
+  const uint8_t*p=lookup(d,len,ss,used,pc,4,1);
+  if(!p){out[8]=pc;return -983;}
+  const uint32_t w=b32(p),op=w>>26;
+  out[7]=w;out[8]=pc;
+  unsigned rt=(w>>21)&31,ra=(w>>16)&31;
+  int16_t imm=(int16_t)(w&0xffffu);
+  uint32_t next=pc+4;
+  if(op==14){
+   gpr[rt]=(ra?gpr[ra]:0u)+(uint64_t)(int64_t)imm;
+  }else if(op==15){
+   gpr[rt]=(ra?gpr[ra]:0u)+(((uint64_t)(int64_t)imm)<<16);
+  }else if(op==25){
+   gpr[ra]=gpr[rt]|((uint64_t)(w&0xffffu)<<16);
+  }else if(op==24){
+   gpr[ra]=gpr[rt]|(uint64_t)(w&0xffffu);
+  }else if(op==32){
+   uint64_t va=(ra?gpr[ra]:0u)+(uint64_t)(int64_t)imm;
+   if(va>UINT32_MAX)return -984;
+   const uint8_t*q=lookup(d,len,ss,used,(uint32_t)va,4,0);
+   if(!q)return -985;
+   gpr[rt]=b32(q);
+  }else if(op==62){
+   if(!ra||(w&3u)>1u)return -986;
+   int16_t ds=(int16_t)(w&0xfffcu);
+   uint64_t va=gpr[ra]+(uint64_t)(int64_t)ds;
+   if(va<base||va>base+sizeof(stack)-8)return -987;
+   for(unsigned j=0;j<8;j++)
+      stack[(size_t)(va-base)+j]=(uint8_t)(gpr[rt]>>(56-8*j));
+   stores++;
+   if((w&3u)==1u)gpr[ra]=va;
+  }else if(op==18){
+   if(w&2u)return -988; /* only relative branches */
+   int64_t delta=(int64_t)(w&0x03fffffcu);
+   if(delta&0x02000000)delta-=0x04000000;
+   const int64_t dest=(int64_t)pc+delta;
+   if(dest<0||dest>UINT32_MAX||
+      !lookup(d,len,ss,used,(uint32_t)dest,4,1))return -989;
+   if(w&1u)lr=next;
+   next=(uint32_t)dest;
+  }else if(op==58){
+   if(!ra||(w&3u)!=0u)return -991;
+   const int16_t ds=(int16_t)(w&0xfffcu);
+   const uint64_t va=gpr[ra]+(uint64_t)(int64_t)ds;
+   if(va>=base&&va<=base+sizeof(stack)-8)
+      gpr[rt]=b64(stack+(size_t)(va-base));
+   else {
+      if(va>UINT32_MAX)return -992;
+      const uint8_t*q=lookup(d,len,ss,used,(uint32_t)va,8,0);
+      if(!q)return -993;
+      gpr[rt]=b64(q);
+   }
+  }else if(op==36){
+   if(!ra)return -994;
+   const uint64_t va=gpr[ra]+(uint64_t)(int64_t)imm;
+   if(va<base||va>base+sizeof(stack)-4)return -995;
+   const uint32_t v=(uint32_t)gpr[rt];
+   for(unsigned k=0;k<4;k++)stack[(size_t)(va-base)+k]=(uint8_t)(v>>(24-8*k));
+   stores++;
+  }else if(op==31 && ((w>>1)&1023u)==444u && !(w&1u)){
+   const unsigned rb=(w>>11)&31u;
+   gpr[ra]=gpr[rt]|gpr[rb];
+  }else if(op==31 && ((w>>1)&1023u)==339u &&
+            ((w>>11)&1023u)==256u && !(w&1u)){
+   /* mflr rT, encoded SPR=8 => 0x100. No arbitrary SPR access. */
+   gpr[rt]=lr;mflr++;
+  }else{
+   out[1]=w;return -990; /* unsupported opcode must fail */
+  }
+  pc=next;out[0]++;
+  if(step==15u && (gpr[2]!=info[2]||stores!=9u||mflr!=1u||gpr[0]!=lr))return -996;
+ }
+ if(gpr[2]!=info[2])return -997;
+ out[1]=(uint32_t)gpr[2];out[2]=pc;out[3]=lr;
+ out[4]=(uint32_t)gpr[1];out[5]=stores;out[6]=(uint32_t)gpr[0];
+ return 0;
+}
