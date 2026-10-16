@@ -64,9 +64,9 @@ int main(void){
  if(ar_ppu_rldicl(0x79040020u,UINT64_C(0x12345678fedcba98),&masked)||
     masked!=UINT64_C(0xfedcba98))return 6;
  /* writable-file: a real stw must not write back to original ELF. */
- p32(d,0x18c,0x39600001u);
+ p32(d,0x18c,0x39601000u);
  if(ar_ppu_bootstrap_forty(d,sizeof d,info,cpu)!=-1004||
-    cpu[0]!=34u||cpu[8]!=0x10094u||cpu[10]!=1u)return 11;
+    cpu[0]!=34u||cpu[8]!=0x10094u||cpu[10]!=0x1000u)return 11;
  /* RW segment enforcement: reject write to executable, read-only text. */
  p32(d,0x18c,0x3d600001u);
  if(ar_ppu_bootstrap_forty(d,sizeof d,info,cpu)!=-1004||
