@@ -8,6 +8,9 @@ extern int ar_private_elf_inspect(const unsigned char*,size_t,unsigned int[5]);
 extern int ar_m70_native_runtime_probe(const unsigned char*,size_t,unsigned int,unsigned int[16]);
 extern int ar_m71_private_continuous_probe(const unsigned char*,size_t,
                         unsigned int,unsigned int,unsigned int[16]);
+extern int ar_m73_private_import_probe(const unsigned char*,size_t,
+                        unsigned int,unsigned int,unsigned int[16],
+                        unsigned int[16],char[48]);
 extern int ar_private_import_match(const unsigned char*,size_t,unsigned int,
                                   unsigned int[4],char[48]);
 extern int ar_ppu_bootstrap_four(const unsigned char*,size_t,
@@ -450,7 +453,7 @@ extern int ar_probe_rsx_texture_cache_mutation(unsigned swizzled,unsigned int ou
         hint.font=[UIFont systemFontOfSize:13 weight:UIFontWeightMedium];
         hint.textColor=[UIColor colorWithWhite:0.83 alpha:1];
         hint.text=i==0 ?
-             @"NPUA80918 · M7.2: CPU PowerPC contínua com CR, comparações 32/64 bits e desvios condicionais. Sem JIT/AOT do jogo." :
+             @"NPUA80918 · M7.3: CPU contínua, CR e identificação automática da próxima importação PRX bloqueada. Sem AOT do jogo." :
              @"Diagnósticos RSX → Metal, do mais recente ao legado. Role para encontrar os testes anteriores.";
         [stack addArrangedSubview:hint];
         NSArray<UIButton *> *ordered=i==0 ? @[elfButton] : @[
@@ -1002,8 +1005,11 @@ extern int ar_probe_rsx_texture_cache_mutation(unsigned swizzled,unsigned int ou
        (int)native[6],native[7],native[14],native[15]];
 
     unsigned int continuous[16]={0};
-    const int execRC=ar_m71_private_continuous_probe(
-        data.bytes,data.length,detail48[8],4096u,continuous);
+    unsigned int importEvidence[16]={0};
+    char discoveredLibrary[48]={0};
+    const int execRC=ar_m73_private_import_probe(
+        data.bytes,data.length,detail48[8],4096u,continuous,
+        importEvidence,discoveredLibrary);
     NSString *continuousText=[NSString stringWithFormat:
        @"\nM7.2 — EXECUÇÃO PPU CONTÍNUA + CR/BRANCH (INTERPRETADOR NATIVO ASSINADO)\n"
         "Preparação=%d · resultado guest=%d · passos=%u / orçamento 4096\n"
@@ -1020,6 +1026,27 @@ extern int ar_probe_rsx_texture_cache_mutation(unsigned swizzled,unsigned int ou
         continuous[5],continuous[6],continuous[7],continuous[8],
         continuous[9],continuous[12],continuous[13],
         continuous[14],continuous[15],continuous[11]];
+    NSString *importReport=[NSString stringWithFormat:
+       @"\nM7.3 — IMPORTAÇÃO PRX NA PARADA REAL\n"
+        "Falha bctrl em PC=0x%08X · r12/stub candidato=0x%08X\n"
+        "CTR=0x%08X · r2=0x%08X · r0=0x%08X\n"
+        "Bytes do stub: palavra0=0x%08X · palavra1=0x%08X\n"
+        "PRX status=%d · NID=0x%08X · biblioteca=%s\n"
+        "Metadados: importações examinadas=%u · bibliotecas=%u\n"
+        "Validação=0x%X (1=código ELF X, 2=CTR, 4=TOC, 8=PRX, 16=tudo)\n"
+        "Argumentos reais: r3=0x%08X r4=0x%08X r5=0x%08X r6=0x%08X\n"
+        "Somente leitura: importação desconhecida NÃO executada.\n",
+        importEvidence[0],importEvidence[1],
+        importEvidence[2],importEvidence[3],importEvidence[15],
+        importEvidence[4],importEvidence[5],
+        (int)importEvidence[7],importEvidence[6],
+        discoveredLibrary[0]?discoveredLibrary:"(não identificada)",
+        importEvidence[9],importEvidence[10],importEvidence[8],
+        importEvidence[11],importEvidence[12],
+        importEvidence[13],importEvidence[14]];
+    if((int)continuous[0]!=-1314 || continuous[3]!=0x4e800421u)
+       importReport=@"\nM7.3: nenhuma chamada bctrl desconhecida detectada nesta execução.\n";
+    continuousText=[continuousText stringByAppendingString:importReport];
     if(rc48){
        NSMutableString *recent=[NSMutableString string];
        for(unsigned i=0;i<4u && i<trace48[15];i++){
@@ -1146,7 +1173,7 @@ extern int ar_probe_rsx_texture_cache_mutation(unsigned swizzled,unsigned int ou
         "M6.7.6 PPU REAL 48/48: OK · TLS=%u\n"
         "PC=0x%X · CTR=0x%08X%08X\n"
         "stores=%u · indiretos=%u · sombra=%u\n"
-        "M7.2 PPU: comparações CR e desvios condicionais; AOT completo ainda pendente.",
+        "M7.3 PPU: próxima importação PRX diagnosticada; AOT do Ascension ainda pendente.",
         legacyState,old40State,tls48[0],cpu48[2],cpu48[18],cpu48[17],
         cpu48[5],cpu48[19],cpu48[15]];
   } @finally {
