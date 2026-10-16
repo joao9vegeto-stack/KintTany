@@ -102,8 +102,9 @@ u32 ar_probe_m55_stencil_draws(void) { return ar_m55_stencil_draws_encoded; }
         rs->depth_test && rs->depth_write && rs->depth_func == 0x0201u;
     s_eng_pipe[slot].ar_m55_stencil =
         rs->stencil_enable && (rs->s_func == 0x0207u || rs->s_func == 0x0202u)
-        && rs->s_func_mask == 0xffu
-        && rs->s_write_mask == 0xffu;
+        && (rs->s_func_mask == 0xffu || rs->s_func_mask == 0x0fu)
+        && (rs->s_write_mask == 0xffu || rs->s_write_mask == 0x0fu
+            || rs->s_write_mask == 0xf0u);
 """, 1)
     a = "vertexStart:0 vertexCount:r->vertex_count];"
     if s.count(a) != 1:
