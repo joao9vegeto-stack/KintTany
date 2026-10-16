@@ -727,7 +727,8 @@ extern int ar_probe_rsx_texture_cache_mutation(unsigned swizzled,unsigned int ou
    const int rc16=ar_ppu_bootstrap_sixteen(data.bytes,data.length,info,cpu16);
    if(rc16){
       self.status.text=[NSString stringWithFormat:
-        @"M5.9 ELF VALIDADO · M6.0 4/4 · M6.1 8/8 OK\n"
+        @"M5.9 ELF VALIDADO · M6.0 4/4\n"
+         "M6.1 PPU REAL 8/8: OK\n"
          "M6.2 PPU: FALHA %d (%u/16 instruções).\n"
          "Parada segura. HLE/SPU não iniciados.",
         rc16,cpu16[0]];
@@ -742,7 +743,8 @@ extern int ar_probe_rsx_texture_cache_mutation(unsigned swizzled,unsigned int ou
    }
    self.status.text=[NSString stringWithFormat:
         @"M5.9 NPUA80918: ELF REAL VALIDADO\n"
-         "M6.0 4/4 · M6.1 8/8 · M6.2 PPU REAL 16/16: OK\n"
+         "M6.0 4/4 · M6.1 PPU REAL 8/8: OK\n"
+         "M6.2 PPU REAL 16/16: OK\n"
          "TOC=0x%X · PC=0x%X · LR=0x%X\n"
          "SP=0x%X · stores=%u · mflr/r0=0x%X\n"
          "Execução limitada, sem HLE/SPU ou gameplay.",
