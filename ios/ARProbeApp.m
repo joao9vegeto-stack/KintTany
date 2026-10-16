@@ -6,6 +6,8 @@
 #import <CommonCrypto/CommonDigest.h>
 extern int ar_private_elf_inspect(const unsigned char*,size_t,unsigned int[5]);
 extern int ar_m70_native_runtime_probe(const unsigned char*,size_t,unsigned int,unsigned int[16]);
+extern int ar_m71_private_continuous_probe(const unsigned char*,size_t,
+                        unsigned int,unsigned int,unsigned int[16]);
 extern int ar_private_import_match(const unsigned char*,size_t,unsigned int,
                                   unsigned int[4],char[48]);
 extern int ar_ppu_bootstrap_four(const unsigned char*,size_t,
@@ -448,7 +450,7 @@ extern int ar_probe_rsx_texture_cache_mutation(unsigned swizzled,unsigned int ou
         hint.font=[UIFont systemFontOfSize:13 weight:UIFontWeightMedium];
         hint.textColor=[UIColor colorWithWhite:0.83 alpha:1];
         hint.text=i==0 ?
-             @"NPUA80918 · M7.0: bootstrap PPU e ELF privado no runtime nativo. Código recompilado do Ascension ainda pendente." :
+             @"NPUA80918 · M7.1: execução PowerPC contínua no runtime nativo, sem JIT. AOT do Ascension ainda não incluído." :
              @"Diagnósticos RSX → Metal, do mais recente ao legado. Role para encontrar os testes anteriores.";
         [stack addArrangedSubview:hint];
         NSArray<UIButton *> *ordered=i==0 ? @[elfButton] : @[
@@ -998,6 +1000,26 @@ extern int ar_probe_rsx_texture_cache_mutation(unsigned swizzled,unsigned int ou
        (int)native[8],(int)native[9],(int)native[10],
        (int)native[11],native[12],
        (int)native[6],native[7],native[14],native[15]];
+
+    unsigned int continuous[16]={0};
+    const int execRC=ar_m71_private_continuous_probe(
+        data.bytes,data.length,detail48[8],4096u,continuous);
+    NSString *continuousText=[NSString stringWithFormat:
+       @"\nM7.1 — EXECUÇÃO PPU CONTÍNUA (INTERPRETADOR NATIVO ASSINADO)\n"
+        "Preparação=%d · resultado guest=%d · passos=%u / orçamento 4096\n"
+        "Último PC=0x%08X · opcode=0x%08X · PC anterior=0x%08X\n"
+        "HLEs reais=%u · r13=0x%08X · LR=0x%08X · CTR=0x%08X\n"
+        "Falha EA/syscall=0x%08X · NID=0x%08X · stub=0x%08X\n"
+        "Thread=%u · VM=%u · funções ARM64 AOT=%u\n"
+        "Motivos: -1310 orçamento; -1311 ISA ausente; -1312 destino não executável;"
+        " -1313 memória; -1314 HLE/indireto; -1315 HLE falhou.\n"
+        "INTERPRETAÇÃO NÃO É RECOMPILAÇÃO AOT: nenhuma função do jogo"
+        " foi gerada como código ARM64 assinado.\n",
+        execRC,(int)continuous[0],continuous[1],
+        continuous[2],continuous[3],continuous[10],
+        continuous[5],continuous[6],continuous[7],continuous[8],
+        continuous[9],continuous[12],continuous[13],
+        continuous[14],continuous[15],continuous[11]];
     if(rc48){
        NSMutableString *recent=[NSMutableString string];
        for(unsigned i=0;i<4u && i<trace48[15];i++){
@@ -1087,6 +1109,7 @@ extern int ar_probe_rsx_texture_cache_mutation(unsigned swizzled,unsigned int ou
          [extended appendString:
            @"TLS recusado: parâmetros, thread já inicializada ou leitura de memória inválida. Não houve sucesso artificial.\n"];
        [extended appendString:nativeText];
+       [extended appendString:continuousText];
        self.ppuReport=extended;
        self.ppuReportButton.enabled=YES;
        [self.ppuReportButton setTitle:@"Copiar diagnóstico PPU" forState:UIControlStateNormal];
@@ -1114,6 +1137,7 @@ extern int ar_probe_rsx_texture_cache_mutation(unsigned swizzled,unsigned int ou
         "TLS copiada=%u bytes; PPU48 ainda é um bootstrap limitado.\n",
         cpu48[0],tls48[0],tls48[6],tls48[7]];
     self.ppuReport=[self.ppuReport stringByAppendingString:nativeText];
+    self.ppuReport=[self.ppuReport stringByAppendingString:continuousText];
     self.ppuReportButton.enabled=YES;
     self.status.text=[NSString stringWithFormat:
        @"M5.9 NPUA80918: ELF REAL VALIDADO\n"
@@ -1122,7 +1146,7 @@ extern int ar_probe_rsx_texture_cache_mutation(unsigned swizzled,unsigned int ou
         "M6.7.6 PPU REAL 48/48: OK · TLS=%u\n"
         "PC=0x%X · CTR=0x%08X%08X\n"
         "stores=%u · indiretos=%u · sombra=%u\n"
-        "M7.0 PPU: TLS HLE comprovada; AOT completo do Ascension pendente.",
+        "M7.1 PPU: interpretação contínua com orçamento e motivos de parada; AOT ainda pendente.",
         legacyState,old40State,tls48[0],cpu48[2],cpu48[18],cpu48[17],
         cpu48[5],cpu48[19],cpu48[15]];
   } @finally {
