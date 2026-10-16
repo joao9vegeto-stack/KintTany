@@ -5,6 +5,8 @@
 #import <UniformTypeIdentifiers/UniformTypeIdentifiers.h>
 #import <CommonCrypto/CommonDigest.h>
 extern int ar_private_elf_inspect(const unsigned char*,size_t,unsigned int[5]);
+extern int ar_ppu_bootstrap_four(const unsigned char*,size_t,
+                                const unsigned int[5],unsigned int[4]);
 
 extern int rsx_metal_backend_init(unsigned int width, unsigned int height, const char* title);
 extern void rsx_metal_backend_shutdown(void);
@@ -695,13 +697,22 @@ extern int ar_probe_rsx_texture_cache_mutation(unsigned swizzled,unsigned int ou
        info[0]!=0x8283f8u||info[1]!=0x10410u||info[2]!=0x83f2b0u){
        self.status.text=@"M5.9: ELF não corresponde à NPUA80918 validada.";return;
    }
+   unsigned int cpu[4]={0};
+   const int cpu_rc=ar_ppu_bootstrap_four(data.bytes,data.length,info,cpu);
+   if(cpu_rc){
+      self.status.text=[NSString stringWithFormat:
+          @"M5.9 ELF VALIDADO. M6.0 PPU: FALHA %d (%u/4 instruções).\n"
+           "Execução interrompida com segurança.",cpu_rc,cpu[0]];
+      return;
+   }
    self.status.text=[NSString stringWithFormat:
        @"M5.9 NPUA80918: ELF REAL VALIDADO\n"
         "SHA256: OK · segmentos: %u\n"
         "PPU entry: 0x%X · TOC: 0x%X\n"
-        "Primeiro opcode: %08X\n"
-        "Não executa gameplay. Próximo: runtime PPU/HLE/SPU.",
-       info[4],info[1],info[2],info[3]];
+        "M6.0 PPU REAL: %u/4 instruções\n"
+        "R2=0x%X · próximo PC=0x%X\n"
+        "Parada controlada. Sem gameplay ou HLE.",
+       info[4],info[1],info[2],cpu[0],cpu[1],cpu[2]];
  } @finally {
     if(scoped)[url stopAccessingSecurityScopedResource];
  }

@@ -53,3 +53,54 @@ int ar_private_elf_inspect(const uint8_t*d,size_t len,uint32_t info[5]){
  info[0]=(uint32_t)entry;info[1]=code;info[2]=toc;info[3]=b32(word);info[4]=used;
  return 0;
 }
+
+/* M6.0: no HLE/syscalls/stack/guest writes. Precisely four PowerPC64
+ * instructions from an on-device, user-selected decrypted ELF.
+ * This strict CPU probe is NOT a game boot or a general PPU emulator. */
+int ar_ppu_bootstrap_four(const uint8_t*d,size_t len,
+                          const uint32_t info[5],uint32_t out[4]){
+ if(!d||!info||!out)return -930;
+ memset(out,0,4*sizeof(*out));
+ uint32_t checked[5]={0};
+ if(ar_private_elf_inspect(d,len,checked)||
+    memcmp(checked,info,5*sizeof(*info)))return -931;
+ uint64_t table=b64(d+32);
+ unsigned phsize=b16(d+54),n=b16(d+56);
+ segment segs[64]={0};unsigned used=0;
+ for(unsigned j=0;j<n;j++){
+  const uint8_t*p=d+table+(uint64_t)j*phsize;
+  if(b32(p)!=1)continue;
+  segment s={b64(p+8),b64(p+16),b64(p+32),b64(p+40),b32(p+4)};
+  if(s.size&&s.mem)segs[used++]=s;
+ }
+ uint64_t gpr[32]={0};gpr[2]=info[2];
+ uint32_t pc=info[1];
+ if(pc>0xfffffff0u||(pc&3))return -932;
+ for(unsigned step=0;step<4;step++){
+  const uint8_t*p=lookup(d,len,segs,used,pc,4,1);
+  if(!p)return -933;
+  uint32_t word=b32(p),op=word>>26;
+  unsigned rt=(word>>21)&31,ra=(word>>16)&31;
+  int16_t imm=(int16_t)(word&0xffffu);
+  if(op==14){
+   gpr[rt]=(ra?gpr[ra]:0u)+(uint64_t)(int64_t)imm;
+  }else if(op==25){
+   gpr[ra]=gpr[rt]|((uint64_t)(word&0xffffu)<<16);
+  }else if(op==24){
+   gpr[ra]=gpr[rt]|(uint64_t)(word&0xffffu);
+  }else if(op==32){
+   uint64_t addr=(ra?gpr[ra]:0u)+(uint64_t)(int64_t)imm;
+   if(addr>UINT32_MAX)return -934;
+   const uint8_t*mem=lookup(d,len,segs,used,(uint32_t)addr,4,0);
+   if(!mem)return -935;
+   gpr[rt]=b32(mem);
+  }else{
+   out[3]=word;
+   return -936; /* unsupported guest instruction: NEVER emulate as NOP */
+  }
+  ++out[0];pc+=4;
+ }
+ if(gpr[2]!=info[2])return -937;
+ out[1]=(uint32_t)gpr[2];out[2]=pc;
+ return 0;
+}
