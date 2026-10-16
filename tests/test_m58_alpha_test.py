@@ -22,7 +22,7 @@ class AlphaTest(unittest.TestCase):
         for token in ("ar_probe_m58_guest_alpha_test",
                       "for(unsigned i=0;i<5u;i++)",
                       "pixels[q]!=expected[i][q]",
-                      "0xff0000ffu,0xffff0000u,0xffff0000u,0xff0000ffu",
+                      "0x000000ffu,0xffff0000u,0x00ff0000u,0xff0000ffu",
                       "*alpha_draws!=4u",
                       "ar_probe_m57_guest_blend_mask",
                       "ar_probe_m56_guest_stencil_bitmasks",
@@ -38,5 +38,5 @@ class AlphaTest(unittest.TestCase):
         for token in ("testM58AlphaTest:","testM57BlendMask:",
                       "testM56StencilBitmasks:","testM55StencilMask:"):
             self.assertIn(token,A)
-        self.assertIn("AscensionRecompProbe-0.6.1-unsigned.ipa",W)
+        self.assertIn("AscensionRecompProbe-0.6.2-unsigned.ipa",W)
 if __name__=="__main__":unittest.main()
