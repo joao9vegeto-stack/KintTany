@@ -1,4 +1,4 @@
-name: AscensionRecomp M6.4 - real PowerPC rldicl and 32-step continuation
+name: AscensionRecomp M6.5 - private writable PT_LOAD shadow and 40 guest PPU steps
 
 on:
   push:
@@ -157,6 +157,12 @@ jobs:
           clang -std=c11 -O2 -Wall -Wextra -Werror ios/ARPrivateELFProbe.c tests/host_m64_ppu.c -o m64-host
           ./m64-host 2>&1 | tee m64-host.log
           grep -Fxq 'M6.4 PPU32 and rldicl PASS' m64-host.log
+      - name: M6.5 prove writable guest PT_LOAD and BSS in isolated shadow
+        run: |
+          set -euo pipefail
+          clang -std=c11 -O2 -Wall -Wextra -Werror ios/ARPrivateELFProbe.c tests/host_m65_guestmem.c -o m65-host
+          ./m65-host 2>&1 | tee m65-host.log
+          grep -Fxq 'M6.5 PPU40 private guest writable PT_LOAD PASS' m65-host.log
       - name: M5.0 run synthetic PPU LV2 integrated boot smoke
         run: |
           set -euo pipefail
@@ -391,9 +397,9 @@ jobs:
         run: |
           set -euo pipefail
           bash tools/build_ios_probe_ipa.sh 2>&1 | tee m41-build-ipa.log
-          test -s AscensionRecompProbe-0.6.9-unsigned.ipa
-          /usr/libexec/PlistBuddy -c 'Print CFBundleShortVersionString' ios-probe/Payload/AscensionRecompProbe.app/Info.plist | grep -Fx 0.6.9
-          /usr/bin/unzip -t AscensionRecompProbe-0.6.9-unsigned.ipa | tee m42-ipa-integrity.log
+          test -s AscensionRecompProbe-0.6.10-unsigned.ipa
+          /usr/libexec/PlistBuddy -c 'Print CFBundleShortVersionString' ios-probe/Payload/AscensionRecompProbe.app/Info.plist | grep -Fx 0.6.10
+          /usr/bin/unzip -t AscensionRecompProbe-0.6.10-unsigned.ipa | tee m42-ipa-integrity.log
           xcrun nm -g ios-probe/Payload/AscensionRecompProbe.app/AscensionRecompProbe | grep -E '(_rsx_metal_backend_present|_rsx_metal_backend_init|_OBJC_CLASS_\\$_ARMetalView)' > m42-runtime-link-symbols.txt || true
           grep -q _rsx_metal_backend_init m39-metal-symbols.txt
           echo 'M4.2: actual GPU clear + presentDrawable + waitUntilCompleted route linked in iOS app; requires on-device screenshot.' > m42-status.txt
@@ -432,6 +438,7 @@ jobs:
           echo 'M6.2 bounded 16-step PPU nested stack + mflr, private guest ELF only on iPhone.' > m62-status.txt
           echo 'M6.3 private bounded 24-step PPU with strict PC/opcode failure; real title on device only.' > m63-status.txt
           echo 'M6.4 PowerPC rldicl 0x79040020 zero extends GPR8 to GPR4; 32 bounded guest steps, pending physical iPhone test.' > m64-status.txt
+          echo 'M6.5 private PT_LOAD writable shadow; 40 bounded steps; device -995 stw r29,0(r11) requires real iPhone validation.' > m65-status.txt
           echo 'M6.1 eight guest PPU steps, stack and branch; user title private; host synthetic only.' > m61-status.txt
           echo 'M6.0 strict PPU bootstrap: at most 4 imported ELF instructions; no actual game bytes bundled.' > m60-status.txt
           echo 'M5.9: on-device Files ELF inspection; no game data in CI or IPA.' > m59-status.txt
@@ -456,7 +463,7 @@ jobs:
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: AscensionRecomp-M6.4-RLDICL-PPU32-evidence
+          name: AscensionRecomp-M6.5-guest-memory-PPU40-evidence
           if-no-files-found: warn
           retention-days: 14
           path: |
@@ -558,6 +565,8 @@ jobs:
             m60-status.txt
             m61-host.log
             m61-status.txt
+            m65-host.log
+            m65-status.txt
             m64-host.log
             m64-status.txt
             m63-host.log
@@ -579,7 +588,7 @@ jobs:
             m50-ios-shader-archive-sha256.txt
             m50-ios-shader-availability-symbol.txt
             build-ios-runtime/libAscensionRSXGuest-ios-arm64.a
-            AscensionRecompProbe-0.6.9-unsigned.ipa
+            AscensionRecompProbe-0.6.10-unsigned.ipa
             m40-ios-layer-view.o
             build-ios-runtime/libps3recomp_runtime.a
             ios-ppu-core/libAscensionPPUCore-ios-arm64.a

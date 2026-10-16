@@ -15,6 +15,8 @@ extern int ar_ppu_bootstrap_twentyfour(const unsigned char*,size_t,
                                       const unsigned int[5],unsigned int[9]);
 extern int ar_ppu_bootstrap_thirtytwo(const unsigned char*,size_t,
                                      const unsigned int[5],unsigned int[10]);
+extern int ar_ppu_bootstrap_forty(const unsigned char*,size_t,
+                                 const unsigned int[5],unsigned int[16]);
 
 extern int rsx_metal_backend_init(unsigned int width, unsigned int height, const char* title);
 extern void rsx_metal_backend_shutdown(void);
@@ -378,7 +380,7 @@ extern int ar_probe_rsx_texture_cache_mutation(unsigned swizzled,unsigned int ou
     [controller.view addSubview:panel];
     UILabel *header=[UILabel new];
     header.translatesAutoresizingMaskIntoConstraints=NO;
-    header.text=@"ASCENSIONRECOMP   ·   M6.4";
+    header.text=@"ASCENSIONRECOMP   ·   M6.5";
     header.textColor=[UIColor colorWithRed:0.73 green:0.87 blue:1 alpha:1];
     header.font=[UIFont systemFontOfSize:12 weight:UIFontWeightBold];
     header.textAlignment=NSTextAlignmentCenter;
@@ -421,7 +423,7 @@ extern int ar_probe_rsx_texture_cache_mutation(unsigned swizzled,unsigned int ou
         hint.font=[UIFont systemFontOfSize:13 weight:UIFontWeightMedium];
         hint.textColor=[UIColor colorWithWhite:0.83 alpha:1];
         hint.text=i==0 ?
-             @"NPUA80918 · M6.4: até 32 instruções reais. PPU limitada, sem HLE/SPU/gameplay; falhas exibem PC e opcode." :
+             @"NPUA80918 · M6.5: até 40 passos PPU reais com memória convidada isolada. Parada segura mostra PC, opcode e endereço." :
              @"Diagnósticos RSX → Metal, do mais recente ao legado. Role para encontrar os testes anteriores.";
         [stack addArrangedSubview:hint];
         NSArray<UIButton *> *ordered=i==0 ? @[elfButton] : @[
@@ -890,23 +892,37 @@ extern int ar_probe_rsx_texture_cache_mutation(unsigned swizzled,unsigned int ou
     if(rc32){
        self.status.text=[NSString stringWithFormat:
           @"M5.9 NPUA80918: ELF REAL VALIDADO\n"
-           "M6.2 PPU REAL 16/16: OK\n"
            "M6.3 PPU REAL 24/24: OK\n"
            "M6.4 PARADA SEGURA %d · %u/32\n"
            "PC=0x%X · opcode=0x%08X\n"
-           "Sem HLE/SPU/gameplay. Nenhum opcode ignorado.",
+           "Sem HLE/SPU/gameplay; nenhuma instrução ignorada.",
            rc32,cpu32[0],cpu32[8],cpu32[7]];
        return;
     }
+    unsigned int cpu40[16]={0};
+    const int rc40=ar_ppu_bootstrap_forty(data.bytes,data.length,info,cpu40);
+    if(rc40){
+       self.status.text=[NSString stringWithFormat:
+          @"M5.9 NPUA80918: ELF REAL VALIDADO\n"
+           "M6.3 24/24 · M6.4 32/32: OK\n"
+           "M6.5 PARADA SEGURA %d · %u/40\n"
+           "PC=0x%X · opcode=0x%08X\n"
+           "EA=0x%X · base=0x%X · valor=0x%X\n"
+           "Memória convidada limitada; SEM HLE/SPU/gameplay.",
+           rc40,cpu40[0],cpu40[8],cpu40[7],
+           cpu40[10],cpu40[11],cpu40[12]];
+       return;
+    }
     self.status.text=[NSString stringWithFormat:
-        @"M5.9 NPUA80918: ELF REAL VALIDADO\n"
-         "M6.2 PPU REAL 16/16: OK\n"
-         "M6.3 PPU REAL 24/24: OK\n"
-         "M6.4 PPU REAL 32/32: OK\n"
-         "TOC=0x%X · PC=0x%X · LR=0x%X\n"
-         "SP=0x%X · stores=%u · r4=0x%X\n"
-         "Execução limitada, SEM HLE/SPU/gameplay.",
-         cpu32[1],cpu32[2],cpu32[3],cpu32[4],cpu32[5],cpu32[9]];
+          @"M5.9 NPUA80918: ELF REAL VALIDADO\n"
+           "M6.3 PPU REAL 24/24: OK\n"
+           "M6.4 PPU REAL 32/32: OK\n"
+           "M6.5 PPU REAL 40/40: OK\n"
+           "TOC=0x%X · PC=0x%X · LR=0x%X\n"
+           "SP=0x%X · stores=%u · overlays=%u\n"
+           "Execução limitada, SEM HLE/SPU ou gameplay.",
+           cpu40[1],cpu40[2],cpu40[3],
+           cpu40[4],cpu40[5],cpu40[15]];
   } @finally {
     if(scoped)[url stopAccessingSecurityScopedResource];
  }
