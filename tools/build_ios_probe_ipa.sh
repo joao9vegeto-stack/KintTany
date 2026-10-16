@@ -27,6 +27,13 @@ if [[ -n "${ASCENSION_PRIVATE_AOT_C:-}" ]]; then
       -I upstream/runtime/ppu -I runtime \
       -c "$ASCENSION_PRIVATE_AOT_C" -o ios-probe/AscensionPrivateAOT.o
   xcrun nm -g ios-probe/AscensionPrivateAOT.o | grep -q '_ar_private_aot_install_sha256'
+  # Fail if any of the 11 TRUE NPUA80918 guest AOT symbols is missing.
+  # Both symbol checks are performed again on the FINAL linked iOS Mach-O.
+  xcrun nm -g ios-probe/AscensionPrivateAOT.o > m78-owner-aot-object-symbols.txt
+  for pc in 00010200 00010410 00010534 000107a4 0052a7bc 0052e118 \
+            0052e4f0 0052e544 00531a74 00531cac 00539a50; do
+    grep -Fq "_ar_game_ppu_${pc}" m78-owner-aot-object-symbols.txt
+  done
   AOT_OBJECTS+=(ios-probe/AscensionPrivateAOT.o)
   AOT_COMPILE_DEFINES+=(-DASCENSION_PRIVATE_AOT_LINKED)
 fi
@@ -70,6 +77,17 @@ xcrun --sdk iphoneos clang++ -target arm64-apple-ios17.0 \
     -framework Security -framework Accelerate \
     -lz -lc++ -o "$APP/AscensionRecompProbe"
 test -s "$APP/AscensionRecompProbe"
+if [[ -z "${ASCENSION_PRIVATE_AOT_C:-}" ]]; then
+  echo 'M7.8 required signed game AOT source not staged: refusing diagnostic-only IPA' >&2
+  exit 77
+fi
+xcrun nm -g "$APP/AscensionRecompProbe" > m78-owner-aot-linked-symbols.txt
+grep -Fq '_ar_private_aot_install_sha256' m78-owner-aot-linked-symbols.txt
+for pc in 00010200 00010410 00010534 000107a4 0052a7bc 0052e118 \
+          0052e4f0 0052e544 00531a74 00531cac 00539a50; do
+  grep -Fq "_ar_game_ppu_${pc}" m78-owner-aot-linked-symbols.txt
+done
+echo 'M7.8: 11 REAL PPU ARM64 functions verified inside final iOS Mach-O; runtime execution on iPhone not yet tested' > m78-aot-status.txt
 file "$APP/AscensionRecompProbe" | tee m41-executable-file.txt
 xcrun lipo -info "$APP/AscensionRecompProbe" | tee m41-executable-arch.txt
 /usr/libexec/PlistBuddy -c 'Print CFBundleIdentifier' "$APP/Info.plist"
