@@ -41,10 +41,10 @@ class M71(unittest.TestCase):
             "M7.1 signed native PowerPC continuous 76-step, import TLS and fail-closed ISA PASS"):
    self.assertIn(s,HOST)
  def test_device_report(self):
-  for s in ("M7.1 — EXECUÇÃO PPU CONTÍNUA",
+  for s in ("M7.2 — EXECUÇÃO PPU CONTÍNUA + CR/BRANCH",
             "ar_m71_private_continuous_probe(",
             "INTERPRETAÇÃO NÃO É RECOMPILAÇÃO AOT",
             "Copiar diagnóstico PPU"):
    self.assertIn(s,UI)
-  self.assertIn("<string>72</string>",PL)
+  self.assertIn("<string>73</string>",PL)
 if __name__=="__main__": unittest.main()
