@@ -13,5 +13,5 @@ class PPU8(unittest.TestCase):
   self.assertIn("ar_ppu_bootstrap_eight(data.bytes,data.length,info,eight)",U)
   self.assertIn("M6.1 PPU REAL 8/8: OK",U)
   self.assertIn("m61-host.log",W)
-  self.assertIn("0.6.13-unsigned.ipa",W)
+  self.assertIn("0.6.14-unsigned.ipa",W)
 if __name__=="__main__":unittest.main()
