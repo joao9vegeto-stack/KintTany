@@ -79,6 +79,13 @@ int ar_m70_native_runtime_probe(const uint8_t*d,size_t len,
  if(load){ar_bridge_shutdown();return load;}
  out[15]|=1u;
  ctx.thread_id=1u; /* the current main guest thread; no fabricated game code */
+ /* Use the same authentic PT_TLS process-entry ABI as M7.1 before
+  * dispatching privately compiled guest CRT instructions. */
+ ctx.gpr[7]=ctx.thread_id;
+ ctx.gpr[8]=tls_va;
+ ctx.gpr[9]=tls_file;
+ ctx.gpr[10]=tls_mem;
+ ctx.gpr[12]=0x100000u;
  ppu_set_stack(&ctx,(uint64_t)tlsbase+0x10000u,0x10000u);
  out[1]=image.entry_code;out[2]=image.toc;out[3]=image.segments;
  out[4]=(uint32_t)cap;out[13]=(uint32_t)image.loaded_bytes;

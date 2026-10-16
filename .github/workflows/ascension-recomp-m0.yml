@@ -1,4 +1,4 @@
-name: AscensionRecomp M7.4 - restore private signed native PPU AOT compilation
+name: AscensionRecomp M7.4.1 - fix strict AOT helper compilation
 
 on:
   push:
@@ -598,7 +598,7 @@ jobs:
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: AscensionRecomp-M7.3-PRX-import-discovery
+          name: AscensionRecomp-M7.4.1-private-native-AOT
           if-no-files-found: warn
           retention-days: 14
           path: |

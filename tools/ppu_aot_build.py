@@ -63,7 +63,7 @@ def build(elf: Path, functions: Path, output_dir: Path, require_entry: int | Non
         " * Link before signing the iOS application.\n"
         " */\n"
         "#include <stddef.h>\n#include <string.h>\n"
-        "#include \"ppu_bridge.h\"\n" + PROLOGUE + "\n".join(bodies) +
+        "#include \"ppu_bridge.h\"\n" + PROLOGUE.replace("static inline", "static inline __attribute__((unused))") + "\n".join(bodies) +
         "\nstatic const unsigned char ar_source_sha256[32] = {"
         + digest_c + "};\n"
         "int ar_private_aot_install_sha256(const unsigned char *digest, size_t size) {\n"
