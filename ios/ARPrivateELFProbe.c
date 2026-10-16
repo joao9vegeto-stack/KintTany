@@ -104,3 +104,70 @@ int ar_ppu_bootstrap_four(const uint8_t*d,size_t len,
  out[1]=(uint32_t)gpr[2];out[2]=pc;
  return 0;
 }
+
+/* M6.1: bounded 8-instruction guest PPU probe. Native stack isolated. */
+int ar_ppu_bootstrap_eight(const uint8_t*d,size_t len,
+                          const uint32_t info[5],uint32_t out[6]){
+ if(!d||!info||!out)return -940;
+ memset(out,0,6*sizeof(*out));
+ uint32_t checked[5]={0};
+ if(ar_private_elf_inspect(d,len,checked)||
+    memcmp(checked,info,5*sizeof(*info)))return -941;
+ segment segs[64]={0};unsigned used=0;
+ uint64_t table=b64(d+32);unsigned phsize=b16(d+54),n=b16(d+56);
+ for(unsigned j=0;j<n;j++){
+  const uint8_t*p=d+table+(uint64_t)j*phsize;
+  if(b32(p)!=1)continue;
+  segment s={b64(p+8),b64(p+16),b64(p+32),b64(p+40),b32(p+4)};
+  if(s.size&&s.mem)segs[used++]=s;
+ }
+ uint64_t gpr[32]={0};uint8_t stack[4096]={0};
+ const uint64_t base=0x07000000u;
+ gpr[1]=base+sizeof(stack);gpr[2]=info[2];
+ uint32_t pc=info[1],lr=0,stores=0;
+ if(pc>0xffffffe0u||(pc&3))return -942;
+ for(unsigned step=0;step<8;step++){
+  const uint8_t*p=lookup(d,len,segs,used,pc,4,1);
+  if(!p)return -943;
+  uint32_t w=b32(p);unsigned op=w>>26,rt=(w>>21)&31,ra=(w>>16)&31;
+  int16_t imm=(int16_t)(w&0xffffu);uint32_t next=pc+4;
+  if(op==14){
+   gpr[rt]=(ra?gpr[ra]:0u)+(uint64_t)(int64_t)imm;
+  }else if(op==25){
+   gpr[ra]=gpr[rt]|((uint64_t)(w&0xffffu)<<16);
+  }else if(op==24){
+   gpr[ra]=gpr[rt]|(uint64_t)(w&0xffffu);
+  }else if(op==32){
+   uint64_t va=(ra?gpr[ra]:0u)+(uint64_t)(int64_t)imm;
+   if(va>UINT32_MAX)return -944;
+   const uint8_t*mem=lookup(d,len,segs,used,(uint32_t)va,4,0);
+   if(!mem)return -945;
+   gpr[rt]=b32(mem);
+  }else if(op==62){
+   if(!ra||(w&3u)>1u)return -946;
+   int16_t ds=(int16_t)(w&0xfffcu);
+   uint64_t va=gpr[ra]+(uint64_t)(int64_t)ds;
+   if(va<base||va>base+sizeof(stack)-8)return -947;
+   uint64_t value=gpr[rt];
+   for(unsigned k=0;k<8;k++)
+      stack[(size_t)(va-base)+k]=(uint8_t)(value>>(56-8*k));
+   ++stores;
+   if((w&3u)==1u)gpr[ra]=va;
+  }else if(op==18){
+   if((w&3u)!=1u)return -948;
+   int64_t disp=(int64_t)(w&0x03fffffcu);
+   if(disp&0x02000000)disp-=0x04000000;
+   int64_t dest=(int64_t)pc+disp;
+   if(dest<0||dest>UINT32_MAX||
+      !lookup(d,len,segs,used,(uint32_t)dest,4,1))return -949;
+   lr=next;next=(uint32_t)dest;
+  }else{
+   out[1]=w;return -950; /* never hide unknown guest opcode */
+  }
+  pc=next;out[0]++;
+ }
+ if(gpr[2]!=info[2]||stores!=2)return -951;
+ out[1]=(uint32_t)gpr[2];out[2]=pc;out[3]=lr;
+ out[4]=(uint32_t)gpr[1];out[5]=stores;
+ return 0;
+}
