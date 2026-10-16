@@ -5,6 +5,8 @@
 #import <UniformTypeIdentifiers/UniformTypeIdentifiers.h>
 #import <CommonCrypto/CommonDigest.h>
 extern int ar_private_elf_inspect(const unsigned char*,size_t,unsigned int[5]);
+extern int ar_private_import_match(const unsigned char*,size_t,unsigned int,
+                                  unsigned int[4],char[48]);
 extern int ar_ppu_bootstrap_four(const unsigned char*,size_t,
                                 const unsigned int[5],unsigned int[4]);
 extern int ar_ppu_bootstrap_eight(const unsigned char*,size_t,
@@ -388,7 +390,7 @@ extern int ar_probe_rsx_texture_cache_mutation(unsigned swizzled,unsigned int ou
     [controller.view addSubview:panel];
     UILabel *header=[UILabel new];
     header.translatesAutoresizingMaskIntoConstraints=NO;
-    header.text=@"ASCENSIONRECOMP   ·   M6.7.2";
+    header.text=@"ASCENSIONRECOMP   ·   M6.7.3";
     header.textColor=[UIColor colorWithRed:0.73 green:0.87 blue:1 alpha:1];
     header.font=[UIFont systemFontOfSize:12 weight:UIFontWeightBold];
     header.textAlignment=NSTextAlignmentCenter;
@@ -442,7 +444,7 @@ extern int ar_probe_rsx_texture_cache_mutation(unsigned swizzled,unsigned int ou
         hint.font=[UIFont systemFontOfSize:13 weight:UIFontWeightMedium];
         hint.textColor=[UIColor colorWithWhite:0.83 alpha:1];
         hint.text=i==0 ?
-             @"NPUA80918 · M6.7.2: até 48 instruções PPU; proveniência de r0/r12/CTR e mapeamento de leitura. ELF privado." :
+             @"NPUA80918 · M6.7.3: até 48 instruções PPU, análise privada de importação/NID e destino protegido. Seu ELF não sai do iPhone." :
              @"Diagnósticos RSX → Metal, do mais recente ao legado. Role para encontrar os testes anteriores.";
         [stack addArrangedSubview:hint];
         NSArray<UIButton *> *ordered=i==0 ? @[elfButton] : @[
@@ -981,7 +983,7 @@ extern int ar_probe_rsx_texture_cache_mutation(unsigned swizzled,unsigned int ou
              i,trace48[16u+2u*slot],trace48[17u+2u*slot]];
        }
        self.ppuReport=[NSString stringWithFormat:
-          @"ASCENSIONRECOMP M6.7.2 / NPUA80918 / trace PPU privado\n"
+          @"ASCENSIONRECOMP M6.7.3 / NPUA80918 / trace PPU privado\n"
            "Resultado=%d · passos=%u/48 · PC=0x%08X · opcode=0x%08X\n"
            "CTR=0x%08X%08X · saltos indiretos=%u\n"
            "r0 atual=0x%08X%08X · alterações=%u\n"
@@ -992,7 +994,7 @@ extern int ar_probe_rsx_texture_cache_mutation(unsigned swizzled,unsigned int ou
            "bctr/bctrl: PC=0x%08X · alvo CTR baixo=%08X\n"
            "Indicador falha memória=%u · EA=0x%08X\n"
            "%@"
-           "Dados são apenas registradores, PC e palavras de instrução; ELF não incluído.",
+           "Dados são registradores e metadados PRX; bytes do ELF não incluídos.",
            rc48,cpu48[0],cpu48[8],cpu48[7],
            cpu48[18],cpu48[17],cpu48[19],
            trace48[6],trace48[5],trace48[7],
@@ -1018,6 +1020,27 @@ extern int ar_probe_rsx_texture_cache_mutation(unsigned swizzled,unsigned int ou
          detail48[8],detail48[9],detail48[10],detail48[11],
          detail48[12],detail48[13],detail48[14],detail48[15],
          detail48[21],detail48[20]];
+       /* Inspect guest firmware metadata only after a failed indirect call
+        * that read an instruction word from executable PT_LOAD.
+        * This never patches imports, changes CTR, or claims HLE support. */
+       if(rc48==-1007 && detail48[10]==2u && detail48[8]){
+          unsigned int importInfo[4]={0};
+          char importLibrary[48]={0};
+          int importStatus=ar_private_import_match(
+             data.bytes,data.length,detail48[8],importInfo,importLibrary);
+          [extended appendFormat:
+              @"PRX import: status=%d · stub=0x%08X · NID=0x%08X"
+               " · biblioteca=%s · importações examinadas=%u · bibliotecas=%u\n",
+               importStatus,importInfo[1],importInfo[0],
+               importLibrary[0]?importLibrary:"(não identificada)",
+               importInfo[2],importInfo[3]];
+          if(importStatus==0)
+            [extended appendString:
+                @"Importação identificada, MAS serviço HLE ainda NÃO vinculado; -1007 preservado.\n"];
+          else
+            [extended appendString:
+                @"Nenhuma importação associada comprovada; não executar este destino.\n"];
+       }
        self.ppuReport=extended;
        self.ppuReportButton.enabled=YES;
        [self.ppuReportButton setTitle:@"Copiar diagnóstico PPU" forState:UIControlStateNormal];
