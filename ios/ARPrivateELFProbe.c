@@ -830,6 +830,37 @@ static int ar_tls_initialize(const uint8_t*d,size_t len,const segment*s,
  return 0;
 }
 
+/* M6.7.5: genuine PS3 process-entry ABI. The LV2 launcher passes the
+ * thread identity + PT_TLS descriptor in r7-r10 and page size in r12.
+ * The guest CRT (not our HLE) transfers those into r3-r6 before calling
+ * sys_initialize_tls. Never seed r3-r6 at the import call site. */
+static int ar_m675_entry_tls(const uint8_t*d,size_t len,
+                             const segment*s,unsigned n,
+                             uint32_t params[4],uint32_t*found){
+ params[0]=1u;params[1]=params[2]=params[3]=0u;
+ *found=0u;
+ const uint64_t offset=b64(d+32);
+ const unsigned stride=b16(d+54),count=b16(d+56);
+ for(unsigned i=0;i<count;i++){
+   const uint8_t*p=d+offset+(uint64_t)i*stride;
+   if(b32(p)!=7u)continue; /* PT_TLS */
+   if(*found)return -1021; /* duplicate ELF TLS descriptors */
+   *found=1u;
+   const uint64_t va=b64(p+16),filesz=b64(p+32),memsz=b64(p+40);
+   if(va>UINT32_MAX || filesz>memsz || memsz>AR_TLS_MAX ||
+      (filesz && (va==0 || m65_segment(s,n,va,(unsigned)filesz,0u)<0)))
+      return -1021;
+   /* Required template bytes must be backed by the physical input ELF.
+    * The subsequent HLE performs checked, bytewise guest reads. */
+   if(filesz && !lookup(d,len,s,n,va,(unsigned)filesz,0u))
+      return -1021;
+   params[1]=(uint32_t)va;
+   params[2]=(uint32_t)filesz;
+   params[3]=(uint32_t)memsz;
+ }
+ return 0;
+}
+
 static int m672_core(const uint8_t*d,size_t len,
                              const uint32_t info[5],uint32_t out[20],
                              uint32_t trace[24],uint32_t detail[24],
@@ -857,6 +888,16 @@ static int m672_core(const uint8_t*d,size_t len,
  m65_memory guest={0};
  const uint64_t base=0x07000000u;
  gpr[1]=base+sizeof(stack);gpr[2]=info[2];
+ if(tls_record){
+    uint32_t entry[4]={0},has_tls=0;
+    const int rc=ar_m675_entry_tls(d,len,ss,used,entry,&has_tls);
+    if(rc){tls_record[8]=(uint32_t)(-rc);return rc;}
+    gpr[7]=entry[0];gpr[8]=entry[1];
+    gpr[9]=entry[2];gpr[10]=entry[3];
+    gpr[12]=0x00100000u; /* genuine LV2 page size at _start */
+    tls_record[9]=has_tls;
+    tls_record[11]=(uint32_t)gpr[12];
+ }
  uint32_t pc=info[1],lr=0,stores=0,mflr=0;
  uint64_t ctr=0;
  if(pc>0xffffff3fu||(pc&3))return -982;
