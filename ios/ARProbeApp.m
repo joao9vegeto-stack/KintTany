@@ -580,7 +580,7 @@ extern int ar_probe_rsx_texture_cache_mutation(unsigned swizzled,unsigned int ou
                                   "5 toques: TEXTURA por NV4097/cache/Metal\n"
                                   "Sem arquivos do jogo.";
                 self.status.text=@"ASCENSIONRECOMP · NPUA80918\n"
-                                  "M7.33 · LV2 144 vinculada\n"
+                                  "M7.34 · ARM64 29 PPC originais\n"
                                   "Importe GOWA.ELF para executar o código recompilado.\n"
                                   "Inicialização parcial, ainda sem gameplay.\n"
                                   "Ferramentas RSX estão na aba RSX / Metal.";
@@ -659,7 +659,7 @@ extern int ar_probe_rsx_texture_cache_mutation(unsigned swizzled,unsigned int ou
     NSString *body=self.ppuReport.length ? self.ppuReport : self.ppuSummary;
     if(!body.length)return nil;
     return [NSString stringWithFormat:
-        @"ASCENSIONRECOMP M7.33 — RELATÓRIO ÚNICO\n"
+        @"ASCENSIONRECOMP M7.34 — RELATÓRIO ÚNICO\n"
          "Status, lote PPC, cobertura ARM64, grafo, TLS/HLE e legados.\n"
          "Somente diagnósticos; NÃO inclui o ELF original.\n"
          "==================================================\n\n%@\n",body];
@@ -675,7 +675,7 @@ extern int ar_probe_rsx_texture_cache_mutation(unsigned swizzled,unsigned int ou
     date.locale=[NSLocale localeWithLocaleIdentifier:@"en_US_POSIX"];
     date.dateFormat=@"yyyyMMdd-HHmmss";
     NSString *name=[NSString stringWithFormat:
-       @"AscensionRecomp-M7.33-NPUA80918-%@.txt",
+       @"AscensionRecomp-M7.34-NPUA80918-%@.txt",
        [date stringFromDate:[NSDate date]]];
     NSURL *url=[NSURL fileURLWithPath:
        [NSTemporaryDirectory() stringByAppendingPathComponent:name]];
@@ -1444,6 +1444,17 @@ extern int ar_probe_rsx_texture_cache_mutation(unsigned swizzled,unsigned int ou
        "AOT originais 1421 preservadas; nenhuma função ARM64 nova.\n",
        measured.lv2_timezone_completed,measured.lv2_last_number,
        measured.lv2_last_pc,measured.lv2_missing_number];
+    uint32_t recent734=0u;
+    for(uint32_t ai=0;ai<measured.trace_count;ai++)
+      if(measured.trace_pcs[ai]==UINT32_C(0x0052aa1c))recent734++;
+    [graphReport appendFormat:
+      @"\nM7.34 — BLOCO ORIGINAL DE LOTE DE 77 PPC RECOMPILADOS NATIVAMENTE\n"
+       "AOT 0x0052AA1C ARM64: %@ · ocorrências recentes=%u\n"
+       "Entradas AOT vinculadas=%u (esperado até 1432) · AOT distintas=%u\n"
+       "Passos PPC interpretados=%u · nenhum frame RSX original confirmado.\n"
+       "Trecho atestado por SHA privada e checksum mais comparação ELF/VM.\n",
+       recent734?@"EXECUTADA":@"NÃO OBSERVADA",recent734,
+       native[5],measured.unique_aot,measured.fallback_steps];
     if((int)native[6]==AR_MISSING_LV2){
        pendingText=[NSString stringWithFormat:
           @"Serviço PS3 LV2 pendente: syscall %u (0x%X)\n"
@@ -1459,14 +1470,14 @@ extern int ar_probe_rsx_texture_cache_mutation(unsigned swizzled,unsigned int ou
                         ? frontierReport : nil;
     self.ppuBatchButton.enabled=(self.ppuBatchReport.length>0);
     self.ppuSummary=[NSString stringWithFormat:
-       @"ASCENSIONRECOMP M7.33 · NPUA80918\n"
+       @"ASCENSIONRECOMP M7.34 · NPUA80918\n"
         "AOT ARM64 + FALLBACK PPC EXPERIMENTAL\n"
         "Entradas AOT vinculadas: %u\n"
         "ELF: %@ · entrada 0x%08X\n"
         "Execução nativa: %d · TLS r13=0x%08X\n"
         "SYSUTIL core vinculado=%@ · mapeamentos guest=%@\n"
         "%@\n"
-        "M7.33: syscall 144 vinculada no app; 1421 AOT preservadas.\n"
+        "M7.34: bloco inteiro 29 PPC nativo ARM64; SRADI em AOT/fallback.\n"
         "RSX do Ascension: não demonstrado (M4/M5 sintéticos).\n"
         "Estado: inicialização parcial, sem gameplay.\n"
         "Diagnósticos legados: seção avançada.",

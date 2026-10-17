@@ -1,4 +1,4 @@
-name: AscensionRecomp M7.33 - iPhone LV2 144 binding with 1421 native AOT intact
+name: AscensionRecomp M7.34 - 11 owner-trace ARM64 AOT blocks, 77 PPC instructions
 
 on:
   push:
@@ -97,6 +97,11 @@ jobs:
           set -euo pipefail
           python3 -m unittest discover -s tests -p test_m733_lv2_bindings.py -v 2>&1 | tee m733-bindings-source.log
           grep -Fq 'Ran 4 tests' m733-bindings-source.log
+      - name: M7.34 verify XS SRADI 6-bit PPC64 translated into native C
+        run: |
+          set -euo pipefail
+          python3 -m unittest discover -s tests -p test_m734_sradi_aot.py -v 2>&1 | tee m734-sradi-aot-tests.log
+          grep -Fq 'Ran 6 tests' m734-sradi-aot-tests.log
       - name: Fetch pinned ps3recomp source
         run: |
           set -euo pipefail
@@ -227,6 +232,24 @@ jobs:
           grep -Eq ' [Tt] _ar_m732_register_block$' m732-owner-arm64-symbols.log
           file m732-owner-arm64.o | tee m732-owner-arm64-file.log
           grep -Ei 'Mach-O 64-bit (object )?arm64' m732-owner-arm64-file.log
+      - name: M7.34 crosscompile 11 guest blocks as signed ARM64 without interpreted PPC
+        run: |
+          set -euo pipefail
+          sdk="$(xcrun --sdk iphoneos --show-sdk-path)"
+          for module in ppu_m734_native_math ppu_m734_native_batch; do
+            xcrun --sdk iphoneos clang -target arm64-apple-ios17.0 -isysroot "$sdk" \
+              -std=c11 -O2 -Wall -Wextra -Werror \
+              -I upstream/runtime/ppu -I runtime \
+              -c "runtime/$module.c" -o "$module.arm64.o"
+            file "$module.arm64.o"
+          done
+          xcrun nm -g ppu_m734_native_math.arm64.o | tee m734-native-math-symbols.log
+          xcrun nm -g ppu_m734_native_batch.arm64.o | tee m734-native-batch-symbols.log
+          grep -Eq ' [Tt] _ar_m734_native_0052aa1c$' m734-native-math-symbols.log
+          grep -Eq ' [Tt] _ar_m734_register_block$' m734-native-math-symbols.log
+          grep -Eq ' [Tt] _ar_m734_register_batch$' m734-native-batch-symbols.log
+          grep -Eq ' [Tt] _ar_m734_native_0052a9a0$' m734-native-batch-symbols.log
+          grep -Eq ' [Tt] _ar_m734_native_0052a910$' m734-native-batch-symbols.log
       - name: M7.21 prove PPC64 RLWIMI RLWNM RLDIC RLDIMI masking and fail-closed
         run: |
           set -euo pipefail
@@ -331,6 +354,23 @@ jobs:
             tests/host_m732_native_timezone.c -lm -o m732-native-host
           ./m732-native-host 2>&1 | tee m732-native-host.log
           grep -Fxq 'M7.32 owner 9-op ARM64 AOT + LV2 144 timezone BE s32, 1 native 2 PPC fallback, authentic fail-closed PASS' m732-native-host.log
+      - name: M7.34 signed multiplication SRADI and owner-ELF fail-closed host tests
+        run: |
+          set -euo pipefail
+          ccopts="-std=c11 -O2 -Wall -Wextra -Werror -fsanitize=undefined"
+          clang $ccopts -I upstream/runtime/ppu -I runtime \
+            runtime/ppu_bridge.c runtime/ppu_m712_exec_window.c \
+            runtime/ppu_m720_fallback.c runtime/ppu_m734_native_math.c \
+            tests/host_m734_owner_math.c -lm -o m734-native-math-host
+          ./m734-native-math-host 2>&1 | tee m734-native-math-host.log
+          grep -Fxq 'M7.34 29 owner instructions natively translated: 5 signed oracles, 2 dispatches 0 fallback, SRADI63 and strict ELF checks PASS' m734-native-math-host.log
+          clang $ccopts -I upstream/runtime/ppu -I runtime \
+            runtime/ppu_bridge.c runtime/ppu_m712_exec_window.c \
+            runtime/ppu_m720_fallback.c runtime/ppu_m734_native_math.c \
+            runtime/ppu_m734_native_batch.c tests/host_m734_aot_batch.c \
+            -lm -o m734-native-batch-host
+          ./m734-native-batch-host 2>&1 | tee m734-native-batch-host.log
+          grep -Fxq 'M7.34 batch AOT guest chain: 7 native dispatches, 0 PPC fallback, strict ELF fail-closed PASS' m734-native-batch-host.log
       - name: M5.0 fetch pinned open source shader compiler sources
         run: |
           set -euo pipefail
@@ -1008,9 +1048,12 @@ jobs:
           grep -Fq 'M7.31: +1 SHA-gated and ELF-verified native ARM64 CR4 transfer' m78-aot-status.txt
           grep -Fq 'M7.32: +1 SHA-gated ELF-verified 9-instruction native ARM64 function' m78-aot-status.txt
           grep -Fq 'M7.33: actual iOS LV2 144 registration' m78-aot-status.txt
+          grep -Fq 'M7.34: 11 new native ARM64 basic blocks' m78-aot-status.txt
+          grep -Eq ' [Tt] _ar_m734_register_block$' m78-owner-aot-linked-symbols.txt
+          grep -Eq ' [Tt] _ar_m734_register_batch$' m78-owner-aot-linked-symbols.txt
           grep -Eq ' [Tt] _ar_lv2_bind_bootstrap_syscalls$' m78-owner-aot-linked-symbols.txt
           grep -Eq ' [Tt] _ar_lv2_timezone$' m78-owner-aot-linked-symbols.txt
-          echo "M7.33: previous iPhone M7.32 missed syscall 144 registration. Shared bootstrap binder now tested on iOS and host; 1421 native owner AOT entries retained; gameplay and RSX still pending." > m78-actions-status.txt
+          echo "M7.34: 11 new SHA-gated owner PPC basic blocks (77 instructions) linked as native ARM64. 1421 earlier AOT preserved. On-device execution and next real stop pending. Interpreter counted separately; no filesystem or RSX claims." > m78-actions-status.txt
           test -s AscensionRecompProbe-0.6.14-unsigned.ipa
           /usr/libexec/PlistBuddy -c 'Print CFBundleShortVersionString' ios-probe/Payload/AscensionRecompProbe.app/Info.plist | grep -Fx 0.6.14
           /usr/bin/unzip -t AscensionRecompProbe-0.6.14-unsigned.ipa | tee m42-ipa-integrity.log
@@ -1096,7 +1139,7 @@ jobs:
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: AscensionRecomp-M7.33-LV2-144-Production
+          name: AscensionRecomp-M7.34-11-Owner-AOT-Blocks
           if-no-files-found: warn
           retention-days: 14
           path: |
@@ -1310,6 +1353,11 @@ jobs:
             m732-owner-arm64-file.log
             m732-native-host.log
             m733-bindings-source.log
+            m734-sradi-aot-tests.log
+            m734-native-math-symbols.log
+            m734-native-batch-symbols.log
+            m734-native-math-host.log
+            m734-native-batch-host.log
             m78-stage-tests.log
             m78-lv2-host.log
             m78-owner-aot-object-symbols.txt

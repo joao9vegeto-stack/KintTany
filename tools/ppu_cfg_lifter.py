@@ -274,7 +274,18 @@ def lift(words: list[int] | tuple[int, ...], base: int, name: str = 'ppu_sample'
             hist['store']+=1
         elif op==31:
             xo=(w>>1)&1023;rc=w&1
-            if xo==144:
+            if ((w>>2)&511)==413:
+                sh=b|((w&2)<<4)
+                e(f'u64 ar_shift_src_{i}={reg(d)};')
+                e(f'u64 ar_shift_sign_{i}=ar_shift_src_{i}>>63U;')
+                e(f'u64 ar_shift_lost_{i}=ar_shift_src_{i} & 0x{((1<<sh)-1):016x}ULL;')
+                e(f'u64 ar_shift_res_{i}=ar_shift_src_{i} >> {sh}U;')
+                if sh:e(f'if(ar_shift_sign_{i}) ar_shift_res_{i} |= UINT64_MAX << {64-sh}U;')
+                e(f'c->xer=(c->xer & ~0x20000000U) | ((ar_shift_sign_{i} && ar_shift_lost_{i}) ? 0x20000000U : 0U);')
+                e(f'{reg(a)}=ar_shift_res_{i};')
+                if rc:record(cmp_expr(f'(int64_t){reg(a)}','0LL'))
+                hist['sradi']+=1
+            elif xo==144:
                 fxm=(w>>12)&255
                 l=(w>>20)&1
                 if (w&0x801) or (l and (fxm==0 or fxm&(fxm-1))):

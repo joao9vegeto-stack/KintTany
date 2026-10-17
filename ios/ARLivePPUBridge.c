@@ -37,6 +37,8 @@ extern int ar_m715_register_fragment(const uint8_t*,size_t);
 extern int ar_m716_register_block(const uint8_t*,size_t);
 extern int ar_m731_register_frontier(const uint8_t*,size_t);
 extern int ar_m732_register_block(const uint8_t*,size_t);
+extern int ar_m734_register_block(const uint8_t*,size_t);
+extern int ar_m734_register_batch(const uint8_t*,size_t);
 extern int ar_private_import_match(const uint8_t*,size_t,uint32_t,uint32_t[4],char[48]);
 extern int ar_private_import_find_nid(const uint8_t*,size_t,uint32_t,const char*,uint32_t[4],char[48]);
 
@@ -173,6 +175,16 @@ int ar_m70_native_runtime_probe(const uint8_t*d,size_t len,
  /* M7.32 native stack/timezone call setup; verified on owner ELF only. */
  if(ar_m732_register_block(d,len)!=AR_OK){
     ar_bridge_shutdown();return -41;
+ }
+ /* M7.34: after private SHA-256 validation of the original ELF, verify
+  * exact PPU executable bytes of a 29-word block before native install. */
+ if(ar_m734_register_block(d,len)!=AR_OK){
+    ar_bridge_shutdown();return -42;
+ }
+ /* M7.34 native batch: 10 additional traced guest basic blocks;
+  * ALL X segments verified and memory bytes matched before registration. */
+ if(ar_m734_register_batch(d,len)!=AR_OK){
+    ar_bridge_shutdown();return -43;
  }
 #endif
 #endif
