@@ -36,6 +36,7 @@ extern int ar_m714_register_fragment(const uint8_t*,size_t);
 extern int ar_m715_register_fragment(const uint8_t*,size_t);
 extern int ar_m716_register_block(const uint8_t*,size_t);
 extern int ar_m731_register_frontier(const uint8_t*,size_t);
+extern int ar_m732_register_block(const uint8_t*,size_t);
 extern int ar_private_import_match(const uint8_t*,size_t,uint32_t,uint32_t[4],char[48]);
 extern int ar_private_import_find_nid(const uint8_t*,size_t,uint32_t,const char*,uint32_t[4],char[48]);
 
@@ -168,6 +169,10 @@ int ar_m70_native_runtime_probe(const uint8_t*d,size_t len,
   * two-instruction continuation. Never falls back to silent success. */
  if(ar_m731_register_frontier(d,len)!=AR_OK){
     ar_bridge_shutdown();return -40;
+ }
+ /* M7.32 native stack/timezone call setup; verified on owner ELF only. */
+ if(ar_m732_register_block(d,len)!=AR_OK){
+    ar_bridge_shutdown();return -41;
  }
 #endif
 #endif
