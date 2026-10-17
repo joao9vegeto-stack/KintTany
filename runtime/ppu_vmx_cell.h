@@ -1,0 +1,76 @@
+/* M7.28: scalar reference VMX/AltiVec + Cell partial vector memory.
+ * Shared by authenticated PPC fallback and future statically lifted ARM64 AOT.
+ * Canonical vector lanes are BIG-ENDIAN bytes in vr[v].d[0..1].
+ * Avoid host SIMD layout/endian assumptions; all effects go through guest VM.
+ */
+#ifndef ASCENSION_PPU_VMX_CELL_H
+#define ASCENSION_PPU_VMX_CELL_H
+#include <stdint.h>
+#include <string.h>
+#include "ppu_bridge.h"
+static inline uint8_t ar_vmx_byte(const ppu_context*c,unsigned v,unsigned n){
+ const uint64_t word=c->vr[v].d[n>>3];
+ return (uint8_t)(word >> (56u-8u*(n&7u)));
+}
+static inline void ar_vmx_setbyte(ppu_context*c,unsigned v,unsigned n,uint8_t value){
+ const unsigned w=n>>3,sh=56u-8u*(n&7u);
+ const uint64_t mask=UINT64_C(255)<<sh;
+ c->vr[v].d[w]=(c->vr[v].d[w]&~mask)|((uint64_t)value<<sh);
+}
+static inline uint32_t ar_vmx_word(const ppu_context*c,unsigned v,unsigned n){
+ return ((uint32_t)ar_vmx_byte(c,v,n*4)<<24) |
+        ((uint32_t)ar_vmx_byte(c,v,n*4+1)<<16) |
+        ((uint32_t)ar_vmx_byte(c,v,n*4+2)<<8) |
+        ((uint32_t)ar_vmx_byte(c,v,n*4+3));
+}
+static inline void ar_vmx_splat_imm(ppu_context*c,unsigned vd,unsigned imm,
+                                   unsigned width){
+ /* VMX 5-bit signed value sign-extended to byte/halfword/word width. */
+ const uint32_t sign=(imm&16u)?(imm|~UINT32_C(31)):imm;
+ uint8_t pattern[4];
+ for(unsigned k=0;k<width;k++)pattern[k]=(uint8_t)(sign>>(8u*(width-1u-k)));
+ for(unsigned k=0;k<16u;k++)ar_vmx_setbyte(c,vd,k,pattern[k%width]);
+}
+static inline int ar_vmx_splatw(ppu_context*c,unsigned vd,unsigned vb,unsigned index){
+ if(index>3u)return AR_PPC_UNSUPPORTED;
+ const uint32_t value=ar_vmx_word(c,vb,index);
+ for(unsigned k=0;k<4u;k++){
+   ar_vmx_setbyte(c,vd,k*4u,(uint8_t)(value>>24));
+   ar_vmx_setbyte(c,vd,k*4u+1u,(uint8_t)(value>>16));
+   ar_vmx_setbyte(c,vd,k*4u+2u,(uint8_t)(value>>8));
+   ar_vmx_setbyte(c,vd,k*4u+3u,(uint8_t)value);
+ }
+ return AR_OK;
+}
+static inline int ar_vmx_guest_load(ppu_context*c,unsigned vd,uint64_t ea,
+                                    unsigned kind){
+ /* kind 0=lvx, 1=lvlx, 2=lvrx.  Cell lvlx loads starting
+  * at EA into LEFT vector lanes; right lanes are zeroed. */
+ uint8_t temp[16]={0};
+ const unsigned eb=(unsigned)(ea&15u);
+ uint64_t start=ea;size_t n=16u;
+ if(kind==0u)start=ea&~UINT64_C(15);
+ else if(kind==1u)n=16u-eb;
+ else if(kind==2u){start=ea&~UINT64_C(15);n=eb;}
+ else return AR_PPC_UNSUPPORTED;
+ if(n && ar_vm_read_bytes(start,temp+(kind==2u?16u-n:0u),n)!=AR_OK)
+   return AR_MEM_FAULT;
+ for(unsigned k=0;k<16u;k++)ar_vmx_setbyte(c,vd,k,temp[k]);
+ return AR_OK;
+}
+static inline int ar_vmx_guest_store(const ppu_context*c,unsigned vs,uint64_t ea,
+                                     unsigned kind){
+ /* kind 0=stvx, 1=stvlx, 2=stvrx.
+  * Validate the full guest range before any write, all-or-nothing. */
+ uint8_t temp[16];
+ for(unsigned k=0;k<16u;k++)temp[k]=ar_vmx_byte(c,vs,k);
+ const unsigned eb=(unsigned)(ea&15u);
+ uint64_t start=ea;size_t n=16u;size_t src=0u;
+ if(kind==0u)start=ea&~UINT64_C(15);
+ else if(kind==1u)n=16u-eb;
+ else if(kind==2u){start=ea&~UINT64_C(15);src=16u-eb;n=eb;}
+ else return AR_PPC_UNSUPPORTED;
+ if(n && ar_vm_load(start,temp+src,n)!=AR_OK)return AR_MEM_FAULT;
+ return AR_OK;
+}
+#endif

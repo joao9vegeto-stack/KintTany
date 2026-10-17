@@ -40,7 +40,7 @@ class M719ReportTests(unittest.TestCase):
         self.assertIn('initForExportingURLs:@[url] asCopy:YES',s)
         self.assertIn('writeToURL:url atomically:YES',s)
         self.assertIn('encoding:NSUTF8StringEncoding',s)
-        self.assertIn('AscensionRecomp-M7.27-NPUA80918-%@.txt',s)
+        self.assertIn('AscensionRecomp-M7.28-NPUA80918-%@.txt',s)
         self.assertIn('UIPasteboard.generalPasteboard.string=report;',s)
         self.assertIn('Exportar TXT · Arquivos',s)
         self.assertIn('Visualizar relatório',s)

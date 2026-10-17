@@ -6,6 +6,7 @@
 #include <stdint.h>
 #include <stddef.h>
 #include "ppu_bridge.h"
+#include "ppu_vmx_cell.h"
 extern int ar_m712_exec_window(const uint8_t*,size_t,uint32_t,uint32_t[6]);
 static int64_t sx16(uint32_t v){return (int64_t)(int16_t)(uint16_t)v;}
 static uint64_t sext32(uint32_t v){return (uint64_t)(int64_t)(int32_t)v;}
@@ -85,6 +86,21 @@ int ar_ppc_fallback_step(ppu_context*c,const uint8_t*elf,size_t elf_len,
  const int64_t imm=sx16(w);
  uint64_t *r=c->gpr;
  switch(op){
+ case 4:{ /* VMX VX: signed splat and splat-word */
+   const unsigned xo=w&2047u;
+   if(xo==780u||xo==844u||xo==908u){
+     if(b)return AR_PPC_UNSUPPORTED; /* reserved VB bits */
+     ar_vmx_splat_imm(c,d,a,xo==780u?1u:xo==844u?2u:4u);
+     c->cia=pc+4u;return AR_TAIL;
+   }
+   if(xo==652u){
+     if(a>3u)return AR_PPC_UNSUPPORTED;
+     const int rc=ar_vmx_splatw(c,d,b,a);
+     if(rc!=AR_OK)return rc;
+     c->cia=pc+4u;return AR_TAIL;
+   }
+   return AR_PPC_UNSUPPORTED;
+ }
  case 14: return add_result(c,pc,(a?r[a]:0u)+(uint64_t)imm,d,0);
  case 15: return add_result(c,pc,(a?r[a]:0u)+(uint64_t)(imm*65536),d,0);
  case 12:case 13:{
@@ -167,6 +183,21 @@ int ar_ppc_fallback_step(ppu_context*c,const uint8_t*elf,size_t elf_len,
    const unsigned xo=(w>>1)&1023u,record=w&1u;
    const uint64_t x=r[a],y=r[b];
    switch(xo){
+   case 103:case 359:case 519:case 775:
+   case 551:case 807:case 231:case 487:
+   case 647:case 903:case 679:case 935:{ /* VMX indexed/Cell partial */
+      if(w&1u)return AR_PPC_UNSUPPORTED; /* opcode bit 0 reserved */
+      const uint64_t ea=(a?r[a]:0u)+r[b];
+      int vmx_rc=AR_PPC_UNSUPPORTED;
+      if(xo==103u||xo==359u)vmx_rc=ar_vmx_guest_load(c,d,ea,0u);
+      if(xo==519u||xo==775u)vmx_rc=ar_vmx_guest_load(c,d,ea,1u);
+      if(xo==551u||xo==807u)vmx_rc=ar_vmx_guest_load(c,d,ea,2u);
+      if(xo==231u||xo==487u)vmx_rc=ar_vmx_guest_store(c,d,ea,0u);
+      if(xo==647u||xo==903u)vmx_rc=ar_vmx_guest_store(c,d,ea,1u);
+      if(xo==679u||xo==935u)vmx_rc=ar_vmx_guest_store(c,d,ea,2u);
+      if(vmx_rc!=AR_OK)return vmx_rc;
+      c->cia=pc+4u;return AR_TAIL;
+   }
    case 854:{ /* EIEIO: only architecturally defined exact X-form */
       if(w!=UINT32_C(0x7c0006ac))return AR_PPC_UNSUPPORTED;
       /* Conservative host-side ordering: stronger than PowerPC eieio.
