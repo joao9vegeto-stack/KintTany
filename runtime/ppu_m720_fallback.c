@@ -204,6 +204,17 @@ int ar_ppc_fallback_step(ppu_context*c,const uint8_t*elf,size_t elf_len,
  case 31:{
    const unsigned xo=(w>>1)&1023u,record=w&1u;
    const uint64_t x=r[a],y=r[b];
+   /* XS-form SRADI uses the nine-bit extension and a sixth shift bit. */
+   if(((w>>2)&511u)==413u){
+      const unsigned shift=b|((w&2u)<<4u);
+      const uint64_t value=r[d], negative=value>>63u;
+      const uint64_t removed=shift?(value&(UINT64_MAX>>(64u-shift))):0u;
+      uint64_t out=shift?(value>>shift):value;
+      if(negative&&shift)out|=UINT64_MAX<<(64u-shift);
+      c->xer=(c->xer&~UINT32_C(0x20000000))|
+         ((negative&&removed)?UINT32_C(0x20000000):0u);
+      return add_result(c,pc,out,a,record);
+   }
    switch(xo){
    case 103:case 359:case 519:case 775:
    case 551:case 807:case 231:case 487:

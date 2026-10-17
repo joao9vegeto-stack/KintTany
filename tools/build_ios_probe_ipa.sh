@@ -149,7 +149,14 @@ xcrun --sdk iphoneos clang -target arm64-apple-ios17.0 -isysroot "$SDK" \
 xcrun --sdk iphoneos clang -target arm64-apple-ios17.0 -isysroot "$SDK" \
     -std=c11 -O2 -Wall -Wextra -Werror -I upstream/runtime/ppu -I runtime \
     -c runtime/ppu_m732_native_timezone.c -o ios-probe/ppu_m732_native_timezone.o
-# M7.17: bounded reachability scan of authentic PPC ELF, READ-ONLY.
+# M7.34: natively linked 29-op signed PPC64 arithmetic block.
+xcrun --sdk iphoneos clang -target arm64-apple-ios17.0 -isysroot "$SDK" \
+    -std=c11 -O2 -Wall -Wextra -Werror -I upstream/runtime/ppu -I runtime \
+    -c runtime/ppu_m734_native_math.c -o ios-probe/ppu_m734_native_math.o
+xcrun --sdk iphoneos clang -target arm64-apple-ios17.0 -isysroot "$SDK" \
+    -std=c11 -O2 -Wall -Wextra -Werror -I upstream/runtime/ppu -I runtime \
+    -c runtime/ppu_m734_native_batch.c -o ios-probe/ppu_m734_native_batch.o
+
 xcrun --sdk iphoneos clang -target arm64-apple-ios17.0 -isysroot "$SDK" \
     -std=c11 -O2 -Wall -Wextra -Werror -I runtime \
     -c runtime/ppu_m717_graph.c -o ios-probe/ppu_m717_graph.o
@@ -187,6 +194,8 @@ xcrun --sdk iphoneos clang++ -target arm64-apple-ios17.0 \
     ios-probe/ppu_m716_native_branch.o \
     ios-probe/ppu_m731_native_mtocrf.o \
     ios-probe/ppu_m732_native_timezone.o \
+    ios-probe/ppu_m734_native_math.o \
+    ios-probe/ppu_m734_native_batch.o \
     ios-probe/ppu_m717_graph.o \
     ios-probe/ppu_m720_fallback.o \
     ${M711_OBJECTS[@]+"${M711_OBJECTS[@]}"} \
@@ -252,6 +261,11 @@ grep -Eq ' [Tt] _ar_m731_native_0052da5c$' m78-owner-aot-linked-symbols.txt
 grep -Eq ' [Tt] _ar_m731_register_frontier$' m78-owner-aot-linked-symbols.txt
 grep -Eq ' [Tt] _ar_m732_native_005230e0$' m78-owner-aot-linked-symbols.txt
 grep -Eq ' [Tt] _ar_m732_register_block$' m78-owner-aot-linked-symbols.txt
+grep -Eq ' [Tt] _ar_m734_native_0052aa1c$' m78-owner-aot-linked-symbols.txt
+grep -Eq ' [Tt] _ar_m734_register_block$' m78-owner-aot-linked-symbols.txt
+grep -Eq ' [Tt] _ar_m734_register_batch$' m78-owner-aot-linked-symbols.txt
+grep -Eq ' [Tt] _ar_m734_native_0052a9a0$' m78-owner-aot-linked-symbols.txt
+grep -Eq ' [Tt] _ar_m734_native_0052a910$' m78-owner-aot-linked-symbols.txt
 grep -Eq ' [Tt] _ar_m716_verified_successors$' m78-owner-aot-linked-symbols.txt
 grep -Eq ' [Tt] _ar_m717_walk$' m78-owner-aot-linked-symbols.txt
 grep -Eq ' [Tt] _ar_m717_last_aot_trace$' m78-owner-aot-linked-symbols.txt
@@ -273,6 +287,7 @@ echo "M7.23: +${ASCENSION_FRONTIER_AOT_COUNT:-0} owner-authenticated native 25-o
 echo 'M7.31: +1 SHA-gated and ELF-verified native ARM64 CR4 transfer + BLR at guest 0x0052DA5C; expected 1420 registered AOT on matching owner ELF; on-device execution not yet proven' >> m78-aot-status.txt
 echo 'M7.32: +1 SHA-gated ELF-verified 9-instruction native ARM64 function at guest 0x005230E0; total expected 1421 on owner ELF; LV2 #144 writes timezone via the host operating-system timezone.' >> m78-aot-status.txt
 echo 'M7.33: actual iOS LV2 144 registration shared with production synthetic regression; AOT count 1421 unchanged, on-device crossing pending.' >> m78-aot-status.txt
+echo 'M7.34: 11 new native ARM64 basic blocks (77 real guest PPC instructions) selected from authenticated owner ELF trace. Existing 1421 AOT preserved; count after registration expected 1432 if no overlaps. Native vs fallback distinguished on device.' >> m78-aot-status.txt
 file "$APP/AscensionRecompProbe" | tee m41-executable-file.txt
 xcrun lipo -info "$APP/AscensionRecompProbe" | tee m41-executable-arch.txt
 /usr/libexec/PlistBuddy -c 'Print CFBundleIdentifier' "$APP/Info.plist"
