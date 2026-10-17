@@ -1,4 +1,4 @@
-name: AscensionRecomp M7.18 - original ELF 500-block owner-secret ARM64 bulk AOT
+name: AscensionRecomp M7.19 - 850 next-frontier owner-private ARM64 PPC blocks
 
 on:
   push:
@@ -670,6 +670,21 @@ jobs:
         run: |
           set -euo pipefail
           python3 -m unittest discover -s tests -p test_m718_bulk_guard.py -v 2>&1 | tee m718-bulk-guard-tests.log
+      - name: M7.19 stage 850 verified NPUA80918 owner-private AOT blocks
+        env:
+          ASCENSION_AOT_BULK2_GZIP_B64: ${{ secrets.ASCENSION_AOT_BULK2_GZIP_B64 }}
+        run: |
+          set -euo pipefail
+          python3 tools/stage_m719_bulk2.py 2>&1 | tee m719-bulk2-stage.log
+          grep -Fq 'M7.19 private batch staged: 850 new PPC AOT entries' m719-bulk2-stage.log
+          # GITHUB_ENV exports are visible in the following step only.
+          test -s "$RUNNER_TEMP/ascension_m719_private_bulk2.c"
+          test "$(wc -l < "$RUNNER_TEMP/ascension_m719_bulk2_symbols.txt" | tr -d ' ')" = "850"
+      - name: M7.19 test exact native symbols, private-source integrity and SHA gate
+        run: |
+          set -euo pipefail
+          python3 -m unittest discover -s tests -p test_m719_private_expansion.py -v 2>&1 | tee m719-private-tests.log
+          python3 -m unittest discover -s tests -p test_m719_unified_report.py -v 2>&1 | tee m719-unified-report-tests.log
       - name: M4.1 link native UIKit RSX Metal diagnostic application
         run: |
           set -euo pipefail
@@ -684,7 +699,8 @@ jobs:
           grep -Fq 'M7.16: +1 verified native 15-instruction PPC block' m78-aot-status.txt
           grep -Fq 'M7.17: static bounded PPC reachability + actual ARM64 AOT dispatch telemetry' m78-aot-status.txt
           grep -Fq 'M7.18: +500 additional owner-private native PPC AOT blocks' m78-aot-status.txt
-          echo "M7.18: 568 actual ARM64 AOT entries linked (64 original, 4 M7.13-M7.16, 500 owner ELF batch); NPUA80918 on-device proof pending" > m78-actions-status.txt
+          grep -Fq 'M7.19: +850 authenticated owner-private native PPC blocks' m78-aot-status.txt
+          echo "M7.19: 1418 signed ARM64 AOT entrypoints (64 owner + 4 previous fragments + 500 M7.18 + 850 M7.19); iPhone runtime/RSX proof pending" > m78-actions-status.txt
           test -s AscensionRecompProbe-0.6.14-unsigned.ipa
           /usr/libexec/PlistBuddy -c 'Print CFBundleShortVersionString' ios-probe/Payload/AscensionRecompProbe.app/Info.plist | grep -Fx 0.6.14
           /usr/bin/unzip -t AscensionRecompProbe-0.6.14-unsigned.ipa | tee m42-ipa-integrity.log
@@ -938,6 +954,10 @@ jobs:
             m718-bulk-stage.log
             m718-bulk-guard-tests.log
             m718-bulk-object-symbols.txt
+            m719-bulk2-stage.log
+            m719-private-tests.log
+            m719-unified-report-tests.log
+            m719-bulk2-object-symbols.txt
             m78-stage-tests.log
             m78-lv2-host.log
             m78-owner-aot-object-symbols.txt
