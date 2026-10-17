@@ -28,7 +28,15 @@ static int try_step(uint8_t *elf,uint32_t w,ppu_context *ctx) {
  if(ar_vm_load(0x1000,elf+0x200,4)!=AR_OK)return -99;
  uint32_t got=0;
  const int rc=ar_ppc_fallback_step(ctx,elf,1024,0x1000,&got);
- if(got!=w)return -98;
+ if(got!=w){
+   uint32_t window[6]={0};
+   extern int ar_m712_exec_window(const uint8_t*,size_t,uint32_t,uint32_t[6]);
+   const int read_rc=ar_m712_exec_window(elf,1024,0x1000,window);
+   fprintf(stderr,"M7.21 ELF-window mismatch: wanted=0x%08x observed=0x%08x read_rc=%d window_word=0x%08x flags=%u count=%u step_rc=%d e_phoff=%u e_phnum=%u\\n",
+     w,got,read_rc,window[0],window[5],window[4],rc,
+     (unsigned)elf[39],(unsigned)elf[57]);
+   return -98;
+ }
  return rc;
 }
 int main(void) {
