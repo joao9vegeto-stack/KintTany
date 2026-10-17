@@ -22,6 +22,7 @@ int ar_bind_import(uint32_t stub,uint32_t nid);
 int ar_bind_hle(uint32_t nid,ar_hle_fn handler);
 int ar_bind_syscall(uint32_t syscall_number,ar_hle_fn handler);
 int ar_guest_syscall(ppu_context*);
+void ar_ppc_note_syscall_pc(uint32_t pc);
 uint32_t ar_last_missing_syscall(void);
 uint32_t ar_last_missing_nid(void);
 uint32_t ar_last_unresolved(void);
@@ -39,6 +40,9 @@ typedef struct {
     uint32_t fallback_unsupported_pc, fallback_unsupported_word;
     uint32_t fallback_step_limit;
     uint32_t fallback_callsite_pc, fallback_call_target; /* M7.25 */
+    /* M7.26: actual LV2 syscall IDs, without fake successes. */
+    uint32_t lv2_calls, lv2_last_number, lv2_last_pc;
+    uint32_t lv2_missing_number, lv2_missing_pc;
 } ar_aot_trace;
 void ar_trace_snapshot(ar_aot_trace *out);
 /* Experimental signed non-JIT fallback. Attach the exact owner ELF ONLY

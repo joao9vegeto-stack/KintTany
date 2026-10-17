@@ -179,6 +179,10 @@ int ar_ppc_fallback_step(ppu_context*c,const uint8_t*elf,size_t elf_len,
       }
       return add_result(c,pc,result,d,record);
    }
+   case 457:{ /* divdu: unsigned PPC64 quotient, no overflow form */
+      if(!y)return AR_PPC_UNSUPPORTED; /* undefined divisor zero */
+      return add_result(c,pc,x/y,d,record);
+   }
    case 459:{ /* divwu: unsigned low 32, ZERO extended to 64 */
       const uint32_t divisor=(uint32_t)y;
       if(!divisor)return AR_PPC_UNSUPPORTED; /* architecturally undefined */

@@ -580,7 +580,7 @@ extern int ar_probe_rsx_texture_cache_mutation(unsigned swizzled,unsigned int ou
                                   "5 toques: TEXTURA por NV4097/cache/Metal\n"
                                   "Sem arquivos do jogo.";
                 self.status.text=@"ASCENSIONRECOMP · NPUA80918\n"
-                                  "M7.25 · AOT nativo + PPC de apoio\n"
+                                  "M7.26 · AOT nativo + PPC de apoio\n"
                                   "Importe GOWA.ELF para executar o código recompilado.\n"
                                   "Inicialização parcial, ainda sem gameplay.\n"
                                   "Ferramentas RSX estão na aba RSX / Metal.";
@@ -659,7 +659,7 @@ extern int ar_probe_rsx_texture_cache_mutation(unsigned swizzled,unsigned int ou
     NSString *body=self.ppuReport.length ? self.ppuReport : self.ppuSummary;
     if(!body.length)return nil;
     return [NSString stringWithFormat:
-        @"ASCENSIONRECOMP M7.25 — RELATÓRIO ÚNICO\n"
+        @"ASCENSIONRECOMP M7.26 — RELATÓRIO ÚNICO\n"
          "Status, lote PPC, cobertura ARM64, grafo, TLS/HLE e legados.\n"
          "Somente diagnósticos; NÃO inclui o ELF original.\n"
          "==================================================\n\n%@\n",body];
@@ -675,7 +675,7 @@ extern int ar_probe_rsx_texture_cache_mutation(unsigned swizzled,unsigned int ou
     date.locale=[NSLocale localeWithLocaleIdentifier:@"en_US_POSIX"];
     date.dateFormat=@"yyyyMMdd-HHmmss";
     NSString *name=[NSString stringWithFormat:
-       @"AscensionRecomp-M7.25-NPUA80918-%@.txt",
+       @"AscensionRecomp-M7.26-NPUA80918-%@.txt",
        [date stringFromDate:[NSDate date]]];
     NSURL *url=[NSURL fileURLWithPath:
        [NSTemporaryDirectory() stringByAppendingPathComponent:name]];
@@ -1349,7 +1349,7 @@ extern int ar_probe_rsx_texture_cache_mutation(unsigned swizzled,unsigned int ou
        "Último PPC interpretado=0x%08X · opcode=0x%08X\n"
        "Primeiro PPC não suportado=0x%08X · opcode=0x%08X\n"
        "Resultado híbrido=%d · próximo PC pendente=0x%08X\n"
-       "M7.25: BL aninhado, primeira chamada falha PC=0x%08X -> 0x%08X\n"
+       "M7.26: BL aninhado, primeira chamada falha PC=0x%08X -> 0x%08X\n"
        "Fallback NÃO é AOT; interpretação não aumenta contagem ARM64.\n"
        "Ainda sem comandos RSX reais do Ascension.\n",
        measured.aot_dispatches,measured.fallback_steps,
@@ -1357,6 +1357,25 @@ extern int ar_probe_rsx_texture_cache_mutation(unsigned swizzled,unsigned int ou
        measured.fallback_last_opcode,measured.fallback_unsupported_pc,
        measured.fallback_unsupported_word,(int)native[6],native[7],
        measured.fallback_callsite_pc,measured.fallback_call_target];
+    /* M7.26 LV2 syscall evidence: exact number and guest source PC.
+     * No ELF contents or user secrets written to TXT or actions. */
+    [graphReport appendFormat:
+       @"\nM7.26 — SYSCALLS LV2 OBSERVADAS\n"
+        "Total chamadas LV2=%u · última=%u (0x%X) · PC=0x%08X\n"
+        "Syscall ausente=%u (0x%X) · PC=0x%08X\n"
+        "Syscall 147: sys_time_get_timebase_frequency (79.800.000 Hz) implementada.\n"
+        "DIVDU PPC64: AOT e fallback com divisão por zero bloqueada.\n",
+        measured.lv2_calls,measured.lv2_last_number,
+        measured.lv2_last_number,measured.lv2_last_pc,
+        measured.lv2_missing_number,measured.lv2_missing_number,
+        measured.lv2_missing_pc];
+    if((int)native[6]==AR_MISSING_LV2){
+       pendingText=[NSString stringWithFormat:
+          @"Serviço PS3 LV2 pendente: syscall %u (0x%X)\n"
+           "Instrução guest: 0x%08X · interrupção segura.",
+           measured.lv2_missing_number,measured.lv2_missing_number,
+           measured.lv2_missing_pc];
+    }
     frontierReport=[frontierReport stringByAppendingString:graphReport];
     /* M7.15: keep verified instruction batch available even when legacy
      * PPU48 returns success and skips the error-detail report branch. */
@@ -1364,14 +1383,14 @@ extern int ar_probe_rsx_texture_cache_mutation(unsigned swizzled,unsigned int ou
                         ? frontierReport : nil;
     self.ppuBatchButton.enabled=(self.ppuBatchReport.length>0);
     self.ppuSummary=[NSString stringWithFormat:
-       @"ASCENSIONRECOMP M7.25 · NPUA80918\n"
+       @"ASCENSIONRECOMP M7.26 · NPUA80918\n"
         "AOT ARM64 + FALLBACK PPC EXPERIMENTAL\n"
         "Entradas AOT vinculadas: %u\n"
         "ELF: %@ · entrada 0x%08X\n"
         "Execução nativa: %d · TLS r13=0x%08X\n"
         "SYSUTIL core vinculado=%@ · mapeamentos guest=%@\n"
         "%@\n"
-        "M7.25: BL aninhado preserva PC real; SRAWI/NEG no AOT e fallback; exportar TXT.\n"
+        "M7.26: LV2 #147 timebase 79,8MHz + DIVDU PPC64; próxima syscall no TXT.\n"
         "RSX do Ascension: não demonstrado (M4/M5 sintéticos).\n"
         "Estado: inicialização parcial, sem gameplay.\n"
         "Diagnósticos legados: seção avançada.",

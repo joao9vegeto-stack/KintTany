@@ -12,10 +12,20 @@
 #include <stdint.h>
 #include <time.h>
 enum { AR_USER_TOTAL=0x10000000u, AR_USER_AVAIL=0x0e000000u };
-static unsigned memory_queries,time_queries;
-void ar_lv2_bootstrap_reset(void){memory_queries=time_queries=0u;}
+static unsigned memory_queries,time_queries,timebase_queries;
+void ar_lv2_bootstrap_reset(void){memory_queries=time_queries=timebase_queries=0u;}
 unsigned ar_lv2_user_memory_queries(void){return memory_queries;}
 unsigned ar_lv2_time_queries(void){return time_queries;}
+unsigned ar_lv2_timebase_queries(void){return timebase_queries;}
+/* Hardware-compatible PS3 Cell 79.8 MHz timebase, NOT iPhone CPU clock.
+ * Syscall returns frequency as u64 directly in guest r3 (not CELL_OK).
+ * Keep guest tick/frequency clock domains consistent in future runtimes. */
+int ar_lv2_timebase_frequency(ppu_context *cpu){
+ if(!cpu)return AR_BAD_ARGS;
+ cpu->gpr[3]=UINT64_C(79800000);
+ ++timebase_queries;
+ return AR_OK;
+}
 int ar_lv2_user_memory_size(ppu_context *cpu){
  if(!cpu)return AR_BAD_ARGS;
  uint64_t dest=cpu->gpr[3];
