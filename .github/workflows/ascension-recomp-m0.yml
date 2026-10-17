@@ -605,9 +605,9 @@ jobs:
           grep -Fq '59 REAL PPU ARM64 functions verified' m78-aot-status.txt
           test "$(grep -c '_ar_game_ppu_' m78-owner-aot-linked-symbols.txt)" -eq 59
           echo 'M7.11: 59 real NPUA80918 ARM64 PPU entries IN IPA; on-device execution is pending' > m78-actions-status.txt
-          test -s AscensionRecompProbe-0.6.15-unsigned.ipa
-          /usr/libexec/PlistBuddy -c 'Print CFBundleShortVersionString' ios-probe/Payload/AscensionRecompProbe.app/Info.plist | grep -Fx 0.6.15
-          /usr/bin/unzip -t AscensionRecompProbe-0.6.15-unsigned.ipa | tee m42-ipa-integrity.log
+          test -s AscensionRecompProbe-0.6.14-unsigned.ipa
+          /usr/libexec/PlistBuddy -c 'Print CFBundleShortVersionString' ios-probe/Payload/AscensionRecompProbe.app/Info.plist | grep -Fx 0.6.14
+          /usr/bin/unzip -t AscensionRecompProbe-0.6.14-unsigned.ipa | tee m42-ipa-integrity.log
           xcrun nm -g ios-probe/Payload/AscensionRecompProbe.app/AscensionRecompProbe | grep -E '(_rsx_metal_backend_present|_rsx_metal_backend_init|_OBJC_CLASS_\\$_ARMetalView)' > m42-runtime-link-symbols.txt || true
           grep -q _rsx_metal_backend_init m39-metal-symbols.txt
           echo 'M4.2: actual GPU clear + presentDrawable + waitUntilCompleted route linked in iOS app; requires on-device screenshot.' > m42-status.txt
@@ -857,7 +857,7 @@ jobs:
             m76-aot-tail-host.log
             m76-status.txt
             m75-aot-boot-host.log
-            AscensionRecompProbe-0.6.15-unsigned.ipa
+            AscensionRecompProbe-0.6.14-unsigned.ipa
             m40-ios-layer-view.o
             build-ios-runtime/libps3recomp_runtime.a
             ios-ppu-core/libAscensionPPUCore-ios-arm64.a

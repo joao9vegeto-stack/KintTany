@@ -27,6 +27,6 @@ class M711(unittest.TestCase):
         self.assertIn("if(mask!=15u)",sys)
     def test_native_first_ui_retained(self):
         ui=(ROOT/"ios/ARProbeApp.m").read_text()
-        self.assertIn('header.text=@"ASCENSIONRECOMP   ·   M7.12"',ui)
+        self.assertIn('header.text=@"ASCENSIONRECOMP   ·   M7.11"',ui)
         self.assertIn("SYSUTIL core vinculado",ui)
         self.assertIn("Diagnóstico avançado · M6/M7",ui)

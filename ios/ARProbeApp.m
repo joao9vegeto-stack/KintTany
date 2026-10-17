@@ -402,7 +402,7 @@ extern int ar_probe_rsx_texture_cache_mutation(unsigned swizzled,unsigned int ou
     [controller.view addSubview:panel];
     UILabel *header=[UILabel new];
     header.translatesAutoresizingMaskIntoConstraints=NO;
-    header.text=@"ASCENSIONRECOMP   ·   M7.12";
+    header.text=@"ASCENSIONRECOMP   ·   M7.11";
     header.textColor=[UIColor colorWithRed:0.73 green:0.87 blue:1 alpha:1];
     header.font=[UIFont systemFontOfSize:12 weight:UIFontWeightBold];
     header.textAlignment=NSTextAlignmentCenter;
