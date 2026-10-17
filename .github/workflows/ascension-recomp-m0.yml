@@ -660,8 +660,12 @@ jobs:
           set -euo pipefail
           python3 tools/stage_m718_bulk.py 2>&1 | tee m718-bulk-stage.log
           grep -Fq 'M7.18: 500 unique private ARM64 AOT blocks validated' m718-bulk-stage.log
-          test -s "${ASCENSION_PRIVATE_BULK_C:?}"
-          test "${ASCENSION_BULK_COUNT:?}" = '500'
+          # GITHUB_ENV exports are visible starting in the NEXT step,
+          # not within this same staging step. Verify the just-written
+          # private files directly under RUNNER_TEMP instead.
+          test -s "$RUNNER_TEMP/ascension_m718_private_bulk.c"
+          test -s "$RUNNER_TEMP/ascension_m718_bulk_symbols.txt"
+          test "$(wc -l < "$RUNNER_TEMP/ascension_m718_bulk_symbols.txt" | tr -d ' ')" = '500'
       - name: M7.18 public-only stage and final Mach-O symbol guard tests
         run: |
           set -euo pipefail
