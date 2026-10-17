@@ -1,4 +1,4 @@
-name: AscensionRecomp M7.32 - owner 9-op native ARM64 block and real LV2 timezone 144
+name: AscensionRecomp M7.33 - iPhone LV2 144 binding with 1421 native AOT intact
 
 on:
   push:
@@ -92,6 +92,11 @@ jobs:
           set -euo pipefail
           python3 -m unittest discover -s tests -p test_m731_mtocrf_aot.py -v 2>&1 | tee m731-cr-aot-tests.log
           grep -Fq 'Ran 6 tests' m731-cr-aot-tests.log
+      - name: M7.33 real iPhone LV2 registration regression tests
+        run: |
+          set -euo pipefail
+          python3 -m unittest discover -s tests -p test_m733_lv2_bindings.py -v 2>&1 | tee m733-bindings-source.log
+          grep -Fq 'Ran 4 tests' m733-bindings-source.log
       - name: Fetch pinned ps3recomp source
         run: |
           set -euo pipefail
@@ -1002,7 +1007,10 @@ jobs:
           grep -Fq 'M7.23: +1 owner-authenticated native 25-opcode block' m78-aot-status.txt
           grep -Fq 'M7.31: +1 SHA-gated and ELF-verified native ARM64 CR4 transfer' m78-aot-status.txt
           grep -Fq 'M7.32: +1 SHA-gated ELF-verified 9-instruction native ARM64 function' m78-aot-status.txt
-          echo "M7.32: preserves 1420 AOT owner blocks and adds one SHA-validated 9-op native ARM64 function at 0x005230e0; expected 1421 after matching ELF import. LV2 syscall 144 timezone uses real OS timezone, two BE s32 outputs; native host has 1 AOT and 2 fallback steps, physical iPhone proof pending." > m78-actions-status.txt
+          grep -Fq 'M7.33: actual iOS LV2 144 registration' m78-aot-status.txt
+          grep -Eq ' [Tt] _ar_lv2_bind_bootstrap_syscalls$' m78-owner-aot-linked-symbols.txt
+          grep -Eq ' [Tt] _ar_lv2_timezone$' m78-owner-aot-linked-symbols.txt
+          echo "M7.33: previous iPhone M7.32 missed syscall 144 registration. Shared bootstrap binder now tested on iOS and host; 1421 native owner AOT entries retained; gameplay and RSX still pending." > m78-actions-status.txt
           test -s AscensionRecompProbe-0.6.14-unsigned.ipa
           /usr/libexec/PlistBuddy -c 'Print CFBundleShortVersionString' ios-probe/Payload/AscensionRecompProbe.app/Info.plist | grep -Fx 0.6.14
           /usr/bin/unzip -t AscensionRecompProbe-0.6.14-unsigned.ipa | tee m42-ipa-integrity.log
@@ -1088,7 +1096,7 @@ jobs:
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: AscensionRecomp-M7.32-Native-Timezone-AOT
+          name: AscensionRecomp-M7.33-LV2-144-Production
           if-no-files-found: warn
           retention-days: 14
           path: |
@@ -1301,6 +1309,7 @@ jobs:
             m732-owner-arm64-symbols.log
             m732-owner-arm64-file.log
             m732-native-host.log
+            m733-bindings-source.log
             m78-stage-tests.log
             m78-lv2-host.log
             m78-owner-aot-object-symbols.txt
