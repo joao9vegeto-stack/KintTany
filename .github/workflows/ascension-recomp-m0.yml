@@ -1,4 +1,4 @@
-name: AscensionRecomp M7.16 - authentic 15-opcode ARM64 branch and dual-path PPC inventory
+name: AscensionRecomp M7.17 - bounded PPC callgraph and measured ARM64 AOT dispatch
 
 on:
   push:
@@ -635,6 +635,17 @@ jobs:
           ./m716-native-host 2>&1 | tee m716-native-host.log
           grep -Fxq 'M7.16 authentic 15-word ARM64 PPC branch, memory, CR0 and XER tests PASS' m716-native-host.log
           python3 -m unittest discover -s tests -p test_m716_branch_integrity.py -v 2>&1 | tee m716-integrity-tests.log
+      - name: M7.17 native 3000-entry AOT hash-index + dispatch trace + PPC graph
+        run: |
+          set -euo pipefail
+          clang -std=c11 -O2 -Wall -Wextra -Werror \
+            -I upstream/runtime/ppu -I runtime \
+            runtime/ppu_bridge.c runtime/ppu_m712_exec_window.c \
+            runtime/ppu_m717_graph.c tests/host_m717_graph_trace.c \
+            -o m717-native-host
+          ./m717-native-host 2>&1 | tee m717-native-host.log
+          grep -Fxq 'M7.17 bounded PPC graph, 3000-entry hashed ARM64 index and real AOT trace PASS' m717-native-host.log
+          python3 -m unittest discover -s tests -p test_m717_architecture.py -v 2>&1 | tee m717-architecture-tests.log
       - name: M7.11 verify and stage 59 real PPU AOT entries before iOS linking
         env:
           ASCENSION_AOT_SOURCE_GZIP_B64: ${{ secrets.ASCENSION_AOT_SOURCE_GZIP_B64 }}
@@ -654,7 +665,8 @@ jobs:
           grep -Fq 'M7.14: +1 ELF-verified static ARM64 fragment' m78-aot-status.txt
           grep -Fq 'M7.15: +1 ELF-verified load/store ARM64 entry' m78-aot-status.txt
           grep -Fq 'M7.16: +1 verified native 15-instruction PPC block' m78-aot-status.txt
-          echo "M7.16: $((ASCENSION_AOT_EXPECTED_SYMBOL_COUNT+4)) ARM64 AOT entrypoints (64 owner secret + M7.13-M7.16); authentic 15-opcode BEQ, dual-path PPC inventory; on-device proof pending" > m78-actions-status.txt
+          grep -Fq 'M7.17: static bounded PPC reachability + actual ARM64 AOT dispatch telemetry' m78-aot-status.txt
+          echo "M7.17: 68 AOT registered (64 owner plus 4 confirmed blocks); faster indexed dispatch, measured execution and bounded static PPC callgraph. New game AOT count unchanged; requires private ELF for next bulk generation" > m78-actions-status.txt
           test -s AscensionRecompProbe-0.6.14-unsigned.ipa
           /usr/libexec/PlistBuddy -c 'Print CFBundleShortVersionString' ios-probe/Payload/AscensionRecompProbe.app/Info.plist | grep -Fx 0.6.14
           /usr/bin/unzip -t AscensionRecompProbe-0.6.14-unsigned.ipa | tee m42-ipa-integrity.log
@@ -903,6 +915,8 @@ jobs:
             m715-regressions.log
             m716-native-host.log
             m716-integrity-tests.log
+            m717-native-host.log
+            m717-architecture-tests.log
             m78-stage-tests.log
             m78-lv2-host.log
             m78-owner-aot-object-symbols.txt

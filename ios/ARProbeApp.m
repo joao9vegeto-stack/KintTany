@@ -4,6 +4,9 @@
 #import "ARMetalView.h"
 #import <UniformTypeIdentifiers/UniformTypeIdentifiers.h>
 #import <CommonCrypto/CommonDigest.h>
+#include "../runtime/ppu_bridge.h"
+#include "../runtime/ppu_m717_graph.h"
+extern void ar_m717_last_aot_trace(ar_aot_trace *);
 extern int ar_private_elf_inspect(const unsigned char*,size_t,unsigned int[5]);
 extern int ar_m70_native_runtime_probe(const unsigned char*,size_t,unsigned int,unsigned int[16]);
 extern int ar_m712_exec_window(const unsigned char*,size_t,unsigned int,unsigned int[6]);
@@ -562,7 +565,7 @@ extern int ar_probe_rsx_texture_cache_mutation(unsigned swizzled,unsigned int ou
                                   "5 toques: TEXTURA por NV4097/cache/Metal\n"
                                   "Sem arquivos do jogo.";
                 self.status.text=@"ASCENSIONRECOMP · NPUA80918\n"
-                                  "M7.16 · recompilação ARM64 nativa\n"
+                                  "M7.17 · recompilação ARM64 nativa\n"
                                   "Importe GOWA.ELF para executar o código recompilado.\n"
                                   "Inicialização parcial, ainda sem gameplay.\n"
                                   "Ferramentas RSX estão na aba RSX / Metal.";
@@ -1208,19 +1211,64 @@ extern int ar_probe_rsx_texture_cache_mutation(unsigned swizzled,unsigned int ou
             "M4/M5 são testes sintéticos Metal, não menu do jogo.\n"];
        frontierReport=batch;
     }
+    /* M7.17: distinguish actually executed ARM64 AOT entrypoints from
+     * possible static PPC edges. This operates on the locally imported,
+     * already SHA-256-authenticated owner ELF. No code is executed here. */
+    ar_aot_trace measured={0};
+    ar_m717_last_aot_trace(&measured);
+    uint32_t roots[10]={0},nr=0;
+    if(native[7])roots[nr++]=native[7];
+    if(native[1])roots[nr++]=native[1];
+    for(uint32_t i=0;i<measured.trace_count && nr<10u;i++){
+       const uint32_t at=measured.trace_count-1u-i;
+       const uint32_t pc=measured.trace_pcs[at];
+       BOOL seen=NO;
+       for(uint32_t j=0;j<nr;j++)if(roots[j]==pc)seen=YES;
+       if(pc && !seen)roots[nr++]=pc;
+    }
+    ar_m717_graph graph={0};
+    int graphRC=(nr && nativeRC==0) ?
+       ar_m717_walk(data.bytes,data.length,roots,nr,2048u,&graph):-1;
+    NSMutableString *graphReport=[NSMutableString stringWithFormat:
+      @"\nM7.17 — COBERTURA ARM64 REAL + GRAFO PPC ESTÁTICO\n"
+       "Entradas vinculadas=%u · despachos ARM64 executados=%u\n"
+       "Entradas ARM64 distintas executadas=%u · HLEs executadas=%u\n"
+       "Último AOT sem tradução=0x%08X · orçamento nativo=%u\n"
+       "Grafo PPC somente leitura: resultado=%d · nós=%u/2048\n"
+       "Arestas possíveis=%u · chamadas diretas=%u · condicionais=%u\n"
+       "Desvios indiretos=%u · syscalls=%u · PCs inválidos=%u · limite=%u\n"
+       "Candidatos de chamadas diretas confirmados em PT_LOAD X=%u\n",
+       native[5],measured.aot_dispatches,measured.unique_aot,
+       measured.hle_dispatches,measured.unresolved_pc,
+       measured.max_budget,graphRC,graph.inspected,graph.edges,
+       graph.direct_calls,graph.conditional,graph.indirect,
+       graph.syscalls,graph.invalid_pc,graph.saturated,graph.call_count];
+    for(uint32_t gi=0;gi<graph.call_count;gi++){
+       [graphReport appendFormat:@"CALL_CANDIDATE 0x%08X\n",graph.calls[gi]];
+    }
+    [graphReport appendString:
+       @"CALL_CANDIDATE é um destino de salto observado no ELF, NÃO"
+        " uma função recompilada ou executada. Cobertura percentual do"
+        " jogo ainda desconhecida. Nenhum RSX real demonstrado.\n"];
+    [graphReport appendString:@"Sequência recente de AOTs nativos executados:\n"];
+    for(uint32_t ti=0;ti<measured.trace_count;ti++){
+       [graphReport appendFormat:@"AOT_EXEC 0x%08X\n",measured.trace_pcs[ti]];
+    }
+    frontierReport=[frontierReport stringByAppendingString:graphReport];
     /* M7.15: keep verified instruction batch available even when legacy
      * PPU48 returns success and skips the error-detail report branch. */
     self.ppuBatchReport=((int)native[6]==-3 && native[7] && pendingMatch!=0)
                         ? frontierReport : nil;
     self.ppuBatchButton.enabled=(self.ppuBatchReport.length>0);
     self.ppuSummary=[NSString stringWithFormat:
-       @"ASCENSIONRECOMP M7.16 · NPUA80918\n"
+       @"ASCENSIONRECOMP M7.17 · NPUA80918\n"
         "RECOMPILAÇÃO ESTÁTICA ARM64\n"
         "Entradas AOT vinculadas: %u\n"
         "ELF: %@ · entrada 0x%08X\n"
         "Execução nativa: %d · TLS r13=0x%08X\n"
         "SYSUTIL core vinculado=%@ · mapeamentos guest=%@\n"
         "%@\n"
+        "M7.17: consulte cobertura AOT e grafo no botão Lote PPC.\n"
         "RSX do Ascension: não demonstrado (M4/M5 sintéticos).\n"
         "Estado: inicialização parcial, sem gameplay.\n"
         "Diagnósticos legados: seção avançada.",

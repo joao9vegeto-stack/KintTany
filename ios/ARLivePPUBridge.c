@@ -30,6 +30,9 @@ extern int ar_private_import_match(const uint8_t*,size_t,uint32_t,uint32_t[4],ch
 extern int ar_private_import_find_nid(const uint8_t*,size_t,uint32_t,const char*,uint32_t[4],char[48]);
 
 enum { AR_NATIVE_LIMIT=128u*1024u*1024u, AR_NATIVE_RESERVE=0x20000u };
+/* Native AOT trace copied before ar_bridge_shutdown; no game code stored. */
+static ar_aot_trace last_run_trace;
+void ar_m717_last_aot_trace(ar_aot_trace *out){if(out)*out=last_run_trace;}
 static uint16_t g16(const uint8_t*p){return (uint16_t)(((uint16_t)p[0]<<8)|p[1]);}
 static uint32_t g32(const uint8_t*p){return ((uint32_t)p[0]<<24)|((uint32_t)p[1]<<16)|((uint32_t)p[2]<<8)|p[3];}
 static uint64_t g64(const uint8_t*p){return ((uint64_t)g32(p)<<32)|g32(p+4);}
@@ -39,6 +42,7 @@ int ar_m70_native_runtime_probe(const uint8_t*d,size_t len,
                                  uint32_t guest_stub,uint32_t out[16]){
  if(!out)return -20;
  memset(out,0,16u*sizeof(*out));
+ memset(&last_run_trace,0,sizeof(last_run_trace));
  if(!d||len<64u)return -20;
  if(memcmp(d,"\177ELF",4)||d[4]!=2u||d[5]!=2u||d[6]!=1u||
     g16(d+16)!=2u||g16(d+18)!=21u||g32(d+20)!=1u)
@@ -221,6 +225,7 @@ int ar_m70_native_runtime_probe(const uint8_t*d,size_t len,
  if(out[5])out[6]=(uint32_t)ar_run(&ctx,image.entry_code,4096u);
  else out[6]=(uint32_t)ar_run(&ctx,image.entry_code,128u);
  out[7]=ar_last_unresolved();
+ ar_trace_snapshot(&last_run_trace);
  
  if(out[5])out[12]=(uint32_t)ctx.gpr[13];
  if((int32_t)out[6]==AR_UNRESOLVED && out[7]==image.entry_code)
