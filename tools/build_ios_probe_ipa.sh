@@ -132,34 +132,10 @@ for pc in \
   0052e544 00531a74 00531cac 00539998 00539a50; do
   grep -Fq "_ar_game_ppu_${pc}" m78-owner-aot-linked-symbols.txt
 done
-# M7.12: require every registered owner entry as an actual linked native symbol.
-test -s "${ASCENSION_AOT_SYMBOL_LIST:?}"
-test "${ASCENSION_AOT_EXPECTED_SYMBOL_COUNT:?}" -ge 60
-defined_count="$(grep -Ec ' [Tt] _ar_game_ppu_[0-9a-f]{8}
-file "$APP/AscensionRecompProbe" | tee m41-executable-file.txt
-xcrun lipo -info "$APP/AscensionRecompProbe" | tee m41-executable-arch.txt
-/usr/libexec/PlistBuddy -c 'Print CFBundleIdentifier' "$APP/Info.plist"
-(cd ios-probe && zip -q -r ../AscensionRecompProbe-0.6.14-unsigned.ipa Payload)
-test -s AscensionRecompProbe-0.6.14-unsigned.ipa
-shasum -a 256 AscensionRecompProbe-0.6.14-unsigned.ipa > m41-ipa-sha256.txt
-echo 'UNSIGNED DIAGNOSTIC APP: UIKit CAMetalLayer + real PS3Recomp Metal backend; NO GOWA GAME included' > m41-status.txt
- m78-owner-aot-linked-symbols.txt || true)"
-test "$defined_count" -eq "$ASCENSION_AOT_EXPECTED_SYMBOL_COUNT"
-grep -Eq ' [Tt] _ar_game_ppu_002c1664
-file "$APP/AscensionRecompProbe" | tee m41-executable-file.txt
-xcrun lipo -info "$APP/AscensionRecompProbe" | tee m41-executable-arch.txt
-/usr/libexec/PlistBuddy -c 'Print CFBundleIdentifier' "$APP/Info.plist"
-(cd ios-probe && zip -q -r ../AscensionRecompProbe-0.6.14-unsigned.ipa Payload)
-test -s AscensionRecompProbe-0.6.14-unsigned.ipa
-shasum -a 256 AscensionRecompProbe-0.6.14-unsigned.ipa > m41-ipa-sha256.txt
-echo 'UNSIGNED DIAGNOSTIC APP: UIKit CAMetalLayer + real PS3Recomp Metal backend; NO GOWA GAME included' > m41-status.txt
- m78-owner-aot-linked-symbols.txt
-while IFS= read -r symbol; do
-  test -n "$symbol"
-  grep -Eq " [Tt] _${symbol}$" m78-owner-aot-linked-symbols.txt
-done < "$ASCENSION_AOT_SYMBOL_LIST"
+# M7.12: fail the build unless EVERY manifest entry is defined code in the final Mach-O.
+python3 tools/verify_m712_macho.py m78-owner-aot-linked-symbols.txt "${ASCENSION_AOT_SYMBOL_LIST:?}" "${ASCENSION_AOT_EXPECTED_SYMBOL_COUNT:?}"
 echo 'M7.11: 59 REAL PPU ARM64 functions verified inside final iOS Mach-O; runtime execution on iPhone not yet tested' > m78-aot-status.txt
-echo "M7.12: ${defined_count} REAL native game PPU entries linked in iPhoneOS Mach-O, including 0x002C1664; device execution pending" >> m78-aot-status.txt
+echo "M7.12: ${ASCENSION_AOT_EXPECTED_SYMBOL_COUNT} REAL native ARM64 PPC entries linked, including 0x002C1664; iPhone proof pending" >> m78-aot-status.txt
 file "$APP/AscensionRecompProbe" | tee m41-executable-file.txt
 xcrun lipo -info "$APP/AscensionRecompProbe" | tee m41-executable-arch.txt
 /usr/libexec/PlistBuddy -c 'Print CFBundleIdentifier' "$APP/Info.plist"
