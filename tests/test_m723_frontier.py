@@ -36,6 +36,10 @@ class FrontierStageM723(unittest.TestCase):
                "AscensionPrivateBulk2.o","AscensionPrivateFrontier.o"]:
    self.assertIn(name,build)
   self.assertIn("_ar_m722_ppu_003c511c$",build)
+  self.assertIn("grep -Eq ' [Tt] _ar_m722_ppu_003c511c$' m723-frontier-object-symbols.txt",build)
+  self.assertIn("grep -Eq ' [Tt] _ar_m722_install_sha256$' m723-frontier-object-symbols.txt",build)
+  self.assertEqual(build.count("# Stage the native PPU bridge"),1)
+  self.assertLess(len(build.splitlines()),290)
   self.assertIn("ASCENSION_AOT_FRONTIER_GZIP_B64",workflow)
   self.assertIn('ASCENSIONRECOMP M7.23',ui)
   self.assertIn('initForExportingURLs:@[url] asCopy:YES',ui)
