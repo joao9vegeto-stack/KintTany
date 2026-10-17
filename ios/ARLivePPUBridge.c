@@ -22,6 +22,7 @@ extern int ar_private_aot_install_sha256(const unsigned char*,size_t);
 
 extern int ar_m711_bind_memory(const uint8_t*,size_t,uint32_t*);
 extern int ar_m711_bind_sysutil(const uint8_t*,size_t,uint32_t*);
+extern int ar_m713_register_fragment(const uint8_t*,size_t);
 extern int ar_private_import_match(const uint8_t*,size_t,uint32_t,uint32_t[4],char[48]);
 extern int ar_private_import_find_nid(const uint8_t*,size_t,uint32_t,const char*,uint32_t[4],char[48]);
 
@@ -104,6 +105,13 @@ int ar_m70_native_runtime_probe(const uint8_t*d,size_t len,
  }
  const int aot_rc=ar_private_aot_install_sha256(digest,sizeof(digest));
  if(aot_rc!=AR_OK){ar_bridge_shutdown();return -29;}
+#ifdef ASCENSION_M711_OWNER_AOT
+ /* The 64 owner entries are authenticated first. Accept the native four-opcode
+  * continuation only if imported executable ELF bytes exactly match. */
+ if(ar_m713_register_fragment(d,len)!=AR_OK){
+   ar_bridge_shutdown();return -32;
+ }
+#endif
 #endif
  out[5]=(uint32_t)ar_registered_count(); /* genuine linked game AOT only */
 
