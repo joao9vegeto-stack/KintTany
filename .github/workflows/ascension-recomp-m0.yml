@@ -54,6 +54,22 @@ jobs:
           git -C upstream checkout a2c20108af45174dbb7d3e2f87f6acaaef09c6b4
           test "$(git -C upstream rev-parse HEAD)" = "a2c20108af45174dbb7d3e2f87f6acaaef09c6b4"
           python3 tools/enable_macos_boot_smoke_null_backend.py upstream
+      - name: M7.21 prove PPC64 RLWIMI RLWNM RLDIC RLDIMI masking and fail-closed
+        run: |
+          set -euo pipefail
+          clang -std=c11 -O2 -Wall -Wextra -Werror -fsanitize=undefined \
+            -I upstream/runtime/ppu -I runtime \
+            runtime/ppu_bridge.c runtime/ppu_m712_exec_window.c \
+            runtime/ppu_m720_fallback.c tests/host_m721_rotate.c \
+            -o m721-host-sanitized
+          ./m721-host-sanitized 2>&1 | tee m721-rotate-sanitized.log
+          grep -Fxq 'M7.21 synthetic PPC64 rlwimi/rlwinm/rlwnm/rldic/rldimi masks, CR0 and fail-closed PASS' m721-rotate-sanitized.log
+          clang -std=c11 -O0 -Wall -Wextra -Werror \
+            -I upstream/runtime/ppu -I runtime \
+            runtime/ppu_bridge.c runtime/ppu_m712_exec_window.c \
+            runtime/ppu_m720_fallback.c tests/host_m721_rotate.c -o m721-host-unoptimized
+          ./m721-host-unoptimized 2>&1 | tee m721-rotate-unoptimized.log
+          python3 -m unittest discover -s tests -p test_m721_rotate_mask.py -v 2>&1 | tee m721-regressions.log
       - name: M5.0 fetch pinned open source shader compiler sources
         run: |
           set -euo pipefail
@@ -657,22 +673,6 @@ jobs:
           ./m720-native-host 2>&1 | tee m720-native-host.log
           grep -Fxq 'M7.20 signed hybrid AOT priority, PPC divwu/mullw/subfc, fail-closed and budget PASS' m720-native-host.log
           python3 -m unittest discover -s tests -p test_m720_hybrid.py -v 2>&1 | tee m720-hybrid-tests.log
-      - name: M7.21 prove PPC64 RLWIMI RLWNM RLDIC RLDIMI masking and fail-closed
-        run: |
-          set -euo pipefail
-          clang -std=c11 -O2 -Wall -Wextra -Werror -fsanitize=undefined \
-            -I upstream/runtime/ppu -I runtime \
-            runtime/ppu_bridge.c runtime/ppu_m712_exec_window.c \
-            runtime/ppu_m720_fallback.c tests/host_m721_rotate.c \
-            -o m721-host-sanitized
-          ./m721-host-sanitized 2>&1 | tee m721-rotate-sanitized.log
-          grep -Fxq 'M7.21 synthetic PPC64 rlwimi/rlwinm/rlwnm/rldic/rldimi masks, CR0 and fail-closed PASS' m721-rotate-sanitized.log
-          clang -std=c11 -O0 -Wall -Wextra -Werror \
-            -I upstream/runtime/ppu -I runtime \
-            runtime/ppu_bridge.c runtime/ppu_m712_exec_window.c \
-            runtime/ppu_m720_fallback.c tests/host_m721_rotate.c -o m721-host-unoptimized
-          ./m721-host-unoptimized 2>&1 | tee m721-rotate-unoptimized.log
-          python3 -m unittest discover -s tests -p test_m721_rotate_mask.py -v 2>&1 | tee m721-regressions.log
       - name: M7.11 verify and stage 59 real PPU AOT entries before iOS linking
         env:
           ASCENSION_AOT_SOURCE_GZIP_B64: ${{ secrets.ASCENSION_AOT_SOURCE_GZIP_B64 }}
