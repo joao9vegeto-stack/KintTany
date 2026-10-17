@@ -7,7 +7,7 @@ ROOT=Path(__file__).resolve().parents[1]
 class M710UI(unittest.TestCase):
     def test_native_first_retains_legacy_in_advanced_view(self):
         ui=(ROOT/"ios/ARProbeApp.m").read_text()
-        self.assertIn('header.text=@"ASCENSIONRECOMP   ·   M7.12"',ui)
+        self.assertIn('header.text=@"ASCENSIONRECOMP   ·   M7.11"',ui)
         for key in (
             "Entradas AOT vinculadas: %u",
             "Diagnóstico avançado · M6/M7",
