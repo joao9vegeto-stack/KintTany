@@ -17,6 +17,12 @@ static uint16_t aot_slot[AR_AOT_INDEX_SIZE];
 static uint8_t trace_seen[MAX_FUNCS];
 static uint32_t trace_ring[AR_AOT_TRACE_PCS],trace_total,trace_unique;
 static uint32_t trace_hle,trace_pending,trace_budget;
+/* Experimental signed PPC fallback. No JIT, never register as native AOT. */
+static const uint8_t *fb_elf;
+static ar_ppc_fallback_fn fb_eval;
+static size_t fb_elf_size;
+static uint32_t fb_cap,fb_steps,fb_pc,fb_op,fb_bad_pc,fb_bad_op;
+
 static uint32_t aot_hash(uint32_t pc){
   return (((pc>>2)*UINT32_C(2654435761)) & (AR_AOT_INDEX_SIZE-1u));
 }
@@ -29,6 +35,11 @@ void ar_trace_snapshot(ar_aot_trace *out) {
  out->hle_dispatches=trace_hle;
  out->max_budget=trace_budget;
  out->trace_count=trace_total<AR_AOT_TRACE_PCS?trace_total:AR_AOT_TRACE_PCS;
+ out->fallback_steps=fb_steps;out->fallback_last_pc=fb_pc;
+ out->fallback_last_opcode=fb_op;
+ out->fallback_unsupported_pc=fb_bad_pc;
+ out->fallback_unsupported_word=fb_bad_op;
+ out->fallback_step_limit=fb_cap;
  const uint32_t start=trace_total-out->trace_count;
  for(uint32_t i=0;i<out->trace_count;i++)
    out->trace_pcs[i]=trace_ring[(start+i)&(AR_AOT_TRACE_PCS-1u)];
@@ -46,6 +57,12 @@ static struct {uint32_t start;size_t size;uint8_t *bytes;} extra[AR_EXTERNAL_MAX
 static size_t nextra;
 static int fault;
 static uint32_t missing,budget,depth;
+int ar_ppc_fallback_attach(const uint8_t*elf,size_t len,uint32_t limit,
+                            ar_ppc_fallback_fn evaluate){
+ if(!mem||!elf||!evaluate||len<64u||!limit||limit>4096u||depth)
+    return AR_BAD_ARGS;
+ fb_elf=elf;fb_elf_size=len;fb_cap=limit;fb_eval=evaluate;return AR_OK;
+}
 int ar_bridge_init(size_t n) {
   if(!n||n>MAX_MEM)return AR_BAD_ARGS;
   ar_bridge_shutdown();
@@ -58,6 +75,7 @@ void ar_bridge_shutdown(void){
  memset(trace_seen,0,sizeof(trace_seen));memset(trace_ring,0,sizeof(trace_ring));
  trace_total=0;trace_unique=0;trace_hle=0;trace_pending=0;trace_budget=0;
  nimports=0;nhandlers=0;nsyscalls=0;missing_nid=0;missing_syscall=0;fault=0;missing=0;budget=0;depth=0;
+ fb_elf=0;fb_eval=0;fb_elf_size=0;fb_cap=0;fb_steps=0;fb_pc=0;fb_op=0;fb_bad_pc=0;fb_bad_op=0;
 }
 int ar_last_error(void){return fault;}
 uint32_t ar_last_missing_nid(void){return missing_nid;}
@@ -211,6 +229,31 @@ static int dispatch(ppu_context *c,uint64_t pc){
         if(rc){result=fault=AR_HLE_FAILURE;break;}
         c->cia=c->lr;result=AR_OK;break;
       }
+      /* M7.20: only if the user-imported ELF was authenticated and the
+       * bridge explicitly attached it. Native AOT always wins lookup.
+       * Each interpreted PPC instruction consumes normal guest budget. */
+      if(fb_elf && fb_eval) {
+        if(fb_steps>=fb_cap){
+          missing=(uint32_t)pc;trace_pending=(uint32_t)pc;
+          result=fault=AR_PPC_LIMIT;break;
+        }
+        uint32_t word=0;
+        const int step=fb_eval(c,fb_elf,fb_elf_size,
+                               (uint32_t)pc,&word);
+        if(step==AR_TAIL || step==AR_OK){
+          fb_steps++;fb_pc=(uint32_t)pc;fb_op=word;
+          if(fault){result=fault;break;}
+          if(step==AR_TAIL){pc=c->cia;continue;}
+          result=AR_OK;break;
+        }
+        if(step==AR_PPC_UNSUPPORTED){
+          fb_bad_pc=(uint32_t)pc;fb_bad_op=word;
+          missing=(uint32_t)pc;trace_pending=(uint32_t)pc;
+          result=fault=AR_PPC_UNSUPPORTED;break;
+        }
+        missing=(uint32_t)pc;trace_pending=(uint32_t)pc;
+        result=fault=step;break;
+      }
       missing=(uint32_t)pc;trace_pending=(uint32_t)pc;
       result=fault=AR_UNRESOLVED;break;
     }
@@ -234,5 +277,6 @@ int ar_run(ppu_context *c,uint32_t pc,uint32_t ticks){
   fault=0;missing=0;missing_nid=0;missing_syscall=0;budget=ticks;
   memset(trace_seen,0,sizeof(trace_seen));memset(trace_ring,0,sizeof(trace_ring));
   trace_total=0;trace_unique=0;trace_hle=0;trace_pending=0;trace_budget=ticks;
+  fb_steps=0;fb_pc=0;fb_op=0;fb_bad_pc=0;fb_bad_op=0;
   return dispatch(c,pc);
 }
