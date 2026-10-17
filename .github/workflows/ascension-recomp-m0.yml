@@ -1,4 +1,4 @@
-name: AscensionRecomp M7.25 - nested PPC call provenance and SRAWI AOT
+name: AscensionRecomp M7.26 - PS3 LV2 147 timebase and PPC64 DIVDU
 
 on:
   push:
@@ -62,6 +62,11 @@ jobs:
           set -euo pipefail
           python3 -m unittest discover -s tests -p test_m725_srawi.py -v 2>&1 | tee m725-srawi-aot.log
           grep -Fq 'Ran 5 tests' m725-srawi-aot.log
+      - name: M7.26 verify static PPC64 DIVDU native C lifter
+        run: |
+          set -euo pipefail
+          python3 -m unittest discover -s tests -p test_m726_divdu_aot.py -v 2>&1 | tee m726-divdu-aot.log
+          grep -Fq 'Ran 4 tests' m726-divdu-aot.log
       - name: Fetch pinned ps3recomp source
         run: |
           set -euo pipefail
@@ -103,6 +108,16 @@ jobs:
             runtime/ppu_m720_fallback.c tests/host_m725_nested_fault.c -o m725-nested-host
           ./m725-nested-host 2>&1 | tee m725-nested-host.log
           grep -Fxq 'M7.25 deep PPC BL fault origin + SRAWI signed carry and CR0 PASS' m725-nested-host.log
+      - name: M7.26 verify LV2 syscall 147, DIVDU and unknown syscall provenance
+        run: |
+          set -euo pipefail
+          clang -std=c11 -O2 -Wall -Wextra -Werror -fsanitize=undefined \
+            -I upstream/runtime/ppu -I runtime \
+            runtime/ppu_bridge.c runtime/ppu_m712_exec_window.c \
+            runtime/ppu_m720_fallback.c runtime/ppu_lv2_bootstrap.c \
+            tests/host_m726_timebase.c -o m726-timebase-host
+          ./m726-timebase-host 2>&1 | tee m726-timebase-host.log
+          grep -Fxq 'M7.26 PS3 LV2 147 timebase, DIVDU64, missing syscall PC, fail-closed PASS' m726-timebase-host.log
       - name: M5.0 fetch pinned open source shader compiler sources
         run: |
           set -euo pipefail
@@ -777,7 +792,7 @@ jobs:
           grep -Fq 'M7.20: experimental bounded PPC fallback' m78-aot-status.txt
           grep -Fq 'M7.21: PowerPC64 rlwimi/rlwnm/rldic/rldimi mask semantics verified' m78-aot-status.txt
           grep -Fq 'M7.23: +1 owner-authenticated native 25-opcode block' m78-aot-status.txt
-          echo "M7.25: original 1419 authenticated ARM64 PPC AOT preserved; nested BL true-fault provenance and SRAWI PPC64; no new owner AOT claimed; iPhone boot test needed" > m78-actions-status.txt
+          echo "M7.26: original 1419 authenticated ARM64 PPC AOT preserved; LV2 syscall 147 (79.8MHz) bound; DIVDU supported in AOT/fallback; future LV2 number and PC tracked; physical iPhone test pending" > m78-actions-status.txt
           test -s AscensionRecompProbe-0.6.14-unsigned.ipa
           /usr/libexec/PlistBuddy -c 'Print CFBundleShortVersionString' ios-probe/Payload/AscensionRecompProbe.app/Info.plist | grep -Fx 0.6.14
           /usr/bin/unzip -t AscensionRecompProbe-0.6.14-unsigned.ipa | tee m42-ipa-integrity.log
@@ -863,7 +878,7 @@ jobs:
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: AscensionRecomp-M7.25-PPC-call-origin
+          name: AscensionRecomp-M7.26-LV2-timebase
           if-no-files-found: warn
           retention-days: 14
           path: |
@@ -1048,6 +1063,8 @@ jobs:
             m724-neg-host.log
             m725-srawi-aot.log
             m725-nested-host.log
+            m726-divdu-aot.log
+            m726-timebase-host.log
             m78-stage-tests.log
             m78-lv2-host.log
             m78-owner-aot-object-symbols.txt

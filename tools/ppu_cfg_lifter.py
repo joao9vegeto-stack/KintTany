@@ -277,6 +277,14 @@ def lift(words: list[int] | tuple[int, ...], base: int, name: str = 'ppu_sample'
                 e(f'{reg(d)}=(u64)(int64_t)(s32)(u32)((u64)(u32){reg(a)} * (u64)(u32){reg(b)});')
                 if rc:record(cmp_expr(f'(int64_t){reg(d)}','0LL'))
                 hist['mullw']+=1
+            elif xo==457:
+                # DIVDU: unsigned 64-bit quotient, guard division by zero.
+                e(f'u64 divdu_divisor_{i}={reg(b)};')
+                e(f'if(!divdu_divisor_{i}) return -12;')
+                e(f'u64 divdu_dividend_{i}={reg(a)};')
+                e(f'{reg(d)}=divdu_dividend_{i}/divdu_divisor_{i};')
+                if rc:record(cmp_expr(f'(int64_t){reg(d)}','0LL'))
+                hist['divdu']+=1
             elif xo==459:
                 # divwu: undefined division by zero fails closed.
                 e(f'u32 divisor_{i}=(u32){reg(b)};')

@@ -211,7 +211,8 @@ int ar_m70_native_runtime_probe(const uint8_t*d,size_t len,
  }
 
  
- if(ar_bind_syscall(0x160u,ar_lv2_user_memory_size)!=AR_OK){
+ if(ar_bind_syscall(0x160u,ar_lv2_user_memory_size)!=AR_OK ||
+    ar_bind_syscall(147u,ar_lv2_timebase_frequency)!=AR_OK){
    ar_bridge_shutdown();return -30;
  }
  uint32_t tmimp[4]={0}; char tmlib[48]={0};
