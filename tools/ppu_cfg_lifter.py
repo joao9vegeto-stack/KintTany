@@ -274,7 +274,16 @@ def lift(words: list[int] | tuple[int, ...], base: int, name: str = 'ppu_sample'
             hist['store']+=1
         elif op==31:
             xo=(w>>1)&1023;rc=w&1
-            if xo==19:
+            if xo==144:
+                fxm=(w>>12)&255
+                l=(w>>20)&1
+                if (w&0x801) or (l and (fxm==0 or fxm&(fxm-1))):
+                    raise Unsupported('invalid mtcrf/mtocrf FXM, L, reserved or Rc')
+                mask=sum((0xf0000000>>(4*field))
+                         for field in range(8) if fxm&(0x80>>field))
+                e(f'c->cr=(c->cr & ~0x{mask:08x}U) | ((u32){reg(d)} & 0x{mask:08x}U);')
+                hist['mtocrf' if l else 'mtcrf']+=1
+            elif xo==19:
                 if w!=(0x7c000026 | (d<<21)):
                     raise Unsupported('invalid MFCR/MFOCRF/reserved encoding')
                 e(f'{reg(d)}=(u64)c->cr;')
