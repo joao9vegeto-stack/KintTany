@@ -77,6 +77,10 @@ xcrun --sdk iphoneos clang -target arm64-apple-ios17.0 -isysroot "$SDK" \
 xcrun --sdk iphoneos clang -target arm64-apple-ios17.0 -isysroot "$SDK" \
     -std=c11 -O2 -Wall -Wextra -Werror \
     -c runtime/ppu_timebase.c -o ios-probe/ppu_timebase.o
+# M7.12: native fail-closed guest ELF executable read-only inspection.
+xcrun --sdk iphoneos clang -target arm64-apple-ios17.0 -isysroot "$SDK" \
+    -std=c11 -O2 -Wall -Wextra -Werror \
+    -c runtime/ppu_m712_exec_window.c -o ios-probe/ppu_m712_exec_window.o
 # M7.11: native SYSUTIL and sparse virtual memory. No game ELF embedded.
 M711_OBJECTS=()
 for module in ppu_mmapper ppu_mmapper_reserve ppu_mmapper_alloc \
@@ -98,7 +102,7 @@ xcrun --sdk iphoneos clang++ -target arm64-apple-ios17.0 \
     ios-probe/ARLivePPUBridge.o ios-probe/ARLivePPUContinuous.o \
     ios-probe/ARNativePPUContinuous.o ios-probe/ppu_lwmutex.o \
     ios-probe/ppu_lv2_bootstrap.o \
-    ios-probe/ppu_timebase.o \
+    ios-probe/ppu_timebase.o ios-probe/ppu_m712_exec_window.o \
     ${M711_OBJECTS[@]+"${M711_OBJECTS[@]}"} \
     ${AOT_OBJECTS[@]+"${AOT_OBJECTS[@]}"} \
     ios-ppu-core/libAscensionPPUCore-ios-arm64.a \
@@ -132,7 +136,7 @@ echo 'M7.11: 59 REAL PPU ARM64 functions verified inside final iOS Mach-O; runti
 file "$APP/AscensionRecompProbe" | tee m41-executable-file.txt
 xcrun lipo -info "$APP/AscensionRecompProbe" | tee m41-executable-arch.txt
 /usr/libexec/PlistBuddy -c 'Print CFBundleIdentifier' "$APP/Info.plist"
-(cd ios-probe && zip -q -r ../AscensionRecompProbe-0.6.14-unsigned.ipa Payload)
-test -s AscensionRecompProbe-0.6.14-unsigned.ipa
-shasum -a 256 AscensionRecompProbe-0.6.14-unsigned.ipa > m41-ipa-sha256.txt
+(cd ios-probe && zip -q -r ../AscensionRecompProbe-0.6.15-unsigned.ipa Payload)
+test -s AscensionRecompProbe-0.6.15-unsigned.ipa
+shasum -a 256 AscensionRecompProbe-0.6.15-unsigned.ipa > m41-ipa-sha256.txt
 echo 'UNSIGNED DIAGNOSTIC APP: UIKit CAMetalLayer + real PS3Recomp Metal backend; NO GOWA GAME included' > m41-status.txt
