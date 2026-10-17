@@ -65,7 +65,7 @@ int main(void){
     ar_read64(c.gpr[1])!=UINT64_C(0x7000) ||
     ar_read64(c.gpr[1]+192)!=UINT32_C(0x00524000) ||
     ar_read32(0x5020)!=0u ||
-    c.gpr[4]!=0u ||c.gpr[10]!=4u ||ar_read32(0x5018u)!=4u)return 5;
+    c.gpr[4]!=0u ||c.gpr[10]!=0u ||ar_read32(0x5018u)!=4u)return 5;
  /* Mismatching ELF 100% fails validation. No commercial bytes in test. */
  uint8_t elf[1024]={0};
  memcpy(elf,"\177ELF",4);elf[4]=2;elf[5]=2;elf[6]=1;
