@@ -25,6 +25,9 @@ uint32_t ar_last_missing_syscall(void);
 uint32_t ar_last_missing_nid(void);
 uint32_t ar_last_unresolved(void);
 size_t ar_registered_count(void);
+/* High mapped guest virtual pages; ownership managed by ppu_mmapper. */
+int ar_vm_external_map(uint32_t guest_va,uint8_t *data,size_t length);
+int ar_vm_external_unmap(uint32_t guest_va);
 int ar_vm_load(uint64_t,const void *,size_t);
 int ar_vm_zero(uint64_t,size_t);
 uint8_t ar_read8(uint64_t); uint16_t ar_read16(uint64_t);

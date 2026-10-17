@@ -1,13 +1,9 @@
-/* M7.0: actual iPhoneOS linkage to AscensionRecomp native PPU core.
- * Imports the user's own decrypted ELF into a private, temporary guest VM.
- * Never interprets a PS3 address as a native iOS pointer and never claims
- * missing AOT functions were successfully executed. */
+
 #include <stdint.h>
 #include <stddef.h>
 #include <string.h>
 #include <CommonCrypto/CommonDigest.h>
-/* A private, pre-signed AOT module is linked only in an explicit private
- * build. No weak unresolved externs are allowed by the macOS/iOS linker. */
+
 #ifdef ASCENSION_PRIVATE_AOT_LINKED
 extern int ar_private_aot_install_sha256(const unsigned char*,size_t);
 #endif
@@ -16,7 +12,11 @@ extern int ar_private_aot_install_sha256(const unsigned char*,size_t);
 #include "../runtime/ppu_tls.h" /* explicit project header, not upstream ppu_tls.h */
 #include "../runtime/ppu_lwmutex.h"
 #include "../runtime/ppu_lv2_bootstrap.h"
+#include "../runtime/ppu_mmapper.h"
+#include "../runtime/ppu_native_sysutil.h"
 
+extern int ar_m711_bind_memory(const uint8_t*,size_t,uint32_t*);
+extern int ar_m711_bind_sysutil(const uint8_t*,size_t,uint32_t*);
 extern int ar_private_import_match(const uint8_t*,size_t,uint32_t,uint32_t[4],char[48]);
 extern int ar_private_import_find_nid(const uint8_t*,size_t,uint32_t,const char*,uint32_t[4],char[48]);
 
@@ -25,14 +25,7 @@ static uint16_t g16(const uint8_t*p){return (uint16_t)(((uint16_t)p[0]<<8)|p[1])
 static uint32_t g32(const uint8_t*p){return ((uint32_t)p[0]<<24)|((uint32_t)p[1]<<16)|((uint32_t)p[2]<<8)|p[3];}
 static uint64_t g64(const uint8_t*p){return ((uint64_t)g32(p)<<32)|g32(p+4);}
 
-/* out:
- 0=loader RC, 1=entry PC, 2=TOC, 3=segments, 4=guest VM capacity,
- 5=registered AOT functions, 6=entry dispatch RC, 7=unresolved entry PC,
- 8=PRX match RC, 9=bind import RC, 10=bind HLE RC,
- 11=registered TLS HLE dispatch RC, 12=r13 after HLE,
- 13=loaded file bytes, 14=real guest first instruction word,
- 15=state bitmask: 1=ELF staged, 2=import verified, 4=real HLE,
-                   8=unknown AOT entry (expected until compiled). */
+
 int ar_m70_native_runtime_probe(const uint8_t*d,size_t len,
                                  uint32_t guest_stub,uint32_t out[16]){
  if(!out)return -20;
@@ -73,7 +66,10 @@ int ar_m70_native_runtime_probe(const uint8_t*d,size_t len,
  if(!tlsbase || tlsbase>=AR_NATIVE_LIMIT)return -27;
  const int rcinit=ar_bridge_init(cap);
  if(rcinit){out[0]=(uint32_t)rcinit;return rcinit;}
- ar_lwmutex_reset(); /* new guest process: no stale sync objects */
+ ar_lwmutex_reset();
+#ifdef ASCENSION_PRIVATE_AOT_LINKED
+ ar_mmapper_reset();ar_sysutil_reset();
+#endif /* new guest process: no stale sync objects */
  ar_lv2_bootstrap_reset();
  ppu_context ctx;
  ppu_context_init(&ctx);
@@ -83,8 +79,7 @@ int ar_m70_native_runtime_probe(const uint8_t*d,size_t len,
  if(load){ar_bridge_shutdown();return load;}
  out[15]|=1u;
  ctx.thread_id=1u; /* the current main guest thread; no fabricated game code */
- /* Use the same authentic PT_TLS process-entry ABI as M7.1 before
-  * dispatching privately compiled guest CRT instructions. */
+ 
  ctx.gpr[7]=ctx.thread_id;
  ctx.gpr[8]=tls_va;
  ctx.gpr[9]=tls_file;
@@ -95,9 +90,7 @@ int ar_m70_native_runtime_probe(const uint8_t*d,size_t len,
  out[4]=(uint32_t)cap;out[13]=(uint32_t)image.loaded_bytes;
  out[14]=ar_read32(image.entry_code);
  if(ar_last_error()!=AR_OK){ar_bridge_shutdown();return -28;}
- /* M7.4: register ONLY offline-recompiled, pre-signed game code for
-  * the exact SHA256 of the privately imported ELF. A public diagnostic
-  * IPA has no such symbol; its real game AOT count stays zero. */
+ 
 #ifdef ASCENSION_PRIVATE_AOT_LINKED
  if(len>UINT32_MAX){ar_bridge_shutdown();return -29;}
  unsigned char digest[CC_SHA256_DIGEST_LENGTH];
@@ -109,8 +102,7 @@ int ar_m70_native_runtime_probe(const uint8_t*d,size_t len,
 #endif
  out[5]=(uint32_t)ar_registered_count(); /* genuine linked game AOT only */
 
- /* Bind only the exact verified ELF PRX import identified by the private
-  * PPU trace, not hard-coded addresses or fake functions. */
+ 
  uint32_t match[4]={0};
  char module[48]={0};
  const int import_rc=guest_stub ?
@@ -125,10 +117,7 @@ int ar_m70_native_runtime_probe(const uint8_t*d,size_t len,
        if((int32_t)out[10]==AR_OK && have_tls && tls_file<=tls_mem &&
           tls_va<=UINT32_MAX &&
           ar_tls_configure(tlsbase,tlsbase+0x10000u)==AR_OK){
-          /* M7.5: a legacy HLE smoke test must never mutate the real
-           * native AOT entry context or consume its only TLS allocation.
-           * When signed functions are present, let the ACTUAL compiled
-           * process entry call its own verified HLE normally. */
+          
           if(out[5]==0u){
              ppu_context smoke=ctx;
              smoke.gpr[3]=smoke.thread_id;
@@ -145,9 +134,7 @@ int ar_m70_native_runtime_probe(const uint8_t*d,size_t len,
     }
  }
 
- /* M7.7: discover lwmutex's PRX stub from this ELF's import tables;
-  * no game address is hardcoded. The NID is a verified system ABI.
-  * Service remains functional only when guest AOT actually invokes it. */
+ 
  uint32_t lwimp[4]={0};char lwlib[48]={0};
  const int lwmatch=ar_private_import_find_nid(
     d,len,0x2f85c0efu,"sysPrxForUser",lwimp,lwlib);
@@ -159,10 +146,7 @@ int ar_m70_native_runtime_probe(const uint8_t*d,size_t len,
        out[15]|=32u; /* genuine HLE implementation now available */
  }
 
- /* M7.8: OS ABI required by the authentic signed PPU startup path.
-  * sys_time_get_system_time import must be authenticated by its PRX table,
-  * never by blindly executing an address from guest registers.
-  * 0x160 is a PS3 LV2 syscall number, not a function address. */
+ 
  if(ar_bind_syscall(0x160u,ar_lv2_user_memory_size)!=AR_OK){
    ar_bridge_shutdown();return -30;
  }
@@ -177,8 +161,7 @@ int ar_m70_native_runtime_probe(const uint8_t*d,size_t len,
        out[15]|=128u; /* OS service bound */
  }
 
- /* M7.9: bind ONLY authenticated PRX entries from the imported ELF.
-  * These are generic PS3 OS services, not interpreted game instructions. */
+ 
  struct {uint32_t nid;ar_hle_fn handler;uint32_t bit;} m79_services[] = {
     {0x350d454eu,ar_lv2_thread_get_id,0x100u},
     {0x1573dc3fu,ar_sys_lwmutex_lock,0x200u},
@@ -196,20 +179,25 @@ int ar_m70_native_runtime_probe(const uint8_t*d,size_t len,
     }
  }
 
- /* This is the actual native AOT dispatcher, NOT the 48-step interpreter.
-  * With no signed game AOT functions in the IPA it MUST return unresolved
-  * rather than executing data as ARM64 or reporting boot success. */
- /* 128 ticks remains the legacy test's exact budget. 4096 AOT ticks
-  * permit the verified multi-routine CRT prefix and fail bounded. */
+ 
+ 
+#ifdef ASCENSION_PRIVATE_AOT_LINKED
+ if(ar_m711_bind_sysutil(d,len,out)!=AR_OK ||
+    ar_m711_bind_memory(d,len,out)!=AR_OK){
+   ar_mmapper_reset();ar_bridge_shutdown();return -31;
+ }
+#endif
  if(out[5])out[6]=(uint32_t)ar_run(&ctx,image.entry_code,4096u);
  else out[6]=(uint32_t)ar_run(&ctx,image.entry_code,128u);
  out[7]=ar_last_unresolved();
- /* In AOT mode this is the r13 reached by genuine recompiled guest
-  * execution, not a separately invented HLE smoke result. The status
-  * bit for the legacy smoke remains unset. */
+ 
  if(out[5])out[12]=(uint32_t)ctx.gpr[13];
  if((int32_t)out[6]==AR_UNRESOLVED && out[7]==image.entry_code)
     out[15]|=8u;
+#ifdef ASCENSION_PRIVATE_AOT_LINKED
+ if(ar_mmapper_mapped_count())out[15]|=0x1000u;
+ ar_mmapper_reset();ar_sysutil_reset();
+#endif
  ar_bridge_shutdown();
  return 0;
 }

@@ -18,6 +18,9 @@ static uint32_t missing_nid,missing_syscall;
 static struct {uint32_t number;ar_hle_fn fn;} syscalls[MAX_LV2_SYSCALLS];
 static size_t nsyscalls;
 static uint8_t *mem;
+#define AR_EXTERNAL_MAX 512u
+static struct {uint32_t start;size_t size;uint8_t *bytes;} extra[AR_EXTERNAL_MAX];
+static size_t nextra;
 static int fault;
 static uint32_t missing,budget,depth;
 int ar_bridge_init(size_t n) {
@@ -28,7 +31,7 @@ int ar_bridge_init(size_t n) {
   mem_size=n;return AR_OK;
 }
 void ar_bridge_shutdown(void){
-  free(mem);mem=0;mem_size=0;nfunc=0;nimports=0;nhandlers=0;nsyscalls=0;missing_nid=0;missing_syscall=0;fault=0;missing=0;budget=0;depth=0;
+  free(mem);mem=0;mem_size=0;memset(extra,0,sizeof(extra));nextra=0;nfunc=0;nimports=0;nhandlers=0;nsyscalls=0;missing_nid=0;missing_syscall=0;fault=0;missing=0;budget=0;depth=0;
 }
 int ar_last_error(void){return fault;}
 uint32_t ar_last_missing_nid(void){return missing_nid;}
@@ -62,28 +65,60 @@ int ar_bind_hle(uint32_t nid,ar_hle_fn fn){
 }
 uint32_t ar_last_unresolved(void){return missing;}
 size_t ar_registered_count(void){return nfunc;}
-static int bounds(uint64_t a,size_t n){
-  if(!mem||a>UINT32_MAX||a>mem_size||n>mem_size-(size_t)a){
-    fault=AR_MEM_FAULT;return 0;
-  }
-  return 1;
+
+/* Guest low ELF plus sparse high mappings; no PPC interpreter.
+ * External map OWNS NO bytes: the mapper manages their lifetime.
+ * An address reservation alone cannot create valid memory. */
+static int overlap(uint64_t a,size_t n,uint64_t b,size_t m){
+ return a<(b+(uint64_t)m) && b<(a+(uint64_t)n);
 }
-int ar_vm_load(uint64_t a,const void* b,size_t n) {
-  if((!b&&n)||!bounds(a,n))return AR_MEM_FAULT;
-  if(n)memcpy(mem+(size_t)a,b,n);return AR_OK;
+int ar_vm_external_map(uint32_t addr,uint8_t *bytes,size_t count){
+ if(!mem||!bytes||!addr||!count||nextra>=AR_EXTERNAL_MAX ||
+    (uint64_t)addr+count>(uint64_t)UINT32_MAX+1u ||
+    overlap(addr,count,0,mem_size))return AR_BAD_ARGS;
+ for(size_t i=0;i<nextra;i++)
+  if(overlap(addr,count,extra[i].start,extra[i].size))return AR_DUPLICATE;
+ extra[nextra].start=addr;extra[nextra].size=count;
+ extra[nextra++].bytes=bytes;return AR_OK;
 }
-int ar_vm_zero(uint64_t a,size_t n) {
-  if(!bounds(a,n))return AR_MEM_FAULT;
-  if(n)memset(mem+(size_t)a,0,n);return AR_OK;
+int ar_vm_external_unmap(uint32_t addr){
+ for(size_t i=0;i<nextra;i++)if(extra[i].start==addr){
+   extra[i]=extra[--nextra];memset(&extra[nextra],0,sizeof(extra[0]));
+   return AR_OK;
+ }
+ return AR_BAD_ARGS;
 }
-static uint64_t read_be(uint64_t a,size_t n) {
-  if(!bounds(a,n))return 0;
-  uint64_t v=0;for(size_t i=0;i<n;i++)v=(v<<8)|mem[(size_t)a+i];
-  return v;
+static uint8_t* guest_ptr(uint64_t addr,size_t n){
+ if(!mem||!n||addr>UINT32_MAX||
+    n>(uint64_t)UINT32_MAX+1u-addr){fault=AR_MEM_FAULT;return NULL;}
+ if(addr<mem_size && n<=mem_size-(size_t)addr)
+   return mem+(size_t)addr;
+ for(size_t i=0;i<nextra;i++){
+   if(addr>=extra[i].start &&
+      addr-(uint64_t)extra[i].start<extra[i].size &&
+      n<=extra[i].size-(size_t)(addr-extra[i].start))
+      return extra[i].bytes+(size_t)(addr-extra[i].start);
+ }
+ fault=AR_MEM_FAULT;return NULL;
+}
+int ar_vm_load(uint64_t a,const void *b,size_t n){
+ if(!n)return AR_OK;
+ if(!b)return AR_BAD_ARGS;
+ uint8_t *dest=guest_ptr(a,n);if(!dest)return AR_MEM_FAULT;
+ memcpy(dest,b,n);return AR_OK;
+}
+int ar_vm_zero(uint64_t a,size_t n){
+ if(!n)return AR_OK;
+ uint8_t *dest=guest_ptr(a,n);if(!dest)return AR_MEM_FAULT;
+ memset(dest,0,n);return AR_OK;
+}
+static uint64_t read_be(uint64_t a,size_t n){
+ uint8_t *p=guest_ptr(a,n);if(!p)return 0;
+ uint64_t v=0;for(size_t i=0;i<n;i++)v=(v<<8)|p[i];return v;
 }
 static void write_be(uint64_t a,uint64_t v,size_t n){
-  if(!bounds(a,n))return;
-  for(size_t i=0;i<n;i++){mem[(size_t)a+n-1-i]=(uint8_t)v;v>>=8;}
+ uint8_t *p=guest_ptr(a,n);if(!p)return;
+ for(size_t i=0;i<n;i++){p[n-1-i]=(uint8_t)v;v>>=8;}
 }
 uint8_t ar_read8(uint64_t a){return (uint8_t)read_be(a,1);}
 uint16_t ar_read16(uint64_t a){return (uint16_t)read_be(a,2);}
