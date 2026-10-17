@@ -546,7 +546,7 @@ extern int ar_probe_rsx_texture_cache_mutation(unsigned swizzled,unsigned int ou
                                   "5 toques: TEXTURA por NV4097/cache/Metal\n"
                                   "Sem arquivos do jogo.";
                 self.status.text=@"ASCENSIONRECOMP · NPUA80918\n"
-                                  "M7.12 · recompilação ARM64 nativa\n"
+                                  "M7.13 · recompilação ARM64 nativa\n"
                                   "Importe GOWA.ELF para executar o código recompilado.\n"
                                   "Inicialização parcial, ainda sem gameplay.\n"
                                   "Ferramentas RSX estão na aba RSX / Metal.";
@@ -1143,7 +1143,7 @@ extern int ar_probe_rsx_texture_cache_mutation(unsigned swizzled,unsigned int ou
            @"Último resultado do despachante: %d",(int)native[6]];
     }
     self.ppuSummary=[NSString stringWithFormat:
-       @"ASCENSIONRECOMP M7.12 · NPUA80918\n"
+       @"ASCENSIONRECOMP M7.13 · NPUA80918\n"
         "RECOMPILAÇÃO ESTÁTICA ARM64\n"
         "Entradas AOT vinculadas: %u\n"
         "ELF: %@ · entrada 0x%08X\n"
