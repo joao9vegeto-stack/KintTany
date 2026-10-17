@@ -1,4 +1,4 @@
-name: AscensionRecomp M7.14 - authenticated PPC stores and private batch frontier
+name: AscensionRecomp M7.15 - native PPC load-store and always-visible frontier batch
 
 on:
   push:
@@ -613,6 +613,17 @@ jobs:
           ./m714-aot-host 2>&1 | tee m714-aot-host.log
           grep -Fxq 'M7.14 authenticated native stores and bounded 32-word frontier batch PASS' m714-aot-host.log
           python3 -m unittest discover -s tests -p test_m714_owner_batch.py -v 2>&1 | tee m714-batch-plan-host.log
+      - name: M7.15 verify native load-store ordering and always-visible PPC batches
+        run: |
+          set -euo pipefail
+          clang -std=c11 -O2 -Wall -Wextra -Werror \
+            -I upstream/runtime/ppu -I runtime \
+            runtime/ppu_bridge.c runtime/ppu_m712_exec_window.c \
+            runtime/ppu_m715_aot_fragment.c tests/host_m715_fragment.c \
+            -o m715-aot-host
+          ./m715-aot-host 2>&1 | tee m715-aot-host.log
+          grep -Fxq 'M7.15 authentic PPC load-store AOT, CA, BE guest memory and fail-closed PASS' m715-aot-host.log
+          python3 -m unittest discover -s tests -p test_m715_regressions.py -v 2>&1 | tee m715-regressions.log
       - name: M7.11 verify and stage 59 real PPU AOT entries before iOS linking
         env:
           ASCENSION_AOT_SOURCE_GZIP_B64: ${{ secrets.ASCENSION_AOT_SOURCE_GZIP_B64 }}
@@ -630,7 +641,8 @@ jobs:
           grep -Fq 'M7.12:' m78-aot-status.txt
           grep -Fq 'M7.13: +1 verified 4-instruction ARM64 entry' m78-aot-status.txt
           grep -Fq 'M7.14: +1 ELF-verified static ARM64 fragment' m78-aot-status.txt
-          echo "M7.14: $((ASCENSION_AOT_EXPECTED_SYMBOL_COUNT+2)) total ARM64 PPC AOT entries: 64 owner secret, M7.13 and M7.14 verified fragments; user-device test required" > m78-actions-status.txt
+          grep -Fq 'M7.15: +1 ELF-verified load/store ARM64 entry' m78-aot-status.txt
+          echo "M7.15: $((ASCENSION_AOT_EXPECTED_SYMBOL_COUNT+3)) NPUA80918 ARM64 AOT entries (64 owner + M7.13/14/15), diagnostic 32-word copy fixed; awaiting iPhone execution" > m78-actions-status.txt
           test -s AscensionRecompProbe-0.6.14-unsigned.ipa
           /usr/libexec/PlistBuddy -c 'Print CFBundleShortVersionString' ios-probe/Payload/AscensionRecompProbe.app/Info.plist | grep -Fx 0.6.14
           /usr/bin/unzip -t AscensionRecompProbe-0.6.14-unsigned.ipa | tee m42-ipa-integrity.log
@@ -875,6 +887,8 @@ jobs:
             m713-aot-host.log
             m714-aot-host.log
             m714-batch-plan-host.log
+            m715-aot-host.log
+            m715-regressions.log
             m78-stage-tests.log
             m78-lv2-host.log
             m78-owner-aot-object-symbols.txt

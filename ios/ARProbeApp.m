@@ -81,6 +81,8 @@ extern int ar_probe_rsx_texture_cache_mutation(unsigned swizzled,unsigned int ou
 @property(nonatomic,strong) UIScrollView *gameList;
 @property(nonatomic,strong) UIScrollView *graphicsList;
 @property(nonatomic,strong) UIButton *ppuReportButton;
+@property(nonatomic,strong) UIButton *ppuBatchButton;
+@property(nonatomic,copy) NSString *ppuBatchReport;
 @property(nonatomic,copy) NSString *ppuReport;
 @property(nonatomic,copy) NSString *ppuSummary;
 @property(nonatomic,strong) UIButton *ppuAdvancedButton;
@@ -442,6 +444,17 @@ extern int ar_probe_rsx_texture_cache_mutation(unsigned swizzled,unsigned int ou
     [reportButton addTarget:self action:@selector(copyPpuReport:)
             forControlEvents:UIControlEventTouchUpInside];
     self.ppuReportButton=reportButton;
+    UIButton *batchButton=[UIButton buttonWithType:UIButtonTypeSystem];
+    [batchButton setTitle:@"Copiar lote PPC (até 32 instruções)" forState:UIControlStateNormal];
+    [batchButton setTitleColor:UIColor.whiteColor forState:UIControlStateNormal];
+    batchButton.backgroundColor=[UIColor colorWithRed:0.14 green:0.23 blue:0.35 alpha:1];
+    batchButton.titleLabel.font=[UIFont systemFontOfSize:13 weight:UIFontWeightSemibold];
+    batchButton.layer.cornerRadius=11;
+    batchButton.enabled=NO;
+    [batchButton.heightAnchor constraintEqualToConstant:42].active=YES;
+    [batchButton addTarget:self action:@selector(copyPpuBatch:)
+        forControlEvents:UIControlEventTouchUpInside];
+    self.ppuBatchButton=batchButton;
     UIButton *advancedButton=[UIButton buttonWithType:UIButtonTypeSystem];
     [advancedButton setTitle:@"Diagnóstico avançado · M6/M7" forState:UIControlStateNormal];
     [advancedButton setTitleColor:UIColor.whiteColor forState:UIControlStateNormal];
@@ -485,6 +498,7 @@ extern int ar_probe_rsx_texture_cache_mutation(unsigned swizzled,unsigned int ou
         }
         if(i==0) {
             [stack addArrangedSubview:reportButton];
+            [stack addArrangedSubview:batchButton];
             [stack addArrangedSubview:advancedButton];
             UILabel *privacy=[UILabel new];
             privacy.numberOfLines=0;
@@ -547,7 +561,7 @@ extern int ar_probe_rsx_texture_cache_mutation(unsigned swizzled,unsigned int ou
                                   "5 toques: TEXTURA por NV4097/cache/Metal\n"
                                   "Sem arquivos do jogo.";
                 self.status.text=@"ASCENSIONRECOMP · NPUA80918\n"
-                                  "M7.14 · recompilação ARM64 nativa\n"
+                                  "M7.15 · recompilação ARM64 nativa\n"
                                   "Importe GOWA.ELF para executar o código recompilado.\n"
                                   "Inicialização parcial, ainda sem gameplay.\n"
                                   "Ferramentas RSX estão na aba RSX / Metal.";
@@ -572,6 +586,11 @@ extern int ar_probe_rsx_texture_cache_mutation(unsigned swizzled,unsigned int ou
     BOOL showGame=sender.selectedSegmentIndex==0;
     self.gameList.hidden=!showGame;
     self.graphicsList.hidden=showGame;
+}
+- (void)copyPpuBatch:(UIButton *)sender {
+    if(!self.ppuBatchReport.length)return;
+    UIPasteboard.generalPasteboard.string=self.ppuBatchReport;
+    [sender setTitle:@"Lote PPC copiado · cole no chat" forState:UIControlStateNormal];
 }
 - (void)copyPpuReport:(UIButton *)sender {
     if(!self.ppuSummary.length)return;
@@ -1040,6 +1059,9 @@ extern int ar_probe_rsx_texture_cache_mutation(unsigned swizzled,unsigned int ou
     unsigned int tls48[12]={0};
     self.ppuReport=nil;
     self.ppuSummary=nil;
+    self.ppuBatchReport=nil;
+    self.ppuBatchButton.enabled=NO;
+    [self.ppuBatchButton setTitle:@"Copiar lote PPC (até 32 instruções)" forState:UIControlStateNormal];
     self.ppuReportButton.enabled=NO;
     self.ppuAdvancedButton.enabled=NO;
     const int rc48=ar_ppu_bootstrap_fortyeight_trace_m674(
@@ -1164,8 +1186,13 @@ extern int ar_probe_rsx_texture_cache_mutation(unsigned swizzled,unsigned int ou
             "M4/M5 são testes sintéticos Metal, não menu do jogo.\n"];
        frontierReport=batch;
     }
+    /* M7.15: keep verified instruction batch available even when legacy
+     * PPU48 returns success and skips the error-detail report branch. */
+    self.ppuBatchReport=((int)native[6]==-3 && native[7] && pendingMatch!=0)
+                        ? frontierReport : nil;
+    self.ppuBatchButton.enabled=(self.ppuBatchReport.length>0);
     self.ppuSummary=[NSString stringWithFormat:
-       @"ASCENSIONRECOMP M7.14 · NPUA80918\n"
+       @"ASCENSIONRECOMP M7.15 · NPUA80918\n"
         "RECOMPILAÇÃO ESTÁTICA ARM64\n"
         "Entradas AOT vinculadas: %u\n"
         "ELF: %@ · entrada 0x%08X\n"
@@ -1341,6 +1368,7 @@ extern int ar_probe_rsx_texture_cache_mutation(unsigned swizzled,unsigned int ou
         "TLS copiada=%u bytes; PPU48 ainda é um bootstrap limitado.\n",
         cpu48[0],tls48[0],tls48[6],tls48[7]];
     self.ppuReport=[self.ppuReport stringByAppendingString:nativeText];
+    self.ppuReport=[self.ppuReport stringByAppendingString:frontierReport];
     self.ppuReport=[self.ppuReport stringByAppendingString:continuousText];
     self.ppuReport=[NSString stringWithFormat:@"%@\n\n%@",self.ppuSummary,self.ppuReport];
     self.ppuAdvancedButton.enabled=YES;
