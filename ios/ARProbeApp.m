@@ -6,6 +6,7 @@
 #import <CommonCrypto/CommonDigest.h>
 extern int ar_private_elf_inspect(const unsigned char*,size_t,unsigned int[5]);
 extern int ar_m70_native_runtime_probe(const unsigned char*,size_t,unsigned int,unsigned int[16]);
+extern int ar_m712_exec_window(const unsigned char*,size_t,unsigned int,unsigned int[6]);
 extern int ar_m71_private_continuous_probe(const unsigned char*,size_t,
                         unsigned int,unsigned int,unsigned int[16]);
 extern int ar_m73_private_import_probe(const unsigned char*,size_t,
@@ -401,7 +402,7 @@ extern int ar_probe_rsx_texture_cache_mutation(unsigned swizzled,unsigned int ou
     [controller.view addSubview:panel];
     UILabel *header=[UILabel new];
     header.translatesAutoresizingMaskIntoConstraints=NO;
-    header.text=@"ASCENSIONRECOMP   ·   M7.11";
+    header.text=@"ASCENSIONRECOMP   ·   M7.12";
     header.textColor=[UIColor colorWithRed:0.73 green:0.87 blue:1 alpha:1];
     header.font=[UIFont systemFontOfSize:12 weight:UIFontWeightBold];
     header.textAlignment=NSTextAlignmentCenter;
@@ -545,7 +546,7 @@ extern int ar_probe_rsx_texture_cache_mutation(unsigned swizzled,unsigned int ou
                                   "5 toques: TEXTURA por NV4097/cache/Metal\n"
                                   "Sem arquivos do jogo.";
                 self.status.text=@"ASCENSIONRECOMP · NPUA80918\n"
-                                  "M7.11 · recompilação ARM64 nativa\n"
+                                  "M7.12 · recompilação ARM64 nativa\n"
                                   "Importe GOWA.ELF para executar o código recompilado.\n"
                                   "Inicialização parcial, ainda sem gameplay.\n"
                                   "Ferramentas RSX estão na aba RSX / Metal.";
@@ -1114,21 +1115,35 @@ extern int ar_probe_rsx_texture_cache_mutation(unsigned swizzled,unsigned int ou
     int pendingMatch=((int)native[6]==-3 && native[7]) ?
        ar_private_import_match(data.bytes,data.length,native[7],
                                pendingImport,pendingLibrary) : -1;
+    /* Real unresolved PPC instruction window, read-only (no fallback). */
+    uint32_t missingWords[6]={0};
+    const int missingRead=((int)native[6]==-3 && pendingMatch!=0 && native[7]) ?
+        ar_m712_exec_window(data.bytes,data.length,native[7],missingWords) : -1;
     NSString *pendingText=nil;
     if((int)native[6]==-3 && pendingMatch==0){
        pendingText=[NSString stringWithFormat:
            @"Import PRX pendente: %s · NID=0x%08X\nStub=0x%08X",
            pendingLibrary[0]?pendingLibrary:"(sem nome)",
            pendingImport[0],native[7]];
+    } else if((int)native[6]==-3 && missingRead==0){
+       pendingText=[NSString stringWithFormat:
+           @"Próximo bloco sem ARM64: 0x%08X\n"
+            "M7.12 · %u palavra(s) PPC do ELF executável\n"
+            "PPC BE: %08X %08X %08X %08X\n"
+            "ARM64 deste bloco ainda NÃO vinculada.",
+            native[7],missingWords[4],missingWords[0],missingWords[1],
+            missingWords[2],missingWords[3]];
     } else if((int)native[6]==-3){
        pendingText=[NSString stringWithFormat:
-           @"Próximo bloco sem ARM64: 0x%08X",native[7]];
+           @"Próximo bloco sem ARM64: 0x%08X\n"
+            "M7.12 · janela PPC indisponível (%d), sem fallback.",
+            native[7],missingRead];
     } else {
        pendingText=[NSString stringWithFormat:
            @"Último resultado do despachante: %d",(int)native[6]];
     }
     self.ppuSummary=[NSString stringWithFormat:
-       @"ASCENSIONRECOMP M7.11 · NPUA80918\n"
+       @"ASCENSIONRECOMP M7.12 · NPUA80918\n"
         "RECOMPILAÇÃO ESTÁTICA ARM64\n"
         "Entradas AOT vinculadas: %u\n"
         "ELF: %@ · entrada 0x%08X\n"
