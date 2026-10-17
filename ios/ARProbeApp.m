@@ -90,6 +90,7 @@ extern int ar_probe_rsx_texture_cache_mutation(unsigned swizzled,unsigned int ou
 @property(nonatomic,copy) NSString *ppuReport;
 @property(nonatomic,copy) NSString *ppuSummary;
 @property(nonatomic,strong) UIButton *ppuAdvancedButton;
+@property(nonatomic,strong) UIButton *ppuDiagnosticsButton;
 @property(nonatomic,assign) BOOL ready;
 @property(nonatomic,assign) BOOL shaderBusy;
 @property(nonatomic,assign) NSUInteger m51Attempts;
@@ -471,6 +472,22 @@ extern int ar_probe_rsx_texture_cache_mutation(unsigned swizzled,unsigned int ou
     [advancedButton addTarget:self action:@selector(openAdvancedPpuReport:)
             forControlEvents:UIControlEventTouchUpInside];
     self.ppuAdvancedButton=advancedButton;
+    /* M7.19: One consolidated diagnostics control replaces three
+     * separate status/lote PPC/advanced buttons in the visible UI. */
+    UIButton *diagnostics=[UIButton buttonWithType:UIButtonTypeSystem];
+    [diagnostics setTitle:@"Relatório completo · visualizar / TXT" forState:UIControlStateNormal];
+    [diagnostics setTitleColor:UIColor.whiteColor forState:UIControlStateNormal];
+    diagnostics.backgroundColor=[UIColor colorWithRed:0.13 green:0.30 blue:0.48 alpha:1];
+    diagnostics.titleLabel.font=[UIFont systemFontOfSize:14 weight:UIFontWeightSemibold];
+    diagnostics.titleLabel.adjustsFontSizeToFitWidth=YES;
+    diagnostics.titleLabel.minimumScaleFactor=0.8;
+    diagnostics.layer.cornerRadius=11;
+    diagnostics.accessibilityLabel=@"Relatório completo: status AOT, PPC, grafo, HLE e exportar TXT";
+    [diagnostics.heightAnchor constraintEqualToConstant:46].active=YES;
+    diagnostics.enabled=NO;
+    [diagnostics addTarget:self action:@selector(openUnifiedPpuMenu:)
+         forControlEvents:UIControlEventTouchUpInside];
+    self.ppuDiagnosticsButton=diagnostics;
     NSArray<UIScrollView *> *scrollers=@[game,graphics];
     for(NSUInteger i=0;i<scrollers.count;i++) {
         UIScrollView *scroll=scrollers[i];
@@ -501,9 +518,7 @@ extern int ar_probe_rsx_texture_cache_mutation(unsigned swizzled,unsigned int ou
             [stack addArrangedSubview:button];
         }
         if(i==0) {
-            [stack addArrangedSubview:reportButton];
-            [stack addArrangedSubview:batchButton];
-            [stack addArrangedSubview:advancedButton];
+            [stack addArrangedSubview:diagnostics];
             UILabel *privacy=[UILabel new];
             privacy.numberOfLines=0;
             privacy.textAlignment=NSTextAlignmentCenter;
@@ -565,7 +580,7 @@ extern int ar_probe_rsx_texture_cache_mutation(unsigned swizzled,unsigned int ou
                                   "5 toques: TEXTURA por NV4097/cache/Metal\n"
                                   "Sem arquivos do jogo.";
                 self.status.text=@"ASCENSIONRECOMP · NPUA80918\n"
-                                  "M7.18 · recompilação ARM64 nativa\n"
+                                  "M7.19 · recompilação ARM64 nativa\n"
                                   "Importe GOWA.ELF para executar o código recompilado.\n"
                                   "Inicialização parcial, ainda sem gameplay.\n"
                                   "Ferramentas RSX estão na aba RSX / Metal.";
@@ -636,6 +651,77 @@ extern int ar_probe_rsx_texture_cache_mutation(unsigned swizzled,unsigned int ou
        action:@selector(copyAdvancedPpuReport:)];
     UINavigationController *nav=[[UINavigationController alloc] initWithRootViewController:page];
     [self.window.rootViewController presentViewController:nav animated:YES completion:nil];
+}
+/* The full report already contains summary + BE PPC batch + static callgraph
+ * + measured AOT dispatches + HLE + M6 legacy diagnostics; don't duplicate
+ * any section when exporting. No ELF or commercial assets leave the phone. */
+- (NSString *)arUnifiedPpuText {
+    NSString *body=self.ppuReport.length ? self.ppuReport : self.ppuSummary;
+    if(!body.length)return nil;
+    return [NSString stringWithFormat:
+        @"ASCENSIONRECOMP M7.19 — RELATÓRIO ÚNICO\n"
+         "Status, lote PPC, cobertura ARM64, grafo, TLS/HLE e legados.\n"
+         "Somente diagnósticos; NÃO inclui o ELF original.\n"
+         "==================================================\n\n%@\n",body];
+}
+- (void)arCopyAllPpuText {
+    NSString *report=[self arUnifiedPpuText];
+    if(report.length)UIPasteboard.generalPasteboard.string=report;
+}
+- (void)arExportPpuText {
+    NSString *report=[self arUnifiedPpuText];
+    if(!report.length)return;
+    NSDateFormatter *date=[NSDateFormatter new];
+    date.locale=[NSLocale localeWithLocaleIdentifier:@"en_US_POSIX"];
+    date.dateFormat=@"yyyyMMdd-HHmmss";
+    NSString *name=[NSString stringWithFormat:
+       @"AscensionRecomp-M7.19-NPUA80918-%@.txt",
+       [date stringFromDate:[NSDate date]]];
+    NSURL *url=[NSURL fileURLWithPath:
+       [NSTemporaryDirectory() stringByAppendingPathComponent:name]];
+    NSError *error=nil;
+    if(![report writeToURL:url atomically:YES
+                encoding:NSUTF8StringEncoding error:&error]){
+        UIAlertController *alert=[UIAlertController alertControllerWithTitle:
+          @"Falha ao gerar o TXT" message:error.localizedDescription ?:
+          @"Não foi possível salvar o relatório." preferredStyle:UIAlertControllerStyleAlert];
+        [alert addAction:[UIAlertAction actionWithTitle:@"OK"
+                   style:UIAlertActionStyleCancel handler:nil]];
+        [self.window.rootViewController presentViewController:alert
+                                    animated:YES completion:nil];
+        return;
+    }
+    /* Native Files export: the user can attach the .txt directly to ChatGPT
+     * instead of pasting a giant report that consumes chat context. */
+    UIDocumentPickerViewController *picker=[[UIDocumentPickerViewController alloc]
+                           initForExportingURLs:@[url] asCopy:YES];
+    UIViewController *presenter=self.window.rootViewController.presentedViewController
+                                ?: self.window.rootViewController;
+    [presenter presentViewController:picker animated:YES completion:nil];
+}
+- (void)openUnifiedPpuMenu:(UIButton *)sender {
+    if(![self arUnifiedPpuText].length)return;
+    UIAlertController *menu=[UIAlertController alertControllerWithTitle:
+          @"Relatório completo do Ascension"
+          message:@"Status, lote PPC, AOT_EXEC, grafo e diagnósticos em um só lugar."
+          preferredStyle:UIAlertControllerStyleActionSheet];
+    [menu addAction:[UIAlertAction actionWithTitle:@"Visualizar relatório"
+          style:UIAlertActionStyleDefault handler:^(__unused UIAlertAction *a){
+          [self openAdvancedPpuReport:sender];
+    }]];
+    [menu addAction:[UIAlertAction actionWithTitle:@"Exportar TXT · Arquivos"
+          style:UIAlertActionStyleDefault handler:^(__unused UIAlertAction *a){
+          [self arExportPpuText];
+    }]];
+    [menu addAction:[UIAlertAction actionWithTitle:@"Copiar tudo"
+          style:UIAlertActionStyleDefault handler:^(__unused UIAlertAction *a){
+          [self arCopyAllPpuText];
+    }]];
+    [menu addAction:[UIAlertAction actionWithTitle:@"Cancelar"
+          style:UIAlertActionStyleCancel handler:nil]];
+    UIPopoverPresentationController *popover=menu.popoverPresentationController;
+    if(popover){popover.sourceView=sender;popover.sourceRect=sender.bounds;}
+    [self.window.rootViewController presentViewController:menu animated:YES completion:nil];
 }
 - (void)testGuestRSXShader:(UIButton *)sender {
     if (!self.ready || self.shaderBusy) return;
@@ -1068,6 +1154,7 @@ extern int ar_probe_rsx_texture_cache_mutation(unsigned swizzled,unsigned int ou
     [self.ppuBatchButton setTitle:@"Copiar lote PPC (até 32 instruções)" forState:UIControlStateNormal];
     self.ppuReportButton.enabled=NO;
     self.ppuAdvancedButton.enabled=NO;
+    self.ppuDiagnosticsButton.enabled=NO;
     const int rc48=ar_ppu_bootstrap_fortyeight_trace_m674(
         data.bytes,data.length,info,cpu48,trace48,detail48,tls48);
 
@@ -1261,14 +1348,14 @@ extern int ar_probe_rsx_texture_cache_mutation(unsigned swizzled,unsigned int ou
                         ? frontierReport : nil;
     self.ppuBatchButton.enabled=(self.ppuBatchReport.length>0);
     self.ppuSummary=[NSString stringWithFormat:
-       @"ASCENSIONRECOMP M7.18 · NPUA80918\n"
+       @"ASCENSIONRECOMP M7.19 · NPUA80918\n"
         "RECOMPILAÇÃO ESTÁTICA ARM64\n"
         "Entradas AOT vinculadas: %u\n"
         "ELF: %@ · entrada 0x%08X\n"
         "Execução nativa: %d · TLS r13=0x%08X\n"
         "SYSUTIL core vinculado=%@ · mapeamentos guest=%@\n"
         "%@\n"
-        "M7.18: AOT em lote; consulte cobertura e grafo no Lote PPC.\n"
+        "M7.19: relatório unificado; visualize ou exporte TXT.\n"
         "RSX do Ascension: não demonstrado (M4/M5 sintéticos).\n"
         "Estado: inicialização parcial, sem gameplay.\n"
         "Diagnósticos legados: seção avançada.",
@@ -1412,6 +1499,7 @@ extern int ar_probe_rsx_texture_cache_mutation(unsigned swizzled,unsigned int ou
        self.ppuReport=[NSString stringWithFormat:@"%@\n\n%@",self.ppuSummary,extended];
        self.ppuReportButton.enabled=YES;
        self.ppuAdvancedButton.enabled=YES;
+       self.ppuDiagnosticsButton.enabled=(self.ppuReport.length>0);
        [self.ppuReportButton setTitle:@"Copiar status AOT" forState:UIControlStateNormal];
        NSString *faultDetail=cpu48[16]
           ? [NSString stringWithFormat:@"EA=0x%X · base=0x%X · valor=0x%X",
@@ -1442,6 +1530,7 @@ extern int ar_probe_rsx_texture_cache_mutation(unsigned swizzled,unsigned int ou
     self.ppuReport=[self.ppuReport stringByAppendingString:continuousText];
     self.ppuReport=[NSString stringWithFormat:@"%@\n\n%@",self.ppuSummary,self.ppuReport];
     self.ppuAdvancedButton.enabled=YES;
+    self.ppuDiagnosticsButton.enabled=(self.ppuReport.length>0);
     [self.ppuReportButton setTitle:@"Copiar status AOT" forState:UIControlStateNormal];
     self.ppuReportButton.enabled=YES;
     self.status.text=[NSString stringWithFormat:

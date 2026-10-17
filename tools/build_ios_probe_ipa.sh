@@ -62,6 +62,21 @@ if [[ -n "${ASCENSION_PRIVATE_BULK_C:-}" ]]; then
   AOT_OBJECTS+=(ios-probe/AscensionPrivateBulk.o)
   AOT_COMPILE_DEFINES+=(-DASCENSION_PRIVATE_BULK_AOT_LINKED)
 fi
+# M7.19: staged 850 owner-only PPC AOT entries from third GitHub secret.
+if [[ -n "${ASCENSION_PRIVATE_BULK2_C:-}" ]]; then
+  test -f "$ASCENSION_PRIVATE_BULK2_C"
+  test "${ASCENSION_BULK2_COUNT:?}" = "850"
+  xcrun --sdk iphoneos clang -target arm64-apple-ios17.0 -isysroot "$SDK" \
+      -std=c11 -O2 -Wall -Wextra -Werror -Wno-unused-label \
+      -I upstream/runtime/ppu -I runtime \
+      -c "$ASCENSION_PRIVATE_BULK2_C" -o ios-probe/AscensionPrivateBulk2.o
+  xcrun nm -g ios-probe/AscensionPrivateBulk2.o > m719-bulk2-object-symbols.txt
+  grep -Eq ' [Tt] _ar_bulk2_install_sha256$' m719-bulk2-object-symbols.txt
+  python3 tools/verify_m719_macho.py m719-bulk2-object-symbols.txt \
+      "${ASCENSION_BULK2_SYMBOL_LIST:?}" "${ASCENSION_BULK2_COUNT:?}"
+  AOT_OBJECTS+=(ios-probe/AscensionPrivateBulk2.o)
+  AOT_COMPILE_DEFINES+=(-DASCENSION_PRIVATE_BULK2_AOT_LINKED)
+fi
 # Stage the native PPU bridge as an ARM64 object and link the prebuilt
 # IOS PPU core archive; never compile or bundle the user's PS3 ELF.
 test -s ios-ppu-core/libAscensionPPUCore-ios-arm64.a
@@ -180,6 +195,12 @@ if [[ -n "${ASCENSION_PRIVATE_BULK_C:-}" ]]; then
       "${ASCENSION_BULK_SYMBOL_LIST:?}" "${ASCENSION_BULK_COUNT:?}"
   grep -Eq ' [Tt] _ar_bulk_install_sha256$' m78-owner-aot-linked-symbols.txt
 fi
+if [[ -n "${ASCENSION_PRIVATE_BULK2_C:-}" ]]; then
+  python3 tools/verify_m719_macho.py m78-owner-aot-linked-symbols.txt \
+      "${ASCENSION_BULK2_SYMBOL_LIST:?}" "${ASCENSION_BULK2_COUNT:?}"
+  grep -Eq ' [Tt] _ar_bulk2_install_sha256$' m78-owner-aot-linked-symbols.txt
+  grep -Eq ' [Tt] _ar_bulk2_ppu_002c16a4$' m78-owner-aot-linked-symbols.txt
+fi
 grep -Eq ' [Tt] _ar_m713_aot_003c4d94$' m78-owner-aot-linked-symbols.txt
 grep -Eq ' [Tt] _ar_m713_register_fragment$' m78-owner-aot-linked-symbols.txt
 grep -Eq ' [Tt] _ar_m714_aot_003c4da4$' m78-owner-aot-linked-symbols.txt
@@ -200,6 +221,7 @@ echo "M7.15: +1 ELF-verified load/store ARM64 entry at 0x003C4DB4; expected tota
 echo "M7.16: +1 verified native 15-instruction PPC block (0x003C4DC4), two real BEQ successors; total $((ASCENSION_AOT_EXPECTED_SYMBOL_COUNT+4)); iPhone execution required" >> m78-aot-status.txt
 echo "M7.17: static bounded PPC reachability + actual ARM64 AOT dispatch telemetry; owner source unchanged; graph coverage needs iPhone" >> m78-aot-status.txt
 echo "M7.18: +${ASCENSION_BULK_COUNT:-0} additional owner-private native PPC AOT blocks; total $((ASCENSION_AOT_EXPECTED_SYMBOL_COUNT+4+${ASCENSION_BULK_COUNT:-0})); exact ELF SHA-256 checked" >> m78-aot-status.txt
+echo "M7.19: +${ASCENSION_BULK2_COUNT:-0} authenticated owner-private native PPC blocks beginning 0x002C16A4; total $((ASCENSION_AOT_EXPECTED_SYMBOL_COUNT+4+${ASCENSION_BULK_COUNT:-0}+${ASCENSION_BULK2_COUNT:-0})) entries; iPhone test pending" >> m78-aot-status.txt
 file "$APP/AscensionRecompProbe" | tee m41-executable-file.txt
 xcrun lipo -info "$APP/AscensionRecompProbe" | tee m41-executable-arch.txt
 /usr/libexec/PlistBuddy -c 'Print CFBundleIdentifier' "$APP/Info.plist"
