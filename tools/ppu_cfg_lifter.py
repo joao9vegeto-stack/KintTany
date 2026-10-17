@@ -111,7 +111,7 @@ def lift(words: list[int] | tuple[int, ...], base: int, name: str = 'ppu_sample'
                 if b:raise Unsupported('VMX immediate reserved bits nonzero')
                 width={780:1,844:2,908:4}[xo]
                 e(f'ar_vmx_splat_imm(c,{d},{a},{width});')
-                hist[{780:"'vspltisb'",844:"'vspltish'",908:"'vspltisw'"}[xo]]+=1
+                hist[{780:'vspltisb',844:'vspltish',908:'vspltisw'}[xo]]+=1
                 continue
             if xo==652:
                 if a>3:raise Unsupported('VSPLTW index must be 0..3')
