@@ -1,6 +1,6 @@
 /* M7.28: scalar reference VMX/AltiVec + Cell partial vector memory.
  * Shared by authenticated PPC fallback and future statically lifted ARM64 AOT.
- * Canonical vector lanes are BIG-ENDIAN bytes in vr[v].d[0..1].
+ * Canonical vector lanes are BIG-ENDIAN bytes in vr[v]._u64[0..1].
  * Avoid host SIMD layout/endian assumptions; all effects go through guest VM.
  */
 #ifndef ASCENSION_PPU_VMX_CELL_H
@@ -9,13 +9,13 @@
 #include <string.h>
 #include "ppu_bridge.h"
 static inline uint8_t ar_vmx_byte(const ppu_context*c,unsigned v,unsigned n){
- const uint64_t word=c->vr[v].d[n>>3];
+ const uint64_t word=c->vr[v]._u64[n>>3];
  return (uint8_t)(word >> (56u-8u*(n&7u)));
 }
 static inline void ar_vmx_setbyte(ppu_context*c,unsigned v,unsigned n,uint8_t value){
  const unsigned w=n>>3,sh=56u-8u*(n&7u);
  const uint64_t mask=UINT64_C(255)<<sh;
- c->vr[v].d[w]=(c->vr[v].d[w]&~mask)|((uint64_t)value<<sh);
+ c->vr[v]._u64[w]=(c->vr[v]._u64[w]&~mask)|((uint64_t)value<<sh);
 }
 static inline uint32_t ar_vmx_word(const ppu_context*c,unsigned v,unsigned n){
  return ((uint32_t)ar_vmx_byte(c,v,n*4)<<24) |

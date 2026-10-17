@@ -41,15 +41,15 @@ class TestM728NativeVMX(unittest.TestCase):
     def test_signed_splat_native(self):
         source,h=run_native([vx(5,31,0,908),BLR],checks=[
             "rc==0","ctx.cia==0x1100ULL",
-            "ctx.vr[5].d[0]==0xffffffffffffffffULL",
-            "ctx.vr[5].d[1]==0xffffffffffffffffULL"])
+            "ctx.vr[5]._u64[0]==0xffffffffffffffffULL",
+            "ctx.vr[5]._u64[1]==0xffffffffffffffffULL"])
         self.assertEqual(h.get("vspltisw"),1)
         self.assertIn("ar_vmx_splat_imm",source)
         self.assertNotIn("ar_ppc_fallback_step",source)
     def test_vector_splat_alias(self):
         run_native([vx(3,31,0,908),vx(3,2,3,652),BLR],
-            checks=["rc==0","ctx.vr[3].d[0]==UINT64_MAX",
-                    "ctx.vr[3].d[1]==UINT64_MAX"])
+            checks=["rc==0","ctx.vr[3]._u64[0]==UINT64_MAX",
+                    "ctx.vr[3]._u64[1]==UINT64_MAX"])
     def test_16byte_aligned_load_store(self):
         run_native([x(5,0,8,103),x(5,0,9,231),BLR],
             init="""uint8_t arr[16];for(unsigned i=0;i<16;i++)arr[i]=(uint8_t)(0x80+i);
@@ -57,7 +57,7 @@ class TestM728NativeVMX(unittest.TestCase):
                     ctx.gpr[8]=0x180fu;ctx.gpr[9]=0x182eu;""",
             checks=["rc==0","ar_read8(0x1820)==0x80",
                     "ar_read8(0x182f)==0x8f",
-                    "ctx.vr[5].d[0]==0x8081828384858687ULL"])
+                    "ctx.vr[5]._u64[0]==0x8081828384858687ULL"])
     def test_cell_lvlx_and_vspltw_native(self):
         source,h=run_native([x(3,4,5,519),vx(6,2,3,652),x(6,0,9,231),BLR],
             init="""uint8_t a[16];for(unsigned i=0;i<16;i++)a[i]=(uint8_t)i;
@@ -65,7 +65,7 @@ class TestM728NativeVMX(unittest.TestCase):
                     ctx.gpr[4]=0x1803;ctx.gpr[5]=0;ctx.gpr[9]=0x1820;""",
             checks=["rc==0","ar_read32(0x1820)==0x0b0c0d0eU",
                     "ar_read32(0x182c)==0x0b0c0d0eU",
-                    "ctx.vr[3].d[1]==0x0b0c0d0e0f000000ULL"])
+                    "ctx.vr[3]._u64[1]==0x0b0c0d0e0f000000ULL"])
         self.assertEqual(h["vmx_load"],1)
         self.assertEqual(h["vspltw"],1)
         self.assertEqual(h["vmx_store"],1)

@@ -90,11 +90,11 @@ int main(void){
    if(out[k]!=expected)return 30;
  }
  /* Underflow/unmapped VM must fail closed with unmodified registers. */
- c.gpr[8]=0xfffffff0ULL;c.vr[1].d[0]=0x8877665544332211ULL;
- c.vr[1].d[1]=0xdeadbeefdeadbeefULL;
+ c.gpr[8]=0xfffffff0ULL;c.vr[1]._u64[0]=0x8877665544332211ULL;
+ c.vr[1]._u64[1]=0xdeadbeefdeadbeefULL;
  if(single(elf,&c,opx(1,0,8,103))!=AR_MEM_FAULT)return 31;
- if(c.vr[1].d[0]!=0x8877665544332211ULL||
-    c.vr[1].d[1]!=0xdeadbeefdeadbeefULL)return 32;
+ if(c.vr[1]._u64[0]!=0x8877665544332211ULL||
+    c.vr[1]._u64[1]!=0xdeadbeefdeadbeefULL)return 32;
  ar_bridge_shutdown();
  /* Isolate expected sticky memory error before reserved-opcode checks. */
  if(ar_bridge_init(0x3000)!=AR_OK)return 33;
@@ -102,9 +102,9 @@ int main(void){
                           opx(3,0,3,103)|1u,
                           opvec(3,0,0,0x6cc)};
  for(unsigned j=0;j<sizeof(invalid)/sizeof(invalid[0]);j++){
-   memset(&c,0,sizeof(c));c.vr[3].d[0]=0x1234567812345678ULL;
+   memset(&c,0,sizeof(c));c.vr[3]._u64[0]=0x1234567812345678ULL;
    if(single(elf,&c,invalid[j])!=AR_PPC_UNSUPPORTED)return 34;
-   if(c.vr[3].d[0]!=0x1234567812345678ULL)return 35;
+   if(c.vr[3]._u64[0]!=0x1234567812345678ULL)return 35;
  }
  ar_bridge_shutdown();
  puts("M7.28 Cell VMX 128-bit signed splats, VSPLTW, LVX, STVX, LVLX, LVRX and partial stores PASS");
