@@ -274,7 +274,12 @@ def lift(words: list[int] | tuple[int, ...], base: int, name: str = 'ppu_sample'
             hist['store']+=1
         elif op==31:
             xo=(w>>1)&1023;rc=w&1
-            if xo in (103,359,519,775,551,807,231,487,647,903,679,935):
+            if xo==19:
+                if w!=(0x7c000026 | (d<<21)):
+                    raise Unsupported('invalid MFCR/MFOCRF/reserved encoding')
+                e(f'{reg(d)}=(u64)c->cr;')
+                hist['mfcr']+=1
+            elif xo in (103,359,519,775,551,807,231,487,647,903,679,935):
                 if w&1:raise Unsupported('VMX indexed reserved bit set')
                 kind={103:0,359:0,519:1,775:1,551:2,807:2,
                       231:0,487:0,647:1,903:1,679:2,935:2}[xo]

@@ -22,6 +22,7 @@ static const uint8_t *fb_elf;
 static ar_ppc_fallback_fn fb_eval;
 static size_t fb_elf_size;
 static uint32_t fb_cap,fb_steps,fb_pc,fb_op,fb_bad_pc,fb_bad_op;
+static uint32_t fb_history_pc[AR_FALLBACK_TRACE_PCS],fb_history_op[AR_FALLBACK_TRACE_PCS];
 static uint32_t fb_callsite_pc,fb_call_target;
 static uint32_t lv2_pc_pending,lv2_calls,lv2_last_number,lv2_last_pc;
 static uint32_t lv2_missing_number,lv2_missing_pc;
@@ -61,6 +62,13 @@ void ar_trace_snapshot(ar_aot_trace *out) {
  out->fp_converts=fp_converts;out->fp_divides=fp_divides;
  out->fp_last_pc=fp_last_pc;
  out->fallback_step_limit=fb_cap;
+ out->fallback_trace_count=fb_steps<AR_FALLBACK_TRACE_PCS?fb_steps:AR_FALLBACK_TRACE_PCS;
+ const uint32_t fb_start=fb_steps-out->fallback_trace_count;
+ for(uint32_t i=0;i<out->fallback_trace_count;i++){
+    const uint32_t at=(fb_start+i)&(AR_FALLBACK_TRACE_PCS-1u);
+    out->fallback_trace_pcs[i]=fb_history_pc[at];
+    out->fallback_trace_words[i]=fb_history_op[at];
+ }
  const uint32_t start=trace_total-out->trace_count;
  for(uint32_t i=0;i<out->trace_count;i++)
    out->trace_pcs[i]=trace_ring[(start+i)&(AR_AOT_TRACE_PCS-1u)];
@@ -314,6 +322,8 @@ static int dispatch(ppu_context *c,uint64_t pc){
         const int step=fb_eval(c,fb_elf,fb_elf_size,
                                (uint32_t)pc,&word);
         if(step==AR_TAIL || step==AR_OK){
+          const uint32_t index=fb_steps&(AR_FALLBACK_TRACE_PCS-1u);
+          fb_history_pc[index]=(uint32_t)pc;fb_history_op[index]=word;
           fb_steps++;fb_pc=(uint32_t)pc;fb_op=word;
           if(fault){result=fault;break;}
           if(step==AR_TAIL){pc=c->cia;continue;}

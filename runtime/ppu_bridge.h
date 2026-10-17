@@ -33,6 +33,7 @@ size_t ar_registered_count(void);
  * trace_pcs are real registered ARM64 entrypoints, oldest to newest.
  * unique_aot counts distinct registered entries reached within one ar_run. */
 #define AR_AOT_TRACE_PCS 64u
+#define AR_FALLBACK_TRACE_PCS 32u
 typedef struct {
     uint32_t aot_dispatches, unique_aot, unresolved_pc;
     uint32_t hle_dispatches, max_budget, trace_count;
@@ -41,6 +42,10 @@ typedef struct {
     uint32_t fallback_steps, fallback_last_pc, fallback_last_opcode;
     uint32_t fallback_unsupported_pc, fallback_unsupported_word;
     uint32_t fallback_step_limit;
+    /* M7.30 only actual interpreted tail PCs; 32 latest, chronological. */
+    uint32_t fallback_trace_count;
+    uint32_t fallback_trace_pcs[AR_FALLBACK_TRACE_PCS];
+    uint32_t fallback_trace_words[AR_FALLBACK_TRACE_PCS];
     uint32_t fallback_callsite_pc, fallback_call_target; /* M7.25 */
     /* M7.26: actual LV2 syscall IDs, without fake successes. */
     uint32_t lv2_calls, lv2_last_number, lv2_last_pc;
