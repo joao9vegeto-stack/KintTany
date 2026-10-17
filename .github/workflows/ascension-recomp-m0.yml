@@ -603,7 +603,8 @@ jobs:
           bash tools/build_ios_probe_ipa.sh 2>&1 | tee m41-build-ipa.log
           test -s m78-aot-status.txt
           grep -Fq '59 REAL PPU ARM64 functions verified' m78-aot-status.txt
-          test -n "${ASCENSION_AOT_EXPECTED_SYMBOL_COUNT:?}"\n          grep -Fq 'M7.12:' m78-aot-status.txt
+          test -n "${ASCENSION_AOT_EXPECTED_SYMBOL_COUNT:?}"
+          grep -Fq 'M7.12:' m78-aot-status.txt
           echo "M7.12: ${ASCENSION_AOT_EXPECTED_SYMBOL_COUNT} native NPUA80918 PPC ARM64 entries linked; iPhone execution pending" > m78-actions-status.txt
           test -s AscensionRecompProbe-0.6.14-unsigned.ipa
           /usr/libexec/PlistBuddy -c 'Print CFBundleShortVersionString' ios-probe/Payload/AscensionRecompProbe.app/Info.plist | grep -Fx 0.6.14
