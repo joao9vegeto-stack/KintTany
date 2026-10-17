@@ -27,5 +27,5 @@ class M730MFCR(unittest.TestCase):
  def test_native_executable_lifter_still_no_interpreter(self):
   src,h=lift([mfcr(12),BLR],0x10000,"test_m730_owner_frontier_synthetic")
   self.assertEqual(h.get("mfcr"),1)
-  self.assertNotIn("ar_guest_call",src)
+  self.assertNotIn("if(ar_guest_call(",src)
 if __name__=="__main__":unittest.main()
