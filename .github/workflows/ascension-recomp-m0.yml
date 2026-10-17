@@ -1,4 +1,4 @@
-name: AscensionRecomp M7.17 - bounded PPC callgraph and measured ARM64 AOT dispatch
+name: AscensionRecomp M7.18 - original ELF 500-block owner-secret ARM64 bulk AOT
 
 on:
   push:
@@ -653,6 +653,19 @@ jobs:
           set -euo pipefail
           python3 tools/stage_m78_aot.py 2>&1 | tee m78-aot-stage.log
           grep -Fq 'M7.12 owner AOT ELF SHA256 verified;' m78-aot-stage.log
+      - name: M7.18 stage 500 authentic owner-private ELF AOT blocks
+        env:
+          ASCENSION_AOT_BULK_GZIP_B64: ${{ secrets.ASCENSION_AOT_BULK_GZIP_B64 }}
+        run: |
+          set -euo pipefail
+          python3 tools/stage_m718_bulk.py 2>&1 | tee m718-bulk-stage.log
+          grep -Fq 'M7.18: 500 unique private ARM64 AOT blocks validated' m718-bulk-stage.log
+          test -s "${ASCENSION_PRIVATE_BULK_C:?}"
+          test "${ASCENSION_BULK_COUNT:?}" = '500'
+      - name: M7.18 public-only stage and final Mach-O symbol guard tests
+        run: |
+          set -euo pipefail
+          python3 -m unittest discover -s tests -p test_m718_bulk_guard.py -v 2>&1 | tee m718-bulk-guard-tests.log
       - name: M4.1 link native UIKit RSX Metal diagnostic application
         run: |
           set -euo pipefail
@@ -666,7 +679,8 @@ jobs:
           grep -Fq 'M7.15: +1 ELF-verified load/store ARM64 entry' m78-aot-status.txt
           grep -Fq 'M7.16: +1 verified native 15-instruction PPC block' m78-aot-status.txt
           grep -Fq 'M7.17: static bounded PPC reachability + actual ARM64 AOT dispatch telemetry' m78-aot-status.txt
-          echo "M7.17: 68 AOT registered (64 owner plus 4 confirmed blocks); faster indexed dispatch, measured execution and bounded static PPC callgraph. New game AOT count unchanged; requires private ELF for next bulk generation" > m78-actions-status.txt
+          grep -Fq 'M7.18: +500 additional owner-private native PPC AOT blocks' m78-aot-status.txt
+          echo "M7.18: 568 actual ARM64 AOT entries linked (64 original, 4 M7.13-M7.16, 500 owner ELF batch); NPUA80918 on-device proof pending" > m78-actions-status.txt
           test -s AscensionRecompProbe-0.6.14-unsigned.ipa
           /usr/libexec/PlistBuddy -c 'Print CFBundleShortVersionString' ios-probe/Payload/AscensionRecompProbe.app/Info.plist | grep -Fx 0.6.14
           /usr/bin/unzip -t AscensionRecompProbe-0.6.14-unsigned.ipa | tee m42-ipa-integrity.log
@@ -917,6 +931,9 @@ jobs:
             m716-integrity-tests.log
             m717-native-host.log
             m717-architecture-tests.log
+            m718-bulk-stage.log
+            m718-bulk-guard-tests.log
+            m718-bulk-object-symbols.txt
             m78-stage-tests.log
             m78-lv2-host.log
             m78-owner-aot-object-symbols.txt

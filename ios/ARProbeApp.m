@@ -565,7 +565,7 @@ extern int ar_probe_rsx_texture_cache_mutation(unsigned swizzled,unsigned int ou
                                   "5 toques: TEXTURA por NV4097/cache/Metal\n"
                                   "Sem arquivos do jogo.";
                 self.status.text=@"ASCENSIONRECOMP · NPUA80918\n"
-                                  "M7.17 · recompilação ARM64 nativa\n"
+                                  "M7.18 · recompilação ARM64 nativa\n"
                                   "Importe GOWA.ELF para executar o código recompilado.\n"
                                   "Inicialização parcial, ainda sem gameplay.\n"
                                   "Ferramentas RSX estão na aba RSX / Metal.";
@@ -1261,14 +1261,14 @@ extern int ar_probe_rsx_texture_cache_mutation(unsigned swizzled,unsigned int ou
                         ? frontierReport : nil;
     self.ppuBatchButton.enabled=(self.ppuBatchReport.length>0);
     self.ppuSummary=[NSString stringWithFormat:
-       @"ASCENSIONRECOMP M7.17 · NPUA80918\n"
+       @"ASCENSIONRECOMP M7.18 · NPUA80918\n"
         "RECOMPILAÇÃO ESTÁTICA ARM64\n"
         "Entradas AOT vinculadas: %u\n"
         "ELF: %@ · entrada 0x%08X\n"
         "Execução nativa: %d · TLS r13=0x%08X\n"
         "SYSUTIL core vinculado=%@ · mapeamentos guest=%@\n"
         "%@\n"
-        "M7.17: consulte cobertura AOT e grafo no botão Lote PPC.\n"
+        "M7.18: AOT em lote; consulte cobertura e grafo no Lote PPC.\n"
         "RSX do Ascension: não demonstrado (M4/M5 sintéticos).\n"
         "Estado: inicialização parcial, sem gameplay.\n"
         "Diagnósticos legados: seção avançada.",
