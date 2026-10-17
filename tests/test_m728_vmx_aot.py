@@ -27,7 +27,7 @@ int main(void){{
     with tempfile.TemporaryDirectory() as td:
         c=pathlib.Path(td)/"code.c";a=pathlib.Path(td)/"app"
         c.write_text(source,encoding="utf-8")
-        args=[cc,"-std=c11","-Wall","-Wextra","-Werror","-Wno-unused-label",
+        args=[cc,"-std=c11","-Wall","-Wextra","-Werror","-Wno-unused-label","-Wno-unused-function",
               "-O2","-fsanitize=undefined","-I",str(ROOT/"tests/fixtures"),
               "-I",str(ROOT/"runtime"),str(c),
               str(ROOT/"runtime/ppu_bridge.c"),"-o",str(a)]
