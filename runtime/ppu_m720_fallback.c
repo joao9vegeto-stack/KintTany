@@ -167,6 +167,23 @@ int ar_ppc_fallback_step(ppu_context*c,const uint8_t*elf,size_t elf_len,
    const unsigned xo=(w>>1)&1023u,record=w&1u;
    const uint64_t x=r[a],y=r[b];
    switch(xo){
+   case 854:{ /* EIEIO: only architecturally defined exact X-form */
+      if(w!=UINT32_C(0x7c0006ac))return AR_PPC_UNSUPPORTED;
+      /* Conservative host-side ordering: stronger than PowerPC eieio.
+       * Unlike NOP, prevents CPU reordering of future MMIO guest effects. */
+      __atomic_thread_fence(__ATOMIC_SEQ_CST);
+      ar_ppc_note_barrier(pc,w);
+      c->cia=pc+4u;
+      return AR_TAIL;
+   }
+   case 598:{ /* SYNC (L=0), LWSYNC (L=1); reject privileged variants */
+      if(w!=UINT32_C(0x7c0004ac) &&
+         w!=UINT32_C(0x7c2004ac))return AR_PPC_UNSUPPORTED;
+      __atomic_thread_fence(__ATOMIC_SEQ_CST);
+      ar_ppc_note_barrier(pc,w);
+      c->cia=pc+4u;
+      return AR_TAIL;
+   }
    case 104:case 616:{ /* NEG / NEGO: -(RA) in 64-bit modular arithmetic */
       if(b!=0u)return AR_PPC_UNSUPPORTED; /* reserved RB must be zero */
       const uint64_t operand=x;
@@ -289,6 +306,13 @@ int ar_ppc_fallback_step(ppu_context*c,const uint8_t*elf,size_t elf_len,
  }
  case 19:{
    const unsigned xo=(w>>1)&1023u,bo=d,bi=(w>>16)&31u;
+   if(xo==150u){ /* ISYNC: instruction synchronization */
+      if(w!=UINT32_C(0x4c00012c))return AR_PPC_UNSUPPORTED;
+      __atomic_thread_fence(__ATOMIC_SEQ_CST);
+      ar_ppc_note_barrier(pc,w);
+      c->cia=pc+4u;
+      return AR_TAIL;
+   }
    if(xo!=16u&&xo!=528u)return AR_PPC_UNSUPPORTED;
    if(xo==528u&&!(bo&4u))return AR_PPC_UNSUPPORTED;
    const uint64_t target=(xo==16u?c->lr:c->ctr)&~UINT64_C(3);

@@ -41,7 +41,7 @@ class TestSecondImport(unittest.TestCase):
             'Copiar diagnóstico PPU'):
    self.assertIn(a,UI)
   for a in ('tests/host_m73_import_discovery.c','m73-prx-host.log',
-            'AscensionRecomp-M7.26-LV2-timebase',
+            'AscensionRecomp-M7.27-PPC-memory-order',
             '_ar_m73_private_import_probe'):
    self.assertIn(a,WF)
   self.assertIn('<string>74</string>',P)
