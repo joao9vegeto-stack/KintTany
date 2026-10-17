@@ -1,4 +1,4 @@
-name: PsTJohn1 1.1.2 - Carpeta exdata support
+name: PsTJohn1 1.2 - Ascension ZCull pressure A/B
 # runner-retry: fresh-run-after-macos-queue-failure
 
 on:
@@ -10,7 +10,7 @@ permissions:
   contents: write
 
 concurrency:
-  group: pstjohn1-v1-1-2
+  group: pstjohn1-v1-2
   cancel-in-progress: true
 
 jobs:
@@ -6416,9 +6416,9 @@ jobs:
           ! grep -q 'ios_dmc_spu_parallelism' rpcs3-src/rpcs3/Emu/Cell/SPUThread.cpp
           # Profile is a test aid; physical run114 left loop detection OFF.
           test -s PsTJon-KK-M6.9.1-NPUB30830-config.txt
-          cp PsTJon-KK-M6.9.1-NPUB30830-config.txt PsTJohn1-1.1.2-NPUB30830-config.txt
-          grep -q 'SPU loop detection: false' PsTJohn1-1.1.2-NPUB30830-config.txt
-          grep -q 'Disable SPU GETLLAR Spin Optimization: true' PsTJohn1-1.1.2-NPUB30830-config.txt
+          cp PsTJon-KK-M6.9.1-NPUB30830-config.txt PsTJohn1-1.2-NPUB30830-config.txt
+          grep -q 'SPU loop detection: false' PsTJohn1-1.2-NPUB30830-config.txt
+          grep -q 'Disable SPU GETLLAR Spin Optimization: true' PsTJohn1-1.2-NPUB30830-config.txt
 
           rm -rf build-kk-host kk-host-tools
           meson setup build-kk-host mesa-src \
@@ -6611,8 +6611,8 @@ jobs:
           assert "(s_offset + in_stencil_size) - z_offset" in p.read_text()
           PY_PSTJOHN_ARM
           git -C rpcs3-src diff --check
-          git -C rpcs3-src diff --stat | tee PsTJohn1-1.1.2-core-diff-stat.txt
-          git -C rpcs3-src diff -- rpcs3/Emu/Cell/SPULLVMRecompiler.cpp rpcs3/Emu/RSX/VK/VKTexture.cpp > PsTJohn1-1.1.2-arm64-backport.patch
+          git -C rpcs3-src diff --stat | tee PsTJohn1-1.2-core-diff-stat.txt
+          git -C rpcs3-src diff -- rpcs3/Emu/Cell/SPULLVMRecompiler.cpp rpcs3/Emu/RSX/VK/VKTexture.cpp > PsTJohn1-1.2-arm64-backport.patch
 
 
       - name: PsTJohn1.1 - controlled SPU rollback and bounded Vulkan cache persistence
@@ -6659,20 +6659,34 @@ jobs:
           print("PsTJohn1.1: guarded 512 MiB cache persistence; Vulkan transfer checks retained")
           PY_PSTJOHN11
           git -C rpcs3-src diff --check
-          git -C rpcs3-src diff --stat | tee PsTJohn1-1.1.2-core-diff-stat.txt
-          git -C rpcs3-src diff -- rpcs3/Emu/Cell/SPULLVMRecompiler.cpp rpcs3/Emu/RSX/VK/VKTexture.cpp rpcs3/Emu/RSX/VK/vkutils/device.cpp > PsTJohn1-1.1.2-arm64-backport.patch
-          test -s PsTJohn1-1.1.2-arm64-backport.patch
+          git -C rpcs3-src diff --stat | tee PsTJohn1-1.2-core-diff-stat.txt
+          git -C rpcs3-src diff -- rpcs3/Emu/Cell/SPULLVMRecompiler.cpp rpcs3/Emu/RSX/VK/VKTexture.cpp rpcs3/Emu/RSX/VK/vkutils/device.cpp > PsTJohn1-1.2-arm64-backport.patch
+          test -s PsTJohn1-1.2-arm64-backport.patch
 
 
-      - name: PsTJohn1 1.1.2 - validate and import sandboxed Carpeta PKG
+      - name: PsTJohn1 1.2 - validate and import sandboxed Carpeta PKG
         run: |
           set -euxo pipefail
           python3 .github/scripts/pstjohn111_carpeta.py
           git -C rpcs3-src diff --check
-          git -C rpcs3-src diff -- rpcs3/Crypto/unpkg.cpp rpcs3/ios/GameLibrary.cpp > PsTJohn1-1.1.2-carpeta.patch
-          test -s PsTJohn1-1.1.2-carpeta.patch
+          git -C rpcs3-src diff -- rpcs3/Crypto/unpkg.cpp rpcs3/ios/GameLibrary.cpp > PsTJohn1-1.2-carpeta.patch
+          test -s PsTJohn1-1.2-carpeta.patch
           grep -q 'PsTJohn1.1.2: Carpeta PKG detected' rpcs3-src/rpcs3/Crypto/unpkg.cpp
           grep -q 'installed_extracted_game(folder_root + entry.name)' rpcs3-src/rpcs3/ios/GameLibrary.cpp
+
+
+      - name: PsTJohn1 1.2 - bounded Ascension Vulkan query pressure A/B
+        run: |
+          set -euxo pipefail
+          python3 -m py_compile .github/scripts/pstjohn120_ascension.py
+          python3 .github/scripts/pstjohn120_ascension.py
+          git -C rpcs3-src diff --check
+          git -C rpcs3-src diff -- rpcs3/Emu/RSX/VK/VKGSRender.cpp rpcs3/Emu/RSX/VK/VKQueryPool.cpp > PsTJohn1-1.2-ascension-zcull.patch
+          test -s PsTJohn1-1.2-ascension-zcull.patch
+          grep -q 'PsTJohn1.2 NPUA_ASCENSION_VK_QUERY_AB' rpcs3-src/rpcs3/Emu/RSX/VK/VKGSRender.cpp
+          grep -q 'PsTJohn1.2 NPUA_VK_QUERY_STARVATION' rpcs3-src/rpcs3/Emu/RSX/VK/VKQueryPool.cpp
+          grep -q 'software query slots=4096 (BCUS98232/NPUA80918' rpcs3-src/rpcs3/Emu/RSX/RSXZCULL.cpp
+          grep -q 'PsTJohn1.1.2: Carpeta PKG detected' rpcs3-src/rpcs3/Crypto/unpkg.cpp
 
       - name: Build FFmpeg 8.1.1 for iOS
         run: |
@@ -6777,10 +6791,10 @@ jobs:
           codesign -d --entitlements :- "$APP" 2>&1 | tee pstjon-entitlements.txt
           (
             cd package
-            ditto -c -k --sequesterRsrc --keepParent Payload "$GITHUB_WORKSPACE/PsTJohn1-1.1.2.ipa"
+            ditto -c -k --sequesterRsrc --keepParent Payload "$GITHUB_WORKSPACE/PsTJohn1-1.2.ipa"
           )
-          shasum -a 256 PsTJohn1-1.1.2.ipa
-          test -s PsTJohn1-1.1.2-NPUB30830-config.txt
+          shasum -a 256 PsTJohn1-1.2.ipa
+          test -s PsTJohn1-1.2-NPUB30830-config.txt
       - name: Build report
         run: |
           {
@@ -6801,13 +6815,13 @@ jobs:
             echo "Volk: $VOLK_SHA"
             echo "FFmpeg: $FFMPEG_VERSION"
             echo "Core: $(shasum -a 256 libRPCS3Core.dylib | awk '{print $1}')"
-            echo "IPA: $(shasum -a 256 PsTJohn1-1.1.2.ipa | awk '{print $1}')"
-            echo "NPUB30830 config: $(shasum -a 256 PsTJohn1-1.1.2-NPUB30830-config.txt | awk '{print $1}')"
+            echo "IPA: $(shasum -a 256 PsTJohn1-1.2.ipa | awk '{print $1}')"
+            echo "NPUB30830 config: $(shasum -a 256 PsTJohn1-1.2-NPUB30830-config.txt | awk '{print $1}')"
             echo "Rollback checkpoint: pstjon-kk-m6.6.8-exp (1a6d4006c3f55b028672cbee36a6b859cdbaccf9)"
-          } > PsTJohn1-1.1.2-build.txt
+          } > PsTJohn1-1.2-build.txt
 
-          cp HANDOFF-PsTJon-KosmicKrisp-M0-M9-2026-10-12-M6.8.2-EXP.txt PsTJohn1-1.1.2-HANDOFF.txt
-          cat >> PsTJohn1-1.1.2-HANDOFF.txt <<'HANDOFF_M683'
+          cp HANDOFF-PsTJon-KosmicKrisp-M0-M9-2026-10-12-M6.8.2-EXP.txt PsTJohn1-1.2-HANDOFF.txt
+          cat >> PsTJohn1-1.2-HANDOFF.txt <<'HANDOFF_M683'
           
           ===========================================================
           M6.8.3-EXP 2026-10-12: update of prior handoff M0-M9
@@ -6848,7 +6862,7 @@ jobs:
           M0-M5 preserved. M6 ongoing graphics correctness/optimization.
           M7-M9 unvalidated and not claimed completed.
           HANDOFF_M683
-          cat >> PsTJohn1-1.1.2-HANDOFF.txt <<'HANDOFF_M684'
+          cat >> PsTJohn1-1.2-HANDOFF.txt <<'HANDOFF_M684'
           
           M6.8.4-EXP / 2026-10-13: NPUA80918 APP_VER=01.04 physical
           recording (81.9 s), clear image but 13.8 -> 0 FPS at 20s,
@@ -6861,7 +6875,7 @@ jobs:
           Ultra shader/WCB/true ZCull 512/KosmicKrisp unchanged.
           No claim of native 30 or 60 FPS or frame generation.
           HANDOFF_M684
-          cat >> PsTJohn1-1.1.2-HANDOFF.txt <<'HANDOFF_M685'
+          cat >> PsTJohn1-1.2-HANDOFF.txt <<'HANDOFF_M685'
           
           M6.8.5 EXP: physical M6.8.4 NPUA80918 v01.04 advanced
           ~5.7 minutes before unmapped writes beginning 0xcf900000;
@@ -6885,7 +6899,7 @@ jobs:
           blurred scene and prior failing scene; send video+log,
           validate local source/dst warnings, ZCull waits and memory.
           HANDOFF_M685
-          cat >> PsTJohn1-1.1.2-HANDOFF.txt <<'HANDOFF_M686'
+          cat >> PsTJohn1-1.2-HANDOFF.txt <<'HANDOFF_M686'
           
           M6.8.6 EXP / 2026-10-13
           A/B SAME TITLE NPUA80918 v01.12 on M6.8.4 vs M6.8.5:
@@ -6907,7 +6921,7 @@ jobs:
           NPUA 01.12 save/route and preserve records of last stage.
           HANDLE CRITICAL AS A DIAGNOSTIC BUILD; don't disable GPU safety.
           HANDOFF_M686
-          cat >> PsTJohn1-1.1.2-HANDOFF.txt <<'HANDOFF_M687'
+          cat >> PsTJohn1-1.2-HANDOFF.txt <<'HANDOFF_M687'
           
           M6.8.7 EXP / 2026-10-13
           Physical NPUB30830 01.01 DmC booted on M6.8.6 with actual
@@ -6934,7 +6948,7 @@ jobs:
           verify no image regression. Preserve graphical fixes and
           all other branches. 30/60FPS not achieved by this change.
           HANDOFF_M687
-          cat >> PsTJohn1-1.1.2-HANDOFF.txt <<'HANDOFF_M688'
+          cat >> PsTJohn1-1.2-HANDOFF.txt <<'HANDOFF_M688'
 
           M6.8.8-EXP 2026-10-13: GLOBAL CODE DEPILATION AUDIT
           M4 workflow ~895 lines, M6.8.7 ~6468 lines due sequential
@@ -6966,7 +6980,7 @@ jobs:
           M0-M6 still in progress; M7 30FPS, M8 60 native, M9
           frame interpolation/integration pending. Do not merge M9.
           HANDOFF_M688
-          cat >> PsTJohn1-1.1.2-HANDOFF.txt <<'HANDOFF_M69'
+          cat >> PsTJohn1-1.2-HANDOFF.txt <<'HANDOFF_M69'
 
           M6.9-EXP 2026-10-14: DmC NPUB30830 physical log audit and
           telemetry-only frametime percentile addition.
@@ -7002,7 +7016,7 @@ jobs:
           No claim of stable 30/60 FPS. Physical A/B on DmC and Ascension
           remains required; supplied log is DmC, not Ascension.
           HANDOFF_M69
-          cat >> PsTJohn1-1.1.2-HANDOFF.txt <<'HANDOFF_M691'
+          cat >> PsTJohn1-1.2-HANDOFF.txt <<'HANDOFF_M691'
 
           M6.9.1-EXP 2026-10-14: ARM64 reservation-wait A/B adapted from
           upstream RPCS3 PR #18913, replacing the speculative scheduler
@@ -7028,7 +7042,7 @@ jobs:
           It does not claim stable 30/60 FPS. Existing M6.9 frame telemetry and
           M6.8.8-to-M6.8.1 safeguards/fidelity changes remain.
           HANDOFF_M691
-          cat >> PsTJohn1-1.1.2-HANDOFF.txt <<'HANDOFF_M692'
+          cat >> PsTJohn1-1.2-HANDOFF.txt <<'HANDOFF_M692'
           
           M6.9.2-EXP 2026-10-14 — CONTROLLED GLOBAL SPU ROLLBACK
           Three sibling commits on common M6.9 parent (2f6009b):
@@ -7060,9 +7074,9 @@ jobs:
           remain outstanding.
           HANDOFF_M692
 
-          cat >> PsTJohn1-1.1.2-HANDOFF.txt <<'HANDOFF_PSTJOHN11'
+          cat >> PsTJohn1-1.2-HANDOFF.txt <<'HANDOFF_PSTJOHN11'
 
-          PsTJohn1 1.1.2 / 2026-10-15 — CONTROLLED STABILITY BUILD
+          PsTJohn1 1.2 / 2026-10-15 — CONTROLLED STABILITY BUILD
           Physical PsTJohn1 1.0 DmC NPUB30830 two logs:
           loop detection ON: 89 telemetry windows; median 19.24 FPS,
           median late 17.66, 55.1% windows below 20FPS, 4898MiB peak.
@@ -7093,9 +7107,9 @@ jobs:
           Do not extrapolate FPS stability from successful CI.
           HANDOFF_PSTJOHN11
 
-          cat >> PsTJohn1-1.1.2-HANDOFF.txt <<'HANDOFF_CARPETA_111'
+          cat >> PsTJohn1-1.2-HANDOFF.txt <<'HANDOFF_CARPETA_111'
 
-          PsTJohn1 1.1.2 / 2026-10-16 — CARPETA PKG IMPORT
+          PsTJohn1 1.2 / 2026-10-16 — CARPETA PKG IMPORT
           User's ZukoStore Carpeta PKG: ZUKO3C_d3v11_m4ykry_4.pkg
           PS3 8,168,857,312 bytes, 2372 files, content-type 0x09
           THEME, header CUSTOM-INSTALLER_00-0000000000000000,
@@ -7119,9 +7133,9 @@ jobs:
           Entire previous 1.1 graphics/JIT/RSX/KosmicKrisp fixes
           remain untouched. 30FPS stable not demonstrated.
           HANDOFF_CARPETA_111
-          cat >> PsTJohn1-1.1.2-HANDOFF.txt <<'HANDOFF_CARPETA_112'
+          cat >> PsTJohn1-1.2-HANDOFF.txt <<'HANDOFF_CARPETA_112'
 
-          PsTJohn1 1.1.2 — PHYSICAL CARPETA PKG FOLLOW-UP
+          PsTJohn1 1.2 — PHYSICAL CARPETA PKG FOLLOW-UP
           Device evidence from 1.1.1: unsafe path ../../dev_hdd0/exdata.
           The old iOS-only preflight permitted game/GAMES/GAMEZ
           but not exdata. Permit exdata within the same protected
@@ -7134,20 +7148,51 @@ jobs:
           existing traversal rejection. On-device installation and
           functional game detection still require physical evidence.
           HANDOFF_CARPETA_112
-          test -s PsTJohn1-1.1.2-HANDOFF.txt
+
+          cat >> PsTJohn1-1.2-HANDOFF.txt <<'PSTJOHN120'
+
+          PsTJohn1 1.2 (2026-10-17) — ASCENSION ZCULL VULKAN A/B
+          Physically observed NPUA80918: ~8FPS median, 1143 forced
+          ZCull hard sync warnings, memory footprint ~5.7GiB,
+          ~19K pipeline misses, 0FPS with RSX join wait. Earlier
+          GETLLAR performance report OFF eliminated warning spam,
+          did not improve FPS, so no SPU wait changes are justified.
+          IMPORTANT: previous RSX software headroom was ALREADY
+          4096 queries with 3584 pressure threshold for NPUA;
+          never present this 1.2 as an increase from 2048.
+          This A/B changes only NPUA Vulkan query manager 512 to
+          768 real hardware query slots; the original 512 was
+          introduced to avoid OOM on unbounded pools. BCUS retains
+          512, all other title branches retain their profiles.
+          VKQueryPool reports real exhaustion at power-of-two
+          intervals without faking results, removing waits or
+          violating GPU reference ownership.
+          Completely preserves 1.1.2 Carpeta/exdata import, all
+          shader/texture fidelity, KosmicKrisp, 512MiB cache and
+          Devil May Cry 4 60FPS controls. No VRAM cache pressure
+          threshold change or speculative unsafe surface purge.
+          On physical test compare frame p50/p95, VK_QUERY_STARVATION,
+          'Out of free occlusion slots', allocator/headroom, crashes,
+          texture corruption and 1.1.2 baseline. Investigate actual
+          RSX stall/freeze cause separately if 0FPS persists.
+          CI success proves only builds/tests; no physical FPS
+          improvement, monster texture fix or Jetsam fix claimed.
+          PSTJOHN120
+          test -s PsTJohn1-1.2-HANDOFF.txt
 
       - uses: actions/upload-artifact@v4
         with:
-          name: PsTJohn1-1.1.2-IPA
+          name: PsTJohn1-1.2-IPA
           path: |
-            PsTJohn1-1.1.2.ipa
-            PsTJohn1-1.1.2-core-diff-stat.txt
-            PsTJohn1-1.1.2-arm64-backport.patch
-            PsTJohn1-1.1.2-carpeta.patch
-            PsTJohn1-1.1.2-build.txt
-            PsTJohn1-1.1.2-NPUB30830-config.txt
+            PsTJohn1-1.2.ipa
+            PsTJohn1-1.2-core-diff-stat.txt
+            PsTJohn1-1.2-arm64-backport.patch
+            PsTJohn1-1.2-carpeta.patch
+            PsTJohn1-1.2-ascension-zcull.patch
+            PsTJohn1-1.2-build.txt
+            PsTJohn1-1.2-NPUB30830-config.txt
             M6.9.1-ROLLBACK-TO-M6.6.8.txt
-            PsTJohn1-1.1.2-HANDOFF.txt
+            PsTJohn1-1.2-HANDOFF.txt
             pstjon-entitlements.txt
             M5-rpcs3-patch-stat.txt
             M4-mesa-patch-stat.txt
@@ -7163,23 +7208,23 @@ jobs:
           compression-level: 0
 
       # Direct iPhone-ready release is required in addition to the Actions artifact.
-      - name: Publish direct PsTJohn1 1.1.2 IPA
+      - name: Publish direct PsTJohn1 1.2 IPA
         if: success()
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
           set -euxo pipefail
-          if gh release view pstjohn1-1.1.2 >/dev/null 2>&1; then
-            gh release upload pstjohn1-1.1.2 PsTJohn1-1.1.2.ipa PsTJohn1-1.1.2-NPUB30830-config.txt M6.9.1-ROLLBACK-TO-M6.6.8.txt PsTJohn1-1.1.2-HANDOFF.txt PsTJohn1-1.1.2-arm64-backport.patch PsTJohn1-1.1.2-carpeta.patch --clobber
+          if gh release view pstjohn1-1.2 >/dev/null 2>&1; then
+            gh release upload pstjohn1-1.2 PsTJohn1-1.2.ipa PsTJohn1-1.2-NPUB30830-config.txt M6.9.1-ROLLBACK-TO-M6.6.8.txt PsTJohn1-1.2-HANDOFF.txt PsTJohn1-1.2-arm64-backport.patch PsTJohn1-1.2-carpeta.patch PsTJohn1-1.2-ascension-zcull.patch --clobber
           else
-            gh release create pstjohn1-1.1.2 PsTJohn1-1.1.2.ipa PsTJohn1-1.1.2-NPUB30830-config.txt M6.9.1-ROLLBACK-TO-M6.6.8.txt PsTJohn1-1.1.2-HANDOFF.txt PsTJohn1-1.1.2-arm64-backport.patch PsTJohn1-1.1.2-carpeta.patch \
+            gh release create pstjohn1-1.2 PsTJohn1-1.2.ipa PsTJohn1-1.2-NPUB30830-config.txt M6.9.1-ROLLBACK-TO-M6.6.8.txt PsTJohn1-1.2-HANDOFF.txt PsTJohn1-1.2-arm64-backport.patch PsTJohn1-1.2-carpeta.patch PsTJohn1-1.2-ascension-zcull.patch \
               --target "$GITHUB_SHA" \
-              --title "PsTJohn1 1.1.2 - Carpeta exdata support" \
-              --notes "PsTJohn1 1.1.2: resolves device-confirmed Carpeta PKG rejection of ../../dev_hdd0/exdata by adding exdata to the sandboxed iOS PS3 HDD whitelist alongside game/GAMES/GAMEZ. Logs sanitized counts of all Carpeta top-level roots to identify other unexpected folders at once. Keeps strict full-entry validation, filesystem canonicalization, protections for ordinary PKGs, and the 1.1.1 game library integration. SPU/RSX/KosmicKrisp and Vulkan pipeline cache unchanged. Hardware test of the 8.17GB source PKG required before claiming successful installation." \
+              --title "PsTJohn1 1.2 - Ascension ZCull pressure A/B" \
+              --notes "PsTJohn1 1.2: Ascension NPUA80918 Vulkan ZCull pool scoped A/B 512->768 slots (existing RSX 4096/3584 unchanged). Power-of-two sampled real query allocation exhaustion; unchanged GPU fences, actual query results, resource lifetime and rendering. DmC Devil May Cry 4 60FPS and Carpeta PKG v1.1.2 behavior retained; KosmicKrisp, SPU, RSX textures, shader precision, VRAM budgets and all other game profiles untouched. Ascension 8FPS, pressure and 0FPS freeze remain targets, not proven fixed. Physical Ascension/DmC regression tests required." \
               --latest=false
           fi
-          gh release edit pstjohn1-1.1.2 \
-            --title "PsTJohn1 1.1.2 - Carpeta exdata support" \
-            --notes "PsTJohn1 1.1.2: resolves device-confirmed Carpeta PKG rejection of ../../dev_hdd0/exdata by adding exdata to the sandboxed iOS PS3 HDD whitelist alongside game/GAMES/GAMEZ. Logs sanitized counts of all Carpeta top-level roots to identify other unexpected folders at once. Keeps strict full-entry validation, filesystem canonicalization, protections for ordinary PKGs, and the 1.1.1 game library integration. SPU/RSX/KosmicKrisp and Vulkan pipeline cache unchanged. Hardware test of the 8.17GB source PKG required before claiming successful installation." \
+          gh release edit pstjohn1-1.2 \
+            --title "PsTJohn1 1.2 - Ascension ZCull pressure A/B" \
+            --notes "PsTJohn1 1.2: Ascension NPUA80918 Vulkan ZCull pool scoped A/B 512->768 slots (existing RSX 4096/3584 unchanged). Power-of-two sampled real query allocation exhaustion; unchanged GPU fences, actual query results, resource lifetime and rendering. DmC Devil May Cry 4 60FPS and Carpeta PKG v1.1.2 behavior retained; KosmicKrisp, SPU, RSX textures, shader precision, VRAM budgets and all other game profiles untouched. Ascension 8FPS, pressure and 0FPS freeze remain targets, not proven fixed. Physical Ascension/DmC regression tests required." \
             --latest=false
-          gh release view pstjohn1-1.1.2 --json url,assets
+          gh release view pstjohn1-1.2 --json url,assets
