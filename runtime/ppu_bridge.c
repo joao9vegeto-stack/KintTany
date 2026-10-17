@@ -10,6 +10,29 @@
 #define MAX_LV2_SYSCALLS 512
 static struct {uint32_t pc;ar_ppu_fn fn;} funcs[MAX_FUNCS];
 static size_t nfunc,mem_size;
+/* Open-addressed 16k index: bounded lookup, no allocations during dispatch.
+ * Slot stores registered-index+1; zero is empty. */
+#define AR_AOT_INDEX_SIZE 16384u
+static uint16_t aot_slot[AR_AOT_INDEX_SIZE];
+static uint8_t trace_seen[MAX_FUNCS];
+static uint32_t trace_ring[AR_AOT_TRACE_PCS],trace_total,trace_unique;
+static uint32_t trace_hle,trace_pending,trace_budget;
+static uint32_t aot_hash(uint32_t pc){
+  return (((pc>>2)*UINT32_C(2654435761)) & (AR_AOT_INDEX_SIZE-1u));
+}
+void ar_trace_snapshot(ar_aot_trace *out) {
+ if(!out)return;
+ memset(out,0,sizeof(*out));
+ out->aot_dispatches=trace_total;
+ out->unique_aot=trace_unique;
+ out->unresolved_pc=trace_pending;
+ out->hle_dispatches=trace_hle;
+ out->max_budget=trace_budget;
+ out->trace_count=trace_total<AR_AOT_TRACE_PCS?trace_total:AR_AOT_TRACE_PCS;
+ const uint32_t start=trace_total-out->trace_count;
+ for(uint32_t i=0;i<out->trace_count;i++)
+   out->trace_pcs[i]=trace_ring[(start+i)&(AR_AOT_TRACE_PCS-1u)];
+}
 static struct {uint32_t stub,nid;} imports[MAX_IMPORTS];
 static size_t nimports;
 static struct {uint32_t nid;ar_hle_fn fn;} handlers[MAX_HANDLERS];
@@ -31,7 +54,10 @@ int ar_bridge_init(size_t n) {
   mem_size=n;return AR_OK;
 }
 void ar_bridge_shutdown(void){
-  free(mem);mem=0;mem_size=0;memset(extra,0,sizeof(extra));nextra=0;nfunc=0;nimports=0;nhandlers=0;nsyscalls=0;missing_nid=0;missing_syscall=0;fault=0;missing=0;budget=0;depth=0;
+  free(mem);mem=0;mem_size=0;memset(extra,0,sizeof(extra));nextra=0;nfunc=0;memset(aot_slot,0,sizeof(aot_slot));
+ memset(trace_seen,0,sizeof(trace_seen));memset(trace_ring,0,sizeof(trace_ring));
+ trace_total=0;trace_unique=0;trace_hle=0;trace_pending=0;trace_budget=0;
+ nimports=0;nhandlers=0;nsyscalls=0;missing_nid=0;missing_syscall=0;fault=0;missing=0;budget=0;depth=0;
 }
 int ar_last_error(void){return fault;}
 uint32_t ar_last_missing_nid(void){return missing_nid;}
@@ -130,12 +156,30 @@ void ar_write32(uint64_t a,uint32_t v){write_be(a,v,4);}
 void ar_write64(uint64_t a,uint64_t v){write_be(a,v,8);}
 int ar_register(uint32_t pc,ar_ppu_fn fn){
   if(!pc||(pc&3)||!fn||nfunc>=MAX_FUNCS)return AR_BAD_ARGS;
-  for(size_t i=0;i<nfunc;i++)if(funcs[i].pc==pc)return AR_DUPLICATE;
-  funcs[nfunc].pc=pc;funcs[nfunc++].fn=fn;return AR_OK;
+  uint32_t slot=aot_hash(pc);
+  for(unsigned probes=0;probes<AR_AOT_INDEX_SIZE;probes++){
+    if(!aot_slot[slot]){
+      funcs[nfunc].pc=pc;funcs[nfunc].fn=fn;
+      aot_slot[slot]=(uint16_t)(nfunc+1u);nfunc++;
+      return AR_OK;
+    }
+    if(funcs[aot_slot[slot]-1u].pc==pc)return AR_DUPLICATE;
+    slot=(slot+1u)&(AR_AOT_INDEX_SIZE-1u);
+  }
+  return AR_BAD_ARGS;
 }
-static ar_ppu_fn lookup(uint64_t addr){
-  if(addr>UINT32_MAX||(addr&3))return 0;
-  for(size_t i=0;i<nfunc;i++)if(funcs[i].pc==addr)return funcs[i].fn;
+static ar_ppu_fn lookup(uint64_t addr,size_t *index){
+  if(addr>UINT32_MAX||(addr&3u))return 0;
+  uint32_t slot=aot_hash((uint32_t)addr);
+  for(unsigned probes=0;probes<AR_AOT_INDEX_SIZE;probes++){
+    if(!aot_slot[slot])return 0;
+    const size_t idx=(size_t)aot_slot[slot]-1u;
+    if(funcs[idx].pc==addr){
+      if(index)*index=idx;
+      return funcs[idx].fn;
+    }
+    slot=(slot+1u)&(AR_AOT_INDEX_SIZE-1u);
+  }
   return 0;
 }
 static uint32_t import_nid(uint64_t stub){
@@ -152,12 +196,14 @@ static int dispatch(ppu_context *c,uint64_t pc){
   for(;;){
     if(!budget){result=fault=AR_BUDGET;break;}
     budget--;
-    ar_ppu_fn fn=lookup(pc);
+    size_t found_index=0u;
+    ar_ppu_fn fn=lookup(pc,&found_index);
     if(!fn){
       uint32_t nid=import_nid(pc);
       if(nid){
         ar_hle_fn hle=hle_handler(nid);
         if(!hle){missing_nid=nid;result=fault=AR_MISSING_HLE;break;}
+        trace_hle++;
         uint64_t saved_toc=c->gpr[2];
         int rc=hle(c);
         c->gpr[2]=saved_toc;
@@ -165,8 +211,12 @@ static int dispatch(ppu_context *c,uint64_t pc){
         if(rc){result=fault=AR_HLE_FAILURE;break;}
         c->cia=c->lr;result=AR_OK;break;
       }
-      missing=(uint32_t)pc;result=fault=AR_UNRESOLVED;break;
+      missing=(uint32_t)pc;trace_pending=(uint32_t)pc;
+      result=fault=AR_UNRESOLVED;break;
     }
+    trace_ring[trace_total & (AR_AOT_TRACE_PCS-1u)]=(uint32_t)pc;
+    trace_total++;
+    if(!trace_seen[found_index]){trace_seen[found_index]=1u;trace_unique++;}
     int status=fn(c);
     if(fault){result=fault;break;}
     if(status==AR_TAIL){pc=c->cia;continue;}
@@ -182,5 +232,7 @@ int ar_guest_call(ppu_context *c,uint64_t pc){
 int ar_run(ppu_context *c,uint32_t pc,uint32_t ticks){
   if(!c||!pc||!ticks||!mem||depth)return AR_BAD_ARGS;
   fault=0;missing=0;missing_nid=0;missing_syscall=0;budget=ticks;
+  memset(trace_seen,0,sizeof(trace_seen));memset(trace_ring,0,sizeof(trace_ring));
+  trace_total=0;trace_unique=0;trace_hle=0;trace_pending=0;trace_budget=ticks;
   return dispatch(c,pc);
 }
