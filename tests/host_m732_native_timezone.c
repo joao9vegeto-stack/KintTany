@@ -45,7 +45,13 @@ int main(void){
  if(ar_vm_load(PC,elf+0x200,sizeof(words))!=AR_OK)return 8;
  if(ar_m732_register_block(elf,sizeof(elf))!=AR_OK ||
     ar_registered_count()!=1u)return 9;
- if(ar_bind_syscall(144u,ar_lv2_timezone)!=AR_OK)return 10;
+ /* The synthetic regression uses the exact SAME production binder. */
+ if(ar_lv2_bind_bootstrap_syscalls()!=AR_OK)return 10;
+ if(ar_bind_syscall(144u,ar_lv2_timezone)!=AR_DUPLICATE ||
+    ar_bind_syscall(145u,ar_lv2_current_time)!=AR_DUPLICATE ||
+    ar_bind_syscall(147u,ar_lv2_timebase_frequency)!=AR_DUPLICATE ||
+    ar_bind_syscall(0x160u,ar_lv2_user_memory_size)!=AR_DUPLICATE)
+     return 21;
  ar_lv2_bootstrap_reset();
  ppu_context c={0};
  c.lr=UINT64_C(0x00524000);

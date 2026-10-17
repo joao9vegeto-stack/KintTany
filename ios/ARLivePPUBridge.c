@@ -223,10 +223,9 @@ int ar_m70_native_runtime_probe(const uint8_t*d,size_t len,
  }
 
  
- if(ar_bind_syscall(0x160u,ar_lv2_user_memory_size)!=AR_OK ||
-    ar_bind_syscall(147u,ar_lv2_timebase_frequency)!=AR_OK ||
-    ar_bind_syscall(145u,ar_lv2_current_time)!=AR_OK){
-   ar_bridge_shutdown();return -30;
+ /* M7.33: production's single source of truth, also tested on host. */
+ if(ar_lv2_bind_bootstrap_syscalls()!=AR_OK){
+    ar_bridge_shutdown();return -30;
  }
  uint32_t tmimp[4]={0}; char tmlib[48]={0};
  const int tmmatch=ar_private_import_find_nid(
@@ -278,6 +277,7 @@ int ar_m70_native_runtime_probe(const uint8_t*d,size_t len,
  else out[6]=(uint32_t)ar_run(&ctx,image.entry_code,128u);
  out[7]=ar_last_unresolved();
  ar_trace_snapshot(&last_run_trace);
+ last_run_trace.lv2_timezone_completed=ar_lv2_timezone_queries();
  
  if(out[5])out[12]=(uint32_t)ctx.gpr[13];
  if((int32_t)out[6]==AR_UNRESOLVED && out[7]==image.entry_code)

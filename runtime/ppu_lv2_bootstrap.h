@@ -3,6 +3,8 @@
 #define AR_LV2_BOOTSTRAP_H
 #include "ppu_bridge.h"
 void ar_lv2_bootstrap_reset(void);
+/* Shared iPhone/host LV2 syscall registration; all four production handlers. */
+int ar_lv2_bind_bootstrap_syscalls(void);
 int ar_lv2_user_memory_size(ppu_context *cpu);
 int ar_lv2_system_time(ppu_context *cpu);
 /* LV2 syscall 147 (0x093): 64-bit timebase frequency in guest r3. */

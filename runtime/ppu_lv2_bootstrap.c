@@ -17,6 +17,20 @@
 enum { AR_USER_TOTAL=0x10000000u, AR_USER_AVAIL=0x0e000000u };
 static unsigned memory_queries,time_queries,timebase_queries,current_time_queries,timezone_queries;
 void ar_lv2_bootstrap_reset(void){memory_queries=time_queries=timebase_queries=current_time_queries=timezone_queries=0u;}
+/* M7.33: use the identical dispatcher registration in iOS and host tests. */
+int ar_lv2_bind_bootstrap_syscalls(void){
+ const struct {uint32_t number;ar_hle_fn fn;} services[]={
+  {UINT32_C(0x160),ar_lv2_user_memory_size},
+  {UINT32_C(147),ar_lv2_timebase_frequency},
+  {UINT32_C(145),ar_lv2_current_time},
+  {UINT32_C(144),ar_lv2_timezone}
+ };
+ for(size_t i=0;i<sizeof(services)/sizeof(services[0]);i++){
+    const int rc=ar_bind_syscall(services[i].number,services[i].fn);
+    if(rc!=AR_OK)return rc;
+ }
+ return AR_OK;
+}
 unsigned ar_lv2_user_memory_queries(void){return memory_queries;}
 unsigned ar_lv2_time_queries(void){return time_queries;}
 unsigned ar_lv2_timebase_queries(void){return timebase_queries;}

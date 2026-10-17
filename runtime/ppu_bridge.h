@@ -55,6 +55,7 @@ typedef struct {
     uint32_t last_barrier_pc;
     /* M7.29 actual PPC fallback FP steps; not native AOT. */
     uint32_t fp_loads,fp_stores,fp_converts,fp_divides,fp_last_pc;
+    uint32_t lv2_timezone_completed; /* M7.33: actual iPhone LV2 144 success count */
 } ar_aot_trace;
 void ar_trace_snapshot(ar_aot_trace *out);
 /* Experimental signed non-JIT fallback. Attach the exact owner ELF ONLY
