@@ -66,11 +66,15 @@ def mask64(mb: int, me: int) -> int:
 def lift(words: list[int] | tuple[int, ...], base: int, name: str = 'ppu_sample') -> tuple[str,dict]:
     if not words or len(words)>512 or base & 3:
         raise Unsupported('invalid function length / address')
+    needs_fp=any(((w>>26) in (48,50,52,54)) or
+                 ((w>>26)==63 and ((w>>1)&1023) in (18,846))
+                 for w in words)
     needs_vmx=any(((w>>26)==4 and (w&2047) in (652,780,844,908)) or
                   ((w>>26)==31 and ((w>>1)&1023) in
                    (103,359,519,775,551,807,231,487,647,903,679,935))
                   for w in words)
     lines=[PROLOGUE, '#include "ppu_vmx_cell.h"' if needs_vmx else '',
+           '#include "ppu_fp_scalar.h"' if needs_fp else '',
            f'int {name}(ppu_ctx *c) {{']
     hist=Counter()
     addresses={base+4*i for i in range(len(words))}
@@ -105,6 +109,26 @@ def lift(words: list[int] | tuple[int, ...], base: int, name: str = 'ppu_sample'
             if not (bo & 16):
                 parts.append(f'(((c->cr >> {31-bi}) & 1U) == {1 if bo&8 else 0}U)')
             return ' && '.join(parts) if parts else '1'
+        if op in (48,50,52,54):
+            single=1 if op in (48,52) else 0
+            ea=f'({addr_base(a)}+(u64)((int64_t){imm}))'
+            name='load' if op in (48,50) else 'store'
+            e(f'int fpr_rc_{i}=ar_fp_{name}(c,{d},{ea},{single});')
+            e(f'if(fpr_rc_{i}!=0) return fpr_rc_{i};')
+            hist['fp_'+name]+=1
+            continue
+        if op==63:
+            xo=(w>>1)&1023
+            if w&1:raise Unsupported('FP Rc updates CR1 not supported yet')
+            if xo==846 and a==0:
+                e(f'if(ar_fp_fcfid(c,{d},{b})!=0) return -12;')
+                hist['fcfid']+=1
+                continue
+            if xo==18:
+                e(f'if(ar_fp_fdiv(c,{d},{a},{b})!=0) return -12;')
+                hist['fdiv']+=1
+                continue
+            raise Unsupported(f'unsupported floating opcode63/{xo}')
         if op==4:
             xo=w&2047
             if xo in (780,844,908):

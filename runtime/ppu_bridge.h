@@ -24,6 +24,7 @@ int ar_bind_syscall(uint32_t syscall_number,ar_hle_fn handler);
 int ar_guest_syscall(ppu_context*);
 void ar_ppc_note_syscall_pc(uint32_t pc);
 void ar_ppc_note_barrier(uint32_t pc, uint32_t instruction);
+void ar_ppc_note_fp(uint32_t pc, uint32_t instruction);
 uint32_t ar_last_missing_syscall(void);
 uint32_t ar_last_missing_nid(void);
 uint32_t ar_last_unresolved(void);
@@ -47,6 +48,8 @@ typedef struct {
     /* M7.27: real fallback-executed memory ordering barriers only. */
     uint32_t eieio_steps, sync_steps, lwsync_steps, isync_steps;
     uint32_t last_barrier_pc;
+    /* M7.29 actual PPC fallback FP steps; not native AOT. */
+    uint32_t fp_loads,fp_stores,fp_converts,fp_divides,fp_last_pc;
 } ar_aot_trace;
 void ar_trace_snapshot(ar_aot_trace *out);
 /* Experimental signed non-JIT fallback. Attach the exact owner ELF ONLY
