@@ -37,6 +37,9 @@ static inline u32 ar_rotl32(u32 v, unsigned sh) {
 static inline u64 ar_rotl64(u64 v, unsigned sh) {
     sh &= 63U; return sh ? ((v<<sh) | (v>>(64U-sh))) : v;
 }
+static inline u64 ar_data32(u32 v) {
+    return ((u64)v << 32) | (u64)v;
+}
 '''
 
 def sx(value: int, bits: int) -> int:
@@ -171,12 +174,24 @@ def lift(words: list[int] | tuple[int, ...], base: int, name: str = 'ppu_sample'
             e(f'{reg(a)} = {reg(d)} & 0x{v:x}ULL;')
             record(cmp_expr(f'(s32)(u32){reg(a)}','0'))
             hist['andi.']+=1
-        elif op==21:
-            sh=(w>>11)&31; mb=(w>>6)&31;me=(w>>1)&31
-            mask=mask32(mb,me)
-            e(f'{reg(a)}=(u64)(ar_rotl32((u32){reg(d)},{sh}) & 0x{mask:08x}U);')
-            if w&1:record(cmp_expr(f'(s32)(u32){reg(a)}','0'))
-            hist['rlwinm']+=1
+        elif op in (20,21,23):
+            # M7.22: PPC64 M-form masked word rotations, including RLWIMI.
+            # The Power ISA MASK32 wraps across the word boundary on 64-bit
+            # machines: MB>ME includes the upper 32 bits as well, while
+            # DATA32 duplicates the rotated word into the full 64-bit value.
+            # RLWIMI must keep every bit OUTSIDE the mask from old RA.
+            sh=(w>>11)&31; mb=(w>>6)&31; me=(w>>1)&31
+            mask=mask32(mb,me) | (0xffffffff00000000 if mb>me else 0)
+            shift=f'((u32){reg(b)} & 31U)' if op==23 else str(sh)
+            e(f'u32 rot32_{i}=ar_rotl32((u32){reg(d)},{shift});')
+            e(f'u64 data64_{i}=ar_data32(rot32_{i});')
+            if op==20:
+                e(f'{reg(a)}=({reg(a)} & ~0x{mask:016x}ULL) | (data64_{i} & 0x{mask:016x}ULL);')
+                hist['rlwimi']+=1
+            else:
+                e(f'{reg(a)}=data64_{i} & 0x{mask:016x}ULL;')
+                hist['rlwnm' if op==23 else 'rlwinm']+=1
+            if w&1:record(cmp_expr(f'(int64_t){reg(a)}','0LL'))
         elif op==30:
             xo=(w>>2)&7
             if xo not in (0,1,2,3):raise Unsupported(f'unsupported MD64 rotate form {xo}')
@@ -223,6 +238,25 @@ def lift(words: list[int] | tuple[int, ...], base: int, name: str = 'ppu_sample'
             elif xo==986:
                 if rc:raise Unsupported('extsw. CR update unsupported')
                 e(f'{reg(a)}=(u64)(int64_t)(s32)(u32){reg(d)};');hist['extsw']+=1
+            elif xo==8:
+                # subfc RT,RA,RB: RB-RA, carry=no borrow; no OE form.
+                e(f'u64 sub_l_{i}={reg(a)},sub_r_{i}={reg(b)};')
+                e(f'{reg(d)}=sub_r_{i}-sub_l_{i};')
+                e(f'c->xer=(c->xer & ~0x20000000U) | ((sub_r_{i}>=sub_l_{i}) ? 0x20000000U : 0U);')
+                if rc:record(cmp_expr(f'(int64_t){reg(d)}','0LL'))
+                hist['subfc']+=1
+            elif xo==235:
+                # mullw: signed 32-bit result sign-extended to PPC64 GPR.
+                e(f'{reg(d)}=(u64)(int64_t)(s32)(u32)((u64)(u32){reg(a)} * (u64)(u32){reg(b)});')
+                if rc:record(cmp_expr(f'(int64_t){reg(d)}','0LL'))
+                hist['mullw']+=1
+            elif xo==459:
+                # divwu: undefined division by zero fails closed.
+                e(f'u32 divisor_{i}=(u32){reg(b)};')
+                e(f'if (!divisor_{i}) return -12;')
+                e(f'{reg(d)}=(u64)((u32){reg(a)} / divisor_{i});')
+                if rc:record(cmp_expr(f'(int64_t){reg(d)}','0LL'))
+                hist['divwu']+=1
             elif xo==10:
                 e(f'u64 old_{i}={reg(a)};')
                 e(f'{reg(d)}=old_{i}+{reg(b)};')
