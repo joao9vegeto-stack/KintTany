@@ -9,7 +9,8 @@ extern "C" {
 #endif
 enum { AR_OK=0, AR_TAIL=1, AR_BAD_ARGS=-1, AR_MEM_FAULT=-2,
        AR_UNRESOLVED=-3, AR_BUDGET=-4, AR_DEPTH=-5, AR_DUPLICATE=-6,
-       AR_NO_MEMORY=-7, AR_MISSING_HLE=-8, AR_HLE_FAILURE=-9, AR_MISSING_LV2=-10, AR_LV2_FAILURE=-11 };
+       AR_NO_MEMORY=-7, AR_MISSING_HLE=-8, AR_HLE_FAILURE=-9, AR_MISSING_LV2=-10, AR_LV2_FAILURE=-11,
+       AR_PPC_UNSUPPORTED=-12, AR_PPC_LIMIT=-13 };
 typedef int (*ar_ppu_fn)(ppu_context *);
 typedef int (*ar_hle_fn)(ppu_context *);
 int ar_bridge_init(size_t);
@@ -33,8 +34,22 @@ typedef struct {
     uint32_t aot_dispatches, unique_aot, unresolved_pc;
     uint32_t hle_dispatches, max_budget, trace_count;
     uint32_t trace_pcs[AR_AOT_TRACE_PCS];
+    /* M7.20: INTERPRETER FALLBACK counts are NEVER included in AOT counts. */
+    uint32_t fallback_steps, fallback_last_pc, fallback_last_opcode;
+    uint32_t fallback_unsupported_pc, fallback_unsupported_word;
+    uint32_t fallback_step_limit;
 } ar_aot_trace;
 void ar_trace_snapshot(ar_aot_trace *out);
+/* Experimental signed non-JIT fallback. Attach the exact owner ELF ONLY
+ * after its SHA-256 was verified by the private AOT installer. Owner of ELF
+ * memory must keep it alive through ar_run; bridge never owns these bytes. */
+typedef int (*ar_ppc_fallback_fn)(ppu_context*,const uint8_t*,size_t,
+                                    uint32_t,uint32_t*);
+int ar_ppc_fallback_attach(const uint8_t *elf,size_t len,uint32_t max_steps,
+                           ar_ppc_fallback_fn evaluator);
+/* Internal single-step evaluator; public only for synthetic tests. */
+int ar_ppc_fallback_step(ppu_context *c,const uint8_t *elf,size_t len,
+                         uint32_t pc,uint32_t *opcode);
 
 /* High mapped guest virtual pages; ownership managed by ppu_mmapper. */
 int ar_vm_external_map(uint32_t guest_va,uint8_t *data,size_t length);

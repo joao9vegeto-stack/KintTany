@@ -580,7 +580,7 @@ extern int ar_probe_rsx_texture_cache_mutation(unsigned swizzled,unsigned int ou
                                   "5 toques: TEXTURA por NV4097/cache/Metal\n"
                                   "Sem arquivos do jogo.";
                 self.status.text=@"ASCENSIONRECOMP · NPUA80918\n"
-                                  "M7.19 · recompilação ARM64 nativa\n"
+                                  "M7.20 · AOT ARM64 + PPC experimental\n"
                                   "Importe GOWA.ELF para executar o código recompilado.\n"
                                   "Inicialização parcial, ainda sem gameplay.\n"
                                   "Ferramentas RSX estão na aba RSX / Metal.";
@@ -659,7 +659,7 @@ extern int ar_probe_rsx_texture_cache_mutation(unsigned swizzled,unsigned int ou
     NSString *body=self.ppuReport.length ? self.ppuReport : self.ppuSummary;
     if(!body.length)return nil;
     return [NSString stringWithFormat:
-        @"ASCENSIONRECOMP M7.19 — RELATÓRIO ÚNICO\n"
+        @"ASCENSIONRECOMP M7.20 — RELATÓRIO ÚNICO\n"
          "Status, lote PPC, cobertura ARM64, grafo, TLS/HLE e legados.\n"
          "Somente diagnósticos; NÃO inclui o ELF original.\n"
          "==================================================\n\n%@\n",body];
@@ -675,7 +675,7 @@ extern int ar_probe_rsx_texture_cache_mutation(unsigned swizzled,unsigned int ou
     date.locale=[NSLocale localeWithLocaleIdentifier:@"en_US_POSIX"];
     date.dateFormat=@"yyyyMMdd-HHmmss";
     NSString *name=[NSString stringWithFormat:
-       @"AscensionRecomp-M7.19-NPUA80918-%@.txt",
+       @"AscensionRecomp-M7.20-NPUA80918-%@.txt",
        [date stringFromDate:[NSDate date]]];
     NSURL *url=[NSURL fileURLWithPath:
        [NSTemporaryDirectory() stringByAppendingPathComponent:name]];
@@ -1167,9 +1167,9 @@ extern int ar_probe_rsx_texture_cache_mutation(unsigned swizzled,unsigned int ou
        "Capacidade VM=%u · arquivo mapeado=%u · funções AOT=%u\n"
        "Import PRX=%d · bind import=%d · bind HLE=%d\n"
        "Teste HLE TLS nativa=%d · r13=0x%08X\n"
-       "Despacho AOT entrada=%d · primeiro PC sem função ARM64=0x%08X\n"
+       "Despacho nativo/híbrido=%d · primeiro PC pendente=0x%08X\n"
        "Opcode inicial guest=0x%08X · evidências=0x%X\n"
-       "AR_UNRESOLVED=-3 significa que falta código do jogo recompilado.\n",
+       "AR_UNRESOLVED=-3: AOT ausente; -12: PPC não suportado; -13: limite fallback.\n",
        nativeRC,native[1],native[2],native[3],
        native[4],native[13],native[5],
        (int)native[8],(int)native[9],(int)native[10],
@@ -1226,31 +1226,31 @@ extern int ar_probe_rsx_texture_cache_mutation(unsigned swizzled,unsigned int ou
      * AOT dispatch, not the older 48/108-step interpreter reports. */
     uint32_t pendingImport[4]={0};
     char pendingLibrary[48]={0};
-    int pendingMatch=((int)native[6]==-3 && native[7]) ?
+    int pendingMatch=(((int)native[6]==-3 || (int)native[6]==-12 || (int)native[6]==-13) && native[7]) ?
        ar_private_import_match(data.bytes,data.length,native[7],
                                pendingImport,pendingLibrary) : -1;
     /* Real unresolved PPC instruction window, read-only (no fallback). */
     uint32_t missingWords[6]={0};
-    const int missingRead=((int)native[6]==-3 && pendingMatch!=0 && native[7]) ?
+    const int missingRead=(((int)native[6]==-3 || (int)native[6]==-12 || (int)native[6]==-13) && pendingMatch!=0 && native[7]) ?
         ar_m712_exec_window(data.bytes,data.length,native[7],missingWords) : -1;
     NSString *pendingText=nil;
-    if((int)native[6]==-3 && pendingMatch==0){
+    if(((int)native[6]==-3 || (int)native[6]==-12 || (int)native[6]==-13) && pendingMatch==0){
        pendingText=[NSString stringWithFormat:
            @"Import PRX pendente: %s · NID=0x%08X\nStub=0x%08X",
            pendingLibrary[0]?pendingLibrary:"(sem nome)",
            pendingImport[0],native[7]];
-    } else if((int)native[6]==-3 && missingRead==0){
+    } else if(((int)native[6]==-3 || (int)native[6]==-12 || (int)native[6]==-13) && missingRead==0){
        pendingText=[NSString stringWithFormat:
-           @"Próximo bloco sem ARM64: 0x%08X\n"
+           @"Próximo PC pendente (híbrido): 0x%08X\n"
             "M7.12 · %u palavra(s) PPC do ELF executável\n"
             "PPC BE: %08X %08X %08X %08X\n"
-            "ARM64 deste bloco ainda NÃO vinculada.",
+            "Endereço sem ARM64 vinculada; resultado fallback=%d.",
             native[7],missingWords[4],missingWords[0],missingWords[1],
-            missingWords[2],missingWords[3]];
-    } else if((int)native[6]==-3){
+            missingWords[2],missingWords[3],(int)native[6]];
+    } else if(((int)native[6]==-3 || (int)native[6]==-12 || (int)native[6]==-13)){
        pendingText=[NSString stringWithFormat:
-           @"Próximo bloco sem ARM64: 0x%08X\n"
-            "M7.12 · janela PPC indisponível (%d), sem fallback.",
+           @"Próximo PC pendente (híbrido): 0x%08X\n"
+            "M7.12 · janela PPC indisponível (%d), fallback finalizado.",
             native[7],missingRead];
     } else {
        pendingText=[NSString stringWithFormat:
@@ -1259,7 +1259,7 @@ extern int ar_probe_rsx_texture_cache_mutation(unsigned swizzled,unsigned int ou
     /* M7.14: collect verified executable PPC words in the clipboard report
      * for a subsequent private AOT batch; this never executes guest code. */
     NSString *frontierReport=@"\nM7.14 · nenhum lote PPC coletado.";
-    if((int)native[6]==-3 && native[7] && pendingMatch!=0){
+    if(((int)native[6]==-3 || (int)native[6]==-12 || (int)native[6]==-13) && native[7] && pendingMatch!=0){
        unsigned int batchWords[32]={0},batchCount=0,batchEnd=0;
        int batchRC=ar_m714_frontier_inventory(
            data.bytes,data.length,native[7],batchWords,&batchCount,&batchEnd);
@@ -1293,7 +1293,7 @@ extern int ar_probe_rsx_texture_cache_mutation(unsigned swizzled,unsigned int ou
           }
        }
        [batch appendString:
-           @"Leitura do ELF local; não há JIT/interpretador.\n"
+           @"Inventário do ELF local SOMENTE LEITURA; fallback experimental sem JIT.\n"
             "Limite gráfico: PPU ainda sem comandos RSX reais do Ascension.\n"
             "M4/M5 são testes sintéticos Metal, não menu do jogo.\n"];
        frontierReport=batch;
@@ -1341,6 +1341,20 @@ extern int ar_probe_rsx_texture_cache_mutation(unsigned swizzled,unsigned int ou
     for(uint32_t ti=0;ti<measured.trace_count;ti++){
        [graphReport appendFormat:@"AOT_EXEC 0x%08X\n",measured.trace_pcs[ti]];
     }
+    /* M7.20 separate experimental PPC fallback metrics; these do not
+     * affect AOT registered/executed counters. Unknown ISA must stop. */
+    [graphReport appendFormat:
+      @"\nM7.20 — DESPACHO HÍBRIDO EXPERIMENTAL (SEM JIT)\n"
+       "Despachos ARM64 executados=%u · passos PPC interpretados=%u/%u\n"
+       "Último PPC interpretado=0x%08X · opcode=0x%08X\n"
+       "Primeiro PPC não suportado=0x%08X · opcode=0x%08X\n"
+       "Resultado híbrido=%d · próximo PC pendente=0x%08X\n"
+       "Fallback NÃO é AOT; interpretação não aumenta contagem ARM64.\n"
+       "Ainda sem comandos RSX reais do Ascension.\n",
+       measured.aot_dispatches,measured.fallback_steps,
+       measured.fallback_step_limit,measured.fallback_last_pc,
+       measured.fallback_last_opcode,measured.fallback_unsupported_pc,
+       measured.fallback_unsupported_word,(int)native[6],native[7]];
     frontierReport=[frontierReport stringByAppendingString:graphReport];
     /* M7.15: keep verified instruction batch available even when legacy
      * PPU48 returns success and skips the error-detail report branch. */
@@ -1348,14 +1362,14 @@ extern int ar_probe_rsx_texture_cache_mutation(unsigned swizzled,unsigned int ou
                         ? frontierReport : nil;
     self.ppuBatchButton.enabled=(self.ppuBatchReport.length>0);
     self.ppuSummary=[NSString stringWithFormat:
-       @"ASCENSIONRECOMP M7.19 · NPUA80918\n"
-        "RECOMPILAÇÃO ESTÁTICA ARM64\n"
+       @"ASCENSIONRECOMP M7.20 · NPUA80918\n"
+        "AOT ARM64 + FALLBACK PPC EXPERIMENTAL\n"
         "Entradas AOT vinculadas: %u\n"
         "ELF: %@ · entrada 0x%08X\n"
         "Execução nativa: %d · TLS r13=0x%08X\n"
         "SYSUTIL core vinculado=%@ · mapeamentos guest=%@\n"
         "%@\n"
-        "M7.19: relatório unificado; visualize ou exporte TXT.\n"
+        "M7.20: AOT + fallback PPC limitado (SEM JIT); relatório TXT.\n"
         "RSX do Ascension: não demonstrado (M4/M5 sintéticos).\n"
         "Estado: inicialização parcial, sem gameplay.\n"
         "Diagnósticos legados: seção avançada.",

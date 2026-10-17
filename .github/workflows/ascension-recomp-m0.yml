@@ -1,4 +1,4 @@
-name: AscensionRecomp M7.19 - 850 next-frontier owner-private ARM64 PPC blocks
+name: AscensionRecomp M7.20 - bounded signed PPC fallback with 1418 native AOT preserved
 
 on:
   push:
@@ -646,6 +646,17 @@ jobs:
           ./m717-native-host 2>&1 | tee m717-native-host.log
           grep -Fxq 'M7.17 bounded PPC graph, 3000-entry hashed ARM64 index and real AOT trace PASS' m717-native-host.log
           python3 -m unittest discover -s tests -p test_m717_architecture.py -v 2>&1 | tee m717-architecture-tests.log
+      - name: M7.20 host prove native AOT priority and bounded signed PPC interpreter
+        run: |
+          set -euo pipefail
+          clang -std=c11 -O2 -Wall -Wextra -Werror \
+            -I upstream/runtime/ppu -I runtime \
+            runtime/ppu_bridge.c runtime/ppu_m712_exec_window.c \
+            runtime/ppu_m720_fallback.c tests/host_m720_ppc_fallback.c \
+            -o m720-native-host
+          ./m720-native-host 2>&1 | tee m720-native-host.log
+          grep -Fxq 'M7.20 signed hybrid AOT priority, PPC divwu/mullw/subfc, fail-closed and budget PASS' m720-native-host.log
+          python3 -m unittest discover -s tests -p test_m720_hybrid.py -v 2>&1 | tee m720-hybrid-tests.log
       - name: M7.11 verify and stage 59 real PPU AOT entries before iOS linking
         env:
           ASCENSION_AOT_SOURCE_GZIP_B64: ${{ secrets.ASCENSION_AOT_SOURCE_GZIP_B64 }}
@@ -700,7 +711,8 @@ jobs:
           grep -Fq 'M7.17: static bounded PPC reachability + actual ARM64 AOT dispatch telemetry' m78-aot-status.txt
           grep -Fq 'M7.18: +500 additional owner-private native PPC AOT blocks' m78-aot-status.txt
           grep -Fq 'M7.19: +850 authenticated owner-private native PPC blocks' m78-aot-status.txt
-          echo "M7.19: 1418 signed ARM64 AOT entrypoints (64 owner + 4 previous fragments + 500 M7.18 + 850 M7.19); iPhone runtime/RSX proof pending" > m78-actions-status.txt
+          grep -Fq 'M7.20: experimental bounded PPC fallback' m78-aot-status.txt
+          echo "M7.20: 1418 original native AOT entries retained, signed no-JIT PPC fallback for missing blocks enabled only after original ELF SHA authentication; iPhone hybrid/RSX test pending" > m78-actions-status.txt
           test -s AscensionRecompProbe-0.6.14-unsigned.ipa
           /usr/libexec/PlistBuddy -c 'Print CFBundleShortVersionString' ios-probe/Payload/AscensionRecompProbe.app/Info.plist | grep -Fx 0.6.14
           /usr/bin/unzip -t AscensionRecompProbe-0.6.14-unsigned.ipa | tee m42-ipa-integrity.log
@@ -958,6 +970,8 @@ jobs:
             m719-private-tests.log
             m719-unified-report-tests.log
             m719-bulk2-object-symbols.txt
+            m720-native-host.log
+            m720-hybrid-tests.log
             m78-stage-tests.log
             m78-lv2-host.log
             m78-owner-aot-object-symbols.txt

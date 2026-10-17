@@ -132,6 +132,12 @@ xcrun --sdk iphoneos clang -target arm64-apple-ios17.0 -isysroot "$SDK" \
 xcrun --sdk iphoneos clang -target arm64-apple-ios17.0 -isysroot "$SDK" \
     -std=c11 -O2 -Wall -Wextra -Werror -I runtime \
     -c runtime/ppu_m717_graph.c -o ios-probe/ppu_m717_graph.o
+# M7.20: signed native PPC fallback for missing AOT entries (NO JIT).
+# This interpreter is NEVER counted as native ARM64 AOT.
+xcrun --sdk iphoneos clang -target arm64-apple-ios17.0 -isysroot "$SDK" \
+    -std=c11 -O2 -Wall -Wextra -Werror \
+    -I upstream/runtime/ppu -I runtime \
+    -c runtime/ppu_m720_fallback.c -o ios-probe/ppu_m720_fallback.o
 # M7.11: native SYSUTIL and sparse virtual memory. No game ELF embedded.
 M711_OBJECTS=()
 for module in ppu_mmapper ppu_mmapper_reserve ppu_mmapper_alloc \
@@ -159,6 +165,7 @@ xcrun --sdk iphoneos clang++ -target arm64-apple-ios17.0 \
     ios-probe/ppu_m715_aot_fragment.o \
     ios-probe/ppu_m716_native_branch.o \
     ios-probe/ppu_m717_graph.o \
+    ios-probe/ppu_m720_fallback.o \
     ${M711_OBJECTS[@]+"${M711_OBJECTS[@]}"} \
     ${AOT_OBJECTS[@]+"${AOT_OBJECTS[@]}"} \
     ios-ppu-core/libAscensionPPUCore-ios-arm64.a \
@@ -213,6 +220,8 @@ grep -Eq ' [Tt] _ar_m716_verified_successors$' m78-owner-aot-linked-symbols.txt
 grep -Eq ' [Tt] _ar_m717_walk$' m78-owner-aot-linked-symbols.txt
 grep -Eq ' [Tt] _ar_m717_last_aot_trace$' m78-owner-aot-linked-symbols.txt
 grep -Eq ' [Tt] _ar_trace_snapshot$' m78-owner-aot-linked-symbols.txt
+grep -Eq ' [Tt] _ar_ppc_fallback_step$' m78-owner-aot-linked-symbols.txt
+grep -Eq ' [Tt] _ar_ppc_fallback_attach$' m78-owner-aot-linked-symbols.txt
 echo 'M7.11: 59 REAL PPU ARM64 functions verified inside final iOS Mach-O; runtime execution on iPhone not yet tested' > m78-aot-status.txt
 echo "M7.12: ${ASCENSION_AOT_EXPECTED_SYMBOL_COUNT} REAL native ARM64 PPC entries linked, including 0x002C1664; iPhone proof pending" >> m78-aot-status.txt
 echo "M7.13: +1 verified 4-instruction ARM64 entry 0x003C4D94; total $((ASCENSION_AOT_EXPECTED_SYMBOL_COUNT+1)); iPhone execution pending" >> m78-aot-status.txt
@@ -222,6 +231,7 @@ echo "M7.16: +1 verified native 15-instruction PPC block (0x003C4DC4), two real 
 echo "M7.17: static bounded PPC reachability + actual ARM64 AOT dispatch telemetry; owner source unchanged; graph coverage needs iPhone" >> m78-aot-status.txt
 echo "M7.18: +${ASCENSION_BULK_COUNT:-0} additional owner-private native PPC AOT blocks; total $((ASCENSION_AOT_EXPECTED_SYMBOL_COUNT+4+${ASCENSION_BULK_COUNT:-0})); exact ELF SHA-256 checked" >> m78-aot-status.txt
 echo "M7.19: +${ASCENSION_BULK2_COUNT:-0} authenticated owner-private native PPC blocks beginning 0x002C16A4; total $((ASCENSION_AOT_EXPECTED_SYMBOL_COUNT+4+${ASCENSION_BULK_COUNT:-0}+${ASCENSION_BULK2_COUNT:-0})) entries; iPhone test pending" >> m78-aot-status.txt
+echo "M7.20: experimental bounded PPC fallback, native AOT priority preserved, separate trace counters; 1418 AOT entries unchanged; no RSX gameplay claimed" >> m78-aot-status.txt
 file "$APP/AscensionRecompProbe" | tee m41-executable-file.txt
 xcrun lipo -info "$APP/AscensionRecompProbe" | tee m41-executable-arch.txt
 /usr/libexec/PlistBuddy -c 'Print CFBundleIdentifier' "$APP/Info.plist"

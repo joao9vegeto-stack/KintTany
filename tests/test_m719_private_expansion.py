@@ -57,7 +57,7 @@ class BulkM719Tests(unittest.TestCase):
         self.assertIn("verify_m719_macho.py",builder)
         self.assertIn("ASCENSION_PRIVATE_BULK2_AOT_LINKED",builder)
         self.assertIn("ASCENSION_AOT_BULK2_GZIP_B64",workflow)
-        self.assertIn("ASCENSIONRECOMP M7.19",ui)
+        self.assertIn("ASCENSIONRECOMP M7.",ui)  # current experimental stage label
         self.assertIn("RSX do Ascension: não demonstrado",ui)
 
 if __name__=="__main__":
