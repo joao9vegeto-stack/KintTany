@@ -1,4 +1,4 @@
-name: AscensionRecomp M7.31 - original owner ELF native AOT CR4 BLR, verified iPhone ARM64
+name: AscensionRecomp M7.32 - owner 9-op native ARM64 block and real LV2 timezone 144
 
 on:
   push:
@@ -210,6 +210,18 @@ jobs:
           grep -Eq ' [Tt] _ar_m731_register_frontier$' m731-cr-arm64-symbols.log
           file m731-cr-arm64.o | tee m731-cr-arm64-file.log
           grep -Ei 'Mach-O 64-bit (object )?arm64' m731-cr-arm64-file.log
+      - name: M7.32 crosscompile owner 9-op native ARM64 entry and verify symbols
+        run: |
+          set -euo pipefail
+          sdk="$(xcrun --sdk iphoneos --show-sdk-path)"
+          xcrun --sdk iphoneos clang -target arm64-apple-ios17.0 -isysroot "$sdk" \
+            -std=c11 -O2 -Wall -Wextra -Werror -I upstream/runtime/ppu -I runtime \
+            -c runtime/ppu_m732_native_timezone.c -o m732-owner-arm64.o
+          xcrun nm -g m732-owner-arm64.o | tee m732-owner-arm64-symbols.log
+          grep -Eq ' [Tt] _ar_m732_native_005230e0$' m732-owner-arm64-symbols.log
+          grep -Eq ' [Tt] _ar_m732_register_block$' m732-owner-arm64-symbols.log
+          file m732-owner-arm64.o | tee m732-owner-arm64-file.log
+          grep -Ei 'Mach-O 64-bit (object )?arm64' m732-owner-arm64-file.log
       - name: M7.21 prove PPC64 RLWIMI RLWNM RLDIC RLDIMI masking and fail-closed
         run: |
           set -euo pipefail
@@ -303,6 +315,17 @@ jobs:
             tests/host_m731_real_cr_aot.c -lm -o m731-native-host
           ./m731-native-host 2>&1 | tee m731-native-host.log
           grep -Fxq 'M7.31 exact owner-PC CR4 BLR native AOT, 1 dispatch 0 fallback, ISA validation PASS' m731-native-host.log
+      - name: M7.32 verify authentic owner AOT nine opcodes and LV2 144 timezone
+        run: |
+          set -euo pipefail
+          clang -std=c11 -O2 -Wall -Wextra -Werror -fsanitize=undefined \
+            -I upstream/runtime/ppu -I runtime \
+            runtime/ppu_bridge.c runtime/ppu_m712_exec_window.c \
+            runtime/ppu_m720_fallback.c runtime/ppu_lv2_bootstrap.c \
+            runtime/ppu_m732_native_timezone.c \
+            tests/host_m732_native_timezone.c -lm -o m732-native-host
+          ./m732-native-host 2>&1 | tee m732-native-host.log
+          grep -Fxq 'M7.32 owner 9-op ARM64 AOT + LV2 144 timezone BE s32, 1 native 2 PPC fallback, authentic fail-closed PASS' m732-native-host.log
       - name: M5.0 fetch pinned open source shader compiler sources
         run: |
           set -euo pipefail
@@ -978,7 +1001,8 @@ jobs:
           grep -Fq 'M7.21: PowerPC64 rlwimi/rlwnm/rldic/rldimi mask semantics verified' m78-aot-status.txt
           grep -Fq 'M7.23: +1 owner-authenticated native 25-opcode block' m78-aot-status.txt
           grep -Fq 'M7.31: +1 SHA-gated and ELF-verified native ARM64 CR4 transfer' m78-aot-status.txt
-          echo "M7.31: private 1419 ELF-authenticated native ARM64 blocks retained; plus 1 genuinely new SHA-and-executable-window-verified native CR4+BLR PPU entry at 0x0052da5c, total 1420 after iPhone owner-ELF import. Native dispatch proven on synthetic authenticated ELF. Real iPhone execution pending; no game RSX or filesystem proven." > m78-actions-status.txt
+          grep -Fq 'M7.32: +1 SHA-gated ELF-verified 9-instruction native ARM64 function' m78-aot-status.txt
+          echo "M7.32: preserves 1420 AOT owner blocks and adds one SHA-validated 9-op native ARM64 function at 0x005230e0; expected 1421 after matching ELF import. LV2 syscall 144 timezone uses real OS timezone, two BE s32 outputs; native host has 1 AOT and 2 fallback steps, physical iPhone proof pending." > m78-actions-status.txt
           test -s AscensionRecompProbe-0.6.14-unsigned.ipa
           /usr/libexec/PlistBuddy -c 'Print CFBundleShortVersionString' ios-probe/Payload/AscensionRecompProbe.app/Info.plist | grep -Fx 0.6.14
           /usr/bin/unzip -t AscensionRecompProbe-0.6.14-unsigned.ipa | tee m42-ipa-integrity.log
@@ -1064,7 +1088,7 @@ jobs:
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: AscensionRecomp-M7.31-Owner-CR4-Native-AOT
+          name: AscensionRecomp-M7.32-Native-Timezone-AOT
           if-no-files-found: warn
           retention-days: 14
           path: |
@@ -1273,6 +1297,10 @@ jobs:
             m731-cr-arm64-file.log
             m731-cr-arm64.o
             m731-native-host.log
+            m732-owner-arm64.o
+            m732-owner-arm64-symbols.log
+            m732-owner-arm64-file.log
+            m732-native-host.log
             m78-stage-tests.log
             m78-lv2-host.log
             m78-owner-aot-object-symbols.txt
