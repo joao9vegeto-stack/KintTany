@@ -25,6 +25,7 @@ extern int ar_m711_bind_sysutil(const uint8_t*,size_t,uint32_t*);
 extern int ar_m713_register_fragment(const uint8_t*,size_t);
 extern int ar_m714_register_fragment(const uint8_t*,size_t);
 extern int ar_m715_register_fragment(const uint8_t*,size_t);
+extern int ar_m716_register_block(const uint8_t*,size_t);
 extern int ar_private_import_match(const uint8_t*,size_t,uint32_t,uint32_t[4],char[48]);
 extern int ar_private_import_find_nid(const uint8_t*,size_t,uint32_t,const char*,uint32_t[4],char[48]);
 
@@ -122,6 +123,11 @@ int ar_m70_native_runtime_probe(const uint8_t*d,size_t len,
   * The 64-entry owner source and M7.13/14 registrations stay intact. */
  if(ar_m715_register_fragment(d,len)!=AR_OK){
    ar_bridge_shutdown();return -34;
+ }
+ /* The 15-word owner-observed branch is linked native ARM64 and may only
+  * enter guest dispatch after the real ELF's exact instructions validate. */
+ if(ar_m716_register_block(d,len)!=AR_OK){
+   ar_bridge_shutdown();return -35;
  }
 #endif
 #endif

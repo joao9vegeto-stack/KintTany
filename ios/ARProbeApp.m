@@ -8,6 +8,7 @@ extern int ar_private_elf_inspect(const unsigned char*,size_t,unsigned int[5]);
 extern int ar_m70_native_runtime_probe(const unsigned char*,size_t,unsigned int,unsigned int[16]);
 extern int ar_m712_exec_window(const unsigned char*,size_t,unsigned int,unsigned int[6]);
 extern int ar_m714_frontier_inventory(const unsigned char*,size_t,unsigned int,unsigned int[32],unsigned int*,unsigned int*);
+extern int ar_m716_verified_successors(const unsigned char*,size_t,unsigned int[2]);
 extern int ar_m71_private_continuous_probe(const unsigned char*,size_t,
                         unsigned int,unsigned int,unsigned int[16]);
 extern int ar_m73_private_import_probe(const unsigned char*,size_t,
@@ -561,7 +562,7 @@ extern int ar_probe_rsx_texture_cache_mutation(unsigned swizzled,unsigned int ou
                                   "5 toques: TEXTURA por NV4097/cache/Metal\n"
                                   "Sem arquivos do jogo.";
                 self.status.text=@"ASCENSIONRECOMP · NPUA80918\n"
-                                  "M7.15 · recompilação ARM64 nativa\n"
+                                  "M7.16 · recompilação ARM64 nativa\n"
                                   "Importe GOWA.ELF para executar o código recompilado.\n"
                                   "Inicialização parcial, ainda sem gameplay.\n"
                                   "Ferramentas RSX estão na aba RSX / Metal.";
@@ -1180,6 +1181,27 @@ extern int ar_probe_rsx_texture_cache_mutation(unsigned swizzled,unsigned int ou
        for(unsigned int ix=0;ix<batchCount;ix++){
           [batch appendFormat:@"0x%08X: %08X\n",native[7]+4u*ix,batchWords[ix]];
        }
+       /* Two successor addresses derived only from the authenticated BEQ
+        * executable word; the alternate path is READ-ONLY, not executed. */
+       unsigned int paths[2]={0};
+       if(ar_m716_verified_successors(data.bytes,data.length,paths)==0 &&
+          (native[7]==paths[0] || native[7]==paths[1])){
+          unsigned int alternative=(native[7]==paths[0]) ? paths[1]:paths[0];
+          unsigned int altWords[32]={0},altCount=0,altTerm=0;
+          int altRC=ar_m714_frontier_inventory(data.bytes,data.length,
+                                  alternative,altWords,&altCount,&altTerm);
+          [batch appendFormat:
+              @"\nM7.16 — RAMIFICAÇÃO AUTENTICADA\n"
+               "Desvio original=0x003C4DFC · beq 0x41820018\n"
+               "Caminho realmente escolhido pelo PPU=0x%08X\n"
+               "Caminho alternativo SOMENTE LEITURA=0x%08X\n"
+               "Resultado alternativo=%d · palavras=%u/32 · desvio=0x%08X\n",
+                native[7],alternative,altRC,altCount,altTerm];
+          for(unsigned int ax=0;ax<altCount;ax++){
+             [batch appendFormat:@"0x%08X: %08X\n",
+                    alternative+4u*ax,altWords[ax]];
+          }
+       }
        [batch appendString:
            @"Leitura do ELF local; não há JIT/interpretador.\n"
             "Limite gráfico: PPU ainda sem comandos RSX reais do Ascension.\n"
@@ -1192,7 +1214,7 @@ extern int ar_probe_rsx_texture_cache_mutation(unsigned swizzled,unsigned int ou
                         ? frontierReport : nil;
     self.ppuBatchButton.enabled=(self.ppuBatchReport.length>0);
     self.ppuSummary=[NSString stringWithFormat:
-       @"ASCENSIONRECOMP M7.15 · NPUA80918\n"
+       @"ASCENSIONRECOMP M7.16 · NPUA80918\n"
         "RECOMPILAÇÃO ESTÁTICA ARM64\n"
         "Entradas AOT vinculadas: %u\n"
         "ELF: %@ · entrada 0x%08X\n"
