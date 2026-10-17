@@ -1,4 +1,4 @@
-name: AscensionRecomp M7.30 - native MFCR, LV2 realtime 145 and PPC AOT-target trace
+name: AscensionRecomp M7.31 - original owner ELF native AOT CR4 BLR, verified iPhone ARM64
 
 on:
   push:
@@ -87,6 +87,11 @@ jobs:
           set -euo pipefail
           python3 -m unittest discover -s tests -p test_m730_mfcr_aot.py -v 2>&1 | tee m730-mfcr-aot.log
           grep -Fq 'Ran 5 tests' m730-mfcr-aot.log
+      - name: M7.31 native static PPC mtocrf and true CR field mask semantics
+        run: |
+          set -euo pipefail
+          python3 -m unittest discover -s tests -p test_m731_mtocrf_aot.py -v 2>&1 | tee m731-cr-aot-tests.log
+          grep -Fq 'Ran 6 tests' m731-cr-aot-tests.log
       - name: Fetch pinned ps3recomp source
         run: |
           set -euo pipefail
@@ -193,6 +198,18 @@ jobs:
             -c m730-mfcr-native.c -o m730-mfcr-arm64.o
           file m730-mfcr-arm64.o | tee m730-mfcr-arm64.log
           grep -Eq 'Mach-O 64-bit object arm64|Mach-O 64-bit arm64 object' m730-mfcr-arm64.log
+      - name: M7.31 crosscompile the same authentic native game block for ARM64
+        run: |
+          set -euo pipefail
+          sdk="$(xcrun --sdk iphoneos --show-sdk-path)"
+          xcrun --sdk iphoneos clang -target arm64-apple-ios17.0 -isysroot "$sdk" \
+            -std=c11 -O2 -Wall -Wextra -Werror -I upstream/runtime/ppu -I runtime \
+            -c runtime/ppu_m731_native_mtocrf.c -o m731-cr-arm64.o
+          xcrun nm -g m731-cr-arm64.o | tee m731-cr-arm64-symbols.log
+          grep -Eq ' [Tt] _ar_m731_native_0052da5c$' m731-cr-arm64-symbols.log
+          grep -Eq ' [Tt] _ar_m731_register_frontier$' m731-cr-arm64-symbols.log
+          file m731-cr-arm64.o | tee m731-cr-arm64-file.log
+          grep -Ei 'Mach-O 64-bit (object )?arm64' m731-cr-arm64-file.log
       - name: M7.21 prove PPC64 RLWIMI RLWNM RLDIC RLDIMI masking and fail-closed
         run: |
           set -euo pipefail
@@ -276,6 +293,16 @@ jobs:
             tests/host_m730_mfcr_time.c -o m730-native-host
           ./m730-native-host 2>&1 | tee m730-native-host.log
           grep -Fxq 'M7.30 native MFCR full CR, real LV2 145 guest BE sec/nsec, fail-closed and fallback trace PASS' m730-native-host.log
+      - name: M7.31 prove native AOT dispatch at observed owner PC, zero fallback
+        run: |
+          set -euo pipefail
+          clang -std=c11 -O2 -Wall -Wextra -Werror -fsanitize=undefined \
+            -I upstream/runtime/ppu -I runtime \
+            runtime/ppu_bridge.c runtime/ppu_m712_exec_window.c \
+            runtime/ppu_m720_fallback.c runtime/ppu_m731_native_mtocrf.c \
+            tests/host_m731_real_cr_aot.c -lm -o m731-native-host
+          ./m731-native-host 2>&1 | tee m731-native-host.log
+          grep -Fxq 'M7.31 exact owner-PC CR4 BLR native AOT, 1 dispatch 0 fallback, ISA validation PASS' m731-native-host.log
       - name: M5.0 fetch pinned open source shader compiler sources
         run: |
           set -euo pipefail
@@ -950,7 +977,8 @@ jobs:
           grep -Fq 'M7.20: experimental bounded PPC fallback' m78-aot-status.txt
           grep -Fq 'M7.21: PowerPC64 rlwimi/rlwnm/rldic/rldimi mask semantics verified' m78-aot-status.txt
           grep -Fq 'M7.23: +1 owner-authenticated native 25-opcode block' m78-aot-status.txt
-          echo "M7.30: 1419 original private ARM64 AOT entries preserved; MFCR r12 static ARM64 and interpreted PPC; LV2 realtime #145 BE writes; last 32 actually interpreted PPC PCs for PRIVATE future AOT targets. No new owner-private AOT counted; no game filesystem/RSX proven." > m78-actions-status.txt
+          grep -Fq 'M7.31: +1 SHA-gated and ELF-verified native ARM64 CR4 transfer' m78-aot-status.txt
+          echo "M7.31: private 1419 ELF-authenticated native ARM64 blocks retained; plus 1 genuinely new SHA-and-executable-window-verified native CR4+BLR PPU entry at 0x0052da5c, total 1420 after iPhone owner-ELF import. Native dispatch proven on synthetic authenticated ELF. Real iPhone execution pending; no game RSX or filesystem proven." > m78-actions-status.txt
           test -s AscensionRecompProbe-0.6.14-unsigned.ipa
           /usr/libexec/PlistBuddy -c 'Print CFBundleShortVersionString' ios-probe/Payload/AscensionRecompProbe.app/Info.plist | grep -Fx 0.6.14
           /usr/bin/unzip -t AscensionRecompProbe-0.6.14-unsigned.ipa | tee m42-ipa-integrity.log
@@ -1036,7 +1064,7 @@ jobs:
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: AscensionRecomp-M7.30-AOT-frontier-and-LV2
+          name: AscensionRecomp-M7.31-Owner-CR4-Native-AOT
           if-no-files-found: warn
           retention-days: 14
           path: |
@@ -1240,6 +1268,11 @@ jobs:
             m730-mfcr-arm64.log
             m730-mfcr-arm64.o
             m730-native-host.log
+            m731-cr-aot-tests.log
+            m731-cr-arm64-symbols.log
+            m731-cr-arm64-file.log
+            m731-cr-arm64.o
+            m731-native-host.log
             m78-stage-tests.log
             m78-lv2-host.log
             m78-owner-aot-object-symbols.txt

@@ -237,6 +237,19 @@ int ar_ppc_fallback_step(ppu_context*c,const uint8_t*elf,size_t elf_len,
       c->cia=pc+4u;
       return AR_TAIL;
    }
+   case 144:{ /* mtcrf FXM,rS; mtocrf L=1 selects one field */
+      const unsigned fxm=(w>>12)&255u;
+      const unsigned l=(w>>20)&1u;
+      if((w&UINT32_C(0x00000801)) ||
+         (l && (!fxm || (fxm&(fxm-1u)))))
+         return AR_PPC_UNSUPPORTED; /* reserved, Rc, FXM multi-field */
+      uint32_t mask=0;
+      for(unsigned field=0;field<8u;field++)
+         if(fxm&(0x80u>>field))
+            mask|=UINT32_C(0xf0000000)>>(4u*field);
+      c->cr=(c->cr&~mask)|((uint32_t)r[d]&mask);
+      c->cia=pc+4u;return AR_TAIL;
+   }
    case 19:{ /* mfcr rD, XFX canonical full CR copy */
       if(w!=(UINT32_C(0x7c000026)|(d<<21)))return AR_PPC_UNSUPPORTED;
       return add_result(c,pc,(uint64_t)c->cr,d,0u);

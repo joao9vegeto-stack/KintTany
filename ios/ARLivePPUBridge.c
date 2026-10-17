@@ -35,6 +35,7 @@ extern int ar_m713_register_fragment(const uint8_t*,size_t);
 extern int ar_m714_register_fragment(const uint8_t*,size_t);
 extern int ar_m715_register_fragment(const uint8_t*,size_t);
 extern int ar_m716_register_block(const uint8_t*,size_t);
+extern int ar_m731_register_frontier(const uint8_t*,size_t);
 extern int ar_private_import_match(const uint8_t*,size_t,uint32_t,uint32_t[4],char[48]);
 extern int ar_private_import_find_nid(const uint8_t*,size_t,uint32_t,const char*,uint32_t[4],char[48]);
 
@@ -162,6 +163,12 @@ int ar_m70_native_runtime_probe(const uint8_t*d,size_t len,
    ar_bridge_shutdown();return -39;
  }
 #endif
+ /* M7.31: the original 1,419 private blocks are now authenticated.
+  * Verify guest executable bytes and register ONE genuinely native ARM64
+  * two-instruction continuation. Never falls back to silent success. */
+ if(ar_m731_register_frontier(d,len)!=AR_OK){
+    ar_bridge_shutdown();return -40;
+ }
 #endif
 #endif
  out[5]=(uint32_t)ar_registered_count(); /* genuine linked game AOT only */
