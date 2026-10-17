@@ -1,4 +1,4 @@
-name: AscensionRecomp M7.21 - PPC64 rotate-mask semantics and hybrid AOT startup
+name: AscensionRecomp M7.22 - real PPC-to-ARM64 AOT lifter rotate-mask and integer ISA
 
 on:
   push:
@@ -47,6 +47,11 @@ jobs:
           brew list --versions sdl2 >/dev/null 2>&1 || brew install sdl2
           brew list --versions glslang >/dev/null 2>&1 || brew install glslang
           brew list --versions spirv-cross >/dev/null 2>&1 || brew install spirv-cross
+      - name: M7.22 verify native C AOT lifting of synthetic PPC64 rotation and arithmetic
+        run: |
+          set -euo pipefail
+          python3 -m unittest discover -s tests -p test_m722_native_aot.py -v 2>&1 | tee m722-native-aot-tests.log
+          grep -Fq 'Ran 7 tests' m722-native-aot-tests.log
       - name: Fetch pinned ps3recomp source
         run: |
           set -euo pipefail
@@ -729,7 +734,7 @@ jobs:
           grep -Fq 'M7.19: +850 authenticated owner-private native PPC blocks' m78-aot-status.txt
           grep -Fq 'M7.20: experimental bounded PPC fallback' m78-aot-status.txt
           grep -Fq 'M7.21: PowerPC64 rlwimi/rlwnm/rldic/rldimi mask semantics verified' m78-aot-status.txt
-          echo "M7.21: 1418 native ARM64 AOT entries preserved; signed bounded PPC64 mask/rotate interpreter validated by host; actual iPhone progress and RSX still pending" > m78-actions-status.txt
+          echo "M7.22: 1418 native AOT entries preserved, PPC64 RLWIMI/RLWNM + subfc/mullw/divwu native C AOT lifter tested; original game 25-word private native block prepared, NOT yet linked, iPhone proof pending" > m78-actions-status.txt
           test -s AscensionRecompProbe-0.6.14-unsigned.ipa
           /usr/libexec/PlistBuddy -c 'Print CFBundleShortVersionString' ios-probe/Payload/AscensionRecompProbe.app/Info.plist | grep -Fx 0.6.14
           /usr/bin/unzip -t AscensionRecompProbe-0.6.14-unsigned.ipa | tee m42-ipa-integrity.log
@@ -992,6 +997,7 @@ jobs:
             m721-rotate-sanitized.log
             m721-rotate-unoptimized.log
             m721-regressions.log
+            m722-native-aot-tests.log
             m78-stage-tests.log
             m78-lv2-host.log
             m78-owner-aot-object-symbols.txt
