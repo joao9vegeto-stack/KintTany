@@ -7,6 +7,7 @@
 #include <stddef.h>
 #include "ppu_bridge.h"
 #include "ppu_vmx_cell.h"
+#include "ppu_fp_scalar.h"
 extern int ar_m712_exec_window(const uint8_t*,size_t,uint32_t,uint32_t[6]);
 static int64_t sx16(uint32_t v){return (int64_t)(int16_t)(uint16_t)v;}
 static uint64_t sext32(uint32_t v){return (uint64_t)(int64_t)(int32_t)v;}
@@ -86,6 +87,27 @@ int ar_ppc_fallback_step(ppu_context*c,const uint8_t*elf,size_t elf_len,
  const int64_t imm=sx16(w);
  uint64_t *r=c->gpr;
  switch(op){
+ case 48:case 50:case 52:case 54:{ /* lfs/lfd/stfs/stfd */
+    const uint64_t ea=(a?r[a]:0u)+(uint64_t)imm;
+    const int single=(op==48u||op==52u);
+    const int rc=(op==48u||op==50u)
+         ? ar_fp_load(c,d,ea,single):ar_fp_store(c,d,ea,single);
+    if(rc!=AR_OK)return rc;
+    ar_ppc_note_fp(pc,w);
+    c->cia=pc+4u;return AR_TAIL;
+ }
+ case 63:{ /* fcfid and fdiv: PPC64 FP register bits / FPSCR */
+    const unsigned xo=(w>>1)&1023u;
+    if(w&1u)return AR_PPC_UNSUPPORTED; /* CR1 dot not yet implemented */
+    int rc=AR_PPC_UNSUPPORTED;
+    if(xo==846u && a==0u)
+       rc=ar_fp_fcfid(c,d,b);
+    else if(xo==18u)
+       rc=ar_fp_fdiv(c,d,a,b);
+    if(rc!=AR_OK)return rc;
+    ar_ppc_note_fp(pc,w);
+    c->cia=pc+4u;return AR_TAIL;
+ }
  case 4:{ /* VMX VX: signed splat and splat-word */
    const unsigned xo=w&2047u;
    if(xo==780u||xo==844u||xo==908u){

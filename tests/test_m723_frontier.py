@@ -41,7 +41,7 @@ class FrontierStageM723(unittest.TestCase):
   self.assertEqual(build.count("# Stage the native PPU bridge"),1)
   self.assertLess(len(build.splitlines()),290)
   self.assertIn("ASCENSION_AOT_FRONTIER_GZIP_B64",workflow)
-  self.assertIn('ASCENSIONRECOMP M7.28',ui)
+  self.assertIn('ASCENSIONRECOMP M7.29',ui)
   self.assertIn('initForExportingURLs:@[url] asCopy:YES',ui)
   self.assertIn('RSX do Ascension: não demonstrado',ui)
  def test_prior_manifest_strict_parsing(self):

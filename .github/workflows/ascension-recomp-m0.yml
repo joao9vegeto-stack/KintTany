@@ -1,4 +1,4 @@
-name: AscensionRecomp M7.28 - Cell VMX 128-bit and native PPC64 vector codegen
+name: AscensionRecomp M7.29 - actual PPU FPU scalar PPC64 LFD FCFID LFS FDIV STFD
 
 on:
   push:
@@ -77,6 +77,11 @@ jobs:
           set -euo pipefail
           python3 -m unittest discover -s tests -p test_m728_vmx_aot.py -v 2>&1 | tee m728-vmx-aot.log
           grep -Fq 'Ran 5 tests' m728-vmx-aot.log
+      - name: M7.29 verify raw FPR bit semantics and native PowerPC scalar FP lifting
+        run: |
+          set -euo pipefail
+          python3 -m unittest discover -s tests -p test_m729_fpu_aot.py -v 2>&1 | tee m729-fpu-aot-tests.log
+          grep -Fq 'Ran 5 tests' m729-fpu-aot-tests.log
       - name: Fetch pinned ps3recomp source
         run: |
           set -euo pipefail
@@ -120,6 +125,51 @@ jobs:
           test -s m728-vmx-arm64.o
           file m728-vmx-arm64.o | tee m728-vmx-arm64.log
           grep -Eq 'Mach-O 64-bit object arm64|Mach-O 64-bit arm64 object' m728-vmx-arm64.log
+      - name: M7.29 compile and execute scalar PPC64 FPU translated into native AOT
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          from pathlib import Path
+          from tools.ppu_cfg_lifter import lift
+          def d(op,rt,ra,disp):
+              return (op<<26)|(rt<<21)|(ra<<16)|(disp&65535)
+          def x(ft,fa,fb,xo):
+              return (63<<26)|(ft<<21)|(fa<<16)|(fb<<11)|(xo<<1)
+          opcodes=[d(50,0,1,128),x(13,0,0,846),d(48,0,2,0),
+                   x(0,13,0,18),d(54,0,11,0),0x4e800020]
+          src,h=lift(opcodes,0x10000,'m729_native_fp')
+          assert h['fp_load']==2 and h['fp_store']==1
+          assert h['fcfid']==1 and h['fdiv']==1
+          harness=r'''
+          int main(void){
+           if(ar_bridge_init(0x4000)!=0)return 1;
+           uint8_t number[8]={0,0,0,0,0x04,0xc1,0xa6,0xc0};
+           uint8_t scalar[4]={0x40,0,0,0};
+           if(ar_vm_load(0x1880,number,8)!=0||
+              ar_vm_load(0x1900,scalar,4)!=0)return 2;
+           ppu_ctx c={0};c.lr=0x1100;
+           c.gpr[1]=0x1800;c.gpr[2]=0x1900;c.gpr[11]=0x1a00;
+           int status=m729_native_fp(&c);
+           if(status!=0||c.fpr[13]!=79800000.0||
+              c.fpr[0]!=39900000.0||
+              ar_read64(0x1a00)!=0x4183069b00000000ULL||
+              (c.fpscr&0x1f000U)!=0x4000U)return 3;
+           ar_bridge_shutdown();
+           return 0;
+          }'''
+          Path('m729-fpu-native.c').write_text(src+'\n'+harness,encoding='utf8')
+          PY
+          sdk="$(xcrun --sdk iphoneos --show-sdk-path)"
+          xcrun --sdk iphoneos clang -target arm64-apple-ios17.0 -isysroot "$sdk" \
+            -std=c11 -O2 -I upstream/runtime/ppu -I runtime \
+            -c m729-fpu-native.c -o m729-fpu-arm64.o
+          file m729-fpu-arm64.o | tee m729-fpu-arm64.log
+          grep -Eq 'Mach-O 64-bit object arm64|Mach-O 64-bit arm64 object' m729-fpu-arm64.log
+          clang -std=c11 -O2 -fsanitize=undefined \
+            -I upstream/runtime/ppu -I runtime \
+            m729-fpu-native.c runtime/ppu_bridge.c -lm -o m729-fpu-native-host
+          ./m729-fpu-native-host 2>&1 | tee m729-fpu-native-host.log
+          echo "M7.29 native AOT FPR memory / integer conversion / fdiv PASS" | tee -a m729-fpu-native-host.log
       - name: M7.21 prove PPC64 RLWIMI RLWNM RLDIC RLDIMI masking and fail-closed
         run: |
           set -euo pipefail
@@ -183,6 +233,16 @@ jobs:
             -o m728-vmx-host
           ./m728-vmx-host 2>&1 | tee m728-vmx-host.log
           grep -Fxq 'M7.28 Cell VMX 128-bit signed splats, VSPLTW, LVX, STVX, LVLX, LVRX and partial stores PASS' m728-vmx-host.log
+      - name: M7.29 validate authentic FPR register bits, FCFID, FDIV and FPSCR
+        run: |
+          set -euo pipefail
+          clang -std=c11 -O2 -Wall -Wextra -Werror -fsanitize=undefined \
+            -I upstream/runtime/ppu -I runtime \
+            runtime/ppu_bridge.c runtime/ppu_m712_exec_window.c \
+            runtime/ppu_m720_fallback.c tests/host_m729_fpu.c -lm \
+            -o m729-fpu-host
+          ./m729-fpu-host 2>&1 | tee m729-fpu-host.log
+          grep -Fxq 'M7.29 PPC64 raw FPR lfd/fcfid/lfs/fdiv/stfd + FPSCR and fail-closed PASS' m729-fpu-host.log
       - name: M5.0 fetch pinned open source shader compiler sources
         run: |
           set -euo pipefail
@@ -857,7 +917,7 @@ jobs:
           grep -Fq 'M7.20: experimental bounded PPC fallback' m78-aot-status.txt
           grep -Fq 'M7.21: PowerPC64 rlwimi/rlwnm/rldic/rldimi mask semantics verified' m78-aot-status.txt
           grep -Fq 'M7.23: +1 owner-authenticated native 25-opcode block' m78-aot-status.txt
-          echo "M7.28: original 1419 authenticated native ARM64 AOT preserved; signed VMX splats and Cell LVLX/LVRX partial vector memory instructions implemented in AOT/fallback; real guest gameplay/RSX pending" > m78-actions-status.txt
+          echo "M7.29: previous 1419 private native ARM64 AOT entries retained; PowerPC64 FPR raw lfd/lfs/fcfid/fdiv/stfd covered in signed fallback and static ARM64 AOT; FPSCR in normal finite domain only; real device proof pending" > m78-actions-status.txt
           test -s AscensionRecompProbe-0.6.14-unsigned.ipa
           /usr/libexec/PlistBuddy -c 'Print CFBundleShortVersionString' ios-probe/Payload/AscensionRecompProbe.app/Info.plist | grep -Fx 0.6.14
           /usr/bin/unzip -t AscensionRecompProbe-0.6.14-unsigned.ipa | tee m42-ipa-integrity.log
@@ -943,7 +1003,7 @@ jobs:
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: AscensionRecomp-M7.28-Cell-VMX
+          name: AscensionRecomp-M7.29-PPC64-FPU
           if-no-files-found: warn
           retention-days: 14
           path: |
@@ -1138,6 +1198,11 @@ jobs:
             m728-vmx-host.log
             m728-vmx-arm64.log
             m728-vmx-arm64.o
+            m729-fpu-aot-tests.log
+            m729-fpu-arm64.o
+            m729-fpu-arm64.log
+            m729-fpu-native-host.log
+            m729-fpu-host.log
             m78-stage-tests.log
             m78-lv2-host.log
             m78-owner-aot-object-symbols.txt
