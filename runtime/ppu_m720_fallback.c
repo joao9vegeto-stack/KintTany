@@ -167,6 +167,18 @@ int ar_ppc_fallback_step(ppu_context*c,const uint8_t*elf,size_t elf_len,
    const unsigned xo=(w>>1)&1023u,record=w&1u;
    const uint64_t x=r[a],y=r[b];
    switch(xo){
+   case 104:case 616:{ /* NEG / NEGO: -(RA) in 64-bit modular arithmetic */
+      if(b!=0u)return AR_PPC_UNSUPPORTED; /* reserved RB must be zero */
+      const uint64_t operand=x;
+      const uint64_t result=UINT64_C(0)-operand; /* INT64_MIN safe */
+      if(xo==616u){ /* OE: OV changes; SO is sticky */
+         const uint32_t ov=operand==UINT64_C(0x8000000000000000)
+             ? UINT32_C(0x40000000):0u;
+         c->xer=(c->xer&~UINT32_C(0x40000000))|ov;
+         if(ov)c->xer|=UINT32_C(0x80000000);
+      }
+      return add_result(c,pc,result,d,record);
+   }
    case 459:{ /* divwu: unsigned low 32, ZERO extended to 64 */
       const uint32_t divisor=(uint32_t)y;
       if(!divisor)return AR_PPC_UNSUPPORTED; /* architecturally undefined */

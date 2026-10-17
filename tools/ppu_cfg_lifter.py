@@ -235,6 +235,20 @@ def lift(words: list[int] | tuple[int, ...], base: int, name: str = 'ppu_sample'
                     lhs=f'(u64){reg(a)}' if wide else f'(u32){reg(a)}'
                     rhs=f'(u64){reg(b)}' if wide else f'(u32){reg(b)}'
                 record(cmp_expr(lhs,rhs),bf);hist['cmp']+=1
+            elif xo in (104, 616):
+                # NEG/NEGO: RT <- (0 - RA) mod 2^64. No signed C overflow.
+                # The five RB/reserved bits must be zero for this X-form.
+                if b: raise Unsupported('NEG reserved RB bits are nonzero')
+                e(f'u64 neg_src_{i}={reg(a)};')
+                e(f'{reg(d)}=0ULL-neg_src_{i};')
+                if xo==616:
+                    # OE=1: XER.OV is recomputed, while XER.SO stays sticky.
+                    # Negating INT64_MIN overflows in signed 64-bit arithmetic.
+                    e(f'u32 neg_ov_{i}=(neg_src_{i}==0x8000000000000000ULL) ? 0x40000000U : 0U;')
+                    e(f'c->xer=(c->xer & ~0x40000000U) | neg_ov_{i};')
+                    e(f'if(neg_ov_{i}) c->xer |= 0x80000000U;')
+                if rc:record(cmp_expr(f'(int64_t){reg(d)}','0LL'))
+                hist['nego' if xo==616 else 'neg']+=1
             elif xo==986:
                 if rc:raise Unsupported('extsw. CR update unsupported')
                 e(f'{reg(a)}=(u64)(int64_t)(s32)(u32){reg(d)};');hist['extsw']+=1

@@ -1,4 +1,4 @@
-name: AscensionRecomp M7.23 - 1419 original owner PPC ARM64 AOT entrypoints
+name: AscensionRecomp M7.24 - NEG PPC64 correctness and 1419 preserved native AOT entries
 
 on:
   push:
@@ -52,6 +52,11 @@ jobs:
           set -euo pipefail
           python3 -m unittest discover -s tests -p test_m722_native_aot.py -v 2>&1 | tee m722-native-aot-tests.log
           grep -Fq 'Ran 7 tests' m722-native-aot-tests.log
+      - name: M7.24 prove native NEG/NEGO PPC64 C lifter with independent synthetic edge cases
+        run: |
+          set -euo pipefail
+          python3 -m unittest discover -s tests -p test_m724_neg_aot.py -v 2>&1 | tee m724-neg-aot-tests.log
+          grep -Fq 'Ran 7 tests' m724-neg-aot-tests.log
       - name: Fetch pinned ps3recomp source
         run: |
           set -euo pipefail
@@ -75,6 +80,15 @@ jobs:
             runtime/ppu_m720_fallback.c tests/host_m721_rotate.c -o m721-host-unoptimized
           ./m721-host-unoptimized 2>&1 | tee m721-rotate-unoptimized.log
           python3 -m unittest discover -s tests -p test_m721_rotate_mask.py -v 2>&1 | tee m721-regressions.log
+      - name: M7.24 prove strict fallback NEG/NEGO XER and Rc with UBSan on synthetic ELF
+        run: |
+          set -euo pipefail
+          clang -std=c11 -O2 -Wall -Wextra -Werror -fsanitize=undefined \
+            -I upstream/runtime/ppu -I runtime \
+            runtime/ppu_bridge.c runtime/ppu_m712_exec_window.c \
+            runtime/ppu_m720_fallback.c tests/host_m724_neg.c -o m724-neg-host
+          ./m724-neg-host 2>&1 | tee m724-neg-host.log
+          grep -Fxq 'M7.24 NEG/NEGO PPC64 fallback: modulo, overflow, sticky SO, Rc and invalid RB PASS' m724-neg-host.log
       - name: M5.0 fetch pinned open source shader compiler sources
         run: |
           set -euo pipefail
@@ -749,7 +763,7 @@ jobs:
           grep -Fq 'M7.20: experimental bounded PPC fallback' m78-aot-status.txt
           grep -Fq 'M7.21: PowerPC64 rlwimi/rlwnm/rldic/rldimi mask semantics verified' m78-aot-status.txt
           grep -Fq 'M7.23: +1 owner-authenticated native 25-opcode block' m78-aot-status.txt
-          echo "M7.23: 1419 owner-ELF-authenticated native ARM64 PPC entrypoints (1418 preserved + one 25-opcode function 0x003C511C); runtime iPhone validation pending; RSX real still not established" > m78-actions-status.txt
+          echo "M7.24: 1419 owner-ELF-authenticated ARM64 PPC AOT entrypoints preserved; NEG/NEGO lifter and fallback synthetically tested; NEW boot frontier requires iPhone report; NO new game AOT claimed; RSX not demonstrated" > m78-actions-status.txt
           test -s AscensionRecompProbe-0.6.14-unsigned.ipa
           /usr/libexec/PlistBuddy -c 'Print CFBundleShortVersionString' ios-probe/Payload/AscensionRecompProbe.app/Info.plist | grep -Fx 0.6.14
           /usr/bin/unzip -t AscensionRecompProbe-0.6.14-unsigned.ipa | tee m42-ipa-integrity.log
@@ -835,7 +849,7 @@ jobs:
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: AscensionRecomp-M7.3-PRX-import-discovery
+          name: AscensionRecomp-M7.24-NEG-verified
           if-no-files-found: warn
           retention-days: 14
           path: |
@@ -1016,6 +1030,8 @@ jobs:
             m723-frontier-stage.log
             m723-frontier-tests.log
             m723-frontier-object-symbols.txt
+            m724-neg-aot-tests.log
+            m724-neg-host.log
             m78-stage-tests.log
             m78-lv2-host.log
             m78-owner-aot-object-symbols.txt
