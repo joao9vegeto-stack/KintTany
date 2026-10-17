@@ -17,9 +17,14 @@ class M715SourceRegressions(unittest.TestCase):
         self.assertIn("[extended appendString:frontierReport];",self.ui)
         self.assertIn("self.ppuBatchReport=",self.ui)
         self.assertIn("self.ppuBatchButton.enabled=(self.ppuBatchReport.length>0);",self.ui)
-        self.assertIn("[stack addArrangedSubview:batchButton];",self.ui)
-        self.assertIn("copyPpuBatch:(UIButton *)sender",self.ui)
-        self.assertIn("UIPasteboard.generalPasteboard.string=self.ppuBatchReport",self.ui)
+        # M7.19 consolidates the visible PPC/status/advanced controls
+        # into ONE user option. The original PPC data generation persists.
+        self.assertIn("[stack addArrangedSubview:diagnostics];",self.ui)
+        self.assertNotIn("[stack addArrangedSubview:batchButton];",self.ui)
+        self.assertNotIn("[stack addArrangedSubview:advancedButton];",self.ui)
+        self.assertIn("openUnifiedPpuMenu:(UIButton *)sender",self.ui)
+        self.assertIn("UIPasteboard.generalPasteboard.string=report;",self.ui)
+        self.assertIn("initForExportingURLs:@[url] asCopy:YES",self.ui)
 
     def test_67_native_entries_only_after_elf_guard(self):
         self.assertIn("ar_m715_register_fragment(d,len)",self.bridge)
