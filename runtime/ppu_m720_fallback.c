@@ -48,6 +48,17 @@ static uint64_t ppc_mask64(unsigned mb,unsigned me){
       m|=UINT64_C(1)<<(63u-i);
  return m;
 }
+/* PPC64 word-mask behavior: for MB>ME the mask wraps across the
+ * boundary and includes the high half. An M-form word rotate duplicates
+ * the low 32-bit word across both halves before applying this mask.
+ * Matches Power ISA and Linux powerpc sstep MASK32/DATA32 semantics. */
+static uint64_t ppc_mask32_64(unsigned mb,unsigned me){
+ const uint64_t lo=ppc_mask32(mb,me);
+ return lo | (mb>me?UINT64_C(0xffffffff00000000):UINT64_C(0));
+}
+static uint64_t ppc_data32(uint32_t v){
+ return (uint64_t)v | ((uint64_t)v<<32);
+}
 static int add_result(ppu_context*c,uint32_t pc,uint64_t v,unsigned d,unsigned record){
  c->gpr[d]=v;
  if(record)cr0(c,v);
@@ -122,18 +133,35 @@ int ar_ppc_fallback_step(ppu_context*c,const uint8_t*elf,size_t elf_len,
    if(op==62&&ds==1u)r[a]=ea;
    c->cia=pc+4u;return AR_TAIL;
  }
- case 21:{ /* rlwinm: real PPC mask and 32-bit rotation */
-   const unsigned sh=(w>>11)&31u,mb=(w>>6)&31u,me=(w>>1)&31u;
-   const uint32_t v=rotate32((uint32_t)r[d],sh)&ppc_mask32(mb,me);
+ case 20:case 21:case 23:{ /* rlwimi / rlwinm / rlwnm */
+   const unsigned sh=op==23u?(unsigned)r[b]&31u:(w>>11)&31u;
+   const unsigned mb=(w>>6)&31u,me=(w>>1)&31u;
+   const uint64_t m=ppc_mask32_64(mb,me);
+   const uint64_t rotated=ppc_data32(rotate32((uint32_t)r[d],sh));
+   const uint64_t v=op==20u
+       ? ((r[a]&~m)|(rotated&m)) : (rotated&m);
    return add_result(c,pc,v,a,w&1u);
  }
- case 30:{ /* rldicl/rldicr: 64-bit masked rotation */
-   const unsigned xo=(w>>2)&7u;
-   const unsigned sh=((w>>11)&31u)|((w&2u)<<4u);
+ case 30:{ /* rldicl, rldicr, rldic, rldimi; rldcl, rldcr */
    const unsigned mb=((w>>6)&31u)|(w&32u);
-   if(xo!=0u&&xo!=1u)return AR_PPC_UNSUPPORTED;
-   const uint64_t mask=xo==0u?ppc_mask64(mb,63u):ppc_mask64(0u,mb);
-   return add_result(c,pc,rotate64(r[d],sh)&mask,a,w&1u);
+   uint64_t rotated=0,mask=0,value=0;
+   if(!(w&0x10u)){ /* MD form immediate shift */
+     const unsigned sh=((w>>11)&31u)|((w&2u)<<4u);
+     const unsigned xo=(w>>2)&3u;
+     rotated=rotate64(r[d],sh);
+     if(xo==0u)mask=ppc_mask64(mb,63u);
+     if(xo==1u)mask=ppc_mask64(0u,mb);
+     if(xo==2u||xo==3u)mask=ppc_mask64(mb,63u-sh);
+     value=xo==3u ? ((r[a]&~mask)|(rotated&mask)) : (rotated&mask);
+   }else{ /* MDS form with register shift */
+     const unsigned sh=(unsigned)r[b]&63u;
+     const unsigned xo=(w>>1)&7u;
+     if(xo>1u)return AR_PPC_UNSUPPORTED;
+     rotated=rotate64(r[d],sh);
+     mask=xo==0u?ppc_mask64(mb,63u):ppc_mask64(0u,mb);
+     value=rotated&mask;
+   }
+   return add_result(c,pc,value,a,w&1u);
  }
  case 31:{
    const unsigned xo=(w>>1)&1023u,record=w&1u;

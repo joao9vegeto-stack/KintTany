@@ -232,6 +232,7 @@ echo "M7.17: static bounded PPC reachability + actual ARM64 AOT dispatch telemet
 echo "M7.18: +${ASCENSION_BULK_COUNT:-0} additional owner-private native PPC AOT blocks; total $((ASCENSION_AOT_EXPECTED_SYMBOL_COUNT+4+${ASCENSION_BULK_COUNT:-0})); exact ELF SHA-256 checked" >> m78-aot-status.txt
 echo "M7.19: +${ASCENSION_BULK2_COUNT:-0} authenticated owner-private native PPC blocks beginning 0x002C16A4; total $((ASCENSION_AOT_EXPECTED_SYMBOL_COUNT+4+${ASCENSION_BULK_COUNT:-0}+${ASCENSION_BULK2_COUNT:-0})) entries; iPhone test pending" >> m78-aot-status.txt
 echo "M7.20: experimental bounded PPC fallback, native AOT priority preserved, separate trace counters; 1418 AOT entries unchanged; no RSX gameplay claimed" >> m78-aot-status.txt
+echo "M7.21: PowerPC64 rlwimi/rlwnm/rldic/rldimi mask semantics verified on synthetic ELF; 1418 native AOT entries preserved; iPhone runtime validation pending" >> m78-aot-status.txt
 file "$APP/AscensionRecompProbe" | tee m41-executable-file.txt
 xcrun lipo -info "$APP/AscensionRecompProbe" | tee m41-executable-arch.txt
 /usr/libexec/PlistBuddy -c 'Print CFBundleIdentifier' "$APP/Info.plist"
