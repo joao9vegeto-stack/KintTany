@@ -401,7 +401,7 @@ extern int ar_probe_rsx_texture_cache_mutation(unsigned swizzled,unsigned int ou
     [controller.view addSubview:panel];
     UILabel *header=[UILabel new];
     header.translatesAutoresizingMaskIntoConstraints=NO;
-    header.text=@"ASCENSIONRECOMP   ·   M7.10";
+    header.text=@"ASCENSIONRECOMP   ·   M7.11";
     header.textColor=[UIColor colorWithRed:0.73 green:0.87 blue:1 alpha:1];
     header.font=[UIFont systemFontOfSize:12 weight:UIFontWeightBold];
     header.textAlignment=NSTextAlignmentCenter;
@@ -545,7 +545,7 @@ extern int ar_probe_rsx_texture_cache_mutation(unsigned swizzled,unsigned int ou
                                   "5 toques: TEXTURA por NV4097/cache/Metal\n"
                                   "Sem arquivos do jogo.";
                 self.status.text=@"ASCENSIONRECOMP · NPUA80918\n"
-                                  "M7.10 · recompilação ARM64 nativa\n"
+                                  "M7.11 · recompilação ARM64 nativa\n"
                                   "Importe GOWA.ELF para executar o código recompilado.\n"
                                   "Inicialização parcial, ainda sem gameplay.\n"
                                   "Ferramentas RSX estão na aba RSX / Metal.";
@@ -1128,16 +1128,19 @@ extern int ar_probe_rsx_texture_cache_mutation(unsigned swizzled,unsigned int ou
            @"Último resultado do despachante: %d",(int)native[6]];
     }
     self.ppuSummary=[NSString stringWithFormat:
-       @"ASCENSIONRECOMP M7.10 · NPUA80918\n"
+       @"ASCENSIONRECOMP M7.11 · NPUA80918\n"
         "RECOMPILAÇÃO ESTÁTICA ARM64\n"
         "Entradas AOT vinculadas: %u\n"
         "ELF: %@ · entrada 0x%08X\n"
         "Execução nativa: %d · TLS r13=0x%08X\n"
+        "SYSUTIL core vinculado=%@ · mapeamentos guest=%@\n"
         "%@\n"
         "Estado: inicialização parcial, sem gameplay.\n"
         "Diagnósticos legados: seção avançada.",
         native[5],nativeRC==0?@"VALIDADO":@"FALHOU",
-        native[1],(int)native[6],native[12],pendingText];
+        native[1],(int)native[6],native[12],
+        (native[15]&0x800u)?@"SIM":@"NÃO",
+        (native[15]&0x1000u)?@"ATIVOS":@"NENHUM",pendingText];
     if((int)continuous[0]!=-1314 || continuous[3]!=0x4e800421u)
        importReport=@"\nM7.3: nenhuma chamada bctrl desconhecida detectada nesta execução.\n";
     continuousText=[continuousText stringByAppendingString:importReport];

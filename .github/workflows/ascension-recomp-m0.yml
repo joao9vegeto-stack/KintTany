@@ -1,4 +1,4 @@
-name: AscensionRecomp M7.10 - 41 real ARM64 AOT and native-first UI
+name: AscensionRecomp M7.11 - 59 real native game AOT, SYSUTIL and sparse memory
 
 on:
   push:
@@ -566,21 +566,38 @@ jobs:
           ./m710-timebase-host 2>&1 | tee m710-timebase-host.log
           grep -Fxq 'M7.10 guest PPU timebase native host PASS' m710-timebase-host.log
           python3 -m unittest discover -s tests -p test_m710_native_ui.py -v 2>&1 | tee m710-native-ui-tests.log
-      - name: M7.10 verify and stage 41 real PPU AOT entries before iOS linking
+      - name: M7.11 verify genuine guest SYSUTIL and sparse memory mappings
+        run: |
+          set -euo pipefail
+          clang -std=c11 -O2 -Wall -Wextra -Werror \
+            -I upstream/runtime/ppu -I runtime \
+            runtime/ppu_bridge.c runtime/ppu_native_sysutil.c \
+            tests/host_m711_sysutil.c -o m711-sysutil-host
+          ./m711-sysutil-host 2>&1 | tee m711-sysutil-host.log
+          grep -Fxq 'M7.11 native SYSUTIL core and fail-closed module load PASS' m711-sysutil-host.log
+          clang -std=c11 -O2 -Wall -Wextra -Werror \
+            -I upstream/runtime/ppu -I runtime \
+            runtime/ppu_bridge.c runtime/ppu_mmapper.c \
+            runtime/ppu_mmapper_reserve.c runtime/ppu_mmapper_alloc.c \
+            runtime/ppu_mmapper_map.c runtime/ppu_mmapper_release.c \
+            tests/host_m711_mmapper.c -o m711-mmapper-host
+          ./m711-mmapper-host 2>&1 | tee m711-mmapper-host.log
+          grep -Fxq 'M7.11 native PPU virtual reservation, physical map and unmap PASS' m711-mmapper-host.log
+      - name: M7.11 verify and stage 59 real PPU AOT entries before iOS linking
         env:
           ASCENSION_AOT_SOURCE_GZIP_B64: ${{ secrets.ASCENSION_AOT_SOURCE_GZIP_B64 }}
         run: |
           set -euo pipefail
           python3 tools/stage_m78_aot.py 2>&1 | tee m78-aot-stage.log
-          grep -Fxq 'M7.10 owner AOT source SHA256 verified; 41 real native entries staged' m78-aot-stage.log
+          grep -Fxq 'M7.11 owner AOT source SHA256 verified; 59 real native entries staged' m78-aot-stage.log
       - name: M4.1 link native UIKit RSX Metal diagnostic application
         run: |
           set -euo pipefail
           bash tools/build_ios_probe_ipa.sh 2>&1 | tee m41-build-ipa.log
           test -s m78-aot-status.txt
-          grep -Fq '41 REAL PPU ARM64 functions verified' m78-aot-status.txt
-          test "$(grep -c '_ar_game_ppu_' m78-owner-aot-linked-symbols.txt)" -eq 41
-          echo 'M7.10: 41 real NPUA80918 ARM64 PPU entries IN IPA; on-device execution is pending' > m78-actions-status.txt
+          grep -Fq '59 REAL PPU ARM64 functions verified' m78-aot-status.txt
+          test "$(grep -c '_ar_game_ppu_' m78-owner-aot-linked-symbols.txt)" -eq 59
+          echo 'M7.11: 59 real NPUA80918 ARM64 PPU entries IN IPA; on-device execution is pending' > m78-actions-status.txt
           test -s AscensionRecompProbe-0.6.14-unsigned.ipa
           /usr/libexec/PlistBuddy -c 'Print CFBundleShortVersionString' ios-probe/Payload/AscensionRecompProbe.app/Info.plist | grep -Fx 0.6.14
           /usr/bin/unzip -t AscensionRecompProbe-0.6.14-unsigned.ipa | tee m42-ipa-integrity.log
@@ -819,6 +836,8 @@ jobs:
             m79-native-hle-host.log
             m710-timebase-host.log
             m710-native-ui-tests.log
+            m711-sysutil-host.log
+            m711-mmapper-host.log
             m78-stage-tests.log
             m78-lv2-host.log
             m78-owner-aot-object-symbols.txt
