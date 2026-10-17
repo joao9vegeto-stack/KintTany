@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""PsTJohn1.1.1: safely import Carpeta PS3 PKGs on iOS."""
+"""PsTJohn1.1.2: safely import Carpeta PS3 PKGs on iOS."""
 from pathlib import Path
 root = Path("rpcs3-src/rpcs3")
 def replace_once(source, needle, replacement):
@@ -18,13 +18,15 @@ def acceptable(raw, folder=False):
     if not rel or "\\" in rel or "//" in rel or "\0" in rel:
         return False
     parts = rel.split("/")
-    return parts[0] in ("game", "GAMES", "GAMEZ") and all(x not in (".", "..", "") for x in parts)
+    return parts[0] in ("game", "GAMES", "GAMEZ", "exdata") and all(x not in (".", "..", "") for x in parts)
 for name, folder in [
     ("../../dev_hdd0", True),
     ("../../dev_hdd0/GAMES", True),
     ("../../dev_hdd0/GAMES/A/PS3_GAME/USRDIR/EBOOT.BIN", False),
     ("../../dev_hdd0/game/NPUB12345/USRDIR/EBOOT.BIN", False),
     ("../../dev_hdd0/GAMEZ/A/PS3_GAME/PARAM.SFO", False),
+    ("../../dev_hdd0/exdata", True),
+    ("../../dev_hdd0/exdata/ABCD12345.rap", False),
 ]:
     assert acceptable(name, folder)
 for name, folder in [
@@ -38,7 +40,7 @@ for name, folder in [
     ("/dev_hdd0/GAMES/x", False), ("PS3_GAME/PARAM.SFO", False),
 ]:
     assert not acceptable(name, folder)
-print("PsTJohn1.1.1: 15 Carpeta path acceptance/security fixtures PASS")
+print("PsTJohn1.1.2: 17 Carpeta path acceptance/security fixtures PASS")
 
 p = root / "Crypto/unpkg.cpp"
 s = p.read_text()
@@ -66,7 +68,7 @@ preflight = r"""#ifdef RPCS3_IOS
 				is_psp ? PKG_AES_KEY2 : m_dec_key.data(),
 				std::span<u8>{reinterpret_cast<u8*>(buf.data()), buf.size()}) < entry.name_size)
 			{
-				pkg_log.error("PsTJohn1.1.1: cannot decrypt PKG path");
+				pkg_log.error("PsTJohn1.1.2: cannot decrypt PKG path");
 				return false;
 			}
 			const std::string_view name = fmt::trim_back_sv(buf, "\0"sv);
@@ -78,6 +80,32 @@ preflight = r"""#ifdef RPCS3_IOS
 		}
 		if (carpeta_pkg)
 		{
+			// Inventory all encrypted top-level names before rejecting a
+			// layout: the device log will show any remaining required roots.
+			std::map<std::string, u32> carpeta_roots;
+			for (const std::string& raw_name : names)
+			{
+				const std::string_view n{raw_name};
+				if (n == prefix)
+					continue;
+				std::string_view relative = n.starts_with("../../dev_hdd0/")
+					? n.substr(prefix.size() + 1) : std::string_view{"<outside>"};
+				const usz slash = relative.find('/');
+				std::string root_name{relative.substr(0, slash)};
+				if (root_name.size() > 48)
+					root_name.resize(48);
+				for (char& ch : root_name)
+				{
+					if (!((ch >= 'a' && ch <= 'z') ||
+						(ch >= 'A' && ch <= 'Z') ||
+						(ch >= '0' && ch <= '9') ||
+						ch == '_' || ch == '-' || ch == '.'))
+						ch = '?';
+				}
+				carpeta_roots[root_name]++;
+			}
+			for (const auto& [root_name, count] : carpeta_roots)
+				pkg_log.notice("PsTJohn1.1.2: Carpeta folder '%s' entries=%u", root_name, count);
 			// Preflight ALL entries before touching the filesystem.
 			for (usz i = 0; i < names.size(); ++i)
 			{
@@ -88,26 +116,26 @@ preflight = r"""#ifdef RPCS3_IOS
 				{
 					if (!folder)
 					{
-						pkg_log.error("PsTJohn1.1.1: Carpeta root is not a folder");
+						pkg_log.error("PsTJohn1.1.2: Carpeta root is not a folder");
 						return false;
 					}
 					continue;
 				}
 				if (!name.starts_with("../../dev_hdd0/"))
 				{
-					pkg_log.error("PsTJohn1.1.1: mixed PKG path '%s'", name);
+					pkg_log.error("PsTJohn1.1.2: mixed PKG path '%s'", name);
 					return false;
 				}
 				const std::string_view relative = name.substr(prefix.size() + 1);
 				const usz slash = relative.find('/');
 				const std::string_view top = relative.substr(0, slash);
-				if ((top != "game" && top != "GAMES" && top != "GAMEZ") ||
+				if ((top != "game" && top != "GAMES" && top != "GAMEZ" && top != "exdata") ||
 					relative.empty() || leaves_directory(relative) ||
 					relative.find('\\') != std::string_view::npos ||
 					relative.find("//") != std::string_view::npos ||
 					relative.find('\0') != std::string_view::npos)
 				{
-					pkg_log.error("PsTJohn1.1.1: unsafe Carpeta PKG path '%s'", name);
+					pkg_log.error("PsTJohn1.1.2: unsafe Carpeta PKG path '%s'", name);
 					return false;
 				}
 			}
@@ -115,7 +143,7 @@ preflight = r"""#ifdef RPCS3_IOS
 			// Never delete the shared HDD root after a partial failure.
 			m_install_path = rpcs3::utils::get_hdd0_dir();
 			m_was_null = false;
-			pkg_log.notice("PsTJohn1.1.1: Carpeta PKG detected; %u paths confined to game/GAMES/GAMEZ",
+			pkg_log.notice("PsTJohn1.1.2: Carpeta PKG detected; %u paths confined to game/GAMES/GAMEZ/exdata",
 				static_cast<u32>(names.size()));
 		}
 	}
@@ -177,4 +205,4 @@ scanner = r"""#ifdef RPCS3_IOS
 s = replace_once(s, "\tconst std::string iso_root = disc_image_root();\n\tfor (auto&& entry : fs::dir{iso_root})", scanner + "\n\tconst std::string iso_root = disc_image_root();\n\tfor (auto&& entry : fs::dir{iso_root})")
 assert s.count("installed_extracted_game(folder_root + entry.name)") == 1
 p.write_text(s)
-print("PsTJohn1.1.1: Carpeta PKG path preflight and GAMES/GAMEZ game discovery patched")
+print("PsTJohn1.1.2: Carpeta PKG path preflight and GAMES/GAMEZ game discovery patched")
