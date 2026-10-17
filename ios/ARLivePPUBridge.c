@@ -24,6 +24,7 @@ extern int ar_m711_bind_memory(const uint8_t*,size_t,uint32_t*);
 extern int ar_m711_bind_sysutil(const uint8_t*,size_t,uint32_t*);
 extern int ar_m713_register_fragment(const uint8_t*,size_t);
 extern int ar_m714_register_fragment(const uint8_t*,size_t);
+extern int ar_m715_register_fragment(const uint8_t*,size_t);
 extern int ar_private_import_match(const uint8_t*,size_t,uint32_t,uint32_t[4],char[48]);
 extern int ar_private_import_find_nid(const uint8_t*,size_t,uint32_t,const char*,uint32_t[4],char[48]);
 
@@ -116,6 +117,11 @@ int ar_m70_native_runtime_probe(const uint8_t*d,size_t len,
   * exact executable PPC words before native registration (fail closed). */
  if(ar_m714_register_fragment(d,len)!=AR_OK){
    ar_bridge_shutdown();return -33;
+ }
+ /* Authenticate the four new instructions before any guest PPU dispatch.
+  * The 64-entry owner source and M7.13/14 registrations stay intact. */
+ if(ar_m715_register_fragment(d,len)!=AR_OK){
+   ar_bridge_shutdown();return -34;
  }
 #endif
 #endif
