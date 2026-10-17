@@ -1,4 +1,4 @@
-name: AscensionRecomp M7.34 - 11 owner-trace ARM64 AOT blocks, 77 PPC instructions
+name: AscensionRecomp M7.35 - 7 new owner-ELF verified ARM64 AOT blocks, 80 PPC instructions
 
 on:
   push:
@@ -371,6 +371,16 @@ jobs:
             -lm -o m734-native-batch-host
           ./m734-native-batch-host 2>&1 | tee m734-native-batch-host.log
           grep -Fxq 'M7.34 batch AOT guest chain: 9 native dispatches, 0 PPC fallback, strict ELF fail-closed PASS' m734-native-batch-host.log
+      - name: M7.35 owner time block ARM64 native and guest-state integration tests
+        run: |
+          set -euo pipefail
+          clang -std=c11 -O2 -Wall -Wextra -Werror -fsanitize=undefined \
+            -I upstream/runtime/ppu -I runtime \
+            runtime/ppu_bridge.c runtime/ppu_m712_exec_window.c \
+            runtime/ppu_m735_native_time.c tests/host_m735_native_time.c \
+            -lm -o m735-time-host
+          ./m735-time-host 2>&1 | tee m735-time-host.log
+          grep -Fq 'M7.35 82 guest PPC instructions: native AOT 2-entry integer date chain, 4-entry looping chain + three alternate entry cases, 0 fallback, 5 numeric oracles, fake ELF rejected PASS' m735-time-host.log
       - name: M5.0 fetch pinned open source shader compiler sources
         run: |
           set -euo pipefail
@@ -1139,7 +1149,7 @@ jobs:
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: AscensionRecomp-M7.34-11-Owner-AOT-Blocks
+          name: AscensionRecomp-M7.35-7-Native-Time-Blocks
           if-no-files-found: warn
           retention-days: 14
           path: |
@@ -1358,6 +1368,7 @@ jobs:
             m734-native-batch-symbols.log
             m734-native-math-host.log
             m734-native-batch-host.log
+            m735-time-host.log
             m78-stage-tests.log
             m78-lv2-host.log
             m78-owner-aot-object-symbols.txt
