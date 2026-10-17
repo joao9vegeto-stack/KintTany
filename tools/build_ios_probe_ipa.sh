@@ -159,6 +159,9 @@ xcrun --sdk iphoneos clang -target arm64-apple-ios17.0 -isysroot "$SDK" \
 xcrun --sdk iphoneos clang -target arm64-apple-ios17.0 -isysroot "$SDK" \
     -std=c11 -O2 -Wall -Wextra -Werror -I upstream/runtime/ppu -I runtime \
     -c runtime/ppu_m735_native_time.c -o ios-probe/ppu_m735_native_time.o
+xcrun --sdk iphoneos clang -target arm64-apple-ios17.0 -isysroot "$SDK" \
+    -std=c11 -O2 -Wall -Wextra -Werror -I upstream/runtime/ppu -I runtime \
+    -c runtime/ppu_m736_native_time.c -o ios-probe/ppu_m736_native_time.o
 
 xcrun --sdk iphoneos clang -target arm64-apple-ios17.0 -isysroot "$SDK" \
     -std=c11 -O2 -Wall -Wextra -Werror -I runtime \
@@ -200,6 +203,7 @@ xcrun --sdk iphoneos clang++ -target arm64-apple-ios17.0 \
     ios-probe/ppu_m734_native_math.o \
     ios-probe/ppu_m734_native_batch.o \
     ios-probe/ppu_m735_native_time.o \
+    ios-probe/ppu_m736_native_time.o \
     ios-probe/ppu_m717_graph.o \
     ios-probe/ppu_m720_fallback.o \
     ${M711_OBJECTS[@]+"${M711_OBJECTS[@]}"} \
@@ -269,6 +273,8 @@ grep -Eq ' [Tt] _ar_m734_native_0052aa1c$' m78-owner-aot-linked-symbols.txt
 grep -Eq ' [Tt] _ar_m734_register_block$' m78-owner-aot-linked-symbols.txt
 grep -Eq ' [Tt] _ar_m734_register_batch$' m78-owner-aot-linked-symbols.txt
 grep -Eq ' [Tt] _ar_m735_register_owner$' m78-owner-aot-linked-symbols.txt
+grep -Eq ' [Tt] _ar_m736_register_owner$' m78-owner-aot-linked-symbols.txt
+grep -Eq ' [Tt] _ar_m736_native_00524b8c$' m78-owner-aot-linked-symbols.txt
 grep -Eq ' [Tt] _ar_m735_native_0052ab58$' m78-owner-aot-linked-symbols.txt
 grep -Eq ' [Tt] _ar_m734_native_0052a9a0$' m78-owner-aot-linked-symbols.txt
 grep -Eq ' [Tt] _ar_m734_native_0052a910$' m78-owner-aot-linked-symbols.txt
@@ -295,10 +301,11 @@ echo 'M7.32: +1 SHA-gated ELF-verified 9-instruction native ARM64 function at gu
 echo 'M7.33: actual iOS LV2 144 registration shared with production synthetic regression; AOT count 1421 unchanged, on-device crossing pending.' >> m78-aot-status.txt
 echo 'M7.34: 11 new native ARM64 basic blocks (77 real guest PPC instructions) selected from authenticated owner ELF trace. Existing 1421 AOT preserved; count after registration expected 1432 if no overlaps. Native vs fallback distinguished on device.' >> m78-aot-status.txt
 echo 'M7.35: +7 original owner-ELF SHA/VM authenticated native AOT entries, 80 distinct PowerPC instructions across time arithmetic and date loop; expected 1439 AOT installed, no claim of cellFs yet.' >> m78-aot-status.txt
+echo 'M7.36: one SHA-verified original owner-ELF nine-opcode time continuation AOT at 0x00524B8C; expected 1440 registered native entries. Generic signed MULHW PPC fallback; no filesystem/RSX claim.' >> m78-aot-status.txt
 file "$APP/AscensionRecompProbe" | tee m41-executable-file.txt
 xcrun lipo -info "$APP/AscensionRecompProbe" | tee m41-executable-arch.txt
 /usr/libexec/PlistBuddy -c 'Print CFBundleIdentifier' "$APP/Info.plist"
-(cd ios-probe && zip -q -r ../AscensionRecompProbe-0.6.14-unsigned.ipa Payload)
-test -s AscensionRecompProbe-0.6.14-unsigned.ipa
-shasum -a 256 AscensionRecompProbe-0.6.14-unsigned.ipa > m41-ipa-sha256.txt
+(cd ios-probe && zip -q -r ../AscensionRecompProbe-0.6.15-unsigned.ipa Payload)
+test -s AscensionRecompProbe-0.6.15-unsigned.ipa
+shasum -a 256 AscensionRecompProbe-0.6.15-unsigned.ipa > m41-ipa-sha256.txt
 echo 'UNSIGNED DIAGNOSTIC APP: UIKit CAMetalLayer + real PS3Recomp Metal backend; NO GOWA GAME included' > m41-status.txt

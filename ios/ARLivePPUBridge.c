@@ -40,6 +40,7 @@ extern int ar_m732_register_block(const uint8_t*,size_t);
 extern int ar_m734_register_block(const uint8_t*,size_t);
 extern int ar_m734_register_batch(const uint8_t*,size_t);
 extern int ar_m735_register_owner(const uint8_t*,size_t);
+extern int ar_m736_register_owner(const uint8_t*,size_t);
 extern int ar_private_import_match(const uint8_t*,size_t,uint32_t,uint32_t[4],char[48]);
 extern int ar_private_import_find_nid(const uint8_t*,size_t,uint32_t,const char*,uint32_t[4],char[48]);
 
@@ -190,6 +191,10 @@ int ar_m70_native_runtime_probe(const uint8_t*d,size_t len,
  /* Owner ELF SHA is authenticated, seven additional AOT blocks verified. */
  if(ar_m735_register_owner(d,len)!=AR_OK){
     ar_bridge_shutdown();return -44;
+ }
+ /* M7.36: fully verified owner-ELF nine-op native time continuation. */
+ if(ar_m736_register_owner(d,len)!=AR_OK){
+    ar_bridge_shutdown();return -45;
  }
 #endif
 #endif

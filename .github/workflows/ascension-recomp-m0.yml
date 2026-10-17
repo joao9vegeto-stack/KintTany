@@ -1,4 +1,4 @@
-name: AscensionRecomp M7.35 - 7 new owner-ELF verified ARM64 AOT blocks, 80 PPC instructions
+name: AscensionRecomp M7.36 - time MULHW 9-op ARM64 AOT + direct TXT sharing
 
 on:
   push:
@@ -381,6 +381,16 @@ jobs:
             -lm -o m735-time-host
           ./m735-time-host 2>&1 | tee m735-time-host.log
           grep -Fq 'M7.35 82 guest PPC instructions: native AOT 2-entry integer date chain, 4-entry looping chain + three alternate entry cases, 0 fallback, 5 numeric oracles, fake ELF rejected PASS' m735-time-host.log
+      - name: M7.36 signed MULHW native 9-PPC guest block with strict owner gate
+        run: |
+          set -euo pipefail
+          clang -std=c11 -O2 -Wall -Wextra -Werror -fsanitize=undefined \
+            -I upstream/runtime/ppu -I runtime \
+            runtime/ppu_bridge.c runtime/ppu_m712_exec_window.c \
+            runtime/ppu_m720_fallback.c runtime/ppu_m736_native_time.c \
+            tests/host_m736_native_time.c -lm -o m736-native-host
+          ./m736-native-host 2>&1 | tee m736-native-host.log
+          grep -Fxq 'M7.36 signed MULHW native nine-op branch: 10 independent numeric oracles, both CR0 paths, XER.CA, preserved LR/CTR/TOC, strict ELF gate, generic fallback MULHW Rc PASS' m736-native-host.log
       - name: M5.0 fetch pinned open source shader compiler sources
         run: |
           set -euo pipefail
@@ -1059,14 +1069,17 @@ jobs:
           grep -Fq 'M7.32: +1 SHA-gated ELF-verified 9-instruction native ARM64 function' m78-aot-status.txt
           grep -Fq 'M7.33: actual iOS LV2 144 registration' m78-aot-status.txt
           grep -Fq 'M7.34: 11 new native ARM64 basic blocks' m78-aot-status.txt
+          grep -Fq 'M7.35: +7 original owner-ELF' m78-aot-status.txt
+          grep -Fq 'M7.36: one SHA-verified' m78-aot-status.txt
+          grep -Eq ' [Tt] _ar_m736_register_owner$' m78-owner-aot-linked-symbols.txt
           grep -Eq ' [Tt] _ar_m734_register_block$' m78-owner-aot-linked-symbols.txt
           grep -Eq ' [Tt] _ar_m734_register_batch$' m78-owner-aot-linked-symbols.txt
           grep -Eq ' [Tt] _ar_lv2_bind_bootstrap_syscalls$' m78-owner-aot-linked-symbols.txt
           grep -Eq ' [Tt] _ar_lv2_timezone$' m78-owner-aot-linked-symbols.txt
-          echo "M7.34: 11 new SHA-gated owner PPC basic blocks (77 instructions) linked as native ARM64. 1421 earlier AOT preserved. On-device execution and next real stop pending. Interpreter counted separately; no filesystem or RSX claims." > m78-actions-status.txt
-          test -s AscensionRecompProbe-0.6.14-unsigned.ipa
-          /usr/libexec/PlistBuddy -c 'Print CFBundleShortVersionString' ios-probe/Payload/AscensionRecompProbe.app/Info.plist | grep -Fx 0.6.14
-          /usr/bin/unzip -t AscensionRecompProbe-0.6.14-unsigned.ipa | tee m42-ipa-integrity.log
+          echo "M7.36: +1 SHA-authenticated nine-PPC owner time block (expected 1440 AOT), generic MULHW fallback, iPhone-native executable linked, no gameplay or sys_fs claims." > m78-actions-status.txt
+          test -s AscensionRecompProbe-0.6.15-unsigned.ipa
+          /usr/libexec/PlistBuddy -c 'Print CFBundleShortVersionString' ios-probe/Payload/AscensionRecompProbe.app/Info.plist | grep -Fx 0.6.15
+          /usr/bin/unzip -t AscensionRecompProbe-0.6.15-unsigned.ipa | tee m42-ipa-integrity.log
           xcrun nm -g ios-probe/Payload/AscensionRecompProbe.app/AscensionRecompProbe | grep -E '(_rsx_metal_backend_present|_rsx_metal_backend_init|_OBJC_CLASS_\\$_ARMetalView)' > m42-runtime-link-symbols.txt || true
           grep -q _rsx_metal_backend_init m39-metal-symbols.txt
           echo 'M4.2: actual GPU clear + presentDrawable + waitUntilCompleted route linked in iOS app; requires on-device screenshot.' > m42-status.txt
@@ -1149,7 +1162,7 @@ jobs:
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: AscensionRecomp-M7.35-7-Native-Time-Blocks
+          name: AscensionRecomp-M7.36-Native-MULHW-TXT-Share
           if-no-files-found: warn
           retention-days: 14
           path: |
@@ -1369,6 +1382,7 @@ jobs:
             m734-native-math-host.log
             m734-native-batch-host.log
             m735-time-host.log
+            m736-native-host.log
             m78-stage-tests.log
             m78-lv2-host.log
             m78-owner-aot-object-symbols.txt
@@ -1380,7 +1394,7 @@ jobs:
             m76-aot-tail-host.log
             m76-status.txt
             m75-aot-boot-host.log
-            AscensionRecompProbe-0.6.14-unsigned.ipa
+            AscensionRecompProbe-0.6.15-unsigned.ipa
             m40-ios-layer-view.o
             build-ios-runtime/libps3recomp_runtime.a
             ios-ppu-core/libAscensionPPUCore-ios-arm64.a
