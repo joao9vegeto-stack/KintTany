@@ -43,9 +43,14 @@ int main(void) {
  /* rlwimi: only the selected bits change, including preserving 64-bit
   * destination bits outside the word mask. */
  c.gpr[3]=UINT64_C(0xab);c.gpr[4]=UINT64_C(0xfeedface12345678);
- if(try_step(elf,mform(20,3,4,24,1,5,0),&c)!=AR_TAIL ||
-    c.gpr[4]!=UINT64_C(0xfeedface2a345678) ||
-    c.cia!=0x1004u)return 2;
+ const int first_rc=try_step(elf,mform(20,3,4,24,1,5,0),&c);
+ if(first_rc!=AR_TAIL || c.gpr[4]!=UINT64_C(0xfeedface2a345678) ||
+    c.cia!=0x1004u){
+    fprintf(stderr,"M7.21 RLWIMI mismatch: rc=%d r4=0x%016llx expected=0xfeedface2a345678 cia=0x%08llx vm_fault=%d\\n",
+        first_rc,(unsigned long long)c.gpr[4],(unsigned long long)c.cia,
+        ar_last_error());
+    return 2;
+ }
  /* Wrapped MASK32 on PPC64 also overwrites high 32 bits per Power ISA;
   * this catches accidental 32-bit-only rlwimi implementations. */
  memset(&c,0,sizeof(c));
