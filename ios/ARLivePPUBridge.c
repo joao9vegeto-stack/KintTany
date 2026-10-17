@@ -12,6 +12,9 @@
 #ifdef ASCENSION_PRIVATE_AOT_LINKED
 extern int ar_private_aot_install_sha256(const unsigned char*,size_t);
 #endif
+#ifdef ASCENSION_PRIVATE_BULK_AOT_LINKED
+extern int ar_bulk_install_sha256(const unsigned char*,size_t);
+#endif
 #include "ppu_bridge.h"
 #include "elf_image.h"
 #include "../runtime/ppu_tls.h" /* explicit project header, not upstream ppu_tls.h */
@@ -133,6 +136,14 @@ int ar_m70_native_runtime_probe(const uint8_t*d,size_t len,
  if(ar_m716_register_block(d,len)!=AR_OK){
    ar_bridge_shutdown();return -35;
  }
+#ifdef ASCENSION_PRIVATE_BULK_AOT_LINKED
+ /* All 500 distinct C-AOT entrypoints were verified against the original
+  * owner ELF digest in the staging step. The signed native binary installs
+  * them only AFTER the original 68 AOT entries are present. */
+ if(ar_bulk_install_sha256(digest,sizeof(digest))!=AR_OK){
+   ar_bridge_shutdown();return -36;
+ }
+#endif
 #endif
 #endif
  out[5]=(uint32_t)ar_registered_count(); /* genuine linked game AOT only */
