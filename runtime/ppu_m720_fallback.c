@@ -286,6 +286,13 @@ int ar_ppc_fallback_step(ppu_context*c,const uint8_t*elf,size_t elf_len,
       if(!divisor)return AR_PPC_UNSUPPORTED; /* architecturally undefined */
       return add_result(c,pc,(uint32_t)x/divisor,d,record);
    }
+   case 75:{ /* M7.36 mulhw: signed 32x32, high 32, sign extend PPC64 */
+      const int64_t p=(int64_t)(int32_t)(uint32_t)x *
+                      (int64_t)(int32_t)(uint32_t)y;
+      const uint32_t upper=(uint32_t)((uint64_t)p>>32u);
+      /* x/y are saved before writing d: RT may alias RA or RB. */
+      return add_result(c,pc,sext32(upper),d,record);
+   }
    case 235:{ /* mullw: low 32 of 32x32 product, signed word result */
       const uint32_t v=(uint32_t)((uint64_t)(uint32_t)x*(uint32_t)y);
       return add_result(c,pc,sext32(v),d,record);

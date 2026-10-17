@@ -36,6 +36,6 @@ class PPU32(unittest.TestCase):
    self.assertIn(t,U)
  def test_ci(self):
   for t in ("host_m64_ppu.c","m64-host.log","m64-status.txt",
-    "M6.4 PPU32 and rldicl PASS","0.6.14-unsigned.ipa"):
+    "M6.4 PPU32 and rldicl PASS","0.6.15-unsigned.ipa"):
    self.assertIn(t,W)
 if __name__=="__main__":unittest.main()

@@ -580,7 +580,7 @@ extern int ar_probe_rsx_texture_cache_mutation(unsigned swizzled,unsigned int ou
                                   "5 toques: TEXTURA por NV4097/cache/Metal\n"
                                   "Sem arquivos do jogo.";
                 self.status.text=@"ASCENSIONRECOMP · NPUA80918\n"
-                                  "M7.35 · 7 AOT de tempo/data\n"
+                                  "M7.36 · MULHW ARM64 e TXT compartilhável\n"
                                   "Importe GOWA.ELF para executar o código recompilado.\n"
                                   "Inicialização parcial, ainda sem gameplay.\n"
                                   "Ferramentas RSX estão na aba RSX / Metal.";
@@ -659,7 +659,7 @@ extern int ar_probe_rsx_texture_cache_mutation(unsigned swizzled,unsigned int ou
     NSString *body=self.ppuReport.length ? self.ppuReport : self.ppuSummary;
     if(!body.length)return nil;
     return [NSString stringWithFormat:
-        @"ASCENSIONRECOMP M7.35 — RELATÓRIO ÚNICO\n"
+        @"ASCENSIONRECOMP M7.36 — RELATÓRIO ÚNICO\n"
          "Status, lote PPC, cobertura ARM64, grafo, TLS/HLE e legados.\n"
          "Somente diagnósticos; NÃO inclui o ELF original.\n"
          "==================================================\n\n%@\n",body];
@@ -668,33 +668,56 @@ extern int ar_probe_rsx_texture_cache_mutation(unsigned swizzled,unsigned int ou
     NSString *report=[self arUnifiedPpuText];
     if(report.length)UIPasteboard.generalPasteboard.string=report;
 }
-- (void)arExportPpuText {
+/* Store TXT persistently in the app's Documents folder. iOS exposes
+ * Documents in Files (including Recents indexing) via Info.plist.
+ * The OS, not the app, controls the selected Files Recents tab.
+ * Share sheet is primary: direct ChatGPT send without iCloud folder browse.
+ */
+- (NSURL *)arCreatePpuTextFile {
     NSString *report=[self arUnifiedPpuText];
-    if(!report.length)return;
+    if(!report.length)return nil;
     NSDateFormatter *date=[NSDateFormatter new];
     date.locale=[NSLocale localeWithLocaleIdentifier:@"en_US_POSIX"];
     date.dateFormat=@"yyyyMMdd-HHmmss";
     NSString *name=[NSString stringWithFormat:
-       @"AscensionRecomp-M7.35-NPUA80918-%@.txt",
+       @"AscensionRecomp-M7.36-NPUA80918-%@.txt",
        [date stringFromDate:[NSDate date]]];
-    NSURL *url=[NSURL fileURLWithPath:
-       [NSTemporaryDirectory() stringByAppendingPathComponent:name]];
+    NSURL *docs=[[[NSFileManager defaultManager]
+        URLsForDirectory:NSDocumentDirectory inDomains:NSUserDomainMask] firstObject];
+    NSURL *url=[docs URLByAppendingPathComponent:name isDirectory:NO];
     NSError *error=nil;
-    if(![report writeToURL:url atomically:YES
-                encoding:NSUTF8StringEncoding error:&error]){
+    if(!url || ![report writeToURL:url atomically:YES
+                  encoding:NSUTF8StringEncoding error:&error]){
         UIAlertController *alert=[UIAlertController alertControllerWithTitle:
           @"Falha ao gerar o TXT" message:error.localizedDescription ?:
           @"Não foi possível salvar o relatório." preferredStyle:UIAlertControllerStyleAlert];
         [alert addAction:[UIAlertAction actionWithTitle:@"OK"
                    style:UIAlertActionStyleCancel handler:nil]];
         [self.window.rootViewController presentViewController:alert
-                                    animated:YES completion:nil];
-        return;
+                                     animated:YES completion:nil];
+        return nil;
     }
-    /* Native Files export: the user can attach the .txt directly to ChatGPT
-     * instead of pasting a giant report that consumes chat context. */
+    return url;
+}
+- (void)arExportPpuText {
+    NSURL *url=[self arCreatePpuTextFile];
+    if(!url)return;
+    UIActivityViewController *share=[[UIActivityViewController alloc]
+                       initWithActivityItems:@[url] applicationActivities:nil];
+    UIViewController *presenter=self.window.rootViewController.presentedViewController
+                                ?: self.window.rootViewController;
+    UIPopoverPresentationController *popover=share.popoverPresentationController;
+    if(popover){popover.sourceView=presenter.view;popover.sourceRect=presenter.view.bounds;}
+    [presenter presentViewController:share animated:YES completion:nil];
+}
+- (void)arSavePpuTextToFiles {
+    NSURL *url=[self arCreatePpuTextFile];
+    if(!url)return;
     UIDocumentPickerViewController *picker=[[UIDocumentPickerViewController alloc]
                            initForExportingURLs:@[url] asCopy:YES];
+    /* Do not pin iCloud Drive. With nil, the system chooses its
+     * last-used Files directory; the virtual Recents tab is OS-owned. */
+    picker.directoryURL=nil;
     UIViewController *presenter=self.window.rootViewController.presentedViewController
                                 ?: self.window.rootViewController;
     [presenter presentViewController:picker animated:YES completion:nil];
@@ -709,9 +732,13 @@ extern int ar_probe_rsx_texture_cache_mutation(unsigned swizzled,unsigned int ou
           style:UIAlertActionStyleDefault handler:^(__unused UIAlertAction *a){
           [self openAdvancedPpuReport:sender];
     }]];
-    [menu addAction:[UIAlertAction actionWithTitle:@"Exportar TXT · Arquivos"
+    [menu addAction:[UIAlertAction actionWithTitle:@"Compartilhar TXT · direto ao ChatGPT"
           style:UIAlertActionStyleDefault handler:^(__unused UIAlertAction *a){
           [self arExportPpuText];
+    }]];
+    [menu addAction:[UIAlertAction actionWithTitle:@"Salvar TXT · Arquivos"
+          style:UIAlertActionStyleDefault handler:^(__unused UIAlertAction *a){
+          [self arSavePpuTextToFiles];
     }]];
     [menu addAction:[UIAlertAction actionWithTitle:@"Copiar tudo"
           style:UIAlertActionStyleDefault handler:^(__unused UIAlertAction *a){
@@ -1450,10 +1477,21 @@ extern int ar_probe_rsx_texture_cache_mutation(unsigned swizzled,unsigned int ou
     [graphReport appendFormat:
       @"\nM7.34 — BLOCO ORIGINAL DE LOTE DE 77 PPC RECOMPILADOS NATIVAMENTE\n"
        "AOT 0x0052AA1C ARM64: %@ · ocorrências recentes=%u\n"
-       "Entradas AOT vinculadas=%u (esperado até 1439) · AOT distintas=%u\n"
+       "Entradas AOT vinculadas=%u (meta M7.36: 1440) · AOT distintas=%u\n"
        "Passos PPC interpretados=%u · nenhum frame RSX original confirmado.\n"
        "Trecho atestado por SHA privada e checksum mais comparação ELF/VM.\n",
        recent734?@"EXECUTADA":@"NÃO OBSERVADA",recent734,
+       native[5],measured.unique_aot,measured.fallback_steps];
+    uint32_t recent736=0u;
+    for(uint32_t ai=0;ai<measured.trace_count;ai++)
+      if(measured.trace_pcs[ai]==UINT32_C(0x00524b8c))recent736++;
+    [graphReport appendFormat:
+      @"\nM7.36 — NOVA AOT ARM64 DE 9 PPC + MULHW ASSINADO\n"
+       "AOT 0x00524B8C ARM64: %@ · ocorrências recentes=%u\n"
+       "AOT vinculadas=%u (meta 1440) · AOT distintas=%u\n"
+       "PPC interpretado=%u · nenhum cellFsOpen/Read ou RSX real presumido.\n"
+       "ELF proprietário fica no iPhone; autenticação SHA + PT_LOAD X/VM.\n",
+       recent736?@"EXECUTADA":@"NÃO OBSERVADA",recent736,
        native[5],measured.unique_aot,measured.fallback_steps];
     if((int)native[6]==AR_MISSING_LV2){
        pendingText=[NSString stringWithFormat:
@@ -1470,7 +1508,7 @@ extern int ar_probe_rsx_texture_cache_mutation(unsigned swizzled,unsigned int ou
                         ? frontierReport : nil;
     self.ppuBatchButton.enabled=(self.ppuBatchReport.length>0);
     self.ppuSummary=[NSString stringWithFormat:
-       @"ASCENSIONRECOMP M7.35 · NPUA80918\n"
+       @"ASCENSIONRECOMP M7.36 · NPUA80918\n"
         "AOT ARM64 + FALLBACK PPC EXPERIMENTAL\n"
         "Entradas AOT vinculadas: %u\n"
         "ELF: %@ · entrada 0x%08X\n"
