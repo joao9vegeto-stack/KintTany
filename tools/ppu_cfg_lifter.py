@@ -235,6 +235,19 @@ def lift(words: list[int] | tuple[int, ...], base: int, name: str = 'ppu_sample'
                     lhs=f'(u64){reg(a)}' if wide else f'(u32){reg(a)}'
                     rhs=f'(u64){reg(b)}' if wide else f'(u32){reg(b)}'
                 record(cmp_expr(lhs,rhs),bf);hist['cmp']+=1
+            elif xo==824:
+                # SRAWI: signed 32-bit arithmetic shift plus sticky SO in CR0.
+                sh=b
+                e(f'u32 sraw_word_{i}=(u32){reg(d)};')
+                e(f'u32 sraw_result_{i}=sraw_word_{i} >> {sh}U;')
+                if sh:
+                    e(f'if(sraw_word_{i} & 0x80000000U) sraw_result_{i} |= UINT32_MAX << {32-sh}U;')
+                e(f'u32 sraw_ca_{i}=((sraw_word_{i} & 0x80000000U) && '
+                  f'((sraw_word_{i} & 0x{(1<<sh)-1:08x}U)!=0U)) ? 0x20000000U : 0U;')
+                e(f'c->xer=(c->xer & ~0x20000000U) | sraw_ca_{i};')
+                e(f'{reg(a)}=(u64)(int64_t)(s32)sraw_result_{i};')
+                if rc:record(cmp_expr(f'(int64_t){reg(a)}','0LL'))
+                hist['srawi']+=1
             elif xo in (104, 616):
                 # NEG/NEGO: RT <- (0 - RA) mod 2^64. No signed C overflow.
                 # The five RB/reserved bits must be zero for this X-form.

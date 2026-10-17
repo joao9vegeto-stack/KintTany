@@ -22,6 +22,7 @@ static const uint8_t *fb_elf;
 static ar_ppc_fallback_fn fb_eval;
 static size_t fb_elf_size;
 static uint32_t fb_cap,fb_steps,fb_pc,fb_op,fb_bad_pc,fb_bad_op;
+static uint32_t fb_callsite_pc,fb_call_target;
 
 static uint32_t aot_hash(uint32_t pc){
   return (((pc>>2)*UINT32_C(2654435761)) & (AR_AOT_INDEX_SIZE-1u));
@@ -39,6 +40,8 @@ void ar_trace_snapshot(ar_aot_trace *out) {
  out->fallback_last_opcode=fb_op;
  out->fallback_unsupported_pc=fb_bad_pc;
  out->fallback_unsupported_word=fb_bad_op;
+ out->fallback_callsite_pc=fb_callsite_pc;
+ out->fallback_call_target=fb_call_target;
  out->fallback_step_limit=fb_cap;
  const uint32_t start=trace_total-out->trace_count;
  for(uint32_t i=0;i<out->trace_count;i++)
@@ -76,6 +79,7 @@ void ar_bridge_shutdown(void){
  trace_total=0;trace_unique=0;trace_hle=0;trace_pending=0;trace_budget=0;
  nimports=0;nhandlers=0;nsyscalls=0;missing_nid=0;missing_syscall=0;fault=0;missing=0;budget=0;depth=0;
  fb_elf=0;fb_eval=0;fb_elf_size=0;fb_cap=0;fb_steps=0;fb_pc=0;fb_op=0;fb_bad_pc=0;fb_bad_op=0;
+ fb_callsite_pc=0;fb_call_target=0;
 }
 int ar_last_error(void){return fault;}
 uint32_t ar_last_missing_nid(void){return missing_nid;}
@@ -200,6 +204,9 @@ static ar_ppu_fn lookup(uint64_t addr,size_t *index){
   }
   return 0;
 }
+void ar_ppc_note_failed_call(uint32_t site,uint32_t target){
+ if(site && target && !fb_callsite_pc){fb_callsite_pc=site;fb_call_target=target;}
+}
 static uint32_t import_nid(uint64_t stub){
  for(size_t i=0;i<nimports;i++)if(imports[i].stub==stub)return imports[i].nid;
  return 0;
@@ -246,6 +253,8 @@ static int dispatch(ppu_context *c,uint64_t pc){
           if(step==AR_TAIL){pc=c->cia;continue;}
           result=AR_OK;break;
         }
+        /* Preserve deepest nested dispatch failure, never overwrite with BL. */
+        if(fault){result=fault;break;}
         if(step==AR_PPC_UNSUPPORTED){
           fb_bad_pc=(uint32_t)pc;fb_bad_op=word;
           missing=(uint32_t)pc;trace_pending=(uint32_t)pc;
@@ -278,5 +287,6 @@ int ar_run(ppu_context *c,uint32_t pc,uint32_t ticks){
   memset(trace_seen,0,sizeof(trace_seen));memset(trace_ring,0,sizeof(trace_ring));
   trace_total=0;trace_unique=0;trace_hle=0;trace_pending=0;trace_budget=ticks;
   fb_steps=0;fb_pc=0;fb_op=0;fb_bad_pc=0;fb_bad_op=0;
+  fb_callsite_pc=0;fb_call_target=0;
   return dispatch(c,pc);
 }

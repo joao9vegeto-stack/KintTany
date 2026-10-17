@@ -38,6 +38,7 @@ typedef struct {
     uint32_t fallback_steps, fallback_last_pc, fallback_last_opcode;
     uint32_t fallback_unsupported_pc, fallback_unsupported_word;
     uint32_t fallback_step_limit;
+    uint32_t fallback_callsite_pc, fallback_call_target; /* M7.25 */
 } ar_aot_trace;
 void ar_trace_snapshot(ar_aot_trace *out);
 /* Experimental signed non-JIT fallback. Attach the exact owner ELF ONLY
@@ -48,6 +49,7 @@ typedef int (*ar_ppc_fallback_fn)(ppu_context*,const uint8_t*,size_t,
 int ar_ppc_fallback_attach(const uint8_t *elf,size_t len,uint32_t max_steps,
                            ar_ppc_fallback_fn evaluator);
 /* Internal single-step evaluator; public only for synthetic tests. */
+void ar_ppc_note_failed_call(uint32_t callsite,uint32_t target);
 int ar_ppc_fallback_step(ppu_context *c,const uint8_t *elf,size_t len,
                          uint32_t pc,uint32_t *opcode);
 

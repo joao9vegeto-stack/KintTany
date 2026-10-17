@@ -238,6 +238,17 @@ int ar_ppc_fallback_step(ppu_context*c,const uint8_t*elf,size_t elf_len,
       if(ar_last_error()!=AR_OK)return AR_MEM_FAULT;
       c->cia=pc+4u;return AR_TAIL;
    }
+   case 824:{ /* srawi RA,RS,SH: arithmetic signed word shift */
+      const unsigned sh=b;
+      const uint32_t input=(uint32_t)r[d];
+      const int negative=(input&UINT32_C(0x80000000))!=0;
+      uint32_t shifted=input>>sh;
+      if(negative && sh)shifted|=UINT32_MAX<<(32u-sh);
+      const int carry=negative && sh && ((input&((UINT32_C(1)<<sh)-1u))!=0u);
+      c->xer=(c->xer & ~UINT32_C(0x20000000)) |
+             (carry?UINT32_C(0x20000000):0u);
+      return add_result(c,pc,sext32(shifted),a,record);
+   }
    case 954:case 922:case 986:{
       uint64_t val=xo==954?(uint64_t)(int64_t)(int8_t)(uint8_t)r[d]:
                    xo==922?(uint64_t)(int64_t)(int16_t)(uint16_t)r[d]:
@@ -266,7 +277,7 @@ int ar_ppc_fallback_step(ppu_context*c,const uint8_t*elf,size_t elf_len,
      c->lr=fall;
      if(taken){
        const int rc=ar_guest_call(c,(uint64_t)dest);
-       if(rc!=AR_OK)return rc;
+       if(rc!=AR_OK){ar_ppc_note_failed_call(pc,(uint32_t)dest);return rc;}
      }
      c->cia=fall;return AR_TAIL;
    }
@@ -283,7 +294,7 @@ int ar_ppc_fallback_step(ppu_context*c,const uint8_t*elf,size_t elf_len,
       c->lr=pc+4u;
       if(taken){
         const int rc=ar_guest_call(c,target);
-        if(rc!=AR_OK)return rc;
+        if(rc!=AR_OK){ar_ppc_note_failed_call(pc,(uint32_t)target);return rc;}
       }
       c->cia=pc+4u;return AR_TAIL;
    }
