@@ -307,6 +307,9 @@ int ar_ppc_fallback_step(ppu_context*c,const uint8_t*elf,size_t elf_len,
    return xo==16u?AR_OK:AR_TAIL;
  }
  case 17:{
+   /* Power ISA valid 32-bit syscall encoding only; never allow undefined forms. */
+   if(w!=UINT32_C(0x44000002))return AR_PPC_UNSUPPORTED;
+   ar_ppc_note_syscall_pc(pc); /* preserve the exact guest instruction address */
    const int rc=ar_guest_syscall(c);
    if(rc!=AR_OK)return rc;
    c->cia=pc+4u;return AR_TAIL;
