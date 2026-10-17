@@ -21,7 +21,7 @@ class TestM673(unittest.TestCase):
    self.assertIn(token,U)
  def test_ci(self):
   for token in ('tests/host_m673_import_match.c','m673-import-host.log',
-                'AscensionRecomp-M7.29-PPC64-FPU'):
+                'AscensionRecomp-M7.30-AOT-frontier-and-LV2'):
    self.assertIn(token,W)
   self.assertIn('<string>74</string>',P)
 if __name__=="__main__":unittest.main()

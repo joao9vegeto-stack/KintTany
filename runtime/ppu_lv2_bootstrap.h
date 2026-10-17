@@ -7,6 +7,9 @@ int ar_lv2_user_memory_size(ppu_context *cpu);
 int ar_lv2_system_time(ppu_context *cpu);
 /* LV2 syscall 147 (0x093): 64-bit timebase frequency in guest r3. */
 int ar_lv2_timebase_frequency(ppu_context *cpu);
+int ar_lv2_current_time(ppu_context *cpu);
+int ar_lv2_current_time_values(ppu_context *cpu,uint64_t sec,uint64_t nsec);
+unsigned ar_lv2_current_time_queries(void);
 unsigned ar_lv2_timebase_queries(void);
 int ar_lv2_thread_get_id(ppu_context *cpu);
 unsigned ar_lv2_user_memory_queries(void);

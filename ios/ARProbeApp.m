@@ -580,7 +580,7 @@ extern int ar_probe_rsx_texture_cache_mutation(unsigned swizzled,unsigned int ou
                                   "5 toques: TEXTURA por NV4097/cache/Metal\n"
                                   "Sem arquivos do jogo.";
                 self.status.text=@"ASCENSIONRECOMP · NPUA80918\n"
-                                  "M7.29 · AOT nativo + FP PowerPC\n"
+                                  "M7.30 · AOT nativo + CR/LV2/trace\n"
                                   "Importe GOWA.ELF para executar o código recompilado.\n"
                                   "Inicialização parcial, ainda sem gameplay.\n"
                                   "Ferramentas RSX estão na aba RSX / Metal.";
@@ -659,7 +659,7 @@ extern int ar_probe_rsx_texture_cache_mutation(unsigned swizzled,unsigned int ou
     NSString *body=self.ppuReport.length ? self.ppuReport : self.ppuSummary;
     if(!body.length)return nil;
     return [NSString stringWithFormat:
-        @"ASCENSIONRECOMP M7.29 — RELATÓRIO ÚNICO\n"
+        @"ASCENSIONRECOMP M7.30 — RELATÓRIO ÚNICO\n"
          "Status, lote PPC, cobertura ARM64, grafo, TLS/HLE e legados.\n"
          "Somente diagnósticos; NÃO inclui o ELF original.\n"
          "==================================================\n\n%@\n",body];
@@ -675,7 +675,7 @@ extern int ar_probe_rsx_texture_cache_mutation(unsigned swizzled,unsigned int ou
     date.locale=[NSLocale localeWithLocaleIdentifier:@"en_US_POSIX"];
     date.dateFormat=@"yyyyMMdd-HHmmss";
     NSString *name=[NSString stringWithFormat:
-       @"AscensionRecomp-M7.29-NPUA80918-%@.txt",
+       @"AscensionRecomp-M7.30-NPUA80918-%@.txt",
        [date stringFromDate:[NSDate date]]];
     NSURL *url=[NSURL fileURLWithPath:
        [NSTemporaryDirectory() stringByAppendingPathComponent:name]];
@@ -1391,6 +1391,24 @@ extern int ar_probe_rsx_texture_cache_mutation(unsigned swizzled,unsigned int ou
          "Contadores pertencem à interpretação, NÃO são novas funções AOT.\n",
          measured.fp_loads,measured.fp_stores,measured.fp_converts,
          measured.fp_divides,measured.fp_last_pc];
+    /* M7.30: this trace records real PPC interpreted instructions, NOT
+     * translated AOT. Use it to select future private owner ELF AOT spans.
+     * No ELF content is included in public CI or GitHub commits. */
+    [graphReport appendFormat:
+       @"\nM7.30 — DESTINOS REAIS PARA PRÓXIMA RECOMPILAÇÃO NATIVA\n"
+        "Entradas ARM64 executadas=%u distintas=%u; PPC interpretado=%u\n"
+        "Últimas %u instruções PPC autenticadas (NÃO AOT):\n",
+        measured.aot_dispatches,measured.unique_aot,
+        measured.fallback_steps,measured.fallback_trace_count];
+    for(uint32_t fi=0;fi<measured.fallback_trace_count;fi++){
+       [graphReport appendFormat:@"PPC_INTERP PC=0x%08X WORD=0x%08X\n",
+          measured.fallback_trace_pcs[fi],measured.fallback_trace_words[fi]];
+    }
+    [graphReport appendString:
+       @"MFCR r12 codificação exata implementada; LV2 #145 hora atual em"
+        " segundos/nanosegundos BE na memória convidada.\n"
+        "Gate: CI NÃO prova AOT integral. Filesystem, PSARC e RSX reais"
+        " continuam SEM evidência neste relatório.\n"];
     if((int)native[6]==AR_MISSING_LV2){
        pendingText=[NSString stringWithFormat:
           @"Serviço PS3 LV2 pendente: syscall %u (0x%X)\n"
@@ -1406,14 +1424,14 @@ extern int ar_probe_rsx_texture_cache_mutation(unsigned swizzled,unsigned int ou
                         ? frontierReport : nil;
     self.ppuBatchButton.enabled=(self.ppuBatchReport.length>0);
     self.ppuSummary=[NSString stringWithFormat:
-       @"ASCENSIONRECOMP M7.29 · NPUA80918\n"
+       @"ASCENSIONRECOMP M7.30 · NPUA80918\n"
         "AOT ARM64 + FALLBACK PPC EXPERIMENTAL\n"
         "Entradas AOT vinculadas: %u\n"
         "ELF: %@ · entrada 0x%08X\n"
         "Execução nativa: %d · TLS r13=0x%08X\n"
         "SYSUTIL core vinculado=%@ · mapeamentos guest=%@\n"
         "%@\n"
-        "M7.29: LFD/FCFID/LFS/FDIV/STFD, FPSCR normal/finito; exportar TXT.\n"
+        "M7.30: MFCR nativo/fallback + LV2 #145 BE real; histórico PPC para AOT.\n"
         "RSX do Ascension: não demonstrado (M4/M5 sintéticos).\n"
         "Estado: inicialização parcial, sem gameplay.\n"
         "Diagnósticos legados: seção avançada.",

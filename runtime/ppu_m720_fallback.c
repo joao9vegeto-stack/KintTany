@@ -237,6 +237,10 @@ int ar_ppc_fallback_step(ppu_context*c,const uint8_t*elf,size_t elf_len,
       c->cia=pc+4u;
       return AR_TAIL;
    }
+   case 19:{ /* mfcr rD, XFX canonical full CR copy */
+      if(w!=(UINT32_C(0x7c000026)|(d<<21)))return AR_PPC_UNSUPPORTED;
+      return add_result(c,pc,(uint64_t)c->cr,d,0u);
+   }
    case 104:case 616:{ /* NEG / NEGO: -(RA) in 64-bit modular arithmetic */
       if(b!=0u)return AR_PPC_UNSUPPORTED; /* reserved RB must be zero */
       const uint64_t operand=x;

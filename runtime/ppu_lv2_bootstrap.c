@@ -12,11 +12,12 @@
 #include <stdint.h>
 #include <time.h>
 enum { AR_USER_TOTAL=0x10000000u, AR_USER_AVAIL=0x0e000000u };
-static unsigned memory_queries,time_queries,timebase_queries;
-void ar_lv2_bootstrap_reset(void){memory_queries=time_queries=timebase_queries=0u;}
+static unsigned memory_queries,time_queries,timebase_queries,current_time_queries;
+void ar_lv2_bootstrap_reset(void){memory_queries=time_queries=timebase_queries=current_time_queries=0u;}
 unsigned ar_lv2_user_memory_queries(void){return memory_queries;}
 unsigned ar_lv2_time_queries(void){return time_queries;}
 unsigned ar_lv2_timebase_queries(void){return timebase_queries;}
+unsigned ar_lv2_current_time_queries(void){return current_time_queries;}
 /* Hardware-compatible PS3 Cell 79.8 MHz timebase, NOT iPhone CPU clock.
  * Syscall returns frequency as u64 directly in guest r3 (not CELL_OK).
  * Keep guest tick/frequency clock domains consistent in future runtimes. */
@@ -25,6 +26,36 @@ int ar_lv2_timebase_frequency(ppu_context *cpu){
  cpu->gpr[3]=UINT64_C(79800000);
  ++timebase_queries;
  return AR_OK;
+}
+/* PS3 LV2 145: UNIX epoch seconds/nanoseconds in two BE guest 64-bit
+ * addresses r3 and r4. Refuse invalid pointer before modifying either. */
+int ar_lv2_current_time_values(ppu_context *cpu,uint64_t sec,uint64_t nsec){
+ if(!cpu||nsec>=UINT64_C(1000000000))return AR_BAD_ARGS;
+ const uint64_t psec=cpu->gpr[3],pnsec=cpu->gpr[4];
+ if(!psec||!pnsec||(psec&7u)||(pnsec&7u)||
+    psec>UINT32_MAX-7u||pnsec>UINT32_MAX-7u||
+    (psec<=pnsec+7u && pnsec<=psec+7u))return AR_BAD_ARGS;
+ uint8_t probe[8];
+ if(ar_vm_read_bytes(psec,probe,8)!=AR_OK ||
+    ar_vm_read_bytes(pnsec,probe,8)!=AR_OK)return AR_MEM_FAULT;
+ uint8_t s[8],n[8];
+ for(unsigned i=0;i<8;i++){
+    s[7u-i]=(uint8_t)(sec>>(i*8u));
+    n[7u-i]=(uint8_t)(nsec>>(i*8u));
+ }
+ if(ar_vm_load(psec,s,8)!=AR_OK ||
+    ar_vm_load(pnsec,n,8)!=AR_OK)return AR_MEM_FAULT;
+ cpu->gpr[3]=0; /* CELL_OK only when both buffers were written */
+ ++current_time_queries;
+ return AR_OK;
+}
+int ar_lv2_current_time(ppu_context *cpu){
+ if(!cpu)return AR_BAD_ARGS;
+ struct timespec now={0};
+ if(clock_gettime(CLOCK_REALTIME,&now)!=0||now.tv_sec<0||
+    now.tv_nsec<0||now.tv_nsec>=1000000000L)return AR_LV2_FAILURE;
+ return ar_lv2_current_time_values(cpu,(uint64_t)now.tv_sec,
+                                   (uint64_t)now.tv_nsec);
 }
 int ar_lv2_user_memory_size(ppu_context *cpu){
  if(!cpu)return AR_BAD_ARGS;

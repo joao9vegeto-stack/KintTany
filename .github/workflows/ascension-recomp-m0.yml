@@ -1,4 +1,4 @@
-name: AscensionRecomp M7.29 - actual PPU FPU scalar PPC64 LFD FCFID LFS FDIV STFD
+name: AscensionRecomp M7.30 - native MFCR, LV2 realtime 145 and PPC AOT-target trace
 
 on:
   push:
@@ -82,6 +82,11 @@ jobs:
           set -euo pipefail
           python3 -m unittest discover -s tests -p test_m729_fpu_aot.py -v 2>&1 | tee m729-fpu-aot-tests.log
           grep -Fq 'Ran 5 tests' m729-fpu-aot-tests.log
+      - name: M7.30 prove canonical MFCR r12 PPC64 to native C AOT
+        run: |
+          set -euo pipefail
+          python3 -m unittest discover -s tests -p test_m730_mfcr_aot.py -v 2>&1 | tee m730-mfcr-aot.log
+          grep -Fq 'Ran 5 tests' m730-mfcr-aot.log
       - name: Fetch pinned ps3recomp source
         run: |
           set -euo pipefail
@@ -170,6 +175,24 @@ jobs:
             m729-fpu-native.c runtime/ppu_bridge.c -lm -o m729-fpu-native-host
           ./m729-fpu-native-host 2>&1 | tee m729-fpu-native-host.log
           echo "M7.29 native AOT FPR memory / integer conversion / fdiv PASS" | tee -a m729-fpu-native-host.log
+      - name: M7.30 prove MFCR r12 emits real iPhone ARM64 object
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          from pathlib import Path
+          from tools.ppu_cfg_lifter import lift
+          source,h=lift([0x7d800026,0x4e800020],0x10000,'m730_mfcr_r12')
+          assert h.get('mfcr')==1
+          assert 'c->gpr[12]=(u64)c->cr' in source
+          assert 'ar_ppc_fallback_step' not in source
+          Path('m730-mfcr-native.c').write_text(source,encoding='utf8')
+          PY
+          sdk="$(xcrun --sdk iphoneos --show-sdk-path)"
+          xcrun --sdk iphoneos clang -target arm64-apple-ios17.0 -isysroot "$sdk" \
+            -std=c11 -O2 -I upstream/runtime/ppu -I runtime \
+            -c m730-mfcr-native.c -o m730-mfcr-arm64.o
+          file m730-mfcr-arm64.o | tee m730-mfcr-arm64.log
+          grep -Eq 'Mach-O 64-bit object arm64|Mach-O 64-bit arm64 object' m730-mfcr-arm64.log
       - name: M7.21 prove PPC64 RLWIMI RLWNM RLDIC RLDIMI masking and fail-closed
         run: |
           set -euo pipefail
@@ -243,6 +266,16 @@ jobs:
             -o m729-fpu-host
           ./m729-fpu-host 2>&1 | tee m729-fpu-host.log
           grep -Fxq 'M7.29 PPC64 raw FPR lfd/fcfid/lfs/fdiv/stfd + FPSCR and fail-closed PASS' m729-fpu-host.log
+      - name: M7.30 verify MFCR + sys_time_get_current_time 145 + fallback tail telemetry
+        run: |
+          set -euo pipefail
+          clang -std=c11 -O2 -Wall -Wextra -Werror -fsanitize=undefined \
+            -I upstream/runtime/ppu -I runtime \
+            runtime/ppu_bridge.c runtime/ppu_m712_exec_window.c \
+            runtime/ppu_m720_fallback.c runtime/ppu_lv2_bootstrap.c \
+            tests/host_m730_mfcr_time.c -o m730-native-host
+          ./m730-native-host 2>&1 | tee m730-native-host.log
+          grep -Fxq 'M7.30 native MFCR full CR, real LV2 145 guest BE sec/nsec, fail-closed and fallback trace PASS' m730-native-host.log
       - name: M5.0 fetch pinned open source shader compiler sources
         run: |
           set -euo pipefail
@@ -917,7 +950,7 @@ jobs:
           grep -Fq 'M7.20: experimental bounded PPC fallback' m78-aot-status.txt
           grep -Fq 'M7.21: PowerPC64 rlwimi/rlwnm/rldic/rldimi mask semantics verified' m78-aot-status.txt
           grep -Fq 'M7.23: +1 owner-authenticated native 25-opcode block' m78-aot-status.txt
-          echo "M7.29: previous 1419 private native ARM64 AOT entries retained; PowerPC64 FPR raw lfd/lfs/fcfid/fdiv/stfd covered in signed fallback and static ARM64 AOT; FPSCR in normal finite domain only; real device proof pending" > m78-actions-status.txt
+          echo "M7.30: 1419 original private ARM64 AOT entries preserved; MFCR r12 static ARM64 and interpreted PPC; LV2 realtime #145 BE writes; last 32 actually interpreted PPC PCs for PRIVATE future AOT targets. No new owner-private AOT counted; no game filesystem/RSX proven." > m78-actions-status.txt
           test -s AscensionRecompProbe-0.6.14-unsigned.ipa
           /usr/libexec/PlistBuddy -c 'Print CFBundleShortVersionString' ios-probe/Payload/AscensionRecompProbe.app/Info.plist | grep -Fx 0.6.14
           /usr/bin/unzip -t AscensionRecompProbe-0.6.14-unsigned.ipa | tee m42-ipa-integrity.log
@@ -1003,7 +1036,7 @@ jobs:
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: AscensionRecomp-M7.29-PPC64-FPU
+          name: AscensionRecomp-M7.30-AOT-frontier-and-LV2
           if-no-files-found: warn
           retention-days: 14
           path: |
@@ -1203,6 +1236,10 @@ jobs:
             m729-fpu-arm64.log
             m729-fpu-native-host.log
             m729-fpu-host.log
+            m730-mfcr-aot.log
+            m730-mfcr-arm64.log
+            m730-mfcr-arm64.o
+            m730-native-host.log
             m78-stage-tests.log
             m78-lv2-host.log
             m78-owner-aot-object-symbols.txt
