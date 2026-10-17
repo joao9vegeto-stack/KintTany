@@ -3,6 +3,11 @@
 #include <stddef.h>
 #include <string.h>
 #include <CommonCrypto/CommonDigest.h>
+/* Owner game AOT services are linked for the iPhoneOS target.
+ * Mac host tests keep their original isolated synthetic AOT ABI. */
+#if defined(ASCENSION_PRIVATE_AOT_LINKED) && defined(__ENVIRONMENT_IPHONE_OS_VERSION_MIN_REQUIRED__)
+#define ASCENSION_M711_OWNER_AOT 1
+#endif
 
 #ifdef ASCENSION_PRIVATE_AOT_LINKED
 extern int ar_private_aot_install_sha256(const unsigned char*,size_t);
@@ -67,7 +72,7 @@ int ar_m70_native_runtime_probe(const uint8_t*d,size_t len,
  const int rcinit=ar_bridge_init(cap);
  if(rcinit){out[0]=(uint32_t)rcinit;return rcinit;}
  ar_lwmutex_reset();
-#ifdef ASCENSION_PRIVATE_AOT_LINKED
+#ifdef ASCENSION_M711_OWNER_AOT
  ar_mmapper_reset();ar_sysutil_reset();
 #endif /* new guest process: no stale sync objects */
  ar_lv2_bootstrap_reset();
@@ -181,7 +186,7 @@ int ar_m70_native_runtime_probe(const uint8_t*d,size_t len,
 
  
  
-#ifdef ASCENSION_PRIVATE_AOT_LINKED
+#ifdef ASCENSION_M711_OWNER_AOT
  if(ar_m711_bind_sysutil(d,len,out)!=AR_OK ||
     ar_m711_bind_memory(d,len,out)!=AR_OK){
    ar_mmapper_reset();ar_bridge_shutdown();return -31;
@@ -194,7 +199,7 @@ int ar_m70_native_runtime_probe(const uint8_t*d,size_t len,
  if(out[5])out[12]=(uint32_t)ctx.gpr[13];
  if((int32_t)out[6]==AR_UNRESOLVED && out[7]==image.entry_code)
     out[15]|=8u;
-#ifdef ASCENSION_PRIVATE_AOT_LINKED
+#ifdef ASCENSION_M711_OWNER_AOT
  if(ar_mmapper_mapped_count())out[15]|=0x1000u;
  ar_mmapper_reset();ar_sysutil_reset();
 #endif
