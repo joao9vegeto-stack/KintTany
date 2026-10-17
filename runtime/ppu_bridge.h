@@ -65,6 +65,8 @@ int ar_ppc_fallback_step(ppu_context *c,const uint8_t *elf,size_t len,
 int ar_vm_external_map(uint32_t guest_va,uint8_t *data,size_t length);
 int ar_vm_external_unmap(uint32_t guest_va);
 int ar_vm_load(uint64_t,const void *,size_t);
+/* All-or-nothing byte fetch for VMX Cell partial vectors. */
+int ar_vm_read_bytes(uint64_t,void *,size_t);
 int ar_vm_zero(uint64_t,size_t);
 uint8_t ar_read8(uint64_t); uint16_t ar_read16(uint64_t);
 uint32_t ar_read32(uint64_t); uint64_t ar_read64(uint64_t);

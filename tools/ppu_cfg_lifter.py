@@ -66,7 +66,12 @@ def mask64(mb: int, me: int) -> int:
 def lift(words: list[int] | tuple[int, ...], base: int, name: str = 'ppu_sample') -> tuple[str,dict]:
     if not words or len(words)>512 or base & 3:
         raise Unsupported('invalid function length / address')
-    lines=[PROLOGUE, f'int {name}(ppu_ctx *c) {{']
+    needs_vmx=any(((w>>26)==4 and (w&2047) in (652,780,844,908)) or
+                  ((w>>26)==31 and ((w>>1)&1023) in
+                   (103,359,519,775,551,807,231,487,647,903,679,935))
+                  for w in words)
+    lines=[PROLOGUE, '#include "ppu_vmx_cell.h"' if needs_vmx else '',
+           f'int {name}(ppu_ctx *c) {{']
     hist=Counter()
     addresses={base+4*i for i in range(len(words))}
     def e(stmt: str):lines.append('    '+stmt)
@@ -100,6 +105,20 @@ def lift(words: list[int] | tuple[int, ...], base: int, name: str = 'ppu_sample'
             if not (bo & 16):
                 parts.append(f'(((c->cr >> {31-bi}) & 1U) == {1 if bo&8 else 0}U)')
             return ' && '.join(parts) if parts else '1'
+        if op==4:
+            xo=w&2047
+            if xo in (780,844,908):
+                if b:raise Unsupported('VMX immediate reserved bits nonzero')
+                width={780:1,844:2,908:4}[xo]
+                e(f'ar_vmx_splat_imm(c,{d},{a},{width});')
+                hist[{780:"'vspltisb'",844:"'vspltish'",908:"'vspltisw'"}[xo]]+=1
+                continue
+            if xo==652:
+                if a>3:raise Unsupported('VSPLTW index must be 0..3')
+                e(f'if(ar_vmx_splatw(c,{d},{b},{a})!=0) return -12;')
+                hist['vspltw']+=1
+                continue
+            raise Unsupported(f'unsupported vector opcode4/{xo}')
         if op==16:
             bo=(w>>21)&31; bi=(w>>16)&31
             target=(sx(w&0xfffc,16) if w&2 else pc+sx(w&0xfffc,16))
@@ -231,7 +250,15 @@ def lift(words: list[int] | tuple[int, ...], base: int, name: str = 'ppu_sample'
             hist['store']+=1
         elif op==31:
             xo=(w>>1)&1023;rc=w&1
-            if xo in (854,598):
+            if xo in (103,359,519,775,551,807,231,487,647,903,679,935):
+                if w&1:raise Unsupported('VMX indexed reserved bit set')
+                kind={103:0,359:0,519:1,775:1,551:2,807:2,
+                      231:0,487:0,647:1,903:1,679:2,935:2}[xo]
+                ea=f'({addr_base(a)}+{reg(b)})'
+                name=('load' if xo in (103,359,519,775,551,807) else 'store')
+                e(f'if(ar_vmx_guest_{name}(c,{d},{ea},{kind})!=0) return -2;')
+                hist['vmx_'+name]+=1
+            elif xo in (854,598):
                 # PPC64 EIEIO/SYNC/LWSYNC: guest ordering, never a bare NOP.
                 # A host-wide C11/GCC fence is stronger, safe on ARM64,
                 # and remains visible in both native AOT and interpreted paths.

@@ -1,4 +1,4 @@
-name: AscensionRecomp M7.27 - actual PowerPC EIEIO and host ARM64 memory fences
+name: AscensionRecomp M7.28 - Cell VMX 128-bit and native PPC64 vector codegen
 
 on:
   push:
@@ -72,6 +72,11 @@ jobs:
           set -euo pipefail
           python3 -m unittest discover -s tests -p test_m727_barriers_aot.py -v 2>&1 | tee m727-barrier-aot.log
           grep -Fq 'Ran 6 tests' m727-barrier-aot.log
+      - name: M7.28 execute scalar reference VMX as actual host-native AOT
+        run: |
+          set -euo pipefail
+          python3 -m unittest discover -s tests -p test_m728_vmx_aot.py -v 2>&1 | tee m728-vmx-aot.log
+          grep -Fq 'Ran 5 tests' m728-vmx-aot.log
       - name: Fetch pinned ps3recomp source
         run: |
           set -euo pipefail
@@ -95,6 +100,26 @@ jobs:
             -S m727-eieio-native.c -o m727-eieio-arm64.s
           grep -Eq 'dmb[[:space:]]+ish' m727-eieio-arm64.s
           echo 'M7.27 ARM64 EIEIO AOT emits dmb ish fence PASS' | tee m727-arm64-fence.log
+      - name: M7.28 cross-compile actual VMX static native AOT for iPhone ARM64
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          from pathlib import Path
+          from tools.ppu_cfg_lifter import lift
+          words=[(4<<26)|(5<<21)|(0<<16)|(0<<11)|908,
+                 (31<<26)|(5<<21)|(0<<16)|(8<<11)|(231<<1),
+                 0x4e800020]
+          src,hist=lift(words,0x10000,'native_arm64_vmx')
+          assert hist.get('vspltisw')==1 and hist.get('vmx_store')==1
+          Path('m728-vmx-native.c').write_text(src,encoding='utf8')
+          PY
+          sdk="$(xcrun --sdk iphoneos --show-sdk-path)"
+          xcrun --sdk iphoneos clang -target arm64-apple-ios17.0 -isysroot "$sdk" \
+            -std=c11 -O2 -I upstream/runtime/ppu -I runtime \
+            -c m728-vmx-native.c -o m728-vmx-arm64.o
+          test -s m728-vmx-arm64.o
+          file m728-vmx-arm64.o | tee m728-vmx-arm64.log
+          grep -Eq 'Mach-O 64-bit object arm64|Mach-O 64-bit arm64 object' m728-vmx-arm64.log
       - name: M7.21 prove PPC64 RLWIMI RLWNM RLDIC RLDIMI masking and fail-closed
         run: |
           set -euo pipefail
@@ -148,6 +173,16 @@ jobs:
             runtime/ppu_m720_fallback.c tests/host_m727_memory_order.c -o m727-barrier-host
           ./m727-barrier-host 2>&1 | tee m727-barrier-host.log
           grep -Fxq 'M7.27 PPC memory barriers EIEIO SYNC LWSYNC ISYNC ordered stores, native semantics, fail-closed PASS' m727-barrier-host.log
+      - name: M7.28 verify CELL unaligned vector load/store semantics and fail-closed
+        run: |
+          set -euo pipefail
+          clang -std=c11 -O2 -Wall -Wextra -Werror -fsanitize=undefined \
+            -I upstream/runtime/ppu -I runtime \
+            runtime/ppu_bridge.c runtime/ppu_m712_exec_window.c \
+            runtime/ppu_m720_fallback.c tests/host_m728_cell_vmx.c \
+            -o m728-vmx-host
+          ./m728-vmx-host 2>&1 | tee m728-vmx-host.log
+          grep -Fxq 'M7.28 Cell VMX 128-bit signed splats, VSPLTW, LVX, STVX, LVLX, LVRX and partial stores PASS' m728-vmx-host.log
       - name: M5.0 fetch pinned open source shader compiler sources
         run: |
           set -euo pipefail
@@ -822,7 +857,7 @@ jobs:
           grep -Fq 'M7.20: experimental bounded PPC fallback' m78-aot-status.txt
           grep -Fq 'M7.21: PowerPC64 rlwimi/rlwnm/rldic/rldimi mask semantics verified' m78-aot-status.txt
           grep -Fq 'M7.23: +1 owner-authenticated native 25-opcode block' m78-aot-status.txt
-          echo "M7.27: prior 1419 private ARM64 AOT entries preserved; genuine EIEIO and SYNC/LWSYNC/ISYNC host memory barriers AOT + fallback; counts distinguish interpreted PPC from native AOT; physical iPhone progression pending" > m78-actions-status.txt
+          echo "M7.28: original 1419 authenticated native ARM64 AOT preserved; signed VMX splats and Cell LVLX/LVRX partial vector memory instructions implemented in AOT/fallback; real guest gameplay/RSX pending" > m78-actions-status.txt
           test -s AscensionRecompProbe-0.6.14-unsigned.ipa
           /usr/libexec/PlistBuddy -c 'Print CFBundleShortVersionString' ios-probe/Payload/AscensionRecompProbe.app/Info.plist | grep -Fx 0.6.14
           /usr/bin/unzip -t AscensionRecompProbe-0.6.14-unsigned.ipa | tee m42-ipa-integrity.log
@@ -908,7 +943,7 @@ jobs:
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: AscensionRecomp-M7.27-PPC-memory-order
+          name: AscensionRecomp-M7.28-Cell-VMX
           if-no-files-found: warn
           retention-days: 14
           path: |
@@ -1099,6 +1134,10 @@ jobs:
             m727-arm64-fence.log
             m727-eieio-arm64.s
             m727-barrier-host.log
+            m728-vmx-aot.log
+            m728-vmx-host.log
+            m728-vmx-arm64.log
+            m728-vmx-arm64.o
             m78-stage-tests.log
             m78-lv2-host.log
             m78-owner-aot-object-symbols.txt

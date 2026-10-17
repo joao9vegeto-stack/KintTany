@@ -191,6 +191,13 @@ static uint8_t* guest_ptr(uint64_t addr,size_t n){
  }
  fault=AR_MEM_FAULT;return NULL;
 }
+int ar_vm_read_bytes(uint64_t a,void *dest,size_t n){
+ if(!n)return AR_OK;
+ if(!dest)return AR_BAD_ARGS;
+ uint8_t *src=guest_ptr(a,n);
+ if(!src)return AR_MEM_FAULT;
+ memcpy(dest,src,n);return AR_OK;
+}
 int ar_vm_load(uint64_t a,const void *b,size_t n){
  if(!n)return AR_OK;
  if(!b)return AR_BAD_ARGS;
