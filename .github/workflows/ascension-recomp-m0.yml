@@ -1,4 +1,4 @@
-name: AscensionRecomp M7.26 - PS3 LV2 147 timebase and PPC64 DIVDU
+name: AscensionRecomp M7.27 - actual PowerPC EIEIO and host ARM64 memory fences
 
 on:
   push:
@@ -67,6 +67,11 @@ jobs:
           set -euo pipefail
           python3 -m unittest discover -s tests -p test_m726_divdu_aot.py -v 2>&1 | tee m726-divdu-aot.log
           grep -Fq 'Ran 4 tests' m726-divdu-aot.log
+      - name: M7.27 lift genuine PowerPC memory ordering barriers into native host C
+        run: |
+          set -euo pipefail
+          python3 -m unittest discover -s tests -p test_m727_barriers_aot.py -v 2>&1 | tee m727-barrier-aot.log
+          grep -Fq 'Ran 6 tests' m727-barrier-aot.log
       - name: Fetch pinned ps3recomp source
         run: |
           set -euo pipefail
@@ -74,6 +79,22 @@ jobs:
           git -C upstream checkout a2c20108af45174dbb7d3e2f87f6acaaef09c6b4
           test "$(git -C upstream rev-parse HEAD)" = "a2c20108af45174dbb7d3e2f87f6acaaef09c6b4"
           python3 tools/enable_macos_boot_smoke_null_backend.py upstream
+      - name: M7.27 verify true host ARM64 dmb fence inside generated AOT
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          from pathlib import Path
+          from tools.ppu_cfg_lifter import lift
+          src,hist=lift([0x7c0006ac,0x4e800020],0x10000,'m727_guest_eieio')
+          assert hist.get('eieio')==1
+          Path('m727-eieio-native.c').write_text(src,encoding='utf-8')
+          PY
+          sdk="$(xcrun --sdk iphoneos --show-sdk-path)"
+          xcrun --sdk iphoneos clang -target arm64-apple-ios17.0 -isysroot "$sdk" \
+            -std=c11 -O2 -I upstream/runtime/ppu -I runtime \
+            -S m727-eieio-native.c -o m727-eieio-arm64.s
+          grep -Eq 'dmb[[:space:]]+ish' m727-eieio-arm64.s
+          echo 'M7.27 ARM64 EIEIO AOT emits dmb ish fence PASS' | tee m727-arm64-fence.log
       - name: M7.21 prove PPC64 RLWIMI RLWNM RLDIC RLDIMI masking and fail-closed
         run: |
           set -euo pipefail
@@ -118,6 +139,15 @@ jobs:
             tests/host_m726_timebase.c -o m726-timebase-host
           ./m726-timebase-host 2>&1 | tee m726-timebase-host.log
           grep -Fxq 'M7.26 PS3 LV2 147 timebase, DIVDU64, missing syscall PC, fail-closed PASS' m726-timebase-host.log
+      - name: M7.27 test guest store ordering, fallback barrier counts, fail-closed under UBSan
+        run: |
+          set -euo pipefail
+          clang -std=c11 -O2 -Wall -Wextra -Werror -fsanitize=undefined \
+            -I upstream/runtime/ppu -I runtime \
+            runtime/ppu_bridge.c runtime/ppu_m712_exec_window.c \
+            runtime/ppu_m720_fallback.c tests/host_m727_memory_order.c -o m727-barrier-host
+          ./m727-barrier-host 2>&1 | tee m727-barrier-host.log
+          grep -Fxq 'M7.27 PPC memory barriers EIEIO SYNC LWSYNC ISYNC ordered stores, native semantics, fail-closed PASS' m727-barrier-host.log
       - name: M5.0 fetch pinned open source shader compiler sources
         run: |
           set -euo pipefail
@@ -792,7 +822,7 @@ jobs:
           grep -Fq 'M7.20: experimental bounded PPC fallback' m78-aot-status.txt
           grep -Fq 'M7.21: PowerPC64 rlwimi/rlwnm/rldic/rldimi mask semantics verified' m78-aot-status.txt
           grep -Fq 'M7.23: +1 owner-authenticated native 25-opcode block' m78-aot-status.txt
-          echo "M7.26: original 1419 authenticated ARM64 PPC AOT preserved; LV2 syscall 147 (79.8MHz) bound; DIVDU supported in AOT/fallback; future LV2 number and PC tracked; physical iPhone test pending" > m78-actions-status.txt
+          echo "M7.27: prior 1419 private ARM64 AOT entries preserved; genuine EIEIO and SYNC/LWSYNC/ISYNC host memory barriers AOT + fallback; counts distinguish interpreted PPC from native AOT; physical iPhone progression pending" > m78-actions-status.txt
           test -s AscensionRecompProbe-0.6.14-unsigned.ipa
           /usr/libexec/PlistBuddy -c 'Print CFBundleShortVersionString' ios-probe/Payload/AscensionRecompProbe.app/Info.plist | grep -Fx 0.6.14
           /usr/bin/unzip -t AscensionRecompProbe-0.6.14-unsigned.ipa | tee m42-ipa-integrity.log
@@ -878,7 +908,7 @@ jobs:
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: AscensionRecomp-M7.26-LV2-timebase
+          name: AscensionRecomp-M7.27-PPC-memory-order
           if-no-files-found: warn
           retention-days: 14
           path: |
@@ -1065,6 +1095,10 @@ jobs:
             m725-nested-host.log
             m726-divdu-aot.log
             m726-timebase-host.log
+            m727-barrier-aot.log
+            m727-arm64-fence.log
+            m727-eieio-arm64.s
+            m727-barrier-host.log
             m78-stage-tests.log
             m78-lv2-host.log
             m78-owner-aot-object-symbols.txt

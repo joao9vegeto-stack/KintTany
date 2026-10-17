@@ -124,6 +124,11 @@ def lift(words: list[int] | tuple[int, ...], base: int, name: str = 'ppu_sample'
             continue
         if op==19:
             xo=(w>>1)&1023; bo=(w>>21)&31;bi=(w>>16)&31;lk=bool(w&1)
+            if xo==150:
+                if w!=0x4c00012c:raise Unsupported('ISYNC reserved or invalid form')
+                e('__atomic_thread_fence(__ATOMIC_SEQ_CST);')
+                hist['isync']+=1
+                continue
             if xo in (16,528):
                 cond=branch_test(bo,bi,ctr_is_target=(xo==528))
                 oldtarget='c->lr' if xo==16 else 'c->ctr'
@@ -226,7 +231,17 @@ def lift(words: list[int] | tuple[int, ...], base: int, name: str = 'ppu_sample'
             hist['store']+=1
         elif op==31:
             xo=(w>>1)&1023;rc=w&1
-            if xo in (0,32):
+            if xo in (854,598):
+                # PPC64 EIEIO/SYNC/LWSYNC: guest ordering, never a bare NOP.
+                # A host-wide C11/GCC fence is stronger, safe on ARM64,
+                # and remains visible in both native AOT and interpreted paths.
+                allowed = (0x7c0006ac,) if xo==854 else (0x7c0004ac,0x7c2004ac)
+                if w not in allowed:
+                    raise Unsupported('memory barrier reserved or privileged form')
+                e('__atomic_thread_fence(__ATOMIC_SEQ_CST);')
+                hist['eieio' if xo==854 else
+                     ('sync' if w==0x7c0004ac else 'lwsync')]+=1
+            elif xo in (0,32):
                 bf=(w>>23)&7;wide=bool((w>>21)&1)
                 if xo==0:
                     lhs=f'(int64_t){reg(a)}' if wide else f'(s32)(u32){reg(a)}'

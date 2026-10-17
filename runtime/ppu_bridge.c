@@ -25,6 +25,8 @@ static uint32_t fb_cap,fb_steps,fb_pc,fb_op,fb_bad_pc,fb_bad_op;
 static uint32_t fb_callsite_pc,fb_call_target;
 static uint32_t lv2_pc_pending,lv2_calls,lv2_last_number,lv2_last_pc;
 static uint32_t lv2_missing_number,lv2_missing_pc;
+static uint32_t barrier_eieio,barrier_sync,barrier_lwsync,barrier_isync;
+static uint32_t barrier_last_pc;
 
 static uint32_t aot_hash(uint32_t pc){
   return (((pc>>2)*UINT32_C(2654435761)) & (AR_AOT_INDEX_SIZE-1u));
@@ -49,6 +51,11 @@ void ar_trace_snapshot(ar_aot_trace *out) {
  out->lv2_last_pc=lv2_last_pc;
  out->lv2_missing_number=lv2_missing_number;
  out->lv2_missing_pc=lv2_missing_pc;
+ out->eieio_steps=barrier_eieio;
+ out->sync_steps=barrier_sync;
+ out->lwsync_steps=barrier_lwsync;
+ out->isync_steps=barrier_isync;
+ out->last_barrier_pc=barrier_last_pc;
  out->fallback_step_limit=fb_cap;
  const uint32_t start=trace_total-out->trace_count;
  for(uint32_t i=0;i<out->trace_count;i++)
@@ -89,6 +96,8 @@ void ar_bridge_shutdown(void){
  fb_callsite_pc=0;fb_call_target=0;
  lv2_pc_pending=0;lv2_calls=0;lv2_last_number=0;lv2_last_pc=0;
  lv2_missing_number=0;lv2_missing_pc=0;
+ barrier_eieio=0;barrier_sync=0;barrier_lwsync=0;barrier_isync=0;
+ barrier_last_pc=0;
 }
 int ar_last_error(void){return fault;}
 uint32_t ar_last_missing_nid(void){return missing_nid;}
@@ -97,6 +106,17 @@ int ar_bind_syscall(uint32_t n,ar_hle_fn fn){
  if(n>=1024||!fn||nsyscalls>=MAX_LV2_SYSCALLS)return AR_BAD_ARGS;
  for(size_t i=0;i<nsyscalls;i++)if(syscalls[i].number==n)return AR_DUPLICATE;
  syscalls[nsyscalls].number=n;syscalls[nsyscalls++].fn=fn;return AR_OK;
+}
+void ar_ppc_note_barrier(uint32_t pc,uint32_t insn){
+  /* Count only authenticated PPC fallback barriers actually executed. */
+  switch(insn){
+  case UINT32_C(0x7c0006ac):barrier_eieio++;break;
+  case UINT32_C(0x7c0004ac):barrier_sync++;break;
+  case UINT32_C(0x7c2004ac):barrier_lwsync++;break;
+  case UINT32_C(0x4c00012c):barrier_isync++;break;
+  default:return;
+  }
+  barrier_last_pc=pc;
 }
 void ar_ppc_note_syscall_pc(uint32_t pc){
  lv2_pc_pending=pc;
@@ -312,5 +332,7 @@ int ar_run(ppu_context *c,uint32_t pc,uint32_t ticks){
   fb_callsite_pc=0;fb_call_target=0;
   lv2_pc_pending=0;lv2_calls=0;lv2_last_number=0;lv2_last_pc=0;
   lv2_missing_number=0;lv2_missing_pc=0;
+  barrier_eieio=0;barrier_sync=0;barrier_lwsync=0;barrier_isync=0;
+  barrier_last_pc=0;
   return dispatch(c,pc);
 }
