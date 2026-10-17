@@ -23,7 +23,7 @@ class M711(unittest.TestCase):
         self.assertIn("ar_mmapper_reset()",bridge)
         self.assertIn("ar_vm_external_map(uint32_t",mem)
         self.assertIn("ar_vm_external_unmap(uint32_t",mem)
-        self.assertIn("CORE_MASK",sys)
+        self.assertIn("ar_sysutil_bind_core",sys)
         self.assertIn("if(mask!=15u)",sys)
     def test_native_first_ui_retained(self):
         ui=(ROOT/"ios/ARProbeApp.m").read_text()
