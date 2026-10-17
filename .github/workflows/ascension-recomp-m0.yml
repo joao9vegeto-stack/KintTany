@@ -370,7 +370,7 @@ jobs:
             runtime/ppu_m734_native_batch.c tests/host_m734_aot_batch.c \
             -lm -o m734-native-batch-host
           ./m734-native-batch-host 2>&1 | tee m734-native-batch-host.log
-          grep -Fxq 'M7.34 batch AOT guest chain: 7 native dispatches, 0 PPC fallback, strict ELF fail-closed PASS' m734-native-batch-host.log
+          grep -Fxq 'M7.34 batch AOT guest chain: 9 native dispatches, 0 PPC fallback, strict ELF fail-closed PASS' m734-native-batch-host.log
       - name: M5.0 fetch pinned open source shader compiler sources
         run: |
           set -euo pipefail
