@@ -45,7 +45,7 @@ int main(void) {
  be16(elf+16,2);be16(elf+18,21);be32(elf+20,1);
  be64(elf+32,64);be16(elf+54,56);be16(elf+56,1);
  uint8_t*ph=elf+64;be32(ph,1);be32(ph+4,5);
- be64(ph+8,0x200);be64(ph+16,0x100);be64(ph+32,0x100);
+ be64(ph+8,0x200);be64(ph+16,0x1000);be64(ph+32,0x100);be64(ph+40,0x100);
  if(ar_bridge_init(0x3000)!=AR_OK)return 1;
  ppu_context c={0};
  /* rlwimi: only the selected bits change, including preserving 64-bit
