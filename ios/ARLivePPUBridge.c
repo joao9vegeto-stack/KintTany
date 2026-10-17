@@ -18,6 +18,9 @@ extern int ar_bulk_install_sha256(const unsigned char*,size_t);
 #ifdef ASCENSION_PRIVATE_BULK2_AOT_LINKED
 extern int ar_bulk2_install_sha256(const unsigned char*,size_t);
 #endif
+#ifdef ASCENSION_PRIVATE_FRONTIER_AOT_LINKED
+extern int ar_m722_install_sha256(const unsigned char*,size_t);
+#endif
 #include "ppu_bridge.h"
 #include "elf_image.h"
 #include "../runtime/ppu_tls.h" /* explicit project header, not upstream ppu_tls.h */
@@ -152,6 +155,11 @@ int ar_m70_native_runtime_probe(const uint8_t*d,size_t len,
   * module ONLY after all 568 legacy entries are present. */
  if(ar_bulk2_install_sha256(digest,sizeof(digest))!=AR_OK){
    ar_bridge_shutdown();return -37;
+ }
+#endif
+#ifdef ASCENSION_PRIVATE_FRONTIER_AOT_LINKED
+ if(ar_m722_install_sha256(digest,sizeof(digest))!=AR_OK){
+   ar_bridge_shutdown();return -39;
  }
 #endif
 #endif
