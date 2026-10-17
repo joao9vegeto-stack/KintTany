@@ -2,7 +2,7 @@
 #ifndef PPU_CONTEXT_H
 #define PPU_CONTEXT_H
 #include <stdint.h>
-typedef struct { uint64_t d[2]; } ar_vec128 __attribute__((aligned(16)));
+typedef union { uint64_t _u64[2]; uint64_t d[2]; uint32_t _u32[4]; uint8_t _u8[16]; } ar_vec128 __attribute__((aligned(16)));
 typedef struct ppu_context {
   uint64_t gpr[32]; double fpr[32];
   ar_vec128 vr[32] __attribute__((aligned(16)));
