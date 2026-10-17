@@ -1,4 +1,4 @@
-name: AscensionRecomp M7.13 - 64 owner PPC AOT entries plus verified native 4-instruction fragment
+name: AscensionRecomp M7.14 - authenticated PPC stores and private batch frontier
 
 on:
   push:
@@ -32,6 +32,8 @@ jobs:
       - name: Python-only PS3 ELF + PPU manifest tests
         run: |
           set -euo pipefail
+          bash -n tools/build_ios_probe_ipa.sh
+          python3 -m py_compile tools/m714_owner_batch.py
           python3 -m unittest discover -s tests -v 2>&1 | tee m0-tests.log
           python3 -m py_compile tools/elf_inventory.py
       - name: Xcode and build tools
@@ -600,6 +602,17 @@ jobs:
             -o m713-aot-host
           ./m713-aot-host 2>&1 | tee m713-aot-host.log
           grep -Fxq 'M7.13 authentic four-instruction AOT fragment, XER carry and next-PC PASS' m713-aot-host.log
+      - name: M7.14 test authentic native stores and bound next 32 PPC instructions
+        run: |
+          set -euo pipefail
+          clang -std=c11 -O2 -Wall -Wextra -Werror \
+            -I upstream/runtime/ppu -I runtime \
+            runtime/ppu_bridge.c runtime/ppu_m712_exec_window.c \
+            runtime/ppu_m714_native_batch.c tests/host_m714_batch.c \
+            -o m714-aot-host
+          ./m714-aot-host 2>&1 | tee m714-aot-host.log
+          grep -Fxq 'M7.14 authenticated native stores and bounded 32-word frontier batch PASS' m714-aot-host.log
+          python3 -m unittest discover -s tests -p test_m714_owner_batch.py -v 2>&1 | tee m714-batch-plan-host.log
       - name: M7.11 verify and stage 59 real PPU AOT entries before iOS linking
         env:
           ASCENSION_AOT_SOURCE_GZIP_B64: ${{ secrets.ASCENSION_AOT_SOURCE_GZIP_B64 }}
@@ -616,7 +629,8 @@ jobs:
           test -n "${ASCENSION_AOT_EXPECTED_SYMBOL_COUNT:?}"
           grep -Fq 'M7.12:' m78-aot-status.txt
           grep -Fq 'M7.13: +1 verified 4-instruction ARM64 entry' m78-aot-status.txt
-          echo "M7.13: $((ASCENSION_AOT_EXPECTED_SYMBOL_COUNT+1)) AOT PPC entrypoints in final ARM64 iOS executable; 64 from owner secret plus 1 verified four-instruction fragment; awaiting iPhone" > m78-actions-status.txt
+          grep -Fq 'M7.14: +1 ELF-verified static ARM64 fragment' m78-aot-status.txt
+          echo "M7.14: $((ASCENSION_AOT_EXPECTED_SYMBOL_COUNT+2)) total ARM64 PPC AOT entries: 64 owner secret, M7.13 and M7.14 verified fragments; user-device test required" > m78-actions-status.txt
           test -s AscensionRecompProbe-0.6.14-unsigned.ipa
           /usr/libexec/PlistBuddy -c 'Print CFBundleShortVersionString' ios-probe/Payload/AscensionRecompProbe.app/Info.plist | grep -Fx 0.6.14
           /usr/bin/unzip -t AscensionRecompProbe-0.6.14-unsigned.ipa | tee m42-ipa-integrity.log
@@ -859,6 +873,8 @@ jobs:
             m711-mmapper-host.log
             m712-host.log
             m713-aot-host.log
+            m714-aot-host.log
+            m714-batch-plan-host.log
             m78-stage-tests.log
             m78-lv2-host.log
             m78-owner-aot-object-symbols.txt

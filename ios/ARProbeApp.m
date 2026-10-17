@@ -7,6 +7,7 @@
 extern int ar_private_elf_inspect(const unsigned char*,size_t,unsigned int[5]);
 extern int ar_m70_native_runtime_probe(const unsigned char*,size_t,unsigned int,unsigned int[16]);
 extern int ar_m712_exec_window(const unsigned char*,size_t,unsigned int,unsigned int[6]);
+extern int ar_m714_frontier_inventory(const unsigned char*,size_t,unsigned int,unsigned int[32],unsigned int*,unsigned int*);
 extern int ar_m71_private_continuous_probe(const unsigned char*,size_t,
                         unsigned int,unsigned int,unsigned int[16]);
 extern int ar_m73_private_import_probe(const unsigned char*,size_t,
@@ -546,7 +547,7 @@ extern int ar_probe_rsx_texture_cache_mutation(unsigned swizzled,unsigned int ou
                                   "5 toques: TEXTURA por NV4097/cache/Metal\n"
                                   "Sem arquivos do jogo.";
                 self.status.text=@"ASCENSIONRECOMP · NPUA80918\n"
-                                  "M7.13 · recompilação ARM64 nativa\n"
+                                  "M7.14 · recompilação ARM64 nativa\n"
                                   "Importe GOWA.ELF para executar o código recompilado.\n"
                                   "Inicialização parcial, ainda sem gameplay.\n"
                                   "Ferramentas RSX estão na aba RSX / Metal.";
@@ -1142,14 +1143,36 @@ extern int ar_probe_rsx_texture_cache_mutation(unsigned swizzled,unsigned int ou
        pendingText=[NSString stringWithFormat:
            @"Último resultado do despachante: %d",(int)native[6]];
     }
+    /* M7.14: collect verified executable PPC words in the clipboard report
+     * for a subsequent private AOT batch; this never executes guest code. */
+    NSString *frontierReport=@"\nM7.14 · nenhum lote PPC coletado.";
+    if((int)native[6]==-3 && native[7] && pendingMatch!=0){
+       unsigned int batchWords[32]={0},batchCount=0,batchEnd=0;
+       int batchRC=ar_m714_frontier_inventory(
+           data.bytes,data.length,native[7],batchWords,&batchCount,&batchEnd);
+       NSMutableString *batch=[NSMutableString stringWithFormat:
+           @"\nM7.14 — LOTE PPC somente leitura\n"
+            "PC inicial=0x%08X · resultado=%d · palavras=%u/32\n"
+            "Primeiro desvio/syscall=0x%08X (0=não encontrado)\n",
+           native[7],batchRC,batchCount,batchEnd];
+       for(unsigned int ix=0;ix<batchCount;ix++){
+          [batch appendFormat:@"0x%08X: %08X\n",native[7]+4u*ix,batchWords[ix]];
+       }
+       [batch appendString:
+           @"Leitura do ELF local; não há JIT/interpretador.\n"
+            "Limite gráfico: PPU ainda sem comandos RSX reais do Ascension.\n"
+            "M4/M5 são testes sintéticos Metal, não menu do jogo.\n"];
+       frontierReport=batch;
+    }
     self.ppuSummary=[NSString stringWithFormat:
-       @"ASCENSIONRECOMP M7.13 · NPUA80918\n"
+       @"ASCENSIONRECOMP M7.14 · NPUA80918\n"
         "RECOMPILAÇÃO ESTÁTICA ARM64\n"
         "Entradas AOT vinculadas: %u\n"
         "ELF: %@ · entrada 0x%08X\n"
         "Execução nativa: %d · TLS r13=0x%08X\n"
         "SYSUTIL core vinculado=%@ · mapeamentos guest=%@\n"
         "%@\n"
+        "RSX do Ascension: não demonstrado (M4/M5 sintéticos).\n"
         "Estado: inicialização parcial, sem gameplay.\n"
         "Diagnósticos legados: seção avançada.",
         native[5],nativeRC==0?@"VALIDADO":@"FALHOU",
@@ -1248,6 +1271,7 @@ extern int ar_probe_rsx_texture_cache_mutation(unsigned swizzled,unsigned int ou
          [extended appendString:
            @"TLS recusado: parâmetros, thread já inicializada ou leitura de memória inválida. Não houve sucesso artificial.\n"];
        [extended appendString:nativeText];
+       [extended appendString:frontierReport];
        [extended appendString:lwMutexText];
        if(native[5]>0u){
          [extended appendFormat:

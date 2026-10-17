@@ -23,6 +23,7 @@ extern int ar_private_aot_install_sha256(const unsigned char*,size_t);
 extern int ar_m711_bind_memory(const uint8_t*,size_t,uint32_t*);
 extern int ar_m711_bind_sysutil(const uint8_t*,size_t,uint32_t*);
 extern int ar_m713_register_fragment(const uint8_t*,size_t);
+extern int ar_m714_register_fragment(const uint8_t*,size_t);
 extern int ar_private_import_match(const uint8_t*,size_t,uint32_t,uint32_t[4],char[48]);
 extern int ar_private_import_find_nid(const uint8_t*,size_t,uint32_t,const char*,uint32_t[4],char[48]);
 
@@ -110,6 +111,11 @@ int ar_m70_native_runtime_probe(const uint8_t*d,size_t len,
   * continuation only if imported executable ELF bytes exactly match. */
  if(ar_m713_register_fragment(d,len)!=AR_OK){
    ar_bridge_shutdown();return -32;
+ }
+ /* The second owner-observed fragment modifies guest memory. Validate
+  * exact executable PPC words before native registration (fail closed). */
+ if(ar_m714_register_fragment(d,len)!=AR_OK){
+   ar_bridge_shutdown();return -33;
  }
 #endif
 #endif
