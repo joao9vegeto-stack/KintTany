@@ -1132,12 +1132,13 @@ extern int ar_probe_rsx_texture_cache_mutation(unsigned swizzled,unsigned int ou
  * This may give ONLY file-level access; test parent before claiming more. */
 - (void)importRPCS3Marker:(UIButton *)sender {
   (void)sender;
-  self.status.text=@"M7.41: abra NPUA80918, toque no ícone PARAM.SFO e só então confirme Abrir. Arquivo original, leitura apenas; sem duplicação.";
+  self.status.text=@"M7.46.1: entre em NPUA80918, use Selecionar para MARCAR PARAM.SFO e confirme Abrir. Sem copiar o arquivo.";
   UIDocumentPickerViewController *picker=
        [[UIDocumentPickerViewController alloc]
              initForOpeningContentTypes:@[UTTypeItem] asCopy:NO];
   picker.delegate=self;
-  picker.allowsMultipleSelection=NO;
+  /* User can explicitly select/mark one or more files in Files. */
+  picker.allowsMultipleSelection=YES;
   picker.directoryURL=nil;
   self.rpcMarkerPicker=picker;
   [self.window.rootViewController presentViewController:picker
@@ -1145,12 +1146,13 @@ extern int ar_probe_rsx_texture_cache_mutation(unsigned swizzled,unsigned int ou
 }
 - (void)importGameFolder:(UIButton *)sender {
   (void)sender;
-  self.status.text=@"M7.45: com PARAM.SFO e USRDIR visíveis, toque Abrir azul no topo para autorizar NPUA80918; nenhum arquivo será copiado.";
+  self.status.text=@"M7.46.1: volte à pasta ACIMA de NPUA80918, use Selecionar, MARQUE a pasta NPUA80918 e confirme Abrir. Não marque USRDIR nem arquivos individuais.";
   UIDocumentPickerViewController *picker=
     [[UIDocumentPickerViewController alloc]
       initForOpeningContentTypes:@[UTTypeFolder] asCopy:NO];
   picker.delegate=self;
-  picker.allowsMultipleSelection=NO;
+  /* Explicit folder selection with Files multi-item selection. */
+  picker.allowsMultipleSelection=YES;
   picker.directoryURL=nil; /* OS owns Recents: no hardcoded iCloud Drive. */
   self.folderPicker=picker;
   [self.window.rootViewController presentViewController:picker
@@ -1168,9 +1170,17 @@ extern int ar_probe_rsx_texture_cache_mutation(unsigned swizzled,unsigned int ou
         didPickDocumentsAtURLs:(NSArray<NSURL*>*)urls {
  if(controller==self.rpcMarkerPicker){
     self.rpcMarkerPicker=nil;
-    NSURL *marker=urls.firstObject;
-    if(!marker)return;
-    self.status.text=@"M7.40: PARAM.SFO selecionado. Verificando permissão sobre USRDIR sem copiar arquivos…";
+    NSURL *marker=nil;
+     for(NSURL *candidate in urls){
+       if([candidate.lastPathComponent caseInsensitiveCompare:@"PARAM.SFO"]==NSOrderedSame){
+         marker=candidate;break;
+       }
+     }
+     if(!marker){
+       self.status.text=@"M7.46.1: marque PARAM.SFO e confirme Abrir; nenhuma seleção válida foi recebida.";
+       return;
+     }
+     self.status.text=@"M7.46.1: PARAM.SFO marcado. Verificando permissão sobre USRDIR sem copiar arquivos…";
     dispatch_async(dispatch_get_global_queue(QOS_CLASS_USER_INITIATED,0),^{
       NSError *error=nil;
       NSDictionary *manifest=ARGameFolderProbeRPCS3Marker(marker,&error);
@@ -1203,9 +1213,18 @@ extern int ar_probe_rsx_texture_cache_mutation(unsigned swizzled,unsigned int ou
  }
  if(controller==self.folderPicker){
     self.folderPicker=nil;
-    NSURL *chosen=urls.firstObject;
-    if(!chosen)return;
-    self.status.text=@"M7.45: pasta recebida; verificando acesso somente leitura…";
+    NSURL *chosen=nil;
+     for(NSURL *candidate in urls){
+       if([candidate.lastPathComponent caseInsensitiveCompare:@"NPUA80918"]==NSOrderedSame){
+         chosen=candidate;break;
+       }
+     }
+     if(!chosen && urls.count==1)chosen=urls.firstObject;
+     if(!chosen){
+       self.status.text=@"M7.46.1: marque somente NPUA80918 no diretório acima para autorizar a pasta inteira.";
+       return;
+     }
+     self.status.text=@"M7.46.1: pasta marcada; verificando acesso somente leitura…";
     dispatch_async(dispatch_get_global_queue(QOS_CLASS_USER_INITIATED,0),^{
       NSError *error=nil;
       NSDictionary *manifest=ARGameFolderImport(chosen,&error);

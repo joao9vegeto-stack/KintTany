@@ -23,5 +23,5 @@ class Test(unittest.TestCase):
   for x in ("tests/host_m672_descriptor.c","m672-host.log","0.6.18-unsigned.ipa"):
    self.assertIn(x,W)
   self.assertIn("<string>0.6.18</string>",P)
-  self.assertIn("<string>85</string>",P)
+  self.assertIn("<string>86</string>",P)
 if __name__=="__main__":unittest.main()
