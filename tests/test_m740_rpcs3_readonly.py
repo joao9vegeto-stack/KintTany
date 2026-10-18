@@ -12,8 +12,8 @@ class M740ReadOnly(unittest.TestCase):
   cls.workflow=(ROOT/".github/workflows/ascension-recomp-m0.yml").read_text()
  def test_picker_opens_existing_param_without_copy(self):
   u=self.ui
-  self.assertIn("Usar RPCS3 existente · PARAM.SFO · sem cópia",u)
-  self.assertIn("initForOpeningContentTypes:@[UTTypeData] asCopy:NO",u)
+  self.assertIn("Abrir PARAM.SFO do RPCS3 · sem cópia",u)
+  self.assertIn("initForOpeningContentTypes:@[UTTypeItem] asCopy:NO",u)
   self.assertIn("self.rpcMarkerPicker=picker",u)
   self.assertIn("ARGameFolderProbeRPCS3Marker(marker,&error)",u)
   self.assertIn("@[rpcMarkerButton,folderButton,elfButton]",u)
@@ -40,6 +40,6 @@ class M740ReadOnly(unittest.TestCase):
   self.assertIn("[sfoAfter isEqualToData:sfo]",c)
   self.assertIn("[assetAfter isEqualToData:payload]",c)
   plist=(ROOT/"ios/Probe-Info.plist").read_text()
-  self.assertIn("<string>79</string>",plist)
+  self.assertIn("<string>80</string>",plist)
 
 if __name__=="__main__":unittest.main()

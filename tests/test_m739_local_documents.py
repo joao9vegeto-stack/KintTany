@@ -35,6 +35,6 @@ class FolderLocalTests(unittest.TestCase):
   self.assertIn("m739-local-documents-host",self.workflow)
   self.assertIn("<key>UIFileSharingEnabled</key><true/>",self.plist)
   self.assertIn("<key>LSSupportsOpeningDocumentsInPlace</key><true/>",self.plist)
-  self.assertIn("<string>79</string>",self.plist)
+  self.assertIn("<string>80</string>",self.plist)
 
 if __name__=="__main__":unittest.main()

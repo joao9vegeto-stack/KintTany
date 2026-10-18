@@ -520,7 +520,7 @@ extern int ar_probe_rsx_texture_cache_mutation(unsigned swizzled,unsigned int ou
              forControlEvents:UIControlEventTouchUpInside];
     /* M7.40: read-only existing RPCS3 PARAM.SFO picker; no copies. */
     UIButton *rpcMarkerButton=[UIButton buttonWithType:UIButtonTypeSystem];
-    [rpcMarkerButton setTitle:@"Usar RPCS3 existente · PARAM.SFO · sem cópia"
+    [rpcMarkerButton setTitle:@"Abrir PARAM.SFO do RPCS3 · sem cópia"
                     forState:UIControlStateNormal];
     [rpcMarkerButton setTitleColor:UIColor.whiteColor forState:UIControlStateNormal];
     rpcMarkerButton.titleLabel.font=[UIFont systemFontOfSize:14
@@ -623,7 +623,7 @@ extern int ar_probe_rsx_texture_cache_mutation(unsigned swizzled,unsigned int ou
                                   "5 toques: TEXTURA por NV4097/cache/Metal\n"
                                   "Sem arquivos do jogo.";
                 self.status.text=@"ASCENSIONRECOMP · NPUA80918\n"
-                                  "M7.40 · RPCS3 existente sem cópia\n"
+                                  "M7.41 · RPCS3 e PPC DCBT\n"
                                   "Importe GOWA.ELF para executar o código recompilado.\n"
                                   "Inicialização parcial, ainda sem gameplay.\n"
                                   "Ferramentas RSX estão na aba RSX / Metal.";
@@ -721,7 +721,7 @@ extern int ar_probe_rsx_texture_cache_mutation(unsigned swizzled,unsigned int ou
                      body,self.folderReport]:self.folderReport;
     }
     return [NSString stringWithFormat:
-        @"ASCENSIONRECOMP M7.40 — RELATÓRIO ÚNICO\n"
+        @"ASCENSIONRECOMP M7.41 — RELATÓRIO ÚNICO\n"
          "Status, lote PPC, cobertura ARM64, grafo, TLS/HLE e legados.\n"
          "Somente diagnósticos; NÃO inclui o ELF original.\n"
          "==================================================\n\n%@\n",body];
@@ -742,7 +742,7 @@ extern int ar_probe_rsx_texture_cache_mutation(unsigned swizzled,unsigned int ou
     date.locale=[NSLocale localeWithLocaleIdentifier:@"en_US_POSIX"];
     date.dateFormat=@"yyyyMMdd-HHmmss";
     NSString *name=[NSString stringWithFormat:
-       @"AscensionRecomp-M7.40-NPUA80918-%@.txt",
+       @"AscensionRecomp-M7.41-NPUA80918-%@.txt",
        [date stringFromDate:[NSDate date]]];
     NSURL *docs=[[[NSFileManager defaultManager]
         URLsForDirectory:NSDocumentDirectory inDomains:NSUserDomainMask] firstObject];
@@ -1132,10 +1132,10 @@ extern int ar_probe_rsx_texture_cache_mutation(unsigned swizzled,unsigned int ou
  * This may give ONLY file-level access; test parent before claiming more. */
 - (void)importRPCS3Marker:(UIButton *)sender {
   (void)sender;
-  self.status.text=@"M7.40: selecione PARAM.SFO em rpcs3/data/dev_hdd0/game/NPUA80918. Nenhuma cópia será criada.";
+  self.status.text=@"M7.41: abra NPUA80918, toque no ícone PARAM.SFO e só então confirme Abrir. Arquivo original, leitura apenas; sem duplicação.";
   UIDocumentPickerViewController *picker=
        [[UIDocumentPickerViewController alloc]
-             initForOpeningContentTypes:@[UTTypeData] asCopy:NO];
+             initForOpeningContentTypes:@[UTTypeItem] asCopy:NO];
   picker.delegate=self;
   picker.allowsMultipleSelection=NO;
   picker.directoryURL=nil;
@@ -1724,7 +1724,7 @@ extern int ar_probe_rsx_texture_cache_mutation(unsigned swizzled,unsigned int ou
                         ? frontierReport : nil;
     self.ppuBatchButton.enabled=(self.ppuBatchReport.length>0);
     self.ppuSummary=[NSString stringWithFormat:
-       @"ASCENSIONRECOMP M7.40 · NPUA80918\n"
+       @"ASCENSIONRECOMP M7.41 · NPUA80918\n"
         "AOT ARM64 + FALLBACK PPC EXPERIMENTAL\n"
         "Entradas AOT vinculadas: %u\n"
         "ELF: %@ · entrada 0x%08X\n"

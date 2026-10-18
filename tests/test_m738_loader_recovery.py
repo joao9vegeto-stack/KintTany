@@ -31,7 +31,7 @@ class M738Checks(unittest.TestCase):
   self.assertIn("tests/host_m738_fallback_limit.c",w)
   self.assertIn("m738-runtime-attach-host",w)
   self.assertIn("0.6.16-unsigned.ipa",w)
-  self.assertIn("<string>79</string>",(R/"ios/Probe-Info.plist").read_text())
+  self.assertIn("<string>80</string>",(R/"ios/Probe-Info.plist").read_text())
 
 if __name__=="__main__":
  unittest.main()

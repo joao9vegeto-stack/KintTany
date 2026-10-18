@@ -1,4 +1,4 @@
-name: AscensionRecomp M7.40 - no-copy RPCS3 PARAM.SFO permission and directory scope
+name: AscensionRecomp M7.41 - PS3 SFO any-file picker and PPC DCBT cache hints
 
 on:
   push:
@@ -437,6 +437,16 @@ jobs:
             -o m740-rpcs3-inplace-host
           ./m740-rpcs3-inplace-host 2>&1 | tee m740-rpcs3-inplace-host.log
           grep -Fxq 'M7.40 read-only RPCS3 PARAM.SFO in-place: exact path, 4-byte coordinated read, original files unchanged, USRDIR manifest, invalid marker denied, unavailable directory denied PASS' m740-rpcs3-inplace-host.log
+      - name: M7.41 PowerPC DCBT and DCBTST cache-hint fallback on synthetic ELF
+        run: |
+          set -euo pipefail
+          clang -std=c11 -O2 -Wall -Wextra -Werror -fsanitize=undefined \
+            -I upstream/runtime/ppu -I runtime \
+            runtime/ppu_bridge.c runtime/ppu_m712_exec_window.c \
+            runtime/ppu_m720_fallback.c tests/host_m741_ppc_dcbt.c \
+            -lm -o m741-dcbt-host
+          ./m741-dcbt-host 2>&1 | tee m741-dcbt-host.log
+          grep -Fxq 'M7.41 PPC DCBT/DCBTST cache-hint semantics: 4 synthetic original-pattern opcodes, 0 GPR/CR/XER/memory mutations, Rc invalid rejected PASS' m741-dcbt-host.log
       - name: M5.0 fetch pinned open source shader compiler sources
         run: |
           set -euo pipefail
@@ -1121,12 +1131,13 @@ jobs:
           grep -Fq 'M7.38: fixed ar_ppc_fallback_attach' m78-aot-status.txt
           grep -Fq 'M7.39: local Files/Documents' m78-aot-status.txt
           grep -Fq 'M7.40: no-copy in-place' m78-aot-status.txt
+          grep -Fq 'M7.41: permissive UTTypeItem' m78-aot-status.txt
           grep -Eq ' [Tt] _ar_m736_register_owner$' m78-owner-aot-linked-symbols.txt
           grep -Eq ' [Tt] _ar_m734_register_block$' m78-owner-aot-linked-symbols.txt
           grep -Eq ' [Tt] _ar_m734_register_batch$' m78-owner-aot-linked-symbols.txt
           grep -Eq ' [Tt] _ar_lv2_bind_bootstrap_syscalls$' m78-owner-aot-linked-symbols.txt
           grep -Eq ' [Tt] _ar_lv2_timezone$' m78-owner-aot-linked-symbols.txt
-          echo "M7.40: in-place PARAM.SFO read-only file capability test against existing RPCS3 NPUA80918; directory access only if iOS grants; no copies, no changes to game, guest filesystem still pending." > m78-actions-status.txt
+          echo "M7.41: UTTypeItem permits selecting unknown .SFO files in Files without copying; DCBT/DCBTST guest cache hint fallback supported, AOT 1440 preserved; real iPhone folder authorization remains unverified." > m78-actions-status.txt
           test -s AscensionRecompProbe-0.6.16-unsigned.ipa
           /usr/libexec/PlistBuddy -c 'Print CFBundleShortVersionString' ios-probe/Payload/AscensionRecompProbe.app/Info.plist | grep -Fx 0.6.16
           /usr/bin/unzip -t AscensionRecompProbe-0.6.16-unsigned.ipa | tee m42-ipa-integrity.log
@@ -1212,7 +1223,7 @@ jobs:
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: AscensionRecomp-M7.40-RPCS3-InPlace-ReadOnly
+          name: AscensionRecomp-M7.41-RPCS3-SFO-AnyType-DCBT
           if-no-files-found: warn
           retention-days: 14
           path: |
@@ -1438,6 +1449,7 @@ jobs:
             m738-runtime-attach-host.log
             m739-local-documents-host.log
             m740-rpcs3-inplace-host.log
+            m741-dcbt-host.log
             m78-stage-tests.log
             m78-lv2-host.log
             m78-owner-aot-object-symbols.txt

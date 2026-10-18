@@ -40,7 +40,7 @@ class M719ReportTests(unittest.TestCase):
         self.assertIn('initForExportingURLs:@[url] asCopy:YES',s)
         self.assertIn('writeToURL:url atomically:YES',s)
         self.assertIn('encoding:NSUTF8StringEncoding',s)
-        self.assertIn('AscensionRecomp-M7.40-NPUA80918-%@.txt',s)
+        self.assertIn('AscensionRecomp-M7.41-NPUA80918-%@.txt',s)
         self.assertIn('UIPasteboard.generalPasteboard.string=report;',s)
         self.assertIn('Compartilhar TXT · direto ao ChatGPT',s)
         self.assertIn('Visualizar relatório',s)

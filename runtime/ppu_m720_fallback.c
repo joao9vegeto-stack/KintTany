@@ -228,6 +228,18 @@ int ar_ppc_fallback_step(ppu_context*c,const uint8_t*elf,size_t elf_len,
       return add_result(c,pc,out,a,record);
    }
    switch(xo){
+   case 278:case 246:{ /* PowerPC dcbt/dcbtst: architecturally cache-hint.
+      * These are not data loads/stores: no CR/XER/GPR/memory changes and
+      * no page allocation. The guest cache prefetch may be ignored by an
+      * implementation; the next instruction is fetched normally.
+      * Reject Rc=1 (reserved bit), including on the exact owner PC
+      * 0x00525EDC (0x7C00222C) observed on physical iPhone M7.40.
+      * Distinct from making UNKNOWN opcodes into no-ops: only XOs
+      * explicitly defined as hints are accepted. */
+      if(record)return AR_PPC_UNSUPPORTED;
+      c->cia=pc+4u;
+      return AR_TAIL;
+   }
    case 103:case 359:case 519:case 775:
    case 551:case 807:case 231:case 487:
    case 647:case 903:case 679:case 935:{ /* VMX indexed/Cell partial */
