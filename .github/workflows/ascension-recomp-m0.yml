@@ -1,4 +1,4 @@
-name: AscensionRecomp M7.52 - owner VMX vsldoi and accurate guest file milestones
+name: AscensionRecomp M7.53 - generic PPC VMX float family and signed vector block
 
 on:
   push:
@@ -605,6 +605,21 @@ jobs:
             -std=c11 -O2 -Wall -Wextra -Werror -I upstream/runtime/ppu -I runtime \
             -c runtime/ppu_m752_vsldoi.c -o m752-vsldoi-arm64.o
           xcrun nm -g m752-vsldoi-arm64.o | grep -Fq '_ar_m752_register_vsldoi'
+      - name: M7.53 native 4-op vector FP signed owner and generic CFG lifting
+        run: |
+          set -euo pipefail
+          python3 -m unittest discover -s tests -p test_m753_vectorfp.py -v 2>&1 | tee m753-vectorfp-python.log
+          clang -std=c11 -O2 -Wall -Wextra -Werror -fsanitize=undefined \
+            -I upstream/runtime/ppu -I runtime \
+            runtime/ppu_m753_native_vectorfp.c tests/host_m753_vectorfp.c \
+            -lm -o m753-vectorfp-host
+          ./m753-vectorfp-host 2>&1 | tee m753-vectorfp-host.log
+          grep -Fq 'M7.53 4 original PPC VMX instructions:' m753-vectorfp-host.log
+          sdk="$(xcrun --sdk iphoneos --show-sdk-path)"
+          xcrun --sdk iphoneos clang -target arm64-apple-ios17.0 -isysroot "$sdk" \
+            -std=c11 -O2 -Wall -Wextra -Werror -I upstream/runtime/ppu -I runtime \
+            -c runtime/ppu_m753_native_vectorfp.c -o m753-vectorfp-arm64.o
+          xcrun nm -g m753-vectorfp-arm64.o | grep -Fq '_ar_m753_register_vectorfp'
       - name: M5.0 fetch pinned open source shader compiler sources
         run: |
           set -euo pipefail
@@ -1322,6 +1337,7 @@ jobs:
           grep -Eq ' [Tt] _ar_fs_guest_open$' m78-owner-aot-linked-symbols.txt
           grep -Eq ' [Tt] _ar_fs_guest_read$' m78-owner-aot-linked-symbols.txt
           grep -Eq ' [Tt] _ar_m752_register_vsldoi$' m78-owner-aot-linked-symbols.txt
+          grep -Eq ' [Tt] _ar_m753_register_vectorfp$' m78-owner-aot-linked-symbols.txt
           grep -Eq ' [Tt] _ar_m734_register_block$' m78-owner-aot-linked-symbols.txt
           grep -Eq ' [Tt] _ar_m734_register_batch$' m78-owner-aot-linked-symbols.txt
           grep -Eq ' [Tt] _ar_lv2_bind_bootstrap_syscalls$' m78-owner-aot-linked-symbols.txt
@@ -1412,7 +1428,7 @@ jobs:
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: AscensionRecomp-M7.52-GOWA-6251-AOT-VSLDOI-GUESTFS-AppleARM64
+          name: AscensionRecomp-M7.53-GOWA-6251-AOT-VECTORFP-GUESTFS-AppleARM64
           if-no-files-found: warn
           retention-days: 14
           path: |
@@ -1648,6 +1664,9 @@ jobs:
             m751-vsubfp-arm64.o
             m752-vsldoi-host.log
             m752-vsldoi-arm64.o
+            m753-vectorfp-python.log
+            m753-vectorfp-host.log
+            m753-vectorfp-arm64.o
             m749-frsp-host.log
             m749-frsp-arm64.o
             m748-native-host.log

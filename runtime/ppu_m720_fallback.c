@@ -138,6 +138,17 @@ int ar_ppc_fallback_step(ppu_context*c,const uint8_t*elf,size_t elf_len,
      if(rc!=AR_OK)return rc;
      c->cia=pc+4u;return AR_TAIL;
    }
+   if(xo==266u && a==0u){ /* VREFP: reciprocal estimate (bounded) */
+     const int rc=ar_vmx_vrefp(c,d,b);
+     if(rc!=AR_OK)return rc;
+     c->cia=pc+4u;return AR_TAIL;
+   }
+   if((xo&63u)==46u||(xo&63u)==47u){ /* VMADDfp, VNMSUBfp */
+     const unsigned vc=(w>>6)&31u;
+     const int rc=ar_vmx_vmaddfp(c,d,a,b,vc,(xo&63u)==47u);
+     if(rc!=AR_OK)return rc;
+     c->cia=pc+4u;return AR_TAIL;
+   }
    if(xo==74u){ /* vsubfp VD,VA,VB: genuine M7.50 failure */
      const int rc=ar_vmx_vsubfp(c,d,a,b);
      if(rc!=AR_OK)return rc;

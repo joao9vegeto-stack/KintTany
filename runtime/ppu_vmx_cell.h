@@ -152,4 +152,64 @@ static inline int ar_vmx_vsldoi(ppu_context*c,unsigned vd,
  for(unsigned i=0;i<16u;i++)ar_vmx_setbyte(c,vd,i,both[i+shb]);
  return AR_OK;
 }
+/* M7.53 VMX floating-point arithmetic family.
+ * Four big-endian IEEE754 lanes; snapshot first to support dest/source alias.
+ * Approximate vrefp estimate via correctly-rounded single-precision reciprocal:
+ * numerical estimate is not bit-exact to Cell hardware. For now nonfinite,
+ * zero, subnormal and abnormal result states fail closed, not silently skip.
+ * A fused multiply-add is used for VMADDfp/VNMSUBfp. CR/XER/FPSCR unaffected.
+ */
+static inline int ar_vmx_float_lane(uint32_t bits,float *value){
+ if(!value)return AR_PPC_UNSUPPORTED;
+ memcpy(value,&bits,sizeof(*value));
+ if(!isfinite(*value)||fpclassify(*value)==FP_SUBNORMAL)
+    return AR_PPC_UNSUPPORTED;
+ return AR_OK;
+}
+static inline int ar_vmx_float_pack(ppu_context*c,unsigned vd,
+                                    const uint32_t output[4]){
+ if(!c||vd>=32u||!output)return AR_PPC_UNSUPPORTED;
+ for(unsigned i=0;i<4u;i++)
+  for(unsigned k=0;k<4u;k++)
+   ar_vmx_setbyte(c,vd,4u*i+k,(uint8_t)(output[i]>>(24u-8u*k)));
+ return AR_OK;
+}
+static inline int ar_vmx_fp_result(float f,uint32_t *bits){
+ if(!bits||!isfinite(f)||fpclassify(f)==FP_SUBNORMAL)
+   return AR_PPC_UNSUPPORTED;
+ memcpy(bits,&f,4u);
+ return AR_OK;
+}
+static inline int ar_vmx_vrefp(ppu_context*c,unsigned vd,unsigned vb){
+ if(!c||vd>=32u||vb>=32u||fegetround()!=FE_TONEAREST)
+  return AR_PPC_UNSUPPORTED;
+ uint32_t out[4];
+ for(unsigned i=0;i<4u;i++){
+  float b=0.0f;
+  if(ar_vmx_float_lane(ar_vmx_word(c,vb,i),&b)!=AR_OK || b==0.0f)
+   return AR_PPC_UNSUPPORTED;
+  volatile float q=1.0f/b;
+  if(ar_vmx_fp_result(q,&out[i])!=AR_OK)return AR_PPC_UNSUPPORTED;
+ }
+ return ar_vmx_float_pack(c,vd,out);
+}
+static inline int ar_vmx_vmaddfp(ppu_context*c,unsigned vd,unsigned va,
+                                  unsigned vb,unsigned vc,int negate){
+ if(!c||vd>=32u||va>=32u||vb>=32u||vc>=32u||
+    fegetround()!=FE_TONEAREST)return AR_PPC_UNSUPPORTED;
+ uint32_t out[4];
+ for(unsigned i=0;i<4u;i++){
+  float a=0.0f,b=0.0f,z=0.0f;
+  if(ar_vmx_float_lane(ar_vmx_word(c,va,i),&a)!=AR_OK||
+     ar_vmx_float_lane(ar_vmx_word(c,vb,i),&b)!=AR_OK||
+     ar_vmx_float_lane(ar_vmx_word(c,vc,i),&z)!=AR_OK)
+      return AR_PPC_UNSUPPORTED;
+  /* PPC VMADDfp: VA*VC+VB. VNMSUBfp: -(VA*VC-VB). */
+  float result=negate ? fmaf(-a,z,b) : fmaf(a,z,b);
+  if(ar_vmx_fp_result(result,&out[i])!=AR_OK)
+    return AR_PPC_UNSUPPORTED;
+ }
+ return ar_vmx_float_pack(c,vd,out);
+}
+
 #endif

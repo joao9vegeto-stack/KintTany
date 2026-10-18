@@ -38,7 +38,7 @@ class PowerPCCTR(unittest.TestCase):
     "M6.5 LEGADA: mtctr","M6.6 PARADA SEGURA",
     "M6.7.6 PPU REAL 48/48: OK",
     "CTR=0x%08X%08X",
-    "ASCENSIONRECOMP   ·   M7.52"):
+    "ASCENSIONRECOMP   ·   M7.53"):
    self.assertIn(token,UI)
  def test_host_synthetic_and_version(self):
   for token in ("0x7c0903a6u","0x4e800420u","0x4e800421u",

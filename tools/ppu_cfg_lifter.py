@@ -70,7 +70,9 @@ def lift(words: list[int] | tuple[int, ...], base: int, name: str = 'ppu_sample'
                  ((w>>26)==63 and ((w>>1)&1023) in (12,18,72,846)) or
                  ((w>>26)==59 and ((w>>1)&31)==20)
                  for w in words)
-    needs_vmx=any(((w>>26)==4 and (w&2047) in (652,780,842,844,908)) or
+    needs_vmx=any(((w>>26)==4 and
+                   ((w&2047) in (652,780,842,844,908,74,266) or
+                    (w&0x43f)==44 or (w&63) in (46,47))) or
                   ((w>>26)==31 and ((w>>1)&1023) in
                    (103,359,519,775,551,807,231,487,647,903,679,935))
                   for w in words)
@@ -147,6 +149,26 @@ def lift(words: list[int] | tuple[int, ...], base: int, name: str = 'ppu_sample'
             raise Unsupported(f'unsupported floating opcode63/{xo}')
         if op==4:
             xo=w&2047
+            if xo==266:
+                if a:raise Unsupported('vrefp nonzero reserved VA')
+                e(f'if(ar_vmx_vrefp(c,{d},{b})!=AR_OK) return AR_PPC_UNSUPPORTED;')
+                hist['vrefp']+=1
+                continue
+            if (xo&63) in (46,47):
+                vc=(w>>6)&31
+                neg=1 if (xo&63)==47 else 0
+                e(f'if(ar_vmx_vmaddfp(c,{d},{a},{b},{vc},{neg})!=AR_OK) return AR_PPC_UNSUPPORTED;')
+                hist['vnmsubfp' if neg else 'vmaddfp']+=1
+                continue
+            if xo==74:
+                e(f'if(ar_vmx_vsubfp(c,{d},{a},{b})!=AR_OK) return AR_PPC_UNSUPPORTED;')
+                hist['vsubfp']+=1
+                continue
+            if (xo&0x43f)==44:
+                shb=(w>>6)&15
+                e(f'if(ar_vmx_vsldoi(c,{d},{a},{b},{shb})!=AR_OK) return AR_PPC_UNSUPPORTED;')
+                hist['vsldoi']+=1
+                continue
             if xo in (780,844,908):
                 if b:raise Unsupported('VMX immediate reserved bits nonzero')
                 width={780:1,844:2,908:4}[xo]
