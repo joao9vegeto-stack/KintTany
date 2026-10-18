@@ -802,7 +802,8 @@ extern int ar_probe_rsx_texture_cache_mutation(unsigned swizzled,unsigned int ou
     @"COMPARAÇÃO COM A BUILD ANTERIOR\n"
      "M7.55 (teste físico 20261018-192038): AOT=7696 entradas;"
      " distintas=91; despachos=1502; PPC=0; limite=0;"
-     " parada=0x003C4FC4; opcode=0x00000000 (campo fallback, NÃO bytes lidos);"\n     " último AOT=0x003C4FB4.\n"
+     " parada=0x003C4FC4; opcode=0x00000000 (campo fallback, NÃO bytes lidos);"
+     " último AOT=0x003C4FB4.\n"
      "M7.56 AOT ONLY atual: AOT=%@; distintas=%@; despachos=%@; PPC=%@;"
      " limite=%@; parada=%@; opcode=%@; último AOT=%@.\n"
      "Dados ausentes=NÃO MEDIDO, não utilizar baseline para preencher.\n\n",
