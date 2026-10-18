@@ -251,7 +251,8 @@ fi
 xcrun nm -g "$APP/AscensionRecompProbe" > m78-owner-aot-linked-symbols.txt
 python3 tools/verify_gowa2_macho.py ios-probe/gowa2-staged/symbols.txt \
  m78-owner-aot-linked-symbols.txt | tee m743-gowa2-final-verified.log
-grep -Eq ' [Tt] _ar_gowa2_offline_aot_install_sha256 '_ar_private_aot_install_sha256' m78-owner-aot-linked-symbols.txt
+grep -Eq ' [Tt] _ar_gowa2_offline_aot_install_sha256$' m78-owner-aot-linked-symbols.txt
+grep -Fq '_ar_private_aot_install_sha256' m78-owner-aot-linked-symbols.txt
 grep -Fq '_ar_ppu_timebase_ticks' m78-owner-aot-linked-symbols.txt
 # M7.33 final Mach-O must retain ACTUAL production LV2 service binder.
 grep -Eq ' [Tt] _ar_lv2_bind_bootstrap_syscalls$' m78-owner-aot-linked-symbols.txt
