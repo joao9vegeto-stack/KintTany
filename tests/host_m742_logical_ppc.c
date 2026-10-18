@@ -32,7 +32,7 @@ static const testcase cases[]={
  {"owner 0x00525F14 CNTLZD",UINT32_C(0x7d600074),11,0,0,
     UINT64_C(0x0000800000000000),UINT64_C(0),16,-1,0},
  {"NOR Rc=1 negative",0,3,4,5,0,0,MASK,9,0},
- {"NAND",0,3,4,5,UINT64_C(0xf0),UINT64_C(0x0f),UINT64_C(0xffffffffffffff00),-1,0},
+ {"NAND",0,3,4,5,UINT64_C(0xf0),UINT64_C(0x0f),MASK,-1,0},
  {"EQV",0,3,4,5,UINT64_C(0x0f),UINT64_C(0xff),UINT64_C(0xffffffffffffff0f),-1,0},
  {"ORC",0,3,4,5,0,UINT64_C(0xff),UINT64_C(0xffffffffffffff00),-1,0},
  {"ANDC",0,3,4,5,UINT64_C(0xf0),UINT64_C(0x0f),UINT64_C(0xf0),-1,0},
