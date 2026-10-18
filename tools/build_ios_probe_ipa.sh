@@ -303,6 +303,7 @@ echo 'M7.34: 11 new native ARM64 basic blocks (77 real guest PPC instructions) s
 echo 'M7.35: +7 original owner-ELF SHA/VM authenticated native AOT entries, 80 distinct PowerPC instructions across time arithmetic and date loop; expected 1439 AOT installed, no claim of cellFs yet.' >> m78-aot-status.txt
 echo 'M7.36: one SHA-verified original owner-ELF nine-opcode time continuation AOT at 0x00524B8C; expected 1440 registered native entries. Generic signed MULHW PPC fallback; no filesystem/RSX claim.' >> m78-aot-status.txt
 echo 'M7.37: F0 selected game-folder host access with bookmark, read-only manifest and real bounded host file prefix; no cellFs syscall claimed. PPC integer family + fallback budgets 16384/32768; AOT count unchanged.' >> m78-aot-status.txt
+echo 'M7.38: fixed ar_ppc_fallback_attach max to 16384 matching iOS request, eliminating M7.37 loader=-38 before AOT. Folder picker message and full local error report. Native execution on iPhone must be rechecked.' >> m78-aot-status.txt
 file "$APP/AscensionRecompProbe" | tee m41-executable-file.txt
 xcrun lipo -info "$APP/AscensionRecompProbe" | tee m41-executable-arch.txt
 /usr/libexec/PlistBuddy -c 'Print CFBundleIdentifier' "$APP/Info.plist"

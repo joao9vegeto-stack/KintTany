@@ -33,7 +33,7 @@ class NativePPU(unittest.TestCase):
             'Sem', 'Copiar diagnóstico PPU'):
    if x=='Sem':continue
    self.assertIn(x,APP)
-  self.assertIn('<string>76</string>',P)
+  self.assertIn('<string>77</string>',P)
  def test_synthetic_negative_cases(self):
   for x in ('M7.0 signed native PPU staging, real NID/HLE, and honest AOT unresolved PASS',
             'out)!=-21','out)!=-23','out[7]!=0x10000u',

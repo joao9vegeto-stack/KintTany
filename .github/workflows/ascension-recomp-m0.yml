@@ -1,4 +1,4 @@
-name: AscensionRecomp M7.37 - F0 game folder importer + scalable PPC runtime
+name: AscensionRecomp M7.38 - restore authentic owner AOT and folder selection errors
 
 on:
   push:
@@ -410,6 +410,15 @@ jobs:
              -lm -o m737-ppu-host
           ./m737-ppu-host 2>&1 | tee m737-ppu-host.log
           grep -Fxq 'M7.37 PPC scalar multiply batch: 9 synthetic ISA vectors mulli/subfic/mulld/mulhdu/mulhd aliases, XER/CR preserved PASS' m737-ppu-host.log
+      - name: M7.38 actual PPU runtime 16384-step attachment and 16385 rejection
+        run: |
+          set -euo pipefail
+          clang -std=c11 -O2 -Wall -Wextra -Werror -fsanitize=undefined \
+            -I upstream/runtime/ppu -I runtime \
+            runtime/ppu_bridge.c tests/host_m738_fallback_limit.c \
+            -lm -o m738-runtime-attach-host
+          ./m738-runtime-attach-host 2>&1 | tee m738-runtime-attach-host.log
+          grep -Fxq 'M7.38 real runtime attach 16384 cap, reject 16385, 16384 PPC fallback steps with separate zero-AOT trace, -38 prevented PASS' m738-runtime-attach-host.log
       - name: M5.0 fetch pinned open source shader compiler sources
         run: |
           set -euo pipefail
@@ -1091,12 +1100,13 @@ jobs:
           grep -Fq 'M7.35: +7 original owner-ELF' m78-aot-status.txt
           grep -Fq 'M7.36: one SHA-verified' m78-aot-status.txt
           grep -Fq 'M7.37: F0 selected game-folder' m78-aot-status.txt
+          grep -Fq 'M7.38: fixed ar_ppc_fallback_attach' m78-aot-status.txt
           grep -Eq ' [Tt] _ar_m736_register_owner$' m78-owner-aot-linked-symbols.txt
           grep -Eq ' [Tt] _ar_m734_register_block$' m78-owner-aot-linked-symbols.txt
           grep -Eq ' [Tt] _ar_m734_register_batch$' m78-owner-aot-linked-symbols.txt
           grep -Eq ' [Tt] _ar_lv2_bind_bootstrap_syscalls$' m78-owner-aot-linked-symbols.txt
           grep -Eq ' [Tt] _ar_lv2_timezone$' m78-owner-aot-linked-symbols.txt
-          echo "M7.37 F0: native folder picker, local manifest/bookmark, 4-byte host read with Mac test; generic PPC mulli/high multiply and finite interpreter budget. Owner 1440 AOT preserved, no PS3 fs calls claimed." > m78-actions-status.txt
+          echo "M7.38: repaired actual PPU attach limit causing M7.37 loader=-38, proper bounded 16384-step host test plus folder picker error reporting, AOT and SYSUTIL preserved, on-device proof pending." > m78-actions-status.txt
           test -s AscensionRecompProbe-0.6.16-unsigned.ipa
           /usr/libexec/PlistBuddy -c 'Print CFBundleShortVersionString' ios-probe/Payload/AscensionRecompProbe.app/Info.plist | grep -Fx 0.6.16
           /usr/bin/unzip -t AscensionRecompProbe-0.6.16-unsigned.ipa | tee m42-ipa-integrity.log
@@ -1182,7 +1192,7 @@ jobs:
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: AscensionRecomp-M7.37-Folder-Import-PPU-Scale
+          name: AscensionRecomp-M7.38-Loader-38-Folder-UX
           if-no-files-found: warn
           retention-days: 14
           path: |
@@ -1405,6 +1415,7 @@ jobs:
             m736-native-host.log
             m737-folder-host.log
             m737-ppu-host.log
+            m738-runtime-attach-host.log
             m78-stage-tests.log
             m78-lv2-host.log
             m78-owner-aot-object-symbols.txt

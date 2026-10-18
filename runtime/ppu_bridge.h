@@ -32,6 +32,10 @@ size_t ar_registered_count(void);
 /* M7.17: counts from the actual signed AOT dispatcher, not PPU interpreter.
  * trace_pcs are real registered ARM64 entrypoints, oldest to newest.
  * unique_aot counts distinct registered entries reached within one ar_run. */
+/* M7.38: one shared bound for on-device attach and host runtime.
+ * Previously the app requested 16,384 but the dispatcher rejected >4,096,
+ * causing loader=-38 before any AOT executed. Never remove the bound. */
+#define AR_PPC_FALLBACK_MAX_STEPS 16384u
 #define AR_AOT_TRACE_PCS 64u
 #define AR_FALLBACK_TRACE_PCS 32u
 typedef struct {
