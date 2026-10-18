@@ -32,7 +32,7 @@ class PPU32(unittest.TestCase):
   for t in ("M6.4 PARADA SEGURA","M6.4 PPU REAL 32/32: OK",
       "self.gameList.hidden=!showGame",
       "self.graphicsList.hidden=showGame",
-      "ASCENSIONRECOMP   ·   M7.55"):
+      "ASCENSIONRECOMP   ·   M7.56"):
    self.assertIn(t,U)
  def test_ci(self):
   for t in ("host_m64_ppu.c","m64-host.log","m64-status.txt",

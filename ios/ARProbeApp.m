@@ -8,6 +8,9 @@
 #include "../ios-probe/ARBuildProvenance.h"
 #include "../runtime/ppu_bridge.h"
 #include "../runtime/ppu_guest_fs.h"
+#include "../runtime/ppu_m756_stop_evidence.h"
+extern void ar_m756_last_stop_evidence(ar_m756_stop_evidence*);
+extern void ar_m756_last_origin_evidence(ar_m756_stop_evidence*);
 extern void ar_m751_last_fs_trace(ar_fs_trace *);
 #include "../runtime/ppu_m717_graph.h"
 extern void ar_m717_last_aot_trace(ar_aot_trace *);
@@ -426,7 +429,7 @@ extern int ar_probe_rsx_texture_cache_mutation(unsigned swizzled,unsigned int ou
     [controller.view addSubview:panel];
     UILabel *header=[UILabel new];
     header.translatesAutoresizingMaskIntoConstraints=NO;
-    header.text=@"ASCENSIONRECOMP   ·   M7.55";
+    header.text=@"ASCENSIONRECOMP   ·   M7.56";
     header.textColor=[UIColor colorWithRed:0.73 green:0.87 blue:1 alpha:1];
     header.font=[UIFont systemFontOfSize:12 weight:UIFontWeightBold];
     header.textAlignment=NSTextAlignmentCenter;
@@ -738,6 +741,7 @@ extern int ar_probe_rsx_texture_cache_mutation(unsigned swizzled,unsigned int ou
   };
   NSString *last=(e&&[e[@"last_aot"] unsignedIntValue])?
      hexval(@"last_aot"):@"NÃO MEDIDO";
+  NSString *realOpcode=(e && [e[@"stop_guest_rc"] intValue]==0)?hexval(@"opcode"):@"NÃO MEDIDO";
   NSString *fsOpen=([e[@"fs_opens"] unsignedIntValue]>0u)?
     [NSString stringWithFormat:@"COMPROVADO no guest · opens=%@/%@ · FD=%@ · caminho=%@",
       val(@"fs_opens"),val(@"fs_open_calls"),val(@"fs_fd"),
@@ -758,10 +762,10 @@ extern int ar_probe_rsx_texture_cache_mutation(unsigned swizzled,unsigned int ou
   NSString *native=e&&[e[@"dispatches"] unsignedIntValue]?
     @"comprovado":@"não comprovado";
   NSMutableString *report=[NSMutableString stringWithFormat:
-    @"ASCENSIONRECOMP — ESQUEMA M7.55-v6\n"
+    @"ASCENSIONRECOMP — ESQUEMA M7.56-v7\n"
      "EXECUÇÃO ATUAL\n"
      "Branch=%s | Commit=%s | Build Actions=%s | Workflow ID=%s\n"
-     "App=M7.55 (binário 0.6.22/90 legado) | Runtime AOT ONLY | Relatório=v6\n"
+     "App=M7.56 (binário 0.6.22/90 legado) | Runtime AOT ONLY | Relatório=v7\n"
      "Tipo teste=%@ | Momento=%@\n"
      "ELF carregado=%@ | origem=%@\n"
      "AOT vinculadas=%@ entradas | origem=%@\n"
@@ -790,20 +794,43 @@ extern int ar_probe_rsx_texture_cache_mutation(unsigned swizzled,unsigned int ou
      val(@"aot"),e?@"tabela AOT carregada no app":origin,
      val(@"unique"),origin,val(@"dispatches"),origin,
      val(@"fallback"),origin,val(@"limit"),origin,
-     val(@"rc"),origin,hexval(@"stop"),hexval(@"opcode"),origin,
+     val(@"rc"),origin,hexval(@"stop"),realOpcode,origin,
      last,origin,elf,native,
      self.m750HostObservation?:@"não comprovado",
      fsOpen,fsRead];
   [report appendFormat:
     @"COMPARAÇÃO COM A BUILD ANTERIOR\n"
-     "M7.54 (teste físico 20261018-184132): AOT=7696 entradas;"
-     " distintas=236; despachos=2370; PPC=11438; limite=16384;"
-     " parada=0x003B085C; opcode=0x1108380A; último AOT=0x003B6180.\n"
-     "M7.55 AOT ONLY atual: AOT=%@; distintas=%@; despachos=%@; PPC=%@;"
+     "M7.55 (teste físico 20261018-192038): AOT=7696 entradas;"
+     " distintas=91; despachos=1502; PPC=0; limite=0;"
+     " parada=0x003C4FC4; opcode=0x00000000 (campo fallback, NÃO bytes lidos);"\n     " último AOT=0x003C4FB4.\n"
+     "M7.56 AOT ONLY atual: AOT=%@; distintas=%@; despachos=%@; PPC=%@;"
      " limite=%@; parada=%@; opcode=%@; último AOT=%@.\n"
      "Dados ausentes=NÃO MEDIDO, não utilizar baseline para preencher.\n\n",
      val(@"aot"),val(@"unique"),val(@"dispatches"),val(@"fallback"),
-     val(@"limit"),hexval(@"stop"),hexval(@"opcode"),last];
+     val(@"limit"),hexval(@"stop"),realOpcode,last];
+  /* ELF versus RAM guest: independent read on-device before the VM is freed.
+   * No fallback opcode or HOST Files sample may populate these fields. */
+  [report appendFormat:
+    @"ELF versus RAM guest | PC=%@ | ELF status=%@ | RAM status=%@\n"
+     "segmento X VA=%@ | p_offset=%@ | tamanho arquivo=%@ | offset físico=%@\n"
+     "opcode ELF=%@ | opcode RAM=%@ | bytes=%@ | comparação=%@\n"
+     "ELF HEX=%@\nRAM HEX=%@\n"
+     "Origem: ELF original + leitura real da memória guest ANTES do shutdown.\n\n",
+     hexval(@"stop"),val(@"stop_elf_rc"),val(@"stop_guest_rc"),
+     val(@"stop_seg_va"),val(@"stop_seg_offset"),val(@"stop_seg_filesz"),
+     val(@"stop_file_offset"),
+     ([e[@"stop_elf_rc"] intValue]==0)?hexval(@"stop_elf_word"):@"NÃO MEDIDO",
+     realOpcode,val(@"stop_count"),val(@"stop_match"),
+     e[@"stop_elf_hex"]?:@"NÃO MEDIDO",e[@"stop_guest_hex"]?:@"NÃO MEDIDO"];
+  [report appendFormat:
+    @"ELF versus RAM guest — ORIGEM FIXA 0x003C4FC4\n"
+     "ELF status=%@ | RAM status=%@ | arquivo offset=%@ | iguais=%@\n"
+     "opcode ELF=%@ | opcode RAM=%@\nELF HEX=%@\nRAM HEX=%@\n\n",
+     val(@"origin_elf_rc"),val(@"origin_guest_rc"),
+     val(@"origin_offset"),val(@"origin_match"),
+     ([e[@"origin_elf_rc"] intValue]==0)?hexval(@"origin_word"):@"NÃO MEDIDO",
+     ([e[@"origin_guest_rc"] intValue]==0)?hexval(@"origin_ram_word"):@"NÃO MEDIDO",
+     e[@"origin_elf_hex"]?:@"NÃO MEDIDO",e[@"origin_ram_hex"]?:@"NÃO MEDIDO"];
   [report appendString:
     @"HISTÓRICO — LEGADOS, NÃO EXECUÇÃO ATUAL\n"
      "Os blocos anteriores M6.7.6, M7.0, M7.14, M7.17, M7.20,"
@@ -836,7 +863,7 @@ extern int ar_probe_rsx_texture_cache_mutation(unsigned swizzled,unsigned int ou
     date.locale=[NSLocale localeWithLocaleIdentifier:@"en_US_POSIX"];
     date.dateFormat=@"yyyyMMdd-HHmmss";
     NSString *name=[NSString stringWithFormat:
-       @"AscensionRecomp-M7.55-NPUA80918-%@.txt",
+       @"AscensionRecomp-M7.56-NPUA80918-%@.txt",
        [date stringFromDate:[NSDate date]]];
     NSURL *docs=[[[NSFileManager defaultManager]
         URLsForDirectory:NSDocumentDirectory inDomains:NSUserDomainMask] firstObject];
@@ -1521,6 +1548,23 @@ extern int ar_probe_rsx_texture_cache_mutation(unsigned swizzled,unsigned int ou
        data.bytes,data.length,detail48[8],native);
     ar_fs_trace fsMeasured={0};
     ar_m751_last_fs_trace(&fsMeasured);
+    ar_m756_stop_evidence ownerStop={0};
+    ar_m756_last_stop_evidence(&ownerStop);
+    ar_m756_stop_evidence origin={0};
+    ar_m756_last_origin_evidence(&origin);
+    NSMutableString *originElfHex=[NSMutableString string];
+    NSMutableString *originGuestHex=[NSMutableString string];
+    for(unsigned i=0;i<origin.count&&i<AR_M756_SAMPLE_BYTES;i++){
+      [originElfHex appendFormat:@"%02X",origin.elf_bytes[i]];
+      if(origin.guest_status==AR_OK)[originGuestHex appendFormat:@"%02X",origin.guest_bytes[i]];
+    }
+    NSMutableString *elfHex=[NSMutableString string];
+    NSMutableString *guestHex=[NSMutableString string];
+    for(unsigned i=0;i<ownerStop.count&&i<AR_M756_SAMPLE_BYTES;i++){
+      [elfHex appendFormat:@"%02X",ownerStop.elf_bytes[i]];
+      if(ownerStop.guest_status==AR_OK)
+        [guestHex appendFormat:@"%02X",ownerStop.guest_bytes[i]];
+    }
     NSString *nativeText=[NSString stringWithFormat:
        @"\nM7.0 — RUNTIME PPU NATIVO (ELF privado)\n"
        "Loader=%d · Entrada=0x%08X · TOC=0x%08X · segmentos=%u\n"
@@ -1672,7 +1716,34 @@ extern int ar_probe_rsx_texture_cache_mutation(unsigned swizzled,unsigned int ou
           @"fallback":@(measured.fallback_steps),
           @"limit":@(measured.fallback_step_limit),
           @"stop":@(native[7]),
-          @"opcode":@(measured.fallback_unsupported_word),
+          @"opcode":@(ownerStop.guest_word),
+          @"origin_elf_rc":@(origin.elf_status),
+          @"origin_guest_rc":@(origin.guest_status),
+          @"origin_word":@(origin.elf_word),
+          @"origin_ram_word":@(origin.guest_word),
+          @"origin_offset":[NSString stringWithFormat:@"0x%llX",
+                                       (unsigned long long)origin.file_offset],
+          @"origin_match":(origin.elf_status==AR_OK&&origin.guest_status==AR_OK)?
+                          (origin.match?@"IGUAIS":@"DIFERENTES"):@"NÃO MEDIDO",
+          @"origin_elf_hex":origin.elf_status==AR_OK?originElfHex:@"NÃO MEDIDO",
+          @"origin_ram_hex":origin.guest_status==AR_OK?originGuestHex:@"NÃO MEDIDO",
+          @"stop_elf_rc":@(ownerStop.elf_status),
+          @"stop_guest_rc":@(ownerStop.guest_status),
+          @"stop_elf_word":@(ownerStop.elf_word),
+          @"stop_seg_va":[NSString stringWithFormat:@"0x%llX",
+                                 (unsigned long long)ownerStop.segment_va],
+          @"stop_seg_offset":[NSString stringWithFormat:@"0x%llX",
+                                 (unsigned long long)ownerStop.segment_file_offset],
+          @"stop_seg_filesz":[NSString stringWithFormat:@"0x%llX",
+                                 (unsigned long long)ownerStop.segment_file_size],
+          @"stop_file_offset":[NSString stringWithFormat:@"0x%llX",
+                                 (unsigned long long)ownerStop.file_offset],
+          @"stop_count":@(ownerStop.count),
+          @"stop_match":(ownerStop.elf_status==AR_OK &&
+                          ownerStop.guest_status==AR_OK)?
+                          (ownerStop.match?@"IGUAIS":@"DIFERENTES"):@"NÃO MEDIDO",
+          @"stop_elf_hex":ownerStop.elf_status==AR_OK?elfHex:@"NÃO MEDIDO",
+          @"stop_guest_hex":ownerStop.guest_status==AR_OK?guestHex:@"NÃO MEDIDO",
           @"last_aot":@(lastAot),
           @"fs_open_calls":@(fsMeasured.open_calls),
           @"fs_opens":@(fsMeasured.open_ok),
@@ -1863,7 +1934,7 @@ extern int ar_probe_rsx_texture_cache_mutation(unsigned swizzled,unsigned int ou
                         ? frontierReport : nil;
     self.ppuBatchButton.enabled=(self.ppuBatchReport.length>0);
     self.ppuSummary=[NSString stringWithFormat:
-       @"ASCENSIONRECOMP M7.55 · NPUA80918\n"
+       @"ASCENSIONRECOMP M7.56 · NPUA80918\n"
         "AOT ARM64 + FALLBACK PPC EXPERIMENTAL\n"
         "Entradas AOT vinculadas: %u\n"
         "ELF: %@ · entrada 0x%08X\n"

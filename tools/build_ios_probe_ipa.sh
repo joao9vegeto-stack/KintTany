@@ -168,6 +168,14 @@ xcrun --sdk iphoneos clang -target arm64-apple-ios17.0 -isysroot "$SDK" \
 xcrun --sdk iphoneos clang -target arm64-apple-ios17.0 -isysroot "$SDK" \
     -std=c11 -O2 -Wall -Wextra -Werror -I upstream/runtime/ppu -I runtime \
     -c runtime/ppu_m754_native_fcmp.c -o ios-probe/ppu_m754_native_fcmp.o
+# M7.56: signed owner PPC division loop with exact BEQ successors.
+xcrun --sdk iphoneos clang -target arm64-apple-ios17.0 -isysroot "$SDK" \
+    -std=c11 -O2 -Wall -Wextra -Werror -I upstream/runtime/ppu -I runtime \
+    -c runtime/ppu_m756_native_divloop.c -o ios-probe/ppu_m756_native_divloop.o
+# M7.56: capture live guest memory vs PT_LOAD file bytes, not fallback counters.
+xcrun --sdk iphoneos clang -target arm64-apple-ios17.0 -isysroot "$SDK" \
+    -std=c11 -O2 -Wall -Wextra -Werror -I upstream/runtime/ppu -I runtime \
+    -c runtime/ppu_m756_stop_evidence.c -o ios-probe/ppu_m756_stop_evidence.o
 xcrun --sdk iphoneos clang -target arm64-apple-ios17.0 -isysroot "$SDK" \
     -std=c11 -O2 -Wall -Wextra -Werror -I upstream/runtime/ppu -I runtime \
     -c runtime/ppu_guest_fs.c -o ios-probe/ppu_guest_fs.o
@@ -293,7 +301,7 @@ xcrun --sdk iphoneos clang++ -target arm64-apple-ios17.0 \
     ios-probe/ppu_m748_native_vcfsx.o \
     ios-probe/ppu_m749_native_frsp.o \
     ios-probe/ppu_m750_native_path.o \
-    ios-probe/ppu_m751_vsubfp.o ios-probe/ppu_m752_vsldoi.o ios-probe/ppu_m753_native_vectorfp.o ios-probe/ppu_m754_native_fcmp.o ios-probe/ppu_guest_fs.o \
+    ios-probe/ppu_m751_vsubfp.o ios-probe/ppu_m752_vsldoi.o ios-probe/ppu_m753_native_vectorfp.o ios-probe/ppu_m754_native_fcmp.o ios-probe/ppu_m756_native_divloop.o ios-probe/ppu_m756_stop_evidence.o ios-probe/ppu_guest_fs.o \
     ${GOWA2_OBJECTS[@]+"${GOWA2_OBJECTS[@]}"} \
     ios-probe/ppu_m717_graph.o \
     ${M711_OBJECTS[@]+"${M711_OBJECTS[@]}"} \
@@ -322,6 +330,9 @@ grep -Eq ' [Tt] _ar_m751_register_vsubfp$' m78-owner-aot-linked-symbols.txt
 grep -Eq ' [Tt] _ar_m752_register_vsldoi$' m78-owner-aot-linked-symbols.txt
 grep -Eq ' [Tt] _ar_m753_register_vectorfp$' m78-owner-aot-linked-symbols.txt
 grep -Eq ' [Tt] _ar_m754_register_fcmp_branch$' m78-owner-aot-linked-symbols.txt
+grep -Eq ' [Tt] _ar_m756_register_divloop$' m78-owner-aot-linked-symbols.txt
+grep -Eq ' [Tt] _ar_m756_aot_003c4fc4$' m78-owner-aot-linked-symbols.txt
+grep -Eq ' [Tt] _ar_m756_capture_stop$' m78-owner-aot-linked-symbols.txt
 grep -Eq ' [Tt] _ar_m754_native_003b064c$' m78-owner-aot-linked-symbols.txt
 grep -Eq ' [Tt] _ar_m753_native_003b062c$' m78-owner-aot-linked-symbols.txt
 grep -Eq ' [Tt] _ar_m752_native_003b0608$' m78-owner-aot-linked-symbols.txt
@@ -435,6 +446,7 @@ echo 'M7.52: VMX VSLDOI at 0x003B0608 owner ELF/PT_LOAD X+VM authenticated; regi
 echo 'M7.53: family VMX float vrefp/vmaddfp/vnmsubfp generically supported in PPC lifter and fallback; four owner PPC ops 0x003B062C-0x003B0638 AOT authenticated; iPhone measurement pending.' >> m78-aot-status.txt
 echo 'M7.54: generic FCMPU/FCMPO correct CR field and FPSCR FPCC; owner PPC two-word FCMPU+BC 0x003B064C authenticated, both branch successors; no guest file reading proved until physical run.' >> m78-aot-status.txt
 echo 'M7.55: iOS core without PPC fallback; unresolved AOT PC fails closed. Whole ELF coverage NOT proven, no gameplay or guest filesystem claimed.' >> m78-aot-status.txt
+echo 'M7.56: PT_LOAD X offset vs RAM guest measured after AOT and before shutdown; signed 7 original PPC words through BEQ at 0x003C4FDC (two outcomes). Interpreter stays absent; guest FS milestones pending.' >> m78-aot-status.txt
 (cd ios-probe && zip -q -r ../AscensionRecompProbe-0.6.22-unsigned.ipa Payload)
 test -s AscensionRecompProbe-0.6.22-unsigned.ipa
 shasum -a 256 AscensionRecompProbe-0.6.22-unsigned.ipa > m41-ipa-sha256.txt

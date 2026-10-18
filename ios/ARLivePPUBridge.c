@@ -32,6 +32,7 @@ extern int ar_gowa2_offline_aot_install_sha256(const uint8_t*,size_t);
 #include "../runtime/ppu_mmapper.h"
 #include "../runtime/ppu_native_sysutil.h"
 #include "../runtime/ppu_guest_fs.h"
+#include "../runtime/ppu_m756_stop_evidence.h"
 extern int ARGameFolderGuestIO(const char*,uint64_t,void*,size_t,size_t*,uint64_t*);
 
 extern int ar_m711_bind_memory(const uint8_t*,size_t,uint32_t*);
@@ -57,6 +58,7 @@ extern int ar_m751_register_vsubfp(const uint8_t*,size_t);
 extern int ar_m752_register_vsldoi(const uint8_t*,size_t);
 extern int ar_m753_register_vectorfp(const uint8_t*,size_t);
 extern int ar_m754_register_fcmp_branch(const uint8_t*,size_t);
+extern int ar_m756_register_divloop(const uint8_t*,size_t);
 extern int ar_private_import_match(const uint8_t*,size_t,uint32_t,uint32_t[4],char[48]);
 extern int ar_private_import_find_nid(const uint8_t*,size_t,uint32_t,const char*,uint32_t[4],char[48]);
 
@@ -64,6 +66,10 @@ enum { AR_NATIVE_LIMIT=128u*1024u*1024u, AR_NATIVE_RESERVE=0x20000u };
 /* Native AOT trace copied before ar_bridge_shutdown; no game code stored. */
 static ar_aot_trace last_run_trace;
 static ar_fs_trace last_fs_trace;
+static ar_m756_stop_evidence last_stop_evidence;
+static ar_m756_stop_evidence last_origin_evidence;
+void ar_m756_last_origin_evidence(ar_m756_stop_evidence*out){if(out)*out=last_origin_evidence;}
+void ar_m756_last_stop_evidence(ar_m756_stop_evidence*out){if(out)*out=last_stop_evidence;}
 void ar_m751_last_fs_trace(ar_fs_trace *out){if(out)*out=last_fs_trace;}
 void ar_m717_last_aot_trace(ar_aot_trace *out){if(out)*out=last_run_trace;}
 static uint16_t g16(const uint8_t*p){return (uint16_t)(((uint16_t)p[0]<<8)|p[1]);}
@@ -77,6 +83,8 @@ int ar_m70_native_runtime_probe(const uint8_t*d,size_t len,
  memset(out,0,16u*sizeof(*out));
  memset(&last_run_trace,0,sizeof(last_run_trace));
  memset(&last_fs_trace,0,sizeof(last_fs_trace));
+ memset(&last_stop_evidence,0,sizeof(last_stop_evidence));
+ memset(&last_origin_evidence,0,sizeof(last_origin_evidence));
  if(!d||len<64u)return -20;
  if(memcmp(d,"\177ELF",4)||d[4]!=2u||d[5]!=2u||d[6]!=1u||
     g16(d+16)!=2u||g16(d+18)!=21u||g32(d+20)!=1u)
@@ -287,6 +295,10 @@ int ar_m70_native_runtime_probe(const uint8_t*d,size_t len,
   if(ar_m754_register_fcmp_branch(d,len)!=AR_OK){
     ar_bridge_shutdown();return -60;
   }
+  /* M7.56 exact original seven-word division and conditional branch. */
+  if(ar_m756_register_divloop(d,len)!=AR_OK){
+    ar_bridge_shutdown();return -61;
+  }
 #endif
 #endif
  out[5]=(uint32_t)ar_registered_count(); /* genuine linked game AOT only */
@@ -413,6 +425,11 @@ int ar_m70_native_runtime_probe(const uint8_t*d,size_t len,
  else out[6]=(uint32_t)ar_run(&ctx,image.entry_code,128u);
  out[7]=ar_last_unresolved();
  ar_trace_snapshot(&last_run_trace);
+#ifdef ASCENSION_NATIVE_ONLY
+ /* Must capture ACTUAL live guest RAM prior to freeing ELF mappings. */
+ ar_m756_capture_stop(d,len,out[7],&last_stop_evidence);
+ ar_m756_capture_stop(d,len,UINT32_C(0x003c4fc4),&last_origin_evidence);
+#endif
 #ifdef ASCENSION_M711_OWNER_AOT
  ar_fs_snapshot(&last_fs_trace);
 #endif

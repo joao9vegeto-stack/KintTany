@@ -1,4 +1,4 @@
-name: AscensionRecomp M7.55 - ARM64 AOT-only fail-closed no PPC interpreter
+name: AscensionRecomp M7.56 - AOT divwu branch and real ELF guest RAM stop evidence
 
 on:
   push:
@@ -657,6 +657,31 @@ jobs:
             -I upstream/runtime/ppu -I runtime \
             -c runtime/ppu_bridge.c -o m755-native-only-arm64.o
           xcrun nm -g m755-native-only-arm64.o | grep -Fq '_ar_run'
+      - name: M7.56 native owner 7-word PPC branch and real ELF vs guest snapshot
+        run: |
+          set -euo pipefail
+          python3 -m unittest discover -s tests -p test_m756_native.py -v 2>&1 | tee m756-native-python.log
+          clang -std=c11 -O2 -Wall -Wextra -Werror -fsanitize=undefined \
+            -I upstream/runtime/ppu -I runtime \
+            runtime/ppu_m756_native_divloop.c tests/host_m756_divloop.c \
+            -o m756-divloop-host
+          ./m756-divloop-host 2>&1 | tee m756-divloop-host.log
+          grep -Fq 'M7.56 native 7 PPC words:' m756-divloop-host.log
+          clang -std=c11 -O2 -Wall -Wextra -Werror -fsanitize=undefined \
+            -I upstream/runtime/ppu -I runtime \
+            runtime/ppu_m756_stop_evidence.c tests/host_m756_stop_evidence.c \
+            -o m756-stop-evidence-host
+          ./m756-stop-evidence-host 2>&1 | tee m756-stop-evidence-host.log
+          grep -Fq 'M7.56 independent PT_LOAD X' m756-stop-evidence-host.log
+          sdk="$(xcrun --sdk iphoneos --show-sdk-path)"
+          for module in ppu_m756_native_divloop ppu_m756_stop_evidence; do
+            xcrun --sdk iphoneos clang -target arm64-apple-ios17.0 -isysroot "$sdk" \
+              -std=c11 -O2 -Wall -Wextra -Werror \
+              -I upstream/runtime/ppu -I runtime \
+              -c "runtime/${module}.c" -o "m756-${module}-arm64.o"
+          done
+          xcrun nm -g m756-ppu_m756_native_divloop-arm64.o | grep -Fq '_ar_m756_register_divloop'
+          xcrun nm -g m756-ppu_m756_stop_evidence-arm64.o | grep -Fq '_ar_m756_capture_stop'
       - name: M5.0 fetch pinned open source shader compiler sources
         run: |
           set -euo pipefail
@@ -1466,7 +1491,7 @@ jobs:
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: AscensionRecomp-M7.55-NATIVE-ONLY-NPUA80918-AppleARM64
+          name: AscensionRecomp-M7.56-NATIVE-ONLY-FS-EVIDENCE-AppleARM64
           if-no-files-found: warn
           retention-days: 14
           path: |
@@ -1712,6 +1737,11 @@ jobs:
             m755-native-only-host.log
             m755-vaddfp-python.log
             m755-vaddfp-host.log
+            m756-native-python.log
+            m756-divloop-host.log
+            m756-stop-evidence-host.log
+            m756-ppu_m756_native_divloop-arm64.o
+            m756-ppu_m756_stop_evidence-arm64.o
             m755-native-only-arm64.o
             m749-frsp-host.log
             m749-frsp-arm64.o

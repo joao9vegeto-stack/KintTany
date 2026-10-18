@@ -31,13 +31,13 @@ class GuestLR(unittest.TestCase):
                 'M6.7.6 mtlr LR restore and guarded blr return PASS'):
    self.assertIn(token,HOST)
  def test_ui_and_ci(self):
-  for token in ('ASCENSIONRECOMP   ·   M7.55',
+  for token in ('ASCENSIONRECOMP   ·   M7.56',
                 'Último mtlr: PC=',
                 'detail48[22],detail48[23]',
                 'Copiar diagnóstico PPU'):
    self.assertIn(token,U)
   for token in ('tests/host_m676_lr_return.c', 'm676-lr-host.log',
-                'AscensionRecomp-M7.55-NATIVE-ONLY-NPUA80918-AppleARM64'):
+                'AscensionRecomp-M7.56-NATIVE-ONLY-FS-EVIDENCE-AppleARM64'):
    self.assertIn(token,WF)
   self.assertIn('<string>90</string>',PL)
 if __name__=="__main__":unittest.main()
