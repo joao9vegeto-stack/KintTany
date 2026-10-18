@@ -32,9 +32,9 @@ class HybridM720Tests(unittest.TestCase):
  def test_sha_guard_before_fallback_and_isa_failure_closed(self):
   i=self.ios
   self.assertLess(i.index("ar_private_aot_install_sha256(digest,sizeof(digest))"),
-                  i.index("ar_ppc_fallback_attach(d,len,2048u"))
+                  i.index("ar_ppc_fallback_attach(d,len,16384u"))
   self.assertLess(i.index("ar_bulk2_install_sha256(digest,sizeof(digest))"),
-                  i.index("ar_ppc_fallback_attach(d,len,2048u"))
+                  i.index("ar_ppc_fallback_attach(d,len,16384u"))
   self.assertIn("ar_ppc_fallback_step",i)
   self.assertIn("ar_m712_exec_window(elf,elf_len,pc,window)",self.fallback)
   self.assertIn("if(ar_read32(pc)!=w)",self.fallback)
