@@ -38,5 +38,5 @@ class AlphaTest(unittest.TestCase):
         for token in ("testM58AlphaTest:","testM57BlendMask:",
                       "testM56StencilBitmasks:","testM55StencilMask:"):
             self.assertIn(token,A)
-        self.assertIn("AscensionRecompProbe-0.6.16-unsigned.ipa",W)
+        self.assertIn("AscensionRecompProbe-0.6.17-unsigned.ipa",W)
 if __name__=="__main__":unittest.main()
