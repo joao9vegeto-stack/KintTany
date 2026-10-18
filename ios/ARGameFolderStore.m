@@ -5,6 +5,7 @@
  */
 #import "ARGameFolderStore.h"
 #include <limits.h>
+#include <sys/stat.h>
 static NSString * const kGameBookmarkKey=@"ARGameFolderBookmarkM737";
 static NSString * const kGameErrorDomain=@"AscensionRecomp.GameFolder";
 static NSError *gameError(NSInteger code,NSString *detail) {
@@ -100,18 +101,26 @@ NSDictionary<NSString*,id> *ARGameFolderImport(NSURL *folder,NSError **error) {
    unsigned long long total=0;
    NSString *firstRelative=nil;
    unsigned long long skippedLinks=0;
-   NSString *prefix=[folder.path stringByAppendingString:@"/"];
+   /* NSURL directory.path may already end in "/". Never form "//" here. */
+   NSString *root=[folder.path stringByStandardizingPath];
+   NSString *prefix=[root hasSuffix:@"/"]?root:
+                       [root stringByAppendingString:@"/"];
    for(NSURL *file in enumerator){
      NSNumber *symbolic=nil;
-     if([file getResourceValue:&symbolic
-                       forKey:NSURLIsSymbolicLinkKey error:NULL]&&symbolic.boolValue){
+     /* File-provider resource keys can follow symlinks on macOS.
+      * POSIX lstat is the authoritative fallback for file:// providers. */
+     struct stat mode={0};
+     const BOOL isLink=(lstat(file.fileSystemRepresentation,&mode)==0 &&
+                       S_ISLNK(mode.st_mode));
+     if(isLink||([file getResourceValue:&symbolic
+                       forKey:NSURLIsSymbolicLinkKey error:NULL]&&symbolic.boolValue)){
        [enumerator skipDescendants];
        skippedLinks++;
        continue;
      }
      NSNumber *bytes=nil;
      if(!isRegular(file,&bytes))continue;
-     NSString *path=file.path;
+     NSString *path=[file.path stringByStandardizingPath];
      if(![path hasPrefix:prefix])continue;
      NSString *relative=[path substringFromIndex:prefix.length];
      if(!safeRelativePath(relative))continue;
