@@ -1,4 +1,4 @@
-name: AscensionRecomp M7.38 - restore authentic owner AOT and folder selection errors
+name: AscensionRecomp M7.39 - local Files folder importer bypassing cloud picker
 
 on:
   push:
@@ -419,6 +419,15 @@ jobs:
             -lm -o m738-runtime-attach-host
           ./m738-runtime-attach-host 2>&1 | tee m738-runtime-attach-host.log
           grep -Fxq 'M7.38 real runtime attach 16384 cap, reject 16385, 16384 PPC fallback steps with separate zero-AOT trace, -38 prevented PASS' m738-runtime-attach-host.log
+      - name: M7.39 native local Files Documents folder manifest and true prefix read
+        run: |
+          set -euo pipefail
+          clang -fobjc-arc -fmodules -O2 -Wall -Wextra -Werror \
+            -I ios -framework Foundation \
+            ios/ARGameFolderStore.m tests/host_m739_local_documents.m \
+            -o m739-local-documents-host
+          ./m739-local-documents-host 2>&1 | tee m739-local-documents-host.log
+          grep -Fxq 'M7.39 Files On My iPhone Documents route: missing-directory error, NPUA80918 manifest, actual 4-byte host read, restored bookmark PASS' m739-local-documents-host.log
       - name: M5.0 fetch pinned open source shader compiler sources
         run: |
           set -euo pipefail
@@ -1101,12 +1110,13 @@ jobs:
           grep -Fq 'M7.36: one SHA-verified' m78-aot-status.txt
           grep -Fq 'M7.37: F0 selected game-folder' m78-aot-status.txt
           grep -Fq 'M7.38: fixed ar_ppc_fallback_attach' m78-aot-status.txt
+          grep -Fq 'M7.39: local Files/Documents' m78-aot-status.txt
           grep -Eq ' [Tt] _ar_m736_register_owner$' m78-owner-aot-linked-symbols.txt
           grep -Eq ' [Tt] _ar_m734_register_block$' m78-owner-aot-linked-symbols.txt
           grep -Eq ' [Tt] _ar_m734_register_batch$' m78-owner-aot-linked-symbols.txt
           grep -Eq ' [Tt] _ar_lv2_bind_bootstrap_syscalls$' m78-owner-aot-linked-symbols.txt
           grep -Eq ' [Tt] _ar_lv2_timezone$' m78-owner-aot-linked-symbols.txt
-          echo "M7.38: repaired actual PPU attach limit causing M7.37 loader=-38, proper bounded 16384-step host test plus folder picker error reporting, AOT and SYSUTIL preserved, on-device proof pending." > m78-actions-status.txt
+          echo "M7.39: Files On My iPhone Documents NPUA80918 local game-folder route, 4-byte host read and bookmark verified with synthetic files; cloud folder picker optional; no guest cellFsOpen/Read claim." > m78-actions-status.txt
           test -s AscensionRecompProbe-0.6.16-unsigned.ipa
           /usr/libexec/PlistBuddy -c 'Print CFBundleShortVersionString' ios-probe/Payload/AscensionRecompProbe.app/Info.plist | grep -Fx 0.6.16
           /usr/bin/unzip -t AscensionRecompProbe-0.6.16-unsigned.ipa | tee m42-ipa-integrity.log
@@ -1192,7 +1202,7 @@ jobs:
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: AscensionRecomp-M7.38-Loader-38-Folder-UX
+          name: AscensionRecomp-M7.39-Local-Documents-Game-Folder
           if-no-files-found: warn
           retention-days: 14
           path: |
@@ -1416,6 +1426,7 @@ jobs:
             m737-folder-host.log
             m737-ppu-host.log
             m738-runtime-attach-host.log
+            m739-local-documents-host.log
             m78-stage-tests.log
             m78-lv2-host.log
             m78-owner-aot-object-symbols.txt

@@ -176,6 +176,59 @@ NSDictionary<NSString*,id> *ARGameFolderImport(NSURL *folder,NSError **error) {
    if(scoped)[folder stopAccessingSecurityScopedResource];
  }
 }
+/* M7.39: Guaranteed local alternative when the iCloud/File Provider
+ * document picker shows an inert "Abrir" button. Users move/copy the
+ * directory into the app Documents (visible in Files > On My iPhone).
+ * Zero recursion outside an exact well-known title directory.
+ */
+NSDictionary<NSString*,id> *ARGameFolderImportLocalAtURL(NSURL *documents,
+                                                         NSError **error) {
+ if(!documents.isFileURL) {
+   if(error)*error=gameError(30,@"A pasta Documentos local não está acessível.");
+   return nil;
+ }
+ NSFileManager *fm=NSFileManager.defaultManager;
+ BOOL isDir=NO;
+ if(![fm fileExistsAtPath:documents.path isDirectory:&isDir]||!isDir) {
+   if(error)*error=gameError(31,@"A pasta Documentos local não existe.");
+   return nil;
+ }
+ /* No broad scan of all files in Documents: never index TXT, logs or
+  * unrelated personal documents. Only the exact user game directory.
+  * An optional Games or Jogos container is allowed for organization. */
+ NSArray<NSArray<NSString*> *> *locations=@[
+   @[@"NPUA80918"],@[@"Jogos",@"NPUA80918"],
+   @[@"Games",@"NPUA80918"],@[@"USRDIR"]
+ ];
+ for(NSArray<NSString*> *parts in locations) {
+   NSURL *folder=documents;
+   BOOL bad=NO;
+   for(NSString *part in parts) {
+     folder=[folder URLByAppendingPathComponent:part isDirectory:YES];
+     struct stat metadata={0};
+     if(lstat(folder.fileSystemRepresentation,&metadata)!=0 ||
+        !S_ISDIR(metadata.st_mode)) {
+       bad=YES;break;
+     }
+   }
+   if(bad)continue;
+   NSError *indexError=nil;
+   NSDictionary *manifest=ARGameFolderImport(folder,&indexError);
+   if(manifest)return manifest;
+   if(error)*error=indexError ?: gameError(33,@"Falha no manifesto local.");
+   return nil;
+ }
+ if(error)*error=gameError(32,
+     @"Copie ou mova a pasta NPUA80918 para Arquivos > "
+      "No Meu iPhone > AscensionRecomp Test. Volte ao app e toque Detectar pasta local.");
+ return nil;
+}
+NSDictionary<NSString*,id> *ARGameFolderImportLocalDocuments(NSError **error) {
+ NSURL *documents=[[NSFileManager.defaultManager
+    URLsForDirectory:NSDocumentDirectory inDomains:NSUserDomainMask]
+    firstObject];
+ return ARGameFolderImportLocalAtURL(documents,error);
+}
 NSDictionary<NSString*,id> *ARGameFolderRestore(NSError **error) {
  NSURL *root=restoreRoot(error);
  if(!root)return nil;
