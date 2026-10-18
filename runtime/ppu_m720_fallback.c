@@ -405,6 +405,11 @@ int ar_ppc_fallback_step(ppu_context*c,const uint8_t*elf,size_t elf_len,
       if(ar_last_error()!=AR_OK)return AR_MEM_FAULT;
       c->cia=pc+4u;return AR_TAIL;
    }
+   case 536:{ /* SRW PPC logical low-word shift by RB 6-bit value. */
+      const unsigned sh=(unsigned)r[b]&63u;
+      const uint32_t val=(uint32_t)r[d];
+      return add_result(c,pc,sh>=32u?0u:(uint64_t)(val>>sh),a,record);
+   }
    case 824:{ /* srawi RA,RS,SH: arithmetic signed word shift */
       const unsigned sh=b;
       const uint32_t input=(uint32_t)r[d];

@@ -79,14 +79,15 @@ NSDictionary<NSString*,id> *ARGameFolderImport(NSURL *folder,NSError **error) {
    if(error)*error=gameError(1,@"Selecione uma pasta local do aplicativo Arquivos.");
    return nil;
  }
- BOOL folderFlag=NO;
- if(![NSFileManager.defaultManager fileExistsAtPath:folder.path
-                                        isDirectory:&folderFlag]||!folderFlag){
-   if(error)*error=gameError(2,@"O item escolhido não é uma pasta.");
-   return nil;
- }
  BOOL scoped=[folder startAccessingSecurityScopedResource];
  @try {
+   /* M7.45: activate File Provider's scoped grant BEFORE stat. */
+   BOOL folderFlag=NO;
+   if(![NSFileManager.defaultManager fileExistsAtPath:folder.path
+                                          isDirectory:&folderFlag]||!folderFlag){
+     if(error)*error=gameError(2,@"iOS não autorizou a leitura da pasta, ou item escolhido não é pasta.");
+     return nil;
+   }
    static const NSUInteger cap=200000u;
    NSArray<NSURLResourceKey> *keys=@[NSURLIsRegularFileKey,
                  NSURLIsSymbolicLinkKey,NSURLFileSizeKey];

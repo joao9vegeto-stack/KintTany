@@ -122,6 +122,10 @@ AOT_COMPILE_DEFINES+=(-DASCENSION_GOWA2_OFFLINE_AOT_LINKED)
 xcrun --sdk iphoneos clang -target arm64-apple-ios17.0 -isysroot "$SDK" \
     -std=c11 -O2 -Wall -Wextra -Werror -I upstream/runtime/ppu -I runtime \
     -c runtime/ppu_m744_native_cror.c -o ios-probe/ppu_m744_native_cror.o
+# M7.45: six executable PPC guest instructions compiled Apple ARM64.
+xcrun --sdk iphoneos clang -target arm64-apple-ios17.0 -isysroot "$SDK" \
+    -std=c11 -O2 -Wall -Wextra -Werror -I upstream/runtime/ppu -I runtime \
+    -c runtime/ppu_m745_native_srw.c -o ios-probe/ppu_m745_native_srw.o
 # Stage the native PPU bridge as an ARM64 object and link the prebuilt
 # IOS PPU core archive; never compile or bundle the user's PS3 ELF.
 test -s ios-ppu-core/libAscensionPPUCore-ios-arm64.a
@@ -237,6 +241,7 @@ xcrun --sdk iphoneos clang++ -target arm64-apple-ios17.0 \
     ios-probe/ppu_m735_native_time.o \
     ios-probe/ppu_m736_native_time.o \
     ios-probe/ppu_m744_native_cror.o \
+    ios-probe/ppu_m745_native_srw.o \
     ${GOWA2_OBJECTS[@]+"${GOWA2_OBJECTS[@]}"} \
     ios-probe/ppu_m717_graph.o \
     ios-probe/ppu_m720_fallback.o \
@@ -350,6 +355,7 @@ file "$APP/AscensionRecompProbe" | tee m41-executable-file.txt
 xcrun lipo -info "$APP/AscensionRecompProbe" | tee m41-executable-arch.txt
 /usr/libexec/PlistBuddy -c 'Print CFBundleIdentifier' "$APP/Info.plist"
 echo 'M7.44: owner ELF CROR+BC 0x003F2860 / 0x003F2864 native ARM64 AOT verified behind SHA gate and registered AFTER 6251 offline entries; next physical iPhone PC not yet proven.' >> m78-aot-status.txt
+echo 'M7.45: native SRW/CMPDI/ANDC/ADDI/STW/BC at 0x0052BA70 owner authenticated, generic SRW fallback and iOS security-scoped folder grant order fixed.' >> m78-aot-status.txt
 (cd ios-probe && zip -q -r ../AscensionRecompProbe-0.6.17-unsigned.ipa Payload)
 test -s AscensionRecompProbe-0.6.17-unsigned.ipa
 shasum -a 256 AscensionRecompProbe-0.6.17-unsigned.ipa > m41-ipa-sha256.txt

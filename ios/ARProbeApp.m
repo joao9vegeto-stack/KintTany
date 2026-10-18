@@ -1145,7 +1145,7 @@ extern int ar_probe_rsx_texture_cache_mutation(unsigned swizzled,unsigned int ou
 }
 - (void)importGameFolder:(UIButton *)sender {
   (void)sender;
-  self.status.text=@"Arquivos: abra NPUA80918, depois toque no botão azul Abrir no topo. Selecione a pasta, não um arquivo interno.";
+  self.status.text=@"M7.45: com PARAM.SFO e USRDIR visíveis, toque Abrir azul no topo para autorizar NPUA80918; nenhum arquivo será copiado.";
   UIDocumentPickerViewController *picker=
     [[UIDocumentPickerViewController alloc]
       initForOpeningContentTypes:@[UTTypeFolder] asCopy:NO];
@@ -1205,7 +1205,7 @@ extern int ar_probe_rsx_texture_cache_mutation(unsigned swizzled,unsigned int ou
     self.folderPicker=nil;
     NSURL *chosen=urls.firstObject;
     if(!chosen)return;
-    self.status.text=@"M7.38 F0: verificando pasta NPUA80918 no iPhone…";
+    self.status.text=@"M7.45: pasta recebida; verificando acesso somente leitura…";
     dispatch_async(dispatch_get_global_queue(QOS_CLASS_USER_INITIATED,0),^{
       NSError *error=nil;
       NSDictionary *manifest=ARGameFolderImport(chosen,&error);

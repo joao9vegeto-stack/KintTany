@@ -9,7 +9,7 @@
 <key>CFBundleDisplayName</key><string>AscensionRecomp Test</string>
 <key>CFBundlePackageType</key><string>APPL</string>
 <key>CFBundleShortVersionString</key><string>0.6.17</string>
-<key>CFBundleVersion</key><string>83</string>
+<key>CFBundleVersion</key><string>84</string>
 <!-- Exported diagnostic reports are visible in Files > On My iPhone
      and eligible for indexing in Files > Recents. -->
 <key>UIFileSharingEnabled</key><true/>
