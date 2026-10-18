@@ -1,4 +1,4 @@
-name: AscensionRecomp M7.45 - native SRW PPC block over 6251 ELF AOT ARM64
+name: AscensionRecomp M7.46 - 69-PPC hot-loop native AOT over 6251 ELF ARM64
 
 on:
   push:
@@ -485,6 +485,20 @@ jobs:
             -std=c11 -O2 -Wall -Wextra -Werror -I upstream/runtime/ppu -I runtime \
             -c runtime/ppu_m745_native_srw.c -o m745-native-arm64.o
           xcrun nm -g m745-native-arm64.o | grep -Fq '_ar_m745_native_0052ba70'
+      - name: M7.46 prove 69 executable PPC words and Apple ARM64 static code
+        run: |
+          set -euo pipefail
+          clang -std=c11 -O2 -Wall -Wextra -Werror -fsanitize=undefined \
+            -I upstream/runtime/ppu -I runtime \
+            runtime/ppu_m746_native_loop.c tests/host_m746_native_loop.c \
+            -o m746-native-host
+          ./m746-native-host 2>&1 | tee m746-native-host.log
+          grep -Fq '69 PPC words: 4 native entries' m746-native-host.log
+          sdk="$(xcrun --sdk iphoneos --show-sdk-path)"
+          xcrun --sdk iphoneos clang -target arm64-apple-ios17.0 -isysroot "$sdk" \
+            -std=c11 -O2 -Wall -Wextra -Werror -I upstream/runtime/ppu -I runtime \
+            -c runtime/ppu_m746_native_loop.c -o m746-native-arm64.o
+          xcrun nm -g m746-native-arm64.o | grep -Fq '_ar_m746_native_003ef6cc'
       - name: M5.0 fetch pinned open source shader compiler sources
         run: |
           set -euo pipefail
@@ -1185,17 +1199,19 @@ jobs:
           grep -Fq 'M7.43: verified Apple ARM64' m78-aot-status.txt
           grep -Fq 'M7.44: owner ELF CROR+BC' m78-aot-status.txt
           grep -Fq 'M7.45: native SRW/CMPWI/ANDC' m78-aot-status.txt
+          grep -Fq 'M7.46: four SHA-gated' m78-aot-status.txt
           grep -Eq ' [Tt] _ar_m736_register_owner$' m78-owner-aot-linked-symbols.txt
           grep -Eq ' [Tt] _ar_m744_register_owner$' m78-owner-aot-linked-symbols.txt
           grep -Eq ' [Tt] _ar_m745_register_owner$' m78-owner-aot-linked-symbols.txt
+          grep -Eq ' [Tt] _ar_m746_register_hotloop$' m78-owner-aot-linked-symbols.txt
           grep -Eq ' [Tt] _ar_m734_register_block$' m78-owner-aot-linked-symbols.txt
           grep -Eq ' [Tt] _ar_m734_register_batch$' m78-owner-aot-linked-symbols.txt
           grep -Eq ' [Tt] _ar_lv2_bind_bootstrap_syscalls$' m78-owner-aot-linked-symbols.txt
           grep -Eq ' [Tt] _ar_lv2_timezone$' m78-owner-aot-linked-symbols.txt
           echo "M7.43: 6251 generated GOWA ELF C-AOT functions compiled and linked in final Apple ARM64 Mach-O (9 modules + SHA installer). Number actually executed and new PC pending physical iPhone report; no guest files/RSX demonstrated." > m78-actions-status.txt
-          test -s AscensionRecompProbe-0.6.17-unsigned.ipa
-          /usr/libexec/PlistBuddy -c 'Print CFBundleShortVersionString' ios-probe/Payload/AscensionRecompProbe.app/Info.plist | grep -Fx 0.6.17
-          /usr/bin/unzip -t AscensionRecompProbe-0.6.17-unsigned.ipa | tee m42-ipa-integrity.log
+          test -s AscensionRecompProbe-0.6.18-unsigned.ipa
+          /usr/libexec/PlistBuddy -c 'Print CFBundleShortVersionString' ios-probe/Payload/AscensionRecompProbe.app/Info.plist | grep -Fx 0.6.18
+          /usr/bin/unzip -t AscensionRecompProbe-0.6.18-unsigned.ipa | tee m42-ipa-integrity.log
           xcrun nm -g ios-probe/Payload/AscensionRecompProbe.app/AscensionRecompProbe | grep -E '(_rsx_metal_backend_present|_rsx_metal_backend_init|_OBJC_CLASS_\\$_ARMetalView)' > m42-runtime-link-symbols.txt || true
           grep -q _rsx_metal_backend_init m39-metal-symbols.txt
           echo 'M4.2: actual GPU clear + presentDrawable + waitUntilCompleted route linked in iOS app; requires on-device screenshot.' > m42-status.txt
@@ -1278,7 +1294,7 @@ jobs:
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: AscensionRecomp-M7.45-GOWA-6251-AOT-SRW-AppleARM64
+          name: AscensionRecomp-M7.46-GOWA-6251-AOT-69PPC-AppleARM64
           if-no-files-found: warn
           retention-days: 14
           path: |
@@ -1506,6 +1522,8 @@ jobs:
             m740-rpcs3-inplace-host.log
             m741-dcbt-host.log
             m742-logical-host.log
+            m746-native-host.log
+            m746-native-arm64.o
             m745-native-host.log
             m745-native-arm64.o
             m744-native-host.log
@@ -1528,7 +1546,7 @@ jobs:
             m76-aot-tail-host.log
             m76-status.txt
             m75-aot-boot-host.log
-            AscensionRecompProbe-0.6.17-unsigned.ipa
+            AscensionRecompProbe-0.6.18-unsigned.ipa
             m40-ios-layer-view.o
             build-ios-runtime/libps3recomp_runtime.a
             ios-ppu-core/libAscensionPPUCore-ios-arm64.a

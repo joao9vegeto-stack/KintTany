@@ -46,6 +46,7 @@ extern int ar_m735_register_owner(const uint8_t*,size_t);
 extern int ar_m736_register_owner(const uint8_t*,size_t);
 extern int ar_m744_register_owner(const uint8_t*,size_t);
 extern int ar_m745_register_owner(const uint8_t*,size_t);
+extern int ar_m746_register_hotloop(const uint8_t*,size_t);
 extern int ar_private_import_match(const uint8_t*,size_t,uint32_t,uint32_t[4],char[48]);
 extern int ar_private_import_find_nid(const uint8_t*,size_t,uint32_t,const char*,uint32_t[4],char[48]);
 
@@ -231,6 +232,11 @@ int ar_m70_native_runtime_probe(const uint8_t*d,size_t len,
   /* M7.45: signed owner-ELF PPC 0x0052BA70 native block */
   if(ar_m745_register_owner(d,len)!=AR_OK){
     ar_bridge_shutdown();return -50;
+  }
+  /* M7.46: 69 owner PPC instructions with two CTR loops native ARM64;
+   * authenticated all 4 entry points against executable ELF and guest VM. */
+  if(ar_m746_register_hotloop(d,len)!=AR_OK){
+    ar_bridge_shutdown();return -51;
   }
 #endif
 #endif
