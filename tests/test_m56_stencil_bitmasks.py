@@ -36,5 +36,5 @@ class StencilBitPlanes(unittest.TestCase):
                       "testM54DepthOcclusion:","testM53Multipass:"):
             self.assertIn(value,U)
         self.assertIn("host_m56_stencil_masks.c",W)
-        self.assertIn("AscensionRecompProbe-0.6.17-unsigned.ipa",W)
+        self.assertIn("AscensionRecompProbe-0.6.18-unsigned.ipa",W)
 if __name__=="__main__":unittest.main()
