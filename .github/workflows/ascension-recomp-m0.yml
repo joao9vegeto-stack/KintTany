@@ -81,7 +81,7 @@ jobs:
         run: |
           set -euo pipefail
           python3 -m unittest discover -s tests -p test_m729_fpu_aot.py -v 2>&1 | tee m729-fpu-aot-tests.log
-          grep -Fq 'Ran 5 tests' m729-fpu-aot-tests.log
+          grep -Fq 'Ran 6 tests' m729-fpu-aot-tests.log
       - name: M7.30 prove canonical MFCR r12 PPC64 to native C AOT
         run: |
           set -euo pipefail
