@@ -157,6 +157,11 @@ int ar_ppc_fallback_step(ppu_context*c,const uint8_t*elf,size_t elf_len,
      if(rc!=AR_OK)return rc;
      c->cia=pc+4u;return AR_TAIL;
    }
+   if(xo==10u){ /* VMX VADDFP reusable ISA helper (legacy host tests only) */
+     const int rc=ar_vmx_vaddfp(c,d,a,b);
+     if(rc!=AR_OK)return rc;
+     c->cia=pc+4u;return AR_TAIL;
+   }
    if(xo==74u){ /* vsubfp VD,VA,VB: genuine M7.50 failure */
      const int rc=ar_vmx_vsubfp(c,d,a,b);
      if(rc!=AR_OK)return rc;

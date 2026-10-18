@@ -426,7 +426,7 @@ extern int ar_probe_rsx_texture_cache_mutation(unsigned swizzled,unsigned int ou
     [controller.view addSubview:panel];
     UILabel *header=[UILabel new];
     header.translatesAutoresizingMaskIntoConstraints=NO;
-    header.text=@"ASCENSIONRECOMP   ·   M7.54";
+    header.text=@"ASCENSIONRECOMP   ·   M7.55";
     header.textColor=[UIColor colorWithRed:0.73 green:0.87 blue:1 alpha:1];
     header.font=[UIFont systemFontOfSize:12 weight:UIFontWeightBold];
     header.textAlignment=NSTextAlignmentCenter;
@@ -758,16 +758,16 @@ extern int ar_probe_rsx_texture_cache_mutation(unsigned swizzled,unsigned int ou
   NSString *native=e&&[e[@"dispatches"] unsignedIntValue]?
     @"comprovado":@"não comprovado";
   NSMutableString *report=[NSMutableString stringWithFormat:
-    @"ASCENSIONRECOMP — ESQUEMA M7.54-v5\n"
+    @"ASCENSIONRECOMP — ESQUEMA M7.55-v6\n"
      "EXECUÇÃO ATUAL\n"
      "Branch=%s | Commit=%s | Build Actions=%s | Workflow ID=%s\n"
-     "App=M7.54 (binário 0.6.22/90 legado) | Runtime legado=M7.44 | Relatório=v5\n"
+     "App=M7.55 (binário 0.6.22/90 legado) | Runtime AOT ONLY | Relatório=v6\n"
      "Tipo teste=%@ | Momento=%@\n"
      "ELF carregado=%@ | origem=%@\n"
      "AOT vinculadas=%@ entradas | origem=%@\n"
      "AOT distintas executadas=%@ entradas | origem=%@\n"
      "Despachos ARM64=%@ despachos | origem=%@\n"
-     "PPC interpretadas=%@ instruções | origem=%@\n"
+     "PPC interpretadas=%@ instruções (exigência AOT ONLY: 0) | origem=%@\n"
      "Limite fallback=%@ instruções | origem=%@\n"
      "Resultado guest=%@ | origem=%@\n"
      "PC de parada=%@ | opcode=%@ | origem=%@\n"
@@ -796,10 +796,10 @@ extern int ar_probe_rsx_texture_cache_mutation(unsigned swizzled,unsigned int ou
      fsOpen,fsRead];
   [report appendFormat:
     @"COMPARAÇÃO COM A BUILD ANTERIOR\n"
-     "M7.53 (teste físico 20261018-180824): AOT=7695 entradas;"
-     " distintas=234; despachos=2368; PPC=11376; limite=16384;"
-     " parada=0x003B064C; opcode=0xFC01F800; último AOT=0x003B062C.\n"
-     "M7.54 atual: AOT=%@; distintas=%@; despachos=%@; PPC=%@;"
+     "M7.54 (teste físico 20261018-184132): AOT=7696 entradas;"
+     " distintas=236; despachos=2370; PPC=11438; limite=16384;"
+     " parada=0x003B085C; opcode=0x1108380A; último AOT=0x003B6180.\n"
+     "M7.55 AOT ONLY atual: AOT=%@; distintas=%@; despachos=%@; PPC=%@;"
      " limite=%@; parada=%@; opcode=%@; último AOT=%@.\n"
      "Dados ausentes=NÃO MEDIDO, não utilizar baseline para preencher.\n\n",
      val(@"aot"),val(@"unique"),val(@"dispatches"),val(@"fallback"),
@@ -836,7 +836,7 @@ extern int ar_probe_rsx_texture_cache_mutation(unsigned swizzled,unsigned int ou
     date.locale=[NSLocale localeWithLocaleIdentifier:@"en_US_POSIX"];
     date.dateFormat=@"yyyyMMdd-HHmmss";
     NSString *name=[NSString stringWithFormat:
-       @"AscensionRecomp-M7.54-NPUA80918-%@.txt",
+       @"AscensionRecomp-M7.55-NPUA80918-%@.txt",
        [date stringFromDate:[NSDate date]]];
     NSURL *docs=[[[NSFileManager defaultManager]
         URLsForDirectory:NSDocumentDirectory inDomains:NSUserDomainMask] firstObject];
@@ -1529,7 +1529,7 @@ extern int ar_probe_rsx_texture_cache_mutation(unsigned swizzled,unsigned int ou
        "Teste HLE TLS nativa=%d · r13=0x%08X\n"
        "Despacho nativo/híbrido=%d · primeiro PC pendente=0x%08X\n"
        "Opcode inicial guest=0x%08X · evidências=0x%X\n"
-       "AR_UNRESOLVED=-3: AOT ausente; -12: PPC não suportado; -13: limite fallback.\n",
+       "AR_UNRESOLVED=-3: PC guest sem ARM64 registrado; AOT ONLY proíbe fallback.\n",
        nativeRC,native[1],native[2],native[3],
        native[4],native[13],native[5],
        (int)native[8],(int)native[9],(int)native[10],
@@ -1863,7 +1863,7 @@ extern int ar_probe_rsx_texture_cache_mutation(unsigned swizzled,unsigned int ou
                         ? frontierReport : nil;
     self.ppuBatchButton.enabled=(self.ppuBatchReport.length>0);
     self.ppuSummary=[NSString stringWithFormat:
-       @"ASCENSIONRECOMP M7.54 · NPUA80918\n"
+       @"ASCENSIONRECOMP M7.55 · NPUA80918\n"
         "AOT ARM64 + FALLBACK PPC EXPERIMENTAL\n"
         "Entradas AOT vinculadas: %u\n"
         "ELF: %@ · entrada 0x%08X\n"

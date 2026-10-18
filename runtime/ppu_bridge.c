@@ -88,10 +88,17 @@ static int fault;
 static uint32_t missing,budget,depth;
 int ar_ppc_fallback_attach(const uint8_t*elf,size_t len,uint32_t limit,
                             ar_ppc_fallback_fn evaluate){
+#ifdef ASCENSION_NATIVE_ONLY
+ /* Production iOS: PPC interpretation prohibited, including accidental
+  * attachment by legacy app code. No JIT or dynamic translation. */
+ (void)elf;(void)len;(void)limit;(void)evaluate;
+ return AR_BAD_ARGS;
+#else
  if(!mem||!elf||!evaluate||len<64u||!limit||
     limit>AR_PPC_FALLBACK_MAX_STEPS||depth)
     return AR_BAD_ARGS;
  fb_elf=elf;fb_elf_size=len;fb_cap=limit;fb_eval=evaluate;return AR_OK;
+#endif
 }
 int ar_bridge_init(size_t n) {
   if(!n||n>MAX_MEM)return AR_BAD_ARGS;
@@ -314,6 +321,7 @@ static int dispatch(ppu_context *c,uint64_t pc){
       /* M7.20: only if the user-imported ELF was authenticated and the
        * bridge explicitly attached it. Native AOT always wins lookup.
        * Each interpreted PPC instruction consumes normal guest budget. */
+#ifndef ASCENSION_NATIVE_ONLY
       if(fb_elf && fb_eval) {
         if(fb_steps>=fb_cap){
           missing=(uint32_t)pc;trace_pending=(uint32_t)pc;
@@ -340,6 +348,10 @@ static int dispatch(ppu_context *c,uint64_t pc){
         missing=(uint32_t)pc;trace_pending=(uint32_t)pc;
         result=fault=step;break;
       }
+#endif
+      /* Native-only gate: no callable AOT and no matching HLE means stop
+       * here. A static ELF branch can target any PC; it is NEVER executed
+       * by decoding PPC at runtime. */
       missing=(uint32_t)pc;trace_pending=(uint32_t)pc;
       result=fault=AR_UNRESOLVED;break;
     }

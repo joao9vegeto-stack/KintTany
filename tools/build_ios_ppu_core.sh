@@ -10,6 +10,7 @@ for src in runtime/ppu_bridge.c runtime/elf_image.c runtime/ppu_tls.c runtime/lv
   obj="$output/objects/$name.o"
   xcrun --sdk iphoneos clang -target arm64-apple-ios17.0 -isysroot "$sdk" \
     -std=c17 -O2 -ffp-contract=off -fno-strict-aliasing \
+    -DASCENSION_NATIVE_ONLY=1 \
     -I upstream/runtime/ppu -I runtime -c "$src" -o "$obj"
   test -s "$obj"
 done
@@ -17,6 +18,8 @@ done
 xcrun lipo -info "$output/libAscensionPPUCore-ios-arm64.a"
 file "$output/libAscensionPPUCore-ios-arm64.a"
 xcrun nm -g "$output/libAscensionPPUCore-ios-arm64.a" > "$output/exports.txt"
+# The archive must carry the strict dispatcher compiled with NATIVE_ONLY.
+grep -q 'ASCENSION_NATIVE_ONLY' runtime/ppu_bridge.c
 for sym in _ar_run _ar_load_elf_image _ar_sys_initialize_tls _ar_sys_ppu_thread_get_id _ar_guest_syscall; do
   grep -q "$sym" "$output/exports.txt"
 done

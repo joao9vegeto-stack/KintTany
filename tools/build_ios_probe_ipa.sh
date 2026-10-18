@@ -177,6 +177,7 @@ test -s ios-ppu-core/libAscensionPPUCore-ios-arm64.a
 xcrun --sdk iphoneos clang -target arm64-apple-ios17.0 -isysroot "$SDK" \
     -std=c11 -O2 -Wall -Wextra -Werror \
     -I upstream/runtime/ppu -I runtime \
+    -DASCENSION_NATIVE_ONLY=1 \
     ${AOT_COMPILE_DEFINES[@]+"${AOT_COMPILE_DEFINES[@]}"} \
     -c ios/ARLivePPUBridge.c -o ios-probe/ARLivePPUBridge.o
 xcrun --sdk iphoneos clang -target arm64-apple-ios17.0 -isysroot "$SDK" \
@@ -295,7 +296,6 @@ xcrun --sdk iphoneos clang++ -target arm64-apple-ios17.0 \
     ios-probe/ppu_m751_vsubfp.o ios-probe/ppu_m752_vsldoi.o ios-probe/ppu_m753_native_vectorfp.o ios-probe/ppu_m754_native_fcmp.o ios-probe/ppu_guest_fs.o \
     ${GOWA2_OBJECTS[@]+"${GOWA2_OBJECTS[@]}"} \
     ios-probe/ppu_m717_graph.o \
-    ios-probe/ppu_m720_fallback.o \
     ${M711_OBJECTS[@]+"${M711_OBJECTS[@]}"} \
     ${AOT_OBJECTS[@]+"${AOT_OBJECTS[@]}"} \
     ios-ppu-core/libAscensionPPUCore-ios-arm64.a \
@@ -387,7 +387,10 @@ grep -Eq ' [Tt] _ar_m716_verified_successors$' m78-owner-aot-linked-symbols.txt
 grep -Eq ' [Tt] _ar_m717_walk$' m78-owner-aot-linked-symbols.txt
 grep -Eq ' [Tt] _ar_m717_last_aot_trace$' m78-owner-aot-linked-symbols.txt
 grep -Eq ' [Tt] _ar_trace_snapshot$' m78-owner-aot-linked-symbols.txt
-grep -Eq ' [Tt] _ar_ppc_fallback_step$' m78-owner-aot-linked-symbols.txt
+if grep -Eq ' [Tt] _ar_ppc_fallback_step$' m78-owner-aot-linked-symbols.txt; then
+  echo 'FAIL M7.55: PPC interpreter linked into AOT-only iOS binary' >&2
+  exit 81
+fi
 grep -Eq ' [Tt] _ar_ppc_fallback_attach$' m78-owner-aot-linked-symbols.txt
 echo 'M7.11: 59 REAL PPU ARM64 functions verified inside final iOS Mach-O; runtime execution on iPhone not yet tested' > m78-aot-status.txt
 echo "M7.12: ${ASCENSION_AOT_EXPECTED_SYMBOL_COUNT} REAL native ARM64 PPC entries linked, including 0x002C1664; iPhone proof pending" >> m78-aot-status.txt
@@ -428,6 +431,7 @@ echo 'M7.51: native owner vsubfp 0x003B0604 plus guest-only read-only sys_fs ope
 echo 'M7.52: VMX VSLDOI at 0x003B0608 owner ELF/PT_LOAD X+VM authenticated; registered ARM64 entry. Correct guest vs host evidence and M7.51 physical baseline, no filesystem success assumed.' >> m78-aot-status.txt
 echo 'M7.53: family VMX float vrefp/vmaddfp/vnmsubfp generically supported in PPC lifter and fallback; four owner PPC ops 0x003B062C-0x003B0638 AOT authenticated; iPhone measurement pending.' >> m78-aot-status.txt
 echo 'M7.54: generic FCMPU/FCMPO correct CR field and FPSCR FPCC; owner PPC two-word FCMPU+BC 0x003B064C authenticated, both branch successors; no guest file reading proved until physical run.' >> m78-aot-status.txt
+echo 'M7.55: iOS core without PPC fallback; unresolved AOT PC fails closed. Whole ELF coverage NOT proven, no gameplay or guest filesystem claimed.' >> m78-aot-status.txt
 (cd ios-probe && zip -q -r ../AscensionRecompProbe-0.6.22-unsigned.ipa Payload)
 test -s AscensionRecompProbe-0.6.22-unsigned.ipa
 shasum -a 256 AscensionRecompProbe-0.6.22-unsigned.ipa > m41-ipa-sha256.txt

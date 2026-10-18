@@ -1,4 +1,4 @@
-name: AscensionRecomp M7.54 - PPC FCMPU/FCMPO branch with CR and FPSCR
+name: AscensionRecomp M7.55 - ARM64 AOT-only fail-closed no PPC interpreter
 
 on:
   push:
@@ -635,6 +635,28 @@ jobs:
             -std=c11 -O2 -Wall -Wextra -Werror -I upstream/runtime/ppu -I runtime \
             -c runtime/ppu_m754_native_fcmp.c -o m754-fcmp-arm64.o
           xcrun nm -g m754-fcmp-arm64.o | grep -Fq '_ar_m754_register_fcmp_branch'
+      - name: M7.55 prove strictly native ARM64 AOT dispatch without PPC interpreter
+        run: |
+          set -euo pipefail
+          python3 -m unittest discover -s tests -p test_m755_native_only.py -v | tee m755-native-only-python.log
+          clang -std=c11 -O2 -Wall -Wextra -Werror -fsanitize=undefined -DASCENSION_NATIVE_ONLY=1 \
+            -I upstream/runtime/ppu -I runtime \
+            runtime/ppu_bridge.c tests/host_m755_native_only.c \
+            -o m755-native-only-host
+          ./m755-native-only-host | tee m755-native-only-host.log
+          grep -Fq 'M7.55 AOT ONLY:' m755-native-only-host.log
+          python3 -m unittest discover -s tests -p test_m755_vaddfp.py -v 2>&1 | tee m755-vaddfp-python.log
+          clang -std=c11 -O2 -Wall -Wextra -Werror -fsanitize=undefined \
+            -I upstream/runtime/ppu -I runtime tests/host_m755_vaddfp.c \
+            -lm -o m755-vaddfp-host
+          ./m755-vaddfp-host | tee m755-vaddfp-host.log
+          grep -Fq 'M7.55 VMX VADDFP' m755-vaddfp-host.log
+          sdk="$(xcrun --sdk iphoneos --show-sdk-path)"
+          xcrun --sdk iphoneos clang -target arm64-apple-ios17.0 -isysroot "$sdk" \
+            -std=c17 -O2 -DASCENSION_NATIVE_ONLY=1 \
+            -I upstream/runtime/ppu -I runtime \
+            -c runtime/ppu_bridge.c -o m755-native-only-arm64.o
+          xcrun nm -g m755-native-only-arm64.o | grep -Fq '_ar_run'
       - name: M5.0 fetch pinned open source shader compiler sources
         run: |
           set -euo pipefail
@@ -1444,7 +1466,7 @@ jobs:
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: AscensionRecomp-M7.54-GOWA-6251-AOT-FCMP-GUESTFS-AppleARM64
+          name: AscensionRecomp-M7.55-NATIVE-ONLY-NPUA80918-AppleARM64
           if-no-files-found: warn
           retention-days: 14
           path: |
@@ -1686,6 +1708,11 @@ jobs:
             m754-fcmp-python.log
             m754-fcmp-host.log
             m754-fcmp-arm64.o
+            m755-native-only-python.log
+            m755-native-only-host.log
+            m755-vaddfp-python.log
+            m755-vaddfp-host.log
+            m755-native-only-arm64.o
             m749-frsp-host.log
             m749-frsp-arm64.o
             m748-native-host.log

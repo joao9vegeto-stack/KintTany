@@ -71,7 +71,7 @@ def lift(words: list[int] | tuple[int, ...], base: int, name: str = 'ppu_sample'
                  ((w>>26)==59 and ((w>>1)&31)==20)
                  for w in words)
     needs_vmx=any(((w>>26)==4 and
-                   ((w&2047) in (652,780,842,844,908,74,266) or
+                   ((w&2047) in (10,652,780,842,844,908,74,266) or
                     (w&0x43f)==44 or (w&63) in (46,47))) or
                   ((w>>26)==31 and ((w>>1)&1023) in
                    (103,359,519,775,551,807,231,487,647,903,679,935))
@@ -156,6 +156,10 @@ def lift(words: list[int] | tuple[int, ...], base: int, name: str = 'ppu_sample'
             raise Unsupported(f'unsupported floating opcode63/{xo}')
         if op==4:
             xo=w&2047
+            if xo==10:
+                e(f'if(ar_vmx_vaddfp(c,{d},{a},{b})!=AR_OK) return AR_PPC_UNSUPPORTED;')
+                hist['vaddfp']+=1
+                continue
             if xo==266:
                 if a:raise Unsupported('vrefp nonzero reserved VA')
                 e(f'if(ar_vmx_vrefp(c,{d},{b})!=AR_OK) return AR_PPC_UNSUPPORTED;')

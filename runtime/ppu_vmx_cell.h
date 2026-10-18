@@ -212,4 +212,25 @@ static inline int ar_vmx_vmaddfp(ppu_context*c,unsigned vd,unsigned va,
  return ar_vmx_float_pack(c,vd,out);
 }
 
+/* M7.55: reusable PPC VMX VADDFP for offline AOT lifting.
+ * Four IEEE-754 single precision lanes, with source snapshot and
+ * fail-closed exceptional cases; no CR, FPSCR, VSCR or GPR changes.
+ * This helper alone does not imply ARM64 compilation of callers. */
+static inline int ar_vmx_vaddfp(ppu_context*c,unsigned vd,
+                                unsigned va,unsigned vb){
+ if(!c||vd>=32u||va>=32u||vb>=32u||
+    fegetround()!=FE_TONEAREST)return AR_PPC_UNSUPPORTED;
+ uint32_t out[4];
+ for(unsigned i=0;i<4u;i++){
+  float a=0.0f,b=0.0f;
+  if(ar_vmx_float_lane(ar_vmx_word(c,va,i),&a)!=AR_OK ||
+     ar_vmx_float_lane(ar_vmx_word(c,vb,i),&b)!=AR_OK)
+    return AR_PPC_UNSUPPORTED;
+  volatile float added=a+b;
+  if(ar_vmx_fp_result(added,&out[i])!=AR_OK)
+    return AR_PPC_UNSUPPORTED;
+ }
+ return ar_vmx_float_pack(c,vd,out);
+}
+
 #endif

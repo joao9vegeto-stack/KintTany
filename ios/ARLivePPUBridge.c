@@ -403,7 +403,8 @@ int ar_m70_native_runtime_probe(const uint8_t*d,size_t len,
   * succeeded, permit a finite signed PPC interpreter for AOT gaps.
   * Native ARM64 entries take precedence, no JIT or new secret required.
   * Previous HLE/VM mappings and 1418 AOT definitions are unchanged. */
-#ifdef ASCENSION_M711_OWNER_AOT
+#if defined(ASCENSION_M711_OWNER_AOT) && !defined(ASCENSION_NATIVE_ONLY)
+ /* Legacy test-only hybrid build; forbidden in native-only iOS. */
  if(ar_ppc_fallback_attach(d,len,AR_PPC_FALLBACK_MAX_STEPS,ar_ppc_fallback_step)!=AR_OK){
     ar_mmapper_reset();ar_bridge_shutdown();return -38;
  }
