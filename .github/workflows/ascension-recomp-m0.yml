@@ -1,4 +1,4 @@
-name: AscensionRecomp M7.48 - native 31-PPC VMX VCFSX and local game path repair
+name: AscensionRecomp M7.49 - visible local assets detection and native FRSP
 
 on:
   push:
@@ -1256,19 +1256,20 @@ jobs:
           grep -Fq 'M7.46: four SHA-gated' m78-aot-status.txt
           grep -Fq 'M7.47: FMR raw-bit preservation' m78-aot-status.txt
           grep -Fq 'M7.48: 31 original owner PPC native VMX instructions' m78-aot-status.txt
+          grep -Fq 'M7.49: UI local file detection button' m78-aot-status.txt
           grep -Eq ' [Tt] _ar_m736_register_owner$' m78-owner-aot-linked-symbols.txt
           grep -Eq ' [Tt] _ar_m744_register_owner$' m78-owner-aot-linked-symbols.txt
           grep -Eq ' [Tt] _ar_m745_register_owner$' m78-owner-aot-linked-symbols.txt
           grep -Eq ' [Tt] _ar_m746_register_hotloop$' m78-owner-aot-linked-symbols.txt
           grep -Eq ' [Tt] _ar_m747_register_owner$' m78-owner-aot-linked-symbols.txt
-          grep -Eq ' [Tt] _ar_m748_register_owner$' m78-owner-aot-linked-symbols.txt
+          grep -Eq ' [Tt] _ar_m748_register_owner
           grep -Eq ' [Tt] _ar_m734_register_block$' m78-owner-aot-linked-symbols.txt
           grep -Eq ' [Tt] _ar_m734_register_batch$' m78-owner-aot-linked-symbols.txt
           grep -Eq ' [Tt] _ar_lv2_bind_bootstrap_syscalls$' m78-owner-aot-linked-symbols.txt
           grep -Eq ' [Tt] _ar_lv2_timezone$' m78-owner-aot-linked-symbols.txt
           echo "M7.43: 6251 generated GOWA ELF C-AOT functions compiled and linked in final Apple ARM64 Mach-O (9 modules + SHA installer). Number actually executed and new PC pending physical iPhone report; no guest files/RSX demonstrated." > m78-actions-status.txt
-          test -s AscensionRecompProbe-0.6.20-unsigned.ipa
-          /usr/libexec/PlistBuddy -c 'Print CFBundleShortVersionString' ios-probe/Payload/AscensionRecompProbe.app/Info.plist | grep -Fx 0.6.20
+          test -s AscensionRecompProbe-0.6.21-unsigned.ipa
+          /usr/libexec/PlistBuddy -c 'Print CFBundleShortVersionString' ios-probe/Payload/AscensionRecompProbe.app/Info.plist | grep -Fx 0.6.21
           /usr/bin/unzip -t AscensionRecompProbe-0.6.20-unsigned.ipa | tee m42-ipa-integrity.log
           xcrun nm -g ios-probe/Payload/AscensionRecompProbe.app/AscensionRecompProbe | grep -E '(_rsx_metal_backend_present|_rsx_metal_backend_init|_OBJC_CLASS_\\$_ARMetalView)' > m42-runtime-link-symbols.txt || true
           grep -q _rsx_metal_backend_init m39-metal-symbols.txt
@@ -1352,7 +1353,760 @@ jobs:
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: AscensionRecomp-M7.48-GOWA-6251-AOT-VMX-AppleARM64
+          name: AscensionRecomp-M7.49-GOWA-6251-AOT-FRSP-AppleARM64
+          if-no-files-found: warn
+          retention-days: 14
+          path: |
+            m0-tests.log
+            m0-configure.log
+            m0-build.log
+            m0-sha256.txt
+            m0-ppu-loader-help.txt
+            m0-ppu-lifter-help.txt
+            m0-status.txt
+            m2-loader.log
+            m2-lifter.log
+            m2-clang-syntax.log
+            m2-status.txt
+            m21-aot.log
+            m21-arch.log
+            m21-object-sha256.txt
+            m21-status.txt
+            m22-batch.log
+            m22-arch.log
+            m22-sha256.txt
+            m22-status.txt
+            m23-lifter.log
+            m23-object-architecture.log
+            m23-object-sha256.txt
+            m23-status.txt
+            m24-gen-hle.log
+            m24-public-handlers.log
+            m24-coverage.log
+            m24-status.txt
+            m25-host-test.log
+            m25-arch.log
+            m25-checksums.txt
+            m25-status.txt
+            m26-host-test.log
+            m26-object-info.log
+            m26-checksums.txt
+            m26-status.txt
+            m27-call-recovery.log
+            m27-candidates.json
+            m27-status.txt
+            m28-host-test.log
+            m28-object-info.log
+            m28-checksums.txt
+            m28-status.txt
+            m29-tls-test.log
+            m29-object-info.log
+            m29-checksums.txt
+            m29-status.txt
+            m30-host-test.log
+            m30-object-info.log
+            m30-checksums.txt
+            m30-status.txt
+            m31-import-generate.log
+            m31-host-test.log
+            m31-arm64-object.log
+            m31-checksums.txt
+            m31-status.txt
+            m37-ios-build.log
+            m37-status.txt
+            m38-ios-configure.log
+            m38-ios-runtime.log
+            m38-lipo.txt
+            m38-runtime-sha256.txt
+            m38-status.txt
+            m39-metal-symbols.txt
+            m39-status.txt
+            m40-ui-symbols.txt
+            m40-ui-arch.txt
+            m40-ui-sha256.txt
+            m40-status.txt
+            m41-build-ipa.log
+            m41-executable-file.txt
+            m41-executable-arch.txt
+            m41-ipa-sha256.txt
+            m41-status.txt
+            m42-ipa-integrity.log
+            m42-runtime-link-symbols.txt
+            m42-status.txt
+            m43-probe-linked-symbols.txt
+            m43-status.txt
+            m44-status.txt
+            m45-status.txt
+            m46-status.txt
+            m47-status.txt
+            m48-status.txt
+            m49-status.txt
+            m410-status.txt
+            m513-nv40-host.log
+            m552-stencil-host.log
+            m56-stencil-host.log
+            m56-status.txt
+            m57-status.txt
+            m58-status.txt
+            m581-alpha-oracle.log
+            m59-host.log
+            m59-status.txt
+            m60-host.log
+            m60-status.txt
+            m61-host.log
+            m61-status.txt
+            m67-host.log
+            m67-status.txt
+            m66-host.log
+            m66-status.txt
+            m65-host.log
+            m65-status.txt
+            m64-host.log
+            m64-status.txt
+            m63-host.log
+            m63-status.txt
+            m62-host.log
+            m62-status.txt
+            m55-status.txt
+            m54-status.txt
+            m53-status.txt
+            m52-status.txt
+            m51-status.txt
+            m50-deps-sha.txt
+            m50-host-configure.log
+            m50-host-build.log
+            m50-host-shaders.log
+            m50-boot-build.log
+            m50-boot-smoke.log
+            m50-guest-shaders.log
+            m50-ios-shader-archive-sha256.txt
+            m50-ios-shader-availability-symbol.txt
+            build-ios-runtime/libAscensionRSXGuest-ios-arm64.a
+            m673-import-host.log
+            m673-status.txt
+            m674-tls-host.log
+            m674-status.txt
+            m675-entry-host.log
+            m675-status.txt
+            m676-lr-host.log
+            m676-status.txt
+            m70-native-host.log
+            m70-status.txt
+            m71-continuous-host.log
+            m71-status.txt
+            m72-cr-branch-host.log
+            m72-status.txt
+            m73-prx-host.log
+            m73-status.txt
+            m74-aot.log
+            m74-aot-host.log
+            m74-arm64-symbols.txt
+            m74-status.txt
+            m78-aot-stage.log
+            m79-native-hle-host.log
+            m710-timebase-host.log
+            m710-native-ui-tests.log
+            m711-sysutil-host.log
+            m711-mmapper-host.log
+            m712-host.log
+            m713-aot-host.log
+            m714-aot-host.log
+            m714-batch-plan-host.log
+            m715-aot-host.log
+            m715-regressions.log
+            m716-native-host.log
+            m716-integrity-tests.log
+            m717-native-host.log
+            m717-architecture-tests.log
+            m718-bulk-stage.log
+            m718-bulk-guard-tests.log
+            m718-bulk-object-symbols.txt
+            m719-bulk2-stage.log
+            m719-private-tests.log
+            m719-unified-report-tests.log
+            m719-bulk2-object-symbols.txt
+            m720-native-host.log
+            m720-hybrid-tests.log
+            m721-rotate-sanitized.log
+            m721-rotate-unoptimized.log
+            m721-regressions.log
+            m722-native-aot-tests.log
+            m723-frontier-stage.log
+            m723-frontier-tests.log
+            m723-frontier-object-symbols.txt
+            m724-neg-aot-tests.log
+            m724-neg-host.log
+            m725-srawi-aot.log
+            m725-nested-host.log
+            m726-divdu-aot.log
+            m726-timebase-host.log
+            m727-barrier-aot.log
+            m727-arm64-fence.log
+            m727-eieio-arm64.s
+            m727-barrier-host.log
+            m728-vmx-aot.log
+            m728-vmx-host.log
+            m728-vmx-arm64.log
+            m728-vmx-arm64.o
+            m729-fpu-aot-tests.log
+            m729-fpu-arm64.o
+            m729-fpu-arm64.log
+            m729-fpu-native-host.log
+            m729-fpu-host.log
+            m730-mfcr-aot.log
+            m730-mfcr-arm64.log
+            m730-mfcr-arm64.o
+            m730-native-host.log
+            m731-cr-aot-tests.log
+            m731-cr-arm64-symbols.log
+            m731-cr-arm64-file.log
+            m731-cr-arm64.o
+            m731-native-host.log
+            m732-owner-arm64.o
+            m732-owner-arm64-symbols.log
+            m732-owner-arm64-file.log
+            m732-native-host.log
+            m733-bindings-source.log
+            m734-sradi-aot-tests.log
+            m734-native-math-symbols.log
+            m734-native-batch-symbols.log
+            m734-native-math-host.log
+            m734-native-batch-host.log
+            m735-time-host.log
+            m736-native-host.log
+            m737-folder-host.log
+            m737-ppu-host.log
+            m738-runtime-attach-host.log
+            m739-local-documents-host.log
+            m740-rpcs3-inplace-host.log
+            m741-dcbt-host.log
+            m742-logical-host.log
+            m749-frsp-host.log
+            m749-frsp-arm64.o
+            m748-native-host.log
+            m748-folder-host.log
+            m748-native-arm64.o
+            m747-native-host.log
+            m747-param-host.log
+            m747-native-arm64.o
+            m746-native-host.log
+            m746-native-arm64.o
+            m745-native-host.log
+            m745-native-arm64.o
+            m744-native-host.log
+            m744-native-arm64.o
+            m743-installer-host.log
+            m743-host-stage.log
+            m743-gowa2-stage.log
+            m743-gowa2-objects-nm.txt
+            m743-gowa2-object-verified.log
+            m743-gowa2-final-verified.log
+            ios-probe/gowa2-staged/stage-report.json
+            m78-stage-tests.log
+            m78-lv2-host.log
+            m78-owner-aot-object-symbols.txt
+            m78-owner-aot-linked-symbols.txt
+            m78-aot-status.txt
+            m78-actions-status.txt
+            m77-lwmutex-host.log
+            m77-status.txt
+            m76-aot-tail-host.log
+            m76-status.txt
+            m75-aot-boot-host.log
+            AscensionRecompProbe-0.6.20-unsigned.ipa
+            m40-ios-layer-view.o
+            build-ios-runtime/libps3recomp_runtime.a
+            ios-ppu-core/libAscensionPPUCore-ios-arm64.a
+            ios-ppu-core/exports.txt
+            ios-ppu-core/SHA256.txt
+            ios-ppu-core/README.txt
+            ios-ppu-core/include/**
+            m31-import-report.json
+            m31-manifest-arm64.o
+            m30-lv2-arm64.o
+            m29-tls-arm64.o
+            m28-hle-bridge-arm64.o
+            m26-elf-loader-arm64.o
+            m25-synthetic-ppu-arm64.o
+            m25-guest-bridge-arm64.o
+            m24-registered-handlers.json
+            m24-synthetic-coverage.json
+            m23-synthetic-out/report.json
+            m23-synthetic-arm64.o
+            m22-synthetic-out/audit.json
+            m22-synthetic-out/*.o
+            m21-synthetic-ppu-ios-arm64.o
+            m2-loader/*.json
+            build/libps3recomp_runtime.a
+ m78-owner-aot-linked-symbols.txt
+          grep -Eq ' [Tt] _ar_m749_register_frsp
+          grep -Eq ' [Tt] _ar_m734_register_block$' m78-owner-aot-linked-symbols.txt
+          grep -Eq ' [Tt] _ar_m734_register_batch$' m78-owner-aot-linked-symbols.txt
+          grep -Eq ' [Tt] _ar_lv2_bind_bootstrap_syscalls$' m78-owner-aot-linked-symbols.txt
+          grep -Eq ' [Tt] _ar_lv2_timezone$' m78-owner-aot-linked-symbols.txt
+          echo "M7.43: 6251 generated GOWA ELF C-AOT functions compiled and linked in final Apple ARM64 Mach-O (9 modules + SHA installer). Number actually executed and new PC pending physical iPhone report; no guest files/RSX demonstrated." > m78-actions-status.txt
+          test -s AscensionRecompProbe-0.6.21-unsigned.ipa
+          /usr/libexec/PlistBuddy -c 'Print CFBundleShortVersionString' ios-probe/Payload/AscensionRecompProbe.app/Info.plist | grep -Fx 0.6.21
+          /usr/bin/unzip -t AscensionRecompProbe-0.6.20-unsigned.ipa | tee m42-ipa-integrity.log
+          xcrun nm -g ios-probe/Payload/AscensionRecompProbe.app/AscensionRecompProbe | grep -E '(_rsx_metal_backend_present|_rsx_metal_backend_init|_OBJC_CLASS_\\$_ARMetalView)' > m42-runtime-link-symbols.txt || true
+          grep -q _rsx_metal_backend_init m39-metal-symbols.txt
+          echo 'M4.2: actual GPU clear + presentDrawable + waitUntilCompleted route linked in iOS app; requires on-device screenshot.' > m42-status.txt
+          xcrun nm -g ios-probe/Payload/AscensionRecompProbe.app/AscensionRecompProbe | tee m43-probe-linked-symbols.txt
+          grep -q '_ar_probe_rsx_clear_flip' m43-probe-linked-symbols.txt
+          grep -q '_ar_probe_rsx_triangle' m43-probe-linked-symbols.txt
+          grep -q '_rsx_metal_backend_debug_fixed_probe_stage' m43-probe-linked-symbols.txt
+          grep -q '_ar_probe_rsx_dma_triangle' m43-probe-linked-symbols.txt
+          grep -q '_ar_probe_rsx_indexed_quad' m43-probe-linked-symbols.txt
+          grep -q '_ar_probe_rsx_texture' m43-probe-linked-symbols.txt
+          grep -q '_ar_probe_rsx_texture_registers' m43-probe-linked-symbols.txt
+          grep -q '_rsx_metal_backend_debug_sample_texture0' m43-probe-linked-symbols.txt
+          grep -q '_ar_probe_rsx_texture_cache_mutation' m43-probe-linked-symbols.txt
+          grep -q '_ar_probe_cache_replacements' m43-probe-linked-symbols.txt
+          grep -q '_ar_probe_m51_guest_textured_quad' m43-probe-linked-symbols.txt
+          grep -q '_ar_probe_m51_readback_quad' m43-probe-linked-symbols.txt
+          grep -q '_ar_probe_m51_encoded_draws' m43-probe-linked-symbols.txt
+          grep -q '_ar_probe_m51_shader_state' m43-probe-linked-symbols.txt
+          grep -q '_ar_probe_m52_guest_texture_mutation' m43-probe-linked-symbols.txt
+          grep -q '_ar_probe_m53_guest_multipass' m43-probe-linked-symbols.txt
+          grep -q '_ar_probe_m53_surface_views' m43-probe-linked-symbols.txt
+          grep -q '_ar_probe_m54_guest_depth_occlusion' m43-probe-linked-symbols.txt
+          grep -q '_ar_probe_m54_depth_draws' m43-probe-linked-symbols.txt
+          grep -q '_ar_probe_m55_guest_stencil_mask' m43-probe-linked-symbols.txt
+          grep -q '_ar_probe_m55_stencil_draws' m43-probe-linked-symbols.txt
+          grep -q '_ar_probe_m56_guest_stencil_bitmasks' m43-probe-linked-symbols.txt
+          grep -q '_ar_probe_m57_guest_blend_mask' m43-probe-linked-symbols.txt
+          grep -q '_ar_probe_m57_blend_draws' m43-probe-linked-symbols.txt
+          grep -q '_ar_probe_m57_red_mask_draws' m43-probe-linked-symbols.txt
+          grep -q '_ar_probe_m58_guest_alpha_test' m43-probe-linked-symbols.txt
+          grep -q '_ar_probe_m58_alpha_draws' m43-probe-linked-symbols.txt
+          grep -q '_ar_private_elf_inspect' m43-probe-linked-symbols.txt
+          grep -q '_ar_ppu_bootstrap_four' m43-probe-linked-symbols.txt
+          grep -q '_ar_ppu_bootstrap_eight' m43-probe-linked-symbols.txt
+          grep -q '_ar_ppu_bootstrap_sixteen' m43-probe-linked-symbols.txt
+          grep -q '_ar_m70_native_runtime_probe' m43-probe-linked-symbols.txt
+          # The legacy M7.1 entry-point still passes host ABI regressions,
+          # but the linker dead-strips it when UIKit uses the M7.3 entry.
+          grep -q '_ar_m73_private_import_probe' m43-probe-linked-symbols.txt
+          grep -q '_ar_m71_signed_ppu_interpret' m43-probe-linked-symbols.txt
+          grep -q '_ar_run' m43-probe-linked-symbols.txt
+          grep -q '_ar_load_elf_image' m43-probe-linked-symbols.txt
+          grep -q '_ar_sys_initialize_tls' m43-probe-linked-symbols.txt
+          echo 'M6.2 bounded 16-step PPU nested stack + mflr, private guest ELF only on iPhone.' > m62-status.txt
+          echo 'M6.3 private bounded 24-step PPU with strict PC/opcode failure; real title on device only.' > m63-status.txt
+          echo 'M6.4 PowerPC rldicl 0x79040020 zero extends GPR8 to GPR4; 32 bounded guest steps, pending physical iPhone test.' > m64-status.txt
+          echo 'M6.5.3 fixes the UI gate: legacy -995 stw after PPU24 now replays via strict PPU40 guest PT_LOAD overlay. Other errors remain fail-closed. iPhone validation needed.' > m65-status.txt
+          echo 'M6.6 mtctr at real PC 0x669C2C, 38/40 screenshot. PPU48 records CTR and clears stale EA each step; commercial ELF verification only on iPhone.' > m66-status.txt
+          echo 'M6.7 guest r0 register-writer provenance for real -1007 at PC 0x669C30, bctrl CTR=0x39800000; no unsafe branch or ELF upload.' > m67-status.txt
+           echo 'M6.7.2 source r12 traced, bctrl guard unchanged; iPhone test pending.' > m672-status.txt
+           echo 'M6.7.3 safely identifies NID of a private firmware import; no HLE execution; iPhone validation required.' > m673-status.txt
+           echo 'M6.7.4 sys_initialize_tls initialized in isolated guest memory, verified by synthetic host tests.' > m674-status.txt
+           echo 'M6.7.5 sources process-entry r7-r10 from ELF PT_TLS, seeds r12 with PS3 page size and validates authentic guest CRT forwarding to TLS HLE; device result not yet observed.' > m675-status.txt
+           echo 'M6.7.6 adds exact PPC64 mtlr r0 + executable-verified blr, while older PPU48 interfaces preserve original unsupported behaviour.' > m676-status.txt
+           echo 'M7.0 links real iOS ARM64 PPU AOT library into the application; imported ELF stages privately; unknown game functions correctly report UNRESOLVED (no AOT game bytes in IPA).' > m70-status.txt
+           echo 'M7.1 adds a signed, generic PowerPC interpretation fallback in the same native PPU guest VM with exact faults, bounded budget, natural verified HLE; NOT game AOT or boot.' > m71-status.txt
+           echo 'M7.2 adds PowerPC signed/unsigned cmp/cmpl/cmpi/cmpli, CR0-CR7 nibble updates, BC CTR+CR and conditional bclr/bcctr; no AOT false positives.' > m72-status.txt
+           echo 'M7.3 identifies current unknown guest PRX import stub, NID and library after a real failing bctrl; dispatch remains blocked.' > m73-status.txt
+          echo 'M6.1 eight guest PPU steps, stack and branch; user title private; host synthetic only.' > m61-status.txt
+          echo 'M6.0 strict PPU bootstrap: at most 4 imported ELF instructions; no actual game bytes bundled.' > m60-status.txt
+          echo 'M5.9: on-device Files ELF inspection; no game data in CI or IPA.' > m59-status.txt
+          echo 'M5.8.1: zero-alpha GREATER/LESS accepted fragments preserve RGB and alpha 00; screenshot showed exact q0=000000FF and q2=00FF0000 in phase 3. On-device phase 4 and 5 proof pending.' > m58-status.txt
+          echo 'M5.7 native GPU blending/RED mask: on-device proof required.' > m57-status.txt
+          echo 'M5.6: 7 RSX/Metal GPU stencil bitmask passes (0F/F0 writes, FF/0F reads); native phone proof pending.' > m56-status.txt
+          echo 'M5.5.2: fix physical iPhone phase-3 -528 by writing NV4097 0x032C stencil writeMask=0xff. Native GPU validation pending.' > m55-status.txt
+          echo 'M5.4.1: fixed conditional depth enable — Z24S8 LESS must stay on until draw, video still required.' > m54-status.txt
+          echo 'M5.3: 2 RSX GPU guest draws; source A render target reused as TEX0 surface view in pass B; on-device test needed.' > m53-status.txt
+          echo 'M5.2: 3 guest FP TEX0 GPU draws with live PS3 texture address mutation and >=2 hash cache replacements; iPhone proof required.' > m52-status.txt
+          echo 'M5.1: real NV4097 VP o0/o7 + FP TEX0 + cache-bound texture; GPU raster and 4-point readback require ON-DEVICE verification.' > m51-status.txt
+          echo 'M4.10: same PS3 texture address across 3 flips with 2 content hash cache replacements; each GPU sample must match rotated palette.' > m410-status.txt
+          echo 'M4.9 NV4097 texture0 register -> PS3 texture decoder/cache -> bound draw Metal object -> GPU compute sample, two layouts; on-device test pending. Does NOT translate guest FP.' > m49-status.txt
+          echo 'M4.8 synthetic PS3 A8R8G8B8 linear/swizzled decode -> actual Metal RGBA8 texture -> fragment sampling -> GPU 4-way readback and CAMetalLayer. Not guest fragment program support.' > m48-status.txt
+          echo 'M4.7 indexes: actual NV4097 indexed two-triangle mesh from bounded PS3 big-endian u16/u32 buffers; hardware test pending.' > m47-status.txt
+          echo 'M4.6 PS3 memory BE float4 vertex DMA via NV4097_DRAW_ARRAYS, expected magenta center pixel; requires hardware confirmation' > m46-status.txt
+          echo 'Metal fixed pipeline MSL compiled on device; game shaders NOT supported without translator; user test needed' > m45-status.txt
+          echo 'Geometry proof: guest-like NV4097 INLINE_ARRAY -> fixed VS/PS pipeline -> framebuffer raster -> center pixel GPU readback. Requires device testing; not guest game shaders.' > m44-status.txt
+          echo 'M4.3 synthetic RSX NV4097 register writes -> GPU engine clear & flip, readback check. On-device screenshot required.' > m43-status.txt
+      - name: Upload M2 evidence - runtime + synthetic PPU proof
+
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: AscensionRecomp-M7.49-GOWA-6251-AOT-FRSP-AppleARM64
+          if-no-files-found: warn
+          retention-days: 14
+          path: |
+            m0-tests.log
+            m0-configure.log
+            m0-build.log
+            m0-sha256.txt
+            m0-ppu-loader-help.txt
+            m0-ppu-lifter-help.txt
+            m0-status.txt
+            m2-loader.log
+            m2-lifter.log
+            m2-clang-syntax.log
+            m2-status.txt
+            m21-aot.log
+            m21-arch.log
+            m21-object-sha256.txt
+            m21-status.txt
+            m22-batch.log
+            m22-arch.log
+            m22-sha256.txt
+            m22-status.txt
+            m23-lifter.log
+            m23-object-architecture.log
+            m23-object-sha256.txt
+            m23-status.txt
+            m24-gen-hle.log
+            m24-public-handlers.log
+            m24-coverage.log
+            m24-status.txt
+            m25-host-test.log
+            m25-arch.log
+            m25-checksums.txt
+            m25-status.txt
+            m26-host-test.log
+            m26-object-info.log
+            m26-checksums.txt
+            m26-status.txt
+            m27-call-recovery.log
+            m27-candidates.json
+            m27-status.txt
+            m28-host-test.log
+            m28-object-info.log
+            m28-checksums.txt
+            m28-status.txt
+            m29-tls-test.log
+            m29-object-info.log
+            m29-checksums.txt
+            m29-status.txt
+            m30-host-test.log
+            m30-object-info.log
+            m30-checksums.txt
+            m30-status.txt
+            m31-import-generate.log
+            m31-host-test.log
+            m31-arm64-object.log
+            m31-checksums.txt
+            m31-status.txt
+            m37-ios-build.log
+            m37-status.txt
+            m38-ios-configure.log
+            m38-ios-runtime.log
+            m38-lipo.txt
+            m38-runtime-sha256.txt
+            m38-status.txt
+            m39-metal-symbols.txt
+            m39-status.txt
+            m40-ui-symbols.txt
+            m40-ui-arch.txt
+            m40-ui-sha256.txt
+            m40-status.txt
+            m41-build-ipa.log
+            m41-executable-file.txt
+            m41-executable-arch.txt
+            m41-ipa-sha256.txt
+            m41-status.txt
+            m42-ipa-integrity.log
+            m42-runtime-link-symbols.txt
+            m42-status.txt
+            m43-probe-linked-symbols.txt
+            m43-status.txt
+            m44-status.txt
+            m45-status.txt
+            m46-status.txt
+            m47-status.txt
+            m48-status.txt
+            m49-status.txt
+            m410-status.txt
+            m513-nv40-host.log
+            m552-stencil-host.log
+            m56-stencil-host.log
+            m56-status.txt
+            m57-status.txt
+            m58-status.txt
+            m581-alpha-oracle.log
+            m59-host.log
+            m59-status.txt
+            m60-host.log
+            m60-status.txt
+            m61-host.log
+            m61-status.txt
+            m67-host.log
+            m67-status.txt
+            m66-host.log
+            m66-status.txt
+            m65-host.log
+            m65-status.txt
+            m64-host.log
+            m64-status.txt
+            m63-host.log
+            m63-status.txt
+            m62-host.log
+            m62-status.txt
+            m55-status.txt
+            m54-status.txt
+            m53-status.txt
+            m52-status.txt
+            m51-status.txt
+            m50-deps-sha.txt
+            m50-host-configure.log
+            m50-host-build.log
+            m50-host-shaders.log
+            m50-boot-build.log
+            m50-boot-smoke.log
+            m50-guest-shaders.log
+            m50-ios-shader-archive-sha256.txt
+            m50-ios-shader-availability-symbol.txt
+            build-ios-runtime/libAscensionRSXGuest-ios-arm64.a
+            m673-import-host.log
+            m673-status.txt
+            m674-tls-host.log
+            m674-status.txt
+            m675-entry-host.log
+            m675-status.txt
+            m676-lr-host.log
+            m676-status.txt
+            m70-native-host.log
+            m70-status.txt
+            m71-continuous-host.log
+            m71-status.txt
+            m72-cr-branch-host.log
+            m72-status.txt
+            m73-prx-host.log
+            m73-status.txt
+            m74-aot.log
+            m74-aot-host.log
+            m74-arm64-symbols.txt
+            m74-status.txt
+            m78-aot-stage.log
+            m79-native-hle-host.log
+            m710-timebase-host.log
+            m710-native-ui-tests.log
+            m711-sysutil-host.log
+            m711-mmapper-host.log
+            m712-host.log
+            m713-aot-host.log
+            m714-aot-host.log
+            m714-batch-plan-host.log
+            m715-aot-host.log
+            m715-regressions.log
+            m716-native-host.log
+            m716-integrity-tests.log
+            m717-native-host.log
+            m717-architecture-tests.log
+            m718-bulk-stage.log
+            m718-bulk-guard-tests.log
+            m718-bulk-object-symbols.txt
+            m719-bulk2-stage.log
+            m719-private-tests.log
+            m719-unified-report-tests.log
+            m719-bulk2-object-symbols.txt
+            m720-native-host.log
+            m720-hybrid-tests.log
+            m721-rotate-sanitized.log
+            m721-rotate-unoptimized.log
+            m721-regressions.log
+            m722-native-aot-tests.log
+            m723-frontier-stage.log
+            m723-frontier-tests.log
+            m723-frontier-object-symbols.txt
+            m724-neg-aot-tests.log
+            m724-neg-host.log
+            m725-srawi-aot.log
+            m725-nested-host.log
+            m726-divdu-aot.log
+            m726-timebase-host.log
+            m727-barrier-aot.log
+            m727-arm64-fence.log
+            m727-eieio-arm64.s
+            m727-barrier-host.log
+            m728-vmx-aot.log
+            m728-vmx-host.log
+            m728-vmx-arm64.log
+            m728-vmx-arm64.o
+            m729-fpu-aot-tests.log
+            m729-fpu-arm64.o
+            m729-fpu-arm64.log
+            m729-fpu-native-host.log
+            m729-fpu-host.log
+            m730-mfcr-aot.log
+            m730-mfcr-arm64.log
+            m730-mfcr-arm64.o
+            m730-native-host.log
+            m731-cr-aot-tests.log
+            m731-cr-arm64-symbols.log
+            m731-cr-arm64-file.log
+            m731-cr-arm64.o
+            m731-native-host.log
+            m732-owner-arm64.o
+            m732-owner-arm64-symbols.log
+            m732-owner-arm64-file.log
+            m732-native-host.log
+            m733-bindings-source.log
+            m734-sradi-aot-tests.log
+            m734-native-math-symbols.log
+            m734-native-batch-symbols.log
+            m734-native-math-host.log
+            m734-native-batch-host.log
+            m735-time-host.log
+            m736-native-host.log
+            m737-folder-host.log
+            m737-ppu-host.log
+            m738-runtime-attach-host.log
+            m739-local-documents-host.log
+            m740-rpcs3-inplace-host.log
+            m741-dcbt-host.log
+            m742-logical-host.log
+            m749-frsp-host.log
+            m749-frsp-arm64.o
+            m748-native-host.log
+            m748-folder-host.log
+            m748-native-arm64.o
+            m747-native-host.log
+            m747-param-host.log
+            m747-native-arm64.o
+            m746-native-host.log
+            m746-native-arm64.o
+            m745-native-host.log
+            m745-native-arm64.o
+            m744-native-host.log
+            m744-native-arm64.o
+            m743-installer-host.log
+            m743-host-stage.log
+            m743-gowa2-stage.log
+            m743-gowa2-objects-nm.txt
+            m743-gowa2-object-verified.log
+            m743-gowa2-final-verified.log
+            ios-probe/gowa2-staged/stage-report.json
+            m78-stage-tests.log
+            m78-lv2-host.log
+            m78-owner-aot-object-symbols.txt
+            m78-owner-aot-linked-symbols.txt
+            m78-aot-status.txt
+            m78-actions-status.txt
+            m77-lwmutex-host.log
+            m77-status.txt
+            m76-aot-tail-host.log
+            m76-status.txt
+            m75-aot-boot-host.log
+            AscensionRecompProbe-0.6.20-unsigned.ipa
+            m40-ios-layer-view.o
+            build-ios-runtime/libps3recomp_runtime.a
+            ios-ppu-core/libAscensionPPUCore-ios-arm64.a
+            ios-ppu-core/exports.txt
+            ios-ppu-core/SHA256.txt
+            ios-ppu-core/README.txt
+            ios-ppu-core/include/**
+            m31-import-report.json
+            m31-manifest-arm64.o
+            m30-lv2-arm64.o
+            m29-tls-arm64.o
+            m28-hle-bridge-arm64.o
+            m26-elf-loader-arm64.o
+            m25-synthetic-ppu-arm64.o
+            m25-guest-bridge-arm64.o
+            m24-registered-handlers.json
+            m24-synthetic-coverage.json
+            m23-synthetic-out/report.json
+            m23-synthetic-arm64.o
+            m22-synthetic-out/audit.json
+            m22-synthetic-out/*.o
+            m21-synthetic-ppu-ios-arm64.o
+            m2-loader/*.json
+            build/libps3recomp_runtime.a
+ m78-owner-aot-linked-symbols.txt
+          grep -Eq ' [Tt] _ar_m734_register_block$' m78-owner-aot-linked-symbols.txt
+          grep -Eq ' [Tt] _ar_m734_register_batch$' m78-owner-aot-linked-symbols.txt
+          grep -Eq ' [Tt] _ar_lv2_bind_bootstrap_syscalls$' m78-owner-aot-linked-symbols.txt
+          grep -Eq ' [Tt] _ar_lv2_timezone$' m78-owner-aot-linked-symbols.txt
+          echo "M7.43: 6251 generated GOWA ELF C-AOT functions compiled and linked in final Apple ARM64 Mach-O (9 modules + SHA installer). Number actually executed and new PC pending physical iPhone report; no guest files/RSX demonstrated." > m78-actions-status.txt
+          test -s AscensionRecompProbe-0.6.21-unsigned.ipa
+          /usr/libexec/PlistBuddy -c 'Print CFBundleShortVersionString' ios-probe/Payload/AscensionRecompProbe.app/Info.plist | grep -Fx 0.6.21
+          /usr/bin/unzip -t AscensionRecompProbe-0.6.20-unsigned.ipa | tee m42-ipa-integrity.log
+          xcrun nm -g ios-probe/Payload/AscensionRecompProbe.app/AscensionRecompProbe | grep -E '(_rsx_metal_backend_present|_rsx_metal_backend_init|_OBJC_CLASS_\\$_ARMetalView)' > m42-runtime-link-symbols.txt || true
+          grep -q _rsx_metal_backend_init m39-metal-symbols.txt
+          echo 'M4.2: actual GPU clear + presentDrawable + waitUntilCompleted route linked in iOS app; requires on-device screenshot.' > m42-status.txt
+          xcrun nm -g ios-probe/Payload/AscensionRecompProbe.app/AscensionRecompProbe | tee m43-probe-linked-symbols.txt
+          grep -q '_ar_probe_rsx_clear_flip' m43-probe-linked-symbols.txt
+          grep -q '_ar_probe_rsx_triangle' m43-probe-linked-symbols.txt
+          grep -q '_rsx_metal_backend_debug_fixed_probe_stage' m43-probe-linked-symbols.txt
+          grep -q '_ar_probe_rsx_dma_triangle' m43-probe-linked-symbols.txt
+          grep -q '_ar_probe_rsx_indexed_quad' m43-probe-linked-symbols.txt
+          grep -q '_ar_probe_rsx_texture' m43-probe-linked-symbols.txt
+          grep -q '_ar_probe_rsx_texture_registers' m43-probe-linked-symbols.txt
+          grep -q '_rsx_metal_backend_debug_sample_texture0' m43-probe-linked-symbols.txt
+          grep -q '_ar_probe_rsx_texture_cache_mutation' m43-probe-linked-symbols.txt
+          grep -q '_ar_probe_cache_replacements' m43-probe-linked-symbols.txt
+          grep -q '_ar_probe_m51_guest_textured_quad' m43-probe-linked-symbols.txt
+          grep -q '_ar_probe_m51_readback_quad' m43-probe-linked-symbols.txt
+          grep -q '_ar_probe_m51_encoded_draws' m43-probe-linked-symbols.txt
+          grep -q '_ar_probe_m51_shader_state' m43-probe-linked-symbols.txt
+          grep -q '_ar_probe_m52_guest_texture_mutation' m43-probe-linked-symbols.txt
+          grep -q '_ar_probe_m53_guest_multipass' m43-probe-linked-symbols.txt
+          grep -q '_ar_probe_m53_surface_views' m43-probe-linked-symbols.txt
+          grep -q '_ar_probe_m54_guest_depth_occlusion' m43-probe-linked-symbols.txt
+          grep -q '_ar_probe_m54_depth_draws' m43-probe-linked-symbols.txt
+          grep -q '_ar_probe_m55_guest_stencil_mask' m43-probe-linked-symbols.txt
+          grep -q '_ar_probe_m55_stencil_draws' m43-probe-linked-symbols.txt
+          grep -q '_ar_probe_m56_guest_stencil_bitmasks' m43-probe-linked-symbols.txt
+          grep -q '_ar_probe_m57_guest_blend_mask' m43-probe-linked-symbols.txt
+          grep -q '_ar_probe_m57_blend_draws' m43-probe-linked-symbols.txt
+          grep -q '_ar_probe_m57_red_mask_draws' m43-probe-linked-symbols.txt
+          grep -q '_ar_probe_m58_guest_alpha_test' m43-probe-linked-symbols.txt
+          grep -q '_ar_probe_m58_alpha_draws' m43-probe-linked-symbols.txt
+          grep -q '_ar_private_elf_inspect' m43-probe-linked-symbols.txt
+          grep -q '_ar_ppu_bootstrap_four' m43-probe-linked-symbols.txt
+          grep -q '_ar_ppu_bootstrap_eight' m43-probe-linked-symbols.txt
+          grep -q '_ar_ppu_bootstrap_sixteen' m43-probe-linked-symbols.txt
+          grep -q '_ar_m70_native_runtime_probe' m43-probe-linked-symbols.txt
+          # The legacy M7.1 entry-point still passes host ABI regressions,
+          # but the linker dead-strips it when UIKit uses the M7.3 entry.
+          grep -q '_ar_m73_private_import_probe' m43-probe-linked-symbols.txt
+          grep -q '_ar_m71_signed_ppu_interpret' m43-probe-linked-symbols.txt
+          grep -q '_ar_run' m43-probe-linked-symbols.txt
+          grep -q '_ar_load_elf_image' m43-probe-linked-symbols.txt
+          grep -q '_ar_sys_initialize_tls' m43-probe-linked-symbols.txt
+          echo 'M6.2 bounded 16-step PPU nested stack + mflr, private guest ELF only on iPhone.' > m62-status.txt
+          echo 'M6.3 private bounded 24-step PPU with strict PC/opcode failure; real title on device only.' > m63-status.txt
+          echo 'M6.4 PowerPC rldicl 0x79040020 zero extends GPR8 to GPR4; 32 bounded guest steps, pending physical iPhone test.' > m64-status.txt
+          echo 'M6.5.3 fixes the UI gate: legacy -995 stw after PPU24 now replays via strict PPU40 guest PT_LOAD overlay. Other errors remain fail-closed. iPhone validation needed.' > m65-status.txt
+          echo 'M6.6 mtctr at real PC 0x669C2C, 38/40 screenshot. PPU48 records CTR and clears stale EA each step; commercial ELF verification only on iPhone.' > m66-status.txt
+          echo 'M6.7 guest r0 register-writer provenance for real -1007 at PC 0x669C30, bctrl CTR=0x39800000; no unsafe branch or ELF upload.' > m67-status.txt
+           echo 'M6.7.2 source r12 traced, bctrl guard unchanged; iPhone test pending.' > m672-status.txt
+           echo 'M6.7.3 safely identifies NID of a private firmware import; no HLE execution; iPhone validation required.' > m673-status.txt
+           echo 'M6.7.4 sys_initialize_tls initialized in isolated guest memory, verified by synthetic host tests.' > m674-status.txt
+           echo 'M6.7.5 sources process-entry r7-r10 from ELF PT_TLS, seeds r12 with PS3 page size and validates authentic guest CRT forwarding to TLS HLE; device result not yet observed.' > m675-status.txt
+           echo 'M6.7.6 adds exact PPC64 mtlr r0 + executable-verified blr, while older PPU48 interfaces preserve original unsupported behaviour.' > m676-status.txt
+           echo 'M7.0 links real iOS ARM64 PPU AOT library into the application; imported ELF stages privately; unknown game functions correctly report UNRESOLVED (no AOT game bytes in IPA).' > m70-status.txt
+           echo 'M7.1 adds a signed, generic PowerPC interpretation fallback in the same native PPU guest VM with exact faults, bounded budget, natural verified HLE; NOT game AOT or boot.' > m71-status.txt
+           echo 'M7.2 adds PowerPC signed/unsigned cmp/cmpl/cmpi/cmpli, CR0-CR7 nibble updates, BC CTR+CR and conditional bclr/bcctr; no AOT false positives.' > m72-status.txt
+           echo 'M7.3 identifies current unknown guest PRX import stub, NID and library after a real failing bctrl; dispatch remains blocked.' > m73-status.txt
+          echo 'M6.1 eight guest PPU steps, stack and branch; user title private; host synthetic only.' > m61-status.txt
+          echo 'M6.0 strict PPU bootstrap: at most 4 imported ELF instructions; no actual game bytes bundled.' > m60-status.txt
+          echo 'M5.9: on-device Files ELF inspection; no game data in CI or IPA.' > m59-status.txt
+          echo 'M5.8.1: zero-alpha GREATER/LESS accepted fragments preserve RGB and alpha 00; screenshot showed exact q0=000000FF and q2=00FF0000 in phase 3. On-device phase 4 and 5 proof pending.' > m58-status.txt
+          echo 'M5.7 native GPU blending/RED mask: on-device proof required.' > m57-status.txt
+          echo 'M5.6: 7 RSX/Metal GPU stencil bitmask passes (0F/F0 writes, FF/0F reads); native phone proof pending.' > m56-status.txt
+          echo 'M5.5.2: fix physical iPhone phase-3 -528 by writing NV4097 0x032C stencil writeMask=0xff. Native GPU validation pending.' > m55-status.txt
+          echo 'M5.4.1: fixed conditional depth enable — Z24S8 LESS must stay on until draw, video still required.' > m54-status.txt
+          echo 'M5.3: 2 RSX GPU guest draws; source A render target reused as TEX0 surface view in pass B; on-device test needed.' > m53-status.txt
+          echo 'M5.2: 3 guest FP TEX0 GPU draws with live PS3 texture address mutation and >=2 hash cache replacements; iPhone proof required.' > m52-status.txt
+          echo 'M5.1: real NV4097 VP o0/o7 + FP TEX0 + cache-bound texture; GPU raster and 4-point readback require ON-DEVICE verification.' > m51-status.txt
+          echo 'M4.10: same PS3 texture address across 3 flips with 2 content hash cache replacements; each GPU sample must match rotated palette.' > m410-status.txt
+          echo 'M4.9 NV4097 texture0 register -> PS3 texture decoder/cache -> bound draw Metal object -> GPU compute sample, two layouts; on-device test pending. Does NOT translate guest FP.' > m49-status.txt
+          echo 'M4.8 synthetic PS3 A8R8G8B8 linear/swizzled decode -> actual Metal RGBA8 texture -> fragment sampling -> GPU 4-way readback and CAMetalLayer. Not guest fragment program support.' > m48-status.txt
+          echo 'M4.7 indexes: actual NV4097 indexed two-triangle mesh from bounded PS3 big-endian u16/u32 buffers; hardware test pending.' > m47-status.txt
+          echo 'M4.6 PS3 memory BE float4 vertex DMA via NV4097_DRAW_ARRAYS, expected magenta center pixel; requires hardware confirmation' > m46-status.txt
+          echo 'Metal fixed pipeline MSL compiled on device; game shaders NOT supported without translator; user test needed' > m45-status.txt
+          echo 'Geometry proof: guest-like NV4097 INLINE_ARRAY -> fixed VS/PS pipeline -> framebuffer raster -> center pixel GPU readback. Requires device testing; not guest game shaders.' > m44-status.txt
+          echo 'M4.3 synthetic RSX NV4097 register writes -> GPU engine clear & flip, readback check. On-device screenshot required.' > m43-status.txt
+      - name: Upload M2 evidence - runtime + synthetic PPU proof
+
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: AscensionRecomp-M7.49-GOWA-6251-AOT-FRSP-AppleARM64
           if-no-files-found: warn
           retention-days: 14
           path: |
