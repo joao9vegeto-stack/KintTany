@@ -88,7 +88,8 @@ static int fault;
 static uint32_t missing,budget,depth;
 int ar_ppc_fallback_attach(const uint8_t*elf,size_t len,uint32_t limit,
                             ar_ppc_fallback_fn evaluate){
- if(!mem||!elf||!evaluate||len<64u||!limit||limit>4096u||depth)
+ if(!mem||!elf||!evaluate||len<64u||!limit||
+    limit>AR_PPC_FALLBACK_MAX_STEPS||depth)
     return AR_BAD_ARGS;
  fb_elf=elf;fb_elf_size=len;fb_cap=limit;fb_eval=evaluate;return AR_OK;
 }

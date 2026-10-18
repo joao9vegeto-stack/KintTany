@@ -18,7 +18,7 @@ class TestM737Folder(unittest.TestCase):
   cls.workflow=(R/".github/workflows/ascension-recomp-m0.yml").read_text()
  def test_folder_picker_is_in_real_game_tab_and_independent_of_elf(self):
   for token in (
-    "Importar pasta do Ascension", "initForOpeningContentTypes:@[UTTypeFolder] asCopy:NO",
+    "Selecionar pasta NPUA80918", "initForOpeningContentTypes:@[UTTypeFolder] asCopy:NO",
     "self.folderPicker=picker;", "controller==self.folderPicker",
     "ARGameFolderImport(chosen,&error)", "@[folderButton,elfButton]",
     "dispatch_get_global_queue(QOS_CLASS_USER_INITIATED,0)"
@@ -44,13 +44,13 @@ class TestM737Folder(unittest.TestCase):
   self.assertIn("case 8:{ /* subfic",self.fallback)
   self.assertIn("case 9:case 73:",self.fallback)
   self.assertIn("case 233:",self.fallback)
-  self.assertIn("ar_ppc_fallback_attach(d,len,16384u",self.bridge)
+  self.assertIn("ar_ppc_fallback_attach(d,len,AR_PPC_FALLBACK_MAX_STEPS",self.bridge)
   self.assertIn("ar_run(&ctx,image.entry_code,32768u)",self.bridge)
   self.assertIn("ios/ARGameFolderStore.m",self.script)
  def test_host_evidence_required_not_decorative(self):
   for token in ("tests/host_m737_gamefolder.m","m737-folder-host",
                 "tests/host_m737_ppc_scale.c","m737-ppu-host",
-                "AscensionRecomp-M7.37-Folder-Import-PPU-Scale"):
+                "AscensionRecomp-M7.38-Loader-38-Folder-UX"):
    self.assertIn(token,self.workflow)
   self.assertIn("0.6.16",self.script)
 

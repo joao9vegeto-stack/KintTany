@@ -493,7 +493,7 @@ extern int ar_probe_rsx_texture_cache_mutation(unsigned swizzled,unsigned int ou
     self.ppuDiagnosticsButton=diagnostics;
     /* M7.37 F0: user-selected game folder independent of guest sys_fs. */
     UIButton *folderButton=[UIButton buttonWithType:UIButtonTypeSystem];
-    [folderButton setTitle:@"Importar pasta do Ascension · arquivos do jogo"
+    [folderButton setTitle:@"Selecionar pasta NPUA80918 · Abrir"
                 forState:UIControlStateNormal];
     [folderButton setTitleColor:UIColor.whiteColor forState:UIControlStateNormal];
     folderButton.titleLabel.font=[UIFont systemFontOfSize:14 weight:UIFontWeightSemibold];
@@ -595,7 +595,7 @@ extern int ar_probe_rsx_texture_cache_mutation(unsigned swizzled,unsigned int ou
                                   "5 toques: TEXTURA por NV4097/cache/Metal\n"
                                   "Sem arquivos do jogo.";
                 self.status.text=@"ASCENSIONRECOMP · NPUA80918\n"
-                                  "M7.37 · Pasta de jogo + runtime PPC escalado\n"
+                                  "M7.38 · Pasta + recuperação execução PPU\n"
                                   "Importe GOWA.ELF para executar o código recompilado.\n"
                                   "Inicialização parcial, ainda sem gameplay.\n"
                                   "Ferramentas RSX estão na aba RSX / Metal.";
@@ -693,7 +693,7 @@ extern int ar_probe_rsx_texture_cache_mutation(unsigned swizzled,unsigned int ou
                      body,self.folderReport]:self.folderReport;
     }
     return [NSString stringWithFormat:
-        @"ASCENSIONRECOMP M7.37 — RELATÓRIO ÚNICO\n"
+        @"ASCENSIONRECOMP M7.38 — RELATÓRIO ÚNICO\n"
          "Status, lote PPC, cobertura ARM64, grafo, TLS/HLE e legados.\n"
          "Somente diagnósticos; NÃO inclui o ELF original.\n"
          "==================================================\n\n%@\n",body];
@@ -714,7 +714,7 @@ extern int ar_probe_rsx_texture_cache_mutation(unsigned swizzled,unsigned int ou
     date.locale=[NSLocale localeWithLocaleIdentifier:@"en_US_POSIX"];
     date.dateFormat=@"yyyyMMdd-HHmmss";
     NSString *name=[NSString stringWithFormat:
-       @"AscensionRecomp-M7.37-NPUA80918-%@.txt",
+       @"AscensionRecomp-M7.38-NPUA80918-%@.txt",
        [date stringFromDate:[NSDate date]]];
     NSURL *docs=[[[NSFileManager defaultManager]
         URLsForDirectory:NSDocumentDirectory inDomains:NSUserDomainMask] firstObject];
@@ -1062,6 +1062,7 @@ extern int ar_probe_rsx_texture_cache_mutation(unsigned swizzled,unsigned int ou
  * A real LV2 sys_fs_open/read has NOT been observed yet. */
 - (void)importGameFolder:(UIButton *)sender {
   (void)sender;
+  self.status.text=@"Arquivos: abra NPUA80918, depois toque no botão azul Abrir no topo. Selecione a pasta, não um arquivo interno.";
   UIDocumentPickerViewController *picker=
     [[UIDocumentPickerViewController alloc]
       initForOpeningContentTypes:@[UTTypeFolder] asCopy:NO];
@@ -1086,13 +1087,13 @@ extern int ar_probe_rsx_texture_cache_mutation(unsigned swizzled,unsigned int ou
     self.folderPicker=nil;
     NSURL *chosen=urls.firstObject;
     if(!chosen)return;
-    self.status.text=@"M7.37 F0: indexando pasta do jogo no iPhone…";
+    self.status.text=@"M7.38 F0: verificando pasta NPUA80918 no iPhone…";
     dispatch_async(dispatch_get_global_queue(QOS_CLASS_USER_INITIATED,0),^{
       NSError *error=nil;
       NSDictionary *manifest=ARGameFolderImport(chosen,&error);
       NSString *relative=manifest[@"probe_relative_path"];
       NSError *readError=nil;
-      NSData *actual=(relative.length>0)?
+      NSData *actual=(manifest && relative.length>0)?
           ARGameFolderReadPrefix(relative,4u,&readError):nil;
       NSString *report=nil;
       if(manifest){
@@ -1100,11 +1101,12 @@ extern int ar_probe_rsx_texture_cache_mutation(unsigned swizzled,unsigned int ou
            @"M7.37 F0 — PASTA DO JOGO IMPORTADA REALMENTE\n"
             "NPUA80918 · arquivos=%@ · bytes=%@\n"
             "Links simbólicos ignorados=%@\n"
-            "Leitura HOST real de arquivo selecionado=%lu byte(s)\n"
+            "Leitura HOST de prefixo=%lu byte(s) · %@\n"
             "Manifesto e bookmark SALVOS SOMENTE NO IPHONE.\n"
             "PS3 cellFsOpen/cellFsRead ainda NÃO executadas.\n",
             manifest[@"file_count"],manifest[@"total_bytes"],
-            manifest[@"symlinks_skipped"],(unsigned long)actual.length];
+            manifest[@"symlinks_skipped"],(unsigned long)actual.length,
+            actual.length?@"OK":(readError.localizedDescription?:@"nenhum arquivo encontrado")];
       }
       dispatch_async(dispatch_get_main_queue(),^{
         if(report){
@@ -1113,9 +1115,17 @@ extern int ar_probe_rsx_texture_cache_mutation(unsigned swizzled,unsigned int ou
                  @"Pasta de jogo selecionada.\n%@",report];
           self.ppuDiagnosticsButton.enabled=YES;
         }else{
+          NSString *detail=error.localizedDescription?:@"sem acesso ao diretório";
+          self.folderReport=[NSString stringWithFormat:
+                @"M7.38 F0 — FALHA IMPORTAÇÃO PASTA\n"
+                 "Erro (%@/%ld): %@\n"
+                 "Selecione NPUA80918 e toque Abrir (azul) no topo.\n"
+                 "Nenhum arquivo comercial foi enviado.\n",
+                 error.domain?:@"sem domínio",(long)error.code,detail];
           self.status.text=[NSString stringWithFormat:
-                 @"Importação da pasta falhou: %@",error.localizedDescription ?:
-                   @"sem acesso ao diretório"];
+                 @"Importação da pasta falhou: %@\n"
+                  "Tente selecionar NPUA80918 e toque Abrir.",detail];
+          self.ppuDiagnosticsButton.enabled=YES;
         }
       });
     });
@@ -1596,7 +1606,7 @@ extern int ar_probe_rsx_texture_cache_mutation(unsigned swizzled,unsigned int ou
                         ? frontierReport : nil;
     self.ppuBatchButton.enabled=(self.ppuBatchReport.length>0);
     self.ppuSummary=[NSString stringWithFormat:
-       @"ASCENSIONRECOMP M7.37 · NPUA80918\n"
+       @"ASCENSIONRECOMP M7.38 · NPUA80918\n"
         "AOT ARM64 + FALLBACK PPC EXPERIMENTAL\n"
         "Entradas AOT vinculadas: %u\n"
         "ELF: %@ · entrada 0x%08X\n"

@@ -32,9 +32,9 @@ class HybridM720Tests(unittest.TestCase):
  def test_sha_guard_before_fallback_and_isa_failure_closed(self):
   i=self.ios
   self.assertLess(i.index("ar_private_aot_install_sha256(digest,sizeof(digest))"),
-                  i.index("ar_ppc_fallback_attach(d,len,16384u"))
+                  i.index("ar_ppc_fallback_attach(d,len,AR_PPC_FALLBACK_MAX_STEPS"))
   self.assertLess(i.index("ar_bulk2_install_sha256(digest,sizeof(digest))"),
-                  i.index("ar_ppc_fallback_attach(d,len,16384u"))
+                  i.index("ar_ppc_fallback_attach(d,len,AR_PPC_FALLBACK_MAX_STEPS"))
   self.assertIn("ar_ppc_fallback_step",i)
   self.assertIn("ar_m712_exec_window(elf,elf_len,pc,window)",self.fallback)
   self.assertIn("if(ar_read32(pc)!=w)",self.fallback)
@@ -46,7 +46,7 @@ class HybridM720Tests(unittest.TestCase):
 
  def test_ui_explicitly_hybrid_txt_and_no_rsx_game_claim(self):
   t=self.ui
-  self.assertIn("ASCENSIONRECOMP M7.37",t)
+  self.assertIn("ASCENSIONRECOMP M7.38",t)
   self.assertIn("M7.20 — DESPACHO HÍBRIDO EXPERIMENTAL",t)
   self.assertIn("measured.fallback_steps",t)
   self.assertIn("measured.fallback_unsupported_word",t)
