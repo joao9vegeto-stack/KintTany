@@ -426,7 +426,7 @@ extern int ar_probe_rsx_texture_cache_mutation(unsigned swizzled,unsigned int ou
     [controller.view addSubview:panel];
     UILabel *header=[UILabel new];
     header.translatesAutoresizingMaskIntoConstraints=NO;
-    header.text=@"ASCENSIONRECOMP   ·   M7.11";
+    header.text=@"ASCENSIONRECOMP   ·   M7.52";
     header.textColor=[UIColor colorWithRed:0.73 green:0.87 blue:1 alpha:1];
     header.font=[UIFont systemFontOfSize:12 weight:UIFontWeightBold];
     header.textAlignment=NSTextAlignmentCenter;
@@ -726,7 +726,7 @@ extern int ar_probe_rsx_texture_cache_mutation(unsigned swizzled,unsigned int ou
  * + measured AOT dispatches + HLE + M6 legacy diagnostics; don't duplicate
  * any section when exporting. No ELF or commercial assets leave the phone. */
 - (NSString *)arUnifiedPpuText {
-  /* M7.50-v2: only this imported ELF run enters current counters.
+  /* M7.52-v3: freshly imported ELF run, measured guest counters only.
    * Do not derive device evidence from offline symbols or historical TXT. */
   NSDictionary *e=self.m750Run;
   NSString *(^val)(NSString *)=^NSString*(NSString *k){
@@ -739,22 +739,29 @@ extern int ar_probe_rsx_texture_cache_mutation(unsigned swizzled,unsigned int ou
   NSString *last=(e&&[e[@"last_aot"] unsignedIntValue])?
      hexval(@"last_aot"):@"NÃO MEDIDO";
   NSString *fsOpen=([e[@"fs_opens"] unsignedIntValue]>0u)?
-    [NSString stringWithFormat:@"COMPROVADO · aberturas=%@ · FD=%@ · caminho=%@",
-      val(@"fs_opens"),val(@"fs_fd"),e[@"fs_path"]?:@"NÃO MEDIDO"]:
-    @"não comprovado (nenhuma abertura real do guest)";
+    [NSString stringWithFormat:@"COMPROVADO no guest · opens=%@/%@ · FD=%@ · caminho=%@",
+      val(@"fs_opens"),val(@"fs_open_calls"),val(@"fs_fd"),
+      e[@"fs_path"]?:@"NÃO MEDIDO"]:
+      ([e[@"fs_open_calls"] unsignedIntValue]>0u)?
+    [NSString stringWithFormat:@"tentativa guest=%@, sem FD válido · último erro=0x%08X",
+      val(@"fs_open_calls"),[e[@"fs_last_error"] unsignedIntValue]]:
+    @"não comprovado (nenhuma chamada open originada no guest)";
   NSString *fsRead=([e[@"fs_bytes"] unsignedLongLongValue]>0u)?
-    [NSString stringWithFormat:@"COMPROVADO · leituras=%@ · bytes=%@",
-      val(@"fs_reads"),val(@"fs_bytes")]:
-    @"não comprovado (nenhuma leitura positiva do guest)";
+    [NSString stringWithFormat:@"COMPROVADO no guest · leituras=%@/%@ · bytes=%@",
+      val(@"fs_reads"),val(@"fs_read_calls"),val(@"fs_bytes")]:
+      ([e[@"fs_read_calls"] unsignedIntValue]>0u)?
+    [NSString stringWithFormat:@"tentativa guest=%@, sem leitura positiva · erro=0x%08X",
+       val(@"fs_read_calls"),[e[@"fs_last_error"] unsignedIntValue]]:
+    @"não comprovado (nenhuma chamada read originada no guest)";
   NSString *origin=e?@"execução real no iPhone":@"NÃO MEDIDO";
   NSString *elf=e?@"comprovado":@"não comprovado";
   NSString *native=e&&[e[@"dispatches"] unsignedIntValue]?
     @"comprovado":@"não comprovado";
   NSMutableString *report=[NSMutableString stringWithFormat:
-    @"ASCENSIONRECOMP — ESQUEMA M7.50-v2\n"
+    @"ASCENSIONRECOMP — ESQUEMA M7.52-v3\n"
      "EXECUÇÃO ATUAL\n"
      "Branch=%s | Commit=%s | Build Actions=%s | Workflow ID=%s\n"
-     "App=M7.50 (0.6.22/90) | Runtime legado=M7.44 | Relatório=v2\n"
+     "App=M7.52 (binário 0.6.22/90 legado) | Runtime legado=M7.44 | Relatório=v3\n"
      "Tipo teste=%@ | Momento=%@\n"
      "ELF carregado=%@ | origem=%@\n"
      "AOT vinculadas=%@ entradas | origem=%@\n"
@@ -770,7 +777,7 @@ extern int ar_probe_rsx_texture_cache_mutation(unsigned swizzled,unsigned int ou
      "QUADRO DE MARCOS\n"
      "ELF carregado: %@\n"
      "AOT executado no caminho atual: %@\n"
-     "USRDIR detectado: %@\n"
+     "USRDIR detectado pelo HOST (NÃO guest): %@\n"
      "cellFsOpen: %@\n"
      "cellFsRead com bytes positivos: %@\n"
      "PSARC aberto/analisado no guest: não comprovado\n"
@@ -784,14 +791,15 @@ extern int ar_probe_rsx_texture_cache_mutation(unsigned swizzled,unsigned int ou
      val(@"unique"),origin,val(@"dispatches"),origin,
      val(@"fallback"),origin,val(@"limit"),origin,
      val(@"rc"),origin,hexval(@"stop"),hexval(@"opcode"),origin,
-     last,origin,elf,native,fsOpen,fsRead,
-     self.m750HostObservation?:@"não comprovado"];
+     last,origin,elf,native,
+     self.m750HostObservation?:@"não comprovado",
+     fsOpen,fsRead];
   [report appendFormat:
     @"COMPARAÇÃO COM A BUILD ANTERIOR\n"
-     "M7.49 (log físico 20261018-143156): AOT=7690 entradas;"
-     " distintas=229; despachos=2363; PPC=11113; limite=16384;"
-     " parada=0x003B1D78; opcode=0xEC21F828; último AOT=0x003B1D5C.\n"
-     "M7.50 atual: AOT=%@; distintas=%@; despachos=%@; PPC=%@;"
+     "M7.51 (teste físico 20261018-165912): AOT=7693 entradas;"
+     " distintas=232; despachos=2366; PPC=11364; limite=16384;"
+     " parada=0x003B0608; opcode=0x105FF82C; último AOT=0x003B0604.\n"
+     "M7.52 atual: AOT=%@; distintas=%@; despachos=%@; PPC=%@;"
      " limite=%@; parada=%@; opcode=%@; último AOT=%@.\n"
      "Dados ausentes=NÃO MEDIDO, não utilizar baseline para preencher.\n\n",
      val(@"aot"),val(@"unique"),val(@"dispatches"),val(@"fallback"),
@@ -828,7 +836,7 @@ extern int ar_probe_rsx_texture_cache_mutation(unsigned swizzled,unsigned int ou
     date.locale=[NSLocale localeWithLocaleIdentifier:@"en_US_POSIX"];
     date.dateFormat=@"yyyyMMdd-HHmmss";
     NSString *name=[NSString stringWithFormat:
-       @"AscensionRecomp-M7.50-NPUA80918-%@.txt",
+       @"AscensionRecomp-M7.52-NPUA80918-%@.txt",
        [date stringFromDate:[NSDate date]]];
     NSURL *docs=[[[NSFileManager defaultManager]
         URLsForDirectory:NSDocumentDirectory inDomains:NSUserDomainMask] firstObject];
@@ -1666,7 +1674,10 @@ extern int ar_probe_rsx_texture_cache_mutation(unsigned swizzled,unsigned int ou
           @"stop":@(native[7]),
           @"opcode":@(measured.fallback_unsupported_word),
           @"last_aot":@(lastAot),
+          @"fs_open_calls":@(fsMeasured.open_calls),
           @"fs_opens":@(fsMeasured.open_ok),
+          @"fs_read_calls":@(fsMeasured.read_calls),
+          @"fs_last_error":@(fsMeasured.last_error),
           @"fs_reads":@(fsMeasured.read_ok),
           @"fs_bytes":@(fsMeasured.bytes_read),
           @"fs_fd":@(fsMeasured.last_fd),
@@ -1852,7 +1863,7 @@ extern int ar_probe_rsx_texture_cache_mutation(unsigned swizzled,unsigned int ou
                         ? frontierReport : nil;
     self.ppuBatchButton.enabled=(self.ppuBatchReport.length>0);
     self.ppuSummary=[NSString stringWithFormat:
-       @"ASCENSIONRECOMP M7.44 · NPUA80918\n"
+       @"ASCENSIONRECOMP M7.52 · NPUA80918\n"
         "AOT ARM64 + FALLBACK PPC EXPERIMENTAL\n"
         "Entradas AOT vinculadas: %u\n"
         "ELF: %@ · entrada 0x%08X\n"

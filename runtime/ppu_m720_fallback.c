@@ -132,6 +132,12 @@ int ar_ppc_fallback_step(ppu_context*c,const uint8_t*elf,size_t elf_len,
      ar_vmx_splat_imm(c,d,a,xo==780u?1u:xo==844u?2u:4u);
      c->cia=pc+4u;return AR_TAIL;
    }
+   if((xo&0x43fu)==44u){ /* VSLDOI VD,VA,VB,SHB: VX bits 6-9 shift */
+     const unsigned shift=(w>>6)&15u;
+     const int rc=ar_vmx_vsldoi(c,d,a,b,shift);
+     if(rc!=AR_OK)return rc;
+     c->cia=pc+4u;return AR_TAIL;
+   }
    if(xo==74u){ /* vsubfp VD,VA,VB: genuine M7.50 failure */
      const int rc=ar_vmx_vsubfp(c,d,a,b);
      if(rc!=AR_OK)return rc;

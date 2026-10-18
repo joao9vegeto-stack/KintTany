@@ -1,4 +1,4 @@
-name: AscensionRecomp M7.51 - VMX vsubfp and read-only guest filesystem
+name: AscensionRecomp M7.52 - owner VMX vsldoi and accurate guest file milestones
 
 on:
   push:
@@ -591,6 +591,20 @@ jobs:
             -c runtime/ppu_m751_vsubfp.c -o m751-vsubfp-arm64.o
           xcrun nm -g m751-guest-fs-arm64.o | grep -Fq '_ar_fs_guest_read'
           xcrun nm -g m751-vsubfp-arm64.o | grep -Fq '_ar_m751_register_vsubfp'
+      - name: M7.52 execute original PPC VSLDOI owner AOT tests
+        run: |
+          set -euo pipefail
+          clang -std=c11 -O2 -Wall -Wextra -Werror -fsanitize=undefined \
+            -I upstream/runtime/ppu -I runtime \
+            runtime/ppu_m752_vsldoi.c tests/host_m752_vsldoi.c \
+            -o m752-vsldoi-host
+          ./m752-vsldoi-host 2>&1 | tee m752-vsldoi-host.log
+          grep -Fq 'M7.52 owner VSLDOI:' m752-vsldoi-host.log
+          sdk="$(xcrun --sdk iphoneos --show-sdk-path)"
+          xcrun --sdk iphoneos clang -target arm64-apple-ios17.0 -isysroot "$sdk" \
+            -std=c11 -O2 -Wall -Wextra -Werror -I upstream/runtime/ppu -I runtime \
+            -c runtime/ppu_m752_vsldoi.c -o m752-vsldoi-arm64.o
+          xcrun nm -g m752-vsldoi-arm64.o | grep -Fq '_ar_m752_register_vsldoi'
       - name: M5.0 fetch pinned open source shader compiler sources
         run: |
           set -euo pipefail
@@ -1307,6 +1321,7 @@ jobs:
           grep -Eq ' [Tt] _ar_m751_register_vsubfp$' m78-owner-aot-linked-symbols.txt
           grep -Eq ' [Tt] _ar_fs_guest_open$' m78-owner-aot-linked-symbols.txt
           grep -Eq ' [Tt] _ar_fs_guest_read$' m78-owner-aot-linked-symbols.txt
+          grep -Eq ' [Tt] _ar_m752_register_vsldoi$' m78-owner-aot-linked-symbols.txt
           grep -Eq ' [Tt] _ar_m734_register_block$' m78-owner-aot-linked-symbols.txt
           grep -Eq ' [Tt] _ar_m734_register_batch$' m78-owner-aot-linked-symbols.txt
           grep -Eq ' [Tt] _ar_lv2_bind_bootstrap_syscalls$' m78-owner-aot-linked-symbols.txt
@@ -1397,7 +1412,7 @@ jobs:
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: AscensionRecomp-M7.51-GOWA-6251-AOT-VMX-GUESTFS-AppleARM64
+          name: AscensionRecomp-M7.52-GOWA-6251-AOT-VSLDOI-GUESTFS-AppleARM64
           if-no-files-found: warn
           retention-days: 14
           path: |
@@ -1631,6 +1646,8 @@ jobs:
             m751-vsubfp-host.log
             m751-guest-fs-arm64.o
             m751-vsubfp-arm64.o
+            m752-vsldoi-host.log
+            m752-vsldoi-arm64.o
             m749-frsp-host.log
             m749-frsp-arm64.o
             m748-native-host.log

@@ -156,6 +156,10 @@ xcrun --sdk iphoneos clang -target arm64-apple-ios17.0 -isysroot "$SDK" \
 xcrun --sdk iphoneos clang -target arm64-apple-ios17.0 -isysroot "$SDK" \
     -std=c11 -O2 -Wall -Wextra -Werror -I upstream/runtime/ppu -I runtime \
     -c runtime/ppu_m751_vsubfp.c -o ios-probe/ppu_m751_vsubfp.o
+# M7.52: next genuine signed PPC VSLDOI executed as ARM64, not host probe.
+xcrun --sdk iphoneos clang -target arm64-apple-ios17.0 -isysroot "$SDK" \
+    -std=c11 -O2 -Wall -Wextra -Werror -I upstream/runtime/ppu -I runtime \
+    -c runtime/ppu_m752_vsldoi.c -o ios-probe/ppu_m752_vsldoi.o
 xcrun --sdk iphoneos clang -target arm64-apple-ios17.0 -isysroot "$SDK" \
     -std=c11 -O2 -Wall -Wextra -Werror -I upstream/runtime/ppu -I runtime \
     -c runtime/ppu_guest_fs.c -o ios-probe/ppu_guest_fs.o
@@ -280,7 +284,7 @@ xcrun --sdk iphoneos clang++ -target arm64-apple-ios17.0 \
     ios-probe/ppu_m748_native_vcfsx.o \
     ios-probe/ppu_m749_native_frsp.o \
     ios-probe/ppu_m750_native_path.o \
-    ios-probe/ppu_m751_vsubfp.o ios-probe/ppu_guest_fs.o \
+    ios-probe/ppu_m751_vsubfp.o ios-probe/ppu_m752_vsldoi.o ios-probe/ppu_guest_fs.o \
     ${GOWA2_OBJECTS[@]+"${GOWA2_OBJECTS[@]}"} \
     ios-probe/ppu_m717_graph.o \
     ios-probe/ppu_m720_fallback.o \
@@ -307,6 +311,8 @@ grep -Fq '_ar_ppu_timebase_ticks' m78-owner-aot-linked-symbols.txt
 grep -Eq ' [Tt] _ar_lv2_bind_bootstrap_syscalls$' m78-owner-aot-linked-symbols.txt
 grep -Eq ' [Tt] _ar_lv2_timezone$' m78-owner-aot-linked-symbols.txt
 grep -Eq ' [Tt] _ar_m751_register_vsubfp$' m78-owner-aot-linked-symbols.txt
+grep -Eq ' [Tt] _ar_m752_register_vsldoi$' m78-owner-aot-linked-symbols.txt
+grep -Eq ' [Tt] _ar_m752_native_003b0608$' m78-owner-aot-linked-symbols.txt
 grep -Eq ' [Tt] _ar_m751_native_003b0604$' m78-owner-aot-linked-symbols.txt
 grep -Eq ' [Tt] _ar_fs_guest_open$' m78-owner-aot-linked-symbols.txt
 grep -Eq ' [Tt] _ar_fs_guest_read$' m78-owner-aot-linked-symbols.txt
@@ -407,6 +413,7 @@ echo 'M7.48: 31 original owner PPC native VMX instructions at 0x003DDF20 and 18-
 echo 'M7.49: UI local file detection button now ARRANGED/visible. FRSP original 0x003B1D5C statically compiled to ARM64 and registered after executable ELF/VM authentication+whole SHA; scalar FRSP supported in generic lifter and fallback. iPhone physical test pending.' >> m78-aot-status.txt
 echo 'M7.50: genuine original fsubs/stfs/12STVX and BDNZ 24 PPC across 2 native AOT entries, ELF+VM authenticated. Reports distinguish build and legacy runtime, no guest cellFs claimed without execution.' >> m78-aot-status.txt
 echo 'M7.51: native owner vsubfp 0x003B0604 plus guest-only read-only sys_fs open/read/close, guarded by local manifest; iPhone proof pending.' >> m78-aot-status.txt
+echo 'M7.52: VMX VSLDOI at 0x003B0608 owner ELF/PT_LOAD X+VM authenticated; registered ARM64 entry. Correct guest vs host evidence and M7.51 physical baseline, no filesystem success assumed.' >> m78-aot-status.txt
 (cd ios-probe && zip -q -r ../AscensionRecompProbe-0.6.22-unsigned.ipa Payload)
 test -s AscensionRecompProbe-0.6.22-unsigned.ipa
 shasum -a 256 AscensionRecompProbe-0.6.22-unsigned.ipa > m41-ipa-sha256.txt

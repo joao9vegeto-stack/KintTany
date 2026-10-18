@@ -137,4 +137,19 @@ static inline int ar_vmx_vsubfp(ppu_context *c,unsigned vd,
  return AR_OK;
 }
 
+/* M7.52: VSLDOI packs VA|VB big-endian 16-byte vectors then selects
+ * 16 bytes starting at SHB (0..15). Source snapshot handles VD==VA/VB.
+ * The operation does not change scalar FPSCR, CR, XER or GPRs. */
+static inline int ar_vmx_vsldoi(ppu_context*c,unsigned vd,
+                               unsigned va,unsigned vb,unsigned shb){
+ if(!c||vd>=32u||va>=32u||vb>=32u||shb>=16u)
+   return AR_PPC_UNSUPPORTED;
+ uint8_t both[32];
+ for(unsigned i=0;i<16u;i++){
+   both[i]=ar_vmx_byte(c,va,i);
+   both[i+16u]=ar_vmx_byte(c,vb,i);
+ }
+ for(unsigned i=0;i<16u;i++)ar_vmx_setbyte(c,vd,i,both[i+shb]);
+ return AR_OK;
+}
 #endif
