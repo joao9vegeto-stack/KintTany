@@ -26,7 +26,7 @@ int ar_m712_exec_window(const uint8_t*e,size_t len,uint32_t pc,uint32_t out[6]){
  out[4]=n;out[5]=5u;return AR_OK;
 }
 uint32_t ar_read32(uint64_t pc){
- if(pc<0x003eef0cu||pc>0x003eef40u||((pc-0x003eef0cu)&3u))return 0;
+ if(pc<0x003eef0cu||pc>0x003eef44u||((pc-0x003eef0cu)&3u))return 0;
  return vmwords[(pc-0x003eef0cu)/4u];
 }
 int ar_last_error(void){return AR_OK;}
@@ -44,11 +44,11 @@ static void putbits(double*p,uint64_t v){memcpy(p,&v,8);}
 int main(void){
  uint8_t fake[64]={0};memcpy(elfwords,orig,sizeof(orig));memcpy(vmwords,orig,sizeof(orig));
  if(ar_m747_register_owner(NULL,64)!=AR_BAD_ARGS)return 1;
- elfwords[4]^=1u;
+ elfwords[5]^=1u;
  if(ar_m747_register_owner(fake,64)!=AR_BAD_ARGS||registered)return 2;
- elfwords[4]^=1u;vmwords[14]^=1u;
+ elfwords[5]^=1u;vmwords[14]^=1u;
  if(ar_m747_register_owner(fake,64)!=AR_BAD_ARGS||registered)return 3;
- vmwords[13]^=1u;
+ vmwords[14]^=1u;
  if(ar_m747_register_owner(fake,64)!=AR_OK||registered!=2)return 4;
  static const uint64_t bits[]={0x7ff800000000cafeULL,0x8000000000000000ULL,
                                   0x7ff0000000000000ULL,0x3ff0000000000000ULL};
