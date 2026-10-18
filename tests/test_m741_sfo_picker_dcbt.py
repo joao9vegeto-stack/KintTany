@@ -24,6 +24,6 @@ class M741(unittest.TestCase):
   self.assertIn("c->cia=pc+4u;",self.fallback)
   self.assertIn("tests/host_m741_ppc_dcbt.c",self.workflow)
  def test_build(self):
-  self.assertIn("<string>89</string>",(R/"ios/Probe-Info.plist").read_text())
-  self.assertIn("AscensionRecomp-M7.49-GOWA-6251-AOT-FRSP-AppleARM64",self.workflow)
+  self.assertIn("<string>90</string>",(R/"ios/Probe-Info.plist").read_text())
+  self.assertIn("AscensionRecomp-M7.50-GOWA-6251-AOT-FSUBS-AppleARM64",self.workflow)
 if __name__=="__main__":unittest.main()

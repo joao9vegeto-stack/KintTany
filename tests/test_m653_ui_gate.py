@@ -28,7 +28,7 @@ class GuestStackGate(unittest.TestCase):
    self.assertIn(text,HOST)
   self.assertIn("m65_store32(&guest,ss,used,va,v)",C)
  def test_version(self):
-  self.assertIn("<string>0.6.21</string>",(R/"ios/Probe-Info.plist").read_text())
-  self.assertIn("0.6.21-unsigned.ipa",
+  self.assertIn("<string>0.6.22</string>",(R/"ios/Probe-Info.plist").read_text())
+  self.assertIn("0.6.22-unsigned.ipa",
      (R/".github/workflows/ascension-recomp-m0.yml").read_text())
 if __name__=="__main__":unittest.main()

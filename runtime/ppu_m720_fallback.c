@@ -96,6 +96,14 @@ int ar_ppc_fallback_step(ppu_context*c,const uint8_t*elf,size_t elf_len,
     ar_ppc_note_fp(pc,w);
     c->cia=pc+4u;return AR_TAIL;
  }
+ case 59:{ /* fsubs PPC single-result floating subtraction */
+    const unsigned xo=(w>>1)&31u;
+    if((w&1u)||xo!=20u)return AR_PPC_UNSUPPORTED;
+    const int rc=ar_fp_fsubs(c,d,a,b);
+    if(rc!=AR_OK)return rc;
+    ar_ppc_note_fp(pc,w);
+    c->cia=pc+4u;return AR_TAIL;
+ }
  case 63:{ /* fcfid and fdiv: PPC64 FP register bits / FPSCR */
     const unsigned xo=(w>>1)&1023u;
     if(w&1u)return AR_PPC_UNSUPPORTED; /* CR1 dot not yet implemented */

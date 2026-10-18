@@ -38,6 +38,6 @@ class GuestMemory(unittest.TestCase):
    self.assertIn(t,U)
  def test_ci(self):
   for t in ("m65-host.log","m65-status.txt",
-    "tests/host_m65_guestmem.c","0.6.21-unsigned.ipa"):
+    "tests/host_m65_guestmem.c","0.6.22-unsigned.ipa"):
    self.assertIn(t,W)
 if __name__=="__main__":unittest.main()

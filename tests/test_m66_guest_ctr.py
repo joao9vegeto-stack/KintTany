@@ -46,6 +46,6 @@ class PowerPCCTR(unittest.TestCase):
     "M6.6 PPU48 guarded mtctr and bctr PASS"):
    self.assertIn(token,H)
   for token in ("m66-host.log","m66-status.txt",
-                "tests/host_m66_ctr.c","0.6.21-unsigned.ipa"):
+                "tests/host_m66_ctr.c","0.6.22-unsigned.ipa"):
    self.assertIn(token,W)
 if __name__=="__main__":unittest.main()

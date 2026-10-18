@@ -1,4 +1,4 @@
-name: AscensionRecomp M7.49 - visible local assets detection and native FRSP
+name: AscensionRecomp M7.50 - native 24 PPC FPU VMX CTR and corrected report
 
 on:
   push:
@@ -553,6 +553,20 @@ jobs:
             -std=c11 -O2 -Wall -Wextra -Werror -I upstream/runtime/ppu -I runtime \
             -c runtime/ppu_m749_native_frsp.c -o m749-frsp-arm64.o
           xcrun nm -g m749-frsp-arm64.o | grep -Fq '_ar_m749_register_frsp'
+      - name: M7.50 original 24 PPC signed VMX FPU CTR AOT and Apple ARM64
+        run: |
+          set -euo pipefail
+          clang -std=c11 -O2 -Wall -Wextra -Werror -fsanitize=undefined \
+            -I upstream/runtime/ppu -I runtime \
+            runtime/ppu_m750_native_path.c tests/host_m750_native_path.c \
+            -lm -o m750-native-host
+          ./m750-native-host 2>&1 | tee m750-native-host.log
+          grep -Fq 'M7.50 original 24-PPC AOT' m750-native-host.log
+          sdk="$(xcrun --sdk iphoneos --show-sdk-path)"
+          xcrun --sdk iphoneos clang -target arm64-apple-ios17.0 -isysroot "$sdk" \
+            -std=c11 -O2 -Wall -Wextra -Werror -I upstream/runtime/ppu -I runtime \
+            -c runtime/ppu_m750_native_path.c -o m750-native-arm64.o
+          xcrun nm -g m750-native-arm64.o | grep -Fq '_ar_m750_register_owner'
       - name: M5.0 fetch pinned open source shader compiler sources
         run: |
           set -euo pipefail
@@ -1257,6 +1271,7 @@ jobs:
           grep -Fq 'M7.47: FMR raw-bit preservation' m78-aot-status.txt
           grep -Fq 'M7.48: 31 original owner PPC native VMX instructions' m78-aot-status.txt
           grep -Fq 'M7.49: UI local file detection button' m78-aot-status.txt
+          grep -Fq 'M7.50: genuine original fsubs/stfs/12STVX' m78-aot-status.txt
           grep -Eq ' [Tt] _ar_m736_register_owner$' m78-owner-aot-linked-symbols.txt
           grep -Eq ' [Tt] _ar_m744_register_owner$' m78-owner-aot-linked-symbols.txt
           grep -Eq ' [Tt] _ar_m745_register_owner$' m78-owner-aot-linked-symbols.txt
@@ -1264,14 +1279,15 @@ jobs:
           grep -Eq ' [Tt] _ar_m747_register_owner$' m78-owner-aot-linked-symbols.txt
           grep -Eq ' [Tt] _ar_m748_register_owner$' m78-owner-aot-linked-symbols.txt
           grep -Eq ' [Tt] _ar_m749_register_frsp$' m78-owner-aot-linked-symbols.txt
+          grep -Eq ' [Tt] _ar_m750_register_owner$' m78-owner-aot-linked-symbols.txt
           grep -Eq ' [Tt] _ar_m734_register_block$' m78-owner-aot-linked-symbols.txt
           grep -Eq ' [Tt] _ar_m734_register_batch$' m78-owner-aot-linked-symbols.txt
           grep -Eq ' [Tt] _ar_lv2_bind_bootstrap_syscalls$' m78-owner-aot-linked-symbols.txt
           grep -Eq ' [Tt] _ar_lv2_timezone$' m78-owner-aot-linked-symbols.txt
           echo "M7.43: 6251 generated GOWA ELF C-AOT functions compiled and linked in final Apple ARM64 Mach-O (9 modules + SHA installer). Number actually executed and new PC pending physical iPhone report; no guest files/RSX demonstrated." > m78-actions-status.txt
-          test -s AscensionRecompProbe-0.6.21-unsigned.ipa
-          /usr/libexec/PlistBuddy -c 'Print CFBundleShortVersionString' ios-probe/Payload/AscensionRecompProbe.app/Info.plist | grep -Fx 0.6.21
-          /usr/bin/unzip -t AscensionRecompProbe-0.6.21-unsigned.ipa | tee m42-ipa-integrity.log
+          test -s AscensionRecompProbe-0.6.22-unsigned.ipa
+          /usr/libexec/PlistBuddy -c 'Print CFBundleShortVersionString' ios-probe/Payload/AscensionRecompProbe.app/Info.plist | grep -Fx 0.6.22
+          /usr/bin/unzip -t AscensionRecompProbe-0.6.22-unsigned.ipa | tee m42-ipa-integrity.log
           xcrun nm -g ios-probe/Payload/AscensionRecompProbe.app/AscensionRecompProbe | grep -E '(_rsx_metal_backend_present|_rsx_metal_backend_init|_OBJC_CLASS_\\$_ARMetalView)' > m42-runtime-link-symbols.txt || true
           grep -q _rsx_metal_backend_init m39-metal-symbols.txt
           echo 'M4.2: actual GPU clear + presentDrawable + waitUntilCompleted route linked in iOS app; requires on-device screenshot.' > m42-status.txt
@@ -1354,7 +1370,7 @@ jobs:
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: AscensionRecomp-M7.49-GOWA-6251-AOT-FRSP-AppleARM64
+          name: AscensionRecomp-M7.50-GOWA-6251-AOT-FSUBS-AppleARM64
           if-no-files-found: warn
           retention-days: 14
           path: |
@@ -1582,6 +1598,8 @@ jobs:
             m740-rpcs3-inplace-host.log
             m741-dcbt-host.log
             m742-logical-host.log
+            m750-native-host.log
+            m750-native-arm64.o
             m749-frsp-host.log
             m749-frsp-arm64.o
             m748-native-host.log
@@ -1614,7 +1632,7 @@ jobs:
             m76-aot-tail-host.log
             m76-status.txt
             m75-aot-boot-host.log
-            AscensionRecompProbe-0.6.21-unsigned.ipa
+            AscensionRecompProbe-0.6.22-unsigned.ipa
             m40-ios-layer-view.o
             build-ios-runtime/libps3recomp_runtime.a
             ios-ppu-core/libAscensionPPUCore-ios-arm64.a

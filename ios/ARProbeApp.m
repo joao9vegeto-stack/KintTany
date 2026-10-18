@@ -5,6 +5,7 @@
 #import "ARGameFolderStore.h"
 #import <UniformTypeIdentifiers/UniformTypeIdentifiers.h>
 #import <CommonCrypto/CommonDigest.h>
+#include "../ios-probe/ARBuildProvenance.h"
 #include "../runtime/ppu_bridge.h"
 #include "../runtime/ppu_m717_graph.h"
 extern void ar_m717_last_aot_trace(ar_aot_trace *);
@@ -91,6 +92,8 @@ extern int ar_probe_rsx_texture_cache_mutation(unsigned swizzled,unsigned int ou
 @property(nonatomic,copy) NSString *ppuReport;
 @property(nonatomic,copy) NSString *ppuSummary;
 @property(nonatomic,copy) NSString *folderReport;
+@property(nonatomic,strong) NSDictionary<NSString*,id> *m750Run;
+@property(nonatomic,copy) NSString *m750HostObservation;
 @property(nonatomic,strong) UIDocumentPickerViewController *folderPicker;
 @property(nonatomic,strong) UIDocumentPickerViewController *rpcMarkerPicker;
 @property(nonatomic,strong) UIButton *ppuAdvancedButton;
@@ -721,17 +724,83 @@ extern int ar_probe_rsx_texture_cache_mutation(unsigned swizzled,unsigned int ou
  * + measured AOT dispatches + HLE + M6 legacy diagnostics; don't duplicate
  * any section when exporting. No ELF or commercial assets leave the phone. */
 - (NSString *)arUnifiedPpuText {
-    NSString *body=self.ppuReport.length ? self.ppuReport : self.ppuSummary;
-    if(!body.length && !self.folderReport.length)return nil;
-    if(self.folderReport.length){
-        body=body.length?[NSString stringWithFormat:@"%@\n\n%@",
-                     body,self.folderReport]:self.folderReport;
-    }
-    return [NSString stringWithFormat:
-        @"ASCENSIONRECOMP M7.49 — RELATÓRIO ÚNICO\n"
-         "Status, lote PPC, cobertura ARM64, grafo, TLS/HLE e legados.\n"
-         "Somente diagnósticos; NÃO inclui o ELF original.\n"
-         "==================================================\n\n%@\n",body];
+  /* M7.50-v2: only this imported ELF run enters current counters.
+   * Do not derive device evidence from offline symbols or historical TXT. */
+  NSDictionary *e=self.m750Run;
+  NSString *(^val)(NSString *)=^NSString*(NSString *k){
+     return e[k]?[e[k] description]:@"NÃO MEDIDO";
+  };
+  NSString *(^hexval)(NSString *)=^NSString*(NSString *k){
+     return e[k]?[NSString stringWithFormat:@"0x%08X",
+       [e[k] unsignedIntValue]]:@"NÃO MEDIDO";
+  };
+  NSString *last=(e&&[e[@"last_aot"] unsignedIntValue])?
+     hexval(@"last_aot"):@"NÃO MEDIDO";
+  NSString *origin=e?@"execução real no iPhone":@"NÃO MEDIDO";
+  NSString *elf=e?@"comprovado":@"não comprovado";
+  NSString *native=e&&[e[@"dispatches"] unsignedIntValue]?
+    @"comprovado":@"não comprovado";
+  NSMutableString *report=[NSMutableString stringWithFormat:
+    @"ASCENSIONRECOMP — ESQUEMA M7.50-v2\n"
+     "EXECUÇÃO ATUAL\n"
+     "Branch=%s | Commit=%s | Build Actions=%s | Workflow ID=%s\n"
+     "App=M7.50 (0.6.22/90) | Runtime legado=M7.44 | Relatório=v2\n"
+     "Tipo teste=%@ | Momento=%@\n"
+     "ELF carregado=%@ | origem=%@\n"
+     "AOT vinculadas=%@ entradas | origem=%@\n"
+     "AOT distintas executadas=%@ entradas | origem=%@\n"
+     "Despachos ARM64=%@ despachos | origem=%@\n"
+     "PPC interpretadas=%@ instruções | origem=%@\n"
+     "Limite fallback=%@ instruções | origem=%@\n"
+     "Resultado guest=%@ | origem=%@\n"
+     "PC de parada=%@ | opcode=%@ | origem=%@\n"
+     "Último PC AOT executado=%@ | origem=%@\n"
+     "Compilador OFFLINE M7.43=6251 funções / 221061 PPC"
+     " | origem: lote AOT histórico, NÃO dados desta execução.\n\n"
+     "QUADRO DE MARCOS\n"
+     "ELF carregado: %@\n"
+     "AOT executado no caminho atual: %@\n"
+     "USRDIR detectado: %@\n"
+     "cellFsOpen: não comprovado (nenhum caminho/FD real registrado)\n"
+     "cellFsRead com bytes positivos: não comprovado\n"
+     "PSARC aberto/analisado no guest: não comprovado\n"
+     "Primeiro comando RSX real: não comprovado\n"
+     "Primeiro quadro original do jogo: não comprovado\n\n",
+     AR_M750_BUILD_BRANCH,AR_M750_BUILD_SHA,
+     AR_M750_BUILD_RUN_NUMBER,AR_M750_BUILD_RUN_ID,
+     e?@"teste físico iPhone / PPU guest":@"NÃO MEDIDO",
+     e?val(@"when"):@"NÃO MEDIDO",elf,origin,
+     val(@"aot"),e?@"tabela AOT carregada no app":origin,
+     val(@"unique"),origin,val(@"dispatches"),origin,
+     val(@"fallback"),origin,val(@"limit"),origin,
+     val(@"rc"),origin,hexval(@"stop"),hexval(@"opcode"),origin,
+     last,origin,elf,native,
+     self.m750HostObservation?:@"não comprovado"];
+  [report appendFormat:
+    @"COMPARAÇÃO COM A BUILD ANTERIOR\n"
+     "M7.49 (log físico 20261018-143156): AOT=7690 entradas;"
+     " distintas=229; despachos=2363; PPC=11113; limite=16384;"
+     " parada=0x003B1D78; opcode=0xEC21F828; último AOT=0x003B1D5C.\n"
+     "M7.50 atual: AOT=%@; distintas=%@; despachos=%@; PPC=%@;"
+     " limite=%@; parada=%@; opcode=%@; último AOT=%@.\n"
+     "Dados ausentes=NÃO MEDIDO, não utilizar baseline para preencher.\n\n",
+     val(@"aot"),val(@"unique"),val(@"dispatches"),val(@"fallback"),
+     val(@"limit"),hexval(@"stop"),hexval(@"opcode"),last];
+  [report appendString:
+    @"HISTÓRICO — LEGADOS, NÃO EXECUÇÃO ATUAL\n"
+     "Os blocos anteriores M6.7.6, M7.0, M7.14, M7.17, M7.20,"
+     " M7.26–M7.49 são diagnósticos de subsistemas antigos."
+     " A etiqueta M7.44 é do runtime legado e não representa a versão"
+     " do app. Nenhuma cifra antiga altera EXECUÇÃO ATUAL.\n"];
+  NSString *body=self.ppuReport.length?self.ppuReport:self.ppuSummary;
+  if(body.length)[report appendFormat:
+    @"\n--- Histórico PPU com origem dos testes no texto ---\n%@\n",body];
+  if(self.folderReport.length)[report appendFormat:
+    @"\n--- Evento HOST Files separado (não cellFsOpen/Read) ---\n%@\n",
+      self.folderReport];
+  [report appendString:
+    @"\nRelatório sem bytes de ELF, PSARC ou arquivos comerciais.\n"];
+  return report;
 }
 - (void)arCopyAllPpuText {
     NSString *report=[self arUnifiedPpuText];
@@ -749,7 +818,7 @@ extern int ar_probe_rsx_texture_cache_mutation(unsigned swizzled,unsigned int ou
     date.locale=[NSLocale localeWithLocaleIdentifier:@"en_US_POSIX"];
     date.dateFormat=@"yyyyMMdd-HHmmss";
     NSString *name=[NSString stringWithFormat:
-       @"AscensionRecomp-M7.49-NPUA80918-%@.txt",
+       @"AscensionRecomp-M7.50-NPUA80918-%@.txt",
        [date stringFromDate:[NSDate date]]];
     NSURL *docs=[[[NSFileManager defaultManager]
         URLsForDirectory:NSDocumentDirectory inDomains:NSUserDomainMask] firstObject];
@@ -1101,7 +1170,7 @@ extern int ar_probe_rsx_texture_cache_mutation(unsigned swizzled,unsigned int ou
  */
 - (void)importGameFolderFromDocuments:(UIButton *)sender {
   (void)sender;
-  self.status.text=@"M7.49: verificando arquivos em AscensionRecomp/NPUA80918; leitura somente, sem alteração…";
+  self.status.text=@"M7.50: verificando arquivos em AscensionRecomp/NPUA80918; leitura somente, sem alteração…";
   dispatch_async(dispatch_get_global_queue(QOS_CLASS_USER_INITIATED,0),^{
     NSError *error=nil;
     NSDictionary *manifest=ARGameFolderImportLocalDocuments(&error);
@@ -1111,7 +1180,7 @@ extern int ar_probe_rsx_texture_cache_mutation(unsigned swizzled,unsigned int ou
         ARGameFolderReadPrefix(relative,4u,&readError):nil;
     NSString *report=manifest
       ? [NSString stringWithFormat:
-         @"M7.49 F1 — PASTA LOCAL IMPORTADA / NO MEU IPHONE\n"
+         @"M7.50 F1 — PASTA LOCAL IMPORTADA / NO MEU IPHONE\n"
           "Raiz=%@ · arquivos=%@ · tamanho=%@ bytes\n"
           "Leitura nativa host=%lu byte(s) · %@\n"
           "Arquivo de amostra=%@\n"
@@ -1122,7 +1191,7 @@ extern int ar_probe_rsx_texture_cache_mutation(unsigned swizzled,unsigned int ou
            bytes.length?@"OK":readError.localizedDescription?:@"indisponível",
            relative?:@"não localizado"]
       : [NSString stringWithFormat:
-         @"M7.49 F1 — PASTA LOCAL NÃO ENCONTRADA\n"
+         @"M7.50 F1 — PASTA LOCAL NÃO ENCONTRADA\n"
           "Erro (%@/%ld): %@\n"
           "Não mova a instalação original do RPCS3. Copie apenas os "
           "arquivos necessários para No Meu iPhone / AscensionRecomp Test / "
@@ -1130,6 +1199,11 @@ extern int ar_probe_rsx_texture_cache_mutation(unsigned swizzled,unsigned int ou
           error.domain?:@"local",(long)error.code,
           error.localizedDescription?:@"pasta ausente"];
     dispatch_async(dispatch_get_main_queue(),^{
+      self.m750HostObservation=(manifest && bytes.length)?
+          [NSString stringWithFormat:
+             @"comprovado: arquivo=%@; bytes_lidos_HOST=%lu; momento=%@; NOTA: NÃO é cellFsRead",
+             relative?:@"NÃO MEDIDO",(unsigned long)bytes.length,
+             [[NSDate date] description]]:nil;
       self.folderReport=report;
       self.ppuDiagnosticsButton.enabled=YES;
       self.status.text=report;
@@ -1424,6 +1498,7 @@ extern int ar_probe_rsx_texture_cache_mutation(unsigned swizzled,unsigned int ou
         data.bytes,data.length,info,cpu48,trace48,detail48,tls48);
 
     unsigned int native[16]={0};
+    self.m750Run=nil; /* new run invalidates older guest numbers */
     const int nativeRC=ar_m70_native_runtime_probe(
        data.bytes,data.length,detail48[8],native);
     NSString *nativeText=[NSString stringWithFormat:
@@ -1568,6 +1643,20 @@ extern int ar_probe_rsx_texture_cache_mutation(unsigned swizzled,unsigned int ou
      * already SHA-256-authenticated owner ELF. No code is executed here. */
     ar_aot_trace measured={0};
     ar_m717_last_aot_trace(&measured);
+    if(nativeRC==AR_OK && native[5]>0u) {
+      uint32_t lastAot=measured.trace_count?
+          measured.trace_pcs[measured.trace_count-1u]:0u;
+      self.m750Run=@{@"aot":@(native[5]),
+          @"unique":@(measured.unique_aot),
+          @"dispatches":@(measured.aot_dispatches),
+          @"fallback":@(measured.fallback_steps),
+          @"limit":@(measured.fallback_step_limit),
+          @"stop":@(native[7]),
+          @"opcode":@(measured.fallback_unsupported_word),
+          @"last_aot":@(lastAot),
+          @"rc":@((int32_t)native[6]),
+          @"when":[[NSDate date] description]};
+    }
     uint32_t roots[10]={0},nr=0;
     if(native[7])roots[nr++]=native[7];
     if(native[1])roots[nr++]=native[1];

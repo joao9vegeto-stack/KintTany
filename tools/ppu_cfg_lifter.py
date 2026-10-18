@@ -67,7 +67,8 @@ def lift(words: list[int] | tuple[int, ...], base: int, name: str = 'ppu_sample'
     if not words or len(words)>512 or base & 3:
         raise Unsupported('invalid function length / address')
     needs_fp=any(((w>>26) in (48,50,52,54)) or
-                 ((w>>26)==63 and ((w>>1)&1023) in (12,18,72,846))
+                 ((w>>26)==63 and ((w>>1)&1023) in (12,18,72,846)) or
+                 ((w>>26)==59 and ((w>>1)&31)==20)
                  for w in words)
     needs_vmx=any(((w>>26)==4 and (w&2047) in (652,780,842,844,908)) or
                   ((w>>26)==31 and ((w>>1)&1023) in
@@ -116,6 +117,13 @@ def lift(words: list[int] | tuple[int, ...], base: int, name: str = 'ppu_sample'
             e(f'int fpr_rc_{i}=ar_fp_{name}(c,{d},{ea},{single});')
             e(f'if(fpr_rc_{i}!=0) return fpr_rc_{i};')
             hist['fp_'+name]+=1
+            continue
+        if op==59:
+            xo=(w>>1)&31
+            if w&1 or xo!=20:raise Unsupported('unsupported PPC fsubs record/opcode')
+            e(f'int fsub_rc_{i}=ar_fp_fsubs(c,{d},{a},{b});')
+            e(f'if(fsub_rc_{i}!=AR_OK) return fsub_rc_{i};')
+            hist['fsubs']+=1
             continue
         if op==63:
             xo=(w>>1)&1023

@@ -134,4 +134,31 @@ static inline int ar_fp_frsp(ppu_context*c,unsigned dst,unsigned src){
  return AR_OK;
 }
 
+
+/* M7.50 PPC opcode59/20 fsubs fD,fA,fB: default RN, FPSCR basic.
+ * Float32 result is re-extended to PPC double FPR after single rounding.
+ * Non-finite, subnormal, exceptional and non-default FPSCR cases
+ * remain unsupported: never silently continue with wrong state. */
+static inline int ar_fp_fsubs(ppu_context*c,unsigned dst,unsigned ra,unsigned rb){
+ if(!c||(c->fpscr&7u)!=0u||fegetround()!=FE_TONEAREST)
+   return AR_PPC_UNSUPPORTED;
+ const double a=c->fpr[ra],b=c->fpr[rb];
+ if(!isfinite(a)||!isfinite(b)||
+    fpclassify(a)==FP_SUBNORMAL||fpclassify(b)==FP_SUBNORMAL)
+   return AR_PPC_UNSUPPORTED;
+ const double exact=a-b;
+ if(!isfinite(exact)||fpclassify(exact)==FP_SUBNORMAL)
+   return AR_PPC_UNSUPPORTED;
+ volatile float narrow=(float)exact;
+ const float f=narrow;
+ if(!isfinite(f)||fpclassify(f)==FP_SUBNORMAL||
+    (f==0.0f&&exact!=0.0))
+   return AR_PPC_UNSUPPORTED;
+ const double result=(double)f;
+ const int inexact=(result!=exact);
+ const int roundedup=inexact&&(result>exact);
+ c->fpr[dst]=result;
+ ar_fp_class(c,result,inexact,roundedup);
+ return AR_OK;
+}
 #endif
