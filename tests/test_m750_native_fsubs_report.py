@@ -34,7 +34,7 @@ class TestM750(unittest.TestCase):
             'AR_M750_BUILD_SHA','AR_M750_BUILD_RUN_ID',
             'NÃO MEDIDO','self.m750Run=nil','m750HostObservation',
             'cellFsRead com bytes positivos: %@',
-            '0x003B0608','M7.53 (teste físico'):
+            '0x003B064C','M7.53 (teste físico'):
    self.assertIn(x,ui)
   self.assertIn('AscensionRecomp-M7.54-NPUA80918',ui)
   sh=(R/'tools/build_ios_probe_ipa.sh').read_text()
