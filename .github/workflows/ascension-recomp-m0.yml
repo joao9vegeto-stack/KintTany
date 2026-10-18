@@ -1,4 +1,4 @@
-name: AscensionRecomp M7.42 - PPC64 logical ISA family and owner NOR-CNTLZD
+name: AscensionRecomp M7.43 - GOWA ELF 6251 SHA-gated offline PPC AOT ARM64
 
 on:
   push:
@@ -1113,6 +1113,17 @@ jobs:
         run: |
           set -euo pipefail
           python3 -m unittest discover -s tests -p test_m723_frontier.py -v 2>&1 | tee m723-frontier-tests.log
+      - name: M7.43 verify all 6251 offline GOWA ELF functions and SHA-digest installer (host)
+        run: |
+          set -euo pipefail
+          python3 tools/gowa2_offline_stage.py \
+            --source runtime/gowa2-offline --dest m743-staged | tee m743-host-stage.log
+          clang -std=c11 -O0 -Wall -Wextra -Werror -I upstream/runtime/ppu -I runtime \
+            runtime/gowa2-offline/ppu_gowa2_offline_aot_install.c \
+            tests/host_gowa2_installer.c -o m743-installer-host
+          ./m743-installer-host | tee m743-installer-host.log
+          grep -Fxq 'GOWA2 installer digest regression: bad hash and length rejected, all 9 valid chunks installed only after matching SHA-256 PASS' m743-installer-host.log
+          test "$(wc -l < m743-staged/symbols.txt | tr -d ' ')" = "6251"
       - name: M4.1 link native UIKit RSX Metal diagnostic application
         run: |
           set -euo pipefail
@@ -1143,12 +1154,13 @@ jobs:
           grep -Fq 'M7.40: no-copy in-place' m78-aot-status.txt
           grep -Fq 'M7.41: permissive UTTypeItem' m78-aot-status.txt
           grep -Fq 'M7.42: implemented PowerPC64' m78-aot-status.txt
+          grep -Fq 'M7.43: verified Apple ARM64' m78-aot-status.txt
           grep -Eq ' [Tt] _ar_m736_register_owner$' m78-owner-aot-linked-symbols.txt
           grep -Eq ' [Tt] _ar_m734_register_block$' m78-owner-aot-linked-symbols.txt
           grep -Eq ' [Tt] _ar_m734_register_batch$' m78-owner-aot-linked-symbols.txt
           grep -Eq ' [Tt] _ar_lv2_bind_bootstrap_syscalls$' m78-owner-aot-linked-symbols.txt
           grep -Eq ' [Tt] _ar_lv2_timezone$' m78-owner-aot-linked-symbols.txt
-          echo "M7.42: general PPC64 NOR/CNTLZD/NAND/EQV/ORC/ANDC verified host ISA coverage; no guessed AOT count, filesystem and native RSX still pending; unchanged iOS external picker permissions." > m78-actions-status.txt
+          echo "M7.43: 6251 generated GOWA ELF C-AOT functions compiled and linked in final Apple ARM64 Mach-O (9 modules + SHA installer). Number actually executed and new PC pending physical iPhone report; no guest files/RSX demonstrated." > m78-actions-status.txt
           test -s AscensionRecompProbe-0.6.16-unsigned.ipa
           /usr/libexec/PlistBuddy -c 'Print CFBundleShortVersionString' ios-probe/Payload/AscensionRecompProbe.app/Info.plist | grep -Fx 0.6.16
           /usr/bin/unzip -t AscensionRecompProbe-0.6.16-unsigned.ipa | tee m42-ipa-integrity.log
@@ -1234,7 +1246,7 @@ jobs:
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: AscensionRecomp-M7.42-Logical-PPC-Batch
+          name: AscensionRecomp-M7.43-GOWA-6251-AOT-AppleARM64
           if-no-files-found: warn
           retention-days: 14
           path: |
@@ -1462,6 +1474,13 @@ jobs:
             m740-rpcs3-inplace-host.log
             m741-dcbt-host.log
             m742-logical-host.log
+            m743-installer-host.log
+            m743-host-stage.log
+            m743-gowa2-stage.log
+            m743-gowa2-objects-nm.txt
+            m743-gowa2-object-verified.log
+            m743-gowa2-final-verified.log
+            ios-probe/gowa2-staged/stage-report.json
             m78-stage-tests.log
             m78-lv2-host.log
             m78-owner-aot-object-symbols.txt

@@ -21,6 +21,9 @@ extern int ar_bulk2_install_sha256(const unsigned char*,size_t);
 #ifdef ASCENSION_PRIVATE_FRONTIER_AOT_LINKED
 extern int ar_m722_install_sha256(const unsigned char*,size_t);
 #endif
+#ifdef ASCENSION_GOWA2_OFFLINE_AOT_LINKED
+extern int ar_gowa2_offline_aot_install_sha256(const uint8_t*,size_t);
+#endif
 #include "ppu_bridge.h"
 #include "elf_image.h"
 #include "../runtime/ppu_tls.h" /* explicit project header, not upstream ppu_tls.h */
@@ -196,6 +199,27 @@ int ar_m70_native_runtime_probe(const uint8_t*d,size_t len,
  if(ar_m736_register_owner(d,len)!=AR_OK){
     ar_bridge_shutdown();return -45;
  }
+ /* M7.43: only after the ORIGINAL game ELF has passed the existing
+  * CC_SHA256 + private AOT authentication, and after old entries have
+  * been registered, install the 6251 offline-translated guest functions.
+  * ar_register preserves the first (older validated) AOT on duplicate PC.
+  * This is static ARM64 machine code after AppleClang compilation, no JIT.
+  * Neither registration nor linking constitutes proof of guest execution. */
+#ifdef ASCENSION_GOWA2_OFFLINE_AOT_LINKED
+ const size_t before_gowa2=ar_registered_count();
+ if(before_gowa2>8192u||6251u>8192u-before_gowa2){
+    ar_bridge_shutdown();return -46;
+ }
+ const int gowa2_rc=ar_gowa2_offline_aot_install_sha256(digest,sizeof(digest));
+ if(gowa2_rc!=AR_OK){
+    ar_bridge_shutdown();return -47;
+ }
+ const size_t after_gowa2=ar_registered_count();
+ if(after_gowa2<=before_gowa2||after_gowa2>before_gowa2+6251u||
+    after_gowa2>8192u){
+    ar_bridge_shutdown();return -48;
+ }
+#endif
 #endif
 #endif
  out[5]=(uint32_t)ar_registered_count(); /* genuine linked game AOT only */
