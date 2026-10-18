@@ -104,7 +104,7 @@ python3 tools/gowa2_offline_stage.py --source runtime/gowa2-offline \
 for chunk in 00 01 02 03 04 05 06 07 08; do
   unit="ppu_gowa2_offline_aot_${chunk}"
   xcrun --sdk iphoneos clang -target arm64-apple-ios17.0 -isysroot "$SDK" \
-    -std=c11 -O0 -Wall -Wextra -Werror -Wno-unused-label -Wno-unused-function \
+    -std=c11 -O0 -Wall -Wextra -Werror -Wno-unused-label -Wno-unused-function -Wno-parentheses-equality \
     -I upstream/runtime/ppu -I runtime \
     -c "ios-probe/gowa2-staged/${unit}.c" -o "ios-probe/${unit}.o"
   xcrun nm -g "ios-probe/${unit}.o" >> m743-gowa2-objects-nm.txt
