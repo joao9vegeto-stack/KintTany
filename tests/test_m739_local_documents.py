@@ -25,9 +25,9 @@ class FolderLocalTests(unittest.TestCase):
  def test_separate_button_exports_failure_and_success_to_unified_txt(self):
   for val in ("Detectar arquivos locais · NPUA80918",
               "importGameFolderFromDocuments:", "ARGameFolderImportLocalDocuments(&error)",
-              "M7.49 F1 — PASTA LOCAL IMPORTADA",
-              "M7.49 F1 — PASTA LOCAL NÃO ENCONTRADA",
-              "self.folderReport=report", "body,self.folderReport",
+              "M7.50 F1 — PASTA LOCAL IMPORTADA",
+              "M7.50 F1 — PASTA LOCAL NÃO ENCONTRADA",
+              "self.folderReport=report", "Evento HOST Files separado",
               "@[rpcMarkerButton,localFolderButton,folderButton,elfButton]"):
    self.assertIn(val,self.ui)
  def test_real_host_proof_and_ios_files_entitlement(self):

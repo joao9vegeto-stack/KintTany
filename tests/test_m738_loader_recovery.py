@@ -25,7 +25,7 @@ class M738Checks(unittest.TestCase):
   self.assertIn("M7.38 F0 — FALHA IMPORTAÇÃO PASTA",ui)
   self.assertIn("self.folderReport=report",ui)
   self.assertIn("self.folderReport=[NSString stringWithFormat:",ui)
-  self.assertIn("body,self.folderReport",ui)
+  self.assertIn("Evento HOST Files separado",ui)
  def test_mac_host_enforces_limit_with_real_runtime(self):
   w=(R/".github/workflows/ascension-recomp-m0.yml").read_text()
   self.assertIn("tests/host_m738_fallback_limit.c",w)
