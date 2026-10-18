@@ -104,6 +104,9 @@ int ar_ppc_fallback_step(ppu_context*c,const uint8_t*elf,size_t elf_len,
        rc=ar_fp_fcfid(c,d,b);
     else if(xo==18u)
         rc=ar_fp_fdiv(c,d,a,b);
+     else if(xo==12u && a==0u){
+         rc=ar_fp_frsp(c,d,b);
+     }
      else if(xo==72u && a==0u){
         /* FMR moves all 64 raw FPR bits, including NaN and -0.0.
          * Does not modify FPSCR, CR or any guest GPR. */

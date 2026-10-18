@@ -20,7 +20,7 @@ class TestM737Folder(unittest.TestCase):
   for token in (
     "Selecionar pasta NPUA80918", "initForOpeningContentTypes:@[UTTypeFolder] asCopy:NO",
     "self.folderPicker=picker;", "controller==self.folderPicker",
-    "ARGameFolderImport(chosen,&error)", "@[rpcMarkerButton,folderButton,elfButton]",
+    "ARGameFolderImport(chosen,&error)", "@[rpcMarkerButton,localFolderButton,folderButton,elfButton]",
     "dispatch_get_global_queue(QOS_CLASS_USER_INITIATED,0)"
   ):
    self.assertIn(token,self.ui)
@@ -50,9 +50,9 @@ class TestM737Folder(unittest.TestCase):
  def test_host_evidence_required_not_decorative(self):
   for token in ("tests/host_m737_gamefolder.m","m737-folder-host",
                 "tests/host_m737_ppc_scale.c","m737-ppu-host",
-                "AscensionRecomp-M7.48-GOWA-6251-AOT-VMX-AppleARM64"):
+                "AscensionRecomp-M7.49-GOWA-6251-AOT-FRSP-AppleARM64"):
    self.assertIn(token,self.workflow)
-  self.assertIn("0.6.20",self.script)
+  self.assertIn("0.6.21",self.script)
 
 if __name__=="__main__":
  unittest.main()

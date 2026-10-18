@@ -40,5 +40,5 @@ class M747(unittest.TestCase):
               "m747-native-host.log","m747-param-host.log",
               "m747-native-arm64.o"):
    self.assertIn(tok,self.workflow)
-  self.assertIn("<string>88</string>",(ROOT/"ios/Probe-Info.plist").read_text())
+  self.assertIn("<string>89</string>",(ROOT/"ios/Probe-Info.plist").read_text())
 if __name__=="__main__":unittest.main()

@@ -111,4 +111,27 @@ static inline int ar_fp_fdiv(ppu_context*c,unsigned dst,
   ar_fp_class(c,result,inexact,roundedup);
   return AR_OK;
 }
+
+/* M7.49: FRSP FRT,FRB (XO12): PPC double -> IEEE754 single
+ * rounded using default FPSCR RN, then re-extended to 64-bit FPR.
+ * Reject unusual traps/round modes/NaN/subnormal/overflow until fully
+ * modeled. FPR input aliases output safely. No JIT or approximate no-op.
+ */
+static inline int ar_fp_frsp(ppu_context*c,unsigned dst,unsigned src){
+ if((c->fpscr&7u)!=0u || fegetround()!=FE_TONEAREST)
+    return AR_PPC_UNSUPPORTED;
+ const double in=c->fpr[src];
+ if(!isfinite(in)||fpclassify(in)==FP_SUBNORMAL)return AR_PPC_UNSUPPORTED;
+ volatile float narrow=(float)in;
+ const float f=narrow;
+ if(!isfinite(f) || fpclassify(f)==FP_SUBNORMAL ||
+    (f==0.0f && in!=0.0))return AR_PPC_UNSUPPORTED;
+ const double widened=(double)f;
+ const int inexact=widened!=in;
+ const int roundedup=inexact && (widened>in);
+ c->fpr[dst]=widened;
+ ar_fp_class(c,widened,inexact,roundedup);
+ return AR_OK;
+}
+
 #endif

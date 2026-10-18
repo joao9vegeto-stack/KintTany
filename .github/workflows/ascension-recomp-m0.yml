@@ -539,6 +539,20 @@ jobs:
             -std=c11 -O2 -Wall -Wextra -Werror -I upstream/runtime/ppu -I runtime \
             -c runtime/ppu_m748_native_vcfsx.c -o m748-native-arm64.o
           xcrun nm -g m748-native-arm64.o | grep -Fq '_ar_m748_register_owner'
+      - name: M7.49 prove native FRSP owner and visible asset detection
+        run: |
+          set -euo pipefail
+          clang -std=c11 -O2 -Wall -Wextra -Werror -fsanitize=undefined \
+            -I upstream/runtime/ppu -I runtime \
+            runtime/ppu_m749_native_frsp.c tests/host_m749_native_frsp.c \
+            -o m749-frsp-host
+          ./m749-frsp-host 2>&1 | tee m749-frsp-host.log
+          grep -Fq 'M7.49 FRSP owner AOT' m749-frsp-host.log
+          sdk="$(xcrun --sdk iphoneos --show-sdk-path)"
+          xcrun --sdk iphoneos clang -target arm64-apple-ios17.0 -isysroot "$sdk" \
+            -std=c11 -O2 -Wall -Wextra -Werror -I upstream/runtime/ppu -I runtime \
+            -c runtime/ppu_m749_native_frsp.c -o m749-frsp-arm64.o
+          xcrun nm -g m749-frsp-arm64.o | grep -Fq '_ar_m749_register_frsp'
       - name: M5.0 fetch pinned open source shader compiler sources
         run: |
           set -euo pipefail
@@ -1566,6 +1580,8 @@ jobs:
             m740-rpcs3-inplace-host.log
             m741-dcbt-host.log
             m742-logical-host.log
+            m749-frsp-host.log
+            m749-frsp-arm64.o
             m748-native-host.log
             m748-folder-host.log
             m748-native-arm64.o

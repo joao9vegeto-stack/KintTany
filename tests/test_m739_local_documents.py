@@ -23,18 +23,18 @@ class FolderLocalTests(unittest.TestCase):
   self.assertIn("ARGameFolderImportLocalDocuments",self.header)
   self.assertIn("ARGameFolderImportLocalAtURL",self.header)
  def test_separate_button_exports_failure_and_success_to_unified_txt(self):
-  for val in ("Detectar pasta local · No Meu iPhone",
+  for val in ("Detectar arquivos locais · NPUA80918",
               "importGameFolderFromDocuments:", "ARGameFolderImportLocalDocuments(&error)",
-              "M7.39 F1 — PASTA LOCAL IMPORTADA",
-              "M7.39 F1 — PASTA LOCAL NÃO ENCONTRADA",
+              "M7.49 F1 — PASTA LOCAL IMPORTADA",
+              "M7.49 F1 — PASTA LOCAL NÃO ENCONTRADA",
               "self.folderReport=report", "body,self.folderReport",
-              "@[rpcMarkerButton,folderButton,elfButton]"):
+              "@[rpcMarkerButton,localFolderButton,folderButton,elfButton]"):
    self.assertIn(val,self.ui)
  def test_real_host_proof_and_ios_files_entitlement(self):
   self.assertIn("tests/host_m739_local_documents.m",self.workflow)
   self.assertIn("m739-local-documents-host",self.workflow)
   self.assertIn("<key>UIFileSharingEnabled</key><true/>",self.plist)
   self.assertIn("<key>LSSupportsOpeningDocumentsInPlace</key><true/>",self.plist)
-  self.assertIn("<string>88</string>",self.plist)
+  self.assertIn("<string>89</string>",self.plist)
 
 if __name__=="__main__":unittest.main()

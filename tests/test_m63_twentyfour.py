@@ -30,6 +30,6 @@ class TwentyFour(unittest.TestCase):
    self.assertIn(x,U)
  def test_ci(self):
   for x in ("m63-host.log","m63-status.txt",
-            "host_m63_ppu.c","0.6.20-unsigned.ipa"):
+            "host_m63_ppu.c","0.6.21-unsigned.ipa"):
    self.assertIn(x,W)
 if __name__=="__main__":unittest.main()

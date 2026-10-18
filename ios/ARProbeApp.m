@@ -513,7 +513,7 @@ extern int ar_probe_rsx_texture_cache_mutation(unsigned swizzled,unsigned int ou
          forControlEvents:UIControlEventTouchUpInside];
     /* F1: local Files Documents folder, independent of the iCloud picker. */
     UIButton *localFolderButton=[UIButton buttonWithType:UIButtonTypeSystem];
-    [localFolderButton setTitle:@"Detectar pasta local · No Meu iPhone"
+    [localFolderButton setTitle:@"Detectar arquivos locais · NPUA80918"
                      forState:UIControlStateNormal];
     [localFolderButton setTitleColor:UIColor.whiteColor
                            forState:UIControlStateNormal];
@@ -556,7 +556,7 @@ extern int ar_probe_rsx_texture_cache_mutation(unsigned swizzled,unsigned int ou
              @"NPUA80918 · AOT ARM64 do Ascension. Importe o ELF para acompanhar a inicialização nativa." :
              @"Diagnósticos RSX → Metal, do mais recente ao legado. Role para encontrar os testes anteriores.";
         [stack addArrangedSubview:hint];
-        NSArray<UIButton *> *ordered=i==0 ? @[rpcMarkerButton,folderButton,elfButton] : @[
+        NSArray<UIButton *> *ordered=i==0 ? @[rpcMarkerButton,localFolderButton,folderButton,elfButton] : @[
             alphaButton,blendButton,maskButton,stencilButton,depthButton,
             multipassButton,mutationButton,drawButton,shaderButton,cacheButton];
         for(UIButton *button in ordered) {
@@ -728,7 +728,7 @@ extern int ar_probe_rsx_texture_cache_mutation(unsigned swizzled,unsigned int ou
                      body,self.folderReport]:self.folderReport;
     }
     return [NSString stringWithFormat:
-        @"ASCENSIONRECOMP M7.48 — RELATÓRIO ÚNICO\n"
+        @"ASCENSIONRECOMP M7.49 — RELATÓRIO ÚNICO\n"
          "Status, lote PPC, cobertura ARM64, grafo, TLS/HLE e legados.\n"
          "Somente diagnósticos; NÃO inclui o ELF original.\n"
          "==================================================\n\n%@\n",body];
@@ -749,7 +749,7 @@ extern int ar_probe_rsx_texture_cache_mutation(unsigned swizzled,unsigned int ou
     date.locale=[NSLocale localeWithLocaleIdentifier:@"en_US_POSIX"];
     date.dateFormat=@"yyyyMMdd-HHmmss";
     NSString *name=[NSString stringWithFormat:
-       @"AscensionRecomp-M7.48-NPUA80918-%@.txt",
+       @"AscensionRecomp-M7.49-NPUA80918-%@.txt",
        [date stringFromDate:[NSDate date]]];
     NSURL *docs=[[[NSFileManager defaultManager]
         URLsForDirectory:NSDocumentDirectory inDomains:NSUserDomainMask] firstObject];
@@ -1101,7 +1101,7 @@ extern int ar_probe_rsx_texture_cache_mutation(unsigned swizzled,unsigned int ou
  */
 - (void)importGameFolderFromDocuments:(UIButton *)sender {
   (void)sender;
-  self.status.text=@"M7.39: buscando NPUA80918 em No Meu iPhone / AscensionRecomp Test…";
+  self.status.text=@"M7.49: verificando arquivos em AscensionRecomp/NPUA80918; leitura somente, sem alteração…";
   dispatch_async(dispatch_get_global_queue(QOS_CLASS_USER_INITIATED,0),^{
     NSError *error=nil;
     NSDictionary *manifest=ARGameFolderImportLocalDocuments(&error);
@@ -1111,7 +1111,7 @@ extern int ar_probe_rsx_texture_cache_mutation(unsigned swizzled,unsigned int ou
         ARGameFolderReadPrefix(relative,4u,&readError):nil;
     NSString *report=manifest
       ? [NSString stringWithFormat:
-         @"M7.39 F1 — PASTA LOCAL IMPORTADA / NO MEU IPHONE\n"
+         @"M7.49 F1 — PASTA LOCAL IMPORTADA / NO MEU IPHONE\n"
           "Raiz=%@ · arquivos=%@ · tamanho=%@ bytes\n"
           "Leitura nativa host=%lu byte(s) · %@\n"
           "Arquivo de amostra=%@\n"
@@ -1122,7 +1122,7 @@ extern int ar_probe_rsx_texture_cache_mutation(unsigned swizzled,unsigned int ou
            bytes.length?@"OK":readError.localizedDescription?:@"indisponível",
            relative?:@"não localizado"]
       : [NSString stringWithFormat:
-         @"M7.39 F1 — PASTA LOCAL NÃO ENCONTRADA\n"
+         @"M7.49 F1 — PASTA LOCAL NÃO ENCONTRADA\n"
           "Erro (%@/%ld): %@\n"
           "Não mova a instalação original do RPCS3. Copie apenas os "
           "arquivos necessários para No Meu iPhone / AscensionRecomp Test / "

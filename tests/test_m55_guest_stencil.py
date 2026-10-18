@@ -45,7 +45,7 @@ class NativeRSXStencil(unittest.TestCase):
         for needle in ("testM55StencilMask:","testM54DepthOcclusion:",
             "testM53Multipass:","testM52TextureMutation:","testM51GuestDraw:",
             "testRSXCache:"):self.assertIn(needle,APP)
-        self.assertIn("0.6.20-unsigned.ipa",
+        self.assertIn("0.6.21-unsigned.ipa",
             (ROOT/"tools/build_ios_probe_ipa.sh").read_text())
         wf=(ROOT/".github/workflows/ascension-recomp-m0.yml").read_text()
         self.assertIn("grep -q '_ar_probe_m55_guest_stencil_mask'",wf)

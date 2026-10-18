@@ -23,5 +23,5 @@ class Blend(unittest.TestCase):
         for token in ("testM57BlendMask:","testM56StencilBitmasks:",
                       "testM55StencilMask:","testM54DepthOcclusion:"):
             self.assertIn(token,A)
-        self.assertIn("AscensionRecompProbe-0.6.20-unsigned.ipa",W)
+        self.assertIn("AscensionRecompProbe-0.6.21-unsigned.ipa",W)
 if __name__=="__main__":unittest.main()
