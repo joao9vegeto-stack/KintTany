@@ -503,6 +503,20 @@ extern int ar_probe_rsx_texture_cache_mutation(unsigned swizzled,unsigned int ou
     [folderButton.heightAnchor constraintEqualToConstant:46].active=YES;
     [folderButton addTarget:self action:@selector(importGameFolder:)
          forControlEvents:UIControlEventTouchUpInside];
+    /* F1: local Files Documents folder, independent of the iCloud picker. */
+    UIButton *localFolderButton=[UIButton buttonWithType:UIButtonTypeSystem];
+    [localFolderButton setTitle:@"Detectar pasta local · No Meu iPhone"
+                     forState:UIControlStateNormal];
+    [localFolderButton setTitleColor:UIColor.whiteColor
+                           forState:UIControlStateNormal];
+    localFolderButton.titleLabel.font=[UIFont systemFontOfSize:14
+                                                         weight:UIFontWeightSemibold];
+    localFolderButton.titleLabel.adjustsFontSizeToFitWidth=YES;
+    localFolderButton.titleLabel.minimumScaleFactor=0.72;
+    localFolderButton.layer.cornerRadius=11;
+    [localFolderButton.heightAnchor constraintEqualToConstant:46].active=YES;
+    [localFolderButton addTarget:self action:@selector(importGameFolderFromDocuments:)
+             forControlEvents:UIControlEventTouchUpInside];
     NSArray<UIScrollView *> *scrollers=@[game,graphics];
     for(NSUInteger i=0;i<scrollers.count;i++) {
         UIScrollView *scroll=scrollers[i];
@@ -521,7 +535,7 @@ extern int ar_probe_rsx_texture_cache_mutation(unsigned swizzled,unsigned int ou
              @"NPUA80918 · AOT ARM64 do Ascension. Importe o ELF para acompanhar a inicialização nativa." :
              @"Diagnósticos RSX → Metal, do mais recente ao legado. Role para encontrar os testes anteriores.";
         [stack addArrangedSubview:hint];
-        NSArray<UIButton *> *ordered=i==0 ? @[folderButton,elfButton] : @[
+        NSArray<UIButton *> *ordered=i==0 ? @[localFolderButton,folderButton,elfButton] : @[
             alphaButton,blendButton,maskButton,stencilButton,depthButton,
             multipassButton,mutationButton,drawButton,shaderButton,cacheButton];
         for(UIButton *button in ordered) {
@@ -595,7 +609,7 @@ extern int ar_probe_rsx_texture_cache_mutation(unsigned swizzled,unsigned int ou
                                   "5 toques: TEXTURA por NV4097/cache/Metal\n"
                                   "Sem arquivos do jogo.";
                 self.status.text=@"ASCENSIONRECOMP · NPUA80918\n"
-                                  "M7.38 · Pasta + recuperação execução PPU\n"
+                                  "M7.39 · Pasta local + PPU retomado\n"
                                   "Importe GOWA.ELF para executar o código recompilado.\n"
                                   "Inicialização parcial, ainda sem gameplay.\n"
                                   "Ferramentas RSX estão na aba RSX / Metal.";
@@ -693,7 +707,7 @@ extern int ar_probe_rsx_texture_cache_mutation(unsigned swizzled,unsigned int ou
                      body,self.folderReport]:self.folderReport;
     }
     return [NSString stringWithFormat:
-        @"ASCENSIONRECOMP M7.38 — RELATÓRIO ÚNICO\n"
+        @"ASCENSIONRECOMP M7.39 — RELATÓRIO ÚNICO\n"
          "Status, lote PPC, cobertura ARM64, grafo, TLS/HLE e legados.\n"
          "Somente diagnósticos; NÃO inclui o ELF original.\n"
          "==================================================\n\n%@\n",body];
@@ -714,7 +728,7 @@ extern int ar_probe_rsx_texture_cache_mutation(unsigned swizzled,unsigned int ou
     date.locale=[NSLocale localeWithLocaleIdentifier:@"en_US_POSIX"];
     date.dateFormat=@"yyyyMMdd-HHmmss";
     NSString *name=[NSString stringWithFormat:
-       @"AscensionRecomp-M7.38-NPUA80918-%@.txt",
+       @"AscensionRecomp-M7.39-NPUA80918-%@.txt",
        [date stringFromDate:[NSDate date]]];
     NSURL *docs=[[[NSFileManager defaultManager]
         URLsForDirectory:NSDocumentDirectory inDomains:NSUserDomainMask] firstObject];
@@ -1060,6 +1074,46 @@ extern int ar_probe_rsx_texture_cache_mutation(unsigned swizzled,unsigned int ou
 /* F0: choose a folder in Files. No copy of GBs to sandbox; bookmarks,
  * manifest and first 4-byte host read remain strictly device-local.
  * A real LV2 sys_fs_open/read has NOT been observed yet. */
+/* M7.39: fallback for folder-pickers whose "Abrir" never dispatches
+ * didPickDocumentsAtURLs on this iPhone/file-provider combination.
+ * Real native file enumeration stays off the main thread.
+ */
+- (void)importGameFolderFromDocuments:(UIButton *)sender {
+  (void)sender;
+  self.status.text=@"M7.39: buscando NPUA80918 em No Meu iPhone / AscensionRecomp Test…";
+  dispatch_async(dispatch_get_global_queue(QOS_CLASS_USER_INITIATED,0),^{
+    NSError *error=nil;
+    NSDictionary *manifest=ARGameFolderImportLocalDocuments(&error);
+    NSError *readError=nil;
+    NSString *relative=manifest[@"probe_relative_path"];
+    NSData *bytes=(manifest && relative.length>0u)?
+        ARGameFolderReadPrefix(relative,4u,&readError):nil;
+    NSString *report=manifest
+      ? [NSString stringWithFormat:
+         @"M7.39 F1 — PASTA LOCAL IMPORTADA / NO MEU IPHONE\n"
+          "Raiz=%@ · arquivos=%@ · tamanho=%@ bytes\n"
+          "Leitura nativa host=%lu byte(s) · %@\n"
+          "Arquivo de amostra=%@\n"
+          "NPUA80918 registrada no manifesto, sem cópia extra pelo app.\n"
+          "cellFsOpen/cellFsRead do guest ainda NÃO demonstradas.\n",
+           manifest[@"root_name"],manifest[@"file_count"],manifest[@"total_bytes"],
+           (unsigned long)bytes.length,
+           bytes.length?@"OK":readError.localizedDescription?:@"indisponível",
+           relative?:@"não localizado"]
+      : [NSString stringWithFormat:
+         @"M7.39 F1 — PASTA LOCAL NÃO ENCONTRADA\n"
+          "Erro (%@/%ld): %@\n"
+          "No Arquivos, mova NPUA80918 para No Meu iPhone / "
+          "AscensionRecomp Test e toque Detectar pasta local.\n",
+          error.domain?:@"local",(long)error.code,
+          error.localizedDescription?:@"pasta ausente"];
+    dispatch_async(dispatch_get_main_queue(),^{
+      self.folderReport=report;
+      self.ppuDiagnosticsButton.enabled=YES;
+      self.status.text=report;
+    });
+  });
+}
 - (void)importGameFolder:(UIButton *)sender {
   (void)sender;
   self.status.text=@"Arquivos: abra NPUA80918, depois toque no botão azul Abrir no topo. Selecione a pasta, não um arquivo interno.";
@@ -1606,7 +1660,7 @@ extern int ar_probe_rsx_texture_cache_mutation(unsigned swizzled,unsigned int ou
                         ? frontierReport : nil;
     self.ppuBatchButton.enabled=(self.ppuBatchReport.length>0);
     self.ppuSummary=[NSString stringWithFormat:
-       @"ASCENSIONRECOMP M7.38 · NPUA80918\n"
+       @"ASCENSIONRECOMP M7.39 · NPUA80918\n"
         "AOT ARM64 + FALLBACK PPC EXPERIMENTAL\n"
         "Entradas AOT vinculadas: %u\n"
         "ELF: %@ · entrada 0x%08X\n"
