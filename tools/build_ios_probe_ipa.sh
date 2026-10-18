@@ -251,7 +251,199 @@ fi
 xcrun nm -g "$APP/AscensionRecompProbe" > m78-owner-aot-linked-symbols.txt
 python3 tools/verify_gowa2_macho.py ios-probe/gowa2-staged/symbols.txt \
  m78-owner-aot-linked-symbols.txt | tee m743-gowa2-final-verified.log
-grep -Eq ' [Tt] _ar_gowa2_offline_aot_install_sha256
+grep -Eq ' [Tt] _ar_gowa2_offline_aot_install_sha256 '_ar_private_aot_install_sha256' m78-owner-aot-linked-symbols.txt
+grep -Fq '_ar_ppu_timebase_ticks' m78-owner-aot-linked-symbols.txt
+# M7.33 final Mach-O must retain ACTUAL production LV2 service binder.
+grep -Eq ' [Tt] _ar_lv2_bind_bootstrap_syscalls$' m78-owner-aot-linked-symbols.txt
+grep -Eq ' [Tt] _ar_lv2_timezone$' m78-owner-aot-linked-symbols.txt
+for pc in \
+  00010200 00010380 00010410 00010434 00010444 00010534 \
+  000107a4 00010814 002c1024 002c10c8 002c10d0 002c10e4 \
+  002c1104 002c1114 002c1124 002c1148 002c1154 002c1168 \
+  002c1174 002c118c 002c11b4 002c11c0 002c11d4 002c11e8 \
+  002c1200 002c1214 002c1564 002c1570 002c15e4 002c15f4 \
+  002c164c 003678ec 003a4c1c 003a4c38 00455a10 00455eac \
+  00455f9c 00455fa4 00455fb8 005232b0 00523318 00523350 \
+  00523360 00523390 00523428 00525c00 0052a710 0052a78c \
+  0052a7bc 0052e118 0052e180 0052e3b0 0052e3f4 0052e4f0 \
+  0052e544 00531a74 00531cac 00539998 00539a50; do
+  grep -Fq "_ar_game_ppu_${pc}" m78-owner-aot-linked-symbols.txt
+done
+# M7.12: fail the build unless EVERY manifest entry is defined code in the final Mach-O.
+python3 tools/verify_m712_macho.py m78-owner-aot-linked-symbols.txt "${ASCENSION_AOT_SYMBOL_LIST:?}" "${ASCENSION_AOT_EXPECTED_SYMBOL_COUNT:?}"
+if [[ -n "${ASCENSION_PRIVATE_BULK_C:-}" ]]; then
+  python3 tools/verify_m718_macho.py m78-owner-aot-linked-symbols.txt \
+      "${ASCENSION_BULK_SYMBOL_LIST:?}" "${ASCENSION_BULK_COUNT:?}"
+  grep -Eq ' [Tt] _ar_bulk_install_sha256$' m78-owner-aot-linked-symbols.txt
+fi
+if [[ -n "${ASCENSION_PRIVATE_BULK2_C:-}" ]]; then
+  python3 tools/verify_m719_macho.py m78-owner-aot-linked-symbols.txt \
+      "${ASCENSION_BULK2_SYMBOL_LIST:?}" "${ASCENSION_BULK2_COUNT:?}"
+  grep -Eq ' [Tt] _ar_bulk2_install_sha256$' m78-owner-aot-linked-symbols.txt
+  grep -Eq ' [Tt] _ar_bulk2_ppu_002c16a4$' m78-owner-aot-linked-symbols.txt
+fi
+if [[ -n "${ASCENSION_PRIVATE_FRONTIER_C:-}" ]]; then
+  test "${ASCENSION_FRONTIER_AOT_COUNT:?}" = "1"
+  grep -Eq ' [Tt] _ar_m722_install_sha256$' m78-owner-aot-linked-symbols.txt
+  grep -Eq ' [Tt] _ar_m722_ppu_003c511c$' m78-owner-aot-linked-symbols.txt
+  test "$(wc -l < "${ASCENSION_FRONTIER_SYMBOL_LIST:?}" | tr -d ' ')" = "1"
+fi
+grep -Eq ' [Tt] _ar_m713_aot_003c4d94$' m78-owner-aot-linked-symbols.txt
+grep -Eq ' [Tt] _ar_m713_register_fragment$' m78-owner-aot-linked-symbols.txt
+grep -Eq ' [Tt] _ar_m714_aot_003c4da4$' m78-owner-aot-linked-symbols.txt
+grep -Eq ' [Tt] _ar_m714_frontier_inventory$' m78-owner-aot-linked-symbols.txt
+grep -Eq ' [Tt] _ar_m715_aot_003c4db4$' m78-owner-aot-linked-symbols.txt
+grep -Eq ' [Tt] _ar_m715_register_fragment$' m78-owner-aot-linked-symbols.txt
+grep -Eq ' [Tt] _ar_m716_aot_003c4dc4$' m78-owner-aot-linked-symbols.txt
+grep -Eq ' [Tt] _ar_m716_register_block$' m78-owner-aot-linked-symbols.txt
+grep -Eq ' [Tt] _ar_m731_native_0052da5c$' m78-owner-aot-linked-symbols.txt
+grep -Eq ' [Tt] _ar_m731_register_frontier$' m78-owner-aot-linked-symbols.txt
+grep -Eq ' [Tt] _ar_m732_native_005230e0$' m78-owner-aot-linked-symbols.txt
+grep -Eq ' [Tt] _ar_m732_register_block$' m78-owner-aot-linked-symbols.txt
+grep -Eq ' [Tt] _ar_m734_native_0052aa1c$' m78-owner-aot-linked-symbols.txt
+grep -Eq ' [Tt] _ar_m734_register_block$' m78-owner-aot-linked-symbols.txt
+grep -Eq ' [Tt] _ar_m734_register_batch$' m78-owner-aot-linked-symbols.txt
+grep -Eq ' [Tt] _ar_m735_register_owner$' m78-owner-aot-linked-symbols.txt
+grep -Eq ' [Tt] _ar_m736_register_owner$' m78-owner-aot-linked-symbols.txt
+grep -Eq ' [Tt] _ar_m736_native_00524b8c$' m78-owner-aot-linked-symbols.txt
+grep -Eq ' [Tt] _ar_m735_native_0052ab58$' m78-owner-aot-linked-symbols.txt
+grep -Eq ' [Tt] _ar_m734_native_0052a9a0$' m78-owner-aot-linked-symbols.txt
+grep -Eq ' [Tt] _ar_m734_native_0052a910$' m78-owner-aot-linked-symbols.txt
+grep -Eq ' [Tt] _ar_m716_verified_successors$' m78-owner-aot-linked-symbols.txt
+grep -Eq ' [Tt] _ar_m717_walk$' m78-owner-aot-linked-symbols.txt
+grep -Eq ' [Tt] _ar_m717_last_aot_trace$' m78-owner-aot-linked-symbols.txt
+grep -Eq ' [Tt] _ar_trace_snapshot$' m78-owner-aot-linked-symbols.txt
+grep -Eq ' [Tt] _ar_ppc_fallback_step$' m78-owner-aot-linked-symbols.txt
+grep -Eq ' [Tt] _ar_ppc_fallback_attach$' m78-owner-aot-linked-symbols.txt
+echo 'M7.11: 59 REAL PPU ARM64 functions verified inside final iOS Mach-O; runtime execution on iPhone not yet tested' > m78-aot-status.txt
+echo "M7.12: ${ASCENSION_AOT_EXPECTED_SYMBOL_COUNT} REAL native ARM64 PPC entries linked, including 0x002C1664; iPhone proof pending" >> m78-aot-status.txt
+echo "M7.13: +1 verified 4-instruction ARM64 entry 0x003C4D94; total $((ASCENSION_AOT_EXPECTED_SYMBOL_COUNT+1)); iPhone execution pending" >> m78-aot-status.txt
+echo "M7.14: +1 ELF-verified static ARM64 fragment (0x003C4DA4), expected total $((ASCENSION_AOT_EXPECTED_SYMBOL_COUNT+2)); read-only 32-word frontier batch, no game RSX submission yet" >> m78-aot-status.txt
+echo "M7.15: +1 ELF-verified load/store ARM64 entry at 0x003C4DB4; expected total $((ASCENSION_AOT_EXPECTED_SYMBOL_COUNT+3)); PPU batch available for iPhone report" >> m78-aot-status.txt
+echo "M7.16: +1 verified native 15-instruction PPC block (0x003C4DC4), two real BEQ successors; total $((ASCENSION_AOT_EXPECTED_SYMBOL_COUNT+4)); iPhone execution required" >> m78-aot-status.txt
+echo "M7.17: static bounded PPC reachability + actual ARM64 AOT dispatch telemetry; owner source unchanged; graph coverage needs iPhone" >> m78-aot-status.txt
+echo "M7.18: +${ASCENSION_BULK_COUNT:-0} additional owner-private native PPC AOT blocks; total $((ASCENSION_AOT_EXPECTED_SYMBOL_COUNT+4+${ASCENSION_BULK_COUNT:-0})); exact ELF SHA-256 checked" >> m78-aot-status.txt
+echo "M7.19: +${ASCENSION_BULK2_COUNT:-0} authenticated owner-private native PPC blocks beginning 0x002C16A4; total $((ASCENSION_AOT_EXPECTED_SYMBOL_COUNT+4+${ASCENSION_BULK_COUNT:-0}+${ASCENSION_BULK2_COUNT:-0})) entries; iPhone test pending" >> m78-aot-status.txt
+echo "M7.20: experimental bounded PPC fallback, native AOT priority preserved, separate trace counters; 1418 AOT entries unchanged; no RSX gameplay claimed" >> m78-aot-status.txt
+echo "M7.21: PowerPC64 rlwimi/rlwnm/rldic/rldimi mask semantics verified on synthetic ELF; 1418 native AOT entries preserved; iPhone runtime validation pending" >> m78-aot-status.txt
+echo "M7.23: +${ASCENSION_FRONTIER_AOT_COUNT:-0} owner-authenticated native 25-opcode block at 0x003C511C; total $((ASCENSION_AOT_EXPECTED_SYMBOL_COUNT+4+${ASCENSION_BULK_COUNT:-0}+${ASCENSION_BULK2_COUNT:-0}+${ASCENSION_FRONTIER_AOT_COUNT:-0})) AOT entries" >> m78-aot-status.txt
+echo 'M7.31: +1 SHA-gated and ELF-verified native ARM64 CR4 transfer + BLR at guest 0x0052DA5C; expected 1420 registered AOT on matching owner ELF; on-device execution not yet proven' >> m78-aot-status.txt
+echo 'M7.32: +1 SHA-gated ELF-verified 9-instruction native ARM64 function at guest 0x005230E0; total expected 1421 on owner ELF; LV2 #144 writes timezone via the host operating-system timezone.' >> m78-aot-status.txt
+echo 'M7.33: actual iOS LV2 144 registration shared with production synthetic regression; AOT count 1421 unchanged, on-device crossing pending.' >> m78-aot-status.txt
+echo 'M7.34: 11 new native ARM64 basic blocks (77 real guest PPC instructions) selected from authenticated owner ELF trace. Existing 1421 AOT preserved; count after registration expected 1432 if no overlaps. Native vs fallback distinguished on device.' >> m78-aot-status.txt
+echo 'M7.35: +7 original owner-ELF SHA/VM authenticated native AOT entries, 80 distinct PowerPC instructions across time arithmetic and date loop; expected 1439 AOT installed, no claim of cellFs yet.' >> m78-aot-status.txt
+echo 'M7.36: one SHA-verified original owner-ELF nine-opcode time continuation AOT at 0x00524B8C; expected 1440 registered native entries. Generic signed MULHW PPC fallback; no filesystem/RSX claim.' >> m78-aot-status.txt
+echo 'M7.37: F0 selected game-folder host access with bookmark, read-only manifest and real bounded host file prefix; no cellFs syscall claimed. PPC integer family + fallback budgets 16384/32768; AOT count unchanged.' >> m78-aot-status.txt
+echo 'M7.38: fixed ar_ppc_fallback_attach max to 16384 matching iOS request, eliminating M7.37 loader=-38 before AOT. Folder picker message and full local error report. Native execution on iPhone must be rechecked.' >> m78-aot-status.txt
+echo 'M7.39: local Files/Documents NPUA80918 importer bypasses inert cloud folder picker; verified synthetic macOS Files-path scan and 4-byte file read, guest sys_fs open/read still pending.' >> m78-aot-status.txt
+echo 'M7.40: no-copy in-place read-only PARAM.SFO permission probe for original RPCS3 game installation. Uses NSFileCoordinator and iOS scoped URL; no permission bypass, no game file modifications, VFS not yet demonstrated.' >> m78-aot-status.txt
+echo 'M7.41: permissive UTTypeItem file filter for unknown PS3 .SFO extension, asCopy:NO; PPC DCBT/DCBTST cache-hint ISA fallback verified; 1440 owner-native AOT preserved. No guest filesystem or game access implied.' >> m78-aot-status.txt
+echo 'M7.42: implemented PowerPC64 NOR/CNTLZD/NAND/EQV/ORC/ANDC generic ISA fallback, correct Rc CR0 and preserved XER/ABI, reg aliasing; native AOT remains 1440; iOS sandbox access to RPCS3 remains unproven.' >> m78-aot-status.txt
+echo 'M7.43: verified Apple ARM64 object and FINAL Mach-O contain all 6251 offline GOWA.ELF AOT functions; SHA-gated install after 1440 legacy AOT registrations, no guest execution count until iPhone test.' >> m78-aot-status.txt
+file "$APP/AscensionRecompProbe" | tee m41-executable-file.txt
+xcrun lipo -info "$APP/AscensionRecompProbe" | tee m41-executable-arch.txt
+/usr/libexec/PlistBuddy -c 'Print CFBundleIdentifier' "$APP/Info.plist"
+(cd ios-probe && zip -q -r ../AscensionRecompProbe-0.6.16-unsigned.ipa Payload)
+test -s AscensionRecompProbe-0.6.16-unsigned.ipa
+shasum -a 256 AscensionRecompProbe-0.6.16-unsigned.ipa > m41-ipa-sha256.txt
+echo 'UNSIGNED DIAGNOSTIC APP: UIKit CAMetalLayer + real PS3Recomp Metal backend; NO GOWA GAME included' > m41-status.txt
+ m78-owner-aot-linked-symbols.txt
+grep -Fq '_ar_private_aot_install_sha256' m78-owner-aot-linked-symbols.txt
+grep -Fq '_ar_ppu_timebase_ticks' m78-owner-aot-linked-symbols.txt
+# M7.33 final Mach-O must retain ACTUAL production LV2 service binder.
+grep -Eq ' [Tt] _ar_lv2_bind_bootstrap_syscalls$' m78-owner-aot-linked-symbols.txt
+grep -Eq ' [Tt] _ar_lv2_timezone$' m78-owner-aot-linked-symbols.txt
+for pc in \
+  00010200 00010380 00010410 00010434 00010444 00010534 \
+  000107a4 00010814 002c1024 002c10c8 002c10d0 002c10e4 \
+  002c1104 002c1114 002c1124 002c1148 002c1154 002c1168 \
+  002c1174 002c118c 002c11b4 002c11c0 002c11d4 002c11e8 \
+  002c1200 002c1214 002c1564 002c1570 002c15e4 002c15f4 \
+  002c164c 003678ec 003a4c1c 003a4c38 00455a10 00455eac \
+  00455f9c 00455fa4 00455fb8 005232b0 00523318 00523350 \
+  00523360 00523390 00523428 00525c00 0052a710 0052a78c \
+  0052a7bc 0052e118 0052e180 0052e3b0 0052e3f4 0052e4f0 \
+  0052e544 00531a74 00531cac 00539998 00539a50; do
+  grep -Fq "_ar_game_ppu_${pc}" m78-owner-aot-linked-symbols.txt
+done
+# M7.12: fail the build unless EVERY manifest entry is defined code in the final Mach-O.
+python3 tools/verify_m712_macho.py m78-owner-aot-linked-symbols.txt "${ASCENSION_AOT_SYMBOL_LIST:?}" "${ASCENSION_AOT_EXPECTED_SYMBOL_COUNT:?}"
+if [[ -n "${ASCENSION_PRIVATE_BULK_C:-}" ]]; then
+  python3 tools/verify_m718_macho.py m78-owner-aot-linked-symbols.txt \
+      "${ASCENSION_BULK_SYMBOL_LIST:?}" "${ASCENSION_BULK_COUNT:?}"
+  grep -Eq ' [Tt] _ar_bulk_install_sha256$' m78-owner-aot-linked-symbols.txt
+fi
+if [[ -n "${ASCENSION_PRIVATE_BULK2_C:-}" ]]; then
+  python3 tools/verify_m719_macho.py m78-owner-aot-linked-symbols.txt \
+      "${ASCENSION_BULK2_SYMBOL_LIST:?}" "${ASCENSION_BULK2_COUNT:?}"
+  grep -Eq ' [Tt] _ar_bulk2_install_sha256$' m78-owner-aot-linked-symbols.txt
+  grep -Eq ' [Tt] _ar_bulk2_ppu_002c16a4$' m78-owner-aot-linked-symbols.txt
+fi
+if [[ -n "${ASCENSION_PRIVATE_FRONTIER_C:-}" ]]; then
+  test "${ASCENSION_FRONTIER_AOT_COUNT:?}" = "1"
+  grep -Eq ' [Tt] _ar_m722_install_sha256$' m78-owner-aot-linked-symbols.txt
+  grep -Eq ' [Tt] _ar_m722_ppu_003c511c$' m78-owner-aot-linked-symbols.txt
+  test "$(wc -l < "${ASCENSION_FRONTIER_SYMBOL_LIST:?}" | tr -d ' ')" = "1"
+fi
+grep -Eq ' [Tt] _ar_m713_aot_003c4d94$' m78-owner-aot-linked-symbols.txt
+grep -Eq ' [Tt] _ar_m713_register_fragment$' m78-owner-aot-linked-symbols.txt
+grep -Eq ' [Tt] _ar_m714_aot_003c4da4$' m78-owner-aot-linked-symbols.txt
+grep -Eq ' [Tt] _ar_m714_frontier_inventory$' m78-owner-aot-linked-symbols.txt
+grep -Eq ' [Tt] _ar_m715_aot_003c4db4$' m78-owner-aot-linked-symbols.txt
+grep -Eq ' [Tt] _ar_m715_register_fragment$' m78-owner-aot-linked-symbols.txt
+grep -Eq ' [Tt] _ar_m716_aot_003c4dc4$' m78-owner-aot-linked-symbols.txt
+grep -Eq ' [Tt] _ar_m716_register_block$' m78-owner-aot-linked-symbols.txt
+grep -Eq ' [Tt] _ar_m731_native_0052da5c$' m78-owner-aot-linked-symbols.txt
+grep -Eq ' [Tt] _ar_m731_register_frontier$' m78-owner-aot-linked-symbols.txt
+grep -Eq ' [Tt] _ar_m732_native_005230e0$' m78-owner-aot-linked-symbols.txt
+grep -Eq ' [Tt] _ar_m732_register_block$' m78-owner-aot-linked-symbols.txt
+grep -Eq ' [Tt] _ar_m734_native_0052aa1c$' m78-owner-aot-linked-symbols.txt
+grep -Eq ' [Tt] _ar_m734_register_block$' m78-owner-aot-linked-symbols.txt
+grep -Eq ' [Tt] _ar_m734_register_batch$' m78-owner-aot-linked-symbols.txt
+grep -Eq ' [Tt] _ar_m735_register_owner$' m78-owner-aot-linked-symbols.txt
+grep -Eq ' [Tt] _ar_m736_register_owner$' m78-owner-aot-linked-symbols.txt
+grep -Eq ' [Tt] _ar_m736_native_00524b8c$' m78-owner-aot-linked-symbols.txt
+grep -Eq ' [Tt] _ar_m735_native_0052ab58$' m78-owner-aot-linked-symbols.txt
+grep -Eq ' [Tt] _ar_m734_native_0052a9a0$' m78-owner-aot-linked-symbols.txt
+grep -Eq ' [Tt] _ar_m734_native_0052a910$' m78-owner-aot-linked-symbols.txt
+grep -Eq ' [Tt] _ar_m716_verified_successors$' m78-owner-aot-linked-symbols.txt
+grep -Eq ' [Tt] _ar_m717_walk$' m78-owner-aot-linked-symbols.txt
+grep -Eq ' [Tt] _ar_m717_last_aot_trace$' m78-owner-aot-linked-symbols.txt
+grep -Eq ' [Tt] _ar_trace_snapshot$' m78-owner-aot-linked-symbols.txt
+grep -Eq ' [Tt] _ar_ppc_fallback_step$' m78-owner-aot-linked-symbols.txt
+grep -Eq ' [Tt] _ar_ppc_fallback_attach$' m78-owner-aot-linked-symbols.txt
+echo 'M7.11: 59 REAL PPU ARM64 functions verified inside final iOS Mach-O; runtime execution on iPhone not yet tested' > m78-aot-status.txt
+echo "M7.12: ${ASCENSION_AOT_EXPECTED_SYMBOL_COUNT} REAL native ARM64 PPC entries linked, including 0x002C1664; iPhone proof pending" >> m78-aot-status.txt
+echo "M7.13: +1 verified 4-instruction ARM64 entry 0x003C4D94; total $((ASCENSION_AOT_EXPECTED_SYMBOL_COUNT+1)); iPhone execution pending" >> m78-aot-status.txt
+echo "M7.14: +1 ELF-verified static ARM64 fragment (0x003C4DA4), expected total $((ASCENSION_AOT_EXPECTED_SYMBOL_COUNT+2)); read-only 32-word frontier batch, no game RSX submission yet" >> m78-aot-status.txt
+echo "M7.15: +1 ELF-verified load/store ARM64 entry at 0x003C4DB4; expected total $((ASCENSION_AOT_EXPECTED_SYMBOL_COUNT+3)); PPU batch available for iPhone report" >> m78-aot-status.txt
+echo "M7.16: +1 verified native 15-instruction PPC block (0x003C4DC4), two real BEQ successors; total $((ASCENSION_AOT_EXPECTED_SYMBOL_COUNT+4)); iPhone execution required" >> m78-aot-status.txt
+echo "M7.17: static bounded PPC reachability + actual ARM64 AOT dispatch telemetry; owner source unchanged; graph coverage needs iPhone" >> m78-aot-status.txt
+echo "M7.18: +${ASCENSION_BULK_COUNT:-0} additional owner-private native PPC AOT blocks; total $((ASCENSION_AOT_EXPECTED_SYMBOL_COUNT+4+${ASCENSION_BULK_COUNT:-0})); exact ELF SHA-256 checked" >> m78-aot-status.txt
+echo "M7.19: +${ASCENSION_BULK2_COUNT:-0} authenticated owner-private native PPC blocks beginning 0x002C16A4; total $((ASCENSION_AOT_EXPECTED_SYMBOL_COUNT+4+${ASCENSION_BULK_COUNT:-0}+${ASCENSION_BULK2_COUNT:-0})) entries; iPhone test pending" >> m78-aot-status.txt
+echo "M7.20: experimental bounded PPC fallback, native AOT priority preserved, separate trace counters; 1418 AOT entries unchanged; no RSX gameplay claimed" >> m78-aot-status.txt
+echo "M7.21: PowerPC64 rlwimi/rlwnm/rldic/rldimi mask semantics verified on synthetic ELF; 1418 native AOT entries preserved; iPhone runtime validation pending" >> m78-aot-status.txt
+echo "M7.23: +${ASCENSION_FRONTIER_AOT_COUNT:-0} owner-authenticated native 25-opcode block at 0x003C511C; total $((ASCENSION_AOT_EXPECTED_SYMBOL_COUNT+4+${ASCENSION_BULK_COUNT:-0}+${ASCENSION_BULK2_COUNT:-0}+${ASCENSION_FRONTIER_AOT_COUNT:-0})) AOT entries" >> m78-aot-status.txt
+echo 'M7.31: +1 SHA-gated and ELF-verified native ARM64 CR4 transfer + BLR at guest 0x0052DA5C; expected 1420 registered AOT on matching owner ELF; on-device execution not yet proven' >> m78-aot-status.txt
+echo 'M7.32: +1 SHA-gated ELF-verified 9-instruction native ARM64 function at guest 0x005230E0; total expected 1421 on owner ELF; LV2 #144 writes timezone via the host operating-system timezone.' >> m78-aot-status.txt
+echo 'M7.33: actual iOS LV2 144 registration shared with production synthetic regression; AOT count 1421 unchanged, on-device crossing pending.' >> m78-aot-status.txt
+echo 'M7.34: 11 new native ARM64 basic blocks (77 real guest PPC instructions) selected from authenticated owner ELF trace. Existing 1421 AOT preserved; count after registration expected 1432 if no overlaps. Native vs fallback distinguished on device.' >> m78-aot-status.txt
+echo 'M7.35: +7 original owner-ELF SHA/VM authenticated native AOT entries, 80 distinct PowerPC instructions across time arithmetic and date loop; expected 1439 AOT installed, no claim of cellFs yet.' >> m78-aot-status.txt
+echo 'M7.36: one SHA-verified original owner-ELF nine-opcode time continuation AOT at 0x00524B8C; expected 1440 registered native entries. Generic signed MULHW PPC fallback; no filesystem/RSX claim.' >> m78-aot-status.txt
+echo 'M7.37: F0 selected game-folder host access with bookmark, read-only manifest and real bounded host file prefix; no cellFs syscall claimed. PPC integer family + fallback budgets 16384/32768; AOT count unchanged.' >> m78-aot-status.txt
+echo 'M7.38: fixed ar_ppc_fallback_attach max to 16384 matching iOS request, eliminating M7.37 loader=-38 before AOT. Folder picker message and full local error report. Native execution on iPhone must be rechecked.' >> m78-aot-status.txt
+echo 'M7.39: local Files/Documents NPUA80918 importer bypasses inert cloud folder picker; verified synthetic macOS Files-path scan and 4-byte file read, guest sys_fs open/read still pending.' >> m78-aot-status.txt
+echo 'M7.40: no-copy in-place read-only PARAM.SFO permission probe for original RPCS3 game installation. Uses NSFileCoordinator and iOS scoped URL; no permission bypass, no game file modifications, VFS not yet demonstrated.' >> m78-aot-status.txt
+echo 'M7.41: permissive UTTypeItem file filter for unknown PS3 .SFO extension, asCopy:NO; PPC DCBT/DCBTST cache-hint ISA fallback verified; 1440 owner-native AOT preserved. No guest filesystem or game access implied.' >> m78-aot-status.txt
+echo 'M7.42: implemented PowerPC64 NOR/CNTLZD/NAND/EQV/ORC/ANDC generic ISA fallback, correct Rc CR0 and preserved XER/ABI, reg aliasing; native AOT remains 1440; iOS sandbox access to RPCS3 remains unproven.' >> m78-aot-status.txt
+file "$APP/AscensionRecompProbe" | tee m41-executable-file.txt
+xcrun lipo -info "$APP/AscensionRecompProbe" | tee m41-executable-arch.txt
+/usr/libexec/PlistBuddy -c 'Print CFBundleIdentifier' "$APP/Info.plist"
+(cd ios-probe && zip -q -r ../AscensionRecompProbe-0.6.16-unsigned.ipa Payload)
+test -s AscensionRecompProbe-0.6.16-unsigned.ipa
+shasum -a 256 AscensionRecompProbe-0.6.16-unsigned.ipa > m41-ipa-sha256.txt
+echo 'UNSIGNED DIAGNOSTIC APP: UIKit CAMetalLayer + real PS3Recomp Metal backend; NO GOWA GAME included' > m41-status.txt
+ m78-owner-aot-linked-symbols.txt
 grep -Fq '_ar_private_aot_install_sha256' m78-owner-aot-linked-symbols.txt
 grep -Fq '_ar_ppu_timebase_ticks' m78-owner-aot-linked-symbols.txt
 # M7.33 final Mach-O must retain ACTUAL production LV2 service binder.
