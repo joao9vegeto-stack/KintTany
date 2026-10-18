@@ -355,7 +355,7 @@ file "$APP/AscensionRecompProbe" | tee m41-executable-file.txt
 xcrun lipo -info "$APP/AscensionRecompProbe" | tee m41-executable-arch.txt
 /usr/libexec/PlistBuddy -c 'Print CFBundleIdentifier' "$APP/Info.plist"
 echo 'M7.44: owner ELF CROR+BC 0x003F2860 / 0x003F2864 native ARM64 AOT verified behind SHA gate and registered AFTER 6251 offline entries; next physical iPhone PC not yet proven.' >> m78-aot-status.txt
-echo 'M7.45: native SRW/CMPDI/ANDC/ADDI/STW/BC at 0x0052BA70 owner authenticated, generic SRW fallback and iOS security-scoped folder grant order fixed.' >> m78-aot-status.txt
+echo 'M7.45: native SRW/CMPWI/ANDC/ADDI/STW/BC at 0x0052BA70 owner authenticated, generic SRW fallback and iOS security-scoped folder grant order fixed.' >> m78-aot-status.txt
 (cd ios-probe && zip -q -r ../AscensionRecompProbe-0.6.17-unsigned.ipa Payload)
 test -s AscensionRecompProbe-0.6.17-unsigned.ipa
 shasum -a 256 AscensionRecompProbe-0.6.17-unsigned.ipa > m41-ipa-sha256.txt

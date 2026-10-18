@@ -42,12 +42,12 @@ int main(void){
  if(fn(NULL)!=AR_BAD_ARGS)return 5;
  const unsigned shifts[]={0,1,7,31,32,33,63,64};
  for(unsigned j=0;j<8;j++)
- for(int cmp=-1;cmp<=1;cmp++)
+ for(int cmp=-2;cmp<=2;cmp++)
  for(unsigned so=0;so<2;so++){
    ppu_context c={0};
    for(unsigned k=0;k<32;k++)c.gpr[k]=0x1234000000000000ULL+k;
    c.gpr[0]=shifts[j];c.gpr[3]=0x1000u;
-   c.gpr[7]=cmp<0?UINT64_MAX:cmp>0?1u:0u;
+   c.gpr[7]=cmp==-2?0x0000000080000000ULL:cmp==-1?UINT64_MAX:cmp==0?0x7000000000000000ULL:cmp==1?1u:0xffffffff00000001ULL;
    c.gpr[9]=0xdeadbeeffedcba98ULL;
    c.gpr[11]=0xf000f000caca0000ULL;
    c.cr=0x12345678u;c.xer=0x20000000u|(so?0x80000000u:0u);
@@ -67,6 +67,6 @@ int main(void){
  }
  ppu_context faulty={0};faulty.gpr[3]=0x1000;err=1;
  if(fn(&faulty)!=AR_MEM_FAULT)return 8;
- puts("M7.45 native PPC SRW/CMPDI/ANDC/ADDI/STW/BC: 48 vectors; ELF/VM mismatch and write errors blocked PASS");
+ puts("M7.45 native PPC SRW/CMPWI/ANDC/ADDI/STW/BC: 80 vectors; ELF/VM mismatch and write errors blocked PASS");
  return 0;
 }

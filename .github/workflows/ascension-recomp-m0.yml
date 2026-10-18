@@ -479,7 +479,7 @@ jobs:
             runtime/ppu_m745_native_srw.c tests/host_m745_native_srw.c \
             -o m745-native-host
           ./m745-native-host 2>&1 | tee m745-native-host.log
-          grep -Fq '48 vectors' m745-native-host.log
+          grep -Fq '80 vectors' m745-native-host.log
           sdk="$(xcrun --sdk iphoneos --show-sdk-path)"
           xcrun --sdk iphoneos clang -target arm64-apple-ios17.0 -isysroot "$sdk" \
             -std=c11 -O2 -Wall -Wextra -Werror -I upstream/runtime/ppu -I runtime \
@@ -1184,7 +1184,7 @@ jobs:
           grep -Fq 'M7.42: implemented PowerPC64' m78-aot-status.txt
           grep -Fq 'M7.43: verified Apple ARM64' m78-aot-status.txt
           grep -Fq 'M7.44: owner ELF CROR+BC' m78-aot-status.txt
-          grep -Fq 'M7.45: native SRW/CMPDI/ANDC' m78-aot-status.txt
+          grep -Fq 'M7.45: native SRW/CMPWI/ANDC' m78-aot-status.txt
           grep -Eq ' [Tt] _ar_m736_register_owner$' m78-owner-aot-linked-symbols.txt
           grep -Eq ' [Tt] _ar_m744_register_owner$' m78-owner-aot-linked-symbols.txt
           grep -Eq ' [Tt] _ar_m745_register_owner$' m78-owner-aot-linked-symbols.txt

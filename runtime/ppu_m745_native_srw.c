@@ -1,5 +1,5 @@
 /* M7.45: static C->Apple ARM64 owner PPC block 0x0052BA70.
- * Original words: SRW, CMPDI, ANDC, ADDI, STW, BC. Not an interpreter.
+ * Original words: SRW, CMPWI, ANDC, ADDI, STW, BC. Not an interpreter.
  * Register only AFTER signed GOWA.ELF SHA validation. */
 #include <stdint.h>
 #include <stddef.h>
@@ -16,7 +16,7 @@ int ar_m745_native_0052ba70(ppu_context *c){
  const uint32_t rs=(uint32_t)r[9];
  r[9]=sh>=32u?0u:(uint64_t)(rs>>sh);
  /* cmpdi cr7,r7,0, CR7.SO follows sticky XER.SO. */
- const uint32_t nib=(int64_t)r[7]<0?8u:r[7]?4u:2u;
+ const uint32_t nib=(int32_t)(uint32_t)r[7]<0?8u:(uint32_t)r[7]?4u:2u;
  c->cr=(c->cr&~UINT32_C(15))|nib|((c->xer>>31)&1u);
  /* andc r9,r11,r9; addi r10,r3,4; stw r9,0(r3) */
  r[9]=r[11]&~r[9];
