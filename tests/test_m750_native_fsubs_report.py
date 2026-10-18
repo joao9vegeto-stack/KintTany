@@ -44,7 +44,7 @@ class TestM750(unittest.TestCase):
   w=(R/'.github/workflows/ascension-recomp-m0.yml').read_text()
   for x in ('tests/host_m750_native_path.c','m750-native-host.log',
             'm750-native-arm64.o','_ar_m750_register_owner',
-            'AscensionRecomp-M7.56-NATIVE-ONLY'):
+            'AscensionRecomp-M7.57-NATIVE-ONLY-BATCH'):
    self.assertIn(x,w)
   self.assertIn('<string>90</string>',(R/'ios/Probe-Info.plist').read_text())
 if __name__=='__main__':unittest.main()
