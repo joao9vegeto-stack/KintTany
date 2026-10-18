@@ -188,7 +188,7 @@ xcrun nm -g ios-probe/ARRSXMethodProbe.o | grep -q '_ar_probe_rsx_clear_flip'
 xcrun --sdk iphoneos clang++ -target arm64-apple-ios17.0 \
     -isysroot "$SDK" -fobjc-arc -fmodules -stdlib=libc++ \
     -O2 -Wl,-dead_strip -I ios -I runtime -I upstream/runtime/ppu -I upstream/libs/video -I upstream/include \
-    ios/ARMetalView.m ios/ARProbeApp.m ios/ARShaderProbe.m ios/ARTextureProbe.m ios/ARProbeGuestVM.c \
+    ios/ARMetalView.m ios/ARProbeApp.m ios/ARGameFolderStore.m ios/ARShaderProbe.m ios/ARTextureProbe.m ios/ARProbeGuestVM.c \
     ios-probe/ARRSXMethodProbe.o ios-probe/ARGuestDrawProbe.o ios-probe/ARPrivateELFProbe.o \
     ios-probe/ARLivePPUBridge.o ios-probe/ARLivePPUContinuous.o \
     ios-probe/ARNativePPUContinuous.o ios-probe/ppu_lwmutex.o \
@@ -302,10 +302,11 @@ echo 'M7.33: actual iOS LV2 144 registration shared with production synthetic re
 echo 'M7.34: 11 new native ARM64 basic blocks (77 real guest PPC instructions) selected from authenticated owner ELF trace. Existing 1421 AOT preserved; count after registration expected 1432 if no overlaps. Native vs fallback distinguished on device.' >> m78-aot-status.txt
 echo 'M7.35: +7 original owner-ELF SHA/VM authenticated native AOT entries, 80 distinct PowerPC instructions across time arithmetic and date loop; expected 1439 AOT installed, no claim of cellFs yet.' >> m78-aot-status.txt
 echo 'M7.36: one SHA-verified original owner-ELF nine-opcode time continuation AOT at 0x00524B8C; expected 1440 registered native entries. Generic signed MULHW PPC fallback; no filesystem/RSX claim.' >> m78-aot-status.txt
+echo 'M7.37: F0 selected game-folder host access with bookmark, read-only manifest and real bounded host file prefix; no cellFs syscall claimed. PPC integer family + fallback budgets 16384/32768; AOT count unchanged.' >> m78-aot-status.txt
 file "$APP/AscensionRecompProbe" | tee m41-executable-file.txt
 xcrun lipo -info "$APP/AscensionRecompProbe" | tee m41-executable-arch.txt
 /usr/libexec/PlistBuddy -c 'Print CFBundleIdentifier' "$APP/Info.plist"
-(cd ios-probe && zip -q -r ../AscensionRecompProbe-0.6.15-unsigned.ipa Payload)
-test -s AscensionRecompProbe-0.6.15-unsigned.ipa
-shasum -a 256 AscensionRecompProbe-0.6.15-unsigned.ipa > m41-ipa-sha256.txt
+(cd ios-probe && zip -q -r ../AscensionRecompProbe-0.6.16-unsigned.ipa Payload)
+test -s AscensionRecompProbe-0.6.16-unsigned.ipa
+shasum -a 256 AscensionRecompProbe-0.6.16-unsigned.ipa > m41-ipa-sha256.txt
 echo 'UNSIGNED DIAGNOSTIC APP: UIKit CAMetalLayer + real PS3Recomp Metal backend; NO GOWA GAME included' > m41-status.txt

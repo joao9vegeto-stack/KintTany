@@ -123,6 +123,18 @@ int ar_ppc_fallback_step(ppu_context*c,const uint8_t*elf,size_t elf_len,
    }
    return AR_PPC_UNSUPPORTED;
  }
+ /* M7.37 scalable PPC64 integer-immediate instruction family. */
+ case 7:{ /* mulli rD,rA,SIMM: low 64 bits, modular overflow */
+   const uint64_t product=r[a]*(uint64_t)imm;
+   return add_result(c,pc,product,d,0u);
+ }
+ case 8:{ /* subfic rD,rA,SIMM: signed immediate minus 64-bit RA */
+   const uint64_t right=(uint64_t)imm, left=r[a];
+   const uint64_t result=right-left;
+   c->xer=(c->xer&~UINT32_C(0x20000000))|
+          (right>=left?UINT32_C(0x20000000):0u);
+   return add_result(c,pc,result,d,0u);
+ }
  case 14: return add_result(c,pc,(a?r[a]:0u)+(uint64_t)imm,d,0);
  case 15: return add_result(c,pc,(a?r[a]:0u)+(uint64_t)(imm*65536),d,0);
  case 12:case 13:{
@@ -292,6 +304,19 @@ int ar_ppc_fallback_step(ppu_context*c,const uint8_t*elf,size_t elf_len,
       const uint32_t upper=(uint32_t)((uint64_t)p>>32u);
       /* x/y are saved before writing d: RT may alias RA or RB. */
       return add_result(c,pc,sext32(upper),d,record);
+   }
+   case 9:case 73:{ /* mulhdu / mulhd: genuine high 64-bit PPC64 */
+      const unsigned __int128 wide=(unsigned __int128)x*
+                                   (unsigned __int128)y;
+      uint64_t high=(uint64_t)(wide>>64u);
+      if(xo==73u){ /* two's-complement signed high half */
+        if(x>>63u)high-=y;
+        if(y>>63u)high-=x;
+      }
+      return add_result(c,pc,high,d,record);
+   }
+   case 233:{ /* mulld: low 64-bit modular signed product */
+      return add_result(c,pc,x*y,d,record);
    }
    case 235:{ /* mullw: low 32 of 32x32 product, signed word result */
       const uint32_t v=(uint32_t)((uint64_t)(uint32_t)x*(uint32_t)y);

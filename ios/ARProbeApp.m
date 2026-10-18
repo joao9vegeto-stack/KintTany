@@ -2,6 +2,7 @@
 #import <UIKit/UIKit.h>
 #import <Metal/Metal.h>
 #import "ARMetalView.h"
+#import "ARGameFolderStore.h"
 #import <UniformTypeIdentifiers/UniformTypeIdentifiers.h>
 #import <CommonCrypto/CommonDigest.h>
 #include "../runtime/ppu_bridge.h"
@@ -89,6 +90,8 @@ extern int ar_probe_rsx_texture_cache_mutation(unsigned swizzled,unsigned int ou
 @property(nonatomic,copy) NSString *ppuBatchReport;
 @property(nonatomic,copy) NSString *ppuReport;
 @property(nonatomic,copy) NSString *ppuSummary;
+@property(nonatomic,copy) NSString *folderReport;
+@property(nonatomic,strong) UIDocumentPickerViewController *folderPicker;
 @property(nonatomic,strong) UIButton *ppuAdvancedButton;
 @property(nonatomic,strong) UIButton *ppuDiagnosticsButton;
 @property(nonatomic,assign) BOOL ready;
@@ -488,6 +491,18 @@ extern int ar_probe_rsx_texture_cache_mutation(unsigned swizzled,unsigned int ou
     [diagnostics addTarget:self action:@selector(openUnifiedPpuMenu:)
          forControlEvents:UIControlEventTouchUpInside];
     self.ppuDiagnosticsButton=diagnostics;
+    /* M7.37 F0: user-selected game folder independent of guest sys_fs. */
+    UIButton *folderButton=[UIButton buttonWithType:UIButtonTypeSystem];
+    [folderButton setTitle:@"Importar pasta do Ascension · arquivos do jogo"
+                forState:UIControlStateNormal];
+    [folderButton setTitleColor:UIColor.whiteColor forState:UIControlStateNormal];
+    folderButton.titleLabel.font=[UIFont systemFontOfSize:14 weight:UIFontWeightSemibold];
+    folderButton.titleLabel.adjustsFontSizeToFitWidth=YES;
+    folderButton.titleLabel.minimumScaleFactor=0.7;
+    folderButton.layer.cornerRadius=11;
+    [folderButton.heightAnchor constraintEqualToConstant:46].active=YES;
+    [folderButton addTarget:self action:@selector(importGameFolder:)
+         forControlEvents:UIControlEventTouchUpInside];
     NSArray<UIScrollView *> *scrollers=@[game,graphics];
     for(NSUInteger i=0;i<scrollers.count;i++) {
         UIScrollView *scroll=scrollers[i];
@@ -506,7 +521,7 @@ extern int ar_probe_rsx_texture_cache_mutation(unsigned swizzled,unsigned int ou
              @"NPUA80918 · AOT ARM64 do Ascension. Importe o ELF para acompanhar a inicialização nativa." :
              @"Diagnósticos RSX → Metal, do mais recente ao legado. Role para encontrar os testes anteriores.";
         [stack addArrangedSubview:hint];
-        NSArray<UIButton *> *ordered=i==0 ? @[elfButton] : @[
+        NSArray<UIButton *> *ordered=i==0 ? @[folderButton,elfButton] : @[
             alphaButton,blendButton,maskButton,stencilButton,depthButton,
             multipassButton,mutationButton,drawButton,shaderButton,cacheButton];
         for(UIButton *button in ordered) {
@@ -580,7 +595,7 @@ extern int ar_probe_rsx_texture_cache_mutation(unsigned swizzled,unsigned int ou
                                   "5 toques: TEXTURA por NV4097/cache/Metal\n"
                                   "Sem arquivos do jogo.";
                 self.status.text=@"ASCENSIONRECOMP · NPUA80918\n"
-                                  "M7.36 · MULHW ARM64 e TXT compartilhável\n"
+                                  "M7.37 · Pasta de jogo + runtime PPC escalado\n"
                                   "Importe GOWA.ELF para executar o código recompilado.\n"
                                   "Inicialização parcial, ainda sem gameplay.\n"
                                   "Ferramentas RSX estão na aba RSX / Metal.";
@@ -594,6 +609,21 @@ extern int ar_probe_rsx_texture_cache_mutation(unsigned swizzled,unsigned int ou
             ar_probe_vm_shutdown();
             self.status.text=@"Falha ao inicializar o backend RSX→Metal.\nEnvie uma captura de tela para diagnóstico.";
         }
+    });
+    /* Bookmark survives app restart; no file copied to the IPA/sandbox.
+     * Manifest reconstruction is local-only and does not call guest sys_fs. */
+    dispatch_async(dispatch_get_global_queue(QOS_CLASS_UTILITY,0),^{
+       NSDictionary *prior=ARGameFolderRestore(NULL);
+       if(!prior)return;
+       dispatch_async(dispatch_get_main_queue(),^{
+         if(!self.folderReport.length){
+           self.folderReport=[NSString stringWithFormat:
+              @"M7.37 F0 — Pasta anterior restaurada · %@ arquivo(s), %@ bytes.\n"
+               "Manifesto privado local; cellFsOpen/Read ainda pendentes.\n",
+               prior[@"file_count"],prior[@"total_bytes"]];
+           self.ppuDiagnosticsButton.enabled=YES;
+         }
+       });
     });
     return YES;
 }
@@ -657,9 +687,13 @@ extern int ar_probe_rsx_texture_cache_mutation(unsigned swizzled,unsigned int ou
  * any section when exporting. No ELF or commercial assets leave the phone. */
 - (NSString *)arUnifiedPpuText {
     NSString *body=self.ppuReport.length ? self.ppuReport : self.ppuSummary;
-    if(!body.length)return nil;
+    if(!body.length && !self.folderReport.length)return nil;
+    if(self.folderReport.length){
+        body=body.length?[NSString stringWithFormat:@"%@\n\n%@",
+                     body,self.folderReport]:self.folderReport;
+    }
     return [NSString stringWithFormat:
-        @"ASCENSIONRECOMP M7.36 — RELATÓRIO ÚNICO\n"
+        @"ASCENSIONRECOMP M7.37 — RELATÓRIO ÚNICO\n"
          "Status, lote PPC, cobertura ARM64, grafo, TLS/HLE e legados.\n"
          "Somente diagnósticos; NÃO inclui o ELF original.\n"
          "==================================================\n\n%@\n",body];
@@ -680,7 +714,7 @@ extern int ar_probe_rsx_texture_cache_mutation(unsigned swizzled,unsigned int ou
     date.locale=[NSLocale localeWithLocaleIdentifier:@"en_US_POSIX"];
     date.dateFormat=@"yyyyMMdd-HHmmss";
     NSString *name=[NSString stringWithFormat:
-       @"AscensionRecomp-M7.36-NPUA80918-%@.txt",
+       @"AscensionRecomp-M7.37-NPUA80918-%@.txt",
        [date stringFromDate:[NSDate date]]];
     NSURL *docs=[[[NSFileManager defaultManager]
         URLsForDirectory:NSDocumentDirectory inDomains:NSUserDomainMask] firstObject];
@@ -1023,6 +1057,21 @@ extern int ar_probe_rsx_texture_cache_mutation(unsigned swizzled,unsigned int ou
 }
 /* Local read-only probe; data is temporary and never logged, persisted
  * into app storage, uploaded or packaged with its compiled code. */
+/* F0: choose a folder in Files. No copy of GBs to sandbox; bookmarks,
+ * manifest and first 4-byte host read remain strictly device-local.
+ * A real LV2 sys_fs_open/read has NOT been observed yet. */
+- (void)importGameFolder:(UIButton *)sender {
+  (void)sender;
+  UIDocumentPickerViewController *picker=
+    [[UIDocumentPickerViewController alloc]
+      initForOpeningContentTypes:@[UTTypeFolder] asCopy:NO];
+  picker.delegate=self;
+  picker.allowsMultipleSelection=NO;
+  picker.directoryURL=nil; /* OS owns Recents: no hardcoded iCloud Drive. */
+  self.folderPicker=picker;
+  [self.window.rootViewController presentViewController:picker
+                                                animated:YES completion:nil];
+}
 - (void)importM59ELF:(UIButton*)sender {
  (void)sender;
  if(!self.ready||self.shaderBusy)return;
@@ -1033,6 +1082,45 @@ extern int ar_probe_rsx_texture_cache_mutation(unsigned swizzled,unsigned int ou
 }
 - (void)documentPicker:(UIDocumentPickerViewController*)controller
         didPickDocumentsAtURLs:(NSArray<NSURL*>*)urls {
+ if(controller==self.folderPicker){
+    self.folderPicker=nil;
+    NSURL *chosen=urls.firstObject;
+    if(!chosen)return;
+    self.status.text=@"M7.37 F0: indexando pasta do jogo no iPhone…";
+    dispatch_async(dispatch_get_global_queue(QOS_CLASS_USER_INITIATED,0),^{
+      NSError *error=nil;
+      NSDictionary *manifest=ARGameFolderImport(chosen,&error);
+      NSString *relative=manifest[@"probe_relative_path"];
+      NSError *readError=nil;
+      NSData *actual=(relative.length>0)?
+          ARGameFolderReadPrefix(relative,4u,&readError):nil;
+      NSString *report=nil;
+      if(manifest){
+        report=[NSString stringWithFormat:
+           @"M7.37 F0 — PASTA DO JOGO IMPORTADA REALMENTE\n"
+            "NPUA80918 · arquivos=%@ · bytes=%@\n"
+            "Links simbólicos ignorados=%@\n"
+            "Leitura HOST real de arquivo selecionado=%lu byte(s)\n"
+            "Manifesto e bookmark SALVOS SOMENTE NO IPHONE.\n"
+            "PS3 cellFsOpen/cellFsRead ainda NÃO executadas.\n",
+            manifest[@"file_count"],manifest[@"total_bytes"],
+            manifest[@"symlinks_skipped"],(unsigned long)actual.length];
+      }
+      dispatch_async(dispatch_get_main_queue(),^{
+        if(report){
+          self.folderReport=report;
+          self.status.text=[NSString stringWithFormat:
+                 @"Pasta de jogo selecionada.\n%@",report];
+          self.ppuDiagnosticsButton.enabled=YES;
+        }else{
+          self.status.text=[NSString stringWithFormat:
+                 @"Importação da pasta falhou: %@",error.localizedDescription ?:
+                   @"sem acesso ao diretório"];
+        }
+      });
+    });
+    return;
+ }
  (void)controller;
  NSURL*url=urls.firstObject;if(!url)return;
  BOOL scoped=[url startAccessingSecurityScopedResource];
@@ -1508,7 +1596,7 @@ extern int ar_probe_rsx_texture_cache_mutation(unsigned swizzled,unsigned int ou
                         ? frontierReport : nil;
     self.ppuBatchButton.enabled=(self.ppuBatchReport.length>0);
     self.ppuSummary=[NSString stringWithFormat:
-       @"ASCENSIONRECOMP M7.36 · NPUA80918\n"
+       @"ASCENSIONRECOMP M7.37 · NPUA80918\n"
         "AOT ARM64 + FALLBACK PPC EXPERIMENTAL\n"
         "Entradas AOT vinculadas: %u\n"
         "ELF: %@ · entrada 0x%08X\n"
@@ -1709,6 +1797,11 @@ extern int ar_probe_rsx_texture_cache_mutation(unsigned swizzled,unsigned int ou
  }
 }
 - (void)documentPickerWasCancelled:(UIDocumentPickerViewController*)controller {
+  if(controller==self.folderPicker){
+    self.folderPicker=nil;
+    self.status.text=@"Importação da pasta cancelada.";
+    return;
+  }
  (void)controller;
  self.status.text=@"M5.9 cancelado; M5.8.1 disponível.";
 }
