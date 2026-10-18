@@ -1,4 +1,4 @@
-name: AscensionRecomp M7.49 - visible local assets detection and native FRSP
+name: AscensionRecomp M7.49 - visible local asset detector and native FRSP
 
 on:
   push:
@@ -539,7 +539,7 @@ jobs:
             -std=c11 -O2 -Wall -Wextra -Werror -I upstream/runtime/ppu -I runtime \
             -c runtime/ppu_m748_native_vcfsx.c -o m748-native-arm64.o
           xcrun nm -g m748-native-arm64.o | grep -Fq '_ar_m748_register_owner'
-      - name: M7.49 prove native FRSP owner and visible asset detection
+      - name: M7.49 static FRSP Apple ARM64 and host ISA verification
         run: |
           set -euo pipefail
           clang -std=c11 -O2 -Wall -Wextra -Werror -fsanitize=undefined \
@@ -1270,7 +1270,7 @@ jobs:
           echo "M7.43: 6251 generated GOWA ELF C-AOT functions compiled and linked in final Apple ARM64 Mach-O (9 modules + SHA installer). Number actually executed and new PC pending physical iPhone report; no guest files/RSX demonstrated." > m78-actions-status.txt
           test -s AscensionRecompProbe-0.6.21-unsigned.ipa
           /usr/libexec/PlistBuddy -c 'Print CFBundleShortVersionString' ios-probe/Payload/AscensionRecompProbe.app/Info.plist | grep -Fx 0.6.21
-          /usr/bin/unzip -t AscensionRecompProbe-0.6.20-unsigned.ipa | tee m42-ipa-integrity.log
+          /usr/bin/unzip -t AscensionRecompProbe-0.6.21-unsigned.ipa | tee m42-ipa-integrity.log
           xcrun nm -g ios-probe/Payload/AscensionRecompProbe.app/AscensionRecompProbe | grep -E '(_rsx_metal_backend_present|_rsx_metal_backend_init|_OBJC_CLASS_\\$_ARMetalView)' > m42-runtime-link-symbols.txt || true
           grep -q _rsx_metal_backend_init m39-metal-symbols.txt
           echo 'M4.2: actual GPU clear + presentDrawable + waitUntilCompleted route linked in iOS app; requires on-device screenshot.' > m42-status.txt
@@ -1613,7 +1613,7 @@ jobs:
             m76-aot-tail-host.log
             m76-status.txt
             m75-aot-boot-host.log
-            AscensionRecompProbe-0.6.20-unsigned.ipa
+            AscensionRecompProbe-0.6.21-unsigned.ipa
             m40-ios-layer-view.o
             build-ios-runtime/libps3recomp_runtime.a
             ios-ppu-core/libAscensionPPUCore-ios-arm64.a
@@ -1647,7 +1647,7 @@ jobs:
           echo "M7.43: 6251 generated GOWA ELF C-AOT functions compiled and linked in final Apple ARM64 Mach-O (9 modules + SHA installer). Number actually executed and new PC pending physical iPhone report; no guest files/RSX demonstrated." > m78-actions-status.txt
           test -s AscensionRecompProbe-0.6.21-unsigned.ipa
           /usr/libexec/PlistBuddy -c 'Print CFBundleShortVersionString' ios-probe/Payload/AscensionRecompProbe.app/Info.plist | grep -Fx 0.6.21
-          /usr/bin/unzip -t AscensionRecompProbe-0.6.20-unsigned.ipa | tee m42-ipa-integrity.log
+          /usr/bin/unzip -t AscensionRecompProbe-0.6.21-unsigned.ipa | tee m42-ipa-integrity.log
           xcrun nm -g ios-probe/Payload/AscensionRecompProbe.app/AscensionRecompProbe | grep -E '(_rsx_metal_backend_present|_rsx_metal_backend_init|_OBJC_CLASS_\\$_ARMetalView)' > m42-runtime-link-symbols.txt || true
           grep -q _rsx_metal_backend_init m39-metal-symbols.txt
           echo 'M4.2: actual GPU clear + presentDrawable + waitUntilCompleted route linked in iOS app; requires on-device screenshot.' > m42-status.txt
@@ -1958,8 +1958,6 @@ jobs:
             m740-rpcs3-inplace-host.log
             m741-dcbt-host.log
             m742-logical-host.log
-            m749-frsp-host.log
-            m749-frsp-arm64.o
             m748-native-host.log
             m748-folder-host.log
             m748-native-arm64.o
@@ -1990,7 +1988,7 @@ jobs:
             m76-aot-tail-host.log
             m76-status.txt
             m75-aot-boot-host.log
-            AscensionRecompProbe-0.6.20-unsigned.ipa
+            AscensionRecompProbe-0.6.21-unsigned.ipa
             m40-ios-layer-view.o
             build-ios-runtime/libps3recomp_runtime.a
             ios-ppu-core/libAscensionPPUCore-ios-arm64.a
@@ -2023,7 +2021,7 @@ jobs:
           echo "M7.43: 6251 generated GOWA ELF C-AOT functions compiled and linked in final Apple ARM64 Mach-O (9 modules + SHA installer). Number actually executed and new PC pending physical iPhone report; no guest files/RSX demonstrated." > m78-actions-status.txt
           test -s AscensionRecompProbe-0.6.21-unsigned.ipa
           /usr/libexec/PlistBuddy -c 'Print CFBundleShortVersionString' ios-probe/Payload/AscensionRecompProbe.app/Info.plist | grep -Fx 0.6.21
-          /usr/bin/unzip -t AscensionRecompProbe-0.6.20-unsigned.ipa | tee m42-ipa-integrity.log
+          /usr/bin/unzip -t AscensionRecompProbe-0.6.21-unsigned.ipa | tee m42-ipa-integrity.log
           xcrun nm -g ios-probe/Payload/AscensionRecompProbe.app/AscensionRecompProbe | grep -E '(_rsx_metal_backend_present|_rsx_metal_backend_init|_OBJC_CLASS_\\$_ARMetalView)' > m42-runtime-link-symbols.txt || true
           grep -q _rsx_metal_backend_init m39-metal-symbols.txt
           echo 'M4.2: actual GPU clear + presentDrawable + waitUntilCompleted route linked in iOS app; requires on-device screenshot.' > m42-status.txt
@@ -2334,8 +2332,6 @@ jobs:
             m740-rpcs3-inplace-host.log
             m741-dcbt-host.log
             m742-logical-host.log
-            m749-frsp-host.log
-            m749-frsp-arm64.o
             m748-native-host.log
             m748-folder-host.log
             m748-native-arm64.o
@@ -2366,7 +2362,7 @@ jobs:
             m76-aot-tail-host.log
             m76-status.txt
             m75-aot-boot-host.log
-            AscensionRecompProbe-0.6.20-unsigned.ipa
+            AscensionRecompProbe-0.6.21-unsigned.ipa
             m40-ios-layer-view.o
             build-ios-runtime/libps3recomp_runtime.a
             ios-ppu-core/libAscensionPPUCore-ios-arm64.a
