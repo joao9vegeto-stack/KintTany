@@ -23,6 +23,11 @@ ARGameFolderImportLocalDocuments(NSError **error);
 /* Injected Documents root for synthetic Mac tests only; same production path. */
 FOUNDATION_EXPORT NSDictionary<NSString*,id> * _Nullable
 ARGameFolderImportLocalAtURL(NSURL *documents, NSError **error);
+/* Small copy-mode import, independent of parent folder access. */
+FOUNDATION_EXPORT NSDictionary<NSString*,id> * _Nullable
+ARGameFolderInspectParamSFO(NSURL *url, NSError **error);
+/* Visible Documents home, no game payload. */
+FOUNDATION_EXPORT BOOL ARGameFolderPrepareDocumentsHome(NSError **error);
 FOUNDATION_EXPORT NSData * _Nullable
 ARGameFolderReadPrefix(NSString *relativePath, NSUInteger maxLength,
                        NSError **error);

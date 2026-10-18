@@ -103,7 +103,13 @@ int ar_ppc_fallback_step(ppu_context*c,const uint8_t*elf,size_t elf_len,
     if(xo==846u && a==0u)
        rc=ar_fp_fcfid(c,d,b);
     else if(xo==18u)
-       rc=ar_fp_fdiv(c,d,a,b);
+        rc=ar_fp_fdiv(c,d,a,b);
+     else if(xo==72u && a==0u){
+        /* FMR moves all 64 raw FPR bits, including NaN and -0.0.
+         * Does not modify FPSCR, CR or any guest GPR. */
+        ar_fp_setraw(c,d,ar_fp_raw64(c,b));
+        rc=AR_OK;
+     }
     if(rc!=AR_OK)return rc;
     ar_ppc_note_fp(pc,w);
     c->cia=pc+4u;return AR_TAIL;

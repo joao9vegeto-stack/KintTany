@@ -36,7 +36,7 @@ class CRSemantics(unittest.TestCase):
  def test_device_and_ci(self):
   self.assertIn("M7.2 — EXECUÇÃO PPU CONTÍNUA + CR/BRANCH",APP)
   for x in ("tests/host_m72_cr_branch.c", "m72-cr-branch-host.log",
-            "AscensionRecomp-M7.46-GOWA-6251-AOT-69PPC-AppleARM64"):
+            "AscensionRecomp-M7.47-GOWA-6251-AOT-FMR-PARAM-AppleARM64"):
    self.assertIn(x,WF)
-  self.assertIn("<string>86</string>",PL)
+  self.assertIn("<string>87</string>",PL)
 if __name__=="__main__":unittest.main()

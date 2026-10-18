@@ -47,6 +47,7 @@ extern int ar_m736_register_owner(const uint8_t*,size_t);
 extern int ar_m744_register_owner(const uint8_t*,size_t);
 extern int ar_m745_register_owner(const uint8_t*,size_t);
 extern int ar_m746_register_hotloop(const uint8_t*,size_t);
+extern int ar_m747_register_owner(const uint8_t*,size_t);
 extern int ar_private_import_match(const uint8_t*,size_t,uint32_t,uint32_t[4],char[48]);
 extern int ar_private_import_find_nid(const uint8_t*,size_t,uint32_t,const char*,uint32_t[4],char[48]);
 
@@ -237,6 +238,10 @@ int ar_m70_native_runtime_probe(const uint8_t*d,size_t len,
    * authenticated all 4 entry points against executable ELF and guest VM. */
   if(ar_m746_register_hotloop(d,len)!=AR_OK){
     ar_bridge_shutdown();return -51;
+  }
+  /* M7.47: signed original executable FMR guest entries, no emulation. */
+  if(ar_m747_register_owner(d,len)!=AR_OK){
+    ar_bridge_shutdown();return -52;
   }
 #endif
 #endif

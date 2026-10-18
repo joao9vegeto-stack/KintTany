@@ -6,6 +6,7 @@
 #import "ARGameFolderStore.h"
 #include <limits.h>
 #include <sys/stat.h>
+#include <string.h>
 static NSString * const kGameBookmarkKey=@"ARGameFolderBookmarkM737";
 static NSString * const kGameErrorDomain=@"AscensionRecomp.GameFolder";
 static NSError *gameError(NSInteger code,NSString *detail) {
@@ -230,6 +231,117 @@ NSDictionary<NSString*,id> *ARGameFolderImportLocalDocuments(NSError **error) {
     firstObject];
  return ARGameFolderImportLocalAtURL(documents,error);
 }
+
+/* M7.47: import a SMALL user-selected PARAM.SFO like GOWA.ELF
+ * (document picker asCopy:YES). System-provided temporary file ONLY;
+ * no game data copied by this app, no claim of parent-directory access.
+ * Validate the real PSF index and the TITLE_ID key, never just the name. */
+static uint32_t psf32(const uint8_t *p){
+ return (uint32_t)p[0]|((uint32_t)p[1]<<8)|
+        ((uint32_t)p[2]<<16)|((uint32_t)p[3]<<24);
+}
+static uint16_t psf16(const uint8_t *p){
+ return (uint16_t)((uint16_t)p[0]|((uint16_t)p[1]<<8));
+}
+NSDictionary<NSString*,id> *ARGameFolderInspectParamSFO(NSURL *url,NSError **error){
+ if(!url.isFileURL || [url.lastPathComponent caseInsensitiveCompare:@"PARAM.SFO"]!=NSOrderedSame){
+   if(error)*error=gameError(47,@"Escolha PARAM.SFO, não outro arquivo.");
+   return nil;
+ }
+ BOOL scoped=[url startAccessingSecurityScopedResource];
+ @try {
+   NSFileCoordinator *coord=[[NSFileCoordinator alloc]initWithFilePresenter:nil];
+   __block NSData *data=nil;
+   __block NSError *readError=nil;
+   NSError *coordError=nil;
+   [coord coordinateReadingItemAtURL:url options:NSFileCoordinatorReadingWithoutChanges
+         error:&coordError byAccessor:^(NSURL *candidate){
+     NSNumber *size=nil;
+     [candidate getResourceValue:&size forKey:NSURLFileSizeKey error:&readError];
+     if(!size||size.unsignedLongLongValue>65536u){
+       readError=gameError(48,@"PARAM.SFO muito grande ou inacessível (máximo 64 KB).");
+       return;
+     }
+     NSFileHandle *fh=[NSFileHandle fileHandleForReadingFromURL:candidate error:&readError];
+     if(!fh)return;
+     @try {data=[fh readDataUpToLength:65537u error:&readError];}
+     @finally {[fh closeFile];}
+   }];
+   if(coordError||readError||data.length<20u||data.length>65536u){
+     if(error)*error=coordError?:readError?:gameError(49,@"Falha ao ler o PARAM.SFO selecionado.");
+     return nil;
+   }
+   const uint8_t*p=data.bytes;
+   if(p[0]!=0u||p[1]!='P'||p[2]!='S'||p[3]!='F'){
+     if(error)*error=gameError(50,@"Arquivo selecionado não tem cabeçalho PSF.");
+     return nil;
+   }
+   const uint32_t key=psf32(p+8),values=psf32(p+12),n=psf32(p+16);
+   if(n>512u||key>=data.length||values>=data.length||
+      n>(data.length-20u)/16u||20u+n*16u>key){
+     if(error)*error=gameError(51,@"Índice do PARAM.SFO inválido.");
+     return nil;
+   }
+   NSString *title=nil;
+   for(uint32_t i=0;i<n;i++){
+     const uint8_t *entry=p+20u+16u*i;
+     const uint32_t kp=key+(uint32_t)psf16(entry);
+     const uint32_t len=psf32(entry+4),maxlen=psf32(entry+8);
+     const uint32_t vp=values+psf32(entry+12);
+     if(kp>=data.length||len>maxlen||vp>data.length||
+         len>data.length-vp){
+       if(error)*error=gameError(52,@"Valores do PARAM.SFO fora dos limites.");
+       return nil;
+     }
+     const uint8_t *end=memchr(p+kp,0u,data.length-kp);
+     if(!end){
+       if(error)*error=gameError(52,@"Chave de PARAM.SFO sem terminador.");
+       return nil;
+     }
+     if((size_t)(end-(p+kp))==8u && memcmp(p+kp,"TITLE_ID",8u)==0){
+       const uint8_t *zero=memchr(p+vp,0u,(size_t)len);
+       const NSUInteger count=zero?(NSUInteger)(zero-(p+vp)):(NSUInteger)len;
+       title=[[NSString alloc]initWithBytes:p+vp length:count
+                                     encoding:NSUTF8StringEncoding];
+       title=[title stringByTrimmingCharactersInSet:
+         [NSCharacterSet whitespaceAndNewlineCharacterSet]];
+       break;
+     }
+   }
+   if(![title isEqualToString:@"NPUA80918"]){
+     if(error)*error=gameError(53,@"O PARAM.SFO não contém TITLE_ID=NPUA80918.");
+     return nil;
+   }
+   return @{@"title_id":title,@"file_bytes":@(data.length),
+            @"metadata_only":@YES,@"folder_access_verified":@NO,
+            @"original_modified":@NO};
+ } @finally {
+   if(scoped)[url stopAccessingSecurityScopedResource];
+ }
+}
+/* Create visible, app-owned Documents structure without copying a game.
+ * These folders are NOT paths into the sandbox of the separate RPCS3 app. */
+BOOL ARGameFolderPrepareDocumentsHome(NSError **error){
+ NSURL *docs=[[NSFileManager.defaultManager URLsForDirectory:NSDocumentDirectory
+                                 inDomains:NSUserDomainMask] firstObject];
+ if(!docs){if(error)*error=gameError(54,@"Documentos do app indisponíveis.");return NO;}
+ NSFileManager *fm=NSFileManager.defaultManager;
+ NSURL *app=[docs URLByAppendingPathComponent:@"AscensionRecomp" isDirectory:YES];
+ NSURL *title=[app URLByAppendingPathComponent:@"NPUA80918" isDirectory:YES];
+ if(![fm createDirectoryAtURL:title withIntermediateDirectories:YES
+                  attributes:nil error:error])return NO;
+ NSURL *readme=[app URLByAppendingPathComponent:@"LEIA-ME.txt"];
+ if(![fm fileExistsAtPath:readme.path]){
+    NSString *message=@"AscensionRecomp — pasta local do aplicativo.\n"
+       "NPUA80918 aqui é apenas um diretório vazio de organização.\n"
+       "Os arquivos do RPCS3 NÃO são copiados e permanecem protegidos pelo iOS.\n"
+       "Para importar PARAM.SFO, use o botão próprio; somente os metadados serão lidos.\n";
+    if(![message writeToURL:readme atomically:YES
+              encoding:NSUTF8StringEncoding error:error])return NO;
+ }
+ return YES;
+}
+
 /* M7.40: permissioned no-copy test of the RPCS3 Documents installation.
  * User chooses .../data/dev_hdd0/game/NPUA80918/PARAM.SFO in the Apple
  * document picker asCopy:NO. Reading this small marker does not grant

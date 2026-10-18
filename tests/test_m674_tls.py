@@ -28,7 +28,7 @@ class TLS(unittest.TestCase):
    self.assertIn(x,U)
   for x in ('tests/host_m674_tls.c',
             'm674-tls-host.log',
-            'AscensionRecomp-M7.46-GOWA-6251-AOT-69PPC-AppleARM64'):
+            'AscensionRecomp-M7.47-GOWA-6251-AOT-FMR-PARAM-AppleARM64'):
    self.assertIn(x,W)
-  self.assertIn('<string>86</string>',P)
+  self.assertIn('<string>87</string>',P)
 if __name__=="__main__":unittest.main()

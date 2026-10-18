@@ -116,7 +116,14 @@ extern int ar_probe_rsx_texture_cache_mutation(unsigned swizzled,unsigned int ou
 @implementation ARProbeDelegate
 - (BOOL)application:(UIApplication*)app didFinishLaunchingWithOptions:(NSDictionary*)options {
     (void)app; (void)options;
-    self.window=[[UIWindow alloc] initWithFrame:[UIScreen mainScreen].bounds];
+     /* Create app-owned Files/Documents folder, NOT RPCS3 folder access. */
+     NSError *homeError=nil;
+     if(!ARGameFolderPrepareDocumentsHome(&homeError)){
+       self.folderReport=[NSString stringWithFormat:
+         @"M7.47: Documents/AscensionRecomp indisponível (%@)",
+         homeError.localizedDescription?:@"erro do iOS"];
+     }
+     self.window=[[UIWindow alloc] initWithFrame:[UIScreen mainScreen].bounds];
     UIViewController *controller=[UIViewController new];
     controller.view.backgroundColor=[UIColor blackColor];
 
@@ -520,7 +527,7 @@ extern int ar_probe_rsx_texture_cache_mutation(unsigned swizzled,unsigned int ou
              forControlEvents:UIControlEventTouchUpInside];
     /* M7.40: read-only existing RPCS3 PARAM.SFO picker; no copies. */
     UIButton *rpcMarkerButton=[UIButton buttonWithType:UIButtonTypeSystem];
-    [rpcMarkerButton setTitle:@"Abrir PARAM.SFO do RPCS3 · sem cópia"
+    [rpcMarkerButton setTitle:@"Importar PARAM.SFO · cópia temporária"
                     forState:UIControlStateNormal];
     [rpcMarkerButton setTitleColor:UIColor.whiteColor forState:UIControlStateNormal];
     rpcMarkerButton.titleLabel.font=[UIFont systemFontOfSize:14
@@ -721,7 +728,7 @@ extern int ar_probe_rsx_texture_cache_mutation(unsigned swizzled,unsigned int ou
                      body,self.folderReport]:self.folderReport;
     }
     return [NSString stringWithFormat:
-        @"ASCENSIONRECOMP M7.43 — RELATÓRIO ÚNICO\n"
+        @"ASCENSIONRECOMP M7.47 — RELATÓRIO ÚNICO\n"
          "Status, lote PPC, cobertura ARM64, grafo, TLS/HLE e legados.\n"
          "Somente diagnósticos; NÃO inclui o ELF original.\n"
          "==================================================\n\n%@\n",body];
@@ -742,7 +749,7 @@ extern int ar_probe_rsx_texture_cache_mutation(unsigned swizzled,unsigned int ou
     date.locale=[NSLocale localeWithLocaleIdentifier:@"en_US_POSIX"];
     date.dateFormat=@"yyyyMMdd-HHmmss";
     NSString *name=[NSString stringWithFormat:
-       @"AscensionRecomp-M7.43-NPUA80918-%@.txt",
+       @"AscensionRecomp-M7.47-NPUA80918-%@.txt",
        [date stringFromDate:[NSDate date]]];
     NSURL *docs=[[[NSFileManager defaultManager]
         URLsForDirectory:NSDocumentDirectory inDomains:NSUserDomainMask] firstObject];
@@ -1128,14 +1135,14 @@ extern int ar_probe_rsx_texture_cache_mutation(unsigned swizzled,unsigned int ou
     });
   });
 }
-/* No File Provider directory picker: open just PARAM.SFO asCopy:NO.
- * This may give ONLY file-level access; test parent before claiming more. */
+/* M7.47: import PARAM.SFO via GOWA.ELF's asCopy:YES mechanism.
+ * Only a small, temporary user-selected metadata copy; NOT USRDIR access. */
 - (void)importRPCS3Marker:(UIButton *)sender {
   (void)sender;
-  self.status.text=@"M7.46.1: entre em NPUA80918, use Selecionar para MARCAR PARAM.SFO e confirme Abrir. Sem copiar o arquivo.";
+  self.status.text=@"M7.47: importe PARAM.SFO como o GOWA.ELF (uma cópia TEMPORÁRIA de até 64 KB). Selecione o arquivo e confirme Abrir; USRDIR continua protegido pelo iOS.";
   UIDocumentPickerViewController *picker=
        [[UIDocumentPickerViewController alloc]
-             initForOpeningContentTypes:@[UTTypeItem] asCopy:NO];
+             initForOpeningContentTypes:@[UTTypeItem] asCopy:YES];
   picker.delegate=self;
   /* User can explicitly select/mark one or more files in Files. */
   picker.allowsMultipleSelection=YES;
@@ -1180,30 +1187,25 @@ extern int ar_probe_rsx_texture_cache_mutation(unsigned swizzled,unsigned int ou
        self.status.text=@"M7.46.1: marque PARAM.SFO e confirme Abrir; nenhuma seleção válida foi recebida.";
        return;
      }
-     self.status.text=@"M7.46.1: PARAM.SFO marcado. Verificando permissão sobre USRDIR sem copiar arquivos…";
+     self.status.text=@"M7.47: lendo PARAM.SFO pelo mecanismo de importação do GOWA.ELF…";
     dispatch_async(dispatch_get_global_queue(QOS_CLASS_USER_INITIATED,0),^{
       NSError *error=nil;
-      NSDictionary *manifest=ARGameFolderProbeRPCS3Marker(marker,&error);
-      NSString *report=manifest
-        ? [NSString stringWithFormat:
-            @"M7.40 — RPCS3 ACESSÍVEL (IN PLACE)\n"
-             "rpcs3/data/dev_hdd0/game/NPUA80918\n"
-             "Arquivos=%@ · tamanho=%@ bytes\n"
-             "PARAM.SFO lido=%@ bytes · USRDIR verificável\n"
-             "Nenhum arquivo do RPCS3 foi copiado, movido ou alterado.\n"
-             "Acesso após reinício precisa confirmação separada.\n"
-             "cellFsOpen/cellFsRead PS3 ainda não demonstradas.\n",
-             manifest[@"file_count"],manifest[@"total_bytes"],
-             manifest[@"param_sfo_prefix_bytes"]]
-        : [NSString stringWithFormat:
-            @"M7.40 — ESCOPO RPCS3 RESTRITO\n"
-             "Esperado: rpcs3/data/dev_hdd0/game/NPUA80918\n"
-             "Erro (%@/%ld): %@\n"
-             "Nenhuma cópia, movimentação ou alteração de arquivo.\n"
-             "A pasta inteira requer permissão explícita do iOS.\n",
-             error.domain?:@"iOS",(long)error.code,
-             error.localizedDescription?:@"sem autorização"];
-      dispatch_async(dispatch_get_main_queue(),^{
+      NSDictionary *manifest=ARGameFolderInspectParamSFO(marker,&error);
+       NSString *report=manifest
+         ? [NSString stringWithFormat:
+             @"M7.47 — PARAM.SFO IMPORTADO E VALIDADO\n"
+              "TITLE_ID=%@ · %lu bytes\n"
+              "Cópia temporária SOMENTE do PARAM.SFO, como GOWA.ELF.\n"
+              "Arquivos grandes do jogo não foram copiados.\n"
+              "Permissão USRDIR ainda NÃO obtida.\n"
+              "cellFsOpen/cellFsRead ainda não demonstradas.\n",
+              manifest[@"title_id"],(unsigned long)[manifest[@"file_bytes"] unsignedLongValue]]
+         : [NSString stringWithFormat:
+             @"M7.47 — FALHA NA IMPORTAÇÃO DO PARAM.SFO\n"
+              "Erro (%@/%ld): %@\n",
+              error.domain?:@"iOS",(long)error.code,
+              error.localizedDescription?:@"arquivo indisponível"];
+       dispatch_async(dispatch_get_main_queue(),^{
         self.folderReport=report;
         self.status.text=report;
         self.ppuDiagnosticsButton.enabled=YES;

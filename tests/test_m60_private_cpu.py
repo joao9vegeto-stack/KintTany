@@ -16,6 +16,6 @@ class PPU4(unittest.TestCase):
   self.assertIn("M5.9 NPUA80918: ELF REAL VALIDADO",A)
   self.assertIn("testM58AlphaTest:",A)
   self.assertIn("m60-host.log",W)
-  self.assertIn("0.6.18-unsigned.ipa",W)
+  self.assertIn("0.6.19-unsigned.ipa",W)
   self.assertNotIn("GOWA.SELF",C)
 if __name__=="__main__":unittest.main()

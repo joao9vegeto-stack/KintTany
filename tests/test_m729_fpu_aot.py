@@ -7,6 +7,13 @@ BLR=0x4e800020
 def d(o,t,a,i):return (o<<26)|(t<<21)|(a<<16)|(i&65535)
 def f(t,a,b,x,rc=0):return (63<<26)|(t<<21)|(a<<16)|(b<<11)|(x<<1)|rc
 class TestM729FPU(unittest.TestCase):
+ def test_fmr_exact_raw_bitcopy_codegen(self):
+  src,h=lift([f(1,0,31,72),f(2,0,31,72),BLR],0x10000)
+  self.assertEqual(h['fmr'],2)
+  self.assertIn("ar_fp_setraw(c,1,ar_fp_raw64(c,31))",src)
+  self.assertIn("ar_fp_setraw(c,2,ar_fp_raw64(c,31))",src)
+  with self.assertRaises(Unsupported):lift([f(1,2,31,72),BLR],0x10000)
+  with self.assertRaises(Unsupported):lift([f(1,0,31,72,1),BLR],0x10000)
  def test_exact_fcfid_raw_bits_codegen(self):
   src,h=lift([d(50,0,1,128),f(13,0,0,846),BLR],0x10000)
   self.assertEqual(h['fp_load'],1);self.assertEqual(h['fcfid'],1)

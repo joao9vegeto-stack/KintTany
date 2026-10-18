@@ -124,6 +124,10 @@ def lift(words: list[int] | tuple[int, ...], base: int, name: str = 'ppu_sample'
                 e(f'if(ar_fp_fcfid(c,{d},{b})!=0) return -12;')
                 hist['fcfid']+=1
                 continue
+            if xo==72 and a==0:
+                e(f'ar_fp_setraw(c,{d},ar_fp_raw64(c,{b}));')
+                hist['fmr']+=1
+                continue
             if xo==18:
                 e(f'if(ar_fp_fdiv(c,{d},{a},{b})!=0) return -12;')
                 hist['fdiv']+=1
