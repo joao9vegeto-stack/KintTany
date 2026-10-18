@@ -37,7 +37,7 @@ class TestM733IOSBindings(unittest.TestCase):
   self.assertIn("last_run_trace.lv2_timezone_completed=ar_lv2_timezone_queries()",runner)
   self.assertIn("uint32_t lv2_timezone_completed;",trace)
   self.assertIn("measured.lv2_timezone_completed",ui)
-  self.assertIn("ASCENSIONRECOMP — ESQUEMA M7.50-v2",ui)
+  self.assertIn("ASCENSIONRECOMP — ESQUEMA M7.52-v3",ui)
   self.assertIn("AscensionRecomp-M7.50-NPUA80918",ui)
  def test_no_regression_of_verified_owner_aot(self):
   runner=source("ios/ARLivePPUBridge.c")

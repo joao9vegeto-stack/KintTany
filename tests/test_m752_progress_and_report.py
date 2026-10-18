@@ -20,7 +20,7 @@ class M752(unittest.TestCase):
   self.assertIn('App=M7.52',ui)
   self.assertIn('last,origin,elf,native,',ui)
   self.assertIn('self.m750HostObservation?:@"não comprovado",',ui)
-  self.assertIn('fsOpen,fsRead,',ui)
+  self.assertIn('fsOpen,fsRead];',ui)
   self.assertIn('M7.51 (teste físico',ui)
   self.assertIn('HOST Files separado',ui)
   self.assertIn('self.m750HostObservation?:@"não comprovado",\n     fsOpen,fsRead];',ui)

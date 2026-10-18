@@ -43,7 +43,7 @@ class FrontierStageM723(unittest.TestCase):
   self.assertEqual(build.count("ppu_m734_native_math.c"),1)
   self.assertEqual(build.count("ppu_m734_native_batch.c"),1)
   self.assertIn("ASCENSION_AOT_FRONTIER_GZIP_B64",workflow)
-  self.assertIn('ASCENSIONRECOMP — ESQUEMA M7.50-v2',ui)
+  self.assertIn('ASCENSIONRECOMP — ESQUEMA M7.52-v3',ui)
   self.assertIn('initForExportingURLs:@[url] asCopy:YES',ui)
   self.assertIn('RSX do Ascension: não demonstrado',ui)
  def test_prior_manifest_strict_parsing(self):

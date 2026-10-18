@@ -24,7 +24,7 @@ class M721Tests(unittest.TestCase):
   self.assertIn("AR_PPC_UNSUPPORTED",self.bridge)
   self.assertIn("fb_steps++;",self.bridge)
  def test_txt_status_and_graphics_limit(self):
-  self.assertIn("ASCENSIONRECOMP M7.44 · NPUA80918",self.ui)
+  self.assertIn("ASCENSIONRECOMP M7.52 · NPUA80918",self.ui)
   self.assertIn("AscensionRecomp-M7.50-NPUA80918-%@.txt",self.ui)
   self.assertIn("initForExportingURLs:@[url] asCopy:YES",self.ui)
   self.assertIn("RSX do Ascension: não demonstrado",self.ui)
