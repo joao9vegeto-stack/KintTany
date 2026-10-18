@@ -7,6 +7,8 @@
 #define ASCENSION_PPU_VMX_CELL_H
 #include <stdint.h>
 #include <string.h>
+#include <math.h>
+#include <fenv.h>
 #include "ppu_bridge.h"
 static inline uint8_t ar_vmx_byte(const ppu_context*c,unsigned v,unsigned n){
  const uint64_t word=c->vr[v]._u64[n>>3];
@@ -104,6 +106,35 @@ static inline void ar_vmx_vcfsx(ppu_context*c,unsigned vd,unsigned vb,unsigned s
  for(unsigned i=0;i<4u;i++)
   for(unsigned j=0;j<4u;j++)
    ar_vmx_setbyte(c,vd,i*4u+j,(uint8_t)(dst[i]>>(24u-8u*j)));
+}
+
+/* M7.51 VMX vsubfp VD,VA,VB (VX opcode 74).
+ * Four IEEE-754 single-precision lanes, read before any write so VD can
+ * alias VA/VB. Fail closed for unsupported exceptional/denormal cases.
+ * Do not change CR/XER/FPSCR or GPRs; VSCR mode is not emulated here. */
+static inline int ar_vmx_vsubfp(ppu_context *c,unsigned vd,
+                                unsigned va,unsigned vb){
+ if(!c||vd>=32u||va>=32u||vb>=32u||fegetround()!=FE_TONEAREST)
+   return AR_PPC_UNSUPPORTED;
+ uint32_t words[4];
+ for(unsigned i=0;i<4u;i++){
+  uint32_t aa=ar_vmx_word(c,va,i),bb=ar_vmx_word(c,vb,i);
+  float a,b;
+  memcpy(&a,&aa,4u);memcpy(&b,&bb,4u);
+  if(!isfinite(a)||!isfinite(b)||
+     fpclassify(a)==FP_SUBNORMAL||fpclassify(b)==FP_SUBNORMAL)
+    return AR_PPC_UNSUPPORTED;
+  volatile float result=a-b;
+  float v=result;
+  if(!isfinite(v)||fpclassify(v)==FP_SUBNORMAL ||
+     (v==0.0f && a!=b))
+    return AR_PPC_UNSUPPORTED;
+  memcpy(&words[i],&v,4u);
+ }
+ for(unsigned i=0;i<4u;i++)
+  for(unsigned j=0;j<4u;j++)
+   ar_vmx_setbyte(c,vd,4u*i+j,(uint8_t)(words[i]>>(24u-8u*j)));
+ return AR_OK;
 }
 
 #endif

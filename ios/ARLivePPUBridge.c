@@ -31,6 +31,8 @@ extern int ar_gowa2_offline_aot_install_sha256(const uint8_t*,size_t);
 #include "../runtime/ppu_lv2_bootstrap.h"
 #include "../runtime/ppu_mmapper.h"
 #include "../runtime/ppu_native_sysutil.h"
+#include "../runtime/ppu_guest_fs.h"
+extern int ARGameFolderGuestIO(const char*,uint64_t,void*,size_t,size_t*,uint64_t*);
 
 extern int ar_m711_bind_memory(const uint8_t*,size_t,uint32_t*);
 extern int ar_m711_bind_sysutil(const uint8_t*,size_t,uint32_t*);
@@ -51,12 +53,15 @@ extern int ar_m747_register_owner(const uint8_t*,size_t);
 extern int ar_m748_register_owner(const uint8_t*,size_t);
 extern int ar_m749_register_frsp(const uint8_t*,size_t);
 extern int ar_m750_register_owner(const uint8_t*,size_t);
+extern int ar_m751_register_vsubfp(const uint8_t*,size_t);
 extern int ar_private_import_match(const uint8_t*,size_t,uint32_t,uint32_t[4],char[48]);
 extern int ar_private_import_find_nid(const uint8_t*,size_t,uint32_t,const char*,uint32_t[4],char[48]);
 
 enum { AR_NATIVE_LIMIT=128u*1024u*1024u, AR_NATIVE_RESERVE=0x20000u };
 /* Native AOT trace copied before ar_bridge_shutdown; no game code stored. */
 static ar_aot_trace last_run_trace;
+static ar_fs_trace last_fs_trace;
+void ar_m751_last_fs_trace(ar_fs_trace *out){if(out)*out=last_fs_trace;}
 void ar_m717_last_aot_trace(ar_aot_trace *out){if(out)*out=last_run_trace;}
 static uint16_t g16(const uint8_t*p){return (uint16_t)(((uint16_t)p[0]<<8)|p[1]);}
 static uint32_t g32(const uint8_t*p){return ((uint32_t)p[0]<<24)|((uint32_t)p[1]<<16)|((uint32_t)p[2]<<8)|p[3];}
@@ -68,6 +73,7 @@ int ar_m70_native_runtime_probe(const uint8_t*d,size_t len,
  if(!out)return -20;
  memset(out,0,16u*sizeof(*out));
  memset(&last_run_trace,0,sizeof(last_run_trace));
+ memset(&last_fs_trace,0,sizeof(last_fs_trace));
  if(!d||len<64u)return -20;
  if(memcmp(d,"\177ELF",4)||d[4]!=2u||d[5]!=2u||d[6]!=1u||
     g16(d+16)!=2u||g16(d+18)!=21u||g32(d+20)!=1u)
@@ -104,6 +110,8 @@ int ar_m70_native_runtime_probe(const uint8_t*d,size_t len,
  if(!tlsbase || tlsbase>=AR_NATIVE_LIMIT)return -27;
  const int rcinit=ar_bridge_init(cap);
  if(rcinit){out[0]=(uint32_t)rcinit;return rcinit;}
+ ar_fs_reset();
+ ar_fs_set_host_io(ARGameFolderGuestIO);
  ar_lwmutex_reset();
 #ifdef ASCENSION_M711_OWNER_AOT
  ar_mmapper_reset();ar_sysutil_reset();
@@ -258,6 +266,10 @@ int ar_m70_native_runtime_probe(const uint8_t*d,size_t len,
   if(ar_m750_register_owner(d,len)!=AR_OK){
     ar_bridge_shutdown();return -55;
   }
+  /* M7.51: signed native vsubfp at actual iPhone failure. */
+  if(ar_m751_register_vsubfp(d,len)!=AR_OK){
+    ar_bridge_shutdown();return -56;
+  }
 #endif
 #endif
  out[5]=(uint32_t)ar_registered_count(); /* genuine linked game AOT only */
@@ -311,6 +323,26 @@ int ar_m70_native_runtime_probe(const uint8_t*d,size_t len,
  if(ar_lv2_bind_bootstrap_syscalls()!=AR_OK){
     ar_bridge_shutdown();return -30;
  }
+ /* LV2 #801/#802/#804: real guest-originating file calls. */
+ if(ar_fs_bind_syscalls()!=AR_OK){
+    ar_bridge_shutdown();return -57;
+ }
+ /* Only exact imports in the authenticated original ELF are bound. */
+ struct {uint32_t nid;ar_hle_fn handler;} fs_imports[]={
+   {UINT32_C(0x718bf5f8),ar_fs_guest_open},
+   {UINT32_C(0x4d5ff8e2),ar_fs_guest_read},
+   {UINT32_C(0x2cb51f0d),ar_fs_guest_close}
+ };
+ for(unsigned j=0;j<sizeof(fs_imports)/sizeof(fs_imports[0]);j++){
+   uint32_t imp[4]={0};char library[48]={0};
+   const int found=ar_private_import_find_nid(d,len,fs_imports[j].nid,
+                                               "sys_fs",imp,library);
+   if(found==0 && imp[0]==fs_imports[j].nid && imp[1] &&
+      strcmp(library,"sys_fs")==0 &&
+      ar_bind_import(imp[1],imp[0])==AR_OK &&
+      ar_bind_hle(imp[0],fs_imports[j].handler)==AR_OK)
+      out[15]|=0x2000u;
+ }
  uint32_t tmimp[4]={0}; char tmlib[48]={0};
  const int tmmatch=ar_private_import_find_nid(
     d,len,0x8461e528u,"sysPrxForUser",tmimp,tmlib);
@@ -361,6 +393,7 @@ int ar_m70_native_runtime_probe(const uint8_t*d,size_t len,
  else out[6]=(uint32_t)ar_run(&ctx,image.entry_code,128u);
  out[7]=ar_last_unresolved();
  ar_trace_snapshot(&last_run_trace);
+ ar_fs_snapshot(&last_fs_trace);
  last_run_trace.lv2_timezone_completed=ar_lv2_timezone_queries();
  
  if(out[5])out[12]=(uint32_t)ctx.gpr[13];

@@ -31,4 +31,9 @@ FOUNDATION_EXPORT BOOL ARGameFolderPrepareDocumentsHome(NSError **error);
 FOUNDATION_EXPORT NSData * _Nullable
 ARGameFolderReadPrefix(NSString *relativePath, NSUInteger maxLength,
                        NSError **error);
+/* M7.51 guest I/O: only real guest HLE/syscall execution invokes this.
+ * Returns no file bytes without validating the stored local manifest. */
+FOUNDATION_EXPORT int ARGameFolderGuestIO(const char *relative,uint64_t offset,
+                                            void *dst,size_t count,size_t *actual,
+                                            uint64_t *size);
 NS_ASSUME_NONNULL_END

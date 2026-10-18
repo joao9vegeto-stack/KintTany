@@ -7,6 +7,8 @@
 #import <CommonCrypto/CommonDigest.h>
 #include "../ios-probe/ARBuildProvenance.h"
 #include "../runtime/ppu_bridge.h"
+#include "../runtime/ppu_guest_fs.h"
+extern void ar_m751_last_fs_trace(ar_fs_trace *);
 #include "../runtime/ppu_m717_graph.h"
 extern void ar_m717_last_aot_trace(ar_aot_trace *);
 extern int ar_private_elf_inspect(const unsigned char*,size_t,unsigned int[5]);
@@ -736,6 +738,14 @@ extern int ar_probe_rsx_texture_cache_mutation(unsigned swizzled,unsigned int ou
   };
   NSString *last=(e&&[e[@"last_aot"] unsignedIntValue])?
      hexval(@"last_aot"):@"NÃO MEDIDO";
+  NSString *fsOpen=([e[@"fs_opens"] unsignedIntValue]>0u)?
+    [NSString stringWithFormat:@"COMPROVADO · aberturas=%@ · FD=%@ · caminho=%@",
+      val(@"fs_opens"),val(@"fs_fd"),e[@"fs_path"]?:@"NÃO MEDIDO"]:
+    @"não comprovado (nenhuma abertura real do guest)";
+  NSString *fsRead=([e[@"fs_bytes"] unsignedLongLongValue]>0u)?
+    [NSString stringWithFormat:@"COMPROVADO · leituras=%@ · bytes=%@",
+      val(@"fs_reads"),val(@"fs_bytes")]:
+    @"não comprovado (nenhuma leitura positiva do guest)";
   NSString *origin=e?@"execução real no iPhone":@"NÃO MEDIDO";
   NSString *elf=e?@"comprovado":@"não comprovado";
   NSString *native=e&&[e[@"dispatches"] unsignedIntValue]?
@@ -761,8 +771,8 @@ extern int ar_probe_rsx_texture_cache_mutation(unsigned swizzled,unsigned int ou
      "ELF carregado: %@\n"
      "AOT executado no caminho atual: %@\n"
      "USRDIR detectado: %@\n"
-     "cellFsOpen: não comprovado (nenhum caminho/FD real registrado)\n"
-     "cellFsRead com bytes positivos: não comprovado\n"
+     "cellFsOpen: %@\n"
+     "cellFsRead com bytes positivos: %@\n"
      "PSARC aberto/analisado no guest: não comprovado\n"
      "Primeiro comando RSX real: não comprovado\n"
      "Primeiro quadro original do jogo: não comprovado\n\n",
@@ -774,7 +784,7 @@ extern int ar_probe_rsx_texture_cache_mutation(unsigned swizzled,unsigned int ou
      val(@"unique"),origin,val(@"dispatches"),origin,
      val(@"fallback"),origin,val(@"limit"),origin,
      val(@"rc"),origin,hexval(@"stop"),hexval(@"opcode"),origin,
-     last,origin,elf,native,
+     last,origin,elf,native,fsOpen,fsRead,
      self.m750HostObservation?:@"não comprovado"];
   [report appendFormat:
     @"COMPARAÇÃO COM A BUILD ANTERIOR\n"
@@ -1501,6 +1511,8 @@ extern int ar_probe_rsx_texture_cache_mutation(unsigned swizzled,unsigned int ou
     self.m750Run=nil; /* new run invalidates older guest numbers */
     const int nativeRC=ar_m70_native_runtime_probe(
        data.bytes,data.length,detail48[8],native);
+    ar_fs_trace fsMeasured={0};
+    ar_m751_last_fs_trace(&fsMeasured);
     NSString *nativeText=[NSString stringWithFormat:
        @"\nM7.0 — RUNTIME PPU NATIVO (ELF privado)\n"
        "Loader=%d · Entrada=0x%08X · TOC=0x%08X · segmentos=%u\n"
@@ -1654,6 +1666,11 @@ extern int ar_probe_rsx_texture_cache_mutation(unsigned swizzled,unsigned int ou
           @"stop":@(native[7]),
           @"opcode":@(measured.fallback_unsupported_word),
           @"last_aot":@(lastAot),
+          @"fs_opens":@(fsMeasured.open_ok),
+          @"fs_reads":@(fsMeasured.read_ok),
+          @"fs_bytes":@(fsMeasured.bytes_read),
+          @"fs_fd":@(fsMeasured.last_fd),
+          @"fs_path":[NSString stringWithUTF8String:fsMeasured.last_path]?:@"",
           @"rc":@((int32_t)native[6]),
           @"when":[[NSDate date] description]};
     }

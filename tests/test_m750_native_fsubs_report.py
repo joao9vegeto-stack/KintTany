@@ -33,7 +33,7 @@ class TestM750(unittest.TestCase):
             'COMPARAÇÃO COM A BUILD ANTERIOR','HISTÓRICO',
             'AR_M750_BUILD_SHA','AR_M750_BUILD_RUN_ID',
             'NÃO MEDIDO','self.m750Run=nil','m750HostObservation',
-            'cellFsRead com bytes positivos: não comprovado',
+            'cellFsRead com bytes positivos: %@',
             '0x003B1D78','M7.49 (log físico'):
    self.assertIn(x,ui)
   self.assertIn('AscensionRecomp-M7.50-NPUA80918',ui)

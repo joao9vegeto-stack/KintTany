@@ -7,6 +7,8 @@
 #include <limits.h>
 #include <sys/stat.h>
 #include <string.h>
+#include <fcntl.h>
+#include <unistd.h>
 static NSString * const kGameBookmarkKey=@"ARGameFolderBookmarkM737";
 static NSString * const kGameErrorDomain=@"AscensionRecomp.GameFolder";
 static NSError *gameError(NSInteger code,NSString *detail) {
@@ -514,4 +516,61 @@ NSData *ARGameFolderReadPrefix(NSString *relativePath,NSUInteger maxLength,
    } @finally { [handle closeFile]; }
    return data;
  } @finally {if(scoped)[folder stopAccessingSecurityScopedResource];}
+}
+
+/* M7.51: guest FS calls enter here ONLY through signed owner PPU HLE.
+ * Local Files bookmark + exact relative manifest entry + no-symlink openat.
+ * No game contents/logs in repository, and no copying into IPA. */
+int ARGameFolderGuestIO(const char *relative,uint64_t offset,void *dst,
+                         size_t count,size_t *actual,uint64_t *outsize){
+ if(actual)*actual=0;
+ if(outsize)*outsize=0;
+ if(!relative||!actual||!outsize||(count&&!dst)||offset>LLONG_MAX)
+   return -1;
+ NSString *rel=[NSString stringWithUTF8String:relative];
+ if(!safeRelativePath(rel))return -1;
+ NSURL *root=restoreRoot(NULL);
+ if(!root)return -1;
+ BOOL scoped=[root startAccessingSecurityScopedResource];
+ @try {
+   NSDictionary *manifest=loadManifest(NULL);
+   if(!manifest)return -1;
+   NSNumber *expected=nil;
+   for(NSDictionary *item in manifest[@"files"]){
+     if([item[@"path"] isEqualToString:rel]){
+       expected=item[@"bytes"];break;
+     }
+   }
+   if(!expected)return -1;
+   int current=open(root.fileSystemRepresentation,O_RDONLY|O_DIRECTORY|O_NOFOLLOW|O_CLOEXEC);
+   if(current<0)return -1;
+   NSArray<NSString*> *parts=[rel componentsSeparatedByString:@"/"];
+   BOOL ok=YES;
+   for(NSUInteger i=0;i<parts.count;i++){
+     const int flags=O_RDONLY|O_NOFOLLOW|O_CLOEXEC|
+                       (i+1<parts.count?O_DIRECTORY:0);
+     int next=openat(current,parts[i].UTF8String,flags);
+     close(current);
+     current=next;
+     if(current<0){ok=NO;break;}
+   }
+   if(!ok)return -1;
+   struct stat st={0};
+   if(fstat(current,&st)!=0||!S_ISREG(st.st_mode)||st.st_size<0||
+      (uint64_t)st.st_size!=expected.unsignedLongLongValue){
+     close(current);return -1;
+   }
+   *outsize=(uint64_t)st.st_size;
+   if(count && offset<(uint64_t)st.st_size){
+     const uint64_t remaining=(uint64_t)st.st_size-offset;
+     const size_t n=(size_t)(remaining<count?remaining:count);
+     ssize_t got=pread(current,dst,n,(off_t)offset);
+     if(got<0){close(current);return -1;}
+     *actual=(size_t)got;
+   }
+   close(current);
+   return 0;
+ } @finally {
+   if(scoped)[root stopAccessingSecurityScopedResource];
+ }
 }

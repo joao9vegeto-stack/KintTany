@@ -152,6 +152,13 @@ xcrun --sdk iphoneos clang -target arm64-apple-ios17.0 -isysroot "$SDK" \
 xcrun --sdk iphoneos clang -target arm64-apple-ios17.0 -isysroot "$SDK" \
     -std=c11 -O2 -Wall -Wextra -Werror -I upstream/runtime/ppu -I runtime \
     -c runtime/ppu_m750_native_path.c -o ios-probe/ppu_m750_native_path.o
+# M7.51 original owner VMX and genuine guest filesystem HLE.
+xcrun --sdk iphoneos clang -target arm64-apple-ios17.0 -isysroot "$SDK" \
+    -std=c11 -O2 -Wall -Wextra -Werror -I upstream/runtime/ppu -I runtime \
+    -c runtime/ppu_m751_vsubfp.c -o ios-probe/ppu_m751_vsubfp.o
+xcrun --sdk iphoneos clang -target arm64-apple-ios17.0 -isysroot "$SDK" \
+    -std=c11 -O2 -Wall -Wextra -Werror -I upstream/runtime/ppu -I runtime \
+    -c runtime/ppu_guest_fs.c -o ios-probe/ppu_guest_fs.o
 # Stage the native PPU bridge as an ARM64 object and link the prebuilt
 # IOS PPU core archive; never compile or bundle the user's PS3 ELF.
 test -s ios-ppu-core/libAscensionPPUCore-ios-arm64.a
@@ -273,6 +280,7 @@ xcrun --sdk iphoneos clang++ -target arm64-apple-ios17.0 \
     ios-probe/ppu_m748_native_vcfsx.o \
     ios-probe/ppu_m749_native_frsp.o \
     ios-probe/ppu_m750_native_path.o \
+    ios-probe/ppu_m751_vsubfp.o ios-probe/ppu_guest_fs.o \
     ${GOWA2_OBJECTS[@]+"${GOWA2_OBJECTS[@]}"} \
     ios-probe/ppu_m717_graph.o \
     ios-probe/ppu_m720_fallback.o \
@@ -298,6 +306,12 @@ grep -Fq '_ar_ppu_timebase_ticks' m78-owner-aot-linked-symbols.txt
 # M7.33 final Mach-O must retain ACTUAL production LV2 service binder.
 grep -Eq ' [Tt] _ar_lv2_bind_bootstrap_syscalls$' m78-owner-aot-linked-symbols.txt
 grep -Eq ' [Tt] _ar_lv2_timezone$' m78-owner-aot-linked-symbols.txt
+grep -Eq ' [Tt] _ar_m751_register_vsubfp$' m78-owner-aot-linked-symbols.txt
+grep -Eq ' [Tt] _ar_m751_native_003b0604$' m78-owner-aot-linked-symbols.txt
+grep -Eq ' [Tt] _ar_fs_guest_open$' m78-owner-aot-linked-symbols.txt
+grep -Eq ' [Tt] _ar_fs_guest_read$' m78-owner-aot-linked-symbols.txt
+grep -Eq ' [Tt] _ar_fs_guest_close$' m78-owner-aot-linked-symbols.txt
+grep -Eq ' [Tt] _ar_fs_bind_syscalls$' m78-owner-aot-linked-symbols.txt
 for pc in \
   00010200 00010380 00010410 00010434 00010444 00010534 \
   000107a4 00010814 002c1024 002c10c8 002c10d0 002c10e4 \
@@ -392,6 +406,7 @@ echo 'M7.47: FMR raw-bit preservation enabled in PPC fallback and lifter, two or
 echo 'M7.48: 31 original owner PPC native VMX instructions at 0x003DDF20 and 18-word hot suffix 0x003DDF54. Generic VMX VCFSX 4-lane signed-fixed to IEEE754 RN ties-even added to AOT lifter+fallback. Detect Documents/AscensionRecomp/NPUA80918; empty titles rejected. Not proven on iPhone yet.' >> m78-aot-status.txt
 echo 'M7.49: UI local file detection button now ARRANGED/visible. FRSP original 0x003B1D5C statically compiled to ARM64 and registered after executable ELF/VM authentication+whole SHA; scalar FRSP supported in generic lifter and fallback. iPhone physical test pending.' >> m78-aot-status.txt
 echo 'M7.50: genuine original fsubs/stfs/12STVX and BDNZ 24 PPC across 2 native AOT entries, ELF+VM authenticated. Reports distinguish build and legacy runtime, no guest cellFs claimed without execution.' >> m78-aot-status.txt
+echo 'M7.51: native owner vsubfp 0x003B0604 plus guest-only read-only sys_fs open/read/close, guarded by local manifest; iPhone proof pending.' >> m78-aot-status.txt
 (cd ios-probe && zip -q -r ../AscensionRecompProbe-0.6.22-unsigned.ipa Payload)
 test -s AscensionRecompProbe-0.6.22-unsigned.ipa
 shasum -a 256 AscensionRecompProbe-0.6.22-unsigned.ipa > m41-ipa-sha256.txt
