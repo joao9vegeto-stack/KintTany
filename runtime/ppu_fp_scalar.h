@@ -161,4 +161,30 @@ static inline int ar_fp_fsubs(ppu_context*c,unsigned dst,unsigned ra,unsigned rb
  ar_fp_class(c,result,inexact,roundedup);
  return AR_OK;
 }
+/* M7.54 PPC FCMPU/FCMPO: update CR(BF) and FPSCR.FPCC with LT/GT/EQ/UN.
+ * Reject signaling NaNs and ordered comparisons with NaNs until FPSCR
+ * exception/trap handling exists. Quiet NaNs allowed only on FCMPU.
+ * This operation never rounds or modifies source FPRs. */
+static inline int ar_fp_compare(ppu_context *c,unsigned bf,unsigned fa,
+                                unsigned fb,int ordered){
+ if(!c||bf>=8u||fa>=32u||fb>=32u)return AR_PPC_UNSUPPORTED;
+ uint64_t a=ar_fp_raw64(c,fa),b=ar_fp_raw64(c,fb);
+ const uint64_t e=UINT64_C(0x7ff0000000000000);
+ const uint64_t m=UINT64_C(0x000fffffffffffff);
+ const uint64_t q=UINT64_C(0x0008000000000000);
+ const int an=(a&e)==e && (a&m)!=0;
+ const int bn=(b&e)==e && (b&m)!=0;
+ const int as=an && !(a&q),bs=bn && !(b&q);
+ if(as||bs||((an||bn)&&ordered))return AR_PPC_UNSUPPORTED;
+ uint32_t cc=1u;
+ if(!(an||bn)){
+  const double x=c->fpr[fa],y=c->fpr[fb];
+  cc=(x<y)?8u:(x>y)?4u:2u;
+ }
+ const unsigned shift=28u-4u*bf;
+ c->cr=(c->cr&~(UINT32_C(0xf)<<shift))|(cc<<shift);
+ c->fpscr=(c->fpscr&~UINT32_C(0x0000f000))|(cc<<12);
+ return AR_OK;
+}
+
 #endif

@@ -104,9 +104,17 @@ int ar_ppc_fallback_step(ppu_context*c,const uint8_t*elf,size_t elf_len,
     ar_ppc_note_fp(pc,w);
     c->cia=pc+4u;return AR_TAIL;
  }
- case 63:{ /* fcfid and fdiv: PPC64 FP register bits / FPSCR */
+ case 63:{ /* scalar FPU and compare ops */
     const unsigned xo=(w>>1)&1023u;
-    if(w&1u)return AR_PPC_UNSUPPORTED; /* CR1 dot not yet implemented */
+    if(xo==0u||xo==32u){ /* FCMPU / FCMPO (Rc and BF reserved bits) */
+      if((w&1u)||((w>>21)&3u))return AR_PPC_UNSUPPORTED;
+      const unsigned bf=(w>>23)&7u;
+      const int rc=ar_fp_compare(c,bf,a,b,xo==32u);
+      if(rc!=AR_OK)return rc;
+      ar_ppc_note_fp(pc,w);
+      c->cia=pc+4u;return AR_TAIL;
+    }
+    if(w&1u)return AR_PPC_UNSUPPORTED; /* arithmetic CR1 dot unhandled */
     int rc=AR_PPC_UNSUPPORTED;
     if(xo==846u && a==0u)
        rc=ar_fp_fcfid(c,d,b);

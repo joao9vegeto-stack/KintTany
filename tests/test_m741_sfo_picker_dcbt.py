@@ -25,5 +25,5 @@ class M741(unittest.TestCase):
   self.assertIn("tests/host_m741_ppc_dcbt.c",self.workflow)
  def test_build(self):
   self.assertIn("<string>90</string>",(R/"ios/Probe-Info.plist").read_text())
-  self.assertIn("AscensionRecomp-M7.53-GOWA-6251-AOT-VECTORFP-GUESTFS-AppleARM64",self.workflow)
+  self.assertIn("AscensionRecomp-M7.54-GOWA-6251-AOT-FCMP-GUESTFS-AppleARM64",self.workflow)
 if __name__=="__main__":unittest.main()

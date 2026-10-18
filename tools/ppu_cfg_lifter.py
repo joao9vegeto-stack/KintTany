@@ -67,7 +67,7 @@ def lift(words: list[int] | tuple[int, ...], base: int, name: str = 'ppu_sample'
     if not words or len(words)>512 or base & 3:
         raise Unsupported('invalid function length / address')
     needs_fp=any(((w>>26) in (48,50,52,54)) or
-                 ((w>>26)==63 and ((w>>1)&1023) in (12,18,72,846)) or
+                 ((w>>26)==63 and ((w>>1)&1023) in (0,12,18,32,72,846)) or
                  ((w>>26)==59 and ((w>>1)&31)==20)
                  for w in words)
     needs_vmx=any(((w>>26)==4 and
@@ -129,6 +129,13 @@ def lift(words: list[int] | tuple[int, ...], base: int, name: str = 'ppu_sample'
             continue
         if op==63:
             xo=(w>>1)&1023
+            if xo in (0,32):
+                if (w&1) or ((w>>21)&3):
+                    raise Unsupported('FP compare reserved or Rc fields')
+                bf=(w>>23)&7
+                e(f'if(ar_fp_compare(c,{bf},{a},{b},{1 if xo==32 else 0})!=AR_OK) return AR_PPC_UNSUPPORTED;')
+                hist['fcmpo' if xo==32 else 'fcmpu']+=1
+                continue
             if w&1:raise Unsupported('FP Rc updates CR1 not supported yet')
             if xo==846 and a==0:
                 e(f'if(ar_fp_fcfid(c,{d},{b})!=0) return -12;')

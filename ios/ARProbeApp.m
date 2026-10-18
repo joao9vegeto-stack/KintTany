@@ -426,7 +426,7 @@ extern int ar_probe_rsx_texture_cache_mutation(unsigned swizzled,unsigned int ou
     [controller.view addSubview:panel];
     UILabel *header=[UILabel new];
     header.translatesAutoresizingMaskIntoConstraints=NO;
-    header.text=@"ASCENSIONRECOMP   ·   M7.53";
+    header.text=@"ASCENSIONRECOMP   ·   M7.54";
     header.textColor=[UIColor colorWithRed:0.73 green:0.87 blue:1 alpha:1];
     header.font=[UIFont systemFontOfSize:12 weight:UIFontWeightBold];
     header.textAlignment=NSTextAlignmentCenter;
@@ -758,10 +758,10 @@ extern int ar_probe_rsx_texture_cache_mutation(unsigned swizzled,unsigned int ou
   NSString *native=e&&[e[@"dispatches"] unsignedIntValue]?
     @"comprovado":@"não comprovado";
   NSMutableString *report=[NSMutableString stringWithFormat:
-    @"ASCENSIONRECOMP — ESQUEMA M7.53-v4\n"
+    @"ASCENSIONRECOMP — ESQUEMA M7.54-v5\n"
      "EXECUÇÃO ATUAL\n"
      "Branch=%s | Commit=%s | Build Actions=%s | Workflow ID=%s\n"
-     "App=M7.53 (binário 0.6.22/90 legado) | Runtime legado=M7.44 | Relatório=v4\n"
+     "App=M7.54 (binário 0.6.22/90 legado) | Runtime legado=M7.44 | Relatório=v5\n"
      "Tipo teste=%@ | Momento=%@\n"
      "ELF carregado=%@ | origem=%@\n"
      "AOT vinculadas=%@ entradas | origem=%@\n"
@@ -796,10 +796,10 @@ extern int ar_probe_rsx_texture_cache_mutation(unsigned swizzled,unsigned int ou
      fsOpen,fsRead];
   [report appendFormat:
     @"COMPARAÇÃO COM A BUILD ANTERIOR\n"
-     "M7.52 (teste físico 20261018-172444): AOT=7694 entradas;"
-     " distintas=233; despachos=2367; PPC=11372; limite=16384;"
-     " parada=0x003B062C; opcode=0x10A0190A; último AOT=0x003B0608.\n"
-     "M7.53 atual: AOT=%@; distintas=%@; despachos=%@; PPC=%@;"
+     "M7.53 (teste físico 20261018-180824): AOT=7695 entradas;"
+     " distintas=234; despachos=2368; PPC=11376; limite=16384;"
+     " parada=0x003B064C; opcode=0xFC01F800; último AOT=0x003B062C.\n"
+     "M7.54 atual: AOT=%@; distintas=%@; despachos=%@; PPC=%@;
      " limite=%@; parada=%@; opcode=%@; último AOT=%@.\n"
      "Dados ausentes=NÃO MEDIDO, não utilizar baseline para preencher.\n\n",
      val(@"aot"),val(@"unique"),val(@"dispatches"),val(@"fallback"),
@@ -836,7 +836,7 @@ extern int ar_probe_rsx_texture_cache_mutation(unsigned swizzled,unsigned int ou
     date.locale=[NSLocale localeWithLocaleIdentifier:@"en_US_POSIX"];
     date.dateFormat=@"yyyyMMdd-HHmmss";
     NSString *name=[NSString stringWithFormat:
-       @"AscensionRecomp-M7.53-NPUA80918-%@.txt",
+       @"AscensionRecomp-M7.54-NPUA80918-%@.txt",
        [date stringFromDate:[NSDate date]]];
     NSURL *docs=[[[NSFileManager defaultManager]
         URLsForDirectory:NSDocumentDirectory inDomains:NSUserDomainMask] firstObject];
@@ -1863,7 +1863,7 @@ extern int ar_probe_rsx_texture_cache_mutation(unsigned swizzled,unsigned int ou
                         ? frontierReport : nil;
     self.ppuBatchButton.enabled=(self.ppuBatchReport.length>0);
     self.ppuSummary=[NSString stringWithFormat:
-       @"ASCENSIONRECOMP M7.53 · NPUA80918\n"
+       @"ASCENSIONRECOMP M7.54 · NPUA80918\n"
         "AOT ARM64 + FALLBACK PPC EXPERIMENTAL\n"
         "Entradas AOT vinculadas: %u\n"
         "ELF: %@ · entrada 0x%08X\n"
