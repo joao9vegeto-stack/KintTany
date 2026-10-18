@@ -40,7 +40,7 @@ class PS3ProcessEntry(unittest.TestCase):
    self.assertIn(token,U)
   for token in ('tests/host_m675_process_entry.c',
                 'm675-entry-host.log',
-                'AscensionRecomp-M7.41-RPCS3-SFO-AnyType-DCBT'):
+                'AscensionRecomp-M7.42-Logical-PPC-Batch'):
    self.assertIn(token,W)
-  self.assertIn('<string>80</string>',P)
+  self.assertIn('<string>81</string>',P)
 if __name__=="__main__":unittest.main()

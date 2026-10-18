@@ -37,7 +37,7 @@ class GuestLR(unittest.TestCase):
                 'Copiar diagnóstico PPU'):
    self.assertIn(token,U)
   for token in ('tests/host_m676_lr_return.c', 'm676-lr-host.log',
-                'AscensionRecomp-M7.41-RPCS3-SFO-AnyType-DCBT'):
+                'AscensionRecomp-M7.42-Logical-PPC-Batch'):
    self.assertIn(token,WF)
-  self.assertIn('<string>80</string>',PL)
+  self.assertIn('<string>81</string>',PL)
 if __name__=="__main__":unittest.main()

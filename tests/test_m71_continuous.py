@@ -47,5 +47,5 @@ class M71(unittest.TestCase):
             "INTERPRETAÇÃO NÃO É RECOMPILAÇÃO AOT",
             "Copiar diagnóstico PPU"):
    self.assertIn(s,UI)
-  self.assertIn("<string>80</string>",PL)
+  self.assertIn("<string>81</string>",PL)
 if __name__=="__main__": unittest.main()

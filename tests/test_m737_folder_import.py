@@ -50,7 +50,7 @@ class TestM737Folder(unittest.TestCase):
  def test_host_evidence_required_not_decorative(self):
   for token in ("tests/host_m737_gamefolder.m","m737-folder-host",
                 "tests/host_m737_ppc_scale.c","m737-ppu-host",
-                "AscensionRecomp-M7.41-RPCS3-SFO-AnyType-DCBT"):
+                "AscensionRecomp-M7.42-Logical-PPC-Batch"):
    self.assertIn(token,self.workflow)
   self.assertIn("0.6.16",self.script)
 

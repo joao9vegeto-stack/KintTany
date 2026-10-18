@@ -1,4 +1,4 @@
-name: AscensionRecomp M7.41 - PS3 SFO any-file picker and PPC DCBT cache hints
+name: AscensionRecomp M7.42 - PPC64 logical ISA family and owner NOR-CNTLZD
 
 on:
   push:
@@ -447,6 +447,16 @@ jobs:
             -lm -o m741-dcbt-host
           ./m741-dcbt-host 2>&1 | tee m741-dcbt-host.log
           grep -Fxq 'M7.41 PPC DCBT/DCBTST cache-hint semantics: 4 synthetic original-pattern opcodes, 0 GPR/CR/XER/memory mutations, Rc invalid rejected PASS' m741-dcbt-host.log
+      - name: M7.42 PPC64 NOR CNTLZD and general X-form logical family host tests
+        run: |
+          set -euo pipefail
+          clang -std=c11 -O2 -Wall -Wextra -Werror -fsanitize=undefined \
+            -I upstream/runtime/ppu -I runtime \
+            runtime/ppu_bridge.c runtime/ppu_m712_exec_window.c \
+            runtime/ppu_m720_fallback.c tests/host_m742_logical_ppc.c \
+            -lm -o m742-logical-host
+          ./m742-logical-host 2>&1 | tee m742-logical-host.log
+          grep -Fxq 'M7.42 PPC logical family: 15 synthetic owner-pattern vectors, NOR/CNTLZD/NAND/EQV/ORC/ANDC, CR0/SO and alias-safe GPR preservation PASS' m742-logical-host.log
       - name: M5.0 fetch pinned open source shader compiler sources
         run: |
           set -euo pipefail
@@ -1132,12 +1142,13 @@ jobs:
           grep -Fq 'M7.39: local Files/Documents' m78-aot-status.txt
           grep -Fq 'M7.40: no-copy in-place' m78-aot-status.txt
           grep -Fq 'M7.41: permissive UTTypeItem' m78-aot-status.txt
+          grep -Fq 'M7.42: implemented PowerPC64' m78-aot-status.txt
           grep -Eq ' [Tt] _ar_m736_register_owner$' m78-owner-aot-linked-symbols.txt
           grep -Eq ' [Tt] _ar_m734_register_block$' m78-owner-aot-linked-symbols.txt
           grep -Eq ' [Tt] _ar_m734_register_batch$' m78-owner-aot-linked-symbols.txt
           grep -Eq ' [Tt] _ar_lv2_bind_bootstrap_syscalls$' m78-owner-aot-linked-symbols.txt
           grep -Eq ' [Tt] _ar_lv2_timezone$' m78-owner-aot-linked-symbols.txt
-          echo "M7.41: UTTypeItem permits selecting unknown .SFO files in Files without copying; DCBT/DCBTST guest cache hint fallback supported, AOT 1440 preserved; real iPhone folder authorization remains unverified." > m78-actions-status.txt
+          echo "M7.42: general PPC64 NOR/CNTLZD/NAND/EQV/ORC/ANDC verified host ISA coverage; no guessed AOT count, filesystem and native RSX still pending; unchanged iOS external picker permissions." > m78-actions-status.txt
           test -s AscensionRecompProbe-0.6.16-unsigned.ipa
           /usr/libexec/PlistBuddy -c 'Print CFBundleShortVersionString' ios-probe/Payload/AscensionRecompProbe.app/Info.plist | grep -Fx 0.6.16
           /usr/bin/unzip -t AscensionRecompProbe-0.6.16-unsigned.ipa | tee m42-ipa-integrity.log
@@ -1223,7 +1234,7 @@ jobs:
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: AscensionRecomp-M7.41-RPCS3-SFO-AnyType-DCBT
+          name: AscensionRecomp-M7.42-Logical-PPC-Batch
           if-no-files-found: warn
           retention-days: 14
           path: |
@@ -1450,6 +1461,7 @@ jobs:
             m739-local-documents-host.log
             m740-rpcs3-inplace-host.log
             m741-dcbt-host.log
+            m742-logical-host.log
             m78-stage-tests.log
             m78-lv2-host.log
             m78-owner-aot-object-symbols.txt

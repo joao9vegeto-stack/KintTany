@@ -307,6 +307,7 @@ echo 'M7.38: fixed ar_ppc_fallback_attach max to 16384 matching iOS request, eli
 echo 'M7.39: local Files/Documents NPUA80918 importer bypasses inert cloud folder picker; verified synthetic macOS Files-path scan and 4-byte file read, guest sys_fs open/read still pending.' >> m78-aot-status.txt
 echo 'M7.40: no-copy in-place read-only PARAM.SFO permission probe for original RPCS3 game installation. Uses NSFileCoordinator and iOS scoped URL; no permission bypass, no game file modifications, VFS not yet demonstrated.' >> m78-aot-status.txt
 echo 'M7.41: permissive UTTypeItem file filter for unknown PS3 .SFO extension, asCopy:NO; PPC DCBT/DCBTST cache-hint ISA fallback verified; 1440 owner-native AOT preserved. No guest filesystem or game access implied.' >> m78-aot-status.txt
+echo 'M7.42: implemented PowerPC64 NOR/CNTLZD/NAND/EQV/ORC/ANDC generic ISA fallback, correct Rc CR0 and preserved XER/ABI, reg aliasing; native AOT remains 1440; iOS sandbox access to RPCS3 remains unproven.' >> m78-aot-status.txt
 file "$APP/AscensionRecompProbe" | tee m41-executable-file.txt
 xcrun lipo -info "$APP/AscensionRecompProbe" | tee m41-executable-arch.txt
 /usr/libexec/PlistBuddy -c 'Print CFBundleIdentifier' "$APP/Info.plist"

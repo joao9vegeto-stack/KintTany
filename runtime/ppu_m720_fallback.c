@@ -348,6 +348,27 @@ int ar_ppc_fallback_step(ppu_context*c,const uint8_t*elf,size_t elf_len,
    }
    case 40:return add_result(c,pc,y-x,d,record);
    case 266:return add_result(c,pc,x+y,d,record);
+   /* M7.42: general PowerPC64 logical register family. These are X-form
+    * operations: RS is field d, RA is destination a, RB is b. Capture
+    * both source operands BEFORE writing RA (RA may alias RS or RB).
+    * The caller retains the CR/XER/LR/CTR ABI semantics: only Rc=1
+    * updates CR0, and none of these logical instructions touch XER. */
+   case 124:case 476:case 284:case 412:case 60:{
+      const uint64_t rs=r[d],rb=r[b];
+      const uint64_t result=
+          xo==124u?~(rs|rb):  /* nor */
+          xo==476u?~(rs&rb):  /* nand */
+          xo==284u?~(rs^rb):  /* eqv */
+          xo==412u?(rs|~rb):  /* orc */
+                    (rs&~rb); /* andc */
+      return add_result(c,pc,result,a,record);
+   }
+   case 58:{ /* cntlzd RA,RS: count leading zeroes in 64-bit RS */
+      if(b!=0u)return AR_PPC_UNSUPPORTED; /* RB field must be zero */
+      const uint64_t rs=r[d];
+      const uint64_t count=rs?(uint64_t)__builtin_clzll((unsigned long long)rs):64u;
+      return add_result(c,pc,count,a,record);
+   }
    case 444:return add_result(c,pc,r[d]|r[b],a,record);
    case 28:return add_result(c,pc,r[d]&r[b],a,record);
    case 316:return add_result(c,pc,r[d]^r[b],a,record);
