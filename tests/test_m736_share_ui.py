@@ -25,7 +25,7 @@ class M736ShareTests(unittest.TestCase):
         self.assertIn("<key>LSSupportsOpeningDocumentsInPlace</key><true/>",self.plist)
         self.assertIn("<string>0.6.22</string>",self.plist)
         self.assertIn("<string>90</string>",self.plist)
-        self.assertIn("AscensionRecomp-M7.56-NPUA80918",self.ui)
+        self.assertIn("AscensionRecomp-M7.57-NPUA80918",self.ui)
         self.assertIn("AscensionRecompProbe-0.6.22-unsigned.ipa",self.script)
     def test_owner_elf_and_guest_fallback_separate(self):
         c=(ROOT/"runtime/ppu_m736_native_time.c").read_text()

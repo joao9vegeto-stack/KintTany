@@ -34,9 +34,9 @@ class TestM750(unittest.TestCase):
             'AR_M750_BUILD_SHA','AR_M750_BUILD_RUN_ID',
             'NÃO MEDIDO','self.m750Run=nil','m750HostObservation',
             'cellFsRead com bytes positivos: %@',
-            '0x003C4FC4','M7.55 (teste físico'):
+            '0x003C5050','M7.56 (teste físico'):
    self.assertIn(x,ui)
-  self.assertIn('AscensionRecomp-M7.56-NPUA80918',ui)
+  self.assertIn('AscensionRecomp-M7.57-NPUA80918',ui)
   sh=(R/'tools/build_ios_probe_ipa.sh').read_text()
   self.assertIn('GITHUB_SHA',sh)
   self.assertIn('GITHUB_RUN_ID',sh)

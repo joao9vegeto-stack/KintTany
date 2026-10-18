@@ -1,4 +1,4 @@
-name: AscensionRecomp M7.56 - AOT divwu branch and real ELF guest RAM stop evidence
+name: AscensionRecomp M7.57 - signed PPC block batch and AOT-only
 
 on:
   push:
@@ -682,6 +682,21 @@ jobs:
           done
           xcrun nm -g m756-ppu_m756_native_divloop-arm64.o | grep -Fq '_ar_m756_register_divloop'
           xcrun nm -g m756-ppu_m756_stop_evidence-arm64.o | grep -Fq '_ar_m756_capture_stop'
+      - name: M7.57 original PPC two-span ARM64 AOT batch and no-interpreter tests
+        run: |
+          set -euo pipefail
+          python3 -m unittest discover -s tests -p test_m757_batch.py -v 2>&1 | tee m757-native-python.log
+          clang -std=c11 -O2 -Wall -Wextra -Werror -fsanitize=undefined \
+            -I upstream/runtime/ppu -I runtime \
+            runtime/ppu_m757_native_batch.c tests/host_m757_native_batch.c \
+            -o m757-native-host
+          ./m757-native-host 2>&1 | tee m757-native-host.log
+          grep -Fq 'M7.57: two original PPC native ARM64 spans' m757-native-host.log
+          sdk="$(xcrun --sdk iphoneos --show-sdk-path)"
+          xcrun --sdk iphoneos clang -target arm64-apple-ios17.0 -isysroot "$sdk" \
+            -std=c11 -O2 -Wall -Wextra -Werror -I upstream/runtime/ppu -I runtime \
+            -c runtime/ppu_m757_native_batch.c -o m757-native-arm64.o
+          xcrun nm -g m757-native-arm64.o | grep -Fq '_ar_m757_register_owner'
       - name: M5.0 fetch pinned open source shader compiler sources
         run: |
           set -euo pipefail
@@ -1491,7 +1506,7 @@ jobs:
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: AscensionRecomp-M7.56-NATIVE-ONLY-FS-EVIDENCE-AppleARM64
+          name: AscensionRecomp-M7.57-NATIVE-ONLY-BATCH-AppleARM64
           if-no-files-found: warn
           retention-days: 14
           path: |
@@ -1737,6 +1752,9 @@ jobs:
             m755-native-only-host.log
             m755-vaddfp-python.log
             m755-vaddfp-host.log
+            m757-native-python.log
+            m757-native-host.log
+            m757-native-arm64.o
             m756-native-python.log
             m756-divloop-host.log
             m756-stop-evidence-host.log

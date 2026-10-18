@@ -18,7 +18,7 @@ class GuestStackGate(unittest.TestCase):
   self.assertIn("legacyState,rc40,cpu40[0],cpu40[8],cpu40[7]",UI)
   self.assertIn("M6.5 PARADA SEGURA",UI)
   self.assertIn("EA=0x%X · base=0x%X · valor=0x%X",UI)
-  self.assertIn("ASCENSIONRECOMP   ·   M7.56",UI)
+  self.assertIn("ASCENSIONRECOMP   ·   M7.57",UI)
  def test_old_legacy_and_new_overlay_same_guest_fixture(self):
   for text in ("ar_ppu_bootstrap_thirtytwo(d,sizeof d,info,legacy)!=-995",
     "legacy[0]!=26u","legacy[7]!=0x93ab0000u",

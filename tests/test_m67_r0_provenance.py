@@ -30,7 +30,7 @@ class Provenance(unittest.TestCase):
       "self.ppuReportButton.enabled=YES;",
       "ar_ppu_bootstrap_fortyeight_trace(",
       "trace48[0],trace48[1]",
-      "ASCENSIONRECOMP   ·   M7.56"):
+      "ASCENSIONRECOMP   ·   M7.57"):
    self.assertIn(token,U)
  def test_host_and_ci(self):
   for token in ("trace[0]!=0x10080u","trace[1]!=0x6000006cu",

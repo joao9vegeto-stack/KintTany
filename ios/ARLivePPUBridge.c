@@ -59,6 +59,7 @@ extern int ar_m752_register_vsldoi(const uint8_t*,size_t);
 extern int ar_m753_register_vectorfp(const uint8_t*,size_t);
 extern int ar_m754_register_fcmp_branch(const uint8_t*,size_t);
 extern int ar_m756_register_divloop(const uint8_t*,size_t);
+extern int ar_m757_register_owner(const uint8_t*,size_t);
 extern int ar_private_import_match(const uint8_t*,size_t,uint32_t,uint32_t[4],char[48]);
 extern int ar_private_import_find_nid(const uint8_t*,size_t,uint32_t,const char*,uint32_t[4],char[48]);
 
@@ -298,6 +299,10 @@ int ar_m70_native_runtime_probe(const uint8_t*d,size_t len,
   /* M7.56 exact original seven-word division and conditional branch. */
   if(ar_m756_register_divloop(d,len)!=AR_OK){
     ar_bridge_shutdown();return -61;
+  }
+  /* M7.57: two independent authenticated owner spans, no fallback. */
+  if(ar_m757_register_owner(d,len)!=AR_OK){
+    ar_bridge_shutdown();return -62;
   }
 #endif
 #endif
