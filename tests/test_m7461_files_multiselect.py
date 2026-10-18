@@ -22,5 +22,5 @@ class TestMultiSelectM7461(unittest.TestCase):
   self.assertIn("Permissão USRDIR ainda NÃO obtida",s)
   self.assertIn("startAccessingSecurityScopedResource",self.folder)
  def test_plist_build_87(self):
-  self.assertIn("<string>87</string>",(ROOT/"ios/Probe-Info.plist").read_text())
+  self.assertIn("<string>88</string>",(ROOT/"ios/Probe-Info.plist").read_text())
 if __name__=="__main__":unittest.main()

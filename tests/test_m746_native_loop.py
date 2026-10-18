@@ -30,10 +30,10 @@ class M746HotLoop(unittest.TestCase):
  def test_real_host_tests_and_apple_object_link(self):
   for s in ("runtime/ppu_m746_native_loop.c",
             "ios-probe/ppu_m746_native_loop.o",
-            "AscensionRecompProbe-0.6.19-unsigned.ipa"):
+            "AscensionRecompProbe-0.6.20-unsigned.ipa"):
    self.assertIn(s,self.build)
   for s in ("tests/host_m746_native_loop.c","m746-native-host.log",
             "m746-native-arm64.o","_ar_m746_register_hotloop"):
    self.assertIn(s,self.workflow)
-  self.assertIn("<string>87</string>",self.plist)
+  self.assertIn("<string>88</string>",self.plist)
 if __name__=="__main__":unittest.main()

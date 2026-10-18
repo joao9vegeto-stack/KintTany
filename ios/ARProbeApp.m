@@ -728,7 +728,7 @@ extern int ar_probe_rsx_texture_cache_mutation(unsigned swizzled,unsigned int ou
                      body,self.folderReport]:self.folderReport;
     }
     return [NSString stringWithFormat:
-        @"ASCENSIONRECOMP M7.47 — RELATÓRIO ÚNICO\n"
+        @"ASCENSIONRECOMP M7.48 — RELATÓRIO ÚNICO\n"
          "Status, lote PPC, cobertura ARM64, grafo, TLS/HLE e legados.\n"
          "Somente diagnósticos; NÃO inclui o ELF original.\n"
          "==================================================\n\n%@\n",body];
@@ -749,7 +749,7 @@ extern int ar_probe_rsx_texture_cache_mutation(unsigned swizzled,unsigned int ou
     date.locale=[NSLocale localeWithLocaleIdentifier:@"en_US_POSIX"];
     date.dateFormat=@"yyyyMMdd-HHmmss";
     NSString *name=[NSString stringWithFormat:
-       @"AscensionRecomp-M7.47-NPUA80918-%@.txt",
+       @"AscensionRecomp-M7.48-NPUA80918-%@.txt",
        [date stringFromDate:[NSDate date]]];
     NSURL *docs=[[[NSFileManager defaultManager]
         URLsForDirectory:NSDocumentDirectory inDomains:NSUserDomainMask] firstObject];
@@ -1124,8 +1124,9 @@ extern int ar_probe_rsx_texture_cache_mutation(unsigned swizzled,unsigned int ou
       : [NSString stringWithFormat:
          @"M7.39 F1 — PASTA LOCAL NÃO ENCONTRADA\n"
           "Erro (%@/%ld): %@\n"
-          "No Arquivos, mova NPUA80918 para No Meu iPhone / "
-          "AscensionRecomp Test e toque Detectar pasta local.\n",
+          "Não mova a instalação original do RPCS3. Copie apenas os "
+          "arquivos necessários para No Meu iPhone / AscensionRecomp Test / "
+          "AscensionRecomp / NPUA80918. Depois toque Detectar pasta local.\n",
           error.domain?:@"local",(long)error.code,
           error.localizedDescription?:@"pasta ausente"];
     dispatch_async(dispatch_get_main_queue(),^{

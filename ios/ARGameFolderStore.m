@@ -144,6 +144,13 @@ NSDictionary<NSString*,id> *ARGameFolderImport(NSURL *folder,NSError **error) {
      if(error)*error=walkError;
      return nil;
    }
+   /* An empty app-created folder is NOT proof of installed game assets. */
+   if(!files.count){
+     if(error)*error=gameError(35,
+       @"A pasta do jogo está vazia. Não mova o original do RPCS3; "
+        "use uma cópia dos arquivos para testes.");
+     return nil;
+   }
    /* A manifest is not proof of a guest LV2 sys_fs call. */
    NSDictionary *manifest=@{
       @"format":@1,@"title_id":@"NPUA80918",
@@ -200,7 +207,11 @@ NSDictionary<NSString*,id> *ARGameFolderImportLocalAtURL(NSURL *documents,
   * An optional Games or Jogos container is allowed for organization. */
  NSArray<NSArray<NSString*> *> *locations=@[
    @[@"NPUA80918"],@[@"Jogos",@"NPUA80918"],
-   @[@"Games",@"NPUA80918"],@[@"USRDIR"]
+   @[@"Games",@"NPUA80918"],@[@"USRDIR"],
+   /* M7.48: scan the exact app-owned folder created by M7.47,
+    * including accidental nesting if a whole folder is pasted inside. */
+   @[@"AscensionRecomp",@"NPUA80918",@"NPUA80918"],
+   @[@"AscensionRecomp",@"NPUA80918"]
  ];
  for(NSArray<NSString*> *parts in locations) {
    NSURL *folder=documents;
@@ -217,12 +228,15 @@ NSDictionary<NSString*,id> *ARGameFolderImportLocalAtURL(NSURL *documents,
    NSError *indexError=nil;
    NSDictionary *manifest=ARGameFolderImport(folder,&indexError);
    if(manifest)return manifest;
+   if(indexError.code==35)continue; /* skip precreated empty title home */
    if(error)*error=indexError ?: gameError(33,@"Falha no manifesto local.");
    return nil;
  }
  if(error)*error=gameError(32,
-     @"Copie ou mova a pasta NPUA80918 para Arquivos > "
-      "No Meu iPhone > AscensionRecomp Test. Volte ao app e toque Detectar pasta local.");
+     @"Nenhuma cópia válida dos arquivos do jogo foi encontrada. Não mova o "
+      "original do RPCS3. Para testar, COPIE os arquivos para Arquivos > "
+      "No Meu iPhone > AscensionRecomp Test > AscensionRecomp > "
+      "NPUA80918, e toque Detectar pasta local.");
  return nil;
 }
 NSDictionary<NSString*,id> *ARGameFolderImportLocalDocuments(NSError **error) {

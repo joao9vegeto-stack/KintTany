@@ -41,8 +41,8 @@ class TestSecondImport(unittest.TestCase):
             'Copiar diagnóstico PPU'):
    self.assertIn(a,UI)
   for a in ('tests/host_m73_import_discovery.c','m73-prx-host.log',
-            'AscensionRecomp-M7.47-GOWA-6251-AOT-FMR-PARAM-AppleARM64',
+            'AscensionRecomp-M7.48-GOWA-6251-AOT-VMX-AppleARM64',
             '_ar_m73_private_import_probe'):
    self.assertIn(a,WF)
-  self.assertIn('<string>87</string>',P)
+  self.assertIn('<string>88</string>',P)
 if __name__=="__main__": unittest.main()

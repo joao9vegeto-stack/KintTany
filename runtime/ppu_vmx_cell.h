@@ -73,4 +73,37 @@ static inline int ar_vmx_guest_store(const ppu_context*c,unsigned vs,uint64_t ea
  if(n && ar_vm_load(start,temp+src,n)!=AR_OK)return AR_MEM_FAULT;
  return AR_OK;
 }
+
+/* M7.48 VCFSX: convert 4 signed 32-bit fixed-point words to IEEE754
+ * float32. Integer implementation of RN ties-to-even is independent
+ * of ARM FPCR, and is correct for all PPC UIMM scale bits 0..31.
+ * Snapshot source first: VD may alias VB. No FPSCR/CR changes. */
+static inline uint32_t ar_vmx_vcfsx_lane(int32_t val,unsigned scale){
+ const uint32_t neg=val<0?UINT32_C(0x80000000):0u;
+ const uint32_t mag=val<0?(uint32_t)(-(int64_t)val):(uint32_t)val;
+ if(!mag)return 0u;
+ const unsigned msb=31u-(unsigned)__builtin_clz(mag);
+ unsigned exponent=127u+msb-scale;
+ uint32_t significant;
+ if(msb<=23u){
+  significant=mag<<(23u-msb);
+ }else{
+  const unsigned drop=msb-23u;
+  const uint32_t mask=(UINT32_C(1)<<drop)-1u;
+  const uint32_t rem=mag&mask,half=UINT32_C(1)<<(drop-1u);
+  significant=mag>>drop;
+  if(rem>half || (rem==half && (significant&1u)))significant++;
+  if(significant==UINT32_C(0x01000000)){significant>>=1;exponent++;}
+ }
+ return neg|(exponent<<23)|(significant&UINT32_C(0x007fffff));
+}
+static inline void ar_vmx_vcfsx(ppu_context*c,unsigned vd,unsigned vb,unsigned scale){
+ uint32_t src[4],dst[4];
+ for(unsigned i=0;i<4u;i++)src[i]=ar_vmx_word(c,vb,i);
+ for(unsigned i=0;i<4u;i++)dst[i]=ar_vmx_vcfsx_lane((int32_t)src[i],scale);
+ for(unsigned i=0;i<4u;i++)
+  for(unsigned j=0;j<4u;j++)
+   ar_vmx_setbyte(c,vd,i*4u+j,(uint8_t)(dst[i]>>(24u-8u*j)));
+}
+
 #endif

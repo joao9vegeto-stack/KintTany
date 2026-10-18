@@ -69,7 +69,7 @@ def lift(words: list[int] | tuple[int, ...], base: int, name: str = 'ppu_sample'
     needs_fp=any(((w>>26) in (48,50,52,54)) or
                  ((w>>26)==63 and ((w>>1)&1023) in (18,846))
                  for w in words)
-    needs_vmx=any(((w>>26)==4 and (w&2047) in (652,780,844,908)) or
+    needs_vmx=any(((w>>26)==4 and (w&2047) in (652,780,842,844,908)) or
                   ((w>>26)==31 and ((w>>1)&1023) in
                    (103,359,519,775,551,807,231,487,647,903,679,935))
                   for w in words)
@@ -140,6 +140,10 @@ def lift(words: list[int] | tuple[int, ...], base: int, name: str = 'ppu_sample'
                 width={780:1,844:2,908:4}[xo]
                 e(f'ar_vmx_splat_imm(c,{d},{a},{width});')
                 hist[{780:'vspltisb',844:'vspltish',908:'vspltisw'}[xo]]+=1
+                continue
+            if xo==842:
+                e(f'ar_vmx_vcfsx(c,{d},{b},{a});')
+                hist['vcfsx']+=1
                 continue
             if xo==652:
                 if a>3:raise Unsupported('VSPLTW index must be 0..3')

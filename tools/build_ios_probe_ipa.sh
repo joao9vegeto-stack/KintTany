@@ -134,6 +134,10 @@ xcrun --sdk iphoneos clang -target arm64-apple-ios17.0 -isysroot "$SDK" \
 xcrun --sdk iphoneos clang -target arm64-apple-ios17.0 -isysroot "$SDK" \
     -std=c11 -O2 -Wall -Wextra -Werror -I upstream/runtime/ppu -I runtime \
     -c runtime/ppu_m747_native_fmr.c -o ios-probe/ppu_m747_native_fmr.o
+# M7.48: full 31 PPC signed owner VMX startup & 18-opcode suffix.
+xcrun --sdk iphoneos clang -target arm64-apple-ios17.0 -isysroot "$SDK" \
+    -std=c11 -O2 -Wall -Wextra -Werror -I upstream/runtime/ppu -I runtime \
+    -c runtime/ppu_m748_native_vcfsx.c -o ios-probe/ppu_m748_native_vcfsx.o
 # Stage the native PPU bridge as an ARM64 object and link the prebuilt
 # IOS PPU core archive; never compile or bundle the user's PS3 ELF.
 test -s ios-ppu-core/libAscensionPPUCore-ios-arm64.a
@@ -252,6 +256,7 @@ xcrun --sdk iphoneos clang++ -target arm64-apple-ios17.0 \
     ios-probe/ppu_m745_native_srw.o \
     ios-probe/ppu_m746_native_loop.o \
     ios-probe/ppu_m747_native_fmr.o \
+    ios-probe/ppu_m748_native_vcfsx.o \
     ${GOWA2_OBJECTS[@]+"${GOWA2_OBJECTS[@]}"} \
     ios-probe/ppu_m717_graph.o \
     ios-probe/ppu_m720_fallback.o \
@@ -368,7 +373,8 @@ echo 'M7.44: owner ELF CROR+BC 0x003F2860 / 0x003F2864 native ARM64 AOT verified
 echo 'M7.45: native SRW/CMPWI/ANDC/ADDI/STW/BC at 0x0052BA70 owner authenticated, generic SRW fallback and iOS security-scoped folder grant order fixed.' >> m78-aot-status.txt
 echo 'M7.46: four SHA-gated and PT_LOAD/VM-verified native ARM64 guest entries covering 69 original PPC words incl. 32+5 CTR loops, 64-iteration guard. iPhone not yet tested; guest files/RSX unproven.' >> m78-aot-status.txt
 echo 'M7.47: FMR raw-bit preservation enabled in PPC fallback and lifter, two original SHA-verified FMR native ARM64 blocks at 0x003EEF0C and 0x003EEF20. Small copy-mode PARAM.SFO import with independent TITLE_ID parser, app-owned Documents folders, game directory access separate. Device test pending.' >> m78-aot-status.txt
-(cd ios-probe && zip -q -r ../AscensionRecompProbe-0.6.19-unsigned.ipa Payload)
-test -s AscensionRecompProbe-0.6.19-unsigned.ipa
-shasum -a 256 AscensionRecompProbe-0.6.19-unsigned.ipa > m41-ipa-sha256.txt
+echo 'M7.48: 31 original owner PPC native VMX instructions at 0x003DDF20 and 18-word hot suffix 0x003DDF54. Generic VMX VCFSX 4-lane signed-fixed to IEEE754 RN ties-even added to AOT lifter+fallback. Detect Documents/AscensionRecomp/NPUA80918; empty titles rejected. Not proven on iPhone yet.' >> m78-aot-status.txt
+(cd ios-probe && zip -q -r ../AscensionRecompProbe-0.6.20-unsigned.ipa Payload)
+test -s AscensionRecompProbe-0.6.20-unsigned.ipa
+shasum -a 256 AscensionRecompProbe-0.6.20-unsigned.ipa > m41-ipa-sha256.txt
 echo 'UNSIGNED DIAGNOSTIC APP: UIKit CAMetalLayer + real PS3Recomp Metal backend; NO GOWA GAME included' > m41-status.txt
