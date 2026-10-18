@@ -110,8 +110,10 @@ int ar_m70_native_runtime_probe(const uint8_t*d,size_t len,
  if(!tlsbase || tlsbase>=AR_NATIVE_LIMIT)return -27;
  const int rcinit=ar_bridge_init(cap);
  if(rcinit){out[0]=(uint32_t)rcinit;return rcinit;}
+#ifdef ASCENSION_M711_OWNER_AOT
  ar_fs_reset();
  ar_fs_set_host_io(ARGameFolderGuestIO);
+#endif
  ar_lwmutex_reset();
 #ifdef ASCENSION_M711_OWNER_AOT
  ar_mmapper_reset();ar_sysutil_reset();
@@ -323,6 +325,7 @@ int ar_m70_native_runtime_probe(const uint8_t*d,size_t len,
  if(ar_lv2_bind_bootstrap_syscalls()!=AR_OK){
     ar_bridge_shutdown();return -30;
  }
+#ifdef ASCENSION_M711_OWNER_AOT
  /* LV2 #801/#802/#804: real guest-originating file calls. */
  if(ar_fs_bind_syscalls()!=AR_OK){
     ar_bridge_shutdown();return -57;
@@ -343,6 +346,7 @@ int ar_m70_native_runtime_probe(const uint8_t*d,size_t len,
       ar_bind_hle(imp[0],fs_imports[j].handler)==AR_OK)
       out[15]|=0x2000u;
  }
+#endif
  uint32_t tmimp[4]={0}; char tmlib[48]={0};
  const int tmmatch=ar_private_import_find_nid(
     d,len,0x8461e528u,"sysPrxForUser",tmimp,tmlib);
@@ -393,7 +397,9 @@ int ar_m70_native_runtime_probe(const uint8_t*d,size_t len,
  else out[6]=(uint32_t)ar_run(&ctx,image.entry_code,128u);
  out[7]=ar_last_unresolved();
  ar_trace_snapshot(&last_run_trace);
+#ifdef ASCENSION_M711_OWNER_AOT
  ar_fs_snapshot(&last_fs_trace);
+#endif
  last_run_trace.lv2_timezone_completed=ar_lv2_timezone_queries();
  
  if(out[5])out[12]=(uint32_t)ctx.gpr[13];
