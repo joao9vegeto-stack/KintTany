@@ -799,7 +799,7 @@ extern int ar_probe_rsx_texture_cache_mutation(unsigned swizzled,unsigned int ou
      "M7.53 (teste físico 20261018-180824): AOT=7695 entradas;"
      " distintas=234; despachos=2368; PPC=11376; limite=16384;"
      " parada=0x003B064C; opcode=0xFC01F800; último AOT=0x003B062C.\n"
-     "M7.54 atual: AOT=%@; distintas=%@; despachos=%@; PPC=%@;
+     "M7.54 atual: AOT=%@; distintas=%@; despachos=%@; PPC=%@;"
      " limite=%@; parada=%@; opcode=%@; último AOT=%@.\n"
      "Dados ausentes=NÃO MEDIDO, não utilizar baseline para preencher.\n\n",
      val(@"aot"),val(@"unique"),val(@"dispatches"),val(@"fallback"),
