@@ -28,13 +28,13 @@ class FolderLocalTests(unittest.TestCase):
               "M7.39 F1 — PASTA LOCAL IMPORTADA",
               "M7.39 F1 — PASTA LOCAL NÃO ENCONTRADA",
               "self.folderReport=report", "body,self.folderReport",
-              "@[localFolderButton,folderButton,elfButton]"):
+              "@[rpcMarkerButton,folderButton,elfButton]"):
    self.assertIn(val,self.ui)
  def test_real_host_proof_and_ios_files_entitlement(self):
   self.assertIn("tests/host_m739_local_documents.m",self.workflow)
   self.assertIn("m739-local-documents-host",self.workflow)
   self.assertIn("<key>UIFileSharingEnabled</key><true/>",self.plist)
   self.assertIn("<key>LSSupportsOpeningDocumentsInPlace</key><true/>",self.plist)
-  self.assertIn("<string>78</string>",self.plist)
+  self.assertIn("<string>79</string>",self.plist)
 
 if __name__=="__main__":unittest.main()

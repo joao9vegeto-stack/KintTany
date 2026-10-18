@@ -92,6 +92,7 @@ extern int ar_probe_rsx_texture_cache_mutation(unsigned swizzled,unsigned int ou
 @property(nonatomic,copy) NSString *ppuSummary;
 @property(nonatomic,copy) NSString *folderReport;
 @property(nonatomic,strong) UIDocumentPickerViewController *folderPicker;
+@property(nonatomic,strong) UIDocumentPickerViewController *rpcMarkerPicker;
 @property(nonatomic,strong) UIButton *ppuAdvancedButton;
 @property(nonatomic,strong) UIButton *ppuDiagnosticsButton;
 @property(nonatomic,assign) BOOL ready;
@@ -517,6 +518,19 @@ extern int ar_probe_rsx_texture_cache_mutation(unsigned swizzled,unsigned int ou
     [localFolderButton.heightAnchor constraintEqualToConstant:46].active=YES;
     [localFolderButton addTarget:self action:@selector(importGameFolderFromDocuments:)
              forControlEvents:UIControlEventTouchUpInside];
+    /* M7.40: read-only existing RPCS3 PARAM.SFO picker; no copies. */
+    UIButton *rpcMarkerButton=[UIButton buttonWithType:UIButtonTypeSystem];
+    [rpcMarkerButton setTitle:@"Usar RPCS3 existente · PARAM.SFO · sem cópia"
+                    forState:UIControlStateNormal];
+    [rpcMarkerButton setTitleColor:UIColor.whiteColor forState:UIControlStateNormal];
+    rpcMarkerButton.titleLabel.font=[UIFont systemFontOfSize:14
+                                         weight:UIFontWeightSemibold];
+    rpcMarkerButton.titleLabel.adjustsFontSizeToFitWidth=YES;
+    rpcMarkerButton.titleLabel.minimumScaleFactor=0.66;
+    rpcMarkerButton.layer.cornerRadius=11;
+    [rpcMarkerButton.heightAnchor constraintEqualToConstant:46].active=YES;
+    [rpcMarkerButton addTarget:self action:@selector(importRPCS3Marker:)
+              forControlEvents:UIControlEventTouchUpInside];
     NSArray<UIScrollView *> *scrollers=@[game,graphics];
     for(NSUInteger i=0;i<scrollers.count;i++) {
         UIScrollView *scroll=scrollers[i];
@@ -535,7 +549,7 @@ extern int ar_probe_rsx_texture_cache_mutation(unsigned swizzled,unsigned int ou
              @"NPUA80918 · AOT ARM64 do Ascension. Importe o ELF para acompanhar a inicialização nativa." :
              @"Diagnósticos RSX → Metal, do mais recente ao legado. Role para encontrar os testes anteriores.";
         [stack addArrangedSubview:hint];
-        NSArray<UIButton *> *ordered=i==0 ? @[localFolderButton,folderButton,elfButton] : @[
+        NSArray<UIButton *> *ordered=i==0 ? @[rpcMarkerButton,folderButton,elfButton] : @[
             alphaButton,blendButton,maskButton,stencilButton,depthButton,
             multipassButton,mutationButton,drawButton,shaderButton,cacheButton];
         for(UIButton *button in ordered) {
@@ -609,7 +623,7 @@ extern int ar_probe_rsx_texture_cache_mutation(unsigned swizzled,unsigned int ou
                                   "5 toques: TEXTURA por NV4097/cache/Metal\n"
                                   "Sem arquivos do jogo.";
                 self.status.text=@"ASCENSIONRECOMP · NPUA80918\n"
-                                  "M7.39 · Pasta local + PPU retomado\n"
+                                  "M7.40 · RPCS3 existente sem cópia\n"
                                   "Importe GOWA.ELF para executar o código recompilado.\n"
                                   "Inicialização parcial, ainda sem gameplay.\n"
                                   "Ferramentas RSX estão na aba RSX / Metal.";
@@ -707,7 +721,7 @@ extern int ar_probe_rsx_texture_cache_mutation(unsigned swizzled,unsigned int ou
                      body,self.folderReport]:self.folderReport;
     }
     return [NSString stringWithFormat:
-        @"ASCENSIONRECOMP M7.39 — RELATÓRIO ÚNICO\n"
+        @"ASCENSIONRECOMP M7.40 — RELATÓRIO ÚNICO\n"
          "Status, lote PPC, cobertura ARM64, grafo, TLS/HLE e legados.\n"
          "Somente diagnósticos; NÃO inclui o ELF original.\n"
          "==================================================\n\n%@\n",body];
@@ -728,7 +742,7 @@ extern int ar_probe_rsx_texture_cache_mutation(unsigned swizzled,unsigned int ou
     date.locale=[NSLocale localeWithLocaleIdentifier:@"en_US_POSIX"];
     date.dateFormat=@"yyyyMMdd-HHmmss";
     NSString *name=[NSString stringWithFormat:
-       @"AscensionRecomp-M7.39-NPUA80918-%@.txt",
+       @"AscensionRecomp-M7.40-NPUA80918-%@.txt",
        [date stringFromDate:[NSDate date]]];
     NSURL *docs=[[[NSFileManager defaultManager]
         URLsForDirectory:NSDocumentDirectory inDomains:NSUserDomainMask] firstObject];
@@ -1114,6 +1128,21 @@ extern int ar_probe_rsx_texture_cache_mutation(unsigned swizzled,unsigned int ou
     });
   });
 }
+/* No File Provider directory picker: open just PARAM.SFO asCopy:NO.
+ * This may give ONLY file-level access; test parent before claiming more. */
+- (void)importRPCS3Marker:(UIButton *)sender {
+  (void)sender;
+  self.status.text=@"M7.40: selecione PARAM.SFO em rpcs3/data/dev_hdd0/game/NPUA80918. Nenhuma cópia será criada.";
+  UIDocumentPickerViewController *picker=
+       [[UIDocumentPickerViewController alloc]
+             initForOpeningContentTypes:@[UTTypeData] asCopy:NO];
+  picker.delegate=self;
+  picker.allowsMultipleSelection=NO;
+  picker.directoryURL=nil;
+  self.rpcMarkerPicker=picker;
+  [self.window.rootViewController presentViewController:picker
+                                                animated:YES completion:nil];
+}
 - (void)importGameFolder:(UIButton *)sender {
   (void)sender;
   self.status.text=@"Arquivos: abra NPUA80918, depois toque no botão azul Abrir no topo. Selecione a pasta, não um arquivo interno.";
@@ -1137,6 +1166,41 @@ extern int ar_probe_rsx_texture_cache_mutation(unsigned swizzled,unsigned int ou
 }
 - (void)documentPicker:(UIDocumentPickerViewController*)controller
         didPickDocumentsAtURLs:(NSArray<NSURL*>*)urls {
+ if(controller==self.rpcMarkerPicker){
+    self.rpcMarkerPicker=nil;
+    NSURL *marker=urls.firstObject;
+    if(!marker)return;
+    self.status.text=@"M7.40: PARAM.SFO selecionado. Verificando permissão sobre USRDIR sem copiar arquivos…";
+    dispatch_async(dispatch_get_global_queue(QOS_CLASS_USER_INITIATED,0),^{
+      NSError *error=nil;
+      NSDictionary *manifest=ARGameFolderProbeRPCS3Marker(marker,&error);
+      NSString *report=manifest
+        ? [NSString stringWithFormat:
+            @"M7.40 — RPCS3 ACESSÍVEL (IN PLACE)\n"
+             "rpcs3/data/dev_hdd0/game/NPUA80918\n"
+             "Arquivos=%@ · tamanho=%@ bytes\n"
+             "PARAM.SFO lido=%@ bytes · USRDIR verificável\n"
+             "Nenhum arquivo do RPCS3 foi copiado, movido ou alterado.\n"
+             "Acesso após reinício precisa confirmação separada.\n"
+             "cellFsOpen/cellFsRead PS3 ainda não demonstradas.\n",
+             manifest[@"file_count"],manifest[@"total_bytes"],
+             manifest[@"param_sfo_prefix_bytes"]]
+        : [NSString stringWithFormat:
+            @"M7.40 — ESCOPO RPCS3 RESTRITO\n"
+             "Esperado: rpcs3/data/dev_hdd0/game/NPUA80918\n"
+             "Erro (%@/%ld): %@\n"
+             "Nenhuma cópia, movimentação ou alteração de arquivo.\n"
+             "A pasta inteira requer permissão explícita do iOS.\n",
+             error.domain?:@"iOS",(long)error.code,
+             error.localizedDescription?:@"sem autorização"];
+      dispatch_async(dispatch_get_main_queue(),^{
+        self.folderReport=report;
+        self.status.text=report;
+        self.ppuDiagnosticsButton.enabled=YES;
+      });
+    });
+    return;
+ }
  if(controller==self.folderPicker){
     self.folderPicker=nil;
     NSURL *chosen=urls.firstObject;
@@ -1660,7 +1724,7 @@ extern int ar_probe_rsx_texture_cache_mutation(unsigned swizzled,unsigned int ou
                         ? frontierReport : nil;
     self.ppuBatchButton.enabled=(self.ppuBatchReport.length>0);
     self.ppuSummary=[NSString stringWithFormat:
-       @"ASCENSIONRECOMP M7.39 · NPUA80918\n"
+       @"ASCENSIONRECOMP M7.40 · NPUA80918\n"
         "AOT ARM64 + FALLBACK PPC EXPERIMENTAL\n"
         "Entradas AOT vinculadas: %u\n"
         "ELF: %@ · entrada 0x%08X\n"
@@ -1861,6 +1925,11 @@ extern int ar_probe_rsx_texture_cache_mutation(unsigned swizzled,unsigned int ou
  }
 }
 - (void)documentPickerWasCancelled:(UIDocumentPickerViewController*)controller {
+  if(controller==self.rpcMarkerPicker){
+    self.rpcMarkerPicker=nil;
+    self.status.text=@"M7.40: seleção cancelada, instalação RPCS3 intocada.";
+    return;
+  }
   if(controller==self.folderPicker){
     self.folderPicker=nil;
     self.status.text=@"Importação da pasta cancelada.";

@@ -229,6 +229,102 @@ NSDictionary<NSString*,id> *ARGameFolderImportLocalDocuments(NSError **error) {
     firstObject];
  return ARGameFolderImportLocalAtURL(documents,error);
 }
+/* M7.40: permissioned no-copy test of the RPCS3 Documents installation.
+ * User chooses .../data/dev_hdd0/game/NPUA80918/PARAM.SFO in the Apple
+ * document picker asCopy:NO. Reading this small marker does not grant
+ * access to its 20+ GB siblings by itself. We test that separately and
+ * fail closed if the File Provider supplies only a file-level grant.
+ */
+NSDictionary<NSString*,id> *ARGameFolderProbeRPCS3Marker(NSURL *paramSfo,
+                                                         NSError **error) {
+ if(!paramSfo.isFileURL) {
+  if(error)*error=gameError(40,@"A seleção não retornou uma URL de arquivo local.");
+  return nil;
+ }
+ NSArray<NSString*> *pieces=paramSfo.path.pathComponents;
+ NSArray<NSString*> *suffix=@[@"data",@"dev_hdd0",@"game",
+                              @"NPUA80918",@"PARAM.SFO"];
+ if(pieces.count<suffix.count) {
+  if(error)*error=gameError(41,@"Selecione PARAM.SFO dentro de "
+                   "rpcs3/data/dev_hdd0/game/NPUA80918.");
+  return nil;
+ }
+ for(NSUInteger i=0;i<suffix.count;i++) {
+  if(![pieces[pieces.count-suffix.count+i] isEqualToString:suffix[i]]) {
+   if(error)*error=gameError(41,@"Arquivo fora da instalação NPUA80918 "
+                     "(rpcs3/data/dev_hdd0/game/NPUA80918/PARAM.SFO).");
+   return nil;
+  }
+ }
+ BOOL fileScope=[paramSfo startAccessingSecurityScopedResource];
+ @try {
+  NSFileCoordinator *coordinator=[[NSFileCoordinator alloc]
+                                       initWithFilePresenter:nil];
+  __block NSData *prefix=nil;
+  __block NSError *readError=nil;
+  NSError *coordError=nil;
+  [coordinator coordinateReadingItemAtURL:paramSfo
+                    options:NSFileCoordinatorReadingWithoutChanges
+                      error:&coordError
+                 byAccessor:^(NSURL *readURL) {
+    NSFileHandle *h=[NSFileHandle fileHandleForReadingFromURL:readURL
+                                                       error:&readError];
+    if(!h)return;
+    @try {prefix=[h readDataUpToLength:4u error:&readError];}
+    @finally {[h closeFile];}
+  }];
+  if(!prefix.length||coordError||readError) {
+   if(error)*error=coordError?:readError?:
+      gameError(42,@"O iOS não autorizou ler o PARAM.SFO sem cópia.");
+   return nil;
+  }
+  NSURL *root=[paramSfo URLByDeletingLastPathComponent];
+  BOOL dir=NO;
+  if(![NSFileManager.defaultManager fileExistsAtPath:root.path
+                                         isDirectory:&dir]||!dir) {
+   if(error)*error=gameError(43,@"PARAM.SFO autorizado, mas a pasta "
+         "NPUA80918 está fora do escopo concedido pelo iOS.");
+   return nil;
+  }
+  NSURL *usrdir=[root URLByAppendingPathComponent:@"USRDIR" isDirectory:YES];
+  BOOL filesDir=NO;
+  if(![NSFileManager.defaultManager fileExistsAtPath:usrdir.path
+                                         isDirectory:&filesDir]||!filesDir) {
+   if(error)*error=gameError(44,@"PARAM.SFO acessível; o iOS não liberou "
+        "USRDIR. Autorizar um arquivo não autoriza a pasta inteira.");
+   return nil;
+  }
+  /* Only read directory metadata. No writes, deletes, renames or copies
+   * are ever performed under the RPCS3 container. */
+  NSError *importError=nil;
+  NSDictionary *manifest=ARGameFolderImport(root,&importError);
+  if(!manifest) {
+   if(error)*error=importError?:
+     gameError(45,@"Permissão insuficiente para ler os arquivos de USRDIR.");
+   return nil;
+  }
+  BOOL hasUSRDIR=NO;
+  for(NSDictionary *entry in manifest[@"files"]) {
+   NSString *relative=entry[@"path"];
+   if([relative hasPrefix:@"USRDIR/"]){hasUSRDIR=YES;break;}
+  }
+  if(!hasUSRDIR) {
+   if(error)*error=gameError(46,@"O seletor autorizou PARAM.SFO, mas "
+      "não comprovou leitura dos arquivos em USRDIR.");
+   return nil;
+  }
+  NSMutableDictionary *verified=[manifest mutableCopy];
+  verified[@"source"]=@"rpcs3/data/dev_hdd0/game/NPUA80918";
+  verified[@"param_sfo_prefix_bytes"]=@(prefix.length);
+  verified[@"read_only"]=@YES;
+  verified[@"no_copy"]=@YES;
+  verified[@"folder_access_verified"]=@YES;
+  verified[@"permission_kind"]=fileScope?@"security-scoped file":@"local";
+  return verified;
+ } @finally {
+  if(fileScope)[paramSfo stopAccessingSecurityScopedResource];
+ }
+}
 NSDictionary<NSString*,id> *ARGameFolderRestore(NSError **error) {
  NSURL *root=restoreRoot(error);
  if(!root)return nil;

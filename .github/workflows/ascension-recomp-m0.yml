@@ -1,4 +1,4 @@
-name: AscensionRecomp M7.39 - local Files folder importer bypassing cloud picker
+name: AscensionRecomp M7.40 - no-copy RPCS3 PARAM.SFO permission and directory scope
 
 on:
   push:
@@ -428,6 +428,15 @@ jobs:
             -o m739-local-documents-host
           ./m739-local-documents-host 2>&1 | tee m739-local-documents-host.log
           grep -Fxq 'M7.39 Files On My iPhone Documents route: missing-directory error, NPUA80918 manifest, actual 4-byte host read, restored bookmark PASS' m739-local-documents-host.log
+      - name: M7.40 verify original RPCS3 marker in-place read-only with NSFileCoordinator
+        run: |
+          set -euo pipefail
+          clang -fobjc-arc -fmodules -O2 -Wall -Wextra -Werror \
+            -I ios -framework Foundation \
+            ios/ARGameFolderStore.m tests/host_m740_rpcs3_inplace.m \
+            -o m740-rpcs3-inplace-host
+          ./m740-rpcs3-inplace-host 2>&1 | tee m740-rpcs3-inplace-host.log
+          grep -Fxq 'M7.40 read-only RPCS3 PARAM.SFO in-place: exact path, 4-byte coordinated read, original files unchanged, USRDIR manifest, invalid marker denied, unavailable directory denied PASS' m740-rpcs3-inplace-host.log
       - name: M5.0 fetch pinned open source shader compiler sources
         run: |
           set -euo pipefail
@@ -1111,12 +1120,13 @@ jobs:
           grep -Fq 'M7.37: F0 selected game-folder' m78-aot-status.txt
           grep -Fq 'M7.38: fixed ar_ppc_fallback_attach' m78-aot-status.txt
           grep -Fq 'M7.39: local Files/Documents' m78-aot-status.txt
+          grep -Fq 'M7.40: no-copy in-place' m78-aot-status.txt
           grep -Eq ' [Tt] _ar_m736_register_owner$' m78-owner-aot-linked-symbols.txt
           grep -Eq ' [Tt] _ar_m734_register_block$' m78-owner-aot-linked-symbols.txt
           grep -Eq ' [Tt] _ar_m734_register_batch$' m78-owner-aot-linked-symbols.txt
           grep -Eq ' [Tt] _ar_lv2_bind_bootstrap_syscalls$' m78-owner-aot-linked-symbols.txt
           grep -Eq ' [Tt] _ar_lv2_timezone$' m78-owner-aot-linked-symbols.txt
-          echo "M7.39: Files On My iPhone Documents NPUA80918 local game-folder route, 4-byte host read and bookmark verified with synthetic files; cloud folder picker optional; no guest cellFsOpen/Read claim." > m78-actions-status.txt
+          echo "M7.40: in-place PARAM.SFO read-only file capability test against existing RPCS3 NPUA80918; directory access only if iOS grants; no copies, no changes to game, guest filesystem still pending." > m78-actions-status.txt
           test -s AscensionRecompProbe-0.6.16-unsigned.ipa
           /usr/libexec/PlistBuddy -c 'Print CFBundleShortVersionString' ios-probe/Payload/AscensionRecompProbe.app/Info.plist | grep -Fx 0.6.16
           /usr/bin/unzip -t AscensionRecompProbe-0.6.16-unsigned.ipa | tee m42-ipa-integrity.log
@@ -1202,7 +1212,7 @@ jobs:
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: AscensionRecomp-M7.39-Local-Documents-Game-Folder
+          name: AscensionRecomp-M7.40-RPCS3-InPlace-ReadOnly
           if-no-files-found: warn
           retention-days: 14
           path: |
@@ -1427,6 +1437,7 @@ jobs:
             m737-ppu-host.log
             m738-runtime-attach-host.log
             m739-local-documents-host.log
+            m740-rpcs3-inplace-host.log
             m78-stage-tests.log
             m78-lv2-host.log
             m78-owner-aot-object-symbols.txt

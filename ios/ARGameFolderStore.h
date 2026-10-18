@@ -5,6 +5,13 @@
 NS_ASSUME_NONNULL_BEGIN
 FOUNDATION_EXPORT NSDictionary<NSString*,id> * _Nullable
 ARGameFolderImport(NSURL *folder, NSError **error);
+/* M7.40: read-only existing RPCS3 installation probe. PARAM.SFO is opened
+ * in place; never copied, moved, modified or re-saved. Only works if
+ * the iOS URL security scope also allows the original NPUA80918 folder.
+ * Failure is explicit and must not be bypassed with sandbox traversal.
+ */
+FOUNDATION_EXPORT NSDictionary<NSString*,id> * _Nullable
+ARGameFolderProbeRPCS3Marker(NSURL *paramSfo, NSError **error);
 FOUNDATION_EXPORT NSDictionary<NSString*,id> * _Nullable
 ARGameFolderRestore(NSError **error);
 /* M7.39: independent local Files -> On My iPhone -> App Documents route.

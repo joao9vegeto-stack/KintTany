@@ -28,7 +28,7 @@ class TLS(unittest.TestCase):
    self.assertIn(x,U)
   for x in ('tests/host_m674_tls.c',
             'm674-tls-host.log',
-            'AscensionRecomp-M7.39-Local-Documents-Game-Folder'):
+            'AscensionRecomp-M7.40-RPCS3-InPlace-ReadOnly'):
    self.assertIn(x,W)
-  self.assertIn('<string>78</string>',P)
+  self.assertIn('<string>79</string>',P)
 if __name__=="__main__":unittest.main()

@@ -305,6 +305,7 @@ echo 'M7.36: one SHA-verified original owner-ELF nine-opcode time continuation A
 echo 'M7.37: F0 selected game-folder host access with bookmark, read-only manifest and real bounded host file prefix; no cellFs syscall claimed. PPC integer family + fallback budgets 16384/32768; AOT count unchanged.' >> m78-aot-status.txt
 echo 'M7.38: fixed ar_ppc_fallback_attach max to 16384 matching iOS request, eliminating M7.37 loader=-38 before AOT. Folder picker message and full local error report. Native execution on iPhone must be rechecked.' >> m78-aot-status.txt
 echo 'M7.39: local Files/Documents NPUA80918 importer bypasses inert cloud folder picker; verified synthetic macOS Files-path scan and 4-byte file read, guest sys_fs open/read still pending.' >> m78-aot-status.txt
+echo 'M7.40: no-copy in-place read-only PARAM.SFO permission probe for original RPCS3 game installation. Uses NSFileCoordinator and iOS scoped URL; no permission bypass, no game file modifications, VFS not yet demonstrated.' >> m78-aot-status.txt
 file "$APP/AscensionRecompProbe" | tee m41-executable-file.txt
 xcrun lipo -info "$APP/AscensionRecompProbe" | tee m41-executable-arch.txt
 /usr/libexec/PlistBuddy -c 'Print CFBundleIdentifier' "$APP/Info.plist"
