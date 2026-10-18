@@ -1,0 +1,132 @@
+ASCENSIONRECOMP — GUIA DE INTEGRAÇÃO M7.40 (AOT OFF-LINE)
+
+OBJETIVO ORIGINAL
+Recompilar estaticamente código PowerPC do GOWA para C nativo e então ARM64,
+integrado ao app iOS. A meta final é executar o jogo no iPhone sem emulador de
+PS3. Este lote é AOT real e experimental para um subconjunto do ELF, mas a
+branch ainda tem fallback/interpreter PPC. Enquanto o teste real executar
+instruções pelo fallback, o projeto ainda não cumpre o requisito “sem emulador”.
+Só alegar esse marco quando o caminho testado do jogo tiver zero instruções
+executadas pelo fallback e a cobertura AOT/serviços necessários estiver provada.
+
+PONTO DE PARTIDA DA BRANCH
+- HEAD `AscensionRecomp`: 4783a6d67710480c3be3fa6256984a18a3fb4278 (M7.39).
+- A execução Actions #176 desse commit concluiu `success`; isso valida o
+  workflow e os testes automatizados, não comprova execução física no iPhone.
+- M7.39 adicionou `Files > No Meu iPhone > AscensionRecomp Test` e uma leitura
+  local de 4 bytes no host com arquivos sintéticos. O commit declara que isso
+  ainda NÃO é uma chamada cellFsOpen/cellFsRead feita pelo jogo.
+
+O QUE FOI PRODUZIDO A PARTIR DO ELF ENVIADO
+- SHA-256 do ELF: 4bf75c897b82d1beb25514cbadaff3d03e1b0c7bf849fa5d289be4f9183462b5
+- OPD: 7643 entradas executáveis distintas
+- candidatos com intervalo CFG: 7488
+- funções traduzidas para C: 6251 de 7488
+- instruções PPC cobertas por essas funções: 221,061
+- funções rejeitadas pelo subconjunto/validador: 1237
+- módulos C do lote completo: 9
+- além disso: bloco observado de 8 instruções em 0x00524C54, incluindo MULLI
+  e os dois destinos do BC em 0x00524C70.
+
+AVANÇO DECISIVO PARA O CARREGAMENTO DE ARQUIVOS
+- A tabela de imports do ELF tem 350 imports e 26 da biblioteca `sys_fs`.
+- Ela já contém os três stubs de arquivo que precisamos ligar:
+  cellFsOpen NID 0x718BF5F8, stub PPC 0x00665D7C;
+  cellFsRead NID 0x4D5FF8E2, stub PPC 0x00665D44;
+  cellFsClose NID 0x2CB51F0D, stub PPC 0x00665CD4.
+- Isso prova que o ELF importa essas APIs; ainda não prova em que instante
+  ou PC de chamador o jogo as invoca. Capturar essa chamada em execução.
+- O bridge atual resolve imports por NID/HLE. Adicionar os três binds e
+  handlers reais, conectados à pasta M7.39, com leitura e estado do descritor.
+  Não responder sucesso sem abrir/ler bytes reais. Preservar também erros e
+  posição de leitura. O PC chamador, caminho, tamanho e bytes devem ir ao log.
+- RPCS3 identifica esses NIDs como cellFsOpen/Read/Close e seus wrappers
+  encaminham Open/Read para sys_fs_open/sys_fs_read; referências no fim do guia.
+
+O lote inteiro usa intervalos de funções estimados via OPD+CFG. Compilar não
+prova equivalência semântica de todas as funções. A função de registro compara
+o SHA-256 recebido com o ELF de origem. O módulo do frontier também valida as
+palavras PPC executáveis, os bytes do VM convidado e o hash do bloco.
+
+AUTORIZAÇÃO E ARQUIVOS
+O usuário autorizou explicitamente colocar estes dados derivados do jogo na
+branch pública AscensionRecomp e informou que depois tornará o repositório
+privado. Não pedir confirmação de novo. O pacote NÃO contém GOWA.ELF, RAP ou
+PSARC; contém C derivado, mapas, manifestos, ferramentas e este guia.
+Não alterar main ou PsTJon. Fazer um commit por vez na branch AscensionRecomp,
+com exatamente um workflow por commit, conforme o fluxo já usado no projeto.
+
+PRÓXIMO COMMIT: M7.40
+REPRODUÇÃO DO COMPILADOR OFF-LINE (ELF fornecido pelo usuário)
+1. `python3 tools/ppu_preflight.py "$ELF" --output /tmp/m740/preflight.json`
+2. `python3 tools/ppu_aot_autorange.py --elf "$ELF" --functions-out /tmp/m740/functions.json --report-out /tmp/m740/cfg.json`
+3. `python3 tools/ppu_aot_build_batch.py --elf "$ELF" --functions /tmp/m740/functions.json --output-dir /tmp/m740/out --prefix m740 --require-entry 0x10410`
+   Isso emite C nativo em módulos separados, o instalador SHA-gated, o manifesto
+   e a lista de símbolos. O ELF original não é copiado para o pacote de saída.
+
+INTEGRAÇÃO NECESSÁRIA NO REPOSITÓRIO
+1. Copiar os módulos `runtime/ppu_m740_offline_*.c` e
+   `runtime/ppu_m740_trace_frontier.c` para runtime/.
+2. No build iOS, compilar e linkar todos os módulos do lote mais o frontier
+   como C ARM64 (mesmas flags e includes usadas pelos módulos PPU atuais).
+3. Em ARLivePPUBridge.c, declarar e chamar
+   ar_m740_offline_aot_install_sha256(digest, sizeof(digest)) somente depois
+   de calcular/authenticar o SHA-256 do ELF e depois dos módulos AOT atuais.
+   Chamar também ar_m740_register_frontier(elf,len,digest,sizeof(digest)).
+4. Preservar as implementações M7.1–M7.39. Os nomes de símbolos M7.40 têm
+   prefixo ar_m740_ para não colidir no linker. Se ar_register retornar
+   AR_DUPLICATE, o instalador do lote deve aceitar e manter a implementação
+   previamente registrada; qualquer outro erro deve falhar fechado.
+5. Limite do bridge: 8.192 entradas. As 6251 funções (ou o total atualizado
+   do manifesto) + as 1.440 existentes ficam abaixo desse limite. Adicionar
+   uma asserção do total antes da integração e contar as entradas únicas em
+   runtime; não inferir execução pelo total compilado/linkado.
+6. No mesmo milestone, adicionar HLE read-only para os três imports acima:
+   abrir apenas dentro da raiz importada, manter tabela de descritores e
+   offsets, copiar bytes reais para o VM PPC e retornar a quantidade lida.
+   Cobrir erro de caminho, descritor inválido, EOF e travessia de diretório.
+   Adicionar testes host de open/read/close com arquivo sintético e conferir
+   que os NIDs/stubs do ELF ficam ligados aos handlers corretos.
+7. Manter também o teste CI do MULLI/frontier. A checagem local do bloco passou
+   quatro estados de registradores, os dois lados do desvio e MULLI com
+   imediato negativo/overflow. No iPhone, exigir relatório de que
+   0x00524C54 foi despachado como AOT, com PC/word terminal e fallback separado,
+   e que o guest cellFsOpen+cellFsRead recebeu bytes reais da pasta local.
+   Rodar tools/verify_m740_symbols.py sobre o `nm -g` do Mach-O final usando
+   `reports/m740-symbols.txt`; exigir que todos os símbolos ARM64 estejam
+   definidos no executável, não apenas no objeto .o.
+
+PRÓXIMA META M7.40: AOT EM LOTE + PRIMEIRO OPEN/READ DO JOGO
+- Preservar a rota M7.39 de `Files > No Meu iPhone > AscensionRecomp Test`.
+  `ARGameFolderReadPrefix` lê no host; não fingir que isso é leitura do jogo.
+- Inspecionar imports reais do ELF e o runtime PS3Recomp no HEAD atual para
+  identificar se o caminho usado pelo jogo passa por cellFs NIDs ou por LV2
+  syscalls. Implementar primeiro o ponto realmente importado pelo ELF, não um
+  NID presumido. Mapear `/dev_hdd0/game/NPUA80918/USRDIR/...` para a raiz local
+  importada com normalização de caminho e rejeição de traversal/symlinks.
+- Instrumentar a primeira abertura/leitura chamada pelo PPC: NID/syscall,
+  PC chamador, caminho convidado, descritor, tamanho pedido, bytes retornados
+  e erro. O relatório deve distinguir retorno real de stub/falha.
+- No teste físico, perseguir o caminho do frontier sem aumentar artificialmente
+  os contadores. Se alcançar um PC sem AOT, registrar PC/opcode e gerar o
+  próximo lote por CFG/trace, em blocos completos e com ambos os sucessores.
+- Sucesso M7.40 só significa que a IPA foi construída e o usuário confirmou
+  dispatch nativo desse bloco. Só afirmar leitura de conteúdo do Ascension
+  após evidência de abertura/leitura guest atendida com bytes reais do diretório
+  escolhido pelo usuário.
+
+ARQUIVOS DO PACOTE
+- `runtime/ppu_m740_offline_aot_*.c`: lote AOT completo separado em módulos.
+- `runtime/ppu_m740_offline_aot_install.c`: verificação SHA e registro do lote.
+- `runtime/ppu_m740_trace_frontier.c`: bloco quente de 0x00524C54 e validador.
+- `tools/`: scanner CFG, lifter, construtor do lote, teste e verificador M7.40.
+- `reports/`: preflight, rejeições CFG, manifestos e inventário de opcodes.
+
+REFERÊNCIAS PARA A SEMÂNTICA DOS IMPORTS
+- RPCS3 `cellFs.cpp`: https://github.com/RPCS3/rpcs3/blob/master/rpcs3/Emu/Cell/Modules/cellFs.cpp
+- Tabela de NIDs: https://www.psdevwiki.com/ps3/Fnids.idh
+
+Este lote foi criado para substituir a lenta expansão manual por instrução.
+Ele aumenta bastante a escala, mas não elimina o fallback: opcode não coberto,
+bloco não elegível, imports/LV2, syscalls, filesystem, RSX e validação em iPhone
+continuam sendo trabalhos separados.
