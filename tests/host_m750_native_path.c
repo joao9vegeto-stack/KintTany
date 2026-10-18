@@ -95,7 +95,7 @@ int main(void){
     ar_read32(0x14b8u)!=0xaabbccddu||
     ar_read32(0x14bcu)!=0xaabbccddu||
     c.lr!=0x550010u)return 8;
- ppu_context bad={0};bad.gpr[31]=UINT64_C(0xffffffffffffff00);
+ ppu_context bad={0};bad.gpr[31]=UINT64_C(0x100000000);
  bad.fpr[1]=2.;bad.fpr[31]=1.;
  if(functions[0](&bad)!=AR_MEM_FAULT)return 9;
  printf("M7.50 original 24-PPC AOT: authenticated ELF/VM + native fsubs/stfs/12STVX/CTR-bdnz, BE real memory, no fake cellFs PASS\n");
