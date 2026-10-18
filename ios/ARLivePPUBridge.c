@@ -44,6 +44,7 @@ extern int ar_m734_register_block(const uint8_t*,size_t);
 extern int ar_m734_register_batch(const uint8_t*,size_t);
 extern int ar_m735_register_owner(const uint8_t*,size_t);
 extern int ar_m736_register_owner(const uint8_t*,size_t);
+extern int ar_m744_register_owner(const uint8_t*,size_t);
 extern int ar_private_import_match(const uint8_t*,size_t,uint32_t,uint32_t[4],char[48]);
 extern int ar_private_import_find_nid(const uint8_t*,size_t,uint32_t,const char*,uint32_t[4],char[48]);
 
@@ -220,6 +221,12 @@ int ar_m70_native_runtime_probe(const uint8_t*d,size_t len,
     ar_bridge_shutdown();return -48;
  }
 #endif
+  /* M7.44: native CROR+BC at the actual device blockade.
+   * Install only after SHA-256 and offline AOT registration; require
+   * matching executable words and loaded guest memory, else fail closed. */
+  if(ar_m744_register_owner(d,len)!=AR_OK){
+     ar_bridge_shutdown();return -49;
+  }
 #endif
 #endif
  out[5]=(uint32_t)ar_registered_count(); /* genuine linked game AOT only */

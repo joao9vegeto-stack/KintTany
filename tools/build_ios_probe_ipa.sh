@@ -118,6 +118,10 @@ GOWA2_OBJECTS+=(ios-probe/ppu_gowa2_offline_aot_install.o)
 python3 tools/verify_gowa2_macho.py ios-probe/gowa2-staged/symbols.txt \
   m743-gowa2-objects-nm.txt | tee m743-gowa2-object-verified.log
 AOT_COMPILE_DEFINES+=(-DASCENSION_GOWA2_OFFLINE_AOT_LINKED)
+# M7.44: owner-authenticated two-op CROR+BC is genuinely compiled ARM64.
+xcrun --sdk iphoneos clang -target arm64-apple-ios17.0 -isysroot "$SDK" \
+    -std=c11 -O2 -Wall -Wextra -Werror -I upstream/runtime/ppu -I runtime \
+    -c runtime/ppu_m744_native_cror.c -o ios-probe/ppu_m744_native_cror.o
 # Stage the native PPU bridge as an ARM64 object and link the prebuilt
 # IOS PPU core archive; never compile or bundle the user's PS3 ELF.
 test -s ios-ppu-core/libAscensionPPUCore-ios-arm64.a
@@ -232,6 +236,7 @@ xcrun --sdk iphoneos clang++ -target arm64-apple-ios17.0 \
     ios-probe/ppu_m734_native_batch.o \
     ios-probe/ppu_m735_native_time.o \
     ios-probe/ppu_m736_native_time.o \
+    ios-probe/ppu_m744_native_cror.o \
     ${GOWA2_OBJECTS[@]+"${GOWA2_OBJECTS[@]}"} \
     ios-probe/ppu_m717_graph.o \
     ios-probe/ppu_m720_fallback.o \
@@ -344,7 +349,8 @@ echo 'M7.43: verified Apple ARM64 object and FINAL Mach-O contain all 6251 offli
 file "$APP/AscensionRecompProbe" | tee m41-executable-file.txt
 xcrun lipo -info "$APP/AscensionRecompProbe" | tee m41-executable-arch.txt
 /usr/libexec/PlistBuddy -c 'Print CFBundleIdentifier' "$APP/Info.plist"
-(cd ios-probe && zip -q -r ../AscensionRecompProbe-0.6.16-unsigned.ipa Payload)
-test -s AscensionRecompProbe-0.6.16-unsigned.ipa
-shasum -a 256 AscensionRecompProbe-0.6.16-unsigned.ipa > m41-ipa-sha256.txt
+echo 'M7.44: owner ELF CROR+BC 0x003F2860 / 0x003F2864 native ARM64 AOT verified behind SHA gate and registered AFTER 6251 offline entries; next physical iPhone PC not yet proven.' >> m78-aot-status.txt
+(cd ios-probe && zip -q -r ../AscensionRecompProbe-0.6.17-unsigned.ipa Payload)
+test -s AscensionRecompProbe-0.6.17-unsigned.ipa
+shasum -a 256 AscensionRecompProbe-0.6.17-unsigned.ipa > m41-ipa-sha256.txt
 echo 'UNSIGNED DIAGNOSTIC APP: UIKit CAMetalLayer + real PS3Recomp Metal backend; NO GOWA GAME included' > m41-status.txt
