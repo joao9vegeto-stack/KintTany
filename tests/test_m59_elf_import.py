@@ -11,7 +11,7 @@ class M59(unittest.TestCase):
   for x in ("UIDocumentPickerDelegate","didPickDocumentsAtURLs:",
             "CC_SHA256(","ar_private_elf_inspect(","testM58AlphaTest:"):
    self.assertIn(x,app)
-  for x in ("ARPrivateELFProbe.o","0.6.15-unsigned.ipa"):
+  for x in ("ARPrivateELFProbe.o","0.6.16-unsigned.ipa"):
    self.assertIn(x,build)
   for x in ("host_m59_elf.c","m59-host.log"):
    self.assertIn(x,work)

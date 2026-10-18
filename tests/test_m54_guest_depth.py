@@ -38,6 +38,6 @@ class ActualDepthContract(unittest.TestCase):
                       "testM52TextureMutation:","testM51GuestDraw:","testRSXCache:"):
             self.assertIn(token,app)
         wf=(ROOT/".github/workflows/ascension-recomp-m0.yml").read_text()
-        self.assertIn("AscensionRecompProbe-0.6.15-unsigned.ipa",wf)
+        self.assertIn("AscensionRecompProbe-0.6.16-unsigned.ipa",wf)
         self.assertIn("m54-status.txt",wf)
 if __name__=="__main__": unittest.main()

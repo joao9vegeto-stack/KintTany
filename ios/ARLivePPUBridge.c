@@ -291,11 +291,11 @@ int ar_m70_native_runtime_probe(const uint8_t*d,size_t len,
   * Native ARM64 entries take precedence, no JIT or new secret required.
   * Previous HLE/VM mappings and 1418 AOT definitions are unchanged. */
 #ifdef ASCENSION_M711_OWNER_AOT
- if(ar_ppc_fallback_attach(d,len,2048u,ar_ppc_fallback_step)!=AR_OK){
+ if(ar_ppc_fallback_attach(d,len,16384u,ar_ppc_fallback_step)!=AR_OK){
     ar_mmapper_reset();ar_bridge_shutdown();return -38;
  }
 #endif
- if(out[5])out[6]=(uint32_t)ar_run(&ctx,image.entry_code,8192u);
+ if(out[5])out[6]=(uint32_t)ar_run(&ctx,image.entry_code,32768u);
  else out[6]=(uint32_t)ar_run(&ctx,image.entry_code,128u);
  out[7]=ar_last_unresolved();
  ar_trace_snapshot(&last_run_trace);
