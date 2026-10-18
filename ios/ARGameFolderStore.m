@@ -232,7 +232,7 @@ NSDictionary<NSString*,id> *ARGameFolderImportLocalDocuments(NSError **error) {
  return ARGameFolderImportLocalAtURL(documents,error);
 }
 
-/* M7.47: import a SMALL user-selected PARAM.SFO like GOWA.ELF
+/* M7.47: import a SMALL user-selected PARAM.SFO like arquivo ELF
  * (document picker asCopy:YES). System-provided temporary file ONLY;
  * no game data copied by this app, no claim of parent-directory access.
  * Validate the real PSF index and the TITLE_ID key, never just the name. */
