@@ -5,7 +5,7 @@
 #include <stddef.h>
 #include <string.h>
 #include "ppu_bridge.h"
-extern int ar_m712_exec_window(const uint8_t*,size_t,uint32_t[6]);
+extern int ar_m712_exec_window(const uint8_t*,size_t,uint32_t,uint32_t[6]);
 static void fmr(ppu_context*c,unsigned dst,unsigned src){
  uint64_t bits;memcpy(&bits,&c->fpr[src],8u);memcpy(&c->fpr[dst],&bits,8u);
 }
