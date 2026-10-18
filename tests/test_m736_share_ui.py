@@ -24,8 +24,8 @@ class M736ShareTests(unittest.TestCase):
         self.assertIn("<key>UIFileSharingEnabled</key><true/>",self.plist)
         self.assertIn("<key>LSSupportsOpeningDocumentsInPlace</key><true/>",self.plist)
         self.assertIn("<string>0.6.16</string>",self.plist)
-        self.assertIn("<string>81</string>",self.plist)
-        self.assertIn("AscensionRecomp-M7.42-NPUA80918",self.ui)
+        self.assertIn("<string>82</string>",self.plist)
+        self.assertIn("AscensionRecomp-M7.43-NPUA80918",self.ui)
         self.assertIn("AscensionRecompProbe-0.6.16-unsigned.ipa",self.script)
     def test_owner_elf_and_guest_fallback_separate(self):
         c=(ROOT/"runtime/ppu_m736_native_time.c").read_text()
