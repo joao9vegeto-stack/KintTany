@@ -83,6 +83,13 @@ int main(void){
  ppu_context bad={0};bad.gpr[7]=0;bad.gpr[31]=8;bad.cr=0x12345678;
  if(first(&bad)!=AR_PPC_UNSUPPORTED||bad.cia!=0x003c5054||
     bad.cr!=0x12345678)return 9;
+ /* Real iPhone M7.57 collision: signed legacy bulk AOT at 003C50C8
+  * must win. A new 003C5050 entry must still be installed, and the
+  * installer must NOT fail or overwrite the historical pointer. */
+ ar_ppu_fn old_bulk=second;
+ first=NULL;
+ if(ar_m757_register_owner(fake,sizeof(fake))!=AR_OK||
+    !first||second!=old_bulk)return 10;
  puts("M7.57: two original PPC native ARM64 spans (13+3), three real branch decisions, CR/XER and divide-zero fail-closed PASS");
  return 0;
 }

@@ -17,6 +17,8 @@ class M757(unittest.TestCase):
   self.assertIn("0x003c50c8",s)
   self.assertIn("0x003c5180",s)
   self.assertIn("0x003c50d4",s)
+  self.assertIn("rc==AR_DUPLICATE ? AR_OK : rc",s)
+  self.assertIn("ar_m757_register_owner(fake,sizeof(fake))!=AR_OK", (ROOT/"tests/host_m757_native_batch.c").read_text())
   self.assertNotIn("ar_ppc_fallback_step",s)
  def test_runtime_uses_aot_only(self):
   bridge=(ROOT/"ios/ARLivePPUBridge.c").read_text()

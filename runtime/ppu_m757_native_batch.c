@@ -123,9 +123,14 @@ int ar_m757_register_owner(const uint8_t*elf,size_t len){
     }
   }
  }
- for(unsigned span=0;span<sizeof(spans)/sizeof(spans[0]);span++){
-  const int rc=ar_register(spans[span].pc,spans[span].fn);
-  if(rc!=AR_OK)return rc;
- }
- return AR_OK;
+ /* 003C5050 was the M7.56 unresolved PC: it MUST be newly installed. */
+ int rc=ar_register(spans[0].pc,spans[0].fn);
+ if(rc!=AR_OK)return rc;
+ /* 003C50C8 already has _ar_bulk_ppu_003c50c8 in the signed M7.18
+  * historical ARM64 batch. Installing a duplicate caused M7.57 loader -62.
+  * Keep the first authenticated AOT owner (the bridge deliberately rejects
+  * duplicate registrations). If the pre-existing translation is absent in
+  * a different build, install this verified 3-word native continuation. */
+ rc=ar_register(spans[1].pc,spans[1].fn);
+ return rc==AR_DUPLICATE ? AR_OK : rc;
 }
