@@ -120,3 +120,10 @@ M7.64.1 HOTFIX APÓS ACTIONS #247 (ID 39282022356)
   validada enquanto o novo run não terminar em SUCCESS.
 - Regras preservadas: AscensionRecomp apenas; 1 commit / 1 workflow,
   sem assets comerciais, PPC interpreter/JIT/fallback.
+
+HOTFIX ACTIONS #248 (ID 39289693476): 432/432 Python unit tests passaram.
+A primeira falha posterior foi linker do teste host: -o m764c-host
+colidia com a pasta m764c-host/, errno=21 (Is a directory).
+Executable movido para m764c-test-host e invocação atualizada.
+Não é falha de semântica PPC; nenhum objeto iOS foi compilado antes
+que este teste host passasse. Próximo Actions deve alcançar build Apple.

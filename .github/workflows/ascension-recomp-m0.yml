@@ -868,8 +868,8 @@ jobs:
           PY
           python3 tools/m764_cfg_successors.py --snapshot m764c-host-snapshot.json --output-dir m764c-host | tee m764c-host-generation.log
           clang -std=c11 -O2 -Wall -Wextra -Werror -I upstream/runtime/ppu -I runtime \
-            m764c-host/ppu_m764c_00.c tests/host_m764c_successor.c -o m764c-host
-          ./m764c-host | tee m764c-host-test.log
+            m764c-host/ppu_m764c_00.c tests/host_m764c_successor.c -o m764c-test-host
+          ./m764c-test-host | tee m764c-host-test.log
           clang -std=c11 -O2 -Wall -Wextra -Werror -DASCENSION_NATIVE_ONLY=1 \
             -I upstream/runtime/ppu -I runtime \
             runtime/ppu_bridge.c tests/host_m764_tail_trace.c -o m764-tail-host
