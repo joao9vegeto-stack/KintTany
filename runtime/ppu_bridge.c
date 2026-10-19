@@ -2,7 +2,8 @@
 #include "ppu_bridge.h"
 #include <stdlib.h>
 #include <string.h>
-#define MAX_FUNCS 65535 /* bounded native AOT capacity >29,849 offline table entries; 16-bit slot uses index+1 */
+/* native AOT 65,535; uint16_t hash stores (index+1) */
+#define MAX_FUNCS 65535
 #define MAX_MEM (128u*1024u*1024u)
 #define MAX_DEPTH 64
 #define MAX_IMPORTS 2048
@@ -12,7 +13,8 @@ static struct {uint32_t pc;ar_ppu_fn fn;} funcs[MAX_FUNCS];
 static size_t nfunc,mem_size;
 /* Open-addressed 32k index: bounded lookup, no allocations during dispatch.
  * Slot stores registered-index+1; zero is empty. */
-#define AR_AOT_INDEX_SIZE 131072u /* power-of-two hash capacity for 65,535 AOT entries */
+/* power-of-two hash >= 2 * MAX_FUNCS */
+#define AR_AOT_INDEX_SIZE 131072u
 static uint16_t aot_slot[AR_AOT_INDEX_SIZE];
 static uint8_t trace_seen[MAX_FUNCS];
 static uint32_t trace_ring[AR_AOT_TRACE_PCS],trace_total,trace_unique;

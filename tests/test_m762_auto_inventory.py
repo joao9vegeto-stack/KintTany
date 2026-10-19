@@ -69,7 +69,7 @@ class M762Batch(unittest.TestCase):
         self.assertIn("m762_semantic_snapshot.gz.b64",build)
         self.assertIn("m762-final-attestation.json",build)
         self.assertIn("ar_m762_register_discovered(d,len)",runtime)
-        self.assertIn("#define MAX_FUNCS 16384",bridge)
+        self.assertIn("#define MAX_FUNCS 65535",bridge)
         self.assertNotIn("ar_ppc_fallback_step",pipeline.emit_sources.__code__.co_names)
 if __name__=="__main__":
     unittest.main()
