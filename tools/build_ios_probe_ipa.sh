@@ -182,6 +182,11 @@ python3 tools/generate_m758_owner_aot.py --output runtime/ppu_m758_generated.c
 xcrun --sdk iphoneos clang -target arm64-apple-ios17.0 -isysroot "$SDK" \
     -std=c11 -O2 -Wall -Wextra -Werror -I upstream/runtime/ppu -I runtime \
     -c runtime/ppu_m758_generated.c -o ios-probe/ppu_m758_generated.o
+# M7.59: 42 PPC words until next branch; no runtime interpreter.
+python3 tools/generate_m759_owner_aot.py --output runtime/ppu_m759_generated.c
+xcrun --sdk iphoneos clang -target arm64-apple-ios17.0 -isysroot "$SDK" \
+    -std=c11 -O2 -Wall -Wextra -Werror -I upstream/runtime/ppu -I runtime \
+    -c runtime/ppu_m759_generated.c -o ios-probe/ppu_m759_generated.o
 # M7.56: capture live guest memory vs PT_LOAD file bytes, not fallback counters.
 xcrun --sdk iphoneos clang -target arm64-apple-ios17.0 -isysroot "$SDK" \
     -std=c11 -O2 -Wall -Wextra -Werror -I upstream/runtime/ppu -I runtime \
@@ -311,7 +316,7 @@ xcrun --sdk iphoneos clang++ -target arm64-apple-ios17.0 \
     ios-probe/ppu_m748_native_vcfsx.o \
     ios-probe/ppu_m749_native_frsp.o \
     ios-probe/ppu_m750_native_path.o \
-    ios-probe/ppu_m751_vsubfp.o ios-probe/ppu_m752_vsldoi.o ios-probe/ppu_m753_native_vectorfp.o ios-probe/ppu_m754_native_fcmp.o ios-probe/ppu_m756_native_divloop.o ios-probe/ppu_m757_native_batch.o ios-probe/ppu_m758_generated.o ios-probe/ppu_m756_stop_evidence.o ios-probe/ppu_guest_fs.o \
+    ios-probe/ppu_m751_vsubfp.o ios-probe/ppu_m752_vsldoi.o ios-probe/ppu_m753_native_vectorfp.o ios-probe/ppu_m754_native_fcmp.o ios-probe/ppu_m756_native_divloop.o ios-probe/ppu_m757_native_batch.o ios-probe/ppu_m758_generated.o ios-probe/ppu_m759_generated.o ios-probe/ppu_m756_stop_evidence.o ios-probe/ppu_guest_fs.o \
     ${GOWA2_OBJECTS[@]+"${GOWA2_OBJECTS[@]}"} \
     ios-probe/ppu_m717_graph.o \
     ${M711_OBJECTS[@]+"${M711_OBJECTS[@]}"} \
@@ -343,6 +348,8 @@ grep -Eq ' [Tt] _ar_m754_register_fcmp_branch$' m78-owner-aot-linked-symbols.txt
 grep -Eq ' [Tt] _ar_m756_register_divloop$' m78-owner-aot-linked-symbols.txt
 grep -Eq ' [Tt] _ar_m757_register_owner$' m78-owner-aot-linked-symbols.txt
 grep -Eq ' [Tt] _ar_m758_register_owner$' m78-owner-aot-linked-symbols.txt
+grep -Eq ' [Tt] _ar_m759_register_owner$' m78-owner-aot-linked-symbols.txt
+grep -Eq ' [Tt] _ar_m759_native_002c1378$' m78-owner-aot-linked-symbols.txt
 grep -Eq ' [Tt] _ar_m758_native_003c5110$' m78-owner-aot-linked-symbols.txt
 grep -Eq ' [Tt] _ar_m757_native_003c5050$' m78-owner-aot-linked-symbols.txt
 grep -Eq ' [Tt] _ar_m757_native_003c50c8$' m78-owner-aot-linked-symbols.txt
@@ -464,6 +471,7 @@ echo 'M7.55: iOS core without PPC fallback; unresolved AOT PC fails closed. Whol
 echo 'M7.56: PT_LOAD X offset vs RAM guest measured after AOT and before shutdown; signed 7 original PPC words through BEQ at 0x003C4FDC (two outcomes). Interpreter stays absent; guest FS milestones pending.' >> m78-aot-status.txt
 echo 'M7.57: 16 authentic PPC64 instructions in two signed native AppleARM64 AOT spans, 0x003C5050 and 0x003C50C8; no interpreter or guest-FS claim without physical device.' >> m78-aot-status.txt
 echo 'M7.58: original ELF executable owner words [0x003C5110,0x003C5180) 28 instructions generated with strict reusable PPC CFG lifter, AOT-only; no guest FS event proven.' >> m78-aot-status.txt
+echo 'M7.59: 42 real owner PPC words 0x002C1378..0x002C141C compiled ARM64 with nested BL to 0x0052B840, BC targets 0x002C14A4 and 0x002C1420; guest cellFsOpen/read not yet physically observed.' >> m78-aot-status.txt
 (cd ios-probe && zip -q -r ../AscensionRecompProbe-0.6.22-unsigned.ipa Payload)
 test -s AscensionRecompProbe-0.6.22-unsigned.ipa
 shasum -a 256 AscensionRecompProbe-0.6.22-unsigned.ipa > m41-ipa-sha256.txt

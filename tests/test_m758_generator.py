@@ -34,7 +34,7 @@ class M758(unittest.TestCase):
   self.assertNotIn('    ios-probe/ppu_m720_fallback.o \\',sh)
  def test_physical_baseline_and_guest_FS_not_fabricated(self):
   b=(ROOT/'ios/ARProbeApp.m').read_text()
-  self.assertIn('M7.57 (teste físico',b)
+  self.assertIn('M7.58 (teste físico',b)
   self.assertIn('M7.58 AOT ONLY atual:',b)
   self.assertIn('cellFsRead com bytes positivos',b)
   self.assertIn('ELF versus RAM guest',b)

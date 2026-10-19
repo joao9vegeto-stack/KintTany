@@ -63,7 +63,7 @@ def mask64(mb: int, me: int) -> int:
         pos = (pos + 1) % 64
     return mask
 
-def lift(words: list[int] | tuple[int, ...], base: int, name: str = 'ppu_sample') -> tuple[str,dict]:
+def lift(words: list[int] | tuple[int, ...], base: int, name: str = 'ppu_sample', *, allow_terminal_conditional: bool = False) -> tuple[str,dict]:
     if not words or len(words)>512 or base & 3:
         raise Unsupported('invalid function length / address')
     needs_fp=any(((w>>26) in (48,50,52,54)) or
@@ -465,7 +465,13 @@ def lift(words: list[int] | tuple[int, ...], base: int, name: str = 'ppu_sample'
     terminal=(final_op==18 and not (final&1) or
               final_op==19 and ((final>>1)&1023) in (16,528)
               and ((final>>21)&31) in (20,21,22,23,28,29,30,31) and not (final&1))
-    if not terminal:raise Unsupported('function boundary lacks unconditional terminator')
+    if not terminal:
+        # Real AOT cut immediately after a conditional branch: the taken edge
+        # already returns a tail dispatch; the not-taken edge exits at PC+4.
+        # Opt-in only, caller must authenticate the exact PPC guest range.
+        if not (allow_terminal_conditional and final_op==16 and not(final&1)):
+            raise Unsupported('function boundary lacks unconditional terminator')
+        e(f'c->cia=0x{base+4*len(words):x}ULL; return 1;')
     lines.append('}')
     return '\n'.join(lines)+'\n',dict(hist)
 
