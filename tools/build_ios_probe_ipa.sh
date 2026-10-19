@@ -707,5 +707,5 @@ test -s AscensionRecompProbe-0.6.22-unsigned.ipa
 shasum -a 256 AscensionRecompProbe-0.6.22-unsigned.ipa > m41-ipa-sha256.txt
 # Retain legacy CI path; new alias has accurate installed bundle version.
 cp AscensionRecompProbe-0.6.22-unsigned.ipa AscensionRecompProbe-7.65.0-unsigned.ipa
-shasum -a 256 AscensionRecompProbe-7.64.1-unsigned.ipa > m765-ipa-sha256.txt
+shasum -a 256 AscensionRecompProbe-7.65.0-unsigned.ipa > m765-ipa-sha256.txt
 echo 'UNSIGNED DIAGNOSTIC APP: UIKit CAMetalLayer + real PS3Recomp Metal backend; NO GOWA GAME included' > m41-status.txt
