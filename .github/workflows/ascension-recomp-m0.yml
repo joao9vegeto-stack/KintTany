@@ -1,4 +1,4 @@
-name: AscensionRecomp M7.66 - batched 254 native PPC CFG frontiers
+name: AscensionRecomp M7.67 - native import provenance and exact guest failure PC
 
 on:
   push:
@@ -849,6 +849,25 @@ jobs:
             m764-host/ppu_m764_00.c tests/host_m764_stop.c -o m764-stop-host
           ./m764-stop-host | tee m764-stop-host.log
           grep -Fq 'native ALU, clrldi and B tail PASS' m764-stop-host.log
+      - name: M7.67 verify native fail-PC and real import/HLE trace semantics
+        run: |
+          set -euo pipefail
+          clang -std=c11 -O2 -Wall -Wextra -Werror \
+            -DASCENSION_NATIVE_ONLY=1 -I upstream/runtime/ppu -I runtime \
+            runtime/ppu_bridge.c tests/host_m767_import_trace.c -o m767-host
+          ./m767-host | tee m767-host-test.log
+          grep -Fq 'M7.67 live AOT fail PC and authenticated import HLE tracking PASS' m767-host-test.log
+          python3 - <<'PY'
+          import json
+          from pathlib import Path
+          x=json.loads(Path('runtime/m767-prx-offline-audit.json').read_text())
+          y=json.loads(Path('runtime/m767-ps3recomp-evidence.json').read_text())
+          assert x['stub']=='0x00669A84' and x['nid']=='0x2f85c0ef' and x['library']=='sysPrxForUser'
+          assert x['imports_total']==350 and x['libraries']==25
+          assert y['OPD_function_descriptors']==7643 and y['emitted_cpp_functions']==29849
+          assert y['TODO_markers_raw']==5081570 and y['whole_game_arm64_recompilation']=='NO'
+          print('M7.67 original ELF PRX 350 imports, stub 0x669A84 => sysPrxForUser NID 0x2f85c0ef, scope acknowledged')
+          PY
       - name: M7.66 test 254 decoded PPC native CFG blocks and guest semantics
         run: |
           set -euo pipefail
@@ -1667,7 +1686,7 @@ jobs:
           grep -Eq ' [Tt] _ar_lv2_timezone$' m78-owner-aot-linked-symbols.txt
           echo "M7.43: 6251 generated GOWA ELF C-AOT functions compiled and linked in final Apple ARM64 Mach-O (9 modules + SHA installer). Number actually executed and new PC pending physical iPhone report; no guest files/RSX demonstrated." > m78-actions-status.txt
           test -s AscensionRecompProbe-0.6.22-unsigned.ipa
-          /usr/libexec/PlistBuddy -c 'Print CFBundleShortVersionString' ios-probe/Payload/AscensionRecompProbe.app/Info.plist | grep -Fx 7.66.0
+          /usr/libexec/PlistBuddy -c 'Print CFBundleShortVersionString' ios-probe/Payload/AscensionRecompProbe.app/Info.plist | grep -Fx 7.67.0
           /usr/bin/unzip -t AscensionRecompProbe-0.6.22-unsigned.ipa | tee m42-ipa-integrity.log
           xcrun nm -g ios-probe/Payload/AscensionRecompProbe.app/AscensionRecompProbe | grep -E '(_rsx_metal_backend_present|_rsx_metal_backend_init|_OBJC_CLASS_\\$_ARMetalView)' > m42-runtime-link-symbols.txt || true
           grep -q _rsx_metal_backend_init m39-metal-symbols.txt
@@ -1786,16 +1805,21 @@ jobs:
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: AscensionRecomp-M7.66-CFG-ARM64
+          name: AscensionRecomp-M7.67-IMPORT-TELEMETRY-ARM64
           retention-days: 14
           if-no-files-found: warn
           path: |
-            AscensionRecompProbe-7.66.0-unsigned.ipa
-            m766-ipa-sha256.txt
+            AscensionRecompProbe-7.67.0-unsigned.ipa
+            m767-ipa-sha256.txt
             m764-final-attestation.json
             m764c-final-attestation.json
             m765-final-attestation.json
             m766-final-attestation.json
+            m767-final-attestation.json
+            m767-host-test.log
+            runtime/m767-prx-offline-audit.json
+            runtime/m767-ps3recomp-evidence.json
+            docs/M7.67-PRX-IMPORT-TELEMETRY-HANDOFF.txt
             m766-objects-nm.txt
             m766-generation.log
             m766-host-generator.log
@@ -1824,14 +1848,31 @@ jobs:
           test -s m764-tail-host-test.log
           grep -Eq ' [Tt] _ar_m764c_native_005392a4$' m78-owner-aot-linked-symbols.txt
           grep -Eq ' [Tt] _ar_m764c_register_successors$' m78-owner-aot-linked-symbols.txt
-          test -s AscensionRecompProbe-7.66.0-unsigned.ipa
+          test -s AscensionRecompProbe-7.67.0-unsigned.ipa
+      - name: M7.67 validate native import telemetry and IPA provenance
+        run: |
+          set -euo pipefail
+          test -s m767-host-test.log
+          test -s m767-final-attestation.json
+          test -s m767-ipa-sha256.txt
+          test -s AscensionRecompProbe-7.67.0-unsigned.ipa
+          grep -Fq 'M7.67 native import lookup and genuine' m41-build-ipa.log || true
+          python3 - <<'PY'
+          from pathlib import Path
+          import json
+          x=json.loads(Path('m767-final-attestation.json').read_text())
+          assert x['real_import_lookup_and_lwmutex_HLE_linked'] is True
+          assert x['earlier_native_CFG_symbols_preserved']==254
+          assert x['last_guest_slot_live_value']=='NOT_MEASURED'
+          assert x['guest_file_read_positive']=='NOT_MEASURED'
+          PY
       - name: M7.66 verify batch 254 native ARM64 CFG blocks in final IPA
         run: |
           set -euo pipefail
           test -s m766-final-attestation.json
           test -s m766-objects-nm.txt
           test -s m766-host-test.log
-          test -s AscensionRecompProbe-7.66.0-unsigned.ipa
+          test -s AscensionRecompProbe-7.67.0-unsigned.ipa
           python3 - <<'PY'
           import json
           from pathlib import Path
@@ -1847,7 +1888,7 @@ jobs:
           test -s m765-final-attestation.json
           test -s m765-objects-nm.txt
           test -s m765-host-test.log
-          test -s AscensionRecompProbe-7.66.0-unsigned.ipa
+          test -s AscensionRecompProbe-7.67.0-unsigned.ipa
           grep -Eq ' [Tt] _ar_m765_native_00539308$' m78-owner-aot-linked-symbols.txt
           grep -Eq ' [Tt] _ar_m765_native_0053930c$' m78-owner-aot-linked-symbols.txt
           grep -Eq ' [Tt] _ar_m765_register_frontier$' m78-owner-aot-linked-symbols.txt
@@ -1881,7 +1922,7 @@ jobs:
             m764-generation.log
             m764-host-generation.log
             m764-stop-host.log
-            m766-ipa-sha256.txt
+            m767-ipa-sha256.txt
             m763-tests.log
             m763-host-generation.log
             m763-generation.log
@@ -2200,8 +2241,8 @@ jobs:
             m76-status.txt
             m75-aot-boot-host.log
             AscensionRecompProbe-0.6.22-unsigned.ipa
-            AscensionRecompProbe-7.66.0-unsigned.ipa
-            m766-ipa-sha256.txt
+            AscensionRecompProbe-7.67.0-unsigned.ipa
+            m767-ipa-sha256.txt
             m40-ios-layer-view.o
             build-ios-runtime/libps3recomp_runtime.a
             ios-ppu-core/libAscensionPPUCore-ios-arm64.a

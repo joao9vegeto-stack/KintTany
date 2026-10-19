@@ -73,6 +73,11 @@ typedef struct {
     /* M7.64.1 native dispatcher AOT tail edge telemetry. */
     uint32_t tail_count, tail_source, tail_target, tail_target_has_native;
     uint32_t first_unlinked_tail_source, first_unlinked_tail_target;
+    /* M7.67: exact pre-shutdown fail source; do not confuse HLE dispatch with missing native PC. */
+    uint32_t m767_fail_pc, m767_fail_reason, m767_failed_handler_pc;
+    uint32_t m767_hle_calls, m767_hle_stub, m767_hle_nid, m767_hle_success;
+    int32_t m767_hle_result;
+    uint64_t m767_hle_pre_lr, m767_hle_pre_toc, m767_hle_pre_r3, m767_hle_post_r3;
 } ar_aot_trace;
 void ar_trace_snapshot(ar_aot_trace *out);
 /* Experimental signed non-JIT fallback. Attach the exact owner ELF ONLY

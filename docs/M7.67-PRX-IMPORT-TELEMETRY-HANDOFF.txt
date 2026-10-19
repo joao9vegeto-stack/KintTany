@@ -1,0 +1,108 @@
+ASCENSIONRECOMP M7.67 — HANDOFF, 19 OCT 2026
+Repo joao9vegeto-stack/KintTany; STRICTLY branch AscensionRecomp.
+God of War: Ascension NPUA80918, static PPC64 to iOS ARM64, NO RPCS3/JIT/PPC runtime interpreter/fallback.
+Canonical GOWA.ELF size=8717136 SHA256=4bf75c897b82d1beb25514cbadaff3d03e1b0c7bf849fa5d289be4f9183462b5.
+Never put ELF, SELF, RAP, PSARC, assets, passwords or actual GOW binaries in GitHub/IPA.
+
+PHYSICAL TEST M7.66.0 (original user log):
+App M7.66.0 build 7660, commit e28ae91d6a6b8d4fcc53f76567725538aa9339cc,
+Actions #254, run 39312208042, physical iPhone.
+8700 AOT registered, 143 distinct executed, 1901 ARM64 dispatches.
+Native AOT last=0x005394E8, AOT_TAIL source=0x005394E8,
+destination=0x00669A84, target_has_native=0.
+Guest result=-3, report stop-PC=0x00000000 (incorrectly lost
+during nested native dispatch/fault), LR 0x10858, CTR 0, TOC 0,
+CR 0x22000044 XER=0. PPC interpretation=0.
+HLE dispatches=544 versus 543 on M7.65; actual NID/result was NOT
+logged in M7.66, so cannot assign that extra event without new proof.
+Physical guest cellFsOpen=0, cellFsRead=0, positive guest bytes=0.
+Only HOST Files had read four bytes of PARAM.SFO; not game I/O.
+RSX, PSARC guest and original game frame unproved.
+Compare M7.65.0 physical (#251, commit eecda5b...) -> M7.66.0:
+AOT registered 8472 -> 8700 (+228), executed distinct 142 -> 143 (+1),
+ARM64 dispatches 1900 -> 1901 (+1); no guest FS or graphics.
+
+M7.67 REAL ORIGINAL ELF PRX ANALYSIS:
+Independent read-only local parser inspected PT_LOAD and PT 0x60000002
+PRX params; source SHA verified; 350 stub/NID imports in 25 libraries.
+Exact guest stub 0x00669A84 is sysPrxForUser / NID 0x2F85C0EF.
+The older NID happened to be correct but THIS determination does not
+come from older log: verified actual original NID and stub arrays,
+library C-string and executable VA, plus reverse lookup.
+Original ELF slot VA=0x00828298 contains 0x00669A84; original
+raw target opcode 0x39800000. DO NOT assume guest VM slot still same
+without the new pre/post guest RAM measurements.
+The existing ar_sys_lwmutex_create is a bounded single-thread HLE
+for sys_lwmutex_create. This version binds only if both original ELF
+PRX lookup stub->(NID,module) and (NID,module)->stub agree.
+If not confirmed, no matching HLE is bound. Existing error behavior
+does not produce fictional success.
+Live guest slot 0x00828298 recorded at import bind and after ar_run,
+with independent read status; real native HLE stub/NID/return code,
+pre/post guest registers, failure reason and real PC recorded before
+ar_bridge_shutdown.
+
+M7.67 TELEMETRY BUG REPAIR:
+Original problem: status=-3 from a native handler may propagate
+without writing ar_last_unresolved, yielding zero. ar_trace_snapshot
+was performed before shutdown but had no snapshot for that error route.
+New unified failure snapshot records actual c->cia or last native
+AOT tail destination, reason 1=missing AOT/HLE; 2=handler failure;
+3=missing HLE; 4=HLE fault/failure. Reason distinguishes target not
+compiled from compiled handler propagating error. Retains LR/CTR,
+CR/XER, r1/r2/r3 at moment of guest failure.
+The report must not mistake HLE-resolved stubs for 'missing native AOT'.
+Preserve both last AOT source, AOT_TAIL destination, and HLE call result.
+
+OFFICIAL ps3recomp REFERENCE, NOT FULL PORT:
+Pre-existing official upstream analysis (sp00nznet/ps3recomp commit
+39a36296511c445707adabcd312f0b740cfbd694) from the user's
+DADOS-PS3RECOMP-GOWA-ELF-20261019(2).zip plus RESULTADO_ps3recomp...
+Source ELF SHA matches. Function records 7643 OPD;
+350 imports/25 modules; 16841 base functions and 13008 wrappers =>
+29849 emitted C++ functions in 16 chunks; only 1 chunk syntax checked.
+5,081,570 raw TODO markers, 4,385,579 TODO '.word' markers,
+1479 SPR unsupported/noops, 18 missing continuations.
+350 generic ps3_hle_call wrappers do NOT equal working HLEs.
+Among the 350, one hot-path stub independently verified here;
+349 others not independently audited to runnable HLE status.
+NOT a full executable recompilation; source may misidentify game data
+as code and repeat functions through wrappers.
+M7.66 batch was 274 CFG candidates, 254 complete PPC blocks,
+20 rejected (16 unique offending word patterns), 369 edges.
+254 is NOT the number of whole-game functions recompiled.
+OFFICIAL PIPELINE WAS NOT RE-RUN HERE: it requires the full upstream
+toolchain/lifter which is not installed in the current isolated environment
+(no network access from host runtime), and the original 16 chunks
+(about 2 GiB) were not supplied. Existing complete run outputs have
+been re-audited as evidence; never claim a new completed upstream run.
+
+BRANCH CHANGES/FILES:
+runtime/ppu_bridge.c/.h: append-only AOT stop + HLE call telemetry,
+nonzero true guest PC restored for native handler-return AR_UNRESOLVED.
+runtime/ppu_m767_live_import.h: HLE/PRX/RAM evidence struct.
+ios/ARLivePPUBridge.c: verify same NID stub and library using two
+independent original PRX lookups; capture original guest slot
+0x00828298 before and after execution; preserve before cleanup.
+ios/ARProbeApp.m: put all fields into current report and AOT_TRIAGE_JSON
+without contaminating historical fields.
+tests/host_m767_import_trace.c: original native dispatcher fault-PC
+and synthetic HLE-ABI test, no guest interpreter.
+tools/m767_elf_prx_audit.py: independent read-only audit of supplied
+canonical owner ELF (locally verified), explicit owner hash guard.
+runtime/m767-prx-offline-audit.json: truthful original source mapping.
+runtime/m767-ps3recomp-evidence.json: scoped upstream run metadata.
+CI checks actual ar_m766_native_005394e8 and verified PRX resolver +
+ar_sys_lwmutex_create and evidence getter in final ARM64 Mach-O.
+Version M7.67.0 / CFBundleVersion 7670.
+No change to other branches. Avoid multiple CI runs per commit.
+
+NOT YET PROVEN: iPhone M7.67 physical import result, whether
+HLE really runs/returns success, subsequent true stop and call stack,
+guest cellFsOpen/read, game RSX and gameplay.
+NEXT TEST: install exact IPA, export TXT and read current
+M7.67 HLE_EXEC, STOP PC_CONSERVADO, SLOT GUEST and AOT_TRIAGE_JSON.
+Compare actual +1 distinct vs previous and HLE results.
+No extrapolation from link/SHA/CI to guest I/O.
+User prefers IPA directly attached in chat plus Handoff TXT,
+comparison, continuation ZIP, exact Actions number/commit/IPA SHA256.

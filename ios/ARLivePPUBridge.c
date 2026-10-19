@@ -33,6 +33,7 @@ extern int ar_gowa2_offline_aot_install_sha256(const uint8_t*,size_t);
 #include "../runtime/ppu_native_sysutil.h"
 #include "../runtime/ppu_guest_fs.h"
 #include "../runtime/ppu_m756_stop_evidence.h"
+#include "../runtime/ppu_m767_live_import.h"
 extern int ARGameFolderGuestIO(const char*,uint64_t,void*,size_t,size_t*,uint64_t*);
 
 extern int ar_m711_bind_memory(const uint8_t*,size_t,uint32_t*);
@@ -78,6 +79,8 @@ static ar_aot_trace last_run_trace;
 static ar_fs_trace last_fs_trace;
 static ar_m756_stop_evidence last_stop_evidence;
 static ar_m756_stop_evidence last_origin_evidence;
+static ar_m767_import_evidence last_import_evidence;
+void ar_m767_last_import_evidence(ar_m767_import_evidence*out){if(out)*out=last_import_evidence;}
 void ar_m756_last_origin_evidence(ar_m756_stop_evidence*out){if(out)*out=last_origin_evidence;}
 void ar_m756_last_stop_evidence(ar_m756_stop_evidence*out){if(out)*out=last_stop_evidence;}
 void ar_m751_last_fs_trace(ar_fs_trace *out){if(out)*out=last_fs_trace;}
@@ -95,6 +98,7 @@ int ar_m70_native_runtime_probe(const uint8_t*d,size_t len,
  memset(&last_fs_trace,0,sizeof(last_fs_trace));
  memset(&last_stop_evidence,0,sizeof(last_stop_evidence));
  memset(&last_origin_evidence,0,sizeof(last_origin_evidence));
+ memset(&last_import_evidence,0,sizeof(last_import_evidence));
  if(!d||len<64u)return -20;
  if(memcmp(d,"\177ELF",4)||d[4]!=2u||d[5]!=2u||d[6]!=1u||
     g16(d+16)!=2u||g16(d+18)!=21u||g32(d+20)!=1u)
@@ -387,15 +391,43 @@ int ar_m70_native_runtime_probe(const uint8_t*d,size_t len,
  }
 
  
- uint32_t lwimp[4]={0};char lwlib[48]={0};
+ /* M7.67: BOTH independent directions of the ORIGINAL ELF/PRX table
+  * must agree on the exact stub, library and NID. No historical stub guess. */
+ uint32_t lwimp[4]={0},forward[4]={0};
+ char lwlib[48]={0},forwardlib[48]={0};
  const int lwmatch=ar_private_import_find_nid(
     d,len,0x2f85c0efu,"sysPrxForUser",lwimp,lwlib);
- if(lwmatch==0 && lwimp[0]==0x2f85c0efu && lwimp[1] &&
-    strcmp(lwlib,"sysPrxForUser")==0){
-    out[15]|=16u; /* import table matched and stub executable */
+ const int forward_rc=ar_private_import_match(
+    d,len,UINT32_C(0x00669a84),forward,forwardlib);
+ last_import_evidence.forward_status=forward_rc;
+ last_import_evidence.reverse_status=lwmatch;
+ last_import_evidence.stub=UINT32_C(0x00669a84);
+ last_import_evidence.nid=forward[0];
+ last_import_evidence.slot_va=UINT32_C(0x00828298);
+ if(forward_rc==AR_OK)
+   memcpy(last_import_evidence.module,forwardlib,sizeof(forwardlib));
+ uint8_t slot_pre[4]={0};
+ last_import_evidence.slot_pre_status=ar_vm_read_bytes(
+   UINT32_C(0x00828298),slot_pre,sizeof(slot_pre));
+ if(last_import_evidence.slot_pre_status==AR_OK)
+   last_import_evidence.slot_pre_be=g32(slot_pre);
+ const int lw_verified=lwmatch==AR_OK && forward_rc==AR_OK &&
+    lwimp[0]==0x2f85c0efu && lwimp[1]==UINT32_C(0x00669a84) &&
+    forward[0]==lwimp[0] && forward[1]==lwimp[1] &&
+    strcmp(lwlib,"sysPrxForUser")==0 &&
+    strcmp(forwardlib,"sysPrxForUser")==0;
+ last_import_evidence.matched=lw_verified?1u:0u;
+ last_import_evidence.bind_status=AR_BAD_ARGS;
+ last_import_evidence.hle_status=AR_BAD_ARGS;
+ if(lw_verified){
+    out[15]|=16u; /* PRX table independently matched in both directions */
     const int b=ar_bind_import(lwimp[1],lwimp[0]);
-    if(b==AR_OK && ar_bind_hle(lwimp[0],ar_sys_lwmutex_create)==AR_OK)
-       out[15]|=32u; /* genuine HLE implementation now available */
+    last_import_evidence.bind_status=b;
+    if(b==AR_OK){
+      const int h=ar_bind_hle(lwimp[0],ar_sys_lwmutex_create);
+      last_import_evidence.hle_status=h;
+      if(h==AR_OK)out[15]|=32u;
+    }
  }
 
  
@@ -476,6 +508,12 @@ int ar_m70_native_runtime_probe(const uint8_t*d,size_t len,
  else out[6]=(uint32_t)ar_run(&ctx,image.entry_code,128u);
  out[7]=ar_last_unresolved();
  ar_trace_snapshot(&last_run_trace);
+ /* Capture *live* guest descriptor slot before guest VM cleanup. */
+ uint8_t slot_post[4]={0};
+ last_import_evidence.slot_post_status=ar_vm_read_bytes(
+     UINT32_C(0x00828298),slot_post,sizeof(slot_post));
+ if(last_import_evidence.slot_post_status==AR_OK)
+   last_import_evidence.slot_post_be=g32(slot_post);
 #ifdef ASCENSION_NATIVE_ONLY
  /* Must capture ACTUAL live guest RAM prior to freeing ELF mappings. */
  ar_m756_capture_stop(d,len,out[7],&last_stop_evidence);

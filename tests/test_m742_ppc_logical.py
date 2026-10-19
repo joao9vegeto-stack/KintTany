@@ -27,7 +27,7 @@ class M742(unittest.TestCase):
   self.assertIn("CNTLZD reserved RB",self.host)
   self.assertIn("memcmp(&before,&cpu,sizeof(cpu))",self.host)
   self.assertIn("m742-logical-host",self.ci)
-  self.assertIn("<string>7660</string>",(ROOT/"ios/Probe-Info.plist").read_text())
+  self.assertIn("<string>7670</string>",(ROOT/"ios/Probe-Info.plist").read_text())
  def test_no_emulator_dependency_added(self):
   self.assertNotIn("rpcs3",self.src.lower())
   self.assertIn("ASCENSIONRECOMP", (ROOT/"ios/ARProbeApp.m").read_text())

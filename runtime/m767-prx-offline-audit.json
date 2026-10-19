@@ -1,0 +1,17 @@
+{
+  "schema": "ascension-m767-private-prx-readonly-audit-1",
+  "sha256": "4bf75c897b82d1beb25514cbadaff3d03e1b0c7bf849fa5d289be4f9183462b5",
+  "imports_total": 350,
+  "libraries": 25,
+  "stub": "0x00669A84",
+  "library": "sysPrxForUser",
+  "nid": "0x2f85c0ef",
+  "source": "original ELF PRX parameter import tables, independently decoded locally",
+  "raw_elf_slot_va": "0x00828298",
+  "raw_elf_slot_value": "0x00669A84",
+  "raw_stub_opcode": "0x39800000",
+  "HLE_binding_existing": "ar_sys_lwmutex_create",
+  "live_guest_slot_value": "NOT_MEASURED",
+  "live_HLE_result": "NOT_MEASURED",
+  "note": "ELF raw slot is a self-pointer, runtime RAM must be measured independently"
+}

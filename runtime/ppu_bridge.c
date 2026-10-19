@@ -102,12 +102,25 @@ void ar_trace_snapshot(ar_aot_trace *out) {
  out->tail_target_has_native=tail_has_native;
  out->first_unlinked_tail_source=tail_first_unlinked_src;
  out->first_unlinked_tail_target=tail_first_unlinked_dst;
+ out->m767_fail_pc=m767_fail_pc;out->m767_fail_reason=m767_fail_reason;
+ out->m767_failed_handler_pc=m767_failed_handler_pc;
+ out->m767_hle_calls=m767_hle_calls;out->m767_hle_stub=m767_hle_stub;
+ out->m767_hle_nid=m767_hle_nid;out->m767_hle_success=m767_hle_success;
+ out->m767_hle_result=m767_hle_result;
+ out->m767_hle_pre_lr=m767_hle_pre_lr;out->m767_hle_pre_toc=m767_hle_pre_toc;
+ out->m767_hle_pre_r3=m767_hle_pre_r3;out->m767_hle_post_r3=m767_hle_post_r3;
 }
 static struct {uint32_t stub,nid;} imports[MAX_IMPORTS];
 static size_t nimports;
 static struct {uint32_t nid;ar_hle_fn fn;} handlers[MAX_HANDLERS];
 static size_t nhandlers;
 static uint32_t missing_nid,missing_syscall;
+/* M7.67 live dispatcher metadata kept until ar_trace_snapshot BEFORE shutdown. */
+static uint32_t m767_fail_pc,m767_fail_reason,m767_failed_handler_pc;
+static uint32_t m767_hle_calls,m767_hle_stub,m767_hle_nid,m767_hle_success;
+static int32_t m767_hle_result;
+static uint64_t m767_hle_pre_lr,m767_hle_pre_toc,m767_hle_pre_r3,m767_hle_post_r3;
+
 static struct {uint32_t number;ar_hle_fn fn;} syscalls[MAX_LV2_SYSCALLS];
 static size_t nsyscalls;
 static uint8_t *mem;
@@ -333,6 +346,21 @@ static ar_hle_fn hle_handler(uint32_t nid){
  for(size_t i=0;i<nhandlers;i++)if(handlers[i].nid==nid)return handlers[i].fn;
  return 0;
 }
+static void m767_failure(ppu_context *c,uint64_t attempted_pc,uint32_t reason){
+  /* reason: 1=missing native+HLE, 2=native handler return/fault,
+   * 3=HLE absent, 4=HLE failure. No opcode decoder/fallback. */
+  uint32_t pc=(uint32_t)attempted_pc;
+  if(attempted_pc>UINT32_MAX||!pc)pc=tail_dst;
+  m767_fail_pc=pc;
+  if(!m767_fail_reason)m767_fail_reason=reason;
+  if(!missing && pc){missing=pc;trace_pending=pc;}
+  triage_stop_prev=trace_total?
+    trace_ring[(trace_total-1u)&(AR_AOT_TRACE_PCS-1u)]:0u;
+  triage_stop_cr=c->cr;triage_stop_xer=c->xer;
+  triage_stop_lr=c->lr;triage_stop_ctr=c->ctr;
+  triage_stop_r1=c->gpr[1];triage_stop_r2=c->gpr[2];
+  triage_stop_r3=c->gpr[3];
+}
 static int dispatch(ppu_context *c,uint64_t pc){
   if(depth>=MAX_DEPTH){fault=AR_DEPTH;return AR_DEPTH;}
   depth++;int result=AR_OK;
@@ -345,13 +373,18 @@ static int dispatch(ppu_context *c,uint64_t pc){
       uint32_t nid=import_nid(pc);
       if(nid){
         ar_hle_fn hle=hle_handler(nid);
-        if(!hle){missing_nid=nid;result=fault=AR_MISSING_HLE;break;}
+        if(!hle){missing_nid=nid;m767_failure(c,pc,3u);result=fault=AR_MISSING_HLE;break;}
         trace_hle++;
+        m767_hle_calls++;m767_hle_stub=(uint32_t)pc;m767_hle_nid=nid;
+        m767_hle_pre_lr=c->lr;m767_hle_pre_toc=c->gpr[2];
+        m767_hle_pre_r3=c->gpr[3];
         uint64_t saved_toc=c->gpr[2];
         int rc=hle(c);
+        m767_hle_result=rc;m767_hle_post_r3=c->gpr[3];
         c->gpr[2]=saved_toc;
-        if(fault){result=fault;break;}
-        if(rc){result=fault=AR_HLE_FAILURE;break;}
+        if(fault){m767_failure(c,pc,4u);result=fault;break;}
+        if(rc){m767_failure(c,pc,4u);result=fault=AR_HLE_FAILURE;break;}
+        m767_hle_success++;
         c->cia=c->lr;result=AR_OK;break;
       }
       /* M7.20: only if the user-imported ELF was authenticated and the
@@ -388,15 +421,7 @@ static int dispatch(ppu_context *c,uint64_t pc){
       /* Native-only gate: no callable AOT and no matching HLE means stop
        * here. A static ELF branch can target any PC; it is NEVER executed
        * by decoding PPC at runtime. */
-      missing=(uint32_t)pc;trace_pending=(uint32_t)pc;
-      /* Snapshot only metadata, never guest data or game assets. This is
-       * a real missing ARM64 entry, not a fabricated PPC opcode. */
-      triage_stop_prev=trace_total?
-        trace_ring[(trace_total-1u)&(AR_AOT_TRACE_PCS-1u)]:0u;
-      triage_stop_cr=c->cr;triage_stop_xer=c->xer;
-      triage_stop_lr=c->lr;triage_stop_ctr=c->ctr;
-      triage_stop_r1=c->gpr[1];triage_stop_r2=c->gpr[2];
-      triage_stop_r3=c->gpr[3];
+      m767_failure(c,pc,1u); /* actual PC survives later cleanup. */
       result=fault=AR_UNRESOLVED;break;
     }
     trace_ring[trace_total & (AR_AOT_TRACE_PCS-1u)]=(uint32_t)pc;
@@ -417,7 +442,7 @@ static int dispatch(ppu_context *c,uint64_t pc){
       triage_run_total++;
     }
     int status=fn(c);
-    if(fault){result=fault;break;}
+    if(fault){m767_failed_handler_pc=(uint32_t)pc;m767_failure(c,c->cia?c->cia:pc,2u);result=fault;break;}
     if(status==AR_TAIL){
       /* Record source, destination, and ACTUAL handler lookup on iPhone. */
       const uint64_t target=c->cia;
@@ -432,6 +457,8 @@ static int dispatch(ppu_context *c,uint64_t pc){
       pc=target;continue;
     }
     if(status==AR_OK){result=AR_OK;break;}
+    m767_failed_handler_pc=(uint32_t)pc;
+    m767_failure(c,c->cia?c->cia:pc,2u);
     result=fault=status;break;
   }
   depth--;return result;
@@ -452,6 +479,9 @@ int ar_run(ppu_context *c,uint32_t pc,uint32_t ticks){
   triage_stop_prev=triage_stop_cr=triage_stop_xer=0;
   tail_count=tail_src=tail_dst=tail_has_native=0;
   tail_first_unlinked_src=tail_first_unlinked_dst=0;
+  m767_fail_pc=m767_fail_reason=m767_failed_handler_pc=0;
+  m767_hle_calls=m767_hle_stub=m767_hle_nid=m767_hle_success=0;
+  m767_hle_result=0;m767_hle_pre_lr=m767_hle_pre_toc=m767_hle_pre_r3=m767_hle_post_r3=0;
   triage_stop_lr=triage_stop_ctr=triage_stop_r1=triage_stop_r2=triage_stop_r3=0;
   fb_steps=0;fb_pc=0;fb_op=0;fb_bad_pc=0;fb_bad_op=0;
   fb_callsite_pc=0;fb_call_target=0;

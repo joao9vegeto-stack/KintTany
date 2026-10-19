@@ -23,5 +23,5 @@ class TestM673(unittest.TestCase):
   for token in ('tests/host_m673_import_match.c','m673-import-host.log',
                 'AscensionRecomp-M7.61-BULK-AOT-AppleARM64'):
    self.assertIn(token,W)
-  self.assertIn('<string>7660</string>',P)
+  self.assertIn('<string>7670</string>',P)
 if __name__=="__main__":unittest.main()

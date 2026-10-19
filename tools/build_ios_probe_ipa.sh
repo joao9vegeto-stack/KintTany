@@ -627,6 +627,30 @@ Path('m766-final-attestation.json').write_text(json.dumps({
 },indent=2)+'\n')
 print('M7.66 254 native ARM64 CFG entrypoints verified in FINAL Mach-O; iPhone NOT MEASURED')
 PY
+# M7.67 executable ARM64 provenance + exact PRX/HLE evidence; no guest gameplay claim.
+python3 - <<'PY'
+import json,re
+from pathlib import Path
+nm=Path('m78-owner-aot-linked-symbols.txt').read_text()
+assert re.search(r' [Tt] _ar_m766_native_005394e8$',nm,re.M)
+assert re.search(r' [Tt] _ar_private_import_match$',nm,re.M)
+assert re.search(r' [Tt] _ar_private_import_find_nid$',nm,re.M)
+assert re.search(r' [Tt] _ar_sys_lwmutex_create$',nm,re.M)
+assert re.search(r' [Tt] _ar_m767_last_import_evidence$',nm,re.M)
+a=json.loads(Path('runtime/m767-prx-offline-audit.json').read_text())
+assert a['library']=='sysPrxForUser' and a['nid']=='0x2f85c0ef'
+assert a['stub']=='0x00669A84' and a['imports_total']==350
+x={'schema':'ascension-m767-ipa-provenance-1','owner_sha256':a['sha256'],
+ 'elf_prx_matching_stub':a['stub'],'module':a['library'],'nid':a['nid'],
+ 'earlier_native_CFG_symbols_preserved':254,
+ 'real_import_lookup_and_lwmutex_HLE_linked':True,
+ 'last_guest_slot_live_value':'NOT_MEASURED',
+ 'actual_game_HLE_call_and_result':'NOT_MEASURED',
+ 'guest_file_read_positive':'NOT_MEASURED',
+ 'gameplay':'NOT_MEASURED'}
+Path('m767-final-attestation.json').write_text(json.dumps(x,indent=2)+'\n')
+print('M7.67 verified native import lookup and genuine sys_lwmutex_create symbol in final Mach-O')
+PY
 # M7.33 final Mach-O must retain ACTUAL production LV2 service binder.
 grep -Eq ' [Tt] _ar_lv2_bind_bootstrap_syscalls$' m78-owner-aot-linked-symbols.txt
 grep -Eq ' [Tt] _ar_lv2_timezone$' m78-owner-aot-linked-symbols.txt
@@ -767,6 +791,6 @@ echo 'M7.59: 42 real owner PPC words 0x002C1378..0x002C141C compiled ARM64 with 
 test -s AscensionRecompProbe-0.6.22-unsigned.ipa
 shasum -a 256 AscensionRecompProbe-0.6.22-unsigned.ipa > m41-ipa-sha256.txt
 # Retain legacy CI path; new alias has accurate installed bundle version.
-cp AscensionRecompProbe-0.6.22-unsigned.ipa AscensionRecompProbe-7.66.0-unsigned.ipa
-shasum -a 256 AscensionRecompProbe-7.66.0-unsigned.ipa > m766-ipa-sha256.txt
+cp AscensionRecompProbe-0.6.22-unsigned.ipa AscensionRecompProbe-7.67.0-unsigned.ipa
+shasum -a 256 AscensionRecompProbe-7.66.0-unsigned.ipa > m767-ipa-sha256.txt
 echo 'UNSIGNED DIAGNOSTIC APP: UIKit CAMetalLayer + real PS3Recomp Metal backend; NO GOWA GAME included' > m41-status.txt

@@ -9,6 +9,7 @@
 #include "../runtime/ppu_bridge.h"
 #include "../runtime/ppu_guest_fs.h"
 #include "../runtime/ppu_m756_stop_evidence.h"
+#include "../runtime/ppu_m767_live_import.h"
 extern void ar_m756_last_stop_evidence(ar_m756_stop_evidence*);
 extern void ar_m756_last_origin_evidence(ar_m756_stop_evidence*);
 extern void ar_m751_last_fs_trace(ar_fs_trace *);
@@ -1562,6 +1563,8 @@ static NSString *ARCurrentRelease(void){
        data.bytes,data.length,detail48[8],native);
     ar_fs_trace fsMeasured={0};
     ar_m751_last_fs_trace(&fsMeasured);
+    ar_m767_import_evidence importMeasured={0};
+    ar_m767_last_import_evidence(&importMeasured);
     ar_m756_stop_evidence ownerStop={0};
     ar_m756_last_stop_evidence(&ownerStop);
     ar_m756_stop_evidence origin={0};
@@ -1727,6 +1730,15 @@ static NSString *ARCurrentRelease(void){
           @"fallback":@(measured.fallback_steps),
           @"limit":@(measured.fallback_step_limit),
           @"stop":@(native[7]),
+          @"m767_stop_reason":@(measured.m767_fail_reason),
+          @"m767_fail_pc":@(measured.m767_fail_pc),
+          @"m767_import_stub":@(importMeasured.stub),
+          @"m767_import_nid":@(importMeasured.nid),
+          @"m767_import_verified":@(importMeasured.matched),
+          @"m767_import_pre_slot":@(importMeasured.slot_pre_be),
+          @"m767_import_post_slot":@(importMeasured.slot_post_be),
+          @"m767_import_hle_calls":@(measured.m767_hle_calls),
+          @"m767_import_hle_success":@(measured.m767_hle_success),
           @"opcode":@(ownerStop.guest_word),
           @"origin_elf_rc":@(origin.elf_status),
           @"origin_guest_rc":@(origin.guest_status),
@@ -1827,6 +1839,28 @@ static NSString *ARCurrentRelease(void){
        measured.tail_target_has_native?@"SIM":@"NÃO",
        measured.tail_count,
        measured.first_unlinked_tail_source,measured.first_unlinked_tail_target];
+    [graphReport appendFormat:
+       @"M7.67 IMPORT PRX ORIGINAL stub=0x%08X module=%s NID=0x%08X "
+        "ambos sentidos=%@ reverse_rc=%d forward_rc=%d vinculado=%d HLE_link=%d\n"
+        "M7.67 SLOT GUEST 0x%08X BEFORE=0x%08X (rc=%d) AFTER=0x%08X (rc=%d)\n"
+        "M7.67 HLE_EXEC chamadas=%u sucesso=%u stub=0x%08X nid=0x%08X result=%d "
+        "guest_lr_pre=0x%llX guest_toc_pre=0x%llX r3_before=0x%llX r3_after=0x%llX\n"
+        "M7.67 STOP PC_CONSERVADO=0x%08X motivo=%u handler_que_retorna_erro=0x%08X "
+        "PC_NATIVE_OUT=0x%08X rc=%d\n",
+       importMeasured.stub,importMeasured.module,importMeasured.nid,
+       importMeasured.matched?@"SIM":@"NÃO",importMeasured.reverse_status,
+       importMeasured.forward_status,importMeasured.bind_status,
+       importMeasured.hle_status,
+       importMeasured.slot_va,importMeasured.slot_pre_be,importMeasured.slot_pre_status,
+       importMeasured.slot_post_be,importMeasured.slot_post_status,
+       measured.m767_hle_calls,measured.m767_hle_success,measured.m767_hle_stub,
+       measured.m767_hle_nid,measured.m767_hle_result,
+       (unsigned long long)measured.m767_hle_pre_lr,
+       (unsigned long long)measured.m767_hle_pre_toc,
+       (unsigned long long)measured.m767_hle_pre_r3,
+       (unsigned long long)measured.m767_hle_post_r3,
+       measured.m767_fail_pc,measured.m767_fail_reason,
+       measured.m767_failed_handler_pc,native[7],(int32_t)native[6]];
     NSMutableArray *firstVisits=[NSMutableArray arrayWithCapacity:measured.first_count];
     for(uint32_t i=0;i<measured.first_count;i++){
        NSString *pc=[NSString stringWithFormat:@"0x%08X",measured.first_pcs[i]];
@@ -1858,6 +1892,22 @@ static NSString *ARCurrentRelease(void){
       @"tail_target":[NSString stringWithFormat:@"0x%08X",measured.tail_target],
       @"tail_target_native":@(measured.tail_target_has_native),
       @"first_unlinked_tail_target":[NSString stringWithFormat:@"0x%08X",measured.first_unlinked_tail_target],
+      @"m767_fail_pc":[NSString stringWithFormat:@"0x%08X",measured.m767_fail_pc],
+      @"m767_fail_reason":@(measured.m767_fail_reason),
+      @"m767_failed_handler_pc":[NSString stringWithFormat:@"0x%08X",measured.m767_failed_handler_pc],
+      @"prx_module":[NSString stringWithUTF8String:importMeasured.module],
+      @"prx_nid":[NSString stringWithFormat:@"0x%08X",importMeasured.nid],
+      @"prx_stub":[NSString stringWithFormat:@"0x%08X",importMeasured.stub],
+      @"prx_verified":@(importMeasured.matched),
+      @"guest_slot_pre":[NSString stringWithFormat:@"0x%08X",importMeasured.slot_pre_be],
+      @"guest_slot_post":[NSString stringWithFormat:@"0x%08X",importMeasured.slot_post_be],
+      @"guest_slot_pre_rc":@(importMeasured.slot_pre_status),
+      @"guest_slot_post_rc":@(importMeasured.slot_post_status),
+      @"hle_call_count":@(measured.m767_hle_calls),
+      @"hle_success_count":@(measured.m767_hle_success),
+      @"hle_result":@(measured.m767_hle_result),
+      @"hle_stub":[NSString stringWithFormat:@"0x%08X",measured.m767_hle_stub],
+      @"hle_nid":[NSString stringWithFormat:@"0x%08X",measured.m767_hle_nid],
       @"fallback_steps":@(measured.fallback_steps),
       @"first_truncated":@(measured.first_total>measured.first_count),
       @"runs_truncated":@(measured.run_total>measured.run_count),
