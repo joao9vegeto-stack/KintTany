@@ -17,7 +17,7 @@ class M752(unittest.TestCase):
                   bridge.index("ar_m752_register_vsldoi(d,len)"))
  def test_report_uses_correct_slots_and_actual_build(self):
   ui=(R/"ios/ARProbeApp.m").read_text()
-  self.assertIn('App=M7.60',ui)
+  self.assertIn('App=M7.61',ui)
   self.assertIn('last,origin,elf,native,',ui)
   self.assertIn('self.m750HostObservation?:@"não comprovado",',ui)
   self.assertIn('fsOpen,fsRead];',ui)

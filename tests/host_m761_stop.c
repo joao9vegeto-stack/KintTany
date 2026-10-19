@@ -47,8 +47,9 @@ int main(void) {
  assert(stack2_addr==original_sp+0x10u && stack2_value==original_lr);
  assert(ctx.gpr[1]==original_sp && ctx.lr==original_lr &&
         ctx.cia==original_lr);
- assert(store1_addr==UINT32_C(0x009c8114) && store1_val==UINT32_C(0x00123456));
- assert(store2_addr==UINT32_C(0x0084b9fc) && store2_val==UINT32_C(0x00127456));
+ /* STW D-form displacements are signed 16-bit values: 0x8114 and 0xB9FC. */
+ assert(store1_addr==UINT32_C(0x009cc234) && store1_val==UINT32_C(0x00123456));
+ assert(store2_addr==UINT32_C(0x0084ba7c) && store2_val==UINT32_C(0x00127456));
  printf("M7.61 PPC STOP native host: 18 PPC / BL->0x003C5218 / LR-STACK-VM preserved PASS\n");
  return 0;
 }

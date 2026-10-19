@@ -1,0 +1,17 @@
+ASCENSIONRECOMP M7.61.1 — CONTINUIDADE TÉCNICA — 2026-10-19
+
+REPO: joao9vegeto-stack/KintTany
+BRANCH: AscensionRecomp EXCLUSIVAMENTE
+BASELINE: 44a41f2240225ca82cfd004f3404b7df7c69d48b
+LAST RUN: #237 / 39241078014 — FAILURE — 415 tests / 28 stale-label assertions
+RULE: 1 commit, 1 push, 1 workflow. No changes to main, PsTJon or other branches.
+DEVICE: iPhone 17 Pro. Strict AOT native PowerPC64→ARM64; 0 interpretation/JIT/fallback.
+
+The M7.61 code contains SHA-checked 26 structural PPC candidates (739 words) and the strict existing lifter; compiler reports accepted/rejected per PC/opcode and builds the batch Apple ARM64. Installer compares full original PPC words to executable ELF + guest RAM BEFORE registering, preserves earlier AOT on duplicates. 4 new Python tests passed in failed run #237; compilation and IPA were never reached. M7.61.1 changes only stale version expectations in 26 test files and corrects signed guest STW host test address expectations. Do not fake success.
+
+ELF: GOWA.ELF edition NPUA80918, SHA256 4bf75c897b82d1beb25514cbadaff3d03e1b0c7bf849fa5d289be4f9183462b5, 8717136 bytes; original elf held in iPhone Files, not bundled/pushed.
+EXPECTED local source generator: tools/generate_m761_owner_batch.py.
+CI proof: m761-generation.log, m761-python.log, m761-stop-host.log, m761-owner-batch.json, m761-object-nm.txt, m761-final-attestation.log, final nm, IPA SHA256.
+LAST proven device baseline M7.60: 7700 linked, 124 unique executed, 1830 dispatches, PPC=0, unresolved 0x003E16E0 F821FF91. 0 guest file reads/open proven.
+EXECUÇÃO ATUAL M7.61.1: TESTE FÍSICO PENDENTE, new linked/registered/executed = NÃO MEDIDO until CI/device.
+First gate on iPhone: advance beyond 0x003E16E0, 0 interpreted PPC; then guest cellFsOpen and cellFsRead with PC/path/FD/status/guest-memory bytes; later PSARC and real RSX/Metal frame.
