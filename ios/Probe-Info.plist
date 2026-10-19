@@ -8,8 +8,8 @@
 <key>CFBundleName</key><string>AscensionRecompProbe</string>
 <key>CFBundleDisplayName</key><string>AscensionRecomp Test</string>
 <key>CFBundlePackageType</key><string>APPL</string>
-<key>CFBundleShortVersionString</key><string>7.67.0</string>
-<key>CFBundleVersion</key><string>7670</string>
+<key>CFBundleShortVersionString</key><string>7.68.0</string>
+<key>CFBundleVersion</key><string>7680</string>
 <!-- Exported diagnostic reports are visible in Files > On My iPhone
      and eligible for indexing in Files > Recents. -->
 <key>UIFileSharingEnabled</key><true/>

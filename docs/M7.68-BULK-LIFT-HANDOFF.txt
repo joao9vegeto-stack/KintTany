@@ -1,0 +1,139 @@
+ASCENSIONRECOMP M7.68 — HANDOFF / ESCOPO E PRIMEIRO BLOQUEIO (2026-10-19)
+================================================================================
+Repo: joao9vegeto-stack/KintTany | SOMENTE branch AscensionRecomp
+Game: God of War: Ascension NPUA80918 | execução ARM64 AOT only
+JIT/interpretador PPC/fallback no app: PROIBIDOS / não ativados.
+NÃO versionar GOWA.ELF/SELF/RAP/PSARC/ELFs SPU/artefatos comerciais/PPU gerado.
+Fonte do usuário: COMANDO_AGENTE_GOWA_M7.68.txt, GOWA_M7.67_BULK_AUDIT.zip,
+RESULTADO_CONCRETO_GOWA_M7.67.txt, log físico M7.67 (19/out 19:15:34).
+
+1) BASE FÍSICA CONFIRMADA PELO IPHONE, M7.67.0 / AÇÕES #257
+Commit 128d9e63e6975663bab2849da7bc4e3aa89a3b11.
+8700 funções AOT registradas, 143 entradas distintas executadas, 1901 despachos.
+PPC interpretadas=0. Código executado último: 0x005394E8.
+Parada física 0x00669A84, palavra 0x39800000, ELF/RAM iguais (28 bytes).
+sysPrxForUser NID 0x2F85C0EF HLE sys_lwmutex_create, import real verificado
+no ELF por duas consultas PRX, slot guest 0x00828298=0x00669A84.
+HLE_EXEC chamadas=544 sucesso=544, LR antes último HLE=0x0053950C,
+r2/TOC pré HLE=0x0083F2B0, r3_before=0x00A38A20, r3_after=0.
+O relatório também afirmou HANDLER_ARM64=NÃO para 0x00669A84; essa coluna
+é APENAS o lookup de handler AOT, não o lookup de import HLE! Mistura
+os domínios. M7.67 terminou rc=-3, motivo de erro final transportado:
+0x00010854 (parada declarada=0x00669A84): o trace anterior podia
+sobrescrever o primeiro PC real quando frames nativos desenrolavam.
+Estas medições provam que o HLE FOI encontrado e executado 544x, NÃO que
+um determinado último frame retomou pelo LR e avançou além do stub.
+guest cellFsOpen=0, cellFsRead=0, guest bytes>0=0.
+Leitura 4 bytes PARAM.SFO veio do HOST Files; não é chamada do guest.
+RSX/primeiro frame original NÃO COMPROVADOS.
+
+2) NOVA CORREÇÃO DE CONTROLE NATIVO M7.68
+arquivo: runtime/ppu_bridge.c + ppu_bridge.h
+- O dispatcher atual usa lookup AOT, então fallback a tabela PRX/HLE.
+- Descoberta de fluxo real: AR_TAIL de uma função AOT para o stub
+  importado entrava no HLE mas, após HLE retornar AR_OK, o dispatcher
+  terminava a rodada. Um BL PPC deve CONTINUAR a execução no endereço
+  LR nativo do guest (ex. 0x0053950C), se a origem veio de AOT_TAIL.
+- Mudado: em AOT_TAIL->import HLE, registrar lookup e handler HLE
+  separadamente do lookup AOT. Após HLE bem-sucedido, preservar TOC e
+  registros guest, buscar/continuar pelo LR através do dispatcher ARM64;
+  na falta de handler para LR, parar nesse LR, sem fabricar sucesso.
+- ar_guest_call() direto (chamada aninhada originada em C AOT) conserva
+  seu contrato: retorna AR_OK ao C native caller, não duplica o retorno
+  via LR. Uma flag local from_native_tail distingue os dois caminhos.
+- O primeiro erro profundo (PC, LR, CR, TOC, CTR, r1/r3) não é sobrescrito
+  no desenrolar de chamadas nativas com erro.
+- Novo trace M7.68 (log + AOT_TRIAGE_JSON): n.º HLE lookups vindos de
+  TAIL, handlers encontrados, retornos ao LR, último LR, ARM64 no
+  retorno, origem por TAIL e profundidade. Medições separadas, jamais
+  contar HLEs como funções AOT. Não adicionar handler nativo fake ao stub.
+- Testes host reproduzem: AOT BL->stub HLE->LR->próximo native,
+  chamada direta aninhada, destino LR sem ARM64 -> falha correta; 0
+  instruções PPC interpretadas. Testes host são sintéticos, não
+  demonstram execução no iPhone.
+
+3) ESCALA DO RUNTIME
+Antes: MAX_FUNCS=16.384, índice AOT hash=32.768, limite menor que as
+29.849 entradas da tabela C++ offline do jogo.
+Agora: MAX_FUNCS=65.535, hash=131.072. Índice uint16 continua seguro
+com reserva índice+1 em 1..65535 (zero é vazio).
+Testes host de 29.849 entradas NATIVAS SINTÉTICAS em hash/despacho.
+IMPORTANTE: isso altera CAPACIDADE DO RUNTIME, não cria nem liga
+29.849 novas funções de God of War.
+
+4) PACOTE DO USER REAL VALIDADO LOCALMENTE E PIPELINE PRIVADO
+ELF privado GOWA(8).ELF SHA256:
+4bf75c897b82d1beb25514cbadaff3d03e1b0c7bf849fa5d289be4f9183462b5
+Arquivo de 8.717.136 bytes confirmado localmente.
+ZIP do inventário do usuário SHA256:
+46fe14aa93f91d545da4e71d9cf28b21b3933a45ba39323b63f7274f04295451
+ps3recomp oficial revisão fixa 39a36296511c445707adabcd312f0b740cfbd694.
+Contagens do inventário original revalidadas por script:
+OPD 7.643; intervalos candidatos recuperados 16.841;
+350 imports (314 nomes conhecidos /36 não conhecidos);
+29.849 entradas na tabela C++ offline, SHA256 da tabela
+310e7f838243a07c76e7198aa13a3d5170fb8e648d1208908685ce0d75010cb9.
+1.942.057 PPC words com estrutura C emitida, NÃO equivalência semântica;
+15.797 opcodes conhecidos ainda sem semântica, 33 no-op SPR,
+148.861 .word ambíguos, sem prova de serem código executado.
+SPU: 4 ELFs embutidos, 2.444 intervalos automáticos. Outros
+SPUs podem existir nos arquivos do jogo ainda não lidos.
+Os 143 AOT_FIRST físicos estão dentro dos intervals offline mas
+só 53 coincidem exatamente com entradas da tabela: NÃO significa
+falha para os outros 90 (entradas internas).
+
+NOVO SCRIPT tools/m768_private_pipeline.py:
+  python3 tools/m768_private_pipeline.py --elf '<GOWA.ELF privado>' \
+    --bundle '<GOWA_M7.67_BULK_AUDIT.zip privado>' \
+    --workdir '<fora do checkout git>' --stage audit
+
+Audit foi REALMENTE EXECUTADO no workspace com o ELF original,
+verificando SHA, contagens, tabela offline e import específico.
+Para relift privado (precisa de checkout upstream fixado + Python e
+espaço suficiente para saída muito grande):
+  python3 tools/m768_private_pipeline.py --elf '<ELF privado>' \
+    --bundle '<ZIP inventário>' --workdir '<disco privado>' \
+    --upstream '<checkout ps3recomp SHA fixado>' --stage lift --jobs 4
+Executa ppu_loader/lifter --functions recovered --hle-stubs --chunks 650,
+extract_spu_images/spu_lifter e gen_hle_nids com logs por fase.
+--stage compile exige macOS+Xcode, compila C++ em .o arm64 iOS.
+Falhas são fail-closed e geram first_blocker.json contendo comando/log.
+Chunks gerados ficam NO DISCO PRIVADO, nunca GitHub/CI.
+A tabela AOT de 29.849 é lista de símbolos offline, NÃO PPU C++ completo
+compilado / ligado / registrado / executado no iPhone.
+O upstream port GoW2 comprova método geral, não compatibilidade automática
+com este jogo. Sem runtime SPU/RSX/asset completo e correção dos TODOs,
+não existe promessa de menu/gameplay.
+
+GATE DE ESCALA NÃO ATENDIDO AINDA:
+Este ambiente é Linux sem Xcode e sem checkout local upstream ps3recomp.
+Não é possível compilar 13GB de PPU C++ para iOS nem incorporar ao CI
+sem injetar os fontes derivados do jogo, proibidos no workflow/repo.
+Assim esta release M7.68 mantém os blocos ARM64 reais já existentes,
+corrige retorno HLE nativo e amplia capacidade para o futuro.
+Contagens do jogo inteiro: PPU novo traduzido nesta build=0,
+PPU novo ARM64 ligado=0, SPU novo ARM64 ligado=0; progresso no
+HLE do guest e capacidade estrutural, NÃO lift integral compilado.
+O comando integral reproduzível fica pronto, mas só pode
+atingir a fase de build privada com upstream+SDK+arquivos localizados.
+NÃO REINTERPRETAR tais limites como percentuais de jogo.
+
+5) PROVA CI / PRÓXIMO TESTE
+CI deve verificar todos host tests (incl. M7.67 histórico modificado
+para esperar continuação real) e o Mach-O iPhoneOS ARM64 para
+ar_run, ar_guest_call, ar_m766_native_005394e8,
+ar_m767_last_import_evidence, ar_sys_lwmutex_create.
+App versão 7.68.0 CFBundleVersion 7680. IPA deve vir do Actions
+concluído e do commit exato; salvar IPA SHA256 e handoff/ZIP.
+CI AOT/link não equivale a execução física.
+No iPhone EXIGIR:
+- HLE último stub=0x00669A84, NID=0x2F85C0EF;
+- count M7.68 de HLE->retorno no guest LR (0x0053950C);
+- próximo AOT e stop PC, motivo e CR/XER/LR/TOC registrados;
+- PPC interpretadas=0.
+Só declarar I/O (cellFsOpen, cellFsRead>0 bytes USRDIR), RSX e
+quadros de gameplay quando explicitamente medidos no aparelho.
+
+Regras permanentes: SOMENTE AscensionRecomp, um commit/um workflow,
+sem tocar main/PsTJon; IPA download DIRETO aqui, resumo concreto,
+comparativo com 7.67, handoff TXT e ZIP privado.

@@ -1861,6 +1861,23 @@ static NSString *ARCurrentRelease(void){
        (unsigned long long)measured.m767_hle_post_r3,
        measured.m767_fail_pc,measured.m767_fail_reason,
        measured.m767_failed_handler_pc,native[7],(int32_t)native[6]];
+    [graphReport appendFormat:
+       @"M7.68 HLE-RETORNO-NATIVO: origem tail HLE-lookups=%u encontrados=%u "
+        "retornos ao LR do guest=%u ultimo_lr=0x%08X retorno_arm64=%@ "
+        "ultima_entrada_por_tail=%u nested_depth=%u\n"
+        "M7.68 PARADA PROFUNDA: PC=0x%08X motivo=%u, LR=0x%llX TOC=0x%llX "
+        "CR=0x%08X CTR=0x%llX; distinguir retorno guest/erro após HLE\n",
+       measured.m768_tail_hle_lookup_count,
+       measured.m768_tail_hle_found_count,
+       measured.m768_hle_return_count,
+       measured.m768_last_hle_return_pc,
+       measured.m768_hle_return_native?@"SIM":@"NÃO",
+       measured.m768_last_hle_entry_from_tail,
+       measured.m768_last_hle_depth,
+       measured.m767_fail_pc,measured.m767_fail_reason,
+       (unsigned long long)measured.stop_lr,
+       (unsigned long long)measured.stop_r2,measured.stop_cr,
+       (unsigned long long)measured.stop_ctr];
     NSMutableArray *firstVisits=[NSMutableArray arrayWithCapacity:measured.first_count];
     for(uint32_t i=0;i<measured.first_count;i++){
        NSString *pc=[NSString stringWithFormat:@"0x%08X",measured.first_pcs[i]];
@@ -1894,6 +1911,13 @@ static NSString *ARCurrentRelease(void){
       @"first_unlinked_tail_target":[NSString stringWithFormat:@"0x%08X",measured.first_unlinked_tail_target],
       @"m767_fail_pc":[NSString stringWithFormat:@"0x%08X",measured.m767_fail_pc],
       @"m767_fail_reason":@(measured.m767_fail_reason),
+      @"m768_hle_return_count":@(measured.m768_hle_return_count),
+      @"m768_hle_return_native":@(measured.m768_hle_return_native),
+      @"m768_last_hle_return_pc":[NSString stringWithFormat:@"0x%08X",measured.m768_last_hle_return_pc],
+      @"m768_tail_hle_lookup_count":@(measured.m768_tail_hle_lookup_count),
+      @"m768_tail_hle_found_count":@(measured.m768_tail_hle_found_count),
+      @"m768_hle_entry_from_tail":@(measured.m768_last_hle_entry_from_tail),
+      @"m768_hle_depth":@(measured.m768_last_hle_depth),
       @"m767_failed_handler_pc":[NSString stringWithFormat:@"0x%08X",measured.m767_failed_handler_pc],
       @"prx_module":[NSString stringWithUTF8String:importMeasured.module],
       @"prx_nid":[NSString stringWithFormat:@"0x%08X",importMeasured.nid],

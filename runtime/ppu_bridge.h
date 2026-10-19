@@ -76,6 +76,10 @@ typedef struct {
     /* M7.67: exact pre-shutdown fail source; do not confuse HLE dispatch with missing native PC. */
     uint32_t m767_fail_pc, m767_fail_reason, m767_failed_handler_pc;
     uint32_t m767_hle_calls, m767_hle_stub, m767_hle_nid, m767_hle_success;
+    /* M7.68: transport semantics distinct from ordinary linked AOT. */
+    uint32_t m768_hle_return_count, m768_hle_return_native, m768_last_hle_return_pc;
+    uint32_t m768_tail_hle_lookup_count, m768_tail_hle_found_count;
+    uint32_t m768_last_hle_entry_from_tail, m768_last_hle_depth;
     int32_t m767_hle_result;
     uint64_t m767_hle_pre_lr, m767_hle_pre_toc, m767_hle_pre_r3, m767_hle_post_r3;
 } ar_aot_trace;

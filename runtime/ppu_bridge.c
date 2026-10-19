@@ -2,7 +2,7 @@
 #include "ppu_bridge.h"
 #include <stdlib.h>
 #include <string.h>
-#define MAX_FUNCS 16384
+#define MAX_FUNCS 65535 /* bounded native AOT capacity >29,849 offline table entries; 16-bit slot uses index+1 */
 #define MAX_MEM (128u*1024u*1024u)
 #define MAX_DEPTH 64
 #define MAX_IMPORTS 2048
@@ -12,7 +12,7 @@ static struct {uint32_t pc;ar_ppu_fn fn;} funcs[MAX_FUNCS];
 static size_t nfunc,mem_size;
 /* Open-addressed 32k index: bounded lookup, no allocations during dispatch.
  * Slot stores registered-index+1; zero is empty. */
-#define AR_AOT_INDEX_SIZE 32768u
+#define AR_AOT_INDEX_SIZE 131072u /* power-of-two hash capacity for 65,535 AOT entries */
 static uint16_t aot_slot[AR_AOT_INDEX_SIZE];
 static uint8_t trace_seen[MAX_FUNCS];
 static uint32_t trace_ring[AR_AOT_TRACE_PCS],trace_total,trace_unique;
@@ -42,6 +42,9 @@ static uint32_t m767_fail_pc,m767_fail_reason,m767_failed_handler_pc;
 static uint32_t m767_hle_calls,m767_hle_stub,m767_hle_nid,m767_hle_success;
 static int32_t m767_hle_result;
 static uint64_t m767_hle_pre_lr,m767_hle_pre_toc,m767_hle_pre_r3,m767_hle_post_r3;
+static uint32_t m768_hle_return_count,m768_hle_return_native,m768_last_hle_return_pc;
+static uint32_t m768_tail_hle_lookup_count,m768_tail_hle_found_count;
+static uint32_t m768_last_hle_entry_from_tail,m768_last_hle_depth;
 
 static uint32_t aot_hash(uint32_t pc){
   return (((pc>>2)*UINT32_C(2654435761)) & (AR_AOT_INDEX_SIZE-1u));
@@ -114,6 +117,13 @@ void ar_trace_snapshot(ar_aot_trace *out) {
  out->m767_hle_result=m767_hle_result;
  out->m767_hle_pre_lr=m767_hle_pre_lr;out->m767_hle_pre_toc=m767_hle_pre_toc;
  out->m767_hle_pre_r3=m767_hle_pre_r3;out->m767_hle_post_r3=m767_hle_post_r3;
+ out->m768_hle_return_count=m768_hle_return_count;
+ out->m768_hle_return_native=m768_hle_return_native;
+ out->m768_last_hle_return_pc=m768_last_hle_return_pc;
+ out->m768_tail_hle_lookup_count=m768_tail_hle_lookup_count;
+ out->m768_tail_hle_found_count=m768_tail_hle_found_count;
+ out->m768_last_hle_entry_from_tail=m768_last_hle_entry_from_tail;
+ out->m768_last_hle_depth=m768_last_hle_depth;
 }
 static struct {uint32_t stub,nid;} imports[MAX_IMPORTS];
 static size_t nimports;
@@ -351,19 +361,26 @@ static void m767_failure(ppu_context *c,uint64_t attempted_pc,uint32_t reason){
    * 3=HLE absent, 4=HLE failure. No opcode decoder/fallback. */
   uint32_t pc=(uint32_t)attempted_pc;
   if(attempted_pc>UINT32_MAX||!pc)pc=tail_dst;
-  m767_fail_pc=pc;
-  if(!m767_fail_reason)m767_fail_reason=reason;
+  /* Nested native callers unwind *after* the deepest fault. Preserve
+   * original guest PC/CR/LR/TOC and never overwrite with caller's PC. */
+  if(!m767_fail_reason){
+    m767_fail_pc=pc;m767_fail_reason=reason;
+    triage_stop_prev=trace_total?
+      trace_ring[(trace_total-1u)&(AR_AOT_TRACE_PCS-1u)]:0u;
+    triage_stop_cr=c->cr;triage_stop_xer=c->xer;
+    triage_stop_lr=c->lr;triage_stop_ctr=c->ctr;
+    triage_stop_r1=c->gpr[1];triage_stop_r2=c->gpr[2];
+    triage_stop_r3=c->gpr[3];
+  }
   if(!missing && pc){missing=pc;trace_pending=pc;}
-  triage_stop_prev=trace_total?
-    trace_ring[(trace_total-1u)&(AR_AOT_TRACE_PCS-1u)]:0u;
-  triage_stop_cr=c->cr;triage_stop_xer=c->xer;
-  triage_stop_lr=c->lr;triage_stop_ctr=c->ctr;
-  triage_stop_r1=c->gpr[1];triage_stop_r2=c->gpr[2];
-  triage_stop_r3=c->gpr[3];
 }
 static int dispatch(ppu_context *c,uint64_t pc){
   if(depth>=MAX_DEPTH){fault=AR_DEPTH;return AR_DEPTH;}
   depth++;int result=AR_OK;
+  /* AOT_TAIL enters the callee via the same dispatcher. If callee is an
+   * imported firmware function, HLE must resume the saved PPC LR. A direct
+   * ar_guest_call() is different: return to its native C caller. */
+  int from_native_tail=0;
   for(;;){
     if(!budget){result=fault=AR_BUDGET;break;}
     budget--;
@@ -371,11 +388,17 @@ static int dispatch(ppu_context *c,uint64_t pc){
     ar_ppu_fn fn=lookup(pc,&found_index);
     if(!fn){
       uint32_t nid=import_nid(pc);
+      if(from_native_tail){
+        m768_tail_hle_lookup_count++;
+        if(nid && hle_handler(nid))m768_tail_hle_found_count++;
+      }
       if(nid){
         ar_hle_fn hle=hle_handler(nid);
         if(!hle){missing_nid=nid;m767_failure(c,pc,3u);result=fault=AR_MISSING_HLE;break;}
         trace_hle++;
         m767_hle_calls++;m767_hle_stub=(uint32_t)pc;m767_hle_nid=nid;
+        m768_last_hle_entry_from_tail=from_native_tail?1u:0u;
+        m768_last_hle_depth=depth;
         m767_hle_pre_lr=c->lr;m767_hle_pre_toc=c->gpr[2];
         m767_hle_pre_r3=c->gpr[3];
         uint64_t saved_toc=c->gpr[2];
@@ -385,7 +408,21 @@ static int dispatch(ppu_context *c,uint64_t pc){
         if(fault){m767_failure(c,pc,4u);result=fault;break;}
         if(rc){m767_failure(c,pc,4u);result=fault=AR_HLE_FAILURE;break;}
         m767_hle_success++;
-        c->cia=c->lr;result=AR_OK;break;
+        c->cia=c->lr;
+        m768_last_hle_return_pc=c->cia<=UINT32_MAX?(uint32_t)c->cia:0u;
+        m768_hle_return_native=lookup(c->cia,NULL)!=NULL;
+        if(from_native_tail){
+          /* The HLE was entered by an AOT branch, not a C native call.
+           * Return to real guest LR as a native dispatch; never fabricate
+           * a successful exit at the stub itself. If LR is unsupported,
+           * the following lookup fails closed at the correct guest PC. */
+          m768_hle_return_count++;
+          if(!c->cia || (c->cia&3u) || c->cia>UINT32_MAX){
+            m767_failure(c,c->cia,1u);result=fault=AR_UNRESOLVED;break;
+          }
+          pc=c->cia;from_native_tail=0;continue;
+        }
+        result=AR_OK;break;
       }
       /* M7.20: only if the user-imported ELF was authenticated and the
        * bridge explicitly attached it. Native AOT always wins lookup.
@@ -454,7 +491,7 @@ static int dispatch(ppu_context *c,uint64_t pc){
         tail_first_unlinked_src=(uint32_t)pc;
         tail_first_unlinked_dst=tail_dst;
       }
-      pc=target;continue;
+      pc=target;from_native_tail=1;continue;
     }
     if(status==AR_OK){result=AR_OK;break;}
     m767_failed_handler_pc=(uint32_t)pc;
@@ -482,6 +519,9 @@ int ar_run(ppu_context *c,uint32_t pc,uint32_t ticks){
   m767_fail_pc=m767_fail_reason=m767_failed_handler_pc=0;
   m767_hle_calls=m767_hle_stub=m767_hle_nid=m767_hle_success=0;
   m767_hle_result=0;m767_hle_pre_lr=m767_hle_pre_toc=m767_hle_pre_r3=m767_hle_post_r3=0;
+  m768_hle_return_count=m768_hle_return_native=m768_last_hle_return_pc=0;
+  m768_tail_hle_lookup_count=m768_tail_hle_found_count=0;
+  m768_last_hle_entry_from_tail=m768_last_hle_depth=0;
   triage_stop_lr=triage_stop_ctr=triage_stop_r1=triage_stop_r2=triage_stop_r3=0;
   fb_steps=0;fb_pc=0;fb_op=0;fb_bad_pc=0;fb_bad_op=0;
   fb_callsite_pc=0;fb_call_target=0;
