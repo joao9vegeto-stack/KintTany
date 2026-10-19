@@ -1,0 +1,50 @@
+{
+  "schema": "ascension-m762-coverage-summary-1",
+  "provenance": "original PPC64 big-endian GOWA.ELF analysed OFFLINE in authorized container; SHA authenticated",
+  "source_elf_sha256": "4bf75c897b82d1beb25514cbadaff3d03e1b0c7bf849fa5d289be4f9183462b5",
+  "source_elf_bytes": 8717136,
+  "e_entry_descriptor": "0x008283F8",
+  "entry_code": "0x00010410",
+  "toc": "0x0083F2B0",
+  "upstream_ps3recomp": "39a36296511c445707adabcd312f0b740cfbd694",
+  "upstream_license": "MIT",
+  "opcode_policy": "conservative only addi/addis/ori/oris/xori/xoris and unconditional BLR with unambiguous whole linear span; others reject",
+  "opd_descriptors": 7643,
+  "opd_unique": 7643,
+  "direct_call_targets": 11995,
+  "unique_candidates": 19403,
+  "fully_lifted": 805,
+  "fully_lifted_ppc_words": 1171,
+  "fully_lifted_opd": 651,
+  "fully_lifted_cfg": 154,
+  "rejected": 18598,
+  "reason_counts": {
+    "ambiguous_terminal": 1362,
+    "unsupported_opcode_semantics": 16847,
+    "oversized_opd_interval": 99,
+    "ambiguous_cfg_boundary": 282,
+    "ambiguous_internal_return": 8
+  },
+  "semantic_snapshot_sha256": "07b74c4557b4951c3c113c998dc5895932e28b33cf240fdc13f9315fe7d84eb3",
+  "canonical_unresolved_pc": "0x002C53B0",
+  "canonical_unresolved_discovered_and_lifted": true,
+  "imports_hle": {
+    "status": "not_expanded_in_m762",
+    "note": "existing NID/HLE resolver preserved; no newly claimed resolution"
+  },
+  "device_baseline_m7613": {
+    "registered": 7726,
+    "unique_executed": 128,
+    "dispatches": 1859,
+    "ppc_interpreted": 0,
+    "missing_pc": "0x002C53B0",
+    "guest_fs_open_calls": 0,
+    "guest_fs_read_calls": 0
+  },
+  "m762_ci_apple_arm64": "NOT_MEASURED",
+  "m762_linked_macho": "NOT_MEASURED",
+  "m762_guest_executed": "NOT_MEASURED",
+  "global_code_coverage_denominator": "UNVERIFIED",
+  "source_ELF_in_CI": false,
+  "no_original_elf_or_opcodes_in_git": true
+}

@@ -194,6 +194,31 @@ xcrun --sdk iphoneos clang -target arm64-apple-ios17.0 -isysroot "$SDK" \
     -I upstream/runtime/ppu -I runtime \
     -c runtime/ppu_m761_generated.c -o ios-probe/ppu_m761_generated.o
 xcrun nm -g ios-probe/ppu_m761_generated.o | grep -Fq '_ar_m761_native_003e16e0'
+# M7.62: immutable semantic AOT snapshot produced by OFFLINE complete ELF
+# inventory. Original GOWA.ELF is NOT on GitHub runner / IPA.
+python3 - <<'PY'
+import base64,gzip,hashlib
+from pathlib import Path
+encoded=Path("runtime/m762_semantic_snapshot.gz.b64").read_text()
+raw=gzip.decompress(base64.b64decode(encoded,validate=True))
+digest=hashlib.sha256(raw).hexdigest()
+assert digest=="07b74c4557b4951c3c113c998dc5895932e28b33cf240fdc13f9315fe7d84eb3",digest
+Path("m762-semantic-snapshot.json").write_bytes(raw)
+print("M7.62 canonical offline semantic snapshot",digest)
+PY
+python3 tools/m762_pipeline.py --snapshot m762-semantic-snapshot.json --output-dir runtime | tee m762-generation.log
+M762_OBJECTS=()
+for src in runtime/ppu_m762_0{0..6}.c runtime/ppu_m762_install.c; do
+  test -s "$src"
+  dst="ios-probe/$(basename "${src%.c}").o"
+  xcrun --sdk iphoneos clang -target arm64-apple-ios17.0 -isysroot "$SDK" \
+    -std=c11 -O2 -Wall -Wextra -Werror -I upstream/runtime/ppu -I runtime \
+    -c "$src" -o "$dst"
+  M762_OBJECTS+=("$dst")
+done
+xcrun nm -g "${M762_OBJECTS[@]}" > m762-objects-nm.txt
+grep -Fq '_ar_m762_native_002c53b0' m762-objects-nm.txt
+grep -Fq '_ar_m762_register_discovered' m762-objects-nm.txt
 # M7.56: capture live guest memory vs PT_LOAD file bytes, not fallback counters.
 xcrun --sdk iphoneos clang -target arm64-apple-ios17.0 -isysroot "$SDK" \
     -std=c11 -O2 -Wall -Wextra -Werror -I upstream/runtime/ppu -I runtime \
@@ -324,6 +349,7 @@ xcrun --sdk iphoneos clang++ -target arm64-apple-ios17.0 \
     ios-probe/ppu_m749_native_frsp.o \
     ios-probe/ppu_m750_native_path.o \
     ios-probe/ppu_m751_vsubfp.o ios-probe/ppu_m752_vsldoi.o ios-probe/ppu_m753_native_vectorfp.o ios-probe/ppu_m754_native_fcmp.o ios-probe/ppu_m756_native_divloop.o ios-probe/ppu_m757_native_batch.o ios-probe/ppu_m758_generated.o ios-probe/ppu_m759_generated.o ios-probe/ppu_m761_generated.o ios-probe/ppu_m756_stop_evidence.o ios-probe/ppu_guest_fs.o \
+    ${M762_OBJECTS[@]+"${M762_OBJECTS[@]}"} \
     ${GOWA2_OBJECTS[@]+"${GOWA2_OBJECTS[@]}"} \
     ios-probe/ppu_m717_graph.o \
     ${M711_OBJECTS[@]+"${M711_OBJECTS[@]}"} \
@@ -340,6 +366,23 @@ if [[ -z "${ASCENSION_PRIVATE_AOT_C:-}" ]]; then
   exit 77
 fi
 xcrun nm -g "$APP/AscensionRecompProbe" > m78-owner-aot-linked-symbols.txt
+# Every M7.62 native function must appear in the FINAL Mach-O, not merely object.
+python3 - <<'PY'
+import json,re
+from pathlib import Path
+s=json.loads(Path("m762-semantic-snapshot.json").read_text())
+expected={"_ar_m762_native_%08x"%e["pc"] for e in s["accepted"]}
+symbols=Path("m78-owner-aot-linked-symbols.txt").read_text()
+missing=sorted(x for x in expected|{"_ar_m762_register_discovered"} if not any(line.endswith(" "+x) and (" T " in line or " t " in line) for line in symbols.splitlines()))
+if missing:raise SystemExit("M7.62 unlinked native AOT: "+str(missing[:25]))
+Path("m762-final-attestation.json").write_text(json.dumps({
+ "schema":"m762-apple-arm64-native-proof-1","native_symbols_final_macho":len(expected),
+ "native_symbols_object":len(expected),"source_elf_sha256":s["source_sha256"],
+ "aot_executed_on_iphone":"NOT_MEASURED","guest_fs":"NOT_MEASURED",
+ "note":"Frozen IR compiled and linked, ELF not present in CI; no global coverage claim"
+},indent=2))
+print("M7.62 final AOT symbols verified",len(expected))
+PY
 python3 tools/verify_gowa2_macho.py ios-probe/gowa2-staged/symbols.txt \
  m78-owner-aot-linked-symbols.txt | tee m743-gowa2-final-verified.log
 grep -Eq ' [Tt] _ar_gowa2_offline_aot_install_sha256$' m78-owner-aot-linked-symbols.txt

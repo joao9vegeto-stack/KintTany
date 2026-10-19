@@ -63,6 +63,7 @@ extern int ar_m757_register_owner(const uint8_t*,size_t);
 extern int ar_m758_register_owner(const uint8_t*,size_t);
 extern int ar_m759_register_owner(const uint8_t*,size_t);
 extern int ar_m761_register_owner(const uint8_t*,size_t);
+extern int ar_m762_register_discovered(const uint8_t*,size_t);
 extern int ar_private_import_match(const uint8_t*,size_t,uint32_t,uint32_t[4],char[48]);
 extern int ar_private_import_find_nid(const uint8_t*,size_t,uint32_t,const char*,uint32_t[4],char[48]);
 
@@ -318,6 +319,11 @@ int ar_m70_native_runtime_probe(const uint8_t*d,size_t len,
   /* M7.61: SHA-gated and guest RAM-authenticated batch, no interpreter. */
   if(ar_m761_register_owner(d,len)!=AR_OK){
     ar_bridge_shutdown();return -65;
+  }
+  /* M7.62: discovered OPD + direct-call AOT, SHA full ELF and live VM.
+   * No PPC interpreter, JIT or runtime code generation. */
+  if(ar_m762_register_discovered(d,len)!=AR_OK){
+    ar_bridge_shutdown();return -66;
   }
 #endif
 #endif

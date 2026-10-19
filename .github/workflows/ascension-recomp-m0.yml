@@ -768,6 +768,44 @@ jobs:
             -c runtime/ppu_m761_generated.c -o m761-native-arm64.o
           xcrun nm -g m761-native-arm64.o | grep -Fq '_ar_m761_native_003e16e0'
           xcrun nm -g m761-native-arm64.o | grep -Fq '_ar_m761_register_owner'
+      - name: M7.62 verify immutable full-ELF offline OPD and CFG native-batch source
+        run: |
+          set -euo pipefail
+          python3 -m unittest discover -s tests -p test_m762_auto_inventory.py -v 2>&1 | tee m762-tests.log
+          python3 - <<'PY'
+          import base64,gzip,hashlib,json
+          from pathlib import Path
+          data=gzip.decompress(base64.b64decode(
+            Path("runtime/m762_semantic_snapshot.gz.b64").read_text(),validate=True))
+          digest=hashlib.sha256(data).hexdigest()
+          assert digest=="07b74c4557b4951c3c113c998dc5895932e28b33cf240fdc13f9315fe7d84eb3",digest
+          Path("m762-semantic-snapshot.json").write_bytes(data)
+          s=json.loads(data)
+          coverage=json.loads(Path("runtime/m762-coverage-summary.json").read_text())
+          assert len(s["accepted"])==coverage["fully_lifted"]==805
+          assert sum(z["count"] for z in s["accepted"])==coverage["fully_lifted_ppc_words"]==1171
+          assert coverage["unique_candidates"]==19403
+          assert sum(coverage["reason_counts"].values())==coverage["rejected"]==18598
+          assert coverage["source_ELF_in_CI"] is False
+          Path("m762-coverage-ci.json").write_text(json.dumps({
+            **coverage,"CI_full_original_ELF_regeneration":"NOT_RUN - ELF deliberately absent",
+            "CI_source":"canonical authenticated semantic IR snapshot",
+            "CI_apple_arm64":"PENDING", "CI_final_macho":"PENDING"
+          },indent=2)+"\n")
+          print("M7.62 offline full-ELF inventory authenticated",digest,coverage["unique_candidates"],coverage["fully_lifted"])
+          PY
+          python3 tools/m762_pipeline.py --snapshot m762-semantic-snapshot.json --output-dir m762-ci | tee m762-generation-ci.log
+          # Compile *all* seven generated units and immutable installer as host objects
+          # before attempting the production Apple ARM64 compiler.
+          for src in m762-ci/ppu_m762_0{0..6}.c m762-ci/ppu_m762_install.c; do
+            test -s "$src"
+            clang -std=c11 -O2 -Wall -Wextra -Werror -I upstream/runtime/ppu -I runtime \
+              -c "$src" -o "${src%.c}.o"
+          done
+          nm m762-ci/ppu_m762_*.o > m762-host-nm.txt
+          grep -Fq 'ar_m762_native_002c53b0' m762-host-nm.txt
+          grep -Fq 'ar_m762_register_discovered' m762-host-nm.txt
+          echo 'M7.62 805/805 fully lifted strict semantic AOT; full canonical ELF input was OFFLINE and is not part of CI' > m762-validation.log
       - name: M7.60 prove bounded native AOT flight recorder, hot loop RLE and machine report
         run: |
           set -euo pipefail
@@ -1598,6 +1636,26 @@ jobs:
             --object-nm m761-object-nm.txt \
             --final-nm m78-owner-aot-linked-symbols.txt \
             --lipo m41-executable-arch.txt | tee m761-final-attestation.log
+      - name: M7.62 verify final Apple ARM64 Mach-O coverage is machine-measured
+        run: |
+          set -euo pipefail
+          test -s m762-final-attestation.json
+          test -s m762-objects-nm.txt
+          test -s m762-generation.log
+          test -s m78-owner-aot-linked-symbols.txt
+          python3 - <<'PY'
+          import json
+          from pathlib import Path
+          m=json.loads(Path('m762-final-attestation.json').read_text())
+          assert m['native_symbols_final_macho']==805,m
+          assert m['native_symbols_object']==805,m
+          assert m['aot_executed_on_iphone']=='NOT_MEASURED',m
+          c=json.loads(Path('m762-coverage-ci.json').read_text())
+          c['CI_apple_arm64']='805 ARM64 native symbols confirmed'
+          c['CI_final_macho']='805 ARM64 native symbols confirmed'
+          Path('m762-coverage-ci.json').write_text(json.dumps(c,indent=2)+"\n")
+          print('M7.62 805 Apple ARM64 AOT symbols were compiled and linked, iPhone execution NOT_MEASURED')
+          PY
       - name: Upload M2 evidence - runtime + synthetic PPU proof
 
         if: always()
@@ -1607,6 +1665,15 @@ jobs:
           if-no-files-found: warn
           retention-days: 14
           path: |
+            m762-tests.log
+            m762-generation-ci.log
+            m762-generation.log
+            m762-validation.log
+            m762-coverage-ci.json
+            m762-final-attestation.json
+            m762-objects-nm.txt
+            m762-host-nm.txt
+            m762-semantic-snapshot.json
             m0-tests.log
             m0-configure.log
             m0-build.log

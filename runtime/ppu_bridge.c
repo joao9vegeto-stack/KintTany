@@ -2,7 +2,7 @@
 #include "ppu_bridge.h"
 #include <stdlib.h>
 #include <string.h>
-#define MAX_FUNCS 8192
+#define MAX_FUNCS 16384
 #define MAX_MEM (128u*1024u*1024u)
 #define MAX_DEPTH 64
 #define MAX_IMPORTS 2048
@@ -10,9 +10,9 @@
 #define MAX_LV2_SYSCALLS 512
 static struct {uint32_t pc;ar_ppu_fn fn;} funcs[MAX_FUNCS];
 static size_t nfunc,mem_size;
-/* Open-addressed 16k index: bounded lookup, no allocations during dispatch.
+/* Open-addressed 32k index: bounded lookup, no allocations during dispatch.
  * Slot stores registered-index+1; zero is empty. */
-#define AR_AOT_INDEX_SIZE 16384u
+#define AR_AOT_INDEX_SIZE 32768u
 static uint16_t aot_slot[AR_AOT_INDEX_SIZE];
 static uint8_t trace_seen[MAX_FUNCS];
 static uint32_t trace_ring[AR_AOT_TRACE_PCS],trace_total,trace_unique;
