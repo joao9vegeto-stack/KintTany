@@ -1890,9 +1890,9 @@ jobs:
           import json
           from pathlib import Path
           m=json.loads(Path('m768-final-attestation.json').read_text())
-          assert m['whole_game_ppu_full_lift_linked'] is False
-          assert m['on_device_hle_to_caller_pc']=='NOT_MEASURED'
-          assert m['executable_arm64_symbols_checked']==5
+          assert m['whole_game_lift_arm64_linked'] is False
+          assert m['iphone_hle_return_to_guest_lr']=='NOT_MEASURED'
+          assert len(m['symbol_definitions_verified'])==5
           PY
       - name: M7.67 validate native import telemetry and IPA provenance
         run: |
