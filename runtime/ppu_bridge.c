@@ -37,6 +37,11 @@ static uint32_t lv2_missing_number,lv2_missing_pc;
 static uint32_t barrier_eieio,barrier_sync,barrier_lwsync,barrier_isync;
 static uint32_t barrier_last_pc;
 static uint32_t fp_loads,fp_stores,fp_converts,fp_divides,fp_last_pc;
+/* M7.67 live dispatcher metadata kept until ar_trace_snapshot BEFORE shutdown. */
+static uint32_t m767_fail_pc,m767_fail_reason,m767_failed_handler_pc;
+static uint32_t m767_hle_calls,m767_hle_stub,m767_hle_nid,m767_hle_success;
+static int32_t m767_hle_result;
+static uint64_t m767_hle_pre_lr,m767_hle_pre_toc,m767_hle_pre_r3,m767_hle_post_r3;
 
 static uint32_t aot_hash(uint32_t pc){
   return (((pc>>2)*UINT32_C(2654435761)) & (AR_AOT_INDEX_SIZE-1u));
@@ -115,11 +120,6 @@ static size_t nimports;
 static struct {uint32_t nid;ar_hle_fn fn;} handlers[MAX_HANDLERS];
 static size_t nhandlers;
 static uint32_t missing_nid,missing_syscall;
-/* M7.67 live dispatcher metadata kept until ar_trace_snapshot BEFORE shutdown. */
-static uint32_t m767_fail_pc,m767_fail_reason,m767_failed_handler_pc;
-static uint32_t m767_hle_calls,m767_hle_stub,m767_hle_nid,m767_hle_success;
-static int32_t m767_hle_result;
-static uint64_t m767_hle_pre_lr,m767_hle_pre_toc,m767_hle_pre_r3,m767_hle_post_r3;
 
 static struct {uint32_t number;ar_hle_fn fn;} syscalls[MAX_LV2_SYSCALLS];
 static size_t nsyscalls;
