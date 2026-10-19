@@ -24,11 +24,20 @@ class Offline(unittest.TestCase):
    self.assertEqual(report["translated_ppc_instructions"],221061)
    self.assertEqual(report["rejected_candidates"],1237)
  def test_real_registration_capacity_and_old_AOT_priority(self):
-  self.assertIn("#define MAX_FUNCS 8192",self.reg)
-  self.assertIn("#define AR_AOT_INDEX_SIZE 16384u",self.reg)
+  # Retain 6251 historical AOT plus 805 M7.62 owner-derived functions.
+  # Runtime capacity changes must not invalidate an otherwise safe increase.
+  cap_match=re.search(r"(?m)^#define MAX_FUNCS (\d+)$",self.reg)
+  hash_match=re.search(r"(?m)^#define AR_AOT_INDEX_SIZE (\d+)u$",self.reg)
+  self.assertIsNotNone(cap_match)
+  self.assertIsNotNone(hash_match)
+  cap=int(cap_match.group(1));hash_size=int(hash_match.group(1))
+  import json
+  coverage=json.loads((ROOT/"runtime/m762-coverage-summary.json").read_text())
+  self.assertGreaterEqual(cap,7726+coverage["fully_lifted"])
+  self.assertGreaterEqual(cap,6251)
+  self.assertGreaterEqual(hash_size,2*cap)
+  self.assertEqual(hash_size&(hash_size-1),0)
   self.assertIn("return AR_DUPLICATE",self.reg)
-  self.assertLessEqual(1440+6251,8192)
-  self.assertLessEqual(6251,8192)
   self.assertIn("ar_gowa2_offline_aot_install_sha256(digest,sizeof(digest))",self.bridge)
   self.assertLess(self.bridge.index("ar_private_aot_install_sha256"),self.bridge.index("ar_gowa2_offline_aot_install_sha256(digest"))
   self.assertLess(self.bridge.index("ar_m736_register_owner(d,len)"),self.bridge.index("ar_gowa2_offline_aot_install_sha256(digest"))
