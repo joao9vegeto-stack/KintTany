@@ -1820,6 +1820,13 @@ static NSString *ARCurrentRelease(void){
        (unsigned long long)measured.stop_r3,
        measured.first_count,measured.first_total,AR_AOT_TRIAGE_FIRST,
        measured.run_count,measured.run_total,AR_AOT_TRIAGE_RUNS];
+    [graphReport appendFormat:
+       @"AOT_TAIL ORIGEM=0x%08X DESTINO=0x%08X HANDLER_ARM64=%@ TRANSFERENCIAS=%u\n"
+        "AOT_TAIL PRIMEIRO_DESTINO_SEM_HANDLER origem=0x%08X destino=0x%08X\n",
+       measured.tail_source,measured.tail_target,
+       measured.tail_target_has_native?@"SIM":@"NÃO",
+       measured.tail_count,
+       measured.first_unlinked_tail_source,measured.first_unlinked_tail_target];
     NSMutableArray *firstVisits=[NSMutableArray arrayWithCapacity:measured.first_count];
     for(uint32_t i=0;i<measured.first_count;i++){
        NSString *pc=[NSString stringWithFormat:@"0x%08X",measured.first_pcs[i]];
@@ -1846,6 +1853,11 @@ static NSString *ARCurrentRelease(void){
       @"linked_aot":@(native[5]),
       @"distinct_aot":@(measured.unique_aot),
       @"aot_dispatches":@(measured.aot_dispatches),
+      @"tail_count":@(measured.tail_count),
+      @"tail_source":[NSString stringWithFormat:@"0x%08X",measured.tail_source],
+      @"tail_target":[NSString stringWithFormat:@"0x%08X",measured.tail_target],
+      @"tail_target_native":@(measured.tail_target_has_native),
+      @"first_unlinked_tail_target":[NSString stringWithFormat:@"0x%08X",measured.first_unlinked_tail_target],
       @"fallback_steps":@(measured.fallback_steps),
       @"first_truncated":@(measured.first_total>measured.first_count),
       @"runs_truncated":@(measured.run_total>measured.run_count),

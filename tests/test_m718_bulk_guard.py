@@ -37,6 +37,6 @@ class M718BulkTests(unittest.TestCase):
         ui=(ROOT/"ios/ARProbeApp.m").read_text()
         self.assertIn("ASCENSIONRECOMP %@",ui)  # current milestone header; M7.18 AOT guarded separately
         self.assertIn("RSX do Ascension: não demonstrado",ui)
-        self.assertIn("Entradas AOT vinculadas: %u",ui)
+        self.assertIn("AOT vinculadas=%@ entradas",ui)
 
 if __name__=="__main__":unittest.main()

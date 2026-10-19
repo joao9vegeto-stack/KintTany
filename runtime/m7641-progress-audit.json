@@ -1,0 +1,65 @@
+{
+  "schema": "ascension-m7641-audit-1",
+  "source": "user-provided-m763-analysis-and-canonical-ELF",
+  "source_sha256": "4bf75c897b82d1beb25514cbadaff3d03e1b0c7bf849fa5d289be4f9183462b5",
+  "predecessor_physical": {
+    "version": "M7.63.1",
+    "commit": "73959e41717ce2575b23ac4833a4ff04523cc102",
+    "registered": 8417,
+    "distinct_executed": 134,
+    "dispatches": 1892,
+    "ppc_interpreted": 0,
+    "fallback": 0,
+    "stop": "0x00539378"
+  },
+  "m763": {
+    "opd": 7643,
+    "candidates_heuristic": 19403,
+    "prior_accepted": 805,
+    "new_accepted": 1582,
+    "new_ppc_words": 8313,
+    "rejections": {
+      "unsupported_opcode_semantics": 15261,
+      "ambiguous_terminal": 1362,
+      "oversized_opd_interval": 99,
+      "ambiguous_cfg_boundary": 282,
+      "ambiguous_internal_return": 12
+    },
+    "first_blocker_rows": 15273
+  },
+  "m764": {
+    "direct_tail_blocks_offline": 31,
+    "unique_first_level_target_pcs": 26,
+    "source_pc": "0x00539378",
+    "target_pc": "0x005392A4"
+  },
+  "m7641": {
+    "native_conditional_blocks_offline": 6,
+    "unlifted_successors": 20,
+    "real_successor": "0x005392A4",
+    "branches": [
+      "0x00539308",
+      "0x005392D0"
+    ],
+    "compiled_ios": "NOT_MEASURED",
+    "linked_macho": "NOT_MEASURED",
+    "registered_device": "NOT_MEASURED",
+    "executed_device": "NOT_MEASURED"
+  },
+  "imports": {
+    "total_heuristic": 350,
+    "libraries": 25,
+    "hle_guest_verified": "NOT_MEASURED"
+  },
+  "spu": {
+    "programs_inventoried": "NOT_MEASURED"
+  },
+  "guest_fs": {
+    "opens": "NOT_MEASURED",
+    "positive_read_bytes": "NOT_MEASURED"
+  },
+  "rsx": {
+    "original_frame": "NOT_MEASURED"
+  },
+  "coverage_percentage": null
+}

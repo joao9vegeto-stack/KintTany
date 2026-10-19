@@ -1,4 +1,4 @@
-name: AscensionRecomp M7.64 - native CFG direct-tail ARM64 batch
+name: AscensionRecomp M7.64.1 - verified CFG successor ARM64 batch
 
 on:
   push:
@@ -849,6 +849,33 @@ jobs:
             m764-host/ppu_m764_00.c tests/host_m764_stop.c -o m764-stop-host
           ./m764-stop-host | tee m764-stop-host.log
           grep -Fq 'native ALU, clrldi and B tail PASS' m764-stop-host.log
+      - name: M7.64.1 authenticate and test 6 actual CFG successor blocks
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          import base64,gzip,hashlib,json
+          from pathlib import Path
+          script=gzip.decompress(base64.b64decode(Path('tools/m764_cfg_successors.py.gz.b64').read_text().strip(),validate=True))
+          assert hashlib.sha256(script).hexdigest()=='8404c4135217924479a03795c86d0efb418eda78c58ddb7cdb2f509850e7c47c'
+          Path('tools/m764_cfg_successors.py').write_bytes(script)
+          raw=gzip.decompress(base64.b64decode(Path('runtime/m764c_semantic_snapshot.gz.b64').read_text().strip(),validate=True))
+          assert hashlib.sha256(raw).hexdigest()=='413409725d9f59d0f3cbec7c85ede61b3229017c151a99aa3acbe7446ef193cf'
+          j=json.loads(raw)
+          assert j['source_sha256']=='4bf75c897b82d1beb25514cbadaff3d03e1b0c7bf849fa5d289be4f9183462b5'
+          assert j['unique_successor_pcs']==26 and len(j['accepted'])==6
+          assert next(q for q in j['accepted'] if q['pc']==0x5392a4)['ir'][-1]==['bc',12,30,0x539308,0x5392d0]
+          Path('m764c-host-snapshot.json').write_bytes(raw)
+          PY
+          python3 tools/m764_cfg_successors.py --snapshot m764c-host-snapshot.json --output-dir m764c-host | tee m764c-host-generation.log
+          clang -std=c11 -O2 -Wall -Wextra -Werror -I upstream/runtime/ppu -I runtime \
+            m764c-host/ppu_m764c_00.c tests/host_m764c_successor.c -o m764c-host
+          ./m764c-host | tee m764c-host-test.log
+          clang -std=c11 -O2 -Wall -Wextra -Werror -DASCENSION_NATIVE_ONLY=1 \
+            -I upstream/runtime/ppu -I runtime \
+            runtime/ppu_bridge.c tests/host_m764_tail_trace.c -o m764-tail-host
+          ./m764-tail-host | tee m764-tail-host-test.log
+          grep -Fq 'both BC edges PASS' m764c-host-test.log
+          grep -Fq 'unresolved PASS' m764-tail-host-test.log
       - name: M7.60 prove bounded native AOT flight recorder, hot loop RLE and machine report
         run: |
           set -euo pipefail
@@ -1591,7 +1618,7 @@ jobs:
           grep -Eq ' [Tt] _ar_lv2_timezone$' m78-owner-aot-linked-symbols.txt
           echo "M7.43: 6251 generated GOWA ELF C-AOT functions compiled and linked in final Apple ARM64 Mach-O (9 modules + SHA installer). Number actually executed and new PC pending physical iPhone report; no guest files/RSX demonstrated." > m78-actions-status.txt
           test -s AscensionRecompProbe-0.6.22-unsigned.ipa
-          /usr/libexec/PlistBuddy -c 'Print CFBundleShortVersionString' ios-probe/Payload/AscensionRecompProbe.app/Info.plist | grep -Fx 7.64.0
+          /usr/libexec/PlistBuddy -c 'Print CFBundleShortVersionString' ios-probe/Payload/AscensionRecompProbe.app/Info.plist | grep -Fx 7.64.1
           /usr/bin/unzip -t AscensionRecompProbe-0.6.22-unsigned.ipa | tee m42-ipa-integrity.log
           xcrun nm -g ios-probe/Payload/AscensionRecompProbe.app/AscensionRecompProbe | grep -E '(_rsx_metal_backend_present|_rsx_metal_backend_init|_OBJC_CLASS_\\$_ARMetalView)' > m42-runtime-link-symbols.txt || true
           grep -q _rsx_metal_backend_init m39-metal-symbols.txt
@@ -1710,17 +1737,33 @@ jobs:
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: AscensionRecomp-M7.64-NATIVE-CFG-ARM64
+          name: AscensionRecomp-M7.64.1-CFG-ARM64
           retention-days: 14
           if-no-files-found: warn
           path: |
-            AscensionRecompProbe-7.64.0-unsigned.ipa
-            m764-ipa-sha256.txt
+            AscensionRecompProbe-7.64.1-unsigned.ipa
+            m7641-ipa-sha256.txt
             m764-final-attestation.json
+            m764c-final-attestation.json
+            m764c-objects-nm.txt
+            m764c-generation.log
+            m764c-host-generation.log
+            m764c-host-test.log
+            m764-tail-host-test.log
             m764-generation.log
             m764-host-generation.log
             m764-stop-host.log
             docs/M7.64-NATIVE-CFG-TAIL-HANDOFF.txt
+      - name: M7.64.1 verify 6 CFG native arm64 entries linked
+        run: |
+          set -euo pipefail
+          test -s m764c-final-attestation.json
+          test -s m764c-objects-nm.txt
+          test -s m764c-host-test.log
+          test -s m764-tail-host-test.log
+          grep -Eq ' [Tt] _ar_m764c_native_005392a4$' m78-owner-aot-linked-symbols.txt
+          grep -Eq ' [Tt] _ar_m764c_register_successors$' m78-owner-aot-linked-symbols.txt
+          test -s AscensionRecompProbe-7.64.1-unsigned.ipa
       - name: M7.63 prove 1582 native ARM64 AOT functions linked in final IPA
         run: |
           set -euo pipefail

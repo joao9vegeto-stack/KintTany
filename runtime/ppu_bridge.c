@@ -22,6 +22,8 @@ static uint32_t triage_first[AR_AOT_TRIAGE_FIRST],triage_first_count;
 static uint32_t triage_run_pcs[AR_AOT_TRIAGE_RUNS];
 static uint32_t triage_run_hits[AR_AOT_TRIAGE_RUNS],triage_run_total;
 static uint32_t triage_stop_prev,triage_stop_cr,triage_stop_xer;
+static uint32_t tail_count,tail_src,tail_dst,tail_has_native;
+static uint32_t tail_first_unlinked_src,tail_first_unlinked_dst;
 static uint64_t triage_stop_lr,triage_stop_ctr,triage_stop_r1,triage_stop_r2,triage_stop_r3;
 /* Experimental signed PPC fallback. No JIT, never register as native AOT. */
 static const uint8_t *fb_elf;
@@ -96,6 +98,10 @@ void ar_trace_snapshot(ar_aot_trace *out) {
  out->stop_lr=triage_stop_lr;out->stop_ctr=triage_stop_ctr;
  out->stop_r1=triage_stop_r1;out->stop_r2=triage_stop_r2;
  out->stop_r3=triage_stop_r3;
+ out->tail_count=tail_count;out->tail_source=tail_src;out->tail_target=tail_dst;
+ out->tail_target_has_native=tail_has_native;
+ out->first_unlinked_tail_source=tail_first_unlinked_src;
+ out->first_unlinked_tail_target=tail_first_unlinked_dst;
 }
 static struct {uint32_t stub,nid;} imports[MAX_IMPORTS];
 static size_t nimports;
@@ -412,7 +418,19 @@ static int dispatch(ppu_context *c,uint64_t pc){
     }
     int status=fn(c);
     if(fault){result=fault;break;}
-    if(status==AR_TAIL){pc=c->cia;continue;}
+    if(status==AR_TAIL){
+      /* Record source, destination, and ACTUAL handler lookup on iPhone. */
+      const uint64_t target=c->cia;
+      if(tail_count!=UINT32_MAX)tail_count++;
+      tail_src=(uint32_t)pc;
+      tail_dst=target<=UINT32_MAX?(uint32_t)target:0u;
+      tail_has_native=(lookup(target,NULL)!=NULL)?1u:0u;
+      if(!tail_has_native && !tail_first_unlinked_dst){
+        tail_first_unlinked_src=(uint32_t)pc;
+        tail_first_unlinked_dst=tail_dst;
+      }
+      pc=target;continue;
+    }
     if(status==AR_OK){result=AR_OK;break;}
     result=fault=status;break;
   }
@@ -432,6 +450,8 @@ int ar_run(ppu_context *c,uint32_t pc,uint32_t ticks){
   memset(triage_run_pcs,0,sizeof(triage_run_pcs));
   memset(triage_run_hits,0,sizeof(triage_run_hits));
   triage_stop_prev=triage_stop_cr=triage_stop_xer=0;
+  tail_count=tail_src=tail_dst=tail_has_native=0;
+  tail_first_unlinked_src=tail_first_unlinked_dst=0;
   triage_stop_lr=triage_stop_ctr=triage_stop_r1=triage_stop_r2=triage_stop_r3=0;
   fb_steps=0;fb_pc=0;fb_op=0;fb_bad_pc=0;fb_bad_op=0;
   fb_callsite_pc=0;fb_call_target=0;

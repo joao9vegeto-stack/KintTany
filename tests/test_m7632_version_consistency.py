@@ -1,4 +1,4 @@
-"""Verify M7.63.2 installed version / UI / diagnostic separation."""
+"""Verify M7.64.1 installed version / UI / diagnostic separation."""
 from pathlib import Path
 import unittest
 R=Path(__file__).resolve().parents[1]

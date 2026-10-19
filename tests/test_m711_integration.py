@@ -28,5 +28,5 @@ class M711(unittest.TestCase):
     def test_native_first_ui_retained(self):
         ui=(ROOT/"ios/ARProbeApp.m").read_text()
         self.assertIn('header.text=[NSString stringWithFormat',ui)
-        self.assertIn("SYSUTIL core vinculado",ui)
+        self.assertIn("ar_m711_bind_sysutil(d,len,out)",bridge)
         self.assertIn("Diagnóstico avançado · M6/M7",ui)

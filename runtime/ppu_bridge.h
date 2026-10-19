@@ -70,6 +70,9 @@ typedef struct {
     uint32_t run_pcs[AR_AOT_TRIAGE_RUNS],run_repetitions[AR_AOT_TRIAGE_RUNS];
     uint32_t stop_previous_aot, stop_cr, stop_xer;
     uint64_t stop_lr, stop_ctr, stop_r1, stop_r2, stop_r3;
+    /* M7.64.1 native dispatcher AOT tail edge telemetry. */
+    uint32_t tail_count, tail_source, tail_target, tail_target_has_native;
+    uint32_t first_unlinked_tail_source, first_unlinked_tail_target;
 } ar_aot_trace;
 void ar_trace_snapshot(ar_aot_trace *out);
 /* Experimental signed non-JIT fallback. Attach the exact owner ELF ONLY

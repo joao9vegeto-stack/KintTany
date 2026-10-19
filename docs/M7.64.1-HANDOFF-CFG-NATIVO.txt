@@ -1,0 +1,106 @@
+ASCENSIONRECOMP M7.64.1 — HANDOFF E AUDITORIA DE PROGRESSO (19/10/2026)
+
+ESCOPO: GOWA.ELF CANÔNICO de God of War: Ascension NPUA80918.
+Upload com nome GOWA(8).ELF == GOWA.ELF: 8.717.136 bytes, SHA-256
+4bf75c897b82d1beb25514cbadaff3d03e1b0c7bf849fa5d289be4f9183462b5.
+Somente branch AscensionRecomp; um commit, um push, um workflow.
+Sem interpreter PPC/JIT/fallback no app, e sem ELF/SELF/RAP/PSARC/chaves nos artefatos.
+
+ESTADO DE PARTIDA
+- M7.62.1 físico: 7.821 AOT ligadas, 132 distintas executadas, 1.890
+  despachos; PC 0x002C53BC.
+- M7.63.1 físico: 8.417 ligadas, 134 distintas executadas, 1.892
+  despachos ARM64; 0 PPC interpretadas; 0 fallback; -3; parada
+  0x00539378, word 0x3880FFFF, ELF == RAM guest, AOT anterior 0x002C1734.
+- M7.63.2 tentativa #245 falhou em 36 testes que exigiam M7.61/build 90.
+- M7.64 commit ee737c5f665db652fa08688670a1198cc45b1c62,
+  Actions #246 FAILURE antes da compilação; 430 testes/11 falhas.
+  Seus 31 blocos AOT com desvio B estão gerados offline, mas 26 destinos
+  distintos inicialmente não constam nesses 31 blocos.
+- NÃO apresentar o artefato da M7.64 (#246) como IPA validada.
+
+M7.64.1 — TRABALHO TÉCNICO
+1. Mantidas/corrigidas 11 falhas legadas dos testes #246; testes verificam
+   a versão real e dados de medição, não strings obsoletas da M7.61.
+   Versão alvo no Info.plist: 7.64.1, CFBundleVersion=7641.
+2. tools/m763_expand.py: parse_pc() aceita PC JSON como inteiro e
+   texto hexadecimal antigo e rejeita valores desalinhados/inválidos.
+   Incluído teste sintético de regressão; offline GOWA.ELF original não
+   entra no Actions.
+3. Varredura rigorosa do primeiro nível de sucessores dos 31 blocos
+   emitidos na M7.64. Dos 26 PCs distintos, seis blocos com semântica
+   inteira são recuperáveis; 20 rejeitados explicitamente por limite
+   sem terminal ou instrução ainda não suportada. São BLOCOS, não
+   funções confirmadas. AOT executadas no iPhone: NÃO MEDIDO.
+4. Novo gerador genérico tools/m764_cfg_successors.py.gz.b64:
+   script Python offline com SHA de conteúdo verificado, leitura de
+   GOWA.ELF privado somente offline e snapshots sem ELF no CI.
+   OPs conservadoras adicionadas: STDU/STD guest BE e falhas,
+   MFLR, CMP/CMPWI CR field e XER.SO, OR, e BO/BI BC
+   (somente condições provadas, BO=12/4); CR, LR, CTR e memória
+   guest preservados. Instrução não reconhecida aborta lifting.
+5. PC REAL 0x005392A4, destino do antigo stop 0x00539378:
+   11 palavras PPC originais, incluindo prólogo, salvar LR/stack,
+   CMPWI CR7, STD, OR, CMPW CR1 e BC usando CR7.EQ.
+   Saídas autenticadas: se CR7.EQ=1 -> 0x00539308;
+   senão -> 0x005392D0.
+   Duas possibilidades semânticas host PASSED, sem PPC interpreter.
+6. IR congelado: runtime/m764c_semantic_snapshot.gz.b64.
+   Fonte do gerador comprimida com SHA-256 para reprodução determinística
+   junto com o Handoff ZIP; sem byte de jogo original no repositório.
+   Installer verifica SHA completo do ELF e SHA de TODOS os 6 blocos
+   na RAM guest antes de ar_register; devolve erro no mismatch.
+7. Integração do novo installer em ARLivePPUBridge.c após M7.64,
+   compilação iPhoneOS clang -target arm64-apple-ios17.0,
+   link final do Mach-O e auditoria de símbolos
+   ar_m764c_native_005392a4 e ar_m764c_register_successors
+   pelo CI. Compilação/link/execução ainda dependem do novo Actions.
+8. Dispatcher nativo: novos campos de ar_aot_trace informam número
+   de AR_TAIL, PC fonte, PC destino, presença real do handler ARM64
+   no índice AOT e primeiro destino sem handler.
+   O aplicativo agora exporta AOT_TAIL e estes dados no JSON/TXT,
+   inclusive para comprovar a origem do próximo PC sem suposições.
+9. Regra para resultados: gerado != compilado ARM64 != ligado
+   != registrado != executado fisicamente. Contagens antigas não
+   são coberturas percentuais do jogo. O milestone é o avanço
+   dos PCs reais e eventual cellFsOpen/Read guest comprovado.
+
+AUDITORIA DE DADOS DA ANÁLISE ANEXADA PELO USUÁRIO
+- Estudo upstream sp00nznet/ps3recomp commit
+  39a36296511c445707adabcd312f0b740cfbd694:
+  OPD 7.643, imports 350/25 bibliotecas, funções geradas
+  C++ 29.849, TODO bruto 5.081.570 (não contar como cobertura),
+  SPR-noop 1.479, 18 continuações ausentes, só 1/16 chunks
+  passou sintaxe (não prova runtime nativo).
+- M7.63 estrito: 19.403 candidatos heurísticos, 805 entradas
+  base M7.62, 1.582 intervalos novos aceitos (8.313 PPC).
+  Rejeitados: unsupported_opcode_semantics 15.261,
+  ambiguous_terminal 1.362, oversized_opd_interval 99,
+  ambiguous_cfg_boundary 282, ambiguous_internal_return 12.
+  Primeiro opcode bloqueador deduplicado por PC+word:
+  15.273 linhas, sem significar todos os PCs restantes.
+  Famílias top: cmpwi 4.351, bl 3.080, clrldi 1.405,
+  clrlwi 1.103, stfd 943, stvx 460, rlwinm 390.
+- M7.64: 7.643 OPD visitadas; 31 blocos gerados com B-tail.
+- M7.64.1: 26 destinos únicos deste conjunto, 6 blocos novos
+  com BC nativo, 20 rejeitados; programa SPU NÃO INVENTARIADO,
+  HLE guest import CONTINUA PENDENTE. Não tratar esses
+  inventários estáticos como 37 funções executadas.
+- FS guest real (cellFsOpen/Read com bytes >0): NÃO COMPROVADO.
+  RSX real, PSARC guest, primeiro quadro original, gameplay: NÃO COMPROVADOS.
+
+PRÓXIMO RESULTADO EXIGIDO
+1. GitHub Actions SUCCESS + IPA real não assinada + SHA256 +
+   nm prova Mach-O ARM64 contendo as 6 entradas e instalador.
+2. Teste físico no iPhone do GOWA.ELF original: comparar com
+   M7.63.1 os contadores 8.417/134/1.892, PPC fallback 0,
+   próximo PC, AOT_TAIL origem/destino/handler e erros concretos.
+3. Se falha no destino 0x00539308/0x005392D0, decodificar
+   CFG do novo alvo offline e ampliar famílias PPC com
+   semântica correta, sem bypass e sem NOP.
+4. Alvo principal ainda cellFsOpen e cellFsRead positivos
+   originados pelo guest em USRDIR; registrar caminho/FD/
+   retorno/bytes. Depois SPU, PSARC, RSX e quadros reais.
+5. Atualizar Handoff+ZIP a cada nova entrega; trabalhar somente
+   nesta branch, 1 commit/1 workflow. Nunca declarar sucesso
+   no iPhone apenas pelo CI.

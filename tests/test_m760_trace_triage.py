@@ -18,7 +18,7 @@ class TestM760Trace(unittest.TestCase):
   for needle in ('AOT_TRIAGE_JSON=','AOT_FIRST %u','AOT_RUN %@ x%@',
                  'first_truncated','runs_truncated','stop_previous_aot',
                  'guest_fs_open_calls','guest_fs_positive_bytes',
-                 'M7.61.3 (teste físico','EXECUÇÃO ATUAL %@: AOT= atual'):
+                 'M7.61.3 (teste físico','EXECUÇÃO ATUAL %@: AOT=%@'):
    self.assertIn(needle,s)
   self.assertIn('Últimos até 16 despachos brutos de AOT',s)
  def test_ci_wires_synthetic_native_host(self):

@@ -265,6 +265,33 @@ done
 xcrun nm -g "${M764_OBJECTS[@]}" > m764-objects-nm.txt
 grep -Fq '_ar_m764_native_00539378' m764-objects-nm.txt
 grep -Fq '_ar_m764_register_discovered' m764-objects-nm.txt
+# M7.64.1: offline-generated immutable six successor blocks, including 0x005392A4.
+python3 - <<'PY'
+import base64,gzip,hashlib,json
+from pathlib import Path
+raw=gzip.decompress(base64.b64decode(Path('tools/m764_cfg_successors.py.gz.b64').read_text().strip(),validate=True))
+assert hashlib.sha256(raw).hexdigest()=='8404c4135217924479a03795c86d0efb418eda78c58ddb7cdb2f509850e7c47c'
+Path('tools/m764_cfg_successors.py').write_bytes(raw)
+snap=gzip.decompress(base64.b64decode(Path('runtime/m764c_semantic_snapshot.gz.b64').read_text().strip(),validate=True))
+assert hashlib.sha256(snap).hexdigest()=='413409725d9f59d0f3cbec7c85ede61b3229017c151a99aa3acbe7446ef193cf'
+s=json.loads(snap)
+assert len(s['accepted'])==6 and s['unique_successor_pcs']==26
+assert any(q['pc']==0x5392a4 for q in s['accepted'])
+Path('m764c-snapshot-ci.json').write_bytes(snap)
+PY
+python3 tools/m764_cfg_successors.py --snapshot m764c-snapshot-ci.json --output-dir runtime | tee m764c-generation.log
+M764C_OBJECTS=()
+for src in runtime/ppu_m764c_[0-9][0-9].c runtime/ppu_m764c_install.c; do
+  test -s "$src"
+  dst="ios-probe/$(basename "${src%.c}").o"
+  xcrun --sdk iphoneos clang -target arm64-apple-ios17.0 -isysroot "$SDK" \
+    -std=c11 -O2 -Wall -Wextra -Werror -I upstream/runtime/ppu -I runtime \
+    -c "$src" -o "$dst"
+  M764C_OBJECTS+=("$dst")
+done
+xcrun nm -g "${M764C_OBJECTS[@]}" > m764c-objects-nm.txt
+grep -Fq '_ar_m764c_native_005392a4' m764c-objects-nm.txt
+grep -Fq '_ar_m764c_register_successors' m764c-objects-nm.txt
 # M7.56: capture live guest memory vs PT_LOAD file bytes, not fallback counters.
 xcrun --sdk iphoneos clang -target arm64-apple-ios17.0 -isysroot "$SDK" \
     -std=c11 -O2 -Wall -Wextra -Werror -I upstream/runtime/ppu -I runtime \
@@ -398,6 +425,7 @@ xcrun --sdk iphoneos clang++ -target arm64-apple-ios17.0 \
     ${M762_OBJECTS[@]+"${M762_OBJECTS[@]}"} \
     ${M763_OBJECTS[@]+"${M763_OBJECTS[@]}"} \
     ${M764_OBJECTS[@]+"${M764_OBJECTS[@]}"} \
+    ${M764C_OBJECTS[@]+"${M764C_OBJECTS[@]}"} \
     ${GOWA2_OBJECTS[@]+"${GOWA2_OBJECTS[@]}"} \
     ios-probe/ppu_m717_graph.o \
     ${M711_OBJECTS[@]+"${M711_OBJECTS[@]}"} \
@@ -471,6 +499,22 @@ Path('m764-final-attestation.json').write_text(json.dumps({
  'guest_fs':'NOT_MEASURED',
  'source_elf_sha256':snap['source_sha256'],
  'embedded_elf':False},indent=2)+'\n')
+PY
+# M7.64.1: original next guest CFG block and installer in FINAL Mach-O.
+grep -Eq ' [Tt] _ar_m764c_native_005392a4$' m78-owner-aot-linked-symbols.txt
+grep -Eq ' [Tt] _ar_m764c_register_successors$' m78-owner-aot-linked-symbols.txt
+python3 - <<'PY'
+import json
+from pathlib import Path
+s=json.loads(Path('m764c-snapshot-ci.json').read_text())
+Path('m764c-final-attestation.json').write_text(json.dumps({
+ 'schema':'ascension-m7641-native-successors-1',
+ 'blocks_in_frozen_IR':len(s['accepted']),
+ 'first_level_successor_candidates':s['unique_successor_pcs'],
+ 'linked_symbols_verified':['ar_m764c_native_005392a4','ar_m764c_register_successors'],
+ 'ios_arch':'arm64','executed_on_iphone':'NOT_MEASURED',
+ 'cell_fs_guest':'NOT_MEASURED',
+ 'elf_sha256':s['source_sha256']},indent=2)+'\n')
 PY
 # M7.33 final Mach-O must retain ACTUAL production LV2 service binder.
 grep -Eq ' [Tt] _ar_lv2_bind_bootstrap_syscalls$' m78-owner-aot-linked-symbols.txt
@@ -612,6 +656,6 @@ echo 'M7.59: 42 real owner PPC words 0x002C1378..0x002C141C compiled ARM64 with 
 test -s AscensionRecompProbe-0.6.22-unsigned.ipa
 shasum -a 256 AscensionRecompProbe-0.6.22-unsigned.ipa > m41-ipa-sha256.txt
 # Retain legacy CI path; new alias has accurate installed bundle version.
-cp AscensionRecompProbe-0.6.22-unsigned.ipa AscensionRecompProbe-7.64.0-unsigned.ipa
-shasum -a 256 AscensionRecompProbe-7.64.0-unsigned.ipa > m764-ipa-sha256.txt
+cp AscensionRecompProbe-0.6.22-unsigned.ipa AscensionRecompProbe-7.64.1-unsigned.ipa
+shasum -a 256 AscensionRecompProbe-7.64.1-unsigned.ipa > m7641-ipa-sha256.txt
 echo 'UNSIGNED DIAGNOSTIC APP: UIKit CAMetalLayer + real PS3Recomp Metal backend; NO GOWA GAME included' > m41-status.txt

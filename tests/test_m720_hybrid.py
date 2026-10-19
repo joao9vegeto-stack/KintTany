@@ -50,7 +50,7 @@ class HybridM720Tests(unittest.TestCase):
   self.assertIn("M7.20 — DESPACHO HÍBRIDO EXPERIMENTAL",t)
   self.assertIn("measured.fallback_steps",t)
   self.assertIn("ownerStop.guest_word",t)
-  self.assertIn("AOT ARM64 NATIVO · FALLBACK PPC DESATIVADO",t)
+  self.assertIn("Runtime AOT ONLY",t)
   self.assertIn("initForExportingURLs:@[url] asCopy:YES",t)
   self.assertIn("RSX do Ascension: não demonstrado",t)
   self.assertIn("M7.19: +",self.build)

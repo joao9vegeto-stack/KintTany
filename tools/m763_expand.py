@@ -43,6 +43,17 @@ def decode(w):
 
 base_decode=base.decode
 
+def parse_pc(value):
+    """Canonicalize PCs saved as JSON numbers or legacy 0x-prefixed strings."""
+    if isinstance(value,bool):raise ValueError('boolean is not a guest PC')
+    if isinstance(value,int):pc=value
+    elif isinstance(value,str):
+        try:pc=int(value,16)
+        except ValueError as err:raise ValueError('invalid guest PC') from err
+    else:raise ValueError('unsupported guest PC type')
+    if pc<0 or pc>0xffffffff or pc&3:raise ValueError('invalid 32-bit aligned guest PC')
+    return pc
+
 def index(elf,baseline):
     orig=base.decode
     try:
@@ -51,7 +62,7 @@ def index(elf,baseline):
     finally:
         base.decode=orig
     old=json.loads(Path(baseline).read_text())
-    known={int(x['pc'],16) for x in old['accepted']}
+    known={parse_pc(x['pc']) for x in old['accepted']}
     fresh=[x for x in valid if x['pc'] not in known]
     if 0x002c53bc not in {x['pc'] for x in fresh}:raise ValueError('real iPhone stop not translated')
     for r in fresh:
