@@ -20,7 +20,7 @@ class OrganizedUI(unittest.TestCase):
             'M6.2: registradores ou pilha divergentes'):
    self.assertIn(t,S)
  def test_version(self):
-  self.assertIn("7.64.1",(P/"ios/Probe-Info.plist").read_text())
+  self.assertIn("7.65.0",(P/"ios/Probe-Info.plist").read_text())
   self.assertIn("AscensionRecompProbe-0.6.22-unsigned.ipa",
       (P/"tools/build_ios_probe_ipa.sh").read_text())
 if __name__=="__main__":unittest.main()

@@ -1,0 +1,61 @@
+ASCENSIONRECOMP M7.65 — HANDOFF, 19-10-2026
+Repo: joao9vegeto-stack/KintTany | SOMENTE branch AscensionRecomp
+Dispositivo: iPhone 17 Pro | God of War: Ascension NPUA80918
+Canônico: GOWA.ELF (upload GOWA(8).ELF), 8.717.136 bytes,
+SHA256 4bf75c897b82d1beb25514cbadaff3d03e1b0c7bf849fa5d289be4f9183462b5.
+
+BASE FÍSICA INCONTESTÁVEL, M7.64.1 ACTIONS #249, COMMIT d358c133be8c939e4080dec0c47b6a5769a7cc66:
+8454 AOT registradas, 136 distintas executadas, 1894 despachos ARM64,
+0 PPC interpretadas, 0 fallback, resultado guest AR_UNRESOLVED=-3.
+Parada 0x00539308, word 0x4086FFEC, bytes RAM==ELF.
+AOT anterior 0x005392A4, AOT_TAIL destino 0x00539308, handler ARM64 NÃO.
+CR=0x22000042; LR=0x00010858; CTR=0x00539378; r2=0x0083F2B0; r3=1.
+cellFsOpen/Read guest 0/0/0 bytes; host leu 4 bytes PARAM.SFO, NÃO guest.
+RSX original, PSARC e quadros de gameplay NÃO COMPROVADOS.
+Comparação com M7.63.1: 8417->8454 registradas (+37),
+134->136 executadas distintas (+2), 1892->1894 despachos (+2),
+0x00539378 -> 0x00539308, avançou 2 handlers e CFG nativo REAL.
+
+IMPLEMENTAÇÃO M7.65 (não confundir com evidência física futura):
+- A análise OFFLINE no ELF idêntico ao do iPhone detectou 0x4086FFEC
+  como BC BO4, BI6, 0x00539308 -> 0x005392F4 (CR1.EQ=0) ou
+  -> 0x0053930C (CR1.EQ=1). CR físico tem bit6=1, logo caminho
+  esperado 0x0053930C. Este cálculo é inferência do estado guest,
+  a passagem real precisa ser comprovada no novo iPhone.
+- Gerador estático genérico offline m765_cfg.py (Handoff ZIP):
+  27 candidatos, 18 blocos CFG completos (teto 48), 9 rejeições
+  SEM NOP, 33 arestas. PPC ISA novo: LWZ, LBZ, LD, STB, MTLR,
+  BL, BLR; reaproveita ADDI/ADDIS, OR, CMP/CMPWI, BC BO4/12,
+  B, STDU/STD, MFLR, CLRLDI. Formas desconhecidas rejeitadas.
+- 0x00539308 -> BC; 0x0053930C contém LWZ guest TOC, li,
+  LWZ, OR, STB e BL autêntico -> 0x00539654 (LR=0x00539324).
+  0x005392F4 contém LD/LD/ADDI/MTLR/BLR autêntico.
+  0x00539654 e sucessores conhecidos também emitidos até falhas reais.
+- Todos os 18 blocos preservam SHA256 do próprio trecho PPC. Installer
+  autentica SHA256 completo GOWA.ELF e as instruções existentes na RAM
+  guest via ar_vm_read_bytes antes de registrar handlers.
+  C já emitido, compilado em host com -std=c11 -Werror, e
+  testes host sintéticos de BC / LWZ / STB / BL / epílogo aprovados.
+- CI Apple compila o C usando clang -target arm64-apple-ios17.0,
+  liga objeto+installer no Mach-O, verifica símbolos
+  _ar_m765_native_00539308, _ar_m765_native_0053930c,
+  _ar_m765_register_frontier. NÃO INCLUI GOWA.ELF.
+- Versão real prevista 7.65.0 (build 7650). Mantém dynamic ARCurrentRelease()
+  para o TXT e commit/workflow do run. É apenas o ambiente para
+  executar o guest; se não houver run/IPA não declarar sucesso.
+- O relatório M7.64.1 inclui trilhas antigas M7.2/M7.14/M7.44,
+  que NÃO são execução atual. Não usá-las em deltas.
+
+DISTINÇÕES OBRIGATÓRIAS: geração IR!=compilação arm64!=vínculo
+final!=registro no dispatcher!=execução física no iPhone.
+M7.65 registro/execução/distintas no iPhone: AINDA NÃO MEDIDO.
+Não inventar cellFsOpen/cellFsRead, RSX ou gameplay.
+Próxima medição deve incluir AOT_FIRST, AOT_TAIL,
+ORIGEM+DESTINO+HANDLER e primeiro PC pendente, r2/CR,
+guest FS open/read/bytes, e ELF/RAM matched.
+
+REGRAS: trabalhar só nesta branch, sem tocar main/PsTJon/outros,
+um commit -> um workflow, sem interpreter PPC/JIT/fallback na IPA,
+sem ELF, SELF, RAP, PSARC, assets/chaves em GitHub/CI/IPA.
+O usuário exige IPA diretamente anexada nesta conversa, Handoff
+TXT, ZIP de continuidade, comparativo e resumo de mudanças.

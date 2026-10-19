@@ -1,4 +1,4 @@
-name: AscensionRecomp M7.64.1 - verified CFG successor ARM64 batch
+name: AscensionRecomp M7.65 - native conditional CFG boot frontier
 
 on:
   push:
@@ -849,6 +849,30 @@ jobs:
             m764-host/ppu_m764_00.c tests/host_m764_stop.c -o m764-stop-host
           ./m764-stop-host | tee m764-stop-host.log
           grep -Fq 'native ALU, clrldi and B tail PASS' m764-stop-host.log
+      - name: M7.65 native original boot CFG and branch host proof
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          import base64,gzip,hashlib,json
+          from pathlib import Path
+          d=Path('m765-host-src')
+          d.mkdir(exist_ok=True)
+          spec=[
+           ('runtime/m765_ppu_native.gz.b64',d/'ppu_m765_00.c','007aee6ecd829662101390982a73233868741fd6377c2a07da0806d8a87da01f'),
+           ('runtime/m765_semantic_snapshot.gz.b64',d/'m765-snapshot.json','9fe737fff36697cf7c59dd3416b8adf0e02901df3ed90ef1dc5384f0da877024')
+          ]
+          for src,dst,sha in spec:
+           raw=gzip.decompress(base64.b64decode(Path(src).read_text().strip(),validate=True))
+           assert hashlib.sha256(raw).hexdigest()==sha
+           dst.write_bytes(raw)
+          x=json.loads((d/'m765-snapshot.json').read_text())
+          assert x['schema']=='ascension-m765-executable-frontier-cfg-1'
+          assert len(x['accepted'])==18 and len(x['rejected'])==9 and len(x['edges'])==33
+          PY
+          clang -std=c11 -O2 -Wall -Wextra -Werror -I upstream/runtime/ppu -I runtime \
+            m765-host-src/ppu_m765_00.c tests/host_m765_frontier.c -o m765-host-binary
+          ./m765-host-binary | tee m765-host-test.log
+          grep -Fq 'native LWZ/STB/BL/LD/MTLR/BLR PASS' m765-host-test.log
       - name: M7.64.1 authenticate and test 6 actual CFG successor blocks
         run: |
           set -euo pipefail
@@ -1737,14 +1761,19 @@ jobs:
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: AscensionRecomp-M7.64.1-CFG-ARM64
+          name: AscensionRecomp-M7.65-NATIVE-CFG-ARM64
           retention-days: 14
           if-no-files-found: warn
           path: |
-            AscensionRecompProbe-7.64.1-unsigned.ipa
-            m7641-ipa-sha256.txt
+            AscensionRecompProbe-7.65.0-unsigned.ipa
+            m765-ipa-sha256.txt
             m764-final-attestation.json
             m764c-final-attestation.json
+            m765-final-attestation.json
+            m765-objects-nm.txt
+            m765-host-test.log
+            runtime/m765_semantic_snapshot.gz.b64
+            docs/M7.65-NATIVE-CFG-HANDOFF.txt
             m764c-objects-nm.txt
             m764c-generation.log
             m764c-host-generation.log
@@ -1764,6 +1793,16 @@ jobs:
           grep -Eq ' [Tt] _ar_m764c_native_005392a4$' m78-owner-aot-linked-symbols.txt
           grep -Eq ' [Tt] _ar_m764c_register_successors$' m78-owner-aot-linked-symbols.txt
           test -s AscensionRecompProbe-7.64.1-unsigned.ipa
+      - name: M7.65 verify Apple ARM64 native frontier in final IPA
+        run: |
+          set -euo pipefail
+          test -s m765-final-attestation.json
+          test -s m765-objects-nm.txt
+          test -s m765-host-test.log
+          test -s AscensionRecompProbe-7.65.0-unsigned.ipa
+          grep -Eq ' [Tt] _ar_m765_native_00539308$' m78-owner-aot-linked-symbols.txt
+          grep -Eq ' [Tt] _ar_m765_native_0053930c$' m78-owner-aot-linked-symbols.txt
+          grep -Eq ' [Tt] _ar_m765_register_frontier$' m78-owner-aot-linked-symbols.txt
       - name: M7.63 prove 1582 native ARM64 AOT functions linked in final IPA
         run: |
           set -euo pipefail

@@ -1,0 +1,31 @@
+{
+  "schema": "ascension-m765-evidence-1",
+  "physical_m7641": {
+    "commit": "d358c133be8c939e4080dec0c47b6a5769a7cc66",
+    "action": 249,
+    "registered": 8454,
+    "distinct": 136,
+    "dispatches": 1894,
+    "stop_pc": "0x00539308",
+    "stop_word": "0x4086FFEC",
+    "last_aot": "0x005392A4",
+    "cr": "0x22000042",
+    "guest_fs_open": 0,
+    "guest_fs_read": 0,
+    "guest_fs_bytes": 0
+  },
+  "current": {
+    "new_native_cfg_blocks_offline": 18,
+    "examined": 27,
+    "rejected": 9,
+    "edges": 33,
+    "first_pc": "0x00539308",
+    "expected_native_fallthrough": "0x0053930C",
+    "potential_call_target": "0x00539654",
+    "native_ios_compiled": "AWAITING_CI",
+    "linked_macho": "AWAITING_CI",
+    "device_executed": "NOT_MEASURED"
+  },
+  "source_sha256": "4bf75c897b82d1beb25514cbadaff3d03e1b0c7bf849fa5d289be4f9183462b5",
+  "gameplay": "NOT_MEASURED"
+}

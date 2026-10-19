@@ -1,4 +1,4 @@
-"""Verify M7.64.1 installed version / UI / diagnostic separation."""
+"""Verify M7.65.0 installed version / UI / diagnostic separation."""
 from pathlib import Path
 import unittest
 R=Path(__file__).resolve().parents[1]
@@ -6,7 +6,7 @@ class M7632(unittest.TestCase):
  def test_release(self):
   ui=(R/'ios/ARProbeApp.m').read_text()
   plist=(R/'ios/Probe-Info.plist').read_text()
-  self.assertIn('<string>7.64.1</string>',plist)
+  self.assertIn('<string>7.65.0</string>',plist)
   self.assertIn('static NSString *ARCurrentRelease(void)',ui)
   self.assertIn('App=%@ (CFBundleVersion=%@)',ui)
   self.assertIn('AscensionRecomp-%@-NPUA80918-%@.txt',ui)

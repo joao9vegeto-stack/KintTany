@@ -67,6 +67,7 @@ extern int ar_m762_register_discovered(const uint8_t*,size_t);
 extern int ar_m763_register_discovered(const uint8_t*,size_t);
 extern int ar_m764_register_discovered(const uint8_t*,size_t);
 extern int ar_m764c_register_successors(const uint8_t*,size_t);
+extern int ar_m765_register_frontier(const uint8_t*,size_t);
 extern int ar_private_import_match(const uint8_t*,size_t,uint32_t,uint32_t[4],char[48]);
 extern int ar_private_import_find_nid(const uint8_t*,size_t,uint32_t,const char*,uint32_t[4],char[48]);
 
@@ -339,6 +340,10 @@ int ar_m70_native_runtime_probe(const uint8_t*d,size_t len,
   /* M7.64.1: every successor is static ELF-derived guest-RAM verified code. */
   if(ar_m764c_register_successors(d,len)!=AR_OK){
     ar_bridge_shutdown();return -69;
+  }
+  /* M7.65 ELF+guest-authenticated native CFG frontier; no PPC fallback. */
+  if(ar_m765_register_frontier(d,len)!=AR_OK){
+    ar_bridge_shutdown();return -70;
   }
 #endif
 #endif
