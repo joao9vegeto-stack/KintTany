@@ -1,0 +1,27 @@
+{
+  "candidates": 19403,
+  "discovery": "entire OPD and file-backed direct calls, exclude already registered M762",
+  "new_lifted": 1582,
+  "new_ppc_words": 8313,
+  "previous_entries": 805,
+  "reject_counts": {
+    "ambiguous_cfg_boundary": 282,
+    "ambiguous_internal_return": 12,
+    "ambiguous_terminal": 1362,
+    "oversized_opd_interval": 99,
+    "unsupported_opcode_semantics": 15261
+  },
+  "schema": "ascension-m763-strict-isa-expansion-1",
+  "source_sha256": "4bf75c897b82d1beb25514cbadaff3d03e1b0c7bf849fa5d289be4f9183462b5",
+  "upstream_ps3recomp_sha": "39a36296511c445707adabcd312f0b740cfbd694",
+  "semantic_snapshot_sha256": "d7f7e024263d888c1b834a7ecddb1cafb862f64a0b066f6dbccb596026c854e7",
+  "expected_generated_chunks": 17,
+  "first_observed_iphone_stop": "0x002C53BC",
+  "apple_arm64": "NOT_MEASURED",
+  "final_linked_macho": "NOT_MEASURED",
+  "physical_AOT_dispatch": "NOT_MEASURED",
+  "guest_fs_positive_bytes": "NOT_MEASURED",
+  "runtime_fallback": 0,
+  "percent_code_complete": "DENOMINATOR_UNVERIFIED",
+  "source_per_function_hashes_full": "m763-full-manifest.json distributed in private continuation ZIP; only physical stop SHA retained in CI IR"
+}

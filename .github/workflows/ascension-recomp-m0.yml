@@ -1,4 +1,4 @@
-name: AscensionRecomp M7.61 - native PPC64 batch AOT ARM64
+name: AscensionRecomp M7.63 - full ELF ISA-family native ARM64 batch
 
 on:
   push:
@@ -806,6 +806,30 @@ jobs:
           grep -Fq 'ar_m762_native_002c53b0' m762-host-nm.txt
           grep -Fq 'ar_m762_register_discovered' m762-host-nm.txt
           echo 'M7.62 805/805 fully lifted strict semantic AOT; full canonical ELF input was OFFLINE and is not part of CI' > m762-validation.log
+      - name: M7.63 host semantic proof for real original iPhone stop and whole ELF AOT snapshot
+        run: |
+          set -euo pipefail
+          python3 -m unittest discover -s tests -p test_m763_expand.py -v 2>&1 | tee m763-tests.log
+          python3 - <<'PY'
+          import base64,gzip,hashlib,re
+          from pathlib import Path
+          raw=gzip.decompress(base64.b64decode(Path('runtime/m763_semantic_snapshot.gz.b64').read_text(),validate=True))
+          assert hashlib.sha256(raw).hexdigest()=='d7f7e024263d888c1b834a7ecddb1cafb862f64a0b066f6dbccb596026c854e7'
+          Path('m763-snapshot-host.json').write_bytes(raw)
+          PY
+          python3 tools/m763_expand.py --snapshot m763-snapshot-host.json --output-dir m763-host | tee m763-host-generation.log
+          python3 - <<'PY'
+          import re
+          from pathlib import Path
+          code='\n'.join(x.read_text() for x in Path('m763-host').glob('ppu_m763_[0-9][0-9].c'))
+          match=re.search(r'(?ms)^int ar_m763_native_002c53bc\(ppu_context \*c\) \{.*?^\}',code)
+          assert match,'Missing real 14-PPC guest stop function'
+          Path('m763-stop-only.c').write_text('#include "ppu_bridge.h"\n'+match.group(0)+'\n')
+          PY
+          clang -std=c11 -O2 -Wall -Wextra -Werror -I upstream/runtime/ppu -I runtime \
+            m763-stop-only.c tests/host_m763_stop.c -o m763-stop-host
+          ./m763-stop-host | tee m763-stop-host.log
+          grep -Fq 'fail-closed PASS' m763-stop-host.log
       - name: M7.60 prove bounded native AOT flight recorder, hot loop RLE and machine report
         run: |
           set -euo pipefail
@@ -1656,15 +1680,38 @@ jobs:
           Path('m762-coverage-ci.json').write_text(json.dumps(c,indent=2)+"\n")
           print('M7.62 805 Apple ARM64 AOT symbols were compiled and linked, iPhone execution NOT_MEASURED')
           PY
+      - name: M7.63 prove 1582 native ARM64 AOT functions linked in final IPA
+        run: |
+          set -euo pipefail
+          test -s m763-final-attestation.json
+          test -s m763-objects-nm.txt
+          test -s m763-stop-host.log
+          python3 - <<'PY'
+          import json
+          from pathlib import Path
+          x=json.loads(Path('m763-final-attestation.json').read_text())
+          assert x['new_native_functions_compiled']==1582,x
+          assert x['new_native_functions_linked']==1582,x
+          assert x['ppc_words']==8313,x
+          assert x['device_executed']=='NOT_MEASURED',x
+          print('M7.63 verified Apple arm64 and full Mach-O 1582 native AOT; device pending')
+          PY
       - name: Upload M2 evidence - runtime + synthetic PPU proof
 
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: AscensionRecomp-M7.61-BULK-AOT-AppleARM64
+          name: AscensionRecomp-M7.63-NATIVE-ISA-AppleARM64
           if-no-files-found: warn
           retention-days: 14
           path: |
+            m763-tests.log
+            m763-host-generation.log
+            m763-generation.log
+            m763-stop-host.log
+            m763-objects-nm.txt
+            m763-final-attestation.json
+            m763-semantic-snapshot.json
             m762-tests.log
             m762-generation-ci.log
             m762-generation.log

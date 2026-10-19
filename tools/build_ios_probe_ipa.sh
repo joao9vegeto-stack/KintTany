@@ -219,6 +219,28 @@ done
 xcrun nm -g "${M762_OBJECTS[@]}" > m762-objects-nm.txt
 grep -Fq '_ar_m762_native_002c53b0' m762-objects-nm.txt
 grep -Fq '_ar_m762_register_discovered' m762-objects-nm.txt
+# M7.63 strict full-ELF OPD/CFG semantic-family batch, no guest interpreter.
+python3 - <<'PY'
+import base64,gzip,hashlib
+from pathlib import Path
+raw=gzip.decompress(base64.b64decode(Path("runtime/m763_semantic_snapshot.gz.b64").read_text(),validate=True))
+actual=hashlib.sha256(raw).hexdigest()
+assert actual=="d7f7e024263d888c1b834a7ecddb1cafb862f64a0b066f6dbccb596026c854e7", actual
+Path("m763-semantic-snapshot.json").write_bytes(raw)
+PY
+python3 tools/m763_expand.py --snapshot m763-semantic-snapshot.json --output-dir runtime | tee m763-generation.log
+M763_OBJECTS=()
+for src in runtime/ppu_m763_[0-9][0-9].c runtime/ppu_m763_install.c; do
+  test -s "$src"
+  dst="ios-probe/$(basename "${src%.c}").o"
+  xcrun --sdk iphoneos clang -target arm64-apple-ios17.0 -isysroot "$SDK" \
+    -std=c11 -O2 -Wall -Wextra -Werror -I upstream/runtime/ppu -I runtime \
+    -c "$src" -o "$dst"
+  M763_OBJECTS+=("$dst")
+done
+xcrun nm -g "${M763_OBJECTS[@]}" > m763-objects-nm.txt
+grep -Fq '_ar_m763_native_002c53bc' m763-objects-nm.txt
+grep -Fq '_ar_m763_register_discovered' m763-objects-nm.txt
 # M7.56: capture live guest memory vs PT_LOAD file bytes, not fallback counters.
 xcrun --sdk iphoneos clang -target arm64-apple-ios17.0 -isysroot "$SDK" \
     -std=c11 -O2 -Wall -Wextra -Werror -I upstream/runtime/ppu -I runtime \
@@ -350,6 +372,7 @@ xcrun --sdk iphoneos clang++ -target arm64-apple-ios17.0 \
     ios-probe/ppu_m750_native_path.o \
     ios-probe/ppu_m751_vsubfp.o ios-probe/ppu_m752_vsldoi.o ios-probe/ppu_m753_native_vectorfp.o ios-probe/ppu_m754_native_fcmp.o ios-probe/ppu_m756_native_divloop.o ios-probe/ppu_m757_native_batch.o ios-probe/ppu_m758_generated.o ios-probe/ppu_m759_generated.o ios-probe/ppu_m761_generated.o ios-probe/ppu_m756_stop_evidence.o ios-probe/ppu_guest_fs.o \
     ${M762_OBJECTS[@]+"${M762_OBJECTS[@]}"} \
+    ${M763_OBJECTS[@]+"${M763_OBJECTS[@]}"} \
     ${GOWA2_OBJECTS[@]+"${GOWA2_OBJECTS[@]}"} \
     ios-probe/ppu_m717_graph.o \
     ${M711_OBJECTS[@]+"${M711_OBJECTS[@]}"} \
@@ -382,6 +405,23 @@ Path("m762-final-attestation.json").write_text(json.dumps({
  "note":"Frozen IR compiled and linked, ELF not present in CI; no global coverage claim"
 },indent=2))
 print("M7.62 final AOT symbols verified",len(expected))
+PY
+# M7.63 attest exactly 1582 newly compiled and linked AOT guest functions.
+python3 - <<'PY'
+import json,re
+from pathlib import Path
+s=json.loads(Path("m763-semantic-snapshot.json").read_text())
+expect={"ar_m763_native_%08x"%q["pc"] for q in s["accepted"]}
+installer="ar_m763_register_discovered"
+assert len(expect)==1582 and sum(q["count"] for q in s["accepted"])==8313
+pattern=re.compile(r"\s[Tt]\s+_?(ar_m763_native_[0-9a-f]{8}|ar_m763_register_discovered)$")
+def symbols(name):
+ return {m.group(1) for line in Path(name).read_text().splitlines() if (m:=pattern.search(line))}
+obj=symbols("m763-objects-nm.txt");final=symbols("m78-owner-aot-linked-symbols.txt")
+required=expect|{installer}
+if required-obj or required-final:raise SystemExit("M7.63 UNLINKED ARM64 symbols in object/final: %s / %s"%(list(required-obj)[:10],list(required-final)[:10]))
+Path("m763-final-attestation.json").write_text(json.dumps({"schema":"m763-apple-arm64-proof-1","new_native_functions_compiled":len(expect),"new_native_functions_linked":len(expect),"ppc_words":8313,"ios_arch":"arm64","device_executed":"NOT_MEASURED","guest_fs":"NOT_MEASURED","raw_ELF_embedded":False},indent=2)+"\n")
+print("M7.63 native Apple ARM64 AOT compiled/linked",len(expect),"source PPC",8313)
 PY
 python3 tools/verify_gowa2_macho.py ios-probe/gowa2-staged/symbols.txt \
  m78-owner-aot-linked-symbols.txt | tee m743-gowa2-final-verified.log
