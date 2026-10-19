@@ -32,7 +32,7 @@ class M757(unittest.TestCase):
  def test_ui_physically_sourced_not_fake_FS(self):
   ui=(ROOT/"ios/ARProbeApp.m").read_text()
   self.assertIn("App=M7.58",ui)
-  self.assertIn("M7.56 (teste físico",ui)
+  self.assertIn("M7.57 (teste físico",ui)
   self.assertIn("ELF versus RAM guest",ui)
   self.assertIn("cellFsRead com bytes positivos",ui)
   self.assertIn("ownerStop.guest_word",ui)
