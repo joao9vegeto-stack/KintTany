@@ -44,5 +44,5 @@ class TestSecondImport(unittest.TestCase):
             'AscensionRecomp-M7.61-BULK-AOT-AppleARM64',
             '_ar_m73_private_import_probe'):
    self.assertIn(a,WF)
-  self.assertIn('<string>7640</string>',P)
+  self.assertIn('<string>7641</string>',P)
 if __name__=="__main__": unittest.main()

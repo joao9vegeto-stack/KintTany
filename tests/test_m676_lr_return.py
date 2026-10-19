@@ -39,5 +39,5 @@ class GuestLR(unittest.TestCase):
   for token in ('tests/host_m676_lr_return.c', 'm676-lr-host.log',
                 'AscensionRecomp-M7.61-BULK-AOT-AppleARM64'):
    self.assertIn(token,WF)
-  self.assertIn('<string>7640</string>',PL)
+  self.assertIn('<string>7641</string>',PL)
 if __name__=="__main__":unittest.main()

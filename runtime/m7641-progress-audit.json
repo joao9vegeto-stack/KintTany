@@ -61,5 +61,21 @@
   "rsx": {
     "original_frame": "NOT_MEASURED"
   },
-  "coverage_percentage": null
+  "coverage_percentage": null,
+  "ci247": {
+    "run_id": 39282022356,
+    "result": "failure",
+    "phase": "Python-only PS3 ELF + PPU manifest tests",
+    "tested": 432,
+    "failures": 20,
+    "errors": 1,
+    "ipa_artifact_valid": false
+  },
+  "hotfix": {
+    "stale_version_assertions_corrected": 20,
+    "name_error_corrected": 1,
+    "artifact_paths_corrected": 2,
+    "apple_compiled": "NOT_MEASURED",
+    "physical_executed": "NOT_MEASURED"
+  }
 }

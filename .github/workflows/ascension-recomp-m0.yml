@@ -1794,7 +1794,7 @@ jobs:
             m764-generation.log
             m764-host-generation.log
             m764-stop-host.log
-            m764-ipa-sha256.txt
+            m7641-ipa-sha256.txt
             m763-tests.log
             m763-host-generation.log
             m763-generation.log
@@ -2113,8 +2113,8 @@ jobs:
             m76-status.txt
             m75-aot-boot-host.log
             AscensionRecompProbe-0.6.22-unsigned.ipa
-            AscensionRecompProbe-7.64.0-unsigned.ipa
-            m764-ipa-sha256.txt
+            AscensionRecompProbe-7.64.1-unsigned.ipa
+            m7641-ipa-sha256.txt
             m40-ios-layer-view.o
             build-ios-runtime/libps3recomp_runtime.a
             ios-ppu-core/libAscensionPPUCore-ios-arm64.a

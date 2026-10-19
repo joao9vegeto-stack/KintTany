@@ -104,3 +104,19 @@ PRÓXIMO RESULTADO EXIGIDO
 5. Atualizar Handoff+ZIP a cada nova entrega; trabalhar somente
    nesta branch, 1 commit/1 workflow. Nunca declarar sucesso
    no iPhone apenas pelo CI.
+
+M7.64.1 HOTFIX APÓS ACTIONS #247 (ID 39282022356)
+- Resultado #247: FAILED durante os testes Python, antes de build Apple.
+- 432 testes executados; 20 falhas de strings legadas 7.64.0/7640 e
+  1 erro NameError devido a variável "bridge" fora do escopo.
+- Corrigidos todos os 21 casos exatos, mantendo o Info.plist canônico
+  7.64.1 (build 7641). Os testes seguem validando o projeto real.
+- Corrigidos os dois campos de artifact upload que apontavam para
+  AscensionRecompProbe-7.64.0-unsigned.ipa e m764-ipa-sha256.txt;
+  agora são versão 7.64.1 e m7641-ipa-sha256.txt.
+- O próximo Actions será a primeira prova de compilação/link Apple
+  dos 37 blocos CFG AOT gerados pela rota M7.64/M7.64.1.
+- Não há evidência física nova, nem cellFsOpen/cellFsRead, nem IPA
+  validada enquanto o novo run não terminar em SUCCESS.
+- Regras preservadas: AscensionRecomp apenas; 1 commit / 1 workflow,
+  sem assets comerciais, PPC interpreter/JIT/fallback.

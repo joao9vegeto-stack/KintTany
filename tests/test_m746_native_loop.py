@@ -35,5 +35,5 @@ class M746HotLoop(unittest.TestCase):
   for s in ("tests/host_m746_native_loop.c","m746-native-host.log",
             "m746-native-arm64.o","_ar_m746_register_hotloop"):
    self.assertIn(s,self.workflow)
-  self.assertIn("<string>7640</string>",self.plist)
+  self.assertIn("<string>7641</string>",self.plist)
 if __name__=="__main__":unittest.main()
