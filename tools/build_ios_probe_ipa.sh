@@ -567,4 +567,7 @@ echo 'M7.59: 42 real owner PPC words 0x002C1378..0x002C141C compiled ARM64 with 
 (cd ios-probe && zip -q -r ../AscensionRecompProbe-0.6.22-unsigned.ipa Payload)
 test -s AscensionRecompProbe-0.6.22-unsigned.ipa
 shasum -a 256 AscensionRecompProbe-0.6.22-unsigned.ipa > m41-ipa-sha256.txt
+# Retain legacy CI path; new alias has accurate installed bundle version.
+cp AscensionRecompProbe-0.6.22-unsigned.ipa AscensionRecompProbe-7.63.2-unsigned.ipa
+shasum -a 256 AscensionRecompProbe-7.63.2-unsigned.ipa > m7632-ipa-sha256.txt
 echo 'UNSIGNED DIAGNOSTIC APP: UIKit CAMetalLayer + real PS3Recomp Metal backend; NO GOWA GAME included' > m41-status.txt

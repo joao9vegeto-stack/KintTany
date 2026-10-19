@@ -30,13 +30,13 @@ class TestM750(unittest.TestCase):
  def test_report_fresh_scoped_provenance_and_no_false_fs(self):
   ui=(R/'ios/ARProbeApp.m').read_text()
   for x in ('ARBuildProvenance.h','EXECUÇÃO ATUAL',
-            'COMPARAÇÃO COM A BUILD ANTERIOR','HISTÓRICO',
+            'COMPARAÇÃO COM TESTES FÍSICOS ANTERIORES','HISTÓRICO',
             'AR_M750_BUILD_SHA','AR_M750_BUILD_RUN_ID',
             'NÃO MEDIDO','self.m750Run=nil','m750HostObservation',
             'cellFsRead com bytes positivos: %@',
-            '0x003E16E0','M7.59 (teste físico'):
+            '0x002C53B0','M7.63.1 (teste físico'):
    self.assertIn(x,ui)
-  self.assertIn('AscensionRecomp-M7.61-NPUA80918',ui)
+  self.assertIn('AscensionRecomp-%@-NPUA80918',ui)
   sh=(R/'tools/build_ios_probe_ipa.sh').read_text()
   self.assertIn('GITHUB_SHA',sh)
   self.assertIn('GITHUB_RUN_ID',sh)
@@ -46,5 +46,5 @@ class TestM750(unittest.TestCase):
             'm750-native-arm64.o','_ar_m750_register_owner',
             'AscensionRecomp-M7.61-BULK-AOT'):
    self.assertIn(x,w)
-  self.assertIn('<string>90</string>',(R/'ios/Probe-Info.plist').read_text())
+  self.assertIn('<string>7632</string>',(R/'ios/Probe-Info.plist').read_text())
 if __name__=='__main__':unittest.main()

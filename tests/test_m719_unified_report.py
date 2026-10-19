@@ -40,7 +40,7 @@ class M719ReportTests(unittest.TestCase):
         self.assertIn('initForExportingURLs:@[url] asCopy:YES',s)
         self.assertIn('writeToURL:url atomically:YES',s)
         self.assertIn('encoding:NSUTF8StringEncoding',s)
-        self.assertIn('AscensionRecomp-M7.61-NPUA80918-%@.txt',s)
+        self.assertIn('AscensionRecomp-%@-NPUA80918-%@.txt',s)
         self.assertIn('UIPasteboard.generalPasteboard.string=report;',s)
         self.assertIn('Compartilhar TXT · direto ao ChatGPT',s)
         self.assertIn('Visualizar relatório',s)
@@ -48,7 +48,7 @@ class M719ReportTests(unittest.TestCase):
         self.assertIn('popover.sourceView=sender',s)
         self.assertIn('Relatório sem bytes de ELF, PSARC ou arquivos comerciais.',s)
         self.assertIn('EXECUÇÃO ATUAL',s)
-        self.assertIn('COMPARAÇÃO COM A BUILD ANTERIOR',s)
+        self.assertIn('COMPARAÇÃO COM TESTES FÍSICOS ANTERIORES',s)
 
 if __name__=="__main__":
     unittest.main()

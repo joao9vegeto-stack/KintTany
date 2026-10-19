@@ -1572,7 +1572,7 @@ jobs:
           grep -Eq ' [Tt] _ar_lv2_timezone$' m78-owner-aot-linked-symbols.txt
           echo "M7.43: 6251 generated GOWA ELF C-AOT functions compiled and linked in final Apple ARM64 Mach-O (9 modules + SHA installer). Number actually executed and new PC pending physical iPhone report; no guest files/RSX demonstrated." > m78-actions-status.txt
           test -s AscensionRecompProbe-0.6.22-unsigned.ipa
-          /usr/libexec/PlistBuddy -c 'Print CFBundleShortVersionString' ios-probe/Payload/AscensionRecompProbe.app/Info.plist | grep -Fx 0.6.22
+          /usr/libexec/PlistBuddy -c 'Print CFBundleShortVersionString' ios-probe/Payload/AscensionRecompProbe.app/Info.plist | grep -Fx 7.63.2
           /usr/bin/unzip -t AscensionRecompProbe-0.6.22-unsigned.ipa | tee m42-ipa-integrity.log
           xcrun nm -g ios-probe/Payload/AscensionRecompProbe.app/AscensionRecompProbe | grep -E '(_rsx_metal_backend_present|_rsx_metal_backend_init|_OBJC_CLASS_\\$_ARMetalView)' > m42-runtime-link-symbols.txt || true
           grep -q _rsx_metal_backend_init m39-metal-symbols.txt
@@ -2023,6 +2023,8 @@ jobs:
             m76-status.txt
             m75-aot-boot-host.log
             AscensionRecompProbe-0.6.22-unsigned.ipa
+            AscensionRecompProbe-7.63.2-unsigned.ipa
+            m7632-ipa-sha256.txt
             m40-ios-layer-view.o
             build-ios-runtime/libps3recomp_runtime.a
             ios-ppu-core/libAscensionPPUCore-ios-arm64.a

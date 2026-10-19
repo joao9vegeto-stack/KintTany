@@ -85,6 +85,11 @@ extern int ar_probe_rsx_texture(void *layer,unsigned swizzled,unsigned int out_p
 extern int ar_probe_rsx_texture_registers(unsigned swizzled,unsigned int out_pixels[4]);
 extern int ar_probe_rsx_texture_cache_mutation(unsigned swizzled,unsigned int out_pixels[4],unsigned *phase,unsigned *uploads,unsigned *replacements);
 
+/* Display/export version comes from the installed IPA's Info.plist. */
+static NSString *ARCurrentRelease(void){
+ NSString *v=[[NSBundle mainBundle] objectForInfoDictionaryKey:@"CFBundleShortVersionString"];
+ return v.length?[@"M" stringByAppendingString:v]:@"M-INDEFINIDA";
+}
 @interface ARProbeDelegate : UIResponder <UIApplicationDelegate, UIDocumentPickerDelegate>
 @property(nonatomic,strong) UIWindow *window;
 @property(nonatomic,strong) ARMetalView *metalView;
@@ -429,7 +434,7 @@ extern int ar_probe_rsx_texture_cache_mutation(unsigned swizzled,unsigned int ou
     [controller.view addSubview:panel];
     UILabel *header=[UILabel new];
     header.translatesAutoresizingMaskIntoConstraints=NO;
-    header.text=@"ASCENSIONRECOMP   ·   M7.61";
+    header.text=[NSString stringWithFormat:@"ASCENSIONRECOMP   ·   %@",ARCurrentRelease()];
     header.textColor=[UIColor colorWithRed:0.73 green:0.87 blue:1 alpha:1];
     header.font=[UIFont systemFontOfSize:12 weight:UIFontWeightBold];
     header.textAlignment=NSTextAlignmentCenter;
@@ -762,17 +767,17 @@ extern int ar_probe_rsx_texture_cache_mutation(unsigned swizzled,unsigned int ou
   NSString *native=e&&[e[@"dispatches"] unsignedIntValue]?
     @"comprovado":@"não comprovado";
   NSMutableString *report=[NSMutableString stringWithFormat:
-    @"ASCENSIONRECOMP — ESQUEMA M7.61-v11\n"
+    @"ASCENSIONRECOMP — ESQUEMA AOT-v12\n"
      "EXECUÇÃO ATUAL\n"
      "Branch=%s | Commit=%s | Build Actions=%s | Workflow ID=%s\n"
-     "App=M7.61 (binário 0.6.22/90 legado) | Runtime AOT ONLY | Relatório=v11\n"
+     "App=%@ (CFBundleVersion=%@) | Runtime AOT ONLY | Relatório=v12\n"
      "Tipo teste=%@ | Momento=%@\n"
      "ELF carregado=%@ | origem=%@\n"
      "AOT vinculadas=%@ entradas | origem=%@\n"
      "AOT distintas executadas=%@ entradas | origem=%@\n"
      "Despachos ARM64=%@ despachos | origem=%@\n"
      "PPC interpretadas=%@ instruções (exigência AOT ONLY: 0) | origem=%@\n"
-     "Limite fallback=%@ instruções | origem=%@\n"
+     "Limite de interpretação PPC=%@ instruções | origem=%@\n"
      "Resultado guest=%@ | origem=%@\n"
      "PC de parada=%@ | opcode=%@ | origem=%@\n"
      "Último PC AOT executado=%@ | origem=%@\n"
@@ -789,6 +794,7 @@ extern int ar_probe_rsx_texture_cache_mutation(unsigned swizzled,unsigned int ou
      "Primeiro quadro original do jogo: não comprovado\n\n",
      AR_M750_BUILD_BRANCH,AR_M750_BUILD_SHA,
      AR_M750_BUILD_RUN_NUMBER,AR_M750_BUILD_RUN_ID,
+     ARCurrentRelease(),[[NSBundle mainBundle] objectForInfoDictionaryKey:@"CFBundleVersion"],
      e?@"teste físico iPhone / PPU guest":@"NÃO MEDIDO",
      e?val(@"when"):@"NÃO MEDIDO",elf,origin,
      val(@"aot"),e?@"tabela AOT carregada no app":origin,
@@ -798,19 +804,24 @@ extern int ar_probe_rsx_texture_cache_mutation(unsigned swizzled,unsigned int ou
      last,origin,elf,native,
      self.m750HostObservation?:@"não comprovado",
      fsOpen,fsRead];
+  /* Device baselines below are historical, never invented for a new run. */
   [report appendFormat:
-    @"COMPARAÇÃO COM A BUILD ANTERIOR\n"
-     "M7.60.1 (CI Actions #236): compilação concluída, sem teste físico próprio; incremento de AOT=0.\\n"
-     "M7.60 (físico, referência): 7700 registradas, 124 distintas, 1830 despachos, parada 0x003E16E0.\\n"
-     "M7.59 (teste físico 20261019-021525): AOT=7700 entradas;"
-     " distintas=124; despachos=1830; PPC=0; limite=0;"
-     " parada=0x003E16E0; opcode RAM=0xF821FF91 (ELF=RAM);"
-     " último AOT=0x002C1700.\n"
-     "M7.61 AOT ONLY atual: AOT=%@; distintas=%@; despachos=%@; PPC=%@;"
-     " limite=%@; parada=%@; opcode=%@; último AOT=%@.\n"
-     "Dados ausentes=NÃO MEDIDO, não utilizar baseline para preencher.\n\n",
-     val(@"aot"),val(@"unique"),val(@"dispatches"),val(@"fallback"),
-     val(@"limit"),hexval(@"stop"),realOpcode,last];
+    @"COMPARAÇÃO COM TESTES FÍSICOS ANTERIORES\n"
+     "M7.61.3 (teste físico): AOT=7726; distintas=128; despachos=1859; parada=0x002C53B0.\n"
+     "M7.62.1 (teste físico): AOT=7821; distintas=132; despachos=1890; parada=0x002C53BC.\n"
+     "M7.63.1 (teste físico, commit 73959e4, Actions #244): AOT=8417; distintas=134;"
+     " despachos=1892; PPC=0; parada=0x00539378.\n"
+     "EXECUÇÃO ATUAL %@: AOT=%@; distintas=%@; despachos=%@; PPC=%@;"
+     " limite=%@; parada=%@; opcode=%@; último AOT=%@.\n",
+     ARCurrentRelease(),val(@"aot"),val(@"unique"),val(@"dispatches"),
+     val(@"fallback"),val(@"limit"),hexval(@"stop"),realOpcode,last];
+  if(e) [report appendFormat:
+    @"DELTA FÍSICO vs M7.63.1: AOT=%+lld; distintas=%+lld; despachos=%+lld."
+     " Símbolos compilados NÃO representam execução no iPhone.\n\n",
+    (long long)[e[@"aot"] longLongValue]-8417LL,
+    (long long)[e[@"unique"] longLongValue]-134LL,
+    (long long)[e[@"dispatches"] longLongValue]-1892LL];
+  else [report appendString:@"DELTA FÍSICO vs M7.63.1: NÃO MEDIDO.\n\n"];
   /* ELF versus RAM guest: independent read on-device before the VM is freed.
    * No fallback opcode or HOST Files sample may populate these fields. */
   [report appendFormat:
@@ -866,8 +877,8 @@ extern int ar_probe_rsx_texture_cache_mutation(unsigned swizzled,unsigned int ou
     date.locale=[NSLocale localeWithLocaleIdentifier:@"en_US_POSIX"];
     date.dateFormat=@"yyyyMMdd-HHmmss";
     NSString *name=[NSString stringWithFormat:
-       @"AscensionRecomp-M7.61-NPUA80918-%@.txt",
-       [date stringFromDate:[NSDate date]]];
+       @"AscensionRecomp-%@-NPUA80918-%@.txt",
+       ARCurrentRelease(),[date stringFromDate:[NSDate date]]];
     NSURL *docs=[[[NSFileManager defaultManager]
         URLsForDirectory:NSDocumentDirectory inDomains:NSUserDomainMask] firstObject];
     NSURL *url=[docs URLByAppendingPathComponent:name isDirectory:NO];
@@ -1574,7 +1585,7 @@ extern int ar_probe_rsx_texture_cache_mutation(unsigned swizzled,unsigned int ou
        "Capacidade VM=%u · arquivo mapeado=%u · funções AOT=%u\n"
        "Import PRX=%d · bind import=%d · bind HLE=%d\n"
        "Teste HLE TLS nativa=%d · r13=0x%08X\n"
-       "Despacho nativo/híbrido=%d · primeiro PC pendente=0x%08X\n"
+       "Despacho AOT nativo=%d · primeiro PC pendente=0x%08X\n"
        "Opcode inicial guest=0x%08X · evidências=0x%X\n"
        "AR_UNRESOLVED=-3: PC guest sem ARM64 registrado; AOT ONLY proíbe fallback.\n",
        nativeRC,native[1],native[2],native[3],
@@ -1641,27 +1652,24 @@ extern int ar_probe_rsx_texture_cache_mutation(unsigned swizzled,unsigned int ou
     const int missingRead=(((int)native[6]==-3 || (int)native[6]==-12 || (int)native[6]==-13) && pendingMatch!=0 && native[7]) ?
         ar_m712_exec_window(data.bytes,data.length,native[7],missingWords) : -1;
     NSString *pendingText=nil;
-    if(((int)native[6]==-3 || (int)native[6]==-12 || (int)native[6]==-13) && pendingMatch==0){
-       pendingText=[NSString stringWithFormat:
-           @"Import PRX pendente: %s · NID=0x%08X\nStub=0x%08X",
-           pendingLibrary[0]?pendingLibrary:"(sem nome)",
-           pendingImport[0],native[7]];
-    } else if(((int)native[6]==-3 || (int)native[6]==-12 || (int)native[6]==-13) && missingRead==0){
-       pendingText=[NSString stringWithFormat:
-           @"Próximo PC pendente (híbrido): 0x%08X\n"
-            "M7.12 · %u palavra(s) PPC do ELF executável\n"
-            "PPC BE: %08X %08X %08X %08X\n"
-            "Endereço sem ARM64 vinculada; resultado fallback=%d.",
-            native[7],missingWords[4],missingWords[0],missingWords[1],
-            missingWords[2],missingWords[3],(int)native[6]];
-    } else if(((int)native[6]==-3 || (int)native[6]==-12 || (int)native[6]==-13)){
-       pendingText=[NSString stringWithFormat:
-           @"Próximo PC pendente (híbrido): 0x%08X\n"
-            "M7.12 · janela PPC indisponível (%d), fallback finalizado.",
-            native[7],missingRead];
+    BOOL needsAOT=((int)native[6]==-3 || (int)native[6]==-12 || (int)native[6]==-13);
+    if(needsAOT && pendingMatch==0){
+      pendingText=[NSString stringWithFormat:
+        @"Import PRX pendente: %s · NID=0x%08X\nStub=0x%08X",
+        pendingLibrary[0]?pendingLibrary:"(sem nome)",
+        pendingImport[0],native[7]];
+    } else if(needsAOT && missingRead==0) {
+      pendingText=[NSString stringWithFormat:
+        @"AOT pendente: 0x%08X · opcode PPC=0x%08X\n"
+         "Sem ARM64 registrado; dispatcher=%d (NÃO é fallback).",
+        native[7],missingWords[0],(int)native[6]];
+    } else if(needsAOT) {
+      pendingText=[NSString stringWithFormat:
+        @"AOT pendente: 0x%08X · janela PPC indisponível (%d).",
+        native[7],missingRead];
     } else {
-       pendingText=[NSString stringWithFormat:
-           @"Último resultado do despachante: %d",(int)native[6]];
+      pendingText=[NSString stringWithFormat:
+        @"Último resultado do despachante: %d",(int)native[6]];
     }
     /* M7.14: collect verified executable PPC words in the clipboard report
      * for a subsequent private AOT batch; this never executes guest code. */
@@ -1700,7 +1708,7 @@ extern int ar_probe_rsx_texture_cache_mutation(unsigned swizzled,unsigned int ou
           }
        }
        [batch appendString:
-           @"Inventário do ELF local SOMENTE LEITURA; fallback experimental sem JIT.\n"
+           @"Inventário PPC SOMENTE LEITURA; nenhuma instrução interpretada.\n"
             "Limite gráfico: PPU ainda sem comandos RSX reais do Ascension.\n"
             "M4/M5 são testes sintéticos Metal, não menu do jogo.\n"];
        frontierReport=batch;
@@ -1797,7 +1805,7 @@ extern int ar_probe_rsx_texture_cache_mutation(unsigned swizzled,unsigned int ou
      * run-length recent trace records last transitions instead of last raw
      * 64 dispatches. All fields are copied from the iPhone PPU dispatcher. */
     [graphReport appendFormat:
-       @"\nM7.61 — TRIAGEM EXECUTÁVEL AOT (IPHONE, SEM INTERPRETADOR)\n"
+       @"\nTELEMETRIA AOT ATUAL (IPHONE, SEM INTERPRETADOR)\n"
         "PC PENDENTE=0x%08X | AOT imediatamente anterior=0x%08X\n"
         "CR=0x%08X XER=0x%08X | LR=0x%llX CTR=0x%llX\n"
         "r1=0x%llX r2/TOC=0x%llX r3=0x%llX\n"
@@ -1995,22 +2003,22 @@ extern int ar_probe_rsx_texture_cache_mutation(unsigned swizzled,unsigned int ou
                           (int)native[6]==-13) && native[7] && pendingMatch!=0)
                         ? frontierReport : nil;
     self.ppuBatchButton.enabled=(self.ppuBatchReport.length>0);
+    /* Primary screen contains only live measured AOT, FS, and frontier. */
     self.ppuSummary=[NSString stringWithFormat:
-       @"ASCENSIONRECOMP M7.61 · NPUA80918\n"
-        "AOT ARM64 NATIVO · FALLBACK PPC DESATIVADO\n"
-        "Entradas AOT vinculadas: %u\n"
-        "ELF: %@ · entrada 0x%08X\n"
-        "Execução nativa: %d · TLS r13=0x%08X\n"
-        "SYSUTIL core vinculado=%@ · mapeamentos guest=%@\n"
-        "%@\n"
-        "M7.34: bloco inteiro 29 PPC nativo ARM64; SRADI em AOT/fallback.\n"
-        "RSX do Ascension: não demonstrado (M4/M5 sintéticos).\n"
-        "Estado: inicialização parcial, sem gameplay.\n"
-        "Diagnósticos legados: seção avançada.",
-        native[5],nativeRC==0?@"VALIDADO":@"FALHOU",
-        native[1],(int)native[6],native[12],
-        (native[15]&0x800u)?@"SIM":@"NÃO",
-        (native[15]&0x1000u)?@"ATIVOS":@"NENHUM",pendingText];
+      @"ASCENSIONRECOMP %@ · NPUA80918\n"
+       "AOT ARM64 ONLY · PPC interpretadas=%u\n"
+       "AOT: %u registradas · %u distintas · %u despachos\n"
+       "ELF: %@ · entrada 0x%08X\n"
+       "%@\n"
+       "Guest FS: open=%u · read=%u · bytes=%llu\n"
+       "Último AOT: 0x%08X · r13/TLS=0x%08X\n"
+       "RSX do Ascension: não demonstrado · sem gameplay.",
+       ARCurrentRelease(),measured.fallback_steps,
+       native[5],measured.unique_aot,measured.aot_dispatches,
+       nativeRC==0?@"VALIDADO":@"FALHOU",native[1],
+       pendingText,fsMeasured.open_calls,fsMeasured.read_calls,
+       (unsigned long long)fsMeasured.bytes_read,
+       measured.stop_previous_aot,native[12]];
     if((int)continuous[0]!=-1314 || continuous[3]!=0x4e800421u)
        importReport=@"\nM7.3: nenhuma chamada bctrl desconhecida detectada nesta execução.\n";
     continuousText=[continuousText stringByAppendingString:importReport];
