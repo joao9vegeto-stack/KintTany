@@ -1642,7 +1642,7 @@ jobs:
           grep -Eq ' [Tt] _ar_lv2_timezone$' m78-owner-aot-linked-symbols.txt
           echo "M7.43: 6251 generated GOWA ELF C-AOT functions compiled and linked in final Apple ARM64 Mach-O (9 modules + SHA installer). Number actually executed and new PC pending physical iPhone report; no guest files/RSX demonstrated." > m78-actions-status.txt
           test -s AscensionRecompProbe-0.6.22-unsigned.ipa
-          /usr/libexec/PlistBuddy -c 'Print CFBundleShortVersionString' ios-probe/Payload/AscensionRecompProbe.app/Info.plist | grep -Fx 7.64.1
+          /usr/libexec/PlistBuddy -c 'Print CFBundleShortVersionString' ios-probe/Payload/AscensionRecompProbe.app/Info.plist | grep -Fx 7.65.0
           /usr/bin/unzip -t AscensionRecompProbe-0.6.22-unsigned.ipa | tee m42-ipa-integrity.log
           xcrun nm -g ios-probe/Payload/AscensionRecompProbe.app/AscensionRecompProbe | grep -E '(_rsx_metal_backend_present|_rsx_metal_backend_init|_OBJC_CLASS_\\$_ARMetalView)' > m42-runtime-link-symbols.txt || true
           grep -q _rsx_metal_backend_init m39-metal-symbols.txt
@@ -1792,7 +1792,7 @@ jobs:
           test -s m764-tail-host-test.log
           grep -Eq ' [Tt] _ar_m764c_native_005392a4$' m78-owner-aot-linked-symbols.txt
           grep -Eq ' [Tt] _ar_m764c_register_successors$' m78-owner-aot-linked-symbols.txt
-          test -s AscensionRecompProbe-7.64.1-unsigned.ipa
+          test -s AscensionRecompProbe-7.65.0-unsigned.ipa
       - name: M7.65 verify Apple ARM64 native frontier in final IPA
         run: |
           set -euo pipefail
@@ -1833,7 +1833,7 @@ jobs:
             m764-generation.log
             m764-host-generation.log
             m764-stop-host.log
-            m7641-ipa-sha256.txt
+            m765-ipa-sha256.txt
             m763-tests.log
             m763-host-generation.log
             m763-generation.log
@@ -2152,8 +2152,8 @@ jobs:
             m76-status.txt
             m75-aot-boot-host.log
             AscensionRecompProbe-0.6.22-unsigned.ipa
-            AscensionRecompProbe-7.64.1-unsigned.ipa
-            m7641-ipa-sha256.txt
+            AscensionRecompProbe-7.65.0-unsigned.ipa
+            m765-ipa-sha256.txt
             m40-ios-layer-view.o
             build-ios-runtime/libps3recomp_runtime.a
             ios-ppu-core/libAscensionPPUCore-ios-arm64.a
