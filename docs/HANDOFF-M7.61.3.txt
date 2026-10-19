@@ -1,0 +1,9 @@
+ASCENSIONRECOMP M7.61.3 — handoff técnico
+Branch exclusiva AscensionRecomp. Parent SHA 508bd69cadc40f49b0fec32603f8129a0d9bc70c. Only one commit+workflow per version, never touch main/PsTJon.
+Previous #239 failed with assert store1_addr==0x009CC234 (incorrect expected value from earlier M7.61.1). Source original GOWA.ELF (NPUA80918) SHA 4bf75c897b82d1beb25514cbadaff3d03e1b0c7bf849fa5d289be4f9183462b5; PPC at PC 0x003E1704 lis r4,0x009D, PC 0x003E1708 lis r5,0x0085, so register overwrites prior initialization. PPC D-form signed STW expected addresses 0x009C8114 and 0x0084B9FC. Original host expected values were right.
+M7.61.3 edits only golden assertions, verifies GPR3/4/5/6 and adds stderr diagnostic; no guest semantics or generators modified.
+#239: 415 Python tests passed, 26/26 ranges (739 PPC) translated to C, host object compiled; Apple ARM64 and IPA NOT reached.
+EXECUÇÃO ATUAL M7.61.3: arm64/MachO/iPhone = NÃO MEDIDO; TESTE FÍSICO PENDENTE.
+Historical M7.60 physical: 7700 AOT, 124 distinct, 1830 native dispatches, 0 interpreted, stop 0x003E16E0/0xF821FF91; guest FS not proven.
+Next workflow must prove host native state, Apple ARM64, final Mach-O, artifact IPA and SHA. iPhone 17 Pro: load original exact-hash GOWA.ELF, export full TXT M7.61, compare real PC, guest cellFsOpen/read path/FD/status/bytes and RSX evidence.
+No interpreter, no JIT, no runtime fallback, no fake counters, no ELF in IPA.
