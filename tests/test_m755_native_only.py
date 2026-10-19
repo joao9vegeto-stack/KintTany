@@ -17,7 +17,7 @@ class TestM755(unittest.TestCase):
   self.assertIn('result=fault=AR_UNRESOLVED',dispatch)
  def test_history_not_falsely_promoted(self):
   app=(R/'ios/ARProbeApp.m').read_text()
-  for needle in ('M7.59 AOT ONLY','M7.59 (teste físico',
+  for needle in ('M7.60 AOT ONLY','M7.59 (teste físico',
                  'PPC interpretadas=%@ instruções (exigência AOT ONLY: 0)',
                  'PC guest sem ARM64 registrado'):
    self.assertIn(needle,app)
