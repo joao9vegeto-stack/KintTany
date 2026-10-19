@@ -46,7 +46,7 @@ class HybridM720Tests(unittest.TestCase):
 
  def test_ui_explicitly_hybrid_txt_and_no_rsx_game_claim(self):
   t=self.ui
-  self.assertIn("ASCENSIONRECOMP — ESQUEMA M7.57-v8",t)
+  self.assertIn("ASCENSIONRECOMP — ESQUEMA M7.58-v9",t)
   self.assertIn("M7.20 — DESPACHO HÍBRIDO EXPERIMENTAL",t)
   self.assertIn("measured.fallback_steps",t)
   self.assertIn("ownerStop.guest_word",t)
