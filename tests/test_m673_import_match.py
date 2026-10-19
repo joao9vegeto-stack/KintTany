@@ -15,7 +15,7 @@ class TestM673(unittest.TestCase):
    self.assertIn(token,C)
  def test_ui_privacy(self):
   for token in ('if(rc48==-1007 && detail48[10]==2u',
-                'ar_private_import_match(', 'ASCENSIONRECOMP   ·   M7.61',
+                'ar_private_import_match(', 'ARCurrentRelease()',
                 'Importação identificada, MAS serviço HLE ainda NÃO vinculado',
                 'Copiar diagnóstico PPU'):
    self.assertIn(token,U)
@@ -23,5 +23,5 @@ class TestM673(unittest.TestCase):
   for token in ('tests/host_m673_import_match.c','m673-import-host.log',
                 'AscensionRecomp-M7.61-BULK-AOT-AppleARM64'):
    self.assertIn(token,W)
-  self.assertIn('<string>90</string>',P)
+  self.assertIn('<string>7640</string>',P)
 if __name__=="__main__":unittest.main()

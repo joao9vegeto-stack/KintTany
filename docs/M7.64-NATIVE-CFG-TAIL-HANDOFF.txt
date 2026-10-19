@@ -1,0 +1,58 @@
+ASCENSIONRECOMP M7.64 — HANDOFF | 19/10/2026
+ATUALIZAÇÃO BASE (antes do único commit M7.64)
+- A branch avançou externamente até o commit M7.63.2 4c6eeee7a0c04e79c02affd030cf6979cf179b2d.
+- GitHub Actions #245, run 39268162856, falhou: 36 testes legados ainda exigiam strings M7.61 e CFBundleVersion 90.
+- A M7.64 preserva ARCurrentRelease() da M7.63.2, corrige as expectativas legadas de testes
+  para versão 7.64.0/build 7640 e não mascara falhas do CI.
+- Executável de distribuição permanece IPA de diagnóstico não assinada, sem conteúdo do jogo.
+- AOT 31 blocos é código estático gerado, não execução comprovada no dispositivo.
+
+SOMENTE branch AscensionRecomp, GOWA.ELF PS3 NPUA80918.
+GOWA(8).ELF no upload é somente nome de arquivo; nunca outro executável.
+Base commit M7.63.1: 73959e41717ce2575b23ac4833a4ff04523cc102
+Actions #244: https://github.com/joao9vegeto-stack/KintTany/actions/runs/39261479794
+SHA-256 ELF canônico: 4bf75c897b82d1beb25514cbadaff3d03e1b0c7bf849fa5d289be4f9183462b5.
+
+MEDIÇÃO FÍSICA anterior M7.62.1: 7.821 AOT registradas, 132 distintas executadas,
+1.890 despachos ARM64; PPC interpretadas 0; primeiro PC ausente 0x002C53BC.
+MEDIÇÃO FÍSICA M7.63.1: 8.417 registradas, 134 distintas, 1.892 despachos;
+PPC interpretadas 0; fallback 0; retorno -3; parada 0x00539378.
+Comparação física comprovada: +596, +2, +2. Mudança PC NÃO comprova FS ou jogo.
+M7.63.1 aparece incorretamente como M7.61 dentro do TXT e nome; defeito de rotulagem.
+
+M7.64 — INTEGRAÇÃO
+Novo gerador tools/m764_cfg_blocks.py lê diretamente o ELF completo offline,
+percorre 7.643 OPD e segue B-tail alcançáveis. 31 blocos com semântica integral
+foram aceitos; 7.638 candidatos tiveram instruções não cobertas no limite estrito.
+O restante não vira NOP e não foi contado como código executado.
+Bloco REAL 0x00539378 contém:
+  0x3880FFFF addi r4,r0,-1
+  0x38600001 addi r3,r0,1
+  0x78840420 clrldi r4,r4,48
+  0x4BFFFF20 b 0x005392A4
+O novo C nativo muda CIA para destino e retorna AR_TAIL, não AR_OK.
+Um snapshot IR compacto autenticado pelo SHA é consumido no CI;
+ELF, RAP, SELF e PSARC não são embutidos no repositório ou IPA.
+Antes de registrar entradas novas, instalador valida hash do ELF COMPLETO
+e SHA-256 de todos os blocos na RAM guest. Duplicate AOT não soma registros.
+Teste host sem interpretador de 0x00539378 passou, com r4=0xFFFF, r3=1
+e destino 0x005392A4.
+
+NÃO INVENTAR STATUS
+- 31: código gerado offline com semântica aceita, não 31 funções de jogo.
+- ARM64 compilado / símbolo Mach-O ligado: dependente de Actions do commit novo.
+- Execução física M7.64: NÃO MEDIDO até usuário instalar IPA e enviar log.
+- cellFsOpen / cellFsRead reais do guest USRDIR: NÃO COMPROVADOS.
+- Inventário de programa SPU: NÃO MEDIDO (não confundir imports SPURS).
+- RSX real, primeiro quadro, gameplay: NÃO COMPROVADOS.
+- Não somar 31 automaticamente a 8.417 AOT (sobreposições / duplicatas).
+
+CONTINUAÇÃO
+Expandir semânticas PPC em lote e CFG com BC e link/retornos;
+auditar PCs e semântica pelo ELF, corrigir HLE NID e SPU específicos do Ascension.
+Primeiro marco de runtime: cellFsOpen e cellFsRead originados do guest,
+com retorno, caminho, fd e >0 bytes da USRDIR; depois PSARC/RSX.
+Usar como MÉTODO, sem copiar dados do outro jogo:
+andrebrumdev/gow2-recomp; andrebrumdev/ps3recomp/spurs-bringup;
+sp00nznet/ps3recomp commit 39a36296511c445707adabcd312f0b740cfbd694.
+Uma revisão/um commit/um workflow, sem outras branches.

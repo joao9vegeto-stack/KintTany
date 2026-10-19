@@ -38,5 +38,5 @@ class CRSemantics(unittest.TestCase):
   for x in ("tests/host_m72_cr_branch.c", "m72-cr-branch-host.log",
             "AscensionRecomp-M7.61-BULK-AOT-AppleARM64"):
    self.assertIn(x,WF)
-  self.assertIn("<string>90</string>",PL)
+  self.assertIn("<string>7640</string>",PL)
 if __name__=="__main__":unittest.main()

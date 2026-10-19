@@ -241,6 +241,30 @@ done
 xcrun nm -g "${M763_OBJECTS[@]}" > m763-objects-nm.txt
 grep -Fq '_ar_m763_native_002c53bc' m763-objects-nm.txt
 grep -Fq '_ar_m763_register_discovered' m763-objects-nm.txt
+# M7.64: immutable native CFG B-tail snapshot from full GOWA ELF.
+python3 - <<'PY'
+import base64,gzip,hashlib,json
+from pathlib import Path
+raw=gzip.decompress(base64.b64decode(Path('runtime/m764_semantic_snapshot.gz.b64').read_text().strip(),validate=True))
+assert hashlib.sha256(raw).hexdigest()=='af303e2ee4b332c4f933ac9894b1f5922d4512a1d4199bbfa5d8328d8ba9fec0'
+snap=json.loads(raw)
+assert snap['opd_unique']==7643 and len(snap['accepted'])==31
+assert any(x['pc']==0x539378 for x in snap['accepted'])
+Path('m764-snapshot-ci.json').write_bytes(raw)
+PY
+python3 tools/m764_cfg_blocks.py --snapshot m764-snapshot-ci.json --output-dir runtime | tee m764-generation.log
+M764_OBJECTS=()
+for src in runtime/ppu_m764_[0-9][0-9].c runtime/ppu_m764_install.c; do
+  test -s "$src"
+  dst="ios-probe/$(basename "${src%.c}").o"
+  xcrun --sdk iphoneos clang -target arm64-apple-ios17.0 -isysroot "$SDK" \
+    -std=c11 -O2 -Wall -Wextra -Werror -I upstream/runtime/ppu -I runtime \
+    -c "$src" -o "$dst"
+  M764_OBJECTS+=("$dst")
+done
+xcrun nm -g "${M764_OBJECTS[@]}" > m764-objects-nm.txt
+grep -Fq '_ar_m764_native_00539378' m764-objects-nm.txt
+grep -Fq '_ar_m764_register_discovered' m764-objects-nm.txt
 # M7.56: capture live guest memory vs PT_LOAD file bytes, not fallback counters.
 xcrun --sdk iphoneos clang -target arm64-apple-ios17.0 -isysroot "$SDK" \
     -std=c11 -O2 -Wall -Wextra -Werror -I upstream/runtime/ppu -I runtime \
@@ -373,6 +397,7 @@ xcrun --sdk iphoneos clang++ -target arm64-apple-ios17.0 \
     ios-probe/ppu_m751_vsubfp.o ios-probe/ppu_m752_vsldoi.o ios-probe/ppu_m753_native_vectorfp.o ios-probe/ppu_m754_native_fcmp.o ios-probe/ppu_m756_native_divloop.o ios-probe/ppu_m757_native_batch.o ios-probe/ppu_m758_generated.o ios-probe/ppu_m759_generated.o ios-probe/ppu_m761_generated.o ios-probe/ppu_m756_stop_evidence.o ios-probe/ppu_guest_fs.o \
     ${M762_OBJECTS[@]+"${M762_OBJECTS[@]}"} \
     ${M763_OBJECTS[@]+"${M763_OBJECTS[@]}"} \
+    ${M764_OBJECTS[@]+"${M764_OBJECTS[@]}"} \
     ${GOWA2_OBJECTS[@]+"${GOWA2_OBJECTS[@]}"} \
     ios-probe/ppu_m717_graph.o \
     ${M711_OBJECTS[@]+"${M711_OBJECTS[@]}"} \
@@ -428,6 +453,25 @@ python3 tools/verify_gowa2_macho.py ios-probe/gowa2-staged/symbols.txt \
 grep -Eq ' [Tt] _ar_gowa2_offline_aot_install_sha256$' m78-owner-aot-linked-symbols.txt
 grep -Fq '_ar_private_aot_install_sha256' m78-owner-aot-linked-symbols.txt
 grep -Fq '_ar_ppu_timebase_ticks' m78-owner-aot-linked-symbols.txt
+# M7.64 actual native tail and installer symbols in FINAL Mach-O.
+grep -Eq ' [Tt] _ar_m764_native_00539378$' m78-owner-aot-linked-symbols.txt
+grep -Eq ' [Tt] _ar_m764_register_discovered$' m78-owner-aot-linked-symbols.txt
+python3 - <<'PY'
+import json
+from pathlib import Path
+snap=json.loads(Path('m764-snapshot-ci.json').read_text())
+assert len(snap['accepted'])==31
+Path('m764-final-attestation.json').write_text(json.dumps({
+ 'schema':'m764-apple-arm64-proof-1',
+ 'semantic_blocks_generated':len(snap['accepted']),
+ 'real_stop_native_symbol':'ar_m764_native_00539378',
+ 'native_installer':'ar_m764_register_discovered',
+ 'final_macho':'SYMBOLS_VERIFIED',
+ 'device_executed':'NOT_MEASURED',
+ 'guest_fs':'NOT_MEASURED',
+ 'source_elf_sha256':snap['source_sha256'],
+ 'embedded_elf':False},indent=2)+'\n')
+PY
 # M7.33 final Mach-O must retain ACTUAL production LV2 service binder.
 grep -Eq ' [Tt] _ar_lv2_bind_bootstrap_syscalls$' m78-owner-aot-linked-symbols.txt
 grep -Eq ' [Tt] _ar_lv2_timezone$' m78-owner-aot-linked-symbols.txt
@@ -568,6 +612,6 @@ echo 'M7.59: 42 real owner PPC words 0x002C1378..0x002C141C compiled ARM64 with 
 test -s AscensionRecompProbe-0.6.22-unsigned.ipa
 shasum -a 256 AscensionRecompProbe-0.6.22-unsigned.ipa > m41-ipa-sha256.txt
 # Retain legacy CI path; new alias has accurate installed bundle version.
-cp AscensionRecompProbe-0.6.22-unsigned.ipa AscensionRecompProbe-7.63.2-unsigned.ipa
-shasum -a 256 AscensionRecompProbe-7.63.2-unsigned.ipa > m7632-ipa-sha256.txt
+cp AscensionRecompProbe-0.6.22-unsigned.ipa AscensionRecompProbe-7.64.0-unsigned.ipa
+shasum -a 256 AscensionRecompProbe-7.64.0-unsigned.ipa > m764-ipa-sha256.txt
 echo 'UNSIGNED DIAGNOSTIC APP: UIKit CAMetalLayer + real PS3Recomp Metal backend; NO GOWA GAME included' > m41-status.txt

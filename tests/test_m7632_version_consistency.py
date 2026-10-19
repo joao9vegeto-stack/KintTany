@@ -6,7 +6,7 @@ class M7632(unittest.TestCase):
  def test_release(self):
   ui=(R/'ios/ARProbeApp.m').read_text()
   plist=(R/'ios/Probe-Info.plist').read_text()
-  self.assertIn('<string>7.63.2</string>',plist)
+  self.assertIn('<string>7.64.0</string>',plist)
   self.assertIn('static NSString *ARCurrentRelease(void)',ui)
   self.assertIn('App=%@ (CFBundleVersion=%@)',ui)
   self.assertIn('AscensionRecomp-%@-NPUA80918-%@.txt',ui)

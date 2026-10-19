@@ -1,4 +1,4 @@
-name: AscensionRecomp M7.63 - full ELF ISA-family native ARM64 batch
+name: AscensionRecomp M7.64 - native CFG direct-tail ARM64 batch
 
 on:
   push:
@@ -830,6 +830,25 @@ jobs:
             m763-stop-only.c tests/host_m763_stop.c -o m763-stop-host
           ./m763-stop-host | tee m763-stop-host.log
           grep -Fq 'fail-closed PASS' m763-stop-host.log
+      - name: M7.64 genuine first-stop native tail regression
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          import gzip,base64,hashlib,json
+          from pathlib import Path
+          raw=gzip.decompress(base64.b64decode(Path('runtime/m764_semantic_snapshot.gz.b64').read_text().strip(),validate=True))
+          assert hashlib.sha256(raw).hexdigest()=='af303e2ee4b332c4f933ac9894b1f5922d4512a1d4199bbfa5d8328d8ba9fec0'
+          snap=json.loads(raw)
+          assert snap['opd_unique']==7643 and len(snap['accepted'])==31
+          expected=[['addi',4,0,-1],['addi',3,0,1],['clrldi',4,4,48],['b',0x5392a4]]
+          assert next(q for q in snap['accepted'] if q['pc']==0x539378)['ir']==expected
+          Path('m764-host-snapshot.json').write_bytes(raw)
+          PY
+          python3 tools/m764_cfg_blocks.py --snapshot m764-host-snapshot.json --output-dir m764-host | tee m764-host-generation.log
+          clang -std=c11 -O2 -Wall -Wextra -Werror -I upstream/runtime/ppu -I runtime \
+            m764-host/ppu_m764_00.c tests/host_m764_stop.c -o m764-stop-host
+          ./m764-stop-host | tee m764-stop-host.log
+          grep -Fq 'native ALU, clrldi and B tail PASS' m764-stop-host.log
       - name: M7.60 prove bounded native AOT flight recorder, hot loop RLE and machine report
         run: |
           set -euo pipefail
@@ -1572,7 +1591,7 @@ jobs:
           grep -Eq ' [Tt] _ar_lv2_timezone$' m78-owner-aot-linked-symbols.txt
           echo "M7.43: 6251 generated GOWA ELF C-AOT functions compiled and linked in final Apple ARM64 Mach-O (9 modules + SHA installer). Number actually executed and new PC pending physical iPhone report; no guest files/RSX demonstrated." > m78-actions-status.txt
           test -s AscensionRecompProbe-0.6.22-unsigned.ipa
-          /usr/libexec/PlistBuddy -c 'Print CFBundleShortVersionString' ios-probe/Payload/AscensionRecompProbe.app/Info.plist | grep -Fx 7.63.2
+          /usr/libexec/PlistBuddy -c 'Print CFBundleShortVersionString' ios-probe/Payload/AscensionRecompProbe.app/Info.plist | grep -Fx 7.64.0
           /usr/bin/unzip -t AscensionRecompProbe-0.6.22-unsigned.ipa | tee m42-ipa-integrity.log
           xcrun nm -g ios-probe/Payload/AscensionRecompProbe.app/AscensionRecompProbe | grep -E '(_rsx_metal_backend_present|_rsx_metal_backend_init|_OBJC_CLASS_\\$_ARMetalView)' > m42-runtime-link-symbols.txt || true
           grep -q _rsx_metal_backend_init m39-metal-symbols.txt
@@ -1680,6 +1699,28 @@ jobs:
           Path('m762-coverage-ci.json').write_text(json.dumps(c,indent=2)+"\n")
           print('M7.62 805 Apple ARM64 AOT symbols were compiled and linked, iPhone execution NOT_MEASURED')
           PY
+      - name: M7.64 final iPhoneOS native symbol attestation
+        run: |
+          set -euo pipefail
+          test -s m764-final-attestation.json
+          test -s m764-objects-nm.txt
+          grep -Eq ' [Tt] _ar_m764_native_00539378$' m78-owner-aot-linked-symbols.txt
+          grep -Eq ' [Tt] _ar_m764_register_discovered$' m78-owner-aot-linked-symbols.txt
+      - name: Publish M7.64 iOS IPA and native proof
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: AscensionRecomp-M7.64-NATIVE-CFG-ARM64
+          retention-days: 14
+          if-no-files-found: warn
+          path: |
+            AscensionRecompProbe-7.64.0-unsigned.ipa
+            m764-ipa-sha256.txt
+            m764-final-attestation.json
+            m764-generation.log
+            m764-host-generation.log
+            m764-stop-host.log
+            docs/M7.64-NATIVE-CFG-TAIL-HANDOFF.txt
       - name: M7.63 prove 1582 native ARM64 AOT functions linked in final IPA
         run: |
           set -euo pipefail
@@ -1705,6 +1746,12 @@ jobs:
           if-no-files-found: warn
           retention-days: 14
           path: |
+            m764-final-attestation.json
+            m764-objects-nm.txt
+            m764-generation.log
+            m764-host-generation.log
+            m764-stop-host.log
+            m764-ipa-sha256.txt
             m763-tests.log
             m763-host-generation.log
             m763-generation.log
@@ -2023,8 +2070,8 @@ jobs:
             m76-status.txt
             m75-aot-boot-host.log
             AscensionRecompProbe-0.6.22-unsigned.ipa
-            AscensionRecompProbe-7.63.2-unsigned.ipa
-            m7632-ipa-sha256.txt
+            AscensionRecompProbe-7.64.0-unsigned.ipa
+            m764-ipa-sha256.txt
             m40-ios-layer-view.o
             build-ios-runtime/libps3recomp_runtime.a
             ios-ppu-core/libAscensionPPUCore-ios-arm64.a

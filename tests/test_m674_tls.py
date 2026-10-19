@@ -21,7 +21,7 @@ class TLS(unittest.TestCase):
             'return m672_core(d,len,info,out,trace,detail,NULL);'):
    self.assertIn(x,C)
  def test_report_and_ci(self):
-  for x in ('ASCENSIONRECOMP   ·   M7.61',
+  for x in ('ARCurrentRelease()',
             'ar_ppu_bootstrap_fortyeight_trace_m674(',
             'TLS HLE M6.7.6:',
             'sys_initialize_tls HLE executada'):
@@ -30,5 +30,5 @@ class TLS(unittest.TestCase):
             'm674-tls-host.log',
             'AscensionRecomp-M7.61-BULK-AOT-AppleARM64'):
    self.assertIn(x,W)
-  self.assertIn('<string>90</string>',P)
+  self.assertIn('<string>7640</string>',P)
 if __name__=="__main__":unittest.main()

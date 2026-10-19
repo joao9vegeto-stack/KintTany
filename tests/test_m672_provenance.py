@@ -17,11 +17,11 @@ class Test(unittest.TestCase):
             "m672_region(ss,used,va,4u,base"):
    self.assertIn(x,C)
  def test_ui_and_workflow(self):
-  for x in ("ASCENSIONRECOMP   ·   M7.61","Copiar diagnóstico PPU",
+  for x in ("ARCurrentRelease()","Copiar diagnóstico PPU",
             "ar_ppu_bootstrap_fortyeight_trace_m672(","r12 na leitura r0"):
    self.assertIn(x,U)
   for x in ("tests/host_m672_descriptor.c","m672-host.log","0.6.22-unsigned.ipa"):
    self.assertIn(x,W)
-  self.assertIn("<string>0.6.22</string>",P)
-  self.assertIn("<string>90</string>",P)
+  self.assertIn("<string>7.64.0</string>",P)
+  self.assertIn("<string>7640</string>",P)
 if __name__=="__main__":unittest.main()

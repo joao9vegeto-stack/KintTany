@@ -40,6 +40,6 @@ class M740ReadOnly(unittest.TestCase):
   self.assertIn("[sfoAfter isEqualToData:sfo]",c)
   self.assertIn("[assetAfter isEqualToData:payload]",c)
   plist=(ROOT/"ios/Probe-Info.plist").read_text()
-  self.assertIn("<string>90</string>",plist)
+  self.assertIn("<string>7640</string>",plist)
 
 if __name__=="__main__":unittest.main()

@@ -35,7 +35,7 @@ class M718BulkTests(unittest.TestCase):
         self.assertNotIn("GOWA.ELF",str(ROOT/"tools/stage_m718_bulk.py"))
     def test_remaining_native_status_remains_precise(self):
         ui=(ROOT/"ios/ARProbeApp.m").read_text()
-        self.assertIn("ASCENSIONRECOMP M7.",ui)  # current milestone header; M7.18 AOT guarded separately
+        self.assertIn("ASCENSIONRECOMP %@",ui)  # current milestone header; M7.18 AOT guarded separately
         self.assertIn("RSX do Ascension: não demonstrado",ui)
         self.assertIn("Entradas AOT vinculadas: %u",ui)
 

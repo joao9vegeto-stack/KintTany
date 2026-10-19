@@ -36,7 +36,7 @@ class M759(unittest.TestCase):
   self.assertIn("_ar_m759_native_002c1378",build)
   self.assertIn("host_m759_generated.c",ci)
   self.assertIn("m759-host.log",ci)
-  self.assertIn("M7.59 (teste físico",ui)
+  self.assertIn("M7.61.3 (teste físico",ui)
   self.assertIn("cellFsRead com bytes positivos",ui)
   self.assertNotIn("    ios-probe/ppu_m720_fallback.o \\",build)
 if __name__=="__main__":unittest.main()
