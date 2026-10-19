@@ -1,0 +1,29 @@
+# HANDOFF ASCENSIONRECOMP M7.61 — NPUA80918 (2026-10-19)
+
+Branch EXCLUSIVA: AscensionRecomp. Base confirmada antes desta etapa: f132d8244c15fd573fb07b89803950b130d019d0 (CI #236 SUCCESS). Branches main e PsTJon intocadas.
+
+Identidade do único ELF testado offline: `GOWA.ELF` PPC64 BE, 8.717.136 bytes, SHA-256 4bf75c897b82d1beb25514cbadaff3d03e1b0c7bf849fa5d289be4f9183462b5; corresponde à cópia do kit M7.60.1. OPD 0x008283F8 => PC 0x00010410, TOC 0x0083F2B0. NÃO colocar ELF em GitHub ou artifacts.
+
+## O QUE FOI IMPLEMENTADO
+Ferramenta geradora M7.61 em lote (26 candidatos estruturais, 739 PPC), verifica opcionalmente o ELF integral e seus PT_LOAD X, traduz todos os candidatos aceitos pelo backend atual com PC/opcode de rejeição quando isolado e impede NOP/fallback artificial. Compila o lote Apple ARM64 junto dos módulos M7.43–M7.59, autentica os words contra ELF/RAM do dispositivo antes de registrar as entradas e não sobrescreve entradas anteriores duplicadas. O PC 0x003E16E0 é obrigatório. Ferramentas adicionais: inventário offline de cobertura/lacunas e atestação de símbolos ARM64 no objeto e Mach-O final. Artifacts excluem fontes C geradas do jogo.
+
+## EXECUÇÃO ATUAL
+**TESTE FÍSICO PENDENTE**. Todos os PCs ARM64 executados e a contagem real registrada no iPhone com M7.61: NÃO MEDIDO. `cellFsOpen`, `cellFsRead`, PSARC e RSX: NÃO MEDIDO. A M7.60.1 não tem teste físico no kit. Prova física anterior M7.60: 7700 AOT, 124 distintas, 1830 despachos, 0 PPC interpretadas, stop 0x003E16E0 / 0xF821FF91, 0 guest FS open/read.
+
+## VALIDAR NO CI
+Executar **somente o workflow iniciado pelo push deste único commit** em AscensionRecomp. Conferir `m761-generation.log`, `m761-python.log`, `m761-final-attestation.log`, `m761-owner-batch.json`, `m41-executable-arch.txt` e `m78-owner-aot-linked-symbols.txt` no artifact. Sem a atestação, NÃO declarar lote compilado/linkado. O arquivo `m761-owner-batch.json` é atualizado após o link com totais autênticos, mas registro/execução guest permanecem NÃO MEDIDO.
+
+## TESTE FÍSICO — iPhone 17 Pro
+1. Instalar/assinar o IPA unsigned M7.61 segundo seu método habitual, sem alterar o arquivo GOWA.ELF.
+2. Carregar a mesma cópia original `GOWA.ELF` SHA-256 exato acima no app.
+3. Importar/permitir acesso à pasta NPUA80918 em Arquivos conforme as autorizações normais; evitar confundir importação HOST com `cellFsOpen`.
+4. Executar a inicialização do jogo em modo AOT ONLY, exportar TXT completo `AscensionRecomp-M7.61-NPUA80918-<data>.txt`. Capturar `EXECUÇÃO ATUAL`, `AOT_TRIAGE_JSON`, opcode ELF/RAM, `PC de parada`, `AOT_FIRST`, contadores guest FS e estado RSX.
+5. Comparar com M7.60: o gate principal é **passar 0x003E16E0 sem interpretar PPC**; se parar em outro PC, identificar opcode e semântica e trabalhar em lote, sem reduzir a meros contadores.
+
+## COMANDOS PRIVADOS, FORA DOS ARTIFACTS
+```bash
+sha256sum GOWA.ELF
+python3 tools/generate_m761_owner_batch.py --verify-elf GOWA.ELF --output /tmp/ppu_m761.c --report /tmp/m761-manifest.json
+python3 tools/m761_code_inventory.py --elf GOWA.ELF --output /tmp/m761-inventory.json
+```
+Próximo marco real: `cellFsOpen`/ `cellFsRead` invocados pelo guest com PC/FD/path/status/bytes efetivamente escritos. Depois PSARC e primeiro frame RSX/Metal do jogo. Sem prova física, não chamar o jogo de inicializado/jogável.

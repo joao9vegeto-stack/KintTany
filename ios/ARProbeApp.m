@@ -429,7 +429,7 @@ extern int ar_probe_rsx_texture_cache_mutation(unsigned swizzled,unsigned int ou
     [controller.view addSubview:panel];
     UILabel *header=[UILabel new];
     header.translatesAutoresizingMaskIntoConstraints=NO;
-    header.text=@"ASCENSIONRECOMP   ·   M7.60";
+    header.text=@"ASCENSIONRECOMP   ·   M7.61";
     header.textColor=[UIColor colorWithRed:0.73 green:0.87 blue:1 alpha:1];
     header.font=[UIFont systemFontOfSize:12 weight:UIFontWeightBold];
     header.textAlignment=NSTextAlignmentCenter;
@@ -762,10 +762,10 @@ extern int ar_probe_rsx_texture_cache_mutation(unsigned swizzled,unsigned int ou
   NSString *native=e&&[e[@"dispatches"] unsignedIntValue]?
     @"comprovado":@"não comprovado";
   NSMutableString *report=[NSMutableString stringWithFormat:
-    @"ASCENSIONRECOMP — ESQUEMA M7.60-v11\n"
+    @"ASCENSIONRECOMP — ESQUEMA M7.61-v11\n"
      "EXECUÇÃO ATUAL\n"
      "Branch=%s | Commit=%s | Build Actions=%s | Workflow ID=%s\n"
-     "App=M7.60 (binário 0.6.22/90 legado) | Runtime AOT ONLY | Relatório=v11\n"
+     "App=M7.61 (binário 0.6.22/90 legado) | Runtime AOT ONLY | Relatório=v11\n"
      "Tipo teste=%@ | Momento=%@\n"
      "ELF carregado=%@ | origem=%@\n"
      "AOT vinculadas=%@ entradas | origem=%@\n"
@@ -800,11 +800,13 @@ extern int ar_probe_rsx_texture_cache_mutation(unsigned swizzled,unsigned int ou
      fsOpen,fsRead];
   [report appendFormat:
     @"COMPARAÇÃO COM A BUILD ANTERIOR\n"
+     "M7.60.1 (CI Actions #236): compilação concluída, sem teste físico próprio; incremento de AOT=0.\\n"
+     "M7.60 (físico, referência): 7700 registradas, 124 distintas, 1830 despachos, parada 0x003E16E0.\\n"
      "M7.59 (teste físico 20261019-021525): AOT=7700 entradas;"
      " distintas=124; despachos=1830; PPC=0; limite=0;"
      " parada=0x003E16E0; opcode RAM=0xF821FF91 (ELF=RAM);"
      " último AOT=0x002C1700.\n"
-     "M7.60 AOT ONLY atual: AOT=%@; distintas=%@; despachos=%@; PPC=%@;"
+     "M7.61 AOT ONLY atual: AOT=%@; distintas=%@; despachos=%@; PPC=%@;"
      " limite=%@; parada=%@; opcode=%@; último AOT=%@.\n"
      "Dados ausentes=NÃO MEDIDO, não utilizar baseline para preencher.\n\n",
      val(@"aot"),val(@"unique"),val(@"dispatches"),val(@"fallback"),
@@ -864,7 +866,7 @@ extern int ar_probe_rsx_texture_cache_mutation(unsigned swizzled,unsigned int ou
     date.locale=[NSLocale localeWithLocaleIdentifier:@"en_US_POSIX"];
     date.dateFormat=@"yyyyMMdd-HHmmss";
     NSString *name=[NSString stringWithFormat:
-       @"AscensionRecomp-M7.60-NPUA80918-%@.txt",
+       @"AscensionRecomp-M7.61-NPUA80918-%@.txt",
        [date stringFromDate:[NSDate date]]];
     NSURL *docs=[[[NSFileManager defaultManager]
         URLsForDirectory:NSDocumentDirectory inDomains:NSUserDomainMask] firstObject];
@@ -1791,11 +1793,11 @@ extern int ar_probe_rsx_texture_cache_mutation(unsigned swizzled,unsigned int ou
        @"CALL_CANDIDATE é um destino de salto observado no ELF, NÃO"
         " uma função recompilada ou executada. Cobertura percentual do"
         " jogo ainda desconhecida. Nenhum RSX real demonstrado.\n"];
-    /* M7.60 trace productivity: first-visit order survives hot loops,
+    /* M7.61 trace productivity: first-visit order survives hot loops,
      * run-length recent trace records last transitions instead of last raw
      * 64 dispatches. All fields are copied from the iPhone PPU dispatcher. */
     [graphReport appendFormat:
-       @"\nM7.60 — TRIAGEM EXECUTÁVEL AOT (IPHONE, SEM INTERPRETADOR)\n"
+       @"\nM7.61 — TRIAGEM EXECUTÁVEL AOT (IPHONE, SEM INTERPRETADOR)\n"
         "PC PENDENTE=0x%08X | AOT imediatamente anterior=0x%08X\n"
         "CR=0x%08X XER=0x%08X | LR=0x%llX CTR=0x%llX\n"
         "r1=0x%llX r2/TOC=0x%llX r3=0x%llX\n"
@@ -1994,7 +1996,7 @@ extern int ar_probe_rsx_texture_cache_mutation(unsigned swizzled,unsigned int ou
                         ? frontierReport : nil;
     self.ppuBatchButton.enabled=(self.ppuBatchReport.length>0);
     self.ppuSummary=[NSString stringWithFormat:
-       @"ASCENSIONRECOMP M7.60 · NPUA80918\n"
+       @"ASCENSIONRECOMP M7.61 · NPUA80918\n"
         "AOT ARM64 NATIVO · FALLBACK PPC DESATIVADO\n"
         "Entradas AOT vinculadas: %u\n"
         "ELF: %@ · entrada 0x%08X\n"

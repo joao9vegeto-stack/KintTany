@@ -1,4 +1,4 @@
-name: AscensionRecomp M7.60 - actionable native AOT triage report
+name: AscensionRecomp M7.61 - native PPC64 batch AOT ARM64
 
 on:
   push:
@@ -731,6 +731,41 @@ jobs:
             -I upstream/runtime/ppu -I runtime \
             -c runtime/ppu_m759_generated.c -o m759-native-arm64.o
           xcrun nm -g m759-native-arm64.o | grep -Fq '_ar_m759_native_002c1378'
+      - name: M7.61 lift and verify multi-span owner native AOT ARM64
+        run: |
+          set -euo pipefail
+          python3 tools/generate_m761_owner_batch.py --output runtime/ppu_m761_generated.c --report m761-owner-batch.json | tee m761-generation.log
+          python3 -m unittest discover -s tests -p test_m761_owner_batch.py -v 2>&1 | tee m761-python.log
+          grep -Fq 'Ran 4 tests' m761-python.log
+          clang -std=c11 -O2 -Wall -Wextra -Werror -Wno-unused-label -Wno-unused-function -Wno-parentheses-equality \
+            -I upstream/runtime/ppu -I runtime \
+            -c runtime/ppu_m761_generated.c -o m761-native-host.o
+          nm m761-native-host.o | grep -Fq 'ar_m761_native_003e16e0'
+          # Isolate the exact owner 0x003E16E0 native function for a host
+          # semantic regression; do not link unrelated GOWA PPC function code.
+          python3 - <<'PY'
+          import re
+          from pathlib import Path
+          import sys
+          sys.path.insert(0, "tools")
+          from ppu_cfg_lifter import PROLOGUE
+          src=Path("runtime/ppu_m761_generated.c").read_text()
+          match=re.search(r"(?m)^int ar_m761_native_003e16e0\(ppu_ctx \*c\) \{.*?^\}",src,re.S|re.M)
+          assert match, "missing original owner guest stop function"
+          Path("m761-stop-only.c").write_text('#include "ppu_bridge.h"\n'+PROLOGUE+'\n'+match.group(0)+'\n')
+          PY
+          clang -std=c11 -O2 -Wall -Wextra -Werror -Wno-unused-label \
+            -I upstream/runtime/ppu -I runtime \
+            m761-stop-only.c tests/host_m761_stop.c -o m761-stop-host
+          ./m761-stop-host 2>&1 | tee m761-stop-host.log
+          grep -Fq 'M7.61 PPC STOP native host:' m761-stop-host.log
+          sdk="$(xcrun --sdk iphoneos --show-sdk-path)"
+          xcrun --sdk iphoneos clang -target arm64-apple-ios17.0 -isysroot "$sdk" \
+            -std=c11 -O2 -Wall -Wextra -Werror -Wno-unused-label -Wno-unused-function -Wno-parentheses-equality \
+            -I upstream/runtime/ppu -I runtime \
+            -c runtime/ppu_m761_generated.c -o m761-native-arm64.o
+          xcrun nm -g m761-native-arm64.o | grep -Fq '_ar_m761_native_003e16e0'
+          xcrun nm -g m761-native-arm64.o | grep -Fq '_ar_m761_register_owner'
       - name: M7.60 prove bounded native AOT flight recorder, hot loop RLE and machine report
         run: |
           set -euo pipefail
@@ -1552,12 +1587,21 @@ jobs:
           echo 'Metal fixed pipeline MSL compiled on device; game shaders NOT supported without translator; user test needed' > m45-status.txt
           echo 'Geometry proof: guest-like NV4097 INLINE_ARRAY -> fixed VS/PS pipeline -> framebuffer raster -> center pixel GPU readback. Requires device testing; not guest game shaders.' > m44-status.txt
           echo 'M4.3 synthetic RSX NV4097 register writes -> GPU engine clear & flip, readback check. On-device screenshot required.' > m43-status.txt
+      - name: M7.61 attest compiled ARM64 and linked AOT in FINAL IPA
+        run: |
+          set -euo pipefail
+          xcrun nm -g ios-probe/ppu_m761_generated.o > m761-object-nm.txt
+          python3 tools/m761_attest_link.py \
+            --manifest m761-owner-batch.json \
+            --object-nm m761-object-nm.txt \
+            --final-nm m78-owner-aot-linked-symbols.txt \
+            --lipo m41-executable-arch.txt | tee m761-final-attestation.log
       - name: Upload M2 evidence - runtime + synthetic PPU proof
 
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: AscensionRecomp-M7.60-AOT-TRIAGE-AppleARM64
+          name: AscensionRecomp-M7.61-BULK-AOT-AppleARM64
           if-no-files-found: warn
           retention-days: 14
           path: |
@@ -1818,8 +1862,12 @@ jobs:
             m760-offline-python.log
             m760-triage-host.log
             m760-triage-arm64.o
-            runtime/ppu_m759_generated.c
-            runtime/ppu_m758_generated.c
+            m761-owner-batch.json
+            m761-generation.log
+            m761-python.log
+            m761-object-nm.txt
+            m761-final-attestation.log
+            m761-stop-host.log
             m756-native-python.log
             m756-divloop-host.log
             m756-stop-evidence-host.log

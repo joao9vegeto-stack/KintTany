@@ -187,6 +187,13 @@ python3 tools/generate_m759_owner_aot.py --output runtime/ppu_m759_generated.c
 xcrun --sdk iphoneos clang -target arm64-apple-ios17.0 -isysroot "$SDK" \
     -std=c11 -O2 -Wall -Wextra -Werror -I upstream/runtime/ppu -I runtime \
     -c runtime/ppu_m759_generated.c -o ios-probe/ppu_m759_generated.o
+# M7.61: a whole authenticated multi-span guest AOT batch; no PPC interpreter.
+python3 tools/generate_m761_owner_batch.py --output runtime/ppu_m761_generated.c --report m761-owner-batch.json
+xcrun --sdk iphoneos clang -target arm64-apple-ios17.0 -isysroot "$SDK" \
+    -std=c11 -O2 -Wall -Wextra -Werror -Wno-unused-label -Wno-unused-function -Wno-parentheses-equality \
+    -I upstream/runtime/ppu -I runtime \
+    -c runtime/ppu_m761_generated.c -o ios-probe/ppu_m761_generated.o
+xcrun nm -g ios-probe/ppu_m761_generated.o | grep -Fq '_ar_m761_native_003e16e0'
 # M7.56: capture live guest memory vs PT_LOAD file bytes, not fallback counters.
 xcrun --sdk iphoneos clang -target arm64-apple-ios17.0 -isysroot "$SDK" \
     -std=c11 -O2 -Wall -Wextra -Werror -I upstream/runtime/ppu -I runtime \
@@ -316,7 +323,7 @@ xcrun --sdk iphoneos clang++ -target arm64-apple-ios17.0 \
     ios-probe/ppu_m748_native_vcfsx.o \
     ios-probe/ppu_m749_native_frsp.o \
     ios-probe/ppu_m750_native_path.o \
-    ios-probe/ppu_m751_vsubfp.o ios-probe/ppu_m752_vsldoi.o ios-probe/ppu_m753_native_vectorfp.o ios-probe/ppu_m754_native_fcmp.o ios-probe/ppu_m756_native_divloop.o ios-probe/ppu_m757_native_batch.o ios-probe/ppu_m758_generated.o ios-probe/ppu_m759_generated.o ios-probe/ppu_m756_stop_evidence.o ios-probe/ppu_guest_fs.o \
+    ios-probe/ppu_m751_vsubfp.o ios-probe/ppu_m752_vsldoi.o ios-probe/ppu_m753_native_vectorfp.o ios-probe/ppu_m754_native_fcmp.o ios-probe/ppu_m756_native_divloop.o ios-probe/ppu_m757_native_batch.o ios-probe/ppu_m758_generated.o ios-probe/ppu_m759_generated.o ios-probe/ppu_m761_generated.o ios-probe/ppu_m756_stop_evidence.o ios-probe/ppu_guest_fs.o \
     ${GOWA2_OBJECTS[@]+"${GOWA2_OBJECTS[@]}"} \
     ios-probe/ppu_m717_graph.o \
     ${M711_OBJECTS[@]+"${M711_OBJECTS[@]}"} \
@@ -350,6 +357,8 @@ grep -Eq ' [Tt] _ar_m757_register_owner$' m78-owner-aot-linked-symbols.txt
 grep -Eq ' [Tt] _ar_m758_register_owner$' m78-owner-aot-linked-symbols.txt
 grep -Eq ' [Tt] _ar_m759_register_owner$' m78-owner-aot-linked-symbols.txt
 grep -Eq ' [Tt] _ar_m759_native_002c1378$' m78-owner-aot-linked-symbols.txt
+grep -Eq ' [Tt] _ar_m761_native_003e16e0$' m78-owner-aot-linked-symbols.txt
+grep -Eq ' [Tt] _ar_m761_register_owner$' m78-owner-aot-linked-symbols.txt
 grep -Eq ' [Tt] _ar_m758_native_003c5110$' m78-owner-aot-linked-symbols.txt
 grep -Eq ' [Tt] _ar_m757_native_003c5050$' m78-owner-aot-linked-symbols.txt
 grep -Eq ' [Tt] _ar_m757_native_003c50c8$' m78-owner-aot-linked-symbols.txt
