@@ -17,6 +17,12 @@ static uint16_t aot_slot[AR_AOT_INDEX_SIZE];
 static uint8_t trace_seen[MAX_FUNCS];
 static uint32_t trace_ring[AR_AOT_TRACE_PCS],trace_total,trace_unique;
 static uint32_t trace_hle,trace_pending,trace_budget;
+/* Runtime-only bounded triage: no allocations or PPC decoder in dispatch. */
+static uint32_t triage_first[AR_AOT_TRIAGE_FIRST],triage_first_count;
+static uint32_t triage_run_pcs[AR_AOT_TRIAGE_RUNS];
+static uint32_t triage_run_hits[AR_AOT_TRIAGE_RUNS],triage_run_total;
+static uint32_t triage_stop_prev,triage_stop_cr,triage_stop_xer;
+static uint64_t triage_stop_lr,triage_stop_ctr,triage_stop_r1,triage_stop_r2,triage_stop_r3;
 /* Experimental signed PPC fallback. No JIT, never register as native AOT. */
 static const uint8_t *fb_elf;
 static ar_ppc_fallback_fn fb_eval;
@@ -72,6 +78,24 @@ void ar_trace_snapshot(ar_aot_trace *out) {
  const uint32_t start=trace_total-out->trace_count;
  for(uint32_t i=0;i<out->trace_count;i++)
    out->trace_pcs[i]=trace_ring[(start+i)&(AR_AOT_TRACE_PCS-1u)];
+ out->first_total=trace_unique;
+ out->first_count=triage_first_count;
+ for(uint32_t i=0;i<triage_first_count;i++)
+   out->first_pcs[i]=triage_first[i];
+ out->run_total=triage_run_total;
+ out->run_count=triage_run_total<AR_AOT_TRIAGE_RUNS?
+                triage_run_total:AR_AOT_TRIAGE_RUNS;
+ const uint32_t rstart=triage_run_total-out->run_count;
+ for(uint32_t i=0;i<out->run_count;i++){
+   const uint32_t at=(rstart+i)&(AR_AOT_TRIAGE_RUNS-1u);
+   out->run_pcs[i]=triage_run_pcs[at];
+   out->run_repetitions[i]=triage_run_hits[at];
+ }
+ out->stop_previous_aot=triage_stop_prev;
+ out->stop_cr=triage_stop_cr;out->stop_xer=triage_stop_xer;
+ out->stop_lr=triage_stop_lr;out->stop_ctr=triage_stop_ctr;
+ out->stop_r1=triage_stop_r1;out->stop_r2=triage_stop_r2;
+ out->stop_r3=triage_stop_r3;
 }
 static struct {uint32_t stub,nid;} imports[MAX_IMPORTS];
 static size_t nimports;
@@ -111,6 +135,12 @@ void ar_bridge_shutdown(void){
   free(mem);mem=0;mem_size=0;memset(extra,0,sizeof(extra));nextra=0;nfunc=0;memset(aot_slot,0,sizeof(aot_slot));
  memset(trace_seen,0,sizeof(trace_seen));memset(trace_ring,0,sizeof(trace_ring));
  trace_total=0;trace_unique=0;trace_hle=0;trace_pending=0;trace_budget=0;
+ triage_first_count=triage_run_total=0;
+ memset(triage_first,0,sizeof(triage_first));
+ memset(triage_run_pcs,0,sizeof(triage_run_pcs));
+ memset(triage_run_hits,0,sizeof(triage_run_hits));
+ triage_stop_prev=triage_stop_cr=triage_stop_xer=0;
+ triage_stop_lr=triage_stop_ctr=triage_stop_r1=triage_stop_r2=triage_stop_r3=0;
  nimports=0;nhandlers=0;nsyscalls=0;missing_nid=0;missing_syscall=0;fault=0;missing=0;budget=0;depth=0;
  fb_elf=0;fb_eval=0;fb_elf_size=0;fb_cap=0;fb_steps=0;fb_pc=0;fb_op=0;fb_bad_pc=0;fb_bad_op=0;
  fb_callsite_pc=0;fb_call_target=0;
@@ -353,11 +383,33 @@ static int dispatch(ppu_context *c,uint64_t pc){
        * here. A static ELF branch can target any PC; it is NEVER executed
        * by decoding PPC at runtime. */
       missing=(uint32_t)pc;trace_pending=(uint32_t)pc;
+      /* Snapshot only metadata, never guest data or game assets. This is
+       * a real missing ARM64 entry, not a fabricated PPC opcode. */
+      triage_stop_prev=trace_total?
+        trace_ring[(trace_total-1u)&(AR_AOT_TRACE_PCS-1u)]:0u;
+      triage_stop_cr=c->cr;triage_stop_xer=c->xer;
+      triage_stop_lr=c->lr;triage_stop_ctr=c->ctr;
+      triage_stop_r1=c->gpr[1];triage_stop_r2=c->gpr[2];
+      triage_stop_r3=c->gpr[3];
       result=fault=AR_UNRESOLVED;break;
     }
     trace_ring[trace_total & (AR_AOT_TRACE_PCS-1u)]=(uint32_t)pc;
     trace_total++;
-    if(!trace_seen[found_index]){trace_seen[found_index]=1u;trace_unique++;}
+    if(!trace_seen[found_index]){
+      trace_seen[found_index]=1u;trace_unique++;
+      if(triage_first_count<AR_AOT_TRIAGE_FIRST)
+        triage_first[triage_first_count++]=(uint32_t)pc;
+    }
+    if(triage_run_total &&
+       triage_run_pcs[(triage_run_total-1u)&(AR_AOT_TRIAGE_RUNS-1u)]==(uint32_t)pc){
+      const uint32_t slot=(triage_run_total-1u)&(AR_AOT_TRIAGE_RUNS-1u);
+      if(triage_run_hits[slot]!=UINT32_MAX)triage_run_hits[slot]++;
+    }else{
+      const uint32_t slot=triage_run_total&(AR_AOT_TRIAGE_RUNS-1u);
+      triage_run_pcs[slot]=(uint32_t)pc;
+      triage_run_hits[slot]=1u;
+      triage_run_total++;
+    }
     int status=fn(c);
     if(fault){result=fault;break;}
     if(status==AR_TAIL){pc=c->cia;continue;}
@@ -375,6 +427,12 @@ int ar_run(ppu_context *c,uint32_t pc,uint32_t ticks){
   fault=0;missing=0;missing_nid=0;missing_syscall=0;budget=ticks;
   memset(trace_seen,0,sizeof(trace_seen));memset(trace_ring,0,sizeof(trace_ring));
   trace_total=0;trace_unique=0;trace_hle=0;trace_pending=0;trace_budget=ticks;
+  triage_first_count=triage_run_total=0;
+  memset(triage_first,0,sizeof(triage_first));
+  memset(triage_run_pcs,0,sizeof(triage_run_pcs));
+  memset(triage_run_hits,0,sizeof(triage_run_hits));
+  triage_stop_prev=triage_stop_cr=triage_stop_xer=0;
+  triage_stop_lr=triage_stop_ctr=triage_stop_r1=triage_stop_r2=triage_stop_r3=0;
   fb_steps=0;fb_pc=0;fb_op=0;fb_bad_pc=0;fb_bad_op=0;
   fb_callsite_pc=0;fb_call_target=0;
   lv2_pc_pending=0;lv2_calls=0;lv2_last_number=0;lv2_last_pc=0;

@@ -429,7 +429,7 @@ extern int ar_probe_rsx_texture_cache_mutation(unsigned swizzled,unsigned int ou
     [controller.view addSubview:panel];
     UILabel *header=[UILabel new];
     header.translatesAutoresizingMaskIntoConstraints=NO;
-    header.text=@"ASCENSIONRECOMP   ·   M7.59";
+    header.text=@"ASCENSIONRECOMP   ·   M7.60";
     header.textColor=[UIColor colorWithRed:0.73 green:0.87 blue:1 alpha:1];
     header.font=[UIFont systemFontOfSize:12 weight:UIFontWeightBold];
     header.textAlignment=NSTextAlignmentCenter;
@@ -762,10 +762,10 @@ extern int ar_probe_rsx_texture_cache_mutation(unsigned swizzled,unsigned int ou
   NSString *native=e&&[e[@"dispatches"] unsignedIntValue]?
     @"comprovado":@"não comprovado";
   NSMutableString *report=[NSMutableString stringWithFormat:
-    @"ASCENSIONRECOMP — ESQUEMA M7.59-v10\n"
+    @"ASCENSIONRECOMP — ESQUEMA M7.60-v11\n"
      "EXECUÇÃO ATUAL\n"
      "Branch=%s | Commit=%s | Build Actions=%s | Workflow ID=%s\n"
-     "App=M7.59 (binário 0.6.22/90 legado) | Runtime AOT ONLY | Relatório=v10\n"
+     "App=M7.60 (binário 0.6.22/90 legado) | Runtime AOT ONLY | Relatório=v11\n"
      "Tipo teste=%@ | Momento=%@\n"
      "ELF carregado=%@ | origem=%@\n"
      "AOT vinculadas=%@ entradas | origem=%@\n"
@@ -800,11 +800,11 @@ extern int ar_probe_rsx_texture_cache_mutation(unsigned swizzled,unsigned int ou
      fsOpen,fsRead];
   [report appendFormat:
     @"COMPARAÇÃO COM A BUILD ANTERIOR\n"
-     "M7.58 (teste físico 20261019-013246): AOT=7699 entradas;"
-     " distintas=108; despachos=1519; PPC=0; limite=0;"
-     " parada=0x002C1378; opcode RAM=0x60000000 (ELF=RAM);"
-     " último AOT=0x003C5390.\n"
-     "M7.59 AOT ONLY atual: AOT=%@; distintas=%@; despachos=%@; PPC=%@;"
+     "M7.59 (teste físico 20261019-021525): AOT=7700 entradas;"
+     " distintas=124; despachos=1830; PPC=0; limite=0;"
+     " parada=0x003E16E0; opcode RAM=0xF821FF91 (ELF=RAM);"
+     " último AOT=0x002C1700.\n"
+     "M7.60 AOT ONLY atual: AOT=%@; distintas=%@; despachos=%@; PPC=%@;"
      " limite=%@; parada=%@; opcode=%@; último AOT=%@.\n"
      "Dados ausentes=NÃO MEDIDO, não utilizar baseline para preencher.\n\n",
      val(@"aot"),val(@"unique"),val(@"dispatches"),val(@"fallback"),
@@ -864,7 +864,7 @@ extern int ar_probe_rsx_texture_cache_mutation(unsigned swizzled,unsigned int ou
     date.locale=[NSLocale localeWithLocaleIdentifier:@"en_US_POSIX"];
     date.dateFormat=@"yyyyMMdd-HHmmss";
     NSString *name=[NSString stringWithFormat:
-       @"AscensionRecomp-M7.59-NPUA80918-%@.txt",
+       @"AscensionRecomp-M7.60-NPUA80918-%@.txt",
        [date stringFromDate:[NSDate date]]];
     NSURL *docs=[[[NSFileManager defaultManager]
         URLsForDirectory:NSDocumentDirectory inDomains:NSUserDomainMask] firstObject];
@@ -1791,10 +1791,69 @@ extern int ar_probe_rsx_texture_cache_mutation(unsigned swizzled,unsigned int ou
        @"CALL_CANDIDATE é um destino de salto observado no ELF, NÃO"
         " uma função recompilada ou executada. Cobertura percentual do"
         " jogo ainda desconhecida. Nenhum RSX real demonstrado.\n"];
-    [graphReport appendString:@"Sequência recente de AOTs nativos executados:\n"];
-    for(uint32_t ti=0;ti<measured.trace_count;ti++){
-       [graphReport appendFormat:@"AOT_EXEC 0x%08X\n",measured.trace_pcs[ti]];
+    /* M7.60 trace productivity: first-visit order survives hot loops,
+     * run-length recent trace records last transitions instead of last raw
+     * 64 dispatches. All fields are copied from the iPhone PPU dispatcher. */
+    [graphReport appendFormat:
+       @"\nM7.60 — TRIAGEM EXECUTÁVEL AOT (IPHONE, SEM INTERPRETADOR)\n"
+        "PC PENDENTE=0x%08X | AOT imediatamente anterior=0x%08X\n"
+        "CR=0x%08X XER=0x%08X | LR=0x%llX CTR=0x%llX\n"
+        "r1=0x%llX r2/TOC=0x%llX r3=0x%llX\n"
+        "AOT primeiras visitas=%u/%u (capacidade %u)\n"
+        "Transições compactadas=%u/%u (últimas %u)\n",
+       measured.unresolved_pc,measured.stop_previous_aot,
+       measured.stop_cr,measured.stop_xer,
+       (unsigned long long)measured.stop_lr,
+       (unsigned long long)measured.stop_ctr,
+       (unsigned long long)measured.stop_r1,
+       (unsigned long long)measured.stop_r2,
+       (unsigned long long)measured.stop_r3,
+       measured.first_count,measured.first_total,AR_AOT_TRIAGE_FIRST,
+       measured.run_count,measured.run_total,AR_AOT_TRIAGE_RUNS];
+    NSMutableArray *firstVisits=[NSMutableArray arrayWithCapacity:measured.first_count];
+    for(uint32_t i=0;i<measured.first_count;i++){
+       NSString *pc=[NSString stringWithFormat:@"0x%08X",measured.first_pcs[i]];
+       [firstVisits addObject:pc];
+       [graphReport appendFormat:@"AOT_FIRST %u %@\n",i,pc];
     }
+    NSMutableArray *runs=[NSMutableArray arrayWithCapacity:measured.run_count];
+    for(uint32_t i=0;i<measured.run_count;i++){
+       NSString *pc=[NSString stringWithFormat:@"0x%08X",measured.run_pcs[i]];
+       NSNumber *times=@(measured.run_repetitions[i]);
+       [runs addObject:@{@"pc":pc,@"hits":times}];
+       [graphReport appendFormat:@"AOT_RUN %@ x%@\n",pc,times];
+    }
+    NSDictionary *triage=@{
+      @"schema":@"ascension-aot-triage-1",
+      @"source":@"iphone-native-ppu-dispatcher",
+      @"first_aot":firstVisits,@"recent_runs":runs,
+      @"missing_pc":[NSString stringWithFormat:@"0x%08X",measured.unresolved_pc],
+      @"previous_aot":[NSString stringWithFormat:@"0x%08X",measured.stop_previous_aot],
+      @"cr":@(measured.stop_cr),@"xer":@(measured.stop_xer),
+      @"lr":@(measured.stop_lr),@"ctr":@(measured.stop_ctr),
+      @"r1":@(measured.stop_r1),@"r2":@(measured.stop_r2),
+      @"r3":@(measured.stop_r3),
+      @"linked_aot":@(native[5]),
+      @"distinct_aot":@(measured.unique_aot),
+      @"aot_dispatches":@(measured.aot_dispatches),
+      @"fallback_steps":@(measured.fallback_steps),
+      @"first_truncated":@(measured.first_total>measured.first_count),
+      @"runs_truncated":@(measured.run_total>measured.run_count),
+      @"guest_fs_open_calls":@(fsMeasured.open_calls),
+      @"guest_fs_read_calls":@(fsMeasured.read_calls),
+      @"guest_fs_positive_bytes":@(fsMeasured.bytes_read)};
+    NSData *triageData=[NSJSONSerialization dataWithJSONObject:triage
+                               options:NSJSONWritingSortedKeys error:NULL];
+    if(triageData.length){
+      NSString *oneLine=[[NSString alloc] initWithData:triageData
+                                              encoding:NSUTF8StringEncoding];
+      if(oneLine.length)[graphReport appendFormat:@"AOT_TRIAGE_JSON=%@\n",oneLine];
+    }
+    /* Keep a short raw tail solely for backward compatibility. */
+    [graphReport appendString:@"Últimos até 16 despachos brutos de AOT:\n"];
+    const uint32_t rawStart=measured.trace_count>16u?measured.trace_count-16u:0u;
+    for(uint32_t ti=rawStart;ti<measured.trace_count;ti++)
+       [graphReport appendFormat:@"AOT_EXEC 0x%08X\n",measured.trace_pcs[ti]];
     /* M7.20 separate experimental PPC fallback metrics; these do not
      * affect AOT registered/executed counters. Unknown ISA must stop. */
     [graphReport appendFormat:
@@ -1935,8 +1994,8 @@ extern int ar_probe_rsx_texture_cache_mutation(unsigned swizzled,unsigned int ou
                         ? frontierReport : nil;
     self.ppuBatchButton.enabled=(self.ppuBatchReport.length>0);
     self.ppuSummary=[NSString stringWithFormat:
-       @"ASCENSIONRECOMP M7.59 · NPUA80918\n"
-        "AOT ARM64 + FALLBACK PPC EXPERIMENTAL\n"
+       @"ASCENSIONRECOMP M7.60 · NPUA80918\n"
+        "AOT ARM64 NATIVO · FALLBACK PPC DESATIVADO\n"
         "Entradas AOT vinculadas: %u\n"
         "ELF: %@ · entrada 0x%08X\n"
         "Execução nativa: %d · TLS r13=0x%08X\n"

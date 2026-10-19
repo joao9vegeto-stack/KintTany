@@ -34,13 +34,13 @@ class PS3ProcessEntry(unittest.TestCase):
                 'M6.7.5 ELF PT_TLS process-entry ABI and negative tests PASS'):
    self.assertIn(token,T)
  def test_ui_build(self):
-  for token in ('ASCENSIONRECOMP   ·   M7.59',
+  for token in ('ASCENSIONRECOMP   ·   M7.60',
                 'Entrada LV2: PT_TLS presente=',
                 'ar_ppu_bootstrap_fortyeight_trace_m674('):
    self.assertIn(token,U)
   for token in ('tests/host_m675_process_entry.c',
                 'm675-entry-host.log',
-                'AscensionRecomp-M7.59-NATIVE-ONLY-BATCH-AppleARM64'):
+                'AscensionRecomp-M7.60-AOT-TRIAGE-AppleARM64'):
    self.assertIn(token,W)
   self.assertIn('<string>90</string>',P)
 if __name__=="__main__":unittest.main()

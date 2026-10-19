@@ -1,4 +1,4 @@
-name: AscensionRecomp M7.59 - authenticated 42-PPC native call + branch
+name: AscensionRecomp M7.60 - actionable native AOT triage report
 
 on:
   push:
@@ -731,6 +731,23 @@ jobs:
             -I upstream/runtime/ppu -I runtime \
             -c runtime/ppu_m759_generated.c -o m759-native-arm64.o
           xcrun nm -g m759-native-arm64.o | grep -Fq '_ar_m759_native_002c1378'
+      - name: M7.60 prove bounded native AOT flight recorder, hot loop RLE and machine report
+        run: |
+          set -euo pipefail
+          python3 -m unittest discover -s tests -p test_m760_trace_triage.py -v 2>&1 | tee m760-triage-python.log
+          python3 -m unittest discover -s tests -p test_m760_offline_triage.py -v 2>&1 | tee m760-offline-python.log
+          clang -std=c11 -O2 -Wall -Wextra -Werror -fsanitize=undefined \
+            -DASCENSION_NATIVE_ONLY=1 -I upstream/runtime/ppu -I runtime \
+            runtime/ppu_bridge.c tests/host_m760_trace_triage.c \
+            -o m760-triage-host
+          ./m760-triage-host | tee m760-triage-host.log
+          grep -Fq 'M7.60 AOT flight recorder:' m760-triage-host.log
+          sdk="$(xcrun --sdk iphoneos --show-sdk-path)"
+          xcrun --sdk iphoneos clang -target arm64-apple-ios17.0 -isysroot "$sdk" \
+            -std=c17 -O2 -Werror -DASCENSION_NATIVE_ONLY=1 \
+            -I upstream/runtime/ppu -I runtime \
+            -c runtime/ppu_bridge.c -o m760-triage-arm64.o
+          xcrun nm -g m760-triage-arm64.o | grep -Fq '_ar_trace_snapshot'
       - name: M5.0 fetch pinned open source shader compiler sources
         run: |
           set -euo pipefail
@@ -1540,7 +1557,7 @@ jobs:
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: AscensionRecomp-M7.59-NATIVE-ONLY-BATCH-AppleARM64
+          name: AscensionRecomp-M7.60-AOT-TRIAGE-AppleARM64
           if-no-files-found: warn
           retention-days: 14
           path: |
@@ -1797,6 +1814,10 @@ jobs:
             m759-python.log
             m759-host.log
             m759-native-arm64.o
+            m760-triage-python.log
+            m760-offline-python.log
+            m760-triage-host.log
+            m760-triage-arm64.o
             runtime/ppu_m759_generated.c
             runtime/ppu_m758_generated.c
             m756-native-python.log

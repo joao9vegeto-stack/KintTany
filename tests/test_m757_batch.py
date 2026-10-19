@@ -31,8 +31,8 @@ class M757(unittest.TestCase):
   self.assertNotIn('    ios-probe/ppu_m720_fallback.o \\',build)
  def test_ui_physically_sourced_not_fake_FS(self):
   ui=(ROOT/"ios/ARProbeApp.m").read_text()
-  self.assertIn("App=M7.59",ui)
-  self.assertIn("M7.58 (teste físico",ui)
+  self.assertIn("App=M7.60",ui)
+  self.assertIn("M7.59 (teste físico",ui)
   self.assertIn("ELF versus RAM guest",ui)
   self.assertIn("cellFsRead com bytes positivos",ui)
   self.assertIn("ownerStop.guest_word",ui)

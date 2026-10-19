@@ -37,6 +37,8 @@ size_t ar_registered_count(void);
  * causing loader=-38 before any AOT executed. Never remove the bound. */
 #define AR_PPC_FALLBACK_MAX_STEPS 16384u
 #define AR_AOT_TRACE_PCS 64u
+#define AR_AOT_TRIAGE_FIRST 256u
+#define AR_AOT_TRIAGE_RUNS 128u
 #define AR_FALLBACK_TRACE_PCS 32u
 typedef struct {
     uint32_t aot_dispatches, unique_aot, unresolved_pc;
@@ -60,6 +62,14 @@ typedef struct {
     /* M7.29 actual PPC fallback FP steps; not native AOT. */
     uint32_t fp_loads,fp_stores,fp_converts,fp_divides,fp_last_pc;
     uint32_t lv2_timezone_completed; /* M7.33: actual iPhone LV2 144 success count */
+    /* M7.60: append-only telemetry (no PPC interpretation).
+     * First appearances survive a hot loop, and run-length entries keep
+     * the last 128 TRANSITIONS rather than just 64 raw dispatches. */
+    uint32_t first_count, first_total, first_pcs[AR_AOT_TRIAGE_FIRST];
+    uint32_t run_count, run_total;
+    uint32_t run_pcs[AR_AOT_TRIAGE_RUNS],run_repetitions[AR_AOT_TRIAGE_RUNS];
+    uint32_t stop_previous_aot, stop_cr, stop_xer;
+    uint64_t stop_lr, stop_ctr, stop_r1, stop_r2, stop_r3;
 } ar_aot_trace;
 void ar_trace_snapshot(ar_aot_trace *out);
 /* Experimental signed non-JIT fallback. Attach the exact owner ELF ONLY
