@@ -1,0 +1,12 @@
+ASCENSIONRECOMP M7.61.2 — CONTINUITY
+
+ONLY BRANCH AscensionRecomp, REPO joao9vegeto-stack/KintTany.
+BASE COMMIT 0d398867eb4a2c4102b061b0b387dd0df8693e4e.
+Actions #238 failed ONLY on unused generic helpers -Wunused-function in isolated native host C, not in guest PPC interpretation.
+415 tests PASS; 26/26 spans and 739 genuine PPC words lifted, whole generated C compiled for host; ARM64 and IPA not reached.
+M7.61.2: -Wno-unused-function only on m761-stop-only.c compilation, retains -Werror, full C generation, explicit ARM64 compile, Mach-O proof and guest stop semantics test.
+Architecture native PPC64->static C->Apple ARM64, NO runtime PPC interpreter/JIT/fallback.
+Original GOWA.ELF SHA256 4bf75c897b82d1beb25514cbadaff3d03e1b0c7bf849fa5d289be4f9183462b5.
+M7.60 physical historical: 7700 AOT, 124 unique executed, 1830 dispatches, zero interpreted, stop 0x003E16E0 opcode F821FF91; zero real guest cellFsOpen/cellFsRead proved.
+EXECUÇÃO ATUAL: arm64, Mach-O, IPA, distinct iPhone PCs/guest FS: NÃO MEDIDO until CI/device. TESTE FÍSICO PENDENTE.
+Check next single workflow after one commit, verify 415 suite, m761-stop-host, m761-native-arm64, final m761-attestation, ipa SHA256 and artifact. If CI fails, do NOT call IPA ready.

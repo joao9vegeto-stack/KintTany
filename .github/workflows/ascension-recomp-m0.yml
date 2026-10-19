@@ -754,7 +754,9 @@ jobs:
           assert match, "missing original owner guest stop function"
           Path("m761-stop-only.c").write_text('#include "ppu_bridge.h"\n'+PROLOGUE+'\n'+match.group(0)+'\n')
           PY
-          clang -std=c11 -O2 -Wall -Wextra -Werror -Wno-unused-label \
+          # Isolated original guest function does not call the generic rotate
+          # helpers; retain Werror for all other warnings, not ISA suppression.
+          clang -std=c11 -O2 -Wall -Wextra -Werror -Wno-unused-label -Wno-unused-function \
             -I upstream/runtime/ppu -I runtime \
             m761-stop-only.c tests/host_m761_stop.c -o m761-stop-host
           ./m761-stop-host 2>&1 | tee m761-stop-host.log
