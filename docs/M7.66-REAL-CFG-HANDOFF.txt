@@ -1,0 +1,96 @@
+ASCENSIONRECOMP — M7.66 HANDOFF (19/10/2026)
+BASE: joao9vegeto-stack/KintTany, exclusivamente branch AscensionRecomp.
+God of War: Ascension NPUA80918, PORT NATIVO PPC64->ARM64 (NÃO RPCS3).
+Sem modificar main/outros ramos; sem ELF, SELF, RAP, PSARC, assets nem chaves no GitHub/CI/IPA.
+ELF canônico "GOWA.ELF", recebido como GOWA(8).ELF, tamanho 8.717.136 B.
+SHA256 original = 4bf75c897b82d1beb25514cbadaff3d03e1b0c7bf849fa5d289be4f9183462b5.
+
+PROVENIÊNCIA / BASE FÍSICA REAL:
+M7.64.1 / Action #249 / commit d358c133...: 8454 AOT registradas, 136 distintas,
+1894 despachos, parada 0x00539308; PPC interpretadas=0.
+M7.65.0 / RELATÓRIO FÍSICO ENVIADO PELO USUÁRIO: commit
+eecda5b1bc3dd7250b1ebd4330d74c1581249a92, Actions #251,
+App 7.65.0, build 7650 (NÃO é Actions #252).
+8472 AOT registradas, 142 distintas executadas, 1900 despachos,
+parada 0x005394E8, opcode 0x8122A864, último AOT=0x00539604,
+CR=0x22000042, XER=0, LR=0x00539608, CTR=0x00539378,
+r1=0x00A87C20, r2/TOC=0x0083F2B0, r3=0x00A38A3C.
+ELF e RAM guest IGUAIS para 28 bytes em 0x005394E8,
+opcodes originais iniciando 8122A864 7C0802A6 F821FF91 F8010080.
+Delta físico M7.64.1->M7.65.0: +18 registradas, +6 distintas, +6 despachos.
+AOT-only, 0 instruções PPC interpretadas, guest result=-3.
+USRDIR/PARAM.SFO 4 bytes foi leitura HOST, não call guest cellFsRead.
+cellFsOpen/Read=0/0 e bytes=0; RSX/PSARC original/gameplay NÃO COMPROVADOS.
+O código da versão 7.65.0 Actions #252, commit 34516f1a..., foi build
+posteriormente verificado SUCCESS. NÃO misturar identidade do app #251
+testado no iPhone com a execução #252 e sua IPA distinta.
+
+LIFT M7.66 — ANÁLISE EM LOTE EFETUADA LOCALMENTE, SUJEITA A CI:
+SHA256 GOWA.ELF CANÔNICO confirmado via arquivo carregado offline.
+Segmento PT_LOAD executável VA 0x00010000 p_offset 0x0 filesz 0x80E468.
+0x005394E8: 0x8122A864 = lwz r9,-0x579C(r2);
+r2 físico 0x0083F2B0 => EA=0x00839B14;
+dado guest big-endian proveniente do ELF original: 0x00A389C8.
+A RAM guest nessa EA não foi medida no log; NÃO presumir que tem o mesmo
+valor no iPhone sem instrumentação específica.
+0x00539508: 0x4813057D é BL 0x00669A84, LR retorno 0x0053950C.
+0x00669A84 está DENTRO do PT_LOAD executável, um thunk dinâmico que
+salva TOC/LR, carrega descritor, mtctr e bctrl.
+R12=0x00830000, lwz -0x7D68 => slot 0x00828298.
+Na IMAGEM ELF BRUTA esse slot vale 0x00669A84 (autorreferência sem bind),
+não aponta ainda para OPD resolvido. Se executado sem vincular, lwz r0
+lê a primeira palavra da instrução 0x39800000 (CTR inválido no guest).
+É BARREIRA DE IMPORT/RELOCAÇÃO, não prova de NID. NID DESTE THUNK:
+NÃO IDENTIFICADO de modo verificável. NÃO inventar nome de biblioteca/NID.
+Classificação: import/indirect-call veneer. Os 7 veneers reconhecidos
+são compiláveis mas ficam explicitamente NÃO REGISTRADOS no dispatcher
+para preservar a precedência de binding HLE/import existente.
+NÃO converter o thunk em retorno falso nem em no-op.
+
+Percurso BFS rigoroso a partir 0x005394E8, retorno de chamada 0x0053950C
+e thunk 0x00669A84, seguindo B/BC/BL e retornos de BCTRL:
+274 candidatos distintos, 254 BLOCOS completos de código PPC, 20
+rejeitados com first_unknown_pc/unsupported_opcode, 369 arestas.
+7/254 são stubs import gate (código compilável, NÃO instalados).
+Não corresponde a 254 novas funções do jogo, nem % de recompilação.
+A fonte do gerador é tools/m766_cfg.py.gz.b64 (gz+b64, SHA256 do texto
+f903c2fc09e0db48976a01e386da8d2a07c2ea714a6bcd45a99f042aec98ad05).
+Snapshot imutável runtime/m766-snapshot.json.gz.b64, SHA256 JSON
+c69d5507ee4290c6df8a1ccc372be0f494d45b96792d1dd881f3d71634d6e0d7.
+Sem bytes brutos de ELF no GitHub, apenas IR reconstituível e hashes.
+Manifesto PRIVADO completo com PC início/fim, words BE, SHA256,
+opcodes PPC, IR, sucessores, símbolo native, rejeições: ENTREGUE NO
+ZIP LOCAL AO USUÁRIO, NUNCA PUBLICADO COMO ASSET DO JOGO.
+
+Native C targets ar_m766_native_XXXXXXXX + instalador
+ar_m766_register_frontier, leitura/escrita guest BE (incl. lwz/stw,
+mflr, STDU/STD), rldicl limitada, OR/AND/ANDC, comparação e CR,
+BC BO4/6/12/14/16/18, SRAWI com XER.CA,
+b/bc/bl/blr/bctr/bctrl, SC delegado ao registrador LV2 REAL
+ar_guest_syscall com fail closed em erro; CTR/LR/TOC preservados.
+Desconhecidos: ERRO rigoroso, NUNCA PPC NOP ou interpretação.
+Installer compara SHA256 completo ELF (8.717.136 bytes) e SHA256
+de cada bloco na RAM guest ANTES de registrar no AOT nativo.
+Entradas duplicadas antigas preservadas.
+Host sintético verificou execução real da função C compilada para
+0x005394E8, a semântica BE guest, BL para thunk, BCTRL com descritor,
+epílogo restaurando LR/TOC, CR7 branch e SRAWI/XER.
+GitHub Actions deveria compilar os 4 lotes + 1 installer ARM64 e
+atestar todos 254 símbolos no Mach-O final, sem ELF no CI.
+Não afirmar compilação/vínculo nem execução sem prova concreta do Actions.
+ps3recomp upstream foi referência de arquitetura, NÃO usado como
+pipeline integral por falta de cobertura comprovada de imports/indiretos,
+SPU e semântica de todos os opcodes; saída aqui = CFG PARCIAL ESTRITO.
+
+PRÓXIMA PROVA FÍSICA EXIGIDA (M7.66):
+Verificar versão 7.66.0, commit/run da IPA instalada e SHA256 do
+arquivo IPA validado por CI, sem confundir IDs históricos.
+Comprovar AOT ar_m766_native_005394e8 executada e destino AR_TAIL.
+Sem HLE import, próximo PC provavelmente 0x00669A84 (inferência,
+não promessa). Se houver binding real, registrar PC seguinte autêntico.
+Capturar CTR/R2/TOC, CR/XER, LR, FS chamadas originadas no guest,
+distinguir bytes HOST de guest; PPC interpretadas permanece 0.
+Só declarar cellFsOpen/cellFsRead positivo, RSX/PSARC ou quadro real
+se o iPhone demonstrar fisicamente.
+Um commit -> um workflow, branch única, IPA anexa diretamente aqui
++ Handoff TXT atualizado, relatório de alterações, dados privados ZIP.

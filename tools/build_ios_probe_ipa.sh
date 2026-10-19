@@ -326,6 +326,42 @@ xcrun nm -g "${M765_OBJECTS[@]}" > m765-objects-nm.txt
 grep -Fq '_ar_m765_native_00539308' m765-objects-nm.txt
 grep -Fq '_ar_m765_native_0053930c' m765-objects-nm.txt
 grep -Fq '_ar_m765_register_frontier' m765-objects-nm.txt
+# M7.66 strict PPC CFG frozen offline IR; source ELF never enters CI/IPA.
+python3 - <<'PY'
+import base64,gzip,hashlib,json
+from pathlib import Path
+files={
+ 'tools/m766_cfg.py.gz.b64':('tools/m766_cfg.py','f903c2fc09e0db48976a01e386da8d2a07c2ea714a6bcd45a99f042aec98ad05'),
+ 'runtime/m766-snapshot.json.gz.b64':('m766-snapshot-ci.json','c69d5507ee4290c6df8a1ccc372be0f494d45b96792d1dd881f3d71634d6e0d7')
+}
+for src,(dest,sha) in files.items():
+ data=gzip.decompress(base64.b64decode(Path(src).read_text().strip(),validate=True))
+ assert hashlib.sha256(data).hexdigest()==sha,src
+ Path(dest).write_bytes(data)
+s=json.loads(Path('m766-snapshot-ci.json').read_text())
+assert s['schema']=='ascension-m766-executable-frontier-cfg-1'
+assert s['source_sha256']=='4bf75c897b82d1beb25514cbadaff3d03e1b0c7bf849fa5d289be4f9183462b5'
+assert s['total_examined']==274 and len(s['accepted'])==254 and len(s['rejected'])==20
+assert len(s['edges'])==369
+assert sum(bool(b['import_veneer_requires_binding']) for b in s['accepted'])==7
+assert next(b for b in s['accepted'] if b['pc']==0x5394e8)['ir'][0]==['lwz',9,2,-22428]
+assert next(b for b in s['accepted'] if b['pc']==0x669a84)['import_veneer_requires_binding']
+print('M7.66 frozen PPC CFG: 254 native full blocks, 20 strict rejections, 369 edges, 7 HLE/import gated')
+PY
+python3 tools/m766_cfg.py --snapshot m766-snapshot-ci.json --output-dir runtime | tee m766-generation.log
+M766_OBJECTS=()
+for src in runtime/ppu_m766_[0-9][0-9].c runtime/ppu_m766_install.c; do
+  test -s "$src"
+  dst="ios-probe/$(basename "${src%.c}").o"
+  xcrun --sdk iphoneos clang -target arm64-apple-ios17.0 -isysroot "$SDK" \
+    -std=c11 -O2 -Wall -Wextra -Werror -I upstream/runtime/ppu -I runtime \
+    -c "$src" -o "$dst"
+  M766_OBJECTS+=("$dst")
+done
+xcrun nm -g "${M766_OBJECTS[@]}" > m766-objects-nm.txt
+grep -Fq '_ar_m766_native_005394e8' m766-objects-nm.txt
+grep -Fq '_ar_m766_native_00669a84' m766-objects-nm.txt
+grep -Fq '_ar_m766_register_frontier' m766-objects-nm.txt
 # M7.56: capture live guest memory vs PT_LOAD file bytes, not fallback counters.
 xcrun --sdk iphoneos clang -target arm64-apple-ios17.0 -isysroot "$SDK" \
     -std=c11 -O2 -Wall -Wextra -Werror -I upstream/runtime/ppu -I runtime \
@@ -461,6 +497,7 @@ xcrun --sdk iphoneos clang++ -target arm64-apple-ios17.0 \
     ${M764_OBJECTS[@]+"${M764_OBJECTS[@]}"} \
     ${M764C_OBJECTS[@]+"${M764C_OBJECTS[@]}"} \
     ${M765_OBJECTS[@]+"${M765_OBJECTS[@]}"} \
+    ${M766_OBJECTS[@]+"${M766_OBJECTS[@]}"} \
     ${GOWA2_OBJECTS[@]+"${GOWA2_OBJECTS[@]}"} \
     ios-probe/ppu_m717_graph.o \
     ${M711_OBJECTS[@]+"${M711_OBJECTS[@]}"} \
@@ -565,6 +602,30 @@ m={'schema':'ascension-m765-apple-arm64-1','original_pc':'0x00539308',
 'final_MachO_symbols_verified':['ar_m765_native_00539308','ar_m765_native_0053930c','ar_m765_register_frontier'],
 'iphone_executed':'NOT_MEASURED','guest_cellFsOpen':'NOT_MEASURED','guest_cellFsRead_positive':'NOT_MEASURED'}
 Path('m765-final-attestation.json').write_text(json.dumps(m,indent=2)+'\n')
+PY
+# M7.66 verify 254 native PPC block symbols in final ARM64 Mach-O.
+python3 - <<'PY'
+import json,re
+from pathlib import Path
+s=json.loads(Path('m766-snapshot-ci.json').read_text())
+nm=Path('m78-owner-aot-linked-symbols.txt').read_text()
+linked=set(re.findall(r' [Tt] _([A-Za-z0-9_]+)\s*$',nm,re.M))
+all_syms={'ar_m766_native_%08x'%b['pc'] for b in s['accepted']}
+missing=sorted(all_syms-linked)
+assert not missing,missing[:20]
+assert 'ar_m766_register_frontier' in linked
+gated=[b['pc'] for b in s['accepted'] if b['import_veneer_requires_binding']]
+assert len(gated)==7
+Path('m766-final-attestation.json').write_text(json.dumps({
+ 'schema':'ascension-m766-final-macho-1','canonical_elf_sha256':s['source_sha256'],
+ 'offline_CFG_candidates':s['total_examined'],'full_blocks_compiled_and_linked':len(all_syms),
+ 'rejected_blocks':len(s['rejected']),'direct_edges':len(s['edges']),
+ 'import_veneer_symbols_not_registered':list(map(lambda x:'0x%08X'%x,gated)),
+ 'source_AOT_entrypoint':'0x005394E8',
+ 'physical_device_executed':'NOT_MEASURED',
+ 'guest_fs_read_bytes':'NOT_MEASURED'
+},indent=2)+'\n')
+print('M7.66 254 native ARM64 CFG entrypoints verified in FINAL Mach-O; iPhone NOT MEASURED')
 PY
 # M7.33 final Mach-O must retain ACTUAL production LV2 service binder.
 grep -Eq ' [Tt] _ar_lv2_bind_bootstrap_syscalls$' m78-owner-aot-linked-symbols.txt
@@ -706,6 +767,6 @@ echo 'M7.59: 42 real owner PPC words 0x002C1378..0x002C141C compiled ARM64 with 
 test -s AscensionRecompProbe-0.6.22-unsigned.ipa
 shasum -a 256 AscensionRecompProbe-0.6.22-unsigned.ipa > m41-ipa-sha256.txt
 # Retain legacy CI path; new alias has accurate installed bundle version.
-cp AscensionRecompProbe-0.6.22-unsigned.ipa AscensionRecompProbe-7.65.0-unsigned.ipa
-shasum -a 256 AscensionRecompProbe-7.65.0-unsigned.ipa > m765-ipa-sha256.txt
+cp AscensionRecompProbe-0.6.22-unsigned.ipa AscensionRecompProbe-7.66.0-unsigned.ipa
+shasum -a 256 AscensionRecompProbe-7.66.0-unsigned.ipa > m766-ipa-sha256.txt
 echo 'UNSIGNED DIAGNOSTIC APP: UIKit CAMetalLayer + real PS3Recomp Metal backend; NO GOWA GAME included' > m41-status.txt

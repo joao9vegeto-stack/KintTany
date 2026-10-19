@@ -46,5 +46,5 @@ class TestM750(unittest.TestCase):
             'm750-native-arm64.o','_ar_m750_register_owner',
             'AscensionRecomp-M7.61-BULK-AOT'):
    self.assertIn(x,w)
-  self.assertIn('<string>7650</string>',(R/'ios/Probe-Info.plist').read_text())
+  self.assertIn('<string>7660</string>',(R/'ios/Probe-Info.plist').read_text())
 if __name__=='__main__':unittest.main()

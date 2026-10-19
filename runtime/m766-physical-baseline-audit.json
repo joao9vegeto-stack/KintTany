@@ -1,0 +1,35 @@
+{
+  "schema": "ascension-m766-public-audit-1",
+  "game_id": "NPUA80918",
+  "canonical_elf_sha256": "4bf75c897b82d1beb25514cbadaff3d03e1b0c7bf849fa5d289be4f9183462b5",
+  "m765_physical": {
+    "report_app": "7.65.0",
+    "report_commit": "eecda5b1bc3dd7250b1ebd4330d74c1581249a92",
+    "report_workflow": 251,
+    "registered": 8472,
+    "distinct": 142,
+    "dispatches": 1900,
+    "ppc_interpreted": 0,
+    "stop": "0x005394E8",
+    "last_native": "0x00539604"
+  },
+  "m765_success_ci": {
+    "commit": "34516f1a4bfdf3ba3e531273c152c008e27a1351",
+    "run": 252
+  },
+  "m766_static": {
+    "candidates": 274,
+    "accepted_full_blocks": 254,
+    "rejected": 20,
+    "direct_edges": 369,
+    "import_veneer_compiled_but_not_registered": 7,
+    "source_pc": "0x005394E8",
+    "import_call_pc": "0x00539508",
+    "indirect_stub": "0x00669A84",
+    "descriptor_va": "0x00828298",
+    "verified_nid": null
+  },
+  "native_iphone_execution": "NOT_MEASURED",
+  "guest_fs_positive_bytes": "NOT_MEASURED",
+  "original_rsx_frame": "NOT_MEASURED"
+}
