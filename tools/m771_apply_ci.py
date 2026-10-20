@@ -119,7 +119,9 @@ static uint32_t aot_hash(uint32_t pc){''',name)
     self.m750HostObservation?:@"NÃO MEDIDO"];
 }
 '''
-    s=s[:begin]+slim+s[end:]
+    legacy=s[begin:end].replace('- (NSString *)arUnifiedPpuText {',
+                                '- (NSString *)arLegacyFullPpuText {',1)
+    s=s[:begin]+slim+legacy+s[end:]
     s=one(s,'          @"m767_stop_reason":@(measured.m767_fail_reason),',
 '''          @"m767_stop_reason":@(measured.m767_fail_reason),
           @"m771_enters":@(measured.m771_enters),
@@ -193,7 +195,7 @@ static uint32_t aot_hash(uint32_t pc){''',name)
     NSURL *docs=[[[NSFileManager defaultManager] URLsForDirectory:NSDocumentDirectory
         inDomains:NSUserDomainMask] firstObject];
     NSURL *url=[docs URLByAppendingPathComponent:name isDirectory:NO];
-    if(![self.ppuReport writeToURL:url atomically:YES
+    if(![[self arLegacyFullPpuText] writeToURL:url atomically:YES
               encoding:NSUTF8StringEncoding error:NULL])return;
     UIActivityViewController *share=[[UIActivityViewController alloc]
        initWithActivityItems:@[url] applicationActivities:nil];
