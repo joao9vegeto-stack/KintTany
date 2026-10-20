@@ -129,6 +129,59 @@ jobs:
           python3 tools/m770_apply_ci.py .
           python3 tools/m771_apply_ci.py .
           bash -n tools/build_ios_probe_ipa.sh
+      - name: Export exact iOS project sources and staged ARM64 runtime (M7.71)
+        run: |
+          set -euo pipefail
+          test "$GITHUB_REF" = "refs/heads/AscensionRecomp"
+          BASE="AscensionRecomp-SOURCE-${GITHUB_SHA}"
+          EXPORT="$RUNNER_TEMP/$BASE"
+          mkdir -p "$EXPORT"
+          git archive --format=tar "${GITHUB_SHA}" | tar -xf - -C "$EXPORT"
+          for sub in ios runtime tools tests docs .github; do
+            test -d "$sub" || continue
+            mkdir -p "$EXPORT/$sub"
+            rsync -a --exclude='__pycache__/' --exclude='*.pyc' --exclude='*.o' --exclude='*.log' --exclude='*.ipa' "$sub/" "$EXPORT/$sub/"
+          done
+          for sub in upstream/runtime/ppu upstream/include; do
+            test -d "$sub" || continue
+            mkdir -p "$EXPORT/$sub"
+            rsync -a --exclude='__pycache__/' --exclude='*.o' "$sub/" "$EXPORT/$sub/"
+          done
+          printf '%s\n' \
+            'ASCENSIONRECOMP - IOS SOURCE SNAPSHOT / NPUA80918' \
+            "Git commit = $GITHUB_SHA" \
+            'Branch = AscensionRecomp (only)' \
+            'M7.70 3835 PPC AOT handlers: runtime/m770-delta/' \
+            'M7.71 frontier diagnostics: runtime/ppu_bridge.c and runtime/ppu_bridge.h' \
+            'iOS app source: ios/ARProbeApp.m and ios/ARLivePPUBridge.c' \
+            'Build script (actual Apple SDK pipeline): tools/build_ios_probe_ipa.sh' \
+            'Workflow: .github/workflows/ascension-recomp-m0.yml' \
+            'Installer scripts: tools/m770_apply_ci.py and tools/m771_apply_ci.py' \
+            'Dependency: pinned ps3recomp a2c20108af45174dbb7d3e2f87f6acaaef09c6b4 (upstream runtime/include included).' \
+            'There is NO .xcodeproj or .xcworkspace in this Git repository.' \
+            'DO NOT claim a generated Xcode project exists. Build via the checked-in script / Actions.' \
+            'Source snapshot is AFTER M7.70 and M7.71 installers, matching the effective code compiled in Actions.' \
+            'GOWA.ELF, RAP, SELF, PSARC and game files are NOT included.' \
+            > "$EXPORT/LEIA-PRIMEIRO-CODIGO-FONTE-IOS.txt"
+          test -s "$EXPORT/runtime/m770-delta/ppu_m770_delta_install.c"
+          test -s "$EXPORT/runtime/m770-delta/ppu_m770_delta_05.c"
+          test -s "$EXPORT/ios/ARProbeApp.m"
+          test -s "$EXPORT/runtime/ppu_bridge.c"
+          test -s "$EXPORT/tools/build_ios_probe_ipa.sh"
+          test -s "$EXPORT/tools/m771_apply_ci.py"
+          grep -Fq 'frontier_enters' "$EXPORT/runtime/ppu_bridge.c"
+          grep -Fq 'M7.71' "$EXPORT/ios/ARProbeApp.m"
+          (cd "$RUNNER_TEMP" && zip -q -r "$GITHUB_WORKSPACE/m771-project-source.zip" "$BASE")
+          shasum -a 256 m771-project-source.zip | tee m771-project-source.sha256
+          test -s m771-project-source.zip
+      - name: Upload complete iOS source ZIP (after AOT/runtime integration)
+        uses: actions/upload-artifact@v4
+        with:
+          name: AscensionRecomp-M771-IOS-SOURCE-COMPLETE
+          path: |
+            m771-project-source.zip
+            m771-project-source.sha256
+          retention-days: 14
       - name: M7.27 verify true host ARM64 dmb fence inside generated AOT
         run: |
           set -euo pipefail
