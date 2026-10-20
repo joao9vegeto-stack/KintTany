@@ -3,16 +3,19 @@
 #include <stdint.h>
 
 #include "ppu/ppu_recomp.h"
-#include "spu/spu_0000_at_006B3E00/spu_recomp.h"
-#include "spu/spu_0001_at_006C1B00/spu_recomp.h"
-#include "spu/spu_0002_at_006CB580/spu_recomp.h"
-#include "spu/spu_0003_at_006D5900/spu_recomp.h"
 
 extern "C" void ppu_recomp_register(void);
 extern "C" void ppu_hle_init(void);
 extern "C" void ppu_sysprx_register(void);
 extern "C" void ppu_fs_register(void);
 extern "C" void lv2_init_syscalls(void);
+/* The generated SPU headers put these declarations after their extern-C
+ * block, although their implementations are compiled as C.  Declare the C
+ * ABI explicitly here so the final iOS linker resolves the actual exports. */
+extern "C" void gowa_spu_0000_at_006B3E00_spu_recomp_register(void);
+extern "C" void gowa_spu_0001_at_006C1B00_spu_recomp_register(void);
+extern "C" void gowa_spu_0002_at_006CB580_spu_recomp_register(void);
+extern "C" void gowa_spu_0003_at_006D5900_spu_recomp_register(void);
 
 static pthread_once_t m772_once = PTHREAD_ONCE_INIT;
 
