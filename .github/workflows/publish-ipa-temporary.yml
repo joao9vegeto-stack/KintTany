@@ -1,0 +1,55 @@
+name: Publish the built Ascension IPA to a temporary link
+
+on:
+  workflow_dispatch:
+    inputs:
+      source_run_id:
+        description: Successful AscensionRecomp Actions run containing the IPA
+        required: true
+        type: string
+
+permissions:
+  actions: read
+  contents: read
+
+jobs:
+  publish:
+    if: github.ref == 'refs/heads/AscensionRecomp'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Download the exact built IPA artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: AscensionRecomp-M7.70-DELTA3835-ARM64
+          github-token: ${{ github.token }}
+          repository: ${{ github.repository }}
+          run-id: ${{ inputs.source_run_id }}
+          path: delivery
+
+      - name: Validate and publish only the IPA
+        id: publish
+        shell: bash
+        run: |
+          set -euo pipefail
+          ipa="$(find delivery -type f -name 'AscensionRecompProbe-7.72.1-unsigned.ipa' -print -quit)"
+          test -n "$ipa"
+          python3 - "$ipa" <<'PY'
+          import sys, zipfile
+          with zipfile.ZipFile(sys.argv[1]) as z:
+              assert z.testzip() is None
+              assert any(n.startswith('Payload/') and n.endswith('.app/Info.plist')
+                         for n in z.namelist())
+          PY
+          curl --fail --silent --show-error --retry 3 \
+            -F "file=@${ipa};filename=AscensionRecomp-7.72.1.ipa" \
+            https://tmpfiles.org/api/v1/upload > "$RUNNER_TEMP/upload.json"
+          python3 - "$RUNNER_TEMP/upload.json" "$GITHUB_OUTPUT" "$GITHUB_STEP_SUMMARY" <<'PY'
+          import json, pathlib, sys
+          response=json.loads(pathlib.Path(sys.argv[1]).read_text())
+          page=response['data']['url']
+          direct=page.replace('https://tmpfiles.org/','https://tmpfiles.org/dl/',1)
+          if direct == page: raise SystemExit('unexpected temporary host URL')
+          with open(sys.argv[2],'a') as f: f.write('ipa_url='+direct+'\n')
+          with open(sys.argv[3],'a') as f: f.write(direct+'\n')
+          print('Temporary IPA download: '+direct)
+          PY

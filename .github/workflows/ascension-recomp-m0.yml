@@ -27,7 +27,9 @@ jobs:
           set -euo pipefail
           test "$GITHUB_REF" = "refs/heads/AscensionRecomp"
           test "$(git branch --show-current)" = "AscensionRecomp"
-          test "$(find .github/workflows -type f | wc -l | tr -d ' ')" = "1"
+          test "$(find .github/workflows -maxdepth 1 -type f | wc -l | tr -d ' ')" = "2"
+          test -f .github/workflows/ascension-recomp-m0.yml
+          test -f .github/workflows/publish-ipa-temporary.yml
           test -z "$(find . -type f \( -iname '*.rap' -o -name 'GOWA.SELF' -o -name 'GOWA.ELF' \) -not -path './.git/*' -print -quit)"
       - name: Python-only PS3 ELF + PPU manifest tests
         run: |
