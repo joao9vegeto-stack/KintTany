@@ -77,6 +77,7 @@ extern "C" void ar_m772_unbind_guest_memory(void* guest_memory)
     if (!guest_memory || vm_base != guest_memory) return;
     vm_base = nullptr;
     ppu_vm_size = 0;
+    __atomic_store_n(&m772_guest_vm_size, 0u, __ATOMIC_RELEASE);
 }
 
 extern "C" int ar_m772_dispatch_native(ppu_context* ctx,uint32_t pc)
