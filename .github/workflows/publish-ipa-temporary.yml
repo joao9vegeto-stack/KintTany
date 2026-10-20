@@ -1,9 +1,12 @@
 name: Publish the built Ascension IPA to a temporary link
 
 on:
-  push:
-    branches:
-      - AscensionRecomp
+  workflow_dispatch:
+    inputs:
+      run_id:
+        description: Successful AscensionRecomp M7.72.2 build run ID
+        required: true
+        type: string
 
 permissions:
   actions: read
@@ -20,7 +23,7 @@ jobs:
           name: AscensionRecomp-M7.70-DELTA3835-ARM64
           github-token: ${{ github.token }}
           repository: ${{ github.repository }}
-          run-id: 39465931173
+          run-id: ${{ inputs.run_id }}
           path: delivery
 
       - name: Validate and publish only the IPA
