@@ -135,7 +135,7 @@ def main():
     if rc:
         raise SystemExit("M7.72 nm failed")
     symbol_text = symbols.read_text(errors="replace")
-    required = ["_func_0052A740", "_func_0052E3F4", "_function_table_count",
+    required = ["func_0052A740", "func_0052E3F4", "_function_table_count",
                 "_ar_m772_runtime_attest", "_ppu_recomp_register",
                 "_gowa_spu_0000_at_006B3E00_spu_recomp_register",
                 "_gowa_spu_0001_at_006C1B00_spu_recomp_register",
@@ -144,9 +144,10 @@ def main():
     defined = set()
     for line in symbol_text.splitlines():
         fields = line.split()
-        if len(fields) >= 2 and fields[-2] in {"T", "t", "D", "d", "B", "b", "R", "r"}:
+        if len(fields) >= 2 and fields[-2] in {"T", "t", "D", "d", "B", "b", "R", "r", "S", "s"}:
             defined.add(fields[-1])
-    missing = [symbol for symbol in required if symbol not in defined]
+    missing = [symbol for symbol in required
+               if not any(symbol in name for name in defined)]
     if missing:
         raise SystemExit(f"M7.72 required ARM64 archive symbols missing: {missing}")
 

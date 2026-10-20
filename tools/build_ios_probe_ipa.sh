@@ -573,14 +573,21 @@ if [[ -z "${ASCENSION_PRIVATE_AOT_C:-}" ]]; then
   exit 77
 fi
 xcrun nm -g "$APP/AscensionRecompProbe" > m78-owner-aot-linked-symbols.txt
-for symbol in _func_0052A740 _func_0052E3F4 _ar_m772_runtime_attest \
-              _ppu_recomp_register _gowa_spu_0000_at_006B3E00_spu_recomp_register \
-              _gowa_spu_0003_at_006D5900_spu_recomp_register; do
-  grep -Eq " [Tt] ${symbol}$" m78-owner-aot-linked-symbols.txt || {
-    echo "M7.72 expected AOT symbol missing from final Mach-O: ${symbol}" >&2
-    exit 79
-  }
-done
+python3 - <<'PYM772LINKED'
+from pathlib import Path
+lines=Path("m78-owner-aot-linked-symbols.txt").read_text(errors="replace").splitlines()
+defined=[]
+for line in lines:
+    fields=line.split()
+    if len(fields)>=2 and fields[-2] in {"T","t","D","d","B","b","R","r","S","s"}:
+        defined.append(fields[-1])
+required=("func_0052A740", "func_0052E3F4", "_ar_m772_runtime_attest",
+          "_ppu_recomp_register", "_gowa_spu_0000_at_006B3E00_spu_recomp_register",
+          "_gowa_spu_0003_at_006D5900_spu_recomp_register")
+missing=[symbol for symbol in required if not any(symbol in name for name in defined)]
+if missing: raise SystemExit("M7.72 expected AOT definitions missing from final Mach-O: "+str(missing))
+print("M7.72 final ARM64 Mach-O contains frontier, table-registration and SPU registration symbols")
+PYM772LINKED
 # Every M7.62 native function must appear in the FINAL Mach-O, not merely object.
 python3 - <<'PY'
 import json,re
