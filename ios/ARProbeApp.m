@@ -10,7 +10,7 @@
 #include "../runtime/ppu_guest_fs.h"
 #include "../runtime/ppu_m756_stop_evidence.h"
 #include "../runtime/ppu_m767_live_import.h"
-extern void ar_m772_runtime_attest(uint64_t out[9]);
+extern void ar_m772_runtime_attest(uint64_t out[13]);
 extern void ar_m756_last_stop_evidence(ar_m756_stop_evidence*);
 extern void ar_m756_last_origin_evidence(ar_m756_stop_evidence*);
 extern void ar_m751_last_fs_trace(ar_fs_trace *);
@@ -892,7 +892,7 @@ static NSString *ARCurrentRelease(void){
   if(self.folderReport.length)[report appendFormat:
     @"\n--- Evento HOST Files separado (não cellFsOpen/Read) ---\n%@\n",
       self.folderReport];
-  uint64_t m772[9]={0};
+  uint64_t m772[13]={0};
   ar_m772_runtime_attest(m772);
   [report appendFormat:
     @"\nM7.72 — TABELAS DO LIFT PS3RECOMP NO RUNTIME\n"
@@ -903,12 +903,16 @@ static NSString *ARCurrentRelease(void){
      "Despachos PPU PS3Recomp executados=%llu · último PC=0x%08llX\n"
      "VM guest ligada ao runtime=%llu bytes\n"
      "Raiz do jogo configurada no VFS nativo=%@\n"
+     "cellFsOpen do guest=%llu · aberturas OK=%llu\n"
+     "cellFsRead do guest=%llu · bytes realmente lidos=%llu\n"
      "Despachos nativos não provam gameplay, HLE completo ou frame RSX.\n",
      (unsigned long long)m772[0],m772[1]?@"SIM":@"NÃO",
      m772[2]?@"SIM":@"NÃO",(unsigned long long)m772[3],
      m772[4]?@"SIM":@"NÃO",(unsigned long long)m772[5],
      (unsigned long long)m772[6],(unsigned long long)m772[7],
-     m772[8]?@"SIM (vinculada à execução)":@"NÃO"];
+     m772[8]?@"SIM (vinculada à execução)":@"NÃO",
+     (unsigned long long)m772[9],(unsigned long long)m772[10],
+     (unsigned long long)m772[11],(unsigned long long)m772[12]];
   [report appendString:
     @"\nRelatório sem bytes de ELF, PSARC ou arquivos comerciais.\n"];
   return report;

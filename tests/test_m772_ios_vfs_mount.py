@@ -18,7 +18,15 @@ class M772IOSVfsMountTests(unittest.TestCase):
             source = upstream / "runtime" / "ppu" / "ppu_fs.cpp"
             source.parent.mkdir(parents=True)
             anchor = '    static const char* hdd0_root = nullptr; static int hdd0_init = 0;'
-            source.write_text(anchor + "\n")
+            source.write_text(
+                '#include <stdint.h>\n'
+                'extern "C" const char* ppu_vfs_root = ".";\n'
+                'void host_path() {\n' + anchor + '\n}\n'
+                'static void cellFsOpen(ppu_context* ctx)\n{\n}\n'
+                '    ctx->gpr[3] = CELL_OK;\n}\n\n/* cellFsSdataOpen\n'
+                'static void cellFsRead(ppu_context* ctx)\n{\n}\n'
+                '    size_t n = fread(vm_base + buf, 1, (size_t)nbytes, g_files[fd]);'
+                '   /* raw bytes, no swap */\n')
 
             MODULE.patch_ios_game_mount(upstream)
             result = source.read_text()
@@ -26,6 +34,8 @@ class M772IOSVfsMountTests(unittest.TestCase):
             self.assertIn('"/dev_hdd0/game/NPUA80918"', result)
             self.assertIn('snprintf(out, cap, "%s/%s", ppu_vfs_root, tail)', result)
             self.assertIn("ps3_vfs_ps3game_fallback(out, cap)", result)
+            self.assertIn("ascension_fs_open_calls", result)
+            self.assertIn("ascension_fs_read_bytes.fetch_add", result)
 
             MODULE.patch_ios_game_mount(upstream)
             self.assertEqual(result, source.read_text())

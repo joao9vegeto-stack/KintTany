@@ -10,6 +10,8 @@ extern "C" void ppu_recomp_register(void);
 extern "C" void ppu_hle_init(void);
 extern "C" void ppu_sysprx_register(void);
 extern "C" void ppu_fs_register(void);
+extern "C" void ppu_fs_ios_reset_stats(void);
+extern "C" void ppu_fs_ios_stats(uint64_t out[4]);
 extern "C" void lv2_init_syscalls(void);
 extern "C" void ppu_install_thread_trampoline(void);
 extern "C" void ps3_indirect_call_to(ppu_context*,uint32_t);
@@ -49,6 +51,7 @@ static void m772_register_all(void)
     gowa_spu_0001_at_006C1B00_spu_recomp_register();
     gowa_spu_0002_at_006CB580_spu_recomp_register();
     gowa_spu_0003_at_006D5900_spu_recomp_register();
+    ppu_fs_ios_reset_stats();
 }
 
 extern "C" int ar_m772_runtime_init(uint8_t* guest_memory,size_t guest_size,
@@ -63,6 +66,7 @@ extern "C" int ar_m772_runtime_init(uint8_t* guest_memory,size_t guest_size,
     ppu_vm_size = (uint32_t)guest_size;
     m772_vfs_root.assign(game_root);
     ppu_vfs_root = m772_vfs_root.c_str();
+    ppu_fs_ios_reset_stats();
     __atomic_store_n(&m772_vfs_root_set, 1u, __ATOMIC_RELEASE);
     __atomic_store_n(&m772_dispatch_count, UINT64_C(0), __ATOMIC_RELAXED);
     __atomic_store_n(&m772_last_guest_pc, 0u, __ATOMIC_RELAXED);
@@ -107,7 +111,7 @@ static uint32_t m772_has_ppu(uint32_t pc)
            function_table[lo].func != nullptr;
 }
 
-extern "C" void ar_m772_runtime_attest(uint64_t out[9])
+extern "C" void ar_m772_runtime_attest(uint64_t out[13])
 {
     if (!out) return;
     const uint32_t ready = __atomic_load_n(&m772_initialized, __ATOMIC_ACQUIRE);
@@ -122,4 +126,5 @@ extern "C" void ar_m772_runtime_attest(uint64_t out[9])
     out[6] = __atomic_load_n(&m772_last_guest_pc, __ATOMIC_RELAXED);
     out[7] = __atomic_load_n(&m772_guest_vm_size, __ATOMIC_RELAXED);
     out[8] = __atomic_load_n(&m772_vfs_root_set, __ATOMIC_ACQUIRE);
+    ppu_fs_ios_stats(out + 9);
 }

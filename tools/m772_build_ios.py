@@ -34,10 +34,9 @@ def patch_ios_game_mount(upstream):
     source = upstream / "runtime/ppu/ppu_fs.cpp"
     text = source.read_text()
     marker = "/* ASCENSION_IOS_NPUA80918_MOUNT */"
-    if marker in text:
-        return
-    anchor = '    static const char* hdd0_root = nullptr; static int hdd0_init = 0;'
-    replacement = '''    /* ASCENSION_IOS_NPUA80918_MOUNT */
+    if marker not in text:
+        anchor = '    static const char* hdd0_root = nullptr; static int hdd0_init = 0;'
+        replacement = '''    /* ASCENSION_IOS_NPUA80918_MOUNT */
     /* The app's Files picker grants NPUA80918/USRDIR directly. Installed PSN
      * paths include the title ID, so map that component onto the bookmarked
      * root instead of assuming a host /dev_hdd0/game tree exists. */
@@ -53,9 +52,76 @@ def patch_ios_game_mount(upstream):
         return;
     }
     static const char* hdd0_root = nullptr; static int hdd0_init = 0;'''
-    if text.count(anchor) != 1:
-        raise SystemExit("M7.72 iOS VFS patch anchor changed; refusing a partial path rewrite")
-    source.write_text(text.replace(anchor, replacement, 1))
+        if text.count(anchor) != 1:
+            raise SystemExit("M7.72 iOS VFS patch anchor changed; refusing a partial path rewrite")
+        text = text.replace(anchor, replacement, 1)
+
+    stats_marker = "/* ASCENSION_IOS_GUEST_FS_STATS */"
+    if stats_marker not in text:
+        include_anchor = '#include <stdint.h>\n'
+        include_replacement = (include_anchor + '#include <atomic>\n#include <mutex>\n')
+        if text.count(include_anchor) != 1:
+            raise SystemExit("M7.72 iOS FS stats include anchor changed")
+        text = text.replace(include_anchor, include_replacement, 1)
+        root_anchor = 'extern "C" const char* ppu_vfs_root = ".";'
+        stats = '''
+/* ASCENSION_IOS_GUEST_FS_STATS */
+static std::atomic<uint64_t> ascension_fs_open_calls{0};
+static std::atomic<uint64_t> ascension_fs_open_success{0};
+static std::atomic<uint64_t> ascension_fs_read_calls{0};
+static std::atomic<uint64_t> ascension_fs_read_bytes{0};
+extern "C" void ppu_fs_ios_reset_stats(void)
+{
+    ascension_fs_open_calls.store(0, std::memory_order_relaxed);
+    ascension_fs_open_success.store(0, std::memory_order_relaxed);
+    ascension_fs_read_calls.store(0, std::memory_order_relaxed);
+    ascension_fs_read_bytes.store(0, std::memory_order_relaxed);
+}
+extern "C" void ppu_fs_ios_stats(uint64_t out[4])
+{
+    if (!out) return;
+    out[0] = ascension_fs_open_calls.load(std::memory_order_relaxed);
+    out[1] = ascension_fs_open_success.load(std::memory_order_relaxed);
+    out[2] = ascension_fs_read_calls.load(std::memory_order_relaxed);
+    out[3] = ascension_fs_read_bytes.load(std::memory_order_relaxed);
+}
+'''
+        if text.count(root_anchor) != 1:
+            raise SystemExit("M7.72 iOS FS stats root anchor changed")
+        text = text.replace(root_anchor, root_anchor + stats, 1)
+
+        open_anchor = 'static void cellFsOpen(ppu_context* ctx)\n{\n'
+        open_body = '''static void cellFsOpen(ppu_context* ctx)
+{
+    ascension_fs_open_calls.fetch_add(1, std::memory_order_relaxed);
+'''
+        if text.count(open_anchor) != 1:
+            raise SystemExit("M7.72 cellFsOpen stats anchor changed")
+        text = text.replace(open_anchor, open_body, 1)
+
+        success_anchor = '    ctx->gpr[3] = CELL_OK;\n}\n\n/* cellFsSdataOpen'
+        success_body = ('    ascension_fs_open_success.fetch_add(1, std::memory_order_relaxed);\n'
+                        '    ctx->gpr[3] = CELL_OK;\n}\n\n/* cellFsSdataOpen')
+        if text.count(success_anchor) != 1:
+            raise SystemExit("M7.72 cellFsOpen success stats anchor changed")
+        text = text.replace(success_anchor, success_body, 1)
+
+        read_anchor = 'static void cellFsRead(ppu_context* ctx)\n{\n'
+        read_body = '''static void cellFsRead(ppu_context* ctx)
+{
+    ascension_fs_read_calls.fetch_add(1, std::memory_order_relaxed);
+'''
+        if text.count(read_anchor) != 1:
+            raise SystemExit("M7.72 cellFsRead stats anchor changed")
+        text = text.replace(read_anchor, read_body, 1)
+
+        bytes_anchor = '    size_t n = fread(vm_base + buf, 1, (size_t)nbytes, g_files[fd]);   /* raw bytes, no swap */'
+        bytes_body = (bytes_anchor + '\n'
+                      '    ascension_fs_read_bytes.fetch_add(n, std::memory_order_relaxed);')
+        if text.count(bytes_anchor) != 1:
+            raise SystemExit("M7.72 cellFsRead byte stats anchor changed")
+        text = text.replace(bytes_anchor, bytes_body, 1)
+    source.write_text(text)
 
 
 def main():
