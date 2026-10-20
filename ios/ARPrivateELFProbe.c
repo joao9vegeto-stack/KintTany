@@ -35,7 +35,7 @@ int ar_private_elf_inspect(const uint8_t*d,size_t len,uint32_t info[5]){
   segment seg={b64(p+8),b64(p+16),b64(p+32),b64(p+40),b32(p+4)};
   if(!seg.mem&&!seg.size)continue;
   if(seg.size>seg.mem||!within(seg.offset,seg.size,len)||
-     !within(seg.va,seg.mem,128u*1024u*1024u))return -905;
+     !within(seg.va,seg.mem,256u*1024u*1024u))return -905;
   for(unsigned j=0;j<used;j++)
    if(seg.va<s[j].va+s[j].mem&&s[j].va<seg.va+seg.mem)return -906;
   s[used++]=seg;if(seg.flags&1)executable++;

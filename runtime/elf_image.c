@@ -13,7 +13,7 @@ static int has(const struct seg*s,uint64_t addr,uint64_t n){
 }
 int ar_load_elf_image(const uint8_t*d,size_t size,size_t cap,
                       ppu_context*c,ar_elf_image_result*out){
- if(!d||!c||!out||size<64||!cap||cap>128u*1024u*1024u)return AR_BAD_ARGS;
+ if(!d||!c||!out||size<64||!cap||cap>256u*1024u*1024u)return AR_BAD_ARGS;
  if(memcmp(d,"\177ELF",4)||d[4]!=2||d[5]!=2||d[6]!=1||
     b16(d+16)!=2||b16(d+18)!=21||b32(d+20)!=1)return AR_BAD_ARGS;
  uint64_t entry=b64(d+24),phoff=b64(d+32);

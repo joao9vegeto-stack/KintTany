@@ -3,7 +3,7 @@
 #include <stdint.h>
 static uint32_t next_tls,tls_limit;
 int ar_tls_configure(uint32_t begin,uint32_t end) {
- if(!begin||(begin&4095u)||(end&4095u)||end<=begin||end>128u*1024u*1024u)
+ if(!begin||(begin&4095u)||(end&4095u)||end<=begin||end>256u*1024u*1024u)
   return AR_BAD_ARGS;
  next_tls=begin;tls_limit=end;return AR_OK;
 }

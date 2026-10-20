@@ -61,7 +61,7 @@ int main(void){
  int rc=ar_m70_native_runtime_probe(d,sizeof(d),0x10060u,out);
  if(rc!=0 || out[0]!=0u || out[1]!=0x10000u ||
     out[2]!=0x20010u || out[3]!=2u ||
-    out[4]!=0x41000u || out[5]!=0u ||
+    out[4]!=256u*1024u*1024u || out[5]!=0u ||
     (int32_t)out[6]!=-3 || out[7]!=0x10000u ||
     (int32_t)out[8]!=0 || (int32_t)out[9]!=0 ||
     (int32_t)out[10]!=0 || (int32_t)out[11]!=0 ||
@@ -86,7 +86,7 @@ int main(void){
  d[0]='x';
  if(ar_m70_native_runtime_probe(d,sizeof(d),0x10060u,out)!=-21)return 5;
  d[0]=0x7f;
- /* Bounded guest staging rejects an ELF that needs more than 128 MiB. */
+ /* Bounded guest staging rejects PT_LOAD data beyond the 256 MiB RAM window. */
  p64(d,0x500u+56u+40u,0x10000000u);
  if(ar_m70_native_runtime_probe(d,sizeof(d),0x10060u,out)!=-23)return 6;
  puts("M7.0 signed native PPU staging, real NID/HLE, and honest AOT unresolved PASS");

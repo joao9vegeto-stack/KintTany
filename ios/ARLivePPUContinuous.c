@@ -12,7 +12,7 @@ extern int ar_private_import_match(const uint8_t*,size_t,uint32_t,uint32_t[4],ch
 extern int ar_m71_signed_ppu_interpret(const uint8_t*,size_t,ppu_context*,
                             uint32_t,uint32_t,uint32_t,uint32_t[16]);
 
-enum { AR71_LIMIT=128u*1024u*1024u, AR71_EXTRA=0x20000u };
+enum { AR71_LIMIT=256u*1024u*1024u, AR71_EXTRA=0x20000u };
 static uint16_t r16(const uint8_t*p){return (uint16_t)(((uint16_t)p[0]<<8)|p[1]);}
 static uint32_t r32(const uint8_t*p){return ((uint32_t)p[0]<<24)|((uint32_t)p[1]<<16)|((uint32_t)p[2]<<8)|p[3];}
 static uint64_t r64(const uint8_t*p){return ((uint64_t)r32(p)<<32)|r32(p+4);}
