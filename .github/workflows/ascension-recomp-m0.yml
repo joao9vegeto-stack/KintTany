@@ -913,7 +913,7 @@ jobs:
       - name: M7.70 original frontier native semantic and AOT collision host regressions
         run: |
           set -euo pipefail
-          gcc -std=c11 -O2 -Wall -Wextra -Werror -Wno-unused-label -I upstream/runtime/ppu -I upstream/include -ffunction-sections -fdata-sections -Wl,--gc-sections tests/frontier_0052a740_host_test.c -o m770-frontier-test
+          gcc -std=c11 -O2 -Wall -Wextra -Werror -Wno-unused-label -I upstream/runtime/ppu -I upstream/include -ffunction-sections -fdata-sections -Wl,-dead_strip tests/frontier_0052a740_host_test.c -o m770-frontier-test
           ./m770-frontier-test | tee m770-frontier-host.log
           grep -Fq 'M770 frontier 0x0052A740 host semantic test PASS' m770-frontier-host.log
           gcc -std=c11 -O2 -Wall -Wextra -Werror -I upstream/runtime/ppu -I runtime tests/m770_register_semantics.c -o m770-register-test
