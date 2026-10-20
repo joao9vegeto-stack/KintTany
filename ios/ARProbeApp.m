@@ -651,9 +651,9 @@ static NSString *ARCurrentRelease(void){
                                   "5 toques: TEXTURA por NV4097/cache/Metal\n"
                                   "Sem arquivos do jogo.";
                 self.status.text=@"ASCENSIONRECOMP · NPUA80918\n"
-                                  "M7.43 · 6.251 AOT nativas em lote\n"
-                                  "Importe GOWA.ELF para executar o código recompilado.\n"
-                                  "Inicialização parcial, ainda sem gameplay.\n"
+                                  "M7.72 · PPU recompilada estaticamente\n"
+                                  "Importe GOWA.ELF e selecione a pasta do jogo.\n"
+                                  "Boot e gameplay só são confirmados por execução guest e quadro RSX.\n"
                                   "Ferramentas RSX estão na aba RSX / Metal.";
             } else {
                 self.status.text=[NSString stringWithFormat:
@@ -1709,6 +1709,7 @@ static NSString *ARCurrentRelease(void){
        "Instalação reconhecida=%@ · arquivos=%lu · bytes=%llu · PSARC=%lu\n"
        "Teste HLE TLS nativa=%d · r13=0x%08X\n"
        "Despacho AOT nativo=%d · primeiro PC pendente=0x%08X\n"
+       "ABI de processo PS3 (thread principal/TLS/argv)=%@\n"
        "Opcode inicial guest=0x%08X · evidências=0x%X\n"
        "AR_UNRESOLVED=-3: PC guest sem ARM64 registrado; AOT ONLY proíbe fallback.\n",
        nativeRC,native[1],native[2],native[3],
@@ -1717,7 +1718,8 @@ static NSString *ARCurrentRelease(void){
        gameReady?@"SIM (USRDIR)":@"NÃO (M7.0 não iniciado)",
        (unsigned long)gameFiles.count,gameBytes,(unsigned long)psarcCount,
        (int)native[11],native[12],
-       (int)native[6],native[7],native[14],native[15]];
+       (int)native[6],native[7],(native[15]&0x4000u)?@"PREPARADO":@"AUSENTE",
+       native[14],native[15]];
 
     unsigned int continuous[16]={0};
     unsigned int importEvidence[16]={0};

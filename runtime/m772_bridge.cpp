@@ -14,7 +14,11 @@ extern "C" void ppu_fs_ios_reset_stats(void);
 extern "C" void ppu_fs_ios_stats(uint64_t out[4]);
 extern "C" void lv2_init_syscalls(void);
 extern "C" void ppu_install_thread_trampoline(void);
+extern "C" uint64_t ppu_thread_register_main(void);
+extern "C" void ppu_resv_register(ppu_context*);
 extern "C" void ps3_indirect_call_to(ppu_context*,uint32_t);
+extern "C" PPU_THREAD_LOCAL ppu_context* g_active_ctx;
+extern "C" ppu_context* volatile g_ppu_main_ctx;
 extern "C" uint8_t* vm_base;
 extern "C" uint32_t ppu_vm_size;
 extern "C" const char* ppu_vfs_root;
@@ -85,6 +89,51 @@ extern "C" int ar_m772_runtime_init(uint8_t* guest_memory,size_t guest_size,
     __atomic_store_n(&m772_guest_vm_size,(uint32_t)guest_size,__ATOMIC_RELAXED);
     pthread_once(&m772_once, m772_register_all);
     __atomic_store_n(&m772_initialized, 1u, __ATOMIC_RELEASE);
+    return 0;
+}
+
+/* Match the PS3Recomp process-entry state before entering the ELF OPD.  The
+ * iOS host uses its own ELF/VFS owner, so it cannot call upstream ppu_run(),
+ * but the guest CRT still requires the same LV2 thread identity, TLS image,
+ * reservation registration and command-line ABI. */
+extern "C" int ar_m772_prepare_main(ppu_context* ctx,uint32_t tls_vaddr,
+                                     uint32_t tls_filesz,uint32_t tls_memsz,
+                                     uint32_t stack_top,uint32_t argv_base)
+{
+    constexpr uint32_t tls_image = 0x10f00000u;
+    constexpr uint32_t tls_tp = tls_image + 0x7000u;
+    if (!ctx || !vm_base || !ppu_vm_size || !stack_top || !argv_base ||
+        tls_filesz > tls_memsz || tls_memsz > 1024u*1024u ||
+        tls_vaddr > ppu_vm_size || tls_filesz > ppu_vm_size - tls_vaddr ||
+        tls_memsz > ppu_vm_size - tls_image ||
+        argv_base > ppu_vm_size - 24u ||
+        stack_top > ppu_vm_size || argv_base >= stack_top)
+        return -1;
+
+    ctx->thread_id = ppu_thread_register_main();
+    if (!ctx->thread_id) return -2;
+    g_ppu_main_ctx = ctx;
+    g_active_ctx = ctx;
+    ppu_resv_register(ctx);
+
+    ctx->gpr[7] = ctx->thread_id;
+    ctx->gpr[8] = tls_vaddr;
+    ctx->gpr[9] = tls_filesz;
+    ctx->gpr[10] = tls_memsz;
+    ctx->gpr[12] = 0x100000u;
+    if (tls_memsz) {
+        memcpy(vm_base + tls_image, vm_base + tls_vaddr, tls_filesz);
+        if (tls_memsz > tls_filesz)
+            memset(vm_base + tls_image + tls_filesz, 0, tls_memsz - tls_filesz);
+        ctx->gpr[13] = tls_tp;
+    }
+
+    /* argc=1; argv[0] is the real disc boot path. PPU pointers occupy the
+     * low 32 bits of big-endian 64-bit slots, as in upstream ppu_run(). */
+    ctx->gpr[3] = 1;
+    ctx->gpr[4] = argv_base;
+    ctx->gpr[5] = argv_base + 16u;
+    ctx->gpr[6] = 0;
     return 0;
 }
 

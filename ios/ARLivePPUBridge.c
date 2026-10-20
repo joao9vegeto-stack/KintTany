@@ -39,6 +39,8 @@ extern int ARGameFolderBeginGuestSession(char*,size_t);
 extern void ARGameFolderEndGuestSession(void);
 #ifdef ASCENSION_M772_LINKED
 extern int ar_m772_runtime_init(uint8_t*,size_t,const char*);
+extern int ar_m772_prepare_main(ppu_context*,uint32_t,uint32_t,uint32_t,
+                                uint32_t,uint32_t);
 #endif
 
 extern int ar_m711_bind_memory(const uint8_t*,size_t,uint32_t*);
@@ -550,6 +552,44 @@ int ar_m70_native_runtime_probe(const uint8_t*d,size_t len,
 #ifdef ASCENSION_M772_LINKED
  /* M7.72 dispatches the statically recompiled PS3Recomp function table.
   * Do not reduce the guest budget because the legacy-fragment table is empty. */
+ /* Match upstream ps3recomp's process-entry ABI. The old host set TLS
+  * descriptor registers but omitted main-thread registration, r13's initial
+  * TLS image, and argv[0]. Ascension's CRT consumes all three before it can
+  * reach game initialization and the game's filesystem calls. */
+ {
+   static const char boot_path[]="/dev_bdvd/PS3_GAME/USRDIR/EBOOT.BIN";
+   const uint32_t entry_frame=0x80u;
+   const uint32_t stack_top=tlsbase+0x20000u;
+   const uint32_t reserve=(entry_frame+24u+(uint32_t)sizeof(boot_path)+15u)&~15u;
+   const uint32_t entry_sp=stack_top-reserve;
+   const uint32_t argv_base=entry_sp+entry_frame;
+   const uint32_t path_addr=argv_base+24u;
+   if(stack_top>cap || path_addr>cap-sizeof(boot_path) ||
+      ar_vm_zero(entry_sp,entry_frame+24u+sizeof(boot_path))!=AR_OK){
+     out[6]=(uint32_t)AR_MEM_FAULT;
+     ar_bridge_shutdown();
+     ARGameFolderEndGuestSession();
+     return AR_MEM_FAULT;
+   }
+   if(ar_vm_load(path_addr,boot_path,sizeof(boot_path))!=AR_OK){
+     out[6]=(uint32_t)AR_MEM_FAULT;
+     ar_bridge_shutdown();
+     ARGameFolderEndGuestSession();
+     return AR_MEM_FAULT;
+   }
+   /* PPU argv is an array of big-endian 64-bit pointers. */
+   ar_write32(argv_base+4u,path_addr);
+   ctx.gpr[1]=entry_sp;
+   const int entry_rc=ar_m772_prepare_main(&ctx,(uint32_t)tls_va,
+       (uint32_t)tls_file,(uint32_t)tls_mem,stack_top,argv_base);
+   if(entry_rc){
+     out[6]=(uint32_t)entry_rc;
+     ar_bridge_shutdown();
+     ARGameFolderEndGuestSession();
+     return entry_rc;
+   }
+   out[15]|=0x4000u; /* main PPU thread + TLS + PS3 argv prepared */
+ }
  out[6]=(uint32_t)ar_run(&ctx,image.entry_code,32768u);
 #else
  if(out[5])out[6]=(uint32_t)ar_run(&ctx,image.entry_code,32768u);
