@@ -1,4 +1,4 @@
-name: AscensionRecomp M7.70 - Ascension 3835 additional PPC AOT handlers arm64
+name: AscensionRecomp M7.71.3 - Ascension 3835 PPC AOT handlers and native frontier diagnostics
 
 on:
   push:
@@ -128,6 +128,28 @@ jobs:
           PYM770UNPACK
           python3 tools/m770_apply_ci.py .
           python3 tools/m771_apply_ci.py .
+          # Correct the shipping version AFTER the M7.69-era unit tests
+          # and AFTER the M7.70 stage. Do not lie about earlier hardware runs.
+          python3 - <<'PYM7713VERSION'
+          from pathlib import Path
+          plist=Path('ios/Probe-Info.plist')
+          old=plist.read_text()
+          for a,b in [
+            ('<key>CFBundleShortVersionString</key><string>7.70.0</string>',
+             '<key>CFBundleShortVersionString</key><string>7.71.3</string>'),
+            ('<key>CFBundleVersion</key><string>7700</string>',
+             '<key>CFBundleVersion</key><string>7713</string>')]:
+            assert old.count(a)==1,(str(plist),a,old.count(a))
+            old=old.replace(a,b)
+          plist.write_text(old)
+          build=Path('tools/build_ios_probe_ipa.sh')
+          src=build.read_text()
+          a='AscensionRecompProbe-7.70.0-unsigned.ipa'
+          b='AscensionRecompProbe-7.71.3-unsigned.ipa'
+          assert src.count(a)>=1,('build IPA name absent',src.count(a))
+          build.write_text(src.replace(a,b))
+          print('M7.71.3 shipping identity 7.71.3 (7713) and IPA basename checked')
+          PYM7713VERSION
           bash -n tools/build_ios_probe_ipa.sh
       - name: Export exact iOS project sources and staged ARM64 runtime (M7.71)
         run: |
@@ -1832,7 +1854,7 @@ jobs:
           grep -Eq ' [Tt] _ar_lv2_timezone$' m78-owner-aot-linked-symbols.txt
           echo "M7.43: 6251 generated GOWA ELF C-AOT functions compiled and linked in final Apple ARM64 Mach-O (9 modules + SHA installer). Number actually executed and new PC pending physical iPhone report; no guest files/RSX demonstrated." > m78-actions-status.txt
           test -s AscensionRecompProbe-0.6.22-unsigned.ipa
-          /usr/libexec/PlistBuddy -c 'Print CFBundleShortVersionString' ios-probe/Payload/AscensionRecompProbe.app/Info.plist | grep -Fx 7.70.0
+          /usr/libexec/PlistBuddy -c 'Print CFBundleShortVersionString' ios-probe/Payload/AscensionRecompProbe.app/Info.plist | grep -Fx 7.71.3
           /usr/bin/unzip -t AscensionRecompProbe-0.6.22-unsigned.ipa | tee m42-ipa-integrity.log
           xcrun nm -g ios-probe/Payload/AscensionRecompProbe.app/AscensionRecompProbe | grep -E '(_rsx_metal_backend_present|_rsx_metal_backend_init|_OBJC_CLASS_\\$_ARMetalView)' > m42-runtime-link-symbols.txt || true
           grep -q _rsx_metal_backend_init m39-metal-symbols.txt
@@ -1955,7 +1977,7 @@ jobs:
           retention-days: 14
           if-no-files-found: warn
           path: |
-            AscensionRecompProbe-7.70.0-unsigned.ipa
+            AscensionRecompProbe-7.71.3-unsigned.ipa
             m770-ipa-sha256.txt
             m764-final-attestation.json
             m764c-final-attestation.json
@@ -2015,11 +2037,11 @@ jobs:
           test -s m764-tail-host-test.log
           grep -Eq ' [Tt] _ar_m764c_native_005392a4$' m78-owner-aot-linked-symbols.txt
           grep -Eq ' [Tt] _ar_m764c_register_successors$' m78-owner-aot-linked-symbols.txt
-          test -s AscensionRecompProbe-7.70.0-unsigned.ipa
+          test -s AscensionRecompProbe-7.71.3-unsigned.ipa
       - name: M7.69 attest 5437 native Apple ARM64 CFG handlers in final IPA
         run: |
           set -euo pipefail
-          test -s AscensionRecompProbe-7.70.0-unsigned.ipa
+          test -s AscensionRecompProbe-7.71.3-unsigned.ipa
           test -s m770-ipa-sha256.txt
           test -s m769-final-attestation.json
           test -s m769-host-frontier.log
@@ -2039,7 +2061,7 @@ jobs:
       - name: M7.70 final eight Apple ARM64 units linked into IPA
         run: |
           set -euo pipefail
-          test -s AscensionRecompProbe-7.70.0-unsigned.ipa
+          test -s AscensionRecompProbe-7.71.3-unsigned.ipa
           test -s m770-apple-arm64-objects.log
           test -s m770-final-attestation.json
           test -s m770-frontier-host.log
@@ -2056,7 +2078,7 @@ jobs:
       - name: M7.68 final native AOT-HLE return and source scope gates
         run: |
           set -euo pipefail
-          test -s AscensionRecompProbe-7.70.0-unsigned.ipa
+          test -s AscensionRecompProbe-7.71.3-unsigned.ipa
           test -s m770-ipa-sha256.txt
           test -s m768-host-hle.log
           test -s m768-host-capacity.log
@@ -2075,7 +2097,7 @@ jobs:
           test -s m767-host-test.log
           test -s m767-final-attestation.json
           test -s m770-ipa-sha256.txt
-          test -s AscensionRecompProbe-7.70.0-unsigned.ipa
+          test -s AscensionRecompProbe-7.71.3-unsigned.ipa
           grep -Fq 'M7.67 native import lookup and genuine' m41-build-ipa.log || true
           python3 - <<'PY'
           from pathlib import Path
@@ -2092,7 +2114,7 @@ jobs:
           test -s m766-final-attestation.json
           test -s m766-objects-nm.txt
           test -s m766-host-test.log
-          test -s AscensionRecompProbe-7.70.0-unsigned.ipa
+          test -s AscensionRecompProbe-7.71.3-unsigned.ipa
           python3 - <<'PY'
           import json
           from pathlib import Path
@@ -2108,7 +2130,7 @@ jobs:
           test -s m765-final-attestation.json
           test -s m765-objects-nm.txt
           test -s m765-host-test.log
-          test -s AscensionRecompProbe-7.70.0-unsigned.ipa
+          test -s AscensionRecompProbe-7.71.3-unsigned.ipa
           grep -Eq ' [Tt] _ar_m765_native_00539308$' m78-owner-aot-linked-symbols.txt
           grep -Eq ' [Tt] _ar_m765_native_0053930c$' m78-owner-aot-linked-symbols.txt
           grep -Eq ' [Tt] _ar_m765_register_frontier$' m78-owner-aot-linked-symbols.txt
@@ -2461,7 +2483,7 @@ jobs:
             m76-status.txt
             m75-aot-boot-host.log
             AscensionRecompProbe-0.6.22-unsigned.ipa
-            AscensionRecompProbe-7.70.0-unsigned.ipa
+            AscensionRecompProbe-7.71.3-unsigned.ipa
             m770-ipa-sha256.txt
             m40-ios-layer-view.o
             build-ios-runtime/libps3recomp_runtime.a
