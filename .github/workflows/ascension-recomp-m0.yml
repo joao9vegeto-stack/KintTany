@@ -1777,7 +1777,7 @@ jobs:
           grep -Eq ' [Tt] _ar_lv2_timezone$' m78-owner-aot-linked-symbols.txt
           echo "M7.43: 6251 generated GOWA ELF C-AOT functions compiled and linked in final Apple ARM64 Mach-O (9 modules + SHA installer). Number actually executed and new PC pending physical iPhone report; no guest files/RSX demonstrated." > m78-actions-status.txt
           test -s AscensionRecompProbe-0.6.22-unsigned.ipa
-          /usr/libexec/PlistBuddy -c 'Print CFBundleShortVersionString' ios-probe/Payload/AscensionRecompProbe.app/Info.plist | grep -Fx 7.69.0
+          /usr/libexec/PlistBuddy -c 'Print CFBundleShortVersionString' ios-probe/Payload/AscensionRecompProbe.app/Info.plist | grep -Fx 7.70.0
           /usr/bin/unzip -t AscensionRecompProbe-0.6.22-unsigned.ipa | tee m42-ipa-integrity.log
           xcrun nm -g ios-probe/Payload/AscensionRecompProbe.app/AscensionRecompProbe | grep -E '(_rsx_metal_backend_present|_rsx_metal_backend_init|_OBJC_CLASS_\\$_ARMetalView)' > m42-runtime-link-symbols.txt || true
           grep -q _rsx_metal_backend_init m39-metal-symbols.txt
