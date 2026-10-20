@@ -582,6 +582,7 @@ for line in lines:
     if len(fields)>=2 and fields[-2] in {"T","t","D","d","B","b","R","r","S","s"}:
         defined.append(fields[-1])
 required=("func_0052A740", "func_0052E3F4", "_ar_m772_runtime_attest",
+          "_ar_m772_runtime_init", "_ar_m772_dispatch_native",
           "_ppu_recomp_register", "_gowa_spu_0000_at_006B3E00_spu_recomp_register",
           "_gowa_spu_0003_at_006D5900_spu_recomp_register")
 missing=[symbol for symbol in required if not any(symbol in name for name in defined)]

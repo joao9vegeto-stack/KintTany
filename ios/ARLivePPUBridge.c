@@ -35,6 +35,7 @@ extern int ar_gowa2_offline_aot_install_sha256(const uint8_t*,size_t);
 #include "../runtime/ppu_m756_stop_evidence.h"
 #include "../runtime/ppu_m767_live_import.h"
 extern int ARGameFolderGuestIO(const char*,uint64_t,void*,size_t,size_t*,uint64_t*);
+extern int ar_m772_runtime_init(uint8_t*,size_t);
 
 extern int ar_m711_bind_memory(const uint8_t*,size_t,uint32_t*);
 extern int ar_m711_bind_sysutil(const uint8_t*,size_t,uint32_t*);
@@ -516,6 +517,14 @@ int ar_m70_native_runtime_probe(const uint8_t*d,size_t len,
     ar_mmapper_reset();ar_bridge_shutdown();return -38;
  }
 #endif
+ /* Register and bind the full PS3Recomp runtime before the first guest
+  * instruction. The old diagnostic-only attestation happened during report
+  * formatting, after ar_run had already stopped. */
+ if(ar_m772_runtime_init((uint8_t*)ar_guest_memory_base(),
+                         ar_guest_memory_capacity())!=0){
+   ar_mmapper_reset();ar_bridge_shutdown();return -73;
+ }
+ out[15]|=0x2000u; /* live PS3Recomp dispatcher initialized before guest run */
  if(out[5])out[6]=(uint32_t)ar_run(&ctx,image.entry_code,32768u);
  else out[6]=(uint32_t)ar_run(&ctx,image.entry_code,128u);
  out[7]=ar_last_unresolved();

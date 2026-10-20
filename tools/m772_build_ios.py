@@ -136,7 +136,9 @@ def main():
         raise SystemExit("M7.72 nm failed")
     symbol_text = symbols.read_text(errors="replace")
     required = ["func_0052A740", "func_0052E3F4", "_function_table_count",
-                "_ar_m772_runtime_attest", "_ppu_recomp_register",
+                "_ar_m772_runtime_attest", "_ar_m772_runtime_init",
+                "_ar_m772_dispatch_native", "_ar_m772_unbind_guest_memory",
+                "_ppu_recomp_register",
                 "_gowa_spu_0000_at_006B3E00_spu_recomp_register",
                 "_gowa_spu_0001_at_006C1B00_spu_recomp_register",
                 "_gowa_spu_0002_at_006CB580_spu_recomp_register",
@@ -162,8 +164,8 @@ def main():
         "archive": archive.name,
         "archive_bytes": archive.stat().st_size,
         "archive_sha256": digest(archive),
-        "table_registered_by_app_report": True,
-        "game_guest_execution": "NOT_MEASURED",
+        "runtime_dispatch_adapter": "linked; boot initializes registry before ar_run",
+        "device_guest_execution": "RUNTIME_COUNTER_REPORTED_BY_APP; DEVICE_RUN_REQUIRED",
         "first_guest_frame": "NOT_MEASURED",
     }
     (out / "m772-ios-arm64-attestation.json").write_text(json.dumps(result, indent=2) + "\n")

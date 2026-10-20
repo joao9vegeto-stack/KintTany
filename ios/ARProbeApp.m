@@ -867,10 +867,14 @@ static NSString *ARCurrentRelease(void){
      "Entradas PPU registradas=%llu\n"
      "0x0052A740=%@ · chamada 0x0052E3F4=%@\n"
      "Imagens SPU registradas=%llu\n"
-     "Execução de código guest por esta verificação= NÃO MEDIDA\n"
-     "Isto prova registro de código nativo; não prova gameplay, HLE completo ou frame RSX.\n",
+     "Runtime inicializado antes do guest=%@\n"
+     "Despachos PPU PS3Recomp executados=%llu · último PC=0x%08llX\n"
+     "VM guest ligada ao runtime=%llu bytes\n"
+     "Despachos nativos não provam gameplay, HLE completo ou frame RSX.\n",
      (unsigned long long)m772[0],m772[1]?@"SIM":@"NÃO",
-     m772[2]?@"SIM":@"NÃO",(unsigned long long)m772[3]];
+     m772[2]?@"SIM":@"NÃO",(unsigned long long)m772[3],
+     m772[4]?@"SIM":@"NÃO",(unsigned long long)m772[5],
+     (unsigned long long)m772[6],(unsigned long long)m772[7]];
   [report appendString:
     @"\nRelatório sem bytes de ELF, PSARC ou arquivos comerciais.\n"];
   return report;

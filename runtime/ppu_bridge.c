@@ -2,6 +2,12 @@
 #include "ppu_bridge.h"
 #include <stdlib.h>
 #include <string.h>
+/* PS3Recomp is an optional production backend.  The weak edge keeps the
+ * isolated host dispatcher fixtures independent of the iOS archive. */
+#if defined(__GNUC__) || defined(__clang__)
+extern int ar_m772_dispatch_native(ppu_context *,uint32_t) __attribute__((weak));
+extern void ar_m772_unbind_guest_memory(void *) __attribute__((weak));
+#endif
 /* native AOT 65,535; uint16_t hash stores (index+1) */
 #define MAX_FUNCS 65535
 #define MAX_MEM (128u*1024u*1024u)
@@ -163,6 +169,9 @@ int ar_bridge_init(size_t n) {
   mem_size=n;return AR_OK;
 }
 void ar_bridge_shutdown(void){
+#if defined(__GNUC__) || defined(__clang__)
+ if(ar_m772_unbind_guest_memory)ar_m772_unbind_guest_memory(mem);
+#endif
   free(mem);mem=0;mem_size=0;memset(extra,0,sizeof(extra));nextra=0;nfunc=0;memset(aot_slot,0,sizeof(aot_slot));
  memset(trace_seen,0,sizeof(trace_seen));memset(trace_ring,0,sizeof(trace_ring));
  trace_total=0;trace_unique=0;trace_hle=0;trace_pending=0;trace_budget=0;
@@ -181,6 +190,8 @@ void ar_bridge_shutdown(void){
  barrier_last_pc=0;
  fp_loads=fp_stores=fp_converts=fp_divides=fp_last_pc=0;
 }
+void *ar_guest_memory_base(void){return mem;}
+size_t ar_guest_memory_capacity(void){return mem_size;}
 int ar_last_error(void){return fault;}
 uint32_t ar_last_missing_nid(void){return missing_nid;}
 uint32_t ar_last_missing_syscall(void){return missing_syscall;}
@@ -386,6 +397,20 @@ static int dispatch(ppu_context *c,uint64_t pc){
   for(;;){
     if(!budget){result=fault=AR_BUDGET;break;}
     budget--;
+#if defined(__GNUC__) || defined(__clang__)
+    /* The PS3Recomp lift is the primary full-function backend.  It must be
+     * checked before the older frontier fragments, otherwise the app can
+     * report those fragments while never entering the full lift. */
+    if(ar_m772_dispatch_native && ar_m772_dispatch_native(c,(uint32_t)pc)){
+      const uint64_t next=c->cia;
+      if(fault){result=fault;break;}
+      if(!next){result=AR_OK;break;}
+      if(next>UINT32_MAX||(next&3u)){
+        m767_failure(c,next,1u);result=fault=AR_UNRESOLVED;break;
+      }
+      pc=next;from_native_tail=1;continue;
+    }
+#endif
     size_t found_index=0u;
     ar_ppu_fn fn=lookup(pc,&found_index);
     if(!fn){

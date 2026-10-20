@@ -15,6 +15,8 @@ typedef int (*ar_ppu_fn)(ppu_context *);
 typedef int (*ar_hle_fn)(ppu_context *);
 int ar_bridge_init(size_t);
 void ar_bridge_shutdown(void);
+void *ar_guest_memory_base(void);
+size_t ar_guest_memory_capacity(void);
 int ar_register(uint32_t, ar_ppu_fn);
 int ar_run(ppu_context *, uint32_t, uint32_t);
 int ar_last_error(void);
