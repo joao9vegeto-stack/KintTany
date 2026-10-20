@@ -69,6 +69,7 @@ class M772IOSVfsMountTests(unittest.TestCase):
         self.assertIn("M7.72 — STATUS PS3RECOMP AO VIVO", stage)
         self.assertIn("ar_m772_runtime_attest(m772)", stage)
         self.assertIn("Despachos PS3Recomp=%llu | último PC=0x%08llX", stage)
+        self.assertEqual(stage.count('self.ppuProgress?:@"sem status recente"'), 2)
         self.assertNotIn("Agora: 13252 AOT", stage)
 
     def test_each_elf_import_clears_stale_m772_runtime_counters(self):

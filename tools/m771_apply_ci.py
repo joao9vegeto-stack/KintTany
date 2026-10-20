@@ -115,6 +115,7 @@ static uint32_t aot_hash(uint32_t pc){''',name)
     ARCurrentRelease(),e?@"SIM":@"NÃO MEDIDO",v(@"when"),
     self.shaderBusy?@"EM EXECUÇÃO":(e?@"CONCLUÍDO":@"SEM EXECUÇÃO"),
     self.ppuProgress?:@"sem status recente",
+    self.ppuProgress?:@"sem status recente",
     (unsigned long long)m772[0],(unsigned long long)m772[3],
     m772[4]?@"SIM":@"NÃO",
     (unsigned long long)m772[5],(unsigned long long)m772[6],
