@@ -1604,10 +1604,47 @@ static NSString *ARCurrentRelease(void){
         data.bytes,data.length,info,cpu48,trace48,detail48,tls48);
 
     unsigned int native[16]={0};
-    [self arSetStatus:@"PPU 48 passos iniciados; carregando VM de 256 MiB e preparando despacho AOT nativo..."];
-    const int nativeRC=ar_m70_native_runtime_probe(
-       data.bytes,data.length,detail48[8],native);
-    [self arSetStatus:[NSString stringWithFormat:@"Despacho AOT terminou (rc=%d) · reunindo evidências guest...",nativeRC]];
+    /* A PS3 title ELF is not a complete install. Starting the full 256 MiB
+     * guest and native PPU entry with no authorized USRDIR gives the game no
+     * files to open, and on LiveContainer can look like a frozen app. Check
+     * the persisted Files.app grant and indexed title layout first. */
+    NSError *gameFolderError=nil;
+    NSDictionary *gameManifest=ARGameFolderRestore(&gameFolderError);
+    NSArray<NSDictionary *> *gameFiles=[gameManifest[@"files"] isKindOfClass:NSArray.class]
+        ? gameManifest[@"files"] : @[];
+    NSString *gameRootName=[gameManifest[@"root_name"] isKindOfClass:NSString.class]
+        ? gameManifest[@"root_name"] : @"";
+    BOOL hasUSRDIR=(gameRootName.caseInsensitiveCompare(@"USRDIR")==NSOrderedSame);
+    unsigned long long gameBytes=0;
+    NSUInteger psarcCount=0;
+    for(NSDictionary *entry in gameFiles){
+      NSString *relative=[entry[@"path"] isKindOfClass:NSString.class]
+          ? entry[@"path"] : @"";
+      if([relative caseInsensitiveCompare:@"USRDIR"]==NSOrderedSame ||
+         [relative.lowercaseString hasPrefix:@"usrdir/"])hasUSRDIR=YES;
+      NSNumber *length=[entry[@"bytes"] isKindOfClass:NSNumber.class]
+          ? entry[@"bytes"] : @0;
+      gameBytes+=length.unsignedLongLongValue;
+      if([relative.pathExtension.lowercaseString isEqualToString:@"psarc"])
+        psarcCount++;
+    }
+    const BOOL gameReady=gameFiles.count>0 && hasUSRDIR;
+    int nativeRC=-74; /* no selected/indexed NPUA80918 USRDIR */
+    if(gameReady){
+      [self arSetStatus:[NSString stringWithFormat:
+        @"Instalação reconhecida: %@ · %lu arquivos · %.2f GiB · %lu PSARC. Preparando runtime PPU nativo...",
+        gameRootName,(unsigned long)gameFiles.count,
+        (double)gameBytes/(1024.0*1024.0*1024.0),(unsigned long)psarcCount]];
+      nativeRC=ar_m70_native_runtime_probe(
+         data.bytes,data.length,detail48[8],native);
+      [self arSetStatus:[NSString stringWithFormat:@"Despacho AOT terminou (rc=%d) · reunindo evidências guest...",nativeRC]];
+    }else{
+      native[6]=(uint32_t)nativeRC;
+      NSString *why=gameFolderError.localizedDescription?:
+          @"A pasta selecionada não contém arquivos USRDIR reconhecíveis.";
+      [self arSetStatus:[NSString stringWithFormat:
+        @"ELF validado; runtime pesado pausado. %@ Selecione a pasta NPUA80918 do jogo (com USRDIR) em ‘Selecionar pasta’ e importe o ELF novamente.",why]];
+    }
     ar_fs_trace fsMeasured={0};
     ar_m751_last_fs_trace(&fsMeasured);
     ar_m767_import_evidence importMeasured={0};
@@ -1636,12 +1673,15 @@ static NSString *ARCurrentRelease(void){
        "Loader=%d · Entrada=0x%08X · TOC=0x%08X · segmentos=%u\n"
        "Capacidade VM=%u · arquivo mapeado=%u · funções AOT=%u\n"
        "Import PRX=%d · bind import=%d · bind HLE=%d\n"
+       "Instalação reconhecida=%@ · arquivos=%lu · bytes=%llu · PSARC=%lu\n"
        "Teste HLE TLS nativa=%d · r13=0x%08X\n"
        "Despacho AOT nativo=%d · primeiro PC pendente=0x%08X\n"
        "Opcode inicial guest=0x%08X · evidências=0x%X\n"
        "AR_UNRESOLVED=-3: PC guest sem ARM64 registrado; AOT ONLY proíbe fallback.\n",
        nativeRC,native[1],native[2],native[3],
        native[4],native[13],native[5],
+       gameReady?@"SIM (USRDIR)":@"NÃO (M7.0 não iniciado)",
+       (unsigned long)gameFiles.count,gameBytes,(unsigned long)psarcCount,
        (int)native[8],(int)native[9],(int)native[10],
        (int)native[11],native[12],
        (int)native[6],native[7],native[14],native[15]];
