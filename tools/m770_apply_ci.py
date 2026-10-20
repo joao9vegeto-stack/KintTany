@@ -97,7 +97,7 @@ def main(repo: Path):
         "ultimo_aot=0x%08X proximo_pc=0x%08X "
         "opcode_PPC_real=0x%08X opcode_validado=%@ "
         "dispatches=%u distintas=%u PPC_interpretadas=%u "
-        "cellFsOpen=%u cellFsRead=%u bytes_guest=%llu\n",
+        "cellFsOpen=%u cellFsRead=%u bytes_guest=%llu\\n",
        m770Stats[0],m770Stats[1],m770Stats[2],m770Stats[3],
        m770Stats[4],m770Stats[5],m770Stats[6],
        m770FrontierExecuted?@"SIM":@"NÃO",
