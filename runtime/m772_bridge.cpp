@@ -110,11 +110,14 @@ static uint32_t m772_has_ppu(uint32_t pc)
 extern "C" void ar_m772_runtime_attest(uint64_t out[9])
 {
     if (!out) return;
-    out[0] = function_table_count;
-    out[1] = m772_has_ppu(0x0052A740u);
-    out[2] = m772_has_ppu(0x0052E3F4u);
-    out[3] = 4; /* SPU image registration calls executed above. */
-    out[4] = __atomic_load_n(&m772_initialized, __ATOMIC_ACQUIRE);
+    const uint32_t ready = __atomic_load_n(&m772_initialized, __ATOMIC_ACQUIRE);
+    /* The UI may poll while runtime_init is registering thousands of entries.
+     * Do not inspect the mutable registry until the release/acquire handshake. */
+    out[0] = ready ? function_table_count : 0;
+    out[1] = ready ? m772_has_ppu(0x0052A740u) : 0;
+    out[2] = ready ? m772_has_ppu(0x0052E3F4u) : 0;
+    out[3] = ready ? 4 : 0; /* SPU image registrations completed. */
+    out[4] = ready;
     out[5] = __atomic_load_n(&m772_dispatch_count, __ATOMIC_RELAXED);
     out[6] = __atomic_load_n(&m772_last_guest_pc, __ATOMIC_RELAXED);
     out[7] = __atomic_load_n(&m772_guest_vm_size, __ATOMIC_RELAXED);
