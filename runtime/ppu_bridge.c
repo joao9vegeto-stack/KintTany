@@ -4,7 +4,10 @@
 #include <string.h>
 /* PS3Recomp is an optional production backend.  The weak edge keeps the
  * isolated host dispatcher fixtures independent of the iOS archive. */
-#if defined(__GNUC__) || defined(__clang__)
+#if defined(__APPLE__)
+extern int ar_m772_dispatch_native(ppu_context *,uint32_t) __attribute__((weak_import));
+extern void ar_m772_unbind_guest_memory(void *) __attribute__((weak_import));
+#elif defined(__GNUC__) || defined(__clang__)
 extern int ar_m772_dispatch_native(ppu_context *,uint32_t) __attribute__((weak));
 extern void ar_m772_unbind_guest_memory(void *) __attribute__((weak));
 #endif
@@ -169,7 +172,7 @@ int ar_bridge_init(size_t n) {
   mem_size=n;return AR_OK;
 }
 void ar_bridge_shutdown(void){
-#if defined(__GNUC__) || defined(__clang__)
+#if defined(__APPLE__) || defined(__GNUC__) || defined(__clang__)
  if(ar_m772_unbind_guest_memory)ar_m772_unbind_guest_memory(mem);
 #endif
   free(mem);mem=0;mem_size=0;memset(extra,0,sizeof(extra));nextra=0;nfunc=0;memset(aot_slot,0,sizeof(aot_slot));
@@ -397,7 +400,7 @@ static int dispatch(ppu_context *c,uint64_t pc){
   for(;;){
     if(!budget){result=fault=AR_BUDGET;break;}
     budget--;
-#if defined(__GNUC__) || defined(__clang__)
+#if defined(__APPLE__) || defined(__GNUC__) || defined(__clang__)
     /* The PS3Recomp lift is the primary full-function backend.  It must be
      * checked before the older frontier fragments, otherwise the app can
      * report those fragments while never entering the full lift. */
