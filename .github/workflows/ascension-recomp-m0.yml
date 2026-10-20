@@ -127,6 +127,7 @@ jobs:
           print('M7.70 owner delta ZIP SHA256 PASS; seven modules, installer, manifest and regression tests staged')
           PYM770UNPACK
           python3 tools/m770_apply_ci.py .
+          python3 tools/m771_apply_ci.py .
           bash -n tools/build_ios_probe_ipa.sh
       - name: M7.27 verify true host ARM64 dmb fence inside generated AOT
         run: |
