@@ -1325,6 +1325,9 @@ static NSString *ARCurrentRelease(void){
 - (void)arSetStatus:(NSString*)text {
  [self arPerformOnMain:^{ self.status.text=text; }];
 }
+- (void)arPublishPpuSummary {
+ [self arPerformOnMain:^{ self.status.text=self.ppuSummary; }];
+}
 - (void)importM59ELF:(UIButton*)sender {
  (void)sender;
  if(!self.ready||self.shaderBusy)return;
@@ -2298,7 +2301,7 @@ static NSString *ARCurrentRelease(void){
            "Use «Copiar diagnóstico PPU» para enviar a trilha.",
            legacyState,old40State,rc48,cpu48[0],cpu48[8],
            cpu48[7],faultDetail,trace48[0],trace48[1]]];
-       [self arSetStatus:self.ppuSummary];
+       [self arPublishPpuSummary];
        return;
     }
     self.ppuReport=[NSString stringWithFormat:
@@ -2324,7 +2327,7 @@ static NSString *ARCurrentRelease(void){
         "M7.9: código ARM64 recompilado vinculado; veja AOT e próximo PC no relatório.",
         legacyState,old40State,tls48[0],cpu48[2],cpu48[18],cpu48[17],
         cpu48[5],cpu48[19],cpu48[15]]];
-    [self arSetStatus:self.ppuSummary];
+    [self arPublishPpuSummary];
    } @finally {
      if(scoped)[url stopAccessingSecurityScopedResource];
      dispatch_async(dispatch_get_main_queue(),^{
@@ -2332,7 +2335,6 @@ static NSString *ARCurrentRelease(void){
        self.ppuBatchButton.enabled=(self.ppuBatchReport.length>0);
        self.ppuReportButton.enabled=(self.ppuReport.length>0);
        self.ppuAdvancedButton.enabled=(self.ppuReport.length>0);
-       self.ppuDiagnosticsButton.enabled=(self.ppuReport.length>0);
      });
    }
  });
