@@ -103,6 +103,7 @@ static NSString *ARCurrentRelease(void){
 @property(nonatomic,strong) UIButton *ppuBatchButton;
 @property(nonatomic,copy) NSString *ppuBatchReport;
 @property(nonatomic,copy) NSString *ppuReport;
+@property(nonatomic,copy) NSString *ppuProgress;
 @property(nonatomic,copy) NSString *ppuSummary;
 @property(nonatomic,copy) NSString *folderReport;
 @property(nonatomic,strong) NSDictionary<NSString*,id> *m750Run;
@@ -699,7 +700,8 @@ static NSString *ARCurrentRelease(void){
 }
 - (void)copyAdvancedPpuReport:(UIBarButtonItem *)sender {
     (void)sender;
-    if(self.ppuReport.length)UIPasteboard.generalPasteboard.string=self.ppuReport;
+    NSString *text=self.ppuReport.length?self.ppuReport:[self arUnifiedPpuText];
+    if(text.length)UIPasteboard.generalPasteboard.string=text;
 }
 - (void)closeAdvancedPpuReport:(UIBarButtonItem *)sender {
     (void)sender;
@@ -707,7 +709,7 @@ static NSString *ARCurrentRelease(void){
 }
 - (void)openAdvancedPpuReport:(UIButton *)sender {
     (void)sender;
-    if(!self.ppuReport.length)return;
+    if(!self.ppuReport.length&&!self.shaderBusy)return;
     UIViewController *page=[UIViewController new];
     page.title=@"Diagnóstico avançado PPU";
     page.view.backgroundColor=UIColor.systemBackgroundColor;
@@ -716,7 +718,7 @@ static NSString *ARCurrentRelease(void){
     details.editable=NO;
     details.selectable=YES;
     details.font=[UIFont monospacedSystemFontOfSize:12 weight:UIFontWeightRegular];
-    details.text=self.ppuReport;
+    details.text=self.ppuReport.length?self.ppuReport:[self arUnifiedPpuText];
     [page.view addSubview:details];
     [NSLayoutConstraint activateConstraints:@[
       [details.topAnchor constraintEqualToAnchor:page.view.safeAreaLayoutGuide.topAnchor],
@@ -739,7 +741,7 @@ static NSString *ARCurrentRelease(void){
 - (NSString *)arUnifiedPpuText {
   /* M7.52-v3: freshly imported ELF run, measured guest counters only.
    * Do not derive device evidence from offline symbols or historical TXT. */
-  NSDictionary *e=self.m750Run;
+  NSDictionary *e=self.shaderBusy?nil:self.m750Run;
   NSString *(^val)(NSString *)=^NSString*(NSString *k){
      return e[k]?[e[k] description]:@"NÃO MEDIDO";
   };
@@ -775,6 +777,7 @@ static NSString *ARCurrentRelease(void){
      "Branch=%s | Commit=%s | Build Actions=%s | Workflow ID=%s\n"
      "App=%@ (CFBundleVersion=%@) | Runtime AOT ONLY | Relatório=v12\n"
      "Tipo teste=%@ | Momento=%@\n"
+     "Estado atual=%@ · %@\n"
      "ELF carregado=%@ | origem=%@\n"
      "AOT vinculadas=%@ entradas | origem=%@\n"
      "AOT distintas executadas=%@ entradas | origem=%@\n"
@@ -799,7 +802,9 @@ static NSString *ARCurrentRelease(void){
      AR_M750_BUILD_RUN_NUMBER,AR_M750_BUILD_RUN_ID,
      ARCurrentRelease(),[[NSBundle mainBundle] objectForInfoDictionaryKey:@"CFBundleVersion"],
      e?@"teste físico iPhone / PPU guest":@"NÃO MEDIDO",
-     e?val(@"when"):@"NÃO MEDIDO",elf,origin,
+     e?val(@"when"):@"NÃO MEDIDO",
+     self.shaderBusy?@"EM EXECUÇÃO":(e?@"CONCLUÍDO":@"SEM EXECUÇÃO"),
+     self.ppuProgress?:@"sem status recente",elf,origin,
      val(@"aot"),e?@"tabela AOT carregada no app":origin,
      val(@"unique"),origin,val(@"dispatches"),origin,
      val(@"fallback"),origin,val(@"limit"),origin,
@@ -854,14 +859,14 @@ static NSString *ARCurrentRelease(void){
      " M7.26–M7.49 são diagnósticos de subsistemas antigos."
      " A etiqueta M7.44 é do runtime legado e não representa a versão"
      " do app. Nenhuma cifra antiga altera EXECUÇÃO ATUAL.\n"];
-  NSString *body=self.ppuReport.length?self.ppuReport:self.ppuSummary;
+  NSString *body=self.shaderBusy?nil:(self.ppuReport.length?self.ppuReport:self.ppuSummary);
   if(body.length)[report appendFormat:
     @"\n--- Histórico PPU com origem dos testes no texto ---\n%@\n",body];
   if(self.folderReport.length)[report appendFormat:
     @"\n--- Evento HOST Files separado (não cellFsOpen/Read) ---\n%@\n",
       self.folderReport];
   uint64_t m772[8]={0};
-  ar_m772_runtime_attest(m772);
+  if(!self.shaderBusy)ar_m772_runtime_attest(m772);
   [report appendFormat:
     @"\nM7.72 — TABELAS DO LIFT PS3RECOMP NO RUNTIME\n"
      "Entradas PPU registradas=%llu\n"
@@ -1323,7 +1328,11 @@ static NSString *ARCurrentRelease(void){
  else dispatch_sync(dispatch_get_main_queue(),block);
 }
 - (void)arSetStatus:(NSString*)text {
- [self arPerformOnMain:^{ self.status.text=text; }];
+ [self arPerformOnMain:^{
+   self.status.text=text;
+   self.ppuProgress=text?:@"";
+   if(self.shaderBusy)self.ppuDiagnosticsButton.enabled=YES;
+ }];
 }
 - (void)arPublishPpuSummary {
  [self arPerformOnMain:^{ self.status.text=self.ppuSummary; }];
@@ -1438,10 +1447,14 @@ static NSString *ARCurrentRelease(void){
  BOOL scoped=[url startAccessingSecurityScopedResource];
  self.shaderBusy=YES;
  self.ppuReport=nil;self.ppuSummary=nil;self.ppuBatchReport=nil;self.m750Run=nil;
+ self.ppuProgress=@"GOWA.ELF recebido; preparando leitura e validação.";
  self.ppuBatchButton.enabled=NO;
  [self.ppuBatchButton setTitle:@"Copiar lote PPC (até 32 instruções)" forState:UIControlStateNormal];
  self.ppuReportButton.enabled=NO;self.ppuAdvancedButton.enabled=NO;
- self.ppuDiagnosticsButton.enabled=NO;
+ /* Keep live status/report available while native probes run off-main. */
+ self.ppuDiagnosticsButton.enabled=YES;
+ [self.ppuDiagnosticsButton setTitle:@"Relatório ao vivo · em execução"
+                            forState:UIControlStateNormal];
  self.status.text=@"GOWA.ELF recebido. Leitura e execução PPU/AOT em segundo plano…";
  dispatch_async(dispatch_get_global_queue(QOS_CLASS_USER_INITIATED,0),^{
    @try {
@@ -1524,6 +1537,7 @@ static NSString *ARCurrentRelease(void){
            rc24,cpu24[0],cpu24[8],cpu24[7]]];
        return;
     }
+    [self arSetStatus:@"M6.3 PPU REAL 24/24: OK · preparando continuação limitada M6.4..."];
     /* Do not start extra PPU instructions before M6.3 24/24 succeeds. */
     unsigned int cpu32[10]={0};
     const int rc32=ar_ppu_bootstrap_thirtytwo(data.bytes,data.length,info,cpu32);
@@ -1547,6 +1561,7 @@ static NSString *ARCurrentRelease(void){
        ? [NSString stringWithFormat:@"M6.4 LEGADA: -995 (%u/32) · transferida à M6.5",
                                     cpu32[0]]
        : @"M6.4 PPU REAL 32/32: OK";
+    [self arSetStatus:[NSString stringWithFormat:@"%@ · M6.5 em execução (40 instruções)...",legacyState]];
     unsigned int cpu40[16]={0};
     const int rc40=ar_ppu_bootstrap_forty(data.bytes,data.length,info,cpu40);
     /* M6.6: only the documented mtctr opcode missing in the M6.5
@@ -1582,12 +1597,15 @@ static NSString *ARCurrentRelease(void){
     unsigned int trace48[24]={0};
     unsigned int detail48[24]={0};
     unsigned int tls48[12]={0};
+    [self arSetStatus:[NSString stringWithFormat:@"%@ · M6.6 em execução (48 instruções)...",old40State]];
     const int rc48=ar_ppu_bootstrap_fortyeight_trace_m674(
         data.bytes,data.length,info,cpu48,trace48,detail48,tls48);
 
     unsigned int native[16]={0};
+    [self arSetStatus:@"PPU 48 passos iniciados; carregando VM de 256 MiB e preparando despacho AOT nativo..."];
     const int nativeRC=ar_m70_native_runtime_probe(
        data.bytes,data.length,detail48[8],native);
+    [self arSetStatus:[NSString stringWithFormat:@"Despacho AOT terminou (rc=%d) · reunindo evidências guest...",nativeRC]];
     ar_fs_trace fsMeasured={0};
     ar_m751_last_fs_trace(&fsMeasured);
     ar_m767_import_evidence importMeasured={0};
@@ -1632,6 +1650,7 @@ static NSString *ARCurrentRelease(void){
     const int execRC=ar_m73_private_import_probe(
         data.bytes,data.length,detail48[8],4096u,continuous,
         importEvidence,discoveredLibrary);
+    [self arSetStatus:@"Diagnóstico PPU/AOT finalizado · publicando relatório..."];
     NSString *lwMutexText=[NSString stringWithFormat:
        @"\nM7.7 — HLE PS3 / sys_lwmutex_create (NID 0x2F85C0EF)\n"
         "Import PRX reconhecido=%@ · HLE vinculado=%@\n"
@@ -2335,6 +2354,9 @@ static NSString *ARCurrentRelease(void){
        self.ppuBatchButton.enabled=(self.ppuBatchReport.length>0);
        self.ppuReportButton.enabled=(self.ppuReport.length>0);
        self.ppuAdvancedButton.enabled=(self.ppuReport.length>0);
+       self.ppuDiagnosticsButton.enabled=YES;
+       [self.ppuDiagnosticsButton setTitle:@"Relatórios · resumo / técnico"
+                                  forState:UIControlStateNormal];
      });
    }
  });

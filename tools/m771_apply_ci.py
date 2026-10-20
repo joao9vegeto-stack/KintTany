@@ -70,7 +70,7 @@ static uint32_t aot_hash(uint32_t pc){''',name)
     begin=s.index('- (NSString *)arUnifiedPpuText {')
     end=s.index('- (void)arCopyAllPpuText {',begin)
     slim='''- (NSString *)arUnifiedPpuText {
-  NSDictionary *e=self.m750Run;
+  NSDictionary *e=self.shaderBusy?nil:self.m750Run;
   NSString *(^v)(NSString *)=^NSString*(NSString *key){
     return e[key]?[e[key] description]:@"NÃO MEDIDO";
   };
@@ -83,7 +83,8 @@ static uint32_t aot_hash(uint32_t pc){''',name)
   return [NSString stringWithFormat:
     @"ASCENSIONRECOMP — EXECUÇÃO ATUAL / AOT-v13\\n"
      "Branch=%s | SHA=%s | Actions=%s | RunID=%s\\n"
-     "App=%@ | NPUA80918 | teste físico=%@ | momento=%@\\n\\n"
+     "App=%@ | NPUA80918 | teste físico=%@ | momento=%@\\n"
+     "Estado=%@ · %@\\n\\n"
      "RESULTADO REAL\\n"
      "Registradas=%@ | AOT distintas=%@ | despachos ARM64=%@ | PPC interpretadas=%@\\n"
      "Resultado guest=%@ | parada=%@ | opcode=%@ | último AOT=%@\\n"
@@ -106,7 +107,8 @@ static uint32_t aot_hash(uint32_t pc){''',name)
     AR_M750_BUILD_BRANCH,AR_M750_BUILD_SHA,
     AR_M750_BUILD_RUN_NUMBER,AR_M750_BUILD_RUN_ID,
     ARCurrentRelease(),e?@"SIM":@"NÃO MEDIDO",v(@"when"),
-    v(@"aot"),v(@"unique"),v(@"dispatches"),v(@"fallback"),
+    self.shaderBusy?@"EM EXECUÇÃO":(e?@"CONCLUÍDO":@"SEM EXECUÇÃO"),
+    self.ppuProgress?:@"sem status recente",v(@"aot"),v(@"unique"),v(@"dispatches"),v(@"fallback"),
     v(@"rc"),h(@"stop"),h(@"opcode"),h(@"last_aot"),
     v(@"fs_open_calls"),v(@"fs_read_calls"),v(@"fs_bytes"),
     v(@"m771_examined"),v(@"m771_new"),v(@"m771_conflicts"),v(@"m771_rejected"),
@@ -186,16 +188,19 @@ static uint32_t aot_hash(uint32_t pc){''',name)
     if((int)continuous[0]!=-1314 || continuous[3]!=0x4e800421u)''',name)
     s=one(s,'- (void)arExportPpuText {',
 '''- (void)arExportDetailedPpuText {
-    if(!self.ppuReport.length)return;
+    if(!self.ppuReport.length&&!self.shaderBusy)return;
     NSDateFormatter *d=[NSDateFormatter new];
     d.locale=[NSLocale localeWithLocaleIdentifier:@"en_US_POSIX"];
     d.dateFormat=@"yyyyMMdd-HHmmss";
-    NSString *name=[NSString stringWithFormat:@"AscensionRecomp-%@-TECNICO-NPUA80918-%@.txt",
-      ARCurrentRelease(),[d stringFromDate:[NSDate date]]];
+    BOOL live=self.shaderBusy&&!self.ppuReport.length;
+    NSString *name=[NSString stringWithFormat:@"AscensionRecomp-%@-%@-NPUA80918-%@.txt",
+      ARCurrentRelease(),live?@"STATUS-AO-VIVO":@"TECNICO",
+      [d stringFromDate:[NSDate date]]];
     NSURL *docs=[[[NSFileManager defaultManager] URLsForDirectory:NSDocumentDirectory
         inDomains:NSUserDomainMask] firstObject];
     NSURL *url=[docs URLByAppendingPathComponent:name isDirectory:NO];
-    if(![[self arLegacyFullPpuText] writeToURL:url atomically:YES
+    NSString *report=live?[self arUnifiedPpuText]:[self arLegacyFullPpuText];
+    if(![report writeToURL:url atomically:YES
               encoding:NSUTF8StringEncoding error:NULL])return;
     UIActivityViewController *share=[[UIActivityViewController alloc]
        initWithActivityItems:@[url] applicationActivities:nil];
