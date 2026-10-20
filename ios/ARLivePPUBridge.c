@@ -181,6 +181,7 @@ int ar_m70_native_runtime_probe(const uint8_t*d,size_t len,
  if(ar_last_error()!=AR_OK){ar_bridge_shutdown();return -28;}
  
 #ifdef ASCENSION_PRIVATE_AOT_LINKED
+#if !defined(ASCENSION_M772_LINKED)
  if(len>UINT32_MAX){ar_bridge_shutdown();return -29;}
  unsigned char digest[CC_SHA256_DIGEST_LENGTH];
  if(!CC_SHA256(d,(CC_LONG)len,digest)){
@@ -378,6 +379,7 @@ int ar_m70_native_runtime_probe(const uint8_t*d,size_t len,
   ar_m769_get_stats(m769_verified_stats);
 #endif
 #endif
+#endif /* ASCENSION_PRIVATE_AOT_LINKED */
  out[5]=(uint32_t)ar_registered_count(); /* genuine linked game AOT only */
 
  
@@ -396,6 +398,10 @@ int ar_m70_native_runtime_probe(const uint8_t*d,size_t len,
           tls_va<=UINT32_MAX &&
           ar_tls_configure(tlsbase,tlsbase+0x10000u)==AR_OK){
           
+          /* The old bootstrap smoke enters the game's main ELF entry without
+           * the PS3Recomp registry.  In the M7.72 path that is a second,
+           * misleading guest run before the real runtime is installed. */
+#if !defined(ASCENSION_M772_LINKED)
           if(out[5]==0u){
              ppu_context smoke=ctx;
              smoke.gpr[3]=smoke.thread_id;
@@ -408,6 +414,7 @@ int ar_m70_native_runtime_probe(const uint8_t*d,size_t len,
              out[12]=(uint32_t)smoke.gpr[13];
              if(hlerr==AR_OK && smoke.gpr[13])out[15]|=4u;
           }
+#endif
        }
     }
  }
@@ -540,8 +547,14 @@ int ar_m70_native_runtime_probe(const uint8_t*d,size_t len,
  }
  out[15]|=0x2000u; /* live PS3Recomp dispatcher initialized before guest run */
 #endif
+#ifdef ASCENSION_M772_LINKED
+ /* M7.72 dispatches the statically recompiled PS3Recomp function table.
+  * Do not reduce the guest budget because the legacy-fragment table is empty. */
+ out[6]=(uint32_t)ar_run(&ctx,image.entry_code,32768u);
+#else
  if(out[5])out[6]=(uint32_t)ar_run(&ctx,image.entry_code,32768u);
  else out[6]=(uint32_t)ar_run(&ctx,image.entry_code,128u);
+#endif
  out[7]=ar_last_unresolved();
  ar_trace_snapshot(&last_run_trace);
  /* Capture *live* guest descriptor slot before guest VM cleanup. */

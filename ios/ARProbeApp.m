@@ -1663,7 +1663,7 @@ static NSString *ARCurrentRelease(void){
     int nativeRC=-74; /* no selected/indexed NPUA80918 USRDIR */
     if(gameReady){
       [self arSetStatus:[NSString stringWithFormat:
-        @"Instalação reconhecida: %@ · %lu arquivos · %.2f GiB · %lu PSARC. Preparando runtime PPU nativo...",
+        @"Instalação reconhecida: %@ · %lu arquivos · %.2f GiB · %lu PSARC. Preparando PS3Recomp nativo (29.849 PPU / 4 SPU); AOT legado fora do caminho desta execução...",
         gameRootName,(unsigned long)gameFiles.count,
         (double)gameBytes/(1024.0*1024.0*1024.0),(unsigned long)psarcCount]];
       nativeRC=ar_m70_native_runtime_probe(

@@ -47,6 +47,12 @@ class M772IOSVfsMountTests(unittest.TestCase):
         self.assertIn("ar_guest_memory_capacity(),guest_root", bridge)
         self.assertIn("ARGameFolderEndGuestSession();", bridge)
 
+    def test_m772_full_lift_skips_legacy_aot_install_and_keeps_full_budget(self):
+        bridge = (ROOT / "ios" / "ARLivePPUBridge.c").read_text()
+        self.assertIn("#ifdef ASCENSION_PRIVATE_AOT_LINKED\n#if !defined(ASCENSION_M772_LINKED)", bridge)
+        self.assertIn("#ifdef ASCENSION_M772_LINKED\n /* M7.72 dispatches the statically recompiled PS3Recomp function table.", bridge)
+        self.assertIn("out[6]=(uint32_t)ar_run(&ctx,image.entry_code,32768u);", bridge)
+
 
 if __name__ == "__main__":
     unittest.main()
