@@ -10,7 +10,7 @@ extern void ar_m772_unbind_guest_memory(void *);
 #endif
 /* native AOT 65,535; uint16_t hash stores (index+1) */
 #define MAX_FUNCS 65535
-#define MAX_MEM (128u*1024u*1024u)
+#define MAX_MEM (256u*1024u*1024u)
 #define MAX_DEPTH 64
 #define MAX_IMPORTS 2048
 #define MAX_HANDLERS 2048

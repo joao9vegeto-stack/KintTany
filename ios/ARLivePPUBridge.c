@@ -78,7 +78,10 @@ extern void ar_m769_get_stats(uint32_t[5]);
 extern int ar_private_import_match(const uint8_t*,size_t,uint32_t,uint32_t[4],char[48]);
 extern int ar_private_import_find_nid(const uint8_t*,size_t,uint32_t,const char*,uint32_t[4],char[48]);
 
-enum { AR_NATIVE_LIMIT=128u*1024u*1024u, AR_NATIVE_RESERVE=0x20000u };
+/* The PS3 PPU guest's main RAM spans 256 MiB.  PT_LOAD segments occupy only
+ * the low part of that address space, but guest code and HLEs can legitimately
+ * touch higher addresses (for example 0x0E000000).  Keep a full guest window. */
+enum { AR_NATIVE_LIMIT=256u*1024u*1024u, AR_NATIVE_RESERVE=0x20000u };
 /* Native AOT trace copied before ar_bridge_shutdown; no game code stored. */
 static ar_aot_trace last_run_trace;
 static ar_fs_trace last_fs_trace;
@@ -140,7 +143,9 @@ int ar_m70_native_runtime_probe(const uint8_t*d,size_t len,
  const uint64_t aligned=(highest+0xfffu)&~UINT64_C(0xfff);
  if(aligned>AR_NATIVE_LIMIT-AR_NATIVE_RESERVE)return -27;
  const uint32_t tlsbase=(uint32_t)aligned;
- const size_t cap=(size_t)(aligned+AR_NATIVE_RESERVE);
+ uint64_t required=(uint64_t)aligned+AR_NATIVE_RESERVE;
+ if(required<AR_NATIVE_LIMIT)required=AR_NATIVE_LIMIT;
+ const size_t cap=(size_t)required;
  if(!tlsbase || tlsbase>=AR_NATIVE_LIMIT)return -27;
  const int rcinit=ar_bridge_init(cap);
  if(rcinit){out[0]=(uint32_t)rcinit;return rcinit;}
