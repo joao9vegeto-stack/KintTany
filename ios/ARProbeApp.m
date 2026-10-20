@@ -1317,6 +1317,14 @@ static NSString *ARCurrentRelease(void){
   [self.window.rootViewController presentViewController:picker
                                                 animated:YES completion:nil];
 }
+- (void)arPerformOnMain:(dispatch_block_t)block {
+ if(!block)return;
+ if([NSThread isMainThread])block();
+ else dispatch_sync(dispatch_get_main_queue(),block);
+}
+- (void)arSetStatus:(NSString*)text {
+ [self arPerformOnMain:^{ self.status.text=text; }];
+}
 - (void)importM59ELF:(UIButton*)sender {
  (void)sender;
  if(!self.ready||self.shaderBusy)return;
@@ -1425,21 +1433,29 @@ static NSString *ARCurrentRelease(void){
  (void)controller;
  NSURL*url=urls.firstObject;if(!url)return;
  BOOL scoped=[url startAccessingSecurityScopedResource];
- @try {
+ self.shaderBusy=YES;
+ self.ppuReport=nil;self.ppuSummary=nil;self.ppuBatchReport=nil;self.m750Run=nil;
+ self.ppuBatchButton.enabled=NO;
+ [self.ppuBatchButton setTitle:@"Copiar lote PPC (até 32 instruções)" forState:UIControlStateNormal];
+ self.ppuReportButton.enabled=NO;self.ppuAdvancedButton.enabled=NO;
+ self.ppuDiagnosticsButton.enabled=NO;
+ self.status.text=@"GOWA.ELF recebido. Leitura e execução PPU/AOT em segundo plano…";
+ dispatch_async(dispatch_get_global_queue(QOS_CLASS_USER_INITIATED,0),^{
+   @try {
    NSError*err=nil;
    NSNumber*size=[[[NSFileManager defaultManager]
       attributesOfItemAtPath:url.path error:&err] objectForKey:NSFileSize];
    if(err||!size||size.unsignedLongLongValue>32u*1024u*1024u){
-       self.status.text=@"M5.9: Arquivo indisponível ou maior que 32 MB.";return;
+       [self arSetStatus:@"M5.9: Arquivo indisponível ou maior que 32 MB."];return;
    }
    NSData*data=[NSData dataWithContentsOfURL:url
        options:NSDataReadingMappedIfSafe error:&err];
-   if(err||!data){self.status.text=@"M5.9: Leitura falhou.";return;}
+   if(err||!data){[self arSetStatus:@"M5.9: Leitura falhou."];return;}
    uint32_t info[5]={0};
    int rc=ar_private_elf_inspect(data.bytes,data.length,info);
    if(rc){
-       self.status.text=[NSString stringWithFormat:
-          @"M5.9: erro ELF %d. Use GOWA.ELF descriptografado.",rc];return;
+       [self arSetStatus:[NSString stringWithFormat:
+          @"M5.9: erro ELF %d. Use GOWA.ELF descriptografado.",rc]];return;
    }
    unsigned char hash[CC_SHA256_DIGEST_LENGTH]={0};
    CC_SHA256(data.bytes,(CC_LONG)data.length,hash);
@@ -1450,59 +1466,59 @@ static NSString *ARCurrentRelease(void){
        0x28,0x9b,0xe4,0xf9,0x18,0x34,0x62,0xb5};
    if(data.length!=8717136u||memcmp(hash,expected,32)||
        info[0]!=0x8283f8u||info[1]!=0x10410u||info[2]!=0x83f2b0u){
-       self.status.text=@"M5.9: ELF não corresponde à NPUA80918 validada.";return;
+       [self arSetStatus:@"M5.9: ELF não corresponde à NPUA80918 validada."];return;
    }
    unsigned int cpu[4]={0};
    const int cpu_rc=ar_ppu_bootstrap_four(data.bytes,data.length,info,cpu);
    if(cpu_rc){
-      self.status.text=[NSString stringWithFormat:
+      [self arSetStatus:[NSString stringWithFormat:
          @"M5.9 ELF VALIDADO; M6.0 PPU FALHA %d (%u/4).\n"
-          "CPU interrompida antes de M6.1.",cpu_rc,cpu[0]];
+          "CPU interrompida antes de M6.1.",cpu_rc,cpu[0]]];
       return;
    }
    unsigned int eight[6]={0};
    const int rc8=ar_ppu_bootstrap_eight(data.bytes,data.length,info,eight);
    if(rc8) {
-      self.status.text=[NSString stringWithFormat:
+      [self arSetStatus:[NSString stringWithFormat:
          @"M5.9 NPUA80918: ELF REAL VALIDADO\n"
           "M6.0 PPU 4/4 OK · M6.1 PPU FALHA %d (%u/8).\n"
-          "Parada segura, sem HLE nem gameplay.",rc8,eight[0]];
+          "Parada segura, sem HLE nem gameplay.",rc8,eight[0]]];
       return;
    }
    if(eight[0]!=8u||eight[1]!=0x83f2b0u||eight[2]!=0x10534u||
       eight[3]!=0x10430u||eight[4]!=0x07000f90u||eight[5]!=2u) {
-      self.status.text=@"M6.1: estado PPU inesperado; execução interrompida.";
+      [self arSetStatus:@"M6.1: estado PPU inesperado; execução interrompida."];
       return;
    }
    unsigned int cpu16[7]={0};
    const int rc16=ar_ppu_bootstrap_sixteen(data.bytes,data.length,info,cpu16);
    if(rc16){
-      self.status.text=[NSString stringWithFormat:
+      [self arSetStatus:[NSString stringWithFormat:
         @"M5.9 ELF VALIDADO · M6.0 4/4\n"
          "M6.1 PPU REAL 8/8: OK\n"
          "M6.2 PPU: FALHA %d (%u/16 instruções).\n"
          "Parada segura. HLE/SPU não iniciados.",
-        rc16,cpu16[0]];
+        rc16,cpu16[0]]];
       return;
    }
    if(cpu16[0]!=16u||cpu16[1]!=0x83f2b0u||
       cpu16[2]!=0x10554u||cpu16[3]!=0x10430u||
       cpu16[4]!=0x07000ef0u||cpu16[5]!=9u||
       cpu16[6]!=0x10430u){
-      self.status.text=@"M6.2: registradores ou pilha divergentes. Parada segura.";
+      [self arSetStatus:@"M6.2: registradores ou pilha divergentes. Parada segura."];
       return;
    }
-   self.status.text=@"M6.2 PPU REAL 16/16: OK · M6.3 em execução...";
+   [self arSetStatus:@"M6.2 PPU REAL 16/16: OK · M6.3 em execução..."];
     unsigned int cpu24[9]={0};
     const int rc24=ar_ppu_bootstrap_twentyfour(data.bytes,data.length,info,cpu24);
     if(rc24){
-       self.status.text=[NSString stringWithFormat:
+       [self arSetStatus:[NSString stringWithFormat:
           @"M5.9 NPUA80918: ELF REAL VALIDADO\n"
            "M6.2 PPU REAL 16/16: OK\n"
            "M6.3 PARADA SEGURA %d · %u/24\n"
            "PC=0x%X · opcode=0x%08X\n"
            "Sem HLE/SPU/gameplay; instrução não ignorada.",
-           rc24,cpu24[0],cpu24[8],cpu24[7]];
+           rc24,cpu24[0],cpu24[8],cpu24[7]]];
        return;
     }
     /* Do not start extra PPU instructions before M6.3 24/24 succeeds. */
@@ -1515,13 +1531,13 @@ static NSString *ARCurrentRelease(void){
     const BOOL legacyStackOnlyStop =
         rc32==-995 && cpu32[0]>=24u && (cpu32[7]>>26)==36u;
     if(rc32 && !legacyStackOnlyStop){
-       self.status.text=[NSString stringWithFormat:
+       [self arSetStatus:[NSString stringWithFormat:
           @"M5.9 NPUA80918: ELF REAL VALIDADO\n"
            "M6.3 PPU REAL 24/24: OK\n"
            "M6.4 PARADA SEGURA %d · %u/32\n"
            "PC=0x%X · opcode=0x%08X\n"
            "M6.5 não iniciada: erro não é de memória convidada.",
-           rc32,cpu32[0],cpu32[8],cpu32[7]];
+           rc32,cpu32[0],cpu32[8],cpu32[7]]];
        return;
     }
     NSString *legacyState=legacyStackOnlyStop
@@ -1541,7 +1557,7 @@ static NSString *ARCurrentRelease(void){
         ((cpu40[7]>>1)&1023u)==467u &&
         guestSpr==9u && !(cpu40[7]&1u);
     if(rc40 && !knownMtctrStop){
-       self.status.text=[NSString stringWithFormat:
+       [self arSetStatus:[NSString stringWithFormat:
            @"M5.9 NPUA80918: ELF REAL VALIDADO\n"
             "M6.3 PPU REAL 24/24: OK\n"
             "%@\n"
@@ -1552,7 +1568,7 @@ static NSString *ARCurrentRelease(void){
             legacyState,rc40,cpu40[0],cpu40[8],cpu40[7],
             ((rc40<=-1001 && rc40>=-1005) ? [NSString stringWithFormat:@"EA=0x%X · base=0x%X · valor=0x%X",
                           cpu40[10],cpu40[11],cpu40[12]] :
-             @"Sem falha de memória nesta instrução")];
+             @"Sem falha de memória nesta instrução")]];
        return;
     }
     NSString *old40State=knownMtctrStop ?
@@ -1563,19 +1579,10 @@ static NSString *ARCurrentRelease(void){
     unsigned int trace48[24]={0};
     unsigned int detail48[24]={0};
     unsigned int tls48[12]={0};
-    self.ppuReport=nil;
-    self.ppuSummary=nil;
-    self.ppuBatchReport=nil;
-    self.ppuBatchButton.enabled=NO;
-    [self.ppuBatchButton setTitle:@"Copiar lote PPC (até 32 instruções)" forState:UIControlStateNormal];
-    self.ppuReportButton.enabled=NO;
-    self.ppuAdvancedButton.enabled=NO;
-    self.ppuDiagnosticsButton.enabled=NO;
     const int rc48=ar_ppu_bootstrap_fortyeight_trace_m674(
         data.bytes,data.length,info,cpu48,trace48,detail48,tls48);
 
     unsigned int native[16]={0};
-    self.m750Run=nil; /* new run invalidates older guest numbers */
     const int nativeRC=ar_m70_native_runtime_probe(
        data.bytes,data.length,detail48[8],native);
     ar_fs_trace fsMeasured={0};
@@ -2120,7 +2127,7 @@ static NSString *ARCurrentRelease(void){
     self.ppuBatchReport=(((int)native[6]==-3 || (int)native[6]==-12 ||
                           (int)native[6]==-13) && native[7] && pendingMatch!=0)
                         ? frontierReport : nil;
-    self.ppuBatchButton.enabled=(self.ppuBatchReport.length>0);
+    [self arPerformOnMain:^{ self.ppuBatchButton.enabled=(self.ppuBatchReport.length>0); }];
     /* Primary screen contains only live measured AOT, FS, and frontier. */
     self.ppuSummary=[NSString stringWithFormat:
       @"ASCENSIONRECOMP %@ · NPUA80918\n"
@@ -2271,16 +2278,16 @@ static NSString *ARCurrentRelease(void){
        }
        [extended appendString:continuousText];
        self.ppuReport=[NSString stringWithFormat:@"%@\n\n%@",self.ppuSummary,extended];
-       self.ppuReportButton.enabled=YES;
-       self.ppuAdvancedButton.enabled=YES;
-       self.ppuDiagnosticsButton.enabled=(self.ppuReport.length>0);
-       [self.ppuReportButton setTitle:@"Copiar status AOT" forState:UIControlStateNormal];
+       [self arPerformOnMain:^{ self.ppuReportButton.enabled=YES; }];
+       [self arPerformOnMain:^{ self.ppuAdvancedButton.enabled=YES; }];
+       [self arPerformOnMain:^{ self.ppuDiagnosticsButton.enabled=(self.ppuReport.length>0); }];
+       [self arPerformOnMain:^{ [self.ppuReportButton setTitle:@"Copiar status AOT" forState:UIControlStateNormal]; }];
        NSString *faultDetail=cpu48[16]
           ? [NSString stringWithFormat:@"EA=0x%X · base=0x%X · valor=0x%X",
                 cpu48[10],cpu48[11],cpu48[12]]
           : [NSString stringWithFormat:@"CTR=0x%08X%08X · indiretos=%u",
                 cpu48[18],cpu48[17],cpu48[19]];
-       self.status.text=[NSString stringWithFormat:
+       [self arSetStatus:[NSString stringWithFormat:
           @"M5.9 NPUA80918: ELF REAL VALIDADO\n"
            "%@\n"
            "%@\n"
@@ -2290,8 +2297,8 @@ static NSString *ARCurrentRelease(void){
            "Última escrita r0: PC=0x%X · word=%08X\n"
            "Use «Copiar diagnóstico PPU» para enviar a trilha.",
            legacyState,old40State,rc48,cpu48[0],cpu48[8],
-           cpu48[7],faultDetail,trace48[0],trace48[1]];
-       self.status.text=self.ppuSummary;
+           cpu48[7],faultDetail,trace48[0],trace48[1]]];
+       [self arSetStatus:self.ppuSummary];
        return;
     }
     self.ppuReport=[NSString stringWithFormat:
@@ -2303,11 +2310,11 @@ static NSString *ARCurrentRelease(void){
     self.ppuReport=[self.ppuReport stringByAppendingString:frontierReport];
     self.ppuReport=[self.ppuReport stringByAppendingString:continuousText];
     self.ppuReport=[NSString stringWithFormat:@"%@\n\n%@",self.ppuSummary,self.ppuReport];
-    self.ppuAdvancedButton.enabled=YES;
-    self.ppuDiagnosticsButton.enabled=(self.ppuReport.length>0);
-    [self.ppuReportButton setTitle:@"Copiar status AOT" forState:UIControlStateNormal];
-    self.ppuReportButton.enabled=YES;
-    self.status.text=[NSString stringWithFormat:
+    [self arPerformOnMain:^{ self.ppuAdvancedButton.enabled=YES; }];
+    [self arPerformOnMain:^{ self.ppuDiagnosticsButton.enabled=(self.ppuReport.length>0); }];
+    [self arPerformOnMain:^{ [self.ppuReportButton setTitle:@"Copiar status AOT" forState:UIControlStateNormal]; }];
+    [self arPerformOnMain:^{ self.ppuReportButton.enabled=YES; }];
+    [self arSetStatus:[NSString stringWithFormat:
        @"M5.9 NPUA80918: ELF REAL VALIDADO\n"
         "%@\n"
         "%@\n"
@@ -2316,11 +2323,20 @@ static NSString *ARCurrentRelease(void){
         "stores=%u · indiretos=%u · sombra=%u\n"
         "M7.9: código ARM64 recompilado vinculado; veja AOT e próximo PC no relatório.",
         legacyState,old40State,tls48[0],cpu48[2],cpu48[18],cpu48[17],
-        cpu48[5],cpu48[19],cpu48[15]];
-    self.status.text=self.ppuSummary;
-  } @finally {
-    if(scoped)[url stopAccessingSecurityScopedResource];
- }
+        cpu48[5],cpu48[19],cpu48[15]]];
+    [self arSetStatus:self.ppuSummary];
+   } @finally {
+     if(scoped)[url stopAccessingSecurityScopedResource];
+     dispatch_async(dispatch_get_main_queue(),^{
+       self.shaderBusy=NO;
+       self.ppuBatchButton.enabled=(self.ppuBatchReport.length>0);
+       self.ppuReportButton.enabled=(self.ppuReport.length>0);
+       self.ppuAdvancedButton.enabled=(self.ppuReport.length>0);
+       self.ppuDiagnosticsButton.enabled=(self.ppuReport.length>0);
+     });
+   }
+ });
+ return;
 }
 - (void)documentPickerWasCancelled:(UIDocumentPickerViewController*)controller {
   if(controller==self.rpcMarkerPicker){
