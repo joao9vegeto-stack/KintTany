@@ -10,7 +10,7 @@ for src in runtime/ppu_bridge.c runtime/elf_image.c runtime/ppu_tls.c runtime/lv
   obj="$output/objects/$name.o"
   xcrun --sdk iphoneos clang -target arm64-apple-ios17.0 -isysroot "$sdk" \
     -std=c17 -O2 -ffp-contract=off -fno-strict-aliasing \
-    -DASCENSION_NATIVE_ONLY=1 \
+    -DASCENSION_NATIVE_ONLY=1 -DASCENSION_M772_LINKED=1 \
     -I upstream/runtime/ppu -I runtime -c "$src" -o "$obj"
   test -s "$obj"
 done
