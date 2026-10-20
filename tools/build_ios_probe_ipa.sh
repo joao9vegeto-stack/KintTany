@@ -31,6 +31,7 @@ LEGACY_AOT_KEEP_SYMBOLS=(
   ar_m761_register_owner ar_m762_register_discovered ar_m763_register_discovered
   ar_m764_register_discovered ar_m764c_register_successors ar_m765_register_frontier
   ar_m766_register_frontier ar_m769_register_frontier ar_m769_get_stats
+  ar_m770_delta_install_sha256
 )
 LEGACY_AOT_KEEP_FLAGS=()
 for symbol in "${LEGACY_AOT_KEEP_SYMBOLS[@]}"; do

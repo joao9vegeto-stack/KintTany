@@ -60,6 +60,7 @@ class M772IOSVfsMountTests(unittest.TestCase):
         self.assertIn("ar_m762_register_discovered", build)
         self.assertIn("ar_m769_register_frontier", build)
         self.assertIn("ar_m769_get_stats", build)
+        self.assertIn("ar_m770_delta_install_sha256", build)
 
 
 if __name__ == "__main__":
