@@ -11,6 +11,8 @@
 #include <unistd.h>
 static NSString * const kGameBookmarkKey=@"ARGameFolderBookmarkM737";
 static NSString * const kGameErrorDomain=@"AscensionRecomp.GameFolder";
+static NSURL *gGuestSessionRoot;
+static BOOL gGuestSessionScoped;
 static NSError *gameError(NSInteger code,NSString *detail) {
  return [NSError errorWithDomain:kGameErrorDomain code:code
    userInfo:@{NSLocalizedDescriptionKey:detail}];
@@ -467,6 +469,45 @@ NSDictionary<NSString*,id> *ARGameFolderRestore(NSError **error) {
   }
   return loadManifest(error);
  } @finally {if(scoped)[root stopAccessingSecurityScopedResource];}
+}
+/* Keep the document-provider grant active while PS3Recomp's own cellFs
+ * handlers use POSIX open/read. A short-lived scope around manifest scanning
+ * is not enough for files opened later by native guest code. */
+int ARGameFolderBeginGuestSession(char *out,size_t capacity){
+ if(!out||capacity==0)return -1;
+ out[0]=0;
+ @synchronized(kGameBookmarkKey){
+   if(gGuestSessionRoot)return -2;
+   NSError *error=nil;
+   NSURL *root=restoreRoot(&error);
+   if(!root)return -3;
+   BOOL scoped=[root startAccessingSecurityScopedResource];
+   BOOL isDirectory=NO;
+   if(![NSFileManager.defaultManager fileExistsAtPath:root.path
+                                          isDirectory:&isDirectory]||!isDirectory){
+     if(scoped)[root stopAccessingSecurityScopedResource];
+     return -4;
+   }
+   const char *path=root.fileSystemRepresentation;
+   size_t length=path?strlen(path):0;
+   if(!length||length+1>capacity){
+     if(scoped)[root stopAccessingSecurityScopedResource];
+     return -5;
+   }
+   memcpy(out,path,length+1);
+   gGuestSessionRoot=root;
+   gGuestSessionScoped=scoped;
+   return 0;
+ }
+}
+void ARGameFolderEndGuestSession(void){
+ @synchronized(kGameBookmarkKey){
+   NSURL *root=gGuestSessionRoot;
+   BOOL scoped=gGuestSessionScoped;
+   gGuestSessionRoot=nil;
+   gGuestSessionScoped=NO;
+   if(root&&scoped)[root stopAccessingSecurityScopedResource];
+ }
 }
 /* Real, bounded host read of an explicitly selected file, NOT cellFsRead.
  * No absolute path and no directory traversal. Files are never copied.

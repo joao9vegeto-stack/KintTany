@@ -29,6 +29,35 @@ def digest(path):
     return h.hexdigest()
 
 
+def patch_ios_game_mount(upstream):
+    """Map the installed Ascension title ID onto the iOS Files bookmark root."""
+    source = upstream / "runtime/ppu/ppu_fs.cpp"
+    text = source.read_text()
+    marker = "/* ASCENSION_IOS_NPUA80918_MOUNT */"
+    if marker in text:
+        return
+    anchor = '    static const char* hdd0_root = nullptr; static int hdd0_init = 0;'
+    replacement = '''    /* ASCENSION_IOS_NPUA80918_MOUNT */
+    /* The app's Files picker grants NPUA80918/USRDIR directly. Installed PSN
+     * paths include the title ID, so map that component onto the bookmarked
+     * root instead of assuming a host /dev_hdd0/game tree exists. */
+    static const char* ascension = "/dev_hdd0/game/NPUA80918";
+    const size_t ascension_len = strlen(ascension);
+    if (strncmp(guest, ascension, ascension_len) == 0 &&
+        (guest[ascension_len] == '/' || guest[ascension_len] == '\\0')) {
+        const char* tail = guest + ascension_len;
+        while (*tail == '/') ++tail;
+        snprintf(out, cap, "%s/%s", ppu_vfs_root, tail);
+        for (char* p = out; *p; p++) if (*p == '\\\\') *p = '/';
+        ps3_vfs_ps3game_fallback(out, cap);
+        return;
+    }
+    static const char* hdd0_root = nullptr; static int hdd0_init = 0;'''
+    if text.count(anchor) != 1:
+        raise SystemExit("M7.72 iOS VFS patch anchor changed; refusing a partial path rewrite")
+    source.write_text(text.replace(anchor, replacement, 1))
+
+
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--source", type=pathlib.Path, required=True)
@@ -43,6 +72,7 @@ def main():
     actual = subprocess.check_output(["git", "-C", str(upstream), "rev-parse", "HEAD"], text=True).strip()
     if actual != expected:
         raise SystemExit(f"M7.72 lifter/runtime pin mismatch: {actual} != {expected}")
+    patch_ios_game_mount(upstream)
     ppu = sorted(source.joinpath("ppu").glob("ppu_recomp_*.cpp"))
     spu = sorted(source.joinpath("spu").glob("*/spu_recomp.c"))
     if len(ppu) != 651 or len(spu) != 4:

@@ -14,6 +14,10 @@ FOUNDATION_EXPORT NSDictionary<NSString*,id> * _Nullable
 ARGameFolderProbeRPCS3Marker(NSURL *paramSfo, NSError **error);
 FOUNDATION_EXPORT NSDictionary<NSString*,id> * _Nullable
 ARGameFolderRestore(NSError **error);
+/* Hold the Files.app security scope for the complete guest session and return
+ * the authorized game-title root to the native PS3Recomp VFS. */
+FOUNDATION_EXPORT int ARGameFolderBeginGuestSession(char *root, size_t capacity);
+FOUNDATION_EXPORT void ARGameFolderEndGuestSession(void);
 /* M7.39: independent local Files -> On My iPhone -> App Documents route.
  * User moves/copies the NPUA80918 folder into the app's Files container.
  * No document picker, security scope or cloud directory selection needed.

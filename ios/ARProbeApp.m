@@ -10,7 +10,7 @@
 #include "../runtime/ppu_guest_fs.h"
 #include "../runtime/ppu_m756_stop_evidence.h"
 #include "../runtime/ppu_m767_live_import.h"
-extern void ar_m772_runtime_attest(uint64_t out[8]);
+extern void ar_m772_runtime_attest(uint64_t out[9]);
 extern void ar_m756_last_stop_evidence(ar_m756_stop_evidence*);
 extern void ar_m756_last_origin_evidence(ar_m756_stop_evidence*);
 extern void ar_m751_last_fs_trace(ar_fs_trace *);
@@ -112,6 +112,8 @@ static NSString *ARCurrentRelease(void){
 @property(nonatomic,strong) UIDocumentPickerViewController *rpcMarkerPicker;
 @property(nonatomic,strong) UIButton *ppuAdvancedButton;
 @property(nonatomic,strong) UIButton *ppuDiagnosticsButton;
+@property(nonatomic,strong) NSTimer *ppuLiveRefreshTimer;
+@property(nonatomic,strong) UITextView *ppuLiveReportView;
 @property(nonatomic,assign) BOOL ready;
 @property(nonatomic,assign) BOOL shaderBusy;
 @property(nonatomic,assign) NSUInteger m51Attempts;
@@ -701,11 +703,15 @@ static NSString *ARCurrentRelease(void){
 }
 - (void)copyAdvancedPpuReport:(UIBarButtonItem *)sender {
     (void)sender;
-    if(self.ppuReport.length)UIPasteboard.generalPasteboard.string=self.ppuReport;
+    if(self.shaderBusy)UIPasteboard.generalPasteboard.string=[self arUnifiedPpuText];
+    else if(self.ppuReport.length)UIPasteboard.generalPasteboard.string=self.ppuReport;
     else UIPasteboard.generalPasteboard.string=[self arUnifiedPpuText];
 }
 - (void)closeAdvancedPpuReport:(UIBarButtonItem *)sender {
     (void)sender;
+    [self.ppuLiveRefreshTimer invalidate];
+    self.ppuLiveRefreshTimer=nil;
+    self.ppuLiveReportView=nil;
     [self.window.rootViewController dismissViewControllerAnimated:YES completion:nil];
 }
 - (void)openAdvancedPpuReport:(UIButton *)sender {
@@ -719,7 +725,26 @@ static NSString *ARCurrentRelease(void){
     details.editable=NO;
     details.selectable=YES;
     details.font=[UIFont monospacedSystemFontOfSize:12 weight:UIFontWeightRegular];
-    details.text=self.ppuReport.length?self.ppuReport:[self arUnifiedPpuText];
+    details.text=(self.shaderBusy||!self.ppuReport.length)
+        ?[self arUnifiedPpuText]:self.ppuReport;
+    self.ppuLiveReportView=details;
+    [self.ppuLiveRefreshTimer invalidate];
+    self.ppuLiveRefreshTimer=nil;
+    if(self.shaderBusy){
+      __weak typeof(self) weakSelf=self;
+      self.ppuLiveRefreshTimer=[NSTimer scheduledTimerWithTimeInterval:0.5
+        repeats:YES block:^(__unused NSTimer *timer){
+          __strong typeof(weakSelf) strongSelf=weakSelf;
+          if(!strongSelf)return;
+          strongSelf.ppuLiveReportView.text=[strongSelf arUnifiedPpuText];
+          if(!strongSelf.shaderBusy){
+            [strongSelf.ppuLiveRefreshTimer invalidate];
+            strongSelf.ppuLiveRefreshTimer=nil;
+          }
+        }];
+      [[NSRunLoop mainRunLoop] addTimer:self.ppuLiveRefreshTimer
+                               forMode:NSRunLoopCommonModes];
+    }
     [page.view addSubview:details];
     [NSLayoutConstraint activateConstraints:@[
       [details.topAnchor constraintEqualToAnchor:page.view.safeAreaLayoutGuide.topAnchor],
@@ -867,8 +892,8 @@ static NSString *ARCurrentRelease(void){
   if(self.folderReport.length)[report appendFormat:
     @"\n--- Evento HOST Files separado (não cellFsOpen/Read) ---\n%@\n",
       self.folderReport];
-  uint64_t m772[8]={0};
-  if(!self.shaderBusy)ar_m772_runtime_attest(m772);
+  uint64_t m772[9]={0};
+  ar_m772_runtime_attest(m772);
   [report appendFormat:
     @"\nM7.72 — TABELAS DO LIFT PS3RECOMP NO RUNTIME\n"
      "Entradas PPU registradas=%llu\n"
@@ -877,11 +902,13 @@ static NSString *ARCurrentRelease(void){
      "Runtime inicializado antes do guest=%@\n"
      "Despachos PPU PS3Recomp executados=%llu · último PC=0x%08llX\n"
      "VM guest ligada ao runtime=%llu bytes\n"
+     "Raiz do jogo configurada no VFS nativo=%@\n"
      "Despachos nativos não provam gameplay, HLE completo ou frame RSX.\n",
      (unsigned long long)m772[0],m772[1]?@"SIM":@"NÃO",
      m772[2]?@"SIM":@"NÃO",(unsigned long long)m772[3],
      m772[4]?@"SIM":@"NÃO",(unsigned long long)m772[5],
-     (unsigned long long)m772[6],(unsigned long long)m772[7]];
+     (unsigned long long)m772[6],(unsigned long long)m772[7],
+     m772[8]?@"SIM (vinculada à execução)":@"NÃO"];
   [report appendString:
     @"\nRelatório sem bytes de ELF, PSARC ou arquivos comerciais.\n"];
   return report;

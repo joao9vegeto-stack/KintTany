@@ -2,6 +2,7 @@
 #include <pthread.h>
 #include <stdint.h>
 #include <stddef.h>
+#include <string>
 
 #include "ppu/ppu_recomp.h"
 
@@ -14,6 +15,7 @@ extern "C" void ppu_install_thread_trampoline(void);
 extern "C" void ps3_indirect_call_to(ppu_context*,uint32_t);
 extern "C" uint8_t* vm_base;
 extern "C" uint32_t ppu_vm_size;
+extern "C" const char* ppu_vfs_root;
 /* The generated SPU headers put these declarations after their extern-C
  * block, although their implementations are compiled as C.  Declare the C
  * ABI explicitly here so the final iOS linker resolves the actual exports. */
@@ -28,6 +30,8 @@ static uint32_t m772_guest_vm_size;
 static uint64_t m772_dispatch_count;
 static uint32_t m772_last_guest_pc;
 static uint32_t m772_sorted_table = 1;
+static uint32_t m772_vfs_root_set;
+static std::string m772_vfs_root;
 static uint32_t m772_has_ppu(uint32_t pc);
 
 static void m772_register_all(void)
@@ -47,14 +51,21 @@ static void m772_register_all(void)
     gowa_spu_0003_at_006D5900_spu_recomp_register();
 }
 
-extern "C" int ar_m772_runtime_init(uint8_t* guest_memory,size_t guest_size)
+extern "C" int ar_m772_runtime_init(uint8_t* guest_memory,size_t guest_size,
+                                      const char* game_root)
 {
-    if (!guest_memory || !guest_size || guest_size > UINT32_MAX) return -1;
+    if (!guest_memory || !guest_size || guest_size > UINT32_MAX ||
+        !game_root || !*game_root) return -1;
     /* Both runtimes now address the exact PT_LOAD allocation populated by
      * ar_load_elf_image.  The separate 16 MiB graphics probe arena must never
      * be used for guest PPU execution. */
     vm_base = guest_memory;
     ppu_vm_size = (uint32_t)guest_size;
+    m772_vfs_root.assign(game_root);
+    ppu_vfs_root = m772_vfs_root.c_str();
+    __atomic_store_n(&m772_vfs_root_set, 1u, __ATOMIC_RELEASE);
+    __atomic_store_n(&m772_dispatch_count, UINT64_C(0), __ATOMIC_RELAXED);
+    __atomic_store_n(&m772_last_guest_pc, 0u, __ATOMIC_RELAXED);
     __atomic_store_n(&m772_guest_vm_size,(uint32_t)guest_size,__ATOMIC_RELAXED);
     pthread_once(&m772_once, m772_register_all);
     __atomic_store_n(&m772_initialized, 1u, __ATOMIC_RELEASE);
@@ -95,7 +106,7 @@ static uint32_t m772_has_ppu(uint32_t pc)
            function_table[lo].func != nullptr;
 }
 
-extern "C" void ar_m772_runtime_attest(uint64_t out[8])
+extern "C" void ar_m772_runtime_attest(uint64_t out[9])
 {
     if (!out) return;
     out[0] = function_table_count;
@@ -106,4 +117,5 @@ extern "C" void ar_m772_runtime_attest(uint64_t out[8])
     out[5] = __atomic_load_n(&m772_dispatch_count, __ATOMIC_RELAXED);
     out[6] = __atomic_load_n(&m772_last_guest_pc, __ATOMIC_RELAXED);
     out[7] = __atomic_load_n(&m772_guest_vm_size, __ATOMIC_RELAXED);
+    out[8] = __atomic_load_n(&m772_vfs_root_set, __ATOMIC_ACQUIRE);
 }

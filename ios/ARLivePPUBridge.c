@@ -35,8 +35,10 @@ extern int ar_gowa2_offline_aot_install_sha256(const uint8_t*,size_t);
 #include "../runtime/ppu_m756_stop_evidence.h"
 #include "../runtime/ppu_m767_live_import.h"
 extern int ARGameFolderGuestIO(const char*,uint64_t,void*,size_t,size_t*,uint64_t*);
+extern int ARGameFolderBeginGuestSession(char*,size_t);
+extern void ARGameFolderEndGuestSession(void);
 #ifdef ASCENSION_M772_LINKED
-extern int ar_m772_runtime_init(uint8_t*,size_t);
+extern int ar_m772_runtime_init(uint8_t*,size_t,const char*);
 #endif
 
 extern int ar_m711_bind_memory(const uint8_t*,size_t,uint32_t*);
@@ -528,8 +530,12 @@ int ar_m70_native_runtime_probe(const uint8_t*d,size_t len,
   * instruction. The old diagnostic-only attestation happened during report
   * formatting, after ar_run had already stopped. */
 #ifdef ASCENSION_M772_LINKED
+ char guest_root[4096]={0};
+ const int scope_rc=ARGameFolderBeginGuestSession(guest_root,sizeof(guest_root));
+ if(scope_rc!=0){ar_bridge_shutdown();return -72;}
  if(ar_m772_runtime_init((uint8_t*)ar_guest_memory_base(),
-                         ar_guest_memory_capacity())!=0){
+                         ar_guest_memory_capacity(),guest_root)!=0){
+   ARGameFolderEndGuestSession();
    ar_bridge_shutdown();return -73;
  }
  out[15]|=0x2000u; /* live PS3Recomp dispatcher initialized before guest run */
@@ -562,5 +568,8 @@ int ar_m70_native_runtime_probe(const uint8_t*d,size_t len,
  ar_mmapper_reset();ar_sysutil_reset();
 #endif
  ar_bridge_shutdown();
+#ifdef ASCENSION_M772_LINKED
+ ARGameFolderEndGuestSession();
+#endif
  return 0;
 }
