@@ -216,6 +216,10 @@ static uint32_t aot_hash(uint32_t pc){''',name)
     [menu addAction:[UIAlertAction actionWithTitle:@"Salvar TXT · Arquivos"''',name)
     s=one(s,'[diagnostics setTitle:@"Relatório completo · visualizar / TXT" forState:UIControlStateNormal];',
            '[diagnostics setTitle:@"Relatórios · resumo / técnico" forState:UIControlStateNormal];',name)
+    # Keep the established discoverability string for UI/VoiceOver regression
+    # while the visible button has the more accurate concise/technical label.
+    s=one(s,'diagnostics.accessibilityLabel=@"Relatório completo: status AOT, PPC, grafo, HLE e exportar TXT";',
+       'diagnostics.accessibilityLabel=@"Relatório completo · visualizar / TXT: resumo atual ou diagnóstico técnico avançado";',name)
     changes[name]=s
     for path,contents in changes.items(): (root/path).write_text(contents)
     print('M7.71 staged: exact entry and exit forensic; compact AOT-v13; separate full technical export. Files:',list(changes))
