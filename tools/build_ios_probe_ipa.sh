@@ -13,6 +13,29 @@ cp ios/Probe-Info.plist "$APP/Info.plist"
 } > ios-probe/ARBuildProvenance.h
 # Compile guest-like register writes with a C compiler to preserve the
 # public C ABI; clang++ treats .c inputs as C++ in its driver mode.
+# M7.72 skips installing the legacy per-version AOT tables at runtime, since
+# the full PS3Recomp lift is now the primary backend. Keep their installers as
+# linker roots for reproducible binary attestation and diagnostic inspection;
+# retaining symbols does not register or execute the legacy tables.
+LEGACY_AOT_KEEP_SYMBOLS=(
+  ar_private_aot_install_sha256 ar_m713_register_fragment ar_m714_register_fragment
+  ar_m715_register_fragment ar_m716_register_block ar_bulk_install_sha256
+  ar_bulk2_install_sha256 ar_m722_install_sha256 ar_m731_register_frontier
+  ar_m732_register_block ar_m734_register_block ar_m734_register_batch
+  ar_m735_register_owner ar_m736_register_owner ar_gowa2_offline_aot_install_sha256
+  ar_m744_register_owner ar_m745_register_owner ar_m746_register_hotloop
+  ar_m747_register_owner ar_m748_register_owner ar_m749_register_frsp
+  ar_m750_register_owner ar_m751_register_vsubfp ar_m752_register_vsldoi
+  ar_m753_register_vectorfp ar_m754_register_fcmp_branch ar_m756_register_divloop
+  ar_m757_register_owner ar_m758_register_owner ar_m759_register_owner
+  ar_m761_register_owner ar_m762_register_discovered ar_m763_register_discovered
+  ar_m764_register_discovered ar_m764c_register_successors ar_m765_register_frontier
+  ar_m766_register_frontier ar_m769_register_frontier
+)
+LEGACY_AOT_KEEP_FLAGS=()
+for symbol in "${LEGACY_AOT_KEEP_SYMBOLS[@]}"; do
+  LEGACY_AOT_KEEP_FLAGS+=("-Wl,-u,_${symbol}")
+done
 xcrun --sdk iphoneos clang -target arm64-apple-ios17.0 -isysroot "$SDK" \
     -std=c11 -O2 -I upstream/libs/video -I upstream/include \
     -c ios/ARRSXMethodProbe.c -o ios-probe/ARRSXMethodProbe.o
@@ -525,6 +548,7 @@ test -s "$M772_ARCHIVE"
 xcrun --sdk iphoneos clang++ -target arm64-apple-ios17.0 \
     -isysroot "$SDK" -fobjc-arc -fmodules -stdlib=libc++ \
     -O2 -Wl,-dead_strip -I ios -I runtime -I upstream/runtime/ppu -I upstream/libs/video -I upstream/include \
+    "${LEGACY_AOT_KEEP_FLAGS[@]}" \
     ios/ARMetalView.m ios/ARProbeApp.m ios/ARGameFolderStore.m ios/ARShaderProbe.m ios/ARTextureProbe.m ios/ARProbeGuestVM.c \
     ios-probe/ARRSXMethodProbe.o ios-probe/ARGuestDrawProbe.o ios-probe/ARPrivateELFProbe.o \
     ios-probe/ARLivePPUBridge.o ios-probe/ARLivePPUContinuous.o \

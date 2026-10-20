@@ -53,6 +53,13 @@ class M772IOSVfsMountTests(unittest.TestCase):
         self.assertIn("#ifdef ASCENSION_M772_LINKED\n /* M7.72 dispatches the statically recompiled PS3Recomp function table.", bridge)
         self.assertIn("out[6]=(uint32_t)ar_run(&ctx,image.entry_code,32768u);", bridge)
 
+    def test_m772_keeps_legacy_aot_symbols_for_binary_attestation_only(self):
+        build = (ROOT / "tools" / "build_ios_probe_ipa.sh").read_text()
+        self.assertIn("LEGACY_AOT_KEEP_SYMBOLS=(", build)
+        self.assertIn('LEGACY_AOT_KEEP_FLAGS+=("-Wl,-u,_${symbol}")', build)
+        self.assertIn("ar_m762_register_discovered", build)
+        self.assertIn("ar_m769_register_frontier", build)
+
 
 if __name__ == "__main__":
     unittest.main()
