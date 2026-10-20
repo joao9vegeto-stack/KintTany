@@ -11,7 +11,8 @@
 extern "C" {
 #endif
 uint8_t *vm_base=0;
-uint32_t ppu_vm_size=0;
+/* M7.72: ppu_vm_size is owned by the PS3Recomp per-game PPU loader. */
+extern uint32_t ppu_vm_size;
 int ar_probe_vm_init(void) {
     if (vm_base) return 0;
     const size_t n=16u*1024u*1024u;

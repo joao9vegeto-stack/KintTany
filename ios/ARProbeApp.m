@@ -10,6 +10,7 @@
 #include "../runtime/ppu_guest_fs.h"
 #include "../runtime/ppu_m756_stop_evidence.h"
 #include "../runtime/ppu_m767_live_import.h"
+extern void ar_m772_runtime_attest(uint64_t out[8]);
 extern void ar_m756_last_stop_evidence(ar_m756_stop_evidence*);
 extern void ar_m756_last_origin_evidence(ar_m756_stop_evidence*);
 extern void ar_m751_last_fs_trace(ar_fs_trace *);
@@ -859,6 +860,17 @@ static NSString *ARCurrentRelease(void){
   if(self.folderReport.length)[report appendFormat:
     @"\n--- Evento HOST Files separado (não cellFsOpen/Read) ---\n%@\n",
       self.folderReport];
+  uint64_t m772[8]={0};
+  ar_m772_runtime_attest(m772);
+  [report appendFormat:
+    @"\nM7.72 — TABELAS DO LIFT PS3RECOMP NO RUNTIME\n"
+     "Entradas PPU registradas=%llu\n"
+     "0x0052A740=%@ · chamada 0x0052E3F4=%@\n"
+     "Imagens SPU registradas=%llu\n"
+     "Execução de código guest por esta verificação= NÃO MEDIDA\n"
+     "Isto prova registro de código nativo; não prova gameplay, HLE completo ou frame RSX.\n",
+     (unsigned long long)m772[0],m772[1]?@"SIM":@"NÃO",
+     m772[2]?@"SIM":@"NÃO",(unsigned long long)m772[3]];
   [report appendString:
     @"\nRelatório sem bytes de ELF, PSARC ou arquivos comerciais.\n"];
   return report;

@@ -510,6 +510,18 @@ done
 xcrun nm -g ios-probe/ARLivePPUBridge.o | grep -q '_ar_m70_native_runtime_probe'
 xcrun nm -g ios-probe/ARLivePPUContinuous.o | grep -q '_ar_m71_private_continuous_probe'
 xcrun nm -g ios-probe/ARRSXMethodProbe.o | grep -q '_ar_probe_rsx_clear_flip'
+if [[ -z "${M772_LIFT_DIR:-}" ]]; then
+  echo 'M7.72 ps3recomp lift source is not staged' >&2
+  exit 78
+fi
+python3 tools/m772_build_ios.py \
+  --source "$M772_LIFT_DIR" \
+  --upstream upstream-m772 \
+  --repo . \
+  --output ios-probe/m772 \
+  --jobs "${M772_JOBS:-3}"
+M772_ARCHIVE=ios-probe/m772/libAscensionGOWA-M772-ios-arm64.a
+test -s "$M772_ARCHIVE"
 xcrun --sdk iphoneos clang++ -target arm64-apple-ios17.0 \
     -isysroot "$SDK" -fobjc-arc -fmodules -stdlib=libc++ \
     -O2 -Wl,-dead_strip -I ios -I runtime -I upstream/runtime/ppu -I upstream/libs/video -I upstream/include \
@@ -548,6 +560,7 @@ xcrun --sdk iphoneos clang++ -target arm64-apple-ios17.0 \
     ios-probe/ppu_m717_graph.o \
     ${M711_OBJECTS[@]+"${M711_OBJECTS[@]}"} \
     ${AOT_OBJECTS[@]+"${AOT_OBJECTS[@]}"} \
+    "$M772_ARCHIVE" \
     ios-ppu-core/libAscensionPPUCore-ios-arm64.a \
     build-ios-runtime/libAscensionRSXGuest-ios-arm64.a \
     -framework UIKit -framework Foundation -framework QuartzCore \
@@ -560,6 +573,14 @@ if [[ -z "${ASCENSION_PRIVATE_AOT_C:-}" ]]; then
   exit 77
 fi
 xcrun nm -g "$APP/AscensionRecompProbe" > m78-owner-aot-linked-symbols.txt
+for symbol in _func_0052A740 _func_0052E3F4 _ar_m772_runtime_attest \
+              _ppu_recomp_register _gowa_spu_0000_at_006B3E00_spu_recomp_register \
+              _gowa_spu_0003_at_006D5900_spu_recomp_register; do
+  grep -Eq " [Tt] ${symbol}$" m78-owner-aot-linked-symbols.txt || {
+    echo "M7.72 expected AOT symbol missing from final Mach-O: ${symbol}" >&2
+    exit 79
+  }
+done
 # Every M7.62 native function must appear in the FINAL Mach-O, not merely object.
 python3 - <<'PY'
 import json,re
