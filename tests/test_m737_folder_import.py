@@ -20,7 +20,7 @@ class TestM737Folder(unittest.TestCase):
   for token in (
     "Selecionar pasta NPUA80918", "initForOpeningContentTypes:@[UTTypeFolder] asCopy:NO",
     "self.folderPicker=picker;", "controller==self.folderPicker",
-    "ARGameFolderImport(chosen,&error)", "@[rpcMarkerButton,localFolderButton,folderButton,elfButton]",
+    "ARGameFolderImport(chosen,&error)", "@[elfButton,folderButton,localFolderButton,rpcMarkerButton]",
     "dispatch_get_global_queue(QOS_CLASS_USER_INITIATED,0)"
   ):
    self.assertIn(token,self.ui)
