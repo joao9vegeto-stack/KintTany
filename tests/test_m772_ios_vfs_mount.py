@@ -59,6 +59,7 @@ class M772IOSVfsMountTests(unittest.TestCase):
         self.assertIn('LEGACY_AOT_KEEP_FLAGS+=("-Wl,-u,_${symbol}")', build)
         self.assertIn("ar_m762_register_discovered", build)
         self.assertIn("ar_m769_register_frontier", build)
+        self.assertIn("ar_m769_get_stats", build)
 
 
 if __name__ == "__main__":
