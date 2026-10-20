@@ -11,6 +11,7 @@
 #include "../runtime/ppu_m756_stop_evidence.h"
 #include "../runtime/ppu_m767_live_import.h"
 extern void ar_m772_runtime_attest(uint64_t out[13]);
+extern void ar_m772_runtime_begin(void);
 extern void ar_m756_last_stop_evidence(ar_m756_stop_evidence*);
 extern void ar_m756_last_origin_evidence(ar_m756_stop_evidence*);
 extern void ar_m751_last_fs_trace(ar_fs_trace *);
@@ -1479,6 +1480,7 @@ static NSString *ARCurrentRelease(void){
  NSURL*url=urls.firstObject;if(!url)return;
  BOOL scoped=[url startAccessingSecurityScopedResource];
  self.shaderBusy=YES;
+ ar_m772_runtime_begin();
  self.ppuReport=nil;self.ppuSummary=nil;self.ppuBatchReport=nil;self.m750Run=nil;
  self.ppuProgress=@"GOWA.ELF recebido; preparando leitura e validação.";
  self.ppuBatchButton.enabled=NO;

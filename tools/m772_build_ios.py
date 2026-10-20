@@ -232,7 +232,8 @@ def main():
         raise SystemExit("M7.72 nm failed")
     symbol_text = symbols.read_text(errors="replace")
     required = ["func_0052A740", "func_0052E3F4", "_function_table_count",
-                "_ar_m772_runtime_attest", "_ar_m772_runtime_init",
+                "_ar_m772_runtime_attest", "_ar_m772_runtime_begin",
+                "_ar_m772_runtime_init",
                 "_ar_m772_dispatch_native", "_ar_m772_unbind_guest_memory",
                 "_ppu_recomp_register",
                 "_gowa_spu_0000_at_006B3E00_spu_recomp_register",

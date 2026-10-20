@@ -52,6 +52,8 @@ class M772IOSVfsMountTests(unittest.TestCase):
         self.assertIn("#ifdef ASCENSION_PRIVATE_AOT_LINKED\n#if !defined(ASCENSION_M772_LINKED)", bridge)
         self.assertIn("#ifdef ASCENSION_M772_LINKED\n /* M7.72 dispatches the statically recompiled PS3Recomp function table.", bridge)
         self.assertIn("out[6]=(uint32_t)ar_run(&ctx,image.entry_code,32768u);", bridge)
+        build = (ROOT / "tools" / "build_ios_probe_ipa.sh").read_text()
+        self.assertIn("_ar_m772_runtime_begin", build)
 
     def test_m772_keeps_legacy_aot_symbols_for_binary_attestation_only(self):
         build = (ROOT / "tools" / "build_ios_probe_ipa.sh").read_text()
@@ -61,6 +63,22 @@ class M772IOSVfsMountTests(unittest.TestCase):
         self.assertIn("ar_m769_register_frontier", build)
         self.assertIn("ar_m769_get_stats", build)
         self.assertIn("ar_m770_delta_install_sha256", build)
+
+    def test_runtime_report_shows_live_m772_counters_before_historical_data(self):
+        stage = (ROOT / "tools" / "m771_apply_ci.py").read_text()
+        self.assertIn("M7.72 — STATUS PS3RECOMP AO VIVO", stage)
+        self.assertIn("ar_m772_runtime_attest(m772)", stage)
+        self.assertIn("Despachos PS3Recomp=%llu | último PC=0x%08llX", stage)
+        self.assertNotIn("Agora: 13252 AOT", stage)
+
+    def test_each_elf_import_clears_stale_m772_runtime_counters(self):
+        app = (ROOT / "ios" / "ARProbeApp.m").read_text()
+        bridge = (ROOT / "runtime" / "m772_bridge.cpp").read_text()
+        self.assertIn("ar_m772_runtime_begin();", app)
+        begin = bridge.split('extern "C" void ar_m772_runtime_begin(void)', 1)[1]
+        self.assertIn("m772_dispatch_count, UINT64_C(0)", begin)
+        self.assertIn("m772_last_guest_pc, 0u", begin)
+        self.assertIn("m772_initialized, 0u", begin)
 
 
 if __name__ == "__main__":

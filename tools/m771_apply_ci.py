@@ -71,6 +71,8 @@ static uint32_t aot_hash(uint32_t pc){''',name)
     end=s.index('- (void)arCopyAllPpuText {',begin)
     slim='''- (NSString *)arUnifiedPpuText {
   NSDictionary *e=self.shaderBusy?nil:self.m750Run;
+  uint64_t m772[13]={0};
+  ar_m772_runtime_attest(m772);
   NSString *(^v)(NSString *)=^NSString*(NSString *key){
     return e[key]?[e[key] description]:@"NÃO MEDIDO";
   };
@@ -85,6 +87,12 @@ static uint32_t aot_hash(uint32_t pc){''',name)
      "Branch=%s | SHA=%s | Actions=%s | RunID=%s\\n"
      "App=%@ | NPUA80918 | teste físico=%@ | momento=%@\\n"
      "Estado=%@ · %@\\n\\n"
+     "M7.72 — STATUS PS3RECOMP AO VIVO\\n"
+     "Fase atual=%@\\n"
+     "Tabela PPU=%llu/29849 | SPU=%llu/4 | runtime inicializado=%@\\n"
+     "Despachos PS3Recomp=%llu | último PC=0x%08llX\\n"
+     "VM guest=%llu bytes | raiz VFS configurada=%@\\n"
+     "cellFsOpen=%llu (OK=%llu) | cellFsRead=%llu | bytes=%llu\\n\\n"
      "RESULTADO REAL\\n"
      "Registradas=%@ | AOT distintas=%@ | despachos ARM64=%@ | PPC interpretadas=%@\\n"
      "Resultado guest=%@ | parada=%@ | opcode=%@ | último AOT=%@\\n"
@@ -99,16 +107,21 @@ static uint32_t aot_hash(uint32_t pc){''',name)
      "r3 entrada=%@ | CIA após retorno=%@\\n"
      "Chamada aninhada 0x0052E3F4: entradas=%@ | status=%@ | TOC=%@\\n"
      "Parada guest: motivo=%@ | PC=%@ | opcode RAM=%@\\n\\n"
-     "MARCO (M7.69 física: 9619 AOT, 154 distintas, 1912 despachos)\\n"
-     "Agora: 13252 AOT, 155 distintas, 1914 despachos na M7.70 física\\n"
-     "Não representa novo resultado sem teste desta build.\\n"
+     "Os marcos M7.69/M7.70 abaixo são históricos e não medem esta execução.\\n"
      "USRDIR HOST=%@ — NÃO é cellFsRead.\\n"
      "Diagnóstico técnico legado integral disponível em TXT separado.\\n",
     AR_M750_BUILD_BRANCH,AR_M750_BUILD_SHA,
     AR_M750_BUILD_RUN_NUMBER,AR_M750_BUILD_RUN_ID,
     ARCurrentRelease(),e?@"SIM":@"NÃO MEDIDO",v(@"when"),
     self.shaderBusy?@"EM EXECUÇÃO":(e?@"CONCLUÍDO":@"SEM EXECUÇÃO"),
-    self.ppuProgress?:@"sem status recente",v(@"aot"),v(@"unique"),v(@"dispatches"),v(@"fallback"),
+    self.ppuProgress?:@"sem status recente",
+    (unsigned long long)m772[0],(unsigned long long)m772[3],
+    m772[4]?@"SIM":@"NÃO",
+    (unsigned long long)m772[5],(unsigned long long)m772[6],
+    (unsigned long long)m772[7],m772[8]?@"SIM":@"NÃO",
+    (unsigned long long)m772[9],(unsigned long long)m772[10],
+    (unsigned long long)m772[11],(unsigned long long)m772[12],
+    v(@"aot"),v(@"unique"),v(@"dispatches"),v(@"fallback"),
     v(@"rc"),h(@"stop"),h(@"opcode"),h(@"last_aot"),
     v(@"fs_open_calls"),v(@"fs_read_calls"),v(@"fs_bytes"),
     v(@"m771_examined"),v(@"m771_new"),v(@"m771_conflicts"),v(@"m771_rejected"),

@@ -36,6 +36,18 @@ static uint32_t m772_vfs_root_set;
 static std::string m772_vfs_root;
 static uint32_t m772_has_ppu(uint32_t pc);
 
+/* Reports should describe the current import attempt instead of leaving
+ * counters from an earlier ELF run visible during the next preflight. */
+extern "C" void ar_m772_runtime_begin(void)
+{
+    __atomic_store_n(&m772_initialized, 0u, __ATOMIC_RELEASE);
+    __atomic_store_n(&m772_guest_vm_size, 0u, __ATOMIC_RELAXED);
+    __atomic_store_n(&m772_dispatch_count, UINT64_C(0), __ATOMIC_RELAXED);
+    __atomic_store_n(&m772_last_guest_pc, 0u, __ATOMIC_RELAXED);
+    __atomic_store_n(&m772_vfs_root_set, 0u, __ATOMIC_RELEASE);
+    ppu_fs_ios_reset_stats();
+}
+
 static void m772_register_all(void)
 {
     for (uint64_t i = 1; i < function_table_count; ++i)
