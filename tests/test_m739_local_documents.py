@@ -28,7 +28,7 @@ class FolderLocalTests(unittest.TestCase):
               "M7.50 F1 — PASTA LOCAL IMPORTADA",
               "M7.50 F1 — PASTA LOCAL NÃO ENCONTRADA",
               "self.folderReport=report", "Evento HOST Files separado",
-              "@[rpcMarkerButton,localFolderButton,folderButton,elfButton]"):
+              "@[elfButton,folderButton,localFolderButton,rpcMarkerButton]"):
    self.assertIn(val,self.ui)
  def test_real_host_proof_and_ios_files_entitlement(self):
   self.assertIn("tests/host_m739_local_documents.m",self.workflow)

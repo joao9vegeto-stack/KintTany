@@ -16,7 +16,7 @@ class M740ReadOnly(unittest.TestCase):
   self.assertIn("initForOpeningContentTypes:@[UTTypeItem] asCopy:YES",u)
   self.assertIn("self.rpcMarkerPicker=picker",u)
   self.assertIn("ARGameFolderInspectParamSFO(marker,&error)",u)
-  self.assertIn("@[rpcMarkerButton,localFolderButton,folderButton,elfButton]",u)
+  self.assertIn("@[elfButton,folderButton,localFolderButton,rpcMarkerButton]",u)
   self.assertNotIn("@[localFolderButton,folderButton,elfButton]",u)
   self.assertIn("Permissão USRDIR ainda NÃO obtida",u)
  def test_readonly_and_scope_failure_are_explicit(self):
