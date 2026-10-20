@@ -516,6 +516,7 @@ static NSString *ARCurrentRelease(void){
     [diagnostics addTarget:self action:@selector(openUnifiedPpuMenu:)
          forControlEvents:UIControlEventTouchUpInside];
     self.ppuDiagnosticsButton=diagnostics;
+    self.ppuDiagnosticsButton.enabled=NO;
     /* M7.37 F0: user-selected game folder independent of guest sys_fs. */
     UIButton *folderButton=[UIButton buttonWithType:UIButtonTypeSystem];
     [folderButton setTitle:@"Selecionar pasta NPUA80918 · Abrir"
@@ -700,8 +701,8 @@ static NSString *ARCurrentRelease(void){
 }
 - (void)copyAdvancedPpuReport:(UIBarButtonItem *)sender {
     (void)sender;
-    NSString *text=self.ppuReport.length?self.ppuReport:[self arUnifiedPpuText];
-    if(text.length)UIPasteboard.generalPasteboard.string=text;
+    if(self.ppuReport.length)UIPasteboard.generalPasteboard.string=self.ppuReport;
+    else UIPasteboard.generalPasteboard.string=[self arUnifiedPpuText];
 }
 - (void)closeAdvancedPpuReport:(UIBarButtonItem *)sender {
     (void)sender;
@@ -859,7 +860,8 @@ static NSString *ARCurrentRelease(void){
      " M7.26–M7.49 são diagnósticos de subsistemas antigos."
      " A etiqueta M7.44 é do runtime legado e não representa a versão"
      " do app. Nenhuma cifra antiga altera EXECUÇÃO ATUAL.\n"];
-  NSString *body=self.shaderBusy?nil:(self.ppuReport.length?self.ppuReport:self.ppuSummary);
+  NSString *body=self.ppuReport.length?self.ppuReport:self.ppuSummary;
+  if(self.shaderBusy)body=nil;
   if(body.length)[report appendFormat:
     @"\n--- Histórico PPU com origem dos testes no texto ---\n%@\n",body];
   if(self.folderReport.length)[report appendFormat:
