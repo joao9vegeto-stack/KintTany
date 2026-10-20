@@ -420,7 +420,7 @@ test -s ios-ppu-core/libAscensionPPUCore-ios-arm64.a
 xcrun --sdk iphoneos clang -target arm64-apple-ios17.0 -isysroot "$SDK" \
     -std=c11 -O2 -Wall -Wextra -Werror \
     -I upstream/runtime/ppu -I runtime \
-    -DASCENSION_NATIVE_ONLY=1 \
+    -DASCENSION_NATIVE_ONLY=1 -DASCENSION_M772_LINKED=1 \
     ${AOT_COMPILE_DEFINES[@]+"${AOT_COMPILE_DEFINES[@]}"} \
     -c ios/ARLivePPUBridge.c -o ios-probe/ARLivePPUBridge.o
 xcrun --sdk iphoneos clang -target arm64-apple-ios17.0 -isysroot "$SDK" \
