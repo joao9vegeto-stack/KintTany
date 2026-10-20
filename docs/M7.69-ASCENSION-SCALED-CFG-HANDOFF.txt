@@ -1,0 +1,100 @@
+ASCENSIONRECOMP M7.69 — ESCALA REAL DE RECOMPILAÇÃO ESTÁTICA, 19/10/2026
+=============================================================================
+Repositório joao9vegeto-stack/KintTany; SOMENTE branch AscensionRecomp.
+Jogo EXCLUSIVO God of War: Ascension, Title ID NPUA80918 — NÃO God of War II.
+Runtime ARM64 nativo, sem execução PPC interpretada, JIT ou fallback.
+Não comitar GOWA.ELF/SELF/RAP/PSARC/arquivos originais/chaves.
+ELF canônico privado (GOWA(8).ELF) 8.717.136 bytes
+SHA-256 4bf75c897b82d1beb25514cbadaff3d03e1b0c7bf849fa5d289be4f9183462b5.
+
+PONTO DE PARTIDA: LOG FÍSICO M7.68.0, Actions #262, commit
+917b7f96652b317124c06b8097858f08ed2158e9, build 7680:
+AOT registradas 8700; 149 entradas distintas fisicamente executadas;
+1907 despachos ARM64; PPC interpretadas 0; erro guest -3.
+Parada 0x0053979C, opcode real PPC=0x8062A864;
+última entrada ARM64 executada 0x00539630.
+ELF e RAM guest iguais em 28 bytes na parada; CR=0x22000042,
+XER=0, LR=0x00539644, CTR=0x0053979C, TOC=0x0083F2B0.
+M7.68 HLE já ultrapassou o import stub 0x00669A84:
+2 retornos através de LR nativo, 149 AOT distintas. HLEs=545.
+cellFsOpen/cellFsRead guest 0/0, bytes positivos guest 0;
+4 bytes PARAM.SFO são leitura HOST, não chamada guest.
+Nenhum PSARC, RSX original, menu ou primeiro frame de jogo comprovado.
+
+NOVA M7.69 — LOTE EM ESCALA (não handler por handler)
+Inspecionado localmente o GOWA.ELF canônico privado, OPD com
+7643 descritores de função AUTORITATIVOS, lista RECOVERED com
+16841 intervalos candidatos NÃO autoritativos, 350 stubs PRX.
+Frente 0x0053979C e 0x005397BC, função próxima + retorno.
+Uso do grafo em largura de até 8192 candidatos partindo dos 7643 OPD
+e complemento do grafo físico (sem adivinhar limites de funções).
+Resultados reais e verificáveis da extração:
+  - Candidatos realmente decodificados: 8483
+  - Blocos PPC terminados e traduzidos para C nativo: 5437
+  - Instruções PPC completas contidas nesses blocos: 41735
+  - Unidades C de handlers: 85; instalador C: 1
+  - Candidatos rejeitados por semântica/opcode/limite real: 3046
+  - Candidatos enfileirados ainda NÃO DECODIFICADOS: 6554
+  - Arestas CFG extraídas: 8313
+  - Veneers import PRX aceitos na representação estática mas NÃO
+    registrados como handler AOT comum: 7 (entre 350 PRX totais).
+TODO opcodes desconhecidos NÃO viram nop; blocos só são aceitos se
+cada instrução foi reconhecida até um terminador PPC real (B/BL/BC/
+BLR/BCTR/BCTRL), com limite máximo 32 palavras por bloco.
+As rejeições incluem PPC VMX/SPU/FPU, padrões indirects com BO
+desconhecido e outros; nenhuma alegação de cobertura integral.
+
+Manifesto completo em runtime/m769-snapshot.part00..14.b64:
+GZIP+Base64 concatenado, JSON expandido SHA256:
+eead98450296a0145227d08223463093324a1539c1465ae50204ae4fb5450734.
+Cada bloco aceito contém PC início/fim, IR PPC sem NOP de desconhecido,
+SHA256 da sequência original, IR terminador/sucessores, símbolo ARM64
+'ar_m769_native_XXXXXXXX', status de veneer HLE.
+Rejeições documentam endereço de primeiro opcode desconhecido,
+opcode PPC bruto e prefixo SEM contar prefixo parcial como função.
+Gerador tools/m769_cfg.py.gz.b64 — SHA256 do código expandido:
+f00f833b5776acd773f35c76f07e5009679531afc77feb5e9937d5bbcf3a33d4.
+
+PROVA SEMÂNTICA HOST EXECUTADA:
+Da parada 0x0053979C código PPC:
+8062A864 7C0802A6 8082A860 38630018 38840010 F821FF91 F8010080
+BL 0x005397B8 word 481302CD -> verdadeiro stub 0x00669A84,
+LR definido 0x005397BC. Teste C host confirmou guest LWZ big endian,
+R3/R4 após ADDI, STDU/STD de stack, LR, e desvio BO6 de 0x005397BC
+pelos dois destinos 0x005397C8/0x005397E4 segundo CR7.
+Todos 86 arquivos C passam clang -Werror -fsyntax-only Linux,
+sem afirmar que isso substitui Apple clang ou execução no iPhone.
+
+Integração iOS:
+- build_ios_probe_ipa.sh recompõe snapshot offline sem ELF na CI,
+  SHA do gerador+snapshot validado, compila os 85 C PPC para
+  -target arm64-apple-ios17.0 mais instalador; linka todos no Mach-O
+  e verifica os 5437 símbolos pelo nm do executável FINAL.
+- ARLivePPUBridge.c registra em runtime após M7.66, preservando
+  ordem e proveniência; instalador valida hash COMPLETO do
+  ELF privado carregado e hash de cada bloco da RAM guest ANTES
+  de registrar; divergência RAM/EOF faz pular bloco sem executar
+  código inseguro. PRX/HLE recebe precedência sobre veneers.
+- ARProbeApp.m mostra contadores REAIS de novos registrados,
+  duplicados já existentes, veneers HLE protegidos, RAM ausente,
+  hash RAM divergente; execução física medida via FIRST/dispatches.
+- Os 85 C compilados != 5437 novas funções independentes; são
+  BLOCOS BÁSICOS, não o jogo completo. Registro e execução M7.69
+  no iPhone: AGUARDANDO NOVO LOG FÍSICO, não presumidos.
+- Não contém PPU C++ integral, SPU recompilado ou RSX original.
+  Tabela upstream GoW2 é uma REFERÊNCIA de processo, não são
+  dados do God of War: Ascension.
+
+CUIDADO: ABI/semântica PPC: a implementação só cobre opcodes do
+snapshot aceito. Branches indiretos resolvidos em runtime seguem
+falha fechada sem interpretador. O projeto ps3recomp oficial (SHA
+39a36296511c445707adabcd312f0b740cfbd694) tem 29.849 entradas
+C++ emitidas para este ELF, mas não compilação integral sem TODO.
+NÃO vender esta M7.69 como port integral nativo.
+
+REGRA DE ENTREGA: 1 COMMIT=>1 ACTIONS, nunca outras branches,
+IPA direta desta conversa, commit/run/SHA da IPA verificados.
+Próximo teste: instalar 7.69.0 build 7690, conferir o registro real
+e execução de ar_m769_native_0053979c, fluxo BL para import
+0x00669A84, HLE retorno LR=0x005397BC, próximo PC pendente
+e FS guest open/read/bytes, RSX/quadros somente com prova real.

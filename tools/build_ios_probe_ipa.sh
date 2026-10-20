@@ -362,6 +362,51 @@ xcrun nm -g "${M766_OBJECTS[@]}" > m766-objects-nm.txt
 grep -Fq '_ar_m766_native_005394e8' m766-objects-nm.txt
 grep -Fq '_ar_m766_native_00669a84' m766-objects-nm.txt
 grep -Fq '_ar_m766_register_frontier' m766-objects-nm.txt
+# M7.69: ORIGINAL ASCENSION (NPUA80918) static PPC CFG, offline owner SHA authenticated.
+# No GOWA ELF/SELF/RAP/PSARC or guest asset included in GitHub/CI/IPA.
+python3 - <<'PY'
+import base64,gzip,hashlib,json
+from pathlib import Path
+files={
+ 'tools/m769_cfg.py.gz.b64':('tools/m769_cfg.py','f00f833b5776acd773f35c76f07e5009679531afc77feb5e9937d5bbcf3a33d4')
+}
+for src,(dest,sha) in files.items():
+ raw=gzip.decompress(base64.b64decode(Path(src).read_text().strip(),validate=True))
+ assert hashlib.sha256(raw).hexdigest()==sha,src
+ Path(dest).write_bytes(raw)
+parts=sorted(Path('runtime').glob('m769-snapshot.part[0-9][0-9].b64'))
+assert len(parts)==15, len(parts)
+joined=''.join(x.read_text().strip() for x in parts)
+raw=gzip.decompress(base64.b64decode(joined,validate=True))
+assert hashlib.sha256(raw).hexdigest()=='eead98450296a0145227d08223463093324a1539c1465ae50204ae4fb5450734'
+Path('m769-snapshot-ci.json').write_bytes(raw)
+a=json.loads(raw)
+assert a['schema']=='ascension-m769-scaled-opd-cfg-1'
+assert a['source_sha256']=='4bf75c897b82d1beb25514cbadaff3d03e1b0c7bf849fa5d289be4f9183462b5'
+assert a['opd_descriptors']==7643 and a['recovered_interval_candidates_not_authoritative']==16841
+assert a['source_prx_imports']==350
+assert len(a['accepted'])==5437 and len(a['rejected'])==3046
+assert a['queued_deferred_not_examined']==6554 and len(a['edges'])==8313
+assert sum(b['count'] for b in a['accepted'])==41735
+assert a['accepted'][0]['pc']==0x53979c and a['accepted'][0]['ir'][-1]==['bl',0x669a84,0x5397bc]
+assert sum(bool(b['import_veneer_requires_binding']) for b in a['accepted'])==7
+print('M7.69 owner-ELF 5437 complete PPC CFG blocks; 3046 true rejects; 6554 deferred, not treated as decoded')
+PY
+python3 tools/m769_cfg.py --snapshot m769-snapshot-ci.json --output-dir runtime | tee m769-generation.log
+M769_OBJECTS=()
+for src in runtime/ppu_m769_[0-9][0-9].c runtime/ppu_m769_install.c; do
+  test -s "$src"
+  dst="ios-probe/$(basename "${src%.c}").o"
+  xcrun --sdk iphoneos clang -target arm64-apple-ios17.0 -isysroot "$SDK" \
+    -std=c11 -O2 -Wall -Wextra -Werror -I upstream/runtime/ppu -I runtime \
+    -c "$src" -o "$dst"
+  M769_OBJECTS+=("$dst")
+done
+xcrun nm -g "${M769_OBJECTS[@]}" > m769-objects-nm.txt
+grep -Fq '_ar_m769_native_0053979c' m769-objects-nm.txt
+grep -Fq '_ar_m769_native_005397bc' m769-objects-nm.txt
+grep -Fq '_ar_m769_register_frontier' m769-objects-nm.txt
+grep -Fq '_ar_m769_get_stats' m769-objects-nm.txt
 # M7.56: capture live guest memory vs PT_LOAD file bytes, not fallback counters.
 xcrun --sdk iphoneos clang -target arm64-apple-ios17.0 -isysroot "$SDK" \
     -std=c11 -O2 -Wall -Wextra -Werror -I upstream/runtime/ppu -I runtime \
@@ -498,6 +543,7 @@ xcrun --sdk iphoneos clang++ -target arm64-apple-ios17.0 \
     ${M764C_OBJECTS[@]+"${M764C_OBJECTS[@]}"} \
     ${M765_OBJECTS[@]+"${M765_OBJECTS[@]}"} \
     ${M766_OBJECTS[@]+"${M766_OBJECTS[@]}"} \
+    ${M769_OBJECTS[@]+"${M769_OBJECTS[@]}"} \
     ${GOWA2_OBJECTS[@]+"${GOWA2_OBJECTS[@]}"} \
     ios-probe/ppu_m717_graph.o \
     ${M711_OBJECTS[@]+"${M711_OBJECTS[@]}"} \
@@ -673,6 +719,40 @@ proof={'schema':'ascension-m768-native-HLE-continuation-1',
 Path('m768-final-attestation.json').write_text(json.dumps(proof,indent=2)+'\n')
 print('M7.68 real ARM64 runtime/HLE symbols linked; guest execution NOT MEASURED')
 PY
+# M7.69 verify EVERY one of 5437 native symbols in FINAL Apple ARM64 Mach-O.
+python3 - <<'PY'
+import json,re
+from pathlib import Path
+a=json.loads(Path('m769-snapshot-ci.json').read_text())
+nm=Path('m78-owner-aot-linked-symbols.txt').read_text()
+defined=set(re.findall(r' [Tt] _([A-Za-z0-9_]+)\s*$',nm,re.M))
+symbols={'ar_m769_native_%08x'%b['pc'] for b in a['accepted']}
+missing=sorted(symbols-defined)
+assert len(symbols)==5437 and not missing,missing[:10]
+assert 'ar_m769_register_frontier' in defined
+assert 'ar_m769_get_stats' in defined
+gate=[b['pc'] for b in a['accepted'] if b['import_veneer_requires_binding']]
+assert len(gate)==7
+proof={'schema':'ascension-m769-owner-elf-arm64-1',
+ 'title_id':'NPUA80918','owner_sha256':a['source_sha256'],
+ 'opd_authoritative_count':a['opd_descriptors'],
+ 'recovered_intervals_not_authoritative':a['recovered_interval_candidates_not_authoritative'],
+ 'source_PRX_imports':a['source_prx_imports'],
+ 'CFG_decoded_candidates':a['total_examined'],
+ 'PPC_complete_native_blocks_generated_and_linked':len(symbols),
+ 'PPC_instructions_in_these_blocks':sum(b['count'] for b in a['accepted']),
+ 'reject_count_true_decoder_limits':len(a['rejected']),
+ 'queued_not_examined':a['queued_deferred_not_examined'],
+ 'CFG_edges':len(a['edges']),
+ 'PRX_HLE_veneer_native_symbols_NOT_REGISTERED':list(map(lambda v:'0x%08X'%v,gate)),
+ 'host_semantic_test':'SEE_m769-host-frontier.log',
+ 'iphone_new_blocks_registered':'NOT_MEASURED',
+ 'iphone_distinct_executed':'NOT_MEASURED',
+ 'guest_cellFsOpen':'NOT_MEASURED','guest_cellFsRead_positive':'NOT_MEASURED',
+ 'full_game_native_recompilation':False,'gameplay':'NOT_MEASURED'}
+Path('m769-final-attestation.json').write_text(json.dumps(proof,indent=2)+'\n')
+print('M7.69: 5437 original Ascension PPC complete blocks linked in final iOS ARM64 Mach-O; guest execution not measured')
+PY
 # M7.33 final Mach-O must retain ACTUAL production LV2 service binder.
 grep -Eq ' [Tt] _ar_lv2_bind_bootstrap_syscalls$' m78-owner-aot-linked-symbols.txt
 grep -Eq ' [Tt] _ar_lv2_timezone$' m78-owner-aot-linked-symbols.txt
@@ -813,6 +893,6 @@ echo 'M7.59: 42 real owner PPC words 0x002C1378..0x002C141C compiled ARM64 with 
 test -s AscensionRecompProbe-0.6.22-unsigned.ipa
 shasum -a 256 AscensionRecompProbe-0.6.22-unsigned.ipa > m41-ipa-sha256.txt
 # Retain legacy CI path; new alias has accurate installed bundle version.
-cp AscensionRecompProbe-0.6.22-unsigned.ipa AscensionRecompProbe-7.68.0-unsigned.ipa
-shasum -a 256 AscensionRecompProbe-7.68.0-unsigned.ipa > m768-ipa-sha256.txt
+cp AscensionRecompProbe-0.6.22-unsigned.ipa AscensionRecompProbe-7.69.0-unsigned.ipa
+shasum -a 256 AscensionRecompProbe-7.69.0-unsigned.ipa > m769-ipa-sha256.txt
 echo 'UNSIGNED DIAGNOSTIC APP: UIKit CAMetalLayer + real PS3Recomp Metal backend; NO GOWA GAME included' > m41-status.txt

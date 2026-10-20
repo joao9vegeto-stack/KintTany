@@ -15,6 +15,7 @@ extern void ar_m756_last_origin_evidence(ar_m756_stop_evidence*);
 extern void ar_m751_last_fs_trace(ar_fs_trace *);
 #include "../runtime/ppu_m717_graph.h"
 extern void ar_m717_last_aot_trace(ar_aot_trace *);
+extern void ar_m769_last_install_stats(uint32_t out[5]);
 extern int ar_private_elf_inspect(const unsigned char*,size_t,unsigned int[5]);
 extern int ar_m70_native_runtime_probe(const unsigned char*,size_t,unsigned int,unsigned int[16]);
 extern int ar_m712_exec_window(const unsigned char*,size_t,unsigned int,unsigned int[6]);
@@ -1565,6 +1566,8 @@ static NSString *ARCurrentRelease(void){
     ar_m751_last_fs_trace(&fsMeasured);
     ar_m767_import_evidence importMeasured={0};
     ar_m767_last_import_evidence(&importMeasured);
+    uint32_t m769Stats[5]={0};
+    ar_m769_last_install_stats(m769Stats);
     ar_m756_stop_evidence ownerStop={0};
     ar_m756_last_stop_evidence(&ownerStop);
     ar_m756_stop_evidence origin={0};
@@ -1878,6 +1881,13 @@ static NSString *ARCurrentRelease(void){
        (unsigned long long)measured.stop_lr,
        (unsigned long long)measured.stop_r2,measured.stop_cr,
        (unsigned long long)measured.stop_ctr];
+    [graphReport appendFormat:
+       @"M7.69 ASCENSION CFG ESCALA: 5437 blocos originais C->ARM64 em lote; "
+        "novos AOT autenticados e registrados=%u; duplicados prévios=%u; "
+        "veneer PRX protegido=%u; RAM inacessível=%u; SHA RAM divergente=%u; "
+        "AOT distintas realmente executadas=%u; sem fallback PPC=%u\n",
+       m769Stats[0],m769Stats[1],m769Stats[2],m769Stats[3],
+       m769Stats[4],measured.unique_aot,measured.fallback_steps];
     NSMutableArray *firstVisits=[NSMutableArray arrayWithCapacity:measured.first_count];
     for(uint32_t i=0;i<measured.first_count;i++){
        NSString *pc=[NSString stringWithFormat:@"0x%08X",measured.first_pcs[i]];
@@ -1911,6 +1921,12 @@ static NSString *ARCurrentRelease(void){
       @"first_unlinked_tail_target":[NSString stringWithFormat:@"0x%08X",measured.first_unlinked_tail_target],
       @"m767_fail_pc":[NSString stringWithFormat:@"0x%08X",measured.m767_fail_pc],
       @"m767_fail_reason":@(measured.m767_fail_reason),
+      @"m769_offline_full_blocks":@5437,
+      @"m769_authenticated_new":@(m769Stats[0]),
+      @"m769_already_registered":@(m769Stats[1]),
+      @"m769_prx_hle_protected":@(m769Stats[2]),
+      @"m769_guest_ram_unreadable":@(m769Stats[3]),
+      @"m769_guest_ram_sha_mismatch":@(m769Stats[4]),
       @"m768_hle_return_count":@(measured.m768_hle_return_count),
       @"m768_hle_return_native":@(measured.m768_hle_return_native),
       @"m768_last_hle_return_pc":[NSString stringWithFormat:@"0x%08X",measured.m768_last_hle_return_pc],

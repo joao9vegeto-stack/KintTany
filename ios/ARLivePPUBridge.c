@@ -70,6 +70,8 @@ extern int ar_m764_register_discovered(const uint8_t*,size_t);
 extern int ar_m764c_register_successors(const uint8_t*,size_t);
 extern int ar_m765_register_frontier(const uint8_t*,size_t);
 extern int ar_m766_register_frontier(const uint8_t*,size_t);
+extern int ar_m769_register_frontier(const uint8_t*,size_t);
+extern void ar_m769_get_stats(uint32_t[5]);
 extern int ar_private_import_match(const uint8_t*,size_t,uint32_t,uint32_t[4],char[48]);
 extern int ar_private_import_find_nid(const uint8_t*,size_t,uint32_t,const char*,uint32_t[4],char[48]);
 
@@ -80,6 +82,9 @@ static ar_fs_trace last_fs_trace;
 static ar_m756_stop_evidence last_stop_evidence;
 static ar_m756_stop_evidence last_origin_evidence;
 static ar_m767_import_evidence last_import_evidence;
+/* Real install evidence captured before guest shutdown, not source counts. */
+static uint32_t m769_verified_stats[5];
+void ar_m769_last_install_stats(uint32_t out[5]){if(out)memcpy(out,m769_verified_stats,sizeof(m769_verified_stats));}
 void ar_m767_last_import_evidence(ar_m767_import_evidence*out){if(out)*out=last_import_evidence;}
 void ar_m756_last_origin_evidence(ar_m756_stop_evidence*out){if(out)*out=last_origin_evidence;}
 void ar_m756_last_stop_evidence(ar_m756_stop_evidence*out){if(out)*out=last_stop_evidence;}
@@ -99,6 +104,7 @@ int ar_m70_native_runtime_probe(const uint8_t*d,size_t len,
  memset(&last_stop_evidence,0,sizeof(last_stop_evidence));
  memset(&last_origin_evidence,0,sizeof(last_origin_evidence));
  memset(&last_import_evidence,0,sizeof(last_import_evidence));
+ memset(m769_verified_stats,0,sizeof(m769_verified_stats));
  if(!d||len<64u)return -20;
  if(memcmp(d,"\177ELF",4)||d[4]!=2u||d[5]!=2u||d[6]!=1u||
     g16(d+16)!=2u||g16(d+18)!=21u||g32(d+20)!=1u)
@@ -354,6 +360,12 @@ int ar_m70_native_runtime_probe(const uint8_t*d,size_t len,
   if(ar_m766_register_frontier(d,len)!=AR_OK){
     ar_bridge_shutdown();return -71;
   }
+  /* M7.69 5,437 strict original Ascension PPC blocks (not GoW2 assets).
+   * ELF+guest SHA before each registration. Imports retain PRX/HLE priority. */
+  if(ar_m769_register_frontier(d,len)!=AR_OK){
+    ar_bridge_shutdown();return -72;
+  }
+  ar_m769_get_stats(m769_verified_stats);
 #endif
 #endif
  out[5]=(uint32_t)ar_registered_count(); /* genuine linked game AOT only */

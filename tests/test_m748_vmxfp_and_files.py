@@ -39,5 +39,5 @@ class M748VCFSX(unittest.TestCase):
             "m748-native-arm64.o"):
    self.assertIn(t,w)
   plist=(R/"ios/Probe-Info.plist").read_text()
-  self.assertIn("<string>7680</string>",plist)
+  self.assertIn("<string>7690</string>",plist)
 if __name__=="__main__":unittest.main()

@@ -1,0 +1,42 @@
+{
+  "schema": "ascension-m769-real-scaled-static-cfg-1",
+  "game_id": "NPUA80918",
+  "game": "God of War: Ascension",
+  "not": "God of War II",
+  "owner_elf_sha256": "4bf75c897b82d1beb25514cbadaff3d03e1b0c7bf849fa5d289be4f9183462b5",
+  "physical_m768": {
+    "commit": "917b7f96652b317124c06b8097858f08ed2158e9",
+    "run": 262,
+    "registered": 8700,
+    "distinct_executed": 149,
+    "dispatches": 1907,
+    "ppc_interpreted": 0,
+    "missing_pc": "0x0053979C",
+    "last_native": "0x00539630",
+    "host_vs_guest_fs": 0
+  },
+  "new_batch": {
+    "authoritative_opd_descriptors": 7643,
+    "recovered_range_candidates": 16841,
+    "PRX_imports": 350,
+    "CFG_candidates_examined": 8483,
+    "fully_lifted_native_blocks": 5437,
+    "PPU_instructions_in_complete_blocks": 41735,
+    "rejected_real": 3046,
+    "queued_not_examined": 6554,
+    "CFG_edges": 8313,
+    "import_veneer_gated": 7,
+    "C_units": 85,
+    "frontier": "0x0053979C",
+    "prx_target": "0x00669A84",
+    "LR_return": "0x005397BC",
+    "code_full_game": false
+  },
+  "host_real_semantics": "PASSED_LOCALLY",
+  "ios_compile": "AWAITING_ACTIONS",
+  "macho_link": "AWAITING_ACTIONS",
+  "device_registered": "NOT_MEASURED",
+  "device_executed": "NOT_MEASURED",
+  "guest_cellFsRead_positive": "NOT_MEASURED",
+  "RSX_original": "NOT_MEASURED"
+}
