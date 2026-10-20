@@ -1614,7 +1614,7 @@ static NSString *ARCurrentRelease(void){
         ? gameManifest[@"files"] : @[];
     NSString *gameRootName=[gameManifest[@"root_name"] isKindOfClass:NSString.class]
         ? gameManifest[@"root_name"] : @"";
-    BOOL hasUSRDIR=(gameRootName.caseInsensitiveCompare(@"USRDIR")==NSOrderedSame);
+    BOOL hasUSRDIR=([gameRootName caseInsensitiveCompare:@"USRDIR"]==NSOrderedSame);
     unsigned long long gameBytes=0;
     NSUInteger psarcCount=0;
     for(NSDictionary *entry in gameFiles){
@@ -1680,9 +1680,9 @@ static NSString *ARCurrentRelease(void){
        "AR_UNRESOLVED=-3: PC guest sem ARM64 registrado; AOT ONLY proíbe fallback.\n",
        nativeRC,native[1],native[2],native[3],
        native[4],native[13],native[5],
+       (int)native[8],(int)native[9],(int)native[10],
        gameReady?@"SIM (USRDIR)":@"NÃO (M7.0 não iniciado)",
        (unsigned long)gameFiles.count,gameBytes,(unsigned long)psarcCount,
-       (int)native[8],(int)native[9],(int)native[10],
        (int)native[11],native[12],
        (int)native[6],native[7],native[14],native[15]];
 
