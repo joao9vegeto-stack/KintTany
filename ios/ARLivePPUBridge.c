@@ -40,7 +40,7 @@ extern void ARGameFolderEndGuestSession(void);
 #ifdef ASCENSION_M772_LINKED
 extern int ar_m772_runtime_init(uint8_t*,size_t,const char*);
 extern int ar_m772_prepare_main(ppu_context*,uint32_t,uint32_t,uint32_t,
-                                uint32_t,uint32_t);
+                                uint32_t,uint32_t,uint32_t);
 #endif
 
 extern int ar_m711_bind_memory(const uint8_t*,size_t,uint32_t*);
@@ -560,11 +560,13 @@ int ar_m70_native_runtime_probe(const uint8_t*d,size_t len,
    static const char boot_path[]="/dev_bdvd/PS3_GAME/USRDIR/EBOOT.BIN";
    const uint32_t entry_frame=0x80u;
    const uint32_t stack_top=tlsbase+0x20000u;
+   const uint32_t process_tls_image=stack_top;
    const uint32_t reserve=(entry_frame+24u+(uint32_t)sizeof(boot_path)+15u)&~15u;
    const uint32_t entry_sp=stack_top-reserve;
    const uint32_t argv_base=entry_sp+entry_frame;
    const uint32_t path_addr=argv_base+24u;
-   if(stack_top>cap || path_addr>cap-sizeof(boot_path) ||
+   if(stack_top>cap || tls_mem>cap-process_tls_image ||
+      path_addr>cap-sizeof(boot_path) ||
       ar_vm_zero(entry_sp,entry_frame+24u+sizeof(boot_path))!=AR_OK){
      out[6]=(uint32_t)AR_MEM_FAULT;
      ar_bridge_shutdown();
@@ -581,7 +583,8 @@ int ar_m70_native_runtime_probe(const uint8_t*d,size_t len,
    ar_write32(argv_base+4u,path_addr);
    ctx.gpr[1]=entry_sp;
    const int entry_rc=ar_m772_prepare_main(&ctx,(uint32_t)tls_va,
-       (uint32_t)tls_file,(uint32_t)tls_mem,stack_top,argv_base);
+       (uint32_t)tls_file,(uint32_t)tls_mem,process_tls_image,
+       stack_top,argv_base);
    if(entry_rc){
      out[6]=(uint32_t)entry_rc;
      ar_bridge_shutdown();

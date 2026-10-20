@@ -98,16 +98,16 @@ extern "C" int ar_m772_runtime_init(uint8_t* guest_memory,size_t guest_size,
  * reservation registration and command-line ABI. */
 extern "C" int ar_m772_prepare_main(ppu_context* ctx,uint32_t tls_vaddr,
                                      uint32_t tls_filesz,uint32_t tls_memsz,
-                                     uint32_t stack_top,uint32_t argv_base)
+                                     uint32_t tls_image,uint32_t stack_top,
+                                     uint32_t argv_base)
 {
-    constexpr uint32_t tls_image = 0x10f00000u;
-    constexpr uint32_t tls_tp = tls_image + 0x7000u;
     if (!ctx || !vm_base || !ppu_vm_size || !stack_top || !argv_base ||
         tls_filesz > tls_memsz || tls_memsz > 1024u*1024u ||
         tls_vaddr > ppu_vm_size || tls_filesz > ppu_vm_size - tls_vaddr ||
-        tls_memsz > ppu_vm_size - tls_image ||
+        tls_image > ppu_vm_size || tls_memsz > ppu_vm_size - tls_image ||
         argv_base > ppu_vm_size - 24u ||
-        stack_top > ppu_vm_size || argv_base >= stack_top)
+        stack_top > ppu_vm_size || argv_base >= stack_top ||
+        tls_image < stack_top)
         return -1;
 
     ctx->thread_id = ppu_thread_register_main();
@@ -125,7 +125,7 @@ extern "C" int ar_m772_prepare_main(ppu_context* ctx,uint32_t tls_vaddr,
         memcpy(vm_base + tls_image, vm_base + tls_vaddr, tls_filesz);
         if (tls_memsz > tls_filesz)
             memset(vm_base + tls_image + tls_filesz, 0, tls_memsz - tls_filesz);
-        ctx->gpr[13] = tls_tp;
+        ctx->gpr[13] = (uint64_t)tls_image + 0x7000u;
     }
 
     /* argc=1; argv[0] is the real disc boot path. PPU pointers occupy the

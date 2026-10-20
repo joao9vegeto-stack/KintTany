@@ -81,6 +81,15 @@ class M772IOSVfsMountTests(unittest.TestCase):
         self.assertIn("m772_last_guest_pc, 0u", begin)
         self.assertIn("m772_initialized, 0u", begin)
 
+    def test_process_tls_is_bounded_by_the_allocated_guest_vm(self):
+        bridge = (ROOT / "ios" / "ARLivePPUBridge.c").read_text()
+        runtime = (ROOT / "runtime" / "m772_bridge.cpp").read_text()
+        self.assertIn("const uint32_t process_tls_image=stack_top", bridge)
+        self.assertIn("stack_top>cap || tls_mem>cap-process_tls_image", bridge)
+        self.assertIn("tls_image > ppu_vm_size || tls_memsz > ppu_vm_size - tls_image", runtime)
+        self.assertIn("tls_image < stack_top", runtime)
+        self.assertNotIn("0x10f00000u", runtime)
+
 
 if __name__ == "__main__":
     unittest.main()

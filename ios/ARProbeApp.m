@@ -157,6 +157,10 @@ static NSString *ARCurrentRelease(void){
         [view.bottomAnchor constraintEqualToAnchor:controller.view.bottomAnchor]
     ]];
     self.metalView=view;
+    /* The game launcher is the first screen. The Metal test surface is only
+     * shown on its own tab; a diagnostic blue clear must never look like a
+     * game frame. */
+    self.metalView.hidden=YES;
     UITapGestureRecognizer *tap=[[UITapGestureRecognizer alloc]
                                  initWithTarget:self action:@selector(drawNextFrame:)];
     [view addGestureRecognizer:tap];
@@ -398,7 +402,7 @@ static NSString *ARCurrentRelease(void){
     /* M5.9: explicit private Files import; no title data in the IPA. */
     UIButton *elfButton=[UIButton buttonWithType:UIButtonTypeSystem];
     elfButton.translatesAutoresizingMaskIntoConstraints=NO;
-    [elfButton setTitle:@"M5.9 · Importar GOWA.ELF" forState:UIControlStateNormal];
+    [elfButton setTitle:@"Selecionar GOWA.ELF · iniciar boot nativo" forState:UIControlStateNormal];
     [elfButton setTitleColor:UIColor.whiteColor forState:UIControlStateNormal];
     elfButton.backgroundColor=[UIColor.blackColor colorWithAlphaComponent:0.82];
     elfButton.titleLabel.font=[UIFont systemFontOfSize:14 weight:UIFontWeightSemibold];
@@ -574,15 +578,15 @@ static NSString *ARCurrentRelease(void){
         hint.font=[UIFont systemFontOfSize:13 weight:UIFontWeightMedium];
         hint.textColor=[UIColor colorWithWhite:0.83 alpha:1];
         hint.text=i==0 ?
-             @"NPUA80918 · AOT ARM64 do Ascension. Importe o ELF para acompanhar a inicialização nativa." :
+             @"GOD OF WAR · ASCENSION\nNPUA80918 · runtime PS3Recomp recompilado para ARM64. Configure os arquivos e acompanhe cada etapa do boot." :
              @"Diagnósticos RSX → Metal, do mais recente ao legado. Role para encontrar os testes anteriores.";
         [stack addArrangedSubview:hint];
-        NSArray<UIButton *> *ordered=i==0 ? @[rpcMarkerButton,localFolderButton,folderButton,elfButton] : @[
+        NSArray<UIButton *> *ordered=i==0 ? @[elfButton,folderButton,localFolderButton,rpcMarkerButton] : @[
             alphaButton,blendButton,maskButton,stencilButton,depthButton,
             multipassButton,mutationButton,drawButton,shaderButton,cacheButton];
         for(UIButton *button in ordered) {
-            button.backgroundColor=i==0 ?
-                [UIColor colorWithRed:0.10 green:0.40 blue:0.73 alpha:1] :
+            button.backgroundColor=(i==0 && button==elfButton) ?
+                [UIColor colorWithRed:0.12 green:0.48 blue:0.31 alpha:1] :
                 [UIColor colorWithRed:0.11 green:0.18 blue:0.30 alpha:1];
             button.titleLabel.adjustsFontSizeToFitWidth=YES;
             button.titleLabel.minimumScaleFactor=0.76;
@@ -606,7 +610,7 @@ static NSString *ARCurrentRelease(void){
             [stack.widthAnchor constraintEqualToAnchor:scroll.frameLayoutGuide.widthAnchor]
         ]];
     }
-    [elfButton setTitle:@"Importar GOWA.ELF · executar AOT" forState:UIControlStateNormal];
+    [elfButton setTitle:@"Selecionar GOWA.ELF · iniciar boot nativo" forState:UIControlStateNormal];
     NSLayoutConstraint *height=[panel.heightAnchor
              constraintEqualToAnchor:controller.view.heightAnchor multiplier:0.60];
     height.priority=UILayoutPriorityDefaultHigh;
@@ -691,6 +695,10 @@ static NSString *ARCurrentRelease(void){
     BOOL showGame=sender.selectedSegmentIndex==0;
     self.gameList.hidden=!showGame;
     self.graphicsList.hidden=showGame;
+    self.metalView.hidden=showGame;
+    self.status.text=showGame ?
+      @"Launcher · selecione a instalação e o ELF para iniciar a prova de boot nativo. Gameplay ainda depende da integração RSX." :
+      @"Laboratório gráfico · superfície Metal de diagnóstico, sem conteúdo do jogo.";
 }
 - (void)copyPpuBatch:(UIButton *)sender {
     if(!self.ppuBatchReport.length)return;
@@ -1490,7 +1498,7 @@ static NSString *ARCurrentRelease(void){
  self.ppuDiagnosticsButton.enabled=YES;
  [self.ppuDiagnosticsButton setTitle:@"Relatório ao vivo · em execução"
                             forState:UIControlStateNormal];
- self.status.text=@"GOWA.ELF recebido. Leitura e execução PPU/AOT em segundo plano…";
+ self.status.text=@"GOWA.ELF recebido · validando o executável e iniciando a prova de boot nativo em segundo plano…";
  dispatch_async(dispatch_get_global_queue(QOS_CLASS_USER_INITIATED,0),^{
    @try {
    NSError*err=nil;
