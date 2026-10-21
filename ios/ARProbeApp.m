@@ -108,8 +108,8 @@ static NSString *ARCurrentRelease(void){
 }
 static NSString *ARVMReservationName(uint32_t kind){
  switch(kind){
-  case 1u:return @"mmap anywhere · janela de 4 GiB";
-  case 3u:return @"Mach VM_FLAGS_ANYWHERE · janela de 4 GiB";
+  case 1u:return @"mmap anywhere · guest 3,5 GiB leitura/escrita";
+  case 3u:return @"Mach VM_FLAGS_ANYWHERE · guest 3,5 GiB leitura/escrita";
   default:return @"sem reserva concluída";
  }
 }
@@ -119,13 +119,13 @@ static NSString *ARVMReservationStageName(uint32_t stage){
   case AR_VM_STAGE_ALIGNED_HINT:return @"mmap do endereço alinhado";
   case AR_VM_STAGE_HINT_RELOCATED:return @"iOS realocou o endereço sugerido";
   case AR_VM_STAGE_HINT_CLEANUP:return @"liberação de endereço realocado";
-  case AR_VM_STAGE_FALLBACK_MAP:return @"mmap anywhere (4 GiB)";
+  case AR_VM_STAGE_FALLBACK_MAP:return @"mmap guest anywhere (3,5 GiB RW)";
   case AR_VM_STAGE_TRIM:return @"ajuste do fallback alinhado";
   case AR_VM_STAGE_PROTECT_LOW:return @"habilitar memória baixa do guest";
   case AR_VM_STAGE_PROTECT_RSX:return @"habilitar memória local RSX";
   case AR_VM_STAGE_PROTECT_STACK:return @"habilitar pilhas do guest";
   case AR_VM_STAGE_RELEASE:return @"liberar região guest";
-  case AR_VM_STAGE_MACH_ALLOCATE:return @"vm_allocate anywhere (4 GiB)";
+  case AR_VM_STAGE_MACH_ALLOCATE:return @"vm_allocate guest anywhere (3,5 GiB RW)";
   case AR_VM_STAGE_MACH_PROTECT_NONE:return @"proteger reserva Mach como PROT_NONE";
   case AR_VM_STAGE_MACH_PROTECT_COMMIT:return @"habilitar faixa guest pela API Mach";
   case AR_VM_STAGE_MACH_RELEASE:return @"liberar reserva Mach";

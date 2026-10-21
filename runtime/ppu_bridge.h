@@ -130,7 +130,7 @@ void ar_ppc_note_failed_call(uint32_t callsite,uint32_t target);
 int ar_ppc_fallback_step(ppu_context *c,const uint8_t *elf,size_t len,
                          uint32_t pc,uint32_t *opcode);
 
-/* High mapped guest virtual pages; ownership managed by ppu_mmapper. */
+/* Guest virtual mappings whose backing bytes are owned by ppu_mmapper. */
 int ar_vm_external_map(uint32_t guest_va,uint8_t *data,size_t length);
 int ar_vm_external_unmap(uint32_t guest_va);
 int ar_vm_load(uint64_t,const void *,size_t);

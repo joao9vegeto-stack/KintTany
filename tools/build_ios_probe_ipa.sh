@@ -662,7 +662,7 @@ required=("func_00010410", "func_0052A740", "func_0052E3F4", "_ar_m772_runtime_a
           "_gowa_spu_0003_at_006D5900_spu_recomp_register")
 missing=[symbol for symbol in required if not any(symbol in name for name in defined)]
 if missing: raise SystemExit("M7.72 expected AOT definitions missing from final Mach-O: "+str(missing))
-print("M7.79 final ARM64 Mach-O contains AOT/HLE/loop telemetry, GCM FIFO pump, Metal present and SPU registration symbols")
+print("M7.80 final ARM64 Mach-O contains AOT/HLE/loop telemetry, GCM FIFO pump, Metal present and SPU registration symbols")
 PYM772LINKED
 # Every M7.62 native function must appear in the FINAL Mach-O, not merely object.
 python3 - <<'PY'

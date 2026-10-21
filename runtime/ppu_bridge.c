@@ -26,19 +26,16 @@ extern void ar_m772_unbind_guest_memory(void *);
 #define MAX_MEM (256u*1024u*1024u)
 #ifdef ASCENSION_M772_LINKED
 /* PS3Recomp uses the PS3 32-bit guest address as an offset from vm_base.
- * Reserve its full address window wherever the host process can place it.
- * Host pointers convert back to guest EAs by subtracting vm_base, so this
- * base need not be 4-GiB aligned. Only make the regions needed by the current
- * boot read/write. Anonymous pages stay zero
- * filled and are backed by the kernel on first touch; never memset gigabytes
- * on iOS. These ranges match the Ascension boot layout from the GoW2 host. */
-#define AR_M772_VM_TOTAL       ((size_t)UINT64_C(0x100000000))
+ * Reserve exactly the exposed guest range anywhere in the host address space.
+ * Do not reserve it as PROT_NONE and reopen selected spans: the M7.79
+ * LiveContainer crash report recorded a process read from a VM_ALLOCATE
+ * page whose current protection was still none. Avoid separate protection
+ * transitions and give the guest range normal read/write access at allocation
+ * time. Anonymous pages remain demand-zero
+ * and are physically backed only on first touch; this does not eagerly commit
+ * 3.5 GiB. Allocating only the guest range also keeps the host mapping itself
+ * bounded at the same 0xE0000000 limit enforced by the checked bridge APIs. */
 #define AR_M772_VM_GUEST       ((size_t)UINT32_C(0xE0000000))
-#define AR_M772_VM_LOW_COMMIT  ((size_t)UINT32_C(0x51000000))
-#define AR_M772_VM_RSX_BASE    ((size_t)UINT32_C(0xC0000000))
-#define AR_M772_VM_RSX_SIZE    ((size_t)UINT32_C(0x10000000))
-#define AR_M772_VM_STACK_BASE  ((size_t)UINT32_C(0xD0000000))
-#define AR_M772_VM_STACK_SIZE  ((size_t)UINT32_C(0x10000000))
 #endif
 #define MAX_DEPTH 64
 #define MAX_IMPORTS 2048
@@ -177,7 +174,7 @@ void ar_bridge_vm_reservation_status(ar_vm_reservation_status *out)
   if(out)*out=last_vm_reservation;
 }
 #ifdef ASCENSION_M772_LINKED
-static int mem_is_sparse_vm;
+static int mem_is_reserved_vm;
 static int mem_is_mach_vm;
 
 static void ar_m772_vm_fail(uint32_t stage,int error_number)
@@ -197,69 +194,11 @@ static void ar_m772_vm_fail_mach(uint32_t stage,kern_return_t kr)
 static void ar_m772_vm_release_mach(uint8_t *base)
 {
   const kern_return_t kr=vm_deallocate(mach_task_self(),
-      (vm_address_t)(uintptr_t)base,(vm_size_t)AR_M772_VM_TOTAL);
+      (vm_address_t)(uintptr_t)base,(vm_size_t)AR_M772_VM_GUEST);
   if(kr!=KERN_SUCCESS)
     ar_m772_vm_fail_mach(AR_VM_STAGE_MACH_RELEASE,kr);
 }
-
-static uint8_t *ar_m772_vm_commit_mach(uint8_t *base)
-{
-  const kern_return_t reserve_protect_kr=vm_protect(mach_task_self(),
-      (vm_address_t)(uintptr_t)base,(vm_size_t)AR_M772_VM_TOTAL,
-      0,VM_PROT_NONE);
-  if(reserve_protect_kr!=KERN_SUCCESS){
-    ar_m772_vm_fail_mach(AR_VM_STAGE_MACH_PROTECT_NONE,reserve_protect_kr);
-    ar_m772_vm_release_mach(base);
-    return NULL;
-  }
-  struct {size_t offset;size_t size;} regions[]={
-    {0u,AR_M772_VM_LOW_COMMIT},
-    {AR_M772_VM_RSX_BASE,AR_M772_VM_RSX_SIZE},
-    {AR_M772_VM_STACK_BASE,AR_M772_VM_STACK_SIZE}
-  };
-  for(size_t i=0;i<sizeof(regions)/sizeof(regions[0]);i++){
-    const vm_address_t address=(vm_address_t)((uintptr_t)base+regions[i].offset);
-    const kern_return_t kr=vm_protect(mach_task_self(),address,
-        (vm_size_t)regions[i].size,0,VM_PROT_READ|VM_PROT_WRITE);
-    if(kr!=KERN_SUCCESS){
-      ar_m772_vm_fail_mach(AR_VM_STAGE_MACH_PROTECT_COMMIT,kr);
-      ar_m772_vm_release_mach(base);
-      return NULL;
-    }
-  }
-  last_vm_reservation.failure_stage=AR_VM_STAGE_NONE;
-  last_vm_reservation.failure_errno=0;
-  last_vm_reservation.last_mach_kern_return=KERN_SUCCESS;
-  return base;
-}
 #endif
-
-static uint8_t *ar_m772_vm_commit(uint8_t *base)
-{
-  if(mprotect(base,AR_M772_VM_LOW_COMMIT,PROT_READ|PROT_WRITE)!=0){
-    const int error_number=errno;
-    ar_m772_vm_fail(AR_VM_STAGE_PROTECT_LOW,error_number);
-    (void)munmap(base,AR_M772_VM_TOTAL);
-    return NULL;
-  }
-  if(mprotect(base+AR_M772_VM_RSX_BASE,AR_M772_VM_RSX_SIZE,
-              PROT_READ|PROT_WRITE)!=0){
-    const int error_number=errno;
-    ar_m772_vm_fail(AR_VM_STAGE_PROTECT_RSX,error_number);
-    (void)munmap(base,AR_M772_VM_TOTAL);
-    return NULL;
-  }
-  if(mprotect(base+AR_M772_VM_STACK_BASE,AR_M772_VM_STACK_SIZE,
-              PROT_READ|PROT_WRITE)!=0){
-    const int error_number=errno;
-    ar_m772_vm_fail(AR_VM_STAGE_PROTECT_STACK,error_number);
-    (void)munmap(base,AR_M772_VM_TOTAL);
-    return NULL;
-  }
-  last_vm_reservation.failure_stage=AR_VM_STAGE_NONE;
-  last_vm_reservation.failure_errno=0;
-  return base;
-}
 
 static uint8_t *ar_m772_vm_reserve(void)
 {
@@ -272,42 +211,41 @@ static uint8_t *ar_m772_vm_reserve(void)
   flags|=MAP_NORESERVE;
 #endif
 
-  /* LiveContainer reserves or fragments every fixed address range tried by
-   * M7.78. Ask the kernel for one free 4-GiB extent instead. The PS3 guest EA
-   * remains an offset within that extent; no 8-GiB over-reservation or
-   * aligned-address guess is needed. */
+  /* LiveContainer reserves or fragments fixed addresses. Ask the kernel for
+   * one free guest-sized extent. vm_allocate returns it readable/writable;
+   * avoid vm_protect transitions that left a no-access page in M7.79. */
 #ifdef AR_M772_HAS_MACH_VM
   vm_address_t address=0;
   last_vm_reservation.mach_attempts++;
   const kern_return_t kr=vm_allocate(mach_task_self(),&address,
-      (vm_size_t)AR_M772_VM_TOTAL,VM_FLAGS_ANYWHERE);
+      (vm_size_t)AR_M772_VM_GUEST,VM_FLAGS_ANYWHERE);
   if(kr==KERN_SUCCESS){
-    uint8_t *committed=ar_m772_vm_commit_mach((uint8_t*)(uintptr_t)address);
-    if(committed){
-      last_vm_reservation.reservation_kind=3u;
-      last_vm_reservation.reservation_base=(uint64_t)address;
-      mem_is_mach_vm=1;
-      return committed;
-    }
+    uint8_t *guest=(uint8_t*)(uintptr_t)address;
+    last_vm_reservation.failure_stage=AR_VM_STAGE_NONE;
+    last_vm_reservation.failure_errno=0;
+    last_vm_reservation.last_mach_kern_return=KERN_SUCCESS;
+    last_vm_reservation.reservation_kind=3u;
+    last_vm_reservation.reservation_base=(uint64_t)address;
+    mem_is_mach_vm=1;
+    return guest;
   }else{
     ar_m772_vm_fail_mach(AR_VM_STAGE_MACH_ALLOCATE,kr);
   }
 #endif
   last_vm_reservation.mmap_attempts++;
-  uint8_t *mapped=(uint8_t*)mmap(NULL,AR_M772_VM_TOTAL,PROT_NONE,
+  uint8_t *mapped=(uint8_t*)mmap(NULL,AR_M772_VM_GUEST,
+                                 PROT_READ|PROT_WRITE,
                                  flags,-1,0);
   if(mapped==MAP_FAILED){
     ar_m772_vm_fail(AR_VM_STAGE_FALLBACK_MAP,errno);
     return NULL;
   }
-  uint8_t *committed=ar_m772_vm_commit(mapped);
-  if(!committed){
-    return NULL;
-  }
+  last_vm_reservation.failure_stage=AR_VM_STAGE_NONE;
+  last_vm_reservation.failure_errno=0;
   last_vm_reservation.reservation_kind=1u;
-  last_vm_reservation.reservation_base=(uint64_t)(uintptr_t)committed;
+  last_vm_reservation.reservation_base=(uint64_t)(uintptr_t)mapped;
   mem_is_mach_vm=0;
-  return committed;
+  return mapped;
 }
 #endif
 #define AR_EXTERNAL_MAX 512u
@@ -338,7 +276,7 @@ int ar_bridge_init(size_t n) {
   mem=ar_m772_vm_reserve();
   if(!mem)return AR_NO_MEMORY;
   mem_size=AR_M772_VM_GUEST;
-  mem_is_sparse_vm=1;
+  mem_is_reserved_vm=1;
 #else
   mem=(uint8_t*)calloc(n,1);
   if(!mem)return AR_NO_MEMORY;
@@ -354,10 +292,10 @@ void ar_bridge_shutdown(void){
    ar_m772_vm_release_mach(mem);
 #endif
  }
- else if(mem && mem_is_sparse_vm)munmap(mem,AR_M772_VM_TOTAL);
+ else if(mem && mem_is_reserved_vm)munmap(mem,AR_M772_VM_GUEST);
  else free(mem);
  mem_is_mach_vm=0;
- mem_is_sparse_vm=0;
+ mem_is_reserved_vm=0;
 #else
  free(mem);
 #endif
@@ -450,23 +388,30 @@ int ar_bind_hle(uint32_t nid,ar_hle_fn fn){
 uint32_t ar_last_unresolved(void){return missing;}
 size_t ar_registered_count(void){return nfunc;}
 
-/* Guest low ELF plus sparse high mappings; no PPC interpreter.
- * External map OWNS NO bytes: the mapper manages their lifetime.
- * An address reservation alone cannot create valid memory. */
+/* Guest low ELF and mmapper staging; no PPC interpreter. External mappings
+ * own no backing bytes: the mmapper owns them and this bridge copies them
+ * into the native guest VM while mapped, then copies changes back on unmap. */
 static int overlap(uint64_t a,size_t n,uint64_t b,size_t m){
  return a<(b+(uint64_t)m) && b<(a+(uint64_t)n);
 }
 int ar_vm_external_map(uint32_t addr,uint8_t *bytes,size_t count){
  if(!mem||!bytes||!addr||!count||nextra>=AR_EXTERNAL_MAX ||
-    (uint64_t)addr+count>(uint64_t)UINT32_MAX+1u ||
-    overlap(addr,count,0,mem_size))return AR_BAD_ARGS;
+    (uint64_t)addr+count>(uint64_t)UINT32_MAX+1u)return AR_BAD_ARGS;
+ const int guest_range=(uint64_t)addr+count<=(uint64_t)mem_size;
+ if(!guest_range && overlap(addr,count,0,mem_size))return AR_BAD_ARGS;
  for(size_t i=0;i<nextra;i++)
   if(overlap(addr,count,extra[i].start,extra[i].size))return AR_DUPLICATE;
+ /* PS3 mmapper guest EAs normally fall inside the full VM. Stage the
+  * allocated object there so checked bridge reads and generated native AOT
+  * direct vm_base+EA accesses observe identical bytes. */
+ if(guest_range)memcpy(mem+(size_t)addr,bytes,count);
  extra[nextra].start=addr;extra[nextra].size=count;
  extra[nextra++].bytes=bytes;return AR_OK;
 }
 int ar_vm_external_unmap(uint32_t addr){
  for(size_t i=0;i<nextra;i++)if(extra[i].start==addr){
+   if((uint64_t)addr+extra[i].size<=(uint64_t)mem_size)
+     memcpy(extra[i].bytes,mem+(size_t)addr,extra[i].size);
    extra[i]=extra[--nextra];memset(&extra[nextra],0,sizeof(extra[0]));
    return AR_OK;
  }

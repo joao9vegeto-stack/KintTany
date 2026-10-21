@@ -84,7 +84,7 @@ extern int ar_private_import_match(const uint8_t*,size_t,uint32_t,uint32_t[4],ch
 extern int ar_private_import_find_nid(const uint8_t*,size_t,uint32_t,const char*,uint32_t[4],char[48]);
 
 /* ELF PT_LOAD/TLS staging stays below 256 MiB for this title. The production
- * M772 runtime gets the separate 3.5-GiB sparse guest address window in
+ * M772 runtime gets the separate 3.5-GiB demand-zero guest address window in
  * ppu_bridge.c; do not use this parse ceiling as the runtime VM size. */
 enum { AR_NATIVE_IMAGE_LIMIT=256u*1024u*1024u, AR_NATIVE_RESERVE=0x20000u };
 /* Native AOT trace copied before ar_bridge_shutdown; no game code stored. */
@@ -179,7 +179,7 @@ int ar_m70_native_runtime_probe(const uint8_t*d,size_t len,
  ctx.gpr[12]=0x100000u;
  ppu_set_stack(&ctx,(uint64_t)tlsbase+0x10000u,0x10000u);
  out[1]=image.entry_code;out[2]=image.toc;out[3]=image.segments;
- /* Report the actual PS3 guest window (3.5 GiB virtual, sparse on iOS), not
+ /* Report the actual PS3 guest window (3.5 GiB virtual, demand-zero on iOS), not
   * the 256-MiB PT_LOAD validation ceiling used while parsing this ELF. */
  out[4]=(uint32_t)ar_guest_memory_capacity();
  out[13]=(uint32_t)image.loaded_bytes;
