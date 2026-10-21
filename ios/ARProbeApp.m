@@ -108,9 +108,8 @@ static NSString *ARCurrentRelease(void){
 }
 static NSString *ARVMReservationName(uint32_t kind){
  switch(kind){
-  case 1u:return @"reserva direta alinhada de 4 GiB";
-  case 2u:return @"fallback 8 GiB aparado para 4 GiB";
-  case 3u:return @"Mach VM_FLAGS_FIXED · 4 GiB sem sobrescrita";
+  case 1u:return @"mmap anywhere · janela de 4 GiB";
+  case 3u:return @"Mach VM_FLAGS_ANYWHERE · janela de 4 GiB";
   default:return @"sem reserva concluída";
  }
 }
@@ -120,13 +119,13 @@ static NSString *ARVMReservationStageName(uint32_t stage){
   case AR_VM_STAGE_ALIGNED_HINT:return @"mmap do endereço alinhado";
   case AR_VM_STAGE_HINT_RELOCATED:return @"iOS realocou o endereço sugerido";
   case AR_VM_STAGE_HINT_CLEANUP:return @"liberação de endereço realocado";
-  case AR_VM_STAGE_FALLBACK_MAP:return @"mmap de fallback 8 GiB";
+  case AR_VM_STAGE_FALLBACK_MAP:return @"mmap anywhere (4 GiB)";
   case AR_VM_STAGE_TRIM:return @"ajuste do fallback alinhado";
   case AR_VM_STAGE_PROTECT_LOW:return @"habilitar memória baixa do guest";
   case AR_VM_STAGE_PROTECT_RSX:return @"habilitar memória local RSX";
   case AR_VM_STAGE_PROTECT_STACK:return @"habilitar pilhas do guest";
   case AR_VM_STAGE_RELEASE:return @"liberar região guest";
-  case AR_VM_STAGE_MACH_ALLOCATE:return @"reserva Mach no endereço alinhado";
+  case AR_VM_STAGE_MACH_ALLOCATE:return @"mach_vm_allocate anywhere (4 GiB)";
   case AR_VM_STAGE_MACH_PROTECT_NONE:return @"proteger reserva Mach como PROT_NONE";
   case AR_VM_STAGE_MACH_PROTECT_COMMIT:return @"habilitar faixa guest pela API Mach";
   case AR_VM_STAGE_MACH_RELEASE:return @"liberar reserva Mach";
@@ -1514,11 +1513,12 @@ static BOOL ARGameManifestHasTitleUsrdir(NSDictionary *manifest){
       @"runtime_initialized":@(m772[4]), @"when":[[NSDate date] description],
       @"vm_attempted":@(vmReservation.attempted),
       @"vm_reservation_kind":@(vmReservation.reservation_kind),
-      @"vm_hint_attempts":@(vmReservation.hint_attempts),
+      @"vm_mmap_attempts":@(vmReservation.mmap_attempts),
       @"vm_failure_stage":@(vmReservation.failure_stage),
       @"vm_failure_errno":@(vmReservation.failure_errno),
       @"vm_mach_attempts":@(vmReservation.mach_attempts),
-      @"vm_last_mach_kern_return":@(vmReservation.last_mach_kern_return)
+      @"vm_last_mach_kern_return":@(vmReservation.last_mach_kern_return),
+      @"vm_reservation_base":@(vmReservation.reservation_base)
     };
     dispatch_async(dispatch_get_main_queue(),^{
       self.nativeRunThread=nil;
@@ -1541,9 +1541,9 @@ static BOOL ARGameManifestHasTitleUsrdir(NSDictionary *manifest){
         uint32_t vmStage=[result[@"vm_failure_stage"] unsignedIntValue];
         int vmErrno=[result[@"vm_failure_errno"] intValue];
         status=[NSString stringWithFormat:
-          @"A VM guest falhou antes de carregar o ELF; por isso o VFS guest ainda não foi montado. %@ · último Mach kr=%@ · errno=%d · Mach tentativas=%@ · endereços mmap=%@. Veja o relatório.",
+          @"A VM guest falhou antes de carregar o ELF; por isso o VFS guest ainda não foi montado. %@ · último Mach kr=%@ · errno=%d · Mach tentativas=%@ · mmap tentativas=%@. Veja o relatório.",
           ARVMReservationStageName(vmStage),result[@"vm_last_mach_kern_return"],vmErrno,
-          result[@"vm_mach_attempts"],result[@"vm_hint_attempts"]];
+          result[@"vm_mach_attempts"],result[@"vm_mmap_attempts"]];
       }
       else if(runHostRC!=0)
         status=[NSString stringWithFormat:@"Loader/host encerrou · host_rc=%d · guest_rc=%@.",runHostRC,result[@"rc"]];
@@ -1760,8 +1760,10 @@ static BOOL ARGameManifestHasTitleUsrdir(NSDictionary *manifest){
       [NSString stringWithFormat:@"%u",vmReservation.mach_attempts]:@"NÃO MEDIDO";
   NSString *vmMachReturn=vmReservation.attempted?
       [NSString stringWithFormat:@"%d",vmReservation.last_mach_kern_return]:@"NÃO MEDIDO";
-  NSString *vmHints=vmReservation.attempted?
-      [NSString stringWithFormat:@"%u",vmReservation.hint_attempts]:@"NÃO MEDIDO";
+  NSString *vmMmapAttempts=vmReservation.attempted?
+      [NSString stringWithFormat:@"%u",vmReservation.mmap_attempts]:@"NÃO MEDIDO";
+  NSString *vmBase=vmReservation.reservation_base?
+      [NSString stringWithFormat:@"0x%llX",(unsigned long long)vmReservation.reservation_base]:@"NENHUM";
   NSString *vmStage=vmReservation.attempted?
       ARVMReservationStageName(vmReservation.failure_stage):@"NÃO MEDIDO";
   NSString *vmErrno=vmReservation.attempted?
@@ -1806,7 +1808,7 @@ static BOOL ARGameManifestHasTitleUsrdir(NSDictionary *manifest){
      "Estado=%@ · fase=%@\n"
      "ELF importado=%@ · entry=%@ · host rc=%@ · guest rc=%@\n"
      "VM guest virtual=%@ bytes (páginas sob demanda) · ELF PT_LOAD=%@ bytes · raiz VFS=%@\n\n"
-     "Reserva VM=%@ · Mach tentativas=%@ (último kr=%@) · mmap endereços=%@ · estágio=%@ · errno=%@\n\n"
+     "Reserva VM=%@ · base=%@ · Mach tentativas=%@ (último kr=%@) · mmap tentativas=%@ · estágio=%@ · errno=%@\n\n"
      "PS3RECOMP / MÉTRICAS AO VIVO\n"
      "Tabela AOT=%llu funções · imagens SPU=%llu · runtime inicializado=%@\n"
      "Chamadas de função AOT=%@ · início(s) da entry=%@ · último PC=0x%08llX\n"
@@ -1836,7 +1838,7 @@ static BOOL ARGameManifestHasTitleUsrdir(NSDictionary *manifest){
      run?[run[@"vm_capacity"] description]:[NSString stringWithFormat:@"%llu",(unsigned long long)live[7]],
      run?[run[@"loaded_bytes"] description]:@"NÃO MEDIDO",
      vfsRootState,
-     vmMode,vmMachAttempts,vmMachReturn,vmHints,vmStage,vmErrno,
+     vmMode,vmBase,vmMachAttempts,vmMachReturn,vmMmapAttempts,vmStage,vmErrno,
      (unsigned long long)live[0],(unsigned long long)live[3],live[4]?@"SIM":@"NÃO",
      aotCalls,entryStarts,(unsigned long long)live[6],
      (unsigned long long)live[14],(unsigned long long)live[15],

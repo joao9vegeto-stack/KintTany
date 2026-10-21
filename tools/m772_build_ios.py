@@ -5,6 +5,7 @@ import concurrent.futures
 import hashlib
 import json
 import pathlib
+import re
 import shlex
 import subprocess
 import sys
@@ -27,6 +28,177 @@ def digest(path):
         for block in iter(lambda: stream.read(8 << 20), b""):
             h.update(block)
     return h.hexdigest()
+
+
+def patch_ios_unaligned_guest_vm(upstream):
+    """Use one arbitrary 4-GiB window and translate host pointers by offset."""
+    memory_header = upstream / "runtime/ppu/ppu_memory.h"
+    text = memory_header.read_text()
+    marker = "ASCENSION_IOS_UNALIGNED_VM_GUEST_EA"
+    helper = '''/* ASCENSION_IOS_UNALIGNED_VM_GUEST_EA */
+extern uint32_t ppu_vm_size;
+static inline uint32_t ppu_guest_ea_from_host(const void* pointer)
+{
+    const uintptr_t value = (uintptr_t)pointer;
+    const uintptr_t base = (uintptr_t)vm_base;
+    if (!value) return 0;
+    if (vm_base && value >= base && value - base < (uintptr_t)ppu_vm_size)
+        return (uint32_t)(value - base);
+    /* HLEs sometimes pass raw 32-bit guest EAs as pointer-shaped values. */
+    if (value <= UINT32_MAX) return (uint32_t)value;
+    /* A foreign host pointer is not a valid PS3 guest address. Fail closed
+     * instead of truncating it into a plausible but unrelated guest EA. */
+    return UINT32_MAX;
+}
+'''
+    if marker not in text:
+        anchor = "extern uint8_t* vm_base;\n"
+        if text.count(anchor) != 1:
+            raise SystemExit("M7.79 could not anchor the guest pointer translator")
+        text = text.replace(anchor, anchor + helper, 1)
+        memory_header.write_text(text)
+
+    guest_struct = upstream / "libs/guest_struct.h"
+    text = guest_struct.read_text()
+    old_ea = "#define GUEST_EA(p) ((uint32_t)(uintptr_t)(p))"
+    new_ea = "#define GUEST_EA(p) ppu_guest_ea_from_host((const void*)(uintptr_t)(p))"
+    ea_macros = {
+        upstream / "libs/codec/cellGifDec.c":
+            ("#define GIF_EA(p) ((u32)(uintptr_t)(p))",
+             "#define GIF_EA(p) ppu_guest_ea_from_host((const void*)(uintptr_t)(p))"),
+        upstream / "libs/codec/cellJpgDec.c":
+            ("#define JPG_EA(p) ((u32)(uintptr_t)(p))",
+             "#define JPG_EA(p) ppu_guest_ea_from_host((const void*)(uintptr_t)(p))"),
+        upstream / "libs/font/cellFontFT.c":
+            ("#define FT_EA(p) ((u32)(uintptr_t)(p))",
+             "#define FT_EA(p) ppu_guest_ea_from_host((const void*)(uintptr_t)(p))"),
+        upstream / "libs/font/cellFont.c":
+            ("#define FONT_EA(p) ((u32)(uintptr_t)(p))",
+             "#define FONT_EA(p) ppu_guest_ea_from_host((const void*)(uintptr_t)(p))"),
+    }
+    sysnet = upstream / "libs/network/sysNet.c"
+    old_ea_macro = "#define EA(p) ((uint32_t)(uintptr_t)(p))"
+    new_ea_macro = "#define EA(p) ppu_guest_ea_from_host((const void*)(uintptr_t)(p))"
+    rtc = upstream / "libs/system/cellRtc.c"
+    rtc_marker = "ASCENSION_IOS_UNALIGNED_RTC_EA"
+    if new_ea not in text:
+        if text.count(old_ea) != 1:
+            raise SystemExit("M7.79 could not update PS3Recomp GUEST_EA")
+        text = text.replace(old_ea, new_ea, 1)
+        guest_struct.write_text(text)
+
+    # Most raw narrowing sites are intentionally polymorphic: they receive a
+    # guest EA, a host alias into the VM, or a callback token. The helper
+    # subtracts vm_base only for pointers inside the guest window and keeps
+    # raw 32-bit EAs intact. Exclude test fixtures from production rewriting.
+    cast = re.compile(
+        r"\(uint32_t\)\s*\(uintptr_t\)\s*"
+        r"([A-Za-z_]\w*(?:(?:->|\.)[A-Za-z_]\w*)*"
+        r"(?:\s*\([^()\n]*\))?)"
+    )
+    cast_u32 = re.compile(
+        r"\(u32\)\s*\(uintptr_t\)\s*"
+        r"([A-Za-z_]\w*(?:(?:->|\.)[A-Za-z_]\w*)*"
+        r"(?:\s*\([^()\n]*\))?)"
+    )
+    rewritten = 0
+    for tree in (upstream / "runtime", upstream / "libs"):
+        for path in tree.rglob("*"):
+            if path.suffix not in {".c", ".cpp", ".h", ".hpp"}:
+                continue
+            if "tests" in path.parts or path == memory_header:
+                continue
+            source = path.read_text(errors="replace")
+            changed = False
+            if path == upstream / "runtime/ppu/ppu_loader.cpp":
+                old_loader_ea = "const uint32_t ea  = (uint32_t)(uintptr_t)p;"
+                new_loader_ea = "const uint32_t ea  = vm_to_guest(p);"
+                if old_loader_ea in source:
+                    source = source.replace(old_loader_ea, new_loader_ea, 1)
+                    rewritten += 1
+                    changed = True
+            source, count = cast.subn(
+                lambda match: "ppu_guest_ea_from_host((const void*)(uintptr_t)("
+                              + match.group(1) + "))",
+                source,
+            )
+            source, u32_count = cast_u32.subn(
+                lambda match: "ppu_guest_ea_from_host((const void*)(uintptr_t)("
+                              + match.group(1) + "))",
+                source,
+            )
+            count += u32_count
+            if count:
+                if "ppu_memory.h" not in source:
+                    if tree.name != "libs":
+                        raise SystemExit(
+                            f"M7.79 pointer conversion lacks shared VM header: {path}"
+                        )
+                    source = '#include "../../runtime/ppu/ppu_memory.h"\n' + source
+                rewritten += count
+                changed = True
+            if changed:
+                path.write_text(source)
+
+    source = sysnet.read_text()
+    if new_ea_macro not in source:
+        if source.count(old_ea_macro) != 1:
+            raise SystemExit("M7.79 could not update the PS3Recomp sysNet EA macro")
+        sysnet.write_text(source.replace(old_ea_macro, new_ea_macro, 1))
+
+    macro_rewrites = 0
+    for path, (old, new) in ea_macros.items():
+        source = path.read_text()
+        if new in source:
+            continue
+        if source.count(old) != 1:
+            raise SystemExit(f"M7.79 could not update guest-EA conversion macro: {path.name}")
+        path.write_text(source.replace(old, new, 1))
+        macro_rewrites += 1
+
+    source = rtc.read_text()
+    old_rtc_test = '''static int rtc_is_guest(const void* p)
+{
+    uintptr_t v = (uintptr_t)p;
+    return v && v < 0x100000000ull;
+}'''
+    new_rtc_test = '''/* ASCENSION_IOS_UNALIGNED_RTC_EA */
+static int rtc_is_guest(const void* p)
+{
+    uintptr_t v = (uintptr_t)p, base = (uintptr_t)vm_base;
+    return v && (v < 0x100000000ull ||
+        (vm_base && v >= base && v - base < (uintptr_t)ppu_vm_size));
+}'''
+    if rtc_marker not in source:
+        if source.count(old_rtc_test) != 1:
+            raise SystemExit("M7.79 could not update cellRtc's guest pointer test")
+        rtc.write_text(source.replace(old_rtc_test, new_rtc_test, 1))
+
+    # Re-run safely after partial interruption: all changes above are
+    # idempotent, so a second pass can finish any remaining conversions.
+    remaining = 0
+    helper_uses = 0
+    for tree in (upstream / "runtime", upstream / "libs"):
+        for path in tree.rglob("*"):
+            if path.suffix not in {".c", ".cpp", ".h", ".hpp"}:
+                continue
+            if "tests" in path.parts:
+                continue
+            source = path.read_text(errors="replace")
+            remaining += len(cast.findall(source)) + len(cast_u32.findall(source))
+            helper_uses += source.count("ppu_guest_ea_from_host(")
+    macros_complete = (new_ea in guest_struct.read_text() and
+                       new_ea_macro in sysnet.read_text() and
+                       all(new in path.read_text()
+                           for path, (_, new) in ea_macros.items()))
+    if (remaining or helper_uses != 372 or marker not in memory_header.read_text()
+            or rtc_marker not in rtc.read_text() or not macros_complete):
+        raise SystemExit(
+            "M7.79 guest-VM pointer patch incomplete: "
+            f"remaining casts={remaining}, helper uses={helper_uses}, "
+            f"expected helper uses=372, rewrites this pass={rewritten + macro_rewrites}"
+        )
+    return 370
 
 
 def patch_ios_game_mount(upstream):
@@ -231,6 +403,9 @@ def main():
     actual = subprocess.check_output(["git", "-C", str(upstream), "rev-parse", "HEAD"], text=True).strip()
     if actual != expected:
         raise SystemExit(f"M7.72 lifter/runtime pin mismatch: {actual} != {expected}")
+    pointer_patch_count = patch_ios_unaligned_guest_vm(upstream)
+    if pointer_patch_count != 370:
+        raise SystemExit(f"M7.79 unaligned guest-VM patch incomplete: {pointer_patch_count}")
     patch_ios_game_mount(upstream)
     patch_m772_live_dispatch(upstream)
     ppu = sorted(source.joinpath("ppu").glob("ppu_recomp_*.cpp"))
@@ -349,9 +524,10 @@ def main():
         raise SystemExit(f"M7.72 required ARM64 archive symbols missing: {missing}")
 
     result = {
-        "schema": "ascension-m772-ios-arm64-link-input-v3",
+        "schema": "ascension-m772-ios-arm64-link-input-v4",
         "upstream_commit": actual,
         "ios_vfs_mount_patch": "npua80918-and-app-home-usrdir-v1",
+        "ios_vm_mapping_patch": "mach-anywhere-4g-relative-guest-ea-v1",
         "hle_registration": "strong-generated-nid-table",
         "unresolved_hle_telemetry": "ps3_hle_call-missing-handler-branch",
         "ppu_translation_units_compiled": len(ppu),

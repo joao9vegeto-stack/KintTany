@@ -114,15 +114,11 @@ extern "C" int ar_m772_runtime_init(uint8_t* guest_memory,size_t guest_size,
 {
     if (!guest_memory || !guest_size || guest_size > UINT32_MAX ||
         !game_root || !*game_root) return -1;
-    /* Guest addresses are recovered from host pointers by truncating to 32
-     * bits in PS3Recomp's GUEST_EA helpers. A flat calloc-backed 256-MiB
-     * buffer cannot represent the title's mmapper/RSX addresses. */
-    if (((uintptr_t)guest_memory & UINT64_C(0xFFFFFFFF)) != 0 ||
-        guest_size != (size_t)UINT32_C(0xE0000000)) return -2;
-    /* Both runtimes now address the same 4-GiB-aligned sparse PS3 guest
-     * reservation into which ar_load_elf_image copied the ELF PT_LOAD data.
-     * The separate 16 MiB graphics probe arena must never be used for guest
-     * PPU execution. */
+    /* PS3 guest addresses are offsets from vm_base. HLE pointer-to-EA
+     * conversion subtracts this base, so LiveContainer can supply any free
+     * 4-GiB virtual extent; the separate 16 MiB graphics probe arena must
+     * never be used for guest PPU execution. */
+    if (guest_size != (size_t)UINT32_C(0xE0000000)) return -2;
     vm_base = guest_memory;
     ppu_vm_size = (uint32_t)guest_size;
     m772_vfs_root.assign(game_root);

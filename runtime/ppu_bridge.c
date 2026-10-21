@@ -12,6 +12,7 @@
 #endif
 #if defined(__APPLE__) || defined(ASCENSION_M772_MACH_VM_TEST)
 #include <mach/mach.h>
+#include <mach/mach_vm.h>
 #define AR_M772_HAS_MACH_VM 1
 #endif
 #endif
@@ -26,8 +27,10 @@ extern void ar_m772_unbind_guest_memory(void *);
 #define MAX_MEM (256u*1024u*1024u)
 #ifdef ASCENSION_M772_LINKED
 /* PS3Recomp uses the PS3 32-bit guest address as an offset from vm_base.
- * Keep that entire address space reserved, 4-GiB aligned, and only make the
- * regions needed by the current boot read/write. Anonymous pages stay zero
+ * Reserve its full address window wherever the host process can place it.
+ * Host pointers convert back to guest EAs by subtracting vm_base, so this
+ * base need not be 4-GiB aligned. Only make the regions needed by the current
+ * boot read/write. Anonymous pages stay zero
  * filled and are backed by the kernel on first touch; never memset gigabytes
  * on iOS. These ranges match the Ascension boot layout from the GoW2 host. */
 #define AR_M772_VM_TOTAL       ((size_t)UINT64_C(0x100000000))
@@ -188,21 +191,25 @@ static void ar_m772_vm_fail(uint32_t stage,int error_number)
 static void ar_m772_vm_fail_mach(uint32_t stage,kern_return_t kr)
 {
   last_vm_reservation.failure_stage=stage;
+  last_vm_reservation.failure_errno=0;
   last_vm_reservation.last_mach_kern_return=(int32_t)kr;
 }
 
 static void ar_m772_vm_release_mach(uint8_t *base)
 {
-  const kern_return_t kr=vm_deallocate(mach_task_self(),
-      (vm_address_t)(uintptr_t)base,(vm_size_t)AR_M772_VM_TOTAL);
+  const kern_return_t kr=mach_vm_deallocate(mach_task_self(),
+      (mach_vm_address_t)(uintptr_t)base,(mach_vm_size_t)AR_M772_VM_TOTAL);
   if(kr!=KERN_SUCCESS)
     ar_m772_vm_fail_mach(AR_VM_STAGE_MACH_RELEASE,kr);
 }
 
 static uint8_t *ar_m772_vm_commit_mach(uint8_t *base)
 {
-  if(((uintptr_t)base&((uintptr_t)AR_M772_VM_TOTAL-1u))!=0u){
-    ar_m772_vm_fail_mach(AR_VM_STAGE_MACH_ALLOCATE,KERN_INVALID_ADDRESS);
+  const kern_return_t reserve_protect_kr=mach_vm_protect(mach_task_self(),
+      (mach_vm_address_t)(uintptr_t)base,(mach_vm_size_t)AR_M772_VM_TOTAL,
+      FALSE,VM_PROT_NONE);
+  if(reserve_protect_kr!=KERN_SUCCESS){
+    ar_m772_vm_fail_mach(AR_VM_STAGE_MACH_PROTECT_NONE,reserve_protect_kr);
     ar_m772_vm_release_mach(base);
     return NULL;
   }
@@ -212,9 +219,9 @@ static uint8_t *ar_m772_vm_commit_mach(uint8_t *base)
     {AR_M772_VM_STACK_BASE,AR_M772_VM_STACK_SIZE}
   };
   for(size_t i=0;i<sizeof(regions)/sizeof(regions[0]);i++){
-    const vm_address_t address=(vm_address_t)((uintptr_t)base+regions[i].offset);
-    const kern_return_t kr=vm_protect(mach_task_self(),address,
-        (vm_size_t)regions[i].size,0,VM_PROT_READ|VM_PROT_WRITE);
+    const mach_vm_address_t address=(mach_vm_address_t)((uintptr_t)base+regions[i].offset);
+    const kern_return_t kr=mach_vm_protect(mach_task_self(),address,
+        (mach_vm_size_t)regions[i].size,FALSE,VM_PROT_READ|VM_PROT_WRITE);
     if(kr!=KERN_SUCCESS){
       ar_m772_vm_fail_mach(AR_VM_STAGE_MACH_PROTECT_COMMIT,kr);
       ar_m772_vm_release_mach(base);
@@ -230,10 +237,6 @@ static uint8_t *ar_m772_vm_commit_mach(uint8_t *base)
 
 static uint8_t *ar_m772_vm_commit(uint8_t *base)
 {
-  if(((uintptr_t)base&((uintptr_t)AR_M772_VM_TOTAL-1u))!=0u){
-    ar_m772_vm_fail(AR_VM_STAGE_HINT_RELOCATED,EINVAL);
-    return NULL;
-  }
   if(mprotect(base,AR_M772_VM_LOW_COMMIT,PROT_READ|PROT_WRITE)!=0){
     const int error_number=errno;
     ar_m772_vm_fail(AR_VM_STAGE_PROTECT_LOW,error_number);
@@ -256,7 +259,6 @@ static uint8_t *ar_m772_vm_commit(uint8_t *base)
   }
   last_vm_reservation.failure_stage=AR_VM_STAGE_NONE;
   last_vm_reservation.failure_errno=0;
-  last_vm_reservation.last_mach_kern_return=0;
   return base;
 }
 
@@ -271,121 +273,40 @@ static uint8_t *ar_m772_vm_reserve(void)
   flags|=MAP_NORESERVE;
 #endif
 
-  /* PS3Recomp derives guest effective addresses from the low 32 bits of a
-   * host pointer, so the guest window must be 4-GiB aligned. On Darwin, mmap's
-   * address argument is only a hint; iOS can relocate every hint and its
-   * LiveContainer VM layout can reject the 8-GiB fallback. vm_allocate with
-   * VM_FLAGS_FIXED reserves only a genuinely free exact slot and fails rather
-   * than overwriting an existing mapping. */
-  static const uintptr_t hints[]={
-    (uintptr_t)UINT64_C(0x0000000400000000),
-    (uintptr_t)UINT64_C(0x0000000500000000),
-    (uintptr_t)UINT64_C(0x0000000600000000),
-    (uintptr_t)UINT64_C(0x0000000700000000),
-    (uintptr_t)UINT64_C(0x0000000800000000),
-    (uintptr_t)UINT64_C(0x0000000900000000),
-    (uintptr_t)UINT64_C(0x0000000A00000000),
-    (uintptr_t)UINT64_C(0x0000000B00000000),
-    (uintptr_t)UINT64_C(0x0000000C00000000),
-    (uintptr_t)UINT64_C(0x0000000D00000000),
-    (uintptr_t)UINT64_C(0x0000000E00000000),
-    (uintptr_t)UINT64_C(0x0000000F00000000),
-    (uintptr_t)UINT64_C(0x0000001000000000),
-    (uintptr_t)UINT64_C(0x0000001400000000),
-    (uintptr_t)UINT64_C(0x0000001800000000),
-    (uintptr_t)UINT64_C(0x0000001C00000000),
-    (uintptr_t)UINT64_C(0x0000002000000000),
-    (uintptr_t)UINT64_C(0x0000002800000000),
-    (uintptr_t)UINT64_C(0x0000003000000000),
-    (uintptr_t)UINT64_C(0x0000003800000000),
-    (uintptr_t)UINT64_C(0x0000004000000000)
-  };
+  /* LiveContainer reserves or fragments every fixed address range tried by
+   * M7.78. Ask the kernel for one free 4-GiB extent instead. The PS3 guest EA
+   * remains an offset within that extent; no 8-GiB over-reservation or
+   * aligned-address guess is needed. */
 #ifdef AR_M772_HAS_MACH_VM
-  for(size_t i=0;i<sizeof(hints)/sizeof(hints[0]);i++){
-    vm_address_t address=(vm_address_t)hints[i];
-    last_vm_reservation.mach_attempts++;
-    const kern_return_t kr=vm_allocate(mach_task_self(),&address,
-        (vm_size_t)AR_M772_VM_TOTAL,VM_FLAGS_FIXED);
-    if(kr!=KERN_SUCCESS){
-      ar_m772_vm_fail_mach(AR_VM_STAGE_MACH_ALLOCATE,kr);
-      continue;
-    }
-    if((uintptr_t)address!=hints[i]){
-      const kern_return_t release_kr=vm_deallocate(mach_task_self(),address,
-          (vm_size_t)AR_M772_VM_TOTAL);
-      ar_m772_vm_fail_mach(release_kr==KERN_SUCCESS?
-          AR_VM_STAGE_HINT_RELOCATED:AR_VM_STAGE_MACH_RELEASE,
-          release_kr==KERN_SUCCESS?KERN_INVALID_ADDRESS:release_kr);
-      continue;
-    }
-    const kern_return_t protect_kr=vm_protect(mach_task_self(),address,
-        (vm_size_t)AR_M772_VM_TOTAL,0,VM_PROT_NONE);
-    if(protect_kr!=KERN_SUCCESS){
-      ar_m772_vm_fail_mach(AR_VM_STAGE_MACH_PROTECT_NONE,protect_kr);
-      ar_m772_vm_release_mach((uint8_t*)(uintptr_t)address);
-      continue;
-    }
+  mach_vm_address_t address=0;
+  last_vm_reservation.mach_attempts++;
+  const kern_return_t kr=mach_vm_allocate(mach_task_self(),&address,
+      (mach_vm_size_t)AR_M772_VM_TOTAL,VM_FLAGS_ANYWHERE);
+  if(kr==KERN_SUCCESS){
     uint8_t *committed=ar_m772_vm_commit_mach((uint8_t*)(uintptr_t)address);
     if(committed){
       last_vm_reservation.reservation_kind=3u;
+      last_vm_reservation.reservation_base=(uint64_t)address;
       mem_is_mach_vm=1;
       return committed;
     }
+  }else{
+    ar_m772_vm_fail_mach(AR_VM_STAGE_MACH_ALLOCATE,kr);
   }
 #endif
-  for(size_t i=0;i<sizeof(hints)/sizeof(hints[0]);i++){
-    void *mapped=mmap((void*)hints[i],AR_M772_VM_TOTAL,PROT_NONE,
-                      flags,-1,0);
-    last_vm_reservation.hint_attempts++;
-    if(mapped==MAP_FAILED){
-      ar_m772_vm_fail(AR_VM_STAGE_ALIGNED_HINT,errno);
-      continue;
-    }
-    if((uintptr_t)mapped!=hints[i]){
-      const int release_rc=munmap(mapped,AR_M772_VM_TOTAL);
-      if(release_rc!=0){
-        ar_m772_vm_fail(AR_VM_STAGE_HINT_CLEANUP,errno);
-        return NULL;
-      }
-      ar_m772_vm_fail(AR_VM_STAGE_HINT_RELOCATED,EINVAL);
-      continue;
-    }
-    uint8_t *committed=ar_m772_vm_commit((uint8_t*)mapped);
-    if(committed){
-      last_vm_reservation.reservation_kind=1u;
-      mem_is_mach_vm=0;
-      return committed;
-    }
-  }
-
-  /* Keep the proven PS3Recomp-compatible strategy as a compatibility path
-   * for systems where none of the ordinary address hints can be honored. */
-  const size_t reserve_size=AR_M772_VM_TOTAL*2u;
-  uint8_t *raw=(uint8_t*)mmap(NULL,reserve_size,PROT_NONE,flags,-1,0);
-  if(raw==MAP_FAILED){
+  last_vm_reservation.mmap_attempts++;
+  uint8_t *mapped=(uint8_t*)mmap(NULL,AR_M772_VM_TOTAL,PROT_NONE,
+                                 flags,-1,0);
+  if(mapped==MAP_FAILED){
     ar_m772_vm_fail(AR_VM_STAGE_FALLBACK_MAP,errno);
     return NULL;
   }
-
-  const uintptr_t raw_addr=(uintptr_t)raw;
-  const uintptr_t aligned_addr=(raw_addr+(uintptr_t)AR_M772_VM_TOTAL-1u)&
-                               ~((uintptr_t)AR_M772_VM_TOTAL-1u);
-  uint8_t *aligned=(uint8_t*)aligned_addr;
-  const size_t head=(size_t)(aligned_addr-raw_addr);
-  const size_t tail=(size_t)((raw_addr+reserve_size)-
-                             (aligned_addr+AR_M772_VM_TOTAL));
-  if((head && munmap(raw,head)!=0) ||
-     (tail && munmap(aligned+AR_M772_VM_TOTAL,tail)!=0)) {
-    const int error_number=errno;
-    (void)munmap(raw,reserve_size);
-    ar_m772_vm_fail(AR_VM_STAGE_TRIM,error_number);
-    return NULL;
-  }
-  uint8_t *committed=ar_m772_vm_commit(aligned);
+  uint8_t *committed=ar_m772_vm_commit(mapped);
   if(!committed){
     return NULL;
   }
-  last_vm_reservation.reservation_kind=2u;
+  last_vm_reservation.reservation_kind=1u;
+  last_vm_reservation.reservation_base=(uint64_t)(uintptr_t)committed;
   mem_is_mach_vm=0;
   return committed;
 }

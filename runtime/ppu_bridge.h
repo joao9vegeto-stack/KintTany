@@ -18,16 +18,18 @@ void ar_bridge_shutdown(void);
 void *ar_guest_memory_base(void);
 size_t ar_guest_memory_capacity(void);
 /* Last PS3 guest-VM reservation attempt. failure_stage is zero on success;
- * reservation_kind is 1 for an exact aligned hint or 2 for the legacy
- * over-reserve-and-trim fallback. errno is captured before cleanup calls. */
+ * reservation_kind is 1 for a 4-GiB mmap-anywhere reservation or 3 for a
+ * Mach VM anywhere reservation. errno and the base are captured before
+ * guest shutdown. */
 typedef struct {
     uint32_t attempted;
     uint32_t reservation_kind;
-    uint32_t hint_attempts;
+    uint32_t mmap_attempts;
     uint32_t mach_attempts;
     uint32_t failure_stage;
     int32_t failure_errno;
     int32_t last_mach_kern_return;
+    uint64_t reservation_base;
 } ar_vm_reservation_status;
 enum {
     AR_VM_STAGE_NONE=0,

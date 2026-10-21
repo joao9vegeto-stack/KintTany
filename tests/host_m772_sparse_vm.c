@@ -21,9 +21,8 @@ int main(void)
     puts("[FAIL] sparse VM reserve/commit");return 1;
   }
   uint8_t *base=(uint8_t*)ar_guest_memory_base();
-  if(!base || ((uintptr_t)base&UINT64_C(0xFFFFFFFF))!=0 ||
-     ar_guest_memory_capacity()!=guest_size){
-    puts("[FAIL] 4-GiB alignment or 3.5-GiB guest window");
+  if(!base || ar_guest_memory_capacity()!=guest_size){
+    puts("[FAIL] 4-GiB extent or 3.5-GiB guest window");
     ar_bridge_shutdown();return 1;
   }
   ar_vm_reservation_status reservation={0};
@@ -31,20 +30,15 @@ int main(void)
   if(!reservation.attempted || !reservation.reservation_kind ||
      reservation.failure_stage!=AR_VM_STAGE_NONE ||
      reservation.failure_errno!=0 ||
-     (reservation.reservation_kind==1u && !reservation.hint_attempts)){
+     (reservation.reservation_kind==1u && !reservation.mmap_attempts) ||
+     reservation.reservation_base!=(uint64_t)(uintptr_t)base){
     puts("[FAIL] sparse VM reservation strategy diagnostics");
     ar_bridge_shutdown();return 1;
   }
   if(reservation.reservation_kind==3u && !reservation.mach_attempts){
-    puts("[FAIL] Mach fixed reservation did not record attempts");
+    puts("[FAIL] Mach anywhere reservation did not record attempts");
     ar_bridge_shutdown();return 1;
   }
-#if defined(__APPLE__)
-  if(reservation.reservation_kind!=3u){
-    puts("[FAIL] Apple host did not reserve guest VM through the Mach fixed path");
-    ar_bridge_shutdown();return 1;
-  }
-#endif
   if(!check_word(UINT32_C(0x11019000),UINT32_C(0x1234ABCD)) ||
      !check_word(UINT32_C(0xC0000000),UINT32_C(0x52535821)) ||
      !check_word(UINT32_C(0xD0000000),UINT32_C(0x5354414B))){
@@ -57,9 +51,10 @@ int main(void)
     ar_bridge_shutdown();return 1;
   }
   ar_bridge_shutdown();
-  const char *strategy=reservation.reservation_kind==3u?"mach-fixed":
-      reservation.reservation_kind==1u?"aligned-hint":"overmap-fallback";
-  printf("[PASS] sparse M772 guest VM: 4-GiB aligned; strategy=%s; Mach attempts=%u; mmap hint attempts=%u; mmapper, RSX and stack ranges readable/writable; upper bound guarded\n",
-      strategy,reservation.mach_attempts,reservation.hint_attempts);
+  const char *strategy=reservation.reservation_kind==3u?"mach-anywhere":
+      reservation.reservation_kind==1u?"mmap-anywhere":"unknown";
+  printf("[PASS] sparse M772 guest VM: 4-GiB extent anywhere; strategy=%s; base=0x%llX; Mach attempts=%u; mmap attempts=%u; mmapper, RSX and stack ranges readable/writable; upper bound guarded\n",
+      strategy,(unsigned long long)reservation.reservation_base,
+      reservation.mach_attempts,reservation.mmap_attempts);
   return 0;
 }
