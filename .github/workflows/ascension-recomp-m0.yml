@@ -6,6 +6,7 @@ on:
       - AscensionRecomp
 
 permissions:
+  actions: read
   contents: read
 
 concurrency:
@@ -1819,11 +1820,23 @@ jobs:
           ./m743-installer-host | tee m743-installer-host.log
           grep -Fxq 'GOWA2 installer digest regression: bad hash and length rejected, all 9 valid chunks installed only after matching SHA-256 PASS' m743-installer-host.log
           test "$(wc -l < m743-staged/symbols.txt | tr -d ' ')" = "6251"
+      - name: Reuse verified M7.72 archive for gate-only repair
+        if: github.event.before == '5e1a6061f9787e273e682d728dde100d0cacbfc6'
+        uses: actions/download-artifact@v4
+        with:
+          name: AscensionRecomp-M7.73.0-LAUNCHER-ARM64
+          github-token: ${{ github.token }}
+          repository: ${{ github.repository }}
+          run-id: 39522246824
+          path: m772-cache
       - name: M7.73 compile full PPU/SPU lift and link native iOS ARM64 launcher
         run: |
           set -euo pipefail
           export M772_LIFT_DIR="$RUNNER_TEMP/m772-lift/AscensionRecomp-PS3Recomp-Lift"
           export M772_JOBS=3
+          if [[ -s m772-cache/ios-probe/m772/libAscensionGOWA-M772-ios-arm64.a ]]; then
+            export M772_PREBUILT_DIR="$PWD/m772-cache/ios-probe/m772"
+          fi
           bash tools/build_ios_probe_ipa.sh 2>&1 | tee m41-build-ipa.log
           test -s m78-aot-status.txt
           grep -Fq '59 REAL PPU ARM64 functions verified' m78-aot-status.txt

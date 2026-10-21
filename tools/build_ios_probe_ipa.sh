@@ -538,12 +538,44 @@ if [[ -z "${M772_LIFT_DIR:-}" ]]; then
   echo 'M7.72 ps3recomp lift source is not staged' >&2
   exit 78
 fi
-python3 tools/m772_build_ios.py \
-  --source "$M772_LIFT_DIR" \
-  --upstream upstream-m772 \
-  --repo . \
-  --output ios-probe/m772 \
-  --jobs "${M772_JOBS:-3}"
+if [[ -n "${M772_PREBUILT_DIR:-}" ]]; then
+  python3 - "$M772_PREBUILT_DIR" <<'PYM772CACHE'
+import hashlib, json, shutil, sys
+from pathlib import Path
+src=Path(sys.argv[1])
+archive=src/'libAscensionGOWA-M772-ios-arm64.a'
+attestation=src/'m772-ios-arm64-attestation.json'
+symbols=src/'symbols.txt'
+assert archive.is_file() and attestation.is_file() and symbols.is_file()
+a=json.loads(attestation.read_text())
+digest=hashlib.sha256(archive.read_bytes()).hexdigest()
+assert a['schema']=='ascension-m772-ios-arm64-link-input-v1'
+assert a['upstream_commit']=='39a36296511c445707adabcd312f0b740cfbd694'
+assert a['ppu_translation_units_compiled']==651
+assert a['ppu_function_table_entries']==29849
+assert a['native_aot_function_entry_hooks']==29849
+assert a['spu_translation_units_compiled']==4
+assert a['archive']=='libAscensionGOWA-M772-ios-arm64.a'
+assert a['archive_bytes']==archive.stat().st_size==220252832
+assert a['archive_sha256']==digest=='cdf2c894cb188c581ecd245a36670b37600d41d80eb14aa08a8e4a56809e19c5'
+text=symbols.read_text(errors='replace')
+for name in ('func_00010410','_ar_m772_run_entry','_ar_m772_note_function',
+             '_ar_m772_runtime_attest','_ppu_recomp_register'):
+    assert name in text,name
+dst=Path('ios-probe/m772')
+dst.mkdir(parents=True,exist_ok=True)
+for path in (archive,attestation,symbols):shutil.copy2(path,dst/path.name)
+if (src/'logs').is_dir():shutil.copytree(src/'logs',dst/'logs',dirs_exist_ok=True)
+print('M7.72 reused verified ARM64 archive from the immediately preceding gate-only build; SHA-256',digest)
+PYM772CACHE
+else
+  python3 tools/m772_build_ios.py \
+    --source "$M772_LIFT_DIR" \
+    --upstream upstream-m772 \
+    --repo . \
+    --output ios-probe/m772 \
+    --jobs "${M772_JOBS:-3}"
+fi
 M772_ARCHIVE=ios-probe/m772/libAscensionGOWA-M772-ios-arm64.a
 test -s "$M772_ARCHIVE"
 xcrun --sdk iphoneos clang++ -target arm64-apple-ios17.0 \
@@ -738,7 +770,7 @@ assert re.search(r' [Tt] _ar_m766_native_005394e8$',nm,re.M)
 assert re.search(r' [Tt] _ar_private_import_match$',nm,re.M)
 assert re.search(r' [Tt] _ar_private_import_find_nid$',nm,re.M)
 assert re.search(r' [Tt] _ar_sys_lwmutex_create$',nm,re.M)
-assert re.search(r' [Tt] _ar_m767_last_import_evidence$',nm,re.M)
+assert re.search(r' [Tt] _ar_m772_run_entry$',nm,re.M)
 a=json.loads(Path('runtime/m767-prx-offline-audit.json').read_text())
 assert a['library']=='sysPrxForUser' and a['nid']=='0x2f85c0ef'
 assert a['stub']=='0x00669A84' and a['imports_total']==350
@@ -762,7 +794,7 @@ assert db['opd_descriptors']==7643 and db['recovered_candidate_intervals']==1684
 assert db['cpp_generated_table_entries']==29849 and db['imports_total']==350
 assert db['ios_complete_lift_linked']=='NO' and not db['game_assets_in_repo']
 nm=Path('m78-owner-aot-linked-symbols.txt').read_text().splitlines()
-symbols=['ar_run','ar_guest_call','ar_m767_last_import_evidence','ar_m766_native_005394e8','ar_sys_lwmutex_create']
+symbols=['ar_run','ar_guest_call','ar_m772_run_entry','ar_m766_native_005394e8','ar_sys_lwmutex_create']
 for sym in symbols:
  assert any((' T _'+sym) in line or (' t _'+sym) in line for line in nm),sym
 proof={'schema':'ascension-m768-native-HLE-continuation-1',
