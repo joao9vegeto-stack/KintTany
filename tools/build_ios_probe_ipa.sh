@@ -5,6 +5,7 @@ SDK="$(xcrun --sdk iphoneos --show-sdk-path)"
 APP="ios-probe/Payload/AscensionRecompProbe.app"
 mkdir -p "$APP"
 cp ios/Probe-Info.plist "$APP/Info.plist"
+cp docs/THIRD-PARTY-NOTICES-M7.82.txt "$APP/ThirdPartyNotices.txt"
 {
   printf '#define AR_M750_BUILD_SHA "%s"\n' "${GITHUB_SHA:-LOCAL_BUILD}"
   printf '#define AR_M750_BUILD_BRANCH "%s"\n' "${GITHUB_REF_NAME:-AscensionRecomp}"
@@ -549,7 +550,7 @@ symbols=src/'symbols.txt'
 assert archive.is_file() and attestation.is_file() and symbols.is_file()
 a=json.loads(attestation.read_text())
 digest=hashlib.sha256(archive.read_bytes()).hexdigest()
-assert a['schema']=='ascension-m772-ios-arm64-link-input-v5'
+assert a['schema']=='ascension-m772-ios-arm64-link-input-v6'
 assert a['upstream_commit']=='39a36296511c445707adabcd312f0b740cfbd694'
 assert a['ios_vfs_mount_patch']=='npua80918-and-app-home-usrdir-v1'
 assert a['ios_vm_mapping_patch']=='mach-anywhere-4g-relative-guest-ea-v1'
@@ -561,12 +562,20 @@ assert a['spu_translation_units_compiled']==4
 assert a['archive']=='libAscensionGOWA-M772-ios-arm64.a'
 assert a['hle_registration']=='strong-generated-nid-table'
 assert a['unresolved_hle_telemetry']=='ps3_hle_call-missing-handler-branch'
+assert a['spurs2_taskset']=='0x2900-two-LV2-event-flags-tracked-cross-taskset-scheduler-v1'
+assert a['spurs2_task_apis']=='create-task2-join-tryjoin-taskset-address-v1'
+assert a['spurs_workload_flags']=='guest-address-and-exclusive-receiver-v1'
+assert a['lfqueue_sdk_layout']=='CellSyncLFQueue-layout-v1'
+assert a['edge_zlib_hle']=='host-deflate-skip-output-counter-eventflag-v2'
+assert a['pc_entry_trace']=='1-in-4096-function-entry-samples-plus-HLE-history-v1'
 assert a['cell_game_patch_check']=='disc-boot-returns-CELL_GAME_ERROR_NOTPATCH'
 assert a['archive_bytes']==archive.stat().st_size
 assert a['archive_sha256']==digest
 text=symbols.read_text(errors='replace')
 for name in ('func_00010410','_ar_m772_run_entry','_ar_m772_note_function',
              '_ar_m772_note_hotloop','_ar_m772_note_unresolved_hle',
+             '_ar_m772_copy_aot_trace','_ar_m772_copy_hle_trace',
+             '_ar_m772_copy_unresolved_hle_trace',
              '_ar_m772_runtime_attest','_ppu_recomp_register',
              '_ppu_hle_register_all'):
     assert name in text,name
@@ -652,6 +661,8 @@ required=("func_00010410", "func_0052A740", "func_0052E3F4", "_ar_m772_runtime_a
           "_ar_m772_runtime_init", "_ar_m772_dispatch_native",
           "_ar_m772_note_function", "_ar_m772_note_hle", "_ar_m772_note_syscall",
           "_ar_m772_note_unresolved_hle", "_ar_m772_note_hotloop",
+          "_ar_m772_copy_aot_trace", "_ar_m772_copy_hle_trace",
+          "_ar_m772_copy_unresolved_hle_trace",
           "_ar_m772_run_entry", "_ar_m772_entry_state",
           "_cellGcmTickVBlank", "_cellGcmTickFlip", "_cellGcm_rsx_process_fifo",
           "_cellGcm_take_flip_pending_synced", "_rsx_metal_backend_init",
@@ -664,7 +675,15 @@ required=("func_00010410", "func_0052A740", "func_0052E3F4", "_ar_m772_runtime_a
           "_gowa_spu_0003_at_006D5900_spu_recomp_register")
 missing=[symbol for symbol in required if not any(symbol in name for name in defined)]
 if missing: raise SystemExit("M7.72 expected AOT definitions missing from final Mach-O: "+str(missing))
-print("M7.81 final ARM64 Mach-O contains disc-boot HLE, AOT telemetry, GCM FIFO pump, Metal present and SPU registration symbols")
+for symbol in ("_cellSpursCreateTaskset2", "_cellSpursCreateTask2",
+               "_cellSpursJoinTask2", "_cellSpursTryJoinTask2",
+               "_cellSpursLFQueuePushBody", "_cellSpursGetWorkloadFlag",
+               "__cellSpursWorkloadFlagReceiver", "_spu_taskset_track",
+               "_spu_signal_parked_on_line", "_edge_inflate",
+               "_rsx_metal_backend_set_ios_output_scale"):
+    if not any(symbol in name for name in defined):
+        raise SystemExit("M7.82 required native HLE/render symbol missing: "+symbol)
+print("M7.82 final ARM64 Mach-O contains SPURS2/Edge HLE, live PC/HLE trace, GCM FIFO pump, Metal presentation and settings symbols")
 PYM772LINKED
 # Every M7.62 native function must appear in the FINAL Mach-O, not merely object.
 python3 - <<'PY'

@@ -51,6 +51,13 @@ static uint64_t m772_last_hotloop_regs[5]; /* r3, r4, r5, r8, r9 */
 static uint64_t m772_unresolved_hle_count;
 static uint32_t m772_last_unresolved_hle_nid;
 static uint32_t m772_last_unresolved_hle_lr;
+static const uint32_t M772_TRACE_CAPACITY = 64;
+static uint64_t m772_aot_trace_write_index;
+static uint64_t m772_aot_trace[M772_TRACE_CAPACITY]; /* PC:function entry, LR:caller */
+static uint64_t m772_hle_trace_write_index;
+static uint64_t m772_hle_trace[M772_TRACE_CAPACITY]; /* NID, caller LR */
+static uint64_t m772_unresolved_trace_write_index;
+static uint64_t m772_unresolved_trace[M772_TRACE_CAPACITY]; /* NID, caller LR */
 /* A PS3Recomp _start is one complete native C function. It must be called
  * like upstream ppu_run(), then its cross-fragment trampolines drained. It is
  * not a PPC basic block that returns a next PC to runtime/ppu_bridge.c. */
@@ -86,6 +93,9 @@ extern "C" void ar_m772_runtime_begin(void)
     __atomic_store_n(&m772_unresolved_hle_count, UINT64_C(0), __ATOMIC_RELAXED);
     __atomic_store_n(&m772_last_unresolved_hle_nid, 0u, __ATOMIC_RELAXED);
     __atomic_store_n(&m772_last_unresolved_hle_lr, 0u, __ATOMIC_RELAXED);
+    __atomic_store_n(&m772_aot_trace_write_index, UINT64_C(0), __ATOMIC_RELAXED);
+    __atomic_store_n(&m772_hle_trace_write_index, UINT64_C(0), __ATOMIC_RELAXED);
+    __atomic_store_n(&m772_unresolved_trace_write_index, UINT64_C(0), __ATOMIC_RELAXED);
     __atomic_store_n(&m772_entry_state, 0u, __ATOMIC_RELAXED);
     __atomic_store_n(&m772_vfs_root_set, 0u, __ATOMIC_RELEASE);
     ppu_fs_ios_reset_stats();
@@ -209,8 +219,17 @@ static void m772_snapshot_context(ppu_context* ctx)
 
 extern "C" void ar_m772_note_function(uint32_t pc, ppu_context* ctx)
 {
-    __atomic_add_fetch(&m772_dispatch_count, UINT64_C(1), __ATOMIC_RELAXED);
+    const uint64_t calls = __atomic_add_fetch(&m772_dispatch_count, UINT64_C(1), __ATOMIC_RELAXED);
     __atomic_store_n(&m772_last_guest_pc, pc, __ATOMIC_RELAXED);
+    /* Sample 1 in 4096 calls to keep the hot-path cost bounded. The report
+     * identifies these as function-entry samples, never as the live PPC PC. */
+    if ((calls & UINT64_C(0xFFF)) == 0) {
+        const uint64_t index = __atomic_fetch_add(&m772_aot_trace_write_index,
+                                                  UINT64_C(1), __ATOMIC_RELAXED);
+        const uint64_t caller = ctx ? (uint32_t)ctx->lr : 0;
+        __atomic_store_n(&m772_aot_trace[index % M772_TRACE_CAPACITY],
+                         ((uint64_t)pc << 32) | caller, __ATOMIC_RELAXED);
+    }
     m772_snapshot_context(ctx);
 }
 
@@ -220,6 +239,10 @@ extern "C" void ar_m772_note_hle(uint32_t nid, uint32_t guest_lr,
     __atomic_add_fetch(&m772_hle_call_count, UINT64_C(1), __ATOMIC_RELAXED);
     __atomic_store_n(&m772_last_hle_nid, nid, __ATOMIC_RELAXED);
     __atomic_store_n(&m772_last_hle_lr, guest_lr, __ATOMIC_RELAXED);
+    const uint64_t index = __atomic_fetch_add(&m772_hle_trace_write_index,
+                                              UINT64_C(1), __ATOMIC_RELAXED);
+    __atomic_store_n(&m772_hle_trace[index % M772_TRACE_CAPACITY],
+                     ((uint64_t)nid << 32) | guest_lr, __ATOMIC_RELAXED);
     m772_snapshot_context(ctx);
 }
 
@@ -238,7 +261,42 @@ extern "C" void ar_m772_note_unresolved_hle(uint32_t nid, uint32_t guest_lr,
     __atomic_add_fetch(&m772_unresolved_hle_count, UINT64_C(1), __ATOMIC_RELAXED);
     __atomic_store_n(&m772_last_unresolved_hle_nid, nid, __ATOMIC_RELAXED);
     __atomic_store_n(&m772_last_unresolved_hle_lr, guest_lr, __ATOMIC_RELAXED);
+    const uint64_t index = __atomic_fetch_add(&m772_unresolved_trace_write_index,
+                                              UINT64_C(1), __ATOMIC_RELAXED);
+    __atomic_store_n(&m772_unresolved_trace[index % M772_TRACE_CAPACITY],
+                     ((uint64_t)nid << 32) | guest_lr, __ATOMIC_RELAXED);
     m772_snapshot_context(ctx);
+}
+
+static uint32_t m772_copy_trace(const uint64_t* trace, uint64_t total,
+                                uint64_t* out, uint32_t capacity)
+{
+    if (!out || !capacity) return 0;
+    uint32_t count = total < capacity ? (uint32_t)total : capacity;
+    const uint64_t first = total - count;
+    for (uint32_t i = 0; i < count; ++i)
+        out[i] = __atomic_load_n(&trace[(first + i) % M772_TRACE_CAPACITY],
+                                 __ATOMIC_RELAXED);
+    return count;
+}
+
+extern "C" uint32_t ar_m772_copy_aot_trace(uint64_t* out, uint32_t capacity)
+{
+    const uint64_t total = __atomic_load_n(&m772_aot_trace_write_index, __ATOMIC_RELAXED);
+    return m772_copy_trace(m772_aot_trace, total, out, capacity);
+}
+
+extern "C" uint32_t ar_m772_copy_hle_trace(uint64_t* out, uint32_t capacity)
+{
+    const uint64_t total = __atomic_load_n(&m772_hle_trace_write_index, __ATOMIC_RELAXED);
+    return m772_copy_trace(m772_hle_trace, total, out, capacity);
+}
+
+extern "C" uint32_t ar_m772_copy_unresolved_hle_trace(uint64_t* out, uint32_t capacity)
+{
+    const uint64_t total = __atomic_load_n(&m772_unresolved_trace_write_index,
+                                           __ATOMIC_RELAXED);
+    return m772_copy_trace(m772_unresolved_trace, total, out, capacity);
 }
 
 extern "C" void ar_m772_note_hotloop(uint32_t guest_pc, ppu_context* ctx)

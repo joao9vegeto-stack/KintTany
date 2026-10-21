@@ -2,10 +2,21 @@
 #import <QuartzCore/CAMetalLayer.h>
 #import <Metal/Metal.h>
 extern int rsx_metal_backend_set_ios_layer(void *metal_layer);
+extern int rsx_metal_backend_set_ios_output_scale(float scale);
 
 @implementation ARMetalView
 + (Class)layerClass {
     return [CAMetalLayer class];
+}
+- (instancetype)initWithFrame:(CGRect)frame {
+    if ((self=[super initWithFrame:frame])) _outputScale=1.0;
+    return self;
+}
+- (void)setOutputScale:(CGFloat)outputScale {
+    if (!(outputScale>=0.5 && outputScale<=1.0)) outputScale=1.0;
+    _outputScale=outputScale;
+    (void)rsx_metal_backend_set_ios_output_scale((float)outputScale);
+    [self setNeedsLayout];
 }
 - (BOOL)bindToPS3MetalBackend {
     if (![NSThread isMainThread]) return NO;
@@ -23,8 +34,10 @@ extern int rsx_metal_backend_set_ios_layer(void *metal_layer);
     if (scale<=0) scale=self.contentScaleFactor;
     if (scale<=0) scale=1;
     drawableLayer.contentsScale=scale;
-    drawableLayer.drawableSize=CGSizeMake(self.bounds.size.width*scale,
-                                          self.bounds.size.height*scale);
+    CGFloat outputScale=self.outputScale;
+    if (!(outputScale>=0.5 && outputScale<=1.0)) outputScale=1.0;
+    drawableLayer.drawableSize=CGSizeMake(self.bounds.size.width*scale*outputScale,
+                                          self.bounds.size.height*scale*outputScale);
 }
 /* Tests the actual iPhone drawable path with a completed GPU command buffer.
  * Produces a visibly colored frame; it deliberately does not issue RSX

@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Compile the M7.81 PPU/SPU lift plus its per-game PS3Recomp runtime for iOS."""
+"""Compile the M7.82 PPU/SPU lift plus its per-game PS3Recomp runtime for iOS."""
 import argparse
 import concurrent.futures
 import hashlib
@@ -407,7 +407,21 @@ def main():
     game_header = upstream / "libs/system/cellGame.h"
     if ("ASCENSION_IOS_CELL_GAME_PATCH_CHECK" not in game_source.read_text() or
             "s32 cellGamePatchCheck(void* size, void* reserved);" not in game_header.read_text()):
-        raise SystemExit("M7.81 disc-boot cellGamePatchCheck HLE patch is missing")
+        raise SystemExit("M7.82 disc-boot cellGamePatchCheck HLE patch is missing")
+    spurs_source=(upstream/"libs/spurs/cellSpurs.c").read_text(errors="replace")
+    spurs_header=(upstream/"libs/spurs/cellSpurs.h").read_text(errors="replace")
+    required_spurs_markers=("ASCENSION_M772_SPURS2_TASK_API_V2",
+        "ASCENSION_M772_LFQUEUE_SDK_LAYOUT_V1", "ASCENSION_M772_EDGE_ZLIB_HLE_V2",
+        "spu_taskset_track", "spu_signal_parked_on_line")
+    missing=[marker for marker in required_spurs_markers
+             if marker not in spurs_source and marker not in (upstream/"runtime/spu/spu_workload.c").read_text(errors="replace")]
+    if missing:
+        raise SystemExit(f"M7.82 PS3Recomp SPURS2/LFQueue patch is missing: {missing}")
+    if "cellSpursCreateTask2" not in spurs_header or "cellSpursGetWorkloadFlag" not in spurs_header:
+        raise SystemExit("M7.82 SPURS2 HLE declarations are missing")
+    inflater=upstream/"libs/codec/edge_inflate.cpp"
+    if not inflater.is_file() or '"libs/codec/edge_inflate.cpp"' not in (upstream/"CMakeLists.txt").read_text():
+        raise SystemExit("M7.82 Edge Zlib inflater is not included in the PS3Recomp target")
     pointer_patch_count = patch_ios_unaligned_guest_vm(upstream)
     if pointer_patch_count != 370:
         raise SystemExit(f"M7.79 unaligned guest-VM patch incomplete: {pointer_patch_count}")
@@ -429,10 +443,22 @@ def main():
     rc = run([sys.executable, upstream / "tools/gen_hle_nids.py", "--all", "--out", nid_source],
              logs / "00-hle-nids.log")
     if rc or not nid_source.is_file() or not nid_source.stat().st_size:
-        raise SystemExit(f"M7.72 HLE NID generation failed; see {logs / '00-hle-nids.log'}")
+        raise SystemExit(f"M7.82 HLE NID generation failed; see {logs / '00-hle-nids.log'}")
     generated_nids = nid_source.read_text(errors="replace")
     if 'ps3_hle_register(0xCE4374F6u, "cellGamePatchCheck"' not in generated_nids:
-        raise SystemExit("M7.81 cellGamePatchCheck NID 0xCE4374F6 is not bound to its HLE")
+        raise SystemExit("M7.82 cellGamePatchCheck NID 0xCE4374F6 is not bound to its HLE")
+    required_nids={
+        '0x4A6465E3u, "cellSpursCreateTaskset2"',
+        '0xE14CA62Du, "cellSpursCreateTask2"',
+        '0x838FA4F0u, "cellSpursTryJoinTask2"',
+        '0xA7A94892u, "cellSpursJoinTask2"',
+        '0x8A85674Du, "_cellSpursLFQueuePushBody"',
+        '0xC765B995u, "cellSpursGetWorkloadFlag"',
+        '0xA73BF47Eu, "_cellSpursWorkloadFlagReceiver"',
+    }
+    missing_nids=[entry for entry in required_nids if f"ps3_hle_register({entry}" not in generated_nids]
+    if missing_nids:
+        raise SystemExit(f"M7.82 generated SPURS2 HLE registry is incomplete: {missing_nids}")
 
     include_dirs = [
         source, source / "ppu", upstream / "include", upstream / "runtime",
@@ -514,6 +540,8 @@ def main():
                 "_ar_m772_dispatch_native", "_ar_m772_note_function",
                 "_ar_m772_note_hle", "_ar_m772_note_syscall",
                 "_ar_m772_note_unresolved_hle", "_ar_m772_note_hotloop",
+                "_ar_m772_copy_aot_trace", "_ar_m772_copy_hle_trace",
+                "_ar_m772_copy_unresolved_hle_trace",
                 "_ar_m772_run_entry", "_ar_m772_unbind_guest_memory",
                 "_ppu_hle_register_all",
                 "_ppu_recomp_register",
@@ -532,13 +560,19 @@ def main():
         raise SystemExit(f"M7.72 required ARM64 archive symbols missing: {missing}")
 
     result = {
-        "schema": "ascension-m772-ios-arm64-link-input-v5",
+        "schema": "ascension-m772-ios-arm64-link-input-v6",
         "upstream_commit": actual,
         "ios_vfs_mount_patch": "npua80918-and-app-home-usrdir-v1",
         "ios_vm_mapping_patch": "mach-anywhere-4g-relative-guest-ea-v1",
         "hle_registration": "strong-generated-nid-table",
         "cell_game_patch_check": "disc-boot-returns-CELL_GAME_ERROR_NOTPATCH",
         "unresolved_hle_telemetry": "ps3_hle_call-missing-handler-branch",
+        "spurs2_taskset": "0x2900-two-LV2-event-flags-tracked-cross-taskset-scheduler-v1",
+        "spurs2_task_apis": "create-task2-join-tryjoin-taskset-address-v1",
+        "spurs_workload_flags": "guest-address-and-exclusive-receiver-v1",
+        "lfqueue_sdk_layout": "CellSyncLFQueue-layout-v1",
+        "edge_zlib_hle": "host-deflate-skip-output-counter-eventflag-v2",
+        "pc_entry_trace": "1-in-4096-function-entry-samples-plus-HLE-history-v1",
         "ppu_translation_units_compiled": len(ppu),
         "ppu_function_table_entries": 29849,
         "native_aot_function_entry_hooks": 29849,
