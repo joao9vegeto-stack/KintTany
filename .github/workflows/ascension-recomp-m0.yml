@@ -1867,6 +1867,7 @@ jobs:
               assert a['ppu_translation_units_compiled']==651
               assert a['ppu_function_table_entries']==29849
               assert a['native_aot_function_entry_hooks']==29849
+              assert a['native_observed_hotloop_hooks']==1
               assert a['spu_translation_units_compiled']==4
               assert a['archive']=='libAscensionGOWA-M772-ios-arm64.a'
               assert a['hle_registration']=='strong-generated-nid-table'
