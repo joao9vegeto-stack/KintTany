@@ -23,3 +23,10 @@ class IOSRSXPumpContractTests(unittest.TestCase):
         self.assertIn('"_rsx_metal_backend_present"', script)
         self.assertIn('"_rsx_metal_backend_guest_draws"', script)
         self.assertNotIn('"_rsx_metal_backend_note_guest_frame"', script)
+
+    def test_final_macho_gate_requires_linked_hle_registration_and_ios_services(self):
+        script = (ROOT / "tools/build_ios_probe_ipa.sh").read_text()
+        self.assertIn('"_ppu_hle_register_all"', script)
+        self.assertIn('"_cellPadGetData"', script)
+        self.assertIn('"_cellAudioPortOpen"', script)
+        self.assertIn('"_cellAudioSetNotifyEventQueue"', script)

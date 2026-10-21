@@ -549,7 +549,7 @@ symbols=src/'symbols.txt'
 assert archive.is_file() and attestation.is_file() and symbols.is_file()
 a=json.loads(attestation.read_text())
 digest=hashlib.sha256(archive.read_bytes()).hexdigest()
-assert a['schema']=='ascension-m772-ios-arm64-link-input-v2'
+assert a['schema']=='ascension-m772-ios-arm64-link-input-v3'
 assert a['upstream_commit']=='39a36296511c445707adabcd312f0b740cfbd694'
 assert a['ppu_translation_units_compiled']==651
 assert a['ppu_function_table_entries']==29849
@@ -557,18 +557,17 @@ assert a['native_aot_function_entry_hooks']==29849
 assert a['native_observed_hotloop_hooks']==1
 assert a['spu_translation_units_compiled']==4
 assert a['archive']=='libAscensionGOWA-M772-ios-arm64.a'
-approved_archives={
-    (220252832,'cdf2c894cb188c581ecd245a36670b37600d41d80eb14aa08a8e4a56809e19c5'),
-    (220377992,'56d6804bab514a0abaf98f2809105bab08f9dbaa45e09284036e08fd236c1087'),
-}
-assert (archive.stat().st_size,digest) in approved_archives
+assert a['hle_registration']=='strong-generated-nid-table'
+assert a['unresolved_hle_telemetry']=='ps3_hle_call-missing-handler-branch'
 assert a['archive_bytes']==archive.stat().st_size
 assert a['archive_sha256']==digest
 text=symbols.read_text(errors='replace')
 for name in ('func_00010410','_ar_m772_run_entry','_ar_m772_note_function',
              '_ar_m772_note_hotloop','_ar_m772_note_unresolved_hle',
-             '_ar_m772_runtime_attest','_ppu_recomp_register'):
+             '_ar_m772_runtime_attest','_ppu_recomp_register',
+             '_ppu_hle_register_all'):
     assert name in text,name
+assert any(' T _ppu_hle_register_all' in line for line in text.splitlines())
 dst=Path('ios-probe/m772')
 dst.mkdir(parents=True,exist_ok=True)
 for path in (archive,attestation,symbols):shutil.copy2(path,dst/path.name)
@@ -654,6 +653,7 @@ required=("func_00010410", "func_0052A740", "func_0052E3F4", "_ar_m772_runtime_a
           "_cellGcmTickVBlank", "_cellGcmTickFlip", "_cellGcm_rsx_process_fifo",
           "_cellGcm_take_flip_pending_synced", "_rsx_metal_backend_init",
           "_rsx_metal_backend_present", "_rsx_metal_backend_guest_draws",
+          "_ppu_hle_register_all",
           "_cellPad_set_host_state",
           "_cellPadGetData", "_cellAudioPortOpen", "_cellAudioSetNotifyEventQueue",
           "_ppu_recomp_register", "_gowa_spu_0000_at_006B3E00_spu_recomp_register",

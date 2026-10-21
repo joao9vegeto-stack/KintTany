@@ -12,6 +12,47 @@ SPEC.loader.exec_module(MODULE)
 
 
 class M772IOSVfsMountTests(unittest.TestCase):
+    def test_live_hle_dispatch_requires_generated_table_and_tracks_unresolved_imports(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            upstream = pathlib.Path(tmp)
+            hle = upstream / "runtime" / "ppu" / "ppu_hle.cpp"
+            loader = upstream / "runtime" / "ppu" / "ppu_loader.cpp"
+            hle.parent.mkdir(parents=True)
+            hle.write_text('''/* Populated by the generated registration unit (gen_hle_nids.py). Weak so a
+ * build without it still links (no HLE registered -> imports log + return 0). */
+extern "C" void ppu_hle_register_all(void) __attribute__((weak));
+extern "C" void ppu_hle_register_all(void) {}
+extern "C" void ppu_hle_init(void) { ppu_hle_register_all(); }
+extern "C" void ps3_hle_call(uint32_t nid, ppu_context* ctx)
+{
+    ps3_nid_entry* e = nullptr;
+    if (!e || !e->handler) {
+        ps3_msf("hle:unresolved:0x%08X", nid);
+        return;
+    }
+}
+''')
+            loader.write_text('''extern "C" void lv2_syscall(ppu_context* ctx)
+{
+}
+''')
+
+            MODULE.patch_m772_live_dispatch(upstream)
+            result = hle.read_text()
+            self.assertIn("ASCENSION_M772_STRONG_HLE_REGISTRATION", result)
+            self.assertNotIn(
+                'extern "C" void ppu_hle_register_all(void) __attribute__((weak));',
+                result)
+            self.assertIn("ASCENSION_M775_LIVE_HLE_TELEMETRY", result)
+            branch = result.split("if (!e || !e->handler) {", 1)[1]
+            self.assertIn("ASCENSION_M775_UNRESOLVED_HLE_TELEMETRY", branch)
+            self.assertIn("ar_m772_note_unresolved_hle(nid, (uint32_t)ctx->lr, ctx);", branch)
+            self.assertIn("ASCENSION_M775_LIVE_SYSCALL_TELEMETRY", loader.read_text())
+
+            once = result
+            MODULE.patch_m772_live_dispatch(upstream)
+            self.assertEqual(once, hle.read_text())
+
     def test_patch_maps_installed_title_to_selected_game_root(self):
         with tempfile.TemporaryDirectory() as tmp:
             upstream = pathlib.Path(tmp)

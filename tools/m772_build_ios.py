@@ -128,25 +128,36 @@ def patch_m772_live_dispatch(upstream):
     """Expose the actual HLE/syscall reached by the live guest thread."""
     hle = upstream / "runtime/ppu/ppu_hle.cpp"
     text = hle.read_text()
-    unresolved_anchor = 'static void ps3_hle_unresolved(uint32_t nid, ppu_context* ctx)\n{\n'
-    unresolved_patch = '''extern "C" void ar_m772_note_unresolved_hle(uint32_t nid,
-                                                uint32_t guest_lr,
-                                                ppu_context* ctx);
-static void ps3_hle_unresolved(uint32_t nid, ppu_context* ctx)
-{
-    /* ASCENSION_M775_UNRESOLVED_HLE_TELEMETRY */
-    if (ctx) ar_m772_note_unresolved_hle(nid, (uint32_t)ctx->lr, ctx);
+    weak_registration = '''/* Populated by the generated registration unit (gen_hle_nids.py). Weak so a
+ * build without it still links (no HLE registered -> imports log + return 0). */
+extern "C" void ppu_hle_register_all(void) __attribute__((weak));
+extern "C" void ppu_hle_register_all(void) {}
 '''
-    if "ASCENSION_M775_UNRESOLVED_HLE_TELEMETRY" not in text:
-        if text.count(unresolved_anchor) != 1:
-            raise SystemExit("M7.75 could not anchor unresolved HLE telemetry")
-        text = text.replace(unresolved_anchor, unresolved_patch, 1)
-        hle.write_text(text)
+    strong_registration = '''/* ASCENSION_M772_STRONG_HLE_REGISTRATION
+ * Require the generated all-module NID table; a weak no-op lets static archive
+ * linking discard every registered service handler. */
+extern "C" void ppu_hle_register_all(void);
+'''
+    if "ASCENSION_M772_STRONG_HLE_REGISTRATION" not in text:
+        if text.count(weak_registration) != 1:
+            raise SystemExit("M7.75 could not replace the weak HLE registration stub")
+        text = text.replace(weak_registration, strong_registration, 1)
 
-    text = hle.read_text()
+    text = text.replace('''    /* The generated registration unit is per-game and easy to leave out: the
+     * weak stub above means a build without it links and starts, then fails
+     * later and somewhere else. Say so here, once, at the point where it is
+     * still obvious what to do about it. */''',
+'''    /* This check catches a generated-but-empty registration unit. The iOS
+     * AOT build requires the strong all-module table at link time. */''')
+    text = text.replace("ppu_hle_register_all() is the weak do-nothing stub",
+                        "ppu_hle_register_all() ran but registered zero handlers")
+
     hle_anchor = 'extern "C" void ps3_hle_call(uint32_t nid, ppu_context* ctx)\n{\n'
     hle_patch = '''extern "C" void ar_m772_note_hle(uint32_t nid, uint32_t guest_lr,
                                      ppu_context* ctx);
+extern "C" void ar_m772_note_unresolved_hle(uint32_t nid,
+                                              uint32_t guest_lr,
+                                              ppu_context* ctx);
 extern "C" void ps3_hle_call(uint32_t nid, ppu_context* ctx)
 {
     /* ASCENSION_M775_LIVE_HLE_TELEMETRY */
@@ -156,7 +167,17 @@ extern "C" void ps3_hle_call(uint32_t nid, ppu_context* ctx)
         if text.count(hle_anchor) != 1:
             raise SystemExit("M7.75 could not anchor live HLE telemetry in ps3_hle_call")
         text = text.replace(hle_anchor, hle_patch, 1)
-        hle.write_text(text)
+
+    unresolved_anchor = '    if (!e || !e->handler) {\n'
+    unresolved_patch = '''    if (!e || !e->handler) {
+        /* ASCENSION_M775_UNRESOLVED_HLE_TELEMETRY */
+        if (ctx) ar_m772_note_unresolved_hle(nid, (uint32_t)ctx->lr, ctx);
+'''
+    if "ASCENSION_M775_UNRESOLVED_HLE_TELEMETRY" not in text:
+        if text.count(unresolved_anchor) != 1:
+            raise SystemExit("M7.75 could not anchor the live unresolved-HLE branch")
+        text = text.replace(unresolved_anchor, unresolved_patch, 1)
+    hle.write_text(text)
 
     loader = upstream / "runtime/ppu/ppu_loader.cpp"
     text = loader.read_text()
@@ -291,6 +312,7 @@ def main():
                 "_ar_m772_note_hle", "_ar_m772_note_syscall",
                 "_ar_m772_note_unresolved_hle", "_ar_m772_note_hotloop",
                 "_ar_m772_run_entry", "_ar_m772_unbind_guest_memory",
+                "_ppu_hle_register_all",
                 "_ppu_recomp_register",
                 "_gowa_spu_0000_at_006B3E00_spu_recomp_register",
                 "_gowa_spu_0001_at_006C1B00_spu_recomp_register",
@@ -307,8 +329,10 @@ def main():
         raise SystemExit(f"M7.72 required ARM64 archive symbols missing: {missing}")
 
     result = {
-        "schema": "ascension-m772-ios-arm64-link-input-v2",
+        "schema": "ascension-m772-ios-arm64-link-input-v3",
         "upstream_commit": actual,
+        "hle_registration": "strong-generated-nid-table",
+        "unresolved_hle_telemetry": "ps3_hle_call-missing-handler-branch",
         "ppu_translation_units_compiled": len(ppu),
         "ppu_function_table_entries": 29849,
         "native_aot_function_entry_hooks": 29849,
