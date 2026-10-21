@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Compile the M7.82 PPU/SPU lift plus its per-game PS3Recomp runtime for iOS."""
+"""Compile the M7.83 PPU/SPU lift plus its per-game PS3Recomp runtime for iOS."""
 import argparse
 import concurrent.futures
 import hashlib
@@ -414,12 +414,17 @@ def main():
     spurs_source=(upstream/"libs/spurs/cellSpurs.c").read_text(errors="replace")
     spurs_header=(upstream/"libs/spurs/cellSpurs.h").read_text(errors="replace")
     required_spurs_markers=("ASCENSION_M772_SPURS2_TASK_API_V2",
+        "ASCENSION_M772_SPURS2_WORKLOADS_32_V1",
         "ASCENSION_M772_LFQUEUE_SDK_LAYOUT_V1", "ASCENSION_M772_EDGE_ZLIB_HLE_V2",
         "spu_taskset_track", "spu_signal_parked_on_line")
     missing=[marker for marker in required_spurs_markers
              if marker not in spurs_source and marker not in (upstream/"runtime/spu/spu_workload.c").read_text(errors="replace")]
     if missing:
-        raise SystemExit(f"M7.82 PS3Recomp SPURS2/LFQueue patch is missing: {missing}")
+        raise SystemExit(f"M7.83 PS3Recomp SPURS2/LFQueue patch is missing: {missing}")
+    for marker in ("SPURS_MAX_WID 32", "SPURS_WKL_INFO2",
+                   "cellSpursResetAscensionMetrics", "cellSpursCopyAscensionMetrics"):
+        if marker not in spurs_source:
+            raise SystemExit(f"M7.83 32-workload scheduler or live metric is missing: {marker}")
     if "cellSpursCreateTask2" not in spurs_header or "cellSpursGetWorkloadFlag" not in spurs_header:
         raise SystemExit("M7.82 SPURS2 HLE declarations are missing")
     inflater=upstream/"libs/codec/edge_inflate.cpp"
@@ -547,6 +552,7 @@ def main():
                 "_ar_m772_copy_unresolved_hle_trace",
                 "_ar_m772_run_entry", "_ar_m772_unbind_guest_memory",
                 "_ppu_hle_register_all",
+                "_cellSpursResetAscensionMetrics", "_cellSpursCopyAscensionMetrics",
                 "_ppu_recomp_register",
                 "_gowa_spu_0000_at_006B3E00_spu_recomp_register",
                 "_gowa_spu_0001_at_006C1B00_spu_recomp_register",
@@ -563,7 +569,7 @@ def main():
         raise SystemExit(f"M7.72 required ARM64 archive symbols missing: {missing}")
 
     result = {
-        "schema": "ascension-m772-ios-arm64-link-input-v6",
+        "schema": "ascension-m772-ios-arm64-link-input-v7",
         "upstream_commit": actual,
         "ios_vfs_mount_patch": "npua80918-and-app-home-usrdir-v1",
         "ios_vm_mapping_patch": "mach-anywhere-4g-relative-guest-ea-v1",
@@ -572,6 +578,7 @@ def main():
         "unresolved_hle_telemetry": "ps3_hle_call-missing-handler-branch",
         "spurs2_taskset": "0x2900-two-LV2-event-flags-tracked-cross-taskset-scheduler-v1",
         "spurs2_task_apis": "create-task2-join-tryjoin-taskset-address-v1",
+        "spurs2_workloads": "32-workload-second-instance-set-and-policy-slots-v1",
         "spurs_workload_flags": "guest-address-and-exclusive-receiver-v1",
         "lfqueue_sdk_layout": "CellSyncLFQueue-layout-v1",
         "edge_zlib_hle": "host-deflate-skip-output-counter-eventflag-v2",

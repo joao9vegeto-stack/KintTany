@@ -1,0 +1,288 @@
+diff --git a/libs/spurs/cellSpurs.c b/libs/spurs/cellSpurs.c
+index 0000000..1111111 100644
+--- a/libs/spurs/cellSpurs.c
++++ b/libs/spurs/cellSpurs.c
+@@ -71 +71,27 @@
+-static SpursWorkload s_workloads[CELL_SPURS_MAX_WORKLOAD];
++/* ASCENSION_M772_SPURS2_WORKLOADS_32_V1 */
++#define SPURS_MAX_WID 32
++static SpursWorkload s_workloads[SPURS_MAX_WID];
++static volatile u64 s_asc_spurs2_instances, s_asc_workloads, s_asc_workloads_hi;
++static volatile u64 s_asc_dispatches, s_asc_dispatches_hi;
++static volatile u64 s_asc_pm_found, s_asc_pm_missing, s_asc_last_dispatch_wid;
++void cellSpursResetAscensionMetrics(void) {
++    __atomic_store_n(&s_asc_spurs2_instances, 0, __ATOMIC_RELAXED);
++    __atomic_store_n(&s_asc_workloads, 0, __ATOMIC_RELAXED);
++    __atomic_store_n(&s_asc_workloads_hi, 0, __ATOMIC_RELAXED);
++    __atomic_store_n(&s_asc_dispatches, 0, __ATOMIC_RELAXED);
++    __atomic_store_n(&s_asc_dispatches_hi, 0, __ATOMIC_RELAXED);
++    __atomic_store_n(&s_asc_pm_found, 0, __ATOMIC_RELAXED);
++    __atomic_store_n(&s_asc_pm_missing, 0, __ATOMIC_RELAXED);
++    __atomic_store_n(&s_asc_last_dispatch_wid, UINT64_MAX, __ATOMIC_RELAXED);
++}
++void cellSpursCopyAscensionMetrics(u64 out[8]) {
++    if (!out) return;
++    out[0]=__atomic_load_n(&s_asc_spurs2_instances,__ATOMIC_RELAXED);
++    out[1]=__atomic_load_n(&s_asc_workloads,__ATOMIC_RELAXED);
++    out[2]=__atomic_load_n(&s_asc_workloads_hi,__ATOMIC_RELAXED);
++    out[3]=__atomic_load_n(&s_asc_dispatches,__ATOMIC_RELAXED);
++    out[4]=__atomic_load_n(&s_asc_dispatches_hi,__ATOMIC_RELAXED);
++    out[5]=__atomic_load_n(&s_asc_pm_found,__ATOMIC_RELAXED);
++    out[6]=__atomic_load_n(&s_asc_pm_missing,__ATOMIC_RELAXED);
++    out[7]=__atomic_load_n(&s_asc_last_dispatch_wid,__ATOMIC_RELAXED);
++}
+@@ -420,0 +447 @@
++    SPURS_WKL_SIGNAL2  = 0x78,   /* be u16, wid 16-31 */
+@@ -423 +450,2 @@
+-    SPURS_WKL_ENABLED  = 0xB0,
++    SPURS_WKL_ENABLED  = 0xB0,   /* be u32, bit 31-wid for all 32 */
++    SPURS_WKL_STATE2   = 0xD0,   /* wid 16-31 */
+@@ -426,0 +455,4 @@
++    SPURS_WKL_INFO2    = 0x1000, /* wid 16-31 (CellSpurs2 only); the Wws job
++                                  * module computes spurs + 0x1000 + 32*(wid-16) */
++    SPURS_FLAGS1       = 0x74,
++    SPURS_SF1_32_WORKLOADS = 0x40,
+@@ -453 +485,2 @@
+-    u8 active[16], idle[16];
++    u8 active[SPURS_MAX_WID], idle[SPURS_MAX_WID];
++    u8 is2;   /* CellSpurs2: 8 KB, 32 workloads */
+@@ -462,0 +496,23 @@
++static int spurs_guest_range_valid(u32 ea, u32 bytes);
++
++/* Instance fields of a workload: the first 16 and the CellSpurs2 second set
++ * (readyCount2 shares the idle-SPU-count bytes, as in libspurs). The second
++ * set's contention is kept host-side. */
++static u32 wkl_ready_off(u32 wid) { return wid < 16 ? SPURS_WKL_READY1 + wid : SPURS_WKL_IDLE2 + (wid - 16); }
++static u32 wkl_state_off(u32 wid) { return wid < 16 ? SPURS_WKL_STATE1 + wid : SPURS_WKL_STATE2 + (wid - 16); }
++static u32 wkl_info_off(u32 wid)  { return wid < 16 ? SPURS_WKL_INFO1 + wid * SPURS_WKL_INFO_SZ
++                                                    : SPURS_WKL_INFO2 + (wid - 16) * SPURS_WKL_INFO_SZ; }
++static u32 wkl_signal_off(u32 wid) { return wid < 16 ? SPURS_WKL_SIGNAL1 : SPURS_WKL_SIGNAL2; }
++static int wkl_signalled(u32 ea, u32 wid)
++{ return (vm_read16(ea + wkl_signal_off(wid)) & (0x8000u >> (wid & 15))) != 0; }
++static void wkl_signal_clear(u32 ea, u32 wid)
++{
++    u32 off = wkl_signal_off(wid);
++    ef_w16(ea + off, (u16)(vm_read16(ea + off) & ~(0x8000u >> (wid & 15))));
++}
++static u32 wkl_maxcont(u32 ea, u32 wid)
++{ return wid < 16 ? vm_read8(ea + SPURS_WKL_MAXCONT + wid) : s_workloads[wid].maxContention; }
++static void wkl_curcont_set(u32 ea, u32 wid, u8 v)
++{ if (wid < 16) vm_base[ea + SPURS_WKL_CURCONT + wid] = v; }
++static u32 spurs_workload_limit(const struct SpursInst* si)
++{ return si->is2 ? SPURS_MAX_WID : 16u; }
+@@ -519,0 +576 @@
++    si->is2 = 0;   /* cellSpursInitializeWithAttribute2 sets it after */
+@@ -564,2 +621,14 @@
+-    printf("[cellSpurs] InitializeWithAttribute2 -> InitializeWithAttribute\n");
+-    return cellSpursInitializeWithAttribute(spurs, attr);
++    if (!spurs || !attr) return CELL_SPURS_CORE_ERROR_NULL_POINTER;
++    const u32 ea = (u32)(uintptr_t)spurs;
++    if (!spurs_guest_range_valid(ea, 0x2000)) return CELL_SPURS_TASK_ERROR_FAULT;
++    s32 rc = cellSpursInitializeWithAttribute(spurs, attr);
++    if (rc != CELL_OK) return rc;
++    struct SpursInst* si = spurs_inst_find(ea);
++    if (!si) return CELL_SPURS_CORE_ERROR_STAT;
++    memset(vm_base + ea + SPURS_INST_SIZE, 0, SPURS_INST_SIZE);
++    *(vm_base + ea + SPURS_FLAGS1) |= SPURS_SF1_32_WORKLOADS;
++    AcquireSRWLockExclusive(&si->lock);
++    si->is2 = 1;
++    ReleaseSRWLockExclusive(&si->lock);
++    __atomic_add_fetch(&s_asc_spurs2_instances, 1, __ATOMIC_RELAXED);
++    return CELL_OK;
+@@ -698,2 +767,5 @@
+-    if (wid >= CELL_SPURS_MAX_WORKLOAD) return CELL_SPURS_CORE_ERROR_INVAL;
+-    if (!spurs_guest_range_valid(spurs_ea, SPURS_INST_SIZE))
++    if (wid >= SPURS_MAX_WID) return CELL_SPURS_CORE_ERROR_INVAL;
++    struct SpursInst* si = spurs_inst_find(spurs_ea);
++    if (!si) return CELL_SPURS_CORE_ERROR_STAT;
++    if (wid >= spurs_workload_limit(si)) return CELL_SPURS_CORE_ERROR_INVAL;
++    if (!spurs_guest_range_valid(spurs_ea, si->is2 ? 0x2000u : SPURS_INST_SIZE))
+@@ -743 +815 @@
+-    if (wid >= CELL_SPURS_MAX_WORKLOAD) return CELL_SPURS_CORE_ERROR_INVAL;
++    if (wid >= SPURS_MAX_WID) return CELL_SPURS_CORE_ERROR_INVAL;
+@@ -746,0 +819,3 @@
++    if (wid >= spurs_workload_limit(si)) {
++        spurs_api_unlock(si); return CELL_SPURS_CORE_ERROR_INVAL;
++    }
+@@ -752 +827 @@
+-    vm_write8(si->ea + SPURS_WKL_MAXCONT + wid, (u8)maxContention);
++    if (wid < 16) vm_write8(si->ea + SPURS_WKL_MAXCONT + wid, (u8)maxContention);
+@@ -762 +837 @@
+-    if (wid >= CELL_SPURS_MAX_WORKLOAD) return CELL_SPURS_CORE_ERROR_INVAL;
++    if (wid >= SPURS_MAX_WID) return CELL_SPURS_CORE_ERROR_INVAL;
+@@ -765,0 +841,3 @@
++    if (wid >= spurs_workload_limit(si)) {
++        spurs_api_unlock(si); return CELL_SPURS_CORE_ERROR_INVAL;
++    }
+@@ -772 +850 @@
+-        vm_write8(si->ea + SPURS_WKL_INFO1 + wid * SPURS_WKL_INFO_SZ + 0x18 + sn, priorities_h[sn]);
++        vm_write8(si->ea + wkl_info_off(wid) + 0x18 + sn, priorities_h[sn]);
+@@ -1594 +1672,2 @@
+-    for (u32 i = 0; i < CELL_SPURS_MAX_WORKLOAD; i++) {
++    const u32 nwid = si->is2 ? SPURS_MAX_WID : 16;
++    for (u32 i = 0; i < nwid; i++) {
+@@ -1599,4 +1678,3 @@
+-            vm_base[spurs_ea + SPURS_WKL_READY1 + i] = 0;
+-            vm_base[spurs_ea + SPURS_WKL_CURCONT + i] = 0;
+-            ef_w16(spurs_ea + SPURS_WKL_SIGNAL1,
+-                   (u16)(vm_read16(spurs_ea + SPURS_WKL_SIGNAL1) & ~(0x8000u >> i)));
++            vm_base[spurs_ea + wkl_ready_off(i)] = 0;
++            wkl_curcont_set(spurs_ea, i, 0);
++            wkl_signal_clear(spurs_ea, i);
+@@ -1604,0 +1683,2 @@
++            __atomic_add_fetch(&s_asc_workloads, 1, __ATOMIC_RELAXED);
++            if (i >= 16) __atomic_add_fetch(&s_asc_workloads_hi, 1, __ATOMIC_RELAXED);
+@@ -1621 +1701 @@
+-            u32 info = spurs_ea + SPURS_WKL_INFO1 + i * SPURS_WKL_INFO_SZ;
++            u32 info = spurs_ea + wkl_info_off(i);
+@@ -1628,3 +1708,5 @@
+-            *(vm_base + spurs_ea + SPURS_WKL_STATE1  + i) = 2;   /* runnable */
+-            *(vm_base + spurs_ea + SPURS_WKL_MINCONT + i) = (u8)(minContention ? minContention : 1);
+-            *(vm_base + spurs_ea + SPURS_WKL_MAXCONT + i) = (u8)(maxContention ? maxContention : 1);
++            *(vm_base + spurs_ea + wkl_state_off(i)) = 2;        /* runnable */
++            if (i < 16) {   /* the second set's contention lives in host state */
++                *(vm_base + spurs_ea + SPURS_WKL_MINCONT + i) = (u8)(minContention ? minContention : 1);
++                *(vm_base + spurs_ea + SPURS_WKL_MAXCONT + i) = (u8)(maxContention ? maxContention : 1);
++            } else if (!s_workloads[i].maxContention) s_workloads[i].maxContention = 1;
+@@ -1810 +1892 @@
+-    if (wid >= CELL_SPURS_MAX_WORKLOAD) return CELL_SPURS_CORE_ERROR_INVAL;
++    if (wid >= SPURS_MAX_WID) return CELL_SPURS_CORE_ERROR_INVAL;
+@@ -1813,0 +1896,3 @@
++    if (wid >= spurs_workload_limit(si)) {
++        spurs_api_unlock(si); return CELL_SPURS_CORE_ERROR_INVAL;
++    }
+@@ -1822 +1907 @@
+-    vm_write8(si->ea + SPURS_WKL_STATE1 + wid, 3);
++    vm_write8(si->ea + wkl_state_off(wid), 3);
+@@ -1872 +1957 @@
+-static WklPm s_wkl_pm[CELL_SPURS_MAX_WORKLOAD];
++static WklPm s_wkl_pm[SPURS_MAX_WID];
+@@ -1883 +1968,2 @@
+-    if (r->fn)
++    if (r->fn) {
++        __atomic_add_fetch(&s_asc_pm_found, 1, __ATOMIC_RELAXED);
+@@ -1886 +1972,2 @@
+-    else
++    } else {
++        __atomic_add_fetch(&s_asc_pm_missing, 1, __ATOMIC_RELAXED);
+@@ -1888,0 +1976 @@
++    }
+@@ -1917 +2005 @@
+-        vm_base[slot->ea + SPURS_WKL_CURCONT + wid] = si->active[wid];
++        wkl_curcont_set(slot->ea, wid, si->active[wid]);
+@@ -1944,3 +2032,4 @@
+-            for (u32 checked = 0; checked < 16; checked++) {
+-                u32 wid = si->cursor;
+-                si->cursor = (wid + 1) & 15;
++            const u32 nwid = si->is2 ? SPURS_MAX_WID : 16u;
++            for (u32 checked = 0; checked < nwid; checked++) {
++                u32 wid = si->cursor % nwid;
++                si->cursor = (wid + 1) % nwid;
+@@ -1948 +2037 @@
+-                    vm_read8(ea + SPURS_WKL_STATE1 + wid) != 2 ||
++                    vm_read8(ea + wkl_state_off(wid)) != 2 ||
+@@ -1951 +2040 @@
+-                if (!vm_read8(ea + SPURS_WKL_INFO1 + wid * SPURS_WKL_INFO_SZ + 0x18 + sn))
++                if (!vm_read8(ea + wkl_info_off(wid) + 0x18 + sn))
+@@ -1953 +2042 @@
+-                u32 maxcont = vm_read8(ea + SPURS_WKL_MAXCONT + wid);
++                u32 maxcont = wkl_maxcont(ea, wid);
+@@ -1957,3 +2046,2 @@
+-                u32 signal = vm_read16(ea + SPURS_WKL_SIGNAL1);
+-                u32 ready = vm_read8(ea + SPURS_WKL_READY1 + wid);
+-                int kicked = ready || (signal & (0x8000u >> wid));
++                u32 ready = vm_read8(ea + wkl_ready_off(wid));
++                int kicked = ready || wkl_signalled(ea, wid);
+@@ -1964,5 +2052,3 @@
+-                ready = vm_read8(ea + SPURS_WKL_READY1 + wid);
+-                signal = vm_read16(ea + SPURS_WKL_SIGNAL1);
+-                if (ready) vm_base[ea + SPURS_WKL_READY1 + wid] = (u8)(ready - 1);
+-                if (signal & (0x8000u >> wid))
+-                    ef_w16(ea + SPURS_WKL_SIGNAL1, (u16)(signal & ~(0x8000u >> wid)));
++                ready = vm_read8(ea + wkl_ready_off(wid));
++                if (ready) vm_base[ea + wkl_ready_off(wid)] = (u8)(ready - 1);
++                if (wkl_signalled(ea, wid)) wkl_signal_clear(ea, wid);
+@@ -1973 +2059 @@
+-                slot->data = vm_read64(ea + SPURS_WKL_INFO1 + wid * SPURS_WKL_INFO_SZ + 8);
++                slot->data = vm_read64(ea + wkl_info_off(wid) + 8);
+@@ -1975,0 +2062,3 @@
++                __atomic_add_fetch(&s_asc_dispatches, 1, __ATOMIC_RELAXED);
++                __atomic_store_n(&s_asc_last_dispatch_wid, wid, __ATOMIC_RELAXED);
++                if (wid >= 16) __atomic_add_fetch(&s_asc_dispatches_hi, 1, __ATOMIC_RELAXED);
+@@ -1977 +2066 @@
+-                vm_base[ea + SPURS_WKL_CURCONT + wid] = si->active[wid];
++                wkl_curcont_set(ea, wid, si->active[wid]);
+@@ -2024 +2113 @@
+-    for (u32 wid = 0; wid < 16; wid++)
++    for (u32 wid = 0; wid < SPURS_MAX_WID; wid++)
+@@ -2047 +2136 @@
+-    for (u32 wid = 0; wid < CELL_SPURS_MAX_WORKLOAD; wid++)
++    for (u32 wid = 0; wid < SPURS_MAX_WID; wid++)
+@@ -2059 +2148 @@
+-    if (wid >= CELL_SPURS_MAX_WORKLOAD) return CELL_SPURS_CORE_ERROR_INVAL;
++    if (wid >= SPURS_MAX_WID) return CELL_SPURS_CORE_ERROR_INVAL;
+@@ -2062,0 +2152,3 @@
++    if (wid >= spurs_workload_limit(si)) {
++        spurs_api_unlock(si); return CELL_SPURS_CORE_ERROR_INVAL;
++    }
+@@ -2069 +2161 @@
+-    vm_write8(si->ea + SPURS_WKL_READY1 + wid, (u8)value);
++    vm_write8(si->ea + wkl_ready_off(wid), (u8)value);
+@@ -2085 +2177 @@
+-    if (wid >= CELL_SPURS_MAX_WORKLOAD) return CELL_SPURS_CORE_ERROR_INVAL;
++    if (wid >= SPURS_MAX_WID) return CELL_SPURS_CORE_ERROR_INVAL;
+@@ -2088,0 +2181,3 @@
++    if (wid >= spurs_workload_limit(si)) {
++        spurs_api_unlock(si); return CELL_SPURS_CORE_ERROR_INVAL;
++    }
+@@ -2093 +2188 @@
+-    u8 previous = vm_read8(si->ea + SPURS_WKL_READY1 + wid);
++    u8 previous = vm_read8(si->ea + wkl_ready_off(wid));
+@@ -2095 +2190 @@
+-        vm_base[si->ea + SPURS_WKL_READY1 + wid] = (u8)value;
++        vm_base[si->ea + wkl_ready_off(wid)] = (u8)value;
+@@ -3289 +3384,4 @@
+-    if (wid >= CELL_SPURS_MAX_WORKLOAD || !s_workloads[wid].in_use)
++    struct SpursInst* si = spurs_inst_find((u32)spurs_ea);
++    if (!si) return CELL_SPURS_CORE_ERROR_STAT;
++    if (wid >= spurs_workload_limit(si) || !s_workloads[wid].in_use ||
++        s_workloads[wid].spurs_ea != (u32)spurs_ea)
+@@ -3310 +3408 @@
+-    *(vm_base + base + 0x20) = *(vm_base + se + SPURS_WKL_CURCONT + wid);  /* contention   */
++    *(vm_base + base + 0x20) = wid < 16 ? *(vm_base + se + SPURS_WKL_CURCONT + wid) : 0;  /* contention */
+@@ -3313,4 +3411,4 @@
+-    *(vm_base + base + 0x23) = *(vm_base + se + SPURS_WKL_READY1 + wid);   /* readyCount   */
+-    *(vm_base + base + 0x24) = *(vm_base + se + SPURS_WKL_IDLE2  + wid);   /* idleSpuRequest */
+-    u32 sig = vm_read32(se + SPURS_WKL_SIGNAL1) >> 16;
+-    *(vm_base + base + 0x25) = (sig & (0x8000u >> wid)) ? 1 : 0;           /* hasSignal    */
++    *(vm_base + base + 0x23) = *(vm_base + se + wkl_ready_off(wid));       /* readyCount   */
++    /* idleSpuRequest: the second set's bytes are its readyCount */
++    *(vm_base + base + 0x24) = wid < 16 ? *(vm_base + se + SPURS_WKL_IDLE2 + wid) : 0;
++    *(vm_base + base + 0x25) = wkl_signalled(se, wid) ? 1 : 0;             /* hasSignal    */
+diff --git a/runtime/spu/spurs_policy.c b/runtime/spu/spurs_policy.c
+index 0000000..1111111 100644
+--- a/runtime/spu/spurs_policy.c
++++ b/runtime/spu/spurs_policy.c
+@@ -0,0 +1 @@
++/* ASCENSION_M772_SPURS2_WORKLOADS_32_V1 */
+@@ -45,0 +47 @@
++#define SPURS_PM_MAX_WKL 32   /* CellSpurs2: 32 workloads */
+@@ -51 +53 @@
+-    unsigned users, workload_users[16];
++    unsigned users, workload_users[SPURS_PM_MAX_WKL];
+@@ -53 +55 @@
+-    struct PmSlot slots[16][6];
++    struct PmSlot slots[SPURS_PM_MAX_WKL][6];
+@@ -100 +102 @@
+-    if (wid >= 16) return -1;
++    if (wid >= SPURS_PM_MAX_WKL) return -1;
+@@ -136 +138 @@
+-        for (unsigned w = 0; w < 16; w++) for (unsigned n = 0; n < 6; n++) {
++        for (unsigned w = 0; w < SPURS_PM_MAX_WKL; w++) for (unsigned n = 0; n < 6; n++) {
+@@ -174 +175,0 @@
+-    enum { SPURS_PM_MAX_WKL = 16 };
+@@ -431,2 +432,2 @@
+-        static SPU_THREAD_LOCAL unsigned long s_pn_wid[16] = {0};
+-        unsigned long s_pn = ++s_pn_wid[wid & 15];
++        static SPU_THREAD_LOCAL unsigned long s_pn_wid[SPURS_PM_MAX_WKL] = {0};
++        unsigned long s_pn = ++s_pn_wid[wid % SPURS_PM_MAX_WKL];

@@ -16,6 +16,7 @@ import sys
 
 PIN = "39a36296511c445707adabcd312f0b740cfbd694"
 MARKER = "ASCENSION_M772_SPURS2_TASK_API_V2"
+WORKLOADS_MARKER = "ASCENSION_M772_SPURS2_WORKLOADS_32_V1"
 LFQUEUE_MARKER = "ASCENSION_M772_LFQUEUE_SDK_LAYOUT_V1"
 
 
@@ -27,13 +28,15 @@ def run(argv: list[str], *, capture: bool = False) -> str:
     return p.stdout if capture else ""
 
 
-def apply_patch(upstream: pathlib.Path, patch: pathlib.Path, markers: tuple[tuple[pathlib.Path, str], ...]) -> None:
+def apply_patch(upstream: pathlib.Path, patch: pathlib.Path,
+                markers: tuple[tuple[pathlib.Path, str], ...], *, zero_context: bool = False) -> None:
     if all(marker in path.read_text(errors="replace") for path, marker in markers):
         return
     if any(marker in path.read_text(errors="replace") for path, marker in markers):
         raise SystemExit(f"partial application detected for {patch.name}; refusing a mixed runtime")
-    run(["git", "-C", str(upstream), "apply", "--check", str(patch)])
-    run(["git", "-C", str(upstream), "apply", str(patch)])
+    flags = ["--unidiff-zero"] if zero_context else []
+    run(["git", "-C", str(upstream), "apply", *flags, "--check", str(patch)])
+    run(["git", "-C", str(upstream), "apply", *flags, str(patch)])
 
 
 def apply_api_layer(upstream: pathlib.Path, repo: pathlib.Path) -> None:
@@ -453,7 +456,7 @@ def main() -> int:
     repo = args.repo.resolve()
     actual = run(["git", "-C", str(upstream), "rev-parse", "HEAD"], capture=True).strip()
     if actual != PIN:
-        raise SystemExit(f"M7.82 PS3Recomp source pin mismatch: {actual} != {PIN}")
+        raise SystemExit(f"M7.83 PS3Recomp source pin mismatch: {actual} != {PIN}")
 
     patch_dir = repo / "patches/ps3recomp"
     spurs_c = upstream / "libs/spurs/cellSpurs.c"
@@ -467,9 +470,17 @@ def main() -> int:
     for filename, markers in patch_assets:
         apply_patch(upstream, patch_dir / filename, markers)
     apply_api_layer(upstream, repo)
+    spurs_source = upstream / "libs/spurs/cellSpurs.c"
+    policy_source = upstream / "runtime/spu/spurs_policy.c"
+    apply_patch(upstream, patch_dir / "ps3recomp-0020-spurs2-32-workloads.patch",
+                ((spurs_source, WORKLOADS_MARKER), (policy_source, WORKLOADS_MARKER)),
+                zero_context=True)
 
     required = {
         "libs/spurs/cellSpurs.c": (
+            WORKLOADS_MARKER, "SPURS_MAX_WID 32", "SPURS_WKL_INFO2",
+            "spurs_workload_limit", "cellSpursResetAscensionMetrics",
+            "cellSpursCopyAscensionMetrics", "s_asc_dispatches_hi",
             "cellSpursInitializeWithAttribute2", "cellSpursCreateTaskset2",
             "_cellSpursTasksetAttribute2Initialize", "cellSpursCreateTask2",
             "cellSpursJoinTask2", "cellSpursTryJoinTask2",
@@ -489,8 +500,8 @@ def main() -> int:
         text = (upstream / filename).read_text(errors="replace")
         missing = [needle for needle in needles if needle not in text]
         if missing:
-            raise SystemExit(f"M7.82 PS3Recomp SPURS2 patch incomplete in {filename}: {missing}")
-    print("M7.82 applied SPURS2 taskset, event flags, task scheduling, LFQueue, and Edge Zlib HLE")
+            raise SystemExit(f"M7.83 PS3Recomp SPURS2 patch incomplete in {filename}: {missing}")
+    print("M7.83 applied 32-workload SPURS2 scheduler, live dispatch telemetry, taskset, LFQueue, and Edge Zlib HLE")
     return 0
 
 

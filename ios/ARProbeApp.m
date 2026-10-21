@@ -20,6 +20,8 @@ extern uint32_t ar_m772_entry_state(void);
 extern uint32_t ar_m772_copy_aot_trace(uint64_t *out, uint32_t capacity);
 extern uint32_t ar_m772_copy_hle_trace(uint64_t *out, uint32_t capacity);
 extern uint32_t ar_m772_copy_unresolved_hle_trace(uint64_t *out, uint32_t capacity);
+extern void cellSpursResetAscensionMetrics(void);
+extern void cellSpursCopyAscensionMetrics(uint64_t out[8]);
 extern void ar_m756_last_stop_evidence(ar_m756_stop_evidence*);
 extern void ar_m756_last_origin_evidence(ar_m756_stop_evidence*);
 extern void ar_m751_last_fs_trace(ar_fs_trace *);
@@ -1509,6 +1511,7 @@ static BOOL ARGameManifestHasTitleUsrdir(NSDictionary *manifest){
    * runtime starts so Ascension uses the game-proven LFQueue and Edge paths. */
   setenv("PS3_EDGE_ZLIB_HLE","1",1);
   setenv("PS3_LFQUEUE_SDK_LAYOUT","1",1);
+  cellSpursResetAscensionMetrics();
   ar_m772_runtime_begin();
   [self arSetStatus:@"Preparando VM, PPU/SPU recompilados e acesso guest ao jogo…"];
   [self refreshNativeLaunchAvailability];
@@ -1859,6 +1862,7 @@ static BOOL ARGameManifestHasTitleUsrdir(NSDictionary *manifest){
  * converts file indexing or synthetic Metal tests into game progress. */
 - (NSString *)arUnifiedPpuText {
   uint64_t live[40]={0}; ar_m772_runtime_attest(live);
+  uint64_t spursMetrics[8]={0}; cellSpursCopyAscensionMetrics(spursMetrics);
   uint32_t state=ar_m772_entry_state();
   NSString *elapsed=ARFormatRunElapsed(self.nativeRunStartedAt,self.nativeRunEndedAt);
   /* A second boot must report its current counters, not the last completed
@@ -1888,6 +1892,8 @@ static BOOL ARGameManifestHasTitleUsrdir(NSDictionary *manifest){
   NSString *hotloopAudit=(live[31]==0x003C4FA4u)?
     @"0x003C4FA4 é o marcador de backedge da busca em func_003C4F98, não o PC corrente.":
     @"PC do hook de loop observado; é um marcador e pode estar antigo.";
+  NSString *lastSpursWid=spursMetrics[7]==UINT64_MAX?@"—":
+    [NSString stringWithFormat:@"%llu",(unsigned long long)spursMetrics[7]];
   ar_vm_reservation_status vmReservation={0};
   ar_bridge_vm_reservation_status(&vmReservation);
   NSString *vmMode=vmReservation.attempted?
@@ -1950,7 +1956,8 @@ static BOOL ARGameManifestHasTitleUsrdir(NSDictionary *manifest){
      "Reserva VM=%@ · base=%@ · Mach tentativas=%@ (último kr=%@) · mmap tentativas=%@ · estágio=%@ · errno=%@\n\n"
      "PS3RECOMP / MÉTRICAS AO VIVO\n"
      "Tabela AOT=%llu funções · imagens SPU=%llu · runtime inicializado=%@\n"
-     "Chamadas de função AOT=%@ · início(s) da entry=%@ · último PC=0x%08llX (entrada AOT, não é PC da instrução atual)\n"
+     "Chamadas de função AOT=%@ · início(s) da entry=%@ · última entrada AOT=0x%08llX (PC atual da instrução NÃO MEDIDO)\n"
+     "SPURS2 · instâncias=%llu · workloads=%llu (%llu IDs 16–31) · PMs encontrados/faltantes=%llu/%llu · despachos=%llu (%llu IDs 16–31) · último wid=%@\n"
      "Últimas amostras AOT (1/4096):\n%@\n"
      "Último evento rastreado: LR=0x%08llX · SP=0x%08llX · r3-r6=%08llX/%08llX/%08llX/%08llX\n"
      "Argumentos r7-r10=%08llX/%08llX/%08llX/%08llX\n"
@@ -1959,7 +1966,7 @@ static BOOL ARGameManifestHasTitleUsrdir(NSDictionary *manifest){
      "HLE sem serviço registrado=%@ · último NID=0x%08llX · LR=0x%08llX\n"
      "Últimos HLE sem serviço:\n%@\n"
      "LV2 syscalls=%@ · último número=%@ · LR=0x%08llX\n"
-     "Loop observado=%@ · marcador PC=0x%08llX · %@ · r3/r4/r5/r8/r9=%08llX/%08llX/%08llX/%08llX/%08llX\n"
+     "Loop observado=%@ · marcador hotloop=0x%08llX (não é PC atual) · %@ · r3/r4/r5/r8/r9=%08llX/%08llX/%08llX/%08llX/%08llX\n"
      "cellFsOpen guest=%@ · opens OK=%@\n"
      "cellFsRead guest=%@ · bytes lidos pelo guest=%@\n"
      "RSX backend=%@ · GCM vblank=%@ · FIFO drains=%@\n"
@@ -1967,7 +1974,7 @@ static BOOL ARGameManifestHasTitleUsrdir(NSDictionary *manifest){
      "Flips guest apresentados=%@ · draws guest no último frame=%@\n"
      "PSARC específico= NÃO MEDIDO (o runtime ainda não registra caminho por arquivo)\n"
      "PPC interpretado=0 · entradas HLE e LV2 contadas no runtime\n\n"
-     "Auditoria do vídeo 7.81: após o marcador 0x003C4FA4, a execução continuou pelos stubs de sys_lwmutex_lock/unlock e sys_lwcond_wait; o bloqueio sem handler era cellSpursCreateTaskset2 (NID 0x4A6465E3, LR 0x003E1E8C). A captura não mediu draw nem flip guest.\n\n"
+     "Auditoria da captura M7.82: 0x003C4FA4 é um marcador histórico; houve atividade PPU/HLE/filesystem, mas zero draws e flips guest. M7.83 amplia o scheduler SPURS2 a 32 workloads e mede registro, resolução de PM e despacho; a execução e o primeiro frame ainda precisam ser confirmados no dispositivo.\n\n"
      "MARCOS DE JOGO\n"
      "Pasta reconhecida pelo HOST=%@\n"
      "Leitura guest de arquivos do jogo= %@\n"
@@ -1985,7 +1992,11 @@ static BOOL ARGameManifestHasTitleUsrdir(NSDictionary *manifest){
      vfsRootState,
      vmMode,vmBase,vmMachAttempts,vmMachReturn,vmMmapAttempts,vmStage,vmErrno,
      (unsigned long long)live[0],(unsigned long long)live[3],live[4]?@"SIM":@"NÃO",
-     aotCalls,entryStarts,(unsigned long long)live[6],aotTraceText,
+     aotCalls,entryStarts,(unsigned long long)live[6],
+     (unsigned long long)spursMetrics[0],(unsigned long long)spursMetrics[1],
+     (unsigned long long)spursMetrics[2],(unsigned long long)spursMetrics[5],
+     (unsigned long long)spursMetrics[6],(unsigned long long)spursMetrics[3],
+     (unsigned long long)spursMetrics[4],lastSpursWid,aotTraceText,
      (unsigned long long)live[14],(unsigned long long)live[15],
      (unsigned long long)live[16],(unsigned long long)live[17],
      (unsigned long long)live[18],(unsigned long long)live[19],
