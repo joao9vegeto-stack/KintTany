@@ -12,7 +12,6 @@
 #endif
 #if defined(__APPLE__) || defined(ASCENSION_M772_MACH_VM_TEST)
 #include <mach/mach.h>
-#include <mach/mach_vm.h>
 #define AR_M772_HAS_MACH_VM 1
 #endif
 #endif
@@ -197,17 +196,17 @@ static void ar_m772_vm_fail_mach(uint32_t stage,kern_return_t kr)
 
 static void ar_m772_vm_release_mach(uint8_t *base)
 {
-  const kern_return_t kr=mach_vm_deallocate(mach_task_self(),
-      (mach_vm_address_t)(uintptr_t)base,(mach_vm_size_t)AR_M772_VM_TOTAL);
+  const kern_return_t kr=vm_deallocate(mach_task_self(),
+      (vm_address_t)(uintptr_t)base,(vm_size_t)AR_M772_VM_TOTAL);
   if(kr!=KERN_SUCCESS)
     ar_m772_vm_fail_mach(AR_VM_STAGE_MACH_RELEASE,kr);
 }
 
 static uint8_t *ar_m772_vm_commit_mach(uint8_t *base)
 {
-  const kern_return_t reserve_protect_kr=mach_vm_protect(mach_task_self(),
-      (mach_vm_address_t)(uintptr_t)base,(mach_vm_size_t)AR_M772_VM_TOTAL,
-      FALSE,VM_PROT_NONE);
+  const kern_return_t reserve_protect_kr=vm_protect(mach_task_self(),
+      (vm_address_t)(uintptr_t)base,(vm_size_t)AR_M772_VM_TOTAL,
+      0,VM_PROT_NONE);
   if(reserve_protect_kr!=KERN_SUCCESS){
     ar_m772_vm_fail_mach(AR_VM_STAGE_MACH_PROTECT_NONE,reserve_protect_kr);
     ar_m772_vm_release_mach(base);
@@ -219,9 +218,9 @@ static uint8_t *ar_m772_vm_commit_mach(uint8_t *base)
     {AR_M772_VM_STACK_BASE,AR_M772_VM_STACK_SIZE}
   };
   for(size_t i=0;i<sizeof(regions)/sizeof(regions[0]);i++){
-    const mach_vm_address_t address=(mach_vm_address_t)((uintptr_t)base+regions[i].offset);
-    const kern_return_t kr=mach_vm_protect(mach_task_self(),address,
-        (mach_vm_size_t)regions[i].size,FALSE,VM_PROT_READ|VM_PROT_WRITE);
+    const vm_address_t address=(vm_address_t)((uintptr_t)base+regions[i].offset);
+    const kern_return_t kr=vm_protect(mach_task_self(),address,
+        (vm_size_t)regions[i].size,0,VM_PROT_READ|VM_PROT_WRITE);
     if(kr!=KERN_SUCCESS){
       ar_m772_vm_fail_mach(AR_VM_STAGE_MACH_PROTECT_COMMIT,kr);
       ar_m772_vm_release_mach(base);
@@ -278,10 +277,10 @@ static uint8_t *ar_m772_vm_reserve(void)
    * remains an offset within that extent; no 8-GiB over-reservation or
    * aligned-address guess is needed. */
 #ifdef AR_M772_HAS_MACH_VM
-  mach_vm_address_t address=0;
+  vm_address_t address=0;
   last_vm_reservation.mach_attempts++;
-  const kern_return_t kr=mach_vm_allocate(mach_task_self(),&address,
-      (mach_vm_size_t)AR_M772_VM_TOTAL,VM_FLAGS_ANYWHERE);
+  const kern_return_t kr=vm_allocate(mach_task_self(),&address,
+      (vm_size_t)AR_M772_VM_TOTAL,VM_FLAGS_ANYWHERE);
   if(kr==KERN_SUCCESS){
     uint8_t *committed=ar_m772_vm_commit_mach((uint8_t*)(uintptr_t)address);
     if(committed){

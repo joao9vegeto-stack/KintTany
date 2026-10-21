@@ -125,7 +125,7 @@ static NSString *ARVMReservationStageName(uint32_t stage){
   case AR_VM_STAGE_PROTECT_RSX:return @"habilitar memória local RSX";
   case AR_VM_STAGE_PROTECT_STACK:return @"habilitar pilhas do guest";
   case AR_VM_STAGE_RELEASE:return @"liberar região guest";
-  case AR_VM_STAGE_MACH_ALLOCATE:return @"mach_vm_allocate anywhere (4 GiB)";
+  case AR_VM_STAGE_MACH_ALLOCATE:return @"vm_allocate anywhere (4 GiB)";
   case AR_VM_STAGE_MACH_PROTECT_NONE:return @"proteger reserva Mach como PROT_NONE";
   case AR_VM_STAGE_MACH_PROTECT_COMMIT:return @"habilitar faixa guest pela API Mach";
   case AR_VM_STAGE_MACH_RELEASE:return @"liberar reserva Mach";

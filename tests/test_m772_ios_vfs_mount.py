@@ -109,6 +109,8 @@ extern "C" void ps3_hle_call(uint32_t nid, ppu_context* ctx)
         self.assertIn("mach-anywhere-4g-relative-guest-ea-v1", workflow)
         self.assertIn("VM_FLAGS_ANYWHERE", bridge)
         self.assertNotIn("VM_FLAGS_FIXED", bridge)
+        self.assertIn("vm_allocate(mach_task_self()", bridge)
+        self.assertNotIn("mach_vm.h", bridge)
         self.assertIn("mmap(NULL,AR_M772_VM_TOTAL", bridge)
 
     def test_runtime_holds_files_grant_and_binds_root_before_guest_entry(self):
