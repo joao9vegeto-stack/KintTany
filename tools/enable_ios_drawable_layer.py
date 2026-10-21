@@ -64,7 +64,7 @@ int rsx_metal_backend_set_ios_layer(void *opaque_layer)
 int rsx_metal_backend_set_ios_output_scale(float scale)
 {
 #if TARGET_OS_IPHONE
-    if (!(scale >= 0.5f && scale <= 1.0f)) return -1;
+    if (s_ready || !(scale >= 0.5f && scale <= 1.0f)) return -1;
     s_ios_output_scale = (CGFloat)scale;
     if (s_layer)
         s_layer.drawableSize = CGSizeMake((CGFloat)s_width * s_ios_output_scale,

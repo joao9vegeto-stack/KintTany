@@ -4,6 +4,10 @@
 extern int rsx_metal_backend_set_ios_layer(void *metal_layer);
 extern int rsx_metal_backend_set_ios_output_scale(float scale);
 
+@interface ARMetalView ()
+@property(nonatomic,assign) BOOL ps3BackendBound;
+@end
+
 @implementation ARMetalView
 + (Class)layerClass {
     return [CAMetalLayer class];
@@ -25,10 +29,17 @@ extern int rsx_metal_backend_set_ios_output_scale(float scale);
     drawableLayer.opaque=YES;
     drawableLayer.contentsScale=self.contentScaleFactor;
     [self layoutIfNeeded];
-    return rsx_metal_backend_set_ios_layer((__bridge void *)drawableLayer)==0;
+    self.ps3BackendBound=
+      rsx_metal_backend_set_ios_layer((__bridge void *)drawableLayer)==0;
+    return self.ps3BackendBound;
 }
 - (void)layoutSubviews {
     [super layoutSubviews];
+    /* Once bound, PS3Recomp owns drawableSize: the guest chooses its display
+     * target, and changing it on device rotation would mismatch the Metal
+     * drawable and its depth attachment. UIKit still scales the layer to the
+     * view's bounds. */
+    if (self.ps3BackendBound) return;
     CAMetalLayer *drawableLayer=(CAMetalLayer *)self.layer;
     CGFloat scale=self.window.screen.scale;
     if (scale<=0) scale=self.contentScaleFactor;

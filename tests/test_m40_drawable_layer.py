@@ -3,6 +3,7 @@ import sys,unittest
 from pathlib import Path
 sys.path.insert(0,str(Path(__file__).resolve().parents[1]/"tools"))
 from enable_ios_drawable_layer import patch_metal,patch_public_header
+VIEW=(Path(__file__).resolve().parents[1]/"ios/ARMetalView.m").read_text()
 class LayerPatchTests(unittest.TestCase):
  def test_backend_iOS_window_path(self):
   template='''static CAMetalLayer*       s_layer;      /* windowed only   */
@@ -35,6 +36,7 @@ static void mtl_set_render_target(u32 w, u32 h)
   self.assertIn('rsx_metal_backend_set_ios_layer',s)
   self.assertIn('rsx_metal_backend_set_ios_output_scale',s)
   self.assertIn('depth_width',s)
+  self.assertIn('if (s_ready || !(scale >= 0.5f && scale <= 1.0f)) return -1;',s)
   self.assertIn('s_headless = 0',s)
   self.assertIn('s_layer = s_ios_layer',s)
   self.assertIn('rc = create_offscreen()',s)
@@ -46,3 +48,6 @@ static void mtl_set_render_target(u32 w, u32 h)
   self.assertEqual(patch_public_header(s),s)
  def test_missing_branch_fails(self):
   with self.assertRaises(ValueError):patch_metal('static CAMetalLayer* s_layer;')
+ def test_rotation_does_not_override_guest_drawable_size(self):
+  self.assertIn('if (self.ps3BackendBound) return;',VIEW)
+  self.assertIn('self.ps3BackendBound=',VIEW)
