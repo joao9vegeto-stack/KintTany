@@ -28,7 +28,10 @@ class TestM756(unittest.TestCase):
   self.assertIn("ar_m756_last_stop_evidence",ui)
   self.assertIn("ar_m756_last_origin_evidence",ui)
   self.assertIn("ar_m756_capture_stop(d,len,UINT32_C(0x003c4fc4)",b)
-  self.assertIn("ELF versus RAM guest",ui)
+  self.assertIn('@"origin_elf_hex"',ui)
+  self.assertIn('@"origin_ram_hex"',ui)
+  self.assertIn('@"stop_elf_hex"',ui)
+  self.assertIn('@"stop_guest_hex"',ui)
   self.assertNotIn('@"opcode":@(measured.fallback_unsupported_word)',ui)
  def test_ci_and_final_binary(self):
   b=(R/"tools/build_ios_probe_ipa.sh").read_text()
