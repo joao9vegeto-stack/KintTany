@@ -27,6 +27,8 @@ class M711(unittest.TestCase):
         self.assertIn("if(mask!=15u)",sys)
     def test_native_first_ui_retained(self):
         ui=(ROOT/"ios/ARProbeApp.m").read_text()
-        self.assertIn('header.text=[NSString stringWithFormat',ui)
-        self.assertIn("Runtime AOT ONLY",ui)
-        self.assertIn("Diagnóstico avançado · M6/M7",ui)
+        self.assertIn('arLauncherLabel:@"ASCENSION"',ui)
+        self.assertIn('self.nativeLaunchButton=[self arLauncherButton:@"INICIAR JOGO"',ui)
+        self.assertIn('self.ppuDiagnosticsButton=[self arLauncherButton:@"RELATÓRIO DA EXECUÇÃO"',ui)
+        self.assertIn("PS3RECOMP / MÉTRICAS AO VIVO",ui)
+        self.assertIn("Chamadas de função AOT=%@",ui)
