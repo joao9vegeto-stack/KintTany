@@ -1831,12 +1831,11 @@ jobs:
           ./m743-installer-host | tee m743-installer-host.log
           grep -Fxq 'GOWA2 installer digest regression: bad hash and length rejected, all 9 valid chunks installed only after matching SHA-256 PASS' m743-installer-host.log
           test "$(wc -l < m743-staged/symbols.txt | tr -d ' ')" = "6251"
-      # The next commit after 992ca90 is launcher-only. Reuse the archive from
-      # the active HLE-link gate once, and only after revalidating its v3 stamp,
-      # digest and strong generated registry. A missing/invalid candidate falls
-      # through to a fresh 651-unit compile in build_ios_probe_ipa.sh.
+      # The incoming commit is launcher-only relative to the HLE-link gate.
+      # Pin reuse to this one parent SHA; future pushes do a full build unless
+      # their runtime changes are reviewed against the archive again.
       - name: Reuse attested M7.75 HLE archive for launcher-only revision
-        if: github.event.before == '992ca904fb3e673197fb6a611076f4035463958d'
+        if: github.event.before == '3ec837eb0197812fd6b1d475f37fd5f772bb001b'
         continue-on-error: true
         uses: actions/download-artifact@v4
         with:
@@ -1846,7 +1845,7 @@ jobs:
           run-id: 39539326629
           path: m772-cache
       - name: Validate one-run M7.75 archive candidate or compile fresh
-        if: github.event.before == '992ca904fb3e673197fb6a611076f4035463958d'
+        if: github.event.before == '3ec837eb0197812fd6b1d475f37fd5f772bb001b'
         run: |
           set -euo pipefail
           python3 - <<'PY'
