@@ -130,6 +130,7 @@ jobs:
           test "$(git -C upstream-m772 rev-parse HEAD)" = "39a36296511c445707adabcd312f0b740cfbd694"
           test "$(git -C upstream rev-parse HEAD)" = "$(git -C upstream-m772 rev-parse HEAD)"
           python3 tools/patch_ps3recomp_cell_game.py --upstream upstream
+          python3 tools/patch_ps3recomp_cell_game.py --upstream upstream-m772
       - name: M7.72 reconstruct PS3Recomp full GOWA lift from validated source shards
         run: |
           set -euo pipefail
