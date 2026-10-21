@@ -25,15 +25,15 @@ def instrument_aot_entries(source):
     """Add a cheap, truthful entry hook to every complete lifted PPU function."""
     header = source / "ppu" / "ppu_recomp.h"
     text = header.read_text()
-    anchor = "#include <stdint.h>\n"
-    declaration = (
-        "#include <stdint.h>\n"
+    anchor = "} ppu_context;\n"
+    declaration = anchor + (
         "#ifdef __cplusplus\n"
-        'extern "C" void ar_m772_note_function(uint32_t guest_pc);\n'
+        'extern "C" void ar_m772_note_function(uint32_t guest_pc, ppu_context* ctx);\n'
+        'extern "C" void ar_m772_note_hotloop(uint32_t guest_pc, ppu_context* ctx);\n'
         "#endif\n"
     )
     if text.count(anchor) != 1:
-        raise SystemExit("M7.72 cannot place the native AOT entry telemetry declaration")
+        raise SystemExit("M7.75 cannot place the native AOT context telemetry declaration")
     header.write_text(text.replace(anchor, declaration, 1))
 
     count = 0
@@ -46,11 +46,30 @@ def instrument_aot_entries(source):
             nonlocal count
             count += 1
             pc = match.group(1).upper()
-            return match.group(0) + f"\n    ar_m772_note_function(0x{pc}u);"
+            return match.group(0) + f"\n    ar_m772_note_function(0x{pc}u, ctx);"
 
         path.write_text(PPU_ENTRY.sub(add_hook, text))
     if count != 29849:
-        raise SystemExit(f"M7.72 native AOT telemetry count mismatch: {count} != 29849")
+        raise SystemExit(f"M7.75 native AOT telemetry count mismatch: {count} != 29849")
+
+    # The M7.74 device capture remained inside this title's tree-search loop.
+    # Record its changing pointers without changing guest registers or control flow.
+    loop_unit = source / "ppu" / "ppu_recomp_058.cpp"
+    loop_text = loop_unit.read_text()
+    start = loop_text.find("void func_003C4F98(ppu_context* ctx) {")
+    end = loop_text.find("\nvoid func_", start + 1)
+    if start < 0 or end < 0:
+        raise SystemExit("M7.75 could not locate the observed 0x003C4F98 guest loop")
+    loop_body = loop_text[start:end]
+    loop_anchor = "loc_003C4FA4:\n"
+    if loop_body.count(loop_anchor) != 1:
+        raise SystemExit("M7.75 observed guest loop header changed")
+    loop_body = loop_body.replace(
+        loop_anchor,
+        loop_anchor + "        ar_m772_note_hotloop(0x003C4FA4u, ctx);\n",
+        1,
+    )
+    loop_unit.write_text(loop_text[:start] + loop_body + loop_text[end:])
     return count
 
 
@@ -116,6 +135,7 @@ def main():
         "ppu_translation_units_including_table": len(ppu),
         "ppu_function_table_entries": 29849,
         "native_aot_function_entry_hooks": instrumented,
+        "native_observed_hotloop_hooks": 1,
         "frontier_0052a740_present": True,
         "frontier_callee_0052e3f4_present": True,
         "spu_translation_units": len(spu),

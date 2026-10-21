@@ -36,6 +36,21 @@ static uint32_t m772_guest_vm_size;
 static uint64_t m772_dispatch_count;
 static uint64_t m772_entry_count;
 static uint32_t m772_last_guest_pc;
+static uint64_t m772_last_guest_lr;
+static uint64_t m772_last_guest_sp;
+static uint64_t m772_last_guest_args[8];
+static uint64_t m772_hle_call_count;
+static uint32_t m772_last_hle_nid;
+static uint32_t m772_last_hle_lr;
+static uint64_t m772_syscall_count;
+static uint32_t m772_last_syscall_number;
+static uint32_t m772_last_syscall_lr;
+static uint64_t m772_hotloop_count;
+static uint32_t m772_last_hotloop_pc;
+static uint64_t m772_last_hotloop_regs[5]; /* r3, r4, r5, r8, r9 */
+static uint64_t m772_unresolved_hle_count;
+static uint32_t m772_last_unresolved_hle_nid;
+static uint32_t m772_last_unresolved_hle_lr;
 /* A PS3Recomp _start is one complete native C function. It must be called
  * like upstream ppu_run(), then its cross-fragment trampolines drained. It is
  * not a PPC basic block that returns a next PC to runtime/ppu_bridge.c. */
@@ -54,6 +69,23 @@ extern "C" void ar_m772_runtime_begin(void)
     __atomic_store_n(&m772_dispatch_count, UINT64_C(0), __ATOMIC_RELAXED);
     __atomic_store_n(&m772_entry_count, UINT64_C(0), __ATOMIC_RELAXED);
     __atomic_store_n(&m772_last_guest_pc, 0u, __ATOMIC_RELAXED);
+    __atomic_store_n(&m772_last_guest_lr, UINT64_C(0), __ATOMIC_RELAXED);
+    __atomic_store_n(&m772_last_guest_sp, UINT64_C(0), __ATOMIC_RELAXED);
+    for (unsigned i = 0; i < 8; ++i)
+        __atomic_store_n(&m772_last_guest_args[i], UINT64_C(0), __ATOMIC_RELAXED);
+    __atomic_store_n(&m772_hle_call_count, UINT64_C(0), __ATOMIC_RELAXED);
+    __atomic_store_n(&m772_last_hle_nid, 0u, __ATOMIC_RELAXED);
+    __atomic_store_n(&m772_last_hle_lr, 0u, __ATOMIC_RELAXED);
+    __atomic_store_n(&m772_syscall_count, UINT64_C(0), __ATOMIC_RELAXED);
+    __atomic_store_n(&m772_last_syscall_number, 0u, __ATOMIC_RELAXED);
+    __atomic_store_n(&m772_last_syscall_lr, 0u, __ATOMIC_RELAXED);
+    __atomic_store_n(&m772_hotloop_count, UINT64_C(0), __ATOMIC_RELAXED);
+    __atomic_store_n(&m772_last_hotloop_pc, 0u, __ATOMIC_RELAXED);
+    for (unsigned i = 0; i < 5; ++i)
+        __atomic_store_n(&m772_last_hotloop_regs[i], UINT64_C(0), __ATOMIC_RELAXED);
+    __atomic_store_n(&m772_unresolved_hle_count, UINT64_C(0), __ATOMIC_RELAXED);
+    __atomic_store_n(&m772_last_unresolved_hle_nid, 0u, __ATOMIC_RELAXED);
+    __atomic_store_n(&m772_last_unresolved_hle_lr, 0u, __ATOMIC_RELAXED);
     __atomic_store_n(&m772_entry_state, 0u, __ATOMIC_RELAXED);
     __atomic_store_n(&m772_vfs_root_set, 0u, __ATOMIC_RELEASE);
     ppu_fs_ios_reset_stats();
@@ -164,10 +196,57 @@ extern "C" int ar_m772_dispatch_native(ppu_context* ctx,uint32_t pc)
 
 /* Inserted at the start of every complete PS3Recomp PPU function during
  * staging. This counts actual AOT calls from direct edges and trampolines. */
-extern "C" void ar_m772_note_function(uint32_t pc)
+static void m772_snapshot_context(ppu_context* ctx)
+{
+    if (!ctx) return;
+    __atomic_store_n(&m772_last_guest_lr, ctx->lr, __ATOMIC_RELAXED);
+    __atomic_store_n(&m772_last_guest_sp, ctx->gpr[1], __ATOMIC_RELAXED);
+    for (unsigned i = 0; i < 8; ++i)
+        __atomic_store_n(&m772_last_guest_args[i], ctx->gpr[i + 3], __ATOMIC_RELAXED);
+}
+
+extern "C" void ar_m772_note_function(uint32_t pc, ppu_context* ctx)
 {
     __atomic_add_fetch(&m772_dispatch_count, UINT64_C(1), __ATOMIC_RELAXED);
     __atomic_store_n(&m772_last_guest_pc, pc, __ATOMIC_RELAXED);
+    m772_snapshot_context(ctx);
+}
+
+extern "C" void ar_m772_note_hle(uint32_t nid, uint32_t guest_lr,
+                                   ppu_context* ctx)
+{
+    __atomic_add_fetch(&m772_hle_call_count, UINT64_C(1), __ATOMIC_RELAXED);
+    __atomic_store_n(&m772_last_hle_nid, nid, __ATOMIC_RELAXED);
+    __atomic_store_n(&m772_last_hle_lr, guest_lr, __ATOMIC_RELAXED);
+    m772_snapshot_context(ctx);
+}
+
+extern "C" void ar_m772_note_syscall(uint32_t number, uint32_t guest_lr,
+                                        ppu_context* ctx)
+{
+    __atomic_add_fetch(&m772_syscall_count, UINT64_C(1), __ATOMIC_RELAXED);
+    __atomic_store_n(&m772_last_syscall_number, number, __ATOMIC_RELAXED);
+    __atomic_store_n(&m772_last_syscall_lr, guest_lr, __ATOMIC_RELAXED);
+    m772_snapshot_context(ctx);
+}
+
+extern "C" void ar_m772_note_unresolved_hle(uint32_t nid, uint32_t guest_lr,
+                                               ppu_context* ctx)
+{
+    __atomic_add_fetch(&m772_unresolved_hle_count, UINT64_C(1), __ATOMIC_RELAXED);
+    __atomic_store_n(&m772_last_unresolved_hle_nid, nid, __ATOMIC_RELAXED);
+    __atomic_store_n(&m772_last_unresolved_hle_lr, guest_lr, __ATOMIC_RELAXED);
+    m772_snapshot_context(ctx);
+}
+
+extern "C" void ar_m772_note_hotloop(uint32_t guest_pc, ppu_context* ctx)
+{
+    if (!ctx) return;
+    __atomic_add_fetch(&m772_hotloop_count, UINT64_C(1), __ATOMIC_RELAXED);
+    __atomic_store_n(&m772_last_hotloop_pc, guest_pc, __ATOMIC_RELAXED);
+    const unsigned indices[5] = {3, 4, 5, 8, 9};
+    for (unsigned i = 0; i < 5; ++i)
+        __atomic_store_n(&m772_last_hotloop_regs[i], ctx->gpr[indices[i]], __ATOMIC_RELAXED);
 }
 
 extern "C" int ar_m772_run_entry(ppu_context* ctx,uint32_t pc)
@@ -235,7 +314,7 @@ static uint32_t m772_has_ppu(uint32_t pc)
            function_table[lo].func != nullptr;
 }
 
-extern "C" void ar_m772_runtime_attest(uint64_t out[14])
+extern "C" void ar_m772_runtime_attest(uint64_t out[40])
 {
     if (!out) return;
     const uint32_t ready = __atomic_load_n(&m772_initialized, __ATOMIC_ACQUIRE);
@@ -252,4 +331,21 @@ extern "C" void ar_m772_runtime_attest(uint64_t out[14])
     out[8] = __atomic_load_n(&m772_vfs_root_set, __ATOMIC_ACQUIRE);
     ppu_fs_ios_stats(out + 9);
     out[13] = __atomic_load_n(&m772_entry_count, __ATOMIC_RELAXED);
+    out[14] = __atomic_load_n(&m772_last_guest_lr, __ATOMIC_RELAXED);
+    out[15] = __atomic_load_n(&m772_last_guest_sp, __ATOMIC_RELAXED);
+    for (unsigned i = 0; i < 8; ++i)
+        out[16 + i] = __atomic_load_n(&m772_last_guest_args[i], __ATOMIC_RELAXED);
+    out[24] = __atomic_load_n(&m772_last_hle_nid, __ATOMIC_RELAXED);
+    out[25] = __atomic_load_n(&m772_last_hle_lr, __ATOMIC_RELAXED);
+    out[26] = __atomic_load_n(&m772_hle_call_count, __ATOMIC_RELAXED);
+    out[27] = __atomic_load_n(&m772_last_syscall_number, __ATOMIC_RELAXED);
+    out[28] = __atomic_load_n(&m772_last_syscall_lr, __ATOMIC_RELAXED);
+    out[29] = __atomic_load_n(&m772_syscall_count, __ATOMIC_RELAXED);
+    out[30] = __atomic_load_n(&m772_hotloop_count, __ATOMIC_RELAXED);
+    out[31] = __atomic_load_n(&m772_last_hotloop_pc, __ATOMIC_RELAXED);
+    for (unsigned i = 0; i < 5; ++i)
+        out[32 + i] = __atomic_load_n(&m772_last_hotloop_regs[i], __ATOMIC_RELAXED);
+    out[37] = __atomic_load_n(&m772_unresolved_hle_count, __ATOMIC_RELAXED);
+    out[38] = __atomic_load_n(&m772_last_unresolved_hle_nid, __ATOMIC_RELAXED);
+    out[39] = __atomic_load_n(&m772_last_unresolved_hle_lr, __ATOMIC_RELAXED);
 }

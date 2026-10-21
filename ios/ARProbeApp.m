@@ -1,16 +1,18 @@
 /* AscensionRecomp iPhone Metal diagnostic host. No commercial game code. */
 #import <UIKit/UIKit.h>
 #import <Metal/Metal.h>
+#import <QuartzCore/QuartzCore.h>
 #import "ARMetalView.h"
 #import "ARGameFolderStore.h"
 #import <UniformTypeIdentifiers/UniformTypeIdentifiers.h>
 #import <CommonCrypto/CommonDigest.h>
+#include <unistd.h>
 #include "../ios-probe/ARBuildProvenance.h"
 #include "../runtime/ppu_bridge.h"
 #include "../runtime/ppu_guest_fs.h"
 #include "../runtime/ppu_m756_stop_evidence.h"
 #include "../runtime/ppu_m767_live_import.h"
-extern void ar_m772_runtime_attest(uint64_t out[14]);
+extern void ar_m772_runtime_attest(uint64_t out[40]);
 extern void ar_m772_runtime_begin(void);
 extern uint32_t ar_m772_entry_state(void);
 extern void ar_m756_last_stop_evidence(ar_m756_stop_evidence*);
@@ -56,6 +58,16 @@ extern int ar_ppu_bootstrap_fortyeight_trace_m674(const unsigned char*,size_t,
 extern int rsx_metal_backend_init(unsigned int width, unsigned int height, const char* title);
 extern void rsx_metal_backend_shutdown(void);
 extern void rsx_metal_backend_present(void);
+extern void rsx_metal_backend_note_guest_frame(void);
+extern unsigned int rsx_metal_backend_guest_draws(void);
+extern void cellGcmTickVBlank(void);
+extern void cellGcmTickFlip(void);
+extern void cellGcm_rsx_process_fifo(void);
+extern int cellGcm_take_flip_pending_synced(void);
+extern void cellPad_set_host_state(uint16_t buttons, uint8_t analog_lx,
+                                   uint8_t analog_ly, uint8_t analog_rx,
+                                   uint8_t analog_ry, uint8_t trigger_l2,
+                                   uint8_t trigger_r2);
 extern int ar_probe_vm_init(void);
 extern int ar_probe_guest_shader_compile(char *details, size_t cap);
 extern int ar_probe_m51_guest_textured_quad(unsigned swizzled, unsigned int pixels[4], unsigned *encoded, unsigned *guest_draws, unsigned int shader_state[4]);
@@ -94,6 +106,29 @@ extern int ar_probe_rsx_texture_cache_mutation(unsigned swizzled,unsigned int ou
 static NSString *ARCurrentRelease(void){
  NSString *v=[[NSBundle mainBundle] objectForInfoDictionaryKey:@"CFBundleShortVersionString"];
  return v.length?[@"M" stringByAppendingString:v]:@"M-INDEFINIDA";
+}
+/* The iOS host must drive the same guest FIFO, vblank and flip loop as the
+ * PS3Recomp desktop host. These counters are only incremented by that loop. */
+static volatile uint32_t ARNativeRSXPumpActive;
+static volatile uint32_t ARNativeRSXBackendReady;
+static volatile uint64_t ARNativeRSXVBlanks;
+static volatile uint64_t ARNativeRSXFIFODrains;
+static volatile uint64_t ARNativeRSXPresentedFrames;
+static volatile uint64_t ARNativeRSXLastGuestDraws;
+enum {
+  ARPadSelect=0x0001, ARPadL3=0x0002, ARPadR3=0x0004, ARPadStart=0x0008,
+  ARPadUp=0x0010, ARPadRight=0x0020, ARPadDown=0x0040, ARPadLeft=0x0080,
+  ARPadL2=0x0100, ARPadR2=0x0200, ARPadL1=0x0400, ARPadR1=0x0800,
+  ARPadTriangle=0x1000, ARPadCircle=0x2000, ARPadCross=0x4000, ARPadSquare=0x8000
+};
+static uint64_t ARRSXLoad(const volatile uint64_t *value){
+ return __atomic_load_n(value,__ATOMIC_RELAXED);
+}
+static void ARRSXResetMetrics(void){
+ __atomic_store_n(&ARNativeRSXVBlanks,UINT64_C(0),__ATOMIC_RELAXED);
+ __atomic_store_n(&ARNativeRSXFIFODrains,UINT64_C(0),__ATOMIC_RELAXED);
+ __atomic_store_n(&ARNativeRSXPresentedFrames,UINT64_C(0),__ATOMIC_RELAXED);
+ __atomic_store_n(&ARNativeRSXLastGuestDraws,UINT64_C(0),__ATOMIC_RELAXED);
 }
 static BOOL ARIsValidatedAscensionELF(NSData *data){
  if(data.length!=8717136u)return NO;
@@ -142,19 +177,28 @@ static BOOL ARGameManifestHasTitleUsrdir(NSDictionary *manifest){
 @property(nonatomic,strong) UITextView *ppuLiveReportView;
 @property(nonatomic,strong) UIButton *nativeLaunchButton;
 @property(nonatomic,strong) UILabel *gameInstallLabel;
+@property(nonatomic,strong) UILabel *settingsGameInstallLabel;
 @property(nonatomic,strong) UILabel *elfStatusLabel;
+@property(nonatomic,strong) UILabel *settingsElfStatusLabel;
 @property(nonatomic,strong) UILabel *bootMetricsLabel;
 @property(nonatomic,strong) UIImageView *gameCoverView;
 @property(nonatomic,strong) UIButton *graphicsDrawButton;
 @property(nonatomic,strong) UIButton *graphicsCacheButton;
 @property(nonatomic,strong) NSTimer *nativeRunRefreshTimer;
 @property(nonatomic,strong) NSThread *nativeRunThread;
+@property(nonatomic,strong) NSThread *nativeRSXPumpThread;
+@property(nonatomic,strong) UISegmentedControl *launcherTabs;
+@property(nonatomic,strong) UIView *nativeGameHUD;
+@property(nonatomic,strong) UILabel *nativeGameHUDLabel;
+@property(nonatomic,strong) UIView *nativeGameControls;
 @property(nonatomic,strong) NSData *selectedElfData;
 @property(nonatomic,copy) NSString *selectedElfPath;
 @property(nonatomic,assign) CFAbsoluteTime nativeRunStartedAt;
 @property(nonatomic,assign) BOOL ready;
 @property(nonatomic,assign) BOOL shaderBusy;
 @property(nonatomic,assign) BOOL graphicsReady;
+@property(nonatomic,assign) BOOL gameDisplayActive;
+@property(nonatomic,assign) uint16_t nativePadButtons;
 @property(nonatomic,assign) BOOL hasGameInstallation;
 @property(nonatomic,assign) NSUInteger m51Attempts;
 @property(nonatomic,assign) NSUInteger m52Attempts;
@@ -173,12 +217,42 @@ static BOOL ARGameManifestHasTitleUsrdir(NSDictionary *manifest){
 - (BOOL)buildLauncherWithApplication:(UIApplication*)app options:(NSDictionary*)options;
 - (NSData*)gameCoverDataFromManifest:(NSDictionary*)manifest;
 - (void)startNativeGame:(UIButton*)sender;
+- (void)runNativeRSXPump;
+- (void)showNativeGameFrame;
+- (void)showLauncherAfterNativeRun;
+- (void)openLauncherSettings:(UIButton*)sender;
+- (UIButton*)nativePadButton:(NSString*)title bit:(uint16_t)bit;
+- (void)nativePadDown:(UIButton*)sender;
+- (void)nativePadUp:(UIButton*)sender;
 - (void)refreshNativeLaunchAvailability;
 - (void)acceptELFAtURL:(NSURL*)url;
 - (void)initializeGraphicsLab:(UIButton*)sender;
 @end
 
 @implementation ARProbeDelegate
+- (UIInterfaceOrientationMask)application:(UIApplication *)application
+ supportedInterfaceOrientationsForWindow:(UIWindow *)window {
+  (void)application; (void)window;
+  return self.gameDisplayActive ? UIInterfaceOrientationMaskLandscape :
+                                 UIInterfaceOrientationMaskPortrait;
+}
+- (void)requestGameOrientation:(UIInterfaceOrientationMask)orientations {
+  [self.window.rootViewController setNeedsUpdateOfSupportedInterfaceOrientations];
+  if (@available(iOS 16.0, *)) {
+    UIWindowScene *scene=self.window.windowScene;
+    if (!scene) return;
+    UIWindowSceneGeometryPreferencesIOS *preferences=
+      [[UIWindowSceneGeometryPreferencesIOS alloc] initWithInterfaceOrientations:orientations];
+    [scene requestGeometryUpdateWithPreferences:preferences errorHandler:^(NSError *error) {
+      dispatch_async(dispatch_get_main_queue(), ^{
+        NSString *message=[NSString stringWithFormat:@"Orientação não aplicada: %@",
+                           error.localizedDescription ?: @"iOS recusou a rotação"];
+        self.status.text=message;
+        if(self.gameDisplayActive)self.nativeGameHUDLabel.text=message;
+      });
+    }];
+  }
+}
 - (BOOL)application:(UIApplication*)app didFinishLaunchingWithOptions:(NSDictionary*)options {
     return [self buildLauncherWithApplication:app options:options];
 #if 0 /* Replaced by the game-first launcher below; legacy test dashboard retired. */
@@ -781,8 +855,9 @@ static BOOL ARGameManifestHasTitleUsrdir(NSDictionary *manifest){
     [metal.bottomAnchor constraintEqualToAnchor:controller.view.bottomAnchor]
   ]];
 
-  UISegmentedControl *tabs=[[UISegmentedControl alloc] initWithItems:@[@"JOGO",@"RSX / METAL"]];
+  UISegmentedControl *tabs=[[UISegmentedControl alloc] initWithItems:@[@"JOGAR",@"CONFIGURAÇÕES"]];
   tabs.translatesAutoresizingMaskIntoConstraints=NO; tabs.selectedSegmentIndex=0;
+  self.launcherTabs=tabs;
   tabs.backgroundColor=panel;
   tabs.selectedSegmentTintColor=[UIColor colorWithRed:0.48 green:0.16 blue:0.11 alpha:1];
   [tabs setTitleTextAttributes:@{NSForegroundColorAttributeName:UIColor.whiteColor,
@@ -890,9 +965,7 @@ static BOOL ARGameManifestHasTitleUsrdir(NSDictionary *manifest){
   ]];
   [main addArrangedSubview:library];
 
-  [main addArrangedSubview:[self arLauncherButton:@"ESCOLHER PASTA NPUA80918" background:[UIColor colorWithWhite:0.18 alpha:1] action:@selector(importGameFolder:)]];
-  [main addArrangedSubview:[self arLauncherButton:@"USAR PASTA EM DOCUMENTOS DO APP" background:[UIColor colorWithWhite:0.15 alpha:1] action:@selector(importGameFolderFromDocuments:)]];
-  [main addArrangedSubview:[self arLauncherButton:@"IMPORTAR GOWA.ELF" background:[UIColor colorWithWhite:0.18 alpha:1] action:@selector(importM59ELF:)]];
+  [main addArrangedSubview:[self arLauncherButton:@"CONFIGURAR JOGO E ARQUIVOS" background:[UIColor colorWithWhite:0.17 alpha:1] action:@selector(openLauncherSettings:)]];
   self.nativeLaunchButton=[self arLauncherButton:@"INICIAR JOGO" background:[UIColor colorWithRed:0.47 green:0.12 blue:0.10 alpha:1] action:@selector(startNativeGame:)];
   [self.nativeLaunchButton.heightAnchor constraintEqualToConstant:56].active=YES;
   self.nativeLaunchButton.enabled=NO; self.nativeLaunchButton.alpha=0.52;
@@ -904,7 +977,7 @@ static BOOL ARGameManifestHasTitleUsrdir(NSDictionary *manifest){
   activityRows.axis=UILayoutConstraintAxisVertical; activityRows.spacing=8;
   [activityRows addArrangedSubview:[self arLauncherLabel:@"SESSÃO / ATIVIDADE" size:10 weight:UIFontWeightBold color:gold lines:1]];
   self.status=[self arLauncherLabel:@"Aguardando instalação e GOWA.ELF" size:12 weight:UIFontWeightMedium color:[UIColor colorWithWhite:0.86 alpha:1] lines:3];
-  self.bootMetricsLabel=[self arLauncherLabel:@"PPU AOT · ainda não iniciado\ncellFs · sem chamadas guest medidas" size:10 weight:UIFontWeightRegular color:muted lines:5];
+  self.bootMetricsLabel=[self arLauncherLabel:@"PPU AOT · ainda não iniciado\ncellFs · sem chamadas guest medidas" size:10 weight:UIFontWeightRegular color:muted lines:7];
   self.bootMetricsLabel.font=[UIFont monospacedSystemFontOfSize:10 weight:UIFontWeightRegular];
   [activityRows addArrangedSubview:self.status]; [activityRows addArrangedSubview:self.bootMetricsLabel];
   [activity addSubview:activityRows];
@@ -919,26 +992,110 @@ static BOOL ARGameManifestHasTitleUsrdir(NSDictionary *manifest){
   [main addArrangedSubview:self.ppuDiagnosticsButton];
   self.ppuReportButton=self.ppuDiagnosticsButton; self.ppuAdvancedButton=self.ppuDiagnosticsButton;
 
-  UIStackView *lab=makeContent(graphics);
-  UIView *labCard=[UIView new]; labCard.backgroundColor=panel; labCard.layer.cornerRadius=15;
-  UIStackView *labCopy=[UIStackView new]; labCopy.translatesAutoresizingMaskIntoConstraints=NO;
-  labCopy.axis=UILayoutConstraintAxisVertical; labCopy.spacing=8;
-  [labCopy addArrangedSubview:[self arLauncherLabel:@"LABORATÓRIO GRÁFICO" size:12 weight:UIFontWeightBold color:gold lines:1]];
-  [labCopy addArrangedSubview:[self arLauncherLabel:@"Testes sintéticos RSX → Metal. Esta tela não renderiza o jogo e não representa um quadro de Ascension." size:13 weight:UIFontWeightMedium color:[UIColor colorWithWhite:0.83 alpha:1] lines:0]];
-  [labCard addSubview:labCopy];
+  UIStackView *settings=makeContent(graphics);
+  [settings addArrangedSubview:[self arLauncherLabel:@"CONFIGURAÇÃO DO JOGO" size:18 weight:UIFontWeightBold color:UIColor.whiteColor lines:1]];
+  [settings addArrangedSubview:[self arLauncherLabel:@"Selecione a instalação NPUA80918 e o ELF recompilado. As referências são mantidas pelo app em Arquivos/Documentos." size:13 weight:UIFontWeightMedium color:muted lines:0]];
+  UIView *installCard=[UIView new]; installCard.translatesAutoresizingMaskIntoConstraints=NO;
+  installCard.backgroundColor=panel; installCard.layer.cornerRadius=15;
+  UIStackView *installRows=[UIStackView new]; installRows.translatesAutoresizingMaskIntoConstraints=NO;
+  installRows.axis=UILayoutConstraintAxisVertical; installRows.spacing=8;
+  [installRows addArrangedSubview:[self arLauncherLabel:@"PASTA DO JOGO" size:10 weight:UIFontWeightBold color:gold lines:1]];
+  self.settingsGameInstallLabel=[self arLauncherLabel:self.gameInstallLabel.text size:13 weight:UIFontWeightSemibold color:UIColor.whiteColor lines:2];
+  [installRows addArrangedSubview:self.settingsGameInstallLabel];
+  UIView *installSeparator=[UIView new]; installSeparator.backgroundColor=[UIColor colorWithWhite:0.22 alpha:1];
+  [installSeparator.heightAnchor constraintEqualToConstant:1].active=YES;
+  [installRows addArrangedSubview:installSeparator];
+  [installRows addArrangedSubview:[self arLauncherLabel:@"EXECUTÁVEL" size:10 weight:UIFontWeightBold color:gold lines:1]];
+  self.settingsElfStatusLabel=[self arLauncherLabel:self.elfStatusLabel.text size:13 weight:UIFontWeightSemibold color:UIColor.whiteColor lines:2];
+  [installRows addArrangedSubview:self.settingsElfStatusLabel];
+  [installCard addSubview:installRows];
   [NSLayoutConstraint activateConstraints:@[
-    [labCopy.leadingAnchor constraintEqualToAnchor:labCard.leadingAnchor constant:14],
-    [labCopy.trailingAnchor constraintEqualToAnchor:labCard.trailingAnchor constant:-14],
-    [labCopy.topAnchor constraintEqualToAnchor:labCard.topAnchor constant:14],
-    [labCopy.bottomAnchor constraintEqualToAnchor:labCard.bottomAnchor constant:-14]
+    [installRows.leadingAnchor constraintEqualToAnchor:installCard.leadingAnchor constant:14],
+    [installRows.trailingAnchor constraintEqualToAnchor:installCard.trailingAnchor constant:-14],
+    [installRows.topAnchor constraintEqualToAnchor:installCard.topAnchor constant:13],
+    [installRows.bottomAnchor constraintEqualToAnchor:installCard.bottomAnchor constant:-13]
   ]];
-  [lab addArrangedSubview:labCard];
-  [lab addArrangedSubview:[self arLauncherButton:@"INICIALIZAR LABORATÓRIO RSX" background:[UIColor colorWithWhite:0.18 alpha:1] action:@selector(initializeGraphicsLab:)]];
-  self.graphicsDrawButton=[self arLauncherButton:@"Desenho de textura sintética" background:[UIColor colorWithWhite:0.12 alpha:1] action:@selector(testM51GuestDraw:)];
-  self.graphicsCacheButton=[self arLauncherButton:@"Atualização de cache RSX" background:[UIColor colorWithWhite:0.12 alpha:1] action:@selector(testRSXCache:)];
-  self.graphicsDrawButton.enabled=NO; self.graphicsCacheButton.enabled=NO;
-  [lab addArrangedSubview:self.graphicsDrawButton]; [lab addArrangedSubview:self.graphicsCacheButton];
-  [lab addArrangedSubview:[self arLauncherButton:@"RELATÓRIO TÉCNICO" background:[UIColor colorWithWhite:0.12 alpha:1] action:@selector(openUnifiedPpuMenu:)]];
+  [settings addArrangedSubview:installCard];
+  [settings addArrangedSubview:[self arLauncherButton:@"SELECIONAR PASTA NPUA80918" background:[UIColor colorWithWhite:0.18 alpha:1] action:@selector(importGameFolder:)]];
+  [settings addArrangedSubview:[self arLauncherButton:@"USAR PASTA EM DOCUMENTOS" background:[UIColor colorWithWhite:0.15 alpha:1] action:@selector(importGameFolderFromDocuments:)]];
+  [settings addArrangedSubview:[self arLauncherButton:@"IMPORTAR GOWA.ELF" background:[UIColor colorWithWhite:0.18 alpha:1] action:@selector(importM59ELF:)]];
+  [settings addArrangedSubview:[self arLauncherButton:@"RELATÓRIO DA EXECUÇÃO" background:[UIColor colorWithWhite:0.12 alpha:1] action:@selector(openUnifiedPpuMenu:)]];
+  UIView *diagnosticCard=[UIView new]; diagnosticCard.translatesAutoresizingMaskIntoConstraints=NO;
+  diagnosticCard.backgroundColor=[UIColor colorWithWhite:0.075 alpha:1]; diagnosticCard.layer.cornerRadius=13;
+  UIStackView *diagnosticRows=[UIStackView new]; diagnosticRows.translatesAutoresizingMaskIntoConstraints=NO;
+  diagnosticRows.axis=UILayoutConstraintAxisVertical; diagnosticRows.spacing=7;
+  [diagnosticRows addArrangedSubview:[self arLauncherLabel:@"DIAGNÓSTICO DE DESENVOLVIMENTO" size:10 weight:UIFontWeightBold color:gold lines:1]];
+  [diagnosticRows addArrangedSubview:[self arLauncherLabel:@"Bancada RSX sintética para validar o backend Metal. Não inicia o jogo nem conta como frame de Ascension." size:12 weight:UIFontWeightMedium color:muted lines:0]];
+  [diagnosticCard addSubview:diagnosticRows];
+  [NSLayoutConstraint activateConstraints:@[
+    [diagnosticRows.leadingAnchor constraintEqualToAnchor:diagnosticCard.leadingAnchor constant:13],
+    [diagnosticRows.trailingAnchor constraintEqualToAnchor:diagnosticCard.trailingAnchor constant:-13],
+    [diagnosticRows.topAnchor constraintEqualToAnchor:diagnosticCard.topAnchor constant:12],
+    [diagnosticRows.bottomAnchor constraintEqualToAnchor:diagnosticCard.bottomAnchor constant:-12]
+  ]];
+  [settings addArrangedSubview:diagnosticCard];
+  [settings addArrangedSubview:[self arLauncherButton:@"ABRIR BANCADA SINTÉTICA" background:[UIColor colorWithWhite:0.12 alpha:1] action:@selector(initializeGraphicsLab:)]];
+
+  UIView *gameHUD=[UIView new]; gameHUD.translatesAutoresizingMaskIntoConstraints=NO;
+  gameHUD.hidden=YES; gameHUD.backgroundColor=[panel colorWithAlphaComponent:0.92];
+  gameHUD.layer.cornerRadius=13; gameHUD.layer.borderWidth=1;
+  gameHUD.layer.borderColor=[gold colorWithAlphaComponent:0.45].CGColor;
+  UIStackView *hudRow=[UIStackView new]; hudRow.translatesAutoresizingMaskIntoConstraints=NO;
+  hudRow.axis=UILayoutConstraintAxisHorizontal; hudRow.alignment=UIStackViewAlignmentCenter; hudRow.spacing=10;
+  UIStackView *hudCopy=[UIStackView new]; hudCopy.axis=UILayoutConstraintAxisVertical; hudCopy.spacing=3;
+  [hudCopy addArrangedSubview:[self arLauncherLabel:@"ASCENSION · RSX NATIVO" size:10 weight:UIFontWeightBold color:gold lines:1]];
+  self.nativeGameHUDLabel=[self arLauncherLabel:@"Aguardando métricas do guest" size:10 weight:UIFontWeightMedium color:UIColor.whiteColor lines:2];
+  self.nativeGameHUDLabel.font=[UIFont monospacedSystemFontOfSize:10 weight:UIFontWeightMedium];
+  [hudCopy addArrangedSubview:self.nativeGameHUDLabel];
+  [hudRow addArrangedSubview:hudCopy];
+  UIButton *hudReport=[self arLauncherButton:@"RELATÓRIO" background:[UIColor colorWithRed:0.43 green:0.13 blue:0.10 alpha:1] action:@selector(openUnifiedPpuMenu:)];
+  hudReport.titleLabel.font=[UIFont systemFontOfSize:10 weight:UIFontWeightBold];
+  [hudReport.heightAnchor constraintEqualToConstant:38].active=YES;
+  [hudRow addArrangedSubview:hudReport];
+  [gameHUD addSubview:hudRow]; [controller.view addSubview:gameHUD]; self.nativeGameHUD=gameHUD;
+  [NSLayoutConstraint activateConstraints:@[
+    [gameHUD.topAnchor constraintEqualToAnchor:controller.view.safeAreaLayoutGuide.topAnchor constant:8],
+    [gameHUD.leadingAnchor constraintEqualToAnchor:controller.view.leadingAnchor constant:12],
+    [gameHUD.trailingAnchor constraintEqualToAnchor:controller.view.trailingAnchor constant:-12],
+    [hudRow.leadingAnchor constraintEqualToAnchor:gameHUD.leadingAnchor constant:10],
+    [hudRow.trailingAnchor constraintEqualToAnchor:gameHUD.trailingAnchor constant:-10],
+    [hudRow.topAnchor constraintEqualToAnchor:gameHUD.topAnchor constant:8],
+    [hudRow.bottomAnchor constraintEqualToAnchor:gameHUD.bottomAnchor constant:-8]
+  ]];
+  UIView *controls=[UIView new]; controls.translatesAutoresizingMaskIntoConstraints=NO;
+  controls.hidden=YES; controls.multipleTouchEnabled=YES; self.nativeGameControls=controls;
+  [controller.view addSubview:controls];
+  [NSLayoutConstraint activateConstraints:@[
+    [controls.leadingAnchor constraintEqualToAnchor:controller.view.leadingAnchor constant:8],
+    [controls.trailingAnchor constraintEqualToAnchor:controller.view.trailingAnchor constant:-8],
+    [controls.bottomAnchor constraintEqualToAnchor:controller.view.safeAreaLayoutGuide.bottomAnchor constant:-8],
+    [controls.heightAnchor constraintEqualToConstant:132]
+  ]];
+  void (^placePadButton)(NSString*,uint16_t,NSLayoutXAxisAnchor*,CGFloat,NSLayoutYAxisAnchor*,CGFloat,CGFloat)=
+    ^(NSString *title,uint16_t bit,NSLayoutXAxisAnchor *x,CGFloat dx,NSLayoutYAxisAnchor *y,CGFloat dy,CGFloat size){
+      UIButton *button=[self nativePadButton:title bit:bit];
+      [controls addSubview:button];
+      [NSLayoutConstraint activateConstraints:@[
+        [button.centerXAnchor constraintEqualToAnchor:x constant:dx],
+        [button.centerYAnchor constraintEqualToAnchor:y constant:dy],
+        [button.widthAnchor constraintEqualToConstant:size],
+        [button.heightAnchor constraintEqualToConstant:size]
+      ]];
+    };
+  placePadButton(@"▲",ARPadUp,controls.leadingAnchor,60,controls.topAnchor,22,44);
+  placePadButton(@"◀",ARPadLeft,controls.leadingAnchor,16,controls.topAnchor,66,44);
+  placePadButton(@"▼",ARPadDown,controls.leadingAnchor,60,controls.topAnchor,66,44);
+  placePadButton(@"▶",ARPadRight,controls.leadingAnchor,104,controls.topAnchor,66,44);
+  placePadButton(@"L1",ARPadL1,controls.leadingAnchor,22,controls.bottomAnchor,-22,40);
+  placePadButton(@"L2",ARPadL2,controls.leadingAnchor,68,controls.bottomAnchor,-22,40);
+  placePadButton(@"△",ARPadTriangle,controls.trailingAnchor,-60,controls.topAnchor,22,44);
+  placePadButton(@"□",ARPadSquare,controls.trailingAnchor,-104,controls.topAnchor,66,44);
+  placePadButton(@"✕",ARPadCross,controls.trailingAnchor,-60,controls.topAnchor,66,44);
+  placePadButton(@"○",ARPadCircle,controls.trailingAnchor,-16,controls.topAnchor,66,44);
+  placePadButton(@"R1",ARPadR1,controls.trailingAnchor,-22,controls.bottomAnchor,-22,40);
+  placePadButton(@"R2",ARPadR2,controls.trailingAnchor,-68,controls.bottomAnchor,-22,40);
+  placePadButton(@"SELECT",ARPadSelect,controls.centerXAnchor,-26,controls.bottomAnchor,-22,40);
+  placePadButton(@"START",ARPadStart,controls.centerXAnchor,26,controls.bottomAnchor,-22,40);
 
   [self.window makeKeyAndVisible]; self.ready=YES;
   self.status.text=@"Pronto. Selecione a pasta do jogo e importe o ELF para habilitar Iniciar.";
@@ -994,6 +1151,8 @@ static BOOL ARGameManifestHasTitleUsrdir(NSDictionary *manifest){
 }
 
 - (void)refreshNativeLaunchAvailability {
+  self.settingsGameInstallLabel.text=self.gameInstallLabel.text;
+  self.settingsElfStatusLabel.text=self.elfStatusLabel.text;
   BOOL enabled=self.ready && !self.shaderBusy && self.hasGameInstallation && self.selectedElfData.length>0;
   self.nativeLaunchButton.enabled=enabled; self.nativeLaunchButton.alpha=enabled?1.0:0.52;
   if(self.shaderBusy)[self.nativeLaunchButton setTitle:@"BOOT NATIVO EM EXECUÇÃO" forState:UIControlStateNormal];
@@ -1044,23 +1203,98 @@ static BOOL ARGameManifestHasTitleUsrdir(NSDictionary *manifest){
   });
 }
 - (void)updateNativeRunMetrics {
-  uint64_t m772[14]={0}; ar_m772_runtime_attest(m772);
+  uint64_t m772[40]={0}; ar_m772_runtime_attest(m772);
   uint32_t state=ar_m772_entry_state();
   NSString *phase=state==0?@"PREPARANDO runtime / VFS":
-                  state==1?@"EXECUTANDO função AOT completa":
+                  state==1?@"ENTRY AOT EM EXECUÇÃO":
                   state==2?@"ENTRY RETORNOU":@"FALHA AO VINCULAR ENTRY";
+  const uint64_t vblanks=ARRSXLoad(&ARNativeRSXVBlanks);
+  const uint64_t drains=ARRSXLoad(&ARNativeRSXFIFODrains);
+  const uint64_t frames=ARRSXLoad(&ARNativeRSXPresentedFrames);
+  const uint64_t draws=ARRSXLoad(&ARNativeRSXLastGuestDraws);
   NSTimeInterval elapsed=self.nativeRunStartedAt>0?CFAbsoluteTimeGetCurrent()-self.nativeRunStartedAt:0;
   self.bootMetricsLabel.text=[NSString stringWithFormat:
-    @"%@ · %.0f s\nAOT calls=%llu · entry=%llu · PC=0x%08llX\n"
-     "runtime=%@ · VFS=%@ · SPU=%llu\n"
-     "cellFsOpen=%llu/%llu OK · Read=%llu · bytes=%llu",
+    @"%@ · %.0f s\nAOT=%llu · entry=%llu · PC=0x%08llX\n"
+     "runtime=%@ · VFS=%@ · SPU=%llu · backend Metal=%@\n"
+     "HLE=%llu / NID 0x%08llX · sem serviço=%llu / NID 0x%08llX\n"
+     "LV2=%llu / syscall %llu\n"
+     "FS open=%llu/%llu · read=%llu · bytes=%llu\n"
+     "GCM vblank=%llu · FIFO drains=%llu\nRSX frames=%llu · draws=%llu\n"
+     "Loop 0x%08llX · iterações=%llu",
      phase,elapsed,(unsigned long long)m772[5],(unsigned long long)m772[13],
     (unsigned long long)m772[6],m772[4]?@"READY":@"PREPARANDO",
     m772[8]?@"MONTADO":@"AGUARDANDO",(unsigned long long)m772[3],
+    __atomic_load_n(&ARNativeRSXBackendReady,__ATOMIC_RELAXED)?@"READY":@"OFF",
+    (unsigned long long)m772[26],(unsigned long long)m772[24],
+    (unsigned long long)m772[37],(unsigned long long)m772[38],
+    (unsigned long long)m772[29],(unsigned long long)m772[27],
     (unsigned long long)m772[9],
      (unsigned long long)m772[10],(unsigned long long)m772[11],
-     (unsigned long long)m772[12]];
-  if(state==1)self.status.text=@"PS3Recomp executando a função AOT completa de entrada. Métricas guest ao vivo abaixo; sem percentual estimado.";
+     (unsigned long long)m772[12],(unsigned long long)vblanks,
+     (unsigned long long)drains,(unsigned long long)frames,(unsigned long long)draws,
+     (unsigned long long)m772[31],(unsigned long long)m772[30]];
+  self.nativeGameHUDLabel.text=[NSString stringWithFormat:
+    @"FIFO %@ · %llu drains · %llu vblanks\nFrames guest %llu · draws %llu",
+    __atomic_load_n(&ARNativeRSXBackendReady,__ATOMIC_RELAXED)?@"Metal":@"aguardando backend",
+    (unsigned long long)drains,(unsigned long long)vblanks,
+    (unsigned long long)frames,(unsigned long long)draws];
+  if(state==1)self.status.text=[NSString stringWithFormat:
+    @"PS3Recomp em execução · AOT %@ · HLE %@ · LV2 %@ · GCM FIFO %@ · frames guest %@.",
+    @(m772[5]),@(m772[26]),@(m772[29]),@(drains),@(frames)];
+  if(state==1 && frames>0 && !self.gameDisplayActive)[self showNativeGameFrame];
+}
+- (void)runNativeRSXPump {
+  CFTimeInterval nextVBlank=CACurrentMediaTime();
+  while(__atomic_load_n(&ARNativeRSXPumpActive,__ATOMIC_ACQUIRE)){
+    uint64_t live[40]={0}; ar_m772_runtime_attest(live);
+    if(!live[4] || !__atomic_load_n(&ARNativeRSXBackendReady,__ATOMIC_ACQUIRE)){
+      [NSThread sleepForTimeInterval:0.002];
+      continue;
+    }
+    const CFTimeInterval now=CACurrentMediaTime();
+    if(now>=nextVBlank){
+      cellGcmTickVBlank();
+      cellGcmTickFlip();
+      __atomic_add_fetch(&ARNativeRSXVBlanks,UINT64_C(1),__ATOMIC_RELAXED);
+      nextVBlank+=1.0/60.0;
+      if(now-nextVBlank>0.100)nextVBlank=now+1.0/60.0;
+    }
+    /* Match PS3Recomp's desktop frame clock: advance guest fences by draining
+     * the real GCM FIFO, then present only after its pending flip is complete. */
+    cellGcm_rsx_process_fifo();
+    __atomic_add_fetch(&ARNativeRSXFIFODrains,UINT64_C(1),__ATOMIC_RELAXED);
+    if(cellGcm_take_flip_pending_synced()){
+      rsx_metal_backend_note_guest_frame();
+      rsx_metal_backend_present();
+      __atomic_add_fetch(&ARNativeRSXPresentedFrames,UINT64_C(1),__ATOMIC_RELAXED);
+    }
+    __atomic_store_n(&ARNativeRSXLastGuestDraws,
+                     (uint64_t)rsx_metal_backend_guest_draws(),__ATOMIC_RELAXED);
+    [NSThread sleepForTimeInterval:0.004];
+  }
+}
+- (void)showNativeGameFrame {
+  if(self.gameDisplayActive)return;
+  self.gameDisplayActive=YES;
+  [self requestGameOrientation:UIInterfaceOrientationMaskLandscape];
+  self.launcherTabs.hidden=YES; self.gameList.hidden=YES; self.graphicsList.hidden=YES;
+  self.metalView.hidden=NO; self.nativeGameHUD.hidden=NO; self.nativeGameControls.hidden=NO;
+  UIView *root=self.window.rootViewController.view;
+  [root bringSubviewToFront:self.metalView];
+  [root bringSubviewToFront:self.nativeGameHUD];
+  [root bringSubviewToFront:self.nativeGameControls];
+}
+- (void)showLauncherAfterNativeRun {
+  self.gameDisplayActive=NO;
+  [self requestGameOrientation:UIInterfaceOrientationMaskPortrait];
+  self.nativeGameHUD.hidden=YES;
+  self.nativeGameControls.hidden=YES;
+  self.nativePadButtons=0;
+  cellPad_set_host_state(0,128,128,128,128,0,0);
+  self.launcherTabs.hidden=NO;
+  self.gameList.hidden=(self.launcherTabs.selectedSegmentIndex!=0);
+  self.graphicsList.hidden=(self.launcherTabs.selectedSegmentIndex==0);
+  self.metalView.hidden=!self.graphicsReady;
 }
 - (void)startNativeGame:(UIButton*)sender {
   (void)sender;
@@ -1075,12 +1309,20 @@ static BOOL ARGameManifestHasTitleUsrdir(NSDictionary *manifest){
    * JSON manifest on the UI thread. The guest session revalidates its security
    * scope in the background immediately before runtime initialization. */
   self.shaderBusy=YES;
+  const BOOL labWasReady=self.graphicsReady;
+  const BOOL layerAttached=labWasReady || [self.metalView bindToPS3MetalBackend];
+  self.graphicsReady=NO;
+  self.graphicsDrawButton.enabled=NO; self.graphicsCacheButton.enabled=NO;
+  self.metalView.hidden=YES; self.nativeGameHUD.hidden=YES; self.gameDisplayActive=NO;
+  ARRSXResetMetrics();
+  __atomic_store_n(&ARNativeRSXBackendReady,0u,__ATOMIC_RELEASE);
+  __atomic_store_n(&ARNativeRSXPumpActive,0u,__ATOMIC_RELEASE);
   self.nativeRunStartedAt=CFAbsoluteTimeGetCurrent();
   self.ppuReport=nil; self.m750Run=nil; self.ppuProgress=@"Montando PS3Recomp e VFS guest.";
   ar_m772_runtime_begin();
   [self arSetStatus:@"Preparando VM, PPU/SPU recompilados e acesso guest ao jogo…"];
   [self refreshNativeLaunchAvailability];
-  self.nativeRunRefreshTimer=[NSTimer scheduledTimerWithTimeInterval:0.75
+  self.nativeRunRefreshTimer=[NSTimer scheduledTimerWithTimeInterval:0.25
       target:self selector:@selector(nativeRunRefreshTick:) userInfo:nil repeats:YES];
   [[NSRunLoop mainRunLoop] addTimer:self.nativeRunRefreshTimer forMode:NSRunLoopCommonModes];
   NSData *elf=[self.selectedElfData copy];
@@ -1089,8 +1331,41 @@ static BOOL ARGameManifestHasTitleUsrdir(NSDictionary *manifest){
    * GCD's default worker stack is too small to treat as a safe game stack. */
   NSThread *worker=[[NSThread alloc] initWithBlock:^{
     unsigned int native[16]={0};
-    const int hostRC=ar_m70_native_runtime_probe(elf.bytes,elf.length,0u,native);
-    uint64_t m772[14]={0}; ar_m772_runtime_attest(m772);
+    int backendRC=-1;
+    if(labWasReady){
+      rsx_metal_backend_shutdown();
+      ar_probe_vm_shutdown();
+    }
+    if(layerAttached)
+      backendRC=rsx_metal_backend_init(1280,720,"God of War: Ascension");
+    __atomic_store_n(&ARNativeRSXBackendReady,backendRC==0?1u:0u,__ATOMIC_RELEASE);
+    int hostRC=layerAttached?(backendRC==0?0:-75):-74;
+    if(hostRC==0){
+      ARRSXResetMetrics();
+      __atomic_store_n(&ARNativeRSXPumpActive,1u,__ATOMIC_RELEASE);
+      NSThread *pump=[[NSThread alloc] initWithTarget:self
+          selector:@selector(runNativeRSXPump) object:nil];
+      pump.name=@"Ascension RSX GCM FIFO";
+      pump.qualityOfService=NSQualityOfServiceUserInteractive;
+      pump.stackSize=(NSUInteger)8u*1024u*1024u;
+      self.nativeRSXPumpThread=pump;
+      [pump start];
+      hostRC=ar_m70_native_runtime_probe(elf.bytes,elf.length,0u,native);
+      __atomic_store_n(&ARNativeRSXPumpActive,0u,__ATOMIC_RELEASE);
+      const CFTimeInterval drainDeadline=CACurrentMediaTime()+1.0;
+      while(!pump.finished && CACurrentMediaTime()<drainDeadline)
+        [NSThread sleepForTimeInterval:0.002];
+      if(pump.finished){
+        self.nativeRSXPumpThread=nil;
+        rsx_metal_backend_shutdown();
+        __atomic_store_n(&ARNativeRSXBackendReady,0u,__ATOMIC_RELEASE);
+      }
+    }
+    const uint64_t vblanks=ARRSXLoad(&ARNativeRSXVBlanks);
+    const uint64_t drains=ARRSXLoad(&ARNativeRSXFIFODrains);
+    const uint64_t frames=ARRSXLoad(&ARNativeRSXPresentedFrames);
+    const uint64_t draws=ARRSXLoad(&ARNativeRSXLastGuestDraws);
+    uint64_t m772[40]={0}; ar_m772_runtime_attest(m772);
     uint32_t state=ar_m772_entry_state();
     NSDictionary *result=@{
       @"host_rc":@(hostRC), @"rc":@((int32_t)native[6]), @"entry":@(native[1]),
@@ -1100,6 +1375,22 @@ static BOOL ARGameManifestHasTitleUsrdir(NSDictionary *manifest){
       @"fallback":@0, @"limit":@0, @"stop":@(native[7]), @"opcode":@(native[14]),
       @"last_aot":@(m772[6]), @"fs_open_calls":@(m772[9]), @"fs_opens":@(m772[10]),
       @"fs_read_calls":@(m772[11]), @"fs_reads":@(m772[11]), @"fs_bytes":@(m772[12]),
+      @"last_aot_lr":@(m772[14]), @"last_aot_sp":@(m772[15]),
+      @"last_aot_r3":@(m772[16]), @"last_aot_r4":@(m772[17]),
+      @"last_aot_r5":@(m772[18]), @"last_aot_r6":@(m772[19]),
+      @"last_aot_r7":@(m772[20]), @"last_aot_r8":@(m772[21]),
+      @"last_aot_r9":@(m772[22]), @"last_aot_r10":@(m772[23]),
+      @"last_hle_nid":@(m772[24]), @"last_hle_lr":@(m772[25]),
+      @"hle_calls":@(m772[26]), @"last_syscall":@(m772[27]),
+      @"last_syscall_lr":@(m772[28]), @"syscall_calls":@(m772[29]),
+      @"hotloop_count":@(m772[30]), @"hotloop_pc":@(m772[31]),
+      @"hotloop_r3":@(m772[32]), @"hotloop_r4":@(m772[33]),
+      @"hotloop_r5":@(m772[34]), @"hotloop_r8":@(m772[35]),
+      @"hotloop_r9":@(m772[36]), @"unresolved_hle_count":@(m772[37]),
+      @"unresolved_hle_nid":@(m772[38]), @"unresolved_hle_lr":@(m772[39]),
+      @"rsx_backend_rc":@(backendRC), @"rsx_vblank_ticks":@(vblanks),
+      @"rsx_fifo_drains":@(drains), @"rsx_guest_frames":@(frames),
+      @"rsx_guest_draws":@(draws),
       @"entry_state":@(state), @"spu_images":@(m772[3]),
       @"runtime_initialized":@(m772[4]), @"when":[[NSDate date] description]
     };
@@ -1107,6 +1398,7 @@ static BOOL ARGameManifestHasTitleUsrdir(NSDictionary *manifest){
       self.nativeRunThread=nil;
       [self.nativeRunRefreshTimer invalidate]; self.nativeRunRefreshTimer=nil;
       self.shaderBusy=NO; self.m750Run=result;
+      [self showLauncherAfterNativeRun];
       BOOL returned=[result[@"entry_state"] unsignedIntValue]==2u;
       int runHostRC=[result[@"host_rc"] intValue];
       uint32_t runEntryState=[result[@"entry_state"] unsignedIntValue];
@@ -1115,6 +1407,10 @@ static BOOL ARGameManifestHasTitleUsrdir(NSDictionary *manifest){
         status=@"Acesso à pasta do jogo expirou ou foi revogado. Selecione NPUA80918 novamente no app Arquivos.";
       else if(runHostRC==-73)
         status=@"Falha ao inicializar PS3Recomp/VFS. Abra o relatório para ver host_rc e estado do runtime.";
+      else if(runHostRC==-74)
+        status=@"Não foi possível associar o CAMetalLayer do launcher ao renderer do jogo.";
+      else if(runHostRC==-75)
+        status=[NSString stringWithFormat:@"O renderer Metal do jogo não inicializou (rc=%d). Abra o relatório técnico.",[result[@"rsx_backend_rc"] intValue]];
       else if(runHostRC!=0)
         status=[NSString stringWithFormat:@"Loader/host encerrou · host_rc=%d · guest_rc=%@.",runHostRC,result[@"rc"]];
       else if(runEntryState==3u)
@@ -1165,10 +1461,46 @@ static BOOL ARGameManifestHasTitleUsrdir(NSDictionary *manifest){
     BOOL showGame=sender.selectedSegmentIndex==0;
     self.gameList.hidden=!showGame;
     self.graphicsList.hidden=showGame;
-    self.metalView.hidden=showGame || !self.graphicsReady;
+    self.metalView.hidden=self.gameDisplayActive || showGame || !self.graphicsReady;
     self.status.text=showGame ?
-      @"Launcher Ascension · selecione a instalação e importe o ELF, depois toque Iniciar." :
-      @"Laboratório sintético RSX → Metal · esta tela não contém o renderizador do jogo.";
+      @"God of War: Ascension · PS3Recomp nativo para ARM64." :
+      @"Arquivos do jogo, executável e diagnóstico de desenvolvimento.";
+}
+- (void)openLauncherSettings:(UIButton*)sender {
+  (void)sender;
+  self.launcherTabs.selectedSegmentIndex=1;
+  [self arSwitchTab:self.launcherTabs];
+}
+- (UIButton*)nativePadButton:(NSString*)title bit:(uint16_t)bit {
+  UIButton *button=[UIButton buttonWithType:UIButtonTypeSystem];
+  button.translatesAutoresizingMaskIntoConstraints=NO; button.tag=bit;
+  button.multipleTouchEnabled=YES;
+  [button setTitle:title forState:UIControlStateNormal];
+  [button setTitleColor:UIColor.whiteColor forState:UIControlStateNormal];
+  button.titleLabel.font=[UIFont systemFontOfSize:title.length>2?9:14 weight:UIFontWeightBold];
+  button.titleLabel.adjustsFontSizeToFitWidth=YES;
+  button.backgroundColor=[[UIColor colorWithRed:0.12 green:0.13 blue:0.15 alpha:1] colorWithAlphaComponent:0.70];
+  button.layer.cornerRadius=22; button.layer.borderWidth=1;
+  button.layer.borderColor=[[UIColor colorWithWhite:1 alpha:0.55] CGColor];
+  [button addTarget:self action:@selector(nativePadDown:) forControlEvents:UIControlEventTouchDown];
+  [button addTarget:self action:@selector(nativePadUp:) forControlEvents:
+       UIControlEventTouchUpInside|UIControlEventTouchUpOutside|UIControlEventTouchCancel];
+  return button;
+}
+- (void)publishNativePadState {
+  uint16_t b=self.nativePadButtons;
+  uint8_t lx=(b&ARPadLeft)?0:((b&ARPadRight)?255:128);
+  uint8_t ly=(b&ARPadUp)?0:((b&ARPadDown)?255:128);
+  cellPad_set_host_state(b,lx,ly,128,128,
+      (b&ARPadL2)?255:0,(b&ARPadR2)?255:0);
+}
+- (void)nativePadDown:(UIButton*)sender {
+  self.nativePadButtons|=(uint16_t)sender.tag;
+  [self publishNativePadState];
+}
+- (void)nativePadUp:(UIButton*)sender {
+  self.nativePadButtons&=(uint16_t)~sender.tag;
+  [self publishNativePadState];
 }
 - (void)copyPpuBatch:(UIButton *)sender {
     if(!self.ppuBatchReport.length)return;
@@ -1246,7 +1578,7 @@ static BOOL ARGameManifestHasTitleUsrdir(NSDictionary *manifest){
  * live AOT entries, VFS state and measured guest file operations. It never
  * converts file indexing or synthetic Metal tests into game progress. */
 - (NSString *)arUnifiedPpuText {
-  uint64_t live[14]={0}; ar_m772_runtime_attest(live);
+  uint64_t live[40]={0}; ar_m772_runtime_attest(live);
   uint32_t state=ar_m772_entry_state();
   NSDictionary *run=self.m750Run;
   NSString *phase=state==0?@"PREPARANDO runtime/VFS":
@@ -1266,6 +1598,17 @@ static BOOL ARGameManifestHasTitleUsrdir(NSDictionary *manifest){
   NSString *fsOK=run?[run[@"fs_opens"] description]:[NSString stringWithFormat:@"%llu",(unsigned long long)live[10]];
   NSString *fsRead=run?[run[@"fs_read_calls"] description]:[NSString stringWithFormat:@"%llu",(unsigned long long)live[11]];
   NSString *fsBytes=run?[run[@"fs_bytes"] description]:[NSString stringWithFormat:@"%llu",(unsigned long long)live[12]];
+  NSString *hleCalls=run?[run[@"hle_calls"] description]:[NSString stringWithFormat:@"%llu",(unsigned long long)live[26]];
+  NSString *unresolvedHLE=run?[run[@"unresolved_hle_count"] description]:[NSString stringWithFormat:@"%llu",(unsigned long long)live[37]];
+  NSString *hotloopCount=run?[run[@"hotloop_count"] description]:[NSString stringWithFormat:@"%llu",(unsigned long long)live[30]];
+  uint64_t guestDraws=run?[run[@"rsx_guest_draws"] unsignedLongLongValue]:ARRSXLoad(&ARNativeRSXLastGuestDraws);
+  NSString *rsxBackend=run?([run[@"rsx_backend_rc"] intValue]==0?@"inicializado · sessão encerrada":@"falhou"):
+       (__atomic_load_n(&ARNativeRSXBackendReady,__ATOMIC_RELAXED)?@"Metal inicializado":@"não inicializado");
+  NSString *rsxVblanks=run?[run[@"rsx_vblank_ticks"] description]:[NSString stringWithFormat:@"%llu",(unsigned long long)ARRSXLoad(&ARNativeRSXVBlanks)];
+  NSString *rsxDrains=run?[run[@"rsx_fifo_drains"] description]:[NSString stringWithFormat:@"%llu",(unsigned long long)ARRSXLoad(&ARNativeRSXFIFODrains)];
+  NSString *rsxFrames=run?[run[@"rsx_guest_frames"] description]:[NSString stringWithFormat:@"%llu",(unsigned long long)ARRSXLoad(&ARNativeRSXPresentedFrames)];
+  NSString *rsxDraws=run?[run[@"rsx_guest_draws"] description]:[NSString stringWithFormat:@"%llu",(unsigned long long)ARRSXLoad(&ARNativeRSXLastGuestDraws)];
+  BOOL hasGuestFlip=(run?[run[@"rsx_guest_frames"] unsignedLongLongValue]:ARRSXLoad(&ARNativeRSXPresentedFrames))>0;
   return [NSString stringWithFormat:
     @"ASCENSIONRECOMP · LAUNCHER / EXECUÇÃO NATIVA\n"
      "Branch=%s · Commit=%s · Actions=%s · RunID=%s\n"
@@ -1277,26 +1620,53 @@ static BOOL ARGameManifestHasTitleUsrdir(NSDictionary *manifest){
      "PS3RECOMP / MÉTRICAS AO VIVO\n"
      "Tabela AOT=%llu funções · imagens SPU=%llu · runtime inicializado=%@\n"
      "Chamadas de função AOT=%@ · início(s) da entry=%@ · último PC=0x%08llX\n"
+     "Último evento rastreado: LR=0x%08llX · SP=0x%08llX · r3-r6=%08llX/%08llX/%08llX/%08llX\n"
+     "Argumentos r7-r10=%08llX/%08llX/%08llX/%08llX\n"
+     "HLE=%@ · último NID=0x%08llX · LR=0x%08llX\n"
+     "HLE sem serviço registrado=%@ · último NID=0x%08llX · LR=0x%08llX\n"
+     "LV2 syscalls=%@ · último número=%@ · LR=0x%08llX\n"
+     "Loop observado=%@ · PC=0x%08llX · r3/r4/r5/r8/r9=%08llX/%08llX/%08llX/%08llX/%08llX\n"
      "cellFsOpen guest=%@ · opens OK=%@\n"
      "cellFsRead guest=%@ · bytes lidos pelo guest=%@\n"
+     "RSX backend=%@ · GCM vblank=%@ · FIFO drains=%@\n"
+     "Flips guest apresentados=%@ · draws guest no último frame=%@\n"
      "PSARC específico= NÃO MEDIDO (o runtime ainda não registra caminho por arquivo)\n"
-     "PPC interpretado=0 · chamadas HLE internas= NÃO INSTRUMENTADAS\n\n"
+     "PPC interpretado=0 · entradas HLE e LV2 contadas no runtime\n\n"
      "MARCOS DE JOGO\n"
      "Pasta reconhecida pelo HOST=%@\n"
      "Leitura guest de arquivos do jogo= %@\n"
-     "Comandos RSX do jogo= NÃO COMPROVADOS\n"
-     "Primeiro frame original= NÃO COMPROVADO\n\n"
-     "Limite atual: o app executa a função de entrada estática completa com o contrato do ppu_run; o runtime iOS ainda precisa de HLE/serviços e integração do renderizador RSX para chegar ao menu e gameplay.\n"
+     "Comandos RSX do jogo= %@\n"
+     "Primeiro flip guest apresentado= %@\n\n"
+     "Host iOS: FIFO GCM drenada em worker, vblank/flip a 60 Hz e flip guest apresentado no Metal quando solicitado.\n"
+     "Controles: cellPad HLE via overlay tátil · cellAudio HLE ativo, saída de áudio iOS silenciosa nesta versão.\n"
+     "Estado do jogo: menu/gameplay ainda não estão comprovados até o guest gerar draws e apresentar um flip.\n"
      "ELF, PSARC e conteúdo do jogo permanecem no dispositivo.",
      AR_M750_BUILD_BRANCH,AR_M750_BUILD_SHA,AR_M750_BUILD_RUN_NUMBER,AR_M750_BUILD_RUN_ID,
      ARCurrentRelease(),stateText,phase,run?@"SIM":(self.selectedElfData?@"SIM · VALIDADO":@"NÃO"),entry,hostRC,rc,
-     run?run[@"vm_capacity"]:@"NÃO MEDIDO",run?run[@"loaded_bytes"]:@"NÃO MEDIDO",
+     run?run[@"vm_capacity"]:@(live[7]),run?run[@"loaded_bytes"]:@"NÃO MEDIDO",
      live[8]?@"MONTADA":@"NÃO MONTADA",
      (unsigned long long)live[0],(unsigned long long)live[3],live[4]?@"SIM":@"NÃO",
-     aotCalls,entryStarts,(unsigned long long)live[6],fsOpen,fsOK,fsRead,fsBytes,
+     aotCalls,entryStarts,(unsigned long long)live[6],
+     (unsigned long long)live[14],(unsigned long long)live[15],
+     (unsigned long long)live[16],(unsigned long long)live[17],
+     (unsigned long long)live[18],(unsigned long long)live[19],
+     (unsigned long long)live[20],(unsigned long long)live[21],
+     (unsigned long long)live[22],(unsigned long long)live[23],
+     hleCalls,
+     (unsigned long long)live[24],(unsigned long long)live[25],
+     unresolvedHLE,(unsigned long long)live[38],(unsigned long long)live[39],
+     run?run[@"syscall_calls"]:[NSString stringWithFormat:@"%llu",(unsigned long long)live[29]],
+     run?run[@"last_syscall"]:[NSString stringWithFormat:@"%llu",(unsigned long long)live[27]],
+     (unsigned long long)live[28],hotloopCount,(unsigned long long)live[31],
+     (unsigned long long)live[32],(unsigned long long)live[33],
+     (unsigned long long)live[34],(unsigned long long)live[35],
+     (unsigned long long)live[36],fsOpen,fsOK,fsRead,fsBytes,
+     rsxBackend,rsxVblanks,rsxDrains,rsxFrames,rsxDraws,
      self.hasGameInstallation?@"SIM (arquivos indexados no host; isso não prova cellFs)":@"NÃO" ,
      (run?[run[@"fs_bytes"] unsignedLongLongValue]:live[12])>0?
-       @"ATIVIDADE COMPROVADA":@"NÃO COMPROVADA"];
+       @"ATIVIDADE COMPROVADA":@"NÃO COMPROVADA",
+     hasGuestFlip?@"COMPROVADOS · pelo menos um flip do guest chegou ao Metal":@"NÃO COMPROVADOS · nenhum flip guest",
+     hasGuestFlip?(guestDraws>0?@"APRESENTADO · draws guest medidos":@"APRESENTADO · sem draw guest medido"):@"NÃO APRESENTADO"];
 }
 - (void)arCopyAllPpuText {
     NSString *report=[self arUnifiedPpuText];

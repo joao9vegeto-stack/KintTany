@@ -124,6 +124,58 @@ extern "C" void ppu_fs_ios_stats(uint64_t out[4])
     source.write_text(text)
 
 
+def patch_m772_live_dispatch(upstream):
+    """Expose the actual HLE/syscall reached by the live guest thread."""
+    hle = upstream / "runtime/ppu/ppu_hle.cpp"
+    text = hle.read_text()
+    unresolved_anchor = 'static void ps3_hle_unresolved(uint32_t nid, ppu_context* ctx)\n{\n'
+    unresolved_patch = '''extern "C" void ar_m772_note_unresolved_hle(uint32_t nid,
+                                                uint32_t guest_lr,
+                                                ppu_context* ctx);
+static void ps3_hle_unresolved(uint32_t nid, ppu_context* ctx)
+{
+    /* ASCENSION_M775_UNRESOLVED_HLE_TELEMETRY */
+    if (ctx) ar_m772_note_unresolved_hle(nid, (uint32_t)ctx->lr, ctx);
+'''
+    if "ASCENSION_M775_UNRESOLVED_HLE_TELEMETRY" not in text:
+        if text.count(unresolved_anchor) != 1:
+            raise SystemExit("M7.75 could not anchor unresolved HLE telemetry")
+        text = text.replace(unresolved_anchor, unresolved_patch, 1)
+        hle.write_text(text)
+
+    text = hle.read_text()
+    hle_anchor = 'extern "C" void ps3_hle_call(uint32_t nid, ppu_context* ctx)\n{\n'
+    hle_patch = '''extern "C" void ar_m772_note_hle(uint32_t nid, uint32_t guest_lr,
+                                     ppu_context* ctx);
+extern "C" void ps3_hle_call(uint32_t nid, ppu_context* ctx)
+{
+    /* ASCENSION_M775_LIVE_HLE_TELEMETRY */
+    if (ctx) ar_m772_note_hle(nid, (uint32_t)ctx->lr, ctx);
+'''
+    if "ASCENSION_M775_LIVE_HLE_TELEMETRY" not in text:
+        if text.count(hle_anchor) != 1:
+            raise SystemExit("M7.75 could not anchor live HLE telemetry in ps3_hle_call")
+        text = text.replace(hle_anchor, hle_patch, 1)
+        hle.write_text(text)
+
+    loader = upstream / "runtime/ppu/ppu_loader.cpp"
+    text = loader.read_text()
+    syscall_anchor = 'extern "C" void lv2_syscall(ppu_context* ctx)\n{\n'
+    syscall_patch = '''extern "C" void ar_m772_note_syscall(uint32_t number, uint32_t guest_lr,
+                                         ppu_context* ctx);
+extern "C" void lv2_syscall(ppu_context* ctx)
+{
+    /* ASCENSION_M775_LIVE_SYSCALL_TELEMETRY */
+    if (ctx) ar_m772_note_syscall((uint32_t)ctx->gpr[11],
+                                  (uint32_t)ctx->lr, ctx);
+'''
+    if "ASCENSION_M775_LIVE_SYSCALL_TELEMETRY" not in text:
+        if text.count(syscall_anchor) != 1:
+            raise SystemExit("M7.75 could not anchor live syscall telemetry in lv2_syscall")
+        text = text.replace(syscall_anchor, syscall_patch, 1)
+        loader.write_text(text)
+
+
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--source", type=pathlib.Path, required=True)
@@ -139,6 +191,7 @@ def main():
     if actual != expected:
         raise SystemExit(f"M7.72 lifter/runtime pin mismatch: {actual} != {expected}")
     patch_ios_game_mount(upstream)
+    patch_m772_live_dispatch(upstream)
     ppu = sorted(source.joinpath("ppu").glob("ppu_recomp_*.cpp"))
     spu = sorted(source.joinpath("spu").glob("*/spu_recomp.c"))
     if len(ppu) != 651 or len(spu) != 4:
@@ -235,6 +288,8 @@ def main():
                 "_ar_m772_runtime_attest", "_ar_m772_runtime_begin",
                 "_ar_m772_runtime_init",
                 "_ar_m772_dispatch_native", "_ar_m772_note_function",
+                "_ar_m772_note_hle", "_ar_m772_note_syscall",
+                "_ar_m772_note_unresolved_hle", "_ar_m772_note_hotloop",
                 "_ar_m772_run_entry", "_ar_m772_unbind_guest_memory",
                 "_ppu_recomp_register",
                 "_gowa_spu_0000_at_006B3E00_spu_recomp_register",
@@ -252,18 +307,19 @@ def main():
         raise SystemExit(f"M7.72 required ARM64 archive symbols missing: {missing}")
 
     result = {
-        "schema": "ascension-m772-ios-arm64-link-input-v1",
+        "schema": "ascension-m772-ios-arm64-link-input-v2",
         "upstream_commit": actual,
         "ppu_translation_units_compiled": len(ppu),
         "ppu_function_table_entries": 29849,
         "native_aot_function_entry_hooks": 29849,
+        "native_observed_hotloop_hooks": 1,
         "spu_translation_units_compiled": len(spu),
         "per_game_runtime_units_compiled": len(scaffold),
         "total_arm64_objects": len(obj_files),
         "archive": archive.name,
         "archive_bytes": archive.stat().st_size,
         "archive_sha256": digest(archive),
-        "runtime_dispatch_adapter": "complete AOT entry call; all 29849 functions report live entry telemetry",
+        "runtime_dispatch_adapter": "complete AOT entry call; live AOT/HLE/LV2/unresolved-HLE telemetry plus observed hot loop",
         "device_guest_execution": "RUNTIME_COUNTER_REPORTED_BY_APP; DEVICE_RUN_REQUIRED",
         "first_guest_frame": "NOT_MEASURED",
     }

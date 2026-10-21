@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Prepare a temporary ios CPU/SPU/LV2 runtime build from the PINNED upstream tree.
-Do not change upstream remote or other project branches. Exclude desktop
-SDL2 input/audio and AppKit Metal WINDOW backend until native adapters exist.
+Do not change upstream remote or other project branches. Include the iOS
+virtual-pad and silent-audio service adapters; keep desktop AppKit out of iOS.
 Fail loudly if any of the upstream CMake patterns change.
 """
 import argparse
@@ -11,12 +11,8 @@ def patch(content: str) -> str:
     replacements = [
         (
             'list(FILTER HLE_SOURCES EXCLUDE REGEX "/tests/")',
-            '''list(FILTER HLE_SOURCES EXCLUDE REGEX "/tests/")
-if(CMAKE_SYSTEM_NAME STREQUAL "iOS")
-    # Explicitly not built: desktop SDL2 implementations.
-    # Guest HLE callers MUST NOT assume these work on iOS yet.
-    list(FILTER HLE_SOURCES EXCLUDE REGEX "/cellPad\\\\.c$|/cellAudio\\\\.c$")
-endif()'''
+            "list(FILTER HLE_SOURCES EXCLUDE REGEX \"/tests/\")\n"
+            "# iOS uses this project's virtual-pad and silent-audio service adapters."
         ),
         (
             'if(APPLE)\n    enable_language(OBJC)',
@@ -44,7 +40,9 @@ if(CMAKE_SYSTEM_NAME STREQUAL "iOS")
         "-framework UIKit"
         "-framework Metal"
         "-framework QuartzCore")
-    message(STATUS "  iOS: CPU/SPU/LV2 core only; native input/audio/RSX host adapters NOT included")
+    target_compile_definitions(ps3recomp_runtime PRIVATE
+        PS3RECOMP_PAD_IOS=1 PS3RECOMP_AUDIO_IOS=1)
+    message(STATUS "  iOS: cellPad virtual input, cellAudio service, RSX Metal host")
 endif()'''
         ),
         (
