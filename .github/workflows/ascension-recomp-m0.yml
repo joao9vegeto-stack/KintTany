@@ -1444,7 +1444,7 @@ jobs:
           python3 upstream/tools/ppu_lifter.py m2-synthetic/EBOOT.ELF --functions m2-loader/EBOOT.functions.json --hle-stubs m2-loader/EBOOT.imports.json --output m2-generated --jobs 1 --chunk-lines 120000 --code-end 0x10028 2>&1 | tee m2-lifter.log
           test -s m2-generated/ppu_recomp.h
           test -n "$(find m2-generated -name 'ppu_recomp*.cpp' -print -quit)"
-          find m2-generated -name '*.cpp' -print0 | xargs -0 -n1 clang++ -std=c++20 -fsyntax-only -I m2-generated 2>&1 | tee m2-clang-syntax.log
+          find m2-generated -name '*.cpp' -print0 | xargs -0 -n1 clang++ -std=c++20 -fsyntax-only -I m2-generated -I upstream/runtime/ppu 2>&1 | tee m2-clang-syntax.log
           echo "M2: real ps3recomp loader -> lifter -> Clang C++ syntax validated on generated SYNTHETIC PPU ELF. Real Ascension code stays PRIVATE." > m2-status.txt
       - name: M2.1 generate iOS ARM64 object from SYNTHETIC PowerPC code
         run: |
@@ -1857,11 +1857,11 @@ jobs:
           ./m743-installer-host | tee m743-installer-host.log
           grep -Fxq 'GOWA2 installer digest regression: bad hash and length rejected, all 9 valid chunks installed only after matching SHA-256 PASS' m743-installer-host.log
           test "$(wc -l < m743-staged/symbols.txt | tr -d ' ')" = "6251"
-      # This revision aligns the base runtime to the already-built M772 source
-      # pin. The cached AOT archive is still exact commit 39a3629 and its full
-      # source/ABI/hash attestation is checked immediately below.
+      # These two integration fixes leave the guest AOT input unchanged. The
+      # cached archive is exact commit 39a3629 and its source/ABI/hash
+      # attestation is checked immediately below.
       - name: Reuse attested M7.75 HLE archive for pinned-runtime integration
-        if: github.event.before == '98c1fa5caa38408b335f836116b2466f8578f7ff'
+        if: github.event.before == '98c1fa5caa38408b335f836116b2466f8578f7ff' || github.event.before == 'e0c04b12a36f89536b1e0827d694a880f47ccd37'
         continue-on-error: true
         uses: actions/download-artifact@v4
         with:
@@ -1871,7 +1871,7 @@ jobs:
           run-id: 39539326629
           path: m772-cache
       - name: Validate one-run M7.75 archive candidate or compile fresh
-        if: github.event.before == '98c1fa5caa38408b335f836116b2466f8578f7ff'
+        if: github.event.before == '98c1fa5caa38408b335f836116b2466f8578f7ff' || github.event.before == 'e0c04b12a36f89536b1e0827d694a880f47ccd37'
         run: |
           set -euo pipefail
           python3 - <<'PY'
