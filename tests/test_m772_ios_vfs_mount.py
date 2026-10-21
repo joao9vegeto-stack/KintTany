@@ -12,6 +12,18 @@ SPEC.loader.exec_module(MODULE)
 
 
 class M772IOSVfsMountTests(unittest.TestCase):
+    def test_spurs_metrics_symbols_are_gated_in_the_runtime_archive(self):
+        build = (ROOT / "tools" / "m772_build_ios.py").read_text()
+        workflow = (ROOT / ".github" / "workflows" / "ascension-recomp-m0.yml").read_text()
+        cached_archive_check = workflow.split("for name in ('func_00010410'", 1)[1]
+        cached_archive_check = cached_archive_check.split("except Exception as error:", 1)[0]
+        runtime_gate = workflow.split("M772_HLE_REQUIRED_SYMBOLS=(", 1)[1]
+        runtime_gate = runtime_gate.split(")", 1)[0]
+        for symbol in ("_cellSpursResetAscensionMetrics", "_cellSpursCopyAscensionMetrics"):
+            self.assertNotIn(symbol, build.split("required = [", 1)[1].split("defined = set()", 1)[0])
+            self.assertNotIn(symbol, cached_archive_check)
+            self.assertIn(symbol, runtime_gate)
+
     def test_live_hle_dispatch_requires_generated_table_and_tracks_unresolved_imports(self):
         with tempfile.TemporaryDirectory() as tmp:
             upstream = pathlib.Path(tmp)

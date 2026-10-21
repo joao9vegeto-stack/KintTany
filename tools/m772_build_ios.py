@@ -553,7 +553,6 @@ def main():
                 "_ar_m772_copy_unresolved_hle_trace",
                 "_ar_m772_run_entry", "_ar_m772_unbind_guest_memory",
                 "_ppu_hle_register_all",
-                "_cellSpursResetAscensionMetrics", "_cellSpursCopyAscensionMetrics",
                 "_ppu_recomp_register",
                 "_gowa_spu_0000_at_006B3E00_spu_recomp_register",
                 "_gowa_spu_0001_at_006C1B00_spu_recomp_register",

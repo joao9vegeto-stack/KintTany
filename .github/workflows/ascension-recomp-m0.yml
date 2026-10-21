@@ -1692,6 +1692,8 @@ jobs:
             _sceNpDrmIsAvailable
             _sceNpDrmIsAvailable2
             _sys_net_bnet_inet_pton
+            _cellSpursResetAscensionMetrics
+            _cellSpursCopyAscensionMetrics
           )
           for symbol in "${M772_HLE_REQUIRED_SYMBOLS[@]}"; do
             if ! grep -Eq " [Tt] ${symbol}$" m39-metal-symbols.txt; then
@@ -1932,7 +1934,6 @@ jobs:
                            '_ar_m772_note_hotloop','_ar_m772_note_unresolved_hle',
                            '_ar_m772_copy_aot_trace','_ar_m772_copy_hle_trace',
                            '_ar_m772_copy_unresolved_hle_trace',
-                           '_cellSpursResetAscensionMetrics','_cellSpursCopyAscensionMetrics',
                            '_ar_m772_runtime_attest','_ppu_recomp_register',
                            '_ppu_hle_register_all'):
                   assert name in text,name
