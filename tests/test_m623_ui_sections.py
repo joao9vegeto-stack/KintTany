@@ -4,7 +4,7 @@ P=Path(__file__).resolve().parents[1]
 S=(P/"ios/ARProbeApp.m").read_text()
 class OrganizedUI(unittest.TestCase):
  def test_groups_scroll_and_actions(self):
-  for t in ('initWithItems:@[@"JOGAR",@"ARQUIVOS",@"RELATÓRIO"]',
+  for t in ('initWithItems:@[@"JOGAR",@"ARQUIVOS",@"AJUSTES",@"RELATÓRIO"]',
             'arSwitchTab:', 'self.gameList.hidden=!showGame',
             'self.graphicsList.hidden=!showFiles','page.contentLayoutGuide',
             'page.frameLayoutGuide','self.nativeLaunchButton=',
