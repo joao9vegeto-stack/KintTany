@@ -24,8 +24,10 @@ typedef struct {
     uint32_t attempted;
     uint32_t reservation_kind;
     uint32_t hint_attempts;
+    uint32_t mach_attempts;
     uint32_t failure_stage;
     int32_t failure_errno;
+    int32_t last_mach_kern_return;
 } ar_vm_reservation_status;
 enum {
     AR_VM_STAGE_NONE=0,
@@ -38,7 +40,11 @@ enum {
     AR_VM_STAGE_PROTECT_LOW=7,
     AR_VM_STAGE_PROTECT_RSX=8,
     AR_VM_STAGE_PROTECT_STACK=9,
-    AR_VM_STAGE_RELEASE=10
+    AR_VM_STAGE_RELEASE=10,
+    AR_VM_STAGE_MACH_ALLOCATE=11,
+    AR_VM_STAGE_MACH_PROTECT_NONE=12,
+    AR_VM_STAGE_MACH_PROTECT_COMMIT=13,
+    AR_VM_STAGE_MACH_RELEASE=14
 };
 void ar_bridge_vm_reservation_status(ar_vm_reservation_status *out);
 int ar_register(uint32_t, ar_ppu_fn);

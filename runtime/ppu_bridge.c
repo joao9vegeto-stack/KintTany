@@ -10,6 +10,10 @@
 #ifndef MAP_ANONYMOUS
 #define MAP_ANONYMOUS MAP_ANON
 #endif
+#if defined(__APPLE__) || defined(ASCENSION_M772_MACH_VM_TEST)
+#include <mach/mach.h>
+#define AR_M772_HAS_MACH_VM 1
+#endif
 #endif
 /* Only the iOS production core links the PS3Recomp archive. Synthetic host
  * fixtures keep this adapter out of their link graph entirely. */
@@ -172,12 +176,57 @@ void ar_bridge_vm_reservation_status(ar_vm_reservation_status *out)
 }
 #ifdef ASCENSION_M772_LINKED
 static int mem_is_sparse_vm;
+static int mem_is_mach_vm;
 
 static void ar_m772_vm_fail(uint32_t stage,int error_number)
 {
   last_vm_reservation.failure_stage=stage;
   last_vm_reservation.failure_errno=error_number;
 }
+
+#ifdef AR_M772_HAS_MACH_VM
+static void ar_m772_vm_fail_mach(uint32_t stage,kern_return_t kr)
+{
+  last_vm_reservation.failure_stage=stage;
+  last_vm_reservation.last_mach_kern_return=(int32_t)kr;
+}
+
+static void ar_m772_vm_release_mach(uint8_t *base)
+{
+  const kern_return_t kr=vm_deallocate(mach_task_self(),
+      (vm_address_t)(uintptr_t)base,(vm_size_t)AR_M772_VM_TOTAL);
+  if(kr!=KERN_SUCCESS)
+    ar_m772_vm_fail_mach(AR_VM_STAGE_MACH_RELEASE,kr);
+}
+
+static uint8_t *ar_m772_vm_commit_mach(uint8_t *base)
+{
+  if(((uintptr_t)base&((uintptr_t)AR_M772_VM_TOTAL-1u))!=0u){
+    ar_m772_vm_fail_mach(AR_VM_STAGE_MACH_ALLOCATE,KERN_INVALID_ADDRESS);
+    ar_m772_vm_release_mach(base);
+    return NULL;
+  }
+  struct {size_t offset;size_t size;} regions[]={
+    {0u,AR_M772_VM_LOW_COMMIT},
+    {AR_M772_VM_RSX_BASE,AR_M772_VM_RSX_SIZE},
+    {AR_M772_VM_STACK_BASE,AR_M772_VM_STACK_SIZE}
+  };
+  for(size_t i=0;i<sizeof(regions)/sizeof(regions[0]);i++){
+    const vm_address_t address=(vm_address_t)((uintptr_t)base+regions[i].offset);
+    const kern_return_t kr=vm_protect(mach_task_self(),address,
+        (vm_size_t)regions[i].size,0,VM_PROT_READ|VM_PROT_WRITE);
+    if(kr!=KERN_SUCCESS){
+      ar_m772_vm_fail_mach(AR_VM_STAGE_MACH_PROTECT_COMMIT,kr);
+      ar_m772_vm_release_mach(base);
+      return NULL;
+    }
+  }
+  last_vm_reservation.failure_stage=AR_VM_STAGE_NONE;
+  last_vm_reservation.failure_errno=0;
+  last_vm_reservation.last_mach_kern_return=KERN_SUCCESS;
+  return base;
+}
+#endif
 
 static uint8_t *ar_m772_vm_commit(uint8_t *base)
 {
@@ -207,6 +256,7 @@ static uint8_t *ar_m772_vm_commit(uint8_t *base)
   }
   last_vm_reservation.failure_stage=AR_VM_STAGE_NONE;
   last_vm_reservation.failure_errno=0;
+  last_vm_reservation.last_mach_kern_return=0;
   return base;
 }
 
@@ -222,10 +272,11 @@ static uint8_t *ar_m772_vm_reserve(void)
 #endif
 
   /* PS3Recomp derives guest effective addresses from the low 32 bits of a
-   * host pointer. Reserve a single aligned 4-GiB slot directly first; asking
-   * iOS/LiveContainer for an 8-GiB contiguous range just to trim half of it
-   * unnecessarily fails under tighter virtual-address maps. Never use
-   * MAP_FIXED: accept a hint only when mmap returns the exact safe address. */
+   * host pointer, so the guest window must be 4-GiB aligned. On Darwin, mmap's
+   * address argument is only a hint; iOS can relocate every hint and its
+   * LiveContainer VM layout can reject the 8-GiB fallback. vm_allocate with
+   * VM_FLAGS_FIXED reserves only a genuinely free exact slot and fails rather
+   * than overwriting an existing mapping. */
   static const uintptr_t hints[]={
     (uintptr_t)UINT64_C(0x0000000400000000),
     (uintptr_t)UINT64_C(0x0000000500000000),
@@ -249,6 +300,39 @@ static uint8_t *ar_m772_vm_reserve(void)
     (uintptr_t)UINT64_C(0x0000003800000000),
     (uintptr_t)UINT64_C(0x0000004000000000)
   };
+#ifdef AR_M772_HAS_MACH_VM
+  for(size_t i=0;i<sizeof(hints)/sizeof(hints[0]);i++){
+    vm_address_t address=(vm_address_t)hints[i];
+    last_vm_reservation.mach_attempts++;
+    const kern_return_t kr=vm_allocate(mach_task_self(),&address,
+        (vm_size_t)AR_M772_VM_TOTAL,VM_FLAGS_FIXED);
+    if(kr!=KERN_SUCCESS){
+      ar_m772_vm_fail_mach(AR_VM_STAGE_MACH_ALLOCATE,kr);
+      continue;
+    }
+    if((uintptr_t)address!=hints[i]){
+      const kern_return_t release_kr=vm_deallocate(mach_task_self(),address,
+          (vm_size_t)AR_M772_VM_TOTAL);
+      ar_m772_vm_fail_mach(release_kr==KERN_SUCCESS?
+          AR_VM_STAGE_HINT_RELOCATED:AR_VM_STAGE_MACH_RELEASE,
+          release_kr==KERN_SUCCESS?KERN_INVALID_ADDRESS:release_kr);
+      continue;
+    }
+    const kern_return_t protect_kr=vm_protect(mach_task_self(),address,
+        (vm_size_t)AR_M772_VM_TOTAL,0,VM_PROT_NONE);
+    if(protect_kr!=KERN_SUCCESS){
+      ar_m772_vm_fail_mach(AR_VM_STAGE_MACH_PROTECT_NONE,protect_kr);
+      ar_m772_vm_release_mach((uint8_t*)(uintptr_t)address);
+      continue;
+    }
+    uint8_t *committed=ar_m772_vm_commit_mach((uint8_t*)(uintptr_t)address);
+    if(committed){
+      last_vm_reservation.reservation_kind=3u;
+      mem_is_mach_vm=1;
+      return committed;
+    }
+  }
+#endif
   for(size_t i=0;i<sizeof(hints)/sizeof(hints[0]);i++){
     void *mapped=mmap((void*)hints[i],AR_M772_VM_TOTAL,PROT_NONE,
                       flags,-1,0);
@@ -269,6 +353,7 @@ static uint8_t *ar_m772_vm_reserve(void)
     uint8_t *committed=ar_m772_vm_commit((uint8_t*)mapped);
     if(committed){
       last_vm_reservation.reservation_kind=1u;
+      mem_is_mach_vm=0;
       return committed;
     }
   }
@@ -301,6 +386,7 @@ static uint8_t *ar_m772_vm_reserve(void)
     return NULL;
   }
   last_vm_reservation.reservation_kind=2u;
+  mem_is_mach_vm=0;
   return committed;
 }
 #endif
@@ -343,8 +429,14 @@ int ar_bridge_init(size_t n) {
 void ar_bridge_shutdown(void){
 #ifdef ASCENSION_M772_LINKED
  ar_m772_unbind_guest_memory(mem);
- if(mem && mem_is_sparse_vm)munmap(mem,AR_M772_VM_TOTAL);
+ if(mem && mem_is_mach_vm){
+#ifdef AR_M772_HAS_MACH_VM
+   ar_m772_vm_release_mach(mem);
+#endif
+ }
+ else if(mem && mem_is_sparse_vm)munmap(mem,AR_M772_VM_TOTAL);
  else free(mem);
+ mem_is_mach_vm=0;
  mem_is_sparse_vm=0;
 #else
  free(mem);

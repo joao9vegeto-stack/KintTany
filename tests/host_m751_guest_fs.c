@@ -51,11 +51,18 @@ int main(void){
     strcmp(t.last_path,"USRDIR/test.psarc")!=0)return 5;
  cpu.gpr[3]=3;
  if(ar_fs_guest_close(&cpu)!=AR_OK||cpu.gpr[3]!=0)return 6;
+ strcpy((char*)guest+64,"/app_home/test.psarc");
+ cpu.gpr[3]=64;cpu.gpr[4]=0;cpu.gpr[5]=512;
+ if(ar_fs_guest_open(&cpu)!=AR_OK||cpu.gpr[3]!=0||be32(guest+512)!=3u)return 7;
+ ar_fs_trace app_home={0};ar_fs_snapshot(&app_home);
+ if(strcmp(app_home.last_path,"USRDIR/test.psarc")!=0)return 8;
+ cpu.gpr[3]=3;
+ if(ar_fs_guest_close(&cpu)!=AR_OK||cpu.gpr[3]!=0)return 9;
  cpu.gpr[3]=3;cpu.gpr[4]=1024;cpu.gpr[5]=1;
- if(ar_fs_guest_read(&cpu)!=AR_OK||cpu.gpr[3]!=UINT32_C(0x8001002a))return 7;
+ if(ar_fs_guest_read(&cpu)!=AR_OK||cpu.gpr[3]!=UINT32_C(0x8001002a))return 10;
  strcpy((char*)guest+64,"/dev_hdd0/game/NPUA80918/USRDIR/../test.psarc");
  cpu.gpr[3]=64;cpu.gpr[4]=0;cpu.gpr[5]=512;
- if(ar_fs_guest_open(&cpu)!=AR_OK||cpu.gpr[3]==0)return 8;
- puts("M7.51 guest FS: BE FD/read count, offset, close, traversal fail-closed PASS (SYNTHETIC; no guest game call)");
+ if(ar_fs_guest_open(&cpu)!=AR_OK||cpu.gpr[3]==0)return 11;
+ puts("M7.51 guest FS: /app_home -> USRDIR; BE FD/read count, offset, close, traversal fail-closed PASS (SYNTHETIC; no guest game call)");
  return 0;
 }

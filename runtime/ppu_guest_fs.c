@@ -32,15 +32,23 @@ static int guest_path(uint64_t ptr,char relative[256]){
   if(path[n]==0)break;
  }
  if(n==sizeof(path)-1u || n==0u)return -1;
- static const char *prefixes[]={
-  "/dev_hdd0/game/NPUA80918/","/dev_bdvd/PS3_GAME/","/app_home/"
+ static const struct {const char *prefix,*relative_root;} mounts[]={
+  {"/dev_hdd0/game/NPUA80918/",""},
+  {"/dev_bdvd/PS3_GAME/",""},
+  /* The selected Files root is NPUA80918; app_home is its USRDIR. */
+  {"/app_home/","USRDIR/"},
+  {"app_home/","USRDIR/"},
+  {"e:/app_home/","USRDIR/"}
  };
- const char *p=0;
- for(unsigned i=0;i<sizeof(prefixes)/sizeof(prefixes[0]);i++){
-  const size_t s=strlen(prefixes[i]);
-  if(strncmp(path,prefixes[i],s)==0){p=path+s;break;}
+ const char *p=0,*relative_root="";
+ for(unsigned i=0;i<sizeof(mounts)/sizeof(mounts[0]);i++){
+  const size_t s=strlen(mounts[i].prefix);
+  if(strncmp(path,mounts[i].prefix,s)==0){
+   p=path+s;relative_root=mounts[i].relative_root;break;
+  }
  }
- if(!p || !*p || strlen(p)>=256u)return -1;
+ const size_t root_len=strlen(relative_root);
+ if(!p || !*p || root_len+strlen(p)>=256u)return -1;
  /* Reject traversal, drive letters, URL-like names, empty segments and
   * backslashes. No absolute host path can be supplied by guest code. */
  if(strchr(p,'\\')||strchr(p,':')||p[0]=='/')return -1;
@@ -52,7 +60,8 @@ static int guest_path(uint64_t ptr,char relative[256]){
   if(!end)break;
   at=end+1;
  }
- memcpy(relative,p,strlen(p)+1u);
+ memcpy(relative,relative_root,root_len);
+ memcpy(relative+root_len,p,strlen(p)+1u);
  return 0;
 }
 static void be32(uint8_t b[4],uint32_t x){

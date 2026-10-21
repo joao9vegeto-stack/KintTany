@@ -74,12 +74,23 @@ extern "C" void ps3_hle_call(uint32_t nid, ppu_context* ctx)
             self.assertIn("ASCENSION_IOS_NPUA80918_MOUNT", result)
             self.assertIn('"/dev_hdd0/game/NPUA80918"', result)
             self.assertIn('snprintf(out, cap, "%s/%s", ppu_vfs_root, tail)', result)
+            self.assertIn('"/app_home", "app_home", "e:/app_home"', result)
+            self.assertIn('"%s/USRDIR/%s", ppu_vfs_root, app_home_tail', result)
             self.assertIn("ps3_vfs_ps3game_fallback(out, cap)", result)
             self.assertIn("ascension_fs_open_calls", result)
             self.assertIn("ascension_fs_read_bytes.fetch_add", result)
 
             MODULE.patch_ios_game_mount(upstream)
             self.assertEqual(result, source.read_text())
+
+    def test_changed_vfs_translation_invalidates_old_m772_archive(self):
+        build = (ROOT / "tools" / "build_ios_probe_ipa.sh").read_text()
+        workflow = (ROOT / ".github" / "workflows" / "ascension-recomp-m0.yml").read_text()
+        attestation = (ROOT / "tools" / "m772_build_ios.py").read_text()
+        patch = "npua80918-and-app-home-usrdir-v1"
+        self.assertIn("a['ios_vfs_mount_patch']=='" + patch + "'", build)
+        self.assertIn("a['ios_vfs_mount_patch']=='" + patch + "'", workflow)
+        self.assertIn('"ios_vfs_mount_patch": "' + patch + '"', attestation)
 
     def test_runtime_holds_files_grant_and_binds_root_before_guest_entry(self):
         bridge = (ROOT / "ios" / "ARLivePPUBridge.c").read_text()

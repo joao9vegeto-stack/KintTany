@@ -110,6 +110,7 @@ static NSString *ARVMReservationName(uint32_t kind){
  switch(kind){
   case 1u:return @"reserva direta alinhada de 4 GiB";
   case 2u:return @"fallback 8 GiB aparado para 4 GiB";
+  case 3u:return @"Mach VM_FLAGS_FIXED · 4 GiB sem sobrescrita";
   default:return @"sem reserva concluída";
  }
 }
@@ -125,6 +126,10 @@ static NSString *ARVMReservationStageName(uint32_t stage){
   case AR_VM_STAGE_PROTECT_RSX:return @"habilitar memória local RSX";
   case AR_VM_STAGE_PROTECT_STACK:return @"habilitar pilhas do guest";
   case AR_VM_STAGE_RELEASE:return @"liberar região guest";
+  case AR_VM_STAGE_MACH_ALLOCATE:return @"reserva Mach no endereço alinhado";
+  case AR_VM_STAGE_MACH_PROTECT_NONE:return @"proteger reserva Mach como PROT_NONE";
+  case AR_VM_STAGE_MACH_PROTECT_COMMIT:return @"habilitar faixa guest pela API Mach";
+  case AR_VM_STAGE_MACH_RELEASE:return @"liberar reserva Mach";
   default:return @"nenhuma";
  }
 }
@@ -1209,7 +1214,7 @@ static BOOL ARGameManifestHasTitleUsrdir(NSDictionary *manifest){
       if(ARGameManifestHasTitleUsrdir(prior)){
         self.hasGameInstallation=YES;
         self.folderReport=[NSString stringWithFormat:@"Pasta restaurada · %@ arquivos (HOST)",prior[@"file_count"]?:@"0"];
-        self.gameInstallLabel.text=[NSString stringWithFormat:@"NPUA80918 · %@ arquivos detectados no host",prior[@"file_count"]?:@"?"];
+        self.gameInstallLabel.text=[NSString stringWithFormat:@"NPUA80918 · %@ arquivos (HOST)",prior[@"file_count"]?:@"?"];
       }else if(prior){
         self.gameInstallLabel.text=@"A pasta salva não é NPUA80918 com USRDIR";
       }
@@ -1262,7 +1267,7 @@ static BOOL ARGameManifestHasTitleUsrdir(NSDictionary *manifest){
     self.launcherReadinessLabel.textColor=[UIColor colorWithRed:0.95 green:0.69 blue:0.38 alpha:1];
   }else if(launchReady){
     [self.nativeLaunchButton setTitle:@"▶   INICIAR ASCENSION" forState:UIControlStateNormal];
-    self.launcherReadinessLabel.text=@"ELF E PASTA DETECTADOS · BOOT AINDA NÃO COMPROVADO";
+    self.launcherReadinessLabel.text=@"HOST VALIDADO · VFS GUEST MONTA NO BOOT DO RUNTIME";
     self.launcherReadinessLabel.textColor=[UIColor colorWithRed:0.95 green:0.69 blue:0.38 alpha:1];
   }else if(!self.hasGameInstallation && !self.selectedElfData.length){
     [self.nativeLaunchButton setTitle:@"CONFIGURAR ARQUIVOS" forState:UIControlStateNormal];
@@ -1274,7 +1279,7 @@ static BOOL ARGameManifestHasTitleUsrdir(NSDictionary *manifest){
     self.launcherReadinessLabel.textColor=[UIColor colorWithRed:0.95 green:0.69 blue:0.38 alpha:1];
   }else{
     [self.nativeLaunchButton setTitle:@"IMPORTAR GOWA.ELF" forState:UIControlStateNormal];
-    self.launcherReadinessLabel.text=@"PASTA DO JOGO PRONTA  ·  FALTA O EXECUTÁVEL";
+    self.launcherReadinessLabel.text=@"PASTA HOST PRONTA · VFS GUEST AGUARDA O BOOT";
     self.launcherReadinessLabel.textColor=[UIColor colorWithRed:0.95 green:0.69 blue:0.38 alpha:1];
   }
 }
@@ -1511,7 +1516,9 @@ static BOOL ARGameManifestHasTitleUsrdir(NSDictionary *manifest){
       @"vm_reservation_kind":@(vmReservation.reservation_kind),
       @"vm_hint_attempts":@(vmReservation.hint_attempts),
       @"vm_failure_stage":@(vmReservation.failure_stage),
-      @"vm_failure_errno":@(vmReservation.failure_errno)
+      @"vm_failure_errno":@(vmReservation.failure_errno),
+      @"vm_mach_attempts":@(vmReservation.mach_attempts),
+      @"vm_last_mach_kern_return":@(vmReservation.last_mach_kern_return)
     };
     dispatch_async(dispatch_get_main_queue(),^{
       self.nativeRunThread=nil;
@@ -1534,8 +1541,9 @@ static BOOL ARGameManifestHasTitleUsrdir(NSDictionary *manifest){
         uint32_t vmStage=[result[@"vm_failure_stage"] unsignedIntValue];
         int vmErrno=[result[@"vm_failure_errno"] intValue];
         status=[NSString stringWithFormat:
-          @"A VM guest não pôde ser reservada antes de ler o ELF. %@ · errno=%d · %@ tentativas de endereço. Veja o relatório para o estágio exato.",
-          ARVMReservationStageName(vmStage),vmErrno,result[@"vm_hint_attempts"]];
+          @"A VM guest falhou antes de carregar o ELF; por isso o VFS guest ainda não foi montado. %@ · último Mach kr=%@ · errno=%d · Mach tentativas=%@ · endereços mmap=%@. Veja o relatório.",
+          ARVMReservationStageName(vmStage),result[@"vm_last_mach_kern_return"],vmErrno,
+          result[@"vm_mach_attempts"],result[@"vm_hint_attempts"]];
       }
       else if(runHostRC!=0)
         status=[NSString stringWithFormat:@"Loader/host encerrou · host_rc=%d · guest_rc=%@.",runHostRC,result[@"rc"]];
@@ -1748,6 +1756,10 @@ static BOOL ARGameManifestHasTitleUsrdir(NSDictionary *manifest){
   ar_bridge_vm_reservation_status(&vmReservation);
   NSString *vmMode=vmReservation.attempted?
       ARVMReservationName(vmReservation.reservation_kind):@"NÃO TENTADA";
+  NSString *vmMachAttempts=vmReservation.attempted?
+      [NSString stringWithFormat:@"%u",vmReservation.mach_attempts]:@"NÃO MEDIDO";
+  NSString *vmMachReturn=vmReservation.attempted?
+      [NSString stringWithFormat:@"%d",vmReservation.last_mach_kern_return]:@"NÃO MEDIDO";
   NSString *vmHints=vmReservation.attempted?
       [NSString stringWithFormat:@"%u",vmReservation.hint_attempts]:@"NÃO MEDIDO";
   NSString *vmStage=vmReservation.attempted?
@@ -1759,6 +1771,10 @@ static BOOL ARGameManifestHasTitleUsrdir(NSDictionary *manifest){
                   state==2?@"ENTRY RETORNOU":
                   state==3?@"ENTRY NÃO VINCULADA":@"SEM ENTRY AOT";
   NSString *stateText=self.shaderBusy?@"EM EXECUÇÃO":(run?@"CONCLUÍDO":@"SEM EXECUÇÃO");
+  NSString *vfsRootState=live[8]?@"ROOT CONFIGURADA · FS AINDA NÃO COMPROVADO":
+      ((run && [run[@"host_rc"] intValue]==AR_NO_MEMORY)?
+       @"NÃO MONTADA · VM falhou antes do runtime":
+       (self.hasGameInstallation?@"PENDENTE · monta no início do boot":@"NÃO CONFIGURADA"));
   if(!self.shaderBusy && !run)phase=@"AGUARDANDO INICIAR";
   else if(!self.shaderBusy && run && [run[@"host_rc"] intValue]!=0)phase=@"FALHA NO HOST / LOADER";
   else if(!self.shaderBusy && run && state==3u)phase=@"ENTRY AOT NÃO VINCULADA";
@@ -1790,7 +1806,7 @@ static BOOL ARGameManifestHasTitleUsrdir(NSDictionary *manifest){
      "Estado=%@ · fase=%@\n"
      "ELF importado=%@ · entry=%@ · host rc=%@ · guest rc=%@\n"
      "VM guest virtual=%@ bytes (páginas sob demanda) · ELF PT_LOAD=%@ bytes · raiz VFS=%@\n\n"
-     "Reserva VM=%@ · tentativas de endereço=%@ · estágio=%@ · errno=%@\n\n"
+     "Reserva VM=%@ · Mach tentativas=%@ (último kr=%@) · mmap endereços=%@ · estágio=%@ · errno=%@\n\n"
      "PS3RECOMP / MÉTRICAS AO VIVO\n"
      "Tabela AOT=%llu funções · imagens SPU=%llu · runtime inicializado=%@\n"
      "Chamadas de função AOT=%@ · início(s) da entry=%@ · último PC=0x%08llX\n"
@@ -1819,8 +1835,8 @@ static BOOL ARGameManifestHasTitleUsrdir(NSDictionary *manifest){
      ARCurrentRelease(),stateText,phase,run?@"SIM":(self.selectedElfData?@"SIM · VALIDADO":@"NÃO"),entry,hostRC,rc,
      run?[run[@"vm_capacity"] description]:[NSString stringWithFormat:@"%llu",(unsigned long long)live[7]],
      run?[run[@"loaded_bytes"] description]:@"NÃO MEDIDO",
-     live[8]?@"ROOT CONFIGURADA · FS AINDA NÃO COMPROVADO":@"NÃO CONFIGURADA",
-     vmMode,vmHints,vmStage,vmErrno,
+     vfsRootState,
+     vmMode,vmMachAttempts,vmMachReturn,vmHints,vmStage,vmErrno,
      (unsigned long long)live[0],(unsigned long long)live[3],live[4]?@"SIM":@"NÃO",
      aotCalls,entryStarts,(unsigned long long)live[6],
      (unsigned long long)live[14],(unsigned long long)live[15],
@@ -2232,7 +2248,7 @@ static BOOL ARGameManifestHasTitleUsrdir(NSDictionary *manifest){
              [[NSDate date] description]]:nil;
       self.folderReport=report;
       self.gameInstallLabel.text=self.hasGameInstallation?
-        [NSString stringWithFormat:@"NPUA80918 · %@ arquivos detectados no host",manifest[@"file_count"]?:@"?"]:
+        [NSString stringWithFormat:@"NPUA80918 · %@ arquivos (HOST)",manifest[@"file_count"]?:@"?"]:
         @"Instalação não encontrada em Documents";
       UIImage *coverImage=coverData?[UIImage imageWithData:coverData]:nil;
       self.gameCoverView.image=coverImage;
@@ -2378,7 +2394,7 @@ static BOOL ARGameManifestHasTitleUsrdir(NSDictionary *manifest){
           UIImage *coverImage=coverData?[UIImage imageWithData:coverData]:nil;
           self.gameCoverView.image=coverImage;
           self.gameCoverView.hidden=(coverImage==nil);
-          self.gameInstallLabel.text=[NSString stringWithFormat:@"NPUA80918 · %@ arquivos detectados no host",
+          self.gameInstallLabel.text=[NSString stringWithFormat:@"NPUA80918 · %@ arquivos (HOST)",
                                       manifest[@"file_count"]?:@"?"];
           self.status.text=[NSString stringWithFormat:
                  @"Pasta de jogo selecionada.\n%@",report];

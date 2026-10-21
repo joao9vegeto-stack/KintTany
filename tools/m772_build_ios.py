@@ -37,9 +37,9 @@ def patch_ios_game_mount(upstream):
     if marker not in text:
         anchor = '    static const char* hdd0_root = nullptr; static int hdd0_init = 0;'
         replacement = '''    /* ASCENSION_IOS_NPUA80918_MOUNT */
-    /* The app's Files picker grants NPUA80918/USRDIR directly. Installed PSN
-     * paths include the title ID, so map that component onto the bookmarked
-     * root instead of assuming a host /dev_hdd0/game tree exists. */
+    /* The app's Files picker grants the NPUA80918 title root, which contains
+     * USRDIR. Installed PSN paths include the title ID, so map that component
+     * onto the bookmarked root instead of assuming a host /dev_hdd0/game tree. */
     static const char* ascension = "/dev_hdd0/game/NPUA80918";
     const size_t ascension_len = strlen(ascension);
     if (strncmp(guest, ascension, ascension_len) == 0 &&
@@ -47,6 +47,26 @@ def patch_ios_game_mount(upstream):
         const char* tail = guest + ascension_len;
         while (*tail == '/') ++tail;
         snprintf(out, cap, "%s/%s", ppu_vfs_root, tail);
+        for (char* p = out; *p; p++) if (*p == '\\\\') *p = '/';
+        ps3_vfs_ps3game_fallback(out, cap);
+        return;
+    }
+    /* /app_home is the installed executable's USRDIR, while the Files picker
+     * grants the containing NPUA80918 directory. Keep that mount rooted at the
+     * actual game data tree instead of looking for NPUA80918/<relative-file>. */
+    static const char* app_home_mounts[] = {"/app_home", "app_home", "e:/app_home"};
+    const char* app_home_tail = nullptr;
+    for (size_t i = 0; i < sizeof(app_home_mounts)/sizeof(app_home_mounts[0]); i++) {
+        const size_t n = strlen(app_home_mounts[i]);
+        if (strncmp(guest, app_home_mounts[i], n) == 0 &&
+            (guest[n] == '/' || guest[n] == '\\0')) {
+            app_home_tail = guest + n;
+            break;
+        }
+    }
+    if (app_home_tail) {
+        while (*app_home_tail == '/') ++app_home_tail;
+        snprintf(out, cap, "%s/USRDIR/%s", ppu_vfs_root, app_home_tail);
         for (char* p = out; *p; p++) if (*p == '\\\\') *p = '/';
         ps3_vfs_ps3game_fallback(out, cap);
         return;
@@ -331,6 +351,7 @@ def main():
     result = {
         "schema": "ascension-m772-ios-arm64-link-input-v3",
         "upstream_commit": actual,
+        "ios_vfs_mount_patch": "npua80918-and-app-home-usrdir-v1",
         "hle_registration": "strong-generated-nid-table",
         "unresolved_hle_telemetry": "ps3_hle_call-missing-handler-branch",
         "ppu_translation_units_compiled": len(ppu),
