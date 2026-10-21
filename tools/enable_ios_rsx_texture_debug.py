@@ -71,9 +71,17 @@ int rsx_metal_backend_debug_sample_texture0(u32 out[4]) {
     source=source.replace(bind,helper+bind,1)
     begin=source.index(draw)
     snippet=source[begin:]
-    anchor="    if (!p->pso) return;"
-    if snippet.count(anchor)<1:
-        raise ValueError("Metal draw PSO guard unexpectedly absent")
+    # PS3Recomp 39a made a missing guest PSO a sticky engine fault; the older
+    # a2c runtime returned without recording it.  Both guards sit at the same
+    # point in the real encoder, after the draw record and pipeline resolve.
+    guards=(
+        "    if (!p->pso) return;",
+        "    if (!p->pso) { s_eng_encoding_failed = 1; return; }",
+    )
+    matches=[guard for guard in guards if snippet.count(guard)==1]
+    if len(matches)!=1:
+        raise ValueError("Metal draw PSO guard unexpectedly absent or ambiguous")
+    anchor=matches[0]
     snippet=snippet.replace(anchor,anchor+'''
     if(r->tex[0]) ar_probe_draw_tex0=r->tex[0];
 ''',1)

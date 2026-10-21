@@ -109,12 +109,13 @@ jobs:
         run: |
           set -euo pipefail
           git clone https://github.com/sp00nznet/ps3recomp.git upstream
-          git -C upstream checkout a2c20108af45174dbb7d3e2f87f6acaaef09c6b4
-          test "$(git -C upstream rev-parse HEAD)" = "a2c20108af45174dbb7d3e2f87f6acaaef09c6b4"
+          git -C upstream checkout 39a36296511c445707adabcd312f0b740cfbd694
+          test "$(git -C upstream rev-parse HEAD)" = "39a36296511c445707adabcd312f0b740cfbd694"
           python3 tools/enable_macos_boot_smoke_null_backend.py upstream
           git clone https://github.com/sp00nznet/ps3recomp.git upstream-m772
           git -C upstream-m772 checkout 39a36296511c445707adabcd312f0b740cfbd694
           test "$(git -C upstream-m772 rev-parse HEAD)" = "39a36296511c445707adabcd312f0b740cfbd694"
+          test "$(git -C upstream rev-parse HEAD)" = "$(git -C upstream-m772 rev-parse HEAD)"
       - name: M7.72 reconstruct PS3Recomp full GOWA lift from validated source shards
         run: |
           set -euo pipefail
@@ -1655,6 +1656,31 @@ jobs:
           grep -Eq ' [Tt] _cellPadGetData$' m39-metal-symbols.txt
           grep -Eq ' [Tt] _cellAudioPortOpen$' m39-metal-symbols.txt
           grep -Eq ' [Tt] _cellAudioSetNotifyEventQueue$' m39-metal-symbols.txt
+          # The M772 strong NID registry is generated from the same pinned
+          # runtime tree. Catch version-skewed HLE handlers before the IPA link.
+          M772_HLE_REQUIRED_SYMBOLS=(
+            _cellCameraRemoveNotifyEventQueue2
+            _cellCameraSetNotifyEventQueue2
+            _cellFontInitializeWithRevision
+            _cellGcmMapEaIoAddressWithFlags
+            _cellGemGetMemorySize
+            _cellHttpResponseGetAllHeaders
+            _cellHttpResponseGetContentLength
+            _cellHttpResponseGetStatusCode
+            _cellSpursTaskExitCodeInitialize
+            _cellSysmoduleIsLoadedEx
+            _cellSysmoduleLoadModuleEx
+            _cellSysmoduleUnloadModuleEx
+            _sceNpDrmIsAvailable
+            _sceNpDrmIsAvailable2
+            _sys_net_bnet_inet_pton
+          )
+          for symbol in "${M772_HLE_REQUIRED_SYMBOLS[@]}"; do
+            if ! grep -Eq " [Tt] ${symbol}$" m39-metal-symbols.txt; then
+              echo "::error::Pinned iOS HLE runtime does not export ${symbol}"
+              exit 1
+            fi
+          done
           if grep -Eq 'SDL_|SDL2|_SDL_' m39-metal-symbols.txt; then
             echo 'SDL backend unexpectedly linked into iOS runtime' >&2
             exit 1
@@ -1831,11 +1857,11 @@ jobs:
           ./m743-installer-host | tee m743-installer-host.log
           grep -Fxq 'GOWA2 installer digest regression: bad hash and length rejected, all 9 valid chunks installed only after matching SHA-256 PASS' m743-installer-host.log
           test "$(wc -l < m743-staged/symbols.txt | tr -d ' ')" = "6251"
-      # The incoming commit is launcher-only relative to the HLE-link gate.
-      # Pin reuse to this one parent SHA; future pushes do a full build unless
-      # their runtime changes are reviewed against the archive again.
-      - name: Reuse attested M7.75 HLE archive for launcher-only revision
-        if: github.event.before == '3ec837eb0197812fd6b1d475f37fd5f772bb001b'
+      # This revision aligns the base runtime to the already-built M772 source
+      # pin. The cached AOT archive is still exact commit 39a3629 and its full
+      # source/ABI/hash attestation is checked immediately below.
+      - name: Reuse attested M7.75 HLE archive for pinned-runtime integration
+        if: github.event.before == '98c1fa5caa38408b335f836116b2466f8578f7ff'
         continue-on-error: true
         uses: actions/download-artifact@v4
         with:
@@ -1845,7 +1871,7 @@ jobs:
           run-id: 39539326629
           path: m772-cache
       - name: Validate one-run M7.75 archive candidate or compile fresh
-        if: github.event.before == '3ec837eb0197812fd6b1d475f37fd5f772bb001b'
+        if: github.event.before == '98c1fa5caa38408b335f836116b2466f8578f7ff'
         run: |
           set -euo pipefail
           python3 - <<'PY'

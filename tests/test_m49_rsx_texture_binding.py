@@ -7,6 +7,13 @@ from enable_ios_rsx_texture_debug import patch
 class ProbeContract(unittest.TestCase):
  def test_pinned_fail_closed(self):
   with self.assertRaises(ValueError): patch("not an RSX Metal backend")
+ def test_old_and_current_draw_guards(self):
+  for guard in ("    if (!p->pso) return;",
+                "    if (!p->pso) { s_eng_encoding_failed = 1; return; }"):
+   source=("static void eng_bind_textures(void* user, const u32* textures,\n"
+     "static void eng_encode_draw(id<MTLRenderCommandEncoder> enc, const EngRecord* r,\n"
+     +guard+"\n")
+   self.assertIn("if(r->tex[0]) ar_probe_draw_tex0=r->tex[0];", patch(source))
  def test_register_to_real_draw_to_gpu(self):
   g=(ROOT/"ios/ARRSXMethodProbe.c").read_text()
   app=(ROOT/"ios/ARProbeApp.m").read_text()
