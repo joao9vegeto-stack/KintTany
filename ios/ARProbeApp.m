@@ -144,9 +144,11 @@ static BOOL ARGameManifestHasTitleUsrdir(NSDictionary *manifest){
 @property(nonatomic,strong) UILabel *gameInstallLabel;
 @property(nonatomic,strong) UILabel *elfStatusLabel;
 @property(nonatomic,strong) UILabel *bootMetricsLabel;
+@property(nonatomic,strong) UIImageView *gameCoverView;
 @property(nonatomic,strong) UIButton *graphicsDrawButton;
 @property(nonatomic,strong) UIButton *graphicsCacheButton;
 @property(nonatomic,strong) NSTimer *nativeRunRefreshTimer;
+@property(nonatomic,strong) NSThread *nativeRunThread;
 @property(nonatomic,strong) NSData *selectedElfData;
 @property(nonatomic,copy) NSString *selectedElfPath;
 @property(nonatomic,assign) CFAbsoluteTime nativeRunStartedAt;
@@ -169,6 +171,7 @@ static BOOL ARGameManifestHasTitleUsrdir(NSDictionary *manifest){
 @property(nonatomic,assign) NSUInteger registerTextureAttempts;
 @property(nonatomic,assign) NSUInteger cacheMutationAttempts;
 - (BOOL)buildLauncherWithApplication:(UIApplication*)app options:(NSDictionary*)options;
+- (NSData*)gameCoverDataFromManifest:(NSDictionary*)manifest;
 - (void)startNativeGame:(UIButton*)sender;
 - (void)refreshNativeLaunchAvailability;
 - (void)acceptELFAtURL:(NSURL*)url;
@@ -832,8 +835,18 @@ static BOOL ARGameManifestHasTitleUsrdir(NSDictionary *manifest){
   UIView *hero=[UIView new]; hero.translatesAutoresizingMaskIntoConstraints=NO;
   hero.backgroundColor=[UIColor colorWithRed:0.13 green:0.055 blue:0.045 alpha:1];
   hero.layer.cornerRadius=18; hero.layer.borderWidth=1;
+  hero.clipsToBounds=YES;
   hero.layer.borderColor=[[UIColor colorWithRed:0.42 green:0.22 blue:0.13 alpha:1] colorWithAlphaComponent:0.65].CGColor;
   [hero.heightAnchor constraintEqualToConstant:195].active=YES;
+  UIImageView *cover=[UIImageView new]; cover.translatesAutoresizingMaskIntoConstraints=NO;
+  cover.contentMode=UIViewContentModeScaleAspectFill; cover.alpha=0.24; cover.hidden=YES;
+  [hero addSubview:cover]; self.gameCoverView=cover;
+  [NSLayoutConstraint activateConstraints:@[
+    [cover.leadingAnchor constraintEqualToAnchor:hero.leadingAnchor],
+    [cover.trailingAnchor constraintEqualToAnchor:hero.trailingAnchor],
+    [cover.topAnchor constraintEqualToAnchor:hero.topAnchor],
+    [cover.bottomAnchor constraintEqualToAnchor:hero.bottomAnchor]
+  ]];
   UIView *stripe=[UIView new]; stripe.translatesAutoresizingMaskIntoConstraints=NO;
   stripe.backgroundColor=gold; stripe.layer.cornerRadius=2; [hero addSubview:stripe];
   UIStackView *heroCopy=[UIStackView new]; heroCopy.translatesAutoresizingMaskIntoConstraints=NO;
@@ -938,6 +951,7 @@ static BOOL ARGameManifestHasTitleUsrdir(NSDictionary *manifest){
                 URLByAppendingPathComponent:@"Import" isDirectory:YES];
     NSData *stored=[NSData dataWithContentsOfURL:[dir URLByAppendingPathComponent:@"GOWA.ELF"]
                                           options:NSDataReadingMappedIfSafe error:NULL];
+    NSData *coverData=ARGameManifestHasTitleUsrdir(prior)?[self gameCoverDataFromManifest:prior]:nil;
     dispatch_async(dispatch_get_main_queue(),^{
       if(ARGameManifestHasTitleUsrdir(prior)){
         self.hasGameInstallation=YES;
@@ -946,6 +960,9 @@ static BOOL ARGameManifestHasTitleUsrdir(NSDictionary *manifest){
       }else if(prior){
         self.gameInstallLabel.text=@"A pasta salva não é NPUA80918 com USRDIR";
       }
+      UIImage *coverImage=coverData?[UIImage imageWithData:coverData]:nil;
+      self.gameCoverView.image=coverImage;
+      self.gameCoverView.hidden=(coverImage==nil);
       if(ARIsValidatedAscensionELF(stored)){
         self.selectedElfData=stored; self.selectedElfPath=[dir URLByAppendingPathComponent:@"GOWA.ELF"].path;
         self.elfStatusLabel.text=@"GOWA.ELF · SHA-256 validado neste dispositivo";
@@ -954,6 +971,26 @@ static BOOL ARGameManifestHasTitleUsrdir(NSDictionary *manifest){
     });
   });
   return YES;
+}
+
+/* Use only the user's small ICON0.PNG from the authorized game folder. The
+ * image stays in memory and is never copied into the app or the IPA. */
+- (NSData*)gameCoverDataFromManifest:(NSDictionary*)manifest {
+  NSArray *files=[manifest[@"files"] isKindOfClass:NSArray.class]?manifest[@"files"]:@[];
+  NSString *selectedPath=nil; NSUInteger selectedSize=0;
+  for(NSDictionary *entry in files){
+    NSString *path=[entry[@"path"] isKindOfClass:NSString.class]?entry[@"path"]:@"";
+    NSNumber *size=[entry[@"bytes"] isKindOfClass:NSNumber.class]?entry[@"bytes"]:nil;
+    if([path.lastPathComponent caseInsensitiveCompare:@"ICON0.PNG"]==NSOrderedSame &&
+       size.unsignedIntegerValue>0 && size.unsignedIntegerValue<=65536u){
+      selectedPath=path; selectedSize=size.unsignedIntegerValue;
+      if([path caseInsensitiveCompare:@"ICON0.PNG"]==NSOrderedSame)break;
+    }
+  }
+  if(!selectedPath)return nil;
+  NSError *error=nil;
+  NSData *data=ARGameFolderReadPrefix(selectedPath,selectedSize,&error);
+  return data.length==selectedSize?data:nil;
 }
 
 - (void)refreshNativeLaunchAvailability {
@@ -1047,7 +1084,10 @@ static BOOL ARGameManifestHasTitleUsrdir(NSDictionary *manifest){
       target:self selector:@selector(nativeRunRefreshTick:) userInfo:nil repeats:YES];
   [[NSRunLoop mainRunLoop] addTimer:self.nativeRunRefreshTimer forMode:NSRunLoopCommonModes];
   NSData *elf=[self.selectedElfData copy];
-  dispatch_async(dispatch_get_global_queue(QOS_CLASS_USER_INITIATED,0),^{
+  /* GoW2's iOS host gives the statically recompiled guest its own 64 MiB
+   * native stack. The full PS3Recomp C-AOT entry can make deep native calls;
+   * GCD's default worker stack is too small to treat as a safe game stack. */
+  NSThread *worker=[[NSThread alloc] initWithBlock:^{
     unsigned int native[16]={0};
     const int hostRC=ar_m70_native_runtime_probe(elf.bytes,elf.length,0u,native);
     uint64_t m772[14]={0}; ar_m772_runtime_attest(m772);
@@ -1064,6 +1104,7 @@ static BOOL ARGameManifestHasTitleUsrdir(NSDictionary *manifest){
       @"runtime_initialized":@(m772[4]), @"when":[[NSDate date] description]
     };
     dispatch_async(dispatch_get_main_queue(),^{
+      self.nativeRunThread=nil;
       [self.nativeRunRefreshTimer invalidate]; self.nativeRunRefreshTimer=nil;
       self.shaderBusy=NO; self.m750Run=result;
       BOOL returned=[result[@"entry_state"] unsignedIntValue]==2u;
@@ -1090,7 +1131,12 @@ static BOOL ARGameManifestHasTitleUsrdir(NSDictionary *manifest){
       self.ppuReport=[self arUnifiedPpuText];
       [self updateNativeRunMetrics]; [self refreshNativeLaunchAvailability];
     });
-  });
+  }];
+  worker.name=@"Ascension PS3Recomp guest";
+  worker.qualityOfService=NSQualityOfServiceUserInitiated;
+  worker.stackSize=(NSUInteger)64u*1024u*1024u;
+  self.nativeRunThread=worker;
+  [worker start];
 }
 - (void)nativeRunRefreshTick:(NSTimer*)timer {
   (void)timer; [self updateNativeRunMetrics];
@@ -1606,6 +1652,7 @@ static BOOL ARGameManifestHasTitleUsrdir(NSDictionary *manifest){
   dispatch_async(dispatch_get_global_queue(QOS_CLASS_USER_INITIATED,0),^{
     NSError *error=nil;
     NSDictionary *manifest=ARGameFolderImportLocalDocuments(&error);
+    NSData *coverData=ARGameManifestHasTitleUsrdir(manifest)?[self gameCoverDataFromManifest:manifest]:nil;
     NSError *readError=nil;
     NSString *relative=manifest[@"probe_relative_path"];
     NSData *bytes=(manifest && relative.length>0u)?
@@ -1641,6 +1688,9 @@ static BOOL ARGameManifestHasTitleUsrdir(NSDictionary *manifest){
       self.gameInstallLabel.text=self.hasGameInstallation?
         [NSString stringWithFormat:@"NPUA80918 · %@ arquivos detectados no host",manifest[@"file_count"]?:@"?"]:
         @"Instalação não encontrada em Documents";
+      UIImage *coverImage=coverData?[UIImage imageWithData:coverData]:nil;
+      self.gameCoverView.image=coverImage;
+      self.gameCoverView.hidden=(coverImage==nil);
       [self refreshNativeLaunchAvailability];
       self.status.text=report;
     });
@@ -1757,6 +1807,7 @@ static BOOL ARGameManifestHasTitleUsrdir(NSDictionary *manifest){
     dispatch_async(dispatch_get_global_queue(QOS_CLASS_USER_INITIATED,0),^{
       NSError *error=nil;
       NSDictionary *manifest=ARGameFolderImport(chosen,&error);
+      NSData *coverData=ARGameManifestHasTitleUsrdir(manifest)?[self gameCoverDataFromManifest:manifest]:nil;
       NSString *relative=manifest[@"probe_relative_path"];
       NSError *readError=nil;
       NSData *actual=(manifest && relative.length>0)?
@@ -1778,12 +1829,17 @@ static BOOL ARGameManifestHasTitleUsrdir(NSDictionary *manifest){
         if(report && ARGameManifestHasTitleUsrdir(manifest)){
           self.folderReport=report;
           self.hasGameInstallation=YES;
+          UIImage *coverImage=coverData?[UIImage imageWithData:coverData]:nil;
+          self.gameCoverView.image=coverImage;
+          self.gameCoverView.hidden=(coverImage==nil);
           self.gameInstallLabel.text=[NSString stringWithFormat:@"NPUA80918 · %@ arquivos detectados no host",
                                       manifest[@"file_count"]?:@"?"];
           self.status.text=[NSString stringWithFormat:
                  @"Pasta de jogo selecionada.\n%@",report];
           [self refreshNativeLaunchAvailability];
         }else{
+          self.gameCoverView.image=nil;
+          self.gameCoverView.hidden=YES;
           NSString *detail=error.localizedDescription?:
               (manifest?@"A pasta escolhida precisa ser NPUA80918 e conter USRDIR.":@"sem acesso ao diretório");
           self.folderReport=[NSString stringWithFormat:

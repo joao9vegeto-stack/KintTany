@@ -57,6 +57,49 @@ nativas, preparação fora da interface e entrada no jogo só quando o backend
 entrega um quadro real. O runtime e os dados de GoW2 são específicos daquele
 jogo; o que pode ser adaptado é o ciclo de vida e o desenho do launcher.
 
+## Rechecagem do vídeo IMG_5030 e do caminho de execução
+
+O vídeo mostra o app **M7.72.2**, com relatório **AOT-v13**: uma entrada do
+host em `0x10410`, sem leituras guest `cellFsOpen`/`cellFsRead`. Esse binário é
+anterior à tela M7.73 e ao bridge que chama a função PS3Recomp completa. A tela
+e o relatório filmados, portanto, não correspondem à branch atual. A entrega
+anterior não deixou essa diferença de versão clara.
+
+O Actions 39527572701 compilou e empacotou o IPA 7.73, mas terminou como falha
+porque o workflow ainda exigia seis símbolos antigos: três bootstraps
+sintéticos, o probe M7.3 e o interpretador PPC `ar_run`. Eles são removidos pelo
+linker do binário AOT-only; essa verificação não descrevia o caminho atual.
+M7.74 corrige os gates e leva a entrada guest para uma `NSThread` com pilha
+nativa de 64 MiB, seguindo o valor usado no host iOS de GoW2. Isso reduz o risco
+de esgotar a pilha padrão numa cadeia profunda de chamadas C recompiladas; o
+relatório do telefone ainda precisa confirmar se essa era a causa do encerramento.
+
+A capa do launcher M7.74 lê no máximo 64 KiB do `ICON0.PNG` já presente na
+instalação escolhida. A imagem fica em memória durante a sessão, não é copiada
+para o app e não entra no IPA.
+
+## Lacunas que ainda bloqueiam menu e gameplay
+
+O port de PC do Ascension contém patches explícitos para SPURS2, LFQueue,
+workloads e início de tarefas SPU, espera/retomada do GCM e VBlank. O nosso
+bridge M7.74 registra as quatro imagens SPU e disponibiliza importações/HLE
+básicos, mas ainda não demonstra o agendamento de workloads do jogo nem o ciclo
+GCM que produz quadros. O renderer Metal disponível no app é sintético: não
+consome a FIFO RSX de Ascension. Portanto, uma entrada AOT em ARM64 é avanço de
+recompilação e boot; não é evidência de menu ou gameplay.
+
+O port de PC valida `BCES-01741`; o nosso ELF e pasta são `NPUA80918`. Os 44
+patches dele são guias para portar o comportamento e instrumentação, não uma
+lista de endereços para aplicar sem validação ao ELF do usuário. O GoW2 fornece
+um padrão de ciclo de vida útil (home e jogo em threads separados, worker de
+64 MiB, UI viva até o primeiro quadro) mas seu HLE, offsets e assets não são
+compatíveis com Ascension.
+
+As próximas provas do telefone são, em ordem: contador de chamadas AOT subir;
+`cellFsOpen` e `cellFsRead` retornarem sucesso com bytes positivos; tarefas
+SPURS/SPU iniciarem; comandos/flip GCM chegarem ao backend; e o primeiro quadro
+real aparecer. Só então se pode afirmar chegada ao menu ou gameplay.
+
 ## O que ainda impede chegar ao menu
 
 Esta revisão corrige a chamada de entrada e torna o caminho observável. Ela
@@ -79,7 +122,7 @@ atual ainda não oferece cancelamento seguro de código guest bloqueado.
 | Marco | Estado verificável nesta revisão |
 |---|---|
 | M0–M1 | ELF autenticado, loader e integração iOS construídos; teste em aparelho continua necessário |
-| M2 | Entrada PS3Recomp completa e hooks nas 29.849 funções preparados; CI ainda precisa compilar este commit |
+| M2 | Entrada PS3Recomp completa e hooks nas 29.849 funções ligados; M7.74 também usa worker com pilha de 64 MiB; execução no telefone pendente |
 | M3 | Quatro imagens SPU registradas; execução de tarefas SPURS do título não comprovada |
 | M4 | Pasta autorizada e VFS montado; chamadas guest de arquivos dependem do resultado no aparelho |
 | M5 | Bancada Metal sintética disponível; renderer RSX do jogo não conectado |
@@ -87,5 +130,5 @@ atual ainda não oferece cancelamento seguro de código guest bloqueado.
 | M7 | Nenhum gameplay estável a 30 FPS medido |
 | M8 | Nenhuma validação de fidelidade a 60 FPS ou upscale medida |
 
-`M7.73.0` é a versão de software do próximo artefato; não significa que o
+`M7.74.0` é a versão de software do próximo artefato; não significa que o
 critério de gameplay do marco M7 foi aprovado.
