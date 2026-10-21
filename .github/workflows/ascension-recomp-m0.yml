@@ -1840,6 +1840,15 @@ jobs:
           repository: ${{ github.repository }}
           run-id: 39522246824
           path: m772-cache
+      - name: Reuse M7.75 ARM64 AOT built before iOS RSX link fix
+        if: github.event.before == '444e43ba3956f834e53099ab6731cee83ea0b8ee'
+        uses: actions/download-artifact@v4
+        with:
+          name: AscensionRecomp-M7.75.0-LAUNCHER-ARM64
+          github-token: ${{ github.token }}
+          repository: ${{ github.repository }}
+          run-id: 39535553625
+          path: m772-cache
       - name: M7.75 compile and link native iOS launcher with dedicated guest stack
         run: |
           set -euo pipefail

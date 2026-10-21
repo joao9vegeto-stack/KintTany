@@ -58,7 +58,6 @@ extern int ar_ppu_bootstrap_fortyeight_trace_m674(const unsigned char*,size_t,
 extern int rsx_metal_backend_init(unsigned int width, unsigned int height, const char* title);
 extern void rsx_metal_backend_shutdown(void);
 extern void rsx_metal_backend_present(void);
-extern void rsx_metal_backend_note_guest_frame(void);
 extern unsigned int rsx_metal_backend_guest_draws(void);
 extern void cellGcmTickVBlank(void);
 extern void cellGcmTickFlip(void);
@@ -1264,7 +1263,6 @@ static BOOL ARGameManifestHasTitleUsrdir(NSDictionary *manifest){
     cellGcm_rsx_process_fifo();
     __atomic_add_fetch(&ARNativeRSXFIFODrains,UINT64_C(1),__ATOMIC_RELAXED);
     if(cellGcm_take_flip_pending_synced()){
-      rsx_metal_backend_note_guest_frame();
       rsx_metal_backend_present();
       __atomic_add_fetch(&ARNativeRSXPresentedFrames,UINT64_C(1),__ATOMIC_RELAXED);
     }
