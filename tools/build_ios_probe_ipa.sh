@@ -794,7 +794,7 @@ assert db['opd_descriptors']==7643 and db['recovered_candidate_intervals']==1684
 assert db['cpp_generated_table_entries']==29849 and db['imports_total']==350
 assert db['ios_complete_lift_linked']=='NO' and not db['game_assets_in_repo']
 nm=Path('m78-owner-aot-linked-symbols.txt').read_text().splitlines()
-symbols=['ar_run','ar_guest_call','ar_m772_run_entry','ar_m766_native_005394e8','ar_sys_lwmutex_create']
+symbols=['ar_m772_runtime_init','ar_guest_call','ar_m772_run_entry','ar_m766_native_005394e8','ar_sys_lwmutex_create']
 for sym in symbols:
  assert any((' T _'+sym) in line or (' t _'+sym) in line for line in nm),sym
 proof={'schema':'ascension-m768-native-HLE-continuation-1',
