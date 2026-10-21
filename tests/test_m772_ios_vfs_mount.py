@@ -111,7 +111,11 @@ extern "C" void ps3_hle_call(uint32_t nid, ppu_context* ctx)
         self.assertNotIn("VM_FLAGS_FIXED", bridge)
         self.assertIn("vm_allocate(mach_task_self()", bridge)
         self.assertNotIn("mach_vm.h", bridge)
-        self.assertIn("mmap(NULL,AR_M772_VM_TOTAL", bridge)
+        self.assertIn("(vm_size_t)AR_M772_VM_GUEST,VM_FLAGS_ANYWHERE", bridge)
+        self.assertIn("mmap(NULL,AR_M772_VM_GUEST", bridge)
+        self.assertIn("PROT_READ|PROT_WRITE", bridge)
+        self.assertNotIn("vm_protect(", bridge)
+        self.assertNotIn("mprotect(", bridge)
 
     def test_runtime_holds_files_grant_and_binds_root_before_guest_entry(self):
         bridge = (ROOT / "ios" / "ARLivePPUBridge.c").read_text()
