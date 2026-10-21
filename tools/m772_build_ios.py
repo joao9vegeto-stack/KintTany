@@ -191,14 +191,17 @@ static int rtc_is_guest(const void* p)
                        new_ea_macro in sysnet.read_text() and
                        all(new in path.read_text()
                            for path, (_, new) in ea_macros.items()))
-    if (remaining or helper_uses != 372 or marker not in memory_header.read_text()
+    # The M7.82 SPURS2 patch adds ten legitimate pointer-narrowing sites
+    # compared with the pre-SPURS runtime (370 -> 380 rewrites; 372 -> 382
+    # helper references). Keep the full patched-source count gated here.
+    if (remaining or helper_uses != 382 or marker not in memory_header.read_text()
             or rtc_marker not in rtc.read_text() or not macros_complete):
         raise SystemExit(
             "M7.79 guest-VM pointer patch incomplete: "
             f"remaining casts={remaining}, helper uses={helper_uses}, "
-            f"expected helper uses=372, rewrites this pass={rewritten + macro_rewrites}"
+            f"expected helper uses=382, rewrites this pass={rewritten + macro_rewrites}"
         )
-    return 370
+    return 380
 
 
 def patch_ios_game_mount(upstream):
@@ -423,7 +426,7 @@ def main():
     if not inflater.is_file() or '"libs/codec/edge_inflate.cpp"' not in (upstream/"CMakeLists.txt").read_text():
         raise SystemExit("M7.82 Edge Zlib inflater is not included in the PS3Recomp target")
     pointer_patch_count = patch_ios_unaligned_guest_vm(upstream)
-    if pointer_patch_count != 370:
+    if pointer_patch_count != 380:
         raise SystemExit(f"M7.79 unaligned guest-VM patch incomplete: {pointer_patch_count}")
     patch_ios_game_mount(upstream)
     patch_m772_live_dispatch(upstream)
