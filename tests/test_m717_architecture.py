@@ -57,7 +57,7 @@ class M717Tests(unittest.TestCase):
         self.assertIn("ar_trace_snapshot",c)
         self.assertIn("ppu_m717_graph.o",build)
         self.assertIn("verify_m712_macho.py",build)
-        self.assertIn("Comandos RSX do jogo= NÃO COMPROVADOS",ui)
+        self.assertIn("Comandos RSX do jogo= %@",ui)
 
 if __name__=="__main__":
     unittest.main()

@@ -15,7 +15,7 @@ class M710UI(unittest.TestCase):
             "Chamadas de função AOT=%@",
             "action:@selector(shareAdvancedPpuReport:)",
             "PPC interpretado=0",
-            "Primeiro frame original= NÃO COMPROVADO",
+            "Primeiro flip guest apresentado= %@",
         ):
             self.assertIn(key,ui)
         bridge=(ROOT/"ios/ARLivePPUBridge.c").read_text()

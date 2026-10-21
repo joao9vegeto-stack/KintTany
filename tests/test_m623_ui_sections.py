@@ -4,11 +4,11 @@ P=Path(__file__).resolve().parents[1]
 S=(P/"ios/ARProbeApp.m").read_text()
 class OrganizedUI(unittest.TestCase):
  def test_groups_scroll_and_actions(self):
-  for t in ('initWithItems:@[@"JOGO",@"RSX / METAL"]',
+  for t in ('initWithItems:@[@"JOGAR",@"CONFIGURAÇÕES"]',
             'arSwitchTab:', 'self.gameList.hidden=!showGame',
             'self.graphicsList.hidden=showGame','page.contentLayoutGuide',
             'page.frameLayoutGuide','self.nativeLaunchButton=',
-            'ESCOLHER PASTA NPUA80918','USAR PASTA EM DOCUMENTOS DO APP',
+            'SELECIONAR PASTA NPUA80918','USAR PASTA EM DOCUMENTOS',
             'importM59ELF:','testM58AlphaTest:','testM57BlendMask:',
             'testM56StencilBitmasks:','testM55StencilMask:',
             'testM54DepthOcclusion:','testM53Multipass:',
@@ -18,8 +18,8 @@ class OrganizedUI(unittest.TestCase):
  def test_real_ppu_is_preserved(self):
   bridge=(P/"ios/ARLivePPUBridge.c").read_text()
   self.assertIn('ar_m772_run_entry(&ctx,image.entry_code)',bridge)
-  self.assertIn('PS3Recomp executando a função AOT completa de entrada',S)
-  start=S.split('- (void)startNativeGame:(UIButton*)sender {',1)[1].split('- (void)nativeRunRefreshTick:',1)[0]
+  self.assertIn('ENTRY AOT EM EXECUÇÃO',S)
+  start=S.rsplit('- (void)startNativeGame:(UIButton*)sender {',1)[1].split('- (void)nativeRunRefreshTick:',1)[0]
   self.assertIn('ar_m70_native_runtime_probe(elf.bytes,elf.length,0u,native)',start)
   self.assertNotIn('ARGameFolderRestore(',start)
   self.assertIn('NSThread *worker=[[NSThread alloc] initWithBlock:',start)

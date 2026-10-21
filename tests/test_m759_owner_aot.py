@@ -39,6 +39,6 @@ class M759(unittest.TestCase):
   self.assertIn("PS3RECOMP / MÉTRICAS AO VIVO",ui)
   self.assertIn("Chamadas de função AOT=%@",ui)
   self.assertIn("cellFsRead guest=%@ · bytes lidos pelo guest=%@",ui)
-  self.assertIn("Primeiro frame original= NÃO COMPROVADO",ui)
+  self.assertIn("Primeiro flip guest apresentado= %@",ui)
   self.assertNotIn("    ios-probe/ppu_m720_fallback.o \\",build)
 if __name__=="__main__":unittest.main()

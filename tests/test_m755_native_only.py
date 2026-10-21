@@ -18,9 +18,9 @@ class TestM755(unittest.TestCase):
  def test_history_not_falsely_promoted(self):
   app=(R/'ios/ARProbeApp.m').read_text()
   for needle in ('LAUNCHER / EXECUÇÃO NATIVA',
-                 'PPC interpretado=0 · chamadas HLE internas= NÃO INSTRUMENTADAS',
-                 'Comandos RSX do jogo= NÃO COMPROVADOS',
-                 'Primeiro frame original= NÃO COMPROVADO'):
+                 'PPC interpretado=0 · entradas HLE e LV2 contadas no runtime',
+                 'Comandos RSX do jogo= %@',
+                 'Primeiro flip guest apresentado= %@'):
    self.assertIn(needle,app)
   self.assertIn('cellFsRead guest=%@ · bytes lidos pelo guest=%@',app)
  def test_ci_native_only_host_gate(self):

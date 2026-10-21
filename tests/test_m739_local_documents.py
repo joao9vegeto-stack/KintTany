@@ -23,7 +23,7 @@ class FolderLocalTests(unittest.TestCase):
   self.assertIn("ARGameFolderImportLocalDocuments",self.header)
   self.assertIn("ARGameFolderImportLocalAtURL",self.header)
  def test_launcher_offers_local_documents_import_and_live_report(self):
-  for val in ("USAR PASTA EM DOCUMENTOS DO APP",
+  for val in ("USAR PASTA EM DOCUMENTOS",
               "importGameFolderFromDocuments:", "ARGameFolderImportLocalDocuments(&error)",
               "PASTA LOCAL IMPORTADA / NO MEU IPHONE",
               "self.folderReport=report", "Leitura HOST de prefixo=%lu byte(s)",

@@ -45,7 +45,7 @@ class FrontierStageM723(unittest.TestCase):
   self.assertIn('ASCENSIONRECOMP · LAUNCHER / EXECUÇÃO NATIVA',ui)
   self.assertIn('PS3RECOMP / MÉTRICAS AO VIVO',ui)
   self.assertIn('initForExportingURLs:@[url] asCopy:YES',ui)
-  self.assertIn('Comandos RSX do jogo= NÃO COMPROVADOS',ui)
+  self.assertIn('Comandos RSX do jogo= %@',ui)
  def test_prior_manifest_strict_parsing(self):
   import tempfile
   with tempfile.TemporaryDirectory() as d:

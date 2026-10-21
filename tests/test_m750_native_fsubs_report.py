@@ -34,7 +34,7 @@ class TestM750(unittest.TestCase):
             'AR_M750_BUILD_SHA','AR_M750_BUILD_RUN_ID',
             'NÃO MEDIDO','self.m750Run=nil','m750HostObservation',
             'cellFsRead guest=%@ · bytes lidos pelo guest=%@',
-            '0x10410u','Primeiro frame original= NÃO COMPROVADO'):
+            '0x10410u','Primeiro flip guest apresentado= %@'):
    self.assertIn(x,ui)
   self.assertIn('AscensionRecomp-%@-NPUA80918',ui)
   sh=(R/'tools/build_ios_probe_ipa.sh').read_text()

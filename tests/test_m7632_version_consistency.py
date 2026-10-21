@@ -14,8 +14,8 @@ class M7632(unittest.TestCase):
   self.assertNotIn('Próximo PC pendente (híbrido)',ui)
  def test_guest_measurements(self):
   ui=(R/'ios/ARProbeApp.m').read_text()
-  self.assertIn('AOT calls=%llu · entry=%llu · PC=0x%08llX',ui)
-  self.assertIn('cellFsOpen=%llu/%llu OK · Read=%llu · bytes=%llu',ui)
+  self.assertIn('Chamadas de função AOT=%@ · início(s) da entry=%@ · último PC=0x%08llX',ui)
+  self.assertIn('cellFsOpen guest=%@ · opens OK=%@',ui)
   self.assertIn('Chamadas de função AOT=%@',ui)
-  self.assertIn('Comandos RSX do jogo= NÃO COMPROVADOS',ui)
+  self.assertIn('Comandos RSX do jogo= %@',ui)
 if __name__=='__main__':unittest.main()

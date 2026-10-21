@@ -16,7 +16,7 @@ class M715SourceRegressions(unittest.TestCase):
         self.assertIn('self.ppuDiagnosticsButton=[self arLauncherButton:@"RELATÓRIO DA EXECUÇÃO"',self.ui)
         self.assertIn("Chamadas de função AOT=%@",self.ui)
         self.assertIn("cellFsRead guest=%@ · bytes lidos pelo guest=%@",self.ui)
-        self.assertIn("self.nativeRunRefreshTimer=[NSTimer scheduledTimerWithTimeInterval:0.75",self.ui)
+        self.assertIn("self.nativeRunRefreshTimer=[NSTimer scheduledTimerWithTimeInterval:0.25",self.ui)
         self.assertIn("UIPasteboard.generalPasteboard.string=report;",self.ui)
         self.assertIn("initForExportingURLs:@[url] asCopy:YES",self.ui)
 
@@ -28,8 +28,8 @@ class M715SourceRegressions(unittest.TestCase):
         self.assertIn("M7.15: +1 ELF-verified load/store ARM64 entry",self.build)
 
     def test_graphics_status_does_not_claim_game_menu(self):
-        self.assertIn("Comandos RSX do jogo= NÃO COMPROVADOS",self.ui)
-        self.assertIn("Esta tela não renderiza o jogo e não representa um quadro de Ascension.",self.ui)
+        self.assertIn("Comandos RSX do jogo= %@",self.ui)
+        self.assertIn("Bancada RSX sintética para validar o backend Metal. Não inicia o jogo",self.ui)
 
 if __name__=="__main__":
     unittest.main()

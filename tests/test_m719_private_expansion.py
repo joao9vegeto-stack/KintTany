@@ -58,7 +58,7 @@ class BulkM719Tests(unittest.TestCase):
         self.assertIn("ASCENSION_PRIVATE_BULK2_AOT_LINKED",builder)
         self.assertIn("ASCENSION_AOT_BULK2_GZIP_B64",workflow)
         self.assertIn("ASCENSIONRECOMP · LAUNCHER / EXECUÇÃO NATIVA",ui)
-        self.assertIn("Comandos RSX do jogo= NÃO COMPROVADOS",ui)
+        self.assertIn("Comandos RSX do jogo= %@",ui)
 
 if __name__=="__main__":
     unittest.main()

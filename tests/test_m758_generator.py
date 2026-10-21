@@ -35,7 +35,7 @@ class M758(unittest.TestCase):
  def test_physical_baseline_and_guest_FS_not_fabricated(self):
   b=(ROOT/'ios/ARProbeApp.m').read_text()
   self.assertIn('LAUNCHER / EXECUÇÃO NATIVA',b)
-  self.assertIn('AOT calls=%llu · entry=%llu · PC=0x%08llX',b)
+  self.assertIn('Chamadas de função AOT=%@ · início(s) da entry=%@ · último PC=0x%08llX',b)
   self.assertIn('cellFsRead guest=%@ · bytes lidos pelo guest=%@',b)
-  self.assertIn('Primeiro frame original= NÃO COMPROVADO',b)
+  self.assertIn('Primeiro flip guest apresentado= %@',b)
 if __name__=='__main__':unittest.main()

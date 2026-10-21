@@ -19,7 +19,7 @@ class M738Checks(unittest.TestCase):
   self.assertIn("ar_run(&ctx,image.entry_code,32768u)",b)
  def test_folder_failure_is_exported_and_picker_discoverable(self):
   ui=(R/"ios/ARProbeApp.m").read_text()
-  self.assertIn("ESCOLHER PASTA NPUA80918",ui)
+  self.assertIn("SELECIONAR PASTA NPUA80918",ui)
   self.assertIn("initForOpeningContentTypes:@[UTTypeFolder] asCopy:NO",ui)
   self.assertIn("Selecione a pasta NPUA80918 inteira no app Arquivos",ui)
   self.assertIn("M7.38 F0 — FALHA IMPORTAÇÃO PASTA",ui)

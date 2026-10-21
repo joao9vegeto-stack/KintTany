@@ -50,7 +50,7 @@ class HybridM720Tests(unittest.TestCase):
   self.assertIn("PPC interpretado=0",t)
   self.assertIn("Chamadas de função AOT=%@",t)
   self.assertIn("initForExportingURLs:@[url] asCopy:YES",t)
-  self.assertIn("Comandos RSX do jogo= NÃO COMPROVADOS",t)
+  self.assertIn("Comandos RSX do jogo= %@",t)
   self.assertIn("M7.19: +",self.build)
   self.assertIn("ppu_m720_fallback.o",self.build)
   self.assertIn("_ar_ppc_fallback_attach$",self.build)

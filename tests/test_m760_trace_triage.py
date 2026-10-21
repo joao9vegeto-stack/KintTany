@@ -22,7 +22,7 @@ class TestM760Trace(unittest.TestCase):
                  'Leitura guest de arquivos do jogo= %@',
                  'PSARC específico= NÃO MEDIDO'):
    self.assertIn(needle,s)
-  self.assertIn('Comandos RSX do jogo= NÃO COMPROVADOS',s)
+  self.assertIn('Comandos RSX do jogo= %@',s)
  def test_ci_wires_synthetic_native_host(self):
   wf=(R/'.github/workflows/ascension-recomp-m0.yml').read_text()
   self.assertIn('host_m760_trace_triage.c',wf)

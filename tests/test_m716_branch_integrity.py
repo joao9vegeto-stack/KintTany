@@ -39,7 +39,7 @@ class BranchAOTM716(unittest.TestCase):
         self.assertIn("M7.16: +1 verified native 15-instruction",self.build)
         self.assertIn('self.nativeLaunchButton=[self arLauncherButton:@"INICIAR JOGO"',self.ui)
         self.assertIn("PS3RECOMP / MÉTRICAS AO VIVO",self.ui)
-        self.assertIn("Comandos RSX do jogo= NÃO COMPROVADOS",self.ui)
+        self.assertIn("Comandos RSX do jogo= %@",self.ui)
 
 if __name__=="__main__":
     unittest.main()

@@ -23,7 +23,7 @@ class M752(unittest.TestCase):
   self.assertIn('Pasta reconhecida pelo HOST=%@',ui)
   self.assertIn('Leitura guest de arquivos do jogo= %@',ui)
   self.assertIn('PSARC específico= NÃO MEDIDO',ui)
-  self.assertIn('Primeiro frame original= NÃO COMPROVADO',ui)
+  self.assertIn('Primeiro flip guest apresentado= %@',ui)
   self.assertIn('fs_open_calls',ui)
   self.assertIn('fs_read_calls',ui)
  def test_production_link_and_ci_gate(self):

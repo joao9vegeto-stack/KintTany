@@ -36,7 +36,7 @@ class M718BulkTests(unittest.TestCase):
     def test_remaining_native_status_remains_precise(self):
         ui=(ROOT/"ios/ARProbeApp.m").read_text()
         self.assertIn("ASCENSIONRECOMP · LAUNCHER / EXECUÇÃO NATIVA",ui)
-        self.assertIn("Comandos RSX do jogo= NÃO COMPROVADOS",ui)
+        self.assertIn("Comandos RSX do jogo= %@",ui)
         self.assertIn("Chamadas de função AOT=%@",ui)
 
 if __name__=="__main__":unittest.main()
