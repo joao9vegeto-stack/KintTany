@@ -53,8 +53,7 @@ int main(void)
   /* Exercise the M772 production configuration: mmapper EAs are inside the
    * full guest window, so map/unmap must stage bytes into the native VM and
    * preserve guest writes in the allocated object across a remap. */
-  ppu_context mapper;
-  ppu_context_init(&mapper);
+  ppu_context mapper={0};
   ar_mmapper_reset();
   mapper.gpr[3]=UINT32_C(0x10000000);
   mapper.gpr[4]=UINT32_C(0x400);
