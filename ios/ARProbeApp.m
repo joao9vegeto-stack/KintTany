@@ -1868,6 +1868,9 @@ static BOOL ARGameManifestHasTitleUsrdir(NSDictionary *manifest){
   /* A second boot must report its current counters, not the last completed
    * run retained by the launcher. */
   NSDictionary *run=self.shaderBusy?nil:self.m750Run;
+  BOOL guestFSReadMeasured=
+      (run?[run[@"fs_read_calls"] unsignedLongLongValue]:live[11])>0 &&
+      (run?[run[@"fs_bytes"] unsignedLongLongValue]:live[12])>0;
   uint64_t trace[12]={0};
   uint32_t traceCount=ar_m772_copy_aot_trace(trace,12);
   NSMutableString *aotTraceText=[NSMutableString string];
@@ -1915,10 +1918,13 @@ static BOOL ARGameManifestHasTitleUsrdir(NSDictionary *manifest){
                   state==2?@"ENTRY RETORNOU":
                   state==3?@"ENTRY NÃO VINCULADA":@"SEM ENTRY AOT";
   NSString *stateText=self.shaderBusy?@"EM EXECUÇÃO":(run?@"CONCLUÍDO":@"SEM EXECUÇÃO");
-  NSString *vfsRootState=live[8]?@"ROOT CONFIGURADA · FS AINDA NÃO COMPROVADO":
-      ((run && [run[@"host_rc"] intValue]==AR_NO_MEMORY)?
-       @"NÃO MONTADA · VM falhou antes do runtime":
-       (self.hasGameInstallation?@"PENDENTE · monta no início do boot":@"NÃO CONFIGURADA"));
+  NSString *vfsRootState=guestFSReadMeasured?
+      (live[8]?@"ROOT CONFIGURADA · cellFsRead guest comprovado; caminho do arquivo não medido":
+               @"cellFsRead guest comprovado · estado da raiz a revisar"):
+      (live[8]?@"ROOT CONFIGURADA · FS ainda não comprovado":
+       ((run && [run[@"host_rc"] intValue]==AR_NO_MEMORY)?
+        @"NÃO MONTADA · VM falhou antes do runtime":
+        (self.hasGameInstallation?@"PENDENTE · monta no início do boot":@"NÃO CONFIGURADA")));
   if(!self.shaderBusy && !run)phase=@"AGUARDANDO INICIAR";
   else if(!self.shaderBusy && run && [run[@"host_rc"] intValue]!=0)phase=@"FALHA NO HOST / LOADER";
   else if(!self.shaderBusy && run && state==3u)phase=@"ENTRY AOT NÃO VINCULADA";

@@ -153,6 +153,15 @@ extern "C" void ps3_hle_call(uint32_t nid, ppu_context* ctx)
         self.assertIn("ar_m772_note_function", stage)
         self.assertNotIn("Agora: 13252 AOT", app)
 
+    def test_runtime_report_confirms_guest_fs_from_live_read_bytes(self):
+        app = (ROOT / "ios" / "ARProbeApp.m").read_text()
+        self.assertIn("BOOL guestFSReadMeasured=", app)
+        self.assertIn('run?[run[@"fs_read_calls"] unsignedLongLongValue]:live[11]', app)
+        self.assertIn('run?[run[@"fs_bytes"] unsignedLongLongValue]:live[12]', app)
+        self.assertIn("ROOT CONFIGURADA · cellFsRead guest comprovado", app)
+        self.assertIn("caminho do arquivo não medido", app)
+        self.assertIn("ROOT CONFIGURADA · FS ainda não comprovado", app)
+
     def test_each_elf_import_clears_stale_m772_runtime_counters(self):
         app = (ROOT / "ios" / "ARProbeApp.m").read_text()
         bridge = (ROOT / "runtime" / "m772_bridge.cpp").read_text()
