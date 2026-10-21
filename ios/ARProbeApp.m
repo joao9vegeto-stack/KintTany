@@ -1230,12 +1230,12 @@ static BOOL ARGameManifestHasTitleUsrdir(NSDictionary *manifest){
   self.nativeLaunchButton.enabled=enabled; self.nativeLaunchButton.alpha=enabled?1.0:0.52;
   if(self.shaderBusy){
     [self.nativeLaunchButton setTitle:@"EXECUÇÃO EM ANDAMENTO" forState:UIControlStateNormal];
-    self.launcherReadinessLabel.text=@"BOOT NATIVO ATIVO  ·  MÉTRICAS AO VIVO";
-    self.launcherReadinessLabel.textColor=UIColor.systemGreenColor;
+    self.launcherReadinessLabel.text=@"AOT EM EXECUÇÃO · AGUARDANDO ATIVIDADE GUEST";
+    self.launcherReadinessLabel.textColor=[UIColor colorWithRed:0.95 green:0.69 blue:0.38 alpha:1];
   }else if(launchReady){
     [self.nativeLaunchButton setTitle:@"▶   INICIAR ASCENSION" forState:UIControlStateNormal];
-    self.launcherReadinessLabel.text=@"JOGO E EXECUTÁVEL PRONTOS PARA O BOOT";
-    self.launcherReadinessLabel.textColor=UIColor.systemGreenColor;
+    self.launcherReadinessLabel.text=@"ELF E PASTA DETECTADOS · BOOT AINDA NÃO COMPROVADO";
+    self.launcherReadinessLabel.textColor=[UIColor colorWithRed:0.95 green:0.69 blue:0.38 alpha:1];
   }else if(!self.hasGameInstallation && !self.selectedElfData.length){
     [self.nativeLaunchButton setTitle:@"CONFIGURAR ARQUIVOS" forState:UIControlStateNormal];
     self.launcherReadinessLabel.text=@"PRECISA DA PASTA NPUA80918 E DO GOWA.ELF";
@@ -1311,11 +1311,11 @@ static BOOL ARGameManifestHasTitleUsrdir(NSDictionary *manifest){
      "HLE=%llu / NID 0x%08llX · sem serviço=%llu / NID 0x%08llX\n"
      "LV2=%llu / syscall %llu\n"
      "FS open=%llu/%llu · read=%llu · bytes=%llu\n"
-     "GCM vblank=%llu · FIFO drains=%llu\nRSX frames=%llu · draws=%llu\n"
+     "Host GCM vblank=%llu · FIFO worker drains=%llu\nGuest frames=%llu · draws=%llu\n"
      "Loop 0x%08llX · iterações=%llu",
      phase,elapsed,(unsigned long long)m772[5],(unsigned long long)m772[13],
     (unsigned long long)m772[6],m772[4]?@"READY":@"PREPARANDO",
-    m772[8]?@"MONTADO":@"AGUARDANDO",(unsigned long long)m772[3],
+    m772[8]?@"ROOT CONFIGURADA":@"AGUARDANDO",(unsigned long long)m772[3],
     __atomic_load_n(&ARNativeRSXBackendReady,__ATOMIC_RELAXED)?@"READY":@"OFF",
     (unsigned long long)m772[26],(unsigned long long)m772[24],
     (unsigned long long)m772[37],(unsigned long long)m772[38],
@@ -1326,13 +1326,13 @@ static BOOL ARGameManifestHasTitleUsrdir(NSDictionary *manifest){
      (unsigned long long)drains,(unsigned long long)frames,(unsigned long long)draws,
      (unsigned long long)m772[31],(unsigned long long)m772[30]];
   self.nativeGameHUDLabel.text=[NSString stringWithFormat:
-    @"FIFO %@ · %llu drains · %llu vblanks\nFrames guest %llu · draws %llu",
+    @"Host %@ · %llu FIFO drains · %llu vblanks\nGuest %llu frames · %llu draws",
     __atomic_load_n(&ARNativeRSXBackendReady,__ATOMIC_RELAXED)?@"Metal":@"aguardando backend",
     (unsigned long long)drains,(unsigned long long)vblanks,
     (unsigned long long)frames,(unsigned long long)draws];
   if(state==1)self.status.text=[NSString stringWithFormat:
-    @"PS3Recomp em execução · AOT %@ · HLE %@ · LV2 %@ · GCM FIFO %@ · frames guest %@.",
-    @(m772[5]),@(m772[26]),@(m772[29]),@(drains),@(frames)];
+    @"PS3Recomp AOT ativo · funções %@ · HLE %@ · LV2 %@ · FS guest %@ bytes · frames guest %@.",
+    @(m772[5]),@(m772[26]),@(m772[29]),@(m772[12]),@(frames)];
   if(state==1 && frames>0 && !self.gameDisplayActive)[self showNativeGameFrame];
 }
 - (void)runNativeRSXPump {
@@ -1714,7 +1714,7 @@ static BOOL ARGameManifestHasTitleUsrdir(NSDictionary *manifest){
      "SESSÃO\n"
      "Estado=%@ · fase=%@\n"
      "ELF importado=%@ · entry=%@ · host rc=%@ · guest rc=%@\n"
-     "VM alocada=%@ bytes · ELF mapeado=%@ bytes · raiz VFS=%@\n\n"
+     "VM guest virtual=%@ bytes (páginas sob demanda) · ELF PT_LOAD=%@ bytes · raiz VFS=%@\n\n"
      "PS3RECOMP / MÉTRICAS AO VIVO\n"
      "Tabela AOT=%llu funções · imagens SPU=%llu · runtime inicializado=%@\n"
      "Chamadas de função AOT=%@ · início(s) da entry=%@ · último PC=0x%08llX\n"
@@ -1735,14 +1735,15 @@ static BOOL ARGameManifestHasTitleUsrdir(NSDictionary *manifest){
      "Leitura guest de arquivos do jogo= %@\n"
      "Comandos RSX do jogo= %@\n"
      "Primeiro flip guest apresentado= %@\n\n"
-     "Host iOS: FIFO GCM drenada em worker, vblank/flip a 60 Hz e flip guest apresentado no Metal quando solicitado.\n"
+     "Host iOS: o contador de FIFO/vblank descreve o worker Metal; só draws e flips guest confirmam renderização do jogo.\n"
      "Controles: cellPad HLE via overlay tátil · cellAudio HLE ativo, saída de áudio iOS silenciosa nesta versão.\n"
      "Estado do jogo: menu/gameplay ainda não estão comprovados até o guest gerar draws e apresentar um flip.\n"
      "ELF, PSARC e conteúdo do jogo permanecem no dispositivo.",
      AR_M750_BUILD_BRANCH,AR_M750_BUILD_SHA,AR_M750_BUILD_RUN_NUMBER,AR_M750_BUILD_RUN_ID,
      ARCurrentRelease(),stateText,phase,run?@"SIM":(self.selectedElfData?@"SIM · VALIDADO":@"NÃO"),entry,hostRC,rc,
-     run?run[@"vm_capacity"]:@(live[7]),run?run[@"loaded_bytes"]:@"NÃO MEDIDO",
-     live[8]?@"MONTADA":@"NÃO MONTADA",
+     run?[run[@"vm_capacity"] description]:[NSString stringWithFormat:@"%llu",(unsigned long long)live[7]],
+     run?[run[@"loaded_bytes"] description]:@"NÃO MEDIDO",
+     live[8]?@"ROOT CONFIGURADA · FS AINDA NÃO COMPROVADO":@"NÃO CONFIGURADA",
      (unsigned long long)live[0],(unsigned long long)live[3],live[4]?@"SIM":@"NÃO",
      aotCalls,entryStarts,(unsigned long long)live[6],
      (unsigned long long)live[14],(unsigned long long)live[15],

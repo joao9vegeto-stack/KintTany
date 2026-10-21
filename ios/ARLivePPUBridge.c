@@ -83,10 +83,10 @@ extern void ar_m769_get_stats(uint32_t[5]);
 extern int ar_private_import_match(const uint8_t*,size_t,uint32_t,uint32_t[4],char[48]);
 extern int ar_private_import_find_nid(const uint8_t*,size_t,uint32_t,const char*,uint32_t[4],char[48]);
 
-/* The PS3 PPU guest's main RAM spans 256 MiB.  PT_LOAD segments occupy only
- * the low part of that address space, but guest code and HLEs can legitimately
- * touch higher addresses (for example 0x0E000000).  Keep a full guest window. */
-enum { AR_NATIVE_LIMIT=256u*1024u*1024u, AR_NATIVE_RESERVE=0x20000u };
+/* ELF PT_LOAD/TLS staging stays below 256 MiB for this title. The production
+ * M772 runtime gets the separate 3.5-GiB sparse guest address window in
+ * ppu_bridge.c; do not use this parse ceiling as the runtime VM size. */
+enum { AR_NATIVE_IMAGE_LIMIT=256u*1024u*1024u, AR_NATIVE_RESERVE=0x20000u };
 /* Native AOT trace copied before ar_bridge_shutdown; no game code stored. */
 static ar_aot_trace last_run_trace;
 static ar_fs_trace last_fs_trace;
@@ -132,8 +132,8 @@ int ar_m70_native_runtime_probe(const uint8_t*d,size_t len,
     const uint64_t fs=g64(p+32),ms=g64(p+40);
     if(type==1u){
        if(fs>ms||fileoff>len||fs>(uint64_t)len-fileoff||
-          va>AR_NATIVE_LIMIT-AR_NATIVE_RESERVE||
-          ms>(uint64_t)(AR_NATIVE_LIMIT-AR_NATIVE_RESERVE)-va)
+          va>AR_NATIVE_IMAGE_LIMIT-AR_NATIVE_RESERVE||
+          ms>(uint64_t)(AR_NATIVE_IMAGE_LIMIT-AR_NATIVE_RESERVE)-va)
           return -23;
        if(ms && va+ms>highest)highest=va+ms;
        if(ms)segments++;
@@ -146,12 +146,12 @@ int ar_m70_native_runtime_probe(const uint8_t*d,size_t len,
  }
  if(!segments)return -26;
  const uint64_t aligned=(highest+0xfffu)&~UINT64_C(0xfff);
- if(aligned>AR_NATIVE_LIMIT-AR_NATIVE_RESERVE)return -27;
+ if(aligned>AR_NATIVE_IMAGE_LIMIT-AR_NATIVE_RESERVE)return -27;
  const uint32_t tlsbase=(uint32_t)aligned;
  uint64_t required=(uint64_t)aligned+AR_NATIVE_RESERVE;
- if(required<AR_NATIVE_LIMIT)required=AR_NATIVE_LIMIT;
+ if(required<AR_NATIVE_IMAGE_LIMIT)required=AR_NATIVE_IMAGE_LIMIT;
  const size_t cap=(size_t)required;
- if(!tlsbase || tlsbase>=AR_NATIVE_LIMIT)return -27;
+ if(!tlsbase || tlsbase>=AR_NATIVE_IMAGE_LIMIT)return -27;
  const int rcinit=ar_bridge_init(cap);
  if(rcinit){out[0]=(uint32_t)rcinit;return rcinit;}
 #ifdef ASCENSION_M711_OWNER_AOT
@@ -179,7 +179,10 @@ int ar_m70_native_runtime_probe(const uint8_t*d,size_t len,
  ctx.gpr[12]=0x100000u;
  ppu_set_stack(&ctx,(uint64_t)tlsbase+0x10000u,0x10000u);
  out[1]=image.entry_code;out[2]=image.toc;out[3]=image.segments;
- out[4]=(uint32_t)cap;out[13]=(uint32_t)image.loaded_bytes;
+ /* Report the actual PS3 guest window (3.5 GiB virtual, sparse on iOS), not
+  * the 256-MiB PT_LOAD validation ceiling used while parsing this ELF. */
+ out[4]=(uint32_t)ar_guest_memory_capacity();
+ out[13]=(uint32_t)image.loaded_bytes;
  out[14]=ar_read32(image.entry_code);
  if(ar_last_error()!=AR_OK){ar_bridge_shutdown();return -28;}
  

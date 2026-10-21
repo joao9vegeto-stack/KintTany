@@ -2,6 +2,14 @@
 #include "ppu_bridge.h"
 #include <stdlib.h>
 #include <string.h>
+#ifdef ASCENSION_M772_LINKED
+#include <stdint.h>
+#include <sys/mman.h>
+#include <unistd.h>
+#ifndef MAP_ANONYMOUS
+#define MAP_ANONYMOUS MAP_ANON
+#endif
+#endif
 /* Only the iOS production core links the PS3Recomp archive. Synthetic host
  * fixtures keep this adapter out of their link graph entirely. */
 #ifdef ASCENSION_M772_LINKED
@@ -11,6 +19,20 @@ extern void ar_m772_unbind_guest_memory(void *);
 /* native AOT 65,535; uint16_t hash stores (index+1) */
 #define MAX_FUNCS 65535
 #define MAX_MEM (256u*1024u*1024u)
+#ifdef ASCENSION_M772_LINKED
+/* PS3Recomp uses the PS3 32-bit guest address as an offset from vm_base.
+ * Keep that entire address space reserved, 4-GiB aligned, and only make the
+ * regions needed by the current boot read/write. Anonymous pages stay zero
+ * filled and are backed by the kernel on first touch; never memset gigabytes
+ * on iOS. These ranges match the Ascension boot layout from the GoW2 host. */
+#define AR_M772_VM_TOTAL       ((size_t)UINT64_C(0x100000000))
+#define AR_M772_VM_GUEST       ((size_t)UINT32_C(0xE0000000))
+#define AR_M772_VM_LOW_COMMIT  ((size_t)UINT32_C(0x51000000))
+#define AR_M772_VM_RSX_BASE    ((size_t)UINT32_C(0xC0000000))
+#define AR_M772_VM_RSX_SIZE    ((size_t)UINT32_C(0x10000000))
+#define AR_M772_VM_STACK_BASE  ((size_t)UINT32_C(0xD0000000))
+#define AR_M772_VM_STACK_SIZE  ((size_t)UINT32_C(0x10000000))
+#endif
 #define MAX_DEPTH 64
 #define MAX_IMPORTS 2048
 #define MAX_HANDLERS 2048
@@ -142,6 +164,44 @@ static uint32_t missing_nid,missing_syscall;
 static struct {uint32_t number;ar_hle_fn fn;} syscalls[MAX_LV2_SYSCALLS];
 static size_t nsyscalls;
 static uint8_t *mem;
+#ifdef ASCENSION_M772_LINKED
+static int mem_is_sparse_vm;
+
+static uint8_t *ar_m772_vm_reserve(void)
+{
+  if(sizeof(uintptr_t)<8u)return NULL;
+  const size_t reserve_size=AR_M772_VM_TOTAL*2u;
+  int flags=MAP_PRIVATE|MAP_ANONYMOUS;
+#ifdef MAP_NORESERVE
+  flags|=MAP_NORESERVE;
+#endif
+  uint8_t *raw=(uint8_t*)mmap(NULL,reserve_size,PROT_NONE,flags,-1,0);
+  if(raw==MAP_FAILED)return NULL;
+
+  const uintptr_t raw_addr=(uintptr_t)raw;
+  const uintptr_t aligned_addr=(raw_addr+(uintptr_t)AR_M772_VM_TOTAL-1u)&
+                               ~((uintptr_t)AR_M772_VM_TOTAL-1u);
+  uint8_t *aligned=(uint8_t*)aligned_addr;
+  const size_t head=(size_t)(aligned_addr-raw_addr);
+  const size_t tail=(size_t)((raw_addr+reserve_size)-
+                             (aligned_addr+AR_M772_VM_TOTAL));
+  if((head && munmap(raw,head)!=0) ||
+     (tail && munmap(aligned+AR_M772_VM_TOTAL,tail)!=0)) {
+    munmap(raw,reserve_size);
+    return NULL;
+  }
+  if(((uintptr_t)aligned&((uintptr_t)AR_M772_VM_TOTAL-1u))!=0u ||
+     mprotect(aligned,AR_M772_VM_LOW_COMMIT,PROT_READ|PROT_WRITE)!=0 ||
+     mprotect(aligned+AR_M772_VM_RSX_BASE,AR_M772_VM_RSX_SIZE,
+              PROT_READ|PROT_WRITE)!=0 ||
+     mprotect(aligned+AR_M772_VM_STACK_BASE,AR_M772_VM_STACK_SIZE,
+              PROT_READ|PROT_WRITE)!=0) {
+    munmap(aligned,AR_M772_VM_TOTAL);
+    return NULL;
+  }
+  return aligned;
+}
+#endif
 #define AR_EXTERNAL_MAX 512u
 static struct {uint32_t start;size_t size;uint8_t *bytes;} extra[AR_EXTERNAL_MAX];
 static size_t nextra;
@@ -164,15 +224,28 @@ int ar_ppc_fallback_attach(const uint8_t*elf,size_t len,uint32_t limit,
 int ar_bridge_init(size_t n) {
   if(!n||n>MAX_MEM)return AR_BAD_ARGS;
   ar_bridge_shutdown();
+#ifdef ASCENSION_M772_LINKED
+  mem=ar_m772_vm_reserve();
+  if(!mem)return AR_NO_MEMORY;
+  mem_size=AR_M772_VM_GUEST;
+  mem_is_sparse_vm=1;
+#else
   mem=(uint8_t*)calloc(n,1);
   if(!mem)return AR_NO_MEMORY;
-  mem_size=n;return AR_OK;
+  mem_size=n;
+#endif
+  return AR_OK;
 }
 void ar_bridge_shutdown(void){
 #ifdef ASCENSION_M772_LINKED
  ar_m772_unbind_guest_memory(mem);
+ if(mem && mem_is_sparse_vm)munmap(mem,AR_M772_VM_TOTAL);
+ else free(mem);
+ mem_is_sparse_vm=0;
+#else
+ free(mem);
 #endif
-  free(mem);mem=0;mem_size=0;memset(extra,0,sizeof(extra));nextra=0;nfunc=0;memset(aot_slot,0,sizeof(aot_slot));
+  mem=0;mem_size=0;memset(extra,0,sizeof(extra));nextra=0;nfunc=0;memset(aot_slot,0,sizeof(aot_slot));
  memset(trace_seen,0,sizeof(trace_seen));memset(trace_ring,0,sizeof(trace_ring));
  trace_total=0;trace_unique=0;trace_hle=0;trace_pending=0;trace_budget=0;
  triage_first_count=triage_run_total=0;
