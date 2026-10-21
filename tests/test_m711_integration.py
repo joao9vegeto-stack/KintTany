@@ -29,6 +29,6 @@ class M711(unittest.TestCase):
         ui=(ROOT/"ios/ARProbeApp.m").read_text()
         self.assertIn('arLauncherLabel:@"ASCENSION"',ui)
         self.assertIn('self.nativeLaunchButton=[self arLauncherButton:@"INICIAR JOGO"',ui)
-        self.assertIn('self.ppuDiagnosticsButton=[self arLauncherButton:@"RELATÓRIO DA EXECUÇÃO"',ui)
+        self.assertIn('self.ppuDiagnosticsButton=[self arLauncherButton:@"PROGRESSO REAL DA EXECUÇÃO"',ui)
         self.assertIn("PS3RECOMP / MÉTRICAS AO VIVO",ui)
         self.assertIn("Chamadas de função AOT=%@",ui)

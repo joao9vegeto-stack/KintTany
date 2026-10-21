@@ -26,7 +26,7 @@ class TwentyFour(unittest.TestCase):
             "M6.3 PPU REAL 24/24: OK",
             "cpu24[8],cpu24[7]",
             "self.gameList.hidden=!showGame",
-            "self.graphicsList.hidden=showGame"):
+            "self.graphicsList.hidden=!showFiles"):
    self.assertIn(x,U)
  def test_ci(self):
   for x in ("m63-host.log","m63-status.txt",

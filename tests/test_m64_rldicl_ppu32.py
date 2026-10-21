@@ -31,7 +31,7 @@ class PPU32(unittest.TestCase):
   self.assertLess(i,j)
   for t in ("M6.4 PARADA SEGURA","M6.4 PPU REAL 32/32: OK",
       "self.gameList.hidden=!showGame",
-      "self.graphicsList.hidden=showGame",
+      "self.graphicsList.hidden=!showFiles",
       "ARCurrentRelease()"):
    self.assertIn(t,U)
  def test_ci(self):

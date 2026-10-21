@@ -34,7 +34,7 @@ class GuestMemory(unittest.TestCase):
    self.assertIn(t,C if "for(" in t else U)
   for t in ("M6.5 PARADA SEGURA","EA=0x%X · base=0x%X · valor=0x%X",
     "M6.5 PPU REAL 40/40: OK","ARCurrentRelease()",
-    "self.gameList.hidden=!showGame","self.graphicsList.hidden=showGame"):
+    "self.gameList.hidden=!showGame","self.graphicsList.hidden=!showFiles"):
    self.assertIn(t,U)
  def test_ci(self):
   for t in ("m65-host.log","m65-status.txt",

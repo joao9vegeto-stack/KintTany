@@ -26,6 +26,15 @@ int main(void)
     puts("[FAIL] 4-GiB alignment or 3.5-GiB guest window");
     ar_bridge_shutdown();return 1;
   }
+  ar_vm_reservation_status reservation={0};
+  ar_bridge_vm_reservation_status(&reservation);
+  if(!reservation.attempted || !reservation.reservation_kind ||
+     reservation.failure_stage!=AR_VM_STAGE_NONE ||
+     reservation.failure_errno!=0 ||
+     (reservation.reservation_kind==1u && !reservation.hint_attempts)){
+    puts("[FAIL] sparse VM reservation strategy diagnostics");
+    ar_bridge_shutdown();return 1;
+  }
   if(!check_word(UINT32_C(0x11019000),UINT32_C(0x1234ABCD)) ||
      !check_word(UINT32_C(0xC0000000),UINT32_C(0x52535821)) ||
      !check_word(UINT32_C(0xD0000000),UINT32_C(0x5354414B))){
@@ -38,6 +47,8 @@ int main(void)
     ar_bridge_shutdown();return 1;
   }
   ar_bridge_shutdown();
-  puts("[PASS] sparse M772 guest VM: 4-GiB aligned; mmapper, RSX and stack ranges readable/writable; upper bound guarded");
+  printf("[PASS] sparse M772 guest VM: 4-GiB aligned; strategy=%s; hint attempts=%u; mmapper, RSX and stack ranges readable/writable; upper bound guarded\n",
+      reservation.reservation_kind==1u?"aligned-hint":"overmap-fallback",
+      reservation.hint_attempts);
   return 0;
 }

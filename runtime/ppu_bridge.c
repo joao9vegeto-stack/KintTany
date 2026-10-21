@@ -3,6 +3,7 @@
 #include <stdlib.h>
 #include <string.h>
 #ifdef ASCENSION_M772_LINKED
+#include <errno.h>
 #include <stdint.h>
 #include <sys/mman.h>
 #include <unistd.h>
@@ -164,19 +165,122 @@ static uint32_t missing_nid,missing_syscall;
 static struct {uint32_t number;ar_hle_fn fn;} syscalls[MAX_LV2_SYSCALLS];
 static size_t nsyscalls;
 static uint8_t *mem;
+static ar_vm_reservation_status last_vm_reservation;
+void ar_bridge_vm_reservation_status(ar_vm_reservation_status *out)
+{
+  if(out)*out=last_vm_reservation;
+}
 #ifdef ASCENSION_M772_LINKED
 static int mem_is_sparse_vm;
 
+static void ar_m772_vm_fail(uint32_t stage,int error_number)
+{
+  last_vm_reservation.failure_stage=stage;
+  last_vm_reservation.failure_errno=error_number;
+}
+
+static uint8_t *ar_m772_vm_commit(uint8_t *base)
+{
+  if(((uintptr_t)base&((uintptr_t)AR_M772_VM_TOTAL-1u))!=0u){
+    ar_m772_vm_fail(AR_VM_STAGE_HINT_RELOCATED,EINVAL);
+    return NULL;
+  }
+  if(mprotect(base,AR_M772_VM_LOW_COMMIT,PROT_READ|PROT_WRITE)!=0){
+    const int error_number=errno;
+    ar_m772_vm_fail(AR_VM_STAGE_PROTECT_LOW,error_number);
+    (void)munmap(base,AR_M772_VM_TOTAL);
+    return NULL;
+  }
+  if(mprotect(base+AR_M772_VM_RSX_BASE,AR_M772_VM_RSX_SIZE,
+              PROT_READ|PROT_WRITE)!=0){
+    const int error_number=errno;
+    ar_m772_vm_fail(AR_VM_STAGE_PROTECT_RSX,error_number);
+    (void)munmap(base,AR_M772_VM_TOTAL);
+    return NULL;
+  }
+  if(mprotect(base+AR_M772_VM_STACK_BASE,AR_M772_VM_STACK_SIZE,
+              PROT_READ|PROT_WRITE)!=0){
+    const int error_number=errno;
+    ar_m772_vm_fail(AR_VM_STAGE_PROTECT_STACK,error_number);
+    (void)munmap(base,AR_M772_VM_TOTAL);
+    return NULL;
+  }
+  last_vm_reservation.failure_stage=AR_VM_STAGE_NONE;
+  last_vm_reservation.failure_errno=0;
+  return base;
+}
+
 static uint8_t *ar_m772_vm_reserve(void)
 {
-  if(sizeof(uintptr_t)<8u)return NULL;
-  const size_t reserve_size=AR_M772_VM_TOTAL*2u;
+  if(sizeof(uintptr_t)<8u){
+    ar_m772_vm_fail(AR_VM_STAGE_NEEDS_64BIT,0);
+    return NULL;
+  }
   int flags=MAP_PRIVATE|MAP_ANONYMOUS;
 #ifdef MAP_NORESERVE
   flags|=MAP_NORESERVE;
 #endif
+
+  /* PS3Recomp derives guest effective addresses from the low 32 bits of a
+   * host pointer. Reserve a single aligned 4-GiB slot directly first; asking
+   * iOS/LiveContainer for an 8-GiB contiguous range just to trim half of it
+   * unnecessarily fails under tighter virtual-address maps. Never use
+   * MAP_FIXED: accept a hint only when mmap returns the exact safe address. */
+  static const uintptr_t hints[]={
+    (uintptr_t)UINT64_C(0x0000000400000000),
+    (uintptr_t)UINT64_C(0x0000000500000000),
+    (uintptr_t)UINT64_C(0x0000000600000000),
+    (uintptr_t)UINT64_C(0x0000000700000000),
+    (uintptr_t)UINT64_C(0x0000000800000000),
+    (uintptr_t)UINT64_C(0x0000000900000000),
+    (uintptr_t)UINT64_C(0x0000000A00000000),
+    (uintptr_t)UINT64_C(0x0000000B00000000),
+    (uintptr_t)UINT64_C(0x0000000C00000000),
+    (uintptr_t)UINT64_C(0x0000000D00000000),
+    (uintptr_t)UINT64_C(0x0000000E00000000),
+    (uintptr_t)UINT64_C(0x0000000F00000000),
+    (uintptr_t)UINT64_C(0x0000001000000000),
+    (uintptr_t)UINT64_C(0x0000001400000000),
+    (uintptr_t)UINT64_C(0x0000001800000000),
+    (uintptr_t)UINT64_C(0x0000001C00000000),
+    (uintptr_t)UINT64_C(0x0000002000000000),
+    (uintptr_t)UINT64_C(0x0000002800000000),
+    (uintptr_t)UINT64_C(0x0000003000000000),
+    (uintptr_t)UINT64_C(0x0000003800000000),
+    (uintptr_t)UINT64_C(0x0000004000000000)
+  };
+  for(size_t i=0;i<sizeof(hints)/sizeof(hints[0]);i++){
+    void *mapped=mmap((void*)hints[i],AR_M772_VM_TOTAL,PROT_NONE,
+                      flags,-1,0);
+    last_vm_reservation.hint_attempts++;
+    if(mapped==MAP_FAILED){
+      ar_m772_vm_fail(AR_VM_STAGE_ALIGNED_HINT,errno);
+      continue;
+    }
+    if((uintptr_t)mapped!=hints[i]){
+      const int release_rc=munmap(mapped,AR_M772_VM_TOTAL);
+      if(release_rc!=0){
+        ar_m772_vm_fail(AR_VM_STAGE_HINT_CLEANUP,errno);
+        return NULL;
+      }
+      ar_m772_vm_fail(AR_VM_STAGE_HINT_RELOCATED,EINVAL);
+      continue;
+    }
+    uint8_t *committed=ar_m772_vm_commit((uint8_t*)mapped);
+    if(committed){
+      last_vm_reservation.reservation_kind=1u;
+      return committed;
+    }
+  }
+
+  /* Keep the proven PS3Recomp-compatible strategy as a compatibility path
+   * for systems where none of the ordinary address hints can be honored. */
+  const size_t reserve_size=AR_M772_VM_TOTAL*2u;
   uint8_t *raw=(uint8_t*)mmap(NULL,reserve_size,PROT_NONE,flags,-1,0);
-  if(raw==MAP_FAILED)return NULL;
+  if(raw==MAP_FAILED){
+    ar_m772_vm_fail(AR_VM_STAGE_FALLBACK_MAP,errno);
+    return NULL;
+  }
 
   const uintptr_t raw_addr=(uintptr_t)raw;
   const uintptr_t aligned_addr=(raw_addr+(uintptr_t)AR_M772_VM_TOTAL-1u)&
@@ -187,19 +291,17 @@ static uint8_t *ar_m772_vm_reserve(void)
                              (aligned_addr+AR_M772_VM_TOTAL));
   if((head && munmap(raw,head)!=0) ||
      (tail && munmap(aligned+AR_M772_VM_TOTAL,tail)!=0)) {
-    munmap(raw,reserve_size);
+    const int error_number=errno;
+    (void)munmap(raw,reserve_size);
+    ar_m772_vm_fail(AR_VM_STAGE_TRIM,error_number);
     return NULL;
   }
-  if(((uintptr_t)aligned&((uintptr_t)AR_M772_VM_TOTAL-1u))!=0u ||
-     mprotect(aligned,AR_M772_VM_LOW_COMMIT,PROT_READ|PROT_WRITE)!=0 ||
-     mprotect(aligned+AR_M772_VM_RSX_BASE,AR_M772_VM_RSX_SIZE,
-              PROT_READ|PROT_WRITE)!=0 ||
-     mprotect(aligned+AR_M772_VM_STACK_BASE,AR_M772_VM_STACK_SIZE,
-              PROT_READ|PROT_WRITE)!=0) {
-    munmap(aligned,AR_M772_VM_TOTAL);
+  uint8_t *committed=ar_m772_vm_commit(aligned);
+  if(!committed){
     return NULL;
   }
-  return aligned;
+  last_vm_reservation.reservation_kind=2u;
+  return committed;
 }
 #endif
 #define AR_EXTERNAL_MAX 512u
@@ -222,9 +324,11 @@ int ar_ppc_fallback_attach(const uint8_t*elf,size_t len,uint32_t limit,
 #endif
 }
 int ar_bridge_init(size_t n) {
+  memset(&last_vm_reservation,0,sizeof(last_vm_reservation));
   if(!n||n>MAX_MEM)return AR_BAD_ARGS;
   ar_bridge_shutdown();
 #ifdef ASCENSION_M772_LINKED
+  last_vm_reservation.attempted=1u;
   mem=ar_m772_vm_reserve();
   if(!mem)return AR_NO_MEMORY;
   mem_size=AR_M772_VM_GUEST;

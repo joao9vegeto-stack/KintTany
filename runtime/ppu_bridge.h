@@ -17,6 +17,30 @@ int ar_bridge_init(size_t);
 void ar_bridge_shutdown(void);
 void *ar_guest_memory_base(void);
 size_t ar_guest_memory_capacity(void);
+/* Last PS3 guest-VM reservation attempt. failure_stage is zero on success;
+ * reservation_kind is 1 for an exact aligned hint or 2 for the legacy
+ * over-reserve-and-trim fallback. errno is captured before cleanup calls. */
+typedef struct {
+    uint32_t attempted;
+    uint32_t reservation_kind;
+    uint32_t hint_attempts;
+    uint32_t failure_stage;
+    int32_t failure_errno;
+} ar_vm_reservation_status;
+enum {
+    AR_VM_STAGE_NONE=0,
+    AR_VM_STAGE_NEEDS_64BIT=1,
+    AR_VM_STAGE_ALIGNED_HINT=2,
+    AR_VM_STAGE_HINT_RELOCATED=3,
+    AR_VM_STAGE_HINT_CLEANUP=4,
+    AR_VM_STAGE_FALLBACK_MAP=5,
+    AR_VM_STAGE_TRIM=6,
+    AR_VM_STAGE_PROTECT_LOW=7,
+    AR_VM_STAGE_PROTECT_RSX=8,
+    AR_VM_STAGE_PROTECT_STACK=9,
+    AR_VM_STAGE_RELEASE=10
+};
+void ar_bridge_vm_reservation_status(ar_vm_reservation_status *out);
 int ar_register(uint32_t, ar_ppu_fn);
 int ar_run(ppu_context *, uint32_t, uint32_t);
 int ar_last_error(void);

@@ -4,7 +4,7 @@ on:
   workflow_dispatch:
     inputs:
       run_id:
-        description: Successful AscensionRecomp M7.76.0 build run ID
+        description: Successful AscensionRecomp M7.77.0 build run ID
         required: true
         type: string
 
@@ -20,7 +20,7 @@ jobs:
       - name: Download the exact built IPA artifact
         uses: actions/download-artifact@v4
         with:
-          name: AscensionRecomp-M7.76.0-LAUNCHER-ARM64
+          name: AscensionRecomp-M7.77.0-LAUNCHER-ARM64
           github-token: ${{ github.token }}
           repository: ${{ github.repository }}
           run-id: ${{ inputs.run_id }}
@@ -31,7 +31,7 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          ipa="$(find delivery -type f -name 'AscensionRecompProbe-7.76.0-unsigned.ipa' -print -quit)"
+          ipa="$(find delivery -type f -name 'AscensionRecompProbe-7.77.0-unsigned.ipa' -print -quit)"
           test -n "$ipa"
           python3 - "$ipa" <<'PY'
           import sys, zipfile
@@ -41,19 +41,31 @@ jobs:
                          for n in z.namelist())
           PY
           curl --fail --silent --show-error --retry 3 \
-            -F "file=@${ipa};filename=AscensionRecomp-7.76.0.ipa" \
+            -F "file=@${ipa};filename=AscensionRecomp-7.77.0.ipa" \
             https://tmpfiles.org/api/v1/upload > "$RUNNER_TEMP/upload.json"
-          python3 - "$RUNNER_TEMP/upload.json" "$GITHUB_OUTPUT" "$GITHUB_STEP_SUMMARY" <<'PY'
+          python3 - "$RUNNER_TEMP/upload.json" "$RUNNER_TEMP/tmpfiles-page.url" <<'PY'
           import json, pathlib, sys
           response=json.loads(pathlib.Path(sys.argv[1]).read_text())
           page=response['data']['url']
           if not page.startswith('https://tmpfiles.org/'):
               raise SystemExit('unexpected temporary host URL')
-          direct=page.replace('https://tmpfiles.org/','https://tmpfiles.org/dl/',1)
-          with open(sys.argv[2],'a') as f:
+          pathlib.Path(sys.argv[2]).write_text(page)
+          PY
+          curl --fail --silent --show-error --retry 3 \
+            "$(cat "$RUNNER_TEMP/tmpfiles-page.url")" -o "$RUNNER_TEMP/tmpfiles-page.html"
+          python3 - "$RUNNER_TEMP/upload.json" "$RUNNER_TEMP/tmpfiles-page.html" "$GITHUB_OUTPUT" "$GITHUB_STEP_SUMMARY" <<'PY'
+          import html, json, pathlib, re, sys
+          response=json.loads(pathlib.Path(sys.argv[1]).read_text())
+          page=response['data']['url']
+          markup=pathlib.Path(sys.argv[2]).read_text(errors='replace')
+          match=re.search(r'href=["\'](https://tmpfiles\.org/dl/[^"\']+)',markup)
+          if not match:
+              raise SystemExit('could not find the direct download URL on the temporary page')
+          direct=html.unescape(match.group(1))
+          with open(sys.argv[3],'a') as f:
               f.write('ipa_page='+page+'\n')
               f.write('ipa_url='+direct+'\n')
-          with open(sys.argv[3],'a') as f:
+          with open(sys.argv[4],'a') as f:
               f.write('IPA direta: '+direct+'\n')
               f.write('Página temporária: '+page+'\n')
           print('Temporary direct IPA URL: '+direct)

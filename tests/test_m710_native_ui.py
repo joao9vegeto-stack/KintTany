@@ -12,7 +12,7 @@ class M710UI(unittest.TestCase):
         self.assertIn('self.launcherReadinessLabel=[self arLauncherLabel:',ui)
         for key in (
             'self.nativeLaunchButton=[self arLauncherButton:@"INICIAR JOGO"',
-            'self.ppuDiagnosticsButton=[self arLauncherButton:@"RELATÓRIO DA EXECUÇÃO"',
+            'self.ppuDiagnosticsButton=[self arLauncherButton:@"PROGRESSO REAL DA EXECUÇÃO"',
             "Chamadas de função AOT=%@",
             "action:@selector(shareAdvancedPpuReport:)",
             "PPC interpretado=0",

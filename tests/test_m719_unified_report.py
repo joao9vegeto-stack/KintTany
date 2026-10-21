@@ -12,7 +12,7 @@ class M719ReportTests(unittest.TestCase):
     def test_game_tab_has_one_execution_report_action(self):
         s=self.ui
         self.assertIn('self.nativeLaunchButton=[self arLauncherButton:@"INICIAR JOGO"',s)
-        self.assertIn('self.ppuDiagnosticsButton=[self arLauncherButton:@"RELATÓRIO DA EXECUÇÃO"',s)
+        self.assertIn('self.ppuDiagnosticsButton=[self arLauncherButton:@"PROGRESSO REAL DA EXECUÇÃO"',s)
         self.assertEqual(s.count('[main addArrangedSubview:self.ppuDiagnosticsButton];'),1)
         self.assertIn('openUnifiedPpuMenu:',s)
         self.assertIn('self.nativeLaunchButton.enabled=enabled;',s)

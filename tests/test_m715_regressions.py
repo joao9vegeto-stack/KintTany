@@ -13,7 +13,7 @@ class M715SourceRegressions(unittest.TestCase):
         cls.aot=(ROOT/"runtime/ppu_m715_aot_fragment.c").read_text()
 
     def test_active_launcher_shows_one_live_execution_report(self):
-        self.assertIn('self.ppuDiagnosticsButton=[self arLauncherButton:@"RELATÓRIO DA EXECUÇÃO"',self.ui)
+        self.assertIn('self.ppuDiagnosticsButton=[self arLauncherButton:@"PROGRESSO REAL DA EXECUÇÃO"',self.ui)
         self.assertIn("Chamadas de função AOT=%@",self.ui)
         self.assertIn("cellFsRead guest=%@ · bytes lidos pelo guest=%@",self.ui)
         self.assertIn("self.nativeRunRefreshTimer=[NSTimer scheduledTimerWithTimeInterval:0.25",self.ui)
@@ -29,7 +29,7 @@ class M715SourceRegressions(unittest.TestCase):
 
     def test_graphics_status_does_not_claim_game_menu(self):
         self.assertIn("Comandos RSX do jogo= %@",self.ui)
-        self.assertIn("Bancada RSX sintética para validar o backend Metal. Não inicia o jogo",self.ui)
+        self.assertIn("Atividade do host, importação de arquivos e bancada sintética não contam como avanço do jogo",self.ui)
 
 if __name__=="__main__":
     unittest.main()

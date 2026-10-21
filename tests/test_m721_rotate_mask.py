@@ -29,6 +29,6 @@ class M721Tests(unittest.TestCase):
   self.assertIn("AscensionRecomp-%@-NPUA80918-%@.txt",self.ui)
   self.assertIn("initForExportingURLs:@[url] asCopy:YES",self.ui)
   self.assertIn("Comandos RSX do jogo= %@",self.ui)
-  self.assertIn('self.ppuDiagnosticsButton=[self arLauncherButton:@"RELATÓRIO DA EXECUÇÃO"',self.ui)
+  self.assertIn('self.ppuDiagnosticsButton=[self arLauncherButton:@"PROGRESSO REAL DA EXECUÇÃO"',self.ui)
 
 if __name__=="__main__":unittest.main()
