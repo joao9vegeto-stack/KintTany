@@ -1956,7 +1956,7 @@ static BOOL ARGameManifestHasTitleUsrdir(NSDictionary *manifest){
      "Reserva VM=%@ · base=%@ · Mach tentativas=%@ (último kr=%@) · mmap tentativas=%@ · estágio=%@ · errno=%@\n\n"
      "PS3RECOMP / MÉTRICAS AO VIVO\n"
      "Tabela AOT=%llu funções · imagens SPU=%llu · runtime inicializado=%@\n"
-     "Chamadas de função AOT=%@ · início(s) da entry=%@ · última entrada AOT=0x%08llX (PC atual da instrução NÃO MEDIDO)\n"
+     "Chamadas de função AOT=%@ · início(s) da entry=%@ · último PC=0x%08llX (entrada AOT mais recente; PC atual da instrução NÃO MEDIDO)\n"
      "SPURS2 · instâncias=%llu · workloads=%llu (%llu IDs 16–31) · PMs encontrados/faltantes=%llu/%llu · despachos=%llu (%llu IDs 16–31) · último wid=%@\n"
      "Últimas amostras AOT (1/4096):\n%@\n"
      "Último evento rastreado: LR=0x%08llX · SP=0x%08llX · r3-r6=%08llX/%08llX/%08llX/%08llX\n"
