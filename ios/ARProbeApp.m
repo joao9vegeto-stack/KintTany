@@ -155,6 +155,16 @@ static void ARRSXResetMetrics(void){
  __atomic_store_n(&ARNativeRSXPresentedFrames,UINT64_C(0),__ATOMIC_RELAXED);
  __atomic_store_n(&ARNativeRSXLastGuestDraws,UINT64_C(0),__ATOMIC_RELAXED);
 }
+static NSString *ARFormatRunElapsed(CFTimeInterval startedAt,
+                                    CFTimeInterval endedAt){
+ if(startedAt<=0.0)return @"AINDA NÃO INICIADO";
+ const CFTimeInterval now=endedAt>startedAt?endedAt:CACurrentMediaTime();
+ const uint64_t seconds=(uint64_t)MAX(0.0,now-startedAt);
+ return [NSString stringWithFormat:@"%02llu:%02llu:%02llu",
+   (unsigned long long)(seconds/3600u),
+   (unsigned long long)((seconds/60u)%60u),
+   (unsigned long long)(seconds%60u)];
+}
 static BOOL ARIsValidatedAscensionELF(NSData *data){
  if(data.length!=8717136u)return NO;
  uint32_t info[5]={0};
@@ -224,6 +234,7 @@ static BOOL ARGameManifestHasTitleUsrdir(NSDictionary *manifest){
 @property(nonatomic,strong) UIButton *graphicsCacheButton;
 @property(nonatomic,strong) NSTimer *nativeRunRefreshTimer;
 @property(nonatomic,strong) NSThread *nativeRunThread;
+@property(nonatomic,strong) UILabel *nativeRunElapsedLabel;
 @property(nonatomic,strong) NSThread *nativeRSXPumpThread;
 @property(nonatomic,strong) UISegmentedControl *launcherTabs;
 @property(nonatomic,strong) UIView *nativeGameHUD;
@@ -232,6 +243,7 @@ static BOOL ARGameManifestHasTitleUsrdir(NSDictionary *manifest){
 @property(nonatomic,strong) NSData *selectedElfData;
 @property(nonatomic,copy) NSString *selectedElfPath;
 @property(nonatomic,assign) CFAbsoluteTime nativeRunStartedAt;
+@property(nonatomic,assign) CFAbsoluteTime nativeRunEndedAt;
 @property(nonatomic,assign) BOOL ready;
 @property(nonatomic,assign) BOOL shaderBusy;
 @property(nonatomic,assign) BOOL graphicsReady;
@@ -1078,9 +1090,13 @@ static BOOL ARGameManifestHasTitleUsrdir(NSDictionary *manifest){
   activityRows.axis=UILayoutConstraintAxisVertical; activityRows.spacing=8;
   [activityRows addArrangedSubview:[self arLauncherLabel:@"SESSÃO / ATIVIDADE" size:10 weight:UIFontWeightBold color:gold lines:1]];
   self.status=[self arLauncherLabel:@"Aguardando instalação e GOWA.ELF" size:12 weight:UIFontWeightMedium color:[UIColor colorWithWhite:0.86 alpha:1] lines:3];
+  self.nativeRunElapsedLabel=[self arLauncherLabel:@"TEMPO DESDE INICIAR  AINDA NÃO INICIADO" size:10 weight:UIFontWeightSemibold color:gold lines:1];
+  self.nativeRunElapsedLabel.font=[UIFont monospacedSystemFontOfSize:10 weight:UIFontWeightSemibold];
   self.bootMetricsLabel=[self arLauncherLabel:@"PPU AOT · ainda não iniciado\ncellFs · sem chamadas guest medidas" size:10 weight:UIFontWeightRegular color:muted lines:7];
   self.bootMetricsLabel.font=[UIFont monospacedSystemFontOfSize:10 weight:UIFontWeightRegular];
-  [activityRows addArrangedSubview:self.status]; [activityRows addArrangedSubview:self.bootMetricsLabel];
+  [activityRows addArrangedSubview:self.status];
+  [activityRows addArrangedSubview:self.nativeRunElapsedLabel];
+  [activityRows addArrangedSubview:self.bootMetricsLabel];
   [activity addSubview:activityRows];
   [NSLayoutConstraint activateConstraints:@[
     [activityRows.leadingAnchor constraintEqualToAnchor:activity.leadingAnchor constant:13],
@@ -1329,6 +1345,8 @@ static BOOL ARGameManifestHasTitleUsrdir(NSDictionary *manifest){
 - (void)updateNativeRunMetrics {
   uint64_t m772[40]={0}; ar_m772_runtime_attest(m772);
   uint32_t state=ar_m772_entry_state();
+  NSString *elapsed=ARFormatRunElapsed(self.nativeRunStartedAt,self.nativeRunEndedAt);
+  self.nativeRunElapsedLabel.text=[NSString stringWithFormat:@"TEMPO DESDE INICIAR  %@",elapsed];
   NSString *phase=state==0?@"PREPARANDO runtime / VFS":
                   state==1?@"ENTRY AOT EM EXECUÇÃO":
                   state==2?@"ENTRY RETORNOU":@"FALHA AO VINCULAR ENTRY";
@@ -1346,8 +1364,8 @@ static BOOL ARGameManifestHasTitleUsrdir(NSDictionary *manifest){
      (unsigned long long)m772[12],(unsigned long long)draws,
      (unsigned long long)frames];
   self.nativeGameHUDLabel.text=[NSString stringWithFormat:
-    @"Guest AOT %@ · FS %@ bytes\nGuest RSX %@ draws · %@ flips",
-    @(m772[5]),@(m772[12]),@(draws),@(frames)];
+    @"Tempo %@\nGuest AOT %@ · FS %@ bytes\nGuest RSX %@ draws · %@ flips",
+    elapsed,@(m772[5]),@(m772[12]),@(draws),@(frames)];
   if(state==1)self.status.text=[NSString stringWithFormat:
     @"PS3Recomp AOT ativo · funções %@ · HLE %@ · LV2 %@ · FS guest %@ bytes · frames guest %@.",
     @(m772[5]),@(m772[26]),@(m772[29]),@(m772[12]),@(frames)];
@@ -1408,6 +1426,7 @@ static BOOL ARGameManifestHasTitleUsrdir(NSDictionary *manifest){
 - (void)startNativeGame:(UIButton*)sender {
   (void)sender;
   if(self.shaderBusy)return;
+  const CFTimeInterval tappedAt=CACurrentMediaTime();
   if(!self.hasGameInstallation){
     self.gameInstallLabel.text=@"Selecione NPUA80918 com a pasta USRDIR";
     self.status.text=@"Escolha uma pasta válida do jogo antes de iniciar.";
@@ -1433,7 +1452,8 @@ static BOOL ARGameManifestHasTitleUsrdir(NSDictionary *manifest){
   ARRSXResetMetrics();
   __atomic_store_n(&ARNativeRSXBackendReady,0u,__ATOMIC_RELEASE);
   __atomic_store_n(&ARNativeRSXPumpActive,0u,__ATOMIC_RELEASE);
-  self.nativeRunStartedAt=CFAbsoluteTimeGetCurrent();
+  self.nativeRunStartedAt=tappedAt;
+  self.nativeRunEndedAt=0.0;
   self.ppuReport=nil; self.m750Run=nil; self.ppuProgress=@"Montando PS3Recomp e VFS guest.";
   ar_m772_runtime_begin();
   [self arSetStatus:@"Preparando VM, PPU/SPU recompilados e acesso guest ao jogo…"];
@@ -1477,6 +1497,7 @@ static BOOL ARGameManifestHasTitleUsrdir(NSDictionary *manifest){
         __atomic_store_n(&ARNativeRSXBackendReady,0u,__ATOMIC_RELEASE);
       }
     }
+    const CFTimeInterval runEndedAt=CACurrentMediaTime();
     const uint64_t vblanks=ARRSXLoad(&ARNativeRSXVBlanks);
     const uint64_t drains=ARRSXLoad(&ARNativeRSXFIFODrains);
     const uint64_t frames=ARRSXLoad(&ARNativeRSXPresentedFrames);
@@ -1521,6 +1542,7 @@ static BOOL ARGameManifestHasTitleUsrdir(NSDictionary *manifest){
       @"vm_reservation_base":@(vmReservation.reservation_base)
     };
     dispatch_async(dispatch_get_main_queue(),^{
+      self.nativeRunEndedAt=runEndedAt;
       self.nativeRunThread=nil;
       [self.nativeRunRefreshTimer invalidate]; self.nativeRunRefreshTimer=nil;
       self.shaderBusy=NO; self.m750Run=result;
@@ -1751,6 +1773,7 @@ static BOOL ARGameManifestHasTitleUsrdir(NSDictionary *manifest){
 - (NSString *)arUnifiedPpuText {
   uint64_t live[40]={0}; ar_m772_runtime_attest(live);
   uint32_t state=ar_m772_entry_state();
+  NSString *elapsed=ARFormatRunElapsed(self.nativeRunStartedAt,self.nativeRunEndedAt);
   NSDictionary *run=self.m750Run;
   ar_vm_reservation_status vmReservation={0};
   ar_bridge_vm_reservation_status(&vmReservation);
@@ -1806,6 +1829,7 @@ static BOOL ARGameManifestHasTitleUsrdir(NSDictionary *manifest){
      "App=%@ · title=NPUA80918 · origem=ELF autenticado no iPhone\n\n"
      "SESSÃO\n"
      "Estado=%@ · fase=%@\n"
+     "Tempo desde tocar Iniciar=%@\n"
      "ELF importado=%@ · entry=%@ · host rc=%@ · guest rc=%@\n"
      "VM guest virtual=%@ bytes (páginas sob demanda) · ELF PT_LOAD=%@ bytes · raiz VFS=%@\n\n"
      "Reserva VM=%@ · base=%@ · Mach tentativas=%@ (último kr=%@) · mmap tentativas=%@ · estágio=%@ · errno=%@\n\n"
@@ -1834,7 +1858,8 @@ static BOOL ARGameManifestHasTitleUsrdir(NSDictionary *manifest){
      "Estado do jogo: menu/gameplay ainda não estão comprovados até o guest gerar draws e apresentar um flip.\n"
      "ELF, PSARC e conteúdo do jogo permanecem no dispositivo.",
      AR_M750_BUILD_BRANCH,AR_M750_BUILD_SHA,AR_M750_BUILD_RUN_NUMBER,AR_M750_BUILD_RUN_ID,
-     ARCurrentRelease(),stateText,phase,run?@"SIM":(self.selectedElfData?@"SIM · VALIDADO":@"NÃO"),entry,hostRC,rc,
+     ARCurrentRelease(),stateText,phase,elapsed,
+     run?@"SIM":(self.selectedElfData?@"SIM · VALIDADO":@"NÃO"),entry,hostRC,rc,
      run?[run[@"vm_capacity"] description]:[NSString stringWithFormat:@"%llu",(unsigned long long)live[7]],
      run?[run[@"loaded_bytes"] description]:@"NÃO MEDIDO",
      vfsRootState,

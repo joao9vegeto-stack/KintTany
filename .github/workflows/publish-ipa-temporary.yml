@@ -4,7 +4,7 @@ on:
   workflow_dispatch:
     inputs:
       run_id:
-        description: Successful AscensionRecomp M7.80.0 build run ID
+        description: Successful AscensionRecomp M7.81.0 build run ID
         required: true
         type: string
 
@@ -20,7 +20,7 @@ jobs:
       - name: Download the exact built IPA artifact
         uses: actions/download-artifact@v4
         with:
-          name: AscensionRecomp-M7.80.0-LAUNCHER-ARM64
+          name: AscensionRecomp-M7.81.0-LAUNCHER-ARM64
           github-token: ${{ github.token }}
           repository: ${{ github.repository }}
           run-id: ${{ inputs.run_id }}
@@ -31,7 +31,7 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          ipa="$(find delivery -type f -name 'AscensionRecompProbe-7.80.0-unsigned.ipa' -print -quit)"
+          ipa="$(find delivery -type f -name 'AscensionRecompProbe-7.81.0-unsigned.ipa' -print -quit)"
           test -n "$ipa"
           python3 - "$ipa" <<'PY'
           import sys, zipfile
@@ -41,7 +41,7 @@ jobs:
                          for n in z.namelist())
           PY
           curl --fail --silent --show-error --retry 3 \
-            -F "file=@${ipa};filename=AscensionRecomp-7.80.0.ipa" \
+            -F "file=@${ipa};filename=AscensionRecomp-7.81.0.ipa" \
             https://tmpfiles.org/api/v1/upload > "$RUNNER_TEMP/upload.json"
           python3 - "$RUNNER_TEMP/upload.json" "$RUNNER_TEMP/tmpfiles-page.url" <<'PY'
           import json, pathlib, sys

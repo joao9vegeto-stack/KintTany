@@ -549,7 +549,7 @@ symbols=src/'symbols.txt'
 assert archive.is_file() and attestation.is_file() and symbols.is_file()
 a=json.loads(attestation.read_text())
 digest=hashlib.sha256(archive.read_bytes()).hexdigest()
-assert a['schema']=='ascension-m772-ios-arm64-link-input-v4'
+assert a['schema']=='ascension-m772-ios-arm64-link-input-v5'
 assert a['upstream_commit']=='39a36296511c445707adabcd312f0b740cfbd694'
 assert a['ios_vfs_mount_patch']=='npua80918-and-app-home-usrdir-v1'
 assert a['ios_vm_mapping_patch']=='mach-anywhere-4g-relative-guest-ea-v1'
@@ -561,6 +561,7 @@ assert a['spu_translation_units_compiled']==4
 assert a['archive']=='libAscensionGOWA-M772-ios-arm64.a'
 assert a['hle_registration']=='strong-generated-nid-table'
 assert a['unresolved_hle_telemetry']=='ps3_hle_call-missing-handler-branch'
+assert a['cell_game_patch_check']=='disc-boot-returns-CELL_GAME_ERROR_NOTPATCH'
 assert a['archive_bytes']==archive.stat().st_size
 assert a['archive_sha256']==digest
 text=symbols.read_text(errors='replace')
@@ -656,13 +657,14 @@ required=("func_00010410", "func_0052A740", "func_0052E3F4", "_ar_m772_runtime_a
           "_cellGcm_take_flip_pending_synced", "_rsx_metal_backend_init",
           "_rsx_metal_backend_present", "_rsx_metal_backend_guest_draws",
           "_ppu_hle_register_all",
+          "_cellGamePatchCheck",
           "_cellPad_set_host_state",
           "_cellPadGetData", "_cellAudioPortOpen", "_cellAudioSetNotifyEventQueue",
           "_ppu_recomp_register", "_gowa_spu_0000_at_006B3E00_spu_recomp_register",
           "_gowa_spu_0003_at_006D5900_spu_recomp_register")
 missing=[symbol for symbol in required if not any(symbol in name for name in defined)]
 if missing: raise SystemExit("M7.72 expected AOT definitions missing from final Mach-O: "+str(missing))
-print("M7.80 final ARM64 Mach-O contains AOT/HLE/loop telemetry, GCM FIFO pump, Metal present and SPU registration symbols")
+print("M7.81 final ARM64 Mach-O contains disc-boot HLE, AOT telemetry, GCM FIFO pump, Metal present and SPU registration symbols")
 PYM772LINKED
 # Every M7.62 native function must appear in the FINAL Mach-O, not merely object.
 python3 - <<'PY'

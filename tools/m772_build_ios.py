@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Compile the M7.72 PPU/SPU lift plus its per-game PS3Recomp runtime for iOS."""
+"""Compile the M7.81 PPU/SPU lift plus its per-game PS3Recomp runtime for iOS."""
 import argparse
 import concurrent.futures
 import hashlib
@@ -403,6 +403,11 @@ def main():
     actual = subprocess.check_output(["git", "-C", str(upstream), "rev-parse", "HEAD"], text=True).strip()
     if actual != expected:
         raise SystemExit(f"M7.72 lifter/runtime pin mismatch: {actual} != {expected}")
+    game_source = upstream / "libs/system/cellGame.c"
+    game_header = upstream / "libs/system/cellGame.h"
+    if ("ASCENSION_IOS_CELL_GAME_PATCH_CHECK" not in game_source.read_text() or
+            "s32 cellGamePatchCheck(void* size, void* reserved);" not in game_header.read_text()):
+        raise SystemExit("M7.81 disc-boot cellGamePatchCheck HLE patch is missing")
     pointer_patch_count = patch_ios_unaligned_guest_vm(upstream)
     if pointer_patch_count != 370:
         raise SystemExit(f"M7.79 unaligned guest-VM patch incomplete: {pointer_patch_count}")
@@ -425,6 +430,9 @@ def main():
              logs / "00-hle-nids.log")
     if rc or not nid_source.is_file() or not nid_source.stat().st_size:
         raise SystemExit(f"M7.72 HLE NID generation failed; see {logs / '00-hle-nids.log'}")
+    generated_nids = nid_source.read_text(errors="replace")
+    if 'ps3_hle_register(0xCE4374F6u, "cellGamePatchCheck"' not in generated_nids:
+        raise SystemExit("M7.81 cellGamePatchCheck NID 0xCE4374F6 is not bound to its HLE")
 
     include_dirs = [
         source, source / "ppu", upstream / "include", upstream / "runtime",
@@ -524,11 +532,12 @@ def main():
         raise SystemExit(f"M7.72 required ARM64 archive symbols missing: {missing}")
 
     result = {
-        "schema": "ascension-m772-ios-arm64-link-input-v4",
+        "schema": "ascension-m772-ios-arm64-link-input-v5",
         "upstream_commit": actual,
         "ios_vfs_mount_patch": "npua80918-and-app-home-usrdir-v1",
         "ios_vm_mapping_patch": "mach-anywhere-4g-relative-guest-ea-v1",
         "hle_registration": "strong-generated-nid-table",
+        "cell_game_patch_check": "disc-boot-returns-CELL_GAME_ERROR_NOTPATCH",
         "unresolved_hle_telemetry": "ps3_hle_call-missing-handler-branch",
         "ppu_translation_units_compiled": len(ppu),
         "ppu_function_table_entries": 29849,
