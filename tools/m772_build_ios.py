@@ -231,10 +231,11 @@ def main():
     if rc:
         raise SystemExit("M7.72 nm failed")
     symbol_text = symbols.read_text(errors="replace")
-    required = ["func_0052A740", "func_0052E3F4", "_function_table_count",
+    required = ["func_00010410", "func_0052A740", "func_0052E3F4", "_function_table_count",
                 "_ar_m772_runtime_attest", "_ar_m772_runtime_begin",
                 "_ar_m772_runtime_init",
-                "_ar_m772_dispatch_native", "_ar_m772_unbind_guest_memory",
+                "_ar_m772_dispatch_native", "_ar_m772_note_function",
+                "_ar_m772_run_entry", "_ar_m772_unbind_guest_memory",
                 "_ppu_recomp_register",
                 "_gowa_spu_0000_at_006B3E00_spu_recomp_register",
                 "_gowa_spu_0001_at_006C1B00_spu_recomp_register",
@@ -255,13 +256,14 @@ def main():
         "upstream_commit": actual,
         "ppu_translation_units_compiled": len(ppu),
         "ppu_function_table_entries": 29849,
+        "native_aot_function_entry_hooks": 29849,
         "spu_translation_units_compiled": len(spu),
         "per_game_runtime_units_compiled": len(scaffold),
         "total_arm64_objects": len(obj_files),
         "archive": archive.name,
         "archive_bytes": archive.stat().st_size,
         "archive_sha256": digest(archive),
-        "runtime_dispatch_adapter": "linked; boot initializes registry before ar_run",
+        "runtime_dispatch_adapter": "complete AOT entry call; all 29849 functions report live entry telemetry",
         "device_guest_execution": "RUNTIME_COUNTER_REPORTED_BY_APP; DEVICE_RUN_REQUIRED",
         "first_guest_frame": "NOT_MEASURED",
     }

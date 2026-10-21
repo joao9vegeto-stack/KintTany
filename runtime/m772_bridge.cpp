@@ -16,12 +16,12 @@ extern "C" void lv2_init_syscalls(void);
 extern "C" void ppu_install_thread_trampoline(void);
 extern "C" uint64_t ppu_thread_register_main(void);
 extern "C" void ppu_resv_register(ppu_context*);
-extern "C" void ps3_indirect_call_to(ppu_context*,uint32_t);
 extern "C" PPU_THREAD_LOCAL ppu_context* g_active_ctx;
 extern "C" ppu_context* volatile g_ppu_main_ctx;
 extern "C" uint8_t* vm_base;
 extern "C" uint32_t ppu_vm_size;
 extern "C" const char* ppu_vfs_root;
+extern "C" PPU_THREAD_LOCAL void (*g_trampoline_fn)(void*);
 /* The generated SPU headers put these declarations after their extern-C
  * block, although their implementations are compiled as C.  Declare the C
  * ABI explicitly here so the final iOS linker resolves the actual exports. */
@@ -34,7 +34,12 @@ static pthread_once_t m772_once = PTHREAD_ONCE_INIT;
 static uint32_t m772_initialized;
 static uint32_t m772_guest_vm_size;
 static uint64_t m772_dispatch_count;
+static uint64_t m772_entry_count;
 static uint32_t m772_last_guest_pc;
+/* A PS3Recomp _start is one complete native C function. It must be called
+ * like upstream ppu_run(), then its cross-fragment trampolines drained. It is
+ * not a PPC basic block that returns a next PC to runtime/ppu_bridge.c. */
+static uint32_t m772_entry_state;
 static uint32_t m772_sorted_table = 1;
 static uint32_t m772_vfs_root_set;
 static std::string m772_vfs_root;
@@ -47,7 +52,9 @@ extern "C" void ar_m772_runtime_begin(void)
     __atomic_store_n(&m772_initialized, 0u, __ATOMIC_RELEASE);
     __atomic_store_n(&m772_guest_vm_size, 0u, __ATOMIC_RELAXED);
     __atomic_store_n(&m772_dispatch_count, UINT64_C(0), __ATOMIC_RELAXED);
+    __atomic_store_n(&m772_entry_count, UINT64_C(0), __ATOMIC_RELAXED);
     __atomic_store_n(&m772_last_guest_pc, 0u, __ATOMIC_RELAXED);
+    __atomic_store_n(&m772_entry_state, 0u, __ATOMIC_RELAXED);
     __atomic_store_n(&m772_vfs_root_set, 0u, __ATOMIC_RELEASE);
     ppu_fs_ios_reset_stats();
 }
@@ -85,7 +92,9 @@ extern "C" int ar_m772_runtime_init(uint8_t* guest_memory,size_t guest_size,
     ppu_fs_ios_reset_stats();
     __atomic_store_n(&m772_vfs_root_set, 1u, __ATOMIC_RELEASE);
     __atomic_store_n(&m772_dispatch_count, UINT64_C(0), __ATOMIC_RELAXED);
+    __atomic_store_n(&m772_entry_count, UINT64_C(0), __ATOMIC_RELAXED);
     __atomic_store_n(&m772_last_guest_pc, 0u, __ATOMIC_RELAXED);
+    __atomic_store_n(&m772_entry_state, 0u, __ATOMIC_RELAXED);
     __atomic_store_n(&m772_guest_vm_size,(uint32_t)guest_size,__ATOMIC_RELAXED);
     pthread_once(&m772_once, m772_register_all);
     __atomic_store_n(&m772_initialized, 1u, __ATOMIC_RELEASE);
@@ -147,12 +156,66 @@ extern "C" void ar_m772_unbind_guest_memory(void* guest_memory)
 
 extern "C" int ar_m772_dispatch_native(ppu_context* ctx,uint32_t pc)
 {
-    if (!ctx || !m772_has_ppu(pc)) return 0;
+    /* Kept as a fail-closed compatibility hook for the fragment runner.
+     * A complete PS3Recomp function cannot return a "next PC" via LR. */
+    (void)ctx; (void)pc;
+    return 0;
+}
+
+/* Inserted at the start of every complete PS3Recomp PPU function during
+ * staging. This counts actual AOT calls from direct edges and trampolines. */
+extern "C" void ar_m772_note_function(uint32_t pc)
+{
     __atomic_add_fetch(&m772_dispatch_count, UINT64_C(1), __ATOMIC_RELAXED);
     __atomic_store_n(&m772_last_guest_pc, pc, __ATOMIC_RELAXED);
-    ps3_indirect_call_to(ctx, pc);
-    ctx->cia = ctx->lr;
-    return 1;
+}
+
+extern "C" int ar_m772_run_entry(ppu_context* ctx,uint32_t pc)
+{
+    if (!ctx || !pc || !m772_has_ppu(pc) ||
+        !__atomic_load_n(&m772_initialized, __ATOMIC_ACQUIRE)) {
+        __atomic_store_n(&m772_entry_state, 3u, __ATOMIC_RELEASE);
+        return -1;
+    }
+    size_t index = (size_t)function_table_count;
+    if (m772_sorted_table) {
+        size_t lo = 0, hi = (size_t)function_table_count;
+        while (lo < hi) {
+            const size_t mid = lo + (hi - lo) / 2;
+            if (function_table[mid].addr < pc) lo = mid + 1;
+            else hi = mid;
+        }
+        if (lo < (size_t)function_table_count && function_table[lo].addr == pc)
+            index = lo;
+    } else {
+        for (size_t i = 0; i < (size_t)function_table_count; ++i)
+            if (function_table[i].addr == pc) { index = i; break; }
+    }
+    if (index >= (size_t)function_table_count || !function_table[index].func) {
+        __atomic_store_n(&m772_entry_state, 3u, __ATOMIC_RELEASE);
+        return -1;
+    }
+
+    __atomic_add_fetch(&m772_entry_count, UINT64_C(1), __ATOMIC_RELAXED);
+    __atomic_store_n(&m772_last_guest_pc, pc, __ATOMIC_RELAXED);
+    __atomic_store_n(&m772_entry_state, 1u, __ATOMIC_RELEASE);
+    ctx->cia = pc;
+    function_table[index].func(ctx);
+    while (g_trampoline_fn) {
+        void (*trampoline)(void*) = g_trampoline_fn;
+        g_trampoline_fn = nullptr;
+        trampoline(ctx);
+    }
+    if (g_active_ctx == ctx) g_active_ctx = nullptr;
+    if (g_ppu_main_ctx == ctx)
+        __atomic_store_n(&g_ppu_main_ctx, (ppu_context*)nullptr, __ATOMIC_RELEASE);
+    __atomic_store_n(&m772_entry_state, 2u, __ATOMIC_RELEASE);
+    return 0;
+}
+
+extern "C" uint32_t ar_m772_entry_state(void)
+{
+    return __atomic_load_n(&m772_entry_state, __ATOMIC_ACQUIRE);
 }
 
 static uint32_t m772_has_ppu(uint32_t pc)
@@ -172,7 +235,7 @@ static uint32_t m772_has_ppu(uint32_t pc)
            function_table[lo].func != nullptr;
 }
 
-extern "C" void ar_m772_runtime_attest(uint64_t out[13])
+extern "C" void ar_m772_runtime_attest(uint64_t out[14])
 {
     if (!out) return;
     const uint32_t ready = __atomic_load_n(&m772_initialized, __ATOMIC_ACQUIRE);
@@ -188,4 +251,5 @@ extern "C" void ar_m772_runtime_attest(uint64_t out[13])
     out[7] = __atomic_load_n(&m772_guest_vm_size, __ATOMIC_RELAXED);
     out[8] = __atomic_load_n(&m772_vfs_root_set, __ATOMIC_ACQUIRE);
     ppu_fs_ios_stats(out + 9);
+    out[13] = __atomic_load_n(&m772_entry_count, __ATOMIC_RELAXED);
 }

@@ -73,56 +73,8 @@ def main(repo: Path):
   if(rc770!=AR_OK){ar_bridge_shutdown();return -73;}
 #endif''',p)
     alterations[p]=s
-    p='ios/ARProbeApp.m';s=load(p)
-    s=replacement(s,'extern void ar_m769_last_install_stats(uint32_t out[5]);',
-       'extern void ar_m769_last_install_stats(uint32_t out[5]);\nextern void ar_m770_last_install_stats(uint32_t out[7]);\nextern ar_ppu_fn ar_m770_delta_prior_frontier_handler(void);',p)
-    s=replacement(s,'    ar_m769_last_install_stats(m769Stats);',
-       '    ar_m769_last_install_stats(m769Stats);\n    uint32_t m770Stats[7]={0};\n    ar_m770_last_install_stats(m770Stats);',p)
-    marker='    NSMutableArray *firstVisits=[NSMutableArray arrayWithCapacity:measured.first_count];'
-    s=replacement(s,marker,'''    BOOL m770FrontierExecuted=NO;
-    for(uint32_t m770i=0;m770i<measured.first_count;++m770i)
-      if(measured.first_pcs[m770i]==0x0052A740u)m770FrontierExecuted=YES;
-    /* Never use an interpreter fallback opcode as true PPC evidence. */
-    uint32_t m770RealStopOpcode=(missingRead==0 && native[7]) ?
-        missingWords[0] : (ownerStop.guest_status==AR_OK ?
-        ownerStop.guest_word : (ownerStop.elf_status==AR_OK ?
-        ownerStop.elf_word : 0u));
-    BOOL m770OpcodeValid=(missingRead==0 && native[7]) ||
-        ownerStop.guest_status==AR_OK || ownerStop.elf_status==AR_OK;
-    [graphReport appendFormat:
-       @"M7.70 BULK DELTA: candidatos_examinados=%u novos_reais=%u "
-        "duplicados_mesmo_handler=%u conflitos_handler=%u rejeitados=%u "
-        "falhas=%u frontier_handler_0x0052A740_confirmado=%u "
-        "frontier_EXECUTADO=%@ handler_preexistente=%p "
-        "ultimo_aot=0x%08X proximo_pc=0x%08X "
-        "opcode_PPC_real=0x%08X opcode_validado=%@ "
-        "dispatches=%u distintas=%u PPC_interpretadas=%u "
-        "cellFsOpen=%u cellFsRead=%u bytes_guest=%llu\\n",
-       m770Stats[0],m770Stats[1],m770Stats[2],m770Stats[3],
-       m770Stats[4],m770Stats[5],m770Stats[6],
-       m770FrontierExecuted?@"SIM":@"NÃO",
-       (void *)ar_m770_delta_prior_frontier_handler(),
-       measured.stop_previous_aot,measured.unresolved_pc,
-       m770RealStopOpcode,m770OpcodeValid?@"SIM":@"NÃO",
-       measured.aot_dispatches,measured.unique_aot,measured.fallback_steps,
-       fsMeasured.open_calls,fsMeasured.read_calls,
-       (unsigned long long)fsMeasured.bytes_read];
-''' +marker,p)
-    s=replacement(s,'      @"m769_offline_full_blocks":@5437,',
-       '''      @"m770_examined_runtime":@(m770Stats[0]),
-      @"m770_new_runtime":@(m770Stats[1]),
-      @"m770_same_handler_duplicates":@(m770Stats[2]),
-      @"m770_conflicting_handlers":@(m770Stats[3]),
-      @"m770_rejected":@(m770Stats[4]),
-      @"m770_failures":@(m770Stats[5]),
-      @"m770_frontier_exact_handler":@(m770Stats[6]),
-      @"m770_frontier_actually_executed":@(m770FrontierExecuted),
-      @"m770_last_guest_stop_opcode":@(m770RealStopOpcode),
-      @"m770_guest_fs_open_calls":@(fsMeasured.open_calls),
-      @"m770_guest_fs_read_calls":@(fsMeasured.read_calls),
-      @"m770_guest_fs_read_bytes":@(fsMeasured.bytes_read),
-      @"m769_offline_full_blocks":@5437,''',p)
-    alterations[p]=s
+    # The game-first launcher does not present the historical M7.70 delta as
+    # runtime evidence; its report reads current PS3Recomp telemetry directly.
     p='ios/Probe-Info.plist';s=load(p)
     s=replacement(s,'<key>CFBundleShortVersionString</key><string>7.69.0</string>',
        '<key>CFBundleShortVersionString</key><string>7.70.0</string>',p)

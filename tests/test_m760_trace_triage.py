@@ -15,12 +15,14 @@ class TestM760Trace(unittest.TestCase):
    self.assertIn(needle,c)
  def test_report_machine_readable_and_honest_fs(self):
   s=(R/'ios/ARProbeApp.m').read_text()
-  for needle in ('AOT_TRIAGE_JSON=','AOT_FIRST %u','AOT_RUN %@ x%@',
-                 'first_truncated','runs_truncated','stop_previous_aot',
-                 'guest_fs_open_calls','guest_fs_positive_bytes',
-                 'M7.61.3 (teste físico','EXECUÇÃO ATUAL %@: AOT=%@'):
+  for needle in ('Chamadas de função AOT=%@','início(s) da entry=%@',
+                 'cellFsOpen guest=%@ · opens OK=%@',
+                 'cellFsRead guest=%@ · bytes lidos pelo guest=%@',
+                 'Pasta reconhecida pelo HOST=%@',
+                 'Leitura guest de arquivos do jogo= %@',
+                 'PSARC específico= NÃO MEDIDO'):
    self.assertIn(needle,s)
-  self.assertIn('Últimos até 16 despachos brutos de AOT',s)
+  self.assertIn('Comandos RSX do jogo= NÃO COMPROVADOS',s)
  def test_ci_wires_synthetic_native_host(self):
   wf=(R/'.github/workflows/ascension-recomp-m0.yml').read_text()
   self.assertIn('host_m760_trace_triage.c',wf)

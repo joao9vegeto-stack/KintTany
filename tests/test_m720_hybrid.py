@@ -46,13 +46,11 @@ class HybridM720Tests(unittest.TestCase):
 
  def test_ui_explicitly_hybrid_txt_and_no_rsx_game_claim(self):
   t=self.ui
-  self.assertIn("ASCENSIONRECOMP — ESQUEMA AOT-v12",t)
-  self.assertIn("M7.20 — DESPACHO HÍBRIDO EXPERIMENTAL",t)
-  self.assertIn("measured.fallback_steps",t)
-  self.assertIn("ownerStop.guest_word",t)
-  self.assertIn("Runtime AOT ONLY",t)
+  self.assertIn("ASCENSIONRECOMP · LAUNCHER / EXECUÇÃO NATIVA",t)
+  self.assertIn("PPC interpretado=0",t)
+  self.assertIn("Chamadas de função AOT=%@",t)
   self.assertIn("initForExportingURLs:@[url] asCopy:YES",t)
-  self.assertIn("RSX do Ascension: não demonstrado",t)
+  self.assertIn("Comandos RSX do jogo= NÃO COMPROVADOS",t)
   self.assertIn("M7.19: +",self.build)
   self.assertIn("ppu_m720_fallback.o",self.build)
   self.assertIn("_ar_ppc_fallback_attach$",self.build)

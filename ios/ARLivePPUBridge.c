@@ -41,6 +41,7 @@ extern void ARGameFolderEndGuestSession(void);
 extern int ar_m772_runtime_init(uint8_t*,size_t,const char*);
 extern int ar_m772_prepare_main(ppu_context*,uint32_t,uint32_t,uint32_t,
                                 uint32_t,uint32_t,uint32_t);
+extern int ar_m772_run_entry(ppu_context*,uint32_t);
 #endif
 
 extern int ar_m711_bind_memory(const uint8_t*,size_t,uint32_t*);
@@ -593,12 +594,20 @@ int ar_m70_native_runtime_probe(const uint8_t*d,size_t len,
    }
    out[15]|=0x4000u; /* main PPU thread + TLS + PS3 argv prepared */
  }
- out[6]=(uint32_t)ar_run(&ctx,image.entry_code,32768u);
+ /* PS3Recomp emits full native C functions, not single PPC basic blocks.
+  * Match upstream ppu_run(): invoke the entry function directly and drain
+  * its native tail-call trampolines. ar_run() is reserved for legacy PPC
+  * fragments and would misread the entry function's saved LR as a next PC. */
+ out[6]=(uint32_t)ar_m772_run_entry(&ctx,image.entry_code);
 #else
  if(out[5])out[6]=(uint32_t)ar_run(&ctx,image.entry_code,32768u);
  else out[6]=(uint32_t)ar_run(&ctx,image.entry_code,128u);
 #endif
+#ifndef ASCENSION_M772_LINKED
  out[7]=ar_last_unresolved();
+#else
+ out[7]=0u; /* no legacy-fragment unresolved-PC meaning in whole-function AOT */
+#endif
  ar_trace_snapshot(&last_run_trace);
  /* Capture *live* guest descriptor slot before guest VM cleanup. */
  uint8_t slot_post[4]={0};

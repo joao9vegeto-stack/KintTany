@@ -17,11 +17,12 @@ class TestM755(unittest.TestCase):
   self.assertIn('result=fault=AR_UNRESOLVED',dispatch)
  def test_history_not_falsely_promoted(self):
   app=(R/'ios/ARProbeApp.m').read_text()
-  for needle in ('EXECUÇÃO ATUAL %@: AOT=','M7.61.3 (teste físico',
-                 'PPC interpretadas=%@ instruções (exigência AOT ONLY: 0)',
-                 'PC guest sem ARM64 registrado'):
+  for needle in ('LAUNCHER / EXECUÇÃO NATIVA',
+                 'PPC interpretado=0 · chamadas HLE internas= NÃO INSTRUMENTADAS',
+                 'Comandos RSX do jogo= NÃO COMPROVADOS',
+                 'Primeiro frame original= NÃO COMPROVADO'):
    self.assertIn(needle,app)
-  self.assertIn('cellFsRead com bytes positivos: %@',app)
+  self.assertIn('cellFsRead guest=%@ · bytes lidos pelo guest=%@',app)
  def test_ci_native_only_host_gate(self):
   flow=(R/'.github/workflows/ascension-recomp-m0.yml').read_text()
   self.assertIn('host_m755_native_only.c',flow)

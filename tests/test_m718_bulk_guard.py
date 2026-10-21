@@ -35,8 +35,8 @@ class M718BulkTests(unittest.TestCase):
         self.assertNotIn("GOWA.ELF",str(ROOT/"tools/stage_m718_bulk.py"))
     def test_remaining_native_status_remains_precise(self):
         ui=(ROOT/"ios/ARProbeApp.m").read_text()
-        self.assertIn("ASCENSIONRECOMP %@",ui)  # current milestone header; M7.18 AOT guarded separately
-        self.assertIn("RSX do Ascension: não demonstrado",ui)
-        self.assertIn("AOT vinculadas=%@ entradas",ui)
+        self.assertIn("ASCENSIONRECOMP · LAUNCHER / EXECUÇÃO NATIVA",ui)
+        self.assertIn("Comandos RSX do jogo= NÃO COMPROVADOS",ui)
+        self.assertIn("Chamadas de função AOT=%@",ui)
 
 if __name__=="__main__":unittest.main()

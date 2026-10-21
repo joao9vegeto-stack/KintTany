@@ -5,23 +5,21 @@ import unittest
 ROOT=Path(__file__).resolve().parents[1]
 
 class M710UI(unittest.TestCase):
-    def test_native_first_retains_legacy_in_advanced_view(self):
+    def test_launcher_exposes_native_entry_and_current_report(self):
         ui=(ROOT/"ios/ARProbeApp.m").read_text()
-        self.assertIn('header.text=[NSString stringWithFormat:',ui)
+        self.assertIn('arLauncherLabel:@"ASCENSION"',ui)
+        self.assertIn('arLauncherLabel:@"RECOMP  /  iOS ARM64"',ui)
         for key in (
-            "AOT: %u registradas",
-            "Diagnóstico avançado · M6/M7",
-            "self.status.text=self.ppuSummary;",
-            "ar_private_import_match(data.bytes,data.length,native[7]",
-            "Copiar status AOT",
-            "Copiar tudo",
-            "M7.2 — EXECUÇÃO PPU CONTÍNUA",
-            "M7.3 — IMPORTAÇÃO PRX",
-            "M6.7.6 / NPUA80918",
-            "self.ppuAdvancedButton.enabled=YES",
+            'self.nativeLaunchButton=[self arLauncherButton:@"INICIAR JOGO"',
+            'self.ppuDiagnosticsButton=[self arLauncherButton:@"RELATÓRIO DA EXECUÇÃO"',
+            "Chamadas de função AOT=%@",
+            "action:@selector(shareAdvancedPpuReport:)",
+            "PPC interpretado=0",
+            "Primeiro frame original= NÃO COMPROVADO",
         ):
             self.assertIn(key,ui)
-        self.assertIn('self.ppuReport=[NSString stringWithFormat:@"%@',ui)
+        bridge=(ROOT/"ios/ARLivePPUBridge.c").read_text()
+        self.assertIn("ar_m772_run_entry(&ctx,image.entry_code)",bridge)
     def test_59_signed_real_entrypoints_and_sha(self):
         from tools.stage_m78_aot import ENTRY_PCS,EXPECTED_SHA256
         self.assertEqual(len(ENTRY_PCS),59)

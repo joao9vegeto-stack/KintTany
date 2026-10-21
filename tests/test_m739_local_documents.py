@@ -22,13 +22,12 @@ class FolderLocalTests(unittest.TestCase):
    self.assertIn(value,self.impl)
   self.assertIn("ARGameFolderImportLocalDocuments",self.header)
   self.assertIn("ARGameFolderImportLocalAtURL",self.header)
- def test_separate_button_exports_failure_and_success_to_unified_txt(self):
-  for val in ("Detectar arquivos locais · NPUA80918",
+ def test_launcher_offers_local_documents_import_and_live_report(self):
+  for val in ("USAR PASTA EM DOCUMENTOS DO APP",
               "importGameFolderFromDocuments:", "ARGameFolderImportLocalDocuments(&error)",
-              "M7.50 F1 — PASTA LOCAL IMPORTADA",
-              "M7.50 F1 — PASTA LOCAL NÃO ENCONTRADA",
-              "self.folderReport=report", "Evento HOST Files separado",
-              "@[elfButton,folderButton,localFolderButton,rpcMarkerButton]"):
+              "PASTA LOCAL IMPORTADA / NO MEU IPHONE",
+              "self.folderReport=report", "Leitura HOST de prefixo=%lu byte(s)",
+              "self.nativeLaunchButton=[self arLauncherButton:@\"INICIAR JOGO\""):
    self.assertIn(val,self.ui)
  def test_real_host_proof_and_ios_files_entitlement(self):
   self.assertIn("tests/host_m739_local_documents.m",self.workflow)

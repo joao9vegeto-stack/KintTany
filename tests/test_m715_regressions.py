@@ -12,17 +12,11 @@ class M715SourceRegressions(unittest.TestCase):
         cls.build=(ROOT/"tools/build_ios_probe_ipa.sh").read_text()
         cls.aot=(ROOT/"runtime/ppu_m715_aot_fragment.c").read_text()
 
-    def test_report_appended_even_on_successful_legacy_ppu48(self):
-        self.assertIn("self.ppuReport=[self.ppuReport stringByAppendingString:frontierReport];",self.ui)
-        self.assertIn("[extended appendString:frontierReport];",self.ui)
-        self.assertIn("self.ppuBatchReport=",self.ui)
-        self.assertIn("self.ppuBatchButton.enabled=(self.ppuBatchReport.length>0);",self.ui)
-        # M7.19 consolidates the visible PPC/status/advanced controls
-        # into ONE user option. The original PPC data generation persists.
-        self.assertIn("[stack addArrangedSubview:diagnostics];",self.ui)
-        self.assertNotIn("[stack addArrangedSubview:batchButton];",self.ui)
-        self.assertNotIn("[stack addArrangedSubview:advancedButton];",self.ui)
-        self.assertIn("openUnifiedPpuMenu:(UIButton *)sender",self.ui)
+    def test_active_launcher_shows_one_live_execution_report(self):
+        self.assertIn('self.ppuDiagnosticsButton=[self arLauncherButton:@"RELATÓRIO DA EXECUÇÃO"',self.ui)
+        self.assertIn("Chamadas de função AOT=%@",self.ui)
+        self.assertIn("cellFsRead guest=%@ · bytes lidos pelo guest=%@",self.ui)
+        self.assertIn("self.nativeRunRefreshTimer=[NSTimer scheduledTimerWithTimeInterval:0.75",self.ui)
         self.assertIn("UIPasteboard.generalPasteboard.string=report;",self.ui)
         self.assertIn("initForExportingURLs:@[url] asCopy:YES",self.ui)
 
@@ -34,8 +28,8 @@ class M715SourceRegressions(unittest.TestCase):
         self.assertIn("M7.15: +1 ELF-verified load/store ARM64 entry",self.build)
 
     def test_graphics_status_does_not_claim_game_menu(self):
-        self.assertIn("RSX do Ascension: não demonstrado",self.ui)
-        self.assertIn("M4/M5 são testes sintéticos Metal, não menu do jogo.",self.ui)
+        self.assertIn("Comandos RSX do jogo= NÃO COMPROVADOS",self.ui)
+        self.assertIn("Esta tela não renderiza o jogo e não representa um quadro de Ascension.",self.ui)
 
 if __name__=="__main__":
     unittest.main()

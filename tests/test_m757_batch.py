@@ -31,11 +31,12 @@ class M757(unittest.TestCase):
   self.assertNotIn('    ios-probe/ppu_m720_fallback.o \\',build)
  def test_ui_physically_sourced_not_fake_FS(self):
   ui=(ROOT/"ios/ARProbeApp.m").read_text()
-  self.assertIn("App=%@",ui)
-  self.assertIn("M7.61.3 (teste físico",ui)
-  self.assertIn("ELF versus RAM guest",ui)
-  self.assertIn("cellFsRead com bytes positivos",ui)
-  self.assertIn("ownerStop.guest_word",ui)
+  self.assertIn("App=%@ · title=NPUA80918",ui)
+  self.assertIn("Chamadas de função AOT=%@",ui)
+  self.assertIn("cellFsRead guest=%@ · bytes lidos pelo guest=%@",ui)
+  self.assertIn("cellFsOpen guest=%@ · opens OK=%@",ui)
+  self.assertIn("Leitura guest de arquivos do jogo= %@",ui)
+  self.assertIn("PSARC específico= NÃO MEDIDO",ui)
   self.assertNotIn('@"opcode":@(measured.fallback_unsupported_word)',ui)
  def test_ci_link(self):
   flow=(ROOT/".github/workflows/ascension-recomp-m0.yml").read_text()

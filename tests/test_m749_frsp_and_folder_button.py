@@ -15,9 +15,11 @@ class M749Regressions(unittest.TestCase):
   cls.bridge=(R/"ios/ARLivePPUBridge.c").read_text()
   cls.workflow=(R/".github/workflows/ascension-recomp-m0.yml").read_text()
  def test_local_detection_button_is_arranged(self):
-  self.assertIn("elfButton,folderButton,localFolderButton",self.ui)
-  self.assertIn("Detectar arquivos locais · NPUA80918",self.ui)
-  self.assertIn("[localFolderButton addTarget:self action:@selector(importGameFolderFromDocuments:)",self.ui)
+  self.assertIn('arLauncherButton:@"USAR PASTA EM DOCUMENTOS DO APP"',self.ui)
+  self.assertIn('arLauncherButton:@"ESCOLHER PASTA NPUA80918"',self.ui)
+  self.assertIn('arLauncherButton:@"IMPORTAR GOWA.ELF"',self.ui)
+  self.assertIn('arLauncherButton:@"INICIAR JOGO"',self.ui)
+  self.assertIn("importGameFolderFromDocuments:",self.ui)
   self.assertIn("ARGameFolderImportLocalDocuments(&error)",self.ui)
   self.assertIn("ARGameFolderReadPrefix(relative,4u,&readError)",self.ui)
  def test_frsp_generic_isa(self):

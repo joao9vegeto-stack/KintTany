@@ -13,8 +13,8 @@ class M736ShareTests(unittest.TestCase):
         for token in (
             "arCreatePpuTextFile", "NSDocumentDirectory",
             "initWithActivityItems:@[url] applicationActivities:nil",
-            "Compartilhar TXT · direto ao ChatGPT",
-            "Salvar TXT · Arquivos", "picker.directoryURL=nil",
+            'initWithTitle:@"Compartilhar"',
+            'action:@selector(shareAdvancedPpuReport:)',
             "initForExportingURLs:@[url] asCopy:YES",
             "UIActivityViewController",
         ):

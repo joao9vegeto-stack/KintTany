@@ -50,10 +50,11 @@ class M772IOSVfsMountTests(unittest.TestCase):
     def test_m772_full_lift_skips_legacy_aot_install_and_keeps_full_budget(self):
         bridge = (ROOT / "ios" / "ARLivePPUBridge.c").read_text()
         self.assertIn("#ifdef ASCENSION_PRIVATE_AOT_LINKED\n#if !defined(ASCENSION_M772_LINKED)", bridge)
-        self.assertIn("#ifdef ASCENSION_M772_LINKED\n /* M7.72 dispatches the statically recompiled PS3Recomp function table.", bridge)
-        self.assertIn("out[6]=(uint32_t)ar_run(&ctx,image.entry_code,32768u);", bridge)
+        self.assertIn("out[6]=(uint32_t)ar_m772_run_entry(&ctx,image.entry_code);", bridge)
+        self.assertIn("ar_run() is reserved for legacy PPC fragments", bridge)
         build = (ROOT / "tools" / "build_ios_probe_ipa.sh").read_text()
         self.assertIn("_ar_m772_runtime_begin", build)
+        self.assertIn("_ar_m772_note_function", build)
 
     def test_m772_keeps_legacy_aot_symbols_for_binary_attestation_only(self):
         build = (ROOT / "tools" / "build_ios_probe_ipa.sh").read_text()
@@ -65,12 +66,14 @@ class M772IOSVfsMountTests(unittest.TestCase):
         self.assertIn("ar_m770_delta_install_sha256", build)
 
     def test_runtime_report_shows_live_m772_counters_before_historical_data(self):
-        stage = (ROOT / "tools" / "m771_apply_ci.py").read_text()
-        self.assertIn("M7.72 — STATUS PS3RECOMP AO VIVO", stage)
-        self.assertIn("ar_m772_runtime_attest(m772)", stage)
-        self.assertIn("Despachos PS3Recomp=%llu | último PC=0x%08llX", stage)
-        self.assertEqual(stage.count('self.ppuProgress?:@"sem status recente"'), 2)
-        self.assertNotIn("Agora: 13252 AOT", stage)
+        app = (ROOT / "ios" / "ARProbeApp.m").read_text()
+        stage = (ROOT / "tools" / "m772_unpack_ci.py").read_text()
+        self.assertIn("ar_m772_runtime_attest(m772)", app)
+        self.assertIn("Chamadas de função AOT=%@", app)
+        self.assertIn("último PC=0x%08llX", app)
+        self.assertIn("native_aot_function_entry_hooks", stage)
+        self.assertIn("ar_m772_note_function", stage)
+        self.assertNotIn("Agora: 13252 AOT", app)
 
     def test_each_elf_import_clears_stale_m772_runtime_counters(self):
         app = (ROOT / "ios" / "ARProbeApp.m").read_text()

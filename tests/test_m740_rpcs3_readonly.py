@@ -12,13 +12,11 @@ class M740ReadOnly(unittest.TestCase):
   cls.workflow=(ROOT/".github/workflows/ascension-recomp-m0.yml").read_text()
  def test_picker_opens_existing_param_without_copy(self):
   u=self.ui
-  self.assertIn("Importar PARAM.SFO · cópia temporária",u)
-  self.assertIn("initForOpeningContentTypes:@[UTTypeItem] asCopy:YES",u)
-  self.assertIn("self.rpcMarkerPicker=picker",u)
-  self.assertIn("ARGameFolderInspectParamSFO(marker,&error)",u)
-  self.assertIn("@[elfButton,folderButton,localFolderButton,rpcMarkerButton]",u)
-  self.assertNotIn("@[localFolderButton,folderButton,elfButton]",u)
-  self.assertIn("Permissão USRDIR ainda NÃO obtida",u)
+  self.assertIn('arLauncherButton:@"ESCOLHER PASTA NPUA80918"',u)
+  self.assertIn('arLauncherButton:@"USAR PASTA EM DOCUMENTOS DO APP"',u)
+  self.assertIn('arLauncherButton:@"IMPORTAR GOWA.ELF"',u)
+  self.assertIn('arLauncherButton:@"INICIAR JOGO"',u)
+  self.assertIn("ARGameFolderRestore(&restoreError)",u)
  def test_readonly_and_scope_failure_are_explicit(self):
   src=self.folder
   for token in (

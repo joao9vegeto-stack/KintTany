@@ -24,10 +24,11 @@ class M721Tests(unittest.TestCase):
   self.assertIn("AR_PPC_UNSUPPORTED",self.bridge)
   self.assertIn("fb_steps++;",self.bridge)
  def test_txt_status_and_graphics_limit(self):
-  self.assertIn("ASCENSIONRECOMP %@ · NPUA80918",self.ui)
+  self.assertIn("ASCENSIONRECOMP · LAUNCHER / EXECUÇÃO NATIVA",self.ui)
+  self.assertIn("title=NPUA80918",self.ui)
   self.assertIn("AscensionRecomp-%@-NPUA80918-%@.txt",self.ui)
   self.assertIn("initForExportingURLs:@[url] asCopy:YES",self.ui)
-  self.assertIn("RSX do Ascension: não demonstrado",self.ui)
-  self.assertIn("[stack addArrangedSubview:diagnostics];",self.ui)
+  self.assertIn("Comandos RSX do jogo= NÃO COMPROVADOS",self.ui)
+  self.assertIn('self.ppuDiagnosticsButton=[self arLauncherButton:@"RELATÓRIO DA EXECUÇÃO"',self.ui)
 
 if __name__=="__main__":unittest.main()

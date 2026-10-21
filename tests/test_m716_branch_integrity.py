@@ -37,10 +37,9 @@ class BranchAOTM716(unittest.TestCase):
         self.assertIn("ppu_m716_native_branch.o",self.build)
         self.assertIn("_ar_m716_aot_003c4dc4$",self.build)
         self.assertIn("M7.16: +1 verified native 15-instruction",self.build)
-        self.assertIn("self.ppuBatchReport=",self.ui)
-        self.assertIn("Caminho alternativo SOMENTE LEITURA",self.ui)
-        self.assertIn("ar_m716_verified_successors(data.bytes,data.length,paths)",self.ui)
-        self.assertIn("RSX do Ascension: não demonstrado",self.ui)
+        self.assertIn('self.nativeLaunchButton=[self arLauncherButton:@"INICIAR JOGO"',self.ui)
+        self.assertIn("PS3RECOMP / MÉTRICAS AO VIVO",self.ui)
+        self.assertIn("Comandos RSX do jogo= NÃO COMPROVADOS",self.ui)
 
 if __name__=="__main__":
     unittest.main()

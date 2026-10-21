@@ -606,14 +606,15 @@ for line in lines:
     fields=line.split()
     if len(fields)>=2 and fields[-2] in {"T","t","D","d","B","b","R","r","S","s"}:
         defined.append(fields[-1])
-required=("func_0052A740", "func_0052E3F4", "_ar_m772_runtime_attest",
+required=("func_00010410", "func_0052A740", "func_0052E3F4", "_ar_m772_runtime_attest",
           "_ar_m772_runtime_begin",
           "_ar_m772_runtime_init", "_ar_m772_dispatch_native",
+          "_ar_m772_note_function", "_ar_m772_run_entry", "_ar_m772_entry_state",
           "_ppu_recomp_register", "_gowa_spu_0000_at_006B3E00_spu_recomp_register",
           "_gowa_spu_0003_at_006D5900_spu_recomp_register")
 missing=[symbol for symbol in required if not any(symbol in name for name in defined)]
 if missing: raise SystemExit("M7.72 expected AOT definitions missing from final Mach-O: "+str(missing))
-print("M7.72 final ARM64 Mach-O contains frontier, table-registration and SPU registration symbols")
+print("M7.73 final ARM64 Mach-O contains the full AOT entry, live function hook and SPU registration symbols")
 PYM772LINKED
 # Every M7.62 native function must appear in the FINAL Mach-O, not merely object.
 python3 - <<'PY'

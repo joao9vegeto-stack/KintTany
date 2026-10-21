@@ -20,7 +20,9 @@ class M751(unittest.TestCase):
   self.assertIn("openat(current",folder)
   self.assertIn("O_NOFOLLOW",folder)
   self.assertIn("fsMeasured.bytes_read",ui)
-  self.assertIn("cellFsRead com bytes positivos",ui)
+  self.assertIn("cellFsRead guest=%@ · bytes lidos pelo guest=%@",ui)
+  self.assertIn("Leitura guest de arquivos do jogo= %@",ui)
+  self.assertIn("PSARC específico= NÃO MEDIDO",ui)
  def test_vmxfp_genuine_pc(self):
   text=(R/"runtime/ppu_m751_vsubfp.c").read_text()
   vmx=(R/"runtime/ppu_vmx_cell.h").read_text()

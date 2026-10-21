@@ -43,9 +43,10 @@ class FrontierStageM723(unittest.TestCase):
   self.assertEqual(build.count("ppu_m734_native_math.c"),1)
   self.assertEqual(build.count("ppu_m734_native_batch.c"),1)
   self.assertIn("ASCENSION_AOT_FRONTIER_GZIP_B64",workflow)
-  self.assertIn('ASCENSIONRECOMP — ESQUEMA AOT-v12',ui)
+  self.assertIn('ASCENSIONRECOMP · LAUNCHER / EXECUÇÃO NATIVA',ui)
+  self.assertIn('PS3RECOMP / MÉTRICAS AO VIVO',ui)
   self.assertIn('initForExportingURLs:@[url] asCopy:YES',ui)
-  self.assertIn('RSX do Ascension: não demonstrado',ui)
+  self.assertIn('Comandos RSX do jogo= NÃO COMPROVADOS',ui)
  def test_prior_manifest_strict_parsing(self):
   import tempfile
   with tempfile.TemporaryDirectory() as d:

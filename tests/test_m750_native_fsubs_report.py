@@ -29,12 +29,12 @@ class TestM750(unittest.TestCase):
   self.assertNotIn('ar_ppc_fallback_step(',n)
  def test_report_fresh_scoped_provenance_and_no_false_fs(self):
   ui=(R/'ios/ARProbeApp.m').read_text()
-  for x in ('ARBuildProvenance.h','EXECUÇÃO ATUAL',
-            'COMPARAÇÃO COM TESTES FÍSICOS ANTERIORES','HISTÓRICO',
+  for x in ('ARBuildProvenance.h','LAUNCHER / EXECUÇÃO NATIVA',
+            'Branch=%s · Commit=%s · Actions=%s · RunID=%s',
             'AR_M750_BUILD_SHA','AR_M750_BUILD_RUN_ID',
             'NÃO MEDIDO','self.m750Run=nil','m750HostObservation',
-            'cellFsRead com bytes positivos: %@',
-            '0x002C53B0','M7.63.1 (teste físico'):
+            'cellFsRead guest=%@ · bytes lidos pelo guest=%@',
+            '0x10410u','Primeiro frame original= NÃO COMPROVADO'):
    self.assertIn(x,ui)
   self.assertIn('AscensionRecomp-%@-NPUA80918',ui)
   sh=(R/'tools/build_ios_probe_ipa.sh').read_text()

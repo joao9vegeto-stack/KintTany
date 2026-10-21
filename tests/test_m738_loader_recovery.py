@@ -19,13 +19,13 @@ class M738Checks(unittest.TestCase):
   self.assertIn("ar_run(&ctx,image.entry_code,32768u)",b)
  def test_folder_failure_is_exported_and_picker_discoverable(self):
   ui=(R/"ios/ARProbeApp.m").read_text()
-  self.assertIn("Selecionar pasta NPUA80918 · Abrir",ui)
+  self.assertIn("ESCOLHER PASTA NPUA80918",ui)
   self.assertIn("initForOpeningContentTypes:@[UTTypeFolder] asCopy:NO",ui)
-  self.assertIn("Selecione NPUA80918 e toque Abrir",ui)
+  self.assertIn("Selecione a pasta NPUA80918 inteira no app Arquivos",ui)
   self.assertIn("M7.38 F0 — FALHA IMPORTAÇÃO PASTA",ui)
   self.assertIn("self.folderReport=report",ui)
   self.assertIn("self.folderReport=[NSString stringWithFormat:",ui)
-  self.assertIn("Evento HOST Files separado",ui)
+  self.assertIn("Leitura HOST de prefixo=%lu byte(s)",ui)
  def test_mac_host_enforces_limit_with_real_runtime(self):
   w=(R/".github/workflows/ascension-recomp-m0.yml").read_text()
   self.assertIn("tests/host_m738_fallback_limit.c",w)

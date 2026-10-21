@@ -1,77 +1,91 @@
-# Auditoria do fluxo iOS e comparação dos launchers
+# Auditoria do launcher e do caminho nativo de Ascension
 
-## Falha que fechou o app
+## O que o vídeo mostrou
 
-O IPS de 20/10 mostra `SIGSEGV` dentro de `memmove`. O host reservou uma VM
-guest de `0x10000000` bytes (256 MiB), mas o setup do processo copiava PT_TLS
-para `vm_base + 0x10f00000`, 15 MiB depois do limite. Corrigi a posição da
-imagem TLS para depois da pilha e validei os limites antes de copiar/zerar a
-imagem. O teste estático de regressão foi adicionado ao conjunto que o Actions
-executa.
+O app conseguiu importar a pasta e o ELF. O relatório da execução anterior
+mostrou uma chamada, PC `0x00010410` e zero chamadas `cellFsOpen`/`cellFsRead`.
+O número 1 não era o total de progresso do jogo: só contava a chamada de
+entrada feita pelo host. Por isso, a tela parecia parada mesmo sem medir as
+funções AOT chamadas por dentro.
 
-## O que o projeto executa hoje
+Havia também um erro de contrato no caminho de execução. O host entregava uma
+função PS3Recomp completa a `ar_run`, que foi feita para blocos PPC pequenos e
+usa LR como próximo PC. No PS3Recomp fixado pelo projeto, `_start` é chamado
+como função C nativa completa e as continuações pendentes em
+`g_trampoline_fn` são drenadas pelo host. O app ainda percorre uma cadeia M6 de
+microprovas antes de “Play”; essas provas não eram requisito do runtime e não
+executavam o processo do jogo.
 
-1. O seletor importa um ELF privado; o código confere tamanho, SHA-256 e
-metadados ELF.
-2. Antes do runtime PS3Recomp, a tela executa em série os checkpoints PPC
-históricos M6.0–M6.7.6. Eles são microprovas do bootstrap, não uma sessão de
- jogo e não são pré-requisito técnico do dispatcher M7.72. É trabalho
- redundante no caminho que o usuário chama de iniciar.
-3. Com `USRDIR` reconhecido, o host inicializa o runtime recompilado, monta a
- pasta autorizada como VFS e prepara thread principal, TLS e `argv` PS3.
-4. O dispatcher roda com orçamento de 32.768 instruções e depois a VM, o
-   runtime e a autorização da pasta são encerrados. O processo não fica vivo.
-   O código não entrega o controle a um loop de jogo persistente.
-5. A aba Metal apresenta quadros de diagnóstico criados pelo host. Não há
-   caminho demonstrado de comandos RSX do Ascension para Metal nem primeiro
-   quadro do jogo.
+## Alterações desta revisão
 
-## Problema principal de progresso
+- O caminho M7.73 entra diretamente na função da tabela AOT em `0x00010410`,
+  com thread principal, TOC, PT_TLS, pilha, `argv[0]` e trampoline configurados
+  segundo o `ppu_run()` do commit PS3Recomp que o CI fixa. Quando o guest
+  retorna, o host coleta os dados e encerra a sessão; LR não é tratado como
+  endereço de continuação.
+- O estágio que reconstrói o lift injeta uma contagem no início das 29.849
+  funções PPU. O relatório passa a mostrar chamadas AOT reais, último PC,
+  chamadas guest de arquivo e bytes lidos. Não estima percentuais e deixa
+  explícito que chamadas HLE internas ainda não têm contadores completos.
+- O relatório reserva “execução do jogo” para a sessão nativa. Importar ELF,
+  indexar arquivos, abrir a bancada gráfica e desenhar quadros sintéticos não
+  são apresentados como boot ou gameplay.
+- O relatório abre em um toque, mesmo antes da primeira execução. Isso corrige
+  o caminho anterior, que recusava visualizar enquanto não existia um resultado
+  concluído. A sessão também não relê o manifesto grande na thread da interface.
+- A primeira tela virou um launcher de jogo: biblioteca, importação da pasta,
+  importação validada do ELF, botão Iniciar condicionado aos dois itens e
+  relatório da sessão. A bancada RSX/Metal fica em aba separada e identificada
+  como sintética.
+- A pasta continua fora do IPA e é aberta por permissão do Files durante a
+  sessão. O ELF é validado localmente pelo SHA-256, entry e TOC esperados.
 
-O gargalo deixou de ser “o app não abriu o ELF”. O host está fazendo uma prova
-limitada de entrada e encerrando-a. Ainda faltam runtime de sessão persistente,
-tratamento completo das chamadas de sistema e serviços bloqueantes do título,
-continuação dos dispatches até a inicialização de recursos do jogo, renderer
-RSX para Metal e gate de apresentação no primeiro quadro guest. Isso explica
-por que a interface podia ficar em execução ou mostrar Metal azul sem mostrar
-progresso visual do jogo. Chamar o fluxo atual de “executar jogo” era enganoso.
+## Comparação com os ports enviados
 
-## Comparação com as referências
+O port de PC do Ascension documenta boot até o primeiro nível, cerca de 28 FPS
+no menu e 9 FPS no primeiro nível no Windows. Ele usa a versão europeia
+`BCES-01741` 1.00; este app valida `NPUA80918`. Portanto, os endereços e os
+resultados do PC não comprovam que o lift deste ELF esteja correto em iOS.
+O repositório do PC também carrega 44 patches de runtime, incluindo SPURS2,
+LFQueue, SPU, espera/retomada do GCM e VBlank. Esses subsistemas são referências
+concretas para a próxima portabilidade; não são trocas de interface.
 
-- O launcher do [gow-ascension-pc](https://github.com/arnaldolima1/gow-ascension-pc)
-  mantém etapas de preparação, inicia um processo de jogo separado, acompanha
-  sua saída em log e trata encerramento/falha. O relatório de FPS citado pelo
-  projeto é resultado de PC; não prova compatibilidade iOS. A UI iOS agora
-  prioriza seleção do ELF e arquivos, e deixa os testes RSX na aba separada.
-- O host iOS de [gow2-recomp](https://github.com/andrebrumdev/gow2-recomp)
-  executa o guest em thread própria e só apresenta a tela de jogo quando recebe
-  um quadro guest real. É um padrão de ciclo de vida aplicável. O backend GoW2
-  não é um renderer intercambiável para Ascension.
-- O runtime vinculado é o [ps3recomp](https://github.com/sp00nznet/ps3recomp)
-  fixado pelo workflow. A tabela AOT estática está ligada ao app; isso não
-  transforma o teste limitado atual numa sessão de jogo completa.
+O launcher de PC prepara o jogo em background, valida o disco, mantém páginas
+de vídeo/controles/jogo/mods, inicia o processo e preserva log de execução. O
+launcher SwiftUI do GoW2 mostra outra parte útil: preferências e importações
+nativas, preparação fora da interface e entrada no jogo só quando o backend
+entrega um quadro real. O runtime e os dados de GoW2 são específicos daquele
+jogo; o que pode ser adaptado é o ciclo de vida e o desenho do launcher.
 
-## Estado contra as passagens do projeto
+## O que ainda impede chegar ao menu
 
-M0–M4 seguem parciais: artefato e loader são construídos, há runtime nativo,
-VFS autorizado e preparação de entrada PS3, mas o CRT ainda precisa provar que
-avança até chamadas de arquivos do jogo. M5 não passou: os quadros são testes
-Metal, não saída RSX do Ascension. M6 e o critério de 30 FPS M7 não passaram:
-não existe primeiro quadro de gameplay medido neste port. `M7.72` é número da
-versão, não aprovação do marco M7.
+Esta revisão corrige a chamada de entrada e torna o caminho observável. Ela
+não demonstra, por si, que o dispositivo chegou à inicialização de arquivos.
+O gate concreto no telefone passa a ser: chamadas AOT aumentando, em seguida
+`cellFsOpen`/`cellFsRead` e bytes positivos. O PC mostra que, mesmo depois de
+entrar no jogo, SPURS e GCM podem parar a execução silenciosamente; esses são
+os subsistemas que precisam ser acompanhados pelos dados reais do próximo run.
+As métricas iniciais contam leituras guest no total; ainda não guardam caminho
+por arquivo, então não afirmam que um `.psarc` específico foi aberto.
 
-## Mudanças desta revisão
+O app ainda não conecta comandos RSX do jogo ao Metal. A aba gráfica é um
+laboratório de testes sintéticos. Por isso, primeiro frame original, menu,
+gameplay e FPS continuam não comprovados. O fluxo nativo roda fora da thread
+da interface e o relatório continua acessível durante a execução, mas o runtime
+atual ainda não oferece cancelamento seguro de código guest bloqueado.
 
-- Corrigido o endereço/limite de PT_TLS que causava o encerramento do app.
-- A tela inicial agora é um launcher escuro; o fundo azul de diagnóstico só
-  aparece na aba RSX/Metal. O ELF aparece como ação principal e as opções de
-  preparação vêm em seguida.
-- O texto diferencia “prova de boot nativo” de gameplay e não apresenta o
-  quadro de diagnóstico como se fosse imagem do jogo.
-- Adicionada cobertura de regressão para o limite TLS, executada pelo workflow
-  de CI.
+## Critérios de passagem
 
-O próximo avanço de runtime exige que o relatório do dispositivo mostre
-despachos M7.72 aumentando e contadores `cellFsOpen`/`cellFsRead` positivos.
-Depois disso, o próximo bloqueio é o caminho RSX→Metal até um primeiro quadro
-real; FPS só faz sentido medir após esse marco.
+| Marco | Estado verificável nesta revisão |
+|---|---|
+| M0–M1 | ELF autenticado, loader e integração iOS construídos; teste em aparelho continua necessário |
+| M2 | Entrada PS3Recomp completa e hooks nas 29.849 funções preparados; CI ainda precisa compilar este commit |
+| M3 | Quatro imagens SPU registradas; execução de tarefas SPURS do título não comprovada |
+| M4 | Pasta autorizada e VFS montado; chamadas guest de arquivos dependem do resultado no aparelho |
+| M5 | Bancada Metal sintética disponível; renderer RSX do jogo não conectado |
+| M6 | Nenhum primeiro frame do jogo medido |
+| M7 | Nenhum gameplay estável a 30 FPS medido |
+| M8 | Nenhuma validação de fidelidade a 60 FPS ou upscale medida |
+
+`M7.73.0` é a versão de software do próximo artefato; não significa que o
+critério de gameplay do marco M7 foi aprovado.
