@@ -950,31 +950,16 @@ static BOOL ARGameManifestHasTitleUsrdir(NSDictionary *manifest){
   hero.layer.borderColor=[[UIColor colorWithRed:0.42 green:0.22 blue:0.13 alpha:1] colorWithAlphaComponent:0.65].CGColor;
   [hero.heightAnchor constraintEqualToConstant:226].active=YES;
   UIImageView *cover=[UIImageView new]; cover.translatesAutoresizingMaskIntoConstraints=NO;
-  cover.contentMode=UIViewContentModeScaleAspectFill; cover.alpha=0.40; cover.hidden=YES;
+  cover.contentMode=UIViewContentModeScaleAspectFit; cover.alpha=1.0; cover.hidden=YES;
+  cover.backgroundColor=[UIColor colorWithWhite:0.06 alpha:1];
+  cover.layer.cornerRadius=12; cover.layer.masksToBounds=YES;
+  cover.layer.borderWidth=1; cover.layer.borderColor=[gold colorWithAlphaComponent:0.65].CGColor;
   [hero addSubview:cover]; self.gameCoverView=cover;
   [NSLayoutConstraint activateConstraints:@[
-    [cover.leadingAnchor constraintEqualToAnchor:hero.leadingAnchor],
-    [cover.trailingAnchor constraintEqualToAnchor:hero.trailingAnchor],
-    [cover.topAnchor constraintEqualToAnchor:hero.topAnchor],
-    [cover.bottomAnchor constraintEqualToAnchor:hero.bottomAnchor]
-  ]];
-  UIView *coverShade=[UIView new]; coverShade.translatesAutoresizingMaskIntoConstraints=NO;
-  coverShade.backgroundColor=[UIColor colorWithWhite:0 alpha:0.36]; [hero addSubview:coverShade];
-  [NSLayoutConstraint activateConstraints:@[
-    [coverShade.leadingAnchor constraintEqualToAnchor:hero.leadingAnchor],
-    [coverShade.trailingAnchor constraintEqualToAnchor:hero.trailingAnchor],
-    [coverShade.topAnchor constraintEqualToAnchor:hero.topAnchor],
-    [coverShade.bottomAnchor constraintEqualToAnchor:hero.bottomAnchor]
-  ]];
-  UILabel *greekMark=[self arLauncherLabel:@"Ω" size:154 weight:UIFontWeightRegular
-                                      color:[gold colorWithAlphaComponent:0.13] lines:1];
-  greekMark.font=[UIFont fontWithName:@"Georgia" size:154] ?: greekMark.font;
-  greekMark.textAlignment=NSTextAlignmentRight; [hero addSubview:greekMark];
-  [NSLayoutConstraint activateConstraints:@[
-    [greekMark.trailingAnchor constraintEqualToAnchor:hero.trailingAnchor constant:8],
-    [greekMark.topAnchor constraintEqualToAnchor:hero.topAnchor constant:-28],
-    [greekMark.widthAnchor constraintEqualToConstant:178],
-    [greekMark.heightAnchor constraintEqualToConstant:190]
+    [cover.trailingAnchor constraintEqualToAnchor:hero.trailingAnchor constant:-14],
+    [cover.topAnchor constraintEqualToAnchor:hero.topAnchor constant:14],
+    [cover.widthAnchor constraintEqualToConstant:68],
+    [cover.heightAnchor constraintEqualToConstant:68]
   ]];
   UIView *stripe=[UIView new]; stripe.translatesAutoresizingMaskIntoConstraints=NO;
   stripe.backgroundColor=gold; stripe.layer.cornerRadius=2; [hero addSubview:stripe];
@@ -996,7 +981,7 @@ static BOOL ARGameManifestHasTitleUsrdir(NSDictionary *manifest){
     [stripe.heightAnchor constraintEqualToConstant:152],
     [heroCopy.leadingAnchor constraintEqualToAnchor:stripe.trailingAnchor constant:14],
     [heroCopy.trailingAnchor constraintEqualToAnchor:hero.trailingAnchor constant:-15],
-    [heroCopy.centerYAnchor constraintEqualToAnchor:hero.centerYAnchor]
+    [heroCopy.bottomAnchor constraintEqualToAnchor:hero.bottomAnchor constant:-17]
   ]];
   [main addArrangedSubview:hero];
 
