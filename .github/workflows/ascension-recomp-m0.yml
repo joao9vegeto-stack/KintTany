@@ -1821,7 +1821,7 @@ jobs:
           grep -Fxq 'GOWA2 installer digest regression: bad hash and length rejected, all 9 valid chunks installed only after matching SHA-256 PASS' m743-installer-host.log
           test "$(wc -l < m743-staged/symbols.txt | tr -d ' ')" = "6251"
       - name: Reuse verified M7.72 archive for gate-only repair
-        if: github.event.before == '5e1a6061f9787e273e682d728dde100d0cacbfc6'
+        if: github.event.before == '5e1a6061f9787e273e682d728dde100d0cacbfc6' || github.event.before == '9c97238fc3946df70684416660486e8b417fc92f'
         uses: actions/download-artifact@v4
         with:
           name: AscensionRecomp-M7.73.0-LAUNCHER-ARM64
