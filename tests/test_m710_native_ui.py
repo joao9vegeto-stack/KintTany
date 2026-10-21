@@ -8,7 +8,8 @@ class M710UI(unittest.TestCase):
     def test_launcher_exposes_native_entry_and_current_report(self):
         ui=(ROOT/"ios/ARProbeApp.m").read_text()
         self.assertIn('arLauncherLabel:@"ASCENSION"',ui)
-        self.assertIn('arLauncherLabel:@"RECOMP  /  iOS ARM64"',ui)
+        self.assertIn('brandSubtitle=[self arLauncherLabel:@"NPUA80918  ·  PS3 → iOS ARM64"',ui)
+        self.assertIn('self.launcherReadinessLabel=[self arLauncherLabel:',ui)
         for key in (
             'self.nativeLaunchButton=[self arLauncherButton:@"INICIAR JOGO"',
             'self.ppuDiagnosticsButton=[self arLauncherButton:@"RELATÓRIO DA EXECUÇÃO"',

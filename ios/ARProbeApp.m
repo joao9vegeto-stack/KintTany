@@ -153,8 +153,18 @@ static BOOL ARGameManifestHasTitleUsrdir(NSDictionary *manifest){
  }
  return NO;
 }
+/* Use a native gradient layer so the game tile remains atmospheric even before
+ * the user imports ICON0.PNG. This keeps the IPA free of game artwork. */
+@interface ARLauncherHeroView : UIView @end
+@implementation ARLauncherHeroView
++ (Class)layerClass { return CAGradientLayer.class; }
+@end
+
 @interface ARProbeDelegate : UIResponder <UIApplicationDelegate, UIDocumentPickerDelegate>
 @property(nonatomic,strong) UIWindow *window;
+@property(nonatomic,strong) UIView *launcherBrand;
+@property(nonatomic,strong) UIView *launcherFooter;
+@property(nonatomic,strong) UILabel *launcherReadinessLabel;
 @property(nonatomic,strong) ARMetalView *metalView;
 @property(nonatomic,strong) UILabel *status;
 @property(nonatomic,strong) UIScrollView *gameList;
@@ -830,6 +840,7 @@ static BOOL ARGameManifestHasTitleUsrdir(NSDictionary *manifest){
   [button addTarget:self action:action forControlEvents:UIControlEventTouchUpInside];
   return button;
 }
+
 - (BOOL)buildLauncherWithApplication:(UIApplication*)app options:(NSDictionary*)options {
   (void)app; (void)options;
   NSError *homeError=nil;
@@ -854,7 +865,33 @@ static BOOL ARGameManifestHasTitleUsrdir(NSDictionary *manifest){
     [metal.bottomAnchor constraintEqualToAnchor:controller.view.bottomAnchor]
   ]];
 
-  UISegmentedControl *tabs=[[UISegmentedControl alloc] initWithItems:@[@"JOGAR",@"CONFIGURAÇÕES"]];
+  UIStackView *brandBar=[UIStackView new]; brandBar.translatesAutoresizingMaskIntoConstraints=NO;
+  brandBar.axis=UILayoutConstraintAxisHorizontal; brandBar.alignment=UIStackViewAlignmentCenter;
+  brandBar.distribution=UIStackViewDistributionEqualSpacing; self.launcherBrand=brandBar;
+  UIStackView *brandCopy=[UIStackView new]; brandCopy.axis=UILayoutConstraintAxisVertical; brandCopy.spacing=2;
+  UILabel *brandTitle=[self arLauncherLabel:@"GOD OF WAR  ASCENSION" size:14 weight:UIFontWeightBlack color:UIColor.whiteColor lines:1];
+  brandTitle.font=[UIFont fontWithName:@"Georgia-Bold" size:14] ?: brandTitle.font;
+  [brandCopy addArrangedSubview:brandTitle];
+  UILabel *brandSubtitle=[self arLauncherLabel:@"NPUA80918  ·  PS3 → iOS ARM64" size:9 weight:UIFontWeightMedium color:muted lines:1];
+  brandSubtitle.font=[UIFont monospacedSystemFontOfSize:9 weight:UIFontWeightMedium];
+  [brandCopy addArrangedSubview:brandSubtitle];
+  UILabel *versionBadge=[self arLauncherLabel:ARCurrentRelease() size:10 weight:UIFontWeightBold color:gold lines:1];
+  versionBadge.textAlignment=NSTextAlignmentCenter;
+  versionBadge.backgroundColor=[UIColor colorWithRed:0.24 green:0.17 blue:0.08 alpha:1];
+  versionBadge.layer.cornerRadius=10; versionBadge.layer.masksToBounds=YES;
+  versionBadge.layer.borderWidth=1; versionBadge.layer.borderColor=[gold colorWithAlphaComponent:0.45].CGColor;
+  versionBadge.text=[NSString stringWithFormat:@"  %@  ",ARCurrentRelease()];
+  [versionBadge.heightAnchor constraintEqualToConstant:28].active=YES;
+  [brandBar addArrangedSubview:brandCopy]; [brandBar addArrangedSubview:versionBadge];
+  [controller.view addSubview:brandBar];
+  [NSLayoutConstraint activateConstraints:@[
+    [brandBar.topAnchor constraintEqualToAnchor:controller.view.safeAreaLayoutGuide.topAnchor constant:7],
+    [brandBar.leadingAnchor constraintEqualToAnchor:controller.view.leadingAnchor constant:20],
+    [brandBar.trailingAnchor constraintEqualToAnchor:controller.view.trailingAnchor constant:-20],
+    [brandBar.heightAnchor constraintEqualToConstant:38]
+  ]];
+
+  UISegmentedControl *tabs=[[UISegmentedControl alloc] initWithItems:@[@"JOGAR",@"ARQUIVOS  ·  AJUSTES"]];
   tabs.translatesAutoresizingMaskIntoConstraints=NO; tabs.selectedSegmentIndex=0;
   self.launcherTabs=tabs;
   tabs.backgroundColor=panel;
@@ -865,10 +902,10 @@ static BOOL ARGameManifestHasTitleUsrdir(NSDictionary *manifest){
   [tabs addTarget:self action:@selector(arSwitchTab:) forControlEvents:UIControlEventValueChanged];
   [controller.view addSubview:tabs];
   [NSLayoutConstraint activateConstraints:@[
-    [tabs.topAnchor constraintEqualToAnchor:controller.view.safeAreaLayoutGuide.topAnchor constant:8],
+    [tabs.topAnchor constraintEqualToAnchor:brandBar.bottomAnchor constant:9],
     [tabs.leadingAnchor constraintEqualToAnchor:controller.view.leadingAnchor constant:18],
     [tabs.trailingAnchor constraintEqualToAnchor:controller.view.trailingAnchor constant:-18],
-    [tabs.heightAnchor constraintEqualToConstant:38]
+    [tabs.heightAnchor constraintEqualToConstant:40]
   ]];
 
   UIScrollView *(^makePage)(void)=^UIScrollView*{
@@ -900,20 +937,20 @@ static BOOL ARGameManifestHasTitleUsrdir(NSDictionary *manifest){
   self.gameList=game; self.graphicsList=graphics;
   UIStackView *main=makeContent(game);
 
-  UIStackView *brand=[UIStackView new]; brand.axis=UILayoutConstraintAxisVertical; brand.spacing=3;
-  [brand addArrangedSubview:[self arLauncherLabel:@"ASCENSION" size:13 weight:UIFontWeightBlack color:gold lines:1]];
-  UILabel *subbrand=[self arLauncherLabel:@"RECOMP  /  iOS ARM64" size:10 weight:UIFontWeightMedium color:muted lines:1];
-  subbrand.font=[UIFont monospacedSystemFontOfSize:10 weight:UIFontWeightMedium];
-  [brand addArrangedSubview:subbrand]; [main addArrangedSubview:brand];
+  [main addArrangedSubview:[self arLauncherLabel:@"SUA BIBLIOTECA" size:10 weight:UIFontWeightBold color:gold lines:1]];
 
-  UIView *hero=[UIView new]; hero.translatesAutoresizingMaskIntoConstraints=NO;
-  hero.backgroundColor=[UIColor colorWithRed:0.13 green:0.055 blue:0.045 alpha:1];
-  hero.layer.cornerRadius=18; hero.layer.borderWidth=1;
+  ARLauncherHeroView *hero=[ARLauncherHeroView new]; hero.translatesAutoresizingMaskIntoConstraints=NO;
+  CAGradientLayer *heroGradient=(CAGradientLayer*)hero.layer;
+  heroGradient.colors=@[(id)[UIColor colorWithRed:0.34 green:0.095 blue:0.055 alpha:1].CGColor,
+                         (id)[UIColor colorWithRed:0.16 green:0.055 blue:0.050 alpha:1].CGColor,
+                         (id)[UIColor colorWithRed:0.045 green:0.040 blue:0.052 alpha:1].CGColor];
+  heroGradient.startPoint=CGPointMake(0,0); heroGradient.endPoint=CGPointMake(1,1);
+  hero.layer.cornerRadius=19; hero.layer.borderWidth=1;
   hero.clipsToBounds=YES;
   hero.layer.borderColor=[[UIColor colorWithRed:0.42 green:0.22 blue:0.13 alpha:1] colorWithAlphaComponent:0.65].CGColor;
-  [hero.heightAnchor constraintEqualToConstant:195].active=YES;
+  [hero.heightAnchor constraintEqualToConstant:226].active=YES;
   UIImageView *cover=[UIImageView new]; cover.translatesAutoresizingMaskIntoConstraints=NO;
-  cover.contentMode=UIViewContentModeScaleAspectFill; cover.alpha=0.24; cover.hidden=YES;
+  cover.contentMode=UIViewContentModeScaleAspectFill; cover.alpha=0.40; cover.hidden=YES;
   [hero addSubview:cover]; self.gameCoverView=cover;
   [NSLayoutConstraint activateConstraints:@[
     [cover.leadingAnchor constraintEqualToAnchor:hero.leadingAnchor],
@@ -921,22 +958,42 @@ static BOOL ARGameManifestHasTitleUsrdir(NSDictionary *manifest){
     [cover.topAnchor constraintEqualToAnchor:hero.topAnchor],
     [cover.bottomAnchor constraintEqualToAnchor:hero.bottomAnchor]
   ]];
+  UIView *coverShade=[UIView new]; coverShade.translatesAutoresizingMaskIntoConstraints=NO;
+  coverShade.backgroundColor=[UIColor colorWithWhite:0 alpha:0.36]; [hero addSubview:coverShade];
+  [NSLayoutConstraint activateConstraints:@[
+    [coverShade.leadingAnchor constraintEqualToAnchor:hero.leadingAnchor],
+    [coverShade.trailingAnchor constraintEqualToAnchor:hero.trailingAnchor],
+    [coverShade.topAnchor constraintEqualToAnchor:hero.topAnchor],
+    [coverShade.bottomAnchor constraintEqualToAnchor:hero.bottomAnchor]
+  ]];
+  UILabel *greekMark=[self arLauncherLabel:@"Ω" size:154 weight:UIFontWeightRegular
+                                      color:[gold colorWithAlphaComponent:0.13] lines:1];
+  greekMark.font=[UIFont fontWithName:@"Georgia" size:154] ?: greekMark.font;
+  greekMark.textAlignment=NSTextAlignmentRight; [hero addSubview:greekMark];
+  [NSLayoutConstraint activateConstraints:@[
+    [greekMark.trailingAnchor constraintEqualToAnchor:hero.trailingAnchor constant:8],
+    [greekMark.topAnchor constraintEqualToAnchor:hero.topAnchor constant:-28],
+    [greekMark.widthAnchor constraintEqualToConstant:178],
+    [greekMark.heightAnchor constraintEqualToConstant:190]
+  ]];
   UIView *stripe=[UIView new]; stripe.translatesAutoresizingMaskIntoConstraints=NO;
   stripe.backgroundColor=gold; stripe.layer.cornerRadius=2; [hero addSubview:stripe];
   UIStackView *heroCopy=[UIStackView new]; heroCopy.translatesAutoresizingMaskIntoConstraints=NO;
   heroCopy.axis=UILayoutConstraintAxisVertical; heroCopy.spacing=7;
-  [heroCopy addArrangedSubview:[self arLauncherLabel:@"GOD OF WAR" size:13 weight:UIFontWeightHeavy color:[UIColor colorWithWhite:0.84 alpha:1] lines:1]];
-  [heroCopy addArrangedSubview:[self arLauncherLabel:@"ASCENSION" size:31 weight:UIFontWeightBlack color:UIColor.whiteColor lines:1]];
+  [heroCopy addArrangedSubview:[self arLauncherLabel:@"RECOMPILAÇÃO NATIVA  ·  PLAYSTATION 3" size:9 weight:UIFontWeightBold color:[UIColor colorWithWhite:0.84 alpha:1] lines:1]];
+  UILabel *heroTitle=[self arLauncherLabel:@"ASCENSION" size:33 weight:UIFontWeightBlack color:UIColor.whiteColor lines:1];
+  heroTitle.font=[UIFont fontWithName:@"Georgia-Bold" size:33] ?: heroTitle.font;
+  [heroCopy addArrangedSubview:heroTitle];
   UILabel *region=[self arLauncherLabel:@"NPUA80918   •   PLAYSTATION 3" size:10 weight:UIFontWeightMedium color:gold lines:1];
   region.font=[UIFont monospacedSystemFontOfSize:10 weight:UIFontWeightMedium];
   [heroCopy addArrangedSubview:region];
-  [heroCopy addArrangedSubview:[self arLauncherLabel:@"Boot nativo com PS3Recomp recompilado para ARM64" size:12 weight:UIFontWeightMedium color:[UIColor colorWithWhite:0.78 alpha:1] lines:2]];
+  [heroCopy addArrangedSubview:[self arLauncherLabel:@"PS3Recomp · guest ARM64 · renderização Metal" size:11 weight:UIFontWeightMedium color:[UIColor colorWithWhite:0.84 alpha:1] lines:1]];
   [hero addSubview:heroCopy];
   [NSLayoutConstraint activateConstraints:@[
     [stripe.leadingAnchor constraintEqualToAnchor:hero.leadingAnchor constant:17],
     [stripe.topAnchor constraintEqualToAnchor:hero.topAnchor constant:20],
     [stripe.widthAnchor constraintEqualToConstant:3],
-    [stripe.heightAnchor constraintEqualToConstant:142],
+    [stripe.heightAnchor constraintEqualToConstant:152],
     [heroCopy.leadingAnchor constraintEqualToAnchor:stripe.trailingAnchor constant:14],
     [heroCopy.trailingAnchor constraintEqualToAnchor:hero.trailingAnchor constant:-15],
     [heroCopy.centerYAnchor constraintEqualToAnchor:hero.centerYAnchor]
@@ -948,7 +1005,7 @@ static BOOL ARGameManifestHasTitleUsrdir(NSDictionary *manifest){
   library.layer.borderWidth=1; library.layer.borderColor=[UIColor colorWithWhite:0.20 alpha:1].CGColor;
   UIStackView *libraryRows=[UIStackView new]; libraryRows.translatesAutoresizingMaskIntoConstraints=NO;
   libraryRows.axis=UILayoutConstraintAxisVertical; libraryRows.spacing=8;
-  [libraryRows addArrangedSubview:[self arLauncherLabel:@"BIBLIOTECA" size:10 weight:UIFontWeightBold color:gold lines:1]];
+  [libraryRows addArrangedSubview:[self arLauncherLabel:@"ARQUIVOS DO JOGO" size:10 weight:UIFontWeightBold color:gold lines:1]];
   self.gameInstallLabel=[self arLauncherLabel:@"Pasta do jogo não selecionada" size:13 weight:UIFontWeightSemibold color:UIColor.whiteColor lines:2];
   [libraryRows addArrangedSubview:self.gameInstallLabel];
   UIView *separator=[UIView new]; separator.backgroundColor=[UIColor colorWithWhite:0.22 alpha:1];
@@ -964,11 +1021,36 @@ static BOOL ARGameManifestHasTitleUsrdir(NSDictionary *manifest){
   ]];
   [main addArrangedSubview:library];
 
-  [main addArrangedSubview:[self arLauncherButton:@"CONFIGURAR JOGO E ARQUIVOS" background:[UIColor colorWithWhite:0.17 alpha:1] action:@selector(openLauncherSettings:)]];
   self.nativeLaunchButton=[self arLauncherButton:@"INICIAR JOGO" background:[UIColor colorWithRed:0.47 green:0.12 blue:0.10 alpha:1] action:@selector(startNativeGame:)];
-  [self.nativeLaunchButton.heightAnchor constraintEqualToConstant:56].active=YES;
+  [self.nativeLaunchButton setTitle:@"▶   INICIAR ASCENSION" forState:UIControlStateNormal];
+  [self.nativeLaunchButton.heightAnchor constraintEqualToConstant:54].active=YES;
   self.nativeLaunchButton.enabled=NO; self.nativeLaunchButton.alpha=0.52;
-  [main addArrangedSubview:self.nativeLaunchButton];
+  UIView *footer=[UIView new]; footer.translatesAutoresizingMaskIntoConstraints=NO;
+  footer.backgroundColor=[UIColor colorWithRed:0.055 green:0.058 blue:0.068 alpha:0.98];
+  self.launcherFooter=footer; [controller.view addSubview:footer];
+  UIView *footerRule=[UIView new]; footerRule.translatesAutoresizingMaskIntoConstraints=NO;
+  footerRule.backgroundColor=[UIColor colorWithWhite:0.21 alpha:1]; [footer addSubview:footerRule];
+  self.launcherReadinessLabel=[self arLauncherLabel:@"CONFIGURE OS ARQUIVOS PARA JOGAR" size:9 weight:UIFontWeightBold color:muted lines:1];
+  self.launcherReadinessLabel.font=[UIFont monospacedSystemFontOfSize:9 weight:UIFontWeightBold];
+  [footer addSubview:self.launcherReadinessLabel]; [footer addSubview:self.nativeLaunchButton];
+  [NSLayoutConstraint activateConstraints:@[
+    [footer.leadingAnchor constraintEqualToAnchor:controller.view.leadingAnchor],
+    [footer.trailingAnchor constraintEqualToAnchor:controller.view.trailingAnchor],
+    [footer.bottomAnchor constraintEqualToAnchor:controller.view.bottomAnchor],
+    [footerRule.topAnchor constraintEqualToAnchor:footer.topAnchor],
+    [footerRule.leadingAnchor constraintEqualToAnchor:footer.leadingAnchor],
+    [footerRule.trailingAnchor constraintEqualToAnchor:footer.trailingAnchor],
+    [footerRule.heightAnchor constraintEqualToConstant:1],
+    [self.launcherReadinessLabel.topAnchor constraintEqualToAnchor:footer.topAnchor constant:8],
+    [self.launcherReadinessLabel.leadingAnchor constraintEqualToAnchor:footer.leadingAnchor constant:20],
+    [self.launcherReadinessLabel.trailingAnchor constraintEqualToAnchor:footer.trailingAnchor constant:-20],
+    [self.nativeLaunchButton.topAnchor constraintEqualToAnchor:self.launcherReadinessLabel.bottomAnchor constant:6],
+    [self.nativeLaunchButton.leadingAnchor constraintEqualToAnchor:footer.leadingAnchor constant:16],
+    [self.nativeLaunchButton.trailingAnchor constraintEqualToAnchor:footer.trailingAnchor constant:-16],
+    [self.nativeLaunchButton.bottomAnchor constraintEqualToAnchor:controller.view.safeAreaLayoutGuide.bottomAnchor constant:-8]
+  ]];
+  game.contentInset=UIEdgeInsetsMake(0,0,112,0); game.scrollIndicatorInsets=game.contentInset;
+  graphics.contentInset=UIEdgeInsetsMake(0,0,12,0);
 
   UIView *activity=[UIView new]; activity.translatesAutoresizingMaskIntoConstraints=NO;
   activity.backgroundColor=[UIColor colorWithWhite:0.075 alpha:1]; activity.layer.cornerRadius=13;
@@ -992,8 +1074,8 @@ static BOOL ARGameManifestHasTitleUsrdir(NSDictionary *manifest){
   self.ppuReportButton=self.ppuDiagnosticsButton; self.ppuAdvancedButton=self.ppuDiagnosticsButton;
 
   UIStackView *settings=makeContent(graphics);
-  [settings addArrangedSubview:[self arLauncherLabel:@"CONFIGURAÇÃO DO JOGO" size:18 weight:UIFontWeightBold color:UIColor.whiteColor lines:1]];
-  [settings addArrangedSubview:[self arLauncherLabel:@"Selecione a instalação NPUA80918 e o ELF recompilado. As referências são mantidas pelo app em Arquivos/Documentos." size:13 weight:UIFontWeightMedium color:muted lines:0]];
+  [settings addArrangedSubview:[self arLauncherLabel:@"ARQUIVOS DO JOGO" size:20 weight:UIFontWeightBold color:UIColor.whiteColor lines:1]];
+  [settings addArrangedSubview:[self arLauncherLabel:@"Selecione a instalação NPUA80918 e o ELF recompilado. O acesso fica guardado neste app." size:13 weight:UIFontWeightMedium color:muted lines:0]];
   UIView *installCard=[UIView new]; installCard.translatesAutoresizingMaskIntoConstraints=NO;
   installCard.backgroundColor=panel; installCard.layer.cornerRadius=15;
   UIStackView *installRows=[UIStackView new]; installRows.translatesAutoresizingMaskIntoConstraints=NO;
@@ -1015,8 +1097,10 @@ static BOOL ARGameManifestHasTitleUsrdir(NSDictionary *manifest){
     [installRows.bottomAnchor constraintEqualToAnchor:installCard.bottomAnchor constant:-13]
   ]];
   [settings addArrangedSubview:installCard];
-  [settings addArrangedSubview:[self arLauncherButton:@"SELECIONAR PASTA NPUA80918" background:[UIColor colorWithWhite:0.18 alpha:1] action:@selector(importGameFolder:)]];
-  [settings addArrangedSubview:[self arLauncherButton:@"USAR PASTA EM DOCUMENTOS" background:[UIColor colorWithWhite:0.15 alpha:1] action:@selector(importGameFolderFromDocuments:)]];
+  [settings addArrangedSubview:[self arLauncherLabel:@"PASTA DA INSTALAÇÃO" size:10 weight:UIFontWeightBold color:gold lines:1]];
+  [settings addArrangedSubview:[self arLauncherButton:@"ESCOLHER PASTA NPUA80918" background:[UIColor colorWithRed:0.40 green:0.13 blue:0.10 alpha:1] action:@selector(importGameFolder:)]];
+  [settings addArrangedSubview:[self arLauncherButton:@"LOCALIZAR EM DOCUMENTOS" background:[UIColor colorWithWhite:0.15 alpha:1] action:@selector(importGameFolderFromDocuments:)]];
+  [settings addArrangedSubview:[self arLauncherLabel:@"EXECUTÁVEL RECOMPILADO" size:10 weight:UIFontWeightBold color:gold lines:1]];
   [settings addArrangedSubview:[self arLauncherButton:@"IMPORTAR GOWA.ELF" background:[UIColor colorWithWhite:0.18 alpha:1] action:@selector(importM59ELF:)]];
   [settings addArrangedSubview:[self arLauncherButton:@"RELATÓRIO DA EXECUÇÃO" background:[UIColor colorWithWhite:0.12 alpha:1] action:@selector(openUnifiedPpuMenu:)]];
   UIView *diagnosticCard=[UIView new]; diagnosticCard.translatesAutoresizingMaskIntoConstraints=NO;
@@ -1152,10 +1236,34 @@ static BOOL ARGameManifestHasTitleUsrdir(NSDictionary *manifest){
 - (void)refreshNativeLaunchAvailability {
   self.settingsGameInstallLabel.text=self.gameInstallLabel.text;
   self.settingsElfStatusLabel.text=self.elfStatusLabel.text;
-  BOOL enabled=self.ready && !self.shaderBusy && self.hasGameInstallation && self.selectedElfData.length>0;
+  self.gameInstallLabel.textColor=self.hasGameInstallation?UIColor.systemGreenColor:UIColor.whiteColor;
+  self.elfStatusLabel.textColor=self.selectedElfData.length?UIColor.systemGreenColor:UIColor.whiteColor;
+  self.settingsGameInstallLabel.textColor=self.gameInstallLabel.textColor;
+  self.settingsElfStatusLabel.textColor=self.elfStatusLabel.textColor;
+  BOOL enabled=self.ready && !self.shaderBusy;
+  BOOL launchReady=self.hasGameInstallation && self.selectedElfData.length>0;
   self.nativeLaunchButton.enabled=enabled; self.nativeLaunchButton.alpha=enabled?1.0:0.52;
-  if(self.shaderBusy)[self.nativeLaunchButton setTitle:@"BOOT NATIVO EM EXECUÇÃO" forState:UIControlStateNormal];
-  else [self.nativeLaunchButton setTitle:enabled?@"INICIAR JOGO":@"SELECIONE A PASTA E O ELF" forState:UIControlStateNormal];
+  if(self.shaderBusy){
+    [self.nativeLaunchButton setTitle:@"EXECUÇÃO EM ANDAMENTO" forState:UIControlStateNormal];
+    self.launcherReadinessLabel.text=@"BOOT NATIVO ATIVO  ·  MÉTRICAS AO VIVO";
+    self.launcherReadinessLabel.textColor=UIColor.systemGreenColor;
+  }else if(launchReady){
+    [self.nativeLaunchButton setTitle:@"▶   INICIAR ASCENSION" forState:UIControlStateNormal];
+    self.launcherReadinessLabel.text=@"JOGO E EXECUTÁVEL PRONTOS PARA O BOOT";
+    self.launcherReadinessLabel.textColor=UIColor.systemGreenColor;
+  }else if(!self.hasGameInstallation && !self.selectedElfData.length){
+    [self.nativeLaunchButton setTitle:@"CONFIGURAR ARQUIVOS" forState:UIControlStateNormal];
+    self.launcherReadinessLabel.text=@"PRECISA DA PASTA NPUA80918 E DO GOWA.ELF";
+    self.launcherReadinessLabel.textColor=[UIColor colorWithRed:0.95 green:0.69 blue:0.38 alpha:1];
+  }else if(!self.hasGameInstallation){
+    [self.nativeLaunchButton setTitle:@"SELECIONAR PASTA DO JOGO" forState:UIControlStateNormal];
+    self.launcherReadinessLabel.text=@"GOWA.ELF VALIDADO  ·  FALTA A PASTA NPUA80918";
+    self.launcherReadinessLabel.textColor=[UIColor colorWithRed:0.95 green:0.69 blue:0.38 alpha:1];
+  }else{
+    [self.nativeLaunchButton setTitle:@"IMPORTAR GOWA.ELF" forState:UIControlStateNormal];
+    self.launcherReadinessLabel.text=@"PASTA DO JOGO PRONTA  ·  FALTA O EXECUTÁVEL";
+    self.launcherReadinessLabel.textColor=[UIColor colorWithRed:0.95 green:0.69 blue:0.38 alpha:1];
+  }
 }
 - (void)acceptELFAtURL:(NSURL*)url {
   if(!url || self.shaderBusy)return;
@@ -1275,7 +1383,8 @@ static BOOL ARGameManifestHasTitleUsrdir(NSDictionary *manifest){
   if(self.gameDisplayActive)return;
   self.gameDisplayActive=YES;
   [self requestGameOrientation:UIInterfaceOrientationMaskLandscape];
-  self.launcherTabs.hidden=YES; self.gameList.hidden=YES; self.graphicsList.hidden=YES;
+  self.launcherBrand.hidden=YES; self.launcherTabs.hidden=YES;
+  self.launcherFooter.hidden=YES; self.gameList.hidden=YES; self.graphicsList.hidden=YES;
   self.metalView.hidden=NO; self.nativeGameHUD.hidden=NO; self.nativeGameControls.hidden=NO;
   UIView *root=self.window.rootViewController.view;
   [root bringSubviewToFront:self.metalView];
@@ -1289,18 +1398,26 @@ static BOOL ARGameManifestHasTitleUsrdir(NSDictionary *manifest){
   self.nativeGameControls.hidden=YES;
   self.nativePadButtons=0;
   cellPad_set_host_state(0,128,128,128,128,0,0);
-  self.launcherTabs.hidden=NO;
+  self.launcherBrand.hidden=NO; self.launcherTabs.hidden=NO;
   self.gameList.hidden=(self.launcherTabs.selectedSegmentIndex!=0);
   self.graphicsList.hidden=(self.launcherTabs.selectedSegmentIndex==0);
+  self.launcherFooter.hidden=(self.launcherTabs.selectedSegmentIndex!=0);
   self.metalView.hidden=!self.graphicsReady;
 }
 - (void)startNativeGame:(UIButton*)sender {
   (void)sender;
-  if(self.shaderBusy || !self.selectedElfData.length)return;
+  if(self.shaderBusy)return;
   if(!self.hasGameInstallation){
     self.gameInstallLabel.text=@"Selecione NPUA80918 com a pasta USRDIR";
     self.status.text=@"Escolha uma pasta válida do jogo antes de iniciar.";
-    [self refreshNativeLaunchAvailability]; return;
+    [self refreshNativeLaunchAvailability];
+    self.launcherTabs.selectedSegmentIndex=1; [self arSwitchTab:self.launcherTabs];
+    return;
+  }
+  if(!self.selectedElfData.length){
+    self.status.text=@"Importe e valide o GOWA.ELF antes de iniciar.";
+    self.launcherTabs.selectedSegmentIndex=1; [self arSwitchTab:self.launcherTabs];
+    return;
   }
   /* The bookmark and title manifest were checked when the user imported the
    * folder or during async startup restore. Do not reload a potentially large
@@ -1459,10 +1576,8 @@ static BOOL ARGameManifestHasTitleUsrdir(NSDictionary *manifest){
     BOOL showGame=sender.selectedSegmentIndex==0;
     self.gameList.hidden=!showGame;
     self.graphicsList.hidden=showGame;
+    self.launcherFooter.hidden=!showGame;
     self.metalView.hidden=self.gameDisplayActive || showGame || !self.graphicsReady;
-    self.status.text=showGame ?
-      @"God of War: Ascension · PS3Recomp nativo para ARM64." :
-      @"Arquivos do jogo, executável e diagnóstico de desenvolvimento.";
 }
 - (void)openLauncherSettings:(UIButton*)sender {
   (void)sender;

@@ -15,8 +15,8 @@ class M749Regressions(unittest.TestCase):
   cls.bridge=(R/"ios/ARLivePPUBridge.c").read_text()
   cls.workflow=(R/".github/workflows/ascension-recomp-m0.yml").read_text()
  def test_local_detection_button_is_arranged(self):
-  self.assertIn('arLauncherButton:@"USAR PASTA EM DOCUMENTOS"',self.ui)
-  self.assertIn('arLauncherButton:@"SELECIONAR PASTA NPUA80918"',self.ui)
+  self.assertIn('arLauncherButton:@"LOCALIZAR EM DOCUMENTOS"',self.ui)
+  self.assertIn('arLauncherButton:@"ESCOLHER PASTA NPUA80918"',self.ui)
   self.assertIn('arLauncherButton:@"IMPORTAR GOWA.ELF"',self.ui)
   self.assertIn('arLauncherButton:@"INICIAR JOGO"',self.ui)
   self.assertIn("importGameFolderFromDocuments:",self.ui)

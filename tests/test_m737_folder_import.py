@@ -18,7 +18,7 @@ class TestM737Folder(unittest.TestCase):
   cls.workflow=(R/".github/workflows/ascension-recomp-m0.yml").read_text()
  def test_folder_picker_is_in_real_game_tab_and_independent_of_elf(self):
   for token in (
-    "SELECIONAR PASTA NPUA80918", "USAR PASTA EM DOCUMENTOS",
+    "ESCOLHER PASTA NPUA80918", "LOCALIZAR EM DOCUMENTOS",
     "initForOpeningContentTypes:@[UTTypeFolder] asCopy:NO",
     "self.folderPicker=picker;", "controller==self.folderPicker",
     "ARGameFolderImport(chosen,&error)", "@selector(importGameFolderFromDocuments:)",
