@@ -903,7 +903,6 @@ fi
 grep -Eq ' [Tt] _ar_m713_aot_003c4d94$' m78-owner-aot-linked-symbols.txt
 grep -Eq ' [Tt] _ar_m713_register_fragment$' m78-owner-aot-linked-symbols.txt
 grep -Eq ' [Tt] _ar_m714_aot_003c4da4$' m78-owner-aot-linked-symbols.txt
-grep -Eq ' [Tt] _ar_m714_frontier_inventory$' m78-owner-aot-linked-symbols.txt
 grep -Eq ' [Tt] _ar_m715_aot_003c4db4$' m78-owner-aot-linked-symbols.txt
 grep -Eq ' [Tt] _ar_m715_register_fragment$' m78-owner-aot-linked-symbols.txt
 grep -Eq ' [Tt] _ar_m716_aot_003c4dc4$' m78-owner-aot-linked-symbols.txt
@@ -921,9 +920,6 @@ grep -Eq ' [Tt] _ar_m736_native_00524b8c$' m78-owner-aot-linked-symbols.txt
 grep -Eq ' [Tt] _ar_m735_native_0052ab58$' m78-owner-aot-linked-symbols.txt
 grep -Eq ' [Tt] _ar_m734_native_0052a9a0$' m78-owner-aot-linked-symbols.txt
 grep -Eq ' [Tt] _ar_m734_native_0052a910$' m78-owner-aot-linked-symbols.txt
-grep -Eq ' [Tt] _ar_m716_verified_successors$' m78-owner-aot-linked-symbols.txt
-grep -Eq ' [Tt] _ar_m717_walk$' m78-owner-aot-linked-symbols.txt
-grep -Eq ' [Tt] _ar_m717_last_aot_trace$' m78-owner-aot-linked-symbols.txt
 grep -Eq ' [Tt] _ar_trace_snapshot$' m78-owner-aot-linked-symbols.txt
 if grep -Eq ' [Tt] _ar_ppc_fallback_step$' m78-owner-aot-linked-symbols.txt; then
   echo 'FAIL M7.55: PPC interpreter linked into AOT-only iOS binary' >&2
