@@ -25,7 +25,7 @@ class NativePPU(unittest.TestCase):
             'ar_run(&ctx,image.entry_code,128u)',
             'ar_last_unresolved()', 'ar_bridge_shutdown()',
             'out[5]=(uint32_t)ar_registered_count()',
-            'AR_UNRESOLVED', 'AR_NATIVE_LIMIT=256u*1024u*1024u'):
+            'AR_UNRESOLVED', 'AR_NATIVE_IMAGE_LIMIT=256u*1024u*1024u'):
    self.assertIn(x,BRIDGE)
   self.assertNotIn('ar_register(image.entry_code',BRIDGE)
  def test_device_report_and_privacy(self):
