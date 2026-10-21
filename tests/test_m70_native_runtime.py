@@ -13,7 +13,7 @@ class NativePPU(unittest.TestCase):
   for x in ('ios/ARLivePPUBridge.c', 'libAscensionPPUCore-ios-arm64.a',
             'ios-probe/ARLivePPUBridge.o', '_ar_m70_native_runtime_probe'):
    self.assertIn(x,BUILD)
-  for x in ("grep -q '_ar_run'", "grep -q '_ar_load_elf_image'",
+  for x in ("grep -Fq '_ar_run'", "grep -q '_ar_load_elf_image'",
             "grep -q '_ar_sys_initialize_tls'",
             'tests/host_m70_native_runtime.c', 'm70-native-host.log'):
    self.assertIn(x,WF)

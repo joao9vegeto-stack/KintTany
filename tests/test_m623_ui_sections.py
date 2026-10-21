@@ -22,7 +22,10 @@ class OrganizedUI(unittest.TestCase):
   start=S.split('- (void)startNativeGame:(UIButton*)sender {',1)[1].split('- (void)nativeRunRefreshTick:',1)[0]
   self.assertIn('ar_m70_native_runtime_probe(elf.bytes,elf.length,0u,native)',start)
   self.assertNotIn('ARGameFolderRestore(',start)
-  self.assertIn('dispatch_async(dispatch_get_global_queue(QOS_CLASS_USER_INITIATED,0)',start)
+  self.assertIn('NSThread *worker=[[NSThread alloc] initWithBlock:',start)
+  self.assertIn('worker.name=@"Ascension PS3Recomp guest";',start)
+  self.assertIn('worker.stackSize=(NSUInteger)64u*1024u*1024u;',start)
+  self.assertIn('[worker start];',start)
   self.assertIn('Acesso à pasta do jogo expirou ou foi revogado.',start)
   self.assertIn('FALHA NO HOST / LOADER',S)
   self.assertNotIn('ar_ppu_bootstrap_',start)

@@ -42,7 +42,7 @@ class TestSecondImport(unittest.TestCase):
    self.assertIn(a,UI)
   for a in ('tests/host_m73_import_discovery.c','m73-prx-host.log',
             'AscensionRecomp-M7.61-BULK-AOT-AppleARM64',
-            '_ar_m73_private_import_probe'):
+            'M7.3 real second PRX stub library NID identified, unknown HLE blocked PASS'):
    self.assertIn(a,WF)
   self.assertIn('<string>7690</string>',P)
 if __name__=="__main__": unittest.main()

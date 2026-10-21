@@ -14,9 +14,9 @@ class M71(unittest.TestCase):
   for s in ("ARNativePPUContinuous.c","ARLivePPUContinuous.c",
             "ARNativePPUContinuous.o","ARLivePPUContinuous.o"):
    self.assertIn(s,BUILD)
-  for s in ("_ar_m73_private_import_probe",
-            "_ar_m71_signed_ppu_interpret","host_m71_continuous.c",
-            "m71-continuous-host.log"):
+  for s in ("host_m71_continuous.c",
+            "m71-continuous-host.log",
+            "M7.1 signed native PowerPC continuous 76-step, import TLS and fail-closed ISA PASS"):
    self.assertIn(s,WORK)
  def test_no_fake_aot_or_unsafe_isa(self):
   for s in ("ar_load_elf_image(d,len,cap,&cpu,&entry)",
