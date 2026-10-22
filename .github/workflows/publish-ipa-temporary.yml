@@ -147,6 +147,12 @@ jobs:
           git clone --quiet --branch AscensionRecomp --single-branch --no-tags \
             "https://x-access-token:${GH_TOKEN}@github.com/${GITHUB_REPOSITORY}.git" "$rewrite"
           old_head="$(git -C "$rewrite" rev-parse refs/heads/AscensionRecomp)"
+          if [[ "$(git -C "$rewrite" rev-parse --is-shallow-repository)" == true ]]; then
+            git -C "$rewrite" fetch --unshallow origin refs/heads/AscensionRecomp
+          fi
+          history_count="$(git -C "$rewrite" rev-list --count HEAD)"
+          echo "Branch commits loaded for history cleanup: $history_count"
+          test "$history_count" -gt 1
           "$filter_script" --force --invert-paths \
             --path-glob '*.mov' --path-glob '*.MOV' --path-glob '*.ips' \
             --path-glob '*.jpg' --path-glob '*.JPG' \
