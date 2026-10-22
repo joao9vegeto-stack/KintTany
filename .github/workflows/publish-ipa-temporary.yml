@@ -1,6 +1,11 @@
 name: Publish the built Ascension IPA to a temporary link
 
 on:
+  push:
+    branches:
+      - AscensionRecomp
+    paths:
+      - .publish-ipa-run-id.txt
   workflow_dispatch:
     inputs:
       run_id:
@@ -9,21 +14,47 @@ on:
         type: string
 
 permissions:
-  actions: read
-  contents: read
+  actions: write
+  contents: write
 
 jobs:
   publish:
     if: github.ref == 'refs/heads/AscensionRecomp'
     runs-on: ubuntu-latest
     steps:
+      - name: Check out the selected branch
+        uses: actions/checkout@v4
+      - name: Read build run ID from branch marker
+        id: selected-run
+        if: github.event_name == 'push'
+        shell: bash
+        run: |
+          set -euo pipefail
+          run_id="$(tr -cd '0-9' < .publish-ipa-run-id.txt)"
+          test -n "$run_id"
+          echo "value=$run_id" >> "$GITHUB_OUTPUT"
+      - name: Confirm source run succeeded on AscensionRecomp
+        uses: actions/github-script@v7
+        env:
+          SOURCE_RUN_ID: ${{ inputs.run_id || steps.selected-run.outputs.value }}
+        with:
+          script: |
+            const id = Number(process.env.SOURCE_RUN_ID);
+            if (!Number.isSafeInteger(id)) throw new Error("Invalid build run ID");
+            const {data: run} = await github.rest.actions.getWorkflowRun({
+              owner: context.repo.owner, repo: context.repo.repo, run_id: id
+            });
+            if (run.head_branch !== "AscensionRecomp" || run.conclusion !== "success" ||
+                run.path !== ".github/workflows/ascension-recomp-m0.yml") {
+              throw new Error("Source run is not a successful AscensionRecomp M7.85 build");
+            }
       - name: Download the exact built IPA artifact
         uses: actions/download-artifact@v4
         with:
           name: AscensionRecomp-M7.85.0-LAUNCHER-ARM64
           github-token: ${{ github.token }}
           repository: ${{ github.repository }}
-          run-id: ${{ inputs.run_id }}
+          run-id: ${{ inputs.run_id || steps.selected-run.outputs.value }}
           path: delivery
 
       - name: Validate and publish only the IPA
@@ -70,3 +101,58 @@ jobs:
               f.write('Página temporária: '+page+'\n')
           print('Temporary direct IPA URL: '+direct)
           PY
+
+      - name: Delete the redundant GitHub IPA artifact after publishing
+        if: steps.publish.outcome == 'success'
+        continue-on-error: true
+        uses: actions/github-script@v7
+        env:
+          SOURCE_RUN_ID: ${{ inputs.run_id || steps.selected-run.outputs.value }}
+        with:
+          script: |
+            const runId = Number(process.env.SOURCE_RUN_ID);
+            const {data} = await github.rest.actions.listWorkflowRunArtifacts({
+              owner: context.repo.owner, repo: context.repo.repo, run_id: runId, per_page: 100
+            });
+            const artifact = data.artifacts.find(a => a.name === "AscensionRecomp-M7.85.0-LAUNCHER-ARM64");
+            if (artifact) {
+              await github.rest.actions.deleteArtifact({owner: context.repo.owner, repo: context.repo.repo, artifact_id: artifact.id});
+              core.notice("Deleted the duplicate Actions IPA artifact after external upload.");
+            } else {
+              core.notice("No matching Actions IPA artifact remained to delete.");
+            }
+      - name: Remove uploaded media and game archives from AscensionRecomp history
+        if: steps.publish.outcome == 'success'
+        continue-on-error: true
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          python3 -m pip install --quiet --prefix "$RUNNER_TEMP/filter-repo" git-filter-repo
+          export PATH="$RUNNER_TEMP/filter-repo/bin:$PATH"
+          rewrite="$RUNNER_TEMP/ascension-history-clean"
+          git clone --quiet --branch AscensionRecomp --single-branch --no-tags \
+            "https://x-access-token:${GH_TOKEN}@github.com/${GITHUB_REPOSITORY}.git" "$rewrite"
+          old_head="$(git -C "$rewrite" rev-parse refs/heads/AscensionRecomp)"
+          git -C "$rewrite" filter-repo --force --invert-paths \
+            --path-glob '*.mov' --path-glob '*.MOV' --path-glob '*.ips' \
+            --path-glob '*.jpg' --path-glob '*.JPG' \
+            --path '7.79.zip' --path 'Arquivo.zip' --path 'arquivos.zip' \
+            --path '.publish-ipa-run-id.txt'
+          if git -C "$rewrite" rev-list --objects HEAD | \
+              awk '$2 ~ /\.(mov|MOV|ips|jpg|JPG)$/ {found=1; print} END {exit !found}'; then
+            echo 'Uploaded captures remain in rewritten branch history' >&2
+            exit 1
+          fi
+          if git -C "$rewrite" rev-list --objects HEAD | \
+              grep -E ' (7\.79\.zip|Arquivo\.zip|arquivos\.zip|\.publish-ipa-run-id\.txt)$'; then
+            echo 'Uploaded archive or delivery marker remains in rewritten branch history' >&2
+            exit 1
+          fi
+          git -C "$rewrite" remote add origin \
+            "https://x-access-token:${GH_TOKEN}@github.com/${GITHUB_REPOSITORY}.git"
+          git -C "$rewrite" push --quiet \
+            --force-with-lease="refs/heads/AscensionRecomp:$old_head" \
+            origin HEAD:refs/heads/AscensionRecomp
+          echo "Branch history rewritten and uploaded media removed. New HEAD: $(git -C "$rewrite" rev-parse HEAD)" >> "$GITHUB_STEP_SUMMARY"

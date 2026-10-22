@@ -4,6 +4,9 @@ on:
   push:
     branches:
       - AscensionRecomp
+    paths-ignore:
+      - .publish-ipa-run-id.txt
+      - .github/workflows/publish-ipa-temporary.yml
 
 permissions:
   actions: read
