@@ -691,11 +691,13 @@ for symbol in ("_cellSpursCreateTaskset2", "_cellSpursCreateTask2",
                "_cellSpursInitializeWithAttribute2",
                "_cellSpursLFQueuePushBody", "_cellSpursGetWorkloadFlag",
                "__cellSpursWorkloadFlagReceiver", "_spu_taskset_track",
+               "_spu_workload_reset_ascension_job_metrics",
+               "_spu_workload_copy_ascension_job_metrics",
                "_spu_signal_parked_on_line", "_edge_inflate",
                "_rsx_metal_backend_set_ios_output_scale"):
     if not any(symbol in name for name in defined):
-        raise SystemExit("M7.86 required native runtime/SPU symbol missing: "+symbol)
-print("M7.86 final ARM64 Mach-O contains the raw NPUA WWS PM fingerprint, tempArea/ready-level SPURS path, live PM diagnostics, Edge HLE and RSX/Metal backend")
+        raise SystemExit("M7.87 required native SPU-job instrumentation symbol missing: "+symbol)
+print("M7.87 final ARM64 Mach-O contains native job counters and exportable missing SPU binaries")
 PYM772LINKED
 # Every M7.62 native function must appear in the FINAL Mach-O, not merely object.
 python3 - <<'PY'

@@ -23,6 +23,8 @@ extern uint32_t ar_m772_copy_unresolved_hle_trace(uint64_t *out, uint32_t capaci
 extern void cellSpursResetAscensionMetrics(void);
 extern void cellSpursCopyAscensionMetrics(uint64_t out[8]);
 extern void cellSpursCopyAscensionPmDiagnostics(uint64_t out[32][7]);
+extern void spu_workload_reset_ascension_job_metrics(void);
+extern void spu_workload_copy_ascension_job_metrics(uint64_t out[8]);
 extern void ar_m756_last_stop_evidence(ar_m756_stop_evidence*);
 extern void ar_m756_last_origin_evidence(ar_m756_stop_evidence*);
 extern void ar_m751_last_fs_trace(ar_fs_trace *);
@@ -225,6 +227,7 @@ static BOOL ARGameManifestHasTitleUsrdir(NSDictionary *manifest){
 @property(nonatomic,copy) NSString *ppuProgress;
 @property(nonatomic,copy) NSString *ppuSummary;
 @property(nonatomic,copy) NSString *folderReport;
+@property(nonatomic,strong) NSURL *latestSpuCaptureURL;
 @property(nonatomic,strong) NSDictionary<NSString*,id> *m750Run;
 @property(nonatomic,copy) NSString *m750HostObservation;
 @property(nonatomic,strong) UIDocumentPickerViewController *folderPicker;
@@ -1201,6 +1204,7 @@ static BOOL ARGameManifestHasTitleUsrdir(NSDictionary *manifest){
   [reportRows addArrangedSubview:self.launcherReportLabel];
   [reportRows addArrangedSubview:[self arLauncherButton:@"COPIAR RELATÓRIO COMPLETO" background:[UIColor colorWithWhite:0.15 alpha:1] action:@selector(copyLauncherReport:)]];
   [reportRows addArrangedSubview:[self arLauncherButton:@"COMPARTILHAR / EXPORTAR TXT" background:[UIColor colorWithWhite:0.15 alpha:1] action:@selector(shareLauncherReport:)]];
+  [reportRows addArrangedSubview:[self arLauncherButton:@"EXPORTAR BINÁRIOS SPU AUSENTES" background:[UIColor colorWithWhite:0.15 alpha:1] action:@selector(shareSpuMissCapture:)]];
 
   UIView *gameHUD=[UIView new]; gameHUD.translatesAutoresizingMaskIntoConstraints=NO;
   gameHUD.hidden=YES; gameHUD.backgroundColor=[panel colorWithAlphaComponent:0.92];
@@ -1514,6 +1518,23 @@ static BOOL ARGameManifestHasTitleUsrdir(NSDictionary *manifest){
   setenv("PS3_LFQUEUE_SDK_LAYOUT","1",1);
   /* Ascension's WWS policy keeps readyCount as a level and chooses by SPU. */
   setenv("SPURS_READY_LEVEL","1",1);
+  /* Save exact unlifted WWS job binaries in Files so they can be lifted into
+   * native ARM64 code. The files remain in the app's Documents sandbox. */
+  NSURL *documents=[[[NSFileManager defaultManager]
+      URLsForDirectory:NSDocumentDirectory inDomains:NSUserDomainMask] firstObject];
+  NSString *captureUUID=[[[NSUUID UUID] UUIDString]
+      stringByReplacingOccurrencesOfString:@"-" withString:@""];
+  NSString *captureName=[NSString stringWithFormat:@"AscensionSPU-%@",captureUUID];
+  self.latestSpuCaptureURL=[documents URLByAppendingPathComponent:captureName isDirectory:YES];
+  NSError *captureError=nil;
+  if(self.latestSpuCaptureURL)
+    [[NSFileManager defaultManager] createDirectoryAtURL:self.latestSpuCaptureURL
+                             withIntermediateDirectories:YES attributes:nil error:&captureError];
+  if(self.latestSpuCaptureURL && !captureError)
+    setenv("SPU_DUMP_MISS",self.latestSpuCaptureURL.path.UTF8String,1);
+  else
+    unsetenv("SPU_DUMP_MISS");
+  spu_workload_reset_ascension_job_metrics();
   cellSpursResetAscensionMetrics();
   ar_m772_runtime_begin();
   [self arSetStatus:@"Preparando VM, PPU/SPU recompilados e acesso guest ao jogo…"];
@@ -1752,6 +1773,30 @@ static BOOL ARGameManifestHasTitleUsrdir(NSDictionary *manifest){
     (void)sender;
     [self arExportPpuText];
 }
+- (void)shareSpuMissCapture:(UIButton*)sender {
+    NSURL *directory=self.latestSpuCaptureURL;
+    NSError *error=nil;
+    NSArray<NSURL*> *files=directory ? [[NSFileManager defaultManager]
+        contentsOfDirectoryAtURL:directory includingPropertiesForKeys:nil
+        options:NSDirectoryEnumerationSkipsHiddenFiles error:&error] : @[];
+    if(!files.count){
+      UIAlertController *alert=[UIAlertController alertControllerWithTitle:
+          @"Nenhum binário SPU ausente capturado"
+          message:error.localizedDescription ?: @"Esta execução não solicitou um job SPU sem lift nativo. O relatório separa chamadas, faltas e conclusões do WWS."
+          preferredStyle:UIAlertControllerStyleAlert];
+      [alert addAction:[UIAlertAction actionWithTitle:@"OK" style:UIAlertActionStyleCancel handler:nil]];
+      [self.window.rootViewController presentViewController:alert animated:YES completion:nil];
+      return;
+    }
+    UIActivityViewController *share=[[UIActivityViewController alloc]
+        initWithActivityItems:files applicationActivities:nil];
+    UIViewController *presenter=self.window.rootViewController.presentedViewController
+                                ?: self.window.rootViewController;
+    UIPopoverPresentationController *popover=share.popoverPresentationController;
+    if(popover){popover.sourceView=sender ?: presenter.view;
+      popover.sourceRect=sender ? sender.bounds : presenter.view.bounds;}
+    [presenter presentViewController:share animated:YES completion:nil];
+}
 - (void)openLauncherSettings:(UIButton*)sender {
   (void)sender;
   self.launcherTabs.selectedSegmentIndex=2;
@@ -1866,7 +1911,9 @@ static BOOL ARGameManifestHasTitleUsrdir(NSDictionary *manifest){
 - (NSString *)arUnifiedPpuText {
   uint64_t live[40]={0}; ar_m772_runtime_attest(live);
   uint64_t spursMetrics[8]={0}; cellSpursCopyAscensionMetrics(spursMetrics);
+  uint64_t spuJobs[8]={0}; spu_workload_copy_ascension_job_metrics(spuJobs);
   uint64_t pmDiagnostics[32][7]={0}; cellSpursCopyAscensionPmDiagnostics(pmDiagnostics);
+  NSString *spuCaptureName=self.latestSpuCaptureURL.lastPathComponent ?: @"não configurada";
   uint32_t state=ar_m772_entry_state();
   NSString *elapsed=ARFormatRunElapsed(self.nativeRunStartedAt,self.nativeRunEndedAt);
   /* A second boot must report its current counters, not the last completed
@@ -1980,7 +2027,9 @@ static BOOL ARGameManifestHasTitleUsrdir(NSDictionary *manifest){
      "PS3RECOMP / MÉTRICAS AO VIVO\n"
      "Tabela AOT=%llu funções · autocheck do catálogo SPU=%llu/5 (não confirma o PM recebido em runtime) · runtime inicializado=%@\n"
      "Chamadas de função AOT=%@ · início(s) da entry=%@ · último PC=0x%08llX (entrada AOT mais recente; PC atual da instrução NÃO MEDIDO)\n"
-     "SPURS2 · instâncias=%llu · workloads=%llu (%llu IDs 16–31) · PMs encontrados/faltantes=%llu/%llu · despachos=%llu (%llu IDs 16–31) · último wid=%@\n"
+     "SPURS2 · instâncias=%llu · workloads=%llu (%llu IDs 16–31) · PMs encontrados/faltantes=%llu/%llu · admissões do WWS PM=%llu (%llu IDs 16–31) · último wid=%@\n"
+     "Jobs de job-chain do título · solicitações=%llu · com lift=%llu · sem lift=%llu · retornos do runner=%llu · ativos=%llu · último FNV=0x%016llX · bytes=%llu · EA=0x%08llX\n"
+     "Captura de módulos ausentes=Documents/%@ · botão EXPORTAR BINÁRIOS SPU AUSENTES\n"
      "PMs examinados (um registro por wid):\n%@\n"
      "Últimas amostras AOT (1/4096):\n%@\n"
      "Último evento rastreado: LR=0x%08llX · SP=0x%08llX · r3-r6=%08llX/%08llX/%08llX/%08llX\n"
@@ -2020,7 +2069,12 @@ static BOOL ARGameManifestHasTitleUsrdir(NSDictionary *manifest){
      (unsigned long long)spursMetrics[0],(unsigned long long)spursMetrics[1],
      (unsigned long long)spursMetrics[2],(unsigned long long)spursMetrics[5],
      (unsigned long long)spursMetrics[6],(unsigned long long)spursMetrics[3],
-     (unsigned long long)spursMetrics[4],lastSpursWid,pmDiagnosticsText,aotTraceText,
+     (unsigned long long)spursMetrics[4],lastSpursWid,
+     (unsigned long long)spuJobs[0],(unsigned long long)spuJobs[1],
+     (unsigned long long)spuJobs[2],(unsigned long long)spuJobs[3],
+     (unsigned long long)spuJobs[4],(unsigned long long)spuJobs[5],
+     (unsigned long long)spuJobs[6],(unsigned long long)spuJobs[7],
+     spuCaptureName,pmDiagnosticsText,aotTraceText,
      (unsigned long long)live[14],(unsigned long long)live[15],
      (unsigned long long)live[16],(unsigned long long)live[17],
      (unsigned long long)live[18],(unsigned long long)live[19],

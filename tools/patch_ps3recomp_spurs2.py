@@ -20,6 +20,7 @@ WORKLOADS_MARKER = "ASCENSION_M772_SPURS2_WORKLOADS_32_V1"
 LFQUEUE_MARKER = "ASCENSION_M772_LFQUEUE_SDK_LAYOUT_V1"
 PM_DIAGNOSTICS_MARKER = "ASCENSION_M785_SPURS_PM_DIAGNOSTICS_V1"
 ASCENSION_POLICY_MARKER = "ASCENSION_M786_WWS_TEMPA_READY_LEVEL_V1"
+JOB_METRICS_MARKER = "ASCENSION_M787_SPURS_JOB_METRICS_V1"
 
 
 def run(argv: list[str], *, capture: bool = False) -> str:
@@ -687,6 +688,105 @@ void spurs_kernel_temp_area_refresh(spu_context* ctx)
     channels_path.write_text(channels)
 
 
+def apply_job_dispatch_metrics(upstream: pathlib.Path) -> None:
+    """Measure actual game job dispatches separately from WWS PM admissions."""
+    path = upstream / "runtime/spu/spu_workload.c"
+    source = path.read_text(errors="replace")
+    if JOB_METRICS_MARKER in source:
+        required = ("spu_workload_reset_ascension_job_metrics",
+                    "spu_workload_copy_ascension_job_metrics",
+                    "s_asc_job_misses", "s_asc_job_completed")
+        missing = [name for name in required if name not in source]
+        if missing:
+            raise SystemExit(f"partial SPURS job metrics patch: {missing}")
+        return
+
+    anchor = "int spu_workload_dispatch_job(const uint8_t* image, uint32_t image_size,\n"
+    if source.count(anchor) != 1:
+        raise SystemExit("M7.87 cannot locate the SPURS job dispatch entry")
+    api = '''/* ASCENSION_M787_SPURS_JOB_METRICS_V1 */
+extern uint8_t* vm_base;
+static volatile uint64_t s_asc_job_calls, s_asc_job_hits, s_asc_job_misses;
+static volatile uint64_t s_asc_job_completed, s_asc_job_active;
+static volatile uint64_t s_asc_job_last_fp, s_asc_job_last_size, s_asc_job_last_ea;
+void spu_workload_reset_ascension_job_metrics(void) {
+    __atomic_store_n(&s_asc_job_calls, 0, __ATOMIC_RELAXED);
+    __atomic_store_n(&s_asc_job_hits, 0, __ATOMIC_RELAXED);
+    __atomic_store_n(&s_asc_job_misses, 0, __ATOMIC_RELAXED);
+    __atomic_store_n(&s_asc_job_completed, 0, __ATOMIC_RELAXED);
+    __atomic_store_n(&s_asc_job_active, 0, __ATOMIC_RELAXED);
+    __atomic_store_n(&s_asc_job_last_fp, 0, __ATOMIC_RELAXED);
+    __atomic_store_n(&s_asc_job_last_size, 0, __ATOMIC_RELAXED);
+    __atomic_store_n(&s_asc_job_last_ea, 0, __ATOMIC_RELAXED);
+}
+void spu_workload_copy_ascension_job_metrics(uint64_t out[8]) {
+    if (!out) return;
+    const uintptr_t image = (uintptr_t)__atomic_load_n(&s_asc_job_last_ea, __ATOMIC_RELAXED);
+    const uintptr_t base = (uintptr_t)vm_base;
+    out[0] = __atomic_load_n(&s_asc_job_calls, __ATOMIC_RELAXED);
+    out[1] = __atomic_load_n(&s_asc_job_hits, __ATOMIC_RELAXED);
+    out[2] = __atomic_load_n(&s_asc_job_misses, __ATOMIC_RELAXED);
+    out[3] = __atomic_load_n(&s_asc_job_completed, __ATOMIC_RELAXED);
+    out[4] = __atomic_load_n(&s_asc_job_active, __ATOMIC_RELAXED);
+    out[5] = __atomic_load_n(&s_asc_job_last_fp, __ATOMIC_RELAXED);
+    out[6] = __atomic_load_n(&s_asc_job_last_size, __ATOMIC_RELAXED);
+    out[7] = base && image >= base && image - base <= UINT32_MAX ? image - base : 0;
+}
+'''
+    source = source.replace(anchor, api + "\n" + anchor, 1)
+    job_start = source.index(anchor)
+
+    fp_anchor = '''    uint64_t fp = spu_workload_fingerprint(image, image_size);
+    spu_lifted_entry_fn fn = NULL;
+    int image_id = 0;
+'''
+    fp_replacement = '''    uint64_t fp = spu_workload_fingerprint(image, image_size);
+    __atomic_add_fetch(&s_asc_job_calls, 1, __ATOMIC_RELAXED);
+    __atomic_store_n(&s_asc_job_last_fp, fp, __ATOMIC_RELAXED);
+    __atomic_store_n(&s_asc_job_last_size, image_size, __ATOMIC_RELAXED);
+    __atomic_store_n(&s_asc_job_last_ea, (uint64_t)(uintptr_t)image, __ATOMIC_RELAXED);
+    spu_lifted_entry_fn fn = NULL;
+    int image_id = 0;
+'''
+    fp_pos = source.find(fp_anchor, job_start)
+    if fp_pos < 0:
+        raise SystemExit("M7.87 cannot instrument SPURS job fingerprint")
+    source = source[:fp_pos] + fp_replacement + source[fp_pos + len(fp_anchor):]
+
+    miss_anchor = '''        return 0;
+    }
+    /* Two lines plus two explicit flushes PER JOB.'''
+    miss_pos = source.find(miss_anchor, job_start)
+    if miss_pos < 0:
+        raise SystemExit("M7.87 cannot instrument unresolved SPURS job modules")
+    source = source[:miss_pos] + '''        __atomic_add_fetch(&s_asc_job_misses, 1, __ATOMIC_RELAXED);
+''' + source[miss_pos:]
+
+    hit_anchor = '''    int verbose = ps3_log_verbose();
+    if (verbose) {
+'''
+    hit_pos = source.find(hit_anchor, job_start)
+    if hit_pos < 0:
+        raise SystemExit("M7.87 cannot instrument resolved SPURS job modules")
+    source = source[:hit_pos] + '''    __atomic_add_fetch(&s_asc_job_hits, 1, __ATOMIC_RELAXED);
+    __atomic_add_fetch(&s_asc_job_active, 1, __ATOMIC_RELAXED);
+''' + source[hit_pos:]
+
+    complete_anchor = '''    int rc = spu_run_spurs_job(fn, image_id, job_ea, job_desc_size);
+    if (verbose) {
+'''
+    complete_pos = source.find(complete_anchor, job_start)
+    if complete_pos < 0:
+        raise SystemExit("M7.87 cannot instrument SPURS job completion")
+    complete_replacement = '''    int rc = spu_run_spurs_job(fn, image_id, job_ea, job_desc_size);
+    __atomic_add_fetch(&s_asc_job_completed, 1, __ATOMIC_RELAXED);
+    __atomic_sub_fetch(&s_asc_job_active, 1, __ATOMIC_RELAXED);
+    if (verbose) {
+'''
+    source = source[:complete_pos] + complete_replacement + source[complete_pos + len(complete_anchor):]
+    path.write_text(source)
+
+
 def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__)
     ap.add_argument("--upstream", type=pathlib.Path, required=True)
@@ -717,6 +817,7 @@ def main() -> int:
                 zero_context=True)
     apply_pm_resolution_diagnostics(upstream)
     apply_ascension_wws_policy(upstream)
+    apply_job_dispatch_metrics(upstream)
 
     required = {
         "libs/spurs/cellSpurs.c": (
@@ -737,7 +838,8 @@ def main() -> int:
                                    "cellSpursTasksetGetSpursAddress", "_cellSpursLFQueuePushBody",
                                    "cellSpursGetWorkloadFlag", "_cellSpursWorkloadFlagReceiver"),
         "runtime/spu/spu_workload.c": ("spu_taskset_set_running", "spu_taskset_track",
-                                       "spu_signal_parked_on_line"),
+                                       "spu_signal_parked_on_line", JOB_METRICS_MARKER,
+                                       "spu_workload_copy_ascension_job_metrics"),
         "runtime/syscalls/sys_event.c": ("sys_event_flag_create_host",),
         "libs/codec/edge_inflate.cpp": ("extern \"C\" int edge_inflate", "const int FULL = -2;"),
     }
@@ -746,7 +848,7 @@ def main() -> int:
         missing = [needle for needle in needles if needle not in text]
         if missing:
             raise SystemExit(f"M7.83 PS3Recomp SPURS2 patch incomplete in {filename}: {missing}")
-    print("M7.86 applied 32-workload SPURS2 scheduler, Ascension WWS tempArea/ready-level, live PM identity diagnostics, taskset, LFQueue, and Edge Zlib HLE")
+    print("M7.87 applied SPURS2 scheduler, Ascension WWS policy, per-job native dispatch metrics and missing-binary capture, taskset, LFQueue, and Edge Zlib HLE")
     return 0
 
 
