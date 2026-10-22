@@ -1518,6 +1518,13 @@ static BOOL ARGameManifestHasTitleUsrdir(NSDictionary *manifest){
   setenv("PS3_LFQUEUE_SDK_LAYOUT","1",1);
   /* Ascension's WWS policy keeps readyCount as a level and chooses by SPU. */
   setenv("SPURS_READY_LEVEL","1",1);
+  /* Ascension patches its RSX FIFO park after SPU jobs build a frame. Use the
+   * same bounded 2 s wait as the PC port; 50 ms can skip commands still being
+   * written by the recompiled SPU jobs. */
+  setenv("GCM_PARK_WAIT_MS","2000",1);
+  /* Keep the RSX behind the frame label that Ascension's post-process jobs
+   * release, instead of running past work the SPUs have not finished. */
+  setenv("GCM_SEMA_ACQUIRE","1",1);
   /* Save exact unlifted WWS job binaries in Files so they can be lifted into
    * native ARM64 code. The files remain in the app's Documents sandbox. */
   NSURL *documents=[[[NSFileManager defaultManager]

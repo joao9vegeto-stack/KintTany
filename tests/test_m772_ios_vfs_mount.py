@@ -104,7 +104,7 @@ extern "C" void ps3_hle_call(uint32_t nid, ppu_context* ctx)
         self.assertIn("a['ios_vfs_mount_patch']=='" + patch + "'", build)
         self.assertIn("a['ios_vfs_mount_patch']=='" + patch + "'", workflow)
         self.assertIn('"ios_vfs_mount_patch": "' + patch + '"', attestation)
-        schema = "ascension-m792-ios-arm64-link-input-v14"
+        schema = "ascension-m793-ios-arm64-link-input-v14"
         self.assertIn("assert a['schema']=='" + schema + "'", build)
         self.assertIn("assert a['schema']=='" + schema + "'", workflow)
         self.assertIn('"schema": "' + schema + '"', attestation)

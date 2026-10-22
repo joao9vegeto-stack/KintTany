@@ -484,7 +484,7 @@ def main():
     if ("wws_pm_c8d774_spu_func_00000A2C" not in c8_source_text or
             "wws_pm_c8d774_spu_func_00000A2C" not in c8_header_text or
             "0x00000A2Cu" not in c8_source_text):
-        raise SystemExit("M7.92 C8 interrupt entry 0xA2C is not emitted in the native lift table")
+        raise SystemExit("M7.93 C8 interrupt entry 0xA2C is not emitted in the native lift table")
     for marker in ("gowa_spu_register_c8_wws_pm", "wws_pm_c8d774_spu_func_00000A00",
                    "0xC8D774963A96DCF2", '6, "wws_pm_c8d774_12288"'):
         if marker not in c8_registry_text:
@@ -711,7 +711,7 @@ def main():
         raise SystemExit(f"M7.72 required ARM64 archive symbols missing: {missing}")
 
     result = {
-        "schema": "ascension-m792-ios-arm64-link-input-v14",
+        "schema": "ascension-m793-ios-arm64-link-input-v14",
         "upstream_commit": actual,
         "ios_vfs_mount_patch": "npua80918-and-app-home-usrdir-v1",
         "ios_vm_mapping_patch": "mach-anywhere-4g-relative-guest-ea-v1",

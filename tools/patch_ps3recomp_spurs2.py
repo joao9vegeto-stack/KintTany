@@ -1216,6 +1216,65 @@ static void sys_lwcond_wait(ppu_context* ctx)
     path.write_text(source)
 
 
+def apply_ascension_gcm_park_watchdog_fix(upstream: pathlib.Path) -> None:
+    """Honor Ascension's SPU-built FIFO park and semaphore waits."""
+    path = upstream / "libs/video/cellGcmSys.c"
+    source = path.read_text()
+    marker = "ASCENSION_GCM_WAIT_STATES_NOT_STUCK_V1"
+    if marker in source:
+        return
+
+    old_grace = "#define GCM_PARK_GRACE_MS 50ull"
+    new_grace = '''#define GCM_PARK_GRACE_MS 50ull
+/* GCM_PARK_WAIT_MS lets the title's recompiled SPU jobs finish filling and
+ * patching the next command segment before the walker skips a standing park. */
+static unsigned long long gcm_park_grace_ms(void)
+{
+    static unsigned long long ms = ~0ull;
+    if (ms == ~0ull) {
+        const char* e = getenv("GCM_PARK_WAIT_MS");
+        ms = e ? strtoull(e, NULL, 0) : GCM_PARK_GRACE_MS;
+    }
+    return ms;
+}'''
+    if source.count(old_grace) != 1:
+        raise SystemExit("M7.93 cannot locate the pinned GCM park grace")
+    source = source.replace(old_grace, new_grace, 1)
+
+    old_use = "now - park_since >= GCM_PARK_GRACE_MS"
+    if source.count(old_use) != 1:
+        raise SystemExit("M7.93 cannot locate the GCM park timeout")
+    source = source.replace(old_use, "now - park_since >= gcm_park_grace_ms()", 1)
+
+    old_sema = "                if (sem_blocked) break;"
+    if source.count(old_sema) != 1:
+        raise SystemExit("M7.93 cannot locate the blocked GCM semaphore branch")
+    source = source.replace(old_sema,
+                            '                if (sem_blocked) { why = "sema-acquire"; break; }', 1)
+
+    old = '''    { static u32 last = 0xFFFFFFFFu; static int stuck = 0;
+      if (s_fifo_getoff == last && s_fifo_getoff != put) {
+          if (++stuck >= 8) { gcm_fifo_dump_around(s_fifo_getoff);
+                             gcm_fifo_resync_why("stuck-get", &s_fifo_getoff, put); stuck = 0; }
+      } else { stuck = 0; last = s_fifo_getoff; } }'''
+    new = '''    /* ASCENSION_GCM_WAIT_STATES_NOT_STUCK_V1
+     * A parked JUMP and a blocked hardware semaphore are expected wait states
+     * in Ascension: SPU jobs patch the former and release the label for the
+     * latter. Their own bounded waits govern recovery; counting either as a
+     * stuck get would jump to `put` and discard unfinished game commands. */
+    { static u32 last = 0xFFFFFFFFu; static int stuck = 0;
+      if (why && (strcmp(why, "parked") == 0 || strcmp(why, "sema-acquire") == 0)) {
+          stuck = 0; last = s_fifo_getoff;
+      }
+      else if (s_fifo_getoff == last && s_fifo_getoff != put) {
+          if (++stuck >= 8) { gcm_fifo_dump_around(s_fifo_getoff);
+                             gcm_fifo_resync_why("stuck-get", &s_fifo_getoff, put); stuck = 0; }
+      } else { stuck = 0; last = s_fifo_getoff; } }'''
+    if source.count(old) != 1:
+        raise SystemExit("M7.93 cannot locate the GCM parked-FIFO stuck-get watchdog")
+    path.write_text(source.replace(old, new, 1))
+
+
 def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__)
     ap.add_argument("--upstream", type=pathlib.Path, required=True)
@@ -1250,6 +1309,7 @@ def main() -> int:
     apply_job_dispatch_metrics(upstream)
     apply_dynamic_wws_pm_role(upstream)
     apply_lwcond_wait_signal_semantics(upstream)
+    apply_ascension_gcm_park_watchdog_fix(upstream)
 
     required = {
         "libs/spurs/cellSpurs.c": (
@@ -1284,13 +1344,17 @@ def main() -> int:
                                         "asc_lwcond_signal(ctx, true, false)"),
         "runtime/syscalls/sys_event.c": ("sys_event_flag_create_host",),
         "libs/codec/edge_inflate.cpp": ("extern \"C\" int edge_inflate", "const int FULL = -2;"),
+        "libs/video/cellGcmSys.c": ("ASCENSION_GCM_WAIT_STATES_NOT_STUCK_V1",
+                                    "GCM_PARK_WAIT_MS", "gcm_park_grace_ms()",
+                                    'why = "sema-acquire"',
+                                    'strcmp(why, "sema-acquire") == 0'),
     }
     for filename, needles in required.items():
         text = (upstream / filename).read_text(errors="replace")
         missing = [needle for needle in needles if needle not in text]
         if missing:
             raise SystemExit(f"M7.83 PS3Recomp SPURS2 patch incomplete in {filename}: {missing}")
-    print("M7.91 routes registered NPUA/C8 WWS PMs and implements guest lwcond wait/signal")
+    print("M7.93 preserves Ascension's RSX park and SPU semaphore wait states")
     return 0
 
 
