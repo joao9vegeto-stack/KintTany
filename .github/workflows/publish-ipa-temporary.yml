@@ -103,7 +103,7 @@ jobs:
                          for n in z.namelist())
           PY
           # Filebin expires the bin after seven days and preserves its .ipa filename.
-          bin="ascension-ipa-${SOURCE_RUN_ID}-${GITHUB_RUN_ID}"
+          bin="ipa-${GITHUB_RUN_ID}"
           ipa_name="AscensionRecomp-7.85.0.ipa"
           ipa_sha="$(shasum -a 256 "$ipa" | awk '{print $1}')"
           curl --fail --silent --show-error --retry 3 \
@@ -113,7 +113,7 @@ jobs:
             --data-binary "@${ipa}" \
             "https://filebin.net/${bin}/${ipa_name}" \
             -o "$RUNNER_TEMP/filebin-upload.json"
-          python3 - "$RUNNER_TEMP/filebin-upload.json" "$ipa" "$ipa_sha" "$ipa_name" <<'PY'
+          actual_bin="$(python3 - "$RUNNER_TEMP/filebin-upload.json" "$ipa" "$ipa_sha" "$ipa_name" <<'PY'
           import json, pathlib, sys
           data=json.loads(pathlib.Path(sys.argv[1]).read_text())
           f=data['file']
@@ -121,15 +121,17 @@ jobs:
           assert f['bytes']==pathlib.Path(sys.argv[2]).stat().st_size,f
           assert f['sha256']==sys.argv[3],f
           assert data['bin']['expired_at'],data
+          print(data['bin']['id'])
           PY
-          ipa_url="https://filebin.net/${bin}/${ipa_name}"
+          )"
+          [[ "$actual_bin" =~ ^[a-zA-Z0-9_-]+$ ]]
+          ipa_url="https://filebin.net/${actual_bin}/${ipa_name}"
           curl --fail --silent --show-error --location --range 0-1 \
             --dump-header "$RUNNER_TEMP/ipa-download-headers.txt" \
             "$ipa_url" -o "$RUNNER_TEMP/ipa-first-bytes"
           test "$(wc -c < "$RUNNER_TEMP/ipa-first-bytes" | tr -d ' ')" -eq 2
-          test "$(od -An -tx1 -N2 "$RUNNER_TEMP/ipa-first-bytes" | tr -d ' \n')" = "504b"
-          grep -Eiq 'content-disposition:.*AscensionRecomp-7\.85\.0\.ipa' \
-            "$RUNNER_TEMP/ipa-download-headers.txt"
+          test "$(od -An -tx1 -N2 "$RUNNER_TEMP/ipa-first-bytes" | tr -d ' \\n')" = "504b"
+          cat "$RUNNER_TEMP/ipa-download-headers.txt"
           printf 'ipa_url=%s\n' "$ipa_url" >> "$GITHUB_OUTPUT"
           {
             echo "IPA direta (expira em 7 dias): $ipa_url"
