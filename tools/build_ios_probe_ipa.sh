@@ -550,7 +550,10 @@ symbols=src/'symbols.txt'
 assert archive.is_file() and attestation.is_file() and symbols.is_file()
 a=json.loads(attestation.read_text())
 digest=hashlib.sha256(archive.read_bytes()).hexdigest()
-assert a['schema']=='ascension-m772-ios-arm64-link-input-v7'
+assert a['schema']=='ascension-m772-ios-arm64-link-input-v9'
+assert a['spu_workload_registry']=='NPUA80918-four-embedded-images-plus-exact-WWS-PM-fingerprint-v1'
+assert a['spu_workload_registry_units_compiled']==2
+assert a['spurs_pm_runtime_diagnostics_dependency']=='separate-PS3Recomp-runtime-archive-verified-at-final-MachO-v1'
 assert a['upstream_commit']=='39a36296511c445707adabcd312f0b740cfbd694'
 assert a['ios_vfs_mount_patch']=='npua80918-and-app-home-usrdir-v1'
 assert a['ios_vm_mapping_patch']=='mach-anywhere-4g-relative-guest-ea-v1'

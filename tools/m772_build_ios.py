@@ -579,8 +579,7 @@ def main():
                 "_gowa_spu_0003_at_006D5900_spu_recomp_register",
                 "_gowa_spu_register_all",
                 "_wws_pm_npua_spu_recomp_register",
-                "_wws_pm_npua_spu_func_00000A00",
-                "_cellSpursCopyAscensionPmDiagnostics"]
+                "_wws_pm_npua_spu_func_00000A00"]
     defined = set()
     for line in symbol_text.splitlines():
         fields = line.split()
@@ -592,7 +591,7 @@ def main():
         raise SystemExit(f"M7.72 required ARM64 archive symbols missing: {missing}")
 
     result = {
-        "schema": "ascension-m772-ios-arm64-link-input-v8",
+        "schema": "ascension-m772-ios-arm64-link-input-v9",
         "upstream_commit": actual,
         "ios_vfs_mount_patch": "npua80918-and-app-home-usrdir-v1",
         "ios_vm_mapping_patch": "mach-anywhere-4g-relative-guest-ea-v1",
@@ -603,7 +602,7 @@ def main():
         "spurs2_task_apis": "create-task2-join-tryjoin-taskset-address-v1",
         "spurs2_workloads": "32-workload-second-instance-set-and-policy-slots-v1",
         "spu_workload_registry": "NPUA80918-four-embedded-images-plus-exact-WWS-PM-fingerprint-v1",
-        "spurs_pm_runtime_diagnostics": "actual-guest-EA-size-FNV-image-range-and-pointer-encoding-v1",
+        "spurs_pm_runtime_diagnostics_dependency": "separate-PS3Recomp-runtime-archive-verified-at-final-MachO-v1",
         "spurs_workload_flags": "guest-address-and-exclusive-receiver-v1",
         "lfqueue_sdk_layout": "CellSyncLFQueue-layout-v1",
         "edge_zlib_hle": "host-deflate-skip-output-counter-eventflag-v2",

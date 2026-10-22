@@ -1676,7 +1676,8 @@ jobs:
           grep -Eq ' [Tt] _cellAudioSetNotifyEventQueue$' m39-metal-symbols.txt
           # The M772 strong NID registry is generated from the same pinned
           # runtime tree. Catch version-skewed HLE handlers before the IPA link.
-          M772_HLE_REQUIRED_SYMBOLS=(
+          # SPURS PM diagnostics are exported by this runtime archive, not by the game lift archive.
+          M772_REQUIRED_RUNTIME_SYMBOLS=(
             _cellCameraRemoveNotifyEventQueue2
             _cellCameraSetNotifyEventQueue2
             _cellFontInitializeWithRevision
@@ -1694,8 +1695,9 @@ jobs:
             _sys_net_bnet_inet_pton
             _cellSpursResetAscensionMetrics
             _cellSpursCopyAscensionMetrics
+            _cellSpursCopyAscensionPmDiagnostics
           )
-          for symbol in "${M772_HLE_REQUIRED_SYMBOLS[@]}"; do
+          for symbol in "${M772_REQUIRED_RUNTIME_SYMBOLS[@]}"; do
             if ! grep -Eq " [Tt] ${symbol}$" m39-metal-symbols.txt; then
               echo "::error::Pinned iOS HLE runtime does not export ${symbol}"
               exit 1
@@ -1907,7 +1909,10 @@ jobs:
               h=hashlib.sha256()
               with archive.open('rb') as f:
                   for chunk in iter(lambda:f.read(1024*1024),b''): h.update(chunk)
-              assert a['schema']=='ascension-m772-ios-arm64-link-input-v7'
+              assert a['schema']=='ascension-m772-ios-arm64-link-input-v9'
+              assert a['spu_workload_registry']=='NPUA80918-four-embedded-images-plus-exact-WWS-PM-fingerprint-v1'
+              assert a['spu_workload_registry_units_compiled']==2
+              assert a['spurs_pm_runtime_diagnostics_dependency']=='separate-PS3Recomp-runtime-archive-verified-at-final-MachO-v1'
               assert a['upstream_commit']=='39a36296511c445707adabcd312f0b740cfbd694'
               assert a['ios_vfs_mount_patch']=='npua80918-and-app-home-usrdir-v1'
               assert a['ios_vm_mapping_patch']=='mach-anywhere-4g-relative-guest-ea-v1'
