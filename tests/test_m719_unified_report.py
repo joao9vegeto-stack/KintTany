@@ -35,7 +35,8 @@ class M719ReportTests(unittest.TestCase):
         self.assertIn('cellFsRead guest=%@ · bytes lidos pelo guest=%@',s)
         self.assertIn('entradas HLE e LV2 contadas no runtime',s)
         self.assertIn('Leitura guest de arquivos do jogo= %@',s)
-        self.assertIn('PSARC específico= NÃO MEDIDO',s)
+        self.assertIn('Último caminho guest=%@',s)
+        self.assertIn('PSARC específico= consulte Último caminho guest',s)
         self.assertIn('Primeiro flip guest apresentado= %@',s)
 
     def test_export_live_utf8_report(self):

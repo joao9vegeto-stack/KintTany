@@ -36,7 +36,8 @@ class M757(unittest.TestCase):
   self.assertIn("cellFsRead guest=%@ · bytes lidos pelo guest=%@",ui)
   self.assertIn("cellFsOpen guest=%@ · opens OK=%@",ui)
   self.assertIn("Leitura guest de arquivos do jogo= %@",ui)
-  self.assertIn("PSARC específico= NÃO MEDIDO",ui)
+  self.assertIn("Último caminho guest=%@",ui)
+  self.assertIn("PSARC específico= consulte Último caminho guest",ui)
   self.assertNotIn('@"opcode":@(measured.fallback_unsupported_word)',ui)
  def test_ci_link(self):
   flow=(ROOT/".github/workflows/ascension-recomp-m0.yml").read_text()

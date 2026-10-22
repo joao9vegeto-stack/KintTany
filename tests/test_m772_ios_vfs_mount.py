@@ -104,7 +104,7 @@ extern "C" void ps3_hle_call(uint32_t nid, ppu_context* ctx)
         self.assertIn("a['ios_vfs_mount_patch']=='" + patch + "'", build)
         self.assertIn("a['ios_vfs_mount_patch']=='" + patch + "'", workflow)
         self.assertIn('"ios_vfs_mount_patch": "' + patch + '"', attestation)
-        schema = "ascension-m772-ios-arm64-link-input-v10"
+        schema = "ascension-m772-ios-arm64-link-input-v11"
         self.assertIn("assert a['schema']=='" + schema + "'", build)
         self.assertIn("assert a['schema']=='" + schema + "'", workflow)
         self.assertIn('"schema": "' + schema + '"', attestation)
@@ -183,7 +183,8 @@ extern "C" void ps3_hle_call(uint32_t nid, ppu_context* ctx)
         self.assertIn('run?[run[@"fs_read_calls"] unsignedLongLongValue]:live[11]', app)
         self.assertIn('run?[run[@"fs_bytes"] unsignedLongLongValue]:live[12]', app)
         self.assertIn("ROOT CONFIGURADA · cellFsRead guest comprovado", app)
-        self.assertIn("caminho do arquivo não medido", app)
+        self.assertIn("último caminho abaixo", app)
+        self.assertIn('"Último caminho guest=%@\\n"', app)
         self.assertIn("ROOT CONFIGURADA · FS ainda não comprovado", app)
 
     def test_each_elf_import_clears_stale_m772_runtime_counters(self):

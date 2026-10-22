@@ -20,7 +20,8 @@ class TestM760Trace(unittest.TestCase):
                  'cellFsRead guest=%@ · bytes lidos pelo guest=%@',
                  'Pasta reconhecida pelo HOST=%@',
                  'Leitura guest de arquivos do jogo= %@',
-                 'PSARC específico= NÃO MEDIDO'):
+                 'Último caminho guest=%@',
+                 'PSARC específico= consulte Último caminho guest'):
    self.assertIn(needle,s)
   self.assertIn('Comandos RSX do jogo= %@',s)
  def test_ci_wires_synthetic_native_host(self):
