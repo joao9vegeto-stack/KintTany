@@ -106,7 +106,7 @@ jobs:
           ipa_name="AscensionRecomp-7.86.0.ipa"
           ipa_sha="$(shasum -a 256 "$ipa" | awk '{print $1}')"
           curl --fail --silent --show-error --retry 3 \
-            -F "files=@${ipa};type=application/octet-stream" \
+            -F "files=@${ipa};filename=${ipa_name};type=application/octet-stream" \
             -F 'expiryHours=48' \
             https://tempfile.org/api/upload/local \
             -o "$RUNNER_TEMP/tempfile-upload.json"
