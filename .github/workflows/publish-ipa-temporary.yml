@@ -132,7 +132,6 @@ jobs:
             }
       - name: Remove uploaded media and game archives from AscensionRecomp history
         if: steps.selected-run.outputs.mode == 'cleanup' || steps.publish.outcome == 'success'
-        continue-on-error: true
         shell: bash
         env:
           GH_TOKEN: ${{ github.token }}
@@ -153,11 +152,14 @@ jobs:
           history_count="$(git -C "$rewrite" rev-list --count HEAD)"
           echo "Branch commits loaded for history cleanup: $history_count"
           test "$history_count" -gt 1
-          "$filter_script" --force --invert-paths \
-            --path-glob '*.mov' --path-glob '*.MOV' --path-glob '*.ips' \
-            --path-glob '*.jpg' --path-glob '*.JPG' \
-            --path '7.79.zip' --path 'Arquivo.zip' --path 'arquivos.zip' \
-            --path '.publish-ipa-run-id.txt'
+          (
+            cd "$rewrite"
+            "$filter_script" --force --invert-paths \
+              --path-glob '*.mov' --path-glob '*.MOV' --path-glob '*.ips' \
+              --path-glob '*.jpg' --path-glob '*.JPG' \
+              --path '7.79.zip' --path 'Arquivo.zip' --path 'arquivos.zip' \
+              --path '.publish-ipa-run-id.txt'
+          )
           if git -C "$rewrite" rev-list --objects HEAD | \
               awk '$2 ~ /\.(mov|MOV|ips|jpg|JPG)$/ {found=1; print} END {exit !found}'; then
             echo 'Uploaded captures remain in rewritten branch history' >&2
