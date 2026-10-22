@@ -697,8 +697,13 @@ for symbol in ("_cellSpursCreateTaskset2", "_cellSpursCreateTask2",
                "_spu_signal_parked_on_line", "_edge_inflate",
                "_rsx_metal_backend_set_ios_output_scale"):
     if not any(symbol in name for name in defined):
-        raise SystemExit("M7.88 required native SPURS PM capture/runtime symbol missing: "+symbol)
-print("M7.88 final ARM64 Mach-O contains unassociated requested-PM capture and native runtime")
+        raise SystemExit("M7.89 required native SPURS PM capture/runtime symbol missing: "+symbol)
+for symbol in ("_gowa_spu_register_c8_wws_pm",
+               "_wws_pm_c8d774_spu_func_00000A00",
+               "_wws_pm_c8d774_spu_recomp_register"):
+    if not any(symbol in name for name in defined):
+        raise SystemExit("M7.89 exact C8 WWS native lift missing from final Mach-O: "+symbol)
+print("M7.89 final ARM64 Mach-O contains the exact C8 WWS PM lift and PS3Recomp runtime")
 PYM772LINKED
 # Every M7.62 native function must appear in the FINAL Mach-O, not merely object.
 python3 - <<'PY'

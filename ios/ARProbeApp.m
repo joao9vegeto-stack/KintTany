@@ -2053,7 +2053,7 @@ static BOOL ARGameManifestHasTitleUsrdir(NSDictionary *manifest){
      "Flips guest apresentados=%@ · draws guest no último frame=%@\n"
      "PSARC específico= consulte Último caminho guest; nenhum histórico adicional é coletado.\n"
      "PPC interpretado=0 · entradas HLE e LV2 contadas no runtime\n\n"
-     "Auditoria M7.88: no log 7.87, os 18 workloads apontaram ao PM bruto C8D774963A96DCF2, mas a associação anterior encaminhava esse hash ao lift NPUA CE052ACDA7412063. São bytes/fingerprints diferentes e não há prova de equivalência. O build 7.88 deixa C8 sem lift e captura uma cópia do PM solicitado; a execução guest ainda precisa de um lift correto antes de alegar jobs, draws ou flips.\n\n"
+     "Auditoria M7.89: o PM bruto C8D774963A96DCF2 (12 KiB, LS 0xA00) foi levantado separadamente em 255 funções nativas; não é alias do PM NPUA CE052ACDA7412063. A entrada C8 está registrada como imagem SPU 6. Registro e compilação não provam que o iPhone executou jobs, draws ou flips; confirme estes contadores no próximo teste.\n\n"
      "MARCOS DE JOGO\n"
      "Pasta reconhecida pelo HOST=%@\n"
      "Leitura guest de arquivos do jogo= %@\n"

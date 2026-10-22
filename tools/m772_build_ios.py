@@ -435,9 +435,42 @@ def main():
         raise SystemExit("M7.86 Ascension WWS module-poll workload selection is missing")
     registry_source=(repo/"runtime/m772-npua-spu/spu_workloads.c").read_text(errors="replace")
     if "0xCE052ACDA7412063ULL" not in registry_source:
-        raise SystemExit("M7.88 NPUA source WWS PM fingerprint is not registered")
+        raise SystemExit("M7.89 NPUA source WWS PM fingerprint is not registered")
     if re.search(r"spu_workload_register_img\s*\(\s*0xC8D774963A96DCF2ULL", registry_source):
-        raise SystemExit("M7.88 refuses the unproven EU C8 PM to NPUA lift association")
+        raise SystemExit("M7.89 refuses to alias the EU C8 PM to the NPUA lift")
+    c8_dir = repo / "runtime/m789-c8-wws"
+    c8_source = c8_dir / "spu_recomp.c"
+    c8_header = c8_dir / "spu_recomp.h"
+    c8_registry = c8_dir / "spu_workloads_c8.c"
+    c8_manifest_path = c8_dir / "manifest.json"
+    if not all(path.is_file() for path in
+               (c8_source, c8_header, c8_registry, c8_manifest_path)):
+        raise SystemExit("M7.89 exact C8 WWS native lift or registry is missing")
+    c8_manifest = json.loads(c8_manifest_path.read_text())
+    if (c8_manifest.get("schema") != "ascension-m789-c8-wws-native-lift-v1" or
+            c8_manifest.get("upstream_commit") != expected or
+            c8_manifest.get("source_sha256") !=
+            "2cdc171545c7874a12ec85646fe0456a9cb4f62c7576bcd571a705799be34e99" or
+            c8_manifest.get("runtime_fnv1a64") != "0xC8D774963A96DCF2" or
+            c8_manifest.get("local_store_base") != "0xA00" or
+            c8_manifest.get("entry") != "0xA00" or
+            c8_manifest.get("native_functions") != 255 or
+            c8_manifest.get("unsupported_instructions") != {} or
+            c8_manifest.get("external_targets") != ["0x3FEC0"]):
+        raise SystemExit("M7.89 C8 lift provenance, entry, function coverage, or decoder report changed")
+    if (hashlib.sha256(c8_source.read_bytes()).hexdigest() !=
+            c8_manifest.get("generated_source_sha256") or
+            hashlib.sha256(c8_header.read_bytes()).hexdigest() !=
+            c8_manifest.get("generated_header_sha256")):
+        raise SystemExit("M7.89 C8 generated source does not match its lift manifest")
+    c8_registry_text = c8_registry.read_text(errors="replace")
+    for marker in ("gowa_spu_register_c8_wws_pm", "wws_pm_c8d774_spu_func_00000A00",
+                   "0xC8D774963A96DCF2", '6, "wws_pm_c8d774_12288"'):
+        if marker not in c8_registry_text:
+            raise SystemExit(f"M7.89 C8 registry is missing {marker}")
+    bridge_source = (repo / "runtime/m772_bridge.cpp").read_text(errors="replace")
+    if "gowa_spu_register_c8_wws_pm();" not in bridge_source:
+        raise SystemExit("M7.89 C8 WWS registry is not called from runtime initialization")
     for marker in ("SPURS_MAX_WID 32", "SPURS_WKL_INFO2",
                    "cellSpursResetAscensionMetrics", "cellSpursCopyAscensionMetrics",
                    "cellSpursCopyAscensionPmDiagnostics", "s_asc_pm_diag"):
@@ -536,6 +569,10 @@ def main():
     for src, object_name in zip(npua_spu_sources,
                                 ("runtime_wws_pm_npua.o", "runtime_spu_workloads.o")):
         tasks.append(("c", src, objects / object_name, c_flags, includes))
+    c8_spu_sources = [c8_source, c8_registry]
+    for src, object_name in zip(c8_spu_sources,
+                                ("runtime_wws_pm_c8.o", "runtime_spu_workloads_c8.o")):
+        tasks.append(("c", src, objects / object_name, c_flags, includes))
 
     def compile_task(task):
         lang, src, dest, flags, incs = task
@@ -592,8 +629,11 @@ def main():
                 "_gowa_spu_0002_at_006CB580_spu_recomp_register",
                 "_gowa_spu_0003_at_006D5900_spu_recomp_register",
                 "_gowa_spu_register_all",
+                "_gowa_spu_register_c8_wws_pm",
                 "_wws_pm_npua_spu_recomp_register",
-                "_wws_pm_npua_spu_func_00000A00"]
+                "_wws_pm_npua_spu_func_00000A00",
+                "_wws_pm_c8d774_spu_recomp_register",
+                "_wws_pm_c8d774_spu_func_00000A00"]
     defined = set()
     for line in symbol_text.splitlines():
         fields = line.split()
@@ -605,7 +645,7 @@ def main():
         raise SystemExit(f"M7.72 required ARM64 archive symbols missing: {missing}")
 
     result = {
-        "schema": "ascension-m772-ios-arm64-link-input-v11",
+        "schema": "ascension-m772-ios-arm64-link-input-v12",
         "upstream_commit": actual,
         "ios_vfs_mount_patch": "npua80918-and-app-home-usrdir-v1",
         "ios_vm_mapping_patch": "mach-anywhere-4g-relative-guest-ea-v1",
@@ -615,7 +655,10 @@ def main():
         "spurs2_taskset": "0x2900-two-LV2-event-flags-tracked-cross-taskset-scheduler-v1",
         "spurs2_task_apis": "create-task2-join-tryjoin-taskset-address-v1",
         "spurs2_workloads": "32-workload-second-instance-set-and-policy-slots-v1",
-        "spu_workload_registry": "NPUA80918-four-embedded-images-plus-WWS-PM-CE052ACDA7412063-only-capture-unassociated-runtime-PM-v3",
+        "spu_workload_registry": "NPUA80918-four-embedded-images-plus-separate-NPUA-WWS-id5-and-exact-C8D774963A96DCF2-WWS-native-lift-id6-v4",
+        "c8_wws_lift_manifest": "runtime/m789-c8-wws/manifest.json",
+        "c8_wws_lift_source_sha256": c8_manifest["generated_source_sha256"],
+        "c8_wws_image_id": 6,
         "spurs_ascension_wws_policy": "tempArea-128-byte-entry-and-poll-refresh-readyCount-level-rotating-spu-v1",
         "spurs_pm_runtime_diagnostics_dependency": "separate-PS3Recomp-runtime-archive-verified-at-final-MachO-v1",
         "spurs_workload_flags": "guest-address-and-exclusive-receiver-v1",
@@ -627,7 +670,7 @@ def main():
         "native_aot_function_entry_hooks": 29849,
         "native_observed_hotloop_hooks": 1,
         "spu_translation_units_compiled": len(spu),
-        "spu_workload_registry_units_compiled": len(npua_spu_sources),
+        "spu_workload_registry_units_compiled": len(npua_spu_sources) + len(c8_spu_sources),
         "per_game_runtime_units_compiled": len(scaffold),
         "total_arm64_objects": len(obj_files),
         "archive": archive.name,
