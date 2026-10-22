@@ -31,7 +31,7 @@ jobs:
         run: |
           set -euo pipefail
           marker="$(tr -d '\r\n' < .publish-ipa-run-id.txt)"
-          if [[ "$marker" == "CLEANUP_ONLY" ]]; then
+          if [[ "$marker" == CLEANUP_ONLY* ]]; then
             echo "mode=cleanup" >> "$GITHUB_OUTPUT"
             exit 0
           fi
@@ -140,8 +140,8 @@ jobs:
           set -euo pipefail
           python3 -m pip install --quiet --prefix "$RUNNER_TEMP/filter-repo" git-filter-repo
           filter_root="$RUNNER_TEMP/filter-repo"
-          filter_script="$(find "$filter_root/bin" -maxdepth 1 -type f -name 'git-filter-repo' -print -quit)"
-          package_dir="$(find "$filter_root/lib" -type d -name site-packages -print -quit)"
+          filter_script="$(find "$filter_root" -type f -name 'git-filter-repo' -print -quit)"
+          package_dir="$(find "$filter_root" -type d -name site-packages -print -quit)"
           test -n "$filter_script" && test -n "$package_dir"
           rewrite="$RUNNER_TEMP/ascension-history-clean"
           git clone --quiet --branch AscensionRecomp --single-branch --no-tags \
