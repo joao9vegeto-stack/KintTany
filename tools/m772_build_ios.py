@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Compile the M7.83 PPU/SPU lift plus its per-game PS3Recomp runtime for iOS."""
+"""Compile the M7.84 NPUA PPU/SPU workload lift and PS3Recomp runtime for iOS."""
 import argparse
 import concurrent.futures
 import hashlib
@@ -504,6 +504,22 @@ def main():
         flags = c_flags if lang == "c" else cpp_flags
         tasks.append((lang, src, objects / ("runtime_" + src.stem + ".o"), flags, includes))
 
+    # The four embedded SPU images are in the reconstructed lift archive, but
+    # they cannot run as SPURS work until the title registry binds their
+    # fingerprints to lifted entries. The NPUA WWS policy module is a separate
+    # ELF-derived lift and is compiled into the same native workload registry.
+    npua_spu = repo / "runtime/m772-npua-spu"
+    npua_spu_sources = [
+        npua_spu / "wws_pm_npua/spu_recomp.c",
+        npua_spu / "spu_workloads.c",
+    ]
+    missing_npua_spu = [str(path) for path in npua_spu_sources if not path.is_file()]
+    if missing_npua_spu:
+        raise SystemExit(f"M7.84 NPUA SPU workload sources missing: {missing_npua_spu}")
+    for src, object_name in zip(npua_spu_sources,
+                                ("runtime_wws_pm_npua.o", "runtime_spu_workloads.o")):
+        tasks.append(("c", src, objects / object_name, c_flags, includes))
+
     def compile_task(task):
         lang, src, dest, flags, incs = task
         compiler = "clang" if lang == "c" else "clang++"
@@ -557,7 +573,10 @@ def main():
                 "_gowa_spu_0000_at_006B3E00_spu_recomp_register",
                 "_gowa_spu_0001_at_006C1B00_spu_recomp_register",
                 "_gowa_spu_0002_at_006CB580_spu_recomp_register",
-                "_gowa_spu_0003_at_006D5900_spu_recomp_register"]
+                "_gowa_spu_0003_at_006D5900_spu_recomp_register",
+                "_gowa_spu_register_all",
+                "_wws_pm_npua_spu_recomp_register",
+                "_wws_pm_npua_spu_func_00000A00"]
     defined = set()
     for line in symbol_text.splitlines():
         fields = line.split()
@@ -569,7 +588,7 @@ def main():
         raise SystemExit(f"M7.72 required ARM64 archive symbols missing: {missing}")
 
     result = {
-        "schema": "ascension-m772-ios-arm64-link-input-v7",
+        "schema": "ascension-m772-ios-arm64-link-input-v8",
         "upstream_commit": actual,
         "ios_vfs_mount_patch": "npua80918-and-app-home-usrdir-v1",
         "ios_vm_mapping_patch": "mach-anywhere-4g-relative-guest-ea-v1",
@@ -579,6 +598,7 @@ def main():
         "spurs2_taskset": "0x2900-two-LV2-event-flags-tracked-cross-taskset-scheduler-v1",
         "spurs2_task_apis": "create-task2-join-tryjoin-taskset-address-v1",
         "spurs2_workloads": "32-workload-second-instance-set-and-policy-slots-v1",
+        "spu_workload_registry": "NPUA80918-four-embedded-images-plus-exact-WWS-PM-fingerprint-v1",
         "spurs_workload_flags": "guest-address-and-exclusive-receiver-v1",
         "lfqueue_sdk_layout": "CellSyncLFQueue-layout-v1",
         "edge_zlib_hle": "host-deflate-skip-output-counter-eventflag-v2",
@@ -588,6 +608,7 @@ def main():
         "native_aot_function_entry_hooks": 29849,
         "native_observed_hotloop_hooks": 1,
         "spu_translation_units_compiled": len(spu),
+        "spu_workload_registry_units_compiled": len(npua_spu_sources),
         "per_game_runtime_units_compiled": len(scaffold),
         "total_arm64_objects": len(obj_files),
         "archive": archive.name,

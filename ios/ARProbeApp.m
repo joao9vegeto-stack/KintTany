@@ -1587,7 +1587,7 @@ static BOOL ARGameManifestHasTitleUsrdir(NSDictionary *manifest){
       @"rsx_backend_rc":@(backendRC), @"rsx_vblank_ticks":@(vblanks),
       @"rsx_fifo_drains":@(drains), @"rsx_guest_frames":@(frames),
       @"rsx_guest_draws":@(draws),
-      @"entry_state":@(state), @"spu_images":@(m772[3]),
+      @"entry_state":@(state), @"spu_fingerprints_registered":@(m772[3]),
       @"runtime_initialized":@(m772[4]), @"when":[[NSDate date] description],
       @"vm_attempted":@(vmReservation.attempted),
       @"vm_reservation_kind":@(vmReservation.reservation_kind),
@@ -1961,7 +1961,7 @@ static BOOL ARGameManifestHasTitleUsrdir(NSDictionary *manifest){
      "VM guest virtual=%@ bytes (páginas sob demanda) · ELF PT_LOAD=%@ bytes · raiz VFS=%@\n\n"
      "Reserva VM=%@ · base=%@ · Mach tentativas=%@ (último kr=%@) · mmap tentativas=%@ · estágio=%@ · errno=%@\n\n"
      "PS3RECOMP / MÉTRICAS AO VIVO\n"
-     "Tabela AOT=%llu funções · imagens SPU=%llu · runtime inicializado=%@\n"
+     "Tabela AOT=%llu funções · fingerprints SPU registrados=%llu/5 · runtime inicializado=%@\n"
      "Chamadas de função AOT=%@ · início(s) da entry=%@ · último PC=0x%08llX (entrada AOT mais recente; PC atual da instrução NÃO MEDIDO)\n"
      "SPURS2 · instâncias=%llu · workloads=%llu (%llu IDs 16–31) · PMs encontrados/faltantes=%llu/%llu · despachos=%llu (%llu IDs 16–31) · último wid=%@\n"
      "Últimas amostras AOT (1/4096):\n%@\n"
@@ -1980,7 +1980,7 @@ static BOOL ARGameManifestHasTitleUsrdir(NSDictionary *manifest){
      "Flips guest apresentados=%@ · draws guest no último frame=%@\n"
      "PSARC específico= NÃO MEDIDO (o runtime ainda não registra caminho por arquivo)\n"
      "PPC interpretado=0 · entradas HLE e LV2 contadas no runtime\n\n"
-     "Auditoria da captura M7.82: 0x003C4FA4 é um marcador histórico; houve atividade PPU/HLE/filesystem, mas zero draws e flips guest. M7.83 amplia o scheduler SPURS2 a 32 workloads e mede registro, resolução de PM e despacho; a execução e o primeiro frame ainda precisam ser confirmados no dispositivo.\n\n"
+     "Auditoria M7.84: o M7.83 corrigiu o scheduler SPURS2 para 32 workloads; este build consulta os fingerprints dos quatro ELFs SPU e do WWS PM NPUA80918 no dispatcher. A captura anterior teve zero draws/flips; registro encontrado não prova despacho ou primeiro frame no aparelho.\n\n"
      "MARCOS DE JOGO\n"
      "Pasta reconhecida pelo HOST=%@\n"
      "Leitura guest de arquivos do jogo= %@\n"
@@ -2776,7 +2776,7 @@ static BOOL ARGameManifestHasTitleUsrdir(NSDictionary *manifest){
     int nativeRC=-74; /* no selected/indexed NPUA80918 USRDIR */
     if(gameReady){
       [self arSetStatus:[NSString stringWithFormat:
-        @"Instalação reconhecida: %@ · %lu arquivos · %.2f GiB · %lu PSARC. Preparando PS3Recomp nativo (29.849 PPU / 4 SPU); AOT legado fora do caminho desta execução...",
+        @"Instalação reconhecida: %@ · %lu arquivos · %.2f GiB · %lu PSARC. Preparando PS3Recomp nativo (29.849 PPU / 4 SPU ELFs + WWS PM NPUA); AOT legado fora do caminho desta execução...",
         gameRootName,(unsigned long)gameFiles.count,
         (double)gameBytes/(1024.0*1024.0*1024.0),(unsigned long)psarcCount]];
       nativeRC=ar_m70_native_runtime_probe(

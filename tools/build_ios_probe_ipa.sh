@@ -673,7 +673,11 @@ required=("func_00010410", "func_0052A740", "func_0052E3F4", "_ar_m772_runtime_a
           "_cellPad_set_host_state",
           "_cellPadGetData", "_cellAudioPortOpen", "_cellAudioSetNotifyEventQueue",
           "_ppu_recomp_register", "_gowa_spu_0000_at_006B3E00_spu_recomp_register",
-          "_gowa_spu_0003_at_006D5900_spu_recomp_register")
+          "_gowa_spu_0003_at_006D5900_spu_recomp_register",
+          "_gowa_spu_register_all", "_spu_workload_register_img",
+          "_spu_workload_find_img",
+          "_wws_pm_npua_spu_func_00000A00",
+          "_wws_pm_npua_spu_recomp_register")
 missing=[symbol for symbol in required if not any(symbol in name for name in defined)]
 if missing: raise SystemExit("M7.72 expected AOT definitions missing from final Mach-O: "+str(missing))
 for symbol in ("_cellSpursCreateTaskset2", "_cellSpursCreateTask2",
@@ -685,8 +689,8 @@ for symbol in ("_cellSpursCreateTaskset2", "_cellSpursCreateTask2",
                "_spu_signal_parked_on_line", "_edge_inflate",
                "_rsx_metal_backend_set_ios_output_scale"):
     if not any(symbol in name for name in defined):
-        raise SystemExit("M7.83 required native HLE/render symbol missing: "+symbol)
-print("M7.83 final ARM64 Mach-O contains 32-workload SPURS2 dispatch/metrics, Edge HLE, live PC/HLE trace, GCM FIFO pump, Metal presentation and settings symbols")
+        raise SystemExit("M7.84 required native runtime/SPU symbol missing: "+symbol)
+print("M7.84 final ARM64 Mach-O contains the NPUA workload registry, exact WWS PM lift, SPURS2 dispatch, Edge HLE and RSX/Metal path")
 PYM772LINKED
 # Every M7.62 native function must appear in the FINAL Mach-O, not merely object.
 python3 - <<'PY'
