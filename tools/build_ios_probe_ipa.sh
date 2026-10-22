@@ -683,14 +683,15 @@ if missing: raise SystemExit("M7.72 expected AOT definitions missing from final 
 for symbol in ("_cellSpursCreateTaskset2", "_cellSpursCreateTask2",
                "_cellSpursJoinTask2", "_cellSpursTryJoinTask2",
                "_cellSpursResetAscensionMetrics", "_cellSpursCopyAscensionMetrics",
+               "_cellSpursCopyAscensionPmDiagnostics",
                "_cellSpursInitializeWithAttribute2",
                "_cellSpursLFQueuePushBody", "_cellSpursGetWorkloadFlag",
                "__cellSpursWorkloadFlagReceiver", "_spu_taskset_track",
                "_spu_signal_parked_on_line", "_edge_inflate",
                "_rsx_metal_backend_set_ios_output_scale"):
     if not any(symbol in name for name in defined):
-        raise SystemExit("M7.84 required native runtime/SPU symbol missing: "+symbol)
-print("M7.84 final ARM64 Mach-O contains the NPUA workload registry, exact WWS PM lift, SPURS2 dispatch, Edge HLE and RSX/Metal path")
+        raise SystemExit("M7.85 required native runtime/SPU symbol missing: "+symbol)
+print("M7.85 final ARM64 Mach-O contains the NPUA workload registry, exact WWS PM lift, live PM identity diagnostics, SPURS2 dispatch, Edge HLE and RSX/Metal path")
 PYM772LINKED
 # Every M7.62 native function must appear in the FINAL Mach-O, not merely object.
 python3 - <<'PY'

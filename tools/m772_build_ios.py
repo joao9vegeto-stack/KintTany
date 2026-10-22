@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Compile the M7.84 NPUA PPU/SPU workload lift and PS3Recomp runtime for iOS."""
+"""Compile the M7.85 NPUA PPU/SPU workload lift and PS3Recomp runtime for iOS."""
 import argparse
 import concurrent.futures
 import hashlib
@@ -416,14 +416,16 @@ def main():
     spurs_header=(upstream/"libs/spurs/cellSpurs.h").read_text(errors="replace")
     required_spurs_markers=("ASCENSION_M772_SPURS2_TASK_API_V2",
         "ASCENSION_M772_SPURS2_WORKLOADS_32_V1",
+        "ASCENSION_M785_SPURS_PM_DIAGNOSTICS_V1",
         "ASCENSION_M772_LFQUEUE_SDK_LAYOUT_V1", "ASCENSION_M772_EDGE_ZLIB_HLE_V2",
-        "spu_taskset_track", "spu_signal_parked_on_line")
+        "cellSpursCopyAscensionPmDiagnostics", "spu_taskset_track", "spu_signal_parked_on_line")
     missing=[marker for marker in required_spurs_markers
              if marker not in spurs_source and marker not in (upstream/"runtime/spu/spu_workload.c").read_text(errors="replace")]
     if missing:
         raise SystemExit(f"M7.83 PS3Recomp SPURS2/LFQueue patch is missing: {missing}")
     for marker in ("SPURS_MAX_WID 32", "SPURS_WKL_INFO2",
-                   "cellSpursResetAscensionMetrics", "cellSpursCopyAscensionMetrics"):
+                   "cellSpursResetAscensionMetrics", "cellSpursCopyAscensionMetrics",
+                   "cellSpursCopyAscensionPmDiagnostics", "s_asc_pm_diag"):
         if marker not in spurs_source:
             raise SystemExit(f"M7.83 32-workload scheduler or live metric is missing: {marker}")
     if "cellSpursCreateTask2" not in spurs_header or "cellSpursGetWorkloadFlag" not in spurs_header:
@@ -515,7 +517,7 @@ def main():
     ]
     missing_npua_spu = [str(path) for path in npua_spu_sources if not path.is_file()]
     if missing_npua_spu:
-        raise SystemExit(f"M7.84 NPUA SPU workload sources missing: {missing_npua_spu}")
+        raise SystemExit(f"M7.85 NPUA SPU workload sources missing: {missing_npua_spu}")
     for src, object_name in zip(npua_spu_sources,
                                 ("runtime_wws_pm_npua.o", "runtime_spu_workloads.o")):
         tasks.append(("c", src, objects / object_name, c_flags, includes))
@@ -576,7 +578,8 @@ def main():
                 "_gowa_spu_0003_at_006D5900_spu_recomp_register",
                 "_gowa_spu_register_all",
                 "_wws_pm_npua_spu_recomp_register",
-                "_wws_pm_npua_spu_func_00000A00"]
+                "_wws_pm_npua_spu_func_00000A00",
+                "_cellSpursCopyAscensionPmDiagnostics"]
     defined = set()
     for line in symbol_text.splitlines():
         fields = line.split()
@@ -599,6 +602,7 @@ def main():
         "spurs2_task_apis": "create-task2-join-tryjoin-taskset-address-v1",
         "spurs2_workloads": "32-workload-second-instance-set-and-policy-slots-v1",
         "spu_workload_registry": "NPUA80918-four-embedded-images-plus-exact-WWS-PM-fingerprint-v1",
+        "spurs_pm_runtime_diagnostics": "actual-guest-EA-size-FNV-image-range-and-pointer-encoding-v1",
         "spurs_workload_flags": "guest-address-and-exclusive-receiver-v1",
         "lfqueue_sdk_layout": "CellSyncLFQueue-layout-v1",
         "edge_zlib_hle": "host-deflate-skip-output-counter-eventflag-v2",

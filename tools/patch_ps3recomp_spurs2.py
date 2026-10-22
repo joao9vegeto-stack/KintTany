@@ -18,6 +18,7 @@ PIN = "39a36296511c445707adabcd312f0b740cfbd694"
 MARKER = "ASCENSION_M772_SPURS2_TASK_API_V2"
 WORKLOADS_MARKER = "ASCENSION_M772_SPURS2_WORKLOADS_32_V1"
 LFQUEUE_MARKER = "ASCENSION_M772_LFQUEUE_SDK_LAYOUT_V1"
+PM_DIAGNOSTICS_MARKER = "ASCENSION_M785_SPURS_PM_DIAGNOSTICS_V1"
 
 
 def run(argv: list[str], *, capture: bool = False) -> str:
@@ -447,6 +448,86 @@ s32 _cellSpursWorkloadFlagReceiver(CellSpurs* spurs, u32 wid, u32 is_set);
         raise SystemExit("pinned upstream already has a different edge_inflate.cpp")
 
 
+def apply_pm_resolution_diagnostics(upstream: pathlib.Path) -> None:
+    """Expose the exact guest PM identity that the SPURS scheduler hashes.
+
+    M7.84's 5/5 registry check only proved that five expected fingerprints
+    were compiled into the table. It did not report the fingerprint, range,
+    or size actually passed by cellSpursAddWorkload, so a device could show
+    0/18 PM matches without revealing which executable bytes were missing.
+    """
+    source_path = upstream / "libs/spurs/cellSpurs.c"
+    source = source_path.read_text(errors="replace")
+    if PM_DIAGNOSTICS_MARKER in source:
+        required = ("cellSpursCopyAscensionPmDiagnostics", "s_asc_pm_diag",
+                    "spurs_guest_range_valid(pm_ea, w->sizePm)")
+        missing = [needle for needle in required if needle not in source]
+        if missing:
+            raise SystemExit(f"partial SPURS PM diagnostics: {missing}")
+        return
+
+    metric_decl = "static volatile u64 s_asc_dispatches, s_asc_dispatches_hi;\n"
+    diagnostic_decl = "static volatile u64 s_asc_pm_diag[SPURS_MAX_WID][7];\n"
+    if source.count(metric_decl) != 1:
+        raise SystemExit("SPURS PM diagnostics could not locate the M7.84 metrics declaration")
+    source = source.replace(metric_decl, metric_decl + diagnostic_decl, 1)
+
+    reset_anchor = "    __atomic_store_n(&s_asc_last_dispatch_wid, UINT64_MAX, __ATOMIC_RELAXED);\n"
+    reset_lines = '''    for (u32 wid = 0; wid < SPURS_MAX_WID; ++wid) {
+        __atomic_store_n(&s_asc_pm_diag[wid][0], UINT64_MAX, __ATOMIC_RELEASE);
+        for (u32 field = 1; field < 7; ++field)
+            __atomic_store_n(&s_asc_pm_diag[wid][field], 0, __ATOMIC_RELAXED);
+    }
+'''
+    if source.count(reset_anchor) != 1:
+        raise SystemExit("SPURS PM diagnostics could not locate the metrics reset")
+    source = source.replace(reset_anchor, reset_anchor + reset_lines, 1)
+
+    copy_anchor = "    out[7]=__atomic_load_n(&s_asc_last_dispatch_wid,__ATOMIC_RELAXED);\n}\n"
+    copy_api = '''
+void cellSpursCopyAscensionPmDiagnostics(u64 out[SPURS_MAX_WID][7]) {
+    if (!out) return;
+    for (u32 wid = 0; wid < SPURS_MAX_WID; ++wid) {
+        out[wid][0]=__atomic_load_n(&s_asc_pm_diag[wid][0],__ATOMIC_ACQUIRE);
+        for (u32 field = 1; field < 7; ++field)
+            out[wid][field]=__atomic_load_n(&s_asc_pm_diag[wid][field],__ATOMIC_RELAXED);
+    }
+}
+'''
+    if source.count(copy_anchor) != 1:
+        raise SystemExit("SPURS PM diagnostics could not locate the M7.84 metrics copy API")
+    source = source.replace(copy_anchor, copy_anchor + copy_api, 1)
+
+    old_fp = '''    uint64_t fp = spu_workload_fingerprint(vm_base + (uint32_t)(uintptr_t)w->pm,
+                                           w->sizePm);
+    r->fn = spu_workload_find_img(fp, &r->image_id);
+'''
+    new_fp = f'''    uintptr_t pm_pointer = (uintptr_t)w->pm;
+    u32 pm_ea = (u32)pm_pointer;
+    u32 pointer_high = pm_pointer > UINT32_MAX;
+    u32 range_ok = !pointer_high && spurs_guest_range_valid(pm_ea, w->sizePm);
+    uint64_t fp = range_ok ? spu_workload_fingerprint(vm_base + pm_ea,
+                                                       w->sizePm) : 0;
+    r->fn = range_ok ? spu_workload_find_img(fp, &r->image_id) : NULL;
+    if (!range_ok) r->image_id = 0;
+    __atomic_store_n(&s_asc_pm_diag[wid][0], UINT64_MAX, __ATOMIC_RELAXED);
+    __atomic_store_n(&s_asc_pm_diag[wid][1], pm_ea, __ATOMIC_RELAXED);
+    __atomic_store_n(&s_asc_pm_diag[wid][2], w->sizePm, __ATOMIC_RELAXED);
+    __atomic_store_n(&s_asc_pm_diag[wid][3], fp, __ATOMIC_RELAXED);
+    __atomic_store_n(&s_asc_pm_diag[wid][4], r->image_id, __ATOMIC_RELAXED);
+    __atomic_store_n(&s_asc_pm_diag[wid][5], range_ok, __ATOMIC_RELAXED);
+    __atomic_store_n(&s_asc_pm_diag[wid][6], pointer_high, __ATOMIC_RELAXED);
+    __atomic_store_n(&s_asc_pm_diag[wid][0], wid, __ATOMIC_RELEASE);
+'''
+    if source.count(old_fp) != 1:
+        raise SystemExit("SPURS PM diagnostics could not locate the runtime fingerprint lookup")
+    source = source.replace(old_fp, new_fp, 1)
+    source = source.replace("/* ASCENSION_M772_SPURS2_WORKLOADS_32_V1 */",
+                            "/* ASCENSION_M772_SPURS2_WORKLOADS_32_V1 */\n/* "
+                            + PM_DIAGNOSTICS_MARKER + " */", 1)
+    source_path.write_text(source)
+
+
 def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__)
     ap.add_argument("--upstream", type=pathlib.Path, required=True)
@@ -475,12 +556,15 @@ def main() -> int:
     apply_patch(upstream, patch_dir / "ps3recomp-0020-spurs2-32-workloads.patch",
                 ((spurs_source, WORKLOADS_MARKER), (policy_source, WORKLOADS_MARKER)),
                 zero_context=True)
+    apply_pm_resolution_diagnostics(upstream)
 
     required = {
         "libs/spurs/cellSpurs.c": (
             WORKLOADS_MARKER, "SPURS_MAX_WID 32", "SPURS_WKL_INFO2",
             "spurs_workload_limit", "cellSpursResetAscensionMetrics",
             "cellSpursCopyAscensionMetrics", "s_asc_dispatches_hi",
+            PM_DIAGNOSTICS_MARKER, "cellSpursCopyAscensionPmDiagnostics",
+            "s_asc_pm_diag", "spurs_guest_range_valid(pm_ea, w->sizePm)",
             "cellSpursInitializeWithAttribute2", "cellSpursCreateTaskset2",
             "_cellSpursTasksetAttribute2Initialize", "cellSpursCreateTask2",
             "cellSpursJoinTask2", "cellSpursTryJoinTask2",
@@ -501,7 +585,7 @@ def main() -> int:
         missing = [needle for needle in needles if needle not in text]
         if missing:
             raise SystemExit(f"M7.83 PS3Recomp SPURS2 patch incomplete in {filename}: {missing}")
-    print("M7.83 applied 32-workload SPURS2 scheduler, live dispatch telemetry, taskset, LFQueue, and Edge Zlib HLE")
+    print("M7.85 applied 32-workload SPURS2 scheduler, live PM identity diagnostics, dispatch telemetry, taskset, LFQueue, and Edge Zlib HLE")
     return 0
 
 

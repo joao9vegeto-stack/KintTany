@@ -1,4 +1,4 @@
-/* M7.84: install the NPUA80918 PS3Recomp lifts into the runtime dispatch tables. */
+/* M7.85: install the NPUA80918 PS3Recomp lifts into the runtime dispatch tables. */
 #include <pthread.h>
 #include <stdint.h>
 #include <stddef.h>

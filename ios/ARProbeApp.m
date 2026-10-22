@@ -22,6 +22,7 @@ extern uint32_t ar_m772_copy_hle_trace(uint64_t *out, uint32_t capacity);
 extern uint32_t ar_m772_copy_unresolved_hle_trace(uint64_t *out, uint32_t capacity);
 extern void cellSpursResetAscensionMetrics(void);
 extern void cellSpursCopyAscensionMetrics(uint64_t out[8]);
+extern void cellSpursCopyAscensionPmDiagnostics(uint64_t out[32][7]);
 extern void ar_m756_last_stop_evidence(ar_m756_stop_evidence*);
 extern void ar_m756_last_origin_evidence(ar_m756_stop_evidence*);
 extern void ar_m751_last_fs_trace(ar_fs_trace *);
@@ -1863,6 +1864,7 @@ static BOOL ARGameManifestHasTitleUsrdir(NSDictionary *manifest){
 - (NSString *)arUnifiedPpuText {
   uint64_t live[40]={0}; ar_m772_runtime_attest(live);
   uint64_t spursMetrics[8]={0}; cellSpursCopyAscensionMetrics(spursMetrics);
+  uint64_t pmDiagnostics[32][7]={0}; cellSpursCopyAscensionPmDiagnostics(pmDiagnostics);
   uint32_t state=ar_m772_entry_state();
   NSString *elapsed=ARFormatRunElapsed(self.nativeRunStartedAt,self.nativeRunEndedAt);
   /* A second boot must report its current counters, not the last completed
@@ -1897,6 +1899,19 @@ static BOOL ARGameManifestHasTitleUsrdir(NSDictionary *manifest){
     @"PC do hook de loop observado; é um marcador e pode estar antigo.";
   NSString *lastSpursWid=spursMetrics[7]==UINT64_MAX?@"—":
     [NSString stringWithFormat:@"%llu",(unsigned long long)spursMetrics[7]];
+  NSMutableString *pmDiagnosticsText=[NSMutableString string];
+  for(NSUInteger wid=0;wid<32;wid++){
+    const uint64_t *d=pmDiagnostics[wid];
+    if(d[0]==UINT64_MAX)continue;
+    [pmDiagnosticsText appendFormat:
+      @"%@wid=%llu · EA=0x%08llX · size=%llu · FNV-1a64=0x%016llX · image=%llu%@ · faixa=%@ · ponteiro host=%@",
+      pmDiagnosticsText.length?@"\n":@"",(unsigned long long)d[0],
+      (unsigned long long)d[1],(unsigned long long)d[2],(unsigned long long)d[3],
+      (unsigned long long)d[4],d[4]?@"":@" (sem registro)",
+      d[5]?@"válida":@"INVÁLIDA",d[6]?@"SIM":@"NÃO"];
+  }
+  if(!pmDiagnosticsText.length)
+    [pmDiagnosticsText appendString:@"(nenhum PM ainda examinado pelo scheduler)"];
   ar_vm_reservation_status vmReservation={0};
   ar_bridge_vm_reservation_status(&vmReservation);
   NSString *vmMode=vmReservation.attempted?
@@ -1961,9 +1976,10 @@ static BOOL ARGameManifestHasTitleUsrdir(NSDictionary *manifest){
      "VM guest virtual=%@ bytes (páginas sob demanda) · ELF PT_LOAD=%@ bytes · raiz VFS=%@\n\n"
      "Reserva VM=%@ · base=%@ · Mach tentativas=%@ (último kr=%@) · mmap tentativas=%@ · estágio=%@ · errno=%@\n\n"
      "PS3RECOMP / MÉTRICAS AO VIVO\n"
-     "Tabela AOT=%llu funções · fingerprints SPU registrados=%llu/5 · runtime inicializado=%@\n"
+     "Tabela AOT=%llu funções · autocheck do catálogo SPU=%llu/5 (não confirma o PM recebido em runtime) · runtime inicializado=%@\n"
      "Chamadas de função AOT=%@ · início(s) da entry=%@ · último PC=0x%08llX (entrada AOT mais recente; PC atual da instrução NÃO MEDIDO)\n"
      "SPURS2 · instâncias=%llu · workloads=%llu (%llu IDs 16–31) · PMs encontrados/faltantes=%llu/%llu · despachos=%llu (%llu IDs 16–31) · último wid=%@\n"
+     "PMs examinados (um registro por wid):\n%@\n"
      "Últimas amostras AOT (1/4096):\n%@\n"
      "Último evento rastreado: LR=0x%08llX · SP=0x%08llX · r3-r6=%08llX/%08llX/%08llX/%08llX\n"
      "Argumentos r7-r10=%08llX/%08llX/%08llX/%08llX\n"
@@ -1980,7 +1996,7 @@ static BOOL ARGameManifestHasTitleUsrdir(NSDictionary *manifest){
      "Flips guest apresentados=%@ · draws guest no último frame=%@\n"
      "PSARC específico= NÃO MEDIDO (o runtime ainda não registra caminho por arquivo)\n"
      "PPC interpretado=0 · entradas HLE e LV2 contadas no runtime\n\n"
-     "Auditoria M7.84: o M7.83 corrigiu o scheduler SPURS2 para 32 workloads; este build consulta os fingerprints dos quatro ELFs SPU e do WWS PM NPUA80918 no dispatcher. A captura anterior teve zero draws/flips; registro encontrado não prova despacho ou primeiro frame no aparelho.\n\n"
+     "Auditoria M7.85: o autocheck 5/5 confirma só que os fingerprints esperados estão registrados. A linha PM mostra os bytes realmente examinados; igualdade com um registro é necessária para despacho SPU.\n\n"
      "MARCOS DE JOGO\n"
      "Pasta reconhecida pelo HOST=%@\n"
      "Leitura guest de arquivos do jogo= %@\n"
@@ -2002,7 +2018,7 @@ static BOOL ARGameManifestHasTitleUsrdir(NSDictionary *manifest){
      (unsigned long long)spursMetrics[0],(unsigned long long)spursMetrics[1],
      (unsigned long long)spursMetrics[2],(unsigned long long)spursMetrics[5],
      (unsigned long long)spursMetrics[6],(unsigned long long)spursMetrics[3],
-     (unsigned long long)spursMetrics[4],lastSpursWid,aotTraceText,
+     (unsigned long long)spursMetrics[4],lastSpursWid,pmDiagnosticsText,aotTraceText,
      (unsigned long long)live[14],(unsigned long long)live[15],
      (unsigned long long)live[16],(unsigned long long)live[17],
      (unsigned long long)live[18],(unsigned long long)live[19],
