@@ -138,16 +138,16 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
-          python3 -m pip install --quiet --prefix "$RUNNER_TEMP/filter-repo" git-filter-repo
-          filter_root="$RUNNER_TEMP/filter-repo"
-          filter_script="$(find "$filter_root" -type f -name 'git-filter-repo' -print -quit)"
-          package_dir="$(find "$filter_root" -type d -name site-packages -print -quit)"
-          test -n "$filter_script" && test -n "$package_dir"
+          filter_script="$RUNNER_TEMP/git-filter-repo"
+          curl --fail --silent --show-error --retry 3 \
+            https://raw.githubusercontent.com/newren/git-filter-repo/v2.47.0/git-filter-repo \
+            -o "$filter_script"
+          chmod 755 "$filter_script"
           rewrite="$RUNNER_TEMP/ascension-history-clean"
           git clone --quiet --branch AscensionRecomp --single-branch --no-tags \
             "https://x-access-token:${GH_TOKEN}@github.com/${GITHUB_REPOSITORY}.git" "$rewrite"
           old_head="$(git -C "$rewrite" rev-parse refs/heads/AscensionRecomp)"
-          PYTHONPATH="$package_dir" "$filter_script" --force --invert-paths \
+          "$filter_script" --force --invert-paths \
             --path-glob '*.mov' --path-glob '*.MOV' --path-glob '*.ips' \
             --path-glob '*.jpg' --path-glob '*.JPG' \
             --path '7.79.zip' --path 'Arquivo.zip' --path 'arquivos.zip' \
