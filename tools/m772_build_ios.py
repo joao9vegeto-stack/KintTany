@@ -441,6 +441,12 @@ def main():
             "spu_workload_is_wws_pm_image(ctx->image_id)" not in channel_runtime or
             "spu_workload_is_wws_pm_image(spu->image_id)" not in dma_runtime):
         raise SystemExit("M7.90 registered NPUA/C8 WWS PM role routing is not patched into PS3Recomp")
+    lwcond_runtime=(upstream/"runtime/ppu/ppu_sysprx.cpp").read_text(errors="replace")
+    if ("ASCENSION_M791_LWCOND_SIGNAL_WAIT_V1" not in lwcond_runtime or
+            "waiter.cv.wait(guard" not in lwcond_runtime or
+            "waiter.cv.wait_for(guard" not in lwcond_runtime or
+            "asc_lwcond_signal(ctx, true, false)" not in lwcond_runtime):
+        raise SystemExit("M7.91 correct guest lwcond wait/signal semantics are missing from PS3Recomp")
     registry_source=(repo/"runtime/m772-npua-spu/spu_workloads.c").read_text(errors="replace")
     if "0xCE052ACDA7412063ULL" not in registry_source:
         raise SystemExit("M7.89 NPUA source WWS PM fingerprint is not registered")

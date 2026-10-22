@@ -1059,5 +1059,5 @@ shasum -a 256 AscensionRecompProbe-0.6.22-unsigned.ipa > m41-ipa-sha256.txt
 cp AscensionRecompProbe-0.6.22-unsigned.ipa AscensionRecompProbe-7.69.0-unsigned.ipa
 IPA_VERSION=$(/usr/libexec/PlistBuddy -c 'Print CFBundleShortVersionString' "$APP/Info.plist")
 cp AscensionRecompProbe-0.6.22-unsigned.ipa "AscensionRecompProbe-${IPA_VERSION}-unsigned.ipa"
-shasum -a 256 "AscensionRecompProbe-${IPA_VERSION}-unsigned.ipa" > m790-ipa-sha256.txt
+shasum -a 256 "AscensionRecompProbe-${IPA_VERSION}-unsigned.ipa" > m791-ipa-sha256.txt
 echo 'UNSIGNED DIAGNOSTIC APP: UIKit CAMetalLayer + real PS3Recomp Metal backend; NO GOWA GAME included' > m41-status.txt

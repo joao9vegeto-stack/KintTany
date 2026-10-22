@@ -24,6 +24,7 @@ ASCENSION_POLICY_MARKER = "ASCENSION_M786_WWS_TEMPA_READY_LEVEL_V1"
 JOB_METRICS_MARKER = "ASCENSION_M787_SPURS_JOB_METRICS_V1"
 PM_CAPTURE_MARKER = "ASCENSION_M788_CAPTURE_REQUESTED_PM_V1"
 DYNAMIC_WWS_PM_MARKER = "ASCENSION_M790_DYNAMIC_WWS_PM_ROLE_V1"
+LWCOND_SEMANTICS_MARKER = "ASCENSION_M791_LWCOND_SIGNAL_WAIT_V1"
 
 
 def run(argv: list[str], *, capture: bool = False) -> str:
@@ -966,6 +967,255 @@ static void spu_workload_note_wws_role(int image_id, const char* name)
     dma_path.write_text(dma)
 
 
+def apply_lwcond_wait_signal_semantics(upstream: pathlib.Path) -> None:
+    """Implement real wait/signal behavior for the game's active lwcond path.
+
+    M7.90's device trace repeatedly enters sys_lwcond_wait from the title, while
+    the pinned HLE returned success after a 1 ms poll and made every signal a
+    no-op. That violates the PS3 contract and can make condition-protected work
+    appear complete before its producer signals it. The guest must release its
+    associated lwmutex while parked and reacquire it before returning.
+    """
+    path = upstream / "runtime/ppu/ppu_sysprx.cpp"
+    source = path.read_text(errors="replace")
+    required = (LWCOND_SEMANTICS_MARKER, "std::condition_variable",
+                "waiter.cv.wait(guard", "waiter.cv.wait_for(guard")
+    if LWCOND_SEMANTICS_MARKER in source:
+        missing = [needle for needle in required if needle not in source]
+        if missing:
+            raise SystemExit(f"partial M7.91 lwcond patch: {missing}")
+        return
+
+    includes_anchor = "#include <string.h>\n"
+    if source.count(includes_anchor) != 1:
+        raise SystemExit("M7.91 cannot anchor lwcond synchronization includes")
+    source = source.replace(includes_anchor, includes_anchor +
+                            "#include <atomic>\n#include <chrono>\n"
+                            "#include <condition_variable>\n#include <mutex>\n", 1)
+
+    old_block = '''/* sys_lwcond (sysPrxForUser) — guest-side condition variable, paired with an
+ * lwmutex. The CRT and (newly) libsre's cellSpurs create/wait/signal these. Like
+ * sys_lwmutex above, model it directly in guest memory so the args stay GUEST
+ * EAs (the generic adapter would pass them raw and the C sysPrxForUser impl
+ * deref'd them as host pointers -> AV during cellSpurs init). A no-op wait is
+ * adequate here: the CRT/SPURS paths that reach us use these for one-shot init
+ * handshakes, not long-term blocking. sys_lwcond_t is 8 bytes: +0x00 u32
+ * lwmutex EA, +0x04 u32 lwcond queue id. Titles read +0x00 themselves (an
+ * lwcond whose lwmutex reads 0 is treated as invalid). */
+static void sys_lwcond_create(ppu_context* ctx)
+{
+    static uint32_t s_lwcond_id = 0x4C000000u;
+    uint32_t lwcond  = (uint32_t)ctx->gpr[3];
+    uint32_t lwmutex = (uint32_t)ctx->gpr[4];
+    vm_write32(lwcond + 0x00, lwmutex);
+    vm_write32(lwcond + 0x04, ++s_lwcond_id);
+    ctx->gpr[3] = 0;
+}
+static void sys_lwcond_destroy(ppu_context* ctx)    { ctx->gpr[3] = 0; }
+static void sys_lwcond_signal(ppu_context* ctx)     { ctx->gpr[3] = 0; }
+static void sys_lwcond_signal_all(ppu_context* ctx) { ctx->gpr[3] = 0; }
+static void sys_lwcond_signal_to(ppu_context* ctx)  { ctx->gpr[3] = 0; }
+/* Now that the lwmutex is REAL, a no-op wait that keeps holding it deadlocks the
+ * signaler. Release the paired lwmutex, wait briefly, reacquire (poll-style: the
+ * guest's while(!predicate) loop re-checks; signalers stay no-ops). Handles the
+ * common single (non-recursive) hold. */
+static void sys_lwcond_wait(ppu_context* ctx)
+{
+    uint32_t lwcond  = (uint32_t)ctx->gpr[3];
+    uint32_t lwmutex = vm_read32(lwcond + 0x00);
+    HANDLE s = lwm_sem(lwmutex);
+    if (s) {
+        uint32_t own = vm_read32(lwmutex + LWM_OWNER);
+        uint32_t rc  = vm_read32(lwmutex + LWM_RECUR);
+        vm_write32(lwmutex + LWM_RECUR, 0);
+        vm_write32(lwmutex + LWM_OWNER, 0);
+        ReleaseSemaphore(s, 1, NULL);
+        Sleep(1);
+        WaitForSingleObject(s, INFINITE);
+        vm_write32(lwmutex + LWM_OWNER, own);
+        vm_write32(lwmutex + LWM_RECUR, rc ? rc : 1);
+    }
+    ctx->gpr[3] = 0;
+}
+'''
+    new_block = r'''/* ASCENSION_M791_LWCOND_SIGNAL_WAIT_V1
+ * The M7.90 device trace repeatedly reaches this import. A successful return
+ * before a guest signal is not a valid lwcond wake and corrupts producer/consumer
+ * state. Each waiter is linked only while holding the condition's host mutex, so
+ * signal cannot be lost between queueing and releasing the guest lwmutex.
+ */
+struct AscensionLwcondWaiter {
+    uint32_t thread_id;
+    bool signaled;
+    std::condition_variable cv;
+    AscensionLwcondWaiter* next;
+};
+
+struct AscensionLwcondSlot {
+    uint32_t addr;
+    std::atomic<uint32_t> guest_id;
+    std::mutex lock;
+    AscensionLwcondWaiter* waiters;
+};
+
+static constexpr uint32_t ASC_LWCOND_SLOTS = 4096;
+static AscensionLwcondSlot s_asc_lwconds[ASC_LWCOND_SLOTS] = {};
+static std::mutex s_asc_lwcond_table_lock;
+static std::atomic<uint32_t> s_lwcond_id{0x4C000000u};
+
+static AscensionLwcondSlot* asc_lwcond_slot(uint32_t addr, bool create)
+{
+    if (!addr) return nullptr;
+    std::lock_guard<std::mutex> guard(s_asc_lwcond_table_lock);
+    const uint32_t start = (addr * 2654435761u) & (ASC_LWCOND_SLOTS - 1u);
+    for (uint32_t i = 0; i < ASC_LWCOND_SLOTS; ++i) {
+        AscensionLwcondSlot* slot = &s_asc_lwconds[(start + i) & (ASC_LWCOND_SLOTS - 1u)];
+        if (slot->addr == addr) return slot;
+        if (!slot->addr) {
+            if (!create) return nullptr;
+            slot->addr = addr;
+            return slot;
+        }
+    }
+    return nullptr;
+}
+
+static void asc_lwcond_unlink(AscensionLwcondSlot* slot, AscensionLwcondWaiter* waiter)
+{
+    AscensionLwcondWaiter** at = &slot->waiters;
+    while (*at && *at != waiter) at = &(*at)->next;
+    if (*at) *at = waiter->next;
+}
+
+static void sys_lwcond_create(ppu_context* ctx)
+{
+    const uint32_t lwcond = (uint32_t)ctx->gpr[3];
+    const uint32_t lwmutex = (uint32_t)ctx->gpr[4];
+    AscensionLwcondSlot* slot = asc_lwcond_slot(lwcond, true);
+    if (!slot || !lwmutex) {
+        ctx->gpr[3] = (uint64_t)(int64_t)(int32_t)0x80010002u; /* CELL_EINVAL */
+        return;
+    }
+    std::lock_guard<std::mutex> guard(slot->lock);
+    if (slot->waiters) {
+        ctx->gpr[3] = (uint64_t)(int64_t)(int32_t)0x8001000Au; /* CELL_EBUSY */
+        return;
+    }
+    const uint32_t id = s_lwcond_id.fetch_add(1, std::memory_order_relaxed) + 1u;
+    vm_write32(lwcond + 0x00, lwmutex);
+    vm_write32(lwcond + 0x04, id);
+    slot->guest_id = id;
+    ctx->gpr[3] = 0;
+}
+
+static void sys_lwcond_destroy(ppu_context* ctx)
+{
+    const uint32_t lwcond = (uint32_t)ctx->gpr[3];
+    AscensionLwcondSlot* slot = asc_lwcond_slot(lwcond, false);
+    if (!slot) { ctx->gpr[3] = (uint64_t)(int64_t)(int32_t)0x80010003u; return; }
+    std::lock_guard<std::mutex> guard(slot->lock);
+    if (slot->waiters) { ctx->gpr[3] = (uint64_t)(int64_t)(int32_t)0x8001000Au; return; }
+    slot->guest_id = 0;
+    vm_write32(lwcond + 0x04, 0);
+    ctx->gpr[3] = 0;
+}
+
+static void asc_lwcond_signal(ppu_context* ctx, bool all, bool targeted)
+{
+    const uint32_t lwcond = (uint32_t)ctx->gpr[3];
+    AscensionLwcondSlot* slot = asc_lwcond_slot(lwcond, false);
+    if (!slot) {
+        ctx->gpr[3] = (uint64_t)(int64_t)(int32_t)0x80010003u; /* CELL_ESRCH */
+        return;
+    }
+    const uint32_t target = (uint32_t)ctx->gpr[4];
+    std::lock_guard<std::mutex> guard(slot->lock);
+    if (!slot->guest_id || slot->guest_id != vm_read32(lwcond + 0x04)) {
+        ctx->gpr[3] = (uint64_t)(int64_t)(int32_t)0x80010003u;
+        return;
+    }
+    bool found = false;
+    for (AscensionLwcondWaiter* waiter = slot->waiters; waiter; waiter = waiter->next) {
+        if (targeted && target != UINT32_MAX && waiter->thread_id != target) continue;
+        waiter->signaled = true;
+        waiter->cv.notify_one();
+        found = true;
+        if (!all) break;
+    }
+    (void)found; /* A signal with no waiter is successful; the guest predicate is authoritative. */
+    ctx->gpr[3] = 0;
+}
+
+static void sys_lwcond_signal(ppu_context* ctx)     { asc_lwcond_signal(ctx, false, false); }
+static void sys_lwcond_signal_all(ppu_context* ctx) { asc_lwcond_signal(ctx, true, false); }
+static void sys_lwcond_signal_to(ppu_context* ctx)  { asc_lwcond_signal(ctx, false, true); }
+
+static void sys_lwcond_wait(ppu_context* ctx)
+{
+    const uint32_t lwcond = (uint32_t)ctx->gpr[3];
+    const uint64_t timeout_us = ctx->gpr[4];
+    AscensionLwcondSlot* slot = asc_lwcond_slot(lwcond, false);
+    if (!slot || !slot->guest_id || slot->guest_id != vm_read32(lwcond + 0x04)) {
+        ctx->gpr[3] = (uint64_t)(int64_t)(int32_t)0x80010003u; /* CELL_ESRCH */
+        return;
+    }
+    const uint32_t lwmutex = vm_read32(lwcond + 0x00);
+    HANDLE semaphore = lwm_sem(lwmutex);
+    if (!lwmutex || !semaphore) {
+        ctx->gpr[3] = (uint64_t)(int64_t)(int32_t)0x80010002u; /* CELL_EINVAL */
+        return;
+    }
+
+    AscensionLwcondWaiter waiter{};
+    waiter.thread_id = LWM_SELF(ctx);
+    std::unique_lock<std::mutex> guard(slot->lock);
+    if (slot->guest_id != vm_read32(lwcond + 0x04)) {
+        ctx->gpr[3] = (uint64_t)(int64_t)(int32_t)0x80010003u;
+        return;
+    }
+    waiter.next = slot->waiters;
+    slot->waiters = &waiter;
+
+    const uint32_t owner = vm_read32(lwmutex + LWM_OWNER);
+    const uint32_t recur = vm_read32(lwmutex + LWM_RECUR);
+    vm_write32(lwmutex + LWM_RECUR, 0);
+    vm_write32(lwmutex + LWM_OWNER, 0);
+    if (!ReleaseSemaphore(semaphore, 1, NULL)) {
+        asc_lwcond_unlink(slot, &waiter);
+        vm_write32(lwmutex + LWM_OWNER, owner);
+        vm_write32(lwmutex + LWM_RECUR, recur);
+        ctx->gpr[3] = (uint64_t)(int64_t)(int32_t)0x80010002u;
+        return;
+    }
+
+    bool signaled = false;
+    if (!timeout_us || timeout_us == UINT64_MAX) {
+        waiter.cv.wait(guard, [&waiter] { return waiter.signaled; });
+        signaled = true;
+    } else {
+        const uint64_t max_us = (uint64_t)std::chrono::microseconds::max().count();
+        const auto timeout = std::chrono::microseconds((int64_t)(timeout_us > max_us ? max_us : timeout_us));
+        signaled = waiter.cv.wait_for(guard, timeout, [&waiter] { return waiter.signaled; });
+    }
+    asc_lwcond_unlink(slot, &waiter);
+    guard.unlock();
+
+    /* PS3 reacquires the associated lwmutex even when the condition times out. */
+    if (WaitForSingleObject(semaphore, INFINITE) != WAIT_OBJECT_0) {
+        ctx->gpr[3] = (uint64_t)(int64_t)(int32_t)0x80010002u;
+        return;
+    }
+    vm_write32(lwmutex + LWM_OWNER, LWM_SELF(ctx));
+    vm_write32(lwmutex + LWM_RECUR, recur ? recur : 1u);
+    ctx->gpr[3] = signaled ? 0 : (uint64_t)(int64_t)(int32_t)0x8001000Bu; /* CELL_ETIMEDOUT */
+}
+'''
+    if source.count(old_block) != 1:
+        raise SystemExit("M7.91 cannot locate the pinned lwcond poll/no-op implementation")
+    source = source.replace(old_block, new_block, 1)
+    path.write_text(source)
+
+
 def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__)
     ap.add_argument("--upstream", type=pathlib.Path, required=True)
@@ -999,6 +1249,7 @@ def main() -> int:
     apply_ascension_wws_policy(upstream)
     apply_job_dispatch_metrics(upstream)
     apply_dynamic_wws_pm_role(upstream)
+    apply_lwcond_wait_signal_semantics(upstream)
 
     required = {
         "libs/spurs/cellSpurs.c": (
@@ -1028,6 +1279,9 @@ def main() -> int:
                                        "spu_workload_is_wws_pm_image(ctx->image_id)"),
         "runtime/spu/spu_dma.h": (DYNAMIC_WWS_PM_MARKER,
                                   "spu_workload_is_wws_pm_image(spu->image_id)"),
+        "runtime/ppu/ppu_sysprx.cpp": (LWCOND_SEMANTICS_MARKER,
+                                        "waiter.cv.wait(guard", "wait_for(guard",
+                                        "asc_lwcond_signal(ctx, true, false)"),
         "runtime/syscalls/sys_event.c": ("sys_event_flag_create_host",),
         "libs/codec/edge_inflate.cpp": ("extern \"C\" int edge_inflate", "const int FULL = -2;"),
     }
@@ -1036,7 +1290,7 @@ def main() -> int:
         missing = [needle for needle in needles if needle not in text]
         if missing:
             raise SystemExit(f"M7.83 PS3Recomp SPURS2 patch incomplete in {filename}: {missing}")
-    print("M7.90 routes both registered NPUA/C8 WWS PM images to native job-overlay dispatch")
+    print("M7.91 routes registered NPUA/C8 WWS PMs and implements guest lwcond wait/signal")
     return 0
 
 
