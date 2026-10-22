@@ -1,0 +1,88 @@
+ASCENSIONRECOMP · LAUNCHER / EXECUÇÃO NATIVA
+Branch=AscensionRecomp · Commit=ad6ae399ff3182423d1ddbac40dad2b27aadacbc · Actions=392 · RunID=39805226205
+App=M7.89.0 · title=NPUA80918 · origem=ELF autenticado no iPhone
+
+SESSÃO
+Estado=EM EXECUÇÃO · fase=EXECUTANDO entry AOT
+Tempo desde tocar Iniciar=00:01:41
+ELF importado=SIM · VALIDADO · entry=0x00010410 · host rc=NÃO MEDIDO · guest rc=NÃO MEDIDO
+VM guest virtual=3758096384 bytes (páginas sob demanda) · ELF PT_LOAD=NÃO MEDIDO bytes · raiz VFS=ROOT CONFIGURADA · cellFsRead guest comprovado; último caminho abaixo
+
+Reserva VM=Mach VM_FLAGS_ANYWHERE · guest 3,5 GiB leitura/escrita · base=0x300000000 · Mach tentativas=1 (último kr=0) · mmap tentativas=0 · estágio=nenhuma · errno=0
+
+PS3RECOMP / MÉTRICAS AO VIVO
+Tabela AOT=29849 funções · autocheck do catálogo SPU=5/5 (não confirma o PM recebido em runtime) · runtime inicializado=SIM
+Chamadas de função AOT=11064345 · início(s) da entry=1 · último PC=0x00669A14 (entrada AOT mais recente; PC atual da instrução NÃO MEDIDO)
+SPURS2 · instâncias=1 · workloads=18 (2 IDs 16–31) · PMs encontrados/faltantes=18/0 · admissões do WWS PM=78689 (4931 IDs 16–31) · último wid=12
+Jobs de job-chain do título · solicitações=0 · com lift=0 · sem lift=0 · retornos do runner=0 · ativos=0 · último FNV=0x0000000000000000 · bytes=0 · EA=0x00000000
+Captura de módulos ausentes=Documents/AscensionSPU-4E8053C3976946B0860976B8F7877803 · botão EXPORTAR BINÁRIOS SPU AUSENTES
+PMs examinados (um registro por wid):
+wid=0 · EA=0x007A7B00 · size=12288 · FNV-1a64=0xC8D774963A96DCF2 · image=6 · faixa=válida · ponteiro host=NÃO
+wid=1 · EA=0x007A7B00 · size=12288 · FNV-1a64=0xC8D774963A96DCF2 · image=6 · faixa=válida · ponteiro host=NÃO
+wid=2 · EA=0x007A7B00 · size=12288 · FNV-1a64=0xC8D774963A96DCF2 · image=6 · faixa=válida · ponteiro host=NÃO
+wid=3 · EA=0x007A7B00 · size=12288 · FNV-1a64=0xC8D774963A96DCF2 · image=6 · faixa=válida · ponteiro host=NÃO
+wid=4 · EA=0x007A7B00 · size=12288 · FNV-1a64=0xC8D774963A96DCF2 · image=6 · faixa=válida · ponteiro host=NÃO
+wid=5 · EA=0x007A7B00 · size=12288 · FNV-1a64=0xC8D774963A96DCF2 · image=6 · faixa=válida · ponteiro host=NÃO
+wid=6 · EA=0x007A7B00 · size=12288 · FNV-1a64=0xC8D774963A96DCF2 · image=6 · faixa=válida · ponteiro host=NÃO
+wid=7 · EA=0x007A7B00 · size=12288 · FNV-1a64=0xC8D774963A96DCF2 · image=6 · faixa=válida · ponteiro host=NÃO
+wid=8 · EA=0x007A7B00 · size=12288 · FNV-1a64=0xC8D774963A96DCF2 · image=6 · faixa=válida · ponteiro host=NÃO
+wid=9 · EA=0x007A7B00 · size=12288 · FNV-1a64=0xC8D774963A96DCF2 · image=6 · faixa=válida · ponteiro host=NÃO
+wid=10 · EA=0x007A7B00 · size=12288 · FNV-1a64=0xC8D774963A96DCF2 · image=6 · faixa=válida · ponteiro host=NÃO
+wid=11 · EA=0x007A7B00 · size=12288 · FNV-1a64=0xC8D774963A96DCF2 · image=6 · faixa=válida · ponteiro host=NÃO
+wid=12 · EA=0x007A7B00 · size=12288 · FNV-1a64=0xC8D774963A96DCF2 · image=6 · faixa=válida · ponteiro host=NÃO
+wid=13 · EA=0x007A7B00 · size=12288 · FNV-1a64=0xC8D774963A96DCF2 · image=6 · faixa=válida · ponteiro host=NÃO
+wid=14 · EA=0x007A7B00 · size=12288 · FNV-1a64=0xC8D774963A96DCF2 · image=6 · faixa=válida · ponteiro host=NÃO
+wid=15 · EA=0x007A7B00 · size=12288 · FNV-1a64=0xC8D774963A96DCF2 · image=6 · faixa=válida · ponteiro host=NÃO
+wid=16 · EA=0x007A7B00 · size=12288 · FNV-1a64=0xC8D774963A96DCF2 · image=6 · faixa=válida · ponteiro host=NÃO
+wid=17 · EA=0x007A7B00 · size=12288 · FNV-1a64=0xC8D774963A96DCF2 · image=6 · faixa=válida · ponteiro host=NÃO
+Últimas amostras AOT (1/4096):
+func_0063A0B8 <- LR 0x00644948
+func_00669A14 <- LR 0x006533A4
+func_006621B0 <- LR 0x00657F14
+func_00643E20 <- LR 0x0063A0EC
+func_00669A14 <- LR 0x004D653C
+func_006698FC <- LR 0x00653384
+func_00669C44 <- LR 0x006531F0
+func_006698FC <- LR 0x006436D0
+func_00669A14 <- LR 0x004D653C
+func_006531E0 <- LR 0x00650610
+func_00669934 <- LR 0x00643694
+func_00669C44 <- LR 0x006531F0
+Último evento rastreado: LR=0x00419B10 · SP=0xD008FBA0 · r3-r6=0000001E/0000FFFF/16600418/00010040
+Argumentos r7-r10=20003000/000002CC/0085B580/00000004
+HLE=2542980 · último NID=0x2A6D9D51 · LR=0x004D653C
+Últimas chamadas HLE:
+NID 0x8461E528 <- LR 0x006531F0
+NID 0x1BC200F4 <- LR 0x00643694
+NID 0x1573DC3F <- LR 0x00653384
+NID 0x2A6D9D51 <- LR 0x006533A4
+NID 0x2A6D9D51 <- LR 0x004D653C
+NID 0x2A6D9D51 <- LR 0x004D653C
+NID 0x2A6D9D51 <- LR 0x004D653C
+NID 0x2A6D9D51 <- LR 0x004D653C
+HLE sem serviço registrado=0 · último NID=0x00000000 · LR=0x00000000
+Últimos HLE sem serviço:
+(nenhum HLE sem serviço registrado)
+LV2 syscalls=2737804 · último número=141 · LR=0x00419B10
+Loop observado=58027 · marcador hotloop=0x003C4FA4 (não é PC atual) · 0x003C4FA4 é o marcador de backedge da busca em func_003C4F98, não o PC corrente. · r3/r4/r5/r8/r9=15DEEAF8/00000138/00000008/00000010/15E65634
+cellFsOpen guest=47 · opens OK=37
+cellFsRead guest=246 · bytes lidos pelo guest=11537018
+Último caminho guest=(nenhum caminho guest ainda)
+RSX backend=Metal inicializado · GCM vblank=27 · FIFO drains=97
+Metal drawable=0.75x · cadência VBlank guest=60 Hz
+Flips guest apresentados=0 · draws guest no último frame=0
+PSARC específico= consulte Último caminho guest; nenhum histórico adicional é coletado.
+PPC interpretado=0 · entradas HLE e LV2 contadas no runtime
+
+Auditoria M7.89: o PM bruto C8D774963A96DCF2 (12 KiB, LS 0xA00) foi levantado separadamente em 255 funções nativas; não é alias do PM NPUA CE052ACDA7412063. A entrada C8 está registrada como imagem SPU 6. Registro e compilação não provam que o iPhone executou jobs, draws ou flips; confirme estes contadores no próximo teste.
+
+MARCOS DE JOGO
+Pasta reconhecida pelo HOST=SIM (arquivos indexados no host; isso não prova cellFs)
+Leitura guest de arquivos do jogo= ATIVIDADE COMPROVADA
+Comandos RSX do jogo= NÃO COMPROVADOS · nenhum flip guest
+Primeiro flip guest apresentado= NÃO APRESENTADO
+
+Host iOS: o contador de FIFO/vblank descreve o worker Metal; só draws e flips guest confirmam renderização do jogo.
+Controles: cellPad HLE via overlay tátil · cellAudio HLE ativo, saída de áudio iOS silenciosa nesta versão.
+Estado do jogo: menu/gameplay ainda não estão comprovados até o guest gerar draws e apresentar um flip.
+ELF, PSARC e conteúdo do jogo permanecem no dispositivo.
