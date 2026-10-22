@@ -128,7 +128,7 @@ jobs:
             "$ipa_url" -o /dev/null
           grep -Eiq 'content-type: application/octet-stream' \
             "$RUNNER_TEMP/ipa-download-headers.txt"
-          grep -Eiq 'content-disposition: attachment; filename="AscensionRecomp-7\\.85\\.0\\.ipa"' \
+          grep -Fqi 'content-disposition: attachment; filename="AscensionRecomp-7.85.0.ipa"' \
             "$RUNNER_TEMP/ipa-download-headers.txt"
           ipa_bytes="$(stat -c%s "$ipa")"
           grep -Eiq "content-length: ${ipa_bytes}" "$RUNNER_TEMP/ipa-download-headers.txt"
