@@ -2054,6 +2054,7 @@ static BOOL ARGameManifestHasTitleUsrdir(NSDictionary *manifest){
      "PSARC específico= consulte Último caminho guest; nenhum histórico adicional é coletado.\n"
      "PPC interpretado=0 · entradas HLE e LV2 contadas no runtime\n\n"
      "Auditoria M7.89: o PM bruto C8D774963A96DCF2 (12 KiB, LS 0xA00) foi levantado separadamente em 255 funções nativas; não é alias do PM NPUA CE052ACDA7412063. A entrada C8 está registrada como imagem SPU 6. Registro e compilação não provam que o iPhone executou jobs, draws ou flips; confirme estes contadores no próximo teste.\n\n"
+     "Auditoria M7.90: os 31 overlays WWS do GOWA.ELF NPUA80918 foram extraídos pelo extractor do port de PC e recompilados para C nativo via ps3recomp. O registro é chamado na inicialização e as imagens PM NPUA=5/C8=6 são roteadas pela identidade do PM registrado. Sete finais de código e uma ilha de strings foram excluídos como dados embutidos; o build recusa qualquer instrução SPU sem tradução. Isto ainda não comprova job, draw, flip ou frame no iPhone.\n\n"
      "MARCOS DE JOGO\n"
      "Pasta reconhecida pelo HOST=%@\n"
      "Leitura guest de arquivos do jogo= %@\n"

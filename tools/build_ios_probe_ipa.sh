@@ -550,11 +550,27 @@ symbols=src/'symbols.txt'
 assert archive.is_file() and attestation.is_file() and symbols.is_file()
 a=json.loads(attestation.read_text())
 digest=hashlib.sha256(archive.read_bytes()).hexdigest()
-assert a['schema']=='ascension-m772-ios-arm64-link-input-v12'
-assert a['spu_workload_registry']=='NPUA80918-four-embedded-images-plus-separate-NPUA-WWS-id5-and-exact-C8D774963A96DCF2-WWS-native-lift-id6-v4'
+assert a['schema']=='ascension-m790-ios-arm64-link-input-v13'
+assert a['spu_workload_registry']=='NPUA80918-four-embedded-images-plus-C8-WWS-id6-plus-31-ELF-WWS-overlays-registered-200-230-v1'
 assert a['spurs_ascension_wws_policy']=='tempArea-128-byte-entry-and-poll-refresh-readyCount-level-rotating-spu-v1'
-assert a['spu_workload_registry_units_compiled']==4
+assert a['spu_workload_registry_units_compiled']==5
 assert a['c8_wws_image_id']==6
+assert a['wws_job_modules']==31
+assert a['wws_job_module_functions_lifted']>0
+assert a['wws_job_module_unclassified_words']==0
+assert a['wws_job_overlay_image_ids']==[200,230]
+assert a['wws_job_module_code_end_overrides']=={
+    'jobmod_00749080_eC40':'0x4F20',
+    'jobmod_0078B380_e7B40':'0xBF08',
+    'jobmod_007AAE00_eAF80':'0x148F0',
+    'jobmod_007BFC80_e16A80':'0x20570',
+    'jobmod_007E1C00_e11A08':'0x1B770',
+    'jobmod_007FF280_eE430':'0x17650',
+    'jobmod_0084BE40_e9DA8':'0xE310'}
+assert a['wws_job_module_data_islands']=={
+    'jobmod_00818600_eA00':[['0x83A0','0x8A48']]}
+assert a['wws_job_overlay_registration']=='explicit-m772-runtime-init-no-static-constructor-v1'
+assert a['wws_pm_role_routing']=='registered-name-bitmap-routes-NPUA-image-5-and-C8-image-6-before-WWS-job-dispatch-v1'
 assert a['c8_wws_lift_source_sha256']=='832ee5bebf19c28f496b7e1e47f49078287f4573ae7367b4dc14a8a9390d420f'
 assert a['spurs_pm_runtime_diagnostics_dependency']=='separate-PS3Recomp-runtime-archive-verified-at-final-MachO-v1'
 assert a['upstream_commit']=='39a36296511c445707adabcd312f0b740cfbd694'
@@ -596,6 +612,7 @@ PYM772CACHE
 else
   python3 tools/m772_build_ios.py \
     --source "$M772_LIFT_DIR" \
+    --jobmods-lifted "${M772_JOBMOD_LIFT_DIR:?}" \
     --upstream upstream-m772 \
     --repo . \
     --output ios-probe/m772 \
@@ -701,11 +718,14 @@ for symbol in ("_cellSpursCreateTaskset2", "_cellSpursCreateTask2",
     if not any(symbol in name for name in defined):
         raise SystemExit("M7.89 required native SPURS PM capture/runtime symbol missing: "+symbol)
 for symbol in ("_gowa_spu_register_c8_wws_pm",
+               "_ascension_npua_jobmods_register_all",
+               "_g_spu_wws_pm_image_mask",
+               "jobmod_00818600_eA00_spu_func_00004A00",
                "_wws_pm_c8d774_spu_func_00000A00",
                "_wws_pm_c8d774_spu_recomp_register"):
     if not any(symbol in name for name in defined):
-        raise SystemExit("M7.89 exact C8 WWS native lift missing from final Mach-O: "+symbol)
-print("M7.89 final ARM64 Mach-O contains the exact C8 WWS PM lift and PS3Recomp runtime")
+        raise SystemExit("M7.90 exact NPUA WWS job lift/C8 PM or runtime routing missing from final Mach-O: "+symbol)
+print("M7.90 final ARM64 Mach-O contains 31 NPUA WWS job lifts, exact C8 PM, and PS3Recomp runtime")
 PYM772LINKED
 # Every M7.62 native function must appear in the FINAL Mach-O, not merely object.
 python3 - <<'PY'
@@ -1037,5 +1057,7 @@ test -s AscensionRecompProbe-0.6.22-unsigned.ipa
 shasum -a 256 AscensionRecompProbe-0.6.22-unsigned.ipa > m41-ipa-sha256.txt
 # Retain legacy CI path; new alias has accurate installed bundle version.
 cp AscensionRecompProbe-0.6.22-unsigned.ipa AscensionRecompProbe-7.69.0-unsigned.ipa
-shasum -a 256 AscensionRecompProbe-7.69.0-unsigned.ipa > m769-ipa-sha256.txt
+IPA_VERSION=$(/usr/libexec/PlistBuddy -c 'Print CFBundleShortVersionString' "$APP/Info.plist")
+cp AscensionRecompProbe-0.6.22-unsigned.ipa "AscensionRecompProbe-${IPA_VERSION}-unsigned.ipa"
+shasum -a 256 "AscensionRecompProbe-${IPA_VERSION}-unsigned.ipa" > m790-ipa-sha256.txt
 echo 'UNSIGNED DIAGNOSTIC APP: UIKit CAMetalLayer + real PS3Recomp Metal backend; NO GOWA GAME included' > m41-status.txt

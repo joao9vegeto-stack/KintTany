@@ -397,13 +397,14 @@ extern "C" void lv2_syscall(ppu_context* ctx)
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--source", type=pathlib.Path, required=True)
+    parser.add_argument("--jobmods-lifted", type=pathlib.Path, required=True)
     parser.add_argument("--upstream", type=pathlib.Path, required=True)
     parser.add_argument("--repo", type=pathlib.Path, default=pathlib.Path("."))
     parser.add_argument("--output", type=pathlib.Path, required=True)
     parser.add_argument("--jobs", type=int, default=3)
     args = parser.parse_args()
-    source, upstream, repo, out = (p.resolve() for p in
-                                   (args.source, args.upstream, args.repo, args.output))
+    source, jobmods_lifted, upstream, repo, out = (p.resolve() for p in
+        (args.source, args.jobmods_lifted, args.upstream, args.repo, args.output))
     expected = "39a36296511c445707adabcd312f0b740cfbd694"
     actual = subprocess.check_output(["git", "-C", str(upstream), "rev-parse", "HEAD"], text=True).strip()
     if actual != expected:
@@ -433,6 +434,13 @@ def main():
     channel_runtime=(upstream/"runtime/spu/spu_channels.c").read_text(errors="replace")
     if "spurs_poll_select" not in channel_runtime:
         raise SystemExit("M7.86 Ascension WWS module-poll workload selection is missing")
+    workload_runtime=(upstream/"runtime/spu/spu_workload.c").read_text(errors="replace")
+    dma_runtime=(upstream/"runtime/spu/spu_dma.h").read_text(errors="replace")
+    if ("ASCENSION_M790_DYNAMIC_WWS_PM_ROLE_V1" not in workload_runtime or
+            "spu_workload_note_wws_role(image_id, name);" not in workload_runtime or
+            "spu_workload_is_wws_pm_image(ctx->image_id)" not in channel_runtime or
+            "spu_workload_is_wws_pm_image(spu->image_id)" not in dma_runtime):
+        raise SystemExit("M7.90 registered NPUA/C8 WWS PM role routing is not patched into PS3Recomp")
     registry_source=(repo/"runtime/m772-npua-spu/spu_workloads.c").read_text(errors="replace")
     if "0xCE052ACDA7412063ULL" not in registry_source:
         raise SystemExit("M7.89 NPUA source WWS PM fingerprint is not registered")
@@ -471,6 +479,44 @@ def main():
     bridge_source = (repo / "runtime/m772_bridge.cpp").read_text(errors="replace")
     if "gowa_spu_register_c8_wws_pm();" not in bridge_source:
         raise SystemExit("M7.89 C8 WWS registry is not called from runtime initialization")
+    if "ascension_npua_jobmods_register_all();" not in bridge_source:
+        raise SystemExit("M7.90 NPUA WWS job overlays are not registered at runtime initialization")
+    jobmods_manifest_path = jobmods_lifted / "jobmods_manifest.json"
+    jobmods_attestation_path = jobmods_lifted / "jobmods_attestation.json"
+    jobmods_registry = jobmods_lifted / "jobmods_register.c"
+    if not all(path.is_file() for path in
+               (jobmods_manifest_path, jobmods_attestation_path, jobmods_registry)):
+        raise SystemExit("M7.90 temporary ELF-derived WWS module lifts are missing")
+    jobmods_manifest = json.loads(jobmods_manifest_path.read_text())
+    jobmods_attestation = json.loads(jobmods_attestation_path.read_text())
+    expected_jobmod_code_ends = {
+        "jobmod_00749080_eC40": "0x4F20",
+        "jobmod_0078B380_e7B40": "0xBF08",
+        "jobmod_007AAE00_eAF80": "0x148F0",
+        "jobmod_007BFC80_e16A80": "0x20570",
+        "jobmod_007E1C00_e11A08": "0x1B770",
+        "jobmod_007FF280_eE430": "0x17650",
+        "jobmod_0084BE40_e9DA8": "0xE310",
+    }
+    expected_jobmod_data_islands = {
+        "jobmod_00818600_eA00": [["0x83A0", "0x8A48"]],
+    }
+    if (len(jobmods_manifest) != 31 or
+            jobmods_attestation.get("schema") != "ascension-m790-elf-jobmods-v1" or
+            jobmods_attestation.get("source_title") != "UP9000-NPUA80918" or
+            jobmods_attestation.get("source_elf_structurally_matches_self") is not True or
+            jobmods_attestation.get("modules") != 31 or
+            jobmods_attestation.get("registered_overlay_image_ids") != [200, 230] or
+            jobmods_attestation.get("code_end_overrides") != expected_jobmod_code_ends or
+            jobmods_attestation.get("data_islands") != expected_jobmod_data_islands or
+            jobmods_attestation.get("unclassified_words") != 0 or
+            jobmods_attestation.get("unclassified_mnemonics") != {} or
+            jobmods_attestation.get("registration_symbol") != "ascension_npua_jobmods_register_all" or
+            jobmods_attestation.get("license_extracted") is not False):
+        raise SystemExit("M7.90 job module manifest/SELF pairing is invalid")
+    jobmod_sources = sorted(jobmods_lifted.glob("jobmod_*/spu_recomp.c"))
+    if len(jobmod_sources) != 31:
+        raise SystemExit(f"M7.90 job source count mismatch: {len(jobmod_sources)} != 31")
     for marker in ("SPURS_MAX_WID 32", "SPURS_WKL_INFO2",
                    "cellSpursResetAscensionMetrics", "cellSpursCopyAscensionMetrics",
                    "cellSpursCopyAscensionPmDiagnostics", "s_asc_pm_diag"):
@@ -540,6 +586,10 @@ def main():
         tasks.append(("c++", src, objects / (src.stem + ".o"), cpp_flags, includes))
     for src in spu:
         tasks.append(("c", src, objects / (src.parent.name + ".o"), c_flags, includes))
+    for src in jobmod_sources:
+        tasks.append(("c", src, objects / (src.parent.name + ".o"), c_flags, includes))
+    tasks.append(("c", jobmods_registry, objects / "runtime_ascension_npua_jobmods_register.o",
+                  c_flags, includes))
     scaffold = [
         upstream / "runtime/ppu/ppu_loader.cpp",
         upstream / "runtime/ppu/ppu_hle.cpp",
@@ -630,6 +680,8 @@ def main():
                 "_gowa_spu_0003_at_006D5900_spu_recomp_register",
                 "_gowa_spu_register_all",
                 "_gowa_spu_register_c8_wws_pm",
+                "_ascension_npua_jobmods_register_all",
+                "jobmod_00818600_eA00_spu_func_00004A00",
                 "_wws_pm_npua_spu_recomp_register",
                 "_wws_pm_npua_spu_func_00000A00",
                 "_wws_pm_c8d774_spu_recomp_register",
@@ -645,7 +697,7 @@ def main():
         raise SystemExit(f"M7.72 required ARM64 archive symbols missing: {missing}")
 
     result = {
-        "schema": "ascension-m772-ios-arm64-link-input-v12",
+        "schema": "ascension-m790-ios-arm64-link-input-v13",
         "upstream_commit": actual,
         "ios_vfs_mount_patch": "npua80918-and-app-home-usrdir-v1",
         "ios_vm_mapping_patch": "mach-anywhere-4g-relative-guest-ea-v1",
@@ -655,10 +707,18 @@ def main():
         "spurs2_taskset": "0x2900-two-LV2-event-flags-tracked-cross-taskset-scheduler-v1",
         "spurs2_task_apis": "create-task2-join-tryjoin-taskset-address-v1",
         "spurs2_workloads": "32-workload-second-instance-set-and-policy-slots-v1",
-        "spu_workload_registry": "NPUA80918-four-embedded-images-plus-separate-NPUA-WWS-id5-and-exact-C8D774963A96DCF2-WWS-native-lift-id6-v4",
+        "spu_workload_registry": "NPUA80918-four-embedded-images-plus-C8-WWS-id6-plus-31-ELF-WWS-overlays-registered-200-230-v1",
         "c8_wws_lift_manifest": "runtime/m789-c8-wws/manifest.json",
         "c8_wws_lift_source_sha256": c8_manifest["generated_source_sha256"],
         "c8_wws_image_id": 6,
+        "wws_job_modules": len(jobmods_manifest),
+        "wws_job_module_functions_lifted": sum(int(item["funcs"]) for item in jobmods_manifest),
+        "wws_job_module_unclassified_words": int(jobmods_attestation["unclassified_words"]),
+        "wws_job_module_code_end_overrides": jobmods_attestation["code_end_overrides"],
+        "wws_job_module_data_islands": jobmods_attestation["data_islands"],
+        "wws_job_overlay_image_ids": jobmods_attestation["registered_overlay_image_ids"],
+        "wws_job_overlay_registration": "explicit-m772-runtime-init-no-static-constructor-v1",
+        "wws_pm_role_routing": "registered-name-bitmap-routes-NPUA-image-5-and-C8-image-6-before-WWS-job-dispatch-v1",
         "spurs_ascension_wws_policy": "tempArea-128-byte-entry-and-poll-refresh-readyCount-level-rotating-spu-v1",
         "spurs_pm_runtime_diagnostics_dependency": "separate-PS3Recomp-runtime-archive-verified-at-final-MachO-v1",
         "spurs_workload_flags": "guest-address-and-exclusive-receiver-v1",
@@ -670,7 +730,8 @@ def main():
         "native_aot_function_entry_hooks": 29849,
         "native_observed_hotloop_hooks": 1,
         "spu_translation_units_compiled": len(spu),
-        "spu_workload_registry_units_compiled": len(npua_spu_sources) + len(c8_spu_sources),
+        "spu_workload_registry_units_compiled": len(npua_spu_sources) + len(c8_spu_sources) + 1,
+        "spu_job_module_units_compiled": len(jobmod_sources),
         "per_game_runtime_units_compiled": len(scaffold),
         "total_arm64_objects": len(obj_files),
         "archive": archive.name,

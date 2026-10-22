@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import argparse
 import pathlib
+import re
 import subprocess
 import sys
 
@@ -22,6 +23,7 @@ PM_DIAGNOSTICS_MARKER = "ASCENSION_M785_SPURS_PM_DIAGNOSTICS_V1"
 ASCENSION_POLICY_MARKER = "ASCENSION_M786_WWS_TEMPA_READY_LEVEL_V1"
 JOB_METRICS_MARKER = "ASCENSION_M787_SPURS_JOB_METRICS_V1"
 PM_CAPTURE_MARKER = "ASCENSION_M788_CAPTURE_REQUESTED_PM_V1"
+DYNAMIC_WWS_PM_MARKER = "ASCENSION_M790_DYNAMIC_WWS_PM_ROLE_V1"
 
 
 def run(argv: list[str], *, capture: bool = False) -> str:
@@ -871,6 +873,99 @@ void spu_workload_copy_ascension_job_metrics(uint64_t out[8]) {
     path.write_text(source)
 
 
+def apply_dynamic_wws_pm_role(upstream: pathlib.Path) -> None:
+    """Route WWS policy hooks by registered PM identity, not image 2.
+
+    The pinned upstream's job-overlay path assumes image 2, while this title
+    registers NPUA and observed C8 policy images as images 5 and 6. Track every
+    registered WWS PM so either exact policy can dispatch the lifted overlays.
+    """
+    workload_path = upstream / "runtime/spu/spu_workload.c"
+    channels_path = upstream / "runtime/spu/spu_channels.c"
+    dma_path = upstream / "runtime/spu/spu_dma.h"
+    workload = workload_path.read_text(errors="replace")
+    channels = channels_path.read_text(errors="replace")
+    dma = dma_path.read_text(errors="replace")
+
+    role_helper = '''/* ASCENSION_M790_DYNAMIC_WWS_PM_ROLE_V1
+ * Preserve the legacy image 2 fallback and add each WWS policy image named by
+ * this title (NPUA=5 and the separately observed C8 policy=6).
+ */
+uint64_t g_spu_wws_pm_image_mask = UINT64_C(1) << 2;
+
+int spu_workload_is_wws_pm_image(int image_id)
+{
+    return image_id >= 0 && image_id < 64 &&
+           (g_spu_wws_pm_image_mask & (UINT64_C(1) << image_id)) != 0;
+}
+
+static void spu_workload_note_wws_role(int image_id, const char* name)
+{
+    if (!name) return;
+    if (image_id >= 0 && image_id < 64 &&
+        (strncmp(name, "pm_wwsjob", 9) == 0 || strncmp(name, "wws_pm_", 7) == 0))
+        g_spu_wws_pm_image_mask |= UINT64_C(1) << image_id;
+}
+'''
+    registry_anchor = "static unsigned           s_registry_count = 0;\n"
+    if DYNAMIC_WWS_PM_MARKER not in workload:
+        if workload.count(registry_anchor) != 1:
+            raise SystemExit("M7.90 cannot anchor dynamic WWS role in workload registry")
+        workload = workload.replace(registry_anchor, registry_anchor + "\n" + role_helper, 1)
+        register_anchor = "    if (!fn) return;\n"
+        if workload.count(register_anchor) != 1:
+            raise SystemExit("M7.90 cannot attach WWS role detection to image registration")
+        workload = workload.replace(register_anchor,
+                                    register_anchor + "    spu_workload_note_wws_role(image_id, name);\n", 1)
+    elif "spu_workload_note_wws_role(image_id, name);" not in workload:
+        raise SystemExit("partial M7.90 dynamic WWS role patch in spu_workload.c")
+
+    if "spu_workload_is_wws_pm_image" not in dma:
+        include_anchor = "#ifdef __cplusplus\nextern \"C\" {\n#endif\n"
+        if dma.count(include_anchor) != 1:
+            raise SystemExit("M7.90 cannot declare WWS role for SPU DMA hooks")
+        dma = dma.replace(include_anchor,
+                          include_anchor + "int spu_workload_is_wws_pm_image(int image_id);\n", 1)
+
+    # These five checks are the policy-specific overlay dispatch, null-job,
+    # completion, and return paths. Other image id 2 checks are diagnostics.
+    channel_new = "spu_workload_is_wws_pm_image(ctx->image_id)"
+    channels = channels.replace(
+        "/* WWS job-code overlay match: the PM (image 2) streams a job module into the",
+        "/* WWS job-code overlay match: a registered WWS PM streams a job module into the")
+    channels = channels.replace(
+        "/* WWS job-code fallback: the jobmanager PM (image 2) stages each job's",
+        "/* WWS job-code fallback: the registered jobmanager PM stages each job's")
+    if DYNAMIC_WWS_PM_MARKER not in channels:
+        channel_pattern = re.compile(r"ctx->image_id == 2(?![0-9])")
+        count = len(channel_pattern.findall(channels))
+        if count != 5:
+            raise SystemExit(f"M7.90 WWS channel id checks changed: {count}, expected 5")
+        channels = channel_pattern.sub(channel_new, channels)
+        channels = channels.replace("/* WWS job-code overlay match:",
+                                    "/* ASCENSION_M790_DYNAMIC_WWS_PM_ROLE_V1 */\n"
+                                    "    /* WWS job-code overlay match:", 1)
+    elif channel_new not in channels or DYNAMIC_WWS_PM_MARKER not in channels:
+        raise SystemExit("partial M7.90 WWS role dispatch patch in spu_channels.c")
+
+    dma_new = "spu_workload_is_wws_pm_image(spu->image_id)"
+    if DYNAMIC_WWS_PM_MARKER not in dma:
+        dma_pattern = re.compile(r"spu->image_id == 2(?![0-9])")
+        count = len(dma_pattern.findall(dma))
+        if count != 2:
+            raise SystemExit(f"M7.90 WWS DMA id checks changed: {count}, expected 2")
+        dma = dma_pattern.sub(dma_new, dma)
+        dma = dma.replace("/* wwsjob batch-fetch probe:",
+                          "/* ASCENSION_M790_DYNAMIC_WWS_PM_ROLE_V1 */\n"
+                          "    /* wwsjob batch-fetch probe:", 1)
+    elif dma_new not in dma or DYNAMIC_WWS_PM_MARKER not in dma:
+        raise SystemExit("partial M7.90 WWS role DMA patch in spu_dma.h")
+
+    workload_path.write_text(workload)
+    channels_path.write_text(channels)
+    dma_path.write_text(dma)
+
+
 def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__)
     ap.add_argument("--upstream", type=pathlib.Path, required=True)
@@ -903,6 +998,7 @@ def main() -> int:
     apply_requested_pm_capture(upstream)
     apply_ascension_wws_policy(upstream)
     apply_job_dispatch_metrics(upstream)
+    apply_dynamic_wws_pm_role(upstream)
 
     required = {
         "libs/spurs/cellSpurs.c": (
@@ -925,7 +1021,13 @@ def main() -> int:
                                    "cellSpursGetWorkloadFlag", "_cellSpursWorkloadFlagReceiver"),
         "runtime/spu/spu_workload.c": ("spu_taskset_set_running", "spu_taskset_track",
                                        "spu_signal_parked_on_line", JOB_METRICS_MARKER,
-                                       "spu_workload_copy_ascension_job_metrics"),
+                                       "spu_workload_copy_ascension_job_metrics",
+                                       DYNAMIC_WWS_PM_MARKER,
+                                       "spu_workload_note_wws_role(image_id, name);"),
+        "runtime/spu/spu_channels.c": (DYNAMIC_WWS_PM_MARKER,
+                                       "spu_workload_is_wws_pm_image(ctx->image_id)"),
+        "runtime/spu/spu_dma.h": (DYNAMIC_WWS_PM_MARKER,
+                                  "spu_workload_is_wws_pm_image(spu->image_id)"),
         "runtime/syscalls/sys_event.c": ("sys_event_flag_create_host",),
         "libs/codec/edge_inflate.cpp": ("extern \"C\" int edge_inflate", "const int FULL = -2;"),
     }
@@ -934,7 +1036,7 @@ def main() -> int:
         missing = [needle for needle in needles if needle not in text]
         if missing:
             raise SystemExit(f"M7.83 PS3Recomp SPURS2 patch incomplete in {filename}: {missing}")
-    print("M7.88 applied fail-closed WWS PM association, requested PM capture, SPURS2 scheduler, Ascension policy, job metrics, taskset, LFQueue, and Edge Zlib HLE")
+    print("M7.90 routes both registered NPUA/C8 WWS PM images to native job-overlay dispatch")
     return 0
 
 

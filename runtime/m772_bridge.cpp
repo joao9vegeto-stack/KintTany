@@ -28,6 +28,8 @@ extern "C" PPU_THREAD_LOCAL void (*g_trampoline_fn)(void*);
 extern "C" void gowa_spu_register_all(void);
 /* Lifted from the exact 12-KiB C8 policy module observed in the guest PM table. */
 extern "C" void gowa_spu_register_c8_wws_pm(void);
+/* Lifted from the 31 WWS job modules embedded in the matching NPUA ELF. */
+extern "C" void ascension_npua_jobmods_register_all(void);
 
 static pthread_once_t m772_once = PTHREAD_ONCE_INIT;
 static uint32_t m772_initialized;
@@ -138,6 +140,7 @@ static void m772_register_all(void)
     ppu_install_thread_trampoline();
     gowa_spu_register_all();
     gowa_spu_register_c8_wws_pm();
+    ascension_npua_jobmods_register_all();
     ppu_fs_ios_reset_stats();
 }
 
