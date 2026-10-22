@@ -66,9 +66,10 @@ static uint32_t m772_vfs_root_set;
 static std::string m772_vfs_root;
 static uint32_t m772_has_ppu(uint32_t pc);
 
-/* These are the exact content fingerprints the NPUA80918 runtime will pass to
- * the generic dispatcher: four complete SPU ELF images and the raw WWS PM.
- * Count successful lookups instead of reporting a build-time constant. */
+/* Build-time catalogue self-check: these entries must exist for the four
+ * embedded SPU images and the NPUA WWS PM. This does not prove what bytes the
+ * guest passes at runtime; cellSpursCopyAscensionPmDiagnostics records that
+ * actual EA, size and fingerprint per workload. */
 static uint32_t m772_count_registered_spu_images(void)
 {
     static const uint64_t fingerprints[] = {
