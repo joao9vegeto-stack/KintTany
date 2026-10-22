@@ -1,0 +1,5 @@
+PoPTST static preflight 2026-10-21
+Retail XBE SHA256 allowlist: 753C58B191279BF4D1A8B28A936DF36AA222ED566487AB1FBDFCD090E91EE379
+rePOP gen source remote: 74 files; recomp_stubs_unresolved.c blob 555fec0f2c1045e116109efef2cba1c1896c6869 matches user lift; recomp_types.h blob f98eed673d32b8134376d4e80b0717594cd49c51 matches user lift.
+Local original 77 generated files extracted, 294/333 mid-entries generated, 39 remaining fail-closed, Clang Linux syntax check of candidate and guard sources passed. Remaining no-op occurrences: 725. No iOS compile or gameplay evidence before Actions.
+One orphan root commit planned; single push-scoped workflow.

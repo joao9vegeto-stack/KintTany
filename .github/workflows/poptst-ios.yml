@@ -1,0 +1,183 @@
+name: PoPTST Xbox retail native iOS
+on:
+  push:
+    branches: [PoPTST]
+permissions:
+  contents: read
+  actions: read
+concurrency:
+  group: poptst-ios-single-run
+  cancel-in-progress: true
+jobs:
+  shaders:
+    name: Compile NV2A host shaders from pinned rePOP
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+      - name: Get pinned rePOP and DXC
+        run: |
+          set -euxo pipefail
+          git clone --filter=blob:none --branch reSOT --single-branch https://github.com/FulGerNet/rePOP.git repop
+          git -C repop checkout --detach 4ee36260e71d39fd8b02028fd614b1907a0d451b
+          python3 ios/Tools/check_build_inputs.py repop
+          curl -fLsS --retry 3 -o dxc.tar.gz https://github.com/microsoft/DirectXShaderCompiler/releases/download/v1.9.2609/linux_dxc_2026_09_28.x86_x64.tar.gz
+          mkdir -p deps/dxc
+          tar -xzf dxc.tar.gz -C deps/dxc
+          test -x deps/dxc/bin/dxc
+          LD_LIBRARY_PATH="$PWD/deps/dxc/lib" deps/dxc/bin/dxc --version || true
+      - name: Compile real shaders to SPIR-V (not game assets)
+        run: |
+          set -euxo pipefail
+          mkdir -p deps/shaders
+          LD_LIBRARY_PATH="$PWD/deps/dxc/lib" python3 repop/tools/build-native-shaders.py \
+            --dxc "$PWD/deps/dxc/bin/dxc" --output "$PWD/deps/shaders"
+          test -s deps/shaders/nv2a_native_shaders.h
+          sha256sum deps/shaders/nv2a_native_shaders.h
+      - uses: actions/upload-artifact@v4
+        with:
+          name: PoPTST-host-SPIRV
+          path: deps/shaders/
+          retention-days: 7
+
+  ipa:
+    needs: shaders
+    runs-on: macos-26
+    timeout-minutes: 360
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          name: PoPTST-host-SPIRV
+          path: deps/shaders
+      - name: Prepare Xcode and verified retail source
+        run: |
+          set -euxo pipefail
+          xcode_apps=(/Applications/Xcode_26*.app)
+          test -d "${xcode_apps[0]}"
+          sudo xcode-select --switch "${xcode_apps[${#xcode_apps[@]}-1]}/Contents/Developer"
+          xcodebuild -version
+          xcrun --sdk iphoneos --show-sdk-version
+          brew list cmake >/dev/null 2>&1 || brew install cmake
+          brew list ninja >/dev/null 2>&1 || brew install ninja
+          brew list xcodegen >/dev/null 2>&1 || brew install xcodegen
+          git clone --filter=blob:none --single-branch --branch reSOT https://github.com/FulGerNet/rePOP.git repop
+          git -C repop checkout --detach 4ee36260e71d39fd8b02028fd614b1907a0d451b
+          python3 ios/Tools/check_build_inputs.py repop
+          python3 ios/Tools/check_sdl_bootstrap.py
+      - name: Apply iOS host and runtime patches
+        run: |
+          set -euxo pipefail
+          python3 ios/Tools/patch_repop_ios.py repop
+          python3 ios/Tools/patch_vm_ios.py repop
+          python3 ios/Tools/patch_guest_exit_ios.py repop
+          python3 ios/Tools/patch_retail_disk_ios.py repop
+          python3 ios/Tools/enable_apple_mmio.py repop
+          python3 ios/Tools/check_vm_ios.py repop
+          python3 ios/Tools/check_guest_exit_ios.py repop
+          python3 ios/Tools/check_retail_disk_ios.py repop
+          # Exercise the actual 4-GiB sparse mmap + private file alias on macOS.
+          cc -std=c11 -O2 -Wall -Wextra tests/host_vm_alias.c -o /tmp/poptst-vm-alias
+          /tmp/poptst-vm-alias
+          mkdir -p reports
+          python3 ios/Tools/repair_mid_entry.py --gen repop/source/xbox-retail/gen \
+            --stub-csv ios/Tools/xbox-retail-stubs.csv --output-json reports/repair-mid.json --apply-private
+          python3 ios/Tools/install_failclosed_guards.py --gen repop/source/xbox-retail/gen \
+            --output-json reports/remaining-guards.json
+          python3 ios/Tools/patch_retail_io_ios.py repop
+          python3 ios/Tools/check_retail_io_ios.py repop
+          python3 ios/Tools/check_gpu_threading_ios.py repop
+          python3 ios/Tools/check_touch_scale_ios.py repop
+          python3 ios/Tools/audit_full_retail_aot.py --repop repop --report reports/aot-full-audit.json
+          git clone --depth=1 --branch release-3.4.18 https://github.com/libsdl-org/SDL.git deps/SDL
+          git clone --depth=1 https://github.com/KhronosGroup/Vulkan-Headers.git deps/Vulkan-Headers
+          python3 repop/tools/patch-sdl-gpu-query.py deps/SDL
+          git -C deps/SDL diff --check
+          git -C repop diff --check
+      - name: Upload structural coverage and unresolved guest targets
+        uses: actions/upload-artifact@v4
+        with:
+          name: PoPTST-B23-AOT-Audit
+          path: reports/
+          retention-days: 30
+      - name: Prepare pinned shader translator dependencies
+        run: |
+          set -euxo pipefail
+          mkdir -p repop/build/deps
+          git clone --filter=blob:none --branch 16.0.0 --depth=1 https://github.com/KhronosGroup/glslang.git repop/build/deps/glslang
+          git clone https://github.com/KhronosGroup/SPIRV-Tools.git repop/build/deps/spirv-tools
+          git -C repop/build/deps/spirv-tools checkout --detach 7f2d9ee926f98fc77a3ed1e1e0f113b8c9c49458
+          git clone https://github.com/KhronosGroup/SPIRV-Headers.git repop/build/deps/spirv-headers
+          git -C repop/build/deps/spirv-headers checkout --detach 01e0577914a75a2569c846778c2f93aa8e6feddd
+      - name: Compile 74 retail C units, Xbox runtime, SDL GPU and native shaders on arm64 iPhoneOS
+        run: |
+          set -euxo pipefail
+          cmake -S ios -B build/ios-native -G Ninja \
+            -DCMAKE_SYSTEM_NAME=iOS \
+            -DCMAKE_OSX_SYSROOT=iphoneos \
+            -DCMAKE_OSX_ARCHITECTURES=arm64 \
+            -DCMAKE_OSX_DEPLOYMENT_TARGET=17.4 \
+            -DCMAKE_BUILD_TYPE=Release \
+            -DRESOT_ROOT="$GITHUB_WORKSPACE/repop" \
+            -DSDL_SOURCE="$GITHUB_WORKSPACE/deps/SDL" \
+            -DVULKAN_HEADERS="$GITHUB_WORKSPACE/deps/Vulkan-Headers/include" \
+            -DNATIVE_SHADERS="$GITHUB_WORKSPACE/deps/shaders"
+          # Collect all compiler errors in the same run, not just the first one.
+          cmake --build build/ios-native --target PoPTSTRetail -- -j 3 -k 0
+          test -s build/ios-native/libPoPTSTRetail.dylib
+          file build/ios-native/libPoPTSTRetail.dylib
+          xcrun llvm-nm build/ios-native/libPoPTSTRetail.dylib | grep -E '(_xbe_entry_point|_poptst_engine_start)'
+      - name: Extract preverified KosmicKrisp iOS ICD from PsTJohn Actions #125
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euxo pipefail
+          mkdir -p deps/kosmickrisp
+          gh run download 39067594955 --repo joao9vegeto-stack/KintTany --name PsTJohn1-1.2-IPA --dir deps/kosmickrisp
+          test -s deps/kosmickrisp/PsTJohn1-1.2.ipa
+          unzip -p deps/kosmickrisp/PsTJohn1-1.2.ipa Payload/RPCS3.app/Frameworks/libKosmicKrisp.dylib > deps/kosmickrisp/libKosmicKrisp.dylib
+          echo '593d3f39a4fc751cc51884383444a5599993012281e084ef01945db7a4e78a34  deps/kosmickrisp/libKosmicKrisp.dylib' | shasum -a 256 -c -
+          xcrun --sdk iphoneos clang -arch arm64 -isysroot "$(xcrun --sdk iphoneos --show-sdk-path)" \
+            -miphoneos-version-min=17.4 -dynamiclib \
+            -install_name '@rpath/libvulkan.dylib' -O2 \
+            ios/Native/poptst_vulkan_icd_bridge.c -o deps/kosmickrisp/libvulkan.dylib
+          otool -L deps/kosmickrisp/libKosmicKrisp.dylib
+      - name: Link SwiftUI retail launcher against real native engine
+        run: |
+          set -euxo pipefail
+          cd ios
+          xcodegen generate --spec project.yml
+          cd ..
+          xcodebuild -project ios/PoPTST.xcodeproj -scheme PoPTST \
+            -configuration Release -sdk iphoneos -destination 'generic/platform=iOS' \
+            -derivedDataPath build/DerivedData CODE_SIGNING_ALLOWED=NO \
+            OTHER_LDFLAGS="-L$GITHUB_WORKSPACE/build/ios-native -lPoPTSTRetail" build
+          test -s build/DerivedData/Build/Products/Release-iphoneos/PoPTST.app/PoPTST
+          APP=build/DerivedData/Build/Products/Release-iphoneos/PoPTST.app
+          test -s "$APP/Assets.car"
+          test -s "$APP/AppIcon60x60@2x.png"
+          /usr/libexec/PlistBuddy -c 'Print :CFBundleIcons:CFBundlePrimaryIcon:CFBundleIconName' "$APP/Info.plist" | grep -x AppIcon
+          /usr/libexec/PlistBuddy -c 'Print :CFBundleVersion' "$APP/Info.plist" | grep -x 28
+          echo 'PASS: actual iOS AppIcon assets and new bundle build version'
+      - name: Package and validate real retail IPA (ad-hoc signed)
+        run: |
+          set -euxo pipefail
+          APP=build/DerivedData/Build/Products/Release-iphoneos/PoPTST.app
+          mkdir -p "$APP/Frameworks" Payload
+          cp build/ios-native/libPoPTSTRetail.dylib "$APP/Frameworks/"
+          cp deps/kosmickrisp/libvulkan.dylib deps/kosmickrisp/libKosmicKrisp.dylib "$APP/Frameworks/"
+          for f in "$APP"/Frameworks/*.dylib; do codesign --force --sign - "$f"; done
+          codesign --force --deep --sign - "$APP"
+          otool -L "$APP/Frameworks/libPoPTSTRetail.dylib"
+          ditto "$APP" Payload/PoPTST.app
+          ditto -c -k --keepParent Payload PoPTST-retail-ios.ipa
+          python3 ios/Tools/validate_ipa.py PoPTST-retail-ios.ipa
+          shasum -a 256 PoPTST-retail-ios.ipa > PoPTST-retail-ios.sha256
+      - uses: actions/upload-artifact@v4
+        with:
+          name: PoPTST-Retail-IPA
+          path: |
+            PoPTST-retail-ios.ipa
+            PoPTST-retail-ios.sha256
+          if-no-files-found: error
+          retention-days: 7

@@ -1,0 +1,48 @@
+name: PoPTST
+options:
+  deploymentTarget:
+    iOS: '17.4'
+  bundleIdPrefix: com.joaopedro
+settings:
+  base:
+    SWIFT_VERSION: '5.9'
+    IPHONEOS_DEPLOYMENT_TARGET: '17.4'
+    TARGETED_DEVICE_FAMILY: '1,2'
+    CODE_SIGNING_ALLOWED: 'NO'
+    SDKROOT: iphoneos
+    SWIFT_OPTIMIZATION_LEVEL: '-O'
+targets:
+  PoPTST:
+    type: application
+    platform: iOS
+    sources:
+      - path: App/PoPTSTApp.swift
+      - path: App/RetailFolderInstaller.swift
+      - path: App/Assets.xcassets
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: com.joaopedro.poptst
+        MARKETING_VERSION: '2.8'
+        CURRENT_PROJECT_VERSION: '28'
+        ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
+        INFOPLIST_KEY_UILaunchScreen_Generation: 'YES'
+        INFOPLIST_KEY_UIApplicationSupportsDocumentBrowser: 'YES'
+        INFOPLIST_KEY_UIFileSharingEnabled: 'YES'
+        INFOPLIST_KEY_LSSupportsOpeningDocumentsInPlace: 'YES'
+        INFOPLIST_KEY_UIRequiresFullScreen: 'YES'
+        INFOPLIST_KEY_UISupportedInterfaceOrientations: 'UIInterfaceOrientationLandscapeLeft UIInterfaceOrientationLandscapeRight'
+        LD_RUNPATH_SEARCH_PATHS: '@executable_path/Frameworks'
+        OTHER_LDFLAGS: '-L$(PROJECT_DIR)/../build/ios-native -lPoPTSTRetail'
+    info:
+      path: App/Info.plist
+      properties:
+        CFBundleDisplayName: 'PoPTST B28'
+        CFBundleShortVersionString: '2.8'
+        CFBundleVersion: '28'
+        UIRequiresFullScreen: true
+        UIFileSharingEnabled: true
+        LSSupportsOpeningDocumentsInPlace: true
+        UISupportedInterfaceOrientations:
+          - UIInterfaceOrientationLandscapeLeft
+          - UIInterfaceOrientationLandscapeRight
+        NSDocumentsFolderUsageDescription: 'Importar sua própria pasta Xbox retail'

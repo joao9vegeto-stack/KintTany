@@ -1,0 +1,35 @@
+HANDOFF — PoPTST / Xbox retail native iOS
+Updated: 2026-10-21
+
+Scope: joao9vegeto-stack/KintTany ONLY in a brand-new orphan branch PoPTST.
+Invariant: ONE root commit -> ONE workflow push; no other branches or workflows.
+Latest verified PsTJohn: db014165eb39429ae37d1946db6fc83c600c63b3 (#125 success).
+Upstream FulGerNet/rePOP reSOT: 4ee36260e71d39fd8b02028fd614b1907a0d451b.
+
+This integration archive now contains a real iOS app target, native host/engine,
+retail boot, source patches, real SDL Vulkan GPU with ResotGpuQueryAPI, prebuilt
+KosmicKrisp binary retrieval by Actions, shader compilation job and IPA packaging.
+No fake runtime symbols, no mock shaders and no demo launch in project.
+
+Local tests: yaml structure, Python byte compilation, Swift frontend parsing,
+Linux C syntax of Vulkan ICD shim, static dependency wiring check: PASS.
+Mac/iOS compilation, link, iPhone GPU and gameplay: NOT RUN. IPA: NOT AVAILABLE.
+GitHub branch PoPTST: NOT CREATED. Commit/push/run: NONE MADE.
+
+Build file: .github/workflows/poptst-ios.yml. It runs automatically once when
+an initial orphan commit is pushed. Uploads PoPTST-Retail-IPA only on verified
+successful native compilation and packaging. The IPA is ad-hoc signed and must
+be resigned by the user's installer for device installation, as previous RPcs3 IPAs.
+
+Remaining major risk: cannot verify the project compiles against Apple SDK in
+Linux, including Darwin MMIO; Mac Actions must report actual clang/linker
+failures. This code is a substantive integration attempt, not a completed IPA.
+
+The Github connector accessible in this chat exposes create_commit requiring
+at least one parent_sha; it cannot produce a genuinely orphan/root commit.
+Git CLI access to github.com is blocked by network DNS in the local container.
+Do not secretly create a non-orphan branch or consume the user's workflow
+without meeting the branch invariant; use authorized GitHub git write
+environment for one orphan-root push.
+
+Source ZIP SHA256: see companion ZIP and final user response.
