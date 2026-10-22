@@ -185,9 +185,9 @@ jobs:
           plist=Path('ios/Probe-Info.plist')
           old=plist.read_text()
           for a,b in [
-            ('<key>CFBundleShortVersionString</key><string>7.69.0</string>',
+            ('<key>CFBundleShortVersionString</key><string>7.70.0</string>',
              '<key>CFBundleShortVersionString</key><string>7.90.0</string>'),
-            ('<key>CFBundleVersion</key><string>7690</string>',
+            ('<key>CFBundleVersion</key><string>7700</string>',
              '<key>CFBundleVersion</key><string>7900</string>')]:
             assert old.count(a)==1,(str(plist),a,old.count(a))
             old=old.replace(a,b)
