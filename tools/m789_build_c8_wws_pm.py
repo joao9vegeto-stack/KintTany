@@ -22,6 +22,10 @@ EXPECTED_FNV = 0xC8D774963A96DCF2
 EXPECTED_UPSTREAM = "39a36296511c445707adabcd312f0b740cfbd694"
 BASE = 0xA00
 CODE_END = BASE + EXPECTED_SIZE
+# The Ascension PC port explicitly seeds this WWS PM interrupt entry because
+# the SPU interrupt vector reaches it indirectly; normal branch discovery from
+# the module entry does not. The image itself installs the vector at 0xA2C.
+INTERRUPT_ENTRY = 0xA2C
 METADATA_WORDS = {
     0x1640: (0x2C000000, 0x00000000),
     0x1650: (0x2D000000, 0x00000000),
@@ -105,6 +109,7 @@ def main() -> None:
         run([sys.executable, str(lifter), str(raw), "--base", hex(BASE),
              "--length", hex(EXPECTED_SIZE), "--functions", str(detected),
              "--output", str(preliminary), "--symbol-prefix", PREFIX,
+             "--extra-funcs", hex(INTERRUPT_ENTRY),
              "--return-entries", "--code-end", hex(CODE_END),
              "--report", str(prelim_report)], tmp / "preliminary.log")
         prelim = json.loads(prelim_report.read_text())
@@ -126,6 +131,7 @@ def main() -> None:
              "--length", hex(EXPECTED_SIZE), "--functions", str(filtered_file),
              "--output", str(out), "--header-name", "spu_recomp.h",
              "--source-name", "spu_recomp.c", "--symbol-prefix", PREFIX,
+             "--extra-funcs", hex(INTERRUPT_ENTRY),
              "--return-entries", "--code-end", hex(CODE_END),
              "--report", str(final_report)], out / "lift.log")
         # The ps3recomp lifter emits paths relative to its own source tree.
@@ -144,8 +150,9 @@ def main() -> None:
     external = (set(result["call_targets"]) | set(result["branch_targets"])) - definitions
     if result["unsupported"]:
         raise SystemExit(f"C8 lift has unsupported instructions: {result['unsupported']}")
-    if BASE not in definitions or len(definitions) != 255:
+    if BASE not in definitions or INTERRUPT_ENTRY not in definitions or len(definitions) != 256:
         raise SystemExit(f"C8 entry/function count mismatch: entry={BASE in definitions}, "
+                         f"interrupt_entry={INTERRUPT_ENTRY in definitions}, "
                          f"functions={len(definitions)}")
     if external != EXPECTED_EXTERNAL_TARGETS:
         raise SystemExit("unexpected C8 external branch/call targets: " +
@@ -163,6 +170,8 @@ def main() -> None:
         "runtime_fnv1a64": f"0x{fnv:016X}",
         "local_store_base": f"0x{BASE:X}",
         "entry": f"0x{BASE:X}",
+        "interrupt_entry": f"0x{INTERRUPT_ENTRY:X}",
+        "interrupt_entry_reason": "SPU vector installed at LS 0x0 by PM function 0x2C30; PC port explicitly seeds this indirect entry",
         "detected_functions_before_return_splits": len(functions),
         "return_entry_splits": True,
         "metadata_slots_excluded": {

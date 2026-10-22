@@ -550,7 +550,7 @@ symbols=src/'symbols.txt'
 assert archive.is_file() and attestation.is_file() and symbols.is_file()
 a=json.loads(attestation.read_text())
 digest=hashlib.sha256(archive.read_bytes()).hexdigest()
-assert a['schema']=='ascension-m790-ios-arm64-link-input-v13'
+assert a['schema']=='ascension-m792-ios-arm64-link-input-v14'
 assert a['spu_workload_registry']=='NPUA80918-four-embedded-images-plus-C8-WWS-id6-plus-31-ELF-WWS-overlays-registered-200-230-v1'
 assert a['spurs_ascension_wws_policy']=='tempArea-128-byte-entry-and-poll-refresh-readyCount-level-rotating-spu-v1'
 assert a['spu_workload_registry_units_compiled']==5
@@ -571,7 +571,9 @@ assert a['wws_job_module_data_islands']=={
     'jobmod_00818600_eA00':[['0x83A0','0x8A48']]}
 assert a['wws_job_overlay_registration']=='explicit-m772-runtime-init-no-static-constructor-v1'
 assert a['wws_pm_role_routing']=='registered-name-bitmap-routes-NPUA-image-5-and-C8-image-6-before-WWS-job-dispatch-v1'
-assert a['c8_wws_lift_source_sha256']=='832ee5bebf19c28f496b7e1e47f49078287f4573ae7367b4dc14a8a9390d420f'
+assert a['c8_wws_lift_source_sha256']=='a3506c57f9e104f502f57add07135b1c0094f25b7debf25d0568ecbce7c293c6'
+assert a['c8_wws_interrupt_entry']=='0xA2C'
+assert a['c8_wws_native_functions']==256
 assert a['spurs_pm_runtime_diagnostics_dependency']=='separate-PS3Recomp-runtime-archive-verified-at-final-MachO-v1'
 assert a['upstream_commit']=='39a36296511c445707adabcd312f0b740cfbd694'
 assert a['ios_vfs_mount_patch']=='npua80918-and-app-home-usrdir-v1'
@@ -722,10 +724,11 @@ for symbol in ("_gowa_spu_register_c8_wws_pm",
                "_g_spu_wws_pm_image_mask",
                "jobmod_00818600_eA00_spu_func_00004A00",
                "_wws_pm_c8d774_spu_func_00000A00",
+               "_wws_pm_c8d774_spu_func_00000A2C",
                "_wws_pm_c8d774_spu_recomp_register"):
     if not any(symbol in name for name in defined):
         raise SystemExit("M7.90 exact NPUA WWS job lift/C8 PM or runtime routing missing from final Mach-O: "+symbol)
-print("M7.90 final ARM64 Mach-O contains 31 NPUA WWS job lifts, exact C8 PM, and PS3Recomp runtime")
+print("M7.92 final ARM64 Mach-O contains 31 NPUA WWS job lifts and the exact C8 PM interrupt entry 0xA2C")
 PYM772LINKED
 # Every M7.62 native function must appear in the FINAL Mach-O, not merely object.
 python3 - <<'PY'
@@ -1059,5 +1062,5 @@ shasum -a 256 AscensionRecompProbe-0.6.22-unsigned.ipa > m41-ipa-sha256.txt
 cp AscensionRecompProbe-0.6.22-unsigned.ipa AscensionRecompProbe-7.69.0-unsigned.ipa
 IPA_VERSION=$(/usr/libexec/PlistBuddy -c 'Print CFBundleShortVersionString' "$APP/Info.plist")
 cp AscensionRecompProbe-0.6.22-unsigned.ipa "AscensionRecompProbe-${IPA_VERSION}-unsigned.ipa"
-shasum -a 256 "AscensionRecompProbe-${IPA_VERSION}-unsigned.ipa" > m791-ipa-sha256.txt
+shasum -a 256 "AscensionRecompProbe-${IPA_VERSION}-unsigned.ipa" > m792-ipa-sha256.txt
 echo 'UNSIGNED DIAGNOSTIC APP: UIKit CAMetalLayer + real PS3Recomp Metal backend; NO GOWA GAME included' > m41-status.txt

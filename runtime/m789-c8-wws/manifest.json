@@ -7,6 +7,8 @@
   "runtime_fnv1a64": "0xC8D774963A96DCF2",
   "local_store_base": "0xA00",
   "entry": "0xA00",
+  "interrupt_entry": "0xA2C",
+  "interrupt_entry_reason": "SPU vector installed at LS 0x0 by PM function 0x2C30; PC port explicitly seeds this indirect entry",
   "detected_functions_before_return_splits": 194,
   "return_entry_splits": true,
   "metadata_slots_excluded": {
@@ -28,14 +30,14 @@
     ]
   },
   "metadata_slots_have_branch_or_call_references": false,
-  "native_functions": 255,
+  "native_functions": 256,
   "unsupported_instructions": {},
   "external_targets": [
     "0x3FEC0"
   ],
   "external_target_resolution": "ps3recomp SPURS runtime-generated kernel stub",
-  "generated_source_sha256": "832ee5bebf19c28f496b7e1e47f49078287f4573ae7367b4dc14a8a9390d420f",
-  "generated_header_sha256": "3c9af78b4fbcad3790bbc3722a41c28e4987e084b72231e8535b8a1f18d6b4ad",
+  "generated_source_sha256": "a3506c57f9e104f502f57add07135b1c0094f25b7debf25d0568ecbce7c293c6",
+  "generated_header_sha256": "56b214fd997a67213340fe12b441d5770112e68914e8d71ada81fe7c74d14bf2",
   "device_execution": "NOT_MEASURED",
   "guest_draws": "NOT_MEASURED",
   "guest_flips": "NOT_MEASURED"

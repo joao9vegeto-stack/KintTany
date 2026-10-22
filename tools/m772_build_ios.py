@@ -468,7 +468,8 @@ def main():
             c8_manifest.get("runtime_fnv1a64") != "0xC8D774963A96DCF2" or
             c8_manifest.get("local_store_base") != "0xA00" or
             c8_manifest.get("entry") != "0xA00" or
-            c8_manifest.get("native_functions") != 255 or
+            c8_manifest.get("interrupt_entry") != "0xA2C" or
+            c8_manifest.get("native_functions") != 256 or
             c8_manifest.get("unsupported_instructions") != {} or
             c8_manifest.get("external_targets") != ["0x3FEC0"]):
         raise SystemExit("M7.89 C8 lift provenance, entry, function coverage, or decoder report changed")
@@ -478,6 +479,12 @@ def main():
             c8_manifest.get("generated_header_sha256")):
         raise SystemExit("M7.89 C8 generated source does not match its lift manifest")
     c8_registry_text = c8_registry.read_text(errors="replace")
+    c8_source_text = c8_source.read_text(errors="replace")
+    c8_header_text = c8_header.read_text(errors="replace")
+    if ("wws_pm_c8d774_spu_func_00000A2C" not in c8_source_text or
+            "wws_pm_c8d774_spu_func_00000A2C" not in c8_header_text or
+            "0x00000A2Cu" not in c8_source_text):
+        raise SystemExit("M7.92 C8 interrupt entry 0xA2C is not emitted in the native lift table")
     for marker in ("gowa_spu_register_c8_wws_pm", "wws_pm_c8d774_spu_func_00000A00",
                    "0xC8D774963A96DCF2", '6, "wws_pm_c8d774_12288"'):
         if marker not in c8_registry_text:
@@ -691,7 +698,8 @@ def main():
                 "_wws_pm_npua_spu_recomp_register",
                 "_wws_pm_npua_spu_func_00000A00",
                 "_wws_pm_c8d774_spu_recomp_register",
-                "_wws_pm_c8d774_spu_func_00000A00"]
+                "_wws_pm_c8d774_spu_func_00000A00",
+                "_wws_pm_c8d774_spu_func_00000A2C"]
     defined = set()
     for line in symbol_text.splitlines():
         fields = line.split()
@@ -703,7 +711,7 @@ def main():
         raise SystemExit(f"M7.72 required ARM64 archive symbols missing: {missing}")
 
     result = {
-        "schema": "ascension-m790-ios-arm64-link-input-v13",
+        "schema": "ascension-m792-ios-arm64-link-input-v14",
         "upstream_commit": actual,
         "ios_vfs_mount_patch": "npua80918-and-app-home-usrdir-v1",
         "ios_vm_mapping_patch": "mach-anywhere-4g-relative-guest-ea-v1",
@@ -716,6 +724,8 @@ def main():
         "spu_workload_registry": "NPUA80918-four-embedded-images-plus-C8-WWS-id6-plus-31-ELF-WWS-overlays-registered-200-230-v1",
         "c8_wws_lift_manifest": "runtime/m789-c8-wws/manifest.json",
         "c8_wws_lift_source_sha256": c8_manifest["generated_source_sha256"],
+        "c8_wws_interrupt_entry": c8_manifest["interrupt_entry"],
+        "c8_wws_native_functions": c8_manifest["native_functions"],
         "c8_wws_image_id": 6,
         "wws_job_modules": len(jobmods_manifest),
         "wws_job_module_functions_lifted": sum(int(item["funcs"]) for item in jobmods_manifest),

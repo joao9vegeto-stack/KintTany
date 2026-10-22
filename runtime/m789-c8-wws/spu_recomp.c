@@ -17,6 +17,23 @@ void wws_pm_c8d774_spu_func_00000A00(spu_context* ctx) {
         { ctx->pc = 0x2C30; g_spu_trampoline_fn = wws_pm_c8d774_spu_func_00002C30; return; }
 }
 
+void wws_pm_c8d774_spu_func_00000A2C(spu_context* ctx) {
+        /* nop */;
+        /* nop */;
+        spu_ls_write128(ctx, 0x1590, ctx->gpr[78]);
+        ctx->gpr[78] = spu_il(0);
+        /* branch hint (ignored) */;
+        spu_ls_write128(ctx, 0x3FE80, ctx->gpr[76]);
+        spu_ls_write128(ctx, 0x3FE90, ctx->gpr[77]);
+        spu_ls_write128(ctx, 0x3FEA0, ctx->gpr[78]);
+        spu_ls_write128(ctx, 0x3FEB0, ctx->gpr[79]);
+        ctx->gpr[76] = spu_ila(0x3FEC0);
+        ctx->gpr[77] = spu_ls_read128(ctx, 0xA40);
+        ctx->gpr[78] = spu_ila(0x130);
+        ctx->gpr[79] = spu_ila(0x804);
+        { ctx->pc = 0xA60; g_spu_trampoline_fn = wws_pm_c8d774_spu_func_00000A60; return; }
+}
+
 void wws_pm_c8d774_spu_func_00000A60(spu_context* ctx) {
 loc_00000A60:
         ctx->gpr[77] = spu_sf(ctx->gpr[79], ctx->gpr[77]);
@@ -3284,6 +3301,7 @@ void wws_pm_c8d774_spu_func_0003FEC0(spu_context* ctx) {
 typedef struct { uint32_t addr; void (*func)(spu_context*); const char* name; } spu_func_entry;
 static const spu_func_entry spu_function_table[] = {
     { 0x00000A00u, wws_pm_c8d774_spu_func_00000A00, "wws_pm_c8d774_spu_func_00000A00" },
+    { 0x00000A2Cu, wws_pm_c8d774_spu_func_00000A2C, "wws_pm_c8d774_spu_func_00000A2C" },
     { 0x00000A60u, wws_pm_c8d774_spu_func_00000A60, "wws_pm_c8d774_spu_func_00000A60" },
     { 0x00000A84u, wws_pm_c8d774_spu_func_00000A84, "wws_pm_c8d774_spu_func_00000A84" },
     { 0x00000A90u, wws_pm_c8d774_spu_func_00000A90, "wws_pm_c8d774_spu_func_00000A90" },

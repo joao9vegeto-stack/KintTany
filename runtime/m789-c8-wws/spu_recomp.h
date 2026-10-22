@@ -64,6 +64,7 @@ void spu_trace_rt(spu_context* ctx, uint32_t rt);
 
 
 void wws_pm_c8d774_spu_func_00000A00(spu_context* ctx);
+void wws_pm_c8d774_spu_func_00000A2C(spu_context* ctx);
 void wws_pm_c8d774_spu_func_00000A60(spu_context* ctx);
 void wws_pm_c8d774_spu_func_00000A84(spu_context* ctx);
 void wws_pm_c8d774_spu_func_00000A90(spu_context* ctx);
