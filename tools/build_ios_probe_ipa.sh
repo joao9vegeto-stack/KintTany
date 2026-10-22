@@ -550,10 +550,12 @@ symbols=src/'symbols.txt'
 assert archive.is_file() and attestation.is_file() and symbols.is_file()
 a=json.loads(attestation.read_text())
 digest=hashlib.sha256(archive.read_bytes()).hexdigest()
-assert a['schema']=='ascension-m772-ios-arm64-link-input-v11'
-assert a['spu_workload_registry']=='NPUA80918-four-embedded-images-plus-WWS-PM-CE052ACDA7412063-only-capture-unassociated-runtime-PM-v3'
+assert a['schema']=='ascension-m772-ios-arm64-link-input-v12'
+assert a['spu_workload_registry']=='NPUA80918-four-embedded-images-plus-separate-NPUA-WWS-id5-and-exact-C8D774963A96DCF2-WWS-native-lift-id6-v4'
 assert a['spurs_ascension_wws_policy']=='tempArea-128-byte-entry-and-poll-refresh-readyCount-level-rotating-spu-v1'
-assert a['spu_workload_registry_units_compiled']==2
+assert a['spu_workload_registry_units_compiled']==4
+assert a['c8_wws_image_id']==6
+assert a['c8_wws_lift_source_sha256']=='832ee5bebf19c28f496b7e1e47f49078287f4573ae7367b4dc14a8a9390d420f'
 assert a['spurs_pm_runtime_diagnostics_dependency']=='separate-PS3Recomp-runtime-archive-verified-at-final-MachO-v1'
 assert a['upstream_commit']=='39a36296511c445707adabcd312f0b740cfbd694'
 assert a['ios_vfs_mount_patch']=='npua80918-and-app-home-usrdir-v1'
