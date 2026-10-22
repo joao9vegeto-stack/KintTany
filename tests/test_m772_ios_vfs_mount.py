@@ -17,9 +17,10 @@ class M772IOSVfsMountTests(unittest.TestCase):
         workflow = (ROOT / ".github" / "workflows" / "ascension-recomp-m0.yml").read_text()
         cached_archive_check = workflow.split("for name in ('func_00010410'", 1)[1]
         cached_archive_check = cached_archive_check.split("except Exception as error:", 1)[0]
-        runtime_gate = workflow.split("M772_HLE_REQUIRED_SYMBOLS=(", 1)[1]
+        runtime_gate = workflow.split("M772_REQUIRED_RUNTIME_SYMBOLS=(", 1)[1]
         runtime_gate = runtime_gate.split(")", 1)[0]
-        for symbol in ("_cellSpursResetAscensionMetrics", "_cellSpursCopyAscensionMetrics"):
+        for symbol in ("_cellSpursResetAscensionMetrics", "_cellSpursCopyAscensionMetrics",
+                       "_cellSpursCopyAscensionPmDiagnostics"):
             self.assertNotIn(symbol, build.split("required = [", 1)[1].split("defined = set()", 1)[0])
             self.assertNotIn(symbol, cached_archive_check)
             self.assertIn(symbol, runtime_gate)
@@ -103,6 +104,14 @@ extern "C" void ps3_hle_call(uint32_t nid, ppu_context* ctx)
         self.assertIn("a['ios_vfs_mount_patch']=='" + patch + "'", build)
         self.assertIn("a['ios_vfs_mount_patch']=='" + patch + "'", workflow)
         self.assertIn('"ios_vfs_mount_patch": "' + patch + '"', attestation)
+        schema = "ascension-m772-ios-arm64-link-input-v9"
+        self.assertIn("assert a['schema']=='" + schema + "'", build)
+        self.assertIn("assert a['schema']=='" + schema + "'", workflow)
+        self.assertIn('"schema": "' + schema + '"', attestation)
+        dependency = "separate-PS3Recomp-runtime-archive-verified-at-final-MachO-v1"
+        self.assertIn("spurs_pm_runtime_diagnostics_dependency", attestation)
+        self.assertIn(dependency, build)
+        self.assertIn(dependency, workflow)
 
     def test_unaligned_guest_vm_patch_covers_both_pointer_narrowing_forms(self):
         build = (ROOT / "tools" / "m772_build_ios.py").read_text()
