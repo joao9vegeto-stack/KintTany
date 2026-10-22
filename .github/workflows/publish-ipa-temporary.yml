@@ -30,10 +30,17 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          run_id="$(tr -cd '0-9' < .publish-ipa-run-id.txt)"
+          marker="$(tr -d '\r\n' < .publish-ipa-run-id.txt)"
+          if [[ "$marker" == "CLEANUP_ONLY" ]]; then
+            echo "mode=cleanup" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          run_id="$(printf '%s' "$marker" | tr -cd '0-9')"
           test -n "$run_id"
+          echo "mode=publish" >> "$GITHUB_OUTPUT"
           echo "value=$run_id" >> "$GITHUB_OUTPUT"
       - name: Confirm source run succeeded on AscensionRecomp
+        if: github.event_name == 'workflow_dispatch' || steps.selected-run.outputs.mode == 'publish'
         uses: actions/github-script@v7
         env:
           SOURCE_RUN_ID: ${{ inputs.run_id || steps.selected-run.outputs.value }}
@@ -49,6 +56,7 @@ jobs:
               throw new Error("Source run is not a successful AscensionRecomp M7.85 build");
             }
       - name: Download the exact built IPA artifact
+        if: github.event_name == 'workflow_dispatch' || steps.selected-run.outputs.mode == 'publish'
         uses: actions/download-artifact@v4
         with:
           name: AscensionRecomp-M7.85.0-LAUNCHER-ARM64
@@ -59,6 +67,7 @@ jobs:
 
       - name: Validate and publish only the IPA
         id: publish
+        if: github.event_name == 'workflow_dispatch' || steps.selected-run.outputs.mode == 'publish'
         shell: bash
         run: |
           set -euo pipefail
@@ -122,7 +131,7 @@ jobs:
               core.notice("No matching Actions IPA artifact remained to delete.");
             }
       - name: Remove uploaded media and game archives from AscensionRecomp history
-        if: steps.publish.outcome == 'success'
+        if: steps.selected-run.outputs.mode == 'cleanup' || steps.publish.outcome == 'success'
         continue-on-error: true
         shell: bash
         env:
@@ -130,12 +139,15 @@ jobs:
         run: |
           set -euo pipefail
           python3 -m pip install --quiet --prefix "$RUNNER_TEMP/filter-repo" git-filter-repo
-          export PATH="$RUNNER_TEMP/filter-repo/bin:$PATH"
+          filter_root="$RUNNER_TEMP/filter-repo"
+          filter_script="$(find "$filter_root/bin" -maxdepth 1 -type f -name 'git-filter-repo' -print -quit)"
+          package_dir="$(find "$filter_root/lib" -type d -name site-packages -print -quit)"
+          test -n "$filter_script" && test -n "$package_dir"
           rewrite="$RUNNER_TEMP/ascension-history-clean"
           git clone --quiet --branch AscensionRecomp --single-branch --no-tags \
             "https://x-access-token:${GH_TOKEN}@github.com/${GITHUB_REPOSITORY}.git" "$rewrite"
           old_head="$(git -C "$rewrite" rev-parse refs/heads/AscensionRecomp)"
-          git -C "$rewrite" filter-repo --force --invert-paths \
+          PYTHONPATH="$package_dir" "$filter_script" --force --invert-paths \
             --path-glob '*.mov' --path-glob '*.MOV' --path-glob '*.ips' \
             --path-glob '*.jpg' --path-glob '*.JPG' \
             --path '7.79.zip' --path 'Arquivo.zip' --path 'arquivos.zip' \
