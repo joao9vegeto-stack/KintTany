@@ -1979,20 +1979,12 @@ jobs:
               print(f'M7.78 archive candidate rejected; fresh ARM64 build will run: {error}')
           else:
               print('M7.93 archive candidate includes the byte-verified C8 interrupt entry 0xA2C')
-      - name: M7.93 extract NPUA WWS overlays with the C8 0xA2C interrupt entry
+      - name: M7.93 verify and stage native NPUA WWS job modules
         run: |
           set -euo pipefail
-          git clone --filter=blob:none https://github.com/RichardFontoura/gowa-pc.git "$RUNNER_TEMP/gowa-pc"
-          git -C "$RUNNER_TEMP/gowa-pc" checkout --detach 45840d709a4e48a1d12d0803e323ba5c8568ab2a
-          test "$(git -C "$RUNNER_TEMP/gowa-pc" rev-parse HEAD)" = "45840d709a4e48a1d12d0803e323ba5c8568ab2a"
-          git clone --filter=blob:none https://github.com/RichardFontoura/ps3recomp.git "$RUNNER_TEMP/ps3recomp-gowa-fixes"
-          git -C "$RUNNER_TEMP/ps3recomp-gowa-fixes" checkout --detach f6ab60baf37662bd712592b7ef9f66891972a5fc
-          test "$(git -C "$RUNNER_TEMP/ps3recomp-gowa-fixes" rev-parse HEAD)" = "f6ab60baf37662bd712592b7ef9f66891972a5fc"
-          python3 tools/m790_prepare_jobmods.py \
-            --archive Arq.zip \
-            --out "$RUNNER_TEMP/m790-jobmods" \
-            --gowa-pc "$RUNNER_TEMP/gowa-pc" \
-            --ps3recomp "$RUNNER_TEMP/ps3recomp-gowa-fixes" | tee m790-jobmods-lift.log
+          python3 tools/m790_stage_jobmods.py \
+            --source runtime/m790-npua-jobmods \
+            --out "$RUNNER_TEMP/m790-jobmods/lifted" | tee m790-jobmods-stage.log
           echo "M772_JOBMOD_LIFT_DIR=$RUNNER_TEMP/m790-jobmods/lifted" >> "$GITHUB_ENV"
       - name: M7.93 compile and link native iOS launcher with the C8 0xA2C interrupt entry
         run: |
@@ -2185,7 +2177,9 @@ jobs:
             docs/M7.90-native-wws-job-overlays.md
             docs/M7.91-lwcond-blocking-semantics.md
             tools/m790_prepare_jobmods.py
-            m790-jobmods-lift.log
+            tools/m790_stage_jobmods.py
+            runtime/m790-npua-jobmods/
+            m790-jobmods-stage.log
             m793-ipa-sha256.txt
             m764-final-attestation.json
             m764c-final-attestation.json

@@ -1,0 +1,342 @@
+{
+  "schema": "ascension-m790-generated-wws-source-sha256-v1",
+  "generator": "tools/m790_prepare_jobmods.py",
+  "gowa_pc_commit": "45840d709a4e48a1d12d0803e323ba5c8568ab2a",
+  "ps3recomp_commit": "f6ab60baf37662bd712592b7ef9f66891972a5fc",
+  "source_title": "UP9000-NPUA80918",
+  "modules": 31,
+  "lifted_functions": 20418,
+  "unsupported_executable_words": 0,
+  "files": [
+    {
+      "path": "jobmod_006F4A00_e2508/spu_recomp.c",
+      "size": 260633,
+      "sha256": "fdaab7a0d378bea3e29ca5a40585c96747a8061145c0cf658f26839cb52cda20"
+    },
+    {
+      "path": "jobmod_006F4A00_e2508/spu_recomp.h",
+      "size": 27382,
+      "sha256": "6b21e663da13bcc0a6e96f62629c5235a7f65371dd43bd7d10a0eec18babc9e2"
+    },
+    {
+      "path": "jobmod_006F7200_e12D8/spu_recomp.c",
+      "size": 167854,
+      "sha256": "4453701bb39921e2ba2aaadec94b519e07ebf34e1735e9cdfd06ac173a96337b"
+    },
+    {
+      "path": "jobmod_006F7200_e12D8/spu_recomp.h",
+      "size": 23798,
+      "sha256": "cb0c4822188d38ed3fe50b82c6af7a58459c9828fcea75e975eabcea0a22366d"
+    },
+    {
+      "path": "jobmod_006F8800_eC4D8/spu_recomp.c",
+      "size": 1086360,
+      "sha256": "fd9af6247aace0d231a07ce4888d5ee6de93c4898554ce949824e98c44f7e3a9"
+    },
+    {
+      "path": "jobmod_006F8800_eC4D8/spu_recomp.h",
+      "size": 84982,
+      "sha256": "9be6352d3f27782cf27cd9e92f9376f90813caca61617108ade755d680dbbf69"
+    },
+    {
+      "path": "jobmod_00705680_e10CF8/spu_recomp.c",
+      "size": 1714251,
+      "sha256": "efed3e7a8b7205013da0e529cd60b05636caa51a241de36e460d1aabc3f07cba"
+    },
+    {
+      "path": "jobmod_00705680_e10CF8/spu_recomp.h",
+      "size": 116680,
+      "sha256": "ffac84c1d228e4a8fa50fc46e72611f0f29893f48a8f104a509ae8773b18d347"
+    },
+    {
+      "path": "jobmod_00719800_e30/spu_recomp.c",
+      "size": 280128,
+      "sha256": "b75183175f0ba60021dc72d3c8342094cc023485d917607acd4152d0b129253e"
+    },
+    {
+      "path": "jobmod_00719800_e30/spu_recomp.h",
+      "size": 31772,
+      "sha256": "13da588f59636f1adb457ea344a753ce1673229423037682e6a9492ccab276cc"
+    },
+    {
+      "path": "jobmod_0071C200_e138/spu_recomp.c",
+      "size": 31217,
+      "sha256": "92a5d05f4f13e3f8388c21b66eca7dea631f8644e5d1070a58339ad7b596e071"
+    },
+    {
+      "path": "jobmod_0071C200_e138/spu_recomp.h",
+      "size": 8167,
+      "sha256": "5c3b90e7b7e9bd89fa95c01b62b8fcb03faf378796d77609c6575040b1e6790b"
+    },
+    {
+      "path": "jobmod_0071C500_e77C8/spu_recomp.c",
+      "size": 992030,
+      "sha256": "8425e6f864e69fa8ed311246f06e123f8326466466ee52f4e6dbbefadcab7fb2"
+    },
+    {
+      "path": "jobmod_0071C500_e77C8/spu_recomp.h",
+      "size": 70198,
+      "sha256": "33aca63ee5697c06f72dbdd8e6a7ac127fc70b28515c69bf55a3e28069efc655"
+    },
+    {
+      "path": "jobmod_00728400_e7F60/spu_recomp.c",
+      "size": 652714,
+      "sha256": "63bea3b31a51e9e03a64f4e135531538ef9600f4443e811b16d6ee11e3b4520d"
+    },
+    {
+      "path": "jobmod_00728400_e7F60/spu_recomp.h",
+      "size": 36470,
+      "sha256": "3a33dde8ac40625c5f77cd15368b65ed9ac51bb931d76dc8c0ea21f4ce3a9b9b"
+    },
+    {
+      "path": "jobmod_00730800_e41E8/spu_recomp.c",
+      "size": 388477,
+      "sha256": "abd4db758a236776dbf370edcb7645f7f38d942cc7bded10c584fcefb284739d"
+    },
+    {
+      "path": "jobmod_00730800_e41E8/spu_recomp.h",
+      "size": 30518,
+      "sha256": "8f2d9c7b11951f9a518f68dfe5975da15bec034cee65fc1c94e01e64836d0294"
+    },
+    {
+      "path": "jobmod_00735700_e1B30/spu_recomp.c",
+      "size": 185855,
+      "sha256": "8fc96fba8d2b5c7c09c7da91afe2027e669800ed923ad9fdf00dd1af3438a795"
+    },
+    {
+      "path": "jobmod_00735700_e1B30/spu_recomp.h",
+      "size": 20470,
+      "sha256": "20b20ff25a5dde63ac086936c7fa1c2b57f1ad998ce60c3a6c4990141d805227"
+    },
+    {
+      "path": "jobmod_00737580_e6D98/spu_recomp.c",
+      "size": 1027879,
+      "sha256": "2639ceb4f16b25c6b96803e4001f78674d04142962c9a1324041ed981ef6a6ad"
+    },
+    {
+      "path": "jobmod_00737580_e6D98/spu_recomp.h",
+      "size": 72374,
+      "sha256": "dfadaffcc03324a3dce3427540991aab7383c8bf4c1327447c193640a8c3cb4d"
+    },
+    {
+      "path": "jobmod_00743A00_e3830/spu_recomp.c",
+      "size": 342215,
+      "sha256": "f1b98b0b9b39c94118dcc684f35f89bca3ebcf9fec8322243b690b610b65258a"
+    },
+    {
+      "path": "jobmod_00743A00_e3830/spu_recomp.h",
+      "size": 31222,
+      "sha256": "4698b71519f52b655622804f70e6c5e48c4c5a2fca0f7461a32e5b8312bdd13c"
+    },
+    {
+      "path": "jobmod_00747600_eB48/spu_recomp.c",
+      "size": 90845,
+      "sha256": "d001dd76d8a9e84393d80fabaeb40b01e135f0b07ef26eb50b709edad18e4339"
+    },
+    {
+      "path": "jobmod_00747600_eB48/spu_recomp.h",
+      "size": 12703,
+      "sha256": "5b34943c91d0af1697f152c7ed8492b8166374013353787e2ecc5b12755a97ab"
+    },
+    {
+      "path": "jobmod_00748400_e450/spu_recomp.c",
+      "size": 100107,
+      "sha256": "5163f9b998489b7a5a025f9657462e0a193fe5ab95efd7681b82426e552c5e33"
+    },
+    {
+      "path": "jobmod_00748400_e450/spu_recomp.h",
+      "size": 16420,
+      "sha256": "92a0132ddba0716502f1589d87763fe690410dec8ac8e73c06b438c01fa542e7"
+    },
+    {
+      "path": "jobmod_00749080_eC40/spu_recomp.c",
+      "size": 113031,
+      "sha256": "b20f9708fdadffc1ab860da67e19859185c8b874ccceff635ac5bb93d310a9ea"
+    },
+    {
+      "path": "jobmod_00749080_eC40/spu_recomp.h",
+      "size": 15979,
+      "sha256": "5fbdc8e65df25f2aa6f92ad2e2cddcefe4dfb3978f74d23ab3b4c5624860a6c6"
+    },
+    {
+      "path": "jobmod_0074A180_eC60/spu_recomp.c",
+      "size": 113738,
+      "sha256": "425fbd8a9a04be85a9aeb32ea7859ad99046b69d85e42673ac9c1e4f6457d053"
+    },
+    {
+      "path": "jobmod_0074A180_eC60/spu_recomp.h",
+      "size": 16798,
+      "sha256": "d495d090f6d75d23510b849f6a3c2c83a839159f6d71f368e1c7f97998b43ce7"
+    },
+    {
+      "path": "jobmod_0074B100_e30/spu_recomp.c",
+      "size": 355535,
+      "sha256": "ea3a6b5665a2fc2d9e0a359300185d0ce7914db3ed966fd754e3b0d6d162399f"
+    },
+    {
+      "path": "jobmod_0074B100_e30/spu_recomp.h",
+      "size": 38964,
+      "sha256": "b201aa654ec67329d2c0c1a9a2f63ded8ab0ad15e96f33cbcc8274d494ea3c90"
+    },
+    {
+      "path": "jobmod_00766280_e136E0/spu_recomp.c",
+      "size": 1680781,
+      "sha256": "947ba56edafb17157cf23f9c16e865d3fddab76d13ad97d84ac7d7e71df02c16"
+    },
+    {
+      "path": "jobmod_00766280_e136E0/spu_recomp.h",
+      "size": 97895,
+      "sha256": "02f0afa506556c65c5cae111fd4fd6116012b1d6613ac411a936d6436a6cc16c"
+    },
+    {
+      "path": "jobmod_0077A580_e10208/spu_recomp.c",
+      "size": 1419009,
+      "sha256": "46a487ce5f05dd9d67c5a671202df27b50597f8b9fa248b648bf23ba219deb3c"
+    },
+    {
+      "path": "jobmod_0077A580_e10208/spu_recomp.h",
+      "size": 89705,
+      "sha256": "451d49c9960242e847ea56d481e7eaaea624c594e1a78de175f3adf03878a396"
+    },
+    {
+      "path": "jobmod_0078B380_e7B40/spu_recomp.c",
+      "size": 752729,
+      "sha256": "6940e2ace6eb3cb0bf3f9ea6f86dea19fe3d89ee5733d3e4e5fb3a705ad7496c"
+    },
+    {
+      "path": "jobmod_0078B380_e7B40/spu_recomp.h",
+      "size": 67894,
+      "sha256": "5224019a8f6a6f4cb3affb38e2bb58c5dc7b779bdbf9f2ac2823d60c51a057b9"
+    },
+    {
+      "path": "jobmod_00793500_e6978/spu_recomp.c",
+      "size": 605214,
+      "sha256": "d533c09bcf9fdd3f7c1105392df0e7ca319bc40d82a966681f68ef7a5c578529"
+    },
+    {
+      "path": "jobmod_00793500_e6978/spu_recomp.h",
+      "size": 50038,
+      "sha256": "ce8d05fd5447c809b3b049fb784a1fa8a7f6fd8da280f1dc7bfc9df8f1019633"
+    },
+    {
+      "path": "jobmod_0079A580_e30/spu_recomp.c",
+      "size": 190046,
+      "sha256": "cbbbdce92afa222877af49522ed227d1d7f19ec5ff447e1105cf8acf49bed0f6"
+    },
+    {
+      "path": "jobmod_0079A580_e30/spu_recomp.h",
+      "size": 19372,
+      "sha256": "4d38d7108d24d022f9e65af90348d0b9740a52614ec66d212dc690fb41f5e0e1"
+    },
+    {
+      "path": "jobmod_0079C400_e8F70/spu_recomp.c",
+      "size": 852399,
+      "sha256": "3eb54368945928e66e5dab60a675488642087d2e31d1a55787b0615b8cfb99b0"
+    },
+    {
+      "path": "jobmod_0079C400_e8F70/spu_recomp.h",
+      "size": 69430,
+      "sha256": "e3fa687c66d1d67ef429ca0c7b6c3e69228eef2345230ae3334bf19e38a15e78"
+    },
+    {
+      "path": "jobmod_007A5C80_e1258/spu_recomp.c",
+      "size": 173007,
+      "sha256": "300f2348673ad576e8266ede855452afbb6a975ae3b3999cdd402d596f7443fb"
+    },
+    {
+      "path": "jobmod_007A5C80_e1258/spu_recomp.h",
+      "size": 24758,
+      "sha256": "a66bccaa60b4a6bcc15e397e1e7cceb72a4a7628541d7ea3de5edcee385b867e"
+    },
+    {
+      "path": "jobmod_007A7200_e270/spu_recomp.c",
+      "size": 75730,
+      "sha256": "ff707552f75183a674a1b0cdf197688e3923aeb53a1e625ab23253e3c7b40f96"
+    },
+    {
+      "path": "jobmod_007A7200_e270/spu_recomp.h",
+      "size": 14152,
+      "sha256": "8f6dc3ff740868a5055c18e533497332ea1ba56b8dc9551afe805b36a00d4d7d"
+    },
+    {
+      "path": "jobmod_007AAE00_eAF80/spu_recomp.c",
+      "size": 1235696,
+      "sha256": "6ca8c6815d31f0c494a17a92863102bb3a752c514be90ed49993b1e8d087c888"
+    },
+    {
+      "path": "jobmod_007AAE00_eAF80/spu_recomp.h",
+      "size": 54518,
+      "sha256": "9f12be77cc30759a920974e9e78eca3181c4d96d18c41d8bd7421b31ed530422"
+    },
+    {
+      "path": "jobmod_007BFC80_e16A80/spu_recomp.c",
+      "size": 2118209,
+      "sha256": "9f229874d0c35f35cf5fcadbb026b75e4e7427210c6acbea8b684a3d2d28af5f"
+    },
+    {
+      "path": "jobmod_007BFC80_e16A80/spu_recomp.h",
+      "size": 80800,
+      "sha256": "4df13809f23059b061a941e3d759155f3b4a0168465cbf47e64f63176a0190b9"
+    },
+    {
+      "path": "jobmod_007E1C00_e11A08/spu_recomp.c",
+      "size": 1764208,
+      "sha256": "6b33c6f0aefa7740b0c04f7339d0e48d2faadbd0ff1bfa3c2718eb1d177e1173"
+    },
+    {
+      "path": "jobmod_007E1C00_e11A08/spu_recomp.h",
+      "size": 75210,
+      "sha256": "c4897e726807532510df2db02a7959032fb037181ac626b8079496d08dd584f3"
+    },
+    {
+      "path": "jobmod_007FF280_eE430/spu_recomp.c",
+      "size": 1490751,
+      "sha256": "8b48cee851be407ba94d9658eaf45c06094e1e409a54357b1459d4e788928a64"
+    },
+    {
+      "path": "jobmod_007FF280_eE430/spu_recomp.h",
+      "size": 72758,
+      "sha256": "323b6d9f1e94eeeb4e0c53125e4fce365a4a24030edd4e2aacc66f2266465f21"
+    },
+    {
+      "path": "jobmod_00818600_eA00/_functions.json",
+      "size": 9184,
+      "sha256": "7c9920e9fd36cebfab0ddf9db35e1b08dd9ce45aacabb7e2273d66a236c652ab"
+    },
+    {
+      "path": "jobmod_00818600_eA00/spu_recomp.c",
+      "size": 329569,
+      "sha256": "36bacde55c81395a1207a020b66ae8be9f751fc916914d0dcf931dbf8026c2b1"
+    },
+    {
+      "path": "jobmod_00818600_eA00/spu_recomp.h",
+      "size": 21460,
+      "sha256": "700c9a22be8e94ba0b1cf4050d934730a87ae94e6dfa29b1eee4edb157436dc0"
+    },
+    {
+      "path": "jobmod_0084BE40_e9DA8/spu_recomp.c",
+      "size": 652923,
+      "sha256": "1129c507bbe2ff66b0ad2836d9db723396f71ed157ba6476320c56e7fad13a35"
+    },
+    {
+      "path": "jobmod_0084BE40_e9DA8/spu_recomp.h",
+      "size": 17654,
+      "sha256": "aebd5927104d8e965d3023ccf944557dd0eb6dc04697b1886b295efd5c425d95"
+    },
+    {
+      "path": "jobmods_attestation.json",
+      "size": 855,
+      "sha256": "02137577bdbb06cd0828201d5e01ef34ea19d43a788ddbacae8f163f3171b506"
+    },
+    {
+      "path": "jobmods_manifest.json",
+      "size": 7840,
+      "sha256": "7911a463a331782fc215411c5ed5d6775f1c3ffcbc4a2493f568fd46a15c40a0"
+    },
+    {
+      "path": "jobmods_register.c",
+      "size": 11294,
+      "sha256": "dc8cee984c2498383efc3171c541443af258bac3499de602082363e24e03779b"
+    }
+  ]
+}

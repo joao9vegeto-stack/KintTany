@@ -1,0 +1,33 @@
+{
+  "schema": "ascension-m790-elf-jobmods-v1",
+  "source_title": "UP9000-NPUA80918",
+  "source_elf_structurally_matches_self": true,
+  "modules": 31,
+  "lifted_functions": 20418,
+  "unclassified_words": 0,
+  "unclassified_mnemonics": {},
+  "code_end_overrides": {
+    "jobmod_00749080_eC40": "0x4F20",
+    "jobmod_0078B380_e7B40": "0xBF08",
+    "jobmod_007AAE00_eAF80": "0x148F0",
+    "jobmod_007BFC80_e16A80": "0x20570",
+    "jobmod_007E1C00_e11A08": "0x1B770",
+    "jobmod_007FF280_eE430": "0x17650",
+    "jobmod_0084BE40_e9DA8": "0xE310"
+  },
+  "data_islands": {
+    "jobmod_00818600_eA00": [
+      [
+        "0x83A0",
+        "0x8A48"
+      ]
+    ]
+  },
+  "registered_overlay_image_ids": [
+    200,
+    230
+  ],
+  "registration_symbol": "ascension_npua_jobmods_register_all",
+  "source_elf_hash_or_bytes_logged": false,
+  "license_extracted": false
+}
