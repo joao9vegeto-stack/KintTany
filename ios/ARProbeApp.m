@@ -1781,8 +1781,8 @@ static BOOL ARGameManifestHasTitleUsrdir(NSDictionary *manifest){
         options:NSDirectoryEnumerationSkipsHiddenFiles error:&error] : @[];
     if(!files.count){
       UIAlertController *alert=[UIAlertController alertControllerWithTitle:
-          @"Nenhum binário SPU ausente capturado"
-          message:error.localizedDescription ?: @"Esta execução não solicitou um job SPU sem lift nativo. O relatório separa chamadas, faltas e conclusões do WWS."
+          @"Nenhum PM SPU sem lift capturado"
+          message:error.localizedDescription ?: @"O jogo ainda não submeteu um PM sem associação nativa nesta execução. PMs e jobs são caminhos separados no relatório."
           preferredStyle:UIAlertControllerStyleAlert];
       [alert addAction:[UIAlertAction actionWithTitle:@"OK" style:UIAlertActionStyleCancel handler:nil]];
       [self.window.rootViewController presentViewController:alert animated:YES completion:nil];
@@ -1910,6 +1910,7 @@ static BOOL ARGameManifestHasTitleUsrdir(NSDictionary *manifest){
  * converts file indexing or synthetic Metal tests into game progress. */
 - (NSString *)arUnifiedPpuText {
   uint64_t live[40]={0}; ar_m772_runtime_attest(live);
+  ar_fs_trace liveFs={0}; ar_fs_snapshot(&liveFs);
   uint64_t spursMetrics[8]={0}; cellSpursCopyAscensionMetrics(spursMetrics);
   uint64_t spuJobs[8]={0}; spu_workload_copy_ascension_job_metrics(spuJobs);
   uint64_t pmDiagnostics[32][7]={0}; cellSpursCopyAscensionPmDiagnostics(pmDiagnostics);
@@ -1983,7 +1984,7 @@ static BOOL ARGameManifestHasTitleUsrdir(NSDictionary *manifest){
                   state==3?@"ENTRY NÃO VINCULADA":@"SEM ENTRY AOT";
   NSString *stateText=self.shaderBusy?@"EM EXECUÇÃO":(run?@"CONCLUÍDO":@"SEM EXECUÇÃO");
   NSString *vfsRootState=guestFSReadMeasured?
-      (live[8]?@"ROOT CONFIGURADA · cellFsRead guest comprovado; caminho do arquivo não medido":
+      (live[8]?@"ROOT CONFIGURADA · cellFsRead guest comprovado; último caminho abaixo":
                @"cellFsRead guest comprovado · estado da raiz a revisar"):
       (live[8]?@"ROOT CONFIGURADA · FS ainda não comprovado":
        ((run && [run[@"host_rc"] intValue]==AR_NO_MEMORY)?
@@ -2001,6 +2002,10 @@ static BOOL ARGameManifestHasTitleUsrdir(NSDictionary *manifest){
   NSString *fsOK=run?[run[@"fs_opens"] description]:[NSString stringWithFormat:@"%llu",(unsigned long long)live[10]];
   NSString *fsRead=run?[run[@"fs_read_calls"] description]:[NSString stringWithFormat:@"%llu",(unsigned long long)live[11]];
   NSString *fsBytes=run?[run[@"fs_bytes"] description]:[NSString stringWithFormat:@"%llu",(unsigned long long)live[12]];
+  NSString *guestFsPath=liveFs.last_path[0]?
+      [NSString stringWithUTF8String:liveFs.last_path]:@"(nenhum caminho guest ainda)";
+  if([run[@"fs_path"] isKindOfClass:[NSString class]] && [run[@"fs_path"] length])
+    guestFsPath=run[@"fs_path"];
   NSString *hleCalls=run?[run[@"hle_calls"] description]:[NSString stringWithFormat:@"%llu",(unsigned long long)live[26]];
   NSString *unresolvedHLE=run?[run[@"unresolved_hle_count"] description]:[NSString stringWithFormat:@"%llu",(unsigned long long)live[37]];
   NSString *hotloopCount=run?[run[@"hotloop_count"] description]:[NSString stringWithFormat:@"%llu",(unsigned long long)live[30]];
@@ -2042,12 +2047,13 @@ static BOOL ARGameManifestHasTitleUsrdir(NSDictionary *manifest){
      "Loop observado=%@ · marcador hotloop=0x%08llX (não é PC atual) · %@ · r3/r4/r5/r8/r9=%08llX/%08llX/%08llX/%08llX/%08llX\n"
      "cellFsOpen guest=%@ · opens OK=%@\n"
      "cellFsRead guest=%@ · bytes lidos pelo guest=%@\n"
+     "Último caminho guest=%@\n"
      "RSX backend=%@ · GCM vblank=%@ · FIFO drains=%@\n"
      "Metal drawable=%.2gx · cadência VBlank guest=%u Hz\n"
      "Flips guest apresentados=%@ · draws guest no último frame=%@\n"
-     "PSARC específico= NÃO MEDIDO (o runtime ainda não registra caminho por arquivo)\n"
+     "PSARC específico= consulte Último caminho guest; nenhum histórico adicional é coletado.\n"
      "PPC interpretado=0 · entradas HLE e LV2 contadas no runtime\n\n"
-     "Auditoria M7.86: o PC 0x003C4FA4 é um marcador estático de backedge em func_003C4F98, não o PC da instrução atual. No log 7.85, os 18 PMs tinham o fingerprint WWS bruto 0xC8D774963A96DCF2; agora ele está registrado no dispatch e o runtime aplica tempArea/readyCount do port PC.\n\n"
+     "Auditoria M7.88: no log 7.87, os 18 workloads apontaram ao PM bruto C8D774963A96DCF2, mas a associação anterior encaminhava esse hash ao lift NPUA CE052ACDA7412063. São bytes/fingerprints diferentes e não há prova de equivalência. O build 7.88 deixa C8 sem lift e captura uma cópia do PM solicitado; a execução guest ainda precisa de um lift correto antes de alegar jobs, draws ou flips.\n\n"
      "MARCOS DE JOGO\n"
      "Pasta reconhecida pelo HOST=%@\n"
      "Leitura guest de arquivos do jogo= %@\n"
@@ -2088,7 +2094,7 @@ static BOOL ARGameManifestHasTitleUsrdir(NSDictionary *manifest){
      (unsigned long long)live[32],(unsigned long long)live[33],
      (unsigned long long)live[34],(unsigned long long)live[35],
      (unsigned long long)live[36],fsOpen,fsOK,fsRead,fsBytes,
-     rsxBackend,rsxVblanks,rsxDrains,(double)self.metalView.outputScale,
+     guestFsPath,rsxBackend,rsxVblanks,rsxDrains,(double)self.metalView.outputScale,
      reportVBlankHz,rsxFrames,rsxDraws,
      self.hasGameInstallation?@"SIM (arquivos indexados no host; isso não prova cellFs)":@"NÃO" ,
      (run?[run[@"fs_bytes"] unsignedLongLongValue]:live[12])>0?

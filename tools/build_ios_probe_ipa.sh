@@ -550,8 +550,8 @@ symbols=src/'symbols.txt'
 assert archive.is_file() and attestation.is_file() and symbols.is_file()
 a=json.loads(attestation.read_text())
 digest=hashlib.sha256(archive.read_bytes()).hexdigest()
-assert a['schema']=='ascension-m772-ios-arm64-link-input-v10'
-assert a['spu_workload_registry']=='NPUA80918-four-embedded-images-plus-WWS-PM-raw-12288-byte-C8D774963A96DCF2-v2'
+assert a['schema']=='ascension-m772-ios-arm64-link-input-v11'
+assert a['spu_workload_registry']=='NPUA80918-four-embedded-images-plus-WWS-PM-CE052ACDA7412063-only-capture-unassociated-runtime-PM-v3'
 assert a['spurs_ascension_wws_policy']=='tempArea-128-byte-entry-and-poll-refresh-readyCount-level-rotating-spu-v1'
 assert a['spu_workload_registry_units_compiled']==2
 assert a['spurs_pm_runtime_diagnostics_dependency']=='separate-PS3Recomp-runtime-archive-verified-at-final-MachO-v1'
@@ -693,11 +693,12 @@ for symbol in ("_cellSpursCreateTaskset2", "_cellSpursCreateTask2",
                "__cellSpursWorkloadFlagReceiver", "_spu_taskset_track",
                "_spu_workload_reset_ascension_job_metrics",
                "_spu_workload_copy_ascension_job_metrics",
+               "_cellSpursCaptureAscensionPmMiss",
                "_spu_signal_parked_on_line", "_edge_inflate",
                "_rsx_metal_backend_set_ios_output_scale"):
     if not any(symbol in name for name in defined):
-        raise SystemExit("M7.87 required native SPU-job instrumentation symbol missing: "+symbol)
-print("M7.87 final ARM64 Mach-O contains native job counters and exportable missing SPU binaries")
+        raise SystemExit("M7.88 required native SPURS PM capture/runtime symbol missing: "+symbol)
+print("M7.88 final ARM64 Mach-O contains unassociated requested-PM capture and native runtime")
 PYM772LINKED
 # Every M7.62 native function must appear in the FINAL Mach-O, not merely object.
 python3 - <<'PY'

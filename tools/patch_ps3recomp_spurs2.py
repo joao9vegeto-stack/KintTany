@@ -21,6 +21,7 @@ LFQUEUE_MARKER = "ASCENSION_M772_LFQUEUE_SDK_LAYOUT_V1"
 PM_DIAGNOSTICS_MARKER = "ASCENSION_M785_SPURS_PM_DIAGNOSTICS_V1"
 ASCENSION_POLICY_MARKER = "ASCENSION_M786_WWS_TEMPA_READY_LEVEL_V1"
 JOB_METRICS_MARKER = "ASCENSION_M787_SPURS_JOB_METRICS_V1"
+PM_CAPTURE_MARKER = "ASCENSION_M788_CAPTURE_REQUESTED_PM_V1"
 
 
 def run(argv: list[str], *, capture: bool = False) -> str:
@@ -530,6 +531,89 @@ void cellSpursCopyAscensionPmDiagnostics(u64 out[SPURS_MAX_WID][7]) {
     source_path.write_text(source)
 
 
+def apply_requested_pm_capture(upstream: pathlib.Path) -> None:
+    """Save a requested but unassociated SPURS PM for exact native relifting.
+
+    The runtime's SPU_DUMP_MISS directory is already created inside Documents
+    and exported by the launcher. A PM is captured only after the game submits
+    it to SPURS and its exact fingerprint has no matching native lift.
+    """
+    path = upstream / "libs/spurs/cellSpurs.c"
+    source = path.read_text(errors="replace")
+    if PM_CAPTURE_MARKER in source:
+        required = ("cellSpursCaptureAscensionPmMiss", "spupm_%016llX_%u.bin",
+                    "cellSpursCaptureAscensionPmMiss(fp, vm_base + pm_ea, w->sizePm)")
+        missing = [marker for marker in required if marker not in source]
+        if missing:
+            raise SystemExit(f"partial requested PM capture patch: {missing}")
+        return
+
+    anchor = "static WklPm* spurs_resolve_pm(u32 wid)\n{"
+    if source.count(anchor) != 1:
+        raise SystemExit("M7.88 cannot locate the SPURS PM resolver")
+    helper = r'''/* ASCENSION_M788_CAPTURE_REQUESTED_PM_V1
+ * The iPhone's C8D774 runtime image is not byte-identical to the NPUA
+ * CE052AC lift. Save only a PM the title actually submitted and the native
+ * registry could not associate; this is source for the next exact lift, not
+ * evidence that a job ran. */
+void cellSpursCaptureAscensionPmMiss(u64 fingerprint, const u8* image, u32 size)
+{
+    const char* dir = getenv("SPU_DUMP_MISS");
+    if (!dir || !*dir || !image || !fingerprint || !size || size > 0x01000000u)
+        return;
+    static volatile u64 dumped[64];
+    unsigned slot = 64;
+    for (unsigned i = 0; i < 64; ++i) {
+        u64 seen = __atomic_load_n(&dumped[i], __ATOMIC_ACQUIRE);
+        if (seen == fingerprint) return;
+        if (seen == 0) {
+            u64 empty = 0;
+            if (__atomic_compare_exchange_n(&dumped[i], &empty, fingerprint, 0,
+                                             __ATOMIC_ACQ_REL, __ATOMIC_ACQUIRE)) {
+                slot = i;
+                break;
+            }
+            if (empty == fingerprint) return;
+        }
+    }
+    if (slot == 64) return;
+    char filename[512];
+    snprintf(filename, sizeof(filename), "%s/spupm_%016llX_%u.bin", dir,
+             (unsigned long long)fingerprint, size);
+    FILE* out = fopen(filename, "wb");
+    if (!out) {
+        __atomic_store_n(&dumped[slot], 0, __ATOMIC_RELEASE);
+        fprintf(stderr, "[spurs-pm] requested PM capture failed: %s\n", filename);
+        return;
+    }
+    size_t written = fwrite(image, 1, size, out);
+    fclose(out);
+    if (written != size) {
+        remove(filename);
+        __atomic_store_n(&dumped[slot], 0, __ATOMIC_RELEASE);
+        fprintf(stderr, "[spurs-pm] requested PM capture was short: %s (%zu/%u)\n",
+                filename, written, size);
+        return;
+    }
+    fprintf(stderr, "[spurs-pm] requested unassociated PM captured: %s\n", filename);
+}
+
+'''
+    source = source.replace(anchor, helper + anchor, 1)
+    lookup = '''    r->fn = range_ok ? spu_workload_find_img(fp, &r->image_id) : NULL;
+    if (!range_ok) r->image_id = 0;
+'''
+    replacement = '''    r->fn = range_ok ? spu_workload_find_img(fp, &r->image_id) : NULL;
+    if (range_ok && !r->fn)
+        cellSpursCaptureAscensionPmMiss(fp, vm_base + pm_ea, w->sizePm);
+    if (!range_ok) r->image_id = 0;
+'''
+    if source.count(lookup) != 1:
+        raise SystemExit("M7.88 cannot attach capture to the unresolved requested PM")
+    source = source.replace(lookup, replacement, 1)
+    path.write_text(source)
+
+
 def apply_ascension_wws_policy(upstream: pathlib.Path) -> None:
     """Port the Ascension-proven WWS/SPURS behavior from the PC port.
 
@@ -816,6 +900,7 @@ def main() -> int:
                 ((spurs_source, WORKLOADS_MARKER), (policy_source, WORKLOADS_MARKER)),
                 zero_context=True)
     apply_pm_resolution_diagnostics(upstream)
+    apply_requested_pm_capture(upstream)
     apply_ascension_wws_policy(upstream)
     apply_job_dispatch_metrics(upstream)
 
@@ -826,6 +911,7 @@ def main() -> int:
             "cellSpursCopyAscensionMetrics", "s_asc_dispatches_hi",
             PM_DIAGNOSTICS_MARKER, "cellSpursCopyAscensionPmDiagnostics",
             "s_asc_pm_diag", "spurs_guest_range_valid(pm_ea, w->sizePm)",
+            PM_CAPTURE_MARKER, "cellSpursCaptureAscensionPmMiss",
             ASCENSION_POLICY_MARKER, "spurs_poll_select", "spurs_ready_level()",
             "cellSpursInitializeWithAttribute2", "cellSpursCreateTaskset2",
             "_cellSpursTasksetAttribute2Initialize", "cellSpursCreateTask2",
@@ -848,7 +934,7 @@ def main() -> int:
         missing = [needle for needle in needles if needle not in text]
         if missing:
             raise SystemExit(f"M7.83 PS3Recomp SPURS2 patch incomplete in {filename}: {missing}")
-    print("M7.87 applied SPURS2 scheduler, Ascension WWS policy, per-job native dispatch metrics and missing-binary capture, taskset, LFQueue, and Edge Zlib HLE")
+    print("M7.88 applied fail-closed WWS PM association, requested PM capture, SPURS2 scheduler, Ascension policy, job metrics, taskset, LFQueue, and Edge Zlib HLE")
     return 0
 
 

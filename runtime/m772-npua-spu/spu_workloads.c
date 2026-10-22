@@ -39,10 +39,9 @@ void gowa_spu_register_all(void)
     spu_begin_image(5); wws_pm_npua_spu_recomp_register();
     spu_workload_register_img(0x516943885EEB4BE8ULL, wws_pm_npua_spu_func_00000A00, 5, "wws_pm_npua");
     spu_workload_register_img(0xCE052ACDA7412063ULL, wws_pm_npua_spu_func_00000A00, 5, "wws_pm_npua.text");
-    /* The guest passes Ascension's raw 12 KiB WWS PM, not its wrapped SPU ELF.
-     * This is the exact FNV-1a-64 fingerprint recorded by the PC port's
-     * extract_spu_pm.py and observed for all 18 workloads in the M7.85 log. */
-    spu_workload_register_img(0xC8D774963A96DCF2ULL, wws_pm_npua_spu_func_00000A00, 5,
-                              "wws_pm_npua.raw-12288-byte-runtime-pm");
+    /* Only the NPUA PM bytes used to generate this lift are associated here.
+     * Runtime M7.87 observed C8D774963A96DCF2, while the NPUA source image is
+     * CE052ACDA7412063. The EU C8 fingerprint is not proven equivalent; it is
+     * captured on a miss so its exact requested bytes can be lifted separately. */
     spu_begin_image(0);
 }
