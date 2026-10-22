@@ -550,8 +550,9 @@ symbols=src/'symbols.txt'
 assert archive.is_file() and attestation.is_file() and symbols.is_file()
 a=json.loads(attestation.read_text())
 digest=hashlib.sha256(archive.read_bytes()).hexdigest()
-assert a['schema']=='ascension-m772-ios-arm64-link-input-v9'
-assert a['spu_workload_registry']=='NPUA80918-four-embedded-images-plus-exact-WWS-PM-fingerprint-v1'
+assert a['schema']=='ascension-m772-ios-arm64-link-input-v10'
+assert a['spu_workload_registry']=='NPUA80918-four-embedded-images-plus-WWS-PM-raw-12288-byte-C8D774963A96DCF2-v2'
+assert a['spurs_ascension_wws_policy']=='tempArea-128-byte-entry-and-poll-refresh-readyCount-level-rotating-spu-v1'
 assert a['spu_workload_registry_units_compiled']==2
 assert a['spurs_pm_runtime_diagnostics_dependency']=='separate-PS3Recomp-runtime-archive-verified-at-final-MachO-v1'
 assert a['upstream_commit']=='39a36296511c445707adabcd312f0b740cfbd694'
@@ -693,8 +694,8 @@ for symbol in ("_cellSpursCreateTaskset2", "_cellSpursCreateTask2",
                "_spu_signal_parked_on_line", "_edge_inflate",
                "_rsx_metal_backend_set_ios_output_scale"):
     if not any(symbol in name for name in defined):
-        raise SystemExit("M7.85 required native runtime/SPU symbol missing: "+symbol)
-print("M7.85 final ARM64 Mach-O contains the NPUA workload registry, exact WWS PM lift, live PM identity diagnostics, SPURS2 dispatch, Edge HLE and RSX/Metal path")
+        raise SystemExit("M7.86 required native runtime/SPU symbol missing: "+symbol)
+print("M7.86 final ARM64 Mach-O contains the raw NPUA WWS PM fingerprint, tempArea/ready-level SPURS path, live PM diagnostics, Edge HLE and RSX/Metal backend")
 PYM772LINKED
 # Every M7.62 native function must appear in the FINAL Mach-O, not merely object.
 python3 - <<'PY'

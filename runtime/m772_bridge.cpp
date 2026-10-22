@@ -75,7 +75,7 @@ static uint32_t m772_count_registered_spu_images(void)
     static const uint64_t fingerprints[] = {
         UINT64_C(0x574361C36D1A4C05), UINT64_C(0xF4C2A58BDE92CE5E),
         UINT64_C(0x4DA69B4166D997AD), UINT64_C(0x00E729804474449A),
-        UINT64_C(0xCE052ACDA7412063)
+        UINT64_C(0xC8D774963A96DCF2)
     };
     uint32_t count = 0;
     for (unsigned i = 0; i < sizeof(fingerprints) / sizeof(fingerprints[0]); ++i) {

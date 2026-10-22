@@ -19,6 +19,7 @@ MARKER = "ASCENSION_M772_SPURS2_TASK_API_V2"
 WORKLOADS_MARKER = "ASCENSION_M772_SPURS2_WORKLOADS_32_V1"
 LFQUEUE_MARKER = "ASCENSION_M772_LFQUEUE_SDK_LAYOUT_V1"
 PM_DIAGNOSTICS_MARKER = "ASCENSION_M785_SPURS_PM_DIAGNOSTICS_V1"
+ASCENSION_POLICY_MARKER = "ASCENSION_M786_WWS_TEMPA_READY_LEVEL_V1"
 
 
 def run(argv: list[str], *, capture: bool = False) -> str:
@@ -528,6 +529,164 @@ void cellSpursCopyAscensionPmDiagnostics(u64 out[SPURS_MAX_WID][7]) {
     source_path.write_text(source)
 
 
+def apply_ascension_wws_policy(upstream: pathlib.Path) -> None:
+    """Port the Ascension-proven WWS/SPURS behavior from the PC port.
+
+    M7.85's live report identifies the WWS PM by the same 12 KiB raw image
+    fingerprint documented by the PC port. That makes the next two SPURS
+    behaviors directly relevant: Wws modules read CellSpurs flags from the
+    kernel tempArea, and their readyCount is a level rather than a token that
+    the host scheduler consumes on admission.
+    """
+    spurs_path = upstream / "libs/spurs/cellSpurs.c"
+    spurs = spurs_path.read_text(errors="replace")
+    channels_path = upstream / "runtime/spu/spu_channels.c"
+    channels = channels_path.read_text(errors="replace")
+    policy_path = upstream / "runtime/spu/spurs_policy.c"
+    policy = policy_path.read_text(errors="replace")
+
+    if ASCENSION_POLICY_MARKER in spurs:
+        required = (
+            "spurs_poll_select", "spurs_ready_level() ? ready > si->active[wid]",
+            "spurs_kernel_temp_area_refresh(ctx)",
+        )
+        if any(marker not in spurs + channels + policy for marker in required):
+            raise SystemExit("partial Ascension WWS/SPURS tempArea/ready-level patch")
+        return
+    if any(ASCENSION_POLICY_MARKER in text for text in (channels, policy)):
+        raise SystemExit("partial Ascension WWS/SPURS tempArea/ready-level patch")
+
+    helper = '''/* ASCENSION_M786_WWS_TEMPA_READY_LEVEL_V1
+ * The Ascension PC port's WWS PM reads CellSpurs flags from LS tempArea and
+ * treats readyCount as a level. Keep the option game-specific and disabled
+ * unless the iOS Ascension launcher enables SPURS_READY_LEVEL. */
+int spurs_ready_level(void)
+{
+    static int s_level = -1;
+    if (s_level < 0) {
+        const char* value = getenv("SPURS_READY_LEVEL");
+        s_level = value && *value != '0';
+    }
+    return s_level;
+}
+
+/* Select the workload cellSpursModulePoll should continue on this SPU. */
+u32 spurs_poll_select(u32 ea, u32 current, u32 spu)
+{
+    struct SpursInst* si = spurs_inst_find(ea);
+    if (!si || spu >= CELL_SPURS_MAX_SPU) return 0x20u;
+    const u32 nwid = spurs_workload_limit(si);
+    const u32 enabled = vm_read32(ea + SPURS_WKL_ENABLED);
+    u32 selected = 0x20u;
+    for (u32 wid = 0; wid < nwid; ++wid) {
+        if (!(enabled & (0x80000000u >> wid)) ||
+            vm_read8(ea + wkl_state_off(wid)) != 2 ||
+            !s_workloads[wid].in_use || s_workloads[wid].spurs_ea != ea ||
+            !vm_read8(ea + wkl_info_off(wid) + 0x18 + spu))
+            continue;
+        const u32 ready = vm_read8(ea + wkl_ready_off(wid));
+        const int signalled = wkl_signalled(ea, wid);
+        if (wid == current) {
+            if (signalled || ready >= si->active[wid]) return current;
+        } else if (selected == 0x20u && (signalled || ready > si->active[wid])) {
+            selected = wid;
+        }
+    }
+    return selected;
+}
+
+'''
+    scheduler_anchor = "static DWORD WINAPI spurs_kernel_thread(LPVOID p)\n{"
+    if spurs.count(scheduler_anchor) != 1:
+        raise SystemExit("Ascension WWS patch cannot find the SPURS scheduler")
+    spurs = spurs.replace(scheduler_anchor, helper + scheduler_anchor, 1)
+
+    start = spurs.index(scheduler_anchor)
+    end = spurs.index("\nstatic s32 spurs_scheduler_start", start)
+    scheduler = spurs[start:end]
+    old_spu_loop = "        for (u32 sn = 0; sn < si->nspus; sn++) {\n"
+    new_spu_loop = '''        /* WWS keeps pipeline state in the local store of the SPU that ran it. */
+        const u32 first_spu = spurs_ready_level() ? si->pass_no % si->nspus : 0;
+        for (u32 k = 0; k < si->nspus; ++k) {
+            const u32 sn = (first_spu + k) % si->nspus;
+'''
+    if scheduler.count(old_spu_loop) != 1:
+        raise SystemExit("Ascension WWS patch cannot locate scheduler SPU scan")
+    scheduler = scheduler.replace(old_spu_loop, new_spu_loop, 1)
+    old_kicked = "                int kicked = ready || wkl_signalled(ea, wid);\n"
+    new_kicked = "                int kicked = (spurs_ready_level() ? ready > si->active[wid] : ready != 0)\n                             || wkl_signalled(ea, wid);\n"
+    if scheduler.count(old_kicked) != 1:
+        raise SystemExit("Ascension WWS patch cannot locate readyCount admission")
+    scheduler = scheduler.replace(old_kicked, new_kicked, 1)
+    old_consume = "                if (ready) vm_base[ea + wkl_ready_off(wid)] = (u8)(ready - 1);\n"
+    new_consume = "                if (ready && !spurs_ready_level())\n                    vm_base[ea + wkl_ready_off(wid)] = (u8)(ready - 1);\n"
+    if scheduler.count(old_consume) != 1:
+        raise SystemExit("Ascension WWS patch cannot locate readyCount consumption")
+    scheduler = scheduler.replace(old_consume, new_consume, 1)
+    spurs = spurs[:start] + scheduler + spurs[end:]
+    spurs_path.write_text(spurs)
+
+    temparea = '''/* Ascension WWS reads the first 128 CellSpurs bytes from LS tempArea. */
+void spurs_kernel_temp_area_refresh(spu_context* ctx)
+{
+    extern uint8_t* vm_base;
+    if (!ctx || !ctx->ls) return;
+    const uint8_t* field = ctx->ls + 0x1C4; /* CellSpurs EA, low half of u64 */
+    const uint32_t ea = ((uint32_t)field[0] << 24) | ((uint32_t)field[1] << 16) |
+                        ((uint32_t)field[2] << 8) | field[3];
+    if (!vm_base || !ea || ea > 0xFFFFFF80u) return;
+    spu_lockline_lock();
+    memcpy(ctx->ls + 0x100, vm_base + ea, 0x80);
+    spu_lockline_unlock();
+}
+
+'''
+    policy_anchor = "extern int spu_run_with_halt(void (*)(spu_context*), spu_context*);\n"
+    if policy.count(policy_anchor) != 1:
+        raise SystemExit("Ascension WWS patch cannot find policy runtime declarations")
+    policy = policy.replace(policy_anchor, policy_anchor + "\n" + temparea, 1)
+    init_anchor = "#undef KBE32\n\n    /* Entry registers per cellSpursModuleEntry. */"
+    if policy.count(init_anchor) != 1:
+        raise SystemExit("Ascension WWS patch cannot locate policy entry context setup")
+    policy = policy.replace(init_anchor,
+                            "#undef KBE32\n    spurs_kernel_temp_area_refresh(ctx);\n\n"
+                            "    /* Entry registers per cellSpursModuleEntry. */", 1)
+    policy_path.write_text(policy)
+
+    poll_anchor = '''            ctx->gpr[3] = spu_make_preferred_u32(0);
+            ctx->pc = ctx->gpr[0]._u32[0] & SPU_LS_MASK;
+'''
+    poll_replacement = '''            /* Refresh the kernel context snapshot at every workload selection. */
+            extern void spurs_kernel_temp_area_refresh(spu_context*);
+            spurs_kernel_temp_area_refresh(ctx);
+            /* SPURS returns the selected workload in the preferred high word. */
+            extern int spurs_ready_level(void);
+            extern uint32_t spurs_poll_select(uint32_t, uint32_t, uint32_t);
+            uint32_t selected = 0;
+            if (spurs_ready_level()) {
+                const uint8_t* p = ctx->ls + 0x1C4;
+                const uint32_t ea = ((uint32_t)p[0] << 24) | ((uint32_t)p[1] << 16) |
+                                    ((uint32_t)p[2] << 8) | p[3];
+                p = ctx->ls + 0x1C8;
+                const uint32_t spu = ((uint32_t)p[0] << 24) | ((uint32_t)p[1] << 16) |
+                                     ((uint32_t)p[2] << 8) | p[3];
+                p = ctx->ls + 0x1DC;
+                const uint32_t current = ((uint32_t)p[0] << 24) | ((uint32_t)p[1] << 16) |
+                                         ((uint32_t)p[2] << 8) | p[3];
+                selected = spurs_poll_select(ea, current, spu);
+            }
+            ctx->gpr[3] = spu_make_preferred_u32(0);
+            ctx->gpr[3]._u32[0] = selected;
+            ctx->gpr[3]._u32[1] = 0;
+            ctx->pc = ctx->gpr[0]._u32[0] & SPU_LS_MASK;
+'''
+    if channels.count(poll_anchor) != 1:
+        raise SystemExit("Ascension WWS patch cannot locate module-poll intercept")
+    channels = channels.replace(poll_anchor, poll_replacement, 1)
+    channels = channels.replace("/* SPURS kernel services (policy-module runs only):", "/* ASCENSION_M786_WWS_TEMPA_READY_LEVEL_V1 */\n    /* SPURS kernel services (policy-module runs only):", 1)
+    channels_path.write_text(channels)
+
+
 def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__)
     ap.add_argument("--upstream", type=pathlib.Path, required=True)
@@ -557,6 +716,7 @@ def main() -> int:
                 ((spurs_source, WORKLOADS_MARKER), (policy_source, WORKLOADS_MARKER)),
                 zero_context=True)
     apply_pm_resolution_diagnostics(upstream)
+    apply_ascension_wws_policy(upstream)
 
     required = {
         "libs/spurs/cellSpurs.c": (
@@ -565,6 +725,7 @@ def main() -> int:
             "cellSpursCopyAscensionMetrics", "s_asc_dispatches_hi",
             PM_DIAGNOSTICS_MARKER, "cellSpursCopyAscensionPmDiagnostics",
             "s_asc_pm_diag", "spurs_guest_range_valid(pm_ea, w->sizePm)",
+            ASCENSION_POLICY_MARKER, "spurs_poll_select", "spurs_ready_level()",
             "cellSpursInitializeWithAttribute2", "cellSpursCreateTaskset2",
             "_cellSpursTasksetAttribute2Initialize", "cellSpursCreateTask2",
             "cellSpursJoinTask2", "cellSpursTryJoinTask2",
@@ -585,7 +746,7 @@ def main() -> int:
         missing = [needle for needle in needles if needle not in text]
         if missing:
             raise SystemExit(f"M7.83 PS3Recomp SPURS2 patch incomplete in {filename}: {missing}")
-    print("M7.85 applied 32-workload SPURS2 scheduler, live PM identity diagnostics, dispatch telemetry, taskset, LFQueue, and Edge Zlib HLE")
+    print("M7.86 applied 32-workload SPURS2 scheduler, Ascension WWS tempArea/ready-level, live PM identity diagnostics, taskset, LFQueue, and Edge Zlib HLE")
     return 0
 
 

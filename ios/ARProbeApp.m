@@ -1512,6 +1512,8 @@ static BOOL ARGameManifestHasTitleUsrdir(NSDictionary *manifest){
    * runtime starts so Ascension uses the game-proven LFQueue and Edge paths. */
   setenv("PS3_EDGE_ZLIB_HLE","1",1);
   setenv("PS3_LFQUEUE_SDK_LAYOUT","1",1);
+  /* Ascension's WWS policy keeps readyCount as a level and chooses by SPU. */
+  setenv("SPURS_READY_LEVEL","1",1);
   cellSpursResetAscensionMetrics();
   ar_m772_runtime_begin();
   [self arSetStatus:@"Preparando VM, PPU/SPU recompilados e acesso guest ao jogo…"];
@@ -1996,7 +1998,7 @@ static BOOL ARGameManifestHasTitleUsrdir(NSDictionary *manifest){
      "Flips guest apresentados=%@ · draws guest no último frame=%@\n"
      "PSARC específico= NÃO MEDIDO (o runtime ainda não registra caminho por arquivo)\n"
      "PPC interpretado=0 · entradas HLE e LV2 contadas no runtime\n\n"
-     "Auditoria M7.85: o autocheck 5/5 confirma só que os fingerprints esperados estão registrados. A linha PM mostra os bytes realmente examinados; igualdade com um registro é necessária para despacho SPU.\n\n"
+     "Auditoria M7.86: o PC 0x003C4FA4 é um marcador estático de backedge em func_003C4F98, não o PC da instrução atual. No log 7.85, os 18 PMs tinham o fingerprint WWS bruto 0xC8D774963A96DCF2; agora ele está registrado no dispatch e o runtime aplica tempArea/readyCount do port PC.\n\n"
      "MARCOS DE JOGO\n"
      "Pasta reconhecida pelo HOST=%@\n"
      "Leitura guest de arquivos do jogo= %@\n"

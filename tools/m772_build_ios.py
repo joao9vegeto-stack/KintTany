@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Compile the M7.85 NPUA PPU/SPU workload lift and PS3Recomp runtime for iOS."""
+"""Compile the M7.86 NPUA PPU/SPU workload lift and PS3Recomp runtime for iOS."""
 import argparse
 import concurrent.futures
 import hashlib
@@ -418,12 +418,22 @@ def main():
     required_spurs_markers=("ASCENSION_M772_SPURS2_TASK_API_V2",
         "ASCENSION_M772_SPURS2_WORKLOADS_32_V1",
         "ASCENSION_M785_SPURS_PM_DIAGNOSTICS_V1",
+        "ASCENSION_M786_WWS_TEMPA_READY_LEVEL_V1",
         "ASCENSION_M772_LFQUEUE_SDK_LAYOUT_V1", "ASCENSION_M772_EDGE_ZLIB_HLE_V2",
         "cellSpursCopyAscensionPmDiagnostics", "spu_taskset_track", "spu_signal_parked_on_line")
     missing=[marker for marker in required_spurs_markers
              if marker not in spurs_source and marker not in (upstream/"runtime/spu/spu_workload.c").read_text(errors="replace")]
     if missing:
         raise SystemExit(f"M7.83 PS3Recomp SPURS2/LFQueue patch is missing: {missing}")
+    policy_runtime=(upstream/"runtime/spu/spurs_policy.c").read_text(errors="replace")
+    if "spurs_kernel_temp_area_refresh" not in policy_runtime:
+        raise SystemExit("M7.86 Ascension WWS policy tempArea refresh is missing")
+    channel_runtime=(upstream/"runtime/spu/spu_channels.c").read_text(errors="replace")
+    if "spurs_poll_select" not in channel_runtime:
+        raise SystemExit("M7.86 Ascension WWS module-poll workload selection is missing")
+    registry_source=(repo/"runtime/m772-npua-spu/spu_workloads.c").read_text(errors="replace")
+    if "0xC8D774963A96DCF2ULL" not in registry_source:
+        raise SystemExit("M7.86 runtime-observed raw Ascension WWS PM fingerprint is not registered")
     for marker in ("SPURS_MAX_WID 32", "SPURS_WKL_INFO2",
                    "cellSpursResetAscensionMetrics", "cellSpursCopyAscensionMetrics",
                    "cellSpursCopyAscensionPmDiagnostics", "s_asc_pm_diag"):
@@ -591,7 +601,7 @@ def main():
         raise SystemExit(f"M7.72 required ARM64 archive symbols missing: {missing}")
 
     result = {
-        "schema": "ascension-m772-ios-arm64-link-input-v9",
+        "schema": "ascension-m772-ios-arm64-link-input-v10",
         "upstream_commit": actual,
         "ios_vfs_mount_patch": "npua80918-and-app-home-usrdir-v1",
         "ios_vm_mapping_patch": "mach-anywhere-4g-relative-guest-ea-v1",
@@ -601,7 +611,8 @@ def main():
         "spurs2_taskset": "0x2900-two-LV2-event-flags-tracked-cross-taskset-scheduler-v1",
         "spurs2_task_apis": "create-task2-join-tryjoin-taskset-address-v1",
         "spurs2_workloads": "32-workload-second-instance-set-and-policy-slots-v1",
-        "spu_workload_registry": "NPUA80918-four-embedded-images-plus-exact-WWS-PM-fingerprint-v1",
+        "spu_workload_registry": "NPUA80918-four-embedded-images-plus-WWS-PM-raw-12288-byte-C8D774963A96DCF2-v2",
+        "spurs_ascension_wws_policy": "tempArea-128-byte-entry-and-poll-refresh-readyCount-level-rotating-spu-v1",
         "spurs_pm_runtime_diagnostics_dependency": "separate-PS3Recomp-runtime-archive-verified-at-final-MachO-v1",
         "spurs_workload_flags": "guest-address-and-exclusive-receiver-v1",
         "lfqueue_sdk_layout": "CellSyncLFQueue-layout-v1",
