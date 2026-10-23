@@ -1539,12 +1539,8 @@ void xowue_VdInitializeScalerCommandBuffer(PPCContext &context, uint8_t *base) {
     recordRuntimeTrace("VdInitializeScalerCommandBuffer filled " + std::to_string(wordCount) + " NOP dwords");
 }
 
-void xowue_VdQueryVideoMode(PPCContext &context, uint8_t *base) {
-    const uint32_t address = context.r3.u32;
-    if (!base || address == 0u || !validGuestRange(address, 48u)) {
-        context.r3.u32 = kNtStatusInvalidParameter;
-        return;
-    }
+bool writeGuestVideoMode(uint8_t *base, uint32_t address) {
+    if (!base || address == 0u || !validGuestRange(address, 48u)) return false;
     std::memset(base + address, 0, 48u);
     PPC_STORE_U32(address + 0x00u, 1280u);
     PPC_STORE_U32(address + 0x04u, 720u);
@@ -1555,10 +1551,30 @@ void xowue_VdQueryVideoMode(PPCContext &context, uint8_t *base) {
     PPC_STORE_U32(address + 0x18u, 1u);
     PPC_STORE_U32(address + 0x1Cu, 0x4Au);
     PPC_STORE_U32(address + 0x20u, 1u);
+    return true;
+}
+
+void xowue_VdQueryVideoMode(PPCContext &context, uint8_t *base) {
+    const uint32_t address = context.r3.u32;
+    if (!writeGuestVideoMode(base, address)) {
+        context.r3.u32 = kNtStatusInvalidParameter;
+        recordRuntimeTrace("VdQueryVideoMode rejected output pointer");
+        return;
+    }
     context.r3.u32 = kNtStatusSuccess;
     recordRuntimeTrace("VdQueryVideoMode -> 1280x720 progressive widescreen 60Hz");
 }
 
+void xowue_XGetVideoMode(PPCContext &context, uint8_t *base) {
+    const uint32_t address = context.r3.u32;
+    if (!writeGuestVideoMode(base, address)) {
+        recordRuntimeTrace("XGetVideoMode rejected output pointer");
+        return;
+    }
+    // XGetVideoMode is a void XAM wrapper; preserve the output pointer in r3.
+    context.r3.u32 = address;
+    recordRuntimeTrace("XGetVideoMode -> 1280x720 progressive widescreen 60Hz");
+}
 void xowue_VdQueryVideoFlags(PPCContext &context) { context.r3.u32 = 3u; }
 
 void xowue_VdGetCurrentDisplayGamma(PPCContext &context, uint8_t *base) {

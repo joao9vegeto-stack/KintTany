@@ -4,16 +4,18 @@
 **Title ID:** 41560816
 **Repositório:** [joao9vegeto-stack/KintTany](https://github.com/joao9vegeto-stack/KintTany)
 **Branch autorizada:** XOWUE
-**Commit de código do Build 3:** d2cfc714903a1381629c6dce3397f56e63ea8436
+**Build mais recente auditado:** 4 (Action #14, sucesso)
 **Workflow:** [XOWUE iOS IPA](https://github.com/joao9vegeto-stack/KintTany/actions/workflows/xowue-ios.yml)
 
 ## Situação desta entrega
 
-A Action #13, commit 32df212, produziu o IPA Build 3. O teste no iPhone validou XEX2 e inicialização do KosmicKrisp/Metal WSI, mas o boot parou em ObReferenceObjectByHandle (LR 0x82C40080), depois de criar a thread PPC. O relatório registra engines=not-initialized e VdSwap=0: o título nunca chegou ao frontend gráfico. A nova revisão implementa as operações de referência e abertura de objetos usadas por esse caminho.
+A Action #14, commit `b1ad999`, produziu o IPA Build 4 sem assinatura (24.480.716 bytes; SHA-256 `c15cc635f25a33a9b28ceada4bbc913f65d380adb108310aa919d612a9630ea7`). O teste no iPhone 17 Pro, iOS 26.5.1, validou o XEX2 e resolveu 261 imports. As chamadas `ObReferenceObjectByHandle` e `ObDereferenceObject` agora passam; duas threads PPC são criadas e encerradas durante a interrupção do boot.
 
-O número que aparece no app vem de CFBundleVersion. A Action conta somente execuções bem-sucedidas do workflow após Build 1; falhas e tentativas não consomem build. Build 1 foi a execução #8 e Build 2 a #11. A execução #12, no commit acima, deve produzir Build 3 se terminar com sucesso. Atualize esta seção com o resultado final e o hash do IPA depois da Action.
+A próxima parada observada é `XGetVideoMode`, LR `0x823744BC`, com `r3=0x7FFEF770`. O Xenia implementa esse XAM por meio de `VdQueryVideoMode`; a estrutura `X_VIDEO_MODE` tem 48 bytes. O XOWUE já escrevia o mesmo modo no handler `VdQueryVideoMode`, mas não ligava o import XAM `XGetVideoMode`. Esta revisão reutiliza esses valores e liga o adapter XAM, preservando o ponteiro de saída para a chamada void.
 
-Build 3 é um runner de desenvolvimento. O default.xex e os assets do jogo não estão incluídos no repositório ou IPA. Ainda não há prova de menu, primeiro frame real ou partida jogável.
+O diagnóstico do Build 4 mostra KosmicKrisp/Vulkan/Metal WSI pronto na Apple A19 Pro e 180 presents do host, mas `guest_swaps=0`, `engines=not-initialized` e `VdSwap=0`. Isso confirma que o boot ainda para antes de entrar no frontend Xenos; não houve frame do jogo.
+
+O número do app vem de `CFBundleVersion`. O Build 4 veio da Action #14; novas Actions bem-sucedidas avançam o número. O `default.xex` e os assets não estão incluídos no IPA ou no branch. Não há prova de menu, primeiro frame real ou partida jogável.
 
 ## O que entrou no Build 3
 
@@ -44,19 +46,19 @@ Esse código compilou no host, mas ainda precisa ser exercitado com o default.xe
 
 Os patches 0001 e 0002 e o smoke source usados aqui correspondem aos mesmos blobs preservados na branch PsTJohn, commit mais recente consultado db014165eb39429ae37d1946db6fc83c600c63b3. O workflow fixa Mesa em bfe063f723d436e5cdef8a98f058d4e44a64810c, aplica os patches iOS/Metal WSI e compila libkk.a e libvulkan_wsi.a para arm64.
 
-iOS/App/XOWUEVulkanBackend.m cria o ICD KosmicKrisp, uma surface CAMetalLayer, device e swapchain, preservando KosmicKrisp como backend. O quadro de clear era apenas um smoke test redundante com a validação já feita em PsTJon/PoPTST; saiu da tela inicial e agora a surface é a viewport em tela cheia. Até haver tradução Xenos, o fundo fica preto e não é apresentado como imagem do jogo.
+iOS/App/XOWUEVulkanBackend.m cria o ICD KosmicKrisp, a surface CAMetalLayer, device e swapchain. O backend continua sendo KosmicKrisp, conforme as validações no PsTJon/PoPTST. O clear de diagnóstico saiu da tela inicial; a viewport em tela cheia fica preta até o runtime executar um draw real do jogo. O Build 4 confirmou 180 presents do host, mas nenhum swap guest.
 
-O runtime tem handlers iniciais Vd*, estado de modo de vídeo, validação limitada de comandos PM4 e um marcador VdSwap que chega ao backend. Ainda falta consumir o ring buffer real do jogo, traduzir registradores/estado de draw, shaders e formatos/tiling de textura Xenos para Vulkan. O painel do app deve continuar descrevendo isso como trabalho incompleto até existir imagem real do XEX.
+O runtime tem handlers iniciais Vd*, estado de modo de vídeo e um parser PM4 que apenas valida/conta pacotes; ele não executa estado ou draws Xenos. O callback guest_swap só recebe endereço/dimensão e atualiza telemetria, sem enviar pixels à swapchain. O tamanho do ring buffer em VdInitializeRingBuffer segue a fórmula do Xenia (1 << (size_log2 + 3)) e VdInitializeEngines retorna 1, então esses dois comportamentos já estão alinhados com os stubs upstream. Ainda falta consumir o ring buffer real, traduzir registradores/estado de draw, shaders e formatos/tiling de textura Xenos para Vulkan. A evidência de progresso visual será draw guest e primeiro flip com imagem do XEX.
 
 ### Imports e conteúdo do jogo
 
-O gerador cobre as 261 imports do executável. 71 adapters possuem comportamento inicial; os outros 190 falham de forma explícita, com nome da API e LR PPC. Os adapters disponíveis não equivalem à implementação completa do kernel/XAM. Ainda devem ser investigados os imports que aparecerem no próximo diagnóstico.
+O gerador cobre as 261 imports do executável. Com XGetVideoMode, 75 adapters têm comportamento inicial; os outros 186 falham de forma explícita, com nome da API e LR PPC. Os adapters disponíveis não equivalem à implementação completa do kernel/XAM. O próximo diagnóstico do aparelho deve guiar a próxima correção.
 
 O AOT existente continua compactado em dist/XOWUE-AOT-source.partNN; a Action valida dist/SHA256SUMS e compila as unidades sem colocar o default.xex no Git. Não regenere ou reenvie os blobs AOT sem necessidade e autorização do projeto. Não adicione o XEX original, pasta WGame, DLC, title update, saves ou assets extraídos ao branch.
 
 ## Como executar no iPhone
 
-1. Baixe o artifact XOWUE-Build-3 da execução bem-sucedida da Action. O IPA é arm64 e unsigned.
+1. Baixe o artifact XOWUE-Build-5 da execução bem-sucedida da Action. O IPA é arm64 e unsigned.
 2. Assine com um certificado e perfil de desenvolvimento Apple compatíveis com com.joaopedro.xowue antes de instalar.
 3. Coloque a pasta completa do jogo em Arquivos → No Meu iPhone → XOWUE → Jogos. Estruturas detectadas:
 
@@ -64,7 +66,7 @@ O AOT existente continua compactado em dist/XOWUE-AOT-source.partNN; a Action va
        Jogos/Nome do jogo/default.xex
 
 4. Volte ao app, toque em atualizar se necessário e use ABRIR JOGO. Também é possível importar uma pasta ou default.xex pelo seletor.
-5. Depois do teste, envie diagnostico-build-3.txt e crash-build-3.txt para identificar a próxima parada. Esses logs ficam na raiz Documentos/XOWUE, acessível pelo app Arquivos.
+5. Depois de testar o Build 5, envie diagnostico-build-5.txt e crash-build-5.txt para identificar a próxima parada e capturar qualquer avanço até VdInitializeEngines/VdSwap. Esses logs ficam na raiz Documentos/XOWUE, acessível pelo app Arquivos.
 
 ## Build host
 
@@ -93,11 +95,11 @@ O workflow da Action executa a compilação iOS arm64, gera o projeto com XcodeG
 
 ## Continuidade do trabalho
 
-1. Testar no iPhone as novas APIs ObReferenceObjectByHandle, ObDereferenceObject e ObOpenObjectByPointer e seguir o próximo import ou endereço em que o XEX parar, usando os logs da build instalada.
-2. Fazer o runtime consumir a sequência real PM4 do título e preservar contexto de GPU entre chamadas. Adicionar captura de registradores, draw/event packets, formatos e endereços de textura aos logs.
-3. Implementar a tradução de shaders Xenos e formatos/tiling de textura e enviar draws Vulkan para a swapchain. Verificar primeiro um draw de teste derivado do estado observado e depois o frame do jogo.
-4. Continuar kernel/XAM, heap, MMIO, XMA/áudio, entrada e acesso aos arquivos WGame a partir dos erros reproduzíveis.
-5. Não marcar o projeto como jogável até capturar um frame real do jogo e validá-lo no aparelho.
+1. Validar no iPhone o adapter XGetVideoMode do próximo build e seguir até o primeiro erro reproduzível ou VdInitializeEngines.
+2. Quando o título inicializar os engines, capturar ring buffer, read/write pointers, PM4 e registradores; a validação atual do parser não executa os pacotes.
+3. Validar no runtime o fetch/frontbuffer do VdSwap (o mapa atual usa identidade) e alimentar a cadeia gráfica com a textura real; conferir formato, dimensões e tiling no aparelho.
+4. Traduzir shaders Xenos para SPIR-V/Vulkan e enviar os draws pela swapchain KosmicKrisp/Metal; preservar contexto entre chamadas.
+5. Não marcar como renderizado/jogável até capturar e validar um frame real do XEX no iPhone.
 
 ## Regras para o próximo agente com acesso ao GitHub
 

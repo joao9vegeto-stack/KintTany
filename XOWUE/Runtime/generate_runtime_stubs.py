@@ -142,6 +142,7 @@ def main() -> int:
             'void xowue_VdSwap(PPCContext &, uint8_t *);',
             'void xowue_VdInitializeScalerCommandBuffer(PPCContext &, uint8_t *);',
             'void xowue_VdQueryVideoMode(PPCContext &, uint8_t *);',
+            'void xowue_XGetVideoMode(PPCContext &, uint8_t *);',
             'void xowue_VdQueryVideoFlags(PPCContext &);',
             'void xowue_VdGetCurrentDisplayGamma(PPCContext &, uint8_t *);',
             'void xowue_VdGetCurrentDisplayInformation(PPCContext &, uint8_t *);',
@@ -278,6 +279,8 @@ def main() -> int:
             code.append("\txowue_RtlLeaveCriticalSection(ctx, base);")
         elif name == "XexCheckExecutablePrivilege":
             code.append("\txowue_XexCheckExecutablePrivilege(ctx);")
+        elif name == "XGetVideoMode":
+            code.append("\txowue_XGetVideoMode(ctx, base);")
         elif name == "XGetAVPack":
             code.append("\txowue_XGetAVPack(ctx);")
         elif name == "XGetGameRegion":
@@ -331,7 +334,7 @@ def main() -> int:
         "RtlInitializeCriticalSection", "RtlInitializeCriticalSectionAndSpinCount",
         "RtlEnterCriticalSection", "RtlTryEnterCriticalSection", "RtlLeaveCriticalSection",
         "XexCheckExecutablePrivilege",
-        "XGetAVPack", "XGetGameRegion",
+        "XGetAVPack", "XGetGameRegion", "XGetVideoMode",
         "KeTlsAlloc", "KeTlsFree", "KeTlsGetValue", "KeTlsSetValue",
         "RtlNtStatusToDosError",
         "NtQueryVirtualMemory",

@@ -1093,7 +1093,7 @@ private struct XOWUERootView: View {
                 Text("KosmicKrisp permanece como backend gráfico.")
                     .font(.system(size: 13, weight: .bold, design: .rounded))
                     .foregroundStyle(XOWUEPalette.white)
-                Text("O Build 3 confirmou a swapchain Metal, mas o XEX parou em ObReferenceObjectByHandle antes de iniciar Xenos. O clear de teste saiu da tela inicial; a superfície do jogo abre em tela cheia. A imagem real depende do boot e da tradução dos comandos Xenos.")
+                Text("KosmicKrisp inicia a GPU e a superfície Metal do iPhone. A imagem do jogo depende do XEX avançar até o Xenos e o runtime executar os draws e shaders do título.")
                     .font(.system(size: 11))
                     .foregroundStyle(XOWUEPalette.muted)
                     .fixedSize(horizontal: false, vertical: true)
