@@ -1,0 +1,15 @@
+# Private game inputs and generated output
+/upload/*
+!/upload/README.md
+/generated/ppc/
+/generated/config/*-recompile.log
+/generated/config/XOWUE-cpp-syntax-*.log
+/generated/config/XOWUE-cpp-syntax-summary.txt
+/vendor/
+/build*/
+*.xex
+*.xexp
+*.iso
+*.bik
+*.xxx
+

@@ -1,0 +1,28 @@
+SECTION .rdata base=0x82000400 size=0x23e6b4 flags=0x0
+SECTION .pdata base=0x8223ec00 size=0x556d8 flags=0x0
+SECTION BINKBSS base=0x82294400 size=0x2920 flags=0x0
+SECTION .text base=0x822a0000 size=0xfc3fe8 flags=0x2
+restgprlr_14 0x82c29fe0
+savegprlr_14 0x82c29f90
+restfpr_14 0x82c2a80c
+savefpr_14 0x82c2a7c0
+restvmx_14 0x82e99088
+savevmx_14 0x82e98df0
+restvmx_64 0x82e9911c
+savevmx_64 0x82e98e84
+SECTION BINK base=0x83264000 size=0xfbc4 flags=0x2
+restgprlr_14 NOT_FOUND
+savegprlr_14 NOT_FOUND
+restfpr_14 NOT_FOUND
+savefpr_14 NOT_FOUND
+restvmx_14 NOT_FOUND
+savevmx_14 NOT_FOUND
+restvmx_64 NOT_FOUND
+savevmx_64 NOT_FOUND
+SECTION .data base=0x83280000 size=0x39e02c flags=0x0
+SECTION BINKDATAh= base=0x8361e200 size=0x3d68 flags=0x0
+SECTION .XBMOVIE base=0x83622000 size=0xc flags=0x0
+SECTION .edata base=0x83630000 size=0x1a41 flags=0x0
+SECTION .idata base=0x83640000 size=0x4b6 flags=0x0
+SECTION .XBLD base=0x83650000 size=0xb0 flags=0x0
+SECTION .reloc base=0x83650200 size=0x1813c0 flags=0x0

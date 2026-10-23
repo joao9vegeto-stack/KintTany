@@ -1,0 +1,54 @@
+Agente com acesso ao GitHub: continue o projeto X-Men Origins: Wolverine — Uncaged Edition na branch XOWUE do repositório joao9vegeto-stack/KintTany.
+
+Trabalhe somente em XOWUE. Não altere main, não crie outra branch e não inclua no Git default.xex, title updates, DLC, assets, código C++ gerado do jogo ou IPA contendo esses materiais.
+
+Antes de editar:
+1. Leia XOWUE/HANDOFF-XOWUE.md, XOWUE/README.md e XOWUE/THIRD_PARTY_NOTICES.md.
+2. Confira o estado da branch e o conteúdo já entregue.
+3. Use a revisão XenonRecomp ddd128bcca99fe8bfbb99bea583c972351fa6ace e aplique XOWUE/patches/XenonRecomp-XOWUE.patch.
+4. Rode XOWUE/tools/run_xowue_codegen.sh com o default.xex fornecido localmente pelo usuário e depois XOWUE/tools/check_generated_cpp_syntax.py.
+
+Estado que deve ser preservado:
+- O C++ AOT foi gerado: 345 unidades, 288.403.878 bytes; checagem clang++-18 passou em 345/345.
+- Zero instruções não reconhecidas, zero debugtrap, zero aviso RC e zero erro de fronteira de switch.
+- Uma observação do XenonRecomp no BCTR 0x82BD1770 é esperada: o C++ usa PPC_CALL_INDIRECT_FUNC.
+- Há 161 falhas de decodificação no trecho final de .text, 0x83263D50–0x83263FE4. Trate isso como investigação em aberto. O trecho parece dado/padding, mas não descarte funções ou bytes sem verificar referências, relocations e comportamento.
+
+Objetivo seguinte:
+- Descobrir o conjunto exato de imports Xbox kernel/XAM e fluxo de boot.
+- Confirmar, com a pasta completa WGame do usuário, os caminhos/arquivos realmente lidos. Se ela não estiver disponível no workspace do agente, avance o trabalho independente e registre esse bloqueio sem fabricar resultados.
+- Integrar a saída AOT ao app iOS arm64 existente em KintTany e documentar as responsabilidades ainda sem runtime.
+- Implementar e validar primeiro um runner mínimo que ligue as funções traduzidas com memória guest e import stubs observáveis; então avançar para APIs XAM/kernel, filesystem, GPU Xenos/D3D, áudio XMA e controles.
+- Corrigir a região final de .text com evidência antes de contar a análise como completa.
+- Fazer commits pequenos exclusivamente em XOWUE. Manter binários de entrada, assets e saída C++ gerada fora do Git.
+- Não declarar jogo jogável por causa de build ou teste de sintaxe. Uma alegação de execução exige boot real, asset real e frame real apresentado; IPA exige teste no iPhone 17 Pro.
+
+Comandos iniciais:
+
+~~~bash
+git clone https://github.com/joao9vegeto-stack/KintTany.git
+cd KintTany
+git fetch origin
+git switch --track origin/XOWUE
+
+git clone --recursive https://github.com/hedge-dev/XenonRecomp.git XOWUE/vendor/XenonRecomp
+git -C XOWUE/vendor/XenonRecomp checkout ddd128bcca99fe8bfbb99bea583c972351fa6ace
+git -C XOWUE/vendor/XenonRecomp submodule update --init --recursive
+git -C XOWUE/vendor/XenonRecomp apply "$PWD/XOWUE/patches/XenonRecomp-XOWUE.patch"
+
+cmake -S XOWUE/vendor/XenonRecomp -B XOWUE/vendor/XenonRecomp/build-xowue \
+  -DCMAKE_C_COMPILER=clang-18 \
+  -DCMAKE_CXX_COMPILER=clang++-18 \
+  -DCMAKE_BUILD_TYPE=Release
+cmake --build XOWUE/vendor/XenonRecomp/build-xowue \
+  --target XenonAnalyse XenonRecomp -j"$(nproc)"
+
+XENONRECOMP_ROOT="$PWD/XOWUE/vendor/XenonRecomp" \
+XENONRECOMP_BUILD_DIR="$PWD/XOWUE/vendor/XenonRecomp/build-xowue" \
+XOWUE_XEX="/caminho/local/default.xex" \
+XOWUE/tools/run_xowue_codegen.sh
+
+XENONRECOMP_ROOT="$PWD/XOWUE/vendor/XenonRecomp" \
+python3 XOWUE/tools/check_generated_cpp_syntax.py
+~~~
+

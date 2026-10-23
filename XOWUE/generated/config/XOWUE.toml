@@ -1,0 +1,12 @@
+[main]
+file_path = "../../upload/default.xex"
+out_directory_path = "../ppc"
+switch_table_file_path = "XOWUE_switch_tables.toml"
+restgprlr_14_address = 0x82C29FE0
+savegprlr_14_address = 0x82C29F90
+restfpr_14_address = 0x82C2A80C
+savefpr_14_address = 0x82C2A7C0
+restvmx_14_address = 0x82E99088
+savevmx_14_address = 0x82E98DF0
+restvmx_64_address = 0x82E9911C
+savevmx_64_address = 0x82E98E84
