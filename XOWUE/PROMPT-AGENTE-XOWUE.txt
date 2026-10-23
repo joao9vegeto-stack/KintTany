@@ -14,9 +14,9 @@ Estado já implementado no branch:
 - App SwiftUI de diagnóstico e workflow macOS para produzir XOWUE-unsigned.ipa.
 
 Trabalho imediato:
-1. Confirmar o build/link host usando clang-18 e o XEX fornecido localmente, sem copiar o XEX para o Git.
-2. Rodar o workflow da branch XOWUE e corrigir build até obter artifact IPA arm64.
-3. Entregar esse IPA como unsigned se não houver credenciais Apple. Não declarar o jogo jogável: kernel/XAM, Xenos/D3D, XMA, assets e boot em aparelho ainda estão pendentes.
-4. Atualizar este handoff com commits, execução de CI, artifact e erros observados.
+1. Confirmar no run mais recente o build arm64, o ícone, o `CFBundleVersion`, o tipo de documento `.xex` e as chaves que expõem Documents ao app Arquivos.
+2. Entregar `XOWUE-Build-1.ipa` unsigned e pedir teste apenas do fluxo de pasta/abertura; registrar qualquer falha observada.
+3. Continuar o runtime a partir do próximo bloqueio real do boot. O caminho testado ainda para em `HalReturnToFirmware(routine=1)`; não alegar menu, frame ou gameplay.
+4. Manter `main` intacta, preservar o XEX e os assets fora do Git e atualizar o handoff com os resultados do CI e do iPhone.
 
 O branch inclui código AOT derivado do XEX, mas não inclui o original nem os assets. Preserve esse limite ao adicionar arquivos.

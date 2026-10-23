@@ -6,12 +6,34 @@ targets:
     deploymentTarget: "17.0"
     sources:
       - path: App
+    info:
+      properties:
+        CFBundleDisplayName: XOWUE
+        LSApplicationCategoryType: public.app-category.games
+        UIFileSharingEnabled: true
+        LSSupportsOpeningDocumentsInPlace: true
+        UIApplicationSupportsDocumentBrowser: true
+        CFBundleDocumentTypes:
+          - CFBundleTypeName: Xbox 360 Executable
+            CFBundleTypeRole: Viewer
+            LSHandlerRank: Owner
+            LSItemContentTypes:
+              - com.xowue.xex
+        UTExportedTypeDeclarations:
+          - UTTypeIdentifier: com.xowue.xex
+            UTTypeDescription: Xbox 360 executable
+            UTTypeConformsTo:
+              - public.data
+            UTTypeTagSpecification:
+              public.filename-extension:
+                - xex
     settings:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: com.joaopedro.xowue
         PRODUCT_NAME: XOWUE
-        INFOPLIST_KEY_CFBundleDisplayName: XOWUE
-        INFOPLIST_KEY_LSApplicationCategoryType: public.app-category.games
+        MARKETING_VERSION: "1.0"
+        CURRENT_PROJECT_VERSION: "1"
+        ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
         GENERATE_INFOPLIST_FILE: YES
         IPHONEOS_DEPLOYMENT_TARGET: "17.0"
         SWIFT_VERSION: "5.0"

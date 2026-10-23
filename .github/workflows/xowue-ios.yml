@@ -5,8 +5,13 @@ on:
     branches:
       - XOWUE
     paths:
-      - "XOWUE/**"
       - ".github/workflows/xowue-ios.yml"
+      - "XOWUE/Runtime/**"
+      - "XOWUE/iOS/**"
+      - "XOWUE/generated/**"
+      - "XOWUE/dist/**"
+      - "XOWUE/patches/**"
+      - "XOWUE/tools/**"
   workflow_dispatch:
 
 concurrency:
@@ -24,6 +29,17 @@ jobs:
     steps:
       - name: Checkout XOWUE branch
         uses: actions/checkout@v4
+
+      - name: Assign app build number
+        id: version
+        run: |
+          set -euo pipefail
+          # Runs 1-5 were bootstrap/handoff runs. The first user-facing IPA is Build 1.
+          build_number=$((GITHUB_RUN_NUMBER - 5))
+          if [ "$build_number" -lt 1 ]; then build_number=1; fi
+          echo "XOWUE_BUILD_NUMBER=$build_number" >> "$GITHUB_ENV"
+          echo "build_number=$build_number" >> "$GITHUB_OUTPUT"
+          echo "XOWUE Build $build_number"
 
       - name: Select Xcode and validate AOT archive
         run: |
@@ -75,6 +91,8 @@ jobs:
             -configuration Release \
             -sdk iphoneos \
             -derivedDataPath build-app \
+            CURRENT_PROJECT_VERSION="$XOWUE_BUILD_NUMBER" \
+            MARKETING_VERSION=1.0 \
             CODE_SIGNING_ALLOWED=NO \
             CODE_SIGNING_REQUIRED=NO \
             CODE_SIGN_IDENTITY="" \
@@ -84,20 +102,36 @@ jobs:
         run: |
           set -euo pipefail
           mkdir -p Payload artifacts
-          cp -R build-app/Build/Products/Release-iphoneos/XOWUE.app Payload/XOWUE.app
-          ditto -c -k --sequesterRsrc --keepParent Payload artifacts/XOWUE-unsigned.ipa
-          unzip -t artifacts/XOWUE-unsigned.ipa
+          APP_SOURCE="build-app/Build/Products/Release-iphoneos/XOWUE.app"
+          cp -R "$APP_SOURCE" Payload/XOWUE.app
           mkdir -p "$RUNNER_TEMP/xowue-ipa-check"
-          unzip -q artifacts/XOWUE-unsigned.ipa -d "$RUNNER_TEMP/xowue-ipa-check"
           APP="$RUNNER_TEMP/xowue-ipa-check/Payload/XOWUE.app"
+          cp -R Payload/XOWUE.app "$APP"
           plutil -lint "$APP/Info.plist"
+          test -f "$APP/Assets.car"
           lipo "$APP/XOWUE" -verify_arch arm64
-          test -f "$APP/XOWUE"
+          python3 - "$APP/Info.plist" "$XOWUE_BUILD_NUMBER" <<'PY'
+          import plistlib, sys
+          with open(sys.argv[1], "rb") as stream:
+              info = plistlib.load(stream)
+          assert str(info.get("CFBundleVersion")) == sys.argv[2], info.get("CFBundleVersion")
+          assert info.get("UIFileSharingEnabled") is True
+          assert info.get("LSSupportsOpeningDocumentsInPlace") is True
+          assert info.get("UIApplicationSupportsDocumentBrowser") is True
+          types = info.get("CFBundleDocumentTypes", [])
+          assert any("com.xowue.xex" in entry.get("LSItemContentTypes", []) for entry in types)
+          exported = info.get("UTExportedTypeDeclarations", [])
+          assert any(entry.get("UTTypeIdentifier") == "com.xowue.xex" for entry in exported)
+          print(f"Info.plist OK · Build {sys.argv[2]} · Files sharing · XEX document type")
+          PY
+          IPA_NAME="XOWUE-Build-${XOWUE_BUILD_NUMBER}.ipa"
+          ditto -c -k --sequesterRsrc --keepParent Payload "artifacts/$IPA_NAME"
+          unzip -t "artifacts/$IPA_NAME"
 
       - name: Upload unsigned IPA
         uses: actions/upload-artifact@v4
         with:
-          name: XOWUE-iOS-unsigned-${{ github.run_number }}
-          path: artifacts/XOWUE-unsigned.ipa
+          name: XOWUE-Build-${{ steps.version.outputs.build_number }}
+          path: artifacts/XOWUE-Build-*.ipa
           if-no-files-found: error
           retention-days: 30

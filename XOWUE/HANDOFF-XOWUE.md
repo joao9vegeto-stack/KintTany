@@ -40,7 +40,11 @@
 - IPA entregue: `XOWUE-unsigned.ipa`, 20.024.250 bytes, SHA-256 `ed2d567b87a278317c2d2c61097ec6b1e2502b6ca22e9864620aaa17fe2e791d`. O ZIP do artifact da CI tem SHA-256 `b897a5ce17bc60dd81e4031debfa5a71fd5c46c7515aaba5e763db914bd2e0f9`.
 - A inspeção local confirmou um ZIP IPA íntegro, executável Mach-O de 64 bits arm64, bundle `com.joaopedro.xowue` e versão mínima iOS 17.0. O pacote não contém assinatura Apple.
 
-`iOS/` contém um app SwiftUI de diagnóstico. Ele importa um `default.xex` (ou uma pasta que o contém), copia o executável para o sandbox e oferece inspeção/tentativa de boot. O workflow cria o projeto Xcode com XcodeGen e empacota `XOWUE-unsigned.ipa`.
+`iOS/` contém o app SwiftUI de diagnóstico, ícone próprio e biblioteca local do jogo. O app expõe `Documents` no Arquivos, cria `Jogos` e detecta `default.xex` no nível da raiz ou em uma pasta de jogo dentro dela. O seletor aceita uma pasta completa ou o `default.xex`; ao receber a pasta externa, o app copia os itens com progresso para a área local e tenta iniciar o diagnóstico. O tipo de documento `.xex` também é registrado para abertura pelo iOS.
+
+O caminho recomendado é **Arquivos → No Meu iPhone → XOWUE → Jogos**. A configuração inclui `UIFileSharingEnabled`, `LSSupportsOpeningDocumentsInPlace` e o tipo `com.xowue.xex`. A interface mostra o estado observado do runtime, o resultado do boot e a versão da IPA em uso.
+
+O workflow define `CFBundleVersion` como **Build 1, Build 2, Build 3…** e nomeia o arquivo `XOWUE-Build-N.ipa`. As execuções iniciais de preparação ocupam os runs 1–5; o primeiro IPA numerado para uso começa no run 6.
 
 ### Limites atuais
 
@@ -94,16 +98,14 @@ python3 XOWUE/tools/package_xowue_aot.py
 
 ## IPA pelo GitHub Actions
 
-O workflow `.github/workflows/xowue-ios.yml` roda em push na branch `XOWUE` (quando arquivos `XOWUE/**` mudam) e por `workflow_dispatch`. Ele valida o hash do AOT, baixa XenonRecomp na revisão pinada, compila `XOWUEEngine` para iOS arm64, gera o Xcode project, monta o app sem assinatura e valida o IPA.
-
-No GitHub, abrir **Actions → XOWUE iOS IPA → run #4 → Artifacts → `XOWUE-iOS-unsigned-4.zip`**. O ZIP contém `XOWUE-unsigned.ipa`; a CI não instala o app no telefone nem cria assinatura Apple.
+O workflow `.github/workflows/xowue-ios.yml` roda em push na branch `XOWUE` quando mudam o runtime, o app, as fontes AOT, as ferramentas ou o próprio workflow; mudanças só nos handoffs não recompilam o IPA. Também aceita `workflow_dispatch`. Cada execução define `CFBundleVersion` e gera o artifact `XOWUE-Build-N`, contendo `XOWUE-Build-N.ipa`. O build continua unsigned e não é instalado no telefone.
 
 ## Próximas etapas técnicas
 
-1. Instrumentar o boot no dispositivo e implementar os imports de startup em ordem observada, mantendo erros explícitos para APIs desconhecidas.
-2. Receber e inventariar a estrutura WGame completa para testar leitura de arquivos.
-3. Completar memória, threads, handles e kernel/XAM; depois implementar MMIO e renderer Xenos/D3D para Metal, além de áudio/XMA e controles.
-4. Configurar certificado e provisioning profile para assinar e instalar o runner em um iPhone de teste.
+1. Instalar o próximo IPA numerado e testar no iPhone: pasta nativa em Arquivos, detecção após retorno ao app, seletor de pasta, abertura de `.xex` pelo iOS e número de Build visível.
+2. Instrumentar o boot real no aparelho e identificar o primeiro import que bloqueia além do smoke test, mantendo falhas explícitas para APIs desconhecidas.
+3. Integrar a leitura da estrutura WGame e implementar os imports Xbox kernel/XAM observados, memória, threads e handles compatíveis.
+4. Implementar MMIO e renderer Xenos/D3D para Metal; depois áudio/XMA e controles.
 5. Só declarar boot jogável após capturar um frame real do jogo e validar no dispositivo alvo.
 
 ## Arquivos importantes
