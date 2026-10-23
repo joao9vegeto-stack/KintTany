@@ -83,6 +83,25 @@ jobs:
           "$RUNNER_TEMP/xowue-dispatch-guard-smoke"
           python3 tools/test_xowue_aot_instrumentation.py
 
+      - name: Fetch pinned XenonRecomp runtime utilities
+        run: |
+          set -euo pipefail
+          git clone --recursive https://github.com/hedge-dev/XenonRecomp.git "$RUNNER_TEMP/XenonRecomp"
+          git -C "$RUNNER_TEMP/XenonRecomp" checkout ddd128bcca99fe8bfbb99bea583c972351fa6ace
+          git -C "$RUNNER_TEMP/XenonRecomp" submodule update --init --recursive
+          git -C "$RUNNER_TEMP/XenonRecomp" apply --check "$GITHUB_WORKSPACE/patches/XenonRecomp-XOWUE.patch"
+          git -C "$RUNNER_TEMP/XenonRecomp" apply "$GITHUB_WORKSPACE/patches/XenonRecomp-XOWUE.patch"
+          PPC_CONTEXT="$RUNNER_TEMP/XenonRecomp/XenonUtils/ppc_context.h"
+          grep -Fq '#define PPC_WEAK_FUNC(x) __attribute__((noinline)) PPC_FUNC(x)' "$PPC_CONTEXT"
+          grep -Fq '#define PPC_CALL_INDIRECT_FUNC(x) xowue_dispatch_indirect(ctx, base, uint32_t(x))' "$PPC_CONTEXT"
+          grep -Fq 'void xowue_dispatch_indirect(struct PPCContext& ctx, uint8_t* base, uint32_t target);' "$PPC_CONTEXT"
+          if grep -Fq '#define PPC_WEAK_FUNC(x) __attribute__((weak,noinline)) PPC_FUNC(x)' "$PPC_CONTEXT"; then
+            echo "XOWUE AOT aliases must not use weak linkage" >&2
+            exit 1
+          fi
+          python3 "$GITHUB_WORKSPACE/tools/patch_xowue_aot_symbols.py" --ppc-dir "$GITHUB_WORKSPACE/generated/ppc"
+          echo "XENONRECOMP_ROOT=$RUNNER_TEMP/XenonRecomp" >> "$GITHUB_ENV"
+
       - name: Install KosmicKrisp iOS cross-build prerequisites
         run: |
           set -euxo pipefail
@@ -261,25 +280,6 @@ jobs:
             exit 1
           fi
           echo "KosmicKrisp arm64 iOS ICD dylib built from $MESA_KOSMICKRISP_SHA" | tee build-ios/kosmickrisp/BUILD.txt
-
-      - name: Fetch pinned XenonRecomp runtime utilities
-        run: |
-          set -euo pipefail
-          git clone --recursive https://github.com/hedge-dev/XenonRecomp.git "$RUNNER_TEMP/XenonRecomp"
-          git -C "$RUNNER_TEMP/XenonRecomp" checkout ddd128bcca99fe8bfbb99bea583c972351fa6ace
-          git -C "$RUNNER_TEMP/XenonRecomp" submodule update --init --recursive
-          git -C "$RUNNER_TEMP/XenonRecomp" apply --check "$GITHUB_WORKSPACE/patches/XenonRecomp-XOWUE.patch"
-          git -C "$RUNNER_TEMP/XenonRecomp" apply "$GITHUB_WORKSPACE/patches/XenonRecomp-XOWUE.patch"
-          PPC_CONTEXT="$RUNNER_TEMP/XenonRecomp/XenonUtils/ppc_context.h"
-          grep -Fq '#define PPC_WEAK_FUNC(x) __attribute__((noinline)) PPC_FUNC(x)' "$PPC_CONTEXT"
-          grep -Fq '#define PPC_CALL_INDIRECT_FUNC(x) xowue_dispatch_indirect(ctx, base, uint32_t(x))' "$PPC_CONTEXT"
-          grep -Fq 'void xowue_dispatch_indirect(struct PPCContext& ctx, uint8_t* base, uint32_t target);' "$PPC_CONTEXT"
-          if grep -Fq '#define PPC_WEAK_FUNC(x) __attribute__((weak,noinline)) PPC_FUNC(x)' "$PPC_CONTEXT"; then
-            echo "XOWUE AOT aliases must not use weak linkage" >&2
-            exit 1
-          fi
-          python3 "$GITHUB_WORKSPACE/tools/patch_xowue_aot_symbols.py" --ppc-dir "$GITHUB_WORKSPACE/generated/ppc"
-          echo "XENONRECOMP_ROOT=$RUNNER_TEMP/XenonRecomp" >> "$GITHUB_ENV"
 
       - name: Build arm64 AOT engine
         run: |
