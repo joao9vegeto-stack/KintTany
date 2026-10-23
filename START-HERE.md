@@ -1,9 +1,9 @@
 # XOWUE — início rápido
 
-Branch: `XOWUE` no repositório [joao9vegeto-stack/KintTany](https://github.com/joao9vegeto-stack/KintTany). O projeto fica na raiz da branch, sem uma pasta externa envolvendo os arquivos.
+Branch: `XOWUE` no repositório [joao9vegeto-stack/KintTany](https://github.com/joao9vegeto-stack/KintTany). O projeto fica diretamente na raiz.
 
-A Action #22, commit `5bde4c1`, concluiu e publicou o IPA Build 8. O engine arm64, o app iOS e o backend KosmicKrisp Vulkan → Metal compilaram; o pacote foi validado como IPA sem assinatura. O Build 8 inclui o handler `KeEnterCriticalRegion` e a correção do ponteiro guest `base`.
+O [Build 10](https://github.com/joao9vegeto-stack/KintTany/actions/runs/40011161715), Action #24 no commit `75cab56`, passou pela compilação, empacotamento e validação dos símbolos AOT no executável final. O Build 8 caía em `PC=0` porque 87.736 aliases PPC estavam weak e viravam weak dyld lookups. O Build 9 ainda continha esses aliases; o Build 10 os liga como símbolos fortes. A inspeção do IPA achou 133.351 definições AOT fortes, zero weak lookups e confirmou `sub_8237CA18` como símbolo forte. O log nativo persistente do boot grava os eventos iniciais em `crash-build-N.txt`.
 
-O último relatório do aparelho ainda é do Build 7: 24 opcodes draw e 5 buffers indiretos, nenhum swap guest, nenhum frame decodificado, parada em `KeEnterCriticalRegion`. O Build 8 ainda não tem relatório de execução em aparelho. A compilação verde não demonstra renderização do jogo: o frontend Xenos ainda não executa por completo shaders, render targets/EDRAM e resolves. KosmicKrisp permanece como backend gráfico; não confunda o clear/present host com frame guest.
+KosmicKrisp continua sendo o backend Vulkan → Metal. O Build 10 ainda aguarda validação de execução no aparelho: esta Action não confirma frames guest nem imagem do jogo. O IPA CI é arm64, sem assinatura e não inclui `default.xex` ou assets do jogo.
 
-O painel do app mostra os contadores do último boot. Contagem de draw indica que o pacote foi observado; não significa que shaders/render targets do Xenos foram executados. Use o [handoff](HANDOFF-XOWUE.md) para os detalhes do runtime e os procedimentos de build. O `default.xex` e os assets do jogo ficam fora do Git e do IPA.
+Consulte [README.md](README.md) para o estado breve, [HANDOFF-XOWUE.md](HANDOFF-XOWUE.md) para a auditoria técnica e [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md) antes de redistribuir.
