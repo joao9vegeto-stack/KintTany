@@ -34,8 +34,8 @@ jobs:
         id: version
         run: |
           set -euo pipefail
-          # Runs 1-6 cover bootstrap, handoff, and XcodeGen correction. First IPA is Build 1.
-          build_number=$((GITHUB_RUN_NUMBER - 6))
+          # Runs 1-7 cover bootstrap, handoff, and packaging fixes. First IPA is Build 1.
+          build_number=$((GITHUB_RUN_NUMBER - 7))
           if [ "$build_number" -lt 1 ]; then build_number=1; fi
           echo "XOWUE_BUILD_NUMBER=$build_number" >> "$GITHUB_ENV"
           echo "build_number=$build_number" >> "$GITHUB_OUTPUT"
@@ -104,7 +104,7 @@ jobs:
           mkdir -p Payload artifacts
           APP_SOURCE="build-app/Build/Products/Release-iphoneos/XOWUE.app"
           cp -R "$APP_SOURCE" Payload/XOWUE.app
-          mkdir -p "$RUNNER_TEMP/xowue-ipa-check"
+          mkdir -p "$RUNNER_TEMP/xowue-ipa-check/Payload"
           APP="$RUNNER_TEMP/xowue-ipa-check/Payload/XOWUE.app"
           cp -R Payload/XOWUE.app "$APP"
           plutil -lint "$APP/Info.plist"

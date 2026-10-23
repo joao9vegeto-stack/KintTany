@@ -37,7 +37,8 @@
 - O engine e todo o código AOT ligaram em `XOWUEHostSmoke`.
 - A chamada ao entry point passou por alocação e liberação de memória; o caminho termina em `HalReturnToFirmware(routine=1)`. O runner relata a parada como estado de firmware, sem alegar que o título chegou ao menu ou renderizou um frame.
 - O workflow GitHub Actions `XOWUE iOS IPA` concluiu com sucesso no run #4 (ID `39888098218`), validando o commit de código `c784c75c3c770ffcf3cebca3dd21ed926f1cc779`. O runner macOS compilou o engine e o app para arm64, empacotou o IPA e passou pelas verificações do workflow. [Run do Actions](https://github.com/joao9vegeto-stack/KintTany/actions/runs/39888098218).
-- O run #6 (ID `39890657352`, commit `9f32c367b378721cc1887a2136c5801ed26e1ac7`) recompilou o engine arm64 com sucesso, mas o XcodeGen recusou o spec por falta de `info.path`; o app não foi compilado nem houve artefato IPA. O spec corrigido gera o Info.plist em `XOWUE-Info.plist`; o próximo run passa a ser **Build 1**. [Run com a falha de configuração](https://github.com/joao9vegeto-stack/KintTany/actions/runs/39890657352).
+- O run #6 (ID `39890657352`, commit `9f32c367b378721cc1887a2136c5801ed26e1ac7`) recompilou o engine arm64 com sucesso, mas o XcodeGen recusou o spec por falta de `info.path`; o app não foi compilado nem houve artefato IPA. [Run com a falha de configuração](https://github.com/joao9vegeto-stack/KintTany/actions/runs/39890657352).
+- O run #7 (ID `39891228913`, commit `257c62275a70e577690137ebe8e6f45c82924f06`) passou pelo XcodeGen e compilou o app SwiftUI. O empacotamento parou porque o workflow não criou o diretório `Payload` no caminho temporário de validação; não houve IPA. A correção cria esse diretório e ajusta a versão para que o run #8 produza **Build 1**. [Run com falha de empacotamento](https://github.com/joao9vegeto-stack/KintTany/actions/runs/39891228913).
 - IPA entregue: `XOWUE-unsigned.ipa`, 20.024.250 bytes, SHA-256 `ed2d567b87a278317c2d2c61097ec6b1e2502b6ca22e9864620aaa17fe2e791d`. O ZIP do artifact da CI tem SHA-256 `b897a5ce17bc60dd81e4031debfa5a71fd5c46c7515aaba5e763db914bd2e0f9`.
 - A inspeção local confirmou um ZIP IPA íntegro, executável Mach-O de 64 bits arm64, bundle `com.joaopedro.xowue` e versão mínima iOS 17.0. O pacote não contém assinatura Apple.
 
@@ -45,7 +46,7 @@
 
 O caminho recomendado é **Arquivos → No Meu iPhone → XOWUE → Jogos**. A configuração inclui `UIFileSharingEnabled`, `LSSupportsOpeningDocumentsInPlace` e o tipo `com.xowue.xex`. A interface mostra o estado observado do runtime, o resultado do boot e a versão da IPA em uso.
 
-O workflow define `CFBundleVersion` como **Build 1, Build 2, Build 3…** e nomeia o arquivo `XOWUE-Build-N.ipa`. O run #6 compilou o engine, mas não gerou IPA porque o spec do XcodeGen estava sem o campo obrigatório `info.path`. A correção restaura esse caminho e reserva o run #7 para o primeiro IPA, **Build 1**.
+O workflow define `CFBundleVersion` como **Build 1, Build 2, Build 3…** e nomeia o arquivo `XOWUE-Build-N.ipa`. O run #6 compilou o engine, mas não gerou IPA porque o spec do XcodeGen estava sem o campo obrigatório `info.path`. A correção restaura esse caminho; o run #7 confirmou a compilação Swift. O run #8 fica reservado para o primeiro IPA, **Build 1**.
 
 ### Limites atuais
 

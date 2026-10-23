@@ -14,7 +14,7 @@ Estado já implementado no branch:
 - App SwiftUI com biblioteca local em Documents, abertura de `.xex`, ícone próprio, build numerada e workflow macOS para produzir `XOWUE-Build-N.ipa`.
 
 Trabalho imediato:
-1. Confirmar no run #7 o build arm64, o ícone, o `CFBundleVersion=1`, o tipo de documento `.xex` e as chaves que expõem Documents ao app Arquivos.
+1. Confirmar no run #8 o build arm64, o ícone, o `CFBundleVersion=1`, o tipo de documento `.xex` e as chaves que expõem Documents ao app Arquivos.
 2. Se o run passar, entregar `XOWUE-Build-1.ipa` unsigned e pedir teste apenas do fluxo de pasta/abertura; registrar qualquer falha observada.
 3. Continuar o runtime a partir do próximo bloqueio real do boot. O caminho testado ainda para em `HalReturnToFirmware(routine=1)`; não alegar menu, frame ou gameplay.
 4. Manter `main` intacta, preservar o XEX e os assets fora do Git e atualizar o handoff com os resultados do CI e do iPhone.
