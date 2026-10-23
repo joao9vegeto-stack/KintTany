@@ -71,6 +71,14 @@ private struct XOWUEDocumentPicker: UIViewControllerRepresentable {
     }
 }
 
+private struct XOWUEVulkanSurface: UIViewRepresentable {
+    func makeUIView(context: Context) -> XOWUEVulkanView {
+        XOWUEVulkanView(frame: .zero)
+    }
+
+    func updateUIView(_ view: XOWUEVulkanView, context: Context) {}
+}
+
 private enum XOWUEFileStore {
     static let executableName = "default.xex"
     static let selectedGameKey = "xowue.selected-game-relative-path"
@@ -668,14 +676,14 @@ private final class XOWUEGameLibrary: ObservableObject {
 }
 
 private enum XOWUEPalette {
-    static let background = Color(rgb: 0x090B10)
-    static let panel = Color(rgb: 0x151A22)
-    static let panelRaised = Color(rgb: 0x222B36)
-    static let yellow = Color(rgb: 0xF4C430)
-    static let yellowLight = Color(rgb: 0xFFE58A)
-    static let blue = Color(rgb: 0x2767D8)
-    static let blueLight = Color(rgb: 0x55A7FF)
-    static let muted = Color(rgb: 0xA2A9B5)
+    static let background = Color(rgb: 0x080B12)
+    static let panel = Color(rgb: 0x151B25)
+    static let panelRaised = Color(rgb: 0x202A3B)
+    static let yellow = Color(rgb: 0xF5C12B)
+    static let yellowLight = Color(rgb: 0xFFE18A)
+    static let blue = Color(rgb: 0x163A70)
+    static let blueLight = Color(rgb: 0x70B6FF)
+    static let muted = Color(rgb: 0xA3A7AC)
     static let green = Color(rgb: 0x57D69A)
     static let red = Color(rgb: 0xFF5B61)
     static let white = Color(rgb: 0xF5F7FA)
@@ -700,8 +708,8 @@ private struct XOWUEBrandMark: View {
             .scaledToFit()
             .frame(width: 68, height: 68)
             .clipShape(RoundedRectangle(cornerRadius: 19))
-            .overlay(RoundedRectangle(cornerRadius: 19).stroke(XOWUEPalette.blueLight.opacity(0.5), lineWidth: 1))
-            .shadow(color: XOWUEPalette.blue.opacity(0.22), radius: 9, y: 4)
+            .overlay(RoundedRectangle(cornerRadius: 19).stroke(XOWUEPalette.blueLight.opacity(0.48), lineWidth: 1))
+            .shadow(color: XOWUEPalette.yellow.opacity(0.14), radius: 10, y: 4)
             .accessibilityHidden(true)
     }
 }
@@ -734,7 +742,7 @@ private struct XOWUERootView: View {
         ZStack {
             XOWUEPalette.background.ignoresSafeArea()
             RadialGradient(
-                colors: [Color(rgb: 0x12345B).opacity(0.38), .clear],
+                colors: [Color(rgb: 0x163A70).opacity(0.30), .clear],
                 center: .topTrailing, startRadius: 0, endRadius: 470
             )
             .ignoresSafeArea()
@@ -743,6 +751,7 @@ private struct XOWUERootView: View {
                 VStack(alignment: .leading, spacing: 18) {
                     header
                     gameLibraryCard
+                    graphicsBackendCard
                     runtimeCard
                     footer
                 }
@@ -964,6 +973,32 @@ private struct XOWUERootView: View {
         .overlay(RoundedRectangle(cornerRadius: 19).stroke(.white.opacity(0.08), lineWidth: 1))
     }
 
+    private var graphicsBackendCard: some View {
+        VStack(alignment: .leading, spacing: 11) {
+            HStack {
+                Label("SAÍDA GRÁFICA · KOSMICKRISP", systemImage: "display")
+                    .font(.system(size: 11, weight: .heavy, design: .rounded))
+                    .tracking(0.8)
+                    .foregroundStyle(XOWUEPalette.yellowLight)
+                Spacer()
+                Text("METAL / iOS")
+                    .font(.system(size: 9, weight: .heavy, design: .monospaced))
+                    .foregroundStyle(XOWUEPalette.blueLight)
+            }
+            XOWUEVulkanSurface()
+                .frame(height: 176)
+                .clipShape(RoundedRectangle(cornerRadius: 14))
+                .overlay(RoundedRectangle(cornerRadius: 14).stroke(XOWUEPalette.blueLight.opacity(0.18), lineWidth: 1))
+            Text("Este quadro confirma a cadeia Vulkan → CAMetalLayer. Ele é um clear de diagnóstico; a cena do jogo depende da tradução Xenos de comandos, shaders e texturas. O painel mostra separadamente cada VdSwap detectado.")
+                .font(.system(size: 10, weight: .medium))
+                .foregroundStyle(XOWUEPalette.muted)
+                .fixedSize(horizontal: false, vertical: true)
+        }
+        .padding(15)
+        .background(XOWUEPalette.panel.opacity(0.97), in: RoundedRectangle(cornerRadius: 19))
+        .overlay(RoundedRectangle(cornerRadius: 19).stroke(XOWUEPalette.blueLight.opacity(0.10), lineWidth: 1))
+    }
+
     private var runtimeCard: some View {
         VStack(alignment: .leading, spacing: 12) {
             HStack {
@@ -977,15 +1012,17 @@ private struct XOWUERootView: View {
                     .foregroundStyle(XOWUEPalette.green)
             }
 
-            runtimeRow("Recompilação AOT", detail: "345 unidades no engine", icon: "checkmark.circle.fill", tint: XOWUEPalette.green)
-            runtimeRow("Loader XEX2 / PPC", detail: "Mapeamento e entry point integrados", icon: "checkmark.circle.fill", tint: XOWUEPalette.green)
-            runtimeRow("KosmicKrisp · iOS Metal WSI", detail: "Patch M2/M3 pinado no projeto; o driver não está linkado e falta Xenos → Vulkan.", icon: "point.3.connected.trianglepath.dotted", tint: XOWUEPalette.blueLight)
+            runtimeRow("Recompilação AOT", detail: "345 unidades ligadas ao runtime", icon: "checkmark.circle.fill", tint: XOWUEPalette.green)
+            runtimeRow("Scheduler PPC / KTHREAD", detail: "Implementado: ExCreateThread, Xapi startup, espera, suspensão, TLS, KPCR e saída. Aguardando teste com o XEX.", icon: "point.3.connected.trianglepath.dotted", tint: XOWUEPalette.yellowLight)
+            runtimeRow("Memória física Xbox", detail: "Alocação e mapeamento guest/physical básicos; compatibilidade do título ainda não validada", icon: "point.3.connected.trianglepath.dotted", tint: XOWUEPalette.yellowLight)
+            runtimeRow("Frontend Xenos / PM4", detail: "Ring buffer, modo de vídeo e pacote VdSwap observados", icon: "point.3.connected.trianglepath.dotted", tint: XOWUEPalette.yellowLight)
+            runtimeRow("KosmicKrisp · Metal WSI", detail: "Mesa iOS compilada e ligada; quadro de clear gerado por Vulkan", icon: "point.3.connected.trianglepath.dotted", tint: XOWUEPalette.blueLight)
 
             VStack(alignment: .leading, spacing: 6) {
-                Text("O boot avança pelo setup inicial e para na criação de thread PPC.")
+                Text("Build 3 inclui o scheduler PPC para avançar além do primeiro ExCreateThread.")
                     .font(.system(size: 13, weight: .bold, design: .rounded))
                     .foregroundStyle(XOWUEPalette.white)
-                Text("Último bloqueio reproduzido: ExCreateThread (LR 0x82C4C110). O scheduler de threads Xbox ainda precisa de contexto PPC, pilha e despacho.")
+                Text("O log do Build 2 parou em ExCreateThread (LR 0x82C4C110). O Build 3 adiciona ciclo de vida e contexto por thread, mas ainda precisa ser executado com esta pasta do jogo. A saída Vulkan atual é um clear de diagnóstico; shaders, tiling e draw state Xenos ainda precisam ser traduzidos para mostrar a cena real.")
                     .font(.system(size: 11))
                     .foregroundStyle(XOWUEPalette.muted)
                     .fixedSize(horizontal: false, vertical: true)
@@ -1012,16 +1049,16 @@ private struct XOWUERootView: View {
             .background(Color.black.opacity(0.45), in: RoundedRectangle(cornerRadius: 12))
 
             HStack(spacing: 16) {
-                if let url = XOWUEDiagnostics.fileURL(named: "diagnostico.txt") {
+                if let url = XOWUEDiagnostics.fileURL(named: XOWUEDiagnostics.diagnosticFilename) {
                     ShareLink(item: url) {
-                        Label("diagnostico.txt", systemImage: "doc.text")
+                        Label(XOWUEDiagnostics.diagnosticFilename, systemImage: "doc.text")
                             .font(.system(size: 10, weight: .bold, design: .rounded))
                             .foregroundStyle(XOWUEPalette.yellowLight)
                     }
                 }
-                if let url = XOWUEDiagnostics.fileURL(named: "crash.txt") {
+                if let url = XOWUEDiagnostics.fileURL(named: XOWUEDiagnostics.crashFilename) {
                     ShareLink(item: url) {
-                        Label("crash.txt", systemImage: "exclamationmark.3")
+                        Label(XOWUEDiagnostics.crashFilename, systemImage: "exclamationmark.3")
                             .font(.system(size: 10, weight: .bold, design: .rounded))
                             .foregroundStyle(XOWUEPalette.blueLight)
                     }

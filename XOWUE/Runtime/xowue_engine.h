@@ -7,6 +7,7 @@ extern "C" {
 /* Returns 0 on success and writes a human-readable result to output. */
 int xowue_inspect_xex(const char *path, char *output, size_t output_capacity);
 int xowue_boot_xex(const char *path, char *output, size_t output_capacity);
+int xowue_runtime_snapshot(char *output, size_t output_capacity);
 
 #ifdef __cplusplus
 }

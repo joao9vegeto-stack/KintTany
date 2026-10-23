@@ -1,11 +1,16 @@
 import Foundation
+import UIKit
 
 enum XOWUEDiagnostics {
     private static let lock = NSRecursiveLock()
     private static var started = false
     private static let maximumBytes = 2 * 1024 * 1024
-    private static let diagnosticName = "diagnostico.txt"
-    private static let crashName = "crash.txt"
+    private static var buildNumber: String {
+        let value = Bundle.main.object(forInfoDictionaryKey: "CFBundleVersion") as? String
+        return value?.isEmpty == false ? value! : "unknown"
+    }
+    static var diagnosticFilename: String { "diagnostico-build-\(buildNumber).txt" }
+    static var crashFilename: String { "crash-build-\(buildNumber).txt" }
 
     static func startup() {
         lock.lock()
@@ -14,8 +19,8 @@ enum XOWUEDiagnostics {
         started = true
         guard let documents = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask).first else { return }
 
-        let diagnosticURL = documents.appendingPathComponent(diagnosticName)
-        let crashURL = documents.appendingPathComponent(crashName)
+        let diagnosticURL = documents.appendingPathComponent(diagnosticFilename)
+        let crashURL = documents.appendingPathComponent(crashFilename)
         ensureFile(diagnosticURL)
         ensureFile(crashURL)
 
@@ -34,6 +39,7 @@ enum XOWUEDiagnostics {
 
         let build = Bundle.main.object(forInfoDictionaryKey: "CFBundleVersion") as? String ?? "unknown"
         appendLocked("APP_LAUNCH build=\(build) title_id=41560816 documents=\(documents.path)", to: diagnosticURL)
+        appendLocked("APP_ENV device=\(UIDevice.current.model) os=\(UIDevice.current.systemVersion) bundle=\(Bundle.main.bundleIdentifier ?? "unknown") arch=arm64", to: diagnosticURL)
         appendLocked("APP_LAUNCH build=\(build) title_id=41560816", to: crashURL)
         NSSetUncaughtExceptionHandler { exception in
             let stack = exception.callStackSymbols.prefix(24).joined(separator: " | ")
@@ -49,17 +55,17 @@ enum XOWUEDiagnostics {
     static func log(_ message: String) {
         lock.lock()
         defer { lock.unlock() }
-        guard let url = fileURL(named: diagnosticName) else { return }
+        guard let url = fileURL(named: diagnosticFilename) else { return }
         appendLocked(message, to: url)
     }
 
     static func bootStarted(path: String, build: String) {
         lock.lock()
         defer { lock.unlock() }
-        if let url = fileURL(named: diagnosticName) {
+        if let url = fileURL(named: diagnosticFilename) {
             appendLocked("BOOT_STARTED build=\(build) title_id=41560816 xex=\(path)", to: url)
         }
-        if let url = fileURL(named: crashName) {
+        if let url = fileURL(named: crashFilename) {
             appendLocked("BOOT_STARTED build=\(build) xex=\(path)", to: url)
         }
     }
@@ -68,10 +74,10 @@ enum XOWUEDiagnostics {
         lock.lock()
         defer { lock.unlock() }
         let result = "BOOT_FINISHED code=\(code)\n\(text)"
-        if let url = fileURL(named: diagnosticName) {
+        if let url = fileURL(named: diagnosticFilename) {
             appendLocked(result, to: url)
         }
-        if let url = fileURL(named: crashName) {
+        if let url = fileURL(named: crashFilename) {
             appendLocked(result, to: url)
         }
     }
@@ -83,10 +89,10 @@ enum XOWUEDiagnostics {
     static func recordCrash(_ message: String) {
         lock.lock()
         defer { lock.unlock() }
-        if let url = fileURL(named: diagnosticName) {
+        if let url = fileURL(named: diagnosticFilename) {
             appendLocked("CRASH \(message)", to: url)
         }
-        if let url = fileURL(named: crashName) {
+        if let url = fileURL(named: crashFilename) {
             appendLocked("CRASH \(message)", to: url)
         }
     }
@@ -114,3 +120,4 @@ enum XOWUEDiagnostics {
         try? file.write(contentsOf: data)
     }
 }
+
