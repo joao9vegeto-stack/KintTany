@@ -61,9 +61,9 @@ https://github.com/Kenji-NX/mesa/blob/bfe063f723d436e5cdef8a98f058d4e44a64810c/d
 
 ## XenonUtils / runtime upstream
 
-O runner usa componentes XenonUtils do repositório XenonRecomp, pinned em
-ddd128bcca99fe8bfbb99bea583c972351fa6ace, incluindo parser XEX2/LZX e
-dependências listadas em XOWUE/patches/XenonRecomp-XOWUE.patch. Consulte as
-licenças e notices dos submódulos no checkout pinado. O archive AOT deste
-projeto deriva do executável fornecido pelo usuário; o executável e os assets
-originais não são publicados neste branch.
+The runner uses XenonUtils components from XenonRecomp at
+ddd128bcca99fe8bfbb99bea583c972351fa6ace, including the XEX2/LZX parser and
+dependencies listed in `patches/XenonRecomp-XOWUE.patch`. Consult the
+submodule licenses and notices in the pinned checkout. The project's AOT
+archive derives from the executable supplied by the user; the executable and
+original game assets are not published in this branch.

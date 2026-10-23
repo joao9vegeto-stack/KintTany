@@ -7,12 +7,18 @@
 #include <algorithm>
 #include <array>
 #include <atomic>
+#include <bit>
+#include <cerrno>
 #include <chrono>
 #include <cstdarg>
+#include <cctype>
+#include <cstdlib>
 #include <condition_variable>
 #include <cstdio>
 #include <cstring>
+#include <deque>
 #include <fstream>
+#include <filesystem>
 #include <iterator>
 #include <limits>
 #include <memory>
@@ -20,12 +26,22 @@
 #include <optional>
 #include <stdexcept>
 #include <string>
+#include <string_view>
 #include <thread>
 #include <unordered_map>
+#include <unordered_set>
 #include <utility>
 #include <vector>
 
+#include <arpa/inet.h>
+#include <fcntl.h>
+#include <netdb.h>
+#include <netinet/in.h>
+#include <poll.h>
+#include <sys/socket.h>
 #include <sys/mman.h>
+#include <sys/ioctl.h>
+#include <sys/types.h>
 #include <unistd.h>
 
 extern "C" void xowue_vulkan_backend_guest_swap(uint32_t frontbuffer,
@@ -38,13 +54,23 @@ extern "C" void xowue_vulkan_backend_guest_frame_rgba(
 extern "C" void xowue_vulkan_backend_guest_frame_reset(void) __attribute__((weak));
 
 void pumpGuestXenosRingBuffer();
+bool validGuestRange(uint32_t address, uint64_t size);
+void xowue_NtClose(PPCContext &context);
+void xowue_ExCreateThread(PPCContext &context, uint8_t *base);
+uint32_t guestStackArgument(PPCContext &context, uint8_t *base,
+                            uint32_t argumentIndex);
 
 namespace {
+uint32_t allocateGuestPhysicalRange(uint8_t *base, uint32_t requestedSize,
+                                    uint32_t alignment, uint32_t protection);
+bool releaseGuestPhysicalRange(uint32_t address);
+void signalGuestEventHandle(uint32_t handle);
 constexpr size_t kGuestAddressSpaceSize = static_cast<size_t>(PPC_MEMORY_SIZE);
 constexpr uint32_t kInitialStackPointer = 0x7FFF0000u;
 constexpr uint32_t kFirstVirtualAllocation = 0x10000000u;
 constexpr uint32_t kLastVirtualAllocation = 0x70000000u;
 constexpr uint32_t kNtStatusSuccess = 0x00000000u;
+constexpr uint32_t kNtStatusNotImplemented = 0xC0000002u;
 constexpr uint32_t kNtStatusInvalidParameter = 0xC000000Du;
 constexpr uint32_t kNtStatusBufferTooSmall = 0xC0000023u;
 constexpr uint32_t kNtStatusInvalidParameter1 = 0xC00000EFu;
@@ -68,6 +94,7 @@ constexpr uint32_t kNtStatusTimeout = 0x00000102u;
 constexpr uint32_t kNtStatusCancelled = 0xC0000120u;
 constexpr uint32_t kNtStatusAbandonedWait0 = 0x00000080u;
 constexpr uint32_t kNtStatusWait0 = 0x00000000u;
+constexpr uint32_t kNtStatusUserApc = 0x000000C0u;
 constexpr size_t kTlsSlotCount = 4096;
 constexpr uint32_t kDefaultTlsSlotCount = 1024u;
 constexpr uint32_t kTlsOutOfIndexes = 0xFFFFFFFFu;
@@ -79,6 +106,7 @@ constexpr uint32_t kFirstGuestTlsAddress = 0x7B000000u;
 constexpr uint32_t kGuestThreadTlsStride = 0x10000u;
 constexpr uint32_t kMainGuestTlsAddress = 0x7A000000u;
 constexpr uint32_t kGuestThreadObjectSize = 0x0AB0u;
+constexpr uint32_t kGuestKThreadApcDisableOffset = 0x0B0u;
 constexpr uint32_t kGuestThreadMetadataStride = 0x1000u;
 constexpr uint32_t kXenosShaderConstantFetchRegister = 0x4800u;
 constexpr uint32_t kXenosGpuRegisterBase = 0x7FC80000u;
@@ -129,14 +157,37 @@ struct GuestCommit {
     uint32_t protection;
 };
 struct GuestWaitable {
-    enum class Kind { Event, Thread };
+    enum class Kind { Event, Thread, Semaphore, Mutant, Timer };
     Kind kind = Kind::Event;
     uint32_t handle = 0;
     uint32_t objectAddress = 0;
     bool manualReset;
     bool signaled;
+    int32_t semaphoreCount = 0;
+    int32_t semaphoreLimit = 0;
+    uint32_t ownerThread = 0u;
+    uint32_t recursion = 0u;
+    uint64_t timerGeneration = 0u;
+    uint64_t pulseGeneration = 0u;
     std::mutex mutex;
     std::condition_variable changed;
+};
+struct GuestFile {
+    std::filesystem::path path;
+    std::fstream stream;
+    bool readable = false;
+    bool writable = false;
+    bool directory = false;
+    std::vector<std::filesystem::path> entries;
+    size_t directoryCursor = 0;
+    std::shared_ptr<GuestWaitable> completion;
+    std::mutex mutex;
+};
+struct GuestApc {
+    uint32_t routine = 0u;
+    uint32_t context = 0u;
+    uint32_t argument1 = 0u;
+    uint32_t argument2 = 0u;
 };
 struct GuestThread {
     uint32_t id = 0;
@@ -154,6 +205,8 @@ struct GuestThread {
     std::atomic<uint32_t> exitStatus{kNtStatusSuccess};
     std::atomic<bool> exited{false};
     std::mutex stateMutex;
+    std::mutex apcMutex;
+    std::deque<GuestApc> pendingApcs;
     std::condition_variable stateChanged;
     std::condition_variable exitChanged;
     std::shared_ptr<GuestWaitable> completion;
@@ -223,6 +276,22 @@ std::mutex g_runtimeTraceMutex;
 std::mutex g_tlsMutex;
 std::mutex g_virtualMemoryMutex;
 std::mutex g_guestObjectMutex;
+std::mutex g_guestFileMutex;
+std::mutex g_spinLockMapMutex;
+std::mutex g_slistMutex;
+std::mutex g_ioShareMutex;
+std::mutex g_socketMutex;
+std::mutex g_l2Mutex;
+std::unordered_map<uint32_t, std::shared_ptr<GuestFile>> g_guestFiles;
+std::unordered_map<uint32_t, std::shared_ptr<std::mutex>> g_guestSpinLocks;
+std::unordered_map<uint32_t, std::pair<uint32_t, uint32_t>> g_ioShareByFileObject;
+std::unordered_map<uint32_t, int> g_guestSockets;
+std::unordered_set<uint32_t> g_guestXmaContexts;
+thread_local int32_t g_wsaLastError = 0;
+std::unordered_map<std::string, std::string> g_guestSymbolicLinks;
+std::filesystem::path g_guestGameRoot;
+std::filesystem::path g_guestSaveRoot;
+thread_local uint32_t g_guestIrql = 0u;
 std::mutex g_guestThreadMutex;
 std::mutex g_guestStackMutex;
 std::mutex g_criticalSectionMapMutex;
@@ -318,6 +387,10 @@ struct GuestMemory final {
 
 std::weak_ptr<GuestMemory> g_activeGuestMemory;
 uint32_t g_activeImageBase = 0;
+uint32_t g_activeEntryPoint = 0u;
+std::vector<std::pair<uint32_t, uint32_t>> g_activeImageSections;
+uint32_t g_activeExecutionInfoAddress = 0u;
+constexpr uint32_t kXowueTitleId = 0x41560816u;
 
 struct GuestThreadStopRequested final {};
 struct GuestThreadExit final {
@@ -332,6 +405,77 @@ PPCFunc *findGuestFunction(uint32_t address) {
         if (mapping->guest == address) return mapping->host;
     }
     return nullptr;
+}
+
+void notifyGuestWaiters();
+
+void queueGuestApc(GuestThread *thread, uint32_t routine, uint32_t apcContext,
+                   uint32_t argument1, uint32_t argument2) {
+    if (!thread || routine == 0u) return;
+    routine &= ~1u;
+    {
+        std::lock_guard<std::mutex> lock(thread->apcMutex);
+        thread->pendingApcs.push_back({routine, apcContext, argument1, argument2});
+    }
+    notifyGuestWaiters();
+}
+
+bool guestApcCanInterruptWait() {
+    GuestThread *thread = g_currentGuestThread;
+    const auto memory = g_activeGuestMemory.lock();
+    if (!thread || g_guestIrql > 1u || !memory || !memory->base ||
+        !validGuestRange(thread->objectAddress + kGuestKThreadApcDisableOffset, 4u) ||
+        static_cast<int32_t>(PPC_LOAD_U32(
+            thread->objectAddress + kGuestKThreadApcDisableOffset)) < 0) {
+        return false;
+    }
+    std::lock_guard<std::mutex> lock(thread->apcMutex);
+    return !thread->pendingApcs.empty();
+}
+
+bool deliverPendingGuestApcs() {
+    GuestThread *thread = g_currentGuestThread;
+    const auto memory = g_activeGuestMemory.lock();
+    if (!thread || g_guestIrql > 1u || !memory || !memory->base ||
+        !validGuestRange(thread->objectAddress + kGuestKThreadApcDisableOffset, 4u) ||
+        static_cast<int32_t>(PPC_LOAD_U32(thread->objectAddress + kGuestKThreadApcDisableOffset)) < 0)
+        return false;
+    bool delivered = false;
+    for (uint32_t count = 0; count < 64u; ++count) {
+        GuestApc apc;
+        {
+            std::lock_guard<std::mutex> lock(thread->apcMutex);
+            if (thread->pendingApcs.empty()) break;
+            apc = thread->pendingApcs.front();
+            thread->pendingApcs.pop_front();
+        }
+        PPCFunc *routine = findGuestFunction(apc.routine);
+        if (!routine) {
+            recordRuntimeTrace("queued APC routine is absent from AOT map address=0x" + [&] {
+                char value[16]; std::snprintf(value, sizeof(value), "%08X", apc.routine);
+                return std::string(value);
+            }());
+            continue;
+        }
+        PPCContext callback{};
+        callback.r1.u32 = (thread->stackBase + thread->stackSize - 0x200u) & ~0xFu;
+        callback.r2.u32 = g_activeImageBase;
+        callback.r13.u32 = thread->pcrAddress;
+        callback.lr = 0;
+        callback.r3.u32 = apc.context;
+        callback.r4.u32 = apc.argument1;
+        callback.r5.u32 = apc.argument2;
+        PPC_STORE_U32(callback.r1.u32, 0u);
+        try {
+            routine(callback, memory->base);
+            delivered = true;
+        } catch (const std::exception &error) {
+            recordRuntimeTrace(std::string("APC callback failed: ") + error.what());
+        } catch (...) {
+            recordRuntimeTrace("APC callback terminated with a guest control transfer");
+        }
+    }
+    return delivered;
 }
 
 void notifyGuestWaiters() {
@@ -377,6 +521,37 @@ std::shared_ptr<GuestWaitable> lookupGuestWaitable(uint32_t handleOrObject) {
     return nullptr;
 }
 
+void writeGuestDispatcherSignalState(const std::shared_ptr<GuestWaitable> &waitable,
+                                     int32_t signalState) {
+    if (!waitable || waitable->objectAddress == 0u) return;
+    const auto memory = g_activeGuestMemory.lock();
+    const uint32_t signalAddress = waitable->objectAddress + 4u;
+    if (memory && memory->base && validGuestRange(signalAddress, 4u))
+        PPC_STORE_U32(signalAddress, static_cast<uint32_t>(signalState));
+}
+
+int32_t guestDispatcherSignalState(const GuestWaitable &waitable) {
+    switch (waitable.kind) {
+        case GuestWaitable::Kind::Semaphore:
+            return waitable.semaphoreCount;
+        case GuestWaitable::Kind::Mutant:
+            return waitable.ownerThread == 0u
+                ? 1
+                : 1 - static_cast<int32_t>(std::min<uint32_t>(
+                      waitable.recursion, static_cast<uint32_t>(INT32_MAX)));
+        case GuestWaitable::Kind::Event:
+        case GuestWaitable::Kind::Thread:
+        case GuestWaitable::Kind::Timer:
+            return waitable.signaled ? 1 : 0;
+    }
+    return 0;
+}
+
+void syncGuestDispatcherSignalState(const std::shared_ptr<GuestWaitable> &waitable) {
+    if (!waitable) return;
+    writeGuestDispatcherSignalState(waitable, guestDispatcherSignalState(*waitable));
+}
+
 std::shared_ptr<GuestThread> lookupGuestThread(uint32_t handleOrObject) {
     if (handleOrObject == 0xFFFFFFFEu ||
         (g_mainGuestThread && handleOrObject == g_mainGuestThread->objectAddress)) {
@@ -401,6 +576,7 @@ std::shared_ptr<GuestWaitable> ensurePointerWaitable(uint32_t address, uint8_t *
     }
     auto waitable = std::make_shared<GuestWaitable>();
     waitable->kind = GuestWaitable::Kind::Event;
+    waitable->objectAddress = address;
     waitable->manualReset = (base[address] == 0u);
     waitable->signaled = PPC_LOAD_U32(address + 4u) != 0u;
     {
@@ -437,27 +613,71 @@ bool readGuestTimeout(uint8_t *base, uint32_t pointer, GuestTimeout &timeout) {
 }
 
 uint32_t waitGuestObject(const std::shared_ptr<GuestWaitable> &waitable,
-                         const GuestTimeout &timeout) {
+                         const GuestTimeout &timeout, bool alertable = false) {
     if (!waitable) return kNtStatusInvalidHandle;
     std::unique_lock<std::mutex> lock(waitable->mutex);
+    const uint64_t initialPulseGeneration = waitable->pulseGeneration;
     const auto ready = [&] {
-        return waitable->signaled || g_schedulerStopRequested.load();
+        const bool available = waitable->kind == GuestWaitable::Kind::Semaphore
+            ? waitable->semaphoreCount > 0
+            : waitable->kind == GuestWaitable::Kind::Mutant
+                ? waitable->ownerThread == 0u || waitable->ownerThread == g_currentGuestThreadId
+                : waitable->signaled;
+        return available || waitable->pulseGeneration != initialPulseGeneration ||
+               g_schedulerStopRequested.load() ||
+               (alertable && guestApcCanInterruptWait());
     };
-    bool completed = true;
-    if (timeout) completed = waitable->changed.wait_for(lock, *timeout, ready);
-    else waitable->changed.wait(lock, ready);
-    if (g_schedulerStopRequested.load() && g_currentGuestThreadId != 1u) {
-        throw GuestThreadStopRequested{};
+    const auto deadline = timeout ? std::optional<std::chrono::steady_clock::time_point>(
+        std::chrono::steady_clock::now() + *timeout) : std::nullopt;
+    for (;;) {
+        if (alertable && guestApcCanInterruptWait()) {
+            lock.unlock();
+            const bool delivered = deliverPendingGuestApcs();
+            lock.lock();
+            if (delivered) return kNtStatusUserApc;
+        }
+        if (g_schedulerStopRequested.load() && g_currentGuestThreadId != 1u)
+            throw GuestThreadStopRequested{};
+        if (waitable->pulseGeneration != initialPulseGeneration)
+            return kNtStatusWait0;
+        const bool available = waitable->kind == GuestWaitable::Kind::Semaphore
+            ? waitable->semaphoreCount > 0
+            : waitable->kind == GuestWaitable::Kind::Mutant
+                ? waitable->ownerThread == 0u || waitable->ownerThread == g_currentGuestThreadId
+                : waitable->signaled;
+        if (available) {
+            if (waitable->kind == GuestWaitable::Kind::Semaphore) {
+                --waitable->semaphoreCount;
+                waitable->signaled = waitable->semaphoreCount > 0;
+            } else if (waitable->kind == GuestWaitable::Kind::Mutant) {
+                waitable->ownerThread = g_currentGuestThreadId;
+                ++waitable->recursion;
+                waitable->signaled = false;
+            } else if (!waitable->manualReset) waitable->signaled = false;
+            syncGuestDispatcherSignalState(waitable);
+            return kNtStatusSuccess;
+        }
+        if (deadline) {
+            if (std::chrono::steady_clock::now() >= *deadline) return kNtStatusTimeout;
+            waitable->changed.wait_until(lock, *deadline, ready);
+        } else {
+            waitable->changed.wait(lock, ready);
+        }
     }
-    if (!completed || !waitable->signaled) return kNtStatusTimeout;
-    if (!waitable->manualReset) waitable->signaled = false;
-    return kNtStatusSuccess;
 }
 
 uint32_t waitGuestObjects(const std::vector<std::shared_ptr<GuestWaitable>> &waitables,
-                          uint32_t waitType, const GuestTimeout &timeout) {
+                          uint32_t waitType, const GuestTimeout &timeout,
+                          bool alertable = false) {
     if (waitables.empty() || waitables.size() > 64u || waitType > 1u) {
         return kNtStatusInvalidParameter;
+    }
+    std::vector<uint64_t> initialPulseGenerations;
+    initialPulseGenerations.reserve(waitables.size());
+    for (const auto &waitable : waitables) {
+        if (!waitable) return kNtStatusInvalidHandle;
+        std::lock_guard<std::mutex> objectLock(waitable->mutex);
+        initialPulseGenerations.push_back(waitable->pulseGeneration);
     }
     const auto readyIndex = [&]() -> int32_t {
         int32_t firstReady = -1;
@@ -465,8 +685,14 @@ uint32_t waitGuestObjects(const std::vector<std::shared_ptr<GuestWaitable>> &wai
         for (size_t index = 0; index < waitables.size(); ++index) {
             if (!waitables[index]) return -2;
             std::lock_guard<std::mutex> objectLock(waitables[index]->mutex);
-            const bool signaled = waitables[index]->signaled;
-            if (!signaled) allReady = false;
+            const auto &candidate = *waitables[index];
+            const bool signaled = candidate.kind == GuestWaitable::Kind::Semaphore
+                ? candidate.semaphoreCount > 0
+                : candidate.kind == GuestWaitable::Kind::Mutant
+                    ? candidate.ownerThread == 0u || candidate.ownerThread == g_currentGuestThreadId
+                    : candidate.signaled;
+            const bool pulsed = candidate.pulseGeneration != initialPulseGenerations[index];
+            if (!signaled && !pulsed) allReady = false;
             else if (firstReady < 0) firstReady = static_cast<int32_t>(index);
         }
         if (waitType == 0u) return allReady ? 0 : -1; // WaitAll.
@@ -476,6 +702,8 @@ uint32_t waitGuestObjects(const std::vector<std::shared_ptr<GuestWaitable>> &wai
     const auto deadline = timeout ? std::optional<std::chrono::steady_clock::time_point>(
         std::chrono::steady_clock::now() + *timeout) : std::nullopt;
     for (;;) {
+        if (alertable && guestApcCanInterruptWait() && deliverPendingGuestApcs())
+            return kNtStatusUserApc;
         int32_t selected = -1;
         {
             std::unique_lock<std::mutex> waitLock(g_waitSetMutex);
@@ -489,23 +717,41 @@ uint32_t waitGuestObjects(const std::vector<std::shared_ptr<GuestWaitable>> &wai
                 if (waitType == 0u) {
                     for (const auto &waitable : waitables) {
                         std::lock_guard<std::mutex> objectLock(waitable->mutex);
-                        if (!waitable->manualReset) waitable->signaled = false;
+                        if (waitable->kind == GuestWaitable::Kind::Semaphore) {
+                            --waitable->semaphoreCount;
+                            waitable->signaled = waitable->semaphoreCount > 0;
+                        } else if (waitable->kind == GuestWaitable::Kind::Mutant) {
+                            waitable->ownerThread = g_currentGuestThreadId;
+                            ++waitable->recursion;
+                            waitable->signaled = false;
+                        } else if (!waitable->manualReset) waitable->signaled = false;
+                        syncGuestDispatcherSignalState(waitable);
                     }
                     return kNtStatusWait0;
                 }
                 auto &waitable = waitables[static_cast<size_t>(selected)];
                 std::lock_guard<std::mutex> objectLock(waitable->mutex);
-                if (!waitable->manualReset) waitable->signaled = false;
+                if (waitable->kind == GuestWaitable::Kind::Semaphore) {
+                    --waitable->semaphoreCount;
+                    waitable->signaled = waitable->semaphoreCount > 0;
+                } else if (waitable->kind == GuestWaitable::Kind::Mutant) {
+                    waitable->ownerThread = g_currentGuestThreadId;
+                    ++waitable->recursion;
+                    waitable->signaled = false;
+                } else if (!waitable->manualReset) waitable->signaled = false;
+                syncGuestDispatcherSignalState(waitable);
                 return kNtStatusWait0 + static_cast<uint32_t>(selected);
             }
             if (deadline) {
                 if (std::chrono::steady_clock::now() >= *deadline) return kNtStatusTimeout;
                 g_waitSetChanged.wait_until(waitLock, *deadline, [&] {
-                    return g_schedulerStopRequested.load() || readyIndex() >= 0;
+                    return g_schedulerStopRequested.load() || readyIndex() >= 0 ||
+                           (alertable && guestApcCanInterruptWait());
                 });
             } else {
                 g_waitSetChanged.wait(waitLock, [&] {
-                    return g_schedulerStopRequested.load() || readyIndex() >= 0;
+                    return g_schedulerStopRequested.load() || readyIndex() >= 0 ||
+                           (alertable && guestApcCanInterruptWait());
                 });
             }
         }
@@ -517,10 +763,24 @@ void signalGuestWaitable(const std::shared_ptr<GuestWaitable> &waitable) {
     {
         std::lock_guard<std::mutex> lock(waitable->mutex);
         waitable->signaled = true;
+        syncGuestDispatcherSignalState(waitable);
     }
     waitable->changed.notify_all();
     g_waitSetChanged.notify_all();
 }
+
+void signalGuestEventHandle(uint32_t handle) {
+    if (handle == 0u) return;
+    const auto waitable = lookupGuestWaitable(handle);
+    if (!waitable || waitable->kind != GuestWaitable::Kind::Event) return;
+    signalGuestWaitable(waitable);
+}
+
+struct GuestEventSignalOnReturn final {
+    explicit GuestEventSignalOnReturn(uint32_t eventHandle) : handle(eventHandle) {}
+    ~GuestEventSignalOnReturn() { signalGuestEventHandle(handle); }
+    uint32_t handle;
+};
 
 std::shared_ptr<std::recursive_mutex> criticalSectionLock(uint32_t address) {
     std::lock_guard<std::mutex> lock(g_criticalSectionMapMutex);
@@ -765,14 +1025,18 @@ struct GuestXenosPumpSessionGuard final {
 struct GuestThreadBinding final {
     GuestThread *previousThread = nullptr;
     uint32_t previousId = 1u;
+    uint32_t previousIrql = 0u;
     explicit GuestThreadBinding(GuestThread *thread)
-        : previousThread(g_currentGuestThread), previousId(g_currentGuestThreadId) {
+        : previousThread(g_currentGuestThread), previousId(g_currentGuestThreadId),
+          previousIrql(g_guestIrql) {
         g_currentGuestThread = thread;
         g_currentGuestThreadId = thread ? thread->id : 1u;
+        g_guestIrql = 0u;
     }
     ~GuestThreadBinding() {
         g_currentGuestThread = previousThread;
         g_currentGuestThreadId = previousId;
+        g_guestIrql = previousIrql;
     }
 };
 
@@ -978,6 +1242,7 @@ extern "C" int xowue_boot_xex(const char *path, char *output, size_t output_capa
         g_nextGuestThreadObjectAddress = kFirstGuestThreadObjectAddress;
         g_nextGuestPcrAddress = kFirstGuestPcrAddress;
         g_nextGuestTlsAddress = kFirstGuestTlsAddress;
+        g_guestIrql = 0u;
         g_mainThreadObjectAddress = kFirstGuestThreadObjectAddress - kGuestThreadMetadataStride;
         g_mainPcrAddress = kFirstGuestPcrAddress - kGuestThreadMetadataStride;
         g_mainTlsAddress = kMainGuestTlsAddress;
@@ -991,8 +1256,23 @@ extern "C" int xowue_boot_xex(const char *path, char *output, size_t output_capa
         }
         if (xowue_vulkan_backend_guest_frame_reset)
             xowue_vulkan_backend_guest_frame_reset();
+        if (!path || path[0] == '\0') throw std::runtime_error("XEX path is empty");
+        g_guestGameRoot = std::filesystem::path(path).parent_path();
+        if (g_guestGameRoot.empty()) g_guestGameRoot = std::filesystem::current_path();
+        g_guestSaveRoot = g_guestGameRoot.parent_path().parent_path() / "XOWUE-Saves";
+        std::error_code saveError;
+        std::filesystem::create_directories(g_guestSaveRoot, saveError);
+        if (saveError) recordRuntimeTrace("save directory unavailable: " + saveError.message());
+        recordRuntimeTrace("Xbox filesystem roots game=" + g_guestGameRoot.string() +
+                           " saves=" + g_guestSaveRoot.string());
         const Image image = parseImage(path);
         g_activeImageBase = static_cast<uint32_t>(image.base);
+        g_activeEntryPoint = static_cast<uint32_t>(image.entry_point);
+        g_activeImageSections.clear();
+        g_activeImageSections.reserve(image.sections.size());
+        for (const auto &section : image.sections)
+            g_activeImageSections.emplace_back(static_cast<uint32_t>(section.base),
+                                                static_cast<uint32_t>(section.size));
         char imageEvent[160];
         std::snprintf(imageEvent, sizeof(imageEvent),
                       "XEX2 carregado base=0x%08zX entry=0x%08zX sections=%zu",
@@ -1018,12 +1298,41 @@ extern "C" int xowue_boot_xex(const char *path, char *output, size_t output_capa
             g_guestPointerWaitables.clear();
         }
         {
+            std::lock_guard<std::mutex> fileLock(g_guestFileMutex);
+            g_guestFiles.clear();
+            g_guestSymbolicLinks.clear();
+        }
+        {
+            std::lock_guard<std::mutex> spinLock(g_spinLockMapMutex);
+            g_guestSpinLocks.clear();
+        }
+        {
+            std::lock_guard<std::mutex> socketLock(g_socketMutex);
+            for (const auto &socket : g_guestSockets) ::close(socket.second);
+            g_guestSockets.clear();
+        }
+        g_guestXmaContexts.clear();
+        g_ioShareByFileObject.clear();
+        {
             std::lock_guard<std::mutex> threadLock(g_guestThreadMutex);
             g_guestThreadsByHandle.clear();
             g_guestThreadsByObject.clear();
             g_guestThreads.clear();
         }
         copyImage(image, *memory);
+        g_activeExecutionInfoAddress = allocateGuestPhysicalRange(memory->base, 0x20u, 0x1000u, 0x04u);
+        if (g_activeExecutionInfoAddress != 0u) {
+            const uint32_t execution = g_activeExecutionInfoAddress;
+            PPC_STORE_U32(execution + 0x00u, 0u); // Media ID is not used by this title.
+            PPC_STORE_U32(execution + 0x04u, 0u); // XEX version.
+            PPC_STORE_U32(execution + 0x08u, 0u); // Base version.
+            PPC_STORE_U32(execution + 0x0Cu, kXowueTitleId);
+            memory->base[execution + 0x10u] = 2u;  // Xbox 360 platform.
+            memory->base[execution + 0x11u] = 0u;  // Default executable type.
+            memory->base[execution + 0x12u] = 1u;
+            memory->base[execution + 0x13u] = 1u;
+            PPC_STORE_U32(execution + 0x14u, kXowueTitleId);
+        }
         const size_t installed = installDispatchTable(*memory);
         recordRuntimeTrace("Guest memory mapeada; AOT dispatch entries=" + std::to_string(installed));
         recordRuntimeTrace("XEX TLS slots=" + std::to_string(g_tlsSlotLimit) +
@@ -1114,14 +1423,1137 @@ extern "C" int xowue_boot_xex(const char *path, char *output, size_t output_capa
     }
 }
 
-/* The generated import adapters route here until a kernel/XAM implementation exists. */
-[[noreturn]] void xowue_unsupported_import(const char *name, const PPCContext &context) {
+static std::array<uint8_t, 20> xowueSha1(const std::vector<uint8_t> &input) {
+    std::vector<uint8_t> data = input;
+    const uint64_t bitLength = static_cast<uint64_t>(data.size()) * 8u;
+    data.push_back(0x80u);
+    while ((data.size() & 63u) != 56u) data.push_back(0u);
+    for (int shift = 56; shift >= 0; shift -= 8)
+        data.push_back(static_cast<uint8_t>(bitLength >> shift));
+    uint32_t h0 = 0x67452301u, h1 = 0xEFCDAB89u, h2 = 0x98BADCFEu,
+             h3 = 0x10325476u, h4 = 0xC3D2E1F0u;
+    for (size_t block = 0; block < data.size(); block += 64u) {
+        uint32_t w[80]{};
+        for (uint32_t i = 0; i < 16u; ++i) {
+            const size_t p = block + i * 4u;
+            w[i] = (static_cast<uint32_t>(data[p]) << 24u) |
+                   (static_cast<uint32_t>(data[p + 1u]) << 16u) |
+                   (static_cast<uint32_t>(data[p + 2u]) << 8u) | data[p + 3u];
+        }
+        for (uint32_t i = 16u; i < 80u; ++i)
+            w[i] = std::rotl(w[i - 3u] ^ w[i - 8u] ^ w[i - 14u] ^ w[i - 16u], 1);
+        uint32_t a = h0, b = h1, c = h2, d = h3, e = h4;
+        for (uint32_t i = 0; i < 80u; ++i) {
+            uint32_t f = 0u, k = 0u;
+            if (i < 20u) { f = (b & c) | ((~b) & d); k = 0x5A827999u; }
+            else if (i < 40u) { f = b ^ c ^ d; k = 0x6ED9EBA1u; }
+            else if (i < 60u) { f = (b & c) | (b & d) | (c & d); k = 0x8F1BBCDCu; }
+            else { f = b ^ c ^ d; k = 0xCA62C1D6u; }
+            const uint32_t temp = std::rotl(a, 5) + f + e + k + w[i];
+            e = d; d = c; c = std::rotl(b, 30); b = a; a = temp;
+        }
+        h0 += a; h1 += b; h2 += c; h3 += d; h4 += e;
+    }
+    const uint32_t words[5] = {h0, h1, h2, h3, h4};
+    std::array<uint8_t, 20> digest{};
+    for (uint32_t i = 0; i < 5u; ++i)
+        for (uint32_t j = 0; j < 4u; ++j)
+            digest[i * 4u + j] = static_cast<uint8_t>(words[i] >> (24u - j * 8u));
+    return digest;
+}
+
+static uint16_t loadGuestBe16Compat(uint8_t *base, uint32_t address) {
+    return static_cast<uint16_t>((static_cast<uint16_t>(base[address]) << 8u) |
+                                 static_cast<uint16_t>(base[address + 1u]));
+}
+
+static bool readGuestCString(uint8_t *base, uint32_t address, std::string &value,
+                             size_t maximum = 4096u) {
+    if (!base || address == 0u || !validGuestRange(address, 1u)) return false;
+    const size_t limit = std::min<size_t>(maximum,
+        static_cast<size_t>(kGuestAddressSpaceSize - address));
+    const char *start = reinterpret_cast<const char *>(base + address);
+    const void *terminator = std::memchr(start, 0, limit);
+    if (!terminator) return false;
+    value.assign(start, static_cast<const char *>(terminator) - start);
+    return true;
+}
+
+static std::optional<int> lookupGuestSocket(uint32_t handle) {
+    std::lock_guard<std::mutex> lock(g_socketMutex);
+    const auto found = g_guestSockets.find(handle);
+    if (found == g_guestSockets.end()) return std::nullopt;
+    return found->second;
+}
+
+static uint32_t registerGuestSocket(int descriptor) {
+    const uint32_t handle = allocateGuestHandle();
+    if (handle == 0u) return 0xFFFFFFFFu;
+    std::lock_guard<std::mutex> lock(g_socketMutex);
+    g_guestSockets.emplace(handle, descriptor);
+    return handle;
+}
+
+static int guestSocketError(int error) {
+    switch (error) {
+        case EACCES: return 10013;
+        case EADDRINUSE: return 10048;
+        case EADDRNOTAVAIL: return 10049;
+        case EAFNOSUPPORT: return 10047;
+        case ECONNABORTED: return 10053;
+        case ECONNREFUSED: return 10061;
+        case ECONNRESET: return 10054;
+        case EINPROGRESS: return 10036;
+        case EINVAL: return 10022;
+        case EMSGSIZE: return 10040;
+        case ENETDOWN: return 10050;
+        case ENETUNREACH: return 10051;
+        case ENOBUFS: return 10055;
+        case ENOTCONN: return 10057;
+        case ENOTSOCK: return 10038;
+        case EOPNOTSUPP: return 10045;
+        case ETIMEDOUT: return 10060;
+        case EWOULDBLOCK: return 10035;
+        default: return 10022;
+    }
+}
+
+static bool readGuestSocketAddress(uint8_t *base, uint32_t address,
+                                   uint32_t length, sockaddr_storage &storage,
+                                   socklen_t &nativeLength) {
+    if (!base || length < 16u || !validGuestRange(address, 16u) ||
+        loadGuestBe16Compat(base, address) != AF_INET) return false;
+    sockaddr_in native{};
+    native.sin_family = AF_INET;
+    std::memcpy(&native.sin_port, base + address + 2u, sizeof(native.sin_port));
+    std::memcpy(&native.sin_addr, base + address + 4u, sizeof(native.sin_addr));
+    std::memcpy(&storage, &native, sizeof(native));
+    nativeLength = sizeof(native);
+    return true;
+}
+
+static bool writeGuestSocketAddress(uint8_t *base, uint32_t address,
+                                    uint32_t lengthPointer,
+                                    const sockaddr *native,
+                                    socklen_t nativeLength) {
+    if (!base || !native || !validGuestRange(lengthPointer, 4u)) return false;
+    const uint32_t capacity = PPC_LOAD_U32(lengthPointer);
+    if (capacity < 16u || !validGuestRange(address, std::min<uint32_t>(capacity, 16u))) {
+        PPC_STORE_U32(lengthPointer, 16u);
+        return false;
+    }
+    if (native->sa_family != AF_INET || nativeLength < sizeof(sockaddr_in)) return false;
+    const auto *ipv4 = reinterpret_cast<const sockaddr_in *>(native);
+    std::memset(base + address, 0, 16u);
+    base[address] = 0u;
+    base[address + 1u] = AF_INET;
+    std::memcpy(base + address + 2u, &ipv4->sin_port, sizeof(ipv4->sin_port));
+    std::memcpy(base + address + 4u, &ipv4->sin_addr, sizeof(ipv4->sin_addr));
+    PPC_STORE_U32(lengthPointer, 16u);
+    return true;
+}
+
+static bool handleNetDllSocketImport(std::string_view api, PPCContext &context,
+                                     uint8_t *base) {
+    if (api == "NetDll_WSAStartup") {
+        const uint32_t data = context.r5.u32;
+        if (data != 0u && base && validGuestRange(data, 0x198u)) {
+            std::memset(base + data, 0, 0x198u);
+            PPC_STORE_U16(data, static_cast<uint16_t>(context.r4.u32));
+            PPC_STORE_U16(data + 2u, static_cast<uint16_t>(context.r4.u32));
+            PPC_STORE_U32(data + 0x184u, 100u);
+            PPC_STORE_U32(data + 0x188u, 1024u);
+        }
+        context.r3.u32 = 0u;
+        return true;
+    }
+    if (api == "NetDll_WSACleanup") { context.r3.u32 = 0u; return true; }
+    if (api == "NetDll_WSAGetLastError") { context.r3.u32 = static_cast<uint32_t>(g_wsaLastError); return true; }
+    if (api == "NetDll_WSASetLastError") { g_wsaLastError = static_cast<int32_t>(context.r4.u32); return true; }
+    if (api == "NetDll_WSACreateEvent") {
+        const uint32_t handle = allocateGuestHandle();
+        auto event = std::make_shared<GuestWaitable>();
+        event->kind = GuestWaitable::Kind::Event;
+        event->handle = handle;
+        event->manualReset = true;
+        event->signaled = false;
+        { std::lock_guard<std::mutex> lock(g_guestObjectMutex); g_guestWaitables[handle] = event; }
+        context.r3.u32 = handle ? handle : 0xFFFFFFFFu;
+        return true;
+    }
+    if (api == "NetDll_socket") {
+        const int descriptor = ::socket(static_cast<int>(context.r4.u32),
+                                        static_cast<int>(context.r5.u32),
+                                        static_cast<int>(context.r6.u32));
+        if (descriptor < 0) {
+            g_wsaLastError = guestSocketError(errno);
+            context.r3.u32 = 0xFFFFFFFFu;
+            return true;
+        }
+#ifdef SO_NOSIGPIPE
+        const int noSigPipe = 1;
+        setsockopt(descriptor, SOL_SOCKET, SO_NOSIGPIPE, &noSigPipe, sizeof(noSigPipe));
+#endif
+        context.r3.u32 = registerGuestSocket(descriptor);
+        return true;
+    }
+
+    const uint32_t handle = context.r4.u32;
+    const auto descriptor = lookupGuestSocket(handle);
+    auto failSocket = [&](int error) { g_wsaLastError = guestSocketError(error); context.r3.u32 = 0xFFFFFFFFu; };
+    if (api == "NetDll_closesocket") {
+        if (!descriptor) { failSocket(ENOTSOCK); return true; }
+        { std::lock_guard<std::mutex> lock(g_socketMutex); g_guestSockets.erase(handle); }
+        const int result = ::close(*descriptor);
+        if (result != 0) failSocket(errno); else context.r3.u32 = 0u;
+        return true;
+    }
+    if (api == "NetDll_bind" || api == "NetDll_connect") {
+        if (!descriptor) { failSocket(ENOTSOCK); return true; }
+        sockaddr_storage address{}; socklen_t addressLength = 0u;
+        if (!readGuestSocketAddress(base, context.r5.u32, context.r6.u32, address, addressLength)) {
+            failSocket(EINVAL); return true;
+        }
+        const int result = api == "NetDll_bind"
+            ? ::bind(*descriptor, reinterpret_cast<sockaddr *>(&address), addressLength)
+            : ::connect(*descriptor, reinterpret_cast<sockaddr *>(&address), addressLength);
+        if (result != 0) failSocket(errno); else context.r3.u32 = 0u;
+        return true;
+    }
+    if (api == "NetDll_listen") {
+        if (!descriptor) { failSocket(ENOTSOCK); return true; }
+        const int result = ::listen(*descriptor, static_cast<int>(context.r5.u32));
+        if (result != 0) failSocket(errno); else context.r3.u32 = 0u;
+        return true;
+    }
+    if (api == "NetDll_accept") {
+        if (!descriptor) { failSocket(ENOTSOCK); return true; }
+        sockaddr_storage address{}; socklen_t length = sizeof(address);
+        const int accepted = ::accept(*descriptor,
+                                      reinterpret_cast<sockaddr *>(&address),
+                                      &length);
+        if (accepted < 0) { failSocket(errno); return true; }
+        if (context.r5.u32 != 0u && context.r6.u32 != 0u &&
+            !writeGuestSocketAddress(base, context.r5.u32, context.r6.u32,
+                                     reinterpret_cast<sockaddr *>(&address), length)) {
+            ::close(accepted); failSocket(EINVAL); return true;
+        }
+        context.r3.u32 = registerGuestSocket(accepted);
+        return true;
+    }
+    if (api == "NetDll_send" || api == "NetDll_recv") {
+        const uint32_t buffer = context.r5.u32, length = context.r6.u32;
+        if (!descriptor) { failSocket(ENOTSOCK); return true; }
+        if (!base || length > 16u * 1024u * 1024u ||
+            (length != 0u && !validGuestRange(buffer, length))) { failSocket(EINVAL); return true; }
+        const int flags = static_cast<int>(context.r7.u32);
+        const ssize_t result = api == "NetDll_send"
+            ? ::send(*descriptor, base + buffer, length, flags)
+            : ::recv(*descriptor, base + buffer, length, flags);
+        if (result < 0) failSocket(errno); else context.r3.u32 = static_cast<uint32_t>(result);
+        return true;
+    }
+    if (api == "NetDll_sendto" || api == "NetDll_recvfrom") {
+        const uint32_t buffer = context.r5.u32, length = context.r6.u32;
+        if (!descriptor) { failSocket(ENOTSOCK); return true; }
+        if (!base || length > 16u * 1024u * 1024u ||
+            (length != 0u && !validGuestRange(buffer, length))) { failSocket(EINVAL); return true; }
+        const int flags = static_cast<int>(context.r7.u32);
+        ssize_t result = -1;
+        if (api == "NetDll_sendto") {
+            sockaddr_storage address{}; socklen_t addressLength = 0u;
+            if (!readGuestSocketAddress(base, context.r8.u32, context.r9.u32,
+                                        address, addressLength)) { failSocket(EINVAL); return true; }
+            result = ::sendto(*descriptor, base + buffer, length, flags,
+                              reinterpret_cast<sockaddr *>(&address), addressLength);
+        } else {
+            sockaddr_storage address{}; socklen_t addressLength = sizeof(address);
+            result = ::recvfrom(*descriptor, base + buffer, length, flags,
+                                context.r8.u32 ? reinterpret_cast<sockaddr *>(&address) : nullptr,
+                                context.r8.u32 ? &addressLength : nullptr);
+            if (result >= 0 && context.r8.u32 && context.r9.u32 &&
+                !writeGuestSocketAddress(base, context.r8.u32, context.r9.u32,
+                                         reinterpret_cast<sockaddr *>(&address), addressLength)) {
+                failSocket(EINVAL); return true;
+            }
+        }
+        if (result < 0) failSocket(errno); else context.r3.u32 = static_cast<uint32_t>(result);
+        return true;
+    }
+    if (api == "NetDll_getsockname") {
+        if (!descriptor) { failSocket(ENOTSOCK); return true; }
+        sockaddr_storage address{}; socklen_t length = sizeof(address);
+        if (::getsockname(*descriptor, reinterpret_cast<sockaddr *>(&address), &length) != 0) {
+            failSocket(errno); return true;
+        }
+        if (!writeGuestSocketAddress(base, context.r5.u32, context.r6.u32,
+                                     reinterpret_cast<sockaddr *>(&address), length)) {
+            failSocket(EINVAL); return true;
+        }
+        context.r3.u32 = 0u; return true;
+    }
+    if (api == "NetDll_getsockopt" || api == "NetDll_setsockopt") {
+        if (!descriptor) { failSocket(ENOTSOCK); return true; }
+        const int level = static_cast<int>(context.r5.u32);
+        const int option = static_cast<int>(context.r6.u32);
+        const uint32_t value = context.r7.u32;
+        if (api == "NetDll_setsockopt") {
+            const uint32_t length = context.r8.u32;
+            if (!base || length > 65536u || !validGuestRange(value, length)) { failSocket(EINVAL); return true; }
+            if (::setsockopt(*descriptor, level, option, base + value, static_cast<socklen_t>(length)) != 0)
+                failSocket(errno);
+            else context.r3.u32 = 0u;
+            return true;
+        }
+        const uint32_t lengthPointer = context.r8.u32;
+        if (!base || !validGuestRange(value, 4u) || !validGuestRange(lengthPointer, 4u)) { failSocket(EINVAL); return true; }
+        socklen_t length = std::min<uint32_t>(PPC_LOAD_U32(lengthPointer), 65536u);
+        std::vector<uint8_t> bytes(std::max<socklen_t>(length, 4u));
+        if (::getsockopt(*descriptor, level, option, bytes.data(), &length) != 0) failSocket(errno);
+        else {
+            if (!validGuestRange(value, length)) { failSocket(EINVAL); return true; }
+            std::memcpy(base + value, bytes.data(), length);
+            PPC_STORE_U32(lengthPointer, length);
+            context.r3.u32 = 0u;
+        }
+        return true;
+    }
+    if (api == "NetDll_ioctlsocket") {
+        if (!descriptor) { failSocket(ENOTSOCK); return true; }
+        const uint32_t argument = context.r6.u32;
+        if (!base || !validGuestRange(argument, 4u)) { failSocket(EINVAL); return true; }
+        if (context.r5.u32 == 0x8004667Eu) { // FIONBIO
+            const int current = fcntl(*descriptor, F_GETFL, 0);
+            if (current < 0 || fcntl(*descriptor, F_SETFL,
+                                     PPC_LOAD_U32(argument) ? current | O_NONBLOCK : current & ~O_NONBLOCK) < 0)
+                failSocket(errno);
+            else context.r3.u32 = 0u;
+        } else {
+            int value = 0;
+            if (::ioctl(*descriptor, context.r5.u32, &value) != 0) failSocket(errno);
+            else { PPC_STORE_U32(argument, static_cast<uint32_t>(value)); context.r3.u32 = 0u; }
+        }
+        return true;
+    }
+    if (api == "NetDll_select") {
+        struct GuestFdSet { uint32_t address; short events; std::vector<uint32_t> handles; };
+        std::array<GuestFdSet, 3> sets{{{context.r5.u32, POLLIN, {}},
+                                       {context.r6.u32, POLLOUT, {}},
+                                       {context.r7.u32, POLLPRI, {}}}};
+        if (!base) { failSocket(EINVAL); return true; }
+        std::vector<pollfd> pollers;
+        for (auto &set : sets) {
+            if (!set.address) continue;
+            if (!validGuestRange(set.address, 4u)) { failSocket(EINVAL); return true; }
+            const uint32_t count = PPC_LOAD_U32(set.address);
+            if (count > 64u || !validGuestRange(set.address + 4u, count * 4u)) { failSocket(EINVAL); return true; }
+            for (uint32_t index = 0; index < count; ++index) {
+                const uint32_t guestHandle = PPC_LOAD_U32(set.address + 4u + index * 4u);
+                const auto fd = lookupGuestSocket(guestHandle);
+                if (!fd) { failSocket(ENOTSOCK); return true; }
+                set.handles.push_back(guestHandle);
+                pollers.push_back({*fd, set.events, 0});
+            }
+        }
+        int timeout = -1;
+        if (context.r8.u32) {
+            if (!validGuestRange(context.r8.u32, 8u)) { failSocket(EINVAL); return true; }
+            const uint32_t seconds = PPC_LOAD_U32(context.r8.u32);
+            const uint32_t micros = PPC_LOAD_U32(context.r8.u32 + 4u);
+            const uint64_t millis = static_cast<uint64_t>(seconds) * 1000u + (micros + 999u) / 1000u;
+            timeout = static_cast<int>(std::min<uint64_t>(millis, INT32_MAX));
+        }
+        const int result = ::poll(pollers.data(), pollers.size(), timeout);
+        if (result < 0) { failSocket(errno); return true; }
+        size_t pollIndex = 0u;
+        uint32_t readySetCount = 0u;
+        for (auto &set : sets) {
+            if (!set.address) continue;
+            std::vector<uint32_t> ready;
+            for (uint32_t guestHandle : set.handles) {
+                if (pollIndex < pollers.size() && (pollers[pollIndex].revents & (set.events | POLLERR | POLLHUP | POLLNVAL)))
+                    ready.push_back(guestHandle);
+                ++pollIndex;
+            }
+            readySetCount += static_cast<uint32_t>(ready.size());
+            PPC_STORE_U32(set.address, static_cast<uint32_t>(ready.size()));
+            for (size_t i = 0; i < ready.size(); ++i) PPC_STORE_U32(set.address + 4u + static_cast<uint32_t>(i * 4u), ready[i]);
+        }
+        context.r3.u32 = readySetCount;
+        return true;
+    }
+    if (api == "NetDll_inet_addr") {
+        std::string text;
+        in_addr address{};
+        if (!readGuestCString(base, context.r4.u32, text) || ::inet_pton(AF_INET, text.c_str(), &address) != 1) {
+            context.r3.u32 = 0xFFFFFFFFu;
+        } else {
+            context.r3.u32 = ntohl(address.s_addr);
+        }
+        return true;
+    }
+    return false;
+}
+
+static uint32_t guestCallArgument(PPCContext &context, uint8_t *base,
+                                  uint32_t argumentIndex) {
+    switch (argumentIndex) {
+        case 0u: return context.r3.u32;
+        case 1u: return context.r4.u32;
+        case 2u: return context.r5.u32;
+        case 3u: return context.r6.u32;
+        case 4u: return context.r7.u32;
+        case 5u: return context.r8.u32;
+        case 6u: return context.r9.u32;
+        case 7u: return context.r10.u32;
+        default: return guestStackArgument(context, base, argumentIndex + 1u);
+    }
+}
+
+static std::string formatGuestVarargs(PPCContext &context, uint8_t *base,
+                                      uint32_t formatPointer,
+                                      uint32_t firstArgument,
+                                      uint32_t arrayArgumentsPointer = 0u) {
+    std::string format;
+    if (!readGuestCString(base, formatPointer, format, 0x10000u))
+        return "<invalid format string>";
+    uint32_t argumentIndex = firstArgument;
+    uint32_t arrayIndex = 0u;
+    auto next = [&]() -> uint32_t {
+        if (arrayArgumentsPointer != 0u && base &&
+            validGuestRange(arrayArgumentsPointer + arrayIndex * 4u, 4u)) {
+            const uint32_t value = PPC_LOAD_U32(arrayArgumentsPointer + arrayIndex * 4u);
+            ++arrayIndex;
+            return value;
+        }
+        return guestCallArgument(context, base, argumentIndex++);
+    };
+    std::string output;
+    output.reserve(std::min<size_t>(format.size() + 32u, 0x10000u));
+    for (size_t index = 0u; index < format.size() && output.size() < 0x10000u; ++index) {
+        if (format[index] != '%' || index + 1u >= format.size()) {
+            output.push_back(format[index]);
+            continue;
+        }
+        if (format[index + 1u] == '%') { output.push_back('%'); ++index; continue; }
+        size_t cursor = index + 1u;
+        std::string flags;
+        while (cursor < format.size() && std::string_view("-+ #0").find(format[cursor]) != std::string_view::npos)
+            flags.push_back(format[cursor++]);
+        int width = -1;
+        if (cursor < format.size() && format[cursor] == '*') {
+            const int32_t dynamicWidth = static_cast<int32_t>(next());
+            if (dynamicWidth < 0) {
+                if (flags.find('-') == std::string::npos) flags.push_back('-');
+                width = static_cast<int>(std::min<int64_t>(
+                    -static_cast<int64_t>(dynamicWidth), 256));
+            } else {
+                width = std::min(dynamicWidth, 256);
+            }
+            ++cursor;
+        } else if (cursor < format.size() && std::isdigit(static_cast<unsigned char>(format[cursor]))) {
+            width = 0;
+            while (cursor < format.size() && std::isdigit(static_cast<unsigned char>(format[cursor]))) {
+                width = std::min(256, width * 10 + (format[cursor++] - '0'));
+            }
+        }
+        int precision = -1;
+        if (cursor < format.size() && format[cursor] == '.') {
+            ++cursor;
+            if (cursor < format.size() && format[cursor] == '*') {
+                precision = static_cast<int32_t>(next());
+                if (precision < 0) precision = -1;
+                else precision = std::min(precision, 256);
+                ++cursor;
+            } else {
+                precision = 0;
+                while (cursor < format.size() && std::isdigit(static_cast<unsigned char>(format[cursor])))
+                    precision = std::min(256, precision * 10 + (format[cursor++] - '0'));
+            }
+        }
+        bool longValue = false;
+        if (cursor < format.size() && (format[cursor] == 'l' || format[cursor] == 'z' || format[cursor] == 't')) {
+            longValue = true;
+            if (format[cursor] == 'l' && cursor + 1u < format.size() && format[cursor + 1u] == 'l') ++cursor;
+            ++cursor;
+        } else if (cursor < format.size() && (format[cursor] == 'h' || format[cursor] == 'j')) {
+            ++cursor;
+            if (cursor < format.size() && format[cursor] == 'h') ++cursor;
+        }
+        if (cursor >= format.size()) break;
+        const char conversion = format[cursor];
+        index = cursor;
+        auto appendPadded = [&](std::string value) {
+            if (precision >= 0 && value.size() > static_cast<size_t>(precision))
+                value.resize(static_cast<size_t>(precision));
+            const size_t pad = width > 0 && static_cast<size_t>(width) > value.size()
+                ? static_cast<size_t>(width) - value.size() : 0u;
+            if (flags.find('-') != std::string::npos) { output += value; output.append(pad, ' '); }
+            else { output.append(pad, ' '); output += value; }
+        };
+        if (conversion == 's' || conversion == 'S') {
+            const uint32_t pointer = next();
+            std::string value;
+            if (!readGuestCString(base, pointer, value, 0x10000u)) value = "<invalid string>";
+            appendPadded(std::move(value));
+        } else if (conversion == 'c') {
+            appendPadded(std::string(1u, static_cast<char>(next() & 0xFFu)));
+        } else if (conversion == 'p') {
+            const uint32_t value = next();
+            char formatted[40];
+            std::snprintf(formatted, sizeof(formatted), "%#010x", value);
+            appendPadded(formatted);
+        } else if (conversion == 'd' || conversion == 'i' || conversion == 'u' ||
+                   conversion == 'o' || conversion == 'x' || conversion == 'X') {
+            const uint32_t raw = next();
+            std::string specification = "%" + flags;
+            if (width >= 0) specification += std::to_string(width);
+            if (precision >= 0) specification += "." + std::to_string(precision);
+            specification += "ll";
+            specification.push_back(conversion);
+            char formatted[384];
+            if (conversion == 'd' || conversion == 'i')
+                std::snprintf(formatted, sizeof(formatted), specification.c_str(),
+                              static_cast<long long>(static_cast<int32_t>(raw)));
+            else
+                std::snprintf(formatted, sizeof(formatted), specification.c_str(),
+                              static_cast<unsigned long long>(raw));
+            output += formatted;
+        } else if (conversion == 'f' || conversion == 'g' || conversion == 'e') {
+            (void)longValue;
+            output += "<float>";
+        } else if (conversion == 'n') {
+            (void)next();
+        } else {
+            output.push_back('%');
+            output.push_back(conversion);
+        }
+    }
+    if (output.size() > 0x10000u) output.resize(0x10000u);
+    return output;
+}
+
+void xowue_compat_import(const char *name, PPCContext &context, uint8_t *base) {
+    const std::string_view api = name ? name : "";
+    constexpr uint32_t kXamNoSuchUser = 0x80070490u;
+    constexpr uint32_t kNotImplemented = 0x80004001u;
+    constexpr uint64_t kLocalUserXuid = 0xE000000000000001ull;
+    if (handleNetDllSocketImport(api, context, base)) return;
+    auto clearOutput = [base](uint32_t address, uint32_t size) {
+        if (base && size && validGuestRange(address, size)) std::memset(base + address, 0, size);
+    };
+    auto spinLockFor = [](uint32_t address) -> std::shared_ptr<std::mutex> {
+        std::lock_guard<std::mutex> guard(g_spinLockMapMutex);
+        auto &lock = g_guestSpinLocks[address];
+        if (!lock) lock = std::make_shared<std::mutex>();
+        return lock;
+    };
+    if (api == "KfAcquireSpinLock") {
+        const uint32_t address = context.r3.u32;
+        if (!base || !validGuestRange(address, 4u)) { context.r3.u32 = kNtStatusInvalidParameter; return; }
+        const uint32_t previousIrql = g_guestIrql;
+        g_guestIrql = 2u;
+        spinLockFor(address)->lock();
+        PPC_STORE_U32(address, 1u);
+        context.r3.u32 = previousIrql;
+        return;
+    }
+    if (api == "KfReleaseSpinLock") {
+        const uint32_t address = context.r3.u32;
+        std::shared_ptr<std::mutex> lock;
+        {
+            std::lock_guard<std::mutex> guard(g_spinLockMapMutex);
+            const auto found = g_guestSpinLocks.find(address);
+            if (found != g_guestSpinLocks.end()) lock = found->second;
+        }
+        if (!lock || !base || !validGuestRange(address, 4u)) {
+            recordRuntimeTrace("KfReleaseSpinLock rejected an unknown lock");
+            return;
+        }
+        PPC_STORE_U32(address, 0u);
+        lock->unlock();
+        const uint32_t previousIrql = context.r4.u32;
+        if (previousIrql > 2u) throw std::runtime_error("KfReleaseSpinLock received an invalid IRQL");
+        const uint32_t oldIrql = g_guestIrql;
+        g_guestIrql = previousIrql;
+        if (oldIrql > 1u && g_guestIrql <= 1u) deliverPendingGuestApcs();
+        return;
+    }
+    if (api == "KfLowerIrql") {
+        const uint32_t targetIrql = context.r3.u32;
+        if (targetIrql > 2u || targetIrql > g_guestIrql)
+            throw std::runtime_error("KfLowerIrql attempted to raise IRQL or use an invalid level");
+        const uint32_t oldIrql = g_guestIrql;
+        g_guestIrql = targetIrql;
+        if (oldIrql > 1u && targetIrql <= 1u) deliverPendingGuestApcs();
+        return;
+    }
+    if (api == "DbgBreakPoint") {
+        recordRuntimeTrace("DbgBreakPoint suppressed for the hosted retail title");
+        return;
+    }
+    if (api == "DbgPrint") {
+        const std::string message = formatGuestVarargs(context, base, context.r3.u32, 1u);
+        recordRuntimeTrace("DbgPrint: " + message.substr(0u, 512u));
+        context.r3.u32 = kNtStatusSuccess;
+        return;
+    }
+    if (api == "InterlockedPopEntrySList" || api == "InterlockedFlushSList") {
+        const uint32_t header = context.r3.u32;
+        if (!base || !validGuestRange(header, 8u)) { context.r3.u32 = 0u; return; }
+        std::lock_guard<std::mutex> guard(g_slistMutex);
+        const uint32_t first = PPC_LOAD_U32(header + 4u);
+        if (api == "InterlockedFlushSList") {
+            std::memset(base + header, 0, 8u);
+            context.r3.u32 = first;
+            return;
+        }
+        if (first == 0u || !validGuestRange(first, 4u)) { context.r3.u32 = 0u; return; }
+        const uint32_t next = PPC_LOAD_U32(first);
+        const uint16_t depth = loadGuestBe16Compat(base, header);
+        const uint16_t sequence = loadGuestBe16Compat(base, header + 2u);
+        const uint16_t nextDepth = depth == 0u ? 0u : static_cast<uint16_t>(depth - 1u);
+        base[header] = static_cast<uint8_t>(nextDepth >> 8u);
+        base[header + 1u] = static_cast<uint8_t>(nextDepth);
+        base[header + 2u] = static_cast<uint8_t>(sequence >> 8u);
+        base[header + 3u] = static_cast<uint8_t>(sequence);
+        PPC_STORE_U32(header + 4u, next);
+        context.r3.u32 = first;
+        return;
+    }
+    if (api == "IoCreateDevice" || api == "StfsCreateDevice") {
+        const uint32_t output = api == "IoCreateDevice" ? context.r8.u32 : context.r7.u32;
+        if (!base || !validGuestRange(output, 4u)) { context.r3.u32 = kNtStatusInvalidParameter; return; }
+        const uint32_t device = allocateGuestPhysicalRange(base, 0x24u, 0x1000u, 0x04u);
+        const uint32_t extension = allocateGuestPhysicalRange(base, 0x1000u, 0x1000u, 0x04u);
+        if (!device || !extension) {
+            if (device) releaseGuestPhysicalRange(device);
+            if (extension) releaseGuestPhysicalRange(extension);
+            context.r3.u32 = kNtStatusNoMemory;
+            return;
+        }
+        PPC_STORE_U32(device + 0x18u, extension);
+        PPC_STORE_U32(output, device);
+        context.r3.u32 = kNtStatusSuccess;
+        recordRuntimeTrace(std::string(api) + " allocated an IoDevice and 4 KiB extension");
+        return;
+    }
+    if (api == "IoDeleteDevice") {
+        const uint32_t device = context.r3.u32;
+        if (base && validGuestRange(device, 0x1Cu)) {
+            const uint32_t extension = PPC_LOAD_U32(device + 0x18u);
+            if (extension) releaseGuestPhysicalRange(extension);
+            releaseGuestPhysicalRange(device);
+        }
+        return;
+    }
+    if (api == "IoInvalidDeviceRequest") { context.r3.u32 = 0xC0000010u; return; }
+    if (api == "IoCompleteRequest") { context.r3.u32 = kNtStatusSuccess; return; }
+    if (api == "IoDismountVolume" || api == "IoDismountVolumeByFileHandle" ||
+        api == "StfsControlDevice") {
+        context.r3.u32 = kNtStatusSuccess;
+        recordRuntimeTrace(std::string(api) + " completed for the local read-only title volume");
+        return;
+    }
+    if (api == "IoCheckShareAccess" || api == "IoSetShareAccess" ||
+        api == "IoRemoveShareAccess") {
+        const uint32_t fileObject = api == "IoRemoveShareAccess" ? context.r3.u32 : context.r5.u32;
+        const uint32_t shareTable = api == "IoRemoveShareAccess" ? context.r4.u32 : context.r6.u32;
+        if (!base || !validGuestRange(shareTable, 28u)) {
+            context.r3.u32 = kNtStatusInvalidParameter;
+            return;
+        }
+        std::lock_guard<std::mutex> guard(g_ioShareMutex);
+        uint32_t openCount = PPC_LOAD_U32(shareTable + 0u);
+        uint32_t readers = PPC_LOAD_U32(shareTable + 4u);
+        uint32_t writers = PPC_LOAD_U32(shareTable + 8u);
+        uint32_t deleters = PPC_LOAD_U32(shareTable + 12u);
+        uint32_t sharedRead = PPC_LOAD_U32(shareTable + 16u);
+        uint32_t sharedWrite = PPC_LOAD_U32(shareTable + 20u);
+        uint32_t sharedDelete = PPC_LOAD_U32(shareTable + 24u);
+        if (api == "IoRemoveShareAccess") {
+            const auto existing = g_ioShareByFileObject.find(fileObject);
+            if (existing != g_ioShareByFileObject.end()) {
+                const auto [access, share] = existing->second;
+                if ((access & 0x80000001u) != 0u && readers) --readers;
+                if ((access & 0x40000006u) != 0u && writers) --writers;
+                if ((access & 0x00010000u) != 0u && deleters) --deleters;
+                if ((share & 1u) && sharedRead) --sharedRead;
+                if ((share & 2u) && sharedWrite) --sharedWrite;
+                if ((share & 4u) && sharedDelete) --sharedDelete;
+                if (openCount) --openCount;
+                g_ioShareByFileObject.erase(existing);
+                PPC_STORE_U32(shareTable + 0u, openCount);
+                PPC_STORE_U32(shareTable + 4u, readers);
+                PPC_STORE_U32(shareTable + 8u, writers);
+                PPC_STORE_U32(shareTable + 12u, deleters);
+                PPC_STORE_U32(shareTable + 16u, sharedRead);
+                PPC_STORE_U32(shareTable + 20u, sharedWrite);
+                PPC_STORE_U32(shareTable + 24u, sharedDelete);
+            }
+            return;
+        }
+        const uint32_t access = context.r3.u32;
+        const uint32_t share = context.r4.u32;
+        const bool readAccess = (access & 0x80000001u) != 0u;
+        const bool writeAccess = (access & 0x40000006u) != 0u;
+        const bool deleteAccess = (access & 0x00010000u) != 0u;
+        if ((readAccess && openCount > sharedRead) ||
+            (writeAccess && openCount > sharedWrite) ||
+            (deleteAccess && openCount > sharedDelete) ||
+            ((share & 1u) == 0u && readers != 0u) ||
+            ((share & 2u) == 0u && writers != 0u) ||
+            ((share & 4u) == 0u && deleters != 0u)) {
+            context.r3.u32 = 0xC0000043u; // STATUS_SHARING_VIOLATION
+            return;
+        }
+        if (api == "IoSetShareAccess" || context.r7.u32 != 0u) {
+            ++openCount;
+            if (readAccess) ++readers;
+            if (writeAccess) ++writers;
+            if (deleteAccess) ++deleters;
+            if (share & 1u) ++sharedRead;
+            if (share & 2u) ++sharedWrite;
+            if (share & 4u) ++sharedDelete;
+            PPC_STORE_U32(shareTable + 0u, openCount);
+            PPC_STORE_U32(shareTable + 4u, readers);
+            PPC_STORE_U32(shareTable + 8u, writers);
+            PPC_STORE_U32(shareTable + 12u, deleters);
+            PPC_STORE_U32(shareTable + 16u, sharedRead);
+            PPC_STORE_U32(shareTable + 20u, sharedWrite);
+            PPC_STORE_U32(shareTable + 24u, sharedDelete);
+            g_ioShareByFileObject[fileObject] = {access, share};
+        }
+        context.r3.u32 = kNtStatusSuccess;
+        return;
+    }
+    if (api == "NetDll_XNetStartup" || api == "NetDll_XNetCleanup" ||
+        api == "NetDll_XNetRegisterKey" || api == "NetDll_XNetUnregisterKey" ||
+        api == "NetDll_XNetQosListen") {
+        context.r3.u32 = kNtStatusSuccess;
+        return;
+    }
+    if (api == "NetDll_XNetRandom") {
+        const uint32_t output = context.r4.u32, length = context.r5.u32;
+        if (!base || length > 16u * 1024u * 1024u ||
+            (length != 0u && !validGuestRange(output, length))) {
+            context.r3.u32 = kNtStatusInvalidParameter;
+            return;
+        }
+        if (length) std::memset(base + output, 0xBB, length);
+        context.r3.u32 = kNtStatusSuccess;
+        return;
+    }
+    if (api == "NetDll_XNetGetEthernetLinkStatus") { context.r3.u32 = 0u; return; }
+    if (api == "NetDll_XNetGetTitleXnAddr") {
+        const uint32_t output = context.r4.u32;
+        if (base && validGuestRange(output, 36u)) std::memset(base + output, 0, 36u);
+        context.r3.u32 = 0u;
+        return;
+    }
+    if (api == "NetDll_XNetDnsLookup") {
+        const uint32_t event = context.r5.u32, outputPointer = context.r6.u32;
+        const uint32_t dns = allocateGuestPhysicalRange(base, 0x100u, 0x1000u, 0x04u);
+        if (base && dns) {
+            PPC_STORE_U32(dns, 1u); // XNDNS status: lookup unavailable while XNet is offline.
+            PPC_STORE_U32(dns + 4u, 0u);
+            if (validGuestRange(outputPointer, 4u)) PPC_STORE_U32(outputPointer, dns);
+        }
+        if (event) signalGuestEventHandle(event);
+        context.r3.u32 = dns ? kNtStatusSuccess : kNtStatusNoMemory;
+        return;
+    }
+    if (api == "NetDll_XNetDnsRelease") {
+        const uint32_t dns = context.r4.u32;
+        const bool released = releaseGuestPhysicalRange(dns);
+        context.r3.u32 = released || dns == 0u ? kNtStatusSuccess : kNtStatusInvalidParameter;
+        return;
+    }
+    if (api == "NetDll_XNetQosLookup") {
+        const uint32_t qosOut = context.r10.u32;
+        const uint32_t qos = allocateGuestPhysicalRange(base, 0x100u, 0x1000u, 0x04u);
+        if (qos && base) {
+            PPC_STORE_U32(qos, 0u);
+            PPC_STORE_U32(qos + 4u, 0u);
+            if (validGuestRange(qosOut, 4u)) PPC_STORE_U32(qosOut, qos);
+        }
+        context.r3.u32 = qos ? kNtStatusSuccess : kNtStatusNoMemory;
+        return;
+    }
+    if (api == "NetDll_XNetQosRelease") {
+        const uint32_t qos = context.r4.u32;
+        const bool released = releaseGuestPhysicalRange(qos);
+        context.r3.u32 = released || qos == 0u ? kNtStatusSuccess : kNtStatusInvalidParameter;
+        return;
+    }
+    if (api == "NetDll_XNetXnAddrToInAddr" || api == "NetDll_XNetServerToInAddr") {
+        const uint32_t output = api == "NetDll_XNetXnAddrToInAddr" ? context.r6.u32 : context.r6.u32;
+        if (base && validGuestRange(output, 4u)) PPC_STORE_U32(output, 0u);
+        context.r3.u32 = 1u; // no live XNet address is available in this offline title session.
+        return;
+    }
+    if (api == "KeBugCheck" || api == "KeBugCheckEx") {
+        char event[160];
+        std::snprintf(event, sizeof(event), "%.*s bugcheck code=0x%08X", static_cast<int>(api.size()), api.data(), context.r3.u32);
+        throw std::runtime_error(event);
+    }
+    if (api == "RtlRaiseException" || api == "RtlUnwind") {
+        char event[160];
+        std::snprintf(event, sizeof(event), "%.*s requested guest exception/control unwind", static_cast<int>(api.size()), api.data());
+        throw std::runtime_error(event);
+    }
+    if (api == "XeCryptSha") {
+        std::vector<uint8_t> input;
+        const uint32_t ptrs[] = {context.r3.u32, context.r5.u32, context.r7.u32};
+        const uint32_t sizes[] = {context.r4.u32, context.r6.u32, context.r8.u32};
+        if (!base) { context.r3.u32 = kNtStatusInvalidParameter; return; }
+        uint64_t total = 0u;
+        for (size_t i = 0; i < 3u; ++i) {
+            if (sizes[i] == 0u) continue;
+            if (sizes[i] > 64u * 1024u * 1024u || !validGuestRange(ptrs[i], sizes[i]) ||
+                (total += sizes[i]) > 64u * 1024u * 1024u) {
+                context.r3.u32 = kNtStatusInvalidParameter; return;
+            }
+            input.insert(input.end(), base + ptrs[i], base + ptrs[i] + sizes[i]);
+        }
+        const uint32_t output = context.r9.u32, outputSize = std::min<uint32_t>(context.r10.u32, 20u);
+        if (outputSize != 0u && !validGuestRange(output, outputSize)) { context.r3.u32 = kNtStatusInvalidParameter; return; }
+        const auto digest = xowueSha1(input);
+        if (outputSize) std::memcpy(base + output, digest.data(), outputSize);
+        return;
+    }
+    if (api == "XGetLanguage") { context.r3.u32 = 9u; return; }
+    if (api == "XNetLogonGetTitleID" || api == "XamGetCurrentTitleId") { context.r3.u32 = kXowueTitleId; return; }
+    if (api == "XamGetSystemVersion") { context.r3.u32 = 0u; return; }
+    if (api == "XamUserGetSigninState") { context.r3.u32 = context.r3.u32 == 0u ? 1u : 0u; return; }
+    if (api == "XamUserGetName") {
+        const uint32_t user = context.r3.u32, output = context.r4.u32, capacity = context.r5.u32;
+        if (user != 0u || !base || !validGuestRange(output, std::max(1u, capacity))) { context.r3.u32 = kXamNoSuchUser; return; }
+        static constexpr char nameValue[] = "XOWUE Player";
+        const uint32_t count = std::min<uint32_t>(capacity ? capacity - 1u : 0u, sizeof(nameValue) - 1u);
+        if (count) std::memcpy(base + output, nameValue, count);
+        if (capacity) base[output + count] = 0u;
+        context.r3.u32 = kNtStatusSuccess; return;
+    }
+    if (api == "XamUserGetSigninInfo") {
+        const uint32_t user = context.r3.u32, output = context.r5.u32;
+        clearOutput(output, 40u);
+        if (user != 0u || !base || !validGuestRange(output, 40u)) { context.r3.u32 = kXamNoSuchUser; return; }
+        PPC_STORE_U64(output, kLocalUserXuid);
+        PPC_STORE_U32(output + 12u, 1u);
+        static constexpr char nameValue[] = "XOWUE Player";
+        std::memcpy(base + output + 24u, nameValue, sizeof(nameValue) - 1u);
+        context.r3.u32 = kNtStatusSuccess; return;
+    }
+    if (api == "XamUserGetXUID") {
+        const uint32_t user = context.r3.u32, output = context.r5.u32;
+        if (!base || !validGuestRange(output, 8u)) { context.r3.u32 = kXamErrorInvalidParameter; return; }
+        PPC_STORE_U64(output, user == 0u ? kLocalUserXuid : 0u);
+        context.r3.u32 = user == 0u ? kNtStatusSuccess : kXamNoSuchUser; return;
+    }
+    if (api == "XamUserCheckPrivilege") {
+        const uint32_t output = context.r5.u32;
+        if (base && validGuestRange(output, 4u)) PPC_STORE_U32(output, 0u);
+        context.r3.u32 = kNtStatusSuccess; return;
+    }
+    if (api == "XamUserAreUsersFriends") { context.r3.u32 = 0u; return; }
+    if (api == "XamUserReadProfileSettings" || api == "XamUserWriteProfileSettings") {
+        context.r3.u32 = context.r3.u32 == 0u ? kNtStatusSuccess : kXamNoSuchUser; return;
+    }
+    if (api == "XamContentGetLicenseMask") {
+        if (base && validGuestRange(context.r3.u32, 4u)) PPC_STORE_U32(context.r3.u32, 0xFFFFFFFFu);
+        context.r3.u32 = kNtStatusSuccess; return;
+    }
+    if (api == "XamContentGetDeviceState") {
+        const uint32_t device = context.r3.u32;
+        const uint32_t overlapped = context.r4.u32;
+        const bool connected = device == 1u || device == 2u;
+        const uint32_t status = connected ? 0u : 1167u;
+        if (overlapped && base && validGuestRange(overlapped, 16u)) {
+            PPC_STORE_U32(overlapped + 4u, status);
+            PPC_STORE_U32(overlapped + 8u, connected ? 0u : 1167u);
+            PPC_STORE_U32(overlapped + 12u, 0u);
+            const uint32_t event = PPC_LOAD_U32(overlapped);
+            if (event) signalGuestEventHandle(event);
+            context.r3.u32 = 997u; // X_ERROR_IO_PENDING after immediate completion.
+        } else context.r3.u32 = status;
+        return;
+    }
+    if (api == "XamContentGetDeviceData") {
+        const uint32_t device = context.r3.u32, output = context.r4.u32;
+        if (!base || !validGuestRange(output, 0x50u) || (device != 1u && device != 2u)) {
+            context.r3.u32 = 1167u;
+            return;
+        }
+        std::memset(base + output, 0, 0x50u);
+        const uint64_t oneGiB = 1024ull * 1024ull * 1024ull;
+        PPC_STORE_U32(output, device);
+        PPC_STORE_U32(output + 4u, device == 1u ? 1u : 4u);
+        PPC_STORE_U64(output + 8u, device == 1u ? 20u * oneGiB : 7u * oneGiB);
+        PPC_STORE_U64(output + 16u, device == 1u ? 3u * oneGiB : 0u);
+        const char *nameValue = device == 1u ? "XOWUE HDD" : "XOWUE Disc";
+        for (size_t i = 0; nameValue[i] && i < 27u; ++i) {
+            const uint16_t character = static_cast<uint8_t>(nameValue[i]);
+            base[output + 24u + static_cast<uint32_t>(i * 2u)] =
+                static_cast<uint8_t>(character >> 8u);
+            base[output + 25u + static_cast<uint32_t>(i * 2u)] =
+                static_cast<uint8_t>(character);
+        }
+        context.r3.u32 = kNtStatusSuccess;
+        return;
+    }
+    if (api == "XamContentCreateEx") {
+        const uint32_t disposition = context.r7.u32, license = context.r8.u32;
+        if (base && validGuestRange(disposition, 4u)) PPC_STORE_U32(disposition, 2u);
+        if (base && validGuestRange(license, 4u)) PPC_STORE_U32(license, 0xFFFFFFFFu);
+        context.r3.u32 = kNtStatusSuccess;
+        return;
+    }
+    if (api == "XamContentCreateEnumerator") {
+        const uint32_t sizeOut = context.r8.u32, handleOut = context.r9.u32;
+        if (base && validGuestRange(sizeOut, 4u)) PPC_STORE_U32(sizeOut, 0u);
+        if (base && validGuestRange(handleOut, 4u)) PPC_STORE_U32(handleOut, 0u);
+        context.r3.u32 = kNtStatusSuccess; return;
+    }
+    if (api == "XamEnumerate") {
+        const uint32_t countOut = context.r6.u32;
+        if (base && validGuestRange(countOut, 4u)) PPC_STORE_U32(countOut, 0u);
+        context.r3.u32 = 0x80000006u; return;
+    }
+    if (api == "XamCreateEnumeratorHandle" || api == "XamGetPrivateEnumStructureFromHandle") {
+        context.r3.u32 = 0u; return;
+    }
+    if (api == "XamLoaderGetLaunchData") {
+        if (base && validGuestRange(context.r3.u32, 4u)) PPC_STORE_U32(context.r3.u32, 0u);
+        context.r3.u32 = kXamNoSuchUser; return;
+    }
+    if (api == "XamLoaderLaunchTitle") { context.r3.u32 = kNotImplemented; return; }
+    if (api == "XamTaskShouldExit") { context.r3.u32 = 0u; return; }
+    if (api == "XamTaskSchedule") {
+        PPCContext threadContext{};
+        threadContext.r3.u32 = context.r6.u32;
+        threadContext.r4.u32 = 0x00010000u;
+        threadContext.r5.u32 = 0u;
+        threadContext.r6.u32 = 0u;
+        threadContext.r7.u32 = context.r3.u32;
+        threadContext.r8.u32 = context.r4.u32;
+        threadContext.r9.u32 = 0u;
+        xowue_ExCreateThread(threadContext, base);
+        context.r3.u32 = threadContext.r3.u32;
+        if (context.r3.u32 == kNtStatusSuccess)
+            recordRuntimeTrace("XamTaskSchedule dispatched callback on the guest PPC scheduler");
+        return;
+    }
+    if (api == "XamTaskCloseHandle") {
+        PPCContext closeContext{}; closeContext.r3.u32 = context.r3.u32;
+        xowue_NtClose(closeContext); context.r3.u32 = closeContext.r3.u32; return;
+    }
+    if (api == "XamAlloc") {
+        const uint32_t size = context.r3.u32;
+        context.r3.u32 = allocateGuestPhysicalRange(base, size, 0x1000u, 0x04u); return;
+    }
+    if (api == "XamFree") {
+        releaseGuestPhysicalRange(context.r3.u32); context.r3.u32 = 0u; return;
+    }
+    if (api == "XAudioGetSpeakerConfig") { context.r3.u32 = 0x00000003u; return; }
+    if (api == "XAudioGetVoiceCategoryVolume") { context.r3.u32 = 0x3F800000u; return; }
+    if (api == "XAudioGetVoiceCategoryVolumeChangeMask") { context.r3.u32 = 0u; return; }
+    if (api == "XAudioRegisterRenderDriverClient" || api == "XAudioSubmitRenderDriverFrame" ||
+        api == "XAudioUnregisterRenderDriverClient" || api == "XamVoiceClose" ||
+        api == "XamVoiceSubmitPacket") { context.r3.u32 = 0u; return; }
+    if (api == "XamVoiceCreate" || api == "XamVoiceHeadsetPresent") {
+        if (api == "XamVoiceCreate" && base && validGuestRange(context.r5.u32, 4u))
+            PPC_STORE_U32(context.r5.u32, 0u);
+        context.r3.u32 = api == "XamVoiceCreate" ? 5u : 0u; return;
+    }
+    if (api == "XeKeysConsolePrivateKeySign" || api == "XeKeysConsoleSignatureVerification") {
+        context.r3.u32 = 0u; return;
+    }
+    if (api == "XMACreateContext") {
+        const uint32_t output = context.r3.u32;
+        if (!base || !validGuestRange(output, 4u)) { context.r3.u32 = kNtStatusInvalidParameter; return; }
+        const uint32_t contextAddress = allocateGuestPhysicalRange(base, 0x1000u, 0x1000u, 0x04u);
+        if (!contextAddress) { context.r3.u32 = kNtStatusNoMemory; return; }
+        g_guestXmaContexts.insert(contextAddress);
+        PPC_STORE_U32(output, contextAddress);
+        context.r3.u32 = kNtStatusSuccess;
+        return;
+    }
+    if (api == "XMAReleaseContext") {
+        const uint32_t contextAddress = context.r3.u32;
+        const bool known = g_guestXmaContexts.erase(contextAddress) != 0u;
+        if (known) releaseGuestPhysicalRange(contextAddress);
+        context.r3.u32 = known ? kNtStatusSuccess : kNtStatusInvalidParameter;
+        return;
+    }
+    if (api == "XamUserCreateAchievementEnumerator" || api == "XamUserCreateStatsEnumerator") {
+        const uint32_t sizeOut = context.r9.u32, handleOut = context.r10.u32;
+        if (base && validGuestRange(sizeOut, 4u)) PPC_STORE_U32(sizeOut, 0u);
+        if (base && validGuestRange(handleOut, 4u)) PPC_STORE_U32(handleOut, 0u);
+        context.r3.u32 = 0u;
+        return;
+    }
+    if (api == "XamWriteGamerTile") { context.r3.u32 = kNtStatusSuccess; return; }
+    if (api == "XMsgStartIORequest" || api == "XMsgStartIORequestEx" ||
+        api == "XMsgInProcessCall" || api == "XMsgCancelIORequest") {
+        recordRuntimeTrace(std::string(api) + " completed as an offline XAM service request");
+        context.r3.u32 = kNtStatusSuccess;
+        return;
+    }
+    if (api == "XexGetModuleHandle") {
+        const uint32_t namePointer = context.r3.u32, output = context.r4.u32;
+        if (!base || !validGuestRange(output, 4u)) { context.r3.u32 = kNtStatusInvalidParameter; return; }
+        bool executable = namePointer == 0u;
+        if (namePointer != 0u) {
+            std::string moduleName;
+            if (!readGuestCString(base, namePointer, moduleName, 260u)) {
+                context.r3.u32 = kNtStatusInvalidParameter; return;
+            }
+            std::transform(moduleName.begin(), moduleName.end(), moduleName.begin(),
+                [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
+            executable = moduleName == "default.xex" || moduleName == "default";
+        }
+        PPC_STORE_U32(output, executable ? g_activeImageBase : 0u);
+        context.r3.u32 = executable ? 0u : 1168u; // X_ERROR_NOT_FOUND
+        return;
+    }
+    if (api == "XexGetModuleSection") {
+        const uint32_t module = context.r3.u32, namePointer = context.r4.u32;
+        const uint32_t dataOut = context.r5.u32, sizeOut = context.r6.u32;
+        if (!base || (module != 0u && module != g_activeImageBase) ||
+            !validGuestRange(dataOut, 4u) || !validGuestRange(sizeOut, 4u)) {
+            context.r3.u32 = kNtStatusInvalidHandle; return;
+        }
+        std::string sectionName;
+        if (!readGuestCString(base, namePointer, sectionName, 64u)) {
+            context.r3.u32 = kNtStatusInvalidParameter; return;
+        }
+        const auto entrySection = std::find_if(g_activeImageSections.begin(), g_activeImageSections.end(),
+            [](const auto &section) {
+                return g_activeEntryPoint >= section.first &&
+                       static_cast<uint64_t>(g_activeEntryPoint) <
+                           static_cast<uint64_t>(section.first) + section.second;
+            });
+        if (sectionName != ".text" || entrySection == g_activeImageSections.end()) {
+            PPC_STORE_U32(dataOut, 0u); PPC_STORE_U32(sizeOut, 0u);
+            context.r3.u32 = 1168u;
+            return;
+        }
+        PPC_STORE_U32(dataOut, entrySection->first);
+        PPC_STORE_U32(sizeOut, entrySection->second);
+        context.r3.u32 = kNtStatusSuccess;
+        return;
+    }
+    if (api == "XexGetProcedureAddress") {
+        const uint32_t module = context.r3.u32, symbol = context.r4.u32, output = context.r5.u32;
+        if (!base || !validGuestRange(output, 4u) || (module != 0u && module != g_activeImageBase)) {
+            context.r3.u32 = kNtStatusInvalidHandle; return;
+        }
+        if (symbol >= PPC_CODE_BASE && symbol - PPC_CODE_BASE < PPC_CODE_SIZE && findGuestFunction(symbol)) {
+            PPC_STORE_U32(output, symbol);
+            context.r3.u32 = kNtStatusSuccess;
+        } else {
+            PPC_STORE_U32(output, 0u);
+            context.r3.u32 = 127u; // X_ERROR_PROC_NOT_FOUND
+        }
+        return;
+    }
+    if (api == "_snprintf" || api == "sprintf" || api == "_vsnprintf") {
+        const uint32_t output = context.r3.u32;
+        const uint32_t capacity = api == "sprintf" ? 0x10000u : context.r4.u32;
+        const uint32_t formatPointer = api == "sprintf" ? context.r4.u32 : context.r5.u32;
+        const uint32_t startIndex = api == "sprintf" ? 2u : 3u;
+        const uint32_t arrayArguments = api == "_vsnprintf" ? context.r6.u32 : 0u;
+        if (!base || capacity == 0u || capacity > 0x10000u ||
+            !validGuestRange(output, capacity) || !validGuestRange(formatPointer, 1u)) {
+            context.r3.u32 = 0xFFFFFFFFu;
+            return;
+        }
+        const std::string result = formatGuestVarargs(context, base, formatPointer,
+                                                       startIndex, arrayArguments);
+        const uint32_t copied = std::min<uint32_t>(capacity ? capacity - 1u : 0u,
+                                                   static_cast<uint32_t>(result.size()));
+        if (copied) std::memcpy(base + output, result.data(), copied);
+        base[output + copied] = 0u;
+        context.r3.u32 = result.size() >= capacity ? 0xFFFFFFFFu
+                                                   : static_cast<uint32_t>(result.size());
+        return;
+    }
+    if (api.rfind("XamShow", 0u) == 0u) {
+        if (api == "XamShowKeyboardUI" && base) {
+            const uint32_t defaultText = context.r5.u32;
+            const uint32_t output = context.r8.u32;
+            const uint32_t capacity = std::min<uint32_t>(context.r9.u32, 8192u);
+            if (output && capacity && validGuestRange(output, static_cast<uint64_t>(capacity) * 2u)) {
+                uint32_t index = 0u;
+                bool terminated = false;
+                while (defaultText && index + 1u < capacity &&
+                       validGuestRange(defaultText + index * 2u, 2u)) {
+                    const uint16_t character = loadGuestBe16Compat(base, defaultText + index * 2u);
+                    base[output + index * 2u] = static_cast<uint8_t>(character >> 8u);
+                    base[output + index * 2u + 1u] = static_cast<uint8_t>(character);
+                    ++index;
+                    if (character == 0u) { terminated = true; break; }
+                }
+                if (!terminated) {
+                    base[output + index * 2u] = 0u;
+                    base[output + index * 2u + 1u] = 0u;
+                }
+            }
+        }
+        context.r3.u32 = kNtStatusSuccess;
+        recordRuntimeTrace(std::string(api) + " completed by the local offline UI policy");
+        return;
+    }
+    if (api == "XamNotifyCreateListener") {
+        const uint32_t handle = allocateGuestHandle();
+        auto listener = std::make_shared<GuestWaitable>();
+        listener->kind = GuestWaitable::Kind::Event;
+        listener->handle = handle;
+        listener->manualReset = true;
+        listener->signaled = false;
+        { std::lock_guard<std::mutex> lock(g_guestObjectMutex); g_guestWaitables[handle] = listener; }
+        context.r3.u32 = handle ? handle : kNtStatusNoMemory;
+        return;
+    }
+    if (api == "XamSessionCreateHandle") {
+        const uint32_t handle = allocateGuestHandle();
+        auto session = std::make_shared<GuestWaitable>();
+        session->kind = GuestWaitable::Kind::Event;
+        session->handle = handle;
+        session->manualReset = true;
+        session->signaled = true;
+        { std::lock_guard<std::mutex> lock(g_guestObjectMutex); g_guestWaitables[handle] = session; }
+        context.r3.u32 = handle ? handle : kNtStatusNoMemory;
+        return;
+    }
+    if (api == "XamSessionRefObjByHandle") {
+        context.r3.u32 = lookupGuestWaitable(context.r3.u32)
+            ? kNtStatusSuccess : kNtStatusInvalidHandle;
+        return;
+    }
+    if (api == "XNotifyPositionUI") { context.r3.u32 = kNtStatusSuccess; return; }
+    if (api == "XNotifyGetNext") { context.r3.u32 = 0x00000102u; return; }
+    if (api == "ObIsTitleObject") { context.r3.u32 = 0u; return; }
+    if (api == "ObReferenceObject") {
+        const uint32_t object = context.r3.u32;
+        if (object) { std::lock_guard<std::mutex> lock(g_guestObjectMutex); ++g_guestObjectReferences[object]; }
+        return;
+    }
+    if (api == "__C_specific_handler") {
+        recordRuntimeTrace("__C_specific_handler returned EXCEPTION_CONTINUE_SEARCH (1)");
+        context.r3.u32 = 1u;
+        return;
+    }
+    if (api == "RtlImageXexHeaderField") {
+        context.r3.u32 = context.r4.u32 == 0x00040006u ? g_activeExecutionInfoAddress : 0u; return;
+    }
+    if (api == "VdGet") { context.r3.u32 = 0u; return; }
+    if (api == "KeTls") { context.r3.u32 = 0u; return; }
     char message[256];
     std::snprintf(message, sizeof(message),
-                  "Xbox kernel/XAM import ainda não implementado: %s (LR=0x%08X; r3-r10=%08X,%08X,%08X,%08X,%08X,%08X,%08X,%08X)",
-                  name ? name : "?", static_cast<uint32_t>(context.lr),
-                  context.r3.u32, context.r4.u32, context.r5.u32, context.r6.u32,
-                  context.r7.u32, context.r8.u32, context.r9.u32, context.r10.u32);
+                  "XOWUE import contract failure: classified handler missing for %.*s",
+                  static_cast<int>(api.size()), api.data());
     recordRuntimeTrace(message);
     throw std::runtime_error(message);
 }
@@ -1402,6 +2834,208 @@ void xowue_ExFreePool(PPCContext &context) {
 
 bool validGuestRange(uint32_t address, uint64_t size) {
     return size != 0u && static_cast<uint64_t>(address) + size <= kGuestAddressSpaceSize;
+}
+
+static uint16_t loadGuestBe16(uint8_t *base, uint32_t address) {
+    return static_cast<uint16_t>((static_cast<uint16_t>(base[address]) << 8u) |
+                                 static_cast<uint16_t>(base[address + 1u]));
+}
+
+static void storeGuestBe16(uint8_t *base, uint32_t address, uint16_t value) {
+    base[address] = static_cast<uint8_t>(value >> 8u);
+    base[address + 1u] = static_cast<uint8_t>(value);
+}
+
+static bool readGuestAnsiString(uint8_t *base, uint32_t descriptor,
+                                std::string &value) {
+    if (!base || !validGuestRange(descriptor, 8u)) return false;
+    const uint16_t length = loadGuestBe16(base, descriptor);
+    const uint32_t buffer = PPC_LOAD_U32(descriptor + 4u);
+    if (length > 0x4000u || (length != 0u && !validGuestRange(buffer, length)))
+        return false;
+    value.assign(reinterpret_cast<const char *>(base + buffer), length);
+    return value.find('\0') == std::string::npos;
+}
+
+static std::string lowerGuestPath(std::string value) {
+    std::replace(value.begin(), value.end(), '\\', '/');
+    std::transform(value.begin(), value.end(), value.begin(), [](unsigned char c) {
+        return static_cast<char>(std::tolower(c));
+    });
+    return value;
+}
+
+static bool translateGuestFilePath(const std::string &guestPath, bool forWrite,
+                                  std::filesystem::path &hostPath) {
+    if (guestPath.empty() || guestPath.size() > 0x4000u) return false;
+    std::string normalized = guestPath;
+    std::replace(normalized.begin(), normalized.end(), '\\', '/');
+    const std::string lower = lowerGuestPath(normalized);
+    bool saveDevice = false;
+    size_t prefixLength = 0u;
+    const std::array<std::string, 6> gamePrefixes = {
+        "game:", "d:", "dvd:", "/device/cdrom0", "/device/harddisk0/partition1", ""
+    };
+    const std::array<std::string, 4> savePrefixes = {
+        "u:", "t:", "cache:", "/device/harddisk0/partition2"
+    };
+    for (const auto &prefix : savePrefixes) {
+        if (lower.rfind(prefix, 0u) == 0u) {
+            saveDevice = true;
+            prefixLength = prefix.size();
+            break;
+        }
+    }
+    if (prefixLength == 0u) {
+        for (const auto &prefix : gamePrefixes) {
+            if (!prefix.empty() && lower.rfind(prefix, 0u) == 0u) {
+                prefixLength = prefix.size();
+                break;
+            }
+        }
+    }
+    std::string relative = normalized.substr(prefixLength);
+    while (!relative.empty() && relative.front() == '/') relative.erase(relative.begin());
+    std::filesystem::path rel(relative);
+    if (rel.empty()) rel = ".";
+    for (const auto &part : rel) {
+        if (part == ".." || part == "." || part.empty()) {
+            if (part == "..") return false;
+        }
+    }
+    const auto root = saveDevice ? g_guestSaveRoot : g_guestGameRoot;
+    if (root.empty()) return false;
+    hostPath = root / rel;
+
+    // Resolve existing components case-insensitively, as Xbox file paths are
+    // case-insensitive while iOS's filesystem is not.
+    std::filesystem::path actual = root;
+    std::error_code ec;
+    for (const auto &part : rel) {
+        if (part == "." || part.empty()) continue;
+        std::filesystem::path match;
+        if (std::filesystem::is_directory(actual, ec)) {
+            const std::string wanted = lowerGuestPath(part.string());
+            for (std::filesystem::directory_iterator it(actual, ec), end;
+                 !ec && it != end; it.increment(ec)) {
+                if (lowerGuestPath(it->path().filename().string()) == wanted) {
+                    match = it->path().filename();
+                    break;
+                }
+            }
+        }
+        actual /= match.empty() ? part : match;
+    }
+    hostPath = actual;
+    const auto normalizedRoot = std::filesystem::weakly_canonical(root, ec);
+    ec.clear();
+    const auto normalizedTarget = std::filesystem::weakly_canonical(hostPath.parent_path(), ec);
+    if (!ec) {
+        auto rootIt = normalizedRoot.begin();
+        auto targetIt = normalizedTarget.begin();
+        for (; rootIt != normalizedRoot.end() && targetIt != normalizedTarget.end();
+             ++rootIt, ++targetIt) {
+            if (*rootIt != *targetIt) return false;
+        }
+        if (rootIt != normalizedRoot.end()) return false;
+    }
+    if (forWrite && !saveDevice) return false;
+    return true;
+}
+
+static std::shared_ptr<GuestFile> lookupGuestFile(uint32_t handle) {
+    std::lock_guard<std::mutex> lock(g_guestFileMutex);
+    const auto it = g_guestFiles.find(handle);
+    return it == g_guestFiles.end() ? nullptr : it->second;
+}
+
+static void writeGuestIoStatus(uint8_t *base, uint32_t address,
+                               uint32_t status, uint32_t information) {
+    if (!base || address == 0u || !validGuestRange(address, 8u)) return;
+    PPC_STORE_U32(address, status);
+    PPC_STORE_U32(address + 4u, information);
+}
+
+static uint32_t createGuestFile(uint8_t *base, const std::string &guestPath,
+                                uint32_t desiredAccess, uint32_t disposition,
+                                uint32_t options, uint32_t &handleOut,
+                                uint32_t &actionOut) {
+    handleOut = 0u;
+    actionOut = 0u;
+    const bool read = (desiredAccess & 0x80000000u) != 0u || (desiredAccess & 1u) != 0u;
+    const bool write = (desiredAccess & 0x40000000u) != 0u ||
+                       (desiredAccess & 2u) != 0u || (desiredAccess & 4u) != 0u;
+    const bool directoryOnly = (options & 0x00000001u) != 0u;
+    const bool fileOnly = (options & 0x00000040u) != 0u;
+    std::filesystem::path path;
+    if (!translateGuestFilePath(guestPath, write, path)) return kNtStatusInvalidParameter;
+    std::error_code ec;
+    bool exists = std::filesystem::exists(path, ec);
+    if (ec) exists = false;
+    const bool existedBeforeOpen = exists;
+    const bool createNew = disposition == 2u || disposition == 3u || disposition == 5u || disposition == 0u;
+    if (!exists && disposition == 1u) return 0xC0000034u; // STATUS_OBJECT_NAME_NOT_FOUND
+    if (exists && disposition == 2u) return 0xC0000035u; // STATUS_OBJECT_NAME_COLLISION
+    if (!exists && !createNew) return 0xC0000034u;
+    if ((directoryOnly && exists && !std::filesystem::is_directory(path, ec)) ||
+        (fileOnly && exists && std::filesystem::is_directory(path, ec)))
+        return kNtStatusInvalidParameter;
+    if (!exists && (directoryOnly || (options & 0x00000002u) != 0u)) {
+        std::filesystem::create_directories(path, ec);
+    } else if (!exists && write) {
+        std::filesystem::create_directories(path.parent_path(), ec);
+        if (!ec) {
+            std::ofstream create(path, std::ios::binary);
+            if (!create) ec = std::make_error_code(std::errc::permission_denied);
+        }
+    }
+    if (ec) return 0xC0000022u;
+    exists = std::filesystem::exists(path, ec);
+    if (!exists || ec) return 0xC0000034u;
+    auto file = std::make_shared<GuestFile>();
+    file->path = path;
+    file->directory = std::filesystem::is_directory(path, ec);
+    if (file->directory && fileOnly) return kNtStatusInvalidParameter;
+    if (!file->directory) {
+        file->readable = read || !write;
+        file->writable = write;
+        std::ios::openmode mode = std::ios::binary;
+        if (file->readable) mode |= std::ios::in;
+        if (file->writable) mode |= std::ios::out;
+        if (disposition == 0u || disposition == 4u || disposition == 5u)
+            mode |= std::ios::trunc;
+        file->stream.open(path, mode);
+        if (!file->stream && file->writable && !file->readable) {
+            file->stream.clear();
+            file->stream.open(path, std::ios::binary | std::ios::out |
+                                      ((disposition == 4u || disposition == 5u)
+                                           ? std::ios::trunc : std::ios::openmode{}));
+        }
+        if (!file->stream) return 0xC0000022u;
+    }
+    const uint32_t handle = allocateGuestHandle();
+    if (handle == 0u) return kNtStatusNoMemory;
+    const uint32_t objectAddress = allocateGuestEventObjectAddress();
+    if (objectAddress == 0u) return kNtStatusNoMemory;
+    file->completion = std::make_shared<GuestWaitable>();
+    file->completion->kind = GuestWaitable::Kind::Event;
+    file->completion->handle = handle;
+    file->completion->objectAddress = objectAddress;
+    file->completion->manualReset = true;
+    file->completion->signaled = true;
+    {
+        std::lock_guard<std::mutex> lock(g_guestFileMutex);
+        g_guestFiles[handle] = file;
+    }
+    {
+        std::lock_guard<std::mutex> lock(g_guestObjectMutex);
+        g_guestWaitables[handle] = file->completion;
+        g_guestWaitables[objectAddress] = file->completion;
+    }
+    handleOut = handle;
+    actionOut = existedBeforeOpen ? 1u : 2u;
+    (void)base;
+    return kNtStatusSuccess;
 }
 
 uint32_t guestStackArgument(PPCContext &context, uint8_t *base, uint32_t argumentIndex) {
@@ -1893,9 +3527,38 @@ void xowue_VdSwap(PPCContext &context, uint8_t *base) {
     PPC_STORE_U32(commandBuffer + 10u * 4u, width);
     PPC_STORE_U32(commandBuffer + 11u * 4u, height);
 
+    // VdSwap is the title's presentation boundary. The system command buffer
+    // is not necessarily linked into the guest ring buffer on this runtime,
+    // so decode and present the supplied Xenos fetch directly as well.
+    std::vector<uint8_t> rgba;
+    uint32_t decodedAddress = 0u;
+    const bool decoded = decodeXenosSwapTexture(base, fetchWords, textureFormat,
+                                                 width, height, decodedAddress,
+                                                 rgba);
+    {
+        std::lock_guard<std::mutex> lock(g_xenosMutex);
+        ++g_xenosFrontend.swaps;
+        g_xenosFrontend.latestFrontbufferAddress = frontbufferPhysicalAddress;
+        g_xenosFrontend.latestWidth = width;
+        g_xenosFrontend.latestHeight = height;
+        g_xenosFrontend.lastSwapTimestampNs = static_cast<uint64_t>(
+            std::chrono::duration_cast<std::chrono::nanoseconds>(
+                std::chrono::steady_clock::now().time_since_epoch()).count());
+        if (decoded) ++g_xenosFrontend.decodedFrames;
+        else ++g_xenosFrontend.malformedPackets;
+    }
+    if (decoded) {
+        if (xowue_vulkan_backend_guest_swap)
+            xowue_vulkan_backend_guest_swap(frontbufferPhysicalAddress, width, height);
+        if (xowue_vulkan_backend_guest_frame_rgba)
+            xowue_vulkan_backend_guest_frame_rgba(decodedAddress, width, height,
+                                                  textureFormat, rgba.data(), rgba.size());
+    }
+
     char event[256];
     std::snprintf(event, sizeof(event),
-                  "VdSwap queued Xenia-compatible PM4 swap width=%u height=%u frontbuffer=0x%08X format=0x%08X colorspace=%u",
+                  "VdSwap %s width=%u height=%u frontbuffer=0x%08X format=0x%08X colorspace=%u",
+                  decoded ? "decoded and presented guest framebuffer" : "framebuffer decode rejected",
                   width, height, frontbufferPhysicalAddress, textureFormat, colorSpace);
     recordRuntimeTrace(event);
 }
@@ -2180,6 +3843,24 @@ void xowue_ExTerminateThread(PPCContext &context) {
 
 void xowue_NtClose(PPCContext &context) {
     const uint32_t handle = context.r3.u32;
+    {
+        std::lock_guard<std::mutex> lock(g_guestFileMutex);
+        const auto file = g_guestFiles.find(handle);
+        if (file != g_guestFiles.end()) {
+            const auto completion = file->second->completion;
+            g_guestFiles.erase(file);
+            std::lock_guard<std::mutex> objectLock(g_guestObjectMutex);
+            g_guestWaitables.erase(handle);
+            if (completion) {
+                const bool aliased = std::any_of(g_guestFiles.begin(), g_guestFiles.end(),
+                    [&completion](const auto &entry) { return entry.second->completion == completion; });
+                if (!aliased) g_guestWaitables.erase(completion->objectAddress);
+            }
+            context.r3.u32 = kNtStatusSuccess;
+            recordRuntimeTrace("NtClose file handle closed");
+            return;
+        }
+    }
     std::shared_ptr<GuestThread> thread = lookupGuestThread(handle);
     std::shared_ptr<GuestWaitable> waitable = lookupGuestWaitable(handle);
     {
@@ -2204,6 +3885,461 @@ void xowue_NtClose(PPCContext &context) {
     recordRuntimeTrace("NtClose handle closed");
 }
 
+static bool getGuestObjectPath(uint8_t *base, uint32_t attributes,
+                               std::string &path) {
+    if (!base || !validGuestRange(attributes, 12u)) return false;
+    const uint32_t rootHandle = PPC_LOAD_U32(attributes + 4u);
+    const uint32_t nameDescriptor = PPC_LOAD_U32(attributes + 8u);
+    if (!readGuestAnsiString(base, nameDescriptor, path)) return false;
+    if (rootHandle != 0u && rootHandle != 0xFFFFFFFDu) {
+        const auto root = lookupGuestFile(rootHandle);
+        if (!root || !root->directory) return false;
+        path = root->path.generic_string() + "/" + path;
+    }
+    return true;
+}
+
+void xowue_NtCreateFile(PPCContext &context, uint8_t *base) {
+    const uint32_t handleOutAddress = context.r3.u32;
+    const uint32_t desiredAccess = context.r4.u32;
+    const uint32_t objectAttributes = context.r5.u32;
+    const uint32_t ioStatusAddress = context.r6.u32;
+    const uint32_t disposition = context.r10.u32;
+    const uint32_t createOptions = guestStackArgument(context, base, 9u);
+    std::string guestPath;
+    if (!base || !validGuestRange(handleOutAddress, 4u) ||
+        !getGuestObjectPath(base, objectAttributes, guestPath)) {
+        context.r3.u32 = kNtStatusInvalidParameter;
+        writeGuestIoStatus(base, ioStatusAddress, context.r3.u32, 0u);
+        recordRuntimeTrace("NtCreateFile rejected invalid output/object attributes");
+        return;
+    }
+    uint32_t handle = 0u, action = 0u;
+    const uint32_t status = createGuestFile(base, guestPath, desiredAccess,
+                                            disposition, createOptions, handle, action);
+    if (status == kNtStatusSuccess) PPC_STORE_U32(handleOutAddress, handle);
+    else PPC_STORE_U32(handleOutAddress, 0u);
+    writeGuestIoStatus(base, ioStatusAddress, status, action);
+    context.r3.u32 = status;
+    recordRuntimeTrace("NtCreateFile path=" + guestPath + " status=0x" + [&] {
+        char value[16]; std::snprintf(value, sizeof(value), "%08X", status);
+        return std::string(value);
+    }() + (status == kNtStatusSuccess ? " opened under game/save root" : " open failed"));
+}
+
+void xowue_NtOpenFile(PPCContext &context, uint8_t *base) {
+    const uint32_t handleOutAddress = context.r3.u32;
+    const uint32_t ioStatusAddress = context.r6.u32;
+    std::string guestPath;
+    if (!base || !validGuestRange(handleOutAddress, 4u) ||
+        !getGuestObjectPath(base, context.r5.u32, guestPath)) {
+        context.r3.u32 = kNtStatusInvalidParameter;
+        writeGuestIoStatus(base, ioStatusAddress, context.r3.u32, 0u);
+        return;
+    }
+    uint32_t handle = 0u, action = 0u;
+    const uint32_t status = createGuestFile(base, guestPath, context.r4.u32,
+                                            1u, context.r7.u32, handle, action);
+    PPC_STORE_U32(handleOutAddress, status == kNtStatusSuccess ? handle : 0u);
+    writeGuestIoStatus(base, ioStatusAddress, status, action);
+    context.r3.u32 = status;
+}
+
+static uint64_t guestFileOffset(uint8_t *base, uint32_t address,
+                                const std::shared_ptr<GuestFile> &file,
+                                bool output) {
+    if (address != 0u && validGuestRange(address, 8u)) {
+        const uint64_t requested = PPC_LOAD_U64(address);
+        if (requested != std::numeric_limits<uint64_t>::max()) return requested;
+    }
+    (void)base;
+    const auto position = output ? file->stream.tellp() : file->stream.tellg();
+    return position < 0 ? 0u : static_cast<uint64_t>(position);
+}
+
+void xowue_NtReadFile(PPCContext &context, uint8_t *base) {
+    GuestEventSignalOnReturn signal(context.r4.u32);
+    const uint32_t handle = context.r3.u32;
+    const uint32_t ioStatus = context.r7.u32;
+    const uint32_t buffer = context.r8.u32;
+    const uint32_t length = context.r9.u32;
+    const uint32_t offsetPointer = context.r10.u32;
+    const auto file = lookupGuestFile(handle);
+    if (!base || !file || file->directory || !file->readable || length > 64u * 1024u * 1024u ||
+        (length != 0u && !validGuestRange(buffer, length))) {
+        context.r3.u32 = file ? kNtStatusInvalidParameter : kNtStatusInvalidHandle;
+        writeGuestIoStatus(base, ioStatus, context.r3.u32, 0u);
+        return;
+    }
+    std::lock_guard<std::mutex> lock(file->mutex);
+    const uint64_t offset = guestFileOffset(base, offsetPointer, file, false);
+    file->stream.clear();
+    file->stream.seekg(static_cast<std::streamoff>(offset), std::ios::beg);
+    if (!file->stream) {
+        context.r3.u32 = kNtStatusUnsuccessful;
+        writeGuestIoStatus(base, ioStatus, context.r3.u32, 0u);
+        return;
+    }
+    file->stream.read(reinterpret_cast<char *>(base + buffer), length);
+    const uint32_t bytesRead = static_cast<uint32_t>(file->stream.gcount());
+    file->stream.clear();
+    if (offsetPointer == 0u) file->stream.seekg(static_cast<std::streamoff>(offset + bytesRead));
+    queueGuestApc(g_currentGuestThread, context.r5.u32, context.r6.u32, ioStatus, 0u);
+    context.r3.u32 = kNtStatusSuccess;
+    writeGuestIoStatus(base, ioStatus, kNtStatusSuccess, bytesRead);
+}
+
+void xowue_NtWriteFile(PPCContext &context, uint8_t *base) {
+    GuestEventSignalOnReturn signal(context.r4.u32);
+    const uint32_t handle = context.r3.u32;
+    const uint32_t ioStatus = context.r7.u32;
+    const uint32_t buffer = context.r8.u32;
+    const uint32_t length = context.r9.u32;
+    const uint32_t offsetPointer = context.r10.u32;
+    const auto file = lookupGuestFile(handle);
+    if (!base || !file || file->directory || !file->writable || length > 64u * 1024u * 1024u ||
+        (length != 0u && !validGuestRange(buffer, length))) {
+        context.r3.u32 = file ? kNtStatusInvalidParameter : kNtStatusInvalidHandle;
+        writeGuestIoStatus(base, ioStatus, context.r3.u32, 0u);
+        return;
+    }
+    std::lock_guard<std::mutex> lock(file->mutex);
+    const uint64_t offset = guestFileOffset(base, offsetPointer, file, true);
+    file->stream.clear();
+    file->stream.seekp(static_cast<std::streamoff>(offset), std::ios::beg);
+    file->stream.write(reinterpret_cast<const char *>(base + buffer), length);
+    if (!file->stream) {
+        context.r3.u32 = kNtStatusUnsuccessful;
+        writeGuestIoStatus(base, ioStatus, context.r3.u32, 0u);
+        return;
+    }
+    if (offsetPointer == 0u) file->stream.seekp(static_cast<std::streamoff>(offset + length));
+    queueGuestApc(g_currentGuestThread, context.r5.u32, context.r6.u32, ioStatus, 0u);
+    context.r3.u32 = kNtStatusSuccess;
+    writeGuestIoStatus(base, ioStatus, kNtStatusSuccess, length);
+}
+
+void xowue_NtFlushBuffersFile(PPCContext &context, uint8_t *base) {
+    const auto file = lookupGuestFile(context.r3.u32);
+    const uint32_t status = file ? kNtStatusSuccess : kNtStatusInvalidHandle;
+    if (file) { std::lock_guard<std::mutex> lock(file->mutex); file->stream.flush(); }
+    writeGuestIoStatus(base, context.r4.u32, status, 0u);
+    context.r3.u32 = status;
+}
+
+void xowue_NtQueryInformationFile(PPCContext &context, uint8_t *base) {
+    const auto file = lookupGuestFile(context.r3.u32);
+    const uint32_t ioStatus = context.r4.u32;
+    const uint32_t output = context.r5.u32;
+    const uint32_t length = context.r6.u32;
+    const uint32_t infoClass = context.r7.u32;
+    if (!base || !file || length > 0x10000u || !validGuestRange(output, length)) {
+        context.r3.u32 = file ? kNtStatusInvalidParameter : kNtStatusInvalidHandle;
+        writeGuestIoStatus(base, ioStatus, context.r3.u32, 0u);
+        return;
+    }
+    std::error_code ec;
+    const bool directory = file->directory;
+    const uint64_t size = directory ? 0u : std::filesystem::file_size(file->path, ec);
+    const uint64_t allocation = (size + 0xFFFu) & ~uint64_t{0xFFFu};
+    uint32_t required = 0u;
+    std::memset(base + output, 0, length);
+    if (infoClass == 4u) { // FILE_BASIC_INFORMATION
+        required = 40u;
+        if (length >= required) PPC_STORE_U32(output + 32u, directory ? 0x10u : 0x20u);
+    } else if (infoClass == 5u) { // FILE_STANDARD_INFORMATION
+        required = 24u;
+        if (length >= required) {
+            PPC_STORE_U64(output, allocation); PPC_STORE_U64(output + 8u, size);
+            PPC_STORE_U32(output + 16u, 1u); base[output + 21u] = directory ? 1u : 0u;
+        }
+    } else if (infoClass == 14u) { // FILE_POSITION_INFORMATION
+        required = 8u;
+        if (length >= required) {
+            std::lock_guard<std::mutex> lock(file->mutex);
+            const auto position = file->stream.tellg();
+            PPC_STORE_U64(output, position < 0 ? 0u : static_cast<uint64_t>(position));
+        }
+    } else if (infoClass == 34u) { // FILE_NETWORK_OPEN_INFORMATION
+        required = 56u;
+        if (length >= required) {
+            PPC_STORE_U64(output + 32u, allocation); PPC_STORE_U64(output + 40u, size);
+            PPC_STORE_U32(output + 48u, directory ? 0x10u : 0x20u);
+        }
+    } else {
+        context.r3.u32 = kNtStatusInvalidParameter;
+        writeGuestIoStatus(base, ioStatus, context.r3.u32, 0u);
+        return;
+    }
+    const uint32_t status = length < required ? kNtStatusBufferTooSmall : kNtStatusSuccess;
+    context.r3.u32 = status;
+    writeGuestIoStatus(base, ioStatus, status, status == kNtStatusSuccess ? required : 0u);
+}
+
+void xowue_NtQueryFullAttributesFile(PPCContext &context, uint8_t *base) {
+    std::string name;
+    std::filesystem::path path;
+    const uint32_t output = context.r4.u32;
+    if (!base || !validGuestRange(output, 56u) ||
+        !getGuestObjectPath(base, context.r3.u32, name) ||
+        !translateGuestFilePath(name, false, path)) {
+        context.r3.u32 = kNtStatusInvalidParameter;
+        return;
+    }
+    std::error_code ec;
+    if (!std::filesystem::exists(path, ec) || ec) {
+        context.r3.u32 = 0xC000000Fu; // STATUS_NO_SUCH_FILE
+        return;
+    }
+    const bool directory = std::filesystem::is_directory(path, ec);
+    const uint64_t size = directory ? 0u : std::filesystem::file_size(path, ec);
+    std::memset(base + output, 0, 56u);
+    PPC_STORE_U64(output + 32u, (size + 0xFFFu) & ~uint64_t{0xFFFu});
+    PPC_STORE_U64(output + 40u, size);
+    PPC_STORE_U32(output + 48u, directory ? 0x10u : 0x20u);
+    context.r3.u32 = kNtStatusSuccess;
+}
+
+void xowue_NtDuplicateObject(PPCContext &context, uint8_t *base) {
+    const uint32_t sourceHandle = context.r3.u32;
+    const uint32_t outputAddress = context.r4.u32;
+    const uint32_t options = context.r5.u32;
+    if (!base || (outputAddress != 0u && !validGuestRange(outputAddress, 4u))) {
+        context.r3.u32 = kNtStatusInvalidParameter; return;
+    }
+    if (outputAddress == 0u) {
+        PPCContext closeContext{}; closeContext.r3.u32 = sourceHandle;
+        xowue_NtClose(closeContext); context.r3.u32 = closeContext.r3.u32; return;
+    }
+    const auto file = lookupGuestFile(sourceHandle);
+    if (file) {
+        const uint32_t duplicate = allocateGuestHandle();
+        if (!duplicate) { context.r3.u32 = kNtStatusNoMemory; return; }
+        { std::lock_guard<std::mutex> lock(g_guestFileMutex); g_guestFiles[duplicate] = file; }
+        { std::lock_guard<std::mutex> lock(g_guestObjectMutex); g_guestWaitables[duplicate] = file->completion; }
+        PPC_STORE_U32(outputAddress, duplicate);
+        context.r3.u32 = kNtStatusSuccess;
+    } else {
+        const auto thread = lookupGuestThread(sourceHandle);
+        const auto waitable = thread ? thread->completion : lookupGuestWaitable(sourceHandle);
+        if (!waitable) { context.r3.u32 = kNtStatusInvalidHandle; return; }
+        const uint32_t duplicate = allocateGuestHandle();
+        if (!duplicate) { context.r3.u32 = kNtStatusNoMemory; return; }
+        {
+            std::lock_guard<std::mutex> lock(g_guestObjectMutex);
+            g_guestWaitables[duplicate] = waitable;
+        }
+        PPC_STORE_U32(outputAddress, duplicate);
+        context.r3.u32 = kNtStatusSuccess;
+    }
+    if (context.r3.u32 == kNtStatusSuccess && (options & 1u) != 0u) {
+        PPCContext closeContext{}; closeContext.r3.u32 = sourceHandle;
+        xowue_NtClose(closeContext);
+    }
+}
+
+static bool guestWildcardMatch(const std::string &patternValue,
+                               const std::string &nameValue) {
+    const std::string pattern = lowerGuestPath(patternValue.empty() ? "*" : patternValue);
+    const std::string name = lowerGuestPath(nameValue);
+    size_t p = 0u, n = 0u, star = std::string::npos, retry = 0u;
+    while (n < name.size()) {
+        if (p < pattern.size() && (pattern[p] == '?' || pattern[p] == name[n])) {
+            ++p; ++n;
+        } else if (p < pattern.size() && pattern[p] == '*') {
+            star = p++; retry = n;
+        } else if (star != std::string::npos) {
+            p = star + 1u; n = ++retry;
+        } else return false;
+    }
+    while (p < pattern.size() && pattern[p] == '*') ++p;
+    return p == pattern.size();
+}
+
+static uint32_t guestFileAttribute(const std::filesystem::path &path) {
+    std::error_code ec;
+    return std::filesystem::is_directory(path, ec) ? 0x10u : 0x20u;
+}
+
+void xowue_NtQueryDirectoryFile(PPCContext &context, uint8_t *base) {
+    GuestEventSignalOnReturn signal(context.r4.u32);
+    const auto file = lookupGuestFile(context.r3.u32);
+    const uint32_t ioStatus = context.r7.u32;
+    const uint32_t output = context.r8.u32;
+    const uint32_t length = context.r9.u32;
+    const uint32_t namePointer = guestStackArgument(context, base, 9u);
+    const uint32_t restart = guestStackArgument(context, base, 10u);
+    std::string pattern = "*";
+    if (namePointer != 0u && !readGuestAnsiString(base, namePointer, pattern)) {
+        context.r3.u32 = kNtStatusInvalidParameter;
+        writeGuestIoStatus(base, ioStatus, context.r3.u32, 0u);
+        return;
+    }
+    if (!base || !file || !file->directory || length < 72u || length > 1u * 1024u * 1024u ||
+        !validGuestRange(output, length)) {
+        context.r3.u32 = file ? kNtStatusInvalidParameter : kNtStatusInvalidHandle;
+        writeGuestIoStatus(base, ioStatus, context.r3.u32, 0u);
+        return;
+    }
+    std::lock_guard<std::mutex> lock(file->mutex);
+    if (restart != 0u) {
+        file->entries.clear();
+        file->directoryCursor = 0u;
+        std::error_code ec;
+        for (std::filesystem::directory_iterator it(file->path, ec), end;
+             !ec && it != end; it.increment(ec)) file->entries.push_back(it->path());
+        std::sort(file->entries.begin(), file->entries.end(), [](const auto &a, const auto &b) {
+            return lowerGuestPath(a.filename().string()) < lowerGuestPath(b.filename().string());
+        });
+    }
+    while (file->directoryCursor < file->entries.size() &&
+           !guestWildcardMatch(pattern, file->entries[file->directoryCursor].filename().string()))
+        ++file->directoryCursor;
+    if (file->directoryCursor >= file->entries.size()) {
+        context.r3.u32 = 0x80000006u; // STATUS_NO_MORE_FILES
+        writeGuestIoStatus(base, ioStatus, context.r3.u32, 0u);
+        return;
+    }
+    const auto entry = file->entries[file->directoryCursor++];
+    const std::string leaf = entry.filename().string();
+    const uint32_t utf16Bytes = static_cast<uint32_t>(leaf.size() * 2u);
+    if (64u + utf16Bytes > length) {
+        context.r3.u32 = kNtStatusBufferTooSmall;
+        writeGuestIoStatus(base, ioStatus, context.r3.u32, 0u);
+        return;
+    }
+    std::memset(base + output, 0, length);
+    std::error_code ec;
+    const bool isDirectory = std::filesystem::is_directory(entry, ec);
+    const uint64_t size = isDirectory ? 0u : std::filesystem::file_size(entry, ec);
+    PPC_STORE_U64(output + 40u, size);
+    PPC_STORE_U64(output + 48u, (size + 0xFFFu) & ~uint64_t{0xFFFu});
+    PPC_STORE_U32(output + 56u, isDirectory ? 0x10u : 0x20u);
+    PPC_STORE_U32(output + 60u, utf16Bytes);
+    for (size_t index = 0; index < leaf.size(); ++index)
+        storeGuestBe16(base, output + 64u + static_cast<uint32_t>(index * 2u),
+                       static_cast<uint8_t>(leaf[index]));
+    context.r3.u32 = kNtStatusSuccess;
+    writeGuestIoStatus(base, ioStatus, kNtStatusSuccess, 64u + utf16Bytes);
+}
+
+void xowue_NtQueryVolumeInformationFile(PPCContext &context, uint8_t *base) {
+    const auto file = lookupGuestFile(context.r3.u32);
+    const uint32_t ioStatus = context.r4.u32, output = context.r5.u32;
+    const uint32_t length = context.r6.u32, infoClass = context.r7.u32;
+    if (!base || !file || length > 0x10000u || !validGuestRange(output, length)) {
+        context.r3.u32 = file ? kNtStatusInvalidParameter : kNtStatusInvalidHandle;
+        writeGuestIoStatus(base, ioStatus, context.r3.u32, 0u);
+        return;
+    }
+    uint32_t required = 0u;
+    if (infoClass == 1u) required = 24u; // FILE_FS_VOLUME_INFORMATION
+    else if (infoClass == 3u) required = 24u; // FILE_FS_SIZE_INFORMATION
+    else if (infoClass == 4u) required = 32u; // FILE_FS_DEVICE_INFORMATION
+    else {
+        context.r3.u32 = kNtStatusInvalidParameter;
+        writeGuestIoStatus(base, ioStatus, context.r3.u32, 0u);
+        return;
+    }
+    if (length >= required) {
+        std::memset(base + output, 0, length);
+        if (infoClass == 1u) PPC_STORE_U32(output + 16u, 0u);
+        if (infoClass == 3u) {
+            PPC_STORE_U64(output, 0x100000u); PPC_STORE_U64(output + 8u, 0x100000u);
+            PPC_STORE_U32(output + 16u, 512u);
+        }
+        if (infoClass == 4u) PPC_STORE_U32(output + 4u, 7u);
+    }
+    const uint32_t status = length < required ? kNtStatusBufferTooSmall : kNtStatusSuccess;
+    context.r3.u32 = status;
+    writeGuestIoStatus(base, ioStatus, status, status == kNtStatusSuccess ? required : 0u);
+}
+
+void xowue_NtFlushBuffersFile(PPCContext &context, uint8_t *base);
+
+void xowue_NtSetInformationFile(PPCContext &context, uint8_t *base) {
+    const auto file = lookupGuestFile(context.r3.u32);
+    const uint32_t ioStatus = context.r4.u32, info = context.r5.u32;
+    const uint32_t length = context.r6.u32, infoClass = context.r7.u32;
+    if (!base || !file || length == 0u || !validGuestRange(info, length)) {
+        context.r3.u32 = file ? kNtStatusInvalidParameter : kNtStatusInvalidHandle;
+        writeGuestIoStatus(base, ioStatus, context.r3.u32, 0u);
+        return;
+    }
+    if (infoClass == 14u && length >= 8u) {
+        const uint64_t offset = PPC_LOAD_U64(info);
+        std::lock_guard<std::mutex> lock(file->mutex);
+        file->stream.clear(); file->stream.seekg(static_cast<std::streamoff>(offset));
+        file->stream.seekp(static_cast<std::streamoff>(offset));
+        context.r3.u32 = kNtStatusSuccess;
+        writeGuestIoStatus(base, ioStatus, context.r3.u32, 0u);
+        return;
+    }
+    if (infoClass == 13u && length >= 1u) {
+        if (base[info] != 0u) {
+            const auto root = std::filesystem::weakly_canonical(g_guestSaveRoot);
+            const auto parent = std::filesystem::weakly_canonical(file->path.parent_path());
+            auto a = root.begin(), b = parent.begin();
+            for (; a != root.end() && b != parent.end() && *a == *b; ++a, ++b) {}
+            if (a == root.end()) {
+                std::error_code ec; std::filesystem::remove(file->path, ec);
+                context.r3.u32 = ec ? kNtStatusUnsuccessful : kNtStatusSuccess;
+            } else context.r3.u32 = 0xC0000022u;
+        } else context.r3.u32 = kNtStatusSuccess;
+        writeGuestIoStatus(base, ioStatus, context.r3.u32, 0u);
+        return;
+    }
+    context.r3.u32 = kNtStatusInvalidParameter;
+    writeGuestIoStatus(base, ioStatus, context.r3.u32, 0u);
+}
+
+void xowue_NtReadFileScatter(PPCContext &context, uint8_t *base) {
+    GuestEventSignalOnReturn signal(context.r4.u32);
+    const auto file = lookupGuestFile(context.r3.u32);
+    const uint32_t ioStatus = context.r7.u32, segments = context.r8.u32;
+    const uint32_t length = context.r9.u32, offsetPointer = context.r10.u32;
+    if (!base || !file || file->directory || !file->readable || length > 64u * 1024u * 1024u ||
+        (length && !validGuestRange(segments, static_cast<uint64_t>((length + 4095u) / 4096u) * 8u))) {
+        context.r3.u32 = file ? kNtStatusInvalidParameter : kNtStatusInvalidHandle;
+        writeGuestIoStatus(base, ioStatus, context.r3.u32, 0u);
+        return;
+    }
+    std::lock_guard<std::mutex> lock(file->mutex);
+    const uint64_t offset = guestFileOffset(base, offsetPointer, file, false);
+    file->stream.clear(); file->stream.seekg(static_cast<std::streamoff>(offset));
+    uint32_t total = 0u;
+    while (total < length) {
+        const uint32_t segment = PPC_LOAD_U32(segments + (total / 4096u) * 8u);
+        const uint32_t chunk = std::min<uint32_t>(4096u, length - total);
+        if (!validGuestRange(segment, chunk)) break;
+        file->stream.read(reinterpret_cast<char *>(base + segment), chunk);
+        const uint32_t read = static_cast<uint32_t>(file->stream.gcount());
+        total += read;
+        if (read != chunk) break;
+    }
+    file->stream.clear();
+    queueGuestApc(g_currentGuestThread, context.r5.u32, context.r6.u32, ioStatus, 0u);
+    context.r3.u32 = kNtStatusSuccess;
+    writeGuestIoStatus(base, ioStatus, kNtStatusSuccess, total);
+}
+
+void xowue_NtDeviceIoControlFile(PPCContext &context, uint8_t *base) {
+    GuestEventSignalOnReturn signal(context.r4.u32);
+    const uint32_t ioStatus = context.r7.u32, code = context.r8.u32;
+    const uint32_t output = guestStackArgument(context, base, 9u);
+    const uint32_t outputLength = guestStackArgument(context, base, 10u);
+    uint32_t status = kNtStatusSuccess, information = 0u;
+    if (code == 0x00070000u) { // DISK_GET_DRIVE_GEOMETRY
+        if (!validGuestRange(output, 8u) || outputLength < 8u) status = kNtStatusBufferTooSmall;
+        else { PPC_STORE_U32(output, 0x7F8u); PPC_STORE_U32(output + 4u, 512u); information = 8u; }
+    } else if (code == 0x00074004u) { // DISK_GET_PARTITION_INFO
+        if (!validGuestRange(output, 16u) || outputLength < 16u) status = kNtStatusBufferTooSmall;
+        else { PPC_STORE_U64(output, 0u); PPC_STORE_U64(output + 8u, 0xFF000u); information = 16u; }
+    } else status = kNtStatusInvalidParameter;
+    writeGuestIoStatus(base, ioStatus, status, information);
+    context.r3.u32 = status;
+}
+
 void xowue_NtSetEvent(PPCContext &context, uint8_t *base) {
     const uint32_t handle = context.r3.u32;
     const uint32_t previousStatePointer = context.r4.u32;
@@ -2212,17 +4348,19 @@ void xowue_NtSetEvent(PPCContext &context, uint8_t *base) {
         context.r3.u32 = kNtStatusInvalidHandle;
         return;
     }
+    if (previousStatePointer != 0u &&
+        (!base || !validGuestRange(previousStatePointer, 4u))) {
+        context.r3.u32 = kNtStatusInvalidParameter;
+        return;
+    }
     bool previous = false;
     {
         std::lock_guard<std::mutex> lock(waitable->mutex);
         previous = waitable->signaled;
         waitable->signaled = true;
+        syncGuestDispatcherSignalState(waitable);
     }
     if (previousStatePointer != 0u) {
-        if (!base || previousStatePointer > kGuestAddressSpaceSize - 4u) {
-            context.r3.u32 = kNtStatusInvalidParameter;
-            return;
-        }
         PPC_STORE_U32(previousStatePointer, previous ? 1u : 0u);
     }
     waitable->changed.notify_all();
@@ -2238,6 +4376,7 @@ void xowue_NtClearEvent(PPCContext &context) {
     }
     std::lock_guard<std::mutex> lock(waitable->mutex);
     waitable->signaled = false;
+    syncGuestDispatcherSignalState(waitable);
     context.r3.u32 = kNtStatusSuccess;
 }
 
@@ -2249,22 +4388,25 @@ void xowue_NtPulseEvent(PPCContext &context, uint8_t *base) {
         context.r3.u32 = kNtStatusInvalidHandle;
         return;
     }
+    if (previousStatePointer != 0u &&
+        (!base || !validGuestRange(previousStatePointer, 4u))) {
+        context.r3.u32 = kNtStatusInvalidParameter;
+        return;
+    }
     bool previous = false;
     {
         std::lock_guard<std::mutex> lock(waitable->mutex);
         previous = waitable->signaled;
-        waitable->signaled = true;
+        ++waitable->pulseGeneration;
+        waitable->signaled = previous;
+        syncGuestDispatcherSignalState(waitable);
     }
     if (previousStatePointer != 0u) {
-        if (!base || previousStatePointer > kGuestAddressSpaceSize - 4u) {
-            context.r3.u32 = kNtStatusInvalidParameter;
-            return;
-        }
         PPC_STORE_U32(previousStatePointer, previous ? 1u : 0u);
     }
     waitable->changed.notify_all();
     g_waitSetChanged.notify_all();
-    recordRuntimeTrace("NtPulseEvent delivered as a signal; reset when an auto-reset waiter consumes it");
+    recordRuntimeTrace("NtPulseEvent delivered as a one-shot pulse to waiters already blocked on the event");
     context.r3.u32 = kNtStatusSuccess;
 }
 
@@ -2279,6 +4421,7 @@ void xowue_KeSetEvent(PPCContext &context, uint8_t *base) {
         std::lock_guard<std::mutex> lock(waitable->mutex);
         previous = waitable->signaled;
         waitable->signaled = true;
+        syncGuestDispatcherSignalState(waitable);
     }
     waitable->changed.notify_all();
     g_waitSetChanged.notify_all();
@@ -2294,6 +4437,7 @@ void xowue_KeResetEvent(PPCContext &context, uint8_t *base) {
     std::lock_guard<std::mutex> lock(waitable->mutex);
     context.r3.u32 = waitable->signaled ? 1u : 0u;
     waitable->signaled = false;
+    syncGuestDispatcherSignalState(waitable);
 }
 
 void xowue_NtWaitForSingleObjectEx(PPCContext &context, uint8_t *base) {
@@ -2302,7 +4446,8 @@ void xowue_NtWaitForSingleObjectEx(PPCContext &context, uint8_t *base) {
         context.r3.u32 = kNtStatusInvalidParameter;
         return;
     }
-    context.r3.u32 = waitGuestObject(lookupGuestWaitable(context.r3.u32), timeout);
+    context.r3.u32 = waitGuestObject(lookupGuestWaitable(context.r3.u32), timeout,
+                                     context.r5.u32 != 0u);
 }
 
 void xowue_KeWaitForSingleObject(PPCContext &context, uint8_t *base) {
@@ -2311,7 +4456,8 @@ void xowue_KeWaitForSingleObject(PPCContext &context, uint8_t *base) {
         context.r3.u32 = kNtStatusInvalidParameter;
         return;
     }
-    context.r3.u32 = waitGuestObject(ensurePointerWaitable(context.r3.u32, base), timeout);
+    context.r3.u32 = waitGuestObject(ensurePointerWaitable(context.r3.u32, base), timeout,
+                                     context.r6.u32 != 0u);
 }
 
 void xowue_NtWaitForMultipleObjectsEx(PPCContext &context, uint8_t *base) {
@@ -2330,7 +4476,8 @@ void xowue_NtWaitForMultipleObjectsEx(PPCContext &context, uint8_t *base) {
     for (uint32_t index = 0; index < count; ++index) {
         waitables.push_back(lookupGuestWaitable(PPC_LOAD_U32(handlesPointer + index * 4u)));
     }
-    context.r3.u32 = waitGuestObjects(waitables, waitType, timeout);
+    context.r3.u32 = waitGuestObjects(waitables, waitType, timeout,
+                                      context.r7.u32 != 0u);
 }
 
 void xowue_KeWaitForMultipleObjects(PPCContext &context, uint8_t *base) {
@@ -2349,7 +4496,8 @@ void xowue_KeWaitForMultipleObjects(PPCContext &context, uint8_t *base) {
     for (uint32_t index = 0; index < count; ++index) {
         waitables.push_back(ensurePointerWaitable(PPC_LOAD_U32(objectsPointer + index * 4u), base));
     }
-    context.r3.u32 = waitGuestObjects(waitables, waitType, timeout);
+    context.r3.u32 = waitGuestObjects(waitables, waitType, timeout,
+                                      context.r8.u32 != 0u);
 }
 
 void xowue_NtResumeThread(PPCContext &context, uint8_t *base) {
@@ -2586,6 +4734,341 @@ void xowue_KeQueryPerformanceFrequency(PPCContext &context) {
     recordRuntimeTrace("KeQueryPerformanceFrequency -> 50000000 Hz");
 }
 
+void xowue_KeEnterCriticalRegion(PPCContext &, uint8_t *base) {
+    if (!base || !g_currentGuestThread ||
+        !validGuestRange(g_currentGuestThread->objectAddress + kGuestKThreadApcDisableOffset, 4u))
+        throw std::runtime_error("KeEnterCriticalRegion has no current guest KTHREAD");
+    const uint32_t address = g_currentGuestThread->objectAddress + kGuestKThreadApcDisableOffset;
+    const int32_t count = static_cast<int32_t>(PPC_LOAD_U32(address));
+    if (count == std::numeric_limits<int32_t>::min())
+        throw std::runtime_error("KeEnterCriticalRegion APC disable count underflow");
+    PPC_STORE_U32(address, static_cast<uint32_t>(count - 1));
+}
+
+void xowue_KeLeaveCriticalRegion(PPCContext &, uint8_t *base) {
+    if (!base || !g_currentGuestThread ||
+        !validGuestRange(g_currentGuestThread->objectAddress + kGuestKThreadApcDisableOffset, 4u))
+        throw std::runtime_error("KeLeaveCriticalRegion has no current guest KTHREAD");
+    const uint32_t address = g_currentGuestThread->objectAddress + kGuestKThreadApcDisableOffset;
+    const int32_t count = static_cast<int32_t>(PPC_LOAD_U32(address));
+    if (count == std::numeric_limits<int32_t>::max())
+        throw std::runtime_error("KeLeaveCriticalRegion APC disable count overflow");
+    const int32_t next = count + 1;
+    PPC_STORE_U32(address, static_cast<uint32_t>(next));
+    if (next == 0) {
+        const bool delivered = deliverPendingGuestApcs();
+        recordRuntimeTrace(delivered ? "KeLeaveCriticalRegion delivered queued APCs"
+                                    : "KeLeaveCriticalRegion APC delivery point reached");
+    }
+}
+
+void xowue_KeRaiseIrqlToDpcLevel(PPCContext &context) {
+    context.r3.u32 = g_guestIrql;
+    g_guestIrql = 2u;
+}
+
+void xowue_KeAcquireSpinLockAtRaisedIrql(PPCContext &context) {
+    const uint32_t address = context.r3.u32;
+    std::shared_ptr<std::mutex> lock;
+    {
+        std::lock_guard<std::mutex> mapLock(g_spinLockMapMutex);
+        auto &entry = g_guestSpinLocks[address];
+        if (!entry) entry = std::make_shared<std::mutex>();
+        lock = entry;
+    }
+    lock->lock();
+    if (validGuestRange(address, 4u)) PPC_STORE_U32(address, 1u);
+}
+
+void xowue_KeReleaseSpinLockFromRaisedIrql(PPCContext &context) {
+    const uint32_t address = context.r3.u32;
+    std::shared_ptr<std::mutex> lock;
+    {
+        std::lock_guard<std::mutex> mapLock(g_spinLockMapMutex);
+        const auto it = g_guestSpinLocks.find(address);
+        if (it != g_guestSpinLocks.end()) lock = it->second;
+    }
+    if (!lock) {
+        recordRuntimeTrace("KeReleaseSpinLockFromRaisedIrql ignored an unlocked spinlock");
+        return;
+    }
+    if (validGuestRange(address, 4u)) PPC_STORE_U32(address, 0u);
+    lock->unlock();
+}
+
+void xowue_KeLockL2(PPCContext &) { g_l2Mutex.lock(); }
+void xowue_KeUnlockL2(PPCContext &) { g_l2Mutex.unlock(); }
+void xowue_KeEnableFpuExceptions(PPCContext &) {}
+
+void xowue_KeQuerySystemTime(PPCContext &context, uint8_t *base) {
+    const uint32_t output = context.r3.u32;
+    if (base && validGuestRange(output, 8u)) {
+        constexpr uint64_t kUnixToFileTimeTicks = 116444736000000000ull;
+        const auto now = std::chrono::system_clock::now().time_since_epoch();
+        const uint64_t ticks = kUnixToFileTimeTicks + static_cast<uint64_t>(
+            std::chrono::duration_cast<std::chrono::nanoseconds>(now).count() / 100);
+        PPC_STORE_U64(output, ticks);
+    }
+}
+
+void xowue_KeInitializeSemaphore(PPCContext &context, uint8_t *base) {
+    const uint32_t address = context.r3.u32;
+    const int32_t count = static_cast<int32_t>(context.r4.u32);
+    const int32_t limit = static_cast<int32_t>(context.r5.u32);
+    if (!base || !validGuestRange(address, 20u) || count < 0 || limit <= 0 || count > limit) {
+        recordRuntimeTrace("KeInitializeSemaphore rejected guest layout or count/limit");
+        return;
+    }
+    auto semaphore = std::make_shared<GuestWaitable>();
+    semaphore->kind = GuestWaitable::Kind::Semaphore;
+    semaphore->manualReset = false;
+    semaphore->signaled = count > 0;
+    semaphore->semaphoreCount = count;
+    semaphore->semaphoreLimit = limit;
+    semaphore->objectAddress = address;
+    {
+        std::lock_guard<std::mutex> lock(g_guestObjectMutex);
+        g_guestPointerWaitables[address] = semaphore;
+        g_guestWaitables[address] = semaphore;
+    }
+    std::memset(base + address, 0, 20u);
+    PPC_STORE_U32(address, 5u);
+    PPC_STORE_U32(address + 4u, static_cast<uint32_t>(count));
+    PPC_STORE_U32(address + 16u, static_cast<uint32_t>(limit));
+}
+
+void xowue_KeReleaseSemaphore(PPCContext &context, uint8_t *base) {
+    const uint32_t address = context.r3.u32;
+    const int32_t adjustment = static_cast<int32_t>(context.r5.u32);
+    const auto semaphore = lookupGuestWaitable(address);
+    if (!base || !semaphore || semaphore->kind != GuestWaitable::Kind::Semaphore || adjustment < 0) {
+        context.r3.u32 = 0u;
+        return;
+    }
+    int32_t previous = 0;
+    {
+        std::lock_guard<std::mutex> lock(semaphore->mutex);
+        previous = semaphore->semaphoreCount;
+        if (adjustment > semaphore->semaphoreLimit - semaphore->semaphoreCount) {
+            context.r3.u32 = 0u;
+            return;
+        }
+        semaphore->semaphoreCount += adjustment;
+        semaphore->signaled = semaphore->semaphoreCount > 0;
+        writeGuestDispatcherSignalState(semaphore, semaphore->semaphoreCount);
+    }
+    context.r3.u32 = static_cast<uint32_t>(previous);
+    semaphore->changed.notify_all();
+    g_waitSetChanged.notify_all();
+}
+
+void xowue_NtCreateSemaphore(PPCContext &context, uint8_t *base) {
+    const uint32_t output = context.r3.u32;
+    const int32_t initialCount = static_cast<int32_t>(context.r5.u32);
+    const int32_t limit = static_cast<int32_t>(context.r6.u32);
+    if (!base || !validGuestRange(output, 4u) || initialCount < 0 || limit <= 0 ||
+        initialCount > limit) {
+        context.r3.u32 = kNtStatusInvalidParameter;
+        return;
+    }
+    const uint32_t handle = allocateGuestHandle();
+    const uint32_t object = allocateGuestEventObjectAddress();
+    if (!handle || !object) { context.r3.u32 = kNtStatusNoMemory; return; }
+    auto semaphore = std::make_shared<GuestWaitable>();
+    semaphore->kind = GuestWaitable::Kind::Semaphore;
+    semaphore->handle = handle; semaphore->objectAddress = object;
+    semaphore->manualReset = false; semaphore->signaled = initialCount > 0;
+    semaphore->semaphoreCount = initialCount; semaphore->semaphoreLimit = limit;
+    {
+        std::lock_guard<std::mutex> lock(g_guestObjectMutex);
+        g_guestWaitables[handle] = semaphore; g_guestWaitables[object] = semaphore;
+    }
+    std::memset(base + object, 0, 20u);
+    PPC_STORE_U32(object, 5u);
+    PPC_STORE_U32(object + 4u, static_cast<uint32_t>(initialCount));
+    PPC_STORE_U32(object + 16u, static_cast<uint32_t>(limit));
+    PPC_STORE_U32(output, handle);
+    context.r3.u32 = kNtStatusSuccess;
+}
+
+void xowue_NtReleaseSemaphore(PPCContext &context, uint8_t *base) {
+    const auto semaphore = lookupGuestWaitable(context.r3.u32);
+    const int32_t releaseCount = static_cast<int32_t>(context.r4.u32);
+    const uint32_t previousPointer = context.r5.u32;
+    if (!base || !semaphore || semaphore->kind != GuestWaitable::Kind::Semaphore ||
+        releaseCount <= 0) {
+        context.r3.u32 = semaphore ? kNtStatusInvalidParameter : kNtStatusInvalidHandle;
+        return;
+    }
+    int32_t previous = 0;
+    {
+        std::lock_guard<std::mutex> lock(semaphore->mutex);
+        previous = semaphore->semaphoreCount;
+        if (releaseCount > semaphore->semaphoreLimit - previous) {
+            context.r3.u32 = kNtStatusInvalidParameter;
+            return;
+        }
+        semaphore->semaphoreCount += releaseCount;
+        semaphore->signaled = semaphore->semaphoreCount > 0;
+        writeGuestDispatcherSignalState(semaphore, semaphore->semaphoreCount);
+    }
+    if (previousPointer && validGuestRange(previousPointer, 4u))
+        PPC_STORE_U32(previousPointer, static_cast<uint32_t>(previous));
+    context.r3.u32 = kNtStatusSuccess;
+    semaphore->changed.notify_all(); g_waitSetChanged.notify_all();
+}
+
+void xowue_NtCreateMutant(PPCContext &context, uint8_t *base) {
+    const uint32_t output = context.r3.u32;
+    if (!base || !validGuestRange(output, 4u)) { context.r3.u32 = kNtStatusInvalidParameter; return; }
+    const uint32_t handle = allocateGuestHandle();
+    const uint32_t object = allocateGuestEventObjectAddress();
+    if (!handle || !object) { context.r3.u32 = kNtStatusNoMemory; return; }
+    auto mutant = std::make_shared<GuestWaitable>();
+    mutant->kind = GuestWaitable::Kind::Mutant;
+    mutant->handle = handle; mutant->objectAddress = object;
+    mutant->manualReset = true;
+    mutant->ownerThread = context.r5.u32 ? g_currentGuestThreadId : 0u;
+    mutant->recursion = context.r5.u32 ? 1u : 0u;
+    mutant->signaled = context.r5.u32 == 0u;
+    {
+        std::lock_guard<std::mutex> lock(g_guestObjectMutex);
+        g_guestWaitables[handle] = mutant; g_guestWaitables[object] = mutant;
+    }
+    std::memset(base + object, 0, 0x18u);
+    PPC_STORE_U32(object, 2u);
+    writeGuestDispatcherSignalState(mutant, guestDispatcherSignalState(*mutant));
+    PPC_STORE_U32(output, handle);
+    context.r3.u32 = kNtStatusSuccess;
+}
+
+void xowue_NtReleaseMutant(PPCContext &context) {
+    const auto mutant = lookupGuestWaitable(context.r3.u32);
+    if (!mutant || mutant->kind != GuestWaitable::Kind::Mutant) {
+        context.r3.u32 = kNtStatusInvalidHandle; return;
+    }
+    {
+        std::lock_guard<std::mutex> lock(mutant->mutex);
+        if (mutant->ownerThread != g_currentGuestThreadId || mutant->recursion == 0u) {
+            context.r3.u32 = 0xC0000046u; // STATUS_MUTANT_NOT_OWNED
+            return;
+        }
+        if (--mutant->recursion == 0u) {
+            mutant->ownerThread = 0u; mutant->signaled = true;
+        }
+        writeGuestDispatcherSignalState(mutant, guestDispatcherSignalState(*mutant));
+    }
+    context.r3.u32 = kNtStatusSuccess;
+    mutant->changed.notify_all(); g_waitSetChanged.notify_all();
+}
+
+void xowue_NtCreateTimer(PPCContext &context, uint8_t *base) {
+    const uint32_t output = context.r3.u32;
+    const uint32_t timerType = context.r5.u32;
+    if (!base || !validGuestRange(output, 4u) || timerType > 1u) {
+        context.r3.u32 = kNtStatusInvalidParameter; return;
+    }
+    const uint32_t handle = allocateGuestHandle();
+    const uint32_t object = allocateGuestEventObjectAddress();
+    if (!handle || !object) { context.r3.u32 = kNtStatusNoMemory; return; }
+    auto timer = std::make_shared<GuestWaitable>();
+    timer->kind = GuestWaitable::Kind::Timer; timer->handle = handle;
+    timer->objectAddress = object; timer->manualReset = timerType == 0u;
+    timer->signaled = false;
+    {
+        std::lock_guard<std::mutex> lock(g_guestObjectMutex);
+        g_guestWaitables[handle] = timer; g_guestWaitables[object] = timer;
+    }
+    std::memset(base + object, 0, 0x18u);
+    PPC_STORE_U32(object, 8u);
+    writeGuestDispatcherSignalState(timer, 0);
+    PPC_STORE_U32(output, handle); context.r3.u32 = kNtStatusSuccess;
+}
+
+void xowue_NtSetTimerEx(PPCContext &context, uint8_t *base) {
+    const auto timer = lookupGuestWaitable(context.r3.u32);
+    const uint32_t duePointer = context.r4.u32;
+    if (!base || !timer || timer->kind != GuestWaitable::Kind::Timer ||
+        !validGuestRange(duePointer, 8u)) {
+        context.r3.u32 = timer ? kNtStatusInvalidParameter : kNtStatusInvalidHandle; return;
+    }
+    const int64_t due = static_cast<int64_t>(PPC_LOAD_U64(duePointer));
+    const uint32_t periodMs = context.r9.u32;
+    uint64_t generation = 0u;
+    {
+        std::lock_guard<std::mutex> lock(timer->mutex);
+        generation = ++timer->timerGeneration; timer->signaled = false;
+        syncGuestDispatcherSignalState(timer);
+    }
+    int64_t delayTicks = due < 0 ? (due == std::numeric_limits<int64_t>::min()
+        ? 86400LL * 10000000LL : -due) : 0;
+    if (due > 0) {
+        constexpr int64_t epoch = 116444736000000000LL;
+        const auto now = std::chrono::system_clock::now().time_since_epoch();
+        const int64_t nowTicks = epoch +
+            std::chrono::duration_cast<std::chrono::nanoseconds>(now).count() / 100;
+        delayTicks = std::max<int64_t>(0, due - nowTicks);
+    }
+    delayTicks = std::clamp<int64_t>(delayTicks, 0, 86400LL * 10000000LL);
+    std::weak_ptr<GuestWaitable> weakTimer = timer;
+    std::thread([weakTimer, generation, delayTicks, periodMs] {
+        int64_t nextDelay = delayTicks;
+        for (;;) {
+            std::this_thread::sleep_for(std::chrono::nanoseconds(nextDelay * 100));
+            const auto current = weakTimer.lock();
+            if (!current) return;
+            {
+                std::lock_guard<std::mutex> lock(current->mutex);
+                if (current->timerGeneration != generation) return;
+                current->signaled = true;
+                syncGuestDispatcherSignalState(current);
+            }
+            current->changed.notify_all(); g_waitSetChanged.notify_all();
+            if (periodMs == 0u) return;
+            nextDelay = static_cast<int64_t>(periodMs) * 10000LL;
+        }
+    }).detach();
+    context.r3.u32 = kNtStatusSuccess;
+}
+
+void xowue_NtCancelTimer(PPCContext &context, uint8_t *base) {
+    const auto timer = lookupGuestWaitable(context.r3.u32);
+    if (!timer || timer->kind != GuestWaitable::Kind::Timer) {
+        context.r3.u32 = kNtStatusInvalidHandle; return;
+    }
+    const uint32_t output = context.r4.u32;
+    {
+        std::lock_guard<std::mutex> lock(timer->mutex);
+        if (output && base && validGuestRange(output, 4u))
+            PPC_STORE_U32(output, timer->signaled ? 1u : 0u);
+        ++timer->timerGeneration; timer->signaled = false;
+        syncGuestDispatcherSignalState(timer);
+    }
+    context.r3.u32 = kNtStatusSuccess;
+}
+
+void xowue_ObCreateSymbolicLink(PPCContext &context, uint8_t *base) {
+    std::string path, target;
+    if (!readGuestAnsiString(base, context.r3.u32, path) ||
+        !readGuestAnsiString(base, context.r4.u32, target)) {
+        context.r3.u32 = kNtStatusInvalidParameter; return;
+    }
+    path = lowerGuestPath(path); target = lowerGuestPath(target);
+    if (path.rfind("/??/", 0u) == 0u) path.erase(0u, 4u);
+    std::lock_guard<std::mutex> lock(g_guestFileMutex);
+    if (g_guestSymbolicLinks.contains(path)) { context.r3.u32 = kNtStatusUnsuccessful; return; }
+    g_guestSymbolicLinks[path] = target;
+    context.r3.u32 = kNtStatusSuccess;
+}
+
+void xowue_ObDeleteSymbolicLink(PPCContext &context, uint8_t *base) {
+    std::string path;
+    if (!readGuestAnsiString(base, context.r3.u32, path)) { context.r3.u32 = kNtStatusInvalidParameter; return; }
+    std::lock_guard<std::mutex> lock(g_guestFileMutex);
+    const bool removed = g_guestSymbolicLinks.erase(lowerGuestPath(path)) != 0u;
+    context.r3.u32 = removed ? kNtStatusSuccess : kNtStatusUnsuccessful;
+}
+
 void xowue_FscSetCacheElementCount(PPCContext &context) {
     const uint32_t cacheClass = context.r3.u32;
     const uint32_t elementCount = context.r4.u32;
@@ -2630,6 +5113,9 @@ void xowue_NtCreateEvent(PPCContext &context, uint8_t *base) {
         g_guestWaitables[handle] = waitable;
         g_guestWaitables[objectAddress] = waitable;
     }
+    std::memset(base + objectAddress, 0, 0x18u);
+    base[objectAddress] = static_cast<uint8_t>(eventType);
+    syncGuestDispatcherSignalState(waitable);
     if (handlePointer != 0u) PPC_STORE_U32(handlePointer, handle);
     context.r3.u32 = kNtStatusSuccess;
     char event[144];
@@ -2675,8 +5161,9 @@ void xowue_ObReferenceObjectByHandle(PPCContext &context, uint8_t *base) {
     const bool knownEventType = objectType == kXboxEventObjectType;
     const bool knownThreadType = objectType == kXboxThreadObjectType;
     const bool knownSemaphoreType = objectType == kXboxSemaphoreObjectType;
-    if ((knownEventType && isThread) || (knownThreadType && !isThread) ||
-        knownSemaphoreType) {
+    const bool isSemaphore = waitable->kind == GuestWaitable::Kind::Semaphore;
+    if ((knownEventType && (isThread || isSemaphore)) ||
+        (knownThreadType && !isThread) || (knownSemaphoreType && !isSemaphore)) {
         context.r3.u32 = kNtStatusObjectTypeMismatch;
         recordRuntimeTrace("ObReferenceObjectByHandle object type mismatch");
         return;
@@ -2692,7 +5179,8 @@ void xowue_ObReferenceObjectByHandle(PPCContext &context, uint8_t *base) {
     char event[184];
     std::snprintf(event, sizeof(event),
                   "ObReferenceObjectByHandle handle=0x%08X type=0x%08X object=0x%08X kind=%s typeCheck=%s",
-                  handle, objectType, objectAddress, isThread ? "Thread" : "Event",
+                  handle, objectType, objectAddress, isThread ? "Thread" :
+                      isSemaphore ? "Semaphore" : "Synchronization",
                   (knownEventType || knownThreadType || knownSemaphoreType || objectType == 0u)
                       ? "recognized" : "opaque-export");
     recordRuntimeTrace(event);
@@ -2867,6 +5355,211 @@ void xowue_RtlNtStatusToDosError(PPCContext &context) {
     recordRuntimeTrace(event);
 }
 
+void xowue_RtlCompareMemoryUlong(PPCContext &context, uint8_t *base) {
+    const uint32_t source = context.r3.u32, length = context.r4.u32;
+    const uint32_t pattern = context.r5.u32;
+    if (!base || (source & 3u) != 0u || (length & 3u) != 0u ||
+        (length != 0u && !validGuestRange(source, length))) {
+        context.r3.u32 = 0u; return;
+    }
+    uint32_t matches = 0u;
+    for (uint32_t offset = 0u; offset < length; offset += 4u)
+        if (PPC_LOAD_U32(source + offset) == pattern) ++matches;
+    context.r3.u32 = matches;
+}
+
+void xowue_RtlFillMemoryUlong(PPCContext &context, uint8_t *base) {
+    const uint32_t destination = context.r3.u32, length = context.r4.u32;
+    const uint32_t pattern = context.r5.u32;
+    if (!base || (length != 0u && !validGuestRange(destination, length))) return;
+    for (uint32_t offset = 0u; offset + 4u <= length; offset += 4u)
+        PPC_STORE_U32(destination + offset, pattern);
+}
+
+void xowue_RtlCompareStringN(PPCContext &context, uint8_t *base) {
+    const uint32_t first = context.r3.u32, firstLengthArg = context.r4.u32;
+    const uint32_t second = context.r5.u32, secondLengthArg = context.r6.u32;
+    const bool insensitive = context.r7.u32 != 0u;
+    auto lengthFor = [base](uint32_t address, uint32_t given, uint32_t &length) {
+        if (given != 0xFFFFu) { length = given; return true; }
+        if (!base || address >= kGuestAddressSpaceSize) return false;
+        length = 0u;
+        while (length < 0x10000u && address + length < kGuestAddressSpaceSize &&
+               base[address + length] != 0u) ++length;
+        return length < 0x10000u;
+    };
+    uint32_t firstLength = 0u, secondLength = 0u;
+    if (!base || !lengthFor(first, firstLengthArg, firstLength) ||
+        !lengthFor(second, secondLengthArg, secondLength) ||
+        (firstLength && !validGuestRange(first, firstLength)) ||
+        (secondLength && !validGuestRange(second, secondLength))) {
+        context.r3.u32 = static_cast<uint32_t>(-1); return;
+    }
+    const uint32_t common = std::min(firstLength, secondLength);
+    for (uint32_t i = 0; i < common; ++i) {
+        unsigned char a = base[first + i], b = base[second + i];
+        if (insensitive) { a = static_cast<unsigned char>(std::tolower(a)); b = static_cast<unsigned char>(std::tolower(b)); }
+        if (a != b) { context.r3.u32 = static_cast<uint32_t>(static_cast<int32_t>(a) - static_cast<int32_t>(b)); return; }
+    }
+    context.r3.u32 = firstLength == secondLength ? 0u :
+        static_cast<uint32_t>(firstLength < secondLength ? -1 : 1);
+}
+
+void xowue_RtlInitAnsiString(PPCContext &context, uint8_t *base) {
+    const uint32_t descriptor = context.r3.u32, source = context.r4.u32;
+    if (!base || !validGuestRange(descriptor, 8u) ||
+        (source != 0u && source >= kGuestAddressSpaceSize)) return;
+    uint32_t length = 0u;
+    if (source != 0u) {
+        while (length < 0xFFFFu && source + length < kGuestAddressSpaceSize && base[source + length]) ++length;
+        if (length == 0xFFFFu) length = 0xFFFEu;
+    }
+    storeGuestBe16(base, descriptor, static_cast<uint16_t>(source ? length : 0u));
+    storeGuestBe16(base, descriptor + 2u, static_cast<uint16_t>(source ? std::min<uint32_t>(length + 1u, 0xFFFFu) : 0u));
+    PPC_STORE_U32(descriptor + 4u, source);
+}
+
+void xowue_RtlInitUnicodeString(PPCContext &context, uint8_t *base) {
+    const uint32_t descriptor = context.r3.u32, source = context.r4.u32;
+    if (!base || !validGuestRange(descriptor, 8u) ||
+        (source != 0u && source >= kGuestAddressSpaceSize)) return;
+    uint32_t length = 0u;
+    if (source != 0u) {
+        while (length < 0x7FFFu && static_cast<uint64_t>(source) + length * 2u + 1u < kGuestAddressSpaceSize &&
+               PPC_LOAD_U16(source + length * 2u) != 0u) ++length;
+    }
+    const uint32_t bytes = source ? length * 2u : 0u;
+    storeGuestBe16(base, descriptor, static_cast<uint16_t>(bytes));
+    storeGuestBe16(base, descriptor + 2u, static_cast<uint16_t>(source ? std::min<uint32_t>(bytes + 2u, 0xFFFFu) : 0u));
+    PPC_STORE_U32(descriptor + 4u, source);
+}
+
+void xowue_RtlFreeAnsiString(PPCContext &context, uint8_t *base) {
+    const uint32_t descriptor = context.r3.u32;
+    if (!base || !validGuestRange(descriptor, 8u)) return;
+    const uint32_t buffer = PPC_LOAD_U32(descriptor + 4u);
+    if (buffer) releaseGuestPhysicalRange(buffer);
+    std::memset(base + descriptor, 0, 8u);
+}
+
+static void appendUtf8(std::string &out, uint16_t character) {
+    if (character < 0x80u) out.push_back(static_cast<char>(character));
+    else if (character < 0x800u) {
+        out.push_back(static_cast<char>(0xC0u | (character >> 6u)));
+        out.push_back(static_cast<char>(0x80u | (character & 0x3Fu)));
+    } else {
+        out.push_back(static_cast<char>(0xE0u | (character >> 12u)));
+        out.push_back(static_cast<char>(0x80u | ((character >> 6u) & 0x3Fu)));
+        out.push_back(static_cast<char>(0x80u | (character & 0x3Fu)));
+    }
+}
+
+void xowue_RtlUnicodeStringToAnsiString(PPCContext &context, uint8_t *base) {
+    const uint32_t destination = context.r3.u32, source = context.r4.u32;
+    const bool allocate = context.r5.u32 != 0u;
+    if (!base || !validGuestRange(destination, 8u) || !validGuestRange(source, 8u)) {
+        context.r3.u32 = kNtStatusInvalidParameter; return;
+    }
+    const uint16_t sourceLength = loadGuestBe16(base, source);
+    const uint16_t sourceMax = loadGuestBe16(base, source + 2u);
+    const uint32_t sourceBuffer = PPC_LOAD_U32(source + 4u);
+    if ((sourceLength & 1u) || sourceLength > sourceMax ||
+        (sourceLength && !validGuestRange(sourceBuffer, sourceLength))) {
+        context.r3.u32 = kNtStatusInvalidParameter; return;
+    }
+    std::string converted;
+    converted.reserve(sourceLength);
+    for (uint32_t i = 0; i < sourceLength; i += 2u)
+        appendUtf8(converted, PPC_LOAD_U16(sourceBuffer + i));
+    uint32_t destinationBuffer = PPC_LOAD_U32(destination + 4u);
+    uint16_t capacity = loadGuestBe16(base, destination + 2u);
+    if (allocate) {
+        destinationBuffer = allocateGuestPhysicalRange(base,
+            static_cast<uint32_t>(converted.size() + 1u), 0x1000u, 0x04u);
+        if (!destinationBuffer) { context.r3.u32 = kNtStatusNoMemory; return; }
+        capacity = static_cast<uint16_t>(std::min<size_t>(converted.size() + 1u, 0xFFFFu));
+    }
+    if (!validGuestRange(destinationBuffer, std::min<size_t>(capacity, converted.size() + 1u))) {
+        context.r3.u32 = kNtStatusInvalidParameter; return;
+    }
+    const size_t count = std::min<size_t>(converted.size(), capacity ? capacity - 1u : 0u);
+    std::memcpy(base + destinationBuffer, converted.data(), count);
+    if (capacity > count) base[destinationBuffer + count] = 0u;
+    storeGuestBe16(base, destination, static_cast<uint16_t>(count));
+    storeGuestBe16(base, destination + 2u, capacity);
+    PPC_STORE_U32(destination + 4u, destinationBuffer);
+    context.r3.u32 = count == converted.size() ? kNtStatusSuccess : kNtStatusBufferTooSmall;
+}
+
+void xowue_RtlUpcaseUnicodeChar(PPCContext &context) {
+    uint32_t c = context.r3.u32 & 0xFFFFu;
+    if (c >= 'a' && c <= 'z') c -= 0x20u;
+    else if ((c >= 0x00E0u && c <= 0x00F6u) || (c >= 0x00F8u && c <= 0x00FEu)) c -= 0x20u;
+    else if (c == 0x00FFu) c = 0x0178u;
+    context.r3.u32 = c;
+}
+
+void xowue_RtlTimeFieldsToTime(PPCContext &context, uint8_t *base) {
+    const uint32_t fields = context.r3.u32, output = context.r4.u32;
+    if (!base || !validGuestRange(fields, 16u) || !validGuestRange(output, 8u)) { context.r3.u32 = 0u; return; }
+    const int year = loadGuestBe16(base, fields), month = loadGuestBe16(base, fields + 2u);
+    const int day = loadGuestBe16(base, fields + 4u), hour = loadGuestBe16(base, fields + 6u);
+    const int minute = loadGuestBe16(base, fields + 8u), second = loadGuestBe16(base, fields + 10u);
+    const int millis = loadGuestBe16(base, fields + 12u);
+    if (year < 1601 || month < 1 || month > 12 || hour > 23 || minute > 59 || second > 59 || millis > 999) { context.r3.u32 = 0u; return; }
+    const std::chrono::year_month_day ymd{std::chrono::year{year}, std::chrono::month{static_cast<unsigned>(month)}, std::chrono::day{static_cast<unsigned>(day)}};
+    if (!ymd.ok()) { context.r3.u32 = 0u; return; }
+    const auto point = std::chrono::sys_days{ymd} + std::chrono::hours{hour} +
+        std::chrono::minutes{minute} + std::chrono::seconds{second} + std::chrono::milliseconds{millis};
+    constexpr int64_t epochTicks = 116444736000000000LL;
+    const auto unixNs = std::chrono::duration_cast<std::chrono::nanoseconds>(point.time_since_epoch()).count();
+    const uint64_t ticks = static_cast<uint64_t>(epochTicks + unixNs / 100);
+    PPC_STORE_U64(output, ticks); context.r3.u32 = 1u;
+}
+
+void xowue_RtlTimeToTimeFields(PPCContext &context, uint8_t *base) {
+    const uint32_t input = context.r3.u32, fields = context.r4.u32;
+    if (!base || !validGuestRange(input, 8u) || !validGuestRange(fields, 16u)) return;
+    constexpr int64_t epochTicks = 116444736000000000LL;
+    const int64_t ticks = static_cast<int64_t>(PPC_LOAD_U64(input));
+    const auto ns = std::chrono::nanoseconds{(ticks - epochTicks) * 100};
+    const auto point = std::chrono::sys_time<std::chrono::nanoseconds>{ns};
+    const auto dayPoint = std::chrono::floor<std::chrono::days>(point);
+    const std::chrono::year_month_day ymd{dayPoint};
+    const std::chrono::weekday weekday{dayPoint};
+    const auto time = std::chrono::hh_mm_ss{std::chrono::floor<std::chrono::milliseconds>(point - dayPoint)};
+    storeGuestBe16(base, fields, static_cast<uint16_t>(static_cast<int>(ymd.year())));
+    storeGuestBe16(base, fields + 2u, static_cast<uint16_t>(static_cast<unsigned>(ymd.month())));
+    storeGuestBe16(base, fields + 4u, static_cast<uint16_t>(static_cast<unsigned>(ymd.day())));
+    storeGuestBe16(base, fields + 6u, static_cast<uint16_t>(time.hours().count()));
+    storeGuestBe16(base, fields + 8u, static_cast<uint16_t>(time.minutes().count()));
+    storeGuestBe16(base, fields + 10u, static_cast<uint16_t>(time.seconds().count()));
+    storeGuestBe16(base, fields + 12u, static_cast<uint16_t>(time.subseconds().count()));
+    storeGuestBe16(base, fields + 14u, static_cast<uint16_t>(weekday.c_encoding()));
+}
+
+void xowue_XamGetExecutionId(PPCContext &context, uint8_t *base) {
+    const uint32_t output = context.r3.u32;
+    if (!base || !validGuestRange(output, 4u) || g_activeExecutionInfoAddress == 0u) {
+        context.r3.u32 = kNtStatusInvalidParameter; return;
+    }
+    PPC_STORE_U32(output, g_activeExecutionInfoAddress);
+    context.r3.u32 = kNtStatusSuccess;
+}
+
+void xowue_XamGetSystemVersion(PPCContext &context) {
+    context.r3.u32 = 0u; // Same conservative value used by Xenia for symbol probing.
+}
+
+void xowue_XGetLanguage(PPCContext &context) {
+    context.r3.u32 = 9u; // XLanguage::kPortuguese
+}
+
+void xowue_RtlImageXexHeaderField(PPCContext &context) {
+    const uint32_t field = context.r4.u32;
+    context.r3.u32 = field == 0x00040006u ? g_activeExecutionInfoAddress : 0u;
+}
+
 void xowue_RtlUnicodeToMultiByteN(PPCContext &context, uint8_t *base) {
     const uint32_t destination = context.r3.u32;
     const uint32_t destinationLength = context.r4.u32;
@@ -2983,6 +5676,84 @@ void xowue_NtQueryVirtualMemory(PPCContext &context, uint8_t *base) {
     std::snprintf(event, sizeof(event), "NtQueryVirtualMemory address=0x%08X state=0x%08X region=0x%08X+0x%08X",
                   address, state, regionBase, regionSize);
     recordRuntimeTrace(event);
+}
+
+void xowue_MmQueryAddressProtect(PPCContext &context) {
+    const uint32_t address = context.r3.u32;
+    std::lock_guard<std::mutex> lock(g_virtualMemoryMutex);
+    const auto commit = std::find_if(g_virtualCommits.begin(), g_virtualCommits.end(),
+        [address](const auto &item) {
+            return address >= item.address &&
+                static_cast<uint64_t>(address) < static_cast<uint64_t>(item.address) + item.size;
+        });
+    context.r3.u32 = commit == g_virtualCommits.end() ? 0u : commit->protection;
+}
+
+void xowue_MmSetAddressProtect(PPCContext &context) {
+    const uint32_t address = context.r3.u32;
+    const uint32_t size = context.r4.u32;
+    const uint32_t protection = context.r5.u32;
+    if (size == 0u || !validGuestRange(address, size)) {
+        recordRuntimeTrace("MmSetAddressProtect rejected invalid range");
+        return;
+    }
+    std::lock_guard<std::mutex> lock(g_virtualMemoryMutex);
+    bool found = false;
+    for (auto &commit : g_virtualCommits) {
+        const uint64_t commitEnd = static_cast<uint64_t>(commit.address) + commit.size;
+        const uint64_t requestEnd = static_cast<uint64_t>(address) + size;
+        if (address < commitEnd && requestEnd > commit.address) {
+            commit.protection = protection;
+            found = true;
+        }
+    }
+    for (auto &allocation : g_virtualAllocations) {
+        const uint64_t allocationEnd = static_cast<uint64_t>(allocation.address) + allocation.size;
+        const uint64_t requestEnd = static_cast<uint64_t>(address) + size;
+        if (address < allocationEnd && requestEnd > allocation.address)
+            allocation.protection = protection;
+    }
+    if (!found) recordRuntimeTrace("MmSetAddressProtect range is reserved but has no committed pages");
+}
+
+void xowue_MmQueryStatistics(PPCContext &context, uint8_t *base) {
+    const uint32_t address = context.r3.u32;
+    constexpr uint32_t kStatsSize = 104u;
+    if (!base || !validGuestRange(address, kStatsSize)) {
+        context.r3.u32 = kNtStatusInvalidParameter;
+        return;
+    }
+    if (PPC_LOAD_U32(address) != kStatsSize) {
+        context.r3.u32 = kNtStatusBufferTooSmall;
+        return;
+    }
+    uint64_t usedPages = 0u;
+    {
+        std::lock_guard<std::mutex> lock(g_virtualMemoryMutex);
+        for (const auto &commit : g_virtualCommits)
+            usedPages += (static_cast<uint64_t>(commit.size) + 0xFFFu) / 0x1000u;
+    }
+    const uint32_t totalPages = 0x20000u;
+    const uint32_t available = usedPages >= totalPages ? 0u :
+        totalPages - static_cast<uint32_t>(usedPages);
+    std::memset(base + address, 0, kStatsSize);
+    PPC_STORE_U32(address, kStatsSize);
+    PPC_STORE_U32(address + 4u, totalPages);
+    PPC_STORE_U32(address + 8u, 0x300u);
+    PPC_STORE_U32(address + 12u, available);
+    PPC_STORE_U32(address + 16u, 0x2FFF0000u);
+    PPC_STORE_U32(address + 20u, 0x00160000u);
+    PPC_STORE_U32(address + 24u, 0x1000u);
+    PPC_STORE_U32(address + 28u, 0x10u);
+    PPC_STORE_U32(address + 32u, 0x100u);
+    PPC_STORE_U32(address + 36u, 0x100u);
+    PPC_STORE_U32(address + 40u, 0x100u);
+    PPC_STORE_U32(address + 44u, 0x100u);
+    PPC_STORE_U32(address + 48u, 0x100u);
+    PPC_STORE_U32(address + 52u, 0x100u);
+    PPC_STORE_U32(address + 56u, 0u);
+    PPC_STORE_U32(address + 100u, totalPages - 1u);
+    context.r3.u32 = kNtStatusSuccess;
 }
 
 void xowue_NtAllocateVirtualMemory(PPCContext &context, uint8_t *base) {

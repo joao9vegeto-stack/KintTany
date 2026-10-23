@@ -33,7 +33,7 @@ def main() -> int:
         parts.append(path)
     digest = hashlib.sha256(data).hexdigest()
     (DIST / "SHA256SUMS").write_text(
-        f"{digest}  XOWUE/dist/XOWUE-AOT-source.tar.gz\n", encoding="utf-8"
+        f"{digest}  dist/XOWUE-AOT-source.tar.gz\n", encoding="utf-8"
     )
     print(f"packed {len(units) + 1} generated C++ units into {ARCHIVE}")
     print(f"split archive into {len(parts)} parts of at most {PART_SIZE} bytes")

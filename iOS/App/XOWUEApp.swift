@@ -1375,13 +1375,13 @@ private struct XOWUERootView: View {
             runtimeRow("Scheduler PPC / KTHREAD", detail: "Threads guest, espera/suspensão, TLS e encerramento pelo kernel Xbox", icon: "point.3.connected.trianglepath.dotted", tint: XOWUEPalette.yellowLight)
             runtimeRow("Memória física Xbox", detail: "Alocação, endereços físicos e mapeamento guest usados pelo XEX", icon: "point.3.connected.trianglepath.dotted", tint: XOWUEPalette.yellowLight)
             runtimeRow("Frontend Xenos / PM4", detail: "Ring buffer lido via CP_RB_WPTR; fetch de swap, draws e buffers indiretos contabilizados", icon: "point.3.connected.trianglepath.dotted", tint: XOWUEPalette.yellowLight)
-            runtimeRow("KosmicKrisp · Metal WSI", detail: "Frames RGBA do frontbuffer enviados à swapchain Vulkan → Metal a 60 Hz", icon: "point.3.connected.trianglepath.dotted", tint: XOWUEPalette.blueLight)
+            runtimeRow("KosmicKrisp · Metal WSI", detail: "Swapchain Vulkan → Metal ativa. \(xenosGraphicsEvidence)", icon: "point.3.connected.trianglepath.dotted", tint: XOWUEPalette.blueLight)
 
             VStack(alignment: .leading, spacing: 6) {
                 Text("KosmicKrisp permanece como backend gráfico.")
                     .font(.system(size: 13, weight: .bold, design: .rounded))
                     .foregroundStyle(XOWUEPalette.white)
-                Text("KosmicKrisp continua como backend gráfico. A fila Xenos acompanha submissões do XEX, processa os swaps e encaminha o frontbuffer RGBA para a superfície Vulkan → Metal. O HUD tátil injeta estados XInput no guest.")
+                Text("KosmicKrisp apresenta a swapchain Vulkan → Metal. As contagens abaixo vêm do último diagnóstico do XEX; draws observados são opcodes contabilizados pelo frontend. O HUD tátil injeta estados XInput no guest.")
                     .font(.system(size: 11))
                     .foregroundStyle(XOWUEPalette.muted)
                     .fixedSize(horizontal: false, vertical: true)
@@ -1444,6 +1444,24 @@ private struct XOWUERootView: View {
             }
             Spacer()
         }
+    }
+
+    private var xenosGraphicsEvidence: String {
+        guard let line = library.bootOutput.components(separatedBy: .newlines)
+            .first(where: { $0.contains("decoded_frames=") }) else {
+            return "Sem contagem guest do último boot."
+        }
+        func value(_ key: String) -> String? {
+            guard let token = line.split(whereSeparator: \.isWhitespace)
+                .first(where: { $0.hasPrefix(key + "=") }) else { return nil }
+            return String(token.dropFirst(key.count + 1))
+        }
+        guard let frames = value("decoded_frames"),
+              let swaps = value("swaps"),
+              let draws = value("draws") else {
+            return "Contagem guest indisponível no último diagnóstico."
+        }
+        return "Último XEX: \(frames) frames guest decodificados, \(swaps) swaps e \(draws) opcodes draw observados."
     }
 
     private var footer: some View {

@@ -46,10 +46,10 @@ targets:
         SWIFT_OBJC_BRIDGING_HEADER: App/XOWUE-Bridging-Header.h
         HEADER_SEARCH_PATHS:
           - "$(SRCROOT)/../Runtime"
-          - "$(SRCROOT)/../../mesa-src/include"
+          - "$(SRCROOT)/../mesa-src/include"
         LIBRARY_SEARCH_PATHS:
-          - "$(SRCROOT)/../../build-ios"
-          - "$(SRCROOT)/../../build-ios/kosmickrisp"
+          - "$(SRCROOT)/../build-ios"
+          - "$(SRCROOT)/../build-ios/kosmickrisp"
         LD_RUNPATH_SEARCH_PATHS:
           - "$(inherited)"
           - "@executable_path/Frameworks"

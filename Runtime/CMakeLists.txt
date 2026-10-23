@@ -23,7 +23,9 @@ set(GENERATED_RUNTIME_DIR "${CMAKE_CURRENT_BINARY_DIR}/runtime-generated")
 set(IMPORT_STUBS "${GENERATED_RUNTIME_DIR}/XOWUEImportStubs.cpp")
 execute_process(
     COMMAND "${Python3_EXECUTABLE}" "${CMAKE_CURRENT_LIST_DIR}/generate_runtime_stubs.py"
-            --ppc-dir "${PPC_DIR}" --recompile-log "${RECOMP_LOG}" --output "${IMPORT_STUBS}"
+            --ppc-dir "${PPC_DIR}" --recompile-log "${RECOMP_LOG}"
+            --output "${IMPORT_STUBS}"
+            --runtime-source "${CMAKE_CURRENT_LIST_DIR}/XOWUEEngine.cpp"
     RESULT_VARIABLE STUB_RESULT
 )
 if(NOT STUB_RESULT EQUAL 0)

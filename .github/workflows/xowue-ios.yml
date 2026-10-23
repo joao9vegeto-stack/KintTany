@@ -6,12 +6,13 @@ on:
       - XOWUE
     paths:
       - ".github/workflows/xowue-ios.yml"
-      - "XOWUE/Runtime/**"
-      - "XOWUE/iOS/**"
-      - "XOWUE/generated/**"
-      - "XOWUE/dist/**"
-      - "XOWUE/patches/**"
-      - "XOWUE/tools/**"
+      - "Runtime/**"
+      - "iOS/**"
+      - "generated/**"
+      - "dist/**"
+      - "patches/**"
+      - "tools/**"
+      - "THIRD_PARTY_NOTICES.md"
   workflow_dispatch:
 
 concurrency:
@@ -70,10 +71,10 @@ jobs:
           set -euo pipefail
           xcodebuild -version
           xcrun --sdk iphoneos --show-sdk-version
-          cat XOWUE/dist/XOWUE-AOT-source.part* > XOWUE/dist/XOWUE-AOT-source.tar.gz
-          shasum -a 256 -c XOWUE/dist/SHA256SUMS
-          tar -xzf XOWUE/dist/XOWUE-AOT-source.tar.gz -C XOWUE/generated
-          test "$(find XOWUE/generated/ppc -maxdepth 1 -name 'ppc_recomp.*.cpp' | wc -l | tr -d ' ')" = "344"
+          cat dist/XOWUE-AOT-source.part* > dist/XOWUE-AOT-source.tar.gz
+          shasum -a 256 -c dist/SHA256SUMS
+          tar -xzf dist/XOWUE-AOT-source.tar.gz -C generated
+          test "$(find generated/ppc -maxdepth 1 -name 'ppc_recomp.*.cpp' | wc -l | tr -d ' ')" = "344"
 
       - name: Install KosmicKrisp iOS cross-build prerequisites
         run: |
@@ -131,8 +132,8 @@ jobs:
           test "$(git -C mesa-src rev-parse HEAD)" = "$MESA_KOSMICKRISP_SHA"
 
           for patch in \
-            "$GITHUB_WORKSPACE/XOWUE/Runtime/Graphics/KosmicKrisp/patches/0001-kosmickrisp-ios-m2.patch" \
-            "$GITHUB_WORKSPACE/XOWUE/Runtime/Graphics/KosmicKrisp/patches/0002-kosmickrisp-ios-m3-metal-wsi.patch"; do
+            "$GITHUB_WORKSPACE/Runtime/Graphics/KosmicKrisp/patches/0001-kosmickrisp-ios-m2.patch" \
+            "$GITHUB_WORKSPACE/Runtime/Graphics/KosmicKrisp/patches/0002-kosmickrisp-ios-m3-metal-wsi.patch"; do
             git -C mesa-src apply --check "$patch"
             git -C mesa-src apply "$patch"
           done
@@ -260,13 +261,13 @@ jobs:
           git clone --recursive https://github.com/hedge-dev/XenonRecomp.git "$RUNNER_TEMP/XenonRecomp"
           git -C "$RUNNER_TEMP/XenonRecomp" checkout ddd128bcca99fe8bfbb99bea583c972351fa6ace
           git -C "$RUNNER_TEMP/XenonRecomp" submodule update --init --recursive
-          git -C "$RUNNER_TEMP/XenonRecomp" apply "$GITHUB_WORKSPACE/XOWUE/patches/XenonRecomp-XOWUE.patch"
+          git -C "$RUNNER_TEMP/XenonRecomp" apply "$GITHUB_WORKSPACE/patches/XenonRecomp-XOWUE.patch"
           echo "XENONRECOMP_ROOT=$RUNNER_TEMP/XenonRecomp" >> "$GITHUB_ENV"
 
       - name: Build arm64 AOT engine
         run: |
           set -euo pipefail
-          cmake -S XOWUE/Runtime -B build-ios -G Xcode \
+          cmake -S Runtime -B build-ios -G Xcode \
             -DCMAKE_SYSTEM_NAME=iOS \
             -DCMAKE_OSX_SYSROOT=iphoneos \
             -DCMAKE_OSX_ARCHITECTURES=arm64 \
@@ -285,11 +286,11 @@ jobs:
         run: |
           set -euo pipefail
           brew install xcodegen
-          cd XOWUE/iOS
+          cd iOS
           xcodegen generate --spec project.yml
           cd "$GITHUB_WORKSPACE"
           xcodebuild build \
-            -project XOWUE/iOS/XOWUE.xcodeproj \
+            -project iOS/XOWUE.xcodeproj \
             -scheme XOWUE \
             -configuration Release \
             -sdk iphoneos \
@@ -310,7 +311,7 @@ jobs:
           mkdir -p Payload/XOWUE.app/Frameworks
           cp build-ios/kosmickrisp/libvulkan_kosmickrisp.dylib Payload/XOWUE.app/Frameworks/
           mkdir -p Payload/XOWUE.app/ThirdPartyLicenses/Mesa/licenses
-          cp XOWUE/THIRD_PARTY_NOTICES.md Payload/XOWUE.app/THIRD_PARTY_NOTICES.md
+          cp THIRD_PARTY_NOTICES.md Payload/XOWUE.app/THIRD_PARTY_NOTICES.md
           cp "$XENONRECOMP_ROOT/LICENSE.md" Payload/XOWUE.app/ThirdPartyLicenses/XenonRecomp-LICENSE.md
           cp mesa-src/docs/license.rst Payload/XOWUE.app/ThirdPartyLicenses/Mesa/license.rst
           cp -R mesa-src/licenses/. Payload/XOWUE.app/ThirdPartyLicenses/Mesa/licenses/

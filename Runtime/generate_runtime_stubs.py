@@ -9,12 +9,149 @@ IMPORT_RE = re.compile(r"PPC_EXTERN_FUNC\(__imp__([A-Za-z_][A-Za-z_0-9]*)\);")
 DECODE_RE = re.compile(r"Unable to decode instruction [0-9A-Fa-f]+ at ([0-9A-Fa-f]+)")
 PPC_FUNCTION_RE = re.compile(r"(PPC_FUNC_IMPL\(__imp__sub_[0-9A-Fa-f]+\)\s*\{)")
 
+COMPATIBILITY_IMPORTS = {
+    "DbgBreakPoint",
+    "DbgPrint",
+    "InterlockedFlushSList",
+    "InterlockedPopEntrySList",
+    "IoCheckShareAccess",
+    "IoCompleteRequest",
+    "IoCreateDevice",
+    "IoDeleteDevice",
+    "IoDismountVolume",
+    "IoDismountVolumeByFileHandle",
+    "IoInvalidDeviceRequest",
+    "IoRemoveShareAccess",
+    "IoSetShareAccess",
+    "KeBugCheck",
+    "KeBugCheckEx",
+    "KfAcquireSpinLock",
+    "KfLowerIrql",
+    "KfReleaseSpinLock",
+    "NetDll_WSACleanup",
+    "NetDll_WSACreateEvent",
+    "NetDll_WSAGetLastError",
+    "NetDll_WSASetLastError",
+    "NetDll_WSAStartup",
+    "NetDll_XNetCleanup",
+    "NetDll_XNetDnsLookup",
+    "NetDll_XNetDnsRelease",
+    "NetDll_XNetGetEthernetLinkStatus",
+    "NetDll_XNetGetTitleXnAddr",
+    "NetDll_XNetQosListen",
+    "NetDll_XNetQosLookup",
+    "NetDll_XNetQosRelease",
+    "NetDll_XNetRandom",
+    "NetDll_XNetRegisterKey",
+    "NetDll_XNetServerToInAddr",
+    "NetDll_XNetStartup",
+    "NetDll_XNetUnregisterKey",
+    "NetDll_XNetXnAddrToInAddr",
+    "NetDll_accept",
+    "NetDll_bind",
+    "NetDll_closesocket",
+    "NetDll_connect",
+    "NetDll_getsockname",
+    "NetDll_getsockopt",
+    "NetDll_inet_addr",
+    "NetDll_ioctlsocket",
+    "NetDll_listen",
+    "NetDll_recv",
+    "NetDll_recvfrom",
+    "NetDll_select",
+    "NetDll_send",
+    "NetDll_sendto",
+    "NetDll_setsockopt",
+    "NetDll_socket",
+    "ObIsTitleObject",
+    "ObReferenceObject",
+    "RtlRaiseException",
+    "RtlUnwind",
+    "StfsControlDevice",
+    "StfsCreateDevice",
+    "XAudioGetSpeakerConfig",
+    "XAudioGetVoiceCategoryVolume",
+    "XAudioGetVoiceCategoryVolumeChangeMask",
+    "XAudioRegisterRenderDriverClient",
+    "XAudioSubmitRenderDriverFrame",
+    "XAudioUnregisterRenderDriverClient",
+    "XMACreateContext",
+    "XMAReleaseContext",
+    "XMsgCancelIORequest",
+    "XMsgInProcessCall",
+    "XMsgStartIORequest",
+    "XMsgStartIORequestEx",
+    "XNetLogonGetTitleID",
+    "XNotifyGetNext",
+    "XNotifyPositionUI",
+    "XamAlloc",
+    "XamContentCreateEnumerator",
+    "XamContentCreateEx",
+    "XamContentGetDeviceData",
+    "XamContentGetDeviceState",
+    "XamContentGetLicenseMask",
+    "XamCreateEnumeratorHandle",
+    "XamEnumerate",
+    "XamFree",
+    "XamGetPrivateEnumStructureFromHandle",
+    "XamLoaderGetLaunchData",
+    "XamLoaderLaunchTitle",
+    "XamNotifyCreateListener",
+    "XamSessionCreateHandle",
+    "XamSessionRefObjByHandle",
+    "XamShowAchievementsUI",
+    "XamShowCustomPlayerListUI",
+    "XamShowDeviceSelectorUI",
+    "XamShowDirtyDiscErrorUI",
+    "XamShowFriendRequestUI",
+    "XamShowFriendsUI",
+    "XamShowGameInviteUI",
+    "XamShowGamerCardUIForXUID",
+    "XamShowKeyboardUI",
+    "XamShowMarketplaceUI",
+    "XamShowMessageBoxUIEx",
+    "XamShowMessageComposeUI",
+    "XamShowMessagesUI",
+    "XamShowPlayerReviewUI",
+    "XamShowPlayersUI",
+    "XamShowSigninUI",
+    "XamTaskCloseHandle",
+    "XamTaskSchedule",
+    "XamTaskShouldExit",
+    "XamUserAreUsersFriends",
+    "XamUserCheckPrivilege",
+    "XamUserCreateAchievementEnumerator",
+    "XamUserCreateStatsEnumerator",
+    "XamUserGetName",
+    "XamUserGetSigninInfo",
+    "XamUserGetSigninState",
+    "XamUserGetXUID",
+    "XamUserReadProfileSettings",
+    "XamUserWriteProfileSettings",
+    "XamVoiceClose",
+    "XamVoiceCreate",
+    "XamVoiceHeadsetPresent",
+    "XamVoiceSubmitPacket",
+    "XamWriteGamerTile",
+    "XeCryptSha",
+    "XeKeysConsolePrivateKeySign",
+    "XeKeysConsoleSignatureVerification",
+    "XexGetModuleHandle",
+    "XexGetModuleSection",
+    "XexGetProcedureAddress",
+    "__C_specific_handler",
+    "_snprintf",
+    "_vsnprintf",
+    "sprintf",
+}
+
 
 def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("--ppc-dir", required=True, type=Path)
     parser.add_argument("--recompile-log", required=True, type=Path)
     parser.add_argument("--output", required=True, type=Path)
+    parser.add_argument("--runtime-source", required=True, type=Path)
     args = parser.parse_args()
 
     shared = (args.ppc_dir / "ppc_recomp_shared.h").read_text(encoding="utf-8")
@@ -79,7 +216,7 @@ def main() -> int:
     args.output.parent.mkdir(parents=True, exist_ok=True)
     code = ['#include "ppc_recomp_shared.h"',
             'void xowue_thread_checkpoint();',
-            '[[noreturn]] void xowue_unsupported_import(const char *, const PPCContext &);',
+            'void xowue_compat_import(const char *, PPCContext &, uint8_t *);',
             'void xowue_ExCreateThread(PPCContext &, uint8_t *);',
             'void xowue_ExTerminateThread(PPCContext &);',
             'void xowue_ExRegisterTitleTerminateNotification(PPCContext &);',
@@ -162,6 +299,56 @@ def main() -> int:
             'void xowue_VdRetrainEDRAMWorker(PPCContext &);',
             'void xowue_VdCallGraphicsNotificationRoutines(PPCContext &);',
             'void xowue_KiApcNormalRoutineNop(PPCContext &);',
+            'void xowue_KeEnterCriticalRegion(PPCContext &, uint8_t *);',
+            'void xowue_KeLeaveCriticalRegion(PPCContext &, uint8_t *);',
+            'void xowue_KeRaiseIrqlToDpcLevel(PPCContext &);',
+            'void xowue_KeAcquireSpinLockAtRaisedIrql(PPCContext &);',
+            'void xowue_KeReleaseSpinLockFromRaisedIrql(PPCContext &);',
+            'void xowue_KeLockL2(PPCContext &);',
+            'void xowue_KeUnlockL2(PPCContext &);',
+            'void xowue_KeEnableFpuExceptions(PPCContext &);',
+            'void xowue_KeQuerySystemTime(PPCContext &, uint8_t *);',
+            'void xowue_KeInitializeSemaphore(PPCContext &, uint8_t *);',
+            'void xowue_KeReleaseSemaphore(PPCContext &, uint8_t *);',
+            'void xowue_NtCreateSemaphore(PPCContext &, uint8_t *);',
+            'void xowue_NtReleaseSemaphore(PPCContext &, uint8_t *);',
+            'void xowue_NtCreateMutant(PPCContext &, uint8_t *);',
+            'void xowue_NtReleaseMutant(PPCContext &);',
+            'void xowue_NtCreateTimer(PPCContext &, uint8_t *);',
+            'void xowue_NtSetTimerEx(PPCContext &, uint8_t *);',
+            'void xowue_NtCancelTimer(PPCContext &, uint8_t *);',
+            'void xowue_NtCreateFile(PPCContext &, uint8_t *);',
+            'void xowue_NtOpenFile(PPCContext &, uint8_t *);',
+            'void xowue_NtReadFile(PPCContext &, uint8_t *);',
+            'void xowue_NtWriteFile(PPCContext &, uint8_t *);',
+            'void xowue_NtReadFileScatter(PPCContext &, uint8_t *);',
+            'void xowue_NtQueryInformationFile(PPCContext &, uint8_t *);',
+            'void xowue_NtQueryFullAttributesFile(PPCContext &, uint8_t *);',
+            'void xowue_NtQueryDirectoryFile(PPCContext &, uint8_t *);',
+            'void xowue_NtQueryVolumeInformationFile(PPCContext &, uint8_t *);',
+            'void xowue_NtSetInformationFile(PPCContext &, uint8_t *);',
+            'void xowue_NtFlushBuffersFile(PPCContext &, uint8_t *);',
+            'void xowue_NtDeviceIoControlFile(PPCContext &, uint8_t *);',
+            'void xowue_NtDuplicateObject(PPCContext &, uint8_t *);',
+            'void xowue_MmQueryAddressProtect(PPCContext &);',
+            'void xowue_MmSetAddressProtect(PPCContext &);',
+            'void xowue_MmQueryStatistics(PPCContext &, uint8_t *);',
+            'void xowue_RtlCompareMemoryUlong(PPCContext &, uint8_t *);',
+            'void xowue_RtlCompareStringN(PPCContext &, uint8_t *);',
+            'void xowue_RtlFillMemoryUlong(PPCContext &, uint8_t *);',
+            'void xowue_RtlFreeAnsiString(PPCContext &, uint8_t *);',
+            'void xowue_RtlInitAnsiString(PPCContext &, uint8_t *);',
+            'void xowue_RtlInitUnicodeString(PPCContext &, uint8_t *);',
+            'void xowue_RtlUnicodeStringToAnsiString(PPCContext &, uint8_t *);',
+            'void xowue_RtlUpcaseUnicodeChar(PPCContext &);',
+            'void xowue_RtlTimeFieldsToTime(PPCContext &, uint8_t *);',
+            'void xowue_RtlTimeToTimeFields(PPCContext &, uint8_t *);',
+            'void xowue_ObCreateSymbolicLink(PPCContext &, uint8_t *);',
+            'void xowue_ObDeleteSymbolicLink(PPCContext &, uint8_t *);',
+            'void xowue_XamGetExecutionId(PPCContext &, uint8_t *);',
+            'void xowue_XamGetSystemVersion(PPCContext &);',
+            'void xowue_XGetLanguage(PPCContext &);',
+            'void xowue_RtlImageXexHeaderField(PPCContext &);',
             '[[noreturn]] void xowue_HalReturnToFirmware(PPCContext &, uint8_t *);', '']
     for name in imports:
         code.append(f"PPC_FUNC(__imp__{name}) {{")
@@ -174,6 +361,32 @@ def main() -> int:
             code.append("\txowue_ExRegisterTitleTerminateNotification(ctx);")
         elif name == "NtClose":
             code.append("\txowue_NtClose(ctx);")
+        elif name == "NtCreateFile":
+            code.append("\txowue_NtCreateFile(ctx, base);")
+        elif name == "NtOpenFile":
+            code.append("\txowue_NtOpenFile(ctx, base);")
+        elif name == "NtReadFile":
+            code.append("\txowue_NtReadFile(ctx, base);")
+        elif name == "NtWriteFile":
+            code.append("\txowue_NtWriteFile(ctx, base);")
+        elif name == "NtReadFileScatter":
+            code.append("\txowue_NtReadFileScatter(ctx, base);")
+        elif name == "NtQueryInformationFile":
+            code.append("\txowue_NtQueryInformationFile(ctx, base);")
+        elif name == "NtQueryFullAttributesFile":
+            code.append("\txowue_NtQueryFullAttributesFile(ctx, base);")
+        elif name == "NtQueryDirectoryFile":
+            code.append("\txowue_NtQueryDirectoryFile(ctx, base);")
+        elif name == "NtQueryVolumeInformationFile":
+            code.append("\txowue_NtQueryVolumeInformationFile(ctx, base);")
+        elif name == "NtSetInformationFile":
+            code.append("\txowue_NtSetInformationFile(ctx, base);")
+        elif name == "NtFlushBuffersFile":
+            code.append("\txowue_NtFlushBuffersFile(ctx, base);")
+        elif name == "NtDeviceIoControlFile":
+            code.append("\txowue_NtDeviceIoControlFile(ctx, base);")
+        elif name == "NtDuplicateObject":
+            code.append("\txowue_NtDuplicateObject(ctx, base);")
         elif name == "NtSetEvent":
             code.append("\txowue_NtSetEvent(ctx, base);")
         elif name == "NtClearEvent":
@@ -266,6 +479,80 @@ def main() -> int:
             code.append("\txowue_KeGetCurrentProcessType(ctx);")
         elif name == "KeQueryPerformanceFrequency":
             code.append("\txowue_KeQueryPerformanceFrequency(ctx);")
+        elif name == "KeEnterCriticalRegion":
+            code.append("\txowue_KeEnterCriticalRegion(ctx, base);")
+        elif name == "KeLeaveCriticalRegion":
+            code.append("\txowue_KeLeaveCriticalRegion(ctx, base);")
+        elif name == "KeRaiseIrqlToDpcLevel":
+            code.append("\txowue_KeRaiseIrqlToDpcLevel(ctx);")
+        elif name == "KeAcquireSpinLockAtRaisedIrql":
+            code.append("\txowue_KeAcquireSpinLockAtRaisedIrql(ctx);")
+        elif name == "KeReleaseSpinLockFromRaisedIrql":
+            code.append("\txowue_KeReleaseSpinLockFromRaisedIrql(ctx);")
+        elif name == "KeLockL2":
+            code.append("\txowue_KeLockL2(ctx);")
+        elif name == "KeUnlockL2":
+            code.append("\txowue_KeUnlockL2(ctx);")
+        elif name == "KeEnableFpuExceptions":
+            code.append("\txowue_KeEnableFpuExceptions(ctx);")
+        elif name == "KeQuerySystemTime":
+            code.append("\txowue_KeQuerySystemTime(ctx, base);")
+        elif name == "KeInitializeSemaphore":
+            code.append("\txowue_KeInitializeSemaphore(ctx, base);")
+        elif name == "KeReleaseSemaphore":
+            code.append("\txowue_KeReleaseSemaphore(ctx, base);")
+        elif name == "NtCreateSemaphore":
+            code.append("\txowue_NtCreateSemaphore(ctx, base);")
+        elif name == "NtReleaseSemaphore":
+            code.append("\txowue_NtReleaseSemaphore(ctx, base);")
+        elif name == "NtCreateMutant":
+            code.append("\txowue_NtCreateMutant(ctx, base);")
+        elif name == "NtReleaseMutant":
+            code.append("\txowue_NtReleaseMutant(ctx);")
+        elif name == "NtCreateTimer":
+            code.append("\txowue_NtCreateTimer(ctx, base);")
+        elif name == "NtSetTimerEx":
+            code.append("\txowue_NtSetTimerEx(ctx, base);")
+        elif name == "NtCancelTimer":
+            code.append("\txowue_NtCancelTimer(ctx, base);")
+        elif name == "MmQueryAddressProtect":
+            code.append("\txowue_MmQueryAddressProtect(ctx);")
+        elif name == "MmSetAddressProtect":
+            code.append("\txowue_MmSetAddressProtect(ctx);")
+        elif name == "MmQueryStatistics":
+            code.append("\txowue_MmQueryStatistics(ctx, base);")
+        elif name == "RtlCompareMemoryUlong":
+            code.append("\txowue_RtlCompareMemoryUlong(ctx, base);")
+        elif name == "RtlCompareStringN":
+            code.append("\txowue_RtlCompareStringN(ctx, base);")
+        elif name == "RtlFillMemoryUlong":
+            code.append("\txowue_RtlFillMemoryUlong(ctx, base);")
+        elif name == "RtlFreeAnsiString":
+            code.append("\txowue_RtlFreeAnsiString(ctx, base);")
+        elif name == "RtlInitAnsiString":
+            code.append("\txowue_RtlInitAnsiString(ctx, base);")
+        elif name == "RtlInitUnicodeString":
+            code.append("\txowue_RtlInitUnicodeString(ctx, base);")
+        elif name == "RtlUnicodeStringToAnsiString":
+            code.append("\txowue_RtlUnicodeStringToAnsiString(ctx, base);")
+        elif name == "RtlUpcaseUnicodeChar":
+            code.append("\txowue_RtlUpcaseUnicodeChar(ctx);")
+        elif name == "RtlTimeFieldsToTime":
+            code.append("\txowue_RtlTimeFieldsToTime(ctx, base);")
+        elif name == "RtlTimeToTimeFields":
+            code.append("\txowue_RtlTimeToTimeFields(ctx, base);")
+        elif name == "RtlImageXexHeaderField":
+            code.append("\txowue_RtlImageXexHeaderField(ctx);")
+        elif name == "ObCreateSymbolicLink":
+            code.append("\txowue_ObCreateSymbolicLink(ctx, base);")
+        elif name == "ObDeleteSymbolicLink":
+            code.append("\txowue_ObDeleteSymbolicLink(ctx, base);")
+        elif name == "XamGetExecutionId":
+            code.append("\txowue_XamGetExecutionId(ctx, base);")
+        elif name == "XamGetSystemVersion":
+            code.append("\txowue_XamGetSystemVersion(ctx);")
+        elif name == "XGetLanguage":
+            code.append("\txowue_XGetLanguage(ctx);")
         elif name == "FscSetCacheElementCount":
             code.append("\txowue_FscSetCacheElementCount(ctx);")
         elif name == "NtCreateEvent":
@@ -333,7 +620,9 @@ def main() -> int:
         elif name == "HalReturnToFirmware":
             code.append("\txowue_HalReturnToFirmware(ctx, base);")
         else:
-            code.append(f'\txowue_unsupported_import("{name}", ctx);')
+            if name not in COMPATIBILITY_IMPORTS:
+                raise SystemExit(f"unclassified XEX import: {name}")
+            code.append(f'\txowue_compat_import("{name}", ctx, base);')
         code.extend(["}", ""])
     args.output.write_text("\n".join(code), encoding="utf-8")
     implemented = {
@@ -355,6 +644,20 @@ def main() -> int:
         "KeResumeThread", "KeSetAffinityThread", "KeSetBasePriorityThread", "KeDelayExecutionThread",
         "XamLoaderTerminateTitle",
         "KeQueryPerformanceFrequency",
+        "KeEnterCriticalRegion", "KeLeaveCriticalRegion", "KeRaiseIrqlToDpcLevel",
+        "KeAcquireSpinLockAtRaisedIrql", "KeReleaseSpinLockFromRaisedIrql",
+        "KeLockL2", "KeUnlockL2", "KeEnableFpuExceptions", "KeQuerySystemTime",
+        "KeInitializeSemaphore", "KeReleaseSemaphore", "NtCreateSemaphore", "NtReleaseSemaphore",
+        "NtCreateMutant", "NtReleaseMutant", "NtCreateTimer", "NtSetTimerEx", "NtCancelTimer",
+        "NtCreateFile", "NtOpenFile", "NtReadFile", "NtWriteFile", "NtReadFileScatter",
+        "NtQueryInformationFile", "NtQueryFullAttributesFile", "NtQueryDirectoryFile",
+        "NtQueryVolumeInformationFile", "NtSetInformationFile", "NtFlushBuffersFile",
+        "NtDeviceIoControlFile", "NtDuplicateObject", "MmQueryAddressProtect",
+        "MmSetAddressProtect", "MmQueryStatistics", "RtlCompareMemoryUlong",
+        "RtlCompareStringN", "RtlFillMemoryUlong", "RtlFreeAnsiString", "RtlInitAnsiString",
+        "RtlInitUnicodeString", "RtlUnicodeStringToAnsiString", "RtlUpcaseUnicodeChar",
+        "RtlTimeFieldsToTime", "RtlTimeToTimeFields", "ObCreateSymbolicLink", "ObDeleteSymbolicLink",
+        "RtlImageXexHeaderField", "XamGetExecutionId", "XamGetSystemVersion", "XGetLanguage",
         "FscSetCacheElementCount",
         "NtCreateEvent",
         "ObReferenceObjectByHandle", "ObDereferenceObject", "ObOpenObjectByPointer",
@@ -374,8 +677,42 @@ def main() -> int:
         "KiApcNormalRoutineNop", "KiApcNormalRoutineNop_",
         "HalReturnToFirmware"
     }
+    imported_set = set(imports)
+    unclassified = imported_set - implemented - COMPATIBILITY_IMPORTS
+    stale_compat = COMPATIBILITY_IMPORTS - imported_set
+    if unclassified or stale_compat:
+        raise SystemExit(
+            f"import contract mismatch: unclassified={sorted(unclassified)}, "
+            f"stale_compat={sorted(stale_compat)}"
+        )
+    runtime_source = args.runtime_source.read_text(encoding="utf-8")
+    compat_start = runtime_source.find("void xowue_compat_import(")
+    compat_end = runtime_source.find("\nvoid xowue_ExCreateThread", compat_start)
+    socket_start = runtime_source.find("static bool handleNetDllSocketImport(")
+    socket_end = runtime_source.find("\n}\n", socket_start)
+    if min(compat_start, compat_end, socket_start, socket_end) < 0:
+        raise SystemExit("runtime compatibility dispatch or socket router is missing")
+    compat_dispatch = runtime_source[compat_start:compat_end]
+    socket_dispatch = runtime_source[socket_start:socket_end + 3]
+    missing_compat = set()
+    for name in COMPATIBILITY_IMPORTS:
+        if name.startswith("NetDll_") and not name.startswith("NetDll_XNet"):
+            routed = (
+                "handleNetDllSocketImport(api, context, base)" in compat_dispatch
+                and re.search(rf'api\s*==\s*"{re.escape(name)}"', socket_dispatch)
+            )
+        elif name.startswith("XamShow"):
+            routed = 'api.rfind("XamShow", 0u)' in compat_dispatch
+        else:
+            routed = re.search(rf'api\s*==\s*"{re.escape(name)}"', compat_dispatch)
+        if not routed:
+            missing_compat.add(name)
+    if missing_compat:
+        raise SystemExit(
+            f"compatibility imports lack a dispatch route: {sorted(missing_compat)}"
+        )
     implemented_imports = len(set(imports) & implemented)
-    print(f"generated {len(imports)} import adapters ({implemented_imports} implemented, {len(imports) - implemented_imports} fail-closed); marked {len(to_mark)}/{len(addresses)} undecoded words with function entries")
+    print(f"generated {len(imports)} import adapters ({implemented_imports} explicit handlers, {len(imports) - implemented_imports} classified runtime compatibility handlers); marked {len(to_mark)}/{len(addresses)} undecoded words with function entries")
     return 0
 
 if __name__ == "__main__":
