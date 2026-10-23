@@ -104,6 +104,9 @@ def main() -> int:
             'void xowue_KeQueryPerformanceFrequency(PPCContext &);',
             'void xowue_FscSetCacheElementCount(PPCContext &);',
             'void xowue_NtCreateEvent(PPCContext &, uint8_t *);',
+            'void xowue_ObReferenceObjectByHandle(PPCContext &, uint8_t *);',
+            'void xowue_ObDereferenceObject(PPCContext &);',
+            'void xowue_ObOpenObjectByPointer(PPCContext &, uint8_t *);',
             'void xowue_RtlInitializeCriticalSection(PPCContext &, uint8_t *);',
             'void xowue_RtlInitializeCriticalSectionAndSpinCount(PPCContext &, uint8_t *);',
             'void xowue_RtlEnterCriticalSection(PPCContext &, uint8_t *);',
@@ -257,6 +260,12 @@ def main() -> int:
             code.append("\txowue_FscSetCacheElementCount(ctx);")
         elif name == "NtCreateEvent":
             code.append("\txowue_NtCreateEvent(ctx, base);")
+        elif name == "ObReferenceObjectByHandle":
+            code.append("\txowue_ObReferenceObjectByHandle(ctx, base);")
+        elif name == "ObDereferenceObject":
+            code.append("\txowue_ObDereferenceObject(ctx);")
+        elif name == "ObOpenObjectByPointer":
+            code.append("\txowue_ObOpenObjectByPointer(ctx, base);")
         elif name == "RtlInitializeCriticalSection":
             code.append("\txowue_RtlInitializeCriticalSection(ctx, base);")
         elif name == "RtlInitializeCriticalSectionAndSpinCount":
@@ -318,6 +327,7 @@ def main() -> int:
         "KeQueryPerformanceFrequency",
         "FscSetCacheElementCount",
         "NtCreateEvent",
+        "ObReferenceObjectByHandle", "ObDereferenceObject", "ObOpenObjectByPointer",
         "RtlInitializeCriticalSection", "RtlInitializeCriticalSectionAndSpinCount",
         "RtlEnterCriticalSection", "RtlTryEnterCriticalSection", "RtlLeaveCriticalSection",
         "XexCheckExecutablePrivilege",

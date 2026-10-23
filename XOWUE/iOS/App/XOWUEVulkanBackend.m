@@ -795,14 +795,8 @@ KKRenderFrame(KKVulkanState *state, CAMetalLayer *layer)
       VK_PIPELINE_STAGE_TRANSFER_BIT,
       0, 0, NULL, 0, NULL, 1, &to_clear);
 
-   const uint32_t guest_swaps = atomic_load_explicit(&g_xowue_guest_swap_count, memory_order_relaxed);
-   const uint32_t visual_phase = guest_swaps ? guest_swaps : (uint32_t)state->frame_count;
-   const float phase = (float)(visual_phase % 240u) / 239.0f;
    VkClearColorValue color = {
-      .float32 = {0.10f + 0.68f * phase,
-                  0.11f + 0.20f * (1.0f - phase),
-                  0.17f + 0.18f * (1.0f - phase),
-                  1.0f},
+      .float32 = {0.0f, 0.0f, 0.0f, 1.0f},
    };
    VkImageSubresourceRange range = {
       .aspectMask = VK_IMAGE_ASPECT_COLOR_BIT,
@@ -918,8 +912,9 @@ KKRenderFrame(KKVulkanState *state, CAMetalLayer *layer)
    _statusLabel.font = [UIFont monospacedSystemFontOfSize:10 weight:UIFontWeightSemibold];
    _statusLabel.textColor = UIColor.whiteColor;
    _statusLabel.backgroundColor = [UIColor colorWithWhite:0 alpha:0.62];
-   _statusLabel.text = @"KOSMICKRISP / METAL\nAguardando camada iOS…";
+   _statusLabel.text = @"KOSMICKRISP / METAL\nInicializando backend gráfico…";
    [self addSubview:_statusLabel];
+   _statusLabel.hidden = YES;
 
    __weak XOWUEVulkanView *weakSelf = self;
    NSNotificationCenter *notifications = NSNotificationCenter.defaultCenter;
@@ -1019,7 +1014,7 @@ KKRenderFrame(KKVulkanState *state, CAMetalLayer *layer)
    }
 
    _statusLabel.text = [NSString stringWithFormat:
-      @"METAL WSI ATIVO · %@\nCAMetalLayer %ux%u · Vulkan swapchain\nQuadro abaixo é teste de clear, ainda sem cena Xenos",
+      @"KOSMICKRISP ATIVO · %@\nCAMetalLayer %ux%u\nAguardando frame Xenos traduzido",
       metalLayer.device.name, _vk.swapchain_extent.width, _vk.swapchain_extent.height];
    KKLog(@"KOSMICKRISP_BACKEND_READY extent=%ux%u images=%u",
          _vk.swapchain_extent.width, _vk.swapchain_extent.height, _vk.swapchain_image_count);
@@ -1061,7 +1056,8 @@ KKRenderFrame(KKVulkanState *state, CAMetalLayer *layer)
    _failed = YES;
    [_displayLink invalidate];
    _displayLink = nil;
-   _statusLabel.text = [NSString stringWithFormat:@"METAL WSI BLOQUEADO\n%@", message];
+   _statusLabel.hidden = NO;
+   _statusLabel.text = [NSString stringWithFormat:@"KOSMICKRISP BLOQUEADO\n%@", message];
    _statusLabel.textColor = [UIColor colorWithRed:1.0 green:0.42 blue:0.36 alpha:1.0];
    KKLog(@"KOSMICKRISP_BACKEND_FAIL %@", message);
 }

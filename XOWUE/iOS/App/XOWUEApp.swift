@@ -79,6 +79,99 @@ private struct XOWUEVulkanSurface: UIViewRepresentable {
     func updateUIView(_ view: XOWUEVulkanView, context: Context) {}
 }
 
+@MainActor
+private struct XOWUEGameSurfaceScreen: View {
+    @ObservedObject var library: XOWUEGameLibrary
+    @State private var showBootHint = true
+
+    private var bootSummary: String {
+        library.bootOutput.components(separatedBy: .newlines).first(where: { !$0.isEmpty }) ?? ""
+    }
+
+    private var showsBootFailure: Bool {
+        library.phase == .failed || library.phase == .stopped
+    }
+
+    var body: some View {
+        ZStack {
+            Color.black.ignoresSafeArea()
+            XOWUEVulkanSurface().ignoresSafeArea()
+
+            VStack(spacing: 0) {
+                HStack {
+                    Button {
+                        library.gameSurfacePresented = false
+                    } label: {
+                        Label("BIBLIOTECA", systemImage: "chevron.left")
+                            .font(.system(size: 11, weight: .heavy, design: .rounded))
+                            .tracking(0.6)
+                            .padding(.horizontal, 13)
+                            .padding(.vertical, 10)
+                            .background(.black.opacity(0.72), in: Capsule())
+                    }
+                    .buttonStyle(.plain)
+
+                    Spacer()
+
+                    Text("X-MEN ORIGINS · KOSMICKRISP")
+                        .font(.system(size: 9, weight: .heavy, design: .monospaced))
+                        .tracking(0.7)
+                        .padding(.horizontal, 11)
+                        .padding(.vertical, 10)
+                        .background(.black.opacity(0.72), in: Capsule())
+                }
+
+                Spacer()
+
+                if showsBootFailure {
+                    VStack(alignment: .leading, spacing: 8) {
+                        Text(library.status)
+                            .font(.system(size: 16, weight: .bold, design: .rounded))
+                        Text(library.detail)
+                            .font(.system(size: 12))
+                            .foregroundStyle(.white.opacity(0.78))
+                        if !bootSummary.isEmpty {
+                            Text(bootSummary)
+                                .font(.system(size: 10, weight: .medium, design: .monospaced))
+                                .foregroundStyle(.white.opacity(0.78))
+                                .lineLimit(4)
+                                .textSelection(.enabled)
+                        }
+                        Button("VOLTAR À BIBLIOTECA") {
+                            library.gameSurfacePresented = false
+                        }
+                        .font(.system(size: 11, weight: .heavy, design: .rounded))
+                        .padding(.top, 4)
+                    }
+                    .foregroundStyle(.white)
+                    .padding(16)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .background(.black.opacity(0.88), in: RoundedRectangle(cornerRadius: 16))
+                    .overlay(RoundedRectangle(cornerRadius: 16).stroke(.white.opacity(0.12), lineWidth: 1))
+                } else if library.phase == .booting && showBootHint {
+                    Text(library.status)
+                        .font(.system(size: 11, weight: .semibold, design: .rounded))
+                        .foregroundStyle(.white.opacity(0.8))
+                        .padding(.horizontal, 13)
+                        .padding(.vertical, 9)
+                        .background(.black.opacity(0.72), in: Capsule())
+                }
+            }
+            .padding(.horizontal, 16)
+            .padding(.top, 14)
+            .padding(.bottom, 22)
+        }
+        .background(.black)
+        .preferredColorScheme(.dark)
+        .statusBarHidden(true)
+        .onAppear {
+            DispatchQueue.main.asyncAfter(deadline: .now() + 5) {
+                withAnimation(.easeOut(duration: 0.2)) { self.showBootHint = false }
+            }
+        }
+    }
+}
+
 private enum XOWUEFileStore {
     static let executableName = "default.xex"
     static let selectedGameKey = "xowue.selected-game-relative-path"
@@ -473,7 +566,7 @@ private final class XOWUEGameLibrary: ObservableObject {
             case .missing: return "PASTA DO JOGO NÃO ENCONTRADA"
             case .ready: return "JOGO DETECTADO"
             case .importing: return "IMPORTANDO PASTA"
-            case .booting: return "TESTE DE BOOT"
+            case .booting: return "JOGO EM EXECUÇÃO"
             case .needsChoice: return "ESCOLHA A INSTALAÇÃO"
             case .stopped: return "BOOT PAROU"
             case .failed: return "AÇÃO FALHOU"
@@ -497,6 +590,7 @@ private final class XOWUEGameLibrary: ObservableObject {
     @Published var progress = 0.0
     @Published var bootOutput = "Nenhum teste de boot executado."
     @Published var isBusy = false
+    @Published var gameSurfacePresented = false
 
     var selectedLocation: String {
         guard let selectedGame, let docs = try? XOWUEFileStore.documents() else {
@@ -615,12 +709,13 @@ private final class XOWUEGameLibrary: ObservableObject {
             phase = .missing
             return
         }
+        gameSurfacePresented = true
         isBusy = true
         phase = .booting
         progress = 0.15
-        status = "Validando XEX2 e executando o entry point…"
-        detail = game.appendingPathComponent(XOWUEFileStore.executableName).path
-        bootOutput = "O diagnóstico está em execução."
+        status = "Abrindo X-MEN ORIGINS: WOLVERINE…"
+        detail = "KosmicKrisp pronto; aguardando o primeiro frame traduzido do Xenos."
+        bootOutput = "O jogo está sendo iniciado."
         let executablePath = game.appendingPathComponent(XOWUEFileStore.executableName).path
         XOWUEDiagnostics.bootStarted(path: executablePath, build: XOWUEBuild.number)
         Task { @MainActor in
@@ -751,7 +846,6 @@ private struct XOWUERootView: View {
                 VStack(alignment: .leading, spacing: 18) {
                     header
                     gameLibraryCard
-                    graphicsBackendCard
                     runtimeCard
                     footer
                 }
@@ -769,6 +863,9 @@ private struct XOWUERootView: View {
                 completion: library.handlePickerResult
             )
             .ignoresSafeArea()
+        }
+        .fullScreenCover(isPresented: $library.gameSurfacePresented) {
+            XOWUEGameSurfaceScreen(library: library)
         }
         .onOpenURL { url in
             library.handleOpenURL(url)
@@ -973,32 +1070,6 @@ private struct XOWUERootView: View {
         .overlay(RoundedRectangle(cornerRadius: 19).stroke(.white.opacity(0.08), lineWidth: 1))
     }
 
-    private var graphicsBackendCard: some View {
-        VStack(alignment: .leading, spacing: 11) {
-            HStack {
-                Label("SAÍDA GRÁFICA · KOSMICKRISP", systemImage: "display")
-                    .font(.system(size: 11, weight: .heavy, design: .rounded))
-                    .tracking(0.8)
-                    .foregroundStyle(XOWUEPalette.yellowLight)
-                Spacer()
-                Text("METAL / iOS")
-                    .font(.system(size: 9, weight: .heavy, design: .monospaced))
-                    .foregroundStyle(XOWUEPalette.blueLight)
-            }
-            XOWUEVulkanSurface()
-                .frame(height: 176)
-                .clipShape(RoundedRectangle(cornerRadius: 14))
-                .overlay(RoundedRectangle(cornerRadius: 14).stroke(XOWUEPalette.blueLight.opacity(0.18), lineWidth: 1))
-            Text("Este quadro confirma a cadeia Vulkan → CAMetalLayer. Ele é um clear de diagnóstico; a cena do jogo depende da tradução Xenos de comandos, shaders e texturas. O painel mostra separadamente cada VdSwap detectado.")
-                .font(.system(size: 10, weight: .medium))
-                .foregroundStyle(XOWUEPalette.muted)
-                .fixedSize(horizontal: false, vertical: true)
-        }
-        .padding(15)
-        .background(XOWUEPalette.panel.opacity(0.97), in: RoundedRectangle(cornerRadius: 19))
-        .overlay(RoundedRectangle(cornerRadius: 19).stroke(XOWUEPalette.blueLight.opacity(0.10), lineWidth: 1))
-    }
-
     private var runtimeCard: some View {
         VStack(alignment: .leading, spacing: 12) {
             HStack {
@@ -1013,16 +1084,16 @@ private struct XOWUERootView: View {
             }
 
             runtimeRow("Recompilação AOT", detail: "345 unidades ligadas ao runtime", icon: "checkmark.circle.fill", tint: XOWUEPalette.green)
-            runtimeRow("Scheduler PPC / KTHREAD", detail: "Implementado: ExCreateThread, Xapi startup, espera, suspensão, TLS, KPCR e saída. Aguardando teste com o XEX.", icon: "point.3.connected.trianglepath.dotted", tint: XOWUEPalette.yellowLight)
+            runtimeRow("Scheduler PPC / KTHREAD", detail: "ExCreateThread e APIs Ob* de handles/referências implementadas; aguarda validação com o XEX.", icon: "point.3.connected.trianglepath.dotted", tint: XOWUEPalette.yellowLight)
             runtimeRow("Memória física Xbox", detail: "Alocação e mapeamento guest/physical básicos; compatibilidade do título ainda não validada", icon: "point.3.connected.trianglepath.dotted", tint: XOWUEPalette.yellowLight)
-            runtimeRow("Frontend Xenos / PM4", detail: "Ring buffer, modo de vídeo e pacote VdSwap observados", icon: "point.3.connected.trianglepath.dotted", tint: XOWUEPalette.yellowLight)
-            runtimeRow("KosmicKrisp · Metal WSI", detail: "Mesa iOS compilada e ligada; quadro de clear gerado por Vulkan", icon: "point.3.connected.trianglepath.dotted", tint: XOWUEPalette.blueLight)
+            runtimeRow("Frontend Xenos / PM4", detail: "Ainda precisa executar draws, shaders e formatos de textura do jogo", icon: "point.3.connected.trianglepath.dotted", tint: XOWUEPalette.yellowLight)
+            runtimeRow("KosmicKrisp · Metal WSI", detail: "Backend Vulkan → Metal usado pela superfície do jogo", icon: "point.3.connected.trianglepath.dotted", tint: XOWUEPalette.blueLight)
 
             VStack(alignment: .leading, spacing: 6) {
-                Text("Build 3 inclui o scheduler PPC para avançar além do primeiro ExCreateThread.")
+                Text("KosmicKrisp permanece como backend gráfico.")
                     .font(.system(size: 13, weight: .bold, design: .rounded))
                     .foregroundStyle(XOWUEPalette.white)
-                Text("O log do Build 2 parou em ExCreateThread (LR 0x82C4C110). O Build 3 adiciona ciclo de vida e contexto por thread, mas ainda precisa ser executado com esta pasta do jogo. A saída Vulkan atual é um clear de diagnóstico; shaders, tiling e draw state Xenos ainda precisam ser traduzidos para mostrar a cena real.")
+                Text("O Build 3 confirmou a swapchain Metal, mas o XEX parou em ObReferenceObjectByHandle antes de iniciar Xenos. O clear de teste saiu da tela inicial; a superfície do jogo abre em tela cheia. A imagem real depende do boot e da tradução dos comandos Xenos.")
                     .font(.system(size: 11))
                     .foregroundStyle(XOWUEPalette.muted)
                     .fixedSize(horizontal: false, vertical: true)

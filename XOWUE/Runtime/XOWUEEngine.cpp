@@ -47,6 +47,13 @@ constexpr uint32_t kXbox360PerformanceFrequency = 50000000u;
 constexpr uint32_t kXamErrorNotFound = 0x80070490u;
 constexpr uint32_t kXamErrorInvalidParameter = 0x80070057u;
 constexpr uint32_t kNtStatusInvalidHandle = 0xC0000008u;
+constexpr uint32_t kNtStatusObjectTypeMismatch = 0xC0000024u;
+constexpr uint32_t kXboxEventObjectType = 0xD00EBEEFu;
+constexpr uint32_t kXboxSemaphoreObjectType = 0xD017BEEFu;
+constexpr uint32_t kXboxThreadObjectType = 0xD01BBEEFu;
+constexpr uint32_t kFirstGuestEventObjectAddress = 0x7E000000u;
+constexpr uint32_t kLastGuestEventObjectAddress = 0x7F000000u;
+constexpr uint32_t kGuestEventObjectStride = 0x1000u;
 constexpr uint32_t kNtStatusTimeout = 0x00000102u;
 constexpr uint32_t kNtStatusCancelled = 0xC0000120u;
 constexpr uint32_t kNtStatusAbandonedWait0 = 0x00000080u;
@@ -97,6 +104,7 @@ struct GuestWaitable {
     enum class Kind { Event, Thread };
     Kind kind = Kind::Event;
     uint32_t handle = 0;
+    uint32_t objectAddress = 0;
     bool manualReset;
     bool signaled;
     std::mutex mutex;
@@ -146,6 +154,7 @@ struct XenosFrontendState {
 
 uint32_t g_nextVirtualAllocation = kFirstVirtualAllocation;
 uint32_t g_nextGuestHandle = 0x100u;
+uint32_t g_nextGuestEventObjectAddress = kFirstGuestEventObjectAddress;
 uint32_t g_nextGuestThreadId = 2u;
 uint32_t g_nextGuestThreadStackTop = kFirstGuestThreadStackTop;
 uint32_t g_nextGuestThreadObjectAddress = kFirstGuestThreadObjectAddress;
@@ -177,6 +186,8 @@ std::mutex g_waitSetMutex;
 std::mutex g_xenosMutex;
 std::condition_variable g_waitSetChanged;
 std::unordered_map<uint32_t, std::shared_ptr<GuestWaitable>> g_guestWaitables;
+std::unordered_map<uint32_t, uint32_t> g_guestObjectReferences;
+std::unordered_map<uint32_t, std::shared_ptr<GuestWaitable>> g_guestReferencedWaitables;
 std::unordered_map<uint32_t, std::shared_ptr<GuestThread>> g_guestThreadsByHandle;
 std::unordered_map<uint32_t, std::shared_ptr<GuestThread>> g_guestThreadsByObject;
 std::shared_ptr<GuestThread> g_mainGuestThread;
@@ -298,12 +309,22 @@ uint32_t allocateGuestHandle() {
     return g_nextGuestHandle++;
 }
 
+uint32_t allocateGuestEventObjectAddress() {
+    std::lock_guard<std::mutex> lock(g_guestObjectMutex);
+    if (g_nextGuestEventObjectAddress > kLastGuestEventObjectAddress - kGuestEventObjectStride) return 0;
+    const uint32_t address = g_nextGuestEventObjectAddress;
+    g_nextGuestEventObjectAddress += kGuestEventObjectStride;
+    return address;
+}
+
 std::shared_ptr<GuestWaitable> lookupGuestWaitable(uint32_t handleOrObject) {
     std::lock_guard<std::mutex> lock(g_guestObjectMutex);
     const auto handle = g_guestWaitables.find(handleOrObject);
     if (handle != g_guestWaitables.end()) return handle->second;
     const auto pointer = g_guestPointerWaitables.find(handleOrObject);
     if (pointer != g_guestPointerWaitables.end()) return pointer->second;
+    const auto referenced = g_guestReferencedWaitables.find(handleOrObject);
+    if (referenced != g_guestReferencedWaitables.end()) return referenced->second;
     return nullptr;
 }
 
@@ -880,6 +901,7 @@ extern "C" int xowue_boot_xex(const char *path, char *output, size_t output_capa
         GuestSchedulerSessionGuard schedulerSession;
         g_nextVirtualAllocation = kFirstVirtualAllocation;
         g_nextGuestHandle = 0x100u;
+        g_nextGuestEventObjectAddress = kFirstGuestEventObjectAddress;
         {
             std::lock_guard<std::mutex> stateLock(g_virtualMemoryMutex);
             g_virtualAllocations.clear();
@@ -888,6 +910,8 @@ extern "C" int xowue_boot_xex(const char *path, char *output, size_t output_capa
         {
             std::lock_guard<std::mutex> objectLock(g_guestObjectMutex);
             g_guestWaitables.clear();
+            g_guestObjectReferences.clear();
+            g_guestReferencedWaitables.clear();
             g_guestPointerWaitables.clear();
         }
         {
@@ -924,6 +948,8 @@ extern "C" int xowue_boot_xex(const char *path, char *output, size_t output_capa
         mainThread->startAddress = static_cast<uint32_t>(image.entry_point);
         mainThread->completion = std::make_shared<GuestWaitable>();
         mainThread->completion->kind = GuestWaitable::Kind::Thread;
+        mainThread->completion->handle = mainThread->handle;
+        mainThread->completion->objectAddress = mainThread->objectAddress;
         mainThread->completion->manualReset = true;
         mainThread->completion->signaled = false;
         initializeGuestThreadEnvironment(memory->base, mainThread->objectAddress,
@@ -1071,6 +1097,7 @@ void xowue_ExCreateThread(PPCContext &context, uint8_t *base) {
         return;
     }
     thread->completion->handle = thread->handle;
+    thread->completion->objectAddress = thread->objectAddress;
     g_guestThreadsByHandle[thread->handle] = thread;
     g_guestThreadsByObject[thread->objectAddress] = thread;
     g_guestThreads.push_back(thread);
@@ -1599,6 +1626,7 @@ void xowue_ExTerminateThread(PPCContext &context) {
 void xowue_NtClose(PPCContext &context) {
     const uint32_t handle = context.r3.u32;
     std::shared_ptr<GuestThread> thread = lookupGuestThread(handle);
+    std::shared_ptr<GuestWaitable> waitable = lookupGuestWaitable(handle);
     {
         std::lock_guard<std::mutex> lock(g_guestObjectMutex);
         if (g_guestWaitables.erase(handle) == 0u) {
@@ -1606,7 +1634,11 @@ void xowue_NtClose(PPCContext &context) {
             recordRuntimeTrace("NtClose invalid handle=0x" + std::to_string(handle));
             return;
         }
-        if (thread) g_guestWaitables.erase(thread->objectAddress);
+        if (waitable && waitable->objectAddress != 0u) {
+            g_guestWaitables.erase(waitable->objectAddress);
+        } else if (thread) {
+            g_guestWaitables.erase(thread->objectAddress);
+        }
     }
     if (thread) {
         std::lock_guard<std::mutex> lock(g_guestThreadMutex);
@@ -2020,14 +2052,22 @@ void xowue_NtCreateEvent(PPCContext &context, uint8_t *base) {
         recordRuntimeTrace("NtCreateEvent handle space exhausted");
         return;
     }
+    const uint32_t objectAddress = allocateGuestEventObjectAddress();
+    if (objectAddress == 0u) {
+        context.r3.u32 = kNtStatusNoMemory;
+        recordRuntimeTrace("NtCreateEvent guest object range exhausted");
+        return;
+    }
     auto waitable = std::make_shared<GuestWaitable>();
     waitable->kind = GuestWaitable::Kind::Event;
     waitable->handle = handle;
+    waitable->objectAddress = objectAddress;
     waitable->manualReset = eventType == 0u;
     waitable->signaled = initialState != 0u;
     {
         std::lock_guard<std::mutex> lock(g_guestObjectMutex);
         g_guestWaitables[handle] = waitable;
+        g_guestWaitables[objectAddress] = waitable;
     }
     if (handlePointer != 0u) PPC_STORE_U32(handlePointer, handle);
     context.r3.u32 = kNtStatusSuccess;
@@ -2037,6 +2077,121 @@ void xowue_NtCreateEvent(PPCContext &context, uint8_t *base) {
                   handle, eventType, eventType == 0u ? 1u : 0u, initialState != 0u ? 1u : 0u,
                   objectAttributes != 0 ? 1u : 0u);
     recordRuntimeTrace(event);
+}
+
+
+void xowue_ObReferenceObjectByHandle(PPCContext &context, uint8_t *base) {
+    const uint32_t handle = context.r3.u32;
+    const uint32_t objectType = context.r4.u32;
+    const uint32_t outputPointer = context.r5.u32;
+    if (!base || (outputPointer != 0u &&
+                  outputPointer > kGuestAddressSpaceSize - sizeof(uint32_t))) {
+        context.r3.u32 = kNtStatusInvalidParameter;
+        recordRuntimeTrace("ObReferenceObjectByHandle rejected output pointer");
+        return;
+    }
+
+    const std::shared_ptr<GuestThread> thread = lookupGuestThread(handle);
+    const std::shared_ptr<GuestWaitable> waitable =
+        thread ? thread->completion : lookupGuestWaitable(handle);
+    if (!waitable) {
+        context.r3.u32 = kNtStatusInvalidHandle;
+        recordRuntimeTrace("ObReferenceObjectByHandle invalid handle=0x" + [&] {
+            char value[16];
+            std::snprintf(value, sizeof(value), "%08X", handle);
+            return std::string(value);
+        }());
+        return;
+    }
+
+    const bool isThread = waitable->kind == GuestWaitable::Kind::Thread;
+    const uint32_t objectAddress = thread ? thread->objectAddress : waitable->objectAddress;
+    if (objectAddress == 0u) {
+        context.r3.u32 = kNtStatusInvalidHandle;
+        recordRuntimeTrace("ObReferenceObjectByHandle object has no guest address");
+        return;
+    }
+    const bool knownEventType = objectType == kXboxEventObjectType;
+    const bool knownThreadType = objectType == kXboxThreadObjectType;
+    const bool knownSemaphoreType = objectType == kXboxSemaphoreObjectType;
+    if ((knownEventType && isThread) || (knownThreadType && !isThread) ||
+        knownSemaphoreType) {
+        context.r3.u32 = kNtStatusObjectTypeMismatch;
+        recordRuntimeTrace("ObReferenceObjectByHandle object type mismatch");
+        return;
+    }
+
+    {
+        std::lock_guard<std::mutex> lock(g_guestObjectMutex);
+        ++g_guestObjectReferences[objectAddress];
+        g_guestReferencedWaitables[objectAddress] = waitable;
+    }
+    if (outputPointer != 0u) PPC_STORE_U32(outputPointer, objectAddress);
+    context.r3.u32 = kNtStatusSuccess;
+    char event[184];
+    std::snprintf(event, sizeof(event),
+                  "ObReferenceObjectByHandle handle=0x%08X type=0x%08X object=0x%08X kind=%s typeCheck=%s",
+                  handle, objectType, objectAddress, isThread ? "Thread" : "Event",
+                  (knownEventType || knownThreadType || knownSemaphoreType || objectType == 0u)
+                      ? "recognized" : "opaque-export");
+    recordRuntimeTrace(event);
+}
+
+void xowue_ObDereferenceObject(PPCContext &context) {
+    const uint32_t objectAddress = context.r3.u32;
+    bool knownReference = false;
+    bool releasedFinalReference = false;
+    {
+        std::lock_guard<std::mutex> lock(g_guestObjectMutex);
+        const auto reference = g_guestObjectReferences.find(objectAddress);
+        if (reference != g_guestObjectReferences.end()) {
+            knownReference = true;
+            if (reference->second > 1u) {
+                --reference->second;
+            } else {
+                g_guestObjectReferences.erase(reference);
+                g_guestReferencedWaitables.erase(objectAddress);
+                releasedFinalReference = true;
+            }
+        }
+    }
+    context.r3.u32 = 0u;
+    recordRuntimeTrace(std::string("ObDereferenceObject object=0x") + [&] {
+        char value[16];
+        std::snprintf(value, sizeof(value), "%08X", objectAddress);
+        return std::string(value);
+    }() + (releasedFinalReference ? " released final reference" :
+           knownReference ? " released reference" : " untracked reference ignored"));
+}
+
+void xowue_ObOpenObjectByPointer(PPCContext &context, uint8_t *base) {
+    const uint32_t objectAddress = context.r3.u32;
+    const uint32_t outputPointer = context.r4.u32;
+    if (!base || outputPointer == 0u ||
+        outputPointer > kGuestAddressSpaceSize - sizeof(uint32_t)) {
+        context.r3.u32 = kNtStatusInvalidParameter;
+        recordRuntimeTrace("ObOpenObjectByPointer rejected output pointer");
+        return;
+    }
+
+    const std::shared_ptr<GuestThread> thread = lookupGuestThread(objectAddress);
+    const std::shared_ptr<GuestWaitable> waitable =
+        thread ? thread->completion : lookupGuestWaitable(objectAddress);
+    const uint32_t handle = thread ? thread->handle : (waitable ? waitable->handle : 0u);
+    if (handle == 0u) {
+        context.r3.u32 = kNtStatusUnsuccessful;
+        recordRuntimeTrace("ObOpenObjectByPointer unknown guest object");
+        return;
+    }
+
+    {
+        std::lock_guard<std::mutex> lock(g_guestObjectMutex);
+        g_guestWaitables[handle] = waitable;
+        g_guestWaitables[objectAddress] = waitable;
+    }
+    PPC_STORE_U32(outputPointer, handle);
+    context.r3.u32 = kNtStatusSuccess;
+    recordRuntimeTrace("ObOpenObjectByPointer returned existing guest handle");
 }
 
 void xowue_XexCheckExecutablePrivilege(PPCContext &context) {

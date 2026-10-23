@@ -9,7 +9,7 @@
 
 ## Situação desta entrega
 
-O runner e o app foram atualizados para Build 3. A compilação host completa do engine passou com Clang 18: as 344 unidades PPC, o mapa de funções, os adapters e XOWUEHostSmoke compilaram e ligaram. O ambiente local não tem Xcode nem SDK iOS; a validação de arm64, compilação Metal/Vulkan e IPA é feita pela Action acima.
+A Action #13, commit 32df212, produziu o IPA Build 3. O teste no iPhone validou XEX2 e inicialização do KosmicKrisp/Metal WSI, mas o boot parou em ObReferenceObjectByHandle (LR 0x82C40080), depois de criar a thread PPC. O relatório registra engines=not-initialized e VdSwap=0: o título nunca chegou ao frontend gráfico. A nova revisão implementa as operações de referência e abertura de objetos usadas por esse caminho.
 
 O número que aparece no app vem de CFBundleVersion. A Action conta somente execuções bem-sucedidas do workflow após Build 1; falhas e tentativas não consomem build. Build 1 foi a execução #8 e Build 2 a #11. A execução #12, no commit acima, deve produzir Build 3 se terminar com sucesso. Atualize esta seção com o resultado final e o hash do IPA depois da Action.
 
@@ -44,7 +44,7 @@ Esse código compilou no host, mas ainda precisa ser exercitado com o default.xe
 
 Os patches 0001 e 0002 e o smoke source usados aqui correspondem aos mesmos blobs preservados na branch PsTJohn, commit mais recente consultado db014165eb39429ae37d1946db6fc83c600c63b3. O workflow fixa Mesa em bfe063f723d436e5cdef8a98f058d4e44a64810c, aplica os patches iOS/Metal WSI e compila libkk.a e libvulkan_wsi.a para arm64.
 
-iOS/App/XOWUEVulkanBackend.m cria o ICD KosmicKrisp, uma surface CAMetalLayer, device, swapchain e apresenta clears Vulkan. O backend pausa/recria a swapchain em transições de background/foreground e escreve eventos com o número do build. Esse quadro de clear prova apenas a cadeia Vulkan → Metal; ele não é um frame do jogo.
+iOS/App/XOWUEVulkanBackend.m cria o ICD KosmicKrisp, uma surface CAMetalLayer, device e swapchain, preservando KosmicKrisp como backend. O quadro de clear era apenas um smoke test redundante com a validação já feita em PsTJon/PoPTST; saiu da tela inicial e agora a surface é a viewport em tela cheia. Até haver tradução Xenos, o fundo fica preto e não é apresentado como imagem do jogo.
 
 O runtime tem handlers iniciais Vd*, estado de modo de vídeo, validação limitada de comandos PM4 e um marcador VdSwap que chega ao backend. Ainda falta consumir o ring buffer real do jogo, traduzir registradores/estado de draw, shaders e formatos/tiling de textura Xenos para Vulkan. O painel do app deve continuar descrevendo isso como trabalho incompleto até existir imagem real do XEX.
 
@@ -93,7 +93,7 @@ O workflow da Action executa a compilação iOS arm64, gera o projeto com XcodeG
 
 ## Continuidade do trabalho
 
-1. Baixar os dois logs da Build 3 e seguir o primeiro import/endereço em que o XEX parar; implementar e testar essa API antes de ampliar os stubs.
+1. Testar no iPhone as novas APIs ObReferenceObjectByHandle, ObDereferenceObject e ObOpenObjectByPointer e seguir o próximo import ou endereço em que o XEX parar, usando os logs da build instalada.
 2. Fazer o runtime consumir a sequência real PM4 do título e preservar contexto de GPU entre chamadas. Adicionar captura de registradores, draw/event packets, formatos e endereços de textura aos logs.
 3. Implementar a tradução de shaders Xenos e formatos/tiling de textura e enviar draws Vulkan para a swapchain. Verificar primeiro um draw de teste derivado do estado observado e depois o frame do jogo.
 4. Continuar kernel/XAM, heap, MMIO, XMA/áudio, entrada e acesso aos arquivos WGame a partir dos erros reproduzíveis.

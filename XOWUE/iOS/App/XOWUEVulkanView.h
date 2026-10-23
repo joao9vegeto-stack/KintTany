@@ -2,8 +2,8 @@
 
 NS_ASSUME_NONNULL_BEGIN
 
-/// iOS CAMetalLayer host for the KosmicKrisp Vulkan/Metal WSI backend.
-/// It currently renders an explicit diagnostic clear frame, not an Xenos scene.
+/// Full-screen iOS game viewport backed by KosmicKrisp Vulkan/Metal WSI.
+/// The runtime must translate Xenos draws before a game frame can appear.
 @interface XOWUEVulkanView : UIView
 @end
 
