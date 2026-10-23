@@ -716,6 +716,7 @@ for symbol in ("_cellSpursCreateTaskset2", "_cellSpursCreateTask2",
                "_cellSpursJoinTask2", "_cellSpursTryJoinTask2",
                "_cellSpursResetAscensionMetrics", "_cellSpursCopyAscensionMetrics",
                "_cellSpursCopyAscensionPmDiagnostics",
+               "_spurs_pm_build_context",
                "_cellSpursInitializeWithAttribute2",
                "_cellSpursLFQueuePushBody", "_cellSpursGetWorkloadFlag",
                "__cellSpursWorkloadFlagReceiver", "_spurs_workload_flag_take",
@@ -737,7 +738,7 @@ for symbol in ("_gowa_spu_register_c8_wws_pm",
                "_wws_pm_c8d774_spu_recomp_register"):
     if not any(symbol in name for name in defined):
         raise SystemExit("M7.90 exact NPUA WWS job lift/C8 PM or runtime routing missing from final Mach-O: "+symbol)
-print("M7.99 final ARM64 Mach-O contains SPURS workload-flag dispatch, the guest callback dispatcher, 31 NPUA WWS lifts, PIC registration, and the SPU interpreter fallback")
+print("M8.00 final ARM64 Mach-O contains the SPURS task-context builder, taskset workload-id parity, 31 NPUA WWS lifts, PIC registration, and the SPU interpreter fallback")
 PYM772LINKED
 # Every M7.62 native function must appear in the FINAL Mach-O, not merely object.
 python3 - <<'PY'
@@ -1071,5 +1072,5 @@ shasum -a 256 AscensionRecompProbe-0.6.22-unsigned.ipa > m41-ipa-sha256.txt
 cp AscensionRecompProbe-0.6.22-unsigned.ipa AscensionRecompProbe-7.69.0-unsigned.ipa
 IPA_VERSION=$(/usr/libexec/PlistBuddy -c 'Print CFBundleShortVersionString' "$APP/Info.plist")
 cp AscensionRecompProbe-0.6.22-unsigned.ipa "AscensionRecompProbe-${IPA_VERSION}-unsigned.ipa"
-shasum -a 256 "AscensionRecompProbe-${IPA_VERSION}-unsigned.ipa" > m799-ipa-sha256.txt
+shasum -a 256 "AscensionRecompProbe-${IPA_VERSION}-unsigned.ipa" > m800-ipa-sha256.txt
 echo 'UNSIGNED DIAGNOSTIC APP: UIKit CAMetalLayer + real PS3Recomp Metal backend; NO GOWA GAME included' > m41-status.txt

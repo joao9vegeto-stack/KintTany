@@ -28,6 +28,7 @@ LWCOND_SEMANTICS_MARKER = "ASCENSION_M791_LWCOND_SIGNAL_WAIT_V1"
 REPORT_HOLD_MARKER = "ASCENSION_M798_GCM_REPORT_SPU_HOLD_V1"
 TASK_ACTIVITY_MARKER = "ASCENSION_M798_SPURS_TASK_ACTIVITY_V1"
 WORKLOAD_FLAG_MARKER = "ASCENSION_M799_SPURS_WORKLOAD_FLAG_V1"
+TASKSET_WID_MARKER = "ASCENSION_M800_TASKSET_CURRENT_WORKLOAD_V1"
 
 
 def run(argv: list[str], *, capture: bool = False) -> str:
@@ -859,6 +860,35 @@ int spurs_workload_flag_take(u32 ea, u32 wid)
     path.write_text(source)
 
 
+def apply_taskset_context_workload_id(upstream: pathlib.Path) -> None:
+    """Match the US port's taskset context ABI for SPU task-library fast paths.
+
+    Its lifted SPU task library reads the active workload id from LS +0x1DC.
+    The pinned iOS runtime built the surrounding context but left this word
+    zero, so task APIs could reject/park work even though a WWS PM was admitted.
+    """
+    path = upstream / "libs/spurs/spurs_pm.c"
+    source = path.read_text(errors="replace")
+    assignment = "LS_BE32(0x1DC, vm_read32(taskset_ea + CSTS_WID));"
+    if TASKSET_WID_MARKER in source:
+        if assignment not in source:
+            raise SystemExit("partial M8.00 taskset workload-id context patch")
+        return
+
+    anchor = "    LS_BE32(STC_DMA_TAG_ID,   dmaTagId);\n"
+    if source.count(anchor) != 1:
+        raise SystemExit("M8.00 cannot locate the SPURS taskset context header")
+    replacement = anchor + (
+        "    /* " + TASKSET_WID_MARKER + "\n"
+        "     * The US GoWA runtime writes the taskset's workload id into the\n"
+        "     * SPU task-library kernel context. The library uses LS +0x1DC to\n"
+        "     * validate task API calls and route workload-scoped signals. */\n"
+        "    " + assignment + "\n"
+    )
+    source = source.replace(anchor, replacement, 1)
+    path.write_text(source)
+
+
 def apply_job_dispatch_metrics(upstream: pathlib.Path) -> None:
     """Measure actual game job dispatches separately from WWS PM admissions."""
     path = upstream / "runtime/spu/spu_workload.c"
@@ -1604,6 +1634,7 @@ def main() -> int:
     apply_patch(upstream, patch_dir / "ps3recomp-0020-spurs2-32-workloads.patch",
                 ((spurs_source, WORKLOADS_MARKER), (policy_source, WORKLOADS_MARKER)),
                 zero_context=True)
+    apply_taskset_context_workload_id(upstream)
     apply_pm_resolution_diagnostics(upstream)
     apply_requested_pm_capture(upstream)
     apply_ascension_wws_policy(upstream)
@@ -1635,6 +1666,8 @@ def main() -> int:
         "libs/spurs/cellSpurs.h": ("cellSpursCreateTask2", "cellSpursJoinTask2",
                                    "cellSpursTasksetGetSpursAddress", "_cellSpursLFQueuePushBody",
                                    "cellSpursGetWorkloadFlag", "_cellSpursWorkloadFlagReceiver"),
+        "libs/spurs/spurs_pm.c": (TASKSET_WID_MARKER,
+                                  "LS_BE32(0x1DC, vm_read32(taskset_ea + CSTS_WID));"),
         "runtime/spu/spu_workload.c": ("spu_taskset_set_running", "spu_taskset_track",
                                        "spu_signal_parked_on_line", JOB_METRICS_MARKER,
                                        "spu_workload_copy_ascension_job_metrics",
@@ -1664,7 +1697,7 @@ def main() -> int:
         missing = [needle for needle in needles if needle not in text]
         if missing:
             raise SystemExit(f"M7.83 PS3Recomp SPURS2 patch incomplete in {filename}: {missing}")
-    print("M7.99 applies the Ascension workload-flag receiver and scheduler protocol")
+    print("M8.00 applies US Ascension taskset workload-id ABI parity to the SPU runtime")
     return 0
 
 
