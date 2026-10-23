@@ -14,6 +14,8 @@ from pathlib import Path
 
 
 MARKER = "ASCENSION_M793_SPU_PIC_RUNTIME_V1"
+WWS_INTERP_MARKER = "ASCENSION_M795_WWS_INTERPRETER_FALLBACK_V1"
+INTERP_SLICE_MARKER = "ASCENSION_M795_SPU_INTERPRETER_SLICE_V1"
 
 PIC_MATCH = r'''/* ASCENSION_M793_SPU_PIC_RUNTIME_V1 */
 #ifndef SPU_PIC_MATCH_H
@@ -212,6 +214,55 @@ def patch(upstream: Path) -> None:
                             "    spu_pic_capture(ctx);\n" + microstep_anchor, 1)
         source.write_text(text)
 
+    # The PC port enables SPU_INTERP_UNLIFTED for generated/copy-relocated
+    # code. In the pinned runtime, the env-gated whole-image fallback excludes
+    # policy contexts. A WWS policy miss therefore reaches the limited SMC
+    # microstep path first; route that miss through the same full interpreter
+    # when opted in, after native/PIC lookups have failed.
+    text = source.read_text()
+    if WWS_INTERP_MARKER not in text:
+        anchor = "    spu_pic_capture(ctx);\n    if (spu_smc_microstep(ctx))\n        return;"
+        fallback = r'''    spu_pic_capture(ctx);
+    /* ASCENSION_M795_WWS_INTERPRETER_FALLBACK_V1
+     * Ascension's WWS policy generates small SPU stubs in LS at runtime. The
+     * generic SPU_INTERP_UNLIFTED branch excludes policy_mode, so an unresolved
+     * WWS instruction otherwise reaches only the partial SMC microstep path.
+     * Keep static lifts and exact-byte PIC lifts first; interpret the remaining
+     * nonzero WWS instruction stream until it reaches a lifted function, stop,
+     * or this host call's return PC. */
+    if (!fn && ctx->policy_mode && spu_workload_is_wws_pm_image(ctx->image_id)) {
+        static int s_wws_interp = -1;
+        int interp = __atomic_load_n(&s_wws_interp, __ATOMIC_ACQUIRE);
+        if (interp < 0) {
+            const char* e = getenv("SPU_INTERP_UNLIFTED");
+            interp = e && *e != '0';
+            __atomic_store_n(&s_wws_interp, interp, __ATOMIC_RELEASE);
+        }
+        const uint32_t p = ctx->pc & SPU_LS_MASK & ~3u;
+        const uint32_t w0 = ((uint32_t)ctx->ls[p] << 24) |
+                            ((uint32_t)ctx->ls[p + 1] << 16) |
+                            ((uint32_t)ctx->ls[p + 2] << 8) | ctx->ls[p + 3];
+        if (interp && w0) {
+            const uint32_t return_pc = ctx->drain_ret_pc;
+            uint32_t result = spu_interp_run_until_budget(ctx, p, return_pc, 4096);
+            if (ctx->status & SPU_STATUS_RUNNING) {
+                if (!return_pc || (ctx->pc & SPU_LS_MASK) != return_pc)
+                    g_spu_trampoline_fn = spu_indirect_branch;
+            }
+            /* The budget returns at a lift, stop, caller return, or after
+             * 4096 instructions. Re-enter through the trampoline on a live
+             * WWS PC so long guest routines remain resumable and bounded. */
+            (void)result;
+            return;
+        }
+    }
+    if (spu_smc_microstep(ctx))
+        return;'''
+        if text.count(anchor) != 1:
+            raise SystemExit("cannot anchor complete interpreter fallback for WWS policy misses")
+        text = text.replace(anchor, fallback, 1)
+        source.write_text(text)
+
     # Fail closed if a later upstream edit causes the runtime patch to land
     # incompletely: the app-side opt-in would otherwise look enabled but never
     # be consumed by this build.
@@ -221,8 +272,59 @@ def patch(upstream: Path) -> None:
                 "spu_interp_run(ctx, p)")
     missing = [needle for needle in required
                if needle not in context_text and needle not in source_text]
+    if WWS_INTERP_MARKER not in source_text:
+        missing.append(WWS_INTERP_MARKER)
     if missing:
         raise SystemExit(f"incomplete SPU interpreter/PIC runtime patch: {missing}")
+
+    interp_header = upstream / "runtime/spu/spu_interp.h"
+    interp_source = upstream / "runtime/spu/spu_interp.c"
+    if not interp_header.is_file() or not interp_source.is_file():
+        raise SystemExit(f"missing PS3Recomp SPU interpreter sources: {upstream}")
+
+    # WWS interpretation yields to the existing trampoline after a fixed
+    # instruction quantum. The caller preserves the live PC/register state and
+    # resumes from there, so long dynamic routines do not monopolize one host
+    # call or grow the host stack.
+    interp_text = interp_source.read_text()
+    if INTERP_SLICE_MARKER not in interp_text:
+        function_anchor = "uint32_t spu_interp_run_until(spu_context* ctx, uint32_t start_lsa, uint32_t stop_lsa) {"
+        function_replacement = '''uint32_t spu_interp_run_until(spu_context* ctx, uint32_t start_lsa, uint32_t stop_lsa) {
+    return spu_interp_run_until_budget(ctx, start_lsa, stop_lsa, 0);
+}
+
+/* ASCENSION_M795_SPU_INTERPRETER_SLICE_V1 */
+uint32_t spu_interp_run_until_budget(spu_context* ctx, uint32_t start_lsa,
+                                     uint32_t stop_lsa, uint64_t step_budget) {'''
+        if interp_text.count(function_anchor) != 1:
+            raise SystemExit("cannot anchor bounded SPU interpreter in spu_interp.c")
+        interp_text = interp_text.replace(function_anchor, function_replacement, 1)
+        rejoin_anchor = "        if (ctx->image_id >= 0 && ((stop_lsa && ctx->pc == stop_lsa) || spu_lifted_lookup(ctx, ctx->pc))) { g_spu_interp_steps = steps; g_spu_interp_last_pc = ctx->pc; return ctx->pc; }  /* rejoin fast path */"
+        budget_check = rejoin_anchor + '''
+        if (step_budget && steps >= step_budget) {
+            g_spu_interp_steps = steps;
+            g_spu_interp_last_pc = ctx->pc;
+            return ctx->pc;
+        }'''
+        if interp_text.count(rejoin_anchor) != 1:
+            raise SystemExit("cannot anchor SPU interpreter instruction budget")
+        interp_text = interp_text.replace(rejoin_anchor, budget_check, 1)
+        interp_source.write_text(interp_text)
+
+    header_text = interp_header.read_text()
+    budget_declaration = "uint32_t spu_interp_run_until_budget(spu_context* ctx, uint32_t start_lsa, uint32_t stop_lsa, uint64_t step_budget);"
+    if budget_declaration not in header_text:
+        header_anchor = "uint32_t spu_interp_run_until(spu_context* ctx, uint32_t start_lsa, uint32_t stop_lsa);"
+        if header_text.count(header_anchor) != 1:
+            raise SystemExit("cannot anchor bounded SPU interpreter declaration")
+        header_text = header_text.replace(
+            header_anchor,
+            header_anchor + "\n/* Budgeted variant returns with live state after at most step_budget instructions (0 = unlimited). */\n" + budget_declaration,
+            1)
+        interp_header.write_text(header_text)
+
+    if INTERP_SLICE_MARKER not in interp_source.read_text():
+        raise SystemExit("bounded SPU interpreter patch did not apply")
 
 
 def main() -> None:
@@ -230,7 +332,7 @@ def main() -> None:
     parser.add_argument("upstream", type=Path)
     args = parser.parse_args()
     patch(args.upstream.resolve())
-    print("M7.94 SPU unlifted interpreter and PIC capture/dispatch runtime enabled")
+    print("M7.95 full WWS SPU interpreter and PIC capture/dispatch runtime enabled")
 
 
 if __name__ == "__main__":

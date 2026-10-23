@@ -9,7 +9,7 @@ on:
   workflow_dispatch:
     inputs:
       run_id:
-        description: Successful AscensionRecomp M7.94.0 build run ID
+        description: Successful AscensionRecomp M7.95.0 build run ID
         required: true
         type: string
 
@@ -53,7 +53,7 @@ jobs:
             });
             if (run.head_branch !== "AscensionRecomp" ||
                 run.path !== ".github/workflows/ascension-recomp-m0.yml") {
-              throw new Error("Source run is not an AscensionRecomp M7.94 build");
+              throw new Error("Source run is not an AscensionRecomp M7.95 build");
             }
             if (run.conclusion === "success") return;
             if (run.conclusion !== "cancelled") {
@@ -68,9 +68,9 @@ jobs:
               })
             ]);
             const finalIPA = jobs.jobs.flatMap(j => j.steps || []).find(s =>
-              s.name === "Publish M7.94 iOS IPA and SPU fallback sources" && s.conclusion === "success");
+              s.name === "Publish M7.95 iOS IPA and SPU fallback sources" && s.conclusion === "success");
             const artifact = artifacts.artifacts.find(a =>
-              a.name === "AscensionRecomp-M7.94.0-LAUNCHER-ARM64" && !a.expired);
+              a.name === "AscensionRecomp-M7.95.0-LAUNCHER-ARM64" && !a.expired);
             if (!finalIPA || !artifact) {
               throw new Error("Cancelled run lacks its successful final IPA step or live IPA artifact");
             }
@@ -79,7 +79,7 @@ jobs:
         if: github.event_name == 'workflow_dispatch' || steps.selected-run.outputs.mode == 'publish'
         uses: actions/download-artifact@v4
         with:
-          name: AscensionRecomp-M7.94.0-LAUNCHER-ARM64
+          name: AscensionRecomp-M7.95.0-LAUNCHER-ARM64
           github-token: ${{ github.token }}
           repository: ${{ github.repository }}
           run-id: ${{ inputs.run_id || steps.selected-run.outputs.value }}
@@ -93,7 +93,7 @@ jobs:
           SOURCE_RUN_ID: ${{ inputs.run_id || steps.selected-run.outputs.value }}
         run: |
           set -euo pipefail
-          ipa="$(find delivery -type f -name 'AscensionRecompProbe-7.94.0-unsigned.ipa' -print -quit)"
+          ipa="$(find delivery -type f -name 'AscensionRecompProbe-7.95.0-unsigned.ipa' -print -quit)"
           test -n "$ipa"
           python3 - "$ipa" <<'PY'
           import sys, zipfile
@@ -103,7 +103,7 @@ jobs:
                          for n in z.namelist())
           PY
           # TempFile serves a direct application/octet-stream attachment and expires after 1 hour.
-          ipa_name="AscensionRecomp-7.94.0.ipa"
+          ipa_name="AscensionRecomp-7.95.0.ipa"
           ipa_sha="$(shasum -a 256 "$ipa" | awk '{print $1}')"
           curl --fail --silent --show-error --retry 3 \
             -F "files=@${ipa};filename=${ipa_name};type=application/octet-stream" \
@@ -115,7 +115,7 @@ jobs:
           data=json.loads(pathlib.Path(sys.argv[1]).read_text())
           assert data.get('success') is True,data
           f=data['files'][0]
-          assert f['name']=='AscensionRecomp-7.94.0.ipa',f
+          assert f['name']=='AscensionRecomp-7.95.0.ipa',f
           assert f['size']==pathlib.Path(sys.argv[2]).stat().st_size,f
           assert f.get('expiryTime'),f
           print(f['id'])
@@ -128,7 +128,7 @@ jobs:
             "$ipa_url" -o /dev/null
           grep -Eiq 'content-type: application/octet-stream' \
             "$RUNNER_TEMP/ipa-download-headers.txt"
-          grep -Fqi 'content-disposition: attachment; filename="AscensionRecomp-7.94.0.ipa"' \
+          grep -Fqi 'content-disposition: attachment; filename="AscensionRecomp-7.95.0.ipa"' \
             "$RUNNER_TEMP/ipa-download-headers.txt"
           ipa_bytes="$(stat -c%s "$ipa")"
           grep -Eiq "content-length: ${ipa_bytes}" "$RUNNER_TEMP/ipa-download-headers.txt"
@@ -153,7 +153,7 @@ jobs:
             const {data} = await github.rest.actions.listWorkflowRunArtifacts({
               owner: context.repo.owner, repo: context.repo.repo, run_id: runId, per_page: 100
             });
-            const artifact = data.artifacts.find(a => a.name === "AscensionRecomp-M7.94.0-LAUNCHER-ARM64");
+            const artifact = data.artifacts.find(a => a.name === "AscensionRecomp-M7.95.0-LAUNCHER-ARM64");
             if (artifact) {
               await github.rest.actions.deleteArtifact({owner: context.repo.owner, repo: context.repo.repo, artifact_id: artifact.id});
               core.notice("Deleted the duplicate Actions IPA artifact after external upload.");

@@ -449,11 +449,15 @@ def main():
         raise SystemExit("M7.91 correct guest lwcond wait/signal semantics are missing from PS3Recomp")
     channel_runtime=(upstream/"runtime/spu/spu_channels.c").read_text(errors="replace")
     spu_context=(upstream/"runtime/spu/spu_context.h").read_text(errors="replace")
+    spu_interpreter=(upstream/"runtime/spu/spu_interp.c").read_text(errors="replace")
     if ("ASCENSION_M793_SPU_PIC_RUNTIME_V1" not in channel_runtime or
-            "spu_interp_run(ctx, p)" not in channel_runtime or
+            "ASCENSION_M795_WWS_INTERPRETER_FALLBACK_V1" not in channel_runtime or
+            "ASCENSION_M795_SPU_INTERPRETER_SLICE_V1" not in spu_interpreter or
+            "spu_workload_is_wws_pm_image(ctx->image_id)" not in channel_runtime or
+            "spu_interp_run_until_budget(ctx, p, return_pc, 4096)" not in channel_runtime or
             "spu_pic_lookup(ctx)" not in channel_runtime or
             "void spu_pic_register" not in spu_context):
-        raise SystemExit("M7.94 unlifted SPU interpreter/PIC runtime patch is missing")
+        raise SystemExit("M7.95 full WWS SPU interpreter/PIC runtime patch is missing")
     registry_source=(repo/"runtime/m772-npua-spu/spu_workloads.c").read_text(errors="replace")
     if "0xCE052ACDA7412063ULL" not in registry_source:
         raise SystemExit("M7.89 NPUA source WWS PM fingerprint is not registered")
