@@ -269,6 +269,7 @@ jobs:
             echo "XOWUE AOT aliases must not use weak linkage" >&2
             exit 1
           fi
+          python3 "$GITHUB_WORKSPACE/tools/patch_xowue_aot_symbols.py" --ppc-dir "$GITHUB_WORKSPACE/generated/ppc"
           echo "XENONRECOMP_ROOT=$RUNNER_TEMP/XenonRecomp" >> "$GITHUB_ENV"
 
       - name: Build arm64 AOT engine
@@ -332,12 +333,7 @@ jobs:
           test -f "$APP/ThirdPartyLicenses/XenonRecomp-LICENSE.md"
           test -f "$APP/ThirdPartyLicenses/Mesa/licenses/MIT"
           lipo "$APP/XOWUE" -verify_arch arm64
-          unresolved_aot="$(nm -u "$APP/XOWUE" | grep -E 'sub_[0-9A-Fa-f]{8}' || true)"
-          if [ -n "$unresolved_aot" ]; then
-            echo "$unresolved_aot" >&2
-            echo "IPA contains unresolved AOT guest-function symbols" >&2
-            exit 1
-          fi
+          python3 "$GITHUB_WORKSPACE/tools/verify_xowue_aot_symbols.py" "$APP/XOWUE"
           lipo "$APP/Frameworks/libvulkan_kosmickrisp.dylib" -verify_arch arm64
           otool -L "$APP/XOWUE" | grep -F "@rpath/libvulkan_kosmickrisp.dylib"
           python3 - "$APP/Info.plist" "$XOWUE_BUILD_NUMBER" <<'PY'
