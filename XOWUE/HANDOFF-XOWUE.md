@@ -9,6 +9,16 @@
 
 ## Estado atual
 
+### Build 2 — resultado confirmado (23/10/2026)
+
+- Commit que gerou o Build 2: `ef03f1238b203eab70f637b04a2714fc633ef27b`.
+- GitHub Actions run #11, ID `39897706560`, concluído com sucesso: [abrir execução](https://github.com/joao9vegeto-stack/KintTany/actions/runs/39897706560).
+- Artifact `XOWUE-Build-2`, ID `12477463507`, 20.692.127 bytes; SHA-256 do ZIP: `ec903c4577aad414726fd63fdb35a2119daab11e0891773ead5bb35fbea2d908`.
+- IPA `XOWUE-Build-2.ipa`: 20.909.754 bytes; SHA-256 `59ccfcfd9b84342ca27aebbbd6866cc68a3297c8d4694b6e522c4b2cde55350a`. O pacote foi verificado como ZIP IPA íntegro, Mach-O arm64, bundle `com.joaopedro.xowue`, `CFBundleVersion=2`, com `Assets.car`, sem assinatura Apple.
+- O CI registrou duas falhas antes do sucesso, sem consumir número de build: run #9 corrigido para usar a lista de execuções do workflow no repositório; run #10 corrigido porque o callback C de exceções Swift capturava contexto. O run #11 compilou o runtime, o app, empacotou e validou o Build 2.
+- O app agora inclui seletor nativo UIKit para pasta ou `default.xex`, biblioteca em `Documents/Jogos`, logs `diagnostico.txt` e `crash.txt` na raiz de Documents, ícone Wolverine refinado e identidade visual em aço/amarelo/azul. O app foi compilado pelo CI; a seleção e o boot ainda precisam de validação física no iPhone.
+- O resultado do smoke continua parando em `ExCreateThread` (LR `0x82C4C110`), antes do menu; não há primeiro frame do jogo. KosmicKrisp está preservado como patches de referência e ainda não está ligado ao app. Isso não é uma build jogável.
+
 ### Recompilação AOT
 
 - Entrada analisada localmente: `default.xex`, 23.052.288 bytes.
@@ -41,7 +51,7 @@
 - O run #7 (ID `39891228913`, commit `257c62275a70e577690137ebe8e6f45c82924f06`) passou pelo XcodeGen e compilou o app SwiftUI. O empacotamento parou porque o workflow não criou o diretório `Payload` no caminho temporário de validação; não houve IPA. A correção cria esse diretório e ajusta a versão para que o run #8 produza **Build 1**. [Run com falha de empacotamento](https://github.com/joao9vegeto-stack/KintTany/actions/runs/39891228913).
 - O run #8 (ID `39891819489`, commit `f4d4ea11f1c211a5628608a6ce1f641731b0063b`) concluiu com sucesso: engine arm64, geração XcodeGen, compilação Swift, Info.plist, arquitetura arm64, Assets.car, tipo `.xex` e validação do IPA. Artifact `XOWUE-Build-1`, ID `12474638929`. [Run do Build 1](https://github.com/joao9vegeto-stack/KintTany/actions/runs/39891819489).
 - IPA: `XOWUE-Build-1.ipa`, 20.356.072 bytes, SHA-256 `d08e7cf391c9712ea80bfe63ad01b82d883af6a10b4d0ae94b53950225a94254`. ZIP do artifact: 20.137.008 bytes, SHA-256 `75312c6ad3aa3ffd2bce5c77e5aec982dbb7365de6e4295740200b82de1ad36d`.
-- IPA entregue: `XOWUE-unsigned.ipa`, 20.024.250 bytes, SHA-256 `ed2d567b87a278317c2d2c61097ec6b1e2502b6ca22e9864620aaa17fe2e791d`. O ZIP do artifact da CI tem SHA-256 `b897a5ce17bc60dd81e4031debfa5a71fd5c46c7515aaba5e763db914bd2e0f9`.
+- Arquivo de IPA usado numa entrega anterior do Build 1: `XOWUE-unsigned.ipa`, 20.024.250 bytes, SHA-256 `ed2d567b87a278317c2d2c61097ec6b1e2502b6ca22e9864620aaa17fe2e791d`. O ZIP do artifact da CI tem SHA-256 `b897a5ce17bc60dd81e4031debfa5a71fd5c46c7515aaba5e763db914bd2e0f9`.
 - A inspeção local confirmou um ZIP IPA íntegro, executável Mach-O de 64 bits arm64, bundle `com.joaopedro.xowue` e versão mínima iOS 17.0. O pacote não contém assinatura Apple.
 
 `iOS/` contém o app SwiftUI, ícone Wolverine e biblioteca local. `Documents` é exposto no Arquivos e recebe `Jogos`, `diagnostico.txt` e `crash.txt` na raiz. O seletor usa `UIDocumentPickerViewController` para abrir uma pasta completa ou `default.xex`; uma pasta externa é copiada para a área local com progresso. O diagnóstico registra busca, escolha, escopo de segurança, importação, inspeção XEX2, boot, resultado nativo e os últimos eventos PPC. `crash.txt` recebe checkpoints de boot e exceções Objective-C; um boot iniciado sem registro final é marcado na próxima abertura. O iOS não oferece aqui um capturador confiável de falhas por sinal nativo.
@@ -56,7 +66,7 @@ Este IPA é um **runner de desenvolvimento**, não uma versão jogável. A execu
 
 O pacote de assets WGame completo não está neste workspace. O repositório não recebe o `default.xex`, assets, DLC, title updates ou arquivos extraídos desses dados. O arquivo AOT contém código derivado do executável fornecido e foi incluído no branch para a CI compilar o engine; não é incluído o executável original.
 
-O IPA `XOWUE-Build-1.ipa` empacotado pela CI é unsigned e não contém perfil Apple. Para instalar em iPhone, configure assinatura Apple compatível (identificador `com.joaopedro.xowue`, certificado e provisioning profile) ou assine localmente com o método de sideload escolhido.
+O IPA `XOWUE-Build-2.ipa` empacotado pela CI é unsigned e não contém perfil Apple. Para instalar em iPhone, configure assinatura Apple compatível (identificador `com.joaopedro.xowue`, certificado e provisioning profile) ou assine localmente com o método de sideload escolhido.
 
 ## Build local (macOS/Linux com Clang 18)
 

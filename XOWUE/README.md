@@ -2,7 +2,8 @@
 
 **Title ID:** `41560816`  
 **Branch:** `XOWUE`  
-**Estado:** runner iOS de desenvolvimento; ainda não chega ao menu nem produz frame do jogo.
+**Estado:** Build 2 confirmado; runner iOS de desenvolvimento; ainda não chega ao menu nem produz frame do jogo.
+**IPA:** `XOWUE-Build-2.ipa`, `CFBundleVersion=2`, arm64, unsigned. [GitHub Actions](https://github.com/joao9vegeto-stack/KintTany/actions/runs/39897706560).
 
 ## O que está neste branch
 
@@ -36,5 +37,8 @@ cmake --build build-runtime-clang --target XOWUEHostSmoke -j2
 ```
 
 ## IPA
+
+Build 2 concluiu no Actions run #11. O app compilou com Build 2 visível por `CFBundleVersion`, mas a pasta/seletor e a execução precisam de teste físico no iPhone. O smoke host ainda para em `ExCreateThread`; não há frame comprovado. Consulte `HANDOFF-XOWUE.md` para hashes, logs e limites completos.
+
 
 `.github/workflows/xowue-ios.yml` cria um IPA unsigned em cada execução bem-sucedida. O número conta somente os builds IPA bem-sucedidos desde o Build 1 (run #8), então uma tentativa falha não pula a numeração. Consulte `HANDOFF-XOWUE.md` para os resultados do Actions, hashes e próximas etapas.
