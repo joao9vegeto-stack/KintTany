@@ -1204,7 +1204,7 @@ static BOOL ARGameManifestHasTitleUsrdir(NSDictionary *manifest){
   [reportRows addArrangedSubview:self.launcherReportLabel];
   [reportRows addArrangedSubview:[self arLauncherButton:@"COPIAR RELATÓRIO COMPLETO" background:[UIColor colorWithWhite:0.15 alpha:1] action:@selector(copyLauncherReport:)]];
   [reportRows addArrangedSubview:[self arLauncherButton:@"COMPARTILHAR / EXPORTAR TXT" background:[UIColor colorWithWhite:0.15 alpha:1] action:@selector(shareLauncherReport:)]];
-  [reportRows addArrangedSubview:[self arLauncherButton:@"EXPORTAR BINÁRIOS SPU AUSENTES" background:[UIColor colorWithWhite:0.15 alpha:1] action:@selector(shareSpuMissCapture:)]];
+  [reportRows addArrangedSubview:[self arLauncherButton:@"EXPORTAR CAPTURAS SPU (MÓDULOS + PIC)" background:[UIColor colorWithWhite:0.15 alpha:1] action:@selector(shareSpuMissCapture:)]];
 
   UIView *gameHUD=[UIView new]; gameHUD.translatesAutoresizingMaskIntoConstraints=NO;
   gameHUD.hidden=YES; gameHUD.backgroundColor=[panel colorWithAlphaComponent:0.92];
@@ -1518,6 +1518,11 @@ static BOOL ARGameManifestHasTitleUsrdir(NSDictionary *manifest){
   setenv("PS3_LFQUEUE_SDK_LAYOUT","1",1);
   /* Ascension's WWS policy keeps readyCount as a level and chooses by SPU. */
   setenv("SPURS_READY_LEVEL","1",1);
+  /* The pinned PS3Recomp runtime already has an SPU interpreter, but its
+   * fallback for real code with no static lift is opt-in. Keep lifted SPU
+   * functions first and interpret only an unresolved code branch, matching
+   * the PC port's default run.sh behavior. */
+  setenv("SPU_INTERP_UNLIFTED","1",1);
   /* Ascension patches its RSX FIFO park after SPU jobs build a frame. Use the
    * same bounded 2 s wait as the PC port; 50 ms can skip commands still being
    * written by the recompiled SPU jobs. */
@@ -1541,6 +1546,12 @@ static BOOL ARGameManifestHasTitleUsrdir(NSDictionary *manifest){
     setenv("SPU_DUMP_MISS",self.latestSpuCaptureURL.path.UTF8String,1);
   else
     unsetenv("SPU_DUMP_MISS");
+  NSURL *picCaptureURL=[self.latestSpuCaptureURL
+      URLByAppendingPathComponent:@"spu-pic-fragments.txt" isDirectory:NO];
+  if(self.latestSpuCaptureURL && !captureError && picCaptureURL)
+    setenv("SPU_PIC_CAPTURE",picCaptureURL.path.UTF8String,1);
+  else
+    unsetenv("SPU_PIC_CAPTURE");
   spu_workload_reset_ascension_job_metrics();
   cellSpursResetAscensionMetrics();
   ar_m772_runtime_begin();
@@ -1788,8 +1799,8 @@ static BOOL ARGameManifestHasTitleUsrdir(NSDictionary *manifest){
         options:NSDirectoryEnumerationSkipsHiddenFiles error:&error] : @[];
     if(!files.count){
       UIAlertController *alert=[UIAlertController alertControllerWithTitle:
-          @"Nenhum PM SPU sem lift capturado"
-          message:error.localizedDescription ?: @"O jogo ainda não submeteu um PM sem associação nativa nesta execução. PMs e jobs são caminhos separados no relatório."
+          @"Nenhuma captura SPU nesta execução"
+          message:error.localizedDescription ?: @"O runtime ainda não encontrou um módulo SPU sem lift nem um branch PIC sem função nativa."
           preferredStyle:UIAlertControllerStyleAlert];
       [alert addAction:[UIAlertAction actionWithTitle:@"OK" style:UIAlertActionStyleCancel handler:nil]];
       [self.window.rootViewController presentViewController:alert animated:YES completion:nil];
@@ -2041,7 +2052,8 @@ static BOOL ARGameManifestHasTitleUsrdir(NSDictionary *manifest){
      "Chamadas de função AOT=%@ · início(s) da entry=%@ · último PC=0x%08llX (entrada AOT mais recente; PC atual da instrução NÃO MEDIDO)\n"
      "SPURS2 · instâncias=%llu · workloads=%llu (%llu IDs 16–31) · PMs encontrados/faltantes=%llu/%llu · admissões do WWS PM=%llu (%llu IDs 16–31) · último wid=%@\n"
      "Jobs de job-chain do título · solicitações=%llu · com lift=%llu · sem lift=%llu · retornos do runner=%llu · ativos=%llu · último FNV=0x%016llX · bytes=%llu · EA=0x%08llX\n"
-     "Captura de módulos ausentes=Documents/%@ · botão EXPORTAR BINÁRIOS SPU AUSENTES\n"
+     "Captura de módulos ausentes=Documents/%@ · fragmentos PIC dinâmicos=Documents/%@/spu-pic-fragments.txt\n"
+     "Fallback SPU: AOT primeiro; interpretação habilitada para branch sem lift · captura PIC habilitada\n"
      "PMs examinados (um registro por wid):\n%@\n"
      "Últimas amostras AOT (1/4096):\n%@\n"
      "Último evento rastreado: LR=0x%08llX · SP=0x%08llX · r3-r6=%08llX/%08llX/%08llX/%08llX\n"
@@ -2088,7 +2100,7 @@ static BOOL ARGameManifestHasTitleUsrdir(NSDictionary *manifest){
      (unsigned long long)spuJobs[2],(unsigned long long)spuJobs[3],
      (unsigned long long)spuJobs[4],(unsigned long long)spuJobs[5],
      (unsigned long long)spuJobs[6],(unsigned long long)spuJobs[7],
-     spuCaptureName,pmDiagnosticsText,aotTraceText,
+     spuCaptureName,spuCaptureName,pmDiagnosticsText,aotTraceText,
      (unsigned long long)live[14],(unsigned long long)live[15],
      (unsigned long long)live[16],(unsigned long long)live[17],
      (unsigned long long)live[18],(unsigned long long)live[19],

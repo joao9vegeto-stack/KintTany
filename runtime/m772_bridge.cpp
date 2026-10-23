@@ -30,6 +30,9 @@ extern "C" void gowa_spu_register_all(void);
 extern "C" void gowa_spu_register_c8_wws_pm(void);
 /* Lifted from the 31 WWS job modules embedded in the matching NPUA ELF. */
 extern "C" void ascension_npua_jobmods_register_all(void);
+/* Runtime-captured position-independent SPU fragments, when lifted from an
+ * exported device capture by tools/m793_lift_spu_pic.py. */
+extern "C" void ascension_spu_pic_register_all(void);
 
 static pthread_once_t m772_once = PTHREAD_ONCE_INIT;
 static uint32_t m772_initialized;
@@ -141,6 +144,7 @@ static void m772_register_all(void)
     gowa_spu_register_all();
     gowa_spu_register_c8_wws_pm();
     ascension_npua_jobmods_register_all();
+    ascension_spu_pic_register_all();
     ppu_fs_ios_reset_stats();
 }
 

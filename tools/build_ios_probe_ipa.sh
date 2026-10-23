@@ -550,7 +550,7 @@ symbols=src/'symbols.txt'
 assert archive.is_file() and attestation.is_file() and symbols.is_file()
 a=json.loads(attestation.read_text())
 digest=hashlib.sha256(archive.read_bytes()).hexdigest()
-assert a['schema']=='ascension-m793-ios-arm64-link-input-v14'
+assert a['schema']=='ascension-m794-ios-arm64-link-input-v15'
 assert a['spu_workload_registry']=='NPUA80918-four-embedded-images-plus-C8-WWS-id6-plus-31-ELF-WWS-overlays-registered-200-230-v1'
 assert a['spurs_ascension_wws_policy']=='tempArea-128-byte-entry-and-poll-refresh-readyCount-level-rotating-spu-v1'
 assert a['spu_workload_registry_units_compiled']==5
@@ -571,6 +571,10 @@ assert a['wws_job_module_data_islands']=={
     'jobmod_00818600_eA00':[['0x83A0','0x8A48']]}
 assert a['wws_job_overlay_registration']=='explicit-m772-runtime-init-no-static-constructor-v1'
 assert a['wws_pm_role_routing']=='registered-name-bitmap-routes-NPUA-image-5-and-C8-image-6-before-WWS-job-dispatch-v1'
+assert a['spu_unlifted_fallback']=='native-lifts-first-interpreter-enabled-by-ios-launcher-v1'
+assert a['spu_pic_capture_and_native_registry']=='runtime-LS-signature-match-capture-export-explicit-native-registration-v1'
+assert a['spu_pic_regions_compiled']>=0
+assert a['spu_pic_registry_units_compiled']==1+a['spu_pic_regions_compiled']
 assert a['c8_wws_lift_source_sha256']=='a3506c57f9e104f502f57add07135b1c0094f25b7debf25d0568ecbce7c293c6'
 assert a['c8_wws_interrupt_entry']=='0xA2C'
 assert a['c8_wws_native_functions']==256
@@ -702,7 +706,8 @@ required=("func_00010410", "func_0052A740", "func_0052E3F4", "_ar_m772_runtime_a
           "_gowa_spu_register_all", "_spu_workload_register_img",
           "_spu_workload_find_img",
           "_wws_pm_npua_spu_func_00000A00",
-          "_wws_pm_npua_spu_recomp_register")
+          "_wws_pm_npua_spu_recomp_register", "_ascension_spu_pic_register_all",
+          "_spu_interp_run", "_spu_pic_register")
 missing=[symbol for symbol in required if not any(symbol in name for name in defined)]
 if missing: raise SystemExit("M7.72 expected AOT definitions missing from final Mach-O: "+str(missing))
 for symbol in ("_cellSpursCreateTaskset2", "_cellSpursCreateTask2",
@@ -721,6 +726,7 @@ for symbol in ("_cellSpursCreateTaskset2", "_cellSpursCreateTask2",
         raise SystemExit("M7.89 required native SPURS PM capture/runtime symbol missing: "+symbol)
 for symbol in ("_gowa_spu_register_c8_wws_pm",
                "_ascension_npua_jobmods_register_all",
+               "_ascension_spu_pic_register_all",
                "_g_spu_wws_pm_image_mask",
                "jobmod_00818600_eA00_spu_func_00004A00",
                "_wws_pm_c8d774_spu_func_00000A00",
@@ -728,7 +734,7 @@ for symbol in ("_gowa_spu_register_c8_wws_pm",
                "_wws_pm_c8d774_spu_recomp_register"):
     if not any(symbol in name for name in defined):
         raise SystemExit("M7.90 exact NPUA WWS job lift/C8 PM or runtime routing missing from final Mach-O: "+symbol)
-print("M7.93 final ARM64 Mach-O contains 31 NPUA WWS job lifts and the exact C8 PM interrupt entry 0xA2C")
+print("M7.94 final ARM64 Mach-O contains 31 NPUA WWS lifts, PIC registration, and the SPU interpreter fallback")
 PYM772LINKED
 # Every M7.62 native function must appear in the FINAL Mach-O, not merely object.
 python3 - <<'PY'

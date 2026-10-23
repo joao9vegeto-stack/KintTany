@@ -447,6 +447,13 @@ def main():
             "waiter.cv.wait_for(guard" not in lwcond_runtime or
             "asc_lwcond_signal(ctx, true, false)" not in lwcond_runtime):
         raise SystemExit("M7.91 correct guest lwcond wait/signal semantics are missing from PS3Recomp")
+    channel_runtime=(upstream/"runtime/spu/spu_channels.c").read_text(errors="replace")
+    spu_context=(upstream/"runtime/spu/spu_context.h").read_text(errors="replace")
+    if ("ASCENSION_M793_SPU_PIC_RUNTIME_V1" not in channel_runtime or
+            "spu_interp_run(ctx, p)" not in channel_runtime or
+            "spu_pic_lookup(ctx)" not in channel_runtime or
+            "void spu_pic_register" not in spu_context):
+        raise SystemExit("M7.94 unlifted SPU interpreter/PIC runtime patch is missing")
     registry_source=(repo/"runtime/m772-npua-spu/spu_workloads.c").read_text(errors="replace")
     if "0xCE052ACDA7412063ULL" not in registry_source:
         raise SystemExit("M7.89 NPUA source WWS PM fingerprint is not registered")
@@ -484,7 +491,7 @@ def main():
     if ("wws_pm_c8d774_spu_func_00000A2C" not in c8_source_text or
             "wws_pm_c8d774_spu_func_00000A2C" not in c8_header_text or
             "0x00000A2Cu" not in c8_source_text):
-        raise SystemExit("M7.93 C8 interrupt entry 0xA2C is not emitted in the native lift table")
+        raise SystemExit("M7.94 C8 interrupt entry 0xA2C is not emitted in the native lift table")
     for marker in ("gowa_spu_register_c8_wws_pm", "wws_pm_c8d774_spu_func_00000A00",
                    "0xC8D774963A96DCF2", '6, "wws_pm_c8d774_12288"'):
         if marker not in c8_registry_text:
@@ -494,6 +501,8 @@ def main():
         raise SystemExit("M7.89 C8 WWS registry is not called from runtime initialization")
     if "ascension_npua_jobmods_register_all();" not in bridge_source:
         raise SystemExit("M7.90 NPUA WWS job overlays are not registered at runtime initialization")
+    if "ascension_spu_pic_register_all();" not in bridge_source:
+        raise SystemExit("M7.94 runtime PIC lift registry is not registered at startup")
     jobmods_manifest_path = jobmods_lifted / "jobmods_manifest.json"
     jobmods_attestation_path = jobmods_lifted / "jobmods_attestation.json"
     jobmods_registry = jobmods_lifted / "jobmods_register.c"
@@ -637,6 +646,23 @@ def main():
                                 ("runtime_wws_pm_c8.o", "runtime_spu_workloads_c8.o")):
         tasks.append(("c", src, objects / object_name, c_flags, includes))
 
+    # Captured position-independent fragments are compiled into the same
+    # archive and registered synchronously before guest SPU workers start.
+    # The initial source tree has an empty registry; after a device exports
+    # PIC captures, tools/m793_lift_spu_pic.py emits native region sources here.
+    pic_root = repo / "runtime/m793-spu-pic"
+    pic_registry = pic_root / "spu_pic_registry.c"
+    if not pic_registry.is_file():
+        raise SystemExit("M7.94 PIC registration source is missing")
+    pic_sources = sorted(pic_root.glob("pic_*/spu_recomp.c"))
+    pic_includes = includes + [flag for path in sorted({src.parent for src in pic_sources})
+                               for flag in ("-I", path)]
+    tasks.append(("c", pic_registry, objects / "runtime_spu_pic_registry.o",
+                  c_flags, includes))
+    for src in pic_sources:
+        tasks.append(("c", src, objects / ("runtime_spu_pic_" + src.parent.name + ".o"),
+                      c_flags, pic_includes))
+
     def compile_task(task):
         lang, src, dest, flags, incs = task
         compiler = "clang" if lang == "c" else "clang++"
@@ -694,6 +720,7 @@ def main():
                 "_gowa_spu_register_all",
                 "_gowa_spu_register_c8_wws_pm",
                 "_ascension_npua_jobmods_register_all",
+                "_ascension_spu_pic_register_all",
                 "jobmod_00818600_eA00_spu_func_00004A00",
                 "_wws_pm_npua_spu_recomp_register",
                 "_wws_pm_npua_spu_func_00000A00",
@@ -711,7 +738,7 @@ def main():
         raise SystemExit(f"M7.72 required ARM64 archive symbols missing: {missing}")
 
     result = {
-        "schema": "ascension-m793-ios-arm64-link-input-v14",
+        "schema": "ascension-m794-ios-arm64-link-input-v15",
         "upstream_commit": actual,
         "ios_vfs_mount_patch": "npua80918-and-app-home-usrdir-v1",
         "ios_vm_mapping_patch": "mach-anywhere-4g-relative-guest-ea-v1",
@@ -734,6 +761,10 @@ def main():
         "wws_job_module_data_islands": jobmods_attestation["data_islands"],
         "wws_job_overlay_image_ids": jobmods_attestation["registered_overlay_image_ids"],
         "wws_job_overlay_registration": "explicit-m772-runtime-init-no-static-constructor-v1",
+        "spu_unlifted_fallback": "native-lifts-first-interpreter-enabled-by-ios-launcher-v1",
+        "spu_pic_capture_and_native_registry": "runtime-LS-signature-match-capture-export-explicit-native-registration-v1",
+        "spu_pic_regions_compiled": len(pic_sources),
+        "spu_pic_registry_units_compiled": 1 + len(pic_sources),
         "wws_pm_role_routing": "registered-name-bitmap-routes-NPUA-image-5-and-C8-image-6-before-WWS-job-dispatch-v1",
         "spurs_ascension_wws_policy": "tempArea-128-byte-entry-and-poll-refresh-readyCount-level-rotating-spu-v1",
         "spurs_pm_runtime_diagnostics_dependency": "separate-PS3Recomp-runtime-archive-verified-at-final-MachO-v1",
