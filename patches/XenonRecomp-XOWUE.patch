@@ -55,7 +55,14 @@ index fa91527..4414039 100644
      case PPC_INST_AND:
          println("\t{}.u64 = {}.u64 & {}.u64;", r(insn.operands[0]), r(insn.operands[1]), r(insn.operands[2]));
          if (strchr(insn.opcode->name, '.'))
-@@ -665,7 +697,13 @@ bool Recompiler::Recompile(
+@@ -629,4 +661,5 @@ bool Recompiler::Recompile(
+ 
+             println("\tdefault:");
+-            println("\t\t__builtin_unreachable();");
++            println("\t\tPPC_CALL_INDIRECT_FUNC({}.u32);", ctr());
++            println("\t\treturn;");
+             println("\t}}");
+@@ -665,7 +698,13 @@ bool Recompiler::Recompile(
      case PPC_INST_BDNZF:
          // NOTE: assuming eq here as a shortcut because all the instructions in the game do that
          println("\t--{}.u64;", ctr());
@@ -70,7 +77,7 @@ index fa91527..4414039 100644
          break;
  
      case PPC_INST_BEQ:
-@@ -712,7 +750,11 @@ bool Recompiler::Recompile(
+@@ -712,7 +751,11 @@ bool Recompiler::Recompile(
          break;
  
      case PPC_INST_BLRL:
@@ -83,7 +90,7 @@ index fa91527..4414039 100644
          break;
  
      case PPC_INST_BLT:
-@@ -804,6 +846,10 @@ bool Recompiler::Recompile(
+@@ -804,6 +847,10 @@ bool Recompiler::Recompile(
          // no op
          break;
  
@@ -94,7 +101,7 @@ index fa91527..4414039 100644
      case PPC_INST_DCBT:
          // no op
          break;
-@@ -985,6 +1031,11 @@ bool Recompiler::Recompile(
+@@ -985,6 +1032,11 @@ bool Recompiler::Recompile(
          println("\t{}.f64 = float(1.0 / {}.f64);", f(insn.operands[0]), f(insn.operands[1]));
          break;
  
@@ -106,7 +113,7 @@ index fa91527..4414039 100644
      case PPC_INST_FRSP:
          printSetFlushMode(false);
          println("\t{}.f64 = double(float({}.f64));", f(insn.operands[0]), f(insn.operands[1]));
-@@ -1035,6 +1086,12 @@ bool Recompiler::Recompile(
+@@ -1035,6 +1087,12 @@ bool Recompiler::Recompile(
          println("{}.u32);", r(insn.operands[2]));
          break;
  
@@ -119,7 +126,7 @@ index fa91527..4414039 100644
      case PPC_INST_LD:
          print("\t{}.u64 = PPC_LOAD_U64(", r(insn.operands[0]));
          if (insn.operands[2] != 0)
-@@ -1071,6 +1128,13 @@ bool Recompiler::Recompile(
+@@ -1071,6 +1129,13 @@ bool Recompiler::Recompile(
          println("{});", int32_t(insn.operands[1]));
          break;
  
@@ -133,7 +140,7 @@ index fa91527..4414039 100644
      case PPC_INST_LFDX:
          printSetFlushMode(false);
          print("\t{}.u64 = PPC_LOAD_U64(", f(insn.operands[0]));
-@@ -1079,6 +1143,13 @@ bool Recompiler::Recompile(
+@@ -1079,6 +1144,13 @@ bool Recompiler::Recompile(
          println("{}.u32);", r(insn.operands[2]));
          break;
  
@@ -147,7 +154,7 @@ index fa91527..4414039 100644
      case PPC_INST_LFS:
          printSetFlushMode(false);
          print("\t{}.u32 = PPC_LOAD_U32(", temp());
-@@ -1088,6 +1159,14 @@ bool Recompiler::Recompile(
+@@ -1088,6 +1160,14 @@ bool Recompiler::Recompile(
          println("\t{}.f64 = double({}.f32);", f(insn.operands[0]), temp());
          break;
  
@@ -162,7 +169,7 @@ index fa91527..4414039 100644
      case PPC_INST_LFSX:
          printSetFlushMode(false);
          print("\t{}.u32 = PPC_LOAD_U32(", temp());
-@@ -1097,6 +1176,14 @@ bool Recompiler::Recompile(
+@@ -1097,6 +1177,14 @@ bool Recompiler::Recompile(
          println("\t{}.f64 = double({}.f32);", f(insn.operands[0]), temp());
          break;
  
@@ -177,7 +184,7 @@ index fa91527..4414039 100644
      case PPC_INST_LHA:
          print("\t{}.s64 = int16_t(PPC_LOAD_U16(", r(insn.operands[0]));
          if (insn.operands[2] != 0)
-@@ -1104,6 +1191,12 @@ bool Recompiler::Recompile(
+@@ -1104,6 +1192,12 @@ bool Recompiler::Recompile(
          println("{}));", int32_t(insn.operands[1]));
          break;
  
@@ -190,7 +197,7 @@ index fa91527..4414039 100644
      case PPC_INST_LHAX:
          print("\t{}.s64 = int16_t(PPC_LOAD_U16(", r(insn.operands[0]));
          if (insn.operands[1] != 0)
-@@ -1111,6 +1204,12 @@ bool Recompiler::Recompile(
+@@ -1111,6 +1205,12 @@ bool Recompiler::Recompile(
          println("{}.u32));", r(insn.operands[2]));
          break;
  
@@ -203,7 +210,7 @@ index fa91527..4414039 100644
      case PPC_INST_LHZ:
          print("\t{}.u64 = PPC_LOAD_U16(", r(insn.operands[0]));
          if (insn.operands[2] != 0)
-@@ -1118,6 +1217,12 @@ bool Recompiler::Recompile(
+@@ -1118,6 +1218,12 @@ bool Recompiler::Recompile(
          println("{});", int32_t(insn.operands[1]));
          break;
  
@@ -216,7 +223,7 @@ index fa91527..4414039 100644
      case PPC_INST_LHZX:
          print("\t{}.u64 = PPC_LOAD_U16(", r(insn.operands[0]));
          if (insn.operands[1] != 0)
-@@ -1125,6 +1230,12 @@ bool Recompiler::Recompile(
+@@ -1125,6 +1231,12 @@ bool Recompiler::Recompile(
          println("{}.u32);", r(insn.operands[2]));
          break;
  
@@ -229,7 +236,7 @@ index fa91527..4414039 100644
      case PPC_INST_LI:
          println("\t{}.s64 = {};", r(insn.operands[0]), int32_t(insn.operands[1]));
          break;
-@@ -1232,6 +1343,12 @@ bool Recompiler::Recompile(
+@@ -1232,6 +1344,12 @@ bool Recompiler::Recompile(
          println("{}.u32);", r(insn.operands[2]));
          break;
  
@@ -242,7 +249,7 @@ index fa91527..4414039 100644
      case PPC_INST_MFCR:
          for (size_t i = 0; i < 32; i++)
          {
-@@ -1311,6 +1428,12 @@ bool Recompiler::Recompile(
+@@ -1311,6 +1429,12 @@ bool Recompiler::Recompile(
              println("\t{}.compare<int32_t>({}.s32, 0, {});", cr(0), r(insn.operands[0]), xer());
          break;
  
@@ -255,7 +262,7 @@ index fa91527..4414039 100644
      case PPC_INST_MULLD:
          println("\t{}.s64 = {}.s64 * {}.s64;", r(insn.operands[0]), r(insn.operands[1]), r(insn.operands[2]));
          break;
-@@ -1343,6 +1466,12 @@ bool Recompiler::Recompile(
+@@ -1343,6 +1467,12 @@ bool Recompiler::Recompile(
          println("\t{}.u64 = ~({}.u64 | {}.u64);", r(insn.operands[0]), r(insn.operands[1]), r(insn.operands[2]));
          break;
  
@@ -268,7 +275,7 @@ index fa91527..4414039 100644
      case PPC_INST_NOT:
          println("\t{}.u64 = ~{}.u64;", r(insn.operands[0]), r(insn.operands[1]));
          if (strchr(insn.opcode->name, '.'))
-@@ -1493,6 +1622,13 @@ bool Recompiler::Recompile(
+@@ -1493,6 +1623,13 @@ bool Recompiler::Recompile(
          println("{}.u32, {}.u8);", r(insn.operands[2]), r(insn.operands[0]));
          break;
  
@@ -282,7 +289,7 @@ index fa91527..4414039 100644
      case PPC_INST_STD:
          print("{}", mmioStore() ? "\tPPC_MM_STORE_U64(" : "\tPPC_STORE_U64(");
          if (insn.operands[2] != 0)
-@@ -1523,6 +1659,13 @@ bool Recompiler::Recompile(
+@@ -1523,6 +1660,13 @@ bool Recompiler::Recompile(
          println("{}.u32, {}.u64);", r(insn.operands[2]), r(insn.operands[0]));
          break;
  
@@ -296,7 +303,7 @@ index fa91527..4414039 100644
      case PPC_INST_STFD:
          printSetFlushMode(false);
          print("{}", mmioStore() ? "\tPPC_MM_STORE_U64(" : "\tPPC_STORE_U64(");
-@@ -1539,6 +1682,22 @@ bool Recompiler::Recompile(
+@@ -1539,6 +1683,22 @@ bool Recompiler::Recompile(
          println("{}.u32, {}.u64);", r(insn.operands[2]), f(insn.operands[0]));
          break;
  
@@ -319,7 +326,7 @@ index fa91527..4414039 100644
      case PPC_INST_STFIWX:
          printSetFlushMode(false);
          print("{}", mmioStore() ? "\tPPC_MM_STORE_U32(" : "\tPPC_STORE_U32(");
-@@ -1556,6 +1715,15 @@ bool Recompiler::Recompile(
+@@ -1556,6 +1716,15 @@ bool Recompiler::Recompile(
          println("{}, {}.u32);", int32_t(insn.operands[1]), temp());
          break;
  
@@ -335,7 +342,7 @@ index fa91527..4414039 100644
      case PPC_INST_STFSX:
          printSetFlushMode(false);
          println("\t{}.f32 = float({}.f64);", temp(), f(insn.operands[0]));
-@@ -1565,6 +1733,15 @@ bool Recompiler::Recompile(
+@@ -1565,6 +1734,15 @@ bool Recompiler::Recompile(
          println("{}.u32, {}.u32);", r(insn.operands[2]), temp());
          break;
  
@@ -351,7 +358,7 @@ index fa91527..4414039 100644
      case PPC_INST_STH:
          print("{}", mmioStore() ? "\tPPC_MM_STORE_U16(" : "\tPPC_STORE_U16(");
          if (insn.operands[2] != 0)
-@@ -1572,6 +1749,13 @@ bool Recompiler::Recompile(
+@@ -1572,6 +1750,13 @@ bool Recompiler::Recompile(
          println("{}, {}.u16);", int32_t(insn.operands[1]), r(insn.operands[0]));
          break;
  
@@ -365,7 +372,7 @@ index fa91527..4414039 100644
      case PPC_INST_STHBRX:
          print("{}", mmioStore() ? "\tPPC_MM_STORE_U16(" : "\tPPC_STORE_U16(");
          if (insn.operands[1] != 0)
-@@ -1586,6 +1770,13 @@ bool Recompiler::Recompile(
+@@ -1586,6 +1771,13 @@ bool Recompiler::Recompile(
          println("{}.u32, {}.u16);", r(insn.operands[2]), r(insn.operands[0]));
          break;
  
@@ -379,7 +386,7 @@ index fa91527..4414039 100644
      case PPC_INST_STVEHX:
          // TODO: vectorize
          // NOTE: accounting for the full vector reversal here
-@@ -1705,6 +1896,14 @@ bool Recompiler::Recompile(
+@@ -1705,6 +1897,14 @@ bool Recompiler::Recompile(
              println("\t{}.compare<int32_t>({}.s32, 0, {});", cr(0), r(insn.operands[0]), xer());
          break;
  
@@ -394,7 +401,7 @@ index fa91527..4414039 100644
      case PPC_INST_SUBFIC:
          println("\t{}.ca = {}.u32 <= {};", xer(), r(insn.operands[1]), insn.operands[2]);
          println("\t{}.s64 = {} - {}.s64;", r(insn.operands[0]), int32_t(insn.operands[2]), r(insn.operands[1]));
-@@ -1795,6 +1994,15 @@ bool Recompiler::Recompile(
+@@ -1795,6 +1995,15 @@ bool Recompiler::Recompile(
              println("simde_mm_load_ps({}.f32)));", v(insn.operands[1]));
          break;
  
@@ -410,7 +417,7 @@ index fa91527..4414039 100644
      case PPC_INST_VCFSX:
      case PPC_INST_VCSXWFP128:
      {
-@@ -1831,7 +2039,20 @@ bool Recompiler::Recompile(
+@@ -1831,7 +2040,20 @@ bool Recompiler::Recompile(
  
      case PPC_INST_VCMPBFP:
      case PPC_INST_VCMPBFP128:
@@ -432,7 +439,7 @@ index fa91527..4414039 100644
          break;
  
      case PPC_INST_VCMPEQFP:
-@@ -2036,7 +2257,32 @@ bool Recompiler::Recompile(
+@@ -2036,7 +2258,32 @@ bool Recompiler::Recompile(
              }
              break;
  
@@ -465,7 +472,7 @@ index fa91527..4414039 100644
              println("\t__builtin_debugtrap();");
              break;
          }
-@@ -2047,6 +2293,18 @@ bool Recompiler::Recompile(
+@@ -2047,6 +2294,18 @@ bool Recompiler::Recompile(
          println("\tsimde_mm_store_si128((simde__m128i*){}.u8, simde_mm_packus_epi16(simde_mm_load_si128((simde__m128i*){}.s16), simde_mm_load_si128((simde__m128i*){}.s16)));", v(insn.operands[0]), v(insn.operands[2]), v(insn.operands[1]));
          break;
  
@@ -484,7 +491,7 @@ index fa91527..4414039 100644
      case PPC_INST_VREFP:
      case PPC_INST_VREFP128:
          // TODO: see if we can use rcp safely
-@@ -2088,9 +2346,14 @@ bool Recompiler::Recompile(
+@@ -2088,9 +2347,14 @@ bool Recompiler::Recompile(
          break;
  
      case PPC_INST_VSEL:
@@ -499,7 +506,7 @@ index fa91527..4414039 100644
      case PPC_INST_VSLB:
          // TODO: vectorize
          for (size_t i = 0; i < 16; i++)
-@@ -2212,7 +2475,29 @@ bool Recompiler::Recompile(
+@@ -2212,7 +2476,29 @@ bool Recompiler::Recompile(
              println("\t{} = {};", v(insn.operands[0]), vTemp());
              break;
  

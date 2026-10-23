@@ -33,3 +33,13 @@ repeat, count = module.instrument_aot_entries(actual)
 if count != 2 or repeat != actual:
     raise SystemExit("AOT entry instrumentation is not idempotent")
 print("PASS: address-bearing AOT entry instrumentation (fresh, legacy, idempotent)")
+
+recompiler_patch = (root / "patches" / "XenonRecomp-XOWUE.patch").read_text(encoding="utf-8")
+required_switch_fallback = (
+    r'-            println("\t\t__builtin_unreachable();");',
+    r'+            println("\t\tPPC_CALL_INDIRECT_FUNC({}.u32);", ctr());',
+    r'+            println("\t\treturn;");',
+)
+if any(line not in recompiler_patch for line in required_switch_fallback):
+    raise SystemExit("BCTR switch-table default does not use the guarded guest CTR target")
+print("PASS: BCTR switch-table fallback uses guarded guest CTR dispatch")
