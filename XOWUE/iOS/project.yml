@@ -1,0 +1,27 @@
+name: XOWUE
+targets:
+  XOWUE:
+    type: application
+    platform: iOS
+    deploymentTarget: "17.0"
+    sources:
+      - path: App
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: com.joaopedro.xowue
+        PRODUCT_NAME: XOWUE
+        INFOPLIST_KEY_CFBundleDisplayName: XOWUE
+        INFOPLIST_KEY_LSApplicationCategoryType: public.app-category.games
+        GENERATE_INFOPLIST_FILE: YES
+        IPHONEOS_DEPLOYMENT_TARGET: "17.0"
+        SWIFT_VERSION: "5.0"
+        SWIFT_OBJC_BRIDGING_HEADER: App/XOWUE-Bridging-Header.h
+        HEADER_SEARCH_PATHS:
+          - "$(SRCROOT)/../Runtime"
+        LIBRARY_SEARCH_PATHS:
+          - "$(SRCROOT)/../../build-ios"
+        OTHER_LDFLAGS:
+          - "-lXOWUEEngineComplete"
+          - "-lc++"
+        CODE_SIGN_STYLE: Manual
+        TARGETED_DEVICE_FAMILY: "1,2"

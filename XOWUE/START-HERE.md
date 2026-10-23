@@ -1,8 +1,9 @@
 # XOWUE — início rápido
 
-Projeto Xbox 360, Title ID 41560816. A branch XOWUE já existe em joao9vegeto-stack/KintTany.
+Branch de trabalho: `XOWUE`, no repositório `joao9vegeto-stack/KintTany`.
 
-Leia HANDOFF-XOWUE.md e PROMPT-AGENTE-XOWUE.txt antes de continuar. A recompilação estática do default.xex foi realizada; os arquivos C++ gerados e o kit para agente estão no pacote ZIP desta entrega. A pasta de assets completa e o runtime Xbox 360 ainda precisam ser integrados para chegar a um boot jogável.
+A geração AOT do `default.xex` foi concluída: 344 arquivos de funções mais `ppc_func_mapping.cpp`, 345 unidades C++ no total. As partes compactadas em `dist/` são reunidas pelo workflow de macOS para montar o IPA. O original `default.xex` e os assets permanecem fora do Git.
 
-Para repetir localmente, use os comandos em HANDOFF-XOWUE.md. Guarde default.xex, assets e generated/ppc fora do GitHub.
+O runtime inicial carrega o XEX, monta o mapa de funções e chama `_xstart`. `NtAllocateVirtualMemory` e `NtFreeVirtualMemory` têm suporte básico no heap guest; `HalReturnToFirmware` encerra o diagnóstico com a rotina solicitada. Os outros 258 imports Xbox/XAM continuam fail-closed. O teste do host chega a `HalReturnToFirmware(routine=1)`, portanto isso ainda não é um boot jogável.
 
+Leia `HANDOFF-XOWUE.md` para comandos, testes, detalhes do runtime e próximos passos. O IPA da CI será unsigned e precisa ser assinado com perfil/certificado Apple para instalação.

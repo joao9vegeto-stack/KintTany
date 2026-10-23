@@ -529,3 +529,13 @@ index fa91527..4414039 100644
              println("\t__builtin_debugtrap();");
              break;
          }
+
+diff --git a/XenonRecomp/CMakeLists.txt b/XenonRecomp/CMakeLists.txt
+--- a/XenonRecomp/CMakeLists.txt
++++ b/XenonRecomp/CMakeLists.txt
+@@ -23,4 +23,1 @@
+-    # alias attribute not supported on Apple.
+-    if (NOT APPLE)
+-        target_compile_definitions(XenonRecomp PRIVATE XENON_RECOMP_USE_ALIAS)
+-    endif()
++    # Emit weak forwarding wrappers; Apple's Clang cannot compile alias attributes.

@@ -13,3 +13,7 @@
 *.bik
 *.xxx
 
+
+/Runtime/generated/
+/iOS/XOWUE.xcodeproj/
+/dist/XOWUE-AOT-source.tar.gz

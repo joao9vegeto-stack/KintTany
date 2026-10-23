@@ -1,0 +1,103 @@
+name: XOWUE iOS IPA
+
+on:
+  push:
+    branches:
+      - XOWUE
+    paths:
+      - "XOWUE/**"
+      - ".github/workflows/xowue-ios.yml"
+  workflow_dispatch:
+
+concurrency:
+  group: xowue-ios-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  build-unsigned-ipa:
+    name: Build XOWUE iOS runner
+    runs-on: macos-26
+    timeout-minutes: 120
+    steps:
+      - name: Checkout XOWUE branch
+        uses: actions/checkout@v4
+
+      - name: Select Xcode and validate AOT archive
+        run: |
+          set -euo pipefail
+          xcodebuild -version
+          xcrun --sdk iphoneos --show-sdk-version
+          cat XOWUE/dist/XOWUE-AOT-source.part* > XOWUE/dist/XOWUE-AOT-source.tar.gz
+          shasum -a 256 -c XOWUE/dist/SHA256SUMS
+          tar -xzf XOWUE/dist/XOWUE-AOT-source.tar.gz -C XOWUE/generated
+          test "$(find XOWUE/generated/ppc -maxdepth 1 -name 'ppc_recomp.*.cpp' | wc -l | tr -d ' ')" = "344"
+
+      - name: Fetch pinned XenonRecomp runtime utilities
+        run: |
+          set -euo pipefail
+          git clone --recursive https://github.com/hedge-dev/XenonRecomp.git "$RUNNER_TEMP/XenonRecomp"
+          git -C "$RUNNER_TEMP/XenonRecomp" checkout ddd128bcca99fe8bfbb99bea583c972351fa6ace
+          git -C "$RUNNER_TEMP/XenonRecomp" submodule update --init --recursive
+          git -C "$RUNNER_TEMP/XenonRecomp" apply "$GITHUB_WORKSPACE/XOWUE/patches/XenonRecomp-XOWUE.patch"
+          echo "XENONRECOMP_ROOT=$RUNNER_TEMP/XenonRecomp" >> "$GITHUB_ENV"
+
+      - name: Build arm64 AOT engine
+        run: |
+          set -euo pipefail
+          cmake -S XOWUE/Runtime -B build-ios -G Xcode \
+            -DCMAKE_SYSTEM_NAME=iOS \
+            -DCMAKE_OSX_SYSROOT=iphoneos \
+            -DCMAKE_OSX_ARCHITECTURES=arm64 \
+            -DCMAKE_OSX_DEPLOYMENT_TARGET=17.0 \
+            -DCMAKE_BUILD_TYPE=Release \
+            -DXENONRECOMP_ROOT="$XENONRECOMP_ROOT"
+          cmake --build build-ios --config Release --target XOWUEEngine --parallel 3
+          ENGINE_LIB=$(find build-ios -name libXOWUEEngine.a -print -quit)
+          UTILS_LIB=$(find build-ios -name libXenonUtils.a -print -quit)
+          DISASM_LIB=$(find build-ios -name libdisasm.a -print -quit)
+          test -n "$ENGINE_LIB" && test -n "$UTILS_LIB" && test -n "$DISASM_LIB"
+          libtool -static -o build-ios/libXOWUEEngineComplete.a "$ENGINE_LIB" "$UTILS_LIB" "$DISASM_LIB"
+          lipo -verify_arch arm64 build-ios/libXOWUEEngineComplete.a
+
+      - name: Generate Xcode project and build app
+        run: |
+          set -euo pipefail
+          brew install xcodegen
+          cd XOWUE/iOS
+          xcodegen generate --spec project.yml
+          cd "$GITHUB_WORKSPACE"
+          xcodebuild build \
+            -project XOWUE/iOS/XOWUE.xcodeproj \
+            -scheme XOWUE \
+            -configuration Release \
+            -sdk iphoneos \
+            -derivedDataPath build-app \
+            CODE_SIGNING_ALLOWED=NO \
+            CODE_SIGNING_REQUIRED=NO \
+            CODE_SIGN_IDENTITY="" \
+            DEVELOPMENT_TEAM=""
+
+      - name: Package and validate unsigned IPA
+        run: |
+          set -euo pipefail
+          mkdir -p Payload artifacts
+          cp -R build-app/Build/Products/Release-iphoneos/XOWUE.app Payload/XOWUE.app
+          ditto -c -k --sequesterRsrc --keepParent Payload artifacts/XOWUE-unsigned.ipa
+          unzip -t artifacts/XOWUE-unsigned.ipa
+          mkdir -p "$RUNNER_TEMP/xowue-ipa-check"
+          unzip -q artifacts/XOWUE-unsigned.ipa -d "$RUNNER_TEMP/xowue-ipa-check"
+          APP="$RUNNER_TEMP/xowue-ipa-check/Payload/XOWUE.app"
+          plutil -lint "$APP/Info.plist"
+          lipo -verify_arch arm64 "$APP/XOWUE"
+          test -f "$APP/XOWUE"
+
+      - name: Upload unsigned IPA
+        uses: actions/upload-artifact@v4
+        with:
+          name: XOWUE-iOS-unsigned-${{ github.run_number }}
+          path: artifacts/XOWUE-unsigned.ipa
+          if-no-files-found: error
+          retention-days: 30

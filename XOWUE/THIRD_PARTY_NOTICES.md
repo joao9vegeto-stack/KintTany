@@ -44,3 +44,7 @@ Sources:
 - https://github.com/rexglue/rexglue-sdk
 - https://github.com/nx-mod/xenonrecomp-nx
 
+
+## XenonUtils / runtime upstream
+
+O runner usa os componentes de XenonUtils do repositório XenonRecomp, pinned em `ddd128bcca99fe8bfbb99bea583c972351fa6ace`, incluindo o parser XEX2/LZX e dependências listadas em `XOWUE/patches/XenonRecomp-XOWUE.patch`. Consulte as licenças e notices dos submódulos no checkout pinado. O archive AOT deste projeto é gerado a partir do executável fornecido pelo usuário; o executável e os assets originais não são publicados neste branch.

@@ -2,7 +2,11 @@ name: KintTany iOS CI
 
 on:
   push:
+    branches-ignore:
+      - XOWUE
   pull_request:
+    branches-ignore:
+      - XOWUE
   workflow_dispatch:
 # Mantém somente a execução mais recente para a mesma branch/PR.
 # Um novo commit cancela imediatamente o workflow anterior, inclusive se já

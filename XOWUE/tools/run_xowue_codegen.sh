@@ -87,5 +87,9 @@ if [[ -d "$project_root/generated/ppc" ]]; then
 fi
 mv -- "$work_dir/ppc" "$project_root/generated/ppc"
 rm -rf -- "$backup_dir/ppc"
+python3 "$project_root/Runtime/generate_runtime_stubs.py" \
+    --ppc-dir "$project_root/generated/ppc" \
+    --recompile-log "$project_root/generated/config/XOWUE-recompile.log" \
+    --output "$project_root/Runtime/generated/XOWUEImportStubs.cpp"
 
 echo "Generated XOWUE C++ output at $project_root/generated/ppc"
