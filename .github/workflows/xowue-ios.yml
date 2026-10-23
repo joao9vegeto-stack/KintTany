@@ -236,17 +236,23 @@ jobs:
             -Dllvm=disabled \
             -Dspirv-tools=disabled \
             --prefer-static
-          ninja -C build-kk/ios src/vulkan/wsi/libvulkan_wsi.a src/kosmickrisp/vulkan/libkk.a
+          # Build Mesa's aggregate ICD target so Meson carries its complete
+          # Vulkan runtime, NIR, utility, WSI, and weak-dispatch dependencies.
+          ninja -C build-kk/ios src/kosmickrisp/vulkan/libvulkan_kosmickrisp.dylib
           mkdir -p build-ios/kosmickrisp
-          cp build-kk/ios/src/kosmickrisp/vulkan/libkk.a build-ios/kosmickrisp/
-          cp build-kk/ios/src/vulkan/wsi/libvulkan_wsi.a build-ios/kosmickrisp/
-          lipo build-ios/kosmickrisp/libkk.a -verify_arch arm64
-          lipo build-ios/kosmickrisp/libvulkan_wsi.a -verify_arch arm64
-          nm -g build-ios/kosmickrisp/libkk.a > build-ios/kosmickrisp/kk-symbols.txt
-          nm -g build-ios/kosmickrisp/libvulkan_wsi.a > build-ios/kosmickrisp/wsi-symbols.txt
-          grep -q "vk_icdGetInstanceProcAddr" build-ios/kosmickrisp/kk-symbols.txt
-          grep -q "wsi_metal_init_wsi" build-ios/kosmickrisp/wsi-symbols.txt
-          echo "KosmicKrisp arm64 iOS archives built from $MESA_KOSMICKRISP_SHA" | tee build-ios/kosmickrisp/BUILD.txt
+          DRIVER_SOURCE="$(find build-kk/ios -type f -name 'libvulkan_kosmickrisp*.dylib' -print -quit)"
+          test -n "$DRIVER_SOURCE"
+          cp "$DRIVER_SOURCE" build-ios/kosmickrisp/libvulkan_kosmickrisp.dylib
+          install_name_tool -id "@rpath/libvulkan_kosmickrisp.dylib" build-ios/kosmickrisp/libvulkan_kosmickrisp.dylib
+          lipo build-ios/kosmickrisp/libvulkan_kosmickrisp.dylib -verify_arch arm64
+          nm -g build-ios/kosmickrisp/libvulkan_kosmickrisp.dylib > build-ios/kosmickrisp/driver-symbols.txt
+          nm -u build-ios/kosmickrisp/libvulkan_kosmickrisp.dylib > build-ios/kosmickrisp/driver-undefined.txt
+          grep -q "vk_icdGetInstanceProcAddr" build-ios/kosmickrisp/driver-symbols.txt
+          if grep -E "[[:space:]](__mesa_|_mesa_|_nir_|_vk_|_kk_|_wsi_)" build-ios/kosmickrisp/driver-undefined.txt; then
+            echo "KosmicKrisp ICD contains unresolved Mesa/Vulkan internal symbols" >&2
+            exit 1
+          fi
+          echo "KosmicKrisp arm64 iOS ICD dylib built from $MESA_KOSMICKRISP_SHA" | tee build-ios/kosmickrisp/BUILD.txt
 
       - name: Fetch pinned XenonRecomp runtime utilities
         run: |
@@ -301,12 +307,25 @@ jobs:
           mkdir -p Payload artifacts
           APP_SOURCE="build-app/Build/Products/Release-iphoneos/XOWUE.app"
           cp -R "$APP_SOURCE" Payload/XOWUE.app
+          mkdir -p Payload/XOWUE.app/Frameworks
+          cp build-ios/kosmickrisp/libvulkan_kosmickrisp.dylib Payload/XOWUE.app/Frameworks/
+          mkdir -p Payload/XOWUE.app/ThirdPartyLicenses/Mesa/licenses
+          cp XOWUE/THIRD_PARTY_NOTICES.md Payload/XOWUE.app/THIRD_PARTY_NOTICES.md
+          cp "$XENONRECOMP_ROOT/LICENSE.md" Payload/XOWUE.app/ThirdPartyLicenses/XenonRecomp-LICENSE.md
+          cp mesa-src/docs/license.rst Payload/XOWUE.app/ThirdPartyLicenses/Mesa/license.rst
+          cp -R mesa-src/licenses/. Payload/XOWUE.app/ThirdPartyLicenses/Mesa/licenses/
           mkdir -p "$RUNNER_TEMP/xowue-ipa-check/Payload"
           APP="$RUNNER_TEMP/xowue-ipa-check/Payload/XOWUE.app"
           cp -R Payload/XOWUE.app "$APP"
           plutil -lint "$APP/Info.plist"
           test -f "$APP/Assets.car"
+          test -f "$APP/Frameworks/libvulkan_kosmickrisp.dylib"
+          test -f "$APP/THIRD_PARTY_NOTICES.md"
+          test -f "$APP/ThirdPartyLicenses/XenonRecomp-LICENSE.md"
+          test -f "$APP/ThirdPartyLicenses/Mesa/licenses/MIT"
           lipo "$APP/XOWUE" -verify_arch arm64
+          lipo "$APP/Frameworks/libvulkan_kosmickrisp.dylib" -verify_arch arm64
+          otool -L "$APP/XOWUE" | grep -F "@rpath/libvulkan_kosmickrisp.dylib"
           python3 - "$APP/Info.plist" "$XOWUE_BUILD_NUMBER" <<'PY'
           import plistlib, sys
           with open(sys.argv[1], "rb") as stream:

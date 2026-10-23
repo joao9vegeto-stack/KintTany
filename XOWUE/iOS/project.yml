@@ -46,10 +46,12 @@ targets:
         LIBRARY_SEARCH_PATHS:
           - "$(SRCROOT)/../../build-ios"
           - "$(SRCROOT)/../../build-ios/kosmickrisp"
+        LD_RUNPATH_SEARCH_PATHS:
+          - "$(inherited)"
+          - "@executable_path/Frameworks"
         OTHER_LDFLAGS:
           - "-lXOWUEEngineComplete"
-          - "-lkk"
-          - "-lvulkan_wsi"
+          - "-lvulkan_kosmickrisp"
           - "-lc++"
           - "-lz"
           - "-framework"
