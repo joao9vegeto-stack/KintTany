@@ -16,6 +16,10 @@ targets:
         UIFileSharingEnabled: true
         LSSupportsOpeningDocumentsInPlace: true
         UIApplicationSupportsDocumentBrowser: true
+        UISupportedInterfaceOrientations:
+          - UIInterfaceOrientationPortrait
+          - UIInterfaceOrientationLandscapeLeft
+          - UIInterfaceOrientationLandscapeRight
         CFBundleDocumentTypes:
           - CFBundleTypeName: Xbox 360 Executable
             CFBundleTypeRole: Viewer
@@ -68,4 +72,3 @@ targets:
           - "IOSurface"
         CODE_SIGN_STYLE: Manual
         TARGETED_DEVICE_FAMILY: "1,2"
-

@@ -93,6 +93,12 @@ private struct XOWUEGameSurfaceScreen: View {
         library.phase == .failed || library.phase == .stopped
     }
 
+    private func requestOrientation(_ orientations: UIInterfaceOrientationMask) {
+        guard let scene = UIApplication.shared.connectedScenes
+            .compactMap({ $0 as? UIWindowScene }).first else { return }
+        scene.requestGeometryUpdate(.iOS(interfaceOrientations: orientations)) { _ in }
+    }
+
     var body: some View {
         ZStack {
             Color.black.ignoresSafeArea()
@@ -166,8 +172,12 @@ private struct XOWUEGameSurfaceScreen: View {
         .background(.black)
         .preferredColorScheme(.dark)
         .statusBarHidden(true)
-        .onDisappear { touchController.releaseAll() }
+        .onDisappear {
+            touchController.releaseAll()
+            requestOrientation(.portrait)
+        }
         .onAppear {
+            requestOrientation(.landscape)
             DispatchQueue.main.asyncAfter(deadline: .now() + 5) {
                 withAnimation(.easeOut(duration: 0.2)) { self.showBootHint = false }
             }
