@@ -1536,6 +1536,13 @@ static BOOL ARGameManifestHasTitleUsrdir(NSDictionary *manifest){
   /* Keep the RSX behind the frame label that Ascension's post-process jobs
    * release, instead of running past work the SPUs have not finished. */
   setenv("GCM_SEMA_ACQUIRE","1",1);
+  /* Match the PC port's bounded RsxSync pacing: GET_REPORT waits briefly for
+   * signalled post-process tasks to finish the prior round before the guest
+   * queues the next report. The hold is bounded by the RSX runtime to 50 ms. */
+  setenv("GCM_REPORT_SPU_HOLD_MS","50",1);
+  /* Recheck the guest WAIT_SIGNAL bit promptly if an SPU line commit misses
+   * its host wakeup, rather than leaving a task asleep for the 1 s timeout. */
+  setenv("SPU_WAITSIG_POLL_MS","2",1);
   /* Save exact unlifted WWS job binaries in Files so they can be lifted into
    * native ARM64 code. The files remain in the app's Documents sandbox. */
   NSURL *documents=[[[NSFileManager defaultManager]

@@ -25,6 +25,8 @@ JOB_METRICS_MARKER = "ASCENSION_M787_SPURS_JOB_METRICS_V1"
 PM_CAPTURE_MARKER = "ASCENSION_M788_CAPTURE_REQUESTED_PM_V1"
 DYNAMIC_WWS_PM_MARKER = "ASCENSION_M790_DYNAMIC_WWS_PM_ROLE_V1"
 LWCOND_SEMANTICS_MARKER = "ASCENSION_M791_LWCOND_SIGNAL_WAIT_V1"
+REPORT_HOLD_MARKER = "ASCENSION_M798_GCM_REPORT_SPU_HOLD_V1"
+TASK_ACTIVITY_MARKER = "ASCENSION_M798_SPURS_TASK_ACTIVITY_V1"
 
 
 def run(argv: list[str], *, capture: bool = False) -> str:
@@ -1275,6 +1277,210 @@ static unsigned long long gcm_park_grace_ms(void)
     path.write_text(source.replace(old, new, 1))
 
 
+def apply_ascension_report_task_sync(upstream: pathlib.Path) -> None:
+    """Port Ascension PC's bounded GET_REPORT/SPU task synchronization."""
+    workload_path = upstream / "runtime/spu/spu_workload.c"
+    workload = workload_path.read_text(errors="replace")
+    if TASK_ACTIVITY_MARKER in workload:
+        required = ("spu_taskset_tasks_running", "spu_taskset_task_ended",
+                    "SPU_WAITSIG_POLL_MS", "spu_task_back_in_wait")
+        if any(token not in workload for token in required):
+            raise SystemExit("partial M7.98 SPU task activity patch")
+    else:
+        activity = r'''/* ASCENSION_M798_SPURS_TASK_ACTIVITY_V1
+ * The Ascension PC runtime holds GET_REPORT while signalled SPU taskset work
+ * is active. Count task threads outside WAIT_SIGNAL and include a signal that
+ * is pending for a parked task, so the RSX cannot consume the next report
+ * before that task starts its round. */
+static volatile long s_tasks_out_of_wait;
+extern void cellGcm_fifo_kick(void);
+static void spu_task_back_in_wait(void)
+{
+    if (__atomic_sub_fetch(&s_tasks_out_of_wait, 1, __ATOMIC_ACQ_REL) == 0)
+        cellGcm_fifo_kick();
+}
+static _Thread_local int s_task_out;
+long spu_taskset_tasks_running(void)
+{
+    const long n = __atomic_load_n(&s_tasks_out_of_wait, __ATOMIC_ACQUIRE);
+    if (n) return n;
+    for (int i = 0; i < SPU_PARKED_MAX; i++) {
+        const uint64_t key = s_parked[i];
+        if (key && spurs_bitset_test((uint32_t)(key >> 32) + CSTS_SIGNALLED,
+                                      (uint32_t)(key & 0xFFFFFFFFu) - 1u))
+            return 1;
+    }
+    return 0;
+}
+void spu_taskset_task_ended(void)
+{
+    if (s_task_out) { s_task_out = 0; spu_task_back_in_wait(); }
+}
+'''
+        wait_anchor = "int spu_taskset_wait_signal(uint32_t taskset_ea, uint32_t taskId)\n{\n"
+        if workload.count(wait_anchor) != 1:
+            raise SystemExit("M7.98 cannot locate the SPU WAIT_SIGNAL implementation")
+        workload = workload.replace(wait_anchor, activity + "\n" + wait_anchor, 1)
+
+        entry = "    if (!taskset_ea || taskId >= 128) return 0;\n"
+        if workload.count(entry) != 1:
+            raise SystemExit("M7.98 cannot locate WAIT_SIGNAL task entry")
+        workload = workload.replace(entry, entry +
+            "    if (s_task_out) { s_task_out = 0; spu_task_back_in_wait(); }\n", 1)
+
+        wait_setup = "    unsigned secs = 0;\n    /* LBP_WS_DRAIN=<secs>:"
+        if workload.count(wait_setup) != 1:
+            raise SystemExit("M7.98 cannot locate WAIT_SIGNAL timeout setup")
+        workload = workload.replace(wait_setup, '''    unsigned secs = 0;
+    /* Match the PC port: re-check a taskset signal every 2 ms if the host
+     * condition wake is missed during an SPU reservation-line commit. */
+    static int wait_poll_ms = -1;
+    if (wait_poll_ms < 0) {
+        const char* value = getenv("SPU_WAITSIG_POLL_MS");
+        wait_poll_ms = value ? atoi(value) : 2;
+        if (wait_poll_ms <= 0 || wait_poll_ms > 1000) wait_poll_ms = 1000;
+    }
+    unsigned waited_ms = 0;
+    /* LBP_WS_DRAIN=<secs>:''', 1)
+
+        win_wait = """    while (!spurs_bitset_test(taskset_ea + CSTS_SIGNALLED, taskId)) {
+        if (!SleepConditionVariableSRW(&s_sig_cv, &s_sig_lock, 1000, 0)) {
+            static int _n = 0;"""
+        win_new = """    while (!spurs_bitset_test(taskset_ea + CSTS_SIGNALLED, taskId)) {
+        if (!SleepConditionVariableSRW(&s_sig_cv, &s_sig_lock, (DWORD)wait_poll_ms, 0)) {
+            if (spurs_bitset_test(taskset_ea + CSTS_SIGNALLED, taskId)) break;
+            if ((waited_ms += (unsigned)wait_poll_ms) < 1000) continue;
+            waited_ms = 0;
+            static int _n = 0;"""
+        if workload.count(win_wait) != 1:
+            raise SystemExit("M7.98 cannot patch Windows WAIT_SIGNAL polling")
+        workload = workload.replace(win_wait, win_new, 1)
+
+        posix_wait = """    while (!spurs_bitset_test(taskset_ea + CSTS_SIGNALLED, taskId)) {
+        struct timespec ts; clock_gettime(CLOCK_REALTIME, &ts); ts.tv_sec += 1;
+        if (pthread_cond_timedwait(&s_sig_cv, &s_sig_lock, &ts) != 0) {
+            static int _n = 0;"""
+        posix_new = """    while (!spurs_bitset_test(taskset_ea + CSTS_SIGNALLED, taskId)) {
+        struct timespec ts; clock_gettime(CLOCK_REALTIME, &ts);
+        ts.tv_nsec += (long)wait_poll_ms * 1000000L;
+        while (ts.tv_nsec >= 1000000000L) { ts.tv_nsec -= 1000000000L; ts.tv_sec++; }
+        if (pthread_cond_timedwait(&s_sig_cv, &s_sig_lock, &ts) != 0) {
+            if (spurs_bitset_test(taskset_ea + CSTS_SIGNALLED, taskId)) break;
+            if ((waited_ms += (unsigned)wait_poll_ms) < 1000) continue;
+            waited_ms = 0;
+            static int _n = 0;"""
+        if workload.count(posix_wait) != 1:
+            raise SystemExit("M7.98 cannot patch POSIX WAIT_SIGNAL polling")
+        workload = workload.replace(posix_wait, posix_new, 1)
+
+        count_before_clear = """    if (!drained) spurs_bitset_clear(taskset_ea + CSTS_SIGNALLED, taskId);"""
+        active_before_clear = """    if (!s_task_out) {
+        s_task_out = 1;
+        __atomic_fetch_add(&s_tasks_out_of_wait, 1, __ATOMIC_ACQ_REL);
+    }
+    if (!drained) spurs_bitset_clear(taskset_ea + CSTS_SIGNALLED, taskId);"""
+        if workload.count(count_before_clear) != 2:
+            raise SystemExit("M7.98 cannot locate both WAIT_SIGNAL signal-clear paths")
+        workload = workload.replace(count_before_clear, active_before_clear, 2)
+
+        resume = """    spu_serial_acquire();       /* resume: re-take the serial lock */
+    { extern unsigned long long ps3_ms_now(void);"""
+        resume_new = """    spu_serial_acquire();       /* resume: re-take the serial lock */
+    if (!s_task_out) {
+        s_task_out = 1;
+        __atomic_fetch_add(&s_tasks_out_of_wait, 1, __ATOMIC_ACQ_REL);
+    }
+    { extern unsigned long long ps3_ms_now(void);"""
+        if workload.count(resume) != 1:
+            raise SystemExit("M7.98 cannot locate WAIT_SIGNAL resume")
+        workload = workload.replace(resume, resume_new, 1)
+
+        exited = "static void spu_taskset_task_exited(uint32_t taskset_ea, uint32_t done_task)\n{\n"
+        if workload.count(exited) != 1:
+            raise SystemExit("M7.98 cannot locate async task exit")
+        workload = workload.replace(exited, "extern void spu_taskset_task_ended(void);\n\n" + exited +
+            "    spu_taskset_task_ended();\n", 1)
+        workload_path.write_text(workload)
+
+    gcm_path = upstream / "libs/video/cellGcmSys.c"
+    gcm = gcm_path.read_text(errors="replace")
+    if REPORT_HOLD_MARKER in gcm:
+        if 'why = "report-hold"' not in gcm or '"report-hold")' not in gcm:
+            raise SystemExit("partial M7.98 RSX report hold patch")
+        return
+
+    kick_anchor = """void cellGcm_fifo_kick_wait(unsigned ms)
+{
+    static int on = -1;
+    if (on < 0) { const char* e = getenv("GCM_FIFO_KICK"); on = (e && *e == '0') ? 0 : 1; }
+    HANDLE ev = on ? (HANDLE)cellGcm_fifo_kick_event() : NULL;
+    if (ev) WaitForSingleObject(ev, ms);
+    else    Sleep(ms);
+}
+"""
+    kick_new = kick_anchor + """
+/* Wake the present-thread walker after the last active SPU task re-enters
+ * WAIT_SIGNAL and releases its report hold. */
+void cellGcm_fifo_kick(void)
+{
+    if (s_gcm_kick_ev) SetEvent(s_gcm_kick_ev);
+}
+"""
+    if gcm.count(kick_anchor) != 1:
+        raise SystemExit("M7.98 cannot locate the GCM present-thread kick event")
+    gcm = gcm.replace(kick_anchor, kick_new, 1)
+
+    method_anchor = """            for (u32 i = 0; i < count; i++) {
+                u32 dea = gcm_io2ea(s_fifo_getoff + 4 + i * 4);
+                if (!dea) break;
+                u32 m = (type == 0) ? method + i * 4 : method;
+                /* GCM_SET_USER_COMMAND"""
+    method_new = """            /* ASCENSION_M798_GCM_REPORT_SPU_HOLD_V1
+             * Ascension RsxSync uses GET_REPORT to release taskset work. The
+             * PC port bounds the next report until signalled SPU tasks finish
+             * or 50 ms elapse; otherwise the guest can signal the next round
+             * while the previous one is still in its barriers. */
+            if (subch == 0 && (type == 0 ?
+                    (method <= 0x1800u && 0x1800u < method + count * 4u) :
+                     method == 0x1800u)) {
+                static long report_hold_ms = -1;
+                static unsigned long long report_hold_since;
+                if (report_hold_ms < 0) {
+                    const char* value = getenv("GCM_REPORT_SPU_HOLD_MS");
+                    report_hold_ms = value ? atol(value) : 0;
+                }
+                extern long spu_taskset_tasks_running(void) __attribute__((weak));
+                if (report_hold_ms > 0) {
+                    const unsigned long long now = ps3_qpc_us();
+                    if (spu_taskset_tasks_running && spu_taskset_tasks_running() > 0) {
+                        if (!report_hold_since) report_hold_since = now;
+                        if (now - report_hold_since <
+                                (unsigned long long)report_hold_ms * 1000ull) {
+                            why = "report-hold";
+                            break;
+                        }
+                    }
+                    report_hold_since = 0;
+                }
+            }
+            for (u32 i = 0; i < count; i++) {
+                u32 dea = gcm_io2ea(s_fifo_getoff + 4 + i * 4);
+                if (!dea) break;
+                u32 m = (type == 0) ? method + i * 4 : method;
+                /* GCM_SET_USER_COMMAND"""
+    if gcm.count(method_anchor) != 1:
+        raise SystemExit("M7.98 cannot locate NV4097 FIFO method dispatch")
+    gcm = gcm.replace(method_anchor, method_new, 1)
+
+    watchdog_old = '''      if (why && (strcmp(why, "parked") == 0 || strcmp(why, "sema-acquire") == 0)) {'''
+    watchdog_new = '''      if (why && (strcmp(why, "parked") == 0 || strcmp(why, "sema-acquire") == 0 ||
+                  strcmp(why, "report-hold") == 0)) {'''
+    if gcm.count(watchdog_old) != 1:
+        raise SystemExit("M7.98 cannot locate GCM non-stuck wait classification")
+    gcm = gcm.replace(watchdog_old, watchdog_new, 1)
+    gcm_path.write_text(gcm)
+
+
 def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__)
     ap.add_argument("--upstream", type=pathlib.Path, required=True)
@@ -1310,6 +1516,7 @@ def main() -> int:
     apply_dynamic_wws_pm_role(upstream)
     apply_lwcond_wait_signal_semantics(upstream)
     apply_ascension_gcm_park_watchdog_fix(upstream)
+    apply_ascension_report_task_sync(upstream)
 
     required = {
         "libs/spurs/cellSpurs.c": (
@@ -1334,7 +1541,10 @@ def main() -> int:
                                        "spu_signal_parked_on_line", JOB_METRICS_MARKER,
                                        "spu_workload_copy_ascension_job_metrics",
                                        DYNAMIC_WWS_PM_MARKER,
-                                       "spu_workload_note_wws_role(image_id, name);"),
+                                       "spu_workload_note_wws_role(image_id, name);",
+                                       TASK_ACTIVITY_MARKER,
+                                       "spu_taskset_tasks_running(void)",
+                                       "spu_taskset_task_ended(void)"),
         "runtime/spu/spu_channels.c": (DYNAMIC_WWS_PM_MARKER,
                                        "spu_workload_is_wws_pm_image(ctx->image_id)"),
         "runtime/spu/spu_dma.h": (DYNAMIC_WWS_PM_MARKER,
@@ -1347,14 +1557,16 @@ def main() -> int:
         "libs/video/cellGcmSys.c": ("ASCENSION_GCM_WAIT_STATES_NOT_STUCK_V1",
                                     "GCM_PARK_WAIT_MS", "gcm_park_grace_ms()",
                                     'why = "sema-acquire"',
-                                    'strcmp(why, "sema-acquire") == 0'),
+                                    'strcmp(why, "sema-acquire") == 0',
+                                    REPORT_HOLD_MARKER, 'why = "report-hold"',
+                                    'strcmp(why, "report-hold") == 0'),
     }
     for filename, needles in required.items():
         text = (upstream / filename).read_text(errors="replace")
         missing = [needle for needle in needles if needle not in text]
         if missing:
             raise SystemExit(f"M7.83 PS3Recomp SPURS2 patch incomplete in {filename}: {missing}")
-    print("M7.93 preserves Ascension's RSX park and SPU semaphore wait states")
+    print("M7.98 preserves Ascension's RSX park, report, and SPU task wait states")
     return 0
 
 

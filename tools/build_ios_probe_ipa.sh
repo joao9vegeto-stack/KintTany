@@ -736,7 +736,7 @@ for symbol in ("_gowa_spu_register_c8_wws_pm",
                "_wws_pm_c8d774_spu_recomp_register"):
     if not any(symbol in name for name in defined):
         raise SystemExit("M7.90 exact NPUA WWS job lift/C8 PM or runtime routing missing from final Mach-O: "+symbol)
-print("M7.97 final ARM64 Mach-O contains the installed PS3Recomp guest callback dispatcher, 31 NPUA WWS lifts, exact-byte PIC registration, and the full WWS SPU interpreter fallback")
+print("M7.98 final ARM64 Mach-O contains the installed PS3Recomp guest callback dispatcher, 31 NPUA WWS lifts, exact-byte PIC registration, and the full WWS SPU interpreter fallback")
 PYM772LINKED
 # Every M7.62 native function must appear in the FINAL Mach-O, not merely object.
 python3 - <<'PY'
@@ -1070,5 +1070,5 @@ shasum -a 256 AscensionRecompProbe-0.6.22-unsigned.ipa > m41-ipa-sha256.txt
 cp AscensionRecompProbe-0.6.22-unsigned.ipa AscensionRecompProbe-7.69.0-unsigned.ipa
 IPA_VERSION=$(/usr/libexec/PlistBuddy -c 'Print CFBundleShortVersionString' "$APP/Info.plist")
 cp AscensionRecompProbe-0.6.22-unsigned.ipa "AscensionRecompProbe-${IPA_VERSION}-unsigned.ipa"
-shasum -a 256 "AscensionRecompProbe-${IPA_VERSION}-unsigned.ipa" > m796-ipa-sha256.txt
+shasum -a 256 "AscensionRecompProbe-${IPA_VERSION}-unsigned.ipa" > m798-ipa-sha256.txt
 echo 'UNSIGNED DIAGNOSTIC APP: UIKit CAMetalLayer + real PS3Recomp Metal backend; NO GOWA GAME included' > m41-status.txt
