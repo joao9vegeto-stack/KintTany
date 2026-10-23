@@ -19,6 +19,8 @@ A tradução Xenos ainda é parcial: o runtime consome ring/indirect buffers, re
 
 O número do app vem de `CFBundleVersion`; somente Actions concluídas com sucesso avançam o build. O `default.xex` e os assets do jogo não estão incluídos no IPA ou na branch.
 
+A Action #20 (commit `98e54e2`) produziu o IPA Build 7, sem assinatura, com 24.529.954 bytes e SHA-256 `8141b57adf3b993c4ef23db9c6d7a3216c020dda3f9f229b23484da499551c61`. A Action validou o AOT, o runtime ARM64, o app e o pacote. O último resultado no aparelho continua sendo o Build 6; o Build 7 aguarda a nova execução do XEX.
+
 ## O que entrou no Build 3
 
 ### Threads PPC e TLS

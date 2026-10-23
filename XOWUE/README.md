@@ -2,7 +2,7 @@
 
 **Title ID:** 41560816
 **Branch:** XOWUE
-**Último teste em aparelho:** Build 6 (Action #19, sucesso). O próximo IPA contém o adapter corrigido para o bloqueio APC observado nesse build.
+**Último teste em aparelho:** Build 6 (Action #19, sucesso). O Build 7 (Action #20, sucesso) contém o adapter APC corrigido e está pronto para novo teste no aparelho.
 
 ## Estado do runner
 
