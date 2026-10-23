@@ -4,13 +4,12 @@
 
 ## Estado comprovado
 
-- A Action #20, no commit `98e54e2`, concluiu e publicou o IPA Build 7.
-- O runtime valida o XEX2 do jogo, compila 344 unidades PPC AOT e gera adapters para os 261 imports encontrados no executável. O gerador falha quando há import sem rota classificada.
-- Os adapters incluem handlers de kernel/XAM e políticas locais para serviços que não existem no iPhone. Cobertura de imports não significa equivalência completa do kernel Xbox.
-- O diagnóstico de aparelho mais recente registrado alcançou o ring Xenos: 24 opcodes draw e 5 buffers indiretos foram observados; o relatório registrou 0 swaps guest e 0 frames decodificados. O Build 7 parou em `KeEnterCriticalRegion`, que ainda não tinha uma rota naquele pacote. O commit `d547096` implementa o handler; a Action #21 gerou os 261 adapters, mas encontrou erro de compilação por acessos PPC sem o ponteiro de memória guest. A correção já está no código local e aguarda nova Action; ainda falta relatório de aparelho.
-- KosmicKrisp validou instância, surface, device, swapchain Metal e presents do host. O runtime decodifica e encaminha frames guest nos formatos Xenos 6 e 54 quando `VdSwap` fornece um framebuffer válido.
+- A Action #22, no commit `5bde4c1`, concluiu e publicou o IPA Build 8. O artifact contém executável arm64, `libvulkan_kosmickrisp.dylib` arm64, e seu IPA tem SHA-256 `8946aae7c1443c91223a03e78adb7f1959dec053a0ca11f7e00b6afcfee974ad`.
+- O engine AOT compilou com 344 unidades e o gerador criou adapters para os 261 imports do executável. A Action confirmou compilação, ligação e empacotamento do app.
+- O Build 8 inclui o handler `KeEnterCriticalRegion` e a correção dos acessos PPC que precisavam de `base`. O relatório de aparelho mais recente continua sendo do Build 7: 24 opcodes draw e 5 buffers indiretos observados, 0 swaps guest e 0 frames decodificados; parou em `KeEnterCriticalRegion`. Ainda não há log de execução do Build 8.
+- KosmicKrisp continua como backend Vulkan → Metal e foi compilado para iOS arm64 na Action. Isso confirma a camada de apresentação do app, não a execução dos shaders Xenos do jogo.
 
-O frontend Xenos atual registra pacotes, draws e buffers indiretos, mas ainda não executa o pipeline de shaders, render targets/EDRAM e resolves do jogo. Portanto, os dados disponíveis ainda não comprovam uma imagem do jogo apresentada no iPhone. O app agora exibe as contagens guest do último diagnóstico em vez de declarar frames de jogo sem evidência.
+O frontend Xenos atual registra pacotes, draws e buffers indiretos, mas ainda não executa o pipeline completo de shaders, render targets/EDRAM e resolves do jogo. Portanto, os dados disponíveis ainda não comprovam uma imagem do jogo apresentada no iPhone. O app exibe as contagens guest do último diagnóstico em vez de declarar frames de jogo sem evidência.
 
 ## App e arquivos do jogo
 
