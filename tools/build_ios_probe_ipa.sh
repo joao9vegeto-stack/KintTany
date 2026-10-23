@@ -702,6 +702,7 @@ required=("func_00010410", "func_0052A740", "func_0052E3F4", "_ar_m772_runtime_a
           "_rsx_metal_backend_present", "_rsx_metal_backend_guest_draws",
           "_cellGcmResetAscensionParkHoldMetrics", "_cellGcmCopyAscensionParkHoldMetrics",
           "_spu_workload_reset_ascension_stack_metrics", "_spu_workload_copy_ascension_stack_metrics",
+          "_spurs_external_event", "_cellSpursCopyAscensionMetrics",
           "_ppu_hle_register_all",
           "_ppu_guest_call", "_g_ps3_guest_caller",
           "_cellGamePatchCheck",
@@ -744,7 +745,7 @@ for symbol in ("_gowa_spu_register_c8_wws_pm",
                "_wws_pm_c8d774_spu_recomp_register"):
     if not any(symbol in name for name in defined):
         raise SystemExit("M7.90 exact NPUA WWS job lift/C8 PM or runtime routing missing from final Mach-O: "+symbol)
-print("M8.03 final ARM64 Mach-O contains GCM park/SPU handoff and worker-stack outcome telemetry, lock-line-safe tasksets, WWS lifts, PIC registration, and SPU interpreter fallback")
+print("M8.04 final ARM64 Mach-O contains SPURS GPU-report wake, bounded SPU worker-stack retries, GCM park/SPU handoff telemetry, lock-line-safe tasksets, WWS lifts, PIC registration, and SPU interpreter fallback")
 PYM772LINKED
 # Every M7.62 native function must appear in the FINAL Mach-O, not merely object.
 python3 - <<'PY'

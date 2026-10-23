@@ -423,19 +423,23 @@ def main():
     missing_gcm=[marker for marker in required_gcm_markers if marker not in gcm_runtime]
     launcher_source=(repo/"ios/ARProbeApp.m").read_text(errors="replace")
     if (missing_gcm or 'setenv("GCM_PARK_SPU_HOLD_MS","50",1)' not in launcher_source or
-            "cellGcmCopyAscensionParkHoldMetrics(gcmParkHoldMetrics);" not in launcher_source):
+            "cellGcmCopyAscensionParkHoldMetrics(gcmParkHoldMetrics);" not in launcher_source or
+            "spurs_external_event();" not in gcm_runtime):
         raise SystemExit(f"M8.03 GCM park/SPU handoff or iOS telemetry missing: {missing_gcm}")
     stack_runtime=(upstream/"runtime/spu/spu_workload.c").read_text(errors="replace")
-    required_stack_markers=("ASCENSION_M803_SPU_STACK_METRICS_V1",
-        "pthread_attr_setstacksize(&attr, 256u << 20)",
+    required_stack_markers=("ASCENSION_M804_SPU_STACK_RECOVERY_V1",
+        "stack_sizes[4] = {256u << 20, 64u << 20, 32u << 20, 16u << 20}",
         "spu_workload_reset_ascension_stack_metrics",
         "spu_workload_copy_ascension_stack_metrics",
-        "s_asc_worker_stack_metrics[4]")
+        "s_asc_worker_stack_metrics[16]")
     missing_stack=[marker for marker in required_stack_markers if marker not in stack_runtime]
     if (missing_stack or
             "spu_workload_reset_ascension_stack_metrics();" not in launcher_source or
-            "spu_workload_copy_ascension_stack_metrics(stackMetrics);" not in launcher_source):
-        raise SystemExit(f"M8.03 Darwin SPU worker-stack outcome telemetry missing: {missing_stack}")
+            "spu_workload_copy_ascension_stack_metrics(stackMetrics);" not in launcher_source or
+            "unsigned long long out[17]" not in launcher_source or
+            "uint64_t spursMetrics[10]" not in launcher_source or
+            "SPURS GPU-report wake" not in launcher_source):
+        raise SystemExit(f"M8.04 SPU worker-stack recovery or report-wake telemetry missing: {missing_stack}")
     spurs_source=(upstream/"libs/spurs/cellSpurs.c").read_text(errors="replace")
     spurs_header=(upstream/"libs/spurs/cellSpurs.h").read_text(errors="replace")
     required_spurs_markers=("ASCENSION_M772_SPURS2_TASK_API_V2",
@@ -445,6 +449,9 @@ def main():
         "ASCENSION_M788_CAPTURE_REQUESTED_PM_V1",
         "ASCENSION_M772_LFQUEUE_SDK_LAYOUT_V1", "ASCENSION_M772_EDGE_ZLIB_HLE_V2",
         "cellSpursCopyAscensionPmDiagnostics", "cellSpursCaptureAscensionPmMiss(fp, vm_base + pm_ea, w->sizePm)",
+        "ASCENSION_M804_SPURS_REPORT_WAKE_V1", "spurs_external_event(void)",
+        "out[8]=__atomic_load_n(&s_asc_gpu_report_events",
+        "out[9]=__atomic_load_n(&s_asc_gpu_report_wakes",
         "spu_taskset_track", "spu_signal_parked_on_line")
     missing=[marker for marker in required_spurs_markers
              if marker not in spurs_source and marker not in (upstream/"runtime/spu/spu_workload.c").read_text(errors="replace")]

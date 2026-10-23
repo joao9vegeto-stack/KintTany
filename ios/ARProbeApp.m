@@ -22,14 +22,14 @@ extern uint32_t ar_m772_copy_hle_trace(uint64_t *out, uint32_t capacity);
 extern uint32_t ar_m772_copy_unresolved_hle_trace(uint64_t *out, uint32_t capacity);
 extern void ar_m772_copy_hotloop_snapshot(uint64_t out[38]);
 extern void cellSpursResetAscensionMetrics(void);
-extern void cellSpursCopyAscensionMetrics(uint64_t out[8]);
+extern void cellSpursCopyAscensionMetrics(uint64_t out[10]);
 extern void cellSpursCopyAscensionPmDiagnostics(uint64_t out[32][7]);
 extern void spu_workload_reset_ascension_job_metrics(void);
 extern void spu_workload_copy_ascension_job_metrics(uint64_t out[8]);
 extern void spu_workload_reset_ascension_taskset_metrics(void);
 extern void spu_workload_copy_ascension_taskset_metrics(uint64_t out[14]);
 extern void spu_workload_reset_ascension_stack_metrics(void);
-extern void spu_workload_copy_ascension_stack_metrics(unsigned long long out[5]);
+extern void spu_workload_copy_ascension_stack_metrics(unsigned long long out[17]);
 extern void cellGcmResetAscensionParkHoldMetrics(void);
 extern void cellGcmCopyAscensionParkHoldMetrics(unsigned long long out[3]);
 extern void ar_m756_last_stop_evidence(ar_m756_stop_evidence*);
@@ -1965,11 +1965,11 @@ static BOOL ARGameManifestHasTitleUsrdir(NSDictionary *manifest){
   uint64_t live[40]={0}; ar_m772_runtime_attest(live);
   uint64_t hotloopSnapshot[38]={0}; ar_m772_copy_hotloop_snapshot(hotloopSnapshot);
   ar_fs_trace liveFs={0}; ar_fs_snapshot(&liveFs);
-  uint64_t spursMetrics[8]={0}; cellSpursCopyAscensionMetrics(spursMetrics);
+  uint64_t spursMetrics[10]={0}; cellSpursCopyAscensionMetrics(spursMetrics);
   uint64_t spuJobs[8]={0}; spu_workload_copy_ascension_job_metrics(spuJobs);
   uint64_t tasksetMetrics[14]={0};
   spu_workload_copy_ascension_taskset_metrics(tasksetMetrics);
-  unsigned long long stackMetrics[5]={0};
+  unsigned long long stackMetrics[17]={0};
   spu_workload_copy_ascension_stack_metrics(stackMetrics);
   unsigned long long gcmParkHoldMetrics[3]={0};
   cellGcmCopyAscensionParkHoldMetrics(gcmParkHoldMetrics);
@@ -2110,9 +2110,10 @@ static BOOL ARGameManifestHasTitleUsrdir(NSDictionary *manifest){
      "Tabela AOT=%llu funções · autocheck do catálogo SPU=%llu/5 (não confirma o PM recebido em runtime) · runtime inicializado=%@\n"
      "Chamadas de função AOT=%@ · início(s) da entry=%@ · último PC=0x%08llX (entrada AOT mais recente; PC atual da instrução NÃO MEDIDO)\n"
      "SPURS2 · instâncias=%llu · workloads=%llu (%llu IDs 16–31) · PMs encontrados/faltantes=%llu/%llu · admissões do WWS PM=%llu (%llu IDs 16–31) · último wid=%@\n"
+     "SPURS GPU-report wake · eventos=%llu · instâncias acordadas=%llu\n"
      "API job-chain genérica · solicitações=%llu · com lift=%llu · sem lift=%llu · retornos do runner=%llu · ativos=%llu · último FNV=0x%016llX · bytes=%llu · EA=0x%08llX\n"
      "WWS taskset direto · tasksets registrados=%llu · saídas=%llu · candidatos=%llu · ELF válidos=%llu · tentativas de requeue=%llu · aceitos=%llu · rejeitados=%llu · runners iniciados=%llu · ELF carregado/reutilizado=%llu · falhas de carga=%llu · retornos=%llu · ativos agora=%llu · último taskset=0x%08llX task=%llu\n"
-     "Pilha de worker SPU · pedido 256 MiB: tentativas=%llu · atributo aceito=%llu · threads com 256 MiB=%llu · fallback para pilha padrão=%llu · threads em fallback=%llu\n"
+     "Pilha SPU (MiB) · tentativas=%llu · 256 attr/criou/falhou=%llu/%llu/%llu · 64=%llu/%llu/%llu · 32=%llu/%llu/%llu · 16=%llu/%llu/%llu · fallback tentou/criou=%llu/%llu · pthread rc=%llu · attr rc=%llu\n"
      "Captura de módulos ausentes=Documents/%@ · fragmentos PIC dinâmicos=Documents/%@/spu-pic-fragments.txt\n"
      "Fallback SPU: AOT primeiro; interpretação habilitada para branch sem lift · captura PIC habilitada\n"
      "PMs examinados (um registro por wid):\n%@\n"
@@ -2159,6 +2160,7 @@ static BOOL ARGameManifestHasTitleUsrdir(NSDictionary *manifest){
      (unsigned long long)spursMetrics[2],(unsigned long long)spursMetrics[5],
      (unsigned long long)spursMetrics[6],(unsigned long long)spursMetrics[3],
      (unsigned long long)spursMetrics[4],lastSpursWid,
+     (unsigned long long)spursMetrics[8],(unsigned long long)spursMetrics[9],
      (unsigned long long)spuJobs[0],(unsigned long long)spuJobs[1],
      (unsigned long long)spuJobs[2],(unsigned long long)spuJobs[3],
      (unsigned long long)spuJobs[4],(unsigned long long)spuJobs[5],
@@ -2170,7 +2172,10 @@ static BOOL ARGameManifestHasTitleUsrdir(NSDictionary *manifest){
      (unsigned long long)tasksetMetrics[8],(unsigned long long)tasksetMetrics[9],
      (unsigned long long)tasksetMetrics[10],(unsigned long long)tasksetMetrics[11],
      (unsigned long long)tasksetMetrics[12],(unsigned long long)tasksetMetrics[13],
-     stackMetrics[0],stackMetrics[1],stackMetrics[2],stackMetrics[3],stackMetrics[4],
+     stackMetrics[0],stackMetrics[1],stackMetrics[2],stackMetrics[3],
+     stackMetrics[4],stackMetrics[5],stackMetrics[6],stackMetrics[7],
+     stackMetrics[8],stackMetrics[9],stackMetrics[10],stackMetrics[11],
+     stackMetrics[12],stackMetrics[13],stackMetrics[14],stackMetrics[15],stackMetrics[16],
      spuCaptureName,spuCaptureName,pmDiagnosticsText,aotTraceText,
      (unsigned long long)live[14],(unsigned long long)live[15],
      (unsigned long long)live[16],(unsigned long long)live[17],

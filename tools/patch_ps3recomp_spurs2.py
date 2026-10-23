@@ -31,7 +31,8 @@ DYNAMIC_WWS_PM_MARKER = "ASCENSION_M790_DYNAMIC_WWS_PM_ROLE_V1"
 LWCOND_SEMANTICS_MARKER = "ASCENSION_M791_LWCOND_SIGNAL_WAIT_V1"
 REPORT_HOLD_MARKER = "ASCENSION_M798_GCM_REPORT_SPU_HOLD_V1"
 PARK_SPU_HOLD_MARKER = "ASCENSION_M803_GCM_PARK_SPU_HOLD_V1"
-STACK_METRICS_MARKER = "ASCENSION_M803_SPU_STACK_METRICS_V1"
+SPURS_REPORT_WAKE_MARKER = "ASCENSION_M804_SPURS_REPORT_WAKE_V1"
+STACK_METRICS_MARKER = "ASCENSION_M804_SPU_STACK_RECOVERY_V1"
 TASK_ACTIVITY_MARKER = "ASCENSION_M798_SPURS_TASK_ACTIVITY_V1"
 WORKLOAD_FLAG_MARKER = "ASCENSION_M799_SPURS_WORKLOAD_FLAG_V1"
 TASKSET_WID_MARKER = "ASCENSION_M800_TASKSET_CURRENT_WORKLOAD_V1"
@@ -1741,35 +1742,129 @@ void cellGcmCopyAscensionParkHoldMetrics(unsigned long long out[3])
     path.write_text(source)
 
 
+def apply_ascension_spurs_report_wake(upstream: pathlib.Path) -> None:
+    """Wake idle/backed-off SPURS WWS workers when the RSX writes a report."""
+    spurs_path = upstream / "libs/spurs/cellSpurs.c"
+    gcm_path = upstream / "libs/video/cellGcmSys.c"
+    spurs = spurs_path.read_text(errors="replace")
+    gcm = gcm_path.read_text(errors="replace")
+    if SPURS_REPORT_WAKE_MARKER in spurs or SPURS_REPORT_WAKE_MARKER in gcm:
+        required = (
+            "spurs_external_event(void)", "s_asc_gpu_report_events",
+            "out[8]=__atomic_load_n(&s_asc_gpu_report_events",
+            "out[9]=__atomic_load_n(&s_asc_gpu_report_wakes",
+        )
+        if any(token not in spurs for token in required) or \
+                "spurs_external_event();" not in gcm:
+            raise SystemExit("partial M8.04 SPURS GPU-report wake patch")
+        return
+
+    metric_anchor = "static volatile u64 s_asc_pm_found, s_asc_pm_missing, s_asc_last_dispatch_wid;\n"
+    if spurs.count(metric_anchor) != 1:
+        raise SystemExit("M8.04 cannot locate the 32-workload SPURS metrics")
+    spurs = spurs.replace(
+        metric_anchor,
+        metric_anchor +
+        "static volatile u64 s_asc_gpu_report_events, s_asc_gpu_report_wakes;\n",
+        1,
+    )
+
+    reset_anchor = "    __atomic_store_n(&s_asc_last_dispatch_wid, UINT64_MAX, __ATOMIC_RELAXED);\n"
+    if spurs.count(reset_anchor) != 1:
+        raise SystemExit("M8.04 cannot locate the SPURS metrics reset")
+    spurs = spurs.replace(
+        reset_anchor,
+        reset_anchor +
+        "    __atomic_store_n(&s_asc_gpu_report_events, 0, __ATOMIC_RELAXED);\n"
+        "    __atomic_store_n(&s_asc_gpu_report_wakes, 0, __ATOMIC_RELAXED);\n",
+        1,
+    )
+
+    copy_signature = "void cellSpursCopyAscensionMetrics(u64 out[8]) {"
+    if spurs.count(copy_signature) != 1:
+        raise SystemExit("M8.04 cannot locate the SPURS metrics copy API")
+    spurs = spurs.replace(copy_signature,
+                          "void cellSpursCopyAscensionMetrics(u64 out[10]) {", 1)
+    copy_anchor = "    out[7]=__atomic_load_n(&s_asc_last_dispatch_wid,__ATOMIC_RELAXED);\n"
+    if spurs.count(copy_anchor) != 1:
+        raise SystemExit("M8.04 cannot extend the SPURS metrics copy API")
+    spurs = spurs.replace(
+        copy_anchor,
+        copy_anchor +
+        "    out[8]=__atomic_load_n(&s_asc_gpu_report_events,__ATOMIC_RELAXED);\n"
+        "    out[9]=__atomic_load_n(&s_asc_gpu_report_wakes,__ATOMIC_RELAXED);\n",
+        1,
+    )
+
+    helper_anchor = (
+        "static void wkl_curcont_set(u32 ea, u32 wid, u8 v)\n"
+        "{ if (wid < 16) vm_base[ea + SPURS_WKL_CURCONT + wid] = v; }\n"
+    )
+    helper = f'''\n/* {SPURS_REPORT_WAKE_MARKER}
+ * A GET_REPORT is an external event for WWS jobs parked at RsxBarrier. It
+ * changes no readyCount/signal bit, so clear scheduler idle back-off and wake
+ * the coordinator without taking its lock (the RSX may be under FIFO lock). */
+void spurs_external_event(void)
+{{
+    __atomic_add_fetch(&s_asc_gpu_report_events, 1, __ATOMIC_RELAXED);
+    for (int i = 0; i < MAX_SPURS_INST; ++i) {{
+        struct SpursInst* si = &s_inst[i];
+        if (!__atomic_load_n(&si->ea, __ATOMIC_ACQUIRE)) continue;
+        for (u32 wid = 0; wid < SPURS_MAX_WID; ++wid)
+            __atomic_store_n(&si->idle[wid], (u8)0, __ATOMIC_RELAXED);
+        __atomic_add_fetch(&s_asc_gpu_report_wakes, 1, __ATOMIC_RELAXED);
+        WakeAllConditionVariable(&si->wake);
+    }}
+}}
+'''
+    if spurs.count(helper_anchor) != 1:
+        raise SystemExit("M8.04 cannot place the SPURS external-report event")
+    spurs = spurs.replace(helper_anchor, helper_anchor + helper, 1)
+
+    report_anchor = "                            s_report_data[idx].value = val;\n"
+    if gcm.count(report_anchor) != 1:
+        raise SystemExit("M8.04 cannot locate the guest GCM report write")
+    gcm = gcm.replace(
+        report_anchor,
+        report_anchor +
+        "                            /* M8.04: wake WWS RsxBarrier polling on report. */\n"
+        "                            { extern void spurs_external_event(void); spurs_external_event(); }\n",
+        1,
+    )
+    spurs_path.write_text(spurs)
+    gcm_path.write_text(gcm)
+
+
 def apply_ascension_spu_stack_metrics(upstream: pathlib.Path) -> None:
-    """Report whether Darwin SPU workers actually get the requested 256 MiB stack."""
+    """Retry SPU worker creation with large-but-bounded stacks before default."""
     path = upstream / "runtime/spu/spu_workload.c"
     source = path.read_text(errors="replace")
     if STACK_METRICS_MARKER in source:
         required = ("spu_workload_reset_ascension_stack_metrics",
                     "spu_workload_copy_ascension_stack_metrics",
-                    "pthread_attr_setstacksize(&attr, 256u << 20)",
-                    "s_asc_worker_stack_metrics[4]")
+                    "stack_sizes[4] = {256u << 20, 64u << 20, 32u << 20, 16u << 20}",
+                    "s_asc_worker_stack_metrics[16]")
         missing = [token for token in required if token not in source]
         if missing:
-            raise SystemExit(f"partial M8.03 SPU stack metrics patch: {missing}")
+            raise SystemExit(f"partial M8.04 SPU stack recovery patch: {missing}")
         return
 
     thread_anchor = "#ifdef _WIN32\nstatic DWORD WINAPI spu_async_thread"
     metrics = '''/* ASCENSION_M803_SPU_STACK_METRICS_V1
  * GoW II's macOS port found deep lifted SPU call chains can exceed Darwin's
- * 512 KiB default. The pinned runtime requests 256 MiB and silently retries
- * the default if that reservation or thread creation fails; expose both paths. */
-static unsigned long long s_asc_worker_stack_metrics[5];
+ * 512 KiB default; the pinned runtime notes even 1 MiB can overflow a Bink
+ * path. M8.04 retries descending bounded reservations before using default. */
+/* ASCENSION_M804_SPU_STACK_RECOVERY_V1 */
+static unsigned long long s_asc_worker_stack_metrics[17];
 void spu_workload_reset_ascension_stack_metrics(void)
 {
-    for (unsigned i = 0; i < 5; ++i)
+    for (unsigned i = 0; i < 17; ++i)
         __atomic_store_n(&s_asc_worker_stack_metrics[i], 0, __ATOMIC_RELAXED);
 }
-void spu_workload_copy_ascension_stack_metrics(unsigned long long out[5])
+void spu_workload_copy_ascension_stack_metrics(unsigned long long out[17])
 {
     if (!out) return;
-    for (unsigned i = 0; i < 5; ++i)
+    for (unsigned i = 0; i < 17; ++i)
         out[i] = __atomic_load_n(&s_asc_worker_stack_metrics[i], __ATOMIC_RELAXED);
 }
 
@@ -1782,29 +1877,55 @@ void spu_workload_copy_ascension_stack_metrics(unsigned long long out[5])
     if (pthread_attr_setstacksize(&attr, 256u << 20) == 0)
         prc = pthread_create(&th, &attr, spu_async_thread, j);
     pthread_attr_destroy(&attr);'''
-    stack_new = '''    int prc = EINVAL;
-    __atomic_add_fetch(&s_asc_worker_stack_metrics[0], 1, __ATOMIC_RELAXED);
-    if (pthread_attr_setstacksize(&attr, 256u << 20) == 0) {
-        __atomic_add_fetch(&s_asc_worker_stack_metrics[1], 1, __ATOMIC_RELAXED);
+    stack_new = '''    __atomic_add_fetch(&s_asc_worker_stack_metrics[0], 1, __ATOMIC_RELAXED);
+    const size_t stack_sizes[4] = {256u << 20, 64u << 20, 32u << 20, 16u << 20};
+    const unsigned attr_metrics[4] = {1, 4, 7, 10};
+    const unsigned success_metrics[4] = {2, 5, 8, 11};
+    const unsigned failure_metrics[4] = {3, 6, 9, 12};
+    int created = 0;
+    int prc = 0;
+    for (unsigned i = 0; i < 4; ++i) {
+        const int arc = pthread_attr_setstacksize(&attr, stack_sizes[i]);
+        if (arc != 0) {
+            __atomic_store_n(&s_asc_worker_stack_metrics[16],
+                             (unsigned long long)arc, __ATOMIC_RELAXED);
+            prc = arc;
+            continue;
+        }
+        __atomic_add_fetch(&s_asc_worker_stack_metrics[attr_metrics[i]],
+                           1, __ATOMIC_RELAXED);
         prc = pthread_create(&th, &attr, spu_async_thread, j);
-        if (prc == 0)
-            __atomic_add_fetch(&s_asc_worker_stack_metrics[2], 1, __ATOMIC_RELAXED);
+        if (prc == 0) {
+            __atomic_add_fetch(&s_asc_worker_stack_metrics[success_metrics[i]],
+                               1, __ATOMIC_RELAXED);
+            created = 1;
+            break;
+        }
+        __atomic_add_fetch(&s_asc_worker_stack_metrics[failure_metrics[i]],
+                           1, __ATOMIC_RELAXED);
+        __atomic_store_n(&s_asc_worker_stack_metrics[15],
+                         (unsigned long long)prc, __ATOMIC_RELAXED);
     }
     pthread_attr_destroy(&attr);'''
     if source.count(stack_anchor) != 1:
-        raise SystemExit("M8.03 cannot locate the 256 MiB POSIX SPU worker stack request")
+        raise SystemExit("M8.04 cannot locate the POSIX SPU worker stack request")
     source = source.replace(stack_anchor, stack_new, 1)
 
     fallback_anchor = '''    if (prc != 0)
         prc = pthread_create(&th, NULL, spu_async_thread, j);'''
-    fallback_new = '''    if (prc != 0) {
-        __atomic_add_fetch(&s_asc_worker_stack_metrics[3], 1, __ATOMIC_RELAXED);
+    fallback_new = '''    if (!created) {
+        __atomic_add_fetch(&s_asc_worker_stack_metrics[13], 1, __ATOMIC_RELAXED);
         prc = pthread_create(&th, NULL, spu_async_thread, j);
-        if (prc == 0)
-            __atomic_add_fetch(&s_asc_worker_stack_metrics[4], 1, __ATOMIC_RELAXED);
+        if (prc == 0) {
+            __atomic_add_fetch(&s_asc_worker_stack_metrics[14], 1, __ATOMIC_RELAXED);
+            created = 1;
+        } else {
+            __atomic_store_n(&s_asc_worker_stack_metrics[15],
+                             (unsigned long long)prc, __ATOMIC_RELAXED);
+        }
     }'''
     if source.count(fallback_anchor) != 1:
-        raise SystemExit("M8.03 cannot locate the POSIX default-stack fallback")
+        raise SystemExit("M8.04 cannot locate the POSIX default-stack fallback")
     path.write_text(source.replace(fallback_anchor, fallback_new, 1))
 
 
@@ -1846,6 +1967,7 @@ def main() -> int:
     apply_lwcond_wait_signal_semantics(upstream)
     apply_ascension_gcm_park_watchdog_fix(upstream)
     apply_ascension_report_task_sync(upstream)
+    apply_ascension_spurs_report_wake(upstream)
     apply_ascension_spu_stack_metrics(upstream)
     apply_ascension_gcm_park_spu_hold(upstream)
     apply_m801_taskset_runtime(upstream)
@@ -1866,7 +1988,10 @@ def main() -> int:
             "cellSpursJoinTask2", "cellSpursTryJoinTask2",
             "cellSpursTasksetGetSpursAddress", "_cellSpursLFQueuePushBody",
             "cellSpursGetWorkloadFlag", "_cellSpursWorkloadFlagReceiver",
-            LFQUEUE_MARKER,
+            LFQUEUE_MARKER, SPURS_REPORT_WAKE_MARKER,
+            "spurs_external_event(void)",
+            "out[8]=__atomic_load_n(&s_asc_gpu_report_events",
+            "out[9]=__atomic_load_n(&s_asc_gpu_report_wakes",
             "ASCENSION_M772_EDGE_ZLIB_HLE_V2", MARKER),
         "libs/spurs/cellSpurs.h": ("cellSpursCreateTask2", "cellSpursJoinTask2",
                                    "cellSpursTasksetGetSpursAddress", "_cellSpursLFQueuePushBody",
@@ -1885,10 +2010,10 @@ def main() -> int:
                                        "spu_taskset_tasks_running(void)",
                                        "spu_taskset_task_ended(void)",
                                        STACK_METRICS_MARKER,
-                                       "pthread_attr_setstacksize(&attr, 256u << 20)",
+                                       "stack_sizes[4] = {256u << 20, 64u << 20, 32u << 20, 16u << 20}",
                                        "spu_workload_reset_ascension_stack_metrics",
                                        "spu_workload_copy_ascension_stack_metrics",
-                                       "s_asc_worker_stack_metrics[4]",
+                                       "s_asc_worker_stack_metrics[16]",
                                        TASKSET_LOCK_MARKER, TASKSET_METRICS_MARKER,
                                        "ts_bits_clear(taskset_ea + 0x30 + done_task / 8, m)",
                                        "spu_workload_copy_ascension_taskset_metrics",
@@ -1913,14 +2038,15 @@ def main() -> int:
                                     "spu_taskset_tasks_running()",
                                     'why = "spu-hold"',
                                     'strcmp(why, "spu-hold") == 0',
-                                    "cellGcmCopyAscensionParkHoldMetrics"),
+                                    "cellGcmCopyAscensionParkHoldMetrics",
+                                    "spurs_external_event();"),
     }
     for filename, needles in required.items():
         text = (upstream / filename).read_text(errors="replace")
         missing = [needle for needle in needles if needle not in text]
         if missing:
             raise SystemExit(f"M7.83 PS3Recomp SPURS2 patch incomplete in {filename}: {missing}")
-    print("M8.03 applies the bounded GCM park/SPU handoff and exposes actual Darwin SPU worker-stack fallback")
+    print("M8.04 applies the SPURS GPU-report wake and bounded SPU worker-stack recovery")
     return 0
 
 

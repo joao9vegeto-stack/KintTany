@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Regression test for the bounded Ascension GCM park/SPU handoff."""
+"""Regression tests for Ascension RSX/SPURS handoff and SPU stack recovery."""
 
 from __future__ import annotations
 
@@ -16,6 +16,24 @@ STACK_FIXTURE = r'''#include <errno.h>
 #include <pthread.h>
 #include <stdint.h>
 #include <stdlib.h>
+#define pthread_attr_setstacksize test_attr_setstacksize
+#define pthread_create test_pthread_create
+#define pthread_detach test_pthread_detach
+static size_t requested_stack;
+unsigned test_create_calls;
+unsigned test_chosen_stack_mib;
+static int test_attr_setstacksize(pthread_attr_t* attr, size_t size)
+{ (void)attr; requested_stack = size; return 0; }
+static int test_pthread_create(pthread_t* thread, const pthread_attr_t* attr,
+                               void* (*start)(void*), void* arg)
+{
+    (void)thread; (void)attr; (void)start; (void)arg;
+    ++test_create_calls;
+    if (requested_stack > (32u << 20)) return EAGAIN;
+    test_chosen_stack_mib = (unsigned)(requested_stack >> 20);
+    return 0;
+}
+static int test_pthread_detach(pthread_t thread) { (void)thread; return 0; }
 static void spu_async_run(void *p) { (void)p; }
 typedef unsigned long DWORD;
 #define WINAPI
@@ -112,6 +130,72 @@ int main(void)
 '''
 
 
+SPURS_REPORT_FIXTURE = r'''#include <stdint.h>
+typedef uint32_t u32;
+typedef uint8_t u8;
+typedef uint64_t u64;
+#define MAX_SPURS_INST 3
+#define SPURS_MAX_WID 32
+#define SPURS_WKL_CURCONT 0x30
+struct SpursInst { volatile u32 ea; u8 idle[SPURS_MAX_WID]; int wake; };
+static struct SpursInst s_inst[MAX_SPURS_INST];
+static u8* vm_base;
+static volatile u64 s_asc_pm_found, s_asc_pm_missing, s_asc_last_dispatch_wid;
+static unsigned s_wake_calls;
+static void WakeAllConditionVariable(int* wake);
+void cellSpursResetAscensionMetrics(void)
+{
+    __atomic_store_n(&s_asc_last_dispatch_wid, UINT64_MAX, __ATOMIC_RELAXED);
+}
+void cellSpursCopyAscensionMetrics(u64 out[8]) {
+    if (!out) return;
+    out[0]=__atomic_load_n(&s_asc_pm_found,__ATOMIC_RELAXED);
+    out[1]=__atomic_load_n(&s_asc_pm_missing,__ATOMIC_RELAXED);
+    out[2]=__atomic_load_n(&s_asc_pm_missing,__ATOMIC_RELAXED);
+    out[3]=__atomic_load_n(&s_asc_pm_found,__ATOMIC_RELAXED);
+    out[4]=__atomic_load_n(&s_asc_pm_found,__ATOMIC_RELAXED);
+    out[5]=__atomic_load_n(&s_asc_pm_found,__ATOMIC_RELAXED);
+    out[6]=__atomic_load_n(&s_asc_pm_missing,__ATOMIC_RELAXED);
+    out[7]=__atomic_load_n(&s_asc_last_dispatch_wid,__ATOMIC_RELAXED);
+}
+static void wkl_curcont_set(u32 ea, u32 wid, u8 v) __attribute__((unused));
+static void wkl_curcont_set(u32 ea, u32 wid, u8 v)
+{ if (wid < 16) vm_base[ea + SPURS_WKL_CURCONT + wid] = v; }
+static void WakeAllConditionVariable(int* wake)
+{ (void)wake; ++s_wake_calls; }
+void test_spurs_init(void)
+{
+    for (u32 i = 0; i < SPURS_MAX_WID; ++i) {
+        s_inst[0].idle[i] = 3;
+        s_inst[1].idle[i] = 3;
+        s_inst[2].idle[i] = 3;
+    }
+    s_inst[0].ea = 1;
+    s_inst[1].ea = 0;
+    s_inst[2].ea = 2;
+}
+int test_spurs_idle_state(void)
+{
+    for (u32 i = 0; i < SPURS_MAX_WID; ++i)
+        if (s_inst[0].idle[i] || s_inst[2].idle[i] || s_inst[1].idle[i] != 3)
+            return 0;
+    return 1;
+}
+unsigned test_spurs_wake_calls(void) { return s_wake_calls; }
+'''
+
+
+GCM_REPORT_FIXTURE = r'''#include <stdint.h>
+static struct { uint32_t timestamp, value; } s_report_data[2];
+static uint32_t idx, ts = 7, val = 9;
+void test_gcm_report(void)
+{
+                            s_report_data[idx].timestamp = ts;
+                            s_report_data[idx].value = val;
+}
+'''
+
+
 def check_upstream_idempotence(upstream: pathlib.Path) -> None:
     source = upstream / "libs/video/cellGcmSys.c"
     text = source.read_text(errors="replace")
@@ -142,10 +226,10 @@ def check_upstream_idempotence(upstream: pathlib.Path) -> None:
     stack_text = stack_source.read_text(errors="replace")
     stack_required = (
         patch_ps3recomp_spurs2.STACK_METRICS_MARKER,
-        "pthread_attr_setstacksize(&attr, 256u << 20)",
+        "stack_sizes[4] = {256u << 20, 64u << 20, 32u << 20, 16u << 20}",
         "spu_workload_reset_ascension_stack_metrics",
         "spu_workload_copy_ascension_stack_metrics",
-        "s_asc_worker_stack_metrics[4]",
+        "s_asc_worker_stack_metrics[16]",
     )
     stack_missing = [token for token in stack_required if token not in stack_text]
     if stack_missing:
@@ -158,7 +242,34 @@ def check_upstream_idempotence(upstream: pathlib.Path) -> None:
         before = target.read_bytes()
         patch_ps3recomp_spurs2.apply_ascension_spu_stack_metrics(fixture_upstream)
         if target.read_bytes() != before:
-            raise SystemExit("M8.03 SPU stack metrics patch is not idempotent")
+            raise SystemExit("M8.04 SPU stack recovery patch is not idempotent")
+
+    spurs_source = upstream / "libs/spurs/cellSpurs.c"
+    spurs_text = spurs_source.read_text(errors="replace")
+    gcm_text = source.read_text(errors="replace")
+    wake_required = (
+        patch_ps3recomp_spurs2.SPURS_REPORT_WAKE_MARKER,
+        "void spurs_external_event(void)",
+        "s_asc_gpu_report_events",
+        "s_asc_gpu_report_wakes",
+        "out[8]=__atomic_load_n(&s_asc_gpu_report_events",
+        "out[9]=__atomic_load_n(&s_asc_gpu_report_wakes",
+    )
+    wake_missing = [token for token in wake_required if token not in spurs_text]
+    if wake_missing or "spurs_external_event();" not in gcm_text:
+        raise SystemExit(f"M8.04 patched upstream is missing SPURS report wake: {wake_missing}")
+    with tempfile.TemporaryDirectory(prefix="m804-report-idempotence-") as temp:
+        fixture_upstream = pathlib.Path(temp)
+        spurs_target = fixture_upstream / "libs/spurs/cellSpurs.c"
+        gcm_target = fixture_upstream / "libs/video/cellGcmSys.c"
+        spurs_target.parent.mkdir(parents=True)
+        gcm_target.parent.mkdir(parents=True)
+        shutil.copy2(spurs_source, spurs_target)
+        shutil.copy2(source, gcm_target)
+        before = (spurs_target.read_bytes(), gcm_target.read_bytes())
+        patch_ps3recomp_spurs2.apply_ascension_spurs_report_wake(fixture_upstream)
+        if before != (spurs_target.read_bytes(), gcm_target.read_bytes()):
+            raise SystemExit("M8.04 SPURS report-wake patch is not idempotent")
 
 
 def check_behavior() -> None:
@@ -204,6 +315,82 @@ def check_stack_patch_syntax() -> None:
              "-fsyntax-only", str(source)],
             check=True,
         )
+        harness = root / "stack-main.c"
+        harness.write_text(r'''#include <errno.h>
+#include <stdint.h>
+extern int dispatch(void);
+extern unsigned test_create_calls, test_chosen_stack_mib;
+extern void spu_workload_reset_ascension_stack_metrics(void);
+extern void spu_workload_copy_ascension_stack_metrics(unsigned long long out[17]);
+int main(void)
+{
+    unsigned long long m[17] = {0};
+    spu_workload_reset_ascension_stack_metrics();
+    if (!dispatch() || test_create_calls != 3 || test_chosen_stack_mib != 32)
+        return 1;
+    spu_workload_copy_ascension_stack_metrics(m);
+    if (m[0] != 1 || m[1] != 1 || m[2] != 0 || m[3] != 1 ||
+        m[4] != 1 || m[5] != 0 || m[6] != 1 || m[7] != 1 ||
+        m[8] != 1 || m[9] || m[10] || m[11] || m[12] ||
+        m[13] || m[14] || m[15] != EAGAIN || m[16]) return 2;
+    return 0;
+}
+''')
+        output = root / "m804-stack-recovery-test"
+        subprocess.run(
+            [compiler, "-std=gnu11", "-Wall", "-Wextra", "-Werror",
+             str(source), str(harness), "-o", str(output)],
+            check=True,
+        )
+        subprocess.run([str(output)], check=True)
+
+
+def check_spurs_report_wake() -> None:
+    compiler = shutil.which("cc") or shutil.which("clang")
+    if not compiler:
+        raise SystemExit("M8.04 report-wake behavior test requires cc or clang")
+    with tempfile.TemporaryDirectory(prefix="m804-report-wake-") as temp:
+        root = pathlib.Path(temp)
+        upstream = root / "upstream"
+        spurs = upstream / "libs/spurs/cellSpurs.c"
+        gcm = upstream / "libs/video/cellGcmSys.c"
+        spurs.parent.mkdir(parents=True)
+        gcm.parent.mkdir(parents=True)
+        spurs.write_text(SPURS_REPORT_FIXTURE)
+        gcm.write_text(GCM_REPORT_FIXTURE)
+        patch_ps3recomp_spurs2.apply_ascension_spurs_report_wake(upstream)
+        before = (spurs.read_bytes(), gcm.read_bytes())
+        patch_ps3recomp_spurs2.apply_ascension_spurs_report_wake(upstream)
+        if before != (spurs.read_bytes(), gcm.read_bytes()):
+            raise SystemExit("M8.04 SPURS GPU-report wake patch is not idempotent")
+
+        harness = root / "report-wake-main.c"
+        harness.write_text(r'''#include <stdint.h>
+extern void cellSpursResetAscensionMetrics(void);
+extern void cellSpursCopyAscensionMetrics(uint64_t out[10]);
+extern void test_spurs_init(void);
+extern void test_gcm_report(void);
+extern int test_spurs_idle_state(void);
+extern unsigned test_spurs_wake_calls(void);
+int main(void)
+{
+    uint64_t metrics[10] = {0};
+    cellSpursResetAscensionMetrics();
+    test_spurs_init();
+    test_gcm_report();
+    cellSpursCopyAscensionMetrics(metrics);
+    if (!test_spurs_idle_state() || test_spurs_wake_calls() != 2 ||
+        metrics[8] != 1 || metrics[9] != 2) return 1;
+    return 0;
+}
+''')
+        output = root / "m804-report-wake-test"
+        subprocess.run(
+            [compiler, "-std=gnu11", "-Wall", "-Wextra", "-Werror",
+             str(spurs), str(gcm), str(harness), "-o", str(output)],
+            check=True,
+        )
+        subprocess.run([str(output)], check=True)
 
 
 def main() -> None:
@@ -214,6 +401,7 @@ def main() -> None:
         check_upstream_idempotence(args.upstream.resolve())
     check_behavior()
     check_stack_patch_syntax()
+    check_spurs_report_wake()
 
 
 if __name__ == "__main__":
