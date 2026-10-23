@@ -82,6 +82,7 @@ private struct XOWUEVulkanSurface: UIViewRepresentable {
 @MainActor
 private struct XOWUEGameSurfaceScreen: View {
     @ObservedObject var library: XOWUEGameLibrary
+    @StateObject private var touchController = XOWUETouchController()
     @State private var showBootHint = true
 
     private var bootSummary: String {
@@ -96,6 +97,7 @@ private struct XOWUEGameSurfaceScreen: View {
         ZStack {
             Color.black.ignoresSafeArea()
             XOWUEVulkanSurface().ignoresSafeArea()
+            XOWUETouchControllerHUD(input: touchController)
 
             VStack(spacing: 0) {
                 HStack {
@@ -159,16 +161,290 @@ private struct XOWUEGameSurfaceScreen: View {
             }
             .padding(.horizontal, 16)
             .padding(.top, 14)
-            .padding(.bottom, 22)
+            .padding(.bottom, showsBootFailure ? 218 : 22)
         }
         .background(.black)
         .preferredColorScheme(.dark)
         .statusBarHidden(true)
+        .onDisappear { touchController.releaseAll() }
         .onAppear {
             DispatchQueue.main.asyncAfter(deadline: .now() + 5) {
                 withAnimation(.easeOut(duration: 0.2)) { self.showBootHint = false }
             }
         }
+    }
+}
+
+@MainActor
+private final class XOWUETouchController: ObservableObject {
+    @Published private(set) var buttons: UInt32 = 0
+    private var leftTrigger: UInt8 = 0
+    private var rightTrigger: UInt8 = 0
+    private var leftX: Int16 = 0
+    private var leftY: Int16 = 0
+    private var rightX: Int16 = 0
+    private var rightY: Int16 = 0
+
+    func setButton(_ mask: UInt32, pressed: Bool) {
+        let next = pressed ? (buttons | mask) : (buttons & ~mask)
+        guard next != buttons else { return }
+        buttons = next
+        send()
+    }
+
+    func setTrigger(left: Bool, pressed: Bool) {
+        let value: UInt8 = pressed ? 255 : 0
+        if left {
+            guard leftTrigger != value else { return }
+            leftTrigger = value
+        } else {
+            guard rightTrigger != value else { return }
+            rightTrigger = value
+        }
+        send()
+    }
+
+    func setStick(left: Bool, x: CGFloat, y: CGFloat) {
+        let nextX = Int16((min(1, max(-1, x)) * 32767).rounded())
+        let nextY = Int16((min(1, max(-1, y)) * 32767).rounded())
+        if left {
+            guard leftX != nextX || leftY != nextY else { return }
+            leftX = nextX
+            leftY = nextY
+        } else {
+            guard rightX != nextX || rightY != nextY else { return }
+            rightX = nextX
+            rightY = nextY
+        }
+        send()
+    }
+
+    func releaseAll() {
+        buttons = 0
+        leftTrigger = 0
+        rightTrigger = 0
+        leftX = 0
+        leftY = 0
+        rightX = 0
+        rightY = 0
+        send()
+    }
+
+    private func send() {
+        xowue_set_touch_controller_state(
+            buttons,
+            leftTrigger,
+            rightTrigger,
+            leftX,
+            leftY,
+            rightX,
+            rightY
+        )
+    }
+}
+
+private enum XOWUEGamepadButton {
+    static let up: UInt32 = 0x0001
+    static let down: UInt32 = 0x0002
+    static let left: UInt32 = 0x0004
+    static let right: UInt32 = 0x0008
+    static let start: UInt32 = 0x0010
+    static let back: UInt32 = 0x0020
+    static let leftThumb: UInt32 = 0x0040
+    static let rightThumb: UInt32 = 0x0080
+    static let leftShoulder: UInt32 = 0x0100
+    static let rightShoulder: UInt32 = 0x0200
+    static let a: UInt32 = 0x1000
+    static let b: UInt32 = 0x2000
+    static let x: UInt32 = 0x4000
+    static let y: UInt32 = 0x8000
+}
+
+private struct XOWUETouchControllerHUD: View {
+    @ObservedObject var input: XOWUETouchController
+    @State private var controlsVisible = true
+
+    var body: some View {
+        GeometryReader { geometry in
+            VStack(spacing: 0) {
+                HStack {
+                    Spacer()
+                    Button {
+                        controlsVisible.toggle()
+                        if !controlsVisible { input.releaseAll() }
+                    } label: {
+                        Image(systemName: controlsVisible ? "gamecontroller.fill" : "gamecontroller")
+                            .font(.system(size: 14, weight: .bold))
+                            .foregroundStyle(XOWUEPalette.yellow)
+                            .frame(width: 42, height: 34)
+                            .background(.black.opacity(0.56), in: Capsule())
+                    }
+                    .buttonStyle(.plain)
+                    .accessibilityLabel(controlsVisible ? "Ocultar controles" : "Mostrar controles")
+                }
+
+                Spacer(minLength: 0)
+
+                if controlsVisible {
+                    HStack(alignment: .bottom, spacing: 8) {
+                        VStack(spacing: 8) {
+                            HStack(spacing: 6) {
+                                XOWUETouchButton(title: "L1", mask: XOWUEGamepadButton.leftShoulder, input: input, size: 39)
+                                XOWUETouchTrigger(title: "L2", left: true, input: input)
+                            }
+                            XOWUETouchStick(left: true, input: input, size: 100)
+                            XOWUETouchDPad(input: input)
+                            XOWUETouchButton(title: "L3", mask: XOWUEGamepadButton.leftThumb, input: input, size: 39)
+                        }
+
+                        Spacer(minLength: 0)
+
+                        VStack(spacing: 10) {
+                            HStack(spacing: 6) {
+                                XOWUETouchButton(title: "BACK", mask: XOWUEGamepadButton.back, input: input, size: 38, compact: true)
+                                XOWUETouchButton(title: "START", mask: XOWUEGamepadButton.start, input: input, size: 38, compact: true)
+                            }
+                            XOWUETouchABXY(input: input)
+                        }
+
+                        Spacer(minLength: 0)
+
+                        VStack(spacing: 8) {
+                            HStack(spacing: 6) {
+                                XOWUETouchTrigger(title: "R2", left: false, input: input)
+                                XOWUETouchButton(title: "R1", mask: XOWUEGamepadButton.rightShoulder, input: input, size: 39)
+                            }
+                            XOWUETouchStick(left: false, input: input, size: 84)
+                            XOWUETouchButton(title: "R3", mask: XOWUEGamepadButton.rightThumb, input: input, size: 39)
+                        }
+                    }
+                    .padding(.horizontal, 8)
+                    .padding(.bottom, max(18, geometry.safeAreaInsets.bottom + 10))
+                    .transition(.opacity)
+                }
+            }
+            .padding(.horizontal, 9)
+            .padding(.top, max(32, geometry.safeAreaInsets.top + 12))
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
+        }
+        .ignoresSafeArea()
+        .animation(.easeOut(duration: 0.18), value: controlsVisible)
+    }
+}
+
+private struct XOWUETouchButton: View {
+    let title: String
+    let mask: UInt32
+    @ObservedObject var input: XOWUETouchController
+    var size: CGFloat = 48
+    var compact = false
+
+    private var isPressed: Bool { input.buttons & mask != 0 }
+
+    var body: some View {
+        Text(title)
+            .font(.system(size: compact ? 8 : 13, weight: .black, design: .rounded))
+            .tracking(compact ? 0.2 : 0.4)
+            .foregroundStyle(isPressed ? Color.black : Color.white)
+            .frame(width: size, height: size)
+            .background(isPressed ? XOWUEPalette.yellow : Color.white.opacity(0.2), in: Circle())
+            .overlay(Circle().stroke(.white.opacity(0.58), lineWidth: 1.2))
+            .shadow(color: .black.opacity(0.3), radius: 5, y: 2)
+            .contentShape(Circle())
+            .gesture(DragGesture(minimumDistance: 0)
+                .onChanged { _ in input.setButton(mask, pressed: true) }
+                .onEnded { _ in input.setButton(mask, pressed: false) })
+            .accessibilityLabel(title)
+    }
+}
+
+private struct XOWUETouchTrigger: View {
+    let title: String
+    let left: Bool
+    @ObservedObject var input: XOWUETouchController
+
+    var body: some View {
+        Text(title)
+            .font(.system(size: 10, weight: .black, design: .rounded))
+            .foregroundStyle(.white)
+            .frame(width: 44, height: 34)
+            .background(.white.opacity(0.2), in: RoundedRectangle(cornerRadius: 11))
+            .overlay(RoundedRectangle(cornerRadius: 11).stroke(.white.opacity(0.56), lineWidth: 1))
+            .gesture(DragGesture(minimumDistance: 0)
+                .onChanged { _ in input.setTrigger(left: left, pressed: true) }
+                .onEnded { _ in input.setTrigger(left: left, pressed: false) })
+            .accessibilityLabel(title == "L2" ? "Gatilho esquerdo" : "Gatilho direito")
+    }
+}
+
+private struct XOWUETouchStick: View {
+    let left: Bool
+    @ObservedObject var input: XOWUETouchController
+    let size: CGFloat
+    @State private var offset = CGSize.zero
+
+    var body: some View {
+        let radius = size * 0.34
+        ZStack {
+            Circle().fill(.white.opacity(0.16))
+            Circle().stroke(.white.opacity(0.58), lineWidth: 1.3)
+            Circle()
+                .fill(.white.opacity(0.34))
+                .overlay(Circle().stroke(.white.opacity(0.7), lineWidth: 1))
+                .frame(width: size * 0.43, height: size * 0.43)
+                .offset(offset)
+        }
+        .frame(width: size, height: size)
+        .shadow(color: .black.opacity(0.3), radius: 5, y: 2)
+        .contentShape(Circle())
+        .gesture(DragGesture(minimumDistance: 0)
+            .onChanged { value in
+                let dx = min(radius, max(-radius, value.translation.width))
+                let dy = min(radius, max(-radius, value.translation.height))
+                offset = CGSize(width: dx, height: dy)
+                input.setStick(left: left, x: dx / radius, y: -dy / radius)
+            }
+            .onEnded { _ in
+                offset = .zero
+                input.setStick(left: left, x: 0, y: 0)
+            })
+            .accessibilityLabel(left ? "Alavanca esquerda" : "Alavanca direita")
+    }
+}
+
+private struct XOWUETouchDPad: View {
+    @ObservedObject var input: XOWUETouchController
+
+    var body: some View {
+        ZStack {
+            XOWUETouchButton(title: "↑", mask: XOWUEGamepadButton.up, input: input, size: 27)
+                .offset(y: -22)
+            XOWUETouchButton(title: "↓", mask: XOWUEGamepadButton.down, input: input, size: 27)
+                .offset(y: 22)
+            XOWUETouchButton(title: "←", mask: XOWUEGamepadButton.left, input: input, size: 27)
+                .offset(x: -22)
+            XOWUETouchButton(title: "→", mask: XOWUEGamepadButton.right, input: input, size: 27)
+                .offset(x: 22)
+        }
+        .frame(width: 76, height: 62)
+        .accessibilityElement(children: .contain)
+        .accessibilityLabel("Direcional")
+    }
+}
+
+private struct XOWUETouchABXY: View {
+    @ObservedObject var input: XOWUETouchController
+
+    var body: some View {
+        ZStack {
+            XOWUETouchButton(title: "Y", mask: XOWUEGamepadButton.y, input: input).offset(y: -30)
+            XOWUETouchButton(title: "A", mask: XOWUEGamepadButton.a, input: input).offset(y: 30)
+            XOWUETouchButton(title: "X", mask: XOWUEGamepadButton.x, input: input).offset(x: -30)
+            XOWUETouchButton(title: "B", mask: XOWUEGamepadButton.b, input: input).offset(x: 30)
+        }
+        .frame(width: 126, height: 126)
+        .accessibilityElement(children: .contain)
+        .accessibilityLabel("Botões A B X Y")
     }
 }
 
@@ -714,7 +990,7 @@ private final class XOWUEGameLibrary: ObservableObject {
         phase = .booting
         progress = 0.15
         status = "Abrindo X-MEN ORIGINS: WOLVERINE…"
-        detail = "KosmicKrisp pronto; aguardando o primeiro frame traduzido do Xenos."
+        detail = "Inicializando o runtime PPC, a fila Xenos e o caminho de frames no KosmicKrisp."
         bootOutput = "O jogo está sendo iniciado."
         let executablePath = game.appendingPathComponent(XOWUEFileStore.executableName).path
         XOWUEDiagnostics.bootStarted(path: executablePath, build: XOWUEBuild.number)
@@ -1084,16 +1360,16 @@ private struct XOWUERootView: View {
             }
 
             runtimeRow("Recompilação AOT", detail: "345 unidades ligadas ao runtime", icon: "checkmark.circle.fill", tint: XOWUEPalette.green)
-            runtimeRow("Scheduler PPC / KTHREAD", detail: "ExCreateThread e APIs Ob* de handles/referências implementadas; aguarda validação com o XEX.", icon: "point.3.connected.trianglepath.dotted", tint: XOWUEPalette.yellowLight)
-            runtimeRow("Memória física Xbox", detail: "Alocação e mapeamento guest/physical básicos; compatibilidade do título ainda não validada", icon: "point.3.connected.trianglepath.dotted", tint: XOWUEPalette.yellowLight)
-            runtimeRow("Frontend Xenos / PM4", detail: "Ainda precisa executar draws, shaders e formatos de textura do jogo", icon: "point.3.connected.trianglepath.dotted", tint: XOWUEPalette.yellowLight)
-            runtimeRow("KosmicKrisp · Metal WSI", detail: "Backend Vulkan → Metal usado pela superfície do jogo", icon: "point.3.connected.trianglepath.dotted", tint: XOWUEPalette.blueLight)
+            runtimeRow("Scheduler PPC / KTHREAD", detail: "Threads guest, espera/suspensão, TLS e encerramento pelo kernel Xbox", icon: "point.3.connected.trianglepath.dotted", tint: XOWUEPalette.yellowLight)
+            runtimeRow("Memória física Xbox", detail: "Alocação, endereços físicos e mapeamento guest usados pelo XEX", icon: "point.3.connected.trianglepath.dotted", tint: XOWUEPalette.yellowLight)
+            runtimeRow("Frontend Xenos / PM4", detail: "Ring buffer lido via CP_RB_WPTR; fetch de swap, draws e buffers indiretos contabilizados", icon: "point.3.connected.trianglepath.dotted", tint: XOWUEPalette.yellowLight)
+            runtimeRow("KosmicKrisp · Metal WSI", detail: "Frames RGBA do frontbuffer enviados à swapchain Vulkan → Metal a 60 Hz", icon: "point.3.connected.trianglepath.dotted", tint: XOWUEPalette.blueLight)
 
             VStack(alignment: .leading, spacing: 6) {
                 Text("KosmicKrisp permanece como backend gráfico.")
                     .font(.system(size: 13, weight: .bold, design: .rounded))
                     .foregroundStyle(XOWUEPalette.white)
-                Text("KosmicKrisp inicia a GPU e a superfície Metal do iPhone. A imagem do jogo depende do XEX avançar até o Xenos e o runtime executar os draws e shaders do título.")
+                Text("KosmicKrisp continua como backend gráfico. A fila Xenos acompanha submissões do XEX, processa os swaps e encaminha o frontbuffer RGBA para a superfície Vulkan → Metal. O HUD tátil injeta estados XInput no guest.")
                     .font(.system(size: 11))
                     .foregroundStyle(XOWUEPalette.muted)
                     .fixedSize(horizontal: false, vertical: true)

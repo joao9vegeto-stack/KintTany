@@ -15,11 +15,21 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <pthread.h>
+#include <math.h>
 
 static _Atomic(uint32_t) g_xowue_guest_swap_count = 0;
 static _Atomic(uint32_t) g_xowue_guest_width = 0;
 static _Atomic(uint32_t) g_xowue_guest_height = 0;
 static _Atomic(uint32_t) g_xowue_guest_frontbuffer = 0;
+static _Atomic(uint64_t) g_xowue_guest_frame_count = 0;
+static pthread_mutex_t g_xowue_guest_frame_mutex = PTHREAD_MUTEX_INITIALIZER;
+static uint8_t *g_xowue_guest_frame = NULL;
+static size_t g_xowue_guest_frame_bytes = 0;
+static uint32_t g_xowue_guest_frame_width = 0;
+static uint32_t g_xowue_guest_frame_height = 0;
+static uint32_t g_xowue_guest_frame_address = 0;
+static uint32_t g_xowue_guest_frame_format = 0;
 
 void xowue_vulkan_backend_guest_swap(uint32_t frontbuffer, uint32_t width, uint32_t height)
 {
@@ -27,6 +37,50 @@ void xowue_vulkan_backend_guest_swap(uint32_t frontbuffer, uint32_t width, uint3
    atomic_store_explicit(&g_xowue_guest_width, width, memory_order_relaxed);
    atomic_store_explicit(&g_xowue_guest_height, height, memory_order_relaxed);
    atomic_fetch_add_explicit(&g_xowue_guest_swap_count, 1, memory_order_relaxed);
+}
+
+void xowue_vulkan_backend_guest_frame_rgba(uint32_t frontbuffer,
+                                           uint32_t width, uint32_t height,
+                                           uint32_t format,
+                                           const uint8_t *rgba,
+                                           size_t byte_count)
+{
+   if (!rgba || width == 0 || height == 0 ||
+       (uint64_t)width * height * 4u > byte_count)
+      return;
+
+   const size_t required = (size_t)width * (size_t)height * 4u;
+   uint8_t *copy = (uint8_t *)malloc(required);
+   if (!copy)
+      return;
+   memcpy(copy, rgba, required);
+
+   pthread_mutex_lock(&g_xowue_guest_frame_mutex);
+   uint8_t *previous = g_xowue_guest_frame;
+   g_xowue_guest_frame = copy;
+   g_xowue_guest_frame_bytes = required;
+   g_xowue_guest_frame_width = width;
+   g_xowue_guest_frame_height = height;
+   g_xowue_guest_frame_address = frontbuffer;
+   g_xowue_guest_frame_format = format;
+   atomic_fetch_add_explicit(&g_xowue_guest_frame_count, 1, memory_order_relaxed);
+   pthread_mutex_unlock(&g_xowue_guest_frame_mutex);
+   free(previous);
+}
+
+void xowue_vulkan_backend_guest_frame_reset(void)
+{
+   pthread_mutex_lock(&g_xowue_guest_frame_mutex);
+   uint8_t *previous = g_xowue_guest_frame;
+   g_xowue_guest_frame = NULL;
+   g_xowue_guest_frame_bytes = 0;
+   g_xowue_guest_frame_width = 0;
+   g_xowue_guest_frame_height = 0;
+   g_xowue_guest_frame_address = 0;
+   g_xowue_guest_frame_format = 0;
+   atomic_store_explicit(&g_xowue_guest_frame_count, 0, memory_order_relaxed);
+   pthread_mutex_unlock(&g_xowue_guest_frame_mutex);
+   free(previous);
 }
 
 
@@ -92,6 +146,11 @@ typedef struct KKVulkanState {
    VkCommandBuffer command_buffer;
    VkSemaphore image_available;
    VkSemaphore render_finished;
+   VkBuffer upload_buffer;
+   VkDeviceMemory upload_memory;
+   void *upload_mapped;
+   VkDeviceSize upload_size;
+   VkMemoryPropertyFlags upload_memory_flags;
 
    PFN_vkDestroyInstance DestroyInstance;
    PFN_vkEnumeratePhysicalDevices EnumeratePhysicalDevices;
@@ -123,6 +182,16 @@ typedef struct KKVulkanState {
    PFN_vkEndCommandBuffer EndCommandBuffer;
    PFN_vkCmdPipelineBarrier CmdPipelineBarrier;
    PFN_vkCmdClearColorImage CmdClearColorImage;
+   PFN_vkCmdCopyBufferToImage CmdCopyBufferToImage;
+   PFN_vkCreateBuffer CreateBuffer;
+   PFN_vkDestroyBuffer DestroyBuffer;
+   PFN_vkGetBufferMemoryRequirements GetBufferMemoryRequirements;
+   PFN_vkAllocateMemory AllocateMemory;
+   PFN_vkFreeMemory FreeMemory;
+   PFN_vkBindBufferMemory BindBufferMemory;
+   PFN_vkMapMemory MapMemory;
+   PFN_vkUnmapMemory UnmapMemory;
+   PFN_vkFlushMappedMemoryRanges FlushMappedMemoryRanges;
    PFN_vkCreateSemaphore CreateSemaphore;
    PFN_vkDestroySemaphore DestroySemaphore;
    PFN_vkQueueSubmit QueueSubmit;
@@ -130,6 +199,7 @@ typedef struct KKVulkanState {
    PFN_vkDeviceWaitIdle DeviceWaitIdle;
 
    uint64_t frame_count;
+   uint64_t guest_frames_presented;
    bool ready;
 } KKVulkanState;
 
@@ -150,6 +220,186 @@ typedef struct KKVulkanState {
          return false; \
       } \
    } while (0)
+
+static void
+KKDestroyUploadBuffer(KKVulkanState *state)
+{
+   if (!state->device)
+      return;
+   if (state->upload_mapped && state->UnmapMemory)
+      state->UnmapMemory(state->device, state->upload_memory);
+   if (state->upload_buffer && state->DestroyBuffer)
+      state->DestroyBuffer(state->device, state->upload_buffer, NULL);
+   if (state->upload_memory && state->FreeMemory)
+      state->FreeMemory(state->device, state->upload_memory, NULL);
+   state->upload_buffer = VK_NULL_HANDLE;
+   state->upload_memory = VK_NULL_HANDLE;
+   state->upload_mapped = NULL;
+   state->upload_size = 0;
+   state->upload_memory_flags = 0;
+}
+
+static bool
+KKEnsureUploadBuffer(KKVulkanState *state, uint32_t width, uint32_t height)
+{
+   const VkDeviceSize required = (VkDeviceSize)width * height * 4u;
+   if (!state->device || width == 0 || height == 0 || required == 0)
+      return false;
+   if (state->upload_buffer && state->upload_mapped && state->upload_size >= required)
+      return true;
+
+   KKDestroyUploadBuffer(state);
+   VkBufferCreateInfo buffer_info = {
+      .sType = VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO,
+      .size = required,
+      .usage = VK_BUFFER_USAGE_TRANSFER_SRC_BIT,
+      .sharingMode = VK_SHARING_MODE_EXCLUSIVE,
+   };
+   VkResult result = state->CreateBuffer(state->device, &buffer_info, NULL,
+                                          &state->upload_buffer);
+   if (result != VK_SUCCESS) {
+      KKLog(@"FAIL guest-frame upload buffer = %d", result);
+      return false;
+   }
+
+   VkMemoryRequirements requirements = {0};
+   state->GetBufferMemoryRequirements(state->device, state->upload_buffer,
+                                      &requirements);
+   VkPhysicalDeviceMemoryProperties memory_properties = {0};
+   state->GetPhysicalDeviceMemoryProperties(state->physical_device,
+                                             &memory_properties);
+   uint32_t memory_type = UINT32_MAX;
+   uint32_t fallback_type = UINT32_MAX;
+   VkMemoryPropertyFlags memory_flags = 0;
+   VkMemoryPropertyFlags fallback_flags = 0;
+   for (uint32_t i = 0; i < memory_properties.memoryTypeCount; ++i) {
+      if ((requirements.memoryTypeBits & (1u << i)) == 0)
+         continue;
+      const VkMemoryPropertyFlags flags = memory_properties.memoryTypes[i].propertyFlags;
+      if ((flags & VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT) == 0)
+         continue;
+      if (fallback_type == UINT32_MAX) {
+         fallback_type = i;
+         fallback_flags = flags;
+      }
+      if ((flags & VK_MEMORY_PROPERTY_HOST_COHERENT_BIT) != 0) {
+         memory_type = i;
+         memory_flags = flags;
+         break;
+      }
+   }
+   if (memory_type == UINT32_MAX) {
+      memory_type = fallback_type;
+      memory_flags = fallback_flags;
+   }
+   if (memory_type == UINT32_MAX) {
+      KKLog(@"FAIL no host-visible memory for guest-frame upload");
+      KKDestroyUploadBuffer(state);
+      return false;
+   }
+
+   VkMemoryAllocateInfo allocation_info = {
+      .sType = VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO,
+      .allocationSize = requirements.size,
+      .memoryTypeIndex = memory_type,
+   };
+   result = state->AllocateMemory(state->device, &allocation_info, NULL,
+                                  &state->upload_memory);
+   if (result != VK_SUCCESS) {
+      KKLog(@"FAIL guest-frame upload memory = %d", result);
+      KKDestroyUploadBuffer(state);
+      return false;
+   }
+   result = state->BindBufferMemory(state->device, state->upload_buffer,
+                                    state->upload_memory, 0);
+   if (result != VK_SUCCESS) {
+      KKLog(@"FAIL bind guest-frame upload memory = %d", result);
+      KKDestroyUploadBuffer(state);
+      return false;
+   }
+   result = state->MapMemory(state->device, state->upload_memory, 0,
+                             VK_WHOLE_SIZE, 0, &state->upload_mapped);
+   if (result != VK_SUCCESS || !state->upload_mapped) {
+      KKLog(@"FAIL map guest-frame upload memory = %d", result);
+      KKDestroyUploadBuffer(state);
+      return false;
+   }
+   state->upload_size = requirements.size;
+   state->upload_memory_flags = memory_flags;
+   KKLog(@"GUEST_FRAME_UPLOAD ready %ux%u bytes=%llu coherent=%d",
+         width, height, (unsigned long long)required,
+         (memory_flags & VK_MEMORY_PROPERTY_HOST_COHERENT_BIT) != 0);
+   return true;
+}
+
+static bool
+KKWriteGuestFrame(KKVulkanState *state)
+{
+   if (!state->upload_mapped || !state->upload_buffer ||
+       state->upload_size < (VkDeviceSize)state->swapchain_extent.width *
+                                state->swapchain_extent.height * 4u)
+      return false;
+   const uint32_t target_width = state->swapchain_extent.width;
+   const uint32_t target_height = state->swapchain_extent.height;
+   const size_t target_bytes = (size_t)target_width * target_height * 4u;
+   uint8_t *destination = (uint8_t *)state->upload_mapped;
+   memset(destination, 0, target_bytes);
+   for (size_t i = 3; i < target_bytes; i += 4)
+      destination[i] = 255;
+
+   bool copied = false;
+   pthread_mutex_lock(&g_xowue_guest_frame_mutex);
+   const uint8_t *source = g_xowue_guest_frame;
+   const uint32_t source_width = g_xowue_guest_frame_width;
+   const uint32_t source_height = g_xowue_guest_frame_height;
+   const size_t source_bytes = g_xowue_guest_frame_bytes;
+   if (source && source_width && source_height &&
+       (uint64_t)source_width * source_height * 4u <= source_bytes) {
+      const bool rotate = target_height > target_width;
+      const uint32_t rotated_width = rotate ? source_height : source_width;
+      const uint32_t rotated_height = rotate ? source_width : source_height;
+      const double scale_x = (double)target_width / rotated_width;
+      const double scale_y = (double)target_height / rotated_height;
+      const double scale = fmin(scale_x, scale_y);
+      const uint32_t draw_width = (uint32_t)fmax(1.0, floor(rotated_width * scale));
+      const uint32_t draw_height = (uint32_t)fmax(1.0, floor(rotated_height * scale));
+      const uint32_t origin_x = (target_width - draw_width) / 2u;
+      const uint32_t origin_y = (target_height - draw_height) / 2u;
+      const bool target_bgra = state->swapchain_format == VK_FORMAT_B8G8R8A8_UNORM ||
+                               state->swapchain_format == VK_FORMAT_B8G8R8A8_SRGB;
+      for (uint32_t y = 0; y < draw_height; ++y) {
+         const uint32_t rotated_y = (uint32_t)((uint64_t)y * rotated_height / draw_height);
+         for (uint32_t x = 0; x < draw_width; ++x) {
+            const uint32_t rotated_x = (uint32_t)((uint64_t)x * rotated_width / draw_width);
+            const uint32_t source_x = rotate ? rotated_y : rotated_x;
+            const uint32_t source_y = rotate ? source_height - 1u - rotated_x : rotated_y;
+            const uint8_t *pixel = source + ((size_t)source_y * source_width + source_x) * 4u;
+            uint8_t *output = destination + ((size_t)(origin_y + y) * target_width + origin_x + x) * 4u;
+            output[0] = target_bgra ? pixel[2] : pixel[0];
+            output[1] = pixel[1];
+            output[2] = target_bgra ? pixel[0] : pixel[2];
+            output[3] = pixel[3];
+         }
+      }
+      copied = true;
+   }
+   pthread_mutex_unlock(&g_xowue_guest_frame_mutex);
+
+   if ((state->upload_memory_flags & VK_MEMORY_PROPERTY_HOST_COHERENT_BIT) == 0) {
+      VkMappedMemoryRange range = {
+         .sType = VK_STRUCTURE_TYPE_MAPPED_MEMORY_RANGE,
+         .memory = state->upload_memory,
+         .offset = 0,
+         .size = VK_WHOLE_SIZE,
+      };
+      VkResult result = state->FlushMappedMemoryRanges(state->device, 1, &range);
+      if (result != VK_SUCCESS) {
+         KKLog(@"FAIL flush guest-frame upload memory = %d", result);
+         return false;
+      }
+   }
+   return copied;
+}
 
 static void
 KKDestroySwapchain(KKVulkanState *state)
@@ -176,6 +426,7 @@ KKDestroyVulkan(KKVulkanState *state)
       state->DeviceWaitIdle(state->device);
 
    KKDestroySwapchain(state);
+   KKDestroyUploadBuffer(state);
 
    if (state->device && state->DestroySemaphore) {
       if (state->image_available)
@@ -335,6 +586,8 @@ KKCreateSwapchain(KKVulkanState *state, CAMetalLayer *layer)
 
    if (old_swapchain)
       state->DestroySwapchainKHR(state->device, old_swapchain, NULL);
+
+   KKEnsureUploadBuffer(state, extent.width, extent.height);
 
    KKLog(@"SWAPCHAIN PASS extent=%ux%u images=%u format=%d present=FIFO",
          extent.width, extent.height, actual_count, chosen.format);
@@ -559,7 +812,7 @@ KKCreateVulkan(KKVulkanState *state, CAMetalLayer *layer)
    VkDeviceSize heap_bytes = 0;
    for (uint32_t i = 0; i < memory_properties.memoryHeapCount; ++i)
       heap_bytes += memory_properties.memoryHeaps[i].size;
-   KKLog(@"GPU_MEMORY heaps=%u heap_bytes=%llu resident_mib=%.1f pipeline_cache=none(clear-only)",
+   KKLog(@"GPU_MEMORY heaps=%u heap_bytes=%llu resident_mib=%.1f pipeline_cache=none(guest-frame-copy)",
          memory_properties.memoryHeapCount, (unsigned long long)heap_bytes, KKResidentMiB());
 
    uint32_t device_extension_count = 0;
@@ -663,6 +916,19 @@ KKCreateVulkan(KKVulkanState *state, CAMetalLayer *layer)
                   "vkCmdPipelineBarrier");
    KK_LOAD_DEVICE(state, CmdClearColorImage, PFN_vkCmdClearColorImage,
                   "vkCmdClearColorImage");
+   KK_LOAD_DEVICE(state, CmdCopyBufferToImage, PFN_vkCmdCopyBufferToImage,
+                  "vkCmdCopyBufferToImage");
+   KK_LOAD_DEVICE(state, CreateBuffer, PFN_vkCreateBuffer, "vkCreateBuffer");
+   KK_LOAD_DEVICE(state, DestroyBuffer, PFN_vkDestroyBuffer, "vkDestroyBuffer");
+   KK_LOAD_DEVICE(state, GetBufferMemoryRequirements,
+                  PFN_vkGetBufferMemoryRequirements, "vkGetBufferMemoryRequirements");
+   KK_LOAD_DEVICE(state, AllocateMemory, PFN_vkAllocateMemory, "vkAllocateMemory");
+   KK_LOAD_DEVICE(state, FreeMemory, PFN_vkFreeMemory, "vkFreeMemory");
+   KK_LOAD_DEVICE(state, BindBufferMemory, PFN_vkBindBufferMemory, "vkBindBufferMemory");
+   KK_LOAD_DEVICE(state, MapMemory, PFN_vkMapMemory, "vkMapMemory");
+   KK_LOAD_DEVICE(state, UnmapMemory, PFN_vkUnmapMemory, "vkUnmapMemory");
+   KK_LOAD_DEVICE(state, FlushMappedMemoryRanges,
+                  PFN_vkFlushMappedMemoryRanges, "vkFlushMappedMemoryRanges");
    KK_LOAD_DEVICE(state, CreateSemaphore, PFN_vkCreateSemaphore,
                   "vkCreateSemaphore");
    KK_LOAD_DEVICE(state, DestroySemaphore, PFN_vkDestroySemaphore,
@@ -755,6 +1021,8 @@ KKRenderFrame(KKVulkanState *state, CAMetalLayer *layer)
       return false;
    }
 
+   const bool guest_frame_ready = KKWriteGuestFrame(state);
+
    result = state->ResetCommandBuffer(state->command_buffer, 0);
    if (result != VK_SUCCESS) {
       KKLog(@"FAIL vkResetCommandBuffer = %d", result);
@@ -795,9 +1063,6 @@ KKRenderFrame(KKVulkanState *state, CAMetalLayer *layer)
       VK_PIPELINE_STAGE_TRANSFER_BIT,
       0, 0, NULL, 0, NULL, 1, &to_clear);
 
-   VkClearColorValue color = {
-      .float32 = {0.0f, 0.0f, 0.0f, 1.0f},
-   };
    VkImageSubresourceRange range = {
       .aspectMask = VK_IMAGE_ASPECT_COLOR_BIT,
       .baseMipLevel = 0,
@@ -805,9 +1070,33 @@ KKRenderFrame(KKVulkanState *state, CAMetalLayer *layer)
       .baseArrayLayer = 0,
       .layerCount = 1,
    };
-   state->CmdClearColorImage(
-      state->command_buffer, state->swapchain_images[image_index],
-      VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, &color, 1, &range);
+   if (guest_frame_ready) {
+      VkBufferImageCopy copy = {
+         .bufferOffset = 0,
+         .bufferRowLength = 0,
+         .bufferImageHeight = 0,
+         .imageSubresource = {
+            .aspectMask = VK_IMAGE_ASPECT_COLOR_BIT,
+            .mipLevel = 0,
+            .baseArrayLayer = 0,
+            .layerCount = 1,
+         },
+         .imageOffset = {0, 0, 0},
+         .imageExtent = {state->swapchain_extent.width,
+                         state->swapchain_extent.height, 1},
+      };
+      state->CmdCopyBufferToImage(
+         state->command_buffer, state->upload_buffer,
+         state->swapchain_images[image_index],
+         VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 1, &copy);
+   } else {
+      VkClearColorValue color = {
+         .float32 = {0.0f, 0.0f, 0.0f, 1.0f},
+      };
+      state->CmdClearColorImage(
+         state->command_buffer, state->swapchain_images[image_index],
+         VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, &color, 1, &range);
+   }
 
    VkImageMemoryBarrier to_present = {
       .sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER,
@@ -874,6 +1163,8 @@ KKRenderFrame(KKVulkanState *state, CAMetalLayer *layer)
    }
 
    state->frame_count++;
+   if (guest_frame_ready)
+      state->guest_frames_presented++;
    return true;
 }
 
@@ -1014,13 +1305,13 @@ KKRenderFrame(KKVulkanState *state, CAMetalLayer *layer)
    }
 
    _statusLabel.text = [NSString stringWithFormat:
-      @"KOSMICKRISP ATIVO · %@\nCAMetalLayer %ux%u\nAguardando frame Xenos traduzido",
+      @"KOSMICKRISP ATIVO · %@\nCAMetalLayer %ux%u\nXenos → Vulkan → Metal",
       metalLayer.device.name, _vk.swapchain_extent.width, _vk.swapchain_extent.height];
    KKLog(@"KOSMICKRISP_BACKEND_READY extent=%ux%u images=%u",
          _vk.swapchain_extent.width, _vk.swapchain_extent.height, _vk.swapchain_image_count);
 
    _displayLink = [CADisplayLink displayLinkWithTarget:self selector:@selector(displayTick:)];
-   _displayLink.preferredFramesPerSecond = 30;
+   _displayLink.preferredFramesPerSecond = 60;
    [_displayLink addToRunLoop:NSRunLoop.mainRunLoop forMode:NSRunLoopCommonModes];
 }
 
@@ -1042,12 +1333,14 @@ KKRenderFrame(KKVulkanState *state, CAMetalLayer *layer)
       const uint32_t swaps = atomic_load_explicit(&g_xowue_guest_swap_count, memory_order_relaxed);
       const uint32_t width = atomic_load_explicit(&g_xowue_guest_width, memory_order_relaxed);
       const uint32_t height = atomic_load_explicit(&g_xowue_guest_height, memory_order_relaxed);
+      const uint64_t decodedFrames = atomic_load_explicit(&g_xowue_guest_frame_count, memory_order_relaxed);
       _statusLabel.text = [NSString stringWithFormat:
-         @"METAL PRESENT PASS · %@\nClear frame %llu · %ux%u\nVdSwap Xenos: %u · %ux%u (sem conversão de textura)",
-         metalLayer.device.name, _vk.frame_count, _vk.swapchain_extent.width,
-         _vk.swapchain_extent.height, swaps, width, height];
-      KKLog(@"KOSMICKRISP_PRESENT frames=%llu guest_swaps=%u guest_extent=%ux%u resident_mib=%.1f",
-            _vk.frame_count, swaps, width, height, KKResidentMiB());
+         @"METAL PRESENT PASS · %@\nVulkan frames %llu · guest frames %llu\nVdSwap Xenos: %u · %ux%u",
+         metalLayer.device.name, _vk.frame_count, _vk.guest_frames_presented,
+         swaps, width, height];
+      KKLog(@"KOSMICKRISP_PRESENT frames=%llu guest_frames=%llu decoded_frames=%llu guest_swaps=%u guest_extent=%ux%u resident_mib=%.1f",
+            _vk.frame_count, _vk.guest_frames_presented, decodedFrames,
+            swaps, width, height, KKResidentMiB());
    }
 }
 
@@ -1073,4 +1366,3 @@ KKRenderFrame(KKVulkanState *state, CAMetalLayer *layer)
 }
 
 @end
-

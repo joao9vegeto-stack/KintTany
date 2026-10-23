@@ -32,6 +32,10 @@ extern "C" void xowue_vulkan_backend_guest_swap(uint32_t frontbuffer,
                                                  uint32_t width,
                                                  uint32_t height)
     __attribute__((weak));
+extern "C" void xowue_vulkan_backend_guest_frame_rgba(
+    uint32_t frontbuffer, uint32_t width, uint32_t height, uint32_t format,
+    const uint8_t *rgba, size_t byte_count) __attribute__((weak));
+extern "C" void xowue_vulkan_backend_guest_frame_reset(void) __attribute__((weak));
 
 namespace {
 constexpr size_t kGuestAddressSpaceSize = static_cast<size_t>(PPC_MEMORY_SIZE);
@@ -40,6 +44,10 @@ constexpr uint32_t kFirstVirtualAllocation = 0x10000000u;
 constexpr uint32_t kLastVirtualAllocation = 0x70000000u;
 constexpr uint32_t kNtStatusSuccess = 0x00000000u;
 constexpr uint32_t kNtStatusInvalidParameter = 0xC000000Du;
+constexpr uint32_t kNtStatusBufferTooSmall = 0xC0000023u;
+constexpr uint32_t kNtStatusInvalidParameter1 = 0xC00000EFu;
+constexpr uint32_t kNtStatusInvalidParameter2 = 0xC00000F0u;
+constexpr uint32_t kNtStatusInvalidParameter3 = 0xC00000F1u;
 constexpr uint32_t kNtStatusNoMemory = 0xC0000017u;
 constexpr uint32_t kNtStatusUnsuccessful = 0xC0000001u;
 constexpr uint32_t kNtStatusMemoryNotAllocated = 0xC00000A0u;
@@ -70,7 +78,9 @@ constexpr uint32_t kGuestThreadTlsStride = 0x10000u;
 constexpr uint32_t kMainGuestTlsAddress = 0x7A000000u;
 constexpr uint32_t kGuestThreadObjectSize = 0x0AB0u;
 constexpr uint32_t kGuestThreadMetadataStride = 0x1000u;
-constexpr uint32_t kXenosRingBufferRegister = 0x4800u;
+constexpr uint32_t kXenosShaderConstantFetchRegister = 0x4800u;
+constexpr uint32_t kXenosGpuRegisterBase = 0x7FC80000u;
+constexpr uint32_t kXenosCommandProcessorWritePointerOffset = 0x0714u;
 constexpr uint32_t kXenosPm4SwapOpcode = 0x64u;
 constexpr uint32_t kXenosPm4IndirectBufferOpcode = 0x3Fu;
 constexpr uint32_t kXenosPm4DrawIndexOpcode = 0x22u;
@@ -78,6 +88,22 @@ constexpr uint32_t kXenosPm4DrawIndex2Opcode = 0x36u;
 constexpr uint32_t kXenosPm4DrawIndexBinOpcode = 0x34u;
 constexpr uint32_t kXenosPm4DrawIndex2BinOpcode = 0x35u;
 constexpr uint32_t kXenosPm4EventWriteOpcode = 0x46u;
+constexpr uint32_t kXInputButtonDPadUp = 0x0001u;
+constexpr uint32_t kXInputButtonDPadDown = 0x0002u;
+constexpr uint32_t kXInputButtonDPadLeft = 0x0004u;
+constexpr uint32_t kXInputButtonDPadRight = 0x0008u;
+constexpr uint32_t kXInputButtonStart = 0x0010u;
+constexpr uint32_t kXInputButtonBack = 0x0020u;
+constexpr uint32_t kXInputButtonLeftThumb = 0x0040u;
+constexpr uint32_t kXInputButtonRightThumb = 0x0080u;
+constexpr uint32_t kXInputButtonLeftShoulder = 0x0100u;
+constexpr uint32_t kXInputButtonRightShoulder = 0x0200u;
+constexpr uint32_t kXInputButtonA = 0x1000u;
+constexpr uint32_t kXInputButtonB = 0x2000u;
+constexpr uint32_t kXInputButtonX = 0x4000u;
+constexpr uint32_t kXInputButtonY = 0x8000u;
+constexpr uint32_t kXInputErrorDeviceNotConnected = 1167u;
+constexpr uint32_t kXInputErrorBadArguments = 160u;
 
 thread_local uint32_t g_currentGuestThreadId = 1;
 thread_local std::array<uint32_t, kTlsSlotCount> g_tlsValues{};
@@ -135,11 +161,15 @@ struct GuestThread {
 struct XenosFrontendState {
     uint32_t ringBufferAddress = 0;
     uint32_t ringBufferSize = 0;
+    uint32_t ringReadPointer = 0;
     uint32_t readPointerWritebackAddress = 0;
     uint32_t readPointerBlockSizeLog2 = 0;
     uint32_t systemCommandBufferGpuAddress = 0;
     uint32_t graphicsInterruptCallback = 0;
     uint32_t graphicsInterruptContext = 0;
+    std::array<uint32_t, 6> swapFetch{};
+    uint8_t swapFetchMask = 0;
+    bool swapFetchValid = false;
     uint32_t latestFrontbufferAddress = 0;
     uint32_t latestWidth = 0;
     uint32_t latestHeight = 0;
@@ -148,8 +178,20 @@ struct XenosFrontendState {
     uint64_t indirectBuffers = 0;
     uint64_t swaps = 0;
     uint64_t malformedPackets = 0;
+    uint64_t decodedFrames = 0;
     uint64_t lastSwapTimestampNs = 0;
     bool enginesInitialized = false;
+};
+
+struct TouchControllerState {
+    uint32_t buttons = 0;
+    uint8_t leftTrigger = 0;
+    uint8_t rightTrigger = 0;
+    int16_t leftX = 0;
+    int16_t leftY = 0;
+    int16_t rightX = 0;
+    int16_t rightY = 0;
+    uint32_t packetNumber = 0;
 };
 
 uint32_t g_nextVirtualAllocation = kFirstVirtualAllocation;
@@ -184,6 +226,9 @@ std::mutex g_guestStackMutex;
 std::mutex g_criticalSectionMapMutex;
 std::mutex g_waitSetMutex;
 std::mutex g_xenosMutex;
+std::mutex g_xenosPumpMutex;
+std::mutex g_touchControllerMutex;
+TouchControllerState g_touchController;
 std::condition_variable g_waitSetChanged;
 std::unordered_map<uint32_t, std::shared_ptr<GuestWaitable>> g_guestWaitables;
 std::unordered_map<uint32_t, uint32_t> g_guestObjectReferences;
@@ -227,15 +272,17 @@ std::string runtimeTraceText() {
     result += "\n\nESTADO XENOS/VD:";
     result += "\n- engines=" + std::string(graphics.enginesInitialized ? "initialized" : "not-initialized");
     result += " ring=0x";
-    char value[320];
-    std::snprintf(value, sizeof(value), "%08X size=0x%08X readback=0x%08X swaps=%llu packets=%llu draws=%llu indirect=%llu malformed=%llu last=%ux%u frontbuffer=0x%08X",
+    char value[384];
+    std::snprintf(value, sizeof(value), "%08X size=0x%08X rptr=%u readback=0x%08X swaps=%llu packets=%llu draws=%llu indirect=%llu malformed=%llu decoded_frames=%llu last=%ux%u frontbuffer=0x%08X",
                   graphics.ringBufferAddress, graphics.ringBufferSize,
+                  graphics.ringReadPointer,
                   graphics.readPointerWritebackAddress,
                   static_cast<unsigned long long>(graphics.swaps),
                   static_cast<unsigned long long>(graphics.packets),
                   static_cast<unsigned long long>(graphics.draws),
                   static_cast<unsigned long long>(graphics.indirectBuffers),
                   static_cast<unsigned long long>(graphics.malformedPackets),
+                  static_cast<unsigned long long>(graphics.decodedFrames),
                   graphics.latestWidth, graphics.latestHeight,
                   graphics.latestFrontbufferAddress);
     result += value;
@@ -689,6 +736,30 @@ struct GuestSchedulerSessionGuard final {
     ~GuestSchedulerSessionGuard() { stop(); }
 };
 
+struct GuestXenosPumpSessionGuard final {
+    std::atomic<bool> stopRequested{false};
+    std::thread worker;
+
+    GuestXenosPumpSessionGuard()
+        : worker([this] {
+              while (!stopRequested.load(std::memory_order_relaxed)) {
+                  try {
+                      pumpGuestXenosRingBuffer();
+                  } catch (const std::exception &error) {
+                      recordRuntimeTrace(std::string("Xenos ring worker: ") + error.what());
+                  } catch (...) {
+                      recordRuntimeTrace("Xenos ring worker: unknown host exception");
+                  }
+                  std::this_thread::sleep_for(std::chrono::milliseconds(1));
+              }
+          }) {}
+
+    ~GuestXenosPumpSessionGuard() {
+        stopRequested.store(true, std::memory_order_relaxed);
+        if (worker.joinable()) worker.join();
+    }
+};
+
 struct GuestThreadBinding final {
     GuestThread *previousThread = nullptr;
     uint32_t previousId = 1u;
@@ -833,9 +904,33 @@ int fail(char *output, size_t capacity, const std::exception &error) {
     writeMessage(output, capacity, "Falha: %s%s", error.what(), trace.c_str());
     return 1;
 }
+
+void pumpGuestXenosRingBuffer();
 } // namespace
 
-void xowue_thread_checkpoint() { checkpointGuestThread(); }
+void xowue_thread_checkpoint() {
+    checkpointGuestThread();
+    pumpGuestXenosRingBuffer();
+}
+
+extern "C" void xowue_set_touch_controller_state(
+    uint32_t buttons, uint8_t left_trigger, uint8_t right_trigger,
+    int16_t left_x, int16_t left_y, int16_t right_x, int16_t right_y) {
+    std::lock_guard<std::mutex> lock(g_touchControllerMutex);
+    const bool changed = g_touchController.buttons != buttons ||
+        g_touchController.leftTrigger != left_trigger ||
+        g_touchController.rightTrigger != right_trigger ||
+        g_touchController.leftX != left_x || g_touchController.leftY != left_y ||
+        g_touchController.rightX != right_x || g_touchController.rightY != right_y;
+    g_touchController.buttons = buttons;
+    g_touchController.leftTrigger = left_trigger;
+    g_touchController.rightTrigger = right_trigger;
+    g_touchController.leftX = left_x;
+    g_touchController.leftY = left_y;
+    g_touchController.rightX = right_x;
+    g_touchController.rightY = right_y;
+    if (changed) ++g_touchController.packetNumber;
+}
 
 extern "C" int xowue_inspect_xex(const char *path, char *output, size_t output_capacity) {
     try {
@@ -889,6 +984,12 @@ extern "C" int xowue_boot_xex(const char *path, char *output, size_t output_capa
             std::lock_guard<std::mutex> graphicsLock(g_xenosMutex);
             g_xenosFrontend = {};
         }
+        {
+            std::lock_guard<std::mutex> controllerLock(g_touchControllerMutex);
+            g_touchController = {};
+        }
+        if (xowue_vulkan_backend_guest_frame_reset)
+            xowue_vulkan_backend_guest_frame_reset();
         const Image image = parseImage(path);
         g_activeImageBase = static_cast<uint32_t>(image.base);
         char imageEvent[160];
@@ -899,6 +1000,7 @@ extern "C" int xowue_boot_xex(const char *path, char *output, size_t output_capa
         auto memory = std::make_shared<GuestMemory>();
         g_activeGuestMemory = memory;
         GuestSchedulerSessionGuard schedulerSession;
+        GuestXenosPumpSessionGuard xenosPumpSession;
         g_nextVirtualAllocation = kFirstVirtualAllocation;
         g_nextGuestHandle = 0x100u;
         g_nextGuestEventObjectAddress = kFirstGuestEventObjectAddress;
@@ -1320,59 +1422,14 @@ struct PM4ParseSummary {
     uint64_t indirectBuffers = 0;
     uint64_t swaps = 0;
     uint64_t malformed = 0;
+    uint64_t frameDecodeFailures = 0;
 };
-
-PM4ParseSummary parseGuestPM4(uint8_t *base, uint32_t address, uint32_t wordCount) {
-    PM4ParseSummary summary;
-    if (!base || !validGuestRange(address, static_cast<uint64_t>(wordCount) * 4u)) {
-        summary.malformed = 1u;
-        return summary;
-    }
-    uint32_t offset = 0u;
-    while (offset < wordCount) {
-        const uint32_t header = PPC_LOAD_U32(address + offset * 4u);
-        const uint32_t type = header >> 30u;
-        if (type == 2u) {
-            ++summary.packets;
-            ++offset;
-            continue;
-        }
-        uint32_t payloadCount = 0u;
-        if (type == 0u || type == 3u) {
-            payloadCount = ((header >> 16u) & 0x3FFFu) + 1u;
-        } else if (type == 1u) {
-            payloadCount = 2u;
-        } else {
-            ++summary.malformed;
-            break;
-        }
-        const uint64_t packetWords = static_cast<uint64_t>(payloadCount) + 1u;
-        if (packetWords > wordCount - offset) {
-            ++summary.malformed;
-            break;
-        }
-        ++summary.packets;
-        if (type == 3u) {
-            const uint32_t opcode = (header >> 8u) & 0x7Fu;
-            if (opcode == kXenosPm4DrawIndexOpcode || opcode == kXenosPm4DrawIndex2Opcode ||
-                opcode == kXenosPm4DrawIndexBinOpcode || opcode == kXenosPm4DrawIndex2BinOpcode) {
-                ++summary.draws;
-            } else if (opcode == kXenosPm4IndirectBufferOpcode) {
-                ++summary.indirectBuffers;
-            } else if (opcode == kXenosPm4SwapOpcode) {
-                ++summary.swaps;
-            }
-        }
-        offset += static_cast<uint32_t>(packetWords);
-    }
-    return summary;
-}
 
 void xowue_VdInitializeEngines(PPCContext &context) {
     std::lock_guard<std::mutex> lock(g_xenosMutex);
     g_xenosFrontend.enginesInitialized = true;
     context.r3.u32 = 1u;
-    recordRuntimeTrace("VdInitializeEngines accepted; Xenos command frontend active, shader translation pending");
+    recordRuntimeTrace("VdInitializeEngines accepted; Xenos ring command pump and guest-frame path active");
 }
 
 void xowue_VdShutdownEngines() {
@@ -1384,7 +1441,7 @@ void xowue_VdShutdownEngines() {
 void xowue_VdInitializeRingBuffer(PPCContext &context, uint8_t *base) {
     const uint32_t address = context.r3.u32;
     const uint32_t log2 = context.r4.u32;
-    if (!base || log2 > 26u) {
+    if (!base || address == 0u || log2 > 26u) {
         context.r3.u32 = 0u;
         recordRuntimeTrace("VdInitializeRingBuffer rejected address or size_log2");
         return;
@@ -1395,10 +1452,16 @@ void xowue_VdInitializeRingBuffer(PPCContext &context, uint8_t *base) {
         recordRuntimeTrace("VdInitializeRingBuffer range exceeds guest memory");
         return;
     }
+    std::memset(base + address, 0, size);
     {
+        std::lock_guard<std::mutex> pumpLock(g_xenosPumpMutex);
         std::lock_guard<std::mutex> lock(g_xenosMutex);
         g_xenosFrontend.ringBufferAddress = address;
         g_xenosFrontend.ringBufferSize = size;
+        g_xenosFrontend.ringReadPointer = 0u;
+        g_xenosFrontend.swapFetch = {};
+        g_xenosFrontend.swapFetchMask = 0u;
+        g_xenosFrontend.swapFetchValid = false;
     }
     context.r3.u32 = 0u;
     char event[112];
@@ -1464,6 +1527,330 @@ void xowue_VdSetGraphicsInterruptCallback(PPCContext &context) {
     }());
 }
 
+static uint64_t xenosTiledOffset2D(uint32_t x, uint32_t y,
+                                   uint32_t pitchAligned,
+                                   uint32_t bytesPerPixelLog2) {
+    const uint64_t outerBlocks =
+        ((static_cast<uint64_t>(y >> 5u) * (pitchAligned >> 5u)) + (x >> 5u)) << 6u;
+    const uint64_t innerBlocks = (((y >> 1u) & 7u) << 3u) | (x & 7u);
+    const uint64_t outerInnerBytes = (outerBlocks | innerBlocks) << bytesPerPixelLog2;
+    const uint32_t bank = (y >> 4u) & 1u;
+    const uint32_t pipe = ((x >> 3u) & 3u) ^ (((y >> 3u) & 1u) << 1u);
+    return ((y & 1u) << 4u) | (pipe << 6u) | (bank << 11u) |
+           (outerInnerBytes & 0xFu) |
+           (((outerInnerBytes >> 4u) & 1u) << 5u) |
+           (((outerInnerBytes >> 5u) & 7u) << 8u) |
+           (outerInnerBytes >> 8u << 12u);
+}
+
+static void swapXenosPixelEndian(uint8_t *pixel, uint32_t bytesPerPixel,
+                                 uint32_t endian) {
+    if (endian == 1u) {
+        for (uint32_t i = 0; i + 1u < bytesPerPixel; i += 2u)
+            std::swap(pixel[i], pixel[i + 1u]);
+    } else if (endian == 2u) {
+        for (uint32_t i = 0; i + 3u < bytesPerPixel; i += 4u) {
+            std::swap(pixel[i], pixel[i + 3u]);
+            std::swap(pixel[i + 1u], pixel[i + 2u]);
+        }
+    } else if (endian == 3u) {
+        for (uint32_t i = 0; i + 3u < bytesPerPixel; i += 4u) {
+            std::swap(pixel[i], pixel[i + 2u]);
+            std::swap(pixel[i + 1u], pixel[i + 3u]);
+        }
+    }
+}
+
+static bool decodeXenosSwapTexture(uint8_t *base, const uint32_t fetchWords[6],
+                                   uint32_t textureFormat,
+                                   uint32_t width, uint32_t height,
+                                   uint32_t &frontbufferAddress,
+                                   std::vector<uint8_t> &rgba) {
+    if (!base || width == 0u || height == 0u ||
+        static_cast<uint64_t>(width) * height > 4u * 1024u * 1024u)
+        return false;
+    const uint32_t fetchFormat = fetchWords[1] & 0x3Fu;
+    // Xenos format 54 is k_2_10_10_10_AS_16_16_16_16, an alias decoded as
+    // R10G10B10A2_UNORM. It is still one 32-bit texel, not four 16-bit lanes.
+    const uint32_t formatBytes = (fetchFormat == 6u || fetchFormat == 54u) ? 4u : 0u;
+    if (formatBytes == 0u || (textureFormat != 6u && textureFormat != 54u))
+        return false;
+
+    const uint32_t fetchWidth = (fetchWords[2] & 0x1FFFu) + 1u;
+    const uint32_t fetchHeight = ((fetchWords[2] >> 13u) & 0x1FFFu) + 1u;
+    if (fetchWidth != width || fetchHeight != height)
+        return false;
+
+    const uint32_t fetchPage = (fetchWords[1] >> 12u) & 0xFFFFFu;
+    frontbufferAddress = fetchPage << 12u;
+    if (!validGuestRange(frontbufferAddress, 4u))
+        return false;
+
+    const bool tiled = (fetchWords[0] >> 31u) != 0u;
+    uint32_t pitchPixels = ((fetchWords[0] >> 22u) & 0x1FFu) << 5u;
+    if (pitchPixels < width) {
+        if (tiled) pitchPixels = (width + 31u) & ~31u;
+        else pitchPixels = (((width * formatBytes) + 255u) & ~255u) / formatBytes;
+    }
+    const uint32_t pitchAligned = (pitchPixels + 31u) & ~31u;
+    const uint32_t endian = (fetchWords[1] >> 6u) & 3u;
+    const uint32_t bytesPerPixelLog2 = 2u;
+    const uint32_t guestSwizzle = (fetchWords[3] >> 1u) & 0xFFFu;
+    const uint64_t pixelCount = static_cast<uint64_t>(width) * height;
+    rgba.resize(static_cast<size_t>(pixelCount) * 4u);
+
+    for (uint32_t y = 0; y < height; ++y) {
+        for (uint32_t x = 0; x < width; ++x) {
+            const uint64_t pixelOffset = tiled
+                ? xenosTiledOffset2D(x, y, pitchAligned, bytesPerPixelLog2)
+                : static_cast<uint64_t>(y) * pitchPixels * formatBytes +
+                    static_cast<uint64_t>(x) * formatBytes;
+            const uint64_t address = static_cast<uint64_t>(frontbufferAddress) + pixelOffset;
+            if (address > std::numeric_limits<uint32_t>::max() ||
+                !validGuestRange(static_cast<uint32_t>(address), formatBytes))
+                return false;
+            uint8_t pixel[8] = {};
+            std::memcpy(pixel, base + address, formatBytes);
+            swapXenosPixelEndian(pixel, formatBytes, endian);
+
+            uint8_t sourceChannels[4]{};
+            if (fetchFormat == 6u) {
+                sourceChannels[0] = pixel[0];
+                sourceChannels[1] = pixel[1];
+                sourceChannels[2] = pixel[2];
+                sourceChannels[3] = pixel[3];
+            } else {
+                const uint32_t packed = static_cast<uint32_t>(pixel[0]) |
+                    (static_cast<uint32_t>(pixel[1]) << 8u) |
+                    (static_cast<uint32_t>(pixel[2]) << 16u) |
+                    (static_cast<uint32_t>(pixel[3]) << 24u);
+                sourceChannels[0] = static_cast<uint8_t>(((packed >> 0u) & 0x3FFu) * 255u / 1023u);
+                sourceChannels[1] = static_cast<uint8_t>(((packed >> 10u) & 0x3FFu) * 255u / 1023u);
+                sourceChannels[2] = static_cast<uint8_t>(((packed >> 20u) & 0x3FFu) * 255u / 1023u);
+                sourceChannels[3] = static_cast<uint8_t>(((packed >> 30u) & 0x003u) * 255u / 3u);
+            }
+            const size_t destination = (static_cast<size_t>(y) * width + x) * 4u;
+            for (uint32_t channel = 0; channel < 4u; ++channel) {
+                uint32_t selector = (guestSwizzle >> (channel * 3u)) & 7u;
+                if (selector >= 6u) selector &= 5u;
+                rgba[destination + channel] = selector < 4u
+                    ? sourceChannels[selector]
+                    : static_cast<uint8_t>(selector == 5u ? 255u : 0u);
+            }
+        }
+    }
+    return true;
+}
+
+static uint32_t loadGuestBe32(const uint8_t *base, uint32_t address) {
+    return (static_cast<uint32_t>(base[address]) << 24u) |
+           (static_cast<uint32_t>(base[address + 1u]) << 16u) |
+           (static_cast<uint32_t>(base[address + 2u]) << 8u) |
+           static_cast<uint32_t>(base[address + 3u]);
+}
+
+static void storeGuestBe32(uint8_t *base, uint32_t address, uint32_t value) {
+    base[address] = static_cast<uint8_t>(value >> 24u);
+    base[address + 1u] = static_cast<uint8_t>(value >> 16u);
+    base[address + 2u] = static_cast<uint8_t>(value >> 8u);
+    base[address + 3u] = static_cast<uint8_t>(value);
+}
+
+static bool executeGuestPM4Words(uint8_t *base,
+                                 const std::vector<uint32_t> &words,
+                                 uint32_t depth,
+                                 XenosFrontendState &frontend,
+                                 PM4ParseSummary &summary) {
+    if (!base || depth > 8u) {
+        ++summary.malformed;
+        return false;
+    }
+    size_t offset = 0u;
+    while (offset < words.size()) {
+        const uint32_t header = words[offset];
+        const uint32_t type = header >> 30u;
+        uint32_t payloadCount = 0u;
+        if (type == 2u) {
+            ++summary.packets;
+            ++offset;
+            continue;
+        } else if (type == 0u || type == 3u) {
+            payloadCount = ((header >> 16u) & 0x3FFFu) + 1u;
+        } else if (type == 1u) {
+            payloadCount = 2u;
+        } else {
+            ++summary.malformed;
+            return false;
+        }
+        const size_t packetWords = static_cast<size_t>(payloadCount) + 1u;
+        if (packetWords > words.size() - offset) {
+            ++summary.malformed;
+            return false;
+        }
+
+        ++summary.packets;
+        if (type == 0u) {
+            const uint32_t firstRegister = header & 0x7FFFu;
+            const bool writeOneRegister = (header & 0x00008000u) != 0u;
+            for (uint32_t i = 0; i < payloadCount; ++i) {
+                const uint32_t reg = writeOneRegister ? firstRegister : firstRegister + i;
+                if (reg >= kXenosShaderConstantFetchRegister &&
+                    reg < kXenosShaderConstantFetchRegister + frontend.swapFetch.size()) {
+                    frontend.swapFetch[reg - kXenosShaderConstantFetchRegister] =
+                        words[offset + 1u + i];
+                    frontend.swapFetchMask |= static_cast<uint8_t>(
+                        1u << (reg - kXenosShaderConstantFetchRegister));
+                    frontend.swapFetchValid = frontend.swapFetchMask == 0x3Fu;
+                }
+            }
+        } else if (type == 3u) {
+            const uint32_t opcode = (header >> 8u) & 0x7Fu;
+            if (opcode == kXenosPm4DrawIndexOpcode || opcode == kXenosPm4DrawIndex2Opcode ||
+                opcode == kXenosPm4DrawIndexBinOpcode || opcode == kXenosPm4DrawIndex2BinOpcode) {
+                ++summary.draws;
+            } else if (opcode == kXenosPm4IndirectBufferOpcode) {
+                ++summary.indirectBuffers;
+                if (payloadCount >= 2u && depth < 8u) {
+                    const uint32_t address = words[offset + 1u];
+                    const uint32_t count = words[offset + 2u] & 0x000FFFFFu;
+                    if (count != 0u && count <= (1u << 20u) &&
+                        validGuestRange(address, static_cast<uint64_t>(count) * 4u)) {
+                        std::vector<uint32_t> indirectWords;
+                        indirectWords.reserve(count);
+                        for (uint32_t i = 0; i < count; ++i)
+                            indirectWords.push_back(loadGuestBe32(base, address + i * 4u));
+                        executeGuestPM4Words(base, indirectWords, depth + 1u,
+                                             frontend, summary);
+                    } else {
+                        ++summary.malformed;
+                    }
+                }
+            } else if (opcode == kXenosPm4SwapOpcode && payloadCount >= 4u &&
+                       words[offset + 1u] == 0x53574150u) {
+                ++summary.swaps;
+                const uint32_t frontbuffer = words[offset + 2u];
+                const uint32_t width = words[offset + 3u];
+                const uint32_t height = words[offset + 4u];
+                frontend.latestFrontbufferAddress = frontbuffer;
+                frontend.latestWidth = width;
+                frontend.latestHeight = height;
+                frontend.lastSwapTimestampNs = static_cast<uint64_t>(
+                    std::chrono::duration_cast<std::chrono::nanoseconds>(
+                        std::chrono::steady_clock::now().time_since_epoch()).count());
+                if (!frontend.swapFetchValid) {
+                    ++summary.frameDecodeFailures;
+                    offset += packetWords;
+                    continue;
+                }
+                const uint32_t textureFormat = frontend.swapFetch[1] & 0x3Fu;
+                std::vector<uint8_t> rgba;
+                uint32_t decodedAddress = 0u;
+                if (decodeXenosSwapTexture(base, frontend.swapFetch.data(),
+                                           textureFormat, width, height,
+                                           decodedAddress, rgba)) {
+                    frontend.latestFrontbufferAddress = frontbuffer;
+                    frontend.latestWidth = width;
+                    frontend.latestHeight = height;
+                    ++frontend.decodedFrames;
+                    if (xowue_vulkan_backend_guest_swap)
+                        xowue_vulkan_backend_guest_swap(frontbuffer, width, height);
+                    if (xowue_vulkan_backend_guest_frame_rgba)
+                        xowue_vulkan_backend_guest_frame_rgba(
+                            decodedAddress, width, height, textureFormat,
+                            rgba.data(), rgba.size());
+                } else {
+                    ++summary.frameDecodeFailures;
+                }
+            }
+        }
+        offset += packetWords;
+    }
+    return true;
+}
+
+void pumpGuestXenosRingBuffer() {
+    std::lock_guard<std::mutex> pumpLock(g_xenosPumpMutex);
+    const auto memory = g_activeGuestMemory.lock();
+    if (!memory || !memory->base) return;
+
+    XenosFrontendState frontend;
+    {
+        std::lock_guard<std::mutex> lock(g_xenosMutex);
+        frontend = g_xenosFrontend;
+    }
+    const uint32_t ringWords = frontend.ringBufferSize / 4u;
+    if (!frontend.enginesInitialized || frontend.ringBufferAddress == 0u ||
+        ringWords < 2u || (ringWords & (ringWords - 1u)) != 0u ||
+        !validGuestRange(frontend.ringBufferAddress, frontend.ringBufferSize))
+        return;
+
+    const uint32_t writeRegister = kXenosGpuRegisterBase +
+                                   kXenosCommandProcessorWritePointerOffset;
+    if (!validGuestRange(writeRegister, 4u)) return;
+    const uint32_t writePointer = loadGuestBe32(memory->base, writeRegister) &
+                                  (ringWords - 1u);
+    uint32_t readPointer = frontend.ringReadPointer & (ringWords - 1u);
+    uint32_t available = (writePointer - readPointer) & (ringWords - 1u);
+    if (available == 0u) return;
+
+    constexpr uint32_t kMaximumDwordsPerPump = 1u << 20u;
+    available = std::min(available, kMaximumDwordsPerPump);
+    std::vector<uint32_t> words;
+    words.reserve(available);
+    const uint32_t ringMask = ringWords - 1u;
+    for (uint32_t i = 0; i < available; ++i) {
+        const uint32_t index = (readPointer + i) & ringMask;
+        words.push_back(loadGuestBe32(memory->base,
+            frontend.ringBufferAddress + index * 4u));
+    }
+
+    PM4ParseSummary summary;
+    const uint64_t decodedFramesBefore = frontend.decodedFrames;
+    executeGuestPM4Words(memory->base, words, 0u, frontend, summary);
+    // CP_RB_WPTR advances only after the title has written a complete kick.
+    // Retire the captured span even if an unknown packet was found so one bad
+    // command cannot hold the guest's entire ring forever.
+    const uint32_t consumed = static_cast<uint32_t>(words.size());
+    readPointer = (readPointer + consumed) & ringMask;
+    frontend.ringReadPointer = readPointer;
+    {
+        std::lock_guard<std::mutex> lock(g_xenosMutex);
+        g_xenosFrontend.ringReadPointer = readPointer;
+        g_xenosFrontend.swapFetch = frontend.swapFetch;
+        g_xenosFrontend.swapFetchMask = frontend.swapFetchMask;
+        g_xenosFrontend.swapFetchValid = frontend.swapFetchValid;
+        g_xenosFrontend.packets += summary.packets;
+        g_xenosFrontend.draws += summary.draws;
+        g_xenosFrontend.indirectBuffers += summary.indirectBuffers;
+        g_xenosFrontend.swaps += summary.swaps;
+        g_xenosFrontend.malformedPackets += summary.malformed;
+        const uint64_t decodedFrameDelta = frontend.decodedFrames - decodedFramesBefore;
+        g_xenosFrontend.decodedFrames += decodedFrameDelta;
+        if (summary.swaps != 0u || decodedFrameDelta != 0u) {
+            g_xenosFrontend.latestFrontbufferAddress = frontend.latestFrontbufferAddress;
+            g_xenosFrontend.latestWidth = frontend.latestWidth;
+            g_xenosFrontend.latestHeight = frontend.latestHeight;
+            g_xenosFrontend.lastSwapTimestampNs = frontend.lastSwapTimestampNs;
+        }
+    }
+
+    if (frontend.readPointerWritebackAddress != 0u &&
+        validGuestRange(frontend.readPointerWritebackAddress, 4u)) {
+        storeGuestBe32(memory->base, frontend.readPointerWritebackAddress, readPointer);
+    }
+    char event[192];
+    std::snprintf(event, sizeof(event),
+                  "Xenos ring kick rptr=%u wptr=%u words=%u packets=%llu draws=%llu swaps=%llu frames=%llu malformed=%llu decode_failures=%llu",
+                  frontend.ringReadPointer, writePointer, consumed,
+                  static_cast<unsigned long long>(summary.packets),
+                  static_cast<unsigned long long>(summary.draws),
+                  static_cast<unsigned long long>(summary.swaps),
+                  static_cast<unsigned long long>(frontend.decodedFrames),
+                  static_cast<unsigned long long>(summary.malformed),
+                  static_cast<unsigned long long>(summary.frameDecodeFailures));
+    recordRuntimeTrace(event);
+}
+
 void xowue_VdSwap(PPCContext &context, uint8_t *base) {
     const uint32_t commandBuffer = context.r3.u32;
     const uint32_t fetch = context.r4.u32;
@@ -1481,48 +1868,35 @@ void xowue_VdSwap(PPCContext &context, uint8_t *base) {
         recordRuntimeTrace("VdSwap rejected invalid guest pointer or stack argument");
         return;
     }
-    const uint32_t frontbufferAddress = PPC_LOAD_U32(frontbufferPointer);
+    const uint32_t frontbufferVirtualAddress = PPC_LOAD_U32(frontbufferPointer);
     const uint32_t textureFormat = PPC_LOAD_U32(textureFormatPointer);
     const uint32_t colorSpace = PPC_LOAD_U32(colorSpacePointer);
     const uint32_t width = PPC_LOAD_U32(widthPointer);
     const uint32_t height = PPC_LOAD_U32(heightPointer);
+    uint32_t fetchWords[6]{};
+    for (uint32_t i = 0; i < 6u; ++i)
+        fetchWords[i] = PPC_LOAD_U32(fetch + i * 4u);
+    const uint32_t frontbufferPhysicalAddress =
+        ((fetchWords[1] >> 12u) & 0xFFFFFu) << 12u;
+    if (frontbufferVirtualAddress != frontbufferPhysicalAddress) {
+        recordRuntimeTrace("VdSwap frontbuffer pointer differs from Xenos fetch base; identity physical mapping retained");
+    }
     for (uint32_t i = 0; i < 64u; ++i) PPC_STORE_U32(commandBuffer + i * 4u, 0x80000000u);
     PPC_STORE_U32(commandBuffer + 0u, (5u << 16u) | 0x4800u); // Type 0, six fetch dwords.
-    for (uint32_t i = 0; i < 6u; ++i) {
-        PPC_STORE_U32(commandBuffer + (i + 1u) * 4u, PPC_LOAD_U32(fetch + i * 4u));
-    }
+    for (uint32_t i = 0; i < 6u; ++i)
+        PPC_STORE_U32(commandBuffer + (i + 1u) * 4u, fetchWords[i]);
     PPC_STORE_U32(commandBuffer + 7u * 4u,
                   (3u << 30u) | (3u << 16u) | (kXenosPm4SwapOpcode << 8u));
     PPC_STORE_U32(commandBuffer + 8u * 4u, 0x53574150u); // 'SWAP'.
-    PPC_STORE_U32(commandBuffer + 9u * 4u, frontbufferAddress);
+    PPC_STORE_U32(commandBuffer + 9u * 4u, frontbufferPhysicalAddress);
     PPC_STORE_U32(commandBuffer + 10u * 4u, width);
     PPC_STORE_U32(commandBuffer + 11u * 4u, height);
 
-    const PM4ParseSummary parsed = parseGuestPM4(base, commandBuffer, 64u);
-    {
-        std::lock_guard<std::mutex> lock(g_xenosMutex);
-        ++g_xenosFrontend.swaps;
-        g_xenosFrontend.packets += parsed.packets;
-        g_xenosFrontend.draws += parsed.draws;
-        g_xenosFrontend.indirectBuffers += parsed.indirectBuffers;
-        g_xenosFrontend.malformedPackets += parsed.malformed;
-        g_xenosFrontend.latestFrontbufferAddress = frontbufferAddress;
-        g_xenosFrontend.latestWidth = width;
-        g_xenosFrontend.latestHeight = height;
-        g_xenosFrontend.lastSwapTimestampNs = static_cast<uint64_t>(
-            std::chrono::duration_cast<std::chrono::nanoseconds>(
-                std::chrono::steady_clock::now().time_since_epoch()).count());
-    }
     char event[256];
     std::snprintf(event, sizeof(event),
-                  "VdSwap emitted PM4 swap width=%u height=%u frontbuffer=0x%08X format=0x%08X colorspace=%u packets=%llu draws=%llu; Xenos shader/tiling translation not yet reached",
-                  width, height, frontbufferAddress, textureFormat, colorSpace,
-                  static_cast<unsigned long long>(parsed.packets),
-                  static_cast<unsigned long long>(parsed.draws));
+                  "VdSwap queued Xenia-compatible PM4 swap width=%u height=%u frontbuffer=0x%08X format=0x%08X colorspace=%u",
+                  width, height, frontbufferPhysicalAddress, textureFormat, colorSpace);
     recordRuntimeTrace(event);
-    if (xowue_vulkan_backend_guest_swap) {
-        xowue_vulkan_backend_guest_swap(frontbufferAddress, width, height);
-    }
 }
 
 void xowue_VdInitializeScalerCommandBuffer(PPCContext &context, uint8_t *base) {
@@ -1575,6 +1949,170 @@ void xowue_XGetVideoMode(PPCContext &context, uint8_t *base) {
     context.r3.u32 = address;
     recordRuntimeTrace("XGetVideoMode -> 1280x720 progressive widescreen 60Hz");
 }
+
+void xowue_ExGetXConfigSetting(PPCContext &context, uint8_t *base) {
+    const uint32_t category = context.r3.u32;
+    const uint32_t setting = context.r4.u32;
+    const uint32_t bufferAddress = context.r5.u32;
+    const uint16_t bufferSize = static_cast<uint16_t>(context.r6.u32);
+    const uint32_t requiredSizeAddress = context.r7.u32;
+    uint16_t settingSize = 0;
+    uint32_t value = 0;
+    uint8_t byteValue = 0;
+    bool byteSetting = false;
+    uint32_t status = kNtStatusSuccess;
+
+    if (category == 0x0002u && setting == 0x0002u) {
+        settingSize = 4u;
+        value = 0x00001000u; // Xenia's retail-safe NTSC AV region default.
+    } else if (category == 0x0003u) {
+        switch (setting) {
+        case 0x0001u: case 0x0002u: case 0x0003u: case 0x0004u:
+        case 0x0005u: case 0x0006u: case 0x0007u:
+            settingSize = 4u;
+            value = 0u;
+            break;
+        case 0x0009u: // Portuguese, matching the supplied PT-BR title build.
+            settingSize = 4u;
+            value = 9u;
+            break;
+        case 0x000Au: // XCONFIG_USER_VIDEO_FLAGS: widescreen/HD capable.
+            settingSize = 4u;
+            value = 0x00040000u;
+            break;
+        case 0x000Cu:
+            settingSize = 4u;
+            value = 0u;
+            break;
+        case 0x000Eu: // Brazil.
+            settingSize = 1u;
+            byteValue = 13u;
+            byteSetting = true;
+            break;
+        default:
+            status = kNtStatusInvalidParameter2;
+            break;
+        }
+    } else if (category != 0x0002u) {
+        status = kNtStatusInvalidParameter1;
+    } else {
+        status = kNtStatusInvalidParameter2;
+    }
+
+    if (status == kNtStatusSuccess && !base) {
+        status = kNtStatusInvalidParameter3;
+    }
+    if (status == kNtStatusSuccess) {
+        if (bufferAddress == 0u) {
+            if (bufferSize != 0u) status = kNtStatusInvalidParameter3;
+        } else if (!validGuestRange(bufferAddress, settingSize)) {
+            status = kNtStatusInvalidParameter3;
+        } else if (bufferSize < settingSize) {
+            status = kNtStatusBufferTooSmall;
+        } else if (byteSetting) {
+            base[bufferAddress] = byteValue;
+        } else {
+            PPC_STORE_U32(bufferAddress, value);
+        }
+    }
+
+    if (base && requiredSizeAddress != 0u && validGuestRange(requiredSizeAddress, 2u)) {
+        // Xenia reports the recognized setting's size even when the caller's
+        // destination is too small; callers use this to retry with a buffer.
+        PPC_STORE_U16(requiredSizeAddress,
+                      status == kNtStatusInvalidParameter1 ||
+                              status == kNtStatusInvalidParameter2
+                          ? 0u
+                          : settingSize);
+    }
+    context.r3.u32 = status;
+    char event[160];
+    std::snprintf(event, sizeof(event),
+                  "ExGetXConfigSetting category=0x%04X setting=0x%04X size=%u value=0x%08X status=0x%08X",
+                  category, setting, settingSize, value, status);
+    recordRuntimeTrace(event);
+}
+
+static uint32_t writeTouchGamepadState(uint8_t *base, uint32_t userIndex,
+                                       uint32_t address) {
+    if (userIndex > 3u) {
+        return kXInputErrorDeviceNotConnected;
+    }
+    if (address == 0u) return kNtStatusSuccess;
+    if (!base || !validGuestRange(address, 16u)) {
+        return kXInputErrorBadArguments;
+    }
+    TouchControllerState state;
+    {
+        std::lock_guard<std::mutex> lock(g_touchControllerMutex);
+        state = g_touchController;
+    }
+    PPC_STORE_U32(address, state.packetNumber);
+    PPC_STORE_U16(address + 4u, static_cast<uint16_t>(state.buttons));
+    base[address + 6u] = state.leftTrigger;
+    base[address + 7u] = state.rightTrigger;
+    PPC_STORE_U16(address + 8u, static_cast<uint16_t>(state.leftX));
+    PPC_STORE_U16(address + 10u, static_cast<uint16_t>(state.leftY));
+    PPC_STORE_U16(address + 12u, static_cast<uint16_t>(state.rightX));
+    PPC_STORE_U16(address + 14u, static_cast<uint16_t>(state.rightY));
+    return kNtStatusSuccess;
+}
+
+static uint32_t writeTouchGamepadCapabilities(uint8_t *base, uint32_t userIndex,
+                                              uint32_t address) {
+    if (userIndex != 0u) {
+        return kXInputErrorDeviceNotConnected;
+    }
+    if (address == 0u || !base || !validGuestRange(address, 20u))
+        return kXInputErrorBadArguments;
+    std::memset(base + address, 0, 20u);
+    base[address] = 1u;     // XINPUT_DEVTYPE_GAMEPAD
+    base[address + 1u] = 1u; // XINPUT_DEVSUBTYPE_GAMEPAD
+    PPC_STORE_U16(address + 4u, 0xFFFFu);
+    base[address + 6u] = 0xFFu;
+    base[address + 7u] = 0xFFu;
+    for (uint32_t offset = 8u; offset <= 14u; offset += 2u)
+        PPC_STORE_U16(address + offset, 0xFFFFu);
+    return kNtStatusSuccess;
+}
+
+void xowue_XInputGetState(PPCContext &context, uint8_t *base) {
+    context.r3.u32 = writeTouchGamepadState(base, context.r3.u32, context.r4.u32);
+}
+
+void xowue_XamInputGetState(PPCContext &context, uint8_t *base) {
+    context.r3.u32 = writeTouchGamepadState(base, context.r3.u32, context.r5.u32);
+}
+
+void xowue_XInputGetCapabilities(PPCContext &context, uint8_t *base) {
+    context.r3.u32 = writeTouchGamepadCapabilities(base, context.r3.u32, context.r5.u32);
+}
+
+void xowue_XamInputGetCapabilities(PPCContext &context, uint8_t *base) {
+    xowue_XInputGetCapabilities(context, base);
+}
+
+void xowue_XamInputGetCapabilitiesEx(PPCContext &context, uint8_t *base) {
+    context.r3.u32 = writeTouchGamepadCapabilities(base, context.r4.u32, context.r6.u32);
+}
+
+void xowue_XInputSetState(PPCContext &context, uint8_t *base) {
+    const uint32_t userIndex = context.r3.u32;
+    const uint32_t vibration = context.r4.u32;
+    context.r3.u32 = vibration == 0u || !validGuestRange(vibration, 4u)
+        ? kXInputErrorBadArguments
+        : (userIndex == 0u ? kNtStatusSuccess : kXInputErrorDeviceNotConnected);
+    (void)base;
+}
+
+void xowue_XamInputSetState(PPCContext &context, uint8_t *base) {
+    const uint32_t userIndex = context.r3.u32;
+    const uint32_t vibration = context.r5.u32;
+    context.r3.u32 = vibration == 0u || !base || !validGuestRange(vibration, 4u)
+        ? kXInputErrorBadArguments
+        : (userIndex == 0u ? kNtStatusSuccess : kXInputErrorDeviceNotConnected);
+}
+
 void xowue_VdQueryVideoFlags(PPCContext &context) { context.r3.u32 = 3u; }
 
 void xowue_VdGetCurrentDisplayGamma(PPCContext &context, uint8_t *base) {

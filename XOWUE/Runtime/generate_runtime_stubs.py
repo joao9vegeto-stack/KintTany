@@ -143,6 +143,14 @@ def main() -> int:
             'void xowue_VdInitializeScalerCommandBuffer(PPCContext &, uint8_t *);',
             'void xowue_VdQueryVideoMode(PPCContext &, uint8_t *);',
             'void xowue_XGetVideoMode(PPCContext &, uint8_t *);',
+            'void xowue_ExGetXConfigSetting(PPCContext &, uint8_t *);',
+            'void xowue_XInputGetState(PPCContext &, uint8_t *);',
+            'void xowue_XamInputGetState(PPCContext &, uint8_t *);',
+            'void xowue_XInputGetCapabilities(PPCContext &, uint8_t *);',
+            'void xowue_XamInputGetCapabilities(PPCContext &, uint8_t *);',
+            'void xowue_XamInputGetCapabilitiesEx(PPCContext &, uint8_t *);',
+            'void xowue_XInputSetState(PPCContext &, uint8_t *);',
+            'void xowue_XamInputSetState(PPCContext &, uint8_t *);',
             'void xowue_VdQueryVideoFlags(PPCContext &);',
             'void xowue_VdGetCurrentDisplayGamma(PPCContext &, uint8_t *);',
             'void xowue_VdGetCurrentDisplayInformation(PPCContext &, uint8_t *);',
@@ -281,6 +289,22 @@ def main() -> int:
             code.append("\txowue_XexCheckExecutablePrivilege(ctx);")
         elif name == "XGetVideoMode":
             code.append("\txowue_XGetVideoMode(ctx, base);")
+        elif name == "ExGetXConfigSetting":
+            code.append("\txowue_ExGetXConfigSetting(ctx, base);")
+        elif name == "XInputGetState":
+            code.append("\txowue_XInputGetState(ctx, base);")
+        elif name == "XamInputGetState":
+            code.append("\txowue_XamInputGetState(ctx, base);")
+        elif name == "XInputGetCapabilities":
+            code.append("\txowue_XInputGetCapabilities(ctx, base);")
+        elif name == "XamInputGetCapabilities":
+            code.append("\txowue_XamInputGetCapabilities(ctx, base);")
+        elif name == "XamInputGetCapabilitiesEx":
+            code.append("\txowue_XamInputGetCapabilitiesEx(ctx, base);")
+        elif name == "XInputSetState":
+            code.append("\txowue_XInputSetState(ctx, base);")
+        elif name == "XamInputSetState":
+            code.append("\txowue_XamInputSetState(ctx, base);")
         elif name == "XGetAVPack":
             code.append("\txowue_XGetAVPack(ctx);")
         elif name == "XGetGameRegion":
@@ -334,7 +358,10 @@ def main() -> int:
         "RtlInitializeCriticalSection", "RtlInitializeCriticalSectionAndSpinCount",
         "RtlEnterCriticalSection", "RtlTryEnterCriticalSection", "RtlLeaveCriticalSection",
         "XexCheckExecutablePrivilege",
-        "XGetAVPack", "XGetGameRegion", "XGetVideoMode",
+        "XGetAVPack", "XGetGameRegion", "XGetVideoMode", "ExGetXConfigSetting",
+        "XInputGetState", "XamInputGetState", "XInputGetCapabilities",
+        "XamInputGetCapabilities", "XamInputGetCapabilitiesEx",
+        "XInputSetState", "XamInputSetState",
         "KeTlsAlloc", "KeTlsFree", "KeTlsGetValue", "KeTlsSetValue",
         "RtlNtStatusToDosError",
         "NtQueryVirtualMemory",
