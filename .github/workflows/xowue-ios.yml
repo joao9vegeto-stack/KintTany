@@ -60,7 +60,7 @@ jobs:
           DISASM_LIB=$(find build-ios -name libdisasm.a -print -quit)
           test -n "$ENGINE_LIB" && test -n "$UTILS_LIB" && test -n "$DISASM_LIB"
           libtool -static -o build-ios/libXOWUEEngineComplete.a "$ENGINE_LIB" "$UTILS_LIB" "$DISASM_LIB"
-          lipo -verify_arch arm64 build-ios/libXOWUEEngineComplete.a
+          lipo build-ios/libXOWUEEngineComplete.a -verify_arch arm64
 
       - name: Generate Xcode project and build app
         run: |
@@ -91,7 +91,7 @@ jobs:
           unzip -q artifacts/XOWUE-unsigned.ipa -d "$RUNNER_TEMP/xowue-ipa-check"
           APP="$RUNNER_TEMP/xowue-ipa-check/Payload/XOWUE.app"
           plutil -lint "$APP/Info.plist"
-          lipo -verify_arch arm64 "$APP/XOWUE"
+          lipo "$APP/XOWUE" -verify_arch arm64
           test -f "$APP/XOWUE"
 
       - name: Upload unsigned IPA
