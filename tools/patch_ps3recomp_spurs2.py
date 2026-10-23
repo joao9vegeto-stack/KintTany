@@ -27,6 +27,7 @@ DYNAMIC_WWS_PM_MARKER = "ASCENSION_M790_DYNAMIC_WWS_PM_ROLE_V1"
 LWCOND_SEMANTICS_MARKER = "ASCENSION_M791_LWCOND_SIGNAL_WAIT_V1"
 REPORT_HOLD_MARKER = "ASCENSION_M798_GCM_REPORT_SPU_HOLD_V1"
 TASK_ACTIVITY_MARKER = "ASCENSION_M798_SPURS_TASK_ACTIVITY_V1"
+WORKLOAD_FLAG_MARKER = "ASCENSION_M799_SPURS_WORKLOAD_FLAG_V1"
 
 
 def run(argv: list[str], *, capture: bool = False) -> str:
@@ -202,7 +203,7 @@ s32 _cellSpursWorkloadFlagReceiver(CellSpurs* spurs, u32 wid, u32 is_set)
         return CELL_SPURS_CORE_ERROR_SRCH;
 
     spu_lockline_lock();
-    const u32 receiver_ea = spurs_ea + 0x77u;
+    const u32 receiver_ea = spurs_ea + SPURS_WKL_FLAG_RCV;
     const u8 receiver = vm_base[receiver_ea];
     s32 rc = CELL_OK;
     if (is_set && receiver != 0xFFu) rc = CELL_SPURS_CORE_ERROR_BUSY;
@@ -210,10 +211,10 @@ s32 _cellSpursWorkloadFlagReceiver(CellSpurs* spurs, u32 wid, u32 is_set)
     else {
         /* The SDK resets the workload flag to all ones on every ownership
          * change; its receiver is the low byte of that BE flag structure. */
-        vm_base[spurs_ea + 0x6Cu] = 0xFFu;
-        vm_base[spurs_ea + 0x6Du] = 0xFFu;
-        vm_base[spurs_ea + 0x6Eu] = 0xFFu;
-        vm_base[spurs_ea + 0x6Fu] = 0xFFu;
+        vm_base[spurs_ea + SPURS_WKL_FLAG_VAL + 0] = 0xFFu;
+        vm_base[spurs_ea + SPURS_WKL_FLAG_VAL + 1] = 0xFFu;
+        vm_base[spurs_ea + SPURS_WKL_FLAG_VAL + 2] = 0xFFu;
+        vm_base[spurs_ea + SPURS_WKL_FLAG_VAL + 3] = 0xFFu;
         vm_base[receiver_ea] = is_set ? (u8)wid : 0xFFu;
     }
     ef_line_end(spurs_ea);
@@ -773,8 +774,89 @@ void spurs_kernel_temp_area_refresh(spu_context* ctx)
     if channels.count(poll_anchor) != 1:
         raise SystemExit("Ascension WWS patch cannot locate module-poll intercept")
     channels = channels.replace(poll_anchor, poll_replacement, 1)
-    channels = channels.replace("/* SPURS kernel services (policy-module runs only):", "/* ASCENSION_M786_WWS_TEMPA_READY_LEVEL_V1 */\n    /* SPURS kernel services (policy-module runs only):", 1)
+    channels = channels.replace("/* SPURS kernel services (policy-module runs only):",
+                                "/* ASCENSION_M786_WWS_TEMPA_READY_LEVEL_V1 */\n"
+                                "    /* SPURS kernel services (policy-module runs only):", 1)
     channels_path.write_text(channels)
+
+
+def apply_ascension_workload_flag_scheduler(upstream: pathlib.Path) -> None:
+    """Match the US Ascension SPURS workload-flag ownership and wake path.
+
+    The iOS HLE already exposes cellSpursGetWorkloadFlag and
+    _cellSpursWorkloadFlagReceiver, but its initializer set +0x60 instead of
+    the flag value at +0x6C and left receiver +0x77 as zero. The PC fork
+    initializes +0x6C to all ones and +0x77 to NONE, then consumes a zero flag
+    for its registered workload in the scheduler. Keep the whole protocol in
+    the runtime that is compiled into the iOS IPA.
+    """
+    path = upstream / "libs/spurs/cellSpurs.c"
+    source = path.read_text(errors="replace")
+    if WORKLOAD_FLAG_MARKER in source:
+        required = ("SPURS_WKL_FLAG_VAL = 0x6C", "SPURS_WKL_FLAG_RCV = 0x77",
+                    "spurs_workload_flag_take(ea, wid)",
+                    "int kicked = flagged ||")
+        if any(token not in source for token in required):
+            raise SystemExit("partial Ascension SPURS workload-flag patch")
+        return
+
+    enum_anchor = "    SPURS_WKL_FLAG     = 0x60,\n"
+    enum_new = (enum_anchor + "    SPURS_WKL_FLAG_VAL = 0x6C,\n"
+                "    SPURS_WKL_FLAG_RCV = 0x77,\n")
+    if source.count(enum_anchor) != 1:
+        raise SystemExit("M7.99 cannot locate CellSpurs workload-flag offsets")
+    source = source.replace(enum_anchor, enum_new, 1)
+
+    init_old = "    vm_write64(spurs_ea + SPURS_WKL_FLAG, 0xFFFFFFFFFFFFFFFFull); /* no receiver */\n"
+    init_new = "    vm_write32(spurs_ea + SPURS_WKL_FLAG_VAL, 0xFFFFFFFFu);\n    vm_write8(spurs_ea + SPURS_WKL_FLAG_RCV, 0xFFu);\n"
+    if source.count(init_old) != 1:
+        raise SystemExit("M7.99 cannot locate the incorrect workload-flag initialization")
+    source = source.replace(init_old, init_new, 1)
+
+    helper_anchor = "static DWORD WINAPI spurs_kernel_thread(LPVOID p)\n{"
+    helper = '''/* ASCENSION_M799_SPURS_WORKLOAD_FLAG_V1 */
+int spurs_workload_flag_take(u32 ea, u32 wid)
+{
+    int flagged = 0;
+    const u32 value_ea = ea + SPURS_WKL_FLAG_VAL;
+    const u32 receiver_ea = ea + SPURS_WKL_FLAG_RCV;
+    spu_lockline_lock();
+    /* Raw BE access: vm_* takes this same nonrecursive lock. */
+    const u32 value = ((u32)vm_base[value_ea] << 24) |
+                      ((u32)vm_base[value_ea + 1] << 16) |
+                      ((u32)vm_base[value_ea + 2] << 8) |
+                       (u32)vm_base[value_ea + 3];
+    if (value == 0 && vm_base[receiver_ea] == (u8)wid) {
+        vm_base[value_ea + 0] = 0xFFu;
+        vm_base[value_ea + 1] = 0xFFu;
+        vm_base[value_ea + 2] = 0xFFu;
+        vm_base[value_ea + 3] = 0xFFu;
+        flagged = 1;
+    }
+    ef_line_end(ea);
+    return flagged;
+}
+
+'''
+    if source.count(helper_anchor) != 1:
+        raise SystemExit("M7.99 cannot locate the SPURS scheduler insertion point")
+    source = source.replace(helper_anchor, helper + helper_anchor, 1)
+
+    kicked_old = '''                int kicked = (spurs_ready_level() ? ready > si->active[wid] : ready != 0)
+                             || wkl_signalled(ea, wid);
+'''
+    kicked_new = '''                const int flagged = spurs_workload_flag_take(ea, wid);
+                int kicked = flagged ||
+                             (spurs_ready_level() ? ready > si->active[wid] : ready != 0) ||
+                             wkl_signalled(ea, wid);
+'''
+    if source.count(kicked_old) != 1:
+        raise SystemExit("M7.99 cannot locate the WWS workload admission condition")
+    source = source.replace(kicked_old, kicked_new, 1)
+    source = source.replace("/* ASCENSION_M772_SPURS2_WORKLOADS_32_V1 */",
+                            "/* ASCENSION_M772_SPURS2_WORKLOADS_32_V1 */\n"
+                            "/* " + WORKLOAD_FLAG_MARKER + " */", 1)
+    path.write_text(source)
 
 
 def apply_job_dispatch_metrics(upstream: pathlib.Path) -> None:
@@ -1525,6 +1607,7 @@ def main() -> int:
     apply_pm_resolution_diagnostics(upstream)
     apply_requested_pm_capture(upstream)
     apply_ascension_wws_policy(upstream)
+    apply_ascension_workload_flag_scheduler(upstream)
     apply_job_dispatch_metrics(upstream)
     apply_dynamic_wws_pm_role(upstream)
     apply_lwcond_wait_signal_semantics(upstream)
@@ -1540,6 +1623,8 @@ def main() -> int:
             "s_asc_pm_diag", "spurs_guest_range_valid(pm_ea, w->sizePm)",
             PM_CAPTURE_MARKER, "cellSpursCaptureAscensionPmMiss",
             ASCENSION_POLICY_MARKER, "spurs_poll_select", "spurs_ready_level()",
+            WORKLOAD_FLAG_MARKER, "SPURS_WKL_FLAG_VAL = 0x6C",
+            "SPURS_WKL_FLAG_RCV = 0x77", "spurs_workload_flag_take(ea, wid)",
             "cellSpursInitializeWithAttribute2", "cellSpursCreateTaskset2",
             "_cellSpursTasksetAttribute2Initialize", "cellSpursCreateTask2",
             "cellSpursJoinTask2", "cellSpursTryJoinTask2",
@@ -1579,7 +1664,7 @@ def main() -> int:
         missing = [needle for needle in needles if needle not in text]
         if missing:
             raise SystemExit(f"M7.83 PS3Recomp SPURS2 patch incomplete in {filename}: {missing}")
-    print("M7.98 preserves Ascension's RSX park, report, and SPU task wait states")
+    print("M7.99 applies the Ascension workload-flag receiver and scheduler protocol")
     return 0
 
 
