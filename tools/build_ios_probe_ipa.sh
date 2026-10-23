@@ -736,7 +736,7 @@ for symbol in ("_gowa_spu_register_c8_wws_pm",
                "_wws_pm_c8d774_spu_recomp_register"):
     if not any(symbol in name for name in defined):
         raise SystemExit("M7.90 exact NPUA WWS job lift/C8 PM or runtime routing missing from final Mach-O: "+symbol)
-print("M7.96 final ARM64 Mach-O contains the installed PS3Recomp guest callback dispatcher, 31 NPUA WWS lifts, exact-byte PIC registration, and the full WWS SPU interpreter fallback")
+print("M7.97 final ARM64 Mach-O contains the installed PS3Recomp guest callback dispatcher, 31 NPUA WWS lifts, exact-byte PIC registration, and the full WWS SPU interpreter fallback")
 PYM772LINKED
 # Every M7.62 native function must appear in the FINAL Mach-O, not merely object.
 python3 - <<'PY'

@@ -1505,7 +1505,13 @@ static BOOL ARGameManifestHasTitleUsrdir(NSDictionary *manifest){
   const BOOL layerAttached=labWasReady || [self.metalView bindToPS3MetalBackend];
   self.graphicsReady=NO;
   self.graphicsDrawButton.enabled=NO; self.graphicsCacheButton.enabled=NO;
-  self.metalView.hidden=YES; self.nativeGameHUD.hidden=YES; self.gameDisplayActive=NO;
+  /* Make the real Metal layer visible before the guest starts. The previous
+   * flow hid this layer here and only revealed it after the first guest flip;
+   * that made the first drawable depend on a flip that could only be shown
+   * after a drawable had already been requested. This changes visibility
+   * only: it does not issue a synthetic draw or claim a game frame. */
+  self.gameDisplayActive=NO;
+  [self showNativeGameFrame];
   ARRSXResetMetrics();
   __atomic_store_n(&ARNativeRSXBackendReady,0u,__ATOMIC_RELEASE);
   __atomic_store_n(&ARNativeRSXPumpActive,0u,__ATOMIC_RELEASE);
@@ -1523,10 +1529,10 @@ static BOOL ARGameManifestHasTitleUsrdir(NSDictionary *manifest){
    * functions first and interpret only an unresolved code branch, matching
    * the PC port's default run.sh behavior. */
   setenv("SPU_INTERP_UNLIFTED","1",1);
-  /* Ascension patches its RSX FIFO park after SPU jobs build a frame. Use the
-   * same bounded 2 s wait as the PC port; 50 ms can skip commands still being
-   * written by the recompiled SPU jobs. */
-  setenv("GCM_PARK_WAIT_MS","2000",1);
+  /* Match the PC port's effective park-resync window. A 2 s resync can skip
+   * guest commands and fences while Ascension's SPU jobs are still patching
+   * the FIFO; keep the parked get position until the guest changes it. */
+  setenv("GCM_PARK_WAIT_MS","2000000000",1);
   /* Keep the RSX behind the frame label that Ascension's post-process jobs
    * release, instead of running past work the SPUs have not finished. */
   setenv("GCM_SEMA_ACQUIRE","1",1);
@@ -1745,6 +1751,10 @@ static BOOL ARGameManifestHasTitleUsrdir(NSDictionary *manifest){
 /* M5.0: NV40 guest microcode is decoded, lowered and compiled on the iPhone.
  * Failures are shown; no draw/gameplay claim is made from shader compilation. */
 - (void)arSwitchTab:(UISegmentedControl *)sender {
+    /* Keep the guest CAMetalLayer attached and visible throughout a live run.
+     * The game HUD opens the report; launcher tabs are not a second display
+     * mode while PS3Recomp owns the surface. */
+    if(self.gameDisplayActive){self.metalView.hidden=NO;return;}
     NSInteger selected=sender.selectedSegmentIndex;
     BOOL showGame=selected==0, showFiles=selected==1;
     BOOL showSettings=selected==2, showReport=selected==3;
