@@ -723,6 +723,8 @@ for symbol in ("_cellSpursCreateTaskset2", "_cellSpursCreateTask2",
                "_spu_taskset_track",
                "_spu_workload_reset_ascension_job_metrics",
                "_spu_workload_copy_ascension_job_metrics",
+               "_spu_workload_reset_ascension_taskset_metrics",
+               "_spu_workload_copy_ascension_taskset_metrics",
                "_cellSpursCaptureAscensionPmMiss",
                "_spu_signal_parked_on_line", "_edge_inflate",
                "_rsx_metal_backend_set_ios_output_scale"):
@@ -738,7 +740,7 @@ for symbol in ("_gowa_spu_register_c8_wws_pm",
                "_wws_pm_c8d774_spu_recomp_register"):
     if not any(symbol in name for name in defined):
         raise SystemExit("M7.90 exact NPUA WWS job lift/C8 PM or runtime routing missing from final Mach-O: "+symbol)
-print("M8.00 final ARM64 Mach-O contains the SPURS task-context builder, taskset workload-id parity, 31 NPUA WWS lifts, PIC registration, and the SPU interpreter fallback")
+print("M8.01 final ARM64 Mach-O contains lock-line-safe SPURS taskset updates, direct WWS telemetry, 31 NPUA WWS lifts, PIC registration, and the SPU interpreter fallback")
 PYM772LINKED
 # Every M7.62 native function must appear in the FINAL Mach-O, not merely object.
 python3 - <<'PY'

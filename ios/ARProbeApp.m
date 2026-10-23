@@ -25,6 +25,8 @@ extern void cellSpursCopyAscensionMetrics(uint64_t out[8]);
 extern void cellSpursCopyAscensionPmDiagnostics(uint64_t out[32][7]);
 extern void spu_workload_reset_ascension_job_metrics(void);
 extern void spu_workload_copy_ascension_job_metrics(uint64_t out[8]);
+extern void spu_workload_reset_ascension_taskset_metrics(void);
+extern void spu_workload_copy_ascension_taskset_metrics(uint64_t out[14]);
 extern void ar_m756_last_stop_evidence(ar_m756_stop_evidence*);
 extern void ar_m756_last_origin_evidence(ar_m756_stop_evidence*);
 extern void ar_m751_last_fs_trace(ar_fs_trace *);
@@ -1566,6 +1568,7 @@ static BOOL ARGameManifestHasTitleUsrdir(NSDictionary *manifest){
   else
     unsetenv("SPU_PIC_CAPTURE");
   spu_workload_reset_ascension_job_metrics();
+  spu_workload_reset_ascension_taskset_metrics();
   cellSpursResetAscensionMetrics();
   ar_m772_runtime_begin();
   [self arSetStatus:@"Preparando VM, PPU/SPU recompilados e acesso guest ao jogo…"];
@@ -1948,6 +1951,8 @@ static BOOL ARGameManifestHasTitleUsrdir(NSDictionary *manifest){
   ar_fs_trace liveFs={0}; ar_fs_snapshot(&liveFs);
   uint64_t spursMetrics[8]={0}; cellSpursCopyAscensionMetrics(spursMetrics);
   uint64_t spuJobs[8]={0}; spu_workload_copy_ascension_job_metrics(spuJobs);
+  uint64_t tasksetMetrics[14]={0};
+  spu_workload_copy_ascension_taskset_metrics(tasksetMetrics);
   uint64_t pmDiagnostics[32][7]={0}; cellSpursCopyAscensionPmDiagnostics(pmDiagnostics);
   NSString *spuCaptureName=self.latestSpuCaptureURL.lastPathComponent ?: @"não configurada";
   uint32_t state=ar_m772_entry_state();
@@ -2068,7 +2073,8 @@ static BOOL ARGameManifestHasTitleUsrdir(NSDictionary *manifest){
      "Tabela AOT=%llu funções · autocheck do catálogo SPU=%llu/5 (não confirma o PM recebido em runtime) · runtime inicializado=%@\n"
      "Chamadas de função AOT=%@ · início(s) da entry=%@ · último PC=0x%08llX (entrada AOT mais recente; PC atual da instrução NÃO MEDIDO)\n"
      "SPURS2 · instâncias=%llu · workloads=%llu (%llu IDs 16–31) · PMs encontrados/faltantes=%llu/%llu · admissões do WWS PM=%llu (%llu IDs 16–31) · último wid=%@\n"
-     "Jobs de job-chain do título · solicitações=%llu · com lift=%llu · sem lift=%llu · retornos do runner=%llu · ativos=%llu · último FNV=0x%016llX · bytes=%llu · EA=0x%08llX\n"
+     "API job-chain genérica · solicitações=%llu · com lift=%llu · sem lift=%llu · retornos do runner=%llu · ativos=%llu · último FNV=0x%016llX · bytes=%llu · EA=0x%08llX\n"
+     "WWS taskset direto · tasksets registrados=%llu · saídas=%llu · candidatos=%llu · ELF válidos=%llu · tentativas de requeue=%llu · aceitos=%llu · rejeitados=%llu · runners iniciados=%llu · ELF carregado/reutilizado=%llu · falhas de carga=%llu · retornos=%llu · ativos agora=%llu · último taskset=0x%08llX task=%llu\n"
      "Captura de módulos ausentes=Documents/%@ · fragmentos PIC dinâmicos=Documents/%@/spu-pic-fragments.txt\n"
      "Fallback SPU: AOT primeiro; interpretação habilitada para branch sem lift · captura PIC habilitada\n"
      "PMs examinados (um registro por wid):\n%@\n"
@@ -2117,6 +2123,13 @@ static BOOL ARGameManifestHasTitleUsrdir(NSDictionary *manifest){
      (unsigned long long)spuJobs[2],(unsigned long long)spuJobs[3],
      (unsigned long long)spuJobs[4],(unsigned long long)spuJobs[5],
      (unsigned long long)spuJobs[6],(unsigned long long)spuJobs[7],
+     (unsigned long long)tasksetMetrics[0],(unsigned long long)tasksetMetrics[1],
+     (unsigned long long)tasksetMetrics[2],(unsigned long long)tasksetMetrics[3],
+     (unsigned long long)tasksetMetrics[4],(unsigned long long)tasksetMetrics[5],
+     (unsigned long long)tasksetMetrics[6],(unsigned long long)tasksetMetrics[7],
+     (unsigned long long)tasksetMetrics[8],(unsigned long long)tasksetMetrics[9],
+     (unsigned long long)tasksetMetrics[10],(unsigned long long)tasksetMetrics[11],
+     (unsigned long long)tasksetMetrics[12],(unsigned long long)tasksetMetrics[13],
      spuCaptureName,spuCaptureName,pmDiagnosticsText,aotTraceText,
      (unsigned long long)live[14],(unsigned long long)live[15],
      (unsigned long long)live[16],(unsigned long long)live[17],

@@ -14,6 +14,10 @@ import re
 import subprocess
 import sys
 
+from m801_taskset_runtime import LOCK_MARKER as TASKSET_LOCK_MARKER
+from m801_taskset_runtime import METRICS_MARKER as TASKSET_METRICS_MARKER
+from m801_taskset_runtime import apply as apply_m801_taskset_runtime
+
 
 PIN = "39a36296511c445707adabcd312f0b740cfbd694"
 MARKER = "ASCENSION_M772_SPURS2_TASK_API_V2"
@@ -1644,6 +1648,7 @@ def main() -> int:
     apply_lwcond_wait_signal_semantics(upstream)
     apply_ascension_gcm_park_watchdog_fix(upstream)
     apply_ascension_report_task_sync(upstream)
+    apply_m801_taskset_runtime(upstream)
 
     required = {
         "libs/spurs/cellSpurs.c": (
@@ -1666,6 +1671,9 @@ def main() -> int:
         "libs/spurs/cellSpurs.h": ("cellSpursCreateTask2", "cellSpursJoinTask2",
                                    "cellSpursTasksetGetSpursAddress", "_cellSpursLFQueuePushBody",
                                    "cellSpursGetWorkloadFlag", "_cellSpursWorkloadFlagReceiver"),
+        "libs/spurs/spurs_taskset.h": (TASKSET_LOCK_MARKER,
+                                        "spurs_bitset_rmw(uint32_t bitset_ea, uint32_t taskId, int set)",
+                                        "spu_lockline_lock()", "spu_coh_notify_write(word_ea)"),
         "libs/spurs/spurs_pm.c": (TASKSET_WID_MARKER,
                                   "LS_BE32(0x1DC, vm_read32(taskset_ea + CSTS_WID));"),
         "runtime/spu/spu_workload.c": ("spu_taskset_set_running", "spu_taskset_track",
@@ -1675,7 +1683,11 @@ def main() -> int:
                                        "spu_workload_note_wws_role(image_id, name);",
                                        TASK_ACTIVITY_MARKER,
                                        "spu_taskset_tasks_running(void)",
-                                       "spu_taskset_task_ended(void)"),
+                                       "spu_taskset_task_ended(void)",
+                                       TASKSET_LOCK_MARKER, TASKSET_METRICS_MARKER,
+                                       "ts_bits_clear(taskset_ea + 0x30 + done_task / 8, m)",
+                                       "spu_workload_copy_ascension_taskset_metrics",
+                                       "asc_taskset_add(7, 1)"),
         "runtime/spu/spu_channels.c": (DYNAMIC_WWS_PM_MARKER,
                                        "spu_workload_is_wws_pm_image(ctx->image_id)"),
         "runtime/spu/spu_dma.h": (DYNAMIC_WWS_PM_MARKER,
@@ -1697,7 +1709,7 @@ def main() -> int:
         missing = [needle for needle in needles if needle not in text]
         if missing:
             raise SystemExit(f"M7.83 PS3Recomp SPURS2 patch incomplete in {filename}: {missing}")
-    print("M8.00 applies US Ascension taskset workload-id ABI parity to the SPU runtime")
+    print("M8.01 applies lock-line-safe SPURS taskset updates and direct WWS task telemetry")
     return 0
 
 
