@@ -423,7 +423,8 @@ void queueGuestApc(GuestThread *thread, uint32_t routine, uint32_t apcContext,
 bool guestApcCanInterruptWait() {
     GuestThread *thread = g_currentGuestThread;
     const auto memory = g_activeGuestMemory.lock();
-    if (!thread || g_guestIrql > 1u || !memory || !memory->base ||
+    uint8_t *base = memory ? memory->base : nullptr;
+    if (!thread || g_guestIrql > 1u || !base ||
         !validGuestRange(thread->objectAddress + kGuestKThreadApcDisableOffset, 4u) ||
         static_cast<int32_t>(PPC_LOAD_U32(
             thread->objectAddress + kGuestKThreadApcDisableOffset)) < 0) {
@@ -436,7 +437,8 @@ bool guestApcCanInterruptWait() {
 bool deliverPendingGuestApcs() {
     GuestThread *thread = g_currentGuestThread;
     const auto memory = g_activeGuestMemory.lock();
-    if (!thread || g_guestIrql > 1u || !memory || !memory->base ||
+    uint8_t *base = memory ? memory->base : nullptr;
+    if (!thread || g_guestIrql > 1u || !base ||
         !validGuestRange(thread->objectAddress + kGuestKThreadApcDisableOffset, 4u) ||
         static_cast<int32_t>(PPC_LOAD_U32(thread->objectAddress + kGuestKThreadApcDisableOffset)) < 0)
         return false;
@@ -467,7 +469,7 @@ bool deliverPendingGuestApcs() {
         callback.r5.u32 = apc.argument2;
         PPC_STORE_U32(callback.r1.u32, 0u);
         try {
-            routine(callback, memory->base);
+            routine(callback, base);
             delivered = true;
         } catch (const std::exception &error) {
             recordRuntimeTrace(std::string("APC callback failed: ") + error.what());
@@ -525,8 +527,9 @@ void writeGuestDispatcherSignalState(const std::shared_ptr<GuestWaitable> &waita
                                      int32_t signalState) {
     if (!waitable || waitable->objectAddress == 0u) return;
     const auto memory = g_activeGuestMemory.lock();
+    uint8_t *base = memory ? memory->base : nullptr;
     const uint32_t signalAddress = waitable->objectAddress + 4u;
-    if (memory && memory->base && validGuestRange(signalAddress, 4u))
+    if (base && validGuestRange(signalAddress, 4u))
         PPC_STORE_U32(signalAddress, static_cast<uint32_t>(signalState));
 }
 
@@ -1322,6 +1325,7 @@ extern "C" int xowue_boot_xex(const char *path, char *output, size_t output_capa
         copyImage(image, *memory);
         g_activeExecutionInfoAddress = allocateGuestPhysicalRange(memory->base, 0x20u, 0x1000u, 0x04u);
         if (g_activeExecutionInfoAddress != 0u) {
+            uint8_t *base = memory->base;
             const uint32_t execution = g_activeExecutionInfoAddress;
             PPC_STORE_U32(execution + 0x00u, 0u); // Media ID is not used by this title.
             PPC_STORE_U32(execution + 0x04u, 0u); // XEX version.
@@ -4767,7 +4771,7 @@ void xowue_KeRaiseIrqlToDpcLevel(PPCContext &context) {
     g_guestIrql = 2u;
 }
 
-void xowue_KeAcquireSpinLockAtRaisedIrql(PPCContext &context) {
+void xowue_KeAcquireSpinLockAtRaisedIrql(PPCContext &context, uint8_t *base) {
     const uint32_t address = context.r3.u32;
     std::shared_ptr<std::mutex> lock;
     {
@@ -4780,7 +4784,7 @@ void xowue_KeAcquireSpinLockAtRaisedIrql(PPCContext &context) {
     if (validGuestRange(address, 4u)) PPC_STORE_U32(address, 1u);
 }
 
-void xowue_KeReleaseSpinLockFromRaisedIrql(PPCContext &context) {
+void xowue_KeReleaseSpinLockFromRaisedIrql(PPCContext &context, uint8_t *base) {
     const uint32_t address = context.r3.u32;
     std::shared_ptr<std::mutex> lock;
     {

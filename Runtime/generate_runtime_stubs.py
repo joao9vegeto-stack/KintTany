@@ -302,8 +302,8 @@ def main() -> int:
             'void xowue_KeEnterCriticalRegion(PPCContext &, uint8_t *);',
             'void xowue_KeLeaveCriticalRegion(PPCContext &, uint8_t *);',
             'void xowue_KeRaiseIrqlToDpcLevel(PPCContext &);',
-            'void xowue_KeAcquireSpinLockAtRaisedIrql(PPCContext &);',
-            'void xowue_KeReleaseSpinLockFromRaisedIrql(PPCContext &);',
+            'void xowue_KeAcquireSpinLockAtRaisedIrql(PPCContext &, uint8_t *);',
+            'void xowue_KeReleaseSpinLockFromRaisedIrql(PPCContext &, uint8_t *);',
             'void xowue_KeLockL2(PPCContext &);',
             'void xowue_KeUnlockL2(PPCContext &);',
             'void xowue_KeEnableFpuExceptions(PPCContext &);',
@@ -486,9 +486,9 @@ def main() -> int:
         elif name == "KeRaiseIrqlToDpcLevel":
             code.append("\txowue_KeRaiseIrqlToDpcLevel(ctx);")
         elif name == "KeAcquireSpinLockAtRaisedIrql":
-            code.append("\txowue_KeAcquireSpinLockAtRaisedIrql(ctx);")
+            code.append("\txowue_KeAcquireSpinLockAtRaisedIrql(ctx, base);")
         elif name == "KeReleaseSpinLockFromRaisedIrql":
-            code.append("\txowue_KeReleaseSpinLockFromRaisedIrql(ctx);")
+            code.append("\txowue_KeReleaseSpinLockFromRaisedIrql(ctx, base);")
         elif name == "KeLockL2":
             code.append("\txowue_KeLockL2(ctx);")
         elif name == "KeUnlockL2":
