@@ -2,6 +2,7 @@
 
 #include "image.h"
 #include "ppc_recomp_shared.h"
+#include "XOWUEDispatchGuard.h"
 #include "xex.h"
 
 #include <algorithm>
@@ -289,6 +290,7 @@ std::mutex g_ioShareMutex;
 std::mutex g_socketMutex;
 std::mutex g_l2Mutex;
 std::unordered_map<uint32_t, std::shared_ptr<GuestFile>> g_guestFiles;
+std::unordered_map<uint32_t, PPCFunc *> g_aotFunctionMap;
 std::unordered_map<uint32_t, std::shared_ptr<std::mutex>> g_guestSpinLocks;
 std::unordered_map<uint32_t, std::pair<uint32_t, uint32_t>> g_ioShareByFileObject;
 std::unordered_map<uint32_t, int> g_guestSockets;
@@ -320,6 +322,13 @@ XenosFrontendState g_xenosFrontend;
 std::atomic<bool> g_schedulerStopRequested{false};
 std::atomic<bool> g_runtimeSessionPoisoned{false};
 thread_local GuestThread *g_currentGuestThread = nullptr;
+std::unique_ptr<std::atomic<uint64_t>[]> g_aotExecutionBitmap;
+size_t g_aotExecutionBitmapWords = 0u;
+std::atomic<uint64_t> g_aotExecutionCalls{0u};
+std::atomic<uint64_t> g_aotExecutionDistinct{0u};
+std::atomic<bool> g_aotExecutionTelemetryActive{false};
+std::atomic<uint32_t> g_lastAotGuestFunction{0u};
+std::atomic<uint32_t> g_lastAotGuestThread{0u};
 
 bool shouldPersistRuntimeTrace(const std::string &event, size_t sequence) {
     if (sequence < 96u) return true;
@@ -329,6 +338,11 @@ bool shouldPersistRuntimeTrace(const std::string &event, size_t sequence) {
                          event.find("failed") != std::string::npos ||
                          event.find("rejected") != std::string::npos ||
                          event.find("untranslated") != std::string::npos;
+    if (event.find("AOT execution") != std::string::npos &&
+        g_runtimeTracePersistMilestones.fetch_add(1, std::memory_order_relaxed) < 128u) {
+        return true;
+    }
+
     if (failure && g_runtimeTracePersistFailures.fetch_add(1, std::memory_order_relaxed) < 128u) {
         return true;
     }
@@ -457,10 +471,74 @@ struct GuestThreadExit final {
 using GuestTimeout = std::optional<std::chrono::nanoseconds>;
 
 PPCFunc *findGuestFunction(uint32_t address) {
-    for (const PPCFuncMapping *mapping = PPCFuncMappings; mapping->host; ++mapping) {
-        if (mapping->guest == address) return mapping->host;
+    const auto function = g_aotFunctionMap.find(address);
+    return function == g_aotFunctionMap.end() ? nullptr : function->second;
+}
+
+void resetAotExecutionTelemetry() {
+    g_aotExecutionTelemetryActive.store(false, std::memory_order_relaxed);
+    g_aotExecutionBitmap.reset();
+    g_aotExecutionBitmapWords = 0u;
+    const uint64_t functionCount = (static_cast<uint64_t>(PPC_CODE_SIZE) + 3u) / 4u;
+    const uint64_t wordCount = (functionCount + 63u) / 64u;
+    if (wordCount == 0u || wordCount > std::numeric_limits<size_t>::max())
+        throw std::runtime_error("AOT execution bitmap size is invalid");
+    auto bitmap = std::make_unique<std::atomic<uint64_t>[]>(static_cast<size_t>(wordCount));
+    for (size_t i = 0; i < static_cast<size_t>(wordCount); ++i)
+        bitmap[i].store(0u, std::memory_order_relaxed);
+    g_aotExecutionBitmap = std::move(bitmap);
+    g_aotExecutionBitmapWords = static_cast<size_t>(wordCount);
+    g_aotExecutionCalls.store(0u, std::memory_order_relaxed);
+    g_aotExecutionDistinct.store(0u, std::memory_order_relaxed);
+    g_lastAotGuestFunction.store(0u, std::memory_order_relaxed);
+    g_lastAotGuestThread.store(0u, std::memory_order_relaxed);
+    g_aotExecutionTelemetryActive.store(true, std::memory_order_release);
+}
+
+void recordAotFunctionExecution(uint32_t guestAddress) {
+    if (!g_aotExecutionTelemetryActive.load(std::memory_order_acquire)) return;
+    const uint64_t calls = g_aotExecutionCalls.fetch_add(1u, std::memory_order_relaxed) + 1u;
+    const uint32_t threadId = g_currentGuestThread ? g_currentGuestThread->id : 0u;
+    g_lastAotGuestFunction.store(guestAddress, std::memory_order_relaxed);
+    g_lastAotGuestThread.store(threadId, std::memory_order_relaxed);
+
+    if (guestAddress >= PPC_CODE_BASE && (guestAddress & 3u) == 0u) {
+        const uint64_t offset = static_cast<uint64_t>(guestAddress) - PPC_CODE_BASE;
+        if (offset < PPC_CODE_SIZE) {
+            const uint64_t functionIndex = offset / 4u;
+            const uint64_t wordIndex = functionIndex / 64u;
+            if (wordIndex < g_aotExecutionBitmapWords) {
+                const uint64_t mask = uint64_t{1} << (functionIndex & 63u);
+                const uint64_t previous = g_aotExecutionBitmap[wordIndex].fetch_or(
+                    mask, std::memory_order_relaxed);
+                if ((previous & mask) == 0u)
+                    g_aotExecutionDistinct.fetch_add(1u, std::memory_order_relaxed);
+            }
+        }
     }
-    return nullptr;
+
+    if (calls == 1u || calls % 65536u == 0u) {
+        char event[192];
+        std::snprintf(event, sizeof(event),
+            "AOT execution milestone calls=%llu distinctGuestFunctions=%llu lastGuest=0x%08X thread=%u",
+            static_cast<unsigned long long>(calls),
+            static_cast<unsigned long long>(g_aotExecutionDistinct.load(std::memory_order_relaxed)),
+            guestAddress, threadId);
+        recordRuntimeTrace(event);
+    }
+}
+
+void recordAotExecutionSummary(const char *reason) {
+    if (!g_aotExecutionTelemetryActive.load(std::memory_order_acquire)) return;
+    char event[224];
+    std::snprintf(event, sizeof(event),
+        "AOT execution summary reason=%s calls=%llu distinctGuestFunctions=%llu lastGuest=0x%08X thread=%u",
+        reason ? reason : "unknown",
+        static_cast<unsigned long long>(g_aotExecutionCalls.load(std::memory_order_relaxed)),
+        static_cast<unsigned long long>(g_aotExecutionDistinct.load(std::memory_order_relaxed)),
+        g_lastAotGuestFunction.load(std::memory_order_relaxed),
+        g_lastAotGuestThread.load(std::memory_order_relaxed));
+    recordRuntimeTrace(event);
 }
 
 void notifyGuestWaiters();
@@ -1202,10 +1280,13 @@ size_t installDispatchTable(GuestMemory &memory) {
     if (tableEnd > memory.size) throw std::runtime_error("AOT dispatch table exceeds guest address space");
 
     size_t installed = 0;
+    g_aotFunctionMap.clear();
+    g_aotFunctionMap.reserve(90000u);
     for (const PPCFuncMapping *mapping = PPCFuncMappings; mapping->host; ++mapping) {
         if (mapping->guest < PPC_CODE_BASE) continue;
         const uint64_t codeOffset = mapping->guest - PPC_CODE_BASE;
         if (codeOffset >= PPC_CODE_SIZE) continue;
+        g_aotFunctionMap[mapping->guest] = mapping->host;
         const uint64_t slotOffset = tableStart + codeOffset * 2;
         auto **slot = reinterpret_cast<PPCFunc **>(memory.base + slotOffset);
         *slot = mapping->host;
@@ -1225,6 +1306,8 @@ void writeMessage(char *output, size_t capacity, const char *format, ...) {
 }
 
 int fail(char *output, size_t capacity, const std::exception &error) {
+    recordAotExecutionSummary("exception");
+    g_aotExecutionTelemetryActive.store(false, std::memory_order_release);
     const std::string trace = runtimeTraceText();
     writeMessage(output, capacity, "Falha: %s%s", error.what(), trace.c_str());
     return 1;
@@ -1235,6 +1318,58 @@ int fail(char *output, size_t capacity, const std::exception &error) {
 void xowue_thread_checkpoint() {
     checkpointGuestThread();
     pumpGuestXenosRingBuffer();
+}
+
+void xowue_thread_checkpoint(uint32_t guestAddress) {
+    recordAotFunctionExecution(guestAddress);
+    xowue_thread_checkpoint();
+}
+
+static const char *dispatchGuardErrorName(xowue_dispatch_guard::Result result) {
+    using Result = xowue_dispatch_guard::Result;
+    switch (result) {
+        case Result::ok: return "ok";
+        case Result::null_base: return "null guest memory";
+        case Result::target_below_code: return "target below AOT code range";
+        case Result::target_out_of_code: return "target outside AOT code range";
+        case Result::target_unaligned: return "unaligned PPC target";
+        case Result::table_out_of_memory: return "dispatch slot outside guest memory";
+        case Result::empty_slot: return "AOT dispatch slot is empty";
+    }
+    return "unknown dispatch guard result";
+}
+
+[[noreturn]] static void failPpcIndirectDispatch(
+    PPCContext &context, uint32_t target, PPCFunc *slotFunction,
+    const char *reason) {
+    const uint32_t lr = static_cast<uint32_t>(context.lr);
+    const uint32_t threadId = g_currentGuestThread ? g_currentGuestThread->id : 0u;
+    char event[256];
+    std::snprintf(event, sizeof(event),
+        "PPC indirect dispatch failed reason=%s guestTarget=0x%08X LR=0x%08X callsite=0x%08X thread=%u slot=0x%llX",
+        reason ? reason : "unknown", target, lr, lr >= 4u ? lr - 4u : 0u,
+        threadId, static_cast<unsigned long long>(reinterpret_cast<uintptr_t>(slotFunction)));
+    recordRuntimeTrace(event);
+    requestGuestSchedulerStop();
+    throw std::runtime_error(event);
+}
+
+void xowue_dispatch_indirect(PPCContext &context, uint8_t *base, uint32_t target) {
+    PPCFunc *slotFunction = nullptr;
+    const uint64_t tableStart = static_cast<uint64_t>(PPC_IMAGE_BASE) + PPC_IMAGE_SIZE;
+    const auto guard = xowue_dispatch_guard::resolve<PPCFunc>(
+        base, kGuestAddressSpaceSize, target, PPC_CODE_BASE, PPC_CODE_SIZE,
+        tableStart, slotFunction);
+    if (guard != xowue_dispatch_guard::Result::ok)
+        failPpcIndirectDispatch(context, target, slotFunction, dispatchGuardErrorName(guard));
+
+    const auto mapped = g_aotFunctionMap.find(target);
+    if (mapped == g_aotFunctionMap.end() || !mapped->second)
+        failPpcIndirectDispatch(context, target, slotFunction, "target absent from linked AOT map");
+    if (mapped->second != slotFunction)
+        failPpcIndirectDispatch(context, target, slotFunction, "dispatch slot does not match linked AOT map");
+
+    mapped->second(context, base);
 }
 
 extern "C" void xowue_set_touch_controller_state(
@@ -1292,6 +1427,7 @@ extern "C" int xowue_runtime_snapshot(char *output, size_t output_capacity) {
 
 extern "C" int xowue_boot_xex(const char *path, char *output, size_t output_capacity) {
     try {
+        g_aotExecutionTelemetryActive.store(false, std::memory_order_relaxed);
         if (g_runtimeSessionPoisoned.load()) {
             throw std::runtime_error("uma thread PPC não encerrou após o limite de parada; feche e reabra o app para iniciar outra sessão");
         }
@@ -1303,6 +1439,7 @@ extern "C" int xowue_boot_xex(const char *path, char *output, size_t output_capa
         g_runtimeTracePersistFailures.store(0, std::memory_order_relaxed);
         g_runtimeTracePersistMilestones.store(0, std::memory_order_relaxed);
         g_runtimeTracePersistSwaps.store(0, std::memory_order_relaxed);
+        resetAotExecutionTelemetry();
         {
             std::lock_guard<std::mutex> tlsLock(g_tlsMutex);
             g_tlsAllocated.fill(false);
@@ -1474,12 +1611,16 @@ extern "C" int xowue_boot_xex(const char *path, char *output, size_t output_capa
         mainThread->exited.store(true);
         signalGuestWaitable(mainThread->completion);
         schedulerSession.stop();
+        recordAotExecutionSummary("entry-returned");
+        g_aotExecutionTelemetryActive.store(false, std::memory_order_release);
         const std::string trace = runtimeTraceText();
         writeMessage(output, output_capacity,
                      "Entry point retornou. Funções AOT registradas: %zu. O boot não foi concluído.%s",
                      installed, trace.c_str());
         return 3;
     } catch (const GuestFirmwareReturn &request) {
+        recordAotExecutionSummary("firmware-return");
+        g_aotExecutionTelemetryActive.store(false, std::memory_order_release);
         char event[128];
         std::snprintf(event, sizeof(event), "HalReturnToFirmware routine=0x%08X LR=0x%08X",
                       request.routine, request.returnAddress);
@@ -3140,7 +3281,7 @@ void xowue_VdInitializeEngines(PPCContext &context) {
     std::lock_guard<std::mutex> lock(g_xenosMutex);
     g_xenosFrontend.enginesInitialized = true;
     context.r3.u32 = 1u;
-    recordRuntimeTrace("VdInitializeEngines accepted; Xenos ring command pump and guest-frame path active");
+    recordRuntimeTrace("VdInitializeEngines accepted; engine flag set only; ring pump awaits guest WPTR/checkpoint or VdSwap; no draw or frame implied");
 }
 
 void xowue_VdShutdownEngines() {

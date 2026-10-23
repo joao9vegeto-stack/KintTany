@@ -7,7 +7,7 @@ from pathlib import Path
 
 IMPORT_RE = re.compile(r"PPC_EXTERN_FUNC\(__imp__([A-Za-z_][A-Za-z_0-9]*)\);")
 DECODE_RE = re.compile(r"Unable to decode instruction [0-9A-Fa-f]+ at ([0-9A-Fa-f]+)")
-PPC_FUNCTION_RE = re.compile(r"(PPC_FUNC_IMPL\(__imp__sub_[0-9A-Fa-f]+\)\s*\{)")
+PPC_FUNCTION_RE = re.compile(r"(PPC_FUNC_IMPL\(__imp__sub_([0-9A-Fa-f]{8})\)\s*\{)(?:\s*(xowue_thread_checkpoint\([^)]*\);))?")
 
 COMPATIBILITY_IMPORTS = {
     "DbgBreakPoint",
@@ -146,6 +146,19 @@ COMPATIBILITY_IMPORTS = {
 }
 
 
+def instrument_aot_entries(contents: str) -> tuple[str, int]:
+    instrumented = 0
+
+    def add_checkpoint(match: re.Match[str]) -> str:
+        nonlocal instrumented
+        instrumented += 1
+        guest_address = int(match.group(2), 16)
+        checkpoint = f"xowue_thread_checkpoint(0x{guest_address:08X}u);"
+        return match.group(1) + chr(10) + chr(9) + checkpoint
+
+    return PPC_FUNCTION_RE.sub(add_checkpoint, contents), instrumented
+
+
 def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("--ppc-dir", required=True, type=Path)
@@ -175,17 +188,7 @@ def main() -> int:
     for source in sorted(args.ppc_dir.glob("ppc_recomp.*.cpp")):
         contents = source.read_text(encoding="utf-8")
         original = contents
-        instrumented = 0
-
-        def add_checkpoint(match: re.Match[str]) -> str:
-            nonlocal instrumented
-            instrumented += 1
-            following = contents[match.end():match.end() + 100]
-            if re.match(r"\s*xowue_thread_checkpoint\(\);", following):
-                return match.group(1)
-            return match.group(1) + "\n\txowue_thread_checkpoint();"
-
-        contents = PPC_FUNCTION_RE.sub(add_checkpoint, contents)
+        contents, instrumented = instrument_aot_entries(contents)
         for address in sorted(tuple(pending)):
             symbol = f"sub_{address:08X}"
             marker = f"PPC_FUNC_IMPL(__imp__{symbol}) {{"
@@ -201,8 +204,8 @@ def main() -> int:
             pending.remove(address)
         if contents != original:
             declarations = []
-            if instrumented and "extern void xowue_thread_checkpoint();" not in contents:
-                declarations.append("extern void xowue_thread_checkpoint();")
+            if instrumented and "extern void xowue_thread_checkpoint(uint32_t);" not in contents:
+                declarations.append("extern void xowue_thread_checkpoint(uint32_t);")
             if "xowue_untranslated_tail(" in contents and "extern void xowue_untranslated_tail(uint32_t);" not in contents:
                 declarations.append("extern void xowue_untranslated_tail(uint32_t);")
             if declarations:
@@ -216,6 +219,7 @@ def main() -> int:
     args.output.parent.mkdir(parents=True, exist_ok=True)
     code = ['#include "ppc_recomp_shared.h"',
             'void xowue_thread_checkpoint();',
+            'void xowue_thread_checkpoint(uint32_t);',
             'void xowue_compat_import(const char *, PPCContext &, uint8_t *);',
             'void xowue_ExCreateThread(PPCContext &, uint8_t *);',
             'void xowue_ExTerminateThread(PPCContext &);',

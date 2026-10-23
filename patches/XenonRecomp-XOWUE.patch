@@ -542,3 +542,16 @@ diff --git a/XenonUtils/ppc_context.h b/XenonUtils/ppc_context.h
  
  #define PPC_FUNC_PROLOGUE() __builtin_assume(((size_t)base & 0x1F) == 0)
  
+@@ -108,10 +108,11 @@
+ #define PPC_MEMORY_SIZE 0x100000000ull
+ 
+ #define PPC_LOOKUP_FUNC(x, y) *(PPCFunc**)(x + PPC_IMAGE_BASE + PPC_IMAGE_SIZE + (uint64_t(uint32_t(y) - PPC_CODE_BASE) * 2))
+ 
+ #ifndef PPC_CALL_INDIRECT_FUNC
+-#define PPC_CALL_INDIRECT_FUNC(x) (PPC_LOOKUP_FUNC(base, x))(ctx, base)
++#define PPC_CALL_INDIRECT_FUNC(x) xowue_dispatch_indirect(ctx, base, uint32_t(x))
+ #endif
+ 
+ typedef void PPCFunc(struct PPCContext& __restrict__ ctx, uint8_t* base);
++void xowue_dispatch_indirect(struct PPCContext& ctx, uint8_t* base, uint32_t target);
+ 
