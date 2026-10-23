@@ -103,7 +103,9 @@ private struct XOWUEGameSurfaceScreen: View {
         ZStack {
             Color.black.ignoresSafeArea()
             XOWUEVulkanSurface().ignoresSafeArea()
-            XOWUETouchControllerHUD(input: touchController)
+            if !showsBootFailure {
+                XOWUETouchControllerHUD(input: touchController)
+            }
 
             VStack(spacing: 0) {
                 HStack {

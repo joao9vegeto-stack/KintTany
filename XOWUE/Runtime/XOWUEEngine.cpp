@@ -2455,6 +2455,12 @@ void xowue_KeGetCurrentProcessType(PPCContext &context) {
     recordRuntimeTrace("KeGetCurrentProcessType -> X_PROCTYPE_USER (1)");
 }
 
+void xowue_KiApcNormalRoutineNop(PPCContext &context) {
+    // Xenia exports this kernel routine as a stub returning zero.
+    context.r3.u32 = 0;
+    recordRuntimeTrace("KiApcNormalRoutineNop -> 0 (Xenia-compatible stub)");
+}
+
 void xowue_RtlInitializeCriticalSection(PPCContext &context, uint8_t *base) {
     const uint32_t address = context.r3.u32;
     constexpr uint32_t kXboxCriticalSectionSize = 28;

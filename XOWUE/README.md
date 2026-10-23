@@ -2,13 +2,13 @@
 
 **Title ID:** 41560816
 **Branch:** XOWUE
-**Build de código:** Build 3 em validação pelo workflow XOWUE iOS IPA.
+**Último teste em aparelho:** Build 6 (Action #19, sucesso). O próximo IPA contém o adapter corrigido para o bloqueio APC observado nesse build.
 
 ## Estado do runner
 
-A recompilação AOT contém 344 unidades de funções mais ppc_func_mapping.cpp. O build host completo com Clang 18 compilou e ligou XOWUEEngine e XOWUEHostSmoke. O runtime agora inclui uma base de ciclo de vida de threads PPC (ExCreateThread, XAPI startup, espera/suspensão/retomada, TLS por thread, KPCR e saída) e adapters iniciais para kernel/XAM.
+No Build 6, o iPhone validou o XEX2 (base `0x82000000`, entry `0x82C3CAA8`, 261 imports), executou `XGetVideoMode` e inicializou o ring buffer Xenos. A chamada seguinte, `KiApcNormalRoutineNop`, era tratada pelo gerador como import não implementado, embora o Xenia a exporte como stub que retorna zero. Esta revisão liga esse adapter e registra o retorno no runtime.
 
-O último log disponível, da Build 2, parou em ExCreateThread (LR 0x82C4C110). O código da Build 3 precisa ser executado no aparelho com a pasta do jogo para confirmar o próximo ponto. Não há prova de menu ou frame real ainda.
+O diagnóstico do Build 6 registrou `guest_frames=0`, `guest_swaps=0`, `draws=0` e `rptr=0`; a falha ocorreu antes da primeira submissão gráfica. A próxima execução deve verificar o avanço do boot. O caminho real de imagem permanece em KosmicKrisp.
 
 ## App, arquivos e relatórios
 
@@ -20,12 +20,12 @@ O último log disponível, da Build 2, parou em ExCreateThread (LR 0x82C4C110). 
 
 ## Gráficos
 
-O workflow compila KosmicKrisp com os patches iOS/Metal WSI preservados da branch PsTJohn e fixa a revisão Mesa usada. O app apresenta um clear de diagnóstico Vulkan sobre CAMetalLayer. Os handlers gráficos Xenos ainda não traduzem o ring buffer real, shaders, textura/tiling ou draw state. O clear de diagnóstico não é um frame do jogo.
+KosmicKrisp permanece o backend Vulkan → Metal; o Build 6 confirmou device, surface, swapchain e presents do host na Apple A19 Pro. O runtime lê o ring Xenos, processa buffers indiretos, reconhece swaps e decodifica framebuffer em dois formatos. Ainda não executa os opcodes de draw nem traduz estado e shaders do jogo; por isso, o contador de draws reais segue em zero até o XEX avançar e enviar comandos.
 
 ## Compile e continuidade
 
 Leia HANDOFF-XOWUE.md para comandos do build host, execução no telefone, diagnóstico e handoff para o próximo agente. Leia THIRD_PARTY_NOTICES.md antes de redistribuir artefatos.
 
-Artifact de Build 3: ação #12 em [GitHub Actions](https://github.com/joao9vegeto-stack/KintTany/actions/workflows/xowue-ios.yml). Confirme a execução e baixe XOWUE-Build-3 somente quando estiver concluída com sucesso.
+O IPA mais recente é publicado como artifact do workflow [XOWUE iOS IPA](https://github.com/joao9vegeto-stack/KintTany/actions/workflows/xowue-ios.yml). Somente uma Action concluída com sucesso gera um novo número de Build.
 
 O jogo, WGame, DLC, title updates e assets derivados permanecem fora do Git.

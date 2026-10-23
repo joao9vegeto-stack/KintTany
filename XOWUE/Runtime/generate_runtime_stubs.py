@@ -161,6 +161,7 @@ def main() -> int:
             'void xowue_VdRetrainEDRAM(PPCContext &);',
             'void xowue_VdRetrainEDRAMWorker(PPCContext &);',
             'void xowue_VdCallGraphicsNotificationRoutines(PPCContext &);',
+            'void xowue_KiApcNormalRoutineNop(PPCContext &);',
             '[[noreturn]] void xowue_HalReturnToFirmware(PPCContext &, uint8_t *);', '']
     for name in imports:
         code.append(f"PPC_FUNC(__imp__{name}) {{")
@@ -327,6 +328,8 @@ def main() -> int:
             code.append("\txowue_RtlMultiByteToUnicodeN(ctx, base);")
         elif name == "XamLoaderGetLaunchDataSize":
             code.append("\txowue_XamLoaderGetLaunchDataSize(ctx, base);")
+        elif name in ("KiApcNormalRoutineNop", "KiApcNormalRoutineNop_"):
+            code.append("\txowue_KiApcNormalRoutineNop(ctx);")
         elif name == "HalReturnToFirmware":
             code.append("\txowue_HalReturnToFirmware(ctx, base);")
         else:
@@ -368,9 +371,11 @@ def main() -> int:
         "RtlUnicodeToMultiByteN",
         "RtlMultiByteToUnicodeN",
         "XamLoaderGetLaunchDataSize",
+        "KiApcNormalRoutineNop", "KiApcNormalRoutineNop_",
         "HalReturnToFirmware"
     }
-    print(f"generated {len(imports)} import adapters ({len(implemented)} implemented, {len(imports) - len(implemented)} fail-closed); marked {len(to_mark)}/{len(addresses)} undecoded words with function entries")
+    implemented_imports = len(set(imports) & implemented)
+    print(f"generated {len(imports)} import adapters ({implemented_imports} implemented, {len(imports) - implemented_imports} fail-closed); marked {len(to_mark)}/{len(addresses)} undecoded words with function entries")
     return 0
 
 if __name__ == "__main__":

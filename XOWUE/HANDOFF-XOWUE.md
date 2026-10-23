@@ -9,13 +9,15 @@
 
 ## Situação desta entrega
 
-A Action #14, commit `b1ad999`, produziu o IPA Build 4 sem assinatura (24.480.716 bytes; SHA-256 `c15cc635f25a33a9b28ceada4bbc913f65d380adb108310aa919d612a9630ea7`). O teste no iPhone 17 Pro, iOS 26.5.1, validou o XEX2 e resolveu 261 imports. As chamadas `ObReferenceObjectByHandle` e `ObDereferenceObject` agora passam; duas threads PPC são criadas e encerradas durante a interrupção do boot.
+A última versão testada no aparelho foi o Build 6 (Action #19, commit `3562073`). O XEX2 foi aberto corretamente e os 261 imports foram localizados. O XOWUE executou `XGetVideoMode`, inicializou os engines e configurou o ring buffer Xenos.
 
-A próxima parada observada é `XGetVideoMode`, LR `0x823744BC`, com `r3=0x7FFEF770`. O Xenia implementa esse XAM por meio de `VdQueryVideoMode`; a estrutura `X_VIDEO_MODE` tem 48 bytes. O XOWUE já escrevia o mesmo modo no handler `VdQueryVideoMode`, mas não ligava o import XAM `XGetVideoMode`. Esta revisão reutiliza esses valores e liga o adapter XAM, preservando o ponteiro de saída para a chamada void.
+O Build 6 então parou na importação `KiApcNormalRoutineNop` (LR `0x82B3E360`). O relatório confirma que o ring buffer ainda não tinha comandos: `rptr=0`, `packets=0`, `draws=0`, `guest_swaps=0` e `decoded_frames=0`. KosmicKrisp passou no dispositivo Apple A19 Pro: Vulkan, CAMetalLayer, Metal e swapchain ativos; o host apresentou frames, mas não recebeu frames convidados.
 
-O diagnóstico do Build 4 mostra KosmicKrisp/Vulkan/Metal WSI pronto na Apple A19 Pro e 180 presents do host, mas `guest_swaps=0`, `engines=not-initialized` e `VdSwap=0`. Isso confirma que o boot ainda para antes de entrar no frontend Xenos; não houve frame do jogo.
+A referência de Xenia exporta `KiApcNormalRoutineNop` como rotina stub que retorna zero. O adapter XOWUE agora atende as duas grafias exportadas, retorna zero no PPC e registra o evento, em vez de abortar o boot. O HUD tátil também deixa de cobrir a mensagem quando o boot falha. A validação desta mudança no XEX requer o próximo teste no aparelho.
 
-O número do app vem de `CFBundleVersion`. O Build 4 veio da Action #14; novas Actions bem-sucedidas avançam o número. O `default.xex` e os assets não estão incluídos no IPA ou no branch. Não há prova de menu, primeiro frame real ou partida jogável.
+A tradução Xenos ainda é parcial: o runtime consome ring/indirect buffers, reconhece pacotes de swap e decodifica dois formatos de framebuffer; os opcodes de draw são contabilizados, mas não executados com estado e shaders Xenos. Portanto, o Build 6 não produziu imagem do jogo. A próxima medição deve confirmar se o título ultrapassa a chamada APC e passa a submeter comandos; o trabalho gráfico fica guiado pelos pacotes reais registrados.
+
+O número do app vem de `CFBundleVersion`; somente Actions concluídas com sucesso avançam o build. O `default.xex` e os assets do jogo não estão incluídos no IPA ou na branch.
 
 ## O que entrou no Build 3
 
