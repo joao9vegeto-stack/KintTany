@@ -16,9 +16,11 @@ XenonRecomp: ddd128bcca99fe8bfbb99bea583c972351fa6ace, com patches em patches/Xe
 | debugtrap emitidos | 0 |
 | Avisos RC | 0 |
 | Erros de fronteira de switch | 0 |
-| Tabelas estáticas mantidas | 36 |
+| Tabelas estáticas mantidas | 37 |
 
 A tabela de dispatch em 0x82BD174C foi excluída da lista de switches estáticos porque seus destinos são inícios de funções. O BCTR em 0x82BD1770 é traduzido para chamada indireta via PPC_CALL_INDIRECT_FUNC.
+
+A tabela absoluta em 0x8237CA50 usa uma sequência PPC reordenada (`LIS`, `RLWINM`, `ADDI`, `LWZX`, `MTCTR`, `BCTR`) que a análise automática não classificou. Seus 11 destinos foram validados contra o XEX e são blocos internos de `sub_8237CA18`; o workflow os reduz para ramos locais, sem inventar entradas de função AOT.
 
 ## Item pendente
 

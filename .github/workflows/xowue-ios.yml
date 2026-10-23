@@ -76,6 +76,13 @@ jobs:
           tar -xzf dist/XOWUE-AOT-source.tar.gz -C generated
           test "$(find generated/ppc -maxdepth 1 -name 'ppc_recomp.*.cpp' | wc -l | tr -d ' ')" = "344"
 
+      - name: Lower the validated internal XOWUE switch into local control flow
+        run: |
+          set -euo pipefail
+          python3 tools/patch_xowue_manual_switches.py \
+            --ppc-dir "$GITHUB_WORKSPACE/generated/ppc" \
+            --switch-table "$GITHUB_WORKSPACE/generated/config/XOWUE_switch_tables.toml"
+
       - name: Test PPC dispatch guard and AOT entry instrumentation
         run: |
           set -euo pipefail

@@ -18,6 +18,24 @@ EXPECTED_LABELS = {
     0x82BD17D8,
     0x82BD17E8,
 }
+MANUAL_SWITCH = {
+    "base": 0x8237CA50,
+    "r": 11,
+    "default": 0x8237CB40,
+    "labels": [
+        0x8237CAD0,
+        0x8237CADC,
+        0x8237CAE8,
+        0x8237CAF4,
+        0x8237CB00,
+        0x8237CB00,
+        0x8237CB08,
+        0x8237CB14,
+        0x8237CB20,
+        0x8237CB2C,
+        0x8237CB38,
+    ],
+}
 
 
 def curate(source: Path, destination: Path) -> tuple[int, int]:
@@ -49,18 +67,21 @@ def curate(source: Path, destination: Path) -> tuple[int, int]:
 
     text = "".join(kept)
     parsed = tomllib.loads(text)
+    if any(table["base"] == MANUAL_SWITCH["base"] for table in parsed.get("switch", [])):
+        raise ValueError(f"Manual switch table 0x{MANUAL_SWITCH['base']:08X} already exists")
+    text = text.rstrip() + "\n\n# Manually verified reordered absolute table\n[[switch]]\n"
+    text += f"base = 0x{MANUAL_SWITCH['base']:08X}\nr = {MANUAL_SWITCH['r']}\n"
+    text += f"default = 0x{MANUAL_SWITCH['default']:08X}\nlabels = [\n"
+    text += "".join(f"    0x{label:08X},\n" for label in MANUAL_SWITCH["labels"])
+    text += "]\n"
+    parsed = tomllib.loads(text)
     tables = parsed.get("switch", [])
     if any(table["base"] == FUNCTION_DISPATCH_TABLE for table in tables):
         raise AssertionError("Filtered dispatch table remains in output")
     if removed not in (0, 1):
         raise ValueError(f"Expected to filter at most one table, filtered {removed}")
-    if removed == 0 and len(tables) != 36:
-        raise ValueError(
-            f"No table was filtered and output contains {len(tables)} switches; "
-            "the input may not be the expected XOWUE analysis"
-        )
-    if removed == 1 and len(tables) != 36:
-        raise ValueError(f"Expected 36 curated switches, found {len(tables)}")
+    if len(tables) != 37:
+        raise ValueError(f"Expected 37 curated switches including the manual table, found {len(tables)}")
 
     destination.parent.mkdir(parents=True, exist_ok=True)
     destination.write_text(text, encoding="utf-8")

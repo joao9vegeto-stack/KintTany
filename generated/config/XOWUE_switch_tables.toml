@@ -927,3 +927,21 @@ labels = [
     0x82E7F260,
 ]
 
+# Manually verified reordered absolute table (XEX 0x8237CA50)
+[[switch]]
+base = 0x8237CA50
+r = 11
+default = 0x8237CB40
+labels = [
+    0x8237CAD0,
+    0x8237CADC,
+    0x8237CAE8,
+    0x8237CAF4,
+    0x8237CB00,
+    0x8237CB00,
+    0x8237CB08,
+    0x8237CB14,
+    0x8237CB20,
+    0x8237CB2C,
+    0x8237CB38,
+]
