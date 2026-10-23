@@ -102,12 +102,12 @@ jobs:
               assert any(n.startswith('Payload/') and n.endswith('.app/Info.plist')
                          for n in z.namelist())
           PY
-          # TempFile serves a direct application/octet-stream attachment and expires after 48 hours.
+          # TempFile serves a direct application/octet-stream attachment and expires after 1 hour.
           ipa_name="AscensionRecomp-7.94.0.ipa"
           ipa_sha="$(shasum -a 256 "$ipa" | awk '{print $1}')"
           curl --fail --silent --show-error --retry 3 \
             -F "files=@${ipa};filename=${ipa_name};type=application/octet-stream" \
-            -F 'expiryHours=48' \
+            -F 'expiryHours=1' \
             https://tempfile.org/api/upload/local \
             -o "$RUNNER_TEMP/tempfile-upload.json"
           file_id="$(python3 - "$RUNNER_TEMP/tempfile-upload.json" "$ipa" <<'PY'
@@ -135,7 +135,7 @@ jobs:
           cat "$RUNNER_TEMP/ipa-download-headers.txt"
           printf 'ipa_url=%s\n' "$ipa_url" >> "$GITHUB_OUTPUT"
           {
-            echo "IPA direta (expira em 48 horas): $ipa_url"
+            echo "IPA direta (expira em 1 hora): $ipa_url"
             echo "Nome enviado e validado: $ipa_name"
             echo "SHA-256: $ipa_sha"
             echo "Estrutura IPA validada: ZIP íntegro com Payload/*.app/Info.plist."
