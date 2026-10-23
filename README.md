@@ -4,12 +4,10 @@
 
 ## Estado comprovado
 
-- A Action #22, no commit `5bde4c1`, concluiu e publicou o IPA Build 8. O artifact contém executável arm64, `libvulkan_kosmickrisp.dylib` arm64, e seu IPA tem SHA-256 `8946aae7c1443c91223a03e78adb7f1959dec053a0ca11f7e00b6afcfee974ad`.
-- O engine AOT compilou com 344 unidades e o gerador criou adapters para os 261 imports do executável. A Action confirmou compilação, ligação e empacotamento do app.
-- O Build 8 inclui o handler `KeEnterCriticalRegion` e a correção dos acessos PPC que precisavam de `base`. O relatório de aparelho mais recente continua sendo do Build 7: 24 opcodes draw e 5 buffers indiretos observados, 0 swaps guest e 0 frames decodificados; parou em `KeEnterCriticalRegion`. Ainda não há log de execução do Build 8.
-- KosmicKrisp continua como backend Vulkan → Metal e foi compilado para iOS arm64 na Action. Isso confirma a camada de apresentação do app, não a execução dos shaders Xenos do jogo.
-
-O frontend Xenos atual registra pacotes, draws e buffers indiretos, mas ainda não executa o pipeline completo de shaders, render targets/EDRAM e resolves do jogo. Portanto, os dados disponíveis ainda não comprovam uma imagem do jogo apresentada no iPhone. O app exibe as contagens guest do último diagnóstico em vez de declarar frames de jogo sem evidência.
+- A Action #24, commit `75cab56`, publicou o Build 10 ([artifact](https://github.com/joao9vegeto-stack/KintTany/actions/runs/40011161715)). IPA SHA-256: `0e9251550e5289b31b4db5caab90c3a3553469136f533f2c5d766ff0cd823c6a`.
+- O Build 8 fechava no início por `EXC_BAD_ACCESS` em `PC=0`. A causa identificada eram 87.736 aliases PPC weak, resolvidos como weak dyld lookups. O Build 9 ainda continha todos eles, apesar do workflow verde.
+- O Build 10 corrige os fontes AOT reconstruídos e adiciona uma validação do Mach-O antes de empacotar. O IPA foi reinspecionado: 133.351 definições AOT fortes, zero aliases/referências weak, zero weak lookups; `sub_8237CA18` agora está ligado como símbolo forte.
+- KosmicKrisp permanece como backend Vulkan → Metal e a Action compilou seu ICD arm64. O Build 10 ainda não foi testado no aparelho, então não há frames de jogo confirmados nesta versão.
 
 ## App e arquivos do jogo
 
