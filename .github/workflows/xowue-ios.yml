@@ -102,6 +102,24 @@ jobs:
             exit 1
           fi
           python3 "$GITHUB_WORKSPACE/tools/patch_xowue_aot_symbols.py" --ppc-dir "$GITHUB_WORKSPACE/generated/ppc"
+
+          # The archived AOT source tree is compiled from generated/ppc, whose
+          # quoted includes take precedence over XenonUtils. Put the patched
+          # context header beside those sources so the build cannot silently
+          # pick an older archived copy.
+          AOT_PPC_CONTEXT="$GITHUB_WORKSPACE/generated/ppc/ppc_context.h"
+          cp "$PPC_CONTEXT" "$AOT_PPC_CONTEXT"
+          cmp -s "$PPC_CONTEXT" "$AOT_PPC_CONTEXT"
+          grep -Fq '#define PPC_CALL_INDIRECT_FUNC(x) xowue_dispatch_indirect(ctx, base, uint32_t(x))' "$AOT_PPC_CONTEXT"
+          grep -Fq '#define PPC_LOOKUP_FUNC(x, y) xowue_lookup_indirect(ctx, x, uint32_t(y))' "$AOT_PPC_CONTEXT"
+
+          INDIRECT_CALL_SOURCES=$(grep -lE 'PPC_CALL_INDIRECT_FUNC\\(|PPC_LOOKUP_FUNC\\(' "$GITHUB_WORKSPACE"/generated/ppc/ppc_recomp.*.cpp || true)
+          if [[ -z "$INDIRECT_CALL_SOURCES" ]]; then
+            echo "Archived AOT sources contain no guarded indirect-dispatch macro callsites" >&2
+            exit 1
+          fi
+          echo "Patched PPC context copied beside AOT sources; indirect-call units: $(printf '%s\\n' "$INDIRECT_CALL_SOURCES" | wc -l | tr -d ' ')"
+
           echo "XENONRECOMP_ROOT=$RUNNER_TEMP/XenonRecomp" >> "$GITHUB_ENV"
 
       - name: Install KosmicKrisp iOS cross-build prerequisites
@@ -298,6 +316,16 @@ jobs:
           UTILS_LIB=$(find build-ios -name libXenonUtils.a -print -quit)
           DISASM_LIB=$(find build-ios -name libdisasm.a -print -quit)
           test -n "$ENGINE_LIB" && test -n "$UTILS_LIB" && test -n "$DISASM_LIB"
+
+          # A successful compile is insufficient if the patched AOT dispatch
+          # helper is not referenced by any generated guest function.
+          nm -u "$ENGINE_LIB" > build-ios/aot-undefined-symbols.txt
+          if ! grep -Eq 'xowue_(dispatch|lookup)_indirect' build-ios/aot-undefined-symbols.txt; then
+            echo "Generated AOT objects do not reference the validated XOWUE PPC dispatch helper" >&2
+            cat build-ios/aot-undefined-symbols.txt | grep -E 'PPC|xowue' | head -80 || true
+            exit 1
+          fi
+          grep -E 'xowue_(dispatch|lookup)_indirect' build-ios/aot-undefined-symbols.txt | head -20
           libtool -static -o build-ios/libXOWUEEngineComplete.a "$ENGINE_LIB" "$UTILS_LIB" "$DISASM_LIB"
           lipo build-ios/libXOWUEEngineComplete.a -verify_arch arm64
 
