@@ -37,6 +37,8 @@ extern "C" void xowue_vulkan_backend_guest_frame_rgba(
     const uint8_t *rgba, size_t byte_count) __attribute__((weak));
 extern "C" void xowue_vulkan_backend_guest_frame_reset(void) __attribute__((weak));
 
+void pumpGuestXenosRingBuffer();
+
 namespace {
 constexpr size_t kGuestAddressSpaceSize = static_cast<size_t>(PPC_MEMORY_SIZE);
 constexpr uint32_t kInitialStackPointer = 0x7FFF0000u;
@@ -735,8 +737,6 @@ struct GuestSchedulerSessionGuard final {
     }
     ~GuestSchedulerSessionGuard() { stop(); }
 };
-
-void pumpGuestXenosRingBuffer();
 
 struct GuestXenosPumpSessionGuard final {
     std::atomic<bool> stopRequested{false};
