@@ -10,7 +10,7 @@
 
 Action #20, commit `98e54e2cc262e0e2ad10f632a418b3f722002d9b`, concluiu com sucesso e publicou o IPA Build 7. Esse pacote tem SHA-256 `8141b57adf3b993c4ef23db9c6d7a3216c020dda3f9f229b23484da499551c61`.
 
-O relatório de aparelho registrado para o Build 7 mostra: XEX2 reconhecido, engines Xenos inicializados, ring buffer configurado, 24 opcodes draw observados, 5 buffers indiretos, 0 swaps guest e 0 frames decodificados. A chamada registrada como parada foi `KeEnterCriticalRegion` (LR `0x82B537A4`). A Action #20 acrescentou o handler de região crítica com APC disable por KTHREAD e ponto de entrega ao sair da região. A evidência existente não confirma ainda o comportamento do aparelho com esse handler.
+O relatório de aparelho registrado para o Build 7 mostra: XEX2 reconhecido, engines Xenos inicializados, ring buffer configurado, 24 opcodes draw observados, 5 buffers indiretos, 0 swaps guest e 0 frames decodificados. A chamada registrada como parada foi `KeEnterCriticalRegion` (LR `0x82B537A4`); o código do Build 7 ainda não tinha esse import. O commit `d547096` adiciona a rota e o handler de região crítica com APC disable por KTHREAD e entrega de APC ao sair da região. A Action #21 compila essa correção; ainda não há relatório de aparelho feito com esse código.
 
 Os números 24/5 descrevem comandos contabilizados pelo parser. Eles não provam que os draws foram executados pela GPU. O último log de diagnóstico é a fonte para a conclusão sobre frames; a Action verde prova somente compilação, ligação e empacotamento.
 
@@ -23,7 +23,7 @@ O conteúdo de projeto fica na raiz da branch: `Runtime/`, `iOS/`, `generated/co
 - O XEX fornecido tem base `0x82000000`, entry `0x82C3CAA8`, Title ID `41560816` e 261 imports únicos.
 - O archive versionado em partes contém 344 unidades de funções PPC mais `ppc_func_mapping.cpp`. A Action recompõe e valida o SHA-256 antes de compilar o engine ARM64.
 - `generate_runtime_stubs.py` exige exatamente 261 imports e falha se houver nome sem rota ou handler compatível sem despacho explícito. A contagem atual é 128 handlers explicitamente roteados no gerador e 133 imports classificados pelo dispatcher de compatibilidade. Há políticas offline e rotinas stub; essa cobertura não afirma equivalência de cada API Xbox.
-- O runtime inclui scheduler PPC/KTHREAD, TLS, sincronização, memória física/virtual, arquivos e handlers kernel/XAM usados no caminho de inicialização observado. `KeEnterCriticalRegion` e `KeLeaveCriticalRegion` atualizam o APC-disable do KTHREAD e verificam entrega de APC ao reabilitar.
+- O runtime inclui scheduler PPC/KTHREAD, TLS, sincronização, memória física/virtual, arquivos e handlers kernel/XAM usados no caminho de inicialização observado. No commit `d547096`, `KeEnterCriticalRegion` e `KeLeaveCriticalRegion` atualizam o APC-disable do KTHREAD e verificam entrega de APC ao reabilitar. O Build 7 parou antes dessa correção.
 - O log de recompilação registra 161 palavras PPC não decodificadas. O gerador instrumenta as que têm entrada em `ppc_func_mapping.cpp` e marca o caminho se alcançado.
 
 ## Gráficos: KosmicKrisp e Xenos
