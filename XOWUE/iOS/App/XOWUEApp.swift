@@ -872,7 +872,7 @@ private struct XOWUERootView: View {
                 }
             }
 
-            if let folder = library.selectedGame {
+            if library.selectedGame != nil {
                 HStack(spacing: 8) {
                     Image(systemName: "folder")
                         .foregroundStyle(XOWUEPalette.yellow)

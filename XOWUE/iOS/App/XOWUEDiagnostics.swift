@@ -37,7 +37,7 @@ enum XOWUEDiagnostics {
         appendLocked("APP_LAUNCH build=\(build) title_id=41560816", to: crashURL)
         NSSetUncaughtExceptionHandler { exception in
             let stack = exception.callStackSymbols.prefix(24).joined(separator: " | ")
-            recordCrash("UNCAUGHT_NS_EXCEPTION name=\(exception.name.rawValue) reason=\(exception.reason ?? "none") stack=\(stack)")
+            XOWUEDiagnostics.recordCrash("UNCAUGHT_NS_EXCEPTION name=\(exception.name.rawValue) reason=\(exception.reason ?? "none") stack=\(stack)")
         }
     }
 
@@ -110,7 +110,7 @@ enum XOWUEDiagnostics {
 
         guard let file = try? FileHandle(forWritingTo: url) else { return }
         defer { try? file.close() }
-        try? file.seekToEnd()
+        _ = try? file.seekToEnd()
         try? file.write(contentsOf: data)
     }
 }
