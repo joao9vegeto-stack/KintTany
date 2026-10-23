@@ -736,6 +736,8 @@ struct GuestSchedulerSessionGuard final {
     ~GuestSchedulerSessionGuard() { stop(); }
 };
 
+void pumpGuestXenosRingBuffer();
+
 struct GuestXenosPumpSessionGuard final {
     std::atomic<bool> stopRequested{false};
     std::thread worker;
@@ -905,7 +907,6 @@ int fail(char *output, size_t capacity, const std::exception &error) {
     return 1;
 }
 
-void pumpGuestXenosRingBuffer();
 } // namespace
 
 void xowue_thread_checkpoint() {
