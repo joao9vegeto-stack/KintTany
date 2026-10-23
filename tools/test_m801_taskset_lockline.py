@@ -146,6 +146,13 @@ int main(void) {
     }
     pthread_join(a, NULL); pthread_join(b, NULL);
     barrier_destroy(&gate);
+    guest[BITSET_EA] = guest[BITSET_EA+1] =
+    guest[BITSET_EA+2] = guest[BITSET_EA+3] = 0xFF;
+    spurs_bitset_clear(BITSET_EA, 0);
+    if (guest[BITSET_EA] != 0x7F) {
+        fprintf(stderr, "SPURS clear changed the wrong bit: %02X\n", guest[BITSET_EA]);
+        return 1;
+    }
 
     if (barrier_init(&gate, 3)) return 2;
     if (pthread_create(&a, NULL, clear_finished_task, NULL) ||
