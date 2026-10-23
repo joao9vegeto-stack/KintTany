@@ -113,12 +113,13 @@ jobs:
           grep -Fq '#define PPC_CALL_INDIRECT_FUNC(x) xowue_dispatch_indirect(ctx, base, uint32_t(x))' "$AOT_PPC_CONTEXT"
           grep -Fq '#define PPC_LOOKUP_FUNC(x, y) xowue_lookup_indirect(ctx, x, uint32_t(y))' "$AOT_PPC_CONTEXT"
 
-          INDIRECT_CALL_SOURCES=$(grep -lE 'PPC_CALL_INDIRECT_FUNC\\(|PPC_LOOKUP_FUNC\\(' "$GITHUB_WORKSPACE"/generated/ppc/ppc_recomp.*.cpp || true)
+          INDIRECT_CALL_SOURCES=$(grep -lF -e 'PPC_CALL_INDIRECT_FUNC(' -e 'PPC_LOOKUP_FUNC(' "$GITHUB_WORKSPACE"/generated/ppc/ppc_recomp.*.cpp || true)
           if [[ -z "$INDIRECT_CALL_SOURCES" ]]; then
             echo "Archived AOT sources contain no guarded indirect-dispatch macro callsites" >&2
+            grep -R -n -m 10 -E 'PPC_CALL_INDIRECT_FUNC|PPC_LOOKUP_FUNC|PPCFunc|PPC_CODE_BASE' "$GITHUB_WORKSPACE/generated/ppc" | head -80 || true
             exit 1
           fi
-          echo "Patched PPC context copied beside AOT sources; indirect-call units: $(printf '%s\\n' "$INDIRECT_CALL_SOURCES" | wc -l | tr -d ' ')"
+          echo "Patched PPC context copied beside AOT sources; indirect-call units: $(printf '%s\n' "$INDIRECT_CALL_SOURCES" | wc -l | tr -d ' ')"
 
           echo "XENONRECOMP_ROOT=$RUNNER_TEMP/XenonRecomp" >> "$GITHUB_ENV"
 
