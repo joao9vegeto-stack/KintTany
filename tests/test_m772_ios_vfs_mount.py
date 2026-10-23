@@ -104,10 +104,14 @@ extern "C" void ps3_hle_call(uint32_t nid, ppu_context* ctx)
         self.assertIn("a['ios_vfs_mount_patch']=='" + patch + "'", build)
         self.assertIn("a['ios_vfs_mount_patch']=='" + patch + "'", workflow)
         self.assertIn('"ios_vfs_mount_patch": "' + patch + '"', attestation)
-        schema = "ascension-m794-ios-arm64-link-input-v15"
+        schema = "ascension-m796-ios-arm64-link-input-v16"
         self.assertIn("assert a['schema']=='" + schema + "'", build)
         self.assertIn("assert a['schema']=='" + schema + "'", workflow)
         self.assertIn('"schema": "' + schema + '"', attestation)
+        callback = "g_ps3_guest_caller-to-ppu_guest_call-before-AOT-v1"
+        self.assertIn("assert a['guest_callback_dispatch']=='" + callback + "'", build)
+        self.assertIn("assert a['guest_callback_dispatch']=='" + callback + "'", workflow)
+        self.assertIn('"guest_callback_dispatch": "' + callback + '"', attestation)
         dependency = "separate-PS3Recomp-runtime-archive-verified-at-final-MachO-v1"
         self.assertIn("spurs_pm_runtime_diagnostics_dependency", attestation)
         self.assertIn(dependency, build)
