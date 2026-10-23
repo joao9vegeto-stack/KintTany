@@ -243,6 +243,8 @@ static BOOL ARGameManifestHasTitleUsrdir(NSDictionary *manifest){
 @property(nonatomic,strong) UIButton *ppuDiagnosticsButton;
 @property(nonatomic,strong) NSTimer *ppuLiveRefreshTimer;
 @property(nonatomic,strong) UITextView *ppuLiveReportView;
+@property(nonatomic,assign) NSUInteger ppuLiveReportGeneration;
+@property(nonatomic,assign) BOOL ppuLiveReportRefreshInFlight;
 @property(nonatomic,strong) UIButton *nativeLaunchButton;
 @property(nonatomic,strong) UILabel *gameInstallLabel;
 @property(nonatomic,strong) UILabel *settingsGameInstallLabel;
@@ -301,6 +303,7 @@ static BOOL ARGameManifestHasTitleUsrdir(NSDictionary *manifest){
 - (void)shareLauncherReport:(UIButton*)sender;
 - (void)updateLauncherReport;
 - (void)launcherReportRefreshTick:(NSTimer*)timer;
+- (void)refreshAdvancedPpuReport:(NSTimer*)timer;
 - (UIButton*)nativePadButton:(NSString*)title bit:(uint16_t)bit;
 - (void)nativePadDown:(UIButton*)sender;
 - (void)nativePadUp:(UIButton*)sender;
@@ -1898,16 +1901,49 @@ static BOOL ARGameManifestHasTitleUsrdir(NSDictionary *manifest){
 }
 - (void)copyAdvancedPpuReport:(UIBarButtonItem *)sender {
     (void)sender;
-    if(self.shaderBusy)UIPasteboard.generalPasteboard.string=[self arUnifiedPpuText];
-    else if(self.ppuReport.length)UIPasteboard.generalPasteboard.string=self.ppuReport;
-    else UIPasteboard.generalPasteboard.string=[self arUnifiedPpuText];
+    NSString *report=self.ppuLiveReportView.text;
+    if(!report.length || [report hasPrefix:@"Coletando métricas"])
+      report=self.ppuReport;
+    if(report.length)UIPasteboard.generalPasteboard.string=report;
 }
 - (void)closeAdvancedPpuReport:(UIBarButtonItem *)sender {
     (void)sender;
+    self.ppuLiveReportGeneration++;
     [self.ppuLiveRefreshTimer invalidate];
     self.ppuLiveRefreshTimer=nil;
     self.ppuLiveReportView=nil;
     [self.window.rootViewController dismissViewControllerAnimated:YES completion:nil];
+}
+- (void)refreshAdvancedPpuReport:(NSTimer *)timer {
+    (void)timer;
+    UITextView *details=self.ppuLiveReportView;
+    if(!details || self.ppuLiveReportRefreshInFlight)return;
+
+    self.ppuLiveReportRefreshInFlight=YES;
+    const NSUInteger generation=self.ppuLiveReportGeneration;
+    __weak typeof(self) weakSelf=self;
+    dispatch_async(dispatch_get_global_queue(QOS_CLASS_USER_INITIATED,0),^{
+      __strong typeof(weakSelf) workerSelf=weakSelf;
+      if(!workerSelf)return;
+      NSString *report=[workerSelf arUnifiedPpuText];
+      if(!report.length)report=@"Relatório vazio: nenhuma métrica foi retornada.";
+      dispatch_async(dispatch_get_main_queue(),^{
+        __strong typeof(weakSelf) callbackSelf=weakSelf;
+        if(!callbackSelf)return;
+        callbackSelf.ppuLiveReportRefreshInFlight=NO;
+        if(generation!=callbackSelf.ppuLiveReportGeneration){
+          if(callbackSelf.ppuLiveReportView)
+            [callbackSelf refreshAdvancedPpuReport:nil];
+          return;
+        }
+        if(callbackSelf.ppuLiveReportView!=details)return;
+        details.text=report;
+        if(!callbackSelf.shaderBusy){
+          [callbackSelf.ppuLiveRefreshTimer invalidate];
+          callbackSelf.ppuLiveRefreshTimer=nil;
+        }
+      });
+    });
 }
 - (void)openAdvancedPpuReport:(UIButton *)sender {
     (void)sender;
@@ -1919,22 +1955,14 @@ static BOOL ARGameManifestHasTitleUsrdir(NSDictionary *manifest){
     details.editable=NO;
     details.selectable=YES;
     details.font=[UIFont monospacedSystemFontOfSize:12 weight:UIFontWeightRegular];
-    details.text=[self arUnifiedPpuText];
+    details.text=@"Coletando métricas do guest em segundo plano…\nA tela permanece responsiva; toque Fechar para voltar.";
     self.ppuLiveReportView=details;
+    self.ppuLiveReportGeneration++;
     [self.ppuLiveRefreshTimer invalidate];
     self.ppuLiveRefreshTimer=nil;
     if(self.shaderBusy){
-      __weak typeof(self) weakSelf=self;
-      self.ppuLiveRefreshTimer=[NSTimer scheduledTimerWithTimeInterval:0.5
-        repeats:YES block:^(__unused NSTimer *timer){
-          __strong typeof(weakSelf) strongSelf=weakSelf;
-          if(!strongSelf)return;
-          strongSelf.ppuLiveReportView.text=[strongSelf arUnifiedPpuText];
-          if(!strongSelf.shaderBusy){
-            [strongSelf.ppuLiveRefreshTimer invalidate];
-            strongSelf.ppuLiveRefreshTimer=nil;
-          }
-        }];
+      self.ppuLiveRefreshTimer=[NSTimer scheduledTimerWithTimeInterval:0.75
+        target:self selector:@selector(refreshAdvancedPpuReport:) userInfo:nil repeats:YES];
       [[NSRunLoop mainRunLoop] addTimer:self.ppuLiveRefreshTimer
                                forMode:NSRunLoopCommonModes];
     }
@@ -1956,7 +1984,9 @@ static BOOL ARGameManifestHasTitleUsrdir(NSDictionary *manifest){
        action:@selector(shareAdvancedPpuReport:)];
     page.navigationItem.rightBarButtonItems=@[share,copy];
     UINavigationController *nav=[[UINavigationController alloc] initWithRootViewController:page];
-    [self.window.rootViewController presentViewController:nav animated:YES completion:nil];
+    [self.window.rootViewController presentViewController:nav animated:YES completion:^{
+      [self refreshAdvancedPpuReport:nil];
+    }];
 }
 /* This report describes the active PS3Recomp session only: host/guest result,
  * live AOT entries, VFS state and measured guest file operations. It never
@@ -2258,8 +2288,7 @@ static BOOL ARGameManifestHasTitleUsrdir(NSDictionary *manifest){
     [presenter presentViewController:picker animated:YES completion:nil];
 }
 - (void)openUnifiedPpuMenu:(UIButton *)sender {
-    if(![self arUnifiedPpuText].length)return;
-    /* One tap opens a preflight, live, or completed execution report. */
+    /* Present first; live metric snapshots run off the main/UI thread. */
     [self openAdvancedPpuReport:sender];
 }
 - (void)shareAdvancedPpuReport:(UIBarButtonItem *)sender {
