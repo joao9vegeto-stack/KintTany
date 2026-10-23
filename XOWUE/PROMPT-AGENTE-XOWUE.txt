@@ -11,11 +11,11 @@ Estado já implementado no branch:
 - Loader inicial para parse XEX2/LZX, mapeamento das seções, janela PPC 4 GiB, dispatcher e chamada de _xstart.
 - 261 adapters falham explicitamente para imports sem implementação.
 - 160 dos 161 endereços com falha de decodificação que têm entrada no mapa passam a falhar com endereço PPC explícito.
-- App SwiftUI de diagnóstico e workflow macOS para produzir XOWUE-unsigned.ipa.
+- App SwiftUI com biblioteca local em Documents, abertura de `.xex`, ícone próprio, build numerada e workflow macOS para produzir `XOWUE-Build-N.ipa`.
 
 Trabalho imediato:
-1. Confirmar no run mais recente o build arm64, o ícone, o `CFBundleVersion`, o tipo de documento `.xex` e as chaves que expõem Documents ao app Arquivos.
-2. Entregar `XOWUE-Build-1.ipa` unsigned e pedir teste apenas do fluxo de pasta/abertura; registrar qualquer falha observada.
+1. Confirmar no run #7 o build arm64, o ícone, o `CFBundleVersion=1`, o tipo de documento `.xex` e as chaves que expõem Documents ao app Arquivos.
+2. Se o run passar, entregar `XOWUE-Build-1.ipa` unsigned e pedir teste apenas do fluxo de pasta/abertura; registrar qualquer falha observada.
 3. Continuar o runtime a partir do próximo bloqueio real do boot. O caminho testado ainda para em `HalReturnToFirmware(routine=1)`; não alegar menu, frame ou gameplay.
 4. Manter `main` intacta, preservar o XEX e os assets fora do Git e atualizar o handoff com os resultados do CI e do iPhone.
 
