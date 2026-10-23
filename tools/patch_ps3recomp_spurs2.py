@@ -1451,16 +1451,29 @@ void cellGcm_fifo_kick(void)
                 }
                 extern long spu_taskset_tasks_running(void) __attribute__((weak));
                 if (report_hold_ms > 0) {
-                    const unsigned long long now = ps3_qpc_us();
-                    if (spu_taskset_tasks_running && spu_taskset_tasks_running() > 0) {
-                        if (!report_hold_since) report_hold_since = now;
-                        if (now - report_hold_since <
-                                (unsigned long long)report_hold_ms * 1000ull) {
-                            why = "report-hold";
-                            break;
-                        }
+                    /* ZPASS (type 1) reports do not signal tasksets. Ascension
+                     * emits many per frame; holding them starves the RSX. */
+                    static int report_hold_all = -1;
+                    if (report_hold_all < 0)
+                        report_hold_all = getenv("GCM_REPORT_HOLD_ALL") ? 1 : 0;
+                    u32 report_type = 0;
+                    {
+                        const u32 index = type == 0 ? (0x1800u - method) / 4u : 0u;
+                        const u32 report_ea = gcm_io2ea(s_fifo_getoff + 4 + index * 4);
+                        if (report_ea) report_type = vm_read32(report_ea) >> 24;
                     }
-                    report_hold_since = 0;
+                    if (report_hold_all || report_type != 1) {
+                        const unsigned long long now = ps3_qpc_us();
+                        if (spu_taskset_tasks_running && spu_taskset_tasks_running() > 0) {
+                            if (!report_hold_since) report_hold_since = now;
+                            if (now - report_hold_since <
+                                    (unsigned long long)report_hold_ms * 1000ull) {
+                                why = "report-hold";
+                                break;
+                            }
+                        }
+                        report_hold_since = 0;
+                    }
                 }
             }
             for (u32 i = 0; i < count; i++) {
