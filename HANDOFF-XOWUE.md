@@ -8,11 +8,13 @@
 
 ## Última evidência
 
-Action #22, commit `5bde4c19e988c72b9affd4556e0e11e56be7530c`, concluiu com sucesso e publicou o IPA Build 8. SHA-256 do IPA: `8946aae7c1443c91223a03e78adb7f1959dec053a0ca11f7e00b6afcfee974ad`. O pacote contém o executável arm64 e `libvulkan_kosmickrisp.dylib` arm64; a Action compilou o engine AOT, gerou o projeto Xcode, validou o IPA sem assinatura e enviou o artifact.
+Action #24, no commit `75cab56cfa0579ab54718bc151628f970233c047`, concluiu com sucesso e publicou o Build 10 ([workflow](https://github.com/joao9vegeto-stack/KintTany/actions/runs/40011161715)). O IPA arm64 sem assinatura tem SHA-256 `0e9251550e5289b31b4db5caab90c3a3553469136f533f2c5d766ff0cd823c6a`; o ZIP do artifact tem SHA-256 `f3e2d6c05f40225820c298c18172ca4572a613b0527f85f7bd31646b28b0cc1f`.
 
-A correção de `KeEnterCriticalRegion` e dos acessos PPC que precisavam receber `base` está incluída no Build 8. O engine arm64 compilou com os 344 arquivos de unidade AOT e os 261 adapters de imports gerados. Isso confirma o build e o empacotamento, não um boot completo do jogo.
+O relatório do Build 8 e o IPS do LiveContainer apontaram `EXC_BAD_ACCESS`, `PC=0`, `FAR=0` e falha de tradução de página. A inspeção do executável confirmou que o boot havia carregado o XEX2 e resolvido 261 imports antes de cair. A causa encontrada foi o AOT: funções PPC estavam publicadas como aliases weak e o dyld tentava resolvê-las por weak lookup. O Build 9 passou na compilação, mas a inspeção do IPA mostrou 87.736 definições weak e 87.736 weak lookups; portanto, aquele pacote não corrigia a falha.
 
-O último relatório de aparelho ainda é do Build 7: XEX2 reconhecido, ring Xenos configurado, 24 opcodes draw observados, 5 buffers indiretos, 0 swaps guest e 0 frames decodificados; a execução parou em `KeEnterCriticalRegion` (LR `0x82B537A4`). O Build 8 ainda precisa ser executado no aparelho para confirmar a próxima etapa. Os números de comandos do Build 7 não provam que os draws foram executados pela GPU.
+O Build 10 normaliza os fontes PPC reconstruídos do archive antes da compilação e valida o Mach-O final lendo `LC_SYMTAB` e `LC_DYLD_CHAINED_FIXUPS`. A verificação no IPA entregue encontrou 133.351 definições AOT fortes, zero definições/referências weak e zero weak dyld lookups; o símbolo que aparecia na queda, `sub_8237CA18`, está presente como definição forte. O pacote inclui KosmicKrisp arm64 e mantém o log nativo persistente de início do boot em `crash-build-N.txt`.
+
+O Build 10 ainda não foi executado no aparelho; portanto, não há contagem de frames guest confirmada para esta versão. O IPA CI é sem assinatura e não inclui `default.xex`, saves ou DLC.
 
 ## Árvore e isolamento
 
