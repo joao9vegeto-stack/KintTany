@@ -1,27 +1,40 @@
 # XOWUE — X-Men Origins: Wolverine (Xbox 360)
 
-**Title ID:** `41560816`
-**Branch:** `XOWUE`
-**Estado:** recompilação AOT ligada a um runner iOS de diagnóstico; o boot jogável ainda não foi concluído.
+**Title ID:** `41560816`  
+**Branch:** `XOWUE`  
+**Estado:** runner iOS de desenvolvimento; ainda não chega ao menu nem produz frame do jogo.
 
 ## O que está neste branch
 
-- Fontes C++ AOT compactadas e divididas em partes de até 4 MiB em `dist/`; a CI recompõe o archive para compilar sem armazenar o `default.xex`.
-- Runtime inicial em `Runtime/`: parser XEX2/LZX de XenonUtils, mapeamento das seções, memória PPC de 32 bits, tabela de despacho e chamada ao entry point `0x82C3CAA8`.
-- Adaptadores explícitos para as 261 importações conhecidas: `NtAllocateVirtualMemory` e `NtFreeVirtualMemory` operam no heap guest limitado; `HalReturnToFirmware` encerra o diagnóstico com o código da rotina. As outras 258 APIs param com erro identificável.
-- App SwiftUI com ícone próprio, abertura direta de `.xex`, seletor de pasta, detecção no Documents exposto em Arquivos > No Meu iPhone > XOWUE > Jogos, e número de Build visível.
-- `.github/workflows/xowue-ios.yml`, que compila o engine arm64, valida o Info.plist/ícone e empacota `XOWUE-Build-N.ipa` unsigned.
+- Recompilação PPC AOT: 344 unidades de funções mais o mapa de despacho.
+- Loader XEX2/LZX, mapeamento PPC 32-bit, tabela de despacho e execução do entry point.
+- 24 adapters básicos em 261 imports; 237 ainda param de forma explícita com nome, LR, r3–r10 e eventos PPC recentes.
+- A pasta local aparece em **Arquivos > No Meu iPhone > XOWUE > Jogos**. O app detecta `default.xex` na raiz ou uma pasta abaixo, e usa o seletor nativo do iOS para importar uma pasta completa ou um XEX.
+- `diagnostico.txt` e `crash.txt` são gravados na raiz Documents do app, visível em Arquivos > No Meu iPhone > XOWUE. Há botões para compartilhar os dois logs.
+- Ícone Wolverine profissional em aço, amarelo e azul; número Build vem de `CFBundleVersion` e aparece na tela.
+- `Runtime/Graphics/KosmicKrisp/` mantém o patch iOS Metal WSI da branch `PsTJohn`, no commit `db014165eb39429ae37d1946db6fc83c600c63b3`.
 
-O smoke test do host parseia e liga o XEX, executa o entry point e chega a `HalReturnToFirmware(routine=1)`. Isso é uma parada de firmware, não prova de boot jogável. O IPA é um runner de desenvolvimento; ainda faltam implementações de Xbox kernel/XAM, memória e threads completas, Xenos/D3D, XMA/áudio, leitura dos assets do jogo e validação em aparelho. O app não inclui o XEX nem assets.
+## Bloqueio técnico atual
 
-## Comece por aqui
+O smoke host chega a `ExCreateThread` (LR `0x82C4C110`, stack 32 KiB, worker `0x82690678`). A rotina worker entra em um loop de mensagens. O runtime ainda não tem scheduler PPC, contexto completo de threads nem objetos de espera. Não retornar sucesso fictício mantém esse erro visível.
 
-1. Leia `HANDOFF-XOWUE.md` para arquitetura, validações e limitações.
-2. Coloque a pasta completa do jogo em `Arquivos > No Meu iPhone > XOWUE > Jogos`; o app procura `default.xex` na raiz ou uma pasta abaixo.
-3. Abra o app e toque **Abrir jogo**. Também é possível selecionar uma pasta ou abrir `default.xex` pelo iOS.
-4. A versão aparece como **Build 1**, **Build 2** e assim por diante. As IPAs da CI são unsigned e exigem assinatura Apple para instalação.
-5. Para repetir localmente, siga “Build local” no handoff.
+KosmicKrisp fornece o lado Vulkan→Metal/WSI. XOWUE ainda precisa de um frontend Xenos/D3D, tradução de comandos/shaders, superfícies e resolução de render targets. O patch está versionado, porém ainda não é compilado nem ligado ao app. Também faltam MMIO, integração WGame, XMA/áudio e teste em iPhone. Nenhum frame do jogo foi comprovado.
 
-## Identificação da entrada usada para a recompilação
+O app não inclui `default.xex`, DLC, title update ou assets. Não os adicione ao Git.
 
-O `default.xex` analisado tinha SHA-256 `b5afa6ff191194e5cc0a29302878b154baccfa7073868108c5e7416d08b3aa9a`, Title ID `41560816`, Media ID `09FF5403`, entry point `0x82C3CAA8`, base `0x82000000`, 12 seções e 261 imports reconhecidos. O arquivo original não está neste repositório.
+## Teste local
+
+No host Clang 18, recompile os adapters e rode:
+
+```bash
+python3 XOWUE/Runtime/generate_runtime_stubs.py \
+  --ppc-dir XOWUE/generated/ppc \
+  --recompile-log XOWUE/generated/config/XOWUE-recompile.log \
+  --output build-runtime-clang/runtime-generated/XOWUEImportStubs.cpp
+cmake --build build-runtime-clang --target XOWUEHostSmoke -j2
+./build-runtime-clang/XOWUEHostSmoke /caminho/local/default.xex boot
+```
+
+## IPA
+
+`.github/workflows/xowue-ios.yml` cria um IPA unsigned em cada execução bem-sucedida. O número conta somente os builds IPA bem-sucedidos desde o Build 1 (run #8), então uma tentativa falha não pula a numeração. Consulte `HANDOFF-XOWUE.md` para os resultados do Actions, hashes e próximas etapas.

@@ -41,7 +41,7 @@ int main(int argc, char **argv) {
         return 64;
     }
     const bool boot = argc == 3 && std::string(argv[2]) == "boot";
-    std::array<char, 4096> output{};
+    std::array<char, 32768> output{};
     std::cerr << (boot ? "Calling guest entry point\n" : "Inspecting XEX\n");
     const int result = boot
         ? xowue_boot_xex(argv[1], output.data(), output.size())

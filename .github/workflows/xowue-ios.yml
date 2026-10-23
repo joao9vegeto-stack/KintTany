@@ -20,6 +20,7 @@ concurrency:
 
 permissions:
   contents: read
+  actions: read
 
 jobs:
   build-unsigned-ipa:
@@ -32,14 +33,28 @@ jobs:
 
       - name: Assign app build number
         id: version
-        run: |
-          set -euo pipefail
-          # Runs 1-7 cover bootstrap, handoff, and packaging fixes. First IPA is Build 1.
-          build_number=$((GITHUB_RUN_NUMBER - 7))
-          if [ "$build_number" -lt 1 ]; then build_number=1; fi
-          echo "XOWUE_BUILD_NUMBER=$build_number" >> "$GITHUB_ENV"
-          echo "build_number=$build_number" >> "$GITHUB_OUTPUT"
-          echo "XOWUE Build $build_number"
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const runs = await github.paginate(github.rest.actions.listWorkflowRuns, {
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              branch: "XOWUE",
+              status: "completed",
+              per_page: 100
+            });
+            // Build 1 is successful run #8. Count only successful XOWUE IPA runs
+            // from that baseline so failed CI attempts never consume a build number.
+            const completedIPAs = runs.filter(run =>
+              run.path === ".github/workflows/xowue-ios.yml" &&
+              run.conclusion === "success" &&
+              run.run_number >= 8 &&
+              run.id !== context.runId
+            ).length;
+            const buildNumber = completedIPAs + 1;
+            core.exportVariable("XOWUE_BUILD_NUMBER", String(buildNumber));
+            core.setOutput("build_number", String(buildNumber));
+            core.info("XOWUE Build " + buildNumber);
 
       - name: Select Xcode and validate AOT archive
         run: |

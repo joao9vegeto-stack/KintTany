@@ -2,9 +2,12 @@ import SwiftUI
 import UniformTypeIdentifiers
 import Foundation
 import Combine
+import UIKit
 
 @main
 struct XOWUEApp: App {
+    init() { XOWUEDiagnostics.startup() }
+
     var body: some Scene {
         WindowGroup {
             XOWUERootView()
@@ -22,6 +25,50 @@ private enum XOWUEBuild {
 private enum XOWUEFileType {
     static let xex = UTType("com.xowue.xex") ?? UTType(filenameExtension: "xex", conformingTo: .data) ?? .data
     static let importerTypes: [UTType] = [.folder, xex]
+}
+
+private struct XOWUEDocumentPicker: UIViewControllerRepresentable {
+    @Binding var isPresented: Bool
+    let completion: (Result<[URL], Error>) -> Void
+
+    func makeCoordinator() -> Coordinator {
+        Coordinator(isPresented: $isPresented, completion: completion)
+    }
+
+    func makeUIViewController(context: Context) -> UIDocumentPickerViewController {
+        let picker = UIDocumentPickerViewController(
+            forOpeningContentTypes: [.folder, XOWUEFileType.xex],
+            asCopy: false
+        )
+        picker.allowsMultipleSelection = false
+        picker.shouldShowFileExtensions = true
+        picker.delegate = context.coordinator
+        return picker
+    }
+
+    func updateUIViewController(_ controller: UIDocumentPickerViewController, context: Context) {}
+
+    final class Coordinator: NSObject, UIDocumentPickerDelegate {
+        private let isPresented: Binding<Bool>
+        private let completion: (Result<[URL], Error>) -> Void
+
+        init(isPresented: Binding<Bool>, completion: @escaping (Result<[URL], Error>) -> Void) {
+            self.isPresented = isPresented
+            self.completion = completion
+        }
+
+        func documentPicker(_ controller: UIDocumentPickerViewController, didPickDocumentsAt urls: [URL]) {
+            XOWUEDiagnostics.log("picker.selected count=\(urls.count) url=\(urls.first?.path ?? "none")")
+            isPresented.wrappedValue = false
+            completion(.success(urls))
+        }
+
+        func documentPickerWasCancelled(_ controller: UIDocumentPickerViewController) {
+            XOWUEDiagnostics.log("picker.cancelled")
+            isPresented.wrappedValue = false
+            completion(.failure(CancellationError()))
+        }
+    }
 }
 
 private enum XOWUEFileStore {
@@ -202,7 +249,8 @@ private enum XOWUEFileStore {
         operation: (URL) throws -> T
     ) throws -> T {
         let started = source.startAccessingSecurityScopedResource()
-        defer { if started { source.stopAccessingSecurityScopedResource() } }
+        XOWUEDiagnostics.log("security_scope.start url=\(source.path) acquired=\(started)")
+        defer { if started { source.stopAccessingSecurityScopedResource(); XOWUEDiagnostics.log("security_scope.stop url=\(source.path)") } }
 
         let docs = try documents()
         let local = isInside(source, parent: docs)
@@ -381,6 +429,7 @@ private enum XOWUERuntime {
     }
 
     static func inspectAndBoot(_ xex: URL) throws -> Outcome {
+        XOWUEDiagnostics.log("xex.inspect.start path=\(xex.path)")
         var inspectBuffer = [CChar](repeating: 0, count: 2048)
         let inspectCode = xex.path.withCString { path in
             inspectBuffer.withUnsafeMutableBufferPointer { output in
@@ -388,16 +437,21 @@ private enum XOWUERuntime {
             }
         }
         guard inspectCode == 0 else {
-            throw RuntimeError.invalidXEX(String(cString: inspectBuffer))
+            let message = String(cString: inspectBuffer)
+            XOWUEDiagnostics.recordCrash("XEX_INSPECT_FAILED path=\(xex.path) detail=\(message)")
+            throw RuntimeError.invalidXEX(message)
         }
+        XOWUEDiagnostics.log("xex.inspect.ok \(String(cString: inspectBuffer))")
 
-        var outputBuffer = [CChar](repeating: 0, count: 4096)
+        var outputBuffer = [CChar](repeating: 0, count: 32768)
         let code = xex.path.withCString { path in
             outputBuffer.withUnsafeMutableBufferPointer { output in
                 xowue_boot_xex(path, output.baseAddress, output.count)
             }
         }
-        return Outcome(code: code, text: String(cString: outputBuffer))
+        let text = String(cString: outputBuffer)
+        XOWUEDiagnostics.log("runtime.native_return code=\(code) result=\(text.replacingOccurrences(of: "\n", with: " | "))")
+        return Outcome(code: code, text: text)
     }
 }
 
@@ -419,7 +473,7 @@ private final class XOWUEGameLibrary: ObservableObject {
         }
         var tint: Color {
             switch self {
-            case .scanning, .importing, .booting: return XOWUEPalette.amber
+            case .scanning, .importing, .booting: return XOWUEPalette.yellow
             case .missing, .needsChoice: return XOWUEPalette.muted
             case .ready: return XOWUEPalette.green
             case .stopped, .failed: return XOWUEPalette.red
@@ -448,6 +502,7 @@ private final class XOWUEGameLibrary: ObservableObject {
 
     func refresh() {
         guard !isBusy else { return }
+        XOWUEDiagnostics.log("scan.start roots=Documents,Documents/Jogos")
         phase = .scanning
         status = "Procurando default.xex nas pastas locais…"
         detail = "Arquivos > No Meu iPhone > XOWUE > Jogos"
@@ -457,6 +512,7 @@ private final class XOWUEGameLibrary: ObservableObject {
                     try XOWUEFileStore.discoverLocalGames()
                 }.value
                 candidates = found
+                XOWUEDiagnostics.log("scan.complete count=\(found.count) paths=\(found.map(\.path).joined(separator: "|"))")
                 let saved = UserDefaults.standard.string(forKey: XOWUEFileStore.selectedGameKey)
                 if let saved, let preferred = found.first(where: { Self.relativePath(for: $0) == saved }) {
                     selectGame(preferred)
@@ -480,6 +536,7 @@ private final class XOWUEGameLibrary: ObservableObject {
     }
 
     func selectGame(_ folder: URL) {
+        XOWUEDiagnostics.log("game.selected path=\(folder.path)")
         selectedGame = folder
         candidates = candidates.isEmpty ? [folder] : candidates
         if let relative = Self.relativePath(for: folder) {
@@ -491,6 +548,7 @@ private final class XOWUEGameLibrary: ObservableObject {
     }
 
     func handlePickerResult(_ result: Result<[URL], Error>) {
+        XOWUEDiagnostics.log("picker.result received")
         do {
             guard let url = try result.get().first else {
                 status = "Nenhum item foi selecionado."
@@ -499,6 +557,7 @@ private final class XOWUEGameLibrary: ObservableObject {
             importItem(url, startAfterImport: true)
         } catch {
             if error is CancellationError {
+                XOWUEDiagnostics.log("picker.result cancellation")
                 status = "Seleção cancelada. A pasta local continua disponível."
             } else {
                 fail(error.localizedDescription)
@@ -507,6 +566,7 @@ private final class XOWUEGameLibrary: ObservableObject {
     }
 
     func handleOpenURL(_ url: URL) {
+        XOWUEDiagnostics.log("app.open_url path=\(url.path)")
         importItem(url, startAfterImport: true)
     }
 
@@ -517,6 +577,7 @@ private final class XOWUEGameLibrary: ObservableObject {
         progress = 0.01
         status = "Recebendo \(url.lastPathComponent)…"
         detail = "O app manterá a pasta na área local do XOWUE."
+        XOWUEDiagnostics.log("import.start source=\(url.path)")
         Task { @MainActor in
             do {
                 let folder = try await Task.detached(priority: .userInitiated) {
@@ -524,6 +585,7 @@ private final class XOWUEGameLibrary: ObservableObject {
                         Task { @MainActor in
                             self.progress = max(0, min(1, fraction))
                             self.status = text
+                            XOWUEDiagnostics.log("import.progress fraction=\(fraction) message=\(text)")
                         }
                     }
                 }.value
@@ -551,6 +613,8 @@ private final class XOWUEGameLibrary: ObservableObject {
         status = "Validando XEX2 e executando o entry point…"
         detail = game.appendingPathComponent(XOWUEFileStore.executableName).path
         bootOutput = "O diagnóstico está em execução."
+        let executablePath = game.appendingPathComponent(XOWUEFileStore.executableName).path
+        XOWUEDiagnostics.bootStarted(path: executablePath, build: XOWUEBuild.number)
         Task { @MainActor in
             do {
                 let executable = game.appendingPathComponent(XOWUEFileStore.executableName)
@@ -560,6 +624,7 @@ private final class XOWUEGameLibrary: ObservableObject {
                 isBusy = false
                 progress = 1
                 bootOutput = outcome.text
+                XOWUEDiagnostics.bootFinished(code: outcome.code, text: outcome.text)
                 if outcome.code == 3 {
                     phase = .stopped
                     status = "O runtime parou em um pedido de firmware."
@@ -579,11 +644,13 @@ private final class XOWUEGameLibrary: ObservableObject {
                 status = "Não foi possível validar ou executar o XEX."
                 detail = error.localizedDescription
                 bootOutput = error.localizedDescription
+                XOWUEDiagnostics.bootFailed(error.localizedDescription)
             }
         }
     }
 
     private func fail(_ message: String) {
+        XOWUEDiagnostics.log("action.failed message=\(message)")
         isBusy = false
         phase = .failed
         status = "Ação não concluída."
@@ -601,15 +668,17 @@ private final class XOWUEGameLibrary: ObservableObject {
 }
 
 private enum XOWUEPalette {
-    static let background = Color(rgb: 0x090A0D)
-    static let panel = Color(rgb: 0x16181D)
-    static let panelRaised = Color(rgb: 0x202329)
-    static let amber = Color(rgb: 0xF3A64A)
-    static let amberLight = Color(rgb: 0xFFD18A)
-    static let muted = Color(rgb: 0xA1A5AD)
+    static let background = Color(rgb: 0x090B10)
+    static let panel = Color(rgb: 0x151A22)
+    static let panelRaised = Color(rgb: 0x222B36)
+    static let yellow = Color(rgb: 0xF4C430)
+    static let yellowLight = Color(rgb: 0xFFE58A)
+    static let blue = Color(rgb: 0x2767D8)
+    static let blueLight = Color(rgb: 0x55A7FF)
+    static let muted = Color(rgb: 0xA2A9B5)
     static let green = Color(rgb: 0x57D69A)
-    static let red = Color(rgb: 0xFF7065)
-    static let white = Color(rgb: 0xF6F4F1)
+    static let red = Color(rgb: 0xFF5B61)
+    static let white = Color(rgb: 0xF5F7FA)
 }
 
 private extension Color {
@@ -626,43 +695,14 @@ private extension Color {
 
 private struct XOWUEBrandMark: View {
     var body: some View {
-        ZStack {
-            RoundedRectangle(cornerRadius: 19)
-                .fill(LinearGradient(
-                    colors: [Color(rgb: 0x31343A), Color(rgb: 0x101114)],
-                    startPoint: .topLeading, endPoint: .bottomTrailing
-                ))
-            RoundedRectangle(cornerRadius: 19)
-                .stroke(XOWUEPalette.amber.opacity(0.65), lineWidth: 1)
-            Text("X")
-                .font(.system(size: 45, weight: .black, design: .rounded))
-                .foregroundStyle(LinearGradient(
-                    colors: [XOWUEPalette.white, XOWUEPalette.amberLight],
-                    startPoint: .top, endPoint: .bottom
-                ))
-                .shadow(color: .black.opacity(0.6), radius: 6, y: 3)
-            XOWUEClawMarks()
-                .stroke(XOWUEPalette.amber, style: StrokeStyle(lineWidth: 4, lineCap: .round))
-                .padding(12)
-                .shadow(color: XOWUEPalette.red.opacity(0.75), radius: 5)
-        }
-        .frame(width: 68, height: 68)
-        .accessibilityHidden(true)
-    }
-}
-
-private struct XOWUEClawMarks: Shape {
-    func path(in rect: CGRect) -> Path {
-        var path = Path()
-        for index in 0..<3 {
-            let x = rect.minX + CGFloat(index) * rect.width * 0.31
-            path.move(to: CGPoint(x: x, y: rect.minY + rect.height * 0.14))
-            path.addQuadCurve(
-                to: CGPoint(x: x + rect.width * 0.25, y: rect.maxY - rect.height * 0.10),
-                control: CGPoint(x: x + rect.width * 0.03, y: rect.midY)
-            )
-        }
-        return path
+        Image("WolverineMark")
+            .resizable()
+            .scaledToFit()
+            .frame(width: 68, height: 68)
+            .clipShape(RoundedRectangle(cornerRadius: 19))
+            .overlay(RoundedRectangle(cornerRadius: 19).stroke(XOWUEPalette.blueLight.opacity(0.5), lineWidth: 1))
+            .shadow(color: XOWUEPalette.blue.opacity(0.22), radius: 9, y: 4)
+            .accessibilityHidden(true)
     }
 }
 
@@ -694,7 +734,7 @@ private struct XOWUERootView: View {
         ZStack {
             XOWUEPalette.background.ignoresSafeArea()
             RadialGradient(
-                colors: [Color(rgb: 0x572C17).opacity(0.42), .clear],
+                colors: [Color(rgb: 0x12345B).opacity(0.38), .clear],
                 center: .topTrailing, startRadius: 0, endRadius: 470
             )
             .ignoresSafeArea()
@@ -714,12 +754,12 @@ private struct XOWUERootView: View {
             }
         }
         .preferredColorScheme(.dark)
-        .fileImporter(
-            isPresented: $showingImporter,
-            allowedContentTypes: XOWUEFileType.importerTypes,
-            allowsMultipleSelection: false
-        ) { result in
-            library.handlePickerResult(result)
+        .sheet(isPresented: $showingImporter) {
+            XOWUEDocumentPicker(
+                isPresented: $showingImporter,
+                completion: library.handlePickerResult
+            )
+            .ignoresSafeArea()
         }
         .onOpenURL { url in
             library.handleOpenURL(url)
@@ -739,7 +779,7 @@ private struct XOWUERootView: View {
                 Text("XOWUE")
                     .font(.system(size: 15, weight: .black, design: .rounded))
                     .tracking(2.5)
-                    .foregroundStyle(XOWUEPalette.amber)
+                    .foregroundStyle(XOWUEPalette.yellow)
                 Text("X-MEN ORIGINS")
                     .font(.system(size: 20, weight: .black, design: .rounded))
                     .foregroundStyle(XOWUEPalette.white)
@@ -748,7 +788,7 @@ private struct XOWUERootView: View {
                 Text("WOLVERINE")
                     .font(.system(size: 17, weight: .black, design: .rounded))
                     .tracking(1.1)
-                    .foregroundStyle(XOWUEPalette.amberLight)
+                    .foregroundStyle(XOWUEPalette.blueLight)
                     .lineLimit(1)
                 Text("XBOX 360  ·  TITLE ID 41560816")
                     .font(.system(size: 9, weight: .bold, design: .monospaced))
@@ -761,7 +801,7 @@ private struct XOWUERootView: View {
                 Text("BUILD")
                     .font(.system(size: 9, weight: .heavy, design: .rounded))
                     .tracking(1.3)
-                    .foregroundStyle(XOWUEPalette.amberLight)
+                    .foregroundStyle(XOWUEPalette.yellowLight)
                 Text(buildNumber)
                     .font(.system(size: 26, weight: .black, design: .rounded))
                     .monospacedDigit()
@@ -770,7 +810,7 @@ private struct XOWUERootView: View {
             .padding(.horizontal, 12)
             .padding(.vertical, 9)
             .background(XOWUEPalette.panelRaised, in: RoundedRectangle(cornerRadius: 14))
-            .overlay(RoundedRectangle(cornerRadius: 14).stroke(XOWUEPalette.amber.opacity(0.35), lineWidth: 1))
+            .overlay(RoundedRectangle(cornerRadius: 14).stroke(XOWUEPalette.yellow.opacity(0.35), lineWidth: 1))
             .accessibilityIdentifier("xowue-build-number")
         }
         .padding(.bottom, 2)
@@ -782,7 +822,7 @@ private struct XOWUERootView: View {
                 Label("BIBLIOTECA LOCAL", systemImage: "externaldrive.fill")
                     .font(.system(size: 11, weight: .heavy, design: .rounded))
                     .tracking(1.2)
-                    .foregroundStyle(XOWUEPalette.amberLight)
+                    .foregroundStyle(XOWUEPalette.yellowLight)
                 Spacer()
                 XOWUEStatusPill(phase: library.phase)
             }
@@ -800,7 +840,7 @@ private struct XOWUERootView: View {
 
             if library.isBusy {
                 ProgressView(value: library.progress)
-                    .tint(XOWUEPalette.amber)
+                    .tint(XOWUEPalette.yellow)
                 Text(library.status)
                     .font(.system(size: 10, weight: .medium, design: .monospaced))
                     .foregroundStyle(XOWUEPalette.muted)
@@ -815,7 +855,7 @@ private struct XOWUERootView: View {
                         } label: {
                             HStack {
                                 Image(systemName: library.selectedGame == folder ? "checkmark.circle.fill" : "folder.fill")
-                                    .foregroundStyle(XOWUEPalette.amber)
+                                    .foregroundStyle(XOWUEPalette.yellow)
                                 Text(folder.lastPathComponent)
                                     .foregroundStyle(XOWUEPalette.white)
                                     .lineLimit(1)
@@ -835,7 +875,7 @@ private struct XOWUERootView: View {
             if let folder = library.selectedGame {
                 HStack(spacing: 8) {
                     Image(systemName: "folder")
-                        .foregroundStyle(XOWUEPalette.amber)
+                        .foregroundStyle(XOWUEPalette.yellow)
                     Text(library.selectedLocation)
                         .font(.system(size: 10, weight: .semibold, design: .monospaced))
                         .foregroundStyle(XOWUEPalette.muted)
@@ -850,7 +890,7 @@ private struct XOWUERootView: View {
                     Text("PASTA NATIVA DO APP")
                         .font(.system(size: 9, weight: .heavy, design: .rounded))
                         .tracking(1.2)
-                        .foregroundStyle(XOWUEPalette.amber)
+                        .foregroundStyle(XOWUEPalette.yellow)
                     Text("Arquivos  ›  No Meu iPhone  ›  XOWUE  ›  Jogos")
                         .font(.system(size: 12, weight: .bold, design: .rounded))
                         .foregroundStyle(XOWUEPalette.white)
@@ -861,8 +901,8 @@ private struct XOWUERootView: View {
                 }
                 .padding(12)
                 .frame(maxWidth: .infinity, alignment: .leading)
-                .background(XOWUEPalette.amber.opacity(0.08), in: RoundedRectangle(cornerRadius: 12))
-                .overlay(RoundedRectangle(cornerRadius: 12).stroke(XOWUEPalette.amber.opacity(0.22), lineWidth: 1))
+                .background(XOWUEPalette.yellow.opacity(0.08), in: RoundedRectangle(cornerRadius: 12))
+                .overlay(RoundedRectangle(cornerRadius: 12).stroke(XOWUEPalette.yellow.opacity(0.22), lineWidth: 1))
             }
 
             HStack(spacing: 10) {
@@ -881,11 +921,11 @@ private struct XOWUERootView: View {
                     }
                     .font(.system(size: 12, weight: .black, design: .rounded))
                     .tracking(0.5)
-                    .foregroundStyle(Color(rgb: 0x17110B))
+                    .foregroundStyle(Color(rgb: 0x10151D))
                     .padding(.horizontal, 15)
                     .frame(height: 50)
                     .background(
-                        LinearGradient(colors: [XOWUEPalette.amberLight, XOWUEPalette.amber],
+                        LinearGradient(colors: [XOWUEPalette.yellowLight, XOWUEPalette.yellow],
                                        startPoint: .topLeading, endPoint: .bottomTrailing),
                         in: RoundedRectangle(cornerRadius: 14)
                     )
@@ -913,7 +953,7 @@ private struct XOWUERootView: View {
             } label: {
                 Label("Selecionar uma pasta ou default.xex", systemImage: "doc.badge.plus")
                     .font(.system(size: 11, weight: .semibold, design: .rounded))
-                    .foregroundStyle(XOWUEPalette.amberLight)
+                    .foregroundStyle(XOWUEPalette.yellowLight)
                     .frame(maxWidth: .infinity, alignment: .leading)
             }
             .buttonStyle(.plain)
@@ -930,7 +970,7 @@ private struct XOWUERootView: View {
                 Label("ESTADO REAL DO RUNTIME", systemImage: "cpu")
                     .font(.system(size: 11, weight: .heavy, design: .rounded))
                     .tracking(1)
-                    .foregroundStyle(XOWUEPalette.amberLight)
+                    .foregroundStyle(XOWUEPalette.yellowLight)
                 Spacer()
                 Text("ARM64")
                     .font(.system(size: 9, weight: .heavy, design: .monospaced))
@@ -939,20 +979,21 @@ private struct XOWUERootView: View {
 
             runtimeRow("Recompilação AOT", detail: "345 unidades no engine", icon: "checkmark.circle.fill", tint: XOWUEPalette.green)
             runtimeRow("Loader XEX2 / PPC", detail: "Mapeamento e entry point integrados", icon: "checkmark.circle.fill", tint: XOWUEPalette.green)
+            runtimeRow("KosmicKrisp · iOS Metal WSI", detail: "Patch M2/M3 pinado no projeto; o driver não está linkado e falta Xenos → Vulkan.", icon: "point.3.connected.trianglepath.dotted", tint: XOWUEPalette.blueLight)
 
             VStack(alignment: .leading, spacing: 6) {
-                Text("O boot ainda não chega ao menu nem renderiza um frame.")
+                Text("O boot avança pelo setup inicial e para na criação de thread PPC.")
                     .font(.system(size: 13, weight: .bold, design: .rounded))
                     .foregroundStyle(XOWUEPalette.white)
-                Text("O último teste parou em HalReturnToFirmware(routine=1). Kernel/XAM, GPU Xenos → Metal e XMA ainda não estão implementados.")
+                Text("Último bloqueio reproduzido: ExCreateThread (LR 0x82C4C110). O scheduler de threads Xbox ainda precisa de contexto PPC, pilha e despacho.")
                     .font(.system(size: 11))
                     .foregroundStyle(XOWUEPalette.muted)
                     .fixedSize(horizontal: false, vertical: true)
             }
             .padding(12)
             .frame(maxWidth: .infinity, alignment: .leading)
-            .background(XOWUEPalette.amber.opacity(0.08), in: RoundedRectangle(cornerRadius: 12))
-            .overlay(RoundedRectangle(cornerRadius: 12).stroke(XOWUEPalette.amber.opacity(0.2), lineWidth: 1))
+            .background(XOWUEPalette.yellow.opacity(0.08), in: RoundedRectangle(cornerRadius: 12))
+            .overlay(RoundedRectangle(cornerRadius: 12).stroke(XOWUEPalette.yellow.opacity(0.2), lineWidth: 1))
 
             VStack(alignment: .leading, spacing: 7) {
                 Text("RESULTADO DO ÚLTIMO TESTE")
@@ -969,6 +1010,26 @@ private struct XOWUERootView: View {
             .padding(12)
             .frame(maxWidth: .infinity, alignment: .leading)
             .background(Color.black.opacity(0.45), in: RoundedRectangle(cornerRadius: 12))
+
+            HStack(spacing: 16) {
+                if let url = XOWUEDiagnostics.fileURL(named: "diagnostico.txt") {
+                    ShareLink(item: url) {
+                        Label("diagnostico.txt", systemImage: "doc.text")
+                            .font(.system(size: 10, weight: .bold, design: .rounded))
+                            .foregroundStyle(XOWUEPalette.yellowLight)
+                    }
+                }
+                if let url = XOWUEDiagnostics.fileURL(named: "crash.txt") {
+                    ShareLink(item: url) {
+                        Label("crash.txt", systemImage: "exclamationmark.3")
+                            .font(.system(size: 10, weight: .bold, design: .rounded))
+                            .foregroundStyle(XOWUEPalette.blueLight)
+                    }
+                }
+            }
+            Text("Logs salvos em Arquivos > No Meu iPhone > XOWUE")
+                .font(.system(size: 9, weight: .medium, design: .monospaced))
+                .foregroundStyle(XOWUEPalette.muted)
         }
         .padding(17)
         .background(XOWUEPalette.panel.opacity(0.94), in: RoundedRectangle(cornerRadius: 19))

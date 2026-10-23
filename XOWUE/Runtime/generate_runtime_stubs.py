@@ -64,6 +64,27 @@ def main() -> int:
     args.output.parent.mkdir(parents=True, exist_ok=True)
     code = ['#include "ppc_recomp_shared.h"',
             '[[noreturn]] void xowue_unsupported_import(const char *, const PPCContext &);',
+            'void xowue_KeGetCurrentProcessType(PPCContext &);',
+            'void xowue_KeQueryPerformanceFrequency(PPCContext &);',
+            'void xowue_FscSetCacheElementCount(PPCContext &);',
+            'void xowue_NtCreateEvent(PPCContext &, uint8_t *);',
+            'void xowue_RtlInitializeCriticalSection(PPCContext &, uint8_t *);',
+            'void xowue_RtlInitializeCriticalSectionAndSpinCount(PPCContext &, uint8_t *);',
+            'void xowue_RtlEnterCriticalSection(PPCContext &, uint8_t *);',
+            'void xowue_RtlTryEnterCriticalSection(PPCContext &, uint8_t *);',
+            'void xowue_RtlLeaveCriticalSection(PPCContext &, uint8_t *);',
+            'void xowue_XexCheckExecutablePrivilege(PPCContext &);',
+            'void xowue_XGetAVPack(PPCContext &);',
+            'void xowue_XGetGameRegion(PPCContext &);',
+            'void xowue_KeTlsAlloc(PPCContext &);',
+            'void xowue_KeTlsFree(PPCContext &);',
+            'void xowue_KeTlsGetValue(PPCContext &);',
+            'void xowue_KeTlsSetValue(PPCContext &);',
+            'void xowue_RtlNtStatusToDosError(PPCContext &);',
+            'void xowue_NtQueryVirtualMemory(PPCContext &, uint8_t *);',
+            'void xowue_RtlUnicodeToMultiByteN(PPCContext &, uint8_t *);',
+            'void xowue_RtlMultiByteToUnicodeN(PPCContext &, uint8_t *);',
+            'void xowue_XamLoaderGetLaunchDataSize(PPCContext &, uint8_t *);',
             'void xowue_NtAllocateVirtualMemory(PPCContext &, uint8_t *);',
             'void xowue_NtFreeVirtualMemory(PPCContext &, uint8_t *);',
             '[[noreturn]] void xowue_HalReturnToFirmware(PPCContext &, uint8_t *);', '']
@@ -73,13 +94,71 @@ def main() -> int:
             code.append("\txowue_NtAllocateVirtualMemory(ctx, base);")
         elif name == "NtFreeVirtualMemory":
             code.append("\txowue_NtFreeVirtualMemory(ctx, base);")
+        elif name == "KeGetCurrentProcessType":
+            code.append("\txowue_KeGetCurrentProcessType(ctx);")
+        elif name == "KeQueryPerformanceFrequency":
+            code.append("\txowue_KeQueryPerformanceFrequency(ctx);")
+        elif name == "FscSetCacheElementCount":
+            code.append("\txowue_FscSetCacheElementCount(ctx);")
+        elif name == "NtCreateEvent":
+            code.append("\txowue_NtCreateEvent(ctx, base);")
+        elif name == "RtlInitializeCriticalSection":
+            code.append("\txowue_RtlInitializeCriticalSection(ctx, base);")
+        elif name == "RtlInitializeCriticalSectionAndSpinCount":
+            code.append("\txowue_RtlInitializeCriticalSectionAndSpinCount(ctx, base);")
+        elif name == "RtlEnterCriticalSection":
+            code.append("\txowue_RtlEnterCriticalSection(ctx, base);")
+        elif name == "RtlTryEnterCriticalSection":
+            code.append("\txowue_RtlTryEnterCriticalSection(ctx, base);")
+        elif name == "RtlLeaveCriticalSection":
+            code.append("\txowue_RtlLeaveCriticalSection(ctx, base);")
+        elif name == "XexCheckExecutablePrivilege":
+            code.append("\txowue_XexCheckExecutablePrivilege(ctx);")
+        elif name == "XGetAVPack":
+            code.append("\txowue_XGetAVPack(ctx);")
+        elif name == "XGetGameRegion":
+            code.append("\txowue_XGetGameRegion(ctx);")
+        elif name == "KeTlsAlloc":
+            code.append("\txowue_KeTlsAlloc(ctx);")
+        elif name == "KeTlsFree":
+            code.append("\txowue_KeTlsFree(ctx);")
+        elif name == "KeTlsGetValue":
+            code.append("\txowue_KeTlsGetValue(ctx);")
+        elif name == "KeTlsSetValue":
+            code.append("\txowue_KeTlsSetValue(ctx);")
+        elif name == "RtlNtStatusToDosError":
+            code.append("\txowue_RtlNtStatusToDosError(ctx);")
+        elif name == "NtQueryVirtualMemory":
+            code.append("\txowue_NtQueryVirtualMemory(ctx, base);")
+        elif name == "RtlUnicodeToMultiByteN":
+            code.append("\txowue_RtlUnicodeToMultiByteN(ctx, base);")
+        elif name == "RtlMultiByteToUnicodeN":
+            code.append("\txowue_RtlMultiByteToUnicodeN(ctx, base);")
+        elif name == "XamLoaderGetLaunchDataSize":
+            code.append("\txowue_XamLoaderGetLaunchDataSize(ctx, base);")
         elif name == "HalReturnToFirmware":
             code.append("\txowue_HalReturnToFirmware(ctx, base);")
         else:
             code.append(f'\txowue_unsupported_import("{name}", ctx);')
         code.extend(["}", ""])
     args.output.write_text("\n".join(code), encoding="utf-8")
-    implemented = {"NtAllocateVirtualMemory", "NtFreeVirtualMemory", "HalReturnToFirmware"}
+    implemented = {
+        "NtAllocateVirtualMemory", "NtFreeVirtualMemory", "KeGetCurrentProcessType",
+        "KeQueryPerformanceFrequency",
+        "FscSetCacheElementCount",
+        "NtCreateEvent",
+        "RtlInitializeCriticalSection", "RtlInitializeCriticalSectionAndSpinCount",
+        "RtlEnterCriticalSection", "RtlTryEnterCriticalSection", "RtlLeaveCriticalSection",
+        "XexCheckExecutablePrivilege",
+        "XGetAVPack", "XGetGameRegion",
+        "KeTlsAlloc", "KeTlsFree", "KeTlsGetValue", "KeTlsSetValue",
+        "RtlNtStatusToDosError",
+        "NtQueryVirtualMemory",
+        "RtlUnicodeToMultiByteN",
+        "RtlMultiByteToUnicodeN",
+        "XamLoaderGetLaunchDataSize",
+        "HalReturnToFirmware"
+    }
     print(f"generated {len(imports)} import adapters ({len(implemented)} implemented, {len(imports) - len(implemented)} fail-closed); marked {len(to_mark)}/{len(addresses)} undecoded words with function entries")
     return 0
 
