@@ -1,44 +1,31 @@
 # XOWUE — X-Men Origins: Wolverine (Xbox 360)
 
-**Title ID:** `41560816`  
-**Branch:** `XOWUE`  
-**Estado:** Build 2 confirmado; runner iOS de desenvolvimento; ainda não chega ao menu nem produz frame do jogo.
-**IPA:** `XOWUE-Build-2.ipa`, `CFBundleVersion=2`, arm64, unsigned. [GitHub Actions](https://github.com/joao9vegeto-stack/KintTany/actions/runs/39897706560).
+**Title ID:** 41560816
+**Branch:** XOWUE
+**Build de código:** Build 3 em validação pelo workflow XOWUE iOS IPA.
 
-## O que está neste branch
+## Estado do runner
 
-- Recompilação PPC AOT: 344 unidades de funções mais o mapa de despacho.
-- Loader XEX2/LZX, mapeamento PPC 32-bit, tabela de despacho e execução do entry point.
-- 24 adapters básicos em 261 imports; 237 ainda param de forma explícita com nome, LR, r3–r10 e eventos PPC recentes.
-- A pasta local aparece em **Arquivos > No Meu iPhone > XOWUE > Jogos**. O app detecta `default.xex` na raiz ou uma pasta abaixo, e usa o seletor nativo do iOS para importar uma pasta completa ou um XEX.
-- `diagnostico.txt` e `crash.txt` são gravados na raiz Documents do app, visível em Arquivos > No Meu iPhone > XOWUE. Há botões para compartilhar os dois logs.
-- Ícone Wolverine profissional em aço, amarelo e azul; número Build vem de `CFBundleVersion` e aparece na tela.
-- `Runtime/Graphics/KosmicKrisp/` mantém o patch iOS Metal WSI da branch `PsTJohn`, no commit `db014165eb39429ae37d1946db6fc83c600c63b3`.
+A recompilação AOT contém 344 unidades de funções mais ppc_func_mapping.cpp. O build host completo com Clang 18 compilou e ligou XOWUEEngine e XOWUEHostSmoke. O runtime agora inclui uma base de ciclo de vida de threads PPC (ExCreateThread, XAPI startup, espera/suspensão/retomada, TLS por thread, KPCR e saída) e adapters iniciais para kernel/XAM.
 
-## Bloqueio técnico atual
+O último log disponível, da Build 2, parou em ExCreateThread (LR 0x82C4C110). O código da Build 3 precisa ser executado no aparelho com a pasta do jogo para confirmar o próximo ponto. Não há prova de menu ou frame real ainda.
 
-O smoke host chega a `ExCreateThread` (LR `0x82C4C110`, stack 32 KiB, worker `0x82690678`). A rotina worker entra em um loop de mensagens. O runtime ainda não tem scheduler PPC, contexto completo de threads nem objetos de espera. Não retornar sucesso fictício mantém esse erro visível.
+## App, arquivos e relatórios
 
-KosmicKrisp fornece o lado Vulkan→Metal/WSI. XOWUE ainda precisa de um frontend Xenos/D3D, tradução de comandos/shaders, superfícies e resolução de render targets. O patch está versionado, porém ainda não é compilado nem ligado ao app. Também faltam MMIO, integração WGame, XMA/áudio e teste em iPhone. Nenhum frame do jogo foi comprovado.
+- A pasta local é Arquivos → No Meu iPhone → XOWUE → Jogos.
+- O app detecta default.xex na raiz de Jogos ou em uma subpasta. O seletor também aceita pasta ou executável.
+- Build aparece no cabeçalho do app e é gravado em CFBundleVersion.
+- Diagnósticos ficam na raiz Documentos com os nomes diagnostico-build-N.txt e crash-build-N.txt.
+- O IPA não inclui default.xex nem assets do jogo e precisa de assinatura Apple para instalação.
 
-O app não inclui `default.xex`, DLC, title update ou assets. Não os adicione ao Git.
+## Gráficos
 
-## Teste local
+O workflow compila KosmicKrisp com os patches iOS/Metal WSI preservados da branch PsTJohn e fixa a revisão Mesa usada. O app apresenta um clear de diagnóstico Vulkan sobre CAMetalLayer. Os handlers gráficos Xenos ainda não traduzem o ring buffer real, shaders, textura/tiling ou draw state. O clear de diagnóstico não é um frame do jogo.
 
-No host Clang 18, recompile os adapters e rode:
+## Compile e continuidade
 
-```bash
-python3 XOWUE/Runtime/generate_runtime_stubs.py \
-  --ppc-dir XOWUE/generated/ppc \
-  --recompile-log XOWUE/generated/config/XOWUE-recompile.log \
-  --output build-runtime-clang/runtime-generated/XOWUEImportStubs.cpp
-cmake --build build-runtime-clang --target XOWUEHostSmoke -j2
-./build-runtime-clang/XOWUEHostSmoke /caminho/local/default.xex boot
-```
+Leia HANDOFF-XOWUE.md para comandos do build host, execução no telefone, diagnóstico e handoff para o próximo agente. Leia THIRD_PARTY_NOTICES.md antes de redistribuir artefatos.
 
-## IPA
+Artifact de Build 3: ação #12 em [GitHub Actions](https://github.com/joao9vegeto-stack/KintTany/actions/workflows/xowue-ios.yml). Confirme a execução e baixe XOWUE-Build-3 somente quando estiver concluída com sucesso.
 
-Build 2 concluiu no Actions run #11. O app compilou com Build 2 visível por `CFBundleVersion`, mas a pasta/seletor e a execução precisam de teste físico no iPhone. O smoke host ainda para em `ExCreateThread`; não há frame comprovado. Consulte `HANDOFF-XOWUE.md` para hashes, logs e limites completos.
-
-
-`.github/workflows/xowue-ios.yml` cria um IPA unsigned em cada execução bem-sucedida. O número conta somente os builds IPA bem-sucedidos desde o Build 1 (run #8), então uma tentativa falha não pula a numeração. Consulte `HANDOFF-XOWUE.md` para os resultados do Actions, hashes e próximas etapas.
+O jogo, WGame, DLC, title updates e assets derivados permanecem fora do Git.

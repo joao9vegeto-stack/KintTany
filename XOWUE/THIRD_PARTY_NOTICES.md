@@ -22,7 +22,7 @@ modification, are permitted provided that the following conditions are met:
 
 1. Redistributions of source code must retain the above copyright notice, this
    list of conditions and the following disclaimer.
-2. Redistributions in binary form must reproduce the above copyright notice,
+2. Redistributions in binary form must reproduce the above copyright notice
    this list of conditions and the following disclaimer in the documentation
    and/or other materials provided with the distribution.
 3. Neither the name of the copyright holder nor the names of its contributors
@@ -31,28 +31,39 @@ modification, are permitted provided that the following conditions are met:
 
 THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS"
 AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE
-IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE ARE
-DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT HOLDER OR CONTRIBUTORS BE LIABLE
-FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL
-DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR
-SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER
-CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY,
-OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
-OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE
+ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT HOLDER OR CONTRIBUTORS BE
+LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR
+CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF
+SUBSTITUTE GOODS OR SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS
+INTERRUPTION) HOWEVER CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN
+CONTRACT, STRICT LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE)
+ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE
+POSSIBILITY OF SUCH DAMAGE.
 
 Sources:
 - https://github.com/rexglue/rexglue-sdk
 - https://github.com/nx-mod/xenonrecomp-nx
 
+## Mesa / KosmicKrisp
+
+The XOWUE workflow builds Mesa from commit
+bfe063f723d436e5cdef8a98f058d4e44a64810c. The iOS Metal WSI patches and smoke
+source were copied from the project branch PsTJohn at commit
+db014165eb39429ae37d1946db6fc83c600c63b3. Preserve the corresponding patch
+history and project attribution.
+
+Mesa is a multi-license distribution. Its license notice states that most code
+uses MIT while individual files may use other licenses. For every compiled
+Mesa/KosmicKrisp source, retain its SPDX notice and the matching text in Mesa's
+licenses directory. Upstream license overview:
+https://github.com/Kenji-NX/mesa/blob/bfe063f723d436e5cdef8a98f058d4e44a64810c/docs/license.rst
 
 ## XenonUtils / runtime upstream
 
-O runner usa os componentes de XenonUtils do repositório XenonRecomp, pinned em `ddd128bcca99fe8bfbb99bea583c972351fa6ace`, incluindo o parser XEX2/LZX e dependências listadas em `XOWUE/patches/XenonRecomp-XOWUE.patch`. Consulte as licenças e notices dos submódulos no checkout pinado. O archive AOT deste projeto é gerado a partir do executável fornecido pelo usuário; o executável e os assets originais não são publicados neste branch.
-
-## KosmicKrisp iOS Metal WSI port
-
-XOWUE carries the iOS Meson/Metal WSI patch series from the same repository's `PsTJohn` branch, exact source commit `db014165eb39429ae37d1946db6fc83c600c63b3`: patches M2, M3, and the optional M3B iOS smoke target. The smoke harness is retained as upstream project material; it exercises a standalone Vulkan clear/present path and is not a game renderer.
-
-The patch series targets Mesa/KosmicKrisp commit `bfe063f723d436e5cdef8a98f058d4e44a64810c` (Kenji-NX/mesa mirror). Mesa is distributed under its upstream per-component licenses; review and preserve those notices when building or redistributing Mesa. XOWUE contains patches and a smoke scaffold, not the Mesa source or a linked driver binary. This port does not implement Xenos/D3D command translation.
-
-Source: https://github.com/joao9vegeto-stack/KintTany/tree/PsTJohn/pstjon-kosmickrisp
+O runner usa componentes XenonUtils do repositório XenonRecomp, pinned em
+ddd128bcca99fe8bfbb99bea583c972351fa6ace, incluindo parser XEX2/LZX e
+dependências listadas em XOWUE/patches/XenonRecomp-XOWUE.patch. Consulte as
+licenças e notices dos submódulos no checkout pinado. O archive AOT deste
+projeto deriva do executável fornecido pelo usuário; o executável e os assets
+originais não são publicados neste branch.

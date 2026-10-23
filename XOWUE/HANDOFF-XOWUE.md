@@ -1,134 +1,109 @@
 # Handoff técnico — XOWUE
 
-**Data:** 23/10/2026
-**Jogo:** X-Men Origins: Wolverine — Uncaged Edition (Xbox 360)
-**Title ID:** `41560816`
-**Repositório:** `joao9vegeto-stack/KintTany`
-**Branch:** `XOWUE` (derivada de `main`)
-**Destino:** runner iOS arm64 que prepara o caminho para uma recompilação estática PPC.
+**Jogo:** X-Men Origins: Wolverine — Xbox 360
+**Title ID:** 41560816
+**Repositório:** [joao9vegeto-stack/KintTany](https://github.com/joao9vegeto-stack/KintTany)
+**Branch autorizada:** XOWUE
+**Commit de código do Build 3:** d2cfc714903a1381629c6dce3397f56e63ea8436
+**Workflow:** [XOWUE iOS IPA](https://github.com/joao9vegeto-stack/KintTany/actions/workflows/xowue-ios.yml)
 
-## Estado atual
+## Situação desta entrega
 
-### Build 2 — resultado confirmado (23/10/2026)
+O runner e o app foram atualizados para Build 3. A compilação host completa do engine passou com Clang 18: as 344 unidades PPC, o mapa de funções, os adapters e XOWUEHostSmoke compilaram e ligaram. O ambiente local não tem Xcode nem SDK iOS; a validação de arm64, compilação Metal/Vulkan e IPA é feita pela Action acima.
 
-- Commit que gerou o Build 2: `ef03f1238b203eab70f637b04a2714fc633ef27b`.
-- GitHub Actions run #11, ID `39897706560`, concluído com sucesso: [abrir execução](https://github.com/joao9vegeto-stack/KintTany/actions/runs/39897706560).
-- Artifact `XOWUE-Build-2`, ID `12477463507`, 20.692.127 bytes; SHA-256 do ZIP: `ec903c4577aad414726fd63fdb35a2119daab11e0891773ead5bb35fbea2d908`.
-- IPA `XOWUE-Build-2.ipa`: 20.909.754 bytes; SHA-256 `59ccfcfd9b84342ca27aebbbd6866cc68a3297c8d4694b6e522c4b2cde55350a`. O pacote foi verificado como ZIP IPA íntegro, Mach-O arm64, bundle `com.joaopedro.xowue`, `CFBundleVersion=2`, com `Assets.car`, sem assinatura Apple.
-- O CI registrou duas falhas antes do sucesso, sem consumir número de build: run #9 corrigido para usar a lista de execuções do workflow no repositório; run #10 corrigido porque o callback C de exceções Swift capturava contexto. O run #11 compilou o runtime, o app, empacotou e validou o Build 2.
-- O app agora inclui seletor nativo UIKit para pasta ou `default.xex`, biblioteca em `Documents/Jogos`, logs `diagnostico.txt` e `crash.txt` na raiz de Documents, ícone Wolverine refinado e identidade visual em aço/amarelo/azul. O app foi compilado pelo CI; a seleção e o boot ainda precisam de validação física no iPhone.
-- O resultado do smoke continua parando em `ExCreateThread` (LR `0x82C4C110`), antes do menu; não há primeiro frame do jogo. KosmicKrisp está preservado como patches de referência e ainda não está ligado ao app. Isso não é uma build jogável.
+O número que aparece no app vem de CFBundleVersion. A Action conta somente execuções bem-sucedidas do workflow após Build 1; falhas e tentativas não consomem build. Build 1 foi a execução #8 e Build 2 a #11. A execução #12, no commit acima, deve produzir Build 3 se terminar com sucesso. Atualize esta seção com o resultado final e o hash do IPA depois da Action.
 
-### Recompilação AOT
+Build 3 é um runner de desenvolvimento. O default.xex e os assets do jogo não estão incluídos no repositório ou IPA. Ainda não há prova de menu, primeiro frame real ou partida jogável.
 
-- Entrada analisada localmente: `default.xex`, 23.052.288 bytes.
-- SHA-256: `b5afa6ff191194e5cc0a29302878b154baccfa7073868108c5e7416d08b3aa9a`.
-- XEX2, Title ID `41560816`, Media ID `09FF5403`, base `0x82000000`, entry point `0x82C3CAA8`, imagem carregada de 23.986.176 bytes, 12 seções e 261 imports resolvidos.
-- Código gerado pelo XenonRecomp: 344 unidades `ppc_recomp.*.cpp` + `ppc_func_mapping.cpp` = 345 fontes C++ geradas. As fontes estão compactadas em `dist/XOWUE-AOT-source.partNN` (partes de até 4 MiB); o SHA-256 do archive montado fica em `dist/SHA256SUMS`.
-- O log `generated/config/XOWUE-recompile.log` é versionado junto ao projeto porque o gerador de adapters usa as 161 instruções que o XenonRecomp não decodificou para manter falhas explícitas.
-- As 345 unidades passaram por `clang++-18 -fsyntax-only`; o engine com as 345 unidades AOT, os adapters e o mapa também compilou e ligou no host com Clang 18.
-- O patch do XenonRecomp está fixado ao upstream `ddd128bcca99fe8bfbb99bea583c972351fa6ace` e adiciona as instruções necessárias para esta entrada, além de retirar o alias não portável em Clang não-Apple.
+## O que entrou no Build 3
 
-### Runtime e app iOS adicionados
+### Threads PPC e TLS
 
-`Runtime/XOWUEEngine.cpp` usa o parser XEX2/LZX de XenonUtils e implementa a fundação do runner:
+Runtime/XOWUEEngine.cpp agora fornece uma base para o ciclo de vida das threads do título:
 
-1. Lê e valida o XEX2 selecionado.
-2. Confere a base do executável contra a configuração AOT (`0x82000000`).
-3. Reserva uma janela de memória PPC de 4 GiB e copia as seções carregadas para os endereços guest.
-4. Preenche a tabela de despacho `PPCFuncMappings`, incluindo as entradas de import geradas.
-5. Inicializa o contexto PPC com uma pilha provisória e chama o entry point recompilado (`_xstart`, `0x82C3CAA8`).
+- ExCreateThread lê o ABI PPC usado pelo startup XAPI, cria contexto e pilha próprios e inicia o trampoline/entry point;
+- objetos guest de thread, KPCR, ponteiro r13, estado de saída e handles ficam associados ao contexto da thread;
+- os caminhos implementados de espera, NtSuspendThread/NtResumeThread, eventos, prioridade/afinidade e término acordam ou finalizam as threads;
+- o header TLS do XEX é lido e validado; dados estáticos são copiados para TLS separado por thread;
+- KeTlsAlloc/Free/GetValue/SetValue mantém valores por thread e geração, para não reutilizar valores antigos após liberar um slot;
+- a parada do runtime acorda e junta threads guest; se uma thread não encerrar no limite, a memória da sessão é preservada em vez de ser liberada enquanto ela ainda executa.
 
-`Runtime/generate_runtime_stubs.py` gera adapters para as 261 APIs importadas. Neste estado, 24 têm comportamento básico e explícito: alocação/liberação e consulta de memória, tipo de processo, seções críticas de uma única thread, TLS, conversões ANSI/Unicode, frequência do relógio, consulta de launch data sem payload, criação mínima de evento, cache de arquivos e retorno de firmware. As outras 237 param com nome, LR, r3–r10 e até 128 eventos PPC recentes. A criação de evento ainda não oferece scheduler de waits; as seções críticas não têm sincronização multithread. O script também transforma as 160 palavras indecodificadas que têm entrada no mapa de funções em falhas explícitas; uma das 161 palavras reportadas não possui entrada própria no mapa. Nenhuma delas é apresentada como código resolvido.
+Esse código compilou no host, mas ainda precisa ser exercitado com o default.xex desta instalação. O log do Build 2 parou na primeira chamada de ExCreateThread, LR 0x82C4C110; portanto não havia resultado anterior que confirmasse o caminho novo.
 
-### Validações concluídas no host
+### App, biblioteca local e relatórios
 
-- O parser leu o XEX2: base `0x82000000`, entry point `0x82C3CAA8`, imagem carregada de 23.986.176 bytes, 12 seções e 261 imports.
-- O engine e todo o código AOT ligaram em `XOWUEHostSmoke`.
-- O smoke do host valida XEX2, executa `_xstart`, passa pela configuração de memória/vídeo e chega a `ExCreateThread`. O bloqueio medido é `LR=0x82C4C110`: handle out `r3=0x7FFEF6B0`, stack `r4=0x8000` (32 KiB), thread ID `r5=0x1013FA2C`, startup `r6=0x82C4D958`, rotina worker `r7=0x82690678`, contexto `r8=0x1013FA20`, flags `r9=0`. A rotina startup chama o worker, que é um loop de mensagens. XOWUE ainda não tem scheduler PPC nem ciclo de vida de threads; por isso, o runner para com erro explícito. Não chegou ao menu nem renderizou um frame.
-- O workflow GitHub Actions `XOWUE iOS IPA` concluiu com sucesso no run #4 (ID `39888098218`), validando o commit de código `c784c75c3c770ffcf3cebca3dd21ed926f1cc779`. O runner macOS compilou o engine e o app para arm64, empacotou o IPA e passou pelas verificações do workflow. [Run do Actions](https://github.com/joao9vegeto-stack/KintTany/actions/runs/39888098218).
-- O run #6 (ID `39890657352`, commit `9f32c367b378721cc1887a2136c5801ed26e1ac7`) recompilou o engine arm64 com sucesso, mas o XcodeGen recusou o spec por falta de `info.path`; o app não foi compilado nem houve artefato IPA. [Run com a falha de configuração](https://github.com/joao9vegeto-stack/KintTany/actions/runs/39890657352).
-- O run #7 (ID `39891228913`, commit `257c62275a70e577690137ebe8e6f45c82924f06`) passou pelo XcodeGen e compilou o app SwiftUI. O empacotamento parou porque o workflow não criou o diretório `Payload` no caminho temporário de validação; não houve IPA. A correção cria esse diretório e ajusta a versão para que o run #8 produza **Build 1**. [Run com falha de empacotamento](https://github.com/joao9vegeto-stack/KintTany/actions/runs/39891228913).
-- O run #8 (ID `39891819489`, commit `f4d4ea11f1c211a5628608a6ce1f641731b0063b`) concluiu com sucesso: engine arm64, geração XcodeGen, compilação Swift, Info.plist, arquitetura arm64, Assets.car, tipo `.xex` e validação do IPA. Artifact `XOWUE-Build-1`, ID `12474638929`. [Run do Build 1](https://github.com/joao9vegeto-stack/KintTany/actions/runs/39891819489).
-- IPA: `XOWUE-Build-1.ipa`, 20.356.072 bytes, SHA-256 `d08e7cf391c9712ea80bfe63ad01b82d883af6a10b4d0ae94b53950225a94254`. ZIP do artifact: 20.137.008 bytes, SHA-256 `75312c6ad3aa3ffd2bce5c77e5aec982dbb7365de6e4295740200b82de1ad36d`.
-- Arquivo de IPA usado numa entrega anterior do Build 1: `XOWUE-unsigned.ipa`, 20.024.250 bytes, SHA-256 `ed2d567b87a278317c2d2c61097ec6b1e2502b6ca22e9864620aaa17fe2e791d`. O ZIP do artifact da CI tem SHA-256 `b897a5ce17bc60dd81e4031debfa5a71fd5c46c7515aaba5e763db914bd2e0f9`.
-- A inspeção local confirmou um ZIP IPA íntegro, executável Mach-O de 64 bits arm64, bundle `com.joaopedro.xowue` e versão mínima iOS 17.0. O pacote não contém assinatura Apple.
+- Em Arquivos, a pasta local do app é No Meu iPhone/XOWUE/Jogos. O app procura default.xex automaticamente, incluindo uma pasta de jogo dentro de Jogos.
+- O seletor do iOS aceita pasta ou default.xex, copia o conteúdo para a biblioteca local do XOWUE e registra a instalação escolhida. Havendo mais de uma instalação, mostra opções.
+- Build aparece no cabeçalho. Os relatórios ficam na raiz de Documentos, visível em Arquivos:
+  - diagnostico-build-N.txt
+  - crash-build-N.txt
+- Os relatórios registram versão/dispositivo, varredura, picker, importação, caminho do XEX, início/fim do boot, eventos do runtime e exceções Objective-C. O arquivo de crash também identifica um início anterior que não teve término registrado; um encerramento forçado do iOS pode não permitir gravar detalhes adicionais.
+- O ícone foi redesenhado para o XOWUE: escudo escuro azul-marinho, lâminas curvas com acabamento metálico e acentos dourados.
 
-`iOS/` contém o app SwiftUI, ícone Wolverine e biblioteca local. `Documents` é exposto no Arquivos e recebe `Jogos`, `diagnostico.txt` e `crash.txt` na raiz. O seletor usa `UIDocumentPickerViewController` para abrir uma pasta completa ou `default.xex`; uma pasta externa é copiada para a área local com progresso. O diagnóstico registra busca, escolha, escopo de segurança, importação, inspeção XEX2, boot, resultado nativo e os últimos eventos PPC. `crash.txt` recebe checkpoints de boot e exceções Objective-C; um boot iniciado sem registro final é marcado na próxima abertura. O iOS não oferece aqui um capturador confiável de falhas por sinal nativo.
+### KosmicKrisp, Vulkan e Xenos
 
-O caminho recomendado é **Arquivos → No Meu iPhone → XOWUE → Jogos**. A configuração inclui `UIFileSharingEnabled`, `LSSupportsOpeningDocumentsInPlace` e o tipo `com.xowue.xex`. A interface mostra o estado observado do runtime, o resultado do boot e a versão da IPA em uso.
+Os patches 0001 e 0002 e o smoke source usados aqui correspondem aos mesmos blobs preservados na branch PsTJohn, commit mais recente consultado db014165eb39429ae37d1946db6fc83c600c63b3. O workflow fixa Mesa em bfe063f723d436e5cdef8a98f058d4e44a64810c, aplica os patches iOS/Metal WSI e compila libkk.a e libvulkan_wsi.a para arm64.
 
-O workflow define `CFBundleVersion` como **Build 1, Build 2, Build 3…** e nomeia o arquivo `XOWUE-Build-N.ipa`. O contador usa execuções bem-sucedidas de IPA a partir do run #8; falhas de CI não consomem números.
+iOS/App/XOWUEVulkanBackend.m cria o ICD KosmicKrisp, uma surface CAMetalLayer, device, swapchain e apresenta clears Vulkan. O backend pausa/recria a swapchain em transições de background/foreground e escreve eventos com o número do build. Esse quadro de clear prova apenas a cadeia Vulkan → Metal; ele não é um frame do jogo.
 
-### Limites atuais
+O runtime tem handlers iniciais Vd*, estado de modo de vídeo, validação limitada de comandos PM4 e um marcador VdSwap que chega ao backend. Ainda falta consumir o ring buffer real do jogo, traduzir registradores/estado de draw, shaders e formatos/tiling de textura Xenos para Vulkan. O painel do app deve continuar descrevendo isso como trabalho incompleto até existir imagem real do XEX.
 
-Este IPA é um **runner de desenvolvimento**, não uma versão jogável. A execução atual para em `ExCreateThread`; falta scheduler PPC com contexto, pilhas, estados de espera e encerramento de threads. O patch KosmicKrisp iOS Metal WSI está versionado em `Runtime/Graphics/KosmicKrisp/patches/`, vindo do último commit `db014165eb39429ae37d1946db6fc83c600c63b3` da branch `PsTJohn`, mas não está compilado nem ligado ao XOWUE. Ele oferece uma camada Vulkan→Metal/WSI; ainda falta a frente Xenos/D3D, interpretação de comandos, shaders e superfícies. Também faltam MMIO, XMA/áudio, integração dos arquivos WGame e teste no iPhone. Nenhum frame do jogo foi comprovado.
+### Imports e conteúdo do jogo
 
-O pacote de assets WGame completo não está neste workspace. O repositório não recebe o `default.xex`, assets, DLC, title updates ou arquivos extraídos desses dados. O arquivo AOT contém código derivado do executável fornecido e foi incluído no branch para a CI compilar o engine; não é incluído o executável original.
+O gerador cobre as 261 imports do executável. 71 adapters possuem comportamento inicial; os outros 190 falham de forma explícita, com nome da API e LR PPC. Os adapters disponíveis não equivalem à implementação completa do kernel/XAM. Ainda devem ser investigados os imports que aparecerem no próximo diagnóstico.
 
-O IPA `XOWUE-Build-2.ipa` empacotado pela CI é unsigned e não contém perfil Apple. Para instalar em iPhone, configure assinatura Apple compatível (identificador `com.joaopedro.xowue`, certificado e provisioning profile) ou assine localmente com o método de sideload escolhido.
+O AOT existente continua compactado em dist/XOWUE-AOT-source.partNN; a Action valida dist/SHA256SUMS e compila as unidades sem colocar o default.xex no Git. Não regenere ou reenvie os blobs AOT sem necessidade e autorização do projeto. Não adicione o XEX original, pasta WGame, DLC, title update, saves ou assets extraídos ao branch.
 
-## Build local (macOS/Linux com Clang 18)
+## Como executar no iPhone
 
-```bash
-git clone https://github.com/joao9vegeto-stack/KintTany.git
-cd KintTany
-git fetch origin
-git switch --track origin/XOWUE
+1. Baixe o artifact XOWUE-Build-3 da execução bem-sucedida da Action. O IPA é arm64 e unsigned.
+2. Assine com um certificado e perfil de desenvolvimento Apple compatíveis com com.joaopedro.xowue antes de instalar.
+3. Coloque a pasta completa do jogo em Arquivos → No Meu iPhone → XOWUE → Jogos. Estruturas detectadas:
 
-git clone --recursive https://github.com/hedge-dev/XenonRecomp.git XOWUE/vendor/XenonRecomp
-git -C XOWUE/vendor/XenonRecomp checkout ddd128bcca99fe8bfbb99bea583c972351fa6ace
-git -C XOWUE/vendor/XenonRecomp submodule update --init --recursive
-git -C XOWUE/vendor/XenonRecomp apply "$PWD/XOWUE/patches/XenonRecomp-XOWUE.patch"
+       Jogos/default.xex
+       Jogos/Nome do jogo/default.xex
 
-tar -xzf XOWUE/dist/XOWUE-AOT-source.tar.gz -C XOWUE/generated
-cmake -S XOWUE/Runtime -B build-runtime \
-  -DCMAKE_C_COMPILER=clang-18 \
-  -DCMAKE_CXX_COMPILER=clang++-18 \
-  -DCMAKE_BUILD_TYPE=Release \
-  -DXENONRECOMP_ROOT="$PWD/XOWUE/vendor/XenonRecomp" \
-  -DXOWUE_BUILD_HOST_SMOKE=ON
-cmake --build build-runtime --target XOWUEHostSmoke --parallel 4
-./build-runtime/XOWUEHostSmoke /caminho/local/default.xex
-```
+4. Volte ao app, toque em atualizar se necessário e use ABRIR JOGO. Também é possível importar uma pasta ou default.xex pelo seletor.
+5. Depois do teste, envie diagnostico-build-3.txt e crash-build-3.txt para identificar a próxima parada. Esses logs ficam na raiz Documentos/XOWUE, acessível pelo app Arquivos.
 
-Para regenerar o AOT, coloque uma cópia autorizada em `XOWUE/upload/default.xex` e rode:
+## Build host
 
-```bash
-XENONRECOMP_ROOT="$PWD/XOWUE/vendor/XenonRecomp" \
-XENONRECOMP_BUILD_DIR="$PWD/XOWUE/vendor/XenonRecomp/build-xowue" \
-XOWUE_XEX="$PWD/XOWUE/upload/default.xex" \
-XOWUE/tools/run_xowue_codegen.sh
+Linux com Clang 18, Python 3, CMake e submódulos XenonRecomp. A branch já contém a análise e o archive AOT:
 
-XENONRECOMP_ROOT="$PWD/XOWUE/vendor/XenonRecomp" \
-python3 XOWUE/tools/check_generated_cpp_syntax.py
-```
+    git clone https://github.com/joao9vegeto-stack/KintTany.git
+    cd KintTany
+    git switch --track origin/XOWUE
 
-Depois de regenerar, atualize o archive AOT e o hash:
+    git clone --recursive https://github.com/hedge-dev/XenonRecomp.git XOWUE/vendor/XenonRecomp
+    git -C XOWUE/vendor/XenonRecomp checkout ddd128bcca99fe8bfbb99bea583c972351fa6ace
+    git -C XOWUE/vendor/XenonRecomp submodule update --init --recursive
+    git -C XOWUE/vendor/XenonRecomp apply "$PWD/XOWUE/patches/XenonRecomp-XOWUE.patch"
 
-```bash
-python3 XOWUE/tools/package_xowue_aot.py
-```
+    tar -xzf XOWUE/dist/XOWUE-AOT-source.tar.gz -C XOWUE/generated
+    cmake -S XOWUE/Runtime -B build-runtime \
+      -DCMAKE_C_COMPILER=clang-18 \
+      -DCMAKE_CXX_COMPILER=clang++-18 \
+      -DCMAKE_BUILD_TYPE=Release \
+      -DXENONRECOMP_ROOT="$PWD/XOWUE/vendor/XenonRecomp" \
+      -DXOWUE_BUILD_HOST_SMOKE=ON
+    cmake --build build-runtime --target XOWUEHostSmoke --parallel 4
+    ./build-runtime/XOWUEHostSmoke /caminho/local/default.xex
 
-## IPA pelo GitHub Actions
+O workflow da Action executa a compilação iOS arm64, gera o projeto com XcodeGen, valida Info.plist e arquitetura, empacota o IPA e testa a integridade do ZIP. O IPA não tem assinatura Apple nem inclui o jogo.
 
-O workflow `.github/workflows/xowue-ios.yml` roda em push na branch `XOWUE` quando mudam o runtime, o app, as fontes AOT, as ferramentas ou o próprio workflow; mudanças só nos handoffs não recompilam o IPA. Também aceita `workflow_dispatch`. Cada execução define `CFBundleVersion` e gera o artifact `XOWUE-Build-N`, contendo `XOWUE-Build-N.ipa`. O build continua unsigned e não é instalado no telefone.
+## Continuidade do trabalho
 
-## Próximas etapas técnicas
+1. Baixar os dois logs da Build 3 e seguir o primeiro import/endereço em que o XEX parar; implementar e testar essa API antes de ampliar os stubs.
+2. Fazer o runtime consumir a sequência real PM4 do título e preservar contexto de GPU entre chamadas. Adicionar captura de registradores, draw/event packets, formatos e endereços de textura aos logs.
+3. Implementar a tradução de shaders Xenos e formatos/tiling de textura e enviar draws Vulkan para a swapchain. Verificar primeiro um draw de teste derivado do estado observado e depois o frame do jogo.
+4. Continuar kernel/XAM, heap, MMIO, XMA/áudio, entrada e acesso aos arquivos WGame a partir dos erros reproduzíveis.
+5. Não marcar o projeto como jogável até capturar um frame real do jogo e validá-lo no aparelho.
 
-1. Instalar e testar o próximo IPA no iPhone: seletor nativo, pasta local, os dois logs, ícone e Build visível.
-2. Implementar scheduler PPC para `ExCreateThread`/`ExTerminateThread` e os imports de espera, handles e eventos descobertos no smoke.
-3. Implementar MMIO e um frontend Xenos/D3D que emita Vulkan commands; depois compilar/integrar o driver KosmicKrisp/Mesa e ligar a superfície Metal à tela do app.
-4. Integrar os arquivos WGame, XMA/áudio e controles.
-5. Só declarar boot jogável depois de capturar um frame real do jogo no dispositivo alvo.
+## Regras para o próximo agente com acesso ao GitHub
 
-## Arquivos importantes
-
-- `Runtime/`: loader PPC, C API, CMake, adapters de import e `Graphics/KosmicKrisp/`.
-- `iOS/`: app SwiftUI, bridging header e spec do XcodeGen.
-- `dist/XOWUE-AOT-source.partNN`: partes do archive AOT usado pela GitHub Actions.
-- `tools/package_xowue_aot.py`: atualiza archive, partes e SHA-256 após nova recompilação.
-- `dist/SHA256SUMS`: integridade do archive AOT.
-- `generated/config/`: TOML, tabelas, logs e histórico da análise.
-- `patches/XenonRecomp-XOWUE.patch`: patch para a revisão upstream pinada.
-- `tools/`: auditoria, geração, validação de sintaxe e análise de helpers/tabelas.
+- Trabalhar exclusivamente em joao9vegeto-stack/KintTany, branch XOWUE; não alterar main.
+- Ler este handoff, README.md, THIRD_PARTY_NOTICES.md e os logs da build instalada antes de alterar o runtime.
+- Atualizar a mesma branch por commit fast-forward; não fazer force push.
+- Preservar o contador sequencial de IPA e o nome de cada diagnóstico/crash por build.
+- Nunca versionar default.xex, WGame, DLC, title updates, saves ou outros assets do usuário.
+- Deixar falhas de APIs desconhecidas explícitas nos logs; não informar que houve boot ou frame sem evidência capturada.

@@ -1,9 +1,11 @@
 # XOWUE — início rápido
 
-Branch de trabalho: `XOWUE`, no repositório `joao9vegeto-stack/KintTany`.
+Branch de trabalho: XOWUE, no repositório joao9vegeto-stack/KintTany. Build 3 está sendo validada pela Action XOWUE iOS IPA (execução #12, commit d2cfc714903a1381629c6dce3397f56e63ea8436).
 
-A geração AOT do `default.xex` foi concluída: 344 arquivos de funções mais `ppc_func_mapping.cpp`, 345 unidades C++ no total. As partes compactadas em `dist/` são reunidas pelo workflow de macOS para montar o IPA. O original `default.xex` e os assets permanecem fora do Git.
+O app mostra o número da build e procura o jogo em Arquivos → No Meu iPhone → XOWUE → Jogos. Coloque a pasta completa do jogo nesse local ou use o seletor de pasta/default.xex. O app detecta o executável e escreve diagnostico-build-N.txt e crash-build-N.txt na raiz Documentos.
 
-O runtime inicial carrega o XEX, monta o mapa de funções e chama `_xstart`. `NtAllocateVirtualMemory` e `NtFreeVirtualMemory` têm suporte básico no heap guest; `HalReturnToFirmware` encerra o diagnóstico com a rotina solicitada. Os outros 258 imports Xbox/XAM continuam fail-closed. O teste do host chega a `HalReturnToFirmware(routine=1)`, portanto isso ainda não é um boot jogável.
+A compilação host Clang 18 passou para as 345 unidades AOT e o smoke executable. Build 2 parou em ExCreateThread. Build 3 acrescenta scheduler PPC/thread/TLS; execute no aparelho e envie os relatórios para identificar o próximo bloqueio.
 
-Leia `HANDOFF-XOWUE.md` para comandos, arquitetura e limites do runtime. O app cria a pasta **Arquivos > No Meu iPhone > XOWUE > Jogos** e detecta automaticamente o `default.xex`; também aceita uma pasta pelo seletor ou abrir o `.xex` diretamente. A IPA aparece no app como **Build 1**, depois Build 2, Build 3… e continua unsigned até receber assinatura Apple.
+KosmicKrisp/Mesa Metal WSI está ligado a um quadro Vulkan de diagnóstico. Ele não renderiza a cena Xenos. Ainda não foi comprovado menu, frame real ou boot jogável.
+
+Leia HANDOFF-XOWUE.md para os comandos e arquitetura. Leia THIRD_PARTY_NOTICES.md antes de redistribuir. O IPA da CI é unsigned; requer certificado e provisioning profile Apple. O executável do jogo e os assets não entram no branch nem no IPA.

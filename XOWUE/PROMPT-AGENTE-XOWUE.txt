@@ -2,24 +2,31 @@ CONTINUIDADE XOWUE — BRANCH XOWUE
 
 Repositório: joao9vegeto-stack/KintTany
 Branch autorizada: XOWUE
-Jogo: X-Men Origins: Wolverine — Uncaged Edition, Xbox 360, Title ID 41560816
+Jogo: X-Men Origins: Wolverine, Xbox 360, Title ID 41560816
+Commit do código Build 3: d2cfc714903a1381629c6dce3397f56e63ea8436
+Action Build 3: https://github.com/joao9vegeto-stack/KintTany/actions/workflows/xowue-ios.yml — run #12
 
-Comece lendo XOWUE/HANDOFF-XOWUE.md, XOWUE/README.md, XOWUE/THIRD_PARTY_NOTICES.md e XOWUE/Runtime/Graphics/KosmicKrisp/README.md. Não altere main. Não comite default.xex, assets WGame, DLC ou title updates.
+Comece lendo XOWUE/HANDOFF-XOWUE.md, XOWUE/README.md e XOWUE/THIRD_PARTY_NOTICES.md. Em seguida leia diagnostico-build-3.txt e crash-build-3.txt obtidos do teste no iPhone.
 
-Estado atual:
-- Build 2 compilado e empacotado; ainda não testado fisicamente no iPhone. Bundle `com.joaopedro.xowue`, arm64, IPA unsigned.
-- AOT PPC: 344 unidades de função mais o mapa de despacho; runner iOS arm64.
-- Loader XEX2 e 24 adapters básicos dos 261 imports. 237 imports ainda falham explicitamente.
-- Smoke host do default.xex chega a ExCreateThread: LR=0x82C4C110, stack=0x8000, startup=0x82C4D958, worker=0x82690678, contexto=0x1013FA20. A thread inicia um loop de mensagens.
-- A próxima peça real é um scheduler PPC/threads: contexto, pilhas, estado, waits/eventos e encerramento. Não retorne sucesso para ExCreateThread sem executar o worker.
-- A tela do app tem seletor UIDocumentPicker, biblioteca em Documents/Jogos, diagnostico.txt e crash.txt na raiz Documents e identidade visual Wolverine aço/amarelo/azul.
-- KosmicKrisp iOS M2/M3 patches foram copiados de PsTJohn commit db014165eb39429ae37d1946db6fc83c600c63b3 e fixam Mesa bfe063f723d436e5cdef8a98f058d4e44a64810c. É Metal WSI/Vulkan; não traduz Xenos/D3D e ainda não está linkado ao XOWUE.
-- Build 1 corresponde ao Actions run #8. Build 2 concluiu no run #11 (commit `ef03f1238b203eab70f637b04a2714fc633ef27b`); o IPA tem `CFBundleVersion=2`. O próximo IPA bem-sucedido deverá ser Build 3. Falhas de CI não consomem número.
+Já foi feito:
+- 345 unidades PPC AOT, engine host compila e liga com Clang 18.
+- Scheduler PPC base para ExCreateThread, XAPI startup, stacks/contextos, espera, eventos, suspensão/retomada, KPCR, TLS estático/per-thread e saída.
+- Biblioteca local Arquivos > No Meu iPhone > XOWUE > Jogos, detecção de default.xex, picker de pasta/XEX, contador de build no cabeçalho e logs na raiz Documentos.
+- KosmicKrisp/Mesa iOS e Metal WSI compilados pela Action; backend Vulkan apresenta um clear diagnóstico e recebe o marcador VdSwap.
+- Ícone XOWUE de escudo e lâminas curvas; interface escura azul-marinho/amarela.
 
-Próximo trabalho:
-1. Implementar scheduler PPC com ExCreateThread/ExTerminateThread, waits, handles, TLS por thread e ciclo de vida seguro da memória guest.
-2. Continuar smoke do XEX e registrar cada import/argumento/retorno em diagnostico.txt e crash.txt.
-3. Criar o frontend Xenos/D3D (comandos, shaders, superfícies/resolve), compilar e integrar o backend KosmicKrisp/Mesa Metal WSI e conectar à CAMetalLayer.
-4. Só declarar boot/renderização após provar um frame real do jogo no dispositivo.
+Restrições:
+- Não altere main. Faça commits fast-forward apenas em XOWUE.
+- Nunca versionar default.xex, WGame, assets do jogo, DLC, title updates ou saves.
+- Não regenerar/republicar fontes/archives AOT sem necessidade técnica.
+- Não chamar o clear de Vulkan de frame do jogo. Ainda faltam parser real do ring-buffer Xenos, shader/tiling/draw translation e validação no dispositivo.
+- 71 adapters têm comportamento inicial; 190 imports permanecem fail-closed. Siga os erros observados no relatório da Build 3 e implemente a próxima API reproduzível.
+- Mantenha builds de IPA sequenciais e nomes de diagnóstico/crash com o número da build.
+- Atualize handoff e README com evidências e checksum depois de cada IPA bem-sucedida.
 
-Preserve os limites de teste no handoff. A IPA atual não foi validada fisicamente no iPhone; código AOT derivado não é o XEX original.
+Trabalho de continuidade:
+1. Confirmar que run #12 produziu Build 3 e validar IPA arm64/Info.plist.
+2. Testar o XEX local e avançar a próxima falha do kernel/XAM.
+3. Trazer de volta diagnostico-build-3.txt e crash-build-3.txt.
+4. Implementar consumo real de PM4 e renderizar um draw de teste antes de perseguir o primeiro frame Xenos do título.
+
