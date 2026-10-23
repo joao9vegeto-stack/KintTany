@@ -439,7 +439,7 @@ def patch(upstream: Path) -> None:
             interp = e && *e != '0';
             __atomic_store_n(&s_wws_interp, interp, __ATOMIC_RELEASE);
         }
-        const uint32_t p = ctx->pc & SPU_LS_MASK & ~3u;
+        uint32_t p = ctx->pc & SPU_LS_MASK & ~3u;
         const uint32_t w0 = ((uint32_t)ctx->ls[p] << 24) |
                             ((uint32_t)ctx->ls[p + 1] << 16) |
                             ((uint32_t)ctx->ls[p + 2] << 8) | ctx->ls[p + 3];

@@ -47,6 +47,9 @@ def main() -> int:
     assert channels.count("spu_rejoin_interpreted_lift(ctx, return_pc)") >= 3
     assert "ASCENSION_M802_SPU_INTERPRETER_REJOIN_DRAIN_V1" in drain
     assert "g_spu_drain_anyret = anyret ? (int)ctx->host_depth : 0;" in drain
+    wws_fallback = channels.split("ASCENSION_M795_WWS_INTERPRETER_FALLBACK_V1", 1)[1]
+    assert "uint32_t p = ctx->pc & SPU_LS_MASK & ~3u;" in wws_fallback
+    assert "const uint32_t p = ctx->pc & SPU_LS_MASK & ~3u;" not in wws_fallback
 
     # Applying the patcher twice must leave the generated runtime unchanged.
     before = drain_path.read_bytes()
