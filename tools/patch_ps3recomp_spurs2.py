@@ -30,6 +30,8 @@ PM_CAPTURE_MARKER = "ASCENSION_M788_CAPTURE_REQUESTED_PM_V1"
 DYNAMIC_WWS_PM_MARKER = "ASCENSION_M790_DYNAMIC_WWS_PM_ROLE_V1"
 LWCOND_SEMANTICS_MARKER = "ASCENSION_M791_LWCOND_SIGNAL_WAIT_V1"
 REPORT_HOLD_MARKER = "ASCENSION_M798_GCM_REPORT_SPU_HOLD_V1"
+PARK_SPU_HOLD_MARKER = "ASCENSION_M803_GCM_PARK_SPU_HOLD_V1"
+STACK_METRICS_MARKER = "ASCENSION_M803_SPU_STACK_METRICS_V1"
 TASK_ACTIVITY_MARKER = "ASCENSION_M798_SPURS_TASK_ACTIVITY_V1"
 WORKLOAD_FLAG_MARKER = "ASCENSION_M799_SPURS_WORKLOAD_FLAG_V1"
 TASKSET_WID_MARKER = "ASCENSION_M800_TASKSET_CURRENT_WORKLOAD_V1"
@@ -1610,6 +1612,202 @@ void cellGcm_fifo_kick(void)
     gcm_path.write_text(gcm)
 
 
+def apply_ascension_gcm_park_spu_hold(upstream: pathlib.Path) -> None:
+    """Hold a patched RSX park until the SPU round that feeds it is complete.
+
+    The Ascension PC port's patch 0017 documents a first-frame race: the host
+    FIFO can reach the next segment before signalled SPU taskset work finishes
+    the prior round. The next task signals are then consumed by tasks still in
+    their old barriers. Keep the same bounded 50 ms handoff on iOS and expose
+    whether it held, released, or timed out in the live report.
+    """
+    path = upstream / "libs/video/cellGcmSys.c"
+    source = path.read_text(errors="replace")
+    if PARK_SPU_HOLD_MARKER in source:
+        required = (
+            "s_last_park_off = s_fifo_getoff",
+            "if (s_fifo_getoff == s_last_park_off)",
+            'getenv("GCM_PARK_SPU_HOLD_MS")',
+            "spu_taskset_tasks_running()",
+            "s_asc_park_spu_hold_since",
+            'why = "spu-hold"',
+            'strcmp(why, "spu-hold") == 0',
+            "cellGcmResetAscensionParkHoldMetrics",
+            "cellGcmCopyAscensionParkHoldMetrics",
+        )
+        missing = [token for token in required if token not in source]
+        if missing:
+            raise SystemExit(f"partial M8.03 GCM park/SPU hold patch: {missing}")
+        return
+
+    state_anchor = "static u32 s_fifo_getoff;   /* tentative: defined below */\n"
+    state = state_anchor + '''
+/* ASCENSION_M803_GCM_PARK_SPU_HOLD_V1
+ * The first patched jump after a park starts the next FIFO segment. Hold it
+ * briefly while the SPU task round that fills that segment is still active. */
+static u32 s_last_park_off = ~0u;
+static long s_asc_park_spu_hold_ms = -1;
+static unsigned long long s_asc_park_spu_hold_since;
+static int s_asc_park_spu_held_for_task;
+static unsigned long long s_asc_park_spu_hold_metrics[3];
+void cellGcmResetAscensionParkHoldMetrics(void)
+{
+    s_last_park_off = ~0u;
+    s_asc_park_spu_hold_ms = -1;
+    s_asc_park_spu_hold_since = 0;
+    s_asc_park_spu_held_for_task = 0;
+    for (unsigned i = 0; i < 3; ++i)
+        __atomic_store_n(&s_asc_park_spu_hold_metrics[i], 0, __ATOMIC_RELAXED);
+}
+void cellGcmCopyAscensionParkHoldMetrics(unsigned long long out[3])
+{
+    if (!out) return;
+    for (unsigned i = 0; i < 3; ++i)
+        out[i] = __atomic_load_n(&s_asc_park_spu_hold_metrics[i], __ATOMIC_RELAXED);
+}
+'''
+    if source.count(state_anchor) != 1:
+        raise SystemExit("M8.03 cannot locate the GCM FIFO get-position declaration")
+    source = source.replace(state_anchor, state, 1)
+
+    park_anchor = '''                  why = "parked";
+                  break;'''
+    park_new = '''                  /* Remember the exact park. When its self-JUMP is patched,
+                   * the first drain of the new segment may have to wait for
+                   * the SPU tasks that produce its draw data. */
+                  s_last_park_off = s_fifo_getoff;
+                  why = "parked";
+                  break;'''
+    if source.count(park_anchor) != 1:
+        raise SystemExit("M8.03 cannot locate the GCM self-JUMP park branch")
+    source = source.replace(park_anchor, park_new, 1)
+
+    advance_anchor = '''              }
+              s_fifo_getoff = tgt; }
+            continue;
+        }
+        if ((w & 3) == 2) {                    /* CALL: offset | 2 */'''
+    advance_new = '''              }
+              /* GCM_PARK_SPU_HOLD_MS=<ms>: a patched park starts the next
+               * segment. The PC port found that a no-cost RSX can overtake
+               * the signalled SPU task round that fills it. */
+              if (s_fifo_getoff == s_last_park_off) {
+                  if (s_asc_park_spu_hold_ms < 0) {
+                      const char* value = getenv("GCM_PARK_SPU_HOLD_MS");
+                      s_asc_park_spu_hold_ms = value ? atol(value) : 0;
+                  }
+                  extern long spu_taskset_tasks_running(void) __attribute__((weak));
+                  const long active = spu_taskset_tasks_running
+                      ? spu_taskset_tasks_running() : 0;
+                  if (s_asc_park_spu_hold_ms > 0 && active > 0) {
+                      extern unsigned long long ps3_ms_now(void);
+                      const unsigned long long now = ps3_ms_now();
+                      if (!s_asc_park_spu_hold_since) {
+                          s_asc_park_spu_hold_since = now;
+                          s_asc_park_spu_held_for_task = 1;
+                      }
+                      if (now - s_asc_park_spu_hold_since <
+                              (unsigned long long)s_asc_park_spu_hold_ms) {
+                          __atomic_add_fetch(&s_asc_park_spu_hold_metrics[0], 1,
+                                             __ATOMIC_RELAXED);
+                          why = "spu-hold";
+                          break;
+                      }
+                      if (s_asc_park_spu_held_for_task)
+                          __atomic_add_fetch(&s_asc_park_spu_hold_metrics[2], 1,
+                                             __ATOMIC_RELAXED);
+                  } else if (s_asc_park_spu_held_for_task) {
+                      __atomic_add_fetch(&s_asc_park_spu_hold_metrics[1], 1,
+                                         __ATOMIC_RELAXED);
+                  }
+                  s_asc_park_spu_hold_since = 0;
+                  s_asc_park_spu_held_for_task = 0;
+                  s_last_park_off = ~0u;
+              }
+              s_fifo_getoff = tgt; }
+            continue;
+        }
+        if ((w & 3) == 2) {                    /* CALL: offset | 2 */'''
+    if source.count(advance_anchor) != 1:
+        raise SystemExit("M8.03 cannot locate the GCM JUMP target advance")
+    source = source.replace(advance_anchor, advance_new, 1)
+
+    watchdog_anchor = '''strcmp(why, "report-hold") == 0)) {'''
+    watchdog_new = '''strcmp(why, "report-hold") == 0 ||
+                  strcmp(why, "spu-hold") == 0)) {'''
+    if source.count(watchdog_anchor) != 1:
+        raise SystemExit("M8.03 cannot locate GCM expected-wait classification")
+    source = source.replace(watchdog_anchor, watchdog_new, 1)
+    path.write_text(source)
+
+
+def apply_ascension_spu_stack_metrics(upstream: pathlib.Path) -> None:
+    """Report whether Darwin SPU workers actually get the requested 256 MiB stack."""
+    path = upstream / "runtime/spu/spu_workload.c"
+    source = path.read_text(errors="replace")
+    if STACK_METRICS_MARKER in source:
+        required = ("spu_workload_reset_ascension_stack_metrics",
+                    "spu_workload_copy_ascension_stack_metrics",
+                    "pthread_attr_setstacksize(&attr, 256u << 20)",
+                    "s_asc_worker_stack_metrics[4]")
+        missing = [token for token in required if token not in source]
+        if missing:
+            raise SystemExit(f"partial M8.03 SPU stack metrics patch: {missing}")
+        return
+
+    thread_anchor = "#ifdef _WIN32\nstatic DWORD WINAPI spu_async_thread"
+    metrics = '''/* ASCENSION_M803_SPU_STACK_METRICS_V1
+ * GoW II's macOS port found deep lifted SPU call chains can exceed Darwin's
+ * 512 KiB default. The pinned runtime requests 256 MiB and silently retries
+ * the default if that reservation or thread creation fails; expose both paths. */
+static unsigned long long s_asc_worker_stack_metrics[5];
+void spu_workload_reset_ascension_stack_metrics(void)
+{
+    for (unsigned i = 0; i < 5; ++i)
+        __atomic_store_n(&s_asc_worker_stack_metrics[i], 0, __ATOMIC_RELAXED);
+}
+void spu_workload_copy_ascension_stack_metrics(unsigned long long out[5])
+{
+    if (!out) return;
+    for (unsigned i = 0; i < 5; ++i)
+        out[i] = __atomic_load_n(&s_asc_worker_stack_metrics[i], __ATOMIC_RELAXED);
+}
+
+'''
+    if source.count(thread_anchor) != 1:
+        raise SystemExit("M8.03 cannot locate the SPU async thread wrappers")
+    source = source.replace(thread_anchor, metrics + thread_anchor, 1)
+
+    stack_anchor = '''    int prc = EINVAL;
+    if (pthread_attr_setstacksize(&attr, 256u << 20) == 0)
+        prc = pthread_create(&th, &attr, spu_async_thread, j);
+    pthread_attr_destroy(&attr);'''
+    stack_new = '''    int prc = EINVAL;
+    __atomic_add_fetch(&s_asc_worker_stack_metrics[0], 1, __ATOMIC_RELAXED);
+    if (pthread_attr_setstacksize(&attr, 256u << 20) == 0) {
+        __atomic_add_fetch(&s_asc_worker_stack_metrics[1], 1, __ATOMIC_RELAXED);
+        prc = pthread_create(&th, &attr, spu_async_thread, j);
+        if (prc == 0)
+            __atomic_add_fetch(&s_asc_worker_stack_metrics[2], 1, __ATOMIC_RELAXED);
+    }
+    pthread_attr_destroy(&attr);'''
+    if source.count(stack_anchor) != 1:
+        raise SystemExit("M8.03 cannot locate the 256 MiB POSIX SPU worker stack request")
+    source = source.replace(stack_anchor, stack_new, 1)
+
+    fallback_anchor = '''    if (prc != 0)
+        prc = pthread_create(&th, NULL, spu_async_thread, j);'''
+    fallback_new = '''    if (prc != 0) {
+        __atomic_add_fetch(&s_asc_worker_stack_metrics[3], 1, __ATOMIC_RELAXED);
+        prc = pthread_create(&th, NULL, spu_async_thread, j);
+        if (prc == 0)
+            __atomic_add_fetch(&s_asc_worker_stack_metrics[4], 1, __ATOMIC_RELAXED);
+    }'''
+    if source.count(fallback_anchor) != 1:
+        raise SystemExit("M8.03 cannot locate the POSIX default-stack fallback")
+    path.write_text(source.replace(fallback_anchor, fallback_new, 1))
+
+
 def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__)
     ap.add_argument("--upstream", type=pathlib.Path, required=True)
@@ -1648,6 +1846,8 @@ def main() -> int:
     apply_lwcond_wait_signal_semantics(upstream)
     apply_ascension_gcm_park_watchdog_fix(upstream)
     apply_ascension_report_task_sync(upstream)
+    apply_ascension_spu_stack_metrics(upstream)
+    apply_ascension_gcm_park_spu_hold(upstream)
     apply_m801_taskset_runtime(upstream)
 
     required = {
@@ -1684,6 +1884,11 @@ def main() -> int:
                                        TASK_ACTIVITY_MARKER,
                                        "spu_taskset_tasks_running(void)",
                                        "spu_taskset_task_ended(void)",
+                                       STACK_METRICS_MARKER,
+                                       "pthread_attr_setstacksize(&attr, 256u << 20)",
+                                       "spu_workload_reset_ascension_stack_metrics",
+                                       "spu_workload_copy_ascension_stack_metrics",
+                                       "s_asc_worker_stack_metrics[4]",
                                        TASKSET_LOCK_MARKER, TASKSET_METRICS_MARKER,
                                        "ts_bits_clear(taskset_ea + 0x30 + done_task / 8, m)",
                                        "spu_workload_copy_ascension_taskset_metrics",
@@ -1702,14 +1907,20 @@ def main() -> int:
                                     'why = "sema-acquire"',
                                     'strcmp(why, "sema-acquire") == 0',
                                     REPORT_HOLD_MARKER, 'why = "report-hold"',
-                                    'strcmp(why, "report-hold") == 0'),
+                                    'strcmp(why, "report-hold") == 0',
+                                    PARK_SPU_HOLD_MARKER,
+                                    'getenv("GCM_PARK_SPU_HOLD_MS")',
+                                    "spu_taskset_tasks_running()",
+                                    'why = "spu-hold"',
+                                    'strcmp(why, "spu-hold") == 0',
+                                    "cellGcmCopyAscensionParkHoldMetrics"),
     }
     for filename, needles in required.items():
         text = (upstream / filename).read_text(errors="replace")
         missing = [needle for needle in needles if needle not in text]
         if missing:
             raise SystemExit(f"M7.83 PS3Recomp SPURS2 patch incomplete in {filename}: {missing}")
-    print("M8.01 applies lock-line-safe SPURS taskset updates and direct WWS task telemetry")
+    print("M8.03 applies the bounded GCM park/SPU handoff and exposes actual Darwin SPU worker-stack fallback")
     return 0
 
 

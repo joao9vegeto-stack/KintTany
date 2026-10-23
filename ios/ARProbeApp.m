@@ -20,6 +20,7 @@ extern uint32_t ar_m772_entry_state(void);
 extern uint32_t ar_m772_copy_aot_trace(uint64_t *out, uint32_t capacity);
 extern uint32_t ar_m772_copy_hle_trace(uint64_t *out, uint32_t capacity);
 extern uint32_t ar_m772_copy_unresolved_hle_trace(uint64_t *out, uint32_t capacity);
+extern void ar_m772_copy_hotloop_snapshot(uint64_t out[38]);
 extern void cellSpursResetAscensionMetrics(void);
 extern void cellSpursCopyAscensionMetrics(uint64_t out[8]);
 extern void cellSpursCopyAscensionPmDiagnostics(uint64_t out[32][7]);
@@ -27,6 +28,10 @@ extern void spu_workload_reset_ascension_job_metrics(void);
 extern void spu_workload_copy_ascension_job_metrics(uint64_t out[8]);
 extern void spu_workload_reset_ascension_taskset_metrics(void);
 extern void spu_workload_copy_ascension_taskset_metrics(uint64_t out[14]);
+extern void spu_workload_reset_ascension_stack_metrics(void);
+extern void spu_workload_copy_ascension_stack_metrics(unsigned long long out[5]);
+extern void cellGcmResetAscensionParkHoldMetrics(void);
+extern void cellGcmCopyAscensionParkHoldMetrics(unsigned long long out[3]);
 extern void ar_m756_last_stop_evidence(ar_m756_stop_evidence*);
 extern void ar_m756_last_origin_evidence(ar_m756_stop_evidence*);
 extern void ar_m751_last_fs_trace(ar_fs_trace *);
@@ -1546,6 +1551,10 @@ static BOOL ARGameManifestHasTitleUsrdir(NSDictionary *manifest){
    * signalled post-process tasks to finish the prior round before the guest
    * queues the next report. The hold is bounded by the RSX runtime to 50 ms. */
   setenv("GCM_REPORT_SPU_HOLD_MS","50",1);
+  /* The Ascension PC port also holds the patched FIFO park while the previous
+   * signalled SPU round finishes; GET_REPORT pacing alone does not cover this
+   * boundary between command segments. */
+  setenv("GCM_PARK_SPU_HOLD_MS","50",1);
   /* Recheck the guest WAIT_SIGNAL bit promptly if an SPU line commit misses
    * its host wakeup, rather than leaving a task asleep for the 1 s timeout. */
   setenv("SPU_WAITSIG_POLL_MS","2",1);
@@ -1573,6 +1582,7 @@ static BOOL ARGameManifestHasTitleUsrdir(NSDictionary *manifest){
     unsetenv("SPU_PIC_CAPTURE");
   spu_workload_reset_ascension_job_metrics();
   spu_workload_reset_ascension_taskset_metrics();
+  spu_workload_reset_ascension_stack_metrics();
   cellSpursResetAscensionMetrics();
   ar_m772_runtime_begin();
   [self arSetStatus:@"Preparando VM, PPU/SPU recompilados e acesso guest ao jogo…"];
@@ -1597,6 +1607,7 @@ static BOOL ARGameManifestHasTitleUsrdir(NSDictionary *manifest){
     int hostRC=layerAttached?(backendRC==0?0:-75):-74;
     if(hostRC==0){
       ARRSXResetMetrics();
+      cellGcmResetAscensionParkHoldMetrics();
       __atomic_store_n(&ARNativeRSXPumpActive,1u,__ATOMIC_RELEASE);
       NSThread *pump=[[NSThread alloc] initWithTarget:self
           selector:@selector(runNativeRSXPump) object:nil];
@@ -1952,11 +1963,16 @@ static BOOL ARGameManifestHasTitleUsrdir(NSDictionary *manifest){
  * converts file indexing or synthetic Metal tests into game progress. */
 - (NSString *)arUnifiedPpuText {
   uint64_t live[40]={0}; ar_m772_runtime_attest(live);
+  uint64_t hotloopSnapshot[38]={0}; ar_m772_copy_hotloop_snapshot(hotloopSnapshot);
   ar_fs_trace liveFs={0}; ar_fs_snapshot(&liveFs);
   uint64_t spursMetrics[8]={0}; cellSpursCopyAscensionMetrics(spursMetrics);
   uint64_t spuJobs[8]={0}; spu_workload_copy_ascension_job_metrics(spuJobs);
   uint64_t tasksetMetrics[14]={0};
   spu_workload_copy_ascension_taskset_metrics(tasksetMetrics);
+  unsigned long long stackMetrics[5]={0};
+  spu_workload_copy_ascension_stack_metrics(stackMetrics);
+  unsigned long long gcmParkHoldMetrics[3]={0};
+  cellGcmCopyAscensionParkHoldMetrics(gcmParkHoldMetrics);
   uint64_t pmDiagnostics[32][7]={0}; cellSpursCopyAscensionPmDiagnostics(pmDiagnostics);
   NSString *spuCaptureName=self.latestSpuCaptureURL.lastPathComponent ?: @"não configurada";
   uint32_t state=ar_m772_entry_state();
@@ -1988,9 +2004,23 @@ static BOOL ARGameManifestHasTitleUsrdir(NSDictionary *manifest){
     [missTraceText appendFormat:@"%@NID 0x%08X <- LR 0x%08X",i?@"\n":@"",
       (uint32_t)(missTrace[i]>>32),(uint32_t)missTrace[i]];
   if(!missTraceText.length)[missTraceText appendString:@"(nenhum HLE sem serviço registrado)"];
-  NSString *hotloopAudit=(live[31]==0x003C4FA4u)?
-    @"0x003C4FA4 é o marcador de backedge da busca em func_003C4F98, não o PC corrente.":
-    @"PC do hook de loop observado; é um marcador e pode estar antigo.";
+  NSString *hotloopAudit=(hotloopSnapshot[0]==0x00419D1Cu)?
+    @"amostra do backedge de func_00419AC8 (loop de usleep(30)); não é o PC atual neste instante.":
+    (hotloopSnapshot[0]==0x003C4FA4u)?
+      @"amostra do backedge da busca em func_003C4F98; não é o PC atual neste instante.":
+      @"última amostra de backedge instrumentado; não é o PC atual neste instante.";
+  NSMutableString *hotloopContextText=[NSMutableString string];
+  if(hotloopSnapshot[36]){
+    [hotloopContextText appendFormat:@"backedge=0x%08llX · hits do wait 0x00419D1C=%llu · CR=0x%08llX · LR=0x%016llX · CTR=0x%016llX",
+       (unsigned long long)hotloopSnapshot[0],(unsigned long long)hotloopSnapshot[37],
+       (unsigned long long)hotloopSnapshot[33],
+       (unsigned long long)hotloopSnapshot[34],(unsigned long long)hotloopSnapshot[35]];
+    for(NSUInteger r=0;r<32;r++)
+      [hotloopContextText appendFormat:@"%@r%lu=0x%016llX",(r%4)==0?@"\n":@"  ",
+         (unsigned long)r,(unsigned long long)hotloopSnapshot[1+r]];
+  } else {
+    [hotloopContextText appendString:@"(nenhum backedge instrumentado amostrado ainda)"];
+  }
   NSString *lastSpursWid=spursMetrics[7]==UINT64_MAX?@"—":
     [NSString stringWithFormat:@"%llu",(unsigned long long)spursMetrics[7]];
   NSMutableString *pmDiagnosticsText=[NSMutableString string];
@@ -2062,6 +2092,9 @@ static BOOL ARGameManifestHasTitleUsrdir(NSDictionary *manifest){
   NSString *rsxDrains=run?[run[@"rsx_fifo_drains"] description]:[NSString stringWithFormat:@"%llu",(unsigned long long)ARRSXLoad(&ARNativeRSXFIFODrains)];
   NSString *rsxFrames=run?[run[@"rsx_guest_frames"] description]:[NSString stringWithFormat:@"%llu",(unsigned long long)ARRSXLoad(&ARNativeRSXPresentedFrames)];
   NSString *rsxDraws=run?[run[@"rsx_guest_draws"] description]:[NSString stringWithFormat:@"%llu",(unsigned long long)ARRSXLoad(&ARNativeRSXLastGuestDraws)];
+  NSString *gcmParkHoldText=[NSString stringWithFormat:
+      @"pausas=%llu · retomadas após fim da tarefa=%llu · timeouts 50 ms=%llu",
+      gcmParkHoldMetrics[0],gcmParkHoldMetrics[1],gcmParkHoldMetrics[2]];
   BOOL hasGuestFlip=(run?[run[@"rsx_guest_frames"] unsignedLongLongValue]:ARRSXLoad(&ARNativeRSXPresentedFrames))>0;
   return [NSString stringWithFormat:
     @"ASCENSIONRECOMP · LAUNCHER / EXECUÇÃO NATIVA\n"
@@ -2079,6 +2112,7 @@ static BOOL ARGameManifestHasTitleUsrdir(NSDictionary *manifest){
      "SPURS2 · instâncias=%llu · workloads=%llu (%llu IDs 16–31) · PMs encontrados/faltantes=%llu/%llu · admissões do WWS PM=%llu (%llu IDs 16–31) · último wid=%@\n"
      "API job-chain genérica · solicitações=%llu · com lift=%llu · sem lift=%llu · retornos do runner=%llu · ativos=%llu · último FNV=0x%016llX · bytes=%llu · EA=0x%08llX\n"
      "WWS taskset direto · tasksets registrados=%llu · saídas=%llu · candidatos=%llu · ELF válidos=%llu · tentativas de requeue=%llu · aceitos=%llu · rejeitados=%llu · runners iniciados=%llu · ELF carregado/reutilizado=%llu · falhas de carga=%llu · retornos=%llu · ativos agora=%llu · último taskset=0x%08llX task=%llu\n"
+     "Pilha de worker SPU · pedido 256 MiB: tentativas=%llu · atributo aceito=%llu · threads com 256 MiB=%llu · fallback para pilha padrão=%llu · threads em fallback=%llu\n"
      "Captura de módulos ausentes=Documents/%@ · fragmentos PIC dinâmicos=Documents/%@/spu-pic-fragments.txt\n"
      "Fallback SPU: AOT primeiro; interpretação habilitada para branch sem lift · captura PIC habilitada\n"
      "PMs examinados (um registro por wid):\n%@\n"
@@ -2090,11 +2124,13 @@ static BOOL ARGameManifestHasTitleUsrdir(NSDictionary *manifest){
      "HLE sem serviço registrado=%@ · último NID=0x%08llX · LR=0x%08llX\n"
      "Últimos HLE sem serviço:\n%@\n"
      "LV2 syscalls=%@ · último número=%@ · LR=0x%08llX\n"
-     "Loop observado=%@ · marcador hotloop=0x%08llX (não é PC atual) · %@ · r3/r4/r5/r8/r9=%08llX/%08llX/%08llX/%08llX/%08llX\n"
+     "Loop observado=%@ · último backedge amostrado=0x%08llX (não é PC atual) · %@ · r3/r4/r5/r8/r9=%08llX/%08llX/%08llX/%08llX/%08llX\n"
+     "Contexto guest no último backedge (snapshot no hook):\n%@\n"
      "cellFsOpen guest=%@ · opens OK=%@\n"
      "cellFsRead guest=%@ · bytes lidos pelo guest=%@\n"
      "Último caminho guest=%@\n"
      "RSX backend=%@ · GCM vblank=%@ · FIFO drains=%@\n"
+     "GCM park aguardando SPU: %@\n"
      "Metal drawable=%.2gx · cadência VBlank guest=%u Hz\n"
      "Flips guest apresentados=%@ · draws guest no último frame=%@\n"
      "PSARC específico= consulte Último caminho guest; nenhum histórico adicional é coletado.\n"
@@ -2134,6 +2170,7 @@ static BOOL ARGameManifestHasTitleUsrdir(NSDictionary *manifest){
      (unsigned long long)tasksetMetrics[8],(unsigned long long)tasksetMetrics[9],
      (unsigned long long)tasksetMetrics[10],(unsigned long long)tasksetMetrics[11],
      (unsigned long long)tasksetMetrics[12],(unsigned long long)tasksetMetrics[13],
+     stackMetrics[0],stackMetrics[1],stackMetrics[2],stackMetrics[3],stackMetrics[4],
      spuCaptureName,spuCaptureName,pmDiagnosticsText,aotTraceText,
      (unsigned long long)live[14],(unsigned long long)live[15],
      (unsigned long long)live[16],(unsigned long long)live[17],
@@ -2144,11 +2181,12 @@ static BOOL ARGameManifestHasTitleUsrdir(NSDictionary *manifest){
      unresolvedHLE,(unsigned long long)live[38],(unsigned long long)live[39],missTraceText,
      run?run[@"syscall_calls"]:[NSString stringWithFormat:@"%llu",(unsigned long long)live[29]],
      run?run[@"last_syscall"]:[NSString stringWithFormat:@"%llu",(unsigned long long)live[27]],
-     (unsigned long long)live[28],hotloopCount,(unsigned long long)live[31],hotloopAudit,
-     (unsigned long long)live[32],(unsigned long long)live[33],
-     (unsigned long long)live[34],(unsigned long long)live[35],
-     (unsigned long long)live[36],fsOpen,fsOK,fsRead,fsBytes,
-     guestFsPath,rsxBackend,rsxVblanks,rsxDrains,(double)self.metalView.outputScale,
+     (unsigned long long)live[28],hotloopCount,(unsigned long long)hotloopSnapshot[0],hotloopAudit,
+     (unsigned long long)hotloopSnapshot[4],(unsigned long long)hotloopSnapshot[5],
+     (unsigned long long)hotloopSnapshot[6],(unsigned long long)hotloopSnapshot[9],
+     (unsigned long long)hotloopSnapshot[10],hotloopContextText,
+     fsOpen,fsOK,fsRead,fsBytes,
+     guestFsPath,rsxBackend,rsxVblanks,rsxDrains,gcmParkHoldText,(double)self.metalView.outputScale,
      reportVBlankHz,rsxFrames,rsxDraws,
      self.hasGameInstallation?@"SIM (arquivos indexados no host; isso não prova cellFs)":@"NÃO" ,
      (run?[run[@"fs_bytes"] unsignedLongLongValue]:live[12])>0?

@@ -414,6 +414,28 @@ def main():
     if ("ASCENSION_IOS_CELL_GAME_PATCH_CHECK" not in game_source.read_text() or
             "s32 cellGamePatchCheck(void* size, void* reserved);" not in game_header.read_text()):
         raise SystemExit("M7.82 disc-boot cellGamePatchCheck HLE patch is missing")
+    gcm_runtime=(upstream/"libs/video/cellGcmSys.c").read_text(errors="replace")
+    required_gcm_markers=("ASCENSION_M803_GCM_PARK_SPU_HOLD_V1",
+        'getenv("GCM_PARK_SPU_HOLD_MS")', "spu_taskset_tasks_running()",
+        'why = "spu-hold"', 'strcmp(why, "spu-hold") == 0',
+        "cellGcmResetAscensionParkHoldMetrics",
+        "cellGcmCopyAscensionParkHoldMetrics")
+    missing_gcm=[marker for marker in required_gcm_markers if marker not in gcm_runtime]
+    launcher_source=(repo/"ios/ARProbeApp.m").read_text(errors="replace")
+    if (missing_gcm or 'setenv("GCM_PARK_SPU_HOLD_MS","50",1)' not in launcher_source or
+            "cellGcmCopyAscensionParkHoldMetrics(gcmParkHoldMetrics);" not in launcher_source):
+        raise SystemExit(f"M8.03 GCM park/SPU handoff or iOS telemetry missing: {missing_gcm}")
+    stack_runtime=(upstream/"runtime/spu/spu_workload.c").read_text(errors="replace")
+    required_stack_markers=("ASCENSION_M803_SPU_STACK_METRICS_V1",
+        "pthread_attr_setstacksize(&attr, 256u << 20)",
+        "spu_workload_reset_ascension_stack_metrics",
+        "spu_workload_copy_ascension_stack_metrics",
+        "s_asc_worker_stack_metrics[4]")
+    missing_stack=[marker for marker in required_stack_markers if marker not in stack_runtime]
+    if (missing_stack or
+            "spu_workload_reset_ascension_stack_metrics();" not in launcher_source or
+            "spu_workload_copy_ascension_stack_metrics(stackMetrics);" not in launcher_source):
+        raise SystemExit(f"M8.03 Darwin SPU worker-stack outcome telemetry missing: {missing_stack}")
     spurs_source=(upstream/"libs/spurs/cellSpurs.c").read_text(errors="replace")
     spurs_header=(upstream/"libs/spurs/cellSpurs.h").read_text(errors="replace")
     required_spurs_markers=("ASCENSION_M772_SPURS2_TASK_API_V2",
@@ -726,6 +748,7 @@ def main():
                 "_ar_m772_dispatch_native", "_ar_m772_note_function",
                 "_ar_m772_note_hle", "_ar_m772_note_syscall",
                 "_ar_m772_note_unresolved_hle", "_ar_m772_note_hotloop",
+                "_ar_m772_copy_hotloop_snapshot",
                 "_ar_m772_copy_aot_trace", "_ar_m772_copy_hle_trace",
                 "_ar_m772_copy_unresolved_hle_trace",
                 "_ar_m772_run_entry", "_ar_m772_unbind_guest_memory",
@@ -794,7 +817,7 @@ def main():
         "ppu_translation_units_compiled": len(ppu),
         "ppu_function_table_entries": 29849,
         "native_aot_function_entry_hooks": 29849,
-        "native_observed_hotloop_hooks": 1,
+        "native_observed_hotloop_hooks": 2,
         "spu_translation_units_compiled": len(spu),
         "spu_workload_registry_units_compiled": len(npua_spu_sources) + len(c8_spu_sources) + 1,
         "spu_job_module_units_compiled": len(jobmod_sources),

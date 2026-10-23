@@ -21,6 +21,37 @@ PPU_ENTRY = re.compile(
 )
 
 
+def instrument_known_waitloop(source):
+    """Sample the exact usleep(30) PPU wait loop identified by M7.96."""
+    wait_entry = "void func_00419AC8(ppu_context* ctx) {"
+    wait_matches = []
+    for path in sorted((source / "ppu").glob("ppu_recomp_*.cpp")):
+        text = path.read_text()
+        if wait_entry in text:
+            wait_matches.append((path, text))
+    if len(wait_matches) != 1:
+        raise SystemExit(
+            f"M8.03 expected one AOT unit for func_00419AC8, found {len(wait_matches)}"
+        )
+    wait_unit, wait_text = wait_matches[0]
+    wait_start = wait_text.find(wait_entry)
+    wait_end = wait_text.find("\nvoid func_", wait_start + 1)
+    if wait_start < 0 or wait_end < 0:
+        raise SystemExit("M8.03 cannot isolate func_00419AC8")
+    wait_body = wait_text[wait_start:wait_end]
+    wait_anchor = "loc_00419D1C:\n"
+    hook = "        ar_m772_note_hotloop(0x00419D1Cu, ctx);\n"
+    if hook in wait_body:
+        if wait_body.count(hook) != 1:
+            raise SystemExit("M8.03 duplicated the func_00419AC8 wait-loop probe")
+        return 1
+    if wait_body.count(wait_anchor) != 1:
+        raise SystemExit("M8.03 known usleep(30) wait-loop backedge changed")
+    wait_body = wait_body.replace(wait_anchor, wait_anchor + hook, 1)
+    wait_unit.write_text(wait_text[:wait_start] + wait_body + wait_text[wait_end:])
+    return 1
+
+
 def instrument_aot_entries(source):
     """Add a cheap, truthful entry hook to every complete lifted PPU function."""
     header = source / "ppu" / "ppu_recomp.h"
@@ -70,6 +101,11 @@ def instrument_aot_entries(source):
         1,
     )
     loop_unit.write_text(loop_text[:start] + loop_body + loop_text[end:])
+
+    # M8.03: sample the known PPU wait loop from M7.96 at its exact backedge.
+    # The last HLE/LV2 event showed sys_timer_usleep(30), but earlier reports
+    # could not tell whether this loop still dominated execution afterward.
+    instrument_known_waitloop(source)
     return count
 
 
@@ -135,7 +171,7 @@ def main():
         "ppu_translation_units_including_table": len(ppu),
         "ppu_function_table_entries": 29849,
         "native_aot_function_entry_hooks": instrumented,
-        "native_observed_hotloop_hooks": 1,
+        "native_observed_hotloop_hooks": 2,
         "frontier_0052a740_present": True,
         "frontier_callee_0052e3f4_present": True,
         "spu_translation_units": len(spu),

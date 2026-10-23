@@ -586,7 +586,7 @@ assert a['ios_vm_mapping_patch']=='mach-anywhere-4g-relative-guest-ea-v1'
 assert a['ppu_translation_units_compiled']==651
 assert a['ppu_function_table_entries']==29849
 assert a['native_aot_function_entry_hooks']==29849
-assert a['native_observed_hotloop_hooks']==1
+assert a['native_observed_hotloop_hooks']==2
 assert a['spu_translation_units_compiled']==4
 assert a['archive']=='libAscensionGOWA-M772-ios-arm64.a'
 assert a['hle_registration']=='strong-generated-nid-table'
@@ -604,6 +604,7 @@ assert a['archive_sha256']==digest
 text=symbols.read_text(errors='replace')
 for name in ('func_00010410','_ar_m772_run_entry','_ar_m772_note_function',
              '_ar_m772_note_hotloop','_ar_m772_note_unresolved_hle',
+             '_ar_m772_copy_hotloop_snapshot',
              '_ar_m772_copy_aot_trace','_ar_m772_copy_hle_trace',
              '_ar_m772_copy_unresolved_hle_trace',
              '_ar_m772_runtime_attest','_ppu_recomp_register',
@@ -692,12 +693,15 @@ required=("func_00010410", "func_0052A740", "func_0052E3F4", "_ar_m772_runtime_a
           "_ar_m772_runtime_init", "_ar_m772_dispatch_native",
           "_ar_m772_note_function", "_ar_m772_note_hle", "_ar_m772_note_syscall",
           "_ar_m772_note_unresolved_hle", "_ar_m772_note_hotloop",
+          "_ar_m772_copy_hotloop_snapshot",
           "_ar_m772_copy_aot_trace", "_ar_m772_copy_hle_trace",
           "_ar_m772_copy_unresolved_hle_trace",
           "_ar_m772_run_entry", "_ar_m772_entry_state",
           "_cellGcmTickVBlank", "_cellGcmTickFlip", "_cellGcm_rsx_process_fifo",
           "_cellGcm_take_flip_pending_synced", "_rsx_metal_backend_init",
           "_rsx_metal_backend_present", "_rsx_metal_backend_guest_draws",
+          "_cellGcmResetAscensionParkHoldMetrics", "_cellGcmCopyAscensionParkHoldMetrics",
+          "_spu_workload_reset_ascension_stack_metrics", "_spu_workload_copy_ascension_stack_metrics",
           "_ppu_hle_register_all",
           "_ppu_guest_call", "_g_ps3_guest_caller",
           "_cellGamePatchCheck",
@@ -740,7 +744,7 @@ for symbol in ("_gowa_spu_register_c8_wws_pm",
                "_wws_pm_c8d774_spu_recomp_register"):
     if not any(symbol in name for name in defined):
         raise SystemExit("M7.90 exact NPUA WWS job lift/C8 PM or runtime routing missing from final Mach-O: "+symbol)
-print("M8.01 final ARM64 Mach-O contains lock-line-safe SPURS taskset updates, direct WWS telemetry, 31 NPUA WWS lifts, PIC registration, and the SPU interpreter fallback")
+print("M8.03 final ARM64 Mach-O contains GCM park/SPU handoff and worker-stack outcome telemetry, lock-line-safe tasksets, WWS lifts, PIC registration, and SPU interpreter fallback")
 PYM772LINKED
 # Every M7.62 native function must appear in the FINAL Mach-O, not merely object.
 python3 - <<'PY'

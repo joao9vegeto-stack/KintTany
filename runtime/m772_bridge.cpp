@@ -59,6 +59,10 @@ static uint32_t m772_last_syscall_lr;
 static uint64_t m772_hotloop_count;
 static uint32_t m772_last_hotloop_pc;
 static uint64_t m772_last_hotloop_regs[5]; /* r3, r4, r5, r8, r9 */
+static uint64_t m772_hotloop_snapshot_seq;
+static uint64_t m772_hotloop_snapshot[36]; /* PC, r0-r31, CR, LR, CTR */
+static uint32_t m772_hotloop_snapshot_valid;
+static uint64_t m772_waitloop_sample_count;
 static uint64_t m772_unresolved_hle_count;
 static uint32_t m772_last_unresolved_hle_nid;
 static uint32_t m772_last_unresolved_hle_lr;
@@ -140,6 +144,12 @@ extern "C" void ar_m772_runtime_begin(void)
     __atomic_store_n(&m772_last_hotloop_pc, 0u, __ATOMIC_RELAXED);
     for (unsigned i = 0; i < 5; ++i)
         __atomic_store_n(&m772_last_hotloop_regs[i], UINT64_C(0), __ATOMIC_RELAXED);
+    __atomic_store_n(&m772_hotloop_snapshot_seq, UINT64_C(1), __ATOMIC_RELAXED);
+    for (unsigned i = 0; i < 36; ++i)
+        __atomic_store_n(&m772_hotloop_snapshot[i], UINT64_C(0), __ATOMIC_RELAXED);
+    __atomic_store_n(&m772_hotloop_snapshot_valid, 0u, __ATOMIC_RELAXED);
+    __atomic_store_n(&m772_hotloop_snapshot_seq, UINT64_C(2), __ATOMIC_RELEASE);
+    __atomic_store_n(&m772_waitloop_sample_count, UINT64_C(0), __ATOMIC_RELAXED);
     __atomic_store_n(&m772_unresolved_hle_count, UINT64_C(0), __ATOMIC_RELAXED);
     __atomic_store_n(&m772_last_unresolved_hle_nid, 0u, __ATOMIC_RELAXED);
     __atomic_store_n(&m772_last_unresolved_hle_lr, 0u, __ATOMIC_RELAXED);
@@ -361,9 +371,44 @@ extern "C" void ar_m772_note_hotloop(uint32_t guest_pc, ppu_context* ctx)
     if (!ctx) return;
     __atomic_add_fetch(&m772_hotloop_count, UINT64_C(1), __ATOMIC_RELAXED);
     __atomic_store_n(&m772_last_hotloop_pc, guest_pc, __ATOMIC_RELAXED);
+    if (guest_pc == 0x00419D1Cu)
+        __atomic_add_fetch(&m772_waitloop_sample_count, UINT64_C(1), __ATOMIC_RELAXED);
     const unsigned indices[5] = {3, 4, 5, 8, 9};
     for (unsigned i = 0; i < 5; ++i)
         __atomic_store_n(&m772_last_hotloop_regs[i], ctx->gpr[indices[i]], __ATOMIC_RELAXED);
+    __atomic_add_fetch(&m772_hotloop_snapshot_seq, UINT64_C(1), __ATOMIC_ACQ_REL);
+    __atomic_store_n(&m772_hotloop_snapshot[0], guest_pc, __ATOMIC_RELAXED);
+    for (unsigned i = 0; i < 32; ++i)
+        __atomic_store_n(&m772_hotloop_snapshot[1 + i], ctx->gpr[i], __ATOMIC_RELAXED);
+    __atomic_store_n(&m772_hotloop_snapshot[33], ctx->cr, __ATOMIC_RELAXED);
+    __atomic_store_n(&m772_hotloop_snapshot[34], ctx->lr, __ATOMIC_RELAXED);
+    __atomic_store_n(&m772_hotloop_snapshot[35], ctx->ctr, __ATOMIC_RELAXED);
+    __atomic_store_n(&m772_hotloop_snapshot_valid, 1u, __ATOMIC_RELAXED);
+    __atomic_add_fetch(&m772_hotloop_snapshot_seq, UINT64_C(1), __ATOMIC_RELEASE);
+}
+
+extern "C" void ar_m772_copy_hotloop_snapshot(uint64_t out[38])
+{
+    if (!out) return;
+    for (unsigned attempt = 0; attempt < 8; ++attempt) {
+        const uint64_t before = __atomic_load_n(&m772_hotloop_snapshot_seq,
+                                                 __ATOMIC_ACQUIRE);
+        if (before & 1u) continue;
+        for (unsigned i = 0; i < 36; ++i)
+            out[i] = __atomic_load_n(&m772_hotloop_snapshot[i], __ATOMIC_RELAXED);
+        const uint32_t valid = __atomic_load_n(&m772_hotloop_snapshot_valid,
+                                                __ATOMIC_RELAXED);
+        const uint64_t after = __atomic_load_n(&m772_hotloop_snapshot_seq,
+                                                __ATOMIC_ACQUIRE);
+        if (before == after) {
+            out[36] = valid;
+            out[37] = __atomic_load_n(&m772_waitloop_sample_count, __ATOMIC_RELAXED);
+            return;
+        }
+    }
+    for (unsigned i = 0; i < 36; ++i) out[i] = 0;
+    out[36] = 0;
+    out[37] = __atomic_load_n(&m772_waitloop_sample_count, __ATOMIC_RELAXED);
 }
 
 extern "C" int ar_m772_run_entry(ppu_context* ctx,uint32_t pc)
