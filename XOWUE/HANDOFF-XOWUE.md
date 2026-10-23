@@ -15,6 +15,7 @@
 - SHA-256: `b5afa6ff191194e5cc0a29302878b154baccfa7073868108c5e7416d08b3aa9a`.
 - XEX2, Title ID `41560816`, Media ID `09FF5403`, base `0x82000000`, entry point `0x82C3CAA8`, imagem carregada de 23.986.176 bytes, 12 seções e 261 imports resolvidos.
 - Código gerado pelo XenonRecomp: 344 unidades `ppc_recomp.*.cpp` + `ppc_func_mapping.cpp` = 345 fontes C++ geradas. As fontes estão compactadas em `dist/XOWUE-AOT-source.partNN` (partes de até 4 MiB); o SHA-256 do archive montado fica em `dist/SHA256SUMS`.
+- O log `generated/config/XOWUE-recompile.log` é versionado junto ao projeto porque o gerador de adapters usa as 161 instruções que o XenonRecomp não decodificou para manter falhas explícitas.
 - As 345 unidades passaram por `clang++-18 -fsyntax-only`; o engine com as 345 unidades AOT, os adapters e o mapa também compilou e ligou no host com Clang 18.
 - O patch do XenonRecomp está fixado ao upstream `ddd128bcca99fe8bfbb99bea583c972351fa6ace` e adiciona as instruções necessárias para esta entrada, além de retirar o alias não portável em Clang não-Apple.
 

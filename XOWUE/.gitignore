@@ -3,6 +3,7 @@
 !/upload/README.md
 /generated/ppc/
 /generated/config/*-recompile.log
+!/generated/config/XOWUE-recompile.log
 /generated/config/XOWUE-cpp-syntax-*.log
 /generated/config/XOWUE-cpp-syntax-summary.txt
 /vendor/
