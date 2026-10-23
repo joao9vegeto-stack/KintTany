@@ -39,6 +39,8 @@
 - O workflow GitHub Actions `XOWUE iOS IPA` concluiu com sucesso no run #4 (ID `39888098218`), validando o commit de código `c784c75c3c770ffcf3cebca3dd21ed926f1cc779`. O runner macOS compilou o engine e o app para arm64, empacotou o IPA e passou pelas verificações do workflow. [Run do Actions](https://github.com/joao9vegeto-stack/KintTany/actions/runs/39888098218).
 - O run #6 (ID `39890657352`, commit `9f32c367b378721cc1887a2136c5801ed26e1ac7`) recompilou o engine arm64 com sucesso, mas o XcodeGen recusou o spec por falta de `info.path`; o app não foi compilado nem houve artefato IPA. [Run com a falha de configuração](https://github.com/joao9vegeto-stack/KintTany/actions/runs/39890657352).
 - O run #7 (ID `39891228913`, commit `257c62275a70e577690137ebe8e6f45c82924f06`) passou pelo XcodeGen e compilou o app SwiftUI. O empacotamento parou porque o workflow não criou o diretório `Payload` no caminho temporário de validação; não houve IPA. A correção cria esse diretório e ajusta a versão para que o run #8 produza **Build 1**. [Run com falha de empacotamento](https://github.com/joao9vegeto-stack/KintTany/actions/runs/39891228913).
+- O run #8 (ID `39891819489`, commit `f4d4ea11f1c211a5628608a6ce1f641731b0063b`) concluiu com sucesso: engine arm64, geração XcodeGen, compilação Swift, Info.plist, arquitetura arm64, Assets.car, tipo `.xex` e validação do IPA. Artifact `XOWUE-Build-1`, ID `12474638929`. [Run do Build 1](https://github.com/joao9vegeto-stack/KintTany/actions/runs/39891819489).
+- IPA: `XOWUE-Build-1.ipa`, 20.356.072 bytes, SHA-256 `d08e7cf391c9712ea80bfe63ad01b82d883af6a10b4d0ae94b53950225a94254`. ZIP do artifact: 20.137.008 bytes, SHA-256 `75312c6ad3aa3ffd2bce5c77e5aec982dbb7365de6e4295740200b82de1ad36d`.
 - IPA entregue: `XOWUE-unsigned.ipa`, 20.024.250 bytes, SHA-256 `ed2d567b87a278317c2d2c61097ec6b1e2502b6ca22e9864620aaa17fe2e791d`. O ZIP do artifact da CI tem SHA-256 `b897a5ce17bc60dd81e4031debfa5a71fd5c46c7515aaba5e763db914bd2e0f9`.
 - A inspeção local confirmou um ZIP IPA íntegro, executável Mach-O de 64 bits arm64, bundle `com.joaopedro.xowue` e versão mínima iOS 17.0. O pacote não contém assinatura Apple.
 
@@ -46,7 +48,7 @@
 
 O caminho recomendado é **Arquivos → No Meu iPhone → XOWUE → Jogos**. A configuração inclui `UIFileSharingEnabled`, `LSSupportsOpeningDocumentsInPlace` e o tipo `com.xowue.xex`. A interface mostra o estado observado do runtime, o resultado do boot e a versão da IPA em uso.
 
-O workflow define `CFBundleVersion` como **Build 1, Build 2, Build 3…** e nomeia o arquivo `XOWUE-Build-N.ipa`. O run #6 compilou o engine, mas não gerou IPA porque o spec do XcodeGen estava sem o campo obrigatório `info.path`. A correção restaura esse caminho; o run #7 confirmou a compilação Swift. O run #8 fica reservado para o primeiro IPA, **Build 1**.
+O workflow define `CFBundleVersion` como **Build 1, Build 2, Build 3…** e nomeia o arquivo `XOWUE-Build-N.ipa`. O run #6 compilou o engine, mas não gerou IPA porque o spec do XcodeGen estava sem o campo obrigatório `info.path`. A correção restaura esse caminho; o run #7 confirmou a compilação Swift. O run #8 gerou o primeiro IPA numerado, **Build 1**, com `CFBundleVersion=1`.
 
 ### Limites atuais
 
@@ -54,7 +56,7 @@ Este IPA é um **runner de desenvolvimento**, não uma versão jogável. O boot 
 
 O pacote de assets WGame completo não está neste workspace. O repositório não recebe o `default.xex`, assets, DLC, title updates ou arquivos extraídos desses dados. O arquivo AOT contém código derivado do executável fornecido e foi incluído no branch para a CI compilar o engine; não é incluído o executável original.
 
-O IPA empacotado pela CI é unsigned. Para instalar em iPhone, configure assinatura Apple compatível (identificador `com.joaopedro.xowue`, certificado e provisioning profile) ou assine localmente com o método de sideload escolhido.
+O IPA `XOWUE-Build-1.ipa` empacotado pela CI é unsigned e não contém perfil Apple. Para instalar em iPhone, configure assinatura Apple compatível (identificador `com.joaopedro.xowue`, certificado e provisioning profile) ou assine localmente com o método de sideload escolhido.
 
 ## Build local (macOS/Linux com Clang 18)
 
@@ -104,7 +106,7 @@ O workflow `.github/workflows/xowue-ios.yml` roda em push na branch `XOWUE` quan
 
 ## Próximas etapas técnicas
 
-1. Instalar o próximo IPA numerado e testar no iPhone: pasta nativa em Arquivos, detecção após retorno ao app, seletor de pasta, abertura de `.xex` pelo iOS e número de Build visível.
+1. Instalar e testar `XOWUE-Build-1.ipa` no iPhone: pasta nativa em Arquivos, detecção após retorno ao app, seletor de pasta, abertura de `.xex` pelo iOS, ícone e número de Build visível.
 2. Instrumentar o boot real no aparelho e identificar o primeiro import que bloqueia além do smoke test, mantendo falhas explícitas para APIs desconhecidas.
 3. Integrar a leitura da estrutura WGame e implementar os imports Xbox kernel/XAM observados, memória, threads e handles compatíveis.
 4. Implementar MMIO e renderer Xenos/D3D para Metal; depois áudio/XMA e controles.
