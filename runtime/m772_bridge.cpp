@@ -1,10 +1,11 @@
-/* M7.85: install the NPUA80918 PS3Recomp lifts into the runtime dispatch tables. */
+/* M7.85 lifts and M7.96 guest callback dispatcher for NPUA80918. */
 #include <pthread.h>
 #include <stdint.h>
 #include <stddef.h>
 #include <string>
 
 #include "ppu/ppu_recomp.h"
+#include "ps3emu/guest_call.h"
 #include "spu_workload.h"
 
 extern "C" void ppu_recomp_register(void);
@@ -15,6 +16,11 @@ extern "C" void ppu_fs_ios_reset_stats(void);
 extern "C" void ppu_fs_ios_stats(uint64_t out[4]);
 extern "C" void lv2_init_syscalls(void);
 extern "C" void ppu_install_thread_trampoline(void);
+extern "C" uint64_t ppu_guest_call(uint32_t opd_addr,
+                                    uint64_t a0, uint64_t a1,
+                                    uint64_t a2, uint64_t a3,
+                                    uint64_t a4, uint64_t a5,
+                                    uint64_t a6, uint64_t a7);
 extern "C" uint64_t ppu_thread_register_main(void);
 extern "C" void ppu_resv_register(ppu_context*);
 extern "C" PPU_THREAD_LOCAL ppu_context* g_active_ctx;
@@ -71,6 +77,21 @@ static uint32_t m772_sorted_table = 1;
 static uint32_t m772_vfs_root_set;
 static std::string m772_vfs_root;
 static uint32_t m772_has_ppu(uint32_t pc);
+
+/* PS3Recomp's HLE modules retain guest callback OPDs, not host function
+ * pointers. Route those callbacks through the upstream OPD resolver and
+ * scratch-context dispatcher. The desktop harness installs the same hook;
+ * without it, cellGcmSys silently drops VBlank/flip callbacks even while the
+ * iOS host is ticking VBlank and draining the RSX FIFO. */
+static void m772_guest_callback(uint32_t opd_addr,
+                                uint64_t a0, uint64_t a1,
+                                uint64_t a2, uint64_t a3,
+                                uint64_t a4, uint64_t a5,
+                                uint64_t a6, uint64_t a7)
+{
+    (void)ppu_guest_call(opd_addr, a0, a1, a2, a3,
+                         a4, a5, a6, a7);
+}
 
 /* Build-time catalogue self-check: four embedded images plus the exact C8 WWS
  * PM observed in M7.88. The NPUA WWS module remains image 5; this
@@ -132,6 +153,11 @@ extern "C" void ar_m772_runtime_begin(void)
 
 static void m772_register_all(void)
 {
+    /* ASCENSION_M796_GUEST_CALLBACK_BRIDGE_V1: install before any guest code
+     * starts. ppu_gcm_pump runs at guest HLE boundaries, so this invokes
+     * handlers synchronously on the guest thread instead of racing the iOS
+     * RSX ticker thread. */
+    g_ps3_guest_caller = m772_guest_callback;
     for (uint64_t i = 1; i < function_table_count; ++i)
         if (function_table[i - 1].addr >= function_table[i].addr)
             m772_sorted_table = 0;

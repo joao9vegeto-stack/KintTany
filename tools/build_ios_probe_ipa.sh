@@ -550,7 +550,8 @@ symbols=src/'symbols.txt'
 assert archive.is_file() and attestation.is_file() and symbols.is_file()
 a=json.loads(attestation.read_text())
 digest=hashlib.sha256(archive.read_bytes()).hexdigest()
-assert a['schema']=='ascension-m794-ios-arm64-link-input-v15'
+assert a['schema']=='ascension-m796-ios-arm64-link-input-v16'
+assert a['guest_callback_dispatch']=='g_ps3_guest_caller-to-ppu_guest_call-before-AOT-v1'
 assert a['spu_workload_registry']=='NPUA80918-four-embedded-images-plus-C8-WWS-id6-plus-31-ELF-WWS-overlays-registered-200-230-v1'
 assert a['spurs_ascension_wws_policy']=='tempArea-128-byte-entry-and-poll-refresh-readyCount-level-rotating-spu-v1'
 assert a['spu_workload_registry_units_compiled']==5
@@ -698,6 +699,7 @@ required=("func_00010410", "func_0052A740", "func_0052E3F4", "_ar_m772_runtime_a
           "_cellGcm_take_flip_pending_synced", "_rsx_metal_backend_init",
           "_rsx_metal_backend_present", "_rsx_metal_backend_guest_draws",
           "_ppu_hle_register_all",
+          "_ppu_guest_call", "_g_ps3_guest_caller",
           "_cellGamePatchCheck",
           "_cellPad_set_host_state",
           "_cellPadGetData", "_cellAudioPortOpen", "_cellAudioSetNotifyEventQueue",
@@ -734,7 +736,7 @@ for symbol in ("_gowa_spu_register_c8_wws_pm",
                "_wws_pm_c8d774_spu_recomp_register"):
     if not any(symbol in name for name in defined):
         raise SystemExit("M7.90 exact NPUA WWS job lift/C8 PM or runtime routing missing from final Mach-O: "+symbol)
-print("M7.95 final ARM64 Mach-O contains 31 NPUA WWS lifts, exact-byte PIC registration, and the full WWS SPU interpreter fallback")
+print("M7.96 final ARM64 Mach-O contains the installed PS3Recomp guest callback dispatcher, 31 NPUA WWS lifts, exact-byte PIC registration, and the full WWS SPU interpreter fallback")
 PYM772LINKED
 # Every M7.62 native function must appear in the FINAL Mach-O, not merely object.
 python3 - <<'PY'
@@ -1068,5 +1070,5 @@ shasum -a 256 AscensionRecompProbe-0.6.22-unsigned.ipa > m41-ipa-sha256.txt
 cp AscensionRecompProbe-0.6.22-unsigned.ipa AscensionRecompProbe-7.69.0-unsigned.ipa
 IPA_VERSION=$(/usr/libexec/PlistBuddy -c 'Print CFBundleShortVersionString' "$APP/Info.plist")
 cp AscensionRecompProbe-0.6.22-unsigned.ipa "AscensionRecompProbe-${IPA_VERSION}-unsigned.ipa"
-shasum -a 256 "AscensionRecompProbe-${IPA_VERSION}-unsigned.ipa" > m795-ipa-sha256.txt
+shasum -a 256 "AscensionRecompProbe-${IPA_VERSION}-unsigned.ipa" > m796-ipa-sha256.txt
 echo 'UNSIGNED DIAGNOSTIC APP: UIKit CAMetalLayer + real PS3Recomp Metal backend; NO GOWA GAME included' > m41-status.txt

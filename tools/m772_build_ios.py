@@ -501,6 +501,10 @@ def main():
         if marker not in c8_registry_text:
             raise SystemExit(f"M7.89 C8 registry is missing {marker}")
     bridge_source = (repo / "runtime/m772_bridge.cpp").read_text(errors="replace")
+    if ("ASCENSION_M796_GUEST_CALLBACK_BRIDGE_V1" not in bridge_source or
+            "g_ps3_guest_caller = m772_guest_callback;" not in bridge_source or
+            "ppu_guest_call(opd_addr, a0, a1, a2, a3" not in bridge_source):
+        raise SystemExit("M7.96 PS3Recomp guest callback dispatcher is not installed")
     if "gowa_spu_register_c8_wws_pm();" not in bridge_source:
         raise SystemExit("M7.89 C8 WWS registry is not called from runtime initialization")
     if "ascension_npua_jobmods_register_all();" not in bridge_source:
@@ -742,8 +746,9 @@ def main():
         raise SystemExit(f"M7.72 required ARM64 archive symbols missing: {missing}")
 
     result = {
-        "schema": "ascension-m794-ios-arm64-link-input-v15",
+        "schema": "ascension-m796-ios-arm64-link-input-v16",
         "upstream_commit": actual,
+        "guest_callback_dispatch": "g_ps3_guest_caller-to-ppu_guest_call-before-AOT-v1",
         "ios_vfs_mount_patch": "npua80918-and-app-home-usrdir-v1",
         "ios_vm_mapping_patch": "mach-anywhere-4g-relative-guest-ea-v1",
         "hle_registration": "strong-generated-nid-table",
