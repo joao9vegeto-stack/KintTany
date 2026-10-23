@@ -16,6 +16,9 @@ from pathlib import Path
 MARKER = "ASCENSION_M793_SPU_PIC_RUNTIME_V1"
 WWS_INTERP_MARKER = "ASCENSION_M795_WWS_INTERPRETER_FALLBACK_V1"
 INTERP_SLICE_MARKER = "ASCENSION_M795_SPU_INTERPRETER_SLICE_V1"
+REJOIN_CHANNEL_MARKER = "ASCENSION_M802_SPU_INTERPRETER_REJOIN_CHANNELS_V1"
+REJOIN_HELPER_MARKER = "ASCENSION_M802_SPU_INTERPRETER_REJOIN_HELPER_V1"
+REJOIN_DRAIN_MARKER = "ASCENSION_M802_SPU_INTERPRETER_REJOIN_DRAIN_V1"
 
 PIC_MATCH = r'''/* ASCENSION_M793_SPU_PIC_RUNTIME_V1 */
 #ifndef SPU_PIC_MATCH_H
@@ -172,6 +175,204 @@ static void spu_pic_capture(const spu_context* ctx)
 '''
 
 
+def patch_interpreter_rejoin(upstream: Path) -> None:
+    """Drain lifted functions reached by the SPU interpreter on its own stack.
+
+    Without this handoff, a lifted function reached from interpreted code can
+    return into the enclosing WWS drain. That drain treats the return as a
+    dispatcher restart and loses the interpreter's continuation. The PC port
+    fixes this with SPU_REJOIN_CALL; keep the same behavior on iOS.
+    """
+    channels = upstream / "runtime/spu/spu_channels.c"
+    drain = upstream / "runtime/spu/spu_drain.c"
+    if not channels.is_file() or not drain.is_file():
+        raise SystemExit(f"missing PS3Recomp SPU drain sources: {upstream}")
+
+    source = channels.read_text(errors="replace")
+    if REJOIN_CHANNEL_MARKER not in source:
+        run_anchor = "    g_spu_trampoline_fn = 0;                        /* no stale transfer pending */\n"
+        run_replacement = run_anchor + '''    /* ASCENSION_M802_SPU_INTERPRETER_REJOIN_CHANNELS_V1
+     * An interpreter drain is a continuation owned by the current SPU run.
+     * Do not let it leak across a nested top-level job or a stack reset. */
+    extern SPU_THREAD_LOCAL int g_spu_drain_anyret;
+    const int asc_outer_anyret = g_spu_drain_anyret;
+    g_spu_drain_anyret = 0;
+'''
+        if source.count(run_anchor) != 1:
+            raise SystemExit("M8.02 could not anchor SPU run's nested interpreter-drain state")
+        source = source.replace(run_anchor, run_replacement, 1)
+
+        reset_anchor = "        ctx->host_depth = 0;\n        g_spu_trampoline_fn = 0;\n        spu_indirect_branch(ctx);"
+        reset_replacement = "        ctx->host_depth = 0;\n        g_spu_trampoline_fn = 0;\n        g_spu_drain_anyret = 0;\n        spu_indirect_branch(ctx);"
+        if source.count(reset_anchor) != 1:
+            raise SystemExit("M8.02 could not anchor SPU stack-reset cleanup")
+        source = source.replace(reset_anchor, reset_replacement, 1)
+
+        exit_anchor = "    if (outer_armed) memcpy(s_spu_halt_env, outer_env, sizeof(jmp_buf));\n    return halted;"
+        exit_replacement = "    if (outer_armed) memcpy(s_spu_halt_env, outer_env, sizeof(jmp_buf));\n    g_spu_drain_anyret = asc_outer_anyret;\n    return halted;"
+        if source.count(exit_anchor) != 1:
+            raise SystemExit("M8.02 could not anchor SPU run's interpreter-drain cleanup")
+        source = source.replace(exit_anchor, exit_replacement, 1)
+
+        helper_anchor = "static int spu_smc_microstep(spu_context* ctx)\n{"
+        helper_replacement = r'''/* ASCENSION_M802_SPU_INTERPRETER_REJOIN_HELPER_V1
+ * Run a lifted target inside a drain owned by the interpreter that reached
+ * it. Return 1 when the guest can be interpreted again, 2 when it stopped,
+ * and 0 when the caller should keep its existing dispatch behavior. */
+static int spu_rejoin_interpreted_lift(spu_context* ctx, uint32_t return_pc)
+{
+    static int s_rejoin = -1;
+    int rejoin_enabled = __atomic_load_n(&s_rejoin, __ATOMIC_ACQUIRE);
+    if (rejoin_enabled < 0) {
+        const char* e = getenv("SPU_REJOIN_CALL");
+        rejoin_enabled = e && *e == '1';
+        __atomic_store_n(&s_rejoin, rejoin_enabled, __ATOMIC_RELEASE);
+    }
+    extern SPU_THREAD_LOCAL int g_spu_drain_anyret;
+    extern void spu_drain_interp(spu_context*, uint32_t);
+    if (!rejoin_enabled || g_spu_drain_anyret == (int)ctx->host_depth ||
+        ctx->image_id < 0 || !(ctx->status & SPU_STATUS_RUNNING) ||
+        (return_pc && (ctx->pc & SPU_LS_MASK) == return_pc) ||
+        !spu_lifted_lookup(ctx, ctx->pc))
+        return 0;
+
+    const int32_t saved_image = (int32_t)ctx->image_id;
+    ctx->host_depth++;
+    g_spu_trampoline_fn = spu_indirect_branch;
+    spu_drain_interp(ctx, return_pc);
+    ctx->host_depth--;
+    spu_img_restore(ctx, saved_image);
+    ctx->drain_ret_pc = return_pc;
+    return (ctx->status & SPU_STATUS_RUNNING) ? 1 : 2;
+}
+
+static int spu_smc_microstep(spu_context* ctx)
+{'''
+        if source.count(helper_anchor) != 1:
+            raise SystemExit("M8.02 could not anchor interpreter rejoin helper")
+        source = source.replace(helper_anchor, helper_replacement, 1)
+
+        interp_anchor = "        uint32_t result = spu_interp_run_until(ctx, pc, return_pc);\n        /* A live interpreter rejoin is a transfer, not a host return."
+        interp_replacement = '''        uint32_t result;
+    interp_again:
+        result = spu_interp_run_until(ctx, pc, return_pc);
+        { const int rejoin = spu_rejoin_interpreted_lift(ctx, return_pc);
+          if (rejoin == 1) { pc = ctx->pc & SPU_LS_MASK; goto interp_again; }
+          if (rejoin == 2) return 1; }
+        /* A live interpreter rejoin is a transfer, not a host return.'''
+        if source.count(interp_anchor) != 1:
+            raise SystemExit("M8.02 could not anchor lifted-function interpreter handoff")
+        source = source.replace(interp_anchor, interp_replacement, 1)
+
+        high_interp_anchor = "              spu_interp_run(ctx, p);\n              return;"
+        high_interp_replacement = '''              const uint32_t return_pc = ctx->drain_ret_pc;
+              uint32_t interp_pc = p;
+          ascension_unlifted_interp_again:
+              (void)spu_interp_run_until(ctx, interp_pc, return_pc);
+              { const int rejoin = spu_rejoin_interpreted_lift(ctx, return_pc);
+                if (rejoin == 1) { interp_pc = ctx->pc & SPU_LS_MASK; goto ascension_unlifted_interp_again; }
+                if (rejoin == 2) return; }
+              /* Keep live interpreter rejoin working when the call-return
+               * drain is disabled, and resume it through the dispatcher. */
+              if (ctx->image_id >= 0 && (ctx->status & SPU_STATUS_RUNNING) &&
+                  (!return_pc || (ctx->pc & SPU_LS_MASK) != return_pc) &&
+                  spu_lifted_lookup(ctx, ctx->pc))
+                  g_spu_trampoline_fn = spu_indirect_branch;
+              return;'''
+        if source.count(high_interp_anchor) != 1:
+            raise SystemExit("M8.02 could not anchor high-address unlifted interpreter handoff")
+        source = source.replace(high_interp_anchor, high_interp_replacement, 1)
+        channels.write_text(source)
+
+    source = channels.read_text(errors="replace")
+    if REJOIN_CHANNEL_MARKER not in source:
+        raise SystemExit("M8.02 SPU interpreter rejoin patch did not apply to spu_channels.c")
+
+    source = drain.read_text(errors="replace")
+    if REJOIN_DRAIN_MARKER not in source:
+        entry_anchor = "void spu_drain_call(spu_context* ctx, uint32_t return_pc)\n{\n    spu_depth_guard(ctx);"
+        entry_replacement = '''/* ASCENSION_M802_SPU_INTERPRETER_REJOIN_DRAIN_V1
+ * Host depth of the current interpreter-owned drain; zero when the innermost
+ * active drain is a normal lifted call. */
+SPU_THREAD_LOCAL int g_spu_drain_anyret;
+
+static void spu_drain_loop(spu_context* ctx, uint32_t return_pc, int anyret)
+{
+    spu_depth_guard(ctx);
+    const int outer_anyret = g_spu_drain_anyret;'''
+        if source.count(entry_anchor) != 1:
+            raise SystemExit("M8.02 could not anchor the shared SPU drain loop")
+        source = source.replace(entry_anchor, entry_replacement, 1)
+
+        macro_anchor = "#define SPU_DRAIN_POP_IRQ() do { if (ctx->irq_frame == &f) ctx->irq_frame = f.prev; ctx->drain_ret_pc = 0; } while (0)"
+        macro_replacement = "#define SPU_DRAIN_POP_IRQ() do { if (ctx->irq_frame == &f) ctx->irq_frame = f.prev; ctx->drain_ret_pc = 0; g_spu_drain_anyret = outer_anyret; } while (0)"
+        if source.count(macro_anchor) != 1:
+            raise SystemExit("M8.02 could not anchor SPU drain cleanup")
+        source = source.replace(macro_anchor, macro_replacement, 1)
+
+        return_anchor = "            if (g_spu_trampoline_fn == spu_indirect_branch &&\n                (ctx->pc & SPU_LS_MASK) == (return_pc & SPU_LS_MASK)) {"
+        return_replacement = "            if (g_spu_trampoline_fn == spu_indirect_branch && (return_pc || !anyret) &&\n                (ctx->pc & SPU_LS_MASK) == (return_pc & SPU_LS_MASK)) {"
+        if source.count(return_anchor) != 1:
+            raise SystemExit("M8.02 could not anchor drain trampoline return test")
+        source = source.replace(return_anchor, return_replacement, 1)
+
+        set_anyret_anchor = "            ctx->drain_ret_pc = return_pc & SPU_LS_MASK;   /* re-set: a nested drain changed it */"
+        set_anyret_replacement = set_anyret_anchor + "\n            g_spu_drain_anyret = anyret ? (int)ctx->host_depth : 0;"
+        if source.count(set_anyret_anchor) != 1:
+            raise SystemExit("M8.02 could not anchor SPU drain continuation tracking")
+        source = source.replace(set_anyret_anchor, set_anyret_replacement, 1)
+
+        irq_anchor = "                        ctx->image_id = f.image_id;\n                        g_spu_trampoline_fn = spu_indirect_branch;"
+        irq_replacement = "                        ctx->image_id = f.image_id;\n                        g_spu_drain_anyret = anyret ? (int)ctx->host_depth : 0;\n                        g_spu_trampoline_fn = spu_indirect_branch;"
+        if source.count(irq_anchor) != 1:
+            raise SystemExit("M8.02 could not anchor SPU interrupt-drain rejoin")
+        source = source.replace(irq_anchor, irq_replacement, 1)
+
+        pc_return_anchor = "        if ((ctx->pc & SPU_LS_MASK) == (return_pc & SPU_LS_MASK)) {"
+        pc_return_replacement = "        if ((anyret && ctx->irq_frame != &f) ||\n            (ctx->pc & SPU_LS_MASK) == (return_pc & SPU_LS_MASK)) {"
+        if source.count(pc_return_anchor) != 1:
+            raise SystemExit("M8.02 could not anchor SPU drain host-return condition")
+        source = source.replace(pc_return_anchor, pc_return_replacement, 1)
+
+        wrapper_anchor = "#undef SPU_DRAIN_POP_IRQ\n}"
+        wrapper_replacement = '''#undef SPU_DRAIN_POP_IRQ
+}
+
+void spu_drain_call(spu_context* ctx, uint32_t return_pc)
+{
+    spu_drain_loop(ctx, return_pc, 0);
+}
+
+/* Stop at the first host return so the owning SPU interpreter can continue. */
+void spu_drain_interp(spu_context* ctx, uint32_t return_pc)
+{
+    spu_drain_loop(ctx, return_pc, 1);
+}'''
+        if source.count(wrapper_anchor) != 1:
+            raise SystemExit("M8.02 could not anchor SPU drain entry wrappers")
+        source = source.replace(wrapper_anchor, wrapper_replacement, 1)
+        drain.write_text(source)
+
+    source = drain.read_text(errors="replace")
+    required_drain = (
+        REJOIN_DRAIN_MARKER, "g_spu_drain_anyret", "spu_drain_interp",
+        "spu_drain_loop(spu_context* ctx, uint32_t return_pc, int anyret)",
+    )
+    missing = [needle for needle in required_drain if needle not in source]
+    if missing:
+        raise SystemExit(f"incomplete M8.02 SPU drain rejoin patch: {missing}")
+    source = channels.read_text(errors="replace")
+    required_channels = (
+        REJOIN_CHANNEL_MARKER, REJOIN_HELPER_MARKER, "SPU_REJOIN_CALL",
+        "interp_again:", "spu_rejoin_interpreted_lift(ctx, return_pc)",
+        "ascension_unlifted_interp_again:",
+        "g_spu_drain_anyret = asc_outer_anyret",
+    )
+    missing = [needle for needle in required_channels if needle not in source]
+    if missing:
+        raise SystemExit(f"incomplete M8.02 SPU interpreter rejoin patch: {missing}")
+
+
 def patch(upstream: Path) -> None:
     context = upstream / "runtime/spu/spu_context.h"
     source = upstream / "runtime/spu/spu_channels.c"
@@ -244,7 +445,14 @@ def patch(upstream: Path) -> None:
                             ((uint32_t)ctx->ls[p + 2] << 8) | ctx->ls[p + 3];
         if (interp && w0) {
             const uint32_t return_pc = ctx->drain_ret_pc;
-            uint32_t result = spu_interp_run_until_budget(ctx, p, return_pc, 4096);
+            uint32_t result;
+            for (;;) {
+                result = spu_interp_run_until_budget(ctx, p, return_pc, 4096);
+                const int rejoin = spu_rejoin_interpreted_lift(ctx, return_pc);
+                if (rejoin == 1) { p = ctx->pc & SPU_LS_MASK; continue; }
+                if (rejoin == 2) break;
+                break;
+            }
             if (ctx->status & SPU_STATUS_RUNNING) {
                 if (!return_pc || (ctx->pc & SPU_LS_MASK) != return_pc)
                     g_spu_trampoline_fn = spu_indirect_branch;
@@ -269,7 +477,7 @@ def patch(upstream: Path) -> None:
     context_text = context.read_text()
     source_text = source.read_text()
     required = (MARKER, "spu_pic_register", "spu_pic_lookup", "spu_pic_capture",
-                "spu_interp_run(ctx, p)")
+                "spu_interp_run_until_budget(ctx, p, return_pc, 4096)")
     missing = [needle for needle in required
                if needle not in context_text and needle not in source_text]
     if WWS_INTERP_MARKER not in source_text:
@@ -326,13 +534,15 @@ uint32_t spu_interp_run_until_budget(spu_context* ctx, uint32_t start_lsa,
     if INTERP_SLICE_MARKER not in interp_source.read_text():
         raise SystemExit("bounded SPU interpreter patch did not apply")
 
+    patch_interpreter_rejoin(upstream)
+
 
 def main() -> None:
     parser = argparse.ArgumentParser()
     parser.add_argument("upstream", type=Path)
     args = parser.parse_args()
     patch(args.upstream.resolve())
-    print("M7.95 full WWS SPU interpreter and PIC capture/dispatch runtime enabled")
+    print("M7.95 full WWS SPU interpreter/PIC plus M8.02 interpreter-to-lifted rejoin enabled")
 
 
 if __name__ == "__main__":

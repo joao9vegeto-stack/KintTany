@@ -709,7 +709,7 @@ required=("func_00010410", "func_0052A740", "func_0052E3F4", "_ar_m772_runtime_a
           "_spu_workload_find_img",
           "_wws_pm_npua_spu_func_00000A00",
           "_wws_pm_npua_spu_recomp_register", "_ascension_spu_pic_register_all",
-          "_spu_interp_run", "_spu_pic_register")
+          "_spu_interp_run", "_spu_pic_register", "_spu_drain_interp")
 missing=[symbol for symbol in required if not any(symbol in name for name in defined)]
 if missing: raise SystemExit("M7.72 expected AOT definitions missing from final Mach-O: "+str(missing))
 for symbol in ("_cellSpursCreateTaskset2", "_cellSpursCreateTask2",

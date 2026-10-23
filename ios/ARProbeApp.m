@@ -1531,6 +1531,10 @@ static BOOL ARGameManifestHasTitleUsrdir(NSDictionary *manifest){
    * functions first and interpret only an unresolved code branch, matching
    * the PC port's default run.sh behavior. */
   setenv("SPU_INTERP_UNLIFTED","1",1);
+  /* A lifted SPU function reached by the interpreter must return to that
+   * interpreter's continuation. This is enabled by default in the Ascension
+   * PC port and is required for runtime-generated WWS code to finish jobs. */
+  setenv("SPU_REJOIN_CALL","1",1);
   /* Match the PC port's effective park-resync window. A 2 s resync can skip
    * guest commands and fences while Ascension's SPU jobs are still patching
    * the FIFO; keep the parked get position until the guest changes it. */
