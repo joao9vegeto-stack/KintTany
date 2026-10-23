@@ -273,6 +273,12 @@ uint32_t g_tlsRawDataSize = 0;
 uint32_t g_tlsBlockSize = 0x1000u;
 std::atomic<size_t> g_criticalSectionInitCount{0};
 std::mutex g_runtimeTraceMutex;
+std::mutex g_runtimeTraceFileMutex;
+int g_runtimeTraceFileDescriptor = -1;
+std::atomic<size_t> g_runtimeTracePersistSequence{0};
+std::atomic<size_t> g_runtimeTracePersistFailures{0};
+std::atomic<size_t> g_runtimeTracePersistMilestones{0};
+std::atomic<size_t> g_runtimeTracePersistSwaps{0};
 std::mutex g_tlsMutex;
 std::mutex g_virtualMemoryMutex;
 std::mutex g_guestObjectMutex;
@@ -315,12 +321,62 @@ std::atomic<bool> g_schedulerStopRequested{false};
 std::atomic<bool> g_runtimeSessionPoisoned{false};
 thread_local GuestThread *g_currentGuestThread = nullptr;
 
+bool shouldPersistRuntimeTrace(const std::string &event, size_t sequence) {
+    if (sequence < 96u) return true;
+    if (sequence < 32768u && sequence % 64u == 0u) return true;
+
+    const bool failure = event.find("exception") != std::string::npos ||
+                         event.find("failed") != std::string::npos ||
+                         event.find("rejected") != std::string::npos ||
+                         event.find("untranslated") != std::string::npos;
+    if (failure && g_runtimeTracePersistFailures.fetch_add(1, std::memory_order_relaxed) < 128u) {
+        return true;
+    }
+
+    const bool milestone = event.find("Chamando PPC entry point") != std::string::npos ||
+                           event.find("Main PPC thread initialized") != std::string::npos ||
+                           event.find("PPC thread started") != std::string::npos ||
+                           event.find("PPC thread exit") != std::string::npos ||
+                           event.find("VdInitializeEngines accepted") != std::string::npos ||
+                           event.find("VdInitializeRingBuffer") != std::string::npos;
+    if (milestone && g_runtimeTracePersistMilestones.fetch_add(1, std::memory_order_relaxed) < 96u) {
+        return true;
+    }
+
+    if (event.find("VdSwap") != std::string::npos &&
+        g_runtimeTracePersistSwaps.fetch_add(1, std::memory_order_relaxed) < 4u) {
+        return true;
+    }
+    return false;
+}
+
+void persistRuntimeTrace(const std::string &tagged, size_t sequence) {
+    if (!shouldPersistRuntimeTrace(tagged, sequence)) return;
+    const std::string line = "RUNTIME seq=" + std::to_string(sequence) + " " + tagged + "\n";
+    std::lock_guard<std::mutex> lock(g_runtimeTraceFileMutex);
+    if (g_runtimeTraceFileDescriptor < 0) return;
+
+    const char *cursor = line.data();
+    size_t remaining = line.size();
+    while (remaining > 0u) {
+        const ssize_t written = ::write(g_runtimeTraceFileDescriptor, cursor, remaining);
+        if (written < 0 && errno == EINTR) continue;
+        if (written <= 0) break;
+        cursor += written;
+        remaining -= static_cast<size_t>(written);
+    }
+}
+
 void recordRuntimeTrace(const std::string &event) {
     constexpr size_t kMaxTraceEvents = 128;
-    std::lock_guard<std::mutex> lock(g_runtimeTraceMutex);
     const std::string tagged = "thread=" + std::to_string(g_currentGuestThreadId) + " " + event;
-    if (g_runtimeTrace.size() == kMaxTraceEvents) g_runtimeTrace.erase(g_runtimeTrace.begin());
-    g_runtimeTrace.push_back(tagged);
+    {
+        std::lock_guard<std::mutex> lock(g_runtimeTraceMutex);
+        if (g_runtimeTrace.size() == kMaxTraceEvents) g_runtimeTrace.erase(g_runtimeTrace.begin());
+        g_runtimeTrace.push_back(tagged);
+    }
+    const size_t sequence = g_runtimeTracePersistSequence.fetch_add(1, std::memory_order_relaxed);
+    persistRuntimeTrace(tagged, sequence);
 }
 
 std::string runtimeTraceText() {
@@ -1200,6 +1256,18 @@ extern "C" void xowue_set_touch_controller_state(
     if (changed) ++g_touchController.packetNumber;
 }
 
+extern "C" int xowue_set_runtime_trace_path(const char *path) {
+    std::lock_guard<std::mutex> lock(g_runtimeTraceFileMutex);
+    if (g_runtimeTraceFileDescriptor >= 0) {
+        ::close(g_runtimeTraceFileDescriptor);
+        g_runtimeTraceFileDescriptor = -1;
+    }
+    if (!path || path[0] == '\0') return 0;
+
+    g_runtimeTraceFileDescriptor = ::open(path, O_WRONLY | O_CREAT | O_APPEND, 0600);
+    return g_runtimeTraceFileDescriptor >= 0 ? 0 : errno;
+}
+
 extern "C" int xowue_inspect_xex(const char *path, char *output, size_t output_capacity) {
     try {
         const Image image = parseImage(path);
@@ -1231,6 +1299,10 @@ extern "C" int xowue_boot_xex(const char *path, char *output, size_t output_capa
             std::lock_guard<std::mutex> traceLock(g_runtimeTraceMutex);
             g_runtimeTrace.clear();
         }
+        g_runtimeTracePersistSequence.store(0, std::memory_order_relaxed);
+        g_runtimeTracePersistFailures.store(0, std::memory_order_relaxed);
+        g_runtimeTracePersistMilestones.store(0, std::memory_order_relaxed);
+        g_runtimeTracePersistSwaps.store(0, std::memory_order_relaxed);
         {
             std::lock_guard<std::mutex> tlsLock(g_tlsMutex);
             g_tlsAllocated.fill(false);

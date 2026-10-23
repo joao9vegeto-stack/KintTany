@@ -832,6 +832,13 @@ private enum XOWUERuntime {
         }
         XOWUEDiagnostics.log("xex.inspect.ok \(String(cString: inspectBuffer))")
 
+        let crashTracePath = XOWUEDiagnostics.fileURL(named: XOWUEDiagnostics.crashFilename)?.path
+        let traceOpenStatus = crashTracePath.map { tracePath in
+            tracePath.withCString { xowue_set_runtime_trace_path($0) }
+        } ?? -1
+        XOWUEDiagnostics.log("runtime.trace_file open_status=\(traceOpenStatus)")
+        defer { _ = xowue_set_runtime_trace_path(nil) }
+
         var outputBuffer = [CChar](repeating: 0, count: 32768)
         let code = xex.path.withCString { path in
             outputBuffer.withUnsafeMutableBufferPointer { output in

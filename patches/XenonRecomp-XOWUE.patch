@@ -529,3 +529,16 @@ index fa91527..4414039 100644
              println("\t__builtin_debugtrap();");
              break;
          }
+
+diff --git a/XenonUtils/ppc_context.h b/XenonUtils/ppc_context.h
+--- a/XenonUtils/ppc_context.h
++++ b/XenonUtils/ppc_context.h
+@@ -27,7 +27,7 @@
+ #define PPC_FUNC(x) void x(PPCContext& __restrict ctx, uint8_t* base)
+ #define PPC_FUNC_IMPL(x) extern "C" PPC_FUNC(x)
+ #define PPC_EXTERN_FUNC(x) extern PPC_FUNC(x)
+-#define PPC_WEAK_FUNC(x) __attribute__((weak,noinline)) PPC_FUNC(x)
++#define PPC_WEAK_FUNC(x) __attribute__((noinline)) PPC_FUNC(x)
+ 
+ #define PPC_FUNC_PROLOGUE() __builtin_assume(((size_t)base & 0x1F) == 0)
+ 

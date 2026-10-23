@@ -261,7 +261,14 @@ jobs:
           git clone --recursive https://github.com/hedge-dev/XenonRecomp.git "$RUNNER_TEMP/XenonRecomp"
           git -C "$RUNNER_TEMP/XenonRecomp" checkout ddd128bcca99fe8bfbb99bea583c972351fa6ace
           git -C "$RUNNER_TEMP/XenonRecomp" submodule update --init --recursive
+          git -C "$RUNNER_TEMP/XenonRecomp" apply --check "$GITHUB_WORKSPACE/patches/XenonRecomp-XOWUE.patch"
           git -C "$RUNNER_TEMP/XenonRecomp" apply "$GITHUB_WORKSPACE/patches/XenonRecomp-XOWUE.patch"
+          PPC_CONTEXT="$RUNNER_TEMP/XenonRecomp/XenonUtils/ppc_context.h"
+          grep -Fq '#define PPC_WEAK_FUNC(x) __attribute__((noinline)) PPC_FUNC(x)' "$PPC_CONTEXT"
+          if grep -Fq '#define PPC_WEAK_FUNC(x) __attribute__((weak,noinline)) PPC_FUNC(x)' "$PPC_CONTEXT"; then
+            echo "XOWUE AOT aliases must not use weak linkage" >&2
+            exit 1
+          fi
           echo "XENONRECOMP_ROOT=$RUNNER_TEMP/XenonRecomp" >> "$GITHUB_ENV"
 
       - name: Build arm64 AOT engine
@@ -325,6 +332,12 @@ jobs:
           test -f "$APP/ThirdPartyLicenses/XenonRecomp-LICENSE.md"
           test -f "$APP/ThirdPartyLicenses/Mesa/licenses/MIT"
           lipo "$APP/XOWUE" -verify_arch arm64
+          unresolved_aot="$(nm -u "$APP/XOWUE" | grep -E 'sub_[0-9A-Fa-f]{8}' || true)"
+          if [ -n "$unresolved_aot" ]; then
+            echo "$unresolved_aot" >&2
+            echo "IPA contains unresolved AOT guest-function symbols" >&2
+            exit 1
+          fi
           lipo "$APP/Frameworks/libvulkan_kosmickrisp.dylib" -verify_arch arm64
           otool -L "$APP/XOWUE" | grep -F "@rpath/libvulkan_kosmickrisp.dylib"
           python3 - "$APP/Info.plist" "$XOWUE_BUILD_NUMBER" <<'PY'
