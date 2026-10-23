@@ -1354,7 +1354,7 @@ static const char *dispatchGuardErrorName(xowue_dispatch_guard::Result result) {
     throw std::runtime_error(event);
 }
 
-void xowue_dispatch_indirect(PPCContext &context, uint8_t *base, uint32_t target) {
+PPCFunc *xowue_lookup_indirect(PPCContext &context, uint8_t *base, uint32_t target) {
     PPCFunc *slotFunction = nullptr;
     const uint64_t tableStart = static_cast<uint64_t>(PPC_IMAGE_BASE) + PPC_IMAGE_SIZE;
     const auto guard = xowue_dispatch_guard::resolve<PPCFunc>(
@@ -1369,7 +1369,11 @@ void xowue_dispatch_indirect(PPCContext &context, uint8_t *base, uint32_t target
     if (mapped->second != slotFunction)
         failPpcIndirectDispatch(context, target, slotFunction, "dispatch slot does not match linked AOT map");
 
-    mapped->second(context, base);
+    return mapped->second;
+}
+
+void xowue_dispatch_indirect(PPCContext &context, uint8_t *base, uint32_t target) {
+    xowue_lookup_indirect(context, base, target)(context, base);
 }
 
 extern "C" void xowue_set_touch_controller_state(

@@ -549,10 +549,11 @@ diff --git a/XenonUtils/ppc_context.h b/XenonUtils/ppc_context.h
  
  #define PPC_FUNC_PROLOGUE() __builtin_assume(((size_t)base & 0x1F) == 0)
  
-@@ -108,10 +108,11 @@
+@@ -108,10 +108,12 @@
  #define PPC_MEMORY_SIZE 0x100000000ull
  
- #define PPC_LOOKUP_FUNC(x, y) *(PPCFunc**)(x + PPC_IMAGE_BASE + PPC_IMAGE_SIZE + (uint64_t(uint32_t(y) - PPC_CODE_BASE) * 2))
+-#define PPC_LOOKUP_FUNC(x, y) *(PPCFunc**)(x + PPC_IMAGE_BASE + PPC_IMAGE_SIZE + (uint64_t(uint32_t(y) - PPC_CODE_BASE) * 2))
++#define PPC_LOOKUP_FUNC(x, y) xowue_lookup_indirect(ctx, x, uint32_t(y))
  
  #ifndef PPC_CALL_INDIRECT_FUNC
 -#define PPC_CALL_INDIRECT_FUNC(x) (PPC_LOOKUP_FUNC(base, x))(ctx, base)
@@ -560,5 +561,6 @@ diff --git a/XenonUtils/ppc_context.h b/XenonUtils/ppc_context.h
  #endif
  
  typedef void PPCFunc(struct PPCContext& __restrict__ ctx, uint8_t* base);
++PPCFunc* xowue_lookup_indirect(struct PPCContext& ctx, uint8_t* base, uint32_t target);
 +void xowue_dispatch_indirect(struct PPCContext& ctx, uint8_t* base, uint32_t target);
  

@@ -43,3 +43,12 @@ required_switch_fallback = (
 if any(line not in recompiler_patch for line in required_switch_fallback):
     raise SystemExit("BCTR switch-table default does not use the guarded guest CTR target")
 print("PASS: BCTR switch-table fallback uses guarded guest CTR dispatch")
+
+required_lookup_guard = (
+    r'-#define PPC_LOOKUP_FUNC(x, y) *(PPCFunc**)(x + PPC_IMAGE_BASE + PPC_IMAGE_SIZE + (uint64_t(uint32_t(y) - PPC_CODE_BASE) * 2))',
+    r'+#define PPC_LOOKUP_FUNC(x, y) xowue_lookup_indirect(ctx, x, uint32_t(y))',
+    r'+PPCFunc* xowue_lookup_indirect(struct PPCContext& ctx, uint8_t* base, uint32_t target);',
+)
+if any(line not in recompiler_patch for line in required_lookup_guard):
+    raise SystemExit("legacy PPC function-table lookup bypasses the guarded AOT resolver")
+print("PASS: legacy PPC function-table lookup uses guarded AOT resolver")

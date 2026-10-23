@@ -94,6 +94,8 @@ jobs:
           PPC_CONTEXT="$RUNNER_TEMP/XenonRecomp/XenonUtils/ppc_context.h"
           grep -Fq '#define PPC_WEAK_FUNC(x) __attribute__((noinline)) PPC_FUNC(x)' "$PPC_CONTEXT"
           grep -Fq '#define PPC_CALL_INDIRECT_FUNC(x) xowue_dispatch_indirect(ctx, base, uint32_t(x))' "$PPC_CONTEXT"
+          grep -Fq '#define PPC_LOOKUP_FUNC(x, y) xowue_lookup_indirect(ctx, x, uint32_t(y))' "$PPC_CONTEXT"
+          grep -Fq 'PPCFunc* xowue_lookup_indirect(struct PPCContext& ctx, uint8_t* base, uint32_t target);' "$PPC_CONTEXT"
           grep -Fq 'void xowue_dispatch_indirect(struct PPCContext& ctx, uint8_t* base, uint32_t target);' "$PPC_CONTEXT"
           if grep -Fq '#define PPC_WEAK_FUNC(x) __attribute__((weak,noinline)) PPC_FUNC(x)' "$PPC_CONTEXT"; then
             echo "XOWUE AOT aliases must not use weak linkage" >&2
