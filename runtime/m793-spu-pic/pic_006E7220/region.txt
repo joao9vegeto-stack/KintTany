@@ -1,0 +1,1 @@
+elf_offset=0x6E7220 size=0x70 seeds=1

@@ -1955,6 +1955,8 @@ static BOOL ARGameManifestHasTitleUsrdir(NSDictionary *manifest){
     details.editable=NO;
     details.selectable=YES;
     details.font=[UIFont monospacedSystemFontOfSize:12 weight:UIFontWeightRegular];
+    details.textColor=UIColor.labelColor;
+    details.backgroundColor=UIColor.systemBackgroundColor;
     details.text=@"Coletando métricas do guest em segundo plano…\nA tela permanece responsiva; toque Fechar para voltar.";
     self.ppuLiveReportView=details;
     self.ppuLiveReportGeneration++;
@@ -1984,7 +1986,12 @@ static BOOL ARGameManifestHasTitleUsrdir(NSDictionary *manifest){
        action:@selector(shareAdvancedPpuReport:)];
     page.navigationItem.rightBarButtonItems=@[share,copy];
     UINavigationController *nav=[[UINavigationController alloc] initWithRootViewController:page];
-    [self.window.rootViewController presentViewController:nav animated:YES completion:^{
+    nav.modalPresentationStyle=UIModalPresentationFullScreen;
+    UIViewController *presenter=self.window.rootViewController;
+    while(presenter.presentedViewController && !presenter.presentedViewController.isBeingDismissed)
+      presenter=presenter.presentedViewController;
+    if(!presenter)return;
+    [presenter presentViewController:nav animated:YES completion:^{
       [self refreshAdvancedPpuReport:nil];
     }];
 }

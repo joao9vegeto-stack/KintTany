@@ -139,7 +139,8 @@ def main() -> None:
                         default=Path("runtime/m793-spu-pic"))
     parser.add_argument("--gap", type=lambda value: int(value, 0), default=0x8000)
     parser.add_argument("--margin", type=lambda value: int(value, 0), default=0x800)
-    parser.add_argument("--min-entries", type=int, default=8)
+    parser.add_argument("--min-entries", type=int, default=1,
+                        help="minimum ELF-backed capture entries per region (default: 1)")
     parser.add_argument("--overlay", action="append", type=int, default=[])
     args = parser.parse_args()
 
