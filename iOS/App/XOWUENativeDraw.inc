@@ -328,6 +328,12 @@ static bool XDUploadGuestDraw(KKVulkanState *state, const XOWUEGuestDraw *draw) 
    return true;
 }
 
+static float XDFloatRegister(uint32_t bits) {
+   float value=0.0f;
+   memcpy(&value,&bits,sizeof(value));
+   return value;
+}
+
 static uint32_t XDProcessDraws(KKVulkanState *state, uint32_t image_index,
                                VkCommandBuffer command) {
    XOWUEGuestDraw *draws=(XOWUEGuestDraw*)calloc(XOWUE_GPU_MAX_DRAWS,sizeof(XOWUEGuestDraw));
@@ -387,8 +393,32 @@ static uint32_t XDProcessDraws(KKVulkanState *state, uint32_t image_index,
       if (primitive==13u) push.indexInfo |= 2u<<3u;
       push.indexOffset=draw->index_offset;
       push.alphaTest=7u;
-      push.posScale[0]=1.0f;
-      push.posScale[1]=1.0f;
+      // The previous build left push.flags=0 and posScale=(1,1),
+      // discarding the PA_CL_VTE_CNTL viewport registers. On Xenos,
+      // disabled scale/offset means pixel coordinates, not normalized NDC.
+      // Convert the real guest viewport from 1280x720 to Vulkan clip space.
+      const uint32_t vte=draw->pa_cl_vte_cntl;
+      const float sx=(vte&1u)?XDFloatRegister(draw->viewport_register_bits[0]):1.0f;
+      const float ox=(vte&2u)?XDFloatRegister(draw->viewport_register_bits[1]):0.0f;
+      const float sy=(vte&4u)?XDFloatRegister(draw->viewport_register_bits[2]):1.0f;
+      const float oy=(vte&8u)?XDFloatRegister(draw->viewport_register_bits[3]):0.0f;
+      if (!isfinite(sx)||!isfinite(sy)||!isfinite(ox)||!isfinite(oy) ||
+          fabsf(sx)>16384.0f||fabsf(sy)>16384.0f||
+          fabsf(ox)>16384.0f||fabsf(oy)>16384.0f) {
+         xowue_xenos_record_rejected(1,"XENOS_INVALID_GUEST_VIEWPORT");
+         continue;
+      }
+      push.flags=1u | ((vte&(1u<<10))?2u:0u) |
+                 ((vte&(1u<<8))?4u:0u) | ((vte&(1u<<9))?8u:0u);
+      push.posScale[0]=sx*(2.0f/1280.0f);
+      push.posScale[1]=sy*(2.0f/720.0f);
+      push.posScale[2]=ox*(2.0f/1280.0f)-1.0f;
+      push.posScale[3]=oy*(2.0f/720.0f)-1.0f;
+      if (!queued) {
+         KKLog(@"XENOS_GUEST_VIEWPORT vte=%08X flags=%X scale=(%.6f,%.6f) offset=(%.4f,%.4f) primitive=%u vertices=%u",
+               vte,push.flags,push.posScale[0],push.posScale[1],
+               push.posScale[2],push.posScale[3],primitive,count);
+      }
       if (!began) {
          VkImageMemoryBarrier to_color={.sType=VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER,
             .srcAccessMask=VK_ACCESS_TRANSFER_WRITE_BIT,
@@ -407,8 +437,15 @@ static uint32_t XDProcessDraws(KKVulkanState *state, uint32_t image_index,
          XD(CmdBeginRenderPass)(command,&render,VK_SUBPASS_CONTENTS_INLINE);
          began=true;
       }
-      VkViewport viewport={.x=0,.y=0,.width=(float)state->swapchain_extent.width,
-         .height=(float)state->swapchain_extent.height,.minDepth=0,.maxDepth=1};
+      // Use the real landscape aspect of the Xbox 360 frame (16:9);
+      // the iPhone's much wider landscape screen receives side pillars.
+      const float targetW=(float)state->swapchain_extent.width;
+      const float targetH=(float)state->swapchain_extent.height;
+      const float fit=fminf(targetW/1280.0f,targetH/720.0f);
+      const float fittedW=1280.0f*fit, fittedH=720.0f*fit;
+      VkViewport viewport={.x=(targetW-fittedW)*0.5f,
+         .y=(targetH-fittedH)*0.5f,.width=fittedW,.height=fittedH,
+         .minDepth=0,.maxDepth=1};
       VkRect2D scissor={.offset={0,0},.extent=state->swapchain_extent};
       XD(CmdSetViewport)(command,0,1,&viewport);
       XD(CmdSetScissor)(command,0,1,&scissor);

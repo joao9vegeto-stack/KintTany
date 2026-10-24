@@ -10,6 +10,7 @@
 #include <algorithm>
 #include <cinttypes>
 #include <cstdio>
+#include <cstring>
 #include <mutex>
 #include <string>
 #include <unordered_map>
@@ -241,6 +242,14 @@ void QueueDraw(uint32_t initiator, uint32_t indexCount,
   packet.index_address = indexAddress;
   packet.index_info = indexInfo;
   packet.index_offset = indexOffset;
+  // Snapshot Xenos PA_CL_VTE_CNTL and guest viewport float bit patterns at
+  // each PM4 draw. A zeroed constant is not equivalent to the GPU registers.
+  // Addresses match Xenia's a2xx PA register definitions.
+  packet.pa_cl_vte_cntl = registers[0x2206u];
+  packet.viewport_register_bits[0] = registers[0x210Fu]; // XSCALE
+  packet.viewport_register_bits[1] = registers[0x2110u]; // XOFFSET
+  packet.viewport_register_bits[2] = registers[0x2111u]; // YSCALE
+  packet.viewport_register_bits[3] = registers[0x2112u]; // YOFFSET
   packet.vertex_fetch_mask = vs->second.vertexFetchMask;
   packet.texture_2d_mask = vs->second.texture2DMask | ps->second.texture2DMask;
   packet.texture_3d_mask = vs->second.texture3DMask | ps->second.texture3DMask;

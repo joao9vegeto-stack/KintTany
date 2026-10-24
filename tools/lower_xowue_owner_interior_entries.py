@@ -162,68 +162,104 @@ def discover_owner(ppc_dir: Path, target: int,
     return base
 
 def materialize_verified_tail_returns(ppc_dir: Path):
-    """Global native AOT for the final *actual blr instruction* in two-opcode
-    pointer-adjustment thunks. This is not an empty fallback stub: XenonRecomp
-    emits 'return;' for its translated PPC blr, and this compiled entry is
-    reachable only when the original AOT body contains that exact opcode.
+    """Native PPC for safe translated instruction tails throughout all AOT units.
+
+    Terminal BLR entries use the exact translated return. Short straight-line
+    functions can enter verified internal instruction suffixes without an
+    interpreter, JIT, fabricated returns or unsafe cross-function ownership.
     """
     map_file = ppc_dir / "ppc_func_mapping.cpp"
     mappings = map_file.read_text("utf-8")
-    occupied = set(int(a,16) for a in
+    occupied = set(int(a, 16) for a in
                    re.findall(r"\{\s*0x([0-9A-Fa-f]+)\s*,", mappings))
+    original_count = len(occupied)
     found = []
+    tail_returns = 0
+    linear_continuations = 0
+    rejected = {}
     for path in sorted(ppc_dir.glob("ppc_recomp.*.cpp")):
-        source=path.read_text("utf-8")
-        edits=[]
-        for m in FUNCTION.finditer(source):
-            owner=int(m.group(1)[4:],16)
-            dest=owner+4
-            if dest in occupied: continue
-            stop=source.find("\n}\n",m.end())
-            if stop<0: continue
-            body=source[m.start():stop+3]
-            insn=list(OPCODE.finditer(body))
-            if len(insn)!=2 or norm(insn[1].group(1))!="blr":
+        source = path.read_text("utf-8")
+        edits = []
+        for match in FUNCTION.finditer(source):
+            owner = int(match.group(1)[4:], 16)
+            end = source.find("\n}\n", match.end())
+            if end < 0:
+                raise ValueError(f"Unterminated native owner 0x{owner:X}")
+            body = source[match.start():end+3]
+            insn = list(OPCODE.finditer(body))
+            if len(insn) < 2 or len(insn) > 32:
                 continue
-            first=norm(insn[0].group(1))
-            if not (first.startswith("addir3,r3,") or
-                    first.startswith("mrr3,r") or first=="nop"):
+            if body.count("PPC_FUNC_PROLOGUE();") != 1:
                 continue
-            if (body.count("PPC_FUNC_PROLOGUE();")!=1 or
-                body.count("PPC_CALL_INDIRECT_FUNC") or
-                not re.search(r"\t// blr\s*\n\treturn;",body)):
+            if LABEL.search(body):
+                rejected["owner_has_labels"] = rejected.get("owner_has_labels", 0) + 1
                 continue
-            if LABEL.search(body): continue
-            injected=(f"\n// Verified native PPC tail: {owner:08X}+4 is the second"
-                      f" original instruction (blr).\n"
-                      f"PPC_FUNC_IMPL(__imp__sub_{dest:X}) {{\n"
-                      f"\tPPC_FUNC_PROLOGUE();\n"
-                      f"\t// blr \n\treturn;\n}}\n"
-                      f"PPC_WEAK_FUNC(sub_{dest:X}) {{\n"
-                      f"\t__imp__sub_{dest:X}(ctx,base);\n}}\n")
-            edits.append((stop+3,injected))
-            found.append((owner,dest,path.name))
-            occupied.add(dest)
-        for at,code in reversed(edits):
-            source=source[:at]+code+source[at:]
-        if edits:path.write_text(source,encoding="utf-8")
-    target=0x830EBE74
-    if target not in {dest for _,dest,_ in found}:
-        raise ValueError(f"Build23 target 0x{target:08X} has no validated "
-                         f"two-instruction native BLR tail")
-    if len(found)>10000:raise ValueError("unexpected thunk count")
-    header=ppc_dir/"ppc_recomp_shared.h"
-    header.write_text(header.read_text("utf-8")+"\n"+
-                      "".join(f"PPC_EXTERN_FUNC(sub_{dst:X});\n" for _,dst,_ in found),
-                      encoding="utf-8")
-    terminators=list(TERMINATOR.finditer(mappings))
-    if len(terminators)!=1:raise ValueError("native map terminator ambiguous")
-    pos=terminators[0].start()
-    entries="".join(f"\t{{ 0x{dst:X}, sub_{dst:X} }},\n" for _,dst,_ in found)
-    map_file.write_text(mappings[:pos]+entries+mappings[pos:],encoding="utf-8")
-    return dict(native_tail_returns=len(found),verified_target="0x830EBE74",
-                verified_owner="0x830EBE70", no_interpreter=True,
-                examples=[f"0x{owner:X}->0x{dst:X}" for owner,dst,_ in found[:12]])
+            for index in range(1, len(insn)):
+                pc = owner + index * 4
+                if pc in occupied:
+                    continue
+                suffix = body[insn[index].start():body.rfind("\n}")]
+                instruction = norm(insn[index].group(1))
+                terminal_blr = (
+                    index == len(insn)-1 and instruction == "blr" and
+                    re.fullmatch(r"\s*//\s*blr\s*\n\s*return;\s*", suffix) is not None
+                )
+                linear = False
+                if len(insn) <= 8 and not terminal_blr:
+                    lines = [line.strip() for line in suffix.splitlines()
+                             if line.strip() and not line.strip().startswith("//")]
+                    linear = bool(lines) and all(
+                        line.startswith(("ctx.", "PPC_", "return;"))
+                        for line in lines
+                    ) and not any(token in suffix for token in
+                                  ("goto ", "loc_", "switch ", "if (", "{", "}", "PPC_CALL_INDIRECT"))
+                if not (terminal_blr or linear):
+                    rejected["unsafe_suffix"] = rejected.get("unsafe_suffix", 0) + 1
+                    continue
+                native = (f"\n// Verified native PPC instruction 0x{pc:08X}\n"
+                          f"PPC_FUNC_IMPL(__imp__sub_{pc:X}) {{\n"
+                          f"\tPPC_FUNC_PROLOGUE();\n"
+                          + (f"\t// blr \n\treturn;\n" if terminal_blr else suffix + "\n")
+                          + "}\n"
+                          f"PPC_WEAK_FUNC(sub_{pc:X}) {{\n"
+                          f"\t__imp__sub_{pc:X}(ctx,base);\n}}\n")
+                edits.append((end+3, native))
+                occupied.add(pc)
+                found.append((owner, pc, path.name))
+                if terminal_blr:
+                    tail_returns += 1
+                else:
+                    linear_continuations += 1
+        by_position = {}
+        for pos, native in edits:
+            by_position[pos] = by_position.get(pos, "") + native
+        for pos, native in sorted(by_position.items(), reverse=True):
+            source = source[:pos] + native + source[pos:]
+        if edits:
+            path.write_text(source, encoding="utf-8")
+    if len(found) > 25000:
+        raise ValueError(f"native PPC continuation count too large: {len(found)}")
+    header = ppc_dir / "ppc_recomp_shared.h"
+    header.write_text(header.read_text("utf-8") + "\n" +
+                      "".join(f"PPC_EXTERN_FUNC(sub_{dest:X});\n"
+                              for _, dest, _ in found), encoding="utf-8")
+    terminators = list(TERMINATOR.finditer(mappings))
+    if len(terminators) != 1:
+        raise ValueError("native PPC mapping terminator ambiguous")
+    pos = terminators[0].start()
+    additions = "".join(f"\t{{ 0x{dest:X}, sub_{dest:X} }},\n"
+                        for _, dest, _ in found)
+    map_file.write_text(mappings[:pos] + additions + mappings[pos:], encoding="utf-8")
+    milestones = (0x830EBE74, 0x831A9EBC)
+    supported = [f"0x{pc:X}" for pc in milestones if pc in occupied]
+    return dict(native_tail_returns=tail_returns,
+                straight_line_internal_entries=linear_continuations,
+                new_entries=len(found), mapped_before=original_count,
+                mapped_after=len(occupied),
+                milestone_targets_supported=supported,
+                milestone_targets_missing=[f"0x{pc:X}" for pc in milestones if pc not in occupied],
+                skipped=rejected, interpreter=False, jit=False,
+                examples=[f"0x{owner:X}->0x{dst:X}" for owner,dst,_ in found[:16]])
 
 def main():
     parser = argparse.ArgumentParser()
@@ -238,6 +274,9 @@ def main():
         tails = materialize_verified_tail_returns(args.ppc_dir)
         report = {"owners": [report], "native_tail_return_coverage": tails,
                   "interpreter": False, "jit": False}
+        if tails["milestone_targets_missing"]:
+            raise ValueError("Uncovered known runtime targets: "
+                             + ", ".join(tails["milestone_targets_missing"]))
     except ValueError as error:
         raise SystemExit(f"REFUSING_UNVERIFIED_GLOBAL_OWNER_CONTINUATION: {error}")
     args.report.parent.mkdir(parents=True, exist_ok=True)

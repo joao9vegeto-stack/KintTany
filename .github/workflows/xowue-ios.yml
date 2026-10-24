@@ -157,21 +157,20 @@ jobs:
             --ppc-dir generated/ppc --report artifacts/xowue-owner-wide-resume.json
           grep -Eq '\{[[:space:]]*0x82C2E4A8[[:space:]]*,[[:space:]]*sub_82C2E4A8' generated/ppc/ppc_func_mapping.cpp
           grep -Eq '\{[[:space:]]*0x830EBE74[[:space:]]*,[[:space:]]*sub_830EBE74' generated/ppc/ppc_func_mapping.cpp
+          grep -Eq '\{[[:space:]]*0x831A9EBC[[:space:]]*,[[:space:]]*sub_831A9EBC' generated/ppc/ppc_func_mapping.cpp
           test -s artifacts/xowue-owner-wide-resume.json
 
-      - name: Verify portrait-only iOS game host
+      - name: Verify real landscape game and portrait library orientations
         run: |
           set -euo pipefail
           grep -Fq 'UIInterfaceOrientationPortrait' iOS/project.yml
-          if grep -Eq 'UIInterfaceOrientationLandscape(Left|Right)' iOS/project.yml; then
-            echo "XOWUE must not declare landscape orientation" >&2
-            exit 1
-          fi
+          grep -Fq 'UIInterfaceOrientationLandscapeLeft' iOS/project.yml
+          grep -Fq 'UIInterfaceOrientationLandscapeRight' iOS/project.yml
+          grep -Fq 'requestOrientation(.landscapeRight)' iOS/App/XOWUEApp.swift
           grep -Fq 'requestOrientation(.portrait)' iOS/App/XOWUEApp.swift
-          if grep -Fq 'requestOrientation(.landscape)' iOS/App/XOWUEApp.swift; then
-            echo "XOWUE game surface still forces landscape" >&2
-            exit 1
-          fi
+          grep -Fq 'setNeedsUpdateOfSupportedInterfaceOrientations' iOS/App/XOWUEApp.swift
+          grep -Fq 'guest_frame_ready' iOS/App/XOWUEVulkanBackend.m
+          echo 'XOWUE_LANDSCAPE_GAME_PROOF source configuration OK'
 
       - name: Audit native PPC AOT control-flow coverage globally
         run: |
@@ -529,6 +528,8 @@ jobs:
           echo "Owner-wide PPC 0x82C2E4A8 linked into final app executable"
           grep -Fq '830EBE74' artifacts/xowue-linked-symbols.txt
           echo "Owner-wide PPC 0x830EBE74 linked into final app executable"
+          grep -Fq '831A9EBC' artifacts/xowue-linked-symbols.txt
+          echo "XOWUE_GLOBAL_PPC 0x831A9EBC linked into final executable"
           # Require the complete native draw plumbing in the packaged Mach-O.
           # Source-only renderer changes are not accepted as a deliverable.
           grep -Eq '_xowue_xenos_take_draws([[:space:]]|$)' artifacts/xowue-linked-symbols.txt
@@ -541,6 +542,7 @@ jobs:
           grep -Fq 'XENOS_COMPOSED_CACHE_ALLOCATION_FAILED' artifacts/xowue-linked-strings.txt
           grep -Fq 'XENOS_FRAGMENT_COLOR_OUTPUT_LINKED' artifacts/xowue-linked-strings.txt
           grep -Fq 'XENOS_COMPOSITED_GPU_READBACK' artifacts/xowue-linked-strings.txt
+          grep -Fq 'XENOS_GUEST_VIEWPORT' artifacts/xowue-linked-strings.txt
           echo "XENOS_GPU_LINKED Mach-O draw commands, PM4 queue and native shader pipeline"
           lipo "$APP/Frameworks/libvulkan_kosmickrisp.dylib" -verify_arch arm64
           otool -L "$APP/XOWUE" | grep -F "@rpath/libvulkan_kosmickrisp.dylib"

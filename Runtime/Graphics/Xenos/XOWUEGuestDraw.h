@@ -10,6 +10,8 @@ enum { XOWUE_GPU_CONSTANT_WORDS = 2296, XOWUE_GPU_MAX_DRAWS = 64 };
 typedef struct XOWUEGuestDraw {
   uint64_t vertex_hash, pixel_hash;
   uint32_t initiator, index_count, index_address, index_info, index_offset;
+  uint32_t pa_cl_vte_cntl;
+  uint32_t viewport_register_bits[4];
   uint32_t vertex_fetch_mask, texture_2d_mask, texture_3d_mask, texture_cube_mask;
   uint32_t fetch_used[3];
   uint32_t fetch_strides[96], fetch_extents[96];

@@ -50,3 +50,11 @@ actual archived AOT source tree.
 pipeline. Compilation and a successful IPA are not proof of the first game
 frame. The existing shaders are real guest shaders; the missing GPU pipeline
 remains separate until draws, textures, EDRAM and resolves are fully linked.
+
+
+## Build 25 structural correction
+- Actual iOS gameplay switches to landscape-right, while the library returns to portrait; Info.plist advertises both before UIWindowScene geometry requests.
+- Global AOT recovery includes real terminal PPC `blr` tails and verified small linear function suffixes, using compiled ARM64 translation only. Unsafe paths remain guarded and are counted; a CI check enforces the known Build 24 target `0x831A9EBC`.
+- Xenos register snapshots `PA_CL_VTE_CNTL` and `PA_CL_VPORT_*` are carried with each PM4 draw, and guest coordinates are converted to Vulkan clip space. Landscape viewports preserve 1280x720 aspect.
+- An accepted Vulkan draw is **not** proof of non-black pixels. GPU readback continues to report measured pixels.
+- On-device XEX execution is required to prove new gameplay, since macOS Actions cannot boot the Xbox guest in the iPhone runtime.

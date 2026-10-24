@@ -38,3 +38,12 @@ assert 'KKUpdateLinkedPixelShaderModule' in vulkan
 assert 'XENOS_COMPOSITED_GPU_READBACK' in vulkan
 assert 'XDGetPipeline' in renderer and 'KKUpdateLinkedPixelShaderModule' in renderer
 print("PASS: fragment OUT0, paired interpolators, native frame readback")
+
+# Verify live guest PA_CL_VTE_CNTL snapshot and guest-to-host viewport
+# transformation, rather than treating recorded Vulkan commands as pixels.
+assert "packet.pa_cl_vte_cntl = registers[0x2206u]" in bridge
+assert "packet.viewport_register_bits[0] = registers[0x210Fu]" in bridge
+assert "XENOS_GUEST_VIEWPORT" in renderer
+assert "push.flags=1u" in renderer
+assert "fminf(targetW/1280.0f,targetH/720.0f)" in renderer
+print("PASS: Xenos guest viewport, real VTE flags and landscape aspect")

@@ -96,7 +96,11 @@ private struct XOWUEGameSurfaceScreen: View {
     private func requestOrientation(_ orientations: UIInterfaceOrientationMask) {
         guard let scene = UIApplication.shared.connectedScenes
             .compactMap({ $0 as? UIWindowScene }).first else { return }
-        scene.requestGeometryUpdate(.iOS(interfaceOrientations: orientations)) { _ in }
+        scene.requestGeometryUpdate(.iOS(interfaceOrientations: orientations)) { error in
+            XOWUEDiagnostics.log("orientation.request.failed mask=\(orientations.rawValue) error=\(error.localizedDescription)")
+        }
+        scene.windows.first(where: { $0.isKeyWindow })?.rootViewController?
+            .setNeedsUpdateOfSupportedInterfaceOrientations()
     }
 
     var body: some View {
@@ -179,9 +183,9 @@ private struct XOWUEGameSurfaceScreen: View {
             requestOrientation(.portrait)
         }
         .onAppear {
-            // Keep game UI, touch controls and CAMetalLayer in portrait. This
-            // is a host presentation choice, not a substitute for Xenos draws.
-            requestOrientation(.portrait)
+            // The Xenos framebuffer is 1280x720. Launch gameplay in true iOS
+            // landscape (the library returns to portrait on dismissal).
+            requestOrientation(.landscapeRight)
             DispatchQueue.main.asyncAfter(deadline: .now() + 5) {
                 withAnimation(.easeOut(duration: 0.2)) { self.showBootHint = false }
             }
