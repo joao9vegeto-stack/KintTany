@@ -86,3 +86,14 @@ assert 'fetchFormat==32u' in engine and 'fetchFormat==25u' in engine
 assert 'std::bit_cast<float>(bits)' in engine
 assert 'format==32u' in textures and 'format==2u' in textures
 print('PASS: native R8 RG8 RG16 RGB10A2 FP16 guest sampling')
+
+# Native EDRAM modes must be different operations, and guest copy packets may
+# omit fragment or vertex programs without being dropped before resolve.
+assert 'const bool copyMode=edramMode==6u' in bridge
+assert 'const bool depthOnly=edramMode==5u' in bridge
+assert 'packet.rb_copy_dest_base = registers[0x2319u]' in bridge
+assert 'XENOS_EDRAM_RESOLVE_NATIVE' in Path('iOS/App/XOWUEGuestColor.inc').read_text()
+assert 'XENOS_EDRAM_DEPTH_NATIVE' in Path('iOS/App/XOWUEGuestDepth.inc').read_text()
+assert 'XDResolveGuestColor' in renderer
+assert 'XENOS_COPY_GUEST_REQUEST' in renderer
+print('PASS: guest PM4 depth-only, offscreen EDRAM, native color resolve and copy destination tracing')

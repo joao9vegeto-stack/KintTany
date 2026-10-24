@@ -211,6 +211,12 @@ jobs:
             -o "$RUNNER_TEMP/xowue-xenos-bridge-smoke"
           "$RUNNER_TEMP/xowue-xenos-bridge-smoke"
 
+      - name: Verify native Xenos BC1 BC2 BC3 block decoder
+        run: |
+          set -euo pipefail
+          clang++ -std=c++23 -Wall -Wextra -Werror -pedantic Runtime/Graphics/Xenos/XOWUEDxtSmoke.cpp -o "$RUNNER_TEMP/xowue-bc-smoke"
+          "$RUNNER_TEMP/xowue-bc-smoke"
+
       - name: Fetch pinned XenonRecomp runtime utilities
         run: |
           set -euo pipefail

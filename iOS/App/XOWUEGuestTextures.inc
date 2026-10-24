@@ -66,7 +66,9 @@ static bool XDCreate2DTexture(KKVulkanState *state, XDTexture *tx,
    const uint32_t format=fetch[1]&0x3Fu;
    const bool supported=(format==2u||format==6u||format==7u||
        format==8u||format==9u||format==10u||format==25u||
-       format==32u||format==54u);
+       format==32u||format==54u||
+       format==18u||format==19u||format==20u||
+       format==51u||format==52u||format==53u);
    if (!width || !height || width>2048u || height>2048u ||
        !supported || bytes>16u*1024u*1024u) return false;
    if (!XDCreateBuffer(state,&tx->staging,bytes,VK_BUFFER_USAGE_TRANSFER_SRC_BIT)) return false;

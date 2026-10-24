@@ -21,7 +21,7 @@ typedef struct {
    VkDescriptorPool pool;
    VkDescriptorSet descriptors;
    VkPipeline pipeline;
-   struct { VkPipeline pipeline; uint64_t vs, ps; VkPrimitiveTopology topology; } pipeline_cache[512];
+   struct { VkPipeline pipeline; uint64_t vs, ps; VkPrimitiveTopology topology; VkRenderPass pass; VkSampleCountFlagBits samples; bool depthOnly; } pipeline_cache[512];
    uint32_t pipeline_cache_count;
    VkPipeline retired[128];
    uint32_t retired_count;
@@ -95,6 +95,8 @@ static void XDDestroyFramebuffers(KKVulkanState *state) {
    }
 }
 
+#include "XOWUEGuestDepth.inc"
+#include "XOWUEGuestColor.inc"
 #include "XOWUEGuestTextures.inc"
 
 static void XDCollectPipelines(KKVulkanState *state) {
@@ -106,6 +108,8 @@ static void XDCollectPipelines(KKVulkanState *state) {
 static void XDDestroyRenderer(KKVulkanState *state) {
    if (!state->device) return;
    XDDestroyFramebuffers(state);
+   XDDestroyGuestDepth(state);
+   XDDestroyGuestColor(state);
    for (uint32_t i=0;i<g_xd.pipeline_cache_count;++i)
       if (g_xd.pipeline_cache[i].pipeline)
          XD(DestroyPipeline)(state->device,g_xd.pipeline_cache[i].pipeline,NULL);
@@ -235,11 +239,15 @@ static VkPrimitiveTopology XDTopology(uint32_t primitive) {
 }
 
 static bool XDGetPipeline(KKVulkanState *state, const XOWUEGuestDraw *draw,
-                          VkPrimitiveTopology topology) {
+                          VkPrimitiveTopology topology, VkRenderPass pass,
+                          VkSampleCountFlagBits samples, bool depthOnly) {
    for (uint32_t i=0;i<g_xd.pipeline_cache_count;++i) {
       if (g_xd.pipeline_cache[i].vs==draw->vertex_hash &&
           g_xd.pipeline_cache[i].ps==draw->pixel_hash &&
-          g_xd.pipeline_cache[i].topology==topology) {
+          g_xd.pipeline_cache[i].topology==topology &&
+          g_xd.pipeline_cache[i].pass==pass &&
+          g_xd.pipeline_cache[i].samples==samples &&
+          g_xd.pipeline_cache[i].depthOnly==depthOnly) {
          g_xd.pipeline=g_xd.pipeline_cache[i].pipeline;
          g_xd.vs_hash=draw->vertex_hash;
          g_xd.ps_hash=draw->pixel_hash;
@@ -254,9 +262,10 @@ static bool XDGetPipeline(KKVulkanState *state, const XOWUEGuestDraw *draw,
    g_xd.pipeline=VK_NULL_HANDLE;
    KKUpdateNativeShaderModule(state,draw->vertex_hash,&state->guest_vertex_module,
                               &state->guest_vertex_hash,"vertex");
-   if (!KKUpdateLinkedPixelShaderModule(state,draw->vertex_hash,draw->pixel_hash))
+   if (!depthOnly && !KKUpdateLinkedPixelShaderModule(state,draw->vertex_hash,draw->pixel_hash))
       return false;
-   if (!state->guest_vertex_module || !state->guest_pixel_module) return false;
+   if (!state->guest_vertex_module ||
+       (!depthOnly && !state->guest_pixel_module)) return false;
    VkPipelineShaderStageCreateInfo stages[2]={
       {.sType=VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO,
        .stage=VK_SHADER_STAGE_VERTEX_BIT,.module=state->guest_vertex_module,.pName="main"},
@@ -271,19 +280,25 @@ static bool XDGetPipeline(KKVulkanState *state, const XOWUEGuestDraw *draw,
       .polygonMode=VK_POLYGON_MODE_FILL,.cullMode=VK_CULL_MODE_NONE,
       .frontFace=VK_FRONT_FACE_CLOCKWISE,.lineWidth=1.0f};
    VkPipelineMultisampleStateCreateInfo ms={.sType=VK_STRUCTURE_TYPE_PIPELINE_MULTISAMPLE_STATE_CREATE_INFO,
-      .rasterizationSamples=VK_SAMPLE_COUNT_1_BIT};
+      .rasterizationSamples=samples};
    VkPipelineColorBlendAttachmentState attachment={.colorWriteMask=0xFu};
    VkPipelineColorBlendStateCreateInfo blend={.sType=VK_STRUCTURE_TYPE_PIPELINE_COLOR_BLEND_STATE_CREATE_INFO,
-      .attachmentCount=1,.pAttachments=&attachment};
+      .attachmentCount=depthOnly?0u:1u,.pAttachments=depthOnly?NULL:&attachment};
+   VkPipelineDepthStencilStateCreateInfo depthState={
+      .sType=VK_STRUCTURE_TYPE_PIPELINE_DEPTH_STENCIL_STATE_CREATE_INFO,
+      .depthTestEnable=depthOnly?VK_TRUE:VK_FALSE,
+      .depthWriteEnable=depthOnly?VK_TRUE:VK_FALSE,
+      .depthCompareOp=VK_COMPARE_OP_LESS_OR_EQUAL};
    VkDynamicState dynamic_states[]={VK_DYNAMIC_STATE_VIEWPORT,VK_DYNAMIC_STATE_SCISSOR};
    VkPipelineDynamicStateCreateInfo dynamic={.sType=VK_STRUCTURE_TYPE_PIPELINE_DYNAMIC_STATE_CREATE_INFO,
       .dynamicStateCount=2,.pDynamicStates=dynamic_states};
    VkGraphicsPipelineCreateInfo info={.sType=VK_STRUCTURE_TYPE_GRAPHICS_PIPELINE_CREATE_INFO,
-      .stageCount=2,.pStages=stages,.pVertexInputState=&vertex,
+      .stageCount=depthOnly?1u:2u,.pStages=stages,.pVertexInputState=&vertex,
       .pInputAssemblyState=&assembly,.pViewportState=&viewport,
       .pRasterizationState=&raster,.pMultisampleState=&ms,
-      .pColorBlendState=&blend,.pDynamicState=&dynamic,
-      .layout=g_xd.layout,.renderPass=g_xd.render_pass,.subpass=0};
+      .pColorBlendState=&blend,
+      .pDepthStencilState=depthOnly?&depthState:NULL,.pDynamicState=&dynamic,
+      .layout=g_xd.layout,.renderPass=pass,.subpass=0};
    VkResult result=XD(CreateGraphicsPipelines)(state->device,VK_NULL_HANDLE,1,&info,NULL,
                                                 &g_xd.pipeline);
    if (result!=VK_SUCCESS) {
@@ -300,6 +315,9 @@ static bool XDGetPipeline(KKVulkanState *state, const XOWUEGuestDraw *draw,
    g_xd.pipeline_cache[pipelineSlot].vs=draw->vertex_hash;
    g_xd.pipeline_cache[pipelineSlot].ps=draw->pixel_hash;
    g_xd.pipeline_cache[pipelineSlot].topology=topology;
+   g_xd.pipeline_cache[pipelineSlot].pass=pass;
+   g_xd.pipeline_cache[pipelineSlot].samples=samples;
+   g_xd.pipeline_cache[pipelineSlot].depthOnly=depthOnly;
    KKLog(@"XENOS_NATIVE_PIPELINE_CREATED vertex=%016llX pixel=%016llX topology=%u",
          (unsigned long long)g_xd.vs_hash,(unsigned long long)g_xd.ps_hash,
          (unsigned)topology);
@@ -402,6 +420,8 @@ static uint32_t XDProcessDraws(KKVulkanState *state, uint32_t image_index,
       textureReady[i]=XDPrepare2DTextures(state,&draws[i],command,(uint32_t)i);
    }
    bool began=false;
+   bool swapchainAttachmentLayout=false;
+   VkRenderPass currentPass=VK_NULL_HANDLE;
    uint32_t queued=0;
    for (size_t i=0;i<total;++i) {
       const XOWUEGuestDraw *draw=&draws[i];
@@ -420,6 +440,38 @@ static uint32_t XDProcessDraws(KKVulkanState *state, uint32_t image_index,
          draw->rb_depth_info,draw->rb_depthcontrol,draw->rb_color_mask,
          draw->rb_blendcontrol[0],draw->rb_copy_control,
          draw->pa_sc_window_scissor_tl,draw->pa_sc_window_scissor_br);
+      const uint32_t edramMode=draw->rb_modecontrol&7u;
+      if(edramMode==6u) {
+         KKLog(@"XENOS_COPY_GUEST_REQUEST dest_base=%08X dest_pitch=%08X dest_info=%08X control=%08X",
+            draw->rb_copy_dest_base,draw->rb_copy_dest_pitch,
+            draw->rb_copy_dest_info,draw->rb_copy_control);
+         if(began){ XD(CmdEndRenderPass)(command);began=false;currentPass=VK_NULL_HANDLE; }
+         if(!XDResolveGuestColor(state,draw,command,image_index,swapchainAttachmentLayout)) {
+            KKLog(@"GRAPHICS_BLOCKER reason=EDRAM_COLOR_SOURCE_UNAVAILABLE tile=%u",
+                  draw->rb_color_info[0]&0xFFFu);
+            xowue_xenos_record_rejected(1,"XENOS_EDRAM_COLOR_SOURCE_UNAVAILABLE");
+         } else {
+            ++queued;
+            swapchainAttachmentLayout=true;
+         }
+         continue;
+      }
+      if(edramMode!=4u && edramMode!=5u) {
+         xowue_xenos_record_rejected(1,"XENOS_EDRAM_MODE_UNSUPPORTED");
+         continue;
+      }
+      const bool depthOnly=edramMode==5u;
+      XDDepthTarget *depthTarget=depthOnly?XDGetGuestDepth(state,draw):NULL;
+      XDColorTarget *colorTarget=(!depthOnly && (draw->rb_surface_info&0x3FFFu))
+          ?XDGetGuestColor(state,draw):NULL;
+      if(!depthOnly && (draw->rb_surface_info&0x3FFFu) && !colorTarget) {
+         xowue_xenos_record_rejected(1,"XENOS_EDRAM_COLOR_TARGET_UNAVAILABLE");
+         continue;
+      }
+      if(depthOnly && !depthTarget) {
+         xowue_xenos_record_rejected(1,"XENOS_EDRAM_DEPTH_TARGET_UNAVAILABLE");
+         continue;
+      }
       VkPrimitiveTopology topology=XDTopology(primitive);
       if (topology==VK_PRIMITIVE_TOPOLOGY_MAX_ENUM || !draw->index_count ||
           draw->index_count>65535u) {
@@ -440,7 +492,13 @@ static uint32_t XDProcessDraws(KKVulkanState *state, uint32_t image_index,
       const uint32_t count=(primitive==8u)?(draw->index_count/3u)*6u:
                            (primitive==13u)?(draw->index_count/4u)*6u:
                            draw->index_count;
-      if (!count || count>131072u || !XDGetPipeline(state,draw,topology)) {
+      if (!count || count>131072u ||
+          !XDGetPipeline(state,draw,topology,
+                         depthOnly?depthTarget->pass:
+                           colorTarget?colorTarget->pass:g_xd.render_pass,
+                         depthOnly?depthTarget->samples:
+                           colorTarget?colorTarget->samples:VK_SAMPLE_COUNT_1_BIT,
+                         depthOnly)) {
          xowue_xenos_record_rejected(1,"XENOS_PIPELINE_CREATION_FAILED");
          continue;
       }
@@ -482,7 +540,31 @@ static uint32_t XDProcessDraws(KKVulkanState *state, uint32_t image_index,
                vte,push.flags,push.posScale[0],push.posScale[1],
                push.posScale[2],push.posScale[3],primitive,count);
       }
+      VkRenderPass neededPass=depthOnly?depthTarget->pass:
+          colorTarget?colorTarget->pass:g_xd.render_pass;
+      if(began && currentPass!=neededPass) {
+         XD(CmdEndRenderPass)(command);began=false;currentPass=VK_NULL_HANDLE;
+      }
+      if(!began && depthOnly) {
+         VkClearValue clear={0};clear.depthStencil.depth=1.0f;
+         VkRenderPassBeginInfo nativeDepth={.sType=VK_STRUCTURE_TYPE_RENDER_PASS_BEGIN_INFO,
+            .renderPass=depthTarget->pass,.framebuffer=depthTarget->framebuffer,
+            .renderArea={.offset={0,0},.extent=depthTarget->extent},
+            .clearValueCount=1,.pClearValues=&clear};
+         XD(CmdBeginRenderPass)(command,&nativeDepth,VK_SUBPASS_CONTENTS_INLINE);
+         began=true;currentPass=neededPass;
+      }
+      if (!began && colorTarget) {
+         VkClearValue clear={0};
+         VkRenderPassBeginInfo offscreen={.sType=VK_STRUCTURE_TYPE_RENDER_PASS_BEGIN_INFO,
+            .renderPass=colorTarget->pass,.framebuffer=colorTarget->framebuffer,
+            .renderArea={.offset={0,0},.extent=colorTarget->extent},
+            .clearValueCount=1,.pClearValues=&clear};
+         XD(CmdBeginRenderPass)(command,&offscreen,VK_SUBPASS_CONTENTS_INLINE);
+         began=true;currentPass=neededPass;
+      }
       if (!began) {
+         if(!swapchainAttachmentLayout) {
          VkImageMemoryBarrier to_color={.sType=VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER,
             .srcAccessMask=VK_ACCESS_TRANSFER_WRITE_BIT,
             .dstAccessMask=VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT,
@@ -494,22 +576,28 @@ static uint32_t XDProcessDraws(KKVulkanState *state, uint32_t image_index,
             .subresourceRange={.aspectMask=VK_IMAGE_ASPECT_COLOR_BIT,.levelCount=1,.layerCount=1}};
          state->CmdPipelineBarrier(command,VK_PIPELINE_STAGE_TRANSFER_BIT,
             VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT,0,0,NULL,0,NULL,1,&to_color);
+         }
          VkRenderPassBeginInfo render={.sType=VK_STRUCTURE_TYPE_RENDER_PASS_BEGIN_INFO,
             .renderPass=g_xd.render_pass,.framebuffer=g_xd.framebuffers[image_index],
             .renderArea={.offset={0,0},.extent=state->swapchain_extent}};
          XD(CmdBeginRenderPass)(command,&render,VK_SUBPASS_CONTENTS_INLINE);
-         began=true;
+         began=true;currentPass=neededPass;
+         swapchainAttachmentLayout=true;
       }
       // Use the real landscape aspect of the Xbox 360 frame (16:9);
       // the iPhone's much wider landscape screen receives side pillars.
-      const float targetW=(float)state->swapchain_extent.width;
-      const float targetH=(float)state->swapchain_extent.height;
+      const float targetW=(float)(depthOnly?depthTarget->extent.width:
+                        colorTarget?colorTarget->extent.width:state->swapchain_extent.width);
+      const float targetH=(float)(depthOnly?depthTarget->extent.height:
+                        colorTarget?colorTarget->extent.height:state->swapchain_extent.height);
       const float fit=fminf(targetW/1280.0f,targetH/720.0f);
       const float fittedW=1280.0f*fit, fittedH=720.0f*fit;
       VkViewport viewport={.x=(targetW-fittedW)*0.5f,
          .y=(targetH-fittedH)*0.5f,.width=fittedW,.height=fittedH,
          .minDepth=0,.maxDepth=1};
-      VkRect2D scissor={.offset={0,0},.extent=state->swapchain_extent};
+      VkRect2D scissor={.offset={0,0},
+         .extent=depthOnly?depthTarget->extent:
+            colorTarget?colorTarget->extent:state->swapchain_extent};
       XD(CmdSetViewport)(command,0,1,&viewport);
       XD(CmdSetScissor)(command,0,1,&scissor);
       XD(CmdBindPipeline)(command,VK_PIPELINE_BIND_POINT_GRAPHICS,g_xd.pipeline);
@@ -535,6 +623,23 @@ static uint32_t XDProcessDraws(KKVulkanState *state, uint32_t image_index,
       XD(CmdEndRenderPass)(command);
       XDFlush(state,&g_xd.constants);
       XDFlush(state,&g_xd.gpu_memory);
+   }
+   // Depth-only and offscreen-color passes never transitioned the swapchain.
+   // Preserve the exact Vulkan layout contract expected by composed readback.
+   if(queued && !swapchainAttachmentLayout) {
+      VkImageMemoryBarrier toAttachment={
+        .sType=VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER,
+        .srcAccessMask=VK_ACCESS_TRANSFER_WRITE_BIT,
+        .dstAccessMask=VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT,
+        .oldLayout=VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
+        .newLayout=VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL,
+        .srcQueueFamilyIndex=VK_QUEUE_FAMILY_IGNORED,
+        .dstQueueFamilyIndex=VK_QUEUE_FAMILY_IGNORED,
+        .image=state->swapchain_images[image_index],
+        .subresourceRange={.aspectMask=VK_IMAGE_ASPECT_COLOR_BIT,
+          .levelCount=1,.layerCount=1}};
+      state->CmdPipelineBarrier(command,VK_PIPELINE_STAGE_TRANSFER_BIT,
+        VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT,0,0,NULL,0,NULL,1,&toAttachment);
    }
    KKLog(@"XENOS_NATIVE_DRAW_OUTCOME captured=%zu queued=%u rejected=%llu rejected_memory=%llu rejected_texture=%llu",
         total,queued,(unsigned long long)g_xd.rejected,

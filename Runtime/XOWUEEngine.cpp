@@ -5,6 +5,7 @@
 #include "XOWUEDispatchGuard.h"
 #include "Graphics/Xenos/XOWUEGpuBridge.h"
 #include "Graphics/Xenos/XOWUEGuestDraw.h"
+#include "Graphics/Xenos/XOWUEDxt.h"
 #include "xex.h"
 
 #include <algorithm>
@@ -1358,12 +1359,22 @@ extern "C" void XOWUECrashRecorderWriteFatal(const char *message) __attribute__(
     const char *reason) {
     const uint32_t lr = static_cast<uint32_t>(context.lr);
     const uint32_t threadId = g_currentGuestThread ? g_currentGuestThread->id : 0u;
-    char event[256];
+    // Capture actual AOT site and PPC branch operands. Never guess or
+    // substitute a new destination for an invalid indirect call.
+    uint8_t site[4]{};
+    const auto graphicsMemory = acquireGraphicsGuestMemory();
+    const bool siteValid = lr>=4u && validGuestRange(lr-4u,4u) &&
+       graphicsMemory && graphicsMemory->base;
+    if (siteValid) std::memcpy(site,graphicsMemory->base+lr-4u,4u);
+    char event[640];
     std::snprintf(event, sizeof(event),
-        "PPC indirect dispatch failed reason=%s guestTarget=0x%08X LR=0x%08X lrMinus4Unverified=0x%08X lastAotEntry=0x%08X thread=%u slot=0x%llX",
-        reason ? reason : "unknown", target, lr, lr >= 4u ? lr - 4u : 0u,
-        g_lastAotGuestFunction.load(std::memory_order_relaxed),
-        threadId, static_cast<unsigned long long>(reinterpret_cast<uintptr_t>(slotFunction)));
+        "PPC indirect dispatch failed reason=%s guestTarget=0x%08X LR=0x%08X lrMinus4Unverified=0x%08X callsite_bytes=%s%02X%02X%02X%02X r3=%08X r4=%08X r5=%08X r6=%08X r7=%08X r8=%08X r9=%08X r10=%08X lastAotEntry=0x%08X thread=%u slot=0x%llX",
+        reason ? reason : "unknown",target,lr,lr>=4u?lr-4u:0u,
+        siteValid?"":"unavailable:",site[0],site[1],site[2],site[3],
+        context.r3.u32,context.r4.u32,context.r5.u32,context.r6.u32,
+        context.r7.u32,context.r8.u32,context.r9.u32,context.r10.u32,
+        g_lastAotGuestFunction.load(std::memory_order_relaxed),threadId,
+        static_cast<unsigned long long>(reinterpret_cast<uintptr_t>(slotFunction)));
     recordRuntimeTrace(event);
     if (XOWUECrashRecorderWriteFatal) XOWUECrashRecorderWriteFatal(event);
     requestGuestSchedulerStop();
@@ -3564,6 +3575,55 @@ static bool decodeXenosSwapTexture(uint8_t *base, const uint32_t fetchWords[6],
     return true;
 }
 
+
+static bool decodeXenosBCTexture(uint8_t* base,const uint32_t fetchWords[6],
+                                 uint32_t width,uint32_t height,
+                                 std::vector<uint8_t>& rgba) {
+    const uint32_t format=fetchWords[1]&63u;
+    const bool bc1=(format==18u||format==51u);
+    const bool bc2=(format==19u||format==52u);
+    const bool bc3=(format==20u||format==53u);
+    if(!base || (!bc1&&!bc2&&!bc3) || width==0u || height==0u ||
+       width>2048u || height>2048u) return false;
+    const uint32_t blockBytes=bc1?8u:16u;
+    const uint32_t blocksX=(width+3u)/4u,blocksY=(height+3u)/4u;
+    const uint32_t fetchPage=(fetchWords[1]>>12u)&0xFFFFFu;
+    const uint64_t addressBase=uint64_t(fetchPage)<<12u;
+    const bool tiled=(fetchWords[0]>>31u)!=0u;
+    uint32_t pitchPixels=((fetchWords[0]>>22u)&0x1FFu)<<5u;
+    if(pitchPixels<width)pitchPixels=(width+31u)&~31u;
+    const uint32_t pitchBlocks=(pitchPixels+3u)/4u;
+    const uint32_t alignedPitch=(pitchBlocks+31u)&~31u;
+    const uint32_t endian=(fetchWords[1]>>6u)&3u;
+    const uint32_t swizzle=(fetchWords[3]>>1u)&0xFFFu;
+    rgba.assign(size_t(width)*height*4u,0u);
+    for(uint32_t by=0;by<blocksY;++by)for(uint32_t bx=0;bx<blocksX;++bx) {
+       const uint64_t offset=tiled?
+         xenosTiledOffset2D(bx,by,alignedPitch,bc1?3u:4u):
+         (uint64_t(by)*pitchBlocks+bx)*blockBytes;
+       const uint64_t guest=addressBase+offset;
+       if(guest>UINT32_MAX||!validGuestRange(uint32_t(guest),blockBytes))return false;
+       uint8_t block[16]{};
+       std::memcpy(block,base+guest,blockBytes);
+       swapXenosPixelEndian(block,blockBytes,endian);
+       uint8_t texels[64]{};
+       if(!xowue::graphics::DecodeBCBlock(block,format,texels))return false;
+       for(uint32_t iy=0;iy<4u;++iy)for(uint32_t ix=0;ix<4u;++ix){
+          uint32_t x=bx*4u+ix,y=by*4u+iy;
+          if(x>=width||y>=height)continue;
+          const uint8_t* rgbaIn=texels+(iy*4u+ix)*4u;
+          uint8_t* rgbaOut=rgba.data()+(size_t(y)*width+x)*4u;
+          for(uint32_t c=0;c<4u;++c){
+             uint32_t selector=(swizzle>>(c*3u))&7u;
+             if(selector>=6u)selector&=5u;
+             rgbaOut[c]=selector<4u?rgbaIn[selector]:
+                        uint8_t(selector==5u?255u:0u);
+          }
+       }
+    }
+    return true;
+}
+
 extern "C" bool xowue_xenos_copy_guest_texture2d(
     const uint32_t fetch[6], void *rgba, size_t bytes) {
     if (!fetch || !rgba) return false;
@@ -3576,9 +3636,12 @@ extern "C" bool xowue_xenos_copy_guest_texture2d(
     std::vector<uint8_t> decoded;
     uint32_t physical = 0;
     const uint32_t format = fetch[1] & 0x3Fu;
-    if (!decodeXenosSwapTexture(memory->base, fetch, format,
-                                width, height, physical, decoded) ||
-        decoded.size() != bytes) return false;
+    const bool ok=(format==18u||format==19u||format==20u||
+                   format==51u||format==52u||format==53u)
+       ? decodeXenosBCTexture(memory->base,fetch,width,height,decoded)
+       : decodeXenosSwapTexture(memory->base,fetch,format,
+                               width,height,physical,decoded);
+    if(!ok||decoded.size()!=bytes)return false;
     std::memcpy(rgba, decoded.data(), bytes);
     return true;
 }
@@ -4311,11 +4374,19 @@ static bool getGuestObjectPath(uint8_t *base, uint32_t attributes,
     if (!base || !validGuestRange(attributes, 12u)) return false;
     const uint32_t rootHandle = PPC_LOAD_U32(attributes + 4u);
     const uint32_t nameDescriptor = PPC_LOAD_U32(attributes + 8u);
-    if (!readGuestAnsiString(base, nameDescriptor, path)) return false;
-    if (rootHandle != 0u && rootHandle != 0xFFFFFFFDu) {
-        const auto root = lookupGuestFile(rootHandle);
+    // Xbox X_OBJECT_ATTRIBUTES permits a null ObjectName when reopening the
+    // object designated by an existing root directory handle.
+    if (nameDescriptor==0u && rootHandle!=0u && rootHandle!=0xFFFFFFFDu) {
+        const auto root=lookupGuestFile(rootHandle);
+        if (!root) return false;
+        path=root->path.generic_string();
+        return true;
+    }
+    if (!readGuestAnsiString(base,nameDescriptor,path)) return false;
+    if (rootHandle!=0u && rootHandle!=0xFFFFFFFDu) {
+        const auto root=lookupGuestFile(rootHandle);
         if (!root || !root->directory) return false;
-        path = root->path.generic_string() + "/" + path;
+        path=root->path.generic_string()+"/"+path;
     }
     return true;
 }
@@ -4332,7 +4403,11 @@ void xowue_NtCreateFile(PPCContext &context, uint8_t *base) {
         !getGuestObjectPath(base, objectAttributes, guestPath)) {
         context.r3.u32 = kNtStatusInvalidParameter;
         writeGuestIoStatus(base, ioStatusAddress, context.r3.u32, 0u);
-        recordRuntimeTrace("NtCreateFile rejected invalid output/object attributes");
+        char details[230];
+        std::snprintf(details,sizeof(details),
+           "NtCreateFile rejected invalid output/object attributes out=%08X attrs=%08X io=%08X access=%08X disposition=%08X",
+           handleOutAddress,objectAttributes,ioStatusAddress,desiredAccess,disposition);
+        recordRuntimeTrace(details);
         return;
     }
     uint32_t handle = 0u, action = 0u;
@@ -6352,6 +6427,11 @@ void xowue_NtFreeVirtualMemory(PPCContext &context, uint8_t *base) {
         std::memset(base + address, 0, resultSize);
     } else if (freeType == 0x00008000u) { // MEM_RELEASE
         if (address != allocationAddress) {
+            char event[200];
+            std::snprintf(event,sizeof(event),
+                "NtFree MEM_RELEASE rejected interior address=%08X reservation=%08X size=%08X (release must start at reservation base)",
+                address,allocationAddress,allocationSize);
+            recordRuntimeTrace(event);
             failWith(kNtStatusInvalidParameter);
             return;
         }

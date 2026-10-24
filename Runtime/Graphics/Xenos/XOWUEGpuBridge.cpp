@@ -230,20 +230,26 @@ void QueueDraw(uint32_t initiator, uint32_t indexCount,
   std::lock_guard lock(stateMutex);
   ++observedDraws;
   lastDrawInitiator = initiator;
-  if (!indexCount || !vertexHash || !pixelHash || pendingDraws.size() >= XOWUE_GPU_MAX_DRAWS) {
+  const uint32_t edramMode=registers[0x2208u]&7u;
+  const bool depthOnly=edramMode==5u;
+  const bool copyMode=edramMode==6u;
+  if (pendingDraws.size()>=XOWUE_GPU_MAX_DRAWS ||
+      (!copyMode && (!indexCount || !vertexHash ||
+                    (!depthOnly && !pixelHash)))) {
     ++droppedDraws;
     return;
   }
-  const auto vs = shaders.find(vertexHash);
-  const auto ps = shaders.find(pixelHash);
-  if (vs == shaders.end() || ps == shaders.end() ||
-      vs->second.spirv.empty() || ps->second.spirv.empty()) {
+  const auto vs=shaders.find(vertexHash);
+  const auto ps=shaders.find(pixelHash);
+  const bool validVS=vs!=shaders.end() && !vs->second.spirv.empty();
+  const bool validPS=ps!=shaders.end() && !ps->second.spirv.empty();
+  if (!copyMode && (!validVS || (!depthOnly && !validPS))) {
     ++droppedDraws;
     return;
   }
   XOWUEGuestDraw packet{};
-  packet.vertex_hash = vertexHash;
-  packet.pixel_hash = pixelHash;
+  packet.vertex_hash = copyMode?0u:vertexHash;
+  packet.pixel_hash = (copyMode||depthOnly)?0u:pixelHash;
   packet.initiator = initiator;
   packet.index_count = indexCount;
   packet.index_address = indexAddress;
@@ -263,6 +269,9 @@ void QueueDraw(uint32_t initiator, uint32_t indexCount,
   packet.rb_color_info[3] = registers[0x2005u];
   packet.rb_depth_info = registers[0x2002u];
   packet.rb_copy_control = registers[0x2318u];
+  packet.rb_copy_dest_base = registers[0x2319u];
+  packet.rb_copy_dest_pitch = registers[0x231Au];
+  packet.rb_copy_dest_info = registers[0x231Bu];
   packet.rb_blendcontrol[0] = registers[0x2201u];
   packet.rb_blendcontrol[1] = registers[0x2209u];
   packet.rb_blendcontrol[2] = registers[0x220Au];
@@ -273,17 +282,24 @@ void QueueDraw(uint32_t initiator, uint32_t indexCount,
   packet.viewport_register_bits[1] = registers[0x2110u]; // XOFFSET
   packet.viewport_register_bits[2] = registers[0x2111u]; // YSCALE
   packet.viewport_register_bits[3] = registers[0x2112u]; // YOFFSET
-  packet.vertex_fetch_mask = vs->second.vertexFetchMask;
-  packet.texture_2d_mask = vs->second.texture2DMask | ps->second.texture2DMask;
-  packet.texture_3d_mask = vs->second.texture3DMask | ps->second.texture3DMask;
-  packet.texture_cube_mask = vs->second.textureCubeMask | ps->second.textureCubeMask;
-  packet.vertex_memexport = vs->second.usesMemExport ? 1u : 0u;
-  packet.pixel_memexport = ps->second.usesMemExport ? 1u : 0u;
-  packet.color_target_mask = ps->second.colorTargetMask;
-  for (uint32_t i = 0; i < 3u; ++i) packet.fetch_used[i] = vs->second.fetchUsed[i];
-  for (uint32_t i = 0; i < 96u; ++i) {
-    packet.fetch_strides[i] = vs->second.fetchStrides[i];
-    packet.fetch_extents[i] = vs->second.fetchExtents[i];
+  if(validVS && !copyMode) {
+    packet.vertex_fetch_mask=vs->second.vertexFetchMask;
+    packet.vertex_memexport=vs->second.usesMemExport?1u:0u;
+    packet.texture_2d_mask=vs->second.texture2DMask;
+    packet.texture_3d_mask=vs->second.texture3DMask;
+    packet.texture_cube_mask=vs->second.textureCubeMask;
+    for(uint32_t i=0;i<3u;++i)packet.fetch_used[i]=vs->second.fetchUsed[i];
+    for(uint32_t i=0;i<96u;++i){
+      packet.fetch_strides[i]=vs->second.fetchStrides[i];
+      packet.fetch_extents[i]=vs->second.fetchExtents[i];
+    }
+  }
+  if(validPS && !depthOnly && !copyMode) {
+    packet.texture_2d_mask|=ps->second.texture2DMask;
+    packet.texture_3d_mask|=ps->second.texture3DMask;
+    packet.texture_cube_mask|=ps->second.textureCubeMask;
+    packet.pixel_memexport=ps->second.usesMemExport?1u:0u;
+    packet.color_target_mask=ps->second.colorTargetMask;
   }
   uint32_t pos = 0;
   for (uint32_t i = 0; i < 2048u; ++i) packet.constants[pos++] = registers[0x4000u + i];

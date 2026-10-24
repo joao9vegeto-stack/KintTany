@@ -52,3 +52,9 @@ required_lookup_guard = (
 if any(line not in recompiler_patch for line in required_lookup_guard):
     raise SystemExit("legacy PPC function-table lookup bypasses the guarded AOT resolver")
 print("PASS: legacy PPC function-table lookup uses guarded AOT resolver")
+
+# Build 31: evidence-first null AOT callsite, no interpreter or invented target.
+assert "callsite_bytes=%s%02X%02X%02X%02X" in Path("Runtime/XOWUEEngine.cpp").read_text()
+assert "NtCreateFile rejected invalid output/object attributes out=%08X" in Path("Runtime/XOWUEEngine.cpp").read_text()
+assert "release must start at reservation base" in Path("Runtime/XOWUEEngine.cpp").read_text()
+print("PASS: AOT invalid target records original bytes and arguments without fallback")

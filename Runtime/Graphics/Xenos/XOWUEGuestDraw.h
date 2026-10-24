@@ -14,6 +14,7 @@ typedef struct XOWUEGuestDraw {
   // Raw Xenos render-target state from the instant this draw was queued.
   uint32_t rb_modecontrol, rb_surface_info, rb_depthcontrol, rb_color_mask;
   uint32_t rb_color_info[4], rb_depth_info, rb_copy_control;
+  uint32_t rb_copy_dest_base, rb_copy_dest_pitch, rb_copy_dest_info;
   uint32_t rb_blendcontrol[4];
   uint32_t pa_sc_window_scissor_tl, pa_sc_window_scissor_br;
   uint32_t viewport_register_bits[4];
