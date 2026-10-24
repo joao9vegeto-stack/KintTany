@@ -45,8 +45,17 @@ def instruction_matches(actual: str, expected: str) -> bool:
     # Keep the exact instruction mnemonic and register operands. Disassemblers
     # may spell branch destinations as 0x82... or 82....
     a, b = norm_opcode(actual), norm_opcode(expected)
-    return a == b or (b.startswith(("bl0x", "b0x")) and
-                      a == b.replace("0x", "", 1))
+    variants = (b, b.replace("0x", "", 1)) if b.startswith(("bl0x", "b0x")) else (b,)
+    for token in variants:
+        offset = a.find(token)
+        if offset < 0:
+            continue
+        suffix = a[offset + len(token):]
+        # Some XenonRecomp releases append source annotations to instruction
+        # comments; accept only delimited annotations, not a longer opcode.
+        if not suffix or suffix[0] in ";#/":
+            return True
+    return False
 
 FUNC_RE = re.compile(r"PPC_FUNC_IMPL\(__imp__(sub_[0-9A-Fa-f]+)\) \{\n")
 ASM_LINE = re.compile(r"(?m)^\t// (.+?)\s*$")
@@ -98,6 +107,11 @@ def recover_entry(ppc_dir: Path, target: int, expected_owner: str, context: tupl
                 offset = (target - base) // 4
                 probable = comments[offset].group(1).strip() if offset < len(comments) else "OUTSIDE_FUNCTION"
                 matching = [i for i, v in enumerate(comments) if norm_opcode(context[0]) in norm_opcode(v.group(1))]
+                if symbol == expected_owner and matching:
+                    print("AOT_OWNER_INSNS target=%08X count=%d matches=%s" %
+                          (target, len(comments), [
+                              (i, repr(comments[i].group(1))) for i in matching[:8]
+                          ]))
                 nearest.append((base, symbol, len(comments), probable, matching[:8], path.name))
         for base, symbol, size, probable, matches, path in sorted(nearest, reverse=True)[:24]:
             print(f"AOT_CANDIDATE {path} {symbol} base=0x{base:08X} comments={size} indexInstruction={probable} expectedPositions={matches}")
