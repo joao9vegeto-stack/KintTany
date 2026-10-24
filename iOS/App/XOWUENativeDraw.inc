@@ -21,6 +21,8 @@ typedef struct {
    VkDescriptorPool pool;
    VkDescriptorSet descriptors;
    VkPipeline pipeline;
+   struct { VkPipeline pipeline; uint64_t vs, ps; VkPrimitiveTopology topology; } pipeline_cache[512];
+   uint32_t pipeline_cache_count;
    VkPipeline retired[128];
    uint32_t retired_count;
    VkPrimitiveTopology topology;
@@ -104,7 +106,10 @@ static void XDCollectPipelines(KKVulkanState *state) {
 static void XDDestroyRenderer(KKVulkanState *state) {
    if (!state->device) return;
    XDDestroyFramebuffers(state);
-   if (g_xd.pipeline) XD(DestroyPipeline)(state->device,g_xd.pipeline,NULL);
+   for (uint32_t i=0;i<g_xd.pipeline_cache_count;++i)
+      if (g_xd.pipeline_cache[i].pipeline)
+         XD(DestroyPipeline)(state->device,g_xd.pipeline_cache[i].pipeline,NULL);
+   g_xd.pipeline=VK_NULL_HANDLE;
    XDCollectPipelines(state);
    XDDestroyTextureBackend(state);
    if (g_xd.pool) XD(DestroyDescriptorPool)(state->device,g_xd.pool,NULL);
@@ -231,14 +236,22 @@ static VkPrimitiveTopology XDTopology(uint32_t primitive) {
 
 static bool XDGetPipeline(KKVulkanState *state, const XOWUEGuestDraw *draw,
                           VkPrimitiveTopology topology) {
-   if (g_xd.pipeline && g_xd.vs_hash==draw->vertex_hash &&
-       g_xd.ps_hash==draw->pixel_hash && g_xd.topology==topology)
-      return true;
-   if (g_xd.pipeline) {
-      if (g_xd.retired_count < 128u) g_xd.retired[g_xd.retired_count++] = g_xd.pipeline;
-      else return false;
-      g_xd.pipeline=VK_NULL_HANDLE;
+   for (uint32_t i=0;i<g_xd.pipeline_cache_count;++i) {
+      if (g_xd.pipeline_cache[i].vs==draw->vertex_hash &&
+          g_xd.pipeline_cache[i].ps==draw->pixel_hash &&
+          g_xd.pipeline_cache[i].topology==topology) {
+         g_xd.pipeline=g_xd.pipeline_cache[i].pipeline;
+         g_xd.vs_hash=draw->vertex_hash;
+         g_xd.ps_hash=draw->pixel_hash;
+         g_xd.topology=topology;
+         return true;
+      }
    }
+   if (g_xd.pipeline_cache_count>=512u) {
+      KKLog(@"GRAPHICS_BLOCKER reason=XENOS_PIPELINE_CACHE_CAPACITY_512");
+      return false;
+   }
+   g_xd.pipeline=VK_NULL_HANDLE;
    KKUpdateNativeShaderModule(state,draw->vertex_hash,&state->guest_vertex_module,
                               &state->guest_vertex_hash,"vertex");
    if (!KKUpdateLinkedPixelShaderModule(state,draw->vertex_hash,draw->pixel_hash))
@@ -282,6 +295,11 @@ static bool XDGetPipeline(KKVulkanState *state, const XOWUEGuestDraw *draw,
    g_xd.vs_hash=draw->vertex_hash;
    g_xd.ps_hash=draw->pixel_hash;
    g_xd.topology=topology;
+   const uint32_t pipelineSlot=g_xd.pipeline_cache_count++;
+   g_xd.pipeline_cache[pipelineSlot].pipeline=g_xd.pipeline;
+   g_xd.pipeline_cache[pipelineSlot].vs=draw->vertex_hash;
+   g_xd.pipeline_cache[pipelineSlot].ps=draw->pixel_hash;
+   g_xd.pipeline_cache[pipelineSlot].topology=topology;
    KKLog(@"XENOS_NATIVE_PIPELINE_CREATED vertex=%016llX pixel=%016llX topology=%u",
          (unsigned long long)g_xd.vs_hash,(unsigned long long)g_xd.ps_hash,
          (unsigned)topology);
@@ -395,6 +413,13 @@ static uint32_t XDProcessDraws(KKVulkanState *state, uint32_t image_index,
                (unsigned long long)draw->vertex_hash,(unsigned long long)draw->pixel_hash,
                draw->pa_cl_vte_cntl,draw->vertex_memexport,draw->pixel_memexport,
                draw->color_target_mask);
+      if (i<32u) KKLog(@"XENOS_NATIVE_TARGET_STATE slot=%zu mode=%08X pitch=%u msaa=%u rt0=%08X rt1=%08X rt2=%08X rt3=%08X depth=%08X depthctrl=%08X color_mask=%08X blend0=%08X copy=%08X scissor=%08X..%08X",
+         i,draw->rb_modecontrol,draw->rb_surface_info&0x3FFFu,
+         (draw->rb_surface_info>>16u)&3u,draw->rb_color_info[0],
+         draw->rb_color_info[1],draw->rb_color_info[2],draw->rb_color_info[3],
+         draw->rb_depth_info,draw->rb_depthcontrol,draw->rb_color_mask,
+         draw->rb_blendcontrol[0],draw->rb_copy_control,
+         draw->pa_sc_window_scissor_tl,draw->pa_sc_window_scissor_br);
       VkPrimitiveTopology topology=XDTopology(primitive);
       if (topology==VK_PRIMITIVE_TOPOLOGY_MAX_ENUM || !draw->index_count ||
           draw->index_count>65535u) {

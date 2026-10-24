@@ -64,8 +64,11 @@ static bool XDCreate2DTexture(KKVulkanState *state, XDTexture *tx,
    const uint32_t height=((fetch[2]>>13u)&0x1FFFu)+1u;
    const VkDeviceSize bytes=(VkDeviceSize)width*height*4u;
    const uint32_t format=fetch[1]&0x3Fu;
+   const bool supported=(format==2u||format==6u||format==7u||
+       format==8u||format==9u||format==10u||format==25u||
+       format==32u||format==54u);
    if (!width || !height || width>2048u || height>2048u ||
-       (format!=6u && format!=54u) || bytes>16u*1024u*1024u) return false;
+       !supported || bytes>16u*1024u*1024u) return false;
    if (!XDCreateBuffer(state,&tx->staging,bytes,VK_BUFFER_USAGE_TRANSFER_SRC_BIT)) return false;
    if (!xowue_xenos_copy_guest_texture2d(fetch,tx->staging.mapped,(size_t)bytes)) return false;
    XDFlush(state,&tx->staging);

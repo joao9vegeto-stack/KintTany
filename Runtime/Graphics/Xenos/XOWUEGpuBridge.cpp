@@ -129,7 +129,7 @@ ShaderResult LoadShader(uint32_t stage, const uint32_t* words, size_t count) {
       else ++spirvRejected;
     }
     (stage == 0 ? vertexHash : pixelHash) = result.hash;
-    if (shaders.size() < 256) {
+    if (shaders.size() < 4096u) {
       ShaderRecord entry;
       entry.valid = shader.ok;
       entry.glslBytes = shader.glsl.size();
@@ -149,6 +149,11 @@ ShaderResult LoadShader(uint32_t stage, const uint32_t* words, size_t count) {
       }
       entry.spirv = std::move(compilation.words);
       shaders.emplace(result.hash, std::move(entry));
+    } else if (shader.ok) {
+      ++failed;
+      result.valid = false;
+      result.spirvReady = false;
+      result.error = "XENOS_SHADER_CACHE_CAPACITY_4096_EXCEEDED";
     }
   }
   return result;
@@ -248,6 +253,22 @@ void QueueDraw(uint32_t initiator, uint32_t indexCount,
   // each PM4 draw. A zeroed constant is not equivalent to the GPU registers.
   // Addresses match Xenia's a2xx PA register definitions.
   packet.pa_cl_vte_cntl = registers[0x2206u];
+  packet.rb_modecontrol = registers[0x2208u];
+  packet.rb_surface_info = registers[0x2000u];
+  packet.rb_depthcontrol = registers[0x2200u];
+  packet.rb_color_mask = registers[0x2104u];
+  packet.rb_color_info[0] = registers[0x2001u];
+  packet.rb_color_info[1] = registers[0x2003u];
+  packet.rb_color_info[2] = registers[0x2004u];
+  packet.rb_color_info[3] = registers[0x2005u];
+  packet.rb_depth_info = registers[0x2002u];
+  packet.rb_copy_control = registers[0x2318u];
+  packet.rb_blendcontrol[0] = registers[0x2201u];
+  packet.rb_blendcontrol[1] = registers[0x2209u];
+  packet.rb_blendcontrol[2] = registers[0x220Au];
+  packet.rb_blendcontrol[3] = registers[0x220Bu];
+  packet.pa_sc_window_scissor_tl = registers[0x2081u];
+  packet.pa_sc_window_scissor_br = registers[0x2082u];
   packet.viewport_register_bits[0] = registers[0x210Fu]; // XSCALE
   packet.viewport_register_bits[1] = registers[0x2110u]; // XOFFSET
   packet.viewport_register_bits[2] = registers[0x2111u]; // YSCALE

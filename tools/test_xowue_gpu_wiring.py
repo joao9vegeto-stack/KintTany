@@ -72,3 +72,17 @@ assert 'XENOS_NATIVE_DRAW_OUTCOME' in renderer
 assert 'vs_memexport=%u ps_memexport=%u' in renderer
 assert 'XOWUECrashRecorderWriteFatal(event)' in engine
 print('PASS: retained guest physical memory, exact fetch allocation, draw rejection and FATAL AOT evidence')
+
+# Expanded native Metal-trace coverage, without guest CPU interpretation.
+assert 'shaders.size() < 4096u' in bridge
+assert 'XOWUE_GPU_MAX_DRAWS = 128' in header
+assert 'packet.rb_surface_info = registers[0x2000u]' in bridge
+assert 'packet.rb_modecontrol = registers[0x2208u]' in bridge
+assert 'XENOS_NATIVE_TARGET_STATE' in renderer
+assert 'pipeline_cache[512]' in renderer
+print('PASS: expanded shader/pipeline cache and Xenos target-state capture')
+
+assert 'fetchFormat==32u' in engine and 'fetchFormat==25u' in engine
+assert 'std::bit_cast<float>(bits)' in engine
+assert 'format==32u' in textures and 'format==2u' in textures
+print('PASS: native R8 RG8 RG16 RGB10A2 FP16 guest sampling')

@@ -3466,9 +3466,13 @@ static bool decodeXenosSwapTexture(uint8_t *base, const uint32_t fetchWords[6],
     const uint32_t fetchFormat = fetchWords[1] & 0x3Fu;
     // Xenos format 54 is k_2_10_10_10_AS_16_16_16_16, an alias decoded as
     // R10G10B10A2_UNORM. It is still one 32-bit texel, not four 16-bit lanes.
-    const uint32_t formatBytes = (fetchFormat == 6u || fetchFormat == 54u) ? 4u : 0u;
-    if (formatBytes == 0u || (textureFormat != 6u && textureFormat != 54u))
-        return false;
+    const uint32_t formatBytes =
+        (fetchFormat==2u || fetchFormat==8u || fetchFormat==9u) ? 1u :
+        (fetchFormat==10u) ? 2u :
+        (fetchFormat==6u || fetchFormat==7u ||
+         fetchFormat==25u || fetchFormat==54u) ? 4u :
+        (fetchFormat==32u) ? 8u : 0u;
+    if (formatBytes==0u || textureFormat!=fetchFormat) return false;
 
     const uint32_t fetchWidth = (fetchWords[2] & 0x1FFFu) + 1u;
     const uint32_t fetchHeight = ((fetchWords[2] >> 13u) & 0x1FFFu) + 1u;
@@ -3488,7 +3492,7 @@ static bool decodeXenosSwapTexture(uint8_t *base, const uint32_t fetchWords[6],
     }
     const uint32_t pitchAligned = (pitchPixels + 31u) & ~31u;
     const uint32_t endian = (fetchWords[1] >> 6u) & 3u;
-    const uint32_t bytesPerPixelLog2 = 2u;
+    const uint32_t bytesPerPixelLog2 = std::countr_zero(formatBytes);
     const uint32_t guestSwizzle = (fetchWords[3] >> 1u) & 0xFFFu;
     const uint64_t pixelCount = static_cast<uint64_t>(width) * height;
     rgba.resize(static_cast<size_t>(pixelCount) * 4u);
@@ -3509,19 +3513,43 @@ static bool decodeXenosSwapTexture(uint8_t *base, const uint32_t fetchWords[6],
 
             uint8_t sourceChannels[4]{};
             if (fetchFormat == 6u) {
-                sourceChannels[0] = pixel[0];
-                sourceChannels[1] = pixel[1];
-                sourceChannels[2] = pixel[2];
-                sourceChannels[3] = pixel[3];
+                for (uint32_t c=0;c<4u;++c) sourceChannels[c]=pixel[c];
+            } else if (formatBytes==1u) {
+                sourceChannels[0]=sourceChannels[1]=sourceChannels[2]=pixel[0];
+                sourceChannels[3]=255u;
+            } else if (fetchFormat==10u) {
+                sourceChannels[0]=pixel[0];sourceChannels[1]=pixel[1];
+                sourceChannels[2]=0u;sourceChannels[3]=255u;
+            } else if (fetchFormat==25u) {
+                uint32_t a=uint32_t(pixel[0])|(uint32_t(pixel[1])<<8u);
+                uint32_t b=uint32_t(pixel[2])|(uint32_t(pixel[3])<<8u);
+                sourceChannels[0]=static_cast<uint8_t>((a*255u+32767u)/65535u);
+                sourceChannels[1]=static_cast<uint8_t>((b*255u+32767u)/65535u);
+                sourceChannels[2]=0u;sourceChannels[3]=255u;
+            } else if (fetchFormat==32u) {
+                for (uint32_t c=0;c<4u;++c) {
+                    const uint16_t half=uint16_t(pixel[c*2u])|
+                        (uint16_t(pixel[c*2u+1u])<<8u);
+                    const uint32_t exp=(half>>10u)&31u;
+                    uint32_t mantissa=half&1023u;
+                    uint32_t bits=uint32_t(half&0x8000u)<<16u;
+                    if(exp==31u)bits|=0x7F800000u|(mantissa<<13u);
+                    else if(exp)bits|=((exp+112u)<<23u)|(mantissa<<13u);
+                    else if(mantissa) {
+                        int32_t power=-14;
+                        while((mantissa&1024u)==0u){mantissa<<=1u;--power;}
+                        bits|=(uint32_t(power+127)<<23u)|((mantissa&1023u)<<13u);
+                    }
+                    float f=std::bit_cast<float>(bits);
+                    sourceChannels[c]=!(f>0.0f)?0u:f>=1.0f?255u:
+                        static_cast<uint8_t>(f*255.0f+0.5f);
+                }
             } else {
-                const uint32_t packed = static_cast<uint32_t>(pixel[0]) |
-                    (static_cast<uint32_t>(pixel[1]) << 8u) |
-                    (static_cast<uint32_t>(pixel[2]) << 16u) |
-                    (static_cast<uint32_t>(pixel[3]) << 24u);
-                sourceChannels[0] = static_cast<uint8_t>(((packed >> 0u) & 0x3FFu) * 255u / 1023u);
-                sourceChannels[1] = static_cast<uint8_t>(((packed >> 10u) & 0x3FFu) * 255u / 1023u);
-                sourceChannels[2] = static_cast<uint8_t>(((packed >> 20u) & 0x3FFu) * 255u / 1023u);
-                sourceChannels[3] = static_cast<uint8_t>(((packed >> 30u) & 0x003u) * 255u / 3u);
+                uint32_t packed=uint32_t(pixel[0])|(uint32_t(pixel[1])<<8u)|
+                    (uint32_t(pixel[2])<<16u)|(uint32_t(pixel[3])<<24u);
+                for(uint32_t c=0;c<3u;++c)
+                    sourceChannels[c]=static_cast<uint8_t>(((packed>>(10u*c))&1023u)*255u/1023u);
+                sourceChannels[3]=static_cast<uint8_t>(((packed>>30u)&3u)*255u/3u);
             }
             const size_t destination = (static_cast<size_t>(y) * width + x) * 4u;
             for (uint32_t channel = 0; channel < 4u; ++channel) {
