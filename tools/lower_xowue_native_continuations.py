@@ -122,6 +122,24 @@ def recover_entry(ppc_dir: Path, target: int, expected_owner: str, context: tupl
                 offset = (target - base) // 4
                 probable = comments[offset].group(1).strip() if offset < len(comments) else "OUTSIDE_FUNCTION"
                 matching = [i for i, v in enumerate(comments) if norm_opcode(context[0]) in norm_opcode(v.group(1))]
+                if symbol == expected_owner:
+                    print("AOT_OWNER_FORENSIC target=%08X owner=%s file=%s instruction_comments=%d" %
+                          (target, symbol, path.name, len(comments)))
+                    preview = min(105, len(comments))
+                    for idx in range(preview):
+                        instruction = comments[idx].group(1).strip()
+                        print("AOT_SOURCE_OPCODE guessed_pc=%08X i=%03d opcode=%s" %
+                              (base + idx * 4, idx, instruction))
+                    for idx, value in enumerate(comments):
+                        opcode = value.group(1).strip()
+                        if ("lwz " in opcode and ("r28" in opcode or "r23" in opcode)) or (
+                                "extsb r11,r10" in opcode):
+                            if idx < 150:
+                                print("AOT_SOURCE_MATCH i=%d opcode=%s" % (idx, opcode))
+                    print("AOT_OWNER_LABELS " + " ".join(
+                        f"{pc}:{pos}" for pc, pos in
+                        [(m.group(1), len(list(ASM_LINE.finditer(body[:m.start()]))) )
+                         for m in re.finditer(r"(?m)^loc_([0-9A-Fa-f]+):\\s*$", body)][:25]))
                 if symbol == expected_owner and matching:
                     print("AOT_OWNER_INSNS target=%08X count=%d matches=%s" %
                           (target, len(comments), [
