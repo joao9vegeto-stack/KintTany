@@ -1944,7 +1944,12 @@ def main() -> int:
     spurs_c = upstream / "libs/spurs/cellSpurs.c"
     workload = upstream / "runtime/spu/spu_workload.c"
     sys_event = upstream / "runtime/syscalls/sys_event.c"
+    gcm_source = upstream / "libs/video/cellGcmSys.c"
     patch_assets = [
+        ("ps3recomp-0005-gcm-offset-table.patch",
+         ((gcm_source, "s_offset_tables_published"),
+          (gcm_source, "offset_table_write_through"),
+          (gcm_source, "s_offset_tables_published = 1;"))),
         ("ps3recomp-0001-spurs2.patch", ((spurs_c, "cellSpursInitializeWithAttribute2"),)),
         ("ps3recomp-0003-lfqueue-push.patch", ((spurs_c, "_cellSpursLFQueuePushBody"), (workload, "spu_signal_parked_on_line"))),
         ("ps3recomp-0019-spurs-taskset2-task-starts.patch", ((workload, "spu_taskset_set_running"), (sys_event, "sys_event_flag_create_host"))),
@@ -2027,7 +2032,10 @@ def main() -> int:
                                         "asc_lwcond_signal(ctx, true, false)"),
         "runtime/syscalls/sys_event.c": ("sys_event_flag_create_host",),
         "libs/codec/edge_inflate.cpp": ("extern \"C\" int edge_inflate", "const int FULL = -2;"),
-        "libs/video/cellGcmSys.c": ("ASCENSION_GCM_WAIT_STATES_NOT_STUCK_V1",
+        "libs/video/cellGcmSys.c": ("s_offset_tables_published",
+                                    "offset_table_write_through",
+                                    "s_offset_tables_published = 1;",
+                                    "ASCENSION_GCM_WAIT_STATES_NOT_STUCK_V1",
                                     "GCM_PARK_WAIT_MS", "gcm_park_grace_ms()",
                                     'why = "sema-acquire"',
                                     'strcmp(why, "sema-acquire") == 0',
@@ -2046,7 +2054,7 @@ def main() -> int:
         missing = [needle for needle in needles if needle not in text]
         if missing:
             raise SystemExit(f"M7.83 PS3Recomp SPURS2 patch incomplete in {filename}: {missing}")
-    print("M8.04 applies the SPURS GPU-report wake and bounded SPU worker-stack recovery")
+    print("M8.05 applies Ascension GCM offset-table write-through, SPURS GPU-report wake, and bounded SPU worker-stack recovery")
     return 0
 
 

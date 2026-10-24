@@ -415,7 +415,9 @@ def main():
             "s32 cellGamePatchCheck(void* size, void* reserved);" not in game_header.read_text()):
         raise SystemExit("M7.82 disc-boot cellGamePatchCheck HLE patch is missing")
     gcm_runtime=(upstream/"libs/video/cellGcmSys.c").read_text(errors="replace")
-    required_gcm_markers=("ASCENSION_M803_GCM_PARK_SPU_HOLD_V1",
+    required_gcm_markers=("s_offset_tables_published",
+        "offset_table_write_through", "s_offset_tables_published = 1;",
+        "ASCENSION_M803_GCM_PARK_SPU_HOLD_V1",
         'getenv("GCM_PARK_SPU_HOLD_MS")', "spu_taskset_tasks_running()",
         'why = "spu-hold"', 'strcmp(why, "spu-hold") == 0',
         "cellGcmResetAscensionParkHoldMetrics",
@@ -425,7 +427,7 @@ def main():
     if (missing_gcm or 'setenv("GCM_PARK_SPU_HOLD_MS","50",1)' not in launcher_source or
             "cellGcmCopyAscensionParkHoldMetrics(gcmParkHoldMetrics);" not in launcher_source or
             "spurs_external_event();" not in gcm_runtime):
-        raise SystemExit(f"M8.03 GCM park/SPU handoff or iOS telemetry missing: {missing_gcm}")
+        raise SystemExit(f"M8.05 GCM offset-table write-through or park/SPU handoff is missing: {missing_gcm}")
     stack_runtime=(upstream/"runtime/spu/spu_workload.c").read_text(errors="replace")
     required_stack_markers=("ASCENSION_M804_SPU_STACK_RECOVERY_V1",
         "stack_sizes[4] = {256u << 20, 64u << 20, 32u << 20, 16u << 20}",
