@@ -67,3 +67,28 @@ dependencies listed in `patches/XenonRecomp-XOWUE.patch`. Consult the
 submodule licenses and notices in the pinned checkout. The project's AOT
 archive derives from the executable supplied by the user; the executable and
 original game assets are not published in this branch.
+
+
+## SpeedBreaker Xenos shader translator (GPL-3.0-or-later)
+
+The XOWUE branch integrates the Xenos microcode-to-GLSL shader translator
+and its Xenia-derived instruction definitions from
+[SpeedBreaker](https://github.com/SpeedBreakerProject/speedbreaker),
+originally distributed under GPL-3.0-or-later. The corresponding full
+license is retained in `Runtime/Graphics/Xenos/COPYING` and shipped with the
+application. Source paths: `Runtime/Graphics/Xenos/shader_translator.*`,
+`shared_memory_glsl.h`, and related `xenos/` dependencies.
+
+The upstream Xenia portions were authored by Ben Vanik and Xenia contributors,
+subject to the BSD license, reproduced in
+`Runtime/Graphics/Xenos/xenos/Xenia-LICENSE`. Attribution to
+[Xenia](https://github.com/xenia-project/xenia).
+
+This port presently translates shaders to GLSL and records command register
+state. It is **not** the complete Xenos Vulkan renderer: shader pipeline
+creation, EDRAM target management, GPU resolves, texture cache and graphical
+submissions remain unimplemented. An IPA with translated shaders alone must
+not be presented as proof of gameplay rendering.
+
+The GPL requirements apply to distributed versions combining GPL-covered code;
+merely making a repository private later does not retroactively waive them.

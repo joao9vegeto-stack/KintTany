@@ -90,6 +90,18 @@ jobs:
           "$RUNNER_TEMP/xowue-dispatch-guard-smoke"
           python3 tools/test_xowue_aot_instrumentation.py
 
+      - name: Validate ported Xenos shader translator on macOS
+        run: |
+          set -euo pipefail
+          clang++ -std=c++23 -O1 -pthread \
+            Runtime/Graphics/Xenos/XOWUEGpuBridgeSmoke.cpp \
+            Runtime/Graphics/Xenos/XOWUEGpuBridge.cpp \
+            Runtime/Graphics/Xenos/shader_translator.cpp \
+            Runtime/Graphics/Xenos/xenos/ucode.cpp \
+            -IRuntime/Graphics/Xenos \
+            -o "$RUNNER_TEMP/xowue-xenos-bridge-smoke"
+          "$RUNNER_TEMP/xowue-xenos-bridge-smoke"
+
       - name: Fetch pinned XenonRecomp runtime utilities
         run: |
           set -euo pipefail
@@ -367,6 +379,9 @@ jobs:
           cp build-ios/kosmickrisp/libvulkan_kosmickrisp.dylib Payload/XOWUE.app/Frameworks/
           mkdir -p Payload/XOWUE.app/ThirdPartyLicenses/Mesa/licenses
           cp THIRD_PARTY_NOTICES.md Payload/XOWUE.app/THIRD_PARTY_NOTICES.md
+          mkdir -p Payload/XOWUE.app/ThirdPartyLicenses/Xenos
+          cp Runtime/Graphics/Xenos/COPYING Payload/XOWUE.app/ThirdPartyLicenses/Xenos/SpeedBreaker-GPL-3.0.txt
+          cp Runtime/Graphics/Xenos/xenos/Xenia-LICENSE Payload/XOWUE.app/ThirdPartyLicenses/Xenos/Xenia-BSD.txt
           cp "$XENONRECOMP_ROOT/LICENSE.md" Payload/XOWUE.app/ThirdPartyLicenses/XenonRecomp-LICENSE.md
           cp mesa-src/docs/license.rst Payload/XOWUE.app/ThirdPartyLicenses/Mesa/license.rst
           cp -R mesa-src/licenses/. Payload/XOWUE.app/ThirdPartyLicenses/Mesa/licenses/
@@ -377,6 +392,8 @@ jobs:
           test -f "$APP/Assets.car"
           test -f "$APP/Frameworks/libvulkan_kosmickrisp.dylib"
           test -f "$APP/THIRD_PARTY_NOTICES.md"
+          test -f "$APP/ThirdPartyLicenses/Xenos/SpeedBreaker-GPL-3.0.txt"
+          test -f "$APP/ThirdPartyLicenses/Xenos/Xenia-BSD.txt"
           test -f "$APP/ThirdPartyLicenses/XenonRecomp-LICENSE.md"
           test -f "$APP/ThirdPartyLicenses/Mesa/licenses/MIT"
           lipo "$APP/XOWUE" -verify_arch arm64

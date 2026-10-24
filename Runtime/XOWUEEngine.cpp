@@ -3,6 +3,7 @@
 #include "image.h"
 #include "ppc_recomp_shared.h"
 #include "XOWUEDispatchGuard.h"
+#include "Graphics/Xenos/XOWUEGpuBridge.h"
 #include "xex.h"
 
 #include <algorithm>
@@ -427,6 +428,7 @@ std::string runtimeTraceText() {
                   graphics.latestWidth, graphics.latestHeight,
                   graphics.latestFrontbufferAddress);
     result += value;
+    result += "\n- " + xowue::xenos::Diagnostics();
     return result;
 }
 
@@ -1433,6 +1435,7 @@ extern "C" int xowue_runtime_snapshot(char *output, size_t output_capacity) {
 extern "C" int xowue_boot_xex(const char *path, char *output, size_t output_capacity) {
     try {
         g_aotExecutionTelemetryActive.store(false, std::memory_order_relaxed);
+        xowue::xenos::Reset();
         if (g_runtimeSessionPoisoned.load()) {
             throw std::runtime_error("uma thread PPC não encerrou após o limite de parada; feche e reabra o app para iniciar outra sessão");
         }
@@ -3280,6 +3283,7 @@ struct PM4ParseSummary {
     uint64_t swaps = 0;
     uint64_t malformed = 0;
     uint64_t frameDecodeFailures = 0;
+    uint64_t guestMemoryWrites = 0;
 };
 
 void xowue_VdInitializeEngines(PPCContext &context) {
@@ -3551,6 +3555,7 @@ static bool executeGuestPM4Words(uint8_t *base,
             const bool writeOneRegister = (header & 0x00008000u) != 0u;
             for (uint32_t i = 0; i < payloadCount; ++i) {
                 const uint32_t reg = writeOneRegister ? firstRegister : firstRegister + i;
+                xowue::xenos::WriteRegister(reg, words[offset + 1u + i]);
                 if (reg >= kXenosShaderConstantFetchRegister &&
                     reg < kXenosShaderConstantFetchRegister + frontend.swapFetch.size()) {
                     frontend.swapFetch[reg - kXenosShaderConstantFetchRegister] =
@@ -3560,11 +3565,111 @@ static bool executeGuestPM4Words(uint8_t *base,
                     frontend.swapFetchValid = frontend.swapFetchMask == 0x3Fu;
                 }
             }
+        } else if (type == 1u) {
+            xowue::xenos::WriteRegister(header & 0x7FFu, words[offset + 1u]);
+            xowue::xenos::WriteRegister((header >> 11u) & 0x7FFu, words[offset + 2u]);
         } else if (type == 3u) {
             const uint32_t opcode = (header >> 8u) & 0x7Fu;
+            auto writeConstantRange = [&](uint32_t first, size_t start, size_t count) {
+                for (size_t n = 0; n < count; ++n)
+                    xowue::xenos::WriteRegister(first + static_cast<uint32_t>(n),
+                                                words[offset + start + n]);
+            };
+            auto loadShaderWords = [&](uint32_t stage, const std::vector<uint32_t>& code) {
+                const auto result = xowue::xenos::LoadShader(stage, code.data(), code.size());
+                if (!result.valid) {
+                    char event[220];
+                    std::snprintf(event, sizeof(event),
+                       "Xenos shader translation rejected stage=%u dwords=%zu hash=%016llX reason=%s",
+                       stage, code.size(), static_cast<unsigned long long>(result.hash),
+                       result.error.c_str());
+                    recordRuntimeTrace(event);
+                }
+            };
+            if ((opcode == 0x2Du || opcode == 0x55u || opcode == 0x56u) && payloadCount >= 2u) {
+                uint32_t first = words[offset + 1u] & (opcode == 0x2Du ? 0x7FFu : 0xFFFFu);
+                if (opcode == 0x2Du) {
+                    const uint32_t kind = (words[offset + 1u] >> 16u) & 0xFFu;
+                    constexpr uint32_t bases[] = {0x4000u, 0x4800u, 0x4900u, 0x4908u, 0x2000u};
+                    if (kind < 5u) writeConstantRange(first + bases[kind], 2u, payloadCount - 1u);
+                } else {
+                    writeConstantRange(first, 2u, payloadCount - 1u);
+                }
+            } else if (opcode == 0x27u && payloadCount >= 2u) {
+                const uint32_t address = words[offset + 1u] & ~3u;
+                const uint32_t stage = words[offset + 1u] & 3u;
+                const uint32_t codeWords = words[offset + 2u] & 0xFFFFu;
+                if (stage <= 1u && codeWords != 0u && codeWords <= 65536u &&
+                    validGuestRange(address, static_cast<uint64_t>(codeWords) * 4u)) {
+                    std::vector<uint32_t> code;
+                    code.reserve(codeWords);
+                    for (uint32_t n = 0; n < codeWords; ++n)
+                        code.push_back(loadGuestBe32(base, address + n * 4u));
+                    loadShaderWords(stage, code);
+                } else {
+                    ++summary.malformed;
+                }
+            } else if (opcode == 0x2Bu && payloadCount >= 2u) {
+                const uint32_t stage = words[offset + 1u] & 3u;
+                const uint32_t codeWords = words[offset + 2u] & 0xFFFFu;
+                if (stage <= 1u && codeWords != 0u && codeWords <= payloadCount - 2u) {
+                    std::vector<uint32_t> code(
+                        words.begin() + static_cast<std::ptrdiff_t>(offset + 3u),
+                        words.begin() + static_cast<std::ptrdiff_t>(offset + 3u + codeWords));
+                    loadShaderWords(stage, code);
+                } else {
+                    ++summary.malformed;
+                }
+            } else if (opcode == 0x21u && payloadCount >= 3u) { // REG_RMW
+                const uint32_t descriptor = words[offset + 1u];
+                const uint32_t reg = descriptor & 0x1FFFu;
+                const uint32_t source = xowue::xenos::ReadRegister(reg);
+                const uint32_t andValue = (descriptor & (1u << 31u))
+                    ? xowue::xenos::ReadRegister(words[offset + 2u] & 0x1FFFu)
+                    : words[offset + 2u];
+                const uint32_t orValue = (descriptor & (1u << 30u))
+                    ? xowue::xenos::ReadRegister(words[offset + 3u] & 0x1FFFu)
+                    : words[offset + 3u];
+                xowue::xenos::WriteRegister(reg, (source & andValue) | orValue);
+            } else if (opcode == 0x3Du && payloadCount >= 2u) { // MEM_WRITE
+                const uint32_t address = words[offset + 1u] & ~3u;
+                const uint64_t writeBytes = static_cast<uint64_t>(payloadCount - 1u) * 4u;
+                if (validGuestRange(address, writeBytes)) {
+                    for (uint32_t n = 0; n < payloadCount - 1u; ++n) {
+                        storeGuestBe32(base, address + n * 4u, words[offset + 2u + n]);
+                        ++summary.guestMemoryWrites;
+                    }
+                } else {
+                    ++summary.malformed;
+                }
+            } else if (opcode == 0x3Eu && payloadCount >= 2u) { // REG_TO_MEM
+                const uint32_t address = words[offset + 2u] & ~3u;
+                if (validGuestRange(address, 4u)) {
+                    const uint32_t value = xowue::xenos::ReadRegister(
+                        words[offset + 1u] & 0x1FFFu);
+                    storeGuestBe32(base, address, value);
+                    ++summary.guestMemoryWrites;
+                } else {
+                    ++summary.malformed;
+                }
+            } else if (opcode == 0x58u && payloadCount >= 3u) { // EVENT_WRITE_SHD
+                const uint32_t initiator = words[offset + 1u];
+                const uint32_t address = words[offset + 2u] & ~3u;
+                if ((initiator & 0x80000000u) == 0u && validGuestRange(address, 4u)) {
+                    storeGuestBe32(base, address, words[offset + 3u]);
+                    ++summary.guestMemoryWrites;
+                } else {
+                    // Counter-based events require the GPU timeline; do not
+                    // fabricate the fence value for unsupported variants.
+                    ++summary.malformed;
+                }
+            }
             if (opcode == kXenosPm4DrawIndexOpcode || opcode == kXenosPm4DrawIndex2Opcode ||
                 opcode == kXenosPm4DrawIndexBinOpcode || opcode == kXenosPm4DrawIndex2BinOpcode) {
                 ++summary.draws;
+                const size_t initiatorWord = offset + (opcode == kXenosPm4DrawIndexOpcode ? 2u : 1u);
+                if (initiatorWord < offset + 1u + payloadCount)
+                    xowue::xenos::ObserveDraw(words[initiatorWord]);
             } else if (opcode == kXenosPm4IndirectBufferOpcode) {
                 ++summary.indirectBuffers;
                 if (payloadCount >= 2u && depth < 8u) {
@@ -3697,12 +3802,13 @@ void pumpGuestXenosRingBuffer() {
     }
     char event[192];
     std::snprintf(event, sizeof(event),
-                  "Xenos ring kick rptr=%u wptr=%u words=%u packets=%llu draws=%llu swaps=%llu frames=%llu malformed=%llu decode_failures=%llu",
+                  "Xenos ring kick rptr=%u wptr=%u words=%u packets=%llu draws=%llu swaps=%llu frames=%llu guest_sync_writes=%llu malformed=%llu decode_failures=%llu",
                   frontend.ringReadPointer, writePointer, consumed,
                   static_cast<unsigned long long>(summary.packets),
                   static_cast<unsigned long long>(summary.draws),
                   static_cast<unsigned long long>(summary.swaps),
                   static_cast<unsigned long long>(frontend.decodedFrames),
+                  static_cast<unsigned long long>(summary.guestMemoryWrites),
                   static_cast<unsigned long long>(summary.malformed),
                   static_cast<unsigned long long>(summary.frameDecodeFailures));
     recordRuntimeTrace(event);

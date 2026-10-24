@@ -45,6 +45,9 @@ if(NOT PPC_SOURCE_COUNT EQUAL 344)
 endif()
 add_library(XOWUEEngine STATIC
     XOWUEEngine.cpp
+    Graphics/Xenos/XOWUEGpuBridge.cpp
+    Graphics/Xenos/shader_translator.cpp
+    Graphics/Xenos/xenos/ucode.cpp
     "${IMPORT_STUBS}"
     "${PPC_DIR}/ppc_func_mapping.cpp"
     ${PPC_SOURCES}
