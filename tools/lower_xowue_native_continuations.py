@@ -26,15 +26,19 @@ import re
 VALIDATED = {
     # Build 20: validated against the user-provided XEX SHA-256
     # b5afa6ff191194e5cc0a29302878b154baccfa7073868108c5e7416d08b3aa9a.
-    # .text RVA 0x00C2E338: raw PE file offset 0x00C25138
-    # (.text RVA 0x002A0000, PointerToRawData 0x00296E00).
-    # Verified original XEX bytes 83 97 00 04: lwz r28,4(r23).
-    # The next instruction at 0x82C2E33C is 4B FF FF 50:
-    # b 0x82C2E28C. The previous version incorrectly read an RVA
-    # as a PE raw offset, selecting an unrelated instruction.
+    # Cross-verified with the XenonRecomp AOT generated from XEX SHA-256
+    # b5afa6ff191194e5cc0a29302878b154baccfa7073868108c5e7416d08b3aa9a.
+    # Original executable code bytes:
+    # 0x82C2E338: 7D 4B 07 74 (extsb r11,r10)
+    # 0x82C2E33C: 2F 0B 00 31 (cmpwi cr6,r11,49)
+    # 0x82C2E340: 41 98 00 18 (blt cr6,0x82c2e358)
+    # The archived native owner sub_82C2E240 has this exact contiguous
+    # instruction sequence beginning at its comment index 62. Three
+    # extsb r11,r10 occur in this owner; the context disambiguates them.
     0x82C2E338: (
         "sub_82C2E240",
-        ("lwz r28,4(r23)", "b 0x82c2e28c"),
+        ("extsb r11,r10", "cmpwi cr6,r11,49",
+         "blt cr6,0x82c2e358"),
     ),
     # These addresses are XEX virtual addresses, NOT PE raw file offsets.
     # .text raw pointer is 0x296E00, while RVA is 0x2A0000:
