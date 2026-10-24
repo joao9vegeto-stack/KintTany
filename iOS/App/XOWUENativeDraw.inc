@@ -241,8 +241,8 @@ static bool XDGetPipeline(KKVulkanState *state, const XOWUEGuestDraw *draw,
    }
    KKUpdateNativeShaderModule(state,draw->vertex_hash,&state->guest_vertex_module,
                               &state->guest_vertex_hash,"vertex");
-   KKUpdateNativeShaderModule(state,draw->pixel_hash,&state->guest_pixel_module,
-                              &state->guest_pixel_hash,"fragment");
+   if (!KKUpdateLinkedPixelShaderModule(state,draw->vertex_hash,draw->pixel_hash))
+      return false;
    if (!state->guest_vertex_module || !state->guest_pixel_module) return false;
    VkPipelineShaderStageCreateInfo stages[2]={
       {.sType=VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO,

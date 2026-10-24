@@ -272,6 +272,39 @@ static void KKUpdateNativeShaderModule(KKVulkanState *state, uint64_t hash,
    // A shader module is not yet a guest pipeline or a PM4 draw submission.
 }
 
+static bool KKUpdateLinkedPixelShaderModule(
+   KKVulkanState *state, uint64_t vertex, uint64_t pixel) {
+   const uint64_t pairHash = pixel ^ (vertex * 0x9E3779B97F4A7C15ull);
+   if (state->guest_pixel_module && state->guest_pixel_hash == pairHash)
+      return true;
+   size_t count=xowue_xenos_linked_fragment_spirv_words(vertex,pixel,NULL,0);
+   if (count < 5u || count > (1u << 20u)) {
+      KKLog(@"XENOS_LINKED_FRAGMENT_REJECT vs=%016llX ps=%016llX",
+         (unsigned long long)vertex,(unsigned long long)pixel);
+      return false;
+   }
+   uint32_t *words=(uint32_t*)malloc(count*sizeof(uint32_t));
+   if (!words) return false;
+   if (xowue_xenos_linked_fragment_spirv_words(vertex,pixel,words,count)!=count ||
+       words[0]!=0x07230203u) { free(words); return false; }
+   VkShaderModuleCreateInfo info={.sType=VK_STRUCTURE_TYPE_SHADER_MODULE_CREATE_INFO,
+      .codeSize=count*sizeof(uint32_t),.pCode=words};
+   VkShaderModule module=VK_NULL_HANDLE;
+   VkResult result=state->CreateShaderModule(state->device,&info,NULL,&module);
+   free(words);
+   if (result!=VK_SUCCESS) {
+      KKLog(@"XENOS_LINKED_FRAGMENT_MODULE_REJECT vk=%d",result);
+      return false;
+   }
+   if (state->guest_pixel_module)
+      state->DestroyShaderModule(state->device,state->guest_pixel_module,NULL);
+   state->guest_pixel_module=module;
+   state->guest_pixel_hash=pairHash;
+   KKLog(@"XENOS_FRAGMENT_COLOR_OUTPUT_LINKED vs=%016llX ps=%016llX words=%zu",
+      (unsigned long long)vertex,(unsigned long long)pixel,count);
+   return true;
+}
+
 static void KKSyncNativeShaders(KKVulkanState *state)
 {
    uint64_t vertex = 0, pixel = 0;
@@ -1266,6 +1299,25 @@ KKRenderFrame(KKVulkanState *state, CAMetalLayer *layer)
    }
 
    result = state->QueueWaitIdle(state->queue);
+   if (result == VK_SUCCESS && capturedComposed && g_xd.composited_frame.mapped) {
+      // Actual GPU readback after queue completion, not a draw-call counter.
+      // BGRA/RGBA swapchain formats both have first three color bytes.
+      const uint8_t *pixels=(const uint8_t*)g_xd.composited_frame.mapped;
+      const size_t total=(size_t)state->swapchain_extent.width *
+                         (size_t)state->swapchain_extent.height;
+      size_t samples=0, nonblack=0;
+      uint64_t checksum=14695981039346656037ull;
+      const size_t interval=total>8192u?total/8192u:1u;
+      for (size_t k=0;k<total;k+=interval) {
+         const uint8_t *c=pixels+k*4u;
+         if (c[0] || c[1] || c[2]) ++nonblack;
+         checksum=((checksum ^ c[0]) * 1099511628211ull ^
+                   ((uint64_t)c[1]<<8) ^ ((uint64_t)c[2]<<16));
+         ++samples;
+      }
+      KKLog(@"XENOS_COMPOSITED_GPU_READBACK nonblack=%zu samples=%zu checksum=%016llX",
+            nonblack,samples,(unsigned long long)checksum);
+   }
    if (result == VK_SUCCESS) XDCollectPipelines(state);
    if (result != VK_SUCCESS) {
       KKLog(@"FAIL vkQueueWaitIdle = %d", result);

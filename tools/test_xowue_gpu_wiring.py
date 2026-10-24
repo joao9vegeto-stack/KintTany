@@ -27,3 +27,14 @@ assert "pipeline_draws_submitted=0" not in bridge
 assert vulkan.index("XDProcessDraws") < vulkan.index("state->QueueSubmit(state->queue")
 assert vulkan.index("xowue_xenos_record_submitted") > vulkan.index("result = state->QueueSubmit")
 print("PASS: Xenos PM4 draw queue, Vulkan pipelines/draw commands, genuine guest textures, final-submit accounting")
+
+# The original Build 23 SPIR-V did not have OUT0; successful draws wrote no
+# fragment colour. Require a pipeline-linked specialization with OUT0 enabled
+# and only interpolators actually emitted by the paired vertex shader.
+assert '#define OUT0 1' in bridge
+assert 'entry.interpolatorMask = shader.interpolatorMask' in bridge
+assert 'xowue_xenos_linked_fragment_spirv_words' in bridge
+assert 'KKUpdateLinkedPixelShaderModule' in vulkan
+assert 'XENOS_COMPOSITED_GPU_READBACK' in vulkan
+assert 'XDGetPipeline' in renderer and 'KKUpdateLinkedPixelShaderModule' in renderer
+print("PASS: fragment OUT0, paired interpolators, native frame readback")

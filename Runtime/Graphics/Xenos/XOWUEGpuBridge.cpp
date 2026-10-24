@@ -24,12 +24,16 @@ struct ShaderRecord {
   std::string error;
   // Store generated GLSL for later Vulkan pipeline integration.
   std::string glsl;
-  uint32_t vertexFetchMask = 0, texture2DMask = 0, texture3DMask = 0, textureCubeMask = 0;
+  uint32_t vertexFetchMask = 0, interpolatorMask = 0, colorTargetMask = 0;
+  uint32_t texture2DMask = 0, texture3DMask = 0, textureCubeMask = 0;
   uint32_t fetchUsed[3]{}, fetchStrides[96]{}, fetchExtents[96]{};
 };
 std::mutex stateMutex;
 std::array<uint32_t, 0x5003> registers{};
 std::unordered_map<uint64_t, ShaderRecord> shaders;
+std::unordered_map<std::string, std::vector<uint32_t>> linkedPixels;
+uint64_t linkedPixelCompiled = 0, linkedPixelRejected = 0;
+uint32_t linkedPixelLastInputs = 0;
 uint64_t translated = 0, failed = 0, cacheHits = 0, observedDraws = 0;
 uint64_t spirvCompiled = 0, spirvRejected = 0;
 uint64_t vertexHash = 0, pixelHash = 0;
@@ -50,6 +54,9 @@ void Reset() {
   std::lock_guard lock(stateMutex);
   registers.fill(0);
   shaders.clear();
+  linkedPixels.clear();
+  linkedPixelCompiled = linkedPixelRejected = 0;
+  linkedPixelLastInputs = 0;
   translated = failed = cacheHits = observedDraws = 0;
   spirvCompiled = spirvRejected = 0;
   vertexHash = pixelHash = 0;
@@ -127,6 +134,8 @@ ShaderResult LoadShader(uint32_t stage, const uint32_t* words, size_t count) {
       entry.error = shader.error;
       entry.glsl = std::move(shader.glsl);
       entry.vertexFetchMask = shader.vertexFetchMask;
+      entry.interpolatorMask = shader.interpolatorMask;
+      entry.colorTargetMask = shader.colorTargetMask;
       entry.texture2DMask = shader.texture2DMask;
       entry.texture3DMask = shader.texture3DMask;
       entry.textureCubeMask = shader.textureCubeMask;
@@ -148,6 +157,57 @@ bool CopyShaderSpirv(uint64_t hash, std::vector<uint32_t>& words) {
   if (it == shaders.end() || it->second.spirv.empty()) return false;
   words = it->second.spirv;
   return true;
+}
+
+// Real guest fragment shader specialization: the Xenos translator deliberately
+// hides pipeline-dependent varying inputs and render-target outputs behind
+// preprocessor definitions. Without OUT0 the shader writes NO COLOR, even
+// when Vulkan reports successful vkCmdDraw. Bind only VS-written interpolators.
+extern "C" size_t xowue_xenos_linked_fragment_spirv_words(
+    uint64_t vertex, uint64_t pixel, uint32_t* out, size_t capacity) {
+  std::string key = std::to_string(vertex) + ":" + std::to_string(pixel);
+  std::string source;
+  uint32_t mask = 0;
+  {
+    std::lock_guard lock(stateMutex);
+    if (auto c = linkedPixels.find(key); c != linkedPixels.end()) {
+      if (!out) return c->second.size();
+      if (capacity < c->second.size()) return 0;
+      std::copy(c->second.begin(), c->second.end(), out);
+      return c->second.size();
+    }
+    const auto v = shaders.find(vertex), p = shaders.find(pixel);
+    if (v == shaders.end() || p == shaders.end() || v->second.glsl.empty() ||
+        p->second.glsl.empty()) return 0;
+    mask = v->second.interpolatorMask;
+    source = p->second.glsl;
+  }
+  const std::string version = "#version 460";
+  const size_t head = source.find(version);
+  if (head != 0u) return 0; // never place defines before GLSL #version
+  const size_t lineEnd = source.find('\n', head);
+  if (lineEnd == std::string::npos) return 0;
+  std::string defines = "\n#define OUT0 1\n";
+  for (unsigned i = 0; i < 16u; ++i)
+    if (mask & (1u << i))
+      defines += "#define IN" + std::to_string(i) + " 1\n";
+  source.insert(lineEnd + 1u, defines);
+  SpirvCompilation compiled = CompileGlslToSpirv(1u, source);
+  if (compiled.words.empty()) {
+    std::lock_guard lock(stateMutex);
+    ++linkedPixelRejected;
+    lastReject = "XENOS_GUEST_FRAGMENT_LINK_FAILED: " + compiled.error;
+    return 0;
+  }
+  std::lock_guard lock(stateMutex);
+  if (linkedPixels.size() >= 128u) linkedPixels.clear();
+  auto [slot, created] = linkedPixels.try_emplace(key, std::move(compiled.words));
+  if (created) ++linkedPixelCompiled;
+  linkedPixelLastInputs = mask;
+  if (!out) return slot->second.size();
+  if (capacity < slot->second.size()) return 0;
+  std::copy(slot->second.begin(), slot->second.end(), out);
+  return slot->second.size();
 }
 
 void ObserveDraw(uint32_t initiator) {
@@ -249,11 +309,14 @@ std::string Diagnostics() {
       " observed_draws=%" PRIu64 " vertex_hash=%016" PRIX64
       " pixel_hash=%016" PRIX64 " initiator=%08X "
       "queued=%zu dropped=%" PRIu64 " pipeline_draws_submitted=%" PRIu64
-      " pipeline_draws_rejected=%" PRIu64 " last_reject=%s",
+      " pipeline_draws_rejected=%" PRIu64
+      " linked_pixels=%" PRIu64 " linked_pixel_rejected=%" PRIu64
+      " linked_varying_mask=%04X last_reject=%s",
       translated, failed, cacheHits, spirvCompiled, spirvRejected,
       observedDraws, vertexHash, pixelHash,
       lastDrawInitiator, pendingDraws.size(), droppedDraws, submittedDraws,
-      rejectedDraws, lastReject.c_str());
+      rejectedDraws, linkedPixelCompiled, linkedPixelRejected,
+      linkedPixelLastInputs, lastReject.c_str());
   return value;
 }
 }

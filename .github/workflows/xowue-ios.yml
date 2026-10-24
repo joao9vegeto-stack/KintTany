@@ -156,6 +156,7 @@ jobs:
           python3 tools/lower_xowue_owner_interior_entries.py \
             --ppc-dir generated/ppc --report artifacts/xowue-owner-wide-resume.json
           grep -Eq '\{[[:space:]]*0x82C2E4A8[[:space:]]*,[[:space:]]*sub_82C2E4A8' generated/ppc/ppc_func_mapping.cpp
+          grep -Eq '\{[[:space:]]*0x830EBE74[[:space:]]*,[[:space:]]*sub_830EBE74' generated/ppc/ppc_func_mapping.cpp
           test -s artifacts/xowue-owner-wide-resume.json
 
       - name: Verify portrait-only iOS game host
@@ -526,6 +527,8 @@ jobs:
             exit 1
           fi
           echo "Owner-wide PPC 0x82C2E4A8 linked into final app executable"
+          grep -Fq '830EBE74' artifacts/xowue-linked-symbols.txt
+          echo "Owner-wide PPC 0x830EBE74 linked into final app executable"
           # Require the complete native draw plumbing in the packaged Mach-O.
           # Source-only renderer changes are not accepted as a deliverable.
           grep -Eq '_xowue_xenos_take_draws([[:space:]]|$)' artifacts/xowue-linked-symbols.txt
@@ -536,6 +539,8 @@ jobs:
           grep -Fq 'XENOS_NATIVE_PIPELINE_CREATED' artifacts/xowue-linked-strings.txt
           grep -Fq 'XENOS_TEXTURE_FORMAT_OR_FETCH_UNSUPPORTED' artifacts/xowue-linked-strings.txt
           grep -Fq 'XENOS_COMPOSED_CACHE_ALLOCATION_FAILED' artifacts/xowue-linked-strings.txt
+          grep -Fq 'XENOS_FRAGMENT_COLOR_OUTPUT_LINKED' artifacts/xowue-linked-strings.txt
+          grep -Fq 'XENOS_COMPOSITED_GPU_READBACK' artifacts/xowue-linked-strings.txt
           echo "XENOS_GPU_LINKED Mach-O draw commands, PM4 queue and native shader pipeline"
           lipo "$APP/Frameworks/libvulkan_kosmickrisp.dylib" -verify_arch arm64
           otool -L "$APP/XOWUE" | grep -F "@rpath/libvulkan_kosmickrisp.dylib"

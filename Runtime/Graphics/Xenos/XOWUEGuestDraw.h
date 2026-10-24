@@ -16,6 +16,8 @@ typedef struct XOWUEGuestDraw {
   uint32_t constants[XOWUE_GPU_CONSTANT_WORDS];
 } XOWUEGuestDraw;
 size_t xowue_xenos_take_draws(XOWUEGuestDraw *out, size_t capacity);
+size_t xowue_xenos_linked_fragment_spirv_words(uint64_t vertex_hash,
+  uint64_t pixel_hash, uint32_t *out, size_t capacity);
 void xowue_xenos_record_submitted(uint32_t count);
 void xowue_xenos_record_rejected(uint32_t count, const char *why);
 bool xowue_xenos_copy_guest_physical(uint32_t address, void *out, size_t size);
