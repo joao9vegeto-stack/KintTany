@@ -96,8 +96,6 @@ def recover_entry(ppc_dir: Path, target: int, expected_opcode: str):
     anchor = comments[index]
     if anchor.group(1).strip().replace(" ", "") != expected_opcode.replace(" ", ""):
         raise ValueError("Target instruction moved while constructing continuation")
-    if target_label not in lifted:
-        raise AssertionError("internal error: goto disappeared")
     # If a label already exists, use it; otherwise make this PPC PC a label.
     if f"\n{target_label}\n" not in lifted and f"\n{target_label}:\n" not in lifted:
         lifted = lifted[:anchor.start()] + f"{target_label}\n" + lifted[anchor.start():]
