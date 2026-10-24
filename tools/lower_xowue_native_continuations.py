@@ -70,12 +70,21 @@ def recover_entry(ppc_dir: Path, target: int, expected_owner: str, context: tupl
             if symbol != expected_owner or base > target or (target - base) % 4:
                 continue
             asm = list(ASM_LINE.finditer(body))
-            # Search a verified PPC instruction sequence rather than trusting
-            # the generated comment count (which can shift after switch lifting).
-            for index in range(len(asm) - len(context) + 1):
-                if not all(instruction_matches(asm[index + n].group(1), op)
-                           for n, op in enumerate(context)):
-                    continue
+            # The recompiler reorders its emitted comments for switch tables;
+            # consecutive C++ comments are NOT necessarily adjacent guest PCs.
+            # The exact guest function owner is required, and the target's
+            # disassembled opcode must be unique within that owner. Do not
+            # borrow a matching sequence from another guest function.
+            indices = [index for index, m in enumerate(asm)
+                       if instruction_matches(m.group(1), context[0])]
+            if len(indices) > 1:
+                # Only disambiguate repeated opcodes when the full original
+                # instruction sequence survives in the generated source.
+                indices = [index for index in indices
+                           if index + len(context) <= len(asm) and
+                           all(instruction_matches(asm[index + n].group(1), op)
+                               for n, op in enumerate(context))]
+            for index in indices:
                 found.append((path, text, symbol, start, end, body, asm[index], index))
     if len(found) != 1:
         print("AOT_MISSING_PC_DIAGNOSTIC: source candidates")
