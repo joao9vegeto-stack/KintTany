@@ -83,6 +83,30 @@ jobs:
             --ppc-dir "$GITHUB_WORKSPACE/generated/ppc" \
             --switch-table "$GITHUB_WORKSPACE/generated/config/XOWUE_switch_tables.toml"
 
+      - name: Preserve original AOT owners for reproducible PPC analysis
+        run: |
+          set -euo pipefail
+          mkdir -p "$RUNNER_TEMP/xowue-aot-owners"
+          python3 - <<'PY'
+          import pathlib, re, os
+          root = pathlib.Path("generated/ppc")
+          out = pathlib.Path(os.environ["RUNNER_TEMP"]) / "xowue-aot-owners"
+          targets = {"sub_82B47360", "sub_82D2D270", "sub_82B3DFD8"}
+          pattern = re.compile(r"PPC_FUNC_IMPL\(__imp__(sub_[0-9A-Fa-f]+)\) \{\n")
+          seen = set()
+          for file in sorted(root.glob("ppc_recomp.*.cpp")):
+              text = file.read_text()
+              for match in pattern.finditer(text):
+                  if match[1] not in targets:
+                      continue
+                  end = text.find("\n}\n", match.end())
+                  if end < 0: raise ValueError("unclosed compiled function")
+                  (out / (match[1] + ".cpp")).write_text(text[match.start():end+3])
+                  print("AOT_OWNER_CAPTURE", match[1], file.name, end-match.start())
+                  seen.add(match[1])
+          if seen != targets: raise ValueError("owners missing " + repr(targets-seen))
+          PY
+
       - name: Reconstruct validated internal AOT branch entries
         run: |
           set -euo pipefail
@@ -91,6 +115,15 @@ jobs:
           grep -Fq '{ 0x82B47458, sub_82B47458 },' generated/ppc/ppc_func_mapping.cpp
           grep -Fq 'PPC_EXTERN_FUNC(sub_82D2D30C);' generated/ppc/ppc_recomp_shared.h
           grep -Fq '{ 0x82D2D30C, sub_82D2D30C },' generated/ppc/ppc_func_mapping.cpp
+
+      - name: Upload PPC native owner evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: XOWUE-AOT-Owners
+          path: ${{ runner.temp }}/xowue-aot-owners/
+          if-no-files-found: warn
+          retention-days: 2
 
       - name: Test PPC dispatch guard and AOT entry instrumentation
         run: |
