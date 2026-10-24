@@ -1346,8 +1346,9 @@ static const char *dispatchGuardErrorName(xowue_dispatch_guard::Result result) {
     const uint32_t threadId = g_currentGuestThread ? g_currentGuestThread->id : 0u;
     char event[256];
     std::snprintf(event, sizeof(event),
-        "PPC indirect dispatch failed reason=%s guestTarget=0x%08X LR=0x%08X callsite=0x%08X thread=%u slot=0x%llX",
+        "PPC indirect dispatch failed reason=%s guestTarget=0x%08X LR=0x%08X lrMinus4Unverified=0x%08X lastAotEntry=0x%08X thread=%u slot=0x%llX",
         reason ? reason : "unknown", target, lr, lr >= 4u ? lr - 4u : 0u,
+        g_lastAotGuestFunction.load(std::memory_order_relaxed),
         threadId, static_cast<unsigned long long>(reinterpret_cast<uintptr_t>(slotFunction)));
     recordRuntimeTrace(event);
     requestGuestSchedulerStop();

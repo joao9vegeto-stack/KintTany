@@ -827,13 +827,13 @@ private enum XOWUERuntime {
         }
         guard inspectCode == 0 else {
             let message = String(cString: inspectBuffer)
-            XOWUEDiagnostics.recordCrash("XEX_INSPECT_FAILED path=\(xex.path) detail=\(message)")
+            XOWUEDiagnostics.log("XEX_INSPECT_FAILED path=\(xex.path) detail=\(message)")
             throw RuntimeError.invalidXEX(message)
         }
         XOWUEDiagnostics.log("xex.inspect.ok \(String(cString: inspectBuffer))")
 
-        let crashTracePath = XOWUEDiagnostics.fileURL(named: XOWUEDiagnostics.crashFilename)?.path
-        let traceOpenStatus = crashTracePath.map { tracePath in
+        let diagnosticTracePath = XOWUEDiagnostics.fileURL(named: XOWUEDiagnostics.diagnosticFilename)?.path
+        let traceOpenStatus = diagnosticTracePath.map { tracePath in
             tracePath.withCString { xowue_set_runtime_trace_path($0) }
         } ?? -1
         XOWUEDiagnostics.log("runtime.trace_file open_status=\(traceOpenStatus)")
@@ -1422,7 +1422,7 @@ private struct XOWUERootView: View {
                             .foregroundStyle(XOWUEPalette.yellowLight)
                     }
                 }
-                if let url = XOWUEDiagnostics.fileURL(named: XOWUEDiagnostics.crashFilename) {
+                if let url = XOWUEDiagnostics.existingCrashFileURL() {
                     ShareLink(item: url) {
                         Label(XOWUEDiagnostics.crashFilename, systemImage: "exclamationmark.3")
                             .font(.system(size: 10, weight: .bold, design: .rounded))
