@@ -121,6 +121,40 @@ def generate(ppc_dir: Path):
                 single_shared_resume_body=True,
                 interpreter=False, jit=False)
 
+def discover_owner(ppc_dir: Path, target: int,
+                   context: tuple[str, ...]) -> int:
+    """Find owner using exact AOT opcode sequence at the XEX guest PC, not
+    the last executed AOT entry (which may be a different function)."""
+    matches = []
+    nearby = []
+    for path in sorted(ppc_dir.glob("ppc_recomp.*.cpp")):
+        source = path.read_text("utf-8")
+        for match in FUNCTION.finditer(source):
+            base = int(match.group(1)[4:], 16)
+            if base > target or target-base > 0x4000:
+                continue
+            stop = source.find("\n}\n", match.end())
+            if stop < 0: continue
+            insns = list(OPCODE.finditer(source[match.start():stop+3]))
+            index = (target - base) // 4
+            if index + len(context) <= len(insns) and all(
+                norm(insns[index+i].group(1)) == norm(ctx)
+                for i,ctx in enumerate(context)):
+                matches.append((base,path.name,index,len(insns)))
+            if 0 <= target-base <= 0x180 and len(nearby)<200:
+                probe=(insns[index].group(1) if index < len(insns) else "OUTSIDE")
+                nearby.append((base,len(insns),index,probe,path.name))
+    for base,n,index,probe,file in sorted(nearby,reverse=True)[:25]:
+        print("XOWUE_OWNER_SEARCH base=%08X instr=%d index=%d opcode=%s file=%s" %
+              (base,n,index,probe,file))
+    if len(matches)!=1:
+        raise ValueError("target 0x%08X owner matches=%s" %
+                         (target,matches[:12]))
+    base,file,index,count=matches[0]
+    print("XOWUE_EXACT_OWNER_FOUND target=%08X owner=%08X index=%d "
+          "opcodes=%d unit=%s" % (target,base,index,count,file))
+    return base
+
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--ppc-dir", required=True, type=Path)
@@ -133,10 +167,11 @@ def main():
         # Verify *both* source AOT opcodes against the supplied XEX; reject
         # wrong ownership/data PC rather than fabricating a callable target.
         global OWNER, END, KNOWN
-        OWNER, END = 0x830EBDF8, 0
         KNOWN = {
             0x830EBE74: ("bne cr6,0x830ebe14", "cmplwi cr6,r27,0"),
         }
+        OWNER = discover_owner(args.ppc_dir, 0x830EBE74, KNOWN[0x830EBE74])
+        END = 0
         additional = generate(args.ppc_dir)
         report = {"owners": [report, additional],
                   "new_native_entries": report["new_native_entries"] +
