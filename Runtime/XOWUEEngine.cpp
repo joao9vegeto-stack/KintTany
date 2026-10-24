@@ -71,8 +71,12 @@ bool releaseGuestPhysicalRange(uint32_t address);
 void signalGuestEventHandle(uint32_t handle);
 constexpr size_t kGuestAddressSpaceSize = static_cast<size_t>(PPC_MEMORY_SIZE);
 constexpr uint32_t kInitialStackPointer = 0x7FFF0000u;
-constexpr uint32_t kFirstVirtualAllocation = 0x10000000u;
+// Xbox 360 virtual and Xenos physical address spaces are separate.
+constexpr uint32_t kFirstVirtualAllocation = 0x40000000u;
 constexpr uint32_t kLastVirtualAllocation = 0x70000000u;
+constexpr uint32_t kFirstPhysicalAllocation = 0x10000000u;
+constexpr uint32_t kLastPhysicalAllocation = 0x20000000u;
+static_assert(kLastPhysicalAllocation<=kFirstVirtualAllocation);
 constexpr uint32_t kNtStatusSuccess = 0x00000000u;
 constexpr uint32_t kNtStatusNotImplemented = 0xC0000002u;
 constexpr uint32_t kNtStatusInvalidParameter = 0xC000000Du;
@@ -254,6 +258,7 @@ struct TouchControllerState {
 };
 
 uint32_t g_nextVirtualAllocation = kFirstVirtualAllocation;
+uint32_t g_nextPhysicalAllocation = kFirstPhysicalAllocation;
 uint32_t g_nextGuestHandle = 0x100u;
 uint32_t g_nextGuestEventObjectAddress = kFirstGuestEventObjectAddress;
 uint32_t g_nextGuestThreadId = 2u;
@@ -266,6 +271,7 @@ uint32_t g_mainPcrAddress = kFirstGuestPcrAddress - kGuestThreadMetadataStride;
 uint32_t g_mainTlsAddress = kMainGuestTlsAddress;
 std::vector<GuestReservation> g_virtualAllocations;
 std::vector<GuestCommit> g_virtualCommits;
+std::vector<GuestReservation> g_physicalAllocations;
 std::vector<std::string> g_runtimeTrace;
 uint32_t g_xexSystemFlags = 0;
 std::array<bool, kTlsSlotCount> g_tlsAllocated{};
@@ -1024,11 +1030,11 @@ uint32_t allocateGuestPhysicalRange(uint8_t *base, uint32_t requestedSize,
     const uint32_t size = static_cast<uint32_t>(roundedSize);
 
     std::lock_guard<std::mutex> lock(g_virtualMemoryMutex);
-    uint64_t candidate = (static_cast<uint64_t>(g_nextVirtualAllocation) + alignment - 1u) &
+    uint64_t candidate = (static_cast<uint64_t>(g_nextPhysicalAllocation) + alignment - 1u) &
                          ~static_cast<uint64_t>(alignment - 1u);
-    while (candidate + size <= kLastVirtualAllocation) {
+    while (candidate + size <= kLastPhysicalAllocation) {
         bool moved = false;
-        for (const auto &allocation : g_virtualAllocations) {
+        for (const auto &allocation : g_physicalAllocations) {
             const uint64_t allocationEnd = static_cast<uint64_t>(allocation.address) + allocation.size;
             if (candidate < allocationEnd && candidate + size > allocation.address) {
                 candidate = (allocationEnd + alignment - 1u) &
@@ -1038,11 +1044,10 @@ uint32_t allocateGuestPhysicalRange(uint8_t *base, uint32_t requestedSize,
             }
         }
         if (moved) continue;
-        if (candidate < kFirstVirtualAllocation || candidate + size > kLastVirtualAllocation) return 0u;
+        if (candidate < kFirstPhysicalAllocation || candidate + size > kLastVirtualAllocation) return 0u;
         const uint32_t address = static_cast<uint32_t>(candidate);
-        g_virtualAllocations.push_back({address, size, protection});
-        g_virtualCommits.push_back({address, size, protection});
-        g_nextVirtualAllocation = static_cast<uint32_t>(candidate + size);
+        g_physicalAllocations.push_back({address, size, protection});
+                 g_nextVirtualAllocation = static_cast<uint32_t>(candidate + size);
         std::memset(base + address, 0, size);
         return address;
     }
@@ -1051,14 +1056,14 @@ uint32_t allocateGuestPhysicalRange(uint8_t *base, uint32_t requestedSize,
 
 bool releaseGuestPhysicalRange(uint32_t address) {
     std::lock_guard<std::mutex> lock(g_virtualMemoryMutex);
-    const auto allocation = std::find_if(g_virtualAllocations.begin(), g_virtualAllocations.end(),
-        [address](const auto &item) { return item.address == address; });
-    if (allocation == g_virtualAllocations.end()) return false;
-    const uint32_t size = allocation->size;
-    g_virtualAllocations.erase(allocation);
-    g_virtualCommits.erase(std::remove_if(g_virtualCommits.begin(), g_virtualCommits.end(),
-        [address, size](const auto &item) { return item.address == address && item.size == size; }),
-        g_virtualCommits.end());
+    const auto allocation=std::find_if(
+        g_physicalAllocations.begin(),g_physicalAllocations.end(),
+        [address](const auto& it){return it.address==address;});
+    if(allocation==g_physicalAllocations.end())return false;
+    const uint64_t end=uint64_t(allocation->address)+allocation->size;
+    if(end==g_nextPhysicalAllocation)
+        g_nextPhysicalAllocation=allocation->address;
+    g_physicalAllocations.erase(allocation);
     return true;
 }
 
@@ -1359,6 +1364,25 @@ extern "C" void XOWUECrashRecorderWriteFatal(const char *message) __attribute__(
     const char *reason) {
     const uint32_t lr = static_cast<uint32_t>(context.lr);
     const uint32_t threadId = g_currentGuestThread ? g_currentGuestThread->id : 0u;
+    // Real source PPC branch is bctrl (4E800421): report CTR rather than
+    // inventing any destination or switching to a PPC interpreter.
+#if defined(PPC_CONFIG_CTR_AS_LOCAL)
+    const uint32_t ctr = target;
+#else
+    const uint32_t ctr = context.ctr.u32;
+#endif
+    uint32_t nearbyOpcodes[8]{};
+    const uint32_t firstOpcode=lr>=32u ? lr-32u : 0u;
+    const auto opcodeMemory=acquireGraphicsGuestMemory();
+    const bool nearbyValid=firstOpcode && validGuestRange(firstOpcode,32u) &&
+       opcodeMemory && opcodeMemory->base;
+    if(nearbyValid) for(uint32_t i=0;i<8u;++i) {
+       const uint32_t p=firstOpcode+4u*i;
+       nearbyOpcodes[i]=(uint32_t(opcodeMemory->base[p])<<24u) |
+           (uint32_t(opcodeMemory->base[p+1u])<<16u) |
+           (uint32_t(opcodeMemory->base[p+2u])<<8u) |
+           uint32_t(opcodeMemory->base[p+3u]);
+    }
     // Capture actual AOT site and PPC branch operands. Never guess or
     // substitute a new destination for an invalid indirect call.
     uint8_t site[4]{};
@@ -1366,13 +1390,21 @@ extern "C" void XOWUECrashRecorderWriteFatal(const char *message) __attribute__(
     const bool siteValid = lr>=4u && validGuestRange(lr-4u,4u) &&
        graphicsMemory && graphicsMemory->base;
     if (siteValid) std::memcpy(site,graphicsMemory->base+lr-4u,4u);
-    char event[640];
+    char event[1152];
     std::snprintf(event, sizeof(event),
-        "PPC indirect dispatch failed reason=%s guestTarget=0x%08X LR=0x%08X lrMinus4Unverified=0x%08X callsite_bytes=%s%02X%02X%02X%02X r3=%08X r4=%08X r5=%08X r6=%08X r7=%08X r8=%08X r9=%08X r10=%08X lastAotEntry=0x%08X thread=%u slot=0x%llX",
-        reason ? reason : "unknown",target,lr,lr>=4u?lr-4u:0u,
+        "PPC indirect dispatch failed reason=%s guestTarget=0x%08X CTR=0x%08X LR=0x%08X lrMinus4Unverified=0x%08X callsite_bytes=%s%02X%02X%02X%02X "
+        "nearby_start=%08X opcodes=%s%08X,%08X,%08X,%08X,%08X,%08X,%08X,%08X "
+        "r0=%08X r1=%08X r2=%08X r3=%08X r4=%08X r5=%08X r6=%08X r7=%08X r8=%08X r9=%08X r10=%08X r11=%08X r12=%08X r31=%08X "
+        "lastAotEntry=0x%08X thread=%u slot=0x%llX",
+        reason ? reason : "unknown",target,ctr,lr,lr>=4u?lr-4u:0u,
         siteValid?"":"unavailable:",site[0],site[1],site[2],site[3],
+        firstOpcode,nearbyValid?"":"unavailable:",
+        nearbyOpcodes[0],nearbyOpcodes[1],nearbyOpcodes[2],nearbyOpcodes[3],
+        nearbyOpcodes[4],nearbyOpcodes[5],nearbyOpcodes[6],nearbyOpcodes[7],
+        context.r0.u32,context.r1.u32,context.r2.u32,
         context.r3.u32,context.r4.u32,context.r5.u32,context.r6.u32,
         context.r7.u32,context.r8.u32,context.r9.u32,context.r10.u32,
+        context.r11.u32,context.r12.u32,context.r31.u32,
         g_lastAotGuestFunction.load(std::memory_order_relaxed),threadId,
         static_cast<unsigned long long>(reinterpret_cast<uintptr_t>(slotFunction)));
     recordRuntimeTrace(event);
@@ -1411,6 +1443,87 @@ extern "C" bool xowue_xenos_copy_guest_physical(uint32_t address, void *out, siz
     const auto memory = acquireGraphicsGuestMemory();
     if (!memory || !memory->base || !validGuestRange(address, size)) return false;
     std::memcpy(out, memory->base + address, size);
+    return true;
+}
+
+
+// Commit a GPU-generated Xenos resolve into the original guest texture.
+// Only validates and writes bytes produced by actual shaders. No fake pixels.
+// The active VdSwap texture descriptor supplies layout/endian/swizzle.
+// Original format adapters are defined below the PM4 decoder. Forward
+// declarations preserve one exact implementation (not an emulator fallback).
+static uint64_t xenosTiledOffset2D(uint32_t x,uint32_t y,
+                                   uint32_t pitchAligned,uint32_t bytesPerPixelLog2);
+static void swapXenosPixelEndian(uint8_t* pixel,uint32_t bytesPerPixel,
+                                 uint32_t endian);
+
+extern "C" bool xowue_xenos_commit_resolved_rgba(
+    uint32_t dest,uint32_t pitch,uint32_t height,uint32_t info,
+    const uint8_t* rgba,size_t sourceBytes) {
+    if(!rgba || pitch==0u || height==0u || pitch>2048u || height>2048u ||
+       ((info>>7u)&63u)!=6u || (uint64_t(pitch)*height*4u)!=sourceBytes)
+        return false;
+    std::array<uint32_t,6> fetch{};
+    {
+        std::lock_guard<std::mutex> lk(g_xenosMutex);
+        if(!g_xenosFrontend.swapFetchValid ||
+           g_xenosFrontend.latestFrontbufferAddress!=dest ||
+           g_xenosFrontend.latestWidth!=pitch ||
+           g_xenosFrontend.latestHeight!=height)
+            return false;
+        fetch=g_xenosFrontend.swapFetch;
+    }
+    if((fetch[1]&63u)!=6u || (((fetch[1]>>12u)&0xFFFFFu)<<12u)!=dest)
+        return false;
+    const uint32_t actualPitch=((fetch[0]>>22u)&0x1FFu)<<5u;
+    const bool tiled=(fetch[0]>>31u)!=0u;
+    const uint32_t pitchPixels=(actualPitch>=pitch)?actualPitch:
+        (tiled?((pitch+31u)&~31u):pitch);
+    const uint32_t alignedPitch=(pitchPixels+31u)&~31u;
+    const uint32_t endian=(fetch[1]>>6u)&3u;
+    const uint32_t swizzle=(fetch[3]>>1u)&0xFFFu;
+    const auto memory=acquireGraphicsGuestMemory();
+    if(!memory || !memory->base)return false;
+    // Reject noninvertible swizzles: emitting incorrect guest components is
+    // worse than an explicit missing framebuffer result.
+    uint32_t selectors[4]{};
+    for(uint32_t channel=0;channel<4u;++channel){
+        selectors[channel]=(swizzle>>(channel*3u))&7u;
+        if(selectors[channel]>=4u)return false;
+        for(uint32_t before=0;before<channel;++before)
+            if(selectors[channel]==selectors[before])return false;
+    }
+    // Verify the entire native texture destination before the first write.
+    // A partially committed framebuffer could corrupt the AOT state.
+    for(uint32_t y=0;y<height;++y)for(uint32_t x=0;x<pitch;++x){
+        const uint64_t off=tiled?xenosTiledOffset2D(x,y,alignedPitch,2u):
+            (uint64_t(y)*pitchPixels+x)*4u;
+        const uint64_t addr=uint64_t(dest)+off;
+        if(addr>UINT32_MAX || !validGuestRange(uint32_t(addr),4u))return false;
+    }
+    uint64_t committed=0u;
+    for(uint32_t y=0;y<height;++y)for(uint32_t x=0;x<pitch;++x) {
+        const uint64_t offset=tiled?
+            xenosTiledOffset2D(x,y,alignedPitch,2u):
+            (uint64_t(y)*pitchPixels+x)*4u;
+        const uint64_t address=uint64_t(dest)+offset;
+        if(address>UINT32_MAX || !validGuestRange(uint32_t(address),4u))
+            return false;
+        const uint8_t* source=rgba+(size_t(y)*pitch+x)*4u;
+        uint8_t pixel[4]{};
+        for(uint32_t i=0;i<4u;++i)pixel[selectors[i]]=source[i];
+        swapXenosPixelEndian(pixel,4u,endian);
+        std::memcpy(memory->base+address,pixel,4u);
+        ++committed;
+    }
+    char event[240];
+    std::snprintf(event,sizeof(event),
+        "XENOS_GPU_GUEST_RESOLVE_COMMITTED dest=%08X %ux%u format=6 tiled=%u endian=%u pixels=%llu",
+        dest,pitch,height,tiled?1u:0u,endian,
+        static_cast<unsigned long long>(committed));
+    recordRuntimeTrace(event);
+    if(xowue_vulkan_backend_guest_frame_rgba)
+        xowue_vulkan_backend_guest_frame_rgba(dest,pitch,height,6u,rgba,sourceBytes);
     return true;
 }
 
@@ -1547,12 +1660,14 @@ extern "C" int xowue_boot_xex(const char *path, char *output, size_t output_capa
         GuestSchedulerSessionGuard schedulerSession;
         GuestXenosPumpSessionGuard xenosPumpSession;
         g_nextVirtualAllocation = kFirstVirtualAllocation;
+        g_nextPhysicalAllocation = kFirstPhysicalAllocation;
         g_nextGuestHandle = 0x100u;
         g_nextGuestEventObjectAddress = kFirstGuestEventObjectAddress;
         {
             std::lock_guard<std::mutex> stateLock(g_virtualMemoryMutex);
             g_virtualAllocations.clear();
             g_virtualCommits.clear();
+            g_physicalAllocations.clear();
         }
         {
             std::lock_guard<std::mutex> objectLock(g_guestObjectMutex);
@@ -2722,8 +2837,14 @@ void xowue_compat_import(const char *name, PPCContext &context, uint8_t *base) {
             PPC_STORE_U32(output, symbol);
             context.r3.u32 = kNtStatusSuccess;
         } else {
+            // Do not manufacture an ARM64 AOT target for an unknown export.
             PPC_STORE_U32(output, 0u);
             context.r3.u32 = 127u; // X_ERROR_PROC_NOT_FOUND
+            char event[180];
+            std::snprintf(event,sizeof(event),
+                "XexGetProcedureAddress unresolved module=%08X symbol=%08X output=%08X status=%08X",
+                module,symbol,output,context.r3.u32);
+            recordRuntimeTrace(event);
         }
         return;
     }
@@ -3139,6 +3260,12 @@ static bool translateGuestFilePath(const std::string &guestPath, bool forWrite,
     if (guestPath.empty() || guestPath.size() > 0x4000u) return false;
     std::string normalized = guestPath;
     std::replace(normalized.begin(), normalized.end(), '\\', '/');
+    // NT Xbox object manager paths commonly begin with the DOS-device
+    // namespace; strip only the recognized exact prefix before mapping.
+    if (normalized.rfind("/??/",0u)==0u)
+        normalized.erase(0u,4u);
+    if (normalized.rfind("??/",0u)==0u)
+        normalized.erase(0u,3u);
     const std::string lower = lowerGuestPath(normalized);
     bool saveDevice = false;
     size_t prefixLength = 0u;
@@ -4376,17 +4503,40 @@ static bool getGuestObjectPath(uint8_t *base, uint32_t attributes,
     const uint32_t nameDescriptor = PPC_LOAD_U32(attributes + 8u);
     // Xbox X_OBJECT_ATTRIBUTES permits a null ObjectName when reopening the
     // object designated by an existing root directory handle.
-    if (nameDescriptor==0u && rootHandle!=0u && rootHandle!=0xFFFFFFFDu) {
-        const auto root=lookupGuestFile(rootHandle);
-        if (!root) return false;
-        path=root->path.generic_string();
-        return true;
+    // A root handle names an Xbox device object, while GuestFile::path
+    // stores its resolved iOS path. Do not prepend that absolute iOS path
+    // to another Xbox guest string and feed it to the Xbox path resolver.
+    auto translateRoot=[&](const std::shared_ptr<GuestFile>& root,
+                           std::string& translated)->bool {
+        if(!root)return false;
+        const auto absolute=root->path.lexically_normal();
+        auto convert=[&](const std::filesystem::path& deviceRoot,
+                         const char* devicePrefix)->bool{
+            if(deviceRoot.empty())return false;
+            const auto relative=absolute.lexically_relative(deviceRoot.lexically_normal());
+            if(relative.empty())return false;
+            for(const auto& part:relative)if(part=="..")return false;
+            translated=std::string(devicePrefix);
+            if(relative!=".") {
+                translated+=relative.generic_string();
+                if(translated.back()!='/') translated+='/';
+            }
+            return true;
+        };
+        return convert(g_guestGameRoot,"game:/") ||
+               convert(g_guestSaveRoot,"t:/");
+    };
+    if(nameDescriptor==0u && rootHandle!=0u && rootHandle!=0xFFFFFFFDu) {
+        return translateRoot(lookupGuestFile(rootHandle),path);
     }
     if (!readGuestAnsiString(base,nameDescriptor,path)) return false;
     if (rootHandle!=0u && rootHandle!=0xFFFFFFFDu) {
         const auto root=lookupGuestFile(rootHandle);
-        if (!root || !root->directory) return false;
-        path=root->path.generic_string()+"/"+path;
+        if (!root || !root->directory)return false;
+        std::string prefix;
+        if(!translateRoot(root,prefix))return false;
+        if(!path.empty() && path[0]=='/')path.erase(0u,1u);
+        path=prefix+path;
     }
     return true;
 }
@@ -4403,10 +4553,18 @@ void xowue_NtCreateFile(PPCContext &context, uint8_t *base) {
         !getGuestObjectPath(base, objectAttributes, guestPath)) {
         context.r3.u32 = kNtStatusInvalidParameter;
         writeGuestIoStatus(base, ioStatusAddress, context.r3.u32, 0u);
-        char details[230];
+        const bool attrsValid=base&&validGuestRange(objectAttributes,12u);
+        const uint32_t root=attrsValid?PPC_LOAD_U32(objectAttributes+4u):0u;
+        const uint32_t name=attrsValid?PPC_LOAD_U32(objectAttributes+8u):0u;
+        const bool nameValid=attrsValid && name && validGuestRange(name,8u);
+        const uint16_t len=nameValid?loadGuestBe16(base,name):0u;
+        const uint32_t buf=nameValid?PPC_LOAD_U32(name+4u):0u;
+        const uint16_t attrLen=attrsValid?static_cast<uint16_t>(PPC_LOAD_U32(objectAttributes)&0xFFFFu):0u;
+        char details[350];
         std::snprintf(details,sizeof(details),
-           "NtCreateFile rejected invalid output/object attributes out=%08X attrs=%08X io=%08X access=%08X disposition=%08X",
-           handleOutAddress,objectAttributes,ioStatusAddress,desiredAccess,disposition);
+           "NtCreateFile rejected attrs out=%08X attrs=%08X attr_len=%u root=%08X name=%08X name_len=%u name_buf=%08X io=%08X access=%08X disposition=%08X",
+           handleOutAddress,objectAttributes,attrLen,root,name,len,buf,
+           ioStatusAddress,desiredAccess,disposition);
         recordRuntimeTrace(details);
         return;
     }
@@ -6122,55 +6280,62 @@ void xowue_XamLoaderGetLaunchDataSize(PPCContext &context, uint8_t *base) {
 
 void xowue_NtQueryVirtualMemory(PPCContext &context, uint8_t *base) {
     std::lock_guard<std::mutex> stateLock(g_virtualMemoryMutex);
-    const uint32_t address = context.r3.u32;
-    const uint32_t information = context.r4.u32;
-    constexpr uint32_t kInformationSize = 7 * sizeof(uint32_t);
-    constexpr uint32_t kMemCommit = 0x00001000u;
-    constexpr uint32_t kMemReserve = 0x00002000u;
-    constexpr uint32_t kMemPrivate = 0x00020000u;
-    if (!base || information > kGuestAddressSpaceSize - kInformationSize) {
-        context.r3.u32 = kNtStatusInvalidParameter;
+    const uint32_t requested=context.r3.u32;
+    const uint32_t information=context.r4.u32;
+    const uint32_t regionType=context.r5.u32;
+    constexpr uint32_t kInfoSize=28u;
+    constexpr uint32_t kCommit=0x1000u,kReserve=0x2000u,kPrivate=0x20000u;
+    if(!base || !validGuestRange(information,kInfoSize) || regionType>2u ||
+       requested>=kGuestAddressSpaceSize) {
+        context.r3.u32=kNtStatusInvalidParameter;
         return;
     }
-    const auto reservation = std::find_if(
-        g_virtualAllocations.begin(), g_virtualAllocations.end(),
-        [address](const auto &item) {
-            return address >= item.address &&
-                   static_cast<uint64_t>(address) < static_cast<uint64_t>(item.address) + item.size;
+    const auto reservation=std::find_if(
+        g_virtualAllocations.begin(),g_virtualAllocations.end(),
+        [requested](const auto &it) {
+            return requested>=it.address &&
+                uint64_t(requested)<uint64_t(it.address)+it.size;
         });
-    if (reservation == g_virtualAllocations.end()) {
-        context.r3.u32 = kNtStatusInvalidParameter;
+    if(reservation==g_virtualAllocations.end()) {
+        context.r3.u32=kNtStatusInvalidParameter;
         return;
     }
-    const auto commit = std::find_if(
-        g_virtualCommits.begin(), g_virtualCommits.end(),
-        [address](const auto &item) {
-            return address >= item.address &&
-                   static_cast<uint64_t>(address) < static_cast<uint64_t>(item.address) + item.size;
-        });
-
-    uint32_t regionBase = reservation->address;
-    uint32_t regionSize = reservation->size;
-    uint32_t state = kMemReserve;
-    uint32_t protection = 0;
-    if (commit != g_virtualCommits.end()) {
-        regionBase = commit->address;
-        regionSize = commit->size;
-        state = kMemCommit;
-        protection = commit->protection;
+    // MEMORY_BASIC_INFORMATION BaseAddress is the queried page, not the
+    // allocation base. RegionSize spans matching contiguous page states from
+    // this page onward, without crossing a different committed subregion.
+    constexpr uint32_t pageSize=0x1000u;
+    const uint32_t regionBase=requested&~(pageSize-1u);
+    const uint64_t reservationEnd=uint64_t(reservation->address)+reservation->size;
+    auto findCommit=[](uint32_t p) {
+        return std::find_if(g_virtualCommits.begin(),g_virtualCommits.end(),
+            [p](const auto &c) {
+                return p>=c.address&&uint64_t(p)<uint64_t(c.address)+c.size;
+            });
+    };
+    const auto first=findCommit(regionBase);
+    const bool committed=first!=g_virtualCommits.end();
+    const uint32_t protect=committed?first->protection:0u;
+    uint64_t end=reservationEnd;
+    if(committed)end=std::min(end,uint64_t(first->address)+first->size);
+    else for(const auto &c:g_virtualCommits)
+        if(c.address>regionBase)end=std::min(end,uint64_t(c.address));
+    if(end<=regionBase || end>kGuestAddressSpaceSize) {
+        context.r3.u32=kNtStatusInvalidParameter;
+        return;
     }
-
-    PPC_STORE_U32(information + 0x00, regionBase);
-    PPC_STORE_U32(information + 0x04, reservation->address);
-    PPC_STORE_U32(information + 0x08, reservation->protection);
-    PPC_STORE_U32(information + 0x0C, regionSize);
-    PPC_STORE_U32(information + 0x10, state);
-    PPC_STORE_U32(information + 0x14, protection);
-    PPC_STORE_U32(information + 0x18, kMemPrivate);
-    context.r3.u32 = kNtStatusSuccess;
-    char event[128];
-    std::snprintf(event, sizeof(event), "NtQueryVirtualMemory address=0x%08X state=0x%08X region=0x%08X+0x%08X",
-                  address, state, regionBase, regionSize);
+    PPC_STORE_U32(information+0x00u,regionBase);
+    PPC_STORE_U32(information+0x04u,reservation->address);
+    PPC_STORE_U32(information+0x08u,reservation->protection);
+    PPC_STORE_U32(information+0x0Cu,static_cast<uint32_t>(end-regionBase));
+    PPC_STORE_U32(information+0x10u,committed?kCommit:kReserve);
+    PPC_STORE_U32(information+0x14u,protect);
+    PPC_STORE_U32(information+0x18u,kPrivate);
+    context.r3.u32=kNtStatusSuccess;
+    char event[200];
+    std::snprintf(event,sizeof(event),
+        "NtQueryVirtualMemory queried=%08X page=%08X allocation=%08X size=%08X state=%08X protection=%08X",
+        requested,regionBase,reservation->address,
+        static_cast<uint32_t>(end-regionBase),committed?kCommit:kReserve,protect);
     recordRuntimeTrace(event);
 }
 
@@ -6421,10 +6586,14 @@ void xowue_NtFreeVirtualMemory(PPCContext &context, uint8_t *base) {
             failWith(kNtStatusInvalidParameter);
             return;
         }
-        const uint64_t adjusted =
-            (static_cast<uint64_t>(requestedSize) + 0xFFFu) & ~uint64_t{0xFFFu};
-        resultSize = static_cast<uint32_t>(std::min<uint64_t>(adjusted, allocationSize));
-        std::memset(base + address, 0, resultSize);
+        const uint64_t alignedStart=uint64_t(address)&~uint64_t{0xFFFu};
+        const uint64_t alignedEnd=(requestedEnd+0xFFFu)&~uint64_t{0xFFFu};
+        if(alignedStart<allocationAddress || alignedEnd>allocationEnd) {
+            failWith(kNtStatusInvalidParameter);
+            return;
+        }
+        resultSize=static_cast<uint32_t>(alignedEnd-alignedStart);
+        std::memset(base+alignedStart,0u,resultSize);
     } else if (freeType == 0x00008000u) { // MEM_RELEASE
         if (address != allocationAddress) {
             char event[200];
@@ -6447,8 +6616,8 @@ void xowue_NtFreeVirtualMemory(PPCContext &context, uint8_t *base) {
     }
 
     if (freeType == 0x00004000u) {
-        const uint64_t decommitStart = address;
-        const uint64_t decommitEnd = static_cast<uint64_t>(address) + resultSize;
+        const uint64_t decommitStart = uint64_t(address)&~uint64_t{0xFFFu};
+        const uint64_t decommitEnd = decommitStart+resultSize;
         std::vector<GuestCommit> remaining;
         for (const auto &commit : g_virtualCommits) {
             const uint64_t commitStart = commit.address;

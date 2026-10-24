@@ -55,6 +55,20 @@ print("PASS: legacy PPC function-table lookup uses guarded AOT resolver")
 
 # Build 31: evidence-first null AOT callsite, no interpreter or invented target.
 assert "callsite_bytes=%s%02X%02X%02X%02X" in Path("Runtime/XOWUEEngine.cpp").read_text()
-assert "NtCreateFile rejected invalid output/object attributes out=%08X" in Path("Runtime/XOWUEEngine.cpp").read_text()
+assert "NtCreateFile rejected attrs out=%08X" in Path("Runtime/XOWUEEngine.cpp").read_text()
 assert "release must start at reservation base" in Path("Runtime/XOWUEEngine.cpp").read_text()
 print("PASS: AOT invalid target records original bytes and arguments without fallback")
+
+# Xbox virtual and Xenos physical heaps must never overlap.
+engine=Path("Runtime/XOWUEEngine.cpp").read_text()
+assert "kFirstVirtualAllocation = 0x40000000u" in engine
+assert "kLastPhysicalAllocation = 0x20000000u" in engine
+assert "g_nextPhysicalAllocation = kFirstPhysicalAllocation" in engine
+assert "g_physicalAllocations.push_back({address, size, protection})" in engine
+assert "g_virtualAllocations.push_back({address, adjustedSize, protection})" in engine
+assert "g_physicalAllocations.clear()" in engine
+assert "CTR=0x%08X" in engine
+assert "nearby_start=%08X opcodes=" in engine
+assert "NtQueryVirtualMemory queried=%08X page=%08X" in engine
+assert "XexGetProcedureAddress unresolved module=%08X" in engine
+print("PASS: physical/virtual heap separation; AOT bctrl CTR provenance, no interpreter")

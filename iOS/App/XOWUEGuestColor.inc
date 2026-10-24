@@ -13,8 +13,45 @@ typedef struct {
 } XDColorTarget;
 static XDColorTarget g_xd_color[16]={0};
 static uint32_t g_xd_color_count=0;
+typedef struct {
+  XDBuffer readback;
+  uint32_t dest,pitch,height,info;
+  bool pending;
+} XDGuestResolve;
+static XDGuestResolve g_xd_guest_resolves[16]={0};
+static uint32_t g_xd_guest_resolves_count=0;
+static void XDCommitGuestResolves(KKVulkanState* state) {
+  for(uint32_t i=0;i<g_xd_guest_resolves_count;++i) {
+    XDGuestResolve* r=&g_xd_guest_resolves[i];
+    if(!r->pending || !r->readback.mapped)continue;
+    VkResult invalidate=VK_SUCCESS;
+    if(!(r->readback.flags&VK_MEMORY_PROPERTY_HOST_COHERENT_BIT)){
+      VkMappedMemoryRange range={.sType=VK_STRUCTURE_TYPE_MAPPED_MEMORY_RANGE,
+         .memory=r->readback.memory,.offset=0,.size=VK_WHOLE_SIZE};
+      PFN_vkInvalidateMappedMemoryRanges fn=
+          (PFN_vkInvalidateMappedMemoryRanges)state->GetDeviceProcAddr(
+              state->device,"vkInvalidateMappedMemoryRanges");
+      invalidate=fn?fn(state->device,1,&range):VK_ERROR_EXTENSION_NOT_PRESENT;
+    }
+    const size_t size=(size_t)r->pitch*r->height*4u;
+    const bool ok=invalidate==VK_SUCCESS &&
+       xowue_xenos_commit_resolved_rgba(r->dest,r->pitch,r->height,
+                                        r->info,(const uint8_t*)r->readback.mapped,size);
+    KKLog(@"XENOS_GUEST_RESOLVE_WRITEBACK addr=%08X pitch=%u height=%u status=%u vk=%d",
+          r->dest,r->pitch,r->height,ok?1u:0u,invalidate);
+    r->pending=false;
+    XDDestroyBuffer(state,&r->readback);
+  }
+  memset(g_xd_guest_resolves,0,sizeof(g_xd_guest_resolves));
+  g_xd_guest_resolves_count=0;
+}
+
 static void XDDestroyGuestColor(KKVulkanState* state) {
   if(!state->device)return;
+  for(uint32_t i=0;i<g_xd_guest_resolves_count;++i)
+     XDDestroyBuffer(state,&g_xd_guest_resolves[i].readback);
+  memset(g_xd_guest_resolves,0,sizeof(g_xd_guest_resolves));
+  g_xd_guest_resolves_count=0;
   for(uint32_t i=0;i<g_xd_color_count;++i) {
     XDColorTarget *t=&g_xd_color[i];
     if(t->framebuffer)XD(DestroyFramebuffer)(state->device,t->framebuffer,NULL);
@@ -62,7 +99,7 @@ static XDColorTarget* XDGetGuestColor(KKVulkanState* state,
   const uint32_t pitch=draw->rb_surface_info&0x3FFFu;
   const uint32_t fmt=(draw->rb_color_info[0]>>16u)&0xFu;
   const uint32_t msaa=(draw->rb_surface_info>>16u)&3u;
-  if(!pitch||pitch>2048u||msaa>2u||g_xd_color_count>=16u)return NULL;
+  if(!pitch||pitch>2048u||msaa>2u)return NULL;
   const VkSampleCountFlagBits samples=(VkSampleCountFlagBits)(1u<<msaa);
   const VkFormat imageFormat=fmt==0u?VK_FORMAT_R8G8B8A8_UNORM:
                              fmt==2u?VK_FORMAT_A2B10G10R10_UNORM_PACK32:
@@ -72,6 +109,7 @@ static XDColorTarget* XDGetGuestColor(KKVulkanState* state,
   for(uint32_t i=0;i<g_xd_color_count;++i)
     if(g_xd_color[i].tile==tile&&g_xd_color[i].pitch==pitch&&
        g_xd_color[i].format==fmt&&g_xd_color[i].samples==samples)return &g_xd_color[i];
+  if(g_xd_color_count>=16u)return NULL;
   VkPhysicalDeviceProperties gpu={0};
   state->GetPhysicalDeviceProperties(state->physical_device,&gpu);
   if(!(gpu.limits.framebufferColorSampleCounts&samples))return NULL;
@@ -182,7 +220,41 @@ static bool XDResolveGuestColor(KKVulkanState* state,
     state->CmdPipelineBarrier(cmd,VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT,
       VK_PIPELINE_STAGE_TRANSFER_BIT,0,0,NULL,0,NULL,1,&toCopy);
   }
-  // Native resolve to host presentation; guest physical writeback is separate.
+  // Write back the original GPU-produced color to Xbox guest memory.
+  // Readback is queued in the same command buffer as the resolve; the CPU
+  // commits it only *after* QueueWaitIdle, never before GPU completion.
+  const uint32_t copyPitch=draw->rb_copy_dest_pitch&0x3FFFu;
+  const uint32_t copyHeight=(draw->rb_copy_dest_pitch>>16u)&0x3FFFu;
+  const uint32_t copyFormat=(draw->rb_copy_dest_info>>7u)&63u;
+  if(t->format==0u && copyFormat==6u && copyPitch>0u && copyHeight>0u &&
+     copyPitch<=t->extent.width && copyHeight<=t->extent.height &&
+     g_xd_guest_resolves_count<16u) {
+      XDGuestResolve* record=&g_xd_guest_resolves[g_xd_guest_resolves_count];
+      const VkDeviceSize size=(VkDeviceSize)copyPitch*copyHeight*4u;
+      if(XDCreateBuffer(state,&record->readback,size,
+                        VK_BUFFER_USAGE_TRANSFER_DST_BIT)) {
+         VkBufferImageCopy toBuffer={
+           .bufferOffset=0u,.bufferRowLength=0u,.bufferImageHeight=0u,
+           .imageSubresource={.aspectMask=VK_IMAGE_ASPECT_COLOR_BIT,.layerCount=1u},
+           .imageExtent={copyPitch,copyHeight,1u}};
+         XD(CmdCopyImageToBuffer)(cmd,image,VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
+                                 record->readback.buffer,1u,&toBuffer);
+         record->dest=draw->rb_copy_dest_base;
+         record->pitch=copyPitch;record->height=copyHeight;
+         record->info=draw->rb_copy_dest_info;record->pending=true;
+         ++g_xd_guest_resolves_count;
+         KKLog(@"XENOS_GPU_RESOLVE_READBACK_QUEUED addr=%08X %ux%u bytes=%llu",
+               record->dest,copyPitch,copyHeight,(unsigned long long)size);
+      } else {
+         XDDestroyBuffer(state,&record->readback);
+         KKLog(@"GRAPHICS_BLOCKER reason=GUEST_RESOLVE_STAGING_CREATE_FAILED bytes=%llu",
+               (unsigned long long)size);
+      }
+  } else {
+    KKLog(@"XENOS_GUEST_RESOLVE_WRITEBACK_UNSUPPORTED edramfmt=%u destfmt=%u pitch=%u height=%u capacity=%u",
+      t->format,copyFormat,copyPitch,copyHeight,g_xd_guest_resolves_count);
+  }
+  // Native resolve to host presentation after guest writeback copy request.
   VkImageBlit region={.srcSubresource={.aspectMask=VK_IMAGE_ASPECT_COLOR_BIT,.layerCount=1},
     .srcOffsets={{0,0,0},{(int32_t)t->extent.width,(int32_t)t->extent.height,1}},
     .dstSubresource={.aspectMask=VK_IMAGE_ASPECT_COLOR_BIT,.layerCount=1},

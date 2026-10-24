@@ -97,3 +97,20 @@ assert 'XENOS_EDRAM_DEPTH_NATIVE' in Path('iOS/App/XOWUEGuestDepth.inc').read_te
 assert 'XDResolveGuestColor' in renderer
 assert 'XENOS_COPY_GUEST_REQUEST' in renderer
 print('PASS: guest PM4 depth-only, offscreen EDRAM, native color resolve and copy destination tracing')
+
+# Native guest GPU memory receives only a completed real color resolve.
+color=Path("iOS/App/XOWUEGuestColor.inc").read_text()
+assert "XENOS_GPU_RESOLVE_READBACK_QUEUED" in color
+assert "XDCommitGuestResolves(state)" in vulkan
+assert "xowue_xenos_commit_resolved_rgba" in engine
+assert "xowue_xenos_commit_resolved_rgba" in color
+assert "VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL" in color
+assert "g_xd_guest_resolves_count=0" in color
+assert "xenosTiledOffset2D(x,y,alignedPitch,2u)" in engine
+print("PASS: native guest EDRAM GPU writeback linked to Xenos tiled original framebuffer")
+
+# The frontend is compiled as Objective-C (.m), not Objective-C++ (.mm).
+# Do not use C++-only functional casts in the Vulkan guest resolve.
+assert 'const VkDeviceSize size=(VkDeviceSize)copyPitch*copyHeight*4u;' in color
+assert 'VkDeviceSize(' not in color
+print('PASS: Objective-C compatible VkDeviceSize guest resolve')

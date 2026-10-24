@@ -191,6 +191,20 @@ jobs:
           set -euo pipefail
           python3 tools/test_xowue_gpu_wiring.py
 
+      - name: Record native source of Wolverine's failing PPC CTR branch
+        run: |
+          set -euo pipefail
+          python3 tools/probe_xowue_bctrl.py --ppc-dir generated/ppc \
+            --target 0x82361BF4 --report artifacts/xowue-bctrl-82361BF4.json
+          test -s artifacts/xowue-bctrl-82361BF4.json
+
+      - name: Upload verified PPC bctrl source evidence
+        uses: actions/upload-artifact@v4
+        with:
+          name: XOWUE-BCTRL-AOT-Source
+          path: artifacts/xowue-bctrl-82361BF4.json
+          if-no-files-found: error
+
       - name: Test PPC dispatch guard and AOT entry instrumentation
         run: |
           set -euo pipefail

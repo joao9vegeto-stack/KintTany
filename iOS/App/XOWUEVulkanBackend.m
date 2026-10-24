@@ -19,6 +19,8 @@ static void KKLog(NSString *format, ...);
 #include <pthread.h>
 #include <math.h>
 #include "Graphics/Xenos/XOWUEGuestDraw.h"
+extern bool xowue_xenos_commit_resolved_rgba(uint32_t dest,uint32_t pitch,
+    uint32_t height,uint32_t info,const uint8_t* rgba,size_t bytes);
 
 static _Atomic(uint32_t) g_xowue_guest_swap_count = 0;
 static _Atomic(uint32_t) g_xowue_guest_width = 0;
@@ -1364,7 +1366,10 @@ KKRenderFrame(KKVulkanState *state, CAMetalLayer *layer)
          KKLog(@"XENOS_COMPOSITED_GPU_READBACK_INVALIDATE_FAILED code=%d",invalidateResult);
       }
    }
-   if (result == VK_SUCCESS) XDCollectPipelines(state);
+   if (result == VK_SUCCESS) {
+      XDCommitGuestResolves(state);
+      XDCollectPipelines(state);
+   }
    if (result != VK_SUCCESS) {
       KKLog(@"FAIL vkQueueWaitIdle = %d", result);
       return false;
