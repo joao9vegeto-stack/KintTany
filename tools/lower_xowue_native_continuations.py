@@ -24,6 +24,14 @@ import re
 # original instructions, not just a guessed source-code offset. The renderer
 # is separate; these are real CPU AOT continuations.
 VALIDATED = {
+    # Build 20: validated against the user-provided XEX SHA-256
+    # b5afa6ff191194e5cc0a29302878b154baccfa7073868108c5e7416d08b3aa9a.
+    # .pdata owns [0x82C2E240, 0x82C2EBA0); exact instruction
+    # 0x82C2E338 is 57 2A 06 31 (rlwinm.), not an invented function.
+    0x82C2E338: (
+        "sub_82C2E240",
+        ("rlwinm. r10,r25,0,24,24", "li r8,16"),
+    ),
     # These addresses are XEX virtual addresses, NOT PE raw file offsets.
     # .text raw pointer is 0x296E00, while RVA is 0x2A0000:
     # naive PE disassembly appears shifted by exactly 0x9200.
@@ -175,18 +183,21 @@ def patch_mappings(ppc_dir: Path, targets):
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--ppc-dir", required=True, type=Path)
+    ap.add_argument("--target", type=lambda value: int(value, 0),
+                    help="Patch only the specified XEX-verified native PC")
     args = ap.parse_args()
     ppc_dir = args.ppc_dir
+    targets = {args.target: VALIDATED[args.target]} if args.target is not None else VALIDATED
     if len(list(ppc_dir.glob("ppc_recomp.*.cpp"))) < 300:
         raise SystemExit("Unexpected XOWUE AOT file count")
     try:
-        for address, (owner, context) in VALIDATED.items():
+        for address, (owner, context) in targets.items():
             file, parent, length = recover_entry(ppc_dir, address, owner, context)
             print(f"AOT_NATIVE_CONTINUATION target=0x{address:08X} original={parent} file={file} instructions={length}")
-        patch_mappings(ppc_dir, VALIDATED)
+        patch_mappings(ppc_dir, targets)
     except ValueError as error:
         raise SystemExit(f"REFUSING_UNVALIDATED_AOT_PATCH: {error}")
-    print(f"PASS: {len(VALIDATED)} direct native PPC continuation(s); no interpreter or JIT")
+    print(f"PASS: {len(targets)} direct native PPC continuation(s); no interpreter or JIT")
 
 
 if __name__ == "__main__":

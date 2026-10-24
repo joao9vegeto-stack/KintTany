@@ -137,6 +137,20 @@ jobs:
             --report artifacts/xowue-global-native-pc.json
           test -s artifacts/xowue-global-native-pc.json
 
+      - name: Restore verified native PPC continuation and all safe local CTR branches
+        run: |
+          set -euo pipefail
+          # Original XEX 0x82C2E338 is an internal PPC instruction within
+          # function 0x82C2E240. Preserve original code, never synthesize stubs.
+          python3 tools/lower_xowue_native_continuations.py --ppc-dir generated/ppc --target 0x82C2E338
+          grep -Eq '\{[[:space:]]*0x82C2E338[[:space:]]*,[[:space:]]*sub_82C2E338' generated/ppc/ppc_func_mapping.cpp
+          # Repair other native BCTR paths globally where validated C++ labels
+          # already exist. Unknown targets remain subject to dispatch guard.
+          python3 tools/patch_xowue_global_local_bctr.py --self-test
+          python3 tools/patch_xowue_global_local_bctr.py \
+            --ppc-dir generated/ppc --report artifacts/xowue-global-local-ctr.json
+          test -s artifacts/xowue-global-local-ctr.json
+
       - name: Verify portrait-only iOS game host
         run: |
           set -euo pipefail
@@ -489,6 +503,12 @@ jobs:
           test -f "$APP/ThirdPartyLicenses/Mesa/licenses/MIT"
           lipo "$APP/XOWUE" -verify_arch arm64
           python3 "$GITHUB_WORKSPACE/tools/verify_xowue_aot_symbols.py" "$APP/XOWUE"
+          nm "$APP/XOWUE" > artifacts/xowue-linked-symbols.txt
+          if ! grep -Fq '82C2E338' artifacts/xowue-linked-symbols.txt; then
+            echo "Native PPC continuation 0x82C2E338 was not linked into IPA" >&2
+            exit 1
+          fi
+          echo "Native PPC continuation 0x82C2E338: linked into final app executable"
           lipo "$APP/Frameworks/libvulkan_kosmickrisp.dylib" -verify_arch arm64
           otool -L "$APP/XOWUE" | grep -F "@rpath/libvulkan_kosmickrisp.dylib"
           python3 - "$APP/Info.plist" "$XOWUE_BUILD_NUMBER" <<'PY'
