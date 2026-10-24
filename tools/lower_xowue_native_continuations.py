@@ -26,11 +26,15 @@ import re
 VALIDATED = {
     # Build 20: validated against the user-provided XEX SHA-256
     # b5afa6ff191194e5cc0a29302878b154baccfa7073868108c5e7416d08b3aa9a.
-    # .pdata owns [0x82C2E240, 0x82C2EBA0); exact instruction
-    # 0x82C2E338 is 57 2A 06 31 (rlwinm.), not an invented function.
+    # .text RVA 0x00C2E338: raw PE file offset 0x00C25138
+    # (.text RVA 0x002A0000, PointerToRawData 0x00296E00).
+    # Verified original XEX bytes 83 97 00 04: lwz r28,4(r23).
+    # The next instruction at 0x82C2E33C is 4B FF FF 50:
+    # b 0x82C2E28C. The previous version incorrectly read an RVA
+    # as a PE raw offset, selecting an unrelated instruction.
     0x82C2E338: (
         "sub_82C2E240",
-        ("rlwinm. r10,r25,0,24,24", "li r8,16"),
+        ("lwz r28,4(r23)", "b 0x82c2e28c"),
     ),
     # These addresses are XEX virtual addresses, NOT PE raw file offsets.
     # .text raw pointer is 0x296E00, while RVA is 0x2A0000:
