@@ -98,7 +98,30 @@ jobs:
           assert hashlib.sha256(packed).hexdigest() == "e068d959ae1b59b14ab46116f5d54b593b057fb074df44386eed946554ec7426"
           source = zlib.decompress(packed)
           assert hashlib.sha256(source).hexdigest() == "d4aec36bc6013befb37176c3b110fa65fb0d3a072bc7c28b162f6efee65c7a2a"
-          Path("tools/patch_xowue_global_native.py").write_bytes(source)
+          script = source.decode("utf-8")
+          old = (
+              "        for lab in LABEL.finditer(body):\n"
+              "            pc = int(lab[1], 16)\n"
+              "            idx = bisect.bisect_left(starts, lab.end())\n"
+              "            if pc < owner or ((pc-owner) & 3) or idx != (pc-owner)//4:\n"
+              "                raise RuntimeError(f'unsafe AOT instruction mapping 0x{owner:08X}: label {pc:08X}')\n"
+          )
+          new = (
+              "        safe_label_map = True\n"
+              "        for lab in LABEL.finditer(body):\n"
+              "            pc = int(lab[1], 16)\n"
+              "            idx = bisect.bisect_left(starts, lab.end())\n"
+              "            if pc < owner or ((pc-owner) & 3) or idx != (pc-owner)//4:\n"
+              "                safe_label_map = False\n"
+              "                break\n"
+              "        if not safe_label_map:\n"
+              "            continue\n"
+          )
+          assert script.count(old) == 1, "global AOT source safety patch context changed"
+          script = script.replace(old, new)
+          # Global discovery excludes a malformed function; never redirect
+          # control flow into a native function with inconsistent PC labels.
+          Path("tools/patch_xowue_global_native.py").write_text(script)
           # Repair one base64-upload transit corruption at the verified
           # compressed-table tail, without changing any original XEX offset.
           compressed_table = bytearray(Path("tools/xowue_tables.guest.bin.z").read_bytes())
