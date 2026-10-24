@@ -275,8 +275,33 @@ def main():
         report = {"owners": [report], "native_tail_return_coverage": tails,
                   "interpreter": False, "jit": False}
         if tails["milestone_targets_missing"]:
+            # Forensics on the actual AOT code: do not assume lastAotEntry
+            # identifies the owner of a computed PPC target.
+            target = 0x831A9EBC
+            matched = 0
+            for path in sorted(args.ppc_dir.glob("ppc_recomp.*.cpp")):
+                src = path.read_text("utf-8")
+                for m in FUNCTION.finditer(src):
+                    start = int(m.group(1)[4:], 16)
+                    if not (target-0x200 <= start <= target+0x20):
+                        continue
+                    stop = src.find("\\n}\\n", m.end())
+                    if stop < 0: continue
+                    body = src[m.start():stop+3]
+                    opcodes = list(OPCODE.finditer(body))
+                    index = (target-start)//4
+                    print(f"XOWUE_PC_FORENSICS owner=0x{start:08X} count={len(opcodes)} target_index={index} file={path.name}")
+                    if start <= target and index < len(opcodes):
+                        matched += 1
+                        print("XOWUE_PC_TARGET_OPCODE " + opcodes[index].group(1))
+                    if target-0x80 <= start <= target+0x10:
+                        print("XOWUE_PC_NATIVE_BODY_BEGIN")
+                        for line in body.splitlines()[:85]:
+                            print("XOWUE_PPC_CPP " + line[:230])
+                        print("XOWUE_PC_NATIVE_BODY_END")
             raise ValueError("Uncovered known runtime targets: "
-                             + ", ".join(tails["milestone_targets_missing"]))
+                             + ", ".join(tails["milestone_targets_missing"]) +
+                             f"; owners_that_cover={matched}")
     except ValueError as error:
         raise SystemExit(f"REFUSING_UNVERIFIED_GLOBAL_OWNER_CONTINUATION: {error}")
     args.report.parent.mkdir(parents=True, exist_ok=True)
