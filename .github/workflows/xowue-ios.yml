@@ -153,11 +153,14 @@ jobs:
           # Compile one shared native continuation for all verified addresses
           # within sub_82C2E240. This covers E4A8 and other local PPC targets
           # without generating one new manual fix per run.
+          python3 -m py_compile tools/lower_xowue_owner_interior_entries.py
           python3 tools/lower_xowue_owner_interior_entries.py \
             --ppc-dir generated/ppc --report artifacts/xowue-owner-wide-resume.json
           grep -Eq '\{[[:space:]]*0x82C2E4A8[[:space:]]*,[[:space:]]*sub_82C2E4A8' generated/ppc/ppc_func_mapping.cpp
           grep -Eq '\{[[:space:]]*0x830EBE74[[:space:]]*,[[:space:]]*sub_830EBE74' generated/ppc/ppc_func_mapping.cpp
           grep -Eq '\{[[:space:]]*0x831A9EBC[[:space:]]*,[[:space:]]*sub_831A9EBC' generated/ppc/ppc_func_mapping.cpp
+          grep -Eq '\{[[:space:]]*0x830F0400[[:space:]]*,[[:space:]]*sub_830F0400' generated/ppc/ppc_func_mapping.cpp
+          grep -Fq 'regional_native_owners' artifacts/xowue-owner-wide-resume.json
           test -s artifacts/xowue-owner-wide-resume.json
 
       - name: Verify real landscape game and portrait library orientations
@@ -169,6 +172,8 @@ jobs:
           grep -Fq 'requestOrientation(.landscapeRight)' iOS/App/XOWUEApp.swift
           grep -Fq 'requestOrientation(.portrait)' iOS/App/XOWUEApp.swift
           grep -Fq 'setNeedsUpdateOfSupportedInterfaceOrientations' iOS/App/XOWUEApp.swift
+          grep -Fq 'UIApplicationDelegateAdaptor' iOS/App/XOWUEApp.swift
+          grep -Fq 'effectiveMask = orientations' iOS/App/XOWUEApp.swift
           grep -Fq 'guest_frame_ready' iOS/App/XOWUEVulkanBackend.m
           echo 'XOWUE_LANDSCAPE_GAME_PROOF source configuration OK'
 
@@ -529,6 +534,7 @@ jobs:
           grep -Fq '830EBE74' artifacts/xowue-linked-symbols.txt
           echo "Owner-wide PPC 0x830EBE74 linked into final app executable"
           grep -Fq '831A9EBC' artifacts/xowue-linked-symbols.txt
+          grep -Fq '830F0400' artifacts/xowue-linked-symbols.txt
           echo "XOWUE_GLOBAL_PPC 0x831A9EBC linked into final executable"
           # Require the complete native draw plumbing in the packaged Mach-O.
           # Source-only renderer changes are not accepted as a deliverable.
@@ -542,6 +548,8 @@ jobs:
           grep -Fq 'XENOS_COMPOSED_CACHE_ALLOCATION_FAILED' artifacts/xowue-linked-strings.txt
           grep -Fq 'XENOS_FRAGMENT_COLOR_OUTPUT_LINKED' artifacts/xowue-linked-strings.txt
           grep -Fq 'XENOS_COMPOSITED_GPU_READBACK' artifacts/xowue-linked-strings.txt
+          grep -Fq 'XENOS_GUEST_SWAP_RGBA' artifacts/xowue-linked-strings.txt
+          grep -Fq 'full_nonblack' artifacts/xowue-linked-strings.txt
           grep -Fq 'XENOS_GUEST_VIEWPORT' artifacts/xowue-linked-strings.txt
           echo "XENOS_GPU_LINKED Mach-O draw commands, PM4 queue and native shader pipeline"
           lipo "$APP/Frameworks/libvulkan_kosmickrisp.dylib" -verify_arch arm64
@@ -551,6 +559,9 @@ jobs:
           with open(sys.argv[1], "rb") as stream:
               info = plistlib.load(stream)
           assert str(info.get("CFBundleVersion")) == sys.argv[2], info.get("CFBundleVersion")
+          supported = set(info.get("UISupportedInterfaceOrientations", []))
+          assert {"UIInterfaceOrientationPortrait", "UIInterfaceOrientationLandscapeLeft",
+                  "UIInterfaceOrientationLandscapeRight"}.issubset(supported), supported
           assert info.get("UIFileSharingEnabled") is True
           assert info.get("LSSupportsOpeningDocumentsInPlace") is True
           assert info.get("UIApplicationSupportsDocumentBrowser") is True

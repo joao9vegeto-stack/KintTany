@@ -266,6 +266,7 @@ def main():
     parser.add_argument("--ppc-dir", required=True, type=Path)
     parser.add_argument("--report", required=True, type=Path)
     args = parser.parse_args()
+    global OWNER, END, KNOWN
     try:
         report = generate(args.ppc_dir)
         # Build 23's missing PC is a real PPC blr at the end of a native
@@ -274,44 +275,99 @@ def main():
         tails = materialize_verified_tail_returns(args.ppc_dir)
         report = {"owners": [report], "native_tail_return_coverage": tails,
                   "interpreter": False, "jit": False}
-        if "0x831A9EBC" in tails["milestone_targets_missing"]:
-            # An indirect PPC target can be deep inside a function even if
-            # lastAotEntry was a different owner. Inspect every translated
-            # owner that geometrically contains the exact target instruction.
-            global OWNER, END, KNOWN
-            target = 0x831A9EBC
-            matches = []
-            nearby = []
-            for path in sorted(args.ppc_dir.glob("ppc_recomp.*.cpp")):
-                src = path.read_text("utf-8")
-                for m in FUNCTION.finditer(src):
-                    start = int(m.group(1)[4:], 16)
-                    if not (target-0x10000 <= start <= target):
-                        continue
-                    stop = src.find("\n}\n", m.end())
-                    if stop < 0:
-                        continue
-                    body = src[m.start():stop+3]
-                    opcodes = list(OPCODE.finditer(body))
-                    index = (target-start)//4
-                    if len(nearby) < 350:
-                        nearby.append((start,len(opcodes),index,path.name))
-                    if index < len(opcodes) and (target-start)%4 == 0:
-                        matches.append((start,path.name,index,len(opcodes),opcodes[index].group(1)))
-            for start,count,index,unit in sorted(nearby,reverse=True)[:24]:
-                print(f"XOWUE_NATIVE_OWNER_NEAR_PC base=0x{start:08X} instructions={count} target_index={index} unit={unit}")
-            if len(matches) != 1:
-                raise ValueError(f"ambiguous/missing AOT owner for 0x{target:08X}: {matches[:12]}")
-            base, unit, index, count, opcode = matches[0]
-            print(f"XOWUE_NATIVE_OWNER_FOUND target=0x{target:08X} owner=0x{base:08X} opcode={opcode} count={count} unit={unit}")
-            OWNER, END, KNOWN = base, 0, {target: (opcode,)}
+        # Scan *every* original native AOT owner once. A function's last
+        # dispatched entry is not necessarily the owner of an indirect target.
+        # Build 25 passed 0x831A9EBC but the next PC was 0x830F0400.
+        # In addition to recovering both demonstrated sites, proactively
+        # compile the verified neighboring native owners in both execution
+        # regions, instead of a one-PC-per-build patch.
+        targets = (0x830F0400, 0x831A9EBC)
+        registered = set(int(pc, 16) for pc in
+                         re.findall(r"\{\s*0x([0-9A-Fa-f]+)\s*,",
+                                    (args.ppc_dir / "ppc_func_mapping.cpp").read_text("utf-8")))
+        owners = {}
+        for file in sorted(args.ppc_dir.glob("ppc_recomp.*.cpp")):
+            src = file.read_text("utf-8")
+            for m in FUNCTION.finditer(src):
+                start = int(m.group(1)[4:], 16)
+                # Only the known execution neighborhoods need ownership
+                # tables; no reason to duplicate every function in the XEX.
+                if not any(t - 0x5000 <= start <= t + 0x2000 for t in targets):
+                    continue
+                stop = src.find("\n}\n", m.end())
+                if stop < 0:
+                    raise ValueError(f"unterminated native function 0x{start:X}")
+                body = src[m.start():stop + 3]
+                comments = list(OPCODE.finditer(body))
+                if not comments:
+                    continue
+                owners[start] = (file.name, len(comments), body,
+                                 [c.group(1) for c in comments])
+
+        selected = {}
+        for target in targets:
+            if target in registered:
+                continue
+            possible = [(start,meta) for start,meta in owners.items()
+                        if start <= target < start + 4*meta[1]]
+            if len(possible) != 1:
+                raise ValueError(f"AOT target 0x{target:08X} ambiguous owners={[(hex(s),m[0],m[1]) for s,m in possible]}")
+            base,meta = possible[0]
+            instruction = meta[3][(target-base)//4]
+            selected[base] = (target, instruction, "observed_runtime")
+            print(f"XOWUE_NATIVE_OWNER_FOUND target=0x{target:08X} owner=0x{base:08X} opcode={instruction} count={meta[1]} unit={meta[0]}")
+
+        # Preemptively cover the native functions surrounding both observed
+        # indirect PPC call sites. The 4K continuation budget limits binary
+        # bloat and branch targets are checked against real AOT instruction
+        # offsets, never generated as NOPs or synthetic return functions.
+        budget = 4096
+        count = sum(max(0, owners[x][1] - 1) for x in selected)
+        if count > budget:
+            raise ValueError(f"mandatory native owner coverage exceeds {budget} entries: {count}")
+        candidate_owners = sorted((
+            (min(abs(start-t) for t in targets), start,meta)
+            for start,meta in owners.items()
+            if start not in selected and 9 <= meta[1] <= 128 and
+               sum((start+4*i not in registered) for i in range(1,meta[1])) >= 8 and
+               any(start <= t + 0x2000 and start+4*meta[1] >= t - 0x2000 for t in targets)
+        ))
+        for _,start,meta in candidate_owners:
+            if len(selected) >= 28 or count + meta[1] - 1 > budget:
+                continue
+            # The first internal instruction must correspond to a real opcode
+            # in the translated function. Validation is performed again by
+            # generate(), including all saved label-to-PC alignments.
+            selected[start] = (start+4, meta[3][1], "neighbor_precompiled")
+            count += meta[1] - 1
+        region_report = []
+        for start,(target,opcode,kind) in selected.items():
+            OWNER,END,KNOWN = start,0,{target:(opcode,)}
             recovered = generate(args.ppc_dir)
-            report["owners"].append(recovered)
-            tails["milestone_targets_supported"].append(f"0x{target:X}")
-            tails["milestone_targets_missing"].remove(f"0x{target:X}")
-        if tails["milestone_targets_missing"]:
-            raise ValueError("Uncovered known runtime targets: "
-                             + ", ".join(tails["milestone_targets_missing"]))
+            recovered["trigger"] = kind
+            recovered["observed_pc"] = f"0x{target:08X}"
+            region_report.append(recovered)
+            registered.update(range(start+4, start+4*owners[start][1],4))
+        report["regional_native_owners"] = region_report
+        report["native_owner_regions_scanned"] = len(owners)
+        report["native_owner_regions_selected"] = len(region_report)
+        report["regional_new_entry_budget"] = budget
+        current = set(int(pc,16) for pc in re.findall(
+            r"\{\s*0x([0-9A-Fa-f]+)\s*,",
+            (args.ppc_dir / "ppc_func_mapping.cpp").read_text("utf-8")))
+        report["confirmed_runtime_targets"] = [f"0x{x:08X}" for x in targets if x in current]
+        missing = [f"0x{x:08X}" for x in targets if x not in current]
+        if missing:
+            raise ValueError("uncovered observed runtime targets: " + ", ".join(missing))
+        tails["milestone_targets_missing"] = [
+            x for x in tails["milestone_targets_missing"] if int(x,16) not in current
+        ]
+        tails["milestone_targets_supported"] = sorted(set(
+            tails["milestone_targets_supported"] +
+            [f"0x{x:08X}" for x in targets if x in current]
+        ))
+        # This is explicit coverage, not a claim that future dynamic targets
+        # can be known without running the game or tracing guest registers.
     except ValueError as error:
         raise SystemExit(f"REFUSING_UNVERIFIED_GLOBAL_OWNER_CONTINUATION: {error}")
     args.report.parent.mkdir(parents=True, exist_ok=True)

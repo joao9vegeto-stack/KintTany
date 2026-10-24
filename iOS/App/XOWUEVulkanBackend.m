@@ -1,6 +1,7 @@
 #import <UIKit/UIKit.h>
 #import <QuartzCore/CAMetalLayer.h>
 #import <Metal/Metal.h>
+static void KKLog(NSString *format, ...);
 #import <mach/mach.h>
 
 #define VK_USE_PLATFORM_METAL_EXT 1
@@ -55,7 +56,17 @@ void xowue_vulkan_backend_guest_frame_rgba(uint32_t frontbuffer,
    if (!copy)
       return;
    memcpy(copy, rgba, required);
-
+   size_t nonblack = 0;
+   uint64_t digest = 14695981039346656037ull;
+   size_t pixelCount = (size_t)width * height;
+   for (size_t k = 0; k < pixelCount; ++k) {
+      const uint8_t *c = copy + k * 4u;
+      if (c[0] || c[1] || c[2]) ++nonblack;
+      digest = ((digest ^ c[0]) * 1099511628211ull)
+               ^ ((uint64_t)c[1] << 8) ^ ((uint64_t)c[2] << 16);
+   }
+   KKLog(@"XENOS_GUEST_SWAP_RGBA nonblack=%zu total=%zu checksum=%016llX address=%08X format=%u",
+         nonblack,pixelCount,(unsigned long long)digest,frontbuffer,format);
    pthread_mutex_lock(&g_xowue_guest_frame_mutex);
    uint8_t *previous = g_xowue_guest_frame;
    g_xowue_guest_frame = copy;
@@ -1315,8 +1326,23 @@ KKRenderFrame(KKVulkanState *state, CAMetalLayer *layer)
                    ((uint64_t)c[1]<<8) ^ ((uint64_t)c[2]<<16));
          ++samples;
       }
-      KKLog(@"XENOS_COMPOSITED_GPU_READBACK nonblack=%zu samples=%zu checksum=%016llX",
-            nonblack,samples,(unsigned long long)checksum);
+      size_t actualColored=0;
+       uint32_t minX=UINT32_MAX,minY=UINT32_MAX,maxX=0,maxY=0;
+       const uint32_t stride=state->swapchain_extent.width;
+       for (size_t k=0;k<total;++k) {
+          const uint8_t *c=pixels+k*4u;
+          if (!(c[0] || c[1] || c[2])) continue;
+          ++actualColored;
+          uint32_t x=(uint32_t)(k%stride), y=(uint32_t)(k/stride);
+          if (x<minX) minX=x;
+          if (y<minY) minY=y;
+          if (x>maxX) maxX=x;
+          if (y>maxY) maxY=y;
+       }
+       KKLog(@"XENOS_COMPOSITED_GPU_READBACK nonblack=%zu samples=%zu checksum=%016llX full_nonblack=%zu full_pixels=%zu bbox=%u,%u..%u,%u",
+            nonblack,samples,(unsigned long long)checksum,
+            actualColored,total,minX==UINT32_MAX?0:minX,
+            minY==UINT32_MAX?0:minY,maxX,maxY);
    }
    if (result == VK_SUCCESS) XDCollectPipelines(state);
    if (result != VK_SUCCESS) {

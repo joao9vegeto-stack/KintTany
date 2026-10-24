@@ -4,8 +4,18 @@ import Foundation
 import Combine
 import UIKit
 
+@MainActor
+final class XOWUEOrientationDelegate: NSObject, UIApplicationDelegate {
+    static var effectiveMask: UIInterfaceOrientationMask = .portrait
+    func application(_ application: UIApplication,
+                     supportedInterfaceOrientationsFor window: UIWindow?) -> UIInterfaceOrientationMask {
+        Self.effectiveMask
+    }
+}
+
 @main
 struct XOWUEApp: App {
+    @UIApplicationDelegateAdaptor(XOWUEOrientationDelegate.self) private var orientationDelegate
     init() { XOWUEDiagnostics.startup() }
 
     var body: some Scene {
@@ -94,13 +104,18 @@ private struct XOWUEGameSurfaceScreen: View {
     }
 
     private func requestOrientation(_ orientations: UIInterfaceOrientationMask) {
+        XOWUEOrientationDelegate.effectiveMask = orientations
         guard let scene = UIApplication.shared.connectedScenes
             .compactMap({ $0 as? UIWindowScene }).first else { return }
+        for window in scene.windows {
+            window.rootViewController?.setNeedsUpdateOfSupportedInterfaceOrientations()
+            window.rootViewController?.presentedViewController?
+                .setNeedsUpdateOfSupportedInterfaceOrientations()
+        }
+        XOWUEDiagnostics.log("orientation.request mask=\(orientations.rawValue) effectiveMask=\(XOWUEOrientationDelegate.effectiveMask.rawValue)")
         scene.requestGeometryUpdate(.iOS(interfaceOrientations: orientations)) { error in
             XOWUEDiagnostics.log("orientation.request.failed mask=\(orientations.rawValue) error=\(error.localizedDescription)")
         }
-        scene.windows.first(where: { $0.isKeyWindow })?.rootViewController?
-            .setNeedsUpdateOfSupportedInterfaceOrientations()
     }
 
     var body: some View {

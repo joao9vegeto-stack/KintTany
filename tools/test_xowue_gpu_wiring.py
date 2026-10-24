@@ -47,3 +47,9 @@ assert "XENOS_GUEST_VIEWPORT" in renderer
 assert "push.flags=1u" in renderer
 assert "fminf(targetW/1280.0f,targetH/720.0f)" in renderer
 print("PASS: Xenos guest viewport, real VTE flags and landscape aspect")
+
+# Verify no false-success graphics claim from sparse samples alone.
+assert "full_nonblack=%zu full_pixels=%zu" in vulkan
+assert "XENOS_GUEST_SWAP_RGBA" in vulkan
+assert "XOWUEOrientationDelegate" in Path("iOS/App/XOWUEApp.swift").read_text()
+print("PASS: UIKit effective orientation, exhaustive GPU readback and guest-swap pixel audit")

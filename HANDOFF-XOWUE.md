@@ -66,3 +66,12 @@ Em aparelho, instale IPA assinado, abra o jogo pela pasta local ou picker, e env
 ## Referências de licença
 
 Consulte [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md) antes de redistribuir patches, binários do app ou bibliotecas compiladas.
+
+
+## Build 26 corrective scope — observed 24 Oct 2026 iPhone log
+
+- Build 25 log proves `orientation.request.failed ... Supported: portrait`; Info.plist alone was insufficient. New UIKit `UIApplicationDelegate` returns dynamic orientation mask, set before `UIWindowScene.requestGeometryUpdate`. Verify on-device landscape presentation.
+- Build 25 execution stopped at indirect `guestTarget=0x830F0400` with `LR=0x830F02FC`, while `lastAotEntry=0x82C2A1F0` was NOT the target owner. Generator scans owner instruction comments and precompiles nearby native continuations, limited by a 4096-entry budget and verification of owner labels.
+- Build 25 graphics: 26 guest queued draws; 24 native Vulkan draws submitted; `XENOS_COMPOSITED_GPU_READBACK nonblack=0 samples=8193` (sparse), `VdSwap` decoded two frames. Now logs full-frame pixel occupancy and independently scans guest-swap RGBA; do not report GPU success until nonblack pixel evidence.
+- All code remains AOT PPC translated to ARM64 + Xenos/Vulkan/Metal; no PPC interpretive execution, JIT or guessed stub.
+- CI compile/link/IPA is necessary but not proof of visible gameplay. Capture guest decoded frame counts, host full pixel color metrics and landscape orientation in subsequent phone diagnostics.
