@@ -70,11 +70,16 @@ def generate(ppc_dir: Path):
         raise ValueError("native owner PC coverage not internally consistent")
     renamed = body.replace(f"PPC_FUNC_IMPL(__imp__sub_{OWNER:X})",
                            f"static void xowue_resume_{OWNER:X}(PPCContext &ctx, uint8_t *base, uint32_t entryPc)", 1)
-    # Inject labels from the end to preserve original source indices.
-    for i in reversed(range(1, len(comments))):
+    # Re-scan after rewriting the header. The new function signature is
+    # longer than PPC_FUNC_IMPL(...), so offsets from 'body' are invalid.
+    # Using those old positions would splice labels into C++ instructions.
+    new_comments = list(OPCODE.finditer(renamed))
+    if len(new_comments) != len(comments):
+        raise ValueError("owner instruction count changed after renaming")
+    for i in reversed(range(1, len(new_comments))):
         pc = OWNER + 4 * i
         if pc not in labels:
-            at = comments[i].start()
+            at = new_comments[i].start()
             renamed = renamed[:at] + f"loc_{pc:X}:\n" + renamed[at:]
     first = OPCODE.search(renamed)
     if first is None: raise ValueError("no native instruction to resume")
