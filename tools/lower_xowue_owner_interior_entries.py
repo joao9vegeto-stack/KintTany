@@ -161,6 +161,70 @@ def discover_owner(ppc_dir: Path, target: int,
           "opcodes=%d unit=%s" % (target,base,index,count,file))
     return base
 
+def materialize_verified_tail_returns(ppc_dir: Path):
+    """Global native AOT for the final *actual blr instruction* in two-opcode
+    pointer-adjustment thunks. This is not an empty fallback stub: XenonRecomp
+    emits 'return;' for its translated PPC blr, and this compiled entry is
+    reachable only when the original AOT body contains that exact opcode.
+    """
+    map_file = ppc_dir / "ppc_func_mapping.cpp"
+    mappings = map_file.read_text("utf-8")
+    occupied = set(int(a,16) for a in
+                   re.findall(r"\{\s*0x([0-9A-Fa-f]+)\s*,", mappings))
+    found = []
+    for path in sorted(ppc_dir.glob("ppc_recomp.*.cpp")):
+        source=path.read_text("utf-8")
+        edits=[]
+        for m in FUNCTION.finditer(source):
+            owner=int(m.group(1)[4:],16)
+            dest=owner+4
+            if dest in occupied: continue
+            stop=source.find("\n}\n",m.end())
+            if stop<0: continue
+            body=source[m.start():stop+3]
+            insn=list(OPCODE.finditer(body))
+            if len(insn)!=2 or norm(insn[1].group(1))!="blr":
+                continue
+            first=norm(insn[0].group(1))
+            if not (first.startswith("addir3,r3,") or
+                    first.startswith("mrr3,r") or first=="nop"):
+                continue
+            if (body.count("PPC_FUNC_PROLOGUE();")!=1 or
+                body.count("PPC_CALL_INDIRECT_FUNC") or
+                not re.search(r"\t// blr\s*\n\treturn;",body)):
+                continue
+            if LABEL.search(body): continue
+            injected=(f"\n// Verified native PPC tail: {owner:08X}+4 is the second"
+                      f" original instruction (blr).\n"
+                      f"PPC_FUNC_IMPL(__imp__sub_{dest:X}) {{\n"
+                      f"\tPPC_FUNC_PROLOGUE();\n"
+                      f"\t// blr \n\treturn;\n}}\n"
+                      f"PPC_WEAK_FUNC(sub_{dest:X}) {{\n"
+                      f"\t__imp__sub_{dest:X}(ctx,base);\n}}\n")
+            edits.append((stop+3,injected))
+            found.append((owner,dest,path.name))
+            occupied.add(dest)
+        for at,code in reversed(edits):
+            source=source[:at]+code+source[at:]
+        if edits:path.write_text(source,encoding="utf-8")
+    target=0x830EBE74
+    if target not in {dest for _,dest,_ in found}:
+        raise ValueError(f"Build23 target 0x{target:08X} has no validated "
+                         f"two-instruction native BLR tail")
+    if len(found)>10000:raise ValueError("unexpected thunk count")
+    header=ppc_dir/"ppc_recomp_shared.h"
+    header.write_text(header.read_text("utf-8")+"\n"+
+                      "".join(f"PPC_EXTERN_FUNC(sub_{dst:X});\n" for _,dst,_ in found),
+                      encoding="utf-8")
+    terminators=list(TERMINATOR.finditer(mappings))
+    if len(terminators)!=1:raise ValueError("native map terminator ambiguous")
+    pos=terminators[0].start()
+    entries="".join(f"\t{{ 0x{dst:X}, sub_{dst:X} }},\n" for _,dst,_ in found)
+    map_file.write_text(mappings[:pos]+entries+mappings[pos:],encoding="utf-8")
+    return dict(native_tail_returns=len(found),verified_target="0x830EBE74",
+                verified_owner="0x830EBE70", no_interpreter=True,
+                examples=[f"0x{owner:X}->0x{dst:X}" for owner,dst,_ in found[:12]])
+
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--ppc-dir", required=True, type=Path)
@@ -168,20 +232,11 @@ def main():
     args = parser.parse_args()
     try:
         report = generate(args.ppc_dir)
-        # The Build 23 runtime confirmed a second, independent internal-branch
-        # owner: lastAotEntry=0x830EBDF8, guestTarget=0x830EBE74.
-        # Verify *both* source AOT opcodes against the supplied XEX; reject
-        # wrong ownership/data PC rather than fabricating a callable target.
-        global OWNER, END, KNOWN
-        KNOWN = {
-            0x830EBE74: ("bne cr6,0x830ebe14", "cmplwi cr6,r27,0"),
-        }
-        OWNER = discover_owner(args.ppc_dir, 0x830EBE74, KNOWN[0x830EBE74])
-        END = 0
-        additional = generate(args.ppc_dir)
-        report = {"owners": [report, additional],
-                  "new_native_entries": report["new_native_entries"] +
-                                        additional["new_native_entries"],
+        # Build 23's missing PC is a real PPC blr at the end of a native
+        # two-instruction this-adjustment thunk. Materialize all such return
+        # tails throughout the AOT corpus, not just the observed hotspot.
+        tails = materialize_verified_tail_returns(args.ppc_dir)
+        report = {"owners": [report], "native_tail_return_coverage": tails,
                   "interpreter": False, "jit": False}
     except ValueError as error:
         raise SystemExit(f"REFUSING_UNVERIFIED_GLOBAL_OWNER_CONTINUATION: {error}")
