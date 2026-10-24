@@ -1,13 +1,13 @@
 #!/usr/bin/env python3
-"""M8.08: rescan SPURS tasksets when their reservation line is committed."""
+"""M8.08: schedule tracked SPURS tasksets after successful SPU atomic-line commits."""
 from __future__ import annotations
 import argparse
 from pathlib import Path
 
-MARKER = "ASCENSION_M808_TASKSET_COMMIT_KICK_V1"
+MARKER = "ASCENSION_M808_TASKSET_COMMIT_KICK_V2"
 
 def body_span(source: str, signature: str) -> tuple[int, int]:
-    assert source.count(signature) == 1, f"missing or repeated {signature}"
+    assert source.count(signature) == 1, f"expected exactly one {signature}"
     a = source.index(signature)
     opening = source.index("{", a + len(signature))
     depth = 0
@@ -18,7 +18,7 @@ def body_span(source: str, signature: str) -> tuple[int, int]:
             depth -= 1
             if depth == 0:
                 return a, i + 1
-    raise RuntimeError("unbalanced C block")
+    raise RuntimeError("unbalanced production C function")
 
 def apply(upstream: Path) -> None:
     path = upstream / "runtime/spu/spu_workload.c"
@@ -29,50 +29,19 @@ def apply(upstream: Path) -> None:
                        "spu_workload_copy_ascension_commit_metrics"):
             assert needle in s, f"partial M8.08: {needle}"
         return
+
+    # Patch 0019 *already* extracts the actual production scheduler from the
+    # exit path into ts_start_ready(). Never extract it a second time.
     for needle in ("ASCENSION_M801_TASKSET_LOCKLINE_RMW_V1",
                    "ASCENSION_M801_TASKSET_RUNTIME_METRICS_V1",
-                   "ts_bits_clear(taskset_ea + 0x20 + t / 8, m)"):
-        assert needle in s, f"install M8.01 before M8.08: {needle}"
-    signature = "static void spu_taskset_task_exited(uint32_t taskset_ea, uint32_t done_task)"
-    a, b = body_span(s, signature)
-    old = s[a:b]
-    anchor = "    for (uint32_t t = 0; t < 128 && run; t++) {"
-    assert old.count(anchor) == 1
-    start = old.index(anchor)
-    depth = 0
-    end = None
-    for i in range(old.index("{", start), len(old)):
-        if old[i] == "{":
-            depth += 1
-        elif old[i] == "}":
-            depth -= 1
-            if depth == 0:
-                end = i + 1
-                break
-    assert end is not None
-    loop = old[start:end]
-    for needle in ("spu_workload_dispatch_async(vm_base + elf",
-                   "asc_taskset_add(2, 1)", "asc_taskset_add(5, 1)"):
-        assert needle in loop, f"missing production scheduler behavior {needle}"
-    assert loop.count("done_task") == 1
-    loop = loop.replace("done_task", "after_task")
-    helper = """/* ASCENSION_M808_TASKSET_COMMIT_KICK_V1
- * Shared ready scan, always under ts_lock. Guest bitset modifications
- * remain protected by M8.01 lock-line operations. */
-static void spu_taskset_start_ready_from_commit(uint32_t taskset_ea,
-                                                uint8_t* run, int after_task)
-{
-    extern uint8_t* vm_base;
-    extern uint32_t g_ydkj_real_taskset_ea, g_ydkj_real_taskid;
-    uint8_t* ts = vm_base + taskset_ea;
-""" + loop + "\n}\n"
-    rewritten = old[:start] + "    spu_taskset_start_ready_from_commit(taskset_ea, run, (int)done_task);" + old[end:]
-    for declaration in ("    extern uint8_t* vm_base;\n",
-                        "    extern uint32_t g_ydkj_real_taskset_ea, g_ydkj_real_taskid;\n",
-                        "    uint8_t* ts = vm_base + taskset_ea;\n"):
-        rewritten = rewritten.replace(declaration, "", 1)
-    assert "ts[" not in rewritten and "vm_base" not in rewritten
-    metrics = """static uint64_t s_asc_taskset_commit_metrics[2];
+                   "static void ts_start_ready(uint32_t taskset_ea, uint32_t done_task)",
+                   "ts_start_ready(taskset_ea, done_task);",
+                   "ts_bits_clear(taskset_ea + 0x20 + t / 8, m)",
+                   "asc_taskset_add(5, 1)"):
+        assert needle in s, f"M8.08 requires full M8.01+patch0019: {needle}"
+
+    metrics = """/* ASCENSION_M808_TASKSET_COMMIT_KICK_V2 */
+static uint64_t s_asc_taskset_commit_metrics[2];
 void spu_workload_reset_ascension_commit_metrics(void)
 {
     __atomic_store_n(&s_asc_taskset_commit_metrics[0], 0, __ATOMIC_RELAXED);
@@ -85,32 +54,40 @@ void spu_workload_copy_ascension_commit_metrics(uint64_t out[2])
     out[1] = __atomic_load_n(&s_asc_taskset_commit_metrics[1], __ATOMIC_RELAXED);
 }
 """
-    s = s[:a] + metrics + "\n" + helper + "\n" + rewritten + s[b:]
-    callback = """/* A successful SPU PUTLLC/PUTLLUC may enable a task before any
- * existing runner exits. Trigger its real task scheduler immediately. */
+    anchor = "static void ts_start_ready(uint32_t taskset_ea, uint32_t done_task)"
+    assert s.count(anchor) == 1
+    s = s.replace(anchor, metrics + "\n" + anchor, 1)
+
+    # channels.c notifies this callback *after* the MFC reservation-line
+    # lock is released, on both PUTLLC and PUTLLUC; the existing WAIT_SIGNAL
+    # wakeup in this callback must be preserved.
+    callback = """/* Successful SPU GETLLAR/PUTLLC can create the next task in a
+ * taskset even when every previously dispatched worker is still alive.
+ * Patch 0019 already defines ts_start_ready(), including run bitguards,
+ * guest TaskInfo decoding, real ELF checks, and M8.01 counters. */
 void spu_taskset_bits_committed(uint32_t line)
 {
     if (line & 127u) return;
     __atomic_add_fetch(&s_asc_taskset_commit_metrics[0], 1, __ATOMIC_RELAXED);
     ts_lock();
     for (int i = 0; i < TS_TRACK; i++) {
-        uint32_t ea = s_ts_run[i].ea;
-        if (!ea || (ea & ~127u) != line) continue;
+        uint32_t taskset_ea = s_ts_run[i].ea;
+        if (!taskset_ea || (taskset_ea & ~127u) != line) continue;
         __atomic_add_fetch(&s_asc_taskset_commit_metrics[1], 1, __ATOMIC_RELAXED);
-        spu_taskset_start_ready_from_commit(ea, s_ts_run[i].running, -1);
+        ts_start_ready(taskset_ea, UINT32_MAX);
     }
     ts_unlock();
 }
 """
-    anchor2 = "static void spu_async_run(spu_async_job* j)"
-    assert s.count(anchor2) == 1
-    s = s.replace(anchor2, callback + "\n" + anchor2, 1)
+    before = "static void spu_async_run(spu_async_job* j)"
+    assert s.count(before) == 1
+    s = s.replace(before, callback + "\n" + before, 1)
     hook = "void spu_taskset_line_committed(uint32_t line)\n{\n"
-    assert s.count(hook) == 1
+    assert s.count(hook) == 1, "missing MFC line-commit hook"
     s = s.replace(hook, hook + "    spu_taskset_bits_committed(line);\n", 1)
     assert s.count(MARKER) == 1
     path.write_text(s)
-    print("M8.08 WWS atomic-line commit -> tracked taskset scheduling ACTIVE")
+    print("M8.08: SPU atomic commit now runs the existing, metrics-bearing WWS task scheduler")
 
 def main() -> None:
     p = argparse.ArgumentParser()

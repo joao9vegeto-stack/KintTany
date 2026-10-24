@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Compile and run the actual M8.08 production ready-scan and PUTLLC callback."""
+"""Compile production taskset scheduler and atomic-line callback on the CI host."""
 from __future__ import annotations
 import argparse
 from pathlib import Path
@@ -13,19 +13,20 @@ def main() -> None:
     p.add_argument("--upstream", type=Path, required=True)
     upstream = p.parse_args().upstream
     work = (upstream / "runtime/spu/spu_workload.c").read_text()
-    ch = (upstream / "runtime/spu/spu_channels.c").read_text()
-    assert "ASCENSION_M808_TASKSET_COMMIT_KICK_V1" in work
+    channels = (upstream / "runtime/spu/spu_channels.c").read_text()
+    assert "ASCENSION_M808_TASKSET_COMMIT_KICK_V2" in work
     assert "spu_taskset_bits_committed(line);" in work
-    assert ch.count("spu_taskset_line_committed(ea & ~127u);") >= 2
+    assert channels.count("spu_taskset_line_committed(ea & ~127u);") >= 2
+    assert "ts_start_ready(taskset_ea, done_task);" in work
     def extract(sig: str) -> str:
         a,b=body_span(work,sig)
         return work[a:b]
-    helper=extract("static void spu_taskset_start_ready_from_commit(uint32_t taskset_ea,")
+    ready=extract("static void ts_start_ready(uint32_t taskset_ea, uint32_t done_task)")
     callback=extract("void spu_taskset_bits_committed(uint32_t line)")
     for term in ("spu_workload_dispatch_async(vm_base + elf",
                  "ts_bits_clear(taskset_ea + 0x20 + t / 8, m)",
                  "asc_taskset_add(5, 1)"):
-        assert term in helper, term
+        assert term in ready, term
     fixture = r'''#include <assert.h>
 #include <stdint.h>
 #include <stdlib.h>
@@ -42,6 +43,10 @@ static unsigned locked, dispatches;
 static uint64_t recorded[14];
 static void ts_lock(void){assert(!locked);locked=1;}
 static void ts_unlock(void){assert(locked);locked=0;}
+static uint8_t* ts_running(uint32_t ea) {
+    for(int i=0;i<TS_TRACK;i++)if(s_ts_run[i].ea==ea)return s_ts_run[i].running;
+    return NULL;
+}
 static void ts_bits_clear(uint32_t ea,uint8_t mask){assert(locked);guest[ea]&=(uint8_t)~mask;}
 static void asc_taskset_add(unsigned slot,uint64_t n){assert(slot<14);recorded[slot]+=n;}
 static void asc_taskset_store(unsigned slot,uint64_t n){assert(slot<14);recorded[slot]=n;}
@@ -73,11 +78,11 @@ int main(void){
     assert(dispatches==1 && !locked);
     assert(s_asc_taskset_commit_metrics[0]==3 && s_asc_taskset_commit_metrics[1]==2);
     assert(g_ydkj_real_taskset_ea==0x100 && g_ydkj_real_taskid==0);
-    puts("[PASS] M8.08 PUTLLC schedules a guest-ready SPU task once");
+    puts("[PASS] M8.08 PUTLLC schedules a guest-ready SPU task exactly once");
     return 0;
 }
 '''
-    fixture=fixture.replace("/* PRODUCTION */",helper+"\n"+callback)
+    fixture=fixture.replace("/* PRODUCTION */",ready+"\n"+callback)
     cc=shutil.which("clang") or shutil.which("cc")
     assert cc, "missing host C compiler"
     with tempfile.TemporaryDirectory(prefix="m808-putllc-") as d:
@@ -86,7 +91,7 @@ int main(void){
         subprocess.run([cc,"-std=c11","-O2","-Wall","-Wextra","-Werror",
                         str(root/"test.c"),"-o",str(root/"test")],check=True)
         subprocess.run([str(root/"test")],check=True)
-    print("[PASS] M8.08 same production ready scan is used after task exit and PUTLLC")
+    print("[PASS] M8.08 same production ready scan serves task exit and PUTLLC")
 
 if __name__=="__main__":
     main()
