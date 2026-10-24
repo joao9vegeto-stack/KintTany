@@ -459,6 +459,15 @@ struct GuestMemory final {
 };
 
 std::weak_ptr<GuestMemory> g_activeGuestMemory;
+// Xenos draws outlive PPC execution: the host render thread drains them after
+// AOT has returned (including controlled fail-closed dispatch failures).
+// Keep ONE guest mapping until the next boot; never dereference a dead weak_ptr.
+std::mutex g_graphicsGuestMemoryMutex;
+std::shared_ptr<GuestMemory> g_graphicsGuestMemory;
+static std::shared_ptr<GuestMemory> acquireGraphicsGuestMemory() {
+    std::lock_guard<std::mutex> lock(g_graphicsGuestMemoryMutex);
+    return g_graphicsGuestMemory;
+}
 uint32_t g_activeImageBase = 0;
 uint32_t g_activeEntryPoint = 0u;
 std::vector<std::pair<uint32_t, uint32_t>> g_activeImageSections;
@@ -1342,6 +1351,8 @@ static const char *dispatchGuardErrorName(xowue_dispatch_guard::Result result) {
     return "unknown dispatch guard result";
 }
 
+extern "C" void XOWUECrashRecorderWriteFatal(const char *message) __attribute__((weak));
+
 [[noreturn]] static void failPpcIndirectDispatch(
     PPCContext &context, uint32_t target, PPCFunc *slotFunction,
     const char *reason) {
@@ -1354,6 +1365,7 @@ static const char *dispatchGuardErrorName(xowue_dispatch_guard::Result result) {
         g_lastAotGuestFunction.load(std::memory_order_relaxed),
         threadId, static_cast<unsigned long long>(reinterpret_cast<uintptr_t>(slotFunction)));
     recordRuntimeTrace(event);
+    if (XOWUECrashRecorderWriteFatal) XOWUECrashRecorderWriteFatal(event);
     requestGuestSchedulerStop();
     throw std::runtime_error(event);
 }
@@ -1385,7 +1397,7 @@ extern "C" bool xowue_xenos_copy_guest_physical(uint32_t address, void *out, siz
     if (!out || !size || address >= 0x20000000u ||
         size > static_cast<size_t>(0x20000000u - address))
         return false;
-    const auto memory = g_activeGuestMemory.lock();
+    const auto memory = acquireGraphicsGuestMemory();
     if (!memory || !memory->base || !validGuestRange(address, size)) return false;
     std::memcpy(out, memory->base + address, size);
     return true;
@@ -1448,6 +1460,10 @@ extern "C" int xowue_boot_xex(const char *path, char *output, size_t output_capa
     try {
         g_aotExecutionTelemetryActive.store(false, std::memory_order_relaxed);
         xowue::xenos::Reset();
+        {
+            std::lock_guard<std::mutex> lock(g_graphicsGuestMemoryMutex);
+            g_graphicsGuestMemory.reset();
+        }
         if (g_runtimeSessionPoisoned.load()) {
             throw std::runtime_error("uma thread PPC não encerrou após o limite de parada; feche e reabra o app para iniciar outra sessão");
         }
@@ -1512,6 +1528,11 @@ extern "C" int xowue_boot_xex(const char *path, char *output, size_t output_capa
         recordRuntimeTrace(imageEvent);
         auto memory = std::make_shared<GuestMemory>();
         g_activeGuestMemory = memory;
+        {
+            std::lock_guard<std::mutex> lock(g_graphicsGuestMemoryMutex);
+            g_graphicsGuestMemory = memory;
+        }
+        recordRuntimeTrace("XENOS_GRAPHICS_MEMORY_RETAINED after AOT lifetime; pending GPU reads remain valid");
         GuestSchedulerSessionGuard schedulerSession;
         GuestXenosPumpSessionGuard xenosPumpSession;
         g_nextVirtualAllocation = kFirstVirtualAllocation;
@@ -3522,7 +3543,7 @@ extern "C" bool xowue_xenos_copy_guest_texture2d(
     const uint32_t height = ((fetch[2] >> 13u) & 0x1FFFu) + 1u;
     if (width > 2048u || height > 2048u ||
         static_cast<uint64_t>(width) * height * 4u != bytes) return false;
-    const auto memory = g_activeGuestMemory.lock();
+    const auto memory = acquireGraphicsGuestMemory();
     if (!memory || !memory->base) return false;
     std::vector<uint8_t> decoded;
     uint32_t physical = 0;

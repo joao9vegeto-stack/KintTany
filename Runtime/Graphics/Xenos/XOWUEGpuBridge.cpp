@@ -27,6 +27,7 @@ struct ShaderRecord {
   std::string glsl;
   uint32_t vertexFetchMask = 0, interpolatorMask = 0, colorTargetMask = 0;
   uint32_t texture2DMask = 0, texture3DMask = 0, textureCubeMask = 0;
+  bool usesMemExport = false;
   uint32_t fetchUsed[3]{}, fetchStrides[96]{}, fetchExtents[96]{};
 };
 std::mutex stateMutex;
@@ -137,6 +138,7 @@ ShaderResult LoadShader(uint32_t stage, const uint32_t* words, size_t count) {
       entry.vertexFetchMask = shader.vertexFetchMask;
       entry.interpolatorMask = shader.interpolatorMask;
       entry.colorTargetMask = shader.colorTargetMask;
+      entry.usesMemExport = shader.usesMemExport;
       entry.texture2DMask = shader.texture2DMask;
       entry.texture3DMask = shader.texture3DMask;
       entry.textureCubeMask = shader.textureCubeMask;
@@ -254,6 +256,9 @@ void QueueDraw(uint32_t initiator, uint32_t indexCount,
   packet.texture_2d_mask = vs->second.texture2DMask | ps->second.texture2DMask;
   packet.texture_3d_mask = vs->second.texture3DMask | ps->second.texture3DMask;
   packet.texture_cube_mask = vs->second.textureCubeMask | ps->second.textureCubeMask;
+  packet.vertex_memexport = vs->second.usesMemExport ? 1u : 0u;
+  packet.pixel_memexport = ps->second.usesMemExport ? 1u : 0u;
+  packet.color_target_mask = ps->second.colorTargetMask;
   for (uint32_t i = 0; i < 3u; ++i) packet.fetch_used[i] = vs->second.fetchUsed[i];
   for (uint32_t i = 0; i < 96u; ++i) {
     packet.fetch_strides[i] = vs->second.fetchStrides[i];

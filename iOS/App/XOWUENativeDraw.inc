@@ -296,12 +296,24 @@ typedef struct {
 } XDPush;
 _Static_assert(sizeof(XDPush)==112, "Xenos shader push constant layout changed");
 
-static bool XDCopyGuestRange(KKVulkanState *state, uint32_t address, uint32_t bytes) {
+// Fetch constant word0 contains the dword-address shifted by two, so its
+// bits 2:31 already express a byte address. Word1 bits 2:25 are the allocation
+// size in DWORDS. Old code copied an arbitrary (count+4)*stride+extent and
+// could reject real rectangle/resolve buffers that contain only six DWORDS.
+static bool XDCopyGuestRange(KKVulkanState *state, uint32_t address,
+                             uint32_t bytes) {
    (void)state;
    if (!bytes) return true;
-   if (address>=XD_GUEST_BYTES || bytes>XD_GUEST_BYTES-address) return false;
-   return xowue_xenos_copy_guest_physical(address,
-      (uint8_t*)g_xd.gpu_memory.mapped+address,bytes);
+   if (address>=XD_GUEST_BYTES || bytes>XD_GUEST_BYTES-address) {
+      KKLog(@"GRAPHICS_BLOCKER reason=GUEST_PHYSICAL_RANGE address=%08X bytes=%u",address,bytes);
+      return false;
+   }
+   if (!xowue_xenos_copy_guest_physical(address,
+             (uint8_t*)g_xd.gpu_memory.mapped+address,bytes)) {
+      KKLog(@"GRAPHICS_BLOCKER reason=GUEST_MEMORY_UNAVAILABLE address=%08X bytes=%u",address,bytes);
+      return false;
+   }
+   return true;
 }
 
 static bool XDUploadGuestDraw(KKVulkanState *state, const XOWUEGuestDraw *draw) {
@@ -311,19 +323,38 @@ static bool XDUploadGuestDraw(KKVulkanState *state, const XOWUEGuestDraw *draw) 
       for (uint32_t sub=0;sub<3u;++sub) {
          const uint32_t entry=slot*3u+sub;
          if (!(draw->fetch_used[entry/32u]&(1u<<(entry%32u)))) continue;
-         const uint32_t address=fetch[slot*6u+sub*2u]&0x1FFFFFFCu;
-         if (!address) return false;
-         uint64_t size=(uint64_t)(draw->index_count+4u)*
-               (draw->fetch_strides[entry]?draw->fetch_strides[entry]:16u)*4u+
-               (draw->fetch_extents[entry]+32u)*4u;
-         if (size>(1u<<22u)) size=1u<<22u;
-         if (!XDCopyGuestRange(state,address,(uint32_t)size)) return false;
+         const uint32_t word0=fetch[slot*6u+sub*2u];
+         const uint32_t word1=fetch[slot*6u+sub*2u+1u];
+         const uint32_t address=word0&0x1FFFFFFCu;
+         const uint32_t declaredWords=(word1>>2u)&0x00FFFFFFu;
+         const uint64_t declaredBytes=(uint64_t)declaredWords*4u;
+         const uint64_t estimatedBytes=
+             ((uint64_t)draw->index_count+4u)*
+             (draw->fetch_strides[entry]?draw->fetch_strides[entry]:16u)*4u+
+             ((uint64_t)draw->fetch_extents[entry]+4u)*4u;
+         // For dynamic indices, the entire declared buffer is needed. Bound
+         // each copy by the guest's own fetch descriptor, not a fabricated
+         // stride estimate extending beyond the buffer's valid allocation.
+         const uint64_t copyBytes=declaredBytes;
+         KKLog(@"XENOS_FETCH_CAPTURE slot=%u sub=%u word0=%08X word1=%08X guest=%08X declared=%llu estimated=%llu stride=%u extent=%u",
+            slot,sub,word0,word1,address,(unsigned long long)declaredBytes,
+            (unsigned long long)estimatedBytes,draw->fetch_strides[entry],
+            draw->fetch_extents[entry]);
+         if ((word0&3u)!=3u || !address || !declaredWords ||
+             copyBytes>16u*1024u*1024u ||
+             !XDCopyGuestRange(state,address,(uint32_t)copyBytes)) {
+            KKLog(@"GRAPHICS_BLOCKER reason=XENOS_VFETCH_BUFFER guest=%08X size=%llu type=%u",
+                  address,(unsigned long long)copyBytes,word0&3u);
+            return false;
+         }
       }
    }
    if (draw->index_address) {
-      uint32_t width=(draw->index_info&1u)?4u:2u;
-      uint32_t length=draw->index_count*width;
-      if (!XDCopyGuestRange(state,draw->index_address,length)) return false;
+      const uint32_t width=(draw->index_info&1u)?4u:2u;
+      const uint64_t length=(uint64_t)draw->index_count*width;
+      if (length>UINT32_MAX ||
+          !XDCopyGuestRange(state,draw->index_address,(uint32_t)length))
+         return false;
    }
    return true;
 }
@@ -358,11 +389,12 @@ static uint32_t XDProcessDraws(KKVulkanState *state, uint32_t image_index,
       const XOWUEGuestDraw *draw=&draws[i];
       const uint32_t primitive=draw->initiator&0x3Fu;
       if (i < 32u)
-         KKLog(@"XENOS_DRAW_AUDIT slot=%zu initiator=%08X primitive=%u index_count=%u index_addr=%08X index_info=%08X fetch_mask=%08X texture2d=%08X vs=%016llX ps=%016llX vte=%08X",
+         KKLog(@"XENOS_DRAW_AUDIT slot=%zu initiator=%08X primitive=%u index_count=%u index_addr=%08X index_info=%08X fetch_mask=%08X texture2d=%08X vs=%016llX ps=%016llX vte=%08X vs_memexport=%u ps_memexport=%u color_mask=%X",
                i,draw->initiator,primitive,draw->index_count,draw->index_address,
                draw->index_info,draw->vertex_fetch_mask,draw->texture_2d_mask,
                (unsigned long long)draw->vertex_hash,(unsigned long long)draw->pixel_hash,
-               draw->pa_cl_vte_cntl);
+               draw->pa_cl_vte_cntl,draw->vertex_memexport,draw->pixel_memexport,
+               draw->color_target_mask);
       VkPrimitiveTopology topology=XDTopology(primitive);
       if (topology==VK_PRIMITIVE_TOPOLOGY_MAX_ENUM || !draw->index_count ||
           draw->index_count>65535u) {
@@ -472,6 +504,12 @@ static uint32_t XDProcessDraws(KKVulkanState *state, uint32_t image_index,
       XDFlush(state,&g_xd.constants);
       XDFlush(state,&g_xd.gpu_memory);
    }
+   KKLog(@"XENOS_NATIVE_DRAW_OUTCOME captured=%zu queued=%u rejected=%llu rejected_memory=%llu rejected_texture=%llu",
+        total,queued,(unsigned long long)g_xd.rejected,
+        (unsigned long long)g_xd.rejected_memory,
+        (unsigned long long)g_xd.rejected_texture);
+   if (queued!=total)
+      KKLog(@"GRAPHICS_BLOCKER reason=DRAW_QUEUE_INCOMPLETE captured=%zu submitted_candidate=%u",total,queued);
    free(draws);
    return queued;
 }

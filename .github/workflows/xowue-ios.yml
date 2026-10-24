@@ -161,6 +161,7 @@ jobs:
           grep -Eq '\{[[:space:]]*0x831A9EBC[[:space:]]*,[[:space:]]*sub_831A9EBC' generated/ppc/ppc_func_mapping.cpp
           grep -Eq '\{[[:space:]]*0x830F0400[[:space:]]*,[[:space:]]*sub_830F0400' generated/ppc/ppc_func_mapping.cpp
           grep -Eq '\{[[:space:]]*0x831AA0B0[[:space:]]*,[[:space:]]*sub_831AA0B0' generated/ppc/ppc_func_mapping.cpp
+          grep -Eq '\{[[:space:]]*0x82B34028[[:space:]]*,[[:space:]]*sub_82B34028' generated/ppc/ppc_func_mapping.cpp
           grep -Fq 'regional_native_owners' artifacts/xowue-owner-wide-resume.json
           test -s artifacts/xowue-owner-wide-resume.json
 
@@ -537,6 +538,7 @@ jobs:
           grep -Fq '831A9EBC' artifacts/xowue-linked-symbols.txt
           grep -Fq '830F0400' artifacts/xowue-linked-symbols.txt
           grep -Fq '831AA0B0' artifacts/xowue-linked-symbols.txt
+          grep -Fq '82B34028' artifacts/xowue-linked-symbols.txt
           echo "XOWUE_GLOBAL_PPC 0x831A9EBC linked into final executable"
           # Require the complete native draw plumbing in the packaged Mach-O.
           # Source-only renderer changes are not accepted as a deliverable.
@@ -554,6 +556,9 @@ jobs:
           grep -Fq 'full_nonblack' artifacts/xowue-linked-strings.txt
           grep -Fq 'XENOS_DRAW_AUDIT' artifacts/xowue-linked-strings.txt
           grep -Fq 'XENOS_GUEST_SWAP_PRESTART' artifacts/xowue-linked-strings.txt
+          grep -Fq 'XENOS_NATIVE_DRAW_OUTCOME' artifacts/xowue-linked-strings.txt
+          grep -Fq 'XENOS_FETCH_CAPTURE' artifacts/xowue-linked-strings.txt
+          grep -Fq 'FATAL SIGNAL' artifacts/xowue-linked-strings.txt
           grep -Fq 'XENOS_GUEST_VIEWPORT' artifacts/xowue-linked-strings.txt
           echo "XENOS_GPU_LINKED Mach-O draw commands, PM4 queue and native shader pipeline"
           lipo "$APP/Frameworks/libvulkan_kosmickrisp.dylib" -verify_arch arm64

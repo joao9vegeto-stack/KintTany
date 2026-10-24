@@ -60,3 +60,15 @@ assert 'XENOS_DRAW_AUDIT' in renderer
 assert 'XENOS_GUEST_SWAP_PRESTART' in vulkan
 assert 'InvalidateMappedMemoryRanges' in vulkan
 print('PASS: B26 AOT target, per-draw audit, guest pixels across logger startup, coherent readback')
+
+# Build 28: preserve guest physical memory after fail-closed AOT and honour the
+# vertex allocation size provided by Xenos itself (Xenia xe_gpu_vertex_fetch_t).
+assert 'g_graphicsGuestMemory = memory' in engine
+assert 'acquireGraphicsGuestMemory()' in engine
+assert 'XENOS_GRAPHICS_MEMORY_RETAINED' in engine
+assert '(word1>>2u)&0x00FFFFFFu' in renderer
+assert 'GRAPHICS_BLOCKER reason=XENOS_VFETCH_BUFFER' in renderer
+assert 'XENOS_NATIVE_DRAW_OUTCOME' in renderer
+assert 'vs_memexport=%u ps_memexport=%u' in renderer
+assert 'XOWUECrashRecorderWriteFatal(event)' in engine
+print('PASS: retained guest physical memory, exact fetch allocation, draw rejection and FATAL AOT evidence')

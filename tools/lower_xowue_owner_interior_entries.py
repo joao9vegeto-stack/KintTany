@@ -281,7 +281,7 @@ def main():
         # In addition to recovering both demonstrated sites, proactively
         # compile the verified neighboring native owners in both execution
         # regions, instead of a one-PC-per-build patch.
-        targets = (0x830F0400, 0x831A9EBC, 0x831AA0B0)
+        targets = (0x830F0400, 0x831A9EBC, 0x831AA0B0, 0x82B34028)
         registered = set(int(pc, 16) for pc in
                          re.findall(r"\{\s*0x([0-9A-Fa-f]+)\s*,",
                                     (args.ppc_dir / "ppc_func_mapping.cpp").read_text("utf-8")))

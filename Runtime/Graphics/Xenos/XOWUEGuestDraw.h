@@ -13,6 +13,7 @@ typedef struct XOWUEGuestDraw {
   uint32_t pa_cl_vte_cntl;
   uint32_t viewport_register_bits[4];
   uint32_t vertex_fetch_mask, texture_2d_mask, texture_3d_mask, texture_cube_mask;
+  uint32_t vertex_memexport, pixel_memexport, color_target_mask;
   uint32_t fetch_used[3];
   uint32_t fetch_strides[96], fetch_extents[96];
   uint32_t constants[XOWUE_GPU_CONSTANT_WORDS];

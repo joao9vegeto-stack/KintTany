@@ -82,3 +82,10 @@ Consulte [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md) antes de redistribuir 
 - Orientação: o primeiro request landscape falhou, mas a swapchain redimensionou depois a 2622x1222; retry UIKit limitado e preservação da tela retrato na biblioteca.
 - GPU ainda não equivale a renderer Xenos completo (EDRAM, resolve, depth, blending). Falha de primeiro frame permanece até teste real no iPhone; CI prova somente tradução/compilação/link/IPA.
 - Política: somente branch XOWUE; um commit, uma execução do workflow; assets do jogo não incluídos.
+
+## Build 28 — lifetime real da memória Xenos, descriptors e FATAL (24/10/2026)
+- A B27 morreu antes de o backend processar os dois rectangles com VFETCH. Os 24 draws point/no-fetch passam mas não geram pixels. Memória de 4GiB guest era weak_ptr e morria após exceção PPC. Retenção forte exclusiva de gráficos até novo boot, cópias protegidas por shared_ptr.
+- Vertex fetch usa palavra0 bits2:31 como endereço físico em bytes; palavra1 bits2:25 como tamanho declarado em dwords; removida estimativa que ultrapassava buffers de resolve. Recusar alocações grandes/inválidas, sem NOP/stub.
+- Registrar XENOS_FETCH_CAPTURE, GRAPHICS_BLOCKER, XENOS_NATIVE_DRAW_OUTCOME e metadados memexport de VS/PS. Memexport completa permanece componente a validar, não é fingida.
+- FATAL AOT_DISPATCH em crash-build-*.txt para exceções fail-closed e FATAL SIGNAL/SIGDETAIL/ARM64REG para sinais reais seguindo padrão PoPTST.
+- Exigir AOT de 0x82B34028 (B27) e validação no Mach-O. A ausência de pixel colorido segue não resolvida até prova em hardware.
