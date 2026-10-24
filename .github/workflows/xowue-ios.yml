@@ -99,13 +99,13 @@ jobs:
           source = zlib.decompress(packed)
           assert hashlib.sha256(source).hexdigest() == "d4aec36bc6013befb37176c3b110fa65fb0d3a072bc7c28b162f6efee65c7a2a"
           Path("tools/patch_xowue_global_native.py").write_bytes(source)
-          compressed_table = Path("tools/xowue_tables.guest.bin.z").read_bytes()
-          expected_chunks = "19dbdd293cdd 1aeded963b7b 81cc48f4d386 21804e05b7f7 566d50372f49 8ec0bb1d4354 525f399ef7e0 71b7312aee98 5fb4dee00fa3 d70863b18a6a 0035d19e56aa a4b37d0eced8 2f323adb3799 d2223f0258be 81490f6ad494 5d1d3db18473 e8f1a4c1f56b".split()
-          for i, expected in enumerate(expected_chunks):
-              chunk = compressed_table[i*256:(i+1)*256]
-              if hashlib.sha256(chunk).hexdigest()[:12] != expected:
-                  print(f"XOWUE_MANIFEST_CORRUPTION chunk={i} actual_hex={chunk.hex()}")
+          # Repair one base64-upload transit corruption at the verified
+          # compressed-table tail, without changing any original XEX offset.
+          compressed_table = bytearray(Path("tools/xowue_tables.guest.bin.z").read_bytes())
+          assert compressed_table[4233:4236] == bytes.fromhex("e42fe9")
+          compressed_table[4233:4236] = bytes.fromhex("e5c3ea")
           assert hashlib.sha256(compressed_table).hexdigest() == "64738d001baa4bf0c6c18b9fdfc1d48fd4aa4fdd593550e214d2307f581f9212"
+          Path("tools/xowue_tables.guest.bin.z").write_bytes(compressed_table)
           PY
           python3 -m py_compile tools/patch_xowue_global_native.py
           python3 tools/patch_xowue_global_native.py \
