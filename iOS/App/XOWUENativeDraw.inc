@@ -496,6 +496,13 @@ static uint32_t XDProcessDraws(KKVulkanState *state, uint32_t image_index,
             g_xd.layout,1,1,&g_xt.sets[i],0,NULL);
       XD(CmdPushConstants)(command,g_xd.layout,
          VK_SHADER_STAGE_VERTEX_BIT|VK_SHADER_STAGE_FRAGMENT_BIT,0,sizeof(push),&push);
+      if (draw->vertex_fetch_mask || draw->vertex_memexport || draw->pixel_memexport) {
+         KKLog(@"XENOS_GEOMETRY_SUBMIT slot=%zu primitive=%u count=%u fetch=%08X memexport_vs=%u memexport_ps=%u viewport=(%.5f,%.5f,%.5f,%.5f) target=%ux%u",
+               i,primitive,count,draw->vertex_fetch_mask,
+               draw->vertex_memexport,draw->pixel_memexport,
+               push.posScale[0],push.posScale[1],push.posScale[2],push.posScale[3],
+               state->swapchain_extent.width,state->swapchain_extent.height);
+      }
       XD(CmdDraw)(command,count,1,0,0);
       ++queued;
    }

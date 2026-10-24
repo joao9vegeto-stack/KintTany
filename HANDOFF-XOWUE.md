@@ -89,3 +89,8 @@ Consulte [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md) antes de redistribuir 
 - Registrar XENOS_FETCH_CAPTURE, GRAPHICS_BLOCKER, XENOS_NATIVE_DRAW_OUTCOME e metadados memexport de VS/PS. Memexport completa permanece componente a validar, não é fingida.
 - FATAL AOT_DISPATCH em crash-build-*.txt para exceções fail-closed e FATAL SIGNAL/SIGDETAIL/ARM64REG para sinais reais seguindo padrão PoPTST.
 - Exigir AOT de 0x82B34028 (B27) e validação no Mach-O. A ausência de pixel colorido segue não resolvida até prova em hardware.
+
+## Build 29 — bloqueio AOT 0x82CFB410 e telemetria de geometria
+- Cobrir 0x82CFB410 por proprietário PPC real no gerador AOT, com verificação de símbolo e tabela no CI.
+- XENOS_GEOMETRY_SUBMIT inclui viewport, tamanho, fetch e memexport por draw geométrico.
+- A instrumentação não constitui implementação de EDRAM/resolve; não declarar frame renderizado sem readback não preto no dispositivo.
