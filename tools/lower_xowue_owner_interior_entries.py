@@ -144,6 +144,12 @@ def discover_owner(ppc_dir: Path, target: int,
             if 0 <= target-base <= 0x180 and len(nearby)<200:
                 probe=(insns[index].group(1) if index < len(insns) else "OUTSIDE")
                 nearby.append((base,len(insns),index,probe,path.name))
+                if 0x830EBE40 <= base <= 0x830EBE80:
+                    functionBody=source[match.start():stop+3]
+                    print("XOWUE_NATIVE_SOURCE_REGION owner=%08X begin" % base)
+                    for line in functionBody.splitlines()[:95]:
+                        print("XOWUE_OWNER_CPP " + line[:230])
+                    print("XOWUE_NATIVE_SOURCE_REGION owner=%08X end" % base)
     for base,n,index,probe,file in sorted(nearby,reverse=True)[:25]:
         print("XOWUE_OWNER_SEARCH base=%08X instr=%d index=%d opcode=%s file=%s" %
               (base,n,index,probe,file))
