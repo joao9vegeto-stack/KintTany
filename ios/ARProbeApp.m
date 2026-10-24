@@ -79,6 +79,8 @@ extern int rsx_metal_backend_init(unsigned int width, unsigned int height, const
 extern void rsx_metal_backend_shutdown(void);
 extern void rsx_metal_backend_present(void);
 extern unsigned int rsx_metal_backend_guest_draws(void);
+extern void spu_workload_reset_ascension_commit_metrics(void);
+extern void spu_workload_copy_ascension_commit_metrics(uint64_t out[2]);
 extern void cellGcmTickVBlank(void);
 extern void cellGcmTickFlip(void);
 extern void cellGcm_rsx_process_fifo(void);
@@ -1596,6 +1598,7 @@ static BOOL ARGameManifestHasTitleUsrdir(NSDictionary *manifest){
     unsetenv("SPU_PIC_CAPTURE");
   spu_workload_reset_ascension_job_metrics();
   spu_workload_reset_ascension_taskset_metrics();
+  spu_workload_reset_ascension_commit_metrics();
   spu_workload_reset_ascension_stack_metrics();
   cellSpursResetAscensionMetrics();
   spu_pic_reset_ascension_metrics();
@@ -1939,6 +1942,7 @@ static BOOL ARGameManifestHasTitleUsrdir(NSDictionary *manifest){
     uint64_t spurs[10]={0}; cellSpursCopyAscensionMetrics(spurs);
     uint64_t jobs[8]={0}; spu_workload_copy_ascension_job_metrics(jobs);
     uint64_t taskset[14]={0}; spu_workload_copy_ascension_taskset_metrics(taskset);
+    uint64_t tasksetCommits[2]={0}; spu_workload_copy_ascension_commit_metrics(tasksetCommits);
     unsigned long long stack[17]={0}; spu_workload_copy_ascension_stack_metrics(stack);
     unsigned long long gcm[3]={0}; cellGcmCopyAscensionParkHoldMetrics(gcm);
     uint64_t pic[6]={0}; spu_pic_copy_ascension_metrics(pic);
@@ -2007,6 +2011,8 @@ static BOOL ARGameManifestHasTitleUsrdir(NSDictionary *manifest){
         (unsigned long long)taskset[3],(unsigned long long)taskset[5],
         (unsigned long long)taskset[6],(unsigned long long)taskset[7],
         (unsigned long long)taskset[10],(unsigned long long)taskset[11]];
+    [out appendFormat:@"SPU PUTLLC: linhas commitadas=%llu · tasksets acordados=%llu (candidatos/válidos acima)\n",
+        (unsigned long long)tasksetCommits[0],(unsigned long long)tasksetCommits[1]];
     [out appendFormat:@"Pilha SPU (MiB): tentativas=%llu · 256=%llu/%llu/%llu · 64=%llu/%llu/%llu · 32=%llu/%llu/%llu · 16=%llu/%llu/%llu · fallback=%llu/%llu · pthread rc=%llu · attr rc=%llu\n",
         stack[0],stack[1],stack[2],stack[3],stack[4],stack[5],stack[6],
         stack[7],stack[8],stack[9],stack[10],stack[11],stack[12],
@@ -2368,8 +2374,8 @@ static BOOL ARGameManifestHasTitleUsrdir(NSDictionary *manifest){
  * Share sheet is primary: direct ChatGPT send without iCloud folder browse.
  */
 - (NSURL *)arCreatePpuTextFile {
-    NSString *report=[self arUnifiedPpuText];
-    if(!report.length)return nil;
+    NSString *report=[self arLivePpuReportText];
+    if(!report.length)report=@"ASCENSIONRECOMP · RELATÓRIO AO VIVO\nSnapshot indisponível.";
     NSDateFormatter *date=[NSDateFormatter new];
     date.locale=[NSLocale localeWithLocaleIdentifier:@"en_US_POSIX"];
     date.dateFormat=@"yyyyMMdd-HHmmss";
@@ -2387,8 +2393,10 @@ static BOOL ARGameManifestHasTitleUsrdir(NSDictionary *manifest){
           @"Não foi possível salvar o relatório." preferredStyle:UIAlertControllerStyleAlert];
         [alert addAction:[UIAlertAction actionWithTitle:@"OK"
                    style:UIAlertActionStyleCancel handler:nil]];
-        [self.window.rootViewController presentViewController:alert
-                                     animated:YES completion:nil];
+        UIViewController *presenter=self.window.rootViewController;
+        while(presenter.presentedViewController && !presenter.presentedViewController.isBeingDismissed)
+            presenter=presenter.presentedViewController;
+        [presenter presentViewController:alert animated:YES completion:nil];
         return nil;
     }
     return url;
@@ -2398,8 +2406,10 @@ static BOOL ARGameManifestHasTitleUsrdir(NSDictionary *manifest){
     if(!url)return;
     UIActivityViewController *share=[[UIActivityViewController alloc]
                        initWithActivityItems:@[url] applicationActivities:nil];
-    UIViewController *presenter=self.window.rootViewController.presentedViewController
-                                ?: self.window.rootViewController;
+    UIViewController *presenter=self.window.rootViewController;
+    while(presenter.presentedViewController && !presenter.presentedViewController.isBeingDismissed)
+        presenter=presenter.presentedViewController;
+    if(!presenter)return;
     UIPopoverPresentationController *popover=share.popoverPresentationController;
     if(popover){popover.sourceView=presenter.view;popover.sourceRect=presenter.view.bounds;}
     [presenter presentViewController:share animated:YES completion:nil];
