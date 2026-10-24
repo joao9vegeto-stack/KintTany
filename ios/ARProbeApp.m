@@ -80,6 +80,8 @@ extern void rsx_metal_backend_shutdown(void);
 extern void rsx_metal_backend_present(void);
 extern unsigned int rsx_metal_backend_guest_draws(void);
 extern void spu_workload_reset_ascension_commit_metrics(void);
+extern void cellSpursResetAscensionLFQueueMetrics(void);
+extern void cellSpursCopyAscensionLFQueueMetrics(uint64_t out[6]);
 extern void spu_workload_copy_ascension_commit_metrics(uint64_t out[2]);
 extern void cellGcmTickVBlank(void);
 extern void cellGcmTickFlip(void);
@@ -1599,6 +1601,7 @@ static BOOL ARGameManifestHasTitleUsrdir(NSDictionary *manifest){
   spu_workload_reset_ascension_job_metrics();
   spu_workload_reset_ascension_taskset_metrics();
   spu_workload_reset_ascension_commit_metrics();
+  cellSpursResetAscensionLFQueueMetrics();
   spu_workload_reset_ascension_stack_metrics();
   cellSpursResetAscensionMetrics();
   spu_pic_reset_ascension_metrics();
@@ -1943,6 +1946,7 @@ static BOOL ARGameManifestHasTitleUsrdir(NSDictionary *manifest){
     uint64_t jobs[8]={0}; spu_workload_copy_ascension_job_metrics(jobs);
     uint64_t taskset[14]={0}; spu_workload_copy_ascension_taskset_metrics(taskset);
     uint64_t tasksetCommits[2]={0}; spu_workload_copy_ascension_commit_metrics(tasksetCommits);
+    uint64_t lfqueue[6]={0}; cellSpursCopyAscensionLFQueueMetrics(lfqueue);
     unsigned long long stack[17]={0}; spu_workload_copy_ascension_stack_metrics(stack);
     unsigned long long gcm[3]={0}; cellGcmCopyAscensionParkHoldMetrics(gcm);
     uint64_t pic[6]={0}; spu_pic_copy_ascension_metrics(pic);
@@ -2011,6 +2015,10 @@ static BOOL ARGameManifestHasTitleUsrdir(NSDictionary *manifest){
         (unsigned long long)taskset[3],(unsigned long long)taskset[5],
         (unsigned long long)taskset[6],(unsigned long long)taskset[7],
         (unsigned long long)taskset[10],(unsigned long long)taskset[11]];
+    [out appendFormat:@"LFQueue nativa: inicializações=%llu · pushes=%llu · commits=%llu · bytes=%llu · taskset signals=%llu · wakes linha=%llu\n",
+        (unsigned long long)lfqueue[0],(unsigned long long)lfqueue[1],
+        (unsigned long long)lfqueue[2],(unsigned long long)lfqueue[3],
+        (unsigned long long)lfqueue[4],(unsigned long long)lfqueue[5]];
     [out appendFormat:@"SPU PUTLLC: linhas commitadas=%llu · tasksets acordados=%llu (candidatos/válidos acima)\n",
         (unsigned long long)tasksetCommits[0],(unsigned long long)tasksetCommits[1]];
     [out appendFormat:@"Pilha SPU (MiB): tentativas=%llu · 256=%llu/%llu/%llu · 64=%llu/%llu/%llu · 32=%llu/%llu/%llu · 16=%llu/%llu/%llu · fallback=%llu/%llu · pthread rc=%llu · attr rc=%llu\n",
