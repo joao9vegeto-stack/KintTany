@@ -17,6 +17,7 @@
 #include <string.h>
 #include <pthread.h>
 #include <math.h>
+#include "Graphics/Xenos/XOWUEGuestDraw.h"
 
 static _Atomic(uint32_t) g_xowue_guest_swap_count = 0;
 static _Atomic(uint32_t) g_xowue_guest_width = 0;
@@ -211,6 +212,7 @@ typedef struct KKVulkanState {
    uint64_t frame_count;
    uint64_t guest_frames_presented;
    uint64_t last_guest_decoded_serial;
+   uint64_t guest_draws_submitted;
    bool ready;
 } KKVulkanState;
 
@@ -460,12 +462,15 @@ KKWriteGuestFrame(KKVulkanState *state)
    return copied;
 }
 
+#include "XOWUENativeDraw.inc"
+
 static void
 KKDestroySwapchain(KKVulkanState *state)
 {
    if (state->device && state->DeviceWaitIdle)
       state->DeviceWaitIdle(state->device);
 
+   XDDestroyFramebuffers(state);
    if (state->swapchain && state->DestroySwapchainKHR) {
       state->DestroySwapchainKHR(state->device, state->swapchain, NULL);
       state->swapchain = VK_NULL_HANDLE;
@@ -485,6 +490,7 @@ KKDestroyVulkan(KKVulkanState *state)
       state->DeviceWaitIdle(state->device);
 
    KKDestroySwapchain(state);
+   XDDestroyRenderer(state);
    KKDestroyUploadBuffer(state);
    if (state->device && state->DestroyShaderModule) {
       if (state->guest_vertex_module)
@@ -599,6 +605,7 @@ KKCreateSwapchain(KKVulkanState *state, CAMetalLayer *layer)
       composite_alpha = VK_COMPOSITE_ALPHA_PRE_MULTIPLIED_BIT_KHR;
 
    VkSwapchainKHR old_swapchain = state->swapchain;
+   g_xd.attachment_supported = (caps.supportedUsageFlags & VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT) != 0;
    VkSwapchainCreateInfoKHR create_info = {
       .sType = VK_STRUCTURE_TYPE_SWAPCHAIN_CREATE_INFO_KHR,
       .surface = state->surface,
@@ -607,7 +614,8 @@ KKCreateSwapchain(KKVulkanState *state, CAMetalLayer *layer)
       .imageColorSpace = chosen.colorSpace,
       .imageExtent = extent,
       .imageArrayLayers = 1,
-      .imageUsage = VK_IMAGE_USAGE_TRANSFER_DST_BIT,
+      .imageUsage = VK_IMAGE_USAGE_TRANSFER_DST_BIT |
+         (g_xd.attachment_supported ? VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT : 0),
       .imageSharingMode = VK_SHARING_MODE_EXCLUSIVE,
       .preTransform = caps.currentTransform,
       .compositeAlpha = composite_alpha,
@@ -649,8 +657,13 @@ KKCreateSwapchain(KKVulkanState *state, CAMetalLayer *layer)
    state->swapchain_extent = extent;
    state->swapchain_image_count = actual_count;
 
-   if (old_swapchain)
+   if (old_swapchain) {
+      XDDestroyFramebuffers(state);
       state->DestroySwapchainKHR(state->device, old_swapchain, NULL);
+   }
+   if (g_xd.render_pass && g_xd.attachment_supported &&
+       !XDCreateFramebuffers(state))
+      KKLog(@"XENOS_SWAPCHAIN_FRAMEBUFFER_REJECT");
 
    KKEnsureUploadBuffer(state, extent.width, extent.height);
 
@@ -1169,11 +1182,13 @@ KKRenderFrame(KKVulkanState *state, CAMetalLayer *layer)
          VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, &color, 1, &range);
    }
 
+   const uint32_t issuedGuestDraws = XDProcessDraws(state, image_index, state->command_buffer);
+
    VkImageMemoryBarrier to_present = {
       .sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER,
-      .srcAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT,
+      .srcAccessMask = issuedGuestDraws ? VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT : VK_ACCESS_TRANSFER_WRITE_BIT,
       .dstAccessMask = 0,
-      .oldLayout = VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
+      .oldLayout = issuedGuestDraws ? VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL : VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
       .newLayout = VK_IMAGE_LAYOUT_PRESENT_SRC_KHR,
       .srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED,
       .dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED,
@@ -1182,7 +1197,7 @@ KKRenderFrame(KKVulkanState *state, CAMetalLayer *layer)
    };
    state->CmdPipelineBarrier(
       state->command_buffer,
-      VK_PIPELINE_STAGE_TRANSFER_BIT,
+      issuedGuestDraws ? VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT : VK_PIPELINE_STAGE_TRANSFER_BIT,
       VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT,
       0, 0, NULL, 0, NULL, 1, &to_present);
 
@@ -1204,6 +1219,12 @@ KKRenderFrame(KKVulkanState *state, CAMetalLayer *layer)
       .pSignalSemaphores = &state->render_finished,
    };
    result = state->QueueSubmit(state->queue, 1, &submit_info, VK_NULL_HANDLE);
+   if (result == VK_SUCCESS && issuedGuestDraws) {
+      xowue_xenos_record_submitted(issuedGuestDraws);
+      state->guest_draws_submitted += issuedGuestDraws;
+      KKLog(@"XENOS_GPU_DRAWS_SUBMITTED=%u total=%llu",issuedGuestDraws,
+            (unsigned long long)state->guest_draws_submitted);
+   }
    if (result != VK_SUCCESS) {
       KKLog(@"FAIL vkQueueSubmit = %d", result);
       return false;
@@ -1228,6 +1249,7 @@ KKRenderFrame(KKVulkanState *state, CAMetalLayer *layer)
    }
 
    result = state->QueueWaitIdle(state->queue);
+   if (result == VK_SUCCESS) XDCollectPipelines(state);
    if (result != VK_SUCCESS) {
       KKLog(@"FAIL vkQueueWaitIdle = %d", result);
       return false;
@@ -1414,9 +1436,9 @@ KKRenderFrame(KKVulkanState *state, CAMetalLayer *layer)
          @"METAL PRESENT PASS · %@\nVulkan presents %llu · distinct guest uploads %llu\nVdSwap Xenos: %u · %ux%u",
          metalLayer.device.name, _vk.frame_count, _vk.guest_frames_presented,
          swaps, width, height];
-      KKLog(@"KOSMICKRISP_PRESENT host_presents=%llu unique_guest_uploads=%llu decoded_frames=%llu guest_swaps=%u guest_extent=%ux%u resident_mib=%.1f",
+      KKLog(@"KOSMICKRISP_PRESENT host_presents=%llu unique_guest_uploads=%llu decoded_frames=%llu guest_swaps=%u guest_extent=%ux%u guest_vk_draws=%llu resident_mib=%.1f",
             _vk.frame_count, _vk.guest_frames_presented, decodedFrames,
-            swaps, width, height, KKResidentMiB());
+            swaps, width, height, (unsigned long long)_vk.guest_draws_submitted, KKResidentMiB());
    }
 }
 

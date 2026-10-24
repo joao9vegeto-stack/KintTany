@@ -171,6 +171,11 @@ jobs:
           python3 tools/audit_xowue_ppc_cfg.py --ppc-dir generated/ppc --json-out artifacts/xowue-ppc-cfg-audit.json
           test -s artifacts/xowue-ppc-cfg-audit.json
 
+      - name: Validate native Xenos PM4 draw pipeline wiring
+        run: |
+          set -euo pipefail
+          python3 tools/test_xowue_gpu_wiring.py
+
       - name: Test PPC dispatch guard and AOT entry instrumentation
         run: |
           set -euo pipefail
@@ -509,6 +514,16 @@ jobs:
             exit 1
           fi
           echo "Native PPC continuation 0x82C2E338: linked into final app executable"
+          # Require the complete native draw plumbing in the packaged Mach-O.
+          # Source-only renderer changes are not accepted as a deliverable.
+          grep -Eq '_xowue_xenos_take_draws([[:space:]]|$)' artifacts/xowue-linked-symbols.txt
+          grep -Eq '_xowue_xenos_record_submitted([[:space:]]|$)' artifacts/xowue-linked-symbols.txt
+          strings "$APP/XOWUE" > artifacts/xowue-linked-strings.txt
+          grep -Fq 'vkCmdDraw' artifacts/xowue-linked-strings.txt
+          grep -Fq 'XENOS_GPU_DRAWS_SUBMITTED' artifacts/xowue-linked-strings.txt
+          grep -Fq 'XENOS_NATIVE_PIPELINE_CREATED' artifacts/xowue-linked-strings.txt
+          grep -Fq 'XENOS_TEXTURE_FORMAT_OR_FETCH_UNSUPPORTED' artifacts/xowue-linked-strings.txt
+          echo "XENOS_GPU_LINKED Mach-O draw commands, PM4 queue and native shader pipeline"
           lipo "$APP/Frameworks/libvulkan_kosmickrisp.dylib" -verify_arch arm64
           otool -L "$APP/XOWUE" | grep -F "@rpath/libvulkan_kosmickrisp.dylib"
           python3 - "$APP/Info.plist" "$XOWUE_BUILD_NUMBER" <<'PY'

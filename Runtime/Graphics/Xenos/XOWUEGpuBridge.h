@@ -22,6 +22,8 @@ void WriteRegister(uint32_t address, uint32_t value);
 uint32_t ReadRegister(uint32_t address);
 ShaderResult LoadShader(uint32_t stage, const uint32_t* hostOrderWords, size_t count);
 void ObserveDraw(uint32_t initiator);
+void QueueDraw(uint32_t initiator, uint32_t count, uint32_t address,
+               uint32_t indexInfo, uint32_t indexOffset);
 // Exact translated guest shaders, not proxy/fixed-function shaders.
 // Return false until real Vulkan pipelines can consume them.
 bool CopyShaderSpirv(uint64_t hash, std::vector<uint32_t>& words);

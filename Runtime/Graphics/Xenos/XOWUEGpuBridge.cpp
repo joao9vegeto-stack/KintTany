@@ -2,6 +2,8 @@
 // The translator is real Xenos microcode -> GLSL, but GLSL translation is
 // NOT pipeline submission. This code does not claim draws reached the GPU.
 #include "XOWUEGpuBridge.h"
+#include "XOWUEGuestDraw.h"
+#include <deque>
 #include "shader_translator.h"
 #include "XOWUESpirvCompiler.h"
 #include <array>
@@ -22,6 +24,8 @@ struct ShaderRecord {
   std::string error;
   // Store generated GLSL for later Vulkan pipeline integration.
   std::string glsl;
+  uint32_t vertexFetchMask = 0, texture2DMask = 0, texture3DMask = 0, textureCubeMask = 0;
+  uint32_t fetchUsed[3]{}, fetchStrides[96]{}, fetchExtents[96]{};
 };
 std::mutex stateMutex;
 std::array<uint32_t, 0x5003> registers{};
@@ -30,6 +34,9 @@ uint64_t translated = 0, failed = 0, cacheHits = 0, observedDraws = 0;
 uint64_t spirvCompiled = 0, spirvRejected = 0;
 uint64_t vertexHash = 0, pixelHash = 0;
 uint32_t lastDrawInitiator = 0;
+std::deque<XOWUEGuestDraw> pendingDraws;
+uint64_t submittedDraws = 0, rejectedDraws = 0, droppedDraws = 0;
+std::string lastReject;
 
 uint64_t Hash(uint32_t stage, const uint32_t* words, size_t count) {
   uint64_t hash = 14695981039346656037ull ^ stage;
@@ -47,6 +54,9 @@ void Reset() {
   spirvCompiled = spirvRejected = 0;
   vertexHash = pixelHash = 0;
   lastDrawInitiator = 0;
+  pendingDraws.clear();
+  submittedDraws = rejectedDraws = droppedDraws = 0;
+  lastReject.clear();
 }
 
 void WriteRegister(uint32_t address, uint32_t value) {
@@ -116,6 +126,15 @@ ShaderResult LoadShader(uint32_t stage, const uint32_t* words, size_t count) {
       entry.glslBytes = shader.glsl.size();
       entry.error = shader.error;
       entry.glsl = std::move(shader.glsl);
+      entry.vertexFetchMask = shader.vertexFetchMask;
+      entry.texture2DMask = shader.texture2DMask;
+      entry.texture3DMask = shader.texture3DMask;
+      entry.textureCubeMask = shader.textureCubeMask;
+      for (uint32_t i = 0; i < 3u; ++i) entry.fetchUsed[i] = shader.vertexFetchConstants[i];
+      for (uint32_t i = 0; i < 96u; ++i) {
+        entry.fetchStrides[i] = shader.vertexStride[i];
+        entry.fetchExtents[i] = shader.vertexExtent[i];
+      }
       entry.spirv = std::move(compilation.words);
       shaders.emplace(result.hash, std::move(entry));
     }
@@ -135,6 +154,68 @@ void ObserveDraw(uint32_t initiator) {
   std::lock_guard lock(stateMutex);
   ++observedDraws;
   lastDrawInitiator = initiator;
+}
+
+
+void QueueDraw(uint32_t initiator, uint32_t indexCount,
+               uint32_t indexAddress, uint32_t indexInfo, uint32_t indexOffset) {
+  std::lock_guard lock(stateMutex);
+  ++observedDraws;
+  lastDrawInitiator = initiator;
+  if (!indexCount || !vertexHash || !pixelHash || pendingDraws.size() >= XOWUE_GPU_MAX_DRAWS) {
+    ++droppedDraws;
+    return;
+  }
+  const auto vs = shaders.find(vertexHash);
+  const auto ps = shaders.find(pixelHash);
+  if (vs == shaders.end() || ps == shaders.end() ||
+      vs->second.spirv.empty() || ps->second.spirv.empty()) {
+    ++droppedDraws;
+    return;
+  }
+  XOWUEGuestDraw packet{};
+  packet.vertex_hash = vertexHash;
+  packet.pixel_hash = pixelHash;
+  packet.initiator = initiator;
+  packet.index_count = indexCount;
+  packet.index_address = indexAddress;
+  packet.index_info = indexInfo;
+  packet.index_offset = indexOffset;
+  packet.vertex_fetch_mask = vs->second.vertexFetchMask;
+  packet.texture_2d_mask = vs->second.texture2DMask | ps->second.texture2DMask;
+  packet.texture_3d_mask = vs->second.texture3DMask | ps->second.texture3DMask;
+  packet.texture_cube_mask = vs->second.textureCubeMask | ps->second.textureCubeMask;
+  for (uint32_t i = 0; i < 3u; ++i) packet.fetch_used[i] = vs->second.fetchUsed[i];
+  for (uint32_t i = 0; i < 96u; ++i) {
+    packet.fetch_strides[i] = vs->second.fetchStrides[i];
+    packet.fetch_extents[i] = vs->second.fetchExtents[i];
+  }
+  uint32_t pos = 0;
+  for (uint32_t i = 0; i < 2048u; ++i) packet.constants[pos++] = registers[0x4000u + i];
+  for (uint32_t i = 0; i < 192u; ++i) packet.constants[pos++] = registers[0x4800u + i];
+  for (uint32_t i = 0; i < 8u; ++i) packet.constants[pos++] = registers[0x4900u + i];
+  for (uint32_t i = 0; i < 32u; ++i) packet.constants[pos++] = registers[0x4908u + i];
+  for (uint32_t i = 0; i < 16u; ++i) packet.constants[pos++] = 0;
+  pendingDraws.push_back(packet);
+}
+extern "C" size_t xowue_xenos_take_draws(XOWUEGuestDraw *out, size_t capacity) {
+  if (!out || capacity == 0) return 0;
+  std::lock_guard lock(stateMutex);
+  const size_t count = std::min(capacity, pendingDraws.size());
+  for (size_t i = 0; i < count; ++i) {
+    out[i] = std::move(pendingDraws.front());
+    pendingDraws.pop_front();
+  }
+  return count;
+}
+extern "C" void xowue_xenos_record_submitted(uint32_t count) {
+  std::lock_guard lock(stateMutex);
+  submittedDraws += count;
+}
+extern "C" void xowue_xenos_record_rejected(uint32_t count, const char *why) {
+  std::lock_guard lock(stateMutex);
+  rejectedDraws += count;
+  lastReject = why ? why : "unspecified";
 }
 
 // C ABI: the Objective-C Vulkan host consumes native guest shader binaries.
@@ -167,10 +248,12 @@ std::string Diagnostics() {
       " spirv_compiled=%" PRIu64 " spirv_rejected=%" PRIu64
       " observed_draws=%" PRIu64 " vertex_hash=%016" PRIX64
       " pixel_hash=%016" PRIX64 " initiator=%08X "
-      "pipeline_draws_submitted=0",
+      "queued=%zu dropped=%" PRIu64 " pipeline_draws_submitted=%" PRIu64
+      " pipeline_draws_rejected=%" PRIu64 " last_reject=%s",
       translated, failed, cacheHits, spirvCompiled, spirvRejected,
       observedDraws, vertexHash, pixelHash,
-      lastDrawInitiator);
+      lastDrawInitiator, pendingDraws.size(), droppedDraws, submittedDraws,
+      rejectedDraws, lastReject.c_str());
   return value;
 }
 }

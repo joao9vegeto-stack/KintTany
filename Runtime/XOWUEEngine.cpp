@@ -4,6 +4,7 @@
 #include "ppc_recomp_shared.h"
 #include "XOWUEDispatchGuard.h"
 #include "Graphics/Xenos/XOWUEGpuBridge.h"
+#include "Graphics/Xenos/XOWUEGuestDraw.h"
 #include "xex.h"
 
 #include <algorithm>
@@ -1377,6 +1378,17 @@ PPCFunc *xowue_lookup_indirect(PPCContext &context, uint8_t *base, uint32_t targ
 
 void xowue_dispatch_indirect(PPCContext &context, uint8_t *base, uint32_t target) {
     xowue_lookup_indirect(context, base, target)(context, base);
+}
+
+// Physical Xenos readback uses the active guest memory mapping; no synthetic data.
+extern "C" bool xowue_xenos_copy_guest_physical(uint32_t address, void *out, size_t size) {
+    if (!out || !size || address >= 0x20000000u ||
+        size > static_cast<size_t>(0x20000000u - address))
+        return false;
+    const auto memory = g_activeGuestMemory.lock();
+    if (!memory || !memory->base || !validGuestRange(address, size)) return false;
+    std::memcpy(out, memory->base + address, size);
+    return true;
 }
 
 extern "C" void xowue_set_touch_controller_state(
@@ -3503,6 +3515,25 @@ static bool decodeXenosSwapTexture(uint8_t *base, const uint32_t fetchWords[6],
     return true;
 }
 
+extern "C" bool xowue_xenos_copy_guest_texture2d(
+    const uint32_t fetch[6], void *rgba, size_t bytes) {
+    if (!fetch || !rgba) return false;
+    const uint32_t width = (fetch[2] & 0x1FFFu) + 1u;
+    const uint32_t height = ((fetch[2] >> 13u) & 0x1FFFu) + 1u;
+    if (width > 2048u || height > 2048u ||
+        static_cast<uint64_t>(width) * height * 4u != bytes) return false;
+    const auto memory = g_activeGuestMemory.lock();
+    if (!memory || !memory->base) return false;
+    std::vector<uint8_t> decoded;
+    uint32_t physical = 0;
+    const uint32_t format = fetch[1] & 0x3Fu;
+    if (!decodeXenosSwapTexture(memory->base, fetch, format,
+                                width, height, physical, decoded) ||
+        decoded.size() != bytes) return false;
+    std::memcpy(rgba, decoded.data(), bytes);
+    return true;
+}
+
 static uint32_t loadGuestBe32(const uint8_t *base, uint32_t address) {
     return (static_cast<uint32_t>(base[address]) << 24u) |
            (static_cast<uint32_t>(base[address + 1u]) << 16u) |
@@ -3668,8 +3699,21 @@ static bool executeGuestPM4Words(uint8_t *base,
                 opcode == kXenosPm4DrawIndexBinOpcode || opcode == kXenosPm4DrawIndex2BinOpcode) {
                 ++summary.draws;
                 const size_t initiatorWord = offset + (opcode == kXenosPm4DrawIndexOpcode ? 2u : 1u);
-                if (initiatorWord < offset + 1u + payloadCount)
-                    xowue::xenos::ObserveDraw(words[initiatorWord]);
+                if (initiatorWord < offset + 1u + payloadCount) {
+                    const uint32_t initiator = words[initiatorWord];
+                    const uint32_t indices = initiator >> 16u;
+                    // SourceSelect bits 6:7; kAutoIndex=2, kDMA=0.
+                    const uint32_t sourceSelect = (initiator >> 6u) & 3u;
+                    // DMA data follows the index initiator in PM4_DRAW_INDX.
+                    const uint32_t dmaAddress = opcode == kXenosPm4DrawIndexOpcode &&
+                        payloadCount >= 4u ? words[offset + 3u] & 0x1FFFFFFFu : 0u;
+                    const uint32_t dmaInfo = opcode == kXenosPm4DrawIndexOpcode &&
+                        payloadCount >= 5u ? words[offset + 4u] : 0u;
+                    xowue::xenos::QueueDraw(initiator, indices,
+                        sourceSelect == 0u ? dmaAddress : 0u, dmaInfo, 0u);
+                } else {
+                    ++summary.malformed;
+                }
             } else if (opcode == kXenosPm4IndirectBufferOpcode) {
                 ++summary.indirectBuffers;
                 if (payloadCount >= 2u && depth < 8u) {
