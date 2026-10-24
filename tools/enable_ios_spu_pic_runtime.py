@@ -59,6 +59,11 @@ typedef struct {
 static spu_pic_slot s_pic[SPU_PIC_MAX_ENTRIES];
 static unsigned s_pic_count;
 static SRWLOCK s_pic_capture_lock = SRWLOCK_INIT;
+static uint64_t s_pic_lookup_attempts;
+static uint64_t s_pic_native_hits;
+static uint64_t s_pic_lookup_misses;
+static uint64_t s_pic_generated_stubs_filtered;
+static uint64_t s_pic_capture_rows_written;
 typedef struct { uint64_t key; int overlay; uint8_t code[64]; } spu_pic_seen;
 static spu_pic_seen s_pic_seen[8192];
 static unsigned s_pic_seen_count;
@@ -104,9 +109,16 @@ void spu_pic_register(const spu_pic_entry* entries, unsigned count,
  * SPU worker starts. The sorted table is immutable during guest execution. */
 static spu_fn spu_pic_lookup(spu_context* ctx)
 {
-    if (!s_pic_count) return NULL;
+    __atomic_fetch_add(&s_pic_lookup_attempts, 1u, __ATOMIC_RELAXED);
+    if (!s_pic_count) {
+        __atomic_fetch_add(&s_pic_lookup_misses, 1u, __ATOMIC_RELAXED);
+        return NULL;
+    }
     const uint32_t pc = ctx->pc & SPU_LS_MASK & ~3u;
-    if (pc > SPU_LS_SIZE - 16u) return NULL;
+    if (pc > SPU_LS_SIZE - 16u) {
+        __atomic_fetch_add(&s_pic_lookup_misses, 1u, __ATOMIC_RELAXED);
+        return NULL;
+    }
     const uint64_t key = spu_pic_key(ctx->ls + pc);
     unsigned lo = 0, hi = s_pic_count;
     while (lo < hi) {
@@ -120,9 +132,54 @@ static spu_fn spu_pic_lookup(spu_context* ctx)
                                    e->addr, e->lo, e->hi, e->ranges, e->nranges))
             continue;
         ctx->pic_base = (pc - e->addr) & SPU_LS_MASK;
+        __atomic_fetch_add(&s_pic_native_hits, 1u, __ATOMIC_RELAXED);
         return (spu_fn)e->func;
     }
+    __atomic_fetch_add(&s_pic_lookup_misses, 1u, __ATOMIC_RELAXED);
     return NULL;
+}
+
+void spu_pic_reset_ascension_metrics(void)
+{
+    AcquireSRWLockExclusive(&s_pic_capture_lock);
+    s_pic_seen_count = 0;
+    __atomic_store_n(&s_pic_lookup_attempts, 0u, __ATOMIC_RELAXED);
+    __atomic_store_n(&s_pic_native_hits, 0u, __ATOMIC_RELAXED);
+    __atomic_store_n(&s_pic_lookup_misses, 0u, __ATOMIC_RELAXED);
+    __atomic_store_n(&s_pic_generated_stubs_filtered, 0u, __ATOMIC_RELAXED);
+    __atomic_store_n(&s_pic_capture_rows_written, 0u, __ATOMIC_RELAXED);
+    ReleaseSRWLockExclusive(&s_pic_capture_lock);
+}
+
+void spu_pic_copy_ascension_metrics(uint64_t out[6])
+{
+    if (!out) return;
+    out[0] = __atomic_load_n(&s_pic_lookup_attempts, __ATOMIC_RELAXED);
+    out[1] = __atomic_load_n(&s_pic_native_hits, __ATOMIC_RELAXED);
+    out[2] = __atomic_load_n(&s_pic_lookup_misses, __ATOMIC_RELAXED);
+    out[3] = __atomic_load_n(&s_pic_generated_stubs_filtered, __ATOMIC_RELAXED);
+    out[4] = __atomic_load_n(&s_pic_capture_rows_written, __ATOMIC_RELAXED);
+    AcquireSRWLockExclusive(&s_pic_capture_lock);
+    out[5] = s_pic_count;
+    ReleaseSRWLockExclusive(&s_pic_capture_lock);
+}
+
+/* M8.07 filters the exact 16-instruction stack bridge that PS3Recomp
+ * synthesizes at LS 0x3FEC0. It is runtime scaffolding, not ELF code. */
+static int spu_pic_generated_stack_bridge(uint32_t pc, const uint8_t code[64])
+{
+    if (pc != UINT32_C(0x3FEC0)) return 0;
+    const uint8_t form = code[0];
+    if (form != 0x20u && form != 0x30u) return 0;
+    for (unsigned i = 0; i < 16; ++i) {
+        const unsigned at = i * 4u;
+        if (code[at] != form ||
+            code[at + 1u] != 0xFFu ||
+            code[at + 2u] != (uint8_t)(0x38u + 2u * i) ||
+            code[at + 3u] != (uint8_t)i)
+            return 0;
+    }
+    return 1;
 }
 
 /* Format is compatible with the PC port:
@@ -150,6 +207,16 @@ static void spu_pic_capture(const spu_context* ctx)
             return;
         }
     }
+    if (s_pic_seen_count < sizeof(s_pic_seen) / sizeof(s_pic_seen[0]) &&
+        spu_pic_generated_stack_bridge(pc, code)) {
+        spu_pic_seen* seen = &s_pic_seen[s_pic_seen_count++];
+        seen->key = key;
+        seen->overlay = ctx->resident_ovl;
+        memcpy(seen->code, code, 64);
+        __atomic_fetch_add(&s_pic_generated_stubs_filtered, 1u, __ATOMIC_RELAXED);
+        ReleaseSRWLockExclusive(&s_pic_capture_lock);
+        return;
+    }
     if (s_pic_seen_count < sizeof(s_pic_seen) / sizeof(s_pic_seen[0])) {
         FILE* f = fopen(path, "a");
         if (f) {
@@ -163,6 +230,7 @@ static void spu_pic_capture(const spu_context* ctx)
                 seen->key = key;
                 seen->overlay = ctx->resident_ovl;
                 memcpy(seen->code, code, 64);
+                __atomic_fetch_add(&s_pic_capture_rows_written, 1u, __ATOMIC_RELAXED);
                 static unsigned logged;
                 if (logged++ < 12)
                     fprintf(stderr, "[spu-pic] captured unresolved LS 0x%05X overlay=%d -> %s\n",
@@ -382,7 +450,7 @@ def patch(upstream: Path) -> None:
     text = context.read_text()
     if MARKER not in text:
         anchor = "    uint32_t drain_ret_pc;\n} spu_context;"
-        replacement = "    uint32_t drain_ret_pc;\n    uint32_t pic_base; /* ASCENSION_M793_SPU_PIC_RUNTIME_V1 */\n} spu_context;\n\n#define SPU_PIC(ctx, a) (((ctx)->pic_base + (uint32_t)(a)) & SPU_LS_MASK)\n\ntypedef struct {\n    uint32_t addr, lo, hi;\n    void (*func)(spu_context*);\n    const uint32_t* ranges;\n    uint32_t nranges;\n} spu_pic_entry;\n\nvoid spu_pic_register(const spu_pic_entry*, unsigned, const uint8_t*, uint32_t, int);"
+        replacement = "    uint32_t drain_ret_pc;\n    uint32_t pic_base; /* ASCENSION_M793_SPU_PIC_RUNTIME_V1 */\n} spu_context;\n\n#define SPU_PIC(ctx, a) (((ctx)->pic_base + (uint32_t)(a)) & SPU_LS_MASK)\n\ntypedef struct {\n    uint32_t addr, lo, hi;\n    void (*func)(spu_context*);\n    const uint32_t* ranges;\n    uint32_t nranges;\n} spu_pic_entry;\n\nvoid spu_pic_register(const spu_pic_entry*, unsigned, const uint8_t*, uint32_t, int);\nvoid spu_pic_reset_ascension_metrics(void);\nvoid spu_pic_copy_ascension_metrics(uint64_t out[6]);"
         if text.count(anchor) != 1:
             raise SystemExit("cannot anchor PIC context fields in pinned PS3Recomp")
         context.write_text(text.replace(anchor, replacement, 1))
@@ -477,6 +545,7 @@ def patch(upstream: Path) -> None:
     context_text = context.read_text()
     source_text = source.read_text()
     required = (MARKER, "spu_pic_register", "spu_pic_lookup", "spu_pic_capture",
+                "spu_pic_reset_ascension_metrics", "spu_pic_copy_ascension_metrics",
                 "spu_interp_run_until_budget(ctx, p, return_pc, 4096)")
     missing = [needle for needle in required
                if needle not in context_text and needle not in source_text]

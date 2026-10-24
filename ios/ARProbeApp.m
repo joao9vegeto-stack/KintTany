@@ -32,6 +32,9 @@ extern void spu_workload_reset_ascension_stack_metrics(void);
 extern void spu_workload_copy_ascension_stack_metrics(unsigned long long out[17]);
 extern void cellGcmResetAscensionParkHoldMetrics(void);
 extern void cellGcmCopyAscensionParkHoldMetrics(unsigned long long out[3]);
+extern uint32_t cellGcm_flip_request_count(void);
+extern void spu_pic_reset_ascension_metrics(void);
+extern void spu_pic_copy_ascension_metrics(uint64_t out[6]);
 extern void ar_m756_last_stop_evidence(ar_m756_stop_evidence*);
 extern void ar_m756_last_origin_evidence(ar_m756_stop_evidence*);
 extern void ar_m751_last_fs_trace(ar_fs_trace *);
@@ -303,6 +306,7 @@ static BOOL ARGameManifestHasTitleUsrdir(NSDictionary *manifest){
 - (void)shareLauncherReport:(UIButton*)sender;
 - (void)updateLauncherReport;
 - (void)launcherReportRefreshTick:(NSTimer*)timer;
+- (NSString *)arLivePpuReportText;
 - (void)refreshAdvancedPpuReport:(NSTimer*)timer;
 - (UIButton*)nativePadButton:(NSString*)title bit:(uint16_t)bit;
 - (void)nativePadDown:(UIButton*)sender;
@@ -1437,6 +1441,10 @@ static BOOL ARGameManifestHasTitleUsrdir(NSDictionary *manifest){
 }
 - (void)runNativeRSXPump {
   CFTimeInterval nextVBlank=CACurrentMediaTime();
+  /* Same guest-flip fallback as the PC frame clock. A synchronized pending
+   * flag is primary; the monotonic guest flip request count catches a request
+   * whose notification was consumed between FIFO drain and presentation. */
+  uint32_t lastFlipRequestCount=cellGcm_flip_request_count();
   while(__atomic_load_n(&ARNativeRSXPumpActive,__ATOMIC_ACQUIRE)){
     uint64_t live[40]={0}; ar_m772_runtime_attest(live);
     if(!live[4] || !__atomic_load_n(&ARNativeRSXBackendReady,__ATOMIC_ACQUIRE)){
@@ -1454,13 +1462,16 @@ static BOOL ARGameManifestHasTitleUsrdir(NSDictionary *manifest){
       nextVBlank+=vblankInterval;
       if(now-nextVBlank>0.100)nextVBlank=now+vblankInterval;
     }
-    /* Match PS3Recomp's desktop frame clock: advance guest fences by draining
-     * the real GCM FIFO, then present only after its pending flip is complete. */
+    /* Match the PC pump order: drain the guest FIFO, then present a real
+     * guest flip. Do not synthesize draws or count idle Metal presents. */
     cellGcm_rsx_process_fifo();
     __atomic_add_fetch(&ARNativeRSXFIFODrains,UINT64_C(1),__ATOMIC_RELAXED);
-    if(cellGcm_take_flip_pending_synced()){
+    const uint32_t flipRequests=cellGcm_flip_request_count();
+    const int pending=cellGcm_take_flip_pending_synced();
+    if(pending || flipRequests!=lastFlipRequestCount){
       rsx_metal_backend_present();
       __atomic_add_fetch(&ARNativeRSXPresentedFrames,UINT64_C(1),__ATOMIC_RELAXED);
+      lastFlipRequestCount=flipRequests;
     }
     __atomic_store_n(&ARNativeRSXLastGuestDraws,
                      (uint64_t)rsx_metal_backend_guest_draws(),__ATOMIC_RELAXED);
@@ -1587,6 +1598,7 @@ static BOOL ARGameManifestHasTitleUsrdir(NSDictionary *manifest){
   spu_workload_reset_ascension_taskset_metrics();
   spu_workload_reset_ascension_stack_metrics();
   cellSpursResetAscensionMetrics();
+  spu_pic_reset_ascension_metrics();
   ar_m772_runtime_begin();
   [self arSetStatus:@"Preparando VM, PPU/SPU recompilados e acesso guest ao jogo…"];
   [self refreshNativeLaunchAvailability];
@@ -1914,36 +1926,146 @@ static BOOL ARGameManifestHasTitleUsrdir(NSDictionary *manifest){
     self.ppuLiveReportView=nil;
     [self.window.rootViewController dismissViewControllerAnimated:YES completion:nil];
 }
+- (NSString *)arLivePpuReportText {
+  /* Keep the report useful even before the guest runtime comes up. The header
+   * is committed first; all live fields are snapshots and never depend on the
+   * giant legacy format string that previously returned empty on the worker. */
+  NSMutableString *out=[NSMutableString stringWithString:
+      @"ASCENSIONRECOMP · RELATÓRIO AO VIVO\n"];
+  @try {
+    uint64_t live[40]={0}; ar_m772_runtime_attest(live);
+    uint64_t hotloop[38]={0}; ar_m772_copy_hotloop_snapshot(hotloop);
+    ar_fs_trace liveFs={0}; ar_fs_snapshot(&liveFs);
+    uint64_t spurs[10]={0}; cellSpursCopyAscensionMetrics(spurs);
+    uint64_t jobs[8]={0}; spu_workload_copy_ascension_job_metrics(jobs);
+    uint64_t taskset[14]={0}; spu_workload_copy_ascension_taskset_metrics(taskset);
+    unsigned long long stack[17]={0}; spu_workload_copy_ascension_stack_metrics(stack);
+    unsigned long long gcm[3]={0}; cellGcmCopyAscensionParkHoldMetrics(gcm);
+    uint64_t pic[6]={0}; spu_pic_copy_ascension_metrics(pic);
+    const uint32_t entryState=ar_m772_entry_state();
+    NSString *phase=entryState==0?@"PREPARANDO runtime/VFS":
+                    entryState==1?@"EXECUTANDO entry AOT":
+                    entryState==2?@"ENTRY RETORNOU":
+                    entryState==3?@"ENTRY NÃO VINCULADA":@"SEM ENTRY AOT";
+    NSString *session=self.shaderBusy?@"EM EXECUÇÃO":
+                      (self.m750Run?@"CONCLUÍDA":@"SEM EXECUÇÃO");
+    NSString *guestPath=liveFs.last_path[0]?
+        ([NSString stringWithUTF8String:liveFs.last_path]?:@"(caminho inválido)"):@"(nenhum caminho guest)";
+    const uint64_t draws=ARRSXLoad(&ARNativeRSXLastGuestDraws);
+    const uint64_t frames=ARRSXLoad(&ARNativeRSXPresentedFrames);
+    const uint64_t vblanks=ARRSXLoad(&ARNativeRSXVBlanks);
+    const uint64_t drains=ARRSXLoad(&ARNativeRSXFIFODrains);
+    const uint32_t flipRequests=cellGcm_flip_request_count();
+    NSString *backend=__atomic_load_n(&ARNativeRSXBackendReady,__ATOMIC_ACQUIRE)?
+                      @"Metal pronto":@"Metal não inicializado";
+
+    [out appendFormat:@"\nBuild %@ · %s · commit %.8s\n",
+        ARCurrentRelease(),AR_M750_BUILD_BRANCH,AR_M750_BUILD_SHA];
+    [out appendFormat:@"Sessão=%@ · estado=%u · fase=%@\n",
+        session,entryState,phase];
+    [out appendFormat:@"Runtime=%@ · funções PPU AOT=%llu · chamadas AOT=%llu · início da entry=%llu\n",
+        live[4]?@"inicializado":@"não inicializado",
+        (unsigned long long)live[0],(unsigned long long)live[5],
+        (unsigned long long)live[13]];
+    [out appendFormat:@"Última entrada de função PPU=0x%08llX (não é PC atual)\n",
+        (unsigned long long)live[6]];
+    [out appendFormat:@"LV2 syscalls=%llu · último número=%llu · LR=0x%08llX\n",
+        (unsigned long long)live[29],(unsigned long long)live[27],
+        (unsigned long long)live[28]];
+    if(hotloop[36]){
+      [out appendFormat:@"Backedge amostrado=0x%08llX · hits=%llu · CR=0x%08llX · LR=0x%016llX · CTR=0x%016llX · r3/r4/r5/r8/r9=%llX/%llX/%llX/%llX/%llX (snapshot do hook; não é PC atual)\n",
+        (unsigned long long)hotloop[0],(unsigned long long)hotloop[37],
+        (unsigned long long)hotloop[33],(unsigned long long)hotloop[34],
+        (unsigned long long)hotloop[35],(unsigned long long)hotloop[4],
+        (unsigned long long)hotloop[5],(unsigned long long)hotloop[6],
+        (unsigned long long)hotloop[9],(unsigned long long)hotloop[10]];
+    } else {
+      [out appendString:@"Backedge amostrado: nenhum hook instrumentado reportou uma amostra; PC atual não medido.\n"];
+    }
+    [out appendFormat:@"VM guest=%llu bytes · SPU images=%llu\n",
+        (unsigned long long)live[7],(unsigned long long)live[3]];
+    [out appendFormat:@"cellFs guest: opens=%llu · opens OK=%llu · reads=%llu · bytes=%llu\n",
+        (unsigned long long)live[9],(unsigned long long)live[10],
+        (unsigned long long)live[11],(unsigned long long)live[12]];
+    [out appendFormat:@"Último caminho guest=%@\n",guestPath];
+    [out appendFormat:@"\nSPURS: instâncias=%llu · workloads=%llu · PMs encontrados/faltantes=%llu/%llu · admissões WWS=%llu · último WID=%llu · GPU-report wakes=%llu\n",
+        (unsigned long long)spurs[0],(unsigned long long)spurs[1],
+        (unsigned long long)spurs[3],(unsigned long long)spurs[4],
+        (unsigned long long)spurs[5],
+        (unsigned long long)(spurs[7]==UINT64_MAX?0:spurs[7]),
+        (unsigned long long)spurs[8]];
+    [out appendFormat:@"SPURS workloads nos IDs 16–31=%llu · admissões IDs 16–31=%llu · instâncias acordadas=%llu\n",
+        (unsigned long long)spurs[2],(unsigned long long)spurs[6],
+        (unsigned long long)spurs[9]];
+    [out appendFormat:@"WWS job-chain: pedidos=%llu · com lift=%llu · sem lift=%llu · retornos=%llu · ativos=%llu · bytes=%llu · EA=0x%08llX\n",
+        (unsigned long long)jobs[0],(unsigned long long)jobs[1],
+        (unsigned long long)jobs[2],(unsigned long long)jobs[3],
+        (unsigned long long)jobs[4],(unsigned long long)jobs[6],
+        (unsigned long long)jobs[7]];
+    [out appendFormat:@"Taskset WWS: registrados=%llu · candidatos=%llu · válidos=%llu · requeue aceitos/rejeitados=%llu/%llu · runners iniciados=%llu · retornos=%llu · ativos=%llu\n",
+        (unsigned long long)taskset[0],(unsigned long long)taskset[2],
+        (unsigned long long)taskset[3],(unsigned long long)taskset[5],
+        (unsigned long long)taskset[6],(unsigned long long)taskset[7],
+        (unsigned long long)taskset[10],(unsigned long long)taskset[11]];
+    [out appendFormat:@"Pilha SPU (MiB): tentativas=%llu · 256=%llu/%llu/%llu · 64=%llu/%llu/%llu · 32=%llu/%llu/%llu · 16=%llu/%llu/%llu · fallback=%llu/%llu · pthread rc=%llu · attr rc=%llu\n",
+        stack[0],stack[1],stack[2],stack[3],stack[4],stack[5],stack[6],
+        stack[7],stack[8],stack[9],stack[10],stack[11],stack[12],
+        stack[13],stack[14],stack[15],stack[16]];
+    [out appendFormat:@"GCM park hold: pausas=%llu · retomadas=%llu · timeouts=%llu\n",
+        gcm[0],gcm[1],gcm[2]];
+    [out appendFormat:@"SPU PIC: lookups=%llu · hits nativos=%llu · misses=%llu · stubs 0x3FEC0 filtrados=%llu · fragmentos úteis gravados=%llu · entradas registradas=%llu\n",
+        (unsigned long long)pic[0],(unsigned long long)pic[1],
+        (unsigned long long)pic[2],(unsigned long long)pic[3],
+        (unsigned long long)pic[4],(unsigned long long)pic[5]];
+    [out appendFormat:@"\nRSX: backend=%@ · flip requests guest=%u · flips guest apresentados=%llu · draws guest=%llu · vblank=%llu · FIFO drains=%llu\n",
+        backend,flipRequests,(unsigned long long)frames,
+        (unsigned long long)draws,(unsigned long long)vblanks,
+        (unsigned long long)drains];
+    [out appendFormat:@"Pasta do jogo no host=%@ (isso não prova leitura guest)\n",
+        self.hasGameInstallation?@"SIM":@"NÃO"];
+    [out appendString:(draws>0 && frames>0)?
+        @"RESULTADO: draws e flips guest positivos; confira pixels reais no aparelho.\n":
+        @"RESULTADO: ainda sem draw e flip guest; menu/frame do jogo não comprovados.\n"];
+    [out appendString:@"ELF, PSARC e conteúdo do jogo permanecem no dispositivo."];
+  } @catch(NSException *exception) {
+    [out appendFormat:@"\nSnapshot parcial: %@ · %@\n",
+        exception.name?:@"exceção",exception.reason?:@"sem detalhes"];
+  }
+  return out.length?out:
+      @"ASCENSIONRECOMP · RELATÓRIO AO VIVO\nSnapshot vazio; os contadores ainda não foram retornados.";
+}
 - (void)refreshAdvancedPpuReport:(NSTimer *)timer {
     (void)timer;
+    if(![NSThread isMainThread]){
+      __weak typeof(self) weakSelf=self;
+      dispatch_async(dispatch_get_main_queue(),^{[weakSelf refreshAdvancedPpuReport:nil];});
+      return;
+    }
     UITextView *details=self.ppuLiveReportView;
     if(!details || self.ppuLiveReportRefreshInFlight)return;
-
     self.ppuLiveReportRefreshInFlight=YES;
     const NSUInteger generation=self.ppuLiveReportGeneration;
-    __weak typeof(self) weakSelf=self;
-    dispatch_async(dispatch_get_global_queue(QOS_CLASS_USER_INITIATED,0),^{
-      __strong typeof(weakSelf) workerSelf=weakSelf;
-      if(!workerSelf)return;
-      NSString *report=[workerSelf arUnifiedPpuText];
-      if(!report.length)report=@"Relatório vazio: nenhuma métrica foi retornada.";
-      dispatch_async(dispatch_get_main_queue(),^{
-        __strong typeof(weakSelf) callbackSelf=weakSelf;
-        if(!callbackSelf)return;
-        callbackSelf.ppuLiveReportRefreshInFlight=NO;
-        if(generation!=callbackSelf.ppuLiveReportGeneration){
-          if(callbackSelf.ppuLiveReportView)
-            [callbackSelf refreshAdvancedPpuReport:nil];
-          return;
-        }
-        if(callbackSelf.ppuLiveReportView!=details)return;
-        details.text=report;
-        if(!callbackSelf.shaderBusy){
-          [callbackSelf.ppuLiveRefreshTimer invalidate];
-          callbackSelf.ppuLiveRefreshTimer=nil;
-        }
-      });
-    });
+    NSString *report=nil;
+    @try { report=[self arLivePpuReportText]; }
+    @catch(NSException *exception) {
+      report=[NSString stringWithFormat:
+          @"ASCENSIONRECOMP · RELATÓRIO AO VIVO\nSnapshot indisponível: %@ · %@",
+          exception.name?:@"exceção",exception.reason?:@"sem detalhes"];
+    }
+    if(![report isKindOfClass:[NSString class]] || report.length==0)
+      report=@"ASCENSIONRECOMP · RELATÓRIO AO VIVO\nSnapshot sem conteúdo; métricas não retornadas.";
+    if(generation!=self.ppuLiveReportGeneration || self.ppuLiveReportView!=details){
+      self.ppuLiveReportRefreshInFlight=NO;
+      if(self.ppuLiveReportView)[self refreshAdvancedPpuReport:nil];
+      return;
+    }
+    details.text=report;
+    self.ppuReport=report;
+    self.ppuLiveReportRefreshInFlight=NO;
+    if(!self.shaderBusy){
+      [self.ppuLiveRefreshTimer invalidate];
+      self.ppuLiveRefreshTimer=nil;
+    }
 }
 - (void)openAdvancedPpuReport:(UIButton *)sender {
     (void)sender;
