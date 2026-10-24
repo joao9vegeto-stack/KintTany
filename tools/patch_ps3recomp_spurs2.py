@@ -686,7 +686,10 @@ u32 spurs_poll_select(u32 ea, u32 current, u32 spu)
         const u32 ready = vm_read8(ea + wkl_ready_off(wid));
         const int signalled = wkl_signalled(ea, wid);
         if (wid == current) {
-            if (signalled || ready >= si->active[wid]) return current;
+            /* An idle workload is NOT runnable just because both
+             * readyCount and activeCount are zero. Otherwise this SPU
+             * loops on an idle WID and starves ready WIDs 16..31. */
+            if (signalled || (ready && ready >= si->active[wid])) return current;
         } else if (selected == 0x20u && (signalled || ready > si->active[wid])) {
             selected = wid;
         }
