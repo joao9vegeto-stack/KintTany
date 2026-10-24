@@ -58,7 +58,7 @@ static void crash_handler(int sig, siginfo_t *info, void *context) {
         const uintptr_t code=(uintptr_t)(info ? info->si_code : 0);
         uintptr_t pc=0, lr=0, sp=0, x0=0, x1=0, x2=0, x3=0;
 #if defined(__APPLE__) && defined(__aarch64__)
-        const ucontext_t ctx=(ucontext_t)context;
+        const ucontext_t *ctx=(const ucontext_t *)context;
         if (ctx && ctx->uc_mcontext) {
             pc=(uintptr_t)ctx->uc_mcontext->__ss.__pc;
             lr=(uintptr_t)ctx->uc_mcontext->__ss.__lr;
