@@ -177,7 +177,32 @@ private struct XOWUEGameSurfaceScreen: View {
             VStack(spacing: 0) {
                 HStack {
                     Button {
+                        // The game uses UIKit's explicit landscape hosting
+                        // controller. Setting @Published alone may remove its
+                        // representable before updateUIViewController dismisses.
+                        XOWUEDiagnostics.log("navigation.back tapped")
+                        touchController.releaseAll()
                         library.gameSurfacePresented = false
+                        let windows = UIApplication.shared.connectedScenes
+                            .compactMap { $0 as? UIWindowScene }
+                            .flatMap(\.windows)
+                        var dismissed = false
+                        for window in windows where !dismissed {
+                            var controller = window.rootViewController
+                            while let presented = controller?.presentedViewController {
+                                if let game = presented as? XOWUELandscapeHostingController {
+                                    game.dismiss(animated: false)
+                                    dismissed = true
+                                    XOWUEDiagnostics.log("navigation.back dismissed UIKit landscape host")
+                                    break
+                                }
+                                controller = presented
+                            }
+                        }
+                        if !dismissed {
+                            XOWUEDiagnostics.log("navigation.back fallback: no presented landscape host")
+                        }
+                        XOWUEOrientationDelegate.effectiveMask = .portrait
                     } label: {
                         Label("BIBLIOTECA", systemImage: "chevron.left")
                             .font(.system(size: 11, weight: .heavy, design: .rounded))

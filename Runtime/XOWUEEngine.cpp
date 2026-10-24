@@ -4499,8 +4499,16 @@ void xowue_NtClose(PPCContext &context) {
 static bool getGuestObjectPath(uint8_t *base, uint32_t attributes,
                                std::string &path) {
     if (!base || !validGuestRange(attributes, 12u)) return false;
-    const uint32_t rootHandle = PPC_LOAD_U32(attributes + 4u);
-    const uint32_t nameDescriptor = PPC_LOAD_U32(attributes + 8u);
+    // Xbox 360 X_OBJECT_ATTRIBUTES (12 bytes) is NOT Win32 OBJECT_ATTRIBUTES:
+    // 0x00 root_directory, 0x04 name_ptr (X_ANSI_STRING*), 0x08 attributes.
+    // In Wolverine: root=FFFFFFFD (ObDosDevices), name=guest stack,
+    // flags=0x40. The old code read flags as name -> NtCreateFile always failed.
+    const uint32_t rootHandle = PPC_LOAD_U32(attributes);
+    const uint32_t nameDescriptor = PPC_LOAD_U32(attributes + 4u);
+    const uint32_t objectFlags = PPC_LOAD_U32(attributes + 8u);
+    // Preserve all attribute flag bits; Xbox object manager defines the
+    // contract. Do not reject future flags merely for being unfamiliar.
+    (void)objectFlags;
     // Xbox X_OBJECT_ATTRIBUTES permits a null ObjectName when reopening the
     // object designated by an existing root directory handle.
     // A root handle names an Xbox device object, while GuestFile::path
@@ -4554,16 +4562,16 @@ void xowue_NtCreateFile(PPCContext &context, uint8_t *base) {
         context.r3.u32 = kNtStatusInvalidParameter;
         writeGuestIoStatus(base, ioStatusAddress, context.r3.u32, 0u);
         const bool attrsValid=base&&validGuestRange(objectAttributes,12u);
-        const uint32_t root=attrsValid?PPC_LOAD_U32(objectAttributes+4u):0u;
-        const uint32_t name=attrsValid?PPC_LOAD_U32(objectAttributes+8u):0u;
+        const uint32_t root=attrsValid?PPC_LOAD_U32(objectAttributes):0u;
+        const uint32_t name=attrsValid?PPC_LOAD_U32(objectAttributes+4u):0u;
+        const uint32_t flags=attrsValid?PPC_LOAD_U32(objectAttributes+8u):0u;
         const bool nameValid=attrsValid && name && validGuestRange(name,8u);
         const uint16_t len=nameValid?loadGuestBe16(base,name):0u;
         const uint32_t buf=nameValid?PPC_LOAD_U32(name+4u):0u;
-        const uint16_t attrLen=attrsValid?static_cast<uint16_t>(PPC_LOAD_U32(objectAttributes)&0xFFFFu):0u;
         char details[350];
         std::snprintf(details,sizeof(details),
-           "NtCreateFile rejected attrs out=%08X attrs=%08X attr_len=%u root=%08X name=%08X name_len=%u name_buf=%08X io=%08X access=%08X disposition=%08X",
-           handleOutAddress,objectAttributes,attrLen,root,name,len,buf,
+           "NtCreateFile rejected Xbox X_OBJECT_ATTRIBUTES out=%08X attrs=%08X root=%08X name=%08X flags=%08X name_len=%u name_buf=%08X io=%08X access=%08X disposition=%08X",
+           handleOutAddress,objectAttributes,root,name,flags,len,buf,
            ioStatusAddress,desiredAccess,disposition);
         recordRuntimeTrace(details);
         return;
@@ -6564,12 +6572,17 @@ void xowue_NtFreeVirtualMemory(PPCContext &context, uint8_t *base) {
         return;
     }
 
+    // MEM_RELEASE size=0 is an exact reservation-base operation. Using an
+    // inclusive range-end search selected the PREVIOUS reservation when the
+    // requested address equaled its end (seen 144 times in Build 33).
     const auto allocation = std::find_if(
         g_virtualAllocations.begin(), g_virtualAllocations.end(),
-        [address, requestedSize](const auto &item) {
-            const uint64_t rangeEnd = static_cast<uint64_t>(address) + requestedSize;
-            const uint64_t reservationEnd = static_cast<uint64_t>(item.address) + item.size;
-            return address >= item.address && rangeEnd <= reservationEnd;
+        [address, requestedSize, freeType](const auto &item) {
+            if (freeType == 0x00008000u) return address == item.address;
+            const uint64_t rangeEnd = uint64_t(address) + requestedSize;
+            const uint64_t reservationEnd = uint64_t(item.address) + item.size;
+            return requestedSize != 0u && address >= item.address &&
+                   uint64_t(address) < reservationEnd && rangeEnd <= reservationEnd;
         });
     if (allocation == g_virtualAllocations.end()) {
         failWith(kNtStatusUnsuccessful);

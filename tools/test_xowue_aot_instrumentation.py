@@ -55,7 +55,7 @@ print("PASS: legacy PPC function-table lookup uses guarded AOT resolver")
 
 # Build 31: evidence-first null AOT callsite, no interpreter or invented target.
 assert "callsite_bytes=%s%02X%02X%02X%02X" in Path("Runtime/XOWUEEngine.cpp").read_text()
-assert "NtCreateFile rejected attrs out=%08X" in Path("Runtime/XOWUEEngine.cpp").read_text()
+assert "NtCreateFile rejected Xbox X_OBJECT_ATTRIBUTES" in Path("Runtime/XOWUEEngine.cpp").read_text()
 assert "release must start at reservation base" in Path("Runtime/XOWUEEngine.cpp").read_text()
 print("PASS: AOT invalid target records original bytes and arguments without fallback")
 
@@ -89,3 +89,23 @@ first_virt = 0x40000000
 assert first_phys + 0x1000 <= 0x20000000
 assert first_virt + 0x100000 <= 0x70000000
 print("PASS: physical heap bookkeeping cannot corrupt first 1MiB Xbox virtual reservation")
+
+# Build 34: Xbox object attributes must use root/name/flags at offsets 0/4/8
+# and a zero-length MEM_RELEASE must search exact reservation base.
+assert "const uint32_t rootHandle = PPC_LOAD_U32(attributes);" in engine
+assert "const uint32_t nameDescriptor = PPC_LOAD_U32(attributes + 4u);" in engine
+assert "const uint32_t objectFlags = PPC_LOAD_U32(attributes + 8u);" in engine
+assert "[address, requestedSize, freeType](const auto &item)" in engine
+assert "if (freeType == 0x00008000u) return address == item.address;" in engine
+assert "uint64_t(address) < reservationEnd" in engine
+assert "NtCreateFile rejected Xbox X_OBJECT_ATTRIBUTES" in engine
+print("PASS: Xbox OBJECT_ATTRIBUTES ABI, NtFree MEM_RELEASE exact address / half-open intervals")
+
+# Boundary regression: two contiguous reservations; release the second base,
+# never choose the previous reservation whose exclusive end equals address.
+regions=[(0x40120000,0x10000),(0x40130000,0x10000)]
+requested=0x40130000
+exact=[(start,size) for start,size in regions if requested==start]
+half_open=[(start,size) for start,size in regions if start<=requested<start+size]
+assert exact==half_open==[(0x40130000,0x10000)]
+print("PASS: contiguous reservation release selects correct exact 64-KiB base")

@@ -123,3 +123,9 @@ assert "override var supportedInterfaceOrientations: UIInterfaceOrientationMask 
 assert "XOWUELandscapePresenter(library: library)" in ui
 assert ".fullScreenCover(isPresented: $library.gameSurfacePresented)" not in ui
 print("PASS: native UIKit landscape game host, portrait library preserved")
+
+# Ensure back dismisses its UIKit host even when representable is removed.
+assert 'navigation.back tapped' in ui
+assert 'game.dismiss(animated: false)' in ui
+assert 'navigation.back dismissed UIKit landscape host' in ui
+print("PASS: landscape-host dismiss and library back navigation")
