@@ -91,7 +91,7 @@ jobs:
           import pathlib, re, os
           root = pathlib.Path("generated/ppc")
           out = pathlib.Path(os.environ["RUNNER_TEMP"]) / "xowue-aot-owners"
-          targets = {"sub_82B47360", "sub_82D2D270", "sub_82B3DFD8"}
+          targets = {"sub_82B47360", "sub_82D2D0A8"}
           pattern = re.compile(r"PPC_FUNC_IMPL\(__imp__(sub_[0-9A-Fa-f]+)\) \{\n")
           seen = set()
           for file in sorted(root.glob("ppc_recomp.*.cpp")):

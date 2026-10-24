@@ -24,15 +24,18 @@ import re
 # original instructions, not just a guessed source-code offset. The renderer
 # is separate; these are real CPU AOT continuations.
 VALIDATED = {
+    # These addresses are XEX virtual addresses, NOT PE raw file offsets.
+    # .text raw pointer is 0x296E00, while RVA is 0x2A0000:
+    # naive PE disassembly appears shifted by exactly 0x9200.
     0x82B47458: (
         "sub_82B47360",
-        ("addi r8,r8,-1", "stw r11,14936(r31)", "stw r26,14896(r31)",
-         "addi r9,r30,-4", "stw r30,14904(r31)"),
+        ("cmplwi cr6,r31,10", "li r11,2", "beq cr6,0x82b47468",
+         "mr r11,r31", "lis r10,-32220"),
     ),
     0x82D2D30C: (
-        "sub_82D2D270",
-        ("bl 0x82cdc8c0", "mr r29,r3", "b 0x82d2d31c",
-         "li r29,0", "cmplwi cr6,r29,0"),
+        "sub_82D2D0A8",
+        ("lwz r3,48(r31)", "lis r11,-32253", "lis r10,-32253",
+         "addi r28,r11,27692", "lis r9,-32253", "addi r29,r10,27716"),
     ),
 }
 
