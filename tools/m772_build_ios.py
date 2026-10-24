@@ -460,6 +460,13 @@ def main():
     if missing:
         raise SystemExit(f"M7.83 PS3Recomp SPURS2/LFQueue patch is missing: {missing}")
     policy_runtime=(upstream/"runtime/spu/spurs_policy.c").read_text(errors="replace")
+    gap_runtime=(upstream/"runtime/spu/spu_channels.c").read_text(errors="replace")
+    if any(s not in policy_runtime for s in ("ASCENSION_M812_SPURS2_POLICY_32_V1", "#define SPURS_PM_MAX_WKL 32", "slots[SPURS_PM_MAX_WKL][6]", "spu_ascension_copy_upper_policy")):
+        raise SystemExit("M8.12 32-WID native policy contexts missing")
+    if any(s not in gap_runtime for s in ("ASCENSION_M812_NATIVE_SPU_GAP_V1", "spu_ascension_copy_native_gap", "ASCENSION_SPU_NATIVE_ONLY")):
+        raise SystemExit("M8.12 native SPU gap capture missing")
+    if 'setenv("ASCENSION_SPU_NATIVE_ONLY","1",1);' not in launcher_source:
+        raise SystemExit("M8.12 strict native SPU opt-in missing")
     if "spurs_kernel_temp_area_refresh" not in policy_runtime:
         raise SystemExit("M7.86 Ascension WWS policy tempArea refresh is missing")
     channel_runtime=(upstream/"runtime/spu/spu_channels.c").read_text(errors="replace")

@@ -85,6 +85,10 @@ extern void cellSpursCopyAscensionLFQueueMetrics(uint64_t out[6]);
 extern void cellSpursResetAscensionEdgeMetrics(void);
 extern void cellSpursCopyAscensionEdgeMetrics(uint64_t out[5]);
 extern void cellSpursCopyAscensionHighMasks(uint64_t out[8]);
+extern void spu_ascension_reset_upper_policy(void);
+extern void spu_ascension_copy_upper_policy(uint64_t out[10]);
+extern void spu_ascension_reset_native_gap(void);
+extern void spu_ascension_copy_native_gap(uint64_t out[10]);
 extern void spu_workload_copy_ascension_commit_metrics(uint64_t out[2]);
 extern void cellGcmTickVBlank(void);
 extern void cellGcmTickFlip(void);
@@ -1559,6 +1563,7 @@ static BOOL ARGameManifestHasTitleUsrdir(NSDictionary *manifest){
   unsetenv("SPU_INTERP_UNLIFTED");
   /* The interpreter rejoin path is intentionally disabled for AOT-only runs. */
   unsetenv("SPU_REJOIN_CALL");
+  setenv("ASCENSION_SPU_NATIVE_ONLY","1",1);
   /* Match the PC port's effective park-resync window. A 2 s resync can skip
    * guest commands and fences while Ascension's SPU jobs are still patching
    * the FIFO; keep the parked get position until the guest changes it. */
@@ -1604,6 +1609,8 @@ static BOOL ARGameManifestHasTitleUsrdir(NSDictionary *manifest){
   spu_workload_reset_ascension_commit_metrics();
   cellSpursResetAscensionLFQueueMetrics();
   cellSpursResetAscensionEdgeMetrics();
+  spu_ascension_reset_upper_policy();
+  spu_ascension_reset_native_gap();
   spu_workload_reset_ascension_stack_metrics();
   cellSpursResetAscensionMetrics();
   spu_pic_reset_ascension_metrics();
@@ -1951,6 +1958,8 @@ static BOOL ARGameManifestHasTitleUsrdir(NSDictionary *manifest){
     uint64_t lfqueue[6]={0}; cellSpursCopyAscensionLFQueueMetrics(lfqueue);
     uint64_t edgeQueue[5]={0}; cellSpursCopyAscensionEdgeMetrics(edgeQueue);
     uint64_t highWids[8]={0}; cellSpursCopyAscensionHighMasks(highWids);
+    uint64_t pmUpper[10]={0}; spu_ascension_copy_upper_policy(pmUpper);
+    uint64_t gap[10]={0}; spu_ascension_copy_native_gap(gap);
     unsigned long long stack[17]={0}; spu_workload_copy_ascension_stack_metrics(stack);
     unsigned long long gcm[3]={0}; cellGcmCopyAscensionParkHoldMetrics(gcm);
     uint64_t pic[6]={0}; spu_pic_copy_ascension_metrics(pic);
@@ -2000,20 +2009,25 @@ static BOOL ARGameManifestHasTitleUsrdir(NSDictionary *manifest){
         (unsigned long long)live[9],(unsigned long long)live[10],
         (unsigned long long)live[11],(unsigned long long)live[12]];
     [out appendFormat:@"Último caminho guest=%@\n",guestPath];
-    [out appendFormat:@"\nSPURS: instâncias=%llu · workloads=%llu · PMs encontrados/faltantes=%llu/%llu · admissões WWS=%llu · último WID=%llu · GPU-report wakes=%llu\n",
+    [out appendFormat:@"\nSPURS: instâncias=%llu · workloads=%llu · PMs agendados=%llu · WIDs16–31 agendados=%llu · PMs resolvidos/não resolvidos=%llu/%llu · último WID=%llu · GPU-report wakes=%llu\n",
         (unsigned long long)spurs[0],(unsigned long long)spurs[1],
         (unsigned long long)spurs[3],(unsigned long long)spurs[4],
-        (unsigned long long)spurs[5],
+        (unsigned long long)spurs[5],(unsigned long long)spurs[6],
         (unsigned long long)(spurs[7]==UINT64_MAX?0:spurs[7]),
         (unsigned long long)spurs[8]];
-    [out appendFormat:@"SPURS workloads nos IDs 16–31=%llu · admissões IDs 16–31=%llu · instâncias acordadas=%llu\n",
-        (unsigned long long)spurs[2],(unsigned long long)spurs[6],
-        (unsigned long long)spurs[9]];
+    [out appendFormat:@"SPURS: workloads WID16–31=%llu · instâncias acordadas=%llu (agendamento não comprova execução)\n",
+        (unsigned long long)spurs[2],(unsigned long long)spurs[9]];
     [out appendFormat:@"SPURS2 WID16–31 máscaras hex: registrados=%04llX · habilitados=%04llX · executáveis=%04llX · prioridades=%04llX · prontos=%04llX · sinais=%04llX · ativos=%04llX · despachos=%llu\n",
         (unsigned long long)highWids[0],(unsigned long long)highWids[1],
         (unsigned long long)highWids[2],(unsigned long long)highWids[3],
         (unsigned long long)highWids[4],(unsigned long long)highWids[5],
         (unsigned long long)highWids[6],(unsigned long long)highWids[7]];
+    [out appendFormat:@"PM WID16–31 EXECUÇÃO NATIVA: chamados=%llu · slots adquiridos=%llu · retornos=%llu · falhas=%llu · rejeições iniciais=%llu · último wid=%llu img=%llu lane=%llu · LS PC final=0x%05llX · rc=0x%llX\n",
+        (unsigned long long)pmUpper[0],(unsigned long long)pmUpper[1],
+        (unsigned long long)pmUpper[2],(unsigned long long)pmUpper[3],
+        (unsigned long long)pmUpper[4],(unsigned long long)pmUpper[5],
+        (unsigned long long)pmUpper[7],(unsigned long long)pmUpper[9],
+        (unsigned long long)pmUpper[6],(unsigned long long)pmUpper[8]];
     [out appendFormat:@"WWS job-chain: pedidos=%llu · com lift=%llu · sem lift=%llu · retornos=%llu · ativos=%llu · bytes=%llu · EA=0x%08llX\n",
         (unsigned long long)jobs[0],(unsigned long long)jobs[1],
         (unsigned long long)jobs[2],(unsigned long long)jobs[3],
@@ -2032,7 +2046,7 @@ static BOOL ARGameManifestHasTitleUsrdir(NSDictionary *manifest){
         (unsigned long long)edgeQueue[0],(unsigned long long)edgeQueue[1],
         (unsigned long long)edgeQueue[2],(unsigned long long)edgeQueue[3],
         (unsigned long long)edgeQueue[4]];
-    [out appendString:@"Execução SPU: AOT exclusivo; interpretação de código não recompilado desabilitada.\n"];
+    [out appendString:@"Execução SPU: nativo estrito; intérprete e microstep SPU desativados.\n"];
     [out appendFormat:@"SPU PUTLLC: linhas commitadas=%llu · tasksets acordados=%llu (candidatos/válidos acima)\n",
         (unsigned long long)tasksetCommits[0],(unsigned long long)tasksetCommits[1]];
     [out appendFormat:@"Pilha SPU (MiB): tentativas=%llu · 256=%llu/%llu/%llu · 64=%llu/%llu/%llu · 32=%llu/%llu/%llu · 16=%llu/%llu/%llu · fallback=%llu/%llu · pthread rc=%llu · attr rc=%llu\n",
@@ -2041,6 +2055,12 @@ static BOOL ARGameManifestHasTitleUsrdir(NSDictionary *manifest){
         stack[13],stack[14],stack[15],stack[16]];
     [out appendFormat:@"GCM park hold: pausas=%llu · retomadas=%llu · timeouts=%llu\n",
         gcm[0],gcm[1],gcm[2]];
+    [out appendFormat:@"SPU AOT sem lift: alvos=%llu · código não-zero=%llu · sem código=%llu · LS PC=0x%05llX · opcode=0x%08llX · image=%llu · ovl=%llu · task=%llu · LR=0x%05llX · PM=%llu\n",
+        (unsigned long long)gap[0],(unsigned long long)gap[1],
+        (unsigned long long)gap[2],(unsigned long long)gap[3],
+        (unsigned long long)gap[4],(unsigned long long)gap[5],
+        (unsigned long long)gap[6],(unsigned long long)gap[8],
+        (unsigned long long)gap[7],(unsigned long long)gap[9]];
     [out appendFormat:@"SPU PIC: lookups=%llu · hits nativos=%llu · misses=%llu · stubs 0x3FEC0 filtrados=%llu · fragmentos úteis gravados=%llu · entradas registradas=%llu\n",
         (unsigned long long)pic[0],(unsigned long long)pic[1],
         (unsigned long long)pic[2],(unsigned long long)pic[3],
