@@ -22,6 +22,14 @@ import re
 VALIDATED = {
     0x82B47458: "addi r8,r8,-1",
 }
+# Following PPC instructions from the user's exact XEX, not guessed offsets.
+CONTEXT_82B47458 = (
+    "addi r8,r8,-1",
+    "stw r11,14936(r31)",
+    "stw r26,14896(r31)",
+    "addi r9,r30,-4",
+    "stw r30,14904(r31)",
+)
 FUNC_RE = re.compile(r"PPC_FUNC_IMPL\(__imp__(sub_[0-9A-Fa-f]+)\) \{\n")
 ASM_LINE = re.compile(r"(?m)^\t// (.+?)\s*$")
 
@@ -43,16 +51,18 @@ def recover_entry(ppc_dir: Path, target: int, expected_opcode: str):
         for symbol, base, start, end, body in parse_functions(text):
             if base > target:
                 continue
-            index = (target - base) // 4
             asm = list(ASM_LINE.finditer(body))
-            if index >= len(asm):
-                continue
-            instruction = asm[index].group(1).strip()
-            if instruction.replace(" ", "") != expected_opcode.replace(" ", ""):
-                continue
             if (target - base) % 4:
                 continue
-            found.append((path, text, symbol, start, end, body, asm[index]))
+            # XenonRecomp may insert extra codegen comments between original
+            # instruction comments. Match the complete original PPC context
+            # rather than assuming every comment advances the guest PC.
+            for index in range(len(asm) - len(CONTEXT_82B47458) + 1):
+                window = tuple(match.group(1).strip().replace(" ", "")
+                               for match in asm[index:index + len(CONTEXT_82B47458)])
+                if window != tuple(op.replace(" ", "") for op in CONTEXT_82B47458):
+                    continue
+                found.append((path, text, symbol, start, end, body, asm[index], index))
     if len(found) != 1:
         print("AOT_MISSING_PC_DIAGNOSTIC: source candidates")
         nearest = []
@@ -69,7 +79,7 @@ def recover_entry(ppc_dir: Path, target: int, expected_opcode: str):
         for base, symbol, size, probable, matches, path in sorted(nearest, reverse=True)[:24]:
             print(f"AOT_CANDIDATE {path} {symbol} base=0x{base:08X} comments={size} indexInstruction={probable} expectedPositions={matches}")
         raise ValueError(f"0x{target:08X}: expected exactly one verified native C++ owner, found {len(found)}")
-    path, text, symbol, start, end, body, hit = found[0]
+    path, text, symbol, start, end, body, hit, index = found[0]
     marker = FUNC_RE.match(body)
     if not marker:
         raise ValueError("AOT generated function marker changed")
