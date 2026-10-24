@@ -277,11 +277,11 @@ def main():
                   "interpreter": False, "jit": False}
         # Scan *every* original native AOT owner once. A function's last
         # dispatched entry is not necessarily the owner of an indirect target.
-        # Build 25 passed 0x831A9EBC but the next PC was 0x830F0400.
+        # Builds 25/26 passed 0x831A9EBC and 0x830F0400; Build 26 next stopped at 0x831AA0B0.
         # In addition to recovering both demonstrated sites, proactively
         # compile the verified neighboring native owners in both execution
         # regions, instead of a one-PC-per-build patch.
-        targets = (0x830F0400, 0x831A9EBC)
+        targets = (0x830F0400, 0x831A9EBC, 0x831AA0B0)
         registered = set(int(pc, 16) for pc in
                          re.findall(r"\{\s*0x([0-9A-Fa-f]+)\s*,",
                                     (args.ppc_dir / "ppc_func_mapping.cpp").read_text("utf-8")))
@@ -321,7 +321,7 @@ def main():
         # indirect PPC call sites. The 4K continuation budget limits binary
         # bloat and branch targets are checked against real AOT instruction
         # offsets, never generated as NOPs or synthetic return functions.
-        budget = 4096
+        budget = 8192
         count = sum(max(0, owners[x][1] - 1) for x in selected)
         if count > budget:
             raise ValueError(f"mandatory native owner coverage exceeds {budget} entries: {count}")
@@ -333,7 +333,7 @@ def main():
                any(start <= t + 0x2000 and start+4*meta[1] >= t - 0x2000 for t in targets)
         ))
         for _,start,meta in candidate_owners:
-            if len(selected) >= 28 or count + meta[1] - 1 > budget:
+            if len(selected) >= 48 or count + meta[1] - 1 > budget:
                 continue
             # The first internal instruction must correspond to a real opcode
             # in the translated function. Validation is performed again by

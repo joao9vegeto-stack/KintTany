@@ -103,7 +103,7 @@ private struct XOWUEGameSurfaceScreen: View {
         library.phase == .failed || library.phase == .stopped
     }
 
-    private func requestOrientation(_ orientations: UIInterfaceOrientationMask) {
+    private func requestOrientation(_ orientations: UIInterfaceOrientationMask, attempt: Int = 0) {
         XOWUEOrientationDelegate.effectiveMask = orientations
         guard let scene = UIApplication.shared.connectedScenes
             .compactMap({ $0 as? UIWindowScene }).first else { return }
@@ -114,7 +114,13 @@ private struct XOWUEGameSurfaceScreen: View {
         }
         XOWUEDiagnostics.log("orientation.request mask=\(orientations.rawValue) effectiveMask=\(XOWUEOrientationDelegate.effectiveMask.rawValue)")
         scene.requestGeometryUpdate(.iOS(interfaceOrientations: orientations)) { error in
-            XOWUEDiagnostics.log("orientation.request.failed mask=\(orientations.rawValue) error=\(error.localizedDescription)")
+            XOWUEDiagnostics.log("orientation.request.failed mask=\(orientations.rawValue) attempt=\(attempt) error=\(error.localizedDescription)")
+            if attempt < 3 {
+                DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) {
+                    guard orientations != .landscapeRight || library.gameSurfacePresented else { return }
+                    self.requestOrientation(orientations, attempt: attempt + 1)
+                }
+            }
         }
     }
 

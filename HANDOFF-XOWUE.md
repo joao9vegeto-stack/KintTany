@@ -75,3 +75,10 @@ Consulte [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md) antes de redistribuir 
 - Build 25 graphics: 26 guest queued draws; 24 native Vulkan draws submitted; `XENOS_COMPOSITED_GPU_READBACK nonblack=0 samples=8193` (sparse), `VdSwap` decoded two frames. Now logs full-frame pixel occupancy and independently scans guest-swap RGBA; do not report GPU success until nonblack pixel evidence.
 - All code remains AOT PPC translated to ARM64 + Xenos/Vulkan/Metal; no PPC interpretive execution, JIT or guessed stub.
 - CI compile/link/IPA is necessary but not proof of visible gameplay. Capture guest decoded frame counts, host full pixel color metrics and landscape orientation in subsequent phone diagnostics.
+
+## Build 27 — diagnóstico da Build 26 recebido 24/10/2026
+- PPC falhou em 0x831AA0B0 (LR 0x831A9F50, lastAotEntry 0x831A9F48); incluir owner AOT verificado e cobertura preventiva regional, sem interpretador, JIT ou retorno simulado.
+- 26 draws Xenos / 24 draws submetidos; GPU readback 0/3.162.132 pixels coloridos. 2 swaps 1280x720; o log do guest RGBA anterior à abertura do logger podia ser perdido. Salvar estatística e registrar por draw.
+- Orientação: o primeiro request landscape falhou, mas a swapchain redimensionou depois a 2622x1222; retry UIKit limitado e preservação da tela retrato na biblioteca.
+- GPU ainda não equivale a renderer Xenos completo (EDRAM, resolve, depth, blending). Falha de primeiro frame permanece até teste real no iPhone; CI prova somente tradução/compilação/link/IPA.
+- Política: somente branch XOWUE; um commit, uma execução do workflow; assets do jogo não incluídos.

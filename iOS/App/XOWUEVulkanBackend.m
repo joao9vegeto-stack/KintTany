@@ -32,6 +32,8 @@ static uint32_t g_xowue_guest_frame_width = 0;
 static uint32_t g_xowue_guest_frame_height = 0;
 static uint32_t g_xowue_guest_frame_address = 0;
 static uint32_t g_xowue_guest_frame_format = 0;
+static _Atomic uint64_t g_xowue_guest_nonblack = 0;
+static _Atomic uint64_t g_xowue_guest_checksum = 0;
 
 void xowue_vulkan_backend_guest_swap(uint32_t frontbuffer, uint32_t width, uint32_t height)
 {
@@ -65,6 +67,8 @@ void xowue_vulkan_backend_guest_frame_rgba(uint32_t frontbuffer,
       digest = ((digest ^ c[0]) * 1099511628211ull)
                ^ ((uint64_t)c[1] << 8) ^ ((uint64_t)c[2] << 16);
    }
+   atomic_store_explicit(&g_xowue_guest_nonblack,(uint64_t)nonblack,memory_order_relaxed);
+   atomic_store_explicit(&g_xowue_guest_checksum,digest,memory_order_relaxed);
    KKLog(@"XENOS_GUEST_SWAP_RGBA nonblack=%zu total=%zu checksum=%016llX address=%08X format=%u",
          nonblack,pixelCount,(unsigned long long)digest,frontbuffer,format);
    pthread_mutex_lock(&g_xowue_guest_frame_mutex);
@@ -91,6 +95,8 @@ void xowue_vulkan_backend_guest_frame_reset(void)
    g_xowue_guest_frame_address = 0;
    g_xowue_guest_frame_format = 0;
    atomic_store_explicit(&g_xowue_guest_frame_count, 0, memory_order_relaxed);
+   atomic_store_explicit(&g_xowue_guest_nonblack,0,memory_order_relaxed);
+   atomic_store_explicit(&g_xowue_guest_checksum,0,memory_order_relaxed);
    pthread_mutex_unlock(&g_xowue_guest_frame_mutex);
    free(previous);
 }
@@ -1311,6 +1317,17 @@ KKRenderFrame(KKVulkanState *state, CAMetalLayer *layer)
 
    result = state->QueueWaitIdle(state->queue);
    if (result == VK_SUCCESS && capturedComposed && g_xd.composited_frame.mapped) {
+      VkResult invalidateResult=VK_SUCCESS;
+      if (!(g_xd.composited_frame.flags&VK_MEMORY_PROPERTY_HOST_COHERENT_BIT)) {
+         VkMappedMemoryRange mapped={.sType=VK_STRUCTURE_TYPE_MAPPED_MEMORY_RANGE,
+            .memory=g_xd.composited_frame.memory,.offset=0,.size=VK_WHOLE_SIZE};
+         PFN_vkInvalidateMappedMemoryRanges invalidateMapped =
+            (PFN_vkInvalidateMappedMemoryRanges)state->GetDeviceProcAddr(
+               state->device,"vkInvalidateMappedMemoryRanges");
+         invalidateResult = invalidateMapped ? invalidateMapped(state->device,1,&mapped)
+                                             : VK_ERROR_EXTENSION_NOT_PRESENT;
+      }
+      if (invalidateResult == VK_SUCCESS) {
       // Actual GPU readback after queue completion, not a draw-call counter.
       // BGRA/RGBA swapchain formats both have first three color bytes.
       const uint8_t *pixels=(const uint8_t*)g_xd.composited_frame.mapped;
@@ -1343,6 +1360,9 @@ KKRenderFrame(KKVulkanState *state, CAMetalLayer *layer)
             nonblack,samples,(unsigned long long)checksum,
             actualColored,total,minX==UINT32_MAX?0:minX,
             minY==UINT32_MAX?0:minY,maxX,maxY);
+      } else {
+         KKLog(@"XENOS_COMPOSITED_GPU_READBACK_INVALIDATE_FAILED code=%d",invalidateResult);
+      }
    }
    if (result == VK_SUCCESS) XDCollectPipelines(state);
    if (result != VK_SUCCESS) {
@@ -1477,6 +1497,10 @@ KKRenderFrame(KKVulkanState *state, CAMetalLayer *layer)
    NSString *logPath = [[documents firstObject] stringByAppendingPathComponent:logName];
    if (!g_log_file && logPath)
       g_log_file = fopen(logPath.fileSystemRepresentation, "a");
+   KKLog(@"XENOS_GUEST_SWAP_PRESTART decoded=%llu nonblack=%llu checksum=%016llX",
+      (unsigned long long)atomic_load_explicit(&g_xowue_guest_frame_count,memory_order_relaxed),
+      (unsigned long long)atomic_load_explicit(&g_xowue_guest_nonblack,memory_order_relaxed),
+      (unsigned long long)atomic_load_explicit(&g_xowue_guest_checksum,memory_order_relaxed));
 
    CAMetalLayer *metalLayer = (CAMetalLayer *)self.layer;
    metalLayer.device = MTLCreateSystemDefaultDevice();

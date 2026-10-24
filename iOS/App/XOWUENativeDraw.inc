@@ -357,6 +357,12 @@ static uint32_t XDProcessDraws(KKVulkanState *state, uint32_t image_index,
    for (size_t i=0;i<total;++i) {
       const XOWUEGuestDraw *draw=&draws[i];
       const uint32_t primitive=draw->initiator&0x3Fu;
+      if (i < 32u)
+         KKLog(@"XENOS_DRAW_AUDIT slot=%zu initiator=%08X primitive=%u index_count=%u index_addr=%08X index_info=%08X fetch_mask=%08X texture2d=%08X vs=%016llX ps=%016llX vte=%08X",
+               i,draw->initiator,primitive,draw->index_count,draw->index_address,
+               draw->index_info,draw->vertex_fetch_mask,draw->texture_2d_mask,
+               (unsigned long long)draw->vertex_hash,(unsigned long long)draw->pixel_hash,
+               draw->pa_cl_vte_cntl);
       VkPrimitiveTopology topology=XDTopology(primitive);
       if (topology==VK_PRIMITIVE_TOPOLOGY_MAX_ENUM || !draw->index_count ||
           draw->index_count>65535u) {

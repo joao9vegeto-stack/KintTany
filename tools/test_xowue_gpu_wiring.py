@@ -53,3 +53,10 @@ assert "full_nonblack=%zu full_pixels=%zu" in vulkan
 assert "XENOS_GUEST_SWAP_RGBA" in vulkan
 assert "XOWUEOrientationDelegate" in Path("iOS/App/XOWUEApp.swift").read_text()
 print("PASS: UIKit effective orientation, exhaustive GPU readback and guest-swap pixel audit")
+
+# Build 26: observe the next PPC site and preserve per-draw and prestart swap evidence.
+assert '0x831AA0B0' in Path('tools/lower_xowue_owner_interior_entries.py').read_text()
+assert 'XENOS_DRAW_AUDIT' in renderer
+assert 'XENOS_GUEST_SWAP_PRESTART' in vulkan
+assert 'InvalidateMappedMemoryRanges' in vulkan
+print('PASS: B26 AOT target, per-draw audit, guest pixels across logger startup, coherent readback')
