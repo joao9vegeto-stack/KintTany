@@ -83,6 +83,13 @@ jobs:
             --ppc-dir "$GITHUB_WORKSPACE/generated/ppc" \
             --switch-table "$GITHUB_WORKSPACE/generated/config/XOWUE_switch_tables.toml"
 
+      - name: Reconstruct validated internal AOT branch entries
+        run: |
+          set -euo pipefail
+          python3 tools/lower_xowue_native_continuations.py --ppc-dir "$GITHUB_WORKSPACE/generated/ppc"
+          grep -Fq 'PPC_EXTERN_FUNC(sub_82B47458);' generated/ppc/ppc_recomp_shared.h
+          grep -Fq '{ 0x82B47458, sub_82B47458 },' generated/ppc/ppc_func_mapping.cpp
+
       - name: Test PPC dispatch guard and AOT entry instrumentation
         run: |
           set -euo pipefail
