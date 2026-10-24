@@ -54,6 +54,20 @@ def recover_entry(ppc_dir: Path, target: int, expected_opcode: str):
                 continue
             found.append((path, text, symbol, start, end, body, asm[index]))
     if len(found) != 1:
+        print("AOT_MISSING_PC_DIAGNOSTIC: source candidates")
+        nearest = []
+        for path in sorted(ppc_dir.glob("ppc_recomp.*.cpp")):
+            text = path.read_text("utf-8")
+            for symbol, base, start, end, body in parse_functions(text):
+                if base > target or target - base > 0x2000:
+                    continue
+                comments = list(ASM_LINE.finditer(body))
+                offset = (target - base) // 4
+                probable = comments[offset].group(1).strip() if offset < len(comments) else "OUTSIDE_FUNCTION"
+                matching = [i for i, v in enumerate(comments) if expected_opcode.replace(" ", "") in v.group(1).replace(" ", "")]
+                nearest.append((base, symbol, len(comments), probable, matching[:8], path.name))
+        for base, symbol, size, probable, matches, path in sorted(nearest, reverse=True)[:24]:
+            print(f"AOT_CANDIDATE {path} {symbol} base=0x{base:08X} comments={size} indexInstruction={probable} expectedPositions={matches}")
         raise ValueError(f"0x{target:08X}: expected exactly one verified native C++ owner, found {len(found)}")
     path, text, symbol, start, end, body, hit = found[0]
     marker = FUNC_RE.match(body)
