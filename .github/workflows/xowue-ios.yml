@@ -88,6 +88,40 @@ jobs:
           set -euo pipefail
           python3 tools/patch_xowue_computed_switches.py --ppc-dir "$GITHUB_WORKSPACE/generated/ppc"
 
+      - name: Recover globally verified native PPC AOT continuations
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          from pathlib import Path
+          import hashlib, zlib
+          packed = Path("tools/patch_xowue_global_native.py.z").read_bytes()
+          assert hashlib.sha256(packed).hexdigest() == "e068d959ae1b59b14ab46116f5d54b593b057fb074df44386eed946554ec7426"
+          source = zlib.decompress(packed)
+          assert hashlib.sha256(source).hexdigest() == "d4aec36bc6013befb37176c3b110fa65fb0d3a072bc7c28b162f6efee65c7a2a"
+          Path("tools/patch_xowue_global_native.py").write_bytes(source)
+          assert hashlib.sha256(Path("tools/xowue_tables.guest.bin.z").read_bytes()).hexdigest() == "64738d001baa4bf0c6c18b9fdfc1d48fd4aa4fdd593550e214d2307f581f9212"
+          PY
+          python3 -m py_compile tools/patch_xowue_global_native.py
+          python3 tools/patch_xowue_global_native.py \
+            --ppc-dir generated/ppc \
+            --manifest tools/xowue_tables.guest.bin.z \
+            --report artifacts/xowue-global-native-pc.json
+          test -s artifacts/xowue-global-native-pc.json
+
+      - name: Verify portrait-only iOS game host
+        run: |
+          set -euo pipefail
+          grep -Fq 'UIInterfaceOrientationPortrait' iOS/project.yml
+          if grep -Eq 'UIInterfaceOrientationLandscape(Left|Right)' iOS/project.yml; then
+            echo "XOWUE must not declare landscape orientation" >&2
+            exit 1
+          fi
+          grep -Fq 'requestOrientation(.portrait)' iOS/App/XOWUEApp.swift
+          if grep -Fq 'requestOrientation(.landscape)' iOS/App/XOWUEApp.swift; then
+            echo "XOWUE game surface still forces landscape" >&2
+            exit 1
+          fi
+
       - name: Audit native PPC AOT control-flow coverage globally
         run: |
           set -euo pipefail
@@ -452,6 +486,17 @@ jobs:
         with:
           name: XOWUE-PPC-CFG-Audit
           path: artifacts/xowue-ppc-cfg-audit.json
+          if-no-files-found: warn
+          retention-days: 30
+
+      - name: Upload global PPC native recovery evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: XOWUE-Global-AOT-Recovery
+          path: |
+            artifacts/xowue-global-native-pc.json
+            tools/patch_xowue_global_native.py
           if-no-files-found: warn
           retention-days: 30
 

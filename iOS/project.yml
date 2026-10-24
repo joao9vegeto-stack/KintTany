@@ -16,10 +16,11 @@ targets:
         UIFileSharingEnabled: true
         LSSupportsOpeningDocumentsInPlace: true
         UIApplicationSupportsDocumentBrowser: true
+        # Portrait-only game host. The guest's 1280x720 framebuffer is
+        # rotated and aspect-fitted to the portrait Metal swapchain.
+        UIRequiresFullScreen: true
         UISupportedInterfaceOrientations:
           - UIInterfaceOrientationPortrait
-          - UIInterfaceOrientationLandscapeLeft
-          - UIInterfaceOrientationLandscapeRight
         CFBundleDocumentTypes:
           - CFBundleTypeName: Xbox 360 Executable
             CFBundleTypeRole: Viewer

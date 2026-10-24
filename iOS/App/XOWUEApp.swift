@@ -179,7 +179,9 @@ private struct XOWUEGameSurfaceScreen: View {
             requestOrientation(.portrait)
         }
         .onAppear {
-            requestOrientation(.landscape)
+            // Keep game UI, touch controls and CAMetalLayer in portrait. This
+            // is a host presentation choice, not a substitute for Xenos draws.
+            requestOrientation(.portrait)
             DispatchQueue.main.asyncAfter(deadline: .now() + 5) {
                 withAnimation(.easeOut(duration: 0.2)) { self.showBootHint = false }
             }
