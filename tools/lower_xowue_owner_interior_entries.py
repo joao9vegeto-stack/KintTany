@@ -274,34 +274,44 @@ def main():
         tails = materialize_verified_tail_returns(args.ppc_dir)
         report = {"owners": [report], "native_tail_return_coverage": tails,
                   "interpreter": False, "jit": False}
-        if tails["milestone_targets_missing"]:
-            # Forensics on the actual AOT code: do not assume lastAotEntry
-            # identifies the owner of a computed PPC target.
+        if "0x831A9EBC" in tails["milestone_targets_missing"]:
+            # An indirect PPC target can be deep inside a function even if
+            # lastAotEntry was a different owner. Inspect every translated
+            # owner that geometrically contains the exact target instruction.
+            global OWNER, END, KNOWN
             target = 0x831A9EBC
-            matched = 0
+            matches = []
+            nearby = []
             for path in sorted(args.ppc_dir.glob("ppc_recomp.*.cpp")):
                 src = path.read_text("utf-8")
                 for m in FUNCTION.finditer(src):
                     start = int(m.group(1)[4:], 16)
-                    if not (target-0x200 <= start <= target+0x20):
+                    if not (target-0x10000 <= start <= target):
                         continue
-                    stop = src.find("\\n}\\n", m.end())
-                    if stop < 0: continue
+                    stop = src.find("\n}\n", m.end())
+                    if stop < 0:
+                        continue
                     body = src[m.start():stop+3]
                     opcodes = list(OPCODE.finditer(body))
                     index = (target-start)//4
-                    print(f"XOWUE_PC_FORENSICS owner=0x{start:08X} count={len(opcodes)} target_index={index} file={path.name}")
-                    if start <= target and index < len(opcodes):
-                        matched += 1
-                        print("XOWUE_PC_TARGET_OPCODE " + opcodes[index].group(1))
-                    if target-0x80 <= start <= target+0x10:
-                        print("XOWUE_PC_NATIVE_BODY_BEGIN")
-                        for line in body.splitlines()[:85]:
-                            print("XOWUE_PPC_CPP " + line[:230])
-                        print("XOWUE_PC_NATIVE_BODY_END")
+                    if len(nearby) < 350:
+                        nearby.append((start,len(opcodes),index,path.name))
+                    if index < len(opcodes) and (target-start)%4 == 0:
+                        matches.append((start,path.name,index,len(opcodes),opcodes[index].group(1)))
+            for start,count,index,unit in sorted(nearby,reverse=True)[:24]:
+                print(f"XOWUE_NATIVE_OWNER_NEAR_PC base=0x{start:08X} instructions={count} target_index={index} unit={unit}")
+            if len(matches) != 1:
+                raise ValueError(f"ambiguous/missing AOT owner for 0x{target:08X}: {matches[:12]}")
+            base, unit, index, count, opcode = matches[0]
+            print(f"XOWUE_NATIVE_OWNER_FOUND target=0x{target:08X} owner=0x{base:08X} opcode={opcode} count={count} unit={unit}")
+            OWNER, END, KNOWN = base, 0, {target: (opcode,)}
+            recovered = generate(args.ppc_dir)
+            report["owners"].append(recovered)
+            tails["milestone_targets_supported"].append(f"0x{target:X}")
+            tails["milestone_targets_missing"].remove(f"0x{target:X}")
+        if tails["milestone_targets_missing"]:
             raise ValueError("Uncovered known runtime targets: "
-                             + ", ".join(tails["milestone_targets_missing"]) +
-                             f"; owners_that_cover={matched}")
+                             + ", ".join(tails["milestone_targets_missing"]))
     except ValueError as error:
         raise SystemExit(f"REFUSING_UNVERIFIED_GLOBAL_OWNER_CONTINUATION: {error}")
     args.report.parent.mkdir(parents=True, exist_ok=True)
