@@ -491,13 +491,15 @@ def main():
         raise SystemExit("M7.95 full WWS SPU interpreter/PIC runtime patch is missing")
     drain_runtime=(upstream/"runtime/spu/spu_drain.c").read_text(errors="replace")
     launcher_source=(repo/"ios/ARProbeApp.m").read_text(errors="replace")
-    if ("ASCENSION_M802_SPU_INTERPRETER_REJOIN_CHANNELS_V1" not in channel_runtime or
+    if ('unsetenv("SPU_INTERP_UNLIFTED");' not in launcher_source or
+            'setenv("SPU_INTERP_UNLIFTED","1",1)' in launcher_source or
+            "ASCENSION_M802_SPU_INTERPRETER_REJOIN_CHANNELS_V1" not in channel_runtime or
             "ASCENSION_M802_SPU_INTERPRETER_REJOIN_HELPER_V1" not in channel_runtime or
             "ASCENSION_M802_SPU_INTERPRETER_REJOIN_DRAIN_V1" not in drain_runtime or
             channel_runtime.count("spu_rejoin_interpreted_lift(ctx, return_pc)") < 3 or
             "void spu_drain_interp(spu_context* ctx, uint32_t return_pc)" not in drain_runtime or
             'getenv("SPU_REJOIN_CALL")' not in channel_runtime or
-            'setenv("SPU_REJOIN_CALL","1",1);' not in launcher_source):
+            'unsetenv("SPU_REJOIN_CALL");' not in launcher_source):
         raise SystemExit("M8.02 interpreter-to-lifted SPU rejoin patch is missing")
     registry_source=(repo/"runtime/m772-npua-spu/spu_workloads.c").read_text(errors="replace")
     if "0xCE052ACDA7412063ULL" not in registry_source:
@@ -812,7 +814,7 @@ def main():
         "wws_job_module_data_islands": jobmods_attestation["data_islands"],
         "wws_job_overlay_image_ids": jobmods_attestation["registered_overlay_image_ids"],
         "wws_job_overlay_registration": "explicit-m772-runtime-init-no-static-constructor-v1",
-        "spu_unlifted_fallback": "native-lifts-first-interpreter-enabled-by-ios-launcher-v1",
+        "spu_unlifted_fallback": "native-AOT-only-SPU-interpreter-unset-in-ios-launcher-v1",
         "spu_pic_capture_and_native_registry": "runtime-LS-signature-match-capture-export-explicit-native-registration-v1",
         "spu_pic_regions_compiled": len(pic_sources),
         "spu_pic_registry_units_compiled": 1 + len(pic_sources),

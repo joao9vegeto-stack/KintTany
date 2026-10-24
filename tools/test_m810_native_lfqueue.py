@@ -40,6 +40,7 @@ int edge_inflate(uint8_t*dst,uint32_t cap,const uint8_t*src,uint32_t len) {
 s32 cellSpursEventFlagSet(CellSpursEventFlag*flag,u16 bits) {
  (void)flag;(void)bits;return CELL_OK;
 }
+static volatile u64 s_asc_edge_metrics[5]; /* M8.11 production instrumentation */
 static uint8_t guest[0x10000];
 uint8_t *vm_base=guest;
 static int locked, line_wakes, waiter_wakes;

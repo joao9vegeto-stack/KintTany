@@ -82,6 +82,9 @@ extern unsigned int rsx_metal_backend_guest_draws(void);
 extern void spu_workload_reset_ascension_commit_metrics(void);
 extern void cellSpursResetAscensionLFQueueMetrics(void);
 extern void cellSpursCopyAscensionLFQueueMetrics(uint64_t out[6]);
+extern void cellSpursResetAscensionEdgeMetrics(void);
+extern void cellSpursCopyAscensionEdgeMetrics(uint64_t out[5]);
+extern void cellSpursCopyAscensionHighMasks(uint64_t out[8]);
 extern void spu_workload_copy_ascension_commit_metrics(uint64_t out[2]);
 extern void cellGcmTickVBlank(void);
 extern void cellGcmTickFlip(void);
@@ -1549,15 +1552,13 @@ static BOOL ARGameManifestHasTitleUsrdir(NSDictionary *manifest){
   setenv("PS3_LFQUEUE_SDK_LAYOUT","1",1);
   /* Ascension's WWS policy keeps readyCount as a level and chooses by SPU. */
   setenv("SPURS_READY_LEVEL","1",1);
-  /* The pinned PS3Recomp runtime already has an SPU interpreter, but its
-   * fallback for real code with no static lift is opt-in. Keep lifted SPU
-   * functions first and interpret only an unresolved code branch, matching
-   * the PC port's default run.sh behavior. */
-  setenv("SPU_INTERP_UNLIFTED","1",1);
-  /* A lifted SPU function reached by the interpreter must return to that
-   * interpreter's continuation. This is enabled by default in the Ascension
-   * PC port and is required for runtime-generated WWS code to finish jobs. */
-  setenv("SPU_REJOIN_CALL","1",1);
+  /* ASCENSION M8.11: strict native AOT only. The previous launcher
+   * explicitly opted into SPU interpretation at unlifted branches.
+   * Never execute those instructions through a runtime CPU interpreter:
+   * missing native lifts must remain visible as AOT coverage blockers. */
+  unsetenv("SPU_INTERP_UNLIFTED");
+  /* The interpreter rejoin path is intentionally disabled for AOT-only runs. */
+  unsetenv("SPU_REJOIN_CALL");
   /* Match the PC port's effective park-resync window. A 2 s resync can skip
    * guest commands and fences while Ascension's SPU jobs are still patching
    * the FIFO; keep the parked get position until the guest changes it. */
@@ -1602,6 +1603,7 @@ static BOOL ARGameManifestHasTitleUsrdir(NSDictionary *manifest){
   spu_workload_reset_ascension_taskset_metrics();
   spu_workload_reset_ascension_commit_metrics();
   cellSpursResetAscensionLFQueueMetrics();
+  cellSpursResetAscensionEdgeMetrics();
   spu_workload_reset_ascension_stack_metrics();
   cellSpursResetAscensionMetrics();
   spu_pic_reset_ascension_metrics();
@@ -1947,6 +1949,8 @@ static BOOL ARGameManifestHasTitleUsrdir(NSDictionary *manifest){
     uint64_t taskset[14]={0}; spu_workload_copy_ascension_taskset_metrics(taskset);
     uint64_t tasksetCommits[2]={0}; spu_workload_copy_ascension_commit_metrics(tasksetCommits);
     uint64_t lfqueue[6]={0}; cellSpursCopyAscensionLFQueueMetrics(lfqueue);
+    uint64_t edgeQueue[5]={0}; cellSpursCopyAscensionEdgeMetrics(edgeQueue);
+    uint64_t highWids[8]={0}; cellSpursCopyAscensionHighMasks(highWids);
     unsigned long long stack[17]={0}; spu_workload_copy_ascension_stack_metrics(stack);
     unsigned long long gcm[3]={0}; cellGcmCopyAscensionParkHoldMetrics(gcm);
     uint64_t pic[6]={0}; spu_pic_copy_ascension_metrics(pic);
@@ -2005,6 +2009,11 @@ static BOOL ARGameManifestHasTitleUsrdir(NSDictionary *manifest){
     [out appendFormat:@"SPURS workloads nos IDs 16–31=%llu · admissões IDs 16–31=%llu · instâncias acordadas=%llu\n",
         (unsigned long long)spurs[2],(unsigned long long)spurs[6],
         (unsigned long long)spurs[9]];
+    [out appendFormat:@"SPURS2 WID16–31 máscaras hex: registrados=%04llX · habilitados=%04llX · executáveis=%04llX · prioridades=%04llX · prontos=%04llX · sinais=%04llX · ativos=%04llX · despachos=%llu\n",
+        (unsigned long long)highWids[0],(unsigned long long)highWids[1],
+        (unsigned long long)highWids[2],(unsigned long long)highWids[3],
+        (unsigned long long)highWids[4],(unsigned long long)highWids[5],
+        (unsigned long long)highWids[6],(unsigned long long)highWids[7]];
     [out appendFormat:@"WWS job-chain: pedidos=%llu · com lift=%llu · sem lift=%llu · retornos=%llu · ativos=%llu · bytes=%llu · EA=0x%08llX\n",
         (unsigned long long)jobs[0],(unsigned long long)jobs[1],
         (unsigned long long)jobs[2],(unsigned long long)jobs[3],
@@ -2019,6 +2028,11 @@ static BOOL ARGameManifestHasTitleUsrdir(NSDictionary *manifest){
         (unsigned long long)lfqueue[0],(unsigned long long)lfqueue[1],
         (unsigned long long)lfqueue[2],(unsigned long long)lfqueue[3],
         (unsigned long long)lfqueue[4],(unsigned long long)lfqueue[5]];
+    [out appendFormat:@"EDGE Zlib nativo: requisições=%llu · concluídas=%llu · falhas=%llu · bytes=%llu · eventos=%llu (não são commits LFQueue)\n",
+        (unsigned long long)edgeQueue[0],(unsigned long long)edgeQueue[1],
+        (unsigned long long)edgeQueue[2],(unsigned long long)edgeQueue[3],
+        (unsigned long long)edgeQueue[4]];
+    [out appendString:@"Execução SPU: AOT exclusivo; interpretação de código não recompilado desabilitada.\n"];
     [out appendFormat:@"SPU PUTLLC: linhas commitadas=%llu · tasksets acordados=%llu (candidatos/válidos acima)\n",
         (unsigned long long)tasksetCommits[0],(unsigned long long)tasksetCommits[1]];
     [out appendFormat:@"Pilha SPU (MiB): tentativas=%llu · 256=%llu/%llu/%llu · 64=%llu/%llu/%llu · 32=%llu/%llu/%llu · 16=%llu/%llu/%llu · fallback=%llu/%llu · pthread rc=%llu · attr rc=%llu\n",
