@@ -92,3 +92,17 @@ not be presented as proof of gameplay rendering.
 
 The GPL requirements apply to distributed versions combining GPL-covered code;
 merely making a repository private later does not retroactively waive them.
+
+
+## Khronos glslang — Xenos shader SPIR-V compilation
+
+XOWUE uses the Khronos glslang GLSL-to-SPIR-V compiler at pinned revision
+`ed883c736e0d5633242218c534264b7eea28b27e`. Khronos Group and its
+contributors retain their original BSD-style and bundled preprocessing
+licenses; the complete upstream `LICENSE.txt` is copied into
+`ThirdPartyLicenses/Xenos/glslang-LICENSE.txt` inside the IPA.
+
+Compiled SPIR-V shader modules are not evidence of completed rendering. The
+native Vulkan graphics pipeline, EDRAM targets, resolves, guest vertex/texture
+fetches and draw submissions must still be implemented and validated against
+the original Wolverine XEX and real frame output on the device.

@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Lower three XEX-validated PPC local computed jumps to native C++ gotos.
+"""Lower XEX-validated PPC local computed jumps to native C++ gotos.
 
 No new AOT entry, interpreter, JIT, NOP or guessed PPC semantics is added.
 The immutable archived AOT source and the original XEX rdata tables were
@@ -7,6 +7,9 @@ cross-checked at the exact guest virtual PCs. Fail closed on source changes.
 """
 from __future__ import annotations
 import argparse
+import base64
+import hashlib
+import struct
 import bisect
 from pathlib import Path
 import re
@@ -14,6 +17,30 @@ import re
 # Table values extracted in big-endian order from the user's XEX image.
 # .rdata PointerToRawData equals RVA. .text's raw offset differs from its
 # guest RVA by 0x9200; never use raw PE offsets as PPC virtual PCs.
+# Verified original XEX .rdata at 0x820360C0 (426 big-endian uint16).
+_COMPUTED_426_BE_B64 = (
+    "AAAACAAUACAALAA0AEAATABYAGQAcAB8AIgAlACgAKwAuADEAMwA1ADgAOwA+AEEARABHAEkATABPAFIAVQB"
+    "XAFkAXABfAGIAZABmAGgAagBsAG4AcAByAHQAdgB5AHwAfwCCAIQAhgCIAIsAjgCRAJQAlwCaAJ0AoACjAKY"
+    "AqQCsAK8AsgC1ALgAuwC+AMEAxADGAMkAzADPANIA1ADWANgA2gDcAN4A4ADiAOQA5gDpAOsA7gDwAPIA9AD"
+    "2APgA+gD8AP4BAQEEAQcBCgENARABEgEUARYBGAEaARwBHgEgASIBJAEmASgBKgEtAS8BMQEzATYBOQE8AT8"
+    "BQgFEAUYBSQFMAU8BUgFVAVgBWgFdAWABYwFmAWgBawFuAXEBdAF3AXoBfAF/AYIBhQGIAYsBjgGRAZQBlwG"
+    "aAZ0BnwGiAaQBpwGqAawBrwGyAbUBuAG7Ab4BwQHEAcYByQHMAc8B0gHVAdgB2wHeAeEB5AHnAekB7AHvAfI"
+    "B9QH4AfsB/gIBAgQCBgIIAgsCDgIRAhQCFwIaAh0CIAIjAiUCJwIpAisCLQIvAjECMwI1AjcCOQI7Aj0CQAJ"
+    "DAkYCSQJMAk4CUAJTAlYCWQJcAl8CYQJjAmYCaQJsAm8CcQJ0AnYCeAJ7An4CgQKEAocCigKNAo8CkQKTApU"
+    "CmAKbAp4CoQKkAqcCqgKtArACsgK0ArcCugK8Ar8CwQLEAscCygLMAs8C0gLVAtcC2QLbAt4C4QLkAucC6gL"
+    "tAvAC8wL2AvkC/AL/AwIDBQMIAwsDDgMRAxQDFgMZAxwDHwMiAyUDJwMpAywDLwMxAzQDNgM5AzsDPQNAA0M"
+    "DRgNJA0sDTgNRA1QDVwNaA10DYANjA2YDaQNsA28DcgN1A3gDewN+A4EDhAOHA4oDjQOQA5MDlgOZA5wDnwO"
+    "iA6UDqAOrA64DsQO0A7cDugO9A8ADwwPGA8kDzAPPA9ID1QPYA9sD3gPhA+QD5wPqA+0D8APzA/YD+QP8A/8"
+    "EAgQFBAgECwQOBBEEFAQXBBoEHQQgBCMEJgQpBCwELwQyBDUEOAQ6BD0EQARDBEYESQRMBE8EUgRVBFgEWwR"
+    "dBGAEYwRlBGcEaQRrBG0EbwRxBHQEdwR5BHsEfQR/BIE"
+)
+_COMPUTED_426_BE = base64.b64decode(_COMPUTED_426_BE_B64)
+assert len(_COMPUTED_426_BE) == 852
+assert hashlib.sha256(_COMPUTED_426_BE).hexdigest() == "383c790a80fffe10c8cf9feea05c2a35b487bccea125f006c6506d9b44cc0d90"
+_COMPUTED_426 = struct.unpack(">426H", _COMPUTED_426_BE)
+assert len({0x82D3440C + v for v in _COMPUTED_426}) == 426
+assert 0x82D355F8 in {0x82D3440C + v for v in _COMPUTED_426}
+
 TABLES = (
     # (guest owner, BCTR PC, table guest address, base guest PC, stride, values)
     (0x82B47360, 0x82B47450, 0x82086360, 0x82B47454, 4,
@@ -27,6 +54,8 @@ TABLES = (
       1568, 0, 144, 400, 1200, 1788, 2028, 2336, 2464, 2528,
       1568, 1568, 2848, 3172, 3288, 3600, 3716, 1568, 4412, 4788,
       6160, 8080, 8444, 8940)),
+    # XEX guest .rdata 0x820360C0; 426 targets in native sub_82D34268.
+    (0x82D34268, 0x82D34408, 0x820360C0, 0x82D3440C, 1, _COMPUTED_426),
 )
 FUNC_RE = re.compile(r'PPC_FUNC_IMPL\(__imp__(sub_[0-9A-Fa-f]+)\) \{\n')
 INSN = re.compile(r'(?m)^\t// (.+?)\s*$')

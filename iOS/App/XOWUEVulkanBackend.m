@@ -87,6 +87,10 @@ void xowue_vulkan_backend_guest_frame_reset(void)
 extern VKAPI_ATTR PFN_vkVoidFunction VKAPI_CALL
 vk_icdGetInstanceProcAddr(VkInstance instance, const char *pName);
 
+// Native Xenos microcode -> SPIR-V bridge, not fixed demo shaders.
+extern bool xowue_xenos_active_shader_hashes(uint64_t *vertex, uint64_t *pixel);
+extern size_t xowue_xenos_spirv_words(uint64_t hash, uint32_t *out, size_t capacity);
+
 static FILE *g_log_file = NULL;
 
 static void
@@ -183,6 +187,12 @@ typedef struct KKVulkanState {
    PFN_vkCmdPipelineBarrier CmdPipelineBarrier;
    PFN_vkCmdClearColorImage CmdClearColorImage;
    PFN_vkCmdCopyBufferToImage CmdCopyBufferToImage;
+   PFN_vkCreateShaderModule CreateShaderModule;
+   PFN_vkDestroyShaderModule DestroyShaderModule;
+   VkShaderModule guest_vertex_module;
+   VkShaderModule guest_pixel_module;
+   uint64_t guest_vertex_hash;
+   uint64_t guest_pixel_hash;
    PFN_vkCreateBuffer CreateBuffer;
    PFN_vkDestroyBuffer DestroyBuffer;
    PFN_vkGetBufferMemoryRequirements GetBufferMemoryRequirements;
@@ -200,6 +210,7 @@ typedef struct KKVulkanState {
 
    uint64_t frame_count;
    uint64_t guest_frames_presented;
+   uint64_t last_guest_decoded_serial;
    bool ready;
 } KKVulkanState;
 
@@ -220,6 +231,54 @@ typedef struct KKVulkanState {
          return false; \
       } \
    } while (0)
+
+static void KKUpdateNativeShaderModule(KKVulkanState *state, uint64_t hash,
+                                       VkShaderModule *module, uint64_t *loadedHash,
+                                       const char *stage)
+{
+   if (!state->ready || hash == *loadedHash) return;
+   if (*module && state->DestroyShaderModule) {
+      state->DestroyShaderModule(state->device, *module, NULL);
+      *module = VK_NULL_HANDLE;
+   }
+   *loadedHash = hash;
+   if (!hash) return;
+   size_t count = xowue_xenos_spirv_words(hash, NULL, 0);
+   if (count < 5 || count > (1u << 20u)) {
+      KKLog(@"XENOS_SPIRV_MISSING stage=%s hash=%016llX",
+            stage, (unsigned long long)hash);
+      return;
+   }
+   uint32_t *words = (uint32_t *)malloc(count * sizeof(uint32_t));
+   if (!words) return;
+   if (xowue_xenos_spirv_words(hash, words, count) != count ||
+       words[0] != 0x07230203u) {
+      free(words);
+      KKLog(@"XENOS_SPIRV_INVALID stage=%s hash=%016llX",
+            stage, (unsigned long long)hash);
+      return;
+   }
+   VkShaderModuleCreateInfo info = {
+      .sType = VK_STRUCTURE_TYPE_SHADER_MODULE_CREATE_INFO,
+      .codeSize = count * sizeof(uint32_t),
+      .pCode = words,
+   };
+   VkResult result = state->CreateShaderModule(state->device, &info, NULL, module);
+   free(words);
+   KKLog(@"XENOS_VULKAN_SHADER_MODULE stage=%s hash=%016llX words=%zu result=%d",
+         stage, (unsigned long long)hash, count, result);
+   // A shader module is not yet a guest pipeline or a PM4 draw submission.
+}
+
+static void KKSyncNativeShaders(KKVulkanState *state)
+{
+   uint64_t vertex = 0, pixel = 0;
+   if (!xowue_xenos_active_shader_hashes(&vertex, &pixel)) return;
+   KKUpdateNativeShaderModule(state, vertex, &state->guest_vertex_module,
+                              &state->guest_vertex_hash, "vertex");
+   KKUpdateNativeShaderModule(state, pixel, &state->guest_pixel_module,
+                              &state->guest_pixel_hash, "fragment");
+}
 
 static void
 KKDestroyUploadBuffer(KKVulkanState *state)
@@ -427,6 +486,12 @@ KKDestroyVulkan(KKVulkanState *state)
 
    KKDestroySwapchain(state);
    KKDestroyUploadBuffer(state);
+   if (state->device && state->DestroyShaderModule) {
+      if (state->guest_vertex_module)
+         state->DestroyShaderModule(state->device, state->guest_vertex_module, NULL);
+      if (state->guest_pixel_module)
+         state->DestroyShaderModule(state->device, state->guest_pixel_module, NULL);
+   }
 
    if (state->device && state->DestroySemaphore) {
       if (state->image_available)
@@ -918,6 +983,8 @@ KKCreateVulkan(KKVulkanState *state, CAMetalLayer *layer)
                   "vkCmdClearColorImage");
    KK_LOAD_DEVICE(state, CmdCopyBufferToImage, PFN_vkCmdCopyBufferToImage,
                   "vkCmdCopyBufferToImage");
+   KK_LOAD_DEVICE(state, CreateShaderModule, PFN_vkCreateShaderModule, "vkCreateShaderModule");
+   KK_LOAD_DEVICE(state, DestroyShaderModule, PFN_vkDestroyShaderModule, "vkDestroyShaderModule");
    KK_LOAD_DEVICE(state, CreateBuffer, PFN_vkCreateBuffer, "vkCreateBuffer");
    KK_LOAD_DEVICE(state, DestroyBuffer, PFN_vkDestroyBuffer, "vkDestroyBuffer");
    KK_LOAD_DEVICE(state, GetBufferMemoryRequirements,
@@ -994,6 +1061,10 @@ KKRenderFrame(KKVulkanState *state, CAMetalLayer *layer)
 {
    if (!state->ready || !state->swapchain)
       return false;
+
+   // Create actual native Vulkan modules from the translated guest shaders.
+   // Xenos EDRAM/pipelines/draws are tracked separately, never fabricated.
+   KKSyncNativeShaders(state);
 
    CGSize drawable = layer.drawableSize;
    const uint32_t drawable_width = (uint32_t)MAX(1.0, drawable.width);
@@ -1163,8 +1234,13 @@ KKRenderFrame(KKVulkanState *state, CAMetalLayer *layer)
    }
 
    state->frame_count++;
-   if (guest_frame_ready)
-      state->guest_frames_presented++;
+   // Re-presenting an old framebuffer is not another game frame.
+   const uint64_t decodedSerial = atomic_load_explicit(
+       &g_xowue_guest_frame_count, memory_order_relaxed);
+   if (guest_frame_ready && decodedSerial > state->last_guest_decoded_serial) {
+      state->guest_frames_presented += decodedSerial - state->last_guest_decoded_serial;
+      state->last_guest_decoded_serial = decodedSerial;
+   }
    return true;
 }
 
@@ -1335,10 +1411,10 @@ KKRenderFrame(KKVulkanState *state, CAMetalLayer *layer)
       const uint32_t height = atomic_load_explicit(&g_xowue_guest_height, memory_order_relaxed);
       const uint64_t decodedFrames = atomic_load_explicit(&g_xowue_guest_frame_count, memory_order_relaxed);
       _statusLabel.text = [NSString stringWithFormat:
-         @"METAL PRESENT PASS · %@\nVulkan frames %llu · guest frames %llu\nVdSwap Xenos: %u · %ux%u",
+         @"METAL PRESENT PASS · %@\nVulkan presents %llu · distinct guest uploads %llu\nVdSwap Xenos: %u · %ux%u",
          metalLayer.device.name, _vk.frame_count, _vk.guest_frames_presented,
          swaps, width, height];
-      KKLog(@"KOSMICKRISP_PRESENT frames=%llu guest_frames=%llu decoded_frames=%llu guest_swaps=%u guest_extent=%ux%u resident_mib=%.1f",
+      KKLog(@"KOSMICKRISP_PRESENT host_presents=%llu unique_guest_uploads=%llu decoded_frames=%llu guest_swaps=%u guest_extent=%ux%u resident_mib=%.1f",
             _vk.frame_count, _vk.guest_frames_presented, decodedFrames,
             swaps, width, height, KKResidentMiB());
    }

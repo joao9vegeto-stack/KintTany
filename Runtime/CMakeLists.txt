@@ -38,6 +38,24 @@ set(THIRDPARTY_ROOT "${XENONRECOMP_ROOT}/thirdparty")
 add_subdirectory("${THIRDPARTY_ROOT}" "${CMAKE_CURRENT_BINARY_DIR}/xenon-thirdparty")
 add_subdirectory("${XENONRECOMP_ROOT}/XenonUtils" "${CMAKE_CURRENT_BINARY_DIR}/xenon-utils")
 
+# Native GLSL-to-SPIR-V compilation for real translated Xenos shaders.
+# The compiler is pinned by the XOWUE workflow and is built for iOS ARM64.
+set(XOWUE_GLSLANG_DIR "${CMAKE_CURRENT_LIST_DIR}/../vendor/glslang")
+if(EXISTS "${XOWUE_GLSLANG_DIR}/CMakeLists.txt")
+    set(ENABLE_SPIRV ON CACHE BOOL "" FORCE)
+    set(ENABLE_OPT OFF CACHE BOOL "" FORCE)
+    set(ENABLE_HLSL OFF CACHE BOOL "" FORCE)
+    set(ENABLE_PCH OFF CACHE BOOL "" FORCE)
+    set(ENABLE_GLSLANG_BINARIES OFF CACHE BOOL "" FORCE)
+    set(GLSLANG_TESTS OFF CACHE BOOL "" FORCE)
+    set(GLSLANG_ENABLE_INSTALL OFF CACHE BOOL "" FORCE)
+    set(BUILD_EXTERNAL OFF CACHE BOOL "" FORCE)
+    add_subdirectory("${XOWUE_GLSLANG_DIR}" "${CMAKE_CURRENT_BINARY_DIR}/glslang" EXCLUDE_FROM_ALL)
+    set(XOWUE_HAS_GLSLANG TRUE)
+else()
+    set(XOWUE_HAS_GLSLANG FALSE)
+endif()
+
 file(GLOB PPC_SOURCES CONFIGURE_DEPENDS "${PPC_DIR}/ppc_recomp.*.cpp")
 list(LENGTH PPC_SOURCES PPC_SOURCE_COUNT)
 if(NOT PPC_SOURCE_COUNT EQUAL 344)
@@ -46,6 +64,7 @@ endif()
 add_library(XOWUEEngine STATIC
     XOWUEEngine.cpp
     Graphics/Xenos/XOWUEGpuBridge.cpp
+    Graphics/Xenos/XOWUESpirvCompiler.cpp
     Graphics/Xenos/shader_translator.cpp
     Graphics/Xenos/xenos/ucode.cpp
     "${IMPORT_STUBS}"
@@ -59,6 +78,10 @@ target_include_directories(XOWUEEngine PUBLIC
     "${THIRDPARTY_ROOT}/simde"
 )
 target_link_libraries(XOWUEEngine PUBLIC XenonUtils)
+if(XOWUE_HAS_GLSLANG)
+    target_link_libraries(XOWUEEngine PUBLIC glslang::glslang glslang::glslang-default-resource-limits)
+    target_compile_definitions(XOWUEEngine PRIVATE XOWUE_GLSLANG_ENABLED=1)
+endif()
 target_compile_options(XOWUEEngine PRIVATE
     $<$<CXX_COMPILER_ID:AppleClang,Clang,GNU>:-O1>
     $<$<CXX_COMPILER_ID:AppleClang,Clang,GNU>:-fno-strict-aliasing>

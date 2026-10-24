@@ -88,6 +88,12 @@ jobs:
           set -euo pipefail
           python3 tools/patch_xowue_computed_switches.py --ppc-dir "$GITHUB_WORKSPACE/generated/ppc"
 
+      - name: Audit native PPC AOT control-flow coverage globally
+        run: |
+          set -euo pipefail
+          python3 tools/audit_xowue_ppc_cfg.py --ppc-dir generated/ppc --json-out artifacts/xowue-ppc-cfg-audit.json
+          test -s artifacts/xowue-ppc-cfg-audit.json
+
       - name: Test PPC dispatch guard and AOT entry instrumentation
         run: |
           set -euo pipefail
@@ -101,6 +107,7 @@ jobs:
           clang++ -std=c++23 -O1 -pthread \
             Runtime/Graphics/Xenos/XOWUEGpuBridgeSmoke.cpp \
             Runtime/Graphics/Xenos/XOWUEGpuBridge.cpp \
+            Runtime/Graphics/Xenos/XOWUESpirvCompiler.cpp \
             Runtime/Graphics/Xenos/shader_translator.cpp \
             Runtime/Graphics/Xenos/xenos/ucode.cpp \
             -IRuntime/Graphics/Xenos \
@@ -326,6 +333,17 @@ jobs:
           fi
           echo "KosmicKrisp arm64 iOS ICD dylib built from $MESA_KOSMICKRISP_SHA" | tee build-ios/kosmickrisp/BUILD.txt
 
+      - name: Fetch pinned Khronos glslang shader compiler for iOS
+        run: |
+          set -euo pipefail
+          mkdir -p vendor
+          git clone --filter=blob:none --no-checkout https://github.com/KhronosGroup/glslang.git vendor/glslang
+          git -C vendor/glslang fetch --depth=1 origin ed883c736e0d5633242218c534264b7eea28b27e
+          git -C vendor/glslang checkout --detach ed883c736e0d5633242218c534264b7eea28b27e
+          test "$(git -C vendor/glslang rev-parse HEAD)" = "ed883c736e0d5633242218c534264b7eea28b27e"
+          test -f vendor/glslang/glslang/Include/glslang_c_interface.h
+          test -f vendor/glslang/LICENSE.txt
+
       - name: Build arm64 AOT engine
         run: |
           set -euo pipefail
@@ -351,7 +369,10 @@ jobs:
             exit 1
           fi
           grep -E 'xowue_(dispatch|lookup)_indirect' build-ios/aot-undefined-symbols.txt | head -20
-          libtool -static -o build-ios/libXOWUEEngineComplete.a "$ENGINE_LIB" "$UTILS_LIB" "$DISASM_LIB"
+          GLSLANG_LIB=$(find build-ios -name libglslang.a -print -quit)
+          GLSLANG_RESOURCE_LIB=$(find build-ios -name libglslang-default-resource-limits.a -print -quit)
+          test -n "$GLSLANG_LIB" && test -n "$GLSLANG_RESOURCE_LIB"
+          libtool -static -o build-ios/libXOWUEEngineComplete.a "$ENGINE_LIB" "$UTILS_LIB" "$DISASM_LIB" "$GLSLANG_LIB" "$GLSLANG_RESOURCE_LIB"
           lipo build-ios/libXOWUEEngineComplete.a -verify_arch arm64
 
       - name: Generate Xcode project and build app
@@ -387,6 +408,7 @@ jobs:
           mkdir -p Payload/XOWUE.app/ThirdPartyLicenses/Xenos
           cp Runtime/Graphics/Xenos/COPYING Payload/XOWUE.app/ThirdPartyLicenses/Xenos/SpeedBreaker-GPL-3.0.txt
           cp Runtime/Graphics/Xenos/xenos/Xenia-LICENSE Payload/XOWUE.app/ThirdPartyLicenses/Xenos/Xenia-BSD.txt
+          cp vendor/glslang/LICENSE.txt Payload/XOWUE.app/ThirdPartyLicenses/Xenos/glslang-LICENSE.txt
           cp "$XENONRECOMP_ROOT/LICENSE.md" Payload/XOWUE.app/ThirdPartyLicenses/XenonRecomp-LICENSE.md
           cp mesa-src/docs/license.rst Payload/XOWUE.app/ThirdPartyLicenses/Mesa/license.rst
           cp -R mesa-src/licenses/. Payload/XOWUE.app/ThirdPartyLicenses/Mesa/licenses/
@@ -399,6 +421,7 @@ jobs:
           test -f "$APP/THIRD_PARTY_NOTICES.md"
           test -f "$APP/ThirdPartyLicenses/Xenos/SpeedBreaker-GPL-3.0.txt"
           test -f "$APP/ThirdPartyLicenses/Xenos/Xenia-BSD.txt"
+          test -f "$APP/ThirdPartyLicenses/Xenos/glslang-LICENSE.txt"
           test -f "$APP/ThirdPartyLicenses/XenonRecomp-LICENSE.md"
           test -f "$APP/ThirdPartyLicenses/Mesa/licenses/MIT"
           lipo "$APP/XOWUE" -verify_arch arm64
@@ -422,6 +445,15 @@ jobs:
           IPA_NAME="XOWUE-Build-${XOWUE_BUILD_NUMBER}.ipa"
           ditto -c -k --sequesterRsrc --keepParent Payload "artifacts/$IPA_NAME"
           unzip -t "artifacts/$IPA_NAME"
+
+      - name: Upload native PPC global CFG audit
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: XOWUE-PPC-CFG-Audit
+          path: artifacts/xowue-ppc-cfg-audit.json
+          if-no-files-found: warn
+          retention-days: 30
 
       - name: Upload unsigned IPA
         uses: actions/upload-artifact@v4
