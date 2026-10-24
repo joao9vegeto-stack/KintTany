@@ -24,7 +24,11 @@ class M719ReportTests(unittest.TestCase):
         self.assertIn('[self openAdvancedPpuReport:sender];',start)
         report=s.split('- (void)openAdvancedPpuReport:',1)[1].split('- (NSString *)arUnifiedPpuText',1)[0]
         self.assertNotIn('if(!self.ppuReport.length&&!self.shaderBusy)return;',report)
-        self.assertIn('details.text=[self arUnifiedPpuText];',report)
+        self.assertIn('Coletando métricas do guest em segundo plano',report)
+        self.assertIn('action:@selector(closeAdvancedPpuReport:)',report)
+        self.assertIn('dispatch_async(dispatch_get_global_queue(QOS_CLASS_USER_INITIATED,0),^{',s)
+        self.assertIn('dispatch_async(dispatch_get_main_queue(),^{',s)
+        self.assertIn('details.text=report;',s)
         self.assertIn('rightBarButtonItems=@[share,copy]',report)
 
     def test_report_uses_live_guest_evidence_and_states_limits(self):

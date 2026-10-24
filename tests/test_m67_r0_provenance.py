@@ -26,7 +26,7 @@ class Provenance(unittest.TestCase):
  def test_report_is_only_user_action(self):
   for token in ("self.ppuReportButton=reportButton;",
       "Copiar diagnóstico PPU",
-      "UIPasteboard.generalPasteboard.string=self.ppuReport;",
+      "UIPasteboard.generalPasteboard.string=report;",
       "self.ppuReportButton.enabled=YES;",
       "ar_ppu_bootstrap_fortyeight_trace(",
       "trace48[0],trace48[1]",
