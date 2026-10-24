@@ -25,7 +25,10 @@ typedef struct {
    uint32_t retired_count;
    VkPrimitiveTopology topology;
    uint64_t vs_hash, ps_hash;
-   XDBuffer gpu_memory, constants;
+   XDBuffer gpu_memory, constants, composited_frame;
+   bool composed_valid;
+   bool swapchain_transfer_src;
+   uint64_t composed_frames;
    VkDeviceSize constant_stride;
    bool attachment_supported;
    uint64_t issued, rejected, rejected_texture, rejected_memory;
@@ -110,6 +113,7 @@ static void XDDestroyRenderer(KKVulkanState *state) {
    if (g_xd.render_pass) XD(DestroyRenderPass)(state->device,g_xd.render_pass,NULL);
    XDDestroyBuffer(state,&g_xd.gpu_memory);
    XDDestroyBuffer(state,&g_xd.constants);
+   XDDestroyBuffer(state,&g_xd.composited_frame);
    memset(&g_xd,0,sizeof(g_xd));
 }
 
@@ -428,4 +432,54 @@ static uint32_t XDProcessDraws(KKVulkanState *state, uint32_t image_index,
    free(draws);
    return queued;
 }
+
+static bool XDCacheComposedFrame(KKVulkanState *state,
+                                 uint32_t imageIndex,
+                                 VkCommandBuffer command) {
+   if (!g_xd.swapchain_transfer_src) return false;
+   VkDeviceSize bytes=(VkDeviceSize)state->swapchain_extent.width *
+                      state->swapchain_extent.height * 4u;
+   if (!g_xd.composited_frame.buffer) {
+      if (!XDCreateBuffer(state,&g_xd.composited_frame,bytes,
+                          VK_BUFFER_USAGE_TRANSFER_DST_BIT |
+                          VK_BUFFER_USAGE_TRANSFER_SRC_BIT)) {
+         KKLog(@"XENOS_COMPOSED_CACHE_ALLOCATION_FAILED bytes=%llu",
+               (unsigned long long)bytes);
+         return false;
+      }
+   }
+   if (g_xd.composited_frame.size < bytes) return false;
+   VkImageMemoryBarrier barrier={.sType=VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER,
+      .srcAccessMask=VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT,
+      .dstAccessMask=VK_ACCESS_TRANSFER_READ_BIT,
+      .oldLayout=VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL,
+      .newLayout=VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
+      .srcQueueFamilyIndex=VK_QUEUE_FAMILY_IGNORED,
+      .dstQueueFamilyIndex=VK_QUEUE_FAMILY_IGNORED,
+      .image=state->swapchain_images[imageIndex],
+      .subresourceRange={.aspectMask=VK_IMAGE_ASPECT_COLOR_BIT,
+                         .levelCount=1,.layerCount=1}};
+   state->CmdPipelineBarrier(command,VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT,
+      VK_PIPELINE_STAGE_TRANSFER_BIT,0,0,NULL,0,NULL,1,&barrier);
+   VkBufferImageCopy region={.bufferOffset=0,.imageSubresource={
+      .aspectMask=VK_IMAGE_ASPECT_COLOR_BIT,.layerCount=1},
+      .imageExtent={state->swapchain_extent.width,state->swapchain_extent.height,1}};
+   XD(CmdCopyImageToBuffer)(command,state->swapchain_images[imageIndex],
+      VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,g_xd.composited_frame.buffer,1,&region);
+   g_xd.composed_valid=true;
+   ++g_xd.composed_frames;
+   return true;
+}
+static void XDReuseComposedFrameBarrier(KKVulkanState *state,VkCommandBuffer command) {
+   VkBufferMemoryBarrier barrier={.sType=VK_STRUCTURE_TYPE_BUFFER_MEMORY_BARRIER,
+      .srcAccessMask=VK_ACCESS_TRANSFER_WRITE_BIT,
+      .dstAccessMask=VK_ACCESS_TRANSFER_READ_BIT,
+      .srcQueueFamilyIndex=VK_QUEUE_FAMILY_IGNORED,
+      .dstQueueFamilyIndex=VK_QUEUE_FAMILY_IGNORED,
+      .buffer=g_xd.composited_frame.buffer,.offset=0,
+      .size=g_xd.composited_frame.size};
+   state->CmdPipelineBarrier(command,VK_PIPELINE_STAGE_TRANSFER_BIT,
+      VK_PIPELINE_STAGE_TRANSFER_BIT,0,0,NULL,1,&barrier,0,NULL);
+}
+
 #undef XD

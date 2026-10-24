@@ -606,6 +606,7 @@ KKCreateSwapchain(KKVulkanState *state, CAMetalLayer *layer)
 
    VkSwapchainKHR old_swapchain = state->swapchain;
    g_xd.attachment_supported = (caps.supportedUsageFlags & VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT) != 0;
+   g_xd.swapchain_transfer_src = (caps.supportedUsageFlags & VK_IMAGE_USAGE_TRANSFER_SRC_BIT) != 0;
    VkSwapchainCreateInfoKHR create_info = {
       .sType = VK_STRUCTURE_TYPE_SWAPCHAIN_CREATE_INFO_KHR,
       .surface = state->surface,
@@ -615,7 +616,8 @@ KKCreateSwapchain(KKVulkanState *state, CAMetalLayer *layer)
       .imageExtent = extent,
       .imageArrayLayers = 1,
       .imageUsage = VK_IMAGE_USAGE_TRANSFER_DST_BIT |
-         (g_xd.attachment_supported ? VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT : 0),
+         (g_xd.attachment_supported ? VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT : 0) |
+         (g_xd.swapchain_transfer_src ? VK_IMAGE_USAGE_TRANSFER_SRC_BIT : 0),
       .imageSharingMode = VK_SHARING_MODE_EXCLUSIVE,
       .preTransform = caps.currentTransform,
       .compositeAlpha = composite_alpha,
@@ -659,6 +661,8 @@ KKCreateSwapchain(KKVulkanState *state, CAMetalLayer *layer)
 
    if (old_swapchain) {
       XDDestroyFramebuffers(state);
+      XDDestroyBuffer(state,&g_xd.composited_frame);
+      g_xd.composed_valid=false;
       state->DestroySwapchainKHR(state->device, old_swapchain, NULL);
    }
    if (g_xd.render_pass && g_xd.attachment_supported &&
@@ -1106,6 +1110,10 @@ KKRenderFrame(KKVulkanState *state, CAMetalLayer *layer)
    }
 
    const bool guest_frame_ready = KKWriteGuestFrame(state);
+   const uint64_t currentGuestSerial = atomic_load_explicit(
+      &g_xowue_guest_frame_count, memory_order_relaxed);
+   const bool reuseComposed = g_xd.composed_valid && g_xd.composited_frame.buffer &&
+      currentGuestSerial == state->last_guest_decoded_serial;
 
    result = state->ResetCommandBuffer(state->command_buffer, 0);
    if (result != VK_SUCCESS) {
@@ -1154,7 +1162,8 @@ KKRenderFrame(KKVulkanState *state, CAMetalLayer *layer)
       .baseArrayLayer = 0,
       .layerCount = 1,
    };
-   if (guest_frame_ready) {
+   if (guest_frame_ready || reuseComposed) {
+      if (reuseComposed) XDReuseComposedFrameBarrier(state,state->command_buffer);
       VkBufferImageCopy copy = {
          .bufferOffset = 0,
          .bufferRowLength = 0,
@@ -1170,7 +1179,8 @@ KKRenderFrame(KKVulkanState *state, CAMetalLayer *layer)
                          state->swapchain_extent.height, 1},
       };
       state->CmdCopyBufferToImage(
-         state->command_buffer, state->upload_buffer,
+         state->command_buffer,
+         reuseComposed ? g_xd.composited_frame.buffer : state->upload_buffer,
          state->swapchain_images[image_index],
          VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 1, &copy);
    } else {
@@ -1183,12 +1193,18 @@ KKRenderFrame(KKVulkanState *state, CAMetalLayer *layer)
    }
 
    const uint32_t issuedGuestDraws = XDProcessDraws(state, image_index, state->command_buffer);
+   const bool capturedComposed = issuedGuestDraws && XDCacheComposedFrame(
+      state,image_index,state->command_buffer);
+   if (!issuedGuestDraws && currentGuestSerial != state->last_guest_decoded_serial)
+      g_xd.composed_valid=false;
 
    VkImageMemoryBarrier to_present = {
       .sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER,
-      .srcAccessMask = issuedGuestDraws ? VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT : VK_ACCESS_TRANSFER_WRITE_BIT,
+      .srcAccessMask = capturedComposed ? VK_ACCESS_TRANSFER_READ_BIT :
+         issuedGuestDraws ? VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT : VK_ACCESS_TRANSFER_WRITE_BIT,
       .dstAccessMask = 0,
-      .oldLayout = issuedGuestDraws ? VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL : VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
+      .oldLayout = capturedComposed ? VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL :
+         issuedGuestDraws ? VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL : VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
       .newLayout = VK_IMAGE_LAYOUT_PRESENT_SRC_KHR,
       .srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED,
       .dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED,
@@ -1197,7 +1213,8 @@ KKRenderFrame(KKVulkanState *state, CAMetalLayer *layer)
    };
    state->CmdPipelineBarrier(
       state->command_buffer,
-      issuedGuestDraws ? VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT : VK_PIPELINE_STAGE_TRANSFER_BIT,
+      capturedComposed ? VK_PIPELINE_STAGE_TRANSFER_BIT :
+         issuedGuestDraws ? VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT : VK_PIPELINE_STAGE_TRANSFER_BIT,
       VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT,
       0, 0, NULL, 0, NULL, 1, &to_present);
 
@@ -1436,9 +1453,10 @@ KKRenderFrame(KKVulkanState *state, CAMetalLayer *layer)
          @"METAL PRESENT PASS · %@\nVulkan presents %llu · distinct guest uploads %llu\nVdSwap Xenos: %u · %ux%u",
          metalLayer.device.name, _vk.frame_count, _vk.guest_frames_presented,
          swaps, width, height];
-      KKLog(@"KOSMICKRISP_PRESENT host_presents=%llu unique_guest_uploads=%llu decoded_frames=%llu guest_swaps=%u guest_extent=%ux%u guest_vk_draws=%llu resident_mib=%.1f",
+      KKLog(@"KOSMICKRISP_PRESENT host_presents=%llu unique_guest_uploads=%llu decoded_frames=%llu guest_swaps=%u guest_extent=%ux%u guest_vk_draws=%llu composed_frames=%llu cache=%d resident_mib=%.1f",
             _vk.frame_count, _vk.guest_frames_presented, decodedFrames,
-            swaps, width, height, (unsigned long long)_vk.guest_draws_submitted, KKResidentMiB());
+            swaps, width, height, (unsigned long long)_vk.guest_draws_submitted,
+            (unsigned long long)g_xd.composed_frames,g_xd.composed_valid,KKResidentMiB());
    }
 }
 

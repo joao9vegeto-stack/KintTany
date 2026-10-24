@@ -18,6 +18,11 @@ for name, content, needles in (
 ):
     for token in needles:
         assert token in content, f"{name}: missing {token}"
+assert "XDCacheComposedFrame" in renderer
+assert "VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL" in renderer
+assert "XDReuseComposedFrameBarrier" in vulkan
+assert "capturedComposed" in vulkan
+assert "reuseComposed" in vulkan
 assert "pipeline_draws_submitted=0" not in bridge
 assert vulkan.index("XDProcessDraws") < vulkan.index("state->QueueSubmit(state->queue")
 assert vulkan.index("xowue_xenos_record_submitted") > vulkan.index("result = state->QueueSubmit")

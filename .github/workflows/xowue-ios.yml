@@ -150,6 +150,13 @@ jobs:
           python3 tools/patch_xowue_global_local_bctr.py \
             --ppc-dir generated/ppc --report artifacts/xowue-global-local-ctr.json
           test -s artifacts/xowue-global-local-ctr.json
+          # Compile one shared native continuation for all verified addresses
+          # within sub_82C2E240. This covers E4A8 and other local PPC targets
+          # without generating one new manual fix per run.
+          python3 tools/lower_xowue_owner_interior_entries.py \
+            --ppc-dir generated/ppc --report artifacts/xowue-owner-wide-resume.json
+          grep -Eq '\{[[:space:]]*0x82C2E4A8[[:space:]]*,[[:space:]]*sub_82C2E4A8' generated/ppc/ppc_func_mapping.cpp
+          test -s artifacts/xowue-owner-wide-resume.json
 
       - name: Verify portrait-only iOS game host
         run: |
@@ -514,6 +521,11 @@ jobs:
             exit 1
           fi
           echo "Native PPC continuation 0x82C2E338: linked into final app executable"
+          if ! grep -Fq '82C2E4A8' artifacts/xowue-linked-symbols.txt; then
+            echo "Owner-wide AOT 0x82C2E4A8 not linked into final Mach-O" >&2
+            exit 1
+          fi
+          echo "Owner-wide PPC 0x82C2E4A8 linked into final app executable"
           # Require the complete native draw plumbing in the packaged Mach-O.
           # Source-only renderer changes are not accepted as a deliverable.
           grep -Eq '_xowue_xenos_take_draws([[:space:]]|$)' artifacts/xowue-linked-symbols.txt
@@ -523,6 +535,7 @@ jobs:
           grep -Fq 'XENOS_GPU_DRAWS_SUBMITTED' artifacts/xowue-linked-strings.txt
           grep -Fq 'XENOS_NATIVE_PIPELINE_CREATED' artifacts/xowue-linked-strings.txt
           grep -Fq 'XENOS_TEXTURE_FORMAT_OR_FETCH_UNSUPPORTED' artifacts/xowue-linked-strings.txt
+          grep -Fq 'XENOS_COMPOSED_CACHE_ALLOCATION_FAILED' artifacts/xowue-linked-strings.txt
           echo "XENOS_GPU_LINKED Mach-O draw commands, PM4 queue and native shader pipeline"
           lipo "$APP/Frameworks/libvulkan_kosmickrisp.dylib" -verify_arch arm64
           otool -L "$APP/XOWUE" | grep -F "@rpath/libvulkan_kosmickrisp.dylib"
