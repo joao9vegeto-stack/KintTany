@@ -6,8 +6,8 @@ import re
 from collections import Counter
 from pathlib import Path
 
-FUNC = re.compile(r'PPC_FUNC_IMPL\\(__imp__(sub_[0-9A-Fa-f]+)\\) \\{\\n')
-BCTR = re.compile(r'(?m)^\\s*// bctr\\s*$')
+FUNC = re.compile(r'PPC_FUNC_IMPL\(__imp__(sub_[0-9A-Fa-f]+)\) \{\n')
+BCTR = re.compile(r'(?m)^\s*// bctr\s*$')
 NATIVE = 'switch (ctx.ctr.u32) {'
 UNRESOLVED = 'PPC_CALL_INDIRECT_FUNC(ctx.ctr.u32);'
 REQUIRED = {
