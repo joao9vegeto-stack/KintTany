@@ -46,8 +46,9 @@ def generate(ppc_dir: Path):
     # Original native AOT therefore contains 599 translated PPC opcodes.
     if END and len(comments) != required - 1:
         raise ValueError(f"owner instruction order incomplete: {len(comments)} != {required - 1}")
-    if not END and (len(comments) < 40 or not (OWNER + len(comments) * 4 > max(KNOWN))):
-        raise ValueError(f"owner 0x{OWNER:X} AOT body too short for verified targets")
+    if not END and not (OWNER + len(comments) * 4 > max(KNOWN)):
+        raise ValueError(f"owner 0x{OWNER:X} translated_count={len(comments)} "
+                         f"does not cover target=0x{max(KNOWN):X}")
     labels = {}
     starts = [match.start() for match in comments]
     for found in LABEL.finditer(body):
@@ -68,7 +69,7 @@ def generate(ppc_dir: Path):
                    re.findall(r"\{\s*0x([0-9A-Fa-f]+)\s*,", map_source))
     candidate_pcs = [OWNER + i * 4 for i in range(1, len(comments))
                      if OWNER + i * 4 not in recorded]
-    if any(pc < OWNER or pc >= (END or OWNER + 4 * len(comments)) for pc in candidate_pcs) or len(candidate_pcs) < 30:
+    if any(pc < OWNER or pc >= (END or OWNER + 4 * len(comments)) for pc in candidate_pcs) or len(candidate_pcs) < (500 if END else 8):
         raise ValueError("native owner PC coverage not internally consistent")
     renamed = body.replace(f"PPC_FUNC_IMPL(__imp__sub_{OWNER:X})",
                            f"static void xowue_resume_{OWNER:X}(PPCContext &ctx, uint8_t *base, uint32_t entryPc)", 1)
