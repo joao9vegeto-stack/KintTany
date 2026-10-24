@@ -1044,10 +1044,10 @@ uint32_t allocateGuestPhysicalRange(uint8_t *base, uint32_t requestedSize,
             }
         }
         if (moved) continue;
-        if (candidate < kFirstPhysicalAllocation || candidate + size > kLastVirtualAllocation) return 0u;
+        if (candidate < kFirstPhysicalAllocation || candidate + size > kLastPhysicalAllocation) return 0u;
         const uint32_t address = static_cast<uint32_t>(candidate);
         g_physicalAllocations.push_back({address, size, protection});
-                 g_nextVirtualAllocation = static_cast<uint32_t>(candidate + size);
+                 g_nextPhysicalAllocation = static_cast<uint32_t>(candidate + size);
         std::memset(base + address, 0, size);
         return address;
     }
@@ -6430,9 +6430,9 @@ void xowue_NtAllocateVirtualMemory(PPCContext &context, uint8_t *base) {
                      &requestedBase, &requestedSize](uint32_t status) {
         char event[220];
         std::snprintf(event, sizeof(event),
-                      "NtAllocate basePtr=0x%08X sizePtr=0x%08X requested=0x%08X size=0x%08X flags=0x%08X protect=0x%08X debug=0x%08X status=0x%08X",
+                      "NtAllocate basePtr=0x%08X sizePtr=0x%08X requested=0x%08X size=0x%08X flags=0x%08X protect=0x%08X debug=0x%08X status=0x%08X next_virtual=0x%08X next_physical=0x%08X",
                       basePointer, sizePointer, requestedBase, requestedSize, allocationType,
-                      protection, debugMemory, status);
+                      protection, debugMemory, status, g_nextVirtualAllocation, g_nextPhysicalAllocation);
         recordRuntimeTrace(event);
         context.r3.u32 = status;
     };

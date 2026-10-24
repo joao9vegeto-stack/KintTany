@@ -72,3 +72,20 @@ assert "nearby_start=%08X opcodes=" in engine
 assert "NtQueryVirtualMemory queried=%08X page=%08X" in engine
 assert "XexGetProcedureAddress unresolved module=%08X" in engine
 print("PASS: physical/virtual heap separation; AOT bctrl CTR provenance, no interpreter")
+
+# Build 33: the physical allocator must NEVER mutate the virtual cursor.
+# A prior typo pushed the virtual pointer below 0x40000000 on the first
+# physical allocation, causing NtAllocate(1 MiB) -> STATUS_NO_MEMORY and
+# HalReturnToFirmware(1) before Xenos initialization.
+physical_start=engine.index("uint32_t allocateGuestPhysicalRange(", engine.index("namespace {")+20)
+physical_end=engine.index("bool releaseGuestPhysicalRange(uint32_t address) {", physical_start)
+physical=engine[physical_start:physical_end]
+assert "g_nextPhysicalAllocation = static_cast<uint32_t>(candidate + size)" in physical
+assert "candidate + size > kLastPhysicalAllocation" in physical
+assert "g_nextVirtualAllocation =" not in physical
+assert "kLastVirtualAllocation" not in physical
+first_phys = 0x10000000
+first_virt = 0x40000000
+assert first_phys + 0x1000 <= 0x20000000
+assert first_virt + 0x100000 <= 0x70000000
+print("PASS: physical heap bookkeeping cannot corrupt first 1MiB Xbox virtual reservation")

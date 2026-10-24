@@ -49,7 +49,12 @@ enum XOWUEDiagnostics {
 
     static func existingCrashFileURL() -> URL? {
         guard let url = fileURL(named: crashFilename),
-              FileManager.default.fileExists(atPath: url.path) else { return nil }
+              FileManager.default.fileExists(atPath: url.path),
+              let attrs = try? FileManager.default.attributesOfItem(atPath: url.path),
+              let size = attrs[.size] as? NSNumber,
+              size.intValue > 0 else { return nil }
+        // A controlled Xbox firmware return is recorded in the diagnostic,
+        // not fabricated as an iOS crash. Hide the empty native crash file.
         return url
     }
 

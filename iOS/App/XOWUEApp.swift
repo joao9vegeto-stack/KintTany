@@ -89,6 +89,48 @@ private struct XOWUEVulkanSurface: UIViewRepresentable {
     func updateUIView(_ view: XOWUEVulkanView, context: Context) {}
 }
 
+// The SwiftUI fullScreenCover hosting controller remained portrait-only on iOS
+// 26 even after the app delegate requested landscape. Present a UIKit host
+// whose actual top controller advertises the game orientation.
+@MainActor
+private final class XOWUELandscapeHostingController: UIHostingController<XOWUEGameSurfaceScreen> {
+    override var supportedInterfaceOrientations: UIInterfaceOrientationMask { .landscapeRight }
+    override var preferredInterfaceOrientationForPresentation: UIInterfaceOrientation { .landscapeRight }
+    override var shouldAutorotate: Bool { true }
+}
+
+@MainActor
+private struct XOWUELandscapePresenter: UIViewControllerRepresentable {
+    @ObservedObject var library: XOWUEGameLibrary
+
+    func makeUIViewController(context: Context) -> UIViewController {
+        let anchor = UIViewController()
+        anchor.view.backgroundColor = .clear
+        return anchor
+    }
+
+    func updateUIViewController(_ anchor: UIViewController, context: Context) {
+        if library.gameSurfacePresented {
+            guard anchor.presentedViewController == nil else { return }
+            DispatchQueue.main.async {
+                guard library.gameSurfacePresented,
+                      anchor.view.window != nil,
+                      anchor.presentedViewController == nil else { return }
+                XOWUEOrientationDelegate.effectiveMask = .landscapeRight
+                let host = XOWUELandscapeHostingController(
+                    rootView: XOWUEGameSurfaceScreen(library: library))
+                host.modalPresentationStyle = .fullScreen
+                XOWUEDiagnostics.log("orientation.host presenting supported=\(host.supportedInterfaceOrientations.rawValue)")
+                anchor.present(host, animated: false) {
+                    host.setNeedsUpdateOfSupportedInterfaceOrientations()
+                }
+            }
+        } else if anchor.presentedViewController != nil {
+            anchor.dismiss(animated: false)
+        }
+    }
+}
+
 @MainActor
 private struct XOWUEGameSurfaceScreen: View {
     @ObservedObject var library: XOWUEGameLibrary
@@ -1186,8 +1228,9 @@ private struct XOWUERootView: View {
             )
             .ignoresSafeArea()
         }
-        .fullScreenCover(isPresented: $library.gameSurfacePresented) {
-            XOWUEGameSurfaceScreen(library: library)
+        .background {
+            XOWUELandscapePresenter(library: library)
+                .frame(width: 1, height: 1)
         }
         .onOpenURL { url in
             library.handleOpenURL(url)

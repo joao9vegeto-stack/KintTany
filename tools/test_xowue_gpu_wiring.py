@@ -114,3 +114,12 @@ print("PASS: native guest EDRAM GPU writeback linked to Xenos tiled original fra
 assert 'const VkDeviceSize size=(VkDeviceSize)copyPitch*copyHeight*4u;' in color
 assert 'VkDeviceSize(' not in color
 print('PASS: Objective-C compatible VkDeviceSize guest resolve')
+
+# iOS 26: present an actual UIKit controller supporting landscape rather
+# than a portrait-only SwiftUI fullScreenCover.
+ui=Path("iOS/App/XOWUEApp.swift").read_text()
+assert "XOWUELandscapeHostingController" in ui
+assert "override var supportedInterfaceOrientations: UIInterfaceOrientationMask { .landscapeRight }" in ui
+assert "XOWUELandscapePresenter(library: library)" in ui
+assert ".fullScreenCover(isPresented: $library.gameSurfacePresented)" not in ui
+print("PASS: native UIKit landscape game host, portrait library preserved")
