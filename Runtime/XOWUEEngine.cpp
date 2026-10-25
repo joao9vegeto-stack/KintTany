@@ -4712,8 +4712,10 @@ void xowue_NtOpenFile(PPCContext &context, uint8_t *base) {
         return;
     }
     uint32_t handle = 0u, action = 0u;
+    const uint32_t shareAccess = context.r7.u32;
+    const uint32_t openOptions = context.r8.u32;
     const uint32_t status = createGuestFile(base, guestPath, context.r4.u32,
-                                            1u, context.r7.u32, handle, action);
+                                            1u, openOptions, handle, action);
     PPC_STORE_U32(handleOutAddress, status == kNtStatusSuccess ? handle : 0u);
     writeGuestIoStatus(base, ioStatusAddress, status, action);
     context.r3.u32 = status;
@@ -4724,8 +4726,8 @@ void xowue_NtOpenFile(PPCContext &context, uint8_t *base) {
     std::snprintf(statusText, sizeof(statusText), "%08X", status);
     char argsText[160];
     std::snprintf(argsText, sizeof(argsText),
-                  " desiredAccess=0x%08X objectAttributes=0x%08X ioStatus=0x%08X options=0x%08X",
-                  context.r4.u32, context.r5.u32, ioStatusAddress, context.r7.u32);
+                  " desiredAccess=0x%08X objectAttributes=0x%08X ioStatus=0x%08X shareAccess=0x%08X options=0x%08X",
+                  context.r4.u32, context.r5.u32, ioStatusAddress, shareAccess, openOptions);
     recordRuntimeTrace("NtOpenFile path=" + guestPath + argsText +
                        " status=0x" + statusText +
                        (status == kNtStatusSuccess ? " opened" : " open failed"));
