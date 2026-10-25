@@ -1131,6 +1131,33 @@ thread_local bool g_insideGraphicsInterrupt = false;
 
 bool dispatchGraphicsInterrupt(uint32_t source, uint32_t cpu);
 bool graphicsInterruptCallbackRegistered();
+// Xenos worker (command processor) thread only.
+std::chrono::steady_clock::time_point g_nextGraphicsVblank{};
+
+// 60 Hz vblank counter/interrupt and deferred CP interrupts. Runs only on
+// the Xenos worker thread, also from inside blocking WAIT_REG_MEM polls.
+void serviceGraphicsInterruptTick() {
+    const auto now = std::chrono::steady_clock::now();
+    const bool vblankDue = now >= g_nextGraphicsVblank;
+    if (vblankDue) {
+        g_nextGraphicsVblank += kGraphicsVblankPeriod;
+        if (now >= g_nextGraphicsVblank) g_nextGraphicsVblank = now + kGraphicsVblankPeriod;
+        g_xenosVblankCounter.fetch_add(1u, std::memory_order_relaxed);
+    }
+    if (graphicsInterruptCallbackRegistered() &&
+        !g_schedulerStopRequested.load() && !g_activeGuestMemory.expired()) {
+        const uint32_t cpuMask = g_pendingCpInterruptCpuMask.exchange(0u);
+        for (uint32_t cpu = 0u; cpu < 6u; ++cpu) {
+            if ((cpuMask & (1u << cpu)) != 0u &&
+                !dispatchGraphicsInterrupt(kGraphicsInterruptSwap, cpu))
+                g_pendingCpInterruptCpuMask.fetch_or(1u << cpu);
+        }
+        // Xenia GraphicsSystem::MarkVblank dispatches on CPU 2.
+        if (vblankDue) dispatchGraphicsInterrupt(kGraphicsInterruptVblank, 2u);
+    } else {
+        g_pendingCpInterruptCpuMask.store(0u);
+    }
+}
 
 void resetGraphicsInterruptState() {
     std::lock_guard<std::mutex> lock(g_graphicsInterruptMutex);
@@ -1205,7 +1232,7 @@ struct GuestXenosPumpSessionGuard final {
 
     GuestXenosPumpSessionGuard()
         : worker([this] {
-              auto nextVblank = std::chrono::steady_clock::now() + kGraphicsVblankPeriod;
+              g_nextGraphicsVblank = std::chrono::steady_clock::now() + kGraphicsVblankPeriod;
               while (!stopRequested.load(std::memory_order_relaxed)) {
                   try {
                       pumpGuestXenosRingBuffer();
@@ -1214,27 +1241,8 @@ struct GuestXenosPumpSessionGuard final {
                   } catch (...) {
                       recordRuntimeTrace("Xenos ring worker: unknown host exception");
                   }
-                  const auto now = std::chrono::steady_clock::now();
-                  const bool vblankDue = now >= nextVblank;
-                  if (vblankDue) {
-                      nextVblank += kGraphicsVblankPeriod;
-                      if (now >= nextVblank) nextVblank = now + kGraphicsVblankPeriod;
-                      g_xenosVblankCounter.fetch_add(1u, std::memory_order_relaxed);
-                  }
-                  if (graphicsInterruptCallbackRegistered() &&
-                      !g_schedulerStopRequested.load() && !g_activeGuestMemory.expired()) {
-                      const uint32_t cpuMask = g_pendingCpInterruptCpuMask.exchange(0u);
-                      for (uint32_t cpu = 0u; cpu < 6u; ++cpu) {
-                          if ((cpuMask & (1u << cpu)) != 0u &&
-                              !dispatchGraphicsInterrupt(kGraphicsInterruptSwap, cpu))
-                              g_pendingCpInterruptCpuMask.fetch_or(1u << cpu);
-                      }
-                      // Xenia GraphicsSystem::MarkVblank dispatches on CPU 2.
-                      if (vblankDue) dispatchGraphicsInterrupt(kGraphicsInterruptVblank, 2u);
-                  } else {
-                      g_pendingCpInterruptCpuMask.store(0u);
-                  }
-                  std::this_thread::sleep_for(std::chrono::milliseconds(1));
+                  serviceGraphicsInterruptTick();
+                  std::this_thread::sleep_for(std::chrono::microseconds(250));
               }
           }) {}
 
@@ -1526,7 +1534,9 @@ void xowue_thread_checkpoint() {
     if (g_schedulerStopRequested.load(std::memory_order_relaxed))
         throw GuestThreadStopRequested{};
     checkpointGuestThread();
-    pumpGuestXenosRingBuffer();
+    // The Xenos ring is executed only by the worker thread (Xenia's CP
+    // thread): it runs PM4_INTERRUPT handlers synchronously and blocks on
+    // WAIT_REG_MEM, neither of which is safe on an arbitrary guest thread.
 }
 
 void xowue_thread_checkpoint(uint32_t guestAddress) {
@@ -3745,8 +3755,6 @@ struct PM4ParseSummary {
     uint64_t frameDecodeFailures = 0;
     uint64_t guestMemoryWrites = 0;
     uint64_t interrupts = 0;
-    bool stalled = false;
-    size_t stallOffset = 0;
 };
 
 void initializeXenosMmioRegisters(uint8_t *base);
@@ -4174,7 +4182,6 @@ std::atomic<uint32_t> g_pm4ScratchTraceBudget{0};
 std::atomic<uint32_t> g_pm4InterruptTraceBudget{0};
 std::atomic<uint32_t> g_pm4WaitTraceBudget{0};
 std::atomic<uint32_t> g_pm4EventTraceBudget{0};
-std::chrono::steady_clock::time_point g_pm4WaitStallSince{};
 
 // Command-processor register write: host register file, GPU MMIO mirror for
 // guest reads, and scratch-register writeback (Xenia WriteRegister).
@@ -4409,34 +4416,36 @@ static bool executeGuestPM4Words(uint8_t *base,
                 bool readable = true;
                 if ((waitInfo & 0x10u) != 0u) readable = loadGpuMemory32(base, poll, value);
                 else value = xowue::xenos::ReadRegister(poll & 0x7FFFu);
-                const bool matched = readable &&
+                bool matched = readable &&
                     xenosCompare(waitInfo, value, words[offset + 4u], words[offset + 3u]);
-                if (matched || !readable) {
-                    g_pm4WaitStallSince = {};
-                } else if (depth == 0u) {
-                    // Never block inside the pump (it also runs on guest
-                    // threads): stall the ring at this packet and retry on
-                    // the next pump, with a bounded timeout.
-                    const auto now = std::chrono::steady_clock::now();
-                    if (g_pm4WaitStallSince == std::chrono::steady_clock::time_point{})
-                        g_pm4WaitStallSince = now;
-                    if (now - g_pm4WaitStallSince < std::chrono::milliseconds(500)) {
-                        summary.stalled = true;
-                        summary.stallOffset = offset;
-                        return true;
-                    }
-                    g_pm4WaitStallSince = {};
+                // Xenia ExecutePacketType3_WAIT_REG_MEM: block the CP until
+                // the condition holds; keep vblank/interrupts flowing.
+                const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(2);
+                while (readable && !matched && !g_schedulerStopRequested.load() &&
+                       std::chrono::steady_clock::now() < deadline) {
+                    serviceGraphicsInterruptTick();
+                    std::this_thread::sleep_for(std::chrono::microseconds(250));
+                    if ((waitInfo & 0x10u) != 0u) readable = loadGpuMemory32(base, poll, value);
+                    else value = xowue::xenos::ReadRegister(poll & 0x7FFFu);
+                    matched = readable &&
+                        xenosCompare(waitInfo, value, words[offset + 4u], words[offset + 3u]);
+                }
+                if (!matched) {
                     recordXenosPm4Event(g_pm4WaitTraceBudget,
-                        "XENOS_PM4_WAIT_REG_MEM timeout info=0x%08X poll=0x%08X value=0x%08X ref=0x%08X mask=0x%08X",
-                        waitInfo, poll, value, words[offset + 3u], words[offset + 4u]);
-                } else {
-                    recordXenosPm4Event(g_pm4WaitTraceBudget,
-                        "XENOS_PM4_WAIT_REG_MEM unmatched in indirect buffer info=0x%08X poll=0x%08X value=0x%08X ref=0x%08X",
-                        waitInfo, poll, value, words[offset + 3u]);
+                        "XENOS_PM4_WAIT_REG_MEM timeout info=0x%08X poll=0x%08X value=0x%08X ref=0x%08X mask=0x%08X depth=%u",
+                        waitInfo, poll, value, words[offset + 3u], words[offset + 4u], depth);
                 }
             } else if (opcode == 0x54u && payloadCount >= 1u) { // INTERRUPT
+                // Xenia ExecutePacketType3_INTERRUPT: dispatch synchronously in
+                // CP order; D3D follows it with a WAIT_REG_MEM on the
+                // handler's acknowledgement and then resets the scratch
+                // callback slot to 0x0BADF00D.
                 const uint32_t cpuMask = words[offset + 1u] & 0x3Fu;
-                g_pendingCpInterruptCpuMask.fetch_or(cpuMask);
+                for (uint32_t cpu = 0u; cpu < 6u; ++cpu) {
+                    if ((cpuMask & (1u << cpu)) != 0u &&
+                        !dispatchGraphicsInterrupt(kGraphicsInterruptSwap, cpu))
+                        g_pendingCpInterruptCpuMask.fetch_or(1u << cpu);
+                }
                 ++summary.interrupts;
                 recordXenosPm4Event(g_pm4InterruptTraceBudget,
                     "XENOS_PM4_INTERRUPT cpu_mask=0x%02X", cpuMask);
@@ -4569,8 +4578,7 @@ void pumpGuestXenosRingBuffer() {
     // CP_RB_WPTR advances only after the title has written a complete kick.
     // Retire the captured span even if an unknown packet was found so one bad
     // command cannot hold the guest's entire ring forever.
-    const uint32_t consumed = static_cast<uint32_t>(
-        summary.stalled ? summary.stallOffset : words.size());
+    const uint32_t consumed = static_cast<uint32_t>(words.size());
     readPointer = (readPointer + consumed) & ringMask;
     frontend.ringReadPointer = readPointer;
     {
