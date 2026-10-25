@@ -32,6 +32,11 @@ struct ShaderRecord {
 };
 std::mutex stateMutex;
 std::array<uint32_t, 0x5003> registers{};
+std::string lastReject;
+FrameLifecycleState guestFrame{}; uint64_t guestFrameGeneration=0;
+bool IsCopyPathActive(){return (registers[0x2318u]&0x00100000u)!=0u;}
+void InvalidateGuestFrame(const char* r){guestFrame.stale=true;guestFrame.committed=false;lastReject=r?r:"XENOS_STALE_GUEST_FRAME";}
+std::string FrameDiagnosticsLocked(){char v[384];std::snprintf(v,sizeof(v),"XOWUE_FRAME_LIFECYCLE generation=%" PRIu64 " swap=%d color_source=%d copied=%d committed=%d stale=%d addr=%08X size=%ux%u pitch=%u format=%u tile=%u copy_cmd=%u",guestFrameGeneration,guestFrame.has_guest_swap?1:0,guestFrame.has_color_source?1:0,guestFrame.copied_to_swapchain?1:0,guestFrame.committed?1:0,guestFrame.stale?1:0,guestFrame.address,guestFrame.width,guestFrame.height,guestFrame.pitch,guestFrame.format,guestFrame.source_tile,guestFrame.copy_command);return v;}
 std::unordered_map<uint64_t, ShaderRecord> shaders;
 std::unordered_map<std::string, std::vector<uint32_t>> linkedPixels;
 uint64_t linkedPixelCompiled = 0, linkedPixelRejected = 0;
@@ -42,7 +47,6 @@ uint64_t vertexHash = 0, pixelHash = 0;
 uint32_t lastDrawInitiator = 0;
 std::deque<XOWUEGuestDraw> pendingDraws;
 uint64_t submittedDraws = 0, rejectedDraws = 0, droppedDraws = 0;
-std::string lastReject;
 
 uint64_t Hash(uint32_t stage, const uint32_t* words, size_t count) {
   uint64_t hash = 14695981039346656037ull ^ stage;
@@ -54,7 +58,7 @@ uint64_t Hash(uint32_t stage, const uint32_t* words, size_t count) {
 
 void Reset() {
   std::lock_guard lock(stateMutex);
-  registers.fill(0);
+  registers.fill(0); guestFrame=FrameLifecycleState{}; guestFrameGeneration=0;
   shaders.clear();
   linkedPixels.clear();
   linkedPixelCompiled = linkedPixelRejected = 0;
@@ -68,11 +72,13 @@ void Reset() {
   lastReject.clear();
 }
 
-void WriteRegister(uint32_t address, uint32_t value) {
-  if (address >= registers.size()) return;
-  std::lock_guard lock(stateMutex);
-  registers[address] = value;
-}
+void WriteRegister(uint32_t address,uint32_t value){if(address>=registers.size())return;std::lock_guard lock(stateMutex);registers[address]=value;switch(address){case 0x2000u:guestFrame.pitch=value;break;case 0x2001u:case 0x2003u:case 0x2004u:case 0x2005u:if(IsCopyPathActive()&&guestFrame.has_guest_swap&&!guestFrame.committed)guestFrame.has_color_source=true;break;case 0x2318u:guestFrame.copy_command=value&0x1Fu;if((value&0x00100000u)==0u)InvalidateGuestFrame("XENOS_STALE_GUEST_FRAME: copy_control_without_commit");break;case 0x2319u:guestFrame.address=value;break;case 0x231Au:guestFrame.pitch=value;break;case 0x231Bu:guestFrame.format=value;break;default:break;}}
+void NotifyGuestSwap(uint32_t a,uint32_t w,uint32_t h,uint32_t f){std::lock_guard lock(stateMutex);++guestFrameGeneration;guestFrame.address=a;guestFrame.width=w;guestFrame.height=h;guestFrame.format=f;guestFrame.has_guest_swap=true;guestFrame.has_color_source=false;guestFrame.copied_to_swapchain=false;guestFrame.committed=false;guestFrame.stale=false;}
+void NotifyGuestResolve(uint32_t t,uint32_t w,uint32_t h,uint32_t p,uint32_t c){std::lock_guard lock(stateMutex);guestFrame.source_tile=t;if(w)guestFrame.width=w;if(h)guestFrame.height=h;if(p)guestFrame.pitch=p;guestFrame.copy_command=c;guestFrame.has_color_source=true;guestFrame.copied_to_swapchain=true;guestFrame.stale=false;}
+void NotifyGuestFrameCommitted(){std::lock_guard lock(stateMutex);guestFrame.committed=true;guestFrame.stale=false;}
+bool HasFreshGuestFrame(){std::lock_guard lock(stateMutex);return guestFrame.has_guest_swap&&guestFrame.has_color_source&&guestFrame.copied_to_swapchain&&guestFrame.committed&&!guestFrame.stale;}
+bool IsGuestFrameStale(){std::lock_guard lock(stateMutex);return guestFrame.stale;}
+std::string FrameDiagnostics(){std::lock_guard lock(stateMutex);return FrameDiagnosticsLocked();}
 
 uint32_t ReadRegister(uint32_t address) {
   if (address >= registers.size()) return 0;
@@ -230,6 +236,7 @@ void QueueDraw(uint32_t initiator, uint32_t indexCount,
   std::lock_guard lock(stateMutex);
   ++observedDraws;
   lastDrawInitiator = initiator;
+  if(IsCopyPathActive()&&!(guestFrame.has_guest_swap&&guestFrame.has_color_source&&guestFrame.copied_to_swapchain&&guestFrame.committed&&!guestFrame.stale)){++droppedDraws;lastReject="XENOS_STALE_GUEST_FRAME: resolve_without_commit";return;}
   const uint32_t edramMode=registers[0x2208u]&7u;
   const bool depthOnly=edramMode==5u;
   const bool copyMode=edramMode==6u;
@@ -352,9 +359,9 @@ extern "C" size_t xowue_xenos_spirv_words(uint64_t hash, uint32_t *out, size_t c
 
 std::string Diagnostics() {
   std::lock_guard lock(stateMutex);
-  char value[480];
+  char value[1024];
   std::snprintf(value, sizeof(value),
-      "XENOS_SHADER_TRANSLATOR source=SpeedBreaker/Xenia "
+      "XENOS_SHADER_TRANSLATOR source=SpeedBreaker/Xenia frame_state=%s "
       "translated=%" PRIu64 " rejected=%" PRIu64 " cache_hits=%" PRIu64
       " spirv_compiled=%" PRIu64 " spirv_rejected=%" PRIu64
       " observed_draws=%" PRIu64 " vertex_hash=%016" PRIX64
@@ -363,7 +370,7 @@ std::string Diagnostics() {
       " pipeline_draws_rejected=%" PRIu64
       " linked_pixels=%" PRIu64 " linked_pixel_rejected=%" PRIu64
       " linked_varying_mask=%04X last_reject=%s",
-      translated, failed, cacheHits, spirvCompiled, spirvRejected,
+      FrameDiagnosticsLocked().c_str(), translated, failed, cacheHits, spirvCompiled, spirvRejected,
       observedDraws, vertexHash, pixelHash,
       lastDrawInitiator, pendingDraws.size(), droppedDraws, submittedDraws,
       rejectedDraws, linkedPixelCompiled, linkedPixelRejected,

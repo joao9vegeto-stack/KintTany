@@ -1535,6 +1535,8 @@ extern "C" bool xowue_xenos_commit_resolved_rgba(
         dest,pitch,height,tiled?1u:0u,endian,
         static_cast<unsigned long long>(committed));
     recordRuntimeTrace(event);
+    xowue::xenos::NotifyGuestResolve(dest,pitch,height,pitch,info & 0x1Fu);
+    xowue::xenos::NotifyGuestFrameCommitted();
     if(xowue_vulkan_backend_guest_frame_rgba)
         xowue_vulkan_backend_guest_frame_rgba(dest,pitch,height,6u,rgba,sourceBytes);
     return true;
@@ -4087,6 +4089,7 @@ static bool executeGuestPM4Words(uint8_t *base,
                     continue;
                 }
                 const uint32_t textureFormat = frontend.swapFetch[1] & 0x3Fu;
+                xowue::xenos::NotifyGuestSwap(frontbuffer,width,height,textureFormat);
                 std::vector<uint8_t> rgba;
                 uint32_t decodedAddress = 0u;
                 if (decodeXenosSwapTexture(base, frontend.swapFetch.data(),
@@ -4257,6 +4260,7 @@ void xowue_VdSwap(PPCContext &context, uint8_t *base) {
         if (decoded) ++g_xenosFrontend.decodedFrames;
         else ++g_xenosFrontend.malformedPackets;
     }
+    xowue::xenos::NotifyGuestSwap(frontbufferPhysicalAddress,width,height,textureFormat);
     if (decoded) {
         if (xowue_vulkan_backend_guest_swap)
             xowue_vulkan_backend_guest_swap(frontbufferPhysicalAddress, width, height);

@@ -1,0 +1,10 @@
+XOWUE: correção do stall de render / guest framebuffer commit
+
+Implementação na branch XOWUE:
+- estado explícito do lifecycle do frame guest no bridge Xenos;
+- registro de swaps reais do ring PM4 e VdSwap;
+- frame marcado como committed somente depois de validar e escrever o framebuffer guest em xowue_xenos_commit_resolved_rgba;
+- draws do caminho de cópia são recusados quando não há commit fresco;
+- diagnóstico XOWUE_FRAME_LIFECYCLE incluído em XENOS_SHADER_TRANSLATOR.
+
+Validação no aparelho continua necessária: guest_memory_commit real, fresh_guest_frames > 0, host present sem reuso de frame stale e avanço além da tela Wolverine. Compilação CI/IPA não prova renderização visível.
