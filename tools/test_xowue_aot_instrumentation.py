@@ -126,3 +126,24 @@ assert "recovered = generate(args.ppc_dir)" in owners
 assert "budget = 12288" in owners
 assert "if len(selected) >= 72" in owners
 print("PASS: Build 35 bctrl target 0x8257A840 included in verified native owner recovery and CI")
+
+# Build 37: an actual user exit cancels guest PPC; UIKit dismissal cannot
+# leave the AOT entry and spawned threads running underneath the launcher.
+header=(root / "Runtime" / "xowue_engine.h").read_text()
+swift=(root / "iOS" / "App" / "XOWUEApp.swift").read_text()
+backend=(root / "iOS" / "App" / "XOWUEVulkanBackend.m").read_text()
+assert "void xowue_request_stop(void);" in header
+assert 'extern "C" void xowue_request_stop(void)' in engine
+assert 'requestGuestSchedulerStop();' in engine
+assert 'catch (const GuestThreadStopRequested &)' in engine
+assert 'recordAotExecutionSummary("user-exit")' in engine
+assert "xowue_request_stop()" in swift
+assert "if exitRequested || outcome.code == 4" in swift
+assert 'Label("SAIR", systemImage: "power")' in swift
+assert 'Label("JOGO INSTALADO"' in swift
+assert "16.0 / 9.0" in swift and "9.0 / 16.0" in swift
+assert "XOWUE_REAL_FPS" in backend and "XOWUE_FPS" not in backend
+assert "guestDelta" in backend and "hostDelta" in backend
+assert "XOWUE_ASSET_PREFLIGHT" in engine
+assert "XOWUE_INPUT_POLLED" in engine
+print("PASS: native guest cancellation, real guest-frame FPS, 16:9 viewport, touch diagnostics")

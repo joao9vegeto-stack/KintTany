@@ -570,6 +570,9 @@ jobs:
           grep -Fq '82CFB410' artifacts/xowue-linked-symbols.txt
           grep -Fq '82C30BFC' artifacts/xowue-linked-symbols.txt
           grep -Fq '8257A840' artifacts/xowue-linked-symbols.txt
+          # The Swift SAIR button must call the linked C ABI scheduler stop,
+          # not only dismiss the Metal host view.
+          grep -Fq 'xowue_request_stop' artifacts/xowue-linked-symbols.txt
           echo "XOWUE Build 34 observed PPC owner-interior 0x82C30BFC linked into final IPA"
           echo "XOWUE_GLOBAL_PPC 0x831A9EBC linked into final executable"
           # Require the complete native draw plumbing in the packaged Mach-O.
@@ -577,6 +580,7 @@ jobs:
           grep -Eq '_xowue_xenos_take_draws([[:space:]]|$)' artifacts/xowue-linked-symbols.txt
           grep -Eq '_xowue_xenos_record_submitted([[:space:]]|$)' artifacts/xowue-linked-symbols.txt
           strings "$APP/XOWUE" > artifacts/xowue-linked-strings.txt
+          grep -Fq 'XOWUE_REAL_FPS' artifacts/xowue-linked-strings.txt
           grep -Fq 'vkCmdDraw' artifacts/xowue-linked-strings.txt
           grep -Fq 'XENOS_GPU_DRAWS_SUBMITTED' artifacts/xowue-linked-strings.txt
           grep -Fq 'XENOS_NATIVE_PIPELINE_CREATED' artifacts/xowue-linked-strings.txt

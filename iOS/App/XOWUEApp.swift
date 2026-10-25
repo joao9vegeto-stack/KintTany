@@ -169,7 +169,17 @@ private struct XOWUEGameSurfaceScreen: View {
     var body: some View {
         ZStack {
             Color.black.ignoresSafeArea()
-            XOWUEVulkanSurface().ignoresSafeArea()
+            // Keep the actual 1280x720 game aspect. The iPhone's extra-wide
+            // landscape screen must letterbox, never stretch/crop Xbox pixels.
+            GeometryReader { canvas in
+                XOWUEVulkanSurface()
+                    .frame(
+                        width: min(canvas.size.width, canvas.size.height * 16.0 / 9.0),
+                        height: min(canvas.size.height, canvas.size.width * 9.0 / 16.0)
+                    )
+                    .position(x: canvas.size.width / 2, y: canvas.size.height / 2)
+            }
+            .ignoresSafeArea()
             if !showsBootFailure {
                 XOWUETouchControllerHUD(input: touchController)
             }
@@ -177,39 +187,16 @@ private struct XOWUEGameSurfaceScreen: View {
             VStack(spacing: 0) {
                 HStack {
                     Button {
-                        // The game uses UIKit's explicit landscape hosting
-                        // controller. Setting @Published alone may remove its
-                        // representable before updateUIViewController dismisses.
-                        XOWUEDiagnostics.log("navigation.back tapped")
+                        XOWUEDiagnostics.log("navigation.exit tapped: terminating native PPC")
                         touchController.releaseAll()
-                        library.gameSurfacePresented = false
-                        let windows = UIApplication.shared.connectedScenes
-                            .compactMap { $0 as? UIWindowScene }
-                            .flatMap(\.windows)
-                        var dismissed = false
-                        for window in windows where !dismissed {
-                            var controller = window.rootViewController
-                            while let presented = controller?.presentedViewController {
-                                if let game = presented as? XOWUELandscapeHostingController {
-                                    game.dismiss(animated: false)
-                                    dismissed = true
-                                    XOWUEDiagnostics.log("navigation.back dismissed UIKit landscape host")
-                                    break
-                                }
-                                controller = presented
-                            }
-                        }
-                        if !dismissed {
-                            XOWUEDiagnostics.log("navigation.back fallback: no presented landscape host")
-                        }
-                        XOWUEOrientationDelegate.effectiveMask = .portrait
+                        library.requestExit()
                     } label: {
-                        Label("BIBLIOTECA", systemImage: "chevron.left")
+                        Label("SAIR", systemImage: "power")
                             .font(.system(size: 11, weight: .heavy, design: .rounded))
                             .tracking(0.6)
-                            .padding(.horizontal, 13)
+                            .padding(.horizontal, 14)
                             .padding(.vertical, 10)
-                            .background(.black.opacity(0.72), in: Capsule())
+                            .background(.black.opacity(0.78), in: Capsule())
                     }
                     .buttonStyle(.plain)
 
@@ -239,8 +226,8 @@ private struct XOWUEGameSurfaceScreen: View {
                                 .lineLimit(4)
                                 .textSelection(.enabled)
                         }
-                        Button("VOLTAR À BIBLIOTECA") {
-                            library.gameSurfacePresented = false
+                        Button("SAIR DO JOGO") {
+                            library.requestExit()
                         }
                         .font(.system(size: 11, weight: .heavy, design: .rounded))
                         .padding(.top, 4)
@@ -268,6 +255,8 @@ private struct XOWUEGameSurfaceScreen: View {
         .statusBarHidden(true)
         .onDisappear {
             touchController.releaseAll()
+            // Also end the guest session if iOS removes the hosting view.
+            library.requestExit()
             requestOrientation(.portrait)
         }
         .onAppear {
@@ -366,72 +355,71 @@ private enum XOWUEGamepadButton {
     static let y: UInt32 = 0x8000
 }
 
+// Fixed bottom-left and bottom-right clusters keep the centre of a 16:9
+// game unobstructed, with Start/Back and visibility at the bottom centre.
 private struct XOWUETouchControllerHUD: View {
     @ObservedObject var input: XOWUETouchController
     @State private var controlsVisible = true
 
     var body: some View {
         GeometryReader { geometry in
-            VStack(spacing: 0) {
-                HStack {
-                    Spacer()
+            let scale = min(1.0, max(0.68, geometry.size.height / 430.0))
+            ZStack(alignment: .bottom) {
+                if controlsVisible {
+                    HStack(alignment: .bottom, spacing: 0) {
+                        VStack(spacing: 7) {
+                            HStack(spacing: 8) {
+                                XOWUETouchButton(title: "L1", mask: XOWUEGamepadButton.leftShoulder, input: input, size: 37)
+                                XOWUETouchTrigger(title: "L2", left: true, input: input)
+                            }
+                            HStack(alignment: .bottom, spacing: 7) {
+                                XOWUETouchStick(left: true, input: input, size: 90)
+                                XOWUETouchDPad(input: input)
+                            }
+                            XOWUETouchButton(title: "L3", mask: XOWUEGamepadButton.leftThumb, input: input, size: 30)
+                        }
+                        Spacer(minLength: 10)
+                        VStack(spacing: 7) {
+                            HStack(spacing: 8) {
+                                XOWUETouchTrigger(title: "R2", left: false, input: input)
+                                XOWUETouchButton(title: "R1", mask: XOWUEGamepadButton.rightShoulder, input: input, size: 37)
+                            }
+                            HStack(alignment: .bottom, spacing: 9) {
+                                XOWUETouchABXY(input: input)
+                                XOWUETouchStick(left: false, input: input, size: 90)
+                            }
+                            XOWUETouchButton(title: "R3", mask: XOWUEGamepadButton.rightThumb, input: input, size: 30)
+                        }
+                    }
+                    .scaleEffect(scale, anchor: .bottom)
+                    .padding(.horizontal, 14)
+                    .padding(.bottom, 14)
+                    .transition(.opacity)
+                }
+
+                HStack(spacing: 10) {
+                    if controlsVisible {
+                        XOWUETouchButton(title: "BACK", mask: XOWUEGamepadButton.back,
+                                         input: input, size: 36, compact: true)
+                        XOWUETouchButton(title: "START", mask: XOWUEGamepadButton.start,
+                                         input: input, size: 39, compact: true)
+                    }
                     Button {
                         controlsVisible.toggle()
                         if !controlsVisible { input.releaseAll() }
                     } label: {
                         Image(systemName: controlsVisible ? "gamecontroller.fill" : "gamecontroller")
-                            .font(.system(size: 14, weight: .bold))
+                            .font(.system(size: 15, weight: .bold))
                             .foregroundStyle(XOWUEPalette.yellow)
-                            .frame(width: 42, height: 34)
-                            .background(.black.opacity(0.56), in: Capsule())
+                            .frame(width: 40, height: 36)
+                            .background(.black.opacity(0.72), in: Capsule())
                     }
                     .buttonStyle(.plain)
                     .accessibilityLabel(controlsVisible ? "Ocultar controles" : "Mostrar controles")
                 }
-
-                Spacer(minLength: 0)
-
-                if controlsVisible {
-                    HStack(alignment: .bottom, spacing: 8) {
-                        VStack(spacing: 8) {
-                            HStack(spacing: 6) {
-                                XOWUETouchButton(title: "L1", mask: XOWUEGamepadButton.leftShoulder, input: input, size: 39)
-                                XOWUETouchTrigger(title: "L2", left: true, input: input)
-                            }
-                            XOWUETouchStick(left: true, input: input, size: 100)
-                            XOWUETouchDPad(input: input)
-                            XOWUETouchButton(title: "L3", mask: XOWUEGamepadButton.leftThumb, input: input, size: 39)
-                        }
-
-                        Spacer(minLength: 0)
-
-                        VStack(spacing: 10) {
-                            HStack(spacing: 6) {
-                                XOWUETouchButton(title: "BACK", mask: XOWUEGamepadButton.back, input: input, size: 38, compact: true)
-                                XOWUETouchButton(title: "START", mask: XOWUEGamepadButton.start, input: input, size: 38, compact: true)
-                            }
-                            XOWUETouchABXY(input: input)
-                        }
-
-                        Spacer(minLength: 0)
-
-                        VStack(spacing: 8) {
-                            HStack(spacing: 6) {
-                                XOWUETouchTrigger(title: "R2", left: false, input: input)
-                                XOWUETouchButton(title: "R1", mask: XOWUEGamepadButton.rightShoulder, input: input, size: 39)
-                            }
-                            XOWUETouchStick(left: false, input: input, size: 84)
-                            XOWUETouchButton(title: "R3", mask: XOWUEGamepadButton.rightThumb, input: input, size: 39)
-                        }
-                    }
-                    .padding(.horizontal, 8)
-                    .padding(.bottom, max(18, geometry.safeAreaInsets.bottom + 10))
-                    .transition(.opacity)
-                }
+                .padding(.bottom, 15)
             }
-            .padding(.horizontal, 9)
-            .padding(.top, max(32, geometry.safeAreaInsets.top + 12))
-            .frame(maxWidth: .infinity, maxHeight: .infinity)
+            .frame(width: geometry.size.width, height: geometry.size.height)
         }
         .ignoresSafeArea()
         .animation(.easeOut(duration: 0.18), value: controlsVisible)
@@ -980,6 +968,7 @@ private final class XOWUEGameLibrary: ObservableObject {
     @Published var bootOutput = "Nenhum teste de boot executado."
     @Published var isBusy = false
     @Published var gameSurfacePresented = false
+    private var exitRequested = false
 
     var selectedLocation: String {
         guard let selectedGame, let docs = try? XOWUEFileStore.documents() else {
@@ -1091,6 +1080,19 @@ private final class XOWUEGameLibrary: ObservableObject {
         }
     }
 
+    func requestExit() {
+        guard !exitRequested else { return }
+        if !isBusy || phase != .booting {
+            gameSurfacePresented = false
+            return
+        }
+        exitRequested = true
+        status = "Encerrando sessão nativa…"
+        detail = "Aguardando as threads PPC e o motor Xenos finalizarem."
+        XOWUEDiagnostics.log("runtime.stop requested by user")
+        xowue_request_stop()
+    }
+
     func runBoot() {
         guard !isBusy else { return }
         guard let game = selectedGame else {
@@ -1098,6 +1100,7 @@ private final class XOWUEGameLibrary: ObservableObject {
             phase = .missing
             return
         }
+        exitRequested = false
         gameSurfacePresented = true
         isBusy = true
         phase = .booting
@@ -1117,6 +1120,15 @@ private final class XOWUEGameLibrary: ObservableObject {
                 progress = 1
                 bootOutput = outcome.text
                 XOWUEDiagnostics.bootFinished(code: outcome.code, text: outcome.text)
+                if exitRequested || outcome.code == 4 {
+                    exitRequested = false
+                    phase = .ready
+                    status = "Sessão do jogo encerrada."
+                    detail = "Threads PPC finalizadas; pronto para iniciar novamente."
+                    gameSurfacePresented = false
+                    XOWUEDiagnostics.log("runtime.stop completed code=\(outcome.code)")
+                    return
+                }
                 if outcome.code == 3 {
                     phase = .stopped
                     status = "O runtime parou em um pedido de firmware."
@@ -1132,6 +1144,14 @@ private final class XOWUEGameLibrary: ObservableObject {
                 }
             } catch {
                 isBusy = false
+                if exitRequested {
+                    exitRequested = false
+                    phase = .ready
+                    gameSurfacePresented = false
+                    status = "Sessão encerrada."
+                    XOWUEDiagnostics.log("runtime.stop completed after error: \(error.localizedDescription)")
+                    return
+                }
                 phase = .failed
                 status = "Não foi possível validar ou executar o XEX."
                 detail = error.localizedDescription
@@ -1315,7 +1335,7 @@ private struct XOWUERootView: View {
     private var gameLibraryCard: some View {
         VStack(alignment: .leading, spacing: 14) {
             HStack {
-                Label("BIBLIOTECA LOCAL", systemImage: "externaldrive.fill")
+                Label("JOGO INSTALADO", systemImage: "externaldrive.fill")
                     .font(.system(size: 11, weight: .heavy, design: .rounded))
                     .tracking(1.2)
                     .foregroundStyle(XOWUEPalette.yellowLight)

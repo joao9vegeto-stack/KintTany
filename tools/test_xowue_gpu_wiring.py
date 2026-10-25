@@ -124,11 +124,14 @@ assert "XOWUELandscapePresenter(library: library)" in ui
 assert ".fullScreenCover(isPresented: $library.gameSurfacePresented)" not in ui
 print("PASS: native UIKit landscape game host, portrait library preserved")
 
-# Ensure back dismisses its UIKit host even when representable is removed.
-assert 'navigation.back tapped' in ui
-assert 'game.dismiss(animated: false)' in ui
-assert 'navigation.back dismissed UIKit landscape host' in ui
-print("PASS: landscape-host dismiss and library back navigation")
+# User-requested single-title launcher must truly cancel guest PPC before
+# dismissing the landscape host (no longer a fake 'back to library').
+assert 'navigation.exit tapped: terminating native PPC' in ui
+assert 'library.requestExit()' in ui
+assert 'if exitRequested || outcome.code == 4' in ui
+assert 'gameSurfacePresented = false' in ui
+assert 'Label("SAIR", systemImage: "power")' in ui
+print("PASS: landscape host closes after cooperative native PPC shutdown")
 
 # RB_COPY_CONTROL bit layout verified against Xenia registers.h:
 # bits 0..2 select RT0..RT3 (4=depth), 20..21 select raw/convert.

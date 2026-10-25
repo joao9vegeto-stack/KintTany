@@ -1391,6 +1391,10 @@ KKRenderFrame(KKVulkanState *state, CAMetalLayer *layer)
    KKVulkanState _vk;
    CADisplayLink *_displayLink;
    UILabel *_statusLabel;
+   UILabel *_fpsLabel;
+   CFTimeInterval _lastFPSMeasurement;
+   uint64_t _lastGameFrames;
+   uint64_t _lastHostFrames;
    id _backgroundObserver;
    id _foregroundObserver;
    BOOL _attempted;
@@ -1424,6 +1428,23 @@ KKRenderFrame(KKVulkanState *state, CAMetalLayer *layer)
    _statusLabel.text = @"KOSMICKRISP / METAL\nInicializando backend gráfico…";
    [self addSubview:_statusLabel];
    _statusLabel.hidden = YES;
+
+   // Real game FPS counts fresh decoded Xbox guest frames, never repeated
+   // Metal presents. Both counters are shown so a frozen guest reads 0 FPS.
+   _fpsLabel = [[UILabel alloc] initWithFrame:CGRectZero];
+   _fpsLabel.numberOfLines = 2;
+   _fpsLabel.font = [UIFont monospacedDigitSystemFontOfSize:11 weight:UIFontWeightBold];
+   _fpsLabel.textAlignment = NSTextAlignmentLeft;
+   _fpsLabel.textColor = UIColor.whiteColor;
+   _fpsLabel.backgroundColor = [UIColor colorWithWhite:0 alpha:0.70];
+   _fpsLabel.layer.cornerRadius = 8;
+   _fpsLabel.layer.masksToBounds = YES;
+   _fpsLabel.text = @" JOGO 0.0 FPS\n Metal 0 Hz";
+   _fpsLabel.accessibilityLabel = @"FPS real do jogo e taxa de apresentação Metal";
+   [self addSubview:_fpsLabel];
+   _lastFPSMeasurement = CACurrentMediaTime();
+   _lastGameFrames = atomic_load_explicit(&g_xowue_guest_frame_count, memory_order_relaxed);
+   _lastHostFrames = 0;
 
    __weak XOWUEVulkanView *weakSelf = self;
    NSNotificationCenter *notifications = NSNotificationCenter.defaultCenter;
@@ -1464,6 +1485,10 @@ KKRenderFrame(KKVulkanState *state, CAMetalLayer *layer)
    metalLayer.drawableSize = CGSizeMake(MAX(1.0, self.bounds.size.width * scale),
                                          MAX(1.0, self.bounds.size.height * scale));
    _statusLabel.frame = CGRectMake(10, 10, MAX(0.0, self.bounds.size.width - 20), 56);
+   // Keep HUD at the physical upper left of the landscape viewport.
+   _fpsLabel.frame = CGRectMake(MAX(12.0, self.safeAreaInsets.left + 8.0),
+                                 MAX(12.0, self.safeAreaInsets.top + 8.0),
+                                 166.0, 42.0);
    if (self.window && !_attempted)
       [self performSelector:@selector(startBackend) withObject:nil afterDelay:0.15];
 }
@@ -1532,6 +1557,9 @@ KKRenderFrame(KKVulkanState *state, CAMetalLayer *layer)
    KKLog(@"KOSMICKRISP_BACKEND_READY extent=%ux%u images=%u",
          _vk.swapchain_extent.width, _vk.swapchain_extent.height, _vk.swapchain_image_count);
 
+   _lastFPSMeasurement = CACurrentMediaTime();
+   _lastGameFrames = atomic_load_explicit(&g_xowue_guest_frame_count, memory_order_relaxed);
+   _lastHostFrames = _vk.frame_count;
    _displayLink = [CADisplayLink displayLinkWithTarget:self selector:@selector(displayTick:)];
    _displayLink.preferredFramesPerSecond = 60;
    [_displayLink addToRunLoop:NSRunLoop.mainRunLoop forMode:NSRunLoopCommonModes];
@@ -1551,6 +1579,27 @@ KKRenderFrame(KKVulkanState *state, CAMetalLayer *layer)
       return;
    }
 
+   const CFTimeInterval now = CACurrentMediaTime();
+   const double elapsed = now - _lastFPSMeasurement;
+   if (elapsed >= 1.0) {
+      const uint64_t guestNow = atomic_load_explicit(
+         &g_xowue_guest_frame_count, memory_order_relaxed);
+      const uint64_t hostNow = _vk.frame_count;
+      const uint64_t guestDelta = guestNow >= _lastGameFrames
+         ? guestNow - _lastGameFrames : 0u;
+      const uint64_t hostDelta = hostNow >= _lastHostFrames
+         ? hostNow - _lastHostFrames : 0u;
+      const double gameFPS = (double)guestDelta / elapsed;
+      const double hostFPS = (double)hostDelta / elapsed;
+      _fpsLabel.text = [NSString stringWithFormat:
+         @" JOGO %.1f FPS\n Metal %.0f Hz", gameFPS, hostFPS];
+      KKLog(@"XOWUE_REAL_FPS guest=%.2f present=%.2f fresh_guest_frames=%llu metal_presents=%llu interval=%.3f",
+            gameFPS, hostFPS, (unsigned long long)guestDelta,
+            (unsigned long long)hostDelta, elapsed);
+      _lastGameFrames = guestNow;
+      _lastHostFrames = hostNow;
+      _lastFPSMeasurement = now;
+   }
    if ((_vk.frame_count % 60u) == 0u) {
       const uint32_t swaps = atomic_load_explicit(&g_xowue_guest_swap_count, memory_order_relaxed);
       const uint32_t width = atomic_load_explicit(&g_xowue_guest_width, memory_order_relaxed);

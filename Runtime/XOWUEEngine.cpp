@@ -1580,6 +1580,19 @@ extern "C" int xowue_runtime_snapshot(char *output, size_t output_capacity) {
     return 0;
 }
 
+// Resolve the authentic case-insensitive Xbox path for asset preflight.
+// The implementation is defined later in this translation unit.
+static bool translateGuestFilePath(const std::string &guestPath, bool forWrite,
+                                   std::filesystem::path &hostPath);
+
+// Exit must terminate guest PPC execution; dismissing the view alone leaves
+// native guest workers running indefinitely behind the single-game launcher.
+extern "C" void xowue_request_stop(void) {
+    if (!g_aotExecutionTelemetryActive.load(std::memory_order_acquire)) return;
+    recordRuntimeTrace("XOWUE_USER_EXIT scheduler cancellation requested");
+    requestGuestSchedulerStop();
+}
+
 extern "C" int xowue_boot_xex(const char *path, char *output, size_t output_capacity) {
     try {
         g_aotExecutionTelemetryActive.store(false, std::memory_order_relaxed);
@@ -1637,6 +1650,25 @@ extern "C" int xowue_boot_xex(const char *path, char *output, size_t output_capa
         if (saveError) recordRuntimeTrace("save directory unavailable: " + saveError.message());
         recordRuntimeTrace("Xbox filesystem roots game=" + g_guestGameRoot.string() +
                            " saves=" + g_guestSaveRoot.string());
+        // Log *actual host filesystem* inventory instead of fabricating
+        // successful UE3/Bink movie opens (or skipping guest video calls).
+        // A missing file is often a wrong game extraction rather than PPC AOT.
+        for (const char *guestMovie : {
+                 "D:\\WGame\\Movies\\ravenlogo.xxx",
+                 "D:\\WGame\\Movies\\blank.bik",
+                 "D:\\WGame\\Movies\\UE3_logo.xxx",
+                 "D:\\WGame\\Movies\\FOX_LOGO.xxx",
+                 "D:\\WGame\\Movies\\MARVEL_INTRO.xxx",
+                 "D:\\WGame\\Movies\\ATVI_logo.xxx"}) {
+            std::filesystem::path hostMovie;
+            const bool mapped = translateGuestFilePath(guestMovie, false, hostMovie);
+            std::error_code ioError;
+            const bool exists = mapped && std::filesystem::is_regular_file(hostMovie, ioError);
+            recordRuntimeTrace(std::string("XOWUE_ASSET_PREFLIGHT guest=") + guestMovie +
+                               " mapped=" + (mapped ? "1" : "0") +
+                               " present=" + (exists ? "1" : "0") +
+                               " host=" + (mapped ? hostMovie.string() : "<rejected>"));
+        }
         const Image image = parseImage(path);
         g_activeImageBase = static_cast<uint32_t>(image.base);
         g_activeEntryPoint = static_cast<uint32_t>(image.entry_point);
@@ -1785,6 +1817,14 @@ extern "C" int xowue_boot_xex(const char *path, char *output, size_t output_capa
                      "Entry point retornou. Funções AOT registradas: %zu. O boot não foi concluído.%s",
                      installed, trace.c_str());
         return 3;
+    } catch (const GuestThreadStopRequested &) {
+        // This is an intentional user exit, not an empty AOT slot or a crash.
+        recordAotExecutionSummary("user-exit");
+        g_aotExecutionTelemetryActive.store(false, std::memory_order_release);
+        recordRuntimeTrace("XOWUE_USER_EXIT PPC stopped; scheduler guard joining guest threads");
+        writeMessage(output, output_capacity, "Sessão PPC encerrada por SAIR.%s",
+                     runtimeTraceText().c_str());
+        return 4;
     } catch (const GuestFirmwareReturn &request) {
         recordAotExecutionSummary("firmware-return");
         g_aotExecutionTelemetryActive.store(false, std::memory_order_release);
@@ -4321,6 +4361,19 @@ static uint32_t writeTouchGamepadState(uint8_t *base, uint32_t userIndex,
     {
         std::lock_guard<std::mutex> lock(g_touchControllerMutex);
         state = g_touchController;
+    }
+    // Confirm *consumption* of touch input by the guest, not merely that
+    // Swift emitted a button press. Log each changed packet only once.
+    static std::atomic<uint32_t> lastObservedPacket{0u};
+    const uint32_t previouslyObserved = lastObservedPacket.exchange(
+        state.packetNumber, std::memory_order_relaxed);
+    if (state.packetNumber && state.packetNumber != previouslyObserved) {
+        char inputEvent[160];
+        std::snprintf(inputEvent, sizeof(inputEvent),
+                      "XOWUE_INPUT_POLLED packet=%u buttons=0x%04X triggers=%u,%u",
+                      state.packetNumber, state.buttons & 0xFFFFu,
+                      state.leftTrigger, state.rightTrigger);
+        recordRuntimeTrace(inputEvent);
     }
     PPC_STORE_U32(address, state.packetNumber);
     PPC_STORE_U16(address + 4u, static_cast<uint16_t>(state.buttons));
