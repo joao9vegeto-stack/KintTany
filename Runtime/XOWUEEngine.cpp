@@ -1414,6 +1414,13 @@ extern "C" void XOWUECrashRecorderWriteFatal(const char *message) __attribute__(
 }
 
 PPCFunc *xowue_lookup_indirect(PPCContext &context, uint8_t *base, uint32_t target) {
+    // Generated PPC code can remain in a guest-side indirect-dispatch loop
+    // without entering a syscall/wait primitive. Poll cancellation here so the
+    // native Exit button can unwind such loops instead of leaving an orphaned
+    // PPC worker alive behind the launcher.
+    if (g_schedulerStopRequested.load(std::memory_order_relaxed))
+        throw GuestThreadStopRequested{};
+
     PPCFunc *slotFunction = nullptr;
     const uint64_t tableStart = static_cast<uint64_t>(PPC_IMAGE_BASE) + PPC_IMAGE_SIZE;
     const auto guard = xowue_dispatch_guard::resolve<PPCFunc>(
