@@ -166,6 +166,10 @@ jobs:
           # Build 34's next genuine AOT interior PC must have a compiled owner
           # and a mapping entry; a fail-closed dispatcher is not enough.
           grep -Eq '\{[[:space:]]*0x82C30BFC[[:space:]]*,[[:space:]]*sub_82C30BFC' generated/ppc/ppc_func_mapping.cpp
+          # Build 35: real bctrl at 0x82579508; CTR=0x8257A840.
+          # Reject IPA generation unless the translated PPC instruction is
+          # mapped as an actual native function, not a runtime bypass.
+          grep -Eq '\{[[:space:]]*0x8257A840[[:space:]]*,[[:space:]]*sub_8257A840' generated/ppc/ppc_func_mapping.cpp
           grep -Fq 'regional_native_owners' artifacts/xowue-owner-wide-resume.json
           test -s artifacts/xowue-owner-wide-resume.json
 
@@ -565,6 +569,7 @@ jobs:
           grep -Fq '82B34028' artifacts/xowue-linked-symbols.txt
           grep -Fq '82CFB410' artifacts/xowue-linked-symbols.txt
           grep -Fq '82C30BFC' artifacts/xowue-linked-symbols.txt
+          grep -Fq '8257A840' artifacts/xowue-linked-symbols.txt
           echo "XOWUE Build 34 observed PPC owner-interior 0x82C30BFC linked into final IPA"
           echo "XOWUE_GLOBAL_PPC 0x831A9EBC linked into final executable"
           # Require the complete native draw plumbing in the packaged Mach-O.

@@ -116,9 +116,13 @@ owners = (root / "tools" / "lower_xowue_owner_interior_entries.py").read_text()
 workflow = (root / ".github" / "workflows" / "xowue-ios.yml").read_text()
 assert "0x82C30BFC" in owners
 assert "0x82C30BFC" in workflow
+assert "0x8257A840" in owners
+assert "0x8257A840" in workflow
+assert "latest_target = targets[-1]" in owners
+assert "most_recent_observed_target" in owners
 assert "if len(possible) != 1:" in owners
 assert "instruction = meta[3][(target-base)//4]" in owners
 assert "recovered = generate(args.ppc_dir)" in owners
 assert "budget = 12288" in owners
 assert "if len(selected) >= 72" in owners
-print("PASS: Build 34 AOT missing slot has verified owner-wide native continuation")
+print("PASS: Build 35 bctrl target 0x8257A840 included in verified native owner recovery and CI")

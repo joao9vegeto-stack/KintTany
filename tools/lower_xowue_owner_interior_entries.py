@@ -281,12 +281,17 @@ def main():
         # In addition to recovering both demonstrated sites, proactively
         # compile the verified neighboring native owners in both execution
         # regions, instead of a one-PC-per-build patch.
+        # Build 35 later reached the real bctrl at 0x82579508, dispatching
+        # CTR=0x8257A840 (valid aligned code, absent AOT slot) after more
+        # than 15 million AOT calls and two non-black GPU-composited frames.
+        # Recover the actual translated owner, not a synthetic PPC fallback.
         # The Build 34 iPhone log reached 0x82C30BFC with an empty native
         # AOT slot, after 995336 AOT calls. This address is inside the
         # translated PPC code region, not null and not a firmware import.
         # Recover the exact owner instruction and compile real labels.
         targets = (0x830F0400, 0x831A9EBC, 0x831AA0B0,
-                   0x82B34028, 0x82CFB410, 0x82C30BFC)
+                   0x82B34028, 0x82CFB410, 0x82C30BFC,
+                   0x8257A840)
         registered = set(int(pc, 16) for pc in
                          re.findall(r"\{\s*0x([0-9A-Fa-f]+)\s*,",
                                     (args.ppc_dir / "ppc_func_mapping.cpp").read_text("utf-8")))
@@ -330,14 +335,20 @@ def main():
         count = sum(max(0, owners[x][1] - 1) for x in selected)
         if count > budget:
             raise ValueError(f"mandatory native owner coverage exceeds {budget} entries: {count}")
+        # Weight the newest *observed* execution neighborhood first.
+        # Earlier hotspots retain their exact mandatory owner mappings;
+        # prioritizing the latest callsite covers likely follow-on bctrl
+        # targets without inflating the 12,288-entry compile-time budget.
+        latest_target = targets[-1]
         candidate_owners = sorted((
-            (min(abs(start-t) for t in targets), start,meta)
+            (0 if abs(start-latest_target) <= 0x2000 else 1,
+             min(abs(start-t) for t in targets), start, meta)
             for start,meta in owners.items()
             if start not in selected and 9 <= meta[1] <= 128 and
                sum((start+4*i not in registered) for i in range(1,meta[1])) >= 8 and
                any(start <= t + 0x2000 and start+4*meta[1] >= t - 0x2000 for t in targets)
         ))
-        for _,start,meta in candidate_owners:
+        for _,_,start,meta in candidate_owners:
             if len(selected) >= 72 or count + meta[1] - 1 > budget:
                 continue
             # The first internal instruction must correspond to a real opcode
@@ -357,6 +368,10 @@ def main():
         report["native_owner_regions_scanned"] = len(owners)
         report["native_owner_regions_selected"] = len(region_report)
         report["regional_new_entry_budget"] = budget
+        report["most_recent_observed_target"] = f"0x{latest_target:08X}"
+        report["recent_region_precompiled"] = sum(
+            1 for start in selected if abs(start-latest_target) <= 0x2000
+        )
         current = set(int(pc,16) for pc in re.findall(
             r"\{\s*0x([0-9A-Fa-f]+)\s*,",
             (args.ppc_dir / "ppc_func_mapping.cpp").read_text("utf-8")))
