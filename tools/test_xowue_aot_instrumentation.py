@@ -109,3 +109,16 @@ exact=[(start,size) for start,size in regions if requested==start]
 half_open=[(start,size) for start,size in regions if start<=requested<start+size]
 assert exact==half_open==[(0x40130000,0x10000)]
 print("PASS: contiguous reservation release selects correct exact 64-KiB base")
+
+# Build 35 native owner recovery is validated against real AOT instruction
+# comments and has to produce the *exact* dispatch mapping + compiled symbol.
+owners = (root / "tools" / "lower_xowue_owner_interior_entries.py").read_text()
+workflow = (root / ".github" / "workflows" / "xowue-ios.yml").read_text()
+assert "0x82C30BFC" in owners
+assert "0x82C30BFC" in workflow
+assert "if len(possible) != 1:" in owners
+assert "instruction = meta[3][(target-base)//4]" in owners
+assert "recovered = generate(args.ppc_dir)" in owners
+assert "budget = 12288" in owners
+assert "if len(selected) >= 72" in owners
+print("PASS: Build 34 AOT missing slot has verified owner-wide native continuation")

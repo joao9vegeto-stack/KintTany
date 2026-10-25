@@ -442,9 +442,10 @@ static uint32_t XDProcessDraws(KKVulkanState *state, uint32_t image_index,
          draw->pa_sc_window_scissor_tl,draw->pa_sc_window_scissor_br);
       const uint32_t edramMode=draw->rb_modecontrol&7u;
       if(edramMode==6u) {
-         KKLog(@"XENOS_COPY_GUEST_REQUEST dest_base=%08X dest_pitch=%08X dest_info=%08X control=%08X",
+         KKLog(@"XENOS_COPY_GUEST_REQUEST dest_base=%08X dest_pitch=%08X dest_info=%08X control=%08X src=%u copy_command=%u",
             draw->rb_copy_dest_base,draw->rb_copy_dest_pitch,
-            draw->rb_copy_dest_info,draw->rb_copy_control);
+            draw->rb_copy_dest_info,draw->rb_copy_control,
+            draw->rb_copy_control&7u,(draw->rb_copy_control>>20u)&3u);
          if(began){ XD(CmdEndRenderPass)(command);began=false;currentPass=VK_NULL_HANDLE; }
          if(!XDResolveGuestColor(state,draw,command,image_index,swapchainAttachmentLayout)) {
             KKLog(@"GRAPHICS_BLOCKER reason=EDRAM_COLOR_SOURCE_UNAVAILABLE tile=%u",

@@ -165,12 +165,29 @@ static bool XDResolveGuestColor(KKVulkanState* state,
                                 const XOWUEGuestDraw* draw,
                                 VkCommandBuffer cmd,uint32_t imageIndex,
                                 bool swapchainInColorLayout) {
-  // Only resolve existing guest EDRAM targets - never invent a color surface.
-  const uint32_t sourceTile=draw->rb_color_info[0]&0xFFFu;
+  // RB_COPY_CONTROL bits 0:2 select one of four color render targets,
+  // or depth at index 4. Bits 20:21 specify the copy command. Do not
+  // read color target 0 when the guest selected another surface / depth.
+  // Xenia registers.h / RB_COPY_CONTROL (Xbox Xenos layout).
+  const uint32_t sourceIndex=draw->rb_copy_control&7u;
+  const uint32_t command=(draw->rb_copy_control>>20u)&3u;
+  if(sourceIndex>=4u || command>1u) {
+    KKLog(@"XENOS_COPY_SOURCE_UNSUPPORTED src=%u command=%u control=%08X",
+       sourceIndex,command,draw->rb_copy_control);
+    return false;
+  }
+  // Only resolve EDRAM surfaces actually written by real guest color draws.
+  // The game's boot copied color target 0, tile 720; the prior draws had
+  // created only a depth image, so producing arbitrary pixels is invalid.
+  const uint32_t sourceTile=draw->rb_color_info[sourceIndex]&0xFFFu;
   XDColorTarget* t=NULL;
   for(uint32_t i=0;i<g_xd_color_count;++i)
     if(g_xd_color[i].tile==sourceTile){t=&g_xd_color[i];break;}
-  if(!t)return false;
+  if(!t) {
+    KKLog(@"XENOS_COPY_MISSING_GUEST_COLOR src=%u command=%u tile=%u available_color=%u",
+      sourceIndex,command,sourceTile,g_xd_color_count);
+    return false;
+  }
   VkImageMemoryBarrier fromColor={.sType=VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER,
     .srcAccessMask=VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT,
     .dstAccessMask=VK_ACCESS_TRANSFER_READ_BIT,

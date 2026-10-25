@@ -281,7 +281,12 @@ def main():
         # In addition to recovering both demonstrated sites, proactively
         # compile the verified neighboring native owners in both execution
         # regions, instead of a one-PC-per-build patch.
-        targets = (0x830F0400, 0x831A9EBC, 0x831AA0B0, 0x82B34028, 0x82CFB410)
+        # The Build 34 iPhone log reached 0x82C30BFC with an empty native
+        # AOT slot, after 995336 AOT calls. This address is inside the
+        # translated PPC code region, not null and not a firmware import.
+        # Recover the exact owner instruction and compile real labels.
+        targets = (0x830F0400, 0x831A9EBC, 0x831AA0B0,
+                   0x82B34028, 0x82CFB410, 0x82C30BFC)
         registered = set(int(pc, 16) for pc in
                          re.findall(r"\{\s*0x([0-9A-Fa-f]+)\s*,",
                                     (args.ppc_dir / "ppc_func_mapping.cpp").read_text("utf-8")))
@@ -317,11 +322,11 @@ def main():
             selected[base] = (target, instruction, "observed_runtime")
             print(f"XOWUE_NATIVE_OWNER_FOUND target=0x{target:08X} owner=0x{base:08X} opcode={instruction} count={meta[1]} unit={meta[0]}")
 
-        # Preemptively cover the native functions surrounding both observed
-        # indirect PPC call sites. The 4K continuation budget limits binary
+        # Preemptively cover the native functions surrounding all observed
+        # indirect PPC call sites. The bounded continuation budget limits binary
         # bloat and branch targets are checked against real AOT instruction
         # offsets, never generated as NOPs or synthetic return functions.
-        budget = 8192
+        budget = 12288
         count = sum(max(0, owners[x][1] - 1) for x in selected)
         if count > budget:
             raise ValueError(f"mandatory native owner coverage exceeds {budget} entries: {count}")
@@ -333,7 +338,7 @@ def main():
                any(start <= t + 0x2000 and start+4*meta[1] >= t - 0x2000 for t in targets)
         ))
         for _,start,meta in candidate_owners:
-            if len(selected) >= 48 or count + meta[1] - 1 > budget:
+            if len(selected) >= 72 or count + meta[1] - 1 > budget:
                 continue
             # The first internal instruction must correspond to a real opcode
             # in the translated function. Validation is performed again by

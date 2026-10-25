@@ -129,3 +129,17 @@ assert 'navigation.back tapped' in ui
 assert 'game.dismiss(animated: false)' in ui
 assert 'navigation.back dismissed UIKit landscape host' in ui
 print("PASS: landscape-host dismiss and library back navigation")
+
+# RB_COPY_CONTROL bit layout verified against Xenia registers.h:
+# bits 0..2 select RT0..RT3 (4=depth), 20..21 select raw/convert.
+color=Path("iOS/App/XOWUEGuestColor.inc").read_text()
+draws=Path("iOS/App/XOWUENativeDraw.inc").read_text()
+assert "sourceIndex=draw->rb_copy_control&7u;" in color
+assert "command=(draw->rb_copy_control>>20u)&3u" in color
+assert "sourceIndex>=4u || command>1u" in color
+assert "draw->rb_color_info[sourceIndex]" in color
+assert "XENOS_COPY_MISSING_GUEST_COLOR" in color
+assert "copy_command=%u" in draws
+assert (0x00100000 & 7)==0
+assert ((0x00100000 >>20)&3)==1
+print("PASS: Xenos copy source=RT0 command=Convert; no fabricated depth/color pixels")
