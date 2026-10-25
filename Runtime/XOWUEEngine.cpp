@@ -1481,18 +1481,13 @@ extern "C" bool xowue_xenos_commit_resolved_rgba(
         (tiled?((pitch+31u)&~31u):pitch);
     const uint32_t alignedPitch=(pitchPixels+31u)&~31u;
     const uint32_t endian=(fetch[1]>>6u)&3u;
-    const uint32_t swizzle=(fetch[3]>>1u)&0xFFFu;
     const auto memory=acquireGraphicsGuestMemory();
     if(!memory || !memory->base)return false;
-    // Reject noninvertible swizzles: emitting incorrect guest components is
-    // worse than an explicit missing framebuffer result.
-    uint32_t selectors[4]{};
-    for(uint32_t channel=0;channel<4u;++channel){
-        selectors[channel]=(swizzle>>(channel*3u))&7u;
-        if(selectors[channel]>=4u)return false;
-        for(uint32_t before=0;before<channel;++before)
-            if(selectors[channel]==selectors[before])return false;
-    }
+    // The fetch-constant swizzle controls texture sampling, not the memory
+    // layout of a color render-target resolve. The Vulkan readback is already
+    // RGBA8; applying the sampling swizzle here (or rejecting repeated
+    // selectors such as the valid default descriptor) can prevent every
+    // rendered frame from reaching the guest framebuffer.
     // Verify the entire native texture destination before the first write.
     // A partially committed framebuffer could corrupt the AOT state.
     for(uint32_t y=0;y<height;++y)for(uint32_t x=0;x<pitch;++x){
@@ -1510,8 +1505,8 @@ extern "C" bool xowue_xenos_commit_resolved_rgba(
         if(address>UINT32_MAX || !validGuestRange(uint32_t(address),4u))
             return false;
         const uint8_t* source=rgba+(size_t(y)*pitch+x)*4u;
-        uint8_t pixel[4]{};
-        for(uint32_t i=0;i<4u;++i)pixel[selectors[i]]=source[i];
+        uint8_t pixel[4];
+        std::memcpy(pixel,source,sizeof(pixel));
         swapXenosPixelEndian(pixel,4u,endian);
         std::memcpy(memory->base+address,pixel,4u);
         ++committed;
