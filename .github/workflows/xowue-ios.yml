@@ -217,6 +217,8 @@ jobs:
           set -euo pipefail
           clang++ -std=c++23 -Wall -Wextra -Werror -pedantic Runtime/DispatchGuardSmoke.cpp -o "$RUNNER_TEMP/xowue-dispatch-guard-smoke"
           "$RUNNER_TEMP/xowue-dispatch-guard-smoke"
+          clang++ -std=c++23 -Wall -Wextra -Werror -pedantic Runtime/PathContainmentSmoke.cpp -o "$RUNNER_TEMP/xowue-path-containment-smoke"
+          "$RUNNER_TEMP/xowue-path-containment-smoke"
           python3 tools/test_xowue_aot_instrumentation.py
 
       - name: Validate ported Xenos shader translator on macOS
