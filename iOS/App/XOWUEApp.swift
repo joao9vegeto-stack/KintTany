@@ -125,8 +125,25 @@ private struct XOWUELandscapePresenter: UIViewControllerRepresentable {
                     host.setNeedsUpdateOfSupportedInterfaceOrientations()
                 }
             }
-        } else if anchor.presentedViewController != nil {
-            anchor.dismiss(animated: false)
+        } else {
+            // A full-screen controller presented by a UIViewControllerRepresentable
+            // may be forwarded by UIKit to the window root controller. In that case
+            // anchor.presentedViewController is nil, so dismissing only the anchor
+            // silently leaves the game surface on screen even though SwiftUI state
+            // has returned to the launcher.
+            DispatchQueue.main.async {
+                guard !library.gameSurfacePresented else { return }
+                if let root = anchor.view.window?.rootViewController,
+                   root.presentedViewController != nil {
+                    XOWUEDiagnostics.log("orientation.host dismissing root-presented game surface")
+                    root.dismiss(animated: false)
+                } else if anchor.presentedViewController != nil {
+                    XOWUEDiagnostics.log("orientation.host dismissing anchor-presented game surface")
+                    anchor.dismiss(animated: false)
+                } else {
+                    XOWUEDiagnostics.log("orientation.host dismiss requested; no modal attached to anchor/root")
+                }
+            }
         }
     }
 }
