@@ -1068,9 +1068,14 @@ bool releaseGuestPhysicalRange(uint32_t address) {
 }
 
 void checkpointGuestThread() {
+    // Cancellation is process/session-wide. Do not make it conditional on the
+    // TLS guest-thread binding: some generated AOT continuation paths can
+    // reach a checkpoint before the binding is restored, and returning early
+    // here would leave the PPC worker spinning after the user presses SAIR.
+    if (g_schedulerStopRequested.load(std::memory_order_relaxed))
+        throw GuestThreadStopRequested{};
     GuestThread *thread = g_currentGuestThread;
     if (!thread) return;
-    if (g_schedulerStopRequested.load()) throw GuestThreadStopRequested{};
     if (thread->suspendCount.load() == 0u) return;
     std::unique_lock<std::mutex> lock(thread->stateMutex);
     thread->stateChanged.wait(lock, [&] {
@@ -1334,6 +1339,12 @@ int fail(char *output, size_t capacity, const std::exception &error) {
 } // namespace
 
 void xowue_thread_checkpoint() {
+    // This hook runs at generated PPC AOT function entries. Poll the global
+    // stop flag before touching scheduler/TLS state or pumping the GPU ring,
+    // so a user exit can unwind even when the current continuation has no
+    // GuestThreadBinding.
+    if (g_schedulerStopRequested.load(std::memory_order_relaxed))
+        throw GuestThreadStopRequested{};
     checkpointGuestThread();
     pumpGuestXenosRingBuffer();
 }
