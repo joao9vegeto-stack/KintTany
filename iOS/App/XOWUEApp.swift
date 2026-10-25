@@ -199,6 +199,8 @@ private struct XOWUEGameSurfaceScreen: View {
                             .background(.black.opacity(0.78), in: Capsule())
                     }
                     .buttonStyle(.plain)
+                    .contentShape(Capsule())
+                    .zIndex(1000)
 
                     Spacer()
 
@@ -1081,22 +1083,19 @@ private final class XOWUEGameLibrary: ObservableObject {
     }
 
     func requestExit() {
-        guard !exitRequested else { return }
+        // Do not debounce/ignore repeated exit taps. The previous implementation
+        // latched exitRequested while the native boot was stuck; every later tap
+        // returned here without issuing another stop request.
+        let shouldStopNativeSession = phase == .booting || gameSurfacePresented || exitRequested
+        exitRequested = true
+        XOWUEDiagnostics.log("runtime.stop requested by user phase=\(phase) surface=\(gameSurfacePresented) latched=\(exitRequested)")
+        status = "Encerrando sessão nativa…"
+        detail = "Solicitando cancelamento do runtime PPC."
+        // Always signal native cancellation. It is safe before boot and idempotent
+        // after a prior request; do not gate the only exit control on SwiftUI state.
+        xowue_request_stop()
 
-        // The presented surface is the source of truth: SwiftUI can change
-        // phase before the native boot task returns. Never let that race turn
-        // SAIR into a view-only dismissal that leaves the PPC session alive.
-        let shouldStopNativeSession = phase == .booting || gameSurfacePresented
-        if shouldStopNativeSession {
-            exitRequested = true
-            status = "Encerrando sessão nativa…"
-            detail = "Cancelando a execução PPC e liberando a tela do jogo."
-            XOWUEDiagnostics.log("runtime.stop requested by user phase=\(phase) surface=\(gameSurfacePresented)")
-            xowue_request_stop()
-        }
-
-        // Dismiss immediately; the native stop is cooperative and must not
-        // block the only visible exit control while the boot task unwinds.
+        // Return to the launcher immediately; never wait for a wedged guest thread.
         gameSurfacePresented = false
         if !shouldStopNativeSession {
             exitRequested = false
