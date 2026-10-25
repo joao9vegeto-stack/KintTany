@@ -1100,6 +1100,25 @@ void requestGuestSchedulerStop() {
     notifyGuestWaiters();
 }
 
+constexpr uint32_t kGraphicsInterruptVblank = 0u;
+constexpr uint32_t kGraphicsInterruptSwap = 1u;
+constexpr auto kGraphicsVblankPeriod = std::chrono::nanoseconds(16666667);
+std::mutex g_graphicsInterruptMutex;
+std::shared_ptr<GuestThread> g_graphicsInterruptThread;
+std::atomic<bool> g_graphicsSwapInterruptPending{false};
+std::atomic<uint64_t> g_graphicsInterruptCounts[2]{};
+thread_local bool g_insideGraphicsInterrupt = false;
+
+bool dispatchGraphicsInterrupt(uint32_t source);
+bool graphicsInterruptCallbackRegistered();
+
+void resetGraphicsInterruptState() {
+    std::lock_guard<std::mutex> lock(g_graphicsInterruptMutex);
+    g_graphicsInterruptThread.reset();
+    g_graphicsSwapInterruptPending.store(false);
+    for (auto &count : g_graphicsInterruptCounts) count.store(0u);
+}
+
 void stopGuestThreads() {
     requestGuestSchedulerStop();
     std::vector<std::shared_ptr<GuestThread>> threads;
@@ -1140,6 +1159,7 @@ void stopGuestThreads() {
         g_guestThreads.clear();
     }
     g_mainGuestThread.reset();
+    resetGraphicsInterruptState();
     {
         std::lock_guard<std::mutex> lock(g_criticalSectionMapMutex);
         g_criticalSectionLocks.clear();
@@ -1164,6 +1184,7 @@ struct GuestXenosPumpSessionGuard final {
 
     GuestXenosPumpSessionGuard()
         : worker([this] {
+              auto nextVblank = std::chrono::steady_clock::now() + kGraphicsVblankPeriod;
               while (!stopRequested.load(std::memory_order_relaxed)) {
                   try {
                       pumpGuestXenosRingBuffer();
@@ -1171,6 +1192,20 @@ struct GuestXenosPumpSessionGuard final {
                       recordRuntimeTrace(std::string("Xenos ring worker: ") + error.what());
                   } catch (...) {
                       recordRuntimeTrace("Xenos ring worker: unknown host exception");
+                  }
+                  if (graphicsInterruptCallbackRegistered() &&
+                      !g_schedulerStopRequested.load() && !g_activeGuestMemory.expired()) {
+                      if (g_graphicsSwapInterruptPending.exchange(false) &&
+                          !dispatchGraphicsInterrupt(kGraphicsInterruptSwap))
+                          g_graphicsSwapInterruptPending.store(true);
+                      const auto now = std::chrono::steady_clock::now();
+                      if (now >= nextVblank) {
+                          dispatchGraphicsInterrupt(kGraphicsInterruptVblank);
+                          nextVblank += kGraphicsVblankPeriod;
+                          if (now >= nextVblank) nextVblank = now + kGraphicsVblankPeriod;
+                      }
+                  } else {
+                      nextVblank = std::chrono::steady_clock::now() + kGraphicsVblankPeriod;
                   }
                   std::this_thread::sleep_for(std::chrono::milliseconds(1));
               }
@@ -1199,6 +1234,121 @@ struct GuestThreadBinding final {
         g_guestIrql = previousIrql;
     }
 };
+
+bool graphicsInterruptCallbackRegistered() {
+    std::lock_guard<std::mutex> lock(g_xenosMutex);
+    return g_xenosFrontend.graphicsInterruptCallback != 0u;
+}
+
+// Dedicated guest thread context (own KTHREAD/KPCR/TLS/stack) used only to run
+// the Vd graphics interrupt callback, so the callback never borrows the stack
+// of a PPC thread that is executing concurrently. Caller holds
+// g_graphicsInterruptMutex.
+GuestThread *acquireGraphicsInterruptThread(uint8_t *base, uint32_t callback) {
+    if (g_graphicsInterruptThread) return g_graphicsInterruptThread.get();
+    auto thread = std::make_shared<GuestThread>();
+    if (!allocateGuestThreadStack(0x10000u, thread->stackBase, thread->stackSize)) {
+        recordRuntimeTrace("XENOS_GRAPHICS_INTERRUPT could not reserve guest interrupt stack");
+        return nullptr;
+    }
+    {
+        std::lock_guard<std::mutex> threadsLock(g_guestThreadMutex);
+        thread->id = g_nextGuestThreadId++;
+        thread->objectAddress = g_nextGuestThreadObjectAddress;
+        g_nextGuestThreadObjectAddress += 0x1000u;
+        thread->pcrAddress = g_nextGuestPcrAddress;
+        g_nextGuestPcrAddress += kGuestThreadMetadataStride;
+        thread->tlsAddress = g_nextGuestTlsAddress;
+        g_nextGuestTlsAddress += kGuestThreadTlsStride;
+    }
+    if (thread->objectAddress >= 0x7E000000u || thread->pcrAddress >= 0x7D000000u ||
+        thread->tlsAddress >= 0x7C000000u) {
+        recordRuntimeTrace("XENOS_GRAPHICS_INTERRUPT guest thread-object range exhausted");
+        return nullptr;
+    }
+    thread->startAddress = callback;
+    initializeGuestThreadEnvironment(base, thread->objectAddress, thread->pcrAddress,
+                                     thread->tlsAddress, thread->stackBase,
+                                     thread->stackSize, thread->id, callback, 0u, 0u);
+    char event[192];
+    std::snprintf(event, sizeof(event),
+                  "XENOS_GRAPHICS_INTERRUPT_THREAD id=%u object=0x%08X KPCR=0x%08X stack=0x%08X+0x%08X",
+                  thread->id, thread->objectAddress, thread->pcrAddress,
+                  thread->stackBase, thread->stackSize);
+    recordRuntimeTrace(event);
+    g_graphicsInterruptThread = std::move(thread);
+    return g_graphicsInterruptThread.get();
+}
+
+// Delivers a Xenos graphics interrupt (0 = vblank, 1 = swap done) to the
+// callback registered through VdSetGraphicsInterruptCallback. Non-blocking:
+// returns false when another delivery is in progress so callers never wait on
+// guest code running elsewhere.
+bool dispatchGraphicsInterrupt(uint32_t source) {
+    if (g_insideGraphicsInterrupt) return false;
+    uint32_t callback = 0u;
+    uint32_t callbackContext = 0u;
+    {
+        std::lock_guard<std::mutex> lock(g_xenosMutex);
+        callback = g_xenosFrontend.graphicsInterruptCallback;
+        callbackContext = g_xenosFrontend.graphicsInterruptContext;
+    }
+    if (callback == 0u) return true;
+    std::unique_lock<std::mutex> dispatchLock(g_graphicsInterruptMutex, std::try_to_lock);
+    if (!dispatchLock.owns_lock()) return false;
+    const auto memory = g_activeGuestMemory.lock();
+    uint8_t *base = memory ? memory->base : nullptr;
+    if (!base || g_schedulerStopRequested.load()) return true;
+    PPCFunc *routine = findGuestFunction(callback);
+    const uint64_t count =
+        g_graphicsInterruptCounts[source & 1u].fetch_add(1u, std::memory_order_relaxed) + 1u;
+    if (!routine) {
+        if (count <= 4u) {
+            char event[160];
+            std::snprintf(event, sizeof(event),
+                          "XENOS_GRAPHICS_INTERRUPT callback absent from AOT map source=%u callback=0x%08X",
+                          source, callback);
+            recordRuntimeTrace(event);
+        }
+        return true;
+    }
+    GuestThread *thread = acquireGraphicsInterruptThread(base, callback);
+    if (!thread) return true;
+    if (count <= 8u || count % 600u == 0u) {
+        char event[192];
+        std::snprintf(event, sizeof(event),
+                      "XENOS_GRAPHICS_INTERRUPT source=%u callback=0x%08X context=0x%08X count=%llu thread=%u",
+                      source, callback, callbackContext,
+                      static_cast<unsigned long long>(count), thread->id);
+        recordRuntimeTrace(event);
+    }
+    PPCContext interrupt{};
+    interrupt.r1.u32 = (thread->stackBase + thread->stackSize - 0x200u) & ~0xFu;
+    interrupt.r2.u32 = g_activeImageBase;
+    interrupt.r13.u32 = thread->pcrAddress;
+    interrupt.lr = 0;
+    interrupt.r3.u32 = source;
+    interrupt.r4.u32 = callbackContext;
+    PPC_STORE_U32(interrupt.r1.u32, 0u);
+    g_insideGraphicsInterrupt = true;
+    try {
+        GuestThreadBinding binding(thread);
+        routine(interrupt, base);
+    } catch (const std::exception &error) {
+        char event[96];
+        std::snprintf(event, sizeof(event), "XENOS_GRAPHICS_INTERRUPT failed source=%u: ", source);
+        recordRuntimeTrace(event + std::string(error.what()));
+    } catch (...) {
+        char event[128];
+        std::snprintf(event, sizeof(event),
+                      "XENOS_GRAPHICS_INTERRUPT source=%u terminated with a guest control transfer",
+                      source);
+        recordRuntimeTrace(event);
+    }
+    g_insideGraphicsInterrupt = false;
+    notifyGuestWaiters();
+    return true;
+}
 
 struct GuestFirmwareReturn final : std::runtime_error {
     explicit GuestFirmwareReturn(const PPCContext &context)
@@ -1657,6 +1807,7 @@ extern "C" int xowue_boot_xex(const char *path, char *output, size_t output_capa
             std::lock_guard<std::mutex> graphicsLock(g_xenosMutex);
             g_xenosFrontend = {};
         }
+        resetGraphicsInterruptState();
         {
             std::lock_guard<std::mutex> controllerLock(g_touchControllerMutex);
             g_touchController = {};
@@ -4291,6 +4442,8 @@ void xowue_VdSwap(PPCContext &context, uint8_t *base) {
                   decoded ? "decoded and presented guest framebuffer" : "framebuffer decode rejected",
                   width, height, frontbufferPhysicalAddress, textureFormat, colorSpace);
     recordRuntimeTrace(event);
+    if (!dispatchGraphicsInterrupt(kGraphicsInterruptSwap))
+        g_graphicsSwapInterruptPending.store(true);
 }
 
 void xowue_VdInitializeScalerCommandBuffer(PPCContext &context, uint8_t *base) {

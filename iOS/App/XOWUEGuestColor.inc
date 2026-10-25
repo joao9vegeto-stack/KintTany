@@ -272,11 +272,20 @@ static bool XDResolveGuestColor(KKVulkanState* state,
       t->format,copyFormat,copyPitch,copyHeight,g_xd_guest_resolves_count);
   }
   // Native resolve to host presentation after guest writeback copy request.
+  // Letterbox the 1280x720 (16:9) Xbox 360 frame like XOWUENativeDraw.inc
+  // instead of stretching it over the whole swapchain extent.
+  const float swapW=(float)state->swapchain_extent.width;
+  const float swapH=(float)state->swapchain_extent.height;
+  const float fit=fminf(swapW/1280.0f,swapH/720.0f);
+  const float fittedW=1280.0f*fit, fittedH=720.0f*fit;
+  const int32_t dstX0=(int32_t)((swapW-fittedW)*0.5f);
+  const int32_t dstY0=(int32_t)((swapH-fittedH)*0.5f);
+  const int32_t dstX1=dstX0+(int32_t)fittedW;
+  const int32_t dstY1=dstY0+(int32_t)fittedH;
   VkImageBlit region={.srcSubresource={.aspectMask=VK_IMAGE_ASPECT_COLOR_BIT,.layerCount=1},
     .srcOffsets={{0,0,0},{(int32_t)t->extent.width,(int32_t)t->extent.height,1}},
     .dstSubresource={.aspectMask=VK_IMAGE_ASPECT_COLOR_BIT,.layerCount=1},
-    .dstOffsets={{0,0,0},{(int32_t)state->swapchain_extent.width,
-                          (int32_t)state->swapchain_extent.height,1}}};
+    .dstOffsets={{dstX0,dstY0,0},{dstX1,dstY1,1}}};
   XD(CmdBlitImage)(cmd,image,VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
     state->swapchain_images[imageIndex],VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
     1,&region,VK_FILTER_NEAREST);
