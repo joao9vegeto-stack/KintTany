@@ -1082,7 +1082,10 @@ private final class XOWUEGameLibrary: ObservableObject {
 
     func requestExit() {
         guard !exitRequested else { return }
-        if !isBusy || phase != .booting {
+        // If the game surface is in its booting/runtime phase, always ask the
+        // native scheduler to stop. isBusy can briefly lag SwiftUI lifecycle
+        // transitions and must not turn SAIR into a view-only dismissal.
+        if phase != .booting {
             gameSurfacePresented = false
             return
         }

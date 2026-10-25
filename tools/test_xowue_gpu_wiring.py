@@ -146,3 +146,22 @@ assert "copy_command=%u" in draws
 assert (0x00100000 & 7)==0
 assert ((0x00100000 >>20)&3)==1
 print("PASS: Xenos copy source=RT0 command=Convert; no fabricated depth/color pixels")
+
+
+# Build 38 regression: native stop is unconditional, even when telemetry is off.
+stop_start = engine.index('extern "C" void xowue_request_stop(void) {')
+stop_end = engine.index('\n}', stop_start) + 2
+stop_body = engine[stop_start:stop_end]
+assert 'requestGuestSchedulerStop();' in stop_body
+assert 'g_aotExecutionTelemetryActive' not in stop_body
+assert 'XOWUE_USER_EXIT scheduler cancellation requested' in stop_body
+ui = Path("iOS/App/XOWUEApp.swift").read_text()
+request_start = ui.index("    func requestExit() {")
+request_exit = ui[request_start:ui.index("\n    func runBoot()", request_start)]
+assert "if phase != .booting" in request_exit
+assert "xowue_request_stop()" in request_exit
+assert vulkan.count("UILabel *_fpsLabel;") == 1
+assert "g_xowue_guest_frame_count" in vulkan
+assert "XOWUE_REAL_FPS guest=" in vulkan
+assert "_fpsLabel.frame = CGRectMake(10.0, 10.0, 184.0, 46.0);" in vulkan
+print("PASS: unconditional native SAIR cancellation and one viewport-anchored real guest FPS badge")

@@ -1486,9 +1486,9 @@ KKRenderFrame(KKVulkanState *state, CAMetalLayer *layer)
                                          MAX(1.0, self.bounds.size.height * scale));
    _statusLabel.frame = CGRectMake(10, 10, MAX(0.0, self.bounds.size.width - 20), 56);
    // Keep HUD at the physical upper left of the landscape viewport.
-   _fpsLabel.frame = CGRectMake(MAX(12.0, self.safeAreaInsets.left + 8.0),
-                                 MAX(12.0, self.safeAreaInsets.top + 8.0),
-                                 166.0, 42.0);
+   // Anchor the single FPS badge to the game viewport itself, not the
+   // device safe area. This avoids drifting into the outer SAIR/branding HUD.
+   _fpsLabel.frame = CGRectMake(10.0, 10.0, 184.0, 46.0);
    if (self.window && !_attempted)
       [self performSelector:@selector(startBackend) withObject:nil afterDelay:0.15];
 }

@@ -1588,7 +1588,9 @@ static bool translateGuestFilePath(const std::string &guestPath, bool forWrite,
 // Exit must terminate guest PPC execution; dismissing the view alone leaves
 // native guest workers running indefinitely behind the single-game launcher.
 extern "C" void xowue_request_stop(void) {
-    if (!g_aotExecutionTelemetryActive.load(std::memory_order_acquire)) return;
+    // Cancellation is a lifecycle operation, not an optional telemetry feature.
+    // Always wake guest waiters and stop the PPC scheduler even before AOT
+    // execution counters have been enabled or after diagnostics are disabled.
     recordRuntimeTrace("XOWUE_USER_EXIT scheduler cancellation requested");
     requestGuestSchedulerStop();
 }
