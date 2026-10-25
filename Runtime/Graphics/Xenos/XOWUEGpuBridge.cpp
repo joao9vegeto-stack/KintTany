@@ -36,7 +36,7 @@ std::string lastReject;
 FrameLifecycleState guestFrame{}; uint64_t guestFrameGeneration=0;
 bool IsCopyPathActive(){return (registers[0x2318u]&0x00100000u)!=0u;}
 void InvalidateGuestFrame(const char* r){guestFrame.stale=true;guestFrame.committed=false;lastReject=r?r:"XENOS_STALE_GUEST_FRAME";}
-std::string FrameDiagnosticsLocked(){char v[384];std::snprintf(v,sizeof(v),"XOWUE_FRAME_LIFECYCLE generation=%" PRIu64 " swap=%d color_source=%d copied=%d committed=%d stale=%d addr=%08X size=%ux%u pitch=%u format=%u tile=%u copy_cmd=%u",guestFrameGeneration,guestFrame.has_guest_swap?1:0,guestFrame.has_color_source?1:0,guestFrame.copied_to_swapchain?1:0,guestFrame.committed?1:0,guestFrame.stale?1:0,guestFrame.address,guestFrame.width,guestFrame.height,guestFrame.pitch,guestFrame.format,guestFrame.source_tile,guestFrame.copy_command);return v;}
+std::string FrameDiagnosticsLocked(){char v[512];std::snprintf(v,sizeof(v),"XOWUE_FRAME_LIFECYCLE generation=%" PRIu64 " swap=%d color_source=%d copied=%d resolve=%d committed=%d nonblack=%d stale=%d guard=%d addr=%08X size=%ux%u pitch=%u format=%u tile=%u copy_cmd=%u status=%u nonblack_pixels=%u",guestFrameGeneration,guestFrame.has_guest_swap?1:0,guestFrame.has_color_source?1:0,guestFrame.copied_to_swapchain?1:0,guestFrame.resolve_valid?1:0,guestFrame.committed?1:0,guestFrame.nonblack_valid?1:0,guestFrame.stale?1:0,guestFrame.black_screen_guard?1:0,guestFrame.address,guestFrame.width,guestFrame.height,guestFrame.pitch,guestFrame.format,guestFrame.source_tile,guestFrame.copy_command,guestFrame.resolve_status,guestFrame.nonblack_pixels);return v;}
 std::unordered_map<uint64_t, ShaderRecord> shaders;
 std::unordered_map<std::string, std::vector<uint32_t>> linkedPixels;
 uint64_t linkedPixelCompiled = 0, linkedPixelRejected = 0;
@@ -72,11 +72,65 @@ void Reset() {
   lastReject.clear();
 }
 
-void WriteRegister(uint32_t address,uint32_t value){if(address>=registers.size())return;std::lock_guard lock(stateMutex);registers[address]=value;switch(address){case 0x2000u:guestFrame.pitch=value;break;case 0x2001u:case 0x2003u:case 0x2004u:case 0x2005u:if(IsCopyPathActive()&&guestFrame.has_guest_swap&&!guestFrame.committed)guestFrame.has_color_source=true;break;case 0x2318u:guestFrame.copy_command=value&0x1Fu;if((value&0x00100000u)==0u)InvalidateGuestFrame("XENOS_STALE_GUEST_FRAME: copy_control_without_commit");break;case 0x2319u:guestFrame.address=value;break;case 0x231Au:guestFrame.pitch=value;break;case 0x231Bu:guestFrame.format=value;break;default:break;}}
-void NotifyGuestSwap(uint32_t a,uint32_t w,uint32_t h,uint32_t f){std::lock_guard lock(stateMutex);++guestFrameGeneration;guestFrame.address=a;guestFrame.width=w;guestFrame.height=h;guestFrame.format=f;guestFrame.has_guest_swap=true;guestFrame.has_color_source=false;guestFrame.copied_to_swapchain=false;guestFrame.committed=false;guestFrame.stale=false;}
-void NotifyGuestResolve(uint32_t t,uint32_t w,uint32_t h,uint32_t p,uint32_t c){std::lock_guard lock(stateMutex);guestFrame.source_tile=t;if(w)guestFrame.width=w;if(h)guestFrame.height=h;if(p)guestFrame.pitch=p;guestFrame.copy_command=c;guestFrame.has_color_source=true;guestFrame.copied_to_swapchain=true;guestFrame.stale=false;}
-void NotifyGuestFrameCommitted(){std::lock_guard lock(stateMutex);guestFrame.committed=true;guestFrame.stale=false;}
-bool HasFreshGuestFrame(){std::lock_guard lock(stateMutex);return guestFrame.has_guest_swap&&guestFrame.has_color_source&&guestFrame.copied_to_swapchain&&guestFrame.committed&&!guestFrame.stale;}
+void WriteRegister(uint32_t address,uint32_t value){
+  if(address>=registers.size())return;
+  std::lock_guard lock(stateMutex);
+  registers[address]=value;
+  switch(address){
+    case 0x2000u: guestFrame.pitch=value; break;
+    case 0x2001u: case 0x2003u: case 0x2004u: case 0x2005u:
+      if(IsCopyPathActive()&&guestFrame.has_guest_swap&&!guestFrame.committed)guestFrame.has_color_source=true;
+      break;
+    case 0x2318u:
+      guestFrame.copy_command=value&0x1Fu;
+      if((value&0x00100000u)==0u)InvalidateGuestFrame("XENOS_STALE_GUEST_FRAME: copy_control_without_commit");
+      break;
+    case 0x2319u: guestFrame.address=value; break;
+    case 0x231Au: guestFrame.pitch=value; break;
+    case 0x231Bu: guestFrame.format=value; break;
+    default: break;
+  }
+}
+void NotifyGuestSwap(uint32_t a,uint32_t w,uint32_t h,uint32_t f){
+  std::lock_guard lock(stateMutex);
+  ++guestFrameGeneration; guestFrame=FrameLifecycleState{};
+  guestFrame.generation=guestFrameGeneration; guestFrame.address=a; guestFrame.width=w; guestFrame.height=h; guestFrame.format=f;
+  guestFrame.has_guest_swap=true;
+}
+void NotifyGuestResolve(uint32_t t,uint32_t w,uint32_t h,uint32_t p,uint32_t c,uint32_t status){
+  std::lock_guard lock(stateMutex);
+  guestFrame.source_tile=t; if(w)guestFrame.width=w; if(h)guestFrame.height=h; if(p)guestFrame.pitch=p;
+  guestFrame.copy_command=c; guestFrame.resolve_status=status;
+  guestFrame.has_color_source=status!=0; guestFrame.copied_to_swapchain=status!=0;
+  guestFrame.resolve_valid=status!=0;
+  if(status==0){guestFrame.committed=false;guestFrame.stale=true;guestFrame.black_screen_guard=true;lastReject="XENOS_STALE_GUEST_FRAME: resolve_status_zero";}
+}
+void NotifyGuestFrameCommitted(){
+  std::lock_guard lock(stateMutex);
+  guestFrame.committed=true;
+  if(!guestFrame.nonblack_valid){guestFrame.stale=true;guestFrame.black_screen_guard=true;}
+}
+void NotifyGuestFrameRejected(const char* reason){
+  std::lock_guard lock(stateMutex);
+  guestFrame.stale=true; guestFrame.committed=false; guestFrame.nonblack_valid=false; guestFrame.black_screen_guard=true;
+  lastReject=reason?reason:"XENOS_STALE_GUEST_FRAME: rejected";
+}
+void NotifyGuestFramePixels(uint32_t width,uint32_t height,const uint8_t* pixels,size_t bytes){
+  if(!pixels||!width||!height||bytes<4u){NotifyGuestFrameRejected("XENOS_STALE_GUEST_FRAME: invalid_frame_pixels");return;}
+  std::lock_guard lock(stateMutex);
+  const size_t limit=std::min<size_t>(bytes,size_t(width)*size_t(height)*4u);
+  uint32_t count=0;
+  for(size_t i=0;i+2<limit;i+=4u)if(pixels[i]||pixels[i+1]||pixels[i+2])++count;
+  guestFrame.nonblack_pixels=count; guestFrame.nonblack_valid=count>0;
+  guestFrame.width=width; guestFrame.height=height;
+  if(count==0){guestFrame.stale=true;guestFrame.committed=false;guestFrame.black_screen_guard=true;lastReject="XENOS_STALE_GUEST_FRAME: black_frame_after_resolve";}
+  else {guestFrame.stale=false;guestFrame.black_screen_guard=false;}
+}
+bool ShouldPresentGuestFrame(){
+  std::lock_guard lock(stateMutex);
+  return guestFrame.has_guest_swap&&guestFrame.has_color_source&&guestFrame.copied_to_swapchain&&guestFrame.resolve_valid&&guestFrame.committed&&guestFrame.nonblack_valid&&!guestFrame.stale&&!guestFrame.black_screen_guard;
+}
+bool HasFreshGuestFrame(){return ShouldPresentGuestFrame();}
 bool IsGuestFrameStale(){std::lock_guard lock(stateMutex);return guestFrame.stale;}
 std::string FrameDiagnostics(){std::lock_guard lock(stateMutex);return FrameDiagnosticsLocked();}
 
@@ -236,7 +290,7 @@ void QueueDraw(uint32_t initiator, uint32_t indexCount,
   std::lock_guard lock(stateMutex);
   ++observedDraws;
   lastDrawInitiator = initiator;
-  if(IsCopyPathActive()&&!(guestFrame.has_guest_swap&&guestFrame.has_color_source&&guestFrame.copied_to_swapchain&&guestFrame.committed&&!guestFrame.stale)){++droppedDraws;lastReject="XENOS_STALE_GUEST_FRAME: resolve_without_commit";return;}
+  if(IsCopyPathActive()&&!(guestFrame.has_guest_swap&&guestFrame.has_color_source&&guestFrame.copied_to_swapchain&&guestFrame.resolve_valid&&guestFrame.committed&&guestFrame.nonblack_valid&&!guestFrame.stale&&!guestFrame.black_screen_guard)){++droppedDraws;lastReject="XENOS_STALE_GUEST_FRAME: draw_without_valid_guest_frame";return;}
   const uint32_t edramMode=registers[0x2208u]&7u;
   const bool depthOnly=edramMode==5u;
   const bool copyMode=edramMode==6u;
