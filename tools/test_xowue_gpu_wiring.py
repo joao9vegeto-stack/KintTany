@@ -163,7 +163,7 @@ assert "xowue_request_stop()" in request_exit
 assert "gameSurfacePresented = false" in request_exit
 assert "Do not debounce/ignore repeated exit taps" in request_exit
 assert "xowue_request_stop()" in request_exit
-assert ".zIndex(1000)" in app
+assert ".zIndex(1000)" in ui
 assert vulkan.count("UILabel *_fpsLabel;") == 1
 assert "g_xowue_guest_frame_count" in vulkan
 assert "XOWUE_REAL_FPS guest=" in vulkan
@@ -178,5 +178,6 @@ assert "XOWUE_OPTIONAL_STARTUP_MOVIE_EOF" in engine
 assert '".XOWUEVirtualMedia"' in engine
 assert 'filename == "ravenlogo.xxx"' in engine
 assert 'filename == "blank.bik"' in engine
+assert 'filename == "blank.xxx"' in engine
 assert 'filename == "marvel_intro.xxx"' in engine
 print("PASS: missing UE3 startup movies use an isolated EOF stub, not fabricated game assets")
