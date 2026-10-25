@@ -1082,18 +1082,25 @@ private final class XOWUEGameLibrary: ObservableObject {
 
     func requestExit() {
         guard !exitRequested else { return }
-        // If the game surface is in its booting/runtime phase, always ask the
-        // native scheduler to stop. isBusy can briefly lag SwiftUI lifecycle
-        // transitions and must not turn SAIR into a view-only dismissal.
-        if phase != .booting {
-            gameSurfacePresented = false
-            return
+
+        // The presented surface is the source of truth: SwiftUI can change
+        // phase before the native boot task returns. Never let that race turn
+        // SAIR into a view-only dismissal that leaves the PPC session alive.
+        let shouldStopNativeSession = phase == .booting || gameSurfacePresented
+        if shouldStopNativeSession {
+            exitRequested = true
+            status = "Encerrando sessão nativa…"
+            detail = "Cancelando a execução PPC e liberando a tela do jogo."
+            XOWUEDiagnostics.log("runtime.stop requested by user phase=\(phase) surface=\(gameSurfacePresented)")
+            xowue_request_stop()
         }
-        exitRequested = true
-        status = "Encerrando sessão nativa…"
-        detail = "Aguardando as threads PPC e o motor Xenos finalizarem."
-        XOWUEDiagnostics.log("runtime.stop requested by user")
-        xowue_request_stop()
+
+        // Dismiss immediately; the native stop is cooperative and must not
+        // block the only visible exit control while the boot task unwinds.
+        gameSurfacePresented = false
+        if !shouldStopNativeSession {
+            exitRequested = false
+        }
     }
 
     func runBoot() {

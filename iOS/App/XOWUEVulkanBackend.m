@@ -1485,10 +1485,14 @@ KKRenderFrame(KKVulkanState *state, CAMetalLayer *layer)
    metalLayer.drawableSize = CGSizeMake(MAX(1.0, self.bounds.size.width * scale),
                                          MAX(1.0, self.bounds.size.height * scale));
    _statusLabel.frame = CGRectMake(10, 10, MAX(0.0, self.bounds.size.width - 20), 56);
-   // Keep HUD at the physical upper left of the landscape viewport.
-   // Anchor the single FPS badge to the game viewport itself, not the
-   // device safe area. This avoids drifting into the outer SAIR/branding HUD.
-   _fpsLabel.frame = CGRectMake(10.0, 10.0, 184.0, 46.0);
+   // The outer SwiftUI header owns the top edge (SAIR + branding). Keep
+   // the real guest-FPS badge centered at the bottom of the 16:9 game viewport
+   // so it cannot cover those controls or the external FPS counters.
+   _fpsLabel.frame = CGRectMake(MAX(10.0, (self.bounds.size.width - 184.0) / 2.0),
+                                MAX(10.0, self.bounds.size.height - 58.0),
+                                184.0, 46.0);
+   _fpsLabel.layer.zPosition = 1000.0;
+   [self bringSubviewToFront:_fpsLabel];
    if (self.window && !_attempted)
       [self performSelector:@selector(startBackend) withObject:nil afterDelay:0.15];
 }

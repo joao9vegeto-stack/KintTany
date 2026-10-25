@@ -3394,6 +3394,17 @@ static void writeGuestIoStatus(uint8_t *base, uint32_t address,
     PPC_STORE_U32(address + 4u, information);
 }
 
+static bool isKnownOptionalStartupMovie(const std::string &guestPath) {
+    const std::string lower = lowerGuestPath(guestPath);
+    if (lower.find("wgame/movies/") == std::string::npos) return false;
+    const size_t slash = lower.find_last_of('/');
+    const std::string filename = slash == std::string::npos
+        ? lower : lower.substr(slash + 1u);
+    return filename == "ravenlogo.xxx" || filename == "blank.bik" ||
+           filename == "ue3_logo.xxx" || filename == "fox_logo.xxx" ||
+           filename == "marvel_intro.xxx" || filename == "atvi_logo.xxx";
+}
+
 static uint32_t createGuestFile(uint8_t *base, const std::string &guestPath,
                                 uint32_t desiredAccess, uint32_t disposition,
                                 uint32_t options, uint32_t &handleOut,
@@ -3410,6 +3421,38 @@ static uint32_t createGuestFile(uint8_t *base, const std::string &guestPath,
     std::error_code ec;
     bool exists = std::filesystem::exists(path, ec);
     if (ec) exists = false;
+
+    // UE3's startup sequence may poll its movie player forever after a
+    // missing optional logo/blank Bink file. Provide a zero-byte EOF stream
+    // for only the known startup movies, outside the game directory, so the
+    // native guest file API reports a successful open followed by EOF. Never
+    // synthesize gameplay assets or modify the user's game dump.
+    bool virtualStartupMovie = false;
+    if (!exists && !write && !directoryOnly &&
+        disposition == 1u && isKnownOptionalStartupMovie(guestPath) &&
+        !g_guestSaveRoot.empty()) {
+        const std::string normalized = lowerGuestPath(guestPath);
+        const size_t slash = normalized.find_last_of('/');
+        const std::string filename = slash == std::string::npos
+            ? normalized : normalized.substr(slash + 1u);
+        const std::filesystem::path virtualRoot =
+            g_guestSaveRoot / ".XOWUEVirtualMedia";
+        std::filesystem::create_directories(virtualRoot, ec);
+        if (!ec) {
+            path = virtualRoot / filename;
+            if (!std::filesystem::exists(path, ec) && !ec) {
+                std::ofstream emptyMovie(path, std::ios::binary);
+                if (!emptyMovie) ec = std::make_error_code(std::errc::permission_denied);
+            }
+        }
+        exists = !ec && std::filesystem::is_regular_file(path, ec);
+        virtualStartupMovie = exists && !ec;
+        if (virtualStartupMovie) {
+            recordRuntimeTrace("XOWUE_OPTIONAL_STARTUP_MOVIE_EOF guest=" +
+                               guestPath + " virtual=1 bytes=0");
+        }
+    }
+
     const bool existedBeforeOpen = exists;
     const bool createNew = disposition == 2u || disposition == 3u || disposition == 5u || disposition == 0u;
     if (!exists && disposition == 1u) return 0xC0000034u; // STATUS_OBJECT_NAME_NOT_FOUND

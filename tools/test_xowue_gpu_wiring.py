@@ -158,10 +158,23 @@ assert 'XOWUE_USER_EXIT scheduler cancellation requested' in stop_body
 ui = Path("iOS/App/XOWUEApp.swift").read_text()
 request_start = ui.index("    func requestExit() {")
 request_exit = ui[request_start:ui.index("\n    func runBoot()", request_start)]
-assert "if phase != .booting" in request_exit
+assert "shouldStopNativeSession = phase == .booting || gameSurfacePresented" in request_exit
 assert "xowue_request_stop()" in request_exit
+assert "gameSurfacePresented = false" in request_exit
+assert "Dismiss immediately" in request_exit
 assert vulkan.count("UILabel *_fpsLabel;") == 1
 assert "g_xowue_guest_frame_count" in vulkan
 assert "XOWUE_REAL_FPS guest=" in vulkan
-assert "_fpsLabel.frame = CGRectMake(10.0, 10.0, 184.0, 46.0);" in vulkan
-print("PASS: unconditional native SAIR cancellation and one viewport-anchored real guest FPS badge")
+assert "self.bounds.size.height - 58.0" in vulkan
+assert "_fpsLabel.layer.zPosition = 1000.0;" in vulkan
+assert "[self bringSubviewToFront:_fpsLabel];" in vulkan
+print("PASS: immediate SAIR dismissal after native stop request and isolated real guest FPS badge")
+
+# Build 39: only known UE3 startup movie files may fall back to EOF when absent.
+assert "isKnownOptionalStartupMovie" in engine
+assert "XOWUE_OPTIONAL_STARTUP_MOVIE_EOF" in engine
+assert '".XOWUEVirtualMedia"' in engine
+assert 'filename == "ravenlogo.xxx"' in engine
+assert 'filename == "blank.bik"' in engine
+assert 'filename == "marvel_intro.xxx"' in engine
+print("PASS: missing UE3 startup movies use an isolated EOF stub, not fabricated game assets")
