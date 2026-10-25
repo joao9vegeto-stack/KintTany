@@ -89,6 +89,8 @@ extern void spu_ascension_reset_upper_policy(void);
 extern void spu_ascension_copy_upper_policy(uint64_t out[10]);
 extern void spu_ascension_reset_native_gap(void);
 extern void spu_ascension_copy_native_gap(uint64_t out[10]);
+extern void spu_ascension_reset_c8_irq(void);
+extern void spu_ascension_copy_c8_irq(uint64_t out[9]);
 extern void spu_workload_copy_ascension_commit_metrics(uint64_t out[2]);
 extern void cellGcmTickVBlank(void);
 extern void cellGcmTickFlip(void);
@@ -1611,6 +1613,7 @@ static BOOL ARGameManifestHasTitleUsrdir(NSDictionary *manifest){
   cellSpursResetAscensionEdgeMetrics();
   spu_ascension_reset_upper_policy();
   spu_ascension_reset_native_gap();
+  spu_ascension_reset_c8_irq();
   spu_workload_reset_ascension_stack_metrics();
   cellSpursResetAscensionMetrics();
   spu_pic_reset_ascension_metrics();
@@ -1960,6 +1963,7 @@ static BOOL ARGameManifestHasTitleUsrdir(NSDictionary *manifest){
     uint64_t highWids[8]={0}; cellSpursCopyAscensionHighMasks(highWids);
     uint64_t pmUpper[10]={0}; spu_ascension_copy_upper_policy(pmUpper);
     uint64_t gap[10]={0}; spu_ascension_copy_native_gap(gap);
+    uint64_t c8irq[9]={0}; spu_ascension_copy_c8_irq(c8irq);
     unsigned long long stack[17]={0}; spu_workload_copy_ascension_stack_metrics(stack);
     unsigned long long gcm[3]={0}; cellGcmCopyAscensionParkHoldMetrics(gcm);
     uint64_t pic[6]={0}; spu_pic_copy_ascension_metrics(pic);
@@ -2055,6 +2059,12 @@ static BOOL ARGameManifestHasTitleUsrdir(NSDictionary *manifest){
         stack[13],stack[14],stack[15],stack[16]];
     [out appendFormat:@"GCM park hold: pausas=%llu · retomadas=%llu · timeouts=%llu\n",
         gcm[0],gcm[1],gcm[2]];
+    [out appendFormat:@"WWS C8 IRQ AOT NATIVO: chamadas=%llu · saves=%llu · restores=%llu · rejeições de template=%llu · primeiro opcode=0x%08llX · divergência instr=%llu · último retorno=0x%05llX · image=%llu · bi=0x%08llX\n",
+        (unsigned long long)c8irq[0],(unsigned long long)c8irq[1],
+        (unsigned long long)c8irq[2],(unsigned long long)c8irq[3],
+        (unsigned long long)c8irq[4],(unsigned long long)c8irq[5],
+        (unsigned long long)c8irq[6],(unsigned long long)c8irq[7],
+        (unsigned long long)c8irq[8]];
     [out appendFormat:@"SPU AOT sem lift: alvos=%llu · código não-zero=%llu · sem código=%llu · LS PC=0x%05llX · opcode=0x%08llX · image=%llu · ovl=%llu · task=%llu · LR=0x%05llX · PM=%llu\n",
         (unsigned long long)gap[0],(unsigned long long)gap[1],
         (unsigned long long)gap[2],(unsigned long long)gap[3],

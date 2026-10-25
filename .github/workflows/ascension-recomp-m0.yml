@@ -1,4 +1,4 @@
-name: AscensionRecomp M8.12.0 - 32-WID native policy AOT execution
+name: AscensionRecomp M8.13.0 - C8 WWS generated IRQ native AOT
 
 on:
   push:
@@ -41,7 +41,7 @@ jobs:
         run: |
           set -euo pipefail
           bash -n tools/build_ios_probe_ipa.sh
-          python3 -m py_compile tools/test_m807_spu_pic_filter.py tools/m808_taskset_commit_kick.py tools/test_m808_taskset_commit_kick.py tools/test_m809_spurs_poll_select.py tools/m810_native_lfqueue.py tools/test_m810_native_lfqueue.py tools/m811_native_stage.py tools/test_m811_native_stage.py tools/m812_spurs2_policy_runtime.py tools/test_m812_spurs2_policy_runtime.py
+          python3 -m py_compile tools/test_m807_spu_pic_filter.py tools/m808_taskset_commit_kick.py tools/test_m808_taskset_commit_kick.py tools/test_m809_spurs_poll_select.py tools/m810_native_lfqueue.py tools/test_m810_native_lfqueue.py tools/m811_native_stage.py tools/test_m811_native_stage.py tools/m812_spurs2_policy_runtime.py tools/test_m812_spurs2_policy_runtime.py tools/m813_native_c8_irq.py tools/test_m813_native_c8_irq.py
           python3 -m py_compile tools/m790_prepare_jobmods.py tools/m772_build_ios.py tools/m772_unpack_ci.py tools/enable_ios_spu_pic_runtime.py tools/m793_lift_spu_pic.py
           python3 -m py_compile tools/m714_owner_batch.py
           python3 -m py_compile tools/patch_ps3recomp_spurs2.py tools/m801_taskset_runtime.py tools/test_m801_taskset_lockline.py tools/test_m802_spu_rejoin.py tools/test_m803_gcm_park_spu_hold.py tools/m772_unpack_ci.py tools/m772_build_ios.py tools/enable_ios_drawable_layer.py
@@ -159,6 +159,10 @@ jobs:
           python3 tools/m812_spurs2_policy_runtime.py --upstream upstream-m772
           python3 tools/test_m812_spurs2_policy_runtime.py --upstream upstream
           python3 tools/test_m812_spurs2_policy_runtime.py --upstream upstream-m772
+          python3 tools/m813_native_c8_irq.py --upstream upstream --repo .
+          python3 tools/m813_native_c8_irq.py --upstream upstream-m772 --repo .
+          python3 tools/test_m813_native_c8_irq.py --upstream upstream --repo .
+          python3 tools/test_m813_native_c8_irq.py --upstream upstream-m772 --repo .
           python3 tools/test_m811_native_stage.py --upstream upstream
           python3 tools/test_m811_native_stage.py --upstream upstream-m772
           python3 tools/test_m810_native_lfqueue.py --upstream upstream
@@ -218,16 +222,16 @@ jobs:
           old=plist.read_text()
           for a,b in [
             ('<key>CFBundleShortVersionString</key><string>7.70.0</string>',
-             '<key>CFBundleShortVersionString</key><string>8.0.12</string>'),
+             '<key>CFBundleShortVersionString</key><string>8.0.13</string>'),
             ('<key>CFBundleVersion</key><string>7700</string>',
-             '<key>CFBundleVersion</key><string>8012</string>')]:
+             '<key>CFBundleVersion</key><string>8013</string>')]:
             assert old.count(a)==1,(str(plist),a,old.count(a))
             old=old.replace(a,b)
           plist.write_text(old)
           build=Path('tools/build_ios_probe_ipa.sh')
           src=build.read_text()
           assert 'IPA_VERSION' in src, 'build script must derive the IPA basename from the installed bundle version'
-          print('M8.08.0 shipping identity 8.0.12 (8012) and versioned IPA basename checked')
+          print('M8.08.0 shipping identity 8.0.13 (8013) and versioned IPA basename checked')
           PYM7930VERSION
           bash -n tools/build_ios_probe_ipa.sh
       - name: Export exact iOS project sources and staged ARM64 runtime (M7.71)
@@ -2029,7 +2033,7 @@ jobs:
             --source runtime/m790-npua-jobmods \
             --out "$RUNNER_TEMP/m790-jobmods/lifted" | tee m790-jobmods-stage.log
           echo "M772_JOBMOD_LIFT_DIR=$RUNNER_TEMP/m790-jobmods/lifted" >> "$GITHUB_ENV"
-      - name: M8.12 native SPURS2 32-WID policy and AOT-only SPU evidence
+      - name: M8.13 C8 generated WWS IRQ save/restore native AOT
         run: |
           set -euo pipefail
           export M772_LIFT_DIR="$RUNNER_TEMP/m772-lift/AscensionRecomp-PS3Recomp-Lift"
@@ -2092,9 +2096,9 @@ jobs:
           grep -Eq ' [Tt] _ar_lv2_timezone$' m78-owner-aot-linked-symbols.txt
           echo "M7.43: 6251 generated GOWA ELF C-AOT functions compiled and linked in final Apple ARM64 Mach-O (9 modules + SHA installer). Number actually executed and new PC pending physical iPhone report; no guest files/RSX demonstrated." > m78-actions-status.txt
           test -s AscensionRecompProbe-0.6.22-unsigned.ipa
-          /usr/libexec/PlistBuddy -c 'Print CFBundleShortVersionString' ios-probe/Payload/AscensionRecompProbe.app/Info.plist | grep -Fx 8.0.12
-          /usr/bin/unzip -t AscensionRecompProbe-8.0.12-unsigned.ipa | tee m807-ipa-integrity.log
-          shasum -a 256 AscensionRecompProbe-8.0.12-unsigned.ipa > m807-ipa-sha256.txt
+          /usr/libexec/PlistBuddy -c 'Print CFBundleShortVersionString' ios-probe/Payload/AscensionRecompProbe.app/Info.plist | grep -Fx 8.0.13
+          /usr/bin/unzip -t AscensionRecompProbe-8.0.13-unsigned.ipa | tee m807-ipa-integrity.log
+          shasum -a 256 AscensionRecompProbe-8.0.13-unsigned.ipa > m807-ipa-sha256.txt
           xcrun nm -g ios-probe/Payload/AscensionRecompProbe.app/AscensionRecompProbe | grep -F '_spu_interp_run' > m394-final-spu-interpreter.txt
           xcrun nm -g ios-probe/Payload/AscensionRecompProbe.app/AscensionRecompProbe | grep -F '_spu_pic_register' > m394-final-spu-pic.txt
           xcrun nm -g ios-probe/Payload/AscensionRecompProbe.app/AscensionRecompProbe | grep -F '_spu_drain_interp' > m802-final-spu-rejoin.txt
@@ -2109,12 +2113,22 @@ jobs:
           grep -Fq '_spu_workload_copy_ascension_stack_metrics' m43-probe-linked-symbols.txt
           grep -Fq '_spurs_external_event' m43-probe-linked-symbols.txt
           grep -Fq '_cellSpursCopyAscensionMetrics' m43-probe-linked-symbols.txt
-          # M8.12 native policy/PC metrics belong to the PS3Recomp runtime
+          # M8.13 native policy/PC metrics belong to the PS3Recomp runtime
           # library, NOT the separate 29,849-function GOWA AOT .a archive.
           grep -Fq '_spu_ascension_copy_upper_policy' m39-metal-symbols.txt
           grep -Fq '_spu_ascension_copy_native_gap' m39-metal-symbols.txt
+          grep -Fq '_spu_ascension_run_c8_generated_irq' m39-metal-symbols.txt
+          grep -Fq '_spu_ascension_copy_c8_irq' m39-metal-symbols.txt
           grep -Fq '_spu_ascension_copy_upper_policy' m43-probe-linked-symbols.txt
           grep -Fq '_spu_ascension_copy_native_gap' m43-probe-linked-symbols.txt
+          grep -Fq '_spu_ascension_run_c8_generated_irq' m43-probe-linked-symbols.txt
+          grep -Fq '_spu_ascension_copy_c8_irq' m43-probe-linked-symbols.txt
+          # C8's 0x3FEC0 stub is inlined / dead-stripped by optimized native
+          # clang: its IDENTICAL SHA-256 verified lift source dispatches to
+          # spu_indirect_branch and the externally linked native runtime helper
+          # _spu_ascension_run_c8_generated_irq performs the exact template.
+          # Requiring a separate C8 thunk symbol misclassifies a valid IPA.
+          grep -Fq 'ctx->pc = 0x3FEC0u; g_spu_trampoline_fn = spu_indirect_branch; return;' runtime/m789-c8-wws/spu_recomp.c
           grep -Fq 'GCM_PARK_SPU_HOLD_MS' ios/ARProbeApp.m
           grep -E '_cellGcm(Reset|Copy)AscensionParkHoldMetrics|_spu_workload_(reset|copy)_ascension_stack_metrics|_spurs_external_event|_cellSpursCopyAscensionMetrics' m43-probe-linked-symbols.txt > m807-runtime-metrics-symbols.txt
           xcrun nm -g ios-probe/Payload/AscensionRecompProbe.app/AscensionRecompProbe | grep -E '(_cellGcm_flip_request_count|_spu_pic_reset_ascension_metrics|_spu_pic_copy_ascension_metrics)' > m807-pic-metrics-symbols.txt
@@ -2228,15 +2242,15 @@ jobs:
           test -s m764-objects-nm.txt
           grep -Eq ' [Tt] _ar_m764_native_00539378$' m78-owner-aot-linked-symbols.txt
           grep -Eq ' [Tt] _ar_m764_register_discovered$' m78-owner-aot-linked-symbols.txt
-      - name: Publish M8.12 true native SPURS2 policy IPA
+      - name: Publish M8.13 C8 WWS native IRQ AOT IPA
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: AscensionRecomp-M8.12.0-LAUNCHER-ARM64
+          name: AscensionRecomp-M8.13.0-LAUNCHER-ARM64
           retention-days: 14
           if-no-files-found: warn
           path: |
-            AscensionRecompProbe-8.0.12-unsigned.ipa
+            AscensionRecompProbe-8.0.13-unsigned.ipa
             runtime/m789-c8-wws/manifest.json
             runtime/m789-c8-wws/spu_recomp.c
             runtime/m789-c8-wws/spu_recomp.h
@@ -2354,11 +2368,11 @@ jobs:
           test -s m764-tail-host-test.log
           grep -Eq ' [Tt] _ar_m764c_native_005392a4$' m78-owner-aot-linked-symbols.txt
           grep -Eq ' [Tt] _ar_m764c_register_successors$' m78-owner-aot-linked-symbols.txt
-          test -s AscensionRecompProbe-8.0.12-unsigned.ipa
+          test -s AscensionRecompProbe-8.0.13-unsigned.ipa
       - name: M7.69 attest 5437 native Apple ARM64 CFG handlers in final IPA
         run: |
           set -euo pipefail
-          test -s AscensionRecompProbe-8.0.12-unsigned.ipa
+          test -s AscensionRecompProbe-8.0.13-unsigned.ipa
           test -s m800-ipa-sha256.txt
           test -s m769-final-attestation.json
           test -s m769-host-frontier.log
@@ -2378,7 +2392,7 @@ jobs:
       - name: M7.70 final eight Apple ARM64 units linked into IPA
         run: |
           set -euo pipefail
-          test -s AscensionRecompProbe-8.0.12-unsigned.ipa
+          test -s AscensionRecompProbe-8.0.13-unsigned.ipa
           test -s m770-apple-arm64-objects.log
           test -s m770-final-attestation.json
           test -s m770-frontier-host.log
@@ -2395,7 +2409,7 @@ jobs:
       - name: M7.68 final native AOT-HLE return and source scope gates
         run: |
           set -euo pipefail
-          test -s AscensionRecompProbe-8.0.12-unsigned.ipa
+          test -s AscensionRecompProbe-8.0.13-unsigned.ipa
           test -s m800-ipa-sha256.txt
           test -s m768-host-hle.log
           test -s m768-host-capacity.log
@@ -2414,7 +2428,7 @@ jobs:
           test -s m767-host-test.log
           test -s m767-final-attestation.json
           test -s m800-ipa-sha256.txt
-          test -s AscensionRecompProbe-8.0.12-unsigned.ipa
+          test -s AscensionRecompProbe-8.0.13-unsigned.ipa
           grep -Fq 'M7.67 native import lookup and genuine' m41-build-ipa.log || true
           python3 - <<'PY'
           from pathlib import Path
@@ -2431,7 +2445,7 @@ jobs:
           test -s m766-final-attestation.json
           test -s m766-objects-nm.txt
           test -s m766-host-test.log
-          test -s AscensionRecompProbe-8.0.12-unsigned.ipa
+          test -s AscensionRecompProbe-8.0.13-unsigned.ipa
           python3 - <<'PY'
           import json
           from pathlib import Path
@@ -2447,7 +2461,7 @@ jobs:
           test -s m765-final-attestation.json
           test -s m765-objects-nm.txt
           test -s m765-host-test.log
-          test -s AscensionRecompProbe-8.0.12-unsigned.ipa
+          test -s AscensionRecompProbe-8.0.13-unsigned.ipa
           grep -Eq ' [Tt] _ar_m765_native_00539308$' m78-owner-aot-linked-symbols.txt
           grep -Eq ' [Tt] _ar_m765_native_0053930c$' m78-owner-aot-linked-symbols.txt
           grep -Eq ' [Tt] _ar_m765_register_frontier$' m78-owner-aot-linked-symbols.txt
@@ -2800,7 +2814,7 @@ jobs:
             m76-status.txt
             m75-aot-boot-host.log
             AscensionRecompProbe-0.6.22-unsigned.ipa
-            AscensionRecompProbe-8.0.12-unsigned.ipa
+            AscensionRecompProbe-8.0.13-unsigned.ipa
             m800-ipa-sha256.txt
             m40-ios-layer-view.o
             build-ios-runtime/libps3recomp_runtime.a

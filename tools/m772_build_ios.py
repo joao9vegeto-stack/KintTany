@@ -467,6 +467,11 @@ def main():
         raise SystemExit("M8.12 native SPU gap capture missing")
     if 'setenv("ASCENSION_SPU_NATIVE_ONLY","1",1);' not in launcher_source:
         raise SystemExit("M8.12 strict native SPU opt-in missing")
+    if "ASCENSION_M813_C8_IRQ_NATIVE_V1" not in gap_runtime:
+        raise SystemExit("M8.13 native C8 generated IRQ SPU helper is absent")
+    c8_lift=(pathlib.Path(__file__).resolve().parent.parent/"runtime/m789-c8-wws/spu_recomp.c").read_text(errors="replace")
+    if "ctx->pc = 0x3FEC0u; g_spu_trampoline_fn = spu_indirect_branch; return;" not in c8_lift:
+        raise SystemExit("M8.13 authenticated original C8 IRQ dispatcher thunk missing")
     if "spurs_kernel_temp_area_refresh" not in policy_runtime:
         raise SystemExit("M7.86 Ascension WWS policy tempArea refresh is missing")
     channel_runtime=(upstream/"runtime/spu/spu_channels.c").read_text(errors="replace")
