@@ -67,14 +67,26 @@ void spu_workload_copy_ascension_commit_metrics(uint64_t out[2])
  * guest TaskInfo decoding, real ELF checks, and M8.01 counters. */
 void spu_taskset_bits_committed(uint32_t line)
 {
+    static uint64_t s_commit_scan_tick;
     if (line & 127u) return;
     __atomic_add_fetch(&s_asc_taskset_commit_metrics[0], 1, __ATOMIC_RELAXED);
+    const uint64_t tick = __atomic_add_fetch(&s_commit_scan_tick, 1, __ATOMIC_RELAXED);
     ts_lock();
     for (int i = 0; i < TS_TRACK; i++) {
         uint32_t taskset_ea = s_ts_run[i].ea;
-        if (!taskset_ea || (taskset_ea & ~127u) != line) continue;
-        __atomic_add_fetch(&s_asc_taskset_commit_metrics[1], 1, __ATOMIC_RELAXED);
-        ts_start_ready(taskset_ea, UINT32_MAX);
+        if (!taskset_ea) continue;
+        if ((taskset_ea & ~127u) == line)
+            __atomic_add_fetch(&s_asc_taskset_commit_metrics[1], 1, __ATOMIC_RELAXED);
+        /* Immediate scan for the taskset whose reservation line committed. */
+        if ((taskset_ea & ~127u) == line)
+            ts_start_ready(taskset_ea, UINT32_MAX);
+        /* Defensive rescan: guest Taskset2 may publish its task descriptor
+         * and ready bits through different translated atomic paths. Poll all
+         * tracked tasksets every 64 commits so a missed/aliased line callback
+         * cannot strand a ready task forever. The real scanner still checks
+         * ready/pending/enabled bits, ELF bounds, and running guards. */
+        if ((tick & 63u) == 0)
+            ts_start_ready(taskset_ea, UINT32_MAX);
     }
     ts_unlock();
 }

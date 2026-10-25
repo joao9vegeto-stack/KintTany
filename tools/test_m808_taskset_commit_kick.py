@@ -71,14 +71,18 @@ int main(void){
     add_valid_task();
     spu_taskset_bits_committed(0x180);
     assert(!dispatches);
-    spu_taskset_bits_committed(0x100);
+    /* Simulate guest-ready bits with callbacks delivered for other lines.
+       The periodic sweep must discover the task on the 64th commit. */
+    for(unsigned i=0;i<62;i++) spu_taskset_bits_committed(0x280);
+    assert(!dispatches);
+    spu_taskset_bits_committed(0x280);
     assert(dispatches==1 && recorded[5]==1);
     assert(s_ts_run[0].running[0]==0x80);
     spu_taskset_bits_committed(0x100);
     assert(dispatches==1 && !locked);
-    assert(s_asc_taskset_commit_metrics[0]==3 && s_asc_taskset_commit_metrics[1]==2);
+    assert(s_asc_taskset_commit_metrics[0]==65 && s_asc_taskset_commit_metrics[1]==1);
     assert(g_ydkj_real_taskset_ea==0x100 && g_ydkj_real_taskid==0);
-    puts("[PASS] M8.08 PUTLLC schedules a guest-ready SPU task exactly once");
+    puts("[PASS] M8.15 periodic PUTLLC rescan discovers a ready task despite missed line match");
     return 0;
 }
 '''
