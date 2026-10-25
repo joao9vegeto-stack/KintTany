@@ -1244,7 +1244,14 @@ KKRenderFrame(KKVulkanState *state, CAMetalLayer *layer)
          VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, &color, 1, &range);
    }
 
-   const uint32_t issuedGuestDraws = XDProcessDraws(state, image_index, state->command_buffer);
+   // A decoded guest framebuffer is already the title's real 1280x720
+   // color output. The current Xenos draw path still reports
+   // EDRAM_COLOR_SOURCE_UNAVAILABLE and produces a non-16:9 composite; drawing
+   // that incomplete queue over the decoded image corrupts its scale and can
+   // replace valid pixels with an empty render target. Preserve the real guest
+   // framebuffer until a complete EDRAM color source is available.
+   const uint32_t issuedGuestDraws = guest_frame_ready ? 0u :
+      XDProcessDraws(state, image_index, state->command_buffer);
    const bool capturedComposed = issuedGuestDraws && XDCacheComposedFrame(
       state,image_index,state->command_buffer);
    if (!issuedGuestDraws && currentGuestSerial != state->last_guest_decoded_serial)
