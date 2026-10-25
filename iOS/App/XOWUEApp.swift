@@ -1126,6 +1126,25 @@ private final class XOWUEGameLibrary: ObservableObject {
 
         // Return to the launcher immediately; never wait for a wedged guest thread.
         gameSurfacePresented = false
+
+        // The UIKit presenter can be removed from SwiftUI's tree in the same
+        // update that flips gameSurfacePresented. Explicitly locate and dismiss
+        // the actual landscape game controller from the active scene instead
+        // of relying only on the representable's next update callback.
+        if let scene = UIApplication.shared.connectedScenes
+            .compactMap({ $0 as? UIWindowScene }).first,
+           let root = scene.windows.first(where: { $0.isKeyWindow })?.rootViewController {
+            var current: UIViewController? = root
+            while let controller = current {
+                if let gameHost = controller as? XOWUELandscapeHostingController {
+                    XOWUEDiagnostics.log("orientation.host exit explicitly dismissing presented game controller")
+                    gameHost.dismiss(animated: false)
+                    break
+                }
+                current = controller.presentedViewController
+            }
+        }
+
         if !shouldStopNativeSession {
             exitRequested = false
         }
