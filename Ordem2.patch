@@ -1,0 +1,51 @@
+XOWUE_BLACKFRAME_FIX.txt
+
+1) Abra a branch XOWUE
+git checkout XOWUE
+git pull --ff-only origin XOWUE
+
+2) Salve o patch acima em:
+xowue-blackframe-combined.patch
+
+3) Verifique:
+git apply --check xowue-blackframe-combined.patch
+
+4) Aplique:
+git apply xowue-blackframe-combined.patch
+
+5) Build:
+# ajuste ao workflow do projeto
+# exemplo genérico:
+xcodebuild -scheme XOWUE -configuration Release -sdk iphoneos -derivedDataPath build
+
+6) Teste no iPhone:
+- instale a build
+- abra Wolverine
+- observe estes logs:
+
+O que precisa aparecer:
+- XOWUE_REAL_FPS deve subir
+- fresh_guest_frames deve crescer
+- XENOS_GUEST_SWAP_RGBA nonblack deve sair de zero
+- XENOS_GUEST_RESOLVE_WRITEBACK status=1
+- XENOS_COMPOSITED_GPU_READBACK nonblack deve deixar de ser zero
+- GRAPHICS_BLOCKER deve parar de aparecer para black source / stale frame
+
+O que não pode aparecer:
+- "nonblack=0" constantemente
+- "fresh_guest_frames=0"
+- "XENOS_STALE_GUEST_FRAME"
+- "resolve_not_ready_for_present"
+- "black_frame_after_resolve"
+
+7) Critério de sucesso:
+- a tela deixa de ficar preta
+- o jogo gera frames reais e avança
+- host present só acontece com framebuffer com pixels válidos
+
+8) Se ainda ficar preto:
+- o próximo passo é ir mais fundo na camada de resolve do Xenos:
+  - validar o EDRAM color source antes do resolve
+  - validar o output final do guest framebuffer antes do present
+  - rejeitar qualquer presente com framebuffer sem pixels não-negros
+- mas este patch já é o conjunto mais forte para quebrar o gargalo atual
