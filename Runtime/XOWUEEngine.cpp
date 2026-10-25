@@ -59,6 +59,7 @@ extern "C" void xowue_vulkan_backend_guest_frame_reset(void) __attribute__((weak
 
 void pumpGuestXenosRingBuffer();
 bool validGuestRange(uint32_t address, uint64_t size);
+void initializeXenosMmioRegisters(uint8_t *base);
 void xowue_NtClose(PPCContext &context);
 void xowue_ExCreateThread(PPCContext &context, uint8_t *base);
 uint32_t guestStackArgument(PPCContext &context, uint8_t *base,
@@ -106,8 +107,11 @@ constexpr uint32_t kNtStatusUserApc = 0x000000C0u;
 constexpr size_t kTlsSlotCount = 4096;
 constexpr uint32_t kDefaultTlsSlotCount = 1024u;
 constexpr uint32_t kTlsOutOfIndexes = 0xFFFFFFFFu;
-constexpr uint32_t kFirstGuestThreadStackTop = 0x7FE00000u;
-constexpr uint32_t kMinimumGuestThreadStackAddress = 0x78000000u;
+// PPC thread stacks live in the free gap between the virtual heap and the
+// TLS/KPCR/KTHREAD/event metadata, never over the GPU MMIO window
+// (0x7FC80000+) whose register values the guest D3D reads.
+constexpr uint32_t kFirstGuestThreadStackTop = 0x7A000000u;
+constexpr uint32_t kMinimumGuestThreadStackAddress = 0x70000000u;
 constexpr uint32_t kFirstGuestThreadObjectAddress = 0x7D000000u;
 constexpr uint32_t kFirstGuestPcrAddress = 0x7C000000u;
 constexpr uint32_t kFirstGuestTlsAddress = 0x7B000000u;
@@ -118,6 +122,9 @@ constexpr uint32_t kGuestKThreadApcDisableOffset = 0x0B0u;
 constexpr uint32_t kGuestThreadMetadataStride = 0x1000u;
 constexpr uint32_t kXenosShaderConstantFetchRegister = 0x4800u;
 constexpr uint32_t kXenosGpuRegisterBase = 0x7FC80000u;
+static_assert(kMinimumGuestThreadStackAddress >= kLastVirtualAllocation);
+static_assert(kFirstGuestThreadStackTop <= kMainGuestTlsAddress);
+static_assert(kFirstGuestThreadStackTop <= kXenosGpuRegisterBase);
 constexpr uint32_t kXenosCommandProcessorWritePointerOffset = 0x0714u;
 constexpr uint32_t kXenosPm4SwapOpcode = 0x64u;
 constexpr uint32_t kXenosPm4IndirectBufferOpcode = 0x3Fu;
@@ -1143,6 +1150,10 @@ void serviceGraphicsInterruptTick() {
         g_nextGraphicsVblank += kGraphicsVblankPeriod;
         if (now >= g_nextGraphicsVblank) g_nextGraphicsVblank = now + kGraphicsVblankPeriod;
         g_xenosVblankCounter.fetch_add(1u, std::memory_order_relaxed);
+        // GPU-synthesized MMIO reads (e.g. 0x1951 interrupt status) must
+        // keep their value even if guest code stores into the window.
+        if (const auto memory = g_activeGuestMemory.lock())
+            initializeXenosMmioRegisters(memory->base);
     }
     if (graphicsInterruptCallbackRegistered() &&
         !g_schedulerStopRequested.load() && !g_activeGuestMemory.expired()) {
