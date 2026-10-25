@@ -289,6 +289,8 @@ std::atomic<size_t> g_runtimeTracePersistSequence{0};
 std::atomic<size_t> g_runtimeTracePersistFailures{0};
 std::atomic<size_t> g_runtimeTracePersistMilestones{0};
 std::atomic<size_t> g_runtimeTracePersistSwaps{0};
+std::atomic<size_t> g_runtimeTracePersistGraphics{0};
+std::atomic<size_t> g_runtimeTracePersistRingKicks{0};
 std::mutex g_tlsMutex;
 std::mutex g_virtualMemoryMutex;
 std::mutex g_guestObjectMutex;
@@ -363,6 +365,19 @@ bool shouldPersistRuntimeTrace(const std::string &event, size_t sequence) {
                            event.find("VdInitializeEngines accepted") != std::string::npos ||
                            event.find("VdInitializeRingBuffer") != std::string::npos;
     if (milestone && g_runtimeTracePersistMilestones.fetch_add(1, std::memory_order_relaxed) < 96u) {
+        return true;
+    }
+
+    const bool graphicsSync = event.find("VdSetGraphicsInterruptCallback") != std::string::npos ||
+                              event.find("VdEnableRingBufferRPtrWriteBack") != std::string::npos ||
+                              event.find("XENOS_GRAPHICS_INTERRUPT") != std::string::npos ||
+                              event.find("XENOS_PM4_") != std::string::npos;
+    if (graphicsSync &&
+        g_runtimeTracePersistGraphics.fetch_add(1, std::memory_order_relaxed) < 384u) {
+        return true;
+    }
+    if (event.find("Xenos ring kick") != std::string::npos &&
+        g_runtimeTracePersistRingKicks.fetch_add(1, std::memory_order_relaxed) < 48u) {
         return true;
     }
 
@@ -1105,17 +1120,23 @@ constexpr uint32_t kGraphicsInterruptSwap = 1u;
 constexpr auto kGraphicsVblankPeriod = std::chrono::nanoseconds(16666667);
 std::mutex g_graphicsInterruptMutex;
 std::shared_ptr<GuestThread> g_graphicsInterruptThread;
-std::atomic<bool> g_graphicsSwapInterruptPending{false};
+// CPU mask of PM4_INTERRUPT packets seen by the command processor; delivered
+// only from the Xenos worker thread (never from a guest thread's checkpoint
+// pump, which may hold a guest spinlock the D3D interrupt handler takes).
+std::atomic<uint32_t> g_pendingCpInterruptCpuMask{0};
+// GPU vblank/swap counter written by EVENT_WRITE_SHD (Xenia counter_).
+std::atomic<uint32_t> g_xenosVblankCounter{0};
 std::atomic<uint64_t> g_graphicsInterruptCounts[2]{};
 thread_local bool g_insideGraphicsInterrupt = false;
 
-bool dispatchGraphicsInterrupt(uint32_t source);
+bool dispatchGraphicsInterrupt(uint32_t source, uint32_t cpu);
 bool graphicsInterruptCallbackRegistered();
 
 void resetGraphicsInterruptState() {
     std::lock_guard<std::mutex> lock(g_graphicsInterruptMutex);
     g_graphicsInterruptThread.reset();
-    g_graphicsSwapInterruptPending.store(false);
+    g_pendingCpInterruptCpuMask.store(0u);
+    g_xenosVblankCounter.store(0u);
     for (auto &count : g_graphicsInterruptCounts) count.store(0u);
 }
 
@@ -1193,19 +1214,25 @@ struct GuestXenosPumpSessionGuard final {
                   } catch (...) {
                       recordRuntimeTrace("Xenos ring worker: unknown host exception");
                   }
+                  const auto now = std::chrono::steady_clock::now();
+                  const bool vblankDue = now >= nextVblank;
+                  if (vblankDue) {
+                      nextVblank += kGraphicsVblankPeriod;
+                      if (now >= nextVblank) nextVblank = now + kGraphicsVblankPeriod;
+                      g_xenosVblankCounter.fetch_add(1u, std::memory_order_relaxed);
+                  }
                   if (graphicsInterruptCallbackRegistered() &&
                       !g_schedulerStopRequested.load() && !g_activeGuestMemory.expired()) {
-                      if (g_graphicsSwapInterruptPending.exchange(false) &&
-                          !dispatchGraphicsInterrupt(kGraphicsInterruptSwap))
-                          g_graphicsSwapInterruptPending.store(true);
-                      const auto now = std::chrono::steady_clock::now();
-                      if (now >= nextVblank) {
-                          dispatchGraphicsInterrupt(kGraphicsInterruptVblank);
-                          nextVblank += kGraphicsVblankPeriod;
-                          if (now >= nextVblank) nextVblank = now + kGraphicsVblankPeriod;
+                      const uint32_t cpuMask = g_pendingCpInterruptCpuMask.exchange(0u);
+                      for (uint32_t cpu = 0u; cpu < 6u; ++cpu) {
+                          if ((cpuMask & (1u << cpu)) != 0u &&
+                              !dispatchGraphicsInterrupt(kGraphicsInterruptSwap, cpu))
+                              g_pendingCpInterruptCpuMask.fetch_or(1u << cpu);
                       }
+                      // Xenia GraphicsSystem::MarkVblank dispatches on CPU 2.
+                      if (vblankDue) dispatchGraphicsInterrupt(kGraphicsInterruptVblank, 2u);
                   } else {
-                      nextVblank = std::chrono::steady_clock::now() + kGraphicsVblankPeriod;
+                      g_pendingCpInterruptCpuMask.store(0u);
                   }
                   std::this_thread::sleep_for(std::chrono::milliseconds(1));
               }
@@ -1284,7 +1311,7 @@ GuestThread *acquireGraphicsInterruptThread(uint8_t *base, uint32_t callback) {
 // callback registered through VdSetGraphicsInterruptCallback. Non-blocking:
 // returns false when another delivery is in progress so callers never wait on
 // guest code running elsewhere.
-bool dispatchGraphicsInterrupt(uint32_t source) {
+bool dispatchGraphicsInterrupt(uint32_t source, uint32_t cpu) {
     if (g_insideGraphicsInterrupt) return false;
     uint32_t callback = 0u;
     uint32_t callbackContext = 0u;
@@ -1317,8 +1344,8 @@ bool dispatchGraphicsInterrupt(uint32_t source) {
     if (count <= 8u || count % 600u == 0u) {
         char event[192];
         std::snprintf(event, sizeof(event),
-                      "XENOS_GRAPHICS_INTERRUPT source=%u callback=0x%08X context=0x%08X count=%llu thread=%u",
-                      source, callback, callbackContext,
+                      "XENOS_GRAPHICS_INTERRUPT source=%u cpu=%u callback=0x%08X context=0x%08X count=%llu thread=%u",
+                      source, cpu, callback, callbackContext,
                       static_cast<unsigned long long>(count), thread->id);
         recordRuntimeTrace(event);
     }
@@ -1330,6 +1357,9 @@ bool dispatchGraphicsInterrupt(uint32_t source) {
     interrupt.r3.u32 = source;
     interrupt.r4.u32 = callbackContext;
     PPC_STORE_U32(interrupt.r1.u32, 0u);
+    // KPCR current processor number; the D3D handler clears this CPU's bit
+    // in its interrupt-pending mask (Xenia XThread::SetActiveCpu).
+    base[thread->pcrAddress + 0x10Cu] = static_cast<uint8_t>(cpu);
     g_insideGraphicsInterrupt = true;
     try {
         GuestThreadBinding binding(thread);
@@ -1781,6 +1811,8 @@ extern "C" int xowue_boot_xex(const char *path, char *output, size_t output_capa
             g_runtimeTrace.clear();
         }
         g_runtimeTracePersistSequence.store(0, std::memory_order_relaxed);
+        g_runtimeTracePersistGraphics.store(0, std::memory_order_relaxed);
+        g_runtimeTracePersistRingKicks.store(0, std::memory_order_relaxed);
         g_runtimeTracePersistFailures.store(0, std::memory_order_relaxed);
         g_runtimeTracePersistMilestones.store(0, std::memory_order_relaxed);
         g_runtimeTracePersistSwaps.store(0, std::memory_order_relaxed);
@@ -3712,12 +3744,18 @@ struct PM4ParseSummary {
     uint64_t malformed = 0;
     uint64_t frameDecodeFailures = 0;
     uint64_t guestMemoryWrites = 0;
+    uint64_t interrupts = 0;
+    bool stalled = false;
+    size_t stallOffset = 0;
 };
+
+void initializeXenosMmioRegisters(uint8_t *base);
 
 void xowue_VdInitializeEngines(PPCContext &context) {
     std::lock_guard<std::mutex> lock(g_xenosMutex);
     g_xenosFrontend.enginesInitialized = true;
     context.r3.u32 = 1u;
+    if (const auto memory = g_activeGuestMemory.lock()) initializeXenosMmioRegisters(memory->base);
     recordRuntimeTrace("VdInitializeEngines accepted; engine flag set only; ring pump awaits guest WPTR/checkpoint or VdSwap; no draw or frame implied");
 }
 
@@ -3742,6 +3780,7 @@ void xowue_VdInitializeRingBuffer(PPCContext &context, uint8_t *base) {
         return;
     }
     std::memset(base + address, 0, size);
+    initializeXenosMmioRegisters(base);
     {
         std::lock_guard<std::mutex> pumpLock(g_xenosPumpMutex);
         std::lock_guard<std::mutex> lock(g_xenosMutex);
@@ -4044,6 +4083,126 @@ static void storeGuestBe32(uint8_t *base, uint32_t address, uint32_t value) {
     base[address + 3u] = static_cast<uint8_t>(value);
 }
 
+// Xenos register file indices (Xenia register_table.inc).
+constexpr uint32_t kXenosRegisterCount = 0x5003u;
+constexpr uint32_t kXenosRegCpRbRptr = 0x01C4u;
+constexpr uint32_t kXenosRegCpRbWptr = 0x01C5u;
+constexpr uint32_t kXenosRegScratchUmsk = 0x01DCu;
+constexpr uint32_t kXenosRegScratchAddr = 0x01DDu;
+constexpr uint32_t kXenosRegScratchReg0 = 0x0578u;
+constexpr uint32_t kXenosRegCoherStatusHost = 0x0A31u;
+constexpr uint32_t kXenosRegVgtEventInitiator = 0x21F9u;
+constexpr uint32_t kXenosRegRbSampleCountAddr = 0x2325u;
+constexpr uint32_t kXenosOcclusionFakeSampleCount = 1000u;
+
+// Registers the guest reads through the GPU MMIO window whose values are
+// synthesized by the GPU (Xenia GraphicsSystem::ReadRegister). The D3D
+// interrupt handler only runs its vblank path when 0x1951 bit 0 is set.
+constexpr std::pair<uint32_t, uint32_t> kXenosMmioReadValues[] = {
+    {0x0F00u, 0x08100748u}, // RB_EDRAM_TIMING
+    {0x0F01u, 0x0000200Eu}, // RB_BC_CONTROL
+    {0x194Cu, 0x000002D0u}, // R500_D1MODE_V_COUNTER
+    {0x1951u, 0x00000001u}, // interrupt status: vblank
+    {0x1961u, 0x050002D0u}, // AVIVO_D1MODE_VIEWPORT_SIZE 1280x720
+};
+
+static bool isXenosMmioReadRegister(uint32_t reg) {
+    for (const auto &entry : kXenosMmioReadValues)
+        if (entry.first == reg) return true;
+    return false;
+}
+
+void initializeXenosMmioRegisters(uint8_t *base) {
+    if (!base) return;
+    for (const auto &entry : kXenosMmioReadValues) {
+        const uint32_t address = kXenosGpuRegisterBase + entry.first * 4u;
+        if (validGuestRange(address, 4u)) storeGuestBe32(base, address, entry.second);
+    }
+}
+
+static uint32_t xenosGpuSwap(uint32_t value, uint32_t endian) {
+    switch (endian & 3u) {
+        case 1u: return ((value & 0x00FF00FFu) << 8u) | ((value >> 8u) & 0x00FF00FFu);
+        case 2u: return __builtin_bswap32(value);
+        case 3u: return (value << 16u) | (value >> 16u);
+        default: return value;
+    }
+}
+
+// GPU memory accesses carry a Xenos endian mode in address bits 0:1; the
+// value is swapped by that mode and then stored host-native (little endian)
+// exactly as Xenia's CommandProcessor does.
+static bool storeGpuMemory32(uint8_t *base, uint32_t gpuAddress, uint32_t value) {
+    const uint32_t address = gpuAddress & ~3u;
+    if (!validGuestRange(address, 4u)) return false;
+    storeGuestBe32(base, address, __builtin_bswap32(xenosGpuSwap(value, gpuAddress)));
+    return true;
+}
+
+static bool loadGpuMemory32(const uint8_t *base, uint32_t gpuAddress, uint32_t &value) {
+    const uint32_t address = gpuAddress & ~3u;
+    if (!validGuestRange(address, 4u)) return false;
+    value = xenosGpuSwap(__builtin_bswap32(loadGuestBe32(base, address)), gpuAddress);
+    return true;
+}
+
+static bool xenosCompare(uint32_t function, uint32_t value, uint32_t mask, uint32_t reference) {
+    value &= mask;
+    switch (function & 7u) {
+        case 1u: return value < reference;
+        case 2u: return value <= reference;
+        case 3u: return value == reference;
+        case 4u: return value != reference;
+        case 5u: return value >= reference;
+        case 6u: return value > reference;
+        case 7u: return true;
+        default: return false;
+    }
+}
+
+static void recordXenosPm4Event(std::atomic<uint32_t> &budget, const char *format, ...) {
+    if (budget.fetch_add(1u, std::memory_order_relaxed) >= 16u) return;
+    char event[224];
+    va_list arguments;
+    va_start(arguments, format);
+    std::vsnprintf(event, sizeof(event), format, arguments);
+    va_end(arguments);
+    recordRuntimeTrace(event);
+}
+
+std::atomic<uint32_t> g_pm4ScratchTraceBudget{0};
+std::atomic<uint32_t> g_pm4InterruptTraceBudget{0};
+std::atomic<uint32_t> g_pm4WaitTraceBudget{0};
+std::atomic<uint32_t> g_pm4EventTraceBudget{0};
+std::chrono::steady_clock::time_point g_pm4WaitStallSince{};
+
+// Command-processor register write: host register file, GPU MMIO mirror for
+// guest reads, and scratch-register writeback (Xenia WriteRegister).
+static void writeXenosRegister(uint8_t *base, uint32_t reg, uint32_t value,
+                               PM4ParseSummary &summary) {
+    if (reg == kXenosRegCoherStatusHost) value &= ~0x80000000u;
+    xowue::xenos::WriteRegister(reg, value);
+    if (!base || reg >= kXenosRegisterCount) return;
+    if (reg != kXenosRegCpRbWptr && !isXenosMmioReadRegister(reg)) {
+        const uint32_t mmio = kXenosGpuRegisterBase + reg * 4u;
+        if (validGuestRange(mmio, 4u)) storeGuestBe32(base, mmio, value);
+    }
+    if (reg >= kXenosRegScratchReg0 && reg < kXenosRegScratchReg0 + 8u) {
+        const uint32_t index = reg - kXenosRegScratchReg0;
+        if ((xowue::xenos::ReadRegister(kXenosRegScratchUmsk) & (1u << index)) != 0u) {
+            const uint32_t address =
+                (xowue::xenos::ReadRegister(kXenosRegScratchAddr) + index * 4u) & ~3u;
+            if (validGuestRange(address, 4u)) {
+                storeGuestBe32(base, address, value);
+                ++summary.guestMemoryWrites;
+            }
+            recordXenosPm4Event(g_pm4ScratchTraceBudget,
+                "XENOS_PM4_SCRATCH_WRITEBACK reg=%u address=0x%08X value=0x%08X",
+                index, address, value);
+        }
+    }
+}
+
 static bool executeGuestPM4Words(uint8_t *base,
                                  const std::vector<uint32_t> &words,
                                  uint32_t depth,
@@ -4082,7 +4241,7 @@ static bool executeGuestPM4Words(uint8_t *base,
             const bool writeOneRegister = (header & 0x00008000u) != 0u;
             for (uint32_t i = 0; i < payloadCount; ++i) {
                 const uint32_t reg = writeOneRegister ? firstRegister : firstRegister + i;
-                xowue::xenos::WriteRegister(reg, words[offset + 1u + i]);
+                writeXenosRegister(base, reg, words[offset + 1u + i], summary);
                 if (reg >= kXenosShaderConstantFetchRegister &&
                     reg < kXenosShaderConstantFetchRegister + frontend.swapFetch.size()) {
                     frontend.swapFetch[reg - kXenosShaderConstantFetchRegister] =
@@ -4093,14 +4252,14 @@ static bool executeGuestPM4Words(uint8_t *base,
                 }
             }
         } else if (type == 1u) {
-            xowue::xenos::WriteRegister(header & 0x7FFu, words[offset + 1u]);
-            xowue::xenos::WriteRegister((header >> 11u) & 0x7FFu, words[offset + 2u]);
+            writeXenosRegister(base, header & 0x7FFu, words[offset + 1u], summary);
+            writeXenosRegister(base, (header >> 11u) & 0x7FFu, words[offset + 2u], summary);
         } else if (type == 3u) {
             const uint32_t opcode = (header >> 8u) & 0x7Fu;
             auto writeConstantRange = [&](uint32_t first, size_t start, size_t count) {
                 for (size_t n = 0; n < count; ++n)
-                    xowue::xenos::WriteRegister(first + static_cast<uint32_t>(n),
-                                                words[offset + start + n]);
+                    writeXenosRegister(base, first + static_cast<uint32_t>(n),
+                                       words[offset + start + n], summary);
             };
             auto loadShaderWords = [&](uint32_t stage, const std::vector<uint32_t>& code) {
                 const auto result = xowue::xenos::LoadShader(stage, code.data(), code.size());
@@ -4157,39 +4316,130 @@ static bool executeGuestPM4Words(uint8_t *base,
                 const uint32_t orValue = (descriptor & (1u << 30u))
                     ? xowue::xenos::ReadRegister(words[offset + 3u] & 0x1FFFu)
                     : words[offset + 3u];
-                xowue::xenos::WriteRegister(reg, (source & andValue) | orValue);
+                writeXenosRegister(base, reg, (source & andValue) | orValue, summary);
             } else if (opcode == 0x3Du && payloadCount >= 2u) { // MEM_WRITE
-                const uint32_t address = words[offset + 1u] & ~3u;
+                const uint32_t gpuAddress = words[offset + 1u];
                 const uint64_t writeBytes = static_cast<uint64_t>(payloadCount - 1u) * 4u;
-                if (validGuestRange(address, writeBytes)) {
+                if (validGuestRange(gpuAddress & ~3u, writeBytes)) {
                     for (uint32_t n = 0; n < payloadCount - 1u; ++n) {
-                        storeGuestBe32(base, address + n * 4u, words[offset + 2u + n]);
+                        storeGpuMemory32(base, gpuAddress + n * 4u, words[offset + 2u + n]);
                         ++summary.guestMemoryWrites;
                     }
                 } else {
                     ++summary.malformed;
                 }
             } else if (opcode == 0x3Eu && payloadCount >= 2u) { // REG_TO_MEM
-                const uint32_t address = words[offset + 2u] & ~3u;
-                if (validGuestRange(address, 4u)) {
-                    const uint32_t value = xowue::xenos::ReadRegister(
-                        words[offset + 1u] & 0x1FFFu);
-                    storeGuestBe32(base, address, value);
-                    ++summary.guestMemoryWrites;
-                } else {
-                    ++summary.malformed;
-                }
+                const uint32_t value = xowue::xenos::ReadRegister(words[offset + 1u] & 0x1FFFu);
+                if (storeGpuMemory32(base, words[offset + 2u], value)) ++summary.guestMemoryWrites;
+                else ++summary.malformed;
             } else if (opcode == 0x58u && payloadCount >= 3u) { // EVENT_WRITE_SHD
                 const uint32_t initiator = words[offset + 1u];
+                writeXenosRegister(base, kXenosRegVgtEventInitiator, initiator & 0x3Fu, summary);
+                // Bit 31 selects the GPU vblank/swap counter (Xenia counter_).
+                const uint32_t value = (initiator & 0x80000000u) != 0u
+                    ? g_xenosVblankCounter.load(std::memory_order_relaxed)
+                    : words[offset + 3u];
+                if (storeGpuMemory32(base, words[offset + 2u], value)) ++summary.guestMemoryWrites;
+                else ++summary.malformed;
+                recordXenosPm4Event(g_pm4EventTraceBudget,
+                    "XENOS_PM4_EVENT_WRITE_SHD initiator=0x%08X address=0x%08X value=0x%08X",
+                    initiator, words[offset + 2u], value);
+            } else if (opcode == kXenosPm4EventWriteOpcode && payloadCount >= 1u) {
+                writeXenosRegister(base, kXenosRegVgtEventInitiator,
+                                   words[offset + 1u] & 0x3Fu, summary);
+            } else if (opcode == 0x5Au && payloadCount >= 2u) { // EVENT_WRITE_EXT
+                writeXenosRegister(base, kXenosRegVgtEventInitiator,
+                                   words[offset + 1u] & 0x3Fu, summary);
                 const uint32_t address = words[offset + 2u] & ~3u;
-                if ((initiator & 0x80000000u) == 0u && validGuestRange(address, 4u)) {
-                    storeGuestBe32(base, address, words[offset + 3u]);
+                // Screen extents min/max x, y, z (8192 >> 3), big-endian u16.
+                constexpr uint16_t extents[6] = {0u, 1024u, 0u, 1024u, 0u, 1u};
+                if (validGuestRange(address, sizeof(extents))) {
+                    for (size_t n = 0; n < 6u; ++n) {
+                        base[address + n * 2u] = static_cast<uint8_t>(extents[n] >> 8u);
+                        base[address + n * 2u + 1u] = static_cast<uint8_t>(extents[n]);
+                    }
                     ++summary.guestMemoryWrites;
-                } else {
-                    // Counter-based events require the GPU timeline; do not
-                    // fabricate the fence value for unsupported variants.
-                    ++summary.malformed;
                 }
+            } else if (opcode == 0x5Bu && payloadCount >= 1u) { // EVENT_WRITE_ZPD
+                writeXenosRegister(base, kXenosRegVgtEventInitiator,
+                                   words[offset + 1u] & 0x3Fu, summary);
+                // Occlusion query: D3D marks an ended query with 0xFFFFFEED
+                // in ZPass/ZFail A/B (little-endian struct); report a fixed
+                // passed-sample count as Xenia does.
+                const uint32_t address =
+                    xowue::xenos::ReadRegister(kXenosRegRbSampleCountAddr) & ~3u;
+                if (validGuestRange(address, 32u)) {
+                    auto loadLe = [&](uint32_t field) {
+                        return __builtin_bswap32(loadGuestBe32(base, address + field * 4u));
+                    };
+                    constexpr uint32_t kQueryFinished = 0xFFFFFEEDu;
+                    const bool ended =
+                        (loadLe(4u) == kQueryFinished && loadLe(5u) == kQueryFinished) ||
+                        (loadLe(2u) == kQueryFinished && loadLe(3u) == kQueryFinished);
+                    std::memset(base + address, 0, 32u);
+                    if (ended) {
+                        storeGuestBe32(base, address + 4u * 4u,
+                                       __builtin_bswap32(kXenosOcclusionFakeSampleCount));
+                        storeGuestBe32(base, address,
+                                       __builtin_bswap32(kXenosOcclusionFakeSampleCount));
+                    }
+                    ++summary.guestMemoryWrites;
+                }
+            } else if (opcode == 0x45u && payloadCount >= 6u) { // COND_WRITE
+                const uint32_t waitInfo = words[offset + 1u];
+                const uint32_t poll = words[offset + 2u];
+                uint32_t value = 0u;
+                bool readable = true;
+                if ((waitInfo & 0x10u) != 0u) readable = loadGpuMemory32(base, poll, value);
+                else value = xowue::xenos::ReadRegister(poll & 0x7FFFu);
+                if (readable && xenosCompare(waitInfo, value, words[offset + 4u], words[offset + 3u])) {
+                    if ((waitInfo & 0x100u) != 0u) {
+                        if (storeGpuMemory32(base, words[offset + 5u], words[offset + 6u]))
+                            ++summary.guestMemoryWrites;
+                    } else {
+                        writeXenosRegister(base, words[offset + 5u] & 0x7FFFu,
+                                           words[offset + 6u], summary);
+                    }
+                }
+                if (!readable) ++summary.malformed;
+            } else if (opcode == 0x3Cu && payloadCount >= 5u) { // WAIT_REG_MEM
+                const uint32_t waitInfo = words[offset + 1u];
+                const uint32_t poll = words[offset + 2u];
+                uint32_t value = 0u;
+                bool readable = true;
+                if ((waitInfo & 0x10u) != 0u) readable = loadGpuMemory32(base, poll, value);
+                else value = xowue::xenos::ReadRegister(poll & 0x7FFFu);
+                const bool matched = readable &&
+                    xenosCompare(waitInfo, value, words[offset + 4u], words[offset + 3u]);
+                if (matched || !readable) {
+                    g_pm4WaitStallSince = {};
+                } else if (depth == 0u) {
+                    // Never block inside the pump (it also runs on guest
+                    // threads): stall the ring at this packet and retry on
+                    // the next pump, with a bounded timeout.
+                    const auto now = std::chrono::steady_clock::now();
+                    if (g_pm4WaitStallSince == std::chrono::steady_clock::time_point{})
+                        g_pm4WaitStallSince = now;
+                    if (now - g_pm4WaitStallSince < std::chrono::milliseconds(500)) {
+                        summary.stalled = true;
+                        summary.stallOffset = offset;
+                        return true;
+                    }
+                    g_pm4WaitStallSince = {};
+                    recordXenosPm4Event(g_pm4WaitTraceBudget,
+                        "XENOS_PM4_WAIT_REG_MEM timeout info=0x%08X poll=0x%08X value=0x%08X ref=0x%08X mask=0x%08X",
+                        waitInfo, poll, value, words[offset + 3u], words[offset + 4u]);
+                } else {
+                    recordXenosPm4Event(g_pm4WaitTraceBudget,
+                        "XENOS_PM4_WAIT_REG_MEM unmatched in indirect buffer info=0x%08X poll=0x%08X value=0x%08X ref=0x%08X",
+                        waitInfo, poll, value, words[offset + 3u]);
+                }
+            } else if (opcode == 0x54u && payloadCount >= 1u) { // INTERRUPT
+                const uint32_t cpuMask = words[offset + 1u] & 0x3Fu;
+                g_pendingCpInterruptCpuMask.fetch_or(cpuMask);
+                ++summary.interrupts;
+                recordXenosPm4Event(g_pm4InterruptTraceBudget,
+                    "XENOS_PM4_INTERRUPT cpu_mask=0x%02X", cpuMask);
             }
             if (opcode == kXenosPm4DrawIndexOpcode || opcode == kXenosPm4DrawIndex2Opcode ||
                 opcode == kXenosPm4DrawIndexBinOpcode || opcode == kXenosPm4DrawIndex2BinOpcode) {
@@ -4230,6 +4480,7 @@ static bool executeGuestPM4Words(uint8_t *base,
             } else if (opcode == kXenosPm4SwapOpcode && payloadCount >= 4u &&
                        words[offset + 1u] == 0x53574150u) {
                 ++summary.swaps;
+                g_xenosVblankCounter.fetch_add(1u, std::memory_order_relaxed);
                 const uint32_t frontbuffer = words[offset + 2u];
                 const uint32_t width = words[offset + 3u];
                 const uint32_t height = words[offset + 4u];
@@ -4318,7 +4569,8 @@ void pumpGuestXenosRingBuffer() {
     // CP_RB_WPTR advances only after the title has written a complete kick.
     // Retire the captured span even if an unknown packet was found so one bad
     // command cannot hold the guest's entire ring forever.
-    const uint32_t consumed = static_cast<uint32_t>(words.size());
+    const uint32_t consumed = static_cast<uint32_t>(
+        summary.stalled ? summary.stallOffset : words.size());
     readPointer = (readPointer + consumed) & ringMask;
     frontend.ringReadPointer = readPointer;
     {
@@ -4346,6 +4598,9 @@ void pumpGuestXenosRingBuffer() {
         validGuestRange(frontend.readPointerWritebackAddress, 4u)) {
         storeGuestBe32(memory->base, frontend.readPointerWritebackAddress, readPointer);
     }
+    if (validGuestRange(kXenosGpuRegisterBase + kXenosRegCpRbRptr * 4u, 4u))
+        storeGuestBe32(memory->base, kXenosGpuRegisterBase + kXenosRegCpRbRptr * 4u, readPointer);
+    if (consumed == 0u) return;
     char event[192];
     std::snprintf(event, sizeof(event),
                   "Xenos ring kick rptr=%u wptr=%u words=%u packets=%llu draws=%llu swaps=%llu frames=%llu guest_sync_writes=%llu malformed=%llu decode_failures=%llu",
@@ -4442,8 +4697,6 @@ void xowue_VdSwap(PPCContext &context, uint8_t *base) {
                   decoded ? "decoded and presented guest framebuffer" : "framebuffer decode rejected",
                   width, height, frontbufferPhysicalAddress, textureFormat, colorSpace);
     recordRuntimeTrace(event);
-    if (!dispatchGraphicsInterrupt(kGraphicsInterruptSwap))
-        g_graphicsSwapInterruptPending.store(true);
 }
 
 void xowue_VdInitializeScalerCommandBuffer(PPCContext &context, uint8_t *base) {
