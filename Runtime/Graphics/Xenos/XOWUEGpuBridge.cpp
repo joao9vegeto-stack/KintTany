@@ -290,7 +290,7 @@ void QueueDraw(uint32_t initiator, uint32_t indexCount,
   std::lock_guard lock(stateMutex);
   ++observedDraws;
   lastDrawInitiator = initiator;
-  if(IsCopyPathActive()&&!(guestFrame.has_guest_swap&&guestFrame.has_color_source&&guestFrame.copied_to_swapchain&&guestFrame.resolve_valid&&guestFrame.committed&&guestFrame.nonblack_valid&&!guestFrame.stale&&!guestFrame.black_screen_guard)){++droppedDraws;lastReject="XENOS_STALE_GUEST_FRAME: draw_without_valid_guest_frame";return;}
+  // Do not gate draw submission on the previous frame lifecycle: the current copy/resolve draw may be what produces the next valid frame. Presentation is guarded at the resolved-frame boundary instead.
   const uint32_t edramMode=registers[0x2208u]&7u;
   const bool depthOnly=edramMode==5u;
   const bool copyMode=edramMode==6u;
