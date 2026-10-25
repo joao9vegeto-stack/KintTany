@@ -3,7 +3,6 @@
 #include "image.h"
 #include "ppc_recomp_shared.h"
 #include "XOWUEDispatchGuard.h"
-#include "XOWUEPathContainment.h"
 #include "Graphics/Xenos/XOWUEGpuBridge.h"
 #include "Graphics/Xenos/XOWUEGuestDraw.h"
 #include "Graphics/Xenos/XOWUEDxt.h"
@@ -3379,11 +3378,18 @@ static bool translateGuestFilePath(const std::string &guestPath, bool forWrite,
         actual /= match.empty() ? part : match;
     }
     hostPath = actual;
-    // Check the resolved target itself. Checking only parent_path() rejects
-    // opening the device root (for example cache:\\), because that root's
-    // parent is outside the sandbox. Canonicalizing the target also blocks a
-    // final-component symlink from escaping the game/save root.
-    if (!xowue::path::isWithinRoot(root, hostPath)) return false;
+    const auto normalizedRoot = std::filesystem::weakly_canonical(root, ec);
+    ec.clear();
+    const auto normalizedTarget = std::filesystem::weakly_canonical(hostPath.parent_path(), ec);
+    if (!ec) {
+        auto rootIt = normalizedRoot.begin();
+        auto targetIt = normalizedTarget.begin();
+        for (; rootIt != normalizedRoot.end() && targetIt != normalizedTarget.end();
+             ++rootIt, ++targetIt) {
+            if (*rootIt != *targetIt) return false;
+        }
+        if (rootIt != normalizedRoot.end()) return false;
+    }
     if (forWrite && !saveDevice) return false;
     return true;
 }
