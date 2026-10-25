@@ -4717,6 +4717,13 @@ void xowue_NtOpenFile(PPCContext &context, uint8_t *base) {
     PPC_STORE_U32(handleOutAddress, status == kNtStatusSuccess ? handle : 0u);
     writeGuestIoStatus(base, ioStatusAddress, status, action);
     context.r3.u32 = status;
+    // NtOpenFile is the path used by several UE3/Bink startup assets. Log it
+    // explicitly: the preflight inventory alone cannot tell whether a missing
+    // logo/movie was actually requested or whether the guest never reached it.
+    char statusText[16];
+    std::snprintf(statusText, sizeof(statusText), "%08X", status);
+    recordRuntimeTrace("NtOpenFile path=" + guestPath + " status=0x" + statusText +
+                       (status == kNtStatusSuccess ? " opened" : " open failed"));
 }
 
 static uint64_t guestFileOffset(uint8_t *base, uint32_t address,
