@@ -3401,6 +3401,7 @@ static bool isKnownOptionalStartupMovie(const std::string &guestPath) {
     const std::string filename = slash == std::string::npos
         ? lower : lower.substr(slash + 1u);
     return filename == "ravenlogo.xxx" || filename == "blank.bik" ||
+           filename == "blank.xxx" ||
            filename == "ue3_logo.xxx" || filename == "fox_logo.xxx" ||
            filename == "marvel_intro.xxx" || filename == "atvi_logo.xxx";
 }
