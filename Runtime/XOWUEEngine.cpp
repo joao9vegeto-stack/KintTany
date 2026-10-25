@@ -4722,7 +4722,12 @@ void xowue_NtOpenFile(PPCContext &context, uint8_t *base) {
     // logo/movie was actually requested or whether the guest never reached it.
     char statusText[16];
     std::snprintf(statusText, sizeof(statusText), "%08X", status);
-    recordRuntimeTrace("NtOpenFile path=" + guestPath + " status=0x" + statusText +
+    char argsText[160];
+    std::snprintf(argsText, sizeof(argsText),
+                  " desiredAccess=0x%08X objectAttributes=0x%08X ioStatus=0x%08X options=0x%08X",
+                  context.r4.u32, context.r5.u32, ioStatusAddress, context.r7.u32);
+    recordRuntimeTrace("NtOpenFile path=" + guestPath + argsText +
+                       " status=0x" + statusText +
                        (status == kNtStatusSuccess ? " opened" : " open failed"));
 }
 
