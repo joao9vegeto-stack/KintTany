@@ -286,14 +286,16 @@ private struct XOWUEGameSurfaceScreen: View {
         .statusBarHidden(true)
         .onDisappear {
             touchController.releaseAll()
-            // Also end the guest session if iOS removes the hosting view.
+            // The UIKit landscape presenter owns orientation transitions.
+            // Requesting portrait here races dismissal and can leave the
+            // window scene advertising portrait while the game host is active.
             library.requestExit()
-            requestOrientation(.portrait)
         }
         .onAppear {
-            // The Xenos framebuffer is 1280x720. Launch gameplay in true iOS
-            // landscape (the library returns to portrait on dismissal).
-            requestOrientation(.landscapeRight)
+            // Orientation is requested only by XOWUELandscapePresenter after
+            // the landscape-only controller is attached to the active scene.
+            // A SwiftUI onAppear request is too early on iOS 26 and is rejected
+            // against the portrait root controller.
             DispatchQueue.main.asyncAfter(deadline: .now() + 5) {
                 withAnimation(.easeOut(duration: 0.2)) { self.showBootHint = false }
             }
