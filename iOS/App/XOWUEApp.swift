@@ -122,7 +122,19 @@ private struct XOWUELandscapePresenter: UIViewControllerRepresentable {
                 host.modalPresentationStyle = .fullScreen
                 XOWUEDiagnostics.log("orientation.host presenting supported=\(host.supportedInterfaceOrientations.rawValue)")
                 anchor.present(host, animated: false) {
+                    // Geometry requests made from SwiftUI onAppear can race the
+                    // UIKit presentation: iOS then validates against the still-
+                    // portrait root controller and rejects landscape. Request it
+                    // only after the real landscape host is attached.
                     host.setNeedsUpdateOfSupportedInterfaceOrientations()
+                    guard let scene = host.view.window?.windowScene else {
+                        XOWUEDiagnostics.log("orientation.host presented but windowScene unavailable")
+                        return
+                    }
+                    XOWUEOrientationDelegate.effectiveMask = .landscapeRight
+                    scene.requestGeometryUpdate(.iOS(interfaceOrientations: .landscapeRight)) { error in
+                        XOWUEDiagnostics.log("orientation.host geometry request failed: \(error.localizedDescription)")
+                    }
                 }
             }
         } else {
