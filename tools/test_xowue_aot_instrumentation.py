@@ -136,6 +136,11 @@ assert "void xowue_request_stop(void);" in header
 assert 'extern "C" void xowue_request_stop(void)' in engine
 assert 'requestGuestSchedulerStop();' in engine
 assert 'catch (const GuestThreadStopRequested &)' in engine
+checkpoint = engine[engine.index("void checkpointGuestThread() {"):engine.index("void finishGuestThread(")]
+assert checkpoint.index("g_schedulerStopRequested.load") < checkpoint.index("if (!thread) return;")
+assert "if (g_schedulerStopRequested.load(std::memory_order_relaxed))" in engine[
+    engine.index("void xowue_thread_checkpoint() {"):engine.index("void xowue_thread_checkpoint(uint32_t")
+]
 assert 'recordAotExecutionSummary("user-exit")' in engine
 assert "xowue_request_stop()" in swift
 assert "if exitRequested || outcome.code == 4" in swift
