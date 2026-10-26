@@ -1,0 +1,790 @@
+2026-10-26T20:10:22Z APP_LAUNCH build=63 title_id=41560816 documents=/var/mobile/Containers/Data/Application/372BCA06-CD6C-45B8-A9D0-F5CDE2465585/Documents/Data/Application/CE896602-7C83-4940-91AE-E0767DFF45BE/Documents
+2026-10-26T20:10:22Z APP_ENV device=iPhone os=26.5.1 bundle=com.joaopedro.xowue arch=arm64
+2026-10-26T20:10:22Z scan.start roots=Documents,Documents/Jogos
+2026-10-26T20:10:22Z orientation.host dismiss requested; no modal attached to anchor/root
+2026-10-26T20:10:22Z orientation.host dismiss requested; no modal attached to anchor/root
+2026-10-26T20:10:22Z scan.start roots=Documents,Documents/Jogos
+2026-10-26T20:10:22Z orientation.host dismiss requested; no modal attached to anchor/root
+2026-10-26T20:10:22Z scan.complete count=1 paths=/private/var/mobile/Containers/Data/Application/372BCA06-CD6C-45B8-A9D0-F5CDE2465585/Documents/Data/Application/CE896602-7C83-4940-91AE-E0767DFF45BE/Documents/Jogos/X-MEN ORIGINS WOLVERINE PT BR
+2026-10-26T20:10:22Z game.selected path=/private/var/mobile/Containers/Data/Application/372BCA06-CD6C-45B8-A9D0-F5CDE2465585/Documents/Data/Application/CE896602-7C83-4940-91AE-E0767DFF45BE/Documents/Jogos/X-MEN ORIGINS WOLVERINE PT BR
+2026-10-26T20:10:22Z scan.complete count=1 paths=/private/var/mobile/Containers/Data/Application/372BCA06-CD6C-45B8-A9D0-F5CDE2465585/Documents/Data/Application/CE896602-7C83-4940-91AE-E0767DFF45BE/Documents/Jogos/X-MEN ORIGINS WOLVERINE PT BR
+2026-10-26T20:10:22Z game.selected path=/private/var/mobile/Containers/Data/Application/372BCA06-CD6C-45B8-A9D0-F5CDE2465585/Documents/Data/Application/CE896602-7C83-4940-91AE-E0767DFF45BE/Documents/Jogos/X-MEN ORIGINS WOLVERINE PT BR
+2026-10-26T20:10:22Z orientation.host dismiss requested; no modal attached to anchor/root
+2026-10-26T20:10:23Z BOOT_STARTED build=63 title_id=41560816 xex=/private/var/mobile/Containers/Data/Application/372BCA06-CD6C-45B8-A9D0-F5CDE2465585/Documents/Data/Application/CE896602-7C83-4940-91AE-E0767DFF45BE/Documents/Jogos/X-MEN ORIGINS WOLVERINE PT BR/default.xex
+2026-10-26T20:10:23Z xex.inspect.start path=/private/var/mobile/Containers/Data/Application/372BCA06-CD6C-45B8-A9D0-F5CDE2465585/Documents/Data/Application/CE896602-7C83-4940-91AE-E0767DFF45BE/Documents/Jogos/X-MEN ORIGINS WOLVERINE PT BR/default.xex
+2026-10-26T20:10:23Z orientation.host presenting supported=8
+2026-10-26T20:10:23Z xex.inspect.ok XEX2 validado
+Base: 0x82000000
+Entry point: 0x82C3CAA8
+Imagem: 23986176 bytes
+Seções: 12
+Imports resolvidos: 261
+2026-10-26T20:10:23Z runtime.trace_file open_status=0
+RUNTIME seq=0 thread=1 XOWUE_VFS_INDEX_READY keys=1673
+RUNTIME seq=1 thread=1 XOWUE_CACHE_ROOT path=/private/var/mobile/Containers/Data/Application/372BCA06-CD6C-45B8-A9D0-F5CDE2465585/Documents/Data/Application/CE896602-7C83-4940-91AE-E0767DFF45BE/Documents/XOWUE-Saves/Cache
+RUNTIME seq=2 thread=1 Xbox filesystem roots game=/private/var/mobile/Containers/Data/Application/372BCA06-CD6C-45B8-A9D0-F5CDE2465585/Documents/Data/Application/CE896602-7C83-4940-91AE-E0767DFF45BE/Documents/Jogos/X-MEN ORIGINS WOLVERINE PT BR saves=/private/var/mobile/Containers/Data/Application/372BCA06-CD6C-45B8-A9D0-F5CDE2465585/Documents/Data/Application/CE896602-7C83-4940-91AE-E0767DFF45BE/Documents/XOWUE-Saves
+RUNTIME seq=3 thread=1 XOWUE_ASSET_PREFLIGHT guest=D:\WGame\Movies\ravenlogo.xxx mapped=1 present=0 host=/private/var/mobile/Containers/Data/Application/372BCA06-CD6C-45B8-A9D0-F5CDE2465585/Documents/Data/Application/CE896602-7C83-4940-91AE-E0767DFF45BE/Documents/Jogos/X-MEN ORIGINS WOLVERINE PT BR/WGame/Movies/ravenlogo.xxx
+RUNTIME seq=4 thread=1 XOWUE_ASSET_PREFLIGHT guest=D:\WGame\Movies\ravenlogo.bik mapped=1 present=1 host=/private/var/mobile/Containers/Data/Application/372BCA06-CD6C-45B8-A9D0-F5CDE2465585/Documents/Data/Application/CE896602-7C83-4940-91AE-E0767DFF45BE/Documents/Jogos/X-MEN ORIGINS WOLVERINE PT BR/WGame/Movies/ravenlogo.bik
+RUNTIME seq=5 thread=1 XOWUE_ASSET_PREFLIGHT guest=D:\WGame\Movies\blank.bik mapped=1 present=0 host=/private/var/mobile/Containers/Data/Application/372BCA06-CD6C-45B8-A9D0-F5CDE2465585/Documents/Data/Application/CE896602-7C83-4940-91AE-E0767DFF45BE/Documents/Jogos/X-MEN ORIGINS WOLVERINE PT BR/WGame/Movies/blank.bik
+RUNTIME seq=6 thread=1 XOWUE_ASSET_PREFLIGHT guest=D:\WGame\Movies\UE3_logo.xxx mapped=1 present=0 host=/private/var/mobile/Containers/Data/Application/372BCA06-CD6C-45B8-A9D0-F5CDE2465585/Documents/Data/Application/CE896602-7C83-4940-91AE-E0767DFF45BE/Documents/Jogos/X-MEN ORIGINS WOLVERINE PT BR/WGame/Movies/UE3_logo.xxx
+RUNTIME seq=7 thread=1 XOWUE_ASSET_PREFLIGHT guest=D:\WGame\Movies\UE3_logo.bik mapped=1 present=1 host=/private/var/mobile/Containers/Data/Application/372BCA06-CD6C-45B8-A9D0-F5CDE2465585/Documents/Data/Application/CE896602-7C83-4940-91AE-E0767DFF45BE/Documents/Jogos/X-MEN ORIGINS WOLVERINE PT BR/WGame/Movies/UE3_logo.bik
+RUNTIME seq=8 thread=1 XOWUE_ASSET_PREFLIGHT guest=D:\WGame\Movies\FOX_LOGO.xxx mapped=1 present=0 host=/private/var/mobile/Containers/Data/Application/372BCA06-CD6C-45B8-A9D0-F5CDE2465585/Documents/Data/Application/CE896602-7C83-4940-91AE-E0767DFF45BE/Documents/Jogos/X-MEN ORIGINS WOLVERINE PT BR/WGame/Movies/FOX_LOGO.xxx
+RUNTIME seq=9 thread=1 XOWUE_ASSET_PREFLIGHT guest=D:\WGame\Movies\FOX_LOGO.bik mapped=1 present=1 host=/private/var/mobile/Containers/Data/Application/372BCA06-CD6C-45B8-A9D0-F5CDE2465585/Documents/Data/Application/CE896602-7C83-4940-91AE-E0767DFF45BE/Documents/Jogos/X-MEN ORIGINS WOLVERINE PT BR/WGame/Movies/fox_logo.bik
+RUNTIME seq=10 thread=1 XOWUE_ASSET_PREFLIGHT guest=D:\WGame\Movies\MARVEL_INTRO.xxx mapped=1 present=0 host=/private/var/mobile/Containers/Data/Application/372BCA06-CD6C-45B8-A9D0-F5CDE2465585/Documents/Data/Application/CE896602-7C83-4940-91AE-E0767DFF45BE/Documents/Jogos/X-MEN ORIGINS WOLVERINE PT BR/WGame/Movies/MARVEL_INTRO.xxx
+RUNTIME seq=11 thread=1 XOWUE_ASSET_PREFLIGHT guest=D:\WGame\Movies\MARVEL_INTRO.bik mapped=1 present=1 host=/private/var/mobile/Containers/Data/Application/372BCA06-CD6C-45B8-A9D0-F5CDE2465585/Documents/Data/Application/CE896602-7C83-4940-91AE-E0767DFF45BE/Documents/Jogos/X-MEN ORIGINS WOLVERINE PT BR/WGame/Movies/MARVEL_INTRO.bik
+RUNTIME seq=12 thread=1 XOWUE_ASSET_PREFLIGHT guest=D:\WGame\Movies\ATVI_logo.xxx mapped=1 present=0 host=/private/var/mobile/Containers/Data/Application/372BCA06-CD6C-45B8-A9D0-F5CDE2465585/Documents/Data/Application/CE896602-7C83-4940-91AE-E0767DFF45BE/Documents/Jogos/X-MEN ORIGINS WOLVERINE PT BR/WGame/Movies/ATVI_logo.xxx
+RUNTIME seq=13 thread=1 XOWUE_ASSET_PREFLIGHT guest=D:\WGame\Movies\ATVI_logo.bik mapped=1 present=1 host=/private/var/mobile/Containers/Data/Application/372BCA06-CD6C-45B8-A9D0-F5CDE2465585/Documents/Data/Application/CE896602-7C83-4940-91AE-E0767DFF45BE/Documents/Jogos/X-MEN ORIGINS WOLVERINE PT BR/WGame/Movies/ATVI_logo.bik
+RUNTIME seq=14 thread=1 XEX2 carregado base=0x82000000 entry=0x82C3CAA8 sections=12
+RUNTIME seq=15 thread=1 XENOS_GRAPHICS_MEMORY_RETAINED after AOT lifetime; pending GPU reads remain valid
+RUNTIME seq=16 thread=1 XOWUE_XEX_CODE_AUDIT addr=0x82C4BE30 words=7D8802A6 9181FFF8 FBC1FFE8 FBE1FFF0 9421FF90 7C9F2378 2F03FFFF 419A0014 786B0020 1D6BD8F0 F9610050 48000014 39600000 3D408000 91610054 91410050
+RUNTIME seq=17 thread=1 XOWUE_XEX_CODE_AUDIT addr=0x82C3C4D8 words=7D6C42E6 556A003F 40820008 7D6C42E6 F9630000 38600001 4E800020 00000000 7D8802A6 9181FFF8 FBE1FFF0 9421FFA0 7CAB2B78 7CC43378 7CE93B78 2B03FDE9
+RUNTIME seq=18 thread=1 XOWUE_XEX_CODE_AUDIT addr=0x82B3DE30 words=7D8802A6 480EC199 9421FF90 7C9F2378 2B030001 409A0058 81642A94 814B0010 2B0A0000 419A0010 806B0014 7D4903A6 4E800421 3BDF2A98 896D010C 39400001
+RUNTIME seq=19 thread=1 XOWUE_XEX_CODE_AUDIT addr=0x82B423C0 words=7D8802A6 480E7BF5 9421FF50 7C7E1B78 487211DD 2F030002 409A0010 3D608200 816B0658 4800000C 3D608200 816B0654 83EB0000 3B5F4148 7F43D378 487212E1
+RUNTIME seq=20 thread=1 CODE_AUDIT_QPC_CALLERS count=0 text=0x82000000-0x836DF000
+RUNTIME seq=21 thread=1 Guest memory mapeada; AOT dispatch entries=115623
+RUNTIME seq=22 thread=1 XEX TLS slots=64 staticData=0 rawData=0 block=4096
+RUNTIME seq=23 thread=1 Main PPC thread initialized id=1 object=0x7CFFF000 KPCR=0x7BFFF000
+RUNTIME seq=24 thread=1 Chamando PPC entry point 0x82C3CAA8
+RUNTIME seq=25 thread=1 AOT_PROGRESS calls=1 distinct=1 last=0x82C44EE0 thread=1 hot0=0x82C44EE0:1 hot1=0x00000000:0 hot2=0x00000000:0 hot3=0x00000000:0 hot4=0x00000000:0 hot5=0x00000000:0 hot6=0x00000000:0 hot7=0x00000000:0 top_fn=0x82C44EE0 top_calls=1 prev_fn=0x00000000 lr=0x00000000 r3=0x00000000 r4=0x00000000 r11=0x00000000 r30=0x00000000 r31=0x00000000 insns=7D8802A6_9181FFF8_9421FFA0_4BFFFF25_2C030000_40820034
+RUNTIME seq=26 thread=1 NtAllocate basePtr=0x7FFEFC50 sizePtr=0x7FFEFD34 requested=0x40000000 size=0x00100000 flags=0x60002000 protect=0x00000004 debug=0x00000000 status=0x00000000 next_virtual=0x40100000 next_physical=0x10001000
+RUNTIME seq=27 thread=1 NtAllocate basePtr=0x7FFEFC54 sizePtr=0x7FFEFD3C requested=0x40000000 size=0x00010000 flags=0x60001000 protect=0x00000004 debug=0x00000000 status=0x00000000 next_virtual=0x40100000 next_physical=0x10001000
+RUNTIME seq=28 thread=1 KeGetCurrentProcessType -> X_PROCTYPE_USER (1)
+RUNTIME seq=29 thread=1 RtlInitializeCriticalSection guest=0x40000610 size=28
+RUNTIME seq=30 thread=1 RtlEnterCriticalSection guest=0x83508910 recursion=1
+RUNTIME seq=31 thread=1 RtlLeaveCriticalSection guest=0x83508910 recursion=0
+RUNTIME seq=32 thread=1 XexCheckExecutablePrivilege privilege=10 systemFlags=0x00000600 result=1
+RUNTIME seq=33 thread=1 XGetAVPack -> VGA (6)
+RUNTIME seq=34 thread=1 RtlInitializeCriticalSectionAndSpinCount inicializada
+RUNTIME seq=35 thread=1 RtlInitializeCriticalSectionAndSpinCount inicializada
+RUNTIME seq=36 thread=1 KeTlsAlloc -> slot 0
+RUNTIME seq=37 thread=1 RtlEnterCriticalSection guest=0x40000610 recursion=1
+RUNTIME seq=38 thread=1 RtlLeaveCriticalSection guest=0x40000610 recursion=0
+RUNTIME seq=39 thread=1 RtlEnterCriticalSection guest=0x83508910 recursion=1
+RUNTIME seq=40 thread=1 RtlLeaveCriticalSection guest=0x83508910 recursion=0
+RUNTIME seq=41 thread=1 RtlEnterCriticalSection guest=0x40000610 recursion=1
+RUNTIME seq=42 thread=1 RtlLeaveCriticalSection guest=0x40000610 recursion=0
+RUNTIME seq=43 thread=1 RtlEnterCriticalSection guest=0x40000610 recursion=1
+RUNTIME seq=44 thread=1 RtlLeaveCriticalSection guest=0x40000610 recursion=0
+RUNTIME seq=45 thread=1 RtlEnterCriticalSection guest=0x40000610 recursion=1
+RUNTIME seq=46 thread=1 RtlLeaveCriticalSection guest=0x40000610 recursion=0
+RUNTIME seq=47 thread=1 RtlInitializeCriticalSection guest=0x83512828 size=28
+RUNTIME seq=48 thread=1 RtlInitializeCriticalSection guest=0x83534AEC size=28
+RUNTIME seq=49 thread=1 RtlInitializeCriticalSection guest=0x835353E8 size=28
+RUNTIME seq=50 thread=1 NtAllocate basePtr=0x7FFEF920 sizePtr=0x7FFEF9C8 requested=0x40010000 size=0x00050000 flags=0x60001000 protect=0x00000004 debug=0x00000000 status=0x00000000 next_virtual=0x40100000 next_physical=0x10001000
+RUNTIME seq=51 thread=1 RtlInitializeCriticalSection guest=0x4000077C size=28
+RUNTIME seq=52 thread=1 NtAllocate basePtr=0x7FFEFA84 sizePtr=0x7FFEFA8C requested=0x40100000 size=0x00010000 flags=0x20001000 protect=0x00000004 debug=0x00000000 status=0x00000000 next_virtual=0x40110000 next_physical=0x10001000
+RUNTIME seq=53 thread=1 NtAllocate basePtr=0x7FFEFB04 sizePtr=0x7FFEFB0C requested=0x40110000 size=0x00010000 flags=0x20001000 protect=0x00000004 debug=0x00000000 status=0x00000000 next_virtual=0x40120000 next_physical=0x10001000
+RUNTIME seq=54 thread=1 NtAllocate basePtr=0x7FFEF7C4 sizePtr=0x7FFEF7CC requested=0x40120000 size=0x00010000 flags=0x00001000 protect=0x00000004 debug=0x00000000 status=0x00000000 next_virtual=0x40130000 next_physical=0x10001000
+RUNTIME seq=55 thread=1 NtAllocate basePtr=0x7FFEF5B4 sizePtr=0x7FFEF5BC requested=0x40130000 size=0x00010000 flags=0x20001000 protect=0x00000004 debug=0x00000000 status=0x00000000 next_virtual=0x40140000 next_physical=0x10001000
+RUNTIME seq=56 thread=1 NtAllocate basePtr=0x7FFEF534 sizePtr=0x7FFEF53C requested=0x40140000 size=0x00010000 flags=0x20001000 protect=0x00000004 debug=0x00000000 status=0x00000000 next_virtual=0x40150000 next_physical=0x10001000
+RUNTIME seq=57 thread=1 NtFree basePtr=0x7FFEF604 sizePtr=0x7FFEF60C address=0x40130000 size=0x00000000 type=0x00008000 debug=0x00000000 status=0x00000000
+RUNTIME seq=58 thread=1 NtAllocate basePtr=0x7FFEF534 sizePtr=0x7FFEF53C requested=0x40150000 size=0x00010000 flags=0x20001000 protect=0x00000004 debug=0x00000000 status=0x00000000 next_virtual=0x40160000 next_physical=0x10001000
+RUNTIME seq=59 thread=1 NtFree basePtr=0x7FFEF604 sizePtr=0x7FFEF60C address=0x40140000 size=0x00000000 type=0x00008000 debug=0x00000000 status=0x00000000
+RUNTIME seq=60 thread=1 NtAllocate basePtr=0x7FFEF534 sizePtr=0x7FFEF53C requested=0x40160000 size=0x00010000 flags=0x20001000 protect=0x00000004 debug=0x00000000 status=0x00000000 next_virtual=0x40170000 next_physical=0x10001000
+RUNTIME seq=61 thread=1 NtFree basePtr=0x7FFEF604 sizePtr=0x7FFEF60C address=0x40150000 size=0x00000000 type=0x00008000 debug=0x00000000 status=0x00000000
+RUNTIME seq=62 thread=1 NtAllocate basePtr=0x7FFEF534 sizePtr=0x7FFEF53C requested=0x40170000 size=0x00010000 flags=0x20001000 protect=0x00000004 debug=0x00000000 status=0x00000000 next_virtual=0x40180000 next_physical=0x10001000
+RUNTIME seq=63 thread=1 NtFree basePtr=0x7FFEF604 sizePtr=0x7FFEF60C address=0x40160000 size=0x00000000 type=0x00008000 debug=0x00000000 status=0x00000000
+RUNTIME seq=64 thread=1 NtAllocate basePtr=0x7FFEF534 sizePtr=0x7FFEF53C requested=0x40180000 size=0x00010000 flags=0x20001000 protect=0x00000004 debug=0x00000000 status=0x00000000 next_virtual=0x40190000 next_physical=0x10001000
+RUNTIME seq=65 thread=1 NtFree basePtr=0x7FFEF604 sizePtr=0x7FFEF60C address=0x40170000 size=0x00000000 type=0x00008000 debug=0x00000000 status=0x00000000
+RUNTIME seq=66 thread=1 NtAllocate basePtr=0x7FFEF534 sizePtr=0x7FFEF53C requested=0x40190000 size=0x00010000 flags=0x20001000 protect=0x00000004 debug=0x00000000 status=0x00000000 next_virtual=0x401A0000 next_physical=0x10001000
+RUNTIME seq=67 thread=1 NtFree basePtr=0x7FFEF604 sizePtr=0x7FFEF60C address=0x40180000 size=0x00000000 type=0x00008000 debug=0x00000000 status=0x00000000
+RUNTIME seq=68 thread=1 NtAllocate basePtr=0x7FFEF534 sizePtr=0x7FFEF53C requested=0x401A0000 size=0x00010000 flags=0x20001000 protect=0x00000004 debug=0x00000000 status=0x00000000 next_virtual=0x401B0000 next_physical=0x10001000
+RUNTIME seq=69 thread=1 NtFree basePtr=0x7FFEF604 sizePtr=0x7FFEF60C address=0x40190000 size=0x00000000 type=0x00008000 debug=0x00000000 status=0x00000000
+RUNTIME seq=70 thread=1 NtAllocate basePtr=0x7FFEF534 sizePtr=0x7FFEF53C requested=0x401B0000 size=0x00010000 flags=0x20001000 protect=0x00000004 debug=0x00000000 status=0x00000000 next_virtual=0x401C0000 next_physical=0x10001000
+RUNTIME seq=71 thread=1 NtFree basePtr=0x7FFEF604 sizePtr=0x7FFEF60C address=0x401A0000 size=0x00000000 type=0x00008000 debug=0x00000000 status=0x00000000
+RUNTIME seq=72 thread=1 NtAllocate basePtr=0x7FFEF534 sizePtr=0x7FFEF53C requested=0x401C0000 size=0x00010000 flags=0x20001000 protect=0x00000004 debug=0x00000000 status=0x00000000 next_virtual=0x401D0000 next_physical=0x10001000
+RUNTIME seq=73 thread=1 NtFree basePtr=0x7FFEF604 sizePtr=0x7FFEF60C address=0x401B0000 size=0x00000000 type=0x00008000 debug=0x00000000 status=0x00000000
+RUNTIME seq=74 thread=1 NtAllocate basePtr=0x7FFEF534 sizePtr=0x7FFEF53C requested=0x401D0000 size=0x00010000 flags=0x20001000 protect=0x00000004 debug=0x00000000 status=0x00000000 next_virtual=0x401E0000 next_physical=0x10001000
+RUNTIME seq=75 thread=1 NtFree basePtr=0x7FFEF604 sizePtr=0x7FFEF60C address=0x401C0000 size=0x00000000 type=0x00008000 debug=0x00000000 status=0x00000000
+RUNTIME seq=76 thread=1 NtAllocate basePtr=0x7FFEF534 sizePtr=0x7FFEF53C requested=0x401E0000 size=0x00010000 flags=0x20001000 protect=0x00000004 debug=0x00000000 status=0x00000000 next_virtual=0x401F0000 next_physical=0x10001000
+RUNTIME seq=77 thread=1 NtFree basePtr=0x7FFEF604 sizePtr=0x7FFEF60C address=0x401D0000 size=0x00000000 type=0x00008000 debug=0x00000000 status=0x00000000
+RUNTIME seq=78 thread=1 NtAllocate basePtr=0x7FFEF534 sizePtr=0x7FFEF53C requested=0x401F0000 size=0x00010000 flags=0x20001000 protect=0x00000004 debug=0x00000000 status=0x00000000 next_virtual=0x40200000 next_physical=0x10001000
+RUNTIME seq=79 thread=1 NtFree basePtr=0x7FFEF604 sizePtr=0x7FFEF60C address=0x401E0000 size=0x00000000 type=0x00008000 debug=0x00000000 status=0x00000000
+RUNTIME seq=80 thread=1 RtlUnicodeToMultiByteN copied=35
+RUNTIME seq=81 thread=1 NtAllocate basePtr=0x7FFEF854 sizePtr=0x7FFEF85C requested=0x40200000 size=0x00010000 flags=0x20001000 protect=0x00000004 debug=0x00000000 status=0x00000000 next_virtual=0x40210000 next_physical=0x10001000
+RUNTIME seq=82 thread=1 RtlUnicodeToMultiByteN copied=38
+RUNTIME seq=83 thread=1 RtlUnicodeToMultiByteN copied=46
+RUNTIME seq=84 thread=1 RtlUnicodeToMultiByteN copied=36
+RUNTIME seq=85 thread=1 NtAllocate basePtr=0x7FFEF7B4 sizePtr=0x7FFEF7BC requested=0x40210000 size=0x00010000 flags=0x20001000 protect=0x00000004 debug=0x00000000 status=0x00000000 next_virtual=0x40220000 next_physical=0x10001000
+RUNTIME seq=86 thread=1 RtlUnicodeToMultiByteN copied=38
+RUNTIME seq=87 thread=1 RtlUnicodeToMultiByteN copied=48
+RUNTIME seq=88 thread=1 RtlUnicodeToMultiByteN copied=45
+RUNTIME seq=89 thread=1 NtAllocate basePtr=0x7FFEF7D4 sizePtr=0x7FFEF7DC requested=0x40220000 size=0x00010000 flags=0x20001000 protect=0x00000004 debug=0x00000000 status=0x00000000 next_virtual=0x40230000 next_physical=0x10001000
+RUNTIME seq=90 thread=1 NtFree basePtr=0x7FFEF8A4 sizePtr=0x7FFEF8AC address=0x40200000 size=0x00000000 type=0x00008000 debug=0x00000000 status=0x00000000
+RUNTIME seq=91 thread=1 RtlUnicodeToMultiByteN copied=39
+RUNTIME seq=92 thread=1 RtlUnicodeToMultiByteN copied=46
+RUNTIME seq=93 thread=1 RtlUnicodeToMultiByteN copied=56
+RUNTIME seq=94 thread=1 RtlUnicodeToMultiByteN copied=53
+RUNTIME seq=95 thread=1 RtlUnicodeToMultiByteN copied=47
+RUNTIME seq=128 thread=1 NtFree basePtr=0x7FFEF8A4 sizePtr=0x7FFEF8AC address=0x40270000 size=0x00000000 type=0x00008000 debug=0x00000000 status=0x00000000
+RUNTIME seq=192 thread=1 NtFree basePtr=0x7FFEF8A4 sizePtr=0x7FFEF8AC address=0x402D0000 size=0x00000000 type=0x00008000 debug=0x00000000 status=0x00000000
+RUNTIME seq=256 thread=1 NtAllocate basePtr=0x7FFEF744 sizePtr=0x7FFEF74C requested=0x402D0000 size=0x00010000 flags=0x20001000 protect=0x00000004 debug=0x00000000 status=0x00000000 next_virtual=0x402E0000 next_physical=0x10001000
+RUNTIME seq=320 thread=1 RtlUnicodeToMultiByteN copied=23
+RUNTIME seq=384 thread=1 RtlUnicodeToMultiByteN copied=21
+RUNTIME seq=448 thread=1 RtlUnicodeToMultiByteN copied=36
+RUNTIME seq=512 thread=1 NtAllocate basePtr=0x7FFEF744 sizePtr=0x7FFEF74C requested=0x40340000 size=0x00010000 flags=0x20001000 protect=0x00000004 debug=0x00000000 status=0x00000000 next_virtual=0x40350000 next_physical=0x10001000
+RUNTIME seq=576 thread=1 NtFree basePtr=0x7FFEF8A4 sizePtr=0x7FFEF8AC address=0x40350000 size=0x00000000 type=0x00008000 debug=0x00000000 status=0x00000000
+RUNTIME seq=640 thread=1 RtlUnicodeToMultiByteN copied=10
+RUNTIME seq=704 thread=1 RtlUnicodeToMultiByteN copied=25
+RUNTIME seq=768 thread=1 NtCreateEvent handle=0x00000102 type=1 manualReset=0 initial=0 named=0
+RUNTIME seq=779 thread=1 VdInitializeEngines accepted; engine flag set only; ring pump awaits guest WPTR/checkpoint or VdSwap; no draw or frame implied
+RUNTIME seq=783 thread=1 VdSetGraphicsInterruptCallback callback=0x82B3DE30
+RUNTIME seq=792 thread=1 VdInitializeRingBuffer address=0x10003000 size=0x00008000 log2=12
+RUNTIME seq=793 thread=1 VdEnableRingBufferRPtrWriteBack address=0x1031003C block_log2=6
+RUNTIME seq=797 thread=1 XENOS_GRAPHICS_INTERRUPT_THREAD id=4 object=0x7D002000 KPCR=0x7C002000 stack=0x79FE0000+0x00010000
+RUNTIME seq=798 thread=1 XENOS_GRAPHICS_INTERRUPT source=0 cpu=2 callback=0x82B3DE30 context=0x4004C080 count=1 thread=4
+RUNTIME seq=815 thread=1 XENOS_PM4_SCRATCH_WRITEBACK reg=4 address=0x10311010 value=0x0BADF00D
+RUNTIME seq=832 thread=1 MmAllocatePhysicalMemoryEx flags=0x00000000 size=0x00006000 protect=0x00000404 align=0x00001000 -> 0x106E0000
+RUNTIME seq=896 thread=1 MmAllocatePhysicalMemoryEx flags=0x00000000 size=0x00010000 protect=0x20000004 align=0x00010000 -> 0x10720000
+RUNTIME seq=914 thread=1 VdSwap decoded and presented guest framebuffer width=1280 height=720 frontbuffer=0x10316000 format=0x00000006 colorspace=0
+RUNTIME seq=960 thread=1 NtFree basePtr=0x7FFEF274 sizePtr=0x7FFEF27C address=0x403E0000 size=0x00000000 type=0x00008000 debug=0x00000000 status=0x00000000
+RUNTIME seq=1024 thread=1 RtlMultiByteToUnicodeN copied=55
+RUNTIME seq=1088 thread=1 RtlMultiByteToUnicodeN copied=56
+RUNTIME seq=1152 thread=1 RtlMultiByteToUnicodeN copied=59
+RUNTIME seq=1216 thread=1 RtlMultiByteToUnicodeN copied=66
+RUNTIME seq=1280 thread=1 RtlMultiByteToUnicodeN copied=56
+RUNTIME seq=1344 thread=1 RtlMultiByteToUnicodeN copied=66
+RUNTIME seq=1408 thread=1 RtlMultiByteToUnicodeN copied=62
+RUNTIME seq=1472 thread=1 RtlMultiByteToUnicodeN copied=69
+RUNTIME seq=1536 thread=1 RtlMultiByteToUnicodeN copied=60
+RUNTIME seq=1600 thread=1 RtlMultiByteToUnicodeN copied=61
+RUNTIME seq=1664 thread=1 RtlMultiByteToUnicodeN copied=65
+RUNTIME seq=1728 thread=1 RtlMultiByteToUnicodeN copied=67
+RUNTIME seq=1792 thread=1 RtlMultiByteToUnicodeN copied=64
+RUNTIME seq=1856 thread=1 RtlMultiByteToUnicodeN copied=50
+RUNTIME seq=1865 thread=1 NtCreateFile path=D:\Binaries\EpicInternal.txt status=0xC0000034 open failed
+RUNTIME seq=1895 thread=1 XENOS_PM4_EVENT_WRITE_SHD initiator=0x00000003 address=0x10310006 value=0x100100D4 counter=0
+RUNTIME seq=1897 thread=1 XENOS_PM4_EVENT_WRITE_SHD initiator=0x00000003 address=0x10310002 value=0x00000003 counter=0
+RUNTIME seq=1898 thread=1 Xenos ring kick rptr=25 wptr=25 words=25 packets=72 draws=24 swaps=0 frames=0 guest_sync_writes=3 malformed=0 decode_failures=0
+RUNTIME seq=1899 thread=1 XENOS_PM4_TAIL count=16 [36 h=C0003600 a=00010081 b=00000000] [36 h=C0003600 a=00010081 b=00000000] [36 h=C0003600 a=00010081 b=00000000] [36 h=C0003600 a=00010081 b=00000000] [36 h=C0003600 a=00010081 b=00000000] [36 h=C0003600 a=00010081 b=00000000] [36 h=C0003600 a=00010081 b=00000000] [36 h=C0003600 a=00010081 b=00000000] [36 h=C0003600 a=00010081 b=00000000] [36 h=C0003600 a=00010081 b=00000000] [36 h=C0003600 a=00010081 b=00000000] [36 h=C0003600 a=00010081 b=00000000] [36 h=C0003600 a=00010081 b=00000000] [3B h=C0003B00 a=00007FFF b=00000000] [58 h=C0025800 a=00000003 b=10310006] [58 h=C0025800 a=00000003 b=10310002]
+RUNTIME seq=1900 thread=1 XENOS_GRAPHICS_INTERRUPT source=0 cpu=2 callback=0x82B3DE30 context=0x4004C080 count=2 thread=4
+RUNTIME seq=1910 thread=1 XENOS_PM4_SCRATCH_WRITEBACK reg=1 address=0x10311004 value=0x00000001
+RUNTIME seq=1911 thread=1 XENOS_PM4_SCRATCH_WRITEBACK reg=4 address=0x10311010 value=0x82B423C0
+RUNTIME seq=1912 thread=1 XENOS_PM4_SCRATCH_WRITEBACK reg=5 address=0x10311014 value=0x00000200
+RUNTIME seq=1913 thread=1 XENOS_PM4_SCRATCH_WRITEBACK reg=0 address=0x10311000 value=0x00000004
+RUNTIME seq=1914 thread=1 XENOS_GRAPHICS_INTERRUPT source=1 cpu=2 callback=0x82B3DE30 context=0x4004C080 count=1 thread=4
+RUNTIME seq=1917 thread=1 XENOS_GRAPHICS_INTERRUPT consumed one-shot SCRATCH_REG4 callback
+RUNTIME seq=1918 thread=1 XENOS_PM4_INTERRUPT cpu_mask=0x04
+RUNTIME seq=1919 thread=1 XENOS_PM4_SCRATCH_WRITEBACK reg=4 address=0x10311010 value=0x0BADF00D
+RUNTIME seq=1920 thread=1 RtlLeaveCriticalSection guest=0x4000077C recursion=0
+RUNTIME seq=1925 thread=1 XENOS_PM4_EVENT_WRITE_SHD initiator=0x80000003 address=0x10310040 value=0x00000005 counter=1
+RUNTIME seq=1947 thread=1 XENOS_PM4_EVENT_WRITE_SHD initiator=0x80000003 address=0x10310044 value=0x00000007 counter=1
+RUNTIME seq=1949 thread=1 XENOS_PM4_EVENT_WRITE_SHD initiator=0x00000003 address=0x10310006 value=0x10011304 counter=0
+RUNTIME seq=1951 thread=1 XENOS_PM4_EVENT_WRITE_SHD initiator=0x00000003 address=0x10310002 value=0x00000005 counter=0
+RUNTIME seq=1953 thread=1 XENOS_PM4_EVENT_WRITE_SHD initiator=0x00000003 address=0x10310006 value=0x1001169C counter=0
+RUNTIME seq=1956 thread=1 XENOS_PM4_EVENT_WRITE_SHD initiator=0x00000003 address=0x10310002 value=0x00000007 counter=0
+RUNTIME seq=1958 thread=1 XENOS_PM4_EVENT_WRITE_SHD initiator=0x00000003 address=0x10310006 value=0x10013B38 counter=0
+RUNTIME seq=1960 thread=1 XENOS_PM4_EVENT_WRITE_SHD initiator=0x00000003 address=0x10310002 value=0x00000009 counter=0
+RUNTIME seq=1962 thread=1 XENOS_PM4_EVENT_WRITE_SHD initiator=0x00000003 address=0x10310006 value=0x10013B8C counter=0
+RUNTIME seq=1964 thread=1 XENOS_PM4_EVENT_WRITE_SHD initiator=0x00000003 address=0x10310002 value=0x0000000B counter=0
+RUNTIME seq=1965 thread=1 Xenos ring kick rptr=49 wptr=49 words=24 packets=1085 draws=2 swaps=1 frames=2 guest_sync_writes=15 malformed=0 decode_failures=0
+RUNTIME seq=1966 thread=1 XENOS_PM4_TAIL count=16 [45 h=C0054500 a=00000007 b=00001925] [45 h=C0054500 a=00000007 b=00001925] [45 h=C0054500 a=00000007 b=00001925] [45 h=C0054500 a=00000007 b=00001925] [45 h=C0054500 a=00000007 b=00001925] [45 h=C0054500 a=00000007 b=00001925] [3B h=C0003B00 a=00007FFF b=00000000] [58 h=C0025800 a=00000003 b=10310006] [58 h=C0025800 a=00000003 b=10310002] [3F h=C0013F00 a=100201C0 b=0000000B] [3C h=C0043C00 a=00000003 b=00000A31] [3F h=C0013F00 a=10013B80 b=0000000E] [21 h=C0022100 a=00001E4E b=FFFFFFFE] [3B h=C0003B00 a=00007FFF b=00000000] [58 h=C0025800 a=00000003 b=10310006] [58 h=C0025800 a=00000003 b=10310002]
+RUNTIME seq=1984 thread=1 NtFree basePtr=0x7FFEEDE4 sizePtr=0x7FFEEDEC address=0x40680000 size=0x00000000 type=0x00008000 debug=0x00000000 status=0x00000000
+RUNTIME seq=2012 thread=1 XENOS_GRAPHICS_INTERRUPT source=0 cpu=2 callback=0x82B3DE30 context=0x4004C080 count=3 thread=4
+XENOS_GUEST_SWAP_PRESTART decoded=0 nonblack=0 checksum=0000000000000000
+KOSMICKRISP_BACKEND_START build=63 mesa_commit=bfe063f723d436e5cdef8a98f058d4e44a64810c os=26.5.1 model=iPhone
+METAL_DEVICE name=Apple A19 Pro GPU registryID=4294968453
+INSTANCE EXT surface=1 metal_surface=1 portability_enum=0 total=14
+INSTANCE PASS
+METAL SURFACE PASS layer=0x105eee6c0
+GPU PASS name=Apple A19 Pro GPU vendor=0x106b device=0x0064 driver=109060195 api=1.4.363 queueFamily=0
+GPU_MEMORY heaps=1 heap_bytes=8589950976 resident_mib=313.0 pipeline_cache=none(guest-frame-copy)
+VULKAN_EXTENSION_INVENTORY instance_available=14 device_available=146 enabled_instance=2 enabled_device=1
+DEVICE EXT swapchain=1 portability_subset=0 total=146
+RUNTIME seq=2046 thread=1 XENOS_GRAPHICS_INTERRUPT source=0 cpu=2 callback=0x82B3DE30 context=0x4004C080 count=4 thread=4
+RUNTIME seq=2048 thread=1 RtlUnicodeToMultiByteN copied=16
+RUNTIME seq=2112 thread=1 RtlUnicodeToMultiByteN copied=12
+RUNTIME seq=2176 thread=1 RtlUnicodeToMultiByteN copied=16
+RUNTIME seq=2240 thread=1 RtlUnicodeToMultiByteN copied=7
+RUNTIME seq=2304 thread=1 RtlUnicodeToMultiByteN copied=5
+RUNTIME seq=2368 thread=1 RtlUnicodeToMultiByteN copied=13
+RUNTIME seq=2432 thread=1 RtlUnicodeToMultiByteN copied=4
+RUNTIME seq=2496 thread=1 RtlMultiByteToUnicodeN copied=5
+GUEST_FRAME_UPLOAD ready 2144x1206 bytes=10342656 coherent=1
+SWAPCHAIN PASS extent=2144x1206 images=3 format=44 present=FIFO
+VULKAN DEVICE PASS direct-ICD + Metal WSI
+KOSMICKRISP_BACKEND_READY extent=2144x1206 images=3
+RUNTIME seq=2535 thread=1 XENOS_GRAPHICS_INTERRUPT source=0 cpu=2 callback=0x82B3DE30 context=0x4004C080 count=5 thread=4
+RUNTIME seq=2560 thread=1 RtlUnicodeToMultiByteN copied=6
+XENOS_VULKAN_SHADER_MODULE stage=vertex hash=1DDB2F897F5466FA words=4000 result=0
+XENOS_VULKAN_SHADER_MODULE stage=fragment hash=92A6B6F8F6E6B311 words=981 result=0
+RUNTIME seq=2624 thread=1 RtlUnicodeToMultiByteN copied=6
+RUNTIME seq=2688 thread=1 RtlUnicodeToMultiByteN copied=6
+RUNTIME seq=2752 thread=1 RtlUnicodeToMultiByteN copied=6
+RUNTIME seq=2816 thread=1 RtlMultiByteToUnicodeN copied=15
+RUNTIME seq=2880 thread=1 RtlUnicodeToMultiByteN copied=29
+RUNTIME seq=2944 thread=1 RtlUnicodeToMultiByteN copied=7
+RUNTIME seq=3008 thread=1 RtlUnicodeToMultiByteN copied=15
+RUNTIME seq=3042 thread=1 XENOS_GRAPHICS_INTERRUPT source=0 cpu=2 callback=0x82B3DE30 context=0x4004C080 count=6 thread=4
+RUNTIME seq=3072 thread=1 RtlUnicodeToMultiByteN copied=7
+RUNTIME seq=3136 thread=1 RtlUnicodeToMultiByteN copied=7
+RUNTIME seq=3200 thread=1 RtlUnicodeToMultiByteN copied=7
+XENOS_NATIVE_RESOURCES renderpass=1 descriptor_set=1 physical_ssbo_mib=512 ubo_bytes=1179648
+XENOS_DRAW_AUDIT slot=0 initiator=00010081 primitive=1 index_count=1 index_addr=00000000 index_info=00000000 fetch_mask=00000000 texture2d=00000000 vs=8D83FD903355B0B9 ps=92A6B6F8F6E6B311 vte=00000300 vs_memexport=0 ps_memexport=0 color_mask=1
+XENOS_NATIVE_TARGET_STATE slot=0 mode=00000004 pitch=0 msaa=0 rt0=00000000 rt1=00000000 rt2=00000000 rt3=00000000 depth=00000000 depthctrl=00000000 color_mask=00000000 blend0=00000000 copy=00000000 scissor=00000000..00100010
+XENOS_VULKAN_SHADER_MODULE stage=vertex hash=8D83FD903355B0B9 words=3177 result=0
+RUNTIME seq=3264 thread=1 RtlMultiByteToUnicodeN copied=11
+RUNTIME seq=3328 thread=1 RtlUnicodeToMultiByteN copied=25
+XENOS_FRAGMENT_COLOR_OUTPUT_LINKED vs=8D83FD903355B0B9 ps=92A6B6F8F6E6B311 words=1039
+RUNTIME seq=3392 thread=1 RtlUnicodeToMultiByteN copied=7
+RUNTIME seq=3456 thread=1 RtlUnicodeToMultiByteN copied=7
+RUNTIME seq=3520 thread=1 RtlMultiByteToUnicodeN copied=31
+RUNTIME seq=3584 thread=1 RtlMultiByteToUnicodeN copied=10
+RUNTIME seq=3648 thread=1 RtlUnicodeToMultiByteN copied=29
+RUNTIME seq=3712 thread=1 RtlUnicodeToMultiByteN copied=7
+RUNTIME seq=3776 thread=1 RtlUnicodeToMultiByteN copied=5
+RUNTIME seq=3840 thread=1 RtlUnicodeToMultiByteN copied=16
+RUNTIME seq=3904 thread=1 RtlUnicodeToMultiByteN copied=25
+RUNTIME seq=3968 thread=1 RtlUnicodeToMultiByteN copied=7
+RUNTIME seq=4032 thread=1 RtlUnicodeToMultiByteN copied=7
+RUNTIME seq=4096 thread=1 RtlUnicodeToMultiByteN copied=7
+XENOS_NATIVE_PIPELINE_CREATED vertex=8D83FD903355B0B9 pixel=92A6B6F8F6E6B311 topology=0
+XENOS_GUEST_VIEWPORT vte=00000300 flags=D scale=(0.001563,0.002778) offset=(-1.0000,-1.0000) primitive=1 vertices=1
+XENOS_DRAW_AUDIT slot=1 initiator=00010081 primitive=1 index_count=1 index_addr=00000000 index_info=00000000 fetch_mask=00000000 texture2d=00000000 vs=8D83FD903355B0B9 ps=92A6B6F8F6E6B311 vte=00000300 vs_memexport=0 ps_memexport=0 color_mask=1
+XENOS_NATIVE_TARGET_STATE slot=1 mode=00000004 pitch=0 msaa=0 rt0=00000000 rt1=00000000 rt2=00000000 rt3=00000000 depth=00000000 depthctrl=00000000 color_mask=00000000 blend0=00000000 copy=00000000 scissor=00000000..00100010
+XENOS_DRAW_AUDIT slot=2 initiator=00010081 primitive=1 index_count=1 index_addr=00000000 index_info=00000000 fetch_mask=00000000 texture2d=00000000 vs=8D83FD903355B0B9 ps=92A6B6F8F6E6B311 vte=00000300 vs_memexport=0 ps_memexport=0 color_mask=1
+XENOS_NATIVE_TARGET_STATE slot=2 mode=00000004 pitch=0 msaa=0 rt0=00000000 rt1=00000000 rt2=00000000 rt3=00000000 depth=00000000 depthctrl=00000000 color_mask=00000000 blend0=00000000 copy=00000000 scissor=00000000..00100010
+XENOS_DRAW_AUDIT slot=3 initiator=00010081 primitive=1 index_count=1 index_addr=00000000 index_info=00000000 fetch_mask=00000000 texture2d=00000000 vs=8D83FD903355B0B9 ps=92A6B6F8F6E6B311 vte=00000300 vs_memexport=0 ps_memexport=0 color_mask=1
+XENOS_NATIVE_TARGET_STATE slot=3 mode=00000004 pitch=0 msaa=0 rt0=00000000 rt1=00000000 rt2=00000000 rt3=00000000 depth=00000000 depthctrl=00000000 color_mask=00000000 blend0=00000000 copy=00000000 scissor=00000000..00100010
+XENOS_DRAW_AUDIT slot=4 initiator=00010081 primitive=1 index_count=1 index_addr=00000000 index_info=00000000 fetch_mask=00000000 texture2d=00000000 vs=8D83FD903355B0B9 ps=92A6B6F8F6E6B311 vte=00000300 vs_memexport=0 ps_memexport=0 color_mask=1
+XENOS_NATIVE_TARGET_STATE slot=4 mode=00000004 pitch=0 msaa=0 rt0=00000000 rt1=00000000 rt2=00000000 rt3=00000000 depth=00000000 depthctrl=00000000 color_mask=00000000 blend0=00000000 copy=00000000 scissor=00000000..00100010
+XENOS_DRAW_AUDIT slot=5 initiator=00010081 primitive=1 index_count=1 index_addr=00000000 index_info=00000000 fetch_mask=00000000 texture2d=00000000 vs=8D83FD903355B0B9 ps=92A6B6F8F6E6B311 vte=00000300 vs_memexport=0 ps_memexport=0 color_mask=1
+XENOS_NATIVE_TARGET_STATE slot=5 mode=00000004 pitch=0 msaa=0 rt0=00000000 rt1=00000000 rt2=00000000 rt3=00000000 depth=00000000 depthctrl=00000000 color_mask=00000000 blend0=00000000 copy=00000000 scissor=00000000..00100010
+XENOS_DRAW_AUDIT slot=6 initiator=00010081 primitive=1 index_count=1 index_addr=00000000 index_info=00000000 fetch_mask=00000000 texture2d=00000000 vs=8D83FD903355B0B9 ps=92A6B6F8F6E6B311 vte=00000300 vs_memexport=0 ps_memexport=0 color_mask=1
+XENOS_NATIVE_TARGET_STATE slot=6 mode=00000004 pitch=0 msaa=0 rt0=00000000 rt1=00000000 rt2=00000000 rt3=00000000 depth=00000000 depthctrl=00000000 color_mask=00000000 blend0=00000000 copy=00000000 scissor=00000000..00100010
+XENOS_DRAW_AUDIT slot=7 initiator=00010081 primitive=1 index_count=1 index_addr=00000000 index_info=00000000 fetch_mask=00000000 texture2d=00000000 vs=8D83FD903355B0B9 ps=92A6B6F8F6E6B311 vte=00000300 vs_memexport=0 ps_memexport=0 color_mask=1
+XENOS_NATIVE_TARGET_STATE slot=7 mode=00000004 pitch=0 msaa=0 rt0=00000000 rt1=00000000 rt2=00000000 rt3=00000000 depth=00000000 depthctrl=00000000 color_mask=00000000 blend0=00000000 copy=00000000 scissor=00000000..00100010
+XENOS_DRAW_AUDIT slot=8 initiator=00010081 primitive=1 index_count=1 index_addr=00000000 index_info=00000000 fetch_mask=00000000 texture2d=00000000 vs=8D83FD903355B0B9 ps=92A6B6F8F6E6B311 vte=00000300 vs_memexport=0 ps_memexport=0 color_mask=1
+RUNTIME seq=4160 thread=1 RtlMultiByteToUnicodeN copied=8
+XENOS_NATIVE_TARGET_STATE slot=8 mode=00000004 pitch=0 msaa=0 rt0=00000000 rt1=00000000 rt2=00000000 rt3=00000000 depth=00000000 depthctrl=00000000 color_mask=00000000 blend0=00000000 copy=00000000 scissor=00000000..00100010
+XENOS_DRAW_AUDIT slot=9 initiator=00010081 primitive=1 index_count=1 index_addr=00000000 index_info=00000000 fetch_mask=00000000 texture2d=00000000 vs=8D83FD903355B0B9 ps=92A6B6F8F6E6B311 vte=00000300 vs_memexport=0 ps_memexport=0 color_mask=1
+XENOS_NATIVE_TARGET_STATE slot=9 mode=00000004 pitch=0 msaa=0 rt0=00000000 rt1=00000000 rt2=00000000 rt3=00000000 depth=00000000 depthctrl=00000000 color_mask=00000000 blend0=00000000 copy=00000000 scissor=00000000..00100010
+XENOS_DRAW_AUDIT slot=10 initiator=00010081 primitive=1 index_count=1 index_addr=00000000 index_info=00000000 fetch_mask=00000000 texture2d=00000000 vs=8D83FD903355B0B9 ps=92A6B6F8F6E6B311 vte=00000300 vs_memexport=0 ps_memexport=0 color_mask=1
+XENOS_NATIVE_TARGET_STATE slot=10 mode=00000004 pitch=0 msaa=0 rt0=00000000 rt1=00000000 rt2=00000000 rt3=00000000 depth=00000000 depthctrl=00000000 color_mask=00000000 blend0=00000000 copy=00000000 scissor=00000000..00100010
+XENOS_DRAW_AUDIT slot=11 initiator=00010081 primitive=1 index_count=1 index_addr=00000000 index_info=00000000 fetch_mask=00000000 texture2d=00000000 vs=8D83FD903355B0B9 ps=92A6B6F8F6E6B311 vte=00000300 vs_memexport=0 ps_memexport=0 color_mask=1
+XENOS_NATIVE_TARGET_STATE slot=11 mode=00000004 pitch=0 msaa=0 rt0=00000000 rt1=00000000 rt2=00000000 rt3=00000000 depth=00000000 depthctrl=00000000 color_mask=00000000 blend0=00000000 copy=00000000 scissor=00000000..00100010
+XENOS_DRAW_AUDIT slot=12 initiator=00010081 primitive=1 index_count=1 index_addr=00000000 index_info=00000000 fetch_mask=00000000 texture2d=00000000 vs=8D83FD903355B0B9 ps=92A6B6F8F6E6B311 vte=00000300 vs_memexport=0 ps_memexport=0 color_mask=1
+XENOS_NATIVE_TARGET_STATE slot=12 mode=00000004 pitch=0 msaa=0 rt0=00000000 rt1=00000000 rt2=00000000 rt3=00000000 depth=00000000 depthctrl=00000000 color_mask=00000000 blend0=00000000 copy=00000000 scissor=00000000..00100010
+XENOS_DRAW_AUDIT slot=13 initiator=00010081 primitive=1 index_count=1 index_addr=00000000 index_info=00000000 fetch_mask=00000000 texture2d=00000000 vs=8D83FD903355B0B9 ps=92A6B6F8F6E6B311 vte=00000300 vs_memexport=0 ps_memexport=0 color_mask=1
+XENOS_NATIVE_TARGET_STATE slot=13 mode=00000004 pitch=0 msaa=0 rt0=00000000 rt1=00000000 rt2=00000000 rt3=00000000 depth=00000000 depthctrl=00000000 color_mask=00000000 blend0=00000000 copy=00000000 scissor=00000000..00100010
+XENOS_DRAW_AUDIT slot=14 initiator=00010081 primitive=1 index_count=1 index_addr=00000000 index_info=00000000 fetch_mask=00000000 texture2d=00000000 vs=8D83FD903355B0B9 ps=92A6B6F8F6E6B311 vte=00000300 vs_memexport=0 ps_memexport=0 color_mask=1
+XENOS_NATIVE_TARGET_STATE slot=14 mode=00000004 pitch=0 msaa=0 rt0=00000000 rt1=00000000 rt2=00000000 rt3=00000000 depth=00000000 depthctrl=00000000 color_mask=00000000 blend0=00000000 copy=00000000 scissor=00000000..00100010
+XENOS_DRAW_AUDIT slot=15 initiator=00010081 primitive=1 index_count=1 index_addr=00000000 index_info=00000000 fetch_mask=00000000 texture2d=00000000 vs=8D83FD903355B0B9 ps=92A6B6F8F6E6B311 vte=00000300 vs_memexport=0 ps_memexport=0 color_mask=1
+XENOS_NATIVE_TARGET_STATE slot=15 mode=00000004 pitch=0 msaa=0 rt0=00000000 rt1=00000000 rt2=00000000 rt3=00000000 depth=00000000 depthctrl=00000000 color_mask=00000000 blend0=00000000 copy=00000000 scissor=00000000..00100010
+XENOS_DRAW_AUDIT slot=16 initiator=00010081 primitive=1 index_count=1 index_addr=00000000 index_info=00000000 fetch_mask=00000000 texture2d=00000000 vs=8D83FD903355B0B9 ps=92A6B6F8F6E6B311 vte=00000300 vs_memexport=0 ps_memexport=0 color_mask=1
+XENOS_NATIVE_TARGET_STATE slot=16 mode=00000004 pitch=0 msaa=0 rt0=00000000 rt1=00000000 rt2=00000000 rt3=00000000 depth=00000000 depthctrl=00000000 color_mask=00000000 blend0=00000000 copy=00000000 scissor=00000000..00100010
+XENOS_DRAW_AUDIT slot=17 initiator=00010081 primitive=1 index_count=1 index_addr=00000000 index_info=00000000 fetch_mask=00000000 texture2d=00000000 vs=8D83FD903355B0B9 ps=92A6B6F8F6E6B311 vte=00000300 vs_memexport=0 ps_memexport=0 color_mask=1
+XENOS_NATIVE_TARGET_STATE slot=17 mode=00000004 pitch=0 msaa=0 rt0=00000000 rt1=00000000 rt2=00000000 rt3=00000000 depth=00000000 depthctrl=00000000 color_mask=00000000 blend0=00000000 copy=00000000 scissor=00000000..00100010
+XENOS_DRAW_AUDIT slot=18 initiator=00010081 primitive=1 index_count=1 index_addr=00000000 index_info=00000000 fetch_mask=00000000 texture2d=00000000 vs=8D83FD903355B0B9 ps=92A6B6F8F6E6B311 vte=00000300 vs_memexport=0 ps_memexport=0 color_mask=1
+XENOS_NATIVE_TARGET_STATE slot=18 mode=00000004 pitch=0 msaa=0 rt0=00000000 rt1=00000000 rt2=00000000 rt3=00000000 depth=00000000 depthctrl=00000000 color_mask=00000000 blend0=00000000 copy=00000000 scissor=00000000..00100010
+XENOS_DRAW_AUDIT slot=19 initiator=00010081 primitive=1 index_count=1 index_addr=00000000 index_info=00000000 fetch_mask=00000000 texture2d=00000000 vs=8D83FD903355B0B9 ps=92A6B6F8F6E6B311 vte=00000300 vs_memexport=0 ps_memexport=0 color_mask=1
+XENOS_NATIVE_TARGET_STATE slot=19 mode=00000004 pitch=0 msaa=0 rt0=00000000 rt1=00000000 rt2=00000000 rt3=00000000 depth=00000000 depthctrl=00000000 color_mask=00000000 blend0=00000000 copy=00000000 scissor=00000000..00100010
+XENOS_DRAW_AUDIT slot=20 initiator=00010081 primitive=1 index_count=1 index_addr=00000000 index_info=00000000 fetch_mask=00000000 texture2d=00000000 vs=8D83FD903355B0B9 ps=92A6B6F8F6E6B311 vte=00000300 vs_memexport=0 ps_memexport=0 color_mask=1
+XENOS_NATIVE_TARGET_STATE slot=20 mode=00000004 pitch=0 msaa=0 rt0=00000000 rt1=00000000 rt2=00000000 rt3=00000000 depth=00000000 depthctrl=00000000 color_mask=00000000 blend0=00000000 copy=00000000 scissor=00000000..00100010
+XENOS_DRAW_AUDIT slot=21 initiator=00010081 primitive=1 index_count=1 index_addr=00000000 index_info=00000000 fetch_mask=00000000 texture2d=00000000 vs=8D83FD903355B0B9 ps=92A6B6F8F6E6B311 vte=00000300 vs_memexport=0 ps_memexport=0 color_mask=1
+XENOS_NATIVE_TARGET_STATE slot=21 mode=00000004 pitch=0 msaa=0 rt0=00000000 rt1=00000000 rt2=00000000 rt3=00000000 depth=00000000 depthctrl=00000000 color_mask=00000000 blend0=00000000 copy=00000000 scissor=00000000..00100010
+XENOS_DRAW_AUDIT slot=22 initiator=00010081 primitive=1 index_count=1 index_addr=00000000 index_info=00000000 fetch_mask=00000000 texture2d=00000000 vs=8D83FD903355B0B9 ps=92A6B6F8F6E6B311 vte=00000300 vs_memexport=0 ps_memexport=0 color_mask=1
+XENOS_NATIVE_TARGET_STATE slot=22 mode=00000004 pitch=0 msaa=0 rt0=00000000 rt1=00000000 rt2=00000000 rt3=00000000 depth=00000000 depthctrl=00000000 color_mask=00000000 blend0=00000000 copy=00000000 scissor=00000000..00100010
+XENOS_DRAW_AUDIT slot=23 initiator=00010081 primitive=1 index_count=1 index_addr=00000000 index_info=00000000 fetch_mask=00000000 texture2d=00000000 vs=8D83FD903355B0B9 ps=92A6B6F8F6E6B311 vte=00000300 vs_memexport=0 ps_memexport=0 color_mask=1
+XENOS_NATIVE_TARGET_STATE slot=23 mode=00000004 pitch=0 msaa=0 rt0=00000000 rt1=00000000 rt2=00000000 rt3=00000000 depth=00000000 depthctrl=00000000 color_mask=00000000 blend0=00000000 copy=00000000 scissor=00000000..00100010
+XENOS_DRAW_AUDIT slot=24 initiator=00030088 primitive=8 index_count=3 index_addr=00000000 index_info=00000000 fetch_mask=00000001 texture2d=00000000 vs=975881668748D9C3 ps=0000000000000000 vte=00000300 vs_memexport=0 ps_memexport=0 color_mask=0
+XENOS_NATIVE_TARGET_STATE slot=24 mode=00000005 pitch=640 msaa=2 rt0=000002D0 rt1=00000000 rt2=00000000 rt3=00000000 depth=000002D0 depthctrl=00008777 color_mask=0000FFFF blend0=00010001 copy=00000000 scissor=00000000..20002000
+XENOS_EDRAM_DEPTH_NATIVE tile=720 pitch=640 samples=4
+XENOS_FETCH_CAPTURE slot=0 sub=0 word0=1002007F word1=10000056 guest=1002007C declared=84 estimated=240 stride=7 extent=7
+XENOS_VULKAN_SHADER_MODULE stage=vertex hash=975881668748D9C3 words=4752 result=0
+RUNTIME seq=4224 thread=1 RtlUnicodeToMultiByteN copied=15
+RUNTIME seq=4288 thread=1 RtlUnicodeToMultiByteN copied=7
+RUNTIME seq=4352 thread=1 RtlUnicodeToMultiByteN copied=16
+RUNTIME seq=4416 thread=1 RtlUnicodeToMultiByteN copied=16
+RUNTIME seq=4480 thread=1 RtlUnicodeToMultiByteN copied=16
+RUNTIME seq=4544 thread=1 RtlUnicodeToMultiByteN copied=16
+RUNTIME seq=4608 thread=1 RtlUnicodeToMultiByteN copied=16
+RUNTIME seq=4672 thread=1 RtlUnicodeToMultiByteN copied=7
+RUNTIME seq=4736 thread=1 RtlMultiByteToUnicodeN copied=20
+RUNTIME seq=4800 thread=1 RtlUnicodeToMultiByteN copied=25
+RUNTIME seq=4864 thread=1 RtlUnicodeToMultiByteN copied=20
+RUNTIME seq=4928 thread=1 RtlUnicodeToMultiByteN copied=7
+RUNTIME seq=4992 thread=1 RtlUnicodeToMultiByteN copied=7
+RUNTIME seq=5056 thread=1 RtlUnicodeToMultiByteN copied=25
+RUNTIME seq=5076 thread=1 XENOS_GRAPHICS_INTERRUPT source=0 cpu=2 callback=0x82B3DE30 context=0x4004C080 count=7 thread=4
+RUNTIME seq=5120 thread=1 RtlUnicodeToMultiByteN copied=7
+RUNTIME seq=5184 thread=1 RtlUnicodeToMultiByteN copied=7
+XENOS_NATIVE_PIPELINE_CREATED vertex=975881668748D9C3 pixel=0000000000000000 topology=3
+RUNTIME seq=5248 thread=1 RtlUnicodeToMultiByteN copied=17
+RUNTIME seq=5312 thread=1 RtlUnicodeToMultiByteN copied=16
+RUNTIME seq=5376 thread=1 RtlUnicodeToMultiByteN copied=16
+XENOS_GEOMETRY_SUBMIT slot=24 primitive=8 count=6 fetch=00000001 memexport_vs=0 memexport_ps=0 viewport=(0.00156,0.00278,-1.00000,-1.00000) target=2144x1206
+XENOS_DRAW_AUDIT slot=25 initiator=00030088 primitive=8 index_count=3 index_addr=00000000 index_info=00000000 fetch_mask=00000000 texture2d=00000000 vs=0000000000000000 ps=0000000000000000 vte=00000300 vs_memexport=0 ps_memexport=0 color_mask=0
+XENOS_NATIVE_TARGET_STATE slot=25 mode=00000006 pitch=1280 msaa=0 rt0=000002D0 rt1=00000000 rt2=00000000 rt3=00000000 depth=00000000 depthctrl=00000000 color_mask=0000000F blend0=00010001 copy=00100000 scissor=00000000..02D00500
+XENOS_COPY_GUEST_REQUEST dest_base=10316000 dest_pitch=02D00500 dest_info=01000300 control=00100000 src=0 copy_command=1
+XENOS_EDRAM_COLOR_NATIVE tile=720 pitch=1280 format=0 samples=1
+XENOS_EDRAM_COLOR_CLEAR_RESOLVE tile=720 destination=0x10316000 source=0
+RUNTIME seq=5440 thread=1 RtlUnicodeToMultiByteN copied=16
+XENOS_GPU_RESOLVE_READBACK_QUEUED addr=10316000 1280x720 bytes=3686400
+XENOS_EDRAM_RESOLVE_NATIVE source_tile=720 samples=1 pitch=1280 copied_to_swapchain=1 guest_memory_commit=0
+XENOS_NATIVE_DRAW_OUTCOME captured=26 queued=26 rejected=0 rejected_memory=0 rejected_texture=0
+RUNTIME seq=5504 thread=1 RtlUnicodeToMultiByteN copied=16
+RUNTIME seq=5568 thread=1 RtlUnicodeToMultiByteN copied=7
+RUNTIME seq=5632 thread=1 RtlMultiByteToUnicodeN copied=25
+RUNTIME seq=5696 thread=1 RtlUnicodeToMultiByteN copied=36
+RUNTIME seq=5760 thread=1 RtlUnicodeToMultiByteN copied=7
+RUNTIME seq=5824 thread=1 RtlUnicodeToMultiByteN copied=7
+RUNTIME seq=5888 thread=1 RtlUnicodeToMultiByteN copied=7
+RUNTIME seq=5952 thread=1 RtlUnicodeToMultiByteN copied=20
+RUNTIME seq=6016 thread=1 RtlUnicodeToMultiByteN copied=16
+RUNTIME seq=6080 thread=1 RtlUnicodeToMultiByteN copied=16
+RUNTIME seq=6144 thread=1 RtlUnicodeToMultiByteN copied=7
+RUNTIME seq=6208 thread=1 RtlMultiByteToUnicodeN copied=36
+RUNTIME seq=6272 thread=1 RtlUnicodeToMultiByteN copied=43
+RUNTIME seq=6336 thread=1 RtlUnicodeToMultiByteN copied=44
+RUNTIME seq=6358 thread=1 XENOS_GRAPHICS_INTERRUPT source=0 cpu=2 callback=0x82B3DE30 context=0x4004C080 count=8 thread=4
+RUNTIME seq=6400 thread=1 RtlUnicodeToMultiByteN copied=38
+RUNTIME seq=6464 thread=1 RtlUnicodeToMultiByteN copied=7
+RUNTIME seq=6528 thread=1 NtAllocate basePtr=0x7FFEF3B4 sizePtr=0x7FFEF3BC requested=0x41260000 size=0x00010000 flags=0x20001000 protect=0x00000004 debug=0x00000000 status=0x00000000 next_virtual=0x41270000 next_physical=0x10744000
+RUNTIME seq=6592 thread=1 RtlUnicodeToMultiByteN copied=7
+RUNTIME seq=6656 thread=1 RtlUnicodeToMultiByteN copied=7
+RUNTIME seq=6720 thread=1 RtlUnicodeToMultiByteN copied=35
+RUNTIME seq=6784 thread=1 RtlUnicodeToMultiByteN copied=32
+RUNTIME seq=6848 thread=1 RtlUnicodeToMultiByteN copied=16
+RUNTIME seq=6912 thread=1 RtlUnicodeToMultiByteN copied=16
+RUNTIME seq=6976 thread=1 RtlUnicodeToMultiByteN copied=7
+RUNTIME seq=7040 thread=1 RtlMultiByteToUnicodeN copied=31
+RUNTIME seq=7104 thread=1 RtlUnicodeToMultiByteN copied=33
+RUNTIME seq=7168 thread=1 RtlUnicodeToMultiByteN copied=7
+RUNTIME seq=7232 thread=1 RtlUnicodeToMultiByteN copied=7
+RUNTIME seq=7296 thread=1 RtlUnicodeToMultiByteN copied=7
+RUNTIME seq=7360 thread=1 RtlUnicodeToMultiByteN copied=30
+RUNTIME seq=7424 thread=1 RtlUnicodeToMultiByteN copied=16
+RUNTIME seq=7488 thread=1 RtlUnicodeToMultiByteN copied=16
+RUNTIME seq=7552 thread=1 RtlUnicodeToMultiByteN copied=16
+RUNTIME seq=7616 thread=1 RtlUnicodeToMultiByteN copied=7
+RUNTIME seq=7680 thread=1 RtlUnicodeToMultiByteN copied=7
+RUNTIME seq=7744 thread=1 RtlMultiByteToUnicodeN copied=29
+RUNTIME seq=7808 thread=1 RtlUnicodeToMultiByteN copied=25
+RUNTIME seq=7872 thread=1 RtlUnicodeToMultiByteN copied=7
+RUNTIME seq=7936 thread=1 RtlUnicodeToMultiByteN copied=7
+RUNTIME seq=8000 thread=1 RtlUnicodeToMultiByteN copied=7
+RUNTIME seq=8064 thread=1 RtlUnicodeToMultiByteN copied=34
+RUNTIME seq=8128 thread=1 RtlUnicodeToMultiByteN copied=17
+RUNTIME seq=8192 thread=1 RtlUnicodeToMultiByteN copied=16
+RUNTIME seq=8256 thread=1 RtlUnicodeToMultiByteN copied=16
+RUNTIME seq=8320 thread=1 RtlUnicodeToMultiByteN copied=7
+RUNTIME seq=8384 thread=1 RtlMultiByteToUnicodeN copied=23
+RUNTIME seq=8448 thread=1 RtlUnicodeToMultiByteN copied=20
+RUNTIME seq=8512 thread=1 RtlUnicodeToMultiByteN copied=7
+RUNTIME seq=8576 thread=1 RtlUnicodeToMultiByteN copied=7
+RUNTIME seq=8640 thread=1 RtlUnicodeToMultiByteN copied=7
+RUNTIME seq=8704 thread=1 RtlUnicodeToMultiByteN copied=7
+RUNTIME seq=8768 thread=1 RtlUnicodeToMultiByteN copied=23
+RUNTIME seq=8832 thread=1 RtlUnicodeToMultiByteN copied=16
+RUNTIME seq=8896 thread=1 RtlUnicodeToMultiByteN copied=16
+RUNTIME seq=8960 thread=1 RtlUnicodeToMultiByteN copied=7
+RUNTIME seq=9024 thread=1 RtlUnicodeToMultiByteN copied=7
+RUNTIME seq=9088 thread=1 RtlUnicodeToMultiByteN copied=7
+RUNTIME seq=9152 thread=1 RtlMultiByteToUnicodeN copied=10
+RUNTIME seq=9216 thread=1 RtlUnicodeToMultiByteN copied=25
+RUNTIME seq=9280 thread=1 RtlUnicodeToMultiByteN copied=26
+RUNTIME seq=9344 thread=1 RtlUnicodeToMultiByteN copied=21
+RUNTIME seq=9408 thread=1 RtlUnicodeToMultiByteN copied=7
+RUNTIME seq=9472 thread=1 RtlUnicodeToMultiByteN copied=7
+RUNTIME seq=9536 thread=1 RtlUnicodeToMultiByteN copied=21
+RUNTIME seq=9600 thread=1 RtlUnicodeToMultiByteN copied=23
+RUNTIME seq=9664 thread=1 RtlUnicodeToMultiByteN copied=16
+RUNTIME seq=9728 thread=1 RtlUnicodeToMultiByteN copied=16
+RUNTIME seq=9792 thread=1 RtlUnicodeToMultiByteN copied=3
+RUNTIME seq=9856 thread=1 RtlMultiByteToUnicodeN copied=13
+RUNTIME seq=9920 thread=1 RtlMultiByteToUnicodeN copied=42
+RUNTIME seq=9984 thread=1 RtlUnicodeToMultiByteN copied=28
+RUNTIME seq=10048 thread=1 RtlUnicodeToMultiByteN copied=30
+RUNTIME seq=10112 thread=1 RtlUnicodeToMultiByteN copied=7
+RUNTIME seq=10176 thread=1 RtlUnicodeToMultiByteN copied=20
+RUNTIME seq=10240 thread=1 RtlUnicodeToMultiByteN copied=16
+RUNTIME seq=10304 thread=1 RtlUnicodeToMultiByteN copied=16
+RUNTIME seq=10368 thread=1 RtlUnicodeToMultiByteN copied=16
+RUNTIME seq=10432 thread=1 RtlUnicodeToMultiByteN copied=7
+RUNTIME seq=10496 thread=1 RtlMultiByteToUnicodeN copied=25
+RUNTIME seq=10560 thread=1 RtlUnicodeToMultiByteN copied=31
+RUNTIME seq=10624 thread=1 RtlUnicodeToMultiByteN copied=33
+RUNTIME seq=10688 thread=1 RtlUnicodeToMultiByteN copied=7
+RUNTIME seq=10752 thread=1 RtlUnicodeToMultiByteN copied=7
+RUNTIME seq=10816 thread=1 RtlUnicodeToMultiByteN copied=7
+RUNTIME seq=10880 thread=1 RtlUnicodeToMultiByteN copied=16
+RUNTIME seq=10944 thread=1 RtlUnicodeToMultiByteN copied=16
+RUNTIME seq=11008 thread=1 RtlUnicodeToMultiByteN copied=16
+RUNTIME seq=11072 thread=1 RtlUnicodeToMultiByteN copied=16
+RUNTIME seq=11136 thread=1 RtlUnicodeToMultiByteN copied=16
+RUNTIME seq=11200 thread=1 RtlUnicodeToMultiByteN copied=16
+XENOS_GPU_DRAWS_SUBMITTED=26 total=26
+RUNTIME seq=11264 thread=1 RtlUnicodeToMultiByteN copied=7
+RUNTIME seq=11328 thread=1 RtlMultiByteToUnicodeN copied=9
+RUNTIME seq=11392 thread=1 RtlUnicodeToMultiByteN copied=28
+RUNTIME seq=11456 thread=1 RtlMultiByteToUnicodeN copied=17
+RUNTIME seq=11520 thread=1 RtlUnicodeToMultiByteN copied=29
+RUNTIME seq=11584 thread=1 RtlUnicodeToMultiByteN copied=8
+RUNTIME seq=11648 thread=1 RtlUnicodeToMultiByteN copied=14
+RUNTIME seq=11712 thread=1 RtlUnicodeToMultiByteN copied=16
+XENOS_COMPOSITED_GPU_READBACK nonblack=0 samples=8209 checksum=5853B5ECFBA7179F full_nonblack=0 full_pixels=2585664 bbox=0,0..0,0
+RUNTIME seq=11776 thread=1 RtlUnicodeToMultiByteN copied=16
+RUNTIME seq=11840 thread=1 RtlUnicodeToMultiByteN copied=16
+RUNTIME seq=11904 thread=1 RtlUnicodeToMultiByteN copied=16
+RUNTIME seq=11968 thread=1 RtlUnicodeToMultiByteN copied=7
+RUNTIME seq=12032 thread=1 RtlMultiByteToUnicodeN copied=32
+RUNTIME seq=12096 thread=1 RtlMultiByteToUnicodeN copied=27
+RUNTIME seq=12160 thread=1 RtlUnicodeToMultiByteN copied=47
+RUNTIME seq=12224 thread=1 RtlMultiByteToUnicodeN copied=44
+XENOS_GUEST_RESOLVE_WRITEBACK addr=10316000 pitch=1280 height=720 status=0 vk=0
+RUNTIME seq=12288 thread=1 RtlUnicodeToMultiByteN copied=64
+XENOS_VULKAN_SHADER_MODULE stage=vertex hash=1DDB2F897F5466FA words=4000 result=0
+XENOS_VULKAN_SHADER_MODULE stage=fragment hash=92A6B6F8F6E6B311 words=981 result=0
+RUNTIME seq=12352 thread=1 RtlUnicodeToMultiByteN copied=8
+RUNTIME seq=12416 thread=1 RtlUnicodeToMultiByteN copied=42
+RUNTIME seq=12480 thread=1 RtlUnicodeToMultiByteN copied=27
+RUNTIME seq=12544 thread=1 RtlUnicodeToMultiByteN copied=8
+RUNTIME seq=12608 thread=1 RtlUnicodeToMultiByteN copied=12
+RUNTIME seq=12672 thread=1 RtlMultiByteToUnicodeN copied=12
+RUNTIME seq=12736 thread=1 RtlUnicodeToMultiByteN copied=30
+RUNTIME seq=12800 thread=1 RtlMultiByteToUnicodeN copied=17
+RUNTIME seq=12864 thread=1 RtlUnicodeToMultiByteN copied=33
+RUNTIME seq=12928 thread=1 RtlUnicodeToMultiByteN copied=40
+RUNTIME seq=12992 thread=1 RtlUnicodeToMultiByteN copied=14
+RUNTIME seq=13056 thread=1 RtlUnicodeToMultiByteN copied=26
+RUNTIME seq=13120 thread=1 RtlUnicodeToMultiByteN copied=13
+RUNTIME seq=13184 thread=1 RtlUnicodeToMultiByteN copied=36
+RUNTIME seq=13248 thread=1 RtlUnicodeToMultiByteN copied=16
+RUNTIME seq=13312 thread=1 RtlUnicodeToMultiByteN copied=16
+RUNTIME seq=13376 thread=1 RtlUnicodeToMultiByteN copied=7
+RUNTIME seq=13440 thread=1 RtlMultiByteToUnicodeN copied=17
+RUNTIME seq=13504 thread=1 RtlMultiByteToUnicodeN copied=24
+RUNTIME seq=13568 thread=1 RtlMultiByteToUnicodeN copied=15
+RUNTIME seq=13632 thread=1 RtlUnicodeToMultiByteN copied=26
+RUNTIME seq=13696 thread=1 RtlUnicodeToMultiByteN copied=12
+RUNTIME seq=13760 thread=1 RtlUnicodeToMultiByteN copied=16
+RUNTIME seq=13824 thread=1 RtlUnicodeToMultiByteN copied=16
+RUNTIME seq=13888 thread=1 RtlUnicodeToMultiByteN copied=16
+RUNTIME seq=13952 thread=1 RtlUnicodeToMultiByteN copied=7
+RUNTIME seq=14016 thread=1 RtlUnicodeToMultiByteN copied=7
+RUNTIME seq=14080 thread=1 RtlMultiByteToUnicodeN copied=17
+RUNTIME seq=14144 thread=1 RtlUnicodeToMultiByteN copied=21
+RUNTIME seq=14208 thread=1 RtlUnicodeToMultiByteN copied=35
+RUNTIME seq=14272 thread=1 RtlUnicodeToMultiByteN copied=12
+RUNTIME seq=14336 thread=1 RtlUnicodeToMultiByteN copied=12
+RUNTIME seq=14400 thread=1 RtlUnicodeToMultiByteN copied=35
+RUNTIME seq=14464 thread=1 RtlUnicodeToMultiByteN copied=12
+RUNTIME seq=14528 thread=1 RtlUnicodeToMultiByteN copied=12
+RUNTIME seq=14592 thread=1 RtlUnicodeToMultiByteN copied=30
+RUNTIME seq=14656 thread=1 RtlUnicodeToMultiByteN copied=16
+RUNTIME seq=14720 thread=1 RtlUnicodeToMultiByteN copied=16
+RUNTIME seq=14784 thread=1 RtlUnicodeToMultiByteN copied=7
+RUNTIME seq=14848 thread=1 RtlUnicodeToMultiByteN copied=16
+RUNTIME seq=14912 thread=1 RtlUnicodeToMultiByteN copied=16
+RUNTIME seq=14976 thread=1 RtlUnicodeToMultiByteN copied=7
+RUNTIME seq=15040 thread=1 RtlMultiByteToUnicodeN copied=45
+RUNTIME seq=15104 thread=1 RtlUnicodeToMultiByteN copied=32
+RUNTIME seq=15168 thread=1 RtlUnicodeToMultiByteN copied=25
+RUNTIME seq=15232 thread=1 RtlUnicodeToMultiByteN copied=6
+RUNTIME seq=15296 thread=1 RtlUnicodeToMultiByteN copied=23
+RUNTIME seq=15360 thread=1 RtlUnicodeToMultiByteN copied=17
+RUNTIME seq=15424 thread=1 RtlUnicodeToMultiByteN copied=16
+RUNTIME seq=15488 thread=1 RtlUnicodeToMultiByteN copied=16
+RUNTIME seq=15552 thread=1 RtlUnicodeToMultiByteN copied=16
+RUNTIME seq=15616 thread=1 RtlUnicodeToMultiByteN copied=7
+RUNTIME seq=15680 thread=1 RtlMultiByteToUnicodeN copied=22
+RUNTIME seq=15744 thread=1 RtlMultiByteToUnicodeN copied=17
+RUNTIME seq=15808 thread=1 RtlMultiByteToUnicodeN copied=27
+RUNTIME seq=15872 thread=1 RtlUnicodeToMultiByteN copied=30
+RUNTIME seq=15936 thread=1 RtlUnicodeToMultiByteN copied=6
+RUNTIME seq=16000 thread=1 RtlUnicodeToMultiByteN copied=29
+RUNTIME seq=16064 thread=1 RtlUnicodeToMultiByteN copied=16
+RUNTIME seq=16128 thread=1 RtlUnicodeToMultiByteN copied=16
+RUNTIME seq=16192 thread=1 RtlUnicodeToMultiByteN copied=7
+RUNTIME seq=16256 thread=1 RtlUnicodeToMultiByteN copied=16
+RUNTIME seq=16320 thread=1 RtlUnicodeToMultiByteN copied=7
+RUNTIME seq=16384 thread=1 RtlMultiByteToUnicodeN copied=8
+RUNTIME seq=16448 thread=1 RtlUnicodeToMultiByteN copied=23
+RUNTIME seq=16512 thread=1 RtlUnicodeToMultiByteN copied=6
+RUNTIME seq=16576 thread=1 RtlUnicodeToMultiByteN copied=26
+RUNTIME seq=16640 thread=1 RtlUnicodeToMultiByteN copied=16
+RUNTIME seq=16704 thread=1 RtlUnicodeToMultiByteN copied=16
+RUNTIME seq=16768 thread=1 RtlUnicodeToMultiByteN copied=16
+RUNTIME seq=16832 thread=1 RtlUnicodeToMultiByteN copied=16
+RUNTIME seq=16896 thread=1 RtlUnicodeToMultiByteN copied=7
+RUNTIME seq=16960 thread=1 RtlUnicodeToMultiByteN copied=7
+RUNTIME seq=17024 thread=1 RtlMultiByteToUnicodeN copied=17
+RUNTIME seq=17088 thread=1 RtlMultiByteToUnicodeN copied=17
+RUNTIME seq=17152 thread=1 RtlMultiByteToUnicodeN copied=22
+RUNTIME seq=17216 thread=1 RtlUnicodeToMultiByteN copied=43
+RUNTIME seq=17280 thread=1 RtlUnicodeToMultiByteN copied=6
+RUNTIME seq=17344 thread=1 RtlUnicodeToMultiByteN copied=28
+RUNTIME seq=17408 thread=1 RtlUnicodeToMultiByteN copied=16
+RUNTIME seq=17472 thread=1 RtlUnicodeToMultiByteN copied=16
+RUNTIME seq=17536 thread=1 RtlUnicodeToMultiByteN copied=7
+RUNTIME seq=17600 thread=1 RtlUnicodeToMultiByteN copied=16
+RUNTIME seq=17664 thread=1 RtlUnicodeToMultiByteN copied=16
+RUNTIME seq=17728 thread=1 RtlUnicodeToMultiByteN copied=7
+RUNTIME seq=17792 thread=1 RtlMultiByteToUnicodeN copied=17
+RUNTIME seq=17856 thread=1 RtlUnicodeToMultiByteN copied=28
+RUNTIME seq=17920 thread=1 RtlUnicodeToMultiByteN copied=6
+RUNTIME seq=17984 thread=1 RtlUnicodeToMultiByteN copied=18
+RUNTIME seq=18048 thread=1 RtlUnicodeToMultiByteN copied=17
+RUNTIME seq=18112 thread=1 RtlUnicodeToMultiByteN copied=16
+RUNTIME seq=18176 thread=1 RtlUnicodeToMultiByteN copied=16
+RUNTIME seq=18240 thread=1 RtlUnicodeToMultiByteN copied=7
+RUNTIME seq=18304 thread=1 RtlUnicodeToMultiByteN copied=7
+RUNTIME seq=18368 thread=1 RtlMultiByteToUnicodeN copied=18
+RUNTIME seq=18432 thread=1 RtlMultiByteToUnicodeN copied=24
+RUNTIME seq=18496 thread=1 RtlMultiByteToUnicodeN copied=14
+RUNTIME seq=18560 thread=1 RtlUnicodeToMultiByteN copied=32
+RUNTIME seq=18624 thread=1 RtlUnicodeToMultiByteN copied=6
+RUNTIME seq=18688 thread=1 RtlUnicodeToMultiByteN copied=23
+RUNTIME seq=18752 thread=1 RtlUnicodeToMultiByteN copied=16
+RUNTIME seq=18816 thread=1 RtlUnicodeToMultiByteN copied=16
+RUNTIME seq=18880 thread=1 RtlUnicodeToMultiByteN copied=7
+RUNTIME seq=18944 thread=1 RtlUnicodeToMultiByteN copied=7
+RUNTIME seq=19008 thread=1 RtlUnicodeToMultiByteN copied=7
+RUNTIME seq=19072 thread=1 RtlMultiByteToUnicodeN copied=23
+RUNTIME seq=19136 thread=1 RtlUnicodeToMultiByteN copied=35
+RUNTIME seq=19200 thread=1 RtlUnicodeToMultiByteN copied=6
+RUNTIME seq=19264 thread=1 RtlUnicodeToMultiByteN copied=7
+RUNTIME seq=19328 thread=1 RtlUnicodeToMultiByteN copied=10
+RUNTIME seq=19392 thread=1 RtlUnicodeToMultiByteN copied=19
+RUNTIME seq=19456 thread=1 RtlUnicodeToMultiByteN copied=18
+RUNTIME seq=19520 thread=1 RtlUnicodeToMultiByteN copied=8
+RUNTIME seq=19584 thread=1 RtlUnicodeToMultiByteN copied=30
+RUNTIME seq=19648 thread=1 RtlUnicodeToMultiByteN copied=10
+RUNTIME seq=19712 thread=1 RtlUnicodeToMultiByteN copied=9
+RUNTIME seq=19776 thread=1 RtlUnicodeToMultiByteN copied=29
+RUNTIME seq=19840 thread=1 RtlUnicodeToMultiByteN copied=28
+RUNTIME seq=19904 thread=1 RtlUnicodeToMultiByteN copied=32
+RUNTIME seq=19968 thread=1 RtlUnicodeToMultiByteN copied=19
+RUNTIME seq=20032 thread=1 RtlUnicodeToMultiByteN copied=22
+RUNTIME seq=20096 thread=1 RtlUnicodeToMultiByteN copied=12
+RUNTIME seq=20160 thread=1 RtlUnicodeToMultiByteN copied=12
+RUNTIME seq=20224 thread=1 RtlUnicodeToMultiByteN copied=31
+RUNTIME seq=20288 thread=1 RtlUnicodeToMultiByteN copied=22
+RUNTIME seq=20352 thread=1 RtlUnicodeToMultiByteN copied=34
+RUNTIME seq=20416 thread=1 RtlUnicodeToMultiByteN copied=38
+RUNTIME seq=20480 thread=1 RtlUnicodeToMultiByteN copied=26
+RUNTIME seq=20544 thread=1 RtlUnicodeToMultiByteN copied=24
+RUNTIME seq=20608 thread=1 RtlUnicodeToMultiByteN copied=19
+RUNTIME seq=20672 thread=1 RtlUnicodeToMultiByteN copied=23
+RUNTIME seq=20736 thread=1 RtlUnicodeToMultiByteN copied=31
+RUNTIME seq=20800 thread=1 RtlUnicodeToMultiByteN copied=37
+RUNTIME seq=20864 thread=1 RtlUnicodeToMultiByteN copied=24
+RUNTIME seq=20928 thread=1 RtlUnicodeToMultiByteN copied=24
+RUNTIME seq=20992 thread=1 RtlUnicodeToMultiByteN copied=75
+RUNTIME seq=21056 thread=9 MmSetAddressProtect range is reserved but has no committed pages
+RUNTIME seq=21085 thread=9 PPC thread exit id=9 code=0x00000000
+RUNTIME seq=21120 thread=1 RtlLeaveCriticalSection guest=0x83535A00 recursion=0
+RUNTIME seq=21143 thread=10 NtCreateFile path=D:\WGame\Movies\Copyright.txt status=0xC0000034 open failed
+RUNTIME seq=21184 thread=1 RtlUnicodeToMultiByteN copied=5
+RUNTIME seq=21248 thread=10 XOWUE_AOT_HOTSPOT guest=0x82C3C4D8 calls=500000 thread=10 cooperative_yield=1
+RUNTIME seq=21312 thread=1 RtlUnicodeToMultiByteN copied=13
+RUNTIME seq=21376 thread=1 RtlUnicodeToMultiByteN copied=17
+RUNTIME seq=21440 thread=1 RtlUnicodeToMultiByteN copied=16
+RUNTIME seq=21504 thread=1 RtlUnicodeToMultiByteN copied=24
+RUNTIME seq=21568 thread=1 RtlUnicodeToMultiByteN copied=2
+RUNTIME seq=21632 thread=1 RtlUnicodeToMultiByteN copied=13
+RUNTIME seq=21696 thread=1 RtlUnicodeToMultiByteN copied=22
+RUNTIME seq=21760 thread=1 RtlUnicodeToMultiByteN copied=12
+RUNTIME seq=21824 thread=1 RtlUnicodeToMultiByteN copied=7
+RUNTIME seq=21888 thread=1 RtlUnicodeToMultiByteN copied=27
+RUNTIME seq=21952 thread=1 RtlUnicodeToMultiByteN copied=2
+RUNTIME seq=22016 thread=1 RtlMultiByteToUnicodeN copied=5
+RUNTIME seq=22080 thread=1 RtlMultiByteToUnicodeN copied=5
+RUNTIME seq=22144 thread=1 RtlMultiByteToUnicodeN copied=5
+RUNTIME seq=22208 thread=1 RtlMultiByteToUnicodeN copied=5
+RUNTIME seq=22272 thread=1 RtlMultiByteToUnicodeN copied=5
+RUNTIME seq=22336 thread=1 RtlMultiByteToUnicodeN copied=5
+RUNTIME seq=22400 thread=1 RtlMultiByteToUnicodeN copied=5
+RUNTIME seq=22464 thread=1 RtlUnicodeToMultiByteN copied=5
+RUNTIME seq=22528 thread=1 RtlUnicodeToMultiByteN copied=5
+RUNTIME seq=22592 thread=1 RtlUnicodeToMultiByteN copied=5
+RUNTIME seq=22656 thread=1 RtlUnicodeToMultiByteN copied=5
+RUNTIME seq=22720 thread=1 RtlMultiByteToUnicodeN copied=5
+RUNTIME seq=22784 thread=1 RtlUnicodeToMultiByteN copied=5
+RUNTIME seq=22848 thread=1 RtlUnicodeToMultiByteN copied=5
+RUNTIME seq=22912 thread=1 RtlUnicodeToMultiByteN copied=5
+RUNTIME seq=22976 thread=1 RtlMultiByteToUnicodeN copied=5
+RUNTIME seq=23040 thread=1 RtlMultiByteToUnicodeN copied=5
+RUNTIME seq=23104 thread=1 RtlMultiByteToUnicodeN copied=5
+RUNTIME seq=23168 thread=1 RtlMultiByteToUnicodeN copied=5
+RUNTIME seq=23232 thread=1 RtlUnicodeToMultiByteN copied=5
+RUNTIME seq=23296 thread=1 RtlUnicodeToMultiByteN copied=5
+RUNTIME seq=23360 thread=1 RtlMultiByteToUnicodeN copied=5
+RUNTIME seq=23424 thread=1 RtlMultiByteToUnicodeN copied=5
+RUNTIME seq=23488 thread=1 RtlUnicodeToMultiByteN copied=5
+RUNTIME seq=23552 thread=1 RtlUnicodeToMultiByteN copied=5
+RUNTIME seq=23616 thread=1 RtlUnicodeToMultiByteN copied=5
+RUNTIME seq=23680 thread=1 RtlUnicodeToMultiByteN copied=5
+RUNTIME seq=23744 thread=1 RtlMultiByteToUnicodeN copied=5
+RUNTIME seq=23808 thread=1 RtlMultiByteToUnicodeN copied=5
+RUNTIME seq=23872 thread=1 RtlMultiByteToUnicodeN copied=5
+RUNTIME seq=23936 thread=1 RtlMultiByteToUnicodeN copied=5
+RUNTIME seq=24000 thread=1 RtlUnicodeToMultiByteN copied=5
+RUNTIME seq=24064 thread=1 RtlMultiByteToUnicodeN copied=5
+RUNTIME seq=24128 thread=1 RtlMultiByteToUnicodeN copied=5
+RUNTIME seq=24192 thread=1 RtlMultiByteToUnicodeN copied=5
+RUNTIME seq=24256 thread=1 RtlUnicodeToMultiByteN copied=5
+RUNTIME seq=24320 thread=1 RtlUnicodeToMultiByteN copied=5
+RUNTIME seq=24384 thread=1 RtlUnicodeToMultiByteN copied=5
+RUNTIME seq=24448 thread=1 RtlUnicodeToMultiByteN copied=5
+RUNTIME seq=24512 thread=1 RtlMultiByteToUnicodeN copied=5
+RUNTIME seq=24576 thread=1 RtlMultiByteToUnicodeN copied=5
+RUNTIME seq=24640 thread=1 RtlMultiByteToUnicodeN copied=5
+RUNTIME seq=24704 thread=1 RtlUnicodeToMultiByteN copied=5
+RUNTIME seq=24768 thread=1 RtlMultiByteToUnicodeN copied=5
+RUNTIME seq=24832 thread=1 RtlMultiByteToUnicodeN copied=5
+RUNTIME seq=24896 thread=1 RtlMultiByteToUnicodeN copied=5
+RUNTIME seq=24960 thread=1 RtlMultiByteToUnicodeN copied=5
+RUNTIME seq=25024 thread=1 RtlUnicodeToMultiByteN copied=5
+RUNTIME seq=25088 thread=1 RtlMultiByteToUnicodeN copied=5
+RUNTIME seq=25152 thread=3 NtAllocate basePtr=0x79FF7930 sizePtr=0x79FF79D8 requested=0x40060000 size=0x00030000 flags=0x60001000 protect=0x00000004 debug=0x00000000 status=0x00000000 next_virtual=0x46630000 next_physical=0x19E40000
+RUNTIME seq=25216 thread=1 RtlUnicodeToMultiByteN copied=33
+RUNTIME seq=25280 thread=1 RtlUnicodeToMultiByteN copied=25
+RUNTIME seq=25344 thread=1 RtlUnicodeToMultiByteN copied=15
+RUNTIME seq=25408 thread=1 RtlUnicodeToMultiByteN copied=7
+RUNTIME seq=25472 thread=1 RtlUnicodeToMultiByteN copied=10
+RUNTIME seq=25536 thread=1 RtlUnicodeToMultiByteN copied=19
+RUNTIME seq=25600 thread=1 RtlUnicodeToMultiByteN copied=16
+RUNTIME seq=25664 thread=1 RtlUnicodeToMultiByteN copied=13
+RUNTIME seq=25728 thread=1 RtlUnicodeToMultiByteN copied=11
+RUNTIME seq=25792 thread=1 RtlUnicodeToMultiByteN copied=20
+RUNTIME seq=25856 thread=1 RtlUnicodeToMultiByteN copied=18
+RUNTIME seq=25920 thread=1 RtlUnicodeToMultiByteN copied=14
+RUNTIME seq=25984 thread=1 RtlUnicodeToMultiByteN copied=29
+RUNTIME seq=26048 thread=1 RtlUnicodeToMultiByteN copied=10
+RUNTIME seq=26112 thread=1 RtlUnicodeToMultiByteN copied=19
+RUNTIME seq=26176 thread=1 RtlUnicodeToMultiByteN copied=15
+RUNTIME seq=26240 thread=1 RtlUnicodeToMultiByteN copied=16
+RUNTIME seq=26304 thread=1 RtlUnicodeToMultiByteN copied=13
+RUNTIME seq=26368 thread=1 RtlUnicodeToMultiByteN copied=16
+RUNTIME seq=26432 thread=1 RtlUnicodeToMultiByteN copied=17
+RUNTIME seq=26496 thread=1 RtlUnicodeToMultiByteN copied=28
+RUNTIME seq=26560 thread=1 RtlUnicodeToMultiByteN copied=19
+RUNTIME seq=26624 thread=1 RtlUnicodeToMultiByteN copied=6
+RUNTIME seq=26688 thread=1 RtlUnicodeToMultiByteN copied=11
+RUNTIME seq=26752 thread=1 RtlUnicodeToMultiByteN copied=16
+RUNTIME seq=26816 thread=1 RtlUnicodeToMultiByteN copied=14
+RUNTIME seq=26880 thread=1 RtlUnicodeToMultiByteN copied=16
+RUNTIME seq=26944 thread=1 RtlUnicodeToMultiByteN copied=23
+RUNTIME seq=27008 thread=1 RtlUnicodeToMultiByteN copied=21
+RUNTIME seq=27072 thread=1 RtlUnicodeToMultiByteN copied=8
+RUNTIME seq=27136 thread=1 RtlUnicodeToMultiByteN copied=20
+RUNTIME seq=27200 thread=1 RtlUnicodeToMultiByteN copied=25
+RUNTIME seq=27264 thread=1 RtlUnicodeToMultiByteN copied=13
+RUNTIME seq=27328 thread=1 RtlUnicodeToMultiByteN copied=24
+RUNTIME seq=27392 thread=1 RtlUnicodeToMultiByteN copied=21
+RUNTIME seq=27456 thread=1 RtlUnicodeToMultiByteN copied=18
+RUNTIME seq=27520 thread=1 RtlUnicodeToMultiByteN copied=12
+RUNTIME seq=27584 thread=1 RtlUnicodeToMultiByteN copied=18
+RUNTIME seq=27648 thread=1 RtlUnicodeToMultiByteN copied=14
+RUNTIME seq=27712 thread=1 RtlUnicodeToMultiByteN copied=15
+RUNTIME seq=27776 thread=1 RtlUnicodeToMultiByteN copied=26
+RUNTIME seq=27840 thread=1 RtlUnicodeToMultiByteN copied=14
+RUNTIME seq=27904 thread=1 RtlUnicodeToMultiByteN copied=28
+RUNTIME seq=27968 thread=1 RtlUnicodeToMultiByteN copied=24
+RUNTIME seq=28032 thread=1 RtlUnicodeToMultiByteN copied=9
+RUNTIME seq=28096 thread=1 RtlUnicodeToMultiByteN copied=29
+RUNTIME seq=28160 thread=1 RtlUnicodeToMultiByteN copied=24
+RUNTIME seq=28224 thread=1 RtlUnicodeToMultiByteN copied=18
+RUNTIME seq=28288 thread=1 RtlUnicodeToMultiByteN copied=23
+RUNTIME seq=28352 thread=1 RtlUnicodeToMultiByteN copied=10
+RUNTIME seq=28416 thread=1 RtlUnicodeToMultiByteN copied=19
+RUNTIME seq=28480 thread=1 RtlUnicodeToMultiByteN copied=12
+RUNTIME seq=28544 thread=1 RtlUnicodeToMultiByteN copied=21
+RUNTIME seq=28608 thread=1 RtlUnicodeToMultiByteN copied=16
+RUNTIME seq=28672 thread=1 RtlUnicodeToMultiByteN copied=6
+RUNTIME seq=28736 thread=1 RtlUnicodeToMultiByteN copied=12
+RUNTIME seq=28800 thread=1 RtlUnicodeToMultiByteN copied=14
+RUNTIME seq=28864 thread=1 RtlUnicodeToMultiByteN copied=21
+RUNTIME seq=28928 thread=1 RtlUnicodeToMultiByteN copied=10
+RUNTIME seq=28992 thread=1 RtlUnicodeToMultiByteN copied=30
+RUNTIME seq=29056 thread=1 RtlUnicodeToMultiByteN copied=15
+RUNTIME seq=29120 thread=1 RtlUnicodeToMultiByteN copied=17
+RUNTIME seq=29184 thread=1 RtlUnicodeToMultiByteN copied=6
+RUNTIME seq=29248 thread=1 RtlUnicodeToMultiByteN copied=13
+RUNTIME seq=29312 thread=1 RtlUnicodeToMultiByteN copied=14
+RUNTIME seq=29376 thread=1 RtlUnicodeToMultiByteN copied=15
+RUNTIME seq=29440 thread=1 RtlUnicodeToMultiByteN copied=10
+RUNTIME seq=29504 thread=1 RtlUnicodeToMultiByteN copied=15
+RUNTIME seq=29568 thread=1 RtlUnicodeToMultiByteN copied=14
+RUNTIME seq=29632 thread=1 RtlUnicodeToMultiByteN copied=20
+RUNTIME seq=29696 thread=1 RtlUnicodeToMultiByteN copied=14
+RUNTIME seq=29760 thread=1 RtlUnicodeToMultiByteN copied=35
+RUNTIME seq=29824 thread=1 RtlUnicodeToMultiByteN copied=10
+RUNTIME seq=29888 thread=1 RtlUnicodeToMultiByteN copied=15
+RUNTIME seq=29952 thread=1 RtlUnicodeToMultiByteN copied=24
+RUNTIME seq=30016 thread=1 RtlUnicodeToMultiByteN copied=27
+RUNTIME seq=30080 thread=1 RtlUnicodeToMultiByteN copied=21
+RUNTIME seq=30144 thread=1 RtlUnicodeToMultiByteN copied=20
+RUNTIME seq=30208 thread=1 RtlUnicodeToMultiByteN copied=25
+RUNTIME seq=30272 thread=1 RtlUnicodeToMultiByteN copied=38
+RUNTIME seq=30336 thread=1 RtlUnicodeToMultiByteN copied=36
+RUNTIME seq=30400 thread=1 RtlUnicodeToMultiByteN copied=36
+RUNTIME seq=30464 thread=1 RtlUnicodeToMultiByteN copied=39
+RUNTIME seq=30528 thread=1 RtlUnicodeToMultiByteN copied=24
+RUNTIME seq=30592 thread=1 RtlUnicodeToMultiByteN copied=28
+RUNTIME seq=30656 thread=10 XOWUE_AOT_HOTSPOT guest=0x82C3C4D8 calls=1000000 thread=10 cooperative_yield=1
+RUNTIME seq=30720 thread=1 RtlUnicodeToMultiByteN copied=27
+RUNTIME seq=30784 thread=1 RtlUnicodeToMultiByteN copied=24
+RUNTIME seq=30848 thread=1 RtlUnicodeToMultiByteN copied=24
+RUNTIME seq=30912 thread=1 RtlUnicodeToMultiByteN copied=32
+RUNTIME seq=30976 thread=1 RtlUnicodeToMultiByteN copied=34
+RUNTIME seq=31040 thread=1 RtlUnicodeToMultiByteN copied=38
+RUNTIME seq=31104 thread=1 RtlUnicodeToMultiByteN copied=22
+RUNTIME seq=31168 thread=1 RtlUnicodeToMultiByteN copied=16
+RUNTIME seq=31232 thread=1 RtlUnicodeToMultiByteN copied=14
+RUNTIME seq=31296 thread=1 RtlUnicodeToMultiByteN copied=14
+RUNTIME seq=31360 thread=1 RtlUnicodeToMultiByteN copied=22
+RUNTIME seq=31424 thread=1 RtlUnicodeToMultiByteN copied=27
+RUNTIME seq=31488 thread=1 RtlUnicodeToMultiByteN copied=24
+RUNTIME seq=31552 thread=1 RtlUnicodeToMultiByteN copied=22
+RUNTIME seq=31616 thread=1 RtlUnicodeToMultiByteN copied=18
+RUNTIME seq=31680 thread=1 RtlUnicodeToMultiByteN copied=14
+RUNTIME seq=31744 thread=1 RtlUnicodeToMultiByteN copied=18
+RUNTIME seq=31808 thread=1 RtlUnicodeToMultiByteN copied=12
+RUNTIME seq=31872 thread=1 RtlUnicodeToMultiByteN copied=9
+RUNTIME seq=31936 thread=1 RtlUnicodeToMultiByteN copied=15
+RUNTIME seq=32000 thread=1 RtlUnicodeToMultiByteN copied=12
+RUNTIME seq=32064 thread=1 RtlUnicodeToMultiByteN copied=6
+RUNTIME seq=32128 thread=1 RtlUnicodeToMultiByteN copied=20
+RUNTIME seq=32192 thread=1 RtlUnicodeToMultiByteN copied=19
+RUNTIME seq=32256 thread=1 RtlUnicodeToMultiByteN copied=17
+RUNTIME seq=32320 thread=1 RtlUnicodeToMultiByteN copied=23
+RUNTIME seq=32384 thread=1 RtlUnicodeToMultiByteN copied=19
+RUNTIME seq=32448 thread=1 RtlUnicodeToMultiByteN copied=17
+RUNTIME seq=32512 thread=1 RtlUnicodeToMultiByteN copied=3
+RUNTIME seq=32576 thread=1 RtlUnicodeToMultiByteN copied=9
+RUNTIME seq=32640 thread=1 RtlUnicodeToMultiByteN copied=14
+RUNTIME seq=32704 thread=1 RtlUnicodeToMultiByteN copied=15
+XOWUE_REAL_FPS guest=0.00 present=53.81 fresh_guest_frames=0 metal_presents=54 interval=1.004
+KOSMICKRISP_PRESENT host_presents=60 unique_guest_uploads=0 decoded_frames=0 guest_swaps=0 guest_extent=0x0 guest_vk_draws=26 composed_frames=1 cache=1 resident_mib=594.5
+XOWUE_REAL_FPS guest=0.00 present=59.97 fresh_guest_frames=0 metal_presents=61 interval=1.017
+KOSMICKRISP_PRESENT host_presents=120 unique_guest_uploads=0 decoded_frames=0 guest_swaps=0 guest_extent=0x0 guest_vk_draws=26 composed_frames=1 cache=1 resident_mib=594.6
+XOWUE_REAL_FPS guest=0.00 present=60.02 fresh_guest_frames=0 metal_presents=61 interval=1.016
+KOSMICKRISP_PRESENT host_presents=180 unique_guest_uploads=0 decoded_frames=0 guest_swaps=0 guest_extent=0x0 guest_vk_draws=26 composed_frames=1 cache=1 resident_mib=594.6
+XOWUE_REAL_FPS guest=0.00 present=59.94 fresh_guest_frames=0 metal_presents=60 interval=1.001
+KOSMICKRISP_PRESENT host_presents=240 unique_guest_uploads=0 decoded_frames=0 guest_swaps=0 guest_extent=0x0 guest_vk_draws=26 composed_frames=1 cache=1 resident_mib=594.5
+XOWUE_REAL_FPS guest=0.00 present=59.97 fresh_guest_frames=0 metal_presents=60 interval=1.001
+KOSMICKRISP_PRESENT host_presents=300 unique_guest_uploads=0 decoded_frames=0 guest_swaps=0 guest_extent=0x0 guest_vk_draws=26 composed_frames=1 cache=1 resident_mib=594.5
+XOWUE_REAL_FPS guest=0.00 present=60.21 fresh_guest_frames=0 metal_presents=61 interval=1.013
+KOSMICKRISP_PRESENT host_presents=360 unique_guest_uploads=0 decoded_frames=0 guest_swaps=0 guest_extent=0x0 guest_vk_draws=26 composed_frames=1 cache=1 resident_mib=594.5
+XOWUE_REAL_FPS guest=0.00 present=59.99 fresh_guest_frames=0 metal_presents=61 interval=1.017
+KOSMICKRISP_PRESENT host_presents=420 unique_guest_uploads=0 decoded_frames=0 guest_swaps=0 guest_extent=0x0 guest_vk_draws=26 composed_frames=1 cache=1 resident_mib=595.1
+XOWUE_REAL_FPS guest=0.00 present=59.81 fresh_guest_frames=0 metal_presents=60 interval=1.003
+KOSMICKRISP_PRESENT host_presents=480 unique_guest_uploads=0 decoded_frames=0 guest_swaps=0 guest_extent=0x0 guest_vk_draws=26 composed_frames=1 cache=1 resident_mib=595.1
+2026-10-26T20:10:31Z navigation.exit tapped: terminating native PPC
+2026-10-26T20:10:31Z runtime.stop requested by user phase=booting surface=true latched=true
+2026-10-26T20:10:31Z orientation.host exit explicitly dismissing presented game controller
+RUNTIME seq=73328 thread=7 PPC thread exit id=7 code=0xC0000120
+RUNTIME seq=73329 thread=6 PPC thread exit id=6 code=0xC0000120
+RUNTIME seq=73330 thread=5 PPC thread exit id=5 code=0xC0000120
+RUNTIME seq=73331 thread=10 PPC thread exit id=10 code=0xC0000120
+RUNTIME seq=73332 thread=11 PPC thread exit id=11 code=0xC0000120
+RUNTIME seq=73335 thread=3 PPC thread exit id=3 code=0xC0000120
+RUNTIME seq=73334 thread=2 PPC thread exit id=2 code=0xC0000120
+RUNTIME seq=73333 thread=8 PPC thread exit id=8 code=0xC0000120
+LIFECYCLE view_detached wait_idle=0
+2026-10-26T20:10:31Z runtime.stop requested by user phase=booting surface=false latched=true
+2026-10-26T20:10:31Z orientation.host dismiss requested; no modal attached to anchor/root
+2026-10-26T20:10:31Z orientation.host dismiss requested; no modal attached to anchor/root
