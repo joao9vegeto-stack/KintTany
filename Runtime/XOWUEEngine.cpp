@@ -2347,7 +2347,7 @@ extern "C" int xowue_boot_xex(const char *path, char *output, size_t output_capa
             }
             char audit[320];
             std::snprintf(audit, sizeof(audit),
-                "XOWUE_XEX_CODE_AUDIT CODE_AUDIT addr=0x%08X words=%08X %08X %08X %08X %08X %08X %08X %08X %08X %08X %08X %08X %08X %08X %08X %08X",
+                "XOWUE_XEX_CODE_AUDIT addr=0x%08X words=%08X %08X %08X %08X %08X %08X %08X %08X %08X %08X %08X %08X %08X %08X %08X %08X",
                 auditAddress, words[0], words[1], words[2], words[3], words[4], words[5], words[6], words[7],
                 words[8], words[9], words[10], words[11], words[12], words[13], words[14], words[15]);
             std::fprintf(stderr, "%s\n", audit);
