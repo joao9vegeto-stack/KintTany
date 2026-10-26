@@ -578,6 +578,14 @@ void resetAotExecutionTelemetry() {
     g_aotExecutionTelemetryActive.store(true, std::memory_order_release);
 }
 
+struct XenosCpWritebackRecord { uint32_t opcode=0, raw=0, address=0, endian=0, value=0; };
+static std::mutex g_xenosCpWritebackMutex;
+static std::array<XenosCpWritebackRecord, 8> g_xenosCpWritebackHistory{};
+static uint32_t g_xenosCpWritebackCursor = 0u;
+static uint32_t g_xenosCpWritebackCount = 0u;
+static std::atomic<uint32_t> g_xenosCpWritebackLogCount{0u};
+static std::atomic<bool> g_xenosCpPlateauDumped{false};
+
 void recordAotFunctionExecution(uint32_t guestAddress) {
     if (!g_aotExecutionTelemetryActive.load(std::memory_order_acquire)) return;
     const uint64_t calls = g_aotExecutionCalls.fetch_add(1u, std::memory_order_relaxed) + 1u;
@@ -4537,14 +4545,6 @@ static inline uint32_t xenosGpuSwap32(uint32_t value, uint32_t endian) {
 // The CP's raw address low bits encode Xenos endian mode, not physical
 // address bits. Host memory is little-endian; after swapping, memcpy produces
 // the byte layout that the guest's big-endian lwz sees as the original value.
-struct XenosCpWritebackRecord { uint32_t opcode=0, raw=0, address=0, endian=0, value=0; };
-static std::mutex g_xenosCpWritebackMutex;
-static std::array<XenosCpWritebackRecord, 8> g_xenosCpWritebackHistory{};
-static uint32_t g_xenosCpWritebackCursor = 0u;
-static uint32_t g_xenosCpWritebackCount = 0u;
-static std::atomic<uint32_t> g_xenosCpWritebackLogCount{0u};
-static std::atomic<bool> g_xenosCpPlateauDumped{false};
-
 static bool xenosCpWriteback32(uint8_t *base, uint32_t rawAddress, uint32_t value,
                                uint32_t opcode = 0xFFu) {
     const uint32_t endian = rawAddress & 3u;

@@ -38,7 +38,7 @@ index fa91527..4414039 100644
 +        break;
 +
 +    case PPC_INST_MFTB:
-+        println("\\t{}.u32 = uint32_t(xowue_guest_timebase());", r(insn.operands[0]));
++        println("\t{}.u32 = uint32_t(xowue_guest_timebase());", r(insn.operands[0]));
 +        break;
 +
      case PPC_INST_ADDE:
