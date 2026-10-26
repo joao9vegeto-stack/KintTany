@@ -549,7 +549,19 @@ diff --git a/XenonUtils/ppc_context.h b/XenonUtils/ppc_context.h
  
  #define PPC_FUNC_PROLOGUE() __builtin_assume(((size_t)base & 0x1F) == 0)
  
-@@ -108,10 +108,12 @@
+@@ -78,4 +78,10 @@
+ #ifndef PPC_STORE_U32
+-#define PPC_STORE_U32(x, y) *(volatile uint32_t*)(base + (x)) = __builtin_bswap32(y)
++#define PPC_STORE_U32(x, y) do { \
++    const uint32_t xowue_store_address_ = uint32_t(x); \
++    const uint32_t xowue_store_value_ = uint32_t(y); \
++    *(volatile uint32_t*)(base + xowue_store_address_) = __builtin_bswap32(xowue_store_value_); \
++    if (xowue_store_address_ == 0x10311010u) \
++        xowue_note_scratch_reg4_write(xowue_store_address_, xowue_store_value_); \
++} while (0)
+ #endif
+ 
+@@ -108,10 +114,13 @@
  #define PPC_MEMORY_SIZE 0x100000000ull
  
 -#define PPC_LOOKUP_FUNC(x, y) *(PPCFunc**)(x + PPC_IMAGE_BASE + PPC_IMAGE_SIZE + (uint64_t(uint32_t(y) - PPC_CODE_BASE) * 2))
@@ -563,4 +575,5 @@ diff --git a/XenonUtils/ppc_context.h b/XenonUtils/ppc_context.h
  typedef void PPCFunc(struct PPCContext& __restrict__ ctx, uint8_t* base);
 +PPCFunc* xowue_lookup_indirect(struct PPCContext& ctx, uint8_t* base, uint32_t target);
 +void xowue_dispatch_indirect(struct PPCContext& ctx, uint8_t* base, uint32_t target);
++void xowue_note_scratch_reg4_write(uint32_t address, uint32_t value);
  

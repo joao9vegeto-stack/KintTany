@@ -279,6 +279,7 @@ jobs:
           cmp -s "$PPC_CONTEXT" "$AOT_PPC_CONTEXT"
           grep -Fq '#define PPC_CALL_INDIRECT_FUNC(x) xowue_dispatch_indirect(ctx, base, uint32_t(x))' "$AOT_PPC_CONTEXT"
           grep -Fq '#define PPC_LOOKUP_FUNC(x, y) xowue_lookup_indirect(ctx, x, uint32_t(y))' "$AOT_PPC_CONTEXT"
+          grep -Fq 'xowue_note_scratch_reg4_write(xowue_store_address_, xowue_store_value_);' "$AOT_PPC_CONTEXT"
 
           INDIRECT_CALL_SOURCES=$(grep -lF -e 'PPC_CALL_INDIRECT_FUNC(' -e 'PPC_LOOKUP_FUNC(' "$GITHUB_WORKSPACE"/generated/ppc/ppc_recomp.*.cpp || true)
           if [[ -z "$INDIRECT_CALL_SOURCES" ]]; then

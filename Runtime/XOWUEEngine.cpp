@@ -57,6 +57,17 @@ extern "C" void xowue_vulkan_backend_guest_frame_rgba(
     const uint8_t *rgba, size_t byte_count) __attribute__((weak));
 extern "C" void xowue_vulkan_backend_guest_frame_reset(void) __attribute__((weak));
 
+// SCRATCH_REG4 is guest memory from PPC's perspective. Capture valid one-shot
+// GPU completion callbacks before a later 0x0BADF00D poison write overwrites it.
+std::atomic<uint32_t> g_lastValidScratchReg4Callback{0u};
+std::atomic<bool> g_scratchReg4CallbackPending{false};
+void xowue_note_scratch_reg4_write(uint32_t address, uint32_t value) {
+    if (address != 0x10311010u || value < 0x82000000u || value >= 0x84000000u)
+        return;
+    g_lastValidScratchReg4Callback.store(value, std::memory_order_release);
+    g_scratchReg4CallbackPending.store(true, std::memory_order_release);
+}
+
 void pumpGuestXenosRingBuffer();
 bool validGuestRange(uint32_t address, uint64_t size);
 void initializeXenosMmioRegisters(uint8_t *base);
@@ -981,8 +992,14 @@ void signalGuestEventHandle(uint32_t handle) {
 
 struct GuestEventSignalOnReturn final {
     explicit GuestEventSignalOnReturn(uint32_t eventHandle) : handle(eventHandle) {}
-    ~GuestEventSignalOnReturn() { signalGuestEventHandle(handle); }
+    void signalNow() {
+        if (signaled) return;
+        signaled = true;
+        signalGuestEventHandle(handle);
+    }
+    ~GuestEventSignalOnReturn() { signalNow(); }
     uint32_t handle;
+    bool signaled = false;
 };
 
 std::shared_ptr<std::recursive_mutex> criticalSectionLock(uint32_t address) {
@@ -1211,6 +1228,8 @@ void resetGraphicsInterruptState() {
     std::lock_guard<std::mutex> lock(g_graphicsInterruptMutex);
     g_graphicsInterruptThread.reset();
     g_pendingCpInterruptCpuMask.store(0u);
+    g_lastValidScratchReg4Callback.store(0u, std::memory_order_release);
+    g_scratchReg4CallbackPending.store(false, std::memory_order_release);
     g_xenosVblankCounter.store(0u);
     for (auto &count : g_graphicsInterruptCounts) count.store(0u);
 }
@@ -1382,23 +1401,46 @@ bool dispatchGraphicsInterrupt(uint32_t source, uint32_t cpu) {
     const auto memory = g_activeGuestMemory.lock();
     uint8_t *base = memory ? memory->base : nullptr;
     if (!base || g_schedulerStopRequested.load()) return true;
-    // The D3D callback dereferences SCRATCH_REG4 before its indirect branch.
-    // A stale sentinel must never become guest CTR (Build 55 crash).
+    // A queued one-shot GPU callback may be overwritten by 0x0BADF00D before
+    // the CP reaches PM4_INTERRUPT. Restore only if a new valid guest write is
+    // pending; never replay the last pointer after consumption.
+    constexpr uint32_t kScratchReg4Address = 0x10311010u;
+    uint32_t scratchCallbackTarget = 0u;
     if (source == kGraphicsInterruptSwap) {
-        constexpr uint32_t kScratchReg4Address = 0x10311010u;
-        const uint32_t scratchTarget = PPC_LOAD_U32(kScratchReg4Address);
-        const uint64_t codeEnd = static_cast<uint64_t>(PPC_CODE_BASE) + PPC_CODE_SIZE;
-        if (scratchTarget == 0x0BADF00Du || scratchTarget < PPC_CODE_BASE ||
-            static_cast<uint64_t>(scratchTarget) >= codeEnd ||
-            findGuestFunction(scratchTarget) == nullptr) {
-            PPC_STORE_U32(kScratchReg4Address, 0u);
+        const auto validScratchCallback = [](uint32_t target) {
+            return target >= 0x82000000u && target < 0x84000000u &&
+                   findGuestFunction(target) != nullptr;
+        };
+        uint32_t target = PPC_LOAD_U32(kScratchReg4Address);
+        if (!validScratchCallback(target)) {
+            const bool pending = g_scratchReg4CallbackPending.exchange(
+                false, std::memory_order_acq_rel);
+            const uint32_t lastValid = g_lastValidScratchReg4Callback.load(
+                std::memory_order_acquire);
+            if (!pending || !validScratchCallback(lastValid)) {
+                PPC_STORE_U32(kScratchReg4Address, 0u);
+                char event[144];
+                std::snprintf(event, sizeof(event),
+                    "XENOS_GRAPHICS_INTERRUPT skipped source=1 invalid SCRATCH_REG4 target=0x%08X",
+                    target);
+                recordRuntimeTrace(event);
+                return true;
+            }
+            PPC_STORE_U32(kScratchReg4Address, lastValid);
+            target = lastValid;
+            // The restore itself is observed by PPC_STORE_U32; it is not a new
+            // guest request, so clear the pending flag before entering guest code.
+            g_scratchReg4CallbackPending.store(false, std::memory_order_release);
             char event[144];
             std::snprintf(event, sizeof(event),
-                "XENOS_GRAPHICS_INTERRUPT skipped source=1 invalid SCRATCH_REG4 target=0x%08X",
-                scratchTarget);
+                "XENOS_GRAPHICS_INTERRUPT restored SCRATCH_REG4 target=0x%08X after invalid value",
+                target);
             recordRuntimeTrace(event);
-            return true;
+        } else {
+            g_lastValidScratchReg4Callback.store(target, std::memory_order_release);
+            g_scratchReg4CallbackPending.store(false, std::memory_order_release);
         }
+        scratchCallbackTarget = target;
     }
     PPCFunc *routine = findGuestFunction(callback);
     const uint64_t count =
@@ -1450,6 +1492,18 @@ bool dispatchGraphicsInterrupt(uint32_t source, uint32_t cpu) {
         recordRuntimeTrace(event);
     }
     g_insideGraphicsInterrupt = false;
+    if (source == kGraphicsInterruptSwap && scratchCallbackTarget != 0u) {
+        // Leave a pointer written by guest code during the callback for the next
+        // interrupt. Otherwise clear the consumed target/sentinel from SCRATCH_REG4.
+        if (!g_scratchReg4CallbackPending.load(std::memory_order_acquire)) {
+            const uint32_t after = PPC_LOAD_U32(kScratchReg4Address);
+            if (after == scratchCallbackTarget || after == 0x0BADF00Du ||
+                after < 0x82000000u || after >= 0x84000000u) {
+                PPC_STORE_U32(kScratchReg4Address, 0u);
+                recordRuntimeTrace("XENOS_GRAPHICS_INTERRUPT consumed one-shot SCRATCH_REG4 callback");
+            }
+        }
+    }
     notifyGuestWaiters();
     return true;
 }
@@ -1607,6 +1661,25 @@ void xowue_thread_checkpoint() {
 
 void xowue_thread_checkpoint(uint32_t guestAddress) {
     recordAotFunctionExecution(guestAddress);
+    // Build 56 showed two AOT entries dominating execution while guest frames
+    // stayed at zero. Yield at these repeated polling sites so host-side event
+    // and completion workers are not starved; do not invent a guest PPC branch.
+    if (guestAddress == 0x82C4BE30u || guestAddress == 0x82C3C4D8u) {
+        static thread_local uint64_t hotspotEntries = 0u;
+        static std::atomic<uint64_t> hotspotCounts[2]{};
+        const size_t index = guestAddress == 0x82C4BE30u ? 0u : 1u;
+        const uint64_t count = hotspotCounts[index].fetch_add(1u, std::memory_order_relaxed) + 1u;
+        ++hotspotEntries;
+        if ((hotspotEntries & 0xFFu) == 0u) std::this_thread::yield();
+        if (count == 1u || count % 25000000u == 0u) {
+            char event[176];
+            std::snprintf(event, sizeof(event),
+                "XOWUE_AOT_HOTSPOT guest=0x%08X calls=%llu thread=%u cooperative_yield=1",
+                guestAddress, static_cast<unsigned long long>(count),
+                g_currentGuestThread ? g_currentGuestThread->id : 0u);
+            recordRuntimeTrace(event);
+        }
+    }
     xowue_thread_checkpoint();
 }
 
@@ -1936,11 +2009,16 @@ extern "C" int xowue_boot_xex(const char *path, char *output, size_t output_capa
         // A missing file is often a wrong game extraction rather than PPC AOT.
         for (const char *guestMovie : {
                  "D:\\WGame\\Movies\\ravenlogo.xxx",
+                 "D:\\WGame\\Movies\\ravenlogo.bik",
                  "D:\\WGame\\Movies\\blank.bik",
                  "D:\\WGame\\Movies\\UE3_logo.xxx",
+                 "D:\\WGame\\Movies\\UE3_logo.bik",
                  "D:\\WGame\\Movies\\FOX_LOGO.xxx",
+                 "D:\\WGame\\Movies\\FOX_LOGO.bik",
                  "D:\\WGame\\Movies\\MARVEL_INTRO.xxx",
-                 "D:\\WGame\\Movies\\ATVI_logo.xxx"}) {
+                 "D:\\WGame\\Movies\\MARVEL_INTRO.bik",
+                 "D:\\WGame\\Movies\\ATVI_logo.xxx",
+                 "D:\\WGame\\Movies\\ATVI_logo.bik"}) {
             std::filesystem::path hostMovie;
             const bool mapped = translateGuestFilePath(guestMovie, false, hostMovie);
             std::error_code ioError;
@@ -3576,6 +3654,30 @@ static std::string lowerGuestPath(std::string value) {
     return value;
 }
 
+// Xbox device paths are case-insensitive; APFS volumes are not always so.
+static std::filesystem::path resolveCaseInsensitivePath(
+    const std::filesystem::path &root, const std::filesystem::path &relative) {
+    std::filesystem::path actual = root;
+    for (const auto &part : relative) {
+        if (part == "." || part.empty()) continue;
+        std::filesystem::path match;
+        std::error_code ec;
+        if (std::filesystem::is_directory(actual, ec) && !ec) {
+            const std::string wanted = lowerGuestPath(part.string());
+            ec.clear();
+            for (std::filesystem::directory_iterator it(actual, ec), end;
+                 !ec && it != end; it.increment(ec)) {
+                if (lowerGuestPath(it->path().filename().string()) == wanted) {
+                    match = it->path().filename();
+                    break;
+                }
+            }
+        }
+        actual /= match.empty() ? part : match;
+    }
+    return actual;
+}
+
 static bool translateGuestFilePath(const std::string &guestPath, bool forWrite,
                                   std::filesystem::path &hostPath) {
     if (guestPath.empty() || guestPath.size() > 0x4000u) return false;
@@ -3622,28 +3724,8 @@ static bool translateGuestFilePath(const std::string &guestPath, bool forWrite,
     }
     const auto root = saveDevice ? g_guestSaveRoot : g_guestGameRoot;
     if (root.empty()) return false;
-    hostPath = root / rel;
-
-    // Resolve existing components case-insensitively, as Xbox file paths are
-    // case-insensitive while iOS's filesystem is not.
-    std::filesystem::path actual = root;
+    hostPath = resolveCaseInsensitivePath(root, rel);
     std::error_code ec;
-    for (const auto &part : rel) {
-        if (part == "." || part.empty()) continue;
-        std::filesystem::path match;
-        if (std::filesystem::is_directory(actual, ec)) {
-            const std::string wanted = lowerGuestPath(part.string());
-            for (std::filesystem::directory_iterator it(actual, ec), end;
-                 !ec && it != end; it.increment(ec)) {
-                if (lowerGuestPath(it->path().filename().string()) == wanted) {
-                    match = it->path().filename();
-                    break;
-                }
-            }
-        }
-        actual /= match.empty() ? part : match;
-    }
-    hostPath = actual;
     const auto normalizedRoot = std::filesystem::weakly_canonical(root, ec);
     ec.clear();
     const auto normalizedTarget = std::filesystem::weakly_canonical(hostPath.parent_path(), ec);
@@ -3679,10 +3761,12 @@ static bool isKnownOptionalStartupMovie(const std::string &guestPath) {
     const size_t slash = lower.find_last_of('/');
     const std::string filename = slash == std::string::npos
         ? lower : lower.substr(slash + 1u);
-    return filename == "ravenlogo.xxx" || filename == "blank.bik" ||
-           filename == "blank.xxx" ||
-           filename == "ue3_logo.xxx" || filename == "fox_logo.xxx" ||
-           filename == "marvel_intro.xxx" || filename == "atvi_logo.xxx";
+    return filename == "ravenlogo.xxx" || filename == "ravenlogo.bik" ||
+           filename == "blank.bik" || filename == "blank.xxx" ||
+           filename == "ue3_logo.xxx" || filename == "ue3_logo.bik" ||
+           filename == "fox_logo.xxx" || filename == "fox_logo.bik" ||
+           filename == "marvel_intro.xxx" || filename == "marvel_intro.bik" ||
+           filename == "atvi_logo.xxx" || filename == "atvi_logo.bik";
 }
 
 static uint32_t createGuestFile(uint8_t *base, const std::string &guestPath,
@@ -4719,7 +4803,8 @@ void startGuestProgressWatchdog() {
                 lastProgress = now;
                 continue;
             }
-            if (swaps == 0u || now - lastProgress < std::chrono::seconds(2)) continue;
+            // A zero swap count is the freeze case, not a reason to suppress diagnostics.
+            if (now - lastProgress < std::chrono::seconds(2)) continue;
             std::vector<std::shared_ptr<GuestThread>> threads;
             {
                 std::lock_guard<std::mutex> lock(g_guestThreadMutex);
@@ -4737,9 +4822,10 @@ void startGuestProgressWatchdog() {
                 const bool waiting = thread->waitingInKernel.load(std::memory_order_acquire);
                 char event[224];
                 std::snprintf(event, sizeof(event),
-                    "XOWUE_GUEST_THREAD_STATE id=%u lastGuest=0x%08X LR=0x%08X state=%s wait=%s target=0x%08X",
-                    thread->id, pc, lr, waiting ? "blocked" : "spin-or-running",
-                    waiting ? "KeWaitForSingleObject/NtWaitForSingleObjectEx" : "none", target);
+                    "XOWUE_GUEST_THREAD_STATE id=%u entry=0x%08X lastGuest=0x%08X LR=0x%08X waitReason=%s target=0x%08X",
+                    thread->id, thread->startAddress, pc, lr,
+                    waiting ? "KeWaitForSingleObject/NtWaitForSingleObjectEx" : "spin-or-running",
+                    target);
                 recordRuntimeTrace(event);
             }
             lastProgress = now;
@@ -5335,6 +5421,8 @@ void xowue_NtReadFile(PPCContext &context, uint8_t *base) {
     queueGuestApc(g_currentGuestThread, context.r5.u32, context.r6.u32, ioStatus, 0u);
     context.r3.u32 = kNtStatusSuccess;
     writeGuestIoStatus(base, ioStatus, kNtStatusSuccess, bytesRead);
+    // Commit BE IoStatusBlock and bytes-read before waking a synchronous guest read.
+    signal.signalNow();
 }
 
 void xowue_NtWriteFile(PPCContext &context, uint8_t *base) {

@@ -61,7 +61,7 @@ assert "cpInterruptRequested" not in engine
 assert "XENOS_PM4_CP_INTERRUPT_AFTER_KICK" not in engine
 assert "XENOS_GRAPHICS_INTERRUPT skipped source=1 invalid SCRATCH_REG4 target=0x%08X" in engine
 assert "XOWUE_GUEST_PROGRESS_WATCHDOG fresh_guest_frames=0 duration_ms=" in engine
-assert "XOWUE_GUEST_THREAD_STATE id=%u lastGuest=0x%08X LR=0x%08X" in engine
+assert "XOWUE_GUEST_THREAD_STATE id=%u entry=0x%08X lastGuest=0x%08X LR=0x%08X waitReason=%s" in engine
 assert "g_runtimeTracePersistMilestones.fetch_add(1, std::memory_order_relaxed) < 100000u" in engine
 assert "colorTarget?fminf(720.0f,(float)colorTarget->extent.height)" in renderer
 assert "scissor.extent.height=(uint32_t)fminf(720.0f" in renderer
@@ -202,4 +202,15 @@ assert 'filename == "ravenlogo.xxx"' in engine
 assert 'filename == "blank.bik"' in engine
 assert 'filename == "blank.xxx"' in engine
 assert 'filename == "marvel_intro.xxx"' in engine
-print("PASS: missing UE3 startup movies use an isolated EOF stub, not fabricated game assets")
+for movie in ("ravenlogo.bik", "ue3_logo.bik", "fox_logo.bik",
+              "marvel_intro.bik", "atvi_logo.bik"):
+    assert movie in engine
+assert "resolveCaseInsensitivePath(root, rel)" in engine
+assert "signal.signalNow();" in engine
+assert "g_lastValidScratchReg4Callback" in engine
+assert "g_scratchReg4CallbackPending" in engine
+assert "XENOS_GRAPHICS_INTERRUPT restored SCRATCH_REG4 target=0x%08X" in engine
+assert "XOWUE_AOT_HOTSPOT guest=0x%08X calls=%llu thread=%u cooperative_yield=1" in engine
+patch = Path("patches/XenonRecomp-XOWUE.patch").read_text()
+assert "xowue_note_scratch_reg4_write" in patch
+print("PASS: .bik preflight, APFS path case-folding, one-shot SCRATCH_REG4 recovery, NtReadFile event, hotspot yields")
