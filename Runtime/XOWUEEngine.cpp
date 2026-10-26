@@ -1693,11 +1693,15 @@ void xowue_thread_checkpoint(uint32_t guestAddress) {
             char dump[256];
             std::snprintf(dump, sizeof(dump),
                 "XOWUE_AOT_SPINLOCK_MEMORY fn=0x%08X code_words=%08X,%08X,%08X,%08X,%08X,%08X,%08X,%08X,%08X",
-                guestAddress, PPC_LOAD_U32(guestAddress), PPC_LOAD_U32(guestAddress+4u),
-                PPC_LOAD_U32(guestAddress+8u), PPC_LOAD_U32(guestAddress+12u),
-                PPC_LOAD_U32(guestAddress+16u), PPC_LOAD_U32(guestAddress+20u),
-                PPC_LOAD_U32(guestAddress+24u), PPC_LOAD_U32(guestAddress+28u),
-                PPC_LOAD_U32(guestAddress+32u));
+                guestAddress, loadGuestBe32(memory->base, guestAddress),
+                loadGuestBe32(memory->base, guestAddress+4u),
+                loadGuestBe32(memory->base, guestAddress+8u),
+                loadGuestBe32(memory->base, guestAddress+12u),
+                loadGuestBe32(memory->base, guestAddress+16u),
+                loadGuestBe32(memory->base, guestAddress+20u),
+                loadGuestBe32(memory->base, guestAddress+24u),
+                loadGuestBe32(memory->base, guestAddress+28u),
+                loadGuestBe32(memory->base, guestAddress+32u));
             recordRuntimeTrace(dump);
         }
     }
@@ -4898,7 +4902,8 @@ void startGuestProgressWatchdog() {
               ringRptr=g_xenosFrontend.ringReadPointer; ringAddress=g_xenosFrontend.ringBufferAddress;
               ringSize=g_xenosFrontend.ringBufferSize; }
             auto activeMemory = g_activeGuestMemory.lock();
-            const uint32_t scratch = activeMemory && activeMemory->base ? PPC_LOAD_U32(kScratchReg4Address) : 0u;
+            const uint32_t scratch = activeMemory && activeMemory->base && validGuestRange(0x10311010u, 4u)
+                ? loadGuestBe32(activeMemory->base, 0x10311010u) : 0u;
             char ringEvent[256];
             std::snprintf(ringEvent,sizeof(ringEvent),
                 "XOWUE_GUEST_PROGRESS_WATCHDOG_RING RPtr=0x%08X WPtr=unknown ring=0x%08X size=0x%08X SCRATCH_REG4=0x%08X lastValid=0x%08X callbackPending=%u",
