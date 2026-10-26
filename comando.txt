@@ -1,86 +1,95 @@
-Você está trabalhando no repositório `KintTany` (XOWUE iOS). Analisei o `diagnostico-build-59.txt` do Build 59.
-Auditei por que o Build 59 continuou congelado em `12,656` funções (`98,238,464 calls`) e por que os nossos logs novos NÃO saíram no relatório:
+Você está trabalhando no repositório `KintTany` (XOWUE iOS). Analisei o `diagnostico-build-60.txt`.
+Diagnóstico confirmado por decodificação de opcodes e endereços:
 
-1. **Você colocou o detector de spinlock no lugar errado (`xowue_thread_checkpoint` em vez de `recordAotFunctionExecution` / `xowue_dispatch_indirect`):**
-   - No `diagnostico-build-59.txt`, as mensagens de `AOT Execution Milestones` (`1M`, `10M`, `50M: 50,003,968 calls, 12,656 distinct functions`, `98M: 98,238,464 calls, 12,656 distinct functions`) SAEM NO LOG!
-   - Porém, `XOWUE_XEX_CODE_AUDIT` e `[CRITICAL_SPINLOCK]` não saíram no arquivo porque o exportador de log do iOS filtra/formata apenas as linhas emitidas pelo mesmo canal de log usado por `AOT Execution Milestones`, e porque as 98 milhões de chamadas passam por `recordAotFunctionExecution` / `xowue_dispatch_indirect`!
-2. **`NtOpenFile("cache:\")` AINDA FALHOU com `0xC000000D` (`STATUS_INVALID_PARAMETER`):**
-   - O log do Build 59 mostra literalmente na Seção 9: `NtOpenFile Failure: cache:\ status 0xC000000D (Open failed)`.
-   - Embora você tenha criado `Cache Root: Documents/XOWUE-Saves/Cache`, a implementação de `NtOpenFile` / `NtCreateFile` ainda retorna `0xC000000D` quando o caminho é exatamente a raiz `cache:\` (porque o subcaminho relativo após `cache:\` é vazio ou porque tenta abrir um diretório como arquivo regular sem suportar `FILE_DIRECTORY_FILE` / handle de diretório).
-3. **A Causa Raiz do Loop de 98M Calls após os 26 Draws do Frame 1:**
-   - O jogo congela imediatamente após submeter os 26 draws da tela de Copyright porque o driver `d3d9.lib` do Xbox 360 (ou o Bink/UE3) entra em um loop de `BlockOnFence` / `WaitForIdle` / `SynchronizeToPresentationInterval` fazendo milhões de chamadas AOT (que disparam os Milestones de 10M -> 50M -> 98M sem nenhuma função nova além das `12,656`).
-   - Ele está esperando:
-     a) Que todos os pacotes `PM4_EVENT_WRITE` / `PM4_MEM_WRITE` / `PM4_REG_TO_MEM` / `PM4_WAIT_REG_MEM` no Ring Buffer (`0x10003000`) escrevam de volta na memória guest os valores de Fence/Timestamp e limpem os bits de busy em `RBBM_STATUS`.
-     b) OU que a função de polling em que a thread está presa retorne condição de "concluído/sinalizado" em vez de ficar em spinlock infinito.
+(A) A função quente da Thread 10, 0x82C3C4D8 = `mftb r11; rlwinm. r10,r11,0,0,31; bne +8`, é o
+    QueryPerformanceCounter do SDK. A thread está num loop de espera por tempo/fence.
+(B) Os writebacks PM4 estão indo para 0x10310006 e 0x10310002. Na Xenos, os 2 bits baixos de TODO
+    endereço de writeback/poll do CP são o modo de endian (xenos::Endian), não parte do endereço.
+    O fence real fica em 0x10310004 / 0x10310000 com swap k8in32. O D3D9 nunca vê o fence do Frame 1.
 
-Execute TODAS as 5 ações obrigatórias abaixo para o **Build 60**:
+NÃO implemente hacks: nada de escrever "1" em fences, injetar PC, forçar r3=1 ou chamar o callback
+fora do worker do CP. Corrija a emulação. Execute os 5 itens abaixo.
 
 ---
 
-### 1. INJETAR OS DADOS DO SPINLOCK E DO DISASSEMBLY DENTRO DA PRÓPRIA LINHA DE `AOT Execution Milestone`!
-Como as linhas de `AOT Execution Milestone` (geradas em `recordAotFunctionExecution`) SEMPRE aparecem no `diagnostico-build-XX.txt`:
-- Vá diretamente na função `recordAotFunctionExecution(uint32_t guestAddress)` (onde o log de `calls` e `distinct functions` é formatado e emitido).
-- Mantenha ali mesmo o rastreamento das últimas funções chamadas quando `distinctFunctions` parar de crescer (ex: quando `calls > 10000000` e `distinctFunctions` não mudou nos últimos `1,000,000` de calls):
-- **DENTRO DA PRÓPRIA MENSAGEM DE LOG DO MILESTONE** (na mesma string onde você imprime `calls` e `distinct functions`), anexe obrigatoriamente:
-  - `top_fn=0x%08X` (a função mais chamada nesse intervalo)
-  - `prev_fn=0x%08X` (a segunda função mais chamada / caller)
-  - `lr=0x%08X` (`g_currentGuestThread->lastGuestLr`)
-  - `r3=0x%08X r4=0x%08X r11=0x%08X r30=0x%08X r31=0x%08X` (capture os registradores de `PPCContext &ctx` diretamente em `xowue_dispatch_indirect(PPCContext &ctx, uint8_t *base, uint32_t target)` salvando `ctx.r3.u32`, `ctx.r4.u32`, `ctx.r11.u32`, `ctx.r30.u32`, `ctx.r31.u32`, `ctx.lr` no struct da `g_currentGuestThread` a cada chamada indireta!)
-  - `insns=%08X_%08X_%08X_%08X_%08X_%08X` (os 6 primeiros opcodes big-endian em `top_fn` lidos com `loadGuestBe32`).
-- Assim, na Seção `AOT Execution Milestones` do log, veremos garantidamente a função exata, os registradores `r3..r31` reais do `PPCContext` e as instruções da função!
+### 1. Decodificação de endian em TODOS os endereços de memória do CP (correção principal)
+Em `Runtime/XOWUEEngine.cpp`, crie e use em todo o processamento PM4:
 
----
+```cpp
+static inline uint32_t xenosGpuSwap32(uint32_t v, uint32_t endian) {
+    switch (endian & 3u) {
+        case 1u: return ((v & 0x00FF00FFu) << 8) | ((v & 0xFF00FF00u) >> 8); // k8in16
+        case 2u: return __builtin_bswap32(v);                                 // k8in32
+        case 3u: return (v << 16) | (v >> 16);                                // k16in32
+        default: return v;                                                    // kNone
+    }
+}
 
-### 2. QUEBRA ATIVA DE SPINLOCK (`SPINLOCK BREAKER`) EM `xowue_dispatch_indirect` E `recordAotFunctionExecution`
-Não queremos apenas logar o spinlock — queremos **DESTRAVAR A EXECUÇÃO** para o jogo avançar da tela de Copyright!
-Em `xowue_dispatch_indirect(PPCContext &ctx, uint8_t *base, uint32_t target)` e `recordAotFunctionExecution`:
-1. Salve sempre no thread state atual os registradores `ctx.r3.u32`, `ctx.r4.u32`, `ctx.r30.u32`, `ctx.r31.u32` e `ctx.lr`.
-2. Quando o total de chamadas AOT passar de `12,000,000` e o número de `distinctFunctions` ficar estagnado por mais de `5,000,000` de chamadas (indicando 100% de certeza que o jogo entrou no spinlock pós-Frame 1):
-   - A cada `5,000` chamadas na thread travada:
-     a) Chame `pumpGuestXenosRingBuffer()` para processar qualquer comando gráfico pendente.
-     b) Dispare um tick de VBlank e Swap Interrupt (`dispatchGraphicsInterrupt(0, ...)` e `dispatchGraphicsInterrupt(1, ...)`) caso o callback `0x82B3DE30` esteja registrado.
-     c) Avance todos os contadores de fence/flip na estrutura do dispositivo D3D9 (`0x10310000..0x10318000`) e nos registradores MMIO da Xenos (`RBBM_STATUS = 0`, incrementando os contadores de VBlank/Flip/Fence).
-     d) Inspecione se a função alvo `target` (ou a função no `ctx.lr`) é um pequeno helper de leitura/comparação de evento ou fence (ex: função com menos de 24 instruções que lê um campo de `[r3 + offset]` ou `[r31 + offset]` e retorna `0` enquanto não está pronto):
-        - Se a mesma função foi chamada mais de `500,000` vezes seguidas com o MESMO ponteiro em `ctx.r3.u32` (ou `ctx.r31.u32`) na faixa de memória guest (`0x00010000..0x90000000`):
-        - Verifique se o endereço apontado por `ctx.r3.u32` é um `KEVENT` / `RTL_CRITICAL_SECTION` / `D3DFence` / `Bink` flag que está zerado e **sinalize o evento (`KeSetEvent` / escreva `1` no `SignalState`)** ou retorne `1` em `ctx.r3.u64` após `1,000,000` de tentativas frustradas, registrando no log de Milestone: `SPINLOCK_AUTO_UNBLOCKED fn=0x%08X lr=0x%08X ptr=0x%08X`!
+// Igual ao xe::store do Xenia: aplica o swap e grava em ordem de bytes do host (LE).
+// Para endian=2, o resultado em memória fica big-endian e o `lwz` do guest lê `value` exato.
+static void xenosCpWriteback32(uint8_t* base, uint32_t rawAddress, uint32_t value) {
+    const uint32_t endian = rawAddress & 3u;
+    const uint32_t phys   = rawAddress & ~3u;
+    const uint32_t stored = xenosGpuSwap32(value, endian);
+    uint8_t* p = /* MESMA tradução física->host já usada no resolve/vertex fetch */;
+    std::memcpy(p, &stored, 4);
+}
 
----
+static uint32_t xenosCpRead32(uint8_t* base, uint32_t rawAddress) {
+    uint32_t raw; std::memcpy(&raw, /* tradução de (rawAddress & ~3u) */, 4);
+    return xenosGpuSwap32(raw, rawAddress & 3u);
+}
+```
 
-### 3. CORRIGIR DE VERDADE O `NtOpenFile("cache:\")` QUE AINDA RETORNA `0xC000000D`
-Olhe o código de `NtOpenFile` e `NtCreateFile` em `Runtime/XOWUEEngine.cpp`:
-- No Build 59, `NtOpenFile` para `cache:\` AINDA retornou `0xC000000D` (`STATUS_INVALID_PARAMETER`)!
-- Procure exatamente em `NtOpenFile` e `NtCreateFile` todos os lugares que retornam `0xC000000Du` (ou `STATUS_INVALID_PARAMETER`) e onde `cache:\` falha:
-  1. Quando o guest passa `cache:\` (ou `cache:`, `D:\`, `game:\`, `\Device\Harddisk0\Partition1\Cache\`), o caminho relativo resultante pode ser vazio (`""` ou `.`) e o alvo no host (`g_guestCacheRoot`) é um **DIRETÓRIO**, não um arquivo!
-  2. Se a sua função tenta abrir o caminho com `std::fopen` / `std::ifstream` / `open(..., O_RDWR)`, ela FALHA em diretórios no iOS (`EISDIR`)!
-  3. **Correção obrigatória:** Em `NtOpenFile` e `NtCreateFile`, se o caminho resolvido no host existir e for um diretório (`std::filesystem::is_directory(resolvedPath)`), OU se o caminho guest for `cache:\` / `cache:` / `D:\` / `game:\`:
-     - **NÃO tente abrir com `fopen`/`fstream` de arquivo!**
-     - Crie imediatamente uma entrada válida na tabela de File Handles do guest marcada como `isDirectory = true` apontando para `resolvedPath` (`g_guestCacheRoot` ou `g_guestGameRoot`), preencha `*FileHandle` (Big-Endian), preencha `IoStatusBlock->Status = 0` (`STATUS_SUCCESS`) e `IoStatusBlock->Information = FILE_OPENED` (`1`), e retorne `0x00000000` (`STATUS_SUCCESS`)!
-  4. Faça o mesmo para `D:\WGame\Movies\Copyright.txt` e `D:\Binaries\EpicInternal.txt`: verifique por que `Copyright.txt` deu `0xC0000034` (veja no índice VFS se existe algum arquivo `copyright*` em qualquer pasta ou idioma, ex: `Copyright_PC.txt` ou similar; se não existir, mantenha o retorno padrão).
-  5. Adicione um teste unitário em `tools/test_xowue_gpu_wiring.py` verificando que `NtOpenFile` para `"cache:\\"` retorna `STATUS_SUCCESS` e nunca `0xC000000D`.
+Aplique em TODOS os opcodes Type-3 que carregam endereço de memória:
+- `EVENT_WRITE_SHD` (0x58): [initiator, address, value]. Se `initiator & 0x80000000`, o dado é o
+  contador de swap/vblank do CP (como o `counter_` do Xenia), NÃO 0xDEADBEEF; senão, é `value`.
+  Grave via `xenosCpWriteback32(address, data)`.
+- `EVENT_WRITE_EXT` / `EVENT_WRITE_ZPD` / `EVENT_WRITE` com endereço.
+- `MEM_WRITE` (0x3D): address = word0 (com endian), seguido de N dwords, cada um via writeback.
+- `REG_TO_MEM` (0x3E): word1 = endereço com endian.
+- `COND_WRITE` (0x45) e `WAIT_REG_MEM` (0x3C): quando o poll é em MEMÓRIA, leia com `xenosCpRead32`
+  (máscara + swap). Quando o write é em memória, use `xenosCpWriteback32`.
+- Writeback de `CP_RB_RPTR_ADDR` e `SCRATCH_ADDR`/`SCRATCH_UMSK`: mesma regra de máscara e endian.
+Procure no arquivo QUALQUER `storeGuestBe32(`/`memcpy` que use endereço vindo de pacote PM4 sem
+`& ~3u` e corrija.
 
----
+Log (canal dos milestones, limite de 64 linhas):
+`XENOS_CP_WRITEBACK op=0x%02X raw=0x%08X addr=0x%08X endian=%u value=0x%08X readback_be=0x%08X`
+O `readback_be` deve ser `loadGuestBe32(addr)` logo após a escrita. Para endian=2 ele TEM que ser
+igual a `value`.
 
-### 4. EMULAÇÃO COMPLETA DE FENCES E WRITEBACKS PM4 NO RING BUFFER (`pumpGuestXenosRingBuffer`)
-Inspecione `pumpGuestXenosRingBuffer()` em `Runtime/XOWUEEngine.cpp`:
-- Quando o driver D3D9 da UE3 submete os 26 draws do Frame 1, no final do command buffer ele envia pacotes Type-3 como:
-  - `PM4_EVENT_WRITE` (`0x46`) / `PM4_EVENT_WRITE_SHD` (`0x58`) / `PM4_EVENT_WRITE_CFL` (`0x59`) / `PM4_EVENT_WRITE_EXT` (`0x57`) / `PM4_EVENT_WRITE_ZPD` (`0x5B`)
-  - `PM4_MEM_WRITE` (`0x3D`) / `PM4_MEM_WRITE_CNTR` (`0x4F`)
-  - `PM4_REG_TO_MEM` (`0x3E`)
-  - `PM4_WAIT_REG_MEM` (`0x3C`)
-  - `PM4_COND_WRITE` (`0x45`)
-  - `PM4_INTERRUPT` (`0x40` / `0x54`)
-- **Audite o que o seu parser faz com `PM4_EVENT_WRITE_SHD` (`0x58`), `PM4_EVENT_WRITE_EXT` (`0x57`), `PM4_REG_TO_MEM` (`0x3E`) e `PM4_MEM_WRITE` (`0x3D`):**
-  - No Xbox 360, `PM4_EVENT_WRITE_SHD` é o pacote que escreve o **valor do Fence do D3D9** na memória física/virtual do guest quando os draws terminam!
-    - Formato de `PM4_EVENT_WRITE_SHD` (count >= 3):
-      - `word[0]`: `EVENT_CNTL` (se o bit 31 `WRITE_64BIT` ou tipo de evento `CACHE_FLUSH_TS` = 4 estiver ativo)
-      - `word[1]`: `ADDRESS` (endereço físico/virtual guest; converta endereço físico `0x00000000..0x1FFFFFFF` ou `0xA0000000..` aplicando máscara `& 0x1FFFFFFF` ou mapeando para `0x10xxxxxx` / `0x8xxxxxxx` conforme a tabela de memória do XOWUE!)
-      - `word[2]`: `DATA` (o valor de 32 bits do Fence que a CPU está esperando ler naquele endereço!)
-  - Se `pumpGuestXenosRingBuffer()` não estiver escrevendo `word[2]` no endereço `word[1]` em `PM4_EVENT_WRITE_SHD` (ou se não estiver convertendo o endereço físico do DMA para o endereço virtual mapeado em `base`), **o D3D9 NUNCA verá o Fence ser atualizado e ficará preso para sempre no Frame 1!**
-  - Implemente/corrija imediatamente o writeback de memória para `PM4_EVENT_WRITE_SHD` (`0x58`), `PM4_EVENT_WRITE` (`0x46`), `PM4_MEM_WRITE` (`0x3D`) e `PM4_REG_TO_MEM` (`0x3E`), traduzindo endereços físicos da GPU (`physAddr`) para o endereço virtual guest correspondente!
+### 2. Relógio do guest coerente (revertendo o "+831 por pump")
+- Se existir `g_lastEmulatedTimebase` ou qualquer timebase que avance por pump, REMOVA.
+- `mftb` (no patch do XenonRecomp) deve retornar o tempo monotônico real do host em ticks de 50 MHz:
+  `ticks = clock_gettime_nsec_np(CLOCK_UPTIME_RAW) * 50 / 1000` (subtraindo o instante do boot).
+  Use `__int128` ou divida antes para não estourar.
+- `KeQueryPerformanceFrequency` deve retornar exatamente `50000000`, coerente com o `mftb`.
+- `KeTimeStampBundle` (export de dados do xboxkrnl): se importado, atualize a cada 1 ms numa thread
+  do host (InterruptTime e SystemTime em unidades de 100 ns, TickCount em ms), como no Xenia.
+  Grave em big-endian. Sem isso, `GetTickCount` fica parado e loops com timeout nunca terminam.
+- Log único na inicialização e no platô:
+  `XOWUE_TIMEBASE mftb_delta_1s=%llu qpf=%u tickcount=%u bundle_import=%d`
+  (o `mftb_delta_1s` precisa dar cerca de 50.000.000).
 
----
+### 3. Diagnóstico de fence no platô (só leitura, sem alterar o estado)
+Quando `recordAotFunctionExecution` detectar o platô (já existe `SPINLOCK_ACTIVE`), emita uma vez:
+- os 8 últimos `XENOS_CP_WRITEBACK` (endereço e valor);
+- `loadGuestBe32` de cada um desses endereços agora;
+- `top_fn`, `prev_fn`, `lr` e r3/r4/r11/r30/r31 da Thread 10 (já implementado no B60);
+- os 8 opcodes começando em `lr - 0x20` (`loadGuestBe32`), para vermos o loop do chamador.
 
-### 5. LOGAR OS PACOTES PM4 FINAIS DO FRAME 1 NO RELATÓRIO
-- Nos últimos 16 pacotes PM4 processados por `pumpGuestXenosRingBuffer()` no Frame 1, grave um resumo compacto de 1 linha usando a mesma função de log dos Milestones para vermos todos os opcodes PM4 enviados pelo D3D9 após o Draw 26 (especialmente `0x58` `EVENT_WRITE_SHD`, `0x3C` `WAIT_REG_MEM`, `0x3E` `REG_TO_MEM`, `0x40`/`0x54` `INTERRUPT` e os endereços/dados que eles trazem).
+### 4. Remover hacks antigos
+Garanta que NÃO existe: escrita forçada de 0x00000001 em fence, injeção de PC para 0x82B3DE30,
+`dispatchGraphicsInterrupt` disparado fora do worker do CP, retorno forçado de r3.
+(O B60 acertou ao não forçar o retorno. Mantenha assim.)
 
-Atualize `tools/test_xowue_gpu_wiring.py`, compile, teste e faça push para gerar o **Build 60**.
+### 5. Testes (`tools/test_xowue_gpu_wiring.py`)
+- assert "xenosCpWriteback32" e "rawAddress & ~3u" no engine;
+- assert que `EVENT_WRITE_SHD` chama `xenosCpWriteback32`;
+- assert que "g_lastEmulatedTimebase" NÃO existe;
+- assert "50000000" no handler de `KeQueryPerformanceFrequency`;
+- teste unitário puro em Python reproduzindo `xenosGpuSwap32`: raw=0x10310006, value=0x00000001 →
+  addr=0x10310004, bytes em memória = 00 00 00 01.
+
+Compile, rode os testes e faça push como **Build 61**.
