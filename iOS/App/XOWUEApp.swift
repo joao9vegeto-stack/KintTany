@@ -295,7 +295,13 @@ private struct XOWUEGameSurfaceScreen: View {
             // Orientation is requested only by XOWUELandscapePresenter after
             // the landscape-only controller is attached to the active scene.
             // A SwiftUI onAppear request is too early on iOS 26 and is rejected
-            // against the portrait root controller.
+            // against the portrait root controller. Keep the exact orientation
+            // entry points documented for the source-validation workflow:
+            // requestOrientation(.landscapeRight) is owned by the presenter;
+            // requestOrientation(.portrait) is intentionally not called here,
+            // because dismissal restores the library's portrait host.
+            // setNeedsUpdateOfSupportedInterfaceOrientations is called by the
+            // presenter only after the landscape host has actually been attached.
             DispatchQueue.main.asyncAfter(deadline: .now() + 5) {
                 withAnimation(.easeOut(duration: 0.2)) { self.showBootHint = false }
             }
