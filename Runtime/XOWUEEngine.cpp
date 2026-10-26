@@ -80,6 +80,7 @@ void xowue_note_scratch_reg4_write(uint32_t address, uint32_t value) {
 }
 
 void pumpGuestXenosRingBuffer();
+static uint32_t loadGuestBe32(const uint8_t *base, uint32_t address);
 bool validGuestRange(uint32_t address, uint64_t size);
 void initializeXenosMmioRegisters(uint8_t *base);
 void xowue_NtClose(PPCContext &context);
@@ -243,6 +244,14 @@ struct GuestThread {
     std::atomic<bool> exited{false};
     std::atomic<uint32_t> lastGuestPc{0u};
     std::atomic<uint32_t> lastGuestLr{0u};
+    // Snapshot the real PPCContext at indirect dispatch so a persisted AOT
+    // milestone can identify the hot function and its actual calling state.
+    std::atomic<uint32_t> lastDispatchTarget{0u};
+    std::atomic<uint32_t> lastR3{0u};
+    std::atomic<uint32_t> lastR4{0u};
+    std::atomic<uint32_t> lastR11{0u};
+    std::atomic<uint32_t> lastR30{0u};
+    std::atomic<uint32_t> lastR31{0u};
     std::atomic<uint32_t> waitTarget{0u};
     std::atomic<bool> waitingInKernel{false};
     std::mutex stateMutex;
@@ -591,13 +600,65 @@ void recordAotFunctionExecution(uint32_t guestAddress) {
         }
     }
 
+    struct HotFunctionSlot { uint32_t fn = 0u; uint32_t count = 0u; };
+    static thread_local std::array<HotFunctionSlot, 8> hot{};
+    static thread_local uint64_t lastDistinctCall = 0u;
+    static thread_local uint64_t lastDistinctValue = 0u;
+    static thread_local uint64_t lastPumpRequest = 0u;
+    uint32_t slot = 0u;
+    for (uint32_t i = 0u; i < hot.size(); ++i) {
+        if (hot[i].fn == guestAddress) { slot = i; break; }
+        if (hot[i].count == 0u) { slot = i; break; }
+        if (hot[i].count < hot[slot].count) slot = i;
+    }
+    if (hot[slot].fn != guestAddress) hot[slot] = {guestAddress, 0u};
+    if (hot[slot].count != UINT32_MAX) ++hot[slot].count;
+
+    const uint64_t distinct = g_aotExecutionDistinct.load(std::memory_order_relaxed);
+    if (distinct != lastDistinctValue) {
+        lastDistinctValue = distinct;
+        lastDistinctCall = calls;
+    }
+    const bool plateau = calls > 12000000u && calls - lastDistinctCall > 5000000u;
+    // The Xenos CP worker exclusively owns PM4 execution and interrupt dispatch.
+    // Requesting diagnostics here must never run a callback recursively while
+    // guest code may hold a D3D lock; the worker continues its 250-us pump/tick.
+    if (plateau && calls - lastPumpRequest >= 5000u) {
+        lastPumpRequest = calls;
+        // The dedicated Xenos worker already pumps the ring and services
+        // interrupts every 250 us; do not falsify the guest's wait-state flag.
+    }
+
     if (calls == 1u || calls % 65536u == 0u) {
-        char event[192];
+        uint32_t topFn = guestAddress, prevFn = 0u, topCount = 0u, prevCount = 0u;
+        for (const auto &entry : hot) {
+            if (entry.count > topCount) {
+                prevFn = topFn; prevCount = topCount;
+                topFn = entry.fn; topCount = entry.count;
+            } else if (entry.count > prevCount && entry.fn != topFn) {
+                prevFn = entry.fn; prevCount = entry.count;
+            }
+        }
+        uint32_t insns[6]{};
+        const auto memory = g_activeGuestMemory.lock();
+        if (memory && memory->base && topFn >= PPC_CODE_BASE &&
+            validGuestRange(topFn, sizeof(insns))) {
+            for (uint32_t i = 0u; i < 6u; ++i)
+                insns[i] = loadGuestBe32(memory->base, topFn + i * 4u);
+        }
+        const uint32_t lr = g_currentGuestThread ? g_currentGuestThread->lastGuestLr.load(std::memory_order_relaxed) : 0u;
+        const uint32_t r3 = g_currentGuestThread ? g_currentGuestThread->lastR3.load(std::memory_order_relaxed) : 0u;
+        const uint32_t r4 = g_currentGuestThread ? g_currentGuestThread->lastR4.load(std::memory_order_relaxed) : 0u;
+        const uint32_t r11 = g_currentGuestThread ? g_currentGuestThread->lastR11.load(std::memory_order_relaxed) : 0u;
+        const uint32_t r30 = g_currentGuestThread ? g_currentGuestThread->lastR30.load(std::memory_order_relaxed) : 0u;
+        const uint32_t r31 = g_currentGuestThread ? g_currentGuestThread->lastR31.load(std::memory_order_relaxed) : 0u;
+        char event[768];
         std::snprintf(event, sizeof(event),
-            "AOT execution milestone calls=%llu distinctGuestFunctions=%llu lastGuest=0x%08X thread=%u",
-            static_cast<unsigned long long>(calls),
-            static_cast<unsigned long long>(g_aotExecutionDistinct.load(std::memory_order_relaxed)),
-            guestAddress, threadId);
+            "AOT execution milestone calls=%llu distinctGuestFunctions=%llu lastGuest=0x%08X thread=%u top_fn=0x%08X top_calls=%u prev_fn=0x%08X prev_calls=%u lr=0x%08X r3=0x%08X r4=0x%08X r11=0x%08X r30=0x%08X r31=0x%08X insns=%08X_%08X_%08X_%08X_%08X_%08X%s",
+            static_cast<unsigned long long>(calls), static_cast<unsigned long long>(distinct),
+            guestAddress, threadId, topFn, topCount, prevFn, prevCount, lr, r3, r4, r11, r30, r31,
+            insns[0], insns[1], insns[2], insns[3], insns[4], insns[5],
+            plateau ? " SPINLOCK_ACTIVE worker_cp_pump=250us no_forced_guest_return" : "");
         recordRuntimeTrace(event);
     }
 }
@@ -1839,6 +1900,15 @@ PPCFunc *xowue_lookup_indirect(PPCContext &context, uint8_t *base, uint32_t targ
 }
 
 void xowue_dispatch_indirect(PPCContext &context, uint8_t *base, uint32_t target) {
+    if (g_currentGuestThread) {
+        g_currentGuestThread->lastDispatchTarget.store(target, std::memory_order_relaxed);
+        g_currentGuestThread->lastR3.store(context.r3.u32, std::memory_order_relaxed);
+        g_currentGuestThread->lastR4.store(context.r4.u32, std::memory_order_relaxed);
+        g_currentGuestThread->lastR11.store(context.r11.u32, std::memory_order_relaxed);
+        g_currentGuestThread->lastR30.store(context.r30.u32, std::memory_order_relaxed);
+        g_currentGuestThread->lastR31.store(context.r31.u32, std::memory_order_relaxed);
+        g_currentGuestThread->lastGuestLr.store(static_cast<uint32_t>(context.lr), std::memory_order_relaxed);
+    }
     xowue_lookup_indirect(context, base, target)(context, base);
 }
 
@@ -3846,7 +3916,10 @@ static bool translateGuestFilePath(const std::string &guestPath, bool forWrite,
     ec.clear();
     const auto normalizedRoot = std::filesystem::weakly_canonical(root, ec);
     ec.clear();
-    const auto normalizedTarget = std::filesystem::weakly_canonical(hostPath.parent_path(), ec);
+    // Canonicalize the target itself, not its parent: for cache:\\ and D:\\
+    // the target is the root directory. Checking parent_path() incorrectly
+    // rejected that legitimate directory handle as outside its own sandbox.
+    const auto normalizedTarget = std::filesystem::weakly_canonical(hostPath, ec);
     if (!ec) {
         auto rootIt = normalizedRoot.begin();
         auto targetIt = normalizedTarget.begin();
@@ -4023,6 +4096,12 @@ struct PM4ParseSummary {
     uint64_t frameDecodeFailures = 0;
     uint64_t guestMemoryWrites = 0;
     uint64_t interrupts = 0;
+    std::array<uint32_t, 16> tailHeader{};
+    std::array<uint32_t, 16> tailOpcode{};
+    std::array<uint32_t, 16> tailArg1{};
+    std::array<uint32_t, 16> tailArg2{};
+    uint32_t tailCount = 0u;
+    uint32_t tailCursor = 0u;
 };
 
 void initializeXenosMmioRegisters(uint8_t *base);
@@ -4531,6 +4610,13 @@ static bool executeGuestPM4Words(uint8_t *base,
             writeXenosRegister(base, (header >> 11u) & 0x7FFu, words[offset + 2u], summary);
         } else if (type == 3u) {
             const uint32_t opcode = (header >> 8u) & 0x7Fu;
+            const uint32_t tail = summary.tailCursor++ % summary.tailHeader.size();
+            summary.tailHeader[tail] = header;
+            summary.tailOpcode[tail] = opcode;
+            summary.tailArg1[tail] = payloadCount >= 1u ? words[offset + 1u] : 0u;
+            summary.tailArg2[tail] = payloadCount >= 2u ? words[offset + 2u] : 0u;
+            summary.tailCount = std::min<uint32_t>(summary.tailCount + 1u,
+                static_cast<uint32_t>(summary.tailHeader.size()));
             auto writeConstantRange = [&](uint32_t first, size_t start, size_t count) {
                 for (size_t n = 0; n < count; ++n)
                     writeXenosRegister(base, first + static_cast<uint32_t>(n),
@@ -4629,9 +4715,19 @@ static bool executeGuestPM4Words(uint8_t *base,
                     "XENOS_PM4_EVENT_WRITE_SHD initiator=0x%08X address=0x%08X value=0x%08X counter=%u",
                     initiator, address, value, writeCounter ? 1u : 0u);
             } else if (opcode == kXenosPm4EventWriteOpcode && payloadCount >= 1u) {
+                const uint32_t initiator = words[offset + 1u];
                 writeXenosRegister(base, kXenosRegVgtEventInitiator,
-                                   words[offset + 1u] & 0x3Fu, summary);
-            } else if (opcode == 0x5Au && payloadCount >= 2u) { // EVENT_WRITE_EXT
+                                   initiator & 0x3Fu, summary);
+                if (payloadCount >= 3u) {
+                    const uint32_t address = words[offset + 2u];
+                    const uint32_t value = words[offset + 3u];
+                    if (storeGpuMemory32(base, address, value)) ++summary.guestMemoryWrites;
+                    else ++summary.malformed;
+                    recordXenosPm4Event(g_pm4EventTraceBudget,
+                        "XENOS_PM4_EVENT_WRITE initiator=0x%08X address=0x%08X value=0x%08X",
+                        initiator, address, value);
+                }
+            } else if ((opcode == 0x57u || opcode == 0x5Au) && payloadCount >= 2u) { // EVENT_WRITE_EXT
                 writeXenosRegister(base, kXenosRegVgtEventInitiator,
                                    words[offset + 1u] & 0x3Fu, summary);
                 const uint32_t address = words[offset + 2u] & ~3u;
@@ -4905,6 +5001,22 @@ void pumpGuestXenosRingBuffer() {
                   static_cast<unsigned long long>(summary.malformed),
                   static_cast<unsigned long long>(summary.frameDecodeFailures));
     recordRuntimeTrace(event);
+    if (summary.tailCount != 0u) {
+        char tailEvent[768];
+        size_t used = static_cast<size_t>(std::snprintf(tailEvent, sizeof(tailEvent),
+            "XENOS_PM4_TAIL count=%u", summary.tailCount));
+        const uint32_t first = (summary.tailCursor + static_cast<uint32_t>(summary.tailHeader.size()) -
+                                summary.tailCount) % static_cast<uint32_t>(summary.tailHeader.size());
+        for (uint32_t i = 0u; i < summary.tailCount && used < sizeof(tailEvent); ++i) {
+            const uint32_t n = (first + i) % static_cast<uint32_t>(summary.tailHeader.size());
+            const int written = std::snprintf(tailEvent + used, sizeof(tailEvent) - used,
+                " [%02X h=%08X a=%08X b=%08X]", summary.tailOpcode[n],
+                summary.tailHeader[n], summary.tailArg1[n], summary.tailArg2[n]);
+            if (written <= 0) break;
+            used += std::min<size_t>(static_cast<size_t>(written), sizeof(tailEvent) - used - 1u);
+        }
+        recordRuntimeTrace(tailEvent);
+    }
 }
 
 void startGuestProgressWatchdog() {

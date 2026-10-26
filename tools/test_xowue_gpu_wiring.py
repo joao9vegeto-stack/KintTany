@@ -230,7 +230,19 @@ assert "XD(CmdBeginRenderPass)(cmd,&begin,VK_SUBPASS_CONTENTS_INLINE)" in color
 print("PASS: Build 58 spinlock diagnostics, indexed UE3 VFS, clear-color resolve, callback aliases, watchdog state")
 
 
-# Build 59: diagnose post-first-frame stalls and keep high-value logs visible.
+# Build 60: AOT milestone diagnostics must include the real indirect PPC
+# register snapshot/disassembly; never fake a guest return to break a loop.
+assert "top_fn=0x%08X" in engine and "prev_fn=0x%08X" in engine
+assert "r3=0x%08X r4=0x%08X r11=0x%08X r30=0x%08X r31=0x%08X" in engine
+assert "insns=%08X_%08X_%08X_%08X_%08X_%08X" in engine
+assert "SPINLOCK_ACTIVE worker_cp_pump=250us no_forced_guest_return" in engine
+assert "lastR3.store(context.r3.u32" in engine
+assert "lastR31.store(context.r31.u32" in engine
+assert "std::filesystem::weakly_canonical(hostPath, ec)" in engine
+assert "weakly_canonical(hostPath.parent_path(), ec)" not in engine
+assert 'XENOS_PM4_TAIL count=%u' in engine
+assert 'opcode == 0x57u || opcode == 0x5Au' in engine
+assert 'XENOS_PM4_EVENT_WRITE initiator=0x%08X address=0x%08X value=0x%08X' in engine
 assert "HotFunctionSlot" in engine
 assert "[CRITICAL_SPINLOCK] thread=%u fn=0x%08X lr=0x%08X calls=%u swaps=%llu code=" in engine
 assert "std::chrono::milliseconds(1500)" in engine
