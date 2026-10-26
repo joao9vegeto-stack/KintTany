@@ -282,6 +282,8 @@ private struct XOWUEGameSurfaceScreen: View {
             .padding(.bottom, showsBootFailure ? 218 : 22)
         }
         .background(.black)
+        // Full-screen canvas: safe-area insets must not shrink the guest 16:9 frame.
+        .ignoresSafeArea(.all)
         .preferredColorScheme(.dark)
         .statusBarHidden(true)
         .onDisappear {

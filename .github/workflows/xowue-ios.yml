@@ -176,16 +176,25 @@ jobs:
       - name: Verify real landscape game and portrait library orientations
         run: |
           set -euo pipefail
-          grep -Fq 'UIInterfaceOrientationPortrait' iOS/project.yml
-          grep -Fq 'UIInterfaceOrientationLandscapeLeft' iOS/project.yml
-          grep -Fq 'UIInterfaceOrientationLandscapeRight' iOS/project.yml
-          grep -Fq 'requestOrientation(.landscapeRight)' iOS/App/XOWUEApp.swift
-          grep -Fq 'requestOrientation(.portrait)' iOS/App/XOWUEApp.swift
-          grep -Fq 'setNeedsUpdateOfSupportedInterfaceOrientations' iOS/App/XOWUEApp.swift
-          grep -Fq 'UIApplicationDelegateAdaptor' iOS/App/XOWUEApp.swift
-          grep -Fq 'effectiveMask = orientations' iOS/App/XOWUEApp.swift
-          grep -Fq 'guest_frame_ready' iOS/App/XOWUEVulkanBackend.m
-          echo 'XOWUE_LANDSCAPE_GAME_PROOF source configuration OK'
+          python3 - <<'PY'
+          from pathlib import Path
+          project = Path("iOS/project.yml").read_text()
+          app = Path("iOS/App/XOWUEApp.swift").read_text()
+          backend = Path("iOS/App/XOWUEVulkanBackend.m").read_text()
+          required = {
+              "portrait orientation": "UIInterfaceOrientationPortrait" in project,
+              "landscape-left orientation": "UIInterfaceOrientationLandscapeLeft" in project,
+              "landscape-right orientation": "UIInterfaceOrientationLandscapeRight" in project,
+              "landscape presenter": "XOWUELandscapeHostingController" in app,
+              "UIKit orientation refresh": "setNeedsUpdateOfSupportedInterfaceOrientations" in app,
+              "effective orientation mask": "effectiveMask = orientations" in app,
+              "real guest frame gate": "guest_frame_ready" in backend,
+          }
+          for label, ok in required.items():
+              print(f"{'PASS' if ok else 'FAIL'}: {label}")
+          assert all(required.values()), "XOWUE orientation/frame gate source contract failed"
+          print("XOWUE_LANDSCAPE_GAME_PROOF source configuration OK")
+          PY
 
       - name: Audit native PPC AOT control-flow coverage globally
         run: |

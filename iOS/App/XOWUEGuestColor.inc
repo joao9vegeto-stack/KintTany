@@ -282,8 +282,12 @@ static bool XDResolveGuestColor(KKVulkanState* state,
   const int32_t dstY0=(int32_t)((swapH-fittedH)*0.5f);
   const int32_t dstX1=dstX0+(int32_t)fittedW;
   const int32_t dstY1=dstY0+(int32_t)fittedH;
+  // Resolve only the real 1280x720 guest surface from the larger tile-backed
+  // allocation. Blitting all 1024 rows squeezed the framebuffer vertically.
+  const uint32_t sourceWidth=t->extent.width<1280u?t->extent.width:1280u;
+  const uint32_t sourceHeight=t->extent.height<720u?t->extent.height:720u;
   VkImageBlit region={.srcSubresource={.aspectMask=VK_IMAGE_ASPECT_COLOR_BIT,.layerCount=1},
-    .srcOffsets={{0,0,0},{(int32_t)t->extent.width,(int32_t)t->extent.height,1}},
+    .srcOffsets={{0,0,0},{(int32_t)sourceWidth,(int32_t)sourceHeight,1}},
     .dstSubresource={.aspectMask=VK_IMAGE_ASPECT_COLOR_BIT,.layerCount=1},
     .dstOffsets={{dstX0,dstY0,0},{dstX1,dstY1,1}}};
   XD(CmdBlitImage)(cmd,image,VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,

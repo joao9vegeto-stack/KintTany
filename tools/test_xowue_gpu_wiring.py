@@ -54,6 +54,20 @@ assert "XENOS_GUEST_SWAP_RGBA" in vulkan
 assert "XOWUEOrientationDelegate" in Path("iOS/App/XOWUEApp.swift").read_text()
 print("PASS: UIKit effective orientation, exhaustive GPU readback and guest-swap pixel audit")
 
+# Build 54 regression: interrupt after committed fence writes, matching 16:9 surface.
+assert "cpInterruptRequested" in engine
+assert "XENOS_PM4_CP_INTERRUPT_AFTER_KICK source=1 cpu=2" in engine
+assert "const uint32_t value = words[offset + 3u]" in engine
+assert "g_runtimeTracePersistMilestones.fetch_add(1, std::memory_order_relaxed) < 100000u" in engine
+assert "colorTarget?fminf(720.0f,(float)colorTarget->extent.height)" in renderer
+assert "scissor.extent.height=(uint32_t)fminf(720.0f" in renderer
+color=Path("iOS/App/XOWUEGuestColor.inc").read_text()
+assert "sourceHeight=t->extent.height<720u?t->extent.height:720u" in color
+critical=engine[engine.index("void xowue_RtlTryEnterCriticalSection"):engine.index("void xowue_RtlLeaveCriticalSection")]
+assert "owner == g_currentGuestThreadId" in critical and "recursion = 1u" in critical
+assert ".ignoresSafeArea(.all)" in Path("iOS/App/XOWUEApp.swift").read_text()
+print("PASS: Build 54 CP fence ordering, critical-section recursion and full 16:9 EDRAM resolve")
+
 # Build 26: observe the next PPC site and preserve per-draw and prestart swap evidence.
 assert '0x831AA0B0' in Path('tools/lower_xowue_owner_interior_entries.py').read_text()
 assert 'XENOS_DRAW_AUDIT' in renderer

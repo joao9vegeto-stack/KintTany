@@ -588,9 +588,11 @@ static uint32_t XDProcessDraws(KKVulkanState *state, uint32_t image_index,
       // Use the real landscape aspect of the Xbox 360 frame (16:9);
       // the iPhone's much wider landscape screen receives side pillars.
       const float targetW=(float)(depthOnly?depthTarget->extent.width:
-                        colorTarget?colorTarget->extent.width:state->swapchain_extent.width);
+                        colorTarget?fminf(1280.0f,(float)colorTarget->extent.width):state->swapchain_extent.width);
+      // Guest EDRAM is 1280x720; the 1024-row allocation is tile backing,
+      // not a reason to vertically letterbox the guest viewport.
       const float targetH=(float)(depthOnly?depthTarget->extent.height:
-                        colorTarget?colorTarget->extent.height:state->swapchain_extent.height);
+                        colorTarget?fminf(720.0f,(float)colorTarget->extent.height):state->swapchain_extent.height);
       const float fit=fminf(targetW/1280.0f,targetH/720.0f);
       const float fittedW=1280.0f*fit, fittedH=720.0f*fit;
       VkViewport viewport={.x=(targetW-fittedW)*0.5f,
@@ -599,6 +601,10 @@ static uint32_t XDProcessDraws(KKVulkanState *state, uint32_t image_index,
       VkRect2D scissor={.offset={0,0},
          .extent=depthOnly?depthTarget->extent:
             colorTarget?colorTarget->extent:state->swapchain_extent};
+      if(colorTarget) {
+         scissor.extent.width=(uint32_t)fminf(1280.0f,(float)colorTarget->extent.width);
+         scissor.extent.height=(uint32_t)fminf(720.0f,(float)colorTarget->extent.height);
+      }
       XD(CmdSetViewport)(command,0,1,&viewport);
       XD(CmdSetScissor)(command,0,1,&scissor);
       XD(CmdBindPipeline)(command,VK_PIPELINE_BIND_POINT_GRAPHICS,g_xd.pipeline);

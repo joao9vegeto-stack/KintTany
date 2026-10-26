@@ -357,7 +357,7 @@ bool shouldPersistRuntimeTrace(const std::string &event, size_t sequence) {
                          event.find("rejected") != std::string::npos ||
                          event.find("untranslated") != std::string::npos;
     if (event.find("AOT execution") != std::string::npos &&
-        g_runtimeTracePersistMilestones.fetch_add(1, std::memory_order_relaxed) < 128u) {
+        g_runtimeTracePersistMilestones.fetch_add(1, std::memory_order_relaxed) < 100000u) {
         return true;
     }
 
@@ -3766,6 +3766,7 @@ struct PM4ParseSummary {
     uint64_t frameDecodeFailures = 0;
     uint64_t guestMemoryWrites = 0;
     uint64_t interrupts = 0;
+    bool cpInterruptRequested = false;
 };
 
 void initializeXenosMmioRegisters(uint8_t *base);
@@ -4353,12 +4354,19 @@ static bool executeGuestPM4Words(uint8_t *base,
             } else if (opcode == 0x58u && payloadCount >= 3u) { // EVENT_WRITE_SHD
                 const uint32_t initiator = words[offset + 1u];
                 writeXenosRegister(base, kXenosRegVgtEventInitiator, initiator & 0x3Fu, summary);
-                // Bit 31 selects the GPU vblank/swap counter (Xenia counter_).
-                const uint32_t value = (initiator & 0x80000000u) != 0u
-                    ? g_xenosVblankCounter.load(std::memory_order_relaxed)
-                    : words[offset + 3u];
-                if (storeGpuMemory32(base, words[offset + 2u], value)) ++summary.guestMemoryWrites;
-                else ++summary.malformed;
+                // EVENT_WRITE_SHD commits the packet data word. Bit 31 requests
+                // a CP interrupt; deliver it after the complete ring kick so the
+                // callback observes every fence store and RPtrWriteBack.
+                const uint32_t address = words[offset + 2u];
+                const uint32_t value = words[offset + 3u];
+                if (storeGpuMemory32(base, address, value)) {
+                    ++summary.guestMemoryWrites;
+                    if ((initiator & 0x80000000u) != 0u ||
+                        address == 0x10310048u || address == 0x1031004Cu)
+                        summary.cpInterruptRequested = true;
+                } else {
+                    ++summary.malformed;
+                }
                 recordXenosPm4Event(g_pm4EventTraceBudget,
                     "XENOS_PM4_EVENT_WRITE_SHD initiator=0x%08X address=0x%08X value=0x%08X",
                     initiator, words[offset + 2u], value);
@@ -4619,6 +4627,15 @@ void pumpGuestXenosRingBuffer() {
     }
     if (validGuestRange(kXenosGpuRegisterBase + kXenosRegCpRbRptr * 4u, 4u))
         storeGuestBe32(memory->base, kXenosGpuRegisterBase + kXenosRegCpRbRptr * 4u, readPointer);
+
+    // D3D9's swap-done callback consumes EVENT_WRITE_SHD fences. Calling it
+    // during packet decode races ahead of later fence stores in this kick.
+    if (summary.cpInterruptRequested) {
+        if (!dispatchGraphicsInterrupt(kGraphicsInterruptSwap, 2u))
+            g_pendingCpInterruptCpuMask.fetch_or(1u << 2u, std::memory_order_relaxed);
+        recordRuntimeTrace("XENOS_PM4_CP_INTERRUPT_AFTER_KICK source=1 cpu=2 guest_sync_writes=" +
+                           std::to_string(summary.guestMemoryWrites));
+    }
     if (consumed == 0u) return;
     char event[192];
     std::snprintf(event, sizeof(event),
@@ -5928,14 +5945,26 @@ void xowue_RtlTryEnterCriticalSection(PPCContext &context, uint8_t *base) {
     const uint32_t owner = PPC_LOAD_U32(address + 0x18);
     int32_t lockCount = static_cast<int32_t>(PPC_LOAD_U32(address + 0x10));
     uint32_t recursion = PPC_LOAD_U32(address + 0x14);
-    (void)owner;
-    ++lockCount;
-    ++recursion;
+    if (owner == g_currentGuestThreadId) {
+        ++lockCount;
+        ++recursion;
+    } else {
+        if (lockCount < -1) {
+            sectionLock->unlock();
+            throw std::runtime_error("critical section lock_count inválido em TryEnter");
+        }
+        ++lockCount;
+        recursion = 1u;
+        PPC_STORE_U32(address + 0x18, g_currentGuestThreadId);
+    }
     PPC_STORE_U32(address + 0x10, static_cast<uint32_t>(lockCount));
     PPC_STORE_U32(address + 0x14, recursion);
-    PPC_STORE_U32(address + 0x18, g_currentGuestThreadId);
     context.r3.u32 = 1;
-    recordRuntimeTrace("RtlTryEnterCriticalSection -> acquired");
+    char event[128];
+    std::snprintf(event, sizeof(event),
+                  "RtlTryEnterCriticalSection guest=0x%08X owner=%u recursion=%u lockCount=%d acquired",
+                  address, g_currentGuestThreadId, recursion, lockCount);
+    recordRuntimeTrace(event);
 }
 
 void xowue_RtlLeaveCriticalSection(PPCContext &context, uint8_t *base) {
