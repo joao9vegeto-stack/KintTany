@@ -768,8 +768,7 @@ KKCreateVulkan(KKVulkanState *state, CAMetalLayer *layer)
       return false;
    }
 
-   for (uint32_t i = 0; i < instance_extension_count; ++i)
-      KKLog(@"INSTANCE_EXTENSION %s", instance_extensions[i].extensionName);
+   // Summarize extension inventory; per-extension logs drown out guest diagnostics.
 
    const bool has_surface =
       KKHasExtension(instance_extensions, instance_extension_count,
@@ -971,8 +970,7 @@ KKCreateVulkan(KKVulkanState *state, CAMetalLayer *layer)
       return false;
    }
 
-   for (uint32_t i = 0; i < device_extension_count; ++i)
-      KKLog(@"DEVICE_EXTENSION %s", device_extensions[i].extensionName);
+   // Summarize extension inventory; per-extension logs drown out guest diagnostics.
 
    const bool has_swapchain =
       KKHasExtension(device_extensions, device_extension_count,
@@ -980,6 +978,9 @@ KKCreateVulkan(KKVulkanState *state, CAMetalLayer *layer)
    const bool has_portability_subset =
       KKHasExtension(device_extensions, device_extension_count,
                      "VK_KHR_portability_subset");
+   KKLog(@"VULKAN_EXTENSION_INVENTORY instance_available=%u device_available=%u enabled_instance=%u enabled_device=%u",
+         instance_extension_count, device_extension_count,
+         enabled_instance_extension_count, has_portability_subset ? 2u : 1u);
    KKLog(@"DEVICE EXT swapchain=%d portability_subset=%d total=%u",
          has_swapchain, has_portability_subset, device_extension_count);
 

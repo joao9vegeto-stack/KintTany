@@ -219,7 +219,7 @@ print("PASS: .bik preflight, APFS path case-folding, one-shot SCRATCH_REG4 recov
 # Build 58: AOT spin detector, recursive case-folded UE3 package index,
 # deterministic EDRAM clear resolve, SCRATCH_REG4 aliases, immediate watchdog.
 for token in (
-    "XOWUE_AOT_SPINLOCK_DETECTED", "XOWUE_AOT_SPINLOCK_MEMORY",
+    "[CRITICAL_SPINLOCK]", "XOWUE_XEX_CODE_AUDIT",
     "XOWUE_VFS_INDEX_READY", "recursive_directory_iterator",
     "g_guestPathIndex.find(fileKey)", "XOWUE_GUEST_PROGRESS_WATCHDOG_RING",
     "XENOS_SCRATCH_REG4_CAPTURED", "0x7FC81710u", "0x90311010u",
@@ -228,3 +228,22 @@ for token in (
 assert "XENOS_EDRAM_COLOR_CLEAR_RESOLVE" in color
 assert "XD(CmdBeginRenderPass)(cmd,&begin,VK_SUBPASS_CONTENTS_INLINE)" in color
 print("PASS: Build 58 spinlock diagnostics, indexed UE3 VFS, clear-color resolve, callback aliases, watchdog state")
+
+
+# Build 59: diagnose post-first-frame stalls and keep high-value logs visible.
+assert "HotFunctionSlot" in engine
+assert "[CRITICAL_SPINLOCK] thread=%u fn=0x%08X lr=0x%08X calls=%u swaps=%llu code=" in engine
+assert "std::chrono::milliseconds(1500)" in engine
+assert "sameFunctionCalls >= 250000u && swaps == 0u" not in engine
+assert "XOWUE_XEX_CODE_AUDIT addr=0x%08X words=" in engine
+assert "XOWUE_CACHE_ROOT path=" in engine
+assert "cacheDevice ? g_guestCacheRoot" in engine
+assert "xowue_store_address_ == 0x7FC81710u" in patch
+assert "candidate = swapped" in engine
+assert "VULKAN_EXTENSION_INVENTORY instance_available=%u device_available=%u" in vulkan
+assert "INSTANCE_EXTENSION %s" not in vulkan and "DEVICE_EXTENSION %s" not in vulkan
+assert "kXbox360PerformanceFrequency = 49875000u" in engine
+assert "kGraphicsVblankPeriod = std::chrono::nanoseconds(16666667)" in engine
+assert "if (vblankDue) dispatchGraphicsInterrupt(kGraphicsInterruptVblank, 2u)" in engine
+assert "const uint32_t scratchValue = loadGuestBe32(base, 0x10311010u);" in engine
+print("PASS: Build 59 per-thread spinlock, code audit, cache root, SCRATCH_REG4, timebase/VBlank and compact Vulkan diagnostics")

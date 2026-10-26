@@ -65,7 +65,13 @@ std::atomic<bool> g_scratchReg4CaptureLogged{false};
 void xowue_note_scratch_reg4_write(uint32_t address, uint32_t value) {
     const bool scratchAddress = address == 0x10311010u || address == 0x7FC81710u ||
         address == 0x90311010u || address == 0xB0311010u || address == 0x000005C4u;
-    if (!scratchAddress || value < 0x82000000u || value >= 0x84000000u) return;
+    uint32_t candidate = value;
+    if (candidate < 0x82000000u || candidate >= 0x84000000u) {
+        const uint32_t swapped = __builtin_bswap32(value);
+        if (swapped >= 0x82000000u && swapped < 0x84000000u) candidate = swapped;
+    }
+    if (!scratchAddress || candidate < 0x82000000u || candidate >= 0x84000000u) return;
+    value = candidate;
     g_lastValidScratchReg4Callback.store(value, std::memory_order_release);
     g_scratchReg4CallbackPending.store(true, std::memory_order_release);
     bool expected = false;
@@ -104,7 +110,7 @@ constexpr uint32_t kNtStatusInvalidParameter3 = 0xC00000F1u;
 constexpr uint32_t kNtStatusNoMemory = 0xC0000017u;
 constexpr uint32_t kNtStatusUnsuccessful = 0xC0000001u;
 constexpr uint32_t kNtStatusMemoryNotAllocated = 0xC00000A0u;
-constexpr uint32_t kXbox360PerformanceFrequency = 50000000u;
+constexpr uint32_t kXbox360PerformanceFrequency = 49875000u;
 constexpr uint32_t kXamErrorNotFound = 0x80070490u;
 constexpr uint32_t kXamErrorInvalidParameter = 0x80070057u;
 constexpr uint32_t kNtStatusInvalidHandle = 0xC0000008u;
@@ -340,6 +346,7 @@ thread_local int32_t g_wsaLastError = 0;
 std::unordered_map<std::string, std::string> g_guestSymbolicLinks;
 std::filesystem::path g_guestGameRoot;
 std::filesystem::path g_guestSaveRoot;
+std::filesystem::path g_guestCacheRoot;
 std::mutex g_guestPathIndexMutex;
 std::unordered_map<std::string, std::filesystem::path> g_guestPathIndex;
 thread_local uint32_t g_guestIrql = 0u;
@@ -1670,47 +1677,61 @@ static uint32_t loadGuestBe32(const uint8_t *base, uint32_t address);
 
 void xowue_thread_checkpoint(uint32_t guestAddress) {
     recordAotFunctionExecution(guestAddress);
-    static thread_local uint32_t previousFunction = 0u;
-    static thread_local uint64_t sameFunctionCalls = 0u;
-    static thread_local bool spinReported = false;
+    struct HotFunctionSlot { uint32_t fn; uint32_t count; };
+    static thread_local std::array<HotFunctionSlot, 8> hotFunctions{};
     static thread_local uint64_t loopEntries = 0u;
-    if (previousFunction == guestAddress) ++sameFunctionCalls;
-    else { previousFunction = guestAddress; sameFunctionCalls = 1u; spinReported = false; }
+    static thread_local uint64_t observedSwaps = 0u;
+    static thread_local auto lastSwapChange = std::chrono::steady_clock::now();
+    static thread_local uint32_t reportedFunction = 0u;
     uint64_t swaps = 0u;
     { std::lock_guard<std::mutex> lock(g_xenosMutex); swaps = g_xenosFrontend.swaps; }
+    const auto now = std::chrono::steady_clock::now();
+    if (swaps != observedSwaps) {
+        observedSwaps = swaps;
+        lastSwapChange = now;
+        hotFunctions.fill(HotFunctionSlot{});
+        reportedFunction = 0u;
+    }
+    HotFunctionSlot *slot = nullptr;
+    HotFunctionSlot *least = &hotFunctions[0];
+    for (auto &candidate : hotFunctions) {
+        if (candidate.fn == guestAddress) { slot = &candidate; break; }
+        if (candidate.fn == 0u) { slot = &candidate; break; }
+        if (candidate.count < least->count) least = &candidate;
+    }
+    if (!slot) { slot = least; *slot = HotFunctionSlot{guestAddress, 0u}; }
+    slot->fn = guestAddress;
+    if (slot->count != UINT32_MAX) ++slot->count;
+    const bool noFrameFor1500ms = now - lastSwapChange >= std::chrono::milliseconds(1500);
+    const bool pastInitialAot = g_aotExecutionCalls.load(std::memory_order_relaxed) >= 5000000u;
+    if (slot->count >= 200000u && (noFrameFor1500ms || pastInitialAot) &&
+        reportedFunction != guestAddress) {
+        reportedFunction = guestAddress;
+        const uint32_t threadId = g_currentGuestThread ? g_currentGuestThread->id : 0u;
+        const uint32_t lr = g_currentGuestThread
+            ? g_currentGuestThread->lastGuestLr.load(std::memory_order_relaxed) : 0u;
+        auto memory = g_activeGuestMemory.lock();
+        uint32_t words[8]{};
+        if (memory && memory->base && validGuestRange(guestAddress, sizeof(words))) {
+            for (uint32_t i = 0; i < 8u; ++i)
+                words[i] = loadGuestBe32(memory->base, guestAddress + i * 4u);
+        }
+        char event[512];
+        std::snprintf(event, sizeof(event),
+            "[CRITICAL_SPINLOCK] thread=%u fn=0x%08X lr=0x%08X calls=%u swaps=%llu code=%08X,%08X,%08X,%08X,%08X,%08X,%08X,%08X",
+            threadId, guestAddress, lr, slot->count, static_cast<unsigned long long>(swaps),
+            words[0], words[1], words[2], words[3], words[4], words[5], words[6], words[7]);
+        std::fprintf(stderr, "%s\n", event);
+        recordRuntimeTrace(event);
+    }
+    if (slot->count != 0u && (slot->count % 2000u) == 0u) std::this_thread::yield();
+    if (slot->count != 0u && (slot->count % 20000u) == 0u)
+        std::this_thread::sleep_for(std::chrono::milliseconds(1));
     const bool likelyWaitFamily = guestAddress == 0x82C4BE30u || guestAddress == 0x82C3C4D8u ||
         (guestAddress >= 0x82B30000u && guestAddress <= 0x82B5FFFFu);
-    if (sameFunctionCalls >= 250000u && swaps == 0u && !spinReported) {
-        spinReported = true;
-        const uint32_t threadId = g_currentGuestThread ? g_currentGuestThread->id : 0u;
-        const uint32_t lr = g_currentGuestThread ? g_currentGuestThread->lastGuestLr.load(std::memory_order_relaxed) : 0u;
-        char event[320];
-        std::snprintf(event, sizeof(event),
-            "XOWUE_AOT_SPINLOCK_DETECTED thread=%u fn=0x%08X lr=0x%08X count=%llu r3=0x%08X r4=0x%08X r11=0x%08X r30=0x%08X r31=0x%08X regs=unavailable-at-entry-hook",
-            threadId, guestAddress, lr, static_cast<unsigned long long>(sameFunctionCalls), 0u, 0u, 0u, 0u, 0u);
-        recordRuntimeTrace(event);
-        auto memory = g_activeGuestMemory.lock();
-        if (memory && memory->base && validGuestRange(guestAddress, 36u)) {
-            char dump[256];
-            std::snprintf(dump, sizeof(dump),
-                "XOWUE_AOT_SPINLOCK_MEMORY fn=0x%08X code_words=%08X,%08X,%08X,%08X,%08X,%08X,%08X,%08X,%08X",
-                guestAddress, loadGuestBe32(memory->base, guestAddress),
-                loadGuestBe32(memory->base, guestAddress+4u),
-                loadGuestBe32(memory->base, guestAddress+8u),
-                loadGuestBe32(memory->base, guestAddress+12u),
-                loadGuestBe32(memory->base, guestAddress+16u),
-                loadGuestBe32(memory->base, guestAddress+20u),
-                loadGuestBe32(memory->base, guestAddress+24u),
-                loadGuestBe32(memory->base, guestAddress+28u),
-                loadGuestBe32(memory->base, guestAddress+32u));
-            recordRuntimeTrace(dump);
-        }
-    }
     if (likelyWaitFamily) {
         ++loopEntries;
-        if ((loopEntries % 1000u) == 0u) std::this_thread::yield();
-        if ((loopEntries % 10000u) == 0u) std::this_thread::sleep_for(std::chrono::milliseconds(1));
-        if (loopEntries == 1u || loopEntries % 25000000u == 0u) {
+        if (loopEntries == 1u || loopEntries % 250000u == 0u) {
             char event[176];
             std::snprintf(event, sizeof(event),
                 "XOWUE_AOT_HOTSPOT guest=0x%08X calls=%llu thread=%u cooperative_yield=1",
@@ -2044,6 +2065,11 @@ extern "C" int xowue_boot_xex(const char *path, char *output, size_t output_capa
         std::error_code saveError;
         std::filesystem::create_directories(g_guestSaveRoot, saveError);
         if (saveError) recordRuntimeTrace("save directory unavailable: " + saveError.message());
+        g_guestCacheRoot = g_guestSaveRoot / "Cache";
+        saveError.clear();
+        std::filesystem::create_directories(g_guestCacheRoot, saveError);
+        if (saveError) recordRuntimeTrace("cache directory unavailable: " + saveError.message());
+        else recordRuntimeTrace("XOWUE_CACHE_ROOT path=" + g_guestCacheRoot.string());
         recordRuntimeTrace("Xbox filesystem roots game=" + g_guestGameRoot.string() +
                            " saves=" + g_guestSaveRoot.string());
         // Log *actual host filesystem* inventory instead of fabricating
@@ -2132,6 +2158,20 @@ extern "C" int xowue_boot_xex(const char *path, char *output, size_t output_capa
             g_guestThreads.clear();
         }
         copyImage(image, *memory);
+        for (const uint32_t auditAddress : {0x82C4BE30u, 0x82C3C4D8u, 0x82B3DE30u, 0x82B423C0u}) {
+            uint32_t words[16]{};
+            if (validGuestRange(auditAddress, sizeof(words))) {
+                for (uint32_t i = 0; i < 16u; ++i)
+                    words[i] = loadGuestBe32(memory->base, auditAddress + i * 4u);
+            }
+            char audit[320];
+            std::snprintf(audit, sizeof(audit),
+                "XOWUE_XEX_CODE_AUDIT addr=0x%08X words=%08X %08X %08X %08X %08X %08X %08X %08X %08X %08X %08X %08X %08X %08X %08X %08X",
+                auditAddress, words[0], words[1], words[2], words[3], words[4], words[5], words[6], words[7],
+                words[8], words[9], words[10], words[11], words[12], words[13], words[14], words[15]);
+            std::fprintf(stderr, "%s\n", audit);
+            recordRuntimeTrace(audit);
+        }
         g_activeExecutionInfoAddress = allocateGuestPhysicalRange(memory->base, 0x20u, 0x1000u, 0x04u);
         if (g_activeExecutionInfoAddress != 0u) {
             uint8_t *base = memory->base;
@@ -3751,7 +3791,13 @@ static bool translateGuestFilePath(const std::string &guestPath, bool forWrite,
         normalized.erase(0u,4u);
     if (normalized.rfind("??/",0u)==0u)
         normalized.erase(0u,3u);
-    const std::string lower = lowerGuestPath(normalized);
+    std::string lower = lowerGuestPath(normalized);
+    if (lower.rfind("/device/harddisk0/partition1/cache", 0u) == 0u)
+        normalized = "cache:" + normalized.substr(std::string("/Device/Harddisk0/Partition1/Cache").size());
+    else if (lower.rfind("/device/harddisk0/cache", 0u) == 0u)
+        normalized = "cache:" + normalized.substr(std::string("/Device/Harddisk0/Cache").size());
+    lower = lowerGuestPath(normalized);
+    const bool cacheDevice = lower.rfind("cache:", 0u) == 0u;
     bool saveDevice = false;
     size_t prefixLength = 0u;
     const std::array<std::string, 6> gamePrefixes = {
@@ -3784,7 +3830,7 @@ static bool translateGuestFilePath(const std::string &guestPath, bool forWrite,
             if (part == "..") return false;
         }
     }
-    const auto root = saveDevice ? g_guestSaveRoot : g_guestGameRoot;
+    const auto root = cacheDevice ? g_guestCacheRoot : (saveDevice ? g_guestSaveRoot : g_guestGameRoot);
     if (root.empty()) return false;
     hostPath = resolveCaseInsensitivePath(root, rel);
     std::error_code ec;
@@ -4762,6 +4808,9 @@ static bool executeGuestPM4Words(uint8_t *base,
                 }
             }
         }
+        const uint32_t scratchValue = loadGuestBe32(base, 0x10311010u);
+        if (scratchValue >= 0x82000000u && scratchValue < 0x84000000u)
+            xowue_note_scratch_reg4_write(0x10311010u, scratchValue);
         offset += packetWords;
     }
     return true;
@@ -4840,6 +4889,9 @@ void pumpGuestXenosRingBuffer() {
     if (validGuestRange(kXenosGpuRegisterBase + kXenosRegCpRbRptr * 4u, 4u))
         storeGuestBe32(memory->base, kXenosGpuRegisterBase + kXenosRegCpRbRptr * 4u, readPointer);
 
+    const uint32_t scratchValue = loadGuestBe32(memory->base, 0x10311010u);
+    if (scratchValue >= 0x82000000u && scratchValue < 0x84000000u)
+        xowue_note_scratch_reg4_write(0x10311010u, scratchValue);
     if (consumed == 0u) return;
     char event[192];
     std::snprintf(event, sizeof(event),
@@ -6277,7 +6329,7 @@ void xowue_RtlLeaveCriticalSection(PPCContext &context, uint8_t *base) {
 
 void xowue_KeQueryPerformanceFrequency(PPCContext &context) {
     context.r3.u32 = kXbox360PerformanceFrequency;
-    recordRuntimeTrace("KeQueryPerformanceFrequency -> 50000000 Hz");
+    recordRuntimeTrace("KeQueryPerformanceFrequency -> 49875000 Hz");
 }
 
 void xowue_KeEnterCriticalRegion(PPCContext &, uint8_t *base) {
