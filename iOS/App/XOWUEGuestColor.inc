@@ -184,9 +184,25 @@ static bool XDResolveGuestColor(KKVulkanState* state,
   for(uint32_t i=0;i<g_xd_color_count;++i)
     if(g_xd_color[i].tile==sourceTile){t=&g_xd_color[i];break;}
   if(!t) {
-    KKLog(@"XENOS_COPY_MISSING_GUEST_COLOR src=%u command=%u tile=%u available_color=%u",
-      sourceIndex,command,sourceTile,g_xd_color_count);
-    return false;
+    // UE3 may resolve a cleared color tile before the first geometry draw.
+    // Initialize the native surface with transparent black instead of blocking
+    // the guest command stream on a color source that has not been rendered yet.
+    t=XDGetGuestColor(state,draw);
+    if(t) {
+      VkClearValue clear={.color={{0.0f,0.0f,0.0f,0.0f}}};
+      VkRenderPassBeginInfo begin={.sType=VK_STRUCTURE_TYPE_RENDER_PASS_BEGIN_INFO,
+        .renderPass=t->pass,.framebuffer=t->framebuffer,
+        .renderArea={{0,0},{t->extent.width,t->extent.height}},
+        .clearValueCount=1,.pClearValues=&clear};
+      XD(CmdBeginRenderPass)(cmd,&begin,VK_SUBPASS_CONTENTS_INLINE);
+      XD(CmdEndRenderPass)(cmd);
+      KKLog(@"XENOS_EDRAM_COLOR_CLEAR_RESOLVE tile=%u destination=0x%08X source=%u",
+        sourceTile,draw->rb_copy_dest_base,sourceIndex);
+    } else {
+      KKLog(@"XENOS_COPY_MISSING_GUEST_COLOR src=%u command=%u tile=%u available_color=%u",
+        sourceIndex,command,sourceTile,g_xd_color_count);
+      return false;
+    }
   }
   VkImageMemoryBarrier fromColor={.sType=VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER,
     .srcAccessMask=VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT,

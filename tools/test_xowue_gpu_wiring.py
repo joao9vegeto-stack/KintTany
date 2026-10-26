@@ -214,3 +214,17 @@ assert "XOWUE_AOT_HOTSPOT guest=0x%08X calls=%llu thread=%u cooperative_yield=1"
 patch = Path("patches/XenonRecomp-XOWUE.patch").read_text()
 assert "xowue_note_scratch_reg4_write" in patch
 print("PASS: .bik preflight, APFS path case-folding, one-shot SCRATCH_REG4 recovery, NtReadFile event, hotspot yields")
+
+
+# Build 58: AOT spin detector, recursive case-folded UE3 package index,
+# deterministic EDRAM clear resolve, SCRATCH_REG4 aliases, immediate watchdog.
+for token in (
+    "XOWUE_AOT_SPINLOCK_DETECTED", "XOWUE_AOT_SPINLOCK_MEMORY",
+    "XOWUE_VFS_INDEX_READY", "recursive_directory_iterator",
+    "g_guestPathIndex.find(fileKey)", "XOWUE_GUEST_PROGRESS_WATCHDOG_RING",
+    "XENOS_SCRATCH_REG4_CAPTURED", "0x7FC81710u", "0x90311010u",
+    "XOWUE_AOT_HOTSPOT", "std::chrono::milliseconds(1)"):
+    assert token in engine, f"Build 58 engine missing {token}"
+assert "XENOS_EDRAM_COLOR_CLEAR_RESOLVE" in color
+assert "XD(CmdBeginRenderPass)(cmd,&begin,VK_SUBPASS_CONTENTS_INLINE)" in color
+print("PASS: Build 58 spinlock diagnostics, indexed UE3 VFS, clear-color resolve, callback aliases, watchdog state")

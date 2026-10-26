@@ -62,10 +62,14 @@ extern "C" void xowue_vulkan_backend_guest_frame_reset(void) __attribute__((weak
 std::atomic<uint32_t> g_lastValidScratchReg4Callback{0u};
 std::atomic<bool> g_scratchReg4CallbackPending{false};
 void xowue_note_scratch_reg4_write(uint32_t address, uint32_t value) {
-    if (address != 0x10311010u || value < 0x82000000u || value >= 0x84000000u)
-        return;
+    const bool scratchAddress = address == 0x10311010u || address == 0x7FC81710u ||
+        address == 0x90311010u || address == 0xB0311010u || address == 0x000005C4u;
+    if (!scratchAddress || value < 0x82000000u || value >= 0x84000000u) return;
     g_lastValidScratchReg4Callback.store(value, std::memory_order_release);
     g_scratchReg4CallbackPending.store(true, std::memory_order_release);
+    bool expected = false;
+    if (g_scratchReg4CaptureLogged.compare_exchange_strong(expected, true, std::memory_order_acq_rel))
+        std::fprintf(stderr, "XENOS_SCRATCH_REG4_CAPTURED address=0x%08X callback=0x%08X\\n", address, value);
 }
 
 void pumpGuestXenosRingBuffer();
@@ -335,6 +339,10 @@ thread_local int32_t g_wsaLastError = 0;
 std::unordered_map<std::string, std::string> g_guestSymbolicLinks;
 std::filesystem::path g_guestGameRoot;
 std::filesystem::path g_guestSaveRoot;
+std::mutex g_guestPathIndexMutex;
+std::unordered_map<std::string, std::filesystem::path> g_guestPathIndex;
+std::atomic<bool> g_scratchReg4CaptureLogged{false};
+static void rebuildGuestPathIndex();
 thread_local uint32_t g_guestIrql = 0u;
 std::mutex g_guestThreadMutex;
 std::mutex g_guestStackMutex;
@@ -1661,21 +1669,47 @@ void xowue_thread_checkpoint() {
 
 void xowue_thread_checkpoint(uint32_t guestAddress) {
     recordAotFunctionExecution(guestAddress);
-    // Build 56 showed two AOT entries dominating execution while guest frames
-    // stayed at zero. Yield at these repeated polling sites so host-side event
-    // and completion workers are not starved; do not invent a guest PPC branch.
-    if (guestAddress == 0x82C4BE30u || guestAddress == 0x82C3C4D8u) {
-        static thread_local uint64_t hotspotEntries = 0u;
-        static std::atomic<uint64_t> hotspotCounts[2]{};
-        const size_t index = guestAddress == 0x82C4BE30u ? 0u : 1u;
-        const uint64_t count = hotspotCounts[index].fetch_add(1u, std::memory_order_relaxed) + 1u;
-        ++hotspotEntries;
-        if ((hotspotEntries & 0xFFu) == 0u) std::this_thread::yield();
-        if (count == 1u || count % 25000000u == 0u) {
+    static thread_local uint32_t previousFunction = 0u;
+    static thread_local uint64_t sameFunctionCalls = 0u;
+    static thread_local bool spinReported = false;
+    static thread_local uint64_t loopEntries = 0u;
+    if (previousFunction == guestAddress) ++sameFunctionCalls;
+    else { previousFunction = guestAddress; sameFunctionCalls = 1u; spinReported = false; }
+    uint64_t swaps = 0u;
+    { std::lock_guard<std::mutex> lock(g_xenosMutex); swaps = g_xenosFrontend.swaps; }
+    const bool likelyWaitFamily = guestAddress == 0x82C4BE30u || guestAddress == 0x82C3C4D8u ||
+        (guestAddress >= 0x82B30000u && guestAddress <= 0x82B5FFFFu);
+    if (sameFunctionCalls >= 250000u && swaps == 0u && !spinReported) {
+        spinReported = true;
+        const uint32_t threadId = g_currentGuestThread ? g_currentGuestThread->id : 0u;
+        const uint32_t lr = g_currentGuestThread ? g_currentGuestThread->lastGuestLr.load(std::memory_order_relaxed) : 0u;
+        char event[320];
+        std::snprintf(event, sizeof(event),
+            "XOWUE_AOT_SPINLOCK_DETECTED thread=%u fn=0x%08X lr=0x%08X count=%llu r3=0x%08X r4=0x%08X r11=0x%08X r30=0x%08X r31=0x%08X regs=unavailable-at-entry-hook",
+            threadId, guestAddress, lr, static_cast<unsigned long long>(sameFunctionCalls), 0u, 0u, 0u, 0u, 0u);
+        recordRuntimeTrace(event);
+        auto memory = g_activeGuestMemory.lock();
+        if (memory && memory->base && validGuestRange(guestAddress, 36u)) {
+            char dump[256];
+            std::snprintf(dump, sizeof(dump),
+                "XOWUE_AOT_SPINLOCK_MEMORY fn=0x%08X code_words=%08X,%08X,%08X,%08X,%08X,%08X,%08X,%08X,%08X",
+                guestAddress, PPC_LOAD_U32(guestAddress), PPC_LOAD_U32(guestAddress+4u),
+                PPC_LOAD_U32(guestAddress+8u), PPC_LOAD_U32(guestAddress+12u),
+                PPC_LOAD_U32(guestAddress+16u), PPC_LOAD_U32(guestAddress+20u),
+                PPC_LOAD_U32(guestAddress+24u), PPC_LOAD_U32(guestAddress+28u),
+                PPC_LOAD_U32(guestAddress+32u));
+            recordRuntimeTrace(dump);
+        }
+    }
+    if (likelyWaitFamily) {
+        ++loopEntries;
+        if ((loopEntries % 1000u) == 0u) std::this_thread::yield();
+        if ((loopEntries % 10000u) == 0u) std::this_thread::sleep_for(std::chrono::milliseconds(1));
+        if (loopEntries == 1u || loopEntries % 25000000u == 0u) {
             char event[176];
             std::snprintf(event, sizeof(event),
                 "XOWUE_AOT_HOTSPOT guest=0x%08X calls=%llu thread=%u cooperative_yield=1",
-                guestAddress, static_cast<unsigned long long>(count),
+                guestAddress, static_cast<unsigned long long>(loopEntries),
                 g_currentGuestThread ? g_currentGuestThread->id : 0u);
             recordRuntimeTrace(event);
         }
@@ -1998,6 +2032,7 @@ extern "C" int xowue_boot_xex(const char *path, char *output, size_t output_capa
         if (!path || path[0] == '\0') throw std::runtime_error("XEX path is empty");
         g_guestGameRoot = std::filesystem::path(path).parent_path();
         if (g_guestGameRoot.empty()) g_guestGameRoot = std::filesystem::current_path();
+        rebuildGuestPathIndex();
         g_guestSaveRoot = g_guestGameRoot.parent_path().parent_path() / "XOWUE-Saves";
         std::error_code saveError;
         std::filesystem::create_directories(g_guestSaveRoot, saveError);
@@ -3678,6 +3713,26 @@ static std::filesystem::path resolveCaseInsensitivePath(
     return actual;
 }
 
+static void rebuildGuestPathIndex() {
+    std::unordered_map<std::string, std::filesystem::path> fresh;
+    std::error_code ec;
+    if (g_guestGameRoot.empty()) return;
+    for (std::filesystem::recursive_directory_iterator it(g_guestGameRoot,
+             std::filesystem::directory_options::skip_permission_denied, ec), end;
+         !ec && it != end; it.increment(ec)) {
+        std::error_code itemError;
+        if (!it->is_regular_file(itemError) || itemError) continue;
+        const auto absolute = it->path();
+        const auto relative = absolute.lexically_relative(g_guestGameRoot);
+        if (relative.empty()) continue;
+        fresh.emplace(lowerGuestPath(relative.generic_string()), absolute);
+        fresh.emplace(lowerGuestPath(absolute.filename().string()), absolute);
+    }
+    const size_t indexed = fresh.size();
+    { std::lock_guard<std::mutex> lock(g_guestPathIndexMutex); g_guestPathIndex.swap(fresh); }
+    recordRuntimeTrace("XOWUE_VFS_INDEX_READY keys=" + std::to_string(indexed));
+}
+
 static bool translateGuestFilePath(const std::string &guestPath, bool forWrite,
                                   std::filesystem::path &hostPath) {
     if (guestPath.empty() || guestPath.size() > 0x4000u) return false;
@@ -3726,6 +3781,16 @@ static bool translateGuestFilePath(const std::string &guestPath, bool forWrite,
     if (root.empty()) return false;
     hostPath = resolveCaseInsensitivePath(root, rel);
     std::error_code ec;
+    if (!forWrite && !saveDevice && (!std::filesystem::exists(hostPath, ec) || ec)) {
+        ec.clear();
+        const std::string fullKey = lowerGuestPath(rel.generic_string());
+        const std::string fileKey = lowerGuestPath(rel.filename().string());
+        std::lock_guard<std::mutex> indexLock(g_guestPathIndexMutex);
+        auto found = g_guestPathIndex.find(fullKey);
+        if (found == g_guestPathIndex.end()) found = g_guestPathIndex.find(fileKey);
+        if (found != g_guestPathIndex.end()) hostPath = found->second;
+    }
+    ec.clear();
     const auto normalizedRoot = std::filesystem::weakly_canonical(root, ec);
     ec.clear();
     const auto normalizedTarget = std::filesystem::weakly_canonical(hostPath.parent_path(), ec);
@@ -4815,19 +4880,32 @@ void startGuestProgressWatchdog() {
                 std::to_string(std::chrono::duration_cast<std::chrono::milliseconds>(now - lastProgress).count()) +
                 " swaps=" + std::to_string(swaps));
             for (const auto &thread : threads) {
-                if (!thread || thread->exited.load(std::memory_order_relaxed)) continue;
+                if (!thread) continue;
                 const uint32_t pc = thread->lastGuestPc.load(std::memory_order_relaxed);
                 const uint32_t lr = thread->lastGuestLr.load(std::memory_order_relaxed);
                 const uint32_t target = thread->waitTarget.load(std::memory_order_relaxed);
                 const bool waiting = thread->waitingInKernel.load(std::memory_order_acquire);
-                char event[224];
+                char event[256];
                 std::snprintf(event, sizeof(event),
-                    "XOWUE_GUEST_THREAD_STATE id=%u entry=0x%08X lastGuest=0x%08X LR=0x%08X waitReason=%s target=0x%08X",
+                    "XOWUE_GUEST_THREAD_STATE id=%u entry=0x%08X lastGuest=0x%08X LR=0x%08X waitReason=%s target=0x%08X exited=%u aotHotFn=0x%08X",
                     thread->id, thread->startAddress, pc, lr,
                     waiting ? "KeWaitForSingleObject/NtWaitForSingleObjectEx" : "spin-or-running",
-                    target);
+                    target, thread->exited.load(std::memory_order_relaxed) ? 1u : 0u, pc);
                 recordRuntimeTrace(event);
             }
+            uint32_t ringRptr=0u, ringAddress=0u, ringSize=0u;
+            { std::lock_guard<std::mutex> lock(g_xenosMutex);
+              ringRptr=g_xenosFrontend.ringReadPointer; ringAddress=g_xenosFrontend.ringBufferAddress;
+              ringSize=g_xenosFrontend.ringBufferSize; }
+            auto activeMemory = g_activeGuestMemory.lock();
+            const uint32_t scratch = activeMemory && activeMemory->base ? PPC_LOAD_U32(kScratchReg4Address) : 0u;
+            char ringEvent[256];
+            std::snprintf(ringEvent,sizeof(ringEvent),
+                "XOWUE_GUEST_PROGRESS_WATCHDOG_RING RPtr=0x%08X WPtr=unknown ring=0x%08X size=0x%08X SCRATCH_REG4=0x%08X lastValid=0x%08X callbackPending=%u",
+                ringRptr,ringAddress,ringSize,scratch,
+                g_lastValidScratchReg4Callback.load(std::memory_order_acquire),
+                g_scratchReg4CallbackPending.load(std::memory_order_acquire) ? 1u : 0u);
+            recordRuntimeTrace(ringEvent);
             lastProgress = now;
         }
         g_guestProgressWatchdogStarted.store(false, std::memory_order_release);
