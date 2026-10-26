@@ -1,60 +1,51 @@
-Objetivo da Build 62: Resolver o bug de truncamento 32/64-bit de `0x82C3C4D8` (e seu caller no loop pós-splash de 12.656 funções / 29 draws) em `Runtime/XOWUEEngine.cpp` e `tools/generate_aot.py`, identificar e destravar as outras funções do loop (`hot[1..7]`), e gravar um relatório cirúrgico compacto (`< 4 KB`) que não seja comprimido.
+Analisei o `diagnostico-build64.txt` na raiz da branch `XOWUE`. Os novos diagnósticos (`XOWUE_QPC_WRITE`, `AOT_PROGRESS` e `XOWUE_STALL_THREADS`) revelaram com precisão absoluta o estado do jogo na Build 64:
 
-Fatos comprovados do log da Build 61:
-- `calls=18,677,760 | distinct=12,656 | top_fn=0x82C3C4D8 | top_calls=4,412,511`
-- `4.41M / 18.67M = 23.6%`: `0x82C3C4D8` é 1 de ~4 funções num loop ativo!
-- `recordAotFunctionExecution` em `Runtime/XOWUEEngine.cpp` já calcula `hot[0..7]`, mas o log `AOT_PROGRESS` só imprime `hot[0]` (`top_fn`), escondendo `hot[1..7]` (que são exatamente o caller de `0x82C3C4D8` e as outras funções do loop!).
-- Além disso, `0x82C3C4D8` usa `mftb r11, 268` no Xbox 360 (onde `mftb` escreve os 64 bits do timebase em `r11` de 64 bits, ou é lido em loop `mftbu`/`mftb`/`mftbu` verificando carry). Se o código AOT gerado para `0x82C3C4D8` trunca `r11` para 32 bits ou ignora instruções 64-bit (`rldicl`/`srdi`/`std`), o caller recebe um timebase corrompido (alta=0 ou delta=0) ou fica preso no retry loop!
+### O QUE OS LOGS DA BUILD 64 PROVARAM:
+1. **`0x82C3C4D8` (QPC) ESTÁ RESOLVIDO:**
+   - `XOWUE_QPC_WRITE` gravou corretamente o timebase de 64 bits em `out_ptr=0x700AEE80` (`mem64=0x00000000010D9E8A`).
+   - Com isso, `0x82C3C4D8` foi chamado apenas **8 vezes** (contra 91.966 na Build 62/63!) e a Thread 4 (`tid=0xF8000014`) saiu do loop de tempo e avançou para a região `0x82DC1FA0..0x82DC2BF0`!
 
-Execute EXATAMENTE os 5 passos abaixo em `Runtime/XOWUEEngine.cpp` (e `tools/generate_aot.py` / `generated/` se aplicável):
+2. **POR QUE A TELA FICOU PRETA NA BUILD 63 E 64 (Thread 1 presa em `0x822000E0` no Draw 26):**
+   - `XOWUE_STALL_THREADS` (`RUNTIME seq=1256`) pegou a Thread 1 (`tid=0xF8000001`, Main/Render Thread) presa em execução dentro de `0x822000E0`:
+     `tid=0xF8000001 host_tid=10935674 state=running fn=0x822000E0 prev=0x82C30CC0 lr=0x82C30CC8 sp=0x7001FE00 r3=0x837E8640 r4=0x00000400`
+   - Na Build 61 e 62, a Thread 1 passava por `0x822000E0` e completava os 48 draws do frame, apresentando o vídeo na tela.
+   - Na Build 63 e 64, a Thread 1 travou dentro de `0x822000E0` porque você adicionou transformações globais nas instruções geradas pelo `XenonRecomp` (`normalize_32bit_writes`, `normalize_rlw_instructions` e `normalize_32bit_arithmetic` em `tools/generate_aot.py` e no patch de `recompiler.cpp` em `.github/workflows/xowue-ios.yml`).
+   - Especificamente, `normalize_32bit_arithmetic` converte `ctx.rX.s64 = -1;` (gerado por `li`/`addi` com imediato negativo) em `ctx.rX.u64 = static_cast<uint32_t>(-1);` (`0x00000000FFFFFFFF`), destruindo a extensão de sinal de 64 bits do PowerPC64 (`s64`) usada em loops, offsets negativos e comparações de 64 bits (`cmpdi`), além de `normalize_32bit_writes` alterar a semântica de todas as 115.623 funções recompiladas!
 
-### PASSO 1: Desassemblar e Corrigir `0x82C3C4D8` e seus Vizinhos no Código AOT/Runtime
-1. Inspecione diretamente os opcodes PPC em `0x82C3C4D8` (até o `blr` + 32 instruções ao redor) e a função C++ gerada para `0x82C3C4D8` em `generated/`.
-2. Verifique como `0x82C3C4D8` lê o timebase e em quais registradores (`r3`, `r4`, `r11`, `f1`, ou memória apontada por `r3`) ela entrega o resultado ao caller:
-   - No Xenon (PPC64), `mftb rD, 268` coloca o Timebase de **64 bits** inteiro em `rD` (64-bit), e frequentemente a função faz:
-     `mftb r11, 268` -> `rlwinm. r10, r11, 0, 0, 31` -> `rldicl r3, r11, 32, 32` / `mr r4, r10` / `std r11, 0(r3)`!
-   - Se `PPCContext` usa `uint32_t r[32]` e `generate_aot.py` traduziu `rldicl` (opcode 30) ou `std` (opcode 62) apenas com 32 bits, a metade alta de 64 bits do timebase em `r11` foi **PERDIDA** (ficou 0 ou igual à metade baixa)!
-3. Corrija `0x82C3C4D8` de forma definitiva:
-   - Se `0x82C3C4D8` usa `mftb` + instruções de 64 bits (`opcode 30` `rldicl`/`rldicr`, `opcode 62` `std`, `opcode 58` `ld`, ou `fcfid`), implemente um **hook/override nativo exato** para `0x82C3C4D8` (e para qualquer função de timebase/QPC logo ao redor, como o caller direto dela) que leia `uint64_t tb = xowue_read_timebase64()` e preencha exatamente os registradores/memória (`r3`, `r4`, `r10`, `r11`, `cr0`, `*r3`, `f1`, etc.) que a função real do XEX produziria em um Xenon de 64 bits!
-   - Verifique também todas as instruções `opcode 30` (`rldicl`, `rldicr`, `rldic`, `rldimi`) dentro de `0x82C3C4D8` e de seus callers imediatos no binário do XEX.
+3. **POR QUE A THREAD 4 (`tid=0xF8000014`) ENTROU EM LOOP INFINITO EM `0x82DC1FA0` <-> `0x82DC2390` (497.081 chamadas):**
+   - Logo após sair do QPC (`0x82C3C4D8`), a Thread 4 executou `0x82DC2228` -> `0x82DC2A50` (`LR=0x82DC2B14`, onde tentou `bctrl` com `CTR=0x00000000`, `r3=0x40113FD0`, `r4=0x700AEBA0`) -> `0x82DC2B74` (`LR=0x82DC2BF0`, `CTR=0x00000000`, `r3=0x401134B0`) -> e entrou em `0x82DC1FA0`.
+   - Em `0x82DC1FA0` (`LR=0x82DC2014`), a Thread 4 chama `0x82DC2390` em loop infinito (**497.081 vezes**, `AOT_PROGRESS calls=1000000`):
+     `THREAD_DUMP tid=0xF8000014 last_fn=0x82DC2390 prev_fn=0x82DC1FA0 lr=0x82DC2014 r3=0x00000000 r4=0x00000000`
+   - Dentro de `0x82DC2390` (`LR=0x82DC23AC`), ela tenta um `bctrl` com `CTR=0x00000000`, que é abortado por `xowue_lookup_indirect` deixando `r3=0x00000000`. O caller `0x82DC1FA0` (em `0x82DC2014`) fica preso em loop esperando que `0x82DC2390` retorne outro valor ou que uma condição de saída na memória/registradores seja satisfeita!
 
-### PASSO 2: Rastrear o Histórico Recente de Funções AOT por Thread e Imprimir `hot[0..7]` Completo
-Em `Runtime/XOWUEEngine.cpp`, dentro de `GuestThread` e `recordAotFunctionExecution(uint32_t guestAddress)`:
-1. Adicione em `GuestThread` um pequeno ring-buffer lock-free das últimas 16 funções AOT distintas chamadas por aquela thread:
-   ```cpp
-   std::atomic<uint32_t> recentAotFns[16]{};
-   std::atomic<uint32_t> recentAotIdx{0u};
-   ```
-   Em `recordAotFunctionExecution(uint32_t guestAddress)`, se `guestAddress` for diferente da última função gravada naquela thread, grave em `recentAotFns[(idx++) & 15] = guestAddress`, e salve também o endereço anterior como `currentGuestThread->lastCallerFn = prevFn`.
-2. Em `AOT_PROGRESS`, imprima **os Top 8 slots completos de `hot[0..7]`** (não apenas `top_fn`!):
-   `AOT_PROGRESS ... hot0=0x%08X:%u hot1=0x%08X:%u hot2=0x%08X:%u hot3=0x%08X:%u hot4=0x%08X:%u hot5=0x%08X:%u hot6=0x%08X:%u hot7=0x%08X:%u prev_fn=0x%08X`
-3. Quando o platô for detectado (ex.: `calls >= 2097152` e `distinct` não cresceu mais que 32 funções desde o milestone anterior, apenas uma vez por sessão via `static std::atomic<bool> plateauDumped{false}`):
-   - Para cada uma das **Top 6 funções em `hot[0..5]`**, faça dump no log dos seus **primeiros 24 opcodes de 32 bits** lidos da memória guest (`loadGuestBe32(base, fn + i*4)`):
-     `HOT_FN_CODE rank=%u fn=0x%08X count=%u insn0..11=...`
-   - Para **TODAS as `GuestThread` criadas**, faça dump do seu estado real:
-     `THREAD_DUMP id=%u entry=0x%08X exited=%d waiting=%d wait_target=0x%08X last_fn=0x%08X prev_fn=0x%08X recent=[0x%08X,0x%08X,0x%08X,0x%08X,0x%08X,0x%08X,0x%08X,0x%08X] r3=0x%08X r4=0x%08X r11=0x%08X r30=0x%08X r31=0x%08X`
+---
 
-### PASSO 3: Auditar e Destravar o Loop do Caller de `0x82C3C4D8` Estáticamente Antes de Compilar
-NÃO espere o runtime rodar para descobrir quem chama `0x82C3C4D8`!
-1. Agora mesmo, durante o trabalho no repositório, procure em `generated/` todos os arquivos `.cpp` que chamam `0x82C3C4D8` (ex.: `grep -rn "82C3C4D8" generated/`).
-2. Abra cada função em `generated/` que chama `0x82C3C4D8`! Veja o que essas funções fazem logo após chamar `0x82C3C4D8`:
-   - Elas usam `r3`/`r4`/`r11`?
-   - Elas contêm algum comentário `// unimplemented` ou instrução de 64 bits (`rldicl`, `std`, `ld`, `fcfid`, `lwarx`, `stwcx.`) mal traduzida?
-   - Qual endereço de memória, registrador ou import de kernel (`KeWaitForSingleObject`, `KeDelayExecutionThread`, `NtWaitForSingleObjectEx`, `VdSwap`, fence da GPU) elas estão testando no loop?
-3. **CORRIJA IMEDIATAMENTE** qualquer bug de tradução AOT (64-bit shift/mask/load/store/float conversion) ou condição de espera que você encontrar em `0x82C3C4D8` e nas funções que a chamam em `generated/` e `Runtime/XOWUEEngine.cpp`!
+### EXECUTAR IMEDIATAMENTE AS CORREÇÕES PARA A BUILD 65:
 
-### PASSO 4: Garantir Progresso de GPU / VBlank / Callbacks Durante Loops Quentes
-Em `recordAotFunctionExecution`:
-- Quando uma thread chamar `0x82C3C4D8` mais de `4096` vezes sem aumento de `distinct`:
-  1. Chame `pumpGuestXenosRingBuffer()` e dispare o tick de VBlank / Graphics Interrupt Callback se registrado (`g_vd_graphics_interrupt_callback`), garantindo que fences pendentes e notificações gráficas rodem.
-  2. Chame `std::this_thread::yield()` (ou `usleep(100)`) a cada `8192` chamadas repetidas de `0x82C3C4D8` para não sufocar as outras threads guest (RenderThread / AsyncIO / Audio / Worker threads) nos núcleos do iPhone.
+#### TAREFA 1: REVERTER A CORRUPÇÃO GLOBAL DE INSTRUÇÕES DO `XenonRecomp` (Restaurar os 48 Draws e Desbloquear `0x822000E0` na Thread 1)
+1. Em `tools/generate_aot.py`:
+   - **DESATIVE / REMOVA** completamente as chamadas para `normalize_32bit_writes`, `normalize_rlw_instructions` e `normalize_32bit_arithmetic` em `process_tree()`!
+   - `tools/generate_aot.py` deve fazer **APENAS** `replace_function(text, "__imp__sub_82C3C4D8", replacement_82c3c4d8())` (e instrumentações cirúrgicas de funções específicas se necessário), **NUNCA** alterar globalmente `.u32` ou `.s64` nas 115.623 funções geradas pelo `XenonRecomp`!
+2. Em `.github/workflows/xowue-ios.yml`:
+   - Verifique o step que aplica patch em `$RUNNER_TEMP/XenonRecomp/XenonRecomp/recompiler.cpp`. Certifique-se de que ele **NÃO** altera `li`, `lis`, `addi`, `addis`, `rlwinm`, `rlwimi` do `XenonRecomp`, mantendo apenas a substituição de `__rdtsc()` por `xowue_guest_timebase()` no `mftb` (exatamente como nas Builds 61/62 onde a Thread 1 renderizava os 48 draws sem travar em `0x822000E0`).
 
-### PASSO 5: Gravar Arquivo Dedicado Compacto `resumo-b62.txt` (< 4 KB) e Atualizar Build = 62
-- Além do `diagnostico-build-62.txt` normal, crie/atualize no diretório `Documents` (no mesmo local onde o diagnóstico é salvo) um arquivo compacto `resumo-b62.txt` limitado a **no máximo 4 KB**, contendo APENAS:
-  1. As linhas `CODE_AUDIT` de `0x82C3C4D8` e de seus callers;
-  2. Os últimos 4 `AOT_PROGRESS` (com `hot0..hot7`);
-  3. O `HOT_FN_CODE` das top 6 funções quentes e o `THREAD_DUMP` de todas as threads;
-  4. As últimas 15 linhas de eventos Xenos/PM4/Swap/Wait.
-- Atualize o número da build para **62** em todos os pontos relevantes.
-- Na sua resposta final, inclua o relatório do que encontrou no `grep -rn "82C3C4D8" generated/` (quais funções chamam `0x82C3C4D8` e qual era o bug nelas).
-- Faça commit e push na branch `XOWUE`.
+#### TAREFA 2: AUDITORIA DE CÓDIGO E PROTEÇÃO DE LOOP PARA `0x822000E0` (Thread 1) E `0x82DC1FA0` / `0x82DC2390` / `0x82DC2A50` (Thread 4)
+1. **Dump de Bytes Brutos no Boot (`Runtime/XOWUEEngine.cpp`):**
+   Assim que a imagem `.text` estiver carregada no boot, emita no log (com prefixo `CODE_AUDIT_B65`, persistido sem filtro em `shouldPersistRuntimeTrace`) as instruções PowerPC (endereço + word hex de 32 bits) dos seguintes intervalos:
+   - `0x822000E0` até `0x822001A0` (a função onde a Thread 1 travou com `r3=0x837E8640, r4=0x00000400`) e o caller `0x82C30CA0` até `0x82C30CF0` (`lr=0x82C30CC8`).
+   - `0x82DC1FA0` até `0x82DC2060` (a função que chama `0x82DC2390` em `0x82DC2010` com `lr=0x82DC2014` em loop infinito).
+   - `0x82DC2390` até `0x82DC23F0` (a função chamada 497.081 vezes que faz `bctrl` em `0x82DC23A8`).
+   - `0x82DC2A50` até `0x82DC2C10` (as funções que fazem `bctrl` em `0x82DC2B10` e `0x82DC2BEC` com `CTR=0x00000000`).
+2. **Resolver o Loop Infinito `0x82DC1FA0` <-> `0x82DC2390` na Thread 4:**
+   - Em `0x82DC2390` (`__imp__sub_82DC2390`), quando o `bctrl` em `0x82DC23A8` tem `CTR=0x00000000` (ou `r3=0x00000000`), `xowue_lookup_indirect` retorna um stub no-op e `ctx.r3` permanece `0`, fazendo o caller `0x82DC1FA0` (`lr=0x82DC2014`) repetir a chamada infinitamente!
+   - Adicione um hook/instrumentação em `__imp__sub_82DC2390` (via `tools/generate_aot.py` ou `xowue_lookup_indirect` quando `LR == 0x82DC23AC` / entrada de `0x82DC2390`):
+     - Nas primeiras 8 chamadas de `0x82DC2390`, logue `XOWUE_82DC2390_STATE` com `r3..r12`, `r28..r31`, `lr`, e os 64 bytes da pilha do caller (`sp`..`sp+0x80`) e da memória caso `r30`/`r31` apontem para a RAM guest (`0x40000000..0x90000000`).
+     - Se `0x82DC2390` for chamada repetidamente pela mesma thread (`lr == 0x82DC2014`) e `r3 == 0` (ou após 16 chamadas consecutivas sem progresso), teste retornar `ctx.r3.u64 = 1ull;` (e se continuar chamando após 32 vezes, `ctx.r3.u64 = 0x80004005ull;` / alterar `cr0`), OU inspecione no próprio script Python durante a build o código C++ gerado pelo `XenonRecomp` para `__imp__sub_82DC1FA0` e `__imp__sub_82DC2390`!
+   - **IMPORTANTE:** No step do workflow `.github/workflows/xowue-ios.yml` (ou em `tools/generate_aot.py`), depois que o `XenonRecomp` gerar os arquivos `ppc_recomp.*.cpp`, faça `tools/generate_aot.py` localizar o corpo C++ gerado para `__imp__sub_82DC1FA0`, `__imp__sub_82DC2390`, `__imp__sub_82DC2A50`, `__imp__sub_82DC2B74` e `__imp__sub_822000E0`:
+     - Imprima o código C++ dessas 5 funções no log do GitHub Actions durante a build para auditoria!
+     - Analise a condição do loop em `__imp__sub_82DC1FA0` logo após `sub_82DC2390(ctx, base);` (endereço `0x82DC2014`): veja exatamente qual registrador (`ctx.r3`? um campo de memória em `ctx.r31`?) faz o loop em `0x82DC1FA0` terminar quando `CTR == 0` em `0x82DC2390`, e garanta que `__imp__sub_82DC2390` defina esse valor de saída caso o ponteiro de função interna seja `0` (`NULL`), impedindo que a Thread 4 fique presa em loop infinito!
+
+#### TAREFA 3: ATUALIZAR TESTES, BUILD 65, COMMIT E PUSH
+- Atualize `tools/generate_aot.py --self-test` e `tools/test_xowue_aot_instrumentation.py` para refletir a remoção de `normalize_32bit_*` e a adição da proteção de `0x82DC2390` / `CODE_AUDIT_B65`.
+- Incremente a versão para **Build 65** (`CURRENT_PROJECT_VERSION: 65` / `CFBundleVersion: 65`).
+- Faça commit e push para a branch `XOWUE`.
