@@ -61,6 +61,7 @@ extern "C" void xowue_vulkan_backend_guest_frame_reset(void) __attribute__((weak
 // GPU completion callbacks before a later 0x0BADF00D poison write overwrites it.
 std::atomic<uint32_t> g_lastValidScratchReg4Callback{0u};
 std::atomic<bool> g_scratchReg4CallbackPending{false};
+std::atomic<bool> g_scratchReg4CaptureLogged{false};
 void xowue_note_scratch_reg4_write(uint32_t address, uint32_t value) {
     const bool scratchAddress = address == 0x10311010u || address == 0x7FC81710u ||
         address == 0x90311010u || address == 0xB0311010u || address == 0x000005C4u;
@@ -341,7 +342,6 @@ std::filesystem::path g_guestGameRoot;
 std::filesystem::path g_guestSaveRoot;
 std::mutex g_guestPathIndexMutex;
 std::unordered_map<std::string, std::filesystem::path> g_guestPathIndex;
-std::atomic<bool> g_scratchReg4CaptureLogged{false};
 static void rebuildGuestPathIndex();
 thread_local uint32_t g_guestIrql = 0u;
 std::mutex g_guestThreadMutex;
