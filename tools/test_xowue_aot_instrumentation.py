@@ -168,9 +168,9 @@ print("PASS: Build 62 hot-function/thread dumps and compact diagnostic are prese
 aot=(root/"tools"/"generate_aot.py").read_text(encoding="utf-8")
 for forbidden in ("def normalize_32bit_writes","def normalize_rlw_instructions","def normalize_32bit_arithmetic"):
     if forbidden in aot: raise SystemExit(f"Build 65 forbids global AOT rewrite: {forbidden}")
-for required in ("xowue_82dc2390_guard(ctx, base)","CODE_AUDIT_B65_CPP_BEGIN","sub_822000E0","sub_82DC1FA0","sub_82DC2390","sub_82DC2A50","sub_82DC2B74"):
+for required in ("CODE_AUDIT_B65_CPP_BEGIN","sub_822000E0","sub_82DC1FA0","sub_82DC2390","sub_82DC2A50","sub_82DC2B74"):
     if required not in aot: raise SystemExit(f"Build 65 AOT audit missing {required}")
-for required in ("CODE_AUDIT_B65","XOWUE_82DC2390_STATE","XOWUE_82DC2390_GUARD","emitBuild65CodeAudit","0x82DC2014u","0x80004005ull"):
+for required in ("CODE_AUDIT_B65","XOWUE_82DC2390_STATE","XOWUE_82DC2390_GUARD","emitBuild65CodeAudit","target == 0x82DC2390u","0x82DC2014u","0x80004005ull"):
     if required not in runtime: raise SystemExit(f"Build 65 runtime guard/audit missing {required}")
 assert "PPC_INST_MFTB" in workflow and "xowue_guest_timebase();" in workflow
 for forbidden in ("RLWIMI record-form CR0","RLDIMI record-form CR0","PPC_INST_RLDICL","PPC_INST_RLDICR"):

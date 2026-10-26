@@ -2106,6 +2106,8 @@ PPCFunc *xowue_lookup_indirect(PPCContext &context, uint8_t *base, uint32_t targ
 }
 
 void xowue_dispatch_indirect(PPCContext &context, uint8_t *base, uint32_t target) {
+    // Build 65: targeted recovery for the observed null callback loop at 0x82DC2390.
+    if (target == 0x82DC2390u && xowue_82dc2390_guard(context, base)) return;
     if (g_currentGuestThread) {
         g_currentGuestThread->lastDispatchTarget.store(target, std::memory_order_relaxed);
         g_currentGuestThread->lastR3.store(context.r3.u32, std::memory_order_relaxed);
