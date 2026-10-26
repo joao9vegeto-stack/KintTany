@@ -90,7 +90,8 @@ enum XOWUEDiagnostics {
             else { break }
         }
         let summary = assembled().joined(separator: "\n") + "\n"
-        let summaryURL = diagnosticURL.deletingLastPathComponent().appendingPathComponent("resumo-b63.txt")
+        let summaryFilename = "resumo-b\(buildNumber).txt"
+        let summaryURL = diagnosticURL.deletingLastPathComponent().appendingPathComponent(summaryFilename)
         try? summary.write(to: summaryURL, atomically: true, encoding: .utf8)
     }
 

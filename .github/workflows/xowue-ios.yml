@@ -230,6 +230,8 @@ jobs:
           clang++ -std=c++23 -Wall -Wextra -Werror -pedantic Runtime/PathContainmentSmoke.cpp -o "$RUNNER_TEMP/xowue-path-containment-smoke"
           "$RUNNER_TEMP/xowue-path-containment-smoke"
           python3 tools/test_xowue_aot_instrumentation.py
+          python3 -m py_compile tools/generate_aot.py
+          python3 tools/generate_aot.py --self-test
 
       - name: Validate ported Xenos shader translator on macOS
         run: |
@@ -275,14 +277,15 @@ jobs:
           # context header beside those sources so the build cannot silently
           # pick an older archived copy.
           AOT_PPC_CONTEXT="$GITHUB_WORKSPACE/generated/ppc/ppc_context.h"
+          python3 "$GITHUB_WORKSPACE/tools/generate_aot.py" --ppc-dir "$GITHUB_WORKSPACE/generated/ppc"
           cp "$PPC_CONTEXT" "$AOT_PPC_CONTEXT"
           cmp -s "$PPC_CONTEXT" "$AOT_PPC_CONTEXT"
           grep -Fq '#define PPC_CALL_INDIRECT_FUNC(x) xowue_dispatch_indirect(ctx, base, uint32_t(x))' "$AOT_PPC_CONTEXT"
           grep -Fq '#define PPC_LOOKUP_FUNC(x, y) xowue_lookup_indirect(ctx, x, uint32_t(y))' "$AOT_PPC_CONTEXT"
           grep -Fq 'xowue_note_scratch_reg4_write(xowue_store_address_, xowue_store_value_);' "$AOT_PPC_CONTEXT"
 
-          # Build 63: fix the actual pinned XenonRecomp generator and the archived
-          # QPC helper before any native AOT translation unit is compiled.
+          # Build 64: apply the archived AOT semantic patch after the pinned
+          # XenonRecomp generator changes and before compiling native translation units.
           python3 - <<'PY'
           from pathlib import Path
           import os
@@ -316,47 +319,17 @@ jobs:
           recomp.write_text(text)
           context = root / "XenonUtils" / "ppc_context.h"
           h = context.read_text()
-          if "uint64_t xowue_guest_timebase(void);" not in h:
-              h = once(h, "typedef void PPCFunc(struct PPCContext& __restrict__ ctx, uint8_t* base);",
-                       "extern \"C\" uint64_t xowue_guest_timebase(void);\n\ntypedef void PPCFunc(struct PPCContext& __restrict__ ctx, uint8_t* base);",
-                       "guest timebase declaration")
-              context.write_text(h)
-          aot = Path("generated/ppc")
-          marker = "PPC_FUNC_IMPL(__imp__sub_82C3C4D8) {"
-          replacement = ("PPC_FUNC_IMPL(__imp__sub_82C3C4D8) {\n"
-              "    const uint64_t tb64 = xowue_guest_timebase();\n"
-              "    const uint64_t safeTb = (static_cast<uint32_t>(tb64) == 0u) ? (tb64 | 1ull) : tb64;\n"
-              "    ctx.r11.u64 = safeTb;\n"
-              "    ctx.r10.u32 = static_cast<uint32_t>(safeTb);\n"
-              "    ctx.r3.u64 = safeTb;\n"
-              "    ctx.cr0.compare<int32_t>(ctx.r10.s32, 0, ctx.xer);\n"
-              "    return;\n}")
-          matches = []
-          for path in sorted(aot.glob("ppc_recomp.*.cpp")):
-              source = path.read_text()
-              if marker not in source:
-                  continue
-              start = source.index(marker)
-              brace = source.index("{", start)
-              depth = 0
-              end = None
-              for i in range(brace, len(source)):
-                  if source[i] == "{": depth += 1
-                  elif source[i] == "}":
-                      depth -= 1
-                      if depth == 0:
-                          end = i + 1
-                          break
-              if end is None: raise SystemExit("unterminated 0x82C3C4D8 function")
-              path.write_text(source[:start] + replacement + source[end:])
-              matches.append(path.name)
-          if len(matches) != 1:
-              raise SystemExit("expected one generated QPC helper, found " + repr(matches))
-          print("XOWUE_B63_TIMEBASE_OVERRIDE " + matches[0])
+          if "uint64_t xowue_guest_timebase(void);" not in h or "uint64_t xowue_qpc_write(uint32_t, uint64_t, uint32_t);" not in h:
+              marker = "typedef void PPCFunc(struct PPCContext& __restrict__ ctx, uint8_t* base);"
+              decls = ("extern \"C\" uint64_t xowue_guest_timebase(void);\n"
+                       "extern \"C\" uint64_t xowue_qpc_write(uint32_t, uint64_t, uint32_t);\n\n" + marker)
+              h = once(h, marker, decls, "guest timebase/QPC declarations")
+          context.write_text(h)
           PY
           cp "$PPC_CONTEXT" "$AOT_PPC_CONTEXT"
           grep -Fq 'xowue_guest_timebase();' "$RUNNER_TEMP/XenonRecomp/XenonRecomp/recompiler.cpp"
-          grep -Fq 'ctx.r3.u64 = safeTb;' "$GITHUB_WORKSPACE/generated/ppc"/ppc_recomp.*.cpp
+          grep -Fq 'xowue_qpc_write(outPtr, xowue_guest_timebase(), static_cast<uint32_t>(ctx.lr))' "$GITHUB_WORKSPACE/generated/ppc"/ppc_recomp.*.cpp
+          grep -Fq 'ctx.r3.u64 = 1ull;' "$GITHUB_WORKSPACE/generated/ppc"/ppc_recomp.*.cpp
 
           INDIRECT_CALL_SOURCES=$(grep -lF -e 'PPC_CALL_INDIRECT_FUNC(' -e 'PPC_LOOKUP_FUNC(' "$GITHUB_WORKSPACE"/generated/ppc/ppc_recomp.*.cpp || true)
           if [[ -z "$INDIRECT_CALL_SOURCES" ]]; then

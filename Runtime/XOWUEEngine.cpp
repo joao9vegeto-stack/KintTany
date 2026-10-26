@@ -394,6 +394,13 @@ std::atomic<uint32_t> g_lastAotGuestFunction{0u};
 std::atomic<uint32_t> g_lastAotGuestThread{0u};
 
 bool shouldPersistRuntimeTrace(const std::string &event, size_t sequence) {
+    // Build 64 must persist diagnostics that identify stalls and QPC output writes.
+    for (const char *required : {"AOT_PROGRESS", "THREAD_DUMP", "XOWUE_AOT_HOTSPOT",
+                                 "XOWUE_AOT_HOTSPOT_STATE", "XOWUE_QPC_WRITE",
+                                 "XOWUE_STALL_THREADS", "CODE_AUDIT_QPC_CALLERS",
+                                 "XOWUE_QPC_CALLER_DUMP"}) {
+        if (event.find(required) != std::string::npos) return true;
+    }
     if (sequence < 96u) return true;
     if (sequence < 32768u && sequence % 64u == 0u) return true;
 
@@ -769,6 +776,48 @@ void recordAotFunctionExecution(uint32_t guestAddress) {
                 recordRuntimeTrace(threadLine);
             }
         }
+    }
+}
+
+static void logAotHotspotThreadDump(uint32_t guestAddress, uint64_t calls) {
+    GuestThread *current = g_currentGuestThread;
+    uint32_t recent[8]{};
+    uint32_t previous = 0u, callerLr = 0u;
+    if (current) {
+        previous = current->lastCallerFn.load(std::memory_order_relaxed);
+        callerLr = current->lastGuestLr.load(std::memory_order_relaxed);
+        const uint32_t end = current->recentAotIdx.load(std::memory_order_relaxed);
+        for (uint32_t i = 0u; i < 8u; ++i)
+            recent[i] = current->recentAotFns[(end - 1u - i) & 15u].load(std::memory_order_relaxed);
+    }
+    char state[768];
+    std::snprintf(state, sizeof(state),
+        "XOWUE_AOT_HOTSPOT_STATE guest=0x%08X calls=%llu thread=%u caller_lr=0x%08X prev_fn=0x%08X recentAotFns[0]=0x%08X recentAotFns[1]=0x%08X recentAotFns[2]=0x%08X recentAotFns[3]=0x%08X recentAotFns[4]=0x%08X recentAotFns[5]=0x%08X recentAotFns[6]=0x%08X recentAotFns[7]=0x%08X",
+        guestAddress, static_cast<unsigned long long>(calls), current ? current->id : 0u,
+        callerLr, previous, recent[0], recent[1], recent[2], recent[3], recent[4], recent[5], recent[6], recent[7]);
+    recordRuntimeTrace(state);
+    std::vector<std::shared_ptr<GuestThread>> snapshot;
+    { std::lock_guard<std::mutex> lock(g_guestThreadMutex); snapshot = g_guestThreads; }
+    for (const auto &thread : snapshot) {
+        if (!thread) continue;
+        char recentText[192]{};
+        size_t used = 0u;
+        const uint32_t end = thread->recentAotIdx.load(std::memory_order_relaxed);
+        for (uint32_t i = 0u; i < 8u; ++i) {
+            const uint32_t fn = thread->recentAotFns[(end - 1u - i) & 15u].load(std::memory_order_relaxed);
+            const int n = std::snprintf(recentText + used, sizeof(recentText) - used,
+                                        "%s0x%08X", i ? "," : "", fn);
+            if (n < 0 || static_cast<size_t>(n) >= sizeof(recentText) - used) break;
+            used += static_cast<size_t>(n);
+        }
+        char line[640];
+        std::snprintf(line, sizeof(line),
+            "THREAD_DUMP id=%u entry=0x%08X exited=%d waiting=%d wait_target=0x%08X last_fn=0x%08X prev_fn=0x%08X lr=0x%08X recent=[%s] r3=0x%08X r4=0x%08X r11=0x%08X r30=0x%08X r31=0x%08X",
+            thread->id, thread->startAddress, thread->exited.load(), thread->waitingInKernel.load(),
+            thread->waitTarget.load(), thread->lastGuestPc.load(), thread->lastCallerFn.load(),
+            thread->lastGuestLr.load(), recentText, thread->lastR3.load(), thread->lastR4.load(),
+            thread->lastR11.load(), thread->lastR30.load(), thread->lastR31.load());
+        recordRuntimeTrace(line);
     }
 }
 
@@ -1910,6 +1959,10 @@ void xowue_thread_checkpoint(uint32_t guestAddress) {
                 guestAddress, static_cast<unsigned long long>(loopEntries),
                 g_currentGuestThread ? g_currentGuestThread->id : 0u);
             recordRuntimeTrace(event);
+            if (guestAddress == 0x82C3C4D8u &&
+                (loopEntries == 500000u || loopEntries == 1000000u)) {
+                logAotHotspotThreadDump(guestAddress, loopEntries);
+            }
         }
     }
     xowue_thread_checkpoint();
@@ -2353,31 +2406,57 @@ extern "C" int xowue_boot_xex(const char *path, char *output, size_t output_capa
             std::fprintf(stderr, "%s\n", audit);
             recordRuntimeTrace(audit);
         }
-        // Build 63: enumerate actual branch-and-link callers of QueryPerformanceCounter.
+        // Build 64: find both b and bl references to the real QPC function.
         uint32_t qpcCallers = 0u;
         constexpr uint32_t qpcTextStart = 0x82000000u;
         constexpr uint32_t qpcTextEnd = 0x836DF000u;
         for (uint32_t pc = qpcTextStart; pc < qpcTextEnd; pc += 4u) {
             if (!validGuestRange(pc, 4u)) continue;
             const uint32_t word = loadGuestBe32(memory->base, pc);
-            if ((word & 0xFC000003u) != 0x48000001u) continue;
+            if ((word & 0xFC000000u) != 0x48000000u) continue;
             int32_t displacement = static_cast<int32_t>(word & 0x03FFFFFCu);
             if ((displacement & 0x02000000) != 0) displacement |= static_cast<int32_t>(0xFC000000u);
             const uint32_t target = (word & 2u) != 0u
                 ? static_cast<uint32_t>(displacement)
                 : static_cast<uint32_t>(pc + static_cast<uint32_t>(displacement));
-            if (target != 0x82C3C4A0u) continue;
-            char callerLine[128];
+            if (target != 0x82C3C4D8u) continue;
+            const char *form = (word & 1u) ? "BL" : "B";
+            char callerLine[160];
             std::snprintf(callerLine, sizeof(callerLine),
-                "CODE_AUDIT_QPC_CALLERS pc=0x%08X insn=0x%08X target=0x%08X", pc, word, target);
-            std::fprintf(stderr, "%s\\n", callerLine);
+                "CODE_AUDIT_QPC_CALLERS form=%s pc=0x%08X insn=0x%08X target=0x%08X",
+                form, pc, word, target);
+            std::fprintf(stderr, "%s\n", callerLine);
             recordRuntimeTrace(callerLine);
+            uint32_t functionStart = pc;
+            const uint32_t lowerBound = pc > 0x200u ? pc - 0x200u : qpcTextStart;
+            for (uint32_t scan = pc; scan >= lowerBound + 4u; ) {
+                scan -= 4u;
+                const uint32_t candidate = loadGuestBe32(memory->base, scan);
+                if (candidate == 0x7D8802A6u || candidate == 0x7C0802A6u ||
+                    (candidate & 0xFFFF0000u) == 0x94210000u) {
+                    functionStart = scan;
+                    break;
+                }
+                if (scan < 4u) break;
+            }
+            char dump[512];
+            int used = std::snprintf(dump, sizeof(dump),
+                "XOWUE_QPC_CALLER_DUMP function=0x%08X callsite=0x%08X words=", functionStart, pc);
+            for (uint32_t i = 0u; i < 16u && used > 0 && static_cast<size_t>(used) < sizeof(dump); ++i) {
+                const uint32_t at = functionStart + i * 4u;
+                const uint32_t insn = validGuestRange(at, 4u) ? loadGuestBe32(memory->base, at) : 0u;
+                used += std::snprintf(dump + used, sizeof(dump) - static_cast<size_t>(used),
+                                       "%s%08X", i ? " " : "", insn);
+            }
+            std::fprintf(stderr, "%s\n", dump);
+            recordRuntimeTrace(dump);
             ++qpcCallers;
         }
-        char qpcSummary[96];
+        char qpcSummary[112];
         std::snprintf(qpcSummary, sizeof(qpcSummary),
-            "CODE_AUDIT_QPC_CALLERS count=%u text=0x%08X-0x%08X", qpcCallers, qpcTextStart, qpcTextEnd);
-        std::fprintf(stderr, "%s\\n", qpcSummary);
+            "CODE_AUDIT_QPC_CALLERS count=%u target=0x82C3C4D8 text=0x%08X-0x%08X",
+            qpcCallers, qpcTextStart, qpcTextEnd);
+        std::fprintf(stderr, "%s\n", qpcSummary);
         recordRuntimeTrace(qpcSummary);
         g_activeExecutionInfoAddress = allocateGuestPhysicalRange(memory->base, 0x20u, 0x1000u, 0x04u);
         if (g_activeExecutionInfoAddress != 0u) {
@@ -6622,6 +6701,53 @@ extern "C" uint64_t xowue_guest_timebase(void) {
            ((static_cast<uint64_t>(ns) % 1000u) * 50u) / 1000u;
 #endif
 }
+
+extern "C" uint64_t xowue_qpc_write(uint32_t outPtr, uint64_t tb64, uint32_t callerLR) {
+    if (static_cast<uint32_t>(tb64) == 0u) tb64 |= 1ull;
+    static std::atomic<uint64_t> qpcCalls{0u};
+    const uint64_t call = qpcCalls.fetch_add(1u, std::memory_order_relaxed) + 1u;
+    const uint32_t threadId = g_currentGuestThread ? g_currentGuestThread->id : g_currentGuestThreadId;
+    const auto memory = g_activeGuestMemory.lock();
+    const bool valid = outPtr != 0u && memory && memory->base && validGuestRange(outPtr, 8u);
+    if (valid) {
+        // PPC guest memory is big-endian: store high word first, then low word.
+        storeGuestBe32(memory->base, outPtr, static_cast<uint32_t>(tb64 >> 32u));
+        storeGuestBe32(memory->base, outPtr + 4u, static_cast<uint32_t>(tb64));
+    }
+    if (call <= 8u || !valid) {
+        char event[256];
+        std::snprintf(event, sizeof(event),
+            "XOWUE_QPC_WRITE call=%llu thread=%u out_ptr=0x%08X tb64=0x%016llX caller_lr=0x%08X out_ptr_valid=%u write=%u",
+            static_cast<unsigned long long>(call), threadId, outPtr,
+            static_cast<unsigned long long>(tb64), callerLR, valid ? 1u : 0u, valid ? 1u : 0u);
+        std::fprintf(stderr, "%s\n", event);
+        recordRuntimeTrace(event);
+    }
+    return tb64;
+}
+
+extern "C" void xowue_log_stall_threads(void) {
+    std::vector<std::shared_ptr<GuestThread>> snapshot;
+    { std::lock_guard<std::mutex> lock(g_guestThreadMutex); snapshot = g_guestThreads; }
+    char line[2048];
+    size_t used = static_cast<size_t>(std::snprintf(line, sizeof(line),
+        "XOWUE_STALL_THREADS count=%zu", snapshot.size()));
+    for (const auto &thread : snapshot) {
+        if (!thread || used >= sizeof(line)) continue;
+        const int n = std::snprintf(line + used, sizeof(line) - used,
+            " t%u=0x%08X lr=0x%08X wait=%u/0x%08X exited=%u",
+            thread->id, thread->lastGuestPc.load(std::memory_order_relaxed),
+            thread->lastGuestLr.load(std::memory_order_relaxed),
+            thread->waitingInKernel.load(std::memory_order_relaxed) ? 1u : 0u,
+            thread->waitTarget.load(std::memory_order_relaxed),
+            thread->exited.load(std::memory_order_relaxed) ? 1u : 0u);
+        if (n < 0 || static_cast<size_t>(n) >= sizeof(line) - used) break;
+        used += static_cast<size_t>(n);
+    }
+    std::fprintf(stderr, "%s\n", line);
+    recordRuntimeTrace(line);
+}
+
 
 void xowue_KeQueryPerformanceFrequency(PPCContext &context) {
     context.r3.u32 = kXbox360PerformanceFrequency;

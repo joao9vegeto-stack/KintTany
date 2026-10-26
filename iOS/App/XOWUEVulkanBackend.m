@@ -21,6 +21,7 @@ static void KKLog(NSString *format, ...);
 #include "Graphics/Xenos/XOWUEGuestDraw.h"
 extern bool xowue_xenos_commit_resolved_rgba(uint32_t dest,uint32_t pitch,
     uint32_t height,uint32_t info,const uint8_t* rgba,size_t bytes);
+extern void xowue_log_stall_threads(void);
 
 static _Atomic(uint32_t) g_xowue_guest_swap_count = 0;
 static _Atomic(uint32_t) g_xowue_guest_width = 0;
@@ -1608,6 +1609,7 @@ KKRenderFrame(KKVulkanState *state, CAMetalLayer *layer)
       KKLog(@"XOWUE_REAL_FPS guest=%.2f present=%.2f fresh_guest_frames=%llu metal_presents=%llu interval=%.3f",
             gameFPS, hostFPS, (unsigned long long)guestDelta,
             (unsigned long long)hostDelta, elapsed);
+      xowue_log_stall_threads();
       _lastGameFrames = guestNow;
       _lastHostFrames = hostNow;
       _lastFPSMeasurement = now;
