@@ -1,0 +1,1094 @@
+2026-10-26T01:29:29Z APP_LAUNCH build=55 title_id=41560816 documents=/var/mobile/Containers/Data/Application/372BCA06-CD6C-45B8-A9D0-F5CDE2465585/Documents/Data/Application/CE896602-7C83-4940-91AE-E0767DFF45BE/Documents
+2026-10-26T01:29:29Z APP_ENV device=iPhone os=26.5.1 bundle=com.joaopedro.xowue arch=arm64
+2026-10-26T01:29:29Z scan.start roots=Documents,Documents/Jogos
+2026-10-26T01:29:29Z orientation.host dismiss requested; no modal attached to anchor/root
+2026-10-26T01:29:29Z orientation.host dismiss requested; no modal attached to anchor/root
+2026-10-26T01:29:29Z scan.start roots=Documents,Documents/Jogos
+2026-10-26T01:29:29Z orientation.host dismiss requested; no modal attached to anchor/root
+2026-10-26T01:29:29Z scan.complete count=1 paths=/private/var/mobile/Containers/Data/Application/372BCA06-CD6C-45B8-A9D0-F5CDE2465585/Documents/Data/Application/CE896602-7C83-4940-91AE-E0767DFF45BE/Documents/Jogos/X-MEN ORIGINS WOLVERINE PT BR
+2026-10-26T01:29:29Z game.selected path=/private/var/mobile/Containers/Data/Application/372BCA06-CD6C-45B8-A9D0-F5CDE2465585/Documents/Data/Application/CE896602-7C83-4940-91AE-E0767DFF45BE/Documents/Jogos/X-MEN ORIGINS WOLVERINE PT BR
+2026-10-26T01:29:29Z orientation.host dismiss requested; no modal attached to anchor/root
+2026-10-26T01:29:29Z scan.complete count=1 paths=/private/var/mobile/Containers/Data/Application/372BCA06-CD6C-45B8-A9D0-F5CDE2465585/Documents/Data/Application/CE896602-7C83-4940-91AE-E0767DFF45BE/Documents/Jogos/X-MEN ORIGINS WOLVERINE PT BR
+2026-10-26T01:29:29Z game.selected path=/private/var/mobile/Containers/Data/Application/372BCA06-CD6C-45B8-A9D0-F5CDE2465585/Documents/Data/Application/CE896602-7C83-4940-91AE-E0767DFF45BE/Documents/Jogos/X-MEN ORIGINS WOLVERINE PT BR
+2026-10-26T01:29:29Z orientation.host dismiss requested; no modal attached to anchor/root
+2026-10-26T01:29:31Z BOOT_STARTED build=55 title_id=41560816 xex=/private/var/mobile/Containers/Data/Application/372BCA06-CD6C-45B8-A9D0-F5CDE2465585/Documents/Data/Application/CE896602-7C83-4940-91AE-E0767DFF45BE/Documents/Jogos/X-MEN ORIGINS WOLVERINE PT BR/default.xex
+2026-10-26T01:29:31Z xex.inspect.start path=/private/var/mobile/Containers/Data/Application/372BCA06-CD6C-45B8-A9D0-F5CDE2465585/Documents/Data/Application/CE896602-7C83-4940-91AE-E0767DFF45BE/Documents/Jogos/X-MEN ORIGINS WOLVERINE PT BR/default.xex
+2026-10-26T01:29:31Z orientation.host presenting supported=8
+2026-10-26T01:29:31Z xex.inspect.ok XEX2 validado
+Base: 0x82000000
+Entry point: 0x82C3CAA8
+Imagem: 23986176 bytes
+Seções: 12
+Imports resolvidos: 261
+2026-10-26T01:29:31Z runtime.trace_file open_status=0
+RUNTIME seq=0 thread=1 Xbox filesystem roots game=/private/var/mobile/Containers/Data/Application/372BCA06-CD6C-45B8-A9D0-F5CDE2465585/Documents/Data/Application/CE896602-7C83-4940-91AE-E0767DFF45BE/Documents/Jogos/X-MEN ORIGINS WOLVERINE PT BR saves=/private/var/mobile/Containers/Data/Application/372BCA06-CD6C-45B8-A9D0-F5CDE2465585/Documents/Data/Application/CE896602-7C83-4940-91AE-E0767DFF45BE/Documents/XOWUE-Saves
+RUNTIME seq=1 thread=1 XOWUE_ASSET_PREFLIGHT guest=D:\WGame\Movies\ravenlogo.xxx mapped=1 present=0 host=/private/var/mobile/Containers/Data/Application/372BCA06-CD6C-45B8-A9D0-F5CDE2465585/Documents/Data/Application/CE896602-7C83-4940-91AE-E0767DFF45BE/Documents/Jogos/X-MEN ORIGINS WOLVERINE PT BR/WGame/Movies/ravenlogo.xxx
+RUNTIME seq=2 thread=1 XOWUE_ASSET_PREFLIGHT guest=D:\WGame\Movies\blank.bik mapped=1 present=0 host=/private/var/mobile/Containers/Data/Application/372BCA06-CD6C-45B8-A9D0-F5CDE2465585/Documents/Data/Application/CE896602-7C83-4940-91AE-E0767DFF45BE/Documents/Jogos/X-MEN ORIGINS WOLVERINE PT BR/WGame/Movies/blank.bik
+RUNTIME seq=3 thread=1 XOWUE_ASSET_PREFLIGHT guest=D:\WGame\Movies\UE3_logo.xxx mapped=1 present=0 host=/private/var/mobile/Containers/Data/Application/372BCA06-CD6C-45B8-A9D0-F5CDE2465585/Documents/Data/Application/CE896602-7C83-4940-91AE-E0767DFF45BE/Documents/Jogos/X-MEN ORIGINS WOLVERINE PT BR/WGame/Movies/UE3_logo.xxx
+RUNTIME seq=4 thread=1 XOWUE_ASSET_PREFLIGHT guest=D:\WGame\Movies\FOX_LOGO.xxx mapped=1 present=0 host=/private/var/mobile/Containers/Data/Application/372BCA06-CD6C-45B8-A9D0-F5CDE2465585/Documents/Data/Application/CE896602-7C83-4940-91AE-E0767DFF45BE/Documents/Jogos/X-MEN ORIGINS WOLVERINE PT BR/WGame/Movies/FOX_LOGO.xxx
+RUNTIME seq=5 thread=1 XOWUE_ASSET_PREFLIGHT guest=D:\WGame\Movies\MARVEL_INTRO.xxx mapped=1 present=0 host=/private/var/mobile/Containers/Data/Application/372BCA06-CD6C-45B8-A9D0-F5CDE2465585/Documents/Data/Application/CE896602-7C83-4940-91AE-E0767DFF45BE/Documents/Jogos/X-MEN ORIGINS WOLVERINE PT BR/WGame/Movies/MARVEL_INTRO.xxx
+RUNTIME seq=6 thread=1 XOWUE_ASSET_PREFLIGHT guest=D:\WGame\Movies\ATVI_logo.xxx mapped=1 present=0 host=/private/var/mobile/Containers/Data/Application/372BCA06-CD6C-45B8-A9D0-F5CDE2465585/Documents/Data/Application/CE896602-7C83-4940-91AE-E0767DFF45BE/Documents/Jogos/X-MEN ORIGINS WOLVERINE PT BR/WGame/Movies/ATVI_logo.xxx
+RUNTIME seq=7 thread=1 XEX2 carregado base=0x82000000 entry=0x82C3CAA8 sections=12
+RUNTIME seq=8 thread=1 XENOS_GRAPHICS_MEMORY_RETAINED after AOT lifetime; pending GPU reads remain valid
+RUNTIME seq=9 thread=1 Guest memory mapeada; AOT dispatch entries=115623
+RUNTIME seq=10 thread=1 XEX TLS slots=64 staticData=0 rawData=0 block=4096
+RUNTIME seq=11 thread=1 Main PPC thread initialized id=1 object=0x7CFFF000 KPCR=0x7BFFF000
+RUNTIME seq=12 thread=1 Chamando PPC entry point 0x82C3CAA8
+RUNTIME seq=13 thread=1 AOT execution milestone calls=1 distinctGuestFunctions=1 lastGuest=0x82C44EE0 thread=1
+RUNTIME seq=14 thread=1 NtAllocate basePtr=0x7FFEFC50 sizePtr=0x7FFEFD34 requested=0x40000000 size=0x00100000 flags=0x60002000 protect=0x00000004 debug=0x00000000 status=0x00000000 next_virtual=0x40100000 next_physical=0x10001000
+RUNTIME seq=15 thread=1 NtAllocate basePtr=0x7FFEFC54 sizePtr=0x7FFEFD3C requested=0x40000000 size=0x00010000 flags=0x60001000 protect=0x00000004 debug=0x00000000 status=0x00000000 next_virtual=0x40100000 next_physical=0x10001000
+RUNTIME seq=16 thread=1 KeGetCurrentProcessType -> X_PROCTYPE_USER (1)
+RUNTIME seq=17 thread=1 RtlInitializeCriticalSection guest=0x40000610 size=28
+RUNTIME seq=18 thread=1 RtlEnterCriticalSection guest=0x83508910 recursion=1
+RUNTIME seq=19 thread=1 RtlLeaveCriticalSection guest=0x83508910 recursion=0
+RUNTIME seq=20 thread=1 XexCheckExecutablePrivilege privilege=10 systemFlags=0x00000600 result=1
+RUNTIME seq=21 thread=1 XGetAVPack -> VGA (6)
+RUNTIME seq=22 thread=1 RtlInitializeCriticalSectionAndSpinCount inicializada
+RUNTIME seq=23 thread=1 RtlInitializeCriticalSectionAndSpinCount inicializada
+RUNTIME seq=24 thread=1 KeTlsAlloc -> slot 0
+RUNTIME seq=25 thread=1 RtlEnterCriticalSection guest=0x40000610 recursion=1
+RUNTIME seq=26 thread=1 RtlLeaveCriticalSection guest=0x40000610 recursion=0
+RUNTIME seq=27 thread=1 RtlEnterCriticalSection guest=0x83508910 recursion=1
+RUNTIME seq=28 thread=1 RtlLeaveCriticalSection guest=0x83508910 recursion=0
+RUNTIME seq=29 thread=1 RtlEnterCriticalSection guest=0x40000610 recursion=1
+RUNTIME seq=30 thread=1 RtlLeaveCriticalSection guest=0x40000610 recursion=0
+RUNTIME seq=31 thread=1 RtlEnterCriticalSection guest=0x40000610 recursion=1
+RUNTIME seq=32 thread=1 RtlLeaveCriticalSection guest=0x40000610 recursion=0
+RUNTIME seq=33 thread=1 RtlEnterCriticalSection guest=0x40000610 recursion=1
+RUNTIME seq=34 thread=1 RtlLeaveCriticalSection guest=0x40000610 recursion=0
+RUNTIME seq=35 thread=1 RtlEnterCriticalSection guest=0x8356C7A8 recursion=1
+RUNTIME seq=36 thread=1 RtlLeaveCriticalSection guest=0x8356C7A8 recursion=0
+RUNTIME seq=37 thread=1 RtlEnterCriticalSection guest=0x8356C7A8 recursion=1
+RUNTIME seq=38 thread=1 RtlLeaveCriticalSection guest=0x8356C7A8 recursion=0
+RUNTIME seq=39 thread=1 RtlEnterCriticalSection guest=0x8356C7A8 recursion=1
+RUNTIME seq=40 thread=1 RtlLeaveCriticalSection guest=0x8356C7A8 recursion=0
+RUNTIME seq=41 thread=1 RtlEnterCriticalSection guest=0x8356C7A8 recursion=1
+RUNTIME seq=42 thread=1 RtlLeaveCriticalSection guest=0x8356C7A8 recursion=0
+RUNTIME seq=43 thread=1 RtlEnterCriticalSection guest=0x8356C7A8 recursion=1
+RUNTIME seq=44 thread=1 RtlLeaveCriticalSection guest=0x8356C7A8 recursion=0
+RUNTIME seq=45 thread=1 RtlEnterCriticalSection guest=0x8356C7A8 recursion=1
+RUNTIME seq=46 thread=1 RtlLeaveCriticalSection guest=0x8356C7A8 recursion=0
+RUNTIME seq=47 thread=1 RtlEnterCriticalSection guest=0x8356C7A8 recursion=1
+RUNTIME seq=48 thread=1 RtlLeaveCriticalSection guest=0x8356C7A8 recursion=0
+RUNTIME seq=49 thread=1 RtlEnterCriticalSection guest=0x8356C7A8 recursion=1
+RUNTIME seq=50 thread=1 RtlLeaveCriticalSection guest=0x8356C7A8 recursion=0
+RUNTIME seq=51 thread=1 RtlEnterCriticalSection guest=0x8356C7A8 recursion=1
+RUNTIME seq=52 thread=1 RtlLeaveCriticalSection guest=0x8356C7A8 recursion=0
+RUNTIME seq=53 thread=1 RtlEnterCriticalSection guest=0x8356C7A8 recursion=1
+RUNTIME seq=54 thread=1 RtlLeaveCriticalSection guest=0x8356C7A8 recursion=0
+RUNTIME seq=55 thread=1 RtlEnterCriticalSection guest=0x8356C7A8 recursion=1
+RUNTIME seq=56 thread=1 RtlLeaveCriticalSection guest=0x8356C7A8 recursion=0
+RUNTIME seq=57 thread=1 RtlEnterCriticalSection guest=0x8356C7A8 recursion=1
+RUNTIME seq=58 thread=1 RtlLeaveCriticalSection guest=0x8356C7A8 recursion=0
+RUNTIME seq=59 thread=1 RtlEnterCriticalSection guest=0x8356C7A8 recursion=1
+RUNTIME seq=60 thread=1 RtlLeaveCriticalSection guest=0x8356C7A8 recursion=0
+RUNTIME seq=61 thread=1 RtlEnterCriticalSection guest=0x8356C7A8 recursion=1
+RUNTIME seq=62 thread=1 RtlLeaveCriticalSection guest=0x8356C7A8 recursion=0
+RUNTIME seq=63 thread=1 RtlEnterCriticalSection guest=0x8356C7A8 recursion=1
+RUNTIME seq=64 thread=1 RtlLeaveCriticalSection guest=0x8356C7A8 recursion=0
+RUNTIME seq=65 thread=1 RtlEnterCriticalSection guest=0x8356C7A8 recursion=1
+RUNTIME seq=66 thread=1 RtlLeaveCriticalSection guest=0x8356C7A8 recursion=0
+RUNTIME seq=67 thread=1 RtlEnterCriticalSection guest=0x8356C7A8 recursion=1
+RUNTIME seq=68 thread=1 RtlLeaveCriticalSection guest=0x8356C7A8 recursion=0
+RUNTIME seq=69 thread=1 RtlEnterCriticalSection guest=0x8356C7A8 recursion=1
+RUNTIME seq=70 thread=1 RtlLeaveCriticalSection guest=0x8356C7A8 recursion=0
+RUNTIME seq=71 thread=1 RtlEnterCriticalSection guest=0x8356C7A8 recursion=1
+RUNTIME seq=72 thread=1 RtlLeaveCriticalSection guest=0x8356C7A8 recursion=0
+RUNTIME seq=73 thread=1 RtlEnterCriticalSection guest=0x8356C7A8 recursion=1
+RUNTIME seq=74 thread=1 RtlLeaveCriticalSection guest=0x8356C7A8 recursion=0
+RUNTIME seq=75 thread=1 RtlEnterCriticalSection guest=0x8356C7A8 recursion=1
+RUNTIME seq=76 thread=1 RtlLeaveCriticalSection guest=0x8356C7A8 recursion=0
+RUNTIME seq=77 thread=1 RtlEnterCriticalSection guest=0x8356C7A8 recursion=1
+RUNTIME seq=78 thread=1 RtlLeaveCriticalSection guest=0x8356C7A8 recursion=0
+RUNTIME seq=79 thread=1 RtlEnterCriticalSection guest=0x8356C7A8 recursion=1
+RUNTIME seq=80 thread=1 RtlLeaveCriticalSection guest=0x8356C7A8 recursion=0
+RUNTIME seq=81 thread=1 RtlEnterCriticalSection guest=0x8356C7A8 recursion=1
+RUNTIME seq=82 thread=1 RtlLeaveCriticalSection guest=0x8356C7A8 recursion=0
+RUNTIME seq=83 thread=1 RtlEnterCriticalSection guest=0x8356C7A8 recursion=1
+RUNTIME seq=84 thread=1 RtlLeaveCriticalSection guest=0x8356C7A8 recursion=0
+RUNTIME seq=85 thread=1 RtlEnterCriticalSection guest=0x8356C7A8 recursion=1
+RUNTIME seq=86 thread=1 RtlLeaveCriticalSection guest=0x8356C7A8 recursion=0
+RUNTIME seq=87 thread=1 RtlEnterCriticalSection guest=0x8356C7A8 recursion=1
+RUNTIME seq=88 thread=1 RtlLeaveCriticalSection guest=0x8356C7A8 recursion=0
+RUNTIME seq=89 thread=1 RtlEnterCriticalSection guest=0x8356C7A8 recursion=1
+RUNTIME seq=90 thread=1 RtlLeaveCriticalSection guest=0x8356C7A8 recursion=0
+RUNTIME seq=91 thread=1 RtlEnterCriticalSection guest=0x8356C7A8 recursion=1
+RUNTIME seq=92 thread=1 RtlLeaveCriticalSection guest=0x8356C7A8 recursion=0
+RUNTIME seq=93 thread=1 RtlEnterCriticalSection guest=0x8356C7A8 recursion=1
+RUNTIME seq=94 thread=1 RtlLeaveCriticalSection guest=0x8356C7A8 recursion=0
+RUNTIME seq=95 thread=1 RtlEnterCriticalSection guest=0x8356C7A8 recursion=1
+RUNTIME seq=128 thread=1 RtlLeaveCriticalSection guest=0x8356C7A8 recursion=0
+RUNTIME seq=192 thread=1 RtlLeaveCriticalSection guest=0x8356C7A8 recursion=0
+RUNTIME seq=256 thread=1 RtlLeaveCriticalSection guest=0x8356C7A8 recursion=0
+RUNTIME seq=320 thread=1 RtlLeaveCriticalSection guest=0x8356C7A8 recursion=0
+RUNTIME seq=384 thread=1 RtlLeaveCriticalSection guest=0x8356C7A8 recursion=0
+RUNTIME seq=448 thread=1 RtlLeaveCriticalSection guest=0x8356C7A8 recursion=0
+RUNTIME seq=512 thread=1 RtlEnterCriticalSection guest=0x8356C7A8 recursion=1
+RUNTIME seq=576 thread=1 RtlEnterCriticalSection guest=0x8356C7A8 recursion=1
+RUNTIME seq=640 thread=1 NtFree basePtr=0x7FFEF604 sizePtr=0x7FFEF60C address=0x401C0000 size=0x00000000 type=0x00008000 debug=0x00000000 status=0x00000000
+RUNTIME seq=704 thread=1 RtlLeaveCriticalSection guest=0x8356C7A8 recursion=0
+RUNTIME seq=768 thread=1 RtlLeaveCriticalSection guest=0x8356C7A8 recursion=0
+RUNTIME seq=832 thread=1 RtlEnterCriticalSection guest=0x8356C7A8 recursion=1
+RUNTIME seq=896 thread=1 RtlLeaveCriticalSection guest=0x4000077C recursion=0
+RUNTIME seq=960 thread=1 RtlLeaveCriticalSection guest=0x8356C7A8 recursion=0
+RUNTIME seq=1024 thread=1 RtlEnterCriticalSection guest=0x8356C7A8 recursion=1
+RUNTIME seq=1088 thread=1 NtFree basePtr=0x7FFEF8A4 sizePtr=0x7FFEF8AC address=0x40270000 size=0x00000000 type=0x00008000 debug=0x00000000 status=0x00000000
+RUNTIME seq=1152 thread=1 RtlLeaveCriticalSection guest=0x8356C7A8 recursion=0
+RUNTIME seq=1216 thread=1 RtlLeaveCriticalSection guest=0x4000077C recursion=0
+RUNTIME seq=1280 thread=1 RtlLeaveCriticalSection guest=0x4000077C recursion=0
+RUNTIME seq=1344 thread=1 RtlTryEnterCriticalSection guest=0x4000077C owner=1 recursion=1 lockCount=0 acquired
+RUNTIME seq=1408 thread=1 RtlEnterCriticalSection guest=0x8356C7A8 recursion=1
+RUNTIME seq=1472 thread=1 RtlLeaveCriticalSection guest=0x4000077C recursion=0
+RUNTIME seq=1536 thread=1 RtlTryEnterCriticalSection guest=0x4000077C owner=1 recursion=1 lockCount=0 acquired
+RUNTIME seq=1600 thread=1 NtAllocate basePtr=0x7FFEF744 sizePtr=0x7FFEF74C requested=0x402E0000 size=0x00010000 flags=0x20001000 protect=0x00000004 debug=0x00000000 status=0x00000000 next_virtual=0x402F0000 next_physical=0x10001000
+RUNTIME seq=1664 thread=1 RtlLeaveCriticalSection guest=0x4000077C recursion=0
+RUNTIME seq=1728 thread=1 RtlTryEnterCriticalSection guest=0x4000077C owner=1 recursion=1 lockCount=0 acquired
+RUNTIME seq=1792 thread=1 RtlTryEnterCriticalSection guest=0x4000077C owner=1 recursion=1 lockCount=0 acquired
+RUNTIME seq=1856 thread=1 RtlEnterCriticalSection guest=0x8356C7A8 recursion=1
+RUNTIME seq=1920 thread=1 RtlEnterCriticalSection guest=0x40000610 recursion=1
+RUNTIME seq=1984 thread=1 RtlUnicodeToMultiByteN copied=20
+RUNTIME seq=2048 thread=1 RtlLeaveCriticalSection guest=0x4000077C recursion=0
+RUNTIME seq=2112 thread=1 RtlLeaveCriticalSection guest=0x8356C7A8 recursion=0
+RUNTIME seq=2176 thread=1 RtlLeaveCriticalSection guest=0x8356C7A8 recursion=0
+RUNTIME seq=2240 thread=1 RtlLeaveCriticalSection guest=0x4000077C recursion=0
+RUNTIME seq=2304 thread=1 RtlUnicodeToMultiByteN copied=45
+RUNTIME seq=2368 thread=1 RtlLeaveCriticalSection guest=0x8356C7A8 recursion=0
+RUNTIME seq=2432 thread=1 RtlEnterCriticalSection guest=0x8356C7A8 recursion=1
+RUNTIME seq=2496 thread=1 RtlUnicodeToMultiByteN copied=34
+RUNTIME seq=2560 thread=1 RtlUnicodeToMultiByteN copied=37
+RUNTIME seq=2624 thread=1 RtlLeaveCriticalSection guest=0x8356C7A8 recursion=0
+RUNTIME seq=2688 thread=1 RtlLeaveCriticalSection guest=0x8356C7A8 recursion=0
+RUNTIME seq=2752 thread=1 NtAllocate basePtr=0x7FFEF744 sizePtr=0x7FFEF74C requested=0x40340000 size=0x00010000 flags=0x20001000 protect=0x00000004 debug=0x00000000 status=0x00000000 next_virtual=0x40350000 next_physical=0x10001000
+RUNTIME seq=2816 thread=1 RtlEnterCriticalSection guest=0x8356C7A8 recursion=1
+RUNTIME seq=2880 thread=1 RtlUnicodeToMultiByteN copied=62
+RUNTIME seq=2944 thread=1 RtlLeaveCriticalSection guest=0x4000077C recursion=0
+RUNTIME seq=3008 thread=1 RtlLeaveCriticalSection guest=0x4000077C recursion=0
+RUNTIME seq=3072 thread=1 RtlTryEnterCriticalSection guest=0x4000077C owner=1 recursion=1 lockCount=0 acquired
+RUNTIME seq=3136 thread=1 RtlLeaveCriticalSection guest=0x8356C7A8 recursion=0
+RUNTIME seq=3200 thread=1 RtlLeaveCriticalSection guest=0x4000077C recursion=0
+RUNTIME seq=3264 thread=1 RtlLeaveCriticalSection guest=0x4000077C recursion=0
+RUNTIME seq=3328 thread=1 RtlLeaveCriticalSection guest=0x4000077C recursion=0
+RUNTIME seq=3392 thread=1 RtlLeaveCriticalSection guest=0x8356C7A8 recursion=0
+RUNTIME seq=3456 thread=1 RtlEnterCriticalSection guest=0x8356C7A8 recursion=1
+RUNTIME seq=3520 thread=1 RtlEnterCriticalSection guest=0x8356C7A8 recursion=1
+RUNTIME seq=3584 thread=1 RtlEnterCriticalSection guest=0x8356C7A8 recursion=1
+RUNTIME seq=3648 thread=1 RtlUnicodeToMultiByteN copied=15
+RUNTIME seq=3687 thread=1 AOT execution milestone calls=65536 distinctGuestFunctions=5485 lastGuest=0x824A8628 thread=1
+RUNTIME seq=3712 thread=1 RtlUnicodeToMultiByteN copied=7
+RUNTIME seq=3776 thread=1 RtlEnterCriticalSection guest=0x8356C7A8 recursion=1
+RUNTIME seq=3840 thread=1 RtlEnterCriticalSection guest=0x8356C7A8 recursion=1
+RUNTIME seq=3904 thread=1 RtlTryEnterCriticalSection guest=0x4000077C owner=1 recursion=1 lockCount=0 acquired
+RUNTIME seq=3968 thread=1 RtlTryEnterCriticalSection guest=0x4000077C owner=1 recursion=1 lockCount=0 acquired
+RUNTIME seq=3983 thread=1 VdInitializeEngines accepted; engine flag set only; ring pump awaits guest WPTR/checkpoint or VdSwap; no draw or frame implied
+RUNTIME seq=3987 thread=1 VdSetGraphicsInterruptCallback callback=0x82B3DE30
+RUNTIME seq=3996 thread=1 VdInitializeRingBuffer address=0x10003000 size=0x00008000 log2=12
+RUNTIME seq=3997 thread=1 VdEnableRingBufferRPtrWriteBack address=0x1031003C block_log2=6
+RUNTIME seq=4016 thread=1 XENOS_PM4_SCRATCH_WRITEBACK reg=4 address=0x10311010 value=0x0BADF00D
+RUNTIME seq=4032 thread=1 RtlLeaveCriticalSection guest=0x4000077C recursion=0
+RUNTIME seq=4096 thread=1 RtlLeaveCriticalSection guest=0x40000610 recursion=0
+RUNTIME seq=4160 thread=1 RtlLeaveCriticalSection guest=0x835FD1BC recursion=0
+RUNTIME seq=4224 thread=1 KeGetCurrentProcessType -> X_PROCTYPE_USER (1)
+RUNTIME seq=4288 thread=1 KeGetCurrentProcessType -> X_PROCTYPE_USER (1)
+RUNTIME seq=4352 thread=1 KeGetCurrentProcessType -> X_PROCTYPE_USER (1)
+RUNTIME seq=4382 thread=1 VdSwap decoded and presented guest framebuffer width=1280 height=720 frontbuffer=0x10316000 format=0x00000006 colorspace=0
+RUNTIME seq=4416 thread=1 RtlEnterCriticalSection guest=0x40000610 recursion=1
+RUNTIME seq=4480 thread=1 RtlLeaveCriticalSection guest=0x40000610 recursion=0
+RUNTIME seq=4544 thread=1 RtlLeaveCriticalSection guest=0x40000610 recursion=0
+RUNTIME seq=4608 thread=1 RtlLeaveCriticalSection guest=0x40000610 recursion=0
+RUNTIME seq=4672 thread=1 RtlLeaveCriticalSection guest=0x40000610 recursion=0
+RUNTIME seq=4736 thread=1 RtlLeaveCriticalSection guest=0x40000610 recursion=0
+RUNTIME seq=4743 thread=1 AOT execution milestone calls=131072 distinctGuestFunctions=6796 lastGuest=0x831A8F48 thread=1
+RUNTIME seq=4800 thread=1 RtlLeaveCriticalSection guest=0x40000610 recursion=0
+RUNTIME seq=4864 thread=1 RtlLeaveCriticalSection guest=0x40000610 recursion=0
+RUNTIME seq=4928 thread=1 RtlTryEnterCriticalSection guest=0x4000077C owner=1 recursion=1 lockCount=0 acquired
+RUNTIME seq=4992 thread=1 RtlLeaveCriticalSection guest=0x4000077C recursion=0
+RUNTIME seq=5038 thread=1 NtOpenFile path=cache:\ desiredAccess=0x00100001 objectAttributes=0x7FFEEA10 ioStatus=0x7FFEEA08 shareAccess=0x00000003 options=0x00004021 status=0xC000000D open failed
+RUNTIME seq=5056 thread=1 RtlTryEnterCriticalSection guest=0x4000077C owner=1 recursion=1 lockCount=0 acquired
+RUNTIME seq=5077 thread=1 NtOpenFile path=cache:\ desiredAccess=0x00100001 objectAttributes=0x7FFEEA10 ioStatus=0x7FFEEA08 shareAccess=0x00000003 options=0x00004021 status=0xC000000D open failed
+RUNTIME seq=5120 thread=1 RtlUnicodeToMultiByteN copied=24
+RUNTIME seq=5184 thread=1 NtAllocate basePtr=0x7FFEE4C4 sizePtr=0x7FFEE4CC requested=0x40410000 size=0x00010000 flags=0x20001000 protect=0x00000004 debug=0x00000000 status=0x00000000 next_virtual=0x40420000 next_physical=0x10744000
+RUNTIME seq=5248 thread=1 RtlLeaveCriticalSection guest=0x4000077C recursion=0
+RUNTIME seq=5312 thread=1 RtlLeaveCriticalSection guest=0x4000077C recursion=0
+RUNTIME seq=5376 thread=1 RtlTryEnterCriticalSection guest=0x4000077C owner=1 recursion=1 lockCount=0 acquired
+RUNTIME seq=5440 thread=1 RtlLeaveCriticalSection guest=0x4000077C recursion=0
+RUNTIME seq=5504 thread=1 RtlMultiByteToUnicodeN copied=55
+RUNTIME seq=5568 thread=1 RtlLeaveCriticalSection guest=0x4000077C recursion=0
+RUNTIME seq=5632 thread=1 RtlTryEnterCriticalSection guest=0x4000077C owner=1 recursion=1 lockCount=0 acquired
+RUNTIME seq=5696 thread=1 RtlLeaveCriticalSection guest=0x4000077C recursion=0
+RUNTIME seq=5760 thread=1 RtlMultiByteToUnicodeN copied=56
+RUNTIME seq=5824 thread=1 RtlLeaveCriticalSection guest=0x4000077C recursion=0
+RUNTIME seq=5888 thread=1 RtlTryEnterCriticalSection guest=0x4000077C owner=1 recursion=1 lockCount=0 acquired
+RUNTIME seq=5952 thread=1 RtlLeaveCriticalSection guest=0x4000077C recursion=0
+RUNTIME seq=6016 thread=1 RtlMultiByteToUnicodeN copied=58
+RUNTIME seq=6080 thread=1 RtlLeaveCriticalSection guest=0x4000077C recursion=0
+RUNTIME seq=6144 thread=1 RtlTryEnterCriticalSection guest=0x4000077C owner=1 recursion=1 lockCount=0 acquired
+RUNTIME seq=6208 thread=1 RtlLeaveCriticalSection guest=0x4000077C recursion=0
+RUNTIME seq=6272 thread=1 RtlTryEnterCriticalSection guest=0x4000077C owner=1 recursion=1 lockCount=0 acquired
+RUNTIME seq=6336 thread=1 RtlLeaveCriticalSection guest=0x4000077C recursion=0
+RUNTIME seq=6400 thread=1 RtlMultiByteToUnicodeN copied=68
+RUNTIME seq=6464 thread=1 AOT execution milestone calls=196608 distinctGuestFunctions=6960 lastGuest=0x82C2D840 thread=1
+RUNTIME seq=6528 thread=1 RtlTryEnterCriticalSection guest=0x4000077C owner=1 recursion=1 lockCount=0 acquired
+RUNTIME seq=6592 thread=1 RtlLeaveCriticalSection guest=0x4000077C recursion=0
+RUNTIME seq=6656 thread=1 RtlMultiByteToUnicodeN copied=61
+RUNTIME seq=6720 thread=1 RtlTryEnterCriticalSection guest=0x4000077C owner=1 recursion=1 lockCount=0 acquired
+RUNTIME seq=6784 thread=1 RtlLeaveCriticalSection guest=0x4000077C recursion=0
+RUNTIME seq=6848 thread=1 RtlTryEnterCriticalSection guest=0x4000077C owner=1 recursion=1 lockCount=0 acquired
+RUNTIME seq=6912 thread=1 RtlLeaveCriticalSection guest=0x4000077C recursion=0
+RUNTIME seq=6976 thread=1 RtlMultiByteToUnicodeN copied=61
+RUNTIME seq=7040 thread=1 RtlTryEnterCriticalSection guest=0x4000077C owner=1 recursion=1 lockCount=0 acquired
+RUNTIME seq=7104 thread=1 RtlLeaveCriticalSection guest=0x4000077C recursion=0
+RUNTIME seq=7168 thread=1 RtlTryEnterCriticalSection guest=0x4000077C owner=1 recursion=1 lockCount=0 acquired
+RUNTIME seq=7232 thread=1 RtlLeaveCriticalSection guest=0x4000077C recursion=0
+RUNTIME seq=7296 thread=1 RtlTryEnterCriticalSection guest=0x4000077C owner=1 recursion=1 lockCount=0 acquired
+RUNTIME seq=7360 thread=1 RtlLeaveCriticalSection guest=0x4000077C recursion=0
+RUNTIME seq=7424 thread=1 RtlTryEnterCriticalSection guest=0x4000077C owner=1 recursion=1 lockCount=0 acquired
+RUNTIME seq=7488 thread=1 RtlLeaveCriticalSection guest=0x4000077C recursion=0
+RUNTIME seq=7552 thread=1 RtlMultiByteToUnicodeN copied=65
+RUNTIME seq=7616 thread=1 RtlTryEnterCriticalSection guest=0x4000077C owner=1 recursion=1 lockCount=0 acquired
+RUNTIME seq=7680 thread=1 RtlLeaveCriticalSection guest=0x4000077C recursion=0
+RUNTIME seq=7744 thread=1 RtlTryEnterCriticalSection guest=0x4000077C owner=1 recursion=1 lockCount=0 acquired
+RUNTIME seq=7808 thread=1 RtlLeaveCriticalSection guest=0x4000077C recursion=0
+RUNTIME seq=7872 thread=1 RtlTryEnterCriticalSection guest=0x4000077C owner=1 recursion=1 lockCount=0 acquired
+RUNTIME seq=7936 thread=1 RtlLeaveCriticalSection guest=0x4000077C recursion=0
+RUNTIME seq=8000 thread=1 RtlMultiByteToUnicodeN copied=59
+RUNTIME seq=8064 thread=1 RtlTryEnterCriticalSection guest=0x4000077C owner=1 recursion=1 lockCount=0 acquired
+RUNTIME seq=8127 thread=1 AOT execution milestone calls=262144 distinctGuestFunctions=6960 lastGuest=0x82C38DF8 thread=1
+RUNTIME seq=8128 thread=1 RtlTryEnterCriticalSection guest=0x4000077C owner=1 recursion=1 lockCount=0 acquired
+RUNTIME seq=8192 thread=1 RtlLeaveCriticalSection guest=0x4000077C recursion=0
+RUNTIME seq=8256 thread=1 RtlMultiByteToUnicodeN copied=67
+RUNTIME seq=8320 thread=1 RtlTryEnterCriticalSection guest=0x4000077C owner=1 recursion=1 lockCount=0 acquired
+RUNTIME seq=8384 thread=1 RtlLeaveCriticalSection guest=0x4000077C recursion=0
+RUNTIME seq=8448 thread=1 RtlTryEnterCriticalSection guest=0x4000077C owner=1 recursion=1 lockCount=0 acquired
+RUNTIME seq=8512 thread=1 RtlLeaveCriticalSection guest=0x4000077C recursion=0
+RUNTIME seq=8576 thread=1 RtlTryEnterCriticalSection guest=0x4000077C owner=1 recursion=1 lockCount=0 acquired
+RUNTIME seq=8640 thread=1 RtlLeaveCriticalSection guest=0x4000077C recursion=0
+RUNTIME seq=8704 thread=1 RtlLeaveCriticalSection guest=0x4000077C recursion=0
+RUNTIME seq=8768 thread=1 RtlTryEnterCriticalSection guest=0x4000077C owner=1 recursion=1 lockCount=0 acquired
+RUNTIME seq=8832 thread=1 RtlLeaveCriticalSection guest=0x4000077C recursion=0
+RUNTIME seq=8896 thread=1 RtlTryEnterCriticalSection guest=0x4000077C owner=1 recursion=1 lockCount=0 acquired
+RUNTIME seq=8960 thread=1 RtlLeaveCriticalSection guest=0x4000077C recursion=0
+RUNTIME seq=9024 thread=1 RtlMultiByteToUnicodeN copied=67
+RUNTIME seq=9088 thread=1 RtlTryEnterCriticalSection guest=0x4000077C owner=1 recursion=1 lockCount=0 acquired
+RUNTIME seq=9152 thread=1 RtlLeaveCriticalSection guest=0x4000077C recursion=0
+RUNTIME seq=9216 thread=1 RtlTryEnterCriticalSection guest=0x4000077C owner=1 recursion=1 lockCount=0 acquired
+RUNTIME seq=9280 thread=1 RtlLeaveCriticalSection guest=0x4000077C recursion=0
+RUNTIME seq=9344 thread=1 RtlTryEnterCriticalSection guest=0x4000077C owner=1 recursion=1 lockCount=0 acquired
+RUNTIME seq=9403 thread=1 AOT execution milestone calls=327680 distinctGuestFunctions=6960 lastGuest=0x82C39070 thread=1
+RUNTIME seq=9408 thread=1 RtlTryEnterCriticalSection guest=0x4000077C owner=1 recursion=1 lockCount=0 acquired
+RUNTIME seq=9472 thread=1 RtlLeaveCriticalSection guest=0x4000077C recursion=0
+RUNTIME seq=9536 thread=1 RtlTryEnterCriticalSection guest=0x4000077C owner=1 recursion=1 lockCount=0 acquired
+RUNTIME seq=9600 thread=1 RtlLeaveCriticalSection guest=0x4000077C recursion=0
+RUNTIME seq=9664 thread=1 RtlTryEnterCriticalSection guest=0x4000077C owner=1 recursion=1 lockCount=0 acquired
+RUNTIME seq=9728 thread=1 RtlLeaveCriticalSection guest=0x4000077C recursion=0
+RUNTIME seq=9792 thread=1 RtlMultiByteToUnicodeN copied=66
+RUNTIME seq=9856 thread=1 RtlTryEnterCriticalSection guest=0x4000077C owner=1 recursion=1 lockCount=0 acquired
+RUNTIME seq=9920 thread=1 RtlLeaveCriticalSection guest=0x4000077C recursion=0
+RUNTIME seq=9984 thread=1 RtlTryEnterCriticalSection guest=0x4000077C owner=1 recursion=1 lockCount=0 acquired
+RUNTIME seq=10048 thread=1 RtlLeaveCriticalSection guest=0x4000077C recursion=0
+RUNTIME seq=10112 thread=1 RtlTryEnterCriticalSection guest=0x4000077C owner=1 recursion=1 lockCount=0 acquired
+RUNTIME seq=10176 thread=1 RtlLeaveCriticalSection guest=0x4000077C recursion=0
+RUNTIME seq=10240 thread=1 RtlTryEnterCriticalSection guest=0x4000077C owner=1 recursion=1 lockCount=0 acquired
+RUNTIME seq=10304 thread=1 RtlLeaveCriticalSection guest=0x4000077C recursion=0
+RUNTIME seq=10368 thread=1 RtlMultiByteToUnicodeN copied=53
+RUNTIME seq=10432 thread=1 RtlTryEnterCriticalSection guest=0x4000077C owner=1 recursion=1 lockCount=0 acquired
+RUNTIME seq=10496 thread=1 RtlLeaveCriticalSection guest=0x4000077C recursion=0
+RUNTIME seq=10560 thread=1 RtlTryEnterCriticalSection guest=0x4000077C owner=1 recursion=1 lockCount=0 acquired
+RUNTIME seq=10624 thread=1 RtlLeaveCriticalSection guest=0x4000077C recursion=0
+RUNTIME seq=10688 thread=1 RtlLeaveCriticalSection guest=0x4000077C recursion=0
+RUNTIME seq=10752 thread=1 RtlMultiByteToUnicodeN copied=45
+RUNTIME seq=10816 thread=1 RtlTryEnterCriticalSection guest=0x4000077C owner=1 recursion=1 lockCount=0 acquired
+RUNTIME seq=10880 thread=1 RtlLeaveCriticalSection guest=0x4000077C recursion=0
+RUNTIME seq=10944 thread=1 RtlTryEnterCriticalSection guest=0x4000077C owner=1 recursion=1 lockCount=0 acquired
+RUNTIME seq=11008 thread=1 RtlLeaveCriticalSection guest=0x4000077C recursion=0
+RUNTIME seq=11072 thread=1 RtlTryEnterCriticalSection guest=0x4000077C owner=1 recursion=1 lockCount=0 acquired
+RUNTIME seq=11121 thread=1 NtCreateFile path=D:\Binaries\EpicInternal.txt status=0xC0000034 open failed
+RUNTIME seq=11136 thread=1 RtlLeaveCriticalSection guest=0x4000077C recursion=0
+RUNTIME seq=11200 thread=1 RtlLeaveCriticalSection guest=0x4000077C recursion=0
+RUNTIME seq=11264 thread=1 RtlLeaveCriticalSection guest=0x4000077C recursion=0
+RUNTIME seq=11328 thread=1 RtlTryEnterCriticalSection guest=0x4000077C owner=1 recursion=1 lockCount=0 acquired
+RUNTIME seq=11392 thread=1 RtlTryEnterCriticalSection guest=0x4000077C owner=1 recursion=1 lockCount=0 acquired
+RUNTIME seq=11456 thread=1 RtlTryEnterCriticalSection guest=0x4000077C owner=1 recursion=1 lockCount=0 acquired
+RUNTIME seq=11520 thread=1 RtlTryEnterCriticalSection guest=0x4000077C owner=1 recursion=1 lockCount=0 acquired
+RUNTIME seq=11584 thread=1 RtlTryEnterCriticalSection guest=0x4000077C owner=1 recursion=1 lockCount=0 acquired
+RUNTIME seq=11648 thread=1 RtlTryEnterCriticalSection guest=0x4000077C owner=1 recursion=1 lockCount=0 acquired
+RUNTIME seq=11712 thread=1 RtlTryEnterCriticalSection guest=0x4000077C owner=1 recursion=1 lockCount=0 acquired
+RUNTIME seq=11776 thread=1 RtlTryEnterCriticalSection guest=0x4000077C owner=1 recursion=1 lockCount=0 acquired
+RUNTIME seq=11840 thread=1 RtlLeaveCriticalSection guest=0x4000077C recursion=0
+RUNTIME seq=11904 thread=1 RtlLeaveCriticalSection guest=0x4000077C recursion=0
+RUNTIME seq=11968 thread=1 RtlTryEnterCriticalSection guest=0x4000077C owner=1 recursion=1 lockCount=0 acquired
+RUNTIME seq=12032 thread=1 RtlTryEnterCriticalSection guest=0x4000077C owner=1 recursion=1 lockCount=0 acquired
+RUNTIME seq=12096 thread=1 RtlTryEnterCriticalSection guest=0x4000077C owner=1 recursion=1 lockCount=0 acquired
+RUNTIME seq=12160 thread=1 RtlTryEnterCriticalSection guest=0x4000077C owner=1 recursion=1 lockCount=0 acquired
+RUNTIME seq=12224 thread=1 RtlTryEnterCriticalSection guest=0x4000077C owner=1 recursion=1 lockCount=0 acquired
+RUNTIME seq=12288 thread=1 RtlTryEnterCriticalSection guest=0x4000077C owner=1 recursion=1 lockCount=0 acquired
+RUNTIME seq=12352 thread=1 RtlLeaveCriticalSection guest=0x4000077C recursion=0
+RUNTIME seq=12416 thread=1 RtlLeaveCriticalSection guest=0x4000077C recursion=0
+RUNTIME seq=12480 thread=1 RtlLeaveCriticalSection guest=0x4000077C recursion=0
+RUNTIME seq=12544 thread=1 RtlLeaveCriticalSection guest=0x4000077C recursion=0
+RUNTIME seq=12608 thread=1 RtlLeaveCriticalSection guest=0x4000077C recursion=0
+RUNTIME seq=12672 thread=1 RtlLeaveCriticalSection guest=0x4000077C recursion=0
+RUNTIME seq=12736 thread=1 RtlLeaveCriticalSection guest=0x4000077C recursion=0
+RUNTIME seq=12800 thread=1 RtlLeaveCriticalSection guest=0x4000077C recursion=0
+RUNTIME seq=12864 thread=1 RtlTryEnterCriticalSection guest=0x4000077C owner=1 recursion=1 lockCount=0 acquired
+RUNTIME seq=12928 thread=1 RtlTryEnterCriticalSection guest=0x4000077C owner=1 recursion=1 lockCount=0 acquired
+RUNTIME seq=12992 thread=1 RtlTryEnterCriticalSection guest=0x4000077C owner=1 recursion=1 lockCount=0 acquired
+RUNTIME seq=13056 thread=1 RtlTryEnterCriticalSection guest=0x4000077C owner=1 recursion=1 lockCount=0 acquired
+RUNTIME seq=13120 thread=1 RtlTryEnterCriticalSection guest=0x4000077C owner=1 recursion=1 lockCount=0 acquired
+RUNTIME seq=13184 thread=1 RtlTryEnterCriticalSection guest=0x4000077C owner=1 recursion=1 lockCount=0 acquired
+RUNTIME seq=13248 thread=1 RtlTryEnterCriticalSection guest=0x4000077C owner=1 recursion=1 lockCount=0 acquired
+RUNTIME seq=13312 thread=1 RtlTryEnterCriticalSection guest=0x4000077C owner=1 recursion=1 lockCount=0 acquired
+RUNTIME seq=13376 thread=1 RtlTryEnterCriticalSection guest=0x4000077C owner=1 recursion=1 lockCount=0 acquired
+RUNTIME seq=13440 thread=1 RtlTryEnterCriticalSection guest=0x4000077C owner=1 recursion=1 lockCount=0 acquired
+RUNTIME seq=13504 thread=1 RtlTryEnterCriticalSection guest=0x4000077C owner=1 recursion=1 lockCount=0 acquired
+RUNTIME seq=13568 thread=1 RtlTryEnterCriticalSection guest=0x4000077C owner=1 recursion=1 lockCount=0 acquired
+RUNTIME seq=13632 thread=1 RtlTryEnterCriticalSection guest=0x4000077C owner=1 recursion=1 lockCount=0 acquired
+RUNTIME seq=13696 thread=1 RtlTryEnterCriticalSection guest=0x4000077C owner=1 recursion=1 lockCount=0 acquired
+RUNTIME seq=13760 thread=1 RtlTryEnterCriticalSection guest=0x4000077C owner=1 recursion=1 lockCount=0 acquired
+RUNTIME seq=13824 thread=1 RtlTryEnterCriticalSection guest=0x4000077C owner=1 recursion=1 lockCount=0 acquired
+RUNTIME seq=13888 thread=1 RtlTryEnterCriticalSection guest=0x4000077C owner=1 recursion=1 lockCount=0 acquired
+RUNTIME seq=13894 thread=1 AOT execution milestone calls=393216 distinctGuestFunctions=6997 lastGuest=0x822A0278 thread=1
+RUNTIME seq=13952 thread=1 RtlLeaveCriticalSection guest=0x4000077C recursion=0
+RUNTIME seq=14016 thread=1 RtlLeaveCriticalSection guest=0x4000077C recursion=0
+RUNTIME seq=14080 thread=1 RtlLeaveCriticalSection guest=0x4000077C recursion=0
+RUNTIME seq=14144 thread=1 RtlLeaveCriticalSection guest=0x4000077C recursion=0
+RUNTIME seq=14208 thread=1 RtlLeaveCriticalSection guest=0x4000077C recursion=0
+RUNTIME seq=14272 thread=1 RtlLeaveCriticalSection guest=0x4000077C recursion=0
+RUNTIME seq=14336 thread=1 RtlLeaveCriticalSection guest=0x4000077C recursion=0
+RUNTIME seq=14400 thread=1 RtlLeaveCriticalSection guest=0x4000077C recursion=0
+RUNTIME seq=14464 thread=1 RtlLeaveCriticalSection guest=0x4000077C recursion=0
+RUNTIME seq=14528 thread=1 RtlLeaveCriticalSection guest=0x4000077C recursion=0
+RUNTIME seq=14592 thread=1 RtlLeaveCriticalSection guest=0x4000077C recursion=0
+RUNTIME seq=14656 thread=1 RtlLeaveCriticalSection guest=0x4000077C recursion=0
+RUNTIME seq=14720 thread=1 RtlLeaveCriticalSection guest=0x4000077C recursion=0
+RUNTIME seq=14784 thread=1 RtlLeaveCriticalSection guest=0x4000077C recursion=0
+RUNTIME seq=14848 thread=1 RtlLeaveCriticalSection guest=0x4000077C recursion=0
+RUNTIME seq=14912 thread=1 RtlLeaveCriticalSection guest=0x4000077C recursion=0
+RUNTIME seq=14976 thread=1 RtlLeaveCriticalSection guest=0x4000077C recursion=0
+RUNTIME seq=15040 thread=1 RtlLeaveCriticalSection guest=0x4000077C recursion=0
+RUNTIME seq=15104 thread=1 RtlLeaveCriticalSection guest=0x4000077C recursion=0
+RUNTIME seq=15168 thread=1 RtlLeaveCriticalSection guest=0x4000077C recursion=0
+RUNTIME seq=15232 thread=1 RtlLeaveCriticalSection guest=0x4000077C recursion=0
+RUNTIME seq=15296 thread=1 RtlLeaveCriticalSection guest=0x4000077C recursion=0
+RUNTIME seq=15360 thread=1 RtlLeaveCriticalSection guest=0x4000077C recursion=0
+RUNTIME seq=15424 thread=1 RtlLeaveCriticalSection guest=0x4000077C recursion=0
+RUNTIME seq=15488 thread=1 RtlLeaveCriticalSection guest=0x4000077C recursion=0
+RUNTIME seq=15552 thread=1 RtlLeaveCriticalSection guest=0x4000077C recursion=0
+RUNTIME seq=15616 thread=1 RtlLeaveCriticalSection guest=0x4000077C recursion=0
+RUNTIME seq=15680 thread=1 RtlLeaveCriticalSection guest=0x4000077C recursion=0
+RUNTIME seq=15744 thread=1 RtlLeaveCriticalSection guest=0x4000077C recursion=0
+RUNTIME seq=15808 thread=1 RtlLeaveCriticalSection guest=0x4000077C recursion=0
+RUNTIME seq=15872 thread=1 RtlLeaveCriticalSection guest=0x4000077C recursion=0
+RUNTIME seq=15936 thread=1 RtlLeaveCriticalSection guest=0x4000077C recursion=0
+RUNTIME seq=16000 thread=1 RtlLeaveCriticalSection guest=0x4000077C recursion=0
+RUNTIME seq=16064 thread=1 RtlLeaveCriticalSection guest=0x4000077C recursion=0
+RUNTIME seq=16128 thread=1 RtlLeaveCriticalSection guest=0x4000077C recursion=0
+RUNTIME seq=16192 thread=1 RtlLeaveCriticalSection guest=0x4000077C recursion=0
+RUNTIME seq=16256 thread=1 RtlLeaveCriticalSection guest=0x4000077C recursion=0
+RUNTIME seq=16320 thread=1 RtlLeaveCriticalSection guest=0x4000077C recursion=0
+RUNTIME seq=16384 thread=1 RtlLeaveCriticalSection guest=0x4000077C recursion=0
+RUNTIME seq=16448 thread=1 RtlLeaveCriticalSection guest=0x4000077C recursion=0
+RUNTIME seq=16512 thread=1 RtlLeaveCriticalSection guest=0x4000077C recursion=0
+RUNTIME seq=16576 thread=1 RtlLeaveCriticalSection guest=0x4000077C recursion=0
+RUNTIME seq=16640 thread=1 RtlLeaveCriticalSection guest=0x4000077C recursion=0
+RUNTIME seq=16704 thread=1 RtlLeaveCriticalSection guest=0x4000077C recursion=0
+RUNTIME seq=16768 thread=1 RtlLeaveCriticalSection guest=0x4000077C recursion=0
+RUNTIME seq=16832 thread=1 RtlLeaveCriticalSection guest=0x4000077C recursion=0
+RUNTIME seq=16896 thread=1 RtlLeaveCriticalSection guest=0x4000077C recursion=0
+RUNTIME seq=16960 thread=1 RtlLeaveCriticalSection guest=0x4000077C recursion=0
+RUNTIME seq=17024 thread=1 RtlLeaveCriticalSection guest=0x4000077C recursion=0
+RUNTIME seq=17088 thread=1 RtlLeaveCriticalSection guest=0x4000077C recursion=0
+RUNTIME seq=17152 thread=1 RtlLeaveCriticalSection guest=0x4000077C recursion=0
+RUNTIME seq=17216 thread=1 RtlLeaveCriticalSection guest=0x4000077C recursion=0
+RUNTIME seq=17280 thread=1 RtlLeaveCriticalSection guest=0x4000077C recursion=0
+RUNTIME seq=17344 thread=1 RtlLeaveCriticalSection guest=0x4000077C recursion=0
+RUNTIME seq=17408 thread=1 RtlLeaveCriticalSection guest=0x4000077C recursion=0
+RUNTIME seq=17472 thread=1 RtlLeaveCriticalSection guest=0x4000077C recursion=0
+RUNTIME seq=17536 thread=1 RtlLeaveCriticalSection guest=0x4000077C recursion=0
+RUNTIME seq=17600 thread=1 RtlLeaveCriticalSection guest=0x4000077C recursion=0
+RUNTIME seq=17664 thread=1 RtlLeaveCriticalSection guest=0x4000077C recursion=0
+RUNTIME seq=17728 thread=1 RtlLeaveCriticalSection guest=0x4000077C recursion=0
+RUNTIME seq=17792 thread=1 RtlLeaveCriticalSection guest=0x4000077C recursion=0
+RUNTIME seq=17856 thread=1 RtlLeaveCriticalSection guest=0x4000077C recursion=0
+RUNTIME seq=17920 thread=1 RtlLeaveCriticalSection guest=0x4000077C recursion=0
+RUNTIME seq=17984 thread=1 RtlLeaveCriticalSection guest=0x4000077C recursion=0
+RUNTIME seq=18048 thread=1 RtlLeaveCriticalSection guest=0x4000077C recursion=0
+RUNTIME seq=18112 thread=1 RtlLeaveCriticalSection guest=0x4000077C recursion=0
+RUNTIME seq=18176 thread=1 RtlLeaveCriticalSection guest=0x4000077C recursion=0
+RUNTIME seq=18240 thread=1 RtlLeaveCriticalSection guest=0x4000077C recursion=0
+RUNTIME seq=18304 thread=1 RtlLeaveCriticalSection guest=0x4000077C recursion=0
+RUNTIME seq=18368 thread=1 RtlLeaveCriticalSection guest=0x4000077C recursion=0
+RUNTIME seq=18432 thread=1 RtlLeaveCriticalSection guest=0x4000077C recursion=0
+RUNTIME seq=18496 thread=1 RtlLeaveCriticalSection guest=0x4000077C recursion=0
+RUNTIME seq=18560 thread=1 RtlLeaveCriticalSection guest=0x4000077C recursion=0
+RUNTIME seq=18624 thread=1 RtlLeaveCriticalSection guest=0x4000077C recursion=0
+RUNTIME seq=18688 thread=1 RtlLeaveCriticalSection guest=0x4000077C recursion=0
+RUNTIME seq=18752 thread=1 RtlLeaveCriticalSection guest=0x4000077C recursion=0
+RUNTIME seq=18816 thread=1 RtlLeaveCriticalSection guest=0x4000077C recursion=0
+RUNTIME seq=18880 thread=1 RtlLeaveCriticalSection guest=0x4000077C recursion=0
+RUNTIME seq=18944 thread=1 RtlLeaveCriticalSection guest=0x4000077C recursion=0
+RUNTIME seq=19008 thread=1 RtlLeaveCriticalSection guest=0x4000077C recursion=0
+RUNTIME seq=19072 thread=1 RtlLeaveCriticalSection guest=0x4000077C recursion=0
+RUNTIME seq=19136 thread=1 RtlLeaveCriticalSection guest=0x4000077C recursion=0
+RUNTIME seq=19200 thread=1 RtlLeaveCriticalSection guest=0x4000077C recursion=0
+RUNTIME seq=19264 thread=1 RtlLeaveCriticalSection guest=0x4000077C recursion=0
+RUNTIME seq=19328 thread=1 RtlLeaveCriticalSection guest=0x4000077C recursion=0
+RUNTIME seq=19392 thread=1 RtlLeaveCriticalSection guest=0x4000077C recursion=0
+RUNTIME seq=19456 thread=1 RtlLeaveCriticalSection guest=0x4000077C recursion=0
+RUNTIME seq=19520 thread=1 RtlLeaveCriticalSection guest=0x4000077C recursion=0
+RUNTIME seq=19584 thread=1 RtlLeaveCriticalSection guest=0x4000077C recursion=0
+RUNTIME seq=19648 thread=1 RtlLeaveCriticalSection guest=0x4000077C recursion=0
+RUNTIME seq=19712 thread=1 RtlLeaveCriticalSection guest=0x4000077C recursion=0
+RUNTIME seq=19776 thread=1 RtlLeaveCriticalSection guest=0x4000077C recursion=0
+RUNTIME seq=19840 thread=1 RtlLeaveCriticalSection guest=0x4000077C recursion=0
+RUNTIME seq=19904 thread=1 RtlLeaveCriticalSection guest=0x4000077C recursion=0
+RUNTIME seq=19968 thread=1 RtlLeaveCriticalSection guest=0x4000077C recursion=0
+RUNTIME seq=20032 thread=1 RtlLeaveCriticalSection guest=0x4000077C recursion=0
+RUNTIME seq=20096 thread=1 RtlLeaveCriticalSection guest=0x4000077C recursion=0
+RUNTIME seq=20160 thread=1 RtlLeaveCriticalSection guest=0x4000077C recursion=0
+RUNTIME seq=20224 thread=1 RtlLeaveCriticalSection guest=0x4000077C recursion=0
+RUNTIME seq=20288 thread=1 RtlLeaveCriticalSection guest=0x4000077C recursion=0
+RUNTIME seq=20352 thread=1 RtlLeaveCriticalSection guest=0x4000077C recursion=0
+RUNTIME seq=20416 thread=1 RtlLeaveCriticalSection guest=0x4000077C recursion=0
+RUNTIME seq=20480 thread=1 RtlLeaveCriticalSection guest=0x4000077C recursion=0
+RUNTIME seq=20544 thread=1 RtlLeaveCriticalSection guest=0x4000077C recursion=0
+RUNTIME seq=20608 thread=1 RtlLeaveCriticalSection guest=0x4000077C recursion=0
+RUNTIME seq=20672 thread=1 RtlLeaveCriticalSection guest=0x4000077C recursion=0
+RUNTIME seq=20736 thread=1 RtlLeaveCriticalSection guest=0x4000077C recursion=0
+RUNTIME seq=20800 thread=1 RtlLeaveCriticalSection guest=0x4000077C recursion=0
+RUNTIME seq=20864 thread=1 RtlLeaveCriticalSection guest=0x4000077C recursion=0
+RUNTIME seq=20928 thread=1 RtlLeaveCriticalSection guest=0x4000077C recursion=0
+RUNTIME seq=20992 thread=1 RtlLeaveCriticalSection guest=0x4000077C recursion=0
+RUNTIME seq=21056 thread=1 RtlLeaveCriticalSection guest=0x4000077C recursion=0
+RUNTIME seq=21120 thread=1 RtlLeaveCriticalSection guest=0x4000077C recursion=0
+RUNTIME seq=21184 thread=1 RtlLeaveCriticalSection guest=0x4000077C recursion=0
+RUNTIME seq=21248 thread=1 RtlLeaveCriticalSection guest=0x4000077C recursion=0
+RUNTIME seq=21312 thread=1 RtlLeaveCriticalSection guest=0x4000077C recursion=0
+RUNTIME seq=21376 thread=1 RtlLeaveCriticalSection guest=0x4000077C recursion=0
+RUNTIME seq=21440 thread=1 RtlLeaveCriticalSection guest=0x4000077C recursion=0
+RUNTIME seq=21504 thread=1 RtlLeaveCriticalSection guest=0x4000077C recursion=0
+RUNTIME seq=21568 thread=1 RtlLeaveCriticalSection guest=0x4000077C recursion=0
+RUNTIME seq=21632 thread=1 RtlLeaveCriticalSection guest=0x4000077C recursion=0
+RUNTIME seq=21696 thread=1 RtlLeaveCriticalSection guest=0x4000077C recursion=0
+RUNTIME seq=21760 thread=1 RtlLeaveCriticalSection guest=0x4000077C recursion=0
+RUNTIME seq=21824 thread=1 RtlLeaveCriticalSection guest=0x4000077C recursion=0
+RUNTIME seq=21888 thread=1 RtlLeaveCriticalSection guest=0x4000077C recursion=0
+RUNTIME seq=21952 thread=1 RtlLeaveCriticalSection guest=0x4000077C recursion=0
+RUNTIME seq=22016 thread=1 RtlLeaveCriticalSection guest=0x4000077C recursion=0
+RUNTIME seq=22080 thread=1 RtlLeaveCriticalSection guest=0x4000077C recursion=0
+RUNTIME seq=22144 thread=1 RtlLeaveCriticalSection guest=0x4000077C recursion=0
+RUNTIME seq=22208 thread=1 RtlLeaveCriticalSection guest=0x4000077C recursion=0
+RUNTIME seq=22272 thread=1 RtlLeaveCriticalSection guest=0x4000077C recursion=0
+RUNTIME seq=22336 thread=1 RtlLeaveCriticalSection guest=0x4000077C recursion=0
+RUNTIME seq=22400 thread=1 RtlLeaveCriticalSection guest=0x4000077C recursion=0
+RUNTIME seq=22464 thread=1 RtlLeaveCriticalSection guest=0x4000077C recursion=0
+RUNTIME seq=22528 thread=1 RtlLeaveCriticalSection guest=0x4000077C recursion=0
+RUNTIME seq=22592 thread=1 RtlLeaveCriticalSection guest=0x4000077C recursion=0
+RUNTIME seq=22656 thread=1 RtlLeaveCriticalSection guest=0x4000077C recursion=0
+RUNTIME seq=22720 thread=1 RtlLeaveCriticalSection guest=0x4000077C recursion=0
+RUNTIME seq=22784 thread=1 RtlLeaveCriticalSection guest=0x4000077C recursion=0
+RUNTIME seq=22848 thread=1 RtlLeaveCriticalSection guest=0x4000077C recursion=0
+RUNTIME seq=22912 thread=1 RtlLeaveCriticalSection guest=0x4000077C recursion=0
+RUNTIME seq=22976 thread=1 RtlLeaveCriticalSection guest=0x4000077C recursion=0
+RUNTIME seq=23040 thread=1 RtlLeaveCriticalSection guest=0x4000077C recursion=0
+RUNTIME seq=23104 thread=1 RtlLeaveCriticalSection guest=0x4000077C recursion=0
+RUNTIME seq=23168 thread=1 RtlLeaveCriticalSection guest=0x4000077C recursion=0
+RUNTIME seq=23232 thread=1 RtlLeaveCriticalSection guest=0x4000077C recursion=0
+RUNTIME seq=23296 thread=1 RtlLeaveCriticalSection guest=0x4000077C recursion=0
+RUNTIME seq=23360 thread=1 RtlLeaveCriticalSection guest=0x4000077C recursion=0
+RUNTIME seq=23424 thread=1 RtlLeaveCriticalSection guest=0x4000077C recursion=0
+RUNTIME seq=23488 thread=1 RtlLeaveCriticalSection guest=0x4000077C recursion=0
+RUNTIME seq=23552 thread=1 RtlLeaveCriticalSection guest=0x4000077C recursion=0
+RUNTIME seq=23616 thread=1 RtlLeaveCriticalSection guest=0x4000077C recursion=0
+RUNTIME seq=23680 thread=1 RtlLeaveCriticalSection guest=0x4000077C recursion=0
+RUNTIME seq=23744 thread=1 RtlLeaveCriticalSection guest=0x4000077C recursion=0
+RUNTIME seq=23808 thread=1 RtlLeaveCriticalSection guest=0x4000077C recursion=0
+RUNTIME seq=23872 thread=1 RtlLeaveCriticalSection guest=0x4000077C recursion=0
+RUNTIME seq=23936 thread=1 RtlLeaveCriticalSection guest=0x4000077C recursion=0
+RUNTIME seq=24000 thread=1 RtlLeaveCriticalSection guest=0x4000077C recursion=0
+RUNTIME seq=24064 thread=1 RtlLeaveCriticalSection guest=0x4000077C recursion=0
+RUNTIME seq=24128 thread=1 RtlLeaveCriticalSection guest=0x4000077C recursion=0
+RUNTIME seq=24192 thread=1 RtlLeaveCriticalSection guest=0x4000077C recursion=0
+RUNTIME seq=24256 thread=1 RtlLeaveCriticalSection guest=0x4000077C recursion=0
+RUNTIME seq=24320 thread=1 RtlLeaveCriticalSection guest=0x4000077C recursion=0
+RUNTIME seq=24384 thread=1 RtlLeaveCriticalSection guest=0x4000077C recursion=0
+RUNTIME seq=24448 thread=1 RtlLeaveCriticalSection guest=0x4000077C recursion=0
+RUNTIME seq=24512 thread=1 RtlLeaveCriticalSection guest=0x4000077C recursion=0
+RUNTIME seq=24576 thread=1 RtlLeaveCriticalSection guest=0x4000077C recursion=0
+RUNTIME seq=24640 thread=1 RtlLeaveCriticalSection guest=0x4000077C recursion=0
+RUNTIME seq=24704 thread=1 RtlLeaveCriticalSection guest=0x4000077C recursion=0
+RUNTIME seq=24768 thread=1 RtlLeaveCriticalSection guest=0x4000077C recursion=0
+RUNTIME seq=24832 thread=1 RtlLeaveCriticalSection guest=0x4000077C recursion=0
+RUNTIME seq=24896 thread=1 RtlLeaveCriticalSection guest=0x4000077C recursion=0
+RUNTIME seq=24960 thread=1 RtlLeaveCriticalSection guest=0x4000077C recursion=0
+RUNTIME seq=25024 thread=1 RtlLeaveCriticalSection guest=0x4000077C recursion=0
+RUNTIME seq=25088 thread=1 RtlLeaveCriticalSection guest=0x4000077C recursion=0
+RUNTIME seq=25152 thread=1 RtlLeaveCriticalSection guest=0x4000077C recursion=0
+RUNTIME seq=25216 thread=1 RtlLeaveCriticalSection guest=0x4000077C recursion=0
+RUNTIME seq=25280 thread=1 RtlLeaveCriticalSection guest=0x4000077C recursion=0
+RUNTIME seq=25344 thread=1 RtlLeaveCriticalSection guest=0x4000077C recursion=0
+RUNTIME seq=25408 thread=1 RtlLeaveCriticalSection guest=0x4000077C recursion=0
+RUNTIME seq=25472 thread=1 RtlLeaveCriticalSection guest=0x4000077C recursion=0
+RUNTIME seq=25536 thread=1 RtlLeaveCriticalSection guest=0x4000077C recursion=0
+RUNTIME seq=25600 thread=1 RtlLeaveCriticalSection guest=0x4000077C recursion=0
+RUNTIME seq=25664 thread=1 RtlLeaveCriticalSection guest=0x4000077C recursion=0
+RUNTIME seq=25728 thread=1 RtlLeaveCriticalSection guest=0x4000077C recursion=0
+RUNTIME seq=25792 thread=1 RtlLeaveCriticalSection guest=0x4000077C recursion=0
+RUNTIME seq=25856 thread=1 RtlLeaveCriticalSection guest=0x4000077C recursion=0
+RUNTIME seq=25920 thread=1 RtlLeaveCriticalSection guest=0x4000077C recursion=0
+RUNTIME seq=25984 thread=1 RtlLeaveCriticalSection guest=0x4000077C recursion=0
+RUNTIME seq=26048 thread=1 RtlLeaveCriticalSection guest=0x4000077C recursion=0
+RUNTIME seq=26112 thread=1 RtlLeaveCriticalSection guest=0x4000077C recursion=0
+RUNTIME seq=26176 thread=1 RtlLeaveCriticalSection guest=0x4000077C recursion=0
+RUNTIME seq=26240 thread=1 RtlLeaveCriticalSection guest=0x4000077C recursion=0
+RUNTIME seq=26304 thread=1 RtlLeaveCriticalSection guest=0x4000077C recursion=0
+RUNTIME seq=26368 thread=1 RtlLeaveCriticalSection guest=0x4000077C recursion=0
+RUNTIME seq=26432 thread=1 RtlLeaveCriticalSection guest=0x4000077C recursion=0
+RUNTIME seq=26496 thread=1 RtlLeaveCriticalSection guest=0x4000077C recursion=0
+RUNTIME seq=26560 thread=1 RtlLeaveCriticalSection guest=0x4000077C recursion=0
+RUNTIME seq=26624 thread=1 RtlLeaveCriticalSection guest=0x4000077C recursion=0
+RUNTIME seq=26688 thread=1 RtlLeaveCriticalSection guest=0x4000077C recursion=0
+RUNTIME seq=26752 thread=1 RtlLeaveCriticalSection guest=0x4000077C recursion=0
+RUNTIME seq=26816 thread=1 RtlLeaveCriticalSection guest=0x4000077C recursion=0
+RUNTIME seq=26880 thread=1 RtlLeaveCriticalSection guest=0x4000077C recursion=0
+RUNTIME seq=26944 thread=1 RtlLeaveCriticalSection guest=0x4000077C recursion=0
+RUNTIME seq=27008 thread=1 RtlLeaveCriticalSection guest=0x4000077C recursion=0
+RUNTIME seq=27072 thread=1 RtlLeaveCriticalSection guest=0x4000077C recursion=0
+RUNTIME seq=27136 thread=1 RtlLeaveCriticalSection guest=0x4000077C recursion=0
+RUNTIME seq=27200 thread=1 RtlLeaveCriticalSection guest=0x4000077C recursion=0
+RUNTIME seq=27264 thread=1 RtlLeaveCriticalSection guest=0x4000077C recursion=0
+RUNTIME seq=27328 thread=1 RtlLeaveCriticalSection guest=0x4000077C recursion=0
+RUNTIME seq=27392 thread=1 RtlLeaveCriticalSection guest=0x4000077C recursion=0
+RUNTIME seq=27456 thread=1 RtlLeaveCriticalSection guest=0x4000077C recursion=0
+RUNTIME seq=27520 thread=1 RtlLeaveCriticalSection guest=0x4000077C recursion=0
+RUNTIME seq=27584 thread=1 RtlLeaveCriticalSection guest=0x4000077C recursion=0
+RUNTIME seq=27648 thread=1 RtlLeaveCriticalSection guest=0x4000077C recursion=0
+RUNTIME seq=27712 thread=1 RtlLeaveCriticalSection guest=0x4000077C recursion=0
+RUNTIME seq=27776 thread=1 RtlLeaveCriticalSection guest=0x4000077C recursion=0
+RUNTIME seq=27840 thread=1 RtlLeaveCriticalSection guest=0x4000077C recursion=0
+RUNTIME seq=27904 thread=1 RtlLeaveCriticalSection guest=0x4000077C recursion=0
+RUNTIME seq=27968 thread=1 RtlLeaveCriticalSection guest=0x4000077C recursion=0
+RUNTIME seq=28032 thread=1 RtlLeaveCriticalSection guest=0x4000077C recursion=0
+RUNTIME seq=28096 thread=1 RtlLeaveCriticalSection guest=0x4000077C recursion=0
+RUNTIME seq=28160 thread=1 RtlLeaveCriticalSection guest=0x4000077C recursion=0
+RUNTIME seq=28224 thread=1 RtlLeaveCriticalSection guest=0x4000077C recursion=0
+RUNTIME seq=28288 thread=1 RtlLeaveCriticalSection guest=0x4000077C recursion=0
+RUNTIME seq=28352 thread=1 RtlLeaveCriticalSection guest=0x4000077C recursion=0
+RUNTIME seq=28416 thread=1 RtlLeaveCriticalSection guest=0x4000077C recursion=0
+RUNTIME seq=28480 thread=1 RtlLeaveCriticalSection guest=0x4000077C recursion=0
+RUNTIME seq=28544 thread=1 RtlLeaveCriticalSection guest=0x4000077C recursion=0
+RUNTIME seq=28608 thread=1 RtlLeaveCriticalSection guest=0x4000077C recursion=0
+RUNTIME seq=28672 thread=1 RtlLeaveCriticalSection guest=0x4000077C recursion=0
+RUNTIME seq=28736 thread=1 RtlLeaveCriticalSection guest=0x4000077C recursion=0
+RUNTIME seq=28800 thread=1 RtlLeaveCriticalSection guest=0x4000077C recursion=0
+RUNTIME seq=28864 thread=1 RtlLeaveCriticalSection guest=0x4000077C recursion=0
+RUNTIME seq=28891 thread=1 AOT execution milestone calls=458752 distinctGuestFunctions=6997 lastGuest=0x822A1CD8 thread=1
+RUNTIME seq=28928 thread=1 RtlTryEnterCriticalSection guest=0x4000077C owner=1 recursion=1 lockCount=0 acquired
+RUNTIME seq=28992 thread=1 RtlTryEnterCriticalSection guest=0x4000077C owner=1 recursion=1 lockCount=0 acquired
+RUNTIME seq=29056 thread=1 RtlTryEnterCriticalSection guest=0x4000077C owner=1 recursion=1 lockCount=0 acquired
+RUNTIME seq=29120 thread=1 RtlTryEnterCriticalSection guest=0x4000077C owner=1 recursion=1 lockCount=0 acquired
+RUNTIME seq=29184 thread=1 RtlTryEnterCriticalSection guest=0x4000077C owner=1 recursion=1 lockCount=0 acquired
+RUNTIME seq=29248 thread=1 RtlTryEnterCriticalSection guest=0x4000077C owner=1 recursion=1 lockCount=0 acquired
+RUNTIME seq=29312 thread=1 RtlTryEnterCriticalSection guest=0x4000077C owner=1 recursion=1 lockCount=0 acquired
+RUNTIME seq=29376 thread=1 RtlTryEnterCriticalSection guest=0x4000077C owner=1 recursion=1 lockCount=0 acquired
+RUNTIME seq=29440 thread=1 RtlTryEnterCriticalSection guest=0x4000077C owner=1 recursion=1 lockCount=0 acquired
+RUNTIME seq=29504 thread=1 RtlTryEnterCriticalSection guest=0x4000077C owner=1 recursion=1 lockCount=0 acquired
+RUNTIME seq=29568 thread=1 RtlTryEnterCriticalSection guest=0x4000077C owner=1 recursion=1 lockCount=0 acquired
+RUNTIME seq=29632 thread=1 RtlTryEnterCriticalSection guest=0x4000077C owner=1 recursion=1 lockCount=0 acquired
+RUNTIME seq=29696 thread=1 RtlTryEnterCriticalSection guest=0x4000077C owner=1 recursion=1 lockCount=0 acquired
+RUNTIME seq=29760 thread=1 RtlTryEnterCriticalSection guest=0x4000077C owner=1 recursion=1 lockCount=0 acquired
+RUNTIME seq=29824 thread=1 RtlTryEnterCriticalSection guest=0x4000077C owner=1 recursion=1 lockCount=0 acquired
+RUNTIME seq=29888 thread=1 RtlTryEnterCriticalSection guest=0x4000077C owner=1 recursion=1 lockCount=0 acquired
+RUNTIME seq=29952 thread=1 RtlTryEnterCriticalSection guest=0x4000077C owner=1 recursion=1 lockCount=0 acquired
+RUNTIME seq=30016 thread=1 RtlTryEnterCriticalSection guest=0x4000077C owner=1 recursion=1 lockCount=0 acquired
+RUNTIME seq=30080 thread=1 RtlTryEnterCriticalSection guest=0x4000077C owner=1 recursion=1 lockCount=0 acquired
+RUNTIME seq=30144 thread=1 RtlTryEnterCriticalSection guest=0x4000077C owner=1 recursion=1 lockCount=0 acquired
+RUNTIME seq=30208 thread=1 RtlTryEnterCriticalSection guest=0x4000077C owner=1 recursion=1 lockCount=0 acquired
+RUNTIME seq=30272 thread=1 RtlTryEnterCriticalSection guest=0x4000077C owner=1 recursion=1 lockCount=0 acquired
+RUNTIME seq=30336 thread=1 RtlTryEnterCriticalSection guest=0x4000077C owner=1 recursion=1 lockCount=0 acquired
+RUNTIME seq=30400 thread=1 RtlTryEnterCriticalSection guest=0x4000077C owner=1 recursion=1 lockCount=0 acquired
+RUNTIME seq=30464 thread=1 RtlTryEnterCriticalSection guest=0x4000077C owner=1 recursion=1 lockCount=0 acquired
+RUNTIME seq=30528 thread=1 RtlTryEnterCriticalSection guest=0x4000077C owner=1 recursion=1 lockCount=0 acquired
+RUNTIME seq=30592 thread=1 RtlTryEnterCriticalSection guest=0x4000077C owner=1 recursion=1 lockCount=0 acquired
+RUNTIME seq=30656 thread=1 RtlTryEnterCriticalSection guest=0x4000077C owner=1 recursion=1 lockCount=0 acquired
+RUNTIME seq=30720 thread=1 RtlTryEnterCriticalSection guest=0x4000077C owner=1 recursion=1 lockCount=0 acquired
+RUNTIME seq=30784 thread=1 RtlTryEnterCriticalSection guest=0x4000077C owner=1 recursion=1 lockCount=0 acquired
+RUNTIME seq=30848 thread=1 RtlTryEnterCriticalSection guest=0x4000077C owner=1 recursion=1 lockCount=0 acquired
+RUNTIME seq=30912 thread=1 RtlTryEnterCriticalSection guest=0x4000077C owner=1 recursion=1 lockCount=0 acquired
+RUNTIME seq=30976 thread=1 RtlTryEnterCriticalSection guest=0x4000077C owner=1 recursion=1 lockCount=0 acquired
+RUNTIME seq=31040 thread=1 RtlTryEnterCriticalSection guest=0x4000077C owner=1 recursion=1 lockCount=0 acquired
+RUNTIME seq=31104 thread=1 RtlTryEnterCriticalSection guest=0x4000077C owner=1 recursion=1 lockCount=0 acquired
+RUNTIME seq=31168 thread=1 RtlTryEnterCriticalSection guest=0x4000077C owner=1 recursion=1 lockCount=0 acquired
+RUNTIME seq=31232 thread=1 RtlTryEnterCriticalSection guest=0x4000077C owner=1 recursion=1 lockCount=0 acquired
+RUNTIME seq=31296 thread=1 RtlTryEnterCriticalSection guest=0x4000077C owner=1 recursion=1 lockCount=0 acquired
+RUNTIME seq=31360 thread=1 RtlTryEnterCriticalSection guest=0x4000077C owner=1 recursion=1 lockCount=0 acquired
+RUNTIME seq=31424 thread=1 RtlTryEnterCriticalSection guest=0x4000077C owner=1 recursion=1 lockCount=0 acquired
+RUNTIME seq=31488 thread=1 RtlTryEnterCriticalSection guest=0x4000077C owner=1 recursion=1 lockCount=0 acquired
+RUNTIME seq=31552 thread=1 RtlLeaveCriticalSection guest=0x4000077C recursion=0
+RUNTIME seq=31616 thread=1 RtlLeaveCriticalSection guest=0x4000077C recursion=0
+RUNTIME seq=31680 thread=1 RtlLeaveCriticalSection guest=0x4000077C recursion=0
+RUNTIME seq=31744 thread=1 RtlLeaveCriticalSection guest=0x4000077C recursion=0
+RUNTIME seq=31808 thread=1 RtlLeaveCriticalSection guest=0x4000077C recursion=0
+RUNTIME seq=31872 thread=1 RtlTryEnterCriticalSection guest=0x4000077C owner=1 recursion=1 lockCount=0 acquired
+RUNTIME seq=31936 thread=1 RtlTryEnterCriticalSection guest=0x4000077C owner=1 recursion=1 lockCount=0 acquired
+RUNTIME seq=32000 thread=1 RtlTryEnterCriticalSection guest=0x4000077C owner=1 recursion=1 lockCount=0 acquired
+RUNTIME seq=32064 thread=1 RtlTryEnterCriticalSection guest=0x4000077C owner=1 recursion=1 lockCount=0 acquired
+RUNTIME seq=32128 thread=1 RtlTryEnterCriticalSection guest=0x4000077C owner=1 recursion=1 lockCount=0 acquired
+RUNTIME seq=32192 thread=1 RtlTryEnterCriticalSection guest=0x4000077C owner=1 recursion=1 lockCount=0 acquired
+RUNTIME seq=32256 thread=1 RtlTryEnterCriticalSection guest=0x4000077C owner=1 recursion=1 lockCount=0 acquired
+RUNTIME seq=32320 thread=1 RtlTryEnterCriticalSection guest=0x4000077C owner=1 recursion=1 lockCount=0 acquired
+RUNTIME seq=32384 thread=1 RtlTryEnterCriticalSection guest=0x4000077C owner=1 recursion=1 lockCount=0 acquired
+RUNTIME seq=32448 thread=1 RtlTryEnterCriticalSection guest=0x4000077C owner=1 recursion=1 lockCount=0 acquired
+RUNTIME seq=32512 thread=1 RtlTryEnterCriticalSection guest=0x4000077C owner=1 recursion=1 lockCount=0 acquired
+RUNTIME seq=32576 thread=1 RtlTryEnterCriticalSection guest=0x4000077C owner=1 recursion=1 lockCount=0 acquired
+RUNTIME seq=32640 thread=1 RtlTryEnterCriticalSection guest=0x4000077C owner=1 recursion=1 lockCount=0 acquired
+RUNTIME seq=32704 thread=1 RtlTryEnterCriticalSection guest=0x4000077C owner=1 recursion=1 lockCount=0 acquired
+RUNTIME seq=41867 thread=1 AOT execution milestone calls=524288 distinctGuestFunctions=7000 lastGuest=0x822A0200 thread=1
+RUNTIME seq=43099 thread=1 XENOS_PM4_EVENT_WRITE_SHD initiator=0x00000003 address=0x10310006 value=0x100100D4
+RUNTIME seq=43107 thread=1 XENOS_PM4_EVENT_WRITE_SHD initiator=0x00000003 address=0x10310002 value=0x00000003
+RUNTIME seq=43111 thread=1 Xenos ring kick rptr=25 wptr=25 words=25 packets=72 draws=24 swaps=0 frames=0 guest_sync_writes=3 malformed=0 decode_failures=0
+RUNTIME seq=43119 thread=1 XENOS_GRAPHICS_INTERRUPT_THREAD id=7 object=0x7D005000 KPCR=0x7C005000 stack=0x79EC0000+0x00010000
+RUNTIME seq=43126 thread=1 XENOS_GRAPHICS_INTERRUPT source=0 cpu=2 callback=0x82B3DE30 context=0x4004C080 count=1 thread=7
+RUNTIME seq=48190 thread=1 XENOS_PM4_SCRATCH_WRITEBACK reg=1 address=0x10311004 value=0x00000001
+RUNTIME seq=48200 thread=1 XENOS_PM4_SCRATCH_WRITEBACK reg=4 address=0x10311010 value=0x82B423C0
+RUNTIME seq=48202 thread=1 XENOS_PM4_SCRATCH_WRITEBACK reg=5 address=0x10311014 value=0x00000200
+RUNTIME seq=48207 thread=1 XENOS_PM4_SCRATCH_WRITEBACK reg=0 address=0x10311000 value=0x00000004
+RUNTIME seq=48214 thread=1 XENOS_GRAPHICS_INTERRUPT source=1 cpu=2 callback=0x82B3DE30 context=0x4004C080 count=1 thread=7
+RUNTIME seq=48245 thread=1 XENOS_PM4_INTERRUPT cpu_mask=0x04
+RUNTIME seq=48246 thread=1 XENOS_PM4_SCRATCH_WRITEBACK reg=4 address=0x10311010 value=0x0BADF00D
+RUNTIME seq=52118 thread=1 XENOS_PM4_EVENT_WRITE_SHD initiator=0x80000003 address=0x10310040 value=0xDEADBEEF
+RUNTIME seq=56759 thread=1 AOT execution milestone calls=589824 distinctGuestFunctions=7003 lastGuest=0x822A1DC0 thread=1
+RUNTIME seq=62021 thread=1 XENOS_PM4_EVENT_WRITE_SHD initiator=0x80000003 address=0x10310044 value=0xDEADBEEF
+RUNTIME seq=62024 thread=1 XENOS_PM4_EVENT_WRITE_SHD initiator=0x00000003 address=0x10310006 value=0x10011304
+RUNTIME seq=62033 thread=1 XENOS_PM4_EVENT_WRITE_SHD initiator=0x00000003 address=0x10310002 value=0x00000005
+RUNTIME seq=62042 thread=1 XENOS_PM4_EVENT_WRITE_SHD initiator=0x00000003 address=0x10310006 value=0x1001169C
+RUNTIME seq=62052 thread=1 XENOS_PM4_EVENT_WRITE_SHD initiator=0x00000003 address=0x10310002 value=0x00000007
+RUNTIME seq=62095 thread=1 XENOS_PM4_EVENT_WRITE_SHD initiator=0x00000003 address=0x10310006 value=0x10013B38
+RUNTIME seq=62107 thread=1 XENOS_PM4_EVENT_WRITE_SHD initiator=0x00000003 address=0x10310002 value=0x00000009
+RUNTIME seq=62114 thread=1 XENOS_PM4_EVENT_WRITE_SHD initiator=0x00000003 address=0x10310006 value=0x10013B8C
+RUNTIME seq=62121 thread=1 XENOS_PM4_EVENT_WRITE_SHD initiator=0x00000003 address=0x10310002 value=0x0000000B
+RUNTIME seq=62126 thread=1 XENOS_GRAPHICS_INTERRUPT source=1 cpu=2 callback=0x82B3DE30 context=0x4004C080 count=2 thread=7
+RUNTIME seq=62137 thread=7 PPC indirect dispatch failed reason=target below AOT code range guestTarget=0x0BADF00D CTR=0x0BADF00D LR=0x82B3DE64 lrMinus4Unverified=0x82B3DE60 callsite_bytes=4E800421 nearby_start=82B3DE44 opcodes=409A0058,81642A94,814B0010,2B0A0000,419A0010,806B0014,7D4903A6,4E800421 r0=00000000 r1=79ECFD90 r2=82000000 r3=00000200 r4=4004C080 r5=00000000 r6=00000000 r7=00000000 r8=00000000 r9=00000000 r10=0BADF00D r11=10311000 r12=00000000 r31=4004C080 lastAotEntry=0x82B3DE30 thread=7 slot=0x0
+RUNTIME seq=62702 thread=1 XENOS_GRAPHICS_INTERRUPT failed source=1: PPC indirect dispatch failed reason=target below AOT code range guestTarget=0x0BADF00D CTR=0x0BADF00D LR=0x82B3DE64 lrMinus4Unverified=0x82B3DE60 callsite_bytes=4E800421 nearby_start=82B3DE44 opcodes=409A0058,81642A94,814B0010,2B0A0000,419A0010,806B0014,7D4903A6,4E800421 r0=00000000 r1=79ECFD90 r2=82000000 r3=00000200 r4=4004C080 r5=00000000 r6=00000000 r7=00000000 r8=00000000 r9=00000000 r10=0BADF00D r11=10311000 r12=00000000 r31=4004C080 lastAotEntry=0x82B3DE30 thread=7 slot=0x0
+RUNTIME seq=62703 thread=4 PPC thread exit id=4 code=0xC0000120
+RUNTIME seq=62704 thread=6 PPC thread exit id=6 code=0xC0000120
+RUNTIME seq=62705 thread=5 PPC thread exit id=5 code=0xC0000120
+RUNTIME seq=62706 thread=1 XENOS_PM4_CP_INTERRUPT_AFTER_KICK source=1 cpu=2 guest_sync_writes=15
+RUNTIME seq=62709 thread=1 Xenos ring kick rptr=49 wptr=49 words=24 packets=1085 draws=2 swaps=1 frames=2 guest_sync_writes=15 malformed=0 decode_failures=0
+RUNTIME seq=62708 thread=2 PPC thread exit id=2 code=0xC0000120
+RUNTIME seq=62707 thread=3 PPC thread exit id=3 code=0xC0000120
+RUNTIME seq=62710 thread=1 AOT execution summary reason=user-exit calls=647607 distinctGuestFunctions=7003 lastGuest=0x822A1D48 thread=1
+2026-10-26T01:29:31Z runtime.native_return code=4 result=Sessão PPC encerrada por SAIR. |  | EVENTOS PPC RECENTES: | - RtlInitializeCriticalSection calls=17 | - thread=1 RtlLeaveCriticalSection guest=0x4000077C recursion=0 | - thread=1 RtlTryEnterCriticalSection guest=0x4000077C owner=1 recursion=1 lockCount=0 acquired | - thread=1 RtlLeaveCriticalSection guest=0x4000077C recursion=0 | - thread=1 RtlTryEnterCriticalSection guest=0x4000077C owner=1 recursion=1 lockCount=0 acquired | - thread=1 RtlLeaveCriticalSection guest=0x4000077C recursion=0 | - thread=1 RtlTryEnterCriticalSection guest=0x4000077C owner=1 recursion=1 lockCount=0 acquired | - thread=1 RtlLeaveCriticalSection guest=0x4000077C recursion=0 | - thread=1 RtlTryEnterCriticalSection guest=0x4000077C owner=1 recursion=1 lockCount=0 acquired | - thread=1 RtlLeaveCriticalSection guest=0x4000077C recursion=0 | - thread=1 RtlTryEnterCriticalSection guest=0x4000077C owner=1 recursion=1 lockCount=0 acquired | - thread=1 RtlLeaveCriticalSection guest=0x4000077C recursion=0 | - thread=1 RtlTryEnterCriticalSection guest=0x4000077C owner=1 recursion=1 lockCount=0 acquired | - thread=1 RtlLeaveCriticalSection guest=0x4000077C recursion=0 | - thread=1 RtlTryEnterCriticalSection guest=0x4000077C owner=1 recursion=1 lockCount=0 acquired | - thread=1 RtlLeaveCriticalSection guest=0x4000077C recursion=0 | - thread=1 RtlTryEnterCriticalSection guest=0x4000077C owner=1 recursion=1 lockCount=0 acquired | - thread=1 RtlLeaveCriticalSection guest=0x4000077C recursion=0 | - thread=1 RtlTryEnterCriticalSection guest=0x4000077C owner=1 recursion=1 lockCount=0 acquired | - thread=1 RtlLeaveCriticalSection guest=0x4000077C recursion=0 | - thread=1 RtlTryEnterCriticalSection guest=0x4000077C owner=1 recursion=1 lockCount=0 acquired | - thread=1 RtlLeaveCriticalSection guest=0x4000077C recursion=0 | - thread=1 RtlTryEnterCriticalSection guest=0x4000077C owner=1 recursion=1 lockCount=0 acquired | - thread=1 RtlLeaveCriticalSection guest=0x4000077C recursion=0 | - thread=1 RtlTryEnterCriticalSection guest=0x4000077C owner=1 recursion=1 lockCount=0 acquired | - thread=1 RtlLeaveCriticalSection guest=0x4000077C recursion=0 | - thread=1 RtlTryEnterCriticalSection guest=0x4000077C owner=1 recursion=1 lockCount=0 acquired | - thread=1 RtlLeaveCriticalSection guest=0x4000077C recursion=0 | - thread=1 RtlTryEnterCriticalSection guest=0x4000077C owner=1 recursion=1 lockCount=0 acquired | - thread=1 RtlLeaveCriticalSection guest=0x4000077C recursion=0 | - thread=1 RtlTryEnterCriticalSection guest=0x4000077C owner=1 recursion=1 lockCount=0 acquired | - thread=1 RtlLeaveCriticalSection guest=0x4000077C recursion=0 | - thread=1 RtlTryEnterCriticalSection guest=0x4000077C owner=1 recursion=1 lockCount=0 acquired | - thread=1 RtlLeaveCriticalSection guest=0x4000077C recursion=0 | - thread=1 RtlTryEnterCriticalSection guest=0x4000077C owner=1 recursion=1 lockCount=0 acquired | - thread=1 RtlLeaveCriticalSection guest=0x4000077C recursion=0 | - thread=1 RtlTryEnterCriticalSection guest=0x4000077C owner=1 recursion=1 lockCount=0 acquired | - thread=1 RtlLeaveCriticalSection guest=0x4000077C recursion=0 | - thread=1 RtlTryEnterCriticalSection guest=0x4000077C owner=1 recursion=1 lockCount=0 acquired | - thread=1 RtlLeaveCriticalSection guest=0x4000077C recursion=0 | - thread=1 RtlTryEnterCriticalSection guest=0x4000077C owner=1 recursion=1 lockCount=0 acquired | - thread=1 RtlLeaveCriticalSection guest=0x4000077C recursion=0 | - thread=1 RtlTryEnterCriticalSection guest=0x4000077C owner=1 recursion=1 lockCount=0 acquired | - thread=1 RtlLeaveCriticalSection guest=0x4000077C recursion=0 | - thread=1 RtlTryEnterCriticalSection guest=0x4000077C owner=1 recursion=1 lockCount=0 acquired | - thread=1 RtlLeaveCriticalSection guest=0x4000077C recursion=0 | - thread=1 RtlTryEnterCriticalSection guest=0x4000077C owner=1 recursion=1 lockCount=0 acquired | - thread=1 RtlLeaveCriticalSection guest=0x4000077C recursion=0 | - thread=1 RtlTryEnterCriticalSection guest=0x4000077C owner=1 recursion=1 lockCount=0 acquired | - thread=1 RtlLeaveCriticalSection guest=0x4000077C recursion=0 | - thread=1 RtlTryEnterCriticalSection guest=0x4000077C owner=1 recursion=1 lockCount=0 acquired | - thread=1 RtlLeaveCriticalSection guest=0x4000077C recursion=0 | - thread=1 RtlTryEnterCriticalSection guest=0x4000077C owner=1 recursion=1 lockCount=0 acquired | - thread=1 RtlLeaveCriticalSection guest=0x4000077C recursion=0 | - thread=1 RtlTryEnterCriticalSection guest=0x4000077C owner=1 recursion=1 lockCount=0 acquired | - thread=1 RtlLeaveCriticalSection guest=0x4000077C recursion=0 | - thread=1 RtlTryEnterCriticalSection guest=0x4000077C owner=1 recursion=1 lockCount=0 acquired | - thread=1 RtlLeaveCriticalSection guest=0x4000077C recursion=0 | - thread=1 RtlTryEnterCriticalSection guest=0x4000077C owner=1 recursion=1 lockCount=0 acquired | - thread=1 RtlLeaveCriticalSection guest=0x4000077C recursion=0 | - thread=1 RtlTryEnterCriticalSection guest=0x4000077C owner=1 recursion=1 lockCount=0 acquired | - thread=1 RtlLeaveCriticalSection guest=0x4000077C recursion=0 | - thread=1 RtlTryEnterCriticalSection guest=0x4000077C owner=1 recursion=1 lockCount=0 acquired | - thread=1 RtlLeaveCriticalSection guest=0x4000077C recursion=0 | - thread=1 RtlTryEnterCriticalSection guest=0x4000077C owner=1 recursion=1 lockCount=0 acquired | - thread=1 RtlLeaveCriticalSection guest=0x4000077C recursion=0 | - thread=1 RtlTryEnterCriticalSection guest=0x4000077C owner=1 recursion=1 lockCount=0 acquired | - thread=1 RtlLeaveCriticalSection guest=0x4000077C recursion=0 | - thread=1 RtlTryEnterCriticalSection guest=0x4000077C owner=1 recursion=1 lockCount=0 acquired | - thread=1 RtlLeaveCriticalSection guest=0x4000077C recursion=0 | - thread=1 RtlTryEnterCriticalSection guest=0x4000077C owner=1 recursion=1 lockCount=0 acquired | - thread=1 RtlLeaveCriticalSection guest=0x4000077C recursion=0 | - thread=1 RtlTryEnterCriticalSection guest=0x4000077C owner=1 recursion=1 lockCount=0 acquired | - thread=1 RtlLeaveCriticalSection guest=0x4000077C recursion=0 | - thread=1 RtlTryEnterCriticalSection guest=0x4000077C owner=1 recursion=1 lockCount=0 acquired | - thread=1 RtlLeaveCriticalSection guest=0x4000077C recursion=0 | - thread=1 RtlTryEnterCriticalSection guest=0x4000077C owner=1 recursion=1 lockCount=0 acquired | - thread=1 RtlLeaveCriticalSection guest=0x4000077C recursion=0 | - thread=1 RtlTryEnterCriticalSection guest=0x4000077C owner=1 recursion=1 lockCount=0 acquired | - thread=1 RtlLeaveCriticalSection guest=0x4000077C recursion=0 | - thread=1 RtlTryEnterCriticalSection guest=0x4000077C owner=1 recursion=1 lockCount=0 acquired | - thread=1 RtlLeaveCriticalSection guest=0x4000077C recursion=0 | - thread=1 RtlTryEnterCriticalSection guest=0x4000077C owner=1 recursion=1 lockCount=0 acquired | - thread=1 RtlLeaveCriticalSection guest=0x4000077C recursion=0 | - thread=1 RtlTryEnterCriticalSection guest=0x4000077C owner=1 recursion=1 lockCount=0 acquired | - thread=1 RtlLeaveCriticalSection guest=0x4000077C recursion=0 | - thread=1 RtlTryEnterCriticalSection guest=0x4000077C owner=1 recursion=1 lockCount=0 acquired | - thread=1 RtlLeaveCriticalSection guest=0x4000077C recursion=0 | - thread=1 RtlTryEnterCriticalSection guest=0x4000077C owner=1 recursion=1 lockCount=0 acquired | - thread=1 RtlLeaveCriticalSection guest=0x4000077C recursion=0 | - thread=1 RtlTryEnterCriticalSection guest=0x4000077C owner=1 recursion=1 lockCount=0 acquired | - thread=1 RtlLeaveCriticalSection guest=0x4000077C recursion=0 | - thread=1 RtlTryEnterCriticalSection guest=0x4000077C owner=1 recursion=1 lockCount=0 acquired | - thread=1 RtlLeaveCriticalSection guest=0x4000077C recursion=0 | - thread=1 RtlTryEnterCriticalSection guest=0x4000077C owner=1 recursion=1 lockCount=0 acquired | - thread=1 RtlLeaveCriticalSection guest=0x4000077C recursion=0 | - thread=1 RtlTryEnterCriticalSection guest=0x4000077C owner=1 recursion=1 lockCount=0 acquired | - thread=1 RtlLeaveCriticalSection guest=0x4000077C recursion=0 | - thread=1 RtlTryEnterCriticalSection guest=0x4000077C owner=1 recursion=1 lockCount=0 acquired | - thread=1 RtlLeaveCriticalSection guest=0x4000077C recursion=0 | - thread=1 RtlTryEnterCriticalSection guest=0x4000077C owner=1 recursion=1 lockCount=0 acquired | - thread=1 RtlLeaveCriticalSection guest=0x4000077C recursion=0 | - thread=1 RtlTryEnterCriticalSection guest=0x4000077C owner=1 recursion=1 lockCount=0 acquired | - thread=1 RtlLeaveCriticalSection guest=0x4000077C recursion=0 | - thread=1 RtlTryEnterCriticalSection guest=0x4000077C owner=1 recursion=1 lockCount=0 acquired | - thread=1 RtlLeaveCriticalSection guest=0x4000077C recursion=0 | - thread=1 RtlTryEnterCriticalSection guest=0x4000077C owner=1 recursion=1 lockCount=0 acquired | - thread=1 RtlLeaveCriticalSection guest=0x4000077C recursion=0 | - thread=1 RtlTryEnterCriticalSection guest=0x4000077C owner=1 recursion=1 lockCount=0 acquired | - thread=1 RtlLeaveCriticalSection guest=0x4000077C recursion=0 | - thread=1 RtlTryEnterCriticalSection guest=0x4000077C owner=1 recursion=1 lockCount=0 acquired | - thread=1 RtlLeaveCriticalSection guest=0x4000077C recursion=0 | - thread=1 RtlTryEnterCriticalSection guest=0x4000077C owner=1 recursion=1 lockCount=0 acquired | - thread=1 RtlLeaveCriticalSection guest=0x4000077C recursion=0 | - thread=1 RtlTryEnterCriticalSection guest=0x4000077C owner=1 recursion=1 lockCount=0 acquired | - thread=1 RtlLeaveCriticalSection guest=0x4000077C recursion=0 | - thread=1 RtlTryEnterCriticalSection guest=0x4000077C owner=1 recursion=1 lockCount=0 acquired | - thread=1 RtlLeaveCriticalSection guest=0x4000077C recursion=0 | - thread=1 RtlTryEnterCriticalSection guest=0x4000077C owner=1 recursion=1 lockCount=0 acquired | - thread=1 XENOS_GRAPHICS_INTERRUPT failed source=1: PPC indirect dispatch failed reason=target below AOT code range guestTarget=0x0BADF00D CTR=0x0BADF00D LR=0x82B3DE64 lrMinus4Unverified=0x82B3DE60 callsite_bytes=4E800421 nearby_start=82B3DE44 opcodes=409A0058,81642A94,814B0010,2B0A0000,419A0010,806B0014,7D4903A6,4E800421 r0=00000000 r1=79ECFD90 r2=82000000 r3=00000200 r4=4004C080 r5=00000000 r6=00000000 r7=00000000 r8=00000000 r9=00000000 r10=0BADF00D r11=10311000 r12=00000000 r31=4004C080 lastAotEntry=0x82B3DE30 thread=7 slot=0x0 | - thread=4 PPC thread exit id=4 code=0xC0000120 | - thread=6 PPC thread exit id=6 code=0xC0000120 | - thread=5 PPC thread exit id=5 code=0xC0000120 | - thread=1 XENOS_PM4_CP_INTERRUPT_AFTER_KICK source=1 cpu=2 guest_sync_writes=15 | - thread=3 PPC thread exit id=3 code=0xC0000120 | - thread=2 PPC thread exit id=2 code=0xC0000120 | - thread=1 Xenos ring kick rptr=49 wptr=49 words=24 packets=1085 draws=2 swaps=1 frames=2 guest_sync_writes=15 malformed=0 decode_failures=0 | - thread=1 AOT execution summary reason=user-exit calls=647607 distinctGuestFunctions=7003 lastGuest=0x822A1D48 thread=1 | - thread=1 XOWUE_USER_EXIT PPC stopped; scheduler guard joining guest threads |  | ESTADO XENOS/VD: | - engines=initialized ring=0x10003000 size=0x00008000 rptr=49 readback=0x1031003C swaps=2 packets=1157 draws=26 indirect=13 malformed=0 decoded_frames=2 last=1280x720 frontbuffer=0x10316000 | - XENOS_SHADER_TRANSLATOR source=SpeedBreaker/Xenia frame_state=XOWUE_FRAME_LIFECYCLE generation=2 swap=1 color_source=1 copied=1 resolve=1 committed=0 nonblack=0 stale=1 guard=1 addr=10316000 size=1280x720 pitch=1280 format=6 tile=271671296 copy_cmd=0 status=1 nonblack_pixels=0 translated=4 rejected=0 cache_hits=1 spirv_compiled=4 spirv_rejected=0 observed_draws=26 vertex_hash=1DDB2F897F5466FA pixel_hash=92A6B6F8F6E6B311 initiator=00030088 queued=26 dropped=0 pipeline_draws_submitted=0 pipeline_draws_rejected=0 linked_pixels=0 linked_pixel_rejected=0 linked_varying_mask=0000 last_reject=XENOS_STALE_GUEST_FRAME: swap_decode_not_ready_for_present
+2026-10-26T01:29:31Z BOOT_FINISHED code=4
+Sessão PPC encerrada por SAIR.
+
+EVENTOS PPC RECENTES:
+- RtlInitializeCriticalSection calls=17
+- thread=1 RtlLeaveCriticalSection guest=0x4000077C recursion=0
+- thread=1 RtlTryEnterCriticalSection guest=0x4000077C owner=1 recursion=1 lockCount=0 acquired
+- thread=1 RtlLeaveCriticalSection guest=0x4000077C recursion=0
+- thread=1 RtlTryEnterCriticalSection guest=0x4000077C owner=1 recursion=1 lockCount=0 acquired
+- thread=1 RtlLeaveCriticalSection guest=0x4000077C recursion=0
+- thread=1 RtlTryEnterCriticalSection guest=0x4000077C owner=1 recursion=1 lockCount=0 acquired
+- thread=1 RtlLeaveCriticalSection guest=0x4000077C recursion=0
+- thread=1 RtlTryEnterCriticalSection guest=0x4000077C owner=1 recursion=1 lockCount=0 acquired
+- thread=1 RtlLeaveCriticalSection guest=0x4000077C recursion=0
+- thread=1 RtlTryEnterCriticalSection guest=0x4000077C owner=1 recursion=1 lockCount=0 acquired
+- thread=1 RtlLeaveCriticalSection guest=0x4000077C recursion=0
+- thread=1 RtlTryEnterCriticalSection guest=0x4000077C owner=1 recursion=1 lockCount=0 acquired
+- thread=1 RtlLeaveCriticalSection guest=0x4000077C recursion=0
+- thread=1 RtlTryEnterCriticalSection guest=0x4000077C owner=1 recursion=1 lockCount=0 acquired
+- thread=1 RtlLeaveCriticalSection guest=0x4000077C recursion=0
+- thread=1 RtlTryEnterCriticalSection guest=0x4000077C owner=1 recursion=1 lockCount=0 acquired
+- thread=1 RtlLeaveCriticalSection guest=0x4000077C recursion=0
+- thread=1 RtlTryEnterCriticalSection guest=0x4000077C owner=1 recursion=1 lockCount=0 acquired
+- thread=1 RtlLeaveCriticalSection guest=0x4000077C recursion=0
+- thread=1 RtlTryEnterCriticalSection guest=0x4000077C owner=1 recursion=1 lockCount=0 acquired
+- thread=1 RtlLeaveCriticalSection guest=0x4000077C recursion=0
+- thread=1 RtlTryEnterCriticalSection guest=0x4000077C owner=1 recursion=1 lockCount=0 acquired
+- thread=1 RtlLeaveCriticalSection guest=0x4000077C recursion=0
+- thread=1 RtlTryEnterCriticalSection guest=0x4000077C owner=1 recursion=1 lockCount=0 acquired
+- thread=1 RtlLeaveCriticalSection guest=0x4000077C recursion=0
+- thread=1 RtlTryEnterCriticalSection guest=0x4000077C owner=1 recursion=1 lockCount=0 acquired
+- thread=1 RtlLeaveCriticalSection guest=0x4000077C recursion=0
+- thread=1 RtlTryEnterCriticalSection guest=0x4000077C owner=1 recursion=1 lockCount=0 acquired
+- thread=1 RtlLeaveCriticalSection guest=0x4000077C recursion=0
+- thread=1 RtlTryEnterCriticalSection guest=0x4000077C owner=1 recursion=1 lockCount=0 acquired
+- thread=1 RtlLeaveCriticalSection guest=0x4000077C recursion=0
+- thread=1 RtlTryEnterCriticalSection guest=0x4000077C owner=1 recursion=1 lockCount=0 acquired
+- thread=1 RtlLeaveCriticalSection guest=0x4000077C recursion=0
+- thread=1 RtlTryEnterCriticalSection guest=0x4000077C owner=1 recursion=1 lockCount=0 acquired
+- thread=1 RtlLeaveCriticalSection guest=0x4000077C recursion=0
+- thread=1 RtlTryEnterCriticalSection guest=0x4000077C owner=1 recursion=1 lockCount=0 acquired
+- thread=1 RtlLeaveCriticalSection guest=0x4000077C recursion=0
+- thread=1 RtlTryEnterCriticalSection guest=0x4000077C owner=1 recursion=1 lockCount=0 acquired
+- thread=1 RtlLeaveCriticalSection guest=0x4000077C recursion=0
+- thread=1 RtlTryEnterCriticalSection guest=0x4000077C owner=1 recursion=1 lockCount=0 acquired
+- thread=1 RtlLeaveCriticalSection guest=0x4000077C recursion=0
+- thread=1 RtlTryEnterCriticalSection guest=0x4000077C owner=1 recursion=1 lockCount=0 acquired
+- thread=1 RtlLeaveCriticalSection guest=0x4000077C recursion=0
+- thread=1 RtlTryEnterCriticalSection guest=0x4000077C owner=1 recursion=1 lockCount=0 acquired
+- thread=1 RtlLeaveCriticalSection guest=0x4000077C recursion=0
+- thread=1 RtlTryEnterCriticalSection guest=0x4000077C owner=1 recursion=1 lockCount=0 acquired
+- thread=1 RtlLeaveCriticalSection guest=0x4000077C recursion=0
+- thread=1 RtlTryEnterCriticalSection guest=0x4000077C owner=1 recursion=1 lockCount=0 acquired
+- thread=1 RtlLeaveCriticalSection guest=0x4000077C recursion=0
+- thread=1 RtlTryEnterCriticalSection guest=0x4000077C owner=1 recursion=1 lockCount=0 acquired
+- thread=1 RtlLeaveCriticalSection guest=0x4000077C recursion=0
+- thread=1 RtlTryEnterCriticalSection guest=0x4000077C owner=1 recursion=1 lockCount=0 acquired
+- thread=1 RtlLeaveCriticalSection guest=0x4000077C recursion=0
+- thread=1 RtlTryEnterCriticalSection guest=0x4000077C owner=1 recursion=1 lockCount=0 acquired
+- thread=1 RtlLeaveCriticalSection guest=0x4000077C recursion=0
+- thread=1 RtlTryEnterCriticalSection guest=0x4000077C owner=1 recursion=1 lockCount=0 acquired
+- thread=1 RtlLeaveCriticalSection guest=0x4000077C recursion=0
+- thread=1 RtlTryEnterCriticalSection guest=0x4000077C owner=1 recursion=1 lockCount=0 acquired
+- thread=1 RtlLeaveCriticalSection guest=0x4000077C recursion=0
+- thread=1 RtlTryEnterCriticalSection guest=0x4000077C owner=1 recursion=1 lockCount=0 acquired
+- thread=1 RtlLeaveCriticalSection guest=0x4000077C recursion=0
+- thread=1 RtlTryEnterCriticalSection guest=0x4000077C owner=1 recursion=1 lockCount=0 acquired
+- thread=1 RtlLeaveCriticalSection guest=0x4000077C recursion=0
+- thread=1 RtlTryEnterCriticalSection guest=0x4000077C owner=1 recursion=1 lockCount=0 acquired
+- thread=1 RtlLeaveCriticalSection guest=0x4000077C recursion=0
+- thread=1 RtlTryEnterCriticalSection guest=0x4000077C owner=1 recursion=1 lockCount=0 acquired
+- thread=1 RtlLeaveCriticalSection guest=0x4000077C recursion=0
+- thread=1 RtlTryEnterCriticalSection guest=0x4000077C owner=1 recursion=1 lockCount=0 acquired
+- thread=1 RtlLeaveCriticalSection guest=0x4000077C recursion=0
+- thread=1 RtlTryEnterCriticalSection guest=0x4000077C owner=1 recursion=1 lockCount=0 acquired
+- thread=1 RtlLeaveCriticalSection guest=0x4000077C recursion=0
+- thread=1 RtlTryEnterCriticalSection guest=0x4000077C owner=1 recursion=1 lockCount=0 acquired
+- thread=1 RtlLeaveCriticalSection guest=0x4000077C recursion=0
+- thread=1 RtlTryEnterCriticalSection guest=0x4000077C owner=1 recursion=1 lockCount=0 acquired
+- thread=1 RtlLeaveCriticalSection guest=0x4000077C recursion=0
+- thread=1 RtlTryEnterCriticalSection guest=0x4000077C owner=1 recursion=1 lockCount=0 acquired
+- thread=1 RtlLeaveCriticalSection guest=0x4000077C recursion=0
+- thread=1 RtlTryEnterCriticalSection guest=0x4000077C owner=1 recursion=1 lockCount=0 acquired
+- thread=1 RtlLeaveCriticalSection guest=0x4000077C recursion=0
+- thread=1 RtlTryEnterCriticalSection guest=0x4000077C owner=1 recursion=1 lockCount=0 acquired
+- thread=1 RtlLeaveCriticalSection guest=0x4000077C recursion=0
+- thread=1 RtlTryEnterCriticalSection guest=0x4000077C owner=1 recursion=1 lockCount=0 acquired
+- thread=1 RtlLeaveCriticalSection guest=0x4000077C recursion=0
+- thread=1 RtlTryEnterCriticalSection guest=0x4000077C owner=1 recursion=1 lockCount=0 acquired
+- thread=1 RtlLeaveCriticalSection guest=0x4000077C recursion=0
+- thread=1 RtlTryEnterCriticalSection guest=0x4000077C owner=1 recursion=1 lockCount=0 acquired
+- thread=1 RtlLeaveCriticalSection guest=0x4000077C recursion=0
+- thread=1 RtlTryEnterCriticalSection guest=0x4000077C owner=1 recursion=1 lockCount=0 acquired
+- thread=1 RtlLeaveCriticalSection guest=0x4000077C recursion=0
+- thread=1 RtlTryEnterCriticalSection guest=0x4000077C owner=1 recursion=1 lockCount=0 acquired
+- thread=1 RtlLeaveCriticalSection guest=0x4000077C recursion=0
+- thread=1 RtlTryEnterCriticalSection guest=0x4000077C owner=1 recursion=1 lockCount=0 acquired
+- thread=1 RtlLeaveCriticalSection guest=0x4000077C recursion=0
+- thread=1 RtlTryEnterCriticalSection guest=0x4000077C owner=1 recursion=1 lockCount=0 acquired
+- thread=1 RtlLeaveCriticalSection guest=0x4000077C recursion=0
+- thread=1 RtlTryEnterCriticalSection guest=0x4000077C owner=1 recursion=1 lockCount=0 acquired
+- thread=1 RtlLeaveCriticalSection guest=0x4000077C recursion=0
+- thread=1 RtlTryEnterCriticalSection guest=0x4000077C owner=1 recursion=1 lockCount=0 acquired
+- thread=1 RtlLeaveCriticalSection guest=0x4000077C recursion=0
+- thread=1 RtlTryEnterCriticalSection guest=0x4000077C owner=1 recursion=1 lockCount=0 acquired
+- thread=1 RtlLeaveCriticalSection guest=0x4000077C recursion=0
+- thread=1 RtlTryEnterCriticalSection guest=0x4000077C owner=1 recursion=1 lockCount=0 acquired
+- thread=1 RtlLeaveCriticalSection guest=0x4000077C recursion=0
+- thread=1 RtlTryEnterCriticalSection guest=0x4000077C owner=1 recursion=1 lockCount=0 acquired
+- thread=1 RtlLeaveCriticalSection guest=0x4000077C recursion=0
+- thread=1 RtlTryEnterCriticalSection guest=0x4000077C owner=1 recursion=1 lockCount=0 acquired
+- thread=1 RtlLeaveCriticalSection guest=0x4000077C recursion=0
+- thread=1 RtlTryEnterCriticalSection guest=0x4000077C owner=1 recursion=1 lockCount=0 acquired
+- thread=1 RtlLeaveCriticalSection guest=0x4000077C recursion=0
+- thread=1 RtlTryEnterCriticalSection guest=0x4000077C owner=1 recursion=1 lockCount=0 acquired
+- thread=1 RtlLeaveCriticalSection guest=0x4000077C recursion=0
+- thread=1 RtlTryEnterCriticalSection guest=0x4000077C owner=1 recursion=1 lockCount=0 acquired
+- thread=1 RtlLeaveCriticalSection guest=0x4000077C recursion=0
+- thread=1 RtlTryEnterCriticalSection guest=0x4000077C owner=1 recursion=1 lockCount=0 acquired
+- thread=1 RtlLeaveCriticalSection guest=0x4000077C recursion=0
+- thread=1 RtlTryEnterCriticalSection guest=0x4000077C owner=1 recursion=1 lockCount=0 acquired
+- thread=1 RtlLeaveCriticalSection guest=0x4000077C recursion=0
+- thread=1 RtlTryEnterCriticalSection guest=0x4000077C owner=1 recursion=1 lockCount=0 acquired
+- thread=1 XENOS_GRAPHICS_INTERRUPT failed source=1: PPC indirect dispatch failed reason=target below AOT code range guestTarget=0x0BADF00D CTR=0x0BADF00D LR=0x82B3DE64 lrMinus4Unverified=0x82B3DE60 callsite_bytes=4E800421 nearby_start=82B3DE44 opcodes=409A0058,81642A94,814B0010,2B0A0000,419A0010,806B0014,7D4903A6,4E800421 r0=00000000 r1=79ECFD90 r2=82000000 r3=00000200 r4=4004C080 r5=00000000 r6=00000000 r7=00000000 r8=00000000 r9=00000000 r10=0BADF00D r11=10311000 r12=00000000 r31=4004C080 lastAotEntry=0x82B3DE30 thread=7 slot=0x0
+- thread=4 PPC thread exit id=4 code=0xC0000120
+- thread=6 PPC thread exit id=6 code=0xC0000120
+- thread=5 PPC thread exit id=5 code=0xC0000120
+- thread=1 XENOS_PM4_CP_INTERRUPT_AFTER_KICK source=1 cpu=2 guest_sync_writes=15
+- thread=3 PPC thread exit id=3 code=0xC0000120
+- thread=2 PPC thread exit id=2 code=0xC0000120
+- thread=1 Xenos ring kick rptr=49 wptr=49 words=24 packets=1085 draws=2 swaps=1 frames=2 guest_sync_writes=15 malformed=0 decode_failures=0
+- thread=1 AOT execution summary reason=user-exit calls=647607 distinctGuestFunctions=7003 lastGuest=0x822A1D48 thread=1
+- thread=1 XOWUE_USER_EXIT PPC stopped; scheduler guard joining guest threads
+
+ESTADO XENOS/VD:
+- engines=initialized ring=0x10003000 size=0x00008000 rptr=49 readback=0x1031003C swaps=2 packets=1157 draws=26 indirect=13 malformed=0 decoded_frames=2 last=1280x720 frontbuffer=0x10316000
+- XENOS_SHADER_TRANSLATOR source=SpeedBreaker/Xenia frame_state=XOWUE_FRAME_LIFECYCLE generation=2 swap=1 color_source=1 copied=1 resolve=1 committed=0 nonblack=0 stale=1 guard=1 addr=10316000 size=1280x720 pitch=1280 format=6 tile=271671296 copy_cmd=0 status=1 nonblack_pixels=0 translated=4 rejected=0 cache_hits=1 spirv_compiled=4 spirv_rejected=0 observed_draws=26 vertex_hash=1DDB2F897F5466FA pixel_hash=92A6B6F8F6E6B311 initiator=00030088 queued=26 dropped=0 pipeline_draws_submitted=0 pipeline_draws_rejected=0 linked_pixels=0 linked_pixel_rejected=0 linked_varying_mask=0000 last_reject=XENOS_STALE_GUEST_FRAME: swap_decode_not_ready_for_present
+2026-10-26T01:29:31Z runtime.stop completed code=4
+XENOS_GUEST_SWAP_PRESTART decoded=0 nonblack=0 checksum=0000000000000000
+KOSMICKRISP_BACKEND_START build=55 mesa_commit=bfe063f723d436e5cdef8a98f058d4e44a64810c os=26.5.1 model=iPhone
+METAL_DEVICE name=Apple A19 Pro GPU registryID=4294968707
+INSTANCE_EXTENSION VK_KHR_device_group_creation
+INSTANCE_EXTENSION VK_KHR_external_fence_capabilities
+INSTANCE_EXTENSION VK_KHR_external_memory_capabilities
+INSTANCE_EXTENSION VK_KHR_external_semaphore_capabilities
+INSTANCE_EXTENSION VK_KHR_get_physical_device_properties2
+INSTANCE_EXTENSION VK_KHR_get_surface_capabilities2
+INSTANCE_EXTENSION VK_KHR_surface
+INSTANCE_EXTENSION VK_KHR_surface_maintenance1
+INSTANCE_EXTENSION VK_KHR_surface_protected_capabilities
+INSTANCE_EXTENSION VK_EXT_debug_report
+INSTANCE_EXTENSION VK_EXT_debug_utils
+INSTANCE_EXTENSION VK_EXT_metal_surface
+INSTANCE_EXTENSION VK_EXT_surface_maintenance1
+INSTANCE_EXTENSION VK_EXT_swapchain_colorspace
+INSTANCE EXT surface=1 metal_surface=1 portability_enum=0 total=14
+INSTANCE PASS
+METAL SURFACE PASS layer=0x10cc02680
+GPU PASS name=Apple A19 Pro GPU vendor=0x106b device=0x0064 driver=109060195 api=1.4.363 queueFamily=0
+GPU_MEMORY heaps=1 heap_bytes=8589950976 resident_mib=307.2 pipeline_cache=none(guest-frame-copy)
+DEVICE_EXTENSION VK_KHR_8bit_storage
+DEVICE_EXTENSION VK_KHR_16bit_storage
+DEVICE_EXTENSION VK_KHR_bind_memory2
+DEVICE_EXTENSION VK_KHR_buffer_device_address
+DEVICE_EXTENSION VK_KHR_calibrated_timestamps
+DEVICE_EXTENSION VK_KHR_copy_commands2
+DEVICE_EXTENSION VK_KHR_create_renderpass2
+DEVICE_EXTENSION VK_KHR_dedicated_allocation
+DEVICE_EXTENSION VK_KHR_deferred_host_operations
+DEVICE_EXTENSION VK_KHR_depth_stencil_resolve
+DEVICE_EXTENSION VK_KHR_descriptor_update_template
+DEVICE_EXTENSION VK_KHR_device_group
+DEVICE_EXTENSION VK_KHR_draw_indirect_count
+DEVICE_EXTENSION VK_KHR_driver_properties
+DEVICE_EXTENSION VK_KHR_dynamic_rendering
+DEVICE_EXTENSION VK_KHR_dynamic_rendering_local_read
+DEVICE_EXTENSION VK_KHR_external_fence
+DEVICE_EXTENSION VK_KHR_external_fence_fd
+DEVICE_EXTENSION VK_KHR_external_memory
+DEVICE_EXTENSION VK_KHR_external_semaphore
+DEVICE_EXTENSION VK_KHR_external_semaphore_fd
+DEVICE_EXTENSION VK_KHR_format_feature_flags2
+DEVICE_EXTENSION VK_KHR_get_memory_requirements2
+DEVICE_EXTENSION VK_KHR_global_priority
+DEVICE_EXTENSION VK_KHR_image_format_list
+DEVICE_EXTENSION VK_KHR_imageless_framebuffer
+DEVICE_EXTENSION VK_KHR_index_type_uint8
+DEVICE_EXTENSION VK_KHR_line_rasterization
+DEVICE_EXTENSION VK_KHR_load_store_op_none
+DEVICE_EXTENSION VK_KHR_maintenance1
+DEVICE_EXTENSION VK_KHR_maintenance2
+DEVICE_EXTENSION VK_KHR_maintenance3
+DEVICE_EXTENSION VK_KHR_maintenance4
+DEVICE_EXTENSION VK_KHR_maintenance5
+DEVICE_EXTENSION VK_KHR_maintenance6
+DEVICE_EXTENSION VK_KHR_maintenance7
+DEVICE_EXTENSION VK_KHR_maintenance8
+DEVICE_EXTENSION VK_KHR_maintenance9
+DEVICE_EXTENSION VK_KHR_maintenance10
+DEVICE_EXTENSION VK_KHR_map_memory2
+DEVICE_EXTENSION VK_KHR_multiview
+DEVICE_EXTENSION VK_KHR_present_id
+DEVICE_EXTENSION VK_KHR_present_id2
+DEVICE_EXTENSION VK_KHR_present_wait
+DEVICE_EXTENSION VK_KHR_present_wait2
+DEVICE_EXTENSION VK_KHR_push_descriptor
+DEVICE_EXTENSION VK_KHR_relaxed_block_layout
+DEVICE_EXTENSION VK_KHR_robustness2
+DEVICE_EXTENSION VK_KHR_sampler_mirror_clamp_to_edge
+DEVICE_EXTENSION VK_KHR_sampler_ycbcr_conversion
+DEVICE_EXTENSION VK_KHR_separate_depth_stencil_layouts
+DEVICE_EXTENSION VK_KHR_shader_draw_parameters
+DEVICE_EXTENSION VK_KHR_shader_expect_assume
+DEVICE_EXTENSION VK_KHR_shader_float16_int8
+DEVICE_EXTENSION VK_KHR_shader_float_controls
+DEVICE_EXTENSION VK_KHR_shader_float_controls2
+DEVICE_EXTENSION VK_KHR_shader_fma
+DEVICE_EXTENSION VK_KHR_shader_integer_dot_product
+DEVICE_EXTENSION VK_KHR_shader_maximal_reconvergence
+DEVICE_EXTENSION VK_KHR_shader_non_semantic_info
+DEVICE_EXTENSION VK_KHR_shader_relaxed_extended_instruction
+DEVICE_EXTENSION VK_KHR_shader_subgroup_extended_types
+DEVICE_EXTENSION VK_KHR_shader_subgroup_rotate
+DEVICE_EXTENSION VK_KHR_shader_subgroup_uniform_control_flow
+DEVICE_EXTENSION VK_KHR_shader_terminate_invocation
+DEVICE_EXTENSION VK_KHR_shader_untyped_pointers
+DEVICE_EXTENSION VK_KHR_spirv_1_4
+DEVICE_EXTENSION VK_KHR_storage_buffer_storage_class
+DEVICE_EXTENSION VK_KHR_swapchain
+DEVICE_EXTENSION VK_KHR_swapchain_maintenance1
+DEVICE_EXTENSION VK_KHR_swapchain_mutable_format
+DEVICE_EXTENSION VK_KHR_synchronization2
+DEVICE_EXTENSION VK_KHR_timeline_semaphore
+DEVICE_EXTENSION VK_KHR_unified_image_layouts
+DEVICE_EXTENSION VK_KHR_uniform_buffer_standard_layout
+DEVICE_EXTENSION VK_KHR_variable_pointers
+DEVICE_EXTENSION VK_KHR_vertex_attribute_divisor
+DEVICE_EXTENSION VK_KHR_vulkan_memory_model
+DEVICE_EXTENSION VK_KHR_workgroup_memory_explicit_layout
+DEVICE_EXTENSION VK_KHR_zero_initialize_workgroup_memory
+DEVICE_EXTENSION VK_EXT_4444_formats
+DEVICE_EXTENSION VK_EXT_attachment_feedback_loop_dynamic_state
+DEVICE_EXTENSION VK_EXT_attachment_feedback_loop_layout
+DEVICE_EXTENSION VK_EXT_blend_operation_advanced
+DEVICE_EXTENSION VK_EXT_buffer_device_address
+DEVICE_EXTENSION VK_EXT_calibrated_timestamps
+DEVICE_EXTENSION VK_EXT_conditional_rendering
+DEVICE_EXTENSION VK_EXT_custom_resolve
+DEVICE_EXTENSION VK_EXT_debug_marker
+DEVICE_EXTENSION VK_EXT_depth_clip_control
+DEVICE_EXTENSION VK_EXT_depth_clip_enable
+DEVICE_EXTENSION VK_EXT_descriptor_indexing
+DEVICE_EXTENSION VK_EXT_extended_dynamic_state
+DEVICE_EXTENSION VK_EXT_extended_dynamic_state2
+DEVICE_EXTENSION VK_EXT_extended_dynamic_state3
+DEVICE_EXTENSION VK_EXT_external_memory_host
+DEVICE_EXTENSION VK_EXT_external_memory_metal
+DEVICE_EXTENSION VK_EXT_global_priority
+DEVICE_EXTENSION VK_EXT_global_priority_query
+DEVICE_EXTENSION VK_EXT_hdr_metadata
+DEVICE_EXTENSION VK_EXT_host_image_copy
+DEVICE_EXTENSION VK_EXT_host_query_reset
+DEVICE_EXTENSION VK_EXT_image_2d_view_of_3d
+DEVICE_EXTENSION VK_EXT_image_robustness
+DEVICE_EXTENSION VK_EXT_index_type_uint8
+DEVICE_EXTENSION VK_EXT_inline_uniform_block
+DEVICE_EXTENSION VK_EXT_line_rasterization
+DEVICE_EXTENSION VK_EXT_load_store_op_none
+DEVICE_EXTENSION VK_EXT_map_memory_placed
+DEVICE_EXTENSION VK_EXT_memory_budget
+DEVICE_EXTENSION VK_EXT_multi_draw
+DEVICE_EXTENSION VK_EXT_mutable_descriptor_type
+DEVICE_EXTENSION VK_EXT_nested_command_buffer
+DEVICE_EXTENSION VK_EXT_pipeline_creation_cache_control
+DEVICE_EXTENSION VK_EXT_pipeline_creation_feedback
+DEVICE_EXTENSION VK_EXT_pipeline_robustness
+DEVICE_EXTENSION VK_EXT_post_depth_coverage
+DEVICE_EXTENSION VK_EXT_primitive_restart_index
+DEVICE_EXTENSION VK_EXT_primitive_topology_list_restart
+DEVICE_EXTENSION VK_EXT_private_data
+DEVICE_EXTENSION VK_EXT_provoking_vertex
+DEVICE_EXTENSION VK_EXT_robustness2
+DEVICE_EXTENSION VK_EXT_sample_locations
+DEVICE_EXTENSION VK_EXT_sampler_filter_minmax
+DEVICE_EXTENSION VK_EXT_scalar_block_layout
+DEVICE_EXTENSION VK_EXT_separate_stencil_usage
+DEVICE_EXTENSION VK_EXT_shader_atomic_float
+DEVICE_EXTENSION VK_EXT_shader_demote_to_helper_invocation
+DEVICE_EXTENSION VK_EXT_shader_replicated_composites
+DEVICE_EXTENSION VK_EXT_shader_stencil_export
+DEVICE_EXTENSION VK_EXT_shader_subgroup_ballot
+DEVICE_EXTENSION VK_EXT_shader_subgroup_vote
+DEVICE_EXTENSION VK_EXT_shader_viewport_index_layer
+DEVICE_EXTENSION VK_EXT_subgroup_size_control
+DEVICE_EXTENSION VK_EXT_swapchain_maintenance1
+DEVICE_EXTENSION VK_EXT_texel_buffer_alignment
+DEVICE_EXTENSION VK_EXT_texture_compression_astc_hdr
+DEVICE_EXTENSION VK_EXT_tooling_info
+DEVICE_EXTENSION VK_EXT_vertex_attribute_divisor
+DEVICE_EXTENSION VK_EXT_vertex_attribute_robustness
+DEVICE_EXTENSION VK_EXT_ycbcr_2plane_444_formats
+DEVICE_EXTENSION VK_AMD_buffer_marker
+DEVICE_EXTENSION VK_AMD_shader_image_load_store_lod
+DEVICE_EXTENSION VK_GOOGLE_decorate_string
+DEVICE_EXTENSION VK_GOOGLE_hlsl_functionality1
+DEVICE_EXTENSION VK_GOOGLE_user_type
+DEVICE EXT swapchain=1 portability_subset=0 total=146
+GUEST_FRAME_UPLOAD ready 2144x1206 bytes=10342656 coherent=1
+SWAPCHAIN PASS extent=2144x1206 images=3 format=44 present=FIFO
+VULKAN DEVICE PASS direct-ICD + Metal WSI
+KOSMICKRISP_BACKEND_READY extent=2144x1206 images=3
+XENOS_VULKAN_SHADER_MODULE stage=vertex hash=1DDB2F897F5466FA words=4000 result=0
+XENOS_VULKAN_SHADER_MODULE stage=fragment hash=92A6B6F8F6E6B311 words=981 result=0
+XENOS_NATIVE_RESOURCES renderpass=1 descriptor_set=1 physical_ssbo_mib=512 ubo_bytes=1179648
+XENOS_DRAW_AUDIT slot=0 initiator=00010081 primitive=1 index_count=1 index_addr=00000000 index_info=00000000 fetch_mask=00000000 texture2d=00000000 vs=8D83FD903355B0B9 ps=92A6B6F8F6E6B311 vte=00000300 vs_memexport=0 ps_memexport=0 color_mask=1
+XENOS_NATIVE_TARGET_STATE slot=0 mode=00000004 pitch=0 msaa=0 rt0=00000000 rt1=00000000 rt2=00000000 rt3=00000000 depth=00000000 depthctrl=00000000 color_mask=00000000 blend0=00000000 copy=00000000 scissor=00000000..00100010
+XENOS_VULKAN_SHADER_MODULE stage=vertex hash=8D83FD903355B0B9 words=3177 result=0
+XENOS_FRAGMENT_COLOR_OUTPUT_LINKED vs=8D83FD903355B0B9 ps=92A6B6F8F6E6B311 words=1039
+XENOS_NATIVE_PIPELINE_CREATED vertex=8D83FD903355B0B9 pixel=92A6B6F8F6E6B311 topology=0
+XENOS_GUEST_VIEWPORT vte=00000300 flags=D scale=(0.001563,0.002778) offset=(-1.0000,-1.0000) primitive=1 vertices=1
+XENOS_DRAW_AUDIT slot=1 initiator=00010081 primitive=1 index_count=1 index_addr=00000000 index_info=00000000 fetch_mask=00000000 texture2d=00000000 vs=8D83FD903355B0B9 ps=92A6B6F8F6E6B311 vte=00000300 vs_memexport=0 ps_memexport=0 color_mask=1
+XENOS_NATIVE_TARGET_STATE slot=1 mode=00000004 pitch=0 msaa=0 rt0=00000000 rt1=00000000 rt2=00000000 rt3=00000000 depth=00000000 depthctrl=00000000 color_mask=00000000 blend0=00000000 copy=00000000 scissor=00000000..00100010
+XENOS_DRAW_AUDIT slot=2 initiator=00010081 primitive=1 index_count=1 index_addr=00000000 index_info=00000000 fetch_mask=00000000 texture2d=00000000 vs=8D83FD903355B0B9 ps=92A6B6F8F6E6B311 vte=00000300 vs_memexport=0 ps_memexport=0 color_mask=1
+XENOS_NATIVE_TARGET_STATE slot=2 mode=00000004 pitch=0 msaa=0 rt0=00000000 rt1=00000000 rt2=00000000 rt3=00000000 depth=00000000 depthctrl=00000000 color_mask=00000000 blend0=00000000 copy=00000000 scissor=00000000..00100010
+XENOS_DRAW_AUDIT slot=3 initiator=00010081 primitive=1 index_count=1 index_addr=00000000 index_info=00000000 fetch_mask=00000000 texture2d=00000000 vs=8D83FD903355B0B9 ps=92A6B6F8F6E6B311 vte=00000300 vs_memexport=0 ps_memexport=0 color_mask=1
+XENOS_NATIVE_TARGET_STATE slot=3 mode=00000004 pitch=0 msaa=0 rt0=00000000 rt1=00000000 rt2=00000000 rt3=00000000 depth=00000000 depthctrl=00000000 color_mask=00000000 blend0=00000000 copy=00000000 scissor=00000000..00100010
+XENOS_DRAW_AUDIT slot=4 initiator=00010081 primitive=1 index_count=1 index_addr=00000000 index_info=00000000 fetch_mask=00000000 texture2d=00000000 vs=8D83FD903355B0B9 ps=92A6B6F8F6E6B311 vte=00000300 vs_memexport=0 ps_memexport=0 color_mask=1
+XENOS_NATIVE_TARGET_STATE slot=4 mode=00000004 pitch=0 msaa=0 rt0=00000000 rt1=00000000 rt2=00000000 rt3=00000000 depth=00000000 depthctrl=00000000 color_mask=00000000 blend0=00000000 copy=00000000 scissor=00000000..00100010
+XENOS_DRAW_AUDIT slot=5 initiator=00010081 primitive=1 index_count=1 index_addr=00000000 index_info=00000000 fetch_mask=00000000 texture2d=00000000 vs=8D83FD903355B0B9 ps=92A6B6F8F6E6B311 vte=00000300 vs_memexport=0 ps_memexport=0 color_mask=1
+XENOS_NATIVE_TARGET_STATE slot=5 mode=00000004 pitch=0 msaa=0 rt0=00000000 rt1=00000000 rt2=00000000 rt3=00000000 depth=00000000 depthctrl=00000000 color_mask=00000000 blend0=00000000 copy=00000000 scissor=00000000..00100010
+XENOS_DRAW_AUDIT slot=6 initiator=00010081 primitive=1 index_count=1 index_addr=00000000 index_info=00000000 fetch_mask=00000000 texture2d=00000000 vs=8D83FD903355B0B9 ps=92A6B6F8F6E6B311 vte=00000300 vs_memexport=0 ps_memexport=0 color_mask=1
+XENOS_NATIVE_TARGET_STATE slot=6 mode=00000004 pitch=0 msaa=0 rt0=00000000 rt1=00000000 rt2=00000000 rt3=00000000 depth=00000000 depthctrl=00000000 color_mask=00000000 blend0=00000000 copy=00000000 scissor=00000000..00100010
+XENOS_DRAW_AUDIT slot=7 initiator=00010081 primitive=1 index_count=1 index_addr=00000000 index_info=00000000 fetch_mask=00000000 texture2d=00000000 vs=8D83FD903355B0B9 ps=92A6B6F8F6E6B311 vte=00000300 vs_memexport=0 ps_memexport=0 color_mask=1
+XENOS_NATIVE_TARGET_STATE slot=7 mode=00000004 pitch=0 msaa=0 rt0=00000000 rt1=00000000 rt2=00000000 rt3=00000000 depth=00000000 depthctrl=00000000 color_mask=00000000 blend0=00000000 copy=00000000 scissor=00000000..00100010
+XENOS_DRAW_AUDIT slot=8 initiator=00010081 primitive=1 index_count=1 index_addr=00000000 index_info=00000000 fetch_mask=00000000 texture2d=00000000 vs=8D83FD903355B0B9 ps=92A6B6F8F6E6B311 vte=00000300 vs_memexport=0 ps_memexport=0 color_mask=1
+XENOS_NATIVE_TARGET_STATE slot=8 mode=00000004 pitch=0 msaa=0 rt0=00000000 rt1=00000000 rt2=00000000 rt3=00000000 depth=00000000 depthctrl=00000000 color_mask=00000000 blend0=00000000 copy=00000000 scissor=00000000..00100010
+XENOS_DRAW_AUDIT slot=9 initiator=00010081 primitive=1 index_count=1 index_addr=00000000 index_info=00000000 fetch_mask=00000000 texture2d=00000000 vs=8D83FD903355B0B9 ps=92A6B6F8F6E6B311 vte=00000300 vs_memexport=0 ps_memexport=0 color_mask=1
+XENOS_NATIVE_TARGET_STATE slot=9 mode=00000004 pitch=0 msaa=0 rt0=00000000 rt1=00000000 rt2=00000000 rt3=00000000 depth=00000000 depthctrl=00000000 color_mask=00000000 blend0=00000000 copy=00000000 scissor=00000000..00100010
+XENOS_DRAW_AUDIT slot=10 initiator=00010081 primitive=1 index_count=1 index_addr=00000000 index_info=00000000 fetch_mask=00000000 texture2d=00000000 vs=8D83FD903355B0B9 ps=92A6B6F8F6E6B311 vte=00000300 vs_memexport=0 ps_memexport=0 color_mask=1
+XENOS_NATIVE_TARGET_STATE slot=10 mode=00000004 pitch=0 msaa=0 rt0=00000000 rt1=00000000 rt2=00000000 rt3=00000000 depth=00000000 depthctrl=00000000 color_mask=00000000 blend0=00000000 copy=00000000 scissor=00000000..00100010
+XENOS_DRAW_AUDIT slot=11 initiator=00010081 primitive=1 index_count=1 index_addr=00000000 index_info=00000000 fetch_mask=00000000 texture2d=00000000 vs=8D83FD903355B0B9 ps=92A6B6F8F6E6B311 vte=00000300 vs_memexport=0 ps_memexport=0 color_mask=1
+XENOS_NATIVE_TARGET_STATE slot=11 mode=00000004 pitch=0 msaa=0 rt0=00000000 rt1=00000000 rt2=00000000 rt3=00000000 depth=00000000 depthctrl=00000000 color_mask=00000000 blend0=00000000 copy=00000000 scissor=00000000..00100010
+XENOS_DRAW_AUDIT slot=12 initiator=00010081 primitive=1 index_count=1 index_addr=00000000 index_info=00000000 fetch_mask=00000000 texture2d=00000000 vs=8D83FD903355B0B9 ps=92A6B6F8F6E6B311 vte=00000300 vs_memexport=0 ps_memexport=0 color_mask=1
+XENOS_NATIVE_TARGET_STATE slot=12 mode=00000004 pitch=0 msaa=0 rt0=00000000 rt1=00000000 rt2=00000000 rt3=00000000 depth=00000000 depthctrl=00000000 color_mask=00000000 blend0=00000000 copy=00000000 scissor=00000000..00100010
+XENOS_DRAW_AUDIT slot=13 initiator=00010081 primitive=1 index_count=1 index_addr=00000000 index_info=00000000 fetch_mask=00000000 texture2d=00000000 vs=8D83FD903355B0B9 ps=92A6B6F8F6E6B311 vte=00000300 vs_memexport=0 ps_memexport=0 color_mask=1
+XENOS_NATIVE_TARGET_STATE slot=13 mode=00000004 pitch=0 msaa=0 rt0=00000000 rt1=00000000 rt2=00000000 rt3=00000000 depth=00000000 depthctrl=00000000 color_mask=00000000 blend0=00000000 copy=00000000 scissor=00000000..00100010
+XENOS_DRAW_AUDIT slot=14 initiator=00010081 primitive=1 index_count=1 index_addr=00000000 index_info=00000000 fetch_mask=00000000 texture2d=00000000 vs=8D83FD903355B0B9 ps=92A6B6F8F6E6B311 vte=00000300 vs_memexport=0 ps_memexport=0 color_mask=1
+XENOS_NATIVE_TARGET_STATE slot=14 mode=00000004 pitch=0 msaa=0 rt0=00000000 rt1=00000000 rt2=00000000 rt3=00000000 depth=00000000 depthctrl=00000000 color_mask=00000000 blend0=00000000 copy=00000000 scissor=00000000..00100010
+XENOS_DRAW_AUDIT slot=15 initiator=00010081 primitive=1 index_count=1 index_addr=00000000 index_info=00000000 fetch_mask=00000000 texture2d=00000000 vs=8D83FD903355B0B9 ps=92A6B6F8F6E6B311 vte=00000300 vs_memexport=0 ps_memexport=0 color_mask=1
+XENOS_NATIVE_TARGET_STATE slot=15 mode=00000004 pitch=0 msaa=0 rt0=00000000 rt1=00000000 rt2=00000000 rt3=00000000 depth=00000000 depthctrl=00000000 color_mask=00000000 blend0=00000000 copy=00000000 scissor=00000000..00100010
+XENOS_DRAW_AUDIT slot=16 initiator=00010081 primitive=1 index_count=1 index_addr=00000000 index_info=00000000 fetch_mask=00000000 texture2d=00000000 vs=8D83FD903355B0B9 ps=92A6B6F8F6E6B311 vte=00000300 vs_memexport=0 ps_memexport=0 color_mask=1
+XENOS_NATIVE_TARGET_STATE slot=16 mode=00000004 pitch=0 msaa=0 rt0=00000000 rt1=00000000 rt2=00000000 rt3=00000000 depth=00000000 depthctrl=00000000 color_mask=00000000 blend0=00000000 copy=00000000 scissor=00000000..00100010
+XENOS_DRAW_AUDIT slot=17 initiator=00010081 primitive=1 index_count=1 index_addr=00000000 index_info=00000000 fetch_mask=00000000 texture2d=00000000 vs=8D83FD903355B0B9 ps=92A6B6F8F6E6B311 vte=00000300 vs_memexport=0 ps_memexport=0 color_mask=1
+XENOS_NATIVE_TARGET_STATE slot=17 mode=00000004 pitch=0 msaa=0 rt0=00000000 rt1=00000000 rt2=00000000 rt3=00000000 depth=00000000 depthctrl=00000000 color_mask=00000000 blend0=00000000 copy=00000000 scissor=00000000..00100010
+XENOS_DRAW_AUDIT slot=18 initiator=00010081 primitive=1 index_count=1 index_addr=00000000 index_info=00000000 fetch_mask=00000000 texture2d=00000000 vs=8D83FD903355B0B9 ps=92A6B6F8F6E6B311 vte=00000300 vs_memexport=0 ps_memexport=0 color_mask=1
+XENOS_NATIVE_TARGET_STATE slot=18 mode=00000004 pitch=0 msaa=0 rt0=00000000 rt1=00000000 rt2=00000000 rt3=00000000 depth=00000000 depthctrl=00000000 color_mask=00000000 blend0=00000000 copy=00000000 scissor=00000000..00100010
+XENOS_DRAW_AUDIT slot=19 initiator=00010081 primitive=1 index_count=1 index_addr=00000000 index_info=00000000 fetch_mask=00000000 texture2d=00000000 vs=8D83FD903355B0B9 ps=92A6B6F8F6E6B311 vte=00000300 vs_memexport=0 ps_memexport=0 color_mask=1
+XENOS_NATIVE_TARGET_STATE slot=19 mode=00000004 pitch=0 msaa=0 rt0=00000000 rt1=00000000 rt2=00000000 rt3=00000000 depth=00000000 depthctrl=00000000 color_mask=00000000 blend0=00000000 copy=00000000 scissor=00000000..00100010
+XENOS_DRAW_AUDIT slot=20 initiator=00010081 primitive=1 index_count=1 index_addr=00000000 index_info=00000000 fetch_mask=00000000 texture2d=00000000 vs=8D83FD903355B0B9 ps=92A6B6F8F6E6B311 vte=00000300 vs_memexport=0 ps_memexport=0 color_mask=1
+XENOS_NATIVE_TARGET_STATE slot=20 mode=00000004 pitch=0 msaa=0 rt0=00000000 rt1=00000000 rt2=00000000 rt3=00000000 depth=00000000 depthctrl=00000000 color_mask=00000000 blend0=00000000 copy=00000000 scissor=00000000..00100010
+XENOS_DRAW_AUDIT slot=21 initiator=00010081 primitive=1 index_count=1 index_addr=00000000 index_info=00000000 fetch_mask=00000000 texture2d=00000000 vs=8D83FD903355B0B9 ps=92A6B6F8F6E6B311 vte=00000300 vs_memexport=0 ps_memexport=0 color_mask=1
+XENOS_NATIVE_TARGET_STATE slot=21 mode=00000004 pitch=0 msaa=0 rt0=00000000 rt1=00000000 rt2=00000000 rt3=00000000 depth=00000000 depthctrl=00000000 color_mask=00000000 blend0=00000000 copy=00000000 scissor=00000000..00100010
+XENOS_DRAW_AUDIT slot=22 initiator=00010081 primitive=1 index_count=1 index_addr=00000000 index_info=00000000 fetch_mask=00000000 texture2d=00000000 vs=8D83FD903355B0B9 ps=92A6B6F8F6E6B311 vte=00000300 vs_memexport=0 ps_memexport=0 color_mask=1
+XENOS_NATIVE_TARGET_STATE slot=22 mode=00000004 pitch=0 msaa=0 rt0=00000000 rt1=00000000 rt2=00000000 rt3=00000000 depth=00000000 depthctrl=00000000 color_mask=00000000 blend0=00000000 copy=00000000 scissor=00000000..00100010
+XENOS_DRAW_AUDIT slot=23 initiator=00010081 primitive=1 index_count=1 index_addr=00000000 index_info=00000000 fetch_mask=00000000 texture2d=00000000 vs=8D83FD903355B0B9 ps=92A6B6F8F6E6B311 vte=00000300 vs_memexport=0 ps_memexport=0 color_mask=1
+XENOS_NATIVE_TARGET_STATE slot=23 mode=00000004 pitch=0 msaa=0 rt0=00000000 rt1=00000000 rt2=00000000 rt3=00000000 depth=00000000 depthctrl=00000000 color_mask=00000000 blend0=00000000 copy=00000000 scissor=00000000..00100010
+XENOS_DRAW_AUDIT slot=24 initiator=00030088 primitive=8 index_count=3 index_addr=00000000 index_info=00000000 fetch_mask=00000001 texture2d=00000000 vs=975881668748D9C3 ps=0000000000000000 vte=00000300 vs_memexport=0 ps_memexport=0 color_mask=0
+XENOS_NATIVE_TARGET_STATE slot=24 mode=00000005 pitch=640 msaa=2 rt0=000002D0 rt1=00000000 rt2=00000000 rt3=00000000 depth=000002D0 depthctrl=00008777 color_mask=0000FFFF blend0=00010001 copy=00000000 scissor=00000000..20002000
+XENOS_EDRAM_DEPTH_NATIVE tile=720 pitch=640 samples=4
+XENOS_FETCH_CAPTURE slot=0 sub=0 word0=1002007F word1=10000056 guest=1002007C declared=84 estimated=240 stride=7 extent=7
+XENOS_VULKAN_SHADER_MODULE stage=vertex hash=975881668748D9C3 words=4752 result=0
+XENOS_NATIVE_PIPELINE_CREATED vertex=975881668748D9C3 pixel=0000000000000000 topology=3
+XENOS_GEOMETRY_SUBMIT slot=24 primitive=8 count=6 fetch=00000001 memexport_vs=0 memexport_ps=0 viewport=(0.00156,0.00278,-1.00000,-1.00000) target=2144x1206
+XENOS_DRAW_AUDIT slot=25 initiator=00030088 primitive=8 index_count=3 index_addr=00000000 index_info=00000000 fetch_mask=00000000 texture2d=00000000 vs=0000000000000000 ps=0000000000000000 vte=00000300 vs_memexport=0 ps_memexport=0 color_mask=0
+XENOS_NATIVE_TARGET_STATE slot=25 mode=00000006 pitch=1280 msaa=0 rt0=000002D0 rt1=00000000 rt2=00000000 rt3=00000000 depth=00000000 depthctrl=00000000 color_mask=0000000F blend0=00010001 copy=00100000 scissor=00000000..02D00500
+XENOS_COPY_GUEST_REQUEST dest_base=10316000 dest_pitch=02D00500 dest_info=01000300 control=00100000 src=0 copy_command=1
+XENOS_COPY_MISSING_GUEST_COLOR src=0 command=1 tile=720 available_color=0
+GRAPHICS_BLOCKER reason=EDRAM_COLOR_SOURCE_UNAVAILABLE tile=720
+XENOS_NATIVE_DRAW_OUTCOME captured=26 queued=25 rejected=0 rejected_memory=0 rejected_texture=0
+GRAPHICS_BLOCKER reason=DRAW_QUEUE_INCOMPLETE captured=26 submitted_candidate=25
+XENOS_GPU_DRAWS_SUBMITTED=25 total=25
+XENOS_COMPOSITED_GPU_READBACK nonblack=0 samples=8209 checksum=5853B5ECFBA7179F full_nonblack=0 full_pixels=2585664 bbox=0,0..0,0
+XENOS_VULKAN_SHADER_MODULE stage=vertex hash=1DDB2F897F5466FA words=4000 result=0
+XENOS_VULKAN_SHADER_MODULE stage=fragment hash=92A6B6F8F6E6B311 words=981 result=0
+XOWUE_REAL_FPS guest=0.00 present=56.35 fresh_guest_frames=0 metal_presents=57 interval=1.012
+KOSMICKRISP_PRESENT host_presents=60 unique_guest_uploads=0 decoded_frames=0 guest_swaps=0 guest_extent=0x0 guest_vk_draws=25 composed_frames=1 cache=1 resident_mib=340.5
+XOWUE_REAL_FPS guest=0.00 present=59.98 fresh_guest_frames=0 metal_presents=60 interval=1.000
+KOSMICKRISP_PRESENT host_presents=120 unique_guest_uploads=0 decoded_frames=0 guest_swaps=0 guest_extent=0x0 guest_vk_draws=25 composed_frames=1 cache=1 resident_mib=318.5
+XOWUE_REAL_FPS guest=0.00 present=59.98 fresh_guest_frames=0 metal_presents=60 interval=1.000
+KOSMICKRISP_PRESENT host_presents=180 unique_guest_uploads=0 decoded_frames=0 guest_swaps=0 guest_extent=0x0 guest_vk_draws=25 composed_frames=1 cache=1 resident_mib=314.9
+XOWUE_REAL_FPS guest=0.00 present=60.41 fresh_guest_frames=0 metal_presents=61 interval=1.010
+KOSMICKRISP_PRESENT host_presents=240 unique_guest_uploads=0 decoded_frames=0 guest_swaps=0 guest_extent=0x0 guest_vk_draws=25 composed_frames=1 cache=1 resident_mib=315.3
+XOWUE_REAL_FPS guest=0.00 present=59.51 fresh_guest_frames=0 metal_presents=60 interval=1.008
+KOSMICKRISP_PRESENT host_presents=300 unique_guest_uploads=0 decoded_frames=0 guest_swaps=0 guest_extent=0x0 guest_vk_draws=25 composed_frames=1 cache=1 resident_mib=315.5
+XOWUE_REAL_FPS guest=0.00 present=59.98 fresh_guest_frames=0 metal_presents=60 interval=1.000
+KOSMICKRISP_PRESENT host_presents=360 unique_guest_uploads=0 decoded_frames=0 guest_swaps=0 guest_extent=0x0 guest_vk_draws=25 composed_frames=1 cache=1 resident_mib=292.6
+XOWUE_REAL_FPS guest=0.00 present=60.10 fresh_guest_frames=0 metal_presents=61 interval=1.015
+KOSMICKRISP_PRESENT host_presents=420 unique_guest_uploads=0 decoded_frames=0 guest_swaps=0 guest_extent=0x0 guest_vk_draws=25 composed_frames=1 cache=1 resident_mib=292.6
+XOWUE_REAL_FPS guest=0.00 present=59.91 fresh_guest_frames=0 metal_presents=60 interval=1.002
+KOSMICKRISP_PRESENT host_presents=480 unique_guest_uploads=0 decoded_frames=0 guest_swaps=0 guest_extent=0x0 guest_vk_draws=25 composed_frames=1 cache=1 resident_mib=292.6
+XOWUE_REAL_FPS guest=0.00 present=59.99 fresh_guest_frames=0 metal_presents=60 interval=1.000
+KOSMICKRISP_PRESENT host_presents=540 unique_guest_uploads=0 decoded_frames=0 guest_swaps=0 guest_extent=0x0 guest_vk_draws=25 composed_frames=1 cache=1 resident_mib=292.5
+2026-10-26T01:29:41Z navigation.exit tapped: terminating native PPC
+2026-10-26T01:29:41Z runtime.stop requested by user phase=ready surface=false latched=true
+2026-10-26T01:29:41Z orientation.host exit explicitly dismissing presented game controller
+2026-10-26T01:29:41Z scan.start roots=Documents,Documents/Jogos
+LIFECYCLE view_detached wait_idle=0
+2026-10-26T01:29:41Z runtime.stop requested by user phase=scanning surface=false latched=true
+2026-10-26T01:29:41Z orientation.host dismiss requested; no modal attached to anchor/root
+2026-10-26T01:29:41Z orientation.host dismiss requested; no modal attached to anchor/root
+2026-10-26T01:29:41Z orientation.host dismiss requested; no modal attached to anchor/root
+2026-10-26T01:29:41Z scan.complete count=1 paths=/private/var/mobile/Containers/Data/Application/372BCA06-CD6C-45B8-A9D0-F5CDE2465585/Documents/Data/Application/CE896602-7C83-4940-91AE-E0767DFF45BE/Documents/Jogos/X-MEN ORIGINS WOLVERINE PT BR
+2026-10-26T01:29:41Z game.selected path=/private/var/mobile/Containers/Data/Application/372BCA06-CD6C-45B8-A9D0-F5CDE2465585/Documents/Data/Application/CE896602-7C83-4940-91AE-E0767DFF45BE/Documents/Jogos/X-MEN ORIGINS WOLVERINE PT BR
+2026-10-26T01:29:41Z orientation.host dismiss requested; no modal attached to anchor/root
