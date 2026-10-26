@@ -161,6 +161,6 @@ for token in ("hot0=", "hot1=", "hot2=", "hot3=", "hot4=", "hot5=", "hot6=", "ho
               "HOT_FN_CODE", "THREAD_DUMP", "recentAotFns", "lastCallerFn", "CODE_AUDIT"):
     if token not in runtime:
         raise SystemExit(f"Build 62 runtime diagnostic missing {token}")
-if "resumo-b62.txt" not in diagnostics or "utf8.count > 4000" not in diagnostics:
+if "resumo-b63.txt" not in diagnostics or "utf8.count > 4000" not in diagnostics:
     raise SystemExit("Build 62 compact diagnostic is missing or not capped at 4 KB")
 print("PASS: Build 62 hot-function/thread dumps and compact diagnostic are present")
