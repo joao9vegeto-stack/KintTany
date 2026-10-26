@@ -355,7 +355,7 @@ jobs:
           print("XOWUE_B63_TIMEBASE_OVERRIDE " + matches[0])
           PY
           cp "$PPC_CONTEXT" "$AOT_PPC_CONTEXT"
-          grep -Fq 'xowue_guest_timebase();' "$XENONRECOMP_ROOT/XenonRecomp/recompiler.cpp"
+          grep -Fq 'xowue_guest_timebase();' "$RUNNER_TEMP/XenonRecomp/XenonRecomp/recompiler.cpp"
           grep -Fq 'ctx.r3.u64 = safeTb;' "$GITHUB_WORKSPACE/generated/ppc"/ppc_recomp.*.cpp
 
           INDIRECT_CALL_SOURCES=$(grep -lF -e 'PPC_CALL_INDIRECT_FUNC(' -e 'PPC_LOOKUP_FUNC(' "$GITHUB_WORKSPACE"/generated/ppc/ppc_recomp.*.cpp || true)
