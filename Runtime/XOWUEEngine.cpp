@@ -342,7 +342,6 @@ std::filesystem::path g_guestGameRoot;
 std::filesystem::path g_guestSaveRoot;
 std::mutex g_guestPathIndexMutex;
 std::unordered_map<std::string, std::filesystem::path> g_guestPathIndex;
-static void rebuildGuestPathIndex();
 thread_local uint32_t g_guestIrql = 0u;
 std::mutex g_guestThreadMutex;
 std::mutex g_guestStackMutex;
@@ -1983,6 +1982,8 @@ extern "C" void xowue_request_stop(void) {
     recordRuntimeTrace("XOWUE_USER_EXIT scheduler cancellation requested");
     requestGuestSchedulerStop();
 }
+
+static void rebuildGuestPathIndex();
 
 extern "C" int xowue_boot_xex(const char *path, char *output, size_t output_capacity) {
     try {
