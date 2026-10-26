@@ -2353,6 +2353,32 @@ extern "C" int xowue_boot_xex(const char *path, char *output, size_t output_capa
             std::fprintf(stderr, "%s\n", audit);
             recordRuntimeTrace(audit);
         }
+        // Build 63: enumerate actual branch-and-link callers of QueryPerformanceCounter.
+        uint32_t qpcCallers = 0u;
+        constexpr uint32_t qpcTextStart = 0x82000000u;
+        constexpr uint32_t qpcTextEnd = 0x836DF000u;
+        for (uint32_t pc = qpcTextStart; pc < qpcTextEnd; pc += 4u) {
+            if (!validGuestRange(pc, 4u)) continue;
+            const uint32_t word = loadGuestBe32(memory->base, pc);
+            if ((word & 0xFC000003u) != 0x48000001u) continue;
+            int32_t displacement = static_cast<int32_t>(word & 0x03FFFFFCu);
+            if ((displacement & 0x02000000) != 0) displacement |= static_cast<int32_t>(0xFC000000u);
+            const uint32_t target = (word & 2u) != 0u
+                ? static_cast<uint32_t>(displacement)
+                : static_cast<uint32_t>(pc + static_cast<uint32_t>(displacement));
+            if (target != 0x82C3C4A0u) continue;
+            char callerLine[128];
+            std::snprintf(callerLine, sizeof(callerLine),
+                "CODE_AUDIT_QPC_CALLERS pc=0x%08X insn=0x%08X target=0x%08X", pc, word, target);
+            std::fprintf(stderr, "%s\\n", callerLine);
+            recordRuntimeTrace(callerLine);
+            ++qpcCallers;
+        }
+        char qpcSummary[96];
+        std::snprintf(qpcSummary, sizeof(qpcSummary),
+            "CODE_AUDIT_QPC_CALLERS count=%u text=0x%08X-0x%08X", qpcCallers, qpcTextStart, qpcTextEnd);
+        std::fprintf(stderr, "%s\\n", qpcSummary);
+        recordRuntimeTrace(qpcSummary);
         g_activeExecutionInfoAddress = allocateGuestPhysicalRange(memory->base, 0x20u, 0x1000u, 0x04u);
         if (g_activeExecutionInfoAddress != 0u) {
             uint8_t *base = memory->base;
