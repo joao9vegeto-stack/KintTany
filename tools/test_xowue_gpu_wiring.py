@@ -54,10 +54,14 @@ assert "XENOS_GUEST_SWAP_RGBA" in vulkan
 assert "XOWUEOrientationDelegate" in Path("iOS/App/XOWUEApp.swift").read_text()
 print("PASS: UIKit effective orientation, exhaustive GPU readback and guest-swap pixel audit")
 
-# Build 54 regression: interrupt after committed fence writes, matching 16:9 surface.
-assert "cpInterruptRequested" in engine
-assert "XENOS_PM4_CP_INTERRUPT_AFTER_KICK source=1 cpu=2" in engine
-assert "const uint32_t value = words[offset + 3u]" in engine
+# Build 55 regression: EVENT_WRITE_SHD bit 31 is a counter write, never a CP interrupt.
+assert "const bool writeCounter = (initiator & 0x80000000u) != 0u" in engine
+assert "packetValue == 0xDEADBEEFu" in engine
+assert "cpInterruptRequested" not in engine
+assert "XENOS_PM4_CP_INTERRUPT_AFTER_KICK" not in engine
+assert "XENOS_GRAPHICS_INTERRUPT skipped source=1 invalid SCRATCH_REG4 target=0x%08X" in engine
+assert "XOWUE_GUEST_PROGRESS_WATCHDOG fresh_guest_frames=0 duration_ms=" in engine
+assert "XOWUE_GUEST_THREAD_STATE id=%u lastGuest=0x%08X LR=0x%08X" in engine
 assert "g_runtimeTracePersistMilestones.fetch_add(1, std::memory_order_relaxed) < 100000u" in engine
 assert "colorTarget?fminf(720.0f,(float)colorTarget->extent.height)" in renderer
 assert "scissor.extent.height=(uint32_t)fminf(720.0f" in renderer
@@ -65,6 +69,10 @@ color=Path("iOS/App/XOWUEGuestColor.inc").read_text()
 assert "sourceHeight=t->extent.height<720u?t->extent.height:720u" in color
 critical=engine[engine.index("void xowue_RtlTryEnterCriticalSection"):engine.index("void xowue_RtlLeaveCriticalSection")]
 assert "owner == g_currentGuestThreadId" in critical and "recursion = 1u" in critical
+assert "shouldTraceCriticalSectionContention" in critical
+assert "shouldTraceCriticalSection()" in critical
+assert "GuestWaitStateScope waitState" in engine
+assert "lastGuestPc.store(guestAddress" in engine
 assert ".ignoresSafeArea(.all)" in Path("iOS/App/XOWUEApp.swift").read_text()
 print("PASS: Build 54 CP fence ordering, critical-section recursion and full 16:9 EDRAM resolve")
 

@@ -219,6 +219,10 @@ struct GuestThread {
     std::atomic<uint32_t> suspendCount{0};
     std::atomic<uint32_t> exitStatus{kNtStatusSuccess};
     std::atomic<bool> exited{false};
+    std::atomic<uint32_t> lastGuestPc{0u};
+    std::atomic<uint32_t> lastGuestLr{0u};
+    std::atomic<uint32_t> waitTarget{0u};
+    std::atomic<bool> waitingInKernel{false};
     std::mutex stateMutex;
     std::mutex apcMutex;
     std::deque<GuestApc> pendingApcs;
@@ -289,6 +293,9 @@ uint32_t g_tlsRawDataAddress = 0;
 uint32_t g_tlsRawDataSize = 0;
 uint32_t g_tlsBlockSize = 0x1000u;
 std::atomic<size_t> g_criticalSectionInitCount{0};
+std::atomic<size_t> g_criticalSectionTraceCount{0};
+std::atomic<size_t> g_criticalSectionContentionTraceCount{0};
+std::atomic<bool> g_guestProgressWatchdogStarted{false};
 std::mutex g_runtimeTraceMutex;
 std::mutex g_runtimeTraceFileMutex;
 int g_runtimeTraceFileDescriptor = -1;
@@ -540,6 +547,7 @@ void recordAotFunctionExecution(uint32_t guestAddress) {
     if (!g_aotExecutionTelemetryActive.load(std::memory_order_acquire)) return;
     const uint64_t calls = g_aotExecutionCalls.fetch_add(1u, std::memory_order_relaxed) + 1u;
     const uint32_t threadId = g_currentGuestThread ? g_currentGuestThread->id : 0u;
+    if (g_currentGuestThread) g_currentGuestThread->lastGuestPc.store(guestAddress, std::memory_order_relaxed);
     g_lastAotGuestFunction.store(guestAddress, std::memory_order_relaxed);
     g_lastAotGuestThread.store(threadId, std::memory_order_relaxed);
 
@@ -790,9 +798,26 @@ bool readGuestTimeout(uint8_t *base, uint32_t pointer, GuestTimeout &timeout) {
     return true;
 }
 
+struct GuestWaitStateScope {
+    explicit GuestWaitStateScope(uint32_t target) : thread(g_currentGuestThread) {
+        if (thread) {
+            thread->waitTarget.store(target, std::memory_order_relaxed);
+            thread->waitingInKernel.store(true, std::memory_order_release);
+        }
+    }
+    ~GuestWaitStateScope() {
+        if (thread) {
+            thread->waitingInKernel.store(false, std::memory_order_release);
+            thread->waitTarget.store(0u, std::memory_order_relaxed);
+        }
+    }
+    GuestThread *thread;
+};
+
 uint32_t waitGuestObject(const std::shared_ptr<GuestWaitable> &waitable,
                          const GuestTimeout &timeout, bool alertable = false) {
     if (!waitable) return kNtStatusInvalidHandle;
+    GuestWaitStateScope waitState(waitable->handle ? waitable->handle : waitable->objectAddress);
     std::unique_lock<std::mutex> lock(waitable->mutex);
     const uint64_t initialPulseGeneration = waitable->pulseGeneration;
     const auto ready = [&] {
@@ -966,6 +991,18 @@ std::shared_ptr<std::recursive_mutex> criticalSectionLock(uint32_t address) {
     if (!entry) entry = std::make_shared<std::recursive_mutex>();
     return entry;
 }
+
+bool shouldTraceCriticalSection() {
+    const size_t count = g_criticalSectionTraceCount.fetch_add(1u, std::memory_order_relaxed) + 1u;
+    return count <= 12u || (count % 2048u) == 0u;
+}
+
+bool shouldTraceCriticalSectionContention() {
+    const size_t count = g_criticalSectionContentionTraceCount.fetch_add(1u, std::memory_order_relaxed) + 1u;
+    return count <= 16u || (count % 64u) == 0u;
+}
+
+
 
 bool allocateGuestThreadStack(uint32_t requestedSize, uint32_t &stackBase,
                               uint32_t &stackSize) {
@@ -1345,6 +1382,24 @@ bool dispatchGraphicsInterrupt(uint32_t source, uint32_t cpu) {
     const auto memory = g_activeGuestMemory.lock();
     uint8_t *base = memory ? memory->base : nullptr;
     if (!base || g_schedulerStopRequested.load()) return true;
+    // The D3D callback dereferences SCRATCH_REG4 before its indirect branch.
+    // A stale sentinel must never become guest CTR (Build 55 crash).
+    if (source == kGraphicsInterruptSwap) {
+        constexpr uint32_t kScratchReg4Address = 0x10311010u;
+        const uint32_t scratchTarget = PPC_LOAD_U32(kScratchReg4Address);
+        const uint64_t codeEnd = static_cast<uint64_t>(PPC_CODE_BASE) + PPC_CODE_SIZE;
+        if (scratchTarget == 0x0BADF00Du || scratchTarget < PPC_CODE_BASE ||
+            static_cast<uint64_t>(scratchTarget) >= codeEnd ||
+            findGuestFunction(scratchTarget) == nullptr) {
+            PPC_STORE_U32(kScratchReg4Address, 0u);
+            char event[144];
+            std::snprintf(event, sizeof(event),
+                "XENOS_GRAPHICS_INTERRUPT skipped source=1 invalid SCRATCH_REG4 target=0x%08X",
+                scratchTarget);
+            recordRuntimeTrace(event);
+            return true;
+        }
+    }
     PPCFunc *routine = findGuestFunction(callback);
     const uint64_t count =
         g_graphicsInterruptCounts[source & 1u].fetch_add(1u, std::memory_order_relaxed) + 1u;
@@ -3766,7 +3821,6 @@ struct PM4ParseSummary {
     uint64_t frameDecodeFailures = 0;
     uint64_t guestMemoryWrites = 0;
     uint64_t interrupts = 0;
-    bool cpInterruptRequested = false;
 };
 
 void initializeXenosMmioRegisters(uint8_t *base);
@@ -4354,22 +4408,24 @@ static bool executeGuestPM4Words(uint8_t *base,
             } else if (opcode == 0x58u && payloadCount >= 3u) { // EVENT_WRITE_SHD
                 const uint32_t initiator = words[offset + 1u];
                 writeXenosRegister(base, kXenosRegVgtEventInitiator, initiator & 0x3Fu, summary);
-                // EVENT_WRITE_SHD commits the packet data word. Bit 31 requests
-                // a CP interrupt; deliver it after the complete ring kick so the
-                // callback observes every fence store and RPtrWriteBack.
+                // Xenia's EVENT_WRITE_SHD bit 31 means WRITE_REAL_TIME_COUNTER,
+                // not a CP interrupt. The DEADBEEF word is a placeholder and
+                // must never leak into guest fence/timestamp memory.
                 const uint32_t address = words[offset + 2u];
-                const uint32_t value = words[offset + 3u];
+                const uint32_t packetValue = words[offset + 3u];
+                const bool writeCounter = (initiator & 0x80000000u) != 0u ||
+                                          packetValue == 0xDEADBEEFu;
+                const uint32_t value = writeCounter
+                    ? g_xenosVblankCounter.fetch_add(1u, std::memory_order_relaxed) + 1u
+                    : packetValue;
                 if (storeGpuMemory32(base, address, value)) {
                     ++summary.guestMemoryWrites;
-                    if ((initiator & 0x80000000u) != 0u ||
-                        address == 0x10310048u || address == 0x1031004Cu)
-                        summary.cpInterruptRequested = true;
                 } else {
                     ++summary.malformed;
                 }
                 recordXenosPm4Event(g_pm4EventTraceBudget,
-                    "XENOS_PM4_EVENT_WRITE_SHD initiator=0x%08X address=0x%08X value=0x%08X",
-                    initiator, words[offset + 2u], value);
+                    "XENOS_PM4_EVENT_WRITE_SHD initiator=0x%08X address=0x%08X value=0x%08X counter=%u",
+                    initiator, address, value, writeCounter ? 1u : 0u);
             } else if (opcode == kXenosPm4EventWriteOpcode && payloadCount >= 1u) {
                 writeXenosRegister(base, kXenosRegVgtEventInitiator,
                                    words[offset + 1u] & 0x3Fu, summary);
@@ -4628,14 +4684,6 @@ void pumpGuestXenosRingBuffer() {
     if (validGuestRange(kXenosGpuRegisterBase + kXenosRegCpRbRptr * 4u, 4u))
         storeGuestBe32(memory->base, kXenosGpuRegisterBase + kXenosRegCpRbRptr * 4u, readPointer);
 
-    // D3D9's swap-done callback consumes EVENT_WRITE_SHD fences. Calling it
-    // during packet decode races ahead of later fence stores in this kick.
-    if (summary.cpInterruptRequested) {
-        if (!dispatchGraphicsInterrupt(kGraphicsInterruptSwap, 2u))
-            g_pendingCpInterruptCpuMask.fetch_or(1u << 2u, std::memory_order_relaxed);
-        recordRuntimeTrace("XENOS_PM4_CP_INTERRUPT_AFTER_KICK source=1 cpu=2 guest_sync_writes=" +
-                           std::to_string(summary.guestMemoryWrites));
-    }
     if (consumed == 0u) return;
     char event[192];
     std::snprintf(event, sizeof(event),
@@ -4651,7 +4699,57 @@ void pumpGuestXenosRingBuffer() {
     recordRuntimeTrace(event);
 }
 
+void startGuestProgressWatchdog() {
+    bool expected = false;
+    if (!g_guestProgressWatchdogStarted.compare_exchange_strong(expected, true)) return;
+    std::thread([] {
+        uint64_t lastSwapCount = 0u;
+        auto lastProgress = std::chrono::steady_clock::now();
+        while (!g_schedulerStopRequested.load(std::memory_order_acquire)) {
+            std::this_thread::sleep_for(std::chrono::milliseconds(500));
+            if (g_schedulerStopRequested.load(std::memory_order_acquire)) break;
+            uint64_t swaps = 0u;
+            {
+                std::lock_guard<std::mutex> lock(g_xenosMutex);
+                swaps = g_xenosFrontend.swaps;
+            }
+            const auto now = std::chrono::steady_clock::now();
+            if (swaps != lastSwapCount) {
+                lastSwapCount = swaps;
+                lastProgress = now;
+                continue;
+            }
+            if (swaps == 0u || now - lastProgress < std::chrono::seconds(2)) continue;
+            std::vector<std::shared_ptr<GuestThread>> threads;
+            {
+                std::lock_guard<std::mutex> lock(g_guestThreadMutex);
+                threads = g_guestThreads;
+                if (g_mainGuestThread) threads.push_back(g_mainGuestThread);
+            }
+            recordRuntimeTrace("XOWUE_GUEST_PROGRESS_WATCHDOG fresh_guest_frames=0 duration_ms=" +
+                std::to_string(std::chrono::duration_cast<std::chrono::milliseconds>(now - lastProgress).count()) +
+                " swaps=" + std::to_string(swaps));
+            for (const auto &thread : threads) {
+                if (!thread || thread->exited.load(std::memory_order_relaxed)) continue;
+                const uint32_t pc = thread->lastGuestPc.load(std::memory_order_relaxed);
+                const uint32_t lr = thread->lastGuestLr.load(std::memory_order_relaxed);
+                const uint32_t target = thread->waitTarget.load(std::memory_order_relaxed);
+                const bool waiting = thread->waitingInKernel.load(std::memory_order_acquire);
+                char event[224];
+                std::snprintf(event, sizeof(event),
+                    "XOWUE_GUEST_THREAD_STATE id=%u lastGuest=0x%08X LR=0x%08X state=%s wait=%s target=0x%08X",
+                    thread->id, pc, lr, waiting ? "blocked" : "spin-or-running",
+                    waiting ? "KeWaitForSingleObject/NtWaitForSingleObjectEx" : "none", target);
+                recordRuntimeTrace(event);
+            }
+            lastProgress = now;
+        }
+        g_guestProgressWatchdogStarted.store(false, std::memory_order_release);
+    }).detach();
+}
+
 void xowue_VdSwap(PPCContext &context, uint8_t *base) {
+    startGuestProgressWatchdog();
     const uint32_t commandBuffer = context.r3.u32;
     const uint32_t fetch = context.r4.u32;
     const uint32_t frontbufferPointer = context.r8.u32;
@@ -5696,6 +5794,7 @@ void xowue_NtWaitForSingleObjectEx(PPCContext &context, uint8_t *base) {
         context.r3.u32 = kNtStatusInvalidParameter;
         return;
     }
+    if (g_currentGuestThread) g_currentGuestThread->lastGuestLr.store(static_cast<uint32_t>(context.lr), std::memory_order_relaxed);
     context.r3.u32 = waitGuestObject(lookupGuestWaitable(context.r3.u32), timeout,
                                      context.r5.u32 != 0u);
 }
@@ -5706,6 +5805,7 @@ void xowue_KeWaitForSingleObject(PPCContext &context, uint8_t *base) {
         context.r3.u32 = kNtStatusInvalidParameter;
         return;
     }
+    if (g_currentGuestThread) g_currentGuestThread->lastGuestLr.store(static_cast<uint32_t>(context.lr), std::memory_order_relaxed);
     context.r3.u32 = waitGuestObject(ensurePointerWaitable(context.r3.u32, base), timeout,
                                      context.r6.u32 != 0u);
 }
@@ -5925,9 +6025,11 @@ void xowue_RtlEnterCriticalSection(PPCContext &context, uint8_t *base) {
     }
     PPC_STORE_U32(address + 0x10, static_cast<uint32_t>(lockCount));
     PPC_STORE_U32(address + 0x14, recursion);
-    char event[128];
-    std::snprintf(event, sizeof(event), "RtlEnterCriticalSection guest=0x%08X recursion=%u", address, recursion);
-    recordRuntimeTrace(event);
+    if (shouldTraceCriticalSection()) {
+        char event[128];
+        std::snprintf(event, sizeof(event), "RtlEnterCriticalSection guest=0x%08X recursion=%u", address, recursion);
+        recordRuntimeTrace(event);
+    }
 }
 
 void xowue_RtlTryEnterCriticalSection(PPCContext &context, uint8_t *base) {
@@ -5939,7 +6041,11 @@ void xowue_RtlTryEnterCriticalSection(PPCContext &context, uint8_t *base) {
     auto sectionLock = criticalSectionLock(address);
     if (!sectionLock->try_lock()) {
         context.r3.u32 = 0u;
-        recordRuntimeTrace("RtlTryEnterCriticalSection -> busy");
+        if (shouldTraceCriticalSectionContention()) {
+            char event[128];
+            std::snprintf(event, sizeof(event), "RtlTryEnterCriticalSection guest=0x%08X contention owner=%u", address, PPC_LOAD_U32(address + 0x18));
+            recordRuntimeTrace(event);
+        }
         return;
     }
     const uint32_t owner = PPC_LOAD_U32(address + 0x18);
@@ -5960,11 +6066,13 @@ void xowue_RtlTryEnterCriticalSection(PPCContext &context, uint8_t *base) {
     PPC_STORE_U32(address + 0x10, static_cast<uint32_t>(lockCount));
     PPC_STORE_U32(address + 0x14, recursion);
     context.r3.u32 = 1;
-    char event[128];
-    std::snprintf(event, sizeof(event),
-                  "RtlTryEnterCriticalSection guest=0x%08X owner=%u recursion=%u lockCount=%d acquired",
-                  address, g_currentGuestThreadId, recursion, lockCount);
-    recordRuntimeTrace(event);
+    if (shouldTraceCriticalSection()) {
+        char event[128];
+        std::snprintf(event, sizeof(event),
+                      "RtlTryEnterCriticalSection guest=0x%08X owner=%u recursion=%u lockCount=%d acquired",
+                      address, g_currentGuestThreadId, recursion, lockCount);
+        recordRuntimeTrace(event);
+    }
 }
 
 void xowue_RtlLeaveCriticalSection(PPCContext &context, uint8_t *base) {
@@ -5986,9 +6094,11 @@ void xowue_RtlLeaveCriticalSection(PPCContext &context, uint8_t *base) {
     PPC_STORE_U32(address + 0x14, recursion);
     if (recursion == 0) PPC_STORE_U32(address + 0x18, 0);
     sectionLock->unlock();
-    char event[128];
-    std::snprintf(event, sizeof(event), "RtlLeaveCriticalSection guest=0x%08X recursion=%u", address, recursion);
-    recordRuntimeTrace(event);
+    if (shouldTraceCriticalSection()) {
+        char event[128];
+        std::snprintf(event, sizeof(event), "RtlLeaveCriticalSection guest=0x%08X recursion=%u", address, recursion);
+        recordRuntimeTrace(event);
+    }
 }
 
 void xowue_KeQueryPerformanceFrequency(PPCContext &context) {

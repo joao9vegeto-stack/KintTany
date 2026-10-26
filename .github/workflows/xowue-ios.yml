@@ -202,9 +202,10 @@ jobs:
           python3 tools/audit_xowue_ppc_cfg.py --ppc-dir generated/ppc --json-out artifacts/xowue-ppc-cfg-audit.json
           test -s artifacts/xowue-ppc-cfg-audit.json
 
-      - name: Validate native Xenos PM4 draw pipeline wiring
+      - name: Validate native Xenos PM4 draw pipeline and Build 55 regressions
         run: |
           set -euo pipefail
+          python3 -m py_compile tools/test_xowue_gpu_wiring.py
           python3 tools/test_xowue_gpu_wiring.py
 
       - name: Record native source of Wolverine's failing PPC CTR branch
