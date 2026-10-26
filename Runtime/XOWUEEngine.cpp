@@ -1667,6 +1667,8 @@ void xowue_thread_checkpoint() {
     // WAIT_REG_MEM, neither of which is safe on an arbitrary guest thread.
 }
 
+static uint32_t loadGuestBe32(const uint8_t *base, uint32_t address);
+
 void xowue_thread_checkpoint(uint32_t guestAddress) {
     recordAotFunctionExecution(guestAddress);
     static thread_local uint32_t previousFunction = 0u;
