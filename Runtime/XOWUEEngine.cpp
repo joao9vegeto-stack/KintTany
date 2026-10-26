@@ -724,11 +724,12 @@ void recordAotFunctionExecution(uint32_t guestAddress) {
         std::sort(rankedHot.begin(), rankedHot.end(), [](const auto &a, const auto &b) { return a.count > b.count; });
         char event[1024];
         std::snprintf(event, sizeof(event),
-            "AOT_PROGRESS calls=%llu distinct=%llu last=0x%08X thread=%u hot0=0x%08X:%u hot1=0x%08X:%u hot2=0x%08X:%u hot3=0x%08X:%u hot4=0x%08X:%u hot5=0x%08X:%u hot6=0x%08X:%u hot7=0x%08X:%u prev_fn=0x%08X lr=0x%08X r3=0x%08X r4=0x%08X r11=0x%08X r30=0x%08X r31=0x%08X insns=%08X_%08X_%08X_%08X_%08X_%08X%s",
+            "AOT_PROGRESS calls=%llu distinct=%llu last=0x%08X thread=%u hot0=0x%08X:%u hot1=0x%08X:%u hot2=0x%08X:%u hot3=0x%08X:%u hot4=0x%08X:%u hot5=0x%08X:%u hot6=0x%08X:%u hot7=0x%08X:%u top_fn=0x%08X top_calls=%u prev_fn=0x%08X lr=0x%08X r3=0x%08X r4=0x%08X r11=0x%08X r30=0x%08X r31=0x%08X insns=%08X_%08X_%08X_%08X_%08X_%08X%s",
             static_cast<unsigned long long>(calls), static_cast<unsigned long long>(distinct), guestAddress, threadId,
             rankedHot[0].fn, rankedHot[0].count, rankedHot[1].fn, rankedHot[1].count, rankedHot[2].fn, rankedHot[2].count,
             rankedHot[3].fn, rankedHot[3].count, rankedHot[4].fn, rankedHot[4].count, rankedHot[5].fn, rankedHot[5].count,
             rankedHot[6].fn, rankedHot[6].count, rankedHot[7].fn, rankedHot[7].count,
+            rankedHot[0].fn, rankedHot[0].count,
             g_currentGuestThread ? g_currentGuestThread->lastCallerFn.load(std::memory_order_relaxed) : 0u,
             lr, r3, r4, r11, r30, r31, insns[0], insns[1], insns[2], insns[3], insns[4], insns[5],
             plateau ? " SPINLOCK_ACTIVE worker_cp_pump=250us no_forced_guest_return" : "");
@@ -2346,7 +2347,7 @@ extern "C" int xowue_boot_xex(const char *path, char *output, size_t output_capa
             }
             char audit[320];
             std::snprintf(audit, sizeof(audit),
-                "CODE_AUDIT addr=0x%08X words=%08X %08X %08X %08X %08X %08X %08X %08X %08X %08X %08X %08X %08X %08X %08X %08X",
+                "XOWUE_XEX_CODE_AUDIT CODE_AUDIT addr=0x%08X words=%08X %08X %08X %08X %08X %08X %08X %08X %08X %08X %08X %08X %08X %08X %08X %08X",
                 auditAddress, words[0], words[1], words[2], words[3], words[4], words[5], words[6], words[7],
                 words[8], words[9], words[10], words[11], words[12], words[13], words[14], words[15]);
             std::fprintf(stderr, "%s\n", audit);
