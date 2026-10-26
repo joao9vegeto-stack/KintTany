@@ -63,6 +63,35 @@ enum XOWUEDiagnostics {
         defer { lock.unlock() }
         guard let url = fileURL(named: diagnosticFilename) else { return }
         appendLocked(message, to: url)
+        let summaryPrefixes = ["CODE_AUDIT", "AOT_PROGRESS", "HOT_FN_CODE", "THREAD_DUMP",
+                               "XENOS_", "PM4_", "SWAP_", "WAIT_", "VBLANK", "GRAPHICS_INTERRUPT"]
+        if summaryPrefixes.contains(where: { message.contains($0) }) {
+            refreshCompactSummaryLocked(diagnosticURL: url)
+        }
+    }
+
+    private static func refreshCompactSummaryLocked(diagnosticURL: URL) {
+        guard let source = try? String(contentsOf: diagnosticURL, encoding: .utf8) else { return }
+        let lines = source.split(whereSeparator: \.isNewline).map(String.init)
+        var audits = lines.filter { $0.contains("CODE_AUDIT") }
+        var progress = Array(lines.filter { $0.contains("AOT_PROGRESS") }.suffix(4))
+        var hot = Array(lines.filter { $0.contains("HOT_FN_CODE") }.suffix(6))
+        var threads = lines.filter { $0.contains("THREAD_DUMP") }
+        var gpu = Array(lines.filter { line in
+            ["XENOS_", "PM4_", "SWAP_", "WAIT_", "VBLANK", "GRAPHICS_INTERRUPT"].contains(where: { line.contains($0) })
+        }.suffix(15))
+        func assembled() -> [String] { audits + progress + hot + threads + gpu }
+        while assembled().joined(separator: "\n").utf8.count > 4000 {
+            if !gpu.isEmpty { gpu.removeFirst() }
+            else if !threads.isEmpty { threads.removeFirst() }
+            else if !hot.isEmpty { hot.removeFirst() }
+            else if !progress.isEmpty { progress.removeFirst() }
+            else if !audits.isEmpty { audits.removeLast() }
+            else { break }
+        }
+        let summary = assembled().joined(separator: "\n") + "\n"
+        let summaryURL = diagnosticURL.deletingLastPathComponent().appendingPathComponent("resumo-b62.txt")
+        try? summary.write(to: summaryURL, atomically: true, encoding: .utf8)
     }
 
     static func bootStarted(path: String, build: String) {

@@ -72,7 +72,7 @@ assert "owner == g_currentGuestThreadId" in critical and "recursion = 1u" in cri
 assert "shouldTraceCriticalSectionContention" in critical
 assert "shouldTraceCriticalSection()" in critical
 assert "GuestWaitStateScope waitState" in engine
-assert "lastGuestPc.store(guestAddress" in engine
+assert "lastGuestPc.exchange(guestAddress" in engine
 assert ".ignoresSafeArea(.all)" in Path("iOS/App/XOWUEApp.swift").read_text()
 print("PASS: Build 54 CP fence ordering, critical-section recursion and full 16:9 EDRAM resolve")
 

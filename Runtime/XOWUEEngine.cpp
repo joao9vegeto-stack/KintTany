@@ -244,6 +244,9 @@ struct GuestThread {
     std::atomic<uint32_t> exitStatus{kNtStatusSuccess};
     std::atomic<bool> exited{false};
     std::atomic<uint32_t> lastGuestPc{0u};
+    std::atomic<uint32_t> lastCallerFn{0u};
+    std::array<std::atomic<uint32_t>, 16> recentAotFns{};
+    std::atomic<uint32_t> recentAotIdx{0u};
     std::atomic<uint32_t> lastGuestLr{0u};
     // Snapshot the real PPCContext at indirect dispatch so a persisted AOT
     // milestone can identify the hot function and its actual calling state.
@@ -590,7 +593,14 @@ void recordAotFunctionExecution(uint32_t guestAddress) {
     if (!g_aotExecutionTelemetryActive.load(std::memory_order_acquire)) return;
     const uint64_t calls = g_aotExecutionCalls.fetch_add(1u, std::memory_order_relaxed) + 1u;
     const uint32_t threadId = g_currentGuestThread ? g_currentGuestThread->id : 0u;
-    if (g_currentGuestThread) g_currentGuestThread->lastGuestPc.store(guestAddress, std::memory_order_relaxed);
+    if (g_currentGuestThread) {
+        const uint32_t previousFn = g_currentGuestThread->lastGuestPc.exchange(guestAddress, std::memory_order_relaxed);
+        if (previousFn != guestAddress) {
+            g_currentGuestThread->lastCallerFn.store(previousFn, std::memory_order_relaxed);
+            const uint32_t idx = g_currentGuestThread->recentAotIdx.fetch_add(1u, std::memory_order_relaxed);
+            g_currentGuestThread->recentAotFns[idx & 15u].store(guestAddress, std::memory_order_relaxed);
+        }
+    }
     g_lastAotGuestFunction.store(guestAddress, std::memory_order_relaxed);
     g_lastAotGuestThread.store(threadId, std::memory_order_relaxed);
 
@@ -710,14 +720,54 @@ void recordAotFunctionExecution(uint32_t guestAddress) {
         const uint32_t r11 = g_currentGuestThread ? g_currentGuestThread->lastR11.load(std::memory_order_relaxed) : 0u;
         const uint32_t r30 = g_currentGuestThread ? g_currentGuestThread->lastR30.load(std::memory_order_relaxed) : 0u;
         const uint32_t r31 = g_currentGuestThread ? g_currentGuestThread->lastR31.load(std::memory_order_relaxed) : 0u;
-        char event[768];
+        auto rankedHot = hot;
+        std::sort(rankedHot.begin(), rankedHot.end(), [](const auto &a, const auto &b) { return a.count > b.count; });
+        char event[1024];
         std::snprintf(event, sizeof(event),
-            "AOT execution milestone calls=%llu distinctGuestFunctions=%llu lastGuest=0x%08X thread=%u top_fn=0x%08X top_calls=%u prev_fn=0x%08X prev_calls=%u lr=0x%08X r3=0x%08X r4=0x%08X r11=0x%08X r30=0x%08X r31=0x%08X insns=%08X_%08X_%08X_%08X_%08X_%08X%s",
-            static_cast<unsigned long long>(calls), static_cast<unsigned long long>(distinct),
-            guestAddress, threadId, topFn, topCount, prevFn, prevCount, lr, r3, r4, r11, r30, r31,
-            insns[0], insns[1], insns[2], insns[3], insns[4], insns[5],
+            "AOT_PROGRESS calls=%llu distinct=%llu last=0x%08X thread=%u hot0=0x%08X:%u hot1=0x%08X:%u hot2=0x%08X:%u hot3=0x%08X:%u hot4=0x%08X:%u hot5=0x%08X:%u hot6=0x%08X:%u hot7=0x%08X:%u prev_fn=0x%08X lr=0x%08X r3=0x%08X r4=0x%08X r11=0x%08X r30=0x%08X r31=0x%08X insns=%08X_%08X_%08X_%08X_%08X_%08X%s",
+            static_cast<unsigned long long>(calls), static_cast<unsigned long long>(distinct), guestAddress, threadId,
+            rankedHot[0].fn, rankedHot[0].count, rankedHot[1].fn, rankedHot[1].count, rankedHot[2].fn, rankedHot[2].count,
+            rankedHot[3].fn, rankedHot[3].count, rankedHot[4].fn, rankedHot[4].count, rankedHot[5].fn, rankedHot[5].count,
+            rankedHot[6].fn, rankedHot[6].count, rankedHot[7].fn, rankedHot[7].count,
+            g_currentGuestThread ? g_currentGuestThread->lastCallerFn.load(std::memory_order_relaxed) : 0u,
+            lr, r3, r4, r11, r30, r31, insns[0], insns[1], insns[2], insns[3], insns[4], insns[5],
             plateau ? " SPINLOCK_ACTIVE worker_cp_pump=250us no_forced_guest_return" : "");
         recordRuntimeTrace(event);
+        if (plateau) {
+            const auto snapshotMemory = g_activeGuestMemory.lock();
+            for (uint32_t rank = 0u; rank < 6u; ++rank) {
+                const auto &entry = rankedHot[rank];
+                if (!entry.fn) continue;
+                char codeLine[256];
+                int used = std::snprintf(codeLine, sizeof(codeLine), "HOT_FN_CODE rank=%u fn=0x%08X count=%u opcodes=", rank, entry.fn, entry.count);
+                if (snapshotMemory && snapshotMemory->base && validGuestRange(entry.fn, 96u)) {
+                    for (uint32_t op = 0u; op < 24u && used > 0 && static_cast<size_t>(used) < sizeof(codeLine); ++op)
+                        used += std::snprintf(codeLine + used, sizeof(codeLine) - static_cast<size_t>(used), "%s%08X", op ? "," : "", loadGuestBe32(snapshotMemory->base, entry.fn + op * 4u));
+                }
+                recordRuntimeTrace(codeLine);
+            }
+            std::vector<std::shared_ptr<GuestThread>> threadSnapshot;
+            { std::lock_guard<std::mutex> lock(g_guestThreadMutex); threadSnapshot = g_guestThreads; }
+            for (const auto &thread : threadSnapshot) {
+                if (!thread) continue;
+                char recent[160]{};
+                size_t used = 0u;
+                const uint32_t end = thread->recentAotIdx.load(std::memory_order_relaxed);
+                for (uint32_t j = 0u; j < 8u; ++j) {
+                    const uint32_t fn = thread->recentAotFns[(end - 1u - j) & 15u].load(std::memory_order_relaxed);
+                    const int n = std::snprintf(recent + used, sizeof(recent) - used, "%s0x%08X", j ? "," : "", fn);
+                    if (n < 0 || static_cast<size_t>(n) >= sizeof(recent) - used) break;
+                    used += static_cast<size_t>(n);
+                }
+                char threadLine[512];
+                std::snprintf(threadLine, sizeof(threadLine),
+                    "THREAD_DUMP id=%u entry=0x%08X exited=%d waiting=%d wait_target=0x%08X last_fn=0x%08X prev_fn=0x%08X recent=[%s] r3=0x%08X r4=0x%08X r11=0x%08X r30=0x%08X r31=0x%08X",
+                    thread->id, thread->startAddress, thread->exited.load(), thread->waitingInKernel.load(),
+                    thread->waitTarget.load(), thread->lastGuestPc.load(), thread->lastCallerFn.load(), recent,
+                    thread->lastR3.load(), thread->lastR4.load(), thread->lastR11.load(), thread->lastR30.load(), thread->lastR31.load());
+                recordRuntimeTrace(threadLine);
+            }
+        }
     }
 }
 
@@ -1850,6 +1900,8 @@ void xowue_thread_checkpoint(uint32_t guestAddress) {
         (guestAddress >= 0x82B30000u && guestAddress <= 0x82B5FFFFu);
     if (likelyWaitFamily) {
         ++loopEntries;
+        // CP packet execution/callbacks remain owned by the dedicated worker; avoid recursive pumping here.
+        if (guestAddress == 0x82C3C4D8u && (loopEntries % 8192u) == 0u) std::this_thread::yield();
         if (loopEntries == 1u || loopEntries % 250000u == 0u) {
             char event[176];
             std::snprintf(event, sizeof(event),
@@ -2294,7 +2346,7 @@ extern "C" int xowue_boot_xex(const char *path, char *output, size_t output_capa
             }
             char audit[320];
             std::snprintf(audit, sizeof(audit),
-                "XOWUE_XEX_CODE_AUDIT addr=0x%08X words=%08X %08X %08X %08X %08X %08X %08X %08X %08X %08X %08X %08X %08X %08X %08X %08X",
+                "CODE_AUDIT addr=0x%08X words=%08X %08X %08X %08X %08X %08X %08X %08X %08X %08X %08X %08X %08X %08X %08X %08X",
                 auditAddress, words[0], words[1], words[2], words[3], words[4], words[5], words[6], words[7],
                 words[8], words[9], words[10], words[11], words[12], words[13], words[14], words[15]);
             std::fprintf(stderr, "%s\n", audit);
