@@ -16,7 +16,7 @@ QPC_BODY = """PPC_FUNC_IMPL(__imp__sub_82C3C4D8) {
 }"""
 AUDIT_SYMBOLS=("sub_822000E0","sub_82DC1FA0","sub_82DC2390","sub_82DC2A50","sub_82DC2B74")
 def function_spans(source: str):
-    marker=re.compile(r"PPC_FUNC_IMPL\\(__imp__(sub_[0-9A-Fa-f]+)\\)\\s*\\{")
+    marker=re.compile(r"PPC_FUNC_IMPL\(__imp__(sub_[0-9A-Fa-f]+)\)\s*\{")
     for m in marker.finditer(source):
         brace=source.find("{",m.start()); depth=0; end=None
         for i in range(brace,len(source)):
