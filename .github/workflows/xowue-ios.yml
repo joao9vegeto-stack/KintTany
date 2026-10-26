@@ -318,7 +318,7 @@ jobs:
           h = context.read_text()
           if "uint64_t xowue_guest_timebase(void);" not in h:
               h = once(h, "typedef void PPCFunc(struct PPCContext& __restrict__ ctx, uint8_t* base);",
-                       "uint64_t xowue_guest_timebase(void);\n\ntypedef void PPCFunc(struct PPCContext& __restrict__ ctx, uint8_t* base);",
+                       "extern \"C\" uint64_t xowue_guest_timebase(void);\n\ntypedef void PPCFunc(struct PPCContext& __restrict__ ctx, uint8_t* base);",
                        "guest timebase declaration")
               context.write_text(h)
           aot = Path("generated/ppc")
