@@ -47,6 +47,7 @@
 #include <sys/ioctl.h>
 #include <sys/types.h>
 #include <unistd.h>
+#include <time.h>
 
 extern "C" void xowue_vulkan_backend_guest_swap(uint32_t frontbuffer,
                                                  uint32_t width,
@@ -111,7 +112,7 @@ constexpr uint32_t kNtStatusInvalidParameter3 = 0xC00000F1u;
 constexpr uint32_t kNtStatusNoMemory = 0xC0000017u;
 constexpr uint32_t kNtStatusUnsuccessful = 0xC0000001u;
 constexpr uint32_t kNtStatusMemoryNotAllocated = 0xC00000A0u;
-constexpr uint32_t kXbox360PerformanceFrequency = 49875000u;
+constexpr uint32_t kXbox360PerformanceFrequency = 50000000u;
 constexpr uint32_t kXamErrorNotFound = 0x80070490u;
 constexpr uint32_t kXamErrorInvalidParameter = 0x80070057u;
 constexpr uint32_t kNtStatusInvalidHandle = 0xC0000008u;
@@ -620,6 +621,55 @@ void recordAotFunctionExecution(uint32_t guestAddress) {
         lastDistinctCall = calls;
     }
     const bool plateau = calls > 12000000u && calls - lastDistinctCall > 5000000u;
+    if (plateau) {
+        bool expectedDump = false;
+        if (g_xenosCpPlateauDumped.compare_exchange_strong(expectedDump, true, std::memory_order_acq_rel)) {
+            std::array<XenosCpWritebackRecord, 8> recent{};
+            uint32_t recentCount = 0u;
+            {
+                std::lock_guard<std::mutex> lock(g_xenosCpWritebackMutex);
+                recentCount = g_xenosCpWritebackCount;
+                const uint32_t first = (g_xenosCpWritebackCursor +
+                    static_cast<uint32_t>(g_xenosCpWritebackHistory.size()) - recentCount) %
+                    static_cast<uint32_t>(g_xenosCpWritebackHistory.size());
+                for (uint32_t i = 0; i < recentCount; ++i)
+                    recent[i] = g_xenosCpWritebackHistory[(first + i) % g_xenosCpWritebackHistory.size()];
+            }
+            const auto memory = g_activeGuestMemory.lock();
+            char line[224];
+            for (uint32_t i = 0; i < recentCount; ++i) {
+                const auto &w = recent[i];
+                const uint32_t now = memory && memory->base && validGuestRange(w.address, 4u)
+                    ? loadGuestBe32(memory->base, w.address) : 0xFFFFFFFFu;
+                std::snprintf(line, sizeof(line),
+                    "XENOS_CP_PLATEAU_WRITEBACK[%u] op=0x%02X raw=0x%08X addr=0x%08X value=0x%08X now_be=0x%08X",
+                    i, w.opcode, w.raw, w.address, w.value, now);
+                recordRuntimeTrace(line);
+            }
+            const uint32_t lr = g_currentGuestThread
+                ? g_currentGuestThread->lastGuestLr.load(std::memory_order_relaxed) : 0u;
+            const uint32_t regs[] = {
+                g_currentGuestThread ? g_currentGuestThread->lastR3.load(std::memory_order_relaxed) : 0u,
+                g_currentGuestThread ? g_currentGuestThread->lastR4.load(std::memory_order_relaxed) : 0u,
+                g_currentGuestThread ? g_currentGuestThread->lastR11.load(std::memory_order_relaxed) : 0u,
+                g_currentGuestThread ? g_currentGuestThread->lastR30.load(std::memory_order_relaxed) : 0u,
+                g_currentGuestThread ? g_currentGuestThread->lastR31.load(std::memory_order_relaxed) : 0u
+            };
+            std::snprintf(line, sizeof(line),
+                "XOWUE_CP_PLATEAU_STATE thread=%u top_fn=0x%08X prev_fn=0x%08X lr=0x%08X r3=0x%08X r4=0x%08X r11=0x%08X r30=0x%08X r31=0x%08X",
+                threadId, hot[0].fn, hot[1].fn, lr, regs[0], regs[1], regs[2], regs[3], regs[4]);
+            recordRuntimeTrace(line);
+            if (memory && memory->base && lr >= 0x20u) {
+                for (uint32_t i = 0; i < 8u; ++i) {
+                    const uint32_t pc = lr - 0x20u + i * 4u;
+                    if (!validGuestRange(pc, 4u)) continue;
+                    std::snprintf(line, sizeof(line), "XOWUE_CP_PLATEAU_CALLER pc=0x%08X insn=0x%08X",
+                                  pc, loadGuestBe32(memory->base, pc));
+                    recordRuntimeTrace(line);
+                }
+            }
+        }
+    }
     // The Xenos CP worker exclusively owns PM4 execution and interrupt dispatch.
     // Requesting diagnostics here must never run a callback recursively while
     // guest code may hold a D3D lock; the worker continues its 250-us pump/tick.
@@ -4475,7 +4525,7 @@ void initializeXenosMmioRegisters(uint8_t *base) {
     }
 }
 
-static uint32_t xenosGpuSwap(uint32_t value, uint32_t endian) {
+static inline uint32_t xenosGpuSwap32(uint32_t value, uint32_t endian) {
     switch (endian & 3u) {
         case 1u: return ((value & 0x00FF00FFu) << 8u) | ((value >> 8u) & 0x00FF00FFu);
         case 2u: return __builtin_bswap32(value);
@@ -4484,20 +4534,62 @@ static uint32_t xenosGpuSwap(uint32_t value, uint32_t endian) {
     }
 }
 
-// GPU memory accesses carry a Xenos endian mode in address bits 0:1; the
-// value is swapped by that mode and then stored host-native (little endian)
-// exactly as Xenia's CommandProcessor does.
-static bool storeGpuMemory32(uint8_t *base, uint32_t gpuAddress, uint32_t value) {
-    const uint32_t address = gpuAddress & ~3u;
-    if (!validGuestRange(address, 4u)) return false;
-    storeGuestBe32(base, address, __builtin_bswap32(xenosGpuSwap(value, gpuAddress)));
+// The CP's raw address low bits encode Xenos endian mode, not physical
+// address bits. Host memory is little-endian; after swapping, memcpy produces
+// the byte layout that the guest's big-endian lwz sees as the original value.
+struct XenosCpWritebackRecord { uint32_t opcode=0, raw=0, address=0, endian=0, value=0; };
+static std::mutex g_xenosCpWritebackMutex;
+static std::array<XenosCpWritebackRecord, 8> g_xenosCpWritebackHistory{};
+static uint32_t g_xenosCpWritebackCursor = 0u;
+static uint32_t g_xenosCpWritebackCount = 0u;
+static std::atomic<uint32_t> g_xenosCpWritebackLogCount{0u};
+static std::atomic<bool> g_xenosCpPlateauDumped{false};
+
+static bool xenosCpWriteback32(uint8_t *base, uint32_t rawAddress, uint32_t value,
+                               uint32_t opcode = 0xFFu) {
+    const uint32_t endian = rawAddress & 3u;
+    const uint32_t phys = rawAddress & ~3u;
+    if (!base || !validGuestRange(phys, 4u)) return false;
+    const uint32_t stored = xenosGpuSwap32(value, endian);
+    std::memcpy(base + phys, &stored, sizeof(stored));
+    {
+        std::lock_guard<std::mutex> lock(g_xenosCpWritebackMutex);
+        g_xenosCpWritebackHistory[g_xenosCpWritebackCursor] =
+            {opcode, rawAddress, phys, endian, value};
+        g_xenosCpWritebackCursor = (g_xenosCpWritebackCursor + 1u) %
+            static_cast<uint32_t>(g_xenosCpWritebackHistory.size());
+        g_xenosCpWritebackCount = std::min<uint32_t>(
+            g_xenosCpWritebackCount + 1u,
+            static_cast<uint32_t>(g_xenosCpWritebackHistory.size()));
+    }
+    const uint32_t line = g_xenosCpWritebackLogCount.fetch_add(1u, std::memory_order_relaxed);
+    if (line < 64u) {
+        char event[192];
+        std::snprintf(event, sizeof(event),
+            "XENOS_CP_WRITEBACK op=0x%02X raw=0x%08X addr=0x%08X endian=%u value=0x%08X readback_be=0x%08X",
+            opcode, rawAddress, phys, endian, value, loadGuestBe32(base, phys));
+        recordRuntimeTrace(event);
+    }
     return true;
+}
+
+static uint32_t xenosCpRead32(const uint8_t *base, uint32_t rawAddress) {
+    const uint32_t endian = rawAddress & 3u;
+    const uint32_t phys = rawAddress & ~3u;
+    if (!base || !validGuestRange(phys, 4u)) return 0u;
+    uint32_t raw = 0u;
+    std::memcpy(&raw, base + phys, sizeof(raw));
+    return xenosGpuSwap32(raw, endian);
+}
+
+static bool storeGpuMemory32(uint8_t *base, uint32_t gpuAddress, uint32_t value) {
+    return xenosCpWriteback32(base, gpuAddress, value);
 }
 
 static bool loadGpuMemory32(const uint8_t *base, uint32_t gpuAddress, uint32_t &value) {
     const uint32_t address = gpuAddress & ~3u;
     if (!validGuestRange(address, 4u)) return false;
-    value = xenosGpuSwap(__builtin_bswap32(loadGuestBe32(base, address)), gpuAddress);
+    value = xenosCpRead32(base, gpuAddress);
     return true;
 }
 
@@ -4701,12 +4793,11 @@ static bool executeGuestPM4Words(uint8_t *base,
                 // must never leak into guest fence/timestamp memory.
                 const uint32_t address = words[offset + 2u];
                 const uint32_t packetValue = words[offset + 3u];
-                const bool writeCounter = (initiator & 0x80000000u) != 0u ||
-                                          packetValue == 0xDEADBEEFu;
+                const bool writeCounter = (initiator & 0x80000000u) != 0u;
                 const uint32_t value = writeCounter
                     ? g_xenosVblankCounter.fetch_add(1u, std::memory_order_relaxed) + 1u
                     : packetValue;
-                if (storeGpuMemory32(base, address, value)) {
+                if (xenosCpWriteback32(base, address, value, 0x58u)) {
                     ++summary.guestMemoryWrites;
                 } else {
                     ++summary.malformed;
@@ -4721,7 +4812,7 @@ static bool executeGuestPM4Words(uint8_t *base,
                 if (payloadCount >= 3u) {
                     const uint32_t address = words[offset + 2u];
                     const uint32_t value = words[offset + 3u];
-                    if (storeGpuMemory32(base, address, value)) ++summary.guestMemoryWrites;
+                    if (xenosCpWriteback32(base, address, value, opcode)) ++summary.guestMemoryWrites;
                     else ++summary.malformed;
                     recordXenosPm4Event(g_pm4EventTraceBudget,
                         "XENOS_PM4_EVENT_WRITE initiator=0x%08X address=0x%08X value=0x%08X",
@@ -4730,7 +4821,8 @@ static bool executeGuestPM4Words(uint8_t *base,
             } else if ((opcode == 0x57u || opcode == 0x5Au) && payloadCount >= 2u) { // EVENT_WRITE_EXT
                 writeXenosRegister(base, kXenosRegVgtEventInitiator,
                                    words[offset + 1u] & 0x3Fu, summary);
-                const uint32_t address = words[offset + 2u] & ~3u;
+                const uint32_t rawAddress = words[offset + 2u];
+                const uint32_t address = rawAddress & ~3u;
                 // Screen extents min/max x, y, z (8192 >> 3), big-endian u16.
                 constexpr uint16_t extents[6] = {0u, 1024u, 0u, 1024u, 0u, 1u};
                 if (validGuestRange(address, sizeof(extents))) {
@@ -4746,8 +4838,9 @@ static bool executeGuestPM4Words(uint8_t *base,
                 // Occlusion query: D3D marks an ended query with 0xFFFFFEED
                 // in ZPass/ZFail A/B (little-endian struct); report a fixed
                 // passed-sample count as Xenia does.
-                const uint32_t address =
-                    xowue::xenos::ReadRegister(kXenosRegRbSampleCountAddr) & ~3u;
+                const uint32_t rawAddress =
+                    xowue::xenos::ReadRegister(kXenosRegRbSampleCountAddr);
+                const uint32_t address = rawAddress & ~3u;
                 if (validGuestRange(address, 32u)) {
                     auto loadLe = [&](uint32_t field) {
                         return __builtin_bswap32(loadGuestBe32(base, address + field * 4u));
@@ -6439,9 +6532,21 @@ void xowue_RtlLeaveCriticalSection(PPCContext &context, uint8_t *base) {
     }
 }
 
+extern "C" uint64_t xowue_guest_timebase(void) {
+#if defined(__APPLE__)
+    const uint64_t ns = clock_gettime_nsec_np(CLOCK_UPTIME_RAW);
+    return (ns / 1000u) * 50u + ((ns % 1000u) * 50u) / 1000u;
+#else
+    const auto ns = std::chrono::duration_cast<std::chrono::nanoseconds>(
+        std::chrono::steady_clock::now().time_since_epoch()).count();
+    return (static_cast<uint64_t>(ns) / 1000u) * 50u +
+           ((static_cast<uint64_t>(ns) % 1000u) * 50u) / 1000u;
+#endif
+}
+
 void xowue_KeQueryPerformanceFrequency(PPCContext &context) {
     context.r3.u32 = kXbox360PerformanceFrequency;
-    recordRuntimeTrace("KeQueryPerformanceFrequency -> 49875000 Hz");
+    recordRuntimeTrace("KeQueryPerformanceFrequency -> 50000000 Hz");
 }
 
 void xowue_KeEnterCriticalRegion(PPCContext &, uint8_t *base) {

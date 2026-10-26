@@ -10,6 +10,8 @@ int xowue_inspect_xex(const char *path, char *output, size_t output_capacity);
 int xowue_boot_xex(const char *path, char *output, size_t output_capacity);
 /* Request cooperative cancellation of all guest PPC threads and the Xenos pump. */
 void xowue_request_stop(void);
+/* Monotonic Xbox guest timebase at 50 MHz, shared with recompiled mftb. */
+uint64_t xowue_guest_timebase(void);
 int xowue_runtime_snapshot(char *output, size_t output_capacity);
 int xowue_set_runtime_trace_path(const char *path);
 void xowue_set_touch_controller_state(uint32_t buttons, uint8_t left_trigger,

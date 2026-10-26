@@ -56,7 +56,7 @@ print("PASS: UIKit effective orientation, exhaustive GPU readback and guest-swap
 
 # Build 55 regression: EVENT_WRITE_SHD bit 31 is a counter write, never a CP interrupt.
 assert "const bool writeCounter = (initiator & 0x80000000u) != 0u" in engine
-assert "packetValue == 0xDEADBEEFu" in engine
+assert "packetValue == 0xDEADBEEFu" not in engine
 assert "cpInterruptRequested" not in engine
 assert "XENOS_PM4_CP_INTERRUPT_AFTER_KICK" not in engine
 assert "XENOS_GRAPHICS_INTERRUPT skipped source=1 invalid SCRATCH_REG4 target=0x%08X" in engine
@@ -254,8 +254,37 @@ assert "xowue_store_address_ == 0x7FC81710u" in patch
 assert "candidate = swapped" in engine
 assert "VULKAN_EXTENSION_INVENTORY instance_available=%u device_available=%u" in vulkan
 assert "INSTANCE_EXTENSION %s" not in vulkan and "DEVICE_EXTENSION %s" not in vulkan
-assert "kXbox360PerformanceFrequency = 49875000u" in engine
+assert "kXbox360PerformanceFrequency = 50000000u" in engine
 assert "kGraphicsVblankPeriod = std::chrono::nanoseconds(16666667)" in engine
 assert "if (vblankDue) dispatchGraphicsInterrupt(kGraphicsInterruptVblank, 2u)" in engine
 assert "const uint32_t scratchValue = loadGuestBe32(base, 0x10311010u);" in engine
 print("PASS: Build 59 per-thread spinlock, code audit, cache root, SCRATCH_REG4, timebase/VBlank and compact Vulkan diagnostics")
+
+# Build 61: CP raw-address endian decoding, real monotonic 50 MHz mftb and fence plateau.
+assert "xenosCpWriteback32" in engine
+assert "rawAddress & ~3u" in engine
+assert "if (xenosCpWriteback32(base, address, value, 0x58u))" in engine
+assert "g_lastEmulatedTimebase" not in engine
+assert "kXbox360PerformanceFrequency = 50000000u" in engine
+assert "KeQueryPerformanceFrequency -> 50000000 Hz" in engine
+assert "PPC_INST_MFTB" in patch
+assert "xowue_guest_timebase" in patch
+assert "XENOS_CP_WRITEBACK op=0x%02X raw=0x%08X addr=0x%08X endian=%u value=0x%08X readback_be=0x%08X" in engine
+assert "XENOS_CP_PLATEAU_WRITEBACK" in engine
+assert "XOWUE_CP_PLATEAU_CALLER" in engine
+def _xenos_gpu_swap32(v, endian):
+    endian &= 3
+    if endian == 1:
+        return ((v & 0x00FF00FF) << 8) | ((v & 0xFF00FF00) >> 8)
+    if endian == 2:
+        return int.from_bytes(v.to_bytes(4, "little"), "big")
+    if endian == 3:
+        return ((v << 16) | (v >> 16)) & 0xFFFFFFFF
+    return v
+raw, value = 0x10310006, 0x00000001
+addr, endian = raw & ~3, raw & 3
+stored = _xenos_gpu_swap32(value, endian)
+assert addr == 0x10310004
+assert stored.to_bytes(4, "little") == bytes.fromhex("00000001")
+assert int.from_bytes(stored.to_bytes(4, "little"), "big") == value
+print("PASS: Build 61 CP writeback endian/physical address, 50 MHz mftb, and non-mutating plateau diagnostics")
