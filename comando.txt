@@ -1,48 +1,36 @@
-Analise o `diagnostico-build-55.txt`, o `crash-build-55.txt` e o estado atual da branch `XOWUE`.
-Contexto importante confirmado: **a exata mesma pasta desta instalação do jogo roda normalmente no emulador Xenios (baseado no Xenia) no mesmo dispositivo**, portanto os arquivos da instalação são válidos e o congelamento pós-Copyright (Build 54) e o crash em tela preta (Build 55) são causados exclusivamente por divergências de emulação de GPU/Kernel em `Runtime/XOWUEEngine.cpp`.
+Analise o `diagnostico-build-56.txt` e o estado atual da branch `XOWUE`.
 
-Execute as seguintes correções cirúrgicas para restaurar o vídeo na tela (mantendo o conserto de escala 16:9) e destravar o avanço do jogo após o primeiro frame:
+Informação crucial confirmada sobre a pasta do jogo (que roda normalmente no Xenios):
+- Em `D:\WGame\Movies\`, os vídeos de introdução existem como arquivos **`.bik`** (`ATVI_logo.bik`, `MARVEL_INTRO.bik`, `FOX_LOGO.bik`, `ravenlogo.bik`, `UE3_logo.bik`), e apenas `blank.bik` não existe.
+- Portanto, as falhas `0xC0000034` ao tentar abrir `.xxx` (`ATVI_logo.xxx`, etc.) e `blank.bik` são o comportamento normal da Unreal Engine 3 (que sonda pacotes `.xxx` opcionais antes de abrir os `.bik`). Corrija também o preflight em `Runtime/XOWUEEngine.cpp` para verificar `.bik` além de `.xxx` e usar resolução case-insensitive no APFS do iOS.
 
-### 1. REVERTER O CRASH `0x0BADF00D` / `0xDEADBEEF` DO BUILD 55 (EM `Runtime/XOWUEEngine.cpp`)
-**Causa raiz comprovada no log do Build 55 (`seq=48190..62137`):**
-- O callback guest `0x82B3DE30` (`opcodes=81642A94,814B0010,2B0A0000,419A0010,806B0014,7D4903A6,4E800421`) lê `r10 = *(0x10311010)` (`SCRATCH_REG4`), compara apenas `cmplwi r10, 0`, e se `r10 != 0` executa `bctrl` para `r10`.
-- O driver D3D9 grava `0x82B423C0` em `0x10311010` (`reg=4`), emite `PM4_INTERRUPT` (`seq=48214` / `48245`) para invocar `0x82B3DE30` com `source=1`, e imediatamente depois grava a sentinela de debug `0x0BADF00D` em `0x10311010` (`seq=48246`).
-- No hardware Xenos (cf. Xenia `CommandProcessor::ExecutePacketType3_EventWriteSHD`), o bit 31 (`0x80000000`) no `initiator` de `PM4_EVENT_WRITE_SHD` significa `WRITE_REAL_TIME_COUNTER` (substituir o imediato dummy `0xDEADBEEF` de `words[offset + 3u]` por um contador/timestamp monotônico) e **NÃO** dispara interrupção CP (`source=1`).
-- Quando o commit `b5f772b` gravou `words[offset + 3u]` (`0xDEADBEEF`) nos endereços de fence `0x10310040`/`0x10310044` e disparou `source=1` no `EVENT_WRITE_SHD` / final do kick enquanto `0x10311010` continha `0x0BADF00D`, `0x82B3DE30` saltou para `0x0BADF00D` e matou a execução antes do primeiro frame.
+O verdadeiro congelamento pós-Copyright no Build 56 (`Guest FPS: 0.00`, com `753,401,856` chamadas AOT travadas exatamente em `12,656` funções distintas girando em `0x82C4BE30` e `0x82C3C4D8`) ocorre pelos 3 motivos abaixo. Execute estas correções cirúrgicas no Build 57:
 
-**Correções obrigatórias em `Runtime/XOWUEEngine.cpp` e `tools/test_xowue_gpu_wiring.py`:**
-1. Em `PM4_EVENT_WRITE_SHD`:
-   - Quando `(initiator & 0x80000000u) != 0` ou `words[offset + 3u] == 0xDEADBEEFu`, **nunca** escreva `0xDEADBEEF` na memória guest; escreva o contador monotônico incremental (`++g_xenosVblankCounter` ou contador de fence dedicado), exatamente como no Build 54.
-   - **Remova** o disparo de `XENOS_GRAPHICS_INTERRUPT` (`source=1`) de dentro de `PM4_EVENT_WRITE_SHD` e do final automático do ring kick (`cpInterruptRequested`). A interrupção `source=1` deve ser disparada **apenas** pelo pacote `PM4_INTERRUPT`.
-   - Adicione proteção em `dispatchXenosGraphicsInterrupt` (ou antes de invocar o callback `0x82B3DE30` com `source=1`): se o word em `0x10311010` (`SCRATCH_REG4`) na memória guest for `0x0BADF00D` ou estiver fora da faixa de código AOT válido (`< 0x82000000`), zere `0x10311010` (ou não despache `source=1` espúrio) para que `0x82B3DE30` jamais faça `bctrl` para `0x0BADF00D`.
-2. Mantenha intactas as correções visuais de `iOS/App/XOWUEApp.swift` (`.ignoresSafeArea(.all)`), `iOS/App/XOWUENativeDraw.inc` e `iOS/App/XOWUEGuestColor.inc` (`720.0f` / `sourceHeight`), e atualize `tools/test_xowue_gpu_wiring.py` e `.github/workflows/xowue-ios.yml` de acordo.
+### 1. EXECUTAR O CALLBACK REAL `0x82B423C0` NO `PM4_INTERRUPT` EM VEZ DE PULÁ-LO (`Runtime/XOWUEEngine.cpp`)
+No Build 56, quando `0x10311010` (`SCRATCH_REG4`) continha `0x0BADF00D` no momento em que `PM4_INTERRUPT` foi processado, `dispatchXenosGraphicsInterrupt` simplesmente pulou (`skipped`) a interrupção `source=1`.
+- **Por que isso trava o D3D9:** O driver D3D9 grava o ponteiro da função `0x82B423C0` em `0x10311010` antes de enfileirar `PM4_INTERRUPT`, e depois grava `0x0BADF00D` em `0x10311010`. No callback guest `0x82B3DE30`, ele lê `0x10311010` e chama `0x82B423C0` (`bctrl`) para concluir o trabalho pendente da GPU/D3D9. Quando pulamos `source=1`, `0x82B423C0` nunca é chamado!
+- **Correção obrigatória:**
+  1. Sempre que o guest escrever um ponteiro de código válido (`0x82000000 <= val < 0x84000000`) em `0x10311010` (`SCRATCH_REG4` / `reg=4`), salve esse valor em `g_lastValidScratchReg4Callback`.
+  2. Quando `dispatchXenosGraphicsInterrupt(1u, ...)` for chamado por `PM4_INTERRUPT`: se o word atual em `0x10311010` for `0x0BADF00D` (ou inválido) mas `g_lastValidScratchReg4Callback` for um ponteiro guest válido (`0x82000000..0x83FFFFFF`), **restaure `g_lastValidScratchReg4Callback` em `0x10311010` na memória guest antes de invocar `0x82B3DE30`** (e depois que `0x82B3DE30` retornar, limpe `0x10311010` para `0` para não reexecutar sem novo write).
+  3. Dessa forma, `0x82B3DE30` executará o callback real `0x82B423C0` sem nunca saltar para `0x0BADF00D`!
 
----
+### 2. INSPECIONAR O CÓDIGO AOT DE `0x82C4BE30` E `0x82C3C4D8` E DESTRAVAR O SPIN-LOCK DE 753 MILHÕES DE CHAMADAS
+No `diagnostico-build-56.txt`:
+- `seq=21312`: `4,456,448` chamadas AOT -> `12,479` funções (`lastGuest=0x82C4BE30`)
+- `seq=54131`: `31,129,600` chamadas AOT -> `12,656` funções (`lastGuest=0x82C4BE30`)
+- `seq=75724`: `753,401,856` chamadas AOT -> `12,656` funções (`lastGuest=0x82C3C4D8`)
 
-### 2. UNIFICAR `RtlEnterCriticalSection`, `RtlTryEnterCriticalSection` E `RtlLeaveCriticalSection`
-**Evidência no log do Build 55 (`seq=12864..32704`):**
-- O log ainda apresenta dezenas de chamadas seguidas na mesma thread:
-  `RtlTryEnterCriticalSection guest=0x4000077C owner=1 recursion=1 lockCount=0 acquired`
-  seguidas por mais de 100 chamadas seguidas:
-  `RtlLeaveCriticalSection guest=0x4000077C recursion=0`
-- Isso ocorre porque `xowue_RtlEnterCriticalSection`, `xowue_RtlTryEnterCriticalSection` e `xowue_RtlLeaveCriticalSection` em `Runtime/XOWUEEngine.cpp` não estão operando sobre a mesma fonte de verdade (uma usa `g_criticalSections` / mutex host enquanto a outra manipula campos guest em offsets ou convenções diferentes de `OwningThread`/`RecursionCount`).
--Quando a Thread 1 (Render/Main) e a Thread 10 (Movie/Worker) disputam `0x4000077C` e `0x8356C7A8` após o primeiro `VdSwap`, o lock fica corrompido e trava o avanço do jogo.
+**Ação obrigatória:**
+1. Abra os arquivos C++ gerados do AOT na pasta de funções recompiladas (ou desmonte os opcodes do XEX) para os endereços **`0x82C4BE30`** e **`0x82C3C4D8`** (e seus chamadores diretos, como `0x824E6FD8`, `0x82C3EE78`, `0x82495770`, `0x82494E20`, `0x82575250`, `0x82380390`).
+2. Veja exatamente o que `0x82C4BE30` e `0x82C3C4D8` fazem! (Por exemplo: se são funções do Bink Video, XAudio2/XMA, D3D9 fence wait, CRT lock/spin, ou thread worker loop).
+3. Identifique **qual condição de memória, registrador, callback de áudio/vídeo ou primitiva de sincronização** está impedindo `0x82C4BE30` / `0x82C3C4D8` de sair do loop, e implemente a correção exata em `Runtime/XOWUEEngine.cpp`.
+4. Além disso, o `XOWUE_GUEST_PROGRESS_WATCHDOG` adicionado no Build 56 **não apareceu no log do Build 56**! Verifique por que ele não foi emitido (ex.: se o watchdog está rodando em uma thread bloqueada ou com condição de tempo que não disparou em 15s, ou se não chamou `persistDiagnosticMilestoneLine`), e garanta que ele seja gravado no arquivo de diagnóstico após 2 segundos sem novos frames, listando todas as threads guest (`id`, `entry`, `lastGuest`, `LR`, `waitReason`).
 
-**Correção obrigatória em `Runtime/XOWUEEngine.cpp`:**
-- Reimplemente `xowue_RtlTryEnterCriticalSection` para usar **exatamente a mesma estrutura host (`g_criticalSections`) e a mesma sincronização** que `xowue_RtlEnterCriticalSection` e `xowue_RtlLeaveCriticalSection` usam (sincronizando de volta os campos da struct guest em Big-Endian da mesma maneira nas três funções).
-- Se a seção crítica estiver livre ou já pertencer à `g_currentGuestThreadId`, `RtlTryEnterCriticalSection` deve incrementar `recursion` (`1, 2, 3...`), manter o `owner` consistente com `RtlEnterCriticalSection` e retornar `1` (`TRUE`); caso pertença a outra thread, deve retornar `0` (`FALSE`) imediatamente sem bloquear.
-- Reduza o spam de log de `RtlEnterCriticalSection` / `RtlTryEnterCriticalSection` / `RtlLeaveCriticalSection` (logue apenas as primeiras ocorrências ou contenções reais) para não poluir o buffer de diagnóstico.
+### 3. VERIFICAR I/O ASSÍNCRONO (`NtReadFile`) E AVANÇO DO BINK VIDEO (`.bik`)
+Logo após a tela de Copyright, o jogo reproduz os vídeos `.bik` (`ATVI_logo.bik`, `MARVEL_INTRO.bik`, `FOX_LOGO.bik`, `ravenlogo.bik`, `UE3_logo.bik`).
+- Verifique em `xowue_NtReadFile`, `xowue_NtCreateFile`, `xowue_NtOpenFile` e `xowue_NtQueryInformationFile`:
+  1. Quando `NtReadFile` lê dados de um `.bik` (ou `.xxx`), garanta que `IoStatusBlock` (se não nulo) receba `Status = 0` (`STATUS_SUCCESS`) e `Information = bytesRead` gravados em **Big-Endian** na memória guest, e se um `Event` handle foi passado para `NtReadFile`, sinalize esse evento (`KeSetEvent`) imediatamente!
+  2. Adicione resolução case-insensitive (`resolveCaseInsensitivePath`) para todos os acessos a `D:\` / `game:\` no iOS.
+  3. Verifique se o player Bink / XAudio2 (`XAudioCreate` / `IXAudio2` / `XMA` / timer callbacks) depende de avanço de cursor de áudio ou de callbacks periódicos para avançar os frames dos vídeos `.bik`. Se o Bink estiver esperando o consumo de buffers de áudio ou o avanço de posição da voz de áudio para liberar o próximo frame do vídeo, avance o estado/buffers da voz de áudio (ou dispare o callback correspondente) para que os vídeos `.bik` avancem normalmente até o menu!
 
----
-
-### 3. DESTRAVAR O LOOP DE FENCE / VBLANK / ARQUIVOS APÓS O PRIMEIRO `VdSwap`
-**Por que o Build 54 parava após exibir a tela de Copyright (`rptr=61 wptr=61`):**
-1. **Sincronização de `g_xenosVblankCounter` / VBlank (`source=0`) e `SCRATCH_REG` / `RPtrWriteBack`:**
-   - Verifique o que a Thread 1 (`0x82495770`, `0x82494E20`, `0x82495BF8`, `0x82575250`, `0x8249A410`, `0x82380390`) e a Thread 10 (`0x82C3C4D8`, `0x824E6FD8`, `0x82C4BE30`, `0x82C3EE78`) estão lendo e esperando após o `VdSwap`.
-   - Inspecione no binário/AOT do jogo as funções `0x82495770`, `0x82494E20`, `0x82575250`, `0x82380390` (Thread 1) e `0x82C3C4D8`, `0x824E6FD8`, `0x82C4BE30` (Thread 10) para identificar exatamente qual endereço de memória, registrador MMIO, evento do kernel (`KeWaitForSingleObject` / `NtWaitForSingleObjectEx`) ou condição de thread elas estão aguardando para avançar para o próximo frame!
-2. **Resolução Case-Insensitive no VFS (`D:\` -> APFS no iOS):**
-   - No Xenios, o VFS resolve caminhos de forma case-insensitive (padrão Xbox 360). No `XOWUE`, certifique-se de que `resolveGuestPath` / `XOWUEPathContainment.h` faça fallback case-insensitive componente a componente no diretório do jogo sempre que `std::filesystem::exists` retornar `false` para um caminho em `D:\` ou `game:\`, garantindo que qualquer arquivo `.xxx`, `.bik`, `.ini` ou `.upk` com diferença de maiúsculas/minúsculas no iOS seja aberto com sucesso.
-3. **Diagnóstico de Watchdog de Threads Ativas:**
-   - Caso `fresh_guest_frames == 0` por mais de 2 segundos após o primeiro `VdSwap`, emita no log de diagnóstico o estado detalhado de cada thread guest ativa (`thread id`, `lastGuest` PC/LR, se está em spin ou bloqueada em `KeWaitForSingleObject` e qual handle/endereço está esperando).
-
-Valide com `python3 tools/test_xowue_gpu_wiring.py`, garanta que a compilação está limpa e faça o commit na branch `XOWUE`.
+Valide tudo em `tools/test_xowue_gpu_wiring.py`, compile sem erros e faça o commit na branch `XOWUE`.
