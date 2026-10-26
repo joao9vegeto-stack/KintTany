@@ -164,3 +164,15 @@ for token in ("hot0=", "hot1=", "hot2=", "hot3=", "hot4=", "hot5=", "hot6=", "ho
 if 'resumo-b\\(buildNumber).txt' not in diagnostics or "utf8.count > 4000" not in diagnostics:
     raise SystemExit("Build 62 compact diagnostic is missing or not capped at 4 KB")
 print("PASS: Build 62 hot-function/thread dumps and compact diagnostic are present")
+# Build 65: prohibit global PPC rewrites and require targeted guard/raw-code audit.
+aot=(root/"tools"/"generate_aot.py").read_text(encoding="utf-8")
+for forbidden in ("def normalize_32bit_writes","def normalize_rlw_instructions","def normalize_32bit_arithmetic"):
+    if forbidden in aot: raise SystemExit(f"Build 65 forbids global AOT rewrite: {forbidden}")
+for required in ("xowue_82dc2390_guard(ctx, base)","CODE_AUDIT_B65_CPP_BEGIN","sub_822000E0","sub_82DC1FA0","sub_82DC2390","sub_82DC2A50","sub_82DC2B74"):
+    if required not in aot: raise SystemExit(f"Build 65 AOT audit missing {required}")
+for required in ("CODE_AUDIT_B65","XOWUE_82DC2390_STATE","XOWUE_82DC2390_GUARD","emitBuild65CodeAudit","0x82DC2014u","0x80004005ull"):
+    if required not in runtime: raise SystemExit(f"Build 65 runtime guard/audit missing {required}")
+assert "PPC_INST_MFTB" in workflow and "xowue_guest_timebase();" in workflow
+for forbidden in ("RLWIMI record-form CR0","RLDIMI record-form CR0","PPC_INST_RLDICL","PPC_INST_RLDICR"):
+    if forbidden in workflow: raise SystemExit(f"Build 65 workflow alters upstream instruction semantics: {forbidden}")
+print("PASS: Build 65 global PPC semantic rewrites removed; targeted 0x82DC2390 guard and raw-code audit wired")

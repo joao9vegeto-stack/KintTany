@@ -82,6 +82,45 @@ void xowue_note_scratch_reg4_write(uint32_t address, uint32_t value) {
 
 void pumpGuestXenosRingBuffer();
 static uint32_t loadGuestBe32(const uint8_t *base, uint32_t address);
+
+static void emitBuild65CodeAudit(uint8_t *base) {
+    static std::atomic<bool> emitted{false};
+    if (!base || emitted.exchange(true,std::memory_order_acq_rel)) return;
+    struct Range { uint32_t first,end; const char *label; };
+    static constexpr Range ranges[]={{0x822000E0u,0x822001A0u,"main_822000E0"},{0x82C30CA0u,0x82C30CF0u,"caller_82C30CA0"},{0x82DC1FA0u,0x82DC2060u,"loop_82DC1FA0"},{0x82DC2390u,0x82DC23F0u,"callback_82DC2390"},{0x82DC2A50u,0x82DC2C10u,"callbacks_82DC2A50"}};
+    for(const auto &range:ranges) for(uint32_t pc=range.first;pc<range.end;pc+=4u) {
+        char event[192];
+        if(validGuestRange(pc,4u)) std::snprintf(event,sizeof(event),"CODE_AUDIT_B65 range=%s pc=0x%08X word=0x%08X",range.label,pc,loadGuestBe32(base,pc));
+        else std::snprintf(event,sizeof(event),"CODE_AUDIT_B65 range=%s pc=0x%08X invalid_guest_range=1",range.label,pc);
+        recordRuntimeTrace(event);
+    }
+}
+extern "C" bool xowue_82dc2390_guard(PPCContext &context,uint8_t *base) {
+    static thread_local uint32_t calls=0u,previousLR=0u,sameCallerCalls=0u,consecutiveZero=0u;
+    ++calls; const uint32_t lr=static_cast<uint32_t>(context.lr);
+    if(lr==previousLR){if(sameCallerCalls!=UINT32_MAX)++sameCallerCalls;}else{previousLR=lr;sameCallerCalls=1u;}
+    if(lr==0x82DC2014u&&context.r3.u32==0u){if(consecutiveZero!=UINT32_MAX)++consecutiveZero;}else consecutiveZero=0u;
+    if(calls<=8u) {
+        const uint32_t regs[]={context.r3.u32,context.r4.u32,context.r5.u32,context.r6.u32,context.r7.u32,context.r8.u32,context.r9.u32,context.r10.u32,context.r11.u32,context.r12.u32,context.r28.u32,context.r29.u32,context.r30.u32,context.r31.u32};
+        const unsigned ids[]={3,4,5,6,7,8,9,10,11,12,28,29,30,31};
+        char event[1024]; int used=std::snprintf(event,sizeof(event),"XOWUE_82DC2390_STATE call=%u thread=%u lr=0x%08X sp=0x%08X",calls,g_currentGuestThread?g_currentGuestThread->id:g_currentGuestThreadId,lr,context.r1.u32);
+        for(size_t i=0;i<14u&&used>0&&static_cast<size_t>(used)<sizeof(event);++i) used+=std::snprintf(event+used,sizeof(event)-static_cast<size_t>(used)," r%u=0x%08X",ids[i],regs[i]);
+        recordRuntimeTrace(event);
+        if(base&&validGuestRange(context.r1.u32,0x80u)){char dump[768];used=std::snprintf(dump,sizeof(dump),"XOWUE_82DC2390_STATE_STACK call=%u sp=0x%08X words=",calls,context.r1.u32);
+            for(uint32_t off=0;off<0x80u&&used>0&&static_cast<size_t>(used)<sizeof(dump);off+=4u)used+=std::snprintf(dump+used,sizeof(dump)-static_cast<size_t>(used),"%s%08X",off?",":"",loadGuestBe32(base,context.r1.u32+off));
+            recordRuntimeTrace(dump);}
+        const uint32_t ptrs[]={context.r30.u32,context.r31.u32};
+        for(size_t p=0;p<2u;++p)if(base&&ptrs[p]>=0x40000000u&&ptrs[p]<0x90000000u&&validGuestRange(ptrs[p],0x40u)){char dump[512];used=std::snprintf(dump,sizeof(dump),"XOWUE_82DC2390_STATE_MEM call=%u reg=r%u address=0x%08X words=",calls,p?31u:30u,ptrs[p]);
+            for(uint32_t off=0;off<0x40u&&used>0&&static_cast<size_t>(used)<sizeof(dump);off+=4u)used+=std::snprintf(dump+used,sizeof(dump)-static_cast<size_t>(used),"%s%08X",off?",":"",loadGuestBe32(base,ptrs[p]+off));
+            recordRuntimeTrace(dump);}
+    }
+    if(lr==0x82DC2014u&&sameCallerCalls>=32u){context.r3.u64=0x80004005ull;context.cr0.compare<int32_t>(context.r3.s32,0,context.xer);char event[192];
+        std::snprintf(event,sizeof(event),"XOWUE_82DC2390_GUARD action=error thread=%u lr=0x%08X calls=%u zero_calls=%u r3=0x%08X",g_currentGuestThread?g_currentGuestThread->id:g_currentGuestThreadId,lr,sameCallerCalls,consecutiveZero,context.r3.u32);recordRuntimeTrace(event);return true;}
+    if(lr==0x82DC2014u&&consecutiveZero>=16u){context.r3.u64=1ull;char event[192];
+        std::snprintf(event,sizeof(event),"XOWUE_82DC2390_GUARD action=return_success thread=%u lr=0x%08X calls=%u zero_calls=%u",g_currentGuestThread?g_currentGuestThread->id:g_currentGuestThreadId,lr,sameCallerCalls,consecutiveZero);recordRuntimeTrace(event);return true;}
+    return false;
+}
+
 bool validGuestRange(uint32_t address, uint64_t size);
 void initializeXenosMmioRegisters(uint8_t *base);
 void xowue_NtClose(PPCContext &context);
@@ -398,7 +437,8 @@ bool shouldPersistRuntimeTrace(const std::string &event, size_t sequence) {
     for (const char *required : {"AOT_PROGRESS", "THREAD_DUMP", "XOWUE_AOT_HOTSPOT",
                                  "XOWUE_AOT_HOTSPOT_STATE", "XOWUE_QPC_WRITE",
                                  "XOWUE_STALL_THREADS", "CODE_AUDIT_QPC_CALLERS",
-                                 "XOWUE_QPC_CALLER_DUMP"}) {
+                                 "XOWUE_QPC_CALLER_DUMP", "CODE_AUDIT_B65",
+                                 "XOWUE_82DC2390_STATE", "XOWUE_82DC2390_GUARD"}) {
         if (event.find(required) != std::string::npos) return true;
     }
     if (sequence < 96u) return true;
@@ -1895,6 +1935,8 @@ void xowue_thread_checkpoint() {
 static uint32_t loadGuestBe32(const uint8_t *base, uint32_t address);
 
 void xowue_thread_checkpoint(uint32_t guestAddress) {
+    auto auditMemory = g_activeGuestMemory.lock();
+    if (auditMemory && auditMemory->base) emitBuild65CodeAudit(auditMemory->base);
     recordAotFunctionExecution(guestAddress);
     struct HotFunctionSlot { uint32_t fn; uint32_t count; };
     static thread_local std::array<HotFunctionSlot, 8> hotFunctions{};

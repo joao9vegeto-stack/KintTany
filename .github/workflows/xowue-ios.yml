@@ -284,48 +284,32 @@ jobs:
           grep -Fq '#define PPC_LOOKUP_FUNC(x, y) xowue_lookup_indirect(ctx, x, uint32_t(y))' "$AOT_PPC_CONTEXT"
           grep -Fq 'xowue_note_scratch_reg4_write(xowue_store_address_, xowue_store_value_);' "$AOT_PPC_CONTEXT"
 
-          # Build 64: apply the archived AOT semantic patch after the pinned
-          # XenonRecomp generator changes and before compiling native translation units.
+          # Build 65: preserve upstream instruction semantics; only mftb gets the host timebase.
           python3 - <<'PY'
           from pathlib import Path
           import os
           root = Path(os.environ["RUNNER_TEMP"]) / "XenonRecomp"
           recomp = root / "XenonRecomp" / "recompiler.cpp"
           text = recomp.read_text()
-          def once(s, old, new, label):
-              n = s.count(old)
-              if n != 1:
-                  raise SystemExit(f"{label}: expected one match, got {n}")
-              return s.replace(old, new, 1)
-          text = once(text,
-              '    case PPC_INST_MFTB:\n        println("\\t{}.u64 = __rdtsc();", r(insn.operands[0]));\n        break;',
-              '    case PPC_INST_MFTB:\n        println("\\t{}.u64 = xowue_guest_timebase();", r(insn.operands[0]));\n        break;',
-              "MFTB guest timebase")
-          text = once(text,
-              '        println("\\t{}.u64 = (__builtin_rotateleft32({}.u32, {}) & 0x{:X}) | ({}.u64 & 0x{:X});", r(insn.operands[0]), r(insn.operands[1]), insn.operands[2], mask, r(insn.operands[0]), ~mask);\n        break;',
-              '        println("\\t{}.u64 = (__builtin_rotateleft32({}.u32, {}) & 0x{:X}) | ({}.u64 & 0x{:X});", r(insn.operands[0]), r(insn.operands[1]), insn.operands[2], mask, r(insn.operands[0]), ~mask);\n        if (strchr(insn.opcode->name, 46))\n            println("\\t{}.compare<int32_t>({}.s32, 0, {});", cr(0), r(insn.operands[0]), xer());\n        break;',
-              "RLWIMI record-form CR0")
-          for opcode in ("PPC_INST_RLDICL", "PPC_INST_RLDICR"):
-              start = text.find("    case " + opcode + ":")
-              end = text.find("\n        break;", start)
-              if start < 0 or end < 0:
-                  raise SystemExit(opcode + " source case missing")
-              if "strchr(insn.opcode->name" not in text[start:end]:
-                  text = text[:end] + '\n        if (strchr(insn.opcode->name, 46))\n            println("\\t{}.compare<int64_t>({}.s64, 0, {});", cr(0), r(insn.operands[0]), xer());' + text[end:]
-          text = once(text,
-              '        println("\\t{}.u64 = (__builtin_rotateleft64({}.u64, {}) & 0x{:X}) | ({}.u64 & 0x{:X});", r(insn.operands[0]), r(insn.operands[1]), insn.operands[2], mask, r(insn.operands[0]), ~mask);\n        break;',
-              '        println("\\t{}.u64 = (__builtin_rotateleft64({}.u64, {}) & 0x{:X}) | ({}.u64 & 0x{:X});", r(insn.operands[0]), r(insn.operands[1]), insn.operands[2], mask, r(insn.operands[0]), ~mask);\n        if (strchr(insn.opcode->name, 46))\n            println("\\t{}.compare<int64_t>({}.s64, 0, {});", cr(0), r(insn.operands[0]), xer());\n        break;',
-              "RLDIMI record-form CR0")
-          recomp.write_text(text)
+          old = '    case PPC_INST_MFTB:\n        println("\\t{}.u64 = __rdtsc();", r(insn.operands[0]));\n        break;'
+          new = '    case PPC_INST_MFTB:\n        println("\\t{}.u64 = xowue_guest_timebase();", r(insn.operands[0]));\n        break;'
+          if text.count(old) != 1: raise SystemExit("MFTB guest timebase: expected exactly one match")
+          recomp.write_text(text.replace(old,new,1))
           context = root / "XenonUtils" / "ppc_context.h"
           h = context.read_text()
+          marker = "typedef void PPCFunc(struct PPCContext& __restrict__ ctx, uint8_t* base);"
           if "uint64_t xowue_guest_timebase(void);" not in h or "uint64_t xowue_qpc_write(uint32_t, uint64_t, uint32_t);" not in h:
-              marker = "typedef void PPCFunc(struct PPCContext& __restrict__ ctx, uint8_t* base);"
-              decls = ("extern \"C\" uint64_t xowue_guest_timebase(void);\n"
-                       "extern \"C\" uint64_t xowue_qpc_write(uint32_t, uint64_t, uint32_t);\n\n" + marker)
-              h = once(h, marker, decls, "guest timebase/QPC declarations")
+              decls = ('extern "C" uint64_t xowue_guest_timebase(void);\n'
+                       'extern "C" uint64_t xowue_qpc_write(uint32_t, uint64_t, uint32_t);\n\n' + marker)
+              if h.count(marker) != 1: raise SystemExit("QPC declarations insertion point changed")
+              h = h.replace(marker,decls,1)
+          if "xowue_82dc2390_guard" not in h:
+              decl = 'extern "C" bool xowue_82dc2390_guard(struct PPCContext& ctx, uint8_t* base);\n' + marker
+              if h.count(marker) != 1: raise SystemExit("Build 65 guard declaration insertion point changed")
+              h = h.replace(marker,decl,1)
           context.write_text(h)
           PY
+          cp "$PPC_CONTEXT" "$AOT_PPC_CONTEXT"
           cp "$PPC_CONTEXT" "$AOT_PPC_CONTEXT"
           grep -Fq 'xowue_guest_timebase();' "$RUNNER_TEMP/XenonRecomp/XenonRecomp/recompiler.cpp"
           grep -Fq 'xowue_qpc_write(outPtr, xowue_guest_timebase(), static_cast<uint32_t>(ctx.lr))' "$GITHUB_WORKSPACE/generated/ppc"/ppc_recomp.*.cpp
