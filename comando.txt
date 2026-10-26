@@ -1,34 +1,48 @@
-Analise e corrija os dois problemas comprovados no `diagnostico-build-54.txt` e na captura de tela do Build 54 na branch `XOWUE` (congelamento em 0.0 FPS após o primeiro frame de splash/copyright e corte/escala incorreta da imagem na tela). Aplique as seguintes correções diretamente nos arquivos do repositório:
+Analise o `diagnostico-build-55.txt`, o `crash-build-55.txt` e o estado atual da branch `XOWUE`.
+Contexto importante confirmado: **a exata mesma pasta desta instalação do jogo roda normalmente no emulador Xenios (baseado no Xenia) no mesmo dispositivo**, portanto os arquivos da instalação são válidos e o congelamento pós-Copyright (Build 54) e o crash em tela preta (Build 55) são causados exclusivamente por divergências de emulação de GPU/Kernel em `Runtime/XOWUEEngine.cpp`.
 
-### 1. CORREÇÃO DO CONGELAMENTO PÓS-SPLASH (0.0 FPS após `rptr=61 wptr=61`)
-**Evidência no log (`diagnostico-build-54.txt`):**
-- No `seq=332698`, a interrupção `XENOS_GRAPHICS_INTERRUPT source=1 cpu=2 callback=0x82B3DE30` é disparada ANTES dos comandos `XENOS_PM4_EVENT_WRITE_SHD` nos `seq=332738` (`initiator=0x80000003 address=0x10310048 value=0x00000016`) e `seq=332822` (`initiator=0x80000003 address=0x1031004C value=0x00000017`), e antes dos sync writes `seq=332823` (`0x10310006 = 0x100253A0`) e `seq=332824` (`0x10310002 = 0x0000000D`).
-- O bit `0x80000000` em `initiator=0x80000003` (`PM4_EVENT_WRITE_SHD`) exige envio de interrupção CP (`source=1`) APÓS a escrita do valor do fence na memória guest. Como `source=1` foi disparado antes de `0x16` e `0x17` serem gravados em `0x10310048` / `0x1031004C` e nenhuma interrupção `source=1` ocorre após o `Xenos ring kick rptr=61 wptr=61` (`seq=332825`), o callback D3D9 (`0x82B3DE30`) nunca processa os fences `0x16`/`0x17`. Com isso, a Thread 1 (`0x82495770`, `0x82575250`, `0x82380390`) e a Thread 10 (`0x82C3C4D8`, `0x824E6FD8`, `0x82C4BE30`) ficam presas em spinlock/wait infinito aguardando a conclusão da GPU, mantendo `guest_vk_draws=28` e `guest=0.00 FPS`, enquanto apenas `source=0` (VBlank) dispara até `count=600`.
-- Além disso, o log mostra centenas de chamadas consecutivas `RtlTryEnterCriticalSection -> acquired` seguidas de `RtlLeaveCriticalSection guest=0x4000077C recursion=0` (`seq=11328..32704`) e falha ao abrir arquivos em `D:\WGame\Movies\*` (`present=0` no preflight e `status=0xC0000034` em `D:\WGame\Movies\Copyright.txt`).
+Execute as seguintes correções cirúrgicas para restaurar o vídeo na tela (mantendo o conserto de escala 16:9) e destravar o avanço do jogo após o primeiro frame:
 
-**Ações obrigatórias em `Runtime/XOWUEEngine.cpp` (e headers correlatos):**
-1. **Disparo de `source=1` em `PM4_EVENT_WRITE_SHD` e ao final do Ring Kick:**
-   - No handler de `PM4_EVENT_WRITE_SHD`, após realizar o store do `value` em `address` (em Big-Endian na memória guest) e atualizar os registradores de writeback/scratch, verifique se `(initiator & 0x80000000u) != 0` ou se houve `guest_sync_writes > 0` no kick atual.
-   - Garanta que `XENOS_GRAPHICS_INTERRUPT` com `source=1` (CP interrupt para `callback=0x82B3DE30`) seja disparado **DEPOIS** que todos os `EVENT_WRITE_SHD` e atualizações de `RPtrWriteBack` (`0x1031003C`) do ring kick tiverem sido comitados na memória guest.
-2. **Consistência de `RtlTryEnterCriticalSection` / `RtlEnterCriticalSection` / `RtlLeaveCriticalSection`:**
-   - Audite a manipulação da struct guest `RTL_CRITICAL_SECTION` (especialmente em `0x4000077C`). Garanta que `RtlTryEnterCriticalSection`, ao adquirir um lock livre ou reentrar na mesma thread, incremente `RecursionCount` e ajuste `LockCount` e `OwningThread` exatamente com a mesma semântica e endianness de `RtlEnterCriticalSection`, evitando que `RtlLeaveCriticalSection` sature em `recursion=0` prematuramente quando a Thread 1 e a Thread 10 disputam a seção crítica.
-3. **Resolução Case-Insensitive no VFS do Xbox (`D:\` -> iOS APFS) e Continuidade do Trace AOT:**
-   - Como o APFS no iOS é case-sensitive e o Xbox 360 é case-insensitive, adicione fallback case-insensitive por componente de diretório ao resolver caminhos guest (`D:\WGame\Movies\...`, etc.) dentro da raiz contida por `XOWUEPathContainment.h`.
-   - Remova ou aumente o teto que silencia os logs de `AOT execution milestone` após `calls=8257536` (`126 * 65536`), e adicione diagnóstico periódico do PC/LR e motivo de bloqueio (`KeWaitForSingleObject` / fence / spin) caso `fresh_guest_frames == 0` por mais de 2 segundos.
+### 1. REVERTER O CRASH `0x0BADF00D` / `0xDEADBEEF` DO BUILD 55 (EM `Runtime/XOWUEEngine.cpp`)
+**Causa raiz comprovada no log do Build 55 (`seq=48190..62137`):**
+- O callback guest `0x82B3DE30` (`opcodes=81642A94,814B0010,2B0A0000,419A0010,806B0014,7D4903A6,4E800421`) lê `r10 = *(0x10311010)` (`SCRATCH_REG4`), compara apenas `cmplwi r10, 0`, e se `r10 != 0` executa `bctrl` para `r10`.
+- O driver D3D9 grava `0x82B423C0` em `0x10311010` (`reg=4`), emite `PM4_INTERRUPT` (`seq=48214` / `48245`) para invocar `0x82B3DE30` com `source=1`, e imediatamente depois grava a sentinela de debug `0x0BADF00D` em `0x10311010` (`seq=48246`).
+- No hardware Xenos (cf. Xenia `CommandProcessor::ExecutePacketType3_EventWriteSHD`), o bit 31 (`0x80000000`) no `initiator` de `PM4_EVENT_WRITE_SHD` significa `WRITE_REAL_TIME_COUNTER` (substituir o imediato dummy `0xDEADBEEF` de `words[offset + 3u]` por um contador/timestamp monotônico) e **NÃO** dispara interrupção CP (`source=1`).
+- Quando o commit `b5f772b` gravou `words[offset + 3u]` (`0xDEADBEEF`) nos endereços de fence `0x10310040`/`0x10310044` e disparou `source=1` no `EVENT_WRITE_SHD` / final do kick enquanto `0x10311010` continha `0x0BADF00D`, `0x82B3DE30` saltou para `0x0BADF00D` e matou a execução antes do primeiro frame.
+
+**Correções obrigatórias em `Runtime/XOWUEEngine.cpp` e `tools/test_xowue_gpu_wiring.py`:**
+1. Em `PM4_EVENT_WRITE_SHD`:
+   - Quando `(initiator & 0x80000000u) != 0` ou `words[offset + 3u] == 0xDEADBEEFu`, **nunca** escreva `0xDEADBEEF` na memória guest; escreva o contador monotônico incremental (`++g_xenosVblankCounter` ou contador de fence dedicado), exatamente como no Build 54.
+   - **Remova** o disparo de `XENOS_GRAPHICS_INTERRUPT` (`source=1`) de dentro de `PM4_EVENT_WRITE_SHD` e do final automático do ring kick (`cpInterruptRequested`). A interrupção `source=1` deve ser disparada **apenas** pelo pacote `PM4_INTERRUPT`.
+   - Adicione proteção em `dispatchXenosGraphicsInterrupt` (ou antes de invocar o callback `0x82B3DE30` com `source=1`): se o word em `0x10311010` (`SCRATCH_REG4`) na memória guest for `0x0BADF00D` ou estiver fora da faixa de código AOT válido (`< 0x82000000`), zere `0x10311010` (ou não despache `source=1` espúrio) para que `0x82B3DE30` jamais faça `bctrl` para `0x0BADF00D`.
+2. Mantenha intactas as correções visuais de `iOS/App/XOWUEApp.swift` (`.ignoresSafeArea(.all)`), `iOS/App/XOWUENativeDraw.inc` e `iOS/App/XOWUEGuestColor.inc` (`720.0f` / `sourceHeight`), e atualize `tools/test_xowue_gpu_wiring.py` e `.github/workflows/xowue-ios.yml` de acordo.
 
 ---
 
-### 2. CORREÇÃO DA ESCALA E DO CORTE DO QUADRO NA TELA
-**Evidência no log e na imagem:**
-- Na UI (`iOS/App/XOWUEApp.swift`), `XOWUEGameSurfaceScreen` posiciona a barra superior (`SAIR` / `X-MEN ORIGINS • KOSMICKRISP`) acima da superfície do jogo ou aplica padding/clipping com cantos arredondados, empurrando o `XOWUEVulkanView` para baixo e cortando a segunda linha do texto de copyright da Marvel na borda inferior.
-- No renderizador (`iOS/App/XOWUENativeDraw.inc` e `iOS/App/XOWUEGuestColor.inc`), o draw `slot=0` (`vs=B458DC9522932E55 ps=50088B75BDAA1827 vte=0000043F`) usa target `2144x1206` com scissor guest `00000000..02D00500` (`1280x720`) e produz `bbox=0,179..2143,1026` no readback (`XENOS_COMPOSITED_GPU_READBACK`), resultando em encolhimento/deslocamento vertical e corte.
+### 2. UNIFICAR `RtlEnterCriticalSection`, `RtlTryEnterCriticalSection` E `RtlLeaveCriticalSection`
+**Evidência no log do Build 55 (`seq=12864..32704`):**
+- O log ainda apresenta dezenas de chamadas seguidas na mesma thread:
+  `RtlTryEnterCriticalSection guest=0x4000077C owner=1 recursion=1 lockCount=0 acquired`
+  seguidas por mais de 100 chamadas seguidas:
+  `RtlLeaveCriticalSection guest=0x4000077C recursion=0`
+- Isso ocorre porque `xowue_RtlEnterCriticalSection`, `xowue_RtlTryEnterCriticalSection` e `xowue_RtlLeaveCriticalSection` em `Runtime/XOWUEEngine.cpp` não estão operando sobre a mesma fonte de verdade (uma usa `g_criticalSections` / mutex host enquanto a outra manipula campos guest em offsets ou convenções diferentes de `OwningThread`/`RecursionCount`).
+-Quando a Thread 1 (Render/Main) e a Thread 10 (Movie/Worker) disputam `0x4000077C` e `0x8356C7A8` após o primeiro `VdSwap`, o lock fica corrompido e trava o avanço do jogo.
 
-**Ações obrigatórias em `iOS/App/XOWUEApp.swift`, `iOS/App/XOWUENativeDraw.inc` e `iOS/App/XOWUEGuestColor.inc`:**
-1. **Em `iOS/App/XOWUEApp.swift` (`XOWUEGameSurfaceScreen`):**
-   - Coloque `XOWUEVulkanSurface()` ocupando 100% da tela em um `ZStack` de fundo com `.ignoresSafeArea(.all)`, sem padding externo e sem `clipShape` que corte as bordas da superfície de renderização.
-   - Transforme o cabeçalho (`SAIR` e título) e o HUD de FPS nos overlays flutuantes sobre o `ZStack`, preservando a área útil total em `16:9` (aspect-fit centralizado na tela cheia).
-2. **Em `iOS/App/XOWUENativeDraw.inc` e `iOS/App/XOWUEGuestColor.inc`:**
-   - Garanta que os alvos EDRAM nativos (`tile=720`, `pitch=1280`, `1280x720`) e os respectivos `VkViewport` / `VkRect2D` (scissor `0..1280` x `0..720`) mantenham a correspondência 1:1 com o espaço de coordenadas do guest (`1280x720`), ou aplique uniformemente os fatores `scaleX = (float)swapchainExtent.width / 1280.0f` e `scaleY = (float)swapchainExtent.height / 720.0f` tanto no `VkViewport` quanto no `VkRect2D` (scissor) e transformações VTE (`vte=0x043F` vs `vte=0x0300`).
-   - No passe de resolve/apresentação para a swapchain (`2144x1206`), faça o mapeamento completo da região `1280x720` do guest para o retângulo `16:9` centralizado da swapchain (via blit/compositing completo de `0..1280, 0..720` para `0..width, 0..height`), garantindo que nenhuma linha inferior ou superior do framebuffer `1280x720` seja cortada.
+**Correção obrigatória em `Runtime/XOWUEEngine.cpp`:**
+- Reimplemente `xowue_RtlTryEnterCriticalSection` para usar **exatamente a mesma estrutura host (`g_criticalSections`) e a mesma sincronização** que `xowue_RtlEnterCriticalSection` e `xowue_RtlLeaveCriticalSection` usam (sincronizando de volta os campos da struct guest em Big-Endian da mesma maneira nas três funções).
+- Se a seção crítica estiver livre ou já pertencer à `g_currentGuestThreadId`, `RtlTryEnterCriticalSection` deve incrementar `recursion` (`1, 2, 3...`), manter o `owner` consistente com `RtlEnterCriticalSection` e retornar `1` (`TRUE`); caso pertença a outra thread, deve retornar `0` (`FALSE`) imediatamente sem bloquear.
+- Reduza o spam de log de `RtlEnterCriticalSection` / `RtlTryEnterCriticalSection` / `RtlLeaveCriticalSection` (logue apenas as primeiras ocorrências ou contenções reais) para não poluir o buffer de diagnóstico.
 
-Valide a compilação, rode os testes de fumaça/wiring existentes e faça o commit na branch `XOWUE`.
+---
+
+### 3. DESTRAVAR O LOOP DE FENCE / VBLANK / ARQUIVOS APÓS O PRIMEIRO `VdSwap`
+**Por que o Build 54 parava após exibir a tela de Copyright (`rptr=61 wptr=61`):**
+1. **Sincronização de `g_xenosVblankCounter` / VBlank (`source=0`) e `SCRATCH_REG` / `RPtrWriteBack`:**
+   - Verifique o que a Thread 1 (`0x82495770`, `0x82494E20`, `0x82495BF8`, `0x82575250`, `0x8249A410`, `0x82380390`) e a Thread 10 (`0x82C3C4D8`, `0x824E6FD8`, `0x82C4BE30`, `0x82C3EE78`) estão lendo e esperando após o `VdSwap`.
+   - Inspecione no binário/AOT do jogo as funções `0x82495770`, `0x82494E20`, `0x82575250`, `0x82380390` (Thread 1) e `0x82C3C4D8`, `0x824E6FD8`, `0x82C4BE30` (Thread 10) para identificar exatamente qual endereço de memória, registrador MMIO, evento do kernel (`KeWaitForSingleObject` / `NtWaitForSingleObjectEx`) ou condição de thread elas estão aguardando para avançar para o próximo frame!
+2. **Resolução Case-Insensitive no VFS (`D:\` -> APFS no iOS):**
+   - No Xenios, o VFS resolve caminhos de forma case-insensitive (padrão Xbox 360). No `XOWUE`, certifique-se de que `resolveGuestPath` / `XOWUEPathContainment.h` faça fallback case-insensitive componente a componente no diretório do jogo sempre que `std::filesystem::exists` retornar `false` para um caminho em `D:\` ou `game:\`, garantindo que qualquer arquivo `.xxx`, `.bik`, `.ini` ou `.upk` com diferença de maiúsculas/minúsculas no iOS seja aberto com sucesso.
+3. **Diagnóstico de Watchdog de Threads Ativas:**
+   - Caso `fresh_guest_frames == 0` por mais de 2 segundos após o primeiro `VdSwap`, emita no log de diagnóstico o estado detalhado de cada thread guest ativa (`thread id`, `lastGuest` PC/LR, se está em spin ou bloqueada em `KeWaitForSingleObject` e qual handle/endereço está esperando).
+
+Valide com `python3 tools/test_xowue_gpu_wiring.py`, garanta que a compilação está limpa e faça o commit na branch `XOWUE`.
