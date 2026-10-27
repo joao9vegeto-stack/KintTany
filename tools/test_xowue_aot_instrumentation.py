@@ -230,7 +230,7 @@ print("PASS: Build 69 QPC fast path, synthetic timebase, main/interrupt thread s
 # Build 69 checks for main-thread PPC context, thread snapshots, and QPC timer pacing.
 aot = (root / "tools" / "generate_aot.py").read_text(encoding="utf-8")
 runtime_stubs = source.read_text(encoding="utf-8")
-for token in ("buildMainThreadDiagnostic","g_mainThreadLastR31","XOWUE_STALL_THREADS_THREAD","49875000ull","syntheticOffset","decodedFrames","g_xenosFrontend.swaps"):
+for token in ("buildMainThreadDiagnostic","g_mainThreadLastR31","XOWUE_STALL_THREADS_THREAD","49875000ull","offset+=50000ull","decodedFrames","g_xenosFrontend.swaps"):
     if token not in engine: raise SystemExit(f"Build 69 missing runtime token {token}")
 assert "xowue_thread_checkpoint(0x82C3C4D8u, ctx);" in aot
 assert "xowue_thread_checkpoint(uint32_t, PPCContext &);" in runtime_stubs
