@@ -2039,6 +2039,15 @@ static void emitBuild66CodeAudit(uint8_t *base) {
 static void logCodeAuditBuild69(uint8_t *base) {
  if(!base||g_build69AuditEmitted.exchange(true,std::memory_order_acq_rel))return;
  struct R{uint32_t b,e;const char*n;}; static constexpr R rs[]={
+ {0x822A0250u,0x822A0360u,"BINK_822A0278"},
+ {0x824ACB80u,0x824ACC60u,"MAIN_824ACBF8"},
+ {0x82C25820u,0x82C259E0u,"UE3_82C25840_82C259C8"},
+ {0x826CF040u,0x826CF100u,"THREAD10_SPIN_826CF060"},
+ {0x82B42280u,0x82B42360u,"AUDIO_THREAD6_82B422A8"},
+ {0x830F4310u,0x830F4390u,"THREAD1_830F4330"},
+ {0x824E6FD0u,0x824E70E0u,"RENDER_824E6FD8"},
+ {0x824E7280u,0x824E7340u,"RENDER_824E72B4"},
+ {0x82C4D480u,0x82C4D500u,"WAIT_CALLER_82C4D4A8"}; static constexpr R rs[]={
  {0x82C3C498u,0x82C3C518u,"QPC_82C3C4D8"},{0x822A1BC0u,0x822A2120u,"BINK_822A1E08"},
  {0x822A01C0u,0x822A0460u,"BINK_822A0278"},{0x824E6F10u,0x824E7140u,"WORKER_824E6FD8"},
  {0x82C257F0u,0x82C25A40u,"UE3_82C25840_82C259C8"},{0x823704C0u,0x82370D00u,"AUDIO_82370500_82370C4C"},
@@ -2076,7 +2085,7 @@ static void emitBuild65CodeAudit(uint8_t *base) {
         char event[192];
         if(validGuestRange(pc,4u)) std::snprintf(event,sizeof(event),"CODE_AUDIT_B65 range=%s pc=0x%08X word=0x%08X",range.label,pc,loadGuestBe32(base,pc));
         else std::snprintf(event,sizeof(event),"CODE_AUDIT_B65 range=%s pc=0x%08X invalid_guest_range=1",range.label,pc);
-        recordRuntimeTrace(event);
+        (void)event;
     }
 }
 extern "C" bool xowue_82dc2390_guard(PPCContext &context,uint8_t *base) {
@@ -2324,21 +2333,21 @@ static void __xowue_sub_83847AC0_init(PPCContext &ctx, uint8_t *base) {
 static void __xowue_sub_83847AC4_free(PPCContext &ctx, uint8_t *) { ctx.r3.u64=0ull; }
 
 static void xowue_forward_pump_and_signal_spin(uint32_t guestAddress, PPCContext &ctx) {
+    (void)guestAddress;
+    (void)ctx;
     static std::atomic<uint32_t> s_directSpinCalls{0};
     const uint32_t sc = s_directSpinCalls.fetch_add(1, std::memory_order_relaxed) + 1u;
-    if (sc > 64u && (sc & 63u) == 0u) {
+    if (sc > 64u && (sc & 255u) == 0u) {
         pumpGuestXenosRingBuffer();
         signalGuestEventHandle(0x4004ED80u);
         signalGuestEventHandle(0x4004EDD0u);
         signalGuestEventHandle(0x00000100u);
         signalGuestEventHandle(0x00000102u);
+        signalGuestEventHandle(0x00000110u);
         signalGuestEventHandle(0x00000112u);
         signalGuestEventHandle(0x00000115u);
         signalGuestEventHandle(0x70016FA0u);
         signalGuestEventHandle(0x7003DD80u);
-        if (guestAddress == 0x822A0278u) {
-            ctx.r3.u64 = 0u;
-        }
     }
 }
 
@@ -2367,12 +2376,7 @@ static void xowue_bink_wait_bypass_stub(PPCContext &context, uint8_t *base) {
 }
 
 PPCFunc *xowue_lookup_indirect(PPCContext &context, uint8_t *base, uint32_t target) {
-    // Build 74: bypass the BinkWait/movie-audio sync spin after warmup.
-    if (target == 0x822A0278u) {
-        static std::atomic<uint32_t> s_binkWaitCalls{0};
-        const uint32_t c = s_binkWaitCalls.fetch_add(1, std::memory_order_relaxed) + 1u;
-        if (c > 64u) return &xowue_bink_wait_bypass_stub;
-    }
+    (void)xowue_bink_wait_bypass_stub;
     // Generated PPC code can remain in a guest-side indirect-dispatch loop
     // without entering a syscall/wait primitive. Poll cancellation here so the
     // native Exit button can unwind such loops instead of leaving an orphaned
