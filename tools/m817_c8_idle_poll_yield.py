@@ -40,16 +40,11 @@ int spu_ascension_run_c8_generated_irq(spu_context* ctx) {{"""
     source = once(source, old_fn, new_fn, "M8.17 C8 IRQ function header")
 
     # Hook the restore completion path in spu_ascension_run_c8_generated_irq
-    target_tail = """    ctx->pc = target & SPU_LS_MASK;
+    target_tail = """    ctx->pc=target;
+    g_spu_trampoline_fn=spu_indirect_branch;
     return 1;
 }"""
-    if target_tail not in source:
-        # Fallback if formatting has no spaces around '='
-        target_tail = """    ctx->pc=target & SPU_LS_MASK;
-    return 1;
-}"""
-    replacement_tail = """    ctx->pc = target & SPU_LS_MASK;
-    if (restoring) {
+    replacement_tail = """    if (restoring) {
         uint64_t commit_stats[2] = {0, 0};
         spu_workload_copy_ascension_commit_metrics(commit_stats);
         if ((target & SPU_LS_MASK) == 0x00AD0u &&
@@ -67,23 +62,21 @@ int spu_ascension_run_c8_generated_irq(spu_context* ctx) {{"""
             s_asc_c8_last_putllc = commit_stats[1];
         }
     }
+    ctx->pc=target;
+    g_spu_trampoline_fn=spu_indirect_branch;
     return 1;
 }"""
     source = once(source, target_tail, replacement_tail, "M8.17 C8 restore yield tail")
 
-    # Ensure callers of spu_ascension_run_c8_generated_irq stop the PM slice when it returns 2
-    old_call = "if (spu_ascension_run_c8_generated_irq(ctx)) continue;"
-    new_call = """{
-            int c8_rc = spu_ascension_run_c8_generated_irq(ctx);
-            if (c8_rc == 2) return;
-            if (c8_rc) continue;
-        }"""
-    if old_call in source:
-        source = source.replace(old_call, new_call)
-    else:
-        old_call2 = "if(spu_ascension_run_c8_generated_irq(ctx))continue;"
-        if old_call2 in source:
-            source = source.replace(old_call2, new_call)
+    # Make the C8 dispatcher distinguish a policy-slice yield from a regular restore.
+    old_call = """    if(ctx->pc==0x3FEC0u && spu_ascension_run_c8_generated_irq(ctx))
+        return;"""
+    new_call = """    if(ctx->pc==0x3FEC0u) {
+        int c8_rc = spu_ascension_run_c8_generated_irq(ctx);
+        if (c8_rc == 2) return;
+        if (c8_rc) return;
+    }"""
+    source = once(source, old_call, new_call, "M8.17 C8 dispatcher yield result")
 
     path.write_text(source)
 
