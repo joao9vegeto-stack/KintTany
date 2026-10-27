@@ -96,7 +96,7 @@ assert "XOWUE_POOL_ALLOC_82DC2BF0" in engine and "XOWUE_POOL_INIT_82DC2B14" in e
 assert "CODE_AUDIT_B66" in engine and "CODE_AUDIT_83847ABC" in engine
 assert "XOWUE_VBLANK_WATCHDOG_SIGNAL" in engine
 assert "obj_creator_lr=0x%08X obj_signals=%u" in engine
-assert 'CURRENT_PROJECT_VERSION: "70"' in (root / "iOS" / "project.yml").read_text(encoding="utf-8")
+assert 'CURRENT_PROJECT_VERSION: "71"' in (root / "iOS" / "project.yml").read_text(encoding="utf-8")
 print("PASS: Build 66 allocator, PPC audit, synchronization telemetry and vblank watchdog hooks")
 
 # Build 34: Xbox object attributes must use root/name/flags at offsets 0/4/8
@@ -206,7 +206,7 @@ assert "CODE_AUDIT_B68_EVENT_WAIT_IMPLEMENTATION" in engine
 assert "CODE_AUDIT_B68_THREAD2_FULL" in engine
 assert "if ((++audioLoopCalls & 63u) == 0u)" in engine
 assert "std::chrono::milliseconds(2)" in engine
-assert 'CURRENT_PROJECT_VERSION: "70"' in (root / "iOS" / "project.yml").read_text(encoding="utf-8")
+assert 'CURRENT_PROJECT_VERSION: "71"' in (root / "iOS" / "project.yml").read_text(encoding="utf-8")
 print("PASS: Build 68 lost-wakeup counters, all-thread worker-first watchdog, async-task recovery, PPC audit and audio throttle")
 
 # Build 69: QPC fast path, synthetic timebase, and complete diagnostics.
@@ -224,7 +224,7 @@ for address in ("0x82C3C498u","0x822A1BC0u","0x822A01C0u","0x824E6F10u","0x82C25
     assert address in engine, f"Build 69 audit address missing {address}"
 assert "CODE_AUDIT_B69_GUEST_WORD" in engine
 assert "THREAD_DUMP id=%u entry=0x%08X exited=%u waiting=%u wait_target=0x%08X last_fn=0x%08X prev_fn=0x%08X lr=0x%08X" in engine
-assert 'CURRENT_PROJECT_VERSION: "70"' in (root / "iOS" / "project.yml").read_text(encoding="utf-8")
+assert 'CURRENT_PROJECT_VERSION: "71"' in (root / "iOS" / "project.yml").read_text(encoding="utf-8")
 print("PASS: Build 69 QPC fast path, synthetic timebase, main/interrupt thread snapshots, PPC code/data audit")
 
 # Build 69 checks for main-thread PPC context, thread snapshots, and QPC timer pacing.
@@ -247,3 +247,10 @@ assert "0x82370790u" in engine, "Missing main wait function in QPC coverage"
 assert "MAIN_WAIT_8237073C_82370790" in engine, "Missing main wait code audit"
 assert "XOWUE DIAGNOSTIC LOG TRUNCATED IN MIDDLE" in (root / "iOS" / "App" / "XOWUEDiagnostics.swift").read_text(encoding="utf-8")
 print("PASS: Build 70 QPC log cap, wait-loop coverage, and bounded diagnostic export")
+
+# Build 71 checks: Xenos ring pump + render/streamer event wake inside stalled QPC worker loop
+engine_b71 = Path("Runtime/XOWUEEngine.cpp").read_text(encoding="utf-8")
+assert "signalGuestEventHandle(0x70016FA0u)" in engine_b71
+assert "signalGuestEventHandle(0x7003DD80u)" in engine_b71
+assert "pumpGuestXenosRingBuffer()" in engine_b71
+print("PASS: Build 71 Xenos ring pump and render/streamer wake inside stalled QPC loop")

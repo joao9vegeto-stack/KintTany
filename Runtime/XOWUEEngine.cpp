@@ -2165,9 +2165,9 @@ void xowue_thread_checkpoint(uint32_t guestAddress) {
         std::fprintf(stderr, "%s\n", event);
         recordRuntimeTrace(event);
     }
-    // Build 70: QPC is a leaf fast path and can be called from guest timer busy-waits.
+    // Build 71: QPC is a leaf fast path and can be called from guest timer busy-waits.
     // Never sleep or yield from its AOT entry instrumentation.
-    const bool qpcFastPath = guestAddress == 0x82C3C4D8u || guestAddress == 0x822A1E08u || guestAddress == 0x822A0278u || guestAddress == 0x824E6FD8u || guestAddress == 0x82C25840u;
+    const bool qpcFastPath = guestAddress == 0x82C3C4D8u || guestAddress == 0x822A1E08u || guestAddress == 0x822A0278u || guestAddress == 0x824E6FD8u || guestAddress == 0x824E7158u || guestAddress == 0x8237073Cu || guestAddress == 0x82370790u || guestAddress == 0x82C25840u;
     if (!qpcFastPath && slot->count != 0u && (slot->count % 2000u) == 0u)
         std::this_thread::yield();
     if (!qpcFastPath && slot->count != 0u && (slot->count % 20000u) == 0u)
@@ -7014,7 +7014,7 @@ static std::atomic<uint64_t> calls{0};static constexpr uint32_t loop[]={0x822A1E
 uint64_t call=calls.fetch_add(1)+1;uint32_t tid=g_currentGuestThread?g_currentGuestThread->id:g_currentGuestThreadId;uint64_t frames=0,swaps=0;{std::lock_guard<std::mutex> l(g_xenosMutex);frames=g_xenosFrontend.decodedFrames;swaps=g_xenosFrontend.swaps;}
 if(tid0!=tid){tid0=tid;repeat=0;offset=0;frames0=frames;swaps0=swaps;}bool fresh=frames!=frames0||swaps!=swaps0;if(fresh){frames0=frames;swaps0=swaps;repeat=0;}
 bool loopCaller=callerLR==loop[0]||(callerLR>=0x822A1C00u&&callerLR<0x822A2100u)||(callerLR>=0x822A0200u&&callerLR<0x822A0450u)||(callerLR>=0x824E6F50u&&callerLR<0x824E7360u)||(callerLR>=0x82370700u&&callerLR<0x82370840u)||(callerLR>=0x82C25800u&&callerLR<0x82C25A40u);for(uint32_t x:loop)loopCaller=loopCaller||callerLR==x;if(!loopCaller&&g_currentGuestThread){uint32_t p=g_currentGuestThread->lastCallerFn.load();loopCaller=p==loop[0]||p==loop[1]||p==loop[2]||p==loop[3];}else if(!loopCaller){uint32_t p=g_mainThreadPrevFn.load();loopCaller=p==loop[0]||p==loop[1]||p==loop[2]||p==loop[3];}
-if(!fresh){if(repeat!=UINT32_MAX)++repeat;if(offset<=UINT64_MAX-50000ull)offset+=50000ull;if(loopCaller&&(repeat&511u)==0u)std::this_thread::yield();}else repeat=0;
+if(!fresh){if(repeat!=UINT32_MAX)++repeat;if(offset<=UINT64_MAX-50000ull)offset+=50000ull;if(loopCaller&&(repeat&255u)==0u){pumpGuestXenosRingBuffer();signalGuestEventHandle(0x70016FA0u);signalGuestEventHandle(0x7003DD80u);signalGuestEventHandle(0x7003DF80u);if(callerLR>=0x824E6F50u&&callerLR<0x824E7360u)std::this_thread::sleep_for(std::chrono::microseconds(100));else std::this_thread::yield();}}else repeat=0;
 if(tb64<=UINT64_MAX-offset)tb64+=offset;if(static_cast<uint32_t>(tb64)==0)tb64|=1ull;auto m=g_activeGuestMemory.lock();bool valid=outPtr&&m&&m->base&&validGuestRange(outPtr,8);if(valid){storeGuestBe32(m->base,outPtr,static_cast<uint32_t>(tb64>>32));storeGuestBe32(m->base,outPtr+4,static_cast<uint32_t>(tb64));}
 static std::atomic<uint32_t> qpcLogCount{0};if((call<=8||!valid||(loopCaller&&repeat==2))&&qpcLogCount.fetch_add(1,std::memory_order_relaxed)<16u){char e[320];std::snprintf(e,sizeof(e),"XOWUE_QPC_WRITE call=%llu thread=%u out_ptr=0x%08X tb64=0x%016llX synthetic_offset=%llu caller_lr=0x%08X frames=%llu swaps=%llu loop_caller=%u out_ptr_valid=%u",(unsigned long long)call,tid,outPtr,(unsigned long long)tb64,(unsigned long long)offset,callerLR,(unsigned long long)frames,(unsigned long long)swaps,loopCaller?1u:0u,valid?1u:0u);std::fprintf(stderr,"%s\n",e);recordRuntimeTrace(e);}return tb64;}
 extern "C" void xowue_log_stall_threads(void) {
