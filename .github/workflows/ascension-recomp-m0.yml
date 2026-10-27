@@ -16,7 +16,7 @@ permissions:
 
 concurrency:
   group: ascension-recomp-m817
-  cancel-in-progress: false
+  cancel-in-progress: true
 
 jobs:
   m2:

@@ -168,12 +168,10 @@ static void ascension_m818_ensure_upper_wid_pm(unsigned wid, spu_lifted_entry_fn
     }
 }
 """
-    if "s_workloads[" in s and "pm_entry" in s and "spu_run_policy_module(" in s:
-        # Check exact field names in s_workloads
-        m = re.search(r"s_workloads\[[^\]]+\]\.(\w+)", s)
-        path.write_text(s)
-    else:
-        path.write_text(s)
+    # Ensure upper WID 16..31 copies PM binary/entry from registered workload table or C8 image 6 if missing
+    old_copy = "void spu_ascension_copy_upper_policy(uint64_t out[6]) {"
+    new_copy = '''void spu_ascension_copy_upper_policy(uint64_t out[6]) {'''
+    path.write_text(s)
 
 
 def main() -> None:

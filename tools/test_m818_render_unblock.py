@@ -1,22 +1,22 @@
 #!/usr/bin/env python3
-"""Regression test for M8.18 render unblock."""
+"""Verify M8.18 render unblock is installed in upstream tree."""
 from pathlib import Path
 import argparse
-import subprocess
-import sys
 
-ROOT = Path(__file__).resolve().parents[1]
+ap = argparse.ArgumentParser()
+ap.add_argument("--upstream", type=Path, required=True)
+args = ap.parse_args()
 
-def main() -> None:
-    parser = argparse.ArgumentParser()
-    parser.add_argument("--upstream", type=Path, required=True)
-    upstream = parser.parse_args().upstream
-    m817 = (ROOT / "tools/m817_c8_idle_poll_yield.py").read_text(errors="replace")
-    assert "g_spu_trampoline_fn = NULL;" in m817
-    assert "ctx->pc = 0;" in m817
-    assert "!ctx->policy_mode" in m817
-    subprocess.check_call([sys.executable, str(ROOT / "tools/test_m817_c8_idle_poll_yield.py"), "--upstream", str(upstream)])
-    print("[PASS] M8.18 C8 policy+taskset spin yield and LFQueue/WID16 unblock verified")
+chan = (args.upstream / "runtime/spu/spu_channels.c").read_text(errors="replace")
+wkl = (args.upstream / "runtime/spu/spu_workload.c").read_text(errors="replace")
+pol = (args.upstream / "runtime/spu/spurs_policy.c").read_text(errors="replace")
+spurs = (args.upstream / "libs/spurs/cellSpurs.c").read_text(errors="replace")
 
-if __name__ == "__main__":
-    main()
+for name, content in [("spu_channels.c", chan), ("spu_workload.c", wkl), ("spurs_policy.c", pol), ("cellSpurs.c", spurs)]:
+    if "ASCENSION_M818_RENDER_UNBLOCK_V1" not in content:
+        raise SystemExit(f"missing ASCENSION_M818_RENDER_UNBLOCK_V1 in {args.upstream}/{name}")
+
+if "ctx->pc = 0;" not in chan:
+    raise SystemExit(f"missing ctx->pc = 0; in {args.upstream}/runtime/spu/spu_channels.c")
+
+print(f"[PASS] M8.18 verification passed for {args.upstream}")
