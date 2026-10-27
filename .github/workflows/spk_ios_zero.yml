@@ -8,7 +8,7 @@ on:
   workflow_dispatch:
     inputs:
       mode:
-        description: '1) build_extractor_ipa (Gera ExtractorNS.ipa com UI Switch e Icone) | 2) build_thin_game_ipa (Compila QUALQUER Jogo a partir do github_kit.zip)'
+        description: '1) build_extractor_ipa (Gera ExtractorNS.ipa com Scanner de Subpastas) | 2) build_thin_game_ipa (Compila QUALQUER Jogo a partir do github_kit.zip)'
         required: true
         default: 'build_extractor_ipa'
         type: choice
@@ -38,7 +38,7 @@ jobs:
           "$RUNNER_TEMP/dotnet-install.sh" --channel 9.0 --install-dir "$HOME/.dotnet"
           echo "$HOME/.dotnet" >> "$GITHUB_PATH"
 
-      - name: 3A. [Modo build_extractor_ipa] Compilar ExtractorNS.ipa (UI Nintendo Switch + Icone Oficial)
+      - name: 3A. [Modo build_extractor_ipa] Compilar ExtractorNS.ipa (UI Nintendo Switch + Scanner de Subpastas)
         if: ${{ (inputs.mode || 'build_extractor_ipa') == 'build_extractor_ipa' }}
         run: |
           export PATH="$HOME/.dotnet:$PATH"
@@ -144,7 +144,6 @@ jobs:
           </plist>
           FWPLIST
 
-          # Gera o Icone Oficial Switch -> iOS (Joy-Con Neon Blue & Neon Red) em CoreGraphics e compila Assets.car + PNGs
           mkdir -p "$RUNNER_TEMP/IconGen"
           cat > "$RUNNER_TEMP/IconGen/gen_icon.m" << 'ICONEOF'
           #import <Foundation/Foundation.h>
@@ -156,19 +155,15 @@ jobs:
               CGContextRef ctx = CGBitmapContextCreate(NULL, sz, sz, 8, sz * 4, cs, kCGImageAlphaPremultipliedLast);
               CGFloat s = (CGFloat)sz / 1024.0;
 
-              // Fundo escuro elegante (#12141A)
               CGContextSetRGBFillColor(ctx, 0.07, 0.08, 0.11, 1.0);
               CGContextFillRect(ctx, CGRectMake(0, 0, sz, sz));
 
-              // Metade Esquerda: Joy-Con Neon Blue (#00C3E3)
               CGContextSetRGBFillColor(ctx, 0.0, 0.765, 0.890, 1.0);
               CGContextFillRect(ctx, CGRectMake(0, 0, sz * 0.5, sz));
 
-              // Metade Direita: Joy-Con Neon Red (#FF3C28)
               CGContextSetRGBFillColor(ctx, 1.0, 0.235, 0.157, 1.0);
               CGContextFillRect(ctx, CGRectMake(sz * 0.5, 0, sz * 0.5, sz));
 
-              // Painel Central Dark Horizon (#191C24) com borda arredondada simulada
               CGFloat pad = 92.0 * s;
               CGRect card = CGRectMake(pad, pad, sz - pad * 2, sz - pad * 2);
               CGPathRef cardPath = CGPathCreateWithRoundedRect(card, 180.0 * s, 180.0 * s, NULL);
@@ -177,7 +172,6 @@ jobs:
               CGContextFillPath(ctx);
               CGPathRelease(cardPath);
 
-              // Desenha Capsula Joy-Con Esquerda (Neon Blue)
               CGRect leftCap = CGRectMake(210 * s, 230 * s, 240 * s, 564 * s);
               CGPathRef lp = CGPathCreateWithRoundedRect(leftCap, 110 * s, 110 * s, NULL);
               CGContextAddPath(ctx, lp);
@@ -185,7 +179,6 @@ jobs:
               CGContextFillPath(ctx);
               CGPathRelease(lp);
 
-              // Recorte interno da Capsula Esquerda
               CGRect leftIn = CGRectMake(258 * s, 278 * s, 144 * s, 468 * s);
               CGPathRef lpi = CGPathCreateWithRoundedRect(leftIn, 66 * s, 66 * s, NULL);
               CGContextAddPath(ctx, lpi);
@@ -193,11 +186,9 @@ jobs:
               CGContextFillPath(ctx);
               CGPathRelease(lpi);
 
-              // Stick Esquerdo (Branco/Azul)
               CGContextSetRGBFillColor(ctx, 0.0, 0.765, 0.890, 1.0);
               CGContextFillEllipseInRect(ctx, CGRectMake(288 * s, 355 * s, 84 * s, 84 * s));
 
-              // Desenha Capsula Joy-Con Direita (Neon Red)
               CGRect rightCap = CGRectMake(574 * s, 230 * s, 240 * s, 564 * s);
               CGPathRef rp = CGPathCreateWithRoundedRect(rightCap, 110 * s, 110 * s, NULL);
               CGContextAddPath(ctx, rp);
@@ -205,11 +196,9 @@ jobs:
               CGContextFillPath(ctx);
               CGPathRelease(rp);
 
-              // Stick Direito (Branco)
               CGContextSetRGBFillColor(ctx, 1.0, 1.0, 1.0, 1.0);
               CGContextFillEllipseInRect(ctx, CGRectMake(652 * s, 535 * s, 84 * s, 84 * s));
 
-              // Seta/Badge Central Turquesa Switch (#00F5D4) indicando Extracao -> iOS
               CGContextSetRGBFillColor(ctx, 0.0, 0.96, 0.83, 1.0);
               CGContextFillEllipseInRect(ctx, CGRectMake(422 * s, 422 * s, 180 * s, 180 * s));
 
@@ -251,7 +240,6 @@ jobs:
           clang -fobjc-arc "$RUNNER_TEMP/IconGen/gen_icon.m" -framework Foundation -framework CoreGraphics -framework ImageIO -o "$RUNNER_TEMP/IconGen/gen_icon"
           "$RUNNER_TEMP/IconGen/gen_icon" "$APP_DIR"
 
-          # Tambem cria um Asset Catalog oficial (Assets.xcassets) e compila com actool para iOS 17/18/19+
           mkdir -p "$RUNNER_TEMP/Assets.xcassets/AppIcon.appiconset"
           cp "$APP_DIR/AppIcon60x60@2x.png" "$RUNNER_TEMP/Assets.xcassets/AppIcon.appiconset/icon_120.png"
           cp "$APP_DIR/AppIcon60x60@3x.png" "$RUNNER_TEMP/Assets.xcassets/AppIcon.appiconset/icon_180.png"
@@ -274,7 +262,6 @@ jobs:
             --app-icon AppIcon \
             --output-partial-info-plist "$RUNNER_TEMP/assetcatalog_info.plist" || true
 
-          # Cria a Interface Nintendo Switch Horizon OS para o ExtractorNS
           mkdir -p "$RUNNER_TEMP/ExtractorApp"
           cat > "$RUNNER_TEMP/ExtractorApp/main.m" << 'OBJCEOF'
           #import <UIKit/UIKit.h>
@@ -386,6 +373,7 @@ jobs:
           @property (nonatomic, strong) UIButton *extractBtn;
           @property (nonatomic, strong) UIButton *scanBtn;
           @property (nonatomic, strong) NSMutableDictionary<NSString *, NSMutableDictionary *> *detectedGames;
+          @property (nonatomic, copy) NSString *detectedKeysPath;
           @end
 
           @implementation ExtractorVC
@@ -402,7 +390,6 @@ jobs:
               CGFloat w = self.view.bounds.size.width;
               CGFloat h = self.view.bounds.size.height;
 
-              // Barras laterais Joy-Con (Esquerda Azul Neon, Direita Vermelho Neon)
               UIView *leftRail = [[UIView alloc] initWithFrame:CGRectMake(0, 0, 5, h)];
               leftRail.autoresizingMask = UIViewAutoresizingFlexibleHeight | UIViewAutoresizingFlexibleRightMargin;
               leftRail.backgroundColor = NS_BLUE_COLOR;
@@ -413,7 +400,6 @@ jobs:
               rightRail.backgroundColor = NS_RED_COLOR;
               [self.view addSubview:rightRail];
 
-              // Header Estilo Switch Horizon OS
               UIView *header = [[UIView alloc] initWithFrame:CGRectMake(16, 54, w - 32, 64)];
               header.autoresizingMask = UIViewAutoresizingFlexibleWidth;
               header.backgroundColor = NS_CARD_COLOR;
@@ -422,7 +408,6 @@ jobs:
               header.layer.borderColor = [UIColor colorWithWhite:1.0 alpha:0.08].CGColor;
               [self.view addSubview:header];
 
-              // Mini Icone Joy-Con no Header
               UIView *joyIcon = [[UIView alloc] initWithFrame:CGRectMake(14, 14, 36, 36)];
               joyIcon.layer.cornerRadius = 10;
               joyIcon.clipsToBounds = YES;
@@ -463,28 +448,24 @@ jobs:
               [self.scanBtn addTarget:self action:@selector(scanLibrary) forControlEvents:UIControlEventTouchUpInside];
               [header addSubview:self.scanBtn];
 
-              // Linha de Status Pills (prod.keys | NSP/XCI | Jogos Prontos)
               CGFloat pillW = (w - 48) / 3.0;
               self.keysBadge = [self makeStatusPillWithFrame:CGRectMake(16, 128, pillW, 44) title:@"PROD.KEYS" value:@"Verificando..."];
               self.pkgsBadge = [self makeStatusPillWithFrame:CGRectMake(24 + pillW, 128, pillW, 44) title:@"ARQUIVOS" value:@"0 NSP/XCI"];
               self.gamesBadge = [self makeStatusPillWithFrame:CGRectMake(32 + pillW * 2, 128, pillW, 44) title:@"JOGOS" value:@"0 Prontos"];
 
-              // Titulo da Secao Carrossel Switch
               UILabel *sec1 = [[UILabel alloc] initWithFrame:CGRectMake(20, 182, w - 40, 18)];
-              sec1.text = @"BIBLIOTECA SWITCH DETECTADA (PASTA EXTRACTORNS)";
+              sec1.text = @"PASTAS E JOGOS DETECTADOS (EXTRACTORNS)";
               sec1.textColor = [UIColor colorWithWhite:0.75 alpha:1.0];
               sec1.font = [UIFont systemFontOfSize:11 weight:UIFontWeightBold];
               [self.view addSubview:sec1];
 
-              // Carrossel Horizontal de Cards Estilo Switch Home Menu
               self.carousel = [[UIScrollView alloc] initWithFrame:CGRectMake(16, 204, w - 32, 158)];
               self.carousel.autoresizingMask = UIViewAutoresizingFlexibleWidth;
               self.carousel.showsHorizontalScrollIndicator = NO;
               [self.view addSubview:self.carousel];
 
-              // Barra de Progresso e Status
               self.statusLabel = [[UILabel alloc] initWithFrame:CGRectMake(20, 370, w - 40, 18)];
-              self.statusLabel.text = @"Pronto para escanear e extrair pacotes .nsp / .xci";
+              self.statusLabel.text = @"Escaneando pastas e subpastas...";
               self.statusLabel.textColor = NS_CYAN_GLOW;
               self.statusLabel.font = [UIFont systemFontOfSize:12 weight:UIFontWeightSemibold];
               [self.view addSubview:self.statusLabel];
@@ -497,7 +478,6 @@ jobs:
               self.progressBar.progress = 0.0;
               [self.view addSubview:self.progressBar];
 
-              // Console de Log LibHac
               self.logView = [[UITextView alloc] initWithFrame:CGRectMake(16, 410, w - 32, h - 504)];
               self.logView.autoresizingMask = UIViewAutoresizingFlexibleWidth | UIViewAutoresizingFlexibleHeight;
               self.logView.backgroundColor = [UIColor colorWithRed:0.07 green:0.08 blue:0.10 alpha:1.0];
@@ -508,13 +488,12 @@ jobs:
               self.logView.layer.borderColor = [UIColor colorWithWhite:1.0 alpha:0.08].CGColor;
               self.logView.editable = NO;
               self.logView.textContainerInset = UIEdgeInsetsMake(10, 10, 10, 10);
-              self.logView.text = @"[ExtractorNS v3.0 — Switch -> iOS Native Engine]\n"
-                                  @"• Coloque prod.keys + qualquer .nsp/.xci (Base, Update, DLC) em:\n"
-                                  @"  Arquivos -> No Meu iPhone -> ExtractorNS\n"
-                                  @"• Toque em '↻ Scan' no topo para ver os Cards dos jogos ou em 'EXTRAIR BIBLIOTECA' abaixo!\n";
+              self.logView.text = @"[ExtractorNS v3.1 — Scanner Recursivo de Subpastas]\n"
+                                  @"• Detecta automaticamente pastas como:\n"
+                                  @"  ExtractorNS/<Jogo>/base/ , update/ , dlcs/\n"
+                                  @"• Detecta prod.keys na raiz do app ou em subpastas!\n";
               [self.view addSubview:self.logView];
 
-              // Botao Principal Estilo Nintendo Switch Action Button
               self.extractBtn = [UIButton buttonWithType:UIButtonTypeSystem];
               self.extractBtn.frame = CGRectMake(16, h - 80, w - 32, 54);
               self.extractBtn.autoresizingMask = UIViewAutoresizingFlexibleWidth | UIViewAutoresizingFlexibleTopMargin;
@@ -575,14 +554,14 @@ jobs:
                   empty.layer.borderColor = [NS_BLUE_COLOR colorWithAlphaComponent:0.4].CGColor;
 
                   UILabel *l1 = [[UILabel alloc] initWithFrame:CGRectMake(16, 36, empty.bounds.size.width - 32, 24)];
-                  l1.text = @"Nenhum Cartucho NSP / XCI na Pasta";
+                  l1.text = @"Nenhum Cartucho NSP / XCI Detectado";
                   l1.textColor = UIColor.whiteColor;
                   l1.textAlignment = NSTextAlignmentCenter;
                   l1.font = [UIFont boldSystemFontOfSize:16];
                   [empty addSubview:l1];
 
                   UILabel *l2 = [[UILabel alloc] initWithFrame:CGRectMake(16, 66, empty.bounds.size.width - 32, 48)];
-                  l2.text = @"Abra o app 'Arquivos' -> No Meu iPhone -> ExtractorNS\ne coloque prod.keys + seus jogos (.nsp ou .xci)";
+                  l2.text = @"Coloque prod.keys na raiz e seus jogos em pastas\n(ex: ExtractorNS/Spk/base, update, dlcs)";
                   l2.textColor = [UIColor colorWithWhite:0.7 alpha:1.0];
                   l2.textAlignment = NSTextAlignmentCenter;
                   l2.numberOfLines = 2;
@@ -595,10 +574,12 @@ jobs:
               }
 
               CGFloat x = 0;
-              CGFloat cardW = 250;
-              for (NSString *tid in self.detectedGames) {
-                  NSDictionary *g = self.detectedGames[tid];
-                  NSString *name = g[@"name"] ?: @"Switch Title";
+              CGFloat cardW = 260;
+              for (NSString *key in self.detectedGames) {
+                  NSDictionary *g = self.detectedGames[key];
+                  NSString *name = g[@"name"] ?: key;
+                  NSString *tid = g[@"tid"] ?: key;
+                  NSString *folder = g[@"folder"] ?: @"Raiz";
                   BOOL hasBase = (g[@"base"] != nil);
                   BOOL hasUpd = (g[@"upd"] != nil);
                   NSUInteger dlcCount = [g[@"dlcs"] count];
@@ -609,27 +590,25 @@ jobs:
                   card.layer.borderWidth = 2.5;
                   card.layer.borderColor = NS_CYAN_GLOW.CGColor;
 
-                  // Faixa Superior Joy-Con
                   UIView *topBar = [[UIView alloc] initWithFrame:CGRectMake(14, 12, 48, 5)];
                   topBar.backgroundColor = NS_BLUE_COLOR;
                   topBar.layer.cornerRadius = 2.5;
                   [card addSubview:topBar];
 
-                  UILabel *tidLbl = [[UILabel alloc] initWithFrame:CGRectMake(14, 24, cardW - 28, 14)];
-                  tidLbl.text = [NSString stringWithFormat:@"TITLE ID: %@", tid];
+                  UILabel *tidLbl = [[UILabel alloc] initWithFrame:CGRectMake(14, 22, cardW - 28, 14)];
+                  tidLbl.text = [NSString stringWithFormat:@"📁 %@ • ID: %@", folder, tid];
                   tidLbl.textColor = NS_CYAN_GLOW;
                   tidLbl.font = [UIFont monospacedSystemFontOfSize:10 weight:UIFontWeightBold];
                   [card addSubview:tidLbl];
 
-                  UILabel *nameLbl = [[UILabel alloc] initWithFrame:CGRectMake(14, 42, cardW - 28, 46)];
+                  UILabel *nameLbl = [[UILabel alloc] initWithFrame:CGRectMake(14, 40, cardW - 28, 48)];
                   nameLbl.text = name;
                   nameLbl.textColor = UIColor.whiteColor;
                   nameLbl.numberOfLines = 2;
-                  nameLbl.font = [UIFont systemFontOfSize:16 weight:UIFontWeightHeavy];
+                  nameLbl.font = [UIFont systemFontOfSize:15 weight:UIFontWeightHeavy];
                   [card addSubview:nameLbl];
 
-                  // Badges de Base / Update / DLC
-                  UILabel *bBase = [[UILabel alloc] initWithFrame:CGRectMake(14, 104, 62, 26)];
+                  UILabel *bBase = [[UILabel alloc] initWithFrame:CGRectMake(14, 104, 66, 26)];
                   bBase.backgroundColor = hasBase ? [NS_BLUE_COLOR colorWithAlphaComponent:0.25] : [UIColor colorWithWhite:1.0 alpha:0.08];
                   bBase.textColor = hasBase ? NS_BLUE_COLOR : UIColor.grayColor;
                   bBase.text = hasBase ? @"✓ BASE" : @"✗ BASE";
@@ -639,7 +618,7 @@ jobs:
                   bBase.clipsToBounds = YES;
                   [card addSubview:bBase];
 
-                  UILabel *bUpd = [[UILabel alloc] initWithFrame:CGRectMake(82, 104, 76, 26)];
+                  UILabel *bUpd = [[UILabel alloc] initWithFrame:CGRectMake(86, 104, 80, 26)];
                   bUpd.backgroundColor = hasUpd ? [NS_CYAN_GLOW colorWithAlphaComponent:0.22] : [UIColor colorWithWhite:1.0 alpha:0.08];
                   bUpd.textColor = hasUpd ? NS_CYAN_GLOW : UIColor.grayColor;
                   bUpd.text = hasUpd ? @"✓ UPDATE" : @"SEM UPD";
@@ -649,7 +628,7 @@ jobs:
                   bUpd.clipsToBounds = YES;
                   [card addSubview:bUpd];
 
-                  UILabel *bDlc = [[UILabel alloc] initWithFrame:CGRectMake(164, 104, 72, 26)];
+                  UILabel *bDlc = [[UILabel alloc] initWithFrame:CGRectMake(172, 104, 74, 26)];
                   bDlc.backgroundColor = dlcCount > 0 ? [NS_RED_COLOR colorWithAlphaComponent:0.25] : [UIColor colorWithWhite:1.0 alpha:0.08];
                   bDlc.textColor = dlcCount > 0 ? NS_RED_COLOR : UIColor.grayColor;
                   bDlc.text = [NSString stringWithFormat:@"%lu DLC(s)", (unsigned long)dlcCount];
@@ -665,29 +644,68 @@ jobs:
               self.carousel.contentSize = CGSizeMake(x, 150);
           }
 
+          // Classifica o pacote pela pasta (base / update / dlcs) ou pelo nome do arquivo caso o CNMT nao responda
+          - (NSString *)classifyByPath:(NSString *)relPath {
+              NSArray<NSString *> *parts = [relPath.lowercaseString pathComponents];
+              for (NSString *p in parts) {
+                  if ([p isEqualToString:@"dlc"] || [p isEqualToString:@"dlcs"] || [p isEqualToString:@"aoc"]) return @"AddOnContent";
+                  if ([p isEqualToString:@"update"] || [p isEqualToString:@"updates"] || [p isEqualToString:@"upd"] || [p isEqualToString:@"patch"]) return @"Patch";
+                  if ([p isEqualToString:@"base"] || [p isEqualToString:@"game"]) return @"Application";
+              }
+              NSString *fname = relPath.lastPathComponent.lowercaseString;
+              if ([fname containsString:@"dlc"] || [fname containsString:@"aoc"]) return @"AddOnContent";
+              if ([fname containsString:@"upd"] || [fname containsString:@"patch"] || [fname containsString:@"800]"]) return @"Patch";
+              return @"Application";
+          }
+
           - (void)scanLibrary {
               dispatch_async(dispatch_get_global_queue(QOS_CLASS_USER_INITIATED, 0), ^{
                   NSFileManager *fm = NSFileManager.defaultManager;
                   NSString *doc = NSSearchPathForDirectoriesInDomains(NSDocumentDirectory, NSUserDomainMask, YES)[0];
-                  NSString *keys = [doc stringByAppendingPathComponent:@"prod.keys"];
-                  BOOL hasKeys = [fm fileExistsAtPath:keys];
 
-                  NSArray<NSString *> *files = [[fm contentsOfDirectoryAtPath:doc error:nil] sortedArrayUsingSelector:@selector(compare:)];
-                  NSMutableArray<NSString *> *pkgFiles = [NSMutableArray array];
-                  for (NSString *f in files) {
-                      NSString *low = f.lowercaseString;
+                  // 1. Procura prod.keys primeiro na raiz do app, depois em qualquer subpasta
+                  NSString *foundKeys = nil;
+                  NSString *rootKeys = [doc stringByAppendingPathComponent:@"prod.keys"];
+                  if ([fm fileExistsAtPath:rootKeys]) {
+                      foundKeys = rootKeys;
+                  }
+
+                  // 2. Varre recursivamente TODAS as pastas e subpastas dentro de ExtractorNS (ex: Spk/base, Spk/update, Spk/dlcs)
+                  NSMutableArray<NSString *> *relPkgFiles = [NSMutableArray array];
+                  NSDirectoryEnumerator *en = [fm enumeratorAtPath:doc];
+                  NSString *rel = nil;
+                  while ((rel = [en nextObject])) {
+                      NSString *low = rel.lowercaseString;
+                      // Ignora pastas de saida geradas pela extracao
+                      if ([low hasPrefix:@"games/"] || [low containsString:@"/extracted/"] || [low containsString:@"/_kit_staging/"] || [low containsString:@"/romfs/"] || [low containsString:@"/aoc/"]) {
+                          continue;
+                      }
+                      NSString *full = [doc stringByAppendingPathComponent:rel];
+                      NSDictionary *attr = [fm attributesOfItemAtPath:full error:nil];
+                      if (![attr.fileType isEqualToString:NSFileTypeRegular]) continue;
+
+                      if (!foundKeys && [low hasSuffix:@".keys"]) {
+                          foundKeys = full;
+                      }
                       if ([low hasSuffix:@".nsp"] || [low hasSuffix:@".xci"]) {
-                          [pkgFiles addObject:[doc stringByAppendingPathComponent:f]];
+                          [relPkgFiles addObject:rel];
                       }
                   }
+                  [relPkgFiles sortUsingSelector:@selector(compare:)];
 
                   NSMutableDictionary<NSString *, NSMutableDictionary *> *games = [NSMutableDictionary dictionary];
                   ios_libhac_info_fn infoFn = get_info_fn();
-                  if (hasKeys && infoFn && pkgFiles.count > 0) {
-                      NSString *tmpInfo = [doc stringByAppendingPathComponent:@"_tmp_info.tsv"];
-                      for (NSString *full in pkgFiles) {
+                  NSString *tmpInfo = [doc stringByAppendingPathComponent:@"_tmp_info.tsv"];
+
+                  for (NSString *relPath in relPkgFiles) {
+                      NSString *full = [doc stringByAppendingPathComponent:relPath];
+                      NSArray<NSString *> *parts = [relPath pathComponents];
+                      NSString *topFolder = (parts.count > 1) ? parts[0] : @"Raiz";
+
+                      BOOL matchedByLibHac = NO;
+                      if (foundKeys && infoFn) {
                           [fm removeItemAtPath:tmpInfo error:nil];
-                          if (infoFn(keys.UTF8String, full.UTF8String, tmpInfo.UTF8String) == 0 && [fm fileExistsAtPath:tmpInfo]) {
+                          if (infoFn(foundKeys.UTF8String, full.UTF8String, tmpInfo.UTF8String) == 0 && [fm fileExistsAtPath:tmpInfo]) {
                               NSString *tsv = [NSString stringWithContentsOfFile:tmpInfo encoding:NSUTF8StringEncoding error:nil];
                               for (NSString *line in [tsv componentsSeparatedByCharactersInSet:NSCharacterSet.newlineCharacterSet]) {
                                   NSArray<NSString *> *cols = [line componentsSeparatedByString:@"\t"];
@@ -696,8 +714,15 @@ jobs:
                                   NSString *tid = cols[1].uppercaseString;
                                   long long ver = [cols[2] longLongValue];
                                   if (tid.length != 16) continue;
+                                  matchedByLibHac = YES;
                                   if (!games[tid]) {
-                                      games[tid] = [@{ @"dlcs": [NSMutableArray array], @"updVer": @(-1LL) } mutableCopy];
+                                      games[tid] = [@{
+                                          @"tid": tid,
+                                          @"folder": topFolder,
+                                          @"name": topFolder,
+                                          @"dlcs": [NSMutableArray array],
+                                          @"updVer": @(-1LL)
+                                      } mutableCopy];
                                   }
                                   if ([kind isEqualToString:@"Application"]) {
                                       games[tid][@"base"] = full;
@@ -713,15 +738,41 @@ jobs:
                               }
                           }
                       }
-                      [fm removeItemAtPath:tmpInfo error:nil];
+
+                      // Fallback automatico por estrutura de pastas (ex: Spk/base, Spk/update, Spk/dlcs)
+                      if (!matchedByLibHac) {
+                          NSString *groupKey = topFolder;
+                          if (!games[groupKey]) {
+                              games[groupKey] = [@{
+                                  @"tid": groupKey,
+                                  @"folder": topFolder,
+                                  @"name": topFolder,
+                                  @"dlcs": [NSMutableArray array],
+                                  @"updVer": @(0LL)
+                              } mutableCopy];
+                          }
+                          NSString *kind = [self classifyByPath:relPath];
+                          if ([kind isEqualToString:@"Application"]) {
+                              games[groupKey][@"base"] = full;
+                          } else if ([kind isEqualToString:@"Patch"]) {
+                              games[groupKey][@"upd"] = full;
+                          } else {
+                              [games[groupKey][@"dlcs"] addObject:full];
+                          }
+                      }
                   }
+                  [fm removeItemAtPath:tmpInfo error:nil];
 
                   dispatch_async(dispatch_get_main_queue(), ^{
-                      self.keysBadge.text = hasKeys ? @"✓ Ativo" : @"✗ Ausente";
-                      self.keysBadge.textColor = hasKeys ? NS_CYAN_GLOW : NS_RED_COLOR;
-                      self.pkgsBadge.text = [NSString stringWithFormat:@"%lu NSP/XCI", (unsigned long)pkgFiles.count];
+                      self.detectedKeysPath = foundKeys;
+                      self.keysBadge.text = foundKeys ? @"✓ Ativo" : @"✗ Ausente";
+                      self.keysBadge.textColor = foundKeys ? NS_CYAN_GLOW : NS_RED_COLOR;
+                      self.pkgsBadge.text = [NSString stringWithFormat:@"%lu NSP/XCI", (unsigned long)relPkgFiles.count];
                       self.gamesBadge.text = [NSString stringWithFormat:@"%lu Jogo(s)", (unsigned long)games.count];
                       self.detectedGames = games;
+                      self.statusLabel.text = relPkgFiles.count > 0
+                          ? [NSString stringWithFormat:@"Detectados %lu arquivos em %lu jogo(s)!", (unsigned long)relPkgFiles.count, (unsigned long)games.count]
+                          : @"Coloque suas pastas de jogos (base/update/dlcs) em ExtractorNS";
                       [self rebuildCarousel];
                   });
               });
@@ -733,9 +784,6 @@ jobs:
               self.statusLabel.text = @"Iniciando motor LibHac...";
 
               dispatch_async(dispatch_get_global_queue(QOS_CLASS_USER_INITIATED, 0), ^{
-                  [self scanLibrary];
-                  [NSThread sleepForTimeInterval:0.4];
-
                   ios_libhac_extract_fn fn = get_extractor();
                   if (!fn) {
                       [self log:[NSString stringWithFormat:@"ERRO dlopen: %s", dlerror()]];
@@ -745,9 +793,9 @@ jobs:
 
                   NSFileManager *fm = NSFileManager.defaultManager;
                   NSString *doc = NSSearchPathForDirectoriesInDomains(NSDocumentDirectory, NSUserDomainMask, YES)[0];
-                  NSString *keys = [doc stringByAppendingPathComponent:@"prod.keys"];
+                  NSString *keys = self.detectedKeysPath ?: [doc stringByAppendingPathComponent:@"prod.keys"];
                   if (![fm fileExistsAtPath:keys]) {
-                      [self log:@"ERRO: prod.keys nao encontrado em Arquivos -> ExtractorNS!"];
+                      [self log:@"ERRO: prod.keys nao encontrado!"];
                       dispatch_async(dispatch_get_main_queue(), ^{
                           self.statusLabel.text = @"Erro: prod.keys ausente";
                           self.extractBtn.enabled = YES;
@@ -756,9 +804,9 @@ jobs:
                   }
 
                   if (self.detectedGames.count == 0) {
-                      [self log:@"ERRO: Nenhum pacote .nsp/.xci detectado na pasta ExtractorNS!"];
+                      [self log:@"ERRO: Nenhum pacote .nsp/.xci detectado nas pastas!"];
                       dispatch_async(dispatch_get_main_queue(), ^{
-                          self.statusLabel.text = @"Coloque os arquivos .nsp/.xci na pasta ExtractorNS";
+                          self.statusLabel.text = @"Nenhum .nsp/.xci encontrado nas pastas";
                           self.extractBtn.enabled = YES;
                       });
                       return;
@@ -767,16 +815,18 @@ jobs:
                   NSUInteger total = self.detectedGames.count;
                   NSUInteger current = 0;
 
-                  for (NSString *tid in self.detectedGames) {
+                  for (NSString *key in self.detectedGames) {
                       current++;
-                      NSDictionary *g = self.detectedGames[tid];
+                      NSDictionary *g = self.detectedGames[key];
+                      NSString *tid = g[@"tid"] ?: key;
+                      NSString *folder = g[@"folder"] ?: tid;
                       NSString *basePkg = g[@"base"];
                       NSString *updPkg = g[@"upd"] ?: @"-";
                       NSArray<NSString *> *dlcs = g[@"dlcs"];
-                      NSString *gName = g[@"name"] ?: tid;
+                      NSString *gName = g[@"name"] ?: folder;
 
                       if (!basePkg) {
-                          [self log:[NSString stringWithFormat:@"[%@] Pulado: falta o NSP/XCI do Jogo Base.", tid]];
+                          [self log:[NSString stringWithFormat:@"[%@] Pulado: pasta base/ sem arquivo .nsp/.xci.", gName]];
                           continue;
                       }
 
@@ -785,13 +835,22 @@ jobs:
                           self.progressBar.progress = 0.15;
                       });
 
-                      [self log:[NSString stringWithFormat:@"\n=== [%@] %@ ===", tid, gName]];
-                      NSString *gameRoot = [[doc stringByAppendingPathComponent:@"Games"] stringByAppendingPathComponent:tid];
+                      [self log:[NSString stringWithFormat:@"\n=== [%@] %@ (Pasta: %@) ===", tid, gName, folder]];
+                      [self log:[NSString stringWithFormat:@"• Base: %@", basePkg.lastPathComponent]];
+                      [self log:[NSString stringWithFormat:@"• Update: %@", [updPkg isEqualToString:@"-"] ? @"Nenhum" : updPkg.lastPathComponent]];
+                      [self log:[NSString stringWithFormat:@"• DLCs: %lu arquivo(s)", (unsigned long)dlcs.count]];
+
+                      // Salva na pasta Extracted dentro da pasta do jogo (ex: ExtractorNS/Spk/Extracted/)
+                      NSString *gameRoot = [folder isEqualToString:@"Raiz"]
+                          ? [[doc stringByAppendingPathComponent:@"Games"] stringByAppendingPathComponent:tid]
+                          : [[doc stringByAppendingPathComponent:folder] stringByAppendingPathComponent:@"Extracted"];
                       NSString *staging = [gameRoot stringByAppendingPathComponent:@"_kit_staging"];
                       [fm removeItemAtPath:staging error:nil];
                       [fm createDirectoryAtPath:staging withIntermediateDirectories:YES attributes:nil error:nil];
 
-                      [tid writeToFile:[staging stringByAppendingPathComponent:@"title_id.txt"] atomically:YES encoding:NSUTF8StringEncoding error:nil];
+                      if (tid.length == 16) {
+                          [tid writeToFile:[staging stringByAppendingPathComponent:@"title_id.txt"] atomically:YES encoding:NSUTF8StringEncoding error:nil];
+                      }
 
                       [self log:@"1/4 Gerando manifesto CNMT..."];
                       fn(keys.UTF8String, basePkg.UTF8String, updPkg.UTF8String, staging.UTF8String, 2);
@@ -807,7 +866,7 @@ jobs:
                       NSString *romfsOut = [gameRoot stringByAppendingPathComponent:@"romfs"];
                       [fm removeItemAtPath:romfsOut error:nil];
                       [fm moveItemAtPath:[staging stringByAppendingPathComponent:@"RomFS"] toPath:romfsOut error:nil];
-                      [self log:[NSString stringWithFormat:@"-> RomFS pronto em: Games/%@/romfs/", tid]];
+                      [self log:[NSString stringWithFormat:@"-> RomFS pronto em: %@/Extracted/romfs/", folder]];
 
                       dispatch_async(dispatch_get_main_queue(), ^{ self.progressBar.progress = 0.65; });
                       int idx = 1;
@@ -840,11 +899,11 @@ jobs:
                           }
                       }
 
-                      NSString *zipName = [NSString stringWithFormat:@"github_kit_%@.zip", tid];
+                      NSString *zipName = [NSString stringWithFormat:@"github_kit_%@.zip", folder];
                       NSString *zipOut = [gameRoot stringByAppendingPathComponent:zipName];
                       if (build_zip_file(staging, zipOut)) {
                           NSDictionary *za = [fm attributesOfItemAtPath:zipOut error:nil];
-                          [self log:[NSString stringWithFormat:@"✓ CONCLUIDO: Games/%@/%@ (%.1f MB)", tid, zipName, [za fileSize] / (1024.0 * 1024.0)]];
+                          [self log:[NSString stringWithFormat:@"✓ CONCLUIDO: %@/Extracted/%@ (%.1f MB)", folder, zipName, [za fileSize] / (1024.0 * 1024.0)]];
                       }
                       [fm removeItemAtPath:staging error:nil];
                   }
@@ -896,8 +955,8 @@ jobs:
             <key>CFBundleIdentifier</key><string>com.kinttany.extractorns</string>
             <key>CFBundleName</key><string>ExtractorNS</string>
             <key>CFBundleDisplayName</key><string>ExtractorNS</string>
-            <key>CFBundleVersion</key><string>3.0</string>
-            <key>CFBundleShortVersionString</key><string>3.0</string>
+            <key>CFBundleVersion</key><string>3.1</string>
+            <key>CFBundleShortVersionString</key><string>3.1</string>
             <key>CFBundlePackageType</key><string>APPL</string>
             <key>LSRequiresIPhoneOS</key><true/>
             <key>UIDeviceFamily</key><array><integer>1</integer><integer>2</integer></array>
@@ -972,13 +1031,14 @@ jobs:
           from pathlib import Path
           kit = Path(os.environ["RUNNER_TEMP"]) / "kit"
           tid_file = kit / "title_id.txt"
-          if tid_file.exists():
-              print(tid_file.read_text().strip().upper())
-          else:
-              npdm = (kit / "ExeFS" / "main.npdm").read_bytes()
+          npdm_file = kit / "ExeFS" / "main.npdm"
+          if npdm_file.exists():
+              npdm = npdm_file.read_bytes()
               aci0 = struct.unpack_from("<I", npdm, 0x70)[0]
               tid = struct.unpack_from("<Q", npdm, aci0 + 0x10)[0]
               print(f"{tid:016X}")
+          elif tid_file.exists():
+              print(tid_file.read_text().strip().upper())
           PYEOF
           )
           echo "Jogo detectado: TITLE_ID=$TITLE_ID"
