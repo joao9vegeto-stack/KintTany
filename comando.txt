@@ -1,78 +1,57 @@
-Analisei o `diagnostico-build-67.txt` na raiz da branch `XOWUE`. O `CODE_AUDIT_B67` e o `XOWUE_STALL_THREADS` revelaram a causa EXATA do deadlock entre a Main Thread (`0xF8000001`) e a Thread 2 (`0xF8000008`):
+Execute all tasks below for **Build 69** directly and completely. Do not skip any step.
 
-### PROVA EXATA DO QUE ACONTECEU NA BUILD 67 (`diagnostico-build-67.txt`):
-
-1. **Na Build 67, o watchdog acordou a Main Thread (`tid=0xF8000001`, `wait_calls` subiu de `45` para `59 -> 66 -> 72 -> 79`), MAS a Main Thread voltou imediatamente para `bl 0x82C4BE30` (`wait_obj=0xF8000011`) por causa das instruções em `0x829F636C..0x829F63A4` (`CODE_AUDIT_B67`):**
-   ```ppc
-   0x829F636C: 393F0008  addi  r9, r31, 8       ; r9 = r31 + 8 (flag de conclusão da tarefa assíncrona!)
-   0x829F6388: 807F0004  lwz   r3, 4(r31)       ; r3 = FEvent (handle 0xF8000011)
-   0x829F638C: 48255AA5  bl    0x82C4BE30       ; FEvent::Wait(INFINITE) -> lr = 0x829F6390
-   0x829F6390: 7C004828  lwarx r0, 0, r9        ; lê *(uint32_t*)(r31 + 8) quando acorda!
-   0x829F6394: 38000000  li    r0, 0
-   0x829F6398: 7C00492D  stwcx. r0, 0, r9
-   0x829F639C: 2F0B0000  cmpwi cr6, r11, 0      ; checa se a Worker Thread já concluiu a tarefa em *(r31 + 8)!
-   0x829F63A0: 419EFFE8  beq   cr6, 0x829F6388  ; SE *(r31 + 8) == 0, VOLTA PARA 0x829F6388 E DORME EM 0xF8000011 DE NOVO!
-   ```
-   A Main Thread está em um loop (`0x829F6388..0x829F63A0`) esperando que a **Thread 2 (`tid=0xF8000008`)** execute a tarefa, escreva `!= 0` em `*(uint32_t*)(r31 + 8)` e sinalize `0xF8000011`!
-
-2. **E POR QUE A THREAD 2 (`tid=0xF8000008`) NÃO EXECUTOU A TAREFA?!**
-   Olhe para a Thread 2 em `XOWUE_STALL_THREADS` (`RUNTIME seq=1559`):
-   ```text
-   tid=0xF8000008 state=waiting_event fn=0x82C4BD50 prev=0x82C4BE30 lr=0x829F0698 sp=0x7005FE90 wait_obj=0xF8000007 obj_guest=0x7E006000 obj_creator_lr=0x82C4BCD4 obj_signals=12 wait_calls=1 caller_chain=0x829F0698->0x82C4C42C
-   ```
-   E olhe para os bytes de `0x829F0684..0x829F06AC` da Thread 2 (`CODE_AUDIT_B66`):
-   ```ppc
-   0x829F0684: 807F002C  lwz   r3, 0x2C(r31)    ; FEvent (handle 0xF8000007)
-   0x829F0690: 3880FFFF  li    r4, -1           ; timeout = INFINITE
-   0x829F0694: 4E800421  bctrl                  ; FEvent::Wait() -> lr = 0x829F0698
-   0x829F0698: 817F0000  lwz   r11, 0(r31)
-   0x829F069C: 7FE3FB78  mr    r3, r31
-   0x829F06A0: 816B0008  lwz   r11, 8(r11)
-   0x829F06A4: 7D6903A6  mtctr r11
-   0x829F06A8: 4E800421  bctrl                  ; EXECUTA A TAREFA QUE A MAIN THREAD ESTÁ ESPERANDO!
-   ```
-   **Veja o absurdo em `tid=0xF8000008`:**
-   - O evento `0xF8000007` teve **`obj_signals=12` (foi sinalizado 12 vezes!)**, mas a Thread 2 (`0xF8000008`) tem **`wait_calls=1`** e NUNCA ACORDOU de `waitGuestObject`!
-   - Por quê?
-     a) Porque na Build 67 você escreveu `if (isMainThread && currentSwaps == lastSwapCount)` no watchdog de `waitGuestObject`, **deixando a Thread 2 (`tid=0xF8000008`, `wait_obj=0xF8000007`), a Thread 3 (`0xF8000009`, `wait_obj=0xF800000A`) e a Thread 4 (`0xF800000D`, `wait_obj=0xF800000E`) de fora do watchdog!**
-     b) E porque em `0x829F6354..0x829F6368` (ou em `0x82C4BD50..0x82C4BE60`), um `ResetEvent` (`KeResetEvent` / `NtClearEvent`) ou `SetEvent` antes da Thread 2 entrar em `waitGuestObject` apagou `waitable->signaled = false` antes da Thread 2 adquirir o lock (lost wakeup)!
+### Context from Real Device Log (`diagnostico-build-68.txt`)
+The real iPhone trace shows why the game freezes right after `KOSMICKRISP_PRESENT decoded_frames=1 composed_frames=3 guest_vk_draws=29`:
+1. **Thread 10 (`id=10`, entry `0x82690DC0`)** is actively spinning (`waiting=0`) with **29,818,880 AOT calls**:
+   - `hot0 = 0x82C3C4D8` (**11,126,865 calls**, `insns=7D6C42E6_556A003F_40820008_7D6C42E6_F9630000_38600001` = `QueryPerformanceCounter` reading PPC `mftb` and storing `uint64_t` to `*r3` = `0x40002130`, returning `r3 = 1`).
+   - Callers/loop partners on Thread 10:
+     - `lr = 0x822A1E08`
+     - `0x824E6FD8`, `0x82C4BE30`, `0x82C3EE78` (`r3=0x40002130 r4=0x4025D0F0..0x4025D0F8 r30=0x4025D0F0..0x4025D0F8 r31=0x40000770`)
+     - `hot1 = 0x822A0278` (only advancing ~16 calls/sec!)
+     - `hot2 = 0x82C25840` (only advancing ~12 calls/sec!)
+     - `hot3 = 0x82C259C8:160`, `hot4 = 0x83269920:69`, `hot5 = 0x82B3C6D8:20`, `hot6 = 0x82B394E0:16`
+     - Periodic call: `last_fn=0x82427940 prev_fn=0x82370500 lr=0x82370C4C r3=0x412F9D84 r4=0x00000002 r11=0x8212A708 r30=0x40499800 r31=0x00000002`.
+2. **Catastrophic Hotspot Throttling on `0x82C3C4D8`**:
+   - Because `0x82C3C4D8` (`QueryPerformanceCounter`) is called frequently, AOT hotspot detection marks it `SPINLOCK_ACTIVE worker_cp_pump=250us` and `XOWUE_AOT_HOTSPOT guest=0x82C3C4D8 cooperative_yield=1`.
+   - Sleeping/pumping 250 microseconds inside `QueryPerformanceCounter` slows Thread 10 down by 100,000x, and if `0x822A1E08` / `0x822A0278` / `0x824E6FD8` / `0x82C25840` is waiting for a condition, audio/movie progress, or a specific time delta, `hot1=0x822A0278` only ticks 16 times per second and never finishes!
+3. **Thread 1 (Main Thread) and Thread 4 (Render/Interrupt Thread) are missing from `THREAD_DUMP` / `XOWUE_STALL_THREADS`**:
+   - `THREAD_DUMP` only dumps `id=2, 3, 5, 6, 7, 8, 9, 10, 11`. `id=1` and `id=4` are completely invisible in the stall dump!
+   - Meanwhile:
+     - `t2` (`0x82690678`) waits on `0x00000100` (`recent=[0x82C4D4A8,0x82C4BB48,0x82C3E928,0x82690468,0x827E1290,0x82690260]`, `r30=0x4036FA24 r31=0x4036FA40`)
+     - `t3` (`0x82690678`) waits on `0x00000102` (`r30=0x4036F9E4 r31=0x4036FA00`)
+     - `t5` (`0x82B4AE40`) waits on `0x4004ED80` (`recent=[0x82B49E20,0x82B4AB28]`, `r3=0x4004ED60`)
+     - `t6` (`0x82B4AE40`) waits on `0x4004EDD0` (`recent=[0x82B49E20,0x82B4AB28]`, `r3=0x4004EDB0`)
+     - `t8` (`0x82690DC0`) waits on `0x00000112` (`recent=[0x82C4D4A8,0x82C4BB48,0x82C3E928,0x82690468]`, `r3=0x4025D270`)
+     - `t11` (`0x82690DC0`) waits on `0x00000115` (`recent=[0x82C4D4A8,0x82C4BB48,0x82C3E928,0x82C2A290,0x82C3C5E8,0x82C3C4D8,0x8236E738]`, `r3=0x40721A60 r4=0x00000FA0 r31=0x40721A40`)
 
 ---
 
-### EXECUTAR IMEDIATAMENTE AS CORREÇÕES PARA A BUILD 68:
+### Task 1: Inspect the Recompiled C++ Code & Log `CODE_AUDIT_B69`
+1. Locate and inspect the generated AOT C++ implementations (or XEXPPC instruction words at `0x82000000` base) for ALL of the following functions involved in the freeze:
+   - `0x82C3C4D8` (`QueryPerformanceCounter` / `mftb`)
+   - `0x822A1E08` (and the function containing `0x822A1E08`, e.g. `0x822A1C00..0x822A2100`)
+   - `0x822A0278` (and `0x822A0200..0x822A0450`)
+   - `0x824E6FD8` (and `0x824E6F50..0x824E7100`)
+   - `0x82C25840` and `0x82C259C8`
+   - `0x82370500`, `0x82370C4C`, and `0x82427940`
+   - `0x82690468`, `0x82690260`, `0x827E1290` (worker queue check in `t2`, `t3`, `t8`)
+   - `0x82B49E20`, `0x82B4AB28`, `0x82B4AE40` (`t5`, `t6` audio/renderer threads)
+2. Add a startup diagnostic logger `logCodeAuditBuild69()` that dumps the 32-bit Big-Endian PPC opcodes for each of those ranges (`CODE_AUDIT_B69`) AND dumps the guest memory words at `0x40000770`, `0x40002130`, `0x4025D0F0`, `0x4025D0F8`, `0x4036FA00`, `0x4036FA40`, `0x4004ED60`, `0x4004EDB0` when the stall snapshot triggers.
 
-#### TAREFA 1: ACORDAR A THREAD 2 (`0xF8000008`) E TODAS AS WORKER THREADS EM `waitGuestObject` + IMPEDIR LOST WAKEUPS (`Runtime/XOWUEEngine.cpp`)
-1. **Impedir Lost Wakeup em `GuestWaitable`:**
-   - Adicione `uint64_t signalGeneration = 0;` em `GuestWaitable`.
-   - Toda vez que o evento for sinalizado (`KeSetEvent`, `NtSetEvent`, `signalGuestEventHandle`, `signalGuestEventStructure`), incremente `waitable->signalGeneration++` além de definir `waitable->signaled = true`.
-   - Quando `KeResetEvent` / `NtClearEvent` for chamado em um evento que tinha `waitable->signaled == true` mas **ainda não foi consumido por nenhum `waitGuestObject`**, mantenha um contador `uint32_t unconsumedSignals` (incrementado no `SetEvent` se `unconsumedSignals == 0`, decrementado quando `waitGuestObject` acorda uma thread) OU não permita que `ResetEvent` apague um sinal que acabou de ser disparado se houver uma thread prestes a esperar!
-2. **Estender o Watchdog de `waitGuestObject` para TODAS as Threads Bloqueadas em Eventos durante Stall Gráfico:**
-   - Em `waitGuestObject`, remova a restrição `if (isMainThread && ...)`!
-   - Quando `currentSwaps == lastSwapCount` (nenhum swap novo nos últimos 32ms):
-     - Se **QUALQUER thread** (`isMainThread` OU worker thread como `0xF8000008` esperando `0xF8000007`, `0xF8000009` esperando `0xF800000A`, `0xF800000D` esperando `0xF800000E`) estiver esperando em `waitGuestObject` por 32ms sem acordar:
-       - Sinalize o `waitable` (`waitable->signaled = true; waitable->signalCount.fetch_add(1u);` e grave `1` em `waitable->objectAddress + 4`), bombeie `pumpGuestXenosRingBuffer()`, logue `XOWUE_WAIT_WATCHDOG_WAKE tid=0x%08X wait_obj=0x%08X lr=0x%08X` (primeiras 64 vezes) e retorne `kNtStatusWait0`!
-       - **IMPORTANTE:** Acorde as **Worker Threads (`!isMainThread`, especialmente `0xF8000008`) ANTES da Main Thread** (use 16ms de timeout de watchdog para Worker Threads e 32ms para a Main Thread!), para que a Thread 2 (`0xF8000008`) acorde primeiro, execute `0x829F0698 -> 0x829F06A8`, preencha `*(r31 + 8) = 1` e sinalize `0xF8000011` naturalmente para a Main Thread!
+### Task 2: Include Thread 1 (`id=1`) and Thread 4 (`id=4`) in `THREAD_DUMP` and `XOWUE_STALL_THREADS`
+1. Ensure Thread 1 (the main/entry PPC thread) and Thread 4 (and any other created PPC/host-dispatched guest thread) are tracked and printed in both `THREAD_DUMP` and `XOWUE_STALL_THREADS`, showing their `last_fn`, `prev_fn`, `lr`, `waiting`, `wait_target`, `recent=[...]`, and registers `r3, r4, r11, r30, r31`.
 
-#### TAREFA 2: DUMP COMPLETO DE `0x829F6300..0x829F63C0`, `0x82C4BCD0..0x82C4BE80` E `0x829F0600..0x829F0720` + DESTRAVAR `0x829F6388..0x829F63A0`
-1. Olhe nos bytes de `0x829F636C..0x829F63A4` (`CODE_AUDIT_B67`):
-   - Em `0x829F6378` e `0x829F6390`, `r11` é comparado em `0x829F639C: cmpwi cr6, r11, 0; beq cr6, 0x829F6388`.
-   - Onde `r11` é carregado entre `0x829F6388` e `0x829F639C`? Dentro de `bl 0x82C4BE30` ou antes!
-   - No boot (`CODE_AUDIT_B68`), faça o dump de todas as instruções PowerPC (sem pular nenhuma!) de:
-     - `0x829F62E0` até `0x829F63D0` (todas as instruções de 4 em 4 bytes!)
-     - `0x82C4BCC0` até `0x82C4BE80` (`0x82C4BCD4`, `0x82C4BD50`, `0x82C4BE00`, `0x82C4BE30`)
-     - `0x829F0600` até `0x829F0720` (a função completa da Thread 2 em `0x829F0698`!)
-2. **Garantia contra loop infinito em `0x829F6390` (`lr=0x829F6390`):**
-   - Quando a Main Thread (`isMainThread`) chamar `waitGuestObject` no evento `0xF8000011` (vindo de `caller_chain` contendo `0x829F6390`), se a Main Thread já tiver esperado nesse mesmo evento `0xF8000011` mais de **8 vezes sem que `g_xenosFrontend.swaps` aumente**:
-     - Leia `r31` (ou o ponteiro do objeto `FAsyncTask` na pilha da Main Thread no frame de `0x829F6390`: `sp` de `0x82C4BE30` é `0x7001FC70`, verifique `PPC_LOAD_U32(0x7001FC70)` -> frame de `0x829F6390`, e inspecione os valores salvos na pilha e em `[r31 + 0..0x20]`).
-     - Logue `XOWUE_ASYNC_TASK_STATE sp=0x%08X frame=0x%08X words=...` e, se `[taskPtr + 8] == 0` após a Thread 2 (`0xF8000008`) já ter sido acordada pelo menos 4 vezes, grave `PPC_STORE_U32(taskPtr + 8, 1u)` (e defina `ctx.r11.u64 = 1ull`) para que `0x829F639C: cmpwi cr6, r11, 0` saia do loop em `0x829F63A0`!
+### Task 3: Fix `0x82C3C4D8` (`QueryPerformanceCounter`) & Stop Throttling It, and Fix the Thread 10 Loop (`0x822A1E08` / `0x824E6FD8` / `0x822A0278` / `0x82C25840`)
+1. **Never apply `worker_cp_pump=250us` or `SPINLOCK_ACTIVE` sleep to `0x82C3C4D8` (`QueryPerformanceCounter`)**!
+   - Instead, intercept `0x82C3C4D8` natively (or in its fast-path hook):
+   - Compute a monotonically increasing 50 MHz Xbox 360 timebase tick (`49,875,000` ticks/sec).
+   - If the same thread calls `0x82C3C4D8` repeatedly while `lr == 0x822A1E08` or inside the `0x824E6FD8` / `0x822A0278` / `0x82C25840` loop without a new frame being decoded/swapped, advance a per-thread synthetic timebase offset by `+50000` ticks (~1 ms) on each repeated call so any busy-wait timer/frame-pacing loop in Bink (`0x822A1E08` / `0x822A0278`) or Criware/UE3 (`0x82C25840`) immediately reaches its target timestamp without spinning 11 million times!
+   - Write the 64-bit Big-Endian counter to `ctx.r3.u32` (`storeGuestU64BE(ctx.r3.u32, counter)`), set `ctx.r3.u64 = 1`, and return without a 250us sleep (only do a light `std::this_thread::yield()` every 4096 calls if needed).
+2. **Analyze the exact loop in `0x822A1E08` / `0x822A0278` / `0x824E6FD8` / `0x82C25840` / `0x82370500 -> 0x82427940`**:
+   - Read the actual recompiled C++ code of `0x822A1E08`, `0x822A0278`, `0x824E6FD8`, `0x82C25840`, `0x82370500`, `0x82370C4C`, and `0x82427940` during your implementation.
+   - Identify the exact memory fields on `r31=0x40000770`, `r30=0x4025D0F0`/`0x4025D0F8`, `r3=0x40002130`, `r3=0x412F9D84`, `r30=0x40499800`, or the audio/worker structs (`0x4004ED60`, `0x4004EDB0`, `0x4036FA00`, `0x4036FA40`) that keep Thread 10 looping instead of decoding frame 2 (`decoded_frames > 1`) or submitting new draws (`guest_vk_draws > 29`).
+   - Fix the root cause in the runtime so that the condition blocking `0x822A1E08` / `0x822A0278` / `0x824E6FD8` / `0x82370C4C` (and/or Thread 1 / Thread 4 / `t5` / `t6`) is properly satisfied and the game progresses past `decoded_frames=1` / `guest_vk_draws=29`.
 
-#### TAREFA 3: THROTTLE DE 2ms NO LOOP DE ÁUDIO DA THREAD 4 (`0x82DC314C` / `0x82DC2390`) PARA NÃO SUFOCAR A CPU
-No `diagnostico-build-67.txt`, a Thread 4 (`tid=0xF8000014`) inicializou os 34 blocos (`XOWUE_POOL_ALLOC_82DC2BF0`) com sucesso e entrou no seu loop de tick normal (`0x82DC3104..0x82DC3154`), mas como não há `sleep` no tick de áudio, ela executou `0x82DC1FA0` / `0x82DC2390` **471.737 vezes** em poucos segundos, consumindo 100% da CPU!
-- Em `Runtime/XOWUEEngine.cpp` (dentro de `xowue_thread_checkpoint(uint32_t address)`):
-  - Quando `address == 0x82DC1FA0u` (ou `0x82DC2390u`) e a thread atual for `g_currentGuestThread` (`tid=0xF8000014`), a cada **64 chamadas**, faça `std::this_thread::sleep_for(std::chrono::milliseconds(2));`!
-  - Isso reduzirá o uso de CPU da Thread 4 de 470.000 chamadas/seg para ~32.000 chamadas/seg (liberando 95% do core da CPU para a Main Thread e a Thread 2!).
-
-#### TAREFA 4: TESTES, BUILD 68, COMMIT E PUSH
-1. Atualize `tools/test_xowue_aot_instrumentation.py` para validar `XOWUE_WAIT_WATCHDOG_WAKE`, `CODE_AUDIT_B68` e o throttle em `xowue_thread_checkpoint`.
-2. Atualize a versão para **Build 68** (`CURRENT_PROJECT_VERSION: "68"` e `CFBundleVersion: 68`).
-3. Faça commit e push na branch `XOWUE`.
+### Task 4: Branch Verification, Version Bump to Build 69, and Tests
+1. Check `git status` / `git branch` and make sure your changes are committed and pushed to the active branch being built (and if both `main` and `XOWUE` exist, ensure the commit is pushed to the current working branch and update `iOS/project.yml` `CURRENT_PROJECT_VERSION: "69"` and `APP_LAUNCH build=69`).
+2. Add assertions in `tools/test_xowue_aot_instrumentation.py` verifying Build 69 changes and run the test suite to confirm all tests pass.
