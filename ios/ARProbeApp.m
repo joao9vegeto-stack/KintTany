@@ -83,10 +83,10 @@ extern void spu_workload_reset_ascension_commit_metrics(void);
 extern void cellSpursResetAscensionLFQueueMetrics(void);
 extern void cellSpursCopyAscensionLFQueueMetrics(uint64_t out[6]);
 extern void cellSpursResetAscensionEdgeMetrics(void);
-extern void cellSpursCopyAscensionEdgeMetrics(uint64_t out[5]);
+extern void cellSpursCopyAscensionEdgeMetrics(uint64_t out[6]);
 extern void cellSpursCopyAscensionHighMasks(uint64_t out[8]);
 extern void spu_ascension_reset_upper_policy(void);
-extern void spu_ascension_copy_upper_policy(uint64_t out[10]);
+extern void spu_ascension_copy_upper_policy(uint64_t out[12]);
 extern void spu_ascension_reset_native_gap(void);
 extern void spu_ascension_copy_native_gap(uint64_t out[10]);
 extern void spu_ascension_reset_c8_irq(void);
@@ -1959,9 +1959,9 @@ static BOOL ARGameManifestHasTitleUsrdir(NSDictionary *manifest){
     uint64_t taskset[14]={0}; spu_workload_copy_ascension_taskset_metrics(taskset);
     uint64_t tasksetCommits[2]={0}; spu_workload_copy_ascension_commit_metrics(tasksetCommits);
     uint64_t lfqueue[6]={0}; cellSpursCopyAscensionLFQueueMetrics(lfqueue);
-    uint64_t edgeQueue[5]={0}; cellSpursCopyAscensionEdgeMetrics(edgeQueue);
+     uint64_t edgeQueue[6]={0};
     uint64_t highWids[8]={0}; cellSpursCopyAscensionHighMasks(highWids);
-    uint64_t pmUpper[10]={0}; spu_ascension_copy_upper_policy(pmUpper);
+     uint64_t pmUpper[12]={0};
     uint64_t gap[10]={0}; spu_ascension_copy_native_gap(gap);
     uint64_t c8irq[9]={0}; spu_ascension_copy_c8_irq(c8irq);
     unsigned long long stack[17]={0}; spu_workload_copy_ascension_stack_metrics(stack);
@@ -2026,12 +2026,13 @@ static BOOL ARGameManifestHasTitleUsrdir(NSDictionary *manifest){
         (unsigned long long)highWids[2],(unsigned long long)highWids[3],
         (unsigned long long)highWids[4],(unsigned long long)highWids[5],
         (unsigned long long)highWids[6],(unsigned long long)highWids[7]];
-    [out appendFormat:@"PM WID16–31 EXECUÇÃO NATIVA: chamados=%llu · slots adquiridos=%llu · retornos=%llu · falhas=%llu · rejeições iniciais=%llu · último wid=%llu img=%llu lane=%llu · LS PC final=0x%05llX · rc=0x%llX\n",
+    [out appendFormat:@"PM WID16–31 EXECUÇÃO NATIVA: chamados=%llu · slots adquiridos=%llu · retornos=%llu · falhas=%llu · rejeições iniciais=%llu · último wid=%llu img=%llu lane=%llu · LS PC final=0x%05llX · rc=0x%llX · arg EA=0x%08llX · Spurs EA=0x%08llX\n",
         (unsigned long long)pmUpper[0],(unsigned long long)pmUpper[1],
         (unsigned long long)pmUpper[2],(unsigned long long)pmUpper[3],
         (unsigned long long)pmUpper[4],(unsigned long long)pmUpper[5],
         (unsigned long long)pmUpper[7],(unsigned long long)pmUpper[9],
-        (unsigned long long)pmUpper[6],(unsigned long long)pmUpper[8]];
+        (unsigned long long)pmUpper[6],(unsigned long long)pmUpper[8],
+        (unsigned long long)pmUpper[10],(unsigned long long)pmUpper[11]];
     [out appendFormat:@"WWS job-chain: pedidos=%llu · com lift=%llu · sem lift=%llu · retornos=%llu · ativos=%llu · bytes=%llu · EA=0x%08llX\n",
         (unsigned long long)jobs[0],(unsigned long long)jobs[1],
         (unsigned long long)jobs[2],(unsigned long long)jobs[3],
@@ -2046,10 +2047,10 @@ static BOOL ARGameManifestHasTitleUsrdir(NSDictionary *manifest){
         (unsigned long long)lfqueue[0],(unsigned long long)lfqueue[1],
         (unsigned long long)lfqueue[2],(unsigned long long)lfqueue[3],
         (unsigned long long)lfqueue[4],(unsigned long long)lfqueue[5]];
-    [out appendFormat:@"EDGE Zlib nativo: requisições=%llu · concluídas=%llu · falhas=%llu · bytes=%llu · eventos=%llu (não são commits LFQueue)\n",
+    [out appendFormat:@"EDGE Zlib nativo: requisições=%llu · concluídas=%llu · falhas=%llu · bytes=%llu · eventos OK=%llu · falhas de sinal=%llu (não são commits LFQueue)\n",
         (unsigned long long)edgeQueue[0],(unsigned long long)edgeQueue[1],
         (unsigned long long)edgeQueue[2],(unsigned long long)edgeQueue[3],
-        (unsigned long long)edgeQueue[4]];
+        (unsigned long long)edgeQueue[4],(unsigned long long)edgeQueue[5]];
     [out appendString:@"Execução SPU: nativo estrito; intérprete e microstep SPU desativados.\n"];
     [out appendFormat:@"SPU PUTLLC: linhas commitadas=%llu · tasksets acordados=%llu (candidatos/válidos acima)\n",
         (unsigned long long)tasksetCommits[0],(unsigned long long)tasksetCommits[1]];

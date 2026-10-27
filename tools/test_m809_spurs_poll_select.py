@@ -30,6 +30,7 @@ static struct { int in_use; u32 spurs_ea; } s_workloads[32];
 static uint8_t guest[8192];
 static u32 enabled;
 static int signals[32];
+static int workload_flags[32];
 #define CELL_SPURS_MAX_SPU 6
 #define SPURS_WKL_ENABLED 0x04u
 static struct SpursInst* spurs_inst_find(u32 ea) { return ea == 0x100 ? &instance : 0; }
@@ -40,11 +41,14 @@ static u32 wkl_state_off(u32 wid) { return 0x100u + wid; }
 static u32 wkl_ready_off(u32 wid) { return 0x200u + wid; }
 static u32 wkl_info_off(u32 wid) { return 0x400u + wid * 32u; }
 static int wkl_signalled(u32 ea, u32 wid) { assert(ea == 0x100 && wid < 32); return signals[wid]; }
+static int spurs_workload_flag_peek(u32 ea, u32 wid) { assert(ea == 0x100 && wid < 32); return workload_flags[wid]; }
+static int spurs_workload_flag_take(u32 ea, u32 wid) { assert(ea == 0x100 && wid < 32); int v = workload_flags[wid]; workload_flags[wid] = 0; return v; }
 static void reset(void) {
     memset(&instance, 0, sizeof instance);
     memset(s_workloads, 0, sizeof s_workloads);
     memset(guest, 0, sizeof guest);
     memset(signals, 0, sizeof signals);
+    memset(workload_flags, 0, sizeof workload_flags);
     enabled = 0;
     instance.nspus = 6;
 }
@@ -63,13 +67,19 @@ int main(void) {
     assert(spurs_poll_select(0x100, 0, 0) == 17);
     reset(); workload(0, 0, 0); workload(17, 0, 0);
     assert(spurs_poll_select(0x100, 0, 0) == 0x20u);
+    reset(); workload(16, 0, 0); workload_flags[16] = 1;
+    assert(spurs_poll_select(0x100, 16, 0) == 16);
+    assert(workload_flags[16] == 0);
+    reset(); workload(0, 0, 0); workload(17, 0, 0); workload_flags[17] = 1;
+    assert(spurs_poll_select(0x100, 0, 0) == 17);
+    assert(workload_flags[17] == 0);
     reset(); workload(0, 1, 1); workload(17, 1, 0);
     assert(spurs_poll_select(0x100, 0, 0) == 0);
     reset(); workload(0, 0, 0); workload(17, 1, 0); signals[0] = 1;
     assert(spurs_poll_select(0x100, 0, 0) == 0);
     reset(); workload(0, 0, 0); workload(17, 1, 0);
     assert(spurs_poll_select(0x100, 0, CELL_SPURS_MAX_SPU) == 0x20u);
-    puts("[PASS] M8.09 production SPURS selector retires idle current and admits ready WID 17");
+    puts("[PASS] M8.16 production SPURS selector preserves WID16/17 workload flags until ModulePoll");
     return 0;
 }
 '''

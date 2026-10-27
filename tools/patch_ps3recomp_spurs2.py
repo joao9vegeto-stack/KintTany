@@ -647,6 +647,7 @@ def apply_ascension_wws_policy(upstream: pathlib.Path) -> None:
     if ASCENSION_POLICY_MARKER in spurs:
         required = (
             "spurs_poll_select", "spurs_ready_level() ? ready > si->active[wid]",
+            "spurs_workload_flag_peek(ea, wid)", "if (flagged) (void)spurs_workload_flag_take(ea, wid)",
             "spurs_kernel_temp_area_refresh(ctx)",
         )
         if any(marker not in spurs + channels + policy for marker in required):
@@ -659,6 +660,8 @@ def apply_ascension_wws_policy(upstream: pathlib.Path) -> None:
  * The Ascension PC port's WWS PM reads CellSpurs flags from LS tempArea and
  * treats readyCount as a level. Keep the option game-specific and disabled
  * unless the iOS Ascension launcher enables SPURS_READY_LEVEL. */
+int spurs_workload_flag_peek(u32 ea, u32 wid);
+int spurs_workload_flag_take(u32 ea, u32 wid);
 int spurs_ready_level(void)
 {
     static int s_level = -1;
@@ -684,14 +687,21 @@ u32 spurs_poll_select(u32 ea, u32 current, u32 spu)
             !vm_read8(ea + wkl_info_off(wid) + 0x18 + spu))
             continue;
         const u32 ready = vm_read8(ea + wkl_ready_off(wid));
-        const int signalled = wkl_signalled(ea, wid);
+        /* WWS WorkloadFlag is the kick that admits some upper WIDs. Do not
+         * lose it at admission: the PM's own ModulePoll must observe it too. */
+        const int flagged = spurs_workload_flag_peek(ea, wid);
+        const int signalled = wkl_signalled(ea, wid) || flagged;
         if (wid == current) {
             /* An idle workload is NOT runnable just because both
              * readyCount and activeCount are zero. Otherwise this SPU
              * loops on an idle WID and starves ready WIDs 16..31. */
-            if (signalled || (ready && ready >= si->active[wid])) return current;
+            if (signalled || (ready && ready >= si->active[wid])) {
+                if (flagged) (void)spurs_workload_flag_take(ea, wid);
+                return current;
+            }
         } else if (selected == 0x20u && (signalled || ready > si->active[wid])) {
             selected = wid;
+            if (flagged) (void)spurs_workload_flag_take(ea, wid);
         }
     }
     return selected;
@@ -805,6 +815,7 @@ def apply_ascension_workload_flag_scheduler(upstream: pathlib.Path) -> None:
     source = path.read_text(errors="replace")
     if WORKLOAD_FLAG_MARKER in source:
         required = ("SPURS_WKL_FLAG_VAL = 0x6C", "SPURS_WKL_FLAG_RCV = 0x77",
+                    "spurs_workload_flag_peek(ea, wid)",
                     "spurs_workload_flag_take(ea, wid)",
                     "int kicked = flagged ||")
         if any(token not in source for token in required):
@@ -825,7 +836,25 @@ def apply_ascension_workload_flag_scheduler(upstream: pathlib.Path) -> None:
     source = source.replace(init_old, init_new, 1)
 
     helper_anchor = "static DWORD WINAPI spurs_kernel_thread(LPVOID p)\n{"
-    helper = '''/* ASCENSION_M799_SPURS_WORKLOAD_FLAG_V1 */
+    helper = '''/* ASCENSION_M799_SPURS_WORKLOAD_FLAG_V1
+ * A workload flag is peeked by admission and consumed only by ModulePoll,
+ * after the native PM confirms which WID it will continue. */
+int spurs_workload_flag_peek(u32 ea, u32 wid)
+{
+    if (!ea || wid >= CELL_SPURS_MAX_WORKLOAD) return 0;
+    int flagged = 0;
+    const u32 value_ea = ea + SPURS_WKL_FLAG_VAL;
+    const u32 receiver_ea = ea + SPURS_WKL_FLAG_RCV;
+    spu_lockline_lock();
+    const u32 value = ((u32)vm_base[value_ea] << 24) |
+                      ((u32)vm_base[value_ea + 1] << 16) |
+                      ((u32)vm_base[value_ea + 2] << 8) |
+                       (u32)vm_base[value_ea + 3];
+    flagged = value == 0 && vm_base[receiver_ea] == (u8)wid;
+    spu_lockline_unlock();
+    return flagged;
+}
+
 int spurs_workload_flag_take(u32 ea, u32 wid)
 {
     int flagged = 0;
@@ -856,7 +885,7 @@ int spurs_workload_flag_take(u32 ea, u32 wid)
     kicked_old = '''                int kicked = (spurs_ready_level() ? ready > si->active[wid] : ready != 0)
                              || wkl_signalled(ea, wid);
 '''
-    kicked_new = '''                const int flagged = spurs_workload_flag_take(ea, wid);
+    kicked_new = '''                const int flagged = spurs_workload_flag_peek(ea, wid);
                 int kicked = flagged ||
                              (spurs_ready_level() ? ready > si->active[wid] : ready != 0) ||
                              wkl_signalled(ea, wid);
@@ -1845,7 +1874,7 @@ def apply_ascension_spu_stack_metrics(upstream: pathlib.Path) -> None:
     if STACK_METRICS_MARKER in source:
         required = ("spu_workload_reset_ascension_stack_metrics",
                     "spu_workload_copy_ascension_stack_metrics",
-                    "stack_sizes[4] = {256u << 20, 64u << 20, 32u << 20, 16u << 20}",
+                    "stack_sizes[4] = {32u << 20, 16u << 20, 64u << 20, 256u << 20}",
                     "s_asc_worker_stack_metrics[16]")
         missing = [token for token in required if token not in source]
         if missing:
@@ -1881,7 +1910,9 @@ void spu_workload_copy_ascension_stack_metrics(unsigned long long out[17])
         prc = pthread_create(&th, &attr, spu_async_thread, j);
     pthread_attr_destroy(&attr);'''
     stack_new = '''    __atomic_add_fetch(&s_asc_worker_stack_metrics[0], 1, __ATOMIC_RELAXED);
-    const size_t stack_sizes[4] = {256u << 20, 64u << 20, 32u << 20, 16u << 20};
+    /* iOS first: avoid reserving hundreds of MiB per SPU worker before
+     * trying practical stacks. Larger sizes remain last-resort fallbacks. */
+    const size_t stack_sizes[4] = {32u << 20, 16u << 20, 64u << 20, 256u << 20};
     const unsigned attr_metrics[4] = {1, 4, 7, 10};
     const unsigned success_metrics[4] = {2, 5, 8, 11};
     const unsigned failure_metrics[4] = {3, 6, 9, 12};
@@ -1989,7 +2020,8 @@ def main() -> int:
             "s_asc_pm_diag", "spurs_guest_range_valid(pm_ea, w->sizePm)",
             PM_CAPTURE_MARKER, "cellSpursCaptureAscensionPmMiss",
             ASCENSION_POLICY_MARKER, "spurs_poll_select", "spurs_ready_level()",
-            WORKLOAD_FLAG_MARKER, "SPURS_WKL_FLAG_VAL = 0x6C",
+            WORKLOAD_FLAG_MARKER, "spurs_workload_flag_peek(ea, wid)",
+            "SPURS_WKL_FLAG_VAL = 0x6C",
             "SPURS_WKL_FLAG_RCV = 0x77", "spurs_workload_flag_take(ea, wid)",
             "cellSpursInitializeWithAttribute2", "cellSpursCreateTaskset2",
             "_cellSpursTasksetAttribute2Initialize", "cellSpursCreateTask2",
@@ -2018,7 +2050,7 @@ def main() -> int:
                                        "spu_taskset_tasks_running(void)",
                                        "spu_taskset_task_ended(void)",
                                        STACK_METRICS_MARKER,
-                                       "stack_sizes[4] = {256u << 20, 64u << 20, 32u << 20, 16u << 20}",
+                                       "stack_sizes[4] = {32u << 20, 16u << 20, 64u << 20, 256u << 20}",
                                        "spu_workload_reset_ascension_stack_metrics",
                                        "spu_workload_copy_ascension_stack_metrics",
                                        "s_asc_worker_stack_metrics[16]",

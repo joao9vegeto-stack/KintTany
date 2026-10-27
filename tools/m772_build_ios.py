@@ -430,7 +430,7 @@ def main():
         raise SystemExit(f"M8.05 GCM offset-table write-through or park/SPU handoff is missing: {missing_gcm}")
     stack_runtime=(upstream/"runtime/spu/spu_workload.c").read_text(errors="replace")
     required_stack_markers=("ASCENSION_M804_SPU_STACK_RECOVERY_V1",
-        "stack_sizes[4] = {256u << 20, 64u << 20, 32u << 20, 16u << 20}",
+        "stack_sizes[4] = {32u << 20, 16u << 20, 64u << 20, 256u << 20}",
         "spu_workload_reset_ascension_stack_metrics",
         "spu_workload_copy_ascension_stack_metrics",
         "s_asc_worker_stack_metrics[16]")

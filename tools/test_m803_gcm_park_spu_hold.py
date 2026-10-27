@@ -226,7 +226,7 @@ def check_upstream_idempotence(upstream: pathlib.Path) -> None:
     stack_text = stack_source.read_text(errors="replace")
     stack_required = (
         patch_ps3recomp_spurs2.STACK_METRICS_MARKER,
-        "stack_sizes[4] = {256u << 20, 64u << 20, 32u << 20, 16u << 20}",
+        "stack_sizes[4] = {32u << 20, 16u << 20, 64u << 20, 256u << 20}",
         "spu_workload_reset_ascension_stack_metrics",
         "spu_workload_copy_ascension_stack_metrics",
         "s_asc_worker_stack_metrics[16]",
@@ -326,13 +326,12 @@ int main(void)
 {
     unsigned long long m[17] = {0};
     spu_workload_reset_ascension_stack_metrics();
-    if (!dispatch() || test_create_calls != 3 || test_chosen_stack_mib != 32)
+    if (!dispatch() || test_create_calls != 1 || test_chosen_stack_mib != 32)
         return 1;
     spu_workload_copy_ascension_stack_metrics(m);
-    if (m[0] != 1 || m[1] != 1 || m[2] != 0 || m[3] != 1 ||
-        m[4] != 1 || m[5] != 0 || m[6] != 1 || m[7] != 1 ||
-        m[8] != 1 || m[9] || m[10] || m[11] || m[12] ||
-        m[13] || m[14] || m[15] != EAGAIN || m[16]) return 2;
+    if (m[0] != 1 || m[1] != 1 || m[2] != 1 ||
+        m[3] || m[4] || m[5] || m[6] || m[7] || m[8] || m[9] ||
+        m[10] || m[11] || m[12] || m[13] || m[14] || m[15] || m[16]) return 2;
     return 0;
 }
 ''')
