@@ -1,57 +1,211 @@
-Execute all tasks below for **Build 69** directly and completely. Do not skip any step.
+python3 - <<'PY'
+from pathlib import Path
+import re
+import subprocess
 
-### Context from Real Device Log (`diagnostico-build-68.txt`)
-The real iPhone trace shows why the game freezes right after `KOSMICKRISP_PRESENT decoded_frames=1 composed_frames=3 guest_vk_draws=29`:
-1. **Thread 10 (`id=10`, entry `0x82690DC0`)** is actively spinning (`waiting=0`) with **29,818,880 AOT calls**:
-   - `hot0 = 0x82C3C4D8` (**11,126,865 calls**, `insns=7D6C42E6_556A003F_40820008_7D6C42E6_F9630000_38600001` = `QueryPerformanceCounter` reading PPC `mftb` and storing `uint64_t` to `*r3` = `0x40002130`, returning `r3 = 1`).
-   - Callers/loop partners on Thread 10:
-     - `lr = 0x822A1E08`
-     - `0x824E6FD8`, `0x82C4BE30`, `0x82C3EE78` (`r3=0x40002130 r4=0x4025D0F0..0x4025D0F8 r30=0x4025D0F0..0x4025D0F8 r31=0x40000770`)
-     - `hot1 = 0x822A0278` (only advancing ~16 calls/sec!)
-     - `hot2 = 0x82C25840` (only advancing ~12 calls/sec!)
-     - `hot3 = 0x82C259C8:160`, `hot4 = 0x83269920:69`, `hot5 = 0x82B3C6D8:20`, `hot6 = 0x82B394E0:16`
-     - Periodic call: `last_fn=0x82427940 prev_fn=0x82370500 lr=0x82370C4C r3=0x412F9D84 r4=0x00000002 r11=0x8212A708 r30=0x40499800 r31=0x00000002`.
-2. **Catastrophic Hotspot Throttling on `0x82C3C4D8`**:
-   - Because `0x82C3C4D8` (`QueryPerformanceCounter`) is called frequently, AOT hotspot detection marks it `SPINLOCK_ACTIVE worker_cp_pump=250us` and `XOWUE_AOT_HOTSPOT guest=0x82C3C4D8 cooperative_yield=1`.
-   - Sleeping/pumping 250 microseconds inside `QueryPerformanceCounter` slows Thread 10 down by 100,000x, and if `0x822A1E08` / `0x822A0278` / `0x824E6FD8` / `0x82C25840` is waiting for a condition, audio/movie progress, or a specific time delta, `hot1=0x822A0278` only ticks 16 times per second and never finishes!
-3. **Thread 1 (Main Thread) and Thread 4 (Render/Interrupt Thread) are missing from `THREAD_DUMP` / `XOWUE_STALL_THREADS`**:
-   - `THREAD_DUMP` only dumps `id=2, 3, 5, 6, 7, 8, 9, 10, 11`. `id=1` and `id=4` are completely invisible in the stall dump!
-   - Meanwhile:
-     - `t2` (`0x82690678`) waits on `0x00000100` (`recent=[0x82C4D4A8,0x82C4BB48,0x82C3E928,0x82690468,0x827E1290,0x82690260]`, `r30=0x4036FA24 r31=0x4036FA40`)
-     - `t3` (`0x82690678`) waits on `0x00000102` (`r30=0x4036F9E4 r31=0x4036FA00`)
-     - `t5` (`0x82B4AE40`) waits on `0x4004ED80` (`recent=[0x82B49E20,0x82B4AB28]`, `r3=0x4004ED60`)
-     - `t6` (`0x82B4AE40`) waits on `0x4004EDD0` (`recent=[0x82B49E20,0x82B4AB28]`, `r3=0x4004EDB0`)
-     - `t8` (`0x82690DC0`) waits on `0x00000112` (`recent=[0x82C4D4A8,0x82C4BB48,0x82C3E928,0x82690468]`, `r3=0x4025D270`)
-     - `t11` (`0x82690DC0`) waits on `0x00000115` (`recent=[0x82C4D4A8,0x82C4BB48,0x82C3E928,0x82C2A290,0x82C3C5E8,0x82C3C4D8,0x8236E738]`, `r3=0x40721A60 r4=0x00000FA0 r31=0x40721A40`)
+ROOT = Path(".")
 
----
+# 0. Enforce branch XOWUE strictly!
+subprocess.check_call(["git", "checkout", "XOWUE"])
+subprocess.check_call(["git", "pull", "--ff-only", "origin", "XOWUE"])
+cur_branch = subprocess.check_output(["git", "rev-parse", "--abbrev-ref", "HEAD"], text=True).strip()
+assert cur_branch == "XOWUE", f"ABORT: Expected branch XOWUE, got {cur_branch}"
 
-### Task 1: Inspect the Recompiled C++ Code & Log `CODE_AUDIT_B69`
-1. Locate and inspect the generated AOT C++ implementations (or XEXPPC instruction words at `0x82000000` base) for ALL of the following functions involved in the freeze:
-   - `0x82C3C4D8` (`QueryPerformanceCounter` / `mftb`)
-   - `0x822A1E08` (and the function containing `0x822A1E08`, e.g. `0x822A1C00..0x822A2100`)
-   - `0x822A0278` (and `0x822A0200..0x822A0450`)
-   - `0x824E6FD8` (and `0x824E6F50..0x824E7100`)
-   - `0x82C25840` and `0x82C259C8`
-   - `0x82370500`, `0x82370C4C`, and `0x82427940`
-   - `0x82690468`, `0x82690260`, `0x827E1290` (worker queue check in `t2`, `t3`, `t8`)
-   - `0x82B49E20`, `0x82B4AB28`, `0x82B4AE40` (`t5`, `t6` audio/renderer threads)
-2. Add a startup diagnostic logger `logCodeAuditBuild69()` that dumps the 32-bit Big-Endian PPC opcodes for each of those ranges (`CODE_AUDIT_B69`) AND dumps the guest memory words at `0x40000770`, `0x40002130`, `0x4025D0F0`, `0x4025D0F8`, `0x4036FA00`, `0x4036FA40`, `0x4004ED60`, `0x4004EDB0` when the stall snapshot triggers.
+eng_path = ROOT / "Runtime/XOWUEEngine.cpp"
+eng = eng_path.read_text(errors="replace")
 
-### Task 2: Include Thread 1 (`id=1`) and Thread 4 (`id=4`) in `THREAD_DUMP` and `XOWUE_STALL_THREADS`
-1. Ensure Thread 1 (the main/entry PPC thread) and Thread 4 (and any other created PPC/host-dispatched guest thread) are tracked and printed in both `THREAD_DUMP` and `XOWUE_STALL_THREADS`, showing their `last_fn`, `prev_fn`, `lr`, `waiting`, `wait_target`, `recent=[...]`, and registers `r3, r4, r11, r30, r31`.
+# 1. Bump Build 69 -> Build 70 banner in Runtime/XOWUEEngine.cpp
+eng = eng.replace("Build 69", "Build 70")
 
-### Task 3: Fix `0x82C3C4D8` (`QueryPerformanceCounter`) & Stop Throttling It, and Fix the Thread 10 Loop (`0x822A1E08` / `0x824E6FD8` / `0x822A0278` / `0x82C25840`)
-1. **Never apply `worker_cp_pump=250us` or `SPINLOCK_ACTIVE` sleep to `0x82C3C4D8` (`QueryPerformanceCounter`)**!
-   - Instead, intercept `0x82C3C4D8` natively (or in its fast-path hook):
-   - Compute a monotonically increasing 50 MHz Xbox 360 timebase tick (`49,875,000` ticks/sec).
-   - If the same thread calls `0x82C3C4D8` repeatedly while `lr == 0x822A1E08` or inside the `0x824E6FD8` / `0x822A0278` / `0x82C25840` loop without a new frame being decoded/swapped, advance a per-thread synthetic timebase offset by `+50000` ticks (~1 ms) on each repeated call so any busy-wait timer/frame-pacing loop in Bink (`0x822A1E08` / `0x822A0278`) or Criware/UE3 (`0x82C25840`) immediately reaches its target timestamp without spinning 11 million times!
-   - Write the 64-bit Big-Endian counter to `ctx.r3.u32` (`storeGuestU64BE(ctx.r3.u32, counter)`), set `ctx.r3.u64 = 1`, and return without a 250us sleep (only do a light `std::this_thread::yield()` every 4096 calls if needed).
-2. **Analyze the exact loop in `0x822A1E08` / `0x822A0278` / `0x824E6FD8` / `0x82C25840` / `0x82370500 -> 0x82427940`**:
-   - Read the actual recompiled C++ code of `0x822A1E08`, `0x822A0278`, `0x824E6FD8`, `0x82C25840`, `0x82370500`, `0x82370C4C`, and `0x82427940` during your implementation.
-   - Identify the exact memory fields on `r31=0x40000770`, `r30=0x4025D0F0`/`0x4025D0F8`, `r3=0x40002130`, `r3=0x412F9D84`, `r30=0x40499800`, or the audio/worker structs (`0x4004ED60`, `0x4004EDB0`, `0x4036FA00`, `0x4036FA40`) that keep Thread 10 looping instead of decoding frame 2 (`decoded_frames > 1`) or submitting new draws (`guest_vk_draws > 29`).
-   - Fix the root cause in the runtime so that the condition blocking `0x822A1E08` / `0x822A0278` / `0x824E6FD8` / `0x82370C4C` (and/or Thread 1 / Thread 4 / `t5` / `t6`) is properly satisfied and the game progresses past `decoded_frames=1` / `guest_vk_draws=29`.
+# 2. CRITICAL FIX A: Stop killing Main Thread (thread=1) after 50,000 repeat calls in shouldSkipFunctionCall!
+#    In Build 69, returning true here skipped 0x82370790/0x8237073C with r3=1 and caused thread=1 to exit prematurely (id=1 exited=1)!
+#    Instead (following Theft4 / rexglue-sdk), pump the GPU Command Processor and yield briefly while keeping thread=1 alive!
+old_main_skip = """    // Break extreme spin loops on the main thread so the initialization sequence can advance.
+    if (guestThreadId == 1 && s_repeatCount > 50000) {
+        s_repeatCount = 0;
+        ctx.r3.u64 = 1;
+        return true;
+    }"""
 
-### Task 4: Branch Verification, Version Bump to Build 69, and Tests
-1. Check `git status` / `git branch` and make sure your changes are committed and pushed to the active branch being built (and if both `main` and `XOWUE` exist, ensure the commit is pushed to the current working branch and update `iOS/project.yml` `CURRENT_PROJECT_VERSION: "69"` and `APP_LAUNCH build=69`).
-2. Add assertions in `tools/test_xowue_aot_instrumentation.py` verifying Build 69 changes and run the test suite to confirm all tests pass.
+new_main_skip = """    // Keep main thread (thread=1) alive during polling loops (Theft4 / rexglue-sdk pattern):
+    // Never skip functions with fake r3=1 on thread=1 (which caused thread=1 exited=1 in Build 69!).
+    // Instead, pump the Xenos Command Processor and yield so worker/render threads can complete the awaited state.
+    if (guestThreadId == 1 && s_repeatCount > 4096) {
+        if ((s_repeatCount & 4095u) == 0u) {
+            if (g_activeEngine != nullptr) {
+                g_activeEngine->pumpCommandProcessor();
+            }
+            std::this_thread::sleep_for(std::chrono::microseconds(100));
+        }
+    }"""
+
+assert old_main_skip in eng, "Could not find old_main_skip in Runtime/XOWUEEngine.cpp"
+eng = eng.replace(old_main_skip, new_main_skip, 1)
+
+# 3. CRITICAL FIX B: Remove the hardcoded `if (swaps >= 4) { return; }` cap in pumpCommandProcessorFromWorker!
+#    In Build 69, frames=4 swaps=4 was reached and then froze forever because pumpCommandProcessorFromWorker had `if (swaps >= 4) return;`!
+#    Also allow thread=1 (tid >= 1) to pump the command processor and remove the `swaps < 8` cap in KeWaitForSingleObject!
+old_worker_pump = """    const uint32_t tid = currentGuestThreadId();
+    if (tid <= 1 || g_activeEngine == nullptr) {
+        return;
+    }
+    const uint64_t swaps = g_activeEngine->xenos_.swapCount();
+    if (swaps >= 4) {
+        return;
+    }"""
+
+new_worker_pump = """    const uint32_t tid = currentGuestThreadId();
+    if (tid == 0 || g_activeEngine == nullptr) {
+        return;
+    }
+    const uint64_t swaps = g_activeEngine->xenos_.swapCount();
+    (void)swaps; // Build 70: never cap swaps at 4! Keep pumping Xenos CP continuously so frames 5..N render!"""
+
+assert old_worker_pump in eng, "Could not find old_worker_pump in Runtime/XOWUEEngine.cpp"
+eng = eng.replace(old_worker_pump, new_worker_pump, 1)
+
+old_wait_swap_cap = "if (swaps < 8 && (waitCount <= 4 || (waitCount & 3u) == 0)) {"
+new_wait_swap_cap = "if (waitCount <= 4 || (waitCount & 3u) == 0) {"
+assert old_wait_swap_cap in eng, "Could not find old_wait_swap_cap in Runtime/XOWUEEngine.cpp"
+eng = eng.replace(old_wait_swap_cap, new_wait_swap_cap, 1)
+
+# 4. CRITICAL FIX C: Fix xowue_qpc_write 147MB log explosion, cover 0x824E7158 (all 4 callsites 0x824E7228..0x824E7308),
+#    keep synthetic_offset advancing monotonically while !fresh, and pump CP / yield when worker spins in 0x824E7158.
+old_qpc_loop = """        const uint32_t loop[]={0x822A1E08u,0x822A0278u,0x824E6FD8u,0x82C25840u,0x82C259C8u,0x82370500u,0x823709B8u,0x82370BF0u,0x82370C4Cu};
+        bool loopCaller=(callerLR>=0x822A0180u&&callerLR<0x822A2100u)||(callerLR>=0x824E6F50u&&callerLR<0x824E7100u)||(callerLR>=0x82C25800u&&callerLR<0x82C25A60u);"""
+
+new_qpc_loop = """        const uint32_t loop[]={0x822A1E08u,0x822A0278u,0x824E6FD8u,0x824E7158u,0x8237073Cu,0x82370790u,0x82C25840u,0x82C259C8u,0x82370500u,0x823709B8u,0x82370BF0u,0x82370C4Cu};
+        bool loopCaller=(callerLR>=0x822A0180u&&callerLR<0x822A2100u)||(callerLR>=0x824E6F50u&&callerLR<0x824E7360u)||(callerLR>=0x82370700u&&callerLR<0x82370840u)||(callerLR>=0x82C25800u&&callerLR<0x82C25A60u);"""
+
+assert old_qpc_loop in eng, "Could not find old_qpc_loop in Runtime/XOWUEEngine.cpp"
+eng = eng.replace(old_qpc_loop, new_qpc_loop, 1)
+
+old_qpc_body = """        const bool fresh=(frames!=lastFrames||swaps!=lastSwaps);
+        if(fresh){lastFrames=frames;lastSwaps=swaps;repeat=0;}
+        else if(loopCaller||call>64){++repeat;offset+=50000ull;}
+        else repeat=0;
+        const uint64_t tb64=computeGuestTimeBase64()+offset;
+        const bool valid=outGuestPtr>=0x00010000u&&outGuestPtr<=0xFFFFF000u&&writeGuestU64BE(outGuestPtr,tb64);
+        if(call<=8||!valid||(loopCaller&&repeat==2)){
+            std::fprintf(stderr,"XOWUE_QPC_WRITE call=%llu thread=%u out_ptr=0x%08X tb64=0x%016llX synthetic_offset=%llu caller_lr=0x%08X frames=%llu swaps=%llu loop_caller=%d out_ptr_valid=%d\\n",
+                static_cast<unsigned long long>(call),currentGuestThreadId(),outGuestPtr,static_cast<unsigned long long>(tb64),static_cast<unsigned long long>(offset),callerLR,static_cast<unsigned long long>(frames),static_cast<unsigned long long>(swaps),loopCaller?1:0,valid?1:0);
+            std::fflush(stderr);
+            char detail[256];
+            std::snprintf(detail,sizeof(detail),"call=%llu thread=%u out_ptr=0x%08X tb64=0x%016llX synthetic_offset=%llu caller_lr=0x%08X frames=%llu swaps=%llu loop_caller=%d out_ptr_valid=%d",
+                static_cast<unsigned long long>(call),currentGuestThreadId(),outGuestPtr,static_cast<unsigned long long>(tb64),static_cast<unsigned long long>(offset),callerLR,static_cast<unsigned long long>(frames),static_cast<unsigned long long>(swaps),loopCaller?1:0,valid?1:0);
+            recordRuntimeTrace("XOWUE_QPC_WRITE",callerLR,detail);
+        }"""
+
+new_qpc_body = """        static std::atomic<uint32_t> qpcLogCount{0};
+        const bool fresh=(frames!=lastFrames||swaps!=lastSwaps);
+        if(fresh){lastFrames=frames;lastSwaps=swaps;repeat=0;}
+        else{++repeat;offset+=50000ull;}
+        const uint64_t tb64=computeGuestTimeBase64()+offset;
+        const bool valid=outGuestPtr>=0x00010000u&&outGuestPtr<=0xFFFFF000u&&writeGuestU64BE(outGuestPtr,tb64);
+        if(!fresh && (repeat & 511u)==0u){
+            pumpCommandProcessorFromWorker(callerLR);
+            if((callerLR>=0x824E6F50u&&callerLR<0x824E7360u) || (callerLR>=0x82370700u&&callerLR<0x82370840u)){
+                std::this_thread::sleep_for(std::chrono::microseconds(150));
+            }
+        }
+        if((call<=8||!valid||(loopCaller&&repeat==2)) && qpcLogCount.fetch_add(1,std::memory_order_relaxed)<16u){
+            std::fprintf(stderr,"XOWUE_QPC_WRITE call=%llu thread=%u out_ptr=0x%08X tb64=0x%016llX synthetic_offset=%llu caller_lr=0x%08X frames=%llu swaps=%llu loop_caller=%d out_ptr_valid=%d\\n",
+                static_cast<unsigned long long>(call),currentGuestThreadId(),outGuestPtr,static_cast<unsigned long long>(tb64),static_cast<unsigned long long>(offset),callerLR,static_cast<unsigned long long>(frames),static_cast<unsigned long long>(swaps),loopCaller?1:0,valid?1:0);
+            std::fflush(stderr);
+            char detail[256];
+            std::snprintf(detail,sizeof(detail),"call=%llu thread=%u out_ptr=0x%08X tb64=0x%016llX synthetic_offset=%llu caller_lr=0x%08X frames=%llu swaps=%llu loop_caller=%d out_ptr_valid=%d",
+                static_cast<unsigned long long>(call),currentGuestThreadId(),outGuestPtr,static_cast<unsigned long long>(tb64),static_cast<unsigned long long>(offset),callerLR,static_cast<unsigned long long>(frames),static_cast<unsigned long long>(swaps),loopCaller?1:0,valid?1:0);
+            recordRuntimeTrace("XOWUE_QPC_WRITE",callerLR,detail);
+        }"""
+
+assert old_qpc_body in eng, "Could not find old_qpc_body in Runtime/XOWUEEngine.cpp"
+eng = eng.replace(old_qpc_body, new_qpc_body, 1)
+
+# 5. Add startup code audits for 0x8237073C/0x82370790 (thread=1 wait), 0x82371DC8/0x82552500 (thread=4 render wait),
+#    0x82493860/0x82493A98 (thread=9 streamer wait), and 0x824E7158 (worker queue loop)
+audit_anchor = 'dumpRange("AUDIO_82370500_82370C4C", 0x823704C0u, 0x82370D00u);'
+audit_addition = '''dumpRange("AUDIO_82370500_82370C4C", 0x823704C0u, 0x82370D00u);
+        dumpRange("MAIN_WAIT_8237073C_82370790", 0x82370700u, 0x82370840u);
+        dumpRange("RENDER_WAIT_82371DC8", 0x82371D80u, 0x82371E60u);
+        dumpRange("RENDER_CALLER_82552500", 0x825524C0u, 0x82552640u);
+        dumpRange("STREAM_WAIT_82493860_82493A98", 0x82493820u, 0x82493B20u);
+        dumpRange("WORKER_824E7158", 0x824E7140u, 0x824E7360u);
+        dumpRange("MAIN_TAIL_82200150", 0x82200150u, 0x82200320u);'''
+
+if "MAIN_WAIT_8237073C_82370790" not in eng:
+    assert audit_anchor in eng, "Could not find audit_anchor in Runtime/XOWUEEngine.cpp"
+    eng = eng.replace(audit_anchor, audit_addition, 1)
+
+eng_path.write_text(eng)
+
+# 6. Cap iOS diagnostic log export in iOS/Sources/Core/DiagnosticsStore.swift to 512 KB (256 KB head + 256 KB tail)
+diag_path = ROOT / "iOS/Sources/Core/DiagnosticsStore.swift"
+diag = diag_path.read_text(errors="replace")
+
+old_diag_read = """        if let runtimeLogPath,
+           !runtimeLogPath.isEmpty,
+           let data = try? Data(contentsOf: URL(fileURLWithPath: runtimeLogPath)),
+           let text = String(data: data, encoding: .utf8),
+           !text.isEmpty {
+            sections.append("=== RUNTIME LOG FILE ===")
+            sections.append(text)
+        }"""
+
+new_diag_read = """        if let runtimeLogPath,
+           !runtimeLogPath.isEmpty,
+           let data = try? Data(contentsOf: URL(fileURLWithPath: runtimeLogPath), options: .mappedIfSafe),
+           !data.isEmpty {
+            sections.append("=== RUNTIME LOG FILE ===")
+            let maxBytes = 512 * 1024
+            if data.count <= maxBytes {
+                sections.append(String(decoding: data, as: UTF8.self))
+            } else {
+                let half = 256 * 1024
+                let head = String(decoding: data.prefix(half), as: UTF8.self)
+                let tail = String(decoding: data.suffix(half), as: UTF8.self)
+                sections.append(head)
+                sections.append("\\n... [XOWUE DIAGNOSTIC LOG TRUNCATED IN MIDDLE (\(data.count) bytes total -> capped to 512 KB for iPhone)] ...\\n")
+                sections.append(tail)
+            }
+        }"""
+
+if "XOWUE DIAGNOSTIC LOG TRUNCATED IN MIDDLE" not in diag:
+    assert old_diag_read in diag, "Could not find old_diag_read in DiagnosticsStore.swift"
+    diag = diag.replace(old_diag_read, new_diag_read, 1)
+    diag_path.write_text(diag)
+
+# 7. Bump version 69 -> 70 in iOS/project.yml and iOS/XOWUEiOS.xcodeproj/project.pbxproj
+proj_yml = ROOT / "iOS/project.yml"
+if proj_yml.exists():
+    y = proj_yml.read_text(errors="replace")
+    y = re.sub(r"(CURRENT_PROJECT_VERSION:\s*)69\b", r"\g<1>70", y)
+    y = re.sub(r'(CFBundleVersion:\s*"?)69("?)', r"\g<1>70\g<2>", y)
+    proj_yml.write_text(y)
+
+pbx = ROOT / "iOS/XOWUEiOS.xcodeproj/project.pbxproj"
+if pbx.exists():
+    p = pbx.read_text(errors="replace")
+    p = re.sub(r"(CURRENT_PROJECT_VERSION\s*=\s*)69;", r"\g<1>70;", p)
+    pbx.write_text(p)
+
+# 8. Update tools/test_xowue_aot_instrumentation.py for Build 70 and add regression checks for the new fixes
+test_path = ROOT / "tools/test_xowue_aot_instrumentation.py"
+t = test_path.read_text(errors="replace")
+t = t.replace("Build 69", "Build 70")
+t = re.sub(r'CURRENT_PROJECT_VERSION:\s*69', 'CURRENT_PROJECT_VERSION: 70', t)
+t = re.sub(r'(["\'])69(["\'])', r'\g<1>70\g<2>', t)
+if "qpcLogCount" not in t:
+    t += """
+# Build 70 regression checks
+eng_src = Path("Runtime/XOWUEEngine.cpp").read_text(errors="replace")
+assert "qpcLogCount" in eng_src, "Missing qpcLogCount cap in XOWUEEngine.cpp"
+assert "0x824E7158u" in eng_src, "Missing 0x824E7158u in xowue_qpc_write loop list"
+assert "if (swaps >= 4)" not in eng_src, "Hardcoded swaps >= 4 cap must be removed from pumpCommandProcessorFromWorker"
+assert "guestThreadId == 1 && s_repeatCount > 50000" not in eng_src, "Main thread killer (s_repeatCount > 50000 skip) must be removed"
+"""
+test_path.write_text(t)
+
+subprocess.check_call(["python3", "tools/test_xowue_aot_instrumentation.py"])
+subprocess.check_call(["git", "status", "-s"])
+PY
+git add -A && git commit -m "Build 70: remove swaps>=4 cap and main-thread skip killer, fix 147MB QPC log flood and cap iOS export to 512KB" && git push origin XOWUE
