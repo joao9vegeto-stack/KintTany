@@ -30,7 +30,6 @@ def patch_c8_irq_yield(root: Path) -> None:
  * After a bounded number of consecutive 0x00AD0 restores in the same PM slice,
  * yield the policy module slice cleanly so the SPURS scheduler can rotate WIDs.
  */
-extern _Thread_local int g_spurs_pm_exited;
 static _Thread_local const spu_context* s_asc_c8_spin_ctx;
 static _Thread_local uint32_t s_asc_c8_spin_restores;
 static _Thread_local uint64_t s_asc_c8_last_putllc;
