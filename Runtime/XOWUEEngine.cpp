@@ -2107,7 +2107,26 @@ extern "C" bool xowue_82dc2390_guard(PPCContext &context,uint8_t *base) {
 
 
 void xowue_thread_checkpoint(uint32_t guestAddress);
-void xowue_thread_checkpoint(uint32_t guestAddress,PPCContext &ctx){uint32_t lr=static_cast<uint32_t>(ctx.lr);if(g_currentGuestThread){g_currentGuestThread->lastGuestLr.store(lr,std::memory_order_relaxed);g_currentGuestThread->lastR3.store(ctx.r3.u32,std::memory_order_relaxed);g_currentGuestThread->lastR4.store(ctx.r4.u32,std::memory_order_relaxed);g_currentGuestThread->lastR11.store(ctx.r11.u32,std::memory_order_relaxed);g_currentGuestThread->lastR30.store(ctx.r30.u32,std::memory_order_relaxed);g_currentGuestThread->lastR31.store(ctx.r31.u32,std::memory_order_relaxed);}else{uint32_t prev=g_mainThreadLastPc.exchange(guestAddress);if(prev!=guestAddress)g_mainThreadPrevFn.store(prev);g_mainThreadGuestLr.store(lr);g_mainThreadLastR3.store(ctx.r3.u32);g_mainThreadLastR4.store(ctx.r4.u32);g_mainThreadLastR11.store(ctx.r11.u32);g_mainThreadLastR30.store(ctx.r30.u32);g_mainThreadLastR31.store(ctx.r31.u32);uint32_t i=g_mainThreadRecentAotIdx.fetch_add(1);g_mainThreadRecentAotFns[i&15u].store(guestAddress);}xowue_thread_checkpoint(guestAddress);}
+void xowue_thread_checkpoint(uint32_t guestAddress,PPCContext &ctx){
+    if (guestAddress == 0x822A0278u || guestAddress == 0x82C25840u || guestAddress == 0x826CF060u) {
+        static std::atomic<uint32_t> s_directSpinCalls{0};
+        const uint32_t sc = s_directSpinCalls.fetch_add(1, std::memory_order_relaxed) + 1u;
+        if (sc > 64u && (sc & 63u) == 0u) {
+            pumpGuestXenosRingBuffer();
+            signalGuestEventHandle(0x4004ED80u);
+            signalGuestEventHandle(0x4004EDD0u);
+            signalGuestEventHandle(0x00000100u);
+            signalGuestEventHandle(0x00000102u);
+            signalGuestEventHandle(0x00000112u);
+            signalGuestEventHandle(0x00000115u);
+            signalGuestEventHandle(0x70016FA0u);
+            signalGuestEventHandle(0x7003DD80u);
+            if (guestAddress == 0x822A0278u) {
+                ctx.r3.u64 = 0u;
+            }
+        }
+    }
+uint32_t lr=static_cast<uint32_t>(ctx.lr);if(g_currentGuestThread){g_currentGuestThread->lastGuestLr.store(lr,std::memory_order_relaxed);g_currentGuestThread->lastR3.store(ctx.r3.u32,std::memory_order_relaxed);g_currentGuestThread->lastR4.store(ctx.r4.u32,std::memory_order_relaxed);g_currentGuestThread->lastR11.store(ctx.r11.u32,std::memory_order_relaxed);g_currentGuestThread->lastR30.store(ctx.r30.u32,std::memory_order_relaxed);g_currentGuestThread->lastR31.store(ctx.r31.u32,std::memory_order_relaxed);}else{uint32_t prev=g_mainThreadLastPc.exchange(guestAddress);if(prev!=guestAddress)g_mainThreadPrevFn.store(prev);g_mainThreadGuestLr.store(lr);g_mainThreadLastR3.store(ctx.r3.u32);g_mainThreadLastR4.store(ctx.r4.u32);g_mainThreadLastR11.store(ctx.r11.u32);g_mainThreadLastR30.store(ctx.r30.u32);g_mainThreadLastR31.store(ctx.r31.u32);uint32_t i=g_mainThreadRecentAotIdx.fetch_add(1);g_mainThreadRecentAotFns[i&15u].store(guestAddress);}xowue_thread_checkpoint(guestAddress);}
 void xowue_thread_checkpoint(uint32_t guestAddress) {
     if (g_currentGuestThread && g_currentGuestThread->handle == 0xF8000014u &&
         (guestAddress == 0x82DC1FA0u || guestAddress == 0x82DC2390u)) {
@@ -2318,13 +2337,19 @@ static void __xowue_sub_83847AC0_init(PPCContext &ctx, uint8_t *base) {
 }
 static void __xowue_sub_83847AC4_free(PPCContext &ctx, uint8_t *) { ctx.r3.u64=0ull; }
 
-static void xowue_bink_wait_bypass_stub(PPCContext &context, uint8_t *base) {
-    (void)base;
-    pumpGuestXenosRingBuffer();
-    if (auto gm = g_activeGuestMemory.lock(); gm && gm->base) {
-        storeGuestBe32(gm->base, 0x4004ED80u + 4u, 1u);
-        storeGuestBe32(gm->base, 0x4004EDD0u + 4u, 1u);
+static inline void xowue_write_be32_raw(uint8_t *base, uint32_t addr, uint32_t val) {
+    if (base != nullptr && addr >= 0x00010000u && addr <= 0xFFFFF000u) {
+        const uint32_t be = __builtin_bswap32(val);
+        std::memcpy(base + addr, &be, sizeof(be));
     }
+}
+
+static void xowue_bink_wait_bypass_stub(PPCContext &context, uint8_t *base) {
+    pumpGuestXenosRingBuffer();
+    xowue_write_be32_raw(base, 0x4004ED80u + 4u, 1u);
+    xowue_write_be32_raw(base, 0x4004EDD0u + 4u, 1u);
+    xowue_write_be32_raw(base, 0x70016FA0u + 4u, 1u);
+    xowue_write_be32_raw(base, 0x7003DD80u + 4u, 1u);
     signalGuestEventHandle(0x4004ED80u);
     signalGuestEventHandle(0x4004EDD0u);
     signalGuestEventHandle(0x00000100u);
