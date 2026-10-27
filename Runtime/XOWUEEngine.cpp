@@ -211,6 +211,12 @@ struct GuestWaitable {
     uint32_t recursion = 0u;
     uint64_t timerGeneration = 0u;
     uint64_t pulseGeneration = 0u;
+    uint32_t creatorLr = 0u;
+    uint32_t creatorTid = 0u;
+    uint32_t guestHeaderAddr = 0u;
+    std::atomic<uint32_t> signalCount{0u};
+    std::atomic<uint32_t> waitCount{0u};
+    std::array<uint32_t, 4> callerChain{};
     std::mutex mutex;
     std::condition_variable changed;
 };
@@ -307,6 +313,13 @@ struct TouchControllerState {
 };
 
 uint32_t g_nextVirtualAllocation = kFirstVirtualAllocation;
+std::mutex g_smallGuestPoolMutex;
+uint32_t g_smallGuestPoolCursor = 0u;
+uint32_t g_smallGuestPoolEnd = 0u;
+std::atomic<uint32_t> g_smallGuestPoolLogs{0u};
+std::atomic<uint32_t> g_syncObjectLogs{0u};
+std::atomic<uint32_t> g_vblankWatchdogLogs{0u};
+std::atomic<bool> g_build66AuditEmitted{false};
 uint32_t g_nextPhysicalAllocation = kFirstPhysicalAllocation;
 uint32_t g_nextGuestHandle = 0x100u;
 uint32_t g_nextGuestEventObjectAddress = kFirstGuestEventObjectAddress;
@@ -398,7 +411,7 @@ std::atomic<uint32_t> g_lastAotGuestThread{0u};
 
 bool shouldPersistRuntimeTrace(const std::string &event, size_t sequence) {
     // Build 64 must persist diagnostics that identify stalls and QPC output writes.
-    for (const char *required : {"AOT_PROGRESS", "THREAD_DUMP", "XOWUE_AOT_HOTSPOT",
+    for (const char *required : {"CODE_AUDIT_B66", "CODE_AUDIT_83847ABC", "XOWUE_SYNC_CREATE", "XOWUE_VBLANK_WATCHDOG_SIGNAL", "XOWUE_POOL_ALLOC_82DC2BF0", "AOT_PROGRESS", "THREAD_DUMP", "XOWUE_AOT_HOTSPOT",
                                  "XOWUE_AOT_HOTSPOT_STATE", "XOWUE_QPC_WRITE",
                                  "XOWUE_STALL_THREADS", "CODE_AUDIT_QPC_CALLERS",
                                  "XOWUE_QPC_CALLER_DUMP", "CODE_AUDIT_B65",
@@ -1011,12 +1024,18 @@ std::shared_ptr<GuestWaitable> ensurePointerWaitable(uint32_t address, uint8_t *
     auto waitable = std::make_shared<GuestWaitable>();
     waitable->kind = GuestWaitable::Kind::Event;
     waitable->objectAddress = address;
+    waitable->guestHeaderAddr = address;
+    waitable->creatorLr = g_currentGuestThread ? g_currentGuestThread->lastGuestLr.load(std::memory_order_relaxed) : 0u;
+    waitable->creatorTid = g_currentGuestThread ? g_currentGuestThread->id : g_currentGuestThreadId;
     waitable->manualReset = (base[address] == 0u);
     waitable->signaled = PPC_LOAD_U32(address + 4u) != 0u;
     {
         std::lock_guard<std::mutex> lock(g_guestObjectMutex);
         const auto inserted = g_guestPointerWaitables.emplace(address, waitable);
         if (!inserted.second) return inserted.first->second;
+    }
+    if (g_syncObjectLogs.fetch_add(1u, std::memory_order_relaxed) < 32u) {
+        char event[256]; std::snprintf(event, sizeof(event), "XOWUE_SYNC_CREATE handle=0x%08X type=Event guest_addr=0x%08X initial=%u tid=0x%08X lr=0x%08X", address, address, waitable->signaled ? 1u : 0u, waitable->creatorTid, waitable->creatorLr); recordRuntimeTrace(event);
     }
     return waitable;
 }
@@ -1066,6 +1085,7 @@ uint32_t waitGuestObject(const std::shared_ptr<GuestWaitable> &waitable,
                          const GuestTimeout &timeout, bool alertable = false) {
     if (!waitable) return kNtStatusInvalidHandle;
     GuestWaitStateScope waitState(waitable->handle ? waitable->handle : waitable->objectAddress);
+    waitable->waitCount.fetch_add(1u, std::memory_order_relaxed);
     std::unique_lock<std::mutex> lock(waitable->mutex);
     const uint64_t initialPulseGeneration = waitable->pulseGeneration;
     const auto ready = [&] {
@@ -1106,6 +1126,20 @@ uint32_t waitGuestObject(const std::shared_ptr<GuestWaitable> &waitable,
                 waitable->signaled = false;
             } else if (!waitable->manualReset) waitable->signaled = false;
             syncGuestDispatcherSignalState(waitable);
+            return kNtStatusSuccess;
+        }
+        const bool watchdogThread = g_currentGuestThread &&
+            (g_currentGuestThread->id == 1u || g_currentGuestThread->lastGuestLr.load(std::memory_order_relaxed) == 0x82585FB4u);
+        const bool watchdogWait = watchdogThread && !timeout.has_value() &&
+            (waitable->handle == 0xF8000011u || waitable->handle == 0xF800000Au || waitable->objectAddress == 0xF8000011u || waitable->objectAddress == 0xF800000Au);
+        if (watchdogWait) {
+            if (waitable->changed.wait_for(lock, std::chrono::milliseconds(50), ready)) continue;
+            lock.unlock(); pumpGuestXenosRingBuffer(); lock.lock();
+            waitable->signaled = true; waitable->signalCount.fetch_add(1u, std::memory_order_relaxed);
+            syncGuestDispatcherSignalState(waitable); waitable->changed.notify_all();
+            if (g_vblankWatchdogLogs.fetch_add(1u, std::memory_order_relaxed) < 32u) {
+                char event[256]; std::snprintf(event, sizeof(event), "XOWUE_VBLANK_WATCHDOG_SIGNAL tid=0x%08X wait_obj=0x%08X guest_addr=0x%08X lr=0x%08X", g_currentGuestThread->id, waitable->handle, waitable->guestHeaderAddr, g_currentGuestThread->lastGuestLr.load(std::memory_order_relaxed)); recordRuntimeTrace(event);
+            }
             return kNtStatusSuccess;
         }
         if (deadline) {
@@ -1883,6 +1917,26 @@ int fail(char *output, size_t capacity, const std::exception &error) {
 
 } // namespace
 
+
+static void emitBuild66CodeAudit(uint8_t *base) {
+    if (!base || g_build66AuditEmitted.exchange(true, std::memory_order_relaxed)) return;
+    auto dump = [base](uint32_t begin,uint32_t end,const char *tag) {
+        if (end<=begin || !validGuestRange(begin,end-begin)) return;
+        char line[160]; std::snprintf(line,sizeof(line),"%s_BEGIN range=0x%08X..0x%08X",tag,begin,end); recordRuntimeTrace(line);
+        for(uint32_t pc=begin;pc<end;pc+=4u){std::snprintf(line,sizeof(line),"%s pc=0x%08X word=0x%08X",tag,pc,loadGuestBe32(base,pc));recordRuntimeTrace(line);}
+        std::snprintf(line,sizeof(line),"%s_END",tag);recordRuntimeTrace(line);
+    };
+    dump(0x82DC2A50u,0x82DC2B74u,"CODE_AUDIT_B66_ALLOC_INIT");
+    dump(0x82DC2C00u,0x82DC2D20u,"CODE_AUDIT_B66_ALLOC_CONT");
+    dump(0x82DC30B0u,0x82DC3190u,"CODE_AUDIT_B66_THREAD4");
+    dump(0x829F0660u,0x829F06D0u,"CODE_AUDIT_B66_WAIT_THREAD2");
+    dump(0x82585F70u,0x82586000u,"CODE_AUDIT_B66_WAIT_THREADS34");
+    for(uint32_t pc=0x82000000u;pc+4u<=0x836DF000u;pc+=4u){const uint32_t w=loadGuestBe32(base,pc),low=w&0xFFFFu;if(low!=0x7ABCu&&low!=0x7AC0u&&low!=0x7AC4u)continue;
+        char line[128];std::snprintf(line,sizeof(line),"CODE_AUDIT_83847ABC match_pc=0x%08X word=0x%08X",pc,w);recordRuntimeTrace(line);
+        const uint32_t first=pc>=12u?pc-12u:0u;for(uint32_t q=first;q<=pc+12u&&validGuestRange(q,4u);q+=4u){std::snprintf(line,sizeof(line),"CODE_AUDIT_83847ABC pc=0x%08X word=0x%08X",q,loadGuestBe32(base,q));recordRuntimeTrace(line);}
+    }
+}
+
 void xowue_thread_checkpoint() {
     // This hook runs at generated PPC AOT function entries. Poll the global
     // stop flag before touching scheduler/TLS state or pumping the GPU ring,
@@ -1891,6 +1945,7 @@ void xowue_thread_checkpoint() {
     if (g_schedulerStopRequested.load(std::memory_order_relaxed))
         throw GuestThreadStopRequested{};
     checkpointGuestThread();
+    auto auditMemory=g_activeGuestMemory.lock(); if(auditMemory && auditMemory->base) emitBuild66CodeAudit(auditMemory->base);
     // The Xenos ring is executed only by the worker thread (Xenia's CP
     // thread): it runs PM4_INTERRUPT handlers synchronously and blocks on
     // WAIT_REG_MEM, neither of which is safe on an arbitrary guest thread.
@@ -2083,6 +2138,45 @@ extern "C" void XOWUECrashRecorderWriteFatal(const char *message) __attribute__(
     throw std::runtime_error(event);
 }
 
+
+static uint32_t allocateSmallGuestPoolBlock(uint8_t *base, uint32_t size, uint32_t alignment) {
+    if (!base || size == 0u) return 0u;
+    alignment = std::max<uint32_t>(alignment, 16u);
+    if ((alignment & (alignment - 1u)) != 0u || alignment > 0x10000u) return 0u;
+    std::lock_guard<std::mutex> poolLock(g_smallGuestPoolMutex);
+    if (g_smallGuestPoolCursor == 0u || ((static_cast<uint64_t>(g_smallGuestPoolCursor) + alignment - 1u) & ~static_cast<uint64_t>(alignment - 1u)) + size > g_smallGuestPoolEnd) {
+        constexpr uint32_t chunkSize = 0x100000u;
+        std::lock_guard<std::mutex> vmLock(g_virtualMemoryMutex);
+        const uint64_t chunk = (static_cast<uint64_t>(g_nextVirtualAllocation) + 0xFFFFu) & ~uint64_t(0xFFFFu);
+        const uint64_t end = chunk + chunkSize;
+        if (chunk < kFirstVirtualAllocation || end > kLastVirtualAllocation || end > kGuestAddressSpaceSize) return 0u;
+        const uint64_t imageEnd = static_cast<uint64_t>(PPC_IMAGE_BASE) + PPC_IMAGE_SIZE;
+        const uint64_t dispatchEnd = imageEnd + static_cast<uint64_t>(PPC_CODE_SIZE) * 2u;
+        if ((chunk < imageEnd && end > PPC_IMAGE_BASE) || (chunk < dispatchEnd && end > imageEnd) || (chunk < kInitialStackPointer && end > kInitialStackPointer - 0x100000u)) return 0u;
+        g_virtualAllocations.push_back({static_cast<uint32_t>(chunk), chunkSize, 0x04u});
+        g_nextVirtualAllocation = static_cast<uint32_t>(end);
+        g_smallGuestPoolCursor = static_cast<uint32_t>(chunk); g_smallGuestPoolEnd = static_cast<uint32_t>(end);
+    }
+    const uint32_t block = static_cast<uint32_t>((static_cast<uint64_t>(g_smallGuestPoolCursor) + alignment - 1u) & ~static_cast<uint64_t>(alignment - 1u));
+    if (static_cast<uint64_t>(block) + size > g_smallGuestPoolEnd) return 0u;
+    g_smallGuestPoolCursor = block + size; std::memset(base + block, 0, size); return block;
+}
+static void __xowue_sub_83847ABC_alloc(PPCContext &ctx, uint8_t *base) {
+    const uint32_t heap = ctx.r3.u32, align = std::max<uint32_t>(ctx.r4.u32, 16u), outPtr = ctx.r5.u32, size = ctx.r6.u32 ? ctx.r6.u32 : 64u;
+    const uint32_t block = allocateSmallGuestPoolBlock(base, size, align);
+    if (outPtr && validGuestRange(outPtr, 4u)) PPC_STORE_U32(outPtr, block);
+    ctx.r3.u64 = 0ull;
+    if (g_smallGuestPoolLogs.fetch_add(1u, std::memory_order_relaxed) < 64u) { char e[256]; std::snprintf(e,sizeof(e),"XOWUE_POOL_ALLOC_82DC2BF0 heap=0x%08X align=%u out_ptr=0x%08X size=0x%X -> block=0x%08X",heap,align,outPtr,size,block); recordRuntimeTrace(e); }
+}
+static void __xowue_sub_83847AC0_init(PPCContext &ctx, uint8_t *base) {
+    const uint32_t object=ctx.r3.u32, nodePtr=ctx.r4.u32;
+    uint32_t node=nodePtr && validGuestRange(nodePtr,4u)?PPC_LOAD_U32(nodePtr):0u;
+    if (!node) { node=allocateSmallGuestPoolBlock(base,256u,16u); if(node && validGuestRange(node+8u,4u))PPC_STORE_U32(node+8u,object); if(nodePtr && validGuestRange(nodePtr,4u))PPC_STORE_U32(nodePtr,node); }
+    ctx.r3.u64=node?1ull:0ull;
+    char e[192];std::snprintf(e,sizeof(e),"XOWUE_POOL_INIT_82DC2B14 obj=0x%08X node_ptr=0x%08X node=0x%08X",object,nodePtr,node);recordRuntimeTrace(e);
+}
+static void __xowue_sub_83847AC4_free(PPCContext &ctx, uint8_t *) { ctx.r3.u64=0ull; }
+
 PPCFunc *xowue_lookup_indirect(PPCContext &context, uint8_t *base, uint32_t target) {
     // Generated PPC code can remain in a guest-side indirect-dispatch loop
     // without entering a syscall/wait primitive. Poll cancellation here so the
@@ -2091,6 +2185,12 @@ PPCFunc *xowue_lookup_indirect(PPCContext &context, uint8_t *base, uint32_t targ
     if (g_schedulerStopRequested.load(std::memory_order_relaxed))
         throw GuestThreadStopRequested{};
 
+    if (target == 0u) {
+        const uint32_t lr=static_cast<uint32_t>(context.lr);
+        if (lr==0x82DC2BF0u) return &__xowue_sub_83847ABC_alloc;
+        if (lr==0x82DC2B14u) return &__xowue_sub_83847AC0_init;
+        if (lr==0x82DC23B4u || lr==0x82DC23ACu) return &__xowue_sub_83847AC4_free;
+    }
     PPCFunc *slotFunction = nullptr;
     const uint64_t tableStart = static_cast<uint64_t>(PPC_IMAGE_BASE) + PPC_IMAGE_SIZE;
     const auto guard = xowue_dispatch_guard::resolve<PPCFunc>(
@@ -2400,6 +2500,8 @@ extern "C" int xowue_boot_xex(const char *path, char *output, size_t output_capa
         GuestSchedulerSessionGuard schedulerSession;
         GuestXenosPumpSessionGuard xenosPumpSession;
         g_nextVirtualAllocation = kFirstVirtualAllocation;
+        { std::lock_guard<std::mutex> poolLock(g_smallGuestPoolMutex); g_smallGuestPoolCursor=0u; g_smallGuestPoolEnd=0u; g_smallGuestPoolLogs.store(0u,std::memory_order_relaxed); }
+        g_build66AuditEmitted.store(false,std::memory_order_relaxed);
         g_nextPhysicalAllocation = kFirstPhysicalAllocation;
         g_nextGuestHandle = 0x100u;
         g_nextGuestEventObjectAddress = kFirstGuestEventObjectAddress;
@@ -6407,6 +6509,7 @@ void xowue_KeSetEvent(PPCContext &context, uint8_t *base) {
         waitable->signaled = true;
         syncGuestDispatcherSignalState(waitable);
     }
+    waitable->signalCount.fetch_add(1u, std::memory_order_relaxed);
     waitable->changed.notify_all();
     g_waitSetChanged.notify_all();
     context.r3.u32 = previous ? 1u : 0u;
@@ -6781,13 +6884,17 @@ extern "C" void xowue_log_stall_threads(void) {
         "XOWUE_STALL_THREADS count=%zu", snapshot.size()));
     for (const auto &thread : snapshot) {
         if (!thread || used >= sizeof(line)) continue;
+        const uint32_t target = thread->waitTarget.load(std::memory_order_relaxed);
+        auto obj = lookupGuestWaitable(target);
         const int n = std::snprintf(line + used, sizeof(line) - used,
-            " t%u=0x%08X lr=0x%08X wait=%u/0x%08X exited=%u",
-            thread->id, thread->lastGuestPc.load(std::memory_order_relaxed),
-            thread->lastGuestLr.load(std::memory_order_relaxed),
-            thread->waitingInKernel.load(std::memory_order_relaxed) ? 1u : 0u,
-            thread->waitTarget.load(std::memory_order_relaxed),
-            thread->exited.load(std::memory_order_relaxed) ? 1u : 0u);
+            " t%u=0x%08X lr=0x%08X wait=%u/0x%08X exited=%u obj_guest=0x%08X obj_creator_lr=0x%08X obj_signals=%u chain=0x%08X,0x%08X,0x%08X,0x%08X",
+            thread->id, thread->lastGuestPc.load(std::memory_order_relaxed), thread->lastGuestLr.load(std::memory_order_relaxed),
+            thread->waitingInKernel.load(std::memory_order_relaxed) ? 1u : 0u, target,
+            thread->exited.load(std::memory_order_relaxed) ? 1u : 0u,
+            obj ? obj->guestHeaderAddr : 0u, obj ? obj->creatorLr : 0u,
+            obj ? obj->signalCount.load(std::memory_order_relaxed) : 0u,
+            obj ? obj->callerChain[0] : 0u, obj ? obj->callerChain[1] : 0u,
+            obj ? obj->callerChain[2] : 0u, obj ? obj->callerChain[3] : 0u);
         if (n < 0 || static_cast<size_t>(n) >= sizeof(line) - used) break;
         used += static_cast<size_t>(n);
     }

@@ -90,6 +90,15 @@ assert first_phys + 0x1000 <= 0x20000000
 assert first_virt + 0x100000 <= 0x70000000
 print("PASS: physical heap bookkeeping cannot corrupt first 1MiB Xbox virtual reservation")
 
+# Build 66 allocator, audit, synchronization watchdog and version checks.
+assert "allocateSmallGuestPoolBlock" in engine
+assert "XOWUE_POOL_ALLOC_82DC2BF0" in engine and "XOWUE_POOL_INIT_82DC2B14" in engine
+assert "CODE_AUDIT_B66" in engine and "CODE_AUDIT_83847ABC" in engine
+assert "XOWUE_VBLANK_WATCHDOG_SIGNAL" in engine
+assert "obj_creator_lr=0x%08X obj_signals=%u" in engine
+assert 'CURRENT_PROJECT_VERSION: "66"' in (root / "iOS" / "project.yml").read_text(encoding="utf-8")
+print("PASS: Build 66 allocator, PPC audit, synchronization telemetry and vblank watchdog hooks")
+
 # Build 34: Xbox object attributes must use root/name/flags at offsets 0/4/8
 # and a zero-length MEM_RELEASE must search exact reservation base.
 assert "const uint32_t rootHandle = PPC_LOAD_U32(attributes);" in engine

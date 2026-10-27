@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Patch only the QPC helper and print source-level Build 65 PPC audit bodies."""
+"""Patch only the QPC helper and print source-level Build 66 PPC audit bodies."""
 from __future__ import annotations
 import argparse
 import re
@@ -52,6 +52,7 @@ def self_test():
     patched,n=replace_qpc(fixture)
     assert n==1 and "xowue_qpc_write(outPtr, xowue_guest_timebase()" in patched
     assert len(audit_bodies(patched))==5
+    # The destructor is intentionally not rewritten by this tool.
     print("PASS: Build 65 QPC-only replacement and five-function source audit")
 def main():
     parser=argparse.ArgumentParser();parser.add_argument("--ppc-dir",type=Path);parser.add_argument("--self-test",action="store_true");args=parser.parse_args()
