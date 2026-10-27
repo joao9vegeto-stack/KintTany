@@ -1,4 +1,4 @@
-name: SpkIOSzero Complete Pipeline (On-Device Extractor IPA & Thin Game IPA)
+name: NXUniversal iOS Pipeline (Universal Extractor IPA & Universal Thin Game IPA)
 
 on:
   push:
@@ -8,7 +8,7 @@ on:
   workflow_dispatch:
     inputs:
       mode:
-        description: '1) build_extractor_ipa (Gera App Extrator LibHac Nativo p/ iPhone) | 2) build_thin_game_ipa (Gera Jogo Thin IPA a partir do github_kit.zip)'
+        description: '1) build_extractor_ipa (Gera App Extrator Universal p/ iPhone) | 2) build_thin_game_ipa (Compila QUALQUER Jogo a partir do github_kit.zip)'
         required: true
         default: 'build_extractor_ipa'
         type: choice
@@ -16,7 +16,7 @@ on:
           - build_extractor_ipa
           - build_thin_game_ipa
       github_kit_url:
-        description: 'URL do github_kit.zip gerado no seu iPhone (usado no modo build_thin_game_ipa)'
+        description: 'URL do github_kit.zip gerado no iPhone (obrigatorio apenas no modo build_thin_game_ipa)'
         required: false
         default: ''
 
@@ -24,27 +24,25 @@ permissions:
   contents: write
 
 jobs:
-  spk_ios_zero:
+  nx_universal_ios:
     runs-on: macos-15
     timeout-minutes: 240
     steps:
       - name: 1. Checkout da Branch SpkIOSzero
         uses: actions/checkout@v4
 
-      - name: 2. Instalar .NET 9 SDK Oficial
+      - name: 2. Instalar .NET 9 SDK e Ferramentas
         run: |
           curl -sSL https://dot.net/v1/dotnet-install.sh -o "$RUNNER_TEMP/dotnet-install.sh"
           chmod +x "$RUNNER_TEMP/dotnet-install.sh"
           "$RUNNER_TEMP/dotnet-install.sh" --channel 9.0 --install-dir "$HOME/.dotnet"
           echo "$HOME/.dotnet" >> "$GITHUB_PATH"
 
-      - name: 3A. [Modo build_extractor_ipa] Compilar App Extrator LibHac Nativo para iPhone (ios-arm64)
+      - name: 3A. [Modo build_extractor_ipa] Compilar NXUniversalExtractor.ipa (Para Qualquer Jogo Switch)
         if: ${{ (inputs.mode || 'build_extractor_ipa') == 'build_extractor_ipa' }}
         run: |
           export PATH="$HOME/.dotnet:$PATH"
-          dotnet --info
 
-          # Caso a branch ainda nao tenha o Program.cs do nxnative, busca direto do upstream
           if [ ! -f "dm/tools/nx_extract/Program.cs" ]; then
             git clone --depth 1 https://github.com/seedds/nxnative.git "$RUNNER_TEMP/nx_up"
             mkdir -p dm/tools/nx_extract
@@ -54,8 +52,6 @@ jobs:
           mkdir -p "$RUNNER_TEMP/nx_ios"
           cp dm/tools/nx_extract/Program.cs "$RUNNER_TEMP/nx_ios/Program.cs"
 
-          # Usa exatamente <PublishAot>true</PublishAot> + <PublishAotUsingRuntimePack>true</PublishAotUsingRuntimePack>
-          # exigido pela documentacao oficial da Microsoft para NativeAOT ios-arm64 no .NET 9!
           cat > "$RUNNER_TEMP/nx_ios/nx_extract.csproj" << 'EOF'
           <Project Sdk="Microsoft.NET.Sdk">
             <PropertyGroup>
@@ -73,12 +69,34 @@ jobs:
           </Project>
           EOF
 
+          # Injeta ios_libhac_extract E ios_libhac_info (que inspeciona automaticamente TitleID, Tipo Base/Patch/DLC e Versao via LibHac CNMT!)
           python3 - << 'PYEOF'
           import os
           from pathlib import Path
           p = Path(os.environ["RUNNER_TEMP"]) / "nx_ios" / "Program.cs"
           code = p.read_text(encoding="utf-8")
           entry = """
+              [System.Runtime.InteropServices.UnmanagedCallersOnly(EntryPoint = "ios_libhac_info")]
+              public static int IosLibHacInfo(IntPtr keysPtr, IntPtr pkgPtr, IntPtr outFilePtr) {
+                  try {
+                      g_damaged.Clear();
+                      g_lenient = null;
+                      g_lenientFs = null;
+                      string k = System.Runtime.InteropServices.Marshal.PtrToStringUTF8(keysPtr);
+                      string pkg = System.Runtime.InteropServices.Marshal.PtrToStringUTF8(pkgPtr);
+                      string outFile = System.Runtime.InteropServices.Marshal.PtrToStringUTF8(outFilePtr);
+                      using var sw = new System.IO.StreamWriter(outFile, false, System.Text.Encoding.UTF8);
+                      var oldOut = Console.Out;
+                      Console.SetOut(sw);
+                      int rc = Main(new string[] { k, "--info", pkg, "--allow-damaged" });
+                      Console.SetOut(oldOut);
+                      return rc;
+                  } catch (Exception e) {
+                      Console.Error.WriteLine(e.ToString());
+                      return 1;
+                  }
+              }
+
               [System.Runtime.InteropServices.UnmanagedCallersOnly(EntryPoint = "ios_libhac_extract")]
               public static int IosLibHacExtract(IntPtr keysPtr, IntPtr basePtr, IntPtr updPtr, IntPtr outDirPtr, int mode) {
                   try {
@@ -104,10 +122,8 @@ jobs:
           PYEOF
 
           dotnet publish -r ios-arm64 -c Release "$RUNNER_TEMP/nx_ios/nx_extract.csproj" -o "$RUNNER_TEMP/libhac_ios"
-          ls -la "$RUNNER_TEMP/libhac_ios/"
 
-          # Empacota o nx_extract.dylib como um Framework oficial do iOS (nx_extract.framework) conforme exigido pela Apple
-          FW_DIR="$RUNNER_TEMP/Payload/SpkExtractor.app/Frameworks/nx_extract.framework"
+          FW_DIR="$RUNNER_TEMP/Payload/NXExtractor.app/Frameworks/nx_extract.framework"
           mkdir -p "$FW_DIR"
           cp "$RUNNER_TEMP/libhac_ios/nx_extract.dylib" "$FW_DIR/nx_extract"
           install_name_tool -id @rpath/nx_extract.framework/nx_extract "$FW_DIR/nx_extract"
@@ -118,7 +134,7 @@ jobs:
           <plist version="1.0">
           <dict>
             <key>CFBundleExecutable</key><string>nx_extract</string>
-            <key>CFBundleIdentifier</key><string>com.kinttany.spkextractor.nxextract</string>
+            <key>CFBundleIdentifier</key><string>com.kinttany.nxextractor.libhac</string>
             <key>CFBundleName</key><string>nx_extract</string>
             <key>CFBundlePackageType</key><string>FMWK</string>
             <key>CFBundleShortVersionString</key><string>1.0</string>
@@ -139,15 +155,25 @@ jobs:
           #include <zlib.h>
 
           typedef int (*ios_libhac_extract_fn)(const char *keys, const char *base_nsp, const char *upd_nsp, const char *out_dir, int mode);
+          typedef int (*ios_libhac_info_fn)(const char *keys, const char *pkg, const char *out_file);
+
+          static void *get_libhac_handle(void) {
+              static void *h = NULL;
+              if (!h) {
+                  NSString *p = [[NSBundle mainBundle].bundlePath stringByAppendingPathComponent:@"Frameworks/nx_extract.framework/nx_extract"];
+                  h = dlopen(p.fileSystemRepresentation, RTLD_NOW);
+              }
+              return h;
+          }
 
           static ios_libhac_extract_fn get_extractor(void) {
-              static ios_libhac_extract_fn fn = NULL;
-              if (!fn) {
-                  NSString *p = [[NSBundle mainBundle].bundlePath stringByAppendingPathComponent:@"Frameworks/nx_extract.framework/nx_extract"];
-                  void *h = dlopen(p.fileSystemRepresentation, RTLD_NOW);
-                  if (h) fn = (ios_libhac_extract_fn)dlsym(h, "ios_libhac_extract");
-              }
-              return fn;
+              void *h = get_libhac_handle();
+              return h ? (ios_libhac_extract_fn)dlsym(h, "ios_libhac_extract") : NULL;
+          }
+
+          static ios_libhac_info_fn get_info_fn(void) {
+              void *h = get_libhac_handle();
+              return h ? (ios_libhac_info_fn)dlsym(h, "ios_libhac_info") : NULL;
           }
 
           #pragma pack(push, 1)
@@ -193,6 +219,25 @@ jobs:
               return count > 0;
           }
 
+          static BOOL should_include_in_universal_kit(NSString *relPath, unsigned long long fileSize) {
+              NSString *low = relPath.lowercaseString;
+              // Inclui automaticamente arquivos de shader/config de QUALQUER engine (Unreal, Unity, NVN, Vulkan, Nintendo Proprietary)
+              NSArray<NSString *> *exts = @[
+                  @".ushaderbytecode", @".upipelinecache", @".utoc", @".ini", @".uproject", @".uplugin",
+                  @".bnsh", @".fsh", @".vsh", @".csh", @".gsh", @".spv", @".spirv", @".glsl", @".hlsl",
+                  @".nson", @".trs", @".trpfd", @".trpfs", @".bntx", @".byml", @".bgyml", @".zs"
+              ];
+              for (NSString *e in exts) {
+                  if ([low hasSuffix:e] && fileSize <= 200ULL * 1024ULL * 1024ULL) return YES;
+              }
+              if (([low containsString:@"shader"] || [low containsString:@"boot.romfs"] || [low containsString:@"global-metadata.dat"]) &&
+                  fileSize <= 250ULL * 1024ULL * 1024ULL) {
+                  return YES;
+              }
+              if ([low hasSuffix:@".pak"] && fileSize <= 128ULL * 1024ULL * 1024ULL) return YES;
+              return NO;
+          }
+
           @interface ExtractorVC : UIViewController
           @property (nonatomic, strong) UITextView *logView;
           @property (nonatomic, strong) UIButton *btn;
@@ -204,9 +249,9 @@ jobs:
               self.view.backgroundColor = [UIColor colorWithRed:0.05 green:0.06 blue:0.10 alpha:1.0];
               UILabel *t = [[UILabel alloc] initWithFrame:CGRectMake(20, 56, self.view.bounds.size.width - 40, 32)];
               t.autoresizingMask = UIViewAutoresizingFlexibleWidth;
-              t.text = @"SpkIOSzero — LibHac NSP/XCI Extractor";
+              t.text = @"NXUniversal — Switch NSP/XCI Extractor";
               t.textColor = UIColor.whiteColor;
-              t.font = [UIFont boldSystemFontOfSize:19];
+              t.font = [UIFont boldSystemFontOfSize:18];
               [self.view addSubview:t];
 
               self.logView = [[UITextView alloc] initWithFrame:CGRectMake(20, 96, self.view.bounds.size.width - 40, self.view.bounds.size.height - 186)];
@@ -215,18 +260,23 @@ jobs:
               self.logView.textColor = [UIColor colorWithRed:0.35 green:0.95 blue:0.55 alpha:1.0];
               self.logView.font = [UIFont monospacedSystemFontOfSize:12 weight:UIFontWeightRegular];
               self.logView.editable = NO;
-              self.logView.text = @"Coloque na pasta deste App no 'Arquivos' do iPhone:\n"
-                                  @"  - prod.keys\n"
-                                  @"  - Jogo Base (.nsp ou .xci)\n"
-                                  @"  - Update (.nsp) e DLCs (.nsp)\n\n"
-                                  @"Depois toque no botao laranja abaixo!\n\n";
+              self.logView.text = @"EXTRATOR UNIVERSAL DE JOGOS SWITCH (LibHac Nativo)\n"
+                                  @"Funciona com QUALQUER jogo (.nsp ou .xci)!\n\n"
+                                  @"1. No app 'Arquivos' -> No Meu iPhone -> NXExtractor, coloque:\n"
+                                  @"   - prod.keys\n"
+                                  @"   - Qualquer Jogo Base (.nsp/.xci), Update (.nsp) e DLCs (.nsp)\n"
+                                  @"2. O LibHac identifica sozinho o TitleID, Nome, Base, Update e DLCs pelo cabecalho CNMT oficial (nao importa o nome do arquivo!).\n"
+                                  @"3. Gera em Documents/Games/<TitleID>:\n"
+                                  @"   - romfs/ (Base + Update fundidos)\n"
+                                  @"   - aoc/ (DLCs)\n"
+                                  @"   - github_kit_<TitleID>.zip (Kit leve p/ compilar Thin IPA no GitHub)\n\n";
               [self.view addSubview:self.logView];
 
               self.btn = [UIButton buttonWithType:UIButtonTypeSystem];
               self.btn.frame = CGRectMake(20, self.view.bounds.size.height - 76, self.view.bounds.size.width - 40, 50);
               self.btn.autoresizingMask = UIViewAutoresizingFlexibleWidth | UIViewAutoresizingFlexibleTopMargin;
-              self.btn.backgroundColor = [UIColor colorWithRed:0.95 green:0.45 blue:0.10 alpha:1.0];
-              [self.btn setTitle:@"Extrair NSP + Update + DLC e Gerar github_kit.zip" forState:UIControlStateNormal];
+              self.btn.backgroundColor = [UIColor colorWithRed:0.15 green:0.55 blue:0.95 alpha:1.0];
+              [self.btn setTitle:@"Identificar e Extrair Todos os Jogos da Pasta" forState:UIControlStateNormal];
               [self.btn setTitleColor:UIColor.whiteColor forState:UIControlStateNormal];
               self.btn.titleLabel.font = [UIFont boldSystemFontOfSize:15];
               self.btn.layer.cornerRadius = 10;
@@ -245,7 +295,8 @@ jobs:
               self.btn.enabled = NO;
               dispatch_async(dispatch_get_global_queue(QOS_CLASS_USER_INITIATED, 0), ^{
                   ios_libhac_extract_fn fn = get_extractor();
-                  if (!fn) {
+                  ios_libhac_info_fn infoFn = get_info_fn();
+                  if (!fn || !infoFn) {
                       [self log:[NSString stringWithFormat:@"ERRO dlopen: %s", dlerror()]];
                       dispatch_async(dispatch_get_main_queue(), ^{ self.btn.enabled = YES; });
                       return;
@@ -254,94 +305,134 @@ jobs:
                   NSString *doc = NSSearchPathForDirectoriesInDomains(NSDocumentDirectory, NSUserDomainMask, YES)[0];
                   NSString *keys = [doc stringByAppendingPathComponent:@"prod.keys"];
                   if (![fm fileExistsAtPath:keys]) {
-                      [self log:@"ERRO: prod.keys nao encontrado na pasta Documents deste app!"];
+                      [self log:@"ERRO: prod.keys nao encontrado na pasta NXExtractor!"];
                       dispatch_async(dispatch_get_main_queue(), ^{ self.btn.enabled = YES; });
                       return;
                   }
-                  NSString *basePkg = nil;
-                  NSString *updPkg = @"-";
-                  NSMutableArray<NSString *> *dlcs = [NSMutableArray array];
+
+                  // Agrupa automaticamente pacotes por TitleID usando os metadados reais CNMT do LibHac (--info)
+                  NSMutableDictionary<NSString *, NSMutableDictionary *> *games = [NSMutableDictionary dictionary];
                   NSArray<NSString *> *files = [[fm contentsOfDirectoryAtPath:doc error:nil] sortedArrayUsingSelector:@selector(compare:)];
+                  NSString *tmpInfo = [doc stringByAppendingPathComponent:@"_tmp_info.tsv"];
+
                   for (NSString *f in files) {
                       NSString *low = f.lowercaseString;
                       if (!([low hasSuffix:@".nsp"] || [low hasSuffix:@".xci"])) continue;
                       NSString *full = [doc stringByAppendingPathComponent:f];
-                      if ([low containsString:@"dlc"] || [low containsString:@"aoc"]) {
-                          [dlcs addObject:full];
-                      } else if ([low containsString:@"upd"] || [low containsString:@"patch"] || [low containsString:@"800]"]) {
-                          updPkg = full;
-                      } else if (!basePkg) {
-                          basePkg = full;
+                      [fm removeItemAtPath:tmpInfo error:nil];
+                      if (infoFn(keys.UTF8String, full.UTF8String, tmpInfo.UTF8String) == 0 && [fm fileExistsAtPath:tmpInfo]) {
+                          NSString *tsv = [NSString stringWithContentsOfFile:tmpInfo encoding:NSUTF8StringEncoding error:nil];
+                          for (NSString *line in [tsv componentsSeparatedByCharactersInSet:NSCharacterSet.newlineCharacterSet]) {
+                              NSArray<NSString *> *cols = [line componentsSeparatedByString:@"\t"];
+                              if (cols.count < 3) continue;
+                              NSString *kind = cols[0];
+                              NSString *tid = cols[1].uppercaseString;
+                              long long ver = [cols[2] longLongValue];
+                              if (tid.length != 16) continue;
+                              if (!games[tid]) {
+                                  games[tid] = [@{ @"dlcs": [NSMutableArray array], @"updVer": @(-1LL) } mutableCopy];
+                              }
+                              if ([kind isEqualToString:@"Application"]) {
+                                  games[tid][@"base"] = full;
+                                  if (cols.count >= 4 && [cols[3] length] > 0) games[tid][@"name"] = cols[3];
+                              } else if ([kind isEqualToString:@"Patch"]) {
+                                  if (ver > [games[tid][@"updVer"] longLongValue]) {
+                                      games[tid][@"upd"] = full;
+                                      games[tid][@"updVer"] = @(ver);
+                                  }
+                              } else if ([kind isEqualToString:@"AddOnContent"]) {
+                                  [games[tid][@"dlcs"] addObject:full];
+                              }
+                          }
                       }
                   }
-                  if (!basePkg) {
-                      [self log:@"ERRO: Nenhum arquivo .nsp/.xci encontrado na pasta Documents!"];
+                  [fm removeItemAtPath:tmpInfo error:nil];
+
+                  if (games.count == 0) {
+                      [self log:@"ERRO: Nenhum pacote .nsp/.xci valido encontrado em Documents!"];
                       dispatch_async(dispatch_get_main_queue(), ^{ self.btn.enabled = YES; });
                       return;
                   }
 
-                  NSString *staging = [doc stringByAppendingPathComponent:@"_kit_staging"];
-                  [fm removeItemAtPath:staging error:nil];
-                  [fm createDirectoryAtPath:staging withIntermediateDirectories:YES attributes:nil error:nil];
-
-                  [self log:[NSString stringWithFormat:@"1/4 Gerando manifesto (Base: %@, Update: %@)...", basePkg.lastPathComponent, updPkg.lastPathComponent]];
-                  fn(keys.UTF8String, basePkg.UTF8String, updPkg.UTF8String, staging.UTF8String, 2);
-
-                  [self log:@"2/4 Extraindo e fundindo Base + Update com LibHac (pode levar alguns minutos para 17GB)..."];
-                  int rc = fn(keys.UTF8String, basePkg.UTF8String, updPkg.UTF8String, staging.UTF8String, 0);
-                  if (rc != 0 && rc != 3) {
-                      [self log:[NSString stringWithFormat:@"ERRO LibHac rc=%d", rc]];
-                      dispatch_async(dispatch_get_main_queue(), ^{ self.btn.enabled = YES; });
-                      return;
-                  }
-
-                  NSString *romfsOut = [doc stringByAppendingPathComponent:@"romfs"];
-                  [fm removeItemAtPath:romfsOut error:nil];
-                  [fm moveItemAtPath:[staging stringByAppendingPathComponent:@"RomFS"] toPath:romfsOut error:nil];
-                  [self log:@"-> Pasta Documents/romfs/ (17GB) criada com sucesso!"];
-
-                  int idx = 1;
-                  for (NSString *d in dlcs) {
-                      [self log:[NSString stringWithFormat:@"3/4 Extraindo DLC #%d: %@...", idx, d.lastPathComponent]];
-                      NSString *aocOut = [NSString stringWithFormat:@"%@/aoc/%03d", staging, idx];
-                      NSString *docAoc = [NSString stringWithFormat:@"%@/aoc/%03d", doc, idx];
-                      [fm createDirectoryAtPath:aocOut withIntermediateDirectories:YES attributes:nil error:nil];
-                      fn(keys.UTF8String, d.UTF8String, "-", aocOut.UTF8String, 1);
-                      [fm createDirectoryAtPath:[doc stringByAppendingPathComponent:@"aoc"] withIntermediateDirectories:YES attributes:nil error:nil];
-                      [fm removeItemAtPath:docAoc error:nil];
-                      [fm copyItemAtPath:aocOut toPath:docAoc error:nil];
-                      idx++;
-                  }
-
-                  [self log:@"4/4 Copiando Shaders/Metadados leves e gerando Documents/github_kit.zip..."];
-                  NSString *slimRomfs = [staging stringByAppendingPathComponent:@"RomFS"];
-                  [fm createDirectoryAtPath:slimRomfs withIntermediateDirectories:YES attributes:nil error:nil];
-                  NSDirectoryEnumerator *en = [fm enumeratorAtPath:romfsOut];
-                  NSString *rel = nil;
-                  while ((rel = [en nextObject])) {
-                      NSString *full = [romfsOut stringByAppendingPathComponent:rel];
-                      NSDictionary *a = [fm attributesOfItemAtPath:full error:nil];
-                      if (![a.fileType isEqualToString:NSFileTypeRegular]) continue;
-                      unsigned long long sz = [a fileSize];
-                      NSString *low = rel.lowercaseString;
-                      if ([low containsString:@"shader"] || [low hasSuffix:@".ushaderbytecode"] ||
-                          [low hasSuffix:@".upipelinecache"] || [low hasSuffix:@".utoc"] ||
-                          [low hasSuffix:@".ini"] || [low hasSuffix:@".uproject"] ||
-                          ([low hasSuffix:@".pak"] && sz <= 128ULL * 1024ULL * 1024ULL)) {
-                          NSString *dst = [slimRomfs stringByAppendingPathComponent:rel];
-                          [fm createDirectoryAtPath:[dst stringByDeletingLastPathComponent] withIntermediateDirectories:YES attributes:nil error:nil];
-                          [fm copyItemAtPath:full toPath:dst error:nil];
+                  for (NSString *tid in games) {
+                      NSDictionary *g = games[tid];
+                      NSString *basePkg = g[@"base"];
+                      NSString *updPkg = g[@"upd"] ?: @"-";
+                      NSArray<NSString *> *dlcs = g[@"dlcs"];
+                      NSString *gName = g[@"name"] ?: tid;
+                      if (!basePkg) {
+                          [self log:[NSString stringWithFormat:@"[%@] Ignorado: possui Update/DLC mas falta o Jogo Base.", tid]];
+                          continue;
                       }
-                  }
 
-                  NSString *zipOut = [doc stringByAppendingPathComponent:@"github_kit.zip"];
-                  if (build_zip_file(staging, zipOut)) {
-                      NSDictionary *za = [fm attributesOfItemAtPath:zipOut error:nil];
-                      [self log:[NSString stringWithFormat:@"CONCLUIDO! Documents/github_kit.zip (%.1f MB) pronto! Agora voce ja pode apagar os arquivos .nsp originais e subir apenas o github_kit.zip no GitHub!", [za fileSize] / (1024.0 * 1024.0)]];
-                  } else {
-                      [self log:@"ERRO ao gerar github_kit.zip"];
+                      [self log:[NSString stringWithFormat:@"\n=== JOGO DETECTADO: %@ (%@) ===", gName, tid]];
+                      [self log:[NSString stringWithFormat:@"  Base: %@", basePkg.lastPathComponent]];
+                      [self log:[NSString stringWithFormat:@"  Update: %@", [updPkg isEqualToString:@"-"] ? @"Nenhum" : updPkg.lastPathComponent]];
+                      [self log:[NSString stringWithFormat:@"  DLCs: %lu pacote(s)", (unsigned long)dlcs.count]];
+
+                      NSString *gameRoot = [[doc stringByAppendingPathComponent:@"Games"] stringByAppendingPathComponent:tid];
+                      NSString *staging = [gameRoot stringByAppendingPathComponent:@"_kit_staging"];
+                      [fm removeItemAtPath:staging error:nil];
+                      [fm createDirectoryAtPath:staging withIntermediateDirectories:YES attributes:nil error:nil];
+
+                      // Salva o TitleID dentro do github_kit.zip para o GitHub Actions identificar automaticamente
+                      [tid writeToFile:[staging stringByAppendingPathComponent:@"title_id.txt"] atomically:YES encoding:NSUTF8StringEncoding error:nil];
+
+                      [self log:@"1/4 Gerando manifesto completo..."];
+                      fn(keys.UTF8String, basePkg.UTF8String, updPkg.UTF8String, staging.UTF8String, 2);
+
+                      [self log:@"2/4 Extraindo e fundindo Base + Update com LibHac..."];
+                      int rc = fn(keys.UTF8String, basePkg.UTF8String, updPkg.UTF8String, staging.UTF8String, 0);
+                      if (rc != 0 && rc != 3) {
+                          [self log:[NSString stringWithFormat:@"ERRO LibHac rc=%d", rc]];
+                          continue;
+                      }
+
+                      NSString *romfsOut = [gameRoot stringByAppendingPathComponent:@"romfs"];
+                      [fm removeItemAtPath:romfsOut error:nil];
+                      [fm moveItemAtPath:[staging stringByAppendingPathComponent:@"RomFS"] toPath:romfsOut error:nil];
+                      [self log:[NSString stringWithFormat:@"-> RomFS completo salvo em: Documents/Games/%@/romfs/", tid]];
+
+                      int idx = 1;
+                      for (NSString *d in dlcs) {
+                          [self log:[NSString stringWithFormat:@"3/4 Extraindo DLC #%d: %@...", idx, d.lastPathComponent]];
+                          NSString *aocOut = [NSString stringWithFormat:@"%@/aoc/%03d", staging, idx];
+                          NSString *docAoc = [NSString stringWithFormat:@"%@/aoc/%03d", gameRoot, idx];
+                          [fm createDirectoryAtPath:aocOut withIntermediateDirectories:YES attributes:nil error:nil];
+                          fn(keys.UTF8String, d.UTF8String, "-", aocOut.UTF8String, 1);
+                          [fm createDirectoryAtPath:[gameRoot stringByAppendingPathComponent:@"aoc"] withIntermediateDirectories:YES attributes:nil error:nil];
+                          [fm removeItemAtPath:docAoc error:nil];
+                          [fm copyItemAtPath:aocOut toPath:docAoc error:nil];
+                          idx++;
+                      }
+
+                      [self log:@"4/4 Selecionando ExeFS + Shaders Universais e empacotando github_kit..."];
+                      NSString *slimRomfs = [staging stringByAppendingPathComponent:@"RomFS"];
+                      [fm createDirectoryAtPath:slimRomfs withIntermediateDirectories:YES attributes:nil error:nil];
+                      NSDirectoryEnumerator *en = [fm enumeratorAtPath:romfsOut];
+                      NSString *rel = nil;
+                      while ((rel = [en nextObject])) {
+                          NSString *full = [romfsOut stringByAppendingPathComponent:rel];
+                          NSDictionary *a = [fm attributesOfItemAtPath:full error:nil];
+                          if (![a.fileType isEqualToString:NSFileTypeRegular]) continue;
+                          if (should_include_in_universal_kit(rel, [a fileSize])) {
+                              NSString *dst = [slimRomfs stringByAppendingPathComponent:rel];
+                              [fm createDirectoryAtPath:[dst stringByDeletingLastPathComponent] withIntermediateDirectories:YES attributes:nil error:nil];
+                              [fm copyItemAtPath:full toPath:dst error:nil];
+                          }
+                      }
+
+                      NSString *zipName = [NSString stringWithFormat:@"github_kit_%@.zip", tid];
+                      NSString *zipOut = [gameRoot stringByAppendingPathComponent:zipName];
+                      if (build_zip_file(staging, zipOut)) {
+                          NSDictionary *za = [fm attributesOfItemAtPath:zipOut error:nil];
+                          [self log:[NSString stringWithFormat:@"SUCESSO! Kit Universal gerado em:\nDocuments/Games/%@/%@ (%.1f MB)", tid, zipName, [za fileSize] / (1024.0 * 1024.0)]];
+                      } else {
+                          [self log:@"ERRO ao gerar github_kit.zip"];
+                      }
+                      [fm removeItemAtPath:staging error:nil];
                   }
-                  [fm removeItemAtPath:staging error:nil];
+                  [self log:@"\n=== PROCESSAMENTO UNIVERSAL FINALIZADO! ==="];
                   dispatch_async(dispatch_get_main_queue(), ^{ self.btn.enabled = YES; });
               });
           }
@@ -374,19 +465,19 @@ jobs:
             "$RUNNER_TEMP/ExtractorApp/main.m" \
             -framework UIKit -framework Foundation \
             -lz \
-            -o "$RUNNER_TEMP/Payload/SpkExtractor.app/SpkExtractor"
+            -o "$RUNNER_TEMP/Payload/NXExtractor.app/NXExtractor"
 
-          cat > "$RUNNER_TEMP/Payload/SpkExtractor.app/Info.plist" << 'PLIST'
+          cat > "$RUNNER_TEMP/Payload/NXExtractor.app/Info.plist" << 'PLIST'
           <?xml version="1.0" encoding="UTF-8"?>
           <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
           <plist version="1.0">
           <dict>
-            <key>CFBundleExecutable</key><string>SpkExtractor</string>
-            <key>CFBundleIdentifier</key><string>com.kinttany.spkextractor</string>
-            <key>CFBundleName</key><string>SpkExtractor</string>
-            <key>CFBundleDisplayName</key><string>SpkExtractor</string>
-            <key>CFBundleVersion</key><string>1.0</string>
-            <key>CFBundleShortVersionString</key><string>1.0</string>
+            <key>CFBundleExecutable</key><string>NXExtractor</string>
+            <key>CFBundleIdentifier</key><string>com.kinttany.nxextractor</string>
+            <key>CFBundleName</key><string>NXExtractor</string>
+            <key>CFBundleDisplayName</key><string>NXExtractor</string>
+            <key>CFBundleVersion</key><string>2.0</string>
+            <key>CFBundleShortVersionString</key><string>2.0</string>
             <key>CFBundlePackageType</key><string>APPL</string>
             <key>LSRequiresIPhoneOS</key><true/>
             <key>UIDeviceFamily</key><array><integer>1</integer><integer>2</integer></array>
@@ -398,25 +489,107 @@ jobs:
           PLIST
 
           codesign -f -s - "$FW_DIR"
-          codesign -f -s - "$RUNNER_TEMP/Payload/SpkExtractor.app"
+          codesign -f -s - "$RUNNER_TEMP/Payload/NXExtractor.app"
           cd "$RUNNER_TEMP"
-          zip -qry "$RUNNER_TEMP/SpkIOSzero_Extractor.ipa" Payload
-          ls -lh "$RUNNER_TEMP/SpkIOSzero_Extractor.ipa"
+          zip -qry "$RUNNER_TEMP/NXUniversal_Extractor.ipa" Payload
+          ls -lh "$RUNNER_TEMP/NXUniversal_Extractor.ipa"
 
-      - name: 3B. [Modo build_thin_game_ipa] Compilar Jogo a partir do github_kit.zip
+      - name: 3B. [Modo build_thin_game_ipa] Compilar QUALQUER Jogo a partir do github_kit.zip
         if: ${{ inputs.mode == 'build_thin_game_ipa' }}
         env:
           KIT_URL: ${{ inputs.github_kit_url }}
         run: |
+          export PATH="$HOME/.dotnet:$PATH"
+          brew install xcodegen
+          pip3 install --break-system-packages lz4 capstone fonttools backports.zstd
+
+          # Garante que temos a arvore completa do nxnative para compilar qualquer jogo
+          if [ ! -f "dm/ios/tools/build_ipa.sh" ]; then
+            git clone --depth 1 https://github.com/seedds/nxnative.git "$RUNNER_TEMP/nx_up"
+            cp -Rn "$RUNNER_TEMP/nx_up/." .
+          fi
+
+          # Aplica patch universal para Thin IPA (nao empacotar RomFS gigante e aceitar Documents/romfs solto)
+          python3 - << 'PYEOF'
+          from pathlib import Path
+          main_m = Path("dm/ios/Sources/main.m")
+          s = main_m.read_text(encoding="utf-8")
+          old_marker = 'if ([fm fileExistsAtPath:[documentFolder stringByAppendingPathComponent:@DM_GAME_ROMFS_MARKER]]) return documentFolder;'
+          new_marker = old_marker + '\n    if ([fm contentsOfDirectoryAtPath:documentFolder error:nil].count > 0) return documentFolder;'
+          if 'contentsOfDirectoryAtPath:documentFolder' not in s:
+              s = s.replace(old_marker, new_marker)
+              main_m.write_text(s, encoding="utf-8")
+
+          bsh = Path("dm/ios/tools/build_ipa.sh")
+          b = bsh.read_text(encoding="utf-8")
+          b = b.replace(
+              'python3 "$DM/tools/romfs.py" "$ROMFS" "$MARKER" || die "no RomFS at $ROMFS (missing $MARKER)"',
+              'echo "[Universal Thin IPA] RomFS sera lido de Documents/romfs no iPhone"'
+          )
+          b = b.replace('"Payload/DmIOS.app/romfs=$ROMFS"', '')
+          bsh.write_text(b, encoding="utf-8")
+          PYEOF
+
           curl -L --fail -o "$RUNNER_TEMP/github_kit.zip" "$KIT_URL"
           mkdir -p "$RUNNER_TEMP/kit"
           unzip -q "$RUNNER_TEMP/github_kit.zip" -d "$RUNNER_TEMP/kit"
-          ls -la "$RUNNER_TEMP/kit"
 
-      - name: 4. Upload do IPA nos Artifacts
+          # Descobre automaticamente o Title ID do jogo a partir de title_id.txt ou ExeFS/main.npdm
+          TITLE_ID=$(python3 - << 'PYEOF'
+          import os, struct
+          from pathlib import Path
+          kit = Path(os.environ["RUNNER_TEMP"]) / "kit"
+          tid_file = kit / "title_id.txt"
+          if tid_file.exists():
+              print(tid_file.read_text().strip().upper())
+          else:
+              npdm = (kit / "ExeFS" / "main.npdm").read_bytes()
+              aci0 = struct.unpack_from("<I", npdm, 0x70)[0]
+              tid = struct.unpack_from("<Q", npdm, aci0 + 0x10)[0]
+              print(f"{tid:016X}")
+          PYEOF
+          )
+          echo "Jogo detectado para compilacao universal: TITLE_ID=$TITLE_ID"
+
+          # Se o jogo ainda nao tiver perfil no repositorio nxnative, gera automaticamente via survey + profile_guess!
+          if [ ! -d "dm/games/$TITLE_ID" ]; then
+            echo "Gerando perfil automatico para $TITLE_ID..."
+            python3 dm/tools/survey/game_survey.py "$RUNNER_TEMP/kit" -o "$RUNNER_TEMP/survey.md" --manifest "$RUNNER_TEMP/kit/manifest.tsv" || true
+            python3 - << PYEOF
+          import sys
+          from pathlib import Path
+          sys.path.insert(0, "dm/games")
+          import profile_guess
+          prof_dir = Path("dm/games/$TITLE_ID")
+          prof_dir.mkdir(parents=True, exist_ok=True)
+          profile_guess.write_provisional_profile(Path("$RUNNER_TEMP/survey.md"), Path("$RUNNER_TEMP/kit"), prof_dir)
+          PYEOF
+          fi
+
+          # Reescreve todos os modulos NSO (ExeFS) para ARM64 iOS
+          mkdir -p "$RUNNER_TEMP/patched"
+          python3 dm/tools/patch_nso.py "$RUNNER_TEMP/kit/ExeFS" "$RUNNER_TEMP/patched" --game "$TITLE_ID"
+
+          # Extrai e compila shaders (NVN / Vulkan) se presentes no kit
+          mkdir -p "$RUNNER_TEMP/shader_out"
+          python3 dm/gfx/tools/shader_split.py "$RUNNER_TEMP/kit/RomFS" "$RUNNER_TEMP/shader_pkg" --game "$TITLE_ID" || true
+          if [ -d "$RUNNER_TEMP/shader_pkg" ]; then
+            IOSOUT=1 ALLOW_OTHER_METAL=1 python3 dm/gfx/tools/dmsh_build.py "$RUNNER_TEMP/shader_pkg" --game "$TITLE_ID" || true
+          fi
+
+          # Empacota o Thin IPA com Bundle ID, Nome e Icone proprios daquele jogo!
+          bash dm/ios/tools/build_ipa.sh \
+            --game "$TITLE_ID" \
+            --patched "$RUNNER_TEMP/patched" \
+            --romfs "$RUNNER_TEMP/kit/RomFS" \
+            --nacp "$RUNNER_TEMP/kit/control.nacp" \
+            --icon "$RUNNER_TEMP/kit/icon.jpg" \
+            -o "$RUNNER_TEMP/${TITLE_ID}_Thin.ipa"
+
+      - name: 4. Upload do IPA Universal nos Artifacts
         uses: actions/upload-artifact@v4
         with:
-          name: SpkIOSzero-${{ inputs.mode || 'build_extractor_ipa' }}-Artifact
+          name: NXUniversal-${{ inputs.mode || 'build_extractor_ipa' }}-Artifact
           path: |
-            ${{ runner.temp }}/SpkIOSzero_Extractor.ipa
-            ${{ runner.temp }}/DBSparkingZero_Thin.ipa
+            ${{ runner.temp }}/NXUniversal_Extractor.ipa
+            ${{ runner.temp }}/*_Thin.ipa
