@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""M8.18.3: Complete render unblock + 0x447b0 crash fix + root log.txt & crash.txt persistence.
+"""M8.18.6: Complete render unblock + 0x447b0 null-spu_context guard & ARM64 fault recovery + root log.txt & crash.txt.
 1. Fix 0x447b0 SIGSEGV: when spu_ascension_run_c8_generated_irq yields on 0x00AD0 spin,
    set g_spurs_pm_exited = 1, g_spu_trampoline_fn = NULL, and return 1 (handled!) so callers
    like lifted spu_003FEC0 return immediately instead of falling through to unbased 0x447b0 write.
@@ -45,6 +45,9 @@ static volatile uint64_t g_asc_last_spu_pc = 0;
 static volatile uint64_t g_asc_last_spu_img = 0;
 static volatile uint64_t g_asc_last_spu_num = 0;
 static volatile uint64_t g_asc_last_spu_pm = 0;
+static volatile uint64_t g_asc_last_spu_ctx = 0;
+static volatile uint64_t g_asc_recovered_faults = 0;
+static uint8_t s_asc_null_ctx_scratch[0x80000] __attribute__((aligned(16)));
 static volatile uint64_t g_asc_last_mfc_ea = 0;
 static volatile uint64_t g_asc_last_mfc_lsa = 0;
 static volatile uint64_t g_asc_last_mfc_sz = 0;
@@ -82,10 +85,22 @@ static void asc_crash_WriteHex(char* buf, size_t cap, const char* prefix, uint64
     buf[pos] = '\\0';
 }}
 
+extern _Thread_local volatile unsigned g_spurs_pm_exited;
+
 static void asc_signal_handler(int sig, siginfo_t* info, void* uap) {{
+    int can_recover = 0;
+    uint64_t far_val = info ? (uint64_t)(uintptr_t)info->si_addr : 0;
+#if defined(__aarch64__)
+    ucontext_t* uc = (ucontext_t*)uap;
+    if (uc && uc->uc_mcontext) far_val = (uint64_t)uc->uc_mcontext->__es.__far;
+    if ((sig == SIGSEGV || sig == SIGBUS) && uc && uc->uc_mcontext && far_val < 0x80000ULL &&
+        (uint64_t)uc->uc_mcontext->__ss.__pc > 0x100000000ULL) can_recover = 1;
+#endif
+    uint64_t rec_num = __atomic_fetch_add(&g_asc_recovered_faults, 1, __ATOMIC_RELAXED);
     int fds[2];
-    fds[0] = open(g_asc_doc_crash_path, O_CREAT | O_WRONLY | O_TRUNC | O_SYNC, 0644);
-    fds[1] = open(g_asc_root_crash_path, O_CREAT | O_WRONLY | O_TRUNC | O_SYNC, 0644);
+    if (!can_recover || rec_num < 16) {{
+    fds[0] = open(g_asc_doc_crash_path, O_CREAT | O_WRONLY | (rec_num == 0 ? O_TRUNC : O_APPEND) | O_SYNC, 0644);
+    fds[1] = open(g_asc_root_crash_path, O_CREAT | O_WRONLY | (rec_num == 0 ? O_TRUNC : O_APPEND) | O_SYNC, 0644);
 
     const char* sig_name = "UNKNOWN";
     if (sig == SIGSEGV) sig_name = "SIGSEGV (Segmentation fault)";
@@ -203,6 +218,27 @@ static void asc_signal_handler(int sig, siginfo_t* info, void* uap) {{
         close(fd);
     }}
 
+    }}
+#if defined(__aarch64__)
+    if (can_recover) {{
+        uint32_t insn = *(const uint32_t*)(uc->uc_mcontext->__ss.__pc);
+        unsigned rn = (insn >> 5) & 0x1Fu;
+        unsigned rt = insn & 0x1Fu;
+        uintptr_t scratch = (uintptr_t)s_asc_null_ctx_scratch;
+        for (unsigned r = 0; r < 29; ++r) {{
+            uint64_t rv = (uint64_t)uc->uc_mcontext->__ss.__x[r];
+            if (rv >= 0x40000ULL && rv < 0x80000ULL)
+                uc->uc_mcontext->__ss.__x[r] = scratch + (rv & 0x7FFFFULL);
+        }}
+        if (rn < 29 && uc->uc_mcontext->__ss.__x[rn] < 0x80000ULL)
+            uc->uc_mcontext->__ss.__x[rn] = scratch + (uc->uc_mcontext->__ss.__x[rn] & 0x7FFFFULL);
+        if ((insn & 0x00400000u) && rt < 29) uc->uc_mcontext->__ss.__x[rt] = 0;
+        uc->uc_mcontext->__ss.__pc += 4;
+        g_spurs_pm_exited = 1;
+        g_spu_trampoline_fn = NULL;
+        return;
+    }}
+#endif
     /* Re-raise default signal so iOS .ips is also generated */
     signal(sig, SIG_DFL);
     raise(sig);
@@ -251,7 +287,11 @@ static void asc_install_crash_and_root_logger(void) {{
 #endif
 """.replace("asc_crash_WriteHex", "asc_crash_WriteHex")
 
-    s = crash_logger_block + "\n" + s
+    anchor_inc = '#include "spu_channels.h"\n'
+    if anchor_inc in s:
+        s = s.replace(anchor_inc, anchor_inc + crash_logger_block + "\n", 1)
+    else:
+        s = crash_logger_block + "\n" + s
 
     # 1. Permitir C8 IRQ handler em policy_mode==1 e policy_mode==0 (runners do WWS)
     s = s.replace(
@@ -278,6 +318,7 @@ static void asc_install_crash_and_root_logger(void) {{
             /* {MARK}: WWS taskset runner hit 0x3FEC0 without PM IRQ stub; exit slice cleanly instead of crashing at 0x447b0 */
             g_spurs_pm_exited = 1;
             g_spu_trampoline_fn = NULL;
+            ctx->pc = 0;
             return 1;
         }}
         return 0; /* native-only missing AOT fail-closed; no interpreter */
@@ -319,7 +360,7 @@ static void asc_install_crash_and_root_logger(void) {{
                 s_asc_c8_spin_restores = 0;
                 g_spurs_pm_exited = 1;
                 g_spu_trampoline_fn = NULL;
-                return 2;
+                return 1;
             }}
         }} else {{
             s_asc_c8_spin_ctx = ctx;
@@ -334,7 +375,7 @@ static void asc_install_crash_and_root_logger(void) {{
             g_spu_trampoline_fn = NULL;
             return;
         }"""
-    new_call = f"""        if (c8_rc == 2) {{
+    new_call = f"""        if (c8_rc == 1 || c8_rc == 2) {{
             g_spurs_pm_exited = 1;
             g_spu_trampoline_fn = NULL;
             ctx->pc = 0;
@@ -348,6 +389,24 @@ static void asc_install_crash_and_root_logger(void) {{
         "void spu_indirect_branch(spu_context* ctx)\n{\n    ctx->pc &= SPU_LS_MASK;",
         "void spu_indirect_branch(spu_context* ctx)\n{\n    ctx->pc &= SPU_LS_MASK;\n#if defined(__APPLE__)\n    g_asc_last_spu_pc = ctx->pc;\n    g_asc_last_spu_img = ctx->image_id;\n    g_asc_last_spu_num = ctx->spu_num;\n    g_asc_last_spu_pm = ctx->policy_mode;\n#endif"
     )
+
+    drain_anchor = "void spu_drain_loop(spu_context* ctx)\\n{"
+    if drain_anchor not in s:
+        drain_anchor = "void spu_drain_loop(spu_context* ctx) {"
+    if drain_anchor in s:
+        s = s.replace(drain_anchor, drain_anchor + """
+    if (!ctx || (uintptr_t)ctx < 0x100000ULL) {
+        g_spu_trampoline_fn = NULL;
+        return;
+    }
+#if defined(__APPLE__)
+    __atomic_store_n(&g_asc_last_spu_ctx, (uint64_t)ctx, __ATOMIC_RELAXED);
+    __atomic_store_n(&g_asc_last_spu_pc, (uint64_t)(ctx->pc & 0x3FFFFu), __ATOMIC_RELAXED);
+    __atomic_store_n(&g_asc_last_spu_img, (uint64_t)(uint32_t)ctx->image_id, __ATOMIC_RELAXED);
+    __atomic_store_n(&g_asc_last_spu_num, (uint64_t)(uint32_t)ctx->spu_num, __ATOMIC_RELAXED);
+    __atomic_store_n(&g_asc_last_spu_pm, (uint64_t)(uint32_t)ctx->policy_mode, __ATOMIC_RELAXED);
+#endif
+""", 1)
 
     path.write_text(s)
 
