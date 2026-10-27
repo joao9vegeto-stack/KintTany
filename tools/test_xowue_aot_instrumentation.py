@@ -210,13 +210,13 @@ assert 'CURRENT_PROJECT_VERSION: "69"' in (root / "iOS" / "project.yml").read_te
 print("PASS: Build 68 lost-wakeup counters, all-thread worker-first watchdog, async-task recovery, PPC audit and audio throttle")
 
 # Build 69: QPC fast path, synthetic timebase, and complete diagnostics.
-assert "const bool qpcFastPath = guestAddress == 0x82C3C4D8u;" in engine
+assert "const bool qpcFastPath = guestAddress == 0x82C3C4D8u || guestAddress == 0x822A1E08u" in engine
 assert "const bool plateau = !qpcFastPath" in engine
 assert "if (!qpcFastPath && slot->count != 0u" in engine
 assert "loopEntries % 4096u" in engine
-assert "static thread_local uint64_t repeats=0u, syntheticOffset=0u;" in engine
-assert "syntheticOffset+=50000u;" in engine
-assert "tb64+=syntheticOffset;" in engine
+assert "static thread_local uint64_t offset=0,frames0=UINT64_MAX,swaps0=UINT64_MAX;" in engine
+assert "offset+=50000ull;" in engine
+assert "tb64+=offset;" in engine
 assert "snapshotAllGuestThreads()" in engine
 assert "add(g_mainGuestThread);" in engine and "add(g_graphicsInterruptThread);" in engine
 assert "static void logCodeAuditBuild69(uint8_t *base)" in engine
@@ -235,3 +235,6 @@ for token in ("buildMainThreadDiagnostic","g_mainThreadLastR31","XOWUE_STALL_THR
 assert "xowue_thread_checkpoint(0x82C3C4D8u, ctx);" in aot
 assert "xowue_thread_checkpoint(uint32_t, PPCContext &);" in runtime_stubs
 print("PASS: Build 69 main-thread context and QPC pacing diagnostics")
+
+for token in ("callerLR>=0x822A1C00u","callerLR>=0x822A0200u","callerLR>=0x824E6F50u","callerLR>=0x82C25800u"):
+    if token not in engine: raise SystemExit(f"Build 69 QPC loop caller range missing {token}")
