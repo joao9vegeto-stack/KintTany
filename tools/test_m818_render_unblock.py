@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Verify M8.18 render unblock is installed in upstream tree."""
+"""Verify M8.18 render unblock and crash logger are installed in upstream tree."""
 from pathlib import Path
 import argparse
 
@@ -16,7 +16,10 @@ for name, content in [("spu_channels.c", chan), ("spu_workload.c", wkl), ("spurs
     if "ASCENSION_M818_RENDER_UNBLOCK_V1" not in content:
         raise SystemExit(f"missing ASCENSION_M818_RENDER_UNBLOCK_V1 in {args.upstream}/{name}")
 
-if "ctx->pc = 0;" not in chan:
-    raise SystemExit(f"missing ctx->pc = 0; in {args.upstream}/runtime/spu/spu_channels.c")
+if "asc_signal_handler" not in chan:
+    raise SystemExit(f"missing asc_signal_handler in {args.upstream}/runtime/spu/spu_channels.c")
+
+if "g_spurs_pm_exited = 1;" not in chan:
+    raise SystemExit(f"missing g_spurs_pm_exited = 1; in {args.upstream}/runtime/spu/spu_channels.c")
 
 print(f"[PASS] M8.18 verification passed for {args.upstream}")
