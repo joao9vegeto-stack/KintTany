@@ -360,7 +360,8 @@ def patch_spu_workload(root: Path) -> None:
     if MARK in s:
         return
 
-    header_guard = f"""/* {MARK} */
+    header_guard = f"""#include <stdint.h>
+/* {MARK} */
 extern _Thread_local volatile unsigned g_spurs_pm_exited;
 static inline int spu_asc_wkl_ea_valid(uint32_t ea, uint32_t sz) {{
     return (ea >= 0x00100000u && ea < 0xF0000000u && sz <= 0x10000000u && (uint64_t)ea + sz <= 0xF0000000ULL);
