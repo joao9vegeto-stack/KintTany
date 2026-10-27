@@ -46,14 +46,14 @@ enum XOWUEDiagnostics {
     static func diagnosticExportURL() -> URL? {
         guard let sourceURL = fileURL(named: diagnosticFilename),
               let data = try? Data(contentsOf: sourceURL, options: .mappedIfSafe) else { return nil }
-        let maxBytes = 80 * 1024
+        let maxBytes = 24 * 1024
         let exportData: Data
         if data.count <= maxBytes {
             exportData = data
         } else {
-            let half = 40 * 1024
+            let half = 12 * 1024
             var bounded = Data(data.prefix(half))
-            bounded.append(Data("\n... [XOWUE DIAGNOSTIC LOG TRUNCATED IN MIDDLE (\(data.count) bytes total -> capped to 512 KB for iPhone)] ...\n".utf8))
+            bounded.append(Data("\n... [XOWUE DIAGNOSTIC LOG TRUNCATED IN MIDDLE (\(data.count) bytes total -> capped to 24 KB for iPhone)] ...\n".utf8))
             bounded.append(Data(data.suffix(half)))
             exportData = bounded
         }

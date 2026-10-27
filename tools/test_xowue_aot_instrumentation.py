@@ -96,7 +96,7 @@ assert "XOWUE_POOL_ALLOC_82DC2BF0" in engine and "XOWUE_POOL_INIT_82DC2B14" in e
 assert "CODE_AUDIT_B66" in engine and "CODE_AUDIT_83847ABC" in engine
 assert "XOWUE_VBLANK_WATCHDOG_SIGNAL" in engine
 assert "obj_creator_lr=0x%08X obj_signals=%u" in engine
-assert 'CURRENT_PROJECT_VERSION: "73"' in (root / "iOS" / "project.yml").read_text(encoding="utf-8")
+assert 'CURRENT_PROJECT_VERSION: "74"' in (root / "iOS" / "project.yml").read_text(encoding="utf-8")
 print("PASS: Build 66 allocator, PPC audit, synchronization telemetry and vblank watchdog hooks")
 
 # Build 34: Xbox object attributes must use root/name/flags at offsets 0/4/8
@@ -270,3 +270,10 @@ assert "storeGuestBe32(gm->base,0x4004ED80u+4u,1u)" in engine_b73
 assert "signalGuestEventHandle(0x00000100u)" in engine_b73
 assert "THREAD7_82B3DE30" in engine_b73
 print("PASS: Build 73 guest DISPATCHER_HEADER SignalState wake and thread 2/3/7/8/10/11 audits")
+
+# Build 74 checks: BinkWait bypass and Thread 10 spinlock audit
+engine_b74 = Path("Runtime/XOWUEEngine.cpp").read_text(encoding="utf-8")
+assert "xowue_bink_wait_bypass_stub" in engine_b74
+assert "THREAD10_SPIN_826CF060" in engine_b74
+assert "WAIT_CALLER_82C4D4A8" in engine_b74
+print("PASS: Build 74 BinkWait 0x822A0278 bypass stub and Thread 10 audit")

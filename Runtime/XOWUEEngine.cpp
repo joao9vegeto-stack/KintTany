@@ -2043,7 +2043,7 @@ static void logCodeAuditBuild69(uint8_t *base) {
  {0x822A01C0u,0x822A0460u,"BINK_822A0278"},{0x824E6F10u,0x824E7140u,"WORKER_824E6FD8"},
  {0x82C257F0u,0x82C25A40u,"UE3_82C25840_82C259C8"},{0x823704C0u,0x82370D00u,"AUDIO_82370500_82370C4C"},
  {0x82370700u,0x82370840u,"MAIN_WAIT_8237073C_82370790"},{0x82371D80u,0x82371E60u,"RENDER_WAIT_82371DC8"},{0x825524C0u,0x82552640u,"RENDER_CALLER_82552500"},{0x82493820u,0x82493B20u,"STREAM_WAIT_82493860_82493A98"},{0x824E7140u,0x824E7360u,"WORKER_824E7158"},{0x82200150u,0x82200320u,"MAIN_TAIL_82200150"},
- {0x824278C0u,0x824279C0u,"AUDIO_82427940"},{0x824ACB80u,0x824ACC80u,"MAIN_824ACBF8"},{0x82B3DE00u,0x82B3DF20u,"THREAD7_82B3DE30"},{0x82690640u,0x82690740u,"THREAD2_82690678"},{0x82690D80u,0x82690E80u,"THREAD10_82690DC0"},{0x826903F0u,0x826904B0u,"QUEUE_82690468"},
+ {0x824278C0u,0x824279C0u,"AUDIO_82427940"},{0x824ACB80u,0x824ACC80u,"MAIN_824ACBF8"},{0x82B3DE00u,0x82B3DF20u,"THREAD7_82B3DE30"},{0x82690640u,0x82690740u,"THREAD2_82690678"},{0x82690D80u,0x82690E80u,"THREAD10_82690DC0"},{0x826CEFC0u,0x826CF100u,"THREAD10_SPIN_826CF060"},{0x82C4D440u,0x82C4D520u,"WAIT_CALLER_82C4D4A8"},{0x826903F0u,0x826904B0u,"QUEUE_82690468"},
  {0x826901E0u,0x826902B0u,"QUEUE_82690260"},{0x827E1250u,0x827E12D0u,"QUEUE_827E1290"},
  {0x82B49DE0u,0x82B49E60u,"AUDIO_82B49E20"},{0x82B4AAE0u,0x82B4AB80u,"AUDIO_82B4AB28"},{0x82B4AE00u,0x82B4AE80u,"AUDIO_82B4AE40"}};
  char l[192]; for(const auto&r:rs){std::snprintf(l,sizeof(l),"CODE_AUDIT_B69_BEGIN name=%s range=0x%08X..0x%08X",r.n,r.b,r.e);recordRuntimeTrace(l);
@@ -2318,7 +2318,31 @@ static void __xowue_sub_83847AC0_init(PPCContext &ctx, uint8_t *base) {
 }
 static void __xowue_sub_83847AC4_free(PPCContext &ctx, uint8_t *) { ctx.r3.u64=0ull; }
 
+static void xowue_bink_wait_bypass_stub(PPCContext &context, uint8_t *base) {
+    (void)base;
+    pumpGuestXenosRingBuffer();
+    if (auto gm = g_activeGuestMemory.lock(); gm && gm->base) {
+        storeGuestBe32(gm->base, 0x4004ED80u + 4u, 1u);
+        storeGuestBe32(gm->base, 0x4004EDD0u + 4u, 1u);
+    }
+    signalGuestEventHandle(0x4004ED80u);
+    signalGuestEventHandle(0x4004EDD0u);
+    signalGuestEventHandle(0x00000100u);
+    signalGuestEventHandle(0x00000102u);
+    signalGuestEventHandle(0x00000112u);
+    signalGuestEventHandle(0x00000115u);
+    signalGuestEventHandle(0x70016FA0u);
+    signalGuestEventHandle(0x7003DD80u);
+    context.r3.u64 = 0u;
+}
+
 PPCFunc *xowue_lookup_indirect(PPCContext &context, uint8_t *base, uint32_t target) {
+    // Build 74: bypass the BinkWait/movie-audio sync spin after warmup.
+    if (target == 0x822A0278u) {
+        static std::atomic<uint32_t> s_binkWaitCalls{0};
+        const uint32_t c = s_binkWaitCalls.fetch_add(1, std::memory_order_relaxed) + 1u;
+        if (c > 64u) return &xowue_bink_wait_bypass_stub;
+    }
     // Generated PPC code can remain in a guest-side indirect-dispatch loop
     // without entering a syscall/wait primitive. Poll cancellation here so the
     // native Exit button can unwind such loops instead of leaving an orphaned
@@ -2710,6 +2734,7 @@ extern "C" int xowue_boot_xex(const char *path, char *output, size_t output_capa
                 ? static_cast<uint32_t>(displacement)
                 : static_cast<uint32_t>(pc + static_cast<uint32_t>(displacement));
             if (target != 0x82C3C4D8u) continue;
+            if (qpcCallers < 4u) {
             const char *form = (word & 1u) ? "BL" : "B";
             char callerLine[160];
             std::snprintf(callerLine, sizeof(callerLine),
@@ -2740,6 +2765,7 @@ extern "C" int xowue_boot_xex(const char *path, char *output, size_t output_capa
             }
             std::fprintf(stderr, "%s\n", dump);
             recordRuntimeTrace(dump);
+            }
             ++qpcCallers;
         }
         char qpcSummary[112];
