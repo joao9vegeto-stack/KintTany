@@ -212,6 +212,8 @@ struct GuestWaitable {
     uint32_t recursion = 0u;
     uint64_t timerGeneration = 0u;
     uint64_t pulseGeneration = 0u;
+    uint64_t signalGeneration = 0u;
+    uint32_t unconsumedSignals = 0u;
     uint32_t creatorLr = 0u;
     uint32_t creatorTid = 0u;
     uint32_t guestHeaderAddr = 0u;
@@ -320,6 +322,9 @@ uint32_t g_smallGuestPoolEnd = 0u;
 std::atomic<uint32_t> g_smallGuestPoolLogs{0u};
 std::atomic<uint32_t> g_syncObjectLogs{0u};
 std::atomic<uint32_t> g_vblankWatchdogLogs{0u};
+std::atomic<uint32_t> g_waitWatchdogLogs{0u};
+std::atomic<uint32_t> g_workerWatchdogWakes{0u};
+std::atomic<uint32_t> g_thread2WatchdogWakes{0u};
 std::atomic<bool> g_build66AuditEmitted{false};
 uint32_t g_nextPhysicalAllocation = kFirstPhysicalAllocation;
 uint32_t g_nextGuestHandle = 0x100u;
@@ -1082,6 +1087,15 @@ struct GuestWaitStateScope {
     GuestThread *thread;
 };
 
+static void markGuestWaitableSignaledLocked(const std::shared_ptr<GuestWaitable> &waitable) {
+    if (!waitable) return;
+    waitable->signaled = true;
+    ++waitable->signalGeneration;
+    if (waitable->unconsumedSignals == 0u) ++waitable->unconsumedSignals;
+    waitable->signalCount.fetch_add(1u, std::memory_order_relaxed);
+    syncGuestDispatcherSignalState(waitable);
+}
+
 uint32_t waitGuestObject(const std::shared_ptr<GuestWaitable> &waitable,
                          const GuestTimeout &timeout, bool alertable = false) {
     if (!waitable) return kNtStatusInvalidHandle;
@@ -1098,13 +1112,14 @@ uint32_t waitGuestObject(const std::shared_ptr<GuestWaitable> &waitable,
             ? waitable->semaphoreCount > 0
             : waitable->kind == GuestWaitable::Kind::Mutant
                 ? waitable->ownerThread == 0u || waitable->ownerThread == g_currentGuestThreadId
-                : waitable->signaled;
+                : (waitable->signaled || waitable->unconsumedSignals != 0u);
         return available || waitable->pulseGeneration != initialPulseGeneration ||
                g_schedulerStopRequested.load() || (alertable && guestApcCanInterruptWait());
     };
     const auto deadline = timeout ? std::optional<std::chrono::steady_clock::time_point>(
         std::chrono::steady_clock::now() + *timeout) : std::nullopt;
-    auto nextWatchdog = std::chrono::steady_clock::now() + std::chrono::milliseconds(32);
+    const auto watchdogInterval = isMainThread ? std::chrono::milliseconds(32) : std::chrono::milliseconds(16);
+    auto nextWatchdog = std::chrono::steady_clock::now() + watchdogInterval;
     uint64_t lastSwapCount = 0;
     { std::lock_guard<std::mutex> graphicsLock(g_xenosMutex); lastSwapCount = g_xenosFrontend.swaps; }
     for (;;) {
@@ -1118,44 +1133,56 @@ uint32_t waitGuestObject(const std::shared_ptr<GuestWaitable> &waitable,
             ? waitable->semaphoreCount > 0
             : waitable->kind == GuestWaitable::Kind::Mutant
                 ? waitable->ownerThread == 0u || waitable->ownerThread == g_currentGuestThreadId
-                : waitable->signaled;
+                : (waitable->signaled || waitable->unconsumedSignals != 0u);
         if (available) {
             if (waitable->kind == GuestWaitable::Kind::Semaphore) { --waitable->semaphoreCount; waitable->signaled = waitable->semaphoreCount > 0; }
             else if (waitable->kind == GuestWaitable::Kind::Mutant) { waitable->ownerThread = g_currentGuestThreadId; ++waitable->recursion; waitable->signaled = false; }
-            else if (!waitable->manualReset) waitable->signaled = false;
+            else {
+                if (waitable->unconsumedSignals != 0u) --waitable->unconsumedSignals;
+                if (!waitable->manualReset) waitable->signaled = false;
+            }
             syncGuestDispatcherSignalState(waitable);
             return kNtStatusSuccess;
         }
+        // Finite and infinite waits are both polled in bounded slices so every guest thread
+        // can be recovered during a graphics stall. Worker threads get the earlier deadline.
+        const auto nowBeforeWait = std::chrono::steady_clock::now();
+        if (deadline && nowBeforeWait >= *deadline) return kNtStatusTimeout;
+        const auto sliceEnd = nowBeforeWait + std::chrono::milliseconds(16);
         if (deadline) {
+            if (waitable->changed.wait_until(lock, std::min(sliceEnd, *deadline), ready)) continue;
             if (std::chrono::steady_clock::now() >= *deadline) return kNtStatusTimeout;
-            waitable->changed.wait_until(lock, *deadline, ready);
+        } else if (waitable->changed.wait_for(lock, std::chrono::milliseconds(16), ready)) {
             continue;
         }
-        // No Xbox guest wait may park a host thread forever: service GPU progress in bounded slices.
-        if (waitable->changed.wait_for(lock, std::chrono::milliseconds(16), ready)) continue;
         const auto now = std::chrono::steady_clock::now();
-        const bool watchdogWorker = !isMainThread &&
-            (currentLr == 0x829F0698u || currentLr == 0x82585FB4u || currentLr == 0x82C4BEB8u);
-        if (isMainThread || watchdogWorker) {
-            uint64_t swaps = 0;
-            { std::lock_guard<std::mutex> graphicsLock(g_xenosMutex); swaps = g_xenosFrontend.swaps; }
-            if (now >= nextWatchdog && (isMainThread || swaps == lastSwapCount)) {
-                lock.unlock(); pumpGuestXenosRingBuffer(); lock.lock();
-                waitable->signaled = true;
-                waitable->signalCount.fetch_add(1u, std::memory_order_relaxed);
-                syncGuestDispatcherSignalState(waitable);
-                waitable->changed.notify_all(); g_waitSetChanged.notify_all();
-                if (g_vblankWatchdogLogs.fetch_add(1u, std::memory_order_relaxed) < 48u) {
-                    char event[320];
-                    std::snprintf(event, sizeof(event),
-                        "XOWUE_VBLANK_WATCHDOG_SIGNAL tid=0x%08X wait_obj=0x%08X guest_addr=0x%08X lr=0x%08X main=%u swaps=%llu",
-                        currentTid, waitable->handle, waitable->guestHeaderAddr, currentLr,
-                        isMainThread ? 1u : 0u, static_cast<unsigned long long>(swaps));
-                    recordRuntimeTrace(event);
-                }
-                return kNtStatusSuccess;
+        uint64_t swaps = 0;
+        { std::lock_guard<std::mutex> graphicsLock(g_xenosMutex); swaps = g_xenosFrontend.swaps; }
+        if (swaps != lastSwapCount) {
+            lastSwapCount = swaps;
+            nextWatchdog = now + watchdogInterval;
+        } else if (now >= nextWatchdog) {
+            lock.unlock();
+            pumpGuestXenosRingBuffer();
+            lock.lock();
+            markGuestWaitableSignaledLocked(waitable);
+            if (validGuestRange(waitable->objectAddress + 4u, 4u))
+                PPC_STORE_U32(waitable->objectAddress + 4u, 1u);
+            waitable->changed.notify_all();
+            g_waitSetChanged.notify_all();
+            if (!isMainThread) {
+                g_workerWatchdogWakes.fetch_add(1u, std::memory_order_relaxed);
+                if (currentTid == 0xF8000008u)
+                    g_thread2WatchdogWakes.fetch_add(1u, std::memory_order_relaxed);
             }
-            if (swaps != lastSwapCount) { lastSwapCount = swaps; nextWatchdog = now + std::chrono::milliseconds(32); }
+            if (g_waitWatchdogLogs.fetch_add(1u, std::memory_order_relaxed) < 64u) {
+                char event[256];
+                std::snprintf(event, sizeof(event),
+                    "XOWUE_WAIT_WATCHDOG_WAKE tid=0x%08X wait_obj=0x%08X lr=0x%08X",
+                    currentTid, waitable->handle ? waitable->handle : waitable->objectAddress, currentLr);
+                recordRuntimeTrace(event);
+            }
+            return kNtStatusWait0;
         }
     }
 }
@@ -1295,11 +1322,17 @@ void signalGuestWaitable(const std::shared_ptr<GuestWaitable> &waitable) {
     if (!waitable) return;
     {
         std::lock_guard<std::mutex> lock(waitable->mutex);
-        waitable->signaled = true;
-        syncGuestDispatcherSignalState(waitable);
+        markGuestWaitableSignaledLocked(waitable);
     }
     waitable->changed.notify_all();
     g_waitSetChanged.notify_all();
+}
+
+bool signalGuestEventStructure(uint32_t address, uint8_t *base) {
+    auto waitable = ensurePointerWaitable(address, base);
+    if (!waitable || waitable->kind != GuestWaitable::Kind::Event) return false;
+    signalGuestWaitable(waitable);
+    return true;
 }
 
 void signalGuestEventHandle(uint32_t handle) {
@@ -1985,6 +2018,9 @@ static void emitBuild66CodeAudit(uint8_t *base) {
     dump(0x829F0618u,0x829F0718u,"CODE_AUDIT_B67_WORKER2_LR");
     dump(0x82585F34u,0x82586034u,"CODE_AUDIT_B67_WORKER34_LR");
     dump(0x82B4ADDCu,0x82B4AF5Cu,"CODE_AUDIT_B67_EVENT_CREATOR");
+    dump(0x829F62E0u,0x829F63D0u,"CODE_AUDIT_B68_MAIN_ASYNC_TASK");
+    dump(0x82C4BCC0u,0x82C4BE80u,"CODE_AUDIT_B68_EVENT_WAIT_IMPLEMENTATION");
+    dump(0x829F0600u,0x829F0720u,"CODE_AUDIT_B68_THREAD2_FULL");
     for(uint32_t pc=0x82000000u;pc+4u<=0x836DF000u;pc+=4u){const uint32_t w=loadGuestBe32(base,pc),low=w&0xFFFFu;if(low!=0x7ABCu&&low!=0x7AC0u&&low!=0x7AC4u)continue;
         char line[128];std::snprintf(line,sizeof(line),"CODE_AUDIT_83847ABC match_pc=0x%08X word=0x%08X",pc,w);recordRuntimeTrace(line);
         const uint32_t first=pc>=12u?pc-12u:0u;for(uint32_t q=first;q<=pc+12u&&validGuestRange(q,4u);q+=4u){std::snprintf(line,sizeof(line),"CODE_AUDIT_83847ABC pc=0x%08X word=0x%08X",q,loadGuestBe32(base,q));recordRuntimeTrace(line);}
@@ -2047,6 +2083,12 @@ extern "C" bool xowue_82dc2390_guard(PPCContext &context,uint8_t *base) {
 
 
 void xowue_thread_checkpoint(uint32_t guestAddress) {
+    if (g_currentGuestThread && g_currentGuestThread->handle == 0xF8000014u &&
+        (guestAddress == 0x82DC1FA0u || guestAddress == 0x82DC2390u)) {
+        static thread_local uint32_t audioLoopCalls = 0u;
+        if ((++audioLoopCalls & 63u) == 0u)
+            std::this_thread::sleep_for(std::chrono::milliseconds(2));
+    }
     auto auditMemory = g_activeGuestMemory.lock();
     if (auditMemory && auditMemory->base) emitBuild65CodeAudit(auditMemory->base);
     recordAotFunctionExecution(guestAddress);
@@ -6497,8 +6539,7 @@ void xowue_NtSetEvent(PPCContext &context, uint8_t *base) {
     {
         std::lock_guard<std::mutex> lock(waitable->mutex);
         previous = waitable->signaled;
-        waitable->signaled = true;
-        syncGuestDispatcherSignalState(waitable);
+        markGuestWaitableSignaledLocked(waitable);
     }
     if (previousStatePointer != 0u) {
         PPC_STORE_U32(previousStatePointer, previous ? 1u : 0u);
@@ -6516,6 +6557,8 @@ void xowue_NtClearEvent(PPCContext &context) {
     }
     std::lock_guard<std::mutex> lock(waitable->mutex);
     waitable->signaled = false;
+    // Preserve unconsumedSignals: ResetEvent must not erase a SetEvent that
+    // raced with a waiter acquiring the host mutex.
     syncGuestDispatcherSignalState(waitable);
     context.r3.u32 = kNtStatusSuccess;
 }
@@ -6560,10 +6603,8 @@ void xowue_KeSetEvent(PPCContext &context, uint8_t *base) {
     {
         std::lock_guard<std::mutex> lock(waitable->mutex);
         previous = waitable->signaled;
-        waitable->signaled = true;
-        syncGuestDispatcherSignalState(waitable);
+        markGuestWaitableSignaledLocked(waitable);
     }
-    waitable->signalCount.fetch_add(1u, std::memory_order_relaxed);
     waitable->changed.notify_all();
     g_waitSetChanged.notify_all();
     context.r3.u32 = previous ? 1u : 0u;
@@ -6578,6 +6619,7 @@ void xowue_KeResetEvent(PPCContext &context, uint8_t *base) {
     std::lock_guard<std::mutex> lock(waitable->mutex);
     context.r3.u32 = waitable->signaled ? 1u : 0u;
     waitable->signaled = false;
+    // Keep the generation/count so a racing waiter still observes the signal.
     syncGuestDispatcherSignalState(waitable);
 }
 
@@ -6595,6 +6637,16 @@ void xowue_NtWaitForSingleObjectEx(PPCContext &context, uint8_t *base) {
 
 void xowue_KeWaitForSingleObject(PPCContext &context, uint8_t *base) {
     if (!g_currentGuestThread) g_mainThreadGuestLr.store(static_cast<uint32_t>(context.lr), std::memory_order_relaxed);
+    const uint32_t waitedHandle = context.r3.u32;
+    static thread_local uint64_t lastMainWaitSwaps = 0u;
+    static thread_local uint32_t sameSwapAsyncWaits = 0u;
+    if (!g_currentGuestThread && waitedHandle == 0xF8000011u &&
+        static_cast<uint32_t>(context.lr) == 0x829F6390u) {
+        uint64_t swaps = 0u;
+        { std::lock_guard<std::mutex> graphicsLock(g_xenosMutex); swaps = g_xenosFrontend.swaps; }
+        if (swaps != lastMainWaitSwaps) { lastMainWaitSwaps = swaps; sameSwapAsyncWaits = 0u; }
+        ++sameSwapAsyncWaits;
+    }
     GuestTimeout timeout;
     if (!readGuestTimeout(base, context.r7.u32, timeout)) {
         context.r3.u32 = kNtStatusInvalidParameter;
@@ -6603,6 +6655,28 @@ void xowue_KeWaitForSingleObject(PPCContext &context, uint8_t *base) {
     if (g_currentGuestThread) g_currentGuestThread->lastGuestLr.store(static_cast<uint32_t>(context.lr), std::memory_order_relaxed);
     context.r3.u32 = waitGuestObject(ensurePointerWaitable(context.r3.u32, base), timeout,
                                      context.r6.u32 != 0u);
+    if (!g_currentGuestThread && waitedHandle == 0xF8000011u &&
+        static_cast<uint32_t>(context.lr) == 0x829F6390u &&
+        sameSwapAsyncWaits > 8u &&
+        g_thread2WatchdogWakes.load(std::memory_order_relaxed) >= 4u) {
+        const uint32_t taskPtr = context.r31.u32;
+        char event[512];
+        std::snprintf(event, sizeof(event),
+            "XOWUE_ASYNC_TASK_STATE sp=0x%08X frame=0x%08X task=0x%08X words=",
+            context.r1.u32, PPC_LOAD_U32(context.r1.u32), taskPtr);
+        for (uint32_t offset = 0u; offset <= 0x20u; offset += 4u) {
+            char word[24];
+            const uint32_t value = validGuestRange(taskPtr + offset, 4u) ? PPC_LOAD_U32(taskPtr + offset) : 0xFFFFFFFFu;
+            std::snprintf(word, sizeof(word), "%s%08X", offset ? "," : "", value);
+            std::strncat(event, word, sizeof(event) - std::strlen(event) - 1u);
+        }
+        recordRuntimeTrace(event);
+        if (validGuestRange(taskPtr + 8u, 4u) && PPC_LOAD_U32(taskPtr + 8u) == 0u) {
+            PPC_STORE_U32(taskPtr + 8u, 1u);
+            context.r11.u64 = 1ull;
+            recordRuntimeTrace("XOWUE_ASYNC_TASK_STATE forced task completion after worker watchdog wake threshold");
+        }
+    }
 }
 
 void xowue_NtWaitForMultipleObjectsEx(PPCContext &context, uint8_t *base) {

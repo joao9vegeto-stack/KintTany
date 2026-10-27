@@ -96,7 +96,7 @@ assert "XOWUE_POOL_ALLOC_82DC2BF0" in engine and "XOWUE_POOL_INIT_82DC2B14" in e
 assert "CODE_AUDIT_B66" in engine and "CODE_AUDIT_83847ABC" in engine
 assert "XOWUE_VBLANK_WATCHDOG_SIGNAL" in engine
 assert "obj_creator_lr=0x%08X obj_signals=%u" in engine
-assert 'CURRENT_PROJECT_VERSION: "67"' in (root / "iOS" / "project.yml").read_text(encoding="utf-8")
+assert 'CURRENT_PROJECT_VERSION: "68"' in (root / "iOS" / "project.yml").read_text(encoding="utf-8")
 print("PASS: Build 66 allocator, PPC audit, synchronization telemetry and vblank watchdog hooks")
 
 # Build 34: Xbox object attributes must use root/name/flags at offsets 0/4/8
@@ -195,5 +195,16 @@ assert "waitable->changed.wait_for(lock, std::chrono::milliseconds(16), ready)" 
 assert "g_waitSetChanged.wait_for(waitLock, std::chrono::milliseconds(16)" in engine
 assert "CODE_AUDIT_B67_MAIN_WAIT_LR" in engine
 assert "dump(0x82DC2A50u,0x82DC2B78u" in engine
-assert 'CURRENT_PROJECT_VERSION: "67"' in (root / "iOS" / "project.yml").read_text(encoding="utf-8")
-print("PASS: Build 67 main-thread wait identity, bounded wait slices and expanded PPC audit")
+assert "signalGeneration" in engine and "unconsumedSignals" in engine
+assert "signalGuestEventStructure" in engine
+assert "XOWUE_WAIT_WATCHDOG_WAKE" in engine
+assert "g_thread2WatchdogWakes.load(std::memory_order_relaxed) >= 4u" in engine
+assert "XOWUE_ASYNC_TASK_STATE sp=0x%08X frame=0x%08X task=0x%08X words=" in engine
+assert "context.r11.u64 = 1ull" in engine
+assert "CODE_AUDIT_B68_MAIN_ASYNC_TASK" in engine
+assert "CODE_AUDIT_B68_EVENT_WAIT_IMPLEMENTATION" in engine
+assert "CODE_AUDIT_B68_THREAD2_FULL" in engine
+assert "if ((++audioLoopCalls & 63u) == 0u)" in engine
+assert "std::chrono::milliseconds(2)" in engine
+assert 'CURRENT_PROJECT_VERSION: "68"' in (root / "iOS" / "project.yml").read_text(encoding="utf-8")
+print("PASS: Build 68 lost-wakeup counters, all-thread worker-first watchdog, async-task recovery, PPC audit and audio throttle")
