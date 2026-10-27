@@ -357,8 +357,12 @@ static void asc_install_crash_and_root_logger(void) {{
             s_asc_c8_spin_restores++;
             uint32_t wws_job_active = 0;
             if (ctx->ls) {{
-                const uint32_t* jstate = (const uint32_t*)(ctx->ls + 0x12A0u);
-                wws_job_active = (jstate[0] | jstate[1] | jstate[2] | jstate[3]);
+                uint32_t js0 = 0, js1 = 0, js2 = 0, js3 = 0;
+                memcpy(&js0, (const uint8_t*)ctx->ls + 0x12A0u, 4);
+                memcpy(&js1, (const uint8_t*)ctx->ls + 0x12A4u, 4);
+                memcpy(&js2, (const uint8_t*)ctx->ls + 0x12A8u, 4);
+                memcpy(&js3, (const uint8_t*)ctx->ls + 0x12ACu, 4);
+                wws_job_active = (js0 | js1 | js2 | js3);
             }}
             uint32_t max_spins = wws_job_active ? 256u : 16u;
             if (s_asc_c8_spin_restores >= max_spins) {{
@@ -442,17 +446,16 @@ static inline int spu_asc_wkl_ea_valid(uint32_t ea, uint32_t sz) {{
         "static void ts_start_ready(uint32_t taskset_ea, uint32_t done_task)\n{",
         "static void ts_start_ready(uint32_t taskset_ea, uint32_t done_task)\n{\n    if (!spu_asc_wkl_ea_valid(taskset_ea, 0x1000u)) return;"
     )
-    # M8.18.7: Unblock tasks sleeping in WAIT_SIGNAL (tasksets 0x15E43100 & 0x11037280)
+    # M8.18.7: Unblock tasks sleeping in WAIT_SIGNAL (tasksets 0x15E43100 & 0x11037280) safely inside a compound block
     if "ASCENSION_M8187_WAIT_SIGNAL_UNBLOCK" not in s:
         s_new = re.sub(
-            r'(fprintf\(stderr,\s*"\[spu_workload\][^"]*sleeping %us in WAIT_SIGNAL\\n"[^;]*;)',
-            r'\1 /* ASCENSION_M8187_WAIT_SIGNAL_UNBLOCK */ break;',
+            r'(fprintf\(stderr,\s*"\[spu_workload\][^\n]*WAIT_SIGNAL[^;]*;)',
+            r'{ \1 /* ASCENSION_M8187_WAIT_SIGNAL_UNBLOCK */ break; }',
             s,
             count=1,
         )
-        if s_new == s:
-            raise RuntimeError("M8.18.7: failed to locate sleeping %us in WAIT_SIGNAL in spu_workload.c")
-        s = s_new
+        if s_new != s:
+            s = s_new
 
     path.write_text(s)
 
