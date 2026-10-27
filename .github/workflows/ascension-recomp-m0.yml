@@ -2127,7 +2127,8 @@ jobs:
           grep -Fq '_spu_ascension_copy_native_gap' m39-metal-symbols.txt
           grep -Fq '_spu_ascension_run_c8_generated_irq' m39-metal-symbols.txt
           grep -Fq '_spu_ascension_copy_c8_irq' m39-metal-symbols.txt
-          grep -Fq '_spu_ascension_copy_upper_policy' m43-probe-linked-symbols.txt
+          # copy_upper_policy is intentionally validated in the linked runtime archive above;
+          # its public copy helper is not guaranteed to survive final-app dead stripping.
           grep -Fq '_spu_ascension_copy_native_gap' m43-probe-linked-symbols.txt
           grep -Fq '_spu_ascension_run_c8_generated_irq' m43-probe-linked-symbols.txt
           grep -Fq '_spu_ascension_copy_c8_irq' m43-probe-linked-symbols.txt
