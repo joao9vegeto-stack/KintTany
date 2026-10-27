@@ -69,8 +69,7 @@ jobs:
           </Project>
           EOF
 
-          # Injeta leitor nativo LibHac que abre qualquer NSP/XCI (Base, Update ou DLC) e extrai:
-          # TitleID Base (0100...000), Tipo (Application/Patch/AddOnContent), Nome Oficial do control.nacp e Icone JPEG do jogo!
+          # Usa APENAS a API oficial LibHac 0.19.0 (PartitionFileSystem + Nca) que ja esta importada no Program.cs!
           python3 - << 'PYEOF'
           import os
           from pathlib import Path
@@ -87,7 +86,8 @@ jobs:
 
                       KeySet ks = ExternalKeyReader.ReadKeyFile(k);
                       using var file = new LocalStorage(pkg, FileAccess.Read);
-                      IFileSystem pfs = OpenPackage(file, pkg);
+                      var pfs = new PartitionFileSystem();
+                      if (pfs.Initialize(file).IsFailure()) return 2;
 
                       ulong foundTid = 0;
                       string kind = "Unknown";
@@ -95,7 +95,7 @@ jobs:
 
                       foreach (var entry in pfs.EnumerateEntries("/", "*.nca")) {
                           using var ncaFile = new UniqueRef<IFile>();
-                          pfs.OpenFile(ref ncaFile.Ref, entry.FullPath.ToU8Span(), OpenMode.Read).ThrowIfFailure();
+                          if (pfs.OpenFile(ref ncaFile.Ref, entry.FullPath.ToU8Span(), OpenMode.Read).IsFailure()) continue;
                           var nca = new Nca(ks, ncaFile.Release().AsStorage());
                           ulong tid = nca.Header.TitleId;
                           if (tid != 0) {
@@ -117,7 +117,7 @@ jobs:
                                   using var nacpFile = new UniqueRef<IFile>();
                                   if (ctrlFs.OpenFile(ref nacpFile.Ref, "/control.nacp".ToU8Span(), OpenMode.Read).IsSuccess()) {
                                       byte[] nacp = new byte[0x4000];
-                                      nacpFile.Get.Read(out long _, 0, nacp).ThrowIfFailure();
+                                      nacpFile.Get.Read(out long _, 0, nacp);
                                       for (int lang = 0; lang < 16; lang++) {
                                           int off = lang * 0x300;
                                           int len = 0;
@@ -132,10 +132,10 @@ jobs:
                                       foreach (var ic in ctrlFs.EnumerateEntries("/", "icon_*.dat")) {
                                           using var icFile = new UniqueRef<IFile>();
                                           if (ctrlFs.OpenFile(ref icFile.Ref, ic.FullPath.ToU8Span(), OpenMode.Read).IsSuccess()) {
-                                              icFile.Get.GetSize(out long sz).ThrowIfFailure();
+                                              icFile.Get.GetSize(out long sz);
                                               if (sz > 0 && sz < 512 * 1024) {
                                                   byte[] buf = new byte[sz];
-                                                  icFile.Get.Read(out long _, 0, buf).ThrowIfFailure();
+                                                  icFile.Get.Read(out long _, 0, buf);
                                                   File.WriteAllBytes(outIcon, buf);
                                                   break;
                                               }
@@ -511,7 +511,7 @@ jobs:
               self.pkgsBadge = [self makeStatusPillWithFrame:CGRectMake(24 + pillW, 122, pillW, 42) title:@"ARQUIVOS" value:@"0 NSP/XCI"];
               self.gamesBadge = [self makeStatusPillWithFrame:CGRectMake(32 + pillW * 2, 122, pillW, 42) title:@"JOGOS" value:@"0 Prontos"];
 
-              // Carrossel Compacto (apenas 88px de altura!) com Icone real do Jogo + Nome Oficial + Title ID
+              // Card Compacto (88px de altura!) com Icone real do Jogo + Nome Oficial + Title ID
               self.carousel = [[UIScrollView alloc] initWithFrame:CGRectMake(16, 174, w - 32, 88)];
               self.carousel.autoresizingMask = UIViewAutoresizingFlexibleWidth;
               self.carousel.showsHorizontalScrollIndicator = NO;
@@ -531,7 +531,6 @@ jobs:
               self.progressBar.progress = 0.0;
               [self.view addSubview:self.progressBar];
 
-              // Console de Log amplo
               self.logView = [[UITextView alloc] initWithFrame:CGRectMake(16, 306, w - 32, h - 398)];
               self.logView.autoresizingMask = UIViewAutoresizingFlexibleWidth | UIViewAutoresizingFlexibleHeight;
               self.logView.backgroundColor = [UIColor colorWithRed:0.07 green:0.08 blue:0.10 alpha:1.0];
@@ -642,7 +641,6 @@ jobs:
                   card.layer.borderWidth = 2.0;
                   card.layer.borderColor = NS_CYAN_GLOW.CGColor;
 
-                  // Icone/Capa real extraida do control.nacp do jogo!
                   UIImageView *imgV = [[UIImageView alloc] initWithFrame:CGRectMake(10, 10, 64, 64)];
                   imgV.backgroundColor = [UIColor colorWithWhite:0.08 alpha:1.0];
                   imgV.layer.cornerRadius = 10;
@@ -789,7 +787,6 @@ jobs:
                           }
                       }
 
-                      // Se o pacote estiver em Spk/base, Spk/update ou Spk/dlcs, agrupa pela pasta principal (topFolder)
                       NSString *groupKey = topFolder;
                       if (!games[groupKey]) {
                           games[groupKey] = [@{
@@ -809,7 +806,6 @@ jobs:
                           games[groupKey][@"icon"] = iconFile;
                       }
 
-                      // Respeita tanto a pasta (base/update/dlcs) quanto o tipo NCA
                       if ([folderKind isEqualToString:@"Application"] || [detectedKind isEqualToString:@"Application"]) {
                           games[groupKey][@"base"] = full;
                       } else if ([folderKind isEqualToString:@"Patch"] || [detectedKind isEqualToString:@"Patch"]) {
@@ -822,7 +818,7 @@ jobs:
 
                   for (NSString *k in games) {
                       NSDictionary *g = games[k];
-                      [self log:[NSString stringWithFormat:@"✓ Jogo: %@ [ID: %@] | Base: %@ | Upd: %@ | DLCs: %lu",
+                      [self log:[NSString stringWithFormat:@"✓ Jogo: %@ [ID: %@]\n  • Base: %@\n  • Update: %@\n  • DLCs: %lu arquivo(s)",
                           g[@"name"], g[@"tid"],
                           g[@"base"] ? [g[@"base"] lastPathComponent] : @"AUSENTE na pasta base/",
                           g[@"upd"] ? [g[@"upd"] lastPathComponent] : @"Nenhum",
