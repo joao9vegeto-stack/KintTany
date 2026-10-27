@@ -153,7 +153,7 @@ def instrument_aot_entries(contents: str) -> tuple[str, int]:
         nonlocal instrumented
         instrumented += 1
         guest_address = int(match.group(2), 16)
-        checkpoint = f"xowue_thread_checkpoint(0x{guest_address:08X}u, ctx);
+        checkpoint = f"xowue_thread_checkpoint(0x{guest_address:08X}u, ctx)"
         return match.group(1) + chr(10) + chr(9) + checkpoint
 
     return PPC_FUNCTION_RE.sub(add_checkpoint, contents), instrumented
