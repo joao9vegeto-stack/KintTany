@@ -1597,7 +1597,7 @@ private struct XOWUERootView: View {
             .background(Color.black.opacity(0.45), in: RoundedRectangle(cornerRadius: 12))
 
             HStack(spacing: 16) {
-                if let url = XOWUEDiagnostics.fileURL(named: XOWUEDiagnostics.diagnosticFilename) {
+                if let url = XOWUEDiagnostics.diagnosticExportURL() {
                     ShareLink(item: url) {
                         Label(XOWUEDiagnostics.diagnosticFilename, systemImage: "doc.text")
                             .font(.system(size: 10, weight: .bold, design: .rounded))
