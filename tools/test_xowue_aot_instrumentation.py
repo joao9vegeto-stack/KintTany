@@ -206,7 +206,7 @@ assert "CODE_AUDIT_B68_EVENT_WAIT_IMPLEMENTATION" in engine
 assert "CODE_AUDIT_B68_THREAD2_FULL" in engine
 assert "if ((++audioLoopCalls & 63u) == 0u)" in engine
 assert "std::chrono::milliseconds(2)" in engine
-assert 'CURRENT_PROJECT_VERSION: "68"' in (root / "iOS" / "project.yml").read_text(encoding="utf-8")
+assert 'CURRENT_PROJECT_VERSION: "69"' in (root / "iOS" / "project.yml").read_text(encoding="utf-8")
 print("PASS: Build 68 lost-wakeup counters, all-thread worker-first watchdog, async-task recovery, PPC audit and audio throttle")
 
 # Build 69: QPC fast path, synthetic timebase, and complete diagnostics.
