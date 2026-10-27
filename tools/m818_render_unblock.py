@@ -114,7 +114,7 @@ static void asc_signal_handler(int sig, siginfo_t* info, void* uap) {{
     for (int f = 0; f < 2; ++f) {{
         int fd = fds[f];
         if (fd < 0) continue;
-        asc_write_str(fd, "=== ASCENSION RECOMP CRASH REPORT (M8.0.18) ===\\n");
+        asc_write_str(fd, "=== ASCENSION RECOMP CRASH REPORT (M8.18.6) ===\\n");
         asc_write_str(fd, "Signal: ");
         asc_write_str(fd, sig_name);
         asc_write_str(fd, "\\n");
@@ -235,7 +235,6 @@ static void asc_signal_handler(int sig, siginfo_t* info, void* uap) {{
         if ((insn & 0x00400000u) && rt < 29) uc->uc_mcontext->__ss.__x[rt] = 0;
         uc->uc_mcontext->__ss.__pc += 4;
         g_spurs_pm_exited = 1;
-        g_spu_trampoline_fn = NULL;
         return;
     }}
 #endif
@@ -259,7 +258,7 @@ static void asc_install_crash_and_root_logger(void) {{
     /* Create initial log.txt in Documents/ and container root and mirror stderr */
     int lfd = open(g_asc_doc_log_path, O_CREAT | O_WRONLY | O_TRUNC | O_SYNC, 0644);
     if (lfd >= 0) {{
-        const char* hdr = "=== ASCENSION RECOMP LIVE LOG (M8.0.18) ===\\n";
+        const char* hdr = "=== ASCENSION RECOMP LIVE LOG (M8.18.6) ===\\n";
         (void)write(lfd, hdr, strlen(hdr));
         /* Redirect stderr to Documents/log.txt so all runtime printf/fprintf(stderr) are flushed live */
         dup2(lfd, STDERR_FILENO);
@@ -267,7 +266,7 @@ static void asc_install_crash_and_root_logger(void) {{
     }}
     int rfd = open(g_asc_root_log_path, O_CREAT | O_WRONLY | O_TRUNC | O_SYNC, 0644);
     if (rfd >= 0) {{
-        const char* hdr = "=== ASCENSION RECOMP LIVE LOG (M8.0.18) — see Documents/log.txt and Documents/crash.txt ===\\n";
+        const char* hdr = "=== ASCENSION RECOMP LIVE LOG (M8.18.6) — see Documents/log.txt and Documents/crash.txt ===\\n";
         (void)write(rfd, hdr, strlen(hdr));
         close(rfd);
     }}
@@ -370,7 +369,7 @@ static void asc_install_crash_and_root_logger(void) {{
     if old_spin in s:
         s = s.replace(old_spin, new_spin, 1)
 
-    # M8.18.3: handle yield code 2 at the lifted C8 caller, preventing fallthrough to 0x447B0.
+    # M8.18.6: handle yield code 2 at the lifted C8 caller, preventing fallthrough to 0x447B0.
     old_call = """        if (c8_rc == 2) {
             g_spu_trampoline_fn = NULL;
             return;
@@ -396,7 +395,6 @@ static void asc_install_crash_and_root_logger(void) {{
     if drain_anchor in s:
         s = s.replace(drain_anchor, drain_anchor + """
     if (!ctx || (uintptr_t)ctx < 0x100000ULL) {
-        g_spu_trampoline_fn = NULL;
         return;
     }
 #if defined(__APPLE__)
@@ -549,7 +547,7 @@ def main() -> None:
     patch_cell_spurs(root)
     patch_spurs_policy(root)
     patch_ios_bootprobe_live_files(repo_root)
-    print("[PASS] M8.18.3 WWS 0x3FEC0/0x447b0 crash fixed + root log.txt & crash.txt enabled")
+    print("[PASS] M8.18.6 WWS 0x3FEC0/0x447b0 guard + ARM64 recovery + root log.txt/crash.txt")
 
 
 if __name__ == "__main__":
