@@ -16,15 +16,15 @@ fixture = (
     "PPC_FUNC_IMPL(__imp__sub_82ABCDEF) {\n    return;\n}\n"
 )
 expected = (
-    "PPC_FUNC_IMPL(__imp__sub_82345678) {\n\txowue_thread_checkpoint(0x82345678u);\n    return;\n}\n"
-    "PPC_FUNC_IMPL(__imp__sub_82ABCDEF) {\n\txowue_thread_checkpoint(0x82ABCDEFu);\n    return;\n}\n"
+    "PPC_FUNC_IMPL(__imp__sub_82345678) {\n\txowue_thread_checkpoint(0x82345678u, ctx);\n    return;\n}\n"
+    "PPC_FUNC_IMPL(__imp__sub_82ABCDEF) {\n\txowue_thread_checkpoint(0x82ABCDEFu, ctx);\n    return;\n}\n"
 )
 actual, count = module.instrument_aot_entries(fixture)
 if count != 2 or actual != expected:
     raise SystemExit("AOT entry instrumentation did not attach each guest address")
 
 legacy = "PPC_FUNC_IMPL(__imp__sub_82345678) {\n\txowue_thread_checkpoint();\n    return;\n}\n"
-wanted = "PPC_FUNC_IMPL(__imp__sub_82345678) {\n\txowue_thread_checkpoint(0x82345678u);\n    return;\n}\n"
+wanted = "PPC_FUNC_IMPL(__imp__sub_82345678) {\n\txowue_thread_checkpoint(0x82345678u, ctx);\n    return;\n}\n"
 upgraded, count = module.instrument_aot_entries(legacy)
 if count != 1 or upgraded != wanted:
     raise SystemExit("legacy checkpoint was not upgraded to an address-bearing hook")
@@ -228,6 +228,8 @@ assert 'CURRENT_PROJECT_VERSION: "69"' in (root / "iOS" / "project.yml").read_te
 print("PASS: Build 69 QPC fast path, synthetic timebase, main/interrupt thread snapshots, PPC code/data audit")
 
 # Build 69 checks for main-thread PPC context, thread snapshots, and QPC timer pacing.
+aot = (root / "tools" / "generate_aot.py").read_text(encoding="utf-8")
+runtime_stubs = source.read_text(encoding="utf-8")
 for token in ("buildMainThreadDiagnostic","g_mainThreadLastR31","XOWUE_STALL_THREADS_THREAD","49875000ull","syntheticOffset","decodedFrames","g_xenosFrontend.swaps"):
     if token not in engine: raise SystemExit(f"Build 69 missing runtime token {token}")
 assert "xowue_thread_checkpoint(0x82C3C4D8u, ctx);" in aot
