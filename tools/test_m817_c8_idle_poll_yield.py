@@ -14,7 +14,8 @@ for token in (
     "ASCENSION_M817_C8_IDLE_POLL_YIELD_V1",
     "s_asc_c8_spin_restores >= 16u",
     "g_spurs_pm_exited = 1;",
-    "if (c8_rc == 2) return;",
+    "g_spu_trampoline_fn = NULL;",
+    "if (c8_rc == 2)",
 ):
     if token not in chan:
         raise SystemExit(f"missing {token} in {args.upstream}/runtime/spu/spu_channels.c")

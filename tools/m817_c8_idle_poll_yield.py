@@ -21,14 +21,14 @@ def patch_c8_irq_yield(root: Path) -> None:
     if "ASCENSION_M813_C8_IRQ_NATIVE_V1" not in source:
         raise SystemExit("M8.17 requires M8.13 C8 IRQ native handler in spu_channels.c")
 
-    # Declare g_spurs_pm_exited and per-context/thread spin tracker before spu_ascension_run_c8_generated_irq
     old_fn = "int spu_ascension_run_c8_generated_irq(spu_context* ctx) {"
     new_fn = f"""/* {MARK}
  * When all 6 SPU workers enter C8 (image=6) with 0 ready tasks, the guest PM
  * polls in a tight save/restore IRQ loop returning to LS 0x00AD0 (179k+ calls)
  * without yielding the SPU slot, starving WID 16/17 and LFQueue consumers.
- * After a bounded number of consecutive 0x00AD0 restores in the same PM slice,
- * yield the policy module slice cleanly so the SPURS scheduler can rotate WIDs.
+ * After 16 consecutive 0x00AD0 restores with no new PUTLLC commits, set both
+ * g_spurs_pm_exited = 1 and g_spu_trampoline_fn = NULL so both spurs_policy
+ * and spu_workload taskset runners release the SPU slot immediately.
  */
 extern _Thread_local volatile unsigned g_spurs_pm_exited;
 static _Thread_local const spu_context* s_asc_c8_spin_ctx;
@@ -39,12 +39,12 @@ extern void spu_workload_copy_ascension_commit_metrics(uint64_t out[2]);
 int spu_ascension_run_c8_generated_irq(spu_context* ctx) {{"""
     source = once(source, old_fn, new_fn, "M8.17 C8 IRQ function header")
 
-    # Hook the restore completion path in spu_ascension_run_c8_generated_irq
     target_tail = """    ctx->pc=target;
     g_spu_trampoline_fn=spu_indirect_branch;
     return 1;
 }"""
-    replacement_tail = """    if (restoring) {
+    replacement_tail = """    ctx->pc=target;
+    if (restoring) {
         uint64_t commit_stats[2] = {0, 0};
         spu_workload_copy_ascension_commit_metrics(commit_stats);
         if ((target & SPU_LS_MASK) == 0x00AD0u &&
@@ -54,6 +54,7 @@ int spu_ascension_run_c8_generated_irq(spu_context* ctx) {{"""
             if (s_asc_c8_spin_restores >= 16u) {
                 s_asc_c8_spin_restores = 0;
                 g_spurs_pm_exited = 1;
+                g_spu_trampoline_fn = NULL;
                 return 2;
             }
         } else {
@@ -62,18 +63,19 @@ int spu_ascension_run_c8_generated_irq(spu_context* ctx) {{"""
             s_asc_c8_last_putllc = commit_stats[1];
         }
     }
-    ctx->pc=target;
     g_spu_trampoline_fn=spu_indirect_branch;
     return 1;
 }"""
     source = once(source, target_tail, replacement_tail, "M8.17 C8 restore yield tail")
 
-    # Make the C8 dispatcher distinguish a policy-slice yield from a regular restore.
     old_call = """    if(ctx->pc==0x3FEC0u && spu_ascension_run_c8_generated_irq(ctx))
         return;"""
     new_call = """    if(ctx->pc==0x3FEC0u) {
         int c8_rc = spu_ascension_run_c8_generated_irq(ctx);
-        if (c8_rc == 2) return;
+        if (c8_rc == 2) {
+            g_spu_trampoline_fn = NULL;
+            return;
+        }
         if (c8_rc) return;
     }"""
     source = once(source, old_call, new_call, "M8.17 C8 dispatcher yield result")
@@ -82,7 +84,6 @@ int spu_ascension_run_c8_generated_irq(spu_context* ctx) {{"""
 
 
 def patch_policy_loop(root: Path) -> None:
-    """Ensure spurs_policy.c also respects g_spurs_pm_exited on C8 idle yield."""
     path = root / "runtime/spu/spurs_policy.c"
     source = path.read_text(errors="replace")
     if MARK in source:
