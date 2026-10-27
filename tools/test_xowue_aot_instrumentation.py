@@ -266,7 +266,7 @@ print("PASS: Build 72 XAudio2/Bink waiter wake (0x4004ED80/0x4004EDD0) and MAIN_
  
 # Build 73 checks: direct DISPATCHER_HEADER SignalState (+4) wake for 0x4004ED80/0x4004EDD0 and kernel handles 0x100..0x115
 engine_b73 = Path("Runtime/XOWUEEngine.cpp").read_text(encoding="utf-8")
-assert "PPC_STORE_U32(0x4004ED80u+4u,1u)" in engine_b73
+assert "storeGuestBe32(gm->base,0x4004ED80u+4u,1u)" in engine_b73
 assert "signalGuestEventHandle(0x00000100u)" in engine_b73
 assert "THREAD7_82B3DE30" in engine_b73
 print("PASS: Build 73 guest DISPATCHER_HEADER SignalState wake and thread 2/3/7/8/10/11 audits")
