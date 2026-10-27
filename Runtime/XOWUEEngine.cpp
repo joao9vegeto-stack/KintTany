@@ -2160,7 +2160,7 @@ void xowue_thread_checkpoint(uint32_t guestAddress) {
         std::fprintf(stderr, "%s\n", event);
         recordRuntimeTrace(event);
     }
-    // QPC is a leaf fast path and can be called from guest timer busy-waits.
+    // Build 69: QPC is a leaf fast path and can be called from guest timer busy-waits.
     // Never sleep or yield from its AOT entry instrumentation.
     const bool qpcFastPath = guestAddress == 0x82C3C4D8u;
     if (!qpcFastPath && slot->count != 0u && (slot->count % 2000u) == 0u)
