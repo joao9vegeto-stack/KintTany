@@ -61,7 +61,7 @@ jobs:
               run.run_number >= 8 &&
               run.id !== context.runId
             ).length;
-            const buildNumber = completedIPAs + 1;
+            const buildNumber = completedIPAs + 2;
             core.exportVariable("XOWUE_BUILD_NUMBER", String(buildNumber));
             core.setOutput("build_number", String(buildNumber));
             core.info("XOWUE Build " + buildNumber);
