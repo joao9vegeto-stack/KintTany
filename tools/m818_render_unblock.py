@@ -61,7 +61,7 @@ static void asc_write_str(int fd, const char* str) {{
     if (n > 0) (void)write(fd, str, n);
 }}
 
-static void asc_ crash_WriteHex(char* buf, size_t cap, const char* prefix, uint64_t val, const char* suffix) {{
+static void asc_crash_WriteHex(char* buf, size_t cap, const char* prefix, uint64_t val, const char* suffix) {{
     static const char hex[] = "0123456789abcdef";
     size_t pos = 0;
     if (prefix) {{
@@ -102,9 +102,9 @@ static void asc_signal_handler(int sig, siginfo_t* info, void* uap) {{
         asc_write_str(fd, sig_name);
         asc_write_str(fd, "\\n");
         if (info) {{
-            asc_ crash_WriteHex(line, sizeof(line), "Fault Address (si_addr / FAR): ", (uint64_t)(uintptr_t)info->si_addr, "\\n");
+            asc_crash_WriteHex(line, sizeof(line), "Fault Address (si_addr / FAR): ", (uint64_t)(uintptr_t)info->si_addr, "\\n");
             asc_write_str(fd, line);
-            asc_ crash_WriteHex(line, sizeof(line), "Signal Code (si_code):         ", (uint64_t)(unsigned)info->si_code, "\\n");
+            asc_crash_WriteHex(line, sizeof(line), "Signal Code (si_code):         ", (uint64_t)(unsigned)info->si_code, "\\n");
             asc_write_str(fd, line);
         }}
 
@@ -119,23 +119,23 @@ static void asc_signal_handler(int sig, siginfo_t* info, void* uap) {{
                 uint64_t far = (uint64_t)uc->uc_mcontext->__es.__far;
                 uint64_t esr = (uint64_t)uc->uc_mcontext->__es.__esr;
 
-                asc_ crash_WriteHex(line, sizeof(line), "ARM64 PC:  ", pc, "\\n");
+                asc_crash_WriteHex(line, sizeof(line), "ARM64 PC:  ", pc, "\\n");
                 asc_write_str(fd, line);
-                asc_ crash_WriteHex(line, sizeof(line), "ARM64 LR:  ", lr, "\\n");
+                asc_crash_WriteHex(line, sizeof(line), "ARM64 LR:  ", lr, "\\n");
                 asc_write_str(fd, line);
-                asc_ crash_WriteHex(line, sizeof(line), "ARM64 SP:  ", sp, "\\n");
+                asc_crash_WriteHex(line, sizeof(line), "ARM64 SP:  ", sp, "\\n");
                 asc_write_str(fd, line);
-                asc_ crash_WriteHex(line, sizeof(line), "ARM64 FP:  ", fp, "\\n");
+                asc_crash_WriteHex(line, sizeof(line), "ARM64 FP:  ", fp, "\\n");
                 asc_write_str(fd, line);
-                asc_ crash_WriteHex(line, sizeof(line), "ARM64 FAR: ", far, "\\n");
+                asc_crash_WriteHex(line, sizeof(line), "ARM64 FAR: ", far, "\\n");
                 asc_write_str(fd, line);
-                asc_ crash_WriteHex(line, sizeof(line), "ARM64 ESR: ", esr, "\\n");
+                asc_crash_WriteHex(line, sizeof(line), "ARM64 ESR: ", esr, "\\n");
                 asc_write_str(fd, line);
 
                 Dl_info dli;
                 if (dladdr((const void*)(uintptr_t)pc, &dli) && dli.dli_fbase) {{
                     uint64_t off = pc - (uint64_t)(uintptr_t)dli.dli_fbase;
-                    asc_ crash_WriteHex(line, sizeof(line), "PC imageOffset: ", off, " (");
+                    asc_crash_WriteHex(line, sizeof(line), "PC imageOffset: ", off, " (");
                     asc_write_str(fd, line);
                     asc_write_str(fd, dli.dli_fname ? dli.dli_fname : "unknown");
                     asc_write_str(fd, " : ");
@@ -144,7 +144,7 @@ static void asc_signal_handler(int sig, siginfo_t* info, void* uap) {{
                 }}
                 if (dladdr((const void*)(uintptr_t)lr, &dli) && dli.dli_fbase) {{
                     uint64_t off = lr - (uint64_t)(uintptr_t)dli.dli_fbase;
-                    asc_ crash_WriteHex(line, sizeof(line), "LR imageOffset: ", off, " (");
+                    asc_crash_WriteHex(line, sizeof(line), "LR imageOffset: ", off, " (");
                     asc_write_str(fd, line);
                     asc_write_str(fd, dli.dli_fname ? dli.dli_fname : "unknown");
                     asc_write_str(fd, " : ");
@@ -167,7 +167,7 @@ static void asc_signal_handler(int sig, siginfo_t* info, void* uap) {{
                         reg_prefix[3] = '=';
                         reg_prefix[4] = '\\0';
                     }}
-                    asc_ crash_WriteHex(line, sizeof(line), reg_prefix, (uint64_t)uc->uc_mcontext->__ss.__x[r], (r % 2 == 1) ? "\\n" : "   ");
+                    asc_crash_WriteHex(line, sizeof(line), reg_prefix, (uint64_t)uc->uc_mcontext->__ss.__x[r], (r % 2 == 1) ? "\\n" : "   ");
                     asc_write_str(fd, line);
                 }}
                 asc_write_str(fd, "\\n");
@@ -176,21 +176,21 @@ static void asc_signal_handler(int sig, siginfo_t* info, void* uap) {{
 #endif
 
         asc_write_str(fd, "--- Last SPU / MFC Breadcrumbs ---\\n");
-        asc_ crash_WriteHex(line, sizeof(line), "last_spu_pc:   ", g_asc_last_spu_pc, "\\n");
+        asc_crash_WriteHex(line, sizeof(line), "last_spu_pc:   ", g_asc_last_spu_pc, "\\n");
         asc_write_str(fd, line);
-        asc_ crash_WriteHex(line, sizeof(line), "last_spu_img:  ", g_asc_last_spu_img, "\\n");
+        asc_crash_WriteHex(line, sizeof(line), "last_spu_img:  ", g_asc_last_spu_img, "\\n");
         asc_write_str(fd, line);
-        asc_ crash_WriteHex(line, sizeof(line), "last_spu_num:  ", g_asc_last_spu_num, "\\n");
+        asc_crash_WriteHex(line, sizeof(line), "last_spu_num:  ", g_asc_last_spu_num, "\\n");
         asc_write_str(fd, line);
-        asc_ crash_WriteHex(line, sizeof(line), "last_spu_pm:   ", g_asc_last_spu_pm, "\\n");
+        asc_crash_WriteHex(line, sizeof(line), "last_spu_pm:   ", g_asc_last_spu_pm, "\\n");
         asc_write_str(fd, line);
-        asc_ crash_WriteHex(line, sizeof(line), "last_mfc_ea:   ", g_asc_last_mfc_ea, "\\n");
+        asc_crash_WriteHex(line, sizeof(line), "last_mfc_ea:   ", g_asc_last_mfc_ea, "\\n");
         asc_write_str(fd, line);
-        asc_ crash_WriteHex(line, sizeof(line), "last_mfc_lsa:  ", g_asc_last_mfc_lsa, "\\n");
+        asc_crash_WriteHex(line, sizeof(line), "last_mfc_lsa:  ", g_asc_last_mfc_lsa, "\\n");
         asc_write_str(fd, line);
-        asc_ crash_WriteHex(line, sizeof(line), "last_mfc_size: ", g_asc_last_mfc_sz, "\\n");
+        asc_crash_WriteHex(line, sizeof(line), "last_mfc_size: ", g_asc_last_mfc_sz, "\\n");
         asc_write_str(fd, line);
-        asc_ crash_WriteHex(line, sizeof(line), "last_mfc_cmd:  ", g_asc_last_mfc_cmd, "\\n");
+        asc_crash_WriteHex(line, sizeof(line), "last_mfc_cmd:  ", g_asc_last_mfc_cmd, "\\n");
         asc_write_str(fd, line);
 
         asc_write_str(fd, "--- Backtrace ---\\n");
@@ -247,7 +247,7 @@ static void asc_install_crash_and_root_logger(void) {{
     sigaction(SIGTRAP, &sa, NULL);
 }}
 #endif
-""".replace("asc_ crash_WriteHex", "asc_crash_WriteHex")
+""".replace("asc_crash_WriteHex", "asc_crash_WriteHex")
 
     s = crash_logger_block + "\n" + s
 
