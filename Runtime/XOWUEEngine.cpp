@@ -2107,24 +2107,10 @@ extern "C" bool xowue_82dc2390_guard(PPCContext &context,uint8_t *base) {
 
 
 void xowue_thread_checkpoint(uint32_t guestAddress);
+static void xowue_forward_pump_and_signal_spin(uint32_t guestAddress, PPCContext &ctx);
 void xowue_thread_checkpoint(uint32_t guestAddress,PPCContext &ctx){
     if (guestAddress == 0x822A0278u || guestAddress == 0x82C25840u || guestAddress == 0x826CF060u) {
-        static std::atomic<uint32_t> s_directSpinCalls{0};
-        const uint32_t sc = s_directSpinCalls.fetch_add(1, std::memory_order_relaxed) + 1u;
-        if (sc > 64u && (sc & 63u) == 0u) {
-            pumpGuestXenosRingBuffer();
-            signalGuestEventHandle(0x4004ED80u);
-            signalGuestEventHandle(0x4004EDD0u);
-            signalGuestEventHandle(0x00000100u);
-            signalGuestEventHandle(0x00000102u);
-            signalGuestEventHandle(0x00000112u);
-            signalGuestEventHandle(0x00000115u);
-            signalGuestEventHandle(0x70016FA0u);
-            signalGuestEventHandle(0x7003DD80u);
-            if (guestAddress == 0x822A0278u) {
-                ctx.r3.u64 = 0u;
-            }
-        }
+        xowue_forward_pump_and_signal_spin(guestAddress, ctx);
     }
 uint32_t lr=static_cast<uint32_t>(ctx.lr);if(g_currentGuestThread){g_currentGuestThread->lastGuestLr.store(lr,std::memory_order_relaxed);g_currentGuestThread->lastR3.store(ctx.r3.u32,std::memory_order_relaxed);g_currentGuestThread->lastR4.store(ctx.r4.u32,std::memory_order_relaxed);g_currentGuestThread->lastR11.store(ctx.r11.u32,std::memory_order_relaxed);g_currentGuestThread->lastR30.store(ctx.r30.u32,std::memory_order_relaxed);g_currentGuestThread->lastR31.store(ctx.r31.u32,std::memory_order_relaxed);}else{uint32_t prev=g_mainThreadLastPc.exchange(guestAddress);if(prev!=guestAddress)g_mainThreadPrevFn.store(prev);g_mainThreadGuestLr.store(lr);g_mainThreadLastR3.store(ctx.r3.u32);g_mainThreadLastR4.store(ctx.r4.u32);g_mainThreadLastR11.store(ctx.r11.u32);g_mainThreadLastR30.store(ctx.r30.u32);g_mainThreadLastR31.store(ctx.r31.u32);uint32_t i=g_mainThreadRecentAotIdx.fetch_add(1);g_mainThreadRecentAotFns[i&15u].store(guestAddress);}xowue_thread_checkpoint(guestAddress);}
 void xowue_thread_checkpoint(uint32_t guestAddress) {
@@ -2336,6 +2322,25 @@ static void __xowue_sub_83847AC0_init(PPCContext &ctx, uint8_t *base) {
     char e[192];std::snprintf(e,sizeof(e),"XOWUE_POOL_INIT_82DC2B14 obj=0x%08X node_ptr=0x%08X node=0x%08X",object,nodePtr,node);recordRuntimeTrace(e);
 }
 static void __xowue_sub_83847AC4_free(PPCContext &ctx, uint8_t *) { ctx.r3.u64=0ull; }
+
+static void xowue_forward_pump_and_signal_spin(uint32_t guestAddress, PPCContext &ctx) {
+    static std::atomic<uint32_t> s_directSpinCalls{0};
+    const uint32_t sc = s_directSpinCalls.fetch_add(1, std::memory_order_relaxed) + 1u;
+    if (sc > 64u && (sc & 63u) == 0u) {
+        pumpGuestXenosRingBuffer();
+        signalGuestEventHandle(0x4004ED80u);
+        signalGuestEventHandle(0x4004EDD0u);
+        signalGuestEventHandle(0x00000100u);
+        signalGuestEventHandle(0x00000102u);
+        signalGuestEventHandle(0x00000112u);
+        signalGuestEventHandle(0x00000115u);
+        signalGuestEventHandle(0x70016FA0u);
+        signalGuestEventHandle(0x7003DD80u);
+        if (guestAddress == 0x822A0278u) {
+            ctx.r3.u64 = 0u;
+        }
+    }
+}
 
 static inline void xowue_write_be32_raw(uint8_t *base, uint32_t addr, uint32_t val) {
     if (base != nullptr && addr >= 0x00010000u && addr <= 0xFFFFF000u) {

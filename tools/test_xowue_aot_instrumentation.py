@@ -206,7 +206,7 @@ assert "CODE_AUDIT_B68_EVENT_WAIT_IMPLEMENTATION" in engine
 assert "CODE_AUDIT_B68_THREAD2_FULL" in engine
 assert "if ((++audioLoopCalls & 63u) == 0u)" in engine
 assert "std::chrono::milliseconds(2)" in engine
-assert 'CURRENT_PROJECT_VERSION: "73"' in (root / "iOS" / "project.yml").read_text(encoding="utf-8")
+assert 'CURRENT_PROJECT_VERSION: "74"' in (root / "iOS" / "project.yml").read_text(encoding="utf-8")
 print("PASS: Build 68 lost-wakeup counters, all-thread worker-first watchdog, async-task recovery, PPC audit and audio throttle")
 
 # Build 69: QPC fast path, synthetic timebase, and complete diagnostics.
@@ -224,7 +224,7 @@ for address in ("0x82C3C498u","0x822A1BC0u","0x822A01C0u","0x824E6F10u","0x82C25
     assert address in engine, f"Build 69 audit address missing {address}"
 assert "CODE_AUDIT_B69_GUEST_WORD" in engine
 assert "THREAD_DUMP id=%u entry=0x%08X exited=%u waiting=%u wait_target=0x%08X last_fn=0x%08X prev_fn=0x%08X lr=0x%08X" in engine
-assert 'CURRENT_PROJECT_VERSION: "73"' in (root / "iOS" / "project.yml").read_text(encoding="utf-8")
+assert 'CURRENT_PROJECT_VERSION: "74"' in (root / "iOS" / "project.yml").read_text(encoding="utf-8")
 print("PASS: Build 69 QPC fast path, synthetic timebase, main/interrupt thread snapshots, PPC code/data audit")
 
 # Build 69 checks for main-thread PPC context, thread snapshots, and QPC timer pacing.
