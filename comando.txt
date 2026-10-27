@@ -1,51 +1,103 @@
-Analisei o `diagnostico-build64.txt` na raiz da branch `XOWUE`. Os novos diagnósticos (`XOWUE_QPC_WRITE`, `AOT_PROGRESS` e `XOWUE_STALL_THREADS`) revelaram com precisão absoluta o estado do jogo na Build 64:
+Analisei o `diagnostico-build-65.txt` na raiz da branch `XOWUE` e comparei o comportamento com o emulador XeniOS (Xenia), onde esta mesma instalação do jogo roda sem congelar.
 
-### O QUE OS LOGS DA BUILD 64 PROVARAM:
-1. **`0x82C3C4D8` (QPC) ESTÁ RESOLVIDO:**
-   - `XOWUE_QPC_WRITE` gravou corretamente o timebase de 64 bits em `out_ptr=0x700AEE80` (`mem64=0x00000000010D9E8A`).
-   - Com isso, `0x82C3C4D8` foi chamado apenas **8 vezes** (contra 91.966 na Build 62/63!) e a Thread 4 (`tid=0xF8000014`) saiu do loop de tempo e avançou para a região `0x82DC1FA0..0x82DC2BF0`!
+### POR QUE O JOGO ESTÁ CONGELADO APÓS OS 48 DRAWS DO FRAME 1 (PROVA EXATA DOS BYTES DE `CODE_AUDIT_B65`):
 
-2. **POR QUE A TELA FICOU PRETA NA BUILD 63 E 64 (Thread 1 presa em `0x822000E0` no Draw 26):**
-   - `XOWUE_STALL_THREADS` (`RUNTIME seq=1256`) pegou a Thread 1 (`tid=0xF8000001`, Main/Render Thread) presa em execução dentro de `0x822000E0`:
-     `tid=0xF8000001 host_tid=10935674 state=running fn=0x822000E0 prev=0x82C30CC0 lr=0x82C30CC8 sp=0x7001FE00 r3=0x837E8640 r4=0x00000400`
-   - Na Build 61 e 62, a Thread 1 passava por `0x822000E0` e completava os 48 draws do frame, apresentando o vídeo na tela.
-   - Na Build 63 e 64, a Thread 1 travou dentro de `0x822000E0` porque você adicionou transformações globais nas instruções geradas pelo `XenonRecomp` (`normalize_32bit_writes`, `normalize_rlw_instructions` e `normalize_32bit_arithmetic` em `tools/generate_aot.py` e no patch de `recompiler.cpp` em `.github/workflows/xowue-ios.yml`).
-   - Especificamente, `normalize_32bit_arithmetic` converte `ctx.rX.s64 = -1;` (gerado por `li`/`addi` com imediato negativo) em `ctx.rX.u64 = static_cast<uint32_t>(-1);` (`0x00000000FFFFFFFF`), destruindo a extensão de sinal de 64 bits do PowerPC64 (`s64`) usada em loops, offsets negativos e comparações de 64 bits (`cmpdi`), além de `normalize_32bit_writes` alterar a semântica de todas as 115.623 funções recompiladas!
+1. **A Thread 4 (`tid=0xF8000014`) está presa em loop infinito (498.540 chamadas de `0x82DC1FA0` <-> `0x82DC2390`) porque as alocações em `0x82DC2BEC` (`LR=0x82DC2BF0`) e `0x82DC2B10` (`LR=0x82DC2B14`) falham com `CTR=0x00000000`!**
+   Olhe para os bytes PowerPC despejados por `CODE_AUDIT_B65` (`RUNTIME seq=7` de `diagnostico-build-65.txt`):
+   ```ppc
+   0x82DC2BC8: 3D608384  lis   r11, -31868      ; 0x83840000
+   0x82DC2BD0: 816B7ABC  lwz   r11, 0x7ABC(r11) ; r11 = *(uint32_t*)(0x83847ABC) -> Callback Global de Alocação!
+   0x82DC2BD4: 38A10050  addi  r5, r1, 0x50     ; r5 = sp + 0x50 (endereço onde o ponteiro alocado deve ser salvo!)
+   0x82DC2BD8: 38800010  li    r4, 16           ; r4 = alignment (16 bytes)
+   0x82DC2BDC: 807F0078  lwz   r3, 0x78(r31)    ; r3 = 0x401134B0 (allocator object)
+   0x82DC2BE4: 7D465378  mr    r6, r10          ; r6 = tamanho em bytes a alocar!
+   0x82DC2BE8: 7D6903A6  mtctr r11
+   0x82DC2BEC: 4E800421  bctrl                  ; (LR = 0x82DC2BF0)
+   0x82DC2BF0: 81610050  lwz   r11, 0x50(r1)    ; LÊ O PONTEIRO ALOCADO DE *(sp + 0x50)!
+   0x82DC2BF8: 917F008C  stw   r11, 0x8C(r31)
+   0x82DC2BFC: 2F0B0000  cmpwi cr6, r11, 0      ; COMPARA O PONTEIRO ALOCADO (r11) COM ZERO!
+   0x82DC2C00: 419A0054  beq   cr6, 0x82DC2C54  ; SE r11 == 0, SALTA PARA O ERRO (0x82DC2C54) QUE CHAMA O DESTRUTOR 0x82DC1FA0!
+   ```
+   - Os três ponteiros globais em `0x83847ABC` (Alloc), `0x83847AC0` (Alloc/Init Node) e `0x83847AC4` (Free) estão `0x00000000` na memória guest.
+   - Quando `0x82DC2BEC` (`LR=0x82DC2BF0`) faz `bctrl` com `CTR=0`, `xowue_lookup_indirect` retorna um stub vazio, deixando `*(uint32_t*)(sp + 0x50) == 0`.
+   - Em `0x82DC2BF0`, `lwz r11, 0x50(r1)` lê `0`, `cmpwi cr6, r11, 0` dá `EQ`, e `beq cr6, 0x82DC2C54` aborta a inicialização e chama o destrutor `0x82DC1FA0` -> `0x82DC2390`.
+   - E por que `0x82DC1FA0` e `0x82DC2390` foram chamados 498.540 vezes mesmo com o seu corte de 16 chamadas em `0x82DC2390`? Porque `0x82DC1FA0` faz `b 0x82800FA8` (`__restgprlr_28`) na linha `0x82DC2044` e retorna para o caller da Thread 4 (`saved_lr=0x82DC314C` na pilha `0x700AEBB0`), que fica tentando reinicializar em loop infinito porque `0x82DC2B74` falhou!
 
-3. **POR QUE A THREAD 4 (`tid=0xF8000014`) ENTROU EM LOOP INFINITO EM `0x82DC1FA0` <-> `0x82DC2390` (497.081 chamadas):**
-   - Logo após sair do QPC (`0x82C3C4D8`), a Thread 4 executou `0x82DC2228` -> `0x82DC2A50` (`LR=0x82DC2B14`, onde tentou `bctrl` com `CTR=0x00000000`, `r3=0x40113FD0`, `r4=0x700AEBA0`) -> `0x82DC2B74` (`LR=0x82DC2BF0`, `CTR=0x00000000`, `r3=0x401134B0`) -> e entrou em `0x82DC1FA0`.
-   - Em `0x82DC1FA0` (`LR=0x82DC2014`), a Thread 4 chama `0x82DC2390` em loop infinito (**497.081 vezes**, `AOT_PROGRESS calls=1000000`):
-     `THREAD_DUMP tid=0xF8000014 last_fn=0x82DC2390 prev_fn=0x82DC1FA0 lr=0x82DC2014 r3=0x00000000 r4=0x00000000`
-   - Dentro de `0x82DC2390` (`LR=0x82DC23AC`), ela tenta um `bctrl` com `CTR=0x00000000`, que é abortado por `xowue_lookup_indirect` deixando `r3=0x00000000`. O caller `0x82DC1FA0` (em `0x82DC2014`) fica preso em loop esperando que `0x82DC2390` retorne outro valor ou que uma condição de saída na memória/registradores seja satisfeita!
+2. **A Thread 1 (`tid=0xF8000001`, Main/Render Thread) terminou os 48 draws do Frame 1 do vídeo `ravenlogo.bik` e ficou bloqueada eternamente em `KeWaitForSingleObject` esperando `wait_obj=0xF8000011` (`lr=0x82C4BEB8`, `wait_calls=45`)!**
+   Veja `XOWUE_STALL_THREADS` (`RUNTIME seq=1493`):
+   - `tid=0xF8000001` (Main Thread): `state=waiting_event wait_obj=0xF8000011 wait_calls=45 lr=0x82C4BEB8`
+   - `tid=0xF8000008`: `state=waiting_event wait_obj=0xF8000007 wait_calls=1 lr=0x829F0698`
+   - `tid=0xF8000009`: `state=waiting_event wait_obj=0xF800000A wait_calls=56 lr=0x82585FB4`
+   - `tid=0xF800000D`: `state=waiting_event wait_obj=0xF800000E wait_calls=1 lr=0x82585FB4`
+   A Main Thread (`0xF8000001`) e as 3 threads auxiliares estão bloqueadas em objetos de sincronização (`0xF8000011`, `0xF8000007`, `0xF800000A`, `0xF800000E`) que nunca mais são sinalizados após `wait_calls=45` / `56`!
 
 ---
 
-### EXECUTAR IMEDIATAMENTE AS CORREÇÕES PARA A BUILD 65:
+### EXECUTAR IMEDIATAMENTE AS CORREÇÕES PARA A BUILD 66:
 
-#### TAREFA 1: REVERTER A CORRUPÇÃO GLOBAL DE INSTRUÇÕES DO `XenonRecomp` (Restaurar os 48 Draws e Desbloquear `0x822000E0` na Thread 1)
-1. Em `tools/generate_aot.py`:
-   - **DESATIVE / REMOVA** completamente as chamadas para `normalize_32bit_writes`, `normalize_rlw_instructions` e `normalize_32bit_arithmetic` em `process_tree()`!
-   - `tools/generate_aot.py` deve fazer **APENAS** `replace_function(text, "__imp__sub_82C3C4D8", replacement_82c3c4d8())` (e instrumentações cirúrgicas de funções específicas se necessário), **NUNCA** alterar globalmente `.u32` ou `.s64` nas 115.623 funções geradas pelo `XenonRecomp`!
-2. Em `.github/workflows/xowue-ios.yml`:
-   - Verifique o step que aplica patch em `$RUNNER_TEMP/XenonRecomp/XenonRecomp/recompiler.cpp`. Certifique-se de que ele **NÃO** altera `li`, `lis`, `addi`, `addis`, `rlwinm`, `rlwimi` do `XenonRecomp`, mantendo apenas a substituição de `__rdtsc()` por `xowue_guest_timebase()` no `mftb` (exatamente como nas Builds 61/62 onde a Thread 1 renderizava os 48 draws sem travar em `0x822000E0`).
+#### TAREFA 1: IMPLEMENTAR OS HANDLERS NATIVOS PARA `0x83847ABC` (`LR=0x82DC2BF0`), `0x83847AC0` (`LR=0x82DC2B14`) E `0x83847AC4` (`LR=0x82DC23B4`) EM `Runtime/XOWUEEngine.cpp`
+1. Crie um sub-alocador rápido (bump allocator alinhado a 16 bytes dentro do heap virtual guest, alocando chunks de 1 MiB sob demanda via `allocateGuestVirtualRange` para não desperdiçar 64 KiB por chamada pequena):
+   `uint32_t allocateSmallGuestPoolBlock(uint8_t *base, uint32_t size, uint32_t alignment)`
+2. Em `xowue_lookup_indirect(PPCContext &ctx, uint8_t *base, uint32_t target)`:
+   Quando `target == 0u`:
+   - **Caso `static_cast<uint32_t>(ctx.lr) == 0x82DC2BF0u` (ou qualquer chamada a `*(0x83847ABC)`):**
+     Retorne um `PPCFunc*` (`__xowue_sub_83847ABC_alloc`) que executa:
+     - `uint32_t align = std::max<uint32_t>(ctx.r4.u32, 16u);`
+     - `uint32_t outPtrAddr = ctx.r5.u32;` (`sp + 0x50`)
+     - `uint32_t size = ctx.r6.u32 ? ctx.r6.u32 : 64u;`
+     - `uint32_t block = allocateSmallGuestPoolBlock(base, size, align);`
+     - Zere `size` bytes em `base + block`.
+     - Grave `block` em Big-Endian no endereço `outPtrAddr`: `PPC_STORE_U32(outPtrAddr, block);`
+     - Defina `ctx.r3.u64 = 0ull;` (ou verifique pelos bytes de `0x82DC2BF0..0x82DC2C10` que o código só checa `lwz r11, 0x50(r1); cmpwi cr6, r11, 0`, não usa `r3`!).
+     - Logue as primeiras 64 chamadas: `XOWUE_POOL_ALLOC_82DC2BF0 heap=0x%08X align=%u out_ptr=0x%08X size=0x%X -> block=0x%08X`.
+   - **Caso `static_cast<uint32_t>(ctx.lr) == 0x82DC2B14u` (chamada a `*(0x83847AC0)` em `0x82DC2B10`):**
+     Olhe os bytes `0x82DC2B00..0x82DC2B38`:
+     ```ppc
+     0x82DC2B00: 7FE4FB78  mr    r4, r31          ; r4 = 0x700AEBA0 (ponteiro para estrutura na pilha)
+     0x82DC2B08: 7FC3F378  mr    r3, r30          ; r3 = 0x40113FD0 (objeto principal)
+     0x82DC2B10: 4E800421  bctrl                  ; (LR = 0x82DC2B14)
+     0x82DC2B14: 2F030000  cmpwi cr6, r3, 0
+     0x82DC2B18: 419A0024  beq   cr6, 0x82DC2B3C  ; se r3 == 0, pula!
+     0x82DC2B1C: 813F0000  lwz   r9, 0(r31)       ; r9 = *(uint32_t*)(r31 + 0)
+     0x82DC2B20: 815E007C  lwz   r10, 0x7C(r30)   ; r10 = *(uint32_t*)(r30 + 0x7C)
+     ```
+     Retorne um `PPCFunc*` (`__xowue_sub_83847AC0_init`) que:
+     - Se `PPC_LOAD_U32(ctx.r4.u32) == 0u`, aloca um bloco de 256 bytes (`block = allocateSmallGuestPoolBlock(base, 256u, 16u)`), inicializa `PPC_STORE_U32(block + 8u, ctx.r3.u32)` e grava `PPC_STORE_U32(ctx.r4.u32, block)`.
+     - Define `ctx.r3.u64 = 1ull;` (sucesso).
+     - Loga `XOWUE_POOL_INIT_82DC2B14 obj=0x%08X node_ptr=0x%08X node=0x%08X`.
+   - **Caso `static_cast<uint32_t>(ctx.lr) == 0x82DC23B4u` ou `0x82DC23ACu` (chamada a `*(0x83847AC4)` em `0x82DC23B0` — Free):**
+     Retorne um `PPCFunc*` (`__xowue_sub_83847AC4_free`) que define `ctx.r3.u64 = 0ull;` e retorna.
+3. Em `tools/generate_aot.py`:
+   - Remova a substituição artificial de `__imp__sub_82DC2390` da Build 65 (deixe `__imp__sub_82DC2390` com seu código nativo normal, ou se instrumentar, adicione `std::this_thread::sleep_for(std::chrono::milliseconds(1))` somente se a mesma thread chamar `0x82DC2390` mais de 32 vezes consecutivas, para impedir busy-wait de 100% de CPU!).
 
-#### TAREFA 2: AUDITORIA DE CÓDIGO E PROTEÇÃO DE LOOP PARA `0x822000E0` (Thread 1) E `0x82DC1FA0` / `0x82DC2390` / `0x82DC2A50` (Thread 4)
-1. **Dump de Bytes Brutos no Boot (`Runtime/XOWUEEngine.cpp`):**
-   Assim que a imagem `.text` estiver carregada no boot, emita no log (com prefixo `CODE_AUDIT_B65`, persistido sem filtro em `shouldPersistRuntimeTrace`) as instruções PowerPC (endereço + word hex de 32 bits) dos seguintes intervalos:
-   - `0x822000E0` até `0x822001A0` (a função onde a Thread 1 travou com `r3=0x837E8640, r4=0x00000400`) e o caller `0x82C30CA0` até `0x82C30CF0` (`lr=0x82C30CC8`).
-   - `0x82DC1FA0` até `0x82DC2060` (a função que chama `0x82DC2390` em `0x82DC2010` com `lr=0x82DC2014` em loop infinito).
-   - `0x82DC2390` até `0x82DC23F0` (a função chamada 497.081 vezes que faz `bctrl` em `0x82DC23A8`).
-   - `0x82DC2A50` até `0x82DC2C10` (as funções que fazem `bctrl` em `0x82DC2B10` e `0x82DC2BEC` com `CTR=0x00000000`).
-2. **Resolver o Loop Infinito `0x82DC1FA0` <-> `0x82DC2390` na Thread 4:**
-   - Em `0x82DC2390` (`__imp__sub_82DC2390`), quando o `bctrl` em `0x82DC23A8` tem `CTR=0x00000000` (ou `r3=0x00000000`), `xowue_lookup_indirect` retorna um stub no-op e `ctx.r3` permanece `0`, fazendo o caller `0x82DC1FA0` (`lr=0x82DC2014`) repetir a chamada infinitamente!
-   - Adicione um hook/instrumentação em `__imp__sub_82DC2390` (via `tools/generate_aot.py` ou `xowue_lookup_indirect` quando `LR == 0x82DC23AC` / entrada de `0x82DC2390`):
-     - Nas primeiras 8 chamadas de `0x82DC2390`, logue `XOWUE_82DC2390_STATE` com `r3..r12`, `r28..r31`, `lr`, e os 64 bytes da pilha do caller (`sp`..`sp+0x80`) e da memória caso `r30`/`r31` apontem para a RAM guest (`0x40000000..0x90000000`).
-     - Se `0x82DC2390` for chamada repetidamente pela mesma thread (`lr == 0x82DC2014`) e `r3 == 0` (ou após 16 chamadas consecutivas sem progresso), teste retornar `ctx.r3.u64 = 1ull;` (e se continuar chamando após 32 vezes, `ctx.r3.u64 = 0x80004005ull;` / alterar `cr0`), OU inspecione no próprio script Python durante a build o código C++ gerado pelo `XenonRecomp` para `__imp__sub_82DC1FA0` e `__imp__sub_82DC2390`!
-   - **IMPORTANTE:** No step do workflow `.github/workflows/xowue-ios.yml` (ou em `tools/generate_aot.py`), depois que o `XenonRecomp` gerar os arquivos `ppc_recomp.*.cpp`, faça `tools/generate_aot.py` localizar o corpo C++ gerado para `__imp__sub_82DC1FA0`, `__imp__sub_82DC2390`, `__imp__sub_82DC2A50`, `__imp__sub_82DC2B74` e `__imp__sub_822000E0`:
-     - Imprima o código C++ dessas 5 funções no log do GitHub Actions durante a build para auditoria!
-     - Analise a condição do loop em `__imp__sub_82DC1FA0` logo após `sub_82DC2390(ctx, base);` (endereço `0x82DC2014`): veja exatamente qual registrador (`ctx.r3`? um campo de memória em `ctx.r31`?) faz o loop em `0x82DC1FA0` terminar quando `CTR == 0` em `0x82DC2390`, e garanta que `__imp__sub_82DC2390` defina esse valor de saída caso o ponteiro de função interna seja `0` (`NULL`), impedindo que a Thread 4 fique presa em loop infinito!
+#### TAREFA 2: DUMP DE AUDITORIA DE `0x82DC2A50..0x82DC3200` E QUEM ESCREVE EM `0x83847ABC`
+No boot (`CODE_AUDIT_B66`, sempre persistido em `shouldPersistRuntimeTrace`):
+1. Despeje as instruções PowerPC completas de:
+   - `0x82DC2A50` até `0x82DC2B74` (para vermos o corpo inteiro de `0x82DC2A50`, incluindo `0x82DC2B20..0x82DC2B70`)
+   - `0x82DC2C00` até `0x82DC2D20` (para vermos o que acontece após as 34 alocações em `0x82DC2B74` terem sucesso!)
+   - `0x82DC30B0` até `0x82DC3190` (o loop da Thread 4 onde `saved_lr=0x82DC314C` foi encontrado na pilha `0x700AEBB0`!)
+2. Varra toda a seção `.text` (`0x82000000..0x836DF000`) procurando instruções cujo halfword inferior seja `0x7ABC`, `0x7AC0` ou `0x7AC4` (ex: `stw rX, 0x7ABC(rY)`). Imprima todos os endereços encontrados e as 6 instruções ao redor com `CODE_AUDIT_83847ABC`!
 
-#### TAREFA 3: ATUALIZAR TESTES, BUILD 65, COMMIT E PUSH
-- Atualize `tools/generate_aot.py --self-test` e `tools/test_xowue_aot_instrumentation.py` para refletir a remoção de `normalize_32bit_*` e a adição da proteção de `0x82DC2390` / `CODE_AUDIT_B65`.
-- Incremente a versão para **Build 65** (`CURRENT_PROJECT_VERSION: 65` / `CFBundleVersion: 65`).
-- Faça commit e push para a branch `XOWUE`.
+#### TAREFA 3: DESBLOQUEAR A MAIN THREAD (`0xF8000001`) EM `wait_obj=0xF8000011` E SINCRONIZAR EVENTOS DE GPU/VBLANK/WORKER (COMO NO XENIOS)
+No `diagnostico-build-65.txt`, a Thread 1 (`0xF8000001`, que desenha os frames) ficou congelada em `KeWaitForSingleObject` esperando `wait_obj=0xF8000011` (`lr=0x82C4BEB8`, `wait_calls=45`), e as threads `0xF8000008`, `0xF8000009` e `0xF800000D` ficaram paradas em `0xF8000007`, `0xF800000A` e `0xF800000E`.
+Faça o seguinte em `Runtime/XOWUEEngine.cpp`:
+1. **Rastreamento Completo de Objetos de Sincronização (`XOWUE_SYNC_OBJ`):**
+   - Na struct interna do evento/semáforo do kernel (`GuestEventObject` / `GuestSyncObject`), salve `uint32_t creatorLr`, `uint32_t creatorTid`, `uint32_t guestHeaderAddr`, `uint32_t signalCount`, e `uint32_t waitCount`.
+   - Sempre que um objeto de sincronização for criado/registrado (especialmente handles `0xF8000001` a `0xF8000020`), logue (sempre persistido):
+     `XOWUE_SYNC_CREATE handle=0x%08X type=%s guest_addr=0x%08X initial=%u tid=0x%08X lr=0x%08X`
+   - Em `XOWUE_STALL_THREADS`, inclua `obj_guest=0x%08X obj_creator_lr=0x%08X obj_signals=%u` para cada thread esperando um `wait_obj`!
+2. **Audit dos Callers de Wait (`0x829F0698`, `0x82585FB4`, e o caller da Thread 1 acima de `0x82C4BEB8`):**
+   - Quando uma thread entrar em `KeWaitForSingleObject` / `NtWaitForSingleObjectEx`, leia os 4 níveis superiores de `LR` na pilha guest (`sp` -> `next_sp` -> `next_sp2` -> `next_sp3`, lendo `PPC_LOAD_U32(frame + 8)` ou `frame - 8` conforme ABI PowerPC `stw r0, 8(r1)` / `__savegprlr`) e salve na struct da thread (`caller_chain`).
+   - Imprima esse `caller_chain` em `XOWUE_STALL_THREADS`! Assim veremos exatamente qual função do jogo na Thread 1 chamou `0x82C4BE30` (`lr=0x82C4BEB8`) para esperar o handle `0xF8000011`!
+   - Faça também dump no boot (`CODE_AUDIT_B66`) de `0x829F0660..0x829F06D0` (`lr=0x829F0698`, Thread 2) e `0x82585F70..0x82586000` (`lr=0x82585FB4`, Threads 3 e 4).
+3. **Destravamento Automático de Eventos de Frame/VBlank/GPU quando a Main Thread (`0xF8000001`) Congelar (Watchdog Ativo estilo VBlank/Fence Pump):**
+   - No XeniOS, o tick de VBlank (60Hz) e a conclusão do Command Buffer da GPU sinalizam os eventos de frame/swap e disparam os callbacks para que a Main Thread (`0xF8000001`) e a RHI Thread (`0xF8000008`/`0xF8000009`) avancem para o próximo frame do vídeo Bink (`ravenlogo.bik`).
+   - Verifique onde `KeWaitForSingleObject` / `NtWaitForSingleObjectEx` faz `condition_variable::wait` / `wait_for` em `Runtime/XOWUEEngine.cpp`:
+     - Se uma thread estiver esperando em um `wait_obj` com timeout infinito (ou > 100ms) e **nenhum novo draw/swap tiver ocorrido nos últimos 100ms**:
+       - Para a **Main Thread (`tid == 0xF8000001`)** (e para a thread `0xF8000009` que espera `0xF800000A` em `lr=0x82585FB4`, que já teve `wait_calls=56`!), sinalize o evento e acorde a thread após **50ms** de inatividade gráfica (retornando `kNtStatusSuccess = 0`), logando as primeiras 32 vezes com `XOWUE_VBLANK_WATCHDOG_SIGNAL tid=0x%08X wait_obj=0x%08X guest_addr=0x%08X lr=0x%08X`!
+       - Ao acordar a Main Thread (`0xF8000001`), também bombeie o ringbuffer da GPU (`pumpGuestXenosRingBuffer()`) caso haja novos pacotes PM4 pendentes!
+
+#### TAREFA 4: TESTES, BUILD 66, COMMIT E PUSH
+- Atualize `tools/generate_aot.py --self-test` e `tools/test_xowue_aot_instrumentation.py`.
+- Atualize a versão para **Build 66** (`CURRENT_PROJECT_VERSION: 66` / `CFBundleVersion: 66`).
+- Faça commit e push na branch `XOWUE`.
