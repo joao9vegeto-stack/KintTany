@@ -1166,8 +1166,8 @@ uint32_t waitGuestObject(const std::shared_ptr<GuestWaitable> &waitable,
             pumpGuestXenosRingBuffer();
             lock.lock();
             markGuestWaitableSignaledLocked(waitable);
-            if (validGuestRange(waitable->objectAddress + 4u, 4u))
-                PPC_STORE_U32(waitable->objectAddress + 4u, 1u);
+            // markGuestWaitableSignaledLocked() synchronizes objectAddress + 4
+            // through the active guest-memory mapping before notifying waiters.
             waitable->changed.notify_all();
             g_waitSetChanged.notify_all();
             if (!isMainThread) {
