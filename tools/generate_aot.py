@@ -5,7 +5,7 @@ import argparse
 import re
 from pathlib import Path
 QPC_BODY = """PPC_FUNC_IMPL(__imp__sub_82C3C4D8) {
-    xowue_thread_checkpoint(0x82C3C4D8u);
+    xowue_thread_checkpoint(0x82C3C4D8u, ctx);
     const uint32_t outPtr = ctx.r3.u32;
     const uint64_t tb64 = xowue_qpc_write(outPtr, xowue_guest_timebase(), static_cast<uint32_t>(ctx.lr));
     ctx.r11.u64 = tb64;
@@ -47,10 +47,11 @@ def audit_bodies(source: str):
         if owners: found[target]=(owners[0][0],source[owners[0][1]:owners[0][2]])
     return found
 def self_test():
-    fixture=("PPC_FUNC_IMPL(__imp__sub_82C3C4D8) {\\n    xowue_thread_checkpoint(0x82C3C4D8u);\\n    return;\\n}\\n"+
+    fixture=("PPC_FUNC_IMPL(__imp__sub_82C3C4D8) {\\n    xowue_thread_checkpoint(0x82C3C4D8u, ctx);\\n    return;\\n}\\n"+
       "".join(f"PPC_FUNC_IMPL(__imp__{s}) {{\\n return;\\n}}\\n" for s in AUDIT_SYMBOLS))
     patched,n=replace_qpc(fixture)
     assert n==1 and "xowue_qpc_write(outPtr, xowue_guest_timebase()" in patched
+    assert "xowue_thread_checkpoint(0x82C3C4D8u, ctx);" in patched
     assert len(audit_bodies(patched))==5
     # The destructor is intentionally not rewritten by this tool.
     print("PASS: Build 65 QPC-only replacement and five-function source audit")

@@ -153,7 +153,7 @@ def instrument_aot_entries(contents: str) -> tuple[str, int]:
         nonlocal instrumented
         instrumented += 1
         guest_address = int(match.group(2), 16)
-        checkpoint = f"xowue_thread_checkpoint(0x{guest_address:08X}u);"
+        checkpoint = f"xowue_thread_checkpoint(0x{guest_address:08X}u, ctx);
         return match.group(1) + chr(10) + chr(9) + checkpoint
 
     return PPC_FUNCTION_RE.sub(add_checkpoint, contents), instrumented
@@ -206,6 +206,8 @@ def main() -> int:
             declarations = []
             if instrumented and "extern void xowue_thread_checkpoint(uint32_t);" not in contents:
                 declarations.append("extern void xowue_thread_checkpoint(uint32_t);")
+            if instrumented and "extern void xowue_thread_checkpoint(uint32_t, PPCContext &);" not in contents:
+                declarations.append("extern void xowue_thread_checkpoint(uint32_t, PPCContext &);")
             if "xowue_untranslated_tail(" in contents and "extern void xowue_untranslated_tail(uint32_t);" not in contents:
                 declarations.append("extern void xowue_untranslated_tail(uint32_t);")
             if declarations:
@@ -220,6 +222,7 @@ def main() -> int:
     code = ['#include "ppc_recomp_shared.h"',
             'void xowue_thread_checkpoint();',
             'void xowue_thread_checkpoint(uint32_t);',
+            'void xowue_thread_checkpoint(uint32_t, PPCContext &);',
             'void xowue_compat_import(const char *, PPCContext &, uint8_t *);',
             'void xowue_ExCreateThread(PPCContext &, uint8_t *);',
             'void xowue_ExTerminateThread(PPCContext &);',

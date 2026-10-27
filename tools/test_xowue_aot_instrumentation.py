@@ -226,3 +226,10 @@ assert "CODE_AUDIT_B69_GUEST_WORD" in engine
 assert "THREAD_DUMP id=%u entry=0x%08X exited=%u waiting=%u wait_target=0x%08X last_fn=0x%08X prev_fn=0x%08X lr=0x%08X" in engine
 assert 'CURRENT_PROJECT_VERSION: "69"' in (root / "iOS" / "project.yml").read_text(encoding="utf-8")
 print("PASS: Build 69 QPC fast path, synthetic timebase, main/interrupt thread snapshots, PPC code/data audit")
+
+# Build 69 checks for main-thread PPC context, thread snapshots, and QPC timer pacing.
+for token in ("buildMainThreadDiagnostic","g_mainThreadLastR31","XOWUE_STALL_THREADS_THREAD","49875000ull","syntheticOffset","decodedFrames","g_xenosFrontend.swaps"):
+    if token not in engine: raise SystemExit(f"Build 69 missing runtime token {token}")
+assert "xowue_thread_checkpoint(0x82C3C4D8u, ctx);" in aot
+assert "xowue_thread_checkpoint(uint32_t, PPCContext &);" in runtime_stubs
+print("PASS: Build 69 main-thread context and QPC pacing diagnostics")
