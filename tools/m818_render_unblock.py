@@ -446,16 +446,6 @@ static inline int spu_asc_wkl_ea_valid(uint32_t ea, uint32_t sz) {{
         "static void ts_start_ready(uint32_t taskset_ea, uint32_t done_task)\n{",
         "static void ts_start_ready(uint32_t taskset_ea, uint32_t done_task)\n{\n    if (!spu_asc_wkl_ea_valid(taskset_ea, 0x1000u)) return;"
     )
-    # M8.18.7: Unblock tasks sleeping in WAIT_SIGNAL (tasksets 0x15E43100 & 0x11037280) safely inside a compound block
-    if "ASCENSION_M8187_WAIT_SIGNAL_UNBLOCK" not in s:
-        s_new = re.sub(
-            r'(fprintf\(stderr,\s*"\[spu_workload\][^\n]*WAIT_SIGNAL[^;]*;)',
-            r'{ \1 /* ASCENSION_M8187_WAIT_SIGNAL_UNBLOCK */ break; }',
-            s,
-            count=1,
-        )
-        if s_new != s:
-            s = s_new
 
     path.write_text(s)
 
