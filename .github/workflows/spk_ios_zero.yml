@@ -1,0 +1,444 @@
+name: SpkIOSzero Complete Pipeline (On-Device Extractor IPA & Thin Game IPA)
+
+on:
+  push:
+    branches:
+      - SpkIOSzero
+      - SpkIOSZero
+  workflow_dispatch:
+    inputs:
+      mode:
+        description: '1) build_extractor_ipa (Gera App Extrator LibHac Nativo p/ iPhone) | 2) build_thin_game_ipa (Gera Jogo Thin IPA a partir do github_kit.zip)'
+        required: true
+        default: 'build_extractor_ipa'
+        type: choice
+        options:
+          - build_extractor_ipa
+          - build_thin_game_ipa
+      github_kit_url:
+        description: 'URL do github_kit.zip gerado no seu iPhone (usado no modo build_thin_game_ipa)'
+        required: false
+        default: ''
+
+permissions:
+  contents: write
+
+jobs:
+  spk_ios_zero:
+    runs-on: macos-15
+    timeout-minutes: 240
+    steps:
+      - name: 1. Sincronizar Branch Orfa SpkIOSzero (1 Unico Commit Limpo)
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          BRANCH_NAME: ${{ github.ref_name }}
+        run: |
+          git config --global user.name "joao9vegeto-stack"
+          git config --global user.email "joao9vegeto-stack@users.noreply.github.com"
+
+          git clone --branch "$BRANCH_NAME" "https://x-access-token:${GH_TOKEN}@github.com/${GITHUB_REPOSITORY}.git" "$RUNNER_TEMP/repo"
+          cd "$RUNNER_TEMP/repo"
+
+          # Garante que a branch SpkIOSzero tenha sempre o workflow atualizado em 1 unico commit limpo sobre o nxnative
+          cp .github/workflows/spk_ios_zero.yml "$RUNNER_TEMP/wf.yml"
+          if [ ! -f "dm/ios/project.yml" ]; then
+            git clone --depth 1 https://github.com/seedds/nxnative.git "$RUNNER_TEMP/up"
+            rm -rf "$RUNNER_TEMP/up/.git" "$RUNNER_TEMP/up/.github/workflows"
+            cp -R "$RUNNER_TEMP/up/." .
+          fi
+          mkdir -p .github/workflows
+          cp "$RUNNER_TEMP/wf.yml" .github/workflows/spk_ios_zero.yml
+
+          # Configura main.m e build_ipa.sh para Thin IPA + leitura de Documents/romfs em pasta solta
+          python3 - << 'PYEOF'
+          from pathlib import Path
+
+          main_m = Path("dm/ios/Sources/main.m")
+          s = main_m.read_text(encoding="utf-8")
+          old_marker = 'if ([fm fileExistsAtPath:[documentFolder stringByAppendingPathComponent:@DM_GAME_ROMFS_MARKER]]) return documentFolder;'
+          new_marker = old_marker + '\n    if ([fm contentsOfDirectoryAtPath:documentFolder error:nil].count > 0) return documentFolder;'
+          if 'contentsOfDirectoryAtPath:documentFolder' not in s:
+              s = s.replace(old_marker, new_marker)
+              main_m.write_text(s, encoding="utf-8")
+
+          bsh = Path("dm/ios/tools/build_ipa.sh")
+          b = bsh.read_text(encoding="utf-8")
+          b = b.replace(
+              'python3 "$DM/tools/romfs.py" "$ROMFS" "$MARKER" || die "no RomFS at $ROMFS (missing $MARKER)"',
+              'echo "[Thin IPA] RomFS externo em Documents/romfs no iPhone"'
+          )
+          b = b.replace('"Payload/DmIOS.app/romfs=$ROMFS"', '')
+          bsh.write_text(b, encoding="utf-8")
+          PYEOF
+
+          # Mantem a branch SpkIOSzero sempre com 1 unico commit limpo
+          git checkout --orphan SpkIOSzero_single
+          git add -A
+          git commit -m "feat(SpkIOSzero): unified nxnative branch with LibHac ios-arm64 extractor & Thin IPA pipeline"
+          git branch -M "$BRANCH_NAME"
+          git push -f origin "$BRANCH_NAME"
+
+      - name: 2. Instalar .NET 9/10 NativeAOT iOS e Dependencias
+        run: |
+          brew install xcodegen
+          pip3 install --break-system-packages lz4 capstone fonttools backports.zstd
+          curl -sSL https://dot.net/v1/dotnet-install.sh -o "$RUNNER_TEMP/dotnet-install.sh"
+          chmod +x "$RUNNER_TEMP/dotnet-install.sh"
+          "$RUNNER_TEMP/dotnet-install.sh" --channel 9.0 --install-dir "$HOME/.dotnet"
+          "$RUNNER_TEMP/dotnet-install.sh" --channel 10.0 --install-dir "$HOME/.dotnet"
+          export PATH="$HOME/.dotnet:$PATH"
+          echo "$HOME/.dotnet" >> "$GITHUB_PATH"
+
+      - name: 3A. [Modo build_extractor_ipa] Compilar App Extrator LibHac Nativo para iPhone (ios-arm64)
+        if: ${{ (inputs.mode || 'build_extractor_ipa') == 'build_extractor_ipa' }}
+        run: |
+          cd "$RUNNER_TEMP/repo"
+
+          # Prepara o projeto LibHac (nx_extract) para compilar como biblioteca estatica NativeAOT ios-arm64 real
+          cat > dm/tools/nx_extract/nx_extract.csproj << 'EOF'
+          <Project Sdk="Microsoft.NET.Sdk">
+            <PropertyGroup>
+              <OutputType>Library</OutputType>
+              <TargetFramework>net9.0</TargetFramework>
+              <RuntimeIdentifier>ios-arm64</RuntimeIdentifier>
+              <PublishAot>true</PublishAot>
+              <NativeLib>Static</NativeLib>
+              <Nullable>disable</Nullable>
+              <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
+              <InvariantGlobalization>true</InvariantGlobalization>
+            </PropertyGroup>
+            <ItemGroup>
+              <PackageReference Include="LibHac" Version="0.19.0" />
+            </ItemGroup>
+          </Project>
+          EOF
+
+          # Injeta o entrypoint C UnmanagedCallersOnly ios_libhac_extract em Program.cs
+          python3 - << 'PYEOF'
+          from pathlib import Path
+          p = Path("dm/tools/nx_extract/Program.cs")
+          code = p.read_text(encoding="utf-8")
+          entry = """
+              [System.Runtime.InteropServices.UnmanagedCallersOnly(EntryPoint = "ios_libhac_extract")]
+              public static int IosLibHacExtract(IntPtr keysPtr, IntPtr basePtr, IntPtr updPtr, IntPtr outDirPtr, int mode) {
+                  try {
+                      g_damaged.Clear();
+                      g_lenient = null;
+                      g_lenientFs = null;
+                      string k = System.Runtime.InteropServices.Marshal.PtrToStringUTF8(keysPtr);
+                      string b = System.Runtime.InteropServices.Marshal.PtrToStringUTF8(basePtr);
+                      string u = updPtr != IntPtr.Zero ? System.Runtime.InteropServices.Marshal.PtrToStringUTF8(updPtr) : "-";
+                      string o = System.Runtime.InteropServices.Marshal.PtrToStringUTF8(outDirPtr);
+                      if (mode == 1) return Main(new string[] { k, "--aoc", b, o, "--allow-damaged" });
+                      if (mode == 2) return Main(new string[] { k, b, u, o, "--manifest", "--allow-damaged" });
+                      return Main(new string[] { k, b, u, o, "--allow-damaged" });
+                  } catch (Exception e) {
+                      Console.Error.WriteLine(e.ToString());
+                      return 1;
+                  }
+              }
+          """
+          if "ios_libhac_extract" not in code:
+              code = code.replace("static int Main(string[] a) {", entry + "\n    static int Main(string[] a) {", 1)
+              p.write_text(code, encoding="utf-8")
+          PYEOF
+
+          dotnet publish dm/tools/nx_extract/nx_extract.csproj \
+            -c Release \
+            -r ios-arm64 \
+            -p:PublishAot=true \
+            -p:NativeLib=Static \
+            -p:StripSymbols=true \
+            -o "$RUNNER_TEMP/libhac_ios"
+
+          ls -lh "$RUNNER_TEMP/libhac_ios/"
+
+          # Localiza todas as bibliotecas .a do runtime NativeAOT ios-arm64 para linkar no executavel iOS
+          NUGET_AOT=$(find "$HOME/.nuget/packages/microsoft.dotnet.ilcompiler" -type d -name "sdk" | grep "ios-arm64" | head -n 1)
+          echo "NUGET_AOT=$NUGET_AOT"
+
+          # Cria o aplicativo iOS nativo extrator (UIViewController + LibHac + gerador automatico de github_kit.zip)
+          mkdir -p "$RUNNER_TEMP/ExtractorApp"
+          cat > "$RUNNER_TEMP/ExtractorApp/main.m" << 'OBJCEOF'
+          #import <UIKit/UIKit.h>
+          #include <stdint.h>
+          #include <stdio.h>
+          #include <stdlib.h>
+          #include <string.h>
+          #include <zlib.h>
+
+          extern int ios_libhac_extract(const char *keys, const char *base_nsp, const char *upd_nsp, const char *out_dir, int mode);
+
+          #pragma pack(push, 1)
+          struct zip_lfh { uint32_t sig; uint16_t ver, flags, method, mtime, mdate; uint32_t crc, csize, usize; uint16_t nlen, elen; };
+          struct zip_cdh { uint32_t sig; uint16_t vmade, vext, flags, method, mtime, mdate; uint32_t crc, csize, usize; uint16_t nlen, elen, clen, disk, iattr; uint32_t eattr, off; };
+          struct zip_eocd { uint32_t sig; uint16_t disk, cd_disk, entries_disk, entries_total; uint32_t cd_size, cd_off; uint16_t comment_len; };
+          #pragma pack(pop)
+
+          static BOOL build_zip_file(NSString *srcDir, NSString *zipPath) {
+              NSFileManager *fm = NSFileManager.defaultManager;
+              [fm removeItemAtPath:zipPath error:nil];
+              FILE *zf = fopen(zipPath.fileSystemRepresentation, "wb");
+              if (!zf) return NO;
+              NSMutableData *cd = [NSMutableData data];
+              uint16_t count = 0;
+              NSDirectoryEnumerator *en = [fm enumeratorAtPath:srcDir];
+              NSString *rel = nil;
+              while ((rel = [en nextObject])) {
+                  NSString *full = [srcDir stringByAppendingPathComponent:rel];
+                  NSDictionary *attr = [fm attributesOfItemAtPath:full error:nil];
+                  if (![attr.fileType isEqualToString:NSFileTypeRegular]) continue;
+                  NSData *data = [NSData dataWithContentsOfFile:full options:NSDataReadingMappedIfSafe error:nil];
+                  if (!data || data.length > 0xFFFFFFFFULL) continue;
+                  const char *name = rel.UTF8String;
+                  uint16_t nlen = (uint16_t)strlen(name);
+                  uint32_t usize = (uint32_t)data.length;
+                  uint32_t crc = (uint32_t)crc32(0L, (const Bytef *)data.bytes, usize);
+                  uint32_t off = (uint32_t)ftell(zf);
+                  struct zip_lfh lfh = {0x04034b50, 20, 0x0800, 0, 0, 0x21, crc, usize, usize, nlen, 0};
+                  fwrite(&lfh, sizeof(lfh), 1, zf);
+                  fwrite(name, 1, nlen, zf);
+                  if (usize) fwrite(data.bytes, 1, usize, zf);
+                  struct zip_cdh cdh = {0x02014b50, 20, 20, 0x0800, 0, 0, 0x21, crc, usize, usize, nlen, 0, 0, 0, 0, 0, off};
+                  [cd appendBytes:&cdh length:sizeof(cdh)];
+                  [cd appendBytes:name length:nlen];
+                  count++;
+              }
+              uint32_t cdOff = (uint32_t)ftell(zf);
+              if (cd.length) fwrite(cd.bytes, 1, cd.length, zf);
+              struct zip_eocd eocd = {0x06054b50, 0, 0, count, count, (uint32_t)cd.length, cdOff, 0};
+              fwrite(&eocd, sizeof(eocd), 1, zf);
+              fclose(zf);
+              return count > 0;
+          }
+
+          @interface ExtractorVC : UIViewController
+          @property (nonatomic, strong) UITextView *logView;
+          @property (nonatomic, strong) UIButton *btn;
+          @end
+
+          @implementation ExtractorVC
+          - (void)viewDidLoad {
+              [super viewDidLoad];
+              self.view.backgroundColor = [UIColor colorWithRed:0.05 green:0.06 blue:0.10 alpha:1.0];
+              UILabel *t = [[UILabel alloc] initWithFrame:CGRectMake(20, 56, self.view.bounds.size.width - 40, 32)];
+              t.autoresizingMask = UIViewAutoresizingFlexibleWidth;
+              t.text = @"SpkIOSzero — LibHac NSP/XCI Extractor";
+              t.textColor = UIColor.whiteColor;
+              t.font = [UIFont boldSystemFontOfSize:19];
+              [self.view addSubview:t];
+
+              self.logView = [[UITextView alloc] initWithFrame:CGRectMake(20, 96, self.view.bounds.size.width - 40, self.view.bounds.size.height - 186)];
+              self.logView.autoresizingMask = UIViewAutoresizingFlexibleWidth | UIViewAutoresizingFlexibleHeight;
+              self.logView.backgroundColor = UIColor.blackColor;
+              self.logView.textColor = [UIColor colorWithRed:0.35 green:0.95 blue:0.55 alpha:1.0];
+              self.logView.font = [UIFont monospacedSystemFontOfSize:12 weight:UIFontWeightRegular];
+              self.logView.editable = NO;
+              self.logView.text = @"Coloque na pasta deste App no 'Arquivos' do iPhone:\n"
+                                  @"  - prod.keys\n"
+                                  @"  - Jogo Base (.nsp ou .xci)\n"
+                                  @"  - Update (.nsp) e DLCs (.nsp)\n\n"
+                                  @"Depois toque no botao laranja abaixo!\n\n";
+              [self.view addSubview:self.logView];
+
+              self.btn = [UIButton buttonWithType:UIButtonTypeSystem];
+              self.btn.frame = CGRectMake(20, self.view.bounds.size.height - 76, self.view.bounds.size.width - 40, 50);
+              self.btn.autoresizingMask = UIViewAutoresizingFlexibleWidth | UIViewAutoresizingFlexibleTopMargin;
+              self.btn.backgroundColor = [UIColor colorWithRed:0.95 green:0.45 blue:0.10 alpha:1.0];
+              [self.btn setTitle:@"Extrair NSP + Update + DLC e Gerar github_kit.zip" forState:UIControlStateNormal];
+              [self.btn setTitleColor:UIColor.whiteColor forState:UIControlStateNormal];
+              self.btn.titleLabel.font = [UIFont boldSystemFontOfSize:15];
+              self.btn.layer.cornerRadius = 10;
+              [self.btn addTarget:self action:@selector(runExtract) forControlEvents:UIControlEventTouchUpInside];
+              [self.view addSubview:self.btn];
+          }
+
+          - (void)log:(NSString *)msg {
+              dispatch_async(dispatch_get_main_queue(), ^{
+                  self.logView.text = [self.logView.text stringByAppendingFormat:@"%@\n", msg];
+                  [self.logView scrollRangeToVisible:NSMakeRange(self.logView.text.length - 1, 1)];
+              });
+          }
+
+          - (void)runExtract {
+              self.btn.enabled = NO;
+              dispatch_async(dispatch_get_global_queue(QOS_CLASS_USER_INITIATED, 0), ^{
+                  NSFileManager *fm = NSFileManager.defaultManager;
+                  NSString *doc = NSSearchPathForDirectoriesInDomains(NSDocumentDirectory, NSUserDomainMask, YES)[0];
+                  NSString *keys = [doc stringByAppendingPathComponent:@"prod.keys"];
+                  if (![fm fileExistsAtPath:keys]) {
+                      [self log:@"ERRO: prod.keys nao encontrado na pasta Documents deste app!"];
+                      dispatch_async(dispatch_get_main_queue(), ^{ self.btn.enabled = YES; });
+                      return;
+                  }
+                  NSString *basePkg = nil;
+                  NSString *updPkg = @"-";
+                  NSMutableArray<NSString *> *dlcs = [NSMutableArray array];
+                  NSArray<NSString *> *files = [[fm contentsOfDirectoryAtPath:doc error:nil] sortedArrayUsingSelector:@selector(compare:)];
+                  for (NSString *f in files) {
+                      NSString *low = f.lowercaseString;
+                      if (!([low hasSuffix:@".nsp"] || [low hasSuffix:@".xci"])) continue;
+                      NSString *full = [doc stringByAppendingPathComponent:f];
+                      if ([low containsString:@"dlc"] || [low containsString:@"aoc"]) {
+                          [dlcs addObject:full];
+                      } else if ([low containsString:@"upd"] || [low containsString:@"patch"] || [low containsString:@"800]"]) {
+                          updPkg = full;
+                      } else if (!basePkg) {
+                          basePkg = full;
+                      }
+                  }
+                  if (!basePkg) {
+                      [self log:@"ERRO: Nenhum arquivo .nsp/.xci encontrado na pasta Documents!"];
+                      dispatch_async(dispatch_get_main_queue(), ^{ self.btn.enabled = YES; });
+                      return;
+                  }
+
+                  NSString *staging = [doc stringByAppendingPathComponent:@"_kit_staging"];
+                  [fm removeItemAtPath:staging error:nil];
+                  [fm createDirectoryAtPath:staging withIntermediateDirectories:YES attributes:nil error:nil];
+
+                  [self log:[NSString stringWithFormat:@"1/4 Gerando manifesto (Base: %@, Update: %@)...", basePkg.lastPathComponent, updPkg.lastPathComponent]];
+                  ios_libhac_extract(keys.UTF8String, basePkg.UTF8String, updPkg.UTF8String, staging.UTF8String, 2);
+
+                  [self log:@"2/4 Extraindo e fundindo Base + Update com LibHac (pode levar alguns minutos para 17GB)..."];
+                  int rc = ios_libhac_extract(keys.UTF8String, basePkg.UTF8String, updPkg.UTF8String, staging.UTF8String, 0);
+                  if (rc != 0 && rc != 3) {
+                      [self log:[NSString stringWithFormat:@"ERRO LibHac rc=%d", rc]];
+                      dispatch_async(dispatch_get_main_queue(), ^{ self.btn.enabled = YES; });
+                      return;
+                  }
+
+                  NSString *romfsOut = [doc stringByAppendingPathComponent:@"romfs"];
+                  [fm removeItemAtPath:romfsOut error:nil];
+                  [fm moveItemAtPath:[staging stringByAppendingPathComponent:@"RomFS"] toPath:romfsOut error:nil];
+                  [self log:@"-> Pasta Documents/romfs/ (17GB) criada com sucesso!"];
+
+                  int idx = 1;
+                  for (NSString *d in dlcs) {
+                      [self log:[NSString stringWithFormat:@"3/4 Extraindo DLC #%d: %@...", idx, d.lastPathComponent]];
+                      NSString *aocOut = [NSString stringWithFormat:@"%@/aoc/%03d", staging, idx];
+                      NSString *docAoc = [NSString stringWithFormat:@"%@/aoc/%03d", doc, idx];
+                      [fm createDirectoryAtPath:aocOut withIntermediateDirectories:YES attributes:nil error:nil];
+                      ios_libhac_extract(keys.UTF8String, d.UTF8String, "-", aocOut.UTF8String, 1);
+                      [fm createDirectoryAtPath:[doc stringByAppendingPathComponent:@"aoc"] withIntermediateDirectories:YES attributes:nil error:nil];
+                      [fm removeItemAtPath:docAoc error:nil];
+                      [fm copyItemAtPath:aocOut toPath:docAoc error:nil];
+                      idx++;
+                  }
+
+                  [self log:@"4/4 Copiando Shaders/Metadados leves e gerando Documents/github_kit.zip..."];
+                  NSString *slimRomfs = [staging stringByAppendingPathComponent:@"RomFS"];
+                  [fm createDirectoryAtPath:slimRomfs withIntermediateDirectories:YES attributes:nil error:nil];
+                  NSDirectoryEnumerator *en = [fm enumeratorAtPath:romfsOut];
+                  NSString *rel = nil;
+                  while ((rel = [en nextObject])) {
+                      NSString *full = [romfsOut stringByAppendingPathComponent:rel];
+                      NSDictionary *a = [fm attributesOfItemAtPath:full error:nil];
+                      if (![a.fileType isEqualToString:NSFileTypeRegular]) continue;
+                      unsigned long long sz = [a fileSize];
+                      NSString *low = rel.lowercaseString;
+                      if ([low containsString:@"shader"] || [low hasSuffix:@".ushaderbytecode"] ||
+                          [low hasSuffix:@".upipelinecache"] || [low hasSuffix:@".utoc"] ||
+                          [low hasSuffix:@".ini"] || [low hasSuffix:@".uproject"] ||
+                          ([low hasSuffix:@".pak"] && sz <= 128ULL * 1024ULL * 1024ULL)) {
+                          NSString *dst = [slimRomfs stringByAppendingPathComponent:rel];
+                          [fm createDirectoryAtPath:[dst stringByDeletingLastPathComponent] withIntermediateDirectories:YES attributes:nil error:nil];
+                          [fm copyItemAtPath:full toPath:dst error:nil];
+                      }
+                  }
+
+                  NSString *zipOut = [doc stringByAppendingPathComponent:@"github_kit.zip"];
+                  if (build_zip_file(staging, zipOut)) {
+                      NSDictionary *za = [fm attributesOfItemAtPath:zipOut error:nil];
+                      [self log:[NSString stringWithFormat:@"CONCLUIDO! Documents/github_kit.zip (%.1f MB) pronto! Agora voce ja pode apagar os arquivos .nsp originais e subir apenas o github_kit.zip no GitHub!", [za fileSize] / (1024.0 * 1024.0)]];
+                  } else {
+                      [self log:@"ERRO ao gerar github_kit.zip"];
+                  }
+                  [fm removeItemAtPath:staging error:nil];
+                  dispatch_async(dispatch_get_main_queue(), ^{ self.btn.enabled = YES; });
+              });
+          }
+          @end
+
+          @interface AppDelegate : UIResponder <UIApplicationDelegate>
+          @property (nonatomic, strong) UIWindow *window;
+          @end
+          @implementation AppDelegate
+          - (BOOL)application:(UIApplication *)app didFinishLaunchingWithOptions:(NSDictionary *)opts {
+              self.window = [[UIWindow alloc] initWithFrame:UIScreen.mainScreen.bounds];
+              self.window.rootViewController = [ExtractorVC new];
+              [self.window makeKeyAndVisible];
+              return YES;
+          }
+          @end
+
+          int main(int argc, char *argv[]) {
+              @autoreleasepool {
+                  return UIApplicationMain(argc, argv, nil, NSStringFromClass([AppDelegate class]));
+              }
+          }
+          OBJCEOF
+
+          # Compila e linka o App Extrator iOS com clang (arm64-apple-ios17.0) + LibHac Static NativeAOT
+          SDK_PATH=$(xcrun --sdk iphoneos --show-sdk-path)
+          mkdir -p "$RUNNER_TEMP/Payload/SpkExtractor.app"
+
+          xcrun --sdk iphoneos clang -arch arm64 -miphoneos-version-min=17.0 \
+            -isysroot "$SDK_PATH" \
+            -fobjc-arc \
+            "$RUNNER_TEMP/ExtractorApp/main.m" \
+            "$RUNNER_TEMP/libhac_ios/nx_extract.a" \
+            "$NUGET_AOT/libbootstrapperdll.o" \
+            "$NUGET_AOT/libRuntime.WorkstationGC.a" \
+            "$NUGET_AOT/libeventpipe-disabled.a" \
+            "$NUGET_AOT/libstdc++compat.a" \
+            "$NUGET_AOT/libSystem.Native.a" \
+            "$NUGET_AOT/libSystem.IO.Compression.Native.a" \
+            "$NUGET_AOT/libSystem.Globalization.Native.a" \
+            -framework UIKit -framework Foundation -framework Security -framework CoreFoundation \
+            -lc++ -lz -liconv -compression \
+            -o "$RUNNER_TEMP/Payload/SpkExtractor.app/SpkExtractor"
+
+          cat > "$RUNNER_TEMP/Payload/SpkExtractor.app/Info.plist" << 'PLIST'
+          <?xml version="1.0" encoding="UTF-8"?>
+          <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+          <plist version="1.0">
+          <dict>
+            <key>CFBundleExecutable</key><string>SpkExtractor</string>
+            <key>CFBundleIdentifier</key><string>com.kinttany.spkextractor</string>
+            <key>CFBundleName</key><string>SpkExtractor</string>
+            <key>CFBundleDisplayName</key><string>SpkExtractor</string>
+            <key>CFBundleVersion</key><string>1.0</string>
+            <key>CFBundleShortVersionString</key><string>1.0</string>
+            <key>CFBundlePackageType</key><string>APPL</string>
+            <key>LSRequiresIPhoneOS</key><true/>
+            <key>UIDeviceFamily</key><array><integer>1</integer><integer>2</integer></array>
+            <key>UIFileSharingEnabled</key><true/>
+            <key>LSSupportsOpeningDocumentsInPlace</key><true/>
+            <key>UILaunchScreen</key><dict/>
+          </dict>
+          </plist>
+          PLIST
+
+          codesign -f -s - "$RUNNER_TEMP/Payload/SpkExtractor.app"
+          cd "$RUNNER_TEMP"
+          zip -qry "$RUNNER_TEMP/SpkIOSzero_Extractor.ipa" Payload
+
+      - name: 3B. [Modo build_thin_game_ipa] Compilar Jogo a partir do github_kit.zip
+        if: ${{ inputs.mode == 'build_thin_game_ipa' }}
+        env:
+          KIT_URL: ${{ inputs.github_kit_url }}
+        run: |
+          cd "$RUNNER_TEMP/repo"
+          curl -L --fail -o "$RUNNER_TEMP/github_kit.zip" "$KIT_URL"
+          mkdir -p "$RUNNER_TEMP/kit"
+          unzip -q "$RUNNER_TEMP/github_kit.zip" -d "$RUNNER_TEMP/kit"
+          ls -la "$RUNNER_TEMP/kit"
+
+      - name: 4. Upload do IPA nos Artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: SpkIOSzero-${{ inputs.mode || 'build_extractor_ipa' }}-Artifact
+          path: |
+            ${{ runner.temp }}/SpkIOSzero_Extractor.ipa
+            ${{ runner.temp }}/DBSparkingZero_Thin.ipa
