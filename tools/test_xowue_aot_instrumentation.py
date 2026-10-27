@@ -208,3 +208,19 @@ assert "if ((++audioLoopCalls & 63u) == 0u)" in engine
 assert "std::chrono::milliseconds(2)" in engine
 assert 'CURRENT_PROJECT_VERSION: "68"' in (root / "iOS" / "project.yml").read_text(encoding="utf-8")
 print("PASS: Build 68 lost-wakeup counters, all-thread worker-first watchdog, async-task recovery, PPC audit and audio throttle")
+
+# Build 69: QPC fast path, synthetic timebase, and complete diagnostics.
+assert "const bool qpcFastPath = guestAddress == 0x82C3C4D8u;" in engine
+assert "const bool plateau = !qpcFastPath" in engine
+assert "static thread_local uint64_t repeats=0u, syntheticOffset=0u;" in engine
+assert "syntheticOffset+=50000u;" in engine
+assert "tb64+=syntheticOffset;" in engine
+assert "snapshotAllGuestThreads()" in engine
+assert "add(g_mainGuestThread);" in engine and "add(g_graphicsInterruptThread);" in engine
+assert "static void logCodeAuditBuild69(uint8_t *base)" in engine
+for address in ("0x82C3C498u","0x822A1BC0u","0x822A01C0u","0x824E6F10u","0x82C257F0u","0x823704C0u","0x824278C0u","0x826903F0u","0x826901E0u","0x827E1250u","0x82B49DE0u","0x82B4AAE0u","0x82B4AE00u","0x40000770u","0x40002130u","0x4025D0F0u","0x4025D0F8u","0x4036FA00u","0x4036FA40u","0x4004ED60u","0x4004EDB0u"):
+    assert address in engine, f"Build 69 audit address missing {address}"
+assert "CODE_AUDIT_B69_GUEST_WORD" in engine
+assert "THREAD_DUMP id=%u entry=0x%08X exited=%u waiting=%u wait_target=0x%08X last_fn=0x%08X prev_fn=0x%08X lr=0x%08X" in engine
+assert 'CURRENT_PROJECT_VERSION: "69"' in (root / "iOS" / "project.yml").read_text(encoding="utf-8")
+print("PASS: Build 69 QPC fast path, synthetic timebase, main/interrupt thread snapshots, PPC code/data audit")

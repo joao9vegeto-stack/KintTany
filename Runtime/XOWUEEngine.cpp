@@ -414,10 +414,18 @@ std::atomic<uint64_t> g_aotExecutionDistinct{0u};
 std::atomic<bool> g_aotExecutionTelemetryActive{false};
 std::atomic<uint32_t> g_lastAotGuestFunction{0u};
 std::atomic<uint32_t> g_lastAotGuestThread{0u};
+std::atomic<bool> g_build69AuditEmitted{false};
+extern std::shared_ptr<GuestThread> g_graphicsInterruptThread;
+std::vector<std::shared_ptr<GuestThread>> snapshotAllGuestThreads() {
+ std::vector<std::shared_ptr<GuestThread>> s;
+ { std::lock_guard<std::mutex> l(g_guestThreadMutex); s=g_guestThreads; }
+ auto add=[&s](const std::shared_ptr<GuestThread>&t){if(t&&std::none_of(s.begin(),s.end(),[&](const auto&v){return v.get()==t.get();}))s.push_back(t);};
+ add(g_mainGuestThread); add(g_graphicsInterruptThread); return s;
+}
 
 bool shouldPersistRuntimeTrace(const std::string &event, size_t sequence) {
     // Build 64 must persist diagnostics that identify stalls and QPC output writes.
-    for (const char *required : {"CODE_AUDIT_B66", "CODE_AUDIT_B67", "CODE_AUDIT_83847ABC", "XOWUE_SYNC_CREATE", "XOWUE_MAIN_WAIT_WATCHDOG", "XOWUE_VBLANK_WATCHDOG_SIGNAL", "XOWUE_POOL_ALLOC_82DC2BF0", "AOT_PROGRESS", "THREAD_DUMP", "XOWUE_AOT_HOTSPOT",
+    for (const char *required : {"CODE_AUDIT_B69", "CODE_AUDIT_B69_GUEST_WORD", "APP_LAUNCH", "CODE_AUDIT_B66", "CODE_AUDIT_B67", "CODE_AUDIT_83847ABC", "XOWUE_SYNC_CREATE", "XOWUE_MAIN_WAIT_WATCHDOG", "XOWUE_VBLANK_WATCHDOG_SIGNAL", "XOWUE_POOL_ALLOC_82DC2BF0", "AOT_PROGRESS", "THREAD_DUMP", "XOWUE_AOT_HOTSPOT",
                                  "XOWUE_AOT_HOTSPOT_STATE", "XOWUE_QPC_WRITE",
                                  "XOWUE_STALL_THREADS", "CODE_AUDIT_QPC_CALLERS",
                                  "XOWUE_QPC_CALLER_DUMP", "CODE_AUDIT_B65",
@@ -668,7 +676,8 @@ void recordAotFunctionExecution(uint32_t guestAddress) {
         lastDistinctValue = distinct;
         lastDistinctCall = calls;
     }
-    const bool plateau = calls > 12000000u && calls - lastDistinctCall > 5000000u;
+    const bool qpcFastPath = guestAddress == 0x82C3C4D8u;
+    const bool plateau = !qpcFastPath && calls > 12000000u && calls - lastDistinctCall > 5000000u;
     if (plateau) {
         bool expectedDump = false;
         if (g_xenosCpPlateauDumped.compare_exchange_strong(expectedDump, true, std::memory_order_acq_rel)) {
@@ -777,8 +786,7 @@ void recordAotFunctionExecution(uint32_t guestAddress) {
                 }
                 recordRuntimeTrace(codeLine);
             }
-            std::vector<std::shared_ptr<GuestThread>> threadSnapshot;
-            { std::lock_guard<std::mutex> lock(g_guestThreadMutex); threadSnapshot = g_guestThreads; }
+            std::vector<std::shared_ptr<GuestThread>> threadSnapshot = snapshotAllGuestThreads();
             for (const auto &thread : threadSnapshot) {
                 if (!thread) continue;
                 char recent[160]{};
@@ -819,8 +827,7 @@ static void logAotHotspotThreadDump(uint32_t guestAddress, uint64_t calls) {
         guestAddress, static_cast<unsigned long long>(calls), current ? current->id : 0u,
         callerLr, previous, recent[0], recent[1], recent[2], recent[3], recent[4], recent[5], recent[6], recent[7]);
     recordRuntimeTrace(state);
-    std::vector<std::shared_ptr<GuestThread>> snapshot;
-    { std::lock_guard<std::mutex> lock(g_guestThreadMutex); snapshot = g_guestThreads; }
+    std::vector<std::shared_ptr<GuestThread>> snapshot = snapshotAllGuestThreads();
     for (const auto &thread : snapshot) {
         if (!thread) continue;
         char recentText[192]{};
@@ -2027,6 +2034,20 @@ static void emitBuild66CodeAudit(uint8_t *base) {
     }
 }
 
+static void logCodeAuditBuild69(uint8_t *base) {
+ if(!base||g_build69AuditEmitted.exchange(true,std::memory_order_acq_rel))return;
+ struct R{uint32_t b,e;const char*n;}; static constexpr R rs[]={
+ {0x82C3C498u,0x82C3C518u,"QPC_82C3C4D8"},{0x822A1BC0u,0x822A2120u,"BINK_822A1E08"},
+ {0x822A01C0u,0x822A0460u,"BINK_822A0278"},{0x824E6F10u,0x824E7140u,"WORKER_824E6FD8"},
+ {0x82C257F0u,0x82C25A40u,"UE3_82C25840_82C259C8"},{0x823704C0u,0x82370D00u,"AUDIO_82370500_82370C4C"},
+ {0x824278C0u,0x824279C0u,"AUDIO_82427940"},{0x826903F0u,0x826904B0u,"QUEUE_82690468"},
+ {0x826901E0u,0x826902B0u,"QUEUE_82690260"},{0x827E1250u,0x827E12D0u,"QUEUE_827E1290"},
+ {0x82B49DE0u,0x82B49E60u,"AUDIO_82B49E20"},{0x82B4AAE0u,0x82B4AB80u,"AUDIO_82B4AB28"},{0x82B4AE00u,0x82B4AE80u,"AUDIO_82B4AE40"}};
+ char l[192]; for(const auto&r:rs){std::snprintf(l,sizeof(l),"CODE_AUDIT_B69_BEGIN name=%s range=0x%08X..0x%08X",r.n,r.b,r.e);recordRuntimeTrace(l);
+ for(uint32_t pc=r.b;pc<r.e;pc+=4u){bool ok=validGuestRange(pc,4u);std::snprintf(l,sizeof(l),"CODE_AUDIT_B69 name=%s pc=0x%08X word=0x%08X valid=%u",r.n,pc,ok?loadGuestBe32(base,pc):0xFFFFFFFFu,ok?1u:0u);recordRuntimeTrace(l);}
+ std::snprintf(l,sizeof(l),"CODE_AUDIT_B69_END name=%s",r.n);recordRuntimeTrace(l);}
+}
+
 void xowue_thread_checkpoint() {
     // This hook runs at generated PPC AOT function entries. Poll the global
     // stop flag before touching scheduler/TLS state or pumping the GPU ring,
@@ -2035,7 +2056,7 @@ void xowue_thread_checkpoint() {
     if (g_schedulerStopRequested.load(std::memory_order_relaxed))
         throw GuestThreadStopRequested{};
     checkpointGuestThread();
-    auto auditMemory=g_activeGuestMemory.lock(); if(auditMemory && auditMemory->base) emitBuild66CodeAudit(auditMemory->base);
+    auto auditMemory=g_activeGuestMemory.lock(); if(auditMemory&&auditMemory->base){emitBuild66CodeAudit(auditMemory->base);logCodeAuditBuild69(auditMemory->base);}
     // The Xenos ring is executed only by the worker thread (Xenia's CP
     // thread): it runs PM4_INTERRUPT handlers synchronously and blocks on
     // WAIT_REG_MEM, neither of which is safe on an arbitrary guest thread.
@@ -6985,6 +7006,14 @@ extern "C" uint64_t xowue_guest_timebase(void) {
 }
 
 extern "C" uint64_t xowue_qpc_write(uint32_t outPtr, uint64_t tb64, uint32_t callerLR) {
+    static thread_local uint32_t prevLR=0u;
+    static thread_local uint64_t repeats=0u, syntheticOffset=0u;
+    const bool timerPoll=callerLR==0x822A1E08u||callerLR==0x822A0278u||callerLR==0x824E6FD8u||callerLR==0x82C25840u||
+      (callerLR>=0x822A1C00u&&callerLR<0x822A2100u)||(callerLR>=0x822A0200u&&callerLR<0x822A0450u)||
+      (callerLR>=0x824E6F50u&&callerLR<0x824E7100u)||(callerLR>=0x82C25800u&&callerLR<0x82C25A80u);
+    if(timerPoll){if(prevLR==callerLR){if(repeats!=UINT64_MAX)++repeats;if(repeats>1u)syntheticOffset+=50000u;}else{prevLR=callerLR;repeats=1u;}}
+    else{prevLR=callerLR;repeats=0u;}
+    tb64+=syntheticOffset;
     if (static_cast<uint32_t>(tb64) == 0u) tb64 |= 1ull;
     static std::atomic<uint64_t> qpcCalls{0u};
     const uint64_t call = qpcCalls.fetch_add(1u, std::memory_order_relaxed) + 1u;
@@ -6996,12 +7025,10 @@ extern "C" uint64_t xowue_qpc_write(uint32_t outPtr, uint64_t tb64, uint32_t cal
         storeGuestBe32(memory->base, outPtr, static_cast<uint32_t>(tb64 >> 32u));
         storeGuestBe32(memory->base, outPtr + 4u, static_cast<uint32_t>(tb64));
     }
-    if (call <= 8u || !valid) {
-        char event[256];
-        std::snprintf(event, sizeof(event),
-            "XOWUE_QPC_WRITE call=%llu thread=%u out_ptr=0x%08X tb64=0x%016llX caller_lr=0x%08X out_ptr_valid=%u write=%u",
-            static_cast<unsigned long long>(call), threadId, outPtr,
-            static_cast<unsigned long long>(tb64), callerLR, valid ? 1u : 0u, valid ? 1u : 0u);
+    if (call <= 8u || !valid || (timerPoll&&repeats==2u)) {
+        char event[320];
+        std::snprintf(event,sizeof(event),"XOWUE_QPC_WRITE call=%llu thread=%u out_ptr=0x%08X tb64=0x%016llX caller_lr=0x%08X out_ptr_valid=%u write=%u timer_poll=%u synthetic_offset=%llu",
+            static_cast<unsigned long long>(call),threadId,outPtr,static_cast<unsigned long long>(tb64),callerLR,valid?1u:0u,valid?1u:0u,timerPoll?1u:0u,static_cast<unsigned long long>(syntheticOffset));
         std::fprintf(stderr, "%s\n", event);
         recordRuntimeTrace(event);
     }
@@ -7009,9 +7036,13 @@ extern "C" uint64_t xowue_qpc_write(uint32_t outPtr, uint64_t tb64, uint32_t cal
 }
 
 extern "C" void xowue_log_stall_threads(void) {
-    std::vector<std::shared_ptr<GuestThread>> snapshot;
-    { std::lock_guard<std::mutex> lock(g_guestThreadMutex); snapshot = g_guestThreads; }
-    char line[2048];
+    std::vector<std::shared_ptr<GuestThread>> snapshot = snapshotAllGuestThreads();
+    const auto mem = g_activeGuestMemory.lock();
+    if(mem&&mem->base) for(uint32_t a:{0x40000770u,0x40002130u,0x4025D0F0u,0x4025D0F8u,0x4036FA00u,0x4036FA40u,0x4004ED60u,0x4004EDB0u}) {
+        const bool ok=validGuestRange(a,4u); char w[128];
+        std::snprintf(w,sizeof(w),"CODE_AUDIT_B69_GUEST_WORD address=0x%08X word=0x%08X valid=%u",a,ok?loadGuestBe32(mem->base,a):0xFFFFFFFFu,ok?1u:0u); recordRuntimeTrace(w);
+    }
+    char line[8192];
     size_t used = static_cast<size_t>(std::snprintf(line, sizeof(line),
         "XOWUE_STALL_THREADS count=%zu", snapshot.size()));
     for (const auto &thread : snapshot) {
@@ -7028,6 +7059,19 @@ extern "C" void xowue_log_stall_threads(void) {
             obj ? obj->callerChain[0] : 0u, obj ? obj->callerChain[1] : 0u,
             obj ? obj->callerChain[2] : 0u, obj ? obj->callerChain[3] : 0u);
         if (n < 0 || static_cast<size_t>(n) >= sizeof(line) - used) break;
+        char detail[768]; char recent[192]{}; size_t recentUsed=0u;
+        const uint32_t recentEnd=thread->recentAotIdx.load(std::memory_order_relaxed);
+        for(uint32_t j=0;j<8u;++j){
+            const uint32_t fn=thread->recentAotFns[(recentEnd-1u-j)&15u].load(std::memory_order_relaxed);
+            const int rn=std::snprintf(recent+recentUsed,sizeof(recent)-recentUsed,"%s0x%08X",j?",":"",fn);
+            if(rn<0||static_cast<size_t>(rn)>=sizeof(recent)-recentUsed)break; recentUsed+=static_cast<size_t>(rn);
+        }
+        std::snprintf(detail,sizeof(detail),
+            "THREAD_DUMP id=%u entry=0x%08X exited=%u waiting=%u wait_target=0x%08X last_fn=0x%08X prev_fn=0x%08X lr=0x%08X recent=[%s] r3=0x%08X r4=0x%08X r11=0x%08X r30=0x%08X r31=0x%08X",
+            thread->id,thread->startAddress,thread->exited.load()?1u:0u,thread->waitingInKernel.load()?1u:0u,target,
+            thread->lastGuestPc.load(),thread->lastCallerFn.load(),thread->lastGuestLr.load(),recent,
+            thread->lastR3.load(),thread->lastR4.load(),thread->lastR11.load(),thread->lastR30.load(),thread->lastR31.load());
+        recordRuntimeTrace(detail);
         used += static_cast<size_t>(n);
     }
     std::fprintf(stderr, "%s\n", line);
