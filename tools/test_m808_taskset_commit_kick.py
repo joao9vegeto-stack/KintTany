@@ -50,7 +50,7 @@ static uint8_t* ts_running(uint32_t ea) {
 static void ts_bits_clear(uint32_t ea,uint8_t mask){assert(locked);guest[ea]&=(uint8_t)~mask;}
 static void asc_taskset_add(unsigned slot,uint64_t n){assert(slot<14);recorded[slot]+=n;}
 static void asc_taskset_store(unsigned slot,uint64_t n){assert(slot<14);recorded[slot]=n;}
-static int spu_asc_wkl_ea_valid(uint32_t ea, uint32_t sz){\n    return (ea >= 0x00100000u && ea < 0xF0000000u && sz <= 0x10000000u && (uint64_t)ea + sz <= 0xF0000000ULL);\n}\nstatic size_t spu_elf_image_size(const uint8_t* image,size_t cap){
+static int spu_asc_wkl_ea_valid(uint32_t ea, uint32_t sz){\n    return ea != 0u && ea < sizeof(guest) && sz <= sizeof(guest) - ea;\n}\nstatic size_t spu_elf_image_size(const uint8_t* image,size_t cap){
     (void)cap;return image==guest+0x1000 ? 128u : 0u;
 }
 static int spu_workload_dispatch_async(const uint8_t* image,uint32_t size,uint32_t ctx){
