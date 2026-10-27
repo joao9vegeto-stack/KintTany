@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""M8.18.6: Complete render unblock + 0x447b0 null-spu_context guard & ARM64 fault recovery + root log.txt & crash.txt.
+"""M8.18.7: Complete render unblock + 0x447b0 null-spu_context guard & ARM64 fault recovery + root log.txt & crash.txt.
 1. Fix 0x447b0 SIGSEGV: when spu_ascension_run_c8_generated_irq yields on 0x00AD0 spin,
    set g_spurs_pm_exited = 1, g_spu_trampoline_fn = NULL, and return 1 (handled!) so callers
    like lifted spu_003FEC0 return immediately instead of falling through to unbased 0x447b0 write.
@@ -114,7 +114,7 @@ static void asc_signal_handler(int sig, siginfo_t* info, void* uap) {{
     for (int f = 0; f < 2; ++f) {{
         int fd = fds[f];
         if (fd < 0) continue;
-        asc_write_str(fd, "=== ASCENSION RECOMP CRASH REPORT (M8.18.6) ===\\n");
+        asc_write_str(fd, "=== ASCENSION RECOMP CRASH REPORT (M8.18.7) ===\\n");
         asc_write_str(fd, "Signal: ");
         asc_write_str(fd, sig_name);
         asc_write_str(fd, "\\n");
@@ -258,7 +258,7 @@ static void asc_install_crash_and_root_logger(void) {{
     /* Create initial log.txt in Documents/ and container root and mirror stderr */
     int lfd = open(g_asc_doc_log_path, O_CREAT | O_WRONLY | O_TRUNC | O_SYNC, 0644);
     if (lfd >= 0) {{
-        const char* hdr = "=== ASCENSION RECOMP LIVE LOG (M8.18.6) ===\\n";
+        const char* hdr = "=== ASCENSION RECOMP LIVE LOG (M8.18.7) ===\\n";
         (void)write(lfd, hdr, strlen(hdr));
         /* Redirect stderr to Documents/log.txt so all runtime printf/fprintf(stderr) are flushed live */
         dup2(lfd, STDERR_FILENO);
@@ -266,7 +266,7 @@ static void asc_install_crash_and_root_logger(void) {{
     }}
     int rfd = open(g_asc_root_log_path, O_CREAT | O_WRONLY | O_TRUNC | O_SYNC, 0644);
     if (rfd >= 0) {{
-        const char* hdr = "=== ASCENSION RECOMP LIVE LOG (M8.18.6) — see Documents/log.txt and Documents/crash.txt ===\\n";
+        const char* hdr = "=== ASCENSION RECOMP LIVE LOG (M8.18.7) — see Documents/log.txt and Documents/crash.txt ===\\n";
         (void)write(rfd, hdr, strlen(hdr));
         close(rfd);
     }}
@@ -355,7 +355,13 @@ static void asc_install_crash_and_root_logger(void) {{
 #endif
         if ((target & SPU_LS_MASK) == 0x00AD0u && s_asc_c8_spin_ctx == ctx) {{
             s_asc_c8_spin_restores++;
-            if (s_asc_c8_spin_restores >= 8u) {{
+            uint32_t wws_job_active = 0;
+            if (ctx->ls) {{
+                const uint32_t* jstate = (const uint32_t*)(ctx->ls + 0x12A0u);
+                wws_job_active = (jstate[0] | jstate[1] | jstate[2] | jstate[3]);
+            }}
+            uint32_t max_spins = wws_job_active ? 256u : 16u;
+            if (s_asc_c8_spin_restores >= max_spins) {{
                 s_asc_c8_spin_restores = 0;
                 g_spurs_pm_exited = 1;
                 g_spu_trampoline_fn = NULL;
@@ -369,7 +375,7 @@ static void asc_install_crash_and_root_logger(void) {{
     if old_spin in s:
         s = s.replace(old_spin, new_spin, 1)
 
-    # M8.18.6: handle yield code 2 at the lifted C8 caller, preventing fallthrough to 0x447B0.
+    # M8.18.7: handle yield code 2 at the lifted C8 caller, preventing fallthrough to 0x447B0.
     old_call = """        if (c8_rc == 2) {
             g_spu_trampoline_fn = NULL;
             return;
@@ -436,6 +442,18 @@ static inline int spu_asc_wkl_ea_valid(uint32_t ea, uint32_t sz) {{
         "static void ts_start_ready(uint32_t taskset_ea, uint32_t done_task)\n{",
         "static void ts_start_ready(uint32_t taskset_ea, uint32_t done_task)\n{\n    if (!spu_asc_wkl_ea_valid(taskset_ea, 0x1000u)) return;"
     )
+    # M8.18.7: Unblock tasks sleeping in WAIT_SIGNAL (tasksets 0x15E43100 & 0x11037280)
+    if "ASCENSION_M8187_WAIT_SIGNAL_UNBLOCK" not in s:
+        s_new = re.sub(
+            r'(fprintf\(stderr,\s*"\[spu_workload\][^"]*sleeping %us in WAIT_SIGNAL\\n"[^;]*;)',
+            r'\1 /* ASCENSION_M8187_WAIT_SIGNAL_UNBLOCK */ break;',
+            s,
+            count=1,
+        )
+        if s_new == s:
+            raise RuntimeError("M8.18.7: failed to locate sleeping %us in WAIT_SIGNAL in spu_workload.c")
+        s = s_new
+
     path.write_text(s)
 
 
@@ -547,7 +565,7 @@ def main() -> None:
     patch_cell_spurs(root)
     patch_spurs_policy(root)
     patch_ios_bootprobe_live_files(repo_root)
-    print("[PASS] M8.18.6 WWS 0x3FEC0/0x447b0 guard + ARM64 recovery + root log.txt/crash.txt")
+    print("[PASS] M8.18.7 WWS 0x3FEC0/0x447b0 guard + ARM64 recovery + root log.txt/crash.txt")
 
 
 if __name__ == "__main__":

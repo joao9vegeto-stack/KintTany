@@ -8,8 +8,8 @@
 <key>CFBundleName</key><string>AscensionRecomp</string>
 <key>CFBundleDisplayName</key><string>AscensionRecomp</string>
 <key>CFBundlePackageType</key><string>APPL</string>
-<key>CFBundleShortVersionString</key><string>7.69.0</string>
-<key>CFBundleVersion</key><string>7690</string>
+<key>CFBundleShortVersionString</key><string>8.18.7</string>
+<key>CFBundleVersion</key><string>8187</string>
 <!-- Exported diagnostic reports are visible in Files > On My iPhone
      and eligible for indexing in Files > Recents. -->
 <key>UIFileSharingEnabled</key><true/>
