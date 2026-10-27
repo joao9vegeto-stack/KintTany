@@ -2160,15 +2160,19 @@ void xowue_thread_checkpoint(uint32_t guestAddress) {
         std::fprintf(stderr, "%s\n", event);
         recordRuntimeTrace(event);
     }
-    if (slot->count != 0u && (slot->count % 2000u) == 0u) std::this_thread::yield();
-    if (slot->count != 0u && (slot->count % 20000u) == 0u)
+    // QPC is a leaf fast path and can be called from guest timer busy-waits.
+    // Never sleep or yield from its AOT entry instrumentation.
+    const bool qpcFastPath = guestAddress == 0x82C3C4D8u;
+    if (!qpcFastPath && slot->count != 0u && (slot->count % 2000u) == 0u)
+        std::this_thread::yield();
+    if (!qpcFastPath && slot->count != 0u && (slot->count % 20000u) == 0u)
         std::this_thread::sleep_for(std::chrono::milliseconds(1));
     const bool likelyWaitFamily = guestAddress == 0x82C4BE30u || guestAddress == 0x82C3C4D8u ||
         (guestAddress >= 0x82B30000u && guestAddress <= 0x82B5FFFFu);
     if (likelyWaitFamily) {
         ++loopEntries;
         // CP packet execution/callbacks remain owned by the dedicated worker; avoid recursive pumping here.
-        if (guestAddress == 0x82C3C4D8u && (loopEntries % 8192u) == 0u) std::this_thread::yield();
+        if (guestAddress == 0x82C3C4D8u && (loopEntries % 4096u) == 0u) std::this_thread::yield();
         if (loopEntries == 1u || loopEntries % 250000u == 0u) {
             char event[176];
             std::snprintf(event, sizeof(event),
