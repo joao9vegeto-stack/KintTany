@@ -178,6 +178,7 @@ constexpr uint32_t kXInputErrorDeviceNotConnected = 1167u;
 constexpr uint32_t kXInputErrorBadArguments = 160u;
 
 thread_local uint32_t g_currentGuestThreadId = 1;
+std::atomic<uint32_t> g_mainThreadGuestLr{0u};
 thread_local std::array<uint32_t, kTlsSlotCount> g_tlsValues{};
 thread_local std::array<uint32_t, kTlsSlotCount> g_tlsValueGenerations{};
 
@@ -411,7 +412,7 @@ std::atomic<uint32_t> g_lastAotGuestThread{0u};
 
 bool shouldPersistRuntimeTrace(const std::string &event, size_t sequence) {
     // Build 64 must persist diagnostics that identify stalls and QPC output writes.
-    for (const char *required : {"CODE_AUDIT_B66", "CODE_AUDIT_83847ABC", "XOWUE_SYNC_CREATE", "XOWUE_VBLANK_WATCHDOG_SIGNAL", "XOWUE_POOL_ALLOC_82DC2BF0", "AOT_PROGRESS", "THREAD_DUMP", "XOWUE_AOT_HOTSPOT",
+    for (const char *required : {"CODE_AUDIT_B66", "CODE_AUDIT_B67", "CODE_AUDIT_83847ABC", "XOWUE_SYNC_CREATE", "XOWUE_MAIN_WAIT_WATCHDOG", "XOWUE_VBLANK_WATCHDOG_SIGNAL", "XOWUE_POOL_ALLOC_82DC2BF0", "AOT_PROGRESS", "THREAD_DUMP", "XOWUE_AOT_HOTSPOT",
                                  "XOWUE_AOT_HOTSPOT_STATE", "XOWUE_QPC_WRITE",
                                  "XOWUE_STALL_THREADS", "CODE_AUDIT_QPC_CALLERS",
                                  "XOWUE_QPC_CALLER_DUMP", "CODE_AUDIT_B65",
@@ -1086,6 +1087,10 @@ uint32_t waitGuestObject(const std::shared_ptr<GuestWaitable> &waitable,
     if (!waitable) return kNtStatusInvalidHandle;
     GuestWaitStateScope waitState(waitable->handle ? waitable->handle : waitable->objectAddress);
     waitable->waitCount.fetch_add(1u, std::memory_order_relaxed);
+    const bool isMainThread = (g_currentGuestThread == nullptr);
+    const uint32_t currentTid = isMainThread ? 0xF8000001u : g_currentGuestThread->handle;
+    const uint32_t currentLr = isMainThread ? g_mainThreadGuestLr.load(std::memory_order_relaxed)
+        : g_currentGuestThread->lastGuestLr.load(std::memory_order_relaxed);
     std::unique_lock<std::mutex> lock(waitable->mutex);
     const uint64_t initialPulseGeneration = waitable->pulseGeneration;
     const auto ready = [&] {
@@ -1095,62 +1100,65 @@ uint32_t waitGuestObject(const std::shared_ptr<GuestWaitable> &waitable,
                 ? waitable->ownerThread == 0u || waitable->ownerThread == g_currentGuestThreadId
                 : waitable->signaled;
         return available || waitable->pulseGeneration != initialPulseGeneration ||
-               g_schedulerStopRequested.load() ||
-               (alertable && guestApcCanInterruptWait());
+               g_schedulerStopRequested.load() || (alertable && guestApcCanInterruptWait());
     };
     const auto deadline = timeout ? std::optional<std::chrono::steady_clock::time_point>(
         std::chrono::steady_clock::now() + *timeout) : std::nullopt;
+    auto nextWatchdog = std::chrono::steady_clock::now() + std::chrono::milliseconds(32);
+    uint64_t lastSwapCount = 0;
+    { std::lock_guard<std::mutex> graphicsLock(g_xenosMutex); lastSwapCount = g_xenosFrontend.swaps; }
     for (;;) {
         if (alertable && guestApcCanInterruptWait()) {
-            lock.unlock();
-            const bool delivered = deliverPendingGuestApcs();
-            lock.lock();
+            lock.unlock(); const bool delivered = deliverPendingGuestApcs(); lock.lock();
             if (delivered) return kNtStatusUserApc;
         }
-        if (g_schedulerStopRequested.load() && g_currentGuestThreadId != 1u)
-            throw GuestThreadStopRequested{};
-        if (waitable->pulseGeneration != initialPulseGeneration)
-            return kNtStatusWait0;
+        if (g_schedulerStopRequested.load() && g_currentGuestThreadId != 1u) throw GuestThreadStopRequested{};
+        if (waitable->pulseGeneration != initialPulseGeneration) return kNtStatusWait0;
         const bool available = waitable->kind == GuestWaitable::Kind::Semaphore
             ? waitable->semaphoreCount > 0
             : waitable->kind == GuestWaitable::Kind::Mutant
                 ? waitable->ownerThread == 0u || waitable->ownerThread == g_currentGuestThreadId
                 : waitable->signaled;
         if (available) {
-            if (waitable->kind == GuestWaitable::Kind::Semaphore) {
-                --waitable->semaphoreCount;
-                waitable->signaled = waitable->semaphoreCount > 0;
-            } else if (waitable->kind == GuestWaitable::Kind::Mutant) {
-                waitable->ownerThread = g_currentGuestThreadId;
-                ++waitable->recursion;
-                waitable->signaled = false;
-            } else if (!waitable->manualReset) waitable->signaled = false;
+            if (waitable->kind == GuestWaitable::Kind::Semaphore) { --waitable->semaphoreCount; waitable->signaled = waitable->semaphoreCount > 0; }
+            else if (waitable->kind == GuestWaitable::Kind::Mutant) { waitable->ownerThread = g_currentGuestThreadId; ++waitable->recursion; waitable->signaled = false; }
+            else if (!waitable->manualReset) waitable->signaled = false;
             syncGuestDispatcherSignalState(waitable);
-            return kNtStatusSuccess;
-        }
-        const bool watchdogThread = g_currentGuestThread &&
-            (g_currentGuestThread->id == 1u || g_currentGuestThread->lastGuestLr.load(std::memory_order_relaxed) == 0x82585FB4u);
-        const bool watchdogWait = watchdogThread && !timeout.has_value() &&
-            (waitable->handle == 0xF8000011u || waitable->handle == 0xF800000Au || waitable->objectAddress == 0xF8000011u || waitable->objectAddress == 0xF800000Au);
-        if (watchdogWait) {
-            if (waitable->changed.wait_for(lock, std::chrono::milliseconds(50), ready)) continue;
-            lock.unlock(); pumpGuestXenosRingBuffer(); lock.lock();
-            waitable->signaled = true; waitable->signalCount.fetch_add(1u, std::memory_order_relaxed);
-            syncGuestDispatcherSignalState(waitable); waitable->changed.notify_all();
-            if (g_vblankWatchdogLogs.fetch_add(1u, std::memory_order_relaxed) < 32u) {
-                char event[256]; std::snprintf(event, sizeof(event), "XOWUE_VBLANK_WATCHDOG_SIGNAL tid=0x%08X wait_obj=0x%08X guest_addr=0x%08X lr=0x%08X", g_currentGuestThread->id, waitable->handle, waitable->guestHeaderAddr, g_currentGuestThread->lastGuestLr.load(std::memory_order_relaxed)); recordRuntimeTrace(event);
-            }
             return kNtStatusSuccess;
         }
         if (deadline) {
             if (std::chrono::steady_clock::now() >= *deadline) return kNtStatusTimeout;
             waitable->changed.wait_until(lock, *deadline, ready);
-        } else {
-            waitable->changed.wait(lock, ready);
+            continue;
+        }
+        // No Xbox guest wait may park a host thread forever: service GPU progress in bounded slices.
+        if (waitable->changed.wait_for(lock, std::chrono::milliseconds(16), ready)) continue;
+        const auto now = std::chrono::steady_clock::now();
+        const bool watchdogWorker = !isMainThread &&
+            (currentLr == 0x829F0698u || currentLr == 0x82585FB4u || currentLr == 0x82C4BEB8u);
+        if (isMainThread || watchdogWorker) {
+            uint64_t swaps = 0;
+            { std::lock_guard<std::mutex> graphicsLock(g_xenosMutex); swaps = g_xenosFrontend.swaps; }
+            if (now >= nextWatchdog && (isMainThread || swaps == lastSwapCount)) {
+                lock.unlock(); pumpGuestXenosRingBuffer(); lock.lock();
+                waitable->signaled = true;
+                waitable->signalCount.fetch_add(1u, std::memory_order_relaxed);
+                syncGuestDispatcherSignalState(waitable);
+                waitable->changed.notify_all(); g_waitSetChanged.notify_all();
+                if (g_vblankWatchdogLogs.fetch_add(1u, std::memory_order_relaxed) < 48u) {
+                    char event[320];
+                    std::snprintf(event, sizeof(event),
+                        "XOWUE_VBLANK_WATCHDOG_SIGNAL tid=0x%08X wait_obj=0x%08X guest_addr=0x%08X lr=0x%08X main=%u swaps=%llu",
+                        currentTid, waitable->handle, waitable->guestHeaderAddr, currentLr,
+                        isMainThread ? 1u : 0u, static_cast<unsigned long long>(swaps));
+                    recordRuntimeTrace(event);
+                }
+                return kNtStatusSuccess;
+            }
+            if (swaps != lastSwapCount) { lastSwapCount = swaps; nextWatchdog = now + std::chrono::milliseconds(32); }
         }
     }
 }
-
 uint32_t waitGuestObjects(const std::vector<std::shared_ptr<GuestWaitable>> &waitables,
                           uint32_t waitType, const GuestTimeout &timeout,
                           bool alertable = false) {
@@ -1184,6 +1192,13 @@ uint32_t waitGuestObjects(const std::vector<std::shared_ptr<GuestWaitable>> &wai
         return firstReady; // WaitAny.
     };
 
+    const bool isMainThread = (g_currentGuestThread == nullptr);
+    const uint32_t currentTid = isMainThread ? 0xF8000001u : g_currentGuestThread->handle;
+    const uint32_t currentLr = isMainThread ? g_mainThreadGuestLr.load(std::memory_order_relaxed)
+        : g_currentGuestThread->lastGuestLr.load(std::memory_order_relaxed);
+    auto nextWatchdog = std::chrono::steady_clock::now() + std::chrono::milliseconds(32);
+    uint64_t lastSwapCount = 0;
+    { std::lock_guard<std::mutex> graphicsLock(g_xenosMutex); lastSwapCount = g_xenosFrontend.swaps; }
     const auto deadline = timeout ? std::optional<std::chrono::steady_clock::time_point>(
         std::chrono::steady_clock::now() + *timeout) : std::nullopt;
     for (;;) {
@@ -1234,10 +1249,43 @@ uint32_t waitGuestObjects(const std::vector<std::shared_ptr<GuestWaitable>> &wai
                            (alertable && guestApcCanInterruptWait());
                 });
             } else {
-                g_waitSetChanged.wait(waitLock, [&] {
+                const bool woke = g_waitSetChanged.wait_for(waitLock, std::chrono::milliseconds(16), [&] {
                     return g_schedulerStopRequested.load() || readyIndex() >= 0 ||
                            (alertable && guestApcCanInterruptWait());
                 });
+                if (!woke) {
+                    const auto now = std::chrono::steady_clock::now();
+                    const bool watchdogWorker = !isMainThread &&
+                        (currentLr == 0x829F0698u || currentLr == 0x82585FB4u || currentLr == 0x82C4BEB8u);
+                    if (isMainThread || watchdogWorker) {
+                        uint64_t swaps = 0;
+                        { std::lock_guard<std::mutex> graphicsLock(g_xenosMutex); swaps = g_xenosFrontend.swaps; }
+                        if (now >= nextWatchdog && (isMainThread || swaps == lastSwapCount)) {
+                            waitLock.unlock();
+                            auto candidate = waitables.front();
+                            for (const auto &w : waitables) if (w &&
+                                (w->handle == 0xF8000011u || w->handle == 0xF800000Au ||
+                                 w->objectAddress == 0xF8000011u || w->objectAddress == 0xF800000Au)) { candidate = w; break; }
+                            pumpGuestXenosRingBuffer();
+                            if (candidate) {
+                                { std::lock_guard<std::mutex> objectLock(candidate->mutex);
+                                  candidate->signaled = true; candidate->signalCount.fetch_add(1u, std::memory_order_relaxed);
+                                  syncGuestDispatcherSignalState(candidate); }
+                                candidate->changed.notify_all();
+                            }
+                            g_waitSetChanged.notify_all();
+                            if (g_vblankWatchdogLogs.fetch_add(1u, std::memory_order_relaxed) < 48u) {
+                                char event[320]; std::snprintf(event, sizeof(event),
+                                    "XOWUE_VBLANK_WATCHDOG_SIGNAL tid=0x%08X wait_obj=0x%08X lr=0x%08X main=%u multi=1 swaps=%llu",
+                                    currentTid, candidate ? candidate->handle : 0u, currentLr,
+                                    isMainThread ? 1u : 0u, static_cast<unsigned long long>(swaps));
+                                recordRuntimeTrace(event);
+                            }
+                            return kNtStatusSuccess;
+                        }
+                        if (swaps != lastSwapCount) { lastSwapCount = swaps; nextWatchdog = now + std::chrono::milliseconds(32); }
+                    }
+                }
             }
         }
     }
@@ -1926,11 +1974,17 @@ static void emitBuild66CodeAudit(uint8_t *base) {
         for(uint32_t pc=begin;pc<end;pc+=4u){std::snprintf(line,sizeof(line),"%s pc=0x%08X word=0x%08X",tag,pc,loadGuestBe32(base,pc));recordRuntimeTrace(line);}
         std::snprintf(line,sizeof(line),"%s_END",tag);recordRuntimeTrace(line);
     };
-    dump(0x82DC2A50u,0x82DC2B74u,"CODE_AUDIT_B66_ALLOC_INIT");
-    dump(0x82DC2C00u,0x82DC2D20u,"CODE_AUDIT_B66_ALLOC_CONT");
-    dump(0x82DC30B0u,0x82DC3190u,"CODE_AUDIT_B66_THREAD4");
-    dump(0x829F0660u,0x829F06D0u,"CODE_AUDIT_B66_WAIT_THREAD2");
-    dump(0x82585F70u,0x82586000u,"CODE_AUDIT_B66_WAIT_THREADS34");
+    dump(0x82DC2A50u,0x82DC2B78u,"CODE_AUDIT_B67_ALLOC_INIT");
+    dump(0x82DC2C00u,0x82DC2D20u,"CODE_AUDIT_B67_ALLOC_CONT");
+    dump(0x82DC30B0u,0x82DC3190u,"CODE_AUDIT_B67_THREAD4");
+    dump(0x829F0660u,0x829F06D0u,"CODE_AUDIT_B67_WAIT_THREAD2");
+    dump(0x82585F70u,0x82586000u,"CODE_AUDIT_B67_WAIT_THREADS34");
+    // The Build 66 dump ended before 0x82DC2B74, the branch under investigation.
+    // Preserve an instruction window around observed wait/callback return addresses.
+    dump(0x82C4BDB8u,0x82C4BF38u,"CODE_AUDIT_B67_MAIN_WAIT_LR");
+    dump(0x829F0618u,0x829F0718u,"CODE_AUDIT_B67_WORKER2_LR");
+    dump(0x82585F34u,0x82586034u,"CODE_AUDIT_B67_WORKER34_LR");
+    dump(0x82B4ADDCu,0x82B4AF5Cu,"CODE_AUDIT_B67_EVENT_CREATOR");
     for(uint32_t pc=0x82000000u;pc+4u<=0x836DF000u;pc+=4u){const uint32_t w=loadGuestBe32(base,pc),low=w&0xFFFFu;if(low!=0x7ABCu&&low!=0x7AC0u&&low!=0x7AC4u)continue;
         char line[128];std::snprintf(line,sizeof(line),"CODE_AUDIT_83847ABC match_pc=0x%08X word=0x%08X",pc,w);recordRuntimeTrace(line);
         const uint32_t first=pc>=12u?pc-12u:0u;for(uint32_t q=first;q<=pc+12u&&validGuestRange(q,4u);q+=4u){std::snprintf(line,sizeof(line),"CODE_AUDIT_83847ABC pc=0x%08X word=0x%08X",q,loadGuestBe32(base,q));recordRuntimeTrace(line);}
@@ -6528,6 +6582,7 @@ void xowue_KeResetEvent(PPCContext &context, uint8_t *base) {
 }
 
 void xowue_NtWaitForSingleObjectEx(PPCContext &context, uint8_t *base) {
+    if (!g_currentGuestThread) g_mainThreadGuestLr.store(static_cast<uint32_t>(context.lr), std::memory_order_relaxed);
     GuestTimeout timeout;
     if (!readGuestTimeout(base, context.r6.u32, timeout)) {
         context.r3.u32 = kNtStatusInvalidParameter;
@@ -6539,6 +6594,7 @@ void xowue_NtWaitForSingleObjectEx(PPCContext &context, uint8_t *base) {
 }
 
 void xowue_KeWaitForSingleObject(PPCContext &context, uint8_t *base) {
+    if (!g_currentGuestThread) g_mainThreadGuestLr.store(static_cast<uint32_t>(context.lr), std::memory_order_relaxed);
     GuestTimeout timeout;
     if (!readGuestTimeout(base, context.r7.u32, timeout)) {
         context.r3.u32 = kNtStatusInvalidParameter;
@@ -6550,6 +6606,7 @@ void xowue_KeWaitForSingleObject(PPCContext &context, uint8_t *base) {
 }
 
 void xowue_NtWaitForMultipleObjectsEx(PPCContext &context, uint8_t *base) {
+    if (!g_currentGuestThread) g_mainThreadGuestLr.store(static_cast<uint32_t>(context.lr), std::memory_order_relaxed);
     const uint32_t count = context.r3.u32;
     const uint32_t handlesPointer = context.r4.u32;
     const uint32_t waitType = context.r5.u32;
@@ -6570,6 +6627,7 @@ void xowue_NtWaitForMultipleObjectsEx(PPCContext &context, uint8_t *base) {
 }
 
 void xowue_KeWaitForMultipleObjects(PPCContext &context, uint8_t *base) {
+    if (!g_currentGuestThread) g_mainThreadGuestLr.store(static_cast<uint32_t>(context.lr), std::memory_order_relaxed);
     const uint32_t count = context.r3.u32;
     const uint32_t objectsPointer = context.r4.u32;
     const uint32_t waitType = context.r5.u32;

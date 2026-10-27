@@ -96,7 +96,7 @@ assert "XOWUE_POOL_ALLOC_82DC2BF0" in engine and "XOWUE_POOL_INIT_82DC2B14" in e
 assert "CODE_AUDIT_B66" in engine and "CODE_AUDIT_83847ABC" in engine
 assert "XOWUE_VBLANK_WATCHDOG_SIGNAL" in engine
 assert "obj_creator_lr=0x%08X obj_signals=%u" in engine
-assert 'CURRENT_PROJECT_VERSION: "66"' in (root / "iOS" / "project.yml").read_text(encoding="utf-8")
+assert 'CURRENT_PROJECT_VERSION: "67"' in (root / "iOS" / "project.yml").read_text(encoding="utf-8")
 print("PASS: Build 66 allocator, PPC audit, synchronization telemetry and vblank watchdog hooks")
 
 # Build 34: Xbox object attributes must use root/name/flags at offsets 0/4/8
@@ -185,3 +185,15 @@ assert "PPC_INST_MFTB" in workflow and "xowue_guest_timebase();" in workflow
 for forbidden in ("RLWIMI record-form CR0","RLDIMI record-form CR0","PPC_INST_RLDICL","PPC_INST_RLDICR"):
     if forbidden in workflow: raise SystemExit(f"Build 65 workflow alters upstream instruction semantics: {forbidden}")
 print("PASS: Build 65 global PPC semantic rewrites removed; targeted 0x82DC2390 guard and raw-code audit wired")
+
+# Build 67: main thread has no GuestThread binding, and no infinite wait may
+# block the host condition variable without bounded GPU/scheduler progress.
+assert "const bool isMainThread = (g_currentGuestThread == nullptr);" in engine
+assert "currentTid = isMainThread ? 0xF8000001u : g_currentGuestThread->handle" in engine
+assert "g_mainThreadGuestLr.load(std::memory_order_relaxed)" in engine
+assert "waitable->changed.wait_for(lock, std::chrono::milliseconds(16), ready)" in engine
+assert "g_waitSetChanged.wait_for(waitLock, std::chrono::milliseconds(16)" in engine
+assert "CODE_AUDIT_B67_MAIN_WAIT_LR" in engine
+assert "dump(0x82DC2A50u,0x82DC2B78u" in engine
+assert 'CURRENT_PROJECT_VERSION: "67"' in (root / "iOS" / "project.yml").read_text(encoding="utf-8")
+print("PASS: Build 67 main-thread wait identity, bounded wait slices and expanded PPC audit")
