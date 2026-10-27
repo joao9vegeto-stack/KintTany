@@ -1,72 +1,78 @@
-O arquivo `diagnostico-build-66.txt` já está na raiz da branch `XOWUE`. O jogo CONTINUA CONGELADO após os 48 draws do Frame 1 pelo mesmo motivo há 32 builds, e a auditoria do seu commit `020e9a0` revelou erros graves na sua implementação da Build 66!
+Analisei o `diagnostico-build-67.txt` na raiz da branch `XOWUE`. O `CODE_AUDIT_B67` e o `XOWUE_STALL_THREADS` revelaram a causa EXATA do deadlock entre a Main Thread (`0xF8000001`) e a Thread 2 (`0xF8000008`):
 
-### PASSO 1 OBRIGATÓRIO: LEIA `diagnostico-build-66.txt` NA RAIZ DO REPOSITÓRIO AGORA!
-Antes de escrever qualquer código, abra e leia o arquivo `diagnostico-build-66.txt` na raiz do repositório:
-1. Leia todas as linhas `CODE_AUDIT_B66`, `CODE_AUDIT_83847ABC`, `XOWUE_POOL_ALLOC_82DC2BF0`, `XOWUE_POOL_INIT_82DC2B14`, `XOWUE_SYNC_CREATE`, `XOWUE_VBLANK_WATCHDOG_SIGNAL` e `XOWUE_STALL_THREADS`.
-2. Verifique em `CODE_AUDIT_B66` (`0x82DC2A50..0x82DC2B74`, `0x82DC2C00..0x82DC2D20`, `0x82DC30B0..0x82DC3190`) e em `CODE_AUDIT_83847ABC`:
-   - Qual função escreve em `0x83847ABC`, `0x83847AC0`, `0x83847AC4` e por que ela não foi chamada ou escreveu zero?
-   - O que acontece em `0x82DC2C00..0x82DC2D20` logo após o loop de `0x82DC2BEC` terminar? Qual instrução de branch (`beq`/`bne`/`bl`/`bctrl`) faz `0x82DC2B74` saltar para o caminho de erro que chama `0x82DC1FA0` (o destrutor)?
-   - O que faz o loop em `0x82DC30B0..0x82DC3190` (`saved_lr=0x82DC314C`) na Thread 4 (`0xF8000014`)?
-3. Verifique em `XOWUE_STALL_THREADS` e `XOWUE_SYNC_CREATE`:
-   - Qual é o `caller_chain` da Main Thread (`tid=0xF8000001`) esperando `wait_obj=0xF8000011`?
-   - Qual função (`obj_creator_lr`) criou os objetos `0xF8000011`, `0xF8000007`, `0xF800000A`, `0xF800000E` e quais são seus `obj_guest`?
+### PROVA EXATA DO QUE ACONTECEU NA BUILD 67 (`diagnostico-build-67.txt`):
 
----
+1. **Na Build 67, o watchdog acordou a Main Thread (`tid=0xF8000001`, `wait_calls` subiu de `45` para `59 -> 66 -> 72 -> 79`), MAS a Main Thread voltou imediatamente para `bl 0x82C4BE30` (`wait_obj=0xF8000011`) por causa das instruções em `0x829F636C..0x829F63A4` (`CODE_AUDIT_B67`):**
+   ```ppc
+   0x829F636C: 393F0008  addi  r9, r31, 8       ; r9 = r31 + 8 (flag de conclusão da tarefa assíncrona!)
+   0x829F6388: 807F0004  lwz   r3, 4(r31)       ; r3 = FEvent (handle 0xF8000011)
+   0x829F638C: 48255AA5  bl    0x82C4BE30       ; FEvent::Wait(INFINITE) -> lr = 0x829F6390
+   0x829F6390: 7C004828  lwarx r0, 0, r9        ; lê *(uint32_t*)(r31 + 8) quando acorda!
+   0x829F6394: 38000000  li    r0, 0
+   0x829F6398: 7C00492D  stwcx. r0, 0, r9
+   0x829F639C: 2F0B0000  cmpwi cr6, r11, 0      ; checa se a Worker Thread já concluiu a tarefa em *(r31 + 8)!
+   0x829F63A0: 419EFFE8  beq   cr6, 0x829F6388  ; SE *(r31 + 8) == 0, VOLTA PARA 0x829F6388 E DORME EM 0xF8000011 DE NOVO!
+   ```
+   A Main Thread está em um loop (`0x829F6388..0x829F63A0`) esperando que a **Thread 2 (`tid=0xF8000008`)** execute a tarefa, escreva `!= 0` em `*(uint32_t*)(r31 + 8)` e sinalize `0xF8000011`!
 
-### PASSO 2: CORRIJA O BUG CRÍTICO NA MAIN THREAD (`g_currentGuestThread == nullptr`) EM `waitGuestObject` (`Runtime/XOWUEEngine.cpp`)
-Olhe o bug que você escreveu na linha 1131 de `Runtime/XOWUEEngine.cpp` no commit `020e9a0`:
-```cpp
-const bool watchdogThread = g_currentGuestThread &&
-    (g_currentGuestThread->id == 1u || g_currentGuestThread->lastGuestLr.load(std::memory_order_relaxed) == 0x82585FB4u);
-```
-**ISSO É SEMPRE `false` PARA A MAIN THREAD (`tid=0xF8000001`)!**
-- Na Main Thread (`tid=0xF8000001`), `g_currentGuestThread` é **`nullptr`** (porque `g_currentGuestThread` só é atribuído nas worker threads criadas em `ExCreateThread`; a Main Thread usa `g_mainThreadState` e `currentTraceThreadId() == 1`)!
-- Por causa de `g_currentGuestThread && ...`, a Main Thread (`0xF8000001`) esperando `0xF8000011` (`lr=0x82C4BEB8`) **NUNCA ENTROU NO WATCHDOG** e ficou bloqueada em `waitable->cv.wait(lock, ...)` para sempre!
-
-**Correção obrigatória em `waitGuestObject` (e em `KeWaitForMultipleObjects` / `NtWaitForMultipleObjectsEx`):**
-1. Identifique a Main Thread corretamente:
-   `const bool isMainThread = (g_currentGuestThread == nullptr);`
-   `const uint32_t currentTid = isMainThread ? 0xF8000001u : g_currentGuestThread->handle;`
-   `const uint32_t currentLr = isMainThread ? g_mainThreadGuestLr.load(std::memory_order_relaxed) : g_currentGuestThread->lastGuestLr.load(std::memory_order_relaxed);`
-2. **NUNCA chame `waitable->cv.wait(lock, ...)` sem timeout em NENHUMA thread quando `!timeout.has_value()`!**
-   No Xbox 360 / XeniOS, eventos de VBlank, GPU Fence, RHI Worker e XAudio2 acordam as threads periodicamente.
-   Quando `!timeout.has_value()`:
-   - Faça um loop com `waitable->cv.wait_for(lock, std::chrono::milliseconds(16), [&] { return canAcquireWaitableLocked(*waitable, threadHandle); })`.
-   - Se `wait_for` retornar `true`, adquira normalmente e retorne `kNtStatusSuccess`.
-   - Se `wait_for` expirar (16ms sem sinal):
-     - Na **Main Thread (`isMainThread`)**: se o último draw/swap da GPU tiver ocorrido há mais de 32ms (ou após 2 slices de 16ms esperando `0xF8000011` ou qualquer outro evento sem novo frame), **sinalize efetivamente o `waitable` (`waitable->signaled = true; waitable->signalCount++;` e se `waitable->objectAddress` for válido em RAM guest, chame `signalGuestEventStructure(base, waitable->objectAddress)`), bombeie a GPU (`pumpGuestXenosRingBuffer()`), dispare o VBlank/GPU interrupt callback se registrado, e retorne `kNtStatusSuccess`!**
-     - Nas **Worker Threads (`!isMainThread`)**:
-       - Analise pelo `CODE_AUDIT_B66` de `0x829F0660..0x829F06D0` (`lr=0x829F0698`, `wait_obj=0xF8000007`) e `0x82585F70..0x82586000` (`lr=0x82585FB4`, `wait_obj=0xF800000A` / `0xF800000E`) o que essas 3 worker threads fazem quando acordam!
-       - Se elas verificam uma fila de trabalho (work queue / command queue) ou se `0xF800000A` é o evento de tick/frame que já teve `wait_calls=56`, sinalize quando apropriado (ou a cada 32ms de stall gráfico) para que a RHI/Worker thread processe os comandos pendentes da Main Thread!
-       - CUIDADO: Verifique nos bytes de `0x82585F70..0x82586000` e `0x829F0660..0x829F06D0` se acordar uma worker thread com fila vazia apenas faz ela voltar a dormir (seguro) ou se ela exige um item na fila! Se voltar a dormir em `KeWaitForSingleObject`, coloque um intervalo de 32ms para não gerar busy-wait.
+2. **E POR QUE A THREAD 2 (`tid=0xF8000008`) NÃO EXECUTOU A TAREFA?!**
+   Olhe para a Thread 2 em `XOWUE_STALL_THREADS` (`RUNTIME seq=1559`):
+   ```text
+   tid=0xF8000008 state=waiting_event fn=0x82C4BD50 prev=0x82C4BE30 lr=0x829F0698 sp=0x7005FE90 wait_obj=0xF8000007 obj_guest=0x7E006000 obj_creator_lr=0x82C4BCD4 obj_signals=12 wait_calls=1 caller_chain=0x829F0698->0x82C4C42C
+   ```
+   E olhe para os bytes de `0x829F0684..0x829F06AC` da Thread 2 (`CODE_AUDIT_B66`):
+   ```ppc
+   0x829F0684: 807F002C  lwz   r3, 0x2C(r31)    ; FEvent (handle 0xF8000007)
+   0x829F0690: 3880FFFF  li    r4, -1           ; timeout = INFINITE
+   0x829F0694: 4E800421  bctrl                  ; FEvent::Wait() -> lr = 0x829F0698
+   0x829F0698: 817F0000  lwz   r11, 0(r31)
+   0x829F069C: 7FE3FB78  mr    r3, r31
+   0x829F06A0: 816B0008  lwz   r11, 8(r11)
+   0x829F06A4: 7D6903A6  mtctr r11
+   0x829F06A8: 4E800421  bctrl                  ; EXECUTA A TAREFA QUE A MAIN THREAD ESTÁ ESPERANDO!
+   ```
+   **Veja o absurdo em `tid=0xF8000008`:**
+   - O evento `0xF8000007` teve **`obj_signals=12` (foi sinalizado 12 vezes!)**, mas a Thread 2 (`0xF8000008`) tem **`wait_calls=1`** e NUNCA ACORDOU de `waitGuestObject`!
+   - Por quê?
+     a) Porque na Build 67 você escreveu `if (isMainThread && currentSwaps == lastSwapCount)` no watchdog de `waitGuestObject`, **deixando a Thread 2 (`tid=0xF8000008`, `wait_obj=0xF8000007`), a Thread 3 (`0xF8000009`, `wait_obj=0xF800000A`) e a Thread 4 (`0xF800000D`, `wait_obj=0xF800000E`) de fora do watchdog!**
+     b) E porque em `0x829F6354..0x829F6368` (ou em `0x82C4BD50..0x82C4BE60`), um `ResetEvent` (`KeResetEvent` / `NtClearEvent`) ou `SetEvent` antes da Thread 2 entrar em `waitGuestObject` apagou `waitable->signaled = false` antes da Thread 2 adquirir o lock (lost wakeup)!
 
 ---
 
-### PASSO 3: CORRIJA DEFINITIVAMENTE A FALHA DE INICIALIZAÇÃO EM `0x82DC2B74` / `0x82DC2228` / `0x82DC314C` (THREAD 4 `0xF8000014`)
-1. Leia no `diagnostico-build-66.txt` o dump `CODE_AUDIT_B66` de:
-   - `0x82DC2A50..0x82DC2B74`
-   - `0x82DC2C00..0x82DC2D20`
-   - `0x82DC30B0..0x82DC3190`
-   - E todas as linhas de `XOWUE_POOL_ALLOC_82DC2BF0` e `XOWUE_POOL_INIT_82DC2B14`.
-2. Descubra **exatamente em qual instrução** entre `0x82DC2B74` e `0x82DC2D20` (ou dentro de `0x82DC2228` / `0x82DC2A50` / `0x82DC30B0..0x82DC3190`) a execução falha e decide chamar o destrutor `0x82DC1FA0` -> `0x82DC2390`!
-3. Com base nos bytes reais que estão em `diagnostico-build-66.txt`:
-   - Inicialize corretamente a tabela global em `0x83847ABC`, `0x83847AC0`, `0x83847AC4` (ou chame a função real do jogo que `CODE_AUDIT_83847ABC` mostrou que popula esses ponteiros!).
-   - Corrija a condição/função exata em `0x82DC2B74` / `0x82DC2A50` / `0x82DC2228` / `0x82DC314C` que ainda causou o loop de `0x82DC1FA0` <-> `0x82DC2390` na Build 66!
-   - Se a Thread 4 (`0xF8000014`) for a thread de bombeamento de áudio (XAudio2) que roda um loop contínuo em `0x82DC30B0..0x82DC3190`, garanta que:
-     a) A inicialização (`0x82DC2228` / `0x82DC2B74`) tenha **SUCESSO** (`r3 != 0`) e **NÃO chame o destrutor `0x82DC1FA0`**!
-     b) O loop de tick de áudio da Thread 4 faça um `sleep_for(4ms)` (cadência de frame de áudio Xbox 360 = 256 samples @ 48kHz ≈ 5.33ms) por iteração em vez de rodar a 100% de CPU em busy-wait!
+### EXECUTAR IMEDIATAMENTE AS CORREÇÕES PARA A BUILD 68:
 
----
+#### TAREFA 1: ACORDAR A THREAD 2 (`0xF8000008`) E TODAS AS WORKER THREADS EM `waitGuestObject` + IMPEDIR LOST WAKEUPS (`Runtime/XOWUEEngine.cpp`)
+1. **Impedir Lost Wakeup em `GuestWaitable`:**
+   - Adicione `uint64_t signalGeneration = 0;` em `GuestWaitable`.
+   - Toda vez que o evento for sinalizado (`KeSetEvent`, `NtSetEvent`, `signalGuestEventHandle`, `signalGuestEventStructure`), incremente `waitable->signalGeneration++` além de definir `waitable->signaled = true`.
+   - Quando `KeResetEvent` / `NtClearEvent` for chamado em um evento que tinha `waitable->signaled == true` mas **ainda não foi consumido por nenhum `waitGuestObject`**, mantenha um contador `uint32_t unconsumedSignals` (incrementado no `SetEvent` se `unconsumedSignals == 0`, decrementado quando `waitGuestObject` acorda uma thread) OU não permita que `ResetEvent` apague um sinal que acabou de ser disparado se houver uma thread prestes a esperar!
+2. **Estender o Watchdog de `waitGuestObject` para TODAS as Threads Bloqueadas em Eventos durante Stall Gráfico:**
+   - Em `waitGuestObject`, remova a restrição `if (isMainThread && ...)`!
+   - Quando `currentSwaps == lastSwapCount` (nenhum swap novo nos últimos 32ms):
+     - Se **QUALQUER thread** (`isMainThread` OU worker thread como `0xF8000008` esperando `0xF8000007`, `0xF8000009` esperando `0xF800000A`, `0xF800000D` esperando `0xF800000E`) estiver esperando em `waitGuestObject` por 32ms sem acordar:
+       - Sinalize o `waitable` (`waitable->signaled = true; waitable->signalCount.fetch_add(1u);` e grave `1` em `waitable->objectAddress + 4`), bombeie `pumpGuestXenosRingBuffer()`, logue `XOWUE_WAIT_WATCHDOG_WAKE tid=0x%08X wait_obj=0x%08X lr=0x%08X` (primeiras 64 vezes) e retorne `kNtStatusWait0`!
+       - **IMPORTANTE:** Acorde as **Worker Threads (`!isMainThread`, especialmente `0xF8000008`) ANTES da Main Thread** (use 16ms de timeout de watchdog para Worker Threads e 32ms para a Main Thread!), para que a Thread 2 (`0xF8000008`) acorde primeiro, execute `0x829F0698 -> 0x829F06A8`, preencha `*(r31 + 8) = 1` e sinalize `0xF8000011` naturalmente para a Main Thread!
 
-### PASSO 4: ANALISE O `caller_chain` DA MAIN THREAD (`0xF8000001`) EM `diagnostico-build-66.txt` E CORRIJA A CAUSA DO WAIT EM `0xF8000011`
-1. Em `diagnostico-build-66.txt`, veja o `caller_chain` da Thread `0xF8000001` (`lr=0x82C4BEB8`, `wait_obj=0xF8000011`) e o `obj_creator_lr` do handle `0xF8000011`.
-2. No boot (`CODE_AUDIT_B67`), faça dump das instruções PowerPC ao redor de **cada endereço do `caller_chain` da Thread 1** e ao redor do **`obj_creator_lr` de `0xF8000011`** (64 instruções antes e 32 depois de cada um)!
-3. Além disso, procure na seção `.text` quem sinaliza (`KeSetEvent` / `NtSetEvent` / `0x82586180` / etc.) o evento guardado na mesma struct ou variável global que contém o handle `0xF8000011`!
-4. Se o evento `0xF8000011` for sinalizado por um callback de GPU, VBlank, XAudio2 ou Worker Thread que está faltando ser invocado no `XOWUEEngine.cpp`, implemente a invocação real desse callback/evento E mantenha o watchdog corrigido do Passo 2 (`isMainThread = (g_currentGuestThread == nullptr)`) ativo para garantir que a Main Thread (`0xF8000001`) NUNCA mais fique presa em `wait_obj=0xF8000011`!
+#### TAREFA 2: DUMP COMPLETO DE `0x829F6300..0x829F63C0`, `0x82C4BCD0..0x82C4BE80` E `0x829F0600..0x829F0720` + DESTRAVAR `0x829F6388..0x829F63A0`
+1. Olhe nos bytes de `0x829F636C..0x829F63A4` (`CODE_AUDIT_B67`):
+   - Em `0x829F6378` e `0x829F6390`, `r11` é comparado em `0x829F639C: cmpwi cr6, r11, 0; beq cr6, 0x829F6388`.
+   - Onde `r11` é carregado entre `0x829F6388` e `0x829F639C`? Dentro de `bl 0x82C4BE30` ou antes!
+   - No boot (`CODE_AUDIT_B68`), faça o dump de todas as instruções PowerPC (sem pular nenhuma!) de:
+     - `0x829F62E0` até `0x829F63D0` (todas as instruções de 4 em 4 bytes!)
+     - `0x82C4BCC0` até `0x82C4BE80` (`0x82C4BCD4`, `0x82C4BD50`, `0x82C4BE00`, `0x82C4BE30`)
+     - `0x829F0600` até `0x829F0720` (a função completa da Thread 2 em `0x829F0698`!)
+2. **Garantia contra loop infinito em `0x829F6390` (`lr=0x829F6390`):**
+   - Quando a Main Thread (`isMainThread`) chamar `waitGuestObject` no evento `0xF8000011` (vindo de `caller_chain` contendo `0x829F6390`), se a Main Thread já tiver esperado nesse mesmo evento `0xF8000011` mais de **8 vezes sem que `g_xenosFrontend.swaps` aumente**:
+     - Leia `r31` (ou o ponteiro do objeto `FAsyncTask` na pilha da Main Thread no frame de `0x829F6390`: `sp` de `0x82C4BE30` é `0x7001FC70`, verifique `PPC_LOAD_U32(0x7001FC70)` -> frame de `0x829F6390`, e inspecione os valores salvos na pilha e em `[r31 + 0..0x20]`).
+     - Logue `XOWUE_ASYNC_TASK_STATE sp=0x%08X frame=0x%08X words=...` e, se `[taskPtr + 8] == 0` após a Thread 2 (`0xF8000008`) já ter sido acordada pelo menos 4 vezes, grave `PPC_STORE_U32(taskPtr + 8, 1u)` (e defina `ctx.r11.u64 = 1ull`) para que `0x829F639C: cmpwi cr6, r11, 0` saia do loop em `0x829F63A0`!
 
----
+#### TAREFA 3: THROTTLE DE 2ms NO LOOP DE ÁUDIO DA THREAD 4 (`0x82DC314C` / `0x82DC2390`) PARA NÃO SUFOCAR A CPU
+No `diagnostico-build-67.txt`, a Thread 4 (`tid=0xF8000014`) inicializou os 34 blocos (`XOWUE_POOL_ALLOC_82DC2BF0`) com sucesso e entrou no seu loop de tick normal (`0x82DC3104..0x82DC3154`), mas como não há `sleep` no tick de áudio, ela executou `0x82DC1FA0` / `0x82DC2390` **471.737 vezes** em poucos segundos, consumindo 100% da CPU!
+- Em `Runtime/XOWUEEngine.cpp` (dentro de `xowue_thread_checkpoint(uint32_t address)`):
+  - Quando `address == 0x82DC1FA0u` (ou `0x82DC2390u`) e a thread atual for `g_currentGuestThread` (`tid=0xF8000014`), a cada **64 chamadas**, faça `std::this_thread::sleep_for(std::chrono::milliseconds(2));`!
+  - Isso reduzirá o uso de CPU da Thread 4 de 470.000 chamadas/seg para ~32.000 chamadas/seg (liberando 95% do core da CPU para a Main Thread e a Thread 2!).
 
-### PASSO 5: TESTES, BUILD 67, COMMIT E PUSH
-1. Adicione testes em `tools/test_xowue_aot_instrumentation.py` verificando explicitamente que o watchdog em `waitGuestObject` trata `g_currentGuestThread == nullptr` como a Main Thread (`0xF8000001`).
-2. Atualize a versão para **Build 67** (`CURRENT_PROJECT_VERSION: "67"` e `CFBundleVersion: 67`).
+#### TAREFA 4: TESTES, BUILD 68, COMMIT E PUSH
+1. Atualize `tools/test_xowue_aot_instrumentation.py` para validar `XOWUE_WAIT_WATCHDOG_WAKE`, `CODE_AUDIT_B68` e o throttle em `xowue_thread_checkpoint`.
+2. Atualize a versão para **Build 68** (`CURRENT_PROJECT_VERSION: "68"` e `CFBundleVersion: 68`).
 3. Faça commit e push na branch `XOWUE`.
