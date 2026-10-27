@@ -447,15 +447,10 @@ static inline int spu_asc_wkl_ea_valid(uint32_t ea, uint32_t sz) {{
         "static void ts_start_ready(uint32_t taskset_ea, uint32_t done_task)\n{\n    if (!spu_asc_wkl_ea_valid(taskset_ea, 0x1000u)) return;"
     )
 
-    # M8.18.7: Auto-wake tasks stuck in WAIT_SIGNAL without injecting a bare break statement
-    if "ASCENSION_M8187_WAIT_SIGNAL_WAKE" not in s:
-        s = s.replace(
-            'sleeping %us in WAIT_SIGNAL\\n"',
-            'sleeping %us in WAIT_SIGNAL (M8.18.7 auto-wake)\\n"'
-        )
-        # Shorten long waits in the workload loop without injecting control-flow statements.
-        s = s.replace("usleep(10000);", "/* ASCENSION_M8187_WAIT_SIGNAL_WAKE */ usleep(250);")
-        s = s.replace("usleep(10000u);", "/* ASCENSION_M8187_WAIT_SIGNAL_WAKE */ usleep(250u);")
+    # M8.18.7: Shorten long 10ms WAIT_SIGNAL usleeps to 250us without altering log strings or control flow
+    if "ASCENSION_M8187_FAST_WAKE" not in s:
+        s = s.replace("usleep(10000);", "/* ASCENSION_M8187_FAST_WAKE */ usleep(250);")
+        s = s.replace("usleep(10000u);", "/* ASCENSION_M8187_FAST_WAKE */ usleep(250u);")
 
     path.write_text(s)
 
@@ -533,21 +528,6 @@ def patch_spurs_policy(root: Path) -> None:
 
 
 def patch_ios_bootprobe_live_files(repo_root: Path) -> None:
-    # M8.18.7: Stamp UI banners and Info.plist at iOS build stage (after Step 4 unit tests have already passed)
-    ios_dir = repo_root / "ios"
-    if ios_dir.exists():
-        for f in ios_dir.rglob("*"):
-            if f.is_file() and f.suffix in {".m", ".c", ".h", ".mm", ".plist"}:
-                txt = f.read_text(errors="replace")
-                new_txt = txt
-                for old_v in ("M8.18.6", "M8.18.5", "M8.18.4", "M8.18.3", "M8.18.2", "M8.18.1", "M8.18.0", "M7.86", "M7.72", "M7.69"):
-                    new_txt = new_txt.replace(old_v, "M8.18.7")
-                if f.name == "Probe-Info.plist":
-                    new_txt = new_txt.replace("<string>7.69.0</string>", "<string>8.18.7</string>")
-                    new_txt = new_txt.replace("<string>7690</string>", "<string>8187</string>")
-                if new_txt != txt:
-                    f.write_text(new_txt)
-
     """Ensure ios/UIViewController or BootProbe writer also saves log.txt in Documents/ and container root."""
     for p in repo_root.glob("ios/**/*.m"):
         txt = p.read_text(errors="replace")
