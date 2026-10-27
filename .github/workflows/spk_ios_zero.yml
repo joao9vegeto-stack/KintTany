@@ -28,81 +28,35 @@ jobs:
     runs-on: macos-15
     timeout-minutes: 240
     steps:
-      - name: 1. Sincronizar Branch Orfa SpkIOSzero (1 Unico Commit Limpo)
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          BRANCH_NAME: ${{ github.ref_name }}
-        run: |
-          git config --global user.name "joao9vegeto-stack"
-          git config --global user.email "joao9vegeto-stack@users.noreply.github.com"
+      - name: 1. Checkout da Branch SpkIOSzero
+        uses: actions/checkout@v4
 
-          git clone --branch "$BRANCH_NAME" "https://x-access-token:${GH_TOKEN}@github.com/${GITHUB_REPOSITORY}.git" "$RUNNER_TEMP/repo"
-          cd "$RUNNER_TEMP/repo"
-
-          # Garante que a branch SpkIOSzero tenha sempre o workflow atualizado em 1 unico commit limpo sobre o nxnative
-          cp .github/workflows/spk_ios_zero.yml "$RUNNER_TEMP/wf.yml"
-          if [ ! -f "dm/ios/project.yml" ]; then
-            git clone --depth 1 https://github.com/seedds/nxnative.git "$RUNNER_TEMP/up"
-            rm -rf "$RUNNER_TEMP/up/.git" "$RUNNER_TEMP/up/.github/workflows"
-            cp -R "$RUNNER_TEMP/up/." .
-          fi
-          mkdir -p .github/workflows
-          cp "$RUNNER_TEMP/wf.yml" .github/workflows/spk_ios_zero.yml
-
-          # Configura main.m e build_ipa.sh para Thin IPA + leitura de Documents/romfs em pasta solta
-          python3 - << 'PYEOF'
-          from pathlib import Path
-
-          main_m = Path("dm/ios/Sources/main.m")
-          s = main_m.read_text(encoding="utf-8")
-          old_marker = 'if ([fm fileExistsAtPath:[documentFolder stringByAppendingPathComponent:@DM_GAME_ROMFS_MARKER]]) return documentFolder;'
-          new_marker = old_marker + '\n    if ([fm contentsOfDirectoryAtPath:documentFolder error:nil].count > 0) return documentFolder;'
-          if 'contentsOfDirectoryAtPath:documentFolder' not in s:
-              s = s.replace(old_marker, new_marker)
-              main_m.write_text(s, encoding="utf-8")
-
-          bsh = Path("dm/ios/tools/build_ipa.sh")
-          b = bsh.read_text(encoding="utf-8")
-          b = b.replace(
-              'python3 "$DM/tools/romfs.py" "$ROMFS" "$MARKER" || die "no RomFS at $ROMFS (missing $MARKER)"',
-              'echo "[Thin IPA] RomFS externo em Documents/romfs no iPhone"'
-          )
-          b = b.replace('"Payload/DmIOS.app/romfs=$ROMFS"', '')
-          bsh.write_text(b, encoding="utf-8")
-          PYEOF
-
-          # Mantem a branch SpkIOSzero sempre com 1 unico commit limpo
-          git checkout --orphan SpkIOSzero_single
-          git add -A
-          git commit -m "feat(SpkIOSzero): unified nxnative branch with LibHac ios-arm64 extractor & Thin IPA pipeline"
-          git branch -M "$BRANCH_NAME"
-          git push -f origin "$BRANCH_NAME"
-
-      - name: 2. Instalar .NET 9/10 NativeAOT iOS e Dependencias
+      - name: 2. Instalar .NET 9 NativeAOT e Dependencias
         run: |
           brew install xcodegen
           pip3 install --break-system-packages lz4 capstone fonttools backports.zstd
           curl -sSL https://dot.net/v1/dotnet-install.sh -o "$RUNNER_TEMP/dotnet-install.sh"
           chmod +x "$RUNNER_TEMP/dotnet-install.sh"
           "$RUNNER_TEMP/dotnet-install.sh" --channel 9.0 --install-dir "$HOME/.dotnet"
-          "$RUNNER_TEMP/dotnet-install.sh" --channel 10.0 --install-dir "$HOME/.dotnet"
-          export PATH="$HOME/.dotnet:$PATH"
           echo "$HOME/.dotnet" >> "$GITHUB_PATH"
 
       - name: 3A. [Modo build_extractor_ipa] Compilar App Extrator LibHac Nativo para iPhone (ios-arm64)
         if: ${{ (inputs.mode || 'build_extractor_ipa') == 'build_extractor_ipa' }}
         run: |
-          cd "$RUNNER_TEMP/repo"
+          export PATH="$HOME/.dotnet:$PATH"
 
-          # Prepara o projeto LibHac (nx_extract) para compilar como biblioteca estatica NativeAOT ios-arm64 real
-          cat > dm/tools/nx_extract/nx_extract.csproj << 'EOF'
+          # Copia o nx_extract para uma pasta temporaria limpa para compilar como dylib ios-arm64 via NativeAOT
+          mkdir -p "$RUNNER_TEMP/nx_ios"
+          cp dm/tools/nx_extract/Program.cs "$RUNNER_TEMP/nx_ios/Program.cs"
+
+          cat > "$RUNNER_TEMP/nx_ios/nx_extract.csproj" << 'EOF'
           <Project Sdk="Microsoft.NET.Sdk">
             <PropertyGroup>
               <OutputType>Library</OutputType>
               <TargetFramework>net9.0</TargetFramework>
               <RuntimeIdentifier>ios-arm64</RuntimeIdentifier>
               <PublishAot>true</PublishAot>
-              <NativeLib>Static</NativeLib>
+              <NativeLib>Shared</NativeLib>
               <Nullable>disable</Nullable>
               <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
               <InvariantGlobalization>true</InvariantGlobalization>
@@ -113,10 +67,10 @@ jobs:
           </Project>
           EOF
 
-          # Injeta o entrypoint C UnmanagedCallersOnly ios_libhac_extract em Program.cs
           python3 - << 'PYEOF'
+          import os
           from pathlib import Path
-          p = Path("dm/tools/nx_extract/Program.cs")
+          p = Path(os.environ["RUNNER_TEMP"]) / "nx_ios" / "Program.cs"
           code = p.read_text(encoding="utf-8")
           entry = """
               [System.Runtime.InteropServices.UnmanagedCallersOnly(EntryPoint = "ios_libhac_extract")]
@@ -143,31 +97,36 @@ jobs:
               p.write_text(code, encoding="utf-8")
           PYEOF
 
-          dotnet publish dm/tools/nx_extract/nx_extract.csproj \
+          dotnet publish "$RUNNER_TEMP/nx_ios/nx_extract.csproj" \
             -c Release \
             -r ios-arm64 \
             -p:PublishAot=true \
-            -p:NativeLib=Static \
-            -p:StripSymbols=true \
+            -p:NativeLib=Shared \
             -o "$RUNNER_TEMP/libhac_ios"
 
-          ls -lh "$RUNNER_TEMP/libhac_ios/"
+          ls -la "$RUNNER_TEMP/libhac_ios/"
 
-          # Localiza todas as bibliotecas .a do runtime NativeAOT ios-arm64 para linkar no executavel iOS
-          NUGET_AOT=$(find "$HOME/.nuget/packages/microsoft.dotnet.ilcompiler" -type d -name "sdk" | grep "ios-arm64" | head -n 1)
-          echo "NUGET_AOT=$NUGET_AOT"
-
-          # Cria o aplicativo iOS nativo extrator (UIViewController + LibHac + gerador automatico de github_kit.zip)
           mkdir -p "$RUNNER_TEMP/ExtractorApp"
           cat > "$RUNNER_TEMP/ExtractorApp/main.m" << 'OBJCEOF'
           #import <UIKit/UIKit.h>
+          #include <dlfcn.h>
           #include <stdint.h>
           #include <stdio.h>
           #include <stdlib.h>
           #include <string.h>
           #include <zlib.h>
 
-          extern int ios_libhac_extract(const char *keys, const char *base_nsp, const char *upd_nsp, const char *out_dir, int mode);
+          typedef int (*ios_libhac_extract_fn)(const char *keys, const char *base_nsp, const char *upd_nsp, const char *out_dir, int mode);
+
+          static ios_libhac_extract_fn get_extractor(void) {
+              static ios_libhac_extract_fn fn = NULL;
+              if (!fn) {
+                  NSString *p = [[NSBundle mainBundle].bundlePath stringByAppendingPathComponent:@"Frameworks/nx_extract.dylib"];
+                  void *h = dlopen(p.fileSystemRepresentation, RTLD_NOW);
+                  if (h) fn = (ios_libhac_extract_fn)dlsym(h, "ios_libhac_extract");
+              }
+              return fn;
+          }
 
           #pragma pack(push, 1)
           struct zip_lfh { uint32_t sig; uint16_t ver, flags, method, mtime, mdate; uint32_t crc, csize, usize; uint16_t nlen, elen; };
@@ -263,6 +222,12 @@ jobs:
           - (void)runExtract {
               self.btn.enabled = NO;
               dispatch_async(dispatch_get_global_queue(QOS_CLASS_USER_INITIATED, 0), ^{
+                  ios_libhac_extract_fn fn = get_extractor();
+                  if (!fn) {
+                      [self log:@"ERRO: Nao foi possivel carregar Frameworks/nx_extract.dylib"];
+                      dispatch_async(dispatch_get_main_queue(), ^{ self.btn.enabled = YES; });
+                      return;
+                  }
                   NSFileManager *fm = NSFileManager.defaultManager;
                   NSString *doc = NSSearchPathForDirectoriesInDomains(NSDocumentDirectory, NSUserDomainMask, YES)[0];
                   NSString *keys = [doc stringByAppendingPathComponent:@"prod.keys"];
@@ -298,10 +263,10 @@ jobs:
                   [fm createDirectoryAtPath:staging withIntermediateDirectories:YES attributes:nil error:nil];
 
                   [self log:[NSString stringWithFormat:@"1/4 Gerando manifesto (Base: %@, Update: %@)...", basePkg.lastPathComponent, updPkg.lastPathComponent]];
-                  ios_libhac_extract(keys.UTF8String, basePkg.UTF8String, updPkg.UTF8String, staging.UTF8String, 2);
+                  fn(keys.UTF8String, basePkg.UTF8String, updPkg.UTF8String, staging.UTF8String, 2);
 
                   [self log:@"2/4 Extraindo e fundindo Base + Update com LibHac (pode levar alguns minutos para 17GB)..."];
-                  int rc = ios_libhac_extract(keys.UTF8String, basePkg.UTF8String, updPkg.UTF8String, staging.UTF8String, 0);
+                  int rc = fn(keys.UTF8String, basePkg.UTF8String, updPkg.UTF8String, staging.UTF8String, 0);
                   if (rc != 0 && rc != 3) {
                       [self log:[NSString stringWithFormat:@"ERRO LibHac rc=%d", rc]];
                       dispatch_async(dispatch_get_main_queue(), ^{ self.btn.enabled = YES; });
@@ -319,7 +284,7 @@ jobs:
                       NSString *aocOut = [NSString stringWithFormat:@"%@/aoc/%03d", staging, idx];
                       NSString *docAoc = [NSString stringWithFormat:@"%@/aoc/%03d", doc, idx];
                       [fm createDirectoryAtPath:aocOut withIntermediateDirectories:YES attributes:nil error:nil];
-                      ios_libhac_extract(keys.UTF8String, d.UTF8String, "-", aocOut.UTF8String, 1);
+                      fn(keys.UTF8String, d.UTF8String, "-", aocOut.UTF8String, 1);
                       [fm createDirectoryAtPath:[doc stringByAppendingPathComponent:@"aoc"] withIntermediateDirectories:YES attributes:nil error:nil];
                       [fm removeItemAtPath:docAoc error:nil];
                       [fm copyItemAtPath:aocOut toPath:docAoc error:nil];
@@ -379,24 +344,16 @@ jobs:
           }
           OBJCEOF
 
-          # Compila e linka o App Extrator iOS com clang (arm64-apple-ios17.0) + LibHac Static NativeAOT
           SDK_PATH=$(xcrun --sdk iphoneos --show-sdk-path)
-          mkdir -p "$RUNNER_TEMP/Payload/SpkExtractor.app"
+          mkdir -p "$RUNNER_TEMP/Payload/SpkExtractor.app/Frameworks"
+          cp "$RUNNER_TEMP/libhac_ios/nx_extract.dylib" "$RUNNER_TEMP/Payload/SpkExtractor.app/Frameworks/nx_extract.dylib"
 
           xcrun --sdk iphoneos clang -arch arm64 -miphoneos-version-min=17.0 \
             -isysroot "$SDK_PATH" \
             -fobjc-arc \
             "$RUNNER_TEMP/ExtractorApp/main.m" \
-            "$RUNNER_TEMP/libhac_ios/nx_extract.a" \
-            "$NUGET_AOT/libbootstrapperdll.o" \
-            "$NUGET_AOT/libRuntime.WorkstationGC.a" \
-            "$NUGET_AOT/libeventpipe-disabled.a" \
-            "$NUGET_AOT/libstdc++compat.a" \
-            "$NUGET_AOT/libSystem.Native.a" \
-            "$NUGET_AOT/libSystem.IO.Compression.Native.a" \
-            "$NUGET_AOT/libSystem.Globalization.Native.a" \
-            -framework UIKit -framework Foundation -framework Security -framework CoreFoundation \
-            -lc++ -lz -liconv -compression \
+            -framework UIKit -framework Foundation \
+            -lz \
             -o "$RUNNER_TEMP/Payload/SpkExtractor.app/SpkExtractor"
 
           cat > "$RUNNER_TEMP/Payload/SpkExtractor.app/Info.plist" << 'PLIST'
@@ -420,6 +377,7 @@ jobs:
           </plist>
           PLIST
 
+          codesign -f -s - "$RUNNER_TEMP/Payload/SpkExtractor.app/Frameworks/nx_extract.dylib"
           codesign -f -s - "$RUNNER_TEMP/Payload/SpkExtractor.app"
           cd "$RUNNER_TEMP"
           zip -qry "$RUNNER_TEMP/SpkIOSzero_Extractor.ipa" Payload
@@ -429,7 +387,6 @@ jobs:
         env:
           KIT_URL: ${{ inputs.github_kit_url }}
         run: |
-          cd "$RUNNER_TEMP/repo"
           curl -L --fail -o "$RUNNER_TEMP/github_kit.zip" "$KIT_URL"
           mkdir -p "$RUNNER_TEMP/kit"
           unzip -q "$RUNNER_TEMP/github_kit.zip" -d "$RUNNER_TEMP/kit"
