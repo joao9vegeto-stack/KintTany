@@ -212,6 +212,8 @@ print("PASS: Build 68 lost-wakeup counters, all-thread worker-first watchdog, as
 # Build 69: QPC fast path, synthetic timebase, and complete diagnostics.
 assert "const bool qpcFastPath = guestAddress == 0x82C3C4D8u;" in engine
 assert "const bool plateau = !qpcFastPath" in engine
+assert "if (!qpcFastPath && slot->count != 0u" in engine
+assert "loopEntries % 4096u" in engine
 assert "static thread_local uint64_t repeats=0u, syntheticOffset=0u;" in engine
 assert "syntheticOffset+=50000u;" in engine
 assert "tb64+=syntheticOffset;" in engine
