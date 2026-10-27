@@ -31,10 +31,8 @@ jobs:
       - name: 1. Checkout da Branch SpkIOSzero
         uses: actions/checkout@v4
 
-      - name: 2. Instalar .NET 9 NativeAOT e Dependencias
+      - name: 2. Instalar .NET 9 SDK Oficial
         run: |
-          brew install xcodegen
-          pip3 install --break-system-packages lz4 capstone fonttools backports.zstd
           curl -sSL https://dot.net/v1/dotnet-install.sh -o "$RUNNER_TEMP/dotnet-install.sh"
           chmod +x "$RUNNER_TEMP/dotnet-install.sh"
           "$RUNNER_TEMP/dotnet-install.sh" --channel 9.0 --install-dir "$HOME/.dotnet"
@@ -44,18 +42,26 @@ jobs:
         if: ${{ (inputs.mode || 'build_extractor_ipa') == 'build_extractor_ipa' }}
         run: |
           export PATH="$HOME/.dotnet:$PATH"
+          dotnet --info
 
-          # Copia o nx_extract para uma pasta temporaria limpa para compilar como dylib ios-arm64 via NativeAOT
+          # Caso a branch ainda nao tenha o Program.cs do nxnative, busca direto do upstream
+          if [ ! -f "dm/tools/nx_extract/Program.cs" ]; then
+            git clone --depth 1 https://github.com/seedds/nxnative.git "$RUNNER_TEMP/nx_up"
+            mkdir -p dm/tools/nx_extract
+            cp "$RUNNER_TEMP/nx_up/dm/tools/nx_extract/Program.cs" dm/tools/nx_extract/Program.cs
+          fi
+
           mkdir -p "$RUNNER_TEMP/nx_ios"
           cp dm/tools/nx_extract/Program.cs "$RUNNER_TEMP/nx_ios/Program.cs"
 
+          # Usa exatamente <PublishAot>true</PublishAot> + <PublishAotUsingRuntimePack>true</PublishAotUsingRuntimePack>
+          # exigido pela documentacao oficial da Microsoft para NativeAOT ios-arm64 no .NET 9!
           cat > "$RUNNER_TEMP/nx_ios/nx_extract.csproj" << 'EOF'
           <Project Sdk="Microsoft.NET.Sdk">
             <PropertyGroup>
-              <OutputType>Library</OutputType>
               <TargetFramework>net9.0</TargetFramework>
-              <RuntimeIdentifier>ios-arm64</RuntimeIdentifier>
               <PublishAot>true</PublishAot>
+              <PublishAotUsingRuntimePack>true</PublishAotUsingRuntimePack>
               <NativeLib>Shared</NativeLib>
               <Nullable>disable</Nullable>
               <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
@@ -97,14 +103,30 @@ jobs:
               p.write_text(code, encoding="utf-8")
           PYEOF
 
-          dotnet publish "$RUNNER_TEMP/nx_ios/nx_extract.csproj" \
-            -c Release \
-            -r ios-arm64 \
-            -p:PublishAot=true \
-            -p:NativeLib=Shared \
-            -o "$RUNNER_TEMP/libhac_ios"
-
+          dotnet publish -r ios-arm64 -c Release "$RUNNER_TEMP/nx_ios/nx_extract.csproj" -o "$RUNNER_TEMP/libhac_ios"
           ls -la "$RUNNER_TEMP/libhac_ios/"
+
+          # Empacota o nx_extract.dylib como um Framework oficial do iOS (nx_extract.framework) conforme exigido pela Apple
+          FW_DIR="$RUNNER_TEMP/Payload/SpkExtractor.app/Frameworks/nx_extract.framework"
+          mkdir -p "$FW_DIR"
+          cp "$RUNNER_TEMP/libhac_ios/nx_extract.dylib" "$FW_DIR/nx_extract"
+          install_name_tool -id @rpath/nx_extract.framework/nx_extract "$FW_DIR/nx_extract"
+
+          cat > "$FW_DIR/Info.plist" << 'FWPLIST'
+          <?xml version="1.0" encoding="UTF-8"?>
+          <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+          <plist version="1.0">
+          <dict>
+            <key>CFBundleExecutable</key><string>nx_extract</string>
+            <key>CFBundleIdentifier</key><string>com.kinttany.spkextractor.nxextract</string>
+            <key>CFBundleName</key><string>nx_extract</string>
+            <key>CFBundlePackageType</key><string>FMWK</string>
+            <key>CFBundleShortVersionString</key><string>1.0</string>
+            <key>CFBundleVersion</key><string>1.0</string>
+            <key>MinimumOSVersion</key><string>17.0</string>
+          </dict>
+          </plist>
+          FWPLIST
 
           mkdir -p "$RUNNER_TEMP/ExtractorApp"
           cat > "$RUNNER_TEMP/ExtractorApp/main.m" << 'OBJCEOF'
@@ -121,7 +143,7 @@ jobs:
           static ios_libhac_extract_fn get_extractor(void) {
               static ios_libhac_extract_fn fn = NULL;
               if (!fn) {
-                  NSString *p = [[NSBundle mainBundle].bundlePath stringByAppendingPathComponent:@"Frameworks/nx_extract.dylib"];
+                  NSString *p = [[NSBundle mainBundle].bundlePath stringByAppendingPathComponent:@"Frameworks/nx_extract.framework/nx_extract"];
                   void *h = dlopen(p.fileSystemRepresentation, RTLD_NOW);
                   if (h) fn = (ios_libhac_extract_fn)dlsym(h, "ios_libhac_extract");
               }
@@ -224,7 +246,7 @@ jobs:
               dispatch_async(dispatch_get_global_queue(QOS_CLASS_USER_INITIATED, 0), ^{
                   ios_libhac_extract_fn fn = get_extractor();
                   if (!fn) {
-                      [self log:@"ERRO: Nao foi possivel carregar Frameworks/nx_extract.dylib"];
+                      [self log:[NSString stringWithFormat:@"ERRO dlopen: %s", dlerror()]];
                       dispatch_async(dispatch_get_main_queue(), ^{ self.btn.enabled = YES; });
                       return;
                   }
@@ -345,12 +367,10 @@ jobs:
           OBJCEOF
 
           SDK_PATH=$(xcrun --sdk iphoneos --show-sdk-path)
-          mkdir -p "$RUNNER_TEMP/Payload/SpkExtractor.app/Frameworks"
-          cp "$RUNNER_TEMP/libhac_ios/nx_extract.dylib" "$RUNNER_TEMP/Payload/SpkExtractor.app/Frameworks/nx_extract.dylib"
-
           xcrun --sdk iphoneos clang -arch arm64 -miphoneos-version-min=17.0 \
             -isysroot "$SDK_PATH" \
             -fobjc-arc \
+            -Wl,-rpath,@executable_path/Frameworks \
             "$RUNNER_TEMP/ExtractorApp/main.m" \
             -framework UIKit -framework Foundation \
             -lz \
@@ -377,10 +397,11 @@ jobs:
           </plist>
           PLIST
 
-          codesign -f -s - "$RUNNER_TEMP/Payload/SpkExtractor.app/Frameworks/nx_extract.dylib"
+          codesign -f -s - "$FW_DIR"
           codesign -f -s - "$RUNNER_TEMP/Payload/SpkExtractor.app"
           cd "$RUNNER_TEMP"
           zip -qry "$RUNNER_TEMP/SpkIOSzero_Extractor.ipa" Payload
+          ls -lh "$RUNNER_TEMP/SpkIOSzero_Extractor.ipa"
 
       - name: 3B. [Modo build_thin_game_ipa] Compilar Jogo a partir do github_kit.zip
         if: ${{ inputs.mode == 'build_thin_game_ipa' }}
