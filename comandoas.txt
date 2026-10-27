@@ -1,72 +1,188 @@
-# MISSÃO CRÍTICA M8.16 — DESTRAVAR `WID 16` (`LS PC 0x009C0`), `LFQueue Commits=0` E `WWS Job-Chain` PARA RENDERIZAR OS FRAMES REAIS (`AscensionRecomp`)
+python3 - <<'PY'
+from pathlib import Path
+import subprocess
 
-Você está operando no repositório `joao9vegeto-stack/KintTany`, partindo do commit `62c058a0` (`M8.0.15`) na branch **`AscensionRecomp`**.
+# 1. Create tools/m817_c8_idle_poll_yield.py
+m817_code = '''#!/usr/bin/env python3
+"""M8.17: break C8 policy-module 0x00AD0 idle IRQ spin so WID16/17 and LFQueue acquire SPU lanes."""
+from pathlib import Path
+import argparse
 
-## ⚠️ REGRAS INVIOLÁVEIS DE ESCOPO E EXECUÇÃO
-1. **BRANCH INTOCÁVEL:** Opere **EXCLUSIVAMENTE** na branch `AscensionRecomp`. Todas as outras branches são intocáveis.
-2. **UM SÓ COMMIT E UM SÓ WORKFLOW:** Faça todas as correções necessárias e entregue tudo em **UM ÚNICO COMMIT** na branch `AscensionRecomp`, acionando apenas o workflow existente `.github/workflows/ascension-recomp-m0.yml`.
-3. **ACOMPANHAMENTO ATÉ O IPA:** Após o push, monitore o GitHub Actions continuamente (`gh run watch`). Se qualquer teste Python (`test_m8*.py`), compilação C/C++ ou linkagem Mach-O falhar, corrija imediatamente, faça `git commit --amend --no-edit && git push --force-with-lease origin AscensionRecomp` e repita até o workflow ficar **100% VERDE** e gerar o artefato `.ipa`.
+MARK = "ASCENSION_M817_C8_IDLE_POLL_YIELD_V1"
 
----
 
-## 📊 EVIDÊNCIA DO LOG DO APARELHO (M8.0.15 - commit `62c058a0`)
-O relatório real do iOS mostra que o jogo já executa 4.24M chamadas AOT, abre 37 arquivos (`11.96 MB` lidos), descomprime `18.93 MB` em `487` requisições `EDGE Zlib`, executa `10.528` IRQs nativas `C8` (`0x3FEC0`) sem falhas e faz `2 draws` e `25 flips` no Metal.
-Porém, a PPU fica presa em loop de espera (`Backedge=0x003C4FA4`, `LV2 syscall 141 = sys_timer_usleep`, `LR=0x0041D5C8`) antes de desenhar as telas de abertura devido a **3 gargalos exatos comprovados pela telemetria**:
+def once(source: str, old: str, new: str, label: str) -> str:
+    n = source.count(old)
+    if n != 1:
+        raise SystemExit(f"{label}: expected 1 anchor, found {n}: {old[:100]!r}")
+    return source.replace(old, new, 1)
 
-1. **Gargalo 1 — `PM WID16–31` sai precocemente em `LS PC=0x009C0` (`WWS job-chain: pedidos=0`):**
-   - Telemetria: `SPURS2 WID16–31 máscaras hex: registrados=0003 · habilitados=0003 · executáveis=0003 · prioridades=0003 · prontos=0000 · sinais=0000`
-   - `PM WID16–31 EXECUÇÃO NATIVA: chamados=146 · retornos=146 · último wid=16 img=6 lane=5 · LS PC final=0x009C0 · rc=0x0`
-   - `WWS job-chain: pedidos=0 · EA=0x00000000`
-   - **Causa:** O host despacha `wid=16` (`img=6`, Policy Module `Wws_Job` `C8D774`) 146 vezes, mas dentro da memória guest do `CellSpurs` (e/ou nos registradores/argumentos passados ao PM em `tools/m812_spurs2_policy_runtime.py` e `tools/patch_ps3recomp_spurs2.py`), os bits de **prontos (`ready`) / sinais (`signals`)** para `WID 16` e `WID 17` estão `0000`, ou o bloco de controle do `Wws_Job` não está sendo sincronizado via DMA/memória guest antes do PM checar o trabalho em `0x009C0`. Como resultado, a imagem `6` acha que não há trabalho e retorna em `0x009C0` todas as 146 vezes sem puxar nenhuma cadeia de jobs WWS!
 
-2. **Gargalo 2 — `LFQueue nativa` tem `487 pushes`, mas `0 commits` e `0 taskset signals`:**
-   - Telemetria: `LFQueue nativa: inicializações=1 · pushes=487 · commits=0 · bytes=0 · taskset signals=0 · wakes linha=0`
-   - `EDGE Zlib nativo: requisições=487 · concluídas=487 · eventos=487 (não são commits LFQueue)`
-   - `Taskset WWS: registrados=4 · candidatos=0 · válidos=0 · runners iniciados=6 · retornos=0 · ativos=6`
-   - **Causa:** Em `tools/m810_native_lfqueue.py` e `tools/m811_native_stage.py`, os `487` pushes da `LFQueue` (que alimentam o `EDGE Zlib`) são processados pelo caminho nativo do EDGE Zlib, **mas não estão avançando/commitando os ponteiros de pop/commit da `LFQueue` na memória guest nem disparando os sinais do Taskset (`spurs_signal_waiter` / `taskset signals`)** ou acordando os 6 runners de Taskset WWS estacionados! Por isso `commits=0`, `taskset signals=0` e `candidatos=0`.
+def patch_c8_irq_yield(root: Path) -> None:
+    path = root / "runtime/spu/spu_channels.c"
+    source = path.read_text(errors="replace")
+    if MARK in source:
+        return
+    if "ASCENSION_M813_C8_IRQ_NATIVE_V1" not in source:
+        raise SystemExit("M8.17 requires M8.13 C8 IRQ native handler in spu_channels.c")
 
-3. **Gargalo 3 — Exaustão de VM no iOS ao criar pilhas SPU (`pthread rc=35 = EAGAIN`) e Visibilidade do Drawable Metal:**
-   - Telemetria: `Pilha SPU (MiB): tentativas=6 · 256=6/1/5 · 64=5/5/0 · pthread rc=35`
-   - No iOS, tentar alocar `256 MiB` de stack por thread SPU falha na 2ª thread com `errno 35 (EAGAIN)`, desperdiçando `256 MiB` de espaço de endereçamento na 1ª thread e `5 x 64 MiB` (`320 MiB`) nas demais (`576 MiB` de VM gasta só em stack de pthread!). No iOS ARM64, stacks de `16 MiB` ou `32 MiB` são mais que suficientes e evitam `pthread rc=35`.
+    # Declare g_spurs_pm_exited and per-context/thread spin tracker before spu_ascension_run_c8_generated_irq
+    old_fn = "int spu_ascension_run_c8_generated_irq(spu_context* ctx) {"
+    new_fn = f"""/* {MARK}
+ * When all 6 SPU workers enter C8 (image=6) with 0 ready tasks, the guest PM
+ * polls in a tight save/restore IRQ loop returning to LS 0x00AD0 (179k+ calls)
+ * without yielding the SPU slot, starving WID 16/17 and LFQueue consumers.
+ * After a bounded number of consecutive 0x00AD0 restores in the same PM slice,
+ * yield the policy module slice cleanly so the SPURS scheduler can rotate WIDs.
+ */
+extern _Thread_local int g_spurs_pm_exited;
+static _Thread_local const spu_context* s_asc_c8_spin_ctx;
+static _Thread_local uint32_t s_asc_c8_spin_restores;
+static _Thread_local uint64_t s_asc_c8_last_putllc;
+extern void spu_workload_copy_ascension_commit_metrics(uint64_t out[2]);
 
----
+int spu_ascension_run_c8_generated_irq(spu_context* ctx) {{"""
+    source = once(source, old_fn, new_fn, "M8.17 C8 IRQ function header")
 
-## 🛠️ O QUE VOCÊ DEVE IMPLEMENTAR (M8.16)
+    # Hook the restore completion path in spu_ascension_run_c8_generated_irq
+    target_tail = """    ctx->pc = target & SPU_LS_MASK;
+    return 1;
+}"""
+    if target_tail not in source:
+        # Fallback if formatting has no spaces around '='
+        target_tail = """    ctx->pc=target & SPU_LS_MASK;
+    return 1;
+}"""
+    replacement_tail = """    ctx->pc = target & SPU_LS_MASK;
+    if (restoring) {
+        uint64_t commit_stats[2] = {0, 0};
+        spu_workload_copy_ascension_commit_metrics(commit_stats);
+        if ((target & SPU_LS_MASK) == 0x00AD0u &&
+            s_asc_c8_spin_ctx == ctx &&
+            commit_stats[1] == s_asc_c8_last_putllc) {
+            s_asc_c8_spin_restores++;
+            if (s_asc_c8_spin_restores >= 16u) {
+                s_asc_c8_spin_restores = 0;
+                g_spurs_pm_exited = 1;
+                return 2;
+            }
+        } else {
+            s_asc_c8_spin_ctx = ctx;
+            s_asc_c8_spin_restores = 1u;
+            s_asc_c8_last_putllc = commit_stats[1];
+        }
+    }
+    return 1;
+}"""
+    source = once(source, target_tail, replacement_tail, "M8.17 C8 restore yield tail")
 
-### 1. Diagnosticar e Corrigir a Saída em `LS PC=0x009C0` do `WID 16` (`img=6` / `Wws_Job`)
-Inspecione o código levantado da `image=6` em torno de `LS PC = 0x009C0` (e a inicialização do PM em `tools/m812_spurs2_policy_runtime.py`, `tools/patch_ps3recomp_spurs2.py` e `RichardFontoura/ps3recomp` branch `gowa-fixes`):
-- Verifique exatamente qual condição faz a `image=6` sair em `0x009C0` com `rc=0x0`.
-- Verifique como `cellSpursReadyCountStore`, `cellSpursWorkloadFlagReceiver`, `cellSpursSendWorkloadSignal` e a escrita de descritores de job WWS na memória guest atualizam as máscaras `prontos` e `sinais` dos `WIDs 16–31`.
-- Corrija o runtime SPURS2 (`m812_spurs2_policy_runtime.py` / `patch_ps3recomp_spurs2.py`) para que, quando a PPU submeter trabalho para `WID 16` / `WID 17` (ou quando `wid=16` for agendado), o estado guest (`readyCount`, `workloadSignals`, ponteiro de configuração do `pm_wwsjob` em `r3`/`r4`/scratchpad do SPURS) reflita corretamente as filas pendentes, permitindo que `img=6` passe de `0x009C0` e execute as cadeias `WWS job-chain` (`pedidos > 0`).
+    # Ensure callers of spu_ascension_run_c8_generated_irq stop the PM slice when it returns 2
+    old_call = "if (spu_ascension_run_c8_generated_irq(ctx)) continue;"
+    new_call = """{
+            int c8_rc = spu_ascension_run_c8_generated_irq(ctx);
+            if (c8_rc == 2) return;
+            if (c8_rc) continue;
+        }"""
+    if old_call in source:
+        source = source.replace(old_call, new_call)
+    else:
+        old_call2 = "if(spu_ascension_run_c8_generated_irq(ctx))continue;"
+        if old_call2 in source:
+            source = source.replace(old_call2, new_call)
 
-### 2. Conectar Conclusão do `EDGE Zlib` / `LFQueue Pushes` ao Commit da `LFQueue` e Wakeup dos `Tasksets WWS`
-Inspecione `tools/m810_native_lfqueue.py`, `tools/m811_native_stage.py`, `tools/m801_taskset_runtime.py` e `tools/m808_taskset_commit_kick.py`:
-- Entenda por que `pushes=487` e `EDGE Zlib concluídas=487` resultam em `LFQueue commits=0` e `taskset signals=0`.
-- Quando um elemento empurrado na `LFQueue` (como uma entrada da fila do `EDGE Zlib`) é consumido/concluído, ou quando uma SPU task tenta dar pop na `LFQueue`, garanta que:
-  1. Os ponteiros guest da `CellSpursLFQueue` (`POP1`/`POP2`/`PUSH` headers BE16) e a contabilidade de `commits` / `bytes` sejam devidamente atualizados na memória guest em Big-Endian.
-  2. Os waiters registrados na `LFQueue` (`LFQ_EA_SIGNAL` / `spurs_signal_waiter`) sejam efetivamente sinalizados (`taskset signals > 0` e `wakes linha > 0`).
-  3. Verifique por que os `4` Tasksets WWS registrados têm `candidatos=0` e `válidos=0` mesmo com `6 runners ativos` e `17.112 PUTLLC commits`. Certifique-se de que quando os runners SPU aguardam em `WAIT_SIGNAL` ou na `LFQueue` / `event_flag`, o sinal do host/PPU destrave a criação/despacho das tasks nos 4 Tasksets registrados.
+    path.write_text(source)
 
-### 3. Corrigir Alocação de Pilha SPU no iOS (`pthread rc=35`) e Garantir Apresentação de Pixels no Metal
-- No código que configura o tamanho da stack das threads SPU (`Pilha SPU (MiB)`), altere a ordem/tamanhos no iOS para iniciar em `32 MiB` ou `16 MiB` (ou ajustar para que nunca falhe com `pthread rc=35 / EAGAIN`), preservando a estabilidade da VM de `3.75 GB`.
-- Verifique em `tools/enable_ios_drawable_layer.py` e no bridge RSX/Metal se os `2 draws guest` e `25 flips guest apresentados` estão realmente preenchendo o color attachment da `CAMetalLayer` visível na tela principal (e não sendo descartados por um clear posterior ou falta de bind do framebuffer principal do `cellGcmSetFlipCommand`).
 
-### 4. Atualizar Versão, Testes de Regressão e Pipeline CI (`.github/workflows/ascension-recomp-m0.yml`)
-- Crie/atualize o script `tools/m816_*.py` e seu respectivo teste de regressão `tools/test_m816_*.py` validando:
-  1. Que `WID 16` (`img=6`) avança além do early-exit `0x009C0` quando há trabalho pendente e despacha `WWS job-chain`.
-  2. Que os `487` pushes de `LFQueue` / `EDGE Zlib` geram commits reais na `LFQueue` e entregam `taskset signals` aos Tasksets WWS.
-- Atualize `.github/workflows/ascension-recomp-m0.yml` para versão **`M8.0.16` (`8.0.16` / build `8016`)**, rodando todos os testes de regressão no CI.
+def patch_policy_loop(root: Path) -> None:
+    """Ensure spurs_policy.c also respects g_spurs_pm_exited on C8 idle yield."""
+    path = root / "runtime/spu/spurs_policy.c"
+    source = path.read_text(errors="replace")
+    if MARK in source:
+        return
+    old = "int result = g_spurs_pm_exited ? 0 : -2;"
+    new = f"/* {MARK} */\n    int result = g_spurs_pm_exited ? 0 : -2;"
+    source = once(source, old, new, "M8.17 spurs_policy marker")
+    path.write_text(source)
 
----
 
-## 🔄 EXECUÇÃO PASSO A PASSO
-1. Faça `git checkout AscensionRecomp && git pull origin AscensionRecomp`.
-2. Analise os scripts `tools/m8*.py` atuais e implemente a solução completa da **M8.16**.
-3. Rode todos os testes `python3 tools/test_m8*.py` localmente para garantir zero regressões antes do commit.
-4. Faça **UM ÚNICO COMMIT**:
-   ```bash
-   git add -A
-   git commit -m "M8.16: fix WID16 PM 0x9C0 early exit, LFQueue commit signals and SPU stack EAGAIN"
-   git push origin AscensionRecomp
-   ```
-5. Monitore o workflow `.github/workflows/ascension-recomp-m0.yml` com `gh run watch` até terminar com **`success`** (corrigindo via `--amend` se houver qualquer erro) e me entregue o relatório final com o commit e o `.ipa` gerado.
+def main() -> None:
+    ap = argparse.ArgumentParser()
+    ap.add_argument("--upstream", type=Path, required=True)
+    args = ap.parse_args()
+    patch_c8_irq_yield(args.upstream)
+    patch_policy_loop(args.upstream)
+    print(f"M8.17 applied to {args.upstream}")
+
+
+if __name__ == "__main__":
+    main()
+'''
+Path("tools/m817_c8_idle_poll_yield.py").write_text(m817_code)
+Path("tools/m817_c8_idle_poll_yield.py").chmod(0o755)
+
+# 2. Create regression test tools/test_m817_c8_idle_poll_yield.py
+test_code = '''#!/usr/bin/env python3
+"""Verify M8.17 C8 0x00AD0 idle poll yield is installed in spu_channels.c and spurs_policy.c."""
+from pathlib import Path
+import argparse
+
+ap = argparse.ArgumentParser()
+ap.add_argument("--upstream", type=Path, required=True)
+args = ap.parse_args()
+
+chan = (args.upstream / "runtime/spu/spu_channels.c").read_text(errors="replace")
+pol = (args.upstream / "runtime/spu/spurs_policy.c").read_text(errors="replace")
+
+for token in (
+    "ASCENSION_M817_C8_IDLE_POLL_YIELD_V1",
+    "s_asc_c8_spin_restores >= 16u",
+    "g_spurs_pm_exited = 1;",
+    "if (c8_rc == 2) return;",
+):
+    if token not in chan:
+        raise SystemExit(f"missing {token} in {args.upstream}/runtime/spu/spu_channels.c")
+
+if "ASCENSION_M817_C8_IDLE_POLL_YIELD_V1" not in pol:
+    raise SystemExit(f"missing M8.17 marker in {args.upstream}/runtime/spu/spurs_policy.c")
+
+print(f"M8.17 verification passed for {args.upstream}")
+'''
+Path("tools/test_m817_c8_idle_poll_yield.py").write_text(test_code)
+Path("tools/test_m817_c8_idle_poll_yield.py").chmod(0o755)
+
+# 3. Update ios/ARProbeApp.m version string to M8.0.17
+probe_app = Path("ios/ARProbeApp.m")
+app_text = probe_app.read_text(errors="replace")
+app_text = app_text.replace("Build M8.0.16", "Build M8.0.17")
+probe_app.write_text(app_text)
+
+# 4. Update .github/workflows/ascension-recomp-m0.yml to run M8.17 and bump to 8.0.17 / 8017
+wf_path = Path(".github/workflows/ascension-recomp-m0.yml")
+wf = wf_path.read_text(errors="replace")
+wf = wf.replace(
+    "name: AscensionRecomp M8.16.0 - WID16 flag handoff, EDGE event result and iOS stacks",
+    "name: AscensionRecomp M8.17.0 - C8 0x00AD0 idle poll yield and WID16/17 slot rotation",
+)
+wf = wf.replace("group: ascension-recomp-m816", "group: ascension-recomp-m817")
+wf = wf.replace(
+    "tools/m816_wid16_lfqueue_commit.py tools/test_m816_wid16_lfqueue_commit.py",
+    "tools/m816_wid16_lfqueue_commit.py tools/test_m816_wid16_lfqueue_commit.py tools/m817_c8_idle_poll_yield.py tools/test_m817_c8_idle_poll_yield.py",
+)
+m816_step = """          python3 tools/test_m816_wid16_lfqueue_commit.py --upstream upstream
+          python3 tools/test_m816_wid16_lfqueue_commit.py --upstream upstream-m772"""
+m817_step = m816_step + """
+          python3 tools/m817_c8_idle_poll_yield.py --upstream upstream
+          python3 tools/m817_c8_idle_poll_yield.py --upstream upstream-m772
+          python3 tools/test_m817_c8_idle_poll_yield.py --upstream upstream
+          python3 tools/test_m817_c8_idle_poll_yield.py --upstream upstream-m772"""
+assert m816_step in wf, "Could not find M8.16 workflow step"
+wf = wf.replace(m816_step, m817_step, 1)
+wf = wf.replace("8.0.16", "8.0.17").replace("8016", "8017").replace("M8.0.16", "M8.0.17")
+wf_path.write_text(wf)
+
+subprocess.run(["python3", "-m", "py_compile", "tools/m817_c8_idle_poll_yield.py", "tools/test_m817_c8_idle_poll_yield.py"], check=True)
+print("M8.0.17 staged successfully.")
+PY
+git add .github/workflows/ascension-recomp-m0.yml ios/ARProbeApp.m tools/m817_c8_idle_poll_yield.py tools/test_m817_c8_idle_poll_yield.py
+git commit -m "M8.17: yield C8 0x00AD0 idle IRQ poll loop to unblock WID16/17 and LFQueue"
+git push origin AscensionRecomp
