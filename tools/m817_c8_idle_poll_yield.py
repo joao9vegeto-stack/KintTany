@@ -21,6 +21,7 @@ def patch_c8_irq_yield(root: Path) -> None:
     if "ASCENSION_M813_C8_IRQ_NATIVE_V1" not in source:
         raise SystemExit("M8.17 requires M8.13 C8 IRQ native handler in spu_channels.c")
 
+    source = source.replace("if(!ctx || ctx->image_id!=6 || !ctx->policy_mode || (ctx->pc & SPU_LS_MASK)!=0x3FEC0u)", "if(!ctx || ctx->image_id!=6 || (ctx->pc & SPU_LS_MASK)!=0x3FEC0u)")
     old_fn = "int spu_ascension_run_c8_generated_irq(spu_context* ctx) {"
     new_fn = f"""/* {MARK}
  * When all 6 SPU workers enter C8 (image=6) with 0 ready tasks, the guest PM
@@ -47,20 +48,21 @@ int spu_ascension_run_c8_generated_irq(spu_context* ctx) {{"""
     if (restoring) {
         uint64_t commit_stats[2] = {0, 0};
         spu_workload_copy_ascension_commit_metrics(commit_stats);
+        (void)commit_stats;
+        (void)s_asc_c8_last_putllc;
         if ((target & SPU_LS_MASK) == 0x00AD0u &&
-            s_asc_c8_spin_ctx == ctx &&
-            commit_stats[1] == s_asc_c8_last_putllc) {
+            s_asc_c8_spin_ctx == ctx) {
             s_asc_c8_spin_restores++;
-            if (s_asc_c8_spin_restores >= 16u) {
+            if (s_asc_c8_spin_restores >= 8u) {
                 s_asc_c8_spin_restores = 0;
                 g_spurs_pm_exited = 1;
                 g_spu_trampoline_fn = NULL;
+                ctx->pc = 0;
                 return 2;
             }
         } else {
             s_asc_c8_spin_ctx = ctx;
             s_asc_c8_spin_restores = 1u;
-            s_asc_c8_last_putllc = commit_stats[1];
         }
     }
     g_spu_trampoline_fn=spu_indirect_branch;
