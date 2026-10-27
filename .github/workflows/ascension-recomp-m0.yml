@@ -1,4 +1,4 @@
-name: AscensionRecomp M8.18.0 - C8 0x00AD0 idle poll yield and WID16/17 slot rotation
+name: AscensionRecomp M8.18.3 - WWS crash diagnostics and C8 yield
 
 on:
   push:
