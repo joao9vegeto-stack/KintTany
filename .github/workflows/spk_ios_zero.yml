@@ -8,7 +8,7 @@ on:
   workflow_dispatch:
     inputs:
       mode:
-        description: '1) build_extractor_ipa (Gera ExtractorNS.ipa com Scanner de Subpastas) | 2) build_thin_game_ipa (Compila QUALQUER Jogo a partir do github_kit.zip)'
+        description: '1) build_extractor_ipa (Gera ExtractorNS.ipa v3.2 Compact Card + NACP/Icon Reader) | 2) build_thin_game_ipa (Compila Jogo a partir do github_kit.zip)'
         required: true
         default: 'build_extractor_ipa'
         type: choice
@@ -38,7 +38,7 @@ jobs:
           "$RUNNER_TEMP/dotnet-install.sh" --channel 9.0 --install-dir "$HOME/.dotnet"
           echo "$HOME/.dotnet" >> "$GITHUB_PATH"
 
-      - name: 3A. [Modo build_extractor_ipa] Compilar ExtractorNS.ipa (UI Nintendo Switch + Scanner de Subpastas)
+      - name: 3A. [Modo build_extractor_ipa] Compilar ExtractorNS.ipa v3.2 (Leitor NACP/Icon + Card Compacto)
         if: ${{ (inputs.mode || 'build_extractor_ipa') == 'build_extractor_ipa' }}
         run: |
           export PATH="$HOME/.dotnet:$PATH"
@@ -69,29 +69,88 @@ jobs:
           </Project>
           EOF
 
+          # Injeta leitor nativo LibHac que abre qualquer NSP/XCI (Base, Update ou DLC) e extrai:
+          # TitleID Base (0100...000), Tipo (Application/Patch/AddOnContent), Nome Oficial do control.nacp e Icone JPEG do jogo!
           python3 - << 'PYEOF'
           import os
           from pathlib import Path
           p = Path(os.environ["RUNNER_TEMP"]) / "nx_ios" / "Program.cs"
           code = p.read_text(encoding="utf-8")
           entry = """
-              [System.Runtime.InteropServices.UnmanagedCallersOnly(EntryPoint = "ios_libhac_info")]
-              public static int IosLibHacInfo(IntPtr keysPtr, IntPtr pkgPtr, IntPtr outFilePtr) {
+              [System.Runtime.InteropServices.UnmanagedCallersOnly(EntryPoint = "ios_libhac_inspect")]
+              public static int IosLibHacInspect(IntPtr keysPtr, IntPtr pkgPtr, IntPtr outTsvPtr, IntPtr outIconPtr) {
                   try {
-                      g_damaged.Clear();
-                      g_lenient = null;
-                      g_lenientFs = null;
                       string k = System.Runtime.InteropServices.Marshal.PtrToStringUTF8(keysPtr);
                       string pkg = System.Runtime.InteropServices.Marshal.PtrToStringUTF8(pkgPtr);
-                      string outFile = System.Runtime.InteropServices.Marshal.PtrToStringUTF8(outFilePtr);
-                      using var sw = new System.IO.StreamWriter(outFile, false, System.Text.Encoding.UTF8);
-                      var oldOut = Console.Out;
-                      Console.SetOut(sw);
-                      int rc = Main(new string[] { k, "--info", pkg, "--allow-damaged" });
-                      Console.SetOut(oldOut);
-                      return rc;
-                  } catch (Exception e) {
-                      Console.Error.WriteLine(e.ToString());
+                      string outTsv = System.Runtime.InteropServices.Marshal.PtrToStringUTF8(outTsvPtr);
+                      string outIcon = outIconPtr != IntPtr.Zero ? System.Runtime.InteropServices.Marshal.PtrToStringUTF8(outIconPtr) : null;
+
+                      KeySet ks = ExternalKeyReader.ReadKeyFile(k);
+                      using var file = new LocalStorage(pkg, FileAccess.Read);
+                      IFileSystem pfs = OpenPackage(file, pkg);
+
+                      ulong foundTid = 0;
+                      string kind = "Unknown";
+                      string gameName = "";
+
+                      foreach (var entry in pfs.EnumerateEntries("/", "*.nca")) {
+                          using var ncaFile = new UniqueRef<IFile>();
+                          pfs.OpenFile(ref ncaFile.Ref, entry.FullPath.ToU8Span(), OpenMode.Read).ThrowIfFailure();
+                          var nca = new Nca(ks, ncaFile.Release().AsStorage());
+                          ulong tid = nca.Header.TitleId;
+                          if (tid != 0) {
+                              ulong low = tid & 0xFFFUL;
+                              if (low == 0x800UL) {
+                                  kind = "Patch";
+                                  foundTid = tid & ~0xFFFUL;
+                              } else if (low != 0x000UL) {
+                                  if (kind == "Unknown") kind = "AddOnContent";
+                                  foundTid = (tid & ~0xFFFUL) - 0x1000UL;
+                              } else {
+                                  kind = "Application";
+                                  foundTid = tid;
+                              }
+                          }
+                          if (nca.Header.ContentType == NcaContentType.Control) {
+                              try {
+                                  IFileSystem ctrlFs = nca.OpenFileSystem(NcaSectionType.Data, IntegrityCheckLevel.None);
+                                  using var nacpFile = new UniqueRef<IFile>();
+                                  if (ctrlFs.OpenFile(ref nacpFile.Ref, "/control.nacp".ToU8Span(), OpenMode.Read).IsSuccess()) {
+                                      byte[] nacp = new byte[0x4000];
+                                      nacpFile.Get.Read(out long _, 0, nacp).ThrowIfFailure();
+                                      for (int lang = 0; lang < 16; lang++) {
+                                          int off = lang * 0x300;
+                                          int len = 0;
+                                          while (len < 0x200 && nacp[off + len] != 0) len++;
+                                          if (len > 0) {
+                                              gameName = System.Text.Encoding.UTF8.GetString(nacp, off, len).Trim();
+                                              break;
+                                          }
+                                      }
+                                  }
+                                  if (!string.IsNullOrEmpty(outIcon) && !File.Exists(outIcon)) {
+                                      foreach (var ic in ctrlFs.EnumerateEntries("/", "icon_*.dat")) {
+                                          using var icFile = new UniqueRef<IFile>();
+                                          if (ctrlFs.OpenFile(ref icFile.Ref, ic.FullPath.ToU8Span(), OpenMode.Read).IsSuccess()) {
+                                              icFile.Get.GetSize(out long sz).ThrowIfFailure();
+                                              if (sz > 0 && sz < 512 * 1024) {
+                                                  byte[] buf = new byte[sz];
+                                                  icFile.Get.Read(out long _, 0, buf).ThrowIfFailure();
+                                                  File.WriteAllBytes(outIcon, buf);
+                                                  break;
+                                              }
+                                          }
+                                      }
+                                  }
+                              } catch { }
+                          }
+                      }
+                      if (foundTid != 0) {
+                          File.WriteAllText(outTsv, $"{kind}\\t{foundTid:X16}\\t{gameName}");
+                          return 0;
+                      }
+                      return 2;
+                  } catch {
                       return 1;
                   }
               }
@@ -273,7 +332,7 @@ jobs:
           #include <zlib.h>
 
           typedef int (*ios_libhac_extract_fn)(const char *keys, const char *base_nsp, const char *upd_nsp, const char *out_dir, int mode);
-          typedef int (*ios_libhac_info_fn)(const char *keys, const char *pkg, const char *out_file);
+          typedef int (*ios_libhac_inspect_fn)(const char *keys, const char *pkg, const char *out_tsv, const char *out_icon);
 
           static void *get_libhac_handle(void) {
               static void *h = NULL;
@@ -289,9 +348,9 @@ jobs:
               return h ? (ios_libhac_extract_fn)dlsym(h, "ios_libhac_extract") : NULL;
           }
 
-          static ios_libhac_info_fn get_info_fn(void) {
+          static ios_libhac_inspect_fn get_inspect_fn(void) {
               void *h = get_libhac_handle();
-              return h ? (ios_libhac_info_fn)dlsym(h, "ios_libhac_info") : NULL;
+              return h ? (ios_libhac_inspect_fn)dlsym(h, "ios_libhac_inspect") : NULL;
           }
 
           #pragma pack(push, 1)
@@ -355,7 +414,6 @@ jobs:
               return NO;
           }
 
-          // Cores Oficiais Nintendo Switch Horizon Dark Theme
           #define NS_BG_COLOR      [UIColor colorWithRed:0.11 green:0.12 blue:0.15 alpha:1.0]
           #define NS_CARD_COLOR    [UIColor colorWithRed:0.16 green:0.18 blue:0.22 alpha:1.0]
           #define NS_BLUE_COLOR    [UIColor colorWithRed:0.00 green:0.76 blue:0.89 alpha:1.0]
@@ -400,7 +458,7 @@ jobs:
               rightRail.backgroundColor = NS_RED_COLOR;
               [self.view addSubview:rightRail];
 
-              UIView *header = [[UIView alloc] initWithFrame:CGRectMake(16, 54, w - 32, 64)];
+              UIView *header = [[UIView alloc] initWithFrame:CGRectMake(16, 54, w - 32, 60)];
               header.autoresizingMask = UIViewAutoresizingFlexibleWidth;
               header.backgroundColor = NS_CARD_COLOR;
               header.layer.cornerRadius = 16;
@@ -408,7 +466,7 @@ jobs:
               header.layer.borderColor = [UIColor colorWithWhite:1.0 alpha:0.08].CGColor;
               [self.view addSubview:header];
 
-              UIView *joyIcon = [[UIView alloc] initWithFrame:CGRectMake(14, 14, 36, 36)];
+              UIView *joyIcon = [[UIView alloc] initWithFrame:CGRectMake(14, 12, 36, 36)];
               joyIcon.layer.cornerRadius = 10;
               joyIcon.clipsToBounds = YES;
               UIView *jl = [[UIView alloc] initWithFrame:CGRectMake(0, 0, 18, 36)];
@@ -425,20 +483,20 @@ jobs:
               [joyIcon addSubview:nsLbl];
               [header addSubview:joyIcon];
 
-              UILabel *title = [[UILabel alloc] initWithFrame:CGRectMake(60, 11, w - 180, 24)];
+              UILabel *title = [[UILabel alloc] initWithFrame:CGRectMake(60, 10, w - 180, 22)];
               title.text = @"ExtractorNS";
               title.textColor = UIColor.whiteColor;
-              title.font = [UIFont systemFontOfSize:21 weight:UIFontWeightHeavy];
+              title.font = [UIFont systemFontOfSize:20 weight:UIFontWeightHeavy];
               [header addSubview:title];
 
-              UILabel *sub = [[UILabel alloc] initWithFrame:CGRectMake(60, 35, w - 180, 16)];
+              UILabel *sub = [[UILabel alloc] initWithFrame:CGRectMake(60, 33, w - 180, 14)];
               sub.text = @"NINTENDO SWITCH ➔ iOS NATIVE";
               sub.textColor = NS_CYAN_GLOW;
-              sub.font = [UIFont systemFontOfSize:10 weight:UIFontWeightBold];
+              sub.font = [UIFont systemFontOfSize:9.5 weight:UIFontWeightBold];
               [header addSubview:sub];
 
               self.scanBtn = [UIButton buttonWithType:UIButtonTypeSystem];
-              self.scanBtn.frame = CGRectMake(header.bounds.size.width - 96, 15, 84, 34);
+              self.scanBtn.frame = CGRectMake(header.bounds.size.width - 94, 13, 82, 34);
               self.scanBtn.autoresizingMask = UIViewAutoresizingFlexibleLeftMargin;
               self.scanBtn.backgroundColor = [UIColor colorWithWhite:1.0 alpha:0.10];
               self.scanBtn.layer.cornerRadius = 10;
@@ -449,36 +507,32 @@ jobs:
               [header addSubview:self.scanBtn];
 
               CGFloat pillW = (w - 48) / 3.0;
-              self.keysBadge = [self makeStatusPillWithFrame:CGRectMake(16, 128, pillW, 44) title:@"PROD.KEYS" value:@"Verificando..."];
-              self.pkgsBadge = [self makeStatusPillWithFrame:CGRectMake(24 + pillW, 128, pillW, 44) title:@"ARQUIVOS" value:@"0 NSP/XCI"];
-              self.gamesBadge = [self makeStatusPillWithFrame:CGRectMake(32 + pillW * 2, 128, pillW, 44) title:@"JOGOS" value:@"0 Prontos"];
+              self.keysBadge = [self makeStatusPillWithFrame:CGRectMake(16, 122, pillW, 42) title:@"PROD.KEYS" value:@"Verificando..."];
+              self.pkgsBadge = [self makeStatusPillWithFrame:CGRectMake(24 + pillW, 122, pillW, 42) title:@"ARQUIVOS" value:@"0 NSP/XCI"];
+              self.gamesBadge = [self makeStatusPillWithFrame:CGRectMake(32 + pillW * 2, 122, pillW, 42) title:@"JOGOS" value:@"0 Prontos"];
 
-              UILabel *sec1 = [[UILabel alloc] initWithFrame:CGRectMake(20, 182, w - 40, 18)];
-              sec1.text = @"PASTAS E JOGOS DETECTADOS (EXTRACTORNS)";
-              sec1.textColor = [UIColor colorWithWhite:0.75 alpha:1.0];
-              sec1.font = [UIFont systemFontOfSize:11 weight:UIFontWeightBold];
-              [self.view addSubview:sec1];
-
-              self.carousel = [[UIScrollView alloc] initWithFrame:CGRectMake(16, 204, w - 32, 158)];
+              // Carrossel Compacto (apenas 88px de altura!) com Icone real do Jogo + Nome Oficial + Title ID
+              self.carousel = [[UIScrollView alloc] initWithFrame:CGRectMake(16, 174, w - 32, 88)];
               self.carousel.autoresizingMask = UIViewAutoresizingFlexibleWidth;
               self.carousel.showsHorizontalScrollIndicator = NO;
               [self.view addSubview:self.carousel];
 
-              self.statusLabel = [[UILabel alloc] initWithFrame:CGRectMake(20, 370, w - 40, 18)];
-              self.statusLabel.text = @"Escaneando pastas e subpastas...";
+              self.statusLabel = [[UILabel alloc] initWithFrame:CGRectMake(20, 270, w - 40, 16)];
+              self.statusLabel.text = @"Lendo metadados NACP/CNMT dos pacotes...";
               self.statusLabel.textColor = NS_CYAN_GLOW;
-              self.statusLabel.font = [UIFont systemFontOfSize:12 weight:UIFontWeightSemibold];
+              self.statusLabel.font = [UIFont systemFontOfSize:11.5 weight:UIFontWeightSemibold];
               [self.view addSubview:self.statusLabel];
 
               self.progressBar = [[UIProgressView alloc] initWithProgressViewStyle:UIProgressViewStyleDefault];
-              self.progressBar.frame = CGRectMake(20, 394, w - 40, 6);
+              self.progressBar.frame = CGRectMake(20, 292, w - 40, 5);
               self.progressBar.autoresizingMask = UIViewAutoresizingFlexibleWidth;
               self.progressBar.trackTintColor = NS_CARD_COLOR;
               self.progressBar.progressTintColor = NS_CYAN_GLOW;
               self.progressBar.progress = 0.0;
               [self.view addSubview:self.progressBar];
 
-              self.logView = [[UITextView alloc] initWithFrame:CGRectMake(16, 410, w - 32, h - 504)];
+              // Console de Log amplo
+              self.logView = [[UITextView alloc] initWithFrame:CGRectMake(16, 306, w - 32, h - 398)];
               self.logView.autoresizingMask = UIViewAutoresizingFlexibleWidth | UIViewAutoresizingFlexibleHeight;
               self.logView.backgroundColor = [UIColor colorWithRed:0.07 green:0.08 blue:0.10 alpha:1.0];
               self.logView.textColor = [UIColor colorWithRed:0.75 green:0.88 blue:0.95 alpha:1.0];
@@ -488,14 +542,11 @@ jobs:
               self.logView.layer.borderColor = [UIColor colorWithWhite:1.0 alpha:0.08].CGColor;
               self.logView.editable = NO;
               self.logView.textContainerInset = UIEdgeInsetsMake(10, 10, 10, 10);
-              self.logView.text = @"[ExtractorNS v3.1 — Scanner Recursivo de Subpastas]\n"
-                                  @"• Detecta automaticamente pastas como:\n"
-                                  @"  ExtractorNS/<Jogo>/base/ , update/ , dlcs/\n"
-                                  @"• Detecta prod.keys na raiz do app ou em subpastas!\n";
+              self.logView.text = @"[ExtractorNS v3.2 — Leitor Direto NACP / Icon / TitleID]\n";
               [self.view addSubview:self.logView];
 
               self.extractBtn = [UIButton buttonWithType:UIButtonTypeSystem];
-              self.extractBtn.frame = CGRectMake(16, h - 80, w - 32, 54);
+              self.extractBtn.frame = CGRectMake(16, h - 78, w - 32, 52);
               self.extractBtn.autoresizingMask = UIViewAutoresizingFlexibleWidth | UIViewAutoresizingFlexibleTopMargin;
               self.extractBtn.backgroundColor = NS_RED_COLOR;
               self.extractBtn.layer.cornerRadius = 14;
@@ -520,13 +571,13 @@ jobs:
               box.layer.borderColor = [UIColor colorWithWhite:1.0 alpha:0.07].CGColor;
               [self.view addSubview:box];
 
-              UILabel *tl = [[UILabel alloc] initWithFrame:CGRectMake(8, 6, f.size.width - 16, 12)];
+              UILabel *tl = [[UILabel alloc] initWithFrame:CGRectMake(8, 5, f.size.width - 16, 12)];
               tl.text = t;
               tl.textColor = [UIColor colorWithWhite:0.6 alpha:1.0];
               tl.font = [UIFont systemFontOfSize:9 weight:UIFontWeightBold];
               [box addSubview:tl];
 
-              UILabel *vl = [[UILabel alloc] initWithFrame:CGRectMake(8, 20, f.size.width - 16, 18)];
+              UILabel *vl = [[UILabel alloc] initWithFrame:CGRectMake(8, 19, f.size.width - 16, 18)];
               vl.text = v;
               vl.textColor = UIColor.whiteColor;
               vl.font = [UIFont systemFontOfSize:12 weight:UIFontWeightBold];
@@ -546,26 +597,26 @@ jobs:
           - (void)rebuildCarousel {
               for (UIView *sub in self.carousel.subviews) [sub removeFromSuperview];
 
+              CGFloat fullW = self.carousel.bounds.size.width;
               if (self.detectedGames.count == 0) {
-                  UIView *empty = [[UIView alloc] initWithFrame:CGRectMake(0, 0, self.carousel.bounds.size.width, 150)];
+                  UIView *empty = [[UIView alloc] initWithFrame:CGRectMake(0, 0, fullW, 84)];
                   empty.backgroundColor = NS_CARD_COLOR;
-                  empty.layer.cornerRadius = 16;
-                  empty.layer.borderWidth = 1.5;
+                  empty.layer.cornerRadius = 14;
+                  empty.layer.borderWidth = 1.2;
                   empty.layer.borderColor = [NS_BLUE_COLOR colorWithAlphaComponent:0.4].CGColor;
 
-                  UILabel *l1 = [[UILabel alloc] initWithFrame:CGRectMake(16, 36, empty.bounds.size.width - 32, 24)];
+                  UILabel *l1 = [[UILabel alloc] initWithFrame:CGRectMake(14, 18, fullW - 28, 20)];
                   l1.text = @"Nenhum Cartucho NSP / XCI Detectado";
                   l1.textColor = UIColor.whiteColor;
                   l1.textAlignment = NSTextAlignmentCenter;
-                  l1.font = [UIFont boldSystemFontOfSize:16];
+                  l1.font = [UIFont boldSystemFontOfSize:14];
                   [empty addSubview:l1];
 
-                  UILabel *l2 = [[UILabel alloc] initWithFrame:CGRectMake(16, 66, empty.bounds.size.width - 32, 48)];
-                  l2.text = @"Coloque prod.keys na raiz e seus jogos em pastas\n(ex: ExtractorNS/Spk/base, update, dlcs)";
+                  UILabel *l2 = [[UILabel alloc] initWithFrame:CGRectMake(14, 42, fullW - 28, 24)];
+                  l2.text = @"Coloque prod.keys + pastas (base, update, dlcs) em ExtractorNS";
                   l2.textColor = [UIColor colorWithWhite:0.7 alpha:1.0];
                   l2.textAlignment = NSTextAlignmentCenter;
-                  l2.numberOfLines = 2;
-                  l2.font = [UIFont systemFontOfSize:12];
+                  l2.font = [UIFont systemFontOfSize:11];
                   [empty addSubview:l2];
 
                   [self.carousel addSubview:empty];
@@ -574,41 +625,54 @@ jobs:
               }
 
               CGFloat x = 0;
-              CGFloat cardW = 260;
+              CGFloat cardW = (self.detectedGames.count == 1) ? fullW : 310;
               for (NSString *key in self.detectedGames) {
                   NSDictionary *g = self.detectedGames[key];
                   NSString *name = g[@"name"] ?: key;
-                  NSString *tid = g[@"tid"] ?: key;
+                  NSString *tid = g[@"tid"] ?: @"N/A";
                   NSString *folder = g[@"folder"] ?: @"Raiz";
+                  NSString *iconPath = g[@"icon"];
                   BOOL hasBase = (g[@"base"] != nil);
                   BOOL hasUpd = (g[@"upd"] != nil);
                   NSUInteger dlcCount = [g[@"dlcs"] count];
 
-                  UIView *card = [[UIView alloc] initWithFrame:CGRectMake(x, 2, cardW, 150)];
+                  UIView *card = [[UIView alloc] initWithFrame:CGRectMake(x, 2, cardW, 84)];
                   card.backgroundColor = NS_CARD_COLOR;
-                  card.layer.cornerRadius = 16;
-                  card.layer.borderWidth = 2.5;
+                  card.layer.cornerRadius = 14;
+                  card.layer.borderWidth = 2.0;
                   card.layer.borderColor = NS_CYAN_GLOW.CGColor;
 
-                  UIView *topBar = [[UIView alloc] initWithFrame:CGRectMake(14, 12, 48, 5)];
-                  topBar.backgroundColor = NS_BLUE_COLOR;
-                  topBar.layer.cornerRadius = 2.5;
-                  [card addSubview:topBar];
+                  // Icone/Capa real extraida do control.nacp do jogo!
+                  UIImageView *imgV = [[UIImageView alloc] initWithFrame:CGRectMake(10, 10, 64, 64)];
+                  imgV.backgroundColor = [UIColor colorWithWhite:0.08 alpha:1.0];
+                  imgV.layer.cornerRadius = 10;
+                  imgV.clipsToBounds = YES;
+                  imgV.contentMode = UIViewContentModeScaleAspectFill;
+                  if (iconPath && [NSFileManager.defaultManager fileExistsAtPath:iconPath]) {
+                      imgV.image = [UIImage imageWithContentsOfFile:iconPath];
+                  } else {
+                      UILabel *ph = [[UILabel alloc] initWithFrame:imgV.bounds];
+                      ph.text = @"NS";
+                      ph.textColor = NS_CYAN_GLOW;
+                      ph.font = [UIFont systemFontOfSize:18 weight:UIFontWeightBlack];
+                      ph.textAlignment = NSTextAlignmentCenter;
+                      [imgV addSubview:ph];
+                  }
+                  [card addSubview:imgV];
 
-                  UILabel *tidLbl = [[UILabel alloc] initWithFrame:CGRectMake(14, 22, cardW - 28, 14)];
-                  tidLbl.text = [NSString stringWithFormat:@"📁 %@ • ID: %@", folder, tid];
+                  UILabel *nameLbl = [[UILabel alloc] initWithFrame:CGRectMake(84, 8, cardW - 94, 20)];
+                  nameLbl.text = name;
+                  nameLbl.textColor = UIColor.whiteColor;
+                  nameLbl.font = [UIFont systemFontOfSize:14.5 weight:UIFontWeightHeavy];
+                  [card addSubview:nameLbl];
+
+                  UILabel *tidLbl = [[UILabel alloc] initWithFrame:CGRectMake(84, 28, cardW - 94, 14)];
+                  tidLbl.text = [NSString stringWithFormat:@"ID: %@  •  Pasta: %@", tid, folder];
                   tidLbl.textColor = NS_CYAN_GLOW;
                   tidLbl.font = [UIFont monospacedSystemFontOfSize:10 weight:UIFontWeightBold];
                   [card addSubview:tidLbl];
 
-                  UILabel *nameLbl = [[UILabel alloc] initWithFrame:CGRectMake(14, 40, cardW - 28, 48)];
-                  nameLbl.text = name;
-                  nameLbl.textColor = UIColor.whiteColor;
-                  nameLbl.numberOfLines = 2;
-                  nameLbl.font = [UIFont systemFontOfSize:15 weight:UIFontWeightHeavy];
-                  [card addSubview:nameLbl];
-
-                  UILabel *bBase = [[UILabel alloc] initWithFrame:CGRectMake(14, 104, 66, 26)];
+                  UILabel *bBase = [[UILabel alloc] initWithFrame:CGRectMake(84, 48, 64, 24)];
                   bBase.backgroundColor = hasBase ? [NS_BLUE_COLOR colorWithAlphaComponent:0.25] : [UIColor colorWithWhite:1.0 alpha:0.08];
                   bBase.textColor = hasBase ? NS_BLUE_COLOR : UIColor.grayColor;
                   bBase.text = hasBase ? @"✓ BASE" : @"✗ BASE";
@@ -618,7 +682,7 @@ jobs:
                   bBase.clipsToBounds = YES;
                   [card addSubview:bBase];
 
-                  UILabel *bUpd = [[UILabel alloc] initWithFrame:CGRectMake(86, 104, 80, 26)];
+                  UILabel *bUpd = [[UILabel alloc] initWithFrame:CGRectMake(154, 48, 76, 24)];
                   bUpd.backgroundColor = hasUpd ? [NS_CYAN_GLOW colorWithAlphaComponent:0.22] : [UIColor colorWithWhite:1.0 alpha:0.08];
                   bUpd.textColor = hasUpd ? NS_CYAN_GLOW : UIColor.grayColor;
                   bUpd.text = hasUpd ? @"✓ UPDATE" : @"SEM UPD";
@@ -628,7 +692,7 @@ jobs:
                   bUpd.clipsToBounds = YES;
                   [card addSubview:bUpd];
 
-                  UILabel *bDlc = [[UILabel alloc] initWithFrame:CGRectMake(172, 104, 74, 26)];
+                  UILabel *bDlc = [[UILabel alloc] initWithFrame:CGRectMake(236, 48, 66, 24)];
                   bDlc.backgroundColor = dlcCount > 0 ? [NS_RED_COLOR colorWithAlphaComponent:0.25] : [UIColor colorWithWhite:1.0 alpha:0.08];
                   bDlc.textColor = dlcCount > 0 ? NS_RED_COLOR : UIColor.grayColor;
                   bDlc.text = [NSString stringWithFormat:@"%lu DLC(s)", (unsigned long)dlcCount];
@@ -641,10 +705,9 @@ jobs:
                   [self.carousel addSubview:card];
                   x += cardW + 12;
               }
-              self.carousel.contentSize = CGSizeMake(x, 150);
+              self.carousel.contentSize = CGSizeMake(x, 84);
           }
 
-          // Classifica o pacote pela pasta (base / update / dlcs) ou pelo nome do arquivo caso o CNMT nao responda
           - (NSString *)classifyByPath:(NSString *)relPath {
               NSArray<NSString *> *parts = [relPath.lowercaseString pathComponents];
               for (NSString *p in parts) {
@@ -663,21 +726,17 @@ jobs:
                   NSFileManager *fm = NSFileManager.defaultManager;
                   NSString *doc = NSSearchPathForDirectoriesInDomains(NSDocumentDirectory, NSUserDomainMask, YES)[0];
 
-                  // 1. Procura prod.keys primeiro na raiz do app, depois em qualquer subpasta
                   NSString *foundKeys = nil;
                   NSString *rootKeys = [doc stringByAppendingPathComponent:@"prod.keys"];
-                  if ([fm fileExistsAtPath:rootKeys]) {
-                      foundKeys = rootKeys;
-                  }
+                  if ([fm fileExistsAtPath:rootKeys]) foundKeys = rootKeys;
 
-                  // 2. Varre recursivamente TODAS as pastas e subpastas dentro de ExtractorNS (ex: Spk/base, Spk/update, Spk/dlcs)
                   NSMutableArray<NSString *> *relPkgFiles = [NSMutableArray array];
+                  NSMutableArray<NSString *> *otherFilesInBase = [NSMutableArray array];
                   NSDirectoryEnumerator *en = [fm enumeratorAtPath:doc];
                   NSString *rel = nil;
                   while ((rel = [en nextObject])) {
                       NSString *low = rel.lowercaseString;
-                      // Ignora pastas de saida geradas pela extracao
-                      if ([low hasPrefix:@"games/"] || [low containsString:@"/extracted/"] || [low containsString:@"/_kit_staging/"] || [low containsString:@"/romfs/"] || [low containsString:@"/aoc/"]) {
+                      if ([low hasPrefix:@"games/"] || [low containsString:@"/extracted/"] || [low containsString:@"/_kit_staging/"] || [low containsString:@"/romfs/"] || [low containsString:@"/aoc/"] || [low hasPrefix:@"_"]) {
                           continue;
                       }
                       NSString *full = [doc stringByAppendingPathComponent:rel];
@@ -686,82 +745,89 @@ jobs:
 
                       if (!foundKeys && [low hasSuffix:@".keys"]) {
                           foundKeys = full;
+                          continue;
                       }
                       if ([low hasSuffix:@".nsp"] || [low hasSuffix:@".xci"]) {
                           [relPkgFiles addObject:rel];
+                      } else if ([low containsString:@"/base/"] && ![low hasSuffix:@".ds_store"]) {
+                          [otherFilesInBase addObject:rel];
                       }
                   }
                   [relPkgFiles sortUsingSelector:@selector(compare:)];
 
+                  if (otherFilesInBase.count > 0) {
+                      for (NSString *ob in otherFilesInBase) {
+                          [self log:[NSString stringWithFormat:@"⚠️ Aviso: Arquivo na pasta base/ nao e .nsp/.xci: %@", ob]];
+                      }
+                  }
+
                   NSMutableDictionary<NSString *, NSMutableDictionary *> *games = [NSMutableDictionary dictionary];
-                  ios_libhac_info_fn infoFn = get_info_fn();
-                  NSString *tmpInfo = [doc stringByAppendingPathComponent:@"_tmp_info.tsv"];
+                  ios_libhac_inspect_fn inspectFn = get_inspect_fn();
+                  NSString *tmpTsv = [doc stringByAppendingPathComponent:@"_tmp_inspect.tsv"];
 
                   for (NSString *relPath in relPkgFiles) {
                       NSString *full = [doc stringByAppendingPathComponent:relPath];
                       NSArray<NSString *> *parts = [relPath pathComponents];
                       NSString *topFolder = (parts.count > 1) ? parts[0] : @"Raiz";
+                      NSString *folderKind = [self classifyByPath:relPath];
 
-                      BOOL matchedByLibHac = NO;
-                      if (foundKeys && infoFn) {
-                          [fm removeItemAtPath:tmpInfo error:nil];
-                          if (infoFn(foundKeys.UTF8String, full.UTF8String, tmpInfo.UTF8String) == 0 && [fm fileExistsAtPath:tmpInfo]) {
-                              NSString *tsv = [NSString stringWithContentsOfFile:tmpInfo encoding:NSUTF8StringEncoding error:nil];
-                              for (NSString *line in [tsv componentsSeparatedByCharactersInSet:NSCharacterSet.newlineCharacterSet]) {
-                                  NSArray<NSString *> *cols = [line componentsSeparatedByString:@"\t"];
-                                  if (cols.count < 3) continue;
-                                  NSString *kind = cols[0];
-                                  NSString *tid = cols[1].uppercaseString;
-                                  long long ver = [cols[2] longLongValue];
-                                  if (tid.length != 16) continue;
-                                  matchedByLibHac = YES;
-                                  if (!games[tid]) {
-                                      games[tid] = [@{
-                                          @"tid": tid,
-                                          @"folder": topFolder,
-                                          @"name": topFolder,
-                                          @"dlcs": [NSMutableArray array],
-                                          @"updVer": @(-1LL)
-                                      } mutableCopy];
-                                  }
-                                  if ([kind isEqualToString:@"Application"]) {
-                                      games[tid][@"base"] = full;
-                                      if (cols.count >= 4 && [cols[3] length] > 0) games[tid][@"name"] = cols[3];
-                                  } else if ([kind isEqualToString:@"Patch"]) {
-                                      if (ver > [games[tid][@"updVer"] longLongValue]) {
-                                          games[tid][@"upd"] = full;
-                                          games[tid][@"updVer"] = @(ver);
-                                      }
-                                  } else if ([kind isEqualToString:@"AddOnContent"]) {
-                                      [games[tid][@"dlcs"] addObject:full];
-                                  }
+                      NSString *detectedTid = nil;
+                      NSString *detectedName = nil;
+                      NSString *detectedKind = folderKind;
+                      NSString *iconFile = [doc stringByAppendingPathComponent:[NSString stringWithFormat:@"_icon_%@.jpg", topFolder]];
+
+                      if (foundKeys && inspectFn) {
+                          [fm removeItemAtPath:tmpTsv error:nil];
+                          if (inspectFn(foundKeys.UTF8String, full.UTF8String, tmpTsv.UTF8String, iconFile.UTF8String) == 0 && [fm fileExistsAtPath:tmpTsv]) {
+                              NSString *tsv = [NSString stringWithContentsOfFile:tmpTsv encoding:NSUTF8StringEncoding error:nil];
+                              NSArray<NSString *> *cols = [tsv componentsSeparatedByString:@"\t"];
+                              if (cols.count >= 2 && cols[1].length == 16) {
+                                  detectedKind = cols[0];
+                                  detectedTid = cols[1];
+                                  if (cols.count >= 3 && cols[2].length > 0) detectedName = cols[2];
                               }
                           }
                       }
 
-                      // Fallback automatico por estrutura de pastas (ex: Spk/base, Spk/update, Spk/dlcs)
-                      if (!matchedByLibHac) {
-                          NSString *groupKey = topFolder;
-                          if (!games[groupKey]) {
-                              games[groupKey] = [@{
-                                  @"tid": groupKey,
-                                  @"folder": topFolder,
-                                  @"name": topFolder,
-                                  @"dlcs": [NSMutableArray array],
-                                  @"updVer": @(0LL)
-                              } mutableCopy];
-                          }
-                          NSString *kind = [self classifyByPath:relPath];
-                          if ([kind isEqualToString:@"Application"]) {
-                              games[groupKey][@"base"] = full;
-                          } else if ([kind isEqualToString:@"Patch"]) {
-                              games[groupKey][@"upd"] = full;
-                          } else {
-                              [games[groupKey][@"dlcs"] addObject:full];
-                          }
+                      // Se o pacote estiver em Spk/base, Spk/update ou Spk/dlcs, agrupa pela pasta principal (topFolder)
+                      NSString *groupKey = topFolder;
+                      if (!games[groupKey]) {
+                          games[groupKey] = [@{
+                              @"tid": detectedTid ?: topFolder,
+                              @"folder": topFolder,
+                              @"name": detectedName ?: topFolder,
+                              @"dlcs": [NSMutableArray array]
+                          } mutableCopy];
+                      }
+                      if (detectedTid && [games[groupKey][@"tid"] isEqualToString:topFolder]) {
+                          games[groupKey][@"tid"] = detectedTid;
+                      }
+                      if (detectedName && [games[groupKey][@"name"] isEqualToString:topFolder]) {
+                          games[groupKey][@"name"] = detectedName;
+                      }
+                      if ([fm fileExistsAtPath:iconFile]) {
+                          games[groupKey][@"icon"] = iconFile;
+                      }
+
+                      // Respeita tanto a pasta (base/update/dlcs) quanto o tipo NCA
+                      if ([folderKind isEqualToString:@"Application"] || [detectedKind isEqualToString:@"Application"]) {
+                          games[groupKey][@"base"] = full;
+                      } else if ([folderKind isEqualToString:@"Patch"] || [detectedKind isEqualToString:@"Patch"]) {
+                          games[groupKey][@"upd"] = full;
+                      } else {
+                          [games[groupKey][@"dlcs"] addObject:full];
                       }
                   }
-                  [fm removeItemAtPath:tmpInfo error:nil];
+                  [fm removeItemAtPath:tmpTsv error:nil];
+
+                  for (NSString *k in games) {
+                      NSDictionary *g = games[k];
+                      [self log:[NSString stringWithFormat:@"✓ Jogo: %@ [ID: %@] | Base: %@ | Upd: %@ | DLCs: %lu",
+                          g[@"name"], g[@"tid"],
+                          g[@"base"] ? [g[@"base"] lastPathComponent] : @"AUSENTE na pasta base/",
+                          g[@"upd"] ? [g[@"upd"] lastPathComponent] : @"Nenhum",
+                          (unsigned long)[g[@"dlcs"] count]]];
+                  }
 
                   dispatch_async(dispatch_get_main_queue(), ^{
                       self.detectedKeysPath = foundKeys;
@@ -803,15 +869,6 @@ jobs:
                       return;
                   }
 
-                  if (self.detectedGames.count == 0) {
-                      [self log:@"ERRO: Nenhum pacote .nsp/.xci detectado nas pastas!"];
-                      dispatch_async(dispatch_get_main_queue(), ^{
-                          self.statusLabel.text = @"Nenhum .nsp/.xci encontrado nas pastas";
-                          self.extractBtn.enabled = YES;
-                      });
-                      return;
-                  }
-
                   NSUInteger total = self.detectedGames.count;
                   NSUInteger current = 0;
 
@@ -826,7 +883,7 @@ jobs:
                       NSString *gName = g[@"name"] ?: folder;
 
                       if (!basePkg) {
-                          [self log:[NSString stringWithFormat:@"[%@] Pulado: pasta base/ sem arquivo .nsp/.xci.", gName]];
+                          [self log:[NSString stringWithFormat:@"❌ [%@] Impossivel extrair RomFS: a pasta '%@/base/' nao contem um arquivo .nsp ou .xci! Verifique se o arquivo na pasta base/ nao esta em .nsz ou .zip!", gName, folder]];
                           continue;
                       }
 
@@ -835,12 +892,7 @@ jobs:
                           self.progressBar.progress = 0.15;
                       });
 
-                      [self log:[NSString stringWithFormat:@"\n=== [%@] %@ (Pasta: %@) ===", tid, gName, folder]];
-                      [self log:[NSString stringWithFormat:@"• Base: %@", basePkg.lastPathComponent]];
-                      [self log:[NSString stringWithFormat:@"• Update: %@", [updPkg isEqualToString:@"-"] ? @"Nenhum" : updPkg.lastPathComponent]];
-                      [self log:[NSString stringWithFormat:@"• DLCs: %lu arquivo(s)", (unsigned long)dlcs.count]];
-
-                      // Salva na pasta Extracted dentro da pasta do jogo (ex: ExtractorNS/Spk/Extracted/)
+                      [self log:[NSString stringWithFormat:@"\n=== [%@] %@ ===", tid, gName]];
                       NSString *gameRoot = [folder isEqualToString:@"Raiz"]
                           ? [[doc stringByAppendingPathComponent:@"Games"] stringByAppendingPathComponent:tid]
                           : [[doc stringByAppendingPathComponent:folder] stringByAppendingPathComponent:@"Extracted"];
@@ -899,7 +951,7 @@ jobs:
                           }
                       }
 
-                      NSString *zipName = [NSString stringWithFormat:@"github_kit_%@.zip", folder];
+                      NSString *zipName = [NSString stringWithFormat:@"github_kit_%@.zip", tid];
                       NSString *zipOut = [gameRoot stringByAppendingPathComponent:zipName];
                       if (build_zip_file(staging, zipOut)) {
                           NSDictionary *za = [fm attributesOfItemAtPath:zipOut error:nil];
@@ -910,7 +962,7 @@ jobs:
 
                   dispatch_async(dispatch_get_main_queue(), ^{
                       self.progressBar.progress = 1.0;
-                      self.statusLabel.text = @"Extração Concluída com Sucesso!";
+                      self.statusLabel.text = @"Processamento Concluído!";
                       self.extractBtn.enabled = YES;
                   });
               });
@@ -955,8 +1007,8 @@ jobs:
             <key>CFBundleIdentifier</key><string>com.kinttany.extractorns</string>
             <key>CFBundleName</key><string>ExtractorNS</string>
             <key>CFBundleDisplayName</key><string>ExtractorNS</string>
-            <key>CFBundleVersion</key><string>3.1</string>
-            <key>CFBundleShortVersionString</key><string>3.1</string>
+            <key>CFBundleVersion</key><string>3.2</string>
+            <key>CFBundleShortVersionString</key><string>3.2</string>
             <key>CFBundlePackageType</key><string>APPL</string>
             <key>LSRequiresIPhoneOS</key><true/>
             <key>UIDeviceFamily</key><array><integer>1</integer><integer>2</integer></array>
