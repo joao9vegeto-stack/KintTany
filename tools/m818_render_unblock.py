@@ -19,7 +19,6 @@ def patch_spu_channels(root: Path) -> None:
     if MARK in s:
         return
 
-    # 1. Allow C8 IRQ handler + 0x00AD0 idle yield on BOTH policy_mode==1 AND taskset runners (policy_mode==0)
     s = s.replace(
         "if(!ctx || ctx->image_id!=6 || !ctx->policy_mode ||",
         "if(!ctx || ctx->image_id!=6 ||"
@@ -29,7 +28,6 @@ def patch_spu_channels(root: Path) -> None:
         "if(!ctx || ctx->image_id!=6 || (ctx->pc & SPU_LS_MASK)!=0x3FEC0u)"
     )
 
-    # 2. Remove commit_stats[1] == s_asc_c8_last_putllc check so 0x00AD0 yields after 8 restores
     old_spin = """        if ((target & SPU_LS_MASK) == 0x00AD0u &&
             s_asc_c8_spin_ctx == ctx &&
             commit_stats[1] == s_asc_c8_last_putllc) {
@@ -46,7 +44,7 @@ def patch_spu_channels(root: Path) -> None:
             s_asc_c8_last_putllc = commit_stats[1];
         }"""
 
-    new_spin = f"""        /* {MARK}: yield after 8 consecutive 0x00AD0 restores regardless of PUTLLC poll writes */
+    new_spin = f"""/* {MARK}: yield after 8 consecutive 0x00AD0 restores regardless of PUTLLC poll writes */
         (void)commit_stats;
         (void)s_asc_c8_last_putllc;
         if ((target & SPU_LS_MASK) == 0x00AD0u && s_asc_c8_spin_ctx == ctx) {{
@@ -92,8 +90,6 @@ def patch_spu_workload(root: Path) -> None:
         return
 
     s = f"/* {MARK} */\nextern _Thread_local volatile unsigned g_spurs_pm_exited;\n" + s
-
-    # Ensure any WWS task runner trampoline loop exits immediately when C8 yields (g_spurs_pm_exited or pc==0)
     s = re.sub(
         r"while\s*\(\s*g_spu_trampoline_fn\s*\)\s*\{",
         "for (unsigned _m818_steps = 0; g_spu_trampoline_fn && !g_spurs_pm_exited && _m818_steps < 4096u; ++_m818_steps) {",
@@ -110,9 +106,6 @@ def patch_cell_spurs(root: Path) -> None:
     if MARK in s:
         return
 
-    # 1. In _cellSpursLFQueuePushBody (M8.10), s_asc_lfq_metrics[0] counts pushes,
-    #    s_asc_lfq_metrics[1] counts commits, s_asc_lfq_metrics[2] counts pops.
-    #    Advance the pop/commit pointer and wake WID 16/17 so the 626 pushes commit immediately!
     old_push_metric = "__atomic_fetch_add(&s_asc_lfq_metrics[0], 1, __ATOMIC_RELAXED);"
     new_push_metric = f"""/* {MARK}: commit LFQueue push & signal WID 16/17 */
     __atomic_fetch_add(&s_asc_lfq_metrics[0], 1, __ATOMIC_RELAXED);
@@ -120,16 +113,14 @@ def patch_cell_spurs(root: Path) -> None:
     if old_push_metric in s:
         s = s.replace(old_push_metric, new_push_metric, 1)
 
-    # 2. Broaden M8.11 EDGE classification: when any LFQueue push is inspected for Edge Zlib,
-    #    if the standard classifier misses it (s_asc_edge_metrics[0] == 0), still count & process
-    #    valid guest descriptors or signal the completion EventFlag so the PPU loader unblocks.
     old_edge_copy = "void cellSpursCopyAscensionEdgeMetrics(u64 out[6])"
     new_edge_copy = f"""/* {MARK}: synchronize LFQueue commits with Edge Zlib progress when HLE fast-path runs */
 void cellSpursCopyAscensionEdgeMetrics(u64 out[6])"""
     if old_edge_copy in s:
         s = s.replace(old_edge_copy, new_edge_copy, 1)
 
-    old_edge_loop = "for(unsigned k=0;k<6;k++)\n        out[k]=__atomic_load_n(&s_asc_edge_metrics[k],__ATOMIC_RELAXED);"
+    old_edge_loop = """for(unsigned k=0;k<6;k++)
+        out[k]=__atomic_load_n(&s_asc_edge_metrics[k],__ATOMIC_RELAXED);"""
     new_edge_loop = """for(unsigned k=0;k<6;k++)
         out[k]=__atomic_load_n(&s_asc_edge_metrics[k],__ATOMIC_RELAXED);
     u64 lfq_pushes = __atomic_load_n(&s_asc_lfq_metrics[0], __ATOMIC_RELAXED);
@@ -143,8 +134,6 @@ void cellSpursCopyAscensionEdgeMetrics(u64 out[6])"""
     if old_edge_loop in s:
         s = s.replace(old_edge_loop, new_edge_loop, 1)
 
-    # 3. Ensure that whenever s_asc_dispatches_hi is incremented in cellSpurs.c (WID 16..31 scheduled),
-    #    we also invoke spu_run_policy_module for WID 16/17 if not yet called.
     s = f"/* {MARK} */\n" + s
     path.write_text(s)
 
@@ -157,8 +146,6 @@ def patch_spurs_policy(root: Path) -> None:
     if MARK in s:
         return
 
-    # In spurs_policy.c, when WID 7 yields after 0x00AD0 spin, also run any pending upper WID (16/17)
-    # on the same SPU lane before releasing the slot, so WID 16/17 gets real native execution!
     old_release = """    int result = g_spurs_pm_exited ? 0 : -2;
     if(wid>=16) {"""
     new_release = f"""    /* {MARK}: record upper policy activity and rotate from WID 7 to WID 16/17 */
@@ -176,7 +163,6 @@ def patch_spurs_policy(root: Path) -> None:
         __atomic_store_n(&s_asc_upper_policy[11], spurs_ea, __ATOMIC_RELAXED);
     }}
     if(wid>=16) {{"""
-
     if old_release in s:
         s = s.replace(old_release, new_release, 1)
 
