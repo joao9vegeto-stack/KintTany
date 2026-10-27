@@ -27,6 +27,8 @@ def patch_spu_channels(root: Path) -> None:
 
     crash_logger_block = f"""/* {MARK}: Root log.txt & crash.txt signal handler + SPU breadcrumbs */
 #if defined(__APPLE__)
+#include <stdint.h>
+#include <stddef.h>
 #include <signal.h>
 #include <unistd.h>
 #include <fcntl.h>
