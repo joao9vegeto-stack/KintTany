@@ -34,10 +34,9 @@ jobs:
 
       - name: 3. Baixar github_kit.zip e Compilar Thin IPA Nativo do Jogo
         run: |
-          if [ ! -f "dm/ios/tools/build_ipa.sh" ]; then
-            git clone --depth 1 https://github.com/seedds/nxnative.git "$RUNNER_TEMP/nx_up"
-            cp -Rn "$RUNNER_TEMP/nx_up/." .
-          fi
+          # Garante arvore completa e limpa do nxnative
+          git clone --depth 1 https://github.com/seedds/nxnative.git "$RUNNER_TEMP/nx_up"
+          cp -Rn "$RUNNER_TEMP/nx_up/." .
 
           # Garante que o Thin IPA leia Documents/romfs no iPhone sem exigir embutir 17 GB no IPA
           python3 - << 'PYEOF'
@@ -64,10 +63,10 @@ jobs:
           curl -L --fail -o "$RUNNER_TEMP/github_kit.zip" "$KIT_URL"
           mkdir -p "$RUNNER_TEMP/kit"
           unzip -q "$RUNNER_TEMP/github_kit.zip" -d "$RUNNER_TEMP/kit"
-          echo "=== Conteudo do github_kit.zip ==="
+          echo "=== Conteudo extraido do github_kit.zip ==="
           find "$RUNNER_TEMP/kit" -maxdepth 3
 
-          # Descobre automaticamente o TitleID real (010035F022078000) lendo ExeFS/main.npdm ou manifest.tsv!
+          # Descobre automaticamente o TitleID real (010035F022078000)
           TITLE_ID=$(python3 - << 'PYEOF'
           import os, struct, re
           from pathlib import Path
@@ -93,54 +92,63 @@ jobs:
           )
           echo "Jogo detectado: TITLE_ID=$TITLE_ID"
 
-          # Verifica os perfis existentes em dm/games/
-          ls -la dm/games/
-
-          # Se o jogo ainda nao tiver pasta em dm/games/$TITLE_ID, procura perfil compativel (UE5 / Sparking ZERO) ou gera automaticamente!
-          if [ ! -d "dm/games/$TITLE_ID" ]; then
-            echo "Procurando ou gerando perfil para $TITLE_ID..."
-            python3 dm/tools/survey/game_survey.py "$RUNNER_TEMP/kit" -o "$RUNNER_TEMP/survey.md" || true
-            python3 - << PYEOF
-          import sys, shutil
+          # Gera ou localiza automaticamente o perfil do jogo em dm/games/
+          GAME_KEY=$(python3 - << PYEOF
+          import os, sys, subprocess
           from pathlib import Path
+
           tid = "$TITLE_ID"
+          kit = Path(os.environ["RUNNER_TEMP"]) / "kit"
           games_dir = Path("dm/games")
-          target_dir = games_dir / tid
-          # Procura se ja existe algum perfil do Sparking! ZERO em dm/games/
-          found_spk = None
-          for d in games_dir.iterdir():
-              if d.is_dir() and d.name.startswith("0100"):
+
+          # 1. Verifica se algum perfil em dm/games/ ja possui esse TITLE_ID no game.mk
+          for d in sorted(games_dir.iterdir()):
+              if d.is_dir():
                   gm = d / "game.mk"
-                  if gm.exists() and ("sparking" in gm.read_text(errors="ignore").lower() or "unreal" in gm.read_text(errors="ignore").lower()):
-                      found_spk = d
-                      break
-          if found_spk:
-              print(f"Clonando perfil base de {found_spk} para {target_dir}")
-              shutil.copytree(found_spk, target_dir)
-          else:
+                  if gm.exists() and tid.lower() in gm.read_text(errors="ignore").lower():
+                      print(d.name)
+                      sys.exit(0)
+
+          # 2. Se nao existir, roda game_survey.py + profile_guess.py para criar dm/games/<tid>
+          survey_md = Path(os.environ["RUNNER_TEMP"]) / "survey.md"
+          cmd_survey = [sys.executable, "dm/tools/survey/game_survey.py", str(kit), "-o", str(survey_md)]
+          if (kit / "manifest.tsv").exists():
+              cmd_survey += ["--manifest", str(kit / "manifest.tsv")]
+          subprocess.run(cmd_survey, check=False)
+
+          prof_dir = games_dir / tid
+          prof_dir.mkdir(parents=True, exist_ok=True)
+          subprocess.run([sys.executable, "dm/games/profile_guess.py", str(survey_md), "--extracted", str(kit), "-o", str(prof_dir)], check=False)
+
+          # Fallback caso profile_guess tenha outra interface
+          if not (prof_dir / "game.mk").exists():
               sys.path.insert(0, "dm/games")
               import profile_guess
-              target_dir.mkdir(parents=True, exist_ok=True)
-              if hasattr(profile_guess, "write_provisional_profile"):
-                  profile_guess.write_provisional_profile(Path("$RUNNER_TEMP/survey.md"), Path("$RUNNER_TEMP/kit"), target_dir)
+              for fn_name in dir(profile_guess):
+                  if "write" in fn_name or "guess" in fn_name or "generate" in fn_name:
+                      sys.stderr.write(f"profile_guess exporta: {fn_name}\n")
+              # Copia o template mais proximo de dm/games/ e ajusta TITLE_ID
+              for d in sorted(games_dir.iterdir()):
+                  if d.is_dir() and (d / "game.mk").exists():
+                      for f in d.iterdir():
+                          if f.is_file():
+                              (prof_dir / f.name).write_bytes(f.read_bytes())
+                      break
+          print(tid)
           PYEOF
-          fi
-
-          # Verifica se ExeFS foi extraido no kit
-          if [ ! -d "$RUNNER_TEMP/kit/ExeFS" ]; then
-            echo "ERRO: A pasta ExeFS nao existe dentro do github_kit.zip! Isso aconteceu porque no ExtractorNS v3.1 a pasta base/ (.xci) nao tinha sido lida junto com o Update!"
-            exit 1
-          fi
+          )
+          echo "Usando perfil: GAME_KEY=$GAME_KEY"
+          ls -la "dm/games/$GAME_KEY"
 
           # 1. Patcheia os binarios ARM64 (ExeFS) para iOS nativo
           mkdir -p "$RUNNER_TEMP/patched"
-          python3 dm/tools/patch_nso.py "$RUNNER_TEMP/kit/ExeFS" "$RUNNER_TEMP/patched" --game "$TITLE_ID"
+          python3 dm/tools/patch_nso.py "$RUNNER_TEMP/kit/ExeFS" "$RUNNER_TEMP/patched" --game "$GAME_KEY"
 
           # 2. Extrai e converte os shaders para Metal (.dmsh)
           mkdir -p "$RUNNER_TEMP/shader_out"
-          python3 dm/gfx/tools/shader_split.py "$RUNNER_TEMP/kit/RomFS" "$RUNNER_TEMP/shader_pkg" --game "$TITLE_ID" || true
+          python3 dm/gfx/tools/shader_split.py "$RUNNER_TEMP/kit/RomFS" "$RUNNER_TEMP/shader_pkg" --game "$GAME_KEY" || true
           if [ -d "$RUNNER_TEMP/shader_pkg" ]; then
-            IOSOUT=1 ALLOW_OTHER_METAL=1 python3 dm/gfx/tools/dmsh_build.py "$RUNNER_TEMP/shader_pkg" --game "$TITLE_ID" || true
+            IOSOUT=1 ALLOW_OTHER_METAL=1 python3 dm/gfx/tools/dmsh_build.py "$RUNNER_TEMP/shader_pkg" --game "$GAME_KEY" || true
           fi
 
           # 3. Empacota o Thin IPA do jogo com icone e nome oficial do control.nacp!
@@ -150,7 +158,7 @@ jobs:
           [ -f "$RUNNER_TEMP/kit/icon.jpg" ] && ICON_ARG=(--icon "$RUNNER_TEMP/kit/icon.jpg")
 
           bash dm/ios/tools/build_ipa.sh \
-            --game "$TITLE_ID" \
+            --game "$GAME_KEY" \
             --patched "$RUNNER_TEMP/patched" \
             --romfs "$RUNNER_TEMP/kit/RomFS" \
             "${NACP_ARG[@]}" \
