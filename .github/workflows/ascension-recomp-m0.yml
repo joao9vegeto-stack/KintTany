@@ -1,14 +1,7 @@
 name: AscensionRecomp M8.19.0 - SPU interpreter fallback default ON
 
 on:
-  push:
-    branches:
-      - AscensionRecomp
-    paths-ignore:
-      - .publish-ipa-run-id.txt
-      - .github/workflows/publish-ipa-temporary.yml
-      - Arq.zip
-      - AscensionRecomp-M7.85.0-NPUA80918-20261022-020947.txt
+  workflow_dispatch:
 
 permissions:
   actions: read

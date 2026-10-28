@@ -1,8 +1,6 @@
 name: m90a-fork-runtime-probe
 on:
   workflow_dispatch:
-  push:
-    paths: ['.github/workflows/m90a-fork-runtime-probe.yml']
 jobs:
   probe:
     runs-on: macos-14

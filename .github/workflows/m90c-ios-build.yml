@@ -1,8 +1,8 @@
 name: m90c-ios-build
 on:
-  workflow_dispatch:
   push:
-    paths: ['.github/workflows/m90c-ios-build.yml']
+    branches: [ AscensionRecomp ]
+  workflow_dispatch:
 jobs:
   build:
     runs-on: macos-14

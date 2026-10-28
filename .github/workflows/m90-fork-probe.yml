@@ -1,8 +1,6 @@
 name: M9.0 fork probe (read-only)
 on:
   workflow_dispatch:
-  push:
-    paths: ['.github/workflows/m90-fork-probe.yml']
 jobs:
   probe:
     runs-on: ubuntu-latest
