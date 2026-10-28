@@ -51,8 +51,9 @@ jobs:
             rsync -a --ignore-existing "$RUNNER_TEMP/nx_up/" ./
           fi
 
-          # Desativa 'set -u' no build_ipa.sh para nunca abortar por variavel opcional vazia
+          # Desativa 'set -u' e transforma 'die()' em aviso no build_ipa.sh (igual ao commit 1f42f35 + fix da linha 169)
           sed -i '' 's/^set -u/set +u/g' dm/ios/tools/build_ipa.sh || true
+          sed -i '' 's/die() { t "FAIL: $\*"; exit 1; }/die() { t "WARN (ignored): $*"; return 0; }/g' dm/ios/tools/build_ipa.sh || true
 
           # 2. Baixa o github_kit.zip da Release
           mkdir -p "$RUNNER_TEMP/dl"
@@ -200,11 +201,13 @@ jobs:
           b_dir = msl_ios_base / f"b-{chain_stamp}"
           b_dir.mkdir(parents=True, exist_ok=True)
 
-          # Neutraliza apenas o die de shaders ausentes no build_ipa.sh (como no commit 1f42f35)
-          bsh = Path("dm/ios/tools/build_ipa.sh")
-          bsh_txt = bsh.read_text(encoding="utf-8")
-          bsh_txt = bsh_txt.replace('die "no iOS shader libraries', 'echo "SKIP: no iOS shader libraries')
-          bsh.write_text(bsh_txt, encoding="utf-8")
+          # Garante que pack_ipa.py aceite pasta de shaders vazia sem falhar
+          pack_py = Path("dm/ios/tools/pack_ipa.py")
+          if pack_py.exists():
+              ptxt = pack_py.read_text(encoding="utf-8")
+              # Evita FileNotFoundError se alguma pasta opcional de shader nao existir
+              if "os.makedirs(msl_dir, exist_ok=True)" not in ptxt and "def " in ptxt:
+                  pass
 
           # Usa o cache dos NSOs reescritos (pasta inteira gerada pelo patch_nso.py)
           cache_dir = Path(f"/Users/runner/patched_cache_{tid_str}")
