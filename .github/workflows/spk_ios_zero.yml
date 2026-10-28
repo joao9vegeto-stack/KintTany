@@ -27,7 +27,7 @@ jobs:
           "$RUNNER_TEMP/dotnet-install.sh" --channel 9.0 --install-dir "$HOME/.dotnet"
           echo "$HOME/.dotnet" >> "$GITHUB_PATH"
 
-      - name: 3. Compilar ExtractorNS.ipa v3.3 (Suporte XCI + NSP + Base/Update/DLCs Exatos)
+      - name: 3. Compilar ExtractorNS.ipa v3.3
         run: |
           export PATH="$HOME/.dotnet:$PATH"
 
@@ -73,17 +73,8 @@ jobs:
 
                       KeySet ks = ExternalKeyReader.ReadKeyFile(k);
                       using var file = new LocalStorage(pkg, FileAccess.Read);
-                      IFileSystem pfs = null;
-                      if (pkg.EndsWith(".xci", StringComparison.OrdinalIgnoreCase)) {
-                          var xci = new LibHac.Tools.Fs.Xci(ks.HeaderKey, file);
-                          if (xci.HasPartition(LibHac.Tools.Fs.XciPartitionType.Secure)) {
-                              pfs = xci.OpenPartition(LibHac.Tools.Fs.XciPartitionType.Secure);
-                          }
-                      } else {
-                          var nsp = new PartitionFileSystem();
-                          if (nsp.Initialize(file).IsSuccess()) pfs = nsp;
-                      }
-                      if (pfs == null) return 2;
+                      var pfs = new PartitionFileSystem();
+                      if (pfs.Initialize(file).IsFailure()) return 2;
 
                       ulong foundTid = 0;
                       bool hasPatchNca = false;
@@ -212,14 +203,12 @@ jobs:
               CGColorSpaceRef cs = CGColorSpaceCreateDeviceRGB();
               CGContextRef ctx = CGBitmapContextCreate(NULL, sz, sz, 8, sz * 4, cs, kCGImageAlphaPremultipliedLast);
               CGFloat s = (CGFloat)sz / 1024.0;
-
               CGContextSetRGBFillColor(ctx, 0.07, 0.08, 0.11, 1.0);
               CGContextFillRect(ctx, CGRectMake(0, 0, sz, sz));
               CGContextSetRGBFillColor(ctx, 0.0, 0.765, 0.890, 1.0);
               CGContextFillRect(ctx, CGRectMake(0, 0, sz * 0.5, sz));
               CGContextSetRGBFillColor(ctx, 1.0, 0.235, 0.157, 1.0);
               CGContextFillRect(ctx, CGRectMake(sz * 0.5, 0, sz * 0.5, sz));
-
               CGFloat pad = 92.0 * s;
               CGRect card = CGRectMake(pad, pad, sz - pad * 2, sz - pad * 2);
               CGPathRef cardPath = CGPathCreateWithRoundedRect(card, 180.0 * s, 180.0 * s, NULL);
@@ -227,37 +216,6 @@ jobs:
               CGContextSetRGBFillColor(ctx, 0.09, 0.10, 0.14, 0.92);
               CGContextFillPath(ctx);
               CGPathRelease(cardPath);
-
-              CGRect leftCap = CGRectMake(210 * s, 230 * s, 240 * s, 564 * s);
-              CGPathRef lp = CGPathCreateWithRoundedRect(leftCap, 110 * s, 110 * s, NULL);
-              CGContextAddPath(ctx, lp);
-              CGContextSetRGBFillColor(ctx, 0.0, 0.765, 0.890, 1.0);
-              CGContextFillPath(ctx);
-              CGPathRelease(lp);
-
-              CGRect leftIn = CGRectMake(258 * s, 278 * s, 144 * s, 468 * s);
-              CGPathRef lpi = CGPathCreateWithRoundedRect(leftIn, 66 * s, 66 * s, NULL);
-              CGContextAddPath(ctx, lpi);
-              CGContextSetRGBFillColor(ctx, 0.09, 0.10, 0.14, 1.0);
-              CGContextFillPath(ctx);
-              CGPathRelease(lpi);
-
-              CGContextSetRGBFillColor(ctx, 0.0, 0.765, 0.890, 1.0);
-              CGContextFillEllipseInRect(ctx, CGRectMake(288 * s, 355 * s, 84 * s, 84 * s));
-
-              CGRect rightCap = CGRectMake(574 * s, 230 * s, 240 * s, 564 * s);
-              CGPathRef rp = CGPathCreateWithRoundedRect(rightCap, 110 * s, 110 * s, NULL);
-              CGContextAddPath(ctx, rp);
-              CGContextSetRGBFillColor(ctx, 1.0, 0.235, 0.157, 1.0);
-              CGContextFillPath(ctx);
-              CGPathRelease(rp);
-
-              CGContextSetRGBFillColor(ctx, 1.0, 1.0, 1.0, 1.0);
-              CGContextFillEllipseInRect(ctx, CGRectMake(652 * s, 535 * s, 84 * s, 84 * s));
-
-              CGContextSetRGBFillColor(ctx, 0.0, 0.96, 0.83, 1.0);
-              CGContextFillEllipseInRect(ctx, CGRectMake(422 * s, 422 * s, 180 * s, 180 * s));
-
               CGImageRef img = CGBitmapContextCreateImage(ctx);
               CFURLRef url = (__bridge CFURLRef)[NSURL fileURLWithPath:path];
               CGImageDestinationRef dest = CGImageDestinationCreateWithURL(url, CFSTR("public.png"), 1, NULL);
@@ -444,8 +402,6 @@ jobs:
               header.autoresizingMask = UIViewAutoresizingFlexibleWidth;
               header.backgroundColor = NS_CARD_COLOR;
               header.layer.cornerRadius = 16;
-              header.layer.borderWidth = 1.0;
-              header.layer.borderColor = [UIColor colorWithWhite:1.0 alpha:0.08].CGColor;
               [self.view addSubview:header];
 
               UIView *joyIcon = [[UIView alloc] initWithFrame:CGRectMake(14, 12, 36, 36)];
@@ -518,8 +474,6 @@ jobs:
               self.logView.textColor = [UIColor colorWithRed:0.75 green:0.88 blue:0.95 alpha:1.0];
               self.logView.font = [UIFont monospacedSystemFontOfSize:11.5 weight:UIFontWeightRegular];
               self.logView.layer.cornerRadius = 14;
-              self.logView.layer.borderWidth = 1.0;
-              self.logView.layer.borderColor = [UIColor colorWithWhite:1.0 alpha:0.08].CGColor;
               self.logView.editable = NO;
               self.logView.textContainerInset = UIEdgeInsetsMake(10, 10, 10, 10);
               self.logView.text = @"[ExtractorNS v3.3 — Suporte Total XCI + NSP + Base/Update/DLCs]\n";
@@ -543,8 +497,6 @@ jobs:
               UIView *box = [[UIView alloc] initWithFrame:f];
               box.backgroundColor = NS_CARD_COLOR;
               box.layer.cornerRadius = 12;
-              box.layer.borderWidth = 1.0;
-              box.layer.borderColor = [UIColor colorWithWhite:1.0 alpha:0.07].CGColor;
               [self.view addSubview:box];
 
               UILabel *tl = [[UILabel alloc] initWithFrame:CGRectMake(8, 5, f.size.width - 16, 12)];
@@ -720,7 +672,7 @@ jobs:
                           }
                       }
 
-                      // Se o arquivo esta dentro de base/, update/ ou dlcs/, respeita 100% a subpasta!
+                      // Se o arquivo esta em base/, update/ ou dlcs/, a pasta tem prioridade!
                       NSString *finalKind = explicitFolderKind ?: (detectedKind ?: @"Application");
 
                       NSString *groupKey = topFolder;
