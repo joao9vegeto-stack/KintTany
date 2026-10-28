@@ -2036,6 +2036,8 @@ static void emitBuild66CodeAudit(uint8_t *base) {
     }
 }
 
+static uint32_t loadGuestBe32(const uint8_t *base, uint32_t address);
+
 static void logCodeAuditBuild69(uint8_t *base) {
  if(!base||g_build69AuditEmitted.exchange(true,std::memory_order_acq_rel))return;
  struct R{uint32_t b,e;const char*n;}; static constexpr R rs[]={
@@ -2048,6 +2050,14 @@ static void logCodeAuditBuild69(uint8_t *base) {
  };
  for(const R&r:rs){char h[160];std::snprintf(h,sizeof(h),"CODE_AUDIT_B69_BEGIN name=%s range=0x%08X..0x%08X",r.n,r.b,r.e);std::fprintf(stderr,"%s\n",h);recordRuntimeTrace(h);for(uint32_t pc=r.b;pc<r.e;pc+=4u){const bool ok=validGuestRange(pc,4u);const uint32_t w=ok?loadGuestBe32(base,pc):0u;char l[160];std::snprintf(l,sizeof(l),"CODE_AUDIT_B69 name=%s pc=0x%08X word=0x%08X valid=%u",r.n,pc,w,ok?1u:0u);std::fprintf(stderr,"%s\n",l);recordRuntimeTrace(l);}}
 }
+
+void xowue_thread_checkpoint() {
+    if (g_schedulerStopRequested.load(std::memory_order_relaxed))
+        throw GuestThreadStopRequested{};
+    checkpointGuestThread();
+    auto auditMemory=g_activeGuestMemory.lock(); if(auditMemory&&auditMemory->base){emitBuild66CodeAudit(auditMemory->base);logCodeAuditBuild69(auditMemory->base);}
+}
+
 static void emitBuild65CodeAudit(uint8_t *base) {
     static std::atomic<bool> emitted{false};
     if (!base || emitted.exchange(true,std::memory_order_acq_rel)) return;
