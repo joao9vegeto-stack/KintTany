@@ -70,3 +70,4 @@ jobs:
           for x in $B; do nm "$x" 2>/dev/null | grep -E 'gowa_spu_register_all|spu_func_00000A2C|rsx_metal|ppu_hle_call' | head -n 20; done | tee report/symbols.txt
       - uses: actions/upload-artifact@v4
         with: { name: m90c-report, path: report/ }
+
