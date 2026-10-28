@@ -76,9 +76,9 @@ jobs:
             fi
           fi
 
-          # 3. Auto-Patch FMallocBinned3: detecta construtor pela vtable, corta BL correto, escreve OBS
-          python3 - <<'PYEOF'
-import os, sys, struct, pathlib, hashlib, shutil
+          # 3. Auto-Patch FMallocBinned3: detecta construtor pela vtable e aplica CUT/OBS correto
+          python3 <<'PYEOF'
+import os, sys, struct, pathlib, hashlib, shutil, re, json
 
 try:
     import capstone
@@ -87,21 +87,19 @@ except ImportError:
     print("[patch] ERRO: capstone nao instalado")
     sys.exit(1)
 
-RUNNER_TEMP  = pathlib.Path(os.environ["RUNNER_TEMP"])
-KIT_DIR      = RUNNER_TEMP / "kit"
-CACHE_DIR    = pathlib.Path("/Users/runner/patched_cache")
+RUNNER_TEMP       = pathlib.Path(os.environ["RUNNER_TEMP"])
+KIT_DIR           = RUNNER_TEMP / "kit"
+CACHE_DIR         = pathlib.Path("/Users/runner/patched_cache")
 CACHE_DIR.mkdir(parents=True, exist_ok=True)
 
-# ── Constantes do mecanismo hle_uemalloc ────────────────────────────────────
-# vtable do FMallocBinned3 no espaço do guest (adrp/add que o construtor monta)
-VTABLE_PAGE_GUEST = 0x92fa000          # página base que adrp aponta
-NOP_INSN          = struct.pack("<I", 0xD503201F)  # NOP AArch64
-# Tamanho máximo de janela de busca (bytes) ao redor do construtor
+# --- Constantes do mecanismo hle_uemalloc ---
+VTABLE_PAGE_GUEST = 0x92fa000
+NOP_INSN          = struct.pack("<I", 0xD503201F)
 SEARCH_WINDOW     = 0x200
 
-# ── Utilitários ─────────────────────────────────────────────────────────────
-def u32(b, off): return struct.unpack_from("<I", b, off)[0]
-def p32(v):      return struct.pack("<I", v)
+# --- Utilitários ---
+def u32(b, off):  return struct.unpack_from("<I", b, off)[0]
+def p32(v):       return struct.pack("<I", v)
 
 def file_sha256(path):
     h = hashlib.sha256()
@@ -110,230 +108,198 @@ def file_sha256(path):
             h.update(chunk)
     return h.hexdigest()
 
-def load_nso(path):
-    """Lê um NSO0 e devolve (header_bytes, text_bytes, offset_of_text_in_file).
-    Suporta NSO não-comprimido (flag bit 0 = 0) e comprimido com lz4."""
-    import lz4.block
-    raw = open(path, "rb").read()
-    magic = raw[:4]
-    if magic != b"NSO0":
-        print(f"[patch] {path.name}: nao e NSO0, pulando")
-        return None, None, None
-    flags      = u32(raw, 0x0C)
-    txt_off    = u32(raw, 0x10)   # offset no arquivo
-    txt_dst    = u32(raw, 0x14)   # offset no segmento de memória (sempre 0 para .text)
-    txt_fsz    = u32(raw, 0x18)   # tamanho comprimido no arquivo
-    txt_msz    = u32(raw, 0x60)   # tamanho descomprimido em memória
-    if flags & 1:
-        text = lz4.block.decompress(raw[txt_off:txt_off+txt_fsz],
-                                    uncompressed_size=txt_msz)
-    else:
-        text = raw[txt_off:txt_off+txt_fsz]
-    return raw, bytearray(text), txt_off
+def sign_extend(value, bits):
+    sign = 1 << (bits - 1)
+    return (value & (sign - 1)) - (value & sign)
 
-def save_nso(path, raw_header, text_patched, txt_off, txt_fsz_orig):
-    """Grava o NSO de volta (sem recomprimir — zera o flag de compressão)."""
-    out = bytearray(raw_header)
-    # Zera flag de compressão do .text (bit 0)
-    flags = u32(out, 0x0C) & ~1
-    out[0x0C:0x10] = p32(flags)
-    # Atualiza tamanho no arquivo = tamanho descomprimido
-    out[0x18:0x1C] = p32(len(text_patched))
-    # Substitui o segmento .text
-    result = bytes(out[:txt_off]) + bytes(text_patched) + bytes(out[txt_off+txt_fsz_orig:])
-    open(path, "wb").write(result)
+def decode_bl_target(word, pc):
+    if (word & 0xFC000000) != 0x94000000:
+        return None
+    imm26 = word & 0x03FFFFFF
+    return pc + sign_extend(imm26 << 2, 28)
 
-# ── Núcleo do patch ──────────────────────────────────────────────────────────
-def find_constructor_and_bl(text: bytearray, text_load_addr: int):
-    """
-    Estratégia (conforme análise do disassembly):
-    1. Varre o .text procurando a sequência adrp/add que materializa VTABLE_PAGE_GUEST.
-    2. Dentro da função que contém essa sequência, acha o 'str xR,[xB]' que grava a vtable.
-    3. Volta ao chamador: procura o 'bl <ctor>' que chama essa função.
-    4. Devolve (offset_do_bl_no_text, reg_do_objeto_no_chamador).
-    """
-    md = capstone.Cs(capstone.CS_ARCH_ARM64, capstone.CS_MODE_ARM)
-    md.detail = True
+def reg_num(name):
+    if not name:
+        return None
+    name = name.lower()
+    m = re.fullmatch(r"[xw](\d+)", name)
+    return int(m.group(1)) if m and 0 <= int(m.group(1)) <= 30 else None
 
-    insns = list(md.disasm(bytes(text), text_load_addr))
-    addr_to_idx = {i.address: n for n, i in enumerate(insns)}
-
-    ctor_start = None   # endereço de início do construtor
-    vtable_reg = None   # registrador que recebe a vtable (xR)
-    base_reg   = None   # registrador base do objeto (xB)
-
-    # Passo 1 + 2: acha adrp que aponta para VTABLE_PAGE_GUEST
-    for n, i in enumerate(insns):
-        if i.mnemonic != "adrp":
-            continue
-        # imm do adrp = (PC & ~0xFFF) + (imm << 12)
-        page = (i.address & ~0xFFF) + (i.operands[1].imm if i.operands[1].type == ARM64_OP_IMM else 0)
-        if page != VTABLE_PAGE_GUEST:
-            continue
-        dst_reg = i.operands[0].reg
-        # próxima instrução deve ser add xR, xR, #off  (ou ldr, mas add é o padrão)
-        if n+1 >= len(insns):
-            continue
-        add_i = insns[n+1]
-        if add_i.mnemonic not in ("add", "ldr") :
-            continue
-        if add_i.operands[0].reg != dst_reg:
-            continue
-        vtable_reg = dst_reg
-        # agora procura str vtable_reg, [xB] nos próximos SEARCH_WINDOW bytes
-        for m in range(n+2, min(n+2+SEARCH_WINDOW//4, len(insns))):
-            si = insns[m]
-            if si.mnemonic == "str" and si.operands[0].reg == vtable_reg:
-                base_reg   = si.operands[1].mem.base
-                ctor_start = i.address   # aproximação; refinamos abaixo
-                break
-        if ctor_start:
-            break
-
-    if ctor_start is None:
-        print("[patch] AVISO: nao encontrei adrp->vtable no .text; patch ignorado")
-        return None, None
-
-    # Refina ctor_start: recua até encontrar uma instrução que pareça prólogo
-    # (stp x29,x30,[sp,#-N]! ou sub sp,sp,#N)
-    idx0 = addr_to_idx.get(ctor_start, 0)
-    for k in range(idx0, max(0, idx0-256), -1):
-        mi = insns[k]
-        if mi.mnemonic == "stp" and mi.operands[0].reg == ARM64_REG_X29:
-            ctor_start = mi.address
-            break
-        if mi.mnemonic == "sub" and mi.operands[0].reg == ARM64_REG_SP:
-            ctor_start = mi.address
-            break
-
-    print(f"[patch] construtor FMallocBinned3 detectado em 0x{ctor_start:x} "
-          f"(vtable_reg=x{vtable_reg-ARM64_REG_X0}, base_reg=x{base_reg-ARM64_REG_X0})")
-
-    # Passo 3: procura bl <ctor_start> no .text inteiro
-    bl_offset = None
-    obj_reg   = None
-    for i in enumerate(insns):
-        n, ins = i
-        if ins.mnemonic != "bl":
-            continue
-        if not ins.operands:
-            continue
-        target = ins.operands[0].imm
-        if target != ctor_start:
-            continue
-        # O registrador do objeto é o primeiro argumento (x0) OU o registrador
-        # que a instrução anterior carrega como 'this'.  Pelo disassembly,
-        # x28 = this no construtor, mas o chamador passa em x0.
-        # Procuramos a instrução imediatamente anterior que move algo para x0
-        obj_reg = ARM64_REG_X0  # default: ABI, primeiro argumento
-        for back in range(n-1, max(0, n-8), -1):
-            bi = insns[back]
-            if bi.mnemonic in ("mov", "add") and bi.operands[0].reg == ARM64_REG_X0:
-                # o valor vem de outro registrador
-                if bi.operands[1].type == ARM64_OP_REG:
-                    obj_reg = bi.operands[1].reg
-                break
-        bl_offset = ins.address - text_load_addr
-        print(f"[patch] BL->ctor encontrado em 0x{ins.address:x} "
-              f"(offset no .text = 0x{bl_offset:x}), obj_reg=x{obj_reg-ARM64_REG_X0}")
-        break
-
-    if bl_offset is None:
-        print("[patch] AVISO: nao encontrei bl->ctor; patch ignorado")
-        return None, None
-
-    return bl_offset, obj_reg
-
-def build_obs_trampoline(obj_reg_idx: int, g_vt_addr: int, text_load_addr: int,
-                         tramp_addr: int) -> bytes:
-    """
-    Monta um pequeno trampoline AArch64 que:
-      1. Salva lr
-      2. Chama o construtor original (bl ctor)  ← NÃO: o CUT já nopou o bl;
-         o trampoline só precisa escrever a vtable no objeto.
-      3. Escreve g_vt em [obj_reg]  (str x_vt, [obj_reg])
-      4. Retorna (ret)
-
-    Na prática o hle_uemalloc.c faz isso em C; aqui apenas emitimos NOPs extras
-    e um marcador para o log, pois o OBS real é injetado pelo runtime do nxnative
-    via hle_uemalloc.  O que precisamos garantir no binário é:
-      - O BL original está nopado (CUT).
-      - Os 4 bytes logo após o NOP contêm um BRK #0xBB00 | obj_reg_idx
-        que o runtime reconhece como OBS gate.
-    """
-    # BRK #imm16: encoding = 0xD4200000 | (imm16 << 5)
-    obs_imm = 0xBB00 | (obj_reg_idx & 0x1F)
-    brk_obs = struct.pack("<I", 0xD4200000 | (obs_imm << 5))
-    return brk_obs   # 4 bytes; vai logo após o NOP do CUT
-
-def patch_main(nso_path: pathlib.Path, text_load_addr: int = 0x0):
-    raw, text, txt_off = load_nso(nso_path)
-    if raw is None:
-        return False
-
-    sha_before = hashlib.sha256(text).hexdigest()[:12]
-
-    # Verifica cache
-    cache_file = CACHE_DIR / (nso_path.name + ".patched")
-    cache_meta = CACHE_DIR / (nso_path.name + ".sha")
-    if cache_file.exists() and cache_meta.exists():
-        cached_sha = cache_meta.read_text().strip()
-        if cached_sha == sha_before:
-            print(f"[patch] {nso_path.name}: cache hit ({sha_before}), copiando")
-            shutil.copy(cache_file, nso_path)
-            return True
-        else:
-            print(f"[patch] {nso_path.name}: cache MISS (sha mudou {cached_sha} -> {sha_before}), re-patch")
-
-    bl_offset, obj_reg = find_constructor_and_bl(text, text_load_addr)
-    if bl_offset is None:
-        return False
-
-    obj_reg_idx = obj_reg - capstone.arm64.ARM64_REG_X0  # 0-30
-
-    # CUT: nopa o BL
-    print(f"[patch] CUT: nopando BL em offset 0x{bl_offset:x}")
-    text[bl_offset:bl_offset+4] = NOP_INSN
-
-    # OBS: BRK gate logo após o NOP
-    obs_offset = bl_offset + 4
-    obs_bytes  = build_obs_trampoline(obj_reg_idx, 0, text_load_addr, text_load_addr + obs_offset)
-    print(f"[patch] OBS: BRK gate em offset 0x{obs_offset:x} (obj_reg=x{obj_reg_idx})")
-    text[obs_offset:obs_offset+4] = obs_bytes
-
-    txt_fsz_orig = u32(raw, 0x18)
-    save_nso(nso_path, raw, text, txt_off, txt_fsz_orig)
-
-    # Atualiza cache
-    cache_file.write_bytes(open(nso_path, "rb").read())
-    cache_meta.write_text(sha_before)
-    print(f"[patch] {nso_path.name}: patch aplicado e cache atualizado")
-    return True
-
-# ── Ponto de entrada ─────────────────────────────────────────────────────────
-exefs = KIT_DIR / "ExeFS"
-if not exefs.exists():
-    print(f"[patch] ERRO: ExeFS nao encontrado em {exefs}")
+# --- Localiza o binário main ---
+def find_main():
+    for exefs in KIT_DIR.rglob("ExeFS"):
+        for p in exefs.iterdir():
+            if p.is_file() and p.name == "main":
+                print("[patch] main encontrado:", p)
+                return p
+    for p in KIT_DIR.rglob("main"):
+        if p.is_file():
+            print("[patch] main encontrado (fallback):", p)
+            return p
+    print("[patch] FATAL: main nao encontrado")
     sys.exit(1)
 
-patched_any = False
-for nso in sorted(exefs.iterdir()):
-    if nso.suffix in (".nso", "") and nso.is_file():
-        print(f"\n[patch] === processando {nso.name} ===")
-        ok = patch_main(nso)
-        if ok:
-            patched_any = True
+# --- Detecta CUT/OBS/OBJ_REG pela vtable do FMallocBinned3 ---
+def detect_cut(main_path):
+    data = main_path.read_bytes()
+    md   = capstone.Cs(capstone.CS_ARCH_ARM64, capstone.CS_MODE_ARM)
+    md.detail = True
+    insns = list(md.disasm(data, 0))
+    print("[patch] instrucoes disassembladas:", len(insns))
 
-if not patched_any:
-    print("[patch] AVISO: nenhum NSO foi patcheado (vtable nao encontrada)")
-    print("[patch] O build continua, mas o SIGSEGV do FMallocBinned3 pode persistir")
+    vtable_page = VTABLE_PAGE_GUEST & ~0xFFF
+    candidates  = []
 
-print("\n[patch] concluido")
+    for idx, insn in enumerate(insns):
+        if insn.mnemonic != "adrp":
+            continue
+        if len(insn.operands) < 2:
+            continue
+        dst = reg_num(insn.reg_name(insn.operands[0].reg))
+        if dst is None or insn.operands[1].imm != vtable_page:
+            continue
+
+        tracked = dst
+        vaddr   = vtable_page
+
+        for j in range(idx + 1, min(idx + 16, len(insns))):
+            ii = insns[j]
+            if ii.mnemonic == "add" and len(ii.operands) >= 3:
+                d = reg_num(ii.reg_name(ii.operands[0].reg))
+                s = reg_num(ii.reg_name(ii.operands[1].reg))
+                if d == tracked and s == tracked and ii.operands[2].type == ARM64_OP_IMM:
+                    vaddr = (vaddr + ii.operands[2].imm) & 0xFFFFFFFFFFFFFFFF
+            if ii.mnemonic == "str" and len(ii.operands) >= 2:
+                src = reg_num(ii.reg_name(ii.operands[0].reg))
+                if src != tracked:
+                    continue
+                base = reg_num(ii.reg_name(ii.operands[1].mem.base))
+                if base is None:
+                    continue
+                func_start = insn.address
+                for k in range(idx, max(-1, idx - 256), -1):
+                    kk = insns[k]
+                    if kk.mnemonic == "stp":
+                        ops = [kk.reg_name(o.reg).lower() if o.type == ARM64_OP_REG else "" for o in kk.operands]
+                        if "x29" in ops and "x30" in ops:
+                            func_start = kk.address
+                            break
+                candidates.append({"func": func_start, "this_reg": base, "score": 100 - min(abs(ii.operands[1].mem.disp), 32)})
+
+    if not candidates:
+        print("[patch] FATAL: construtor nao encontrado pela vtable 0x%x" % VTABLE_PAGE_GUEST)
+        sys.exit(1)
+
+    candidates.sort(key=lambda x: (-x["score"], x["func"]))
+    ctor = candidates[0]
+    print("[patch] construtor: func=0x%x this_reg=x%d" % (ctor["func"], ctor["this_reg"]))
+
+    # Acha BL que chama o construtor
+    bls = []
+    for off in range(0, len(data) - 4, 4):
+        t = decode_bl_target(u32(data, off), off)
+        if t is not None and ctor["func"] <= t <= ctor["func"] + 0x40:
+            bls.append(off)
+
+    if not bls:
+        print("[patch] FATAL: nenhum BL para o construtor encontrado")
+        sys.exit(1)
+
+    # Escolhe o melhor caller pelo obj_reg
+    insn_by_addr = {i.address: i for i in insns}
+    best = None
+    best_score = -1
+
+    for bl in bls:
+        obj_reg = ctor["this_reg"]
+        score   = 0
+        for a in range(max(0, bl - 0x80), bl, 4):
+            ii = insn_by_addr.get(a)
+            if not ii:
+                continue
+            if ii.mnemonic == "mov" and len(ii.operands) >= 2:
+                d = reg_num(ii.reg_name(ii.operands[0].reg))
+                s = reg_num(ii.reg_name(ii.operands[1].reg))
+                if d == 0 and s is not None:
+                    obj_reg = s
+                    score  += 50 + (25 if s in range(19, 29) else 0)
+                    break
+        if obj_reg in (19, 28):
+            score += 12
+        if score > best_score:
+            best_score = score
+            best = {"cut": bl, "obs": bl + 4, "obj_reg": obj_reg, "ctor": ctor["func"]}
+
+    print("[patch] CUT=0x%x OBS=0x%x OBJ_REG=x%d CTOR=0x%x" % (best["cut"], best["obs"], best["obj_reg"], best["ctor"]))
+    return best, data
+
+# --- Aplica NOP no CUT e salva ---
+def apply_nop(data, best, main_path):
+    ba = bytearray(data)
+    ba[best["cut"]:best["cut"]+4] = NOP_INSN
+    main_path.write_bytes(bytes(ba))
+    print("[patch] NOP aplicado em 0x%x" % best["cut"])
+
+# --- Gera header para hle_uemalloc.c ---
+def write_header(best):
+    root = pathlib.Path.cwd()
+    gen  = root / "dm" / "ios" / "generated"
+    gen.mkdir(parents=True, exist_ok=True)
+    h = gen / "uemalloc_autopatch.h"
+    h.write_text(
+        "#pragma once\n"
+        "#define NXNATIVE_UEMALLOC_CUT    0x%xULL\n"
+        "#define NXNATIVE_UEMALLOC_OBS    0x%xULL\n"
+        "#define NXNATIVE_UEMALLOC_OBJ_REG %d\n"
+        "#define NXNATIVE_UEMALLOC_CTOR   0x%xULL\n"
+        % (best["cut"], best["obs"], best["obj_reg"], best["ctor"])
+    )
+    print("[patch] header gerado:", h)
+
+    # Copia ao lado do hle_uemalloc.c também
+    for c in root.rglob("hle_uemalloc.c"):
+        shutil.copy2(h, c.parent / "uemalloc_autopatch.h")
+        print("[patch] header copiado para:", c.parent)
+
+# --- Invalida cache se CUT mudou ---
+def check_cache(best, main_path):
+    stamp_file = CACHE_DIR / "uemalloc_cut_stamp.json"
+    stamp = {"sha256": file_sha256(main_path), "cut": best["cut"],
+             "obs": best["obs"], "obj_reg": best["obj_reg"], "ctor": best["ctor"]}
+    old = None
+    if stamp_file.exists():
+        try:    old = json.loads(stamp_file.read_text())
+        except: pass
+    if old != stamp:
+        print("[patch] stamp mudou — invalidando cache")
+        for p in CACHE_DIR.glob("*"):
+            shutil.rmtree(p) if p.is_dir() else p.unlink()
+        CACHE_DIR.mkdir(parents=True, exist_ok=True)
+    stamp_file.write_text(json.dumps(stamp, indent=2, sort_keys=True))
+
+# --- Exporta para GITHUB_ENV ---
+def export_env(best):
+    env_file = os.environ.get("GITHUB_ENV")
+    if env_file:
+        with open(env_file, "a") as f:
+            f.write("NXNATIVE_UEMALLOC_CUT=0x%x\n"  % best["cut"])
+            f.write("NXNATIVE_UEMALLOC_OBS=0x%x\n"  % best["obs"])
+            f.write("NXNATIVE_UEMALLOC_OBJ_REG=%d\n" % best["obj_reg"])
+            f.write("NXNATIVE_UEMALLOC_CTOR=0x%x\n" % best["ctor"])
+
+# --- Main ---
+main_path       = find_main()
+best, data      = detect_cut(main_path)
+apply_nop(data, best, main_path)
+write_header(best)
+check_cache(best, main_path)
+export_env(best)
+print("[patch] concluido com sucesso")
 PYEOF
 
-          # 4. Compila o IPA via pipeline do nxnative
+          echo "[build] Iniciando build_ipa.sh"
           chmod +x dm/ios/tools/build_ipa.sh
-          bash dm/ios/tools/build_ipa.sh "$RUNNER_TEMP/kit"
+          dm/ios/tools/build_ipa.sh "$RUNNER_TEMP/kit"
 
       - name: 4. Salvar Cache dos Modulos NSO Reescritos
         uses: actions/cache/save@v4
