@@ -1,7 +1,6 @@
 import os, sys, re, struct, shutil, subprocess, json, hashlib
 from pathlib import Path
 
-# ── Imports com fallback ──────────────────────────────────────────────────────
 try:
     import lz4.block
 except ImportError:
@@ -15,12 +14,6 @@ except ImportError:
     subprocess.run([sys.executable,"-m","pip","install","--break-system-packages","capstone"], check=True)
     from capstone import Cs, CS_ARCH_ARM64, CS_MODE_ARM
     from capstone.arm64 import ARM64_OP_REG
-
-# ── Adiciona dm/tools ao path para importar nso.py do repositório ─────────────
-repo_tools = Path(__file__).resolve().parents[2] / "dm" / "tools"
-if str(repo_tools) not in sys.path:
-    sys.path.insert(0, str(repo_tools))
-import nso as nso_loader   # ← usa o nso.py oficial do repositório!
 
 # ── Paths base ────────────────────────────────────────────────────────────────
 rt       = Path(os.environ["RUNNER_TEMP"]).resolve()
@@ -43,7 +36,7 @@ if npdm_file.exists():
 print(f"=== TitleID detectado: {tid_str} ===", flush=True)
 
 # ─────────────────────────────────────────────────────────────────────────────
-# 2. Nome e versão via .nacp
+# 2. Nome e versão
 # ─────────────────────────────────────────────────────────────────────────────
 game_title = f"SwitchGame_{tid_str}"
 game_ver   = "1.0"
@@ -77,7 +70,7 @@ game_py     = games_dir / "game.py"
 sample_tsvs = sorted(games_dir.glob("*/game.tsv"))
 
 # ─────────────────────────────────────────────────────────────────────────────
-# 3. Módulos NSO (sem rtld)
+# 3. Módulos NSO
 # ─────────────────────────────────────────────────────────────────────────────
 order = ["main","subsdk0","subsdk1","subsdk2","subsdk3","subsdk4",
          "subsdk5","subsdk6","subsdk7","subsdk8","subsdk9","sdk"]
@@ -94,45 +87,96 @@ for p in sorted(exefs.iterdir()):
 print(f"=== Módulos NSO (sem rtld): {mods} ===", flush=True)
 
 # ─────────────────────────────────────────────────────────────────────────────
-# 4. Carrega main usando nso.py OFICIAL do repositório
+# 4. Descomprime NSO — lógica self-contained, sem imports externos
+#
+#  Spec switchbrew.org/wiki/NSO0:
+#    0x0C        flags  (bit i = segmento i comprimido; bit 7 = zstd)
+#    0x10+i*0x10 = (file_off, mem_off, decomp_sz) para i=0,1,2
+#    0x60+i*4    = comp_sz para i=0,1,2
+#    0x40..0x60  = ModuleId (build_id = primeiros 16 bytes)
+#
+#  O segmento .text começa com 8 bytes de MOD0 pointer que NÃO são
+#  código ARM64. O código real começa em mem_off + 8.
 # ─────────────────────────────────────────────────────────────────────────────
-main_path  = exefs / "main"
-main_bytes = main_path.read_bytes()
+main_bytes = (exefs / "main").read_bytes()
 
-print(f"=== Carregando main com nso.load() oficial ===", flush=True)
-try:
-    MOD = nso_loader.load(main_bytes, name="main")
-except Exception as e:
-    print(f"[patch] FATAL: nso.load() falhou: {e}")
+if main_bytes[:4] != b"NSO0":
+    print(f"[patch] FATAL: magic invalido {main_bytes[:4]!r}")
     sys.exit(1)
 
-# MOD.image     = bytearray com text+ro+data nos offsets de memória corretos
-# MOD.segments  = ((mem_off, size), ...) para text, ro, data
-# MOD.build_id  = bytes 0x20; build ID = primeiros 0x10
-# MOD.text_end  = fim do segmento .text
-# MOD.bss       = tamanho do bss (não incluído na imagem)
-
-img      = MOD.image
-main_bid = MOD.build_id[:16].hex()
 flags    = struct.unpack_from("<I", main_bytes, 0x0C)[0]
-
-text_mem_off = MOD.segments[0][0]   # sempre 0 para NSO
-text_size    = MOD.segments[0][1]
-ro_mem_off   = MOD.segments[1][0]
-ro_size      = MOD.segments[1][1]
+main_bid = main_bytes[0x40:0x50].hex()
+use_zstd = bool(flags & (1 << 7))
 
 print(f"=== Build ID: {main_bid} ===", flush=True)
-print(f"=== Imagem: 0x{len(img):x} bytes | .text=[0x{text_mem_off:x}..0x{text_mem_off+text_size:x}] ===", flush=True)
+print(f"=== flags: 0x{flags:02x} | compressao: {'zstd' if use_zstd else 'lz4-block'} ===",
+      flush=True)
+
+# Lê os 3 segmentos: (file_off, mem_off, decomp_sz, comp_sz, nome)
+segs = []
+seg_names = ["text","rodata","data"]
+for i in range(3):
+    base     = 0x10 + i * 0x10
+    file_off  = struct.unpack_from("<I", main_bytes, base + 0x00)[0]
+    mem_off   = struct.unpack_from("<I", main_bytes, base + 0x04)[0]
+    decomp_sz = struct.unpack_from("<I", main_bytes, base + 0x08)[0]
+    comp_sz   = struct.unpack_from("<I", main_bytes, 0x60 + i * 4)[0]
+    segs.append((file_off, mem_off, decomp_sz, comp_sz))
+    print(f"  .{seg_names[i]}: file_off=0x{file_off:x} mem_off=0x{mem_off:x} "
+          f"decomp_sz=0x{decomp_sz:x} comp_sz=0x{comp_sz:x} "
+          f"compressed={(flags>>i)&1}", flush=True)
+
+# Monta imagem
+img_size = max(mo + sz for (fo, mo, sz, csz) in segs)
+img      = bytearray(img_size)
+
+for i, (file_off, mem_off, decomp_sz, comp_sz) in enumerate(segs):
+    is_compressed = bool((flags >> i) & 1)
+    raw = main_bytes[file_off : file_off + comp_sz]
+
+    print(f"  seg[{i}] .{seg_names[i]}: lendo 0x{len(raw):x} bytes "
+          f"de file_off=0x{file_off:x}", flush=True)
+
+    if is_compressed:
+        try:
+            if use_zstd:
+                import zstandard as zstd
+                raw = zstd.ZstdDecompressor().decompress(raw, max_output_size=decomp_sz)
+            else:
+                raw = lz4.block.decompress(raw, uncompressed_size=decomp_sz)
+        except Exception as e:
+            print(f"[patch] FATAL: falha ao descomprimir seg[{i}] .{seg_names[i]}: {e}")
+            print(f"  primeiros 16 bytes: {main_bytes[file_off:file_off+16].hex()}")
+            sys.exit(1)
+
+    if len(raw) < decomp_sz:
+        raw = raw + bytes(decomp_sz - len(raw))
+
+    img[mem_off : mem_off + decomp_sz] = raw[:decomp_sz]
+    print(f"  seg[{i}] .{seg_names[i]} ok -> mem[0x{mem_off:x}..0x{mem_off+decomp_sz:x}]",
+          flush=True)
+
+print(f"=== Imagem descomprimida: 0x{img_size:x} bytes ===", flush=True)
 
 # ─────────────────────────────────────────────────────────────────────────────
-# 5. Disassembla .text — pula o MOD0 header (primeiros 8 bytes)
+# 5. Disassembla .text — PULA os 8 bytes do MOD0 pointer
+#
+#  Os primeiros 8 bytes do .text são:
+#    [0..3] = 0x00000000  (instrução inválida / padding)
+#    [4..7] = offset do MOD0 header (ex: 0x00000008)
+#  Isso NÃO é código ARM64. O Capstone trava aqui e retorna só 3 instruções.
+#  O código real começa em mem_off + 8.
 # ─────────────────────────────────────────────────────────────────────────────
-# O .text começa com um MOD0 header de 8 bytes que NÃO é código ARM64
-# O código real começa em text_mem_off + 8 (após o ponteiro MOD0)
+text_mem_off = segs[0][1]   # sempre 0x0 para NSO
+text_size    = segs[0][2]
+
+# Pula MOD0 pointer (8 bytes) — código ARM64 real começa aqui
 CODE_START = text_mem_off + 8
 CODE_END   = text_mem_off + text_size
 
-print(f"=== Disassemblando código: [0x{CODE_START:x}..0x{CODE_END:x}] ===", flush=True)
+print(f"=== Disassemblando .text: "
+      f"mem[0x{CODE_START:x}..0x{CODE_END:x}] "
+      f"(pulando MOD0 header de 8 bytes) ===", flush=True)
 
 md = Cs(CS_ARCH_ARM64, CS_MODE_ARM)
 md.detail = True
@@ -206,7 +250,8 @@ if not ctor_candidates:
 
 ctor_candidates.sort(key=lambda x: (-x["score"], x["func"]))
 ctor = ctor_candidates[0]
-print(f"=== Construtor: func=0x{ctor['func']:x} this_reg=x{ctor['this_reg']} ===", flush=True)
+print(f"=== Construtor: func=0x{ctor['func']:x} this_reg=x{ctor['this_reg']} ===",
+      flush=True)
 
 bls = []
 for off in range(CODE_START, CODE_END - 4, 4):
@@ -264,7 +309,9 @@ if vtable_addr + 26 * 8 <= len(img):
         if "#0x18" in s4_asm:
             ue_layout = "UE4_27"
 
-rodata      = bytes(img[ro_mem_off : ro_mem_off + ro_size])
+ro_mem_off = segs[1][1]
+ro_size    = segs[1][2]
+rodata     = bytes(img[ro_mem_off : ro_mem_off + ro_size])
 has_ansimalloc = (b"ansimalloc" in rodata) or \
                  ("ansimalloc".encode("utf-16-le") in rodata)
 print(f"=== Layout: {ue_layout} | ansimalloc={has_ansimalloc} ===", flush=True)
