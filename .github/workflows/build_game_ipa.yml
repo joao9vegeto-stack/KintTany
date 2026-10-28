@@ -51,7 +51,7 @@ jobs:
             rsync -a --ignore-existing "$RUNNER_TEMP/nx_up/" ./
           fi
 
-          # Desativa 'set -u' e transforma 'die()' em aviso no build_ipa.sh (igual ao commit 1f42f35 + fix da linha 169)
+          # Desativa 'set -u' e transforma 'die()' em aviso no build_ipa.sh
           sed -i '' 's/^set -u/set +u/g' dm/ios/tools/build_ipa.sh || true
           sed -i '' 's/die() { t "FAIL: $\*"; exit 1; }/die() { t "WARN (ignored): $*"; return 0; }/g' dm/ios/tools/build_ipa.sh || true
 
@@ -99,17 +99,18 @@ jobs:
           game_py = games_dir / "game.py"
           sample_tsvs = sorted(games_dir.glob("*/game.tsv"))
 
-          # Descobre quais modulos NSO existem dentro de ExeFS
-          order = ["rtld", "main", "subsdk0", "subsdk1", "subsdk2", "subsdk3", "subsdk4", "subsdk5", "subsdk6", "subsdk7", "subsdk8", "subsdk9", "sdk"]
+          # IMPORTANTE: NUNCA incluir 'rtld' em modules!
+          # O dm/host/loader.c substitui o rtld da Nintendo. Carregar o rtld causa SIGBUS (sig=10) em rtld+0x3008 durante relocate().
+          order = ["main", "subsdk0", "subsdk1", "subsdk2", "subsdk3", "subsdk4", "subsdk5", "subsdk6", "subsdk7", "subsdk8", "subsdk9", "sdk"]
           mods = []
           for m in order:
               p = exefs / m
               if p.is_file() and p.read_bytes()[:4] == b"NSO0":
                   mods.append(m)
           for p in sorted(exefs.iterdir()):
-              if p.is_file() and p.name not in mods and p.name != "main.npdm" and p.read_bytes()[:4] == b"NSO0":
+              if p.is_file() and p.name not in mods and p.name not in ("main.npdm", "rtld") and p.read_bytes()[:4] == b"NSO0":
                   mods.append(p.name)
-          print(f"=== Modulos NSO encontrados em ExeFS: {mods} ===", flush=True)
+          print(f"=== Modulos NSO ativos (sem rtld): {mods} ===", flush=True)
 
           # Descobre um arquivo real do RomFS para usar como marker
           marker = "SparkingZERO/Content/Paks/global.ucas"
@@ -134,29 +135,29 @@ jobs:
                           ref_kv.setdefault(k.strip(), v.strip())
                   break
 
+          ipa_filename = "DRAGON_BALL_Sparking_ZERO.ipa"
+
+          # Layout de memoria oficial de Unreal Engine 4 no nxnative (baseado em 010069C01AB82000/game.tsv)
           kv = {
               "name": "DRAGON BALL: Sparking! ZERO",
-              "program_id": tid_str.lower(),
-              "title_id": tid_str.lower(),
-              "bundle_id": f"com.nxnative.g{tid_str.lower()}",
+              "program_id": tid_str,
+              "title_id": tid_str,
+              "bundle_id": f"org.nxnative.{tid_str.lower()}",
               "version": "1.0",
               "package": "v0",
-              "ipa": f"{tid_str}_Thin.ipa",
+              "ipa": ipa_filename,
               "modules": " ".join(mods),
               "romfs_marker": marker,
               "gfx_api": "nvn",
-              "app_category": ref_kv.get("app_category", "public.app-category.action-games"),
+              "app_category": "public.app-category.games",
               "orientation": "landscape",
-              "mem_reserve": "0x300000000",
-              "mem_alias": "0x200000000",
+              "mem_reserve": "0xF0000000",
+              "mem_alias": "0xC8000000",
               "mem_stack": "0x10000000",
               "app_pool": "0xCD500000",
-              "sys_resource": "0x1e00000",
+              "sys_resource": "0x2800000",
               "fps_target": "60",
-              "present_interval": "display",
-              "op_mode": "handheld",
-              "depth_mode": "zero",
-              "alloc_big_align": "on",
+              "pad_layout": "full",
               "game_args": "-SwitchVirtualAddressSpaceSize=2048",
           }
           skip_keys = {"patches", "hooks", "vulkan_shaders", "gl_shaders", "trinity_packs", "feedback_snap", "shader_versions", "shader_groups", "shader_note", "pso_mtl4", "game_env"}
@@ -166,6 +167,14 @@ jobs:
 
           tsv_content = "\n".join(f"{k}\t{v}" for k, v in kv.items()) + "\n"
           game_tsv.write_text(tsv_content, encoding="utf-8")
+
+          # Registra tambem o jogo em dm/games/settings.tsv para o Launcher.swift exibir a tela de configuracoes
+          settings_tsv = games_dir / "settings.tsv"
+          if settings_tsv.exists():
+              stxt = settings_tsv.read_text(encoding="utf-8")
+              if tid_str not in stxt:
+                  with open(settings_tsv, "a", encoding="utf-8") as sf:
+                      sf.write(f"{tid_str}\tDRAGON BALL: Sparking! ZERO\t60\t1.0\n")
 
           # Garante que dm/games/game.py nunca de KeyError
           gpy_txt = game_py.read_text(encoding="utf-8")
@@ -201,14 +210,6 @@ jobs:
           b_dir = msl_ios_base / f"b-{chain_stamp}"
           b_dir.mkdir(parents=True, exist_ok=True)
 
-          # Garante que pack_ipa.py aceite pasta de shaders vazia sem falhar
-          pack_py = Path("dm/ios/tools/pack_ipa.py")
-          if pack_py.exists():
-              ptxt = pack_py.read_text(encoding="utf-8")
-              # Evita FileNotFoundError se alguma pasta opcional de shader nao existir
-              if "os.makedirs(msl_dir, exist_ok=True)" not in ptxt and "def " in ptxt:
-                  pass
-
           # Usa o cache dos NSOs reescritos (pasta inteira gerada pelo patch_nso.py)
           cache_dir = Path(f"/Users/runner/patched_cache_{tid_str}")
           cache_dir.mkdir(parents=True, exist_ok=True)
@@ -217,6 +218,10 @@ jobs:
           if len(cached_files) >= len(mods):
               print(f"=== [CACHE HIT] Restaurando {len(cached_files)} arquivos de {cache_dir} ===", flush=True)
               shutil.copytree(cache_dir, patched, dirs_exist_ok=True)
+              # Remove arquivos do rtld da pasta patched para garantir que o Xcode nao o embuta
+              for rtld_f in patched.glob("rtld*"):
+                  if rtld_f.is_file():
+                      rtld_f.unlink()
           else:
               for m in mods:
                   src_nso = exefs / m
@@ -241,8 +246,8 @@ jobs:
           # Gera os cabecalhos do perfil no host
           subprocess.run(["make", "-s", "-C", "dm/host", "game_profile", f"GAME={tid_str}"], check=True)
 
-          # Executa o build_ipa.sh
-          out_ipa = rt / f"{tid_str}_Thin.ipa"
+          # Executa o build_ipa.sh gerando DRAGON_BALL_Sparking_ZERO.ipa
+          out_ipa = rt / ipa_filename
           env = os.environ.copy()
           env.update({
               "GAME": tid_str,
@@ -271,9 +276,17 @@ jobs:
           path: /Users/runner/patched_cache_010035F022078000
           key: patched-nso-010035F022078000-v3
 
-      - name: 4. Upload do IPA do Jogo nos Artifacts
+      - name: 4. Publicar DRAGON_BALL_Sparking_ZERO.ipa direto na Release (sem zip!)
+        run: |
+          IPA_FILE="${RUNNER_TEMP}/DRAGON_BALL_Sparking_ZERO.ipa"
+          if [ -f "$IPA_FILE" ]; then
+            gh release upload v1.0-kit "$IPA_FILE" --repo "$GITHUB_REPOSITORY" --clobber || true
+            echo "=== IPA puro publicado na Release v1.0-kit: DRAGON_BALL_Sparking_ZERO.ipa ==="
+          fi
+
+      - name: 5. Upload do IPA nos Artifacts (backup)
         uses: actions/upload-artifact@v4
         with:
-          name: SparkingZERO-Thin-IPA
-          path: ${{ runner.temp }}/*_Thin.ipa
+          name: DRAGON_BALL_Sparking_ZERO.ipa
+          path: ${{ runner.temp }}/DRAGON_BALL_Sparking_ZERO.ipa
           if-no-files-found: error
