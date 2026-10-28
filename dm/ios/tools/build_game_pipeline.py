@@ -69,23 +69,45 @@ for p in sorted(exefs.iterdir()):
         mods.append(p.name)
 print(f"=== Módulos NSO (sem rtld): {mods} ===", flush=True)
 
-# ── 4. Descomprime main e detecta CUT/OBS pela vtable ────────────────────────
+# ── 4. Descomprime main ───────────────────────────────────────────────────────
 main_bytes = (exefs / "main").read_bytes()
 main_bid   = main_bytes[0x40:0x50].hex()
 print(f"=== Build ID: {main_bid} ===", flush=True)
 
 flags = struct.unpack_from("<I", main_bytes, 0xC)[0]
-segs  = [struct.unpack_from("<III", main_bytes, 0x10 + i * 0x10) for i in range(3)]
-csz   = struct.unpack_from("<III", main_bytes, 0x60)
-img   = bytearray(segs[2][1] + segs[2][2])
+
+# Cada segmento: (file_offset, mem_offset, mem_size)
+segs = [struct.unpack_from("<III", main_bytes, 0x10 + i * 0x10) for i in range(3)]
+
+# Tamanhos comprimidos (ou raw) de cada segmento
+csz  = struct.unpack_from("<III", main_bytes, 0x60)
+
+# CORREÇÃO: tamanho do buffer = max(mem_offset + mem_size) entre todos os segmentos
+img_size = max(mo + sz for (fo, mo, sz) in segs)
+img = bytearray(img_size)
+
 for i, (fo, mo, sz) in enumerate(segs):
-    raw = main_bytes[fo:fo + csz[i]]
+    raw = main_bytes[fo : fo + csz[i]]
     if (flags >> i) & 1:
+        import lz4.block
         raw = lz4.block.decompress(raw, uncompressed_size=sz)
-    img[mo:mo + sz] = raw
+    img[mo : mo + sz] = raw[:sz]
+
+print(f"=== Imagem descomprimida: {img_size:#x} bytes ===", flush=True)
 
 md = Cs(CS_ARCH_ARM64, CS_MODE_ARM)
 md.detail = True
+
+# Disassembla a imagem COMPLETA
+insns_all = list(md.disasm(bytes(img), 0))
+print(f"=== Instruções disassembladas: {len(insns_all)} ===", flush=True)
+
+if len(insns_all) < 1000:
+    print("[patch] FATAL: imagem descomprimida parece invalida ou muito pequena")
+    print(f"  img_size={img_size:#x}, flags={flags:#x}")
+    for i, (fo, mo, sz) in enumerate(segs):
+        print(f"  seg[{i}]: file_off={fo:#x} mem_off={mo:#x} mem_sz={sz:#x} csz={csz[i]:#x} compressed={(flags>>i)&1}")
+    sys.exit(1)
 
 # ── Detector dinâmico pela vtable 0x92fa000 ──────────────────────────────────
 VTABLE_PAGE = 0x92fa000 & ~0xFFF   # página base do adrp
