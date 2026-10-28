@@ -159,30 +159,22 @@ jobs:
                   raw = lz4.block.decompress(raw, uncompressed_size=sz)
               img[mo:mo + sz] = raw
 
-          # Desmonta a regiao do backtrace (0x1e4da00 a 0x1e4e600) para ver GCreateMalloc e FMallocBinned3
           md = Cs(CS_ARCH_ARM64, CS_MODE_ARM)
-          print("=== Disassembly da regiao GCreateMalloc / FMallocBinned3 (0x1e4e180 .. 0x1e4e240) ===", flush=True)
+          print("=== Disassembly da regiao GCreateMalloc / FMallocBinned3 (0x1e4df00 .. 0x1e4e500) ===", flush=True)
           cut_addr = None
           cut_orig_hex = None
           obs_addr = None
           obs_orig_hex = None
-          obs_reg_mov = None
 
           insns = list(md.disasm(bytes(img[0x1e4df00:0x1e4e500]), 0x1e4df00))
           for idx, ins in enumerate(insns):
               if 0x1e4e050 <= ins.address <= 0x1e4e490:
                   print(f"  0x{ins.address:x}:\t{ins.mnemonic}\t{ins.op_str}\t[{ins.bytes.hex()}]")
 
-          # No crash log:
-          # bt: main+0x1e4e0a8 main+0x1e4e0cc main+0x1e4e478 main+0x1e4e1fc main+0x1eab28c main+0x1e4db34
-          # GCreateMalloc esta em torno de 0x1e4e1fc (chama a funcao em 0x1e4e478 ou o construtor de FMallocBinned3)
-          # Vamos inspecionar a funcao que contem 0x1e4e1fc:
           for idx, ins in enumerate(insns):
-              # Procura a chamada 'bl' em 0x1e4e1f8 (logo antes do retorno 0x1e4e1fc do backtrace!)
               if ins.address == 0x1e4e1f8 and ins.mnemonic == "bl":
                   cut_addr = ins.address
                   cut_orig_hex = ins.bytes.hex()
-                  # Procura logo apos 0x1e4e1f8 uma instrucao position-independent (ex: mov x0, x19 / mov x0, x20) para o OBS_UE_MALLOC
                   for j in range(idx + 1, min(idx + 8, len(insns))):
                       nxt = insns[j]
                       if nxt.mnemonic in ("mov", "orr", "str") and "pc" not in nxt.op_str:
@@ -191,16 +183,11 @@ jobs:
                           break
                   break
 
-          # Verifica o layout da vtable em main+0x92fa000 (que apareceu em *x4 no log.txt)
           vtable_addr = 0x92fa000
           if vtable_addr + 32 * 8 <= len(img):
               slots = [struct.unpack_from("<Q", img, vtable_addr + k * 8)[0] for k in range(32)]
               print(f"=== Slots da vtable em 0x{vtable_addr:x}: {[hex(s) for s in slots[:26]]} ===", flush=True)
 
-          # Verifica se o construtor ou o objeto FMallocBinned3 e estatico (bss) ou dinamico (GCreateMalloc)
-          # No log: stack scan [+192]main+0x92ed700 [+200]main+0x92ed6f8 [+264]main+0x92fa000 [+968]main+0xb60ca28
-          # Veja main+0xb60ca28! O main tem size 0xb614000, entao 0xb60ca28 fica no .bss (como em Octopath Traveler 0 e FF Resonance)!
-          # Vamos checar se 0x1e4e1f8 passa um objeto em x0/x19 ou se 0x1e4db34 usa 0xb60ca28!
           print("=== Disassembly de 0x1e4db00 .. 0x1e4db60 ===", flush=True)
           for ins in md.disasm(bytes(img[0x1e4db00:0x1e4db60]), 0x1e4db00):
               print(f"  0x{ins.address:x}:\t{ins.mnemonic}\t{ins.op_str}\t[{ins.bytes.hex()}]")
@@ -208,18 +195,11 @@ jobs:
           prof_dir = games_dir / tid_str
           prof_dir.mkdir(parents=True, exist_ok=True)
 
-          # Se encontramos o bl do construtor do FMallocBinned3 em 0x1e4e1f8 (que reservou os 37 GB = 0x940000000):
           need_repatch = False
-          if cut_addr is not None:
-              # Verifica qual registrador guarda o ponteiro do objeto FMallocBinned3 em 0x1e4e1f8
-              # Olhando as instrucoes anteriores a 0x1e4e1f8 para ver de qual registrador x0 veio (ex: mov x0, x19)
-              obj_reg = "x19"
+          if cut_addr is not None and obs_addr is not None:
               for ins in md.disasm(bytes(img[0x1e4e1c0:0x1e4e220]), 0x1e4e1c0):
                   print(f"  [GCreateMalloc] 0x{ins.address:x}:\t{ins.mnemonic}\t{ins.op_str}\t[{ins.bytes.hex()}]")
 
-              # Determina se a vtable tem layout UE4_27 (21 slots), UE5 (26 slots) ou UE5_6 (32 slots)
-              # Sparking ZERO e Unreal Engine 5.1! No UE5.1 o layout de FMalloc tem 26 slots (UE5) ou 21 slots (UE4_27).
-              # Vamos checar qual slot da vtable 0x92fa000 chama +0x18 (UE4_27) ou +0x30 (UE5):
               ue_layout = "UE5"
               if vtable_addr + 26 * 8 <= len(img):
                   slot4_fn = struct.unpack_from("<Q", img, vtable_addr + 4 * 8)[0]
@@ -237,31 +217,29 @@ jobs:
 
               print(f"=== Layout detectado para FMallocBinned3: {ue_layout} | cut=0x{cut_addr:x} ({cut_orig_hex}) | obs=0x{obs_addr:x} ({obs_orig_hex}) ===", flush=True)
 
-              # Escreve dm/games/<tid>/patches.py para cortar o construtor de 37 GB e instalar a vtable do host
               patches_py = prof_dir / "patches.py"
-              patches_code = f"""# Auto-generated FMallocBinned3 (37 GB) replacement patch for {game_title}
-CUTS = {{
-    '{main_bid}': [
-        (0x{cut_addr:x}, '{cut_orig_hex}', '1f2003d5', 'GCreateMalloc: bl FMallocBinned3 constructor -> nop; host malloc zone installed at OBS_UE_MALLOC'),
-    ],
-}}
-OBS = {{
-    '{main_bid}': [
-        (0x{obs_addr:x}, 21, '{obs_orig_hex}', 'GCreateMalloc: install the host vtable before use'),
-    ],
-}}
-"""
-              patches_py.write_text(patches_code, encoding="utf-8")
+              patches_lines = [
+                  "# Auto-generated FMallocBinned3 (37 GB) replacement patch",
+                  "CUTS = {",
+                  f"    '{main_bid}': [",
+                  f"        (0x{cut_addr:x}, '{cut_orig_hex}', '1f2003d5', 'GCreateMalloc: bl FMallocBinned3 constructor -> nop'),",
+                  "    ],",
+                  "}",
+                  "OBS = {",
+                  f"    '{main_bid}': [",
+                  f"        (0x{obs_addr:x}, 21, '{obs_orig_hex}', 'GCreateMalloc: install the host vtable before use'),",
+                  "    ],",
+                  "}",
+              ]
+              patches_py.write_text("\n".join(patches_lines) + "\n", encoding="utf-8")
 
-              # Registra o Build ID em dm/host/hle_uemalloc.c (incluindo suporte caso o ponteiro esteja em x0 ou x19)
               uemalloc_c = Path("dm/host/hle_uemalloc.c")
               if uemalloc_c.exists():
                   uetxt = uemalloc_c.read_text(encoding="utf-8")
                   if main_bid not in uetxt:
                       new_entry = f'    {{ "{main_bid}", "{game_title}", {ue_layout}, 0, 0x{vtable_addr:x}, 0x{cut_addr:x} }},\n'
-                      uetxt = uetxt.replace("static const struct { const char *build, *what; int layout; uint64_t obj, vtable, cut; } k_ue[] = {\n",
-                                            "static const struct { const char *build, *what; int layout; uint64_t obj, vtable, cut; } k_ue[] = {\n" + new_entry)
-                      # Garante que no callback de OBS_UE_MALLOC, se x19 nao for ponteiro valido, use x20 ou x0
+                      target_hdr = "static const struct { const char *build, *what; int layout; uint64_t obj, vtable, cut; } k_ue[] = {\n"
+                      uetxt = uetxt.replace(target_hdr, target_hdr + new_entry)
                       uetxt = uetxt.replace("uint64_t obj = regs[19];", "uint64_t obj = regs[19] ? regs[19] : (regs[20] ? regs[20] : regs[0]);")
                       uemalloc_c.write_text(uetxt, encoding="utf-8")
                       print("=== Build ID registrado com sucesso em dm/host/hle_uemalloc.c! ===", flush=True)
@@ -292,7 +270,7 @@ OBS = {{
               "program_id": tid_str,
               "title_id": tid_str,
               "bundle_id": f"org.nxnative.{tid_str.lower()}",
-              " build": f"v0\t{game_ver}\tmain={main_bid}",
+              "build": f"v0\t{game_ver}\tmain={main_bid}",
               "version": game_ver,
               "package": "v0",
               "ipa": ipa_filename,
@@ -342,7 +320,6 @@ OBS = {{
           for d in (patched, msl_ios_base, data_v0):
               d.mkdir(parents=True, exist_ok=True)
 
-          # Descobre o DMSH_CHAIN real de dm/gfx/nvn/dmsh_chain.h e cria a pasta b-<stamp>
           chain_h = Path("dm/gfx/nvn/dmsh_chain.h")
           chain_stamp = "157e1b96c8da"
           if chain_h.exists():
@@ -352,7 +329,7 @@ OBS = {{
           b_dir = msl_ios_base / f"b-{chain_stamp}"
           b_dir.mkdir(parents=True, exist_ok=True)
 
-          # Cache por TitleID (re-reescreve apenas o 'main' se adicionamos CUTS/OBS novos no patches.py!)
+          # Cache por TitleID
           cache_root = Path("/Users/runner/patched_cache")
           cache_dir = cache_root / tid_str
           cache_dir.mkdir(parents=True, exist_ok=True)
@@ -364,7 +341,6 @@ OBS = {{
               for rtld_f in patched.glob("rtld*"):
                   if rtld_f.is_file():
                       rtld_f.unlink()
-              # Se o main.cuts.tsv estiver vazio no cache e agora temos patches.py, reescreve APENAS o main!
               cuts_file = patched / "main.cuts.tsv"
               if need_repatch and (not cuts_file.exists() or cuts_file.stat().st_size == 0):
                   print("=== Re-aplicando patch_nso.py APENAS no 'main' para ativar o corte do FMallocBinned3 (37 GB) ===", flush=True)
@@ -391,10 +367,8 @@ OBS = {{
                       shutil.copy2(nacp, dst_nacp)
               break
 
-          # Gera os cabecalhos do perfil no host
           subprocess.run(["make", "-s", "-C", "dm/host", "game_profile", f"GAME={tid_str}"], check=True)
 
-          # Executa o build_ipa.sh gerando <Nome_do_Jogo>.ipa
           out_ipa = rt / ipa_filename
           env = os.environ.copy()
           env.update({
@@ -439,6 +413,6 @@ OBS = {{
       - name: 5. Upload do IPA nos Artifacts com o Nome do Jogo
         uses: actions/upload-artifact@v4
         with:
-          name: ${{ env.GAME_SAFE_NAME }}.ipa
+          name: ${{ env.GAME_SAFE_NAME }}_Artifact
           path: ${{ runner.temp }}/*.ipa
           if-no-files-found: error
