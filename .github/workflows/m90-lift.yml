@@ -53,29 +53,35 @@ jobs:
         run: |
           set -o pipefail
           PS3RECOMP=../ps3recomp scripts/lift_spu.sh 2>&1 | tee ../lift-spu.log | tail -n 80
-      - name: Lift jobmods (probe)
+      - name: Lift jobmods
         working-directory: gowa-pc
-        continue-on-error: true
         run: |
           set -o pipefail
-          {
-          echo "=== lift_jobmods.py --help ==="
-          python3 ../ps3recomp/tools/lift_jobmods.py --help
-          echo "=== gowa-pc references to jobmods ==="
-          grep -rn 'jobmod' scripts/ CMakeLists.txt README.md 2>/dev/null | head -n 40
-          echo "=== attempt ==="
-          python3 ../ps3recomp/tools/lift_jobmods.py analysis/jobmods --out spu/jobmods 2>&1 | tail -n 60 || true
-          echo "=== spu/jobmods ==="; find spu/jobmods -type f 2>/dev/null | head -n 40; du -sh spu/jobmods 2>/dev/null || echo "NENHUM"
-          } 2>&1 | tee ../lift-jobmods.log
+          python3 ../ps3recomp/tools/lift_jobmods.py \
+            --jobmods analysis/jobmods --out spu --register spu/jobmods_register.c \
+            2>&1 | tee ../lift-jobmods.log | tail -n 80
+          echo "=== manifest ==="
+          python3 - <<'EOF' | tee -a ../lift-jobmods.log
+          import json
+          m=json.load(open('spu/jobmods_manifest.json'))
+          print(len(m),"modules")
+          print("total funcs", sum(x.get('funcs',0) for x in m), "unsupported", sum(x.get('unsupported',0) for x in m))
+          for x in m: print(f"{x['name']:28s} entry={x['entry']:>7} size={x['size']:>7} funcs={x.get('funcs','?'):>4} unsup={x.get('unsupported','?')}")
+          EOF
+          ls -la spu/jobmods_register.c spu/taskset_policy_bytes.c 2>&1 || echo "taskset_policy_bytes.c AUSENTE: ver CMakeLists.txt:153"
+          grep -n 'taskset_policy_bytes' CMakeLists.txt scripts/*.sh scripts/*.py 2>/dev/null | head -n 10
       - name: Inventory
         working-directory: gowa-pc
         run: |
           {
-          echo "=== recompiled/ ==="; find recompiled -type f | wc -l; du -sh recompiled 2>/dev/null
-          find recompiled -name 'ppu_recomp_*.cpp' | wc -l
-          echo "=== spu/ ==="; find spu -type f 2>/dev/null | wc -l; du -sh spu 2>/dev/null
-          find spu -name 'spu_recomp.c' 2>/dev/null
-          grep -rn 'spu_pic_register\|0xA2C\|0x0A2C' spu/ 2>/dev/null | head -n 20
+          echo "=== recompiled/ ==="; find recompiled -type f | wc -l; du -sh recompiled
+          ls -la recompiled/
+          echo "=== spu/ ==="; find spu -type f | wc -l; du -sh spu
+          ls spu/
+          echo "--- jobmod dirs ---"; ls -d spu/jobmod_* 2>/dev/null | wc -l
+          echo "--- generated TUs ---"; ls -la spu/*.c 2>/dev/null
+          echo "--- 0xA2C ---"; grep -rn 'A2C' spu/pm_wwsjob_at_007A7B00/spu_recomp.h | head -n 5
+          echo "--- register symbols ---"; grep -hn '^void\|^int\|register' spu/spu_workloads.c spu/jobmods_register.c 2>/dev/null | grep -v '^\s*//' | head -n 20
           } | tee ../inventory.txt
       - name: Bundle
         working-directory: gowa-pc
