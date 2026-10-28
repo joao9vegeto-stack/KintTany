@@ -44,7 +44,7 @@ jobs:
         run: |
           set -o pipefail
           PS3RECOMP=../ps3recomp scripts/analyze.sh 2>&1 | tee ../analyze.log | tail -n 60
-          python3 scripts/extract_jobmods_elf.py game/EBOOT.ELF analysis/jobmods 2>&1 | tee ../jobmods.log | tail -n 40
+          python3 scripts/extract_jobmods_elf.py game/EBOOT.ELF --out analysis/jobmods 2>&1 | tee ../jobmods.log | tail -n 60
           echo "--- spu_images ---"; ls -la analysis/spu_images/ 2>/dev/null || echo "NENHUMA"
           echo "--- jobmods ---";    ls -la analysis/jobmods/    2>/dev/null || echo "NENHUM"
       - name: Lift SPU
@@ -53,6 +53,20 @@ jobs:
         run: |
           set -o pipefail
           PS3RECOMP=../ps3recomp scripts/lift_spu.sh 2>&1 | tee ../lift-spu.log | tail -n 80
+      - name: Lift jobmods (probe)
+        working-directory: gowa-pc
+        continue-on-error: true
+        run: |
+          set -o pipefail
+          {
+          echo "=== lift_jobmods.py --help ==="
+          python3 ../ps3recomp/tools/lift_jobmods.py --help
+          echo "=== gowa-pc references to jobmods ==="
+          grep -rn 'jobmod' scripts/ CMakeLists.txt README.md 2>/dev/null | head -n 40
+          echo "=== attempt ==="
+          python3 ../ps3recomp/tools/lift_jobmods.py analysis/jobmods --out spu/jobmods 2>&1 | tail -n 60 || true
+          echo "=== spu/jobmods ==="; find spu/jobmods -type f 2>/dev/null | head -n 40; du -sh spu/jobmods 2>/dev/null || echo "NENHUM"
+          } 2>&1 | tee ../lift-jobmods.log
       - name: Inventory
         working-directory: gowa-pc
         run: |
@@ -82,6 +96,7 @@ jobs:
             analyze.log
             jobmods.log
             lift-spu.log
+            lift-jobmods.log
             inventory.txt
             m90-lift-sha256.txt
       - uses: actions/upload-artifact@v4
