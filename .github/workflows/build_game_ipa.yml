@@ -37,7 +37,7 @@ jobs:
         uses: actions/cache/restore@v4
         with:
           path: /Users/runner/patched_cache_010035F022078000
-          key: patched-nso-010035F022078000-v2
+          key: patched-nso-010035F022078000-v3
           restore-keys: |
             patched-nso-010035F022078000-
 
@@ -51,8 +51,8 @@ jobs:
             rsync -a --ignore-existing "$RUNNER_TEMP/nx_up/" ./
           fi
 
-          # Remove 'set -u' do build_ipa.sh para nao falhar no CHAIN_STAMP (linha 169)
-          sed -i '' 's/^set -u/# set -u/g' dm/ios/tools/build_ipa.sh || true
+          # Desativa 'set -u' no build_ipa.sh para nao quebrar em CHAIN_STAMP (linha 169)
+          sed -i '' 's/^set -u/set +u/g' dm/ios/tools/build_ipa.sh || true
 
           # 2. Baixa o github_kit.zip da Release
           mkdir -p "$RUNNER_TEMP/dl"
@@ -209,11 +209,14 @@ jobs:
               shutil.copytree(patched, cache_dir, dirs_exist_ok=True)
 
           if (exefs / "main.npdm").exists():
-              shutil.copy2(exefs / "main.npdm", patched / "main.npdm")
+              dst_npdm = patched / "main.npdm"
+              if (exefs / "main.npdm").resolve() != dst_npdm.resolve():
+                  shutil.copy2(exefs / "main.npdm", dst_npdm)
 
           for nacp in kit.rglob("*.nacp"):
-              shutil.copy2(nacp, data_v0 / "control.nacp")
-              shutil.copy2(nacp, romfs.parent / "control.nacp")
+              for dst_nacp in (data_v0 / "control.nacp", romfs.parent / "control.nacp"):
+                  if nacp.resolve() != dst_nacp.resolve():
+                      shutil.copy2(nacp, dst_nacp)
               break
 
           # Gera os cabecalhos do perfil no host
