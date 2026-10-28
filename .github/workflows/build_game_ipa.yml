@@ -44,7 +44,26 @@ jobs:
             patched-nso-uemalloc-v5-
             patched-nso-
 
-      
+      - name: 3. Baixar github_kit.zip, Aplicar Patch FMallocBinned3 (37GB -> iOS) e Compilar IPA
+        run: |
+          set -e
+
+          # 1. Garante arvore completa do nxnative
+          if [ ! -f "dm/ios/tools/build_ipa.sh" ]; then
+            git clone --depth 1 https://github.com/seedds/nxnative.git "$RUNNER_TEMP/nx_up"
+            rsync -a --ignore-existing "$RUNNER_TEMP/nx_up/" ./
+          fi
+
+          # Desativa 'set -u' e transforma 'die()' em aviso no build_ipa.sh
+          sed -i '' 's/^set -u/set +u/g' dm/ios/tools/build_ipa.sh || true
+          sed -i '' 's/die() { t "FAIL: $\*"; exit 1; }/die() { t "WARN (ignored): $*"; return 0; }/g' dm/ios/tools/build_ipa.sh || true
+
+          # 2. Baixa o github_kit.zip da Release
+          mkdir -p "$RUNNER_TEMP/dl"
+          if ! curl -L --fail -o "$RUNNER_TEMP/dl/github_kit.zip" "$KIT_URL"; then
+            gh release download --repo "$GITHUB_REPOSITORY" --pattern "*.zip" --dir "$RUNNER_TEMP/dl" --clobber
+          fi
+
           FIRST_ZIP=$(find "$RUNNER_TEMP/dl" -name "*.zip" | head -n 1)
           mkdir -p "$RUNNER_TEMP/kit"
           unzip -q "$FIRST_ZIP" -d "$RUNNER_TEMP/kit"
@@ -57,279 +76,30 @@ jobs:
             fi
           fi
 
-                   - name: 3. Baixar github_kit.zip, Aplicar Patch FMallocBinned3 (37GB -> iOS) e Compilar IPA
-            run: |
-              set -e
+          # 3. Auto-Patch FMallocBinned3 + build IPA (script externo, sem heredoc)
+          python3 -u dm/ios/tools/build_game_pipeline.py
 
-              # 1. Garante arvore completa do nxnative
-              if [ ! -f "dm/ios/tools/build_ipa.sh" ]; then
-                git clone --depth 1 https://github.com/seedds/nxnative.git "$RUNNER_TEMP/nx_up"
-                rsync -a --ignore-existing "$RUNNER_TEMP/nx_up/" ./
-              fi
+          echo "GAME_SAFE_NAME=$(cat $RUNNER_TEMP/last_ipa_name.txt)" >> $GITHUB_ENV
 
-              # Desativa 'set -u' e transforma 'die()' em aviso no build_ipa.sh
-              sed -i '' 's/^set -u/set +u/g' dm/ios/tools/build_ipa.sh || true
-              sed -i '' 's/die() { t "FAIL: $\*"; exit 1; }/die() { t "WARN (ignored): $*"; return 0; }/g' dm/ios/tools/build_ipa.sh || true
-
-              # 2. Baixa o github_kit.zip da Release
-              mkdir -p "$RUNNER_TEMP/dl"
-              if ! curl -L --fail -o "$RUNNER_TEMP/dl/github_kit.zip" "$KIT_URL"; then
-                gh release download --repo "$GITHUB_REPOSITORY" --pattern "*.zip" --dir "$RUNNER_TEMP/dl" --clobber
-              fi
-
-              FIRST_ZIP=$(find "$RUNNER_TEMP/dl" -name "*.zip" | head -n 1)
-              mkdir -p "$RUNNER_TEMP/kit"
-              unzip -q "$FIRST_ZIP" -d "$RUNNER_TEMP/kit"
-
-              if [ ! -d "$RUNNER_TEMP/kit/ExeFS" ]; then
-                SUB_EXEFS=$(find "$RUNNER_TEMP/kit" -type d -iname "ExeFS" | head -n 1)
-                if [ -n "$SUB_EXEFS" ]; then
-                  PARENT_DIR=$(dirname "$SUB_EXEFS")
-                  [ "$PARENT_DIR" != "$RUNNER_TEMP/kit" ] && mv "$PARENT_DIR"/* "$RUNNER_TEMP/kit/" || true
-                fi
-              fi
-
-              # 3. Auto-Patch FMallocBinned3 + build IPA
-              python3 -u dm/ios/tools/build_game_pipeline.py
-
-              echo "GAME_SAFE_NAME=$(cat $RUNNER_TEMP/last_ipa_name.txt)" >> $GITHUB_ENV
-
-# --- Constantes do mecanismo hle_uemalloc ---
-VTABLE_PAGE_GUEST = 0x92fa000
-NOP_INSN          = struct.pack("<I", 0xD503201F)
-SEARCH_WINDOW     = 0x200
-
-# --- Utilitários ---
-def u32(b, off):  return struct.unpack_from("<I", b, off)[0]
-def p32(v):       return struct.pack("<I", v)
-
-def file_sha256(path):
-    h = hashlib.sha256()
-    with open(path, "rb") as f:
-        for chunk in iter(lambda: f.read(1 << 20), b""):
-            h.update(chunk)
-    return h.hexdigest()
-
-def sign_extend(value, bits):
-    sign = 1 << (bits - 1)
-    return (value & (sign - 1)) - (value & sign)
-
-def decode_bl_target(word, pc):
-    if (word & 0xFC000000) != 0x94000000:
-        return None
-    imm26 = word & 0x03FFFFFF
-    return pc + sign_extend(imm26 << 2, 28)
-
-def reg_num(name):
-    if not name:
-        return None
-    name = name.lower()
-    m = re.fullmatch(r"[xw](\d+)", name)
-    return int(m.group(1)) if m and 0 <= int(m.group(1)) <= 30 else None
-
-# --- Localiza o binário main ---
-def find_main():
-    for exefs in KIT_DIR.rglob("ExeFS"):
-        for p in exefs.iterdir():
-            if p.is_file() and p.name == "main":
-                print("[patch] main encontrado:", p)
-                return p
-    for p in KIT_DIR.rglob("main"):
-        if p.is_file():
-            print("[patch] main encontrado (fallback):", p)
-            return p
-    print("[patch] FATAL: main nao encontrado")
-    sys.exit(1)
-
-# --- Detecta CUT/OBS/OBJ_REG pela vtable do FMallocBinned3 ---
-def detect_cut(main_path):
-    data = main_path.read_bytes()
-    md   = capstone.Cs(capstone.CS_ARCH_ARM64, capstone.CS_MODE_ARM)
-    md.detail = True
-    insns = list(md.disasm(data, 0))
-    print("[patch] instrucoes disassembladas:", len(insns))
-
-    vtable_page = VTABLE_PAGE_GUEST & ~0xFFF
-    candidates  = []
-
-    for idx, insn in enumerate(insns):
-        if insn.mnemonic != "adrp":
-            continue
-        if len(insn.operands) < 2:
-            continue
-        dst = reg_num(insn.reg_name(insn.operands[0].reg))
-        if dst is None or insn.operands[1].imm != vtable_page:
-            continue
-
-        tracked = dst
-        vaddr   = vtable_page
-
-        for j in range(idx + 1, min(idx + 16, len(insns))):
-            ii = insns[j]
-            if ii.mnemonic == "add" and len(ii.operands) >= 3:
-                d = reg_num(ii.reg_name(ii.operands[0].reg))
-                s = reg_num(ii.reg_name(ii.operands[1].reg))
-                if d == tracked and s == tracked and ii.operands[2].type == ARM64_OP_IMM:
-                    vaddr = (vaddr + ii.operands[2].imm) & 0xFFFFFFFFFFFFFFFF
-            if ii.mnemonic == "str" and len(ii.operands) >= 2:
-                src = reg_num(ii.reg_name(ii.operands[0].reg))
-                if src != tracked:
-                    continue
-                base = reg_num(ii.reg_name(ii.operands[1].mem.base))
-                if base is None:
-                    continue
-                func_start = insn.address
-                for k in range(idx, max(-1, idx - 256), -1):
-                    kk = insns[k]
-                    if kk.mnemonic == "stp":
-                        ops = [kk.reg_name(o.reg).lower() if o.type == ARM64_OP_REG else "" for o in kk.operands]
-                        if "x29" in ops and "x30" in ops:
-                            func_start = kk.address
-                            break
-                candidates.append({"func": func_start, "this_reg": base, "score": 100 - min(abs(ii.operands[1].mem.disp), 32)})
-
-    if not candidates:
-        print("[patch] FATAL: construtor nao encontrado pela vtable 0x%x" % VTABLE_PAGE_GUEST)
-        sys.exit(1)
-
-    candidates.sort(key=lambda x: (-x["score"], x["func"]))
-    ctor = candidates[0]
-    print("[patch] construtor: func=0x%x this_reg=x%d" % (ctor["func"], ctor["this_reg"]))
-
-    # Acha BL que chama o construtor
-    bls = []
-    for off in range(0, len(data) - 4, 4):
-        t = decode_bl_target(u32(data, off), off)
-        if t is not None and ctor["func"] <= t <= ctor["func"] + 0x40:
-            bls.append(off)
-
-    if not bls:
-        print("[patch] FATAL: nenhum BL para o construtor encontrado")
-        sys.exit(1)
-
-    # Escolhe o melhor caller pelo obj_reg
-    insn_by_addr = {i.address: i for i in insns}
-    best = None
-    best_score = -1
-
-    for bl in bls:
-        obj_reg = ctor["this_reg"]
-        score   = 0
-        for a in range(max(0, bl - 0x80), bl, 4):
-            ii = insn_by_addr.get(a)
-            if not ii:
-                continue
-            if ii.mnemonic == "mov" and len(ii.operands) >= 2:
-                d = reg_num(ii.reg_name(ii.operands[0].reg))
-                s = reg_num(ii.reg_name(ii.operands[1].reg))
-                if d == 0 and s is not None:
-                    obj_reg = s
-                    score  += 50 + (25 if s in range(19, 29) else 0)
-                    break
-        if obj_reg in (19, 28):
-            score += 12
-        if score > best_score:
-            best_score = score
-            best = {"cut": bl, "obs": bl + 4, "obj_reg": obj_reg, "ctor": ctor["func"]}
-
-    print("[patch] CUT=0x%x OBS=0x%x OBJ_REG=x%d CTOR=0x%x" % (best["cut"], best["obs"], best["obj_reg"], best["ctor"]))
-    return best, data
-
-# --- Aplica NOP no CUT e salva ---
-def apply_nop(data, best, main_path):
-    ba = bytearray(data)
-    ba[best["cut"]:best["cut"]+4] = NOP_INSN
-    main_path.write_bytes(bytes(ba))
-    print("[patch] NOP aplicado em 0x%x" % best["cut"])
-
-# --- Gera header para hle_uemalloc.c ---
-def write_header(best):
-    root = pathlib.Path.cwd()
-    gen  = root / "dm" / "ios" / "generated"
-    gen.mkdir(parents=True, exist_ok=True)
-    h = gen / "uemalloc_autopatch.h"
-    h.write_text(
-        "#pragma once\n"
-        "#define NXNATIVE_UEMALLOC_CUT    0x%xULL\n"
-        "#define NXNATIVE_UEMALLOC_OBS    0x%xULL\n"
-        "#define NXNATIVE_UEMALLOC_OBJ_REG %d\n"
-        "#define NXNATIVE_UEMALLOC_CTOR   0x%xULL\n"
-        % (best["cut"], best["obs"], best["obj_reg"], best["ctor"])
-    )
-    print("[patch] header gerado:", h)
-
-    # Copia ao lado do hle_uemalloc.c também
-    for c in root.rglob("hle_uemalloc.c"):
-        shutil.copy2(h, c.parent / "uemalloc_autopatch.h")
-        print("[patch] header copiado para:", c.parent)
-
-# --- Invalida cache se CUT mudou ---
-def check_cache(best, main_path):
-    stamp_file = CACHE_DIR / "uemalloc_cut_stamp.json"
-    stamp = {"sha256": file_sha256(main_path), "cut": best["cut"],
-             "obs": best["obs"], "obj_reg": best["obj_reg"], "ctor": best["ctor"]}
-    old = None
-    if stamp_file.exists():
-        try:    old = json.loads(stamp_file.read_text())
-        except: pass
-    if old != stamp:
-        print("[patch] stamp mudou — invalidando cache")
-        for p in CACHE_DIR.glob("*"):
-            shutil.rmtree(p) if p.is_dir() else p.unlink()
-        CACHE_DIR.mkdir(parents=True, exist_ok=True)
-    stamp_file.write_text(json.dumps(stamp, indent=2, sort_keys=True))
-
-# --- Exporta para GITHUB_ENV ---
-def export_env(best):
-    env_file = os.environ.get("GITHUB_ENV")
-    if env_file:
-        with open(env_file, "a") as f:
-            f.write("NXNATIVE_UEMALLOC_CUT=0x%x\n"  % best["cut"])
-            f.write("NXNATIVE_UEMALLOC_OBS=0x%x\n"  % best["obs"])
-            f.write("NXNATIVE_UEMALLOC_OBJ_REG=%d\n" % best["obj_reg"])
-            f.write("NXNATIVE_UEMALLOC_CTOR=0x%x\n" % best["ctor"])
-
-# --- Main ---
-main_path       = find_main()
-best, data      = detect_cut(main_path)
-apply_nop(data, best, main_path)
-write_header(best)
-check_cache(best, main_path)
-export_env(best)
-print("[patch] concluido com sucesso")
-PYEOF
-
-          echo "[build] Iniciando build_ipa.sh"
-          chmod +x dm/ios/tools/build_ipa.sh
-          dm/ios/tools/build_ipa.sh "$RUNNER_TEMP/kit"
-
-      - name: 4. Salvar Cache dos Modulos NSO Reescritos
+      - name: 3.5 Salvar Cache dos Modulos NSO Reescritos
         uses: actions/cache/save@v4
         if: always()
         with:
           path: /Users/runner/patched_cache
           key: patched-nso-uemalloc-v7-${{ github.run_id }}
 
-      - name: 5. Upload IPA como Artefato
+      - name: 4. Publicar <Nome_do_Jogo>.ipa direto na Release
+        run: |
+          for IPA_FILE in "$RUNNER_TEMP"/*.ipa; do
+            if [ -f "$IPA_FILE" ]; then
+              gh release upload v1.0-kit "$IPA_FILE" --repo "$GITHUB_REPOSITORY" --clobber || true
+              echo "=== IPA publicado na Release v1.0-kit: $(basename "$IPA_FILE") ==="
+            fi
+          done
+
+      - name: 5. Upload do IPA nos Artifacts com o Nome do Jogo
         uses: actions/upload-artifact@v4
         with:
-          name: game-thin-ipa-${{ github.run_id }}
-          path: |
-            ${{ runner.temp }}/kit/**/*.ipa
-            *.ipa
-          if-no-files-found: warn
-          retention-days: 7
-
-      - name: 6. Publicar IPA na Release
-        if: success()
-        run: |
-          IPA_FILE=$(find "$RUNNER_TEMP/kit" "$GITHUB_WORKSPACE" -name "*.ipa" | head -n 1)
-          if [ -z "$IPA_FILE" ]; then
-            echo "Nenhum IPA encontrado para publicar"
-            exit 0
-          fi
-          TAG="build-$(date +%Y%m%d-%H%M%S)-${GITHUB_SHA::7}"
-          gh release create "$TAG" "$IPA_FILE" \
-            --title "Build $TAG" \
-            --notes "FMallocBinned3 patch v7 — CUT/OBS via vtable detector" \
-            --repo "$GITHUB_REPOSITORY" || true
+          name: ${{ env.GAME_SAFE_NAME }}_Artifact
+          path: ${{ runner.temp }}/*.ipa
+          if-no-files-found: error
