@@ -1,11 +1,10 @@
-name: 2. Build Thin IPA - Teste sem corte incorreto
+name: 2. Build Thin IPA - Auditoria 2 (construtor FMallocBinned3)
 
 on:
   push:
     branches:
       - SpkIOSzero
       - SpkIOSZero
-
   workflow_dispatch:
     inputs:
       github_kit_url:
@@ -21,22 +20,17 @@ jobs:
   build_thin_game_ipa:
     runs-on: macos-26
     timeout-minutes: 240
-
     env:
       GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
       PYTHONUNBUFFERED: "1"
       CHAIN_STAMP: ""
-
       KIT_URL: ${{ inputs.github_kit_url || 'https://github.com/joao9vegeto-stack/KintTany/releases/download/v1.0-kit/github_kit_Spk.zip' }}
-
       BASELINE_COMMIT: "306dcdfcb53d348085292e9e527339161c0536c7"
-
       EXPECTED_MAIN_SHA256: "a0f8f0644c92384ddb1baac1c21aecbeeace5bc99ad40895e216add61da78efe"
-
       EXPECTED_MAIN_BUILD_ID: "68edafd68c7bc1a1af50b82aac838018"
 
     steps:
-      - name: 1. Baixar codigo da versao que compilou
+      - name: 1. Baixar versao que compilou
         uses: actions/checkout@v4
         with:
           ref: 306dcdfcb53d348085292e9e527339161c0536c7
@@ -45,289 +39,196 @@ jobs:
         shell: bash
         run: |
           set -e
+          brew install xcodegen || true
+          pip3 install --break-system-packages lz4 capstone fonttools zstandard PyYAML
 
-          if ! command -v xcodegen >/dev/null 2>&1; then
-            brew install xcodegen
-          fi
-
-          pip3 install --break-system-packages \
-            lz4 \
-            capstone \
-            fonttools \
-            zstandard \
-            PyYAML
-
-      - name: 3. Preparar workflow original sem o patch suspeito
+      - name: 3. Preparar build com auditoria do construtor
         shell: bash
         run: |
           set -e
-
-          mkdir -p "$RUNNER_TEMP/spk-teste"
-
-          # Não usar módulos reescritos por uma execução anterior.
+          mkdir -p "$RUNNER_TEMP/spk-auditoria2"
           rm -rf /Users/runner/patched_cache
 
           python3 -u - <<'PYEOF'
           import os
           from pathlib import Path
-
           import yaml
 
-          workflow_path = Path(".github/workflows/build_game_ipa.yml")
-
-          if not workflow_path.is_file():
-              raise SystemExit(
-                  "ERRO: workflow original nao encontrado no commit base."
-              )
-
-          with workflow_path.open("r", encoding="utf-8") as f:
-              workflow = yaml.safe_load(f)
-
-          try:
-              steps = workflow["jobs"]["build_thin_game_ipa"]["steps"]
-          except (KeyError, TypeError) as exc:
-              raise SystemExit(
-                  f"ERRO: estrutura inesperada no workflow original: {exc}"
-              )
-
-          candidates = []
-
-          for step in steps:
-              name = str(step.get("name", ""))
-              command = step.get("run")
-
-              if (
-                  "Baixar github_kit.zip" in name
-                  and isinstance(command, str)
-              ):
-                  candidates.append((name, command))
-
-          if len(candidates) != 1:
-              raise SystemExit(
-                  "ERRO: esperado exatamente um passo de build original; "
-                  f"encontrados {len(candidates)}."
-              )
-
-          step_name, command = candidates[0]
-
+          wf = Path(".github/workflows/build_game_ipa.yml")
+          steps = yaml.safe_load(wf.read_text(encoding="utf-8"))["jobs"]["build_thin_game_ipa"]["steps"]
+          cands = [(str(s.get("name","")), s.get("run")) for s in steps
+                   if "Baixar github_kit.zip" in str(s.get("name","")) and isinstance(s.get("run"), str)]
+          if len(cands) != 1:
+              raise SystemExit(f"ERRO: esperado 1 passo de build antigo, encontrados {len(cands)}")
+          step_name, command = cands[0]
           if "python3 -u - << 'PYEOF'" not in command:
-              raise SystemExit(
-                  "ERRO: o workflow base nao contem o Python embutido "
-                  "esperado."
-              )
+              raise SystemExit("ERRO: pipeline embutido nao encontrado no workflow base")
 
           def replace_once(text, old, new, label):
-              count = text.count(old)
-
-              if count != 1:
-                  raise SystemExit(
-                      f"ERRO em '{label}': esperado 1 ponto de alteracao, "
-                      f"encontrados {count}. Build interrompido."
-                  )
-
+              n = text.count(old)
+              if n != 1:
+                  raise SystemExit(f"ERRO em {label}: esperado 1, encontrados {n}")
               return text.replace(old, new, 1)
 
-          # Confere que o kit contém exatamente o executável analisado.
-          old_main = 'main_bytes = (exefs / "main").read_bytes()'
+          # A. Conferir o main
+          command = replace_once(command,
+              'main_bytes = (exefs / "main").read_bytes()',
+              '''main_bytes = (exefs / "main").read_bytes()
+          import hashlib
+          _sha = hashlib.sha256(main_bytes).hexdigest()
+          _bid = main_bytes[0x40:0x50].hex()
+          print(f"=== SHA-256 main: {_sha}", flush=True)
+          print(f"=== Build ID main: {_bid}", flush=True)
+          if _sha != os.environ["EXPECTED_MAIN_SHA256"] or _bid != os.environ["EXPECTED_MAIN_BUILD_ID"]:
+              raise SystemExit("ERRO: main diferente do executavel analisado")
+          ''', "verificacao do main")
 
-          new_main = (
-              'main_bytes = (exefs / "main").read_bytes(); '
-              'import hashlib; '
-              'print("=== SHA-256 main: " + '
-              'hashlib.sha256(main_bytes).hexdigest(), flush=True); '
-              'assert hashlib.sha256(main_bytes).hexdigest() == '
-              'os.environ["EXPECTED_MAIN_SHA256"], '
-              '"ExeFS/main diferente do analisado"; '
-              'assert main_bytes[0x40:0x50].hex() == '
-              'os.environ["EXPECTED_MAIN_BUILD_ID"], '
-              '"Build ID diferente do analisado"'
-          )
+          # B. Patch automatico continua DESATIVADO (cortava o alocador de paginas)
+          command = replace_once(command,
+              "if cut_addr is not None and obs_addr is not None:",
+              'print("=== Patch automatico DESATIVADO (auditoria 2) ===", flush=True)\n'
+              "if False and cut_addr is not None and obs_addr is not None:",
+              "desativacao do patch")
 
-          command = replace_once(
-              command,
-              old_main,
-              new_main,
-              "verificacao do executavel",
-          )
+          # C. Nenhum patches.py antigo
+          command = replace_once(command,
+              "prof_dir.mkdir(parents=True, exist_ok=True)",
+              '''prof_dir.mkdir(parents=True, exist_ok=True)
+          if (prof_dir / "patches.py").exists():
+              (prof_dir / "patches.py").unlink()
+          ''', "limpeza de patches.py")
 
-          # Impede que um patches.py ja existente no perfil seja aplicado
-          # sem que este teste tenha considerado seu conteudo.
-          old_profile = 'prof_dir.mkdir(parents=True, exist_ok=True)'
+          # D. Nome do IPA
+          command = replace_once(command,
+              'ipa_filename = f"{safe_name}.ipa"',
+              'safe_name = safe_name + "_AUDITORIA2"\n          ipa_filename = f"{safe_name}.ipa"\n',
+              "nome do IPA")
 
-          new_profile = (
-              'prof_dir.mkdir(parents=True, exist_ok=True); '
-              'assert not (prof_dir / "patches.py").exists(), '
-              '"Existe patches.py no perfil: teste interrompido"'
-          )
+          # E. Dumps do construtor, do chamador, da vtable e do crash
+          command = replace_once(command,
+              'dump(0x1eab040, 0x1eab0a0, "BT main+0x1eab078")',
+              r'''dump(0x1eab040, 0x1eab0a0, "BT main+0x1eab078")
 
-          command = replace_once(
-              command,
-              old_profile,
-              new_profile,
-              "verificacao de patch preexistente",
-          )
+          print("=== AUDITORIA 2: CONSTRUTOR FMallocBinned3 ===", flush=True)
 
-          # O bloco abaixo, no workflow original, cria o CUT, a OBS e
-          # registra o build em hle_uemalloc.c. Desativamos o bloco inteiro.
-          old_condition = (
-              "if cut_addr is not None and obs_addr is not None:"
-          )
+          TEXT_LO = segs[0][1]
+          TEXT_HI = TEXT_LO + segs[0][2]
+          RO_LO, RO_HI = segs[1][1], segs[1][1] + segs[1][2]
+          DATA_LO, DATA_HI = segs[2][1], segs[2][1] + segs[2][2]
+          print(f"text {TEXT_LO:#x}..{TEXT_HI:#x}  rodata {RO_LO:#x}..{RO_HI:#x}  data {DATA_LO:#x}..{DATA_HI:#x}", flush=True)
 
-          new_condition = (
-              "if False and cut_addr is not None and obs_addr is not None:"
-          )
+          def word(a):
+              return struct.unpack_from("<I", img, a)[0]
 
-          command = replace_once(
-              command,
-              old_condition,
-              new_condition,
-              "desativacao do patch automatico",
-          )
+          def bl_target(a):
+              w = word(a)
+              if (w & 0xFC000000) != 0x94000000:
+                  return None
+              imm = w & 0x03FFFFFF
+              if imm & 0x02000000:
+                  imm -= 0x04000000
+              return a + (imm << 2)
 
-          # Nome distinto para identificar o IPA experimental.
-          old_ipa = 'ipa_filename = f"{safe_name}.ipa"'
+          # 1. Chamador do construtor: a funcao que recebe a regiao de 2 GB
+          dump(0x1e4d980, 0x1e4dc40, "CHAMADOR (bt main+0x1e4db34, regiao em main+0x1e4da74)")
 
-          new_ipa = (
-              'safe_name = f"{safe_name}_SEM_CORTE"; '
-              'ipa_filename = f"{safe_name}.ipa"'
-          )
+          for a in range(0x1e4da00, 0x1e4dc40, 4):
+              t = bl_target(a)
+              if t is not None:
+                  print(f"  BL em main+{a:#x} -> main+{t:#x}", flush=True)
 
-          command = replace_once(
-              command,
-              old_ipa,
-              new_ipa,
-              "nome do IPA",
-          )
+          ctor_call = 0x1e4db30
+          ctor = bl_target(ctor_call)
+          print(f"=== candidato a chamada do construtor: main+{ctor_call:#x} -> {('main+%#x' % ctor) if ctor else 'NAO E BL'}", flush=True)
 
-          output = Path(os.environ["RUNNER_TEMP"]) / "spk-build-teste.sh"
-          output.write_text(command + "\n", encoding="utf-8")
+          # 2. Inicio do construtor (funcao que contem main+0x1eab288)
+          if ctor is None:
+              # procura o prologo para tras a partir do bt
+              a = 0x1eab288
+              while a > 0x1ea8000:
+                  w = word(a)
+                  if (w & 0xFFE07FFF) == 0xA9A07BFD or (w & 0xFFC003FF) == 0xD10003FF:  # stp x29,x30,[sp,#-N]! / sub sp,sp,#N
+                      prev = word(a - 4)
+                      if prev in (0xD65F03C0, 0x00000000) or (prev & 0xFC000000) == 0x14000000:
+                          ctor = a
+                          break
+                  a -= 4
+              print(f"=== inicio do construtor por prologo: {('main+%#x' % ctor) if ctor else 'nao encontrado'}", flush=True)
 
-          print(f"Commit base: {os.environ['BASELINE_COMMIT']}")
-          print(f"Etapa original: {step_name}")
-          print("CUT e OBS automaticos: DESATIVADOS")
-          print("Cache de modulos antigos: DESATIVADO")
-          print(f"Script preparado: {output}")
+          if ctor:
+              dump(ctor, min(ctor + 0x200, 0x1eab300), "INICIO DO CONSTRUTOR")
+
+              # 3. Vtable: adrp/add que produz endereco em .data e e gravado com str
+              print("=== candidatos a vtable (adrp+add -> data, seguido de str) ===", flush=True)
+              end = 0x1eab300
+              a = ctor
+              while a < end - 8:
+                  w = word(a)
+                  if (w & 0x9F000000) == 0x90000000:  # ADRP
+                      rd = w & 0x1F
+                      immlo = (w >> 29) & 3
+                      immhi = (w >> 5) & 0x7FFFF
+                      imm = (immhi << 2) | immlo
+                      if imm & 0x100000:
+                          imm -= 0x200000
+                      page = (a & ~0xFFF) + (imm << 12)
+                      w2 = word(a + 4)
+                      if (w2 & 0xFF800000) == 0x91000000 and (w2 & 0x1F) == rd and ((w2 >> 5) & 0x1F) == rd:  # ADD xd, xd, #imm
+                          addr = page + ((w2 >> 10) & 0xFFF)
+                          if DATA_LO <= addr < DATA_HI or RO_LO <= addr < RO_HI:
+                              # str xd, [xn] ou [xn,#imm] nas 6 instrucoes seguintes
+                              for b in range(a + 8, a + 32, 4):
+                                  w3 = word(b)
+                                  if (w3 & 0xFFC00000) == 0xF9000000 and (w3 & 0x1F) == rd:
+                                      base = (w3 >> 5) & 0x1F
+                                      off = ((w3 >> 10) & 0xFFF) * 8
+                                      words = []
+                                      for k in range(34):
+                                          p = addr + k * 8
+                                          if p + 8 <= len(img):
+                                              words.append(struct.unpack_from("<Q", img, p)[0])
+                                      n_text = sum(1 for v in words if TEXT_LO <= v < TEXT_HI)
+                                      n_zero = sum(1 for v in words if v == 0)
+                                      print(f"  main+{a:#x}: vtable? main+{addr:#x}  str x{rd} -> [x{base}, #{off:#x}]  "
+                                            f"palavras: {n_text} em text, {n_zero} zero (no arquivo; relocs podem zerar)", flush=True)
+                                      for k, v in enumerate(words[:34]):
+                                          tag = "text" if TEXT_LO <= v < TEXT_HI else ("0" if v == 0 else "?")
+                                          print(f"      [{k:2d}] {v:#018x} {tag}", flush=True)
+                                      break
+                  a += 4
+
+          # 4. Caminho de falta de memoria e crash
+          dump(0x1eab240, 0x1eab2c0, "CHAMADA QUE FALTOU MEMORIA (bt main+0x1eab28c)")
+          dump(0x1e4e0a0, 0x1e4e170, "SAIDA DE FALTA DE MEMORIA (bt 0x1e4e0a8 / 0x1e4e0cc)")
+          dump(0x1e4e478, 0x1e4e560, "FUNCAO DE ERRO (bt 0x1e4e478)")
+          dump(0x42d2f60, 0x42d3060, "LOCAL DO CRASH (pc main+0x42d3048, x0=0)")
+          print("=== FIM AUDITORIA 2 ===", flush=True)
+          ''', "dumps auditoria 2")
+
+          out = Path(os.environ["RUNNER_TEMP"]) / "spk-build.sh"
+          out.write_text(command + "\n", encoding="utf-8")
+          print(f"Etapa base: {step_name}\nScript: {out}")
           PYEOF
 
-      - name: 4. Baixar kit e compilar IPA de teste
+      - name: 4. Baixar kit e compilar
         shell: bash
         run: |
           set -o pipefail
+          bash "$RUNNER_TEMP/spk-build.sh" 2>&1 | tee "$RUNNER_TEMP/spk-auditoria2/build.log"
 
-          bash "$RUNNER_TEMP/spk-build-teste.sh" 2>&1 \
-            | tee "$RUNNER_TEMP/spk-teste/build.log"
-
-      - name: 5. Registrar resultado e cortes aplicados
-        if: always()
-        shell: bash
-        run: |
-          python3 -u - <<'PYEOF'
-          import hashlib
-          import os
-          from pathlib import Path
-
-          rt = Path(os.environ["RUNNER_TEMP"])
-          report_dir = rt / "spk-teste"
-          report_dir.mkdir(parents=True, exist_ok=True)
-
-          lines = [
-              "TESTE SEM CORTE AUTOMATICO DO FMALLOC",
-              "",
-              f"Commit disparador: {os.environ.get('GITHUB_SHA', '')}",
-              f"Commit base: {os.environ.get('BASELINE_COMMIT', '')}",
-              f"Execucao: {os.environ.get('GITHUB_RUN_ID', '')}",
-              "",
-              "Este IPA e experimental.",
-              "A cadeia de shaders ainda nao foi corrigida.",
-              "",
-          ]
-
-          main = rt / "kit" / "ExeFS" / "main"
-
-          if main.is_file():
-              digest = hashlib.sha256()
-
-              with main.open("rb") as f:
-                  while True:
-                      chunk = f.read(1024 * 1024)
-
-                      if not chunk:
-                          break
-
-                      digest.update(chunk)
-
-              with main.open("rb") as f:
-                  header = f.read(0x60)
-
-              lines.append(f"main SHA-256: {digest.hexdigest()}")
-
-              if len(header) >= 0x50 and header[:4] == b"NSO0":
-                  lines.append(
-                      f"main Build ID: {header[0x40:0x50].hex()}"
-                  )
-          else:
-              lines.append("ExeFS/main nao encontrado.")
-
-          lines.append("")
-
-          for pattern in (
-              "*-work/build/patched_v0/main.cuts.tsv",
-              "*-work/build/patched_v0/main.obs.tsv",
-          ):
-              paths = sorted(rt.glob(pattern))
-
-              if not paths:
-                  lines.append(f"Nao encontrado: {pattern}")
-                  continue
-
-              for path in paths:
-                  lines.append(f"=== {path.name} ===")
-
-                  try:
-                      content = path.read_text(
-                          encoding="utf-8",
-                          errors="replace",
-                      )
-                      lines.append(content if content else "(vazio)")
-                  except OSError as exc:
-                      lines.append(f"Erro ao ler arquivo: {exc}")
-
-                  lines.append("")
-
-          ipas = sorted(rt.glob("*.ipa"))
-
-          if ipas:
-              lines.append("IPAs gerados:")
-
-              for ipa in ipas:
-                  lines.append(
-                      f"  {ipa.name} ({ipa.stat().st_size} bytes)"
-                  )
-          else:
-              lines.append("Nenhum IPA encontrado.")
-
-          report = report_dir / "resumo.txt"
-          report.write_text(
-              "\n".join(lines) + "\n",
-              encoding="utf-8",
-          )
-
-          print(report.read_text(encoding="utf-8"))
-          PYEOF
-
-      - name: 6. Salvar diagnostico
+      - name: 5. Salvar auditoria
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: spk-teste-sem-corte-logs-${{ github.run_id }}
-          path: ${{ runner.temp }}/spk-teste/
+          name: spk-auditoria2-${{ github.run_id }}
+          path: ${{ runner.temp }}/spk-auditoria2/
+          retention-days: 7
+
+      - name: 6. Salvar IPA (igual ao anterior, so para referencia)
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: spk-ipa-auditoria2-${{ github.run_id }}
+          path: ${{ runner.temp }}/*_AUDITORIA2.ipa
           if-no-files-found: warn
-          retention-days: 7
-
-      - name: 7. Salvar IPA experimental
-        uses: actions/upload-artifact@v4
-        with:
-          name: spk-ipa-sem-corte-${{ github.run_id }}
-          path: ${{ runner.temp }}/*_SEM_CORTE.ipa
-          if-no-files-found: error
-          retention-days: 7
+          retention-days: 3
