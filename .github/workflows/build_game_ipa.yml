@@ -37,8 +37,9 @@ jobs:
         uses: actions/cache/restore@v4
         with:
           path: /Users/runner/patched_cache
-          key: patched-nso-uemalloc-v4-${{ github.run_id }}
+          key: patched-nso-uemalloc-v5-${{ github.run_id }}
           restore-keys: |
+            patched-nso-uemalloc-v5-
             patched-nso-uemalloc-v4-
             patched-nso-
 
@@ -160,18 +161,15 @@ jobs:
               img[mo:mo + sz] = raw
 
           md = Cs(CS_ARCH_ARM64, CS_MODE_ARM)
-          print("=== Disassembly da regiao GCreateMalloc / FMallocBinned3 (0x1e4df00 .. 0x1e4e500) ===", flush=True)
           cut_addr = None
           cut_orig_hex = None
           obs_addr = None
-          obs_orig_hex = None
+          obs_orig_word = None
 
-          insns = list(md.disasm(bytes(img[0x1e4df00:0x1e4e500]), 0x1e4df00))
+          insns = list(md.disasm(bytes(img[0x1e4e180:0x1e4e240]), 0x1e4e180))
+          print("=== Disassembly completo de GCreateMalloc (0x1e4e180 .. 0x1e4e210) ===", flush=True)
           for idx, ins in enumerate(insns):
-              if 0x1e4e050 <= ins.address <= 0x1e4e490:
-                  print(f"  0x{ins.address:x}:\t{ins.mnemonic}\t{ins.op_str}\t[{ins.bytes.hex()}]")
-
-          for idx, ins in enumerate(insns):
+              print(f"  0x{ins.address:x}:\t{ins.mnemonic}\t{ins.op_str}\t[bytes={ins.bytes.hex()}]")
               if ins.address == 0x1e4e1f8 and ins.mnemonic == "bl":
                   cut_addr = ins.address
                   cut_orig_hex = ins.bytes.hex()
@@ -179,43 +177,31 @@ jobs:
                       nxt = insns[j]
                       if nxt.mnemonic in ("mov", "orr", "str") and "pc" not in nxt.op_str:
                           obs_addr = nxt.address
-                          obs_orig_hex = nxt.bytes.hex()
+                          # IMPORTANTE: OBS exige o uint32_t formatado como f'{w:08x}' (ex: aa1503e1)!
+                          w32 = struct.unpack_from("<I", img, obs_addr)[0]
+                          obs_orig_word = f"{w32:08x}"
                           break
-                  break
 
           vtable_addr = 0x92fa000
-          if vtable_addr + 32 * 8 <= len(img):
-              slots = [struct.unpack_from("<Q", img, vtable_addr + k * 8)[0] for k in range(32)]
-              print(f"=== Slots da vtable em 0x{vtable_addr:x}: {[hex(s) for s in slots[:26]]} ===", flush=True)
-
-          print("=== Disassembly de 0x1e4db00 .. 0x1e4db60 ===", flush=True)
-          for ins in md.disasm(bytes(img[0x1e4db00:0x1e4db60]), 0x1e4db00):
-              print(f"  0x{ins.address:x}:\t{ins.mnemonic}\t{ins.op_str}\t[{ins.bytes.hex()}]")
-
           prof_dir = games_dir / tid_str
           prof_dir.mkdir(parents=True, exist_ok=True)
 
           need_repatch = False
           if cut_addr is not None and obs_addr is not None:
-              for ins in md.disasm(bytes(img[0x1e4e1c0:0x1e4e220]), 0x1e4e1c0):
-                  print(f"  [GCreateMalloc] 0x{ins.address:x}:\t{ins.mnemonic}\t{ins.op_str}\t[{ins.bytes.hex()}]")
-
               ue_layout = "UE5"
               if vtable_addr + 26 * 8 <= len(img):
                   slot4_fn = struct.unpack_from("<Q", img, vtable_addr + 4 * 8)[0]
                   slot7_fn = struct.unpack_from("<Q", img, vtable_addr + 7 * 8)[0]
                   if slot4_fn < len(img):
                       s4_asm = " ; ".join(f"{i.mnemonic} {i.op_str}" for i in md.disasm(bytes(img[slot4_fn:slot4_fn+32]), slot4_fn))
-                      print(f"  [vtable slot 4 @ 0x{slot4_fn:x}]: {s4_asm}", flush=True)
                       if "#0x18" in s4_asm:
                           ue_layout = "UE4_27"
                   if slot7_fn < len(img):
                       s7_asm = " ; ".join(f"{i.mnemonic} {i.op_str}" for i in md.disasm(bytes(img[slot7_fn:slot7_fn+32]), slot7_fn))
-                      print(f"  [vtable slot 7 @ 0x{slot7_fn:x}]: {s7_asm}", flush=True)
                       if "#0x30" in s7_asm:
                           ue_layout = "UE5"
 
-              print(f"=== Layout detectado para FMallocBinned3: {ue_layout} | cut=0x{cut_addr:x} ({cut_orig_hex}) | obs=0x{obs_addr:x} ({obs_orig_hex}) ===", flush=True)
+              print(f"=== Layout detectado para FMallocBinned3: {ue_layout} | cut=0x{cut_addr:x} ({cut_orig_hex}) | obs=0x{obs_addr:x} ({obs_orig_word}) ===", flush=True)
 
               patches_py = prof_dir / "patches.py"
               patches_lines = [
@@ -227,7 +213,7 @@ jobs:
                   "}",
                   "OBS = {",
                   f"    '{main_bid}': [",
-                  f"        (0x{obs_addr:x}, 21, '{obs_orig_hex}', 'GCreateMalloc: install the host vtable before use'),",
+                  f"        (0x{obs_addr:x}, 21, '{obs_orig_word}', 'GCreateMalloc: install the host vtable before use'),",
                   "    ],",
                   "}",
               ]
@@ -236,11 +222,17 @@ jobs:
               uemalloc_c = Path("dm/host/hle_uemalloc.c")
               if uemalloc_c.exists():
                   uetxt = uemalloc_c.read_text(encoding="utf-8")
+                  print("=== Conteudo original de dm/host/hle_uemalloc.c ===", flush=True)
+                  print(uetxt, flush=True)
                   if main_bid not in uetxt:
                       new_entry = f'    {{ "{main_bid}", "{game_title}", {ue_layout}, 0, 0x{vtable_addr:x}, 0x{cut_addr:x} }},\n'
                       target_hdr = "static const struct { const char *build, *what; int layout; uint64_t obj, vtable, cut; } k_ue[] = {\n"
                       uetxt = uetxt.replace(target_hdr, target_hdr + new_entry)
-                      uetxt = uetxt.replace("uint64_t obj = regs[19];", "uint64_t obj = regs[19] ? regs[19] : (regs[20] ? regs[20] : regs[0]);")
+                      # Suporta tanto x19 quanto x20/x21/x0 para o ponteiro do objeto FMallocBinned3 em GCreateMalloc
+                      uetxt = uetxt.replace(
+                          "uint64_t obj = regs[19];",
+                          "uint64_t obj = (regs[19] > 0x100000000ULL) ? regs[19] : ((regs[20] > 0x100000000ULL) ? regs[20] : ((regs[21] > 0x100000000ULL) ? regs[21] : regs[0]));"
+                      )
                       uemalloc_c.write_text(uetxt, encoding="utf-8")
                       print("=== Build ID registrado com sucesso em dm/host/hle_uemalloc.c! ===", flush=True)
                       need_repatch = True
@@ -329,7 +321,7 @@ jobs:
           b_dir = msl_ios_base / f"b-{chain_stamp}"
           b_dir.mkdir(parents=True, exist_ok=True)
 
-          # Cache por TitleID
+          # Cache por TitleID (migra também de patched_cache_010035F022078000 caso exista)
           cache_root = Path("/Users/runner/patched_cache")
           cache_dir = cache_root / tid_str
           cache_dir.mkdir(parents=True, exist_ok=True)
@@ -399,7 +391,7 @@ jobs:
         if: always()
         with:
           path: /Users/runner/patched_cache
-          key: patched-nso-uemalloc-v4-${{ github.run_id }}
+          key: patched-nso-uemalloc-v5-${{ github.run_id }}
 
       - name: 4. Publicar <Nome_do_Jogo>.ipa direto na Release
         run: |
