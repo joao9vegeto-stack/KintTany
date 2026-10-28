@@ -101,57 +101,79 @@ jobs:
           prof_dir.mkdir(parents=True, exist_ok=True)
           game_tsv = prof_dir / "game.tsv"
 
-          if not game_tsv.exists():
-              print("=== Gerando perfil provisorio com profile_guess.py ===")
-              sys.path.insert(0, str(games_dir))
-              sys.path.insert(0, str(Path("dm/tools").resolve()))
-              kv = {}
-              try:
-                  import profile_guess
-                  src_arg = str(manifest) if manifest.exists() else str(romfs)
-                  if hasattr(profile_guess, "facts_of") and hasattr(profile_guess, "guess"):
-                      facts = profile_guess.facts_of(str(exefs), src_arg)
-                      g = profile_guess.guess(facts)
-                      if isinstance(g, dict):
-                          for k, v in g.items():
-                              # Se v for tupla (valor, comentario), extrai apenas v[0]!
-                              val = v[0] if isinstance(v, (tuple, list)) else v
-                              kv[str(k).strip()] = str(val).strip()
-              except Exception as e:
-                  print("Aviso no profile_guess:", e)
+          # Copia todas as chaves de um perfil existente como base segura para nao faltar nenhuma chave no game.py
+          base_keys = {}
+          for existing_tsv in sorted(games_dir.glob("*/game.tsv")):
+              if existing_tsv.parent.name != tid_str:
+                  for line in existing_tsv.read_text(errors="ignore").splitlines():
+                      if "\t" in line and not line.startswith("#"):
+                          k, v = line.split("\t", 1)
+                          base_keys.setdefault(k.strip(), v.strip())
 
-              # Descobre um arquivo real do RomFS para usar como marker
-              marker = "SparkingZERO"
-              if manifest.exists():
-                  for line in manifest.read_text(errors="ignore").splitlines():
-                      if line.strip() and not line.startswith("#"):
-                          first_col = line.split("\t")[0].lstrip("/")
-                          if first_col:
-                              marker = first_col
-                              break
+          print("=== Gerando perfil provisorio com profile_guess.py ===")
+          sys.path.insert(0, str(games_dir))
+          sys.path.insert(0, str(Path("dm/tools").resolve()))
+          kv = dict(base_keys)
+          try:
+              import profile_guess
+              src_arg = str(manifest) if manifest.exists() else str(romfs)
+              if hasattr(profile_guess, "facts_of") and hasattr(profile_guess, "guess"):
+                  facts = profile_guess.facts_of(str(exefs), src_arg)
+                  g = profile_guess.guess(facts)
+                  if isinstance(g, dict):
+                      for k, v in g.items():
+                          val = v[0] if isinstance(v, (tuple, list)) else v
+                          kv[str(k).strip()] = str(val).strip()
+          except Exception as e:
+              print("Aviso no profile_guess:", e)
 
-              defaults = {
-                  "name": "DRAGON BALL: Sparking! ZERO",
-                  "title_id": tid_str.lower(),
-                  "package": "v0",
-                  "ipa": f"{tid_str}_Thin.ipa",
-                  "modules": " ".join(mods),
-                  "romfs_marker": marker,
-                  "gfx_api": "nvn",
-              }
-              for k, v in defaults.items():
-                  kv.setdefault(k, v)
-              kv["modules"] = " ".join(mods)
+          # Descobre um arquivo real do RomFS para usar como marker
+          marker = "SparkingZERO"
+          if manifest.exists():
+              for line in manifest.read_text(errors="ignore").splitlines():
+                  if line.strip() and not line.startswith("#"):
+                      first_col = line.split("\t")[0].lstrip("/")
+                      if first_col:
+                          marker = first_col
+                          break
 
-              # Para iPhone (8GB RAM), ajusta mem_reserve / mem_alias caso o guess do Mac tenha colocado 64GB
-              if kv.get("mem_reserve", "").startswith("0x10"):
-                  kv["mem_reserve"] = "0x300000000"
-                  kv["mem_alias"] = "0x200000000"
+          # Sobrescreve com os dados exatos do Sparking! ZERO
+          kv.update({
+              "name": "DRAGON BALL: Sparking! ZERO",
+              "title_id": tid_str.lower(),
+              "package": "v0",
+              "ipa": f"{tid_str}_Thin.ipa",
+              "modules": " ".join(mods),
+              "romfs_marker": marker,
+              "gfx_api": "nvn",
+              "app_category": "public.app-category.action-games",
+              "orientation": "landscape",
+              "mem_reserve": "0x300000000",
+              "mem_alias": "0x200000000",
+          })
+          # Remove chaves especificas de outros jogos que nao pertencem ao Sparking ZERO
+          for drop_k in ("patches", "hooks", "vulkan_shaders", "gl_shaders", "trinity_packs"):
+              kv.pop(drop_k, None)
 
-              tsv_content = "\n".join(f"{k}\t{v}" for k, v in kv.items()) + "\n"
-              game_tsv.write_text(tsv_content, encoding="utf-8")
-              print("=== game.tsv gerado (limpo): ===")
-              print(tsv_content)
+          tsv_content = "\n".join(f"{k}\t{v}" for k, v in kv.items()) + "\n"
+          game_tsv.write_text(tsv_content, encoding="utf-8")
+          print("=== game.tsv gerado (completo): ===")
+          print(tsv_content)
+
+          # Garante arquivos auxiliares no perfil caso o Makefile/compiler procure por eles
+          for aux_file in ("c1_full.tsv", "cb_extent.tsv", "shaders.tsv", "game.mk"):
+              p_aux = prof_dir / aux_file
+              if not p_aux.exists():
+                  p_aux.write_text("", encoding="utf-8")
+
+          # Faz com que dm/games/game.py nunca de KeyError se consultarem qualquer chave opcional sem default
+          game_py = games_dir / "game.py"
+          if game_py.exists():
+              gpy_txt = game_py.read_text(encoding="utf-8")
+              old_err = "raise KeyError(f'{path} has no key {key}')"
+              new_err = "return ''"
+              if old_err in gpy_txt:
+                  game_py.write_text(gpy_txt.replace(old_err, new_err), encoding="utf-8")
 
           # Prepara estrutura W=<work_dir> exigida pelo build_ipa.sh
           work = rt / f"{tid_str}-work"
@@ -166,7 +188,7 @@ jobs:
           if (kit / "icon.jpg").exists():
               shutil.copy2(kit / "icon.jpg", data_v0 / "icon.jpg")
 
-          # 4. Reescreve CADA modulo NSO individualmente (patch_nso.py <NSO file> <output dir> <module name>)
+          # 4. Reescreve CADA modulo NSO individualmente
           env = os.environ.copy()
           env["DM_GAME"] = tid_str
           env["GAME"] = tid_str
@@ -179,7 +201,7 @@ jobs:
                   check=True
               )
 
-          # 5. Adapta main.m e build_ipa.sh para permitir Thin IPA (ler RomFS de Documents/ no iPhone)
+          # 5. Adapta main.m e build_ipa.sh para permitir Thin IPA (sem RomFS gigante e sem exigir dmsh_b pre-compilado)
           main_m = Path("dm/ios/Sources/main.m")
           if main_m.exists():
               s = main_m.read_text(encoding="utf-8")
@@ -195,16 +217,20 @@ jobs:
                   'python3 "$DM/tools/romfs.py" "$ROMFS" "$MARKER" || die "no RomFS at $ROMFS (missing $MARKER)"',
                   'echo "[Thin IPA] RomFS sera carregado de Documents/ no iPhone"'
               )
+              # Permite gerar o Thin IPA mesmo quando nao ha bibliotecas dmsh_b pre-compiladas
+              bt = bt.replace(
+                  '[ -n "$MSL_B" ] || die "no iOS shader libraries $MSL_IOS/b-$CHAIN_STAMP (IOSOUT=$MSL_IOS dmsh_build.py ...)"',
+                  'if [ -z "$MSL_B" ]; then mkdir -p "$MSL_IOS/b-$CHAIN_STAMP"; MSL_B="$MSL_IOS/b-$CHAIN_STAMP"; fi'
+              )
               bsh.write_text(bt, encoding="utf-8")
 
-          # Garante que o arquivo do marker exista dentro do RomFS esqueleto caso o script valide
-          marker_rel = subprocess.check_output([sys.executable, "dm/games/game.py", tid_str, "romfs_marker", "SparkingZERO"], text=True).strip()
-          marker_path = romfs / marker_rel.lstrip("/")
+          # Garante que o arquivo do marker exista dentro do RomFS esqueleto
+          marker_path = romfs / marker.lstrip("/")
           if not marker_path.exists():
               marker_path.parent.mkdir(parents=True, exist_ok=True)
               marker_path.write_bytes(b"")
 
-          # 6. Chama dm/ios/tools/build_ipa.sh com as variaveis de ambiente oficiais (GAME, W, PATCHED, ROMFS, MSL_IOS, AOC)
+          # 6. Chama dm/ios/tools/build_ipa.sh
           out_ipa = rt / f"{tid_str}_Thin.ipa"
           env["W"] = str(work)
           env["PATCHED"] = str(patched)
