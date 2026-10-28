@@ -1,0 +1,91 @@
+name: M9.0 lift (gowa-fixes lifter)
+on:
+  workflow_dispatch:
+  push:
+    paths: ['.github/workflows/m90-lift.yml']
+jobs:
+  lift:
+    runs-on: ubuntu-latest
+    timeout-minutes: 180
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with: { python-version: '3.11' }
+      - name: Clone fork gowa-fixes (pinned) and gowa-pc
+        run: |
+          git clone -q --branch gowa-fixes https://github.com/RichardFontoura/ps3recomp.git ps3recomp
+          git -C ps3recomp checkout -q f6ab60baf37662bd712592b7ef9f66891972a5fc
+          git clone -q https://github.com/RichardFontoura/gowa-pc.git gowa-pc
+          git -C gowa-pc log -1 --format='gowa-pc %H %ad' --date=short
+          pip install -q -r ps3recomp/requirements.txt ninja
+          sudo apt-get install -y -q clang cmake ninja-build p7zip-full >/dev/null
+      - name: Fetch ELF from private repo
+        env: { TOKEN: "${{ secrets.GOWA_ELF_TOKEN }}" }
+        run: |
+          mkdir -p gowa-pc/game
+          curl -fsSL -H "Authorization: Bearer $TOKEN" -H "Accept: application/vnd.github.raw" \
+            "https://api.github.com/repos/joao9vegeto-stack/gowa-elf-private/contents/GOWA.ELF" \
+            -o gowa-pc/game/GOWA.update.ELF
+          ln -sf GOWA.update.ELF gowa-pc/game/EBOOT.ELF
+          ls -la gowa-pc/game/
+          python3 - <<'EOF'
+          d=open('gowa-pc/game/GOWA.update.ELF','rb').read(64)
+          assert d[:4]==b'\x7fELF', f"not an ELF: {d[:4]!r}"
+          print("ELF OK, class", d[4], "machine", int.from_bytes(d[18:20],'big'))
+          EOF
+      - name: Lift PPU
+        working-directory: gowa-pc
+        run: |
+          set -o pipefail
+          PS3RECOMP=../ps3recomp scripts/lift.sh 2>&1 | tee ../lift-ppu.log | tail -n 60
+      - name: Analyze and extract SPU
+        working-directory: gowa-pc
+        continue-on-error: true
+        run: |
+          set -o pipefail
+          PS3RECOMP=../ps3recomp scripts/analyze.sh 2>&1 | tee ../analyze.log | tail -n 60
+          python3 scripts/extract_jobmods_elf.py game/EBOOT.ELF analysis/jobmods 2>&1 | tee ../jobmods.log | tail -n 40
+          echo "--- spu_images ---"; ls -la analysis/spu_images/ 2>/dev/null || echo "NENHUMA"
+          echo "--- jobmods ---";    ls -la analysis/jobmods/    2>/dev/null || echo "NENHUM"
+      - name: Lift SPU
+        working-directory: gowa-pc
+        continue-on-error: true
+        run: |
+          set -o pipefail
+          PS3RECOMP=../ps3recomp scripts/lift_spu.sh 2>&1 | tee ../lift-spu.log | tail -n 80
+      - name: Inventory
+        working-directory: gowa-pc
+        run: |
+          {
+          echo "=== recompiled/ ==="; find recompiled -type f | wc -l; du -sh recompiled 2>/dev/null
+          find recompiled -name 'ppu_recomp_*.cpp' | wc -l
+          echo "=== spu/ ==="; find spu -type f 2>/dev/null | wc -l; du -sh spu 2>/dev/null
+          find spu -name 'spu_recomp.c' 2>/dev/null
+          grep -rn 'spu_pic_register\|0xA2C\|0x0A2C' spu/ 2>/dev/null | head -n 20
+          } | tee ../inventory.txt
+      - name: Bundle
+        working-directory: gowa-pc
+        run: |
+          mkdir -p ../bundle/AscensionRecomp-M90-Lift
+          cp -r recompiled ../bundle/AscensionRecomp-M90-Lift/ppu
+          [ -d spu ] && cp -r spu ../bundle/AscensionRecomp-M90-Lift/spu || true
+          cp -r analysis ../bundle/AscensionRecomp-M90-Lift/analysis 2>/dev/null || true
+          cd ../bundle && zip -qr -9 AscensionRecomp-M90-Lift.zip AscensionRecomp-M90-Lift
+          sha256sum AscensionRecomp-M90-Lift.zip | tee ../m90-lift-sha256.txt
+          ls -la AscensionRecomp-M90-Lift.zip
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: m90-lift-logs
+          path: |
+            lift-ppu.log
+            analyze.log
+            jobmods.log
+            lift-spu.log
+            inventory.txt
+            m90-lift-sha256.txt
+      - uses: actions/upload-artifact@v4
+        with:
+          name: m90-lift-bundle
+          path: bundle/AscensionRecomp-M90-Lift.zip
+          retention-days: 7
