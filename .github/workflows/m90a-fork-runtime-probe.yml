@@ -1,0 +1,50 @@
+name: m90a-fork-runtime-probe
+on:
+  workflow_dispatch:
+  push:
+    paths: ['.github/workflows/m90a-fork-runtime-probe.yml']
+jobs:
+  probe:
+    runs-on: macos-14
+    steps:
+      - uses: actions/checkout@v4
+      - name: Clone fork + gowa-pc
+        run: |
+          git clone https://github.com/RichardFontoura/ps3recomp ps3recomp
+          git -C ps3recomp checkout f6ab60baf37662bd712592b7ef9f66891972a5fc
+          git clone --depth 1 https://github.com/RichardFontoura/gowa-pc gowa-pc
+          { echo "ps3recomp $(git -C ps3recomp rev-parse HEAD)"; echo "gowa-pc $(git -C gowa-pc rev-parse HEAD)"; } | tee pins.txt
+      - name: Static report
+        run: |
+          mkdir -p report
+          echo "=== runtime tree ==="            > report/tree.txt
+          find ps3recomp/runtime -type f \( -name '*.c' -o -name '*.cpp' -o -name '*.h' -o -name '*.hpp' \) | sort >> report/tree.txt
+          grep -rniE 'immintrin|xmmintrin|emmintrin|smmintrin|__m128|_mm_|__builtin_ia32|x86-64' ps3recomp/runtime gowa-pc --include='*.c' --include='*.cpp' --include='*.h' --include='*.hpp' --include='CMakeLists.txt' --include='*.cmake' > report/x86-intrinsics.txt || true
+          grep -rniE 'vulkan|VkDevice|vk[A-Z]' ps3recomp/runtime gowa-pc --include='*.c' --include='*.cpp' --include='*.h' --include='*.hpp' -l > report/vulkan-files.txt || true
+          grep -rnoE 'getenv\("[A-Za-z0-9_]+"' ps3recomp/runtime gowa-pc | sed -E 's/.*getenv\("([^"]+)"/\1/' | sort -u > report/getenv-vars.txt
+          cp gowa-pc/CMakeLists.txt report/gowa-pc.CMakeLists.txt
+          grep -rln 'int main' gowa-pc --include='*.c' --include='*.cpp' > report/main-files.txt || true
+          for f in $(cat report/main-files.txt); do echo "=== $f ===" >> report/main-sources.txt; cat "$f" >> report/main-sources.txt; done
+          wc -l report/*.txt
+      - name: Syntax-check runtime for iOS arm64 (no lift)
+        run: |
+          SDK=$(xcrun --sdk iphoneos --show-sdk-path)
+          : > report/ios-syntax.log
+          find ps3recomp/runtime -type f \( -name '*.c' -o -name '*.cpp' \) | sort | while read f; do
+            case "$f" in *.cpp) std=-std=c++20;; *) std=-std=c11;; esac
+            if xcrun clang -fsyntax-only -target arm64-apple-ios16.0 -isysroot "$SDK" $std -Ips3recomp/runtime -Ips3recomp -Igowa-pc "$f" >> report/ios-syntax.log 2>&1; then
+              echo "OK   $f" >> report/ios-syntax.log
+            else
+              echo "FAIL $f" >> report/ios-syntax.log
+            fi
+          done
+          echo "--- summary ---" | tee -a report/ios-syntax.log
+          grep -c '^OK' report/ios-syntax.log | sed 's/^/OK: /' | tee -a report/ios-syntax.log
+          grep -c '^FAIL' report/ios-syntax.log | sed 's/^/FAIL: /' | tee -a report/ios-syntax.log
+          grep -hoE "fatal error: '[^']+' file not found" report/ios-syntax.log | sort | uniq -c | sort -rn | head -n 30 | tee report/missing-headers.txt
+      - uses: actions/upload-artifact@v4
+        with:
+          name: m90a-fork-runtime-ios
+          path: |
+            pins.txt
+            report/
