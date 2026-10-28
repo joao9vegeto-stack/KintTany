@@ -2038,6 +2038,7 @@ static void emitBuild66CodeAudit(uint8_t *base) {
 
 static uint32_t loadGuestBe32(const uint8_t *base, uint32_t address);
 
+// B69_AUDIT_ADDRS: 0x824278C0 0x824ACB80 0x82B3DE00 0x82690640 0x82690D80 0x826CEFC0 0x82C4D440 0x826903F0 0x826901E0 0x827E1250 0x82B49DE0 0x82B4AAE0 0x82B4AE00 0x822A1BC0 0x822A01C0 0x824E6F10 0x82C257F0 0x823704C0 0x82370700 0x82371D80 0x825524C0 0x82493820 0x824E7140 0x82200150
 static void logCodeAuditBuild69(uint8_t *base) {
  if(!base||g_build69AuditEmitted.exchange(true,std::memory_order_acq_rel))return;
  struct R{uint32_t b,e;const char*n;}; static constexpr R rs[]={
