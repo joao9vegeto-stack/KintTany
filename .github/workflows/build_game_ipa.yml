@@ -51,29 +51,51 @@ jobs:
 
           python3 -u - <<'PYEOF'
           import os
+          import textwrap
           from pathlib import Path
           import yaml
 
           wf = Path(".github/workflows/build_game_ipa.yml")
           steps = yaml.safe_load(wf.read_text(encoding="utf-8"))["jobs"]["build_thin_game_ipa"]["steps"]
-          cands = [(str(s.get("name","")), s.get("run")) for s in steps
-                   if "Baixar github_kit.zip" in str(s.get("name","")) and isinstance(s.get("run"), str)]
+          cands = [(str(s.get("name", "")), s.get("run")) for s in steps
+                   if "Baixar github_kit.zip" in str(s.get("name", "")) and isinstance(s.get("run"), str)]
           if len(cands) != 1:
               raise SystemExit(f"ERRO: esperado 1 passo de build antigo, encontrados {len(cands)}")
           step_name, command = cands[0]
           if "python3 -u - << 'PYEOF'" not in command:
               raise SystemExit("ERRO: pipeline embutido nao encontrado no workflow base")
 
-          def replace_once(text, old, new, label):
-              n = text.count(old)
-              if n != 1:
-                  raise SystemExit(f"ERRO em {label}: esperado 1, encontrados {n}")
-              return text.replace(old, new, 1)
+          lines = command.split("\n")
+
+          def find_unique(stripped_text):
+              hits = [i for i, l in enumerate(lines) if l.strip() == stripped_text]
+              if len(hits) != 1:
+                  raise SystemExit(f"ERRO: linha '{stripped_text}' encontrada {len(hits)}x (esperado 1)")
+              return hits[0]
+
+          def indent_of(i):
+              l = lines[i]
+              return l[: len(l) - len(l.lstrip())]
+
+          def insert_after(stripped_text, block):
+              """Insere o bloco (dedentado) logo depois da linha, com a mesma indentacao dela."""
+              i = find_unique(stripped_text)
+              ind = indent_of(i)
+              new = [ind + l if l.strip() else "" for l in textwrap.dedent(block).strip("\n").split("\n")]
+              lines[i + 1:i + 1] = new
+
+          def insert_before(stripped_text, block):
+              i = find_unique(stripped_text)
+              ind = indent_of(i)
+              new = [ind + l if l.strip() else "" for l in textwrap.dedent(block).strip("\n").split("\n")]
+              lines[i:i] = new
+
+          def replace_line(stripped_text, new_stripped):
+              i = find_unique(stripped_text)
+              lines[i] = indent_of(i) + new_stripped
 
           # A. Conferir o main
-          command = replace_once(command,
-              'main_bytes = (exefs / "main").read_bytes()',
-              '''main_bytes = (exefs / "main").read_bytes()
+          insert_after('main_bytes = (exefs / "main").read_bytes()', '''
           import hashlib
           _sha = hashlib.sha256(main_bytes).hexdigest()
           _bid = main_bytes[0x40:0x50].hex()
@@ -81,34 +103,26 @@ jobs:
           print(f"=== Build ID main: {_bid}", flush=True)
           if _sha != os.environ["EXPECTED_MAIN_SHA256"] or _bid != os.environ["EXPECTED_MAIN_BUILD_ID"]:
               raise SystemExit("ERRO: main diferente do executavel analisado")
-          ''', "verificacao do main")
+          ''')
 
-          # B. Patch automatico continua DESATIVADO (cortava o alocador de paginas)
-          command = replace_once(command,
-              "if cut_addr is not None and obs_addr is not None:",
-              'print("=== Patch automatico DESATIVADO (auditoria 2) ===", flush=True)\n'
-              "if False and cut_addr is not None and obs_addr is not None:",
-              "desativacao do patch")
+          # B. Patch automatico DESATIVADO (cortava o alocador de paginas)
+          insert_before("if cut_addr is not None and obs_addr is not None:",
+                        'print("=== Patch automatico DESATIVADO (auditoria 2) ===", flush=True)')
+          replace_line("if cut_addr is not None and obs_addr is not None:",
+                       "if False and cut_addr is not None and obs_addr is not None:")
 
           # C. Nenhum patches.py antigo
-          command = replace_once(command,
-              "prof_dir.mkdir(parents=True, exist_ok=True)",
-              '''prof_dir.mkdir(parents=True, exist_ok=True)
+          insert_after("prof_dir.mkdir(parents=True, exist_ok=True)", '''
           if (prof_dir / "patches.py").exists():
               (prof_dir / "patches.py").unlink()
-          ''', "limpeza de patches.py")
+          ''')
 
-          # D. Nome do IPA
-          command = replace_once(command,
-              'ipa_filename = f"{safe_name}.ipa"',
-              'safe_name = safe_name + "_AUDITORIA2"\n          ipa_filename = f"{safe_name}.ipa"\n',
-              "nome do IPA")
+          # D. Nome do IPA (mesma indentacao da linha original)
+          insert_before('ipa_filename = f"{safe_name}.ipa"',
+                        'safe_name = safe_name + "_AUDITORIA2"')
 
           # E. Dumps do construtor, do chamador, da vtable e do crash
-          command = replace_once(command,
-              'dump(0x1eab040, 0x1eab0a0, "BT main+0x1eab078")',
-              r'''dump(0x1eab040, 0x1eab0a0, "BT main+0x1eab078")
-
+          insert_after('dump(0x1eab040, 0x1eab0a0, "BT main+0x1eab078")', r'''
           print("=== AUDITORIA 2: CONSTRUTOR FMallocBinned3 ===", flush=True)
 
           TEXT_LO = segs[0][1]
@@ -129,9 +143,7 @@ jobs:
                   imm -= 0x04000000
               return a + (imm << 2)
 
-          # 1. Chamador do construtor: a funcao que recebe a regiao de 2 GB
           dump(0x1e4d980, 0x1e4dc40, "CHAMADOR (bt main+0x1e4db34, regiao em main+0x1e4da74)")
-
           for a in range(0x1e4da00, 0x1e4dc40, 4):
               t = bl_target(a)
               if t is not None:
@@ -141,13 +153,11 @@ jobs:
           ctor = bl_target(ctor_call)
           print(f"=== candidato a chamada do construtor: main+{ctor_call:#x} -> {('main+%#x' % ctor) if ctor else 'NAO E BL'}", flush=True)
 
-          # 2. Inicio do construtor (funcao que contem main+0x1eab288)
           if ctor is None:
-              # procura o prologo para tras a partir do bt
               a = 0x1eab288
               while a > 0x1ea8000:
                   w = word(a)
-                  if (w & 0xFFE07FFF) == 0xA9A07BFD or (w & 0xFFC003FF) == 0xD10003FF:  # stp x29,x30,[sp,#-N]! / sub sp,sp,#N
+                  if (w & 0xFFE07FFF) == 0xA9A07BFD or (w & 0xFFC003FF) == 0xD10003FF:
                       prev = word(a - 4)
                       if prev in (0xD65F03C0, 0x00000000) or (prev & 0xFC000000) == 0x14000000:
                           ctor = a
@@ -157,14 +167,12 @@ jobs:
 
           if ctor:
               dump(ctor, min(ctor + 0x200, 0x1eab300), "INICIO DO CONSTRUTOR")
-
-              # 3. Vtable: adrp/add que produz endereco em .data e e gravado com str
-              print("=== candidatos a vtable (adrp+add -> data, seguido de str) ===", flush=True)
+              print("=== candidatos a vtable (adrp+add -> data/rodata, seguido de str) ===", flush=True)
               end = 0x1eab300
               a = ctor
               while a < end - 8:
                   w = word(a)
-                  if (w & 0x9F000000) == 0x90000000:  # ADRP
+                  if (w & 0x9F000000) == 0x90000000:
                       rd = w & 0x1F
                       immlo = (w >> 29) & 3
                       immhi = (w >> 5) & 0x7FFFF
@@ -173,10 +181,9 @@ jobs:
                           imm -= 0x200000
                       page = (a & ~0xFFF) + (imm << 12)
                       w2 = word(a + 4)
-                      if (w2 & 0xFF800000) == 0x91000000 and (w2 & 0x1F) == rd and ((w2 >> 5) & 0x1F) == rd:  # ADD xd, xd, #imm
+                      if (w2 & 0xFF800000) == 0x91000000 and (w2 & 0x1F) == rd and ((w2 >> 5) & 0x1F) == rd:
                           addr = page + ((w2 >> 10) & 0xFFF)
                           if DATA_LO <= addr < DATA_HI or RO_LO <= addr < RO_HI:
-                              # str xd, [xn] ou [xn,#imm] nas 6 instrucoes seguintes
                               for b in range(a + 8, a + 32, 4):
                                   w3 = word(b)
                                   if (w3 & 0xFFC00000) == 0xF9000000 and (w3 & 0x1F) == rd:
@@ -190,20 +197,36 @@ jobs:
                                       n_text = sum(1 for v in words if TEXT_LO <= v < TEXT_HI)
                                       n_zero = sum(1 for v in words if v == 0)
                                       print(f"  main+{a:#x}: vtable? main+{addr:#x}  str x{rd} -> [x{base}, #{off:#x}]  "
-                                            f"palavras: {n_text} em text, {n_zero} zero (no arquivo; relocs podem zerar)", flush=True)
-                                      for k, v in enumerate(words[:34]):
+                                            f"palavras: {n_text} em text, {n_zero} zero", flush=True)
+                                      for k, v in enumerate(words):
                                           tag = "text" if TEXT_LO <= v < TEXT_HI else ("0" if v == 0 else "?")
                                           print(f"      [{k:2d}] {v:#018x} {tag}", flush=True)
                                       break
                   a += 4
 
-          # 4. Caminho de falta de memoria e crash
           dump(0x1eab240, 0x1eab2c0, "CHAMADA QUE FALTOU MEMORIA (bt main+0x1eab28c)")
           dump(0x1e4e0a0, 0x1e4e170, "SAIDA DE FALTA DE MEMORIA (bt 0x1e4e0a8 / 0x1e4e0cc)")
           dump(0x1e4e478, 0x1e4e560, "FUNCAO DE ERRO (bt 0x1e4e478)")
           dump(0x42d2f60, 0x42d3060, "LOCAL DO CRASH (pc main+0x42d3048, x0=0)")
           print("=== FIM AUDITORIA 2 ===", flush=True)
-          ''', "dumps auditoria 2")
+          ''')
+
+          command = "\n".join(lines)
+
+          # Confere que o Python embutido compila antes de rodar
+          import re
+          m = re.search(r"python3 -u - << 'PYEOF'\n(.*?)\nPYEOF", command, re.S)
+          if not m:
+              raise SystemExit("ERRO: nao consegui isolar o Python embutido para validar")
+          try:
+              compile(m.group(1), "<embutido>", "exec")
+          except SyntaxError as e:
+              ctx = m.group(1).split("\n")
+              lo, hi = max(0, e.lineno - 4), min(len(ctx), e.lineno + 3)
+              for n in range(lo, hi):
+                  print(f"{n+1:5d}: {ctx[n]}")
+              raise SystemExit(f"ERRO de sintaxe no Python embutido: {e}")
+          print("Python embutido: sintaxe OK")
 
           out = Path(os.environ["RUNNER_TEMP"]) / "spk-build.sh"
           out.write_text(command + "\n", encoding="utf-8")
