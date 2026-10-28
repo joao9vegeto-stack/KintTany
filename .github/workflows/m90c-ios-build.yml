@@ -23,12 +23,17 @@ jobs:
       - name: Place bundle + verify
         run: |
           set -e
-          find bundle -maxdepth 3 | head -n 20
+          Z=$(find bundle -name '*.zip' | head -n1)
+          if [ -n "$Z" ]; then unzip -q "$Z" -d bundle/unpacked; fi
+          find bundle -maxdepth 4 -type d | head -n 30
           R=$(find bundle -type d -name recompiled | head -n1); S=$(find bundle -type d -name spu | head -n1)
+          echo "recompiled=$R spu=$S"
+          test -n "$R" -a -n "$S"
           rm -rf gowa-pc/recompiled gowa-pc/spu; cp -r "$R" gowa-pc/recompiled; cp -r "$S" gowa-pc/spu
+          ls gowa-pc/recompiled; ls gowa-pc/spu | head -n 20
           test $(ls gowa-pc/recompiled | wc -l) -eq 7
           test -f gowa-pc/spu/jobmods_register.c -a -f gowa-pc/spu/spu_workloads.c
-          test $(python3 -c "import json;print(len(json.load(open('gowa-pc/spu/jobmods_manifest.json'))))") -eq 31
+          test $(python3 -c "import json;d=json.load(open('gowa-pc/spu/jobmods_manifest.json'));print(len(d) if isinstance(d,list) else len(d.get('jobmods',d)))") -eq 31
       - name: Patch win32_compat.c for iOS (mach_vm_region -> vm_region_64)
         run: |
           mkdir -p report
