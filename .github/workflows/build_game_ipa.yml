@@ -1,4 +1,4 @@
-name: 2. Build Thin IPA - Auditoria 2 (construtor FMallocBinned3)
+name: 2. Build Thin IPA - Auditoria 3 (vtable por relocacoes + objeto)
 
 on:
   push:
@@ -42,16 +42,15 @@ jobs:
           brew install xcodegen || true
           pip3 install --break-system-packages lz4 capstone fonttools zstandard PyYAML
 
-      - name: 3. Preparar build com auditoria do construtor
+      - name: 3. Preparar build com auditoria 3
         shell: bash
         run: |
           set -e
-          mkdir -p "$RUNNER_TEMP/spk-auditoria2"
+          mkdir -p "$RUNNER_TEMP/spk-auditoria3"
           rm -rf /Users/runner/patched_cache
 
           python3 -u - <<'PYEOF'
-          import os
-          import textwrap
+          import os, re, textwrap
           from pathlib import Path
           import yaml
 
@@ -63,195 +62,251 @@ jobs:
               raise SystemExit(f"ERRO: esperado 1 passo de build antigo, encontrados {len(cands)}")
           step_name, command = cands[0]
           if "python3 -u - << 'PYEOF'" not in command:
-              raise SystemExit("ERRO: pipeline embutido nao encontrado no workflow base")
+              raise SystemExit("ERRO: pipeline embutido nao encontrado")
+
+          # Guarda, para o fatos.txt, como o pipeline antigo registrava o build no hle_uemalloc.c
+          fatos = Path(os.environ["RUNNER_TEMP"]) / "spk-auditoria3" / "fatos.txt"
+          with fatos.open("w", encoding="utf-8") as f:
+              f.write("=== COMO O PIPELINE ANTIGO EDITAVA hle_uemalloc.c / patches.py ===\n")
+              for n, l in enumerate(command.split("\n"), 1):
+                  if re.search(r"hle_uemalloc|k_ue|patches\.py|CUTS|OBS|UE5|layout|vtable", l):
+                      f.write(f"{n:5d}: {l}\n")
+              f.write("\n")
 
           lines = command.split("\n")
 
-          def find_unique(stripped_text):
-              hits = [i for i, l in enumerate(lines) if l.strip() == stripped_text]
+          def find_unique(s):
+              hits = [i for i, l in enumerate(lines) if l.strip() == s]
               if len(hits) != 1:
-                  raise SystemExit(f"ERRO: linha '{stripped_text}' encontrada {len(hits)}x (esperado 1)")
+                  raise SystemExit(f"ERRO: linha '{s}' encontrada {len(hits)}x")
               return hits[0]
 
           def indent_of(i):
               l = lines[i]
               return l[: len(l) - len(l.lstrip())]
 
-          def insert_after(stripped_text, block):
-              """Insere o bloco (dedentado) logo depois da linha, com a mesma indentacao dela."""
-              i = find_unique(stripped_text)
-              ind = indent_of(i)
-              new = [ind + l if l.strip() else "" for l in textwrap.dedent(block).strip("\n").split("\n")]
-              lines[i + 1:i + 1] = new
+          def insert_after(s, block):
+              i = find_unique(s); ind = indent_of(i)
+              lines[i + 1:i + 1] = [ind + l if l.strip() else "" for l in textwrap.dedent(block).strip("\n").split("\n")]
 
-          def insert_before(stripped_text, block):
-              i = find_unique(stripped_text)
-              ind = indent_of(i)
-              new = [ind + l if l.strip() else "" for l in textwrap.dedent(block).strip("\n").split("\n")]
-              lines[i:i] = new
+          def insert_before(s, block):
+              i = find_unique(s); ind = indent_of(i)
+              lines[i:i] = [ind + l if l.strip() else "" for l in textwrap.dedent(block).strip("\n").split("\n")]
 
-          def replace_line(stripped_text, new_stripped):
-              i = find_unique(stripped_text)
-              lines[i] = indent_of(i) + new_stripped
+          def replace_line(s, new):
+              i = find_unique(s); lines[i] = indent_of(i) + new
 
-          # A. Conferir o main
           insert_after('main_bytes = (exefs / "main").read_bytes()', '''
           import hashlib
           _sha = hashlib.sha256(main_bytes).hexdigest()
           _bid = main_bytes[0x40:0x50].hex()
           print(f"=== SHA-256 main: {_sha}", flush=True)
-          print(f"=== Build ID main: {_bid}", flush=True)
           if _sha != os.environ["EXPECTED_MAIN_SHA256"] or _bid != os.environ["EXPECTED_MAIN_BUILD_ID"]:
               raise SystemExit("ERRO: main diferente do executavel analisado")
           ''')
 
-          # B. Patch automatico DESATIVADO (cortava o alocador de paginas)
           insert_before("if cut_addr is not None and obs_addr is not None:",
-                        'print("=== Patch automatico DESATIVADO (auditoria 2) ===", flush=True)')
+                        'print("=== Patch automatico DESATIVADO (auditoria 3) ===", flush=True)')
           replace_line("if cut_addr is not None and obs_addr is not None:",
                        "if False and cut_addr is not None and obs_addr is not None:")
 
-          # C. Nenhum patches.py antigo
           insert_after("prof_dir.mkdir(parents=True, exist_ok=True)", '''
           if (prof_dir / "patches.py").exists():
               (prof_dir / "patches.py").unlink()
           ''')
 
-          # D. Nome do IPA (mesma indentacao da linha original)
-          insert_before('ipa_filename = f"{safe_name}.ipa"',
-                        'safe_name = safe_name + "_AUDITORIA2"')
+          insert_before('ipa_filename = f"{safe_name}.ipa"', 'safe_name = safe_name + "_AUDITORIA3"')
 
-          # E. Dumps do construtor, do chamador, da vtable e do crash
           insert_after('dump(0x1eab040, 0x1eab0a0, "BT main+0x1eab078")', r'''
-          print("=== AUDITORIA 2: CONSTRUTOR FMallocBinned3 ===", flush=True)
+          # ================= AUDITORIA 3 =================
+          from capstone import Cs, CS_ARCH_ARM64, CS_MODE_ARM
+          _md = Cs(CS_ARCH_ARM64, CS_MODE_ARM)
+          _fatos = Path(os.environ["RUNNER_TEMP"]) / "spk-auditoria3" / "fatos.txt"
+          _out = []
+          def F(s=""):
+              print("FATO: " + s, flush=True)
+              _out.append(s)
 
-          TEXT_LO = segs[0][1]
-          TEXT_HI = TEXT_LO + segs[0][2]
+          TEXT_LO, TEXT_HI = segs[0][1], segs[0][1] + segs[0][2]
           RO_LO, RO_HI = segs[1][1], segs[1][1] + segs[1][2]
           DATA_LO, DATA_HI = segs[2][1], segs[2][1] + segs[2][2]
-          print(f"text {TEXT_LO:#x}..{TEXT_HI:#x}  rodata {RO_LO:#x}..{RO_HI:#x}  data {DATA_LO:#x}..{DATA_HI:#x}", flush=True)
+          BSS_HI = DATA_HI + bss if "bss" in dir() else DATA_HI
+          def u32(a): return struct.unpack_from("<I", img, a)[0]
+          def u64(a): return struct.unpack_from("<Q", img, a)[0]
+          def s64(a): return struct.unpack_from("<q", img, a)[0]
 
-          def word(a):
-              return struct.unpack_from("<I", img, a)[0]
+          F("=== SEGMENTOS ===")
+          F(f"text {TEXT_LO:#x}..{TEXT_HI:#x} rodata {RO_LO:#x}..{RO_HI:#x} data {DATA_LO:#x}..{DATA_HI:#x} fim bss {BSS_HI:#x}")
 
-          def bl_target(a):
-              w = word(a)
-              if (w & 0xFC000000) != 0x94000000:
-                  return None
+          # ---- 1. Chamador: instrucoes antes da chamada do construtor ----
+          CTOR_CALL = 0x1e4db30
+          F("=== DISASM 0x1e4dac0..0x1e4db48 (chamador do construtor) ===")
+          code = img[0x1e4dac0:0x1e4db48]
+          for ins in _md.disasm(code, 0x1e4dac0):
+              F(f"  {ins.address:#x}: {ins.mnemonic} {ins.op_str}   [{img[ins.address:ins.address+4].hex()}]")
+
+          w = u32(CTOR_CALL)
+          if (w & 0xFC000000) == 0x94000000:
               imm = w & 0x03FFFFFF
-              if imm & 0x02000000:
-                  imm -= 0x04000000
-              return a + (imm << 2)
+              if imm & 0x02000000: imm -= 0x04000000
+              F(f"=== CHAMADA: main+{CTOR_CALL:#x} bl main+{CTOR_CALL + (imm << 2):#x}  bytes={img[CTOR_CALL:CTOR_CALL+4].hex()}")
+          else:
+              F(f"=== ATENCAO: main+{CTOR_CALL:#x} NAO e BL (word {w:#x})")
 
-          dump(0x1e4d980, 0x1e4dc40, "CHAMADOR (bt main+0x1e4db34, regiao em main+0x1e4da74)")
-          for a in range(0x1e4da00, 0x1e4dc40, 4):
-              t = bl_target(a)
-              if t is not None:
-                  print(f"  BL em main+{a:#x} -> main+{t:#x}", flush=True)
+          # ---- 2. Origem de x0 na chamada ----
+          F("=== ORIGEM DE x0 ===")
+          a = CTOR_CALL - 4
+          found = None
+          while a >= 0x1e4da00:
+              w = u32(a)
+              if (w & 0xFFE0FFFF) == 0xAA0003E0:      # mov x0, xN
+                  found = ("mov", (w >> 16) & 0x1F, a); break
+              if (w & 0xFF80001F) == 0x91000000:       # add x0, xN, #imm
+                  found = ("add", (w >> 5) & 0x1F, a, (w >> 10) & 0xFFF); break
+              if (w & 0x9F00001F) == 0x90000000:       # adrp x0
+                  immlo = (w >> 29) & 3; immhi = (w >> 5) & 0x7FFFF
+                  imm = (immhi << 2) | immlo
+                  if imm & 0x100000: imm -= 0x200000
+                  found = ("adrp", (a & ~0xFFF) + (imm << 12), a); break
+              if (w & 0xFC000000) == 0x94000000:       # bl: x0 = retorno
+                  found = ("bl", None, a); break
+              a -= 4
+          obj_fixed = None
+          if found is None:
+              F("x0 nao definido entre 0x1e4da00 e a chamada")
+          elif found[0] == "mov":
+              F(f"x0 <- x{found[1]} em main+{found[2]:#x}  (objeto esta em x{found[1]})")
+              # tenta ver se xN veio de adrp/add fixo
+              n = found[1]; b = found[2] - 4
+              while b >= 0x1e4da00:
+                  w2 = u32(b)
+                  if (w2 & 0xFF80001F) == (0x91000000 | n) and ((w2 >> 5) & 0x1F) == n:
+                      w3 = u32(b - 4)
+                      if (w3 & 0x9F00001F) == (0x90000000 | n):
+                          immlo = (w3 >> 29) & 3; immhi = (w3 >> 5) & 0x7FFFF
+                          imm = (immhi << 2) | immlo
+                          if imm & 0x100000: imm -= 0x200000
+                          obj_fixed = ((b - 4) & ~0xFFF) + (imm << 12) + ((w2 >> 10) & 0xFFF)
+                          F(f"x{n} = endereco fixo main+{obj_fixed:#x} (adrp/add em main+{b-4:#x})")
+                      break
+                  if (w2 & 0x1F) == n and (w2 & 0xFC000000) in (0xAA000000, 0xF9400000, 0x94000000):
+                      F(f"x{n} escrito por outra instrucao em main+{b:#x}: {img[b:b+4].hex()}")
+                      break
+                  b -= 4
+          elif found[0] == "add":
+              w3 = u32(found[2] - 4)
+              if (w3 & 0x9F00001F) == (0x90000000 | found[1]):
+                  immlo = (w3 >> 29) & 3; immhi = (w3 >> 5) & 0x7FFFF
+                  imm = (immhi << 2) | immlo
+                  if imm & 0x100000: imm -= 0x200000
+                  obj_fixed = ((found[2] - 4) & ~0xFFF) + (imm << 12) + found[3]
+                  F(f"x0 = endereco fixo main+{obj_fixed:#x} (adrp/add em main+{found[2]-4:#x})")
+              else:
+                  F(f"x0 = x{found[1]} + {found[3]:#x} em main+{found[2]:#x}")
+          elif found[0] == "adrp":
+              F(f"x0 = adrp main+{found[1]:#x} em main+{found[2]:#x} (sem add?)")
+          else:
+              F(f"x0 vem do retorno de bl em main+{found[2]:#x} (objeto alocado em tempo de execucao)")
+          if obj_fixed is not None:
+              where = "bss" if obj_fixed >= DATA_HI else ("data" if obj_fixed >= DATA_LO else "?")
+              F(f"OBJETO FIXO: main+{obj_fixed:#x} ({where})")
 
-          ctor_call = 0x1e4db30
-          ctor = bl_target(ctor_call)
-          print(f"=== candidato a chamada do construtor: main+{ctor_call:#x} -> {('main+%#x' % ctor) if ctor else 'NAO E BL'}", flush=True)
+          # ---- 3. Vtable real via relocacoes ----
+          VT = 0x8703ab8
+          F("=== RELOCACOES ===")
+          relmap = {}
+          try:
+              mod0 = u32(0x4)
+              if img[mod0:mod0+4] != b"MOD0":
+                  F(f"MOD0 nao encontrado em {mod0:#x}")
+              else:
+                  dyn = mod0 + struct.unpack_from("<i", img, mod0 + 4)[0]
+                  rela = relasz = relaent = 0
+                  d = dyn
+                  while True:
+                      tag, val = struct.unpack_from("<QQ", img, d)
+                      if tag == 0: break
+                      if tag == 7: rela = val
+                      if tag == 8: relasz = val
+                      if tag == 9: relaent = val
+                      d += 16
+                  F(f"DT_RELA={rela:#x} DT_RELASZ={relasz:#x} DT_RELAENT={relaent:#x}")
+                  relaent = relaent or 24
+                  lo, hi = VT - 0x20, VT + 0x300
+                  for off in range(rela, rela + relasz, relaent):
+                      r_off, r_info, r_add = struct.unpack_from("<QQq", img, off)
+                      if lo <= r_off < hi:
+                          relmap[r_off] = (r_info & 0xFFFFFFFF, r_info >> 32, r_add)
+          except Exception as e:
+              F(f"erro lendo relocacoes: {e}")
 
-          if ctor is None:
-              a = 0x1eab288
-              while a > 0x1ea8000:
-                  w = word(a)
-                  if (w & 0xFFE07FFF) == 0xA9A07BFD or (w & 0xFFC003FF) == 0xD10003FF:
-                      prev = word(a - 4)
-                      if prev in (0xD65F03C0, 0x00000000) or (prev & 0xFC000000) == 0x14000000:
-                          ctor = a
-                          break
-                  a -= 4
-              print(f"=== inicio do construtor por prologo: {('main+%#x' % ctor) if ctor else 'nao encontrado'}", flush=True)
+          F(f"=== VTABLE main+{VT:#x} (via relocacoes; tipo 1027=RELATIVE, 257=ABS64) ===")
+          for k in range(-2, 40):
+              p = VT + k * 8
+              r = relmap.get(p)
+              if r:
+                  typ, sym, add = r
+                  tag = "text" if TEXT_LO <= add < TEXT_HI else ("rodata" if RO_LO <= add < RO_HI else ("data" if DATA_LO <= add < BSS_HI else "?"))
+                  F(f"  [{k:3d}] main+{p:#x}: tipo {typ} sym {sym} -> main+{add:#x} {tag}")
+              else:
+                  F(f"  [{k:3d}] main+{p:#x}: sem relocacao (valor no arquivo {u64(p):#x})")
+          nslots = 0
+          for k in range(0, 40):
+              r = relmap.get(VT + k * 8)
+              if r and TEXT_LO <= r[2] < TEXT_HI:
+                  nslots += 1
+              else:
+                  break
+          F(f"SLOTS CONSECUTIVOS EM TEXT A PARTIR DE main+{VT:#x}: {nslots}  (UE5=26, UE5.6=32)")
 
-          if ctor:
-              dump(ctor, min(ctor + 0x200, 0x1eab300), "INICIO DO CONSTRUTOR")
-              print("=== candidatos a vtable (adrp+add -> data/rodata, seguido de str) ===", flush=True)
-              end = 0x1eab300
-              a = ctor
-              while a < end - 8:
-                  w = word(a)
-                  if (w & 0x9F000000) == 0x90000000:
-                      rd = w & 0x1F
-                      immlo = (w >> 29) & 3
-                      immhi = (w >> 5) & 0x7FFFF
-                      imm = (immhi << 2) | immlo
-                      if imm & 0x100000:
-                          imm -= 0x200000
-                      page = (a & ~0xFFF) + (imm << 12)
-                      w2 = word(a + 4)
-                      if (w2 & 0xFF800000) == 0x91000000 and (w2 & 0x1F) == rd and ((w2 >> 5) & 0x1F) == rd:
-                          addr = page + ((w2 >> 10) & 0xFFF)
-                          if DATA_LO <= addr < DATA_HI or RO_LO <= addr < RO_HI:
-                              for b in range(a + 8, a + 32, 4):
-                                  w3 = word(b)
-                                  if (w3 & 0xFFC00000) == 0xF9000000 and (w3 & 0x1F) == rd:
-                                      base = (w3 >> 5) & 0x1F
-                                      off = ((w3 >> 10) & 0xFFF) * 8
-                                      words = []
-                                      for k in range(34):
-                                          p = addr + k * 8
-                                          if p + 8 <= len(img):
-                                              words.append(struct.unpack_from("<Q", img, p)[0])
-                                      n_text = sum(1 for v in words if TEXT_LO <= v < TEXT_HI)
-                                      n_zero = sum(1 for v in words if v == 0)
-                                      print(f"  main+{a:#x}: vtable? main+{addr:#x}  str x{rd} -> [x{base}, #{off:#x}]  "
-                                            f"palavras: {n_text} em text, {n_zero} zero", flush=True)
-                                      for k, v in enumerate(words):
-                                          tag = "text" if TEXT_LO <= v < TEXT_HI else ("0" if v == 0 else "?")
-                                          print(f"      [{k:2d}] {v:#018x} {tag}", flush=True)
-                                      break
-                  a += 4
+          # ---- 4. Como a vtable e gravada no construtor ----
+          F("=== DISASM 0x1eaacdc..0x1eaad30 (inicio do construtor) ===")
+          for ins in _md.disasm(img[0x1eaacdc:0x1eaad30], 0x1eaacdc):
+              F(f"  {ins.address:#x}: {ins.mnemonic} {ins.op_str}")
 
-          dump(0x1eab240, 0x1eab2c0, "CHAMADA QUE FALTOU MEMORIA (bt main+0x1eab28c)")
-          dump(0x1e4e0a0, 0x1e4e170, "SAIDA DE FALTA DE MEMORIA (bt 0x1e4e0a8 / 0x1e4e0cc)")
-          dump(0x1e4e478, 0x1e4e560, "FUNCAO DE ERRO (bt 0x1e4e478)")
-          dump(0x42d2f60, 0x42d3060, "LOCAL DO CRASH (pc main+0x42d3048, x0=0)")
-          print("=== FIM AUDITORIA 2 ===", flush=True)
+          with _fatos.open("a", encoding="utf-8") as fh:
+              fh.write("\n".join(_out) + "\n")
+          print(f"=== fatos gravados em {_fatos} ===", flush=True)
+          # ================= FIM AUDITORIA 3 =================
           ''')
 
           command = "\n".join(lines)
-
-          # Confere que o Python embutido compila antes de rodar
-          import re
           m = re.search(r"python3 -u - << 'PYEOF'\n(.*?)\nPYEOF", command, re.S)
           if not m:
-              raise SystemExit("ERRO: nao consegui isolar o Python embutido para validar")
+              raise SystemExit("ERRO: nao isolei o Python embutido")
           try:
               compile(m.group(1), "<embutido>", "exec")
           except SyntaxError as e:
               ctx = m.group(1).split("\n")
-              lo, hi = max(0, e.lineno - 4), min(len(ctx), e.lineno + 3)
-              for n in range(lo, hi):
+              for n in range(max(0, e.lineno - 4), min(len(ctx), e.lineno + 3)):
                   print(f"{n+1:5d}: {ctx[n]}")
-              raise SystemExit(f"ERRO de sintaxe no Python embutido: {e}")
+              raise SystemExit(f"ERRO de sintaxe: {e}")
           print("Python embutido: sintaxe OK")
 
           out = Path(os.environ["RUNNER_TEMP"]) / "spk-build.sh"
           out.write_text(command + "\n", encoding="utf-8")
-          print(f"Etapa base: {step_name}\nScript: {out}")
+          print(f"Etapa base: {step_name}")
           PYEOF
 
       - name: 4. Baixar kit e compilar
         shell: bash
         run: |
           set -o pipefail
-          bash "$RUNNER_TEMP/spk-build.sh" 2>&1 | tee "$RUNNER_TEMP/spk-auditoria2/build.log"
+          bash "$RUNNER_TEMP/spk-build.sh" 2>&1 | tee "$RUNNER_TEMP/spk-auditoria3/build.log"
 
       - name: 5. Salvar auditoria
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: spk-auditoria2-${{ github.run_id }}
-          path: ${{ runner.temp }}/spk-auditoria2/
+          name: spk-auditoria3-${{ github.run_id }}
+          path: ${{ runner.temp }}/spk-auditoria3/
           retention-days: 7
 
-      - name: 6. Salvar IPA (igual ao anterior, so para referencia)
+      - name: 6. Salvar IPA (referencia)
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: spk-ipa-auditoria2-${{ github.run_id }}
-          path: ${{ runner.temp }}/*_AUDITORIA2.ipa
+          name: spk-ipa-auditoria3-${{ github.run_id }}
+          path: ${{ runner.temp }}/*_AUDITORIA3.ipa
           if-no-files-found: warn
           retention-days: 3
