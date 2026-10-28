@@ -82,7 +82,7 @@ jobs:
           cmake -S gowa-pc -B build -G Ninja \
             -DCMAKE_SYSTEM_NAME=iOS -DCMAKE_OSX_ARCHITECTURES=arm64 \
             -DCMAKE_OSX_DEPLOYMENT_TARGET=16.0 -DCMAKE_OSX_SYSROOT=iphoneos \
-            -DCMAKE_BUILD_TYPE=Release \
+            -DCMAKE_BUILD_TYPE=Release -DCMAKE_SKIP_INSTALL_RULES=ON \
             -DPS3RECOMP_DIR="$PWD/ps3recomp" -DRECOMP_DIR="$PWD/gowa-pc/recompiled" \
             2>&1 | tee report/cmake-configure.log
       - name: Build runtime library only
@@ -98,8 +98,8 @@ jobs:
       - name: Symbols
         continue-on-error: true
         run: |
-          B=$(find build -type f -perm +111 -name 'Gow*' -o -type f -name '*.a' | head -n 5); echo "$B" | tee report/outputs.txt
-          for x in $B; do nm "$x" 2>/dev/null | grep -E 'gowa_spu_register_all|spu_func_00000A2C|rsx_metal|ppu_hle_call' | head -n 20; done | tee report/symbols.txt
+          B=$(find build -type f -perm +111 \( -name 'GowAscensionRecomp' -o -name '*.dylib' -o -name '*.a' \) | tee report/outputs.txt)
+          for x in $B; do echo "== $x"; file "$x"; nm "$x" 2>/dev/null | grep -cE 'gowa_|spu_job_|ppu_' ; done | tee -a report/outputs.txt
       - uses: actions/upload-artifact@v4
         with: { name: m90c-report, path: report/ }
 
