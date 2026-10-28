@@ -1,0 +1,135 @@
+name: 2. Build Game Thin IPA (from github_kit.zip)
+
+on:
+  push:
+    branches:
+      - SpkIOSzero
+      - SpkIOSZero
+    paths:
+      - '.github/workflows/build_game_ipa.yml'
+  workflow_dispatch:
+    inputs:
+      github_kit_url:
+        description: 'Link direto do github_kit.zip na Release'
+        required: true
+        default: 'https://github.com/joao9vegeto-stack/KintTany/releases/download/v1.0-kit/github_kit_Spk.zip'
+
+permissions:
+  contents: write
+
+jobs:
+  build_thin_game_ipa:
+    runs-on: macos-15
+    timeout-minutes: 240
+    env:
+      KIT_URL: ${{ inputs.github_kit_url || 'https://github.com/joao9vegeto-stack/KintTany/releases/download/v1.0-kit/github_kit_Spk.zip' }}
+    steps:
+      - name: 1. Checkout da Branch SpkIOSzero
+        uses: actions/checkout@v4
+
+      - name: 2. Instalar Dependencias (xcodegen + Python packages)
+        run: |
+          brew install xcodegen
+          pip3 install --break-system-packages lz4 capstone fonttools backports.zstd
+
+      - name: 3. Baixar github_kit.zip e Compilar Thin IPA Nativo do Jogo
+        run: |
+          if [ ! -f "dm/ios/tools/build_ipa.sh" ]; then
+            git clone --depth 1 https://github.com/seedds/nxnative.git "$RUNNER_TEMP/nx_up"
+            cp -Rn "$RUNNER_TEMP/nx_up/." .
+          fi
+
+          # Garante que o Thin IPA leia Documents/romfs no iPhone sem exigir embutir 17 GB no IPA
+          python3 - << 'PYEOF'
+          from pathlib import Path
+          main_m = Path("dm/ios/Sources/main.m")
+          s = main_m.read_text(encoding="utf-8")
+          old_marker = 'if ([fm fileExistsAtPath:[documentFolder stringByAppendingPathComponent:@DM_GAME_ROMFS_MARKER]]) return documentFolder;'
+          new_marker = old_marker + '\n    if ([fm contentsOfDirectoryAtPath:documentFolder error:nil].count > 0) return documentFolder;'
+          if 'contentsOfDirectoryAtPath:documentFolder' not in s:
+              s = s.replace(old_marker, new_marker)
+              main_m.write_text(s, encoding="utf-8")
+
+          bsh = Path("dm/ios/tools/build_ipa.sh")
+          b = bsh.read_text(encoding="utf-8")
+          b = b.replace(
+              'python3 "$DM/tools/romfs.py" "$ROMFS" "$MARKER" || die "no RomFS at $ROMFS (missing $MARKER)"',
+              'echo "[Universal Thin IPA] RomFS sera lido de Documents/romfs no iPhone"'
+          )
+          b = b.replace('"Payload/DmIOS.app/romfs=$ROMFS"', '')
+          bsh.write_text(b, encoding="utf-8")
+          PYEOF
+
+          echo "Baixando github_kit de: $KIT_URL"
+          curl -L --fail -o "$RUNNER_TEMP/github_kit.zip" "$KIT_URL"
+          mkdir -p "$RUNNER_TEMP/kit"
+          unzip -q "$RUNNER_TEMP/github_kit.zip" -d "$RUNNER_TEMP/kit"
+          ls -la "$RUNNER_TEMP/kit"
+
+          # Descobre automaticamente o TitleID real (010035F022078000) lendo ExeFS/main.npdm!
+          TITLE_ID=$(python3 - << 'PYEOF'
+          import os, struct
+          from pathlib import Path
+          kit = Path(os.environ["RUNNER_TEMP"]) / "kit"
+          npdm_file = kit / "ExeFS" / "main.npdm"
+          tid_file = kit / "title_id.txt"
+          tid_str = ""
+          if npdm_file.exists():
+              npdm = npdm_file.read_bytes()
+              aci0 = struct.unpack_from("<I", npdm, 0x70)[0]
+              tid = struct.unpack_from("<Q", npdm, aci0 + 0x10)[0]
+              tid_str = f"{tid:016X}"
+          elif tid_file.exists():
+              tid_str = tid_file.read_text().strip().upper()
+          print(tid_str or "010035F022078000")
+          PYEOF
+          )
+          echo "Jogo detectado pelo main.npdm: TITLE_ID=$TITLE_ID"
+
+          # Gera perfil automatico se ainda nao existir em dm/games/<TITLE_ID>
+          if [ ! -d "dm/games/$TITLE_ID" ]; then
+            echo "Gerando perfil automatico para $TITLE_ID..."
+            python3 dm/tools/survey/game_survey.py "$RUNNER_TEMP/kit" -o "$RUNNER_TEMP/survey.md" --manifest "$RUNNER_TEMP/kit/manifest.tsv" || true
+            python3 - << PYEOF
+          import sys
+          from pathlib import Path
+          sys.path.insert(0, "dm/games")
+          import profile_guess
+          prof_dir = Path("dm/games/$TITLE_ID")
+          prof_dir.mkdir(parents=True, exist_ok=True)
+          profile_guess.write_provisional_profile(Path("$RUNNER_TEMP/survey.md"), Path("$RUNNER_TEMP/kit"), prof_dir)
+          PYEOF
+          fi
+
+          # 1. Patcheia os binarios ARM64 (ExeFS) para iOS nativo
+          mkdir -p "$RUNNER_TEMP/patched"
+          python3 dm/tools/patch_nso.py "$RUNNER_TEMP/kit/ExeFS" "$RUNNER_TEMP/patched" --game "$TITLE_ID"
+
+          # 2. Extrai e converte os shaders para Metal (.dmsh)
+          mkdir -p "$RUNNER_TEMP/shader_out"
+          python3 dm/gfx/tools/shader_split.py "$RUNNER_TEMP/kit/RomFS" "$RUNNER_TEMP/shader_pkg" --game "$TITLE_ID" || true
+          if [ -d "$RUNNER_TEMP/shader_pkg" ]; then
+            IOSOUT=1 ALLOW_OTHER_METAL=1 python3 dm/gfx/tools/dmsh_build.py "$RUNNER_TEMP/shader_pkg" --game "$TITLE_ID" || true
+          fi
+
+          # 3. Empacota o Thin IPA do jogo com icone e nome oficial do control.nacp!
+          NACP_ARG=()
+          ICON_ARG=()
+          [ -f "$RUNNER_TEMP/kit/control.nacp" ] && NACP_ARG=(--nacp "$RUNNER_TEMP/kit/control.nacp")
+          [ -f "$RUNNER_TEMP/kit/icon.jpg" ] && ICON_ARG=(--icon "$RUNNER_TEMP/kit/icon.jpg")
+
+          bash dm/ios/tools/build_ipa.sh \
+            --game "$TITLE_ID" \
+            --patched "$RUNNER_TEMP/patched" \
+            --romfs "$RUNNER_TEMP/kit/RomFS" \
+            "${NACP_ARG[@]}" \
+            "${ICON_ARG[@]}" \
+            -o "$RUNNER_TEMP/${TITLE_ID}_Thin.ipa"
+
+          ls -lh "$RUNNER_TEMP/${TITLE_ID}_Thin.ipa"
+
+      - name: 4. Upload do IPA do Jogo nos Artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: Game-Thin-IPA-Artifact
+          path: ${{ runner.temp }}/*_Thin.ipa
