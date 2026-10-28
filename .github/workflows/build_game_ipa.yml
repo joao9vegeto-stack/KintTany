@@ -36,12 +36,13 @@ jobs:
       - name: 2.5 Restaurar Cache dos Modulos NSO Reescritos
         uses: actions/cache/restore@v4
         with:
-          path: /Users/runner/patched_cache_010035F022078000
-          key: patched-nso-010035F022078000-v3
+          path: /Users/runner/patched_cache
+          key: patched-nso-uemalloc-v4-${{ github.run_id }}
           restore-keys: |
-            patched-nso-010035F022078000-
+            patched-nso-uemalloc-v4-
+            patched-nso-
 
-      - name: 3. Baixar github_kit.zip e Compilar Thin IPA Nativo do Jogo
+      - name: 3. Baixar github_kit.zip, Aplicar Patch FMallocBinned3 (37GB -> iOS) e Compilar IPA
         run: |
           set -e
 
@@ -73,10 +74,11 @@ jobs:
             fi
           fi
 
-          # 3. Executa o pipeline real do nxnative
+          # 3. Executa o pipeline real do nxnative + Auto-Patch do FMallocBinned3 (37 GB)
           python3 -u - << 'PYEOF'
-          import os, sys, re, struct, shutil, subprocess
+          import os, sys, re, struct, shutil, subprocess, lz4.block
           from pathlib import Path
+          from capstone import Cs, CS_ARCH_ARM64, CS_MODE_ARM
 
           rt = Path(os.environ["RUNNER_TEMP"]).resolve()
           kit = rt / "kit"
@@ -85,7 +87,7 @@ jobs:
           romfs.mkdir(parents=True, exist_ok=True)
           manifest = kit / "romfs_manifest.tsv"
 
-          # Descobre o TitleID real a partir do main.npdm
+          # 1. Descobre o TitleID real a partir do main.npdm
           tid_str = "010035F022078000"
           npdm_file = exefs / "main.npdm"
           if npdm_file.exists():
@@ -95,12 +97,42 @@ jobs:
               tid_str = f"{tid:016X}"
           print(f"=== TitleID detectado: {tid_str} ===", flush=True)
 
+          # 2. Descobre o Nome Real e Versao do jogo direto do control.nacp
+          game_title = f"SwitchGame_{tid_str}"
+          game_ver = "1.0"
+          nacp_files = list(kit.rglob("*.nacp"))
+          if nacp_files:
+              nacp_path = nacp_files[0]
+              try:
+                  res_name = subprocess.run(
+                      ["python3", "dm/tools/nacp.py", str(nacp_path)],
+                      capture_output=True, text=True, check=True
+                  ).stdout.strip()
+                  if res_name:
+                      game_title = res_name
+              except Exception:
+                  pass
+              try:
+                  res_ver = subprocess.run(
+                      ["python3", "dm/tools/nacp.py", "--version", str(nacp_path)],
+                      capture_output=True, text=True, check=True
+                  ).stdout.strip()
+                  if res_ver:
+                      game_ver = res_ver
+              except Exception:
+                  pass
+          elif tid_str == "010035F022078000":
+              game_title = "DRAGON BALL: Sparking! ZERO"
+
+          safe_name = re.sub(r"[^A-Za-z0-9]+", "_", game_title).strip("_") or tid_str
+          ipa_filename = f"{safe_name}.ipa"
+          print(f"=== Jogo detectado: '{game_title}' (v{game_ver}) -> Arquivo: {ipa_filename} ===", flush=True)
+
           games_dir = Path("dm/games").resolve()
           game_py = games_dir / "game.py"
           sample_tsvs = sorted(games_dir.glob("*/game.tsv"))
 
-          # IMPORTANTE: NUNCA incluir 'rtld' em modules!
-          # O dm/host/loader.c substitui o rtld da Nintendo. Carregar o rtld causa SIGBUS (sig=10) em rtld+0x3008 durante relocate().
+          # 3. Modulos NSO (sem rtld!)
           order = ["main", "subsdk0", "subsdk1", "subsdk2", "subsdk3", "subsdk4", "subsdk5", "subsdk6", "subsdk7", "subsdk8", "subsdk9", "sdk"]
           mods = []
           for m in order:
@@ -112,8 +144,131 @@ jobs:
                   mods.append(p.name)
           print(f"=== Modulos NSO ativos (sem rtld): {mods} ===", flush=True)
 
-          # Descobre um arquivo real do RomFS para usar como marker
-          marker = "SparkingZERO/Content/Paks/global.ucas"
+          # 4. Inspeciona o NSO 'main' para extrair o Build ID e localizar o FMallocBinned3 (37 GB)
+          main_bytes = (exefs / "main").read_bytes()
+          main_bid = main_bytes[0x40:0x50].hex()
+          print(f"=== Build ID do main: {main_bid} ===", flush=True)
+
+          flags = struct.unpack_from("<I", main_bytes, 0xC)[0]
+          segs = [struct.unpack_from("<III", main_bytes, 0x10 + i * 0x10) for i in range(3)]
+          csz = struct.unpack_from("<III", main_bytes, 0x60)
+          img = bytearray(segs[2][1] + segs[2][2])
+          for i, (fo, mo, sz) in enumerate(segs):
+              raw = main_bytes[fo:fo + csz[i]]
+              if (flags >> i) & 1:
+                  raw = lz4.block.decompress(raw, uncompressed_size=sz)
+              img[mo:mo + sz] = raw
+
+          # Desmonta a regiao do backtrace (0x1e4da00 a 0x1e4e600) para ver GCreateMalloc e FMallocBinned3
+          md = Cs(CS_ARCH_ARM64, CS_MODE_ARM)
+          print("=== Disassembly da regiao GCreateMalloc / FMallocBinned3 (0x1e4e180 .. 0x1e4e240) ===", flush=True)
+          cut_addr = None
+          cut_orig_hex = None
+          obs_addr = None
+          obs_orig_hex = None
+          obs_reg_mov = None
+
+          insns = list(md.disasm(bytes(img[0x1e4df00:0x1e4e500]), 0x1e4df00))
+          for idx, ins in enumerate(insns):
+              if 0x1e4e050 <= ins.address <= 0x1e4e490:
+                  print(f"  0x{ins.address:x}:\t{ins.mnemonic}\t{ins.op_str}\t[{ins.bytes.hex()}]")
+
+          # No crash log:
+          # bt: main+0x1e4e0a8 main+0x1e4e0cc main+0x1e4e478 main+0x1e4e1fc main+0x1eab28c main+0x1e4db34
+          # GCreateMalloc esta em torno de 0x1e4e1fc (chama a funcao em 0x1e4e478 ou o construtor de FMallocBinned3)
+          # Vamos inspecionar a funcao que contem 0x1e4e1fc:
+          for idx, ins in enumerate(insns):
+              # Procura a chamada 'bl' em 0x1e4e1f8 (logo antes do retorno 0x1e4e1fc do backtrace!)
+              if ins.address == 0x1e4e1f8 and ins.mnemonic == "bl":
+                  cut_addr = ins.address
+                  cut_orig_hex = ins.bytes.hex()
+                  # Procura logo apos 0x1e4e1f8 uma instrucao position-independent (ex: mov x0, x19 / mov x0, x20) para o OBS_UE_MALLOC
+                  for j in range(idx + 1, min(idx + 8, len(insns))):
+                      nxt = insns[j]
+                      if nxt.mnemonic in ("mov", "orr", "str") and "pc" not in nxt.op_str:
+                          obs_addr = nxt.address
+                          obs_orig_hex = nxt.bytes.hex()
+                          break
+                  break
+
+          # Verifica o layout da vtable em main+0x92fa000 (que apareceu em *x4 no log.txt)
+          vtable_addr = 0x92fa000
+          if vtable_addr + 32 * 8 <= len(img):
+              slots = [struct.unpack_from("<Q", img, vtable_addr + k * 8)[0] for k in range(32)]
+              print(f"=== Slots da vtable em 0x{vtable_addr:x}: {[hex(s) for s in slots[:26]]} ===", flush=True)
+
+          # Verifica se o construtor ou o objeto FMallocBinned3 e estatico (bss) ou dinamico (GCreateMalloc)
+          # No log: stack scan [+192]main+0x92ed700 [+200]main+0x92ed6f8 [+264]main+0x92fa000 [+968]main+0xb60ca28
+          # Veja main+0xb60ca28! O main tem size 0xb614000, entao 0xb60ca28 fica no .bss (como em Octopath Traveler 0 e FF Resonance)!
+          # Vamos checar se 0x1e4e1f8 passa um objeto em x0/x19 ou se 0x1e4db34 usa 0xb60ca28!
+          print("=== Disassembly de 0x1e4db00 .. 0x1e4db60 ===", flush=True)
+          for ins in md.disasm(bytes(img[0x1e4db00:0x1e4db60]), 0x1e4db00):
+              print(f"  0x{ins.address:x}:\t{ins.mnemonic}\t{ins.op_str}\t[{ins.bytes.hex()}]")
+
+          prof_dir = games_dir / tid_str
+          prof_dir.mkdir(parents=True, exist_ok=True)
+
+          # Se encontramos o bl do construtor do FMallocBinned3 em 0x1e4e1f8 (que reservou os 37 GB = 0x940000000):
+          need_repatch = False
+          if cut_addr is not None:
+              # Verifica qual registrador guarda o ponteiro do objeto FMallocBinned3 em 0x1e4e1f8
+              # Olhando as instrucoes anteriores a 0x1e4e1f8 para ver de qual registrador x0 veio (ex: mov x0, x19)
+              obj_reg = "x19"
+              for ins in md.disasm(bytes(img[0x1e4e1c0:0x1e4e220]), 0x1e4e1c0):
+                  print(f"  [GCreateMalloc] 0x{ins.address:x}:\t{ins.mnemonic}\t{ins.op_str}\t[{ins.bytes.hex()}]")
+
+              # Determina se a vtable tem layout UE4_27 (21 slots), UE5 (26 slots) ou UE5_6 (32 slots)
+              # Sparking ZERO e Unreal Engine 5.1! No UE5.1 o layout de FMalloc tem 26 slots (UE5) ou 21 slots (UE4_27).
+              # Vamos checar qual slot da vtable 0x92fa000 chama +0x18 (UE4_27) ou +0x30 (UE5):
+              ue_layout = "UE5"
+              if vtable_addr + 26 * 8 <= len(img):
+                  slot4_fn = struct.unpack_from("<Q", img, vtable_addr + 4 * 8)[0]
+                  slot7_fn = struct.unpack_from("<Q", img, vtable_addr + 7 * 8)[0]
+                  if slot4_fn < len(img):
+                      s4_asm = " ; ".join(f"{i.mnemonic} {i.op_str}" for i in md.disasm(bytes(img[slot4_fn:slot4_fn+32]), slot4_fn))
+                      print(f"  [vtable slot 4 @ 0x{slot4_fn:x}]: {s4_asm}", flush=True)
+                      if "#0x18" in s4_asm:
+                          ue_layout = "UE4_27"
+                  if slot7_fn < len(img):
+                      s7_asm = " ; ".join(f"{i.mnemonic} {i.op_str}" for i in md.disasm(bytes(img[slot7_fn:slot7_fn+32]), slot7_fn))
+                      print(f"  [vtable slot 7 @ 0x{slot7_fn:x}]: {s7_asm}", flush=True)
+                      if "#0x30" in s7_asm:
+                          ue_layout = "UE5"
+
+              print(f"=== Layout detectado para FMallocBinned3: {ue_layout} | cut=0x{cut_addr:x} ({cut_orig_hex}) | obs=0x{obs_addr:x} ({obs_orig_hex}) ===", flush=True)
+
+              # Escreve dm/games/<tid>/patches.py para cortar o construtor de 37 GB e instalar a vtable do host
+              patches_py = prof_dir / "patches.py"
+              patches_code = f"""# Auto-generated FMallocBinned3 (37 GB) replacement patch for {game_title}
+CUTS = {{
+    '{main_bid}': [
+        (0x{cut_addr:x}, '{cut_orig_hex}', '1f2003d5', 'GCreateMalloc: bl FMallocBinned3 constructor -> nop; host malloc zone installed at OBS_UE_MALLOC'),
+    ],
+}}
+OBS = {{
+    '{main_bid}': [
+        (0x{obs_addr:x}, 21, '{obs_orig_hex}', 'GCreateMalloc: install the host vtable before use'),
+    ],
+}}
+"""
+              patches_py.write_text(patches_code, encoding="utf-8")
+
+              # Registra o Build ID em dm/host/hle_uemalloc.c (incluindo suporte caso o ponteiro esteja em x0 ou x19)
+              uemalloc_c = Path("dm/host/hle_uemalloc.c")
+              if uemalloc_c.exists():
+                  uetxt = uemalloc_c.read_text(encoding="utf-8")
+                  if main_bid not in uetxt:
+                      new_entry = f'    {{ "{main_bid}", "{game_title}", {ue_layout}, 0, 0x{vtable_addr:x}, 0x{cut_addr:x} }},\n'
+                      uetxt = uetxt.replace("static const struct { const char *build, *what; int layout; uint64_t obj, vtable, cut; } k_ue[] = {\n",
+                                            "static const struct { const char *build, *what; int layout; uint64_t obj, vtable, cut; } k_ue[] = {\n" + new_entry)
+                      # Garante que no callback de OBS_UE_MALLOC, se x19 nao for ponteiro valido, use x20 ou x0
+                      uetxt = uetxt.replace("uint64_t obj = regs[19];", "uint64_t obj = regs[19] ? regs[19] : (regs[20] ? regs[20] : regs[0]);")
+                      uemalloc_c.write_text(uetxt, encoding="utf-8")
+                      print("=== Build ID registrado com sucesso em dm/host/hle_uemalloc.c! ===", flush=True)
+                      need_repatch = True
+
+          # 5. Descobre um arquivo real do RomFS para usar como marker
+          marker = "romfs_marker.bin"
           if manifest.exists():
               for line in manifest.read_text(errors="ignore").splitlines():
                   if line.strip() and not line.startswith("#"):
@@ -122,10 +277,7 @@ jobs:
                           marker = first_col
                           break
 
-          prof_dir = games_dir / tid_str
-          prof_dir.mkdir(parents=True, exist_ok=True)
           game_tsv = prof_dir / "game.tsv"
-
           ref_kv = {}
           for stsv in sample_tsvs:
               if stsv.parent.name != tid_str:
@@ -135,15 +287,13 @@ jobs:
                           ref_kv.setdefault(k.strip(), v.strip())
                   break
 
-          ipa_filename = "DRAGON_BALL_Sparking_ZERO.ipa"
-
-          # Layout de memoria oficial de Unreal Engine 4 no nxnative (baseado em 010069C01AB82000/game.tsv)
           kv = {
-              "name": "DRAGON BALL: Sparking! ZERO",
+              "name": game_title,
               "program_id": tid_str,
               "title_id": tid_str,
               "bundle_id": f"org.nxnative.{tid_str.lower()}",
-              "version": "1.0",
+              " build": f"v0\t{game_ver}\tmain={main_bid}",
+              "version": game_ver,
               "package": "v0",
               "ipa": ipa_filename,
               "modules": " ".join(mods),
@@ -160,21 +310,13 @@ jobs:
               "pad_layout": "full",
               "game_args": "-SwitchVirtualAddressSpaceSize=2048",
           }
-          skip_keys = {"patches", "hooks", "vulkan_shaders", "gl_shaders", "trinity_packs", "feedback_snap", "shader_versions", "shader_groups", "shader_note", "pso_mtl4", "game_env"}
+          skip_keys = {"patches", "hooks", "vulkan_shaders", "gl_shaders", "trinity_packs", "feedback_snap", "shader_versions", "shader_groups", "shader_note", "pso_mtl4", "game_env", "build"}
           for rk, rv in ref_kv.items():
               if rk not in kv and rk not in skip_keys and not rk.startswith("subsdk") and rk not in ("rtld", "main", "sdk"):
                   kv[rk] = rv
 
-          tsv_content = "\n".join(f"{k}\t{v}" for k, v in kv.items()) + "\n"
+          tsv_content = "\n".join(f"{k.strip()}\t{v}" for k, v in kv.items()) + "\n"
           game_tsv.write_text(tsv_content, encoding="utf-8")
-
-          # Registra tambem o jogo em dm/games/settings.tsv para o Launcher.swift exibir a tela de configuracoes
-          settings_tsv = games_dir / "settings.tsv"
-          if settings_tsv.exists():
-              stxt = settings_tsv.read_text(encoding="utf-8")
-              if tid_str not in stxt:
-                  with open(settings_tsv, "a", encoding="utf-8") as sf:
-                      sf.write(f"{tid_str}\tDRAGON BALL: Sparking! ZERO\t60\t1.0\n")
 
           # Garante que dm/games/game.py nunca de KeyError
           gpy_txt = game_py.read_text(encoding="utf-8")
@@ -210,18 +352,24 @@ jobs:
           b_dir = msl_ios_base / f"b-{chain_stamp}"
           b_dir.mkdir(parents=True, exist_ok=True)
 
-          # Usa o cache dos NSOs reescritos (pasta inteira gerada pelo patch_nso.py)
-          cache_dir = Path(f"/Users/runner/patched_cache_{tid_str}")
+          # Cache por TitleID (re-reescreve apenas o 'main' se adicionamos CUTS/OBS novos no patches.py!)
+          cache_root = Path("/Users/runner/patched_cache")
+          cache_dir = cache_root / tid_str
           cache_dir.mkdir(parents=True, exist_ok=True)
 
           cached_files = [f for f in cache_dir.iterdir() if f.name != ".DS_Store"]
           if len(cached_files) >= len(mods):
-              print(f"=== [CACHE HIT] Restaurando {len(cached_files)} arquivos de {cache_dir} ===", flush=True)
+              print(f"=== [CACHE HIT] Restaurando modulos de {cache_dir} ===", flush=True)
               shutil.copytree(cache_dir, patched, dirs_exist_ok=True)
-              # Remove arquivos do rtld da pasta patched para garantir que o Xcode nao o embuta
               for rtld_f in patched.glob("rtld*"):
                   if rtld_f.is_file():
                       rtld_f.unlink()
+              # Se o main.cuts.tsv estiver vazio no cache e agora temos patches.py, reescreve APENAS o main!
+              cuts_file = patched / "main.cuts.tsv"
+              if need_repatch and (not cuts_file.exists() or cuts_file.stat().st_size == 0):
+                  print("=== Re-aplicando patch_nso.py APENAS no 'main' para ativar o corte do FMallocBinned3 (37 GB) ===", flush=True)
+                  subprocess.run(["python3", "dm/tools/patch_nso.py", str(exefs / "main"), str(patched), "main"], check=True)
+                  shutil.copytree(patched, cache_dir, dirs_exist_ok=True)
           else:
               for m in mods:
                   src_nso = exefs / m
@@ -237,7 +385,7 @@ jobs:
               if (exefs / "main.npdm").resolve() != dst_npdm.resolve():
                   shutil.copy2(exefs / "main.npdm", dst_npdm)
 
-          for nacp in kit.rglob("*.nacp"):
+          for nacp in nacp_files:
               for dst_nacp in (data_v0 / "control.nacp", romfs.parent / "control.nacp"):
                   if nacp.resolve() != dst_nacp.resolve():
                       shutil.copy2(nacp, dst_nacp)
@@ -246,7 +394,7 @@ jobs:
           # Gera os cabecalhos do perfil no host
           subprocess.run(["make", "-s", "-C", "dm/host", "game_profile", f"GAME={tid_str}"], check=True)
 
-          # Executa o build_ipa.sh gerando DRAGON_BALL_Sparking_ZERO.ipa
+          # Executa o build_ipa.sh gerando <Nome_do_Jogo>.ipa
           out_ipa = rt / ipa_filename
           env = os.environ.copy()
           env.update({
@@ -255,8 +403,8 @@ jobs:
               "PATCHED": str(patched),
               "ROMFS": str(romfs),
               "MSL_IOS": str(msl_ios_base),
-              "DM_DISPLAY_NAME": "DRAGON BALL: Sparking! ZERO",
-              "DM_APP_VERSION": "1.0",
+              "DM_DISPLAY_NAME": game_title,
+              "DM_APP_VERSION": game_ver,
               "CHAIN_STAMP": chain_stamp,
           })
           aoc_dir = kit / "aoc"
@@ -266,27 +414,31 @@ jobs:
               env["AOC"] = ""
 
           subprocess.run(["bash", "-x", "dm/ios/tools/build_ipa.sh", str(out_ipa)], env=env, check=True)
+          (rt / "last_ipa_name.txt").write_text(safe_name, encoding="utf-8")
           print(f"=== SUCESSO! IPA GERADO EM: {out_ipa} ===", flush=True)
           PYEOF
+
+          echo "GAME_SAFE_NAME=$(cat $RUNNER_TEMP/last_ipa_name.txt)" >> $GITHUB_ENV
 
       - name: 3.5 Salvar Cache dos Modulos NSO Reescritos
         uses: actions/cache/save@v4
         if: always()
         with:
-          path: /Users/runner/patched_cache_010035F022078000
-          key: patched-nso-010035F022078000-v3
+          path: /Users/runner/patched_cache
+          key: patched-nso-uemalloc-v4-${{ github.run_id }}
 
-      - name: 4. Publicar DRAGON_BALL_Sparking_ZERO.ipa direto na Release (sem zip!)
+      - name: 4. Publicar <Nome_do_Jogo>.ipa direto na Release
         run: |
-          IPA_FILE="${RUNNER_TEMP}/DRAGON_BALL_Sparking_ZERO.ipa"
-          if [ -f "$IPA_FILE" ]; then
-            gh release upload v1.0-kit "$IPA_FILE" --repo "$GITHUB_REPOSITORY" --clobber || true
-            echo "=== IPA puro publicado na Release v1.0-kit: DRAGON_BALL_Sparking_ZERO.ipa ==="
-          fi
+          for IPA_FILE in "$RUNNER_TEMP"/*.ipa; do
+            if [ -f "$IPA_FILE" ]; then
+              gh release upload v1.0-kit "$IPA_FILE" --repo "$GITHUB_REPOSITORY" --clobber || true
+              echo "=== IPA publicado na Release v1.0-kit: $(basename "$IPA_FILE") ==="
+            fi
+          done
 
-      - name: 5. Upload do IPA nos Artifacts (backup)
+      - name: 5. Upload do IPA nos Artifacts com o Nome do Jogo
         uses: actions/upload-artifact@v4
         with:
-          name: DRAGON_BALL_Sparking_ZERO.ipa
-          path: ${{ runner.temp }}/DRAGON_BALL_Sparking_ZERO.ipa
+          name: ${{ env.GAME_SAFE_NAME }}.ipa
+          path: ${{ runner.temp }}/*.ipa
           if-no-files-found: error
