@@ -116,11 +116,25 @@ print(f"=== flags: 0x{flags:02x} | compressao: {'zstd' if use_zstd else 'lz4-blo
 segs = []
 seg_names = ["text","rodata","data"]
 for i in range(3):
-    base     = 0x10 + i * 0x10
+    base      = 0x10 + i * 0x10
     file_off  = struct.unpack_from("<I", main_bytes, base + 0x00)[0]
     mem_off   = struct.unpack_from("<I", main_bytes, base + 0x04)[0]
     decomp_sz = struct.unpack_from("<I", main_bytes, base + 0x08)[0]
     comp_sz   = struct.unpack_from("<I", main_bytes, 0x60 + i * 4)[0]
+
+    # ── CORREÇÃO CRÍTICA ──────────────────────────────────────────────────
+    # O NSO usa o bit 0 de file_off como flag interna (ex: 0x101 → 0x100).
+    # O dado comprimido começa sempre no alinhamento de 1 byte abaixo.
+    # Mascara o bit 0 para obter o offset real no arquivo.
+    file_off_real = file_off & ~1
+    # O comp_sz pode também precisar de ajuste se o offset foi deslocado
+    # (o byte extra pertence ao header, não ao stream LZ4)
+    if file_off != file_off_real:
+        print(f"  [fix] seg[{i}] file_off 0x{file_off:x} -> 0x{file_off_real:x} "
+              f"(bit0 era flag)", flush=True)
+    file_off = file_off_real
+    # ─────────────────────────────────────────────────────────────────────
+
     segs.append((file_off, mem_off, decomp_sz, comp_sz))
     print(f"  .{seg_names[i]}: file_off=0x{file_off:x} mem_off=0x{mem_off:x} "
           f"decomp_sz=0x{decomp_sz:x} comp_sz=0x{comp_sz:x} "
