@@ -1,0 +1,91 @@
+diff --git a/libs/audio/cellAudio.c b/libs/audio/cellAudio.c
+--- a/libs/audio/cellAudio.c
++++ b/libs/audio/cellAudio.c
+@@ -34,12 +34,20 @@
+  * Backend selection
+  * -----------------------------------------------------------------------*/
+ 
++#if defined(__APPLE__)
++  #include <TargetConditionals.h>
++#endif
++
+ #if defined(PS3RECOMP_AUDIO_USE_SDL2)
+   #define AUDIO_BACKEND_SDL2    1
+   #define AUDIO_BACKEND_WASAPI  0
+ #elif defined(_WIN32)
+   #define AUDIO_BACKEND_SDL2    0
+   #define AUDIO_BACKEND_WASAPI  1
++#elif defined(__APPLE__) && TARGET_OS_IPHONE
++  /* iOS: no SDL2. Silent backend until an AVAudioEngine one exists. */
++  #define AUDIO_BACKEND_SDL2    0
++  #define AUDIO_BACKEND_WASAPI  0
+ #else
+   #define AUDIO_BACKEND_SDL2    1
+   #define AUDIO_BACKEND_WASAPI  0
+@@ -227,6 +235,41 @@
+ 
+ #endif /* AUDIO_BACKEND_SDL2 */
+ 
++#if !AUDIO_BACKEND_SDL2 && !AUDIO_BACKEND_WASAPI
++/* Null audio backend (iOS bring-up): accepts and discards everything. */
++static int audio_backend_init(void)
++{
++    printf("[cellAudio] null audio backend (iOS)\n");
++    return 0;
++}
++
++static void audio_backend_shutdown(void)
++{
++}
++
++static void audio_backend_submit(const float* stereo_samples, u32 num_samples)
++{
++    (void)stereo_samples;
++    (void)num_samples;
++}
++
++static int audio_backend_room(void)
++{
++    return 1;
++}
++
++static void audio_backend_wait(void)
++{
++    struct timespec ts = {0, 1000000};
++    nanosleep(&ts, NULL);
++}
++
++static u32 audio_backend_queued_samples(void)
++{
++    return 0;
++}
++#endif /* null audio backend */
++
+ #if AUDIO_BACKEND_WASAPI
+ 
+ static IAudioClient*        s_wasapi_client = NULL;
+diff --git a/libs/input/cellPad.c b/libs/input/cellPad.c
+--- a/libs/input/cellPad.c
++++ b/libs/input/cellPad.c
+@@ -24,12 +24,21 @@
+  * Backend selection
+  * -----------------------------------------------------------------------*/
+ 
++#if defined(__APPLE__)
++  #include <TargetConditionals.h>
++#endif
++
+ #if defined(PS3RECOMP_PAD_USE_SDL2)
+   #define PAD_BACKEND_SDL2  1
+   #define PAD_BACKEND_XINPUT 0
+ #elif defined(_WIN32)
+   #define PAD_BACKEND_SDL2  0
+   #define PAD_BACKEND_XINPUT 1
++#elif defined(__APPLE__) && TARGET_OS_IPHONE
++  /* iOS: no SDL2. Pads report disconnected until a GameController adapter
++   * is wired through cellPad_set_host_adapter(). */
++  #define PAD_BACKEND_SDL2  0
++  #define PAD_BACKEND_XINPUT 0
+ #else
+   #define PAD_BACKEND_SDL2  1
+   #define PAD_BACKEND_XINPUT 0

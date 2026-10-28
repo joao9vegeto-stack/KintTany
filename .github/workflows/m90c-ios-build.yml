@@ -36,6 +36,11 @@ jobs:
           print(Path("report/sdl2-ios-gate.patch").read_text())
           PY
           git clone --depth 1 https://github.com/RichardFontoura/gowa-pc gowa-pc
+      - name: Apply iOS null audio/pad backend patch
+        run: |
+          set -e
+          (cd ps3recomp && git apply --check ../.github/patches/ios-no-sdl-audio-pad.patch)
+          (cd ps3recomp && git apply ../.github/patches/ios-no-sdl-audio-pad.patch)
       - name: Download M9.0 lift bundle
         uses: dawidd6/action-download-artifact@v6
         with:
