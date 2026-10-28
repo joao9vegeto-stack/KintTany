@@ -1,0 +1,158 @@
+name: "3. Diagnosticar crash do jogo"
+
+on:
+  workflow_dispatch:
+    inputs:
+      github_kit_url:
+        description: "Link direto do github_kit.zip que gerou o IPA com crash"
+        required: true
+        type: string
+        default: "https://github.com/joao9vegeto-stack/KintTany/releases/download/v1.0-kit/github_kit_Spk.zip"
+
+permissions:
+  contents: read
+
+jobs:
+  diagnose:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+
+    env:
+      PYTHONUNBUFFERED: "1"
+      KIT_URL: ${{ inputs.github_kit_url }}
+
+    steps:
+      - name: Baixar código da branch selecionada
+        uses: actions/checkout@v4
+
+      - name: Instalar dependências do diagnóstico
+        run: |
+          set -euo pipefail
+
+          python3 -m venv "$RUNNER_TEMP/spk-diagnostic-venv"
+
+          "$RUNNER_TEMP/spk-diagnostic-venv/bin/python" \
+            -m pip install --upgrade pip
+
+          "$RUNNER_TEMP/spk-diagnostic-venv/bin/python" \
+            -m pip install \
+            "lz4==4.4.4" \
+            "capstone==5.0.6"
+
+      - name: Baixar o kit informado
+        run: |
+          set -euo pipefail
+
+          mkdir -p "$RUNNER_TEMP/spk-diagnostic"
+
+          curl \
+            --fail \
+            --location \
+            --retry 3 \
+            --output "$RUNNER_TEMP/spk-diagnostic/github_kit.zip" \
+            "$KIT_URL"
+
+          echo "Download concluído."
+
+      - name: Extrair somente ExeFS/main
+        run: |
+          set -euo pipefail
+
+          "$RUNNER_TEMP/spk-diagnostic-venv/bin/python" - <<'PY'
+          import os
+          import shutil
+          import sys
+          import zipfile
+          from pathlib import Path, PurePosixPath
+
+          root = Path(os.environ["RUNNER_TEMP"]) / "spk-diagnostic"
+          archive_path = root / "github_kit.zip"
+          output_path = root / "main"
+
+          # Proteção contra extração acidental de entrada gigantesca.
+          max_main_size = 2 * 1024 * 1024 * 1024
+
+          try:
+              with zipfile.ZipFile(archive_path) as archive:
+                  matches = []
+
+                  for entry in archive.infolist():
+                      if entry.is_dir():
+                          continue
+
+                      parts = PurePosixPath(entry.filename).parts
+
+                      if (
+                          len(parts) >= 2
+                          and parts[-2].lower() == "exefs"
+                          and parts[-1] == "main"
+                      ):
+                          matches.append(entry)
+
+                  if len(matches) != 1:
+                      print(
+                          "ERRO: esperava exatamente um ExeFS/main no ZIP, "
+                          f"mas encontrei {len(matches)}.",
+                          file=sys.stderr,
+                      )
+
+                      for entry in matches:
+                          print(f"  - {entry.filename}", file=sys.stderr)
+
+                      raise SystemExit(1)
+
+                  entry = matches[0]
+
+                  if entry.file_size <= 0 or entry.file_size > max_main_size:
+                      raise RuntimeError(
+                          "Tamanho inválido para ExeFS/main: "
+                          f"{entry.file_size} bytes"
+                      )
+
+                  print(f"Entrada selecionada: {entry.filename}")
+                  print(f"Tamanho descompactado: {entry.file_size} bytes")
+
+                  # A saída tem caminho fixo: não usa o caminho interno do ZIP.
+                  with archive.open(entry, "r") as source:
+                      with output_path.open("wb") as destination:
+                          shutil.copyfileobj(source, destination)
+
+                  if output_path.stat().st_size != entry.file_size:
+                      raise RuntimeError(
+                          "O tamanho extraído não corresponde ao ZIP."
+                      )
+
+                  print(f"Arquivo extraído para: {output_path}")
+
+          except zipfile.BadZipFile as exc:
+              raise SystemExit(f"ERRO: ZIP inválido: {exc}")
+          except Exception as exc:
+              raise SystemExit(f"ERRO ao extrair ExeFS/main: {exc}")
+          PY
+
+      - name: Diagnosticar PC, LR e backtrace
+        run: |
+          set -euo pipefail
+
+          mkdir -p diagnostic-output
+
+          {
+            echo "Commit do repositório: $GITHUB_SHA"
+            echo "Branch/ref: $GITHUB_REF"
+            echo "Execução do Actions: $GITHUB_RUN_ID"
+            echo
+          } > diagnostic-output/build-context.txt
+
+          "$RUNNER_TEMP/spk-diagnostic-venv/bin/python" \
+            dm/ios/tools/diagnose_spk_crash.py \
+            "$RUNNER_TEMP/spk-diagnostic/main" \
+            --output diagnostic-output/crash_diagnostic.txt
+
+      - name: Publicar relatório do diagnóstico
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: spk-crash-diagnostic-${{ github.run_id }}
+          path: diagnostic-output/
+          if-no-files-found: warn
+          retention-days: 7
