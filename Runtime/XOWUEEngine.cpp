@@ -2039,43 +2039,15 @@ static void emitBuild66CodeAudit(uint8_t *base) {
 static void logCodeAuditBuild69(uint8_t *base) {
  if(!base||g_build69AuditEmitted.exchange(true,std::memory_order_acq_rel))return;
  struct R{uint32_t b,e;const char*n;}; static constexpr R rs[]={
- {0x822A0250u,0x822A0360u,"BINK_822A0278"},
- {0x824ACB80u,0x824ACC60u,"MAIN_824ACBF8"},
- {0x82C25820u,0x82C259E0u,"UE3_82C25840_82C259C8"},
- {0x826CF040u,0x826CF100u,"THREAD10_SPIN_826CF060"},
- {0x82B42280u,0x82B42360u,"AUDIO_THREAD6_82B422A8"},
- {0x830F4310u,0x830F4390u,"THREAD1_830F4330"},
- {0x824E6FD0u,0x824E70E0u,"RENDER_824E6FD8"},
- {0x824E7280u,0x824E7340u,"RENDER_824E72B4"},
- {0x82C4D480u,0x82C4D500u,"WAIT_CALLER_82C4D4A8"},
- {0x82C3C498u,0x82C3C518u,"QPC_82C3C4D8"},{0x822A1BC0u,0x822A2120u,"BINK_822A1E08"},
- {0x822A01C0u,0x822A0460u,"BINK_822A0278"},{0x824E6F10u,0x824E7140u,"WORKER_824E6FD8"},
- {0x82C257F0u,0x82C25A40u,"UE3_82C25840_82C259C8"},{0x823704C0u,0x82370D00u,"AUDIO_82370500_82370C4C"},
- {0x82370700u,0x82370840u,"MAIN_WAIT_8237073C_82370790"},{0x82371D80u,0x82371E60u,"RENDER_WAIT_82371DC8"},{0x825524C0u,0x82552640u,"RENDER_CALLER_82552500"},{0x82493820u,0x82493B20u,"STREAM_WAIT_82493860_82493A98"},{0x824E7140u,0x824E7360u,"WORKER_824E7158"},{0x82200150u,0x82200320u,"MAIN_TAIL_82200150"},
- {0x824278C0u,0x824279C0u,"AUDIO_82427940"},{0x824ACB80u,0x824ACC80u,"MAIN_824ACBF8"},{0x82B3DE00u,0x82B3DF20u,"THREAD7_82B3DE30"},{0x82690640u,0x82690740u,"THREAD2_82690678"},{0x82690D80u,0x82690E80u,"THREAD10_82690DC0"},{0x826CEFC0u,0x826CF100u,"THREAD10_SPIN_826CF060"},{0x82C4D440u,0x82C4D520u,"WAIT_CALLER_82C4D4A8"},{0x826903F0u,0x826904B0u,"QUEUE_82690468"},
- {0x826901E0u,0x826902B0u,"QUEUE_82690260"},{0x827E1250u,0x827E12D0u,"QUEUE_827E1290"},
- {0x82B49DE0u,0x82B49E60u,"AUDIO_82B49E20"},{0x82B4AAE0u,0x82B4AB80u,"AUDIO_82B4AB28"},{0x82B4AE00u,0x82B4AE80u,"AUDIO_82B4AE40"}};
- char l[192]; for(const auto&r:rs){std::snprintf(l,sizeof(l),"CODE_AUDIT_B69_BEGIN name=%s range=0x%08X..0x%08X",r.n,r.b,r.e);recordRuntimeTrace(l);
- for(uint32_t pc=r.b;pc<r.e;pc+=4u){bool ok=validGuestRange(pc,4u);std::snprintf(l,sizeof(l),"CODE_AUDIT_B69 name=%s pc=0x%08X word=0x%08X valid=%u",r.n,pc,ok?loadGuestBe32(base,pc):0xFFFFFFFFu,ok?1u:0u);recordRuntimeTrace(l);}
- std::snprintf(l,sizeof(l),"CODE_AUDIT_B69_END name=%s",r.n);recordRuntimeTrace(l);}
+  {0x82370500u,0x823705C0u,"BINK_TICK_82370500"},
+  {0x82370BF0u,0x82370C60u,"BINK_WAIT_82370C34"},
+  {0x82427900u,0x82427980u,"BINK_SYNC_82427940"},
+  {0x824ACBC0u,0x824ACC40u,"MAIN_824ACBF8"},
+  {0x826CF040u,0x826CF0B0u,"SPIN_826CF060"},
+  {0x825F91C0u,0x825F9220u,"SPIN_825F91D8"}
+ };
+ for(const R&r:rs){char h[160];std::snprintf(h,sizeof(h),"CODE_AUDIT_B69_BEGIN name=%s range=0x%08X..0x%08X",r.n,r.b,r.e);std::fprintf(stderr,"%s\n",h);recordRuntimeTrace(h);for(uint32_t pc=r.b;pc<r.e;pc+=4u){const bool ok=validGuestRange(pc,4u);const uint32_t w=ok?loadGuestBe32(base,pc):0u;char l[160];std::snprintf(l,sizeof(l),"CODE_AUDIT_B69 name=%s pc=0x%08X word=0x%08X valid=%u",r.n,pc,w,ok?1u:0u);std::fprintf(stderr,"%s\n",l);recordRuntimeTrace(l);}}
 }
-
-void xowue_thread_checkpoint() {
-    // This hook runs at generated PPC AOT function entries. Poll the global
-    // stop flag before touching scheduler/TLS state or pumping the GPU ring,
-    // so a user exit can unwind even when the current continuation has no
-    // GuestThreadBinding.
-    if (g_schedulerStopRequested.load(std::memory_order_relaxed))
-        throw GuestThreadStopRequested{};
-    checkpointGuestThread();
-    auto auditMemory=g_activeGuestMemory.lock(); if(auditMemory&&auditMemory->base){emitBuild66CodeAudit(auditMemory->base);logCodeAuditBuild69(auditMemory->base);}
-    // The Xenos ring is executed only by the worker thread (Xenia's CP
-    // thread): it runs PM4_INTERRUPT handlers synchronously and blocks on
-    // WAIT_REG_MEM, neither of which is safe on an arbitrary guest thread.
-}
-
-static uint32_t loadGuestBe32(const uint8_t *base, uint32_t address);
-
 static void emitBuild65CodeAudit(uint8_t *base) {
     static std::atomic<bool> emitted{false};
     if (!base || emitted.exchange(true,std::memory_order_acq_rel)) return;
@@ -2118,7 +2090,7 @@ extern "C" bool xowue_82dc2390_guard(PPCContext &context,uint8_t *base) {
 void xowue_thread_checkpoint(uint32_t guestAddress);
 static void xowue_forward_pump_and_signal_spin(uint32_t guestAddress, PPCContext &ctx);
 void xowue_thread_checkpoint(uint32_t guestAddress,PPCContext &ctx){
-    if (guestAddress == 0x822A0278u || guestAddress == 0x82C25840u || guestAddress == 0x826CF060u) {
+    if (guestAddress == 0x82370500u || guestAddress == 0x82427940u || guestAddress == 0x826CF060u || guestAddress == 0x825F91D8u || guestAddress == 0x824ACBF8u) {
         xowue_forward_pump_and_signal_spin(guestAddress, ctx);
     }
 uint32_t lr=static_cast<uint32_t>(ctx.lr);if(g_currentGuestThread){g_currentGuestThread->lastGuestLr.store(lr,std::memory_order_relaxed);g_currentGuestThread->lastR3.store(ctx.r3.u32,std::memory_order_relaxed);g_currentGuestThread->lastR4.store(ctx.r4.u32,std::memory_order_relaxed);g_currentGuestThread->lastR11.store(ctx.r11.u32,std::memory_order_relaxed);g_currentGuestThread->lastR30.store(ctx.r30.u32,std::memory_order_relaxed);g_currentGuestThread->lastR31.store(ctx.r31.u32,std::memory_order_relaxed);}else{uint32_t prev=g_mainThreadLastPc.exchange(guestAddress);if(prev!=guestAddress)g_mainThreadPrevFn.store(prev);g_mainThreadGuestLr.store(lr);g_mainThreadLastR3.store(ctx.r3.u32);g_mainThreadLastR4.store(ctx.r4.u32);g_mainThreadLastR11.store(ctx.r11.u32);g_mainThreadLastR30.store(ctx.r30.u32);g_mainThreadLastR31.store(ctx.r31.u32);uint32_t i=g_mainThreadRecentAotIdx.fetch_add(1);g_mainThreadRecentAotFns[i&15u].store(guestAddress);}xowue_thread_checkpoint(guestAddress);}
@@ -2332,12 +2304,11 @@ static void __xowue_sub_83847AC0_init(PPCContext &ctx, uint8_t *base) {
 }
 static void __xowue_sub_83847AC4_free(PPCContext &ctx, uint8_t *) { ctx.r3.u64=0ull; }
 
+static inline void xowue_write_be32_raw(uint8_t *base, uint32_t addr, uint32_t val);
 static void xowue_forward_pump_and_signal_spin(uint32_t guestAddress, PPCContext &ctx) {
-    (void)guestAddress;
-    (void)ctx;
     static std::atomic<uint32_t> s_directSpinCalls{0};
     const uint32_t sc = s_directSpinCalls.fetch_add(1, std::memory_order_relaxed) + 1u;
-    if (sc > 64u && (sc & 255u) == 0u) {
+    if (sc > 128u && (sc & 63u) == 0u) {
         pumpGuestXenosRingBuffer();
         signalGuestEventHandle(0x4004ED80u);
         signalGuestEventHandle(0x4004EDD0u);
@@ -2348,6 +2319,26 @@ static void xowue_forward_pump_and_signal_spin(uint32_t guestAddress, PPCContext
         signalGuestEventHandle(0x00000115u);
         signalGuestEventHandle(0x70016FA0u);
         signalGuestEventHandle(0x7003DD80u);
+        uint8_t *base = g_guestMemoryBase.load(std::memory_order_acquire);
+        if (base != nullptr) {
+            const uint32_t cand[2] = {ctx.r31.u32, ctx.r30.u32};
+            for (uint32_t hbink : cand) {
+                if (hbink >= 0x40000000u && hbink < 0x70000000u && validGuestRange(hbink, 0x40u)) {
+                    const uint32_t totalFrames = loadGuestBe32(base, hbink + 0x08u);
+                    const uint32_t curFrame = loadGuestBe32(base, hbink + 0x0Cu);
+                    if (totalFrames > 1u && totalFrames < 100000u && curFrame <= totalFrames) {
+                        const uint32_t nextFrame = (curFrame + 1u < totalFrames) ? (curFrame + 1u) : totalFrames;
+                        xowue_write_be32_raw(base, hbink + 0x0Cu, nextFrame);
+                        xowue_write_be32_raw(base, hbink + 0x10u, nextFrame);
+                    }
+                }
+            }
+            if (guestAddress == 0x826CF060u || guestAddress == 0x825F91D8u) {
+                if (ctx.r3.u32 >= 0x40000000u && ctx.r3.u32 < 0x70000000u && validGuestRange(ctx.r3.u32, 8u)) {
+                    xowue_write_be32_raw(base, ctx.r3.u32, 0u);
+                }
+            }
+        }
     }
 }
 
