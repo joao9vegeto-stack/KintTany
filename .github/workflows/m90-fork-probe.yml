@@ -1,0 +1,78 @@
+name: M9.0 fork probe (read-only)
+on:
+  workflow_dispatch:
+  push:
+    paths: ['.github/workflows/m90-fork-probe.yml']
+jobs:
+  probe:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Clone pin and fork
+        run: |
+          set -x
+          git clone -q https://github.com/sp00nznet/ps3recomp.git pin
+          git -C pin checkout -q a2c20108af45174dbb7d3e2f87f6acaaef09c6b4
+          git clone -q --branch gowa-fixes https://github.com/RichardFontoura/ps3recomp.git fork
+          git clone -q --depth 1 https://github.com/RichardFontoura/gowa-pc.git gowa-pc
+      - name: Probe
+        shell: bash
+        run: |
+          PIN=a2c20108af45174dbb7d3e2f87f6acaaef09c6b4
+          mkdir -p out
+          {
+          echo "=== 1. RELACAO PIN/FORK ==="
+          git -C fork merge-base HEAD $PIN
+          git -C fork rev-list --count $PIN..HEAD
+          git -C fork log --oneline $PIN..HEAD
+          echo; echo "=== 2. DIFF STAT ==="
+          git -C fork diff --stat $PIN..HEAD | tail -n 120
+          echo; echo "=== 3. ARQUIVOS DE RUNTIME/INCLUDE/TOOLS ALTERADOS ==="
+          git -C fork diff --name-status $PIN..HEAD -- runtime include libs tools CMakeLists.txt
+          echo; echo "=== 4. ARVORE spu/spurs NO FORK ==="
+          find fork/runtime fork/libs -maxdepth 2 -type d | sort
+          echo; echo "=== 5. HEADERS NOVOS/REMOVIDOS (impacto no lift de 243MB) ==="
+          diff <(git -C pin ls-files include/ | sort) <(git -C fork ls-files include/ | sort) || true
+          echo; echo "=== 6. LIFTER: tools/ alterados (lift precisa ser regerado?) ==="
+          git -C fork diff --stat $PIN..HEAD -- tools/ | tail -n 40
+          } > out/01-fork.txt 2>&1
+
+          {
+          echo "=== 7. PATCHERS KINTTANY APLICAM NO FORK? ==="
+          for p in tools/patch_ps3recomp_cell_game.py tools/patch_ps3recomp_spurs2.py \
+                   tools/enable_ios_spu_pic_runtime.py tools/m8*.py tools/m7*.py; do
+            [ -f "$p" ] || continue
+            grep -q 'add_argument("--upstream"' "$p" || { echo "SKIP(sem --upstream) $p"; continue; }
+            rm -rf ft && cp -r fork ft
+            if out=$(timeout 120 python3 "$p" --upstream ft --repo . 2>&1) || out=$(timeout 120 python3 "$p" --upstream ft 2>&1); then
+              echo "APLICA   $p"
+            else
+              echo "FALHA    $p -> $(echo "$out" | tail -n 1)"
+            fi
+          done
+          } > out/02-patchers.txt 2>&1
+
+          {
+          echo "=== 8. PIPELINE SPU DO GOWA-PC ==="
+          echo "--- lift_spu.sh ---"; cat gowa-pc/scripts/lift_spu.sh
+          echo; echo "--- lift_spu_fragments.py (120 linhas) ---"; sed -n '1,120p' gowa-pc/scripts/lift_spu_fragments.py
+          echo; echo "--- extract_jobmods_elf.py (80 linhas) ---"; sed -n '1,80p' gowa-pc/scripts/extract_jobmods_elf.py
+          echo; echo "--- lift.sh ---"; cat gowa-pc/scripts/lift.sh
+          echo; echo "--- config.toml ---"; cat gowa-pc/config.toml
+          echo; echo "--- CMakeLists.txt (SPU/RSX options) ---"; grep -n -i 'spu\|rsx\|vulkan\|option(' gowa-pc/CMakeLists.txt
+          } > out/03-gowa-pc.txt 2>&1
+
+          {
+          echo "=== 9. PATCHES .patch EXISTENTES NO KINTTANY ==="
+          ls -la patches/ps3recomp/ 2>/dev/null
+          for f in patches/ps3recomp/*.patch; do
+            [ -f "$f" ] || continue
+            echo "--- $f aplica no fork? ---"
+            git -C fork apply --check "../$f" 2>&1 && echo "APLICA" || echo "FALHA"
+          done
+          } > out/04-patches.txt 2>&1
+          cat out/*.txt
+      - uses: actions/upload-artifact@v4
+        with:
+          name: m90-fork-probe
+          path: out/
