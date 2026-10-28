@@ -1,0 +1,47 @@
+diff --git a/gowa-pc/CMakeLists.txt b/gowa-pc/CMakeLists.txt
+--- a/gowa-pc/CMakeLists.txt
++++ b/gowa-pc/CMakeLists.txt
+@@ -200,13 +200,22 @@
+ if(SPU_SOURCES)
+     set_source_files_properties(${SPU_SOURCES} PROPERTIES
+         INCLUDE_DIRECTORIES "${PS3RECOMP_DIR}/runtime/spu"
+         COMPILE_DEFINITIONS "SPU_USE_DISPATCH_MT;SPU_LS_NO_PROBES")
+     if(NOT MSVC OR CMAKE_CXX_COMPILER_ID MATCHES "Clang")
+-        set_source_files_properties(${SPU_SOURCES} PROPERTIES
+-            COMPILE_OPTIONS "-O2;-march=${PORT_SPU_MARCH};-ffp-contract=off")
+-        set_source_files_properties("${PS3RECOMP_DIR}/runtime/spu/spu_interp.c"
+-            TARGET_DIRECTORY ps3recomp_runtime PROPERTIES
+-            COMPILE_OPTIONS "-march=${PORT_SPU_MARCH};-ffp-contract=off"
+-            COMPILE_DEFINITIONS "SPU_LS_NO_PROBES")
++        if(CMAKE_SYSTEM_PROCESSOR MATCHES "x86_64|AMD64|x86")
++            set_source_files_properties(${SPU_SOURCES} PROPERTIES
++                COMPILE_OPTIONS "-O2;-march=${PORT_SPU_MARCH};-ffp-contract=off")
++            set_source_files_properties("${PS3RECOMP_DIR}/runtime/spu/spu_interp.c"
++                TARGET_DIRECTORY ps3recomp_runtime PROPERTIES
++                COMPILE_OPTIONS "-march=${PORT_SPU_MARCH};-ffp-contract=off"
++                COMPILE_DEFINITIONS "SPU_LS_NO_PROBES")
++        else()
++            set_source_files_properties(${SPU_SOURCES} PROPERTIES
++                COMPILE_OPTIONS "-O2;-ffp-contract=off")
++            set_source_files_properties("${PS3RECOMP_DIR}/runtime/spu/spu_interp.c"
++                TARGET_DIRECTORY ps3recomp_runtime PROPERTIES
++                COMPILE_OPTIONS "-ffp-contract=off"
++                COMPILE_DEFINITIONS "SPU_LS_NO_PROBES")
++        endif()
+     endif()
+ endif()
+diff --git a/ps3recomp/CMakeLists.txt b/ps3recomp/CMakeLists.txt
+--- a/ps3recomp/CMakeLists.txt
++++ b/ps3recomp/CMakeLists.txt
+@@ -334,5 +334,7 @@
+-    include(CheckCCompilerFlag)
+-    check_c_compiler_flag(-msse4.1 PS3RECOMP_HAS_MSSE41)
+-    if(PS3RECOMP_HAS_MSSE41)
+-        target_compile_options(ps3recomp_runtime PRIVATE -msse4.1)
++    if(CMAKE_SYSTEM_PROCESSOR MATCHES "x86_64|AMD64|x86")
++        include(CheckCCompilerFlag)
++        check_c_compiler_flag(-msse4.1 PS3RECOMP_HAS_MSSE41)
++        if(PS3RECOMP_HAS_MSSE41)
++            target_compile_options(ps3recomp_runtime PRIVATE -msse4.1)
++        endif()
+     endif()

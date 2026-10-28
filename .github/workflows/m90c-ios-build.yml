@@ -51,6 +51,11 @@ jobs:
           set -e
           (cd ps3recomp && git apply --check ../.github/patches/ios-metal-window.patch)
           (cd ps3recomp && git apply ../.github/patches/ios-metal-window.patch)
+      - name: Apply iOS x86-only compile flags patch
+        run: |
+          set -e
+          git apply --check .github/patches/ios-no-x86-march.patch
+          git apply .github/patches/ios-no-x86-march.patch
       - name: Download M9.0 lift bundle
         uses: dawidd6/action-download-artifact@v6
         with:
@@ -101,20 +106,27 @@ jobs:
             -DPS3RECOMP_DIR="$PWD/ps3recomp" -DRECOMP_DIR="$PWD/gowa-pc/recompiled" \
             2>&1 | tee report/cmake-configure.log
       - name: Build runtime library only
-        continue-on-error: true
         run: |
+          set +e
+          set -o pipefail
           cmake --build build --target ps3recomp_runtime -j4 2>&1 | tee report/build-runtime.log | grep -E 'error|Linking|\[[0-9]+/[0-9]+\]' | tail -n 80
+          build_status=${PIPESTATUS[0]}
+          exit "$build_status"
       - name: Build full target
-        continue-on-error: true
         run: |
+          set +e
+          set -o pipefail
           cmake --build build -j2 2>&1 | tee report/build-full.log | grep -E 'error|Linking|FAILED|\[[0-9]+/[0-9]+\]' | tail -n 120
+          build_status=${PIPESTATUS[0]}
           echo "=== error summary ==="; grep -c 'error:' report/build-full.log || true
           grep -oE '[^ ]+\.(c|cpp|m|mm):[0-9]+:[0-9]+: error: .*' report/build-full.log | sort | uniq -c | sort -rn | head -n 40 | tee report/errors-ranked.txt
+          exit "$build_status"
       - name: Symbols
         continue-on-error: true
         run: |
           B=$(find build -type f -perm +111 \( -name 'GowAscensionRecomp' -o -name '*.dylib' -o -name '*.a' \) | tee report/outputs.txt)
           for x in $B; do echo "== $x"; file "$x"; nm "$x" 2>/dev/null | grep -cE 'gowa_|spu_job_|ppu_' ; done | tee -a report/outputs.txt
       - uses: actions/upload-artifact@v4
+        if: always()
         with: { name: m90c-report, path: report/ }
 
