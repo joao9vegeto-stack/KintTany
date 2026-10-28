@@ -61,7 +61,7 @@ jobs:
             fi
           fi
 
-          # 3. Executa o pipeline real do nxnative (profile_guess -> patch_nso por arquivo -> build_ipa.sh)
+          # 3. Executa o pipeline real do nxnative
           python3 - << 'PYEOF'
           import os, sys, struct, shutil, subprocess
           from pathlib import Path
@@ -105,7 +105,7 @@ jobs:
               print("=== Gerando perfil provisorio com profile_guess.py ===")
               sys.path.insert(0, str(games_dir))
               sys.path.insert(0, str(Path("dm/tools").resolve()))
-              guessed_lines = []
+              kv = {}
               try:
                   import profile_guess
                   src_arg = str(manifest) if manifest.exists() else str(romfs)
@@ -114,20 +114,11 @@ jobs:
                       g = profile_guess.guess(facts)
                       if isinstance(g, dict):
                           for k, v in g.items():
-                              guessed_lines.append(f"{k}\t{v}")
-                      elif isinstance(g, (list, tuple)):
-                          for item in g:
-                              if isinstance(item, (list, tuple)) and len(item) >= 2:
-                                  guessed_lines.append(f"{item[0]}\t{item[1]}")
+                              # Se v for tupla (valor, comentario), extrai apenas v[0]!
+                              val = v[0] if isinstance(v, (tuple, list)) else v
+                              kv[str(k).strip()] = str(val).strip()
               except Exception as e:
                   print("Aviso no profile_guess:", e)
-
-              # Garante todas as chaves obrigatorias que dm/ios/tools/build_ipa.sh e o Makefile exigem
-              kv = {}
-              for line in guessed_lines:
-                  if "\t" in line and not line.startswith("#"):
-                      k, v = line.split("\t", 1)
-                      kv[k.strip()] = v.strip()
 
               # Descobre um arquivo real do RomFS para usar como marker
               marker = "SparkingZERO"
@@ -150,12 +141,16 @@ jobs:
               }
               for k, v in defaults.items():
                   kv.setdefault(k, v)
-              # Forca modules real do ExeFS
               kv["modules"] = " ".join(mods)
+
+              # Para iPhone (8GB RAM), ajusta mem_reserve / mem_alias caso o guess do Mac tenha colocado 64GB
+              if kv.get("mem_reserve", "").startswith("0x10"):
+                  kv["mem_reserve"] = "0x300000000"
+                  kv["mem_alias"] = "0x200000000"
 
               tsv_content = "\n".join(f"{k}\t{v}" for k, v in kv.items()) + "\n"
               game_tsv.write_text(tsv_content, encoding="utf-8")
-              print("=== game.tsv gerado: ===")
+              print("=== game.tsv gerado (limpo): ===")
               print(tsv_content)
 
           # Prepara estrutura W=<work_dir> exigida pelo build_ipa.sh
@@ -168,10 +163,8 @@ jobs:
 
           if (kit / "control.nacp").exists():
               shutil.copy2(kit / "control.nacp", data_v0 / "control.nacp")
-              shutil.copy2(kit / "control.nacp", romfs.parent / "control.nacp")
           if (kit / "icon.jpg").exists():
               shutil.copy2(kit / "icon.jpg", data_v0 / "icon.jpg")
-              shutil.copy2(kit / "icon.jpg", romfs.parent / "icon.jpg")
 
           # 4. Reescreve CADA modulo NSO individualmente (patch_nso.py <NSO file> <output dir> <module name>)
           env = os.environ.copy()
