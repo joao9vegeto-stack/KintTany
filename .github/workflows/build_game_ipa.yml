@@ -37,8 +37,9 @@ jobs:
         uses: actions/cache/restore@v4
         with:
           path: /Users/runner/patched_cache
-          key: patched-nso-uemalloc-v5-${{ github.run_id }}
+          key: patched-nso-uemalloc-v6-${{ github.run_id }}
           restore-keys: |
+            patched-nso-uemalloc-v6-
             patched-nso-uemalloc-v5-
             patched-nso-uemalloc-v4-
             patched-nso-
@@ -182,6 +183,29 @@ jobs:
                           obs_orig_word = f"{w32:08x}"
                           break
 
+          # ---- Diagnostico do crash pos-alocador (pc=main+0x1eb0d40, lr=main+0x1e5bbbc, bt main+0x1e4e87c) ----
+          def dump(lo, hi, tag):
+              print(f"=== [{tag}] 0x{lo:x} .. 0x{hi:x} ===", flush=True)
+              for i2 in md.disasm(bytes(img[lo:hi]), lo):
+                  print(f"  0x{i2.address:x}:\t{i2.mnemonic}\t{i2.op_str}\t[{i2.bytes.hex()}]")
+          dump(0x1eb0cc0, 0x1eb0d80, "PC main+0x1eb0d40")
+          dump(0x1e5bb60, 0x1e5bbe0, "LR main+0x1e5bbbc")
+          dump(0x1e4e840, 0x1e4e8a0, "BT main+0x1e4e87c")
+          dump(0x1eab040, 0x1eab0a0, "BT main+0x1eab078")
+
+          # Vtable desconhecida vista em *x0 (main+0x8ecc1a8): quem e esse objeto?
+          alt_vt = 0x8ecc1a8
+          if alt_vt + 16 * 8 <= len(img):
+              alt_slots = [struct.unpack_from("<Q", img, alt_vt + k * 8)[0] for k in range(16)]
+              print(f"=== Slots da vtable alternativa 0x{alt_vt:x}: {[hex(s) for s in alt_slots]} ===", flush=True)
+
+          # A Unreal aceita '-ansimalloc' se a string existir no binario (TEXT() = UTF-16LE)
+          ro_lo, ro_hi = segs[1][1], segs[1][1] + segs[1][2]
+          rodata = bytes(img[ro_lo:ro_hi])
+          has_ansimalloc = ("ansimalloc".encode("utf-16-le") in rodata) or (b"ansimalloc" in rodata)
+          has_binned2 = ("binned2".encode("utf-16-le") in rodata)
+          print(f"=== Flags de alocador no .rodata: ansimalloc={has_ansimalloc} binned2={has_binned2} ===", flush=True)
+
           vtable_addr = 0x92fa000
           prof_dir = games_dir / tid_str
           prof_dir.mkdir(parents=True, exist_ok=True)
@@ -278,7 +302,7 @@ jobs:
               "sys_resource": "0x2800000",
               "fps_target": "60",
               "pad_layout": "full",
-              "game_args": "-SwitchVirtualAddressSpaceSize=2048",
+              "game_args": "-SwitchVirtualAddressSpaceSize=2048" + (" -ansimalloc" if has_ansimalloc else ""),
           }
           skip_keys = {"patches", "hooks", "vulkan_shaders", "gl_shaders", "trinity_packs", "feedback_snap", "shader_versions", "shader_groups", "shader_note", "pso_mtl4", "game_env", "build"}
           for rk, rv in ref_kv.items():
@@ -287,6 +311,7 @@ jobs:
 
           tsv_content = "\n".join(f"{k.strip()}\t{v}" for k, v in kv.items()) + "\n"
           game_tsv.write_text(tsv_content, encoding="utf-8")
+          print(f"=== game_args final: {kv['game_args']} ===", flush=True)
 
           # Garante que dm/games/game.py nunca de KeyError
           gpy_txt = game_py.read_text(encoding="utf-8")
@@ -321,7 +346,7 @@ jobs:
           b_dir = msl_ios_base / f"b-{chain_stamp}"
           b_dir.mkdir(parents=True, exist_ok=True)
 
-          # Cache por TitleID (migra também de patched_cache_010035F022078000 caso exista)
+          # Cache por TitleID
           cache_root = Path("/Users/runner/patched_cache")
           cache_dir = cache_root / tid_str
           cache_dir.mkdir(parents=True, exist_ok=True)
@@ -391,7 +416,7 @@ jobs:
         if: always()
         with:
           path: /Users/runner/patched_cache
-          key: patched-nso-uemalloc-v5-${{ github.run_id }}
+          key: patched-nso-uemalloc-v6-${{ github.run_id }}
 
       - name: 4. Publicar <Nome_do_Jogo>.ipa direto na Release
         run: |
