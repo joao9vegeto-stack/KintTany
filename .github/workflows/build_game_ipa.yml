@@ -5,12 +5,14 @@ on:
     branches:
       - SpkIOSzero
       - SpkIOSZero
+
   workflow_dispatch:
     inputs:
       github_kit_url:
-        description: 'Link direto do github_kit.zip na Release'
+        description: "Link direto do github_kit.zip na Release"
         required: false
-        default: 'https://github.com/joao9vegeto-stack/KintTany/releases/download/v1.0-kit/github_kit_Spk.zip'
+        type: string
+        default: "https://github.com/joao9vegeto-stack/KintTany/releases/download/v1.0-kit/github_kit_Spk.zip"
 
 permissions:
   contents: write
@@ -19,85 +21,235 @@ jobs:
   build_thin_game_ipa:
     runs-on: macos-26
     timeout-minutes: 240
+
     env:
       GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
       PYTHONUNBUFFERED: "1"
       CHAIN_STAMP: ""
       KIT_URL: ${{ inputs.github_kit_url || 'https://github.com/joao9vegeto-stack/KintTany/releases/download/v1.0-kit/github_kit_Spk.zip' }}
+
+      # Commit do workflow que você informou que compilou.
+      BASELINE_COMMIT: "306dcdfcb53d348085292e9e527339161c0536c7"
+
     steps:
-      - name: 1. Checkout da Branch SpkIOSzero
+      - name: 1. Baixar projeto da versao que compilou
         uses: actions/checkout@v4
-
-      - name: 2. Instalar Dependencias (xcodegen + Python packages)
-        run: |
-          brew install xcodegen || true
-          pip3 install --break-system-packages lz4 capstone fonttools zstandard
-
-      - name: 2.5 Restaurar Cache dos Modulos NSO Reescritos
-        uses: actions/cache/restore@v4
         with:
-          path: /Users/runner/patched_cache
-          key: patched-nso-uemalloc-v7-${{ github.run_id }}
-          restore-keys: |
-            patched-nso-uemalloc-v7-
-            patched-nso-uemalloc-v6-
-            patched-nso-uemalloc-v5-
-            patched-nso-
+          ref: 306dcdfcb53d348085292e9e527339161c0536c7
 
-      - name: 3. Baixar github_kit.zip, Aplicar Patch FMallocBinned3 (37GB -> iOS) e Compilar IPA
+      - name: 2. Instalar dependencias
+        shell: bash
         run: |
           set -e
 
-          # 1. Garante arvore completa do nxnative
-          if [ ! -f "dm/ios/tools/build_ipa.sh" ]; then
-            git clone --depth 1 https://github.com/seedds/nxnative.git "$RUNNER_TEMP/nx_up"
-            rsync -a --ignore-existing "$RUNNER_TEMP/nx_up/" ./
-          fi
+          brew install xcodegen || true
 
-          # Desativa 'set -u' e transforma 'die()' em aviso no build_ipa.sh
-          sed -i '' 's/^set -u/set +u/g' dm/ios/tools/build_ipa.sh || true
-          sed -i '' 's/die() { t "FAIL: $\*"; exit 1; }/die() { t "WARN (ignored): $*"; return 0; }/g' dm/ios/tools/build_ipa.sh || true
+          pip3 install --break-system-packages \
+            lz4 \
+            capstone \
+            fonttools \
+            zstandard \
+            PyYAML
 
-          # 2. Baixa o github_kit.zip da Release
-          mkdir -p "$RUNNER_TEMP/dl"
-          if ! curl -L --fail -o "$RUNNER_TEMP/dl/github_kit.zip" "$KIT_URL"; then
-            gh release download --repo "$GITHUB_REPOSITORY" --pattern "*.zip" --dir "$RUNNER_TEMP/dl" --clobber
-          fi
-
-          FIRST_ZIP=$(find "$RUNNER_TEMP/dl" -name "*.zip" | head -n 1)
-          mkdir -p "$RUNNER_TEMP/kit"
-          unzip -q "$FIRST_ZIP" -d "$RUNNER_TEMP/kit"
-
-          if [ ! -d "$RUNNER_TEMP/kit/ExeFS" ]; then
-            SUB_EXEFS=$(find "$RUNNER_TEMP/kit" -type d -iname "ExeFS" | head -n 1)
-            if [ -n "$SUB_EXEFS" ]; then
-              PARENT_DIR=$(dirname "$SUB_EXEFS")
-              [ "$PARENT_DIR" != "$RUNNER_TEMP/kit" ] && mv "$PARENT_DIR"/* "$RUNNER_TEMP/kit/" || true
-            fi
-          fi
-
-          # 3. Auto-Patch FMallocBinned3 + build IPA (script externo, sem heredoc)
-          python3 -u dm/ios/tools/build_game_pipeline.py
-
-          echo "GAME_SAFE_NAME=$(cat $RUNNER_TEMP/last_ipa_name.txt)" >> $GITHUB_ENV
-
-      - name: 3.5 Salvar Cache dos Modulos NSO Reescritos
-        uses: actions/cache/save@v4
-        if: always()
-        with:
-          path: /Users/runner/patched_cache
-          key: patched-nso-uemalloc-v7-${{ github.run_id }}
-
-      - name: 4. Publicar <Nome_do_Jogo>.ipa direto na Release
+      - name: 3. Preparar workflow antigo sem cache externo
+        shell: bash
         run: |
+          set -e
+
+          mkdir -p "$RUNNER_TEMP/spk-diagnostics"
+
+          # O runner do GitHub é descartável. Removemos qualquer cache
+          # eventualmente existente neste runner para não reutilizar
+          # módulos reescritos de outra tentativa.
+          rm -rf /Users/runner/patched_cache
+
+          python3 -u - <<'PYEOF'
+          import os
+          import sys
+          from pathlib import Path
+
+          import yaml
+
+          workflow_path = Path(".github/workflows/build_game_ipa.yml")
+
+          if not workflow_path.is_file():
+              raise SystemExit(
+                  "ERRO: workflow original não encontrado no commit base."
+              )
+
+          with workflow_path.open("r", encoding="utf-8") as f:
+              workflow = yaml.safe_load(f)
+
+          try:
+              steps = workflow["jobs"]["build_thin_game_ipa"]["steps"]
+          except (KeyError, TypeError):
+              raise SystemExit(
+                  "ERRO: não foi possível localizar as etapas "
+                  "do workflow original."
+              )
+
+          matches = []
+
+          for step in steps:
+              name = str(step.get("name", ""))
+              command = step.get("run")
+
+              if (
+                  "Baixar github_kit.zip" in name
+                  and isinstance(command, str)
+              ):
+                  matches.append((name, command))
+
+          if len(matches) != 1:
+              raise SystemExit(
+                  "ERRO: esperava encontrar exatamente uma etapa "
+                  "de build no workflow original; "
+                  f"encontradas: {len(matches)}."
+              )
+
+          name, command = matches[0]
+
+          # Verifica que encontramos o workflow antigo, com a lógica
+          # embutida, e não o workflow novo baseado no script externo.
+          if "python3 -u - << 'PYEOF'" not in command:
+              raise SystemExit(
+                  "ERRO: a etapa localizada não contém o pipeline "
+                  "Python embutido esperado."
+              )
+
+          output = Path(os.environ["RUNNER_TEMP"]) / "spk-legacy-build.sh"
+          output.write_text(command + "\n", encoding="utf-8")
+
+          print(f"Commit base: {os.environ['BASELINE_COMMIT']}")
+          print(f"Etapa original: {name}")
+          print(f"Script preparado: {output}")
+          PYEOF
+
+      - name: 4. Baixar kit e compilar IPA com pipeline original
+        shell: bash
+        run: |
+          set -o pipefail
+
+          bash "$RUNNER_TEMP/spk-legacy-build.sh" 2>&1 \
+            | tee "$RUNNER_TEMP/spk-diagnostics/build.log"
+
+      - name: 5. Preparar relatorio de diagnostico
+        if: always()
+        shell: bash
+        run: |
+          python3 -u - <<'PYEOF'
+          import hashlib
+          import os
+          from pathlib import Path
+
+          rt = Path(os.environ["RUNNER_TEMP"])
+          diagnostics = rt / "spk-diagnostics"
+          diagnostics.mkdir(parents=True, exist_ok=True)
+
+          lines = [
+              "DIAGNÓSTICO DO BUILD THIN IPA",
+              "",
+              f"Commit que disparou o workflow: {os.environ.get('GITHUB_SHA', '')}",
+              f"Commit base do código: {os.environ.get('BASELINE_COMMIT', '')}",
+              f"Execução: {os.environ.get('GITHUB_RUN_ID', '')}",
+              "",
+              "O build.log contém a saída completa da etapa de build.",
+              "O workflow original imprime o disassembly dos offsets",
+              "PC, LR e backtrace informados no log de crash.",
+              "",
+          ]
+
+          main = rt / "kit" / "ExeFS" / "main"
+
+          if main.is_file():
+              digest = hashlib.sha256()
+
+              with main.open("rb") as f:
+                  while True:
+                      chunk = f.read(1024 * 1024)
+                      if not chunk:
+                          break
+                      digest.update(chunk)
+
+              with main.open("rb") as f:
+                  header = f.read(0x60)
+
+              lines.append(f"ExeFS/main encontrado: sim")
+              lines.append(f"Tamanho: {main.stat().st_size} bytes")
+              lines.append(f"SHA-256: {digest.hexdigest()}")
+
+              if len(header) >= 0x60 and header[:4] == b"NSO0":
+                  lines.append(f"Build ID: {header[0x40:0x60].hex()}")
+              else:
+                  lines.append("Build ID: cabeçalho NSO0 não identificado")
+          else:
+              lines.append("ExeFS/main encontrado: não")
+
+          lines.append("")
+
+          cuts = sorted(rt.glob("*-work/build/patched_v0/*.cuts.tsv"))
+
+          if cuts:
+              lines.append("Arquivos de cortes encontrados:")
+
+              for path in cuts:
+                  lines.append(f"  - {path.name}: {path.stat().st_size} bytes")
+
+                  if path.name == "main.cuts.tsv":
+                      try:
+                          lines.append("")
+                          lines.append("Conteúdo de main.cuts.tsv:")
+                          lines.append(
+                              path.read_text(
+                                  encoding="utf-8",
+                                  errors="replace",
+                              )
+                          )
+                      except OSError as exc:
+                          lines.append(f"Não foi possível ler cortes: {exc}")
+          else:
+              lines.append("Nenhum arquivo .cuts.tsv encontrado.")
+
+          report = diagnostics / "resumo.txt"
+          report.write_text("\n".join(lines) + "\n", encoding="utf-8")
+
+          print(report.read_text(encoding="utf-8"))
+          PYEOF
+
+      - name: 6. Salvar diagnostico nos Artifacts
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: spk-diagnostico-${{ github.run_id }}
+          path: ${{ runner.temp }}/spk-diagnostics/
+          if-no-files-found: warn
+          retention-days: 7
+
+      - name: 7. Publicar IPA na Release
+        shell: bash
+        run: |
+          set -e
+
+          FOUND=0
+
           for IPA_FILE in "$RUNNER_TEMP"/*.ipa; do
             if [ -f "$IPA_FILE" ]; then
-              gh release upload v1.0-kit "$IPA_FILE" --repo "$GITHUB_REPOSITORY" --clobber || true
-              echo "=== IPA publicado na Release v1.0-kit: $(basename "$IPA_FILE") ==="
+              FOUND=1
+
+              echo "Publicando: $(basename "$IPA_FILE")"
+
+              gh release upload v1.0-kit "$IPA_FILE" \
+                --repo "$GITHUB_REPOSITORY" \
+                --clobber
             fi
           done
 
-      - name: 5. Upload do IPA nos Artifacts com o Nome do Jogo
+          if [ "$FOUND" -ne 1 ]; then
+            echo "ERRO: nenhum IPA foi encontrado."
+            exit 1
+          fi
+
+      - name: 8. Salvar IPA nos Artifacts
         uses: actions/upload-artifact@v4
         with:
           name: ${{ env.GAME_SAFE_NAME }}_Artifact
