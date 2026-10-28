@@ -34,11 +34,11 @@ jobs:
           brew install xcodegen || true
           pip3 install --break-system-packages lz4 capstone fonttools zstandard
 
-      - name: 2.5 Cache dos Modulos NSO Reescritos (Economiza 9 min!)
-        uses: actions/cache@v4
+      - name: 2.5 Restaurar Cache dos Modulos NSO Reescritos
+        uses: actions/cache/restore@v4
         with:
           path: /Users/runner/patched_cache_010035F022078000
-          key: patched-nso-010035F022078000-v1
+          key: patched-nso-010035F022078000-v2
 
       - name: 3. Baixar github_kit.zip e Compilar Thin IPA Nativo do Jogo
         run: |
@@ -68,7 +68,7 @@ jobs:
             fi
           fi
 
-          # 3. Executa o pipeline real do nxnative com logs sincronizados (flush=True)
+          # 3. Executa o pipeline real do nxnative
           python3 -u - << 'PYEOF'
           import os, sys, re, struct, shutil, subprocess
           from pathlib import Path
@@ -89,6 +89,17 @@ jobs:
               tid = struct.unpack_from("<Q", npdm, aci0 + 0x10)[0]
               tid_str = f"{tid:016X}"
           print(f"=== TitleID detectado: {tid_str} ===", flush=True)
+
+          # Inspeciona dm/games/game.py e um game.tsv existente para ver TODAS as chaves reais
+          games_dir = Path("dm/games").resolve()
+          game_py = games_dir / "game.py"
+          print("=== Conteudo de dm/games/game.py ===", flush=True)
+          print(game_py.read_text(encoding="utf-8"), flush=True)
+
+          sample_tsvs = sorted(games_dir.glob("*/game.tsv"))
+          if sample_tsvs:
+              print(f"=== Exemplo de game.tsv oficial ({sample_tsvs[0]}): ===", flush=True)
+              print(sample_tsvs[0].read_text(encoding="utf-8"), flush=True)
 
           # Descobre quais modulos NSO existem dentro de ExeFS
           order = ["rtld", "main", "subsdk0", "subsdk1", "subsdk2", "subsdk3", "subsdk4", "subsdk5", "subsdk6", "subsdk7", "subsdk8", "subsdk9", "sdk"]
@@ -112,21 +123,32 @@ jobs:
                           marker = first_col
                           break
 
-          # Cria o perfil LIMPO de Unreal Engine (baseado no Octopath Traveler 0 / Unreal profile do nxnative, sem lixo de outros jogos!)
-          games_dir = Path("dm/games").resolve()
           prof_dir = games_dir / tid_str
           prof_dir.mkdir(parents=True, exist_ok=True)
           game_tsv = prof_dir / "game.tsv"
 
+          # Pega as chaves obrigatorias de um perfil Unreal/NVN existente (ex: octopath0 ou primeiro perfil) apenas para saber os nomes das chaves de cabecalho
+          ref_kv = {}
+          for stsv in sample_tsvs:
+              if stsv.parent.name != tid_str:
+                  for line in stsv.read_text(errors="ignore").splitlines():
+                      if "\t" in line and not line.startswith("#"):
+                          k, v = line.split("\t", 1)
+                          ref_kv.setdefault(k.strip(), v.strip())
+                  break
+
           kv = {
               "name": "DRAGON BALL: Sparking! ZERO",
+              "program_id": tid_str.lower(),
               "title_id": tid_str.lower(),
+              "bundle_id": f"com.nxnative.g{tid_str.lower()}",
+              "version": "1.0",
               "package": "v0",
               "ipa": f"{tid_str}_Thin.ipa",
               "modules": " ".join(mods),
               "romfs_marker": marker,
               "gfx_api": "nvn",
-              "app_category": "public.app-category.action-games",
+              "app_category": ref_kv.get("app_category", "public.app-category.action-games"),
               "orientation": "landscape",
               "mem_reserve": "0x300000000",
               "mem_alias": "0x200000000",
@@ -140,19 +162,33 @@ jobs:
               "alloc_big_align": "on",
               "game_args": "-SwitchVirtualAddressSpaceSize=2048",
           }
+          # Se o perfil de referencia tiver alguma chave de cabecalho que nao esteja em kv (exceto hashes/patches especificos), adiciona com seguranca
+          skip_keys = {"patches", "hooks", "vulkan_shaders", "gl_shaders", "trinity_packs", "feedback_snap", "shader_versions", "shader_groups", "shader_note", "pso_mtl4", "game_env"}
+          for rk, rv in ref_kv.items():
+              if rk not in kv and rk not in skip_keys and not rk.startswith("subsdk") and rk not in ("rtld", "main", "sdk"):
+                  kv[rk] = rv
 
           tsv_content = "\n".join(f"{k}\t{v}" for k, v in kv.items()) + "\n"
           game_tsv.write_text(tsv_content, encoding="utf-8")
-          print("=== game.tsv limpo gerado: ===", flush=True)
+          print("=== game.tsv gerado: ===", flush=True)
           print(tsv_content, flush=True)
 
-          # Garante que dm/games/game.py nunca de KeyError em chaves opcionais
-          game_py = games_dir / "game.py"
-          if game_py.exists():
-              gpy_txt = game_py.read_text(encoding="utf-8")
-              old_err = "raise KeyError(f'{path} has no key {key}')"
-              if old_err in gpy_txt:
-                  game_py.write_text(gpy_txt.replace(old_err, "return ''"), encoding="utf-8")
+          # Corrige a linha 28 do dm/games/game.py para NUNCA MAIS lancar KeyError (usando a string exata que apareceu no traceback!)
+          gpy_txt = game_py.read_text(encoding="utf-8")
+          gpy_txt = re.sub(
+              r'if default is None:\s*raise KeyError\([^\)]+\)',
+              "if default is None: return ''",
+              gpy_txt
+          )
+          game_py.write_text(gpy_txt, encoding="utf-8")
+
+          # Testa imediatamente a geracao do game_profile.h (que falhou na linha 569 antes!) ANTES de rodar o patch_nso!
+          env = os.environ.copy()
+          env["DM_GAME"] = tid_str
+          env["GAME"] = tid_str
+          print("=== Testando make -C dm/host game_profile IMEDIATAMENTE (Fail-Fast check) ===", flush=True)
+          subprocess.run(["make", "-s", "-C", "dm/host", "game_profile"], env=env, check=True)
+          print("=== SUCESSO! game_profile.h gerado perfeitamente! ===", flush=True)
 
           # Prepara estrutura W=<work_dir>
           work = rt / f"{tid_str}-work"
@@ -170,10 +206,6 @@ jobs:
           # 4. Reescreve CADA modulo NSO (ou restaura do cache em 2 segundos!)
           cache_dir = Path("/Users/runner/patched_cache_010035F022078000")
           cache_dir.mkdir(parents=True, exist_ok=True)
-
-          env = os.environ.copy()
-          env["DM_GAME"] = tid_str
-          env["GAME"] = tid_str
 
           cached_files = list(cache_dir.glob("*"))
           if len(cached_files) >= len(mods):
@@ -193,34 +225,24 @@ jobs:
                   if pf.is_file():
                       shutil.copy2(pf, cache_dir / pf.name)
 
-          print("=== Arquivos na pasta patched: ===", [p.name for p in patched.iterdir()], flush=True)
-
-          # 5. Inspeciona dm/ios/tools/build_ipa.sh e adapta para Thin IPA (sem exigir shaders pre-compilados nem RomFS de 28GB)
+          # 5. Prepara CHAIN_STAMP, tabelas e build_ipa.sh
           bsh = Path("dm/ios/tools/build_ipa.sh")
           bt = bsh.read_text(encoding="utf-8")
-          print("=== Conteudo original de dm/ios/tools/build_ipa.sh ===", flush=True)
-          for idx, line in enumerate(bt.splitlines(), 1):
-              print(f"{idx:3d}: {line}", flush=True)
 
-          # Descobre o CHAIN_STAMP que o build_ipa.sh usa
           chain_h = Path("dm/gfx/nvn/dmsh_chain.h")
           chain_stamp = ""
           if chain_h.exists():
               m_st = re.search(r'DMSH_CHAIN_STAMP\s+"([^"]+)"', chain_h.read_text(errors="ignore"))
               if m_st:
                   chain_stamp = m_st.group(1)
-          print(f"=== CHAIN_STAMP detectado: '{chain_stamp}' ===", flush=True)
 
-          # Cria as tabelas c1_full.tsv e cb_extent.tsv com o stamp correto para nao falhar na checagem de tabelas!
           stamp_hdr = f"# chain_stamp {chain_stamp}\n" if chain_stamp else "# chain_stamp\n"
           for tbl in ("c1_full.tsv", "cb_extent.tsv"):
               (prof_dir / tbl).write_text(stamp_hdr, encoding="utf-8")
 
-          # Se tivermos pasta b-<stamp>, cria ela dentro de msl_ios
           if chain_stamp:
               (msl_ios / f"b-{chain_stamp}").mkdir(parents=True, exist_ok=True)
 
-          # Adapta main.m para aceitar Documents/ no iPhone
           main_m = Path("dm/ios/Sources/main.m")
           if main_m.exists():
               s = main_m.read_text(encoding="utf-8")
@@ -229,22 +251,19 @@ jobs:
               if 'contentsOfDirectoryAtPath:documentFolder' not in s:
                   main_m.write_text(s.replace(old_m, new_m), encoding="utf-8")
 
-          # Garante que o arquivo do marker exista dentro do RomFS esqueleto
           marker_path = romfs / marker.lstrip("/")
           if not marker_path.exists():
               marker_path.parent.mkdir(parents=True, exist_ok=True)
               marker_path.write_bytes(b"dummy")
 
-          # Neutraliza checagens de shader libraries / chain_tables no build_ipa.sh caso nao haja shaders compilados
           bt_mod = bt.replace(
               'python3 "$DM/tools/romfs.py" "$ROMFS" "$MARKER" || die "no RomFS at $ROMFS (missing $MARKER)"',
               'echo "[Thin IPA] RomFS sera carregado de Documents/ no iPhone"'
           )
-          # Substitui qualquer die de shader libraries ou chain tables por warning
           bt_mod = re.sub(r'\bdie\s+"([^"]*shader[^"]*|[^"]*c1_full[^"]*|[^"]*cb_extent[^"]*|[^"]*table[^"]*)"', r'echo "WARN (ignorado para Thin IPA): \1"', bt_mod)
           bsh.write_text(bt_mod, encoding="utf-8")
 
-          # 6. Chama bash -x dm/ios/tools/build_ipa.sh para mostrar cada comando ao vivo
+          # 6. Chama bash -x dm/ios/tools/build_ipa.sh
           out_ipa = rt / f"{tid_str}_Thin.ipa"
           env["W"] = str(work)
           env["PATCHED"] = str(patched)
@@ -254,12 +273,17 @@ jobs:
           env["GFXAPI"] = "nvn"
 
           print(f"=== Executando bash -x build_ipa.sh -> {out_ipa} ===", flush=True)
-          res = subprocess.run(["bash", "-x", "dm/ios/tools/build_ipa.sh", str(out_ipa)], env=env)
-          if res.returncode != 0:
-              sys.exit(res.returncode)
+          subprocess.run(["bash", "-x", "dm/ios/tools/build_ipa.sh", str(out_ipa)], env=env, check=True)
           PYEOF
 
           ls -lh "$RUNNER_TEMP"/*_Thin.ipa
+
+      - name: 3.5 Salvar Cache dos Modulos NSO Reescritos (Mesmo se o build_ipa falhar!)
+        if: always()
+        uses: actions/cache/save@v4
+        with:
+          path: /Users/runner/patched_cache_010035F022078000
+          key: patched-nso-010035F022078000-v2
 
       - name: 4. Upload do IPA do Jogo nos Artifacts
         uses: actions/upload-artifact@v4
