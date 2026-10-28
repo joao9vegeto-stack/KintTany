@@ -1,0 +1,13 @@
+diff --git a/libs/video/rsx_metal_backend.m b/libs/video/rsx_metal_backend.m
+--- a/libs/video/rsx_metal_backend.m
++++ b/libs/video/rsx_metal_backend.m
+@@ -71,7 +71,9 @@
+ static CAMetalLayer*       s_layer;      /* windowed only   */
+ static id<MTLTexture>      s_offscreen;  /* headless only   */
+ static id<MTLTexture>      s_depth;      /* depth + stencil, both surfaces  */
++#if !TARGET_OS_IPHONE
+ static NSWindow*           s_window;
++#endif
+ static int                 s_headless;
+ static int                 s_closed;
+ static int                 s_ready;

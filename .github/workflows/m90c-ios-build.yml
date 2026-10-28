@@ -46,6 +46,11 @@ jobs:
           set -e
           (cd ps3recomp && git apply --check ../.github/patches/ios-mach-vm.patch)
           (cd ps3recomp && git apply ../.github/patches/ios-mach-vm.patch)
+      - name: Apply iOS Metal window guard patch
+        run: |
+          set -e
+          (cd ps3recomp && git apply --check ../.github/patches/ios-metal-window.patch)
+          (cd ps3recomp && git apply ../.github/patches/ios-metal-window.patch)
       - name: Download M9.0 lift bundle
         uses: dawidd6/action-download-artifact@v6
         with:
