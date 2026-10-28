@@ -2051,7 +2051,7 @@ static BOOL ARGameManifestHasTitleUsrdir(NSDictionary *manifest){
         (unsigned long long)edgeQueue[0],(unsigned long long)edgeQueue[1],
         (unsigned long long)edgeQueue[2],(unsigned long long)edgeQueue[3],
         (unsigned long long)edgeQueue[4],(unsigned long long)edgeQueue[5]];
-    [out appendString:@"Execução SPU: nativo estrito; intérprete e microstep SPU desativados.\n"];
+    [out appendString:@"Execução SPU: AOT nativo + PIC, com intérprete de fallback (M8.19) e microstep ativos.\n"];
     [out appendFormat:@"SPU PUTLLC: linhas commitadas=%llu · tasksets acordados=%llu (candidatos/válidos acima)\n",
         (unsigned long long)tasksetCommits[0],(unsigned long long)tasksetCommits[1]];
     [out appendFormat:@"Pilha SPU (MiB): tentativas=%llu · 256=%llu/%llu/%llu · 64=%llu/%llu/%llu · 32=%llu/%llu/%llu · 16=%llu/%llu/%llu · fallback=%llu/%llu · pthread rc=%llu · attr rc=%llu\n",

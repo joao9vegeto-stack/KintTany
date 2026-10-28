@@ -1,4 +1,4 @@
-name: AscensionRecomp M8.18.6 - WWS crash diagnostics and C8 yield
+name: AscensionRecomp M8.19.0 - SPU interpreter fallback default ON
 
 on:
   push:
@@ -41,7 +41,7 @@ jobs:
         run: |
           set -euo pipefail
           bash -n tools/build_ios_probe_ipa.sh
-          python3 -m py_compile tools/test_m807_spu_pic_filter.py tools/m808_taskset_commit_kick.py tools/test_m808_taskset_commit_kick.py tools/test_m809_spurs_poll_select.py tools/m810_native_lfqueue.py tools/test_m810_native_lfqueue.py tools/m811_native_stage.py tools/test_m811_native_stage.py tools/m812_spurs2_policy_runtime.py tools/test_m812_spurs2_policy_runtime.py tools/m813_native_c8_irq.py tools/test_m813_native_c8_irq.py tools/m814_taskset2_eventflags.py tools/test_m814_taskset2_eventflags.py tools/m816_wid16_lfqueue_commit.py tools/test_m816_wid16_lfqueue_commit.py tools/m817_c8_idle_poll_yield.py tools/test_m817_c8_idle_poll_yield.py tools/m818_render_unblock.py tools/test_m818_render_unblock.py
+          python3 -m py_compile tools/test_m807_spu_pic_filter.py tools/m808_taskset_commit_kick.py tools/test_m808_taskset_commit_kick.py tools/test_m809_spurs_poll_select.py tools/m810_native_lfqueue.py tools/test_m810_native_lfqueue.py tools/m811_native_stage.py tools/test_m811_native_stage.py tools/m812_spurs2_policy_runtime.py tools/test_m812_spurs2_policy_runtime.py tools/m813_native_c8_irq.py tools/test_m813_native_c8_irq.py tools/m814_taskset2_eventflags.py tools/test_m814_taskset2_eventflags.py tools/m816_wid16_lfqueue_commit.py tools/test_m816_wid16_lfqueue_commit.py tools/m817_c8_idle_poll_yield.py tools/test_m817_c8_idle_poll_yield.py tools/m818_render_unblock.py tools/test_m818_render_unblock.py tools/m819_interp_default_on.py
           python3 -m py_compile tools/m790_prepare_jobmods.py tools/m772_build_ios.py tools/m772_unpack_ci.py tools/enable_ios_spu_pic_runtime.py tools/m793_lift_spu_pic.py
           python3 -m py_compile tools/m714_owner_batch.py
           python3 -m py_compile tools/patch_ps3recomp_spurs2.py tools/m801_taskset_runtime.py tools/test_m801_taskset_lockline.py tools/test_m802_spu_rejoin.py tools/test_m803_gcm_park_spu_hold.py tools/m772_unpack_ci.py tools/m772_build_ios.py tools/enable_ios_drawable_layer.py
@@ -179,6 +179,10 @@ jobs:
           python3 tools/m818_render_unblock.py --upstream upstream-m772
           python3 tools/test_m818_render_unblock.py --upstream upstream
           python3 tools/test_m818_render_unblock.py --upstream upstream-m772
+          python3 tools/m819_interp_default_on.py --upstream upstream
+          python3 tools/m819_interp_default_on.py --upstream upstream-m772
+          python3 tools/m819_interp_default_on.py --upstream upstream --verify
+          python3 tools/m819_interp_default_on.py --upstream upstream-m772 --verify
           python3 tools/test_m816_wid16_lfqueue_commit.py --upstream upstream
           python3 tools/test_m816_wid16_lfqueue_commit.py --upstream upstream-m772
           python3 tools/test_m811_native_stage.py --upstream upstream
