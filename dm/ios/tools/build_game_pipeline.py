@@ -87,9 +87,11 @@ for p in sorted(exefs.iterdir()):
 print(f"=== Módulos NSO (sem rtld): {mods} ===", flush=True)
 
 # ─────────────────────────────────────────────────────────────────────────────
-# 4. Descomprime NSO — lógica idêntica ao nso.py do nxnative
+# 4. Lê NSO e descomprime usando nso.py do repositório
+#    (evita reimplementar a lógica — usa o loader oficial que já funciona)
 # ─────────────────────────────────────────────────────────────────────────────
-main_bytes = (exefs / "main").read_bytes()
+main_file  = exefs / "main"
+main_bytes = main_file.read_bytes()
 
 if main_bytes[:4] != b"NSO0":
     print(f"[patch] FATAL: magic invalido {main_bytes[:4]!r}")
@@ -98,326 +100,274 @@ if main_bytes[:4] != b"NSO0":
 flags    = struct.unpack_from("<I", main_bytes, 0x0C)[0]
 main_bid = main_bytes[0x40:0x50].hex()
 use_zstd = bool(flags & (1 << 7))
-
 print(f"=== Build ID: {main_bid} ===", flush=True)
 print(f"=== flags: 0x{flags:02x} | compressao: {'zstd' if use_zstd else 'lz4-block'} ===", flush=True)
 
-# stored = (file_offset, mem_offset, decomp_size) — exatamente como nso.py
-stored = [struct.unpack_from("<III", main_bytes, 0x10 + i * 0x10) for i in range(3)]
-csz_hdr = struct.unpack_from("<III", main_bytes, 0x60)
-csz = [csz_hdr[i] if (flags >> i) & 1 else stored[i][2] for i in range(3)]
-
-seg_names = ["text","rodata","data"]
-for i, ((fo, mo, sz), c) in enumerate(zip(stored, csz)):
-    print(f"  .{seg_names[i]}: file_off=0x{fo:x} mem_off=0x{mo:x} "
-          f"decomp_sz=0x{sz:x} comp_sz=0x{c:x} compressed={(flags>>i)&1}", flush=True)
-
-end = stored[2][1] + stored[2][2]
-img = bytearray(end)
-
-for i, ((fo, mo, sz), c) in enumerate(zip(stored, csz)):
-    raw = main_bytes[fo : fo + c]
-    print(f"  seg[{i}] .{seg_names[i]}: lendo 0x{len(raw):x} bytes de file_off=0x{fo:x}", flush=True)
-    if (flags >> i) & 1:
-        if use_zstd:
-            try:
+# Usa nso.py do repositório para descomprimir — é o loader oficial e correto
+try:
+    sys.path.insert(0, str(Path("dm/tools").resolve()))
+    import nso as _nso
+    MOD     = _nso.cli_read(str(main_file))
+    img     = MOD.image
+    img_size = len(img)
+    # Segmentos: ((mem_off, size), ...) para text, ro, data
+    seg_text = MOD.segments[0]   # (mem_off, size)
+    seg_ro   = MOD.segments[1]
+    seg_data = MOD.segments[2]
+    segs = [
+        (None, seg_text[0], seg_text[1], None),
+        (None, seg_ro[0],   seg_ro[1],   None),
+        (None, seg_data[0], seg_data[1], None),
+    ]
+    print(f"=== nso.py: imagem 0x{img_size:x} bytes ===", flush=True)
+    print(f"  .text:   mem=0x{seg_text[0]:x} size=0x{seg_text[1]:x}", flush=True)
+    print(f"  .rodata: mem=0x{seg_ro[0]:x}   size=0x{seg_ro[1]:x}", flush=True)
+    print(f"  .data:   mem=0x{seg_data[0]:x}  size=0x{seg_data[1]:x}", flush=True)
+except Exception as e:
+    print(f"  [warn] nso.py falhou ({e}), usando descompressão manual", flush=True)
+    # Fallback manual — idêntico ao nso.py
+    stored   = [struct.unpack_from("<III", main_bytes, 0x10 + i * 0x10) for i in range(3)]
+    csz_hdr  = struct.unpack_from("<III", main_bytes, 0x60)
+    csz      = [csz_hdr[i] if (flags >> i) & 1 else stored[i][2] for i in range(3)]
+    seg_names_l = ["text","rodata","data"]
+    for i, ((fo, mo, sz), c) in enumerate(zip(stored, csz)):
+        print(f"  .{seg_names_l[i]}: file_off=0x{fo:x} mem_off=0x{mo:x} "
+              f"decomp_sz=0x{sz:x} comp_sz=0x{c:x}", flush=True)
+    end = stored[2][1] + stored[2][2]
+    img = bytearray(end)
+    for i, ((fo, mo, sz), c) in enumerate(zip(stored, csz)):
+        raw = main_bytes[fo : fo + c]
+        print(f"  seg[{i}]: lendo 0x{len(raw):x} bytes de 0x{fo:x}", flush=True)
+        if (flags >> i) & 1:
+            if use_zstd:
                 import zstandard as zstd
                 raw = zstd.ZstdDecompressor().decompress(raw, max_output_size=sz)
-            except Exception as e:
-                print(f"[patch] FATAL: zstd seg[{i}]: {e}")
-                sys.exit(1)
-        else:
-            try:
+            else:
                 raw = lz4.block.decompress(raw, uncompressed_size=sz)
-            except Exception as e:
-                print(f"[patch] FATAL: lz4 seg[{i}] .{seg_names[i]}: {e}")
-                print(f"  primeiros 16 bytes: {main_bytes[fo:fo+16].hex()}")
-                sys.exit(1)
-    if len(raw) < sz:
-        raw = raw + bytes(sz - len(raw))
-    img[mo : mo + sz] = raw[:sz]
-    print(f"  seg[{i}] ok -> mem[0x{mo:x}..0x{mo+sz:x}]", flush=True)
+        if len(raw) < sz:
+            raw = raw + bytes(sz - len(raw))
+        img[mo : mo + sz] = raw[:sz]
+        print(f"  seg[{i}] ok -> mem[0x{mo:x}..0x{mo+sz:x}]", flush=True)
+    img_size = end
+    seg_text  = (stored[0][1], stored[0][2])
+    seg_ro    = (stored[1][1], stored[1][2])
+    seg_data  = (stored[2][1], stored[2][2])
+    segs = [(stored[i][0], stored[i][1], stored[i][2], csz[i]) for i in range(3)]
 
-img_size = end
 print(f"=== Imagem descomprimida: 0x{img_size:x} bytes ===", flush=True)
 
-segs = [(stored[i][0], stored[i][1], stored[i][2], csz[i]) for i in range(3)]
+# ─────────────────────────────────────────────────────────────────────────────
+# 5. Base de dados de builds conhecidos (do hle_uemalloc.c do nxnative)
+#    Para builds conhecidos: usa vtable/cut diretamente, sem disassembly
+# ─────────────────────────────────────────────────────────────────────────────
+# Formato: build_id -> (layout, obj, vtable, cut, obj_reg)
+# obj=0 significa que o objeto é criado por GCreateMalloc (não é fixo)
+# obj_reg=19 é o padrão para UE5 (x19 = this após o construtor)
+KNOWN_BUILDS = {
+    # Octopath Traveler 0 1.0.5
+    "9fe60a212cff9b9a3656ab63d4f882e5": ("UE5",   0x68022c8, 0x5b06f38, 0x12e40,    19),
+    # DRAGON QUEST VII Reimagined 1.2.0
+    "f7ec03e4cb9de3bd8319d4e899d2e9cc": ("UE4_27",0,         0x5e4c0e8, 0x32758dc,  19),
+    # Pikmin 4 1.1.1
+    "060f827bd2b38703e9ea11e3210d89bc": ("UE4_27",0,         0x8da4758, 0x353f788,  19),
+    # OCTOPATH TRAVELER II 1.1.1
+    "0d9649011312f62e93f6a5673a09d7e9": ("UE4_27",0,         0x64710b0, 0xbecc08,   19),
+}
+
+cut_addr     = None
+obs_addr     = None
+vtable_addr  = None
+ue_layout    = "UE5"
+obj_reg_n    = 19
+
+if main_bid in KNOWN_BUILDS:
+    layout, obj, vtable, cut, oreg = KNOWN_BUILDS[main_bid]
+    cut_addr    = cut
+    obs_addr    = cut + 4
+    vtable_addr = vtable
+    ue_layout   = layout
+    obj_reg_n   = oreg
+    cut_orig_hex  = bytes(img[cut_addr:cut_addr+4]).hex()
+    obs_orig_word = f"{struct.unpack_from('<I', img, obs_addr)[0]:08x}"
+    print(f"=== Build conhecido: vtable=0x{vtable_addr:x} cut=0x{cut_addr:x} "
+          f"layout={ue_layout} ===", flush=True)
+    print(f"=== CUT=0x{cut_addr:x} ({cut_orig_hex}) OBS=0x{obs_addr:x} "
+          f"({obs_orig_word}) OBJ_REG=x{obj_reg_n} ===", flush=True)
 
 # ─────────────────────────────────────────────────────────────────────────────
-# 5. Disassembla .text — pula MOD0 header
+# 6. Detector dinâmico — só roda se o build NÃO for conhecido
 # ─────────────────────────────────────────────────────────────────────────────
-text_mem_off = stored[0][1]
-text_size    = stored[0][2]
+if cut_addr is None:
+    print(f"=== Build desconhecido — iniciando detector dinâmico ===", flush=True)
 
-mod0_ptr   = struct.unpack_from("<I", img, text_mem_off + 0x04)[0]
-mod0_magic = bytes(img[text_mem_off + mod0_ptr : text_mem_off + mod0_ptr + 4])
+    md = Cs(CS_ARCH_ARM64, CS_MODE_ARM)
+    md.detail = True
 
-if mod0_magic == b"MOD0":
-    code_start = (text_mem_off + mod0_ptr + 0x28 + 3) & ~3
-    print(f"=== MOD0 em 0x{text_mem_off+mod0_ptr:x}, código começa em 0x{code_start:x} ===", flush=True)
-else:
-    code_start = text_mem_off + 0x100
-    print(f"=== MOD0 não encontrado (magic={mod0_magic!r}), fallback 0x{code_start:x} ===", flush=True)
+    text_start = seg_text[0]
+    text_size  = seg_text[1]
 
-code_end = text_mem_off + text_size
+    # Pula MOD0 — lê ponteiro em [0x04] do .text
+    mod0_ptr   = struct.unpack_from("<I", img, text_start + 0x04)[0]
+    mod0_magic = bytes(img[text_start + mod0_ptr : text_start + mod0_ptr + 4])
+    if mod0_magic == b"MOD0":
+        code_start = (text_start + mod0_ptr + 0x28 + 3) & ~3
+        print(f"=== MOD0 em 0x{text_start+mod0_ptr:x}, código em 0x{code_start:x} ===", flush=True)
+    else:
+        code_start = text_start + 0x100
+        print(f"=== MOD0 fallback 0x{code_start:x} ===", flush=True)
+    code_end = text_start + text_size
 
-print(f"=== Disassemblando .text: [0x{code_start:x}..0x{code_end:x}] ===", flush=True)
+    print(f"=== Disassemblando .text: [0x{code_start:x}..0x{code_end:x}] ===", flush=True)
+    insns_all = list(md.disasm(bytes(img[code_start:code_end]), code_start))
+    print(f"=== Instruções disassembladas: {len(insns_all)} ===", flush=True)
 
-md = Cs(CS_ARCH_ARM64, CS_MODE_ARM)
-md.detail = True
+    if len(insns_all) < 100000:
+        print(f"[patch] FATAL: apenas {len(insns_all)} instrucoes — imagem corrompida ou offset errado")
+        print(f"  primeiros 32 bytes (0x{code_start:x}): {bytes(img[code_start:code_start+32]).hex()}")
+        sys.exit(1)
 
-insns_all = list(md.disasm(bytes(img[code_start:code_end]), code_start))
-print(f"=== Instruções disassembladas: {len(insns_all)} ===", flush=True)
+    by_addr = {ins.address: ins for ins in insns_all}
 
-if len(insns_all) < 1000:
-    sample = img[code_start:code_start+32].hex()
-    print(f"[patch] FATAL: apenas {len(insns_all)} instrucoes")
-    print(f"  primeiros 32 bytes (0x{code_start:x}): {sample}")
-    sys.exit(1)
+    ro_start = seg_ro[0]
+    ro_size  = seg_ro[1]
+    ro_bytes = bytes(img[ro_start : ro_start + ro_size])
 
-by_addr = {ins.address: ins for ins in insns_all}
-print(f"=== by_addr: {len(by_addr)} entradas ===", flush=True)
+    def sign_extend(v, bits):
+        s = 1 << (bits - 1)
+        return (v & (s - 1)) - (v & s)
 
-# ─────────────────────────────────────────────────────────────────────────────
-# 6. Detecta vtable FMallocBinned3 DINAMICAMENTE
-#
-#  Estratégia (igual ao nxnative):
-#  1. Procura a string "Binned3" no rodata
-#  2. Encontra a função GetDescriptiveName que retorna essa string
-#     (adrp + add/ldr que aponta para ela)
-#  3. Essa função está no slot 22 (UE5) ou 19 (UE4_27) da vtable
-#  4. A vtable é encontrada procurando ponteiros para essa função no rodata
-# ─────────────────────────────────────────────────────────────────────────────
-ro_mem_off = stored[1][1]
-ro_size    = stored[1][2]
-rodata     = bytes(img[ro_mem_off : ro_mem_off + ro_size])
+    def decode_bl(word, pc):
+        if (word & 0xFC000000) != 0x94000000: return None
+        return pc + sign_extend((word & 0x03FFFFFF) << 2, 28)
 
-# Procura "Binned3" no rodata
-binned3_addr = None
-for needle in [b"Binned3\x00", b"Binned3"]:
-    idx = rodata.find(needle)
-    if idx >= 0:
-        binned3_addr = ro_mem_off + idx
-        break
+    def rnum(name):
+        if not name: return None
+        m2 = re.fullmatch(r"[xw](\d+)", name.lower())
+        return int(m2.group(1)) if m2 and int(m2.group(1)) <= 30 else None
 
-if binned3_addr is None:
-    print("[patch] FATAL: string 'Binned3' nao encontrada no rodata")
-    sys.exit(1)
-
-print(f"=== 'Binned3' encontrado em 0x{binned3_addr:x} ===", flush=True)
-
-# Procura no .text funções que referenciam binned3_addr via adrp+add
-binned3_page = binned3_addr & ~0xFFF
-binned3_lo   = binned3_addr & 0xFFF
-
-def sign_extend(v, bits):
-    s = 1 << (bits - 1)
-    return (v & (s - 1)) - (v & s)
-
-def decode_bl(word, pc):
-    if (word & 0xFC000000) != 0x94000000:
-        return None
-    return pc + sign_extend((word & 0x03FFFFFF) << 2, 28)
-
-def rnum(name):
-    if not name:
-        return None
-    m2 = re.fullmatch(r"[xw](\d+)", name.lower())
-    return int(m2.group(1)) if m2 and int(m2.group(1)) <= 30 else None
-
-# Encontra GetDescriptiveName: função que faz adrp+add para binned3_addr e retorna
-getdesc_candidates = []
-for idx, insn in enumerate(insns_all):
-    if insn.mnemonic != "adrp" or len(insn.operands) < 2:
-        continue
-    if insn.operands[1].imm != binned3_page:
-        continue
-    dst = rnum(insn.reg_name(insn.operands[0].reg))
-    if dst is None:
-        continue
-    # Procura add/ldr seguinte com o mesmo reg e offset correto
-    for j in range(idx + 1, min(idx + 8, len(insns_all))):
-        ii = insns_all[j]
-        if ii.mnemonic in ("add", "ldr") and len(ii.operands) >= 2:
-            if ii.mnemonic == "add" and len(ii.operands) >= 3:
-                base = rnum(ii.reg_name(ii.operands[1].reg))
-                if base == dst:
-                    imm = ii.operands[2].imm if len(ii.operands) > 2 else 0
-                    if imm == binned3_lo:
-                        getdesc_candidates.append(insn.address)
-                        break
-            elif ii.mnemonic == "ldr":
+    # Busca vtable: sequência de ponteiros para .text no .rodata
+    best_vtable = None
+    best_count  = 0
+    for off in range(ro_start, ro_start + ro_size - 64, 8):
+        count = 0
+        for slot in range(64):
+            ptr_off = off + slot * 8
+            if ptr_off + 8 > len(img): break
+            ptr = struct.unpack_from("<Q", img, ptr_off)[0]
+            if text_start <= ptr < text_start + text_size:
+                count += 1
+            else:
                 break
-        # Se encontrar ret logo após, é candidato mesmo sem add
-        if ii.mnemonic == "ret":
-            break
+        if count > best_count:
+            best_count  = count
+            best_vtable = off
 
-print(f"=== GetDescriptiveName candidatos: {[hex(x) for x in getdesc_candidates[:5]]} ===", flush=True)
+    if not best_vtable or best_count < 20:
+        print(f"[patch] FATAL: vtable nao encontrada (melhor={best_count} slots)")
+        sys.exit(1)
 
-# Procura vtable no rodata: bloco de ponteiros onde um deles aponta para GetDescriptiveName
-# A vtable tem pelo menos 20 entradas de 8 bytes
-vtable_addr = None
-vtable_slot_getdesc = None
+    vtable_addr = best_vtable
+    VTABLE_PAGE = vtable_addr & ~0xFFF
+    print(f"=== vtable detectada: 0x{vtable_addr:x} ({best_count} slots) ===", flush=True)
 
-if getdesc_candidates:
-    gd_fn = getdesc_candidates[0]
-    # Procura no rodata ponteiros de 8 bytes para gd_fn
-    for off in range(0, ro_size - 8, 8):
-        ptr = struct.unpack_from("<Q", rodata, off)[0]
-        if ptr == gd_fn:
-            candidate_vtable_base = ro_mem_off + off
-            # Verifica se parece vtable: entradas anteriores também são ponteiros no .text
-            valid = True
-            for slot_back in range(1, 5):
-                check_off = off - slot_back * 8
-                if check_off < 0:
-                    valid = False
-                    break
-                p = struct.unpack_from("<Q", rodata, check_off)[0]
-                if not (code_start <= p < code_end):
-                    valid = False
-                    break
-            if valid:
-                # Determina o slot (22=UE5, 19=UE4_27)
-                # Tenta UE5: slot 22 = GetDescriptiveName
-                for slot_try in [22, 19, 26]:
-                    vtable_try = candidate_vtable_base - slot_try * 8
-                    if vtable_try >= ro_mem_off:
-                        vtable_addr = vtable_try
-                        vtable_slot_getdesc = slot_try
-                        break
-                if vtable_addr:
-                    break
+    # Detecta layout UE pelo número de slots
+    if best_count >= 30:
+        ue_layout = "UE5_6"
+    elif best_count >= 25:
+        ue_layout = "UE5"
+    else:
+        ue_layout = "UE4_27"
+    print(f"=== Layout detectado: {ue_layout} ({best_count} slots) ===", flush=True)
 
-if vtable_addr is None:
-    # Fallback: procura qualquer bloco de ponteiros .text no rodata com >= 20 entradas
-    print("[patch] WARN: vtable por GetDescriptiveName falhou, tentando heuristica...", flush=True)
-    best_run = 0
-    best_off  = 0
-    run = 0
-    run_start = 0
-    for off in range(0, ro_size - 8, 8):
-        ptr = struct.unpack_from("<Q", rodata, off)[0]
-        if code_start <= ptr < code_end:
-            if run == 0:
-                run_start = off
-            run += 1
-            if run > best_run:
-                best_run = run
-                best_off  = run_start
-        else:
-            run = 0
-    if best_run >= 20:
-        vtable_addr = ro_mem_off + best_off
-        vtable_slot_getdesc = best_run
-        print(f"  [fallback] vtable heuristica em 0x{vtable_addr:x} ({best_run} slots)", flush=True)
-
-if vtable_addr is None:
-    print("[patch] FATAL: vtable FMallocBinned3 nao encontrada")
-    sys.exit(1)
-
-print(f"=== vtable FMallocBinned3: 0x{vtable_addr:x} (slot GetDesc={vtable_slot_getdesc}) ===", flush=True)
-
-VTABLE_PAGE = vtable_addr & ~0xFFF
-
-# ─────────────────────────────────────────────────────────────────────────────
-# 7. Detector do construtor via vtable
-# ─────────────────────────────────────────────────────────────────────────────
-ctor_candidates = []
-for idx, insn in enumerate(insns_all):
-    if insn.mnemonic != "adrp" or len(insn.operands) < 2:
-        continue
-    dst = rnum(insn.reg_name(insn.operands[0].reg))
-    if dst is None or insn.operands[1].imm != VTABLE_PAGE:
-        continue
-    tracked = dst
-    for j in range(idx + 1, min(idx + 16, len(insns_all))):
-        ii = insns_all[j]
-        if ii.mnemonic == "str" and len(ii.operands) >= 2:
-            src  = rnum(ii.reg_name(ii.operands[0].reg))
-            base = rnum(ii.reg_name(ii.operands[1].mem.base))
-            if src == tracked and base is not None:
-                func_start = insn.address
-                for k in range(idx, max(-1, idx - 256), -1):
-                    kk = insns_all[k]
-                    if kk.mnemonic == "stp":
-                        ops = [kk.reg_name(o.reg).lower()
-                               if o.type == ARM64_OP_REG else ""
-                               for o in kk.operands]
-                        if "x29" in ops and "x30" in ops:
-                            func_start = kk.address
-                            break
-                ctor_candidates.append({
-                    "func":     func_start,
-                    "this_reg": base,
-                    "score":    100 - min(abs(ii.operands[1].mem.disp), 32)
-                })
-                break
-
-if not ctor_candidates:
-    print(f"[patch] FATAL: construtor nao encontrado pela vtable 0x{vtable_addr:x}")
-    sys.exit(1)
-
-ctor_candidates.sort(key=lambda x: (-x["score"], x["func"]))
-ctor = ctor_candidates[0]
-print(f"=== Construtor: func=0x{ctor['func']:x} this_reg=x{ctor['this_reg']} ===", flush=True)
-
-bls = []
-for off in range(code_start, code_end - 4, 4):
-    w = struct.unpack_from("<I", img, off)[0]
-    t = decode_bl(w, off)
-    if t is not None and ctor["func"] <= t <= ctor["func"] + 0x40:
-        bls.append(off)
-
-if not bls:
-    print("[patch] FATAL: nenhum BL para o construtor")
-    sys.exit(1)
-
-best_cut   = None
-best_score = -1
-for bl in bls:
-    obj_reg = ctor["this_reg"]
-    score   = 0
-    for a in range(max(code_start, bl - 0x80), bl, 4):
-        ii = by_addr.get(a)
-        if not ii:
+    # Busca ADRP para a página da vtable no .text
+    ctor_candidates = []
+    for idx, insn in enumerate(insns_all):
+        if insn.mnemonic != "adrp" or len(insn.operands) < 2:
             continue
-        if ii.mnemonic == "mov" and len(ii.operands) >= 2:
-            d2 = rnum(ii.reg_name(ii.operands[0].reg))
-            s2 = rnum(ii.reg_name(ii.operands[1].reg))
-            if d2 == 0 and s2 is not None:
-                obj_reg = s2
-                score  += 50 + (25 if s2 in range(19, 29) else 0)
-                break
-    score += 12 if obj_reg in (19, 28) else 0
-    if score > best_score:
-        best_score = score
-        best_cut   = {"cut": bl, "obs": bl + 4,
-                      "obj_reg": obj_reg, "ctor": ctor["func"]}
+        if insn.operands[1].imm != VTABLE_PAGE:
+            continue
+        dst = rnum(insn.reg_name(insn.operands[0].reg))
+        if dst is None: continue
+        for j in range(idx+1, min(idx+16, len(insns_all))):
+            jj = insns_all[j]
+            if jj.mnemonic == "str" and len(jj.operands) >= 2:
+                src_r  = rnum(jj.reg_name(jj.operands[0].reg))
+                base_r = rnum(jj.reg_name(jj.operands[1].mem.base))
+                if src_r == dst and base_r is not None:
+                    func_start = insn.address
+                    for k in range(idx, max(-1, idx-512), -1):
+                        kk = insns_all[k]
+                        if kk.mnemonic == "stp":
+                            ops2 = [kk.reg_name(o.reg).lower() if o.type == ARM64_OP_REG else ""
+                                    for o in kk.operands]
+                            if "x29" in ops2 and "x30" in ops2:
+                                func_start = kk.address
+                                break
+                    ctor_candidates.append({
+                        "func": func_start, "this_reg": base_r,
+                        "score": 100 - min(abs(jj.operands[1].mem.disp), 32)
+                    })
+                    break
 
-cut_addr      = best_cut["cut"]
-obs_addr      = best_cut["obs"]
-cut_orig_hex  = img[cut_addr:cut_addr+4].hex()
-obs_orig_word = f"{struct.unpack_from('<I', img, obs_addr)[0]:08x}"
-print(f"=== CUT=0x{cut_addr:x} ({cut_orig_hex}) "
-      f"OBS=0x{obs_addr:x} ({obs_orig_word}) "
-      f"OBJ_REG=x{best_cut['obj_reg']} ===", flush=True)
+    if not ctor_candidates:
+        print(f"[patch] FATAL: construtor nao encontrado pela vtable 0x{vtable_addr:x}")
+        sys.exit(1)
+
+    ctor_candidates.sort(key=lambda x: (-x["score"], x["func"]))
+    ctor = ctor_candidates[0]
+    print(f"=== Construtor: func=0x{ctor['func']:x} this_reg=x{ctor['this_reg']} ===", flush=True)
+
+    bls = []
+    for off in range(code_start, code_end - 4, 4):
+        w = struct.unpack_from("<I", img, off)[0]
+        t = decode_bl(w, off)
+        if t is not None and ctor["func"] <= t <= ctor["func"] + 0x40:
+            bls.append(off)
+
+    if not bls:
+        print("[patch] FATAL: nenhum BL para o construtor")
+        sys.exit(1)
+
+    best_cut_d = None
+    best_score = -1
+    for bl in bls:
+        obj_reg = ctor["this_reg"]
+        score   = 0
+        for a in range(max(code_start, bl - 0x80), bl, 4):
+            ii = by_addr.get(a)
+            if not ii: continue
+            if ii.mnemonic == "mov" and len(ii.operands) >= 2:
+                dr = rnum(ii.reg_name(ii.operands[0].reg))
+                sr = rnum(ii.reg_name(ii.operands[1].reg))
+                if dr == 0 and sr is not None:
+                    obj_reg = sr
+                    score  += 50 + (25 if sr in range(19, 29) else 0)
+                    break
+        score += 12 if obj_reg in (19, 28) else 0
+        if score > best_score:
+            best_score = score
+            best_cut_d = {"cut": bl, "obs": bl+4, "obj_reg": obj_reg}
+
+    cut_addr      = best_cut_d["cut"]
+    obs_addr      = best_cut_d["obs"]
+    obj_reg_n     = best_cut_d["obj_reg"]
+    cut_orig_hex  = bytes(img[cut_addr:cut_addr+4]).hex()
+    obs_orig_word = f"{struct.unpack_from('<I', img, obs_addr)[0]:08x}"
+    print(f"=== CUT=0x{cut_addr:x} ({cut_orig_hex}) OBS=0x{obs_addr:x} "
+          f"({obs_orig_word}) OBJ_REG=x{obj_reg_n} ===", flush=True)
 
 # ─────────────────────────────────────────────────────────────────────────────
-# 8. Layout UE
+# 7. ansimalloc
 # ─────────────────────────────────────────────────────────────────────────────
-ue_layout = "UE5"
-if vtable_slot_getdesc == 19:
-    ue_layout = "UE4_27"
-elif vtable_slot_getdesc == 26:
-    ue_layout = "UE5_6"
-
-has_ansimalloc = (b"ansimalloc" in rodata) or \
-                 ("ansimalloc".encode("utf-16-le") in rodata)
-print(f"=== Layout: {ue_layout} | vtable=0x{vtable_addr:x} | ansimalloc={has_ansimalloc} ===", flush=True)
+ro_start   = seg_ro[0]
+ro_size_v  = seg_ro[1]
+ro_bytes_v = bytes(img[ro_start : ro_start + ro_size_v])
+has_ansimalloc = (b"ansimalloc" in ro_bytes_v) or \
+                 ("ansimalloc".encode("utf-16-le") in ro_bytes_v)
+print(f"=== Layout: {ue_layout} | ansimalloc={has_ansimalloc} ===", flush=True)
 
 # ─────────────────────────────────────────────────────────────────────────────
-# 9. patches.py e hle_uemalloc.c
+# 8. patches.py e hle_uemalloc.c
 # ─────────────────────────────────────────────────────────────────────────────
 prof_dir = games_dir / tid_str
 prof_dir.mkdir(parents=True, exist_ok=True)
@@ -433,7 +383,7 @@ patches_py.write_text(
     "}\n"
     "OBS = {\n"
     f"    '{main_bid}': [\n"
-    f"        (0x{obs_addr:x}, {best_cut['obj_reg']}, '{obs_orig_word}',\n"
+    f"        (0x{obs_addr:x}, {obj_reg_n}, '{obs_orig_word}',\n"
     f"         'GCreateMalloc: install host vtable'),\n"
     "    ],\n"
     "}\n",
@@ -450,7 +400,6 @@ if uemalloc_c.exists():
         target_hdr = ('static const struct { const char *build, *what; '
                       'int layout; uint64_t obj, vtable, cut; } k_ue[] = {\n')
         uetxt = uetxt.replace(target_hdr, target_hdr + new_entry)
-        obj_reg_n = best_cut["obj_reg"]
         uetxt = re.sub(
             r'uint64_t obj = regs\[\d+\];',
             f'uint64_t obj = (regs[{obj_reg_n}] > 0x100000000ULL) ? regs[{obj_reg_n}] : '
@@ -463,7 +412,7 @@ if uemalloc_c.exists():
         need_repatch = True
 
 # ─────────────────────────────────────────────────────────────────────────────
-# 10. game.tsv
+# 9. game.tsv
 # ─────────────────────────────────────────────────────────────────────────────
 marker = "romfs_marker.bin"
 if manifest.exists():
@@ -539,7 +488,7 @@ if not marker_path.exists():
     marker_path.write_bytes(b"DUMMY_ROMFS_MARKER")
 
 # ─────────────────────────────────────────────────────────────────────────────
-# 11. Dirs de trabalho
+# 10. Dirs de trabalho
 # ─────────────────────────────────────────────────────────────────────────────
 work         = rt / f"{tid_str}-work"
 patched      = work / "build" / "patched_v0"
@@ -560,7 +509,7 @@ b_dir = msl_ios_base / f"b-{chain_stamp}"
 b_dir.mkdir(parents=True, exist_ok=True)
 
 # ─────────────────────────────────────────────────────────────────────────────
-# 12. Cache com stamp
+# 11. Cache com stamp
 # ─────────────────────────────────────────────────────────────────────────────
 cache_root = Path("/Users/runner/patched_cache")
 cache_dir  = cache_root / tid_str
@@ -571,7 +520,7 @@ stamp = {
     "sha256":  hashlib.sha256(main_bytes).hexdigest(),
     "cut":     cut_addr,
     "obs":     obs_addr,
-    "obj_reg": best_cut["obj_reg"],
+    "obj_reg": obj_reg_n,
 }
 old_stamp = None
 if stamp_file.exists():
@@ -635,7 +584,7 @@ subprocess.run(
 )
 
 # ─────────────────────────────────────────────────────────────────────────────
-# 13. Build IPA
+# 12. Build IPA
 # ─────────────────────────────────────────────────────────────────────────────
 out_ipa = rt / ipa_filename
 env = os.environ.copy()
