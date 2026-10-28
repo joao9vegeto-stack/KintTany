@@ -1,4 +1,4 @@
-name: 2. Build Thin IPA - Auditoria 3 (vtable por relocacoes + objeto)
+name: 2. Build Thin IPA - patch do construtor FMallocBinned3
 
 on:
   push:
@@ -14,7 +14,7 @@ on:
         default: "https://github.com/joao9vegeto-stack/KintTany/releases/download/v1.0-kit/github_kit_Spk.zip"
 
 permissions:
-  contents: read
+  contents: write
 
 jobs:
   build_thin_game_ipa:
@@ -28,6 +28,15 @@ jobs:
       BASELINE_COMMIT: "306dcdfcb53d348085292e9e527339161c0536c7"
       EXPECTED_MAIN_SHA256: "a0f8f0644c92384ddb1baac1c21aecbeeace5bc99ad40895e216add61da78efe"
       EXPECTED_MAIN_BUILD_ID: "68edafd68c7bc1a1af50b82aac838018"
+      IPA_SUFFIX: "_PATCH_CTOR"
+
+      # Valores medidos no build 68edafd6 (fatos.txt da auditoria 3)
+      SPK_CUT_ADDR: "0x1e4db30"
+      SPK_CUT_BYTES: "6b740194"
+      SPK_OBS_ADDR: "0x1e4db34"
+      SPK_OBS_WORD: "f9035293"
+      SPK_VTABLE: "0x8703ab8"
+      SPK_LAYOUT: "UE5_SPK"
 
     steps:
       - name: 1. Baixar versao que compilou
@@ -42,11 +51,36 @@ jobs:
           brew install xcodegen || true
           pip3 install --break-system-packages lz4 capstone fonttools zstandard PyYAML
 
-      - name: 3. Preparar build com auditoria 3
+      - name: 3. Adicionar layout de 23 slots ao hle_uemalloc.c
         shell: bash
         run: |
           set -e
-          mkdir -p "$RUNNER_TEMP/spk-auditoria3"
+          python3 -u - <<'PYEOF'
+          from pathlib import Path
+          p = Path("dm/host/hle_uemalloc.c")
+          src = p.read_text(encoding="utf-8")
+
+          old_enum = "enum { UE5, UE4_27, UE5_6 };"
+          if src.count(old_enum) != 1:
+              raise SystemExit(f"ERRO: enum de layouts nao encontrado ({src.count(old_enum)}x)")
+          src = src.replace(old_enum, "enum { UE5, UE4_27, UE5_6, UE5_SPK };", 1)
+
+          lines = src.split("\n")
+          idx = [i for i, l in enumerate(lines) if l.startswith("    [UE5_6] = {")]
+          if len(idx) != 1:
+              raise SystemExit(f"ERRO: linha k_lay[UE5_6] nao encontrada ({len(idx)}x)")
+          lines.insert(idx[0] + 1,
+              "    [UE5_SPK] = { 23, 3, 4, 5, 6, 7, 8, 9, { 10, 11, 12, 16 } },   "
+              "// DRAGON BALL: Sparking! ZERO 2.0.76: UE4.27 layout + OnPreFork/OnPostFork (vtable main+0x8703ab8)")
+          p.write_text("\n".join(lines), encoding="utf-8")
+          print("hle_uemalloc.c: layout UE5_SPK adicionado")
+          PYEOF
+
+      - name: 4. Preparar build com os valores corretos
+        shell: bash
+        run: |
+          set -e
+          mkdir -p "$RUNNER_TEMP/spk-relatorio"
           rm -rf /Users/runner/patched_cache
 
           python3 -u - <<'PYEOF'
@@ -64,15 +98,6 @@ jobs:
           if "python3 -u - << 'PYEOF'" not in command:
               raise SystemExit("ERRO: pipeline embutido nao encontrado")
 
-          # Guarda, para o fatos.txt, como o pipeline antigo registrava o build no hle_uemalloc.c
-          fatos = Path(os.environ["RUNNER_TEMP"]) / "spk-auditoria3" / "fatos.txt"
-          with fatos.open("w", encoding="utf-8") as f:
-              f.write("=== COMO O PIPELINE ANTIGO EDITAVA hle_uemalloc.c / patches.py ===\n")
-              for n, l in enumerate(command.split("\n"), 1):
-                  if re.search(r"hle_uemalloc|k_ue|patches\.py|CUTS|OBS|UE5|layout|vtable", l):
-                      f.write(f"{n:5d}: {l}\n")
-              f.write("\n")
-
           lines = command.split("\n")
 
           def find_unique(s):
@@ -82,8 +107,7 @@ jobs:
               return hits[0]
 
           def indent_of(i):
-              l = lines[i]
-              return l[: len(l) - len(l.lstrip())]
+              l = lines[i]; return l[: len(l) - len(l.lstrip())]
 
           def insert_after(s, block):
               i = find_unique(s); ind = indent_of(i)
@@ -93,181 +117,59 @@ jobs:
               i = find_unique(s); ind = indent_of(i)
               lines[i:i] = [ind + l if l.strip() else "" for l in textwrap.dedent(block).strip("\n").split("\n")]
 
-          def replace_line(s, new):
-              i = find_unique(s); lines[i] = indent_of(i) + new
-
+          # A. Conferir o main
           insert_after('main_bytes = (exefs / "main").read_bytes()', '''
           import hashlib
           _sha = hashlib.sha256(main_bytes).hexdigest()
           _bid = main_bytes[0x40:0x50].hex()
           print(f"=== SHA-256 main: {_sha}", flush=True)
           if _sha != os.environ["EXPECTED_MAIN_SHA256"] or _bid != os.environ["EXPECTED_MAIN_BUILD_ID"]:
-              raise SystemExit("ERRO: main diferente do executavel analisado")
+              raise SystemExit("ERRO: main diferente do executavel analisado; patch nao se aplica")
           ''')
 
-          insert_before("if cut_addr is not None and obs_addr is not None:",
-                        'print("=== Patch automatico DESATIVADO (auditoria 3) ===", flush=True)')
-          replace_line("if cut_addr is not None and obs_addr is not None:",
-                       "if False and cut_addr is not None and obs_addr is not None:")
-
+          # B. Nenhum patches.py antigo
           insert_after("prof_dir.mkdir(parents=True, exist_ok=True)", '''
           if (prof_dir / "patches.py").exists():
               (prof_dir / "patches.py").unlink()
           ''')
 
-          insert_before('ipa_filename = f"{safe_name}.ipa"', 'safe_name = safe_name + "_AUDITORIA3"')
+          # C. Sobrescrever a deteccao heuristica com os valores medidos
+          insert_before("if cut_addr is not None and obs_addr is not None:", '''
+          cut_addr = int(os.environ["SPK_CUT_ADDR"], 16)
+          cut_orig_hex = os.environ["SPK_CUT_BYTES"]
+          obs_addr = int(os.environ["SPK_OBS_ADDR"], 16)
+          obs_orig_word = os.environ["SPK_OBS_WORD"]
+          vtable_addr = int(os.environ["SPK_VTABLE"], 16)
+          ue_layout = os.environ["SPK_LAYOUT"]
 
-          insert_after('dump(0x1eab040, 0x1eab0a0, "BT main+0x1eab078")', r'''
-          # ================= AUDITORIA 3 =================
-          from capstone import Cs, CS_ARCH_ARM64, CS_MODE_ARM
-          _md = Cs(CS_ARCH_ARM64, CS_MODE_ARM)
-          _fatos = Path(os.environ["RUNNER_TEMP"]) / "spk-auditoria3" / "fatos.txt"
-          _out = []
-          def F(s=""):
-              print("FATO: " + s, flush=True)
-              _out.append(s)
+          _cut_here = img[cut_addr:cut_addr + 4].hex()
+          _obs_here = f"{struct.unpack_from('<I', img, obs_addr)[0]:08x}"
+          if _cut_here != cut_orig_hex:
+              raise SystemExit(f"ERRO: bytes em {cut_addr:#x} sao {_cut_here}, esperado {cut_orig_hex}")
+          if _obs_here != obs_orig_word:
+              raise SystemExit(f"ERRO: palavra em {obs_addr:#x} e {_obs_here}, esperado {obs_orig_word}")
+          print(f"=== PATCH SPK: cut {cut_addr:#x} ({cut_orig_hex}) obs {obs_addr:#x} ({obs_orig_word}) "
+                f"vtable {vtable_addr:#x} layout {ue_layout} ===", flush=True)
+          ''')
 
-          TEXT_LO, TEXT_HI = segs[0][1], segs[0][1] + segs[0][2]
-          RO_LO, RO_HI = segs[1][1], segs[1][1] + segs[1][2]
-          DATA_LO, DATA_HI = segs[2][1], segs[2][1] + segs[2][2]
-          BSS_HI = DATA_HI + bss if "bss" in dir() else DATA_HI
-          def u32(a): return struct.unpack_from("<I", img, a)[0]
-          def u64(a): return struct.unpack_from("<Q", img, a)[0]
-          def s64(a): return struct.unpack_from("<q", img, a)[0]
+          # D. Nome do IPA
+          insert_before('ipa_filename = f"{safe_name}.ipa"',
+                        'safe_name = safe_name + os.environ.get("IPA_SUFFIX", "")')
 
-          F("=== SEGMENTOS ===")
-          F(f"text {TEXT_LO:#x}..{TEXT_HI:#x} rodata {RO_LO:#x}..{RO_HI:#x} data {DATA_LO:#x}..{DATA_HI:#x} fim bss {BSS_HI:#x}")
-
-          # ---- 1. Chamador: instrucoes antes da chamada do construtor ----
-          CTOR_CALL = 0x1e4db30
-          F("=== DISASM 0x1e4dac0..0x1e4db48 (chamador do construtor) ===")
-          code = img[0x1e4dac0:0x1e4db48]
-          for ins in _md.disasm(code, 0x1e4dac0):
-              F(f"  {ins.address:#x}: {ins.mnemonic} {ins.op_str}   [{img[ins.address:ins.address+4].hex()}]")
-
-          w = u32(CTOR_CALL)
-          if (w & 0xFC000000) == 0x94000000:
-              imm = w & 0x03FFFFFF
-              if imm & 0x02000000: imm -= 0x04000000
-              F(f"=== CHAMADA: main+{CTOR_CALL:#x} bl main+{CTOR_CALL + (imm << 2):#x}  bytes={img[CTOR_CALL:CTOR_CALL+4].hex()}")
-          else:
-              F(f"=== ATENCAO: main+{CTOR_CALL:#x} NAO e BL (word {w:#x})")
-
-          # ---- 2. Origem de x0 na chamada ----
-          F("=== ORIGEM DE x0 ===")
-          a = CTOR_CALL - 4
-          found = None
-          while a >= 0x1e4da00:
-              w = u32(a)
-              if (w & 0xFFE0FFFF) == 0xAA0003E0:      # mov x0, xN
-                  found = ("mov", (w >> 16) & 0x1F, a); break
-              if (w & 0xFF80001F) == 0x91000000:       # add x0, xN, #imm
-                  found = ("add", (w >> 5) & 0x1F, a, (w >> 10) & 0xFFF); break
-              if (w & 0x9F00001F) == 0x90000000:       # adrp x0
-                  immlo = (w >> 29) & 3; immhi = (w >> 5) & 0x7FFFF
-                  imm = (immhi << 2) | immlo
-                  if imm & 0x100000: imm -= 0x200000
-                  found = ("adrp", (a & ~0xFFF) + (imm << 12), a); break
-              if (w & 0xFC000000) == 0x94000000:       # bl: x0 = retorno
-                  found = ("bl", None, a); break
-              a -= 4
-          obj_fixed = None
-          if found is None:
-              F("x0 nao definido entre 0x1e4da00 e a chamada")
-          elif found[0] == "mov":
-              F(f"x0 <- x{found[1]} em main+{found[2]:#x}  (objeto esta em x{found[1]})")
-              # tenta ver se xN veio de adrp/add fixo
-              n = found[1]; b = found[2] - 4
-              while b >= 0x1e4da00:
-                  w2 = u32(b)
-                  if (w2 & 0xFF80001F) == (0x91000000 | n) and ((w2 >> 5) & 0x1F) == n:
-                      w3 = u32(b - 4)
-                      if (w3 & 0x9F00001F) == (0x90000000 | n):
-                          immlo = (w3 >> 29) & 3; immhi = (w3 >> 5) & 0x7FFFF
-                          imm = (immhi << 2) | immlo
-                          if imm & 0x100000: imm -= 0x200000
-                          obj_fixed = ((b - 4) & ~0xFFF) + (imm << 12) + ((w2 >> 10) & 0xFFF)
-                          F(f"x{n} = endereco fixo main+{obj_fixed:#x} (adrp/add em main+{b-4:#x})")
-                      break
-                  if (w2 & 0x1F) == n and (w2 & 0xFC000000) in (0xAA000000, 0xF9400000, 0x94000000):
-                      F(f"x{n} escrito por outra instrucao em main+{b:#x}: {img[b:b+4].hex()}")
-                      break
-                  b -= 4
-          elif found[0] == "add":
-              w3 = u32(found[2] - 4)
-              if (w3 & 0x9F00001F) == (0x90000000 | found[1]):
-                  immlo = (w3 >> 29) & 3; immhi = (w3 >> 5) & 0x7FFFF
-                  imm = (immhi << 2) | immlo
-                  if imm & 0x100000: imm -= 0x200000
-                  obj_fixed = ((found[2] - 4) & ~0xFFF) + (imm << 12) + found[3]
-                  F(f"x0 = endereco fixo main+{obj_fixed:#x} (adrp/add em main+{found[2]-4:#x})")
-              else:
-                  F(f"x0 = x{found[1]} + {found[3]:#x} em main+{found[2]:#x}")
-          elif found[0] == "adrp":
-              F(f"x0 = adrp main+{found[1]:#x} em main+{found[2]:#x} (sem add?)")
-          else:
-              F(f"x0 vem do retorno de bl em main+{found[2]:#x} (objeto alocado em tempo de execucao)")
-          if obj_fixed is not None:
-              where = "bss" if obj_fixed >= DATA_HI else ("data" if obj_fixed >= DATA_LO else "?")
-              F(f"OBJETO FIXO: main+{obj_fixed:#x} ({where})")
-
-          # ---- 3. Vtable real via relocacoes ----
-          VT = 0x8703ab8
-          F("=== RELOCACOES ===")
-          relmap = {}
-          try:
-              mod0 = u32(0x4)
-              if img[mod0:mod0+4] != b"MOD0":
-                  F(f"MOD0 nao encontrado em {mod0:#x}")
-              else:
-                  dyn = mod0 + struct.unpack_from("<i", img, mod0 + 4)[0]
-                  rela = relasz = relaent = 0
-                  d = dyn
-                  while True:
-                      tag, val = struct.unpack_from("<QQ", img, d)
-                      if tag == 0: break
-                      if tag == 7: rela = val
-                      if tag == 8: relasz = val
-                      if tag == 9: relaent = val
-                      d += 16
-                  F(f"DT_RELA={rela:#x} DT_RELASZ={relasz:#x} DT_RELAENT={relaent:#x}")
-                  relaent = relaent or 24
-                  lo, hi = VT - 0x20, VT + 0x300
-                  for off in range(rela, rela + relasz, relaent):
-                      r_off, r_info, r_add = struct.unpack_from("<QQq", img, off)
-                      if lo <= r_off < hi:
-                          relmap[r_off] = (r_info & 0xFFFFFFFF, r_info >> 32, r_add)
-          except Exception as e:
-              F(f"erro lendo relocacoes: {e}")
-
-          F(f"=== VTABLE main+{VT:#x} (via relocacoes; tipo 1027=RELATIVE, 257=ABS64) ===")
-          for k in range(-2, 40):
-              p = VT + k * 8
-              r = relmap.get(p)
-              if r:
-                  typ, sym, add = r
-                  tag = "text" if TEXT_LO <= add < TEXT_HI else ("rodata" if RO_LO <= add < RO_HI else ("data" if DATA_LO <= add < BSS_HI else "?"))
-                  F(f"  [{k:3d}] main+{p:#x}: tipo {typ} sym {sym} -> main+{add:#x} {tag}")
-              else:
-                  F(f"  [{k:3d}] main+{p:#x}: sem relocacao (valor no arquivo {u64(p):#x})")
-          nslots = 0
-          for k in range(0, 40):
-              r = relmap.get(VT + k * 8)
-              if r and TEXT_LO <= r[2] < TEXT_HI:
-                  nslots += 1
-              else:
-                  break
-          F(f"SLOTS CONSECUTIVOS EM TEXT A PARTIR DE main+{VT:#x}: {nslots}  (UE5=26, UE5.6=32)")
-
-          # ---- 4. Como a vtable e gravada no construtor ----
-          F("=== DISASM 0x1eaacdc..0x1eaad30 (inicio do construtor) ===")
-          for ins in _md.disasm(img[0x1eaacdc:0x1eaad30], 0x1eaacdc):
-              F(f"  {ins.address:#x}: {ins.mnemonic} {ins.op_str}")
-
-          with _fatos.open("a", encoding="utf-8") as fh:
-              fh.write("\n".join(_out) + "\n")
-          print(f"=== fatos gravados em {_fatos} ===", flush=True)
-          # ================= FIM AUDITORIA 3 =================
+          # E. Conferir que a reescrita aplicou exatamente 1 cut e 1 obs
+          insert_before('if (exefs / "main.npdm").exists():', '''
+          def _rows(p):
+              if not p.exists():
+                  return []
+              return [l for l in p.read_text(errors="ignore").splitlines() if l.strip() and not l.startswith("#")]
+          _cuts = _rows(patched / "main.cuts.tsv")
+          _obs = _rows(patched / "main.obs.tsv")
+          print("=== main.cuts.tsv ===\\n" + "\\n".join(_cuts), flush=True)
+          print("=== main.obs.tsv ===\\n" + "\\n".join(_obs), flush=True)
+          if len(_cuts) != 1 or "0x1e4db30" not in _cuts[0]:
+              raise SystemExit("ERRO: main.cuts.tsv nao contem exatamente o corte em 0x1e4db30")
+          if len(_obs) != 1 or "0x1e4db34" not in _obs[0]:
+              raise SystemExit("ERRO: main.obs.tsv nao contem exatamente o gate em 0x1e4db34")
           ''')
 
           command = "\n".join(lines)
@@ -288,25 +190,55 @@ jobs:
           print(f"Etapa base: {step_name}")
           PYEOF
 
-      - name: 4. Baixar kit e compilar
+      - name: 5. Baixar kit e compilar
         shell: bash
         run: |
           set -o pipefail
-          bash "$RUNNER_TEMP/spk-build.sh" 2>&1 | tee "$RUNNER_TEMP/spk-auditoria3/build.log"
+          bash "$RUNNER_TEMP/spk-build.sh" 2>&1 | tee "$RUNNER_TEMP/spk-relatorio/build.log"
 
-      - name: 5. Salvar auditoria
+      - name: 6. Resumo
+        if: always()
+        shell: bash
+        run: |
+          {
+            echo "PATCH DO CONSTRUTOR FMallocBinned3"
+            echo "Execucao: $GITHUB_RUN_ID  commit: $GITHUB_SHA"
+            echo
+            for f in "$RUNNER_TEMP"/*-work/build/patched_v0/main.cuts.tsv "$RUNNER_TEMP"/*-work/build/patched_v0/main.obs.tsv; do
+              [ -f "$f" ] && { echo "=== $(basename "$f") ==="; cat "$f"; echo; }
+            done
+            echo "=== k_ue em hle_uemalloc.c ==="
+            grep -n "68edafd6\|UE5_SPK" dm/host/hle_uemalloc.c || echo "(nao registrado)"
+            echo
+            echo "=== IPAs ==="
+            ls -la "$RUNNER_TEMP"/*.ipa 2>/dev/null || echo "nenhum"
+          } | tee "$RUNNER_TEMP/spk-relatorio/resumo.txt"
+
+      - name: 7. Salvar relatorio
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: spk-auditoria3-${{ github.run_id }}
-          path: ${{ runner.temp }}/spk-auditoria3/
+          name: spk-relatorio-${{ github.run_id }}
+          path: ${{ runner.temp }}/spk-relatorio/
           retention-days: 7
 
-      - name: 6. Salvar IPA (referencia)
-        if: always()
+      - name: 8. Publicar IPA na Release
+        shell: bash
+        run: |
+          set -e
+          FOUND=0
+          for f in "$RUNNER_TEMP"/*"$IPA_SUFFIX".ipa; do
+            [ -f "$f" ] || continue
+            FOUND=1
+            echo "Publicando $(basename "$f")"
+            gh release upload v1.0-kit "$f" --repo "$GITHUB_REPOSITORY" --clobber
+          done
+          [ "$FOUND" -eq 1 ] || { echo "ERRO: nenhum IPA"; exit 1; }
+
+      - name: 9. Salvar IPA nos Artifacts
         uses: actions/upload-artifact@v4
         with:
-          name: spk-ipa-auditoria3-${{ github.run_id }}
-          path: ${{ runner.temp }}/*_AUDITORIA3.ipa
-          if-no-files-found: warn
-          retention-days: 3
+          name: spk-ipa-patch-ctor-${{ github.run_id }}
+          path: ${{ runner.temp }}/*${{ env.IPA_SUFFIX }}.ipa
+          if-no-files-found: error
+          retention-days: 7
