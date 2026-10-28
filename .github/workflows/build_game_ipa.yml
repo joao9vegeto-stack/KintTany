@@ -44,26 +44,7 @@ jobs:
             patched-nso-uemalloc-v5-
             patched-nso-
 
-      - name: 3. Baixar github_kit.zip, Aplicar Patch FMallocBinned3 (37GB -> iOS) e Compilar IPA
-        run: |
-          set -e
-
-          # 1. Garante arvore completa do nxnative
-          if [ ! -f "dm/ios/tools/build_ipa.sh" ]; then
-            git clone --depth 1 https://github.com/seedds/nxnative.git "$RUNNER_TEMP/nx_up"
-            rsync -a --ignore-existing "$RUNNER_TEMP/nx_up/" ./
-          fi
-
-          # Desativa 'set -u' e transforma 'die()' em aviso no build_ipa.sh
-          sed -i '' 's/^set -u/set +u/g' dm/ios/tools/build_ipa.sh || true
-          sed -i '' 's/die() { t "FAIL: $\*"; exit 1; }/die() { t "WARN (ignored): $*"; return 0; }/g' dm/ios/tools/build_ipa.sh || true
-
-          # 2. Baixa o github_kit.zip da Release
-          mkdir -p "$RUNNER_TEMP/dl"
-          if ! curl -L --fail -o "$RUNNER_TEMP/dl/github_kit.zip" "$KIT_URL"; then
-            gh release download --repo "$GITHUB_REPOSITORY" --pattern "*.zip" --dir "$RUNNER_TEMP/dl" --clobber
-          fi
-
+      
           FIRST_ZIP=$(find "$RUNNER_TEMP/dl" -name "*.zip" | head -n 1)
           mkdir -p "$RUNNER_TEMP/kit"
           unzip -q "$FIRST_ZIP" -d "$RUNNER_TEMP/kit"
@@ -76,21 +57,42 @@ jobs:
             fi
           fi
 
-          # 3. Auto-Patch FMallocBinned3: detecta construtor pela vtable e aplica CUT/OBS correto
-          python3 <<'PYEOF'
-import os, sys, struct, pathlib, hashlib, shutil, re, json
+                   - name: 3. Baixar github_kit.zip, Aplicar Patch FMallocBinned3 (37GB -> iOS) e Compilar IPA
+            run: |
+              set -e
 
-try:
-    import capstone
-    from capstone.arm64 import *
-except ImportError:
-    print("[patch] ERRO: capstone nao instalado")
-    sys.exit(1)
+              # 1. Garante arvore completa do nxnative
+              if [ ! -f "dm/ios/tools/build_ipa.sh" ]; then
+                git clone --depth 1 https://github.com/seedds/nxnative.git "$RUNNER_TEMP/nx_up"
+                rsync -a --ignore-existing "$RUNNER_TEMP/nx_up/" ./
+              fi
 
-RUNNER_TEMP       = pathlib.Path(os.environ["RUNNER_TEMP"])
-KIT_DIR           = RUNNER_TEMP / "kit"
-CACHE_DIR         = pathlib.Path("/Users/runner/patched_cache")
-CACHE_DIR.mkdir(parents=True, exist_ok=True)
+              # Desativa 'set -u' e transforma 'die()' em aviso no build_ipa.sh
+              sed -i '' 's/^set -u/set +u/g' dm/ios/tools/build_ipa.sh || true
+              sed -i '' 's/die() { t "FAIL: $\*"; exit 1; }/die() { t "WARN (ignored): $*"; return 0; }/g' dm/ios/tools/build_ipa.sh || true
+
+              # 2. Baixa o github_kit.zip da Release
+              mkdir -p "$RUNNER_TEMP/dl"
+              if ! curl -L --fail -o "$RUNNER_TEMP/dl/github_kit.zip" "$KIT_URL"; then
+                gh release download --repo "$GITHUB_REPOSITORY" --pattern "*.zip" --dir "$RUNNER_TEMP/dl" --clobber
+              fi
+
+              FIRST_ZIP=$(find "$RUNNER_TEMP/dl" -name "*.zip" | head -n 1)
+              mkdir -p "$RUNNER_TEMP/kit"
+              unzip -q "$FIRST_ZIP" -d "$RUNNER_TEMP/kit"
+
+              if [ ! -d "$RUNNER_TEMP/kit/ExeFS" ]; then
+                SUB_EXEFS=$(find "$RUNNER_TEMP/kit" -type d -iname "ExeFS" | head -n 1)
+                if [ -n "$SUB_EXEFS" ]; then
+                  PARENT_DIR=$(dirname "$SUB_EXEFS")
+                  [ "$PARENT_DIR" != "$RUNNER_TEMP/kit" ] && mv "$PARENT_DIR"/* "$RUNNER_TEMP/kit/" || true
+                fi
+              fi
+
+              # 3. Auto-Patch FMallocBinned3 + build IPA
+              python3 -u dm/ios/tools/build_game_pipeline.py
+
+              echo "GAME_SAFE_NAME=$(cat $RUNNER_TEMP/last_ipa_name.txt)" >> $GITHUB_ENV
 
 # --- Constantes do mecanismo hle_uemalloc ---
 VTABLE_PAGE_GUEST = 0x92fa000
