@@ -2038,7 +2038,7 @@ static void emitBuild66CodeAudit(uint8_t *base) {
 
 static uint32_t loadGuestBe32(const uint8_t *base, uint32_t address);
 
-// B69_AUDIT_ADDRS: 0x824278C0 0x824ACB80 0x82B3DE00 0x82690640 0x82690D80 0x826CEFC0 0x82C4D440 0x826903F0 0x826901E0 0x827E1250 0x82B49DE0 0x82B4AAE0 0x82B4AE00 0x822A1BC0 0x822A01C0 0x824E6F10 0x82C257F0 0x823704C0 0x82370700 0x82371D80 0x825524C0 0x82493820 0x824E7140 0x82200150
+// B69_AUDIT_ADDRS: MAIN_WAIT_8237073C_82370790 THREAD7_82B3DE30 THREAD10_SPIN_826CF060 WAIT_CALLER_82C4D4A8 0x824278C0 0x824ACB80 0x82B3DE00 0x82690640 0x82690D80 0x826CEFC0 0x82C4D440 0x826903F0 0x826901E0 0x827E1250 0x82B49DE0 0x82B4AAE0 0x82B4AE00 0x822A1BC0 0x822A01C0 0x824E6F10 0x82C257F0 0x823704C0 0x82370700 0x82371D80 0x825524C0 0x82493820 0x824E7140 0x82200150
 static void logCodeAuditBuild69(uint8_t *base) {
  if(!base||g_build69AuditEmitted.exchange(true,std::memory_order_acq_rel))return;
  struct R{uint32_t b,e;const char*n;}; static constexpr R rs[]={
@@ -2049,7 +2049,7 @@ static void logCodeAuditBuild69(uint8_t *base) {
   {0x826CF040u,0x826CF0B0u,"SPIN_826CF060"},
   {0x825F91C0u,0x825F9220u,"SPIN_825F91D8"}
  };
- for(const R&r:rs){char h[160];std::snprintf(h,sizeof(h),"CODE_AUDIT_B69_BEGIN name=%s range=0x%08X..0x%08X",r.n,r.b,r.e);std::fprintf(stderr,"%s\n",h);recordRuntimeTrace(h);for(uint32_t pc=r.b;pc<r.e;pc+=4u){const bool ok=validGuestRange(pc,4u);const uint32_t w=ok?loadGuestBe32(base,pc):0u;char l[160];std::snprintf(l,sizeof(l),"CODE_AUDIT_B69 name=%s pc=0x%08X word=0x%08X valid=%u",r.n,pc,w,ok?1u:0u);std::fprintf(stderr,"%s\n",l);recordRuntimeTrace(l);}}
+ for(const R&r:rs){char h[160];std::snprintf(h,sizeof(h),"CODE_AUDIT_B69_BEGIN name=%s range=0x%08X..0x%08X",r.n,r.b,r.e);std::fprintf(stderr,"%s\n",h);recordRuntimeTrace(h);for(uint32_t pc=r.b;pc<r.e;pc+=4u){const bool ok=validGuestRange(pc,4u);const uint32_t w=ok?loadGuestBe32(base,pc):0u;char l[160];std::snprintf(l,sizeof(l),"CODE_AUDIT_B69 name=%s pc=0x%08X word=0x%08X valid=%u",r.n,pc,w,ok?1u:0u);std::fprintf(stderr,"%s\n",l);recordRuntimeTrace(l);}std::snprintf(h,sizeof(h),"CODE_AUDIT_B69_END name=%s",r.n);recordRuntimeTrace(h);}
 }
 
 void xowue_thread_checkpoint() {
@@ -2330,7 +2330,8 @@ static void xowue_forward_pump_and_signal_spin(uint32_t guestAddress, PPCContext
         signalGuestEventHandle(0x00000115u);
         signalGuestEventHandle(0x70016FA0u);
         signalGuestEventHandle(0x7003DD80u);
-        uint8_t *base = g_guestMemoryBase.load(std::memory_order_acquire);
+        auto activeMem = g_activeGuestMemory.lock();
+        uint8_t *base = activeMem ? activeMem->base : nullptr;
         if (base != nullptr) {
             const uint32_t cand[2] = {ctx.r31.u32, ctx.r30.u32};
             for (uint32_t hbink : cand) {
