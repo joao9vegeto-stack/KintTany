@@ -89,3 +89,23 @@ diff --git a/libs/input/cellPad.c b/libs/input/cellPad.c
  #else
    #define PAD_BACKEND_SDL2  1
    #define PAD_BACKEND_XINPUT 0
+@@ -400,5 +409,19 @@
+ #endif /* PAD_BACKEND_SDL2 */
+ 
++#if !PAD_BACKEND_SDL2 && !PAD_BACKEND_XINPUT
++/* Null pad backend (iOS bring-up): no host controller enumerated. Ports stay
++ * disconnected until a GameController adapter is installed through
++ * cellPad_set_host_adapter(). */
++static void pad_init_backend(void)
++{
++    printf("[cellPad] null pad backend (iOS)\n");
++}
++
++static void pad_shutdown_backend(void)
++{
++}
++#endif /* null pad backend */
++
+ /* ---------------------------------------------------------------------------
+  * Poll dispatcher
+  * -----------------------------------------------------------------------*/
