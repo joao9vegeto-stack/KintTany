@@ -31,14 +31,10 @@ jobs:
         run: |
           export PATH="$HOME/.dotnet:$PATH"
 
-          if [ ! -f "dm/tools/nx_extract/Program.cs" ]; then
-            git clone --depth 1 https://github.com/seedds/nxnative.git "$RUNNER_TEMP/nx_up"
-            mkdir -p dm/tools/nx_extract
-            cp "$RUNNER_TEMP/nx_up/dm/tools/nx_extract/Program.cs" dm/tools/nx_extract/Program.cs
-          fi
-
+          # Sempre pega o Program.cs limpo do nxnative para nunca duplicar nem pular simbolos!
+          git clone --depth 1 https://github.com/seedds/nxnative.git "$RUNNER_TEMP/nx_up"
           mkdir -p "$RUNNER_TEMP/nx_ios"
-          cp dm/tools/nx_extract/Program.cs "$RUNNER_TEMP/nx_ios/Program.cs"
+          cp "$RUNNER_TEMP/nx_up/dm/tools/nx_extract/Program.cs" "$RUNNER_TEMP/nx_ios/Program.cs"
 
           cat > "$RUNNER_TEMP/nx_ios/nx_extract.csproj" << 'EOF'
           <Project Sdk="Microsoft.NET.Sdk">
@@ -164,9 +160,8 @@ jobs:
                   }
               }
           """
-          if "ios_libhac_extract" not in code:
-              code = code.replace("static int Main(string[] a) {", entry + "\n    static int Main(string[] a) {", 1)
-              p.write_text(code, encoding="utf-8")
+          code = code.replace("static int Main(string[] a) {", entry + "\n    static int Main(string[] a) {", 1)
+          p.write_text(code, encoding="utf-8")
           PYEOF
 
           dotnet publish -r ios-arm64 -c Release "$RUNNER_TEMP/nx_ios/nx_extract.csproj" -o "$RUNNER_TEMP/libhac_ios"
@@ -672,7 +667,6 @@ jobs:
                           }
                       }
 
-                      // Se o arquivo esta em base/, update/ ou dlcs/, a pasta tem prioridade!
                       NSString *finalKind = explicitFolderKind ?: (detectedKind ?: @"Application");
 
                       NSString *groupKey = topFolder;
