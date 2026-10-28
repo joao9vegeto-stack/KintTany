@@ -19,7 +19,7 @@ permissions:
 
 jobs:
   build_thin_game_ipa:
-    runs-on: macos-15
+    runs-on: macos-26
     timeout-minutes: 240
     env:
       GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -28,46 +28,42 @@ jobs:
       - name: 1. Checkout da Branch SpkIOSzero
         uses: actions/checkout@v4
 
-      - name: 2. Instalar Dependencias (xcodegen + Python packages)
+      - name: 2. Instalar Dependencias (xcodegen + Python 3.14 packages)
         run: |
           brew install xcodegen || true
-          pip3 install --break-system-packages lz4 capstone fonttools backports.zstd
+          pip3 install --break-system-packages lz4 capstone fonttools zstandard
 
       - name: 3. Baixar github_kit.zip e Compilar Thin IPA Nativo do Jogo
         run: |
           set -x
 
-          # 1. Garante arvore completa do nxnative (sem cp -n que retorna exit 1 no macOS!)
+          # 1. Garante arvore completa do nxnative
           if [ ! -f "dm/ios/tools/build_ipa.sh" ]; then
             git clone --depth 1 https://github.com/seedds/nxnative.git "$RUNNER_TEMP/nx_up"
             rsync -a --ignore-existing "$RUNNER_TEMP/nx_up/" ./
           fi
 
-          # 2. Baixa o github_kit.zip (via gh release autenticado ou curl)
+          # 2. Baixa o github_kit.zip da Release
           mkdir -p "$RUNNER_TEMP/dl"
-          echo "Listando Releases disponiveis no repositorio:"
-          gh release list --repo "$GITHUB_REPOSITORY" || true
-
-          if gh release download v1.0-kit --repo "$GITHUB_REPOSITORY" --pattern "*.zip" --dir "$RUNNER_TEMP/dl" --clobber; then
-            echo "Baixado da Release v1.0-kit via gh CLI!"
-          elif gh release download --repo "$GITHUB_REPOSITORY" --pattern "*.zip" --dir "$RUNNER_TEMP/dl" --clobber; then
-            echo "Baixado da ultima Release via gh CLI!"
+          echo "=== Buscando github_kit.zip ==="
+          if curl -L --fail -o "$RUNNER_TEMP/dl/github_kit.zip" "$KIT_URL"; then
+            echo "Baixado via URL direta!"
           else
-            curl -L --fail -o "$RUNNER_TEMP/dl/github_kit.zip" "$KIT_URL"
+            gh release download --repo "$GITHUB_REPOSITORY" --pattern "*.zip" --dir "$RUNNER_TEMP/dl" --clobber || true
           fi
 
           FIRST_ZIP=$(find "$RUNNER_TEMP/dl" -name "*.zip" | head -n 1)
           if [ -z "$FIRST_ZIP" ]; then
-            echo "ERRO: Nenhum arquivo .zip encontrado na Release!"
+            echo "ERRO: Nenhum arquivo .zip encontrado em $KIT_URL nem nas Releases!"
             exit 1
           fi
 
           mkdir -p "$RUNNER_TEMP/kit"
           unzip -q "$FIRST_ZIP" -d "$RUNNER_TEMP/kit"
-          echo "=== Conteudo extraido do github_kit.zip ==="
+          echo "=== Conteudo do github_kit.zip ==="
           find "$RUNNER_TEMP/kit" -maxdepth 3
 
-          # Se o zip tiver subpasta, sobe os arquivos para $RUNNER_TEMP/kit
+          # Se o zip tiver subpasta, sobe para $RUNNER_TEMP/kit
           if [ ! -d "$RUNNER_TEMP/kit/ExeFS" ]; then
             SUB_EXEFS=$(find "$RUNNER_TEMP/kit" -type d -iname "ExeFS" | head -n 1)
             if [ -n "$SUB_EXEFS" ]; then
@@ -78,9 +74,21 @@ jobs:
             fi
           fi
 
-          # 3. Garante que o Thin IPA leia Documents/romfs no iPhone sem exigir embutir 17 GB no IPA
+          # 3. Compila o Thin IPA Nativo do Jogo
           python3 - << 'PYEOF'
+          import os, sys, struct, shutil, subprocess
           from pathlib import Path
+
+          rt = Path(os.environ["RUNNER_TEMP"])
+          kit = rt / "kit"
+          exefs = kit / "ExeFS"
+          romfs = kit / "RomFS"
+          romfs.mkdir(parents=True, exist_ok=True)
+
+          bsh_path = Path("dm/ios/tools/build_ipa.sh")
+          bsh_text = bsh_path.read_text(encoding="utf-8")
+
+          # Adapta main.m e build_ipa.sh para Thin IPA Universal (ler RomFS de Documents/ no iPhone)
           main_m = Path("dm/ios/Sources/main.m")
           if main_m.exists():
               s = main_m.read_text(encoding="utf-8")
@@ -90,33 +98,17 @@ jobs:
                   s = s.replace(old_marker, new_marker)
                   main_m.write_text(s, encoding="utf-8")
 
-          bsh = Path("dm/ios/tools/build_ipa.sh")
-          if bsh.exists():
-              b = bsh.read_text(encoding="utf-8")
-              b = b.replace(
-                  'python3 "$DM/tools/romfs.py" "$ROMFS" "$MARKER" || die "no RomFS at $ROMFS (missing $MARKER)"',
-                  'echo "[Universal Thin IPA] RomFS sera lido de Documents/romfs no iPhone"'
-              )
-              b = b.replace('"Payload/DmIOS.app/romfs=$ROMFS"', '')
-              bsh.write_text(b, encoding="utf-8")
-          PYEOF
-
-          # 4. Descobre TitleID e executa o pipeline exato do nxnative
-          python3 - << 'PYEOF'
-          import os, sys, struct, subprocess
-          from pathlib import Path
-
-          rt = Path(os.environ["RUNNER_TEMP"])
-          kit = rt / "kit"
-          exefs = kit / "ExeFS"
-          romfs = kit / "RomFS"
-          romfs.mkdir(parents=True, exist_ok=True)
+          bsh_mod = bsh_text.replace(
+              'python3 "$DM/tools/romfs.py" "$ROMFS" "$MARKER" || die "no RomFS at $ROMFS (missing $MARKER)"',
+              'echo "[Universal Thin IPA] RomFS sera lido de Documents/ no iPhone"'
+          ).replace('"Payload/DmIOS.app/romfs=$ROMFS"', '')
+          bsh_path.write_text(bsh_mod, encoding="utf-8")
 
           if not exefs.exists():
-              print("ERRO CRITICO: Pasta ExeFS nao encontrada dentro do github_kit.zip!")
-              print("Arquivos presentes no kit:", list(kit.rglob("*")))
+              print("ERRO: Pasta ExeFS ausente no github_kit.zip! Arquivos no zip:", list(kit.rglob("*")))
               sys.exit(1)
 
+          # Descobre TitleID do main.npdm
           tid_str = "010035F022078000"
           npdm_file = exefs / "main.npdm"
           if npdm_file.exists():
@@ -124,51 +116,59 @@ jobs:
               aci0 = struct.unpack_from("<I", npdm, 0x70)[0]
               tid = struct.unpack_from("<Q", npdm, aci0 + 0x10)[0]
               tid_str = f"{tid:016X}"
-          print(f"TitleID detectado: {tid_str}")
+          print(f"TitleID real do jogo: {tid_str}")
 
           games_dir = Path("dm/games")
-          prof_dir = games_dir / tid_str
-          if not prof_dir.exists():
+          game_key = None
+          for d in games_dir.iterdir():
+              if d.is_dir() and (d / "game.mk").exists():
+                  txt = (d / "game.mk").read_text(errors="ignore")
+                  if tid_str.lower() in txt.lower():
+                      game_key = d.name
+                      break
+
+          if not game_key:
+              game_key = tid_str
+              prof_dir = games_dir / game_key
+              prof_dir.mkdir(parents=True, exist_ok=True)
               survey_md = rt / "survey.md"
-              cmd_survey = [sys.executable, "dm/tools/survey/game_survey.py", str(kit), "-o", str(survey_md)]
+              cmd_s = [sys.executable, "dm/tools/survey/game_survey.py", str(kit), "-o", str(survey_md)]
               if (kit / "manifest.tsv").exists():
-                  cmd_survey += ["--manifest", str(kit / "manifest.tsv")]
-              subprocess.run(cmd_survey, check=False)
+                  cmd_s += ["--manifest", str(kit / "manifest.tsv")]
+              subprocess.run(cmd_s, check=False)
 
               sys.path.insert(0, str(games_dir))
               import profile_guess
-              prof_dir.mkdir(parents=True, exist_ok=True)
-              profile_guess.write_provisional_profile(survey_md, kit, prof_dir)
+              if hasattr(profile_guess, "write_provisional_profile"):
+                  profile_guess.write_provisional_profile(survey_md, kit, prof_dir)
 
-          print("Arquivos do perfil em dm/games:", list(prof_dir.iterdir()))
+          print(f"Usando GAME_KEY={game_key}, arquivos em dm/games/{game_key}:", list((games_dir / game_key).iterdir()))
 
-          # 1. Patcheia NSOs (ExeFS)
           patched = rt / "patched"
           patched.mkdir(parents=True, exist_ok=True)
-          subprocess.run([sys.executable, "dm/tools/patch_nso.py", str(exefs), str(patched), "--game", tid_str], check=True)
+          subprocess.run([sys.executable, "dm/tools/patch_nso.py", str(exefs), str(patched), "--game", game_key], check=True)
 
-          # 2. Compila Shaders Metal (.dmsh)
           shader_pkg = rt / "shader_pkg"
-          subprocess.run([sys.executable, "dm/gfx/tools/shader_split.py", str(romfs), str(shader_pkg), "--game", tid_str], check=False)
+          subprocess.run([sys.executable, "dm/gfx/tools/shader_split.py", str(romfs), str(shader_pkg), "--game", game_key], check=False)
           if shader_pkg.exists():
               env = os.environ.copy()
               env["IOSOUT"] = "1"
               env["ALLOW_OTHER_METAL"] = "1"
-              subprocess.run([sys.executable, "dm/gfx/tools/dmsh_build.py", str(shader_pkg), "--game", tid_str], env=env, check=False)
+              subprocess.run([sys.executable, "dm/gfx/tools/dmsh_build.py", str(shader_pkg), "--game", game_key], env=env, check=False)
 
-          # 3. Empacota o Thin IPA
           cmd = [
               "bash", "dm/ios/tools/build_ipa.sh",
-              "--game", tid_str,
+              "--game", game_key,
               "--patched", str(patched),
               "--romfs", str(romfs),
               "-o", str(rt / f"{tid_str}_Thin.ipa")
           ]
-          if (kit / "control.nacp").exists():
+          if "--nacp" in bsh_text and (kit / "control.nacp").exists():
               cmd += ["--nacp", str(kit / "control.nacp")]
-          if (kit / "icon.jpg").exists():
+          if "--icon" in bsh_text and (kit / "icon.jpg").exists():
               cmd += ["--icon", str(kit / "icon.jpg")]
 
+          print("Executando:", " ".join(cmd))
           subprocess.run(cmd, check=True)
           PYEOF
 
