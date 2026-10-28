@@ -69,45 +69,69 @@ for p in sorted(exefs.iterdir()):
         mods.append(p.name)
 print(f"=== Módulos NSO (sem rtld): {mods} ===", flush=True)
 
-# ── 4. Descomprime main ───────────────────────────────────────────────────────
+# ── 4. Descomprime main (NSO format correto) ─────────────────────────────────
 main_bytes = (exefs / "main").read_bytes()
 main_bid   = main_bytes[0x40:0x50].hex()
 print(f"=== Build ID: {main_bid} ===", flush=True)
 
-flags = struct.unpack_from("<I", main_bytes, 0xC)[0]
+# Header NSO real:
+# 0x0C = flags (bit i = segmento i está comprimido)
+# Segmento i começa em 0x10 + i*0x10:
+#   +0x00 = file_offset (u32)
+#   +0x04 = mem_offset  (u32)
+#   +0x08 = decomp_size (u32)  ← tamanho DESCOMPRIMIDO
+#   +0x0C = align/extra (u32)  ← ignorar
+# Tamanhos comprimidos ficam em 0x60 + i*4
 
-# Cada segmento: (file_offset, mem_offset, mem_size)
-segs = [struct.unpack_from("<III", main_bytes, 0x10 + i * 0x10) for i in range(3)]
+flags = struct.unpack_from("<I", main_bytes, 0x0C)[0]
 
-# Tamanhos comprimidos (ou raw) de cada segmento
-csz  = struct.unpack_from("<III", main_bytes, 0x60)
+segs = []
+for i in range(3):
+    base = 0x10 + i * 0x10
+    file_off  = struct.unpack_from("<I", main_bytes, base + 0x00)[0]
+    mem_off   = struct.unpack_from("<I", main_bytes, base + 0x04)[0]
+    decomp_sz = struct.unpack_from("<I", main_bytes, base + 0x08)[0]
+    segs.append((file_off, mem_off, decomp_sz))
 
-# CORREÇÃO: tamanho do buffer = max(mem_offset + mem_size) entre todos os segmentos
+csz = struct.unpack_from("<III", main_bytes, 0x60)
+
+# Diagnóstico
+for i, (fo, mo, sz) in enumerate(segs):
+    print(f"  seg[{i}]: file_off=0x{fo:x} mem_off=0x{mo:x} "
+          f"mem_sz=0x{sz:x} csz=0x{csz[i]:x} compressed={(flags>>i)&1}", flush=True)
+
+# Valida que os offsets fazem sentido
+if segs[0][0] < 0x100:
+    print("[patch] FATAL: file_off do seg[0] invalido — header NSO corrompido ou formato inesperado")
+    sys.exit(1)
+
+# Monta imagem descomprimida
 img_size = max(mo + sz for (fo, mo, sz) in segs)
 img = bytearray(img_size)
 
 for i, (fo, mo, sz) in enumerate(segs):
-    raw = main_bytes[fo : fo + csz[i]]
+    comp_sz = csz[i]
+    raw = main_bytes[fo : fo + comp_sz]
     if (flags >> i) & 1:
-        import lz4.block
         raw = lz4.block.decompress(raw, uncompressed_size=sz)
+    if len(raw) < sz:
+        print(f"[patch] AVISO: seg[{i}] raw={len(raw):#x} < sz={sz:#x}, padding com zeros")
+        raw = raw + bytes(sz - len(raw))
     img[mo : mo + sz] = raw[:sz]
 
 print(f"=== Imagem descomprimida: {img_size:#x} bytes ===", flush=True)
 
+# Disassembla
 md = Cs(CS_ARCH_ARM64, CS_MODE_ARM)
 md.detail = True
-
-# Disassembla a imagem COMPLETA
 insns_all = list(md.disasm(bytes(img), 0))
 print(f"=== Instruções disassembladas: {len(insns_all)} ===", flush=True)
 
 if len(insns_all) < 1000:
-    print("[patch] FATAL: imagem descomprimida parece invalida ou muito pequena")
-    print(f"  img_size={img_size:#x}, flags={flags:#x}")
-    for i, (fo, mo, sz) in enumerate(segs):
-        print(f"  seg[{i}]: file_off={fo:#x} mem_off={mo:#x} mem_sz={sz:#x} csz={csz[i]:#x} compressed={(flags>>i)&1}")
+    print(f"[patch] FATAL: apenas {len(insns_all)} instrucoes — imagem invalida")
     sys.exit(1)
+
+by_addr = {i.address: i for i in insns_all}
 
 # ── Detector dinâmico pela vtable 0x92fa000 ──────────────────────────────────
 VTABLE_PAGE = 0x92fa000 & ~0xFFF   # página base do adrp
