@@ -87,12 +87,7 @@ for p in sorted(exefs.iterdir()):
 print(f"=== Módulos NSO (sem rtld): {mods} ===", flush=True)
 
 # ─────────────────────────────────────────────────────────────────────────────
-# 4. Descomprime NSO
-#
-#  ATENÇÃO: file_off=0x101 é o valor REAL — NÃO mascarar.
-#  O stream LZ4 começa exatamente em file_off.
-#  comp_sz é calculado pela distância até o próximo segmento
-#  (mais confiável que o valor do header).
+# 4. Descomprime NSO — usando lógica idêntica ao nso.py do nxnative
 # ─────────────────────────────────────────────────────────────────────────────
 main_bytes = (exefs / "main").read_bytes()
 
@@ -107,100 +102,94 @@ use_zstd = bool(flags & (1 << 7))
 print(f"=== Build ID: {main_bid} ===", flush=True)
 print(f"=== flags: 0x{flags:02x} | compressao: {'zstd' if use_zstd else 'lz4-block'} ===", flush=True)
 
-# Lê os 3 segmentos com file_off ORIGINAL (sem mascarar)
-segs = []
-seg_names = ["text","rodata","data"]
-for i in range(3):
-    base      = 0x10 + i * 0x10
-    file_off  = struct.unpack_from("<I", main_bytes, base + 0x00)[0]
-    mem_off   = struct.unpack_from("<I", main_bytes, base + 0x04)[0]
-    decomp_sz = struct.unpack_from("<I", main_bytes, base + 0x08)[0]
-    comp_sz   = struct.unpack_from("<I", main_bytes, 0x60 + i * 4)[0]
-    segs.append((file_off, mem_off, decomp_sz, comp_sz))
-    print(f"  .{seg_names[i]}: file_off=0x{file_off:x} mem_off=0x{mem_off:x} "
-          f"decomp_sz=0x{decomp_sz:x} comp_sz=0x{comp_sz:x} "
-          f"compressed={(flags>>i)&1}", flush=True)
+# stored = (file_offset, mem_offset, decomp_size) — exatamente como nso.py
+stored = [struct.unpack_from("<III", main_bytes, 0x10 + i * 0x10) for i in range(3)]
+# csz = tamanho comprimido no arquivo (ou decomp_size se não comprimido)
+csz_hdr = struct.unpack_from("<III", main_bytes, 0x60)
+csz = [csz_hdr[i] if (flags >> i) & 1 else stored[i][2] for i in range(3)]
 
-# Calcula comp_sz real pela distância entre segmentos consecutivos
-real_comp = []
-for i in range(3):
-    file_off  = segs[i][0]
-    comp_sz   = segs[i][3]
-    is_comp   = bool((flags >> i) & 1)
-    if is_comp:
-        next_fo = segs[i+1][0] if i < 2 else len(main_bytes)
-        comp_real = next_fo - file_off
-        if comp_real != comp_sz:
-            print(f"  [info] seg[{i}] comp_sz header=0x{comp_sz:x} "
-                  f"dist=0x{comp_real:x} -> usando min", flush=True)
-        comp_sz = min(comp_sz, comp_real, len(main_bytes) - file_off)
-    real_comp.append(comp_sz)
+seg_names = ["text","rodata","data"]
+for i, ((fo, mo, sz), c) in enumerate(zip(stored, csz)):
+    print(f"  .{seg_names[i]}: file_off=0x{fo:x} mem_off=0x{mo:x} "
+          f"decomp_sz=0x{sz:x} comp_sz=0x{c:x} compressed={(flags>>i)&1}", flush=True)
 
 # Monta imagem
-img_size = max(mo + sz for (fo, mo, sz, csz) in segs)
-img      = bytearray(img_size)
+end = stored[2][1] + stored[2][2]
+img = bytearray(end)
 
-for i, (file_off, mem_off, decomp_sz, _) in enumerate(segs):
-    is_compressed = bool((flags >> i) & 1)
-    comp_sz = real_comp[i]
-    raw = main_bytes[file_off : file_off + comp_sz]
-
-    print(f"  seg[{i}] .{seg_names[i]}: file_off=0x{file_off:x} "
-          f"lendo 0x{len(raw):x} bytes", flush=True)
-
-    if is_compressed:
+for i, ((fo, mo, sz), c) in enumerate(zip(stored, csz)):
+    raw = main_bytes[fo : fo + c]
+    print(f"  seg[{i}] .{seg_names[i]}: lendo 0x{len(raw):x} bytes de file_off=0x{fo:x}", flush=True)
+    if (flags >> i) & 1:
         if use_zstd:
             try:
                 import zstandard as zstd
-                raw = zstd.ZstdDecompressor().decompress(raw, max_output_size=decomp_sz)
+                raw = zstd.ZstdDecompressor().decompress(raw, max_output_size=sz)
             except Exception as e:
                 print(f"[patch] FATAL: zstd seg[{i}]: {e}")
                 sys.exit(1)
         else:
-            # Tenta com decomp_sz exato, depois com margem crescente
-            ok = False
-            for extra in [0, 0x1000, 0x10000, 0x100000]:
-                try:
-                    raw = lz4.block.decompress(raw, uncompressed_size=decomp_sz + extra)
-                    if extra:
-                        print(f"  [info] seg[{i}] lz4 precisou extra=0x{extra:x}", flush=True)
-                    ok = True
-                    break
-                except Exception:
-                    pass
-            if not ok:
-                print(f"[patch] FATAL: lz4 falhou seg[{i}] .{seg_names[i]}")
-                print(f"  primeiros 16 bytes: {main_bytes[file_off:file_off+16].hex()}")
+            try:
+                raw = lz4.block.decompress(raw, uncompressed_size=sz)
+            except Exception as e:
+                print(f"[patch] FATAL: lz4 seg[{i}] .{seg_names[i]}: {e}")
+                print(f"  primeiros 16 bytes: {main_bytes[fo:fo+16].hex()}")
                 sys.exit(1)
+    if len(raw) < sz:
+        raw = raw + bytes(sz - len(raw))
+    img[mo : mo + sz] = raw[:sz]
+    print(f"  seg[{i}] ok -> mem[0x{mo:x}..0x{mo+sz:x}]", flush=True)
 
-    if len(raw) < decomp_sz:
-        raw = raw + bytes(decomp_sz - len(raw))
-
-    img[mem_off : mem_off + decomp_sz] = raw[:decomp_sz]
-    print(f"  seg[{i}] ok -> mem[0x{mem_off:x}..0x{mem_off+decomp_sz:x}]", flush=True)
-
+img_size = end
 print(f"=== Imagem descomprimida: 0x{img_size:x} bytes ===", flush=True)
 
-# ─────────────────────────────────────────────────────────────────────────────
-# 5. Disassembla .text completo
-# ─────────────────────────────────────────────────────────────────────────────
-text_mem_off = segs[0][1]
-text_size    = segs[0][2]
-CODE_START   = text_mem_off
-CODE_END     = text_mem_off + text_size
+# Guarda referências de segmentos para uso posterior
+segs = [(stored[i][0], stored[i][1], stored[i][2], csz[i]) for i in range(3)]
 
-print(f"=== Disassemblando .text: [0x{CODE_START:x}..0x{CODE_END:x}] ===", flush=True)
+# ─────────────────────────────────────────────────────────────────────────────
+# 5. Disassembla .text — pula o MOD0 header (primeiros bytes não são ARM64)
+#
+#  O .text começa em mem_off=0x0. Os primeiros bytes são:
+#    [0x00] 4 bytes: branch ou padding
+#    [0x04] 4 bytes: ponteiro para MOD0 (relativo ao início do .text)
+#    [MOD0_ptr+0x00] "MOD0" magic
+#    [MOD0_ptr+0x04..+0x20] campos do MOD0
+#  O código ARM64 real começa APÓS o bloco MOD0.
+#  Estratégia: lê o ponteiro MOD0, calcula o fim do MOD0, e começa daí.
+#  Se MOD0 não for encontrado, usa 0x100 como fallback seguro.
+# ─────────────────────────────────────────────────────────────────────────────
+text_mem_off = stored[0][1]   # = 0x0
+text_size    = stored[0][2]
+
+# Lê ponteiro MOD0 em [0x04] do .text
+mod0_ptr   = struct.unpack_from("<I", img, text_mem_off + 0x04)[0]
+mod0_magic = bytes(img[text_mem_off + mod0_ptr : text_mem_off + mod0_ptr + 4])
+
+if mod0_magic == b"MOD0":
+    # MOD0 tem 0x28 bytes (magic + 6 campos de 4 bytes)
+    code_start = text_mem_off + mod0_ptr + 0x28
+    # Alinha para cima em 4 bytes
+    code_start = (code_start + 3) & ~3
+    print(f"=== MOD0 em 0x{text_mem_off+mod0_ptr:x}, código começa em 0x{code_start:x} ===", flush=True)
+else:
+    # Fallback: pula os primeiros 0x100 bytes
+    code_start = text_mem_off + 0x100
+    print(f"=== MOD0 não encontrado (magic={mod0_magic!r}), fallback 0x{code_start:x} ===", flush=True)
+
+code_end = text_mem_off + text_size
+
+print(f"=== Disassemblando .text: [0x{code_start:x}..0x{code_end:x}] ===", flush=True)
 
 md = Cs(CS_ARCH_ARM64, CS_MODE_ARM)
 md.detail = True
 
-insns_all = list(md.disasm(bytes(img[CODE_START:CODE_END]), CODE_START))
+insns_all = list(md.disasm(bytes(img[code_start:code_end]), code_start))
 print(f"=== Instruções disassembladas: {len(insns_all)} ===", flush=True)
 
 if len(insns_all) < 1000:
-    sample = img[CODE_START:CODE_START+32].hex()
+    sample = img[code_start:code_start+32].hex()
     print(f"[patch] FATAL: apenas {len(insns_all)} instrucoes")
-    print(f"  primeiros 32 bytes (0x{CODE_START:x}): {sample}")
+    print(f"  primeiros 32 bytes (0x{code_start:x}): {sample}")
     sys.exit(1)
 
 by_addr = {ins.address: ins for ins in insns_all}
@@ -266,7 +255,7 @@ ctor = ctor_candidates[0]
 print(f"=== Construtor: func=0x{ctor['func']:x} this_reg=x{ctor['this_reg']} ===", flush=True)
 
 bls = []
-for off in range(CODE_START, CODE_END - 4, 4):
+for off in range(code_start, code_end - 4, 4):
     w = struct.unpack_from("<I", img, off)[0]
     t = decode_bl(w, off)
     if t is not None and ctor["func"] <= t <= ctor["func"] + 0x40:
@@ -281,7 +270,7 @@ best_score = -1
 for bl in bls:
     obj_reg = ctor["this_reg"]
     score   = 0
-    for a in range(max(CODE_START, bl - 0x80), bl, 4):
+    for a in range(max(code_start, bl - 0x80), bl, 4):
         ii = by_addr.get(a)
         if not ii:
             continue
