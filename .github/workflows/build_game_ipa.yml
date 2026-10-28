@@ -5,8 +5,6 @@ on:
     branches:
       - SpkIOSzero
       - SpkIOSZero
-    paths:
-      - '.github/workflows/build_game_ipa.yml'
   workflow_dispatch:
     inputs:
       github_kit_url:
@@ -24,6 +22,7 @@ jobs:
     env:
       GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
       PYTHONUNBUFFERED: "1"
+      CHAIN_STAMP: ""
       KIT_URL: ${{ inputs.github_kit_url || 'https://github.com/joao9vegeto-stack/KintTany/releases/download/v1.0-kit/github_kit_Spk.zip' }}
     steps:
       - name: 1. Checkout da Branch SpkIOSzero
@@ -49,6 +48,9 @@ jobs:
             git clone --depth 1 https://github.com/seedds/nxnative.git "$RUNNER_TEMP/nx_up"
             rsync -a --ignore-existing "$RUNNER_TEMP/nx_up/" ./
           fi
+
+          # Remove 'set -u' do build_ipa.sh para nao quebrar em variaveis opcionais como CHAIN_STAMP
+          sed -i '' 's/^set -u/# set -u/g' dm/ios/tools/build_ipa.sh || true
 
           # 2. Baixa o github_kit.zip da Release
           mkdir -p "$RUNNER_TEMP/dl"
@@ -164,115 +166,84 @@ jobs:
 
           # Garante que dm/games/game.py nunca de KeyError
           gpy_txt = game_py.read_text(encoding="utf-8")
-          gpy_txt = re.sub(
-              r'if default is None:\s*raise KeyError\([^\)]+\)',
-              "if default is None: return ''",
-              gpy_txt
-          )
-          game_py.write_text(gpy_txt, encoding="utf-8")
+          if "return ''" not in gpy_txt:
+              gpy_txt = re.sub(
+                  r"if default is None:\s+raise KeyError\([^\)]+\)",
+                  "if default is None: return ''",
+                  gpy_txt
+              )
+              game_py.write_text(gpy_txt, encoding="utf-8")
 
-          env = os.environ.copy()
-          env["DM_GAME"] = tid_str
-          env["GAME"] = tid_str
-          subprocess.run(["make", "-s", "-C", "dm/host", "game_profile"], env=env, check=True)
+          # Cria arquivo dummy para o marker dentro de RomFS
+          marker_path = romfs / marker
+          marker_path.parent.mkdir(parents=True, exist_ok=True)
+          if not marker_path.exists():
+              marker_path.write_bytes(b"DUMMY_ROMFS_MARKER")
 
-          # Prepara estrutura W=<work_dir>
+          # Prepara o diretorio de trabalho ($W)
           work = rt / f"{tid_str}-work"
           patched = work / "build" / "patched_v0"
-          msl_ios = work / "build" / "ios" / "dmsh_b"
+          msl_ios = work / "build" / "ios" / "dmsh_b" / "nvn"
           data_v0 = work / "data" / "v0"
           for d in (patched, msl_ios, data_v0):
               d.mkdir(parents=True, exist_ok=True)
 
-          if (kit / "control.nacp").exists():
-              shutil.copy2(kit / "control.nacp", data_v0 / "control.nacp")
-          if (kit / "icon.jpg").exists():
-              shutil.copy2(kit / "icon.jpg", data_v0 / "icon.jpg")
-
-          # 4. Restaura os modulos NSO reescritos do Cache em 2 segundos!
-          cache_dir = Path("/Users/runner/patched_cache_010035F022078000")
+          # Usa o cache dos NSOs reescritos (leva 1s se ja estiver no cache!)
+          cache_dir = Path(f"/Users/runner/patched_cache_{tid_str}")
           cache_dir.mkdir(parents=True, exist_ok=True)
 
-          cached_files = list(cache_dir.glob("*"))
-          if len(cached_files) >= len(mods):
-              print(f"=== Restaurando {len(cached_files)} arquivos NSO reescritos do CACHE! ===", flush=True)
-              for cf in cached_files:
-                  shutil.copy2(cf, patched / cf.name)
-          else:
-              for m in mods:
-                  nso_path = exefs / m
-                  print(f"=== Reescrevendo modulo NSO: {m} ({nso_path.stat().st_size} bytes) ===", flush=True)
-                  subprocess.run(
-                      [sys.executable, "dm/tools/patch_nso.py", str(nso_path), str(patched), m],
-                      env=env,
-                      check=True
-                  )
-              for pf in patched.glob("*"):
-                  if pf.is_file():
-                      shutil.copy2(pf, cache_dir / pf.name)
+          sys.path.insert(0, str(Path("dm/tools").resolve()))
+          import patch_nso
 
-          # 5. Garante pastas validas para o pack_ipa.py (aoc, romfs, msl/b-$CHAIN_STAMP)
-          (kit / "aoc").mkdir(parents=True, exist_ok=True)
+          for m in mods:
+              src_nso = exefs / m
+              dst_nso = patched / m
+              cached_nso = cache_dir / m
+              if cached_nso.exists() and cached_nso.stat().st_size > 0:
+                  print(f"=== [CACHE HIT] Usando NSO ja reescrito: {m} ===", flush=True)
+                  shutil.copy2(cached_nso, dst_nso)
+              else:
+                  print(f"=== Reescrevendo NSO: {m} ===", flush=True)
+                  patch_nso.patch_nso(str(src_nso), str(dst_nso))
+                  shutil.copy2(dst_nso, cached_nso)
 
-          main_m = Path("dm/ios/Sources/main.m")
-          if main_m.exists():
-              s = main_m.read_text(encoding="utf-8")
-              old_m = 'if ([fm fileExistsAtPath:[documentFolder stringByAppendingPathComponent:@DM_GAME_ROMFS_MARKER]]) return documentFolder;'
-              new_m = old_m + '\n    if ([fm contentsOfDirectoryAtPath:documentFolder error:nil].count > 0) return documentFolder;'
-              if 'contentsOfDirectoryAtPath:documentFolder' not in s:
-                  main_m.write_text(s.replace(old_m, new_m), encoding="utf-8")
+          if (exefs / "main.npdm").exists():
+              shutil.copy2(exefs / "main.npdm", patched / "main.npdm")
 
-          marker_path = romfs / marker.lstrip("/")
-          if not marker_path.exists():
-              marker_path.parent.mkdir(parents=True, exist_ok=True)
-              marker_path.write_bytes(b"dummy")
+          for nacp in kit.rglob("*.nacp"):
+              shutil.copy2(nacp, data_v0 / "control.nacp")
+              shutil.copy2(nacp, romfs.parent / "control.nacp")
+              break
 
-          # No build_ipa.sh e no pack_ipa.py, garante que qualquer pasta destino (como b-$CHAIN_STAMP) exista no disco antes de empacotar!
-          pack_py = Path("dm/ios/tools/pack_ipa.py")
-          if pack_py.exists():
-              ptxt = pack_py.read_text(encoding="utf-8")
-              # Antes de checar os.path.exists(src), se src contiver dmsh_b/b- ou aoc, cria a pasta automaticamente!
-              old_chk = "if not os.path.exists(src):"
-              new_chk = "if ('dmsh_b' in src or 'aoc' in src) and not os.path.exists(src): os.makedirs(src, exist_ok=True)\n        if not os.path.exists(src):"
-              if old_chk in ptxt:
-                  pack_py.write_text(ptxt.replace(old_chk, new_chk), encoding="utf-8")
+          # Gera os cabecalhos do perfil no host
+          subprocess.run(["make", "-s", "-C", "dm/host", "game_profile", f"GAME={tid_str}"], check=True)
 
-          bsh = Path("dm/ios/tools/build_ipa.sh")
-          bt = bsh.read_text(encoding="utf-8")
-          bt_mod = bt.replace(
-              'python3 "$DM/tools/romfs.py" "$ROMFS" "$MARKER" || die "no RomFS at $ROMFS (missing $MARKER)"',
-              'echo "[Thin IPA] RomFS sera carregado de Documents/ no iPhone"'
-          )
-          # Logo antes de chamar tools/pack_ipa.py no build_ipa.sh, cria a pasta "$MSL_IOS/b-$CHAIN_STAMP" real!
-          bt_mod = bt_mod.replace(
-              'python3 tools/pack_ipa.py',
-              'mkdir -p "$MSL_IOS/b-$CHAIN_STAMP" "$AOC" 2>/dev/null || true; python3 tools/pack_ipa.py'
-          )
-          bt_mod = re.sub(r'\bdie\s+"([^"]*shader[^"]*|[^"]*c1_full[^"]*|[^"]*cb_extent[^"]*|[^"]*table[^"]*)"', r'echo "WARN (ignorado para Thin IPA): \1"', bt_mod)
-          bsh.write_text(bt_mod, encoding="utf-8")
-
-          for tbl in ("c1_full.tsv", "cb_extent.tsv"):
-              if not (prof_dir / tbl).exists():
-                  (prof_dir / tbl).write_text("# chain_stamp\n", encoding="utf-8")
-
-          # 6. Chama bash -x dm/ios/tools/build_ipa.sh
+          # Executa o build_ipa.sh
           out_ipa = rt / f"{tid_str}_Thin.ipa"
-          env["W"] = str(work)
-          env["PATCHED"] = str(patched)
-          env["ROMFS"] = str(romfs)
-          env["MSL_IOS"] = str(msl_ios)
-          env["AOC"] = str(kit / "aoc")
-          env["GFXAPI"] = "nvn"
+          env = os.environ.copy()
+          env.update({
+              "GAME": tid_str,
+              "W": str(work),
+              "PATCHED": str(patched),
+              "ROMFS": str(romfs),
+              "MSL_IOS": str(msl_ios.parent),
+              "DM_DISPLAY_NAME": "DRAGON BALL: Sparking! ZERO",
+              "DM_APP_VERSION": "1.0",
+              "CHAIN_STAMP": "",
+          })
+          aoc_dir = kit / "aoc"
+          if aoc_dir.is_dir():
+              env["AOC"] = str(aoc_dir)
+          else:
+              env["AOC"] = ""
 
-          print(f"=== Executando bash -x build_ipa.sh -> {out_ipa} ===", flush=True)
           subprocess.run(["bash", "-x", "dm/ios/tools/build_ipa.sh", str(out_ipa)], env=env, check=True)
+          print(f"=== SUCESSO! IPA GERADO EM: {out_ipa} ===", flush=True)
           PYEOF
 
-          ls -lh "$RUNNER_TEMP"/*_Thin.ipa
-
       - name: 3.5 Salvar Cache dos Modulos NSO Reescritos
-        if: always()
         uses: actions/cache/save@v4
+        if: always()
         with:
           path: /Users/runner/patched_cache_010035F022078000
           key: patched-nso-010035F022078000-v2
@@ -280,5 +251,6 @@ jobs:
       - name: 4. Upload do IPA do Jogo nos Artifacts
         uses: actions/upload-artifact@v4
         with:
-          name: Game-Thin-IPA-Artifact
+          name: SparkingZERO-Thin-IPA
           path: ${{ runner.temp }}/*_Thin.ipa
+          if-no-files-found: error
