@@ -12,6 +12,29 @@ jobs:
         run: |
           git clone https://github.com/RichardFontoura/ps3recomp ps3recomp
           git -C ps3recomp checkout f6ab60baf37662bd712592b7ef9f66891972a5fc
+          mkdir -p report
+          python3 - <<'PY'
+          from pathlib import Path
+          import difflib
+
+          path = Path("ps3recomp/CMakeLists.txt")
+          original = path.read_text()
+          start = original.index("    find_package(SDL2 QUIET)")
+          marker = "    endif()\n\n    find_package(Threads REQUIRED)"
+          pos = original.index(marker, start)
+          end = pos + len("    endif()")
+          block = original[start:end]
+          if "if(NOT IOS)" in block:
+              raise SystemExit("SDL2 gate already patched; refusing duplicate patch")
+          updated = original[:start] + "    if(NOT IOS)\n" + block + "\n    endif()" + original[end:]
+          path.write_text(updated)
+          diff = difflib.unified_diff(
+              original.splitlines(True), updated.splitlines(True),
+              fromfile="a/ps3recomp/CMakeLists.txt",
+              tofile="b/ps3recomp/CMakeLists.txt")
+          Path("report/sdl2-ios-gate.patch").write_text("".join(diff))
+          print(Path("report/sdl2-ios-gate.patch").read_text())
+          PY
           git clone --depth 1 https://github.com/RichardFontoura/gowa-pc gowa-pc
       - name: Download M9.0 lift bundle
         uses: dawidd6/action-download-artifact@v6
@@ -50,6 +73,10 @@ jobs:
           cp ps3recomp/runtime/host/host_main.c report/host_main.c
           cp ps3recomp/runtime/host/host_posix.c report/host_posix.c
           grep -n 'SDL\|UIKit\|NSApplication\|CAMetalLayer\|MTK' ps3recomp/libs/video/rsx_metal_backend.m ps3recomp/runtime/host/*.c | head -n 60 | tee report/metal-host-deps.txt
+      - name: Inspect SDL2 gate in fork CMake
+        run: |
+          sed -n '120,175p' ps3recomp/CMakeLists.txt | tee report/cmake-sdl-gate.txt
+          grep -n 'option(' ps3recomp/CMakeLists.txt | tee report/cmake-options.txt
       - name: CMake configure (iOS arm64)
         run: |
           cmake -S gowa-pc -B build -G Ninja \
