@@ -1,4 +1,4 @@
-name: 2. Build Game Thin IPA (from github_kit.zip)
+name: 2. Build Thin IPA - Auditoria SPK
 
 on:
   push:
@@ -9,13 +9,13 @@ on:
   workflow_dispatch:
     inputs:
       github_kit_url:
-        description: "Link direto do github_kit.zip na Release"
+        description: "Link direto do github_kit.zip"
         required: false
         type: string
         default: "https://github.com/joao9vegeto-stack/KintTany/releases/download/v1.0-kit/github_kit_Spk.zip"
 
 permissions:
-  contents: write
+  contents: read
 
 jobs:
   build_thin_game_ipa:
@@ -26,13 +26,17 @@ jobs:
       GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
       PYTHONUNBUFFERED: "1"
       CHAIN_STAMP: ""
+
       KIT_URL: ${{ inputs.github_kit_url || 'https://github.com/joao9vegeto-stack/KintTany/releases/download/v1.0-kit/github_kit_Spk.zip' }}
 
-      # Commit do workflow que você informou que compilou.
       BASELINE_COMMIT: "306dcdfcb53d348085292e9e527339161c0536c7"
 
+      EXPECTED_MAIN_SHA256: "a0f8f0644c92384ddb1baac1c21aecbeeace5bc99ad40895e216add61da78efe"
+
+      EXPECTED_MAIN_BUILD_ID: "68edafd68c7bc1a1af50b82aac838018"
+
     steps:
-      - name: 1. Baixar projeto da versao que compilou
+      - name: 1. Baixar versao conhecida do projeto
         uses: actions/checkout@v4
         with:
           ref: 306dcdfcb53d348085292e9e527339161c0536c7
@@ -51,21 +55,18 @@ jobs:
             zstandard \
             PyYAML
 
-      - name: 3. Preparar workflow antigo sem cache externo
+      - name: 3. Preparar build com auditoria adicional
         shell: bash
         run: |
           set -e
 
-          mkdir -p "$RUNNER_TEMP/spk-diagnostics"
+          mkdir -p "$RUNNER_TEMP/spk-auditoria"
 
-          # O runner do GitHub é descartável. Removemos qualquer cache
-          # eventualmente existente neste runner para não reutilizar
-          # módulos reescritos de outra tentativa.
+          # Não restaura módulos reescritos de uma execução anterior.
           rm -rf /Users/runner/patched_cache
 
           python3 -u - <<'PYEOF'
           import os
-          import sys
           from pathlib import Path
 
           import yaml
@@ -74,7 +75,7 @@ jobs:
 
           if not workflow_path.is_file():
               raise SystemExit(
-                  "ERRO: workflow original não encontrado no commit base."
+                  "ERRO: workflow do commit base não encontrado."
               )
 
           with workflow_path.open("r", encoding="utf-8") as f:
@@ -82,13 +83,12 @@ jobs:
 
           try:
               steps = workflow["jobs"]["build_thin_game_ipa"]["steps"]
-          except (KeyError, TypeError):
+          except (KeyError, TypeError) as exc:
               raise SystemExit(
-                  "ERRO: não foi possível localizar as etapas "
-                  "do workflow original."
+                  f"ERRO ao ler o workflow base: {exc}"
               )
 
-          matches = []
+          candidates = []
 
           for step in steps:
               name = str(step.get("name", ""))
@@ -98,42 +98,245 @@ jobs:
                   "Baixar github_kit.zip" in name
                   and isinstance(command, str)
               ):
-                  matches.append((name, command))
+                  candidates.append((name, command))
 
-          if len(matches) != 1:
+          if len(candidates) != 1:
               raise SystemExit(
-                  "ERRO: esperava encontrar exatamente uma etapa "
-                  "de build no workflow original; "
-                  f"encontradas: {len(matches)}."
+                  "ERRO: esperado exatamente um passo de build antigo; "
+                  f"encontrados {len(candidates)}."
               )
 
-          name, command = matches[0]
+          step_name, command = candidates[0]
 
-          # Verifica que encontramos o workflow antigo, com a lógica
-          # embutida, e não o workflow novo baseado no script externo.
           if "python3 -u - << 'PYEOF'" not in command:
               raise SystemExit(
-                  "ERRO: a etapa localizada não contém o pipeline "
-                  "Python embutido esperado."
+                  "ERRO: o workflow base não contém o pipeline embutido "
+                  "esperado. Nenhuma alteração foi aplicada."
               )
 
-          output = Path(os.environ["RUNNER_TEMP"]) / "spk-legacy-build.sh"
+          def replace_once(text, old, new, label):
+              count = text.count(old)
+
+              if count != 1:
+                  raise SystemExit(
+                      f"ERRO em {label}: esperado 1 ponto de alteração, "
+                      f"encontrados {count}."
+                  )
+
+              return text.replace(old, new, 1)
+
+          # Auditoria do ZIP e identificação exata do executável.
+          old_main = 'main_bytes = (exefs / "main").read_bytes()'
+
+          new_main = '''main_bytes = (exefs / "main").read_bytes()
+          import hashlib
+          import zipfile
+
+          actual_sha256 = hashlib.sha256(main_bytes).hexdigest()
+          actual_build_id = main_bytes[0x40:0x50].hex()
+
+          print("=== AUDITORIA: IDENTIDADE DO MAIN ===", flush=True)
+          print(f"SHA-256: {actual_sha256}", flush=True)
+          print(f"Build ID: {actual_build_id}", flush=True)
+
+          if actual_sha256 != os.environ["EXPECTED_MAIN_SHA256"]:
+              raise SystemExit(
+                  "ERRO: o main do kit é diferente daquele do crash analisado."
+              )
+
+          if actual_build_id != os.environ["EXPECTED_MAIN_BUILD_ID"]:
+              raise SystemExit(
+                  "ERRO: Build ID diferente daquele do crash analisado."
+              )
+
+          print("=== AUDITORIA: CONTEUDO DO KIT ZIP ===", flush=True)
+
+          zip_candidates = sorted((rt / "dl").glob("*.zip"))
+
+          if len(zip_candidates) != 1:
+              print(
+                  f"AVISO: encontrados {len(zip_candidates)} arquivos ZIP "
+                  "no diretorio de download.",
+                  flush=True,
+              )
+
+          interesting = (
+              "shader",
+              "oodle",
+              ".ushaderbytecode",
+              ".ushader",
+              ".metallib",
+              "shader_map",
+              "shader_facts",
+              "pso_manifest",
+              "c1_full",
+              "cb_extent",
+              ".ucas",
+              ".utoc",
+              ".pak",
+          )
+
+          for archive_path in zip_candidates:
+              print(f"ZIP: {archive_path.name}", flush=True)
+
+              try:
+                  with zipfile.ZipFile(archive_path) as archive:
+                      entries = archive.infolist()
+                      print(
+                          f"Total de entradas: {len(entries)}",
+                          flush=True,
+                      )
+
+                      found = 0
+
+                      for entry in entries:
+                          lower = entry.filename.lower()
+
+                          if any(token in lower for token in interesting):
+                              found += 1
+
+                              if found <= 300:
+                                  print(
+                                      "KIT_ENTRY "
+                                      f"size={entry.file_size} "
+                                      f"compressed={entry.compress_size} "
+                                      f"path={entry.filename}",
+                                      flush=True,
+                                  )
+
+                      print(
+                          f"Entradas relacionadas a shaders/Unreal: {found}",
+                          flush=True,
+                      )
+
+                      if found > 300:
+                          print(
+                              "AVISO: listagem limitada a 300 entradas.",
+                              flush=True,
+                          )
+
+              except Exception as exc:
+                  print(
+                      f"ERRO ao inspecionar o ZIP: {exc}",
+                      flush=True,
+                  )
+                  raise
+
+          print("=== FIM DA AUDITORIA DO KIT ===", flush=True)
+          '''
+
+          command = replace_once(
+              command,
+              old_main,
+              new_main,
+              "identificação do main e auditoria do kit",
+          )
+
+          # Acrescenta disassembly e referências às funções relacionadas
+          # ao corte automático e ao crash.
+          old_dump = (
+              'dump(0x1eab040, 0x1eab0a0, "BT main+0x1eab078")'
+          )
+
+          new_dump = '''dump(0x1eab040, 0x1eab0a0, "BT main+0x1eab078")
+
+          print("=== AUDITORIA: FUNCOES RELACIONADAS AO CORTE ===", flush=True)
+
+          dump(0x1e4e140, 0x1e4e220, "ROTINA QUE CONTEM O CORTE")
+          dump(0x1e4e2fc, 0x1e4e47c, "DESTINO ORIGINAL DA CHAMADA CORTADA")
+          dump(0x1e4e6c0, 0x1e4e840, "FUNCAO CHAMADA PELO BACKTRACE")
+          dump(0x1e5baf8, 0x1e5bb60, "INICIO DA FUNCAO QUE CHAMA O PC")
+          dump(0x1eab000, 0x1eab040, "INICIO DA FUNCAO ANTERIOR NO BACKTRACE")
+
+          # Procura instruções BL diretas para funções relevantes.
+          # Isso é uma busca de referências, não uma identificação
+          # automática de função ou de construtor.
+          print("=== AUDITORIA: BL DIRETOS PARA FUNCOES RELEVANTES ===", flush=True)
+
+          target_names = {
+              0x1e4e168: "rotina que contem o corte",
+              0x1e4e2fc: "destino da chamada cortada",
+              0x1e4e6c0: "rotina no backtrace",
+              0x1e5baf8: "rotina que chama teste de bitmap",
+              0x1eb0d34: "teste de bitmap que contem o PC",
+          }
+
+          references = {target: [] for target in target_names}
+          counts = {target: 0 for target in target_names}
+
+          text_start = segs[0][1]
+          text_end = min(text_start + segs[0][2], len(img))
+
+          for address in range(text_start, text_end - 3, 4):
+              word = struct.unpack_from("<I", img, address)[0]
+
+              # BL imediato AArch64: bits altos 100101.
+              if (word & 0xFC000000) != 0x94000000:
+                  continue
+
+              imm26 = word & 0x03FFFFFF
+
+              if imm26 & 0x02000000:
+                  imm26 -= 0x04000000
+
+              target = address + (imm26 << 2)
+
+              if target in references:
+                  counts[target] += 1
+
+                  if len(references[target]) < 40:
+                      references[target].append(address)
+
+          for target, label in target_names.items():
+              print(
+                  f"TARGET main+0x{target:x} ({label}): "
+                  f"{counts[target]} chamada(s) direta(s)",
+                  flush=True,
+              )
+
+              for caller in references[target]:
+                  print(
+                      f"  BL em main+0x{caller:x}",
+                      flush=True,
+                  )
+
+              if counts[target] > len(references[target]):
+                  print(
+                      "  ... listagem limitada a 40 chamadas",
+                      flush=True,
+                  )
+
+          print("=== FIM DA AUDITORIA DE FUNCOES ===", flush=True)
+          '''
+
+          command = replace_once(
+              command,
+              old_dump,
+              new_dump,
+              "dumps adicionais",
+          )
+
+          output = Path(os.environ["RUNNER_TEMP"]) / "spk-audit-build.sh"
           output.write_text(command + "\n", encoding="utf-8")
 
           print(f"Commit base: {os.environ['BASELINE_COMMIT']}")
-          print(f"Etapa original: {name}")
+          print(f"Etapa original: {step_name}")
           print(f"Script preparado: {output}")
+          print(
+              "ATENCAO: este build reproduz o pipeline antigo; "
+              "nao declara o IPA como corrigido."
+          )
           PYEOF
 
-      - name: 4. Baixar kit e compilar IPA com pipeline original
+      - name: 4. Baixar kit e executar build auditado
         shell: bash
         run: |
           set -o pipefail
 
-          bash "$RUNNER_TEMP/spk-legacy-build.sh" 2>&1 \
-            | tee "$RUNNER_TEMP/spk-diagnostics/build.log"
+          bash "$RUNNER_TEMP/spk-audit-build.sh" 2>&1 \
+            | tee "$RUNNER_TEMP/spk-auditoria/build.log"
 
-      - name: 5. Preparar relatorio de diagnostico
+      - name: 5. Gerar resumo
         if: always()
         shell: bash
         run: |
@@ -143,19 +346,18 @@ jobs:
           from pathlib import Path
 
           rt = Path(os.environ["RUNNER_TEMP"])
-          diagnostics = rt / "spk-diagnostics"
-          diagnostics.mkdir(parents=True, exist_ok=True)
+          output = rt / "spk-auditoria"
+          output.mkdir(parents=True, exist_ok=True)
 
           lines = [
-              "DIAGNÓSTICO DO BUILD THIN IPA",
+              "AUDITORIA DO BUILD SPK",
               "",
               f"Commit que disparou o workflow: {os.environ.get('GITHUB_SHA', '')}",
-              f"Commit base do código: {os.environ.get('BASELINE_COMMIT', '')}",
+              f"Commit base: {os.environ.get('BASELINE_COMMIT', '')}",
               f"Execução: {os.environ.get('GITHUB_RUN_ID', '')}",
               "",
-              "O build.log contém a saída completa da etapa de build.",
-              "O workflow original imprime o disassembly dos offsets",
-              "PC, LR e backtrace informados no log de crash.",
+              "Este build reproduz o pipeline antigo com diagnóstico adicional.",
+              "Ele não confirma correção do crash nem dos shaders.",
               "",
           ]
 
@@ -167,91 +369,92 @@ jobs:
               with main.open("rb") as f:
                   while True:
                       chunk = f.read(1024 * 1024)
+
                       if not chunk:
                           break
+
                       digest.update(chunk)
 
               with main.open("rb") as f:
                   header = f.read(0x60)
 
-              lines.append(f"ExeFS/main encontrado: sim")
-              lines.append(f"Tamanho: {main.stat().st_size} bytes")
-              lines.append(f"SHA-256: {digest.hexdigest()}")
+              lines.extend(
+                  [
+                      "ExeFS/main encontrado: sim",
+                      f"Tamanho: {main.stat().st_size} bytes",
+                      f"SHA-256: {digest.hexdigest()}",
+                  ]
+              )
 
               if len(header) >= 0x60 and header[:4] == b"NSO0":
-                  lines.append(f"Build ID: {header[0x40:0x60].hex()}")
+                  lines.append(
+                      f"Build ID completo: {header[0x40:0x60].hex()}"
+                  )
               else:
-                  lines.append("Build ID: cabeçalho NSO0 não identificado")
+                  lines.append("Cabeçalho NSO0 não identificado.")
           else:
               lines.append("ExeFS/main encontrado: não")
 
           lines.append("")
 
-          cuts = sorted(rt.glob("*-work/build/patched_v0/*.cuts.tsv"))
+          for pattern in (
+              "*-work/build/patched_v0/main.cuts.tsv",
+              "*-work/build/patched_v0/main.obs.tsv",
+          ):
+              paths = sorted(rt.glob(pattern))
 
-          if cuts:
-              lines.append("Arquivos de cortes encontrados:")
+              if not paths:
+                  lines.append(f"Não encontrado: {pattern}")
+                  continue
 
-              for path in cuts:
-                  lines.append(f"  - {path.name}: {path.stat().st_size} bytes")
+              for path in paths:
+                  lines.append(f"=== {path.name} ===")
 
-                  if path.name == "main.cuts.tsv":
-                      try:
-                          lines.append("")
-                          lines.append("Conteúdo de main.cuts.tsv:")
-                          lines.append(
-                              path.read_text(
-                                  encoding="utf-8",
-                                  errors="replace",
-                              )
-                          )
-                      except OSError as exc:
-                          lines.append(f"Não foi possível ler cortes: {exc}")
+                  try:
+                      content = path.read_text(
+                          encoding="utf-8",
+                          errors="replace",
+                      )
+                      lines.append(content if content else "(vazio)")
+                  except OSError as exc:
+                      lines.append(f"Erro ao ler: {exc}")
+
+                  lines.append("")
+
+          ipas = sorted(rt.glob("*.ipa"))
+
+          if ipas:
+              lines.append("IPAs gerados:")
+
+              for ipa in ipas:
+                  lines.append(
+                      f"  {ipa.name} - {ipa.stat().st_size} bytes"
+                  )
           else:
-              lines.append("Nenhum arquivo .cuts.tsv encontrado.")
+              lines.append("Nenhum IPA encontrado.")
 
-          report = diagnostics / "resumo.txt"
-          report.write_text("\n".join(lines) + "\n", encoding="utf-8")
+          report = output / "resumo.txt"
+          report.write_text(
+              "\n".join(lines) + "\n",
+              encoding="utf-8",
+          )
 
           print(report.read_text(encoding="utf-8"))
           PYEOF
 
-      - name: 6. Salvar diagnostico nos Artifacts
+      - name: 6. Salvar logs da auditoria
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: spk-diagnostico-${{ github.run_id }}
-          path: ${{ runner.temp }}/spk-diagnostics/
+          name: spk-auditoria-${{ github.run_id }}
+          path: ${{ runner.temp }}/spk-auditoria/
           if-no-files-found: warn
           retention-days: 7
 
-      - name: 7. Publicar IPA na Release
-        shell: bash
-        run: |
-          set -e
-
-          FOUND=0
-
-          for IPA_FILE in "$RUNNER_TEMP"/*.ipa; do
-            if [ -f "$IPA_FILE" ]; then
-              FOUND=1
-
-              echo "Publicando: $(basename "$IPA_FILE")"
-
-              gh release upload v1.0-kit "$IPA_FILE" \
-                --repo "$GITHUB_REPOSITORY" \
-                --clobber
-            fi
-          done
-
-          if [ "$FOUND" -ne 1 ]; then
-            echo "ERRO: nenhum IPA foi encontrado."
-            exit 1
-          fi
-
-      - name: 8. Salvar IPA nos Artifacts
+      - name: 7. Salvar IPA experimental
         uses: actions/upload-artifact@v4
         with:
-          name: ${{ env.GAME_SAFE_NAME }}_Artifact
+          name: spk-ipa-experimental-${{ github.run_id }}
           path: ${{ runner.temp }}/*.ipa
           if-no-files-found: error
+          retention-days: 7
