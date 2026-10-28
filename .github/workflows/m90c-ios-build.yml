@@ -1,0 +1,66 @@
+name: m90c-ios-build
+on:
+  workflow_dispatch:
+  push:
+    paths: ['.github/workflows/m90c-ios-build.yml']
+jobs:
+  build:
+    runs-on: macos-14
+    steps:
+      - uses: actions/checkout@v4
+      - name: Clone fork + gowa-pc
+        run: |
+          git clone https://github.com/RichardFontoura/ps3recomp ps3recomp
+          git -C ps3recomp checkout f6ab60baf37662bd712592b7ef9f66891972a5fc
+          git clone --depth 1 https://github.com/RichardFontoura/gowa-pc gowa-pc
+      - name: Download M9.0 lift bundle
+        uses: dawidd6/action-download-artifact@v6
+        with:
+          workflow: m90-lift.yml
+          name: m90-lift-bundle
+          path: bundle
+          search_artifacts: true
+      - name: Place bundle + verify
+        run: |
+          set -e
+          find bundle -maxdepth 3 | head -n 20
+          R=$(find bundle -type d -name recompiled | head -n1); S=$(find bundle -type d -name spu | head -n1)
+          rm -rf gowa-pc/recompiled gowa-pc/spu; cp -r "$R" gowa-pc/recompiled; cp -r "$S" gowa-pc/spu
+          test $(ls gowa-pc/recompiled | wc -l) -eq 7
+          test -f gowa-pc/spu/jobmods_register.c -a -f gowa-pc/spu/spu_workloads.c
+          test $(python3 -c "import json;print(len(json.load(open('gowa-pc/spu/jobmods_manifest.json'))))") -eq 31
+      - name: Patch win32_compat.c for iOS (mach_vm_region -> vm_region_64)
+        run: |
+          mkdir -p report
+          f=ps3recomp/runtime/platform/win32_compat.c
+          grep -n 'mach_vm\|vm_region' $f | tee report/win32_compat-sites.txt
+          # Não aplique patch ainda: só registre os sites. O patch vem na rodada seguinte com o contexto exato.
+      - name: Save host_main/host_posix for review
+        run: |
+          cp ps3recomp/runtime/host/host_main.c report/host_main.c
+          cp ps3recomp/runtime/host/host_posix.c report/host_posix.c
+          grep -n 'SDL\|UIKit\|NSApplication\|CAMetalLayer\|MTK' ps3recomp/libs/video/rsx_metal_backend.m ps3recomp/runtime/host/*.c | head -n 60 | tee report/metal-host-deps.txt
+      - name: CMake configure (iOS arm64)
+        run: |
+          cmake -S gowa-pc -B build -G Ninja \
+            -DCMAKE_SYSTEM_NAME=iOS -DCMAKE_OSX_ARCHITECTURES=arm64 \
+            -DCMAKE_OSX_DEPLOYMENT_TARGET=16.0 -DCMAKE_OSX_SYSROOT=iphoneos \
+            -DCMAKE_BUILD_TYPE=Release \
+            -DPS3RECOMP_DIR="$PWD/ps3recomp" -DRECOMP_DIR="$PWD/gowa-pc/recompiled" \
+            2>&1 | tee report/cmake-configure.log
+      - name: Build runtime library only
+        continue-on-error: true
+        run: cmake --build build --target ps3recomp_runtime -j4 2>&1 | tee report/build-runtime.log | grep -E 'error|warning: unused|Linking|\[[0-9]+/[0-9]+\]' | tail -n 80
+      - name: Build full target
+        continue-on-error: true
+        run: |
+          cmake --build build -j2 2>&1 | tee report/build-full.log | grep -E 'error|Linking|FAILED|\[[0-9]+/[0-9]+\]' | tail -n 120
+          echo "=== error summary ==="; grep -c 'error:' report/build-full.log || true
+          grep -oE '[^ ]+\.(c|cpp|m|mm):[0-9]+:[0-9]+: error: .*' report/build-full.log | sort | uniq -c | sort -rn | head -n 40 | tee report/errors-ranked.txt
+      - name: Symbols
+        continue-on-error: true
+        run: |
+          B=$(find build -type f -perm +111 -name 'Gow*' -o -type f -name '*.a' | head -n 5); echo "$B" | tee report/outputs.txt
+          for x in $B; do nm "$x" 2>/dev/null | grep -E 'gowa_spu_register_all|spu_func_00000A2C|rsx_metal|ppu_hle_call' | head -n 20; done | tee report/symbols.txt
+      - uses: actions/upload-artifact@v4
+        with: { name: m90c-report, path: report/ }
