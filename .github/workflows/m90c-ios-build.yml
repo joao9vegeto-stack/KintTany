@@ -50,7 +50,8 @@ jobs:
             2>&1 | tee report/cmake-configure.log
       - name: Build runtime library only
         continue-on-error: true
-        run: cmake --build build --target ps3recomp_runtime -j4 2>&1 | tee report/build-runtime.log | grep -E 'error|warning: unused|Linking|\[[0-9]+/[0-9]+\]' | tail -n 80
+        run: |
+          cmake --build build --target ps3recomp_runtime -j4 2>&1 | tee report/build-runtime.log | grep -E 'error|Linking|\[[0-9]+/[0-9]+\]' | tail -n 80
       - name: Build full target
         continue-on-error: true
         run: |
