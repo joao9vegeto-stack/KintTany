@@ -38,6 +38,8 @@ jobs:
         with:
           path: /Users/runner/patched_cache_010035F022078000
           key: patched-nso-010035F022078000-v2
+          restore-keys: |
+            patched-nso-010035F022078000-
 
       - name: 3. Baixar github_kit.zip e Compilar Thin IPA Nativo do Jogo
         run: |
@@ -49,7 +51,7 @@ jobs:
             rsync -a --ignore-existing "$RUNNER_TEMP/nx_up/" ./
           fi
 
-          # Remove 'set -u' do build_ipa.sh para nao quebrar em variaveis opcionais como CHAIN_STAMP
+          # Remove 'set -u' do build_ipa.sh para nao falhar no CHAIN_STAMP (linha 169)
           sed -i '' 's/^set -u/# set -u/g' dm/ios/tools/build_ipa.sh || true
 
           # 2. Baixa o github_kit.zip da Release
@@ -188,24 +190,23 @@ jobs:
           for d in (patched, msl_ios, data_v0):
               d.mkdir(parents=True, exist_ok=True)
 
-          # Usa o cache dos NSOs reescritos (leva 1s se ja estiver no cache!)
+          # Usa o cache dos NSOs reescritos (pasta inteira gerada pelo patch_nso.py)
           cache_dir = Path(f"/Users/runner/patched_cache_{tid_str}")
           cache_dir.mkdir(parents=True, exist_ok=True)
 
-          sys.path.insert(0, str(Path("dm/tools").resolve()))
-          import patch_nso
-
-          for m in mods:
-              src_nso = exefs / m
-              dst_nso = patched / m
-              cached_nso = cache_dir / m
-              if cached_nso.exists() and cached_nso.stat().st_size > 0:
-                  print(f"=== [CACHE HIT] Usando NSO ja reescrito: {m} ===", flush=True)
-                  shutil.copy2(cached_nso, dst_nso)
-              else:
+          cached_files = [f for f in cache_dir.iterdir() if f.name != ".DS_Store"]
+          if len(cached_files) >= len(mods):
+              print(f"=== [CACHE HIT] Restaurando {len(cached_files)} arquivos de {cache_dir} ===", flush=True)
+              shutil.copytree(cache_dir, patched, dirs_exist_ok=True)
+          else:
+              for m in mods:
+                  src_nso = exefs / m
                   print(f"=== Reescrevendo NSO: {m} ===", flush=True)
-                  patch_nso.patch_nso(str(src_nso), str(dst_nso))
-                  shutil.copy2(dst_nso, cached_nso)
+                  subprocess.run(
+                      ["python3", "dm/tools/patch_nso.py", str(src_nso), str(patched), m],
+                      check=True
+                  )
+              shutil.copytree(patched, cache_dir, dirs_exist_ok=True)
 
           if (exefs / "main.npdm").exists():
               shutil.copy2(exefs / "main.npdm", patched / "main.npdm")
@@ -246,7 +247,7 @@ jobs:
         if: always()
         with:
           path: /Users/runner/patched_cache_010035F022078000
-          key: patched-nso-010035F022078000-v2
+          key: patched-nso-010035F022078000-v3
 
       - name: 4. Upload do IPA do Jogo nos Artifacts
         uses: actions/upload-artifact@v4
