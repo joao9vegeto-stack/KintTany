@@ -2042,14 +2042,14 @@ static uint32_t loadGuestBe32(const uint8_t *base, uint32_t address);
 static void logCodeAuditBuild69(uint8_t *base) {
  if(!base||g_build69AuditEmitted.exchange(true,std::memory_order_acq_rel))return;
  struct R{uint32_t b,e;const char*n;}; static constexpr R rs[]={
-  {0x82370500u,0x823705C0u,"BINK_TICK_82370500"},
-  {0x82370BF0u,0x82370C60u,"BINK_WAIT_82370C34"},
-  {0x82427900u,0x82427980u,"BINK_SYNC_82427940"},
-  {0x824ACBC0u,0x824ACC40u,"MAIN_824ACBF8"},
-  {0x826CF040u,0x826CF0B0u,"SPIN_826CF060"},
-  {0x825F91C0u,0x825F9220u,"SPIN_825F91D8"}
+  {0x8311C620u,0x8311C6A0u,"MAIN_STALL_8311C638"},
+  {0x830D9838u,0x830D98B0u,"MAIN_CALLER_830D9838"},
+  {0x830D9CC0u,0x830D9D20u,"MAIN_LR_830D9CF4"},
+  {0x824ACBF8u,0x824ACC60u,"MAIN_LOOP_824ACBF8"},
+  {0x82B422A8u,0x82B42340u,"AUDIO6_82B422A8"},
+  {0x82370500u,0x82370580u,"BINK_TICK_82370500"}
  };
- for(const R&r:rs){char h[160];std::snprintf(h,sizeof(h),"CODE_AUDIT_B69_BEGIN name=%s range=0x%08X..0x%08X",r.n,r.b,r.e);std::fprintf(stderr,"%s\n",h);recordRuntimeTrace(h);for(uint32_t pc=r.b;pc<r.e;pc+=4u){const bool ok=validGuestRange(pc,4u);const uint32_t w=ok?loadGuestBe32(base,pc):0u;char l[160];std::snprintf(l,sizeof(l),"CODE_AUDIT_B69 name=%s pc=0x%08X word=0x%08X valid=%u",r.n,pc,w,ok?1u:0u);std::fprintf(stderr,"%s\n",l);recordRuntimeTrace(l);}std::snprintf(h,sizeof(h),"CODE_AUDIT_B69_END name=%s",r.n);recordRuntimeTrace(h);}
+ for(const R&r:rs){char h[160];std::snprintf(h,sizeof(h),"CODE_AUDIT_B69_BEGIN name=%s range=0x%08X..0x%08X",r.n,r.b,r.e);std::fprintf(stderr,"%s\n",h);recordRuntimeTrace(h);for(uint32_t pc=r.b;pc<r.e;pc+=16u){const bool ok=validGuestRange(pc,16u);const uint32_t w0=ok?loadGuestBe32(base,pc):0u,w1=ok?loadGuestBe32(base,pc+4u):0u,w2=ok?loadGuestBe32(base,pc+8u):0u,w3=ok?loadGuestBe32(base,pc+12u):0u;char l[200];std::snprintf(l,sizeof(l),"CODE_AUDIT_B69 name=%s pc=0x%08X word=0x%08X w1=0x%08X w2=0x%08X w3=0x%08X valid=%u",r.n,pc,w0,w1,w2,w3,ok?1u:0u);std::fprintf(stderr,"%s\n",l);recordRuntimeTrace(l);}std::snprintf(h,sizeof(h),"CODE_AUDIT_B69_END name=%s",r.n);recordRuntimeTrace(h);}
 }
 
 void xowue_thread_checkpoint() {
@@ -2317,40 +2317,35 @@ static void __xowue_sub_83847AC4_free(PPCContext &ctx, uint8_t *) { ctx.r3.u64=0
 
 static inline void xowue_write_be32_raw(uint8_t *base, uint32_t addr, uint32_t val);
 static void xowue_forward_pump_and_signal_spin(uint32_t guestAddress, PPCContext &ctx) {
-    static std::atomic<uint32_t> s_directSpinCalls{0};
-    const uint32_t sc = s_directSpinCalls.fetch_add(1, std::memory_order_relaxed) + 1u;
-    if (sc > 128u && (sc & 63u) == 0u) {
+    const bool isHotWait =
+        guestAddress == 0x826CF060u || guestAddress == 0x825F91D8u ||
+        guestAddress == 0x82427970u || guestAddress == 0x824ACBF8u ||
+        guestAddress == 0x822A1BE8u || guestAddress == 0x822A0278u ||
+        guestAddress == 0x824E6F38u || guestAddress == 0x82C25810u ||
+        guestAddress == 0x82370500u || guestAddress == 0x82370744u ||
+        guestAddress == 0x82371DC8u || guestAddress == 0x82552508u ||
+        guestAddress == 0x82493860u || guestAddress == 0x824E7180u ||
+        guestAddress == 0x8311C638u || guestAddress == 0x830D9838u ||
+        guestAddress == 0x82B422A8u || guestAddress == 0x82B3DE30u;
+    if (!isHotWait) return;
+    thread_local uint32_t s_lastAddr = 0;
+    thread_local uint32_t s_spinCalls = 0;
+    if (guestAddress == s_lastAddr) ++s_spinCalls;
+    else { s_lastAddr = guestAddress; s_spinCalls = 1; }
+    const uint32_t mask = (guestAddress == 0x822A0278u || guestAddress == 0x822A1BE8u) ? 0xFFFu : 0xFFu;
+    if ((s_spinCalls & mask) == 0u || guestAddress == 0x8311C638u || guestAddress == 0x824ACBF8u) {
         pumpGuestXenosRingBuffer();
-        signalGuestEventHandle(0x4004ED80u);
-        signalGuestEventHandle(0x4004EDD0u);
         signalGuestEventHandle(0x00000100u);
         signalGuestEventHandle(0x00000102u);
-        signalGuestEventHandle(0x00000110u);
-        signalGuestEventHandle(0x00000112u);
+        signalGuestEventHandle(0x4004ED80u);
+        signalGuestEventHandle(0x4004EDD0u);
+        signalGuestEventHandle(0x4004EF80u);
+        signalGuestEventHandle(0x00000113u);
         signalGuestEventHandle(0x00000115u);
         signalGuestEventHandle(0x70016FA0u);
         signalGuestEventHandle(0x7003DD80u);
-        auto activeMem = g_activeGuestMemory.lock();
-        uint8_t *base = activeMem ? activeMem->base : nullptr;
-        if (base != nullptr) {
-            const uint32_t cand[2] = {ctx.r31.u32, ctx.r30.u32};
-            for (uint32_t hbink : cand) {
-                if (hbink >= 0x40000000u && hbink < 0x70000000u && validGuestRange(hbink, 0x40u)) {
-                    const uint32_t totalFrames = loadGuestBe32(base, hbink + 0x08u);
-                    const uint32_t curFrame = loadGuestBe32(base, hbink + 0x0Cu);
-                    if (totalFrames > 1u && totalFrames < 100000u && curFrame <= totalFrames) {
-                        const uint32_t nextFrame = (curFrame + 1u < totalFrames) ? (curFrame + 1u) : totalFrames;
-                        xowue_write_be32_raw(base, hbink + 0x0Cu, nextFrame);
-                        xowue_write_be32_raw(base, hbink + 0x10u, nextFrame);
-                    }
-                }
-            }
-            if (guestAddress == 0x826CF060u || guestAddress == 0x825F91D8u) {
-                if (ctx.r3.u32 >= 0x40000000u && ctx.r3.u32 < 0x70000000u && validGuestRange(ctx.r3.u32, 8u)) {
-                    xowue_write_be32_raw(base, ctx.r3.u32, 0u);
-                }
-            }
-        }
+        if ((s_spinCalls & 0x3FFu) == 0u)
+            std::this_thread::sleep_for(std::chrono::microseconds(250));
     }
 }
 
