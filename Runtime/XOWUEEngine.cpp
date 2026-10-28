@@ -2317,35 +2317,34 @@ static void __xowue_sub_83847AC4_free(PPCContext &ctx, uint8_t *) { ctx.r3.u64=0
 
 static inline void xowue_write_be32_raw(uint8_t *base, uint32_t addr, uint32_t val);
 static void xowue_forward_pump_and_signal_spin(uint32_t guestAddress, PPCContext &ctx) {
-    const bool isHotWait =
-        guestAddress == 0x826CF060u || guestAddress == 0x825F91D8u ||
-        guestAddress == 0x82427970u || guestAddress == 0x824ACBF8u ||
-        guestAddress == 0x822A1BE8u || guestAddress == 0x822A0278u ||
-        guestAddress == 0x824E6F38u || guestAddress == 0x82C25810u ||
-        guestAddress == 0x82370500u || guestAddress == 0x82370744u ||
-        guestAddress == 0x82371DC8u || guestAddress == 0x82552508u ||
-        guestAddress == 0x82493860u || guestAddress == 0x824E7180u ||
-        guestAddress == 0x8311C638u || guestAddress == 0x830D9838u ||
-        guestAddress == 0x82B422A8u || guestAddress == 0x82B3DE30u;
+    if (guestAddress == 0x82427940u || guestAddress == 0x82370500u) {
+        auto activeMem = g_activeGuestMemory.lock();
+        uint8_t *base = activeMem ? activeMem->base : nullptr;
+        const uint32_t hbink = ctx.r31.u32;
+        if (base && hbink >= 0x40000000u && hbink < 0x70000000u && validGuestRange(hbink, 0x40u)) {
+            const uint32_t frames = loadGuestBe32(base, hbink + 0x08u);
+            if (frames > 0u && frames < 100000u) {
+                xowue_write_be32_raw(base, hbink + 0x0Cu, frames);
+                xowue_write_be32_raw(base, hbink + 0x10u, frames);
+                ctx.r4.u32 = frames;
+                ctx.r30.u32 = 0u;
+            }
+        }
+    }
+    const bool isHotWait = guestAddress == 0x826CF060u || guestAddress == 0x825F91D8u || guestAddress == 0x82427940u || guestAddress == 0x82427970u || guestAddress == 0x824ACBF8u || guestAddress == 0x822A1BE8u || guestAddress == 0x822A0278u || guestAddress == 0x824E6F38u || guestAddress == 0x82C25810u || guestAddress == 0x82370500u || guestAddress == 0x82370744u || guestAddress == 0x82371DC8u || guestAddress == 0x82552508u || guestAddress == 0x82493860u || guestAddress == 0x824E7180u || guestAddress == 0x8311C638u || guestAddress == 0x830D9838u || guestAddress == 0x82B422A8u || guestAddress == 0x82B3DE30u;
     if (!isHotWait) return;
     thread_local uint32_t s_lastAddr = 0;
     thread_local uint32_t s_spinCalls = 0;
-    if (guestAddress == s_lastAddr) ++s_spinCalls;
-    else { s_lastAddr = guestAddress; s_spinCalls = 1; }
+    if (guestAddress == s_lastAddr) ++s_spinCalls; else { s_lastAddr = guestAddress; s_spinCalls = 1; }
     const uint32_t mask = (guestAddress == 0x822A0278u || guestAddress == 0x822A1BE8u) ? 0xFFFu : 0xFFu;
     if ((s_spinCalls & mask) == 0u || guestAddress == 0x8311C638u || guestAddress == 0x824ACBF8u) {
         pumpGuestXenosRingBuffer();
-        signalGuestEventHandle(0x00000100u);
-        signalGuestEventHandle(0x00000102u);
-        signalGuestEventHandle(0x4004ED80u);
-        signalGuestEventHandle(0x4004EDD0u);
-        signalGuestEventHandle(0x4004EF80u);
-        signalGuestEventHandle(0x00000113u);
-        signalGuestEventHandle(0x00000115u);
-        signalGuestEventHandle(0x70016FA0u);
-        signalGuestEventHandle(0x7003DD80u);
-        if ((s_spinCalls & 0x3FFu) == 0u)
-            std::this_thread::sleep_for(std::chrono::microseconds(250));
+        signalGuestEventHandle(0x00000100u); signalGuestEventHandle(0x00000102u);
+        signalGuestEventHandle(0x4004ED80u); signalGuestEventHandle(0x4004EDD0u); signalGuestEventHandle(0x4004EF80u);
+        signalGuestEventHandle(0x00000112u); signalGuestEventHandle(0x00000113u); signalGuestEventHandle(0x00000115u);
+        signalGuestEventHandle(0x70016FA0u); signalGuestEventHandle(0x7003DD80u);
+        const bool shouldYieldCpu = guestAddress == 0x82B422A8u || guestAddress == 0x82B3DE30u || guestAddress == 0x826CF060u || guestAddress == 0x825F91D8u || guestAddress == 0x824ACBF8u;
+        if (shouldYieldCpu && (s_spinCalls & 0x3FFu) == 0u) std::this_thread::sleep_for(std::chrono::microseconds(250));
     }
 }
 
@@ -4510,6 +4509,16 @@ static void writeGuestIoStatus(uint8_t *base, uint32_t address,
     PPC_STORE_U32(address + 4u, information);
 }
 
+static bool isSplashBikMovie(const std::string &guestPath) {
+    const std::string lower = lowerGuestPath(guestPath);
+    if (lower.find(".bik") == std::string::npos) return false;
+    const size_t slash = lower.find_last_of('/');
+    const std::string filename = slash == std::string::npos ? lower : lower.substr(slash + 1u);
+    return filename == "ravenlogo.bik" || filename == "ue3_logo.bik" ||
+           filename == "fox_logo.bik" || filename == "marvel_intro.bik" ||
+           filename == "atvi_logo.bik";
+}
+
 static bool isKnownOptionalStartupMovie(const std::string &guestPath) {
     const std::string lower = lowerGuestPath(guestPath);
     if (lower.find("wgame/movies/") == std::string::npos) return false;
@@ -6183,6 +6192,13 @@ void xowue_NtCreateFile(PPCContext &context, uint8_t *base) {
         recordRuntimeTrace(details);
         return;
     }
+    if (isSplashBikMovie(guestPath)) {
+        PPC_STORE_U32(handleOutAddress, 0u);
+        writeGuestIoStatus(base, ioStatusAddress, 0xC0000034u, 0u);
+        context.r3.u32 = 0xC0000034u;
+        recordRuntimeTrace("NtCreateFile splash-bik bypass path=" + guestPath);
+        return;
+    }
     uint32_t handle = 0u, action = 0u;
     const uint32_t status = createGuestFile(base, guestPath, desiredAccess,
                                             disposition, createOptions, handle, action);
@@ -6204,6 +6220,13 @@ void xowue_NtOpenFile(PPCContext &context, uint8_t *base) {
         !getGuestObjectPath(base, context.r5.u32, guestPath)) {
         context.r3.u32 = kNtStatusInvalidParameter;
         writeGuestIoStatus(base, ioStatusAddress, context.r3.u32, 0u);
+        return;
+    }
+    if (isSplashBikMovie(guestPath)) {
+        PPC_STORE_U32(handleOutAddress, 0u);
+        writeGuestIoStatus(base, ioStatusAddress, 0xC0000034u, 0u);
+        context.r3.u32 = 0xC0000034u;
+        recordRuntimeTrace("NtOpenFile splash-bik bypass path=" + guestPath);
         return;
     }
     uint32_t handle = 0u, action = 0u;
