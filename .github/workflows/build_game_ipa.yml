@@ -64,15 +64,17 @@ jobs:
           curl -L --fail -o "$RUNNER_TEMP/github_kit.zip" "$KIT_URL"
           mkdir -p "$RUNNER_TEMP/kit"
           unzip -q "$RUNNER_TEMP/github_kit.zip" -d "$RUNNER_TEMP/kit"
-          ls -la "$RUNNER_TEMP/kit"
+          echo "=== Conteudo do github_kit.zip ==="
+          find "$RUNNER_TEMP/kit" -maxdepth 3
 
-          # Descobre automaticamente o TitleID real (010035F022078000) lendo ExeFS/main.npdm!
+          # Descobre automaticamente o TitleID real (010035F022078000) lendo ExeFS/main.npdm ou manifest.tsv!
           TITLE_ID=$(python3 - << 'PYEOF'
-          import os, struct
+          import os, struct, re
           from pathlib import Path
           kit = Path(os.environ["RUNNER_TEMP"]) / "kit"
           npdm_file = kit / "ExeFS" / "main.npdm"
           tid_file = kit / "title_id.txt"
+          manifest_file = kit / "manifest.tsv"
           tid_str = ""
           if npdm_file.exists():
               npdm = npdm_file.read_bytes()
@@ -81,24 +83,53 @@ jobs:
               tid_str = f"{tid:016X}"
           elif tid_file.exists():
               tid_str = tid_file.read_text().strip().upper()
+          elif manifest_file.exists():
+              m = re.search(r"0100[0-9A-Fa-f]{12}", manifest_file.read_text(errors="ignore"))
+              if m:
+                  tid_val = int(m.group(0), 16) & ~0xFFF
+                  tid_str = f"{tid_val:016X}"
           print(tid_str or "010035F022078000")
           PYEOF
           )
-          echo "Jogo detectado pelo main.npdm: TITLE_ID=$TITLE_ID"
+          echo "Jogo detectado: TITLE_ID=$TITLE_ID"
 
-          # Gera perfil automatico se ainda nao existir em dm/games/<TITLE_ID>
+          # Verifica os perfis existentes em dm/games/
+          ls -la dm/games/
+
+          # Se o jogo ainda nao tiver pasta em dm/games/$TITLE_ID, procura perfil compativel (UE5 / Sparking ZERO) ou gera automaticamente!
           if [ ! -d "dm/games/$TITLE_ID" ]; then
-            echo "Gerando perfil automatico para $TITLE_ID..."
-            python3 dm/tools/survey/game_survey.py "$RUNNER_TEMP/kit" -o "$RUNNER_TEMP/survey.md" --manifest "$RUNNER_TEMP/kit/manifest.tsv" || true
+            echo "Procurando ou gerando perfil para $TITLE_ID..."
+            python3 dm/tools/survey/game_survey.py "$RUNNER_TEMP/kit" -o "$RUNNER_TEMP/survey.md" || true
             python3 - << PYEOF
-          import sys
+          import sys, shutil
           from pathlib import Path
-          sys.path.insert(0, "dm/games")
-          import profile_guess
-          prof_dir = Path("dm/games/$TITLE_ID")
-          prof_dir.mkdir(parents=True, exist_ok=True)
-          profile_guess.write_provisional_profile(Path("$RUNNER_TEMP/survey.md"), Path("$RUNNER_TEMP/kit"), prof_dir)
+          tid = "$TITLE_ID"
+          games_dir = Path("dm/games")
+          target_dir = games_dir / tid
+          # Procura se ja existe algum perfil do Sparking! ZERO em dm/games/
+          found_spk = None
+          for d in games_dir.iterdir():
+              if d.is_dir() and d.name.startswith("0100"):
+                  gm = d / "game.mk"
+                  if gm.exists() and ("sparking" in gm.read_text(errors="ignore").lower() or "unreal" in gm.read_text(errors="ignore").lower()):
+                      found_spk = d
+                      break
+          if found_spk:
+              print(f"Clonando perfil base de {found_spk} para {target_dir}")
+              shutil.copytree(found_spk, target_dir)
+          else:
+              sys.path.insert(0, "dm/games")
+              import profile_guess
+              target_dir.mkdir(parents=True, exist_ok=True)
+              if hasattr(profile_guess, "write_provisional_profile"):
+                  profile_guess.write_provisional_profile(Path("$RUNNER_TEMP/survey.md"), Path("$RUNNER_TEMP/kit"), target_dir)
           PYEOF
+          fi
+
+          # Verifica se ExeFS foi extraido no kit
+          if [ ! -d "$RUNNER_TEMP/kit/ExeFS" ]; then
+            echo "ERRO: A pasta ExeFS nao existe dentro do github_kit.zip! Isso aconteceu porque no ExtractorNS v3.1 a pasta base/ (.xci) nao tinha sido lida junto com o Update!"
+            exit 1
           fi
 
           # 1. Patcheia os binarios ARM64 (ExeFS) para iOS nativo
