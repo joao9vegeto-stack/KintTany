@@ -159,24 +159,47 @@ for i, (file_off, mem_off, decomp_sz, comp_sz) in enumerate(segs):
 print(f"=== Imagem descomprimida: 0x{img_size:x} bytes ===", flush=True)
 
 # ─────────────────────────────────────────────────────────────────────────────
-# 5. Disassembla .text — PULA os 8 bytes do MOD0 pointer
+# 5. Disassembla .text — pula MOD0 header completo
 #
-#  Os primeiros 8 bytes do .text são:
-#    [0..3] = 0x00000000  (instrução inválida / padding)
-#    [4..7] = offset do MOD0 header (ex: 0x00000008)
-#  Isso NÃO é código ARM64. O Capstone trava aqui e retorna só 3 instruções.
-#  O código real começa em mem_off + 8.
+#  Estrutura do início do .text (NSO):
+#    [0x00] uint32 = 0x00000000 (padding / branch)
+#    [0x04] uint32 = offset do MOD0 a partir do início do .text
+#    [0x08] "MOD0" magic (4 bytes)
+#    [0x0C] int32  = offset de dynamic (relativo ao MOD0)
+#    [0x10] int32  = offset de bss_start (relativo ao MOD0)
+#    [0x14] int32  = offset de bss_end
+#    [0x18] int32  = offset de eh_frame_hdr_start
+#    [0x1C] int32  = offset de eh_frame_hdr_end
+#    [0x20] int32  = offset de runtime_module_ptr
+#  Total: MOD0 tem 0x24 bytes de campos após o magic
+#  O código ARM64 real começa logo após o MOD0 = mod0_off + 0x28
+#  Mas para segurança: procura a primeira instrução válida após o MOD0
 # ─────────────────────────────────────────────────────────────────────────────
-text_mem_off = segs[0][1]   # sempre 0x0 para NSO
+text_mem_off = segs[0][1]   # 0x0 para NSO
 text_size    = segs[0][2]
 
-# Pula MOD0 pointer (8 bytes) — código ARM64 real começa aqui
-CODE_START = text_mem_off + 8
+# Lê o offset do MOD0 (está em [0x04] do .text)
+mod0_ptr = struct.unpack_from("<I", img, text_mem_off + 0x04)[0]
+# MOD0 tem magic "MOD0" em mod0_ptr + 0x00, e termina em mod0_ptr + 0x28
+# O código ARM64 começa após o MOD0 — alinhado em 4 bytes
+mod0_end = text_mem_off + mod0_ptr + 0x28
+# Alinha para cima em 4 bytes
+CODE_START = (mod0_end + 3) & ~3
 CODE_END   = text_mem_off + text_size
 
-print(f"=== Disassemblando .text: "
-      f"mem[0x{CODE_START:x}..0x{CODE_END:x}] "
-      f"(pulando MOD0 header de 8 bytes) ===", flush=True)
+# Verifica se o magic MOD0 está onde esperamos
+mod0_magic = img[text_mem_off + mod0_ptr : text_mem_off + mod0_ptr + 4]
+print(f"=== MOD0: ptr=0x{mod0_ptr:x} magic={bytes(mod0_magic)!r} "
+      f"code_start=0x{CODE_START:x} ===", flush=True)
+
+if bytes(mod0_magic) != b"MOD0":
+    # Fallback: procura o primeiro bloco de 4 bytes que pareça instrução ARM64 válida
+    # após os primeiros 0x100 bytes
+    print(f"  [warn] MOD0 magic nao encontrado em 0x{text_mem_off+mod0_ptr:x}, "
+          f"usando fallback 0x100", flush=True)
+    CODE_START = text_mem_off + 0x100
+
+print(f"=== Disassemblando .text: [0x{CODE_START:x}..0x{CODE_END:x}] ===", flush=True)
 
 md = Cs(CS_ARCH_ARM64, CS_MODE_ARM)
 md.detail = True
@@ -187,7 +210,13 @@ print(f"=== Instruções disassembladas: {len(insns_all)} ===", flush=True)
 if len(insns_all) < 1000:
     sample = img[CODE_START:CODE_START+32].hex()
     print(f"[patch] FATAL: apenas {len(insns_all)} instrucoes")
-    print(f"  primeiros 32 bytes do código (0x{CODE_START:x}): {sample}")
+    print(f"  primeiros 32 bytes (0x{CODE_START:x}): {sample}")
+    # Debug extra: tenta offsets alternativos
+    for try_off in [0x40, 0x80, 0x100, 0x200]:
+        ts = text_mem_off + try_off
+        ti = list(md.disasm(bytes(img[ts:ts+64]), ts))
+        print(f"  tentativa offset +0x{try_off:x}: {len(ti)} instrucoes, "
+              f"bytes={img[ts:ts+8].hex()}")
     sys.exit(1)
 
 by_addr = {ins.address: ins for ins in insns_all}
