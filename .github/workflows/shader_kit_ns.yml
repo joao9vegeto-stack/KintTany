@@ -1,4 +1,4 @@
-name: 1b. Build ShaderKitNS App IPA (v1.8 - FINAL FIX SPLIT ZIP)
+name: 1b. Build ShaderKitNS App IPA (v1.9 - GIGANTE SPLIT REAL)
 
 on:
   push:
@@ -21,7 +21,7 @@ jobs:
       - name: 1. Checkout
         uses: actions/checkout@v4
 
-      - name: 2. Build ShaderKitNS v1.8
+      - name: 2. Build ShaderKitNS v1.9
         run: |
           set -e
           APP_DIR="$RUNNER_TEMP/Payload/ShaderKitNS.app"
@@ -155,40 +155,7 @@ jobs:
                   uint16_t nlen = (uint16_t)strlen(name);
                   uint32_t usize = (uint32_t)fsz;
                   unsigned long long headerSize = sizeof(struct zip_lfh) + nlen;
-                  unsigned long long totalNeeded = headerSize + fsz;
                   unsigned long long currentSize = (unsigned long long)ftello(parts[currentPart]);
-
-                  BOOL isGiant = (fsz > maxPartSize);
-
-                  if (isGiant) {
-                      if (currentSize > 0 && currentPart < 49) {
-                          logf([NSString stringWithFormat:@"  fecha parte %d (%.0f MB) para arquivo gigante %@", currentPart, currentSize / 1048576.0, relPath.lastPathComponent]);
-                          fclose(parts[currentPart]);
-                          parts[currentPart] = NULL;
-                          currentPart++;
-                          numParts++;
-                          NSString *nextPartPath = [baseZipPath stringByAppendingFormat:@".z%02d", currentPart];
-                          parts[currentPart] = fopen(nextPartPath.fileSystemRepresentation, "wb");
-                          if (!parts[currentPart]) {
-                              free(buf);
-                              for (int i = 0; i < numParts; i++) if (parts[i]) fclose(parts[i]);
-                              return NO;
-                          }
-                      }
-                  } else if (currentSize > 0 && currentSize + totalNeeded > maxPartSize && currentPart < 49) {
-                      logf([NSString stringWithFormat:@"  parte %d cheia (%.0f MB), abre parte %d", currentPart, currentSize / 1048576.0, currentPart + 1]);
-                      fclose(parts[currentPart]);
-                      parts[currentPart] = NULL;
-                      currentPart++;
-                      numParts++;
-                      NSString *nextPartPath = [baseZipPath stringByAppendingFormat:@".z%02d", currentPart];
-                      parts[currentPart] = fopen(nextPartPath.fileSystemRepresentation, "wb");
-                      if (!parts[currentPart]) {
-                          free(buf);
-                          for (int i = 0; i < numParts; i++) if (parts[i]) fclose(parts[i]);
-                          return NO;
-                      }
-                  }
 
                   FILE *in = fopen(full.fileSystemRepresentation, "rb");
                   if (!in) continue;
@@ -196,36 +163,70 @@ jobs:
                   uint32_t crc = 0;
                   size_t n;
                   while ((n = fread(buf, 1, 1 << 20, in)) > 0) crc = (uint32_t)crc32(crc, buf, (uInt)n);
+                  rewind(in);
 
-                  uint32_t off = (uint32_t)ftello(parts[currentPart]);
-                  struct zip_lfh lfh = {0x04034b50, 20, 0x0800, 0, 0, 0x21, crc, usize, usize, nlen, 0};
-                  fwrite(&lfh, sizeof(lfh), 1, parts[currentPart]);
-                  fwrite(name, 1, nlen, parts[currentPart]);
+                  unsigned long long bytesWritten = 0;
+                  BOOL firstChunk = YES;
+                  uint32_t fileStartOff = (uint32_t)ftello(parts[currentPart]);
 
-                  fseeko(in, 0, SEEK_SET);
-                  while ((n = fread(buf, 1, 1 << 20, in)) > 0) fwrite(buf, 1, n, parts[currentPart]);
+                  while (bytesWritten < fsz) {
+                      unsigned long long currentPartSize = (unsigned long long)ftello(parts[currentPart]);
+                      unsigned long long remainingInFile = fsz - bytesWritten;
+                      unsigned long long spaceLeftInPart = (currentPartSize > 0) ? (maxPartSize - currentPartSize) : maxPartSize;
+
+                      if (spaceLeftInPart < (headerSize + 1024)) {
+                          if (currentPart < 49 && currentPartSize > 0) {
+                              logf([NSString stringWithFormat:@"  parte %d cheia (%.0f MB), abre %d para %@", currentPart, currentPartSize / 1048576.0, currentPart + 1, relPath.lastPathComponent]);
+                              fclose(parts[currentPart]);
+                              parts[currentPart] = NULL;
+                              currentPart++;
+                              numParts++;
+                              NSString *nextPartPath = [baseZipPath stringByAppendingFormat:@".z%02d", currentPart];
+                              parts[currentPart] = fopen(nextPartPath.fileSystemRepresentation, "wb");
+                              if (!parts[currentPart]) {
+                                  fclose(in);
+                                  free(buf);
+                                  for (int i = 0; i < numParts; i++) if (parts[i]) fclose(parts[i]);
+                                  return NO;
+                              }
+                              currentPartSize = 0;
+                              spaceLeftInPart = maxPartSize;
+                          } else if (currentPart >= 49) {
+                              logf([NSString stringWithFormat:@"  ERRO: atingiu limite 50 partes!"]);
+                              fclose(in);
+                              free(buf);
+                              for (int i = 0; i < numParts; i++) if (parts[i]) fclose(parts[i]);
+                              return NO;
+                          }
+                      }
+
+                      if (firstChunk) {
+                          uint32_t off = (uint32_t)ftello(parts[currentPart]);
+                          fileStartOff = off;
+                          struct zip_lfh lfh = {0x04034b50, 20, 0x0800, 0, 0, 0x21, crc, usize, usize, nlen, 0};
+                          fwrite(&lfh, sizeof(lfh), 1, parts[currentPart]);
+                          fwrite(name, 1, nlen, parts[currentPart]);
+                          firstChunk = NO;
+                      }
+
+                      unsigned long long toWrite = (remainingInFile < spaceLeftInPart) ? remainingInFile : spaceLeftInPart;
+                      if (toWrite > (1ULL << 20)) toWrite = (1ULL << 20);
+
+                      fseeko(in, (off_t)bytesWritten, SEEK_SET);
+                      size_t got = fread(buf, 1, toWrite, in);
+                      if (got == 0) break;
+                      fwrite(buf, 1, got, parts[currentPart]);
+                      bytesWritten += got;
+                  }
+
                   fclose(in);
 
-                  struct zip_cdh cdh = {0x02014b50, 20, 20, 0x0800, 0, 0, 0x21, crc, usize, usize, nlen, 0, 0, 0, 0, 0, off};
+                  struct zip_cdh cdh = {0x02014b50, 20, 20, 0x0800, 0, 0, 0x21, crc, usize, usize, nlen, 0, 0, 0, 0, 0, fileStartOff};
                   [cd appendBytes:&cdh length:sizeof(cdh)];
                   [cd appendBytes:name length:nlen];
                   count++;
 
-                  if (isGiant && currentPart < 49) {
-                      unsigned long long finalSize = (unsigned long long)ftello(parts[currentPart]);
-                      logf([NSString stringWithFormat:@"  %@ escrito (%.0f MB), fecha parte %d", relPath.lastPathComponent, finalSize / 1048576.0, currentPart]);
-                      fclose(parts[currentPart]);
-                      parts[currentPart] = NULL;
-                      currentPart++;
-                      numParts++;
-                      NSString *nextPartPath = [baseZipPath stringByAppendingFormat:@".z%02d", currentPart];
-                      parts[currentPart] = fopen(nextPartPath.fileSystemRepresentation, "wb");
-                      if (!parts[currentPart]) {
-                          free(buf);
-                          for (int i = 0; i < numParts; i++) if (parts[i]) fclose(parts[i]);
-                          return NO;
-                      }
-                  }
+                  logf([NSString stringWithFormat:@"  %@ (%.0f MB) escrito", relPath.lastPathComponent, fsz / 1048576.0]);
               }
 
               free(buf);
@@ -278,10 +279,7 @@ jobs:
               const uint8_t *blks = t + p; p += (uint64_t)blkEntSz * nblk;
               const uint8_t *cmn = t + p; p += (uint64_t)ncm * cml;
 
-              if (p > toc.length || blkEntSz != 12 || blkSz == 0) {
-                  logf([NSString stringWithFormat:@"  %@: layout errado (v%u)", utocPath.lastPathComponent, ver]);
-                  return NO;
-              }
+              if (p > toc.length || blkEntSz != 12 || blkSz == 0) { logf([NSString stringWithFormat:@"  %@: layout errado", utocPath.lastPathComponent]); return NO; }
 
               NSString *base = [utocPath.lastPathComponent stringByDeletingPathExtension];
               NSString *stem = [utocPath stringByDeletingPathExtension];
@@ -292,13 +290,10 @@ jobs:
               FILE *tsv = fopen(tsvPath.fileSystemRepresentation, "w");
               if (!bin || !tsv) { if (bin) fclose(bin); if (tsv) fclose(tsv); return NO; }
 
-              fprintf(tsv, "# utoc=%s ver=%u flags=0x%02x blk_sz=%u nent=%u nblk=%u part_sz=%llu\n", base.UTF8String, ver, flags, blkSz, nent, nblk, (unsigned long long)partSz);
+              fprintf(tsv, "# utoc=%s ver=%u flags=0x%02x blk_sz=%u\n", base.UTF8String, ver, flags, blkSz);
 
-              FILE *ucas = NULL;
-              int curPart = -1;
-              uint64_t binOff = 0, carved = 0;
-              uint32_t nChunks = 0, nBlocks = 0;
-              int64_t lastBlk = -1;
+              FILE *ucas = NULL; int curPart = -1;
+              uint64_t carved = 0; uint32_t nChunks = 0, nBlocks = 0; int64_t lastBlk = -1;
               uint8_t *buf = malloc(blkSz + 16);
 
               for (uint32_t i = 0; i < nent; i++) {
@@ -336,7 +331,6 @@ jobs:
                       fseeko(ucas, (off_t)poff, SEEK_SET);
                       size_t got = fread(buf, 1, dsz, ucas);
                       fwrite(buf, 1, got, bin);
-                      binOff += got;
                       carved += got;
                       nBlocks++;
                   }
@@ -478,7 +472,7 @@ jobs:
               self.logView.layer.cornerRadius = 14;
               self.logView.editable = NO;
               self.logView.textContainerInset = UIEdgeInsetsMake(10, 10, 10, 10);
-              self.logView.text = @"[v1.8 FINAL]\nMova romfs → Arquivos > ShaderKitNS\nScan → GERAR\n.z00/.z01... (1.9GB cada)";
+              self.logView.text = @"[v1.9 GIGANTE DIVIDIDO]\nMova romfs → Arquivos\nScan → GERAR ZIP dividido\n.z00/.z01... < 2GB cada";
               [self.view addSubview:self.logView];
 
               self.runBtn = [UIButton buttonWithType:UIButtonTypeSystem];
@@ -647,11 +641,12 @@ jobs:
 
                   if (zip1Ok || zip2Ok) {
                       [self log:@""];
-                      [self log:@"✓ COMPLETO!"];
+                      [self log:@"✓✓ PRONTO!"];
+                      [self log:@"  Arquivos < 2GB p/ GitHub!"];
                       [self log:@"  Baixe: part1.z00 part1.z01 ..."];
                       [self log:@"  Baixe: part2.z00 part2.z01 ..."];
                   } else {
-                      [self log:@"✗ Nada"];
+                      [self log:@"✗ Nada gerado"];
                   }
 
                   [fm removeItemAtPath:staging1 error:nil];
@@ -659,7 +654,7 @@ jobs:
 
                   dispatch_async(dispatch_get_main_queue(), ^{
                       self.progressBar.progress = 1.0;
-                      self.statusLabel.text = @"OK";
+                      self.statusLabel.text = @"OK!";
                       self.runBtn.enabled = YES;
                       self.scanBtn.enabled = YES;
                   });
@@ -697,8 +692,8 @@ jobs:
             <key>CFBundleIdentifier</key><string>com.kinttany.shaderkitns</string>
             <key>CFBundleName</key><string>ShaderKitNS</string>
             <key>CFBundleDisplayName</key><string>ShaderKitNS</string>
-            <key>CFBundleVersion</key><string>1.8</string>
-            <key>CFBundleShortVersionString</key><string>1.8</string>
+            <key>CFBundleVersion</key><string>1.9</string>
+            <key>CFBundleShortVersionString</key><string>1.9</string>
             <key>CFBundlePackageType</key><string>APPL</string>
             <key>LSRequiresIPhoneOS</key><true/>
             <key>UIDeviceFamily</key><array><integer>1</integer><integer>2</integer></array>
