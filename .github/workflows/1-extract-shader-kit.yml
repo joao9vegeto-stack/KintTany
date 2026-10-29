@@ -502,6 +502,17 @@ jobs:
           ROMFS_MARKER=$(echo "$PROFILE_OUTPUT" | grep "^romfs_marker" | cut -f2 || echo "")
           BUILD=$(echo "$PROFILE_OUTPUT" | grep "^build" | cut -f2 || echo "")
           
+          # Extract values com DEFAULTS
+          MODULES=$(echo "$PROFILE_OUTPUT" | grep "^modules" | cut -f2 || echo "main")
+          SHADER_GROUPS=$(echo "$PROFILE_OUTPUT" | grep "^shader_groups" | cut -f2 || echo "global=global")  # ← ADICIONE ISTO
+          SHADER_NOTE=$(echo "$PROFILE_OUTPUT" | grep "^shader_note" | cut -f2 || echo "")
+          MEM_RESERVE=$(echo "$PROFILE_OUTPUT" | grep "^mem_reserve" | cut -f2 || echo "0x30000000")
+          # ... resto dos valores ...
+
+          printf '%s\t%s\t%s\t\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n' \
+          "$GAME" "$GAME" "$GAME_NAME" "$BUILD" "$MODULES" "$ROMFS_MARKER" "$FPS_TARGET" "$MEM_RESERVE" "$MEM_ALIAS" "$MEM_STACK" "$APP_POOL" "$SHADER_GROUPS" "$SHADER_NOTE" >> "$GAME_DIR/game.tsv"
+
+
           # Create game.tsv com TABS REAIS
           echo "Building $GAME_DIR/game.tsv..."
           
