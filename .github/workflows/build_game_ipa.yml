@@ -1,4 +1,4 @@
-name: 2. Build Thin IPA - auditoria 4 (SpNet Panic 0x5cbad1cc em main+0x19dceb4)
+name: 2. Build Thin IPA - corte do SpNet Panic 0x5cbad1cc + auditoria 5
 
 on:
   push:
@@ -28,9 +28,9 @@ jobs:
       BASELINE_COMMIT: "306dcdfcb53d348085292e9e527339161c0536c7"
       EXPECTED_MAIN_SHA256: "a0f8f0644c92384ddb1baac1c21aecbeeace5bc99ad40895e216add61da78efe"
       EXPECTED_MAIN_BUILD_ID: "68edafd68c7bc1a1af50b82aac838018"
-      IPA_SUFFIX: "_AUDITORIA4"
+      IPA_SUFFIX: "_PATCH_SPNET"
 
-      # Valores medidos no build 68edafd6 (patch do construtor + layout, ja confirmados no log do iPhone)
+      # Patch do construtor + layout (confirmados no log do iPhone: allocator OK, 14 threads, heap 0.28 GB)
       SPK_CUT_ADDR: "0x1e4db30"
       SPK_CUT_BYTES: "6b740194"
       SPK_OBS_ADDR: "0x1e4db34"
@@ -38,10 +38,11 @@ jobs:
       SPK_VTABLE: "0x8703ab8"
       SPK_LAYOUT: "UE5_SPK"
 
-      # Novo crash (log.txt do _PATCH_LAYOUT): brk em main+0x19dceb4, "SpNet Panic 0x5cbad1cc"
-      CRASH_PC: "0x19dceb4"
-      CRASH_BT: "0x1b750d8 0x1b74d80 0x1b74f68 0x1fb2df8 0x1fe1168 0x1ff8e04 0x5a68 0x3df4 0xbbc"
-      PANIC_CODE: "5cbad1cc"
+      # Cortes do SpNet Panic (fatos.txt da auditoria 4): addr|orig|novo|descricao, separados por ';'
+      SPNET_CUTS: "0x1b74f78|420a0054|1f2003d5|SpNet init main+0x1b74d88: b.hs status>=0x100 -> panic 0x5cbad1cc -> nop;0x1b750d4|00013fd6|1f2003d5|SpNet init main+0x1b74d88: blr SpNetPanic(0x5cbad1cc) -> nop"
+
+      # Auditoria 5: a funcao que devolve o status do init do SpNet
+      SPNET_INIT_FN: "0x19cec44"
 
     steps:
       - name: 1. Baixar versao que compilou
@@ -86,7 +87,7 @@ jobs:
           print("hle_uemalloc.c: layout UE5_SPK garantido (a linha k_ue e gravada pelo pipeline e corrigida no passo 4)")
           PYEOF
 
-      - name: 4. Preparar build com os valores corretos + auditoria do novo crash
+      - name: 4. Preparar build (ctor + layout + cortes SpNet + auditoria 5)
         shell: bash
         run: |
           set -e
@@ -116,16 +117,27 @@ jobs:
                   raise SystemExit(f"ERRO: linha '{s}' encontrada {len(hits)}x")
               return hits[0]
 
+          def find_unique_contains(s):
+              hits = [i for i, l in enumerate(lines) if s in l]
+              if len(hits) != 1:
+                  for i in hits: print(f"  {i}: {lines[i]}")
+                  raise SystemExit(f"ERRO: ancora contendo '{s}' encontrada {len(hits)}x")
+              return hits[0]
+
           def indent_of(i):
               l = lines[i]; return l[: len(l) - len(l.lstrip())]
 
+          def _blk(ind, block):
+              return [ind + l if l.strip() else "" for l in textwrap.dedent(block).strip("\n").split("\n")]
+
           def insert_after(s, block):
-              i = find_unique(s); ind = indent_of(i)
-              lines[i + 1:i + 1] = [ind + l if l.strip() else "" for l in textwrap.dedent(block).strip("\n").split("\n")]
+              i = find_unique(s); lines[i + 1:i + 1] = _blk(indent_of(i), block)
 
           def insert_before(s, block):
-              i = find_unique(s); ind = indent_of(i)
-              lines[i:i] = [ind + l if l.strip() else "" for l in textwrap.dedent(block).strip("\n").split("\n")]
+              i = find_unique(s); lines[i:i] = _blk(indent_of(i), block)
+
+          def insert_after_contains(s, block):
+              i = find_unique_contains(s); lines[i + 1:i + 1] = _blk(indent_of(i), block)
 
           # A. Conferir o main
           insert_after('main_bytes = (exefs / "main").read_bytes()', '''
@@ -162,11 +174,10 @@ jobs:
                 f"vtable {vtable_addr:#x} layout {ue_layout} ===", flush=True)
           ''')
 
-          # D. AUDITORIA 4: disassembly do brk em main+0x19dceb4, dos callers e das referencias a "SpNet Panic"
+          # D. AUDITORIA 5: a funcao 0x19cec44 que devolve o status do init do SpNet, e suas vizinhas
           insert_before("if cut_addr is not None and obs_addr is not None:", '''
           from capstone import Cs, CS_ARCH_ARM64, CS_MODE_ARM, CS_MODE_LITTLE_ENDIAN
           _cs = Cs(CS_ARCH_ARM64, CS_MODE_ARM | CS_MODE_LITTLE_ENDIAN)
-          _cs.detail = False
 
           def _dis(a, b, title):
               print(f"=== [{title}] {a:#x} .. {b:#x} ===", flush=True)
@@ -174,42 +185,50 @@ jobs:
                   print(f"  {ins.address:#x}:\\t{ins.mnemonic}\\t{ins.op_str}\\t[{img[ins.address:ins.address+4].hex()}]")
               print(flush=True)
 
-          _pc = int(os.environ["CRASH_PC"], 16)
-          print(f"=== AUDITORIA 4: palavra em {_pc:#x} = {img[_pc:_pc+4].hex()} (brk esperado: xx 00 20 d4) ===", flush=True)
-          _dis(_pc - 0x1c0, _pc + 0x60, "PC main+0x19dceb4 (SpNet Panic) com prologo")
-          _dis(0x1b74d00, 0x1b75120, "BT main+0x1b74d80 / main+0x1b74f68 / main+0x1b750d8 (caller do panic)")
-          _dis(0x1fb2d80, 0x1fb2e20, "BT main+0x1fb2df8")
-          _dis(0x1fe1120, 0x1fe1180, "BT main+0x1fe1168")
-          _dis(0x1ff8dc0, 0x1ff8e20, "BT main+0x1ff8e04")
-
-          # strings UTF-16LE e UTF-8 "SpNet" no modulo + quem as referencia (adrp/add e adr) nas janelas do backtrace
-          for _needle in ("SpNet Panic", "SpNet"):
-              for _enc, _nm in ((_needle.encode("utf-16-le"), "utf16"), (_needle.encode("ascii"), "ascii")):
-                  _n = 0; _at = img.find(_enc)
-                  while _at != -1 and _n < 40:
-                      _end = _at
-                      while _end < len(img) and _end - _at < 400 and img[_end:_end+2] != (b"\\x00\\x00" if _nm == "utf16" else b"\\x00"):
-                          _end += 2 if _nm == "utf16" else 1
-                      _txt = img[_at:_end].decode("utf-16-le" if _nm == "utf16" else "ascii", errors="replace")
-                      print(f"=== string {_nm} '{_needle}' em main+{_at:#x}: {_txt!r} ===", flush=True)
-                      _n += 1; _at = img.find(_enc, _at + 1)
-
-          # ocorrencias do codigo do panic como imediato (movz/movk) perto do PC
-          _code = int(os.environ["PANIC_CODE"], 16)
-          _lo, _hi = _code & 0xffff, _code >> 16
-          print(f"=== procurando movz/movk de {_code:#x} (lo={_lo:#x} hi={_hi:#x}) em {_pc-0x4000:#x}..{_pc+0x1000:#x} ===", flush=True)
-          for ins in _cs.disasm(img[_pc-0x4000:_pc+0x1000], _pc-0x4000):
-              if ins.mnemonic in ("movz", "movk", "mov") and (f"#{_lo:#x}" in ins.op_str or f"#{_hi:#x}" in ins.op_str):
-                  print(f"  {ins.address:#x}:\\t{ins.mnemonic}\\t{ins.op_str}\\t[{img[ins.address:ins.address+4].hex()}]")
-          print(flush=True)
+          _fn = int(os.environ["SPNET_INIT_FN"], 16)
+          print("=== AUDITORIA 5: init do SpNet que devolve o status (>= 0x100 => panic) ===", flush=True)
+          _dis(_fn, _fn + 0x600, "SpNet init status fn main+0x19cec44")
+          _dis(0x19ce9a4, 0x19cec44, "main+0x19ce9a4 (chamada antes do init, mesmo config)")
+          _dis(0x4713010, 0x4713080, "main+0x4713010 / main+0x4713030 (tamanhos usados no config)")
           ''')
 
           # E. Nome do IPA
           insert_before('ipa_filename = f"{safe_name}.ipa"',
                         'safe_name = safe_name + os.environ.get("IPA_SUFFIX", "")')
 
-          # F. Corrigir a linha k_ue gravada pelo pipeline (UE5 -> UE5_SPK) antes de compilar,
-          #    e conferir que a reescrita aplicou exatamente 1 cut e 1 obs
+          # F. CORTES DO SPNET: apos o pipeline gravar o patches.py (antes da reescrita), duplicar a linha
+          #    do corte do construtor com os novos endereco/bytes. Imprime o patches.py gerado e falha com
+          #    diagnostico claro se o formato nao for o esperado.
+          insert_after_contains("game_args final", '''
+          _pp = prof_dir / "patches.py"
+          if not _pp.exists():
+              raise SystemExit(f"ERRO: {_pp} nao existe neste ponto; prof_dir tem: {sorted(x.name for x in prof_dir.iterdir())}")
+          _ps = _pp.read_text(encoding="utf-8")
+          print("=== patches.py gerado pelo pipeline (antes dos cortes SpNet) ===\\n" + _ps + "\\n=== fim patches.py ===", flush=True)
+          _tmpl = [l for l in _ps.splitlines() if "0x1e4db30" in l and "6b740194" in l and "1f2003d5" in l]
+          if len(_tmpl) != 1:
+              raise SystemExit(f"ERRO: linha CUTS do construtor nao esta em 1 linha com addr/orig/novo ({len(_tmpl)}x)")
+          _tmpl = _tmpl[0]
+          _tdesc = "GCreateMalloc: bl FMallocBinned3 constructor -> nop"
+          _new = []
+          for _c in os.environ["SPNET_CUTS"].split(";"):
+              _a, _o, _n, _d = _c.split("|")
+              _a = int(_a, 16)
+              _here = img[_a:_a + 4].hex()
+              if _here != _o:
+                  raise SystemExit(f"ERRO: bytes em {_a:#x} sao {_here}, esperado {_o}; corte SpNet nao se aplica")
+              _l = _tmpl.replace("0x1e4db30", f"{_a:#x}").replace("6b740194", _o).replace("1f2003d5", _n)
+              if _tdesc in _l:
+                  _l = _l.replace(_tdesc, _d)
+              _new.append(_l)
+              print(f"=== CORTE SPNET: {_a:#x} {_o} -> {_n}  ({_d}) ===", flush=True)
+          _ps = _ps.replace(_tmpl, _tmpl + "\\n" + "\\n".join(_new), 1)
+          _pp.write_text(_ps, encoding="utf-8")
+          print("=== patches.py com os cortes SpNet ===\\n" + _ps + "\\n=== fim patches.py ===", flush=True)
+          ''')
+
+          # G. Corrigir a linha k_ue gravada pelo pipeline (UE5 -> UE5_SPK) antes de compilar,
+          #    e conferir que a reescrita aplicou exatamente 3 cuts e 1 obs
           insert_before('if (exefs / "main.npdm").exists():', '''
           import re as _re
           _hp = Path("dm/host/hle_uemalloc.c")
@@ -234,8 +253,9 @@ jobs:
           _obs = _rows(patched / "main.obs.tsv")
           print("=== main.cuts.tsv ===\\n" + "\\n".join(_cuts), flush=True)
           print("=== main.obs.tsv ===\\n" + "\\n".join(_obs), flush=True)
-          if len(_cuts) != 1 or "0x1e4db30" not in _cuts[0]:
-              raise SystemExit("ERRO: main.cuts.tsv nao contem exatamente o corte em 0x1e4db30")
+          _want = ["0x1e4db30", "0x1b74f78", "0x1b750d4"]
+          if len(_cuts) != 3 or any(not any(w in c for c in _cuts) for w in _want):
+              raise SystemExit("ERRO: main.cuts.tsv nao contem exatamente os 3 cortes " + ", ".join(_want))
           if len(_obs) != 1 or "0x1e4db34" not in _obs[0]:
               raise SystemExit("ERRO: main.obs.tsv nao contem exatamente o gate em 0x1e4db34")
           ''')
@@ -270,7 +290,7 @@ jobs:
         run: |
           mkdir -p "$RUNNER_TEMP/spk-relatorio"
           {
-            echo "AUDITORIA 4: SpNet Panic 0x5cbad1cc em main+0x19dceb4 (allocator ja resolvido: UE5_SPK)"
+            echo "CORTE DO SPNET PANIC 0x5cbad1cc (main+0x1b74f78 b.hs -> nop, main+0x1b750d4 blr -> nop) + AUDITORIA 5"
             echo "Execucao: $GITHUB_RUN_ID  commit: $GITHUB_SHA"
             echo
             for f in "$RUNNER_TEMP"/*-work/build/patched_v0/main.cuts.tsv "$RUNNER_TEMP"/*-work/build/patched_v0/main.obs.tsv; do
@@ -283,15 +303,18 @@ jobs:
             ls -la "$RUNNER_TEMP"/*.ipa 2>/dev/null || echo "nenhum"
           } | tee "$RUNNER_TEMP/spk-relatorio/resumo.txt"
 
-          # fatos.txt: so o disassembly e as strings da auditoria, para leitura direta
-          sed -n '/=== AUDITORIA 4/,/=== Flags de alocador/p' "$RUNNER_TEMP/spk-relatorio/build.log" > "$RUNNER_TEMP/spk-relatorio/fatos.txt" || true
+          # fatos.txt: disassembly da auditoria 5 + patches.py gerado + cortes
+          {
+            sed -n '/=== AUDITORIA 5/,/=== PATCH SPK/p' "$RUNNER_TEMP/spk-relatorio/build.log"
+            sed -n '/=== patches.py gerado pelo pipeline/,/=== main.obs.tsv ===/p' "$RUNNER_TEMP/spk-relatorio/build.log"
+          } > "$RUNNER_TEMP/spk-relatorio/fatos.txt" || true
           wc -l "$RUNNER_TEMP/spk-relatorio/fatos.txt"
 
       - name: 7. Salvar relatorio
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: spk-auditoria4-${{ github.run_id }}
+          name: spk-relatorio-spnet-${{ github.run_id }}
           path: ${{ runner.temp }}/spk-relatorio/
           retention-days: 7
 
@@ -311,7 +334,7 @@ jobs:
       - name: 9. Salvar IPA nos Artifacts
         uses: actions/upload-artifact@v4
         with:
-          name: spk-ipa-auditoria4-${{ github.run_id }}
+          name: spk-ipa-patch-spnet-${{ github.run_id }}
           path: ${{ runner.temp }}/*${{ env.IPA_SUFFIX }}.ipa
           if-no-files-found: error
           retention-days: 7
