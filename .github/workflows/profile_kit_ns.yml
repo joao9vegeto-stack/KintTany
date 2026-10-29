@@ -154,7 +154,7 @@ jobs:
               NSDirectoryEnumerator *en = [fm enumeratorAtPath:path];
               NSString *rel = nil;
               while ((rel = [en nextObject])) {
-                  if ([rel.pathComponents.count > 1]) {
+                  if (rel.pathComponents.count > 1) {
                       NSString *component = rel.pathComponents[0];
                       // Se encontrar pasta com nome que não é conhecida
                       if (![component isEqualToString:@"bin"] && 
