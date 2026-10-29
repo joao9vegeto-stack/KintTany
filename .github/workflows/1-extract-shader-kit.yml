@@ -364,7 +364,7 @@ jobs:
           echo "Input: $SIZE"
           echo ""
           
-          if ! unzip -q "$WORK/part2.zip" -d "$KIT_DIR" 2>&1 | tee "$RUNNER_TEMP/unzip2.log"; then
+          if ! unzip -q -o "$WORK/part2.zip" -d "$KIT_DIR" 2>&1 | tee "$RUNNER_TEMP/unzip2.log"; then
             echo "❌ Extraction failed!"
             tail -n 20 "$RUNNER_TEMP/unzip2.log"
             exit 1
