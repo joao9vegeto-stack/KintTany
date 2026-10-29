@@ -295,6 +295,8 @@ jobs:
           ACTUAL_SIZE=$(stat -f%z "$WORK/part2.zip" 2>/dev/null || stat -c%s "$WORK/part2.zip")
           
           echo "✅ Reconstruction complete"
+          echo "🔍 Testing zip integrity..."
+          unzip -t "$WORK/part2.zip" > /dev/null 2>&1 || { echo "❌ ZIP corrupted!"; exit 1; }
           echo "   Size: $SIZE ($ACTUAL_SIZE bytes)"
           
           # Verify size is sum of parts
