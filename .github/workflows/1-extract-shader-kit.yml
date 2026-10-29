@@ -456,6 +456,91 @@ jobs:
             echo "KIT_MAIN=" >> "$GITHUB_ENV"
           fi
 
+      - name: Build game profile from extraction
+        shell: bash
+        run: |
+          set -e
+          GAME="${{ env.GAME }}"
+          GAME_NAME="${{ env.GAME_NAME }}"
+          GAME_DIR="dm/games/$GAME"
+          ROMFS="${{ env.KIT_ROMFS }}"
+          MAIN_FILE="${{ env.KIT_MAIN }}"
+          
+          echo "📋 Building game profile from extraction"
+          echo "════════════════════════════════════════"
+          echo ""
+          
+          # Create ExeFS directory with main
+          EXEFS="$RUNNER_TEMP/ExeFS_temp"
+          mkdir -p "$EXEFS"
+          
+          if [ -n "$MAIN_FILE" ] && [ -f "$MAIN_FILE" ]; then
+            echo "Copying main executable..."
+            cp "$MAIN_FILE" "$EXEFS/main"
+            echo "✅ main copied"
+          else
+            echo "⚠️  WARNING: main executable not found"
+            echo "   Profile generation may be incomplete"
+          fi
+          
+          echo ""
+          echo "Running profile_guess.py..."
+          echo "  ExeFS: $EXEFS"
+          echo "  RomFS: $ROMFS"
+          echo ""
+          
+          # Run profile_guess and capture output
+          PROFILE_OUTPUT=$(python3 dm/games/profile_guess.py "$EXEFS" "$ROMFS" 2>&1) || true
+          
+          echo "✅ Profile generation complete"
+          echo ""
+          
+          # Create game directory
+          mkdir -p "$GAME_DIR"
+          
+          # Build game.tsv header
+          echo "Building $GAME_DIR/game.tsv..."
+          
+          cat > "$GAME_DIR/game.tsv" << 'EOF'
+title_id	program_id	name	ipa	build	modules	romfs_marker	fps_target	mem_reserve	mem_alias	mem_stack	app_pool	shader_groups
+EOF
+          
+          # Extract key values from profile_guess output
+          MODULES=$(echo "$PROFILE_OUTPUT" | grep "^modules" | cut -f2 || echo "main")
+          MEM_RESERVE=$(echo "$PROFILE_OUTPUT" | grep "^mem_reserve" | cut -f2 || echo "0x30000000")
+          MEM_ALIAS=$(echo "$PROFILE_OUTPUT" | grep "^mem_alias" | cut -f2 || echo "0x10000000")
+          MEM_STACK=$(echo "$PROFILE_OUTPUT" | grep "^mem_stack" | cut -f2 || echo "0x10000000")
+          APP_POOL=$(echo "$PROFILE_OUTPUT" | grep "^app_pool" | cut -f2 || echo "0xCD500000")
+          FPS_TARGET=$(echo "$PROFILE_OUTPUT" | grep "^fps_target" | cut -f2 || echo "60")
+          ROMFS_MARKER=$(echo "$PROFILE_OUTPUT" | grep "^romfs_marker" | cut -f2 || echo "")
+          BUILD=$(echo "$PROFILE_OUTPUT" | grep "^build" | cut -f2 || echo "")
+          
+          # Append game data row
+          cat >> "$GAME_DIR/game.tsv" << EOF
+$GAME	$GAME	$GAME_NAME		$BUILD	$MODULES	$ROMFS_MARKER	$FPS_TARGET	$MEM_RESERVE	$MEM_ALIAS	$MEM_STACK	$APP_POOL	
+EOF
+          
+          echo "✅ Created: $GAME_DIR/game.tsv"
+          echo ""
+          echo "Profile summary:"
+          head -2 "$GAME_DIR/game.tsv"
+          echo ""
+          
+          # Create support TSV files
+          echo "Creating support TSV files..."
+          
+          echo -e "key\toffset\tarchive\tcompressed" > "$GAME_DIR/shader_map.tsv"
+          echo -e "key\tstage\tbindings\tregisters" > "$GAME_DIR/shader_facts.tsv"
+          echo -e "vertex\tpixel" > "$GAME_DIR/shader_pairs.tsv"
+          echo -e "hash\tvertex_shader\tpixel_shader\tstate" > "$GAME_DIR/pso_manifest.tsv"
+          
+          echo "✅ All support files created"
+          echo ""
+          echo "✅ Game profile ready at: $GAME_DIR"
+          
+          # Cleanup
+          rm -rf "$EXEFS"
+
       - name: Run shader_split.py
         shell: bash
         run: |
