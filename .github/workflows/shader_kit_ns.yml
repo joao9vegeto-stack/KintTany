@@ -1,4 +1,4 @@
-name: 1b. Build ShaderKitNS App IPA (v1.3 - Dual Zip)
+name: 1b. Build ShaderKitNS App IPA (v1.4 - Auto Split)
 
 on:
   push:
@@ -21,7 +21,7 @@ jobs:
       - name: 1. Checkout
         uses: actions/checkout@v4
 
-      - name: 2. Compilar ShaderKitNS.ipa (v1.3)
+      - name: 2. Compilar ShaderKitNS.ipa (v1.4)
         run: |
           set -e
           APP_DIR="$RUNNER_TEMP/Payload/ShaderKitNS.app"
@@ -168,6 +168,104 @@ jobs:
               fwrite(&eocd, sizeof(eocd), 1, zf);
               fclose(zf);
               return count > 0;
+          }
+
+          static int build_split_zip_file(NSString *srcDir, NSString *baseZipPath, unsigned long long maxPartSize, void (^logf)(NSString *)) {
+              NSFileManager *fm = NSFileManager.defaultManager;
+              FILE *parts[50] = {NULL};
+              int numParts = 0;
+              
+              NSMutableArray *files = [NSMutableArray array];
+              NSDirectoryEnumerator *en = [fm enumeratorAtPath:srcDir];
+              NSString *rel = nil;
+              unsigned long long totalSize = 0;
+              
+              while ((rel = [en nextObject])) {
+                  NSString *full = [srcDir stringByAppendingPathComponent:rel];
+                  NSDictionary *attr = [fm attributesOfItemAtPath:full error:nil];
+                  if (![attr.fileType isEqualToString:NSFileTypeRegular]) continue;
+                  unsigned long long fsz = [attr fileSize];
+                  if (fsz > 0xFFFFFFFFULL) continue;
+                  [files addObject:@{@"path": full, @"rel": rel, @"size": @(fsz)}];
+                  totalSize += fsz;
+              }
+              
+              NSString *part0Path = [baseZipPath stringByAppendingString:@".z00"];
+              [fm removeItemAtPath:part0Path error:nil];
+              parts[0] = fopen(part0Path.fileSystemRepresentation, "wb");
+              if (!parts[0]) return 0;
+              numParts = 1;
+              
+              NSMutableData *cd = [NSMutableData data];
+              uint16_t count = 0;
+              uint8_t *buf = malloc(1 << 20);
+              unsigned long long currentPartSize = 0;
+              int currentPart = 0;
+              
+              for (NSDictionary *fileInfo in files) {
+                  NSString *full = fileInfo[@"path"];
+                  NSString *relPath = fileInfo[@"rel"];
+                  unsigned long long fsz = [fileInfo[@"size"] unsignedLongLongValue];
+                  
+                  FILE *in = fopen(full.fileSystemRepresentation, "rb");
+                  if (!in) continue;
+                  
+                  uint32_t crc = 0;
+                  size_t n;
+                  while ((n = fread(buf, 1, 1 << 20, in)) > 0) crc = (uint32_t)crc32(crc, buf, (uInt)n);
+                  
+                  const char *name = relPath.UTF8String;
+                  uint16_t nlen = (uint16_t)strlen(name);
+                  uint32_t usize = (uint32_t)fsz;
+                  
+                  unsigned long long neededSize = sizeof(struct zip_lfh) + nlen + fsz;
+                  if (currentPartSize + neededSize > maxPartSize && currentPart < 49) {
+                      currentPart++;
+                      numParts++;
+                      if (parts[currentPart - 1]) fclose(parts[currentPart - 1]);
+                      NSString *nextPartPath = [baseZipPath stringByAppendingFormat:@".z%02d", currentPart];
+                      [fm removeItemAtPath:nextPartPath error:nil];
+                      parts[currentPart] = fopen(nextPartPath.fileSystemRepresentation, "wb");
+                      if (!parts[currentPart]) { free(buf); return 0; }
+                      currentPartSize = 0;
+                  }
+                  
+                  uint32_t off = (uint32_t)ftello(parts[currentPart]);
+                  struct zip_lfh lfh = {0x04034b50, 20, 0x0800, 0, 0, 0x21, crc, usize, usize, nlen, 0};
+                  fwrite(&lfh, sizeof(lfh), 1, parts[currentPart]);
+                  fwrite(name, 1, nlen, parts[currentPart]);
+                  
+                  fseeko(in, 0, SEEK_SET);
+                  while ((n = fread(buf, 1, 1 << 20, in)) > 0) fwrite(buf, 1, n, parts[currentPart]);
+                  fclose(in);
+                  
+                  struct zip_cdh cdh = {0x02014b50, 20, 20, 0x0800, 0, 0, 0x21, crc, usize, usize, nlen, 0, 0, 0, 0, 0, off};
+                  [cd appendBytes:&cdh length:sizeof(cdh)];
+                  [cd appendBytes:name length:nlen];
+                  
+                  currentPartSize += neededSize;
+                  count++;
+              }
+              
+              free(buf);
+              
+              uint32_t cdOff = (uint32_t)ftello(parts[currentPart]);
+              if (cd.length) fwrite(cd.bytes, 1, cd.length, parts[currentPart]);
+              struct zip_eocd eocd = {0x06054b50, 0, 0, count, count, (uint32_t)cd.length, cdOff, 0};
+              fwrite(&eocd, sizeof(eocd), 1, parts[currentPart]);
+              
+              for (int i = 0; i < numParts; i++) if (parts[i]) fclose(parts[i]);
+              
+              if (count > 0 && numParts > 0) {
+                  NSString *docPath = [baseZipPath stringByDeletingLastPathComponent];
+                  for (int i = 0; i < numParts; i++) {
+                      NSString *partPath = [baseZipPath stringByAppendingFormat:@".z%02d", i];
+                      NSDictionary *za = [fm attributesOfItemAtPath:partPath error:nil];
+                      if (za) logf([NSString stringWithFormat:@"  ✓ %@.z%02d (%.1f MB)", [baseZipPath lastPathComponent], i, [za fileSize] / 1048576.0]);
+                  }
+              }
+              
+              return count > 0 ? numParts : 0;
           }
 
           static uint64_t be40(const uint8_t *p) { return ((uint64_t)p[0]<<32)|((uint64_t)p[1]<<24)|((uint64_t)p[2]<<16)|((uint64_t)p[3]<<8)|p[4]; }
@@ -319,7 +417,7 @@ jobs:
               self.logView.textColor = [UIColor colorWithRed:0.75 green:0.88 blue:0.95 alpha:1.0];
               self.logView.font = [UIFont monospacedSystemFontOfSize:11.5 weight:UIFontWeightRegular];
               self.logView.layer.cornerRadius = 14; self.logView.editable = NO; self.logView.textContainerInset = UIEdgeInsetsMake(10, 10, 10, 10);
-              self.logView.text = @"[ShaderKitNS v1.3 — extrai shaders de IoStore + pakchunk0]\nNo app Arquivos, mova a pasta romfs (inteira) para\n  Neste iPhone > ShaderKitNS\nDepois toque em Scan. Gerará 2 zips se houver pak.\n";
+              self.logView.text = @"[ShaderKitNS v1.4 — IoStore + Pak (dividido em partes < 2GB)]\nMova a pasta romfs INTEIRA para: Neste iPhone > ShaderKitNS\nToque em Scan, depois ⚡ GERAR SHADER KIT.\n";
               [self.view addSubview:self.logView];
 
               self.runBtn = [UIButton buttonWithType:UIButtonTypeSystem];
@@ -394,7 +492,7 @@ jobs:
 
               BOOL ok = found.count > 0 || paks.count > 0;
               self.runBtn.enabled = ok; self.runBtn.alpha = ok ? 1.0 : 0.5;
-              self.statusLabel.text = [NSString stringWithFormat:@"%lu .utoc + %lu .pak → 2 zips", (unsigned long)found.count, (unsigned long)paks.count];
+              self.statusLabel.text = [NSString stringWithFormat:@"%lu .utoc + %lu .pak", (unsigned long)found.count, (unsigned long)paks.count];
           }
 
           - (void)runKit {
@@ -419,7 +517,7 @@ jobs:
 
                   [tid writeToFile:[staging1 stringByAppendingPathComponent:@"title_id.txt"] atomically:YES encoding:NSUTF8StringEncoding error:nil];
 
-                  // ============ PART 1: IoStore chunks ============
+                  // ====== PART 1: IoStore ======
                   int found = 0, i = 0;
                   for (NSString *r in utocs) {
                       i++;
@@ -433,7 +531,7 @@ jobs:
                       if (carve_shader_chunks(full, dstDir, ^(NSString *m) { [self log:m]; })) found++;
                   }
 
-                  // ============ PART 2: pakchunk0 ============
+                  // ====== PART 2: Pak ======
                   int paksCopied = 0;
                   for (NSString *r in paksArr) {
                       NSString *full = [doc stringByAppendingPathComponent:r];
@@ -455,38 +553,38 @@ jobs:
                       }
                   }
 
-                  // Copy manifest to BOTH zips (para facilitar rebuild)
                   if (manifestPath) {
                       NSString *full = [doc stringByAppendingPathComponent:manifestPath];
                       [fm copyItemAtPath:full toPath:[staging1 stringByAppendingPathComponent:@"RomFS/Manifest_UFSFiles_Switch.txt"] error:nil];
                       [fm copyItemAtPath:full toPath:[staging2 stringByAppendingPathComponent:@"RomFS/Manifest_UFSFiles_Switch.txt"] error:nil];
-                      [self log:@"  manifest copiado para ambos os zips"];
+                      [self log:@"  manifest copiado para ambos"];
                   }
 
-                  // ============ Build Zip 1: IoStore ============
-                  dispatch_async(dispatch_get_main_queue(), ^{ self.statusLabel.text = @"Empacotando part1 (IoStore)..."; self.progressBar.progress = 0.8; });
+                  // ====== Build Part1 (normal zip) ======
+                  dispatch_async(dispatch_get_main_queue(), ^{ self.statusLabel.text = @"Empacotando part1..."; self.progressBar.progress = 0.8; });
                   NSString *zipOut1 = [doc stringByAppendingPathComponent:[NSString stringWithFormat:@"shader_kit_%@_part1.zip", tid]];
                   BOOL zip1Ok = found > 0 && build_zip_file(staging1, zipOut1);
                   if (zip1Ok) {
                       NSDictionary *za = [fm attributesOfItemAtPath:zipOut1 error:nil];
-                      [self log:[NSString stringWithFormat:@"✓ Part1 (IoStore): %.1f MB", [za fileSize] / 1048576.0]];
+                      [self log:[NSString stringWithFormat:@"✓ Part1: %.1f MB", [za fileSize] / 1048576.0]];
                   }
 
-                  // ============ Build Zip 2: Pak ============
-                  dispatch_async(dispatch_get_main_queue(), ^{ self.statusLabel.text = @"Empacotando part2 (Pak)..."; self.progressBar.progress = 0.88; });
-                  NSString *zipOut2 = [doc stringByAppendingPathComponent:[NSString stringWithFormat:@"shader_kit_%@_part2.zip", tid]];
-                  BOOL zip2Ok = paksCopied > 0 && build_zip_file(staging2, zipOut2);
-                  if (zip2Ok) {
-                      NSDictionary *za = [fm attributesOfItemAtPath:zipOut2 error:nil];
-                      [self log:[NSString stringWithFormat:@"✓ Part2 (Pak): %.1f MB", [za fileSize] / 1048576.0]];
-                  }
+                  // ====== Build Part2 (dividido em .z00, .z01, etc) ======
+                  dispatch_async(dispatch_get_main_queue(), ^{ self.statusLabel.text = @"Empacotando part2 (dividido)..."; self.progressBar.progress = 0.88; });
+                  NSString *zipOut2Base = [doc stringByAppendingPathComponent:[NSString stringWithFormat:@"shader_kit_%@_part2", tid]];
+                  int part2Count = build_split_zip_file(staging2, zipOut2Base, 1900ull * 1048576, ^(NSString *m) { [self log:m]; });
+                  BOOL zip2Ok = part2Count > 0;
 
                   if (zip1Ok || zip2Ok) {
                       [self log:@""];
                       [self log:@"✓✓ SHADER KIT COMPLETO!"];
-                      [self log:[NSString stringWithFormat:@"  Baixe AMBOS:  part1 + part2"]];
-                      [self log:@"  Descompacte na mesma pasta. Ordem: part1 primeiro, depois part2."];
-                      [self log:@"  Suba ambos na release v1.0-kit."];
+                      if (zip1Ok && zip2Ok) {
+                          [self log:[NSString stringWithFormat:@"  Part1: 1 arquivo .zip"]];
+                          [self log:[NSString stringWithFormat:@"  Part2: %d arquivo(s) .z00-.z%02d", part2Count, part2Count - 1]];
+                          [self log:@"  Suba TODOS na release v1.0-kit"];
+                      } else if (zip1Ok) {
+                          [self log:@"  Suba part1.zip na release v1.0-kit"];
+                      }
                   } else {
                       [self log:@"✗ Nenhum zip gerado."];
                   }
@@ -534,8 +632,8 @@ jobs:
             <key>CFBundleIdentifier</key><string>com.kinttany.shaderkitns</string>
             <key>CFBundleName</key><string>ShaderKitNS</string>
             <key>CFBundleDisplayName</key><string>ShaderKitNS</string>
-            <key>CFBundleVersion</key><string>1.3</string>
-            <key>CFBundleShortVersionString</key><string>1.3</string>
+            <key>CFBundleVersion</key><string>1.4</string>
+            <key>CFBundleShortVersionString</key><string>1.4</string>
             <key>CFBundlePackageType</key><string>APPL</string>
             <key>LSRequiresIPhoneOS</key><true/>
             <key>UIDeviceFamily</key><array><integer>1</integer><integer>2</integer></array>
@@ -573,4 +671,4 @@ jobs:
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          gh release upload v1.0-kit "$RUNNER_TEMP/ShaderKitNS.ipa" --repo "$GITHUB_REPOSITORY" --clobber || echo "aviso: nao publiquei na release"
+          gh release upload v1.0-kit "$RUNNER_TEMP/ShaderKitNS.ipa" --repo "$GITHUB_REPOSITORY" --clobber || echo "aviso: nao publiquei na release (artifact continua disponivel)"
