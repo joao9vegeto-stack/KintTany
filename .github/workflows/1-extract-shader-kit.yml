@@ -509,7 +509,7 @@ jobs:
           printf 'title_id\tprogram_id\tname\tipa\tbuild\tmodules\tromfs_marker\tfps_target\tmem_reserve\tmem_alias\tmem_stack\tapp_pool\tshader_groups\n' > "$GAME_DIR/game.tsv"
           
           # Data row
-          printf '%s\t%s\t%s\t\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t\n' \
+          printf '%s\t%s\t%s\t\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t\t\n' \
             "$GAME" "$GAME" "$GAME_NAME" "$BUILD" "$MODULES" "$ROMFS_MARKER" "$FPS_TARGET" "$MEM_RESERVE" "$MEM_ALIAS" "$MEM_STACK" "$APP_POOL" >> "$GAME_DIR/game.tsv"
           
           echo "✅ Created: $GAME_DIR/game.tsv"
