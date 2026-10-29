@@ -1,4 +1,4 @@
-  name: 2b. Shader Build - Compile (Fatiado)
+name: 2b. Shader Build - Compile (Fatiado)
 
 on:
   workflow_run:
@@ -362,7 +362,6 @@ jobs:
     needs: compile_slice
     runs-on: macos-latest
     timeout-minutes: 60
-    if: always()
 
     steps:
       - name: Checkout repo
