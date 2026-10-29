@@ -41,7 +41,7 @@ jobs:
           
           echo ""
           echo "Installing packages..."
-          pip3 install \
+          pip3 install --user \
             lz4 \
             capstone \
             PyYAML \
