@@ -649,22 +649,22 @@ jobs:
             echo ""
             
             cat > /tmp/commit_msg.txt << 'COMMIT_EOF'
-          chore: shader split tables for DRAGON BALL: Sparking! ZERO
+chore: shader split tables for DRAGON BALL: Sparking! ZERO
 
-          Title ID: 010035F022078000
-          Game: DRAGON BALL: Sparking! ZERO
-          
-          Generated TSV tables:
-            • shader_map.tsv - shader keys and storage locations
-            • shader_facts.tsv - binding layout and analysis information
-            • shader_pairs.tsv - vertex/pixel shader associations and pairs
-          
-          Method:
-            • Extracted from RomFS via shader_split.py
-            • timestamp: $(date -u)
-          
-          Next step: Workflow 2a will setup cache and begin compilation
-          COMMIT_EOF
+Title ID: 010035F022078000
+Game: DRAGON BALL: Sparking! ZERO
+
+Generated TSV tables:
+  • shader_map.tsv - shader keys and storage locations
+  • shader_facts.tsv - binding layout and analysis information
+  • shader_pairs.tsv - vertex/pixel shader associations and pairs
+
+Method:
+  • Extracted from RomFS via shader_split.py
+  • timestamp: $(date -u)
+
+Next step: Workflow 2a will setup cache and begin compilation
+COMMIT_EOF
             
             git commit -F /tmp/commit_msg.txt
             
@@ -683,6 +683,7 @@ jobs:
             git diff
           fi
 
+
       - name: Cleanup work directory
         shell: bash
         if: always()
@@ -695,7 +696,7 @@ jobs:
             rm -rf "$WORK"
             echo "✅ Freed $SIZE"
           fi
-
+          
       - name: Final Summary
         shell: bash
         run: |
