@@ -648,7 +648,7 @@ jobs:
             echo "✅ Changes detected, committing..."
             echo ""
             
-            cat > /tmp/commit_msg.txt << 'COMMIT_EOF'
+                      cat > /tmp/commit_msg.txt << 'COMMIT_EOF'
 chore: shader split tables for DRAGON BALL: Sparking! ZERO
 
 Title ID: 010035F022078000
@@ -665,6 +665,7 @@ Method:
 
 Next step: Workflow 2a will setup cache and begin compilation
 COMMIT_EOF
+
             
             git commit -F /tmp/commit_msg.txt
             
