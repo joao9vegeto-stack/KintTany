@@ -1,4 +1,4 @@
-name: 2. Build Thin IPA - corte do SpNet Panic 0x5cbad1cc + auditoria 5
+name: 2. Build Thin IPA - SpNet cortado + auditoria 6 (PLT, imports nn sem hook, sdk)
 
 on:
   push:
@@ -28,7 +28,7 @@ jobs:
       BASELINE_COMMIT: "306dcdfcb53d348085292e9e527339161c0536c7"
       EXPECTED_MAIN_SHA256: "a0f8f0644c92384ddb1baac1c21aecbeeace5bc99ad40895e216add61da78efe"
       EXPECTED_MAIN_BUILD_ID: "68edafd68c7bc1a1af50b82aac838018"
-      IPA_SUFFIX: "_PATCH_SPNET"
+      IPA_SUFFIX: "_AUDIT6"
 
       # Patch do construtor + layout (confirmados no log do iPhone: allocator OK, 14 threads, heap 0.28 GB)
       SPK_CUT_ADDR: "0x1e4db30"
@@ -39,6 +39,7 @@ jobs:
       SPK_LAYOUT: "UE5_SPK"
 
       # Cortes do SpNet Panic (fatos.txt da auditoria 4): addr|orig|novo|descricao, separados por ';'
+      # Mantidos nesta rodada; saem quando o hook no host entrar (auditoria 6 decide qual).
       SPNET_CUTS: "0x1b74f78|420a0054|1f2003d5|SpNet init main+0x1b74d88: b.hs status>=0x100 -> panic 0x5cbad1cc -> nop;0x1b750d4|00013fd6|1f2003d5|SpNet init main+0x1b74d88: blr SpNetPanic(0x5cbad1cc) -> nop"
 
       # Auditoria 5: a funcao que devolve o status do init do SpNet
@@ -284,13 +285,212 @@ jobs:
           set -o pipefail
           bash "$RUNNER_TEMP/spk-build.sh" 2>&1 | tee "$RUNNER_TEMP/spk-relatorio/build.log"
 
+      - name: 5b. Auditoria 6 - A/B do SpNet, caminho do crash, PLT, imports nn sem hook, sdk
+        if: always()
+        continue-on-error: true
+        shell: bash
+        run: |
+          set -o pipefail
+          mkdir -p "$RUNNER_TEMP/spk-relatorio"
+          python3 -u - <<'PYEOF' 2>&1 | tee "$RUNNER_TEMP/spk-relatorio/auditoria6.txt"
+          import os, re, struct, subprocess
+          from pathlib import Path
+          import lz4.block
+          from capstone import Cs, CS_ARCH_ARM64, CS_MODE_ARM, CS_MODE_LITTLE_ENDIAN
+
+          TMP = Path(os.environ["RUNNER_TEMP"])
+          BID = os.environ["EXPECTED_MAIN_BUILD_ID"]
+          md = Cs(CS_ARCH_ARM64, CS_MODE_ARM | CS_MODE_LITTLE_ENDIAN)
+
+          def P(s=""): print(s, flush=True)
+          def u32(img, a): return struct.unpack_from("<I", img, a)[0]
+
+          # ---------- NSO: descomprimir e montar imagem ----------
+          def load_nso(p):
+              d = p.read_bytes()
+              if d[:4] != b"NSO0": return None
+              flags = u32(d, 0xC); segs = []
+              for i, (hdr, csz_off) in enumerate(((0x10, 0x60), (0x20, 0x64), (0x30, 0x68))):
+                  fo, mo, sz = struct.unpack_from("<III", d, hdr)
+                  raw = d[fo:fo + u32(d, csz_off)]
+                  if flags & (1 << i): raw = lz4.block.decompress(raw, uncompressed_size=sz)
+                  segs.append((mo, raw[:sz]))
+              end = max(mo + len(r) for mo, r in segs) + u32(d, 0x3C)
+              img = bytearray(end)
+              for mo, r in segs: img[mo:mo + len(r)] = r
+              return {"img": img, "bid": d[0x40:0x50].hex(), "path": str(p)}
+
+          def find_nso(name, bid=None):
+              cands = []
+              for p in TMP.rglob(name):
+                  try:
+                      if not p.is_file() or p.stat().st_size < (1 << 20): continue
+                      with p.open("rb") as f: h = f.read(0x50)
+                      if h[:4] != b"NSO0": continue
+                      if bid and h[0x40:0x50].hex() != bid: continue
+                      cands.append(p)
+                  except Exception as e: P(f"# {p}: {e}")
+              # preferir o original (fora de pastas 'patched')
+              cands.sort(key=lambda p: ("patched" in str(p).lower(), len(str(p))))
+              for p in cands:
+                  try: return load_nso(p)
+                  except Exception as e: P(f"# falha ao carregar {p}: {e}")
+              return None
+
+          # ---------- .dynamic: simbolos e relocs (GOT -> nome do import) ----------
+          def parse_dyn(img):
+              mod0 = u32(img, 4)
+              if img[mod0:mod0 + 4] != b"MOD0": return [], {}
+              a = mod0 + struct.unpack_from("<i", img, mod0 + 4)[0]; tags = {}
+              while a + 16 <= len(img):
+                  t, v = struct.unpack_from("<QQ", img, a); a += 16
+                  if t == 0: break
+                  tags.setdefault(t, v)
+              symtab, strtab, strsz = tags.get(6), tags.get(5), tags.get(10, 0)
+              syms = []
+              if symtab and strtab:
+                  n = u32(img, tags[4] + 4) if tags.get(4) else ((strtab - symtab) // 24 if strtab > symtab else 0)
+                  for k in range(n):
+                      a = symtab + 24 * k
+                      if a + 24 > len(img): break
+                      nm, info, other, shndx, val, size = struct.unpack_from("<IBBHQQ", img, a)
+                      if nm >= strsz: break
+                      e = img.find(b"\0", strtab + nm)
+                      syms.append((img[strtab + nm:e].decode("ascii", "replace"), info, shndx, val, size))
+              rel = {}
+              for ta, ts in ((23, 2), (7, 8)):
+                  ra, rs = tags.get(ta), tags.get(ts)
+                  if not ra or not rs: continue
+                  for off in range(0, rs, 24):
+                      r_off, r_info, add = struct.unpack_from("<QQq", img, ra + off)
+                      si, ty = r_info >> 32, r_info & 0xffffffff
+                      if ty in (257, 1025, 1026) and 0 < si < len(syms): rel[r_off] = syms[si][0]
+              return syms, rel
+
+          def demangle(names):
+              names = list(names)
+              if not names: return {}
+              try:
+                  out = subprocess.run(["c++filt"], input="\n".join(names), capture_output=True, text=True, timeout=180).stdout.split("\n")
+                  return dict(zip(names, out))
+              except Exception: return {n: n for n in names}
+
+          # ---------- disasm ----------
+          def dis(img, start, end, label):
+              P(f"=== [{label}] {start:#x} .. {end:#x} ===")
+              res = []; a = start
+              while a < end and a + 4 <= len(img):
+                  ins = list(md.disasm(bytes(img[a:a + 4]), a))
+                  if ins:
+                      i = ins[0]; res.append(i)
+                      P(f"  {i.address:#x}:\t{i.mnemonic}\t{i.op_str}\t[{bytes(i.bytes).hex()}]")
+                  else:
+                      P(f"  {a:#x}:\t.word\t{img[a:a+4].hex()}")
+                  a += 4
+              P()
+              return res
+
+          def sym_at(syms, addr):
+              for n, info, shndx, val, size in syms:
+                  if shndx and val <= addr < val + max(size, 4): return (n, addr - val)
+              return None
+
+          def resolve(img, rel, syms, addr, dm, depth=0):
+              if addr + 16 > len(img): return "fora da imagem"
+              ins = list(md.disasm(bytes(img[addr:addr + 16]), addr))
+              if len(ins) >= 3 and ins[0].mnemonic == "adrp" and ins[1].mnemonic == "ldr" and ins[2].mnemonic == "br":
+                  page = int(ins[0].op_str.split("#")[1], 16)
+                  m = re.search(r"#(0x[0-9a-fA-F]+|\d+)", ins[1].op_str)
+                  slot = page + (int(m.group(1), 0) if m else 0)
+                  nm = rel.get(slot)
+                  return f"PLT -> GOT {slot:#x} -> {dm.get(nm, nm) if nm else '(slot sem simbolo: ponteiro interno)'}"
+              if ins and ins[0].mnemonic == "b" and depth < 2:
+                  t = int(ins[0].op_str.lstrip("#"), 16)
+                  return f"b {t:#x} -> " + resolve(img, rel, syms, t, dm, depth + 1)
+              s = sym_at(syms, addr)
+              return f"{dm.get(s[0], s[0])}+{s[1]:#x}" if s else "funcao interna sem simbolo"
+
+          def follow_calls(img, rel, syms, insns, dm, label):
+              P(f"=== alvos de bl em {label} ===")
+              seen = set()
+              for i in insns:
+                  if i.mnemonic != "bl": continue
+                  t = int(i.op_str.lstrip("#"), 16)
+                  if t in seen: continue
+                  seen.add(t)
+                  P(f"  {i.address:#x}: bl {t:#x}  =>  {resolve(img, rel, syms, t, dm)}")
+              P()
+
+          # ================= main =================
+          main = find_nso("main", BID)
+          if not main:
+              P(f"ERRO: main com build id {BID} nao encontrado em {TMP}"); raise SystemExit(0)
+          P(f"=== main: {main['path']} build {main['bid']} tamanho {len(main['img']):#x} ===")
+          img = main["img"]; syms, rel = parse_dyn(img)
+          dm = demangle(sorted({n for n, *_ in syms} | set(rel.values())))
+          P(f"=== simbolos dinamicos: {len(syms)}  relocs com simbolo: {len(rel)} ===\n")
+
+          P("#################### AUDITORIA 6.1: A (caller), B (SpNet init) e o caminho do crash ####################")
+          A  = dis(img, 0x1b74b80, 0x1b74d88, "A: caller de B, ate bl 0x1b74d7c")
+          B  = dis(img, 0x1b74d88, 0x1b75140, "B: SpNet init (cortes em 0x1b74f78 / 0x1b750d4; crash passa por 0x1b75008)")
+          C1 = dis(img, 0x4bcd160, 0x4bcd1e0, "caller 2 do crash (bt main+0x4bcd1c8)")
+          C2 = dis(img, 0x4bea720, 0x4bea7a0, "caller 1 do crash (lr main+0x4bea780)")
+          C3 = dis(img, 0x4be9780, 0x4be9830, "funcao do crash (pc main+0x4be9808, ldr [x0,#0x28] com x0=0x688)")
+          D1 = dis(img, 0x1fb2db0, 0x1fb2e10, "PreInit: chamada de A (bt main+0x1fb2df8)")
+          follow_calls(img, rel, syms, A, dm, "A")
+          follow_calls(img, rel, syms, B, dm, "B")
+          follow_calls(img, rel, syms, C1 + C2 + C3, dm, "crash e callers")
+          follow_calls(img, rel, syms, D1, dm, "PreInit")
+
+          P("#################### AUDITORIA 6.2: funcao irma main+0x19cec44 e seus imports ####################")
+          for t in (0x46af000, 0x4721bd0, 0x46b3080, 0x46d3518, 0x4719638, 0x46cae70, 0x46cad30, 0x46cb0a0):
+              P(f"  {t:#x}  =>  {resolve(img, rel, syms, t, dm)}")
+          P()
+
+          P("#################### AUDITORIA 6.3: imports nn:: do main sem hook em dm/host e dm/gfx (services.md) ####################")
+          blob = ""
+          for d in ("dm/host", "dm/gfx"):
+              for f in Path(d).rglob("*"):
+                  if f.is_file() and f.suffix in (".c", ".h", ".m", ".mm", ".cpp", ".py", ".tsv", ".txt"):
+                      try: blob += f.read_text(errors="ignore") + "\n"
+                      except Exception: pass
+          undef = sorted({n for n, info, shndx, val, size in syms if shndx == 0 and n.startswith("_ZN2nn")})
+          hooked, unhooked = [], []
+          for n in undef:
+              d = dm.get(n, n); short = d.split("(")[0]
+              (hooked if (n in blob or short in blob) else unhooked).append(short)
+          P(f"=== imports nn:: indefinidos: {len(undef)}  com hook/mencao no host: {len(hooked)}  SEM: {len(unhooked)} ===")
+          groups = {}
+          for s in sorted(set(unhooked)):
+              groups.setdefault("::".join(s.split("::")[:2]), []).append(s)
+          for g in sorted(groups):
+              P(f"--- {g} ({len(groups[g])}) ---")
+              for s in groups[g]: P(f"  {s}")
+          P()
+
+          # ================= sdk =================
+          P("#################### AUDITORIA 6.4: sdk+0x589790 (x17 no crash) e sdk+0x123a1c (threads em espera) ####################")
+          sdk = find_nso("sdk")
+          if sdk:
+              simg = sdk["img"]; ssyms, srel = parse_dyn(simg)
+              sdm = demangle(sorted({n for n, *_ in ssyms}))
+              P(f"=== sdk: {sdk['path']} build {sdk['bid']} simbolos {len(ssyms)} ===")
+              for off in (0x589790, 0x123a1c):
+                  s = sym_at(ssyms, off)
+                  P(f"  sdk+{off:#x} => {sdm.get(s[0], s[0]) + '+' + hex(s[1]) if s else 'sem simbolo'}")
+                  dis(simg, max(0, off - 0x40), off + 0x40, f"sdk+{off:#x}")
+          else:
+              P("sdk NSO nao encontrado")
+          P("=== FIM AUDITORIA 6 ===")
+          PYEOF
+
       - name: 6. Resumo e fatos
         if: always()
         shell: bash
         run: |
           mkdir -p "$RUNNER_TEMP/spk-relatorio"
           {
-            echo "CORTE DO SPNET PANIC 0x5cbad1cc (main+0x1b74f78 b.hs -> nop, main+0x1b750d4 blr -> nop) + AUDITORIA 5"
+            echo "SPNET CORTADO (main+0x1b74f78 b.hs -> nop, main+0x1b750d4 blr -> nop) + AUDITORIA 5 + AUDITORIA 6"
             echo "Execucao: $GITHUB_RUN_ID  commit: $GITHUB_SHA"
             echo
             for f in "$RUNNER_TEMP"/*-work/build/patched_v0/main.cuts.tsv "$RUNNER_TEMP"/*-work/build/patched_v0/main.obs.tsv; do
@@ -303,8 +503,14 @@ jobs:
             ls -la "$RUNNER_TEMP"/*.ipa 2>/dev/null || echo "nenhum"
           } | tee "$RUNNER_TEMP/spk-relatorio/resumo.txt"
 
-          # fatos.txt: disassembly da auditoria 5 + patches.py gerado + cortes
+          # fatos.txt: auditoria 6 (prioridade) + disassembly da auditoria 5 + patches.py gerado + cortes
           {
+            if [ -f "$RUNNER_TEMP/spk-relatorio/auditoria6.txt" ]; then
+              cat "$RUNNER_TEMP/spk-relatorio/auditoria6.txt"
+            else
+              echo "(auditoria 6 nao gerou saida)"
+            fi
+            echo
             sed -n '/=== AUDITORIA 5/,/=== PATCH SPK/p' "$RUNNER_TEMP/spk-relatorio/build.log"
             sed -n '/=== patches.py gerado pelo pipeline/,/=== main.obs.tsv ===/p' "$RUNNER_TEMP/spk-relatorio/build.log"
           } > "$RUNNER_TEMP/spk-relatorio/fatos.txt" || true
@@ -314,7 +520,7 @@ jobs:
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: spk-relatorio-spnet-${{ github.run_id }}
+          name: spk-relatorio-audit6-${{ github.run_id }}
           path: ${{ runner.temp }}/spk-relatorio/
           retention-days: 7
 
@@ -334,7 +540,7 @@ jobs:
       - name: 9. Salvar IPA nos Artifacts
         uses: actions/upload-artifact@v4
         with:
-          name: spk-ipa-patch-spnet-${{ github.run_id }}
+          name: spk-ipa-audit6-${{ github.run_id }}
           path: ${{ runner.temp }}/*${{ env.IPA_SUFFIX }}.ipa
           if-no-files-found: error
           retention-days: 7
