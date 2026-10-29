@@ -1,6 +1,7 @@
 name: 3. Sonda de shaders - IoStore, ferramentas e cadeia de traducao
 
 on:
+push:
   workflow_dispatch:
     inputs:
       github_kit_url:
