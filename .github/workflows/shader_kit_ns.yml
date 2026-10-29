@@ -1,0 +1,488 @@
+name: 1b. Build ShaderKitNS App IPA (v1.0)
+
+on:
+  push:
+    branches:
+      - SpkIOSzero
+      - SpkIOSZero
+    paths:
+      - '.github/workflows/shader_kit_ns.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build_shader_kit_ns:
+    runs-on: macos-15
+    timeout-minutes: 30
+    steps:
+      - name: 1. Checkout
+        uses: actions/checkout@v4
+
+      - name: 2. Compilar ShaderKitNS.ipa
+        run: |
+          set -e
+          APP_DIR="$RUNNER_TEMP/Payload/ShaderKitNS.app"
+          mkdir -p "$APP_DIR" "$RUNNER_TEMP/IconGen" "$RUNNER_TEMP/App"
+
+          # ---------- icone: moldura joy-con + cartao escuro COM o texto "SK" no centro ----------
+          cat > "$RUNNER_TEMP/IconGen/gen_icon.m" << 'ICONEOF'
+          #import <Foundation/Foundation.h>
+          #import <CoreGraphics/CoreGraphics.h>
+          #import <CoreText/CoreText.h>
+          #import <ImageIO/ImageIO.h>
+
+          static void draw_text(CGContextRef ctx, NSString *text, CGFloat fontSize, CGFloat cx, CGFloat cy, CGColorRef color) {
+              CTFontRef font = CTFontCreateWithName(CFSTR("Helvetica-Bold"), fontSize, NULL);
+              NSDictionary *attrs = @{ (id)kCTFontAttributeName: (__bridge id)font, (id)kCTForegroundColorAttributeName: (__bridge id)color };
+              NSAttributedString *as = [[NSAttributedString alloc] initWithString:text attributes:attrs];
+              CTLineRef line = CTLineCreateWithAttributedString((__bridge CFAttributedStringRef)as);
+              CGFloat asc, desc;
+              double w = CTLineGetTypographicBounds(line, &asc, &desc, NULL);
+              CGContextSetTextMatrix(ctx, CGAffineTransformIdentity);
+              CGContextSetTextPosition(ctx, cx - w / 2.0, cy - (asc - desc) / 2.0);
+              CTLineDraw(line, ctx);
+              CFRelease(line); CFRelease(font);
+          }
+
+          static void save_icon(NSString *path, int sz) {
+              CGColorSpaceRef cs = CGColorSpaceCreateDeviceRGB();
+              CGContextRef ctx = CGBitmapContextCreate(NULL, sz, sz, 8, sz * 4, cs, kCGImageAlphaPremultipliedLast);
+              CGFloat s = (CGFloat)sz / 1024.0;
+              CGContextSetRGBFillColor(ctx, 0.0, 0.765, 0.890, 1.0);
+              CGContextFillRect(ctx, CGRectMake(0, 0, sz * 0.5, sz));
+              CGContextSetRGBFillColor(ctx, 1.0, 0.235, 0.157, 1.0);
+              CGContextFillRect(ctx, CGRectMake(sz * 0.5, 0, sz * 0.5, sz));
+              CGFloat pad = 92.0 * s;
+              CGRect card = CGRectMake(pad, pad, sz - pad * 2, sz - pad * 2);
+              CGPathRef cardPath = CGPathCreateWithRoundedRect(card, 180.0 * s, 180.0 * s, NULL);
+              CGContextAddPath(ctx, cardPath);
+              CGContextSetRGBFillColor(ctx, 0.09, 0.10, 0.14, 1.0);
+              CGContextFillPath(ctx);
+              CGPathRelease(cardPath);
+              CGColorRef white = CGColorCreateGenericRGB(1, 1, 1, 1);
+              CGColorRef cyan  = CGColorCreateGenericRGB(0.0, 0.96, 0.83, 1);
+              draw_text(ctx, @"SK", 420.0 * s, sz / 2.0, sz * 0.56, white);
+              draw_text(ctx, @"SHADER KIT", 78.0 * s, sz / 2.0, sz * 0.25, cyan);
+              CGColorRelease(white); CGColorRelease(cyan);
+              CGImageRef img = CGBitmapContextCreateImage(ctx);
+              CGImageDestinationRef dest = CGImageDestinationCreateWithURL((__bridge CFURLRef)[NSURL fileURLWithPath:path], CFSTR("public.png"), 1, NULL);
+              CGImageDestinationAddImage(dest, img, NULL);
+              CGImageDestinationFinalize(dest);
+              CFRelease(dest); CGImageRelease(img); CGContextRelease(ctx); CGColorSpaceRelease(cs);
+          }
+
+          int main(int argc, const char *argv[]) {
+              @autoreleasepool {
+                  NSString *outDir = [NSString stringWithUTF8String:argv[1]];
+                  save_icon([outDir stringByAppendingPathComponent:@"AppIcon60x60@2x.png"], 120);
+                  save_icon([outDir stringByAppendingPathComponent:@"AppIcon60x60@3x.png"], 180);
+                  save_icon([outDir stringByAppendingPathComponent:@"AppIcon1024.png"], 1024);
+              }
+              return 0;
+          }
+          ICONEOF
+          clang -fobjc-arc "$RUNNER_TEMP/IconGen/gen_icon.m" -framework Foundation -framework CoreGraphics -framework CoreText -framework ImageIO -o "$RUNNER_TEMP/IconGen/gen_icon"
+          "$RUNNER_TEMP/IconGen/gen_icon" "$APP_DIR"
+
+          mkdir -p "$RUNNER_TEMP/Assets.xcassets/AppIcon.appiconset"
+          cp "$APP_DIR/AppIcon60x60@2x.png" "$RUNNER_TEMP/Assets.xcassets/AppIcon.appiconset/icon_120.png"
+          cp "$APP_DIR/AppIcon60x60@3x.png" "$RUNNER_TEMP/Assets.xcassets/AppIcon.appiconset/icon_180.png"
+          cp "$APP_DIR/AppIcon1024.png" "$RUNNER_TEMP/Assets.xcassets/AppIcon.appiconset/icon_1024.png"
+          cat > "$RUNNER_TEMP/Assets.xcassets/AppIcon.appiconset/Contents.json" << 'JSONEOF'
+          {
+            "images" : [
+              { "filename" : "icon_120.png", "idiom" : "iphone", "scale" : "2x", "size" : "60x60" },
+              { "filename" : "icon_180.png", "idiom" : "iphone", "scale" : "3x", "size" : "60x60" },
+              { "filename" : "icon_1024.png", "idiom" : "ios-marketing", "scale" : "1x", "size" : "1024x1024" }
+            ],
+            "info" : { "author" : "xcode", "version" : 1 }
+          }
+          JSONEOF
+          xcrun actool "$RUNNER_TEMP/Assets.xcassets" --compile "$APP_DIR" --platform iphoneos \
+            --minimum-deployment-target 17.0 --app-icon AppIcon \
+            --output-partial-info-plist "$RUNNER_TEMP/assetcatalog_info.plist" || true
+
+          # ---------- app ----------
+          cat > "$RUNNER_TEMP/App/main.m" << 'OBJCEOF'
+          #import <UIKit/UIKit.h>
+          #import <UniformTypeIdentifiers/UniformTypeIdentifiers.h>
+          #include <stdint.h>
+          #include <stdio.h>
+          #include <stdlib.h>
+          #include <string.h>
+          #include <zlib.h>
+
+          #define NS_BG_COLOR    [UIColor colorWithRed:0.11 green:0.12 blue:0.15 alpha:1.0]
+          #define NS_CARD_COLOR  [UIColor colorWithRed:0.16 green:0.18 blue:0.22 alpha:1.0]
+          #define NS_BLUE_COLOR  [UIColor colorWithRed:0.00 green:0.76 blue:0.89 alpha:1.0]
+          #define NS_RED_COLOR   [UIColor colorWithRed:1.00 green:0.24 blue:0.16 alpha:1.0]
+          #define NS_CYAN_GLOW   [UIColor colorWithRed:0.00 green:0.96 blue:0.83 alpha:1.0]
+
+          #pragma pack(push, 1)
+          struct zip_lfh { uint32_t sig; uint16_t ver, flags, method, mtime, mdate; uint32_t crc, csize, usize; uint16_t nlen, elen; };
+          struct zip_cdh { uint32_t sig; uint16_t vmade, vext, flags, method, mtime, mdate; uint32_t crc, csize, usize; uint16_t nlen, elen, clen, disk, iattr; uint32_t eattr, off; };
+          struct zip_eocd { uint32_t sig; uint16_t disk, cd_disk, entries_disk, entries_total; uint32_t cd_size, cd_off; uint16_t comment_len; };
+          #pragma pack(pop)
+
+          // zip "store" (sem compressao): os blocos ja vem comprimidos com Oodle. Limite 4 GB por arquivo e total.
+          static BOOL build_zip_file(NSString *srcDir, NSString *zipPath) {
+              NSFileManager *fm = NSFileManager.defaultManager;
+              [fm removeItemAtPath:zipPath error:nil];
+              FILE *zf = fopen(zipPath.fileSystemRepresentation, "wb");
+              if (!zf) return NO;
+              NSMutableData *cd = [NSMutableData data];
+              uint16_t count = 0;
+              NSDirectoryEnumerator *en = [fm enumeratorAtPath:srcDir];
+              NSString *rel = nil;
+              uint8_t *buf = malloc(1 << 20);
+              while ((rel = [en nextObject])) {
+                  NSString *full = [srcDir stringByAppendingPathComponent:rel];
+                  NSDictionary *attr = [fm attributesOfItemAtPath:full error:nil];
+                  if (![attr.fileType isEqualToString:NSFileTypeRegular]) continue;
+                  unsigned long long fsz = [attr fileSize];
+                  if (fsz > 0xFFFFFFFFULL) continue;
+                  FILE *in = fopen(full.fileSystemRepresentation, "rb");
+                  if (!in) continue;
+                  uint32_t crc = 0; size_t n;
+                  while ((n = fread(buf, 1, 1 << 20, in)) > 0) crc = (uint32_t)crc32(crc, buf, (uInt)n);
+                  const char *name = rel.UTF8String;
+                  uint16_t nlen = (uint16_t)strlen(name);
+                  uint32_t usize = (uint32_t)fsz;
+                  uint32_t off = (uint32_t)ftello(zf);
+                  struct zip_lfh lfh = {0x04034b50, 20, 0x0800, 0, 0, 0x21, crc, usize, usize, nlen, 0};
+                  fwrite(&lfh, sizeof(lfh), 1, zf);
+                  fwrite(name, 1, nlen, zf);
+                  fseeko(in, 0, SEEK_SET);
+                  while ((n = fread(buf, 1, 1 << 20, in)) > 0) fwrite(buf, 1, n, zf);
+                  fclose(in);
+                  struct zip_cdh cdh = {0x02014b50, 20, 20, 0x0800, 0, 0, 0x21, crc, usize, usize, nlen, 0, 0, 0, 0, 0, off};
+                  [cd appendBytes:&cdh length:sizeof(cdh)];
+                  [cd appendBytes:name length:nlen];
+                  count++;
+              }
+              free(buf);
+              uint32_t cdOff = (uint32_t)ftello(zf);
+              if (cd.length) fwrite(cd.bytes, 1, cd.length, zf);
+              struct zip_eocd eocd = {0x06054b50, 0, 0, count, count, (uint32_t)cd.length, cdOff, 0};
+              fwrite(&eocd, sizeof(eocd), 1, zf);
+              fclose(zf);
+              return count > 0;
+          }
+
+          static uint64_t be40(const uint8_t *p) { return ((uint64_t)p[0]<<32)|((uint64_t)p[1]<<24)|((uint64_t)p[2]<<16)|((uint64_t)p[3]<<8)|p[4]; }
+          static uint64_t le40(const uint8_t *p) { return (uint64_t)p[0]|((uint64_t)p[1]<<8)|((uint64_t)p[2]<<16)|((uint64_t)p[3]<<24)|((uint64_t)p[4]<<32); }
+          static uint32_t le24(const uint8_t *p) { return (uint32_t)p[0]|((uint32_t)p[1]<<8)|((uint32_t)p[2]<<16); }
+          static uint32_t rd32(const uint8_t *p) { uint32_t v; memcpy(&v, p, 4); return v; }
+          static uint64_t rd64(const uint8_t *p) { uint64_t v; memcpy(&v, p, 8); return v; }
+
+          // Recorta do .ucas somente os blocos dos chunks ShaderCodeLibrary (tipo 8) e ShaderCode (tipo 9).
+          // Nao descriptografa: os blocos saem como estao no disco (AES + Oodle). O runner resolve.
+          static BOOL carve_shader_chunks(NSString *utocPath, NSString *outDir, void (^logf)(NSString *)) {
+              NSData *toc = [NSData dataWithContentsOfFile:utocPath options:NSDataReadingMappedIfSafe error:nil];
+              if (!toc || toc.length < 144) { logf([NSString stringWithFormat:@"  %@: nao li o .utoc", utocPath.lastPathComponent]); return NO; }
+              const uint8_t *t = toc.bytes;
+              if (memcmp(t, "-==--==--==--==-", 16) != 0) { logf([NSString stringWithFormat:@"  %@: magic invalido", utocPath.lastPathComponent]); return NO; }
+              uint8_t ver = t[0x10];
+              uint32_t hdr = rd32(t+0x14), nent = rd32(t+0x18), nblk = rd32(t+0x1c), blkEntSz = rd32(t+0x20);
+              uint32_t ncm = rd32(t+0x24), cml = rd32(t+0x28), blkSz = rd32(t+0x2c);
+              uint8_t flags = t[0x50];
+              uint32_t seeds = rd32(t+0x54), noHash = rd32(t+0x60);
+              uint64_t partSz = rd64(t+0x58);
+              uint64_t p = hdr;
+              const uint8_t *ids = t + p; p += 12ULL * nent;
+              const uint8_t *ols = t + p; p += 10ULL * nent;
+              if (ver >= 4) p += 4ULL * seeds;
+              if (ver >= 5) p += 4ULL * noHash;
+              const uint8_t *blks = t + p; p += (uint64_t)blkEntSz * nblk;
+              const uint8_t *cmn = t + p; p += (uint64_t)ncm * cml;
+              if (p > toc.length || blkEntSz != 12 || blkSz == 0) { logf([NSString stringWithFormat:@"  %@: TOC com layout inesperado (v%u)", utocPath.lastPathComponent, ver]); return NO; }
+
+              NSString *base = [utocPath.lastPathComponent stringByDeletingPathExtension];
+              NSString *stem = [utocPath stringByDeletingPathExtension];
+              NSString *binPath = [outDir stringByAppendingPathComponent:[base stringByAppendingString:@".shaders.bin"]];
+              NSString *tsvPath = [outDir stringByAppendingPathComponent:[base stringByAppendingString:@".shaders.tsv"]];
+              FILE *bin = fopen(binPath.fileSystemRepresentation, "wb");
+              FILE *tsv = fopen(tsvPath.fileSystemRepresentation, "w");
+              if (!bin || !tsv) { if (bin) fclose(bin); if (tsv) fclose(tsv); return NO; }
+
+              fprintf(tsv, "# utoc=%s version=%u flags=0x%02x block_size=%u entries=%u blocks=%u partition_size=%llu methods=",
+                      base.UTF8String, ver, flags, blkSz, nent, nblk, (unsigned long long)partSz);
+              for (uint32_t i = 0; i < ncm; i++) fprintf(tsv, "%s%.*s", i ? "," : "", (int)cml, (const char *)(cmn + (uint64_t)i * cml));
+              fprintf(tsv, "\n# chunk\tchunk_id_hex\ttype\toffset\tlength\n# block\tblock_index\tbin_offset\tdisk_size\tcomp_size\tuncomp_size\tmethod\n");
+
+              FILE *ucas = NULL; int curPart = -1;
+              uint64_t binOff = 0, carved = 0; uint32_t nChunks = 0, nBlocks = 0; int64_t lastBlk = -1;
+              uint8_t *buf = malloc(blkSz + 16);
+              for (uint32_t i = 0; i < nent; i++) {
+                  const uint8_t *id = ids + 12ULL * i;
+                  uint8_t type = id[11];
+                  if (type != 8 && type != 9) continue;
+                  uint64_t off = be40(ols + 10ULL * i), len = be40(ols + 10ULL * i + 5);
+                  if (len == 0) continue;
+                  uint64_t b0 = off / blkSz, b1 = (off + len - 1) / blkSz;
+                  nChunks++;
+                  fprintf(tsv, "chunk\t");
+                  for (int k = 0; k < 12; k++) fprintf(tsv, "%02x", id[k]);
+                  fprintf(tsv, "\t%u\t%llu\t%llu\n", type, (unsigned long long)off, (unsigned long long)len);
+                  for (uint64_t b = b0; b <= b1 && b < nblk; b++) {
+                      if ((int64_t)b <= lastBlk) continue;
+                      lastBlk = (int64_t)b;
+                      const uint8_t *e = blks + 12ULL * b;
+                      uint64_t boff = le40(e); uint32_t csz = le24(e + 5), usz = le24(e + 8); uint8_t m = e[11];
+                      uint32_t dsz = (flags & 2) ? ((csz + 15u) & ~15u) : csz;
+                      int part = partSz ? (int)(boff / partSz) : 0;
+                      uint64_t poff = partSz ? (boff % partSz) : boff;
+                      if (part != curPart) {
+                          if (ucas) fclose(ucas);
+                          NSString *path = part == 0 ? [stem stringByAppendingPathExtension:@"ucas"] : [stem stringByAppendingFormat:@"_s%d.ucas", part];
+                          ucas = fopen(path.fileSystemRepresentation, "rb"); curPart = part;
+                          if (!ucas) { logf([NSString stringWithFormat:@"  ERRO: nao abri %@ (o .ucas esta na mesma pasta?)", path.lastPathComponent]); free(buf); fclose(bin); fclose(tsv); return NO; }
+                      }
+                      if (dsz > blkSz + 16) continue;
+                      fseeko(ucas, (off_t)poff, SEEK_SET);
+                      size_t got = fread(buf, 1, dsz, ucas);
+                      if (got != dsz) logf([NSString stringWithFormat:@"  AVISO: bloco %llu curto (%zu/%u)", (unsigned long long)b, got, dsz]);
+                      fwrite(buf, 1, got, bin);
+                      fprintf(tsv, "block\t%llu\t%llu\t%zu\t%u\t%u\t%u\n", (unsigned long long)b, (unsigned long long)binOff, got, csz, usz, m);
+                      binOff += got; carved += got; nBlocks++;
+                  }
+              }
+              free(buf); if (ucas) fclose(ucas); fclose(bin); fclose(tsv);
+              logf([NSString stringWithFormat:@"  %@: v%u flags=0x%02x  %u chunks de shader, %u blocos, %.1f MB", base, ver, flags, nChunks, nBlocks, carved / (1024.0 * 1024.0)]);
+              if (nChunks == 0) { [NSFileManager.defaultManager removeItemAtPath:binPath error:nil]; [NSFileManager.defaultManager removeItemAtPath:tsvPath error:nil]; }
+              return nChunks > 0;
+          }
+
+          @interface KitVC : UIViewController <UIDocumentPickerDelegate>
+          @property (nonatomic, strong) UITextField *tidField;
+          @property (nonatomic, strong) UILabel *folderLabel;
+          @property (nonatomic, strong) UILabel *statusLabel;
+          @property (nonatomic, strong) UIProgressView *progressBar;
+          @property (nonatomic, strong) UITextView *logView;
+          @property (nonatomic, strong) UIButton *pickBtn;
+          @property (nonatomic, strong) UIButton *runBtn;
+          @property (nonatomic, strong) NSURL *folderURL;
+          @end
+
+          @implementation KitVC
+          - (UIStatusBarStyle)preferredStatusBarStyle { return UIStatusBarStyleLightContent; }
+
+          - (void)viewDidLoad {
+              [super viewDidLoad];
+              self.view.backgroundColor = NS_BG_COLOR;
+              CGFloat w = self.view.bounds.size.width, h = self.view.bounds.size.height;
+
+              UIView *leftRail = [[UIView alloc] initWithFrame:CGRectMake(0, 0, 5, h)];
+              leftRail.autoresizingMask = UIViewAutoresizingFlexibleHeight; leftRail.backgroundColor = NS_BLUE_COLOR; [self.view addSubview:leftRail];
+              UIView *rightRail = [[UIView alloc] initWithFrame:CGRectMake(w - 5, 0, 5, h)];
+              rightRail.autoresizingMask = UIViewAutoresizingFlexibleHeight | UIViewAutoresizingFlexibleLeftMargin; rightRail.backgroundColor = NS_RED_COLOR; [self.view addSubview:rightRail];
+
+              UIView *header = [[UIView alloc] initWithFrame:CGRectMake(16, 54, w - 32, 60)];
+              header.autoresizingMask = UIViewAutoresizingFlexibleWidth; header.backgroundColor = NS_CARD_COLOR; header.layer.cornerRadius = 16; [self.view addSubview:header];
+              UIView *joy = [[UIView alloc] initWithFrame:CGRectMake(14, 12, 36, 36)]; joy.layer.cornerRadius = 10; joy.clipsToBounds = YES;
+              UIView *jl = [[UIView alloc] initWithFrame:CGRectMake(0, 0, 18, 36)]; jl.backgroundColor = NS_BLUE_COLOR;
+              UIView *jr = [[UIView alloc] initWithFrame:CGRectMake(18, 0, 18, 36)]; jr.backgroundColor = NS_RED_COLOR;
+              [joy addSubview:jl]; [joy addSubview:jr];
+              UILabel *sk = [[UILabel alloc] initWithFrame:joy.bounds]; sk.text = @"SK"; sk.textColor = UIColor.whiteColor; sk.font = [UIFont systemFontOfSize:13 weight:UIFontWeightBlack]; sk.textAlignment = NSTextAlignmentCenter; [joy addSubview:sk];
+              [header addSubview:joy];
+              UILabel *title = [[UILabel alloc] initWithFrame:CGRectMake(60, 10, w - 100, 22)]; title.text = @"ShaderKitNS"; title.textColor = UIColor.whiteColor; title.font = [UIFont systemFontOfSize:20 weight:UIFontWeightHeavy]; [header addSubview:title];
+              UILabel *sub = [[UILabel alloc] initWithFrame:CGRectMake(60, 33, w - 100, 14)]; sub.text = @"IOSTORE ➔ SHADER KIT (SEM COPIAR O JOGO)"; sub.textColor = NS_CYAN_GLOW; sub.font = [UIFont systemFontOfSize:9.5 weight:UIFontWeightBold]; [header addSubview:sub];
+
+              UILabel *tl = [[UILabel alloc] initWithFrame:CGRectMake(20, 124, w - 40, 14)]; tl.text = @"TITLE ID"; tl.textColor = [UIColor colorWithWhite:0.6 alpha:1]; tl.font = [UIFont systemFontOfSize:9 weight:UIFontWeightBold]; [self.view addSubview:tl];
+              self.tidField = [[UITextField alloc] initWithFrame:CGRectMake(16, 140, w - 32, 40)];
+              self.tidField.autoresizingMask = UIViewAutoresizingFlexibleWidth; self.tidField.backgroundColor = NS_CARD_COLOR; self.tidField.textColor = UIColor.whiteColor;
+              self.tidField.font = [UIFont monospacedSystemFontOfSize:14 weight:UIFontWeightBold]; self.tidField.layer.cornerRadius = 12; self.tidField.text = @"010035F022078000";
+              self.tidField.leftView = [[UIView alloc] initWithFrame:CGRectMake(0, 0, 12, 1)]; self.tidField.leftViewMode = UITextFieldViewModeAlways;
+              self.tidField.autocapitalizationType = UITextAutocapitalizationTypeAllCharacters; self.tidField.autocorrectionType = UITextAutocorrectionTypeNo;
+              [self.view addSubview:self.tidField];
+
+              self.pickBtn = [UIButton buttonWithType:UIButtonTypeSystem];
+              self.pickBtn.frame = CGRectMake(16, 192, w - 32, 46); self.pickBtn.autoresizingMask = UIViewAutoresizingFlexibleWidth;
+              self.pickBtn.backgroundColor = NS_BLUE_COLOR; self.pickBtn.layer.cornerRadius = 12;
+              [self.pickBtn setTitle:@"📂 ESCOLHER PASTA  (ExtractorNS ▸ Spk ▸ Extracted ▸ romfs)" forState:UIControlStateNormal];
+              [self.pickBtn setTitleColor:UIColor.whiteColor forState:UIControlStateNormal]; self.pickBtn.titleLabel.font = [UIFont systemFontOfSize:12 weight:UIFontWeightHeavy];
+              self.pickBtn.titleLabel.adjustsFontSizeToFitWidth = YES;
+              [self.pickBtn addTarget:self action:@selector(pickFolder) forControlEvents:UIControlEventTouchUpInside];
+              [self.view addSubview:self.pickBtn];
+
+              self.folderLabel = [[UILabel alloc] initWithFrame:CGRectMake(20, 244, w - 40, 16)];
+              self.folderLabel.text = @"Nenhuma pasta escolhida"; self.folderLabel.textColor = NS_CYAN_GLOW; self.folderLabel.font = [UIFont systemFontOfSize:11 weight:UIFontWeightSemibold];
+              self.folderLabel.adjustsFontSizeToFitWidth = YES; [self.view addSubview:self.folderLabel];
+
+              self.statusLabel = [[UILabel alloc] initWithFrame:CGRectMake(20, 266, w - 40, 16)];
+              self.statusLabel.text = @"Aguardando"; self.statusLabel.textColor = [UIColor colorWithWhite:0.75 alpha:1]; self.statusLabel.font = [UIFont systemFontOfSize:11.5 weight:UIFontWeightSemibold]; [self.view addSubview:self.statusLabel];
+
+              self.progressBar = [[UIProgressView alloc] initWithProgressViewStyle:UIProgressViewStyleDefault];
+              self.progressBar.frame = CGRectMake(20, 288, w - 40, 5); self.progressBar.autoresizingMask = UIViewAutoresizingFlexibleWidth;
+              self.progressBar.trackTintColor = NS_CARD_COLOR; self.progressBar.progressTintColor = NS_CYAN_GLOW; [self.view addSubview:self.progressBar];
+
+              self.logView = [[UITextView alloc] initWithFrame:CGRectMake(16, 302, w - 32, h - 394)];
+              self.logView.autoresizingMask = UIViewAutoresizingFlexibleWidth | UIViewAutoresizingFlexibleHeight;
+              self.logView.backgroundColor = [UIColor colorWithRed:0.07 green:0.08 blue:0.10 alpha:1.0];
+              self.logView.textColor = [UIColor colorWithRed:0.75 green:0.88 blue:0.95 alpha:1.0];
+              self.logView.font = [UIFont monospacedSystemFontOfSize:11.5 weight:UIFontWeightRegular];
+              self.logView.layer.cornerRadius = 14; self.logView.editable = NO; self.logView.textContainerInset = UIEdgeInsetsMake(10, 10, 10, 10);
+              self.logView.text = @"[ShaderKitNS v1.0 — recorta ShaderCodeLibrary/ShaderCode do IoStore]\nEscolha a pasta romfs (ou Content/Paks) extraida pelo ExtractorNS. Os .utoc e .ucas sao lidos no lugar.\n";
+              [self.view addSubview:self.logView];
+
+              self.runBtn = [UIButton buttonWithType:UIButtonTypeSystem];
+              self.runBtn.frame = CGRectMake(16, h - 78, w - 32, 52); self.runBtn.autoresizingMask = UIViewAutoresizingFlexibleWidth | UIViewAutoresizingFlexibleTopMargin;
+              self.runBtn.backgroundColor = NS_RED_COLOR; self.runBtn.layer.cornerRadius = 14;
+              [self.runBtn setTitle:@"⚡ GERAR SHADER KIT" forState:UIControlStateNormal];
+              [self.runBtn setTitleColor:UIColor.whiteColor forState:UIControlStateNormal]; self.runBtn.titleLabel.font = [UIFont systemFontOfSize:15 weight:UIFontWeightHeavy];
+              [self.runBtn addTarget:self action:@selector(runKit) forControlEvents:UIControlEventTouchUpInside];
+              self.runBtn.enabled = NO; self.runBtn.alpha = 0.5;
+              [self.view addSubview:self.runBtn];
+          }
+
+          - (void)log:(NSString *)msg {
+              dispatch_async(dispatch_get_main_queue(), ^{
+                  self.logView.text = [self.logView.text stringByAppendingFormat:@"%@\n", msg];
+                  [self.logView scrollRangeToVisible:NSMakeRange(self.logView.text.length - 1, 1)];
+              });
+          }
+
+          - (void)pickFolder {
+              UIDocumentPickerViewController *pk = [[UIDocumentPickerViewController alloc] initForOpeningContentTypes:@[UTTypeFolder]];
+              pk.delegate = self; pk.allowsMultipleSelection = NO;
+              [self presentViewController:pk animated:YES completion:nil];
+          }
+
+          - (void)documentPicker:(UIDocumentPickerViewController *)controller didPickDocumentsAtURLs:(NSArray<NSURL *> *)urls {
+              if (urls.count == 0) return;
+              self.folderURL = urls[0];
+              self.folderLabel.text = [NSString stringWithFormat:@"Pasta: %@", self.folderURL.path];
+              self.runBtn.enabled = YES; self.runBtn.alpha = 1.0;
+              [self log:[NSString stringWithFormat:@"Pasta escolhida: %@", self.folderURL.path]];
+          }
+
+          - (void)runKit {
+              self.runBtn.enabled = NO; self.pickBtn.enabled = NO;
+              [self.tidField resignFirstResponder];
+              NSString *tid = [self.tidField.text stringByTrimmingCharactersInSet:NSCharacterSet.whitespaceAndNewlineCharacterSet];
+              if (tid.length != 16) tid = @"unknown";
+              NSURL *folder = self.folderURL;
+              self.progressBar.progress = 0.05; self.statusLabel.text = @"Procurando .utoc...";
+
+              dispatch_async(dispatch_get_global_queue(QOS_CLASS_USER_INITIATED, 0), ^{
+                  NSFileManager *fm = NSFileManager.defaultManager;
+                  BOOL scoped = [folder startAccessingSecurityScopedResource];
+                  NSString *doc = NSSearchPathForDirectoriesInDomains(NSDocumentDirectory, NSUserDomainMask, YES)[0];
+                  NSString *staging = [doc stringByAppendingPathComponent:@"_shader_staging"];
+                  [fm removeItemAtPath:staging error:nil];
+                  [fm createDirectoryAtPath:staging withIntermediateDirectories:YES attributes:nil error:nil];
+                  [tid writeToFile:[staging stringByAppendingPathComponent:@"title_id.txt"] atomically:YES encoding:NSUTF8StringEncoding error:nil];
+
+                  NSMutableArray<NSString *> *utocs = [NSMutableArray array];
+                  NSDirectoryEnumerator *en = [fm enumeratorAtPath:folder.path];
+                  NSString *rel = nil;
+                  while ((rel = [en nextObject])) if ([rel.lowercaseString hasSuffix:@".utoc"]) [utocs addObject:rel];
+                  [utocs sortUsingSelector:@selector(compare:)];
+                  [self log:[NSString stringWithFormat:@"%lu arquivo(s) .utoc encontrados", (unsigned long)utocs.count]];
+                  if (utocs.count == 0) [self log:@"✗ Nenhum .utoc. Escolha a pasta romfs ou SparkingZERO/Content/Paks."];
+
+                  int found = 0, i = 0;
+                  for (NSString *r in utocs) {
+                      i++;
+                      dispatch_async(dispatch_get_main_queue(), ^{ self.statusLabel.text = [NSString stringWithFormat:@"Recortando %@ (%d/%lu)", r.lastPathComponent, i, (unsigned long)utocs.count]; self.progressBar.progress = 0.05 + 0.8 * i / (float)utocs.count; });
+                      NSString *full = [folder.path stringByAppendingPathComponent:r];
+                      NSString *dstDir = [staging stringByAppendingPathComponent:[@"RomFS" stringByAppendingPathComponent:r.stringByDeletingLastPathComponent]];
+                      [fm createDirectoryAtPath:dstDir withIntermediateDirectories:YES attributes:nil error:nil];
+                      [fm copyItemAtPath:full toPath:[dstDir stringByAppendingPathComponent:r.lastPathComponent] error:nil];
+                      if (carve_shader_chunks(full, dstDir, ^(NSString *m) { [self log:m]; })) found++;
+                  }
+
+                  dispatch_async(dispatch_get_main_queue(), ^{ self.statusLabel.text = @"Empacotando zip..."; self.progressBar.progress = 0.9; });
+                  NSString *zipOut = [doc stringByAppendingPathComponent:[NSString stringWithFormat:@"shader_kit_%@.zip", tid]];
+                  if (found > 0 && build_zip_file(staging, zipOut)) {
+                      NSDictionary *za = [fm attributesOfItemAtPath:zipOut error:nil];
+                      [self log:[NSString stringWithFormat:@"✓ SHADER KIT: ShaderKitNS/%@ (%.1f MB) — containers com shader: %d\nSuba este zip na release v1.0-kit.", zipOut.lastPathComponent, [za fileSize] / (1024.0 * 1024.0), found]];
+                  } else {
+                      [self log:@"✗ Nenhum chunk de shader recortado (ver mensagens acima)."];
+                  }
+                  [fm removeItemAtPath:staging error:nil];
+                  if (scoped) [folder stopAccessingSecurityScopedResource];
+                  dispatch_async(dispatch_get_main_queue(), ^{ self.progressBar.progress = 1.0; self.statusLabel.text = @"Concluido"; self.runBtn.enabled = YES; self.pickBtn.enabled = YES; });
+              });
+          }
+          @end
+
+          @interface AppDelegate : UIResponder <UIApplicationDelegate>
+          @property (nonatomic, strong) UIWindow *window;
+          @end
+          @implementation AppDelegate
+          - (BOOL)application:(UIApplication *)app didFinishLaunchingWithOptions:(NSDictionary *)opts {
+              self.window = [[UIWindow alloc] initWithFrame:UIScreen.mainScreen.bounds];
+              self.window.rootViewController = [KitVC new];
+              [self.window makeKeyAndVisible];
+              return YES;
+          }
+          @end
+
+          int main(int argc, char *argv[]) {
+              @autoreleasepool { return UIApplicationMain(argc, argv, nil, NSStringFromClass([AppDelegate class])); }
+          }
+          OBJCEOF
+
+          SDK_PATH=$(xcrun --sdk iphoneos --show-sdk-path)
+          xcrun --sdk iphoneos clang -arch arm64 -miphoneos-version-min=17.0 \
+            -isysroot "$SDK_PATH" \
+            -fobjc-arc \
+            "$RUNNER_TEMP/App/main.m" \
+            -framework UIKit -framework Foundation -framework CoreGraphics \
+            -framework UniformTypeIdentifiers \
+            -lz \
+            -o "$APP_DIR/ShaderKitNS"
+
+          cat > "$APP_DIR/Info.plist" << 'PLIST'
+          <?xml version="1.0" encoding="UTF-8"?>
+          <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+          <plist version="1.0">
+          <dict>
+            <key>CFBundleExecutable</key><string>ShaderKitNS</string>
+            <key>CFBundleIdentifier</key><string>com.kinttany.shaderkitns</string>
+            <key>CFBundleName</key><string>ShaderKitNS</string>
+            <key>CFBundleDisplayName</key><string>ShaderKitNS</string>
+            <key>CFBundleVersion</key><string>1.0</string>
+            <key>CFBundleShortVersionString</key><string>1.0</string>
+            <key>CFBundlePackageType</key><string>APPL</string>
+            <key>LSRequiresIPhoneOS</key><true/>
+            <key>UIDeviceFamily</key><array><integer>1</integer><integer>2</integer></array>
+            <key>UIFileSharingEnabled</key><true/>
+            <key>LSSupportsOpeningDocumentsInPlace</key><true/>
+            <key>UILaunchScreen</key><dict/>
+            <key>CFBundleIconName</key><string>AppIcon</string>
+            <key>CFBundleIcons</key>
+            <dict>
+              <key>CFBundlePrimaryIcon</key>
+              <dict>
+                <key>CFBundleIconFiles</key>
+                <array><string>AppIcon60x60</string></array>
+                <key>CFBundleIconName</key><string>AppIcon</string>
+                <key>UIPrerenderedIcon</key><true/>
+              </dict>
+            </dict>
+          </dict>
+          </plist>
+          PLIST
+
+          codesign -f -s - "$APP_DIR"
+          cd "$RUNNER_TEMP"
+          zip -qry "$RUNNER_TEMP/ShaderKitNS.ipa" Payload
+          ls -lh "$RUNNER_TEMP/ShaderKitNS.ipa"
+
+      - name: 3. Upload do ShaderKitNS.ipa nos Artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: ShaderKitNS-App-IPA
+          path: ${{ runner.temp }}/ShaderKitNS.ipa
+
+      - name: 4. Publicar ShaderKitNS.ipa na Release
+        shell: bash
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          gh release upload v1.0-kit "$RUNNER_TEMP/ShaderKitNS.ipa" --repo "$GITHUB_REPOSITORY" --clobber || echo "aviso: nao publiquei na release (artifact continua disponivel)"
+
