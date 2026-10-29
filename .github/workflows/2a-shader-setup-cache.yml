@@ -1,0 +1,102 @@
+name: 2a. Shader Build - Setup Cache
+
+on:
+  workflow_run:
+    workflows: ["1. Extract Shader Kit + Split"]
+    types: [completed]
+    branches:
+      - SpkIOSzero
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+env:
+  GAME: "010035F022078000"
+
+jobs:
+  setup_cache:
+    runs-on: macos-latest
+    timeout-minutes: 30
+    outputs:
+      shader_count: ${{ steps.count.outputs.total }}
+      cache_key: ${{ steps.cache_key.outputs.key }}
+      cache_hit: ${{ steps.cache.outputs.cache-hit }}
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          ref: SpkIOSzero
+
+      - name: Verify shader tables exist
+        shell: bash
+        run: |
+          GAME="${{ env.GAME }}"
+          MAP="dm/games/$GAME/shaders/shader_map.tsv"
+          
+          if [ ! -f "$MAP" ]; then
+            echo "❌ shader_map.tsv not found!"
+            echo "   Path: $MAP"
+            exit 1
+          fi
+          
+          echo "✅ shader_map.tsv found"
+
+      - name: Generate cache key
+        id: cache_key
+        shell: bash
+        run: |
+          GAME="${{ env.GAME }}"
+          FACTS="dm/games/$GAME/shaders/shader_facts.tsv"
+          
+          if [ -f "$FACTS" ]; then
+            KEY="sparking-shaders-$(sha256sum "$FACTS" | cut -c1-12)"
+          else
+            KEY="sparking-shaders-fresh"
+          fi
+          
+          echo "key=$KEY" >> "$GITHUB_OUTPUT"
+          echo "📌 Cache key: $KEY"
+
+      - name: Count shaders
+        id: count
+        shell: bash
+        run: |
+          GAME="${{ env.GAME }}"
+          MAP="dm/games/$GAME/shaders/shader_map.tsv"
+          
+          TOTAL=$(tail -n +2 "$MAP" 2>/dev/null | wc -l)
+          
+          echo "total=$TOTAL" >> "$GITHUB_OUTPUT"
+          echo "📊 Total shaders to build: $TOTAL"
+
+      - name: Restore shader build cache
+        id: cache
+        uses: actions/cache@v4
+        with:
+          path: |
+            .dmsh_cas
+            dm/gfx/tools/dmsh_cache
+          key: ${{ steps.cache_key.outputs.key }}
+          restore-keys: |
+            sparking-shaders-
+
+      - name: Report cache status
+        shell: bash
+        run: |
+          if [ "${{ steps.cache.outputs.cache-hit }}" == "true" ]; then
+            echo "✅ CACHE HIT! Reusing existing build data"
+            
+            CAS_SIZE=$(du -sh .dmsh_cas 2>/dev/null | awk '{print $1}')
+            echo "   CAS size: ${CAS_SIZE:-0}"
+            
+            CACHE_SIZE=$(du -sh dm/gfx/tools/dmsh_cache 2>/dev/null | awk '{print $1}')
+            echo "   Cache size: ${CACHE_SIZE:-0}"
+            
+            echo ""
+            echo "Build will resume from checkpoint!"
+          else
+            echo "📦 CACHE MISS - Starting fresh build"
+            echo "   Shaders: ${{ steps.count.outputs.total }}"
+          fi
