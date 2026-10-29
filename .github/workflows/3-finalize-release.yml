@@ -38,7 +38,6 @@ jobs:
 
   finalize:
     needs: check_workflow_status
-    if: needs.check_workflow_status.outputs.should_continue == 'true'
     runs-on: macos-latest
     timeout-minutes: 60
 
