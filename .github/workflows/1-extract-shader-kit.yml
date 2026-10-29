@@ -502,8 +502,8 @@ jobs:
           echo "Building $GAME_DIR/game.tsv..."
           
           cat > "$GAME_DIR/game.tsv" << 'EOF'
-title_id	program_id	name	ipa	build	modules	romfs_marker	fps_target	mem_reserve	mem_alias	mem_stack	app_pool	shader_groups
-EOF
+          title_id	program_id	name	ipa	build	modules	romfs_marker	fps_target	mem_reserve	mem_alias	mem_stack	app_pool	shader_groups
+          EOF
           
           # Extract key values from profile_guess output
           MODULES=$(echo "$PROFILE_OUTPUT" | grep "^modules" | cut -f2 || echo "main")
@@ -517,8 +517,8 @@ EOF
           
           # Append game data row
           cat >> "$GAME_DIR/game.tsv" << EOF
-$GAME	$GAME	$GAME_NAME		$BUILD	$MODULES	$ROMFS_MARKER	$FPS_TARGET	$MEM_RESERVE	$MEM_ALIAS	$MEM_STACK	$APP_POOL	
-EOF
+          $GAME	$GAME	$GAME_NAME		$BUILD	$MODULES	$ROMFS_MARKER	$FPS_TARGET	$MEM_RESERVE	$MEM_ALIAS	$MEM_STACK	$APP_POOL	
+          EOF
           
           echo "✅ Created: $GAME_DIR/game.tsv"
           echo ""
