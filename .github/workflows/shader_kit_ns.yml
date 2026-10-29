@@ -1,4 +1,4 @@
-name: 1b. Build ShaderKitNS App IPA (v1.1)
+name: 1b. Build ShaderKitNS App IPA (v1.2)
 
 on:
   push:
@@ -104,7 +104,7 @@ jobs:
             --minimum-deployment-target 17.0 --app-icon AppIcon \
             --output-partial-info-plist "$RUNNER_TEMP/assetcatalog_info.plist" || true
 
-          # ---------- app ----------
+          # ---------- app main.m ----------
           cat > "$RUNNER_TEMP/App/main.m" << 'OBJCEOF'
           #import <UIKit/UIKit.h>
           #include <stdint.h>
@@ -125,7 +125,6 @@ jobs:
           struct zip_eocd { uint32_t sig; uint16_t disk, cd_disk, entries_disk, entries_total; uint32_t cd_size, cd_off; uint16_t comment_len; };
           #pragma pack(pop)
 
-          // zip "store" (sem compressao): os blocos ja vem comprimidos com Oodle. Limite 4 GB por arquivo e total.
           static BOOL build_zip_file(NSString *srcDir, NSString *zipPath) {
               NSFileManager *fm = NSFileManager.defaultManager;
               [fm removeItemAtPath:zipPath error:nil];
@@ -176,8 +175,6 @@ jobs:
           static uint32_t rd32(const uint8_t *p) { uint32_t v; memcpy(&v, p, 4); return v; }
           static uint64_t rd64(const uint8_t *p) { uint64_t v; memcpy(&v, p, 8); return v; }
 
-          // Recorta do .ucas somente os blocos dos chunks ShaderCodeLibrary (tipo 8) e ShaderCode (tipo 9).
-          // Nao descriptografa: os blocos saem como estao no disco (AES + Oodle). O runner resolve.
           static BOOL carve_shader_chunks(NSString *utocPath, NSString *outDir, void (^logf)(NSString *)) {
               NSData *toc = [NSData dataWithContentsOfFile:utocPath options:NSDataReadingMappedIfSafe error:nil];
               if (!toc || toc.length < 144) { logf([NSString stringWithFormat:@"  %@: nao li o .utoc", utocPath.lastPathComponent]); return NO; }
@@ -253,7 +250,6 @@ jobs:
               if (nChunks == 0) { [NSFileManager.defaultManager removeItemAtPath:binPath error:nil]; [NSFileManager.defaultManager removeItemAtPath:tsvPath error:nil]; }
               return nChunks > 0;
           }
-
           @interface KitVC : UIViewController
           @property (nonatomic, strong) UITextField *tidField;
           @property (nonatomic, strong) UILabel *statusLabel;
@@ -261,7 +257,9 @@ jobs:
           @property (nonatomic, strong) UITextView *logView;
           @property (nonatomic, strong) UIButton *scanBtn;
           @property (nonatomic, strong) UIButton *runBtn;
-          @property (nonatomic, strong) NSArray<NSString *> *utocs;   // relativos a Documents
+          @property (nonatomic, strong) NSArray<NSString *> *utocs;
+          @property (nonatomic, strong) NSArray<NSString *> *paks;
+          @property (nonatomic, strong) NSString *manifest;
           @end
 
           @implementation KitVC
@@ -319,7 +317,7 @@ jobs:
               self.logView.textColor = [UIColor colorWithRed:0.75 green:0.88 blue:0.95 alpha:1.0];
               self.logView.font = [UIFont monospacedSystemFontOfSize:11.5 weight:UIFontWeightRegular];
               self.logView.layer.cornerRadius = 14; self.logView.editable = NO; self.logView.textContainerInset = UIEdgeInsetsMake(10, 10, 10, 10);
-              self.logView.text = @"[ShaderKitNS v1.1 — recorta ShaderCodeLibrary/ShaderCode do IoStore]\nNo app Arquivos, mova a pasta romfs (ou so Content/Paks) para\n  Neste iPhone > ShaderKitNS\nDepois toque em Scan. Os .utoc e .ucas precisam estar lado a lado.\n";
+              self.logView.text = @"[ShaderKitNS v1.2 — extrai shaders de IoStore e pakchunk0]\nNo app Arquivos, mova a pasta romfs (inteira) para\n  Neste iPhone > ShaderKitNS\nDepois toque em Scan. Os .utoc/.ucas e .pak precisam estar lado a lado.\n";
               [self.view addSubview:self.logView];
 
               self.runBtn = [UIButton buttonWithType:UIButtonTypeSystem];
@@ -330,7 +328,6 @@ jobs:
               [self.runBtn addTarget:self action:@selector(runKit) forControlEvents:UIControlEventTouchUpInside];
               [self.view addSubview:self.runBtn];
 
-              // pasta raiz visivel no app Arquivos + scan automatico ao abrir
               [NSFileManager.defaultManager createDirectoryAtPath:[self.docs stringByAppendingPathComponent:@"romfs"] withIntermediateDirectories:YES attributes:nil error:nil];
               [self scan];
           }
@@ -345,28 +342,52 @@ jobs:
           - (void)scan {
               NSFileManager *fm = NSFileManager.defaultManager;
               NSMutableArray *found = [NSMutableArray array];
+              NSMutableArray *paks = [NSMutableArray array];
+              NSString *manifest = nil;
               NSDirectoryEnumerator *en = [fm enumeratorAtPath:self.docs];
               NSString *rel = nil;
               while ((rel = [en nextObject])) {
                   if ([rel hasPrefix:@"_shader_staging"]) { [en skipDescendants]; continue; }
                   if ([rel.lowercaseString hasSuffix:@".utoc"]) [found addObject:rel];
+                  if ([rel.lowercaseString hasSuffix:@".pak"]) [paks addObject:rel];
+                  if ([rel.lastPathComponent isEqualToString:@"Manifest_UFSFiles_Switch.txt"]) manifest = rel;
               }
               [found sortUsingSelector:@selector(compare:)];
+              [paks sortUsingSelector:@selector(compare:)];
               self.utocs = found;
+              self.paks = paks;
+              self.manifest = manifest;
+
               unsigned long long ucasBytes = 0; int ucasMissing = 0;
               for (NSString *r in found) {
                   NSString *ucas = [[[self.docs stringByAppendingPathComponent:r] stringByDeletingPathExtension] stringByAppendingPathExtension:@"ucas"];
                   NSDictionary *a = [fm attributesOfItemAtPath:ucas error:nil];
                   if (a) ucasBytes += [a fileSize]; else ucasMissing++;
               }
-              BOOL ok = found.count > 0 && ucasMissing == 0;
+
+              for (NSString *r in paks) {
+                  NSDictionary *a = [fm attributesOfItemAtPath:[self.docs stringByAppendingPathComponent:r] error:nil];
+                  [self log:[NSString stringWithFormat:@"  pak %7.1f MB  %@", [a fileSize] / 1048576.0, r.lastPathComponent]];
+              }
+
+              if (manifest) {
+                  NSString *txt = [NSString stringWithContentsOfFile:[self.docs stringByAppendingPathComponent:manifest] encoding:NSUTF8StringEncoding error:nil];
+                  int n = 0;
+                  for (NSString *ln in [txt componentsSeparatedByString:@"\n"]) {
+                      if ([ln rangeOfString:@"ShaderArchive" options:NSCaseInsensitiveSearch].location != NSNotFound ||
+                          [ln rangeOfString:@"ushaderbytecode" options:NSCaseInsensitiveSearch].location != NSNotFound ||
+                          [ln rangeOfString:@"GlobalShaderCache" options:NSCaseInsensitiveSearch].location != NSNotFound) {
+                          [self log:[NSString stringWithFormat:@"  manifest: %@", [ln stringByTrimmingCharactersInSet:NSCharacterSet.whitespaceAndNewlineCharacterSet]]]; n++;
+                      }
+                  }
+                  [self log:[NSString stringWithFormat:@"  manifest: %d linha(s) de shader", n]];
+              } else if (paks.count > 0) {
+                  [self log:@"  ⚠ manifest nao esta — mova a pasta romfs INTEIRA para ca"];
+              }
+
+              BOOL ok = found.count > 0 || paks.count > 0;
               self.runBtn.enabled = ok; self.runBtn.alpha = ok ? 1.0 : 0.5;
-              self.statusLabel.text = found.count == 0
-                  ? @"Nenhum .utoc em ShaderKitNS. Mova a pasta romfs para ca e toque em Scan."
-                  : [NSString stringWithFormat:@"%lu .utoc detectados, %.1f GB de .ucas%@", (unsigned long)found.count, ucasBytes / 1073741824.0,
-                     ucasMissing ? [NSString stringWithFormat:@" — %d sem .ucas ao lado!", ucasMissing] : @""];
-              [self log:[NSString stringWithFormat:@"Scan: %@", self.statusLabel.text]];
-              for (NSString *r in found) [self log:[NSString stringWithFormat:@"  %@", r]];
+              self.statusLabel.text = [NSString stringWithFormat:@"%lu .utoc, %lu .pak%@", (unsigned long)found.count, (unsigned long)paks.count, manifest ? @", manifest OK" : @""];
           }
 
           - (void)runKit {
@@ -375,6 +396,8 @@ jobs:
               NSString *tid = [self.tidField.text stringByTrimmingCharactersInSet:NSCharacterSet.whitespaceAndNewlineCharacterSet];
               if (tid.length != 16) tid = @"unknown";
               NSArray<NSString *> *utocs = self.utocs;
+              NSArray<NSString *> *paksArr = self.paks;
+              NSString *manifestPath = self.manifest;
               NSString *doc = self.docs;
               self.progressBar.progress = 0.05;
 
@@ -388,9 +411,8 @@ jobs:
                   int found = 0, i = 0;
                   for (NSString *r in utocs) {
                       i++;
-                      dispatch_async(dispatch_get_main_queue(), ^{ self.statusLabel.text = [NSString stringWithFormat:@"Recortando %@ (%d/%lu)", r.lastPathComponent, i, (unsigned long)utocs.count]; self.progressBar.progress = 0.05 + 0.8 * i / (float)utocs.count; });
+                      dispatch_async(dispatch_get_main_queue(), ^{ self.statusLabel.text = [NSString stringWithFormat:@"Recortando %@ (%d/%lu)", r.lastPathComponent, i, (unsigned long)utocs.count]; self.progressBar.progress = 0.05 + 0.4 * i / (float)(utocs.count + 1); });
                       NSString *full = [doc stringByAppendingPathComponent:r];
-                      // no zip, normaliza para RomFS/<caminho a partir de SparkingZERO ou do que vier>
                       NSString *relKit = r;
                       NSRange rr = [r rangeOfString:@"romfs/"]; if (rr.location != NSNotFound) relKit = [r substringFromIndex:rr.location + rr.length];
                       NSString *dstDir = [staging stringByAppendingPathComponent:[@"RomFS" stringByAppendingPathComponent:relKit.stringByDeletingLastPathComponent]];
@@ -399,13 +421,33 @@ jobs:
                       if (carve_shader_chunks(full, dstDir, ^(NSString *m) { [self log:m]; })) found++;
                   }
 
+                  int paksCopied = 0;
+                  for (NSString *r in paksArr) {
+                      NSString *full = [doc stringByAppendingPathComponent:r];
+                      unsigned long long sz = [[fm attributesOfItemAtPath:full error:nil] fileSize];
+                      BOOL want = [r.lastPathComponent.lowercaseString hasPrefix:@"pakchunk0-"] || sz <= 64ull * 1048576;
+                      if (!want) continue;
+                      if (sz > 1900ull * 1048576) { [self log:[NSString stringWithFormat:@"  AVISO: %@ tem %.0f MB, acima do limite de release (2 GB) — nao copiado", r.lastPathComponent, sz / 1048576.0]]; continue; }
+                      NSString *relKit = r; NSRange rr = [r rangeOfString:@"romfs/"]; if (rr.location != NSNotFound) relKit = [r substringFromIndex:rr.location + rr.length];
+                      NSString *dstDir = [staging stringByAppendingPathComponent:[@"RomFS" stringByAppendingPathComponent:relKit.stringByDeletingLastPathComponent]];
+                      [fm createDirectoryAtPath:dstDir withIntermediateDirectories:YES attributes:nil error:nil];
+                      dispatch_async(dispatch_get_main_queue(), ^{ self.statusLabel.text = [NSString stringWithFormat:@"Copiando %@ (%.0f MB)", r.lastPathComponent, sz / 1048576.0]; self.progressBar.progress = 0.45 + 0.4 * paksCopied / (float)(paksArr.count + 1); });
+                      if ([fm copyItemAtPath:full toPath:[dstDir stringByAppendingPathComponent:r.lastPathComponent] error:nil]) { paksCopied++; [self log:[NSString stringWithFormat:@"  pak copiado: %@ (%.0f MB)", r.lastPathComponent, sz / 1048576.0]]; }
+                  }
+
+                  if (manifestPath) {
+                      NSString *full = [doc stringByAppendingPathComponent:manifestPath];
+                      NSString *dst = [staging stringByAppendingPathComponent:@"RomFS/Manifest_UFSFiles_Switch.txt"];
+                      if ([fm copyItemAtPath:full toPath:dst error:nil]) [self log:@"  manifest copiado"];
+                  }
+
                   dispatch_async(dispatch_get_main_queue(), ^{ self.statusLabel.text = @"Empacotando zip..."; self.progressBar.progress = 0.9; });
                   NSString *zipOut = [doc stringByAppendingPathComponent:[NSString stringWithFormat:@"shader_kit_%@.zip", tid]];
-                  if (found > 0 && build_zip_file(staging, zipOut)) {
+                  if ((found + paksCopied) > 0 && build_zip_file(staging, zipOut)) {
                       NSDictionary *za = [fm attributesOfItemAtPath:zipOut error:nil];
-                      [self log:[NSString stringWithFormat:@"✓ SHADER KIT: ShaderKitNS/%@ (%.1f MB) — containers com shader: %d\nSuba este zip na release v1.0-kit.", zipOut.lastPathComponent, [za fileSize] / 1048576.0, found]];
+                      [self log:[NSString stringWithFormat:@"✓ SHADER KIT: ShaderKitNS/%@ (%.1f MB) — %.0f blocos IoStore + %d pak(s) copiados\nSuba este zip na release v1.0-kit.", zipOut.lastPathComponent, [za fileSize] / 1048576.0, (double)found, paksCopied]];
                   } else {
-                      [self log:@"✗ Nenhum chunk de shader recortado (ver mensagens acima)."];
+                      [self log:@"✗ Nenhum chunk ou pak copiado (ver mensagens acima)."];
                   }
                   [fm removeItemAtPath:staging error:nil];
                   dispatch_async(dispatch_get_main_queue(), ^{ self.progressBar.progress = 1.0; self.statusLabel.text = @"Concluido"; self.runBtn.enabled = YES; self.scanBtn.enabled = YES; });
@@ -440,16 +482,16 @@ jobs:
             -o "$APP_DIR/ShaderKitNS"
 
           cat > "$APP_DIR/Info.plist" << 'PLIST'
-          <?xml version="1.1" encoding="UTF-8"?>
-          <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.1//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
-          <plist version="1.1">
+          <?xml version="1.0" encoding="UTF-8"?>
+          <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+          <plist version="1.0">
           <dict>
             <key>CFBundleExecutable</key><string>ShaderKitNS</string>
             <key>CFBundleIdentifier</key><string>com.kinttany.shaderkitns</string>
             <key>CFBundleName</key><string>ShaderKitNS</string>
             <key>CFBundleDisplayName</key><string>ShaderKitNS</string>
-            <key>CFBundleVersion</key><string>1.1</string>
-            <key>CFBundleShortVersionString</key><string>1.1</string>
+            <key>CFBundleVersion</key><string>1.2</string>
+            <key>CFBundleShortVersionString</key><string>1.2</string>
             <key>CFBundlePackageType</key><string>APPL</string>
             <key>LSRequiresIPhoneOS</key><true/>
             <key>UIDeviceFamily</key><array><integer>1</integer><integer>2</integer></array>
@@ -488,4 +530,3 @@ jobs:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           gh release upload v1.0-kit "$RUNNER_TEMP/ShaderKitNS.ipa" --repo "$GITHUB_REPOSITORY" --clobber || echo "aviso: nao publiquei na release (artifact continua disponivel)"
-
