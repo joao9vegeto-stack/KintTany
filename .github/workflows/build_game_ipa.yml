@@ -1,4 +1,4 @@
-name: 2. Build Thin IPA - patch do construtor FMallocBinned3
+name: 2. Build Thin IPA - fix do layout FMallocBinned3 apos patch do construtor
 
 on:
   push:
@@ -28,9 +28,9 @@ jobs:
       BASELINE_COMMIT: "306dcdfcb53d348085292e9e527339161c0536c7"
       EXPECTED_MAIN_SHA256: "a0f8f0644c92384ddb1baac1c21aecbeeace5bc99ad40895e216add61da78efe"
       EXPECTED_MAIN_BUILD_ID: "68edafd68c7bc1a1af50b82aac838018"
-      IPA_SUFFIX: "_PATCH_CTOR"
+      IPA_SUFFIX: "_PATCH_LAYOUT"
 
-      # Valores medidos no build 68edafd6 (fatos.txt da auditoria 3)
+      # Valores medidos no build 68edafd6
       SPK_CUT_ADDR: "0x1e4db30"
       SPK_CUT_BYTES: "6b740194"
       SPK_OBS_ADDR: "0x1e4db34"
@@ -51,29 +51,41 @@ jobs:
           brew install xcodegen || true
           pip3 install --break-system-packages lz4 capstone fonttools zstandard PyYAML
 
-      - name: 3. Adicionar layout de 23 slots ao hle_uemalloc.c
+      - name: 3. Ajustar hle_uemalloc.c para o layout real do SPK
         shell: bash
         run: |
           set -e
           python3 -u - <<'PYEOF'
           from pathlib import Path
+
           p = Path("dm/host/hle_uemalloc.c")
           src = p.read_text(encoding="utf-8")
 
           old_enum = "enum { UE5, UE4_27, UE5_6 };"
-          if src.count(old_enum) != 1:
-              raise SystemExit(f"ERRO: enum de layouts nao encontrado ({src.count(old_enum)}x)")
-          src = src.replace(old_enum, "enum { UE5, UE4_27, UE5_6, UE5_SPK };", 1)
+          if old_enum in src:
+              src = src.replace(old_enum, "enum { UE5, UE4_27, UE5_6, UE5_SPK };", 1)
+          elif "enum { UE5, UE4_27, UE5_6, UE5_SPK };" not in src:
+              raise SystemExit("ERRO: enum de layouts nao encontrado em formato esperado")
 
-          lines = src.split("\n")
-          idx = [i for i, l in enumerate(lines) if l.startswith("    [UE5_6] = {")]
-          if len(idx) != 1:
-              raise SystemExit(f"ERRO: linha k_lay[UE5_6] nao encontrada ({len(idx)}x)")
-          lines.insert(idx[0] + 1,
-              "    [UE5_SPK] = { 23, 3, 4, 5, 6, 7, 8, 9, { 10, 11, 12, 16 } },   "
-              "// DRAGON BALL: Sparking! ZERO 2.0.76: UE4.27 layout + OnPreFork/OnPostFork (vtable main+0x8703ab8)")
-          p.write_text("\n".join(lines), encoding="utf-8")
-          print("hle_uemalloc.c: layout UE5_SPK adicionado")
+          if "[UE5_SPK]" not in src:
+              lines = src.split("\n")
+              idx = [i for i, l in enumerate(lines) if l.startswith("    [UE5_6] = {")]
+              if len(idx) != 1:
+                  raise SystemExit(f"ERRO: linha k_lay[UE5_6] nao encontrada ({len(idx)}x)")
+              lines.insert(idx[0] + 1,
+                  "    [UE5_SPK] = { 23, 3, 4, 5, 6, 7, 8, 9, { 10, 11, 12, 16 } },   "
+                  "// DRAGON BALL: Sparking! ZERO 2.0.76: UE4_27 + OnPreFork/OnPostFork (vtable main+0x8703ab8)")
+              src = "\n".join(lines)
+
+          old_kue = '{ "68edafd68c7bc1a1af50b82aac838018", "DRAGON BALL: Sparking! ZERO", UE5, 0, 0x8703ab8, 0x1e4db30 },'
+          new_kue = '{ "68edafd68c7bc1a1af50b82aac838018", "DRAGON BALL: Sparking! ZERO", UE5_SPK, 0, 0x8703ab8, 0x1e4db30 },'
+          if old_kue in src:
+              src = src.replace(old_kue, new_kue, 1)
+          elif new_kue not in src:
+              raise SystemExit("ERRO: entrada k_ue do build 68edafd6 nao encontrada")
+
+          p.write_text(src, encoding="utf-8")
+          print("hle_uemalloc.c: UE5_SPK garantido e build 68edafd6 corrigido para UE5_SPK")
           PYEOF
 
       - name: 4. Preparar build com os valores corretos
@@ -107,33 +119,37 @@ jobs:
               return hits[0]
 
           def indent_of(i):
-              l = lines[i]; return l[: len(l) - len(l.lstrip())]
+              l = lines[i]
+              return l[: len(l) - len(l.lstrip())]
 
           def insert_after(s, block):
-              i = find_unique(s); ind = indent_of(i)
+              i = find_unique(s)
+              ind = indent_of(i)
               lines[i + 1:i + 1] = [ind + l if l.strip() else "" for l in textwrap.dedent(block).strip("\n").split("\n")]
 
           def insert_before(s, block):
-              i = find_unique(s); ind = indent_of(i)
+              i = find_unique(s)
+              ind = indent_of(i)
               lines[i:i] = [ind + l if l.strip() else "" for l in textwrap.dedent(block).strip("\n").split("\n")]
 
-          # A. Conferir o main
+          # A. Validar o main exato analisado
           insert_after('main_bytes = (exefs / "main").read_bytes()', '''
           import hashlib
           _sha = hashlib.sha256(main_bytes).hexdigest()
           _bid = main_bytes[0x40:0x50].hex()
           print(f"=== SHA-256 main: {_sha}", flush=True)
+          print(f"=== Build ID do main: {_bid} ===", flush=True)
           if _sha != os.environ["EXPECTED_MAIN_SHA256"] or _bid != os.environ["EXPECTED_MAIN_BUILD_ID"]:
               raise SystemExit("ERRO: main diferente do executavel analisado; patch nao se aplica")
           ''')
 
-          # B. Nenhum patches.py antigo
+          # B. Evitar patches herdados
           insert_after("prof_dir.mkdir(parents=True, exist_ok=True)", '''
           if (prof_dir / "patches.py").exists():
               (prof_dir / "patches.py").unlink()
           ''')
 
-          # C. Sobrescrever a deteccao heuristica com os valores medidos
+          # C. Forcar os valores medidos do patch do construtor
           insert_before("if cut_addr is not None and obs_addr is not None:", '''
           cut_addr = int(os.environ["SPK_CUT_ADDR"], 16)
           cut_orig_hex = os.environ["SPK_CUT_BYTES"]
@@ -152,7 +168,7 @@ jobs:
                 f"vtable {vtable_addr:#x} layout {ue_layout} ===", flush=True)
           ''')
 
-          # D. Nome do IPA
+          # D. Nome da IPA
           insert_before('ipa_filename = f"{safe_name}.ipa"',
                         'safe_name = safe_name + os.environ.get("IPA_SUFFIX", "")')
 
@@ -173,20 +189,20 @@ jobs:
           ''')
 
           command = "\n".join(lines)
-          m = re.search(r"python3 -u - << 'PYEOF'\n(.*?)\nPYEOF", command, re.S)
+          m = re.search(r"python3 -u - << 'PYEOF'\\n(.*?)\\nPYEOF", command, re.S)
           if not m:
               raise SystemExit("ERRO: nao isolei o Python embutido")
           try:
               compile(m.group(1), "<embutido>", "exec")
           except SyntaxError as e:
-              ctx = m.group(1).split("\n")
+              ctx = m.group(1).split("\\n")
               for n in range(max(0, e.lineno - 4), min(len(ctx), e.lineno + 3)):
                   print(f"{n+1:5d}: {ctx[n]}")
               raise SystemExit(f"ERRO de sintaxe: {e}")
-          print("Python embutido: sintaxe OK")
 
+          print("Python embutido: sintaxe OK")
           out = Path(os.environ["RUNNER_TEMP"]) / "spk-build.sh"
-          out.write_text(command + "\n", encoding="utf-8")
+          out.write_text(command + "\\n", encoding="utf-8")
           print(f"Etapa base: {step_name}")
           PYEOF
 
@@ -201,7 +217,7 @@ jobs:
         shell: bash
         run: |
           {
-            echo "PATCH DO CONSTRUTOR FMallocBinned3"
+            echo "FIX DO LAYOUT UE5_SPK APOS PATCH DO CONSTRUTOR"
             echo "Execucao: $GITHUB_RUN_ID  commit: $GITHUB_SHA"
             echo
             for f in "$RUNNER_TEMP"/*-work/build/patched_v0/main.cuts.tsv "$RUNNER_TEMP"/*-work/build/patched_v0/main.obs.tsv; do
@@ -238,7 +254,7 @@ jobs:
       - name: 9. Salvar IPA nos Artifacts
         uses: actions/upload-artifact@v4
         with:
-          name: spk-ipa-patch-ctor-${{ github.run_id }}
+          name: spk-ipa-patch-layout-${{ github.run_id }}
           path: ${{ runner.temp }}/*${{ env.IPA_SUFFIX }}.ipa
           if-no-files-found: error
           retention-days: 7
