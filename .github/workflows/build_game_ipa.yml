@@ -1,4 +1,4 @@
-name: 2. Build Thin IPA - fix do layout FMallocBinned3 apos patch do construtor
+name: 2. Build Thin IPA - auditoria 4 (SpNet Panic 0x5cbad1cc em main+0x19dceb4)
 
 on:
   push:
@@ -28,15 +28,20 @@ jobs:
       BASELINE_COMMIT: "306dcdfcb53d348085292e9e527339161c0536c7"
       EXPECTED_MAIN_SHA256: "a0f8f0644c92384ddb1baac1c21aecbeeace5bc99ad40895e216add61da78efe"
       EXPECTED_MAIN_BUILD_ID: "68edafd68c7bc1a1af50b82aac838018"
-      IPA_SUFFIX: "_PATCH_LAYOUT"
+      IPA_SUFFIX: "_AUDITORIA4"
 
-      # Valores medidos no build 68edafd6 (fatos.txt da auditoria 3)
+      # Valores medidos no build 68edafd6 (patch do construtor + layout, ja confirmados no log do iPhone)
       SPK_CUT_ADDR: "0x1e4db30"
       SPK_CUT_BYTES: "6b740194"
       SPK_OBS_ADDR: "0x1e4db34"
       SPK_OBS_WORD: "f9035293"
       SPK_VTABLE: "0x8703ab8"
       SPK_LAYOUT: "UE5_SPK"
+
+      # Novo crash (log.txt do _PATCH_LAYOUT): brk em main+0x19dceb4, "SpNet Panic 0x5cbad1cc"
+      CRASH_PC: "0x19dceb4"
+      CRASH_BT: "0x1b750d8 0x1b74d80 0x1b74f68 0x1fb2df8 0x1fe1168 0x1ff8e04 0x5a68 0x3df4 0xbbc"
+      PANIC_CODE: "5cbad1cc"
 
     steps:
       - name: 1. Baixar versao que compilou
@@ -81,7 +86,7 @@ jobs:
           print("hle_uemalloc.c: layout UE5_SPK garantido (a linha k_ue e gravada pelo pipeline e corrigida no passo 4)")
           PYEOF
 
-      - name: 4. Preparar build com os valores corretos
+      - name: 4. Preparar build com os valores corretos + auditoria do novo crash
         shell: bash
         run: |
           set -e
@@ -157,11 +162,53 @@ jobs:
                 f"vtable {vtable_addr:#x} layout {ue_layout} ===", flush=True)
           ''')
 
-          # D. Nome do IPA
+          # D. AUDITORIA 4: disassembly do brk em main+0x19dceb4, dos callers e das referencias a "SpNet Panic"
+          insert_before("if cut_addr is not None and obs_addr is not None:", '''
+          from capstone import Cs, CS_ARCH_ARM64, CS_MODE_ARM, CS_MODE_LITTLE_ENDIAN
+          _cs = Cs(CS_ARCH_ARM64, CS_MODE_ARM | CS_MODE_LITTLE_ENDIAN)
+          _cs.detail = False
+
+          def _dis(a, b, title):
+              print(f"=== [{title}] {a:#x} .. {b:#x} ===", flush=True)
+              for ins in _cs.disasm(img[a:b], a):
+                  print(f"  {ins.address:#x}:\\t{ins.mnemonic}\\t{ins.op_str}\\t[{img[ins.address:ins.address+4].hex()}]")
+              print(flush=True)
+
+          _pc = int(os.environ["CRASH_PC"], 16)
+          print(f"=== AUDITORIA 4: palavra em {_pc:#x} = {img[_pc:_pc+4].hex()} (brk esperado: xx 00 20 d4) ===", flush=True)
+          _dis(_pc - 0x1c0, _pc + 0x60, "PC main+0x19dceb4 (SpNet Panic) com prologo")
+          _dis(0x1b74d00, 0x1b75120, "BT main+0x1b74d80 / main+0x1b74f68 / main+0x1b750d8 (caller do panic)")
+          _dis(0x1fb2d80, 0x1fb2e20, "BT main+0x1fb2df8")
+          _dis(0x1fe1120, 0x1fe1180, "BT main+0x1fe1168")
+          _dis(0x1ff8dc0, 0x1ff8e20, "BT main+0x1ff8e04")
+
+          # strings UTF-16LE e UTF-8 "SpNet" no modulo + quem as referencia (adrp/add e adr) nas janelas do backtrace
+          for _needle in ("SpNet Panic", "SpNet"):
+              for _enc, _nm in ((_needle.encode("utf-16-le"), "utf16"), (_needle.encode("ascii"), "ascii")):
+                  _n = 0; _at = img.find(_enc)
+                  while _at != -1 and _n < 40:
+                      _end = _at
+                      while _end < len(img) and _end - _at < 400 and img[_end:_end+2] != (b"\\x00\\x00" if _nm == "utf16" else b"\\x00"):
+                          _end += 2 if _nm == "utf16" else 1
+                      _txt = img[_at:_end].decode("utf-16-le" if _nm == "utf16" else "ascii", errors="replace")
+                      print(f"=== string {_nm} '{_needle}' em main+{_at:#x}: {_txt!r} ===", flush=True)
+                      _n += 1; _at = img.find(_enc, _at + 1)
+
+          # ocorrencias do codigo do panic como imediato (movz/movk) perto do PC
+          _code = int(os.environ["PANIC_CODE"], 16)
+          _lo, _hi = _code & 0xffff, _code >> 16
+          print(f"=== procurando movz/movk de {_code:#x} (lo={_lo:#x} hi={_hi:#x}) em {_pc-0x4000:#x}..{_pc+0x1000:#x} ===", flush=True)
+          for ins in _cs.disasm(img[_pc-0x4000:_pc+0x1000], _pc-0x4000):
+              if ins.mnemonic in ("movz", "movk", "mov") and (f"#{_lo:#x}" in ins.op_str or f"#{_hi:#x}" in ins.op_str):
+                  print(f"  {ins.address:#x}:\\t{ins.mnemonic}\\t{ins.op_str}\\t[{img[ins.address:ins.address+4].hex()}]")
+          print(flush=True)
+          ''')
+
+          # E. Nome do IPA
           insert_before('ipa_filename = f"{safe_name}.ipa"',
                         'safe_name = safe_name + os.environ.get("IPA_SUFFIX", "")')
 
-          # E. Corrigir a linha k_ue gravada pelo pipeline (UE5 -> UE5_SPK) antes de compilar,
+          # F. Corrigir a linha k_ue gravada pelo pipeline (UE5 -> UE5_SPK) antes de compilar,
           #    e conferir que a reescrita aplicou exatamente 1 cut e 1 obs
           insert_before('if (exefs / "main.npdm").exists():', '''
           import re as _re
@@ -217,13 +264,13 @@ jobs:
           set -o pipefail
           bash "$RUNNER_TEMP/spk-build.sh" 2>&1 | tee "$RUNNER_TEMP/spk-relatorio/build.log"
 
-      - name: 6. Resumo
+      - name: 6. Resumo e fatos
         if: always()
         shell: bash
         run: |
           mkdir -p "$RUNNER_TEMP/spk-relatorio"
           {
-            echo "FIX DO LAYOUT UE5_SPK APOS PATCH DO CONSTRUTOR"
+            echo "AUDITORIA 4: SpNet Panic 0x5cbad1cc em main+0x19dceb4 (allocator ja resolvido: UE5_SPK)"
             echo "Execucao: $GITHUB_RUN_ID  commit: $GITHUB_SHA"
             echo
             for f in "$RUNNER_TEMP"/*-work/build/patched_v0/main.cuts.tsv "$RUNNER_TEMP"/*-work/build/patched_v0/main.obs.tsv; do
@@ -236,11 +283,15 @@ jobs:
             ls -la "$RUNNER_TEMP"/*.ipa 2>/dev/null || echo "nenhum"
           } | tee "$RUNNER_TEMP/spk-relatorio/resumo.txt"
 
+          # fatos.txt: so o disassembly e as strings da auditoria, para leitura direta
+          sed -n '/=== AUDITORIA 4/,/=== Flags de alocador/p' "$RUNNER_TEMP/spk-relatorio/build.log" > "$RUNNER_TEMP/spk-relatorio/fatos.txt" || true
+          wc -l "$RUNNER_TEMP/spk-relatorio/fatos.txt"
+
       - name: 7. Salvar relatorio
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: spk-relatorio-${{ github.run_id }}
+          name: spk-auditoria4-${{ github.run_id }}
           path: ${{ runner.temp }}/spk-relatorio/
           retention-days: 7
 
@@ -260,7 +311,7 @@ jobs:
       - name: 9. Salvar IPA nos Artifacts
         uses: actions/upload-artifact@v4
         with:
-          name: spk-ipa-patch-layout-${{ github.run_id }}
+          name: spk-ipa-auditoria4-${{ github.run_id }}
           path: ${{ runner.temp }}/*${{ env.IPA_SUFFIX }}.ipa
           if-no-files-found: error
           retention-days: 7
