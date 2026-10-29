@@ -47,7 +47,6 @@ jobs:
             PyYAML \
             zstandard \
             requests \
-            2>&1 | grep -E "(Successfully|Requirement)" || true
           
           echo ""
           echo "📋 Environment:"
