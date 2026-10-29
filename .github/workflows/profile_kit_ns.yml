@@ -1,4 +1,4 @@
-name: 2a. Build ProfileKitNS App IPA (v2.0 - ROMFS ANALYZER)
+name: 2a. Build ProfileKitNS App IPA (v2.2 - ROMFS ANALYZER - FIXED)
 
 on:
   push:
@@ -21,13 +21,13 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Build ProfileKitNS v2.0
+      - name: Build ProfileKitNS v2.2 - ROMFS Root Analyzer
         run: |
           set -e
           APP_DIR="$RUNNER_TEMP/Payload/ProfileKitNS.app"
           mkdir -p "$APP_DIR" "$RUNNER_TEMP/IconGen" "$RUNNER_TEMP/App"
 
-          # ═══════ GERAR ICON ═══════
+          # ═══════ GERAR ICON (Roxo) ═══════
           cat > "$RUNNER_TEMP/IconGen/gen_icon.m" << 'ICONEOF'
           #import <Foundation/Foundation.h>
           #import <CoreGraphics/CoreGraphics.h>
@@ -52,11 +52,9 @@ jobs:
               CGContextRef ctx = CGBitmapContextCreate(NULL, sz, sz, 8, sz * 4, cs, kCGImageAlphaPremultipliedLast);
               CGFloat s = (CGFloat)sz / 1024.0;
               
-              // Fundo: roxo (nova cor!)
               CGContextSetRGBFillColor(ctx, 0.6, 0.2, 0.8, 1.0);
               CGContextFillRect(ctx, CGRectMake(0, 0, sz, sz));
               
-              // Card darker
               CGFloat pad = 92.0 * s;
               CGRect card = CGRectMake(pad, pad, sz - pad * 2, sz - pad * 2);
               CGPathRef cardPath = CGPathCreateWithRoundedRect(card, 180.0 * s, 180.0 * s, NULL);
@@ -102,7 +100,7 @@ jobs:
 
           xcrun actool "$RUNNER_TEMP/Assets.xcassets" --compile "$APP_DIR" --platform iphoneos --minimum-deployment-target 17.0 --app-icon AppIcon --output-partial-info-plist "$RUNNER_TEMP/assetcatalog_info.plist" || true
 
-          # ═══════ CRIAR APP PRINCIPAL ═══════
+          # ═══════ APP PRINCIPAL - CÓPIA DO PADRÃO DO SHADERKITNS ═══════
           cat > "$RUNNER_TEMP/App/main.m" << 'OBJCEOF'
           #import <UIKit/UIKit.h>
           #include <stdio.h>
@@ -122,20 +120,24 @@ jobs:
 
           @implementation ProfileAnalyzer
 
-          + (BOOL)directoryContainsFile:(NSString *)dir withSuffix:(NSString *)suffix {
+          + (BOOL)directoryContainsPattern:(NSString *)dir withPattern:(NSString *)pattern {
+              if (!dir) return NO;
               NSFileManager *fm = NSFileManager.defaultManager;
               NSDirectoryEnumerator *en = [fm enumeratorAtPath:dir];
-              for (NSString *file in en) {
-                  if ([file.lowercaseString hasSuffix:suffix]) return YES;
+              NSString *rel = nil;
+              while ((rel = [en nextObject])) {
+                  if ([rel.lowercaseString containsString:pattern.lowercaseString]) return YES;
               }
               return NO;
           }
 
-          + (BOOL)directoryContainsPattern:(NSString *)dir withPattern:(NSString *)pattern {
+          + (BOOL)directoryContainsFile:(NSString *)dir withSuffix:(NSString *)suffix {
+              if (!dir) return NO;
               NSFileManager *fm = NSFileManager.defaultManager;
               NSDirectoryEnumerator *en = [fm enumeratorAtPath:dir];
-              for (NSString *file in en) {
-                  if ([file.lowercaseString containsString:pattern.lowercaseString]) return YES;
+              NSString *rel = nil;
+              while ((rel = [en nextObject])) {
+                  if ([rel.lowercaseString hasSuffix:suffix]) return YES;
               }
               return NO;
           }
@@ -150,7 +152,7 @@ jobs:
               NSMutableDictionary *results = [NSMutableDictionary dictionary];
               NSFileManager *fm = NSFileManager.defaultManager;
 
-              // 1️⃣ DETECTAR ENGINE E SHADER_GROUPS
+              // 1️⃣ DETECTAR ENGINE E SHADER_GROUPS (padrão ShaderKitNS)
               BOOL hasShaderArchive = [self directoryContainsPattern:romfsPath withPattern:@"shaderarchive"];
               BOOL hasPak = [self directoryContainsFile:romfsPath withSuffix:@".pak"];
               BOOL hasUnreal = [self directoryContainsPattern:romfsPath withPattern:@".utoc"] || [self directoryContainsPattern:romfsPath withPattern:@".ucas"];
@@ -161,6 +163,8 @@ jobs:
                   shaderGroups = @"ShaderArchive-Global-=global ShaderArchive-=game";
               } else if (hasShaderArchive) {
                   shaderGroups = @"global=global";
+              } else if (hasPak) {
+                  shaderGroups = @"ShaderArchive-=game";
               }
               results[@"shader_groups"] = shaderGroups;
 
@@ -169,9 +173,10 @@ jobs:
               NSArray<NSString *> *versionMarkers = @[@"version.txt", @"buildid.txt", @"build.txt"];
               for (NSString *marker in versionMarkers) {
                   NSDirectoryEnumerator *en = [fm enumeratorAtPath:romfsPath];
-                  for (NSString *file in en) {
-                      if ([file.lastPathComponent isEqualToString:marker]) {
-                          NSString *content = [self readFileContentAtPath:[romfsPath stringByAppendingPathComponent:file]];
+                  NSString *rel = nil;
+                  while ((rel = [en nextObject])) {
+                      if ([rel.lastPathComponent isEqualToString:marker]) {
+                          NSString *content = [self readFileContentAtPath:[romfsPath stringByAppendingPathComponent:rel]];
                           build = [content stringByTrimmingCharactersInSet:NSCharacterSet.whitespaceAndNewlineCharacterSet];
                           if (build.length > 0) break;
                       }
@@ -185,11 +190,9 @@ jobs:
 
               // 4️⃣ DETECTAR MEMORY (baseado no engine)
               if (hasUnreal) {
-                  // Unreal com VA memory (64GB)
                   results[@"mem_reserve"] = @"0x1028000000";
                   results[@"mem_alias"] = @"0x1000000000";
               } else {
-                  // Padrão
                   results[@"mem_reserve"] = @"0x30000000";
                   results[@"mem_alias"] = @"0x10000000";
               }
@@ -202,29 +205,6 @@ jobs:
               // 6️⃣ ROMFS_MARKER E SHADER_NOTE
               results[@"romfs_marker"] = @"";
               results[@"shader_note"] = @"";
-
-              // 7️⃣ DETECTAR TÍTULO DO JOGO (heurística)
-              NSString *gameTitle = @"Unknown Game";
-              NSDirectoryEnumerator *en = [fm enumeratorAtPath:romfsPath];
-              for (NSString *file in en) {
-                  NSString *lower = file.lowercaseString;
-                  if ([lower containsString:@"control.nacp"] || [lower containsString:@"game.ini"]) {
-                      gameTitle = [romfsPath lastPathComponent];
-                      break;
-                  }
-              }
-              results[@"game_title"] = gameTitle;
-
-              // 8️⃣ DETECTAR TITLE_ID (se existir arquivo title_id.txt)
-              NSString *titleIdFile = [romfsPath stringByAppendingPathComponent:@"title_id.txt"];
-              NSString *titleId = @"0100000000000000";
-              if ([fm fileExistsAtPath:titleIdFile]) {
-                  NSString *content = [NSString stringWithContentsOfFile:titleIdFile encoding:NSUTF8StringEncoding error:nil];
-                  if (content && content.length == 16) {
-                      titleId = [content stringByTrimmingCharactersInSet:NSCharacterSet.whitespaceAndNewlineCharacterSet];
-                  }
-              }
-              results[@"title_id"] = titleId;
 
               return results;
           }
@@ -251,7 +231,6 @@ jobs:
               self.view.backgroundColor = PK_BG_COLOR;
               CGFloat w = self.view.bounds.size.width, h = self.view.bounds.size.height;
 
-              // Rails
               UIView *leftRail = [[UIView alloc] initWithFrame:CGRectMake(0, 0, 5, h)];
               leftRail.autoresizingMask = UIViewAutoresizingFlexibleHeight;
               leftRail.backgroundColor = PK_PURPLE_COLOR;
@@ -262,7 +241,6 @@ jobs:
               rightRail.backgroundColor = PK_PURPLE_COLOR;
               [self.view addSubview:rightRail];
 
-              // Header
               UIView *header = [[UIView alloc] initWithFrame:CGRectMake(16, 54, w - 32, 60)];
               header.autoresizingMask = UIViewAutoresizingFlexibleWidth;
               header.backgroundColor = PK_CARD_COLOR;
@@ -276,19 +254,17 @@ jobs:
               [header addSubview:title];
 
               UILabel *sub = [[UILabel alloc] initWithFrame:CGRectMake(20, 33, w - 60, 14)];
-              sub.text = @"ROMFS PROFILE ANALYZER";
+              sub.text = @"ROMFS PROFILE ANALYZER v2.2";
               sub.textColor = PK_CYAN_GLOW;
               sub.font = [UIFont systemFontOfSize:9.5 weight:UIFontWeightBold];
               [header addSubview:sub];
 
-              // Status
               self.statusLabel = [[UILabel alloc] initWithFrame:CGRectMake(20, 130, w - 40, 16)];
               self.statusLabel.textColor = PK_CYAN_GLOW;
               self.statusLabel.font = [UIFont systemFontOfSize:11.5 weight:UIFontWeightSemibold];
-              self.statusLabel.text = @"Escaneando RomFS...";
+              self.statusLabel.text = @"🔍 Escaneando...";
               [self.view addSubview:self.statusLabel];
 
-              // Progress
               self.progressBar = [[UIProgressView alloc] initWithProgressViewStyle:UIProgressViewStyleDefault];
               self.progressBar.frame = CGRectMake(20, 152, w - 40, 5);
               self.progressBar.autoresizingMask = UIViewAutoresizingFlexibleWidth;
@@ -296,7 +272,6 @@ jobs:
               self.progressBar.progressTintColor = PK_CYAN_GLOW;
               [self.view addSubview:self.progressBar];
 
-              // Log
               self.logView = [[UITextView alloc] initWithFrame:CGRectMake(16, 170, w - 32, h - 262)];
               self.logView.autoresizingMask = UIViewAutoresizingFlexibleWidth | UIViewAutoresizingFlexibleHeight;
               self.logView.backgroundColor = [UIColor colorWithRed:0.07 green:0.08 blue:0.10 alpha:1.0];
@@ -305,10 +280,9 @@ jobs:
               self.logView.layer.cornerRadius = 14;
               self.logView.editable = NO;
               self.logView.textContainerInset = UIEdgeInsetsMake(10, 10, 10, 10);
-              self.logView.text = @"[ProfileKitNS v2.0]\nCopie romfs/ → Arquivos\nToque em EXTRAIR para analisar\n";
+              self.logView.text = @"[ProfileKitNS v2.2]\nProcurando pasta romfs/...\nPode estar em qualquer lugar em Documents/";
               [self.view addSubview:self.logView];
 
-              // Button
               self.analyzeBtn = [UIButton buttonWithType:UIButtonTypeSystem];
               self.analyzeBtn.frame = CGRectMake(16, h - 78, w - 32, 52);
               self.analyzeBtn.autoresizingMask = UIViewAutoresizingFlexibleWidth | UIViewAutoresizingFlexibleTopMargin;
@@ -320,8 +294,7 @@ jobs:
               [self.analyzeBtn addTarget:self action:@selector(runAnalysis) forControlEvents:UIControlEventTouchUpInside];
               [self.view addSubview:self.analyzeBtn];
 
-              // Create base profiles dir
-              NSString *profilesDir = [[self.docs stringByAppendingPathComponent:@"Profiles"] stringByAppendingPathComponent:@"romfs"];
+              NSString *profilesDir = [self.docs stringByAppendingPathComponent:@"Profiles"];
               [[NSFileManager defaultManager] createDirectoryAtPath:profilesDir withIntermediateDirectories:YES attributes:nil error:nil];
 
               [self scanForRomfs];
@@ -339,32 +312,34 @@ jobs:
           - (void)scanForRomfs {
               dispatch_async(dispatch_get_global_queue(QOS_CLASS_USER_INITIATED, 0), ^{
                   NSFileManager *fm = NSFileManager.defaultManager;
-                  NSString *profilesDir = [[self.docs stringByAppendingPathComponent:@"Profiles"] stringByAppendingPathComponent:@"romfs"];
+                  NSString *doc = self.docs;
 
-                  NSDirectoryEnumerator *en = [fm enumeratorAtPath:profilesDir];
-                  NSString *romfsPath = nil;
+                  // PADRÃO CORRETO: Como ShaderKitNS faz!
+                  NSMutableArray<NSString *> *found = [NSMutableArray array];
+                  NSDirectoryEnumerator *en = [fm enumeratorAtPath:doc];
+                  NSString *rel = nil;
 
-                  for (NSString *item in en) {
-                      if ([item.lastPathComponent isEqualToString:@"romfs"]) {
-                          NSString *full = [profilesDir stringByAppendingPathComponent:item];
+                  while ((rel = [en nextObject])) {
+                      // Se encontrou pasta chamada "romfs"
+                      if ([rel.lastPathComponent isEqualToString:@"romfs"]) {
+                          NSString *full = [doc stringByAppendingPathComponent:rel];
                           NSDictionary *attr = [fm attributesOfItemAtPath:full error:nil];
                           if ([attr.fileType isEqualToString:NSFileTypeDirectory]) {
-                              romfsPath = full;
-                              break;
+                              [found addObject:full];
                           }
                       }
                   }
 
                   dispatch_async(dispatch_get_main_queue(), ^{
-                      if (romfsPath) {
-                          self.detectedRomfsPath = romfsPath;
-                          self.statusLabel.text = [NSString stringWithFormat:@"✅ RomFS encontrada!"];
+                      if (found.count > 0) {
+                          self.detectedRomfsPath = found[0];
+                          self.statusLabel.text = @"✅ RomFS encontrada!";
                           self.analyzeBtn.enabled = YES;
-                          [self log:[NSString stringWithFormat:@"✓ RomFS detectada em:\n%@", [romfsPath lastPathComponent]]];
+                          [self log:[NSString stringWithFormat:@"✓ Detectada em:\n%@", self.detectedRomfsPath]];
                       } else {
                           self.statusLabel.text = @"❌ RomFS não encontrada";
                           self.analyzeBtn.enabled = NO;
-                          [self log:@"❌ Coloque a pasta romfs/ em Profiles/"];
+                          [self log:@"❌ Coloque uma pasta 'romfs' em qualquer lugar em Documents/"];
                       }
                   });
               });
@@ -378,29 +353,51 @@ jobs:
 
               self.analyzeBtn.enabled = NO;
               self.progressBar.progress = 0.1;
-              self.statusLabel.text = @"Analisando RomFS...";
+              self.statusLabel.text = @"🔍 Analisando RomFS...";
 
               dispatch_async(dispatch_get_global_queue(QOS_CLASS_USER_INITIATED, 0), ^{
                   NSFileManager *fm = NSFileManager.defaultManager;
 
-                  // Analisar
-                  [self log:@"\n🔍 Iniciando análise..."];
+                  [self log:@"\n═══════════════════════════════════"];
+                  [self log:@"📊 Iniciando análise de RomFS..."];
+                  [self log:@"═══════════════════════════════════\n"];
+
                   NSDictionary *analysis = [ProfileAnalyzer analyzeRomfsAtPath:self.detectedRomfsPath];
                   self.analysisResults = analysis;
 
                   dispatch_async(dispatch_get_main_queue(), ^{ self.progressBar.progress = 0.4; });
 
-                  NSString *titleId = analysis[@"title_id"] ?: @"0100000000000000";
-                  NSString *gameTitle = analysis[@"game_title"] ?: @"Unknown Game";
+                  NSString *titleId = @"0100000000000000";
+                  NSString *titleIdFile = [self.detectedRomfsPath stringByAppendingPathComponent:@"title_id.txt"];
+                  if ([fm fileExistsAtPath:titleIdFile]) {
+                      NSString *content = [NSString stringWithContentsOfFile:titleIdFile encoding:NSUTF8StringEncoding error:nil];
+                      if (content && content.length == 16) {
+                          titleId = [content stringByTrimmingCharactersInSet:NSCharacterSet.whitespaceAndNewlineCharacterSet];
+                      }
+                  }
+
+                  NSString *gameTitle = @"Unknown Game";
+                  NSDirectoryEnumerator *en = [fm enumeratorAtPath:self.detectedRomfsPath];
+                  NSString *rel = nil;
+                  while ((rel = [en nextObject])) {
+                      NSString *lower = rel.lowercaseString;
+                      if ([lower containsString:@"control.nacp"] || [lower containsString:@"game.ini"]) {
+                          gameTitle = [self.detectedRomfsPath lastPathComponent];
+                          break;
+                      }
+                  }
+
                   NSString *profileFolderName = [NSString stringWithFormat:@"profile-%@-%@", gameTitle, titleId];
                   NSString *profilePath = [[self.docs stringByAppendingPathComponent:@"Profiles"] stringByAppendingPathComponent:profileFolderName];
 
                   [fm removeItemAtPath:profilePath error:nil];
                   [fm createDirectoryAtPath:profilePath withIntermediateDirectories:YES attributes:nil error:nil];
 
-                  [self log:[NSString stringWithFormat:@"📋 Criando pasta: %@", profileFolderName]];
+                  [self log:[NSString stringWithFormat:@"📁 Criando pasta: %@", profileFolderName]];
 
-                  // Criar game.tsv
+                  dispatch_async(dispatch_get_main_queue(), ^{ self.progressBar.progress = 0.5; });
+
+                  // ════════ CRIAR game.tsv ════════
                   NSString *shaderGroups = analysis[@"shader_groups"] ?: @"default=default";
                   NSString *build = analysis[@"build"] ?: @"";
                   NSString *memReserve = analysis[@"mem_reserve"] ?: @"0x30000000";
@@ -415,41 +412,54 @@ jobs:
                   [gameTsv appendFormat:@"%@\t%@\t%@\t\t%@\tmain\t\t%@\t%@\t%@\t%@\t%@\t%@\t\n",
                       titleId, titleId, gameTitle, build, fpsTarget, memReserve, memAlias, memStack, appPool, shaderGroups];
                   [gameTsv writeToFile:gameTsvPath atomically:YES encoding:NSUTF8StringEncoding error:nil];
-                  [self log:@"✅ game.tsv criado"];
+                  [self log:@"✅ game.tsv"];
 
-                  dispatch_async(dispatch_get_main_queue(), ^{ self.progressBar.progress = 0.6; });
+                  dispatch_async(dispatch_get_main_queue(), ^{ self.progressBar.progress = 0.65; });
 
                   // Criar shader_map.tsv
                   NSString *shaderMapPath = [profilePath stringByAppendingPathComponent:@"shader_map.tsv"];
                   NSString *shaderMap = @"key\toffset\tarchive\tcompressed\n";
                   [shaderMap writeToFile:shaderMapPath atomically:YES encoding:NSUTF8StringEncoding error:nil];
-                  [self log:@"✅ shader_map.tsv criado"];
+                  [self log:@"✅ shader_map.tsv"];
 
                   // Criar shader_facts.tsv
                   NSString *shaderFactsPath = [profilePath stringByAppendingPathComponent:@"shader_facts.tsv"];
                   NSString *shaderFacts = @"key\tstage\tbindings\tregisters\n";
                   [shaderFacts writeToFile:shaderFactsPath atomically:YES encoding:NSUTF8StringEncoding error:nil];
-                  [self log:@"✅ shader_facts.tsv criado"];
+                  [self log:@"✅ shader_facts.tsv"];
 
                   // Criar shader_pairs.tsv
                   NSString *shaderPairsPath = [profilePath stringByAppendingPathComponent:@"shader_pairs.tsv"];
                   NSString *shaderPairs = @"vertex\tpixel\n";
                   [shaderPairs writeToFile:shaderPairsPath atomically:YES encoding:NSUTF8StringEncoding error:nil];
-                  [self log:@"✅ shader_pairs.tsv criado"];
+                  [self log:@"✅ shader_pairs.tsv"];
 
                   // Criar pso_manifest.tsv
                   NSString *psoPath = [profilePath stringByAppendingPathComponent:@"pso_manifest.tsv"];
                   NSString *psoManifest = @"hash\tvertex_shader\tpixel_shader\tstate\n";
                   [psoManifest writeToFile:psoPath atomically:YES encoding:NSUTF8StringEncoding error:nil];
-                  [self log:@"✅ pso_manifest.tsv criado"];
+                  [self log:@"✅ pso_manifest.tsv"];
 
-                  dispatch_async(dispatch_get_main_queue(), ^{ self.progressBar.progress = 1.0; });
+                  dispatch_async(dispatch_get_main_queue(), ^{ self.progressBar.progress = 0.85; });
 
-                  [self log:[NSString stringWithFormat:@"\n✅ PERFIL PRONTO!\nPasta: %@\n\nValores detectados:\n  • Shader Groups: %@\n  • Build: %@\n  • Memory: %@\n  • FPS: %@",
-                      profileFolderName, shaderGroups, (build.length > 0 ? build : @"(não encontrado)"), memReserve, fpsTarget]];
+                  [self log:@"\n═══════════════════════════════════"];
+                  [self log:[NSString stringWithFormat:@"✅ PERFIL COMPLETO!"]];
+                  [self log:@"═══════════════════════════════════"];
+                  [self log:@""];
+                  [self log:[NSString stringWithFormat:@"📋 Valores Detectados:"]];
+                  [self log:[NSString stringWithFormat:@"  • Title ID: %@", titleId]];
+                  [self log:[NSString stringWithFormat:@"  • Nome: %@", gameTitle]];
+                  [self log:[NSString stringWithFormat:@"  • Build: %@", (build.length > 0 ? build : @"(não encontrado)")]];
+                  [self log:[NSString stringWithFormat:@"  • Shaders: %@", shaderGroups]];
+                  [self log:[NSString stringWithFormat:@"  • Memória: %@", memReserve]];
+                  [self log:[NSString stringWithFormat:@"  • FPS: %@", fpsTarget]];
+                  [self log:@""];
+                  [self log:@"📍 Localização:"];
+                  [self log:[NSString stringWithFormat:@"   Documents/Profiles/%@/", profileFolderName]];
 
                   dispatch_async(dispatch_get_main_queue(), ^{
-                      self.statusLabel.text = @"✅ Perfil criado com sucesso!";
+                      self.progressBar.progress = 1.0;
+                      self.statusLabel.text = @"✅ Profile criado com sucesso!";
                       self.analyzeBtn.enabled = YES;
                       [self scanForRomfs];
                   });
@@ -491,8 +501,8 @@ jobs:
             <key>CFBundleIdentifier</key><string>com.kinttany.profilekitns</string>
             <key>CFBundleName</key><string>ProfileKitNS</string>
             <key>CFBundleDisplayName</key><string>ProfileKitNS</string>
-            <key>CFBundleVersion</key><string>2.0</string>
-            <key>CFBundleShortVersionString</key><string>2.0</string>
+            <key>CFBundleVersion</key><string>2.2</string>
+            <key>CFBundleShortVersionString</key><string>2.2</string>
             <key>CFBundlePackageType</key><string>APPL</string>
             <key>LSRequiresIPhoneOS</key><true/>
             <key>UIDeviceFamily</key><array><integer>1</integer><integer>2</integer></array>
@@ -509,7 +519,7 @@ jobs:
           zip -qry "$RUNNER_TEMP/ProfileKitNS.ipa" Payload
           ls -lh "$RUNNER_TEMP/ProfileKitNS.ipa"
 
-      - name: Upload IPA
+      - name: Upload Artifact
         uses: actions/upload-artifact@v4
         with:
           name: ProfileKitNS-App-IPA
