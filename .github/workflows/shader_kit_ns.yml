@@ -112,107 +112,104 @@ jobs:
           #pragma pack(pop)
 
           static BOOL build_split_zip_file(NSString *srcDir, NSString *baseZipPath, unsigned long long maxPartSize, void (^logf)(NSString *)) {
-              NSFileManager *fm = NSFileManager.defaultManager;
-              NSMutableArray *files = [NSMutableArray array];
-              NSDirectoryEnumerator *en = [fm enumeratorAtPath:srcDir];
-              NSString *rel = nil;
-              while ((rel = [en nextObject])) {
-                  NSString *full = [srcDir stringByAppendingPathComponent:rel];
-                  NSDictionary *attr = [fm attributesOfItemAtPath:full error:nil];
-                  if (![attr.fileType isEqualToString:NSFileTypeRegular]) continue;
-                  unsigned long long fsz = [attr fileSize];
-                  if (fsz > 0xFFFFFFFFULL) continue;
-                  [files addObject:@{@"path": full, @"rel": rel, @"size": @(fsz)}];
-              }
-              if (files.count == 0) return NO;
-              for (int i = 0; i < 50; i++) {
-                  NSString *p = (i == 0) ? [baseZipPath stringByAppendingPathExtension:@"z00"] : [baseZipPath stringByAppendingFormat:@".z%02d", i];
-                  [fm removeItemAtPath:p error:nil];
-              }
-              FILE *parts[50] = {0};
-              int numParts = 1;
-              int currentPart = 0;
-              NSString *part0 = [baseZipPath stringByAppendingPathExtension:@"z00"];
-              parts[0] = fopen(part0.fileSystemRepresentation, "wb");
-              if (!parts[0]) return NO;
-              NSMutableData *cd = [NSMutableData data];
-              uint16_t count = 0;
-              uint8_t *buf = malloc(1 << 20);
-              if (!buf) { fclose(parts[0]); return NO; }
-
-              for (NSDictionary *fileInfo in files) {
-                  NSString *full = fileInfo[@"path"];
-                  NSString *relPath = fileInfo[@"rel"];
-                  unsigned long long fsz = [fileInfo[@"size"] unsignedLongLongValue];
-                  const char *name = relPath.UTF8String;
-                  uint16_t nlen = (uint16_t)strlen(name);
-                  uint32_t usize = (uint32_t)fsz;
-                  unsigned long long headerSize = sizeof(struct zip_lfh) + nlen;
-                  unsigned long long totalNeeded = headerSize + fsz;
-                  unsigned long long currentSize = (unsigned long long)ftello(parts[currentPart]);
-
-                  if (fsz > maxPartSize) {
-                      logf([NSString stringWithFormat:@"  AVISO: arquivo %@ (%.0f MB) > limite (%.0f MB)", relPath.lastPathComponent, fsz / 1048576.0, maxPartSize / 1048576.0]);
-                      if (currentSize > 0 && currentPart < 49) {
-                          logf([NSString stringWithFormat:@"  fecha parte %d (%.0f MB), abre parte %d para arquivo gigante", currentPart, currentSize / 1048576.0, currentPart + 1]);
-                          fclose(parts[currentPart]);
-                          parts[currentPart] = NULL;
-                          currentPart++;
-                          numParts++;
-                          NSString *nextPartPath = [baseZipPath stringByAppendingFormat:@".z%02d", currentPart];
-                          parts[currentPart] = fopen(nextPartPath.fileSystemRepresentation, "wb");
-                          if (!parts[currentPart]) {
-                              free(buf);
-                              for (int i = 0; i < numParts; i++) if (parts[i]) fclose(parts[i]);
-                              return NO;
-                          }
-                      }
-                  } else if (currentSize > 0 && currentSize + totalNeeded > maxPartSize && currentPart < 49) {
-                      logf([NSString stringWithFormat:@"  parte %d cheia (%.0f MB), abre parte %d", currentPart, currentSize / 1048576.0, currentPart + 1]);
-                      fclose(parts[currentPart]);
-                      parts[currentPart] = NULL;
-                      currentPart++;
-                      numParts++;
-                      NSString *nextPartPath = [baseZipPath stringByAppendingFormat:@".z%02d", currentPart];
-                      parts[currentPart] = fopen(nextPartPath.fileSystemRepresentation, "wb");
-                      if (!parts[currentPart]) {
-                          free(buf);
-                          for (int i = 0; i < numParts; i++) if (parts[i]) fclose(parts[i]);
-                          return NO;
-                      }
-                  }
-
-                  FILE *in = fopen(full.fileSystemRepresentation, "rb");
-                  if (!in) continue;
-                  uint32_t crc = 0;
-                  size_t n;
-                  while ((n = fread(buf, 1, 1 << 20, in)) > 0) crc = (uint32_t)crc32(crc, buf, (uInt)n);
-                  uint32_t off = (uint32_t)ftello(parts[currentPart]);
-                  struct zip_lfh lfh = {0x04034b50, 20, 0x0800, 0, 0, 0x21, crc, usize, usize, nlen, 0};
-                  fwrite(&lfh, sizeof(lfh), 1, parts[currentPart]);
-                  fwrite(name, 1, nlen, parts[currentPart]);
-                  fseeko(in, 0, SEEK_SET);
-                  while ((n = fread(buf, 1, 1 << 20, in)) > 0) fwrite(buf, 1, n, parts[currentPart]);
-                  fclose(in);
-                  struct zip_cdh cdh = {0x02014b50, 20, 20, 0x0800, 0, 0, 0x21, crc, usize, usize, nlen, 0, 0, 0, 0, 0, off};
-                  [cd appendBytes:&cdh length:sizeof(cdh)];
-                  [cd appendBytes:name length:nlen];
-                  count++;
-              }
-              free(buf);
-              uint32_t cdOff = (uint32_t)ftello(parts[currentPart]);
-              if (cd.length) fwrite(cd.bytes, 1, cd.length, parts[currentPart]);
-              struct zip_eocd eocd = {0x06054b50, 0, 0, count, count, (uint32_t)cd.length, cdOff, 0};
-              fwrite(&eocd, sizeof(eocd), 1, parts[currentPart]);
-              for (int i = 0; i < numParts; i++) { if (parts[i]) fclose(parts[i]); }
-              if (count == 0) return NO;
-              for (int i = 0; i < numParts; i++) {
-                  NSString *partPath = (i == 0) ? [baseZipPath stringByAppendingPathExtension:@"z00"] : [baseZipPath stringByAppendingFormat:@".z%02d", i];
-                  NSDictionary *za = [fm attributesOfItemAtPath:partPath error:nil];
-                  if (za) logf([NSString stringWithFormat:@"  ✓ %@.z%02d (%.1f MB)", [baseZipPath lastPathComponent], i, [za fileSize] / 1048576.0]);
-              }
-              return YES;
-          }
+    NSFileManager *fm = NSFileManager.defaultManager;
+    NSMutableArray *files = [NSMutableArray array];
+    NSDirectoryEnumerator *en = [fm enumeratorAtPath:srcDir];
+    NSString *rel = nil;
+    while ((rel = [en nextObject])) {
+        NSString *full = [srcDir stringByAppendingPathComponent:rel];
+        NSDictionary *attr = [fm attributesOfItemAtPath:full error:nil];
+        if (![attr.fileType isEqualToString:NSFileTypeRegular]) continue;
+        unsigned long long fsz = [attr fileSize];
+        if (fsz > 0xFFFFFFFFULL) continue;
+        [files addObject:@{@"path": full, @"rel": rel, @"size": @(fsz)}];
+    }
+    if (files.count == 0) return NO;
+    for (int i = 0; i < 50; i++) {
+        NSString *p = (i == 0) ? [baseZipPath stringByAppendingPathExtension:@"z00"] : [baseZipPath stringByAppendingFormat:@".z%02d", i];
+        [fm removeItemAtPath:p error:nil];
+    }
+    FILE *parts[50] = {0};
+    int numParts = 1;
+    int currentPart = 0;
+    NSString *part0 = [baseZipPath stringByAppendingPathExtension:@"z00"];
+    parts[0] = fopen(part0.fileSystemRepresentation, "wb");
+    if (!parts[0]) return NO;
+    NSMutableData *cd = [NSMutableData data];
+    uint16_t count = 0;
+    uint8_t *buf = malloc(1 << 20);
+    if (!buf) { fclose(parts[0]); return NO; }
+    for (NSDictionary *fileInfo in files) {
+        NSString *full = fileInfo[@"path"];
+        NSString *relPath = fileInfo[@"rel"];
+        unsigned long long fsz = [fileInfo[@"size"] unsignedLongLongValue];
+        const char *name = relPath.UTF8String;
+        uint16_t nlen = (uint16_t)strlen(name);
+        uint32_t usize = (uint32_t)fsz;
+        unsigned long long headerSize = sizeof(struct zip_lfh) + nlen;
+        unsigned long long totalNeeded = headerSize + fsz;
+        unsigned long long currentSize = (unsigned long long)ftello(parts[currentPart]);
+        if (fsz > maxPartSize) {
+            logf([NSString stringWithFormat:@"  AVISO: arquivo %@ (%.0f MB) maior que limite (%.0f MB)", relPath.lastPathComponent, fsz / 1048576.0, maxPartSize / 1048576.0]);
+            if (currentSize > 0 && currentPart < 49) {
+                logf([NSString stringWithFormat:@"  fecha parte %d (%.0f MB), abre parte %d", currentPart, currentSize / 1048576.0, currentPart + 1]);
+                fclose(parts[currentPart]);
+                parts[currentPart] = NULL;
+                currentPart++;
+                numParts++;
+                NSString *nextPartPath = [baseZipPath stringByAppendingFormat:@".z%02d", currentPart];
+                parts[currentPart] = fopen(nextPartPath.fileSystemRepresentation, "wb");
+                if (!parts[currentPart]) {
+                    free(buf);
+                    for (int i = 0; i < numParts; i++) if (parts[i]) fclose(parts[i]);
+                    return NO;
+                }
+            }
+        } else if (currentSize > 0 && currentSize + totalNeeded > maxPartSize && currentPart < 49) {
+            logf([NSString stringWithFormat:@"  parte %d cheia (%.0f MB), abre parte %d", currentPart, currentSize / 1048576.0, currentPart + 1]);
+            fclose(parts[currentPart]);
+            parts[currentPart] = NULL;
+            currentPart++;
+            numParts++;
+            NSString *nextPartPath = [baseZipPath stringByAppendingFormat:@".z%02d", currentPart];
+            parts[currentPart] = fopen(nextPartPath.fileSystemRepresentation, "wb");
+            if (!parts[currentPart]) {
+                free(buf);
+                for (int i = 0; i < numParts; i++) if (parts[i]) fclose(parts[i]);
+                return NO;
+            }
+        }
+        FILE *in = fopen(full.fileSystemRepresentation, "rb");
+        if (!in) continue;
+        uint32_t crc = 0;
+        size_t n;
+        while ((n = fread(buf, 1, 1 << 20, in)) > 0) crc = (uint32_t)crc32(crc, buf, (uInt)n);
+        uint32_t off = (uint32_t)ftello(parts[currentPart]);
+        struct zip_lfh lfh = {0x04034b50, 20, 0x0800, 0, 0, 0x21, crc, usize, usize, nlen, 0};
+        fwrite(&lfh, sizeof(lfh), 1, parts[currentPart]);
+        fwrite(name, 1, nlen, parts[currentPart]);
+        fseeko(in, 0, SEEK_SET);
+        while ((n = fread(buf, 1, 1 << 20, in)) > 0) fwrite(buf, 1, n, parts[currentPart]);
+        fclose(in);
+        struct zip_cdh cdh = {0x02014b50, 20, 20, 0x0800, 0, 0, 0x21, crc, usize, usize, nlen, 0, 0, 0, 0, 0, off};
+        [cd appendBytes:&cdh length:sizeof(cdh)];
+        [cd appendBytes:name length:nlen];
+        count++;
+    }
+    free(buf);
+    uint32_t cdOff = (uint32_t)ftello(parts[currentPart]);
+    if (cd.length) fwrite(cd.bytes, 1, cd.length, parts[currentPart]);
+    struct zip_eocd eocd = {0x06054b50, 0, 0, count, count, (uint32_t)cd.length, cdOff, 0};
+    fwrite(&eocd, sizeof(eocd), 1, parts[currentPart]);
+    for (int i = 0; i < numParts; i++) { if (parts[i]) fclose(parts[i]); }
+    if (count == 0) return NO;
+    for (int i = 0; i < numParts; i++) {
+        NSString *partPath = (i == 0) ? [baseZipPath stringByAppendingPathExtension:@"z00"] : [baseZipPath stringByAppendingFormat:@".z%02d", i];
+        NSDictionary *za = [fm attributesOfItemAtPath:partPath error:nil];
+        if (za) logf([NSString stringWithFormat:@"  ✓ %@.z%02d (%.1f MB)", [baseZipPath lastPathComponent], i, [za fileSize] / 1048576.0]);
+    }
+    return YES;
+  }
 
           static uint64_t be40(const uint8_t *p) { return ((uint64_t)p[0]<<32)|((uint64_t)p[1]<<24)|((uint64_t)p[2]<<16)|((uint64_t)p[3]<<8)|p[4]; }
           static uint64_t le40(const uint8_t *p) { return (uint64_t)p[0]|((uint64_t)p[1]<<8)|((uint64_t)p[2]<<16)|((uint64_t)p[3]<<24)|((uint64_t)p[4]<<32); }
