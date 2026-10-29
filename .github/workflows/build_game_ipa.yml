@@ -1,4 +1,4 @@
-name: 2. Build Thin IPA - SpNet cortado + auditoria 6 (PLT, imports nn sem hook, sdk)
+name: 2. Build Thin IPA - SpNet pulado pelo StartupModule + auditoria 6 (PLT corrigido)
 
 on:
   push:
@@ -28,7 +28,7 @@ jobs:
       BASELINE_COMMIT: "306dcdfcb53d348085292e9e527339161c0536c7"
       EXPECTED_MAIN_SHA256: "a0f8f0644c92384ddb1baac1c21aecbeeace5bc99ad40895e216add61da78efe"
       EXPECTED_MAIN_BUILD_ID: "68edafd68c7bc1a1af50b82aac838018"
-      IPA_SUFFIX: "_AUDIT6"
+      IPA_SUFFIX: "_SKIP_SPNET"
 
       # Patch do construtor + layout (confirmados no log do iPhone: allocator OK, 14 threads, heap 0.28 GB)
       SPK_CUT_ADDR: "0x1e4db30"
@@ -38,9 +38,12 @@ jobs:
       SPK_VTABLE: "0x8703ab8"
       SPK_LAYOUT: "UE5_SPK"
 
-      # Cortes do SpNet Panic (fatos.txt da auditoria 4): addr|orig|novo|descricao, separados por ';'
-      # Mantidos nesta rodada; saem quando o hook no host entrar (auditoria 6 decide qual).
-      SPNET_CUTS: "0x1b74f78|420a0054|1f2003d5|SpNet init main+0x1b74d88: b.hs status>=0x100 -> panic 0x5cbad1cc -> nop;0x1b750d4|00013fd6|1f2003d5|SpNet init main+0x1b74d88: blr SpNetPanic(0x5cbad1cc) -> nop"
+      # Corte do SpNet (auditoria 6): addr|orig|novo|descricao, separados por ';'
+      # FSpNetModule::StartupModule (main+0x1b74d5c) le uma flag global e, se ligada, retorna sem chamar
+      # o init do SpNet (0x1b74d88) nem a segunda init (0x1b7513c). NOP no cbz toma esse caminho do proprio
+      # jogo. Substitui os dois NOPs anteriores dentro de 0x1b74d88, que forcavam o caminho de sucesso de uma
+      # init que falhou (status >= 0x100) e levavam ao NULL+0x688 em main+0x4be9808.
+      SPNET_CUTS: "0x1b74d70|68000034|1f2003d5|FSpNetModule::StartupModule main+0x1b74d5c: cbz flag -> nop, retorna sem inicializar SpNet (caminho do proprio jogo)"
 
       # Auditoria 5: a funcao que devolve o status do init do SpNet
       SPNET_INIT_FN: "0x19cec44"
@@ -88,7 +91,7 @@ jobs:
           print("hle_uemalloc.c: layout UE5_SPK garantido (a linha k_ue e gravada pelo pipeline e corrigida no passo 4)")
           PYEOF
 
-      - name: 4. Preparar build (ctor + layout + cortes SpNet + auditoria 5)
+      - name: 4. Preparar build (ctor + layout + corte SpNet + auditoria 5)
         shell: bash
         run: |
           set -e
@@ -197,15 +200,14 @@ jobs:
           insert_before('ipa_filename = f"{safe_name}.ipa"',
                         'safe_name = safe_name + os.environ.get("IPA_SUFFIX", "")')
 
-          # F. CORTES DO SPNET: apos o pipeline gravar o patches.py (antes da reescrita), duplicar a linha
-          #    do corte do construtor com os novos endereco/bytes. Imprime o patches.py gerado e falha com
-          #    diagnostico claro se o formato nao for o esperado.
+          # F. CORTE DO SPNET: apos o pipeline gravar o patches.py (antes da reescrita), duplicar a linha
+          #    do corte do construtor com os novos endereco/bytes.
           insert_after_contains("game_args final", '''
           _pp = prof_dir / "patches.py"
           if not _pp.exists():
               raise SystemExit(f"ERRO: {_pp} nao existe neste ponto; prof_dir tem: {sorted(x.name for x in prof_dir.iterdir())}")
           _ps = _pp.read_text(encoding="utf-8")
-          print("=== patches.py gerado pelo pipeline (antes dos cortes SpNet) ===\\n" + _ps + "\\n=== fim patches.py ===", flush=True)
+          print("=== patches.py gerado pelo pipeline (antes do corte SpNet) ===\\n" + _ps + "\\n=== fim patches.py ===", flush=True)
           _tmpl = [l for l in _ps.splitlines() if "0x1e4db30" in l and "6b740194" in l and "1f2003d5" in l]
           if len(_tmpl) != 1:
               raise SystemExit(f"ERRO: linha CUTS do construtor nao esta em 1 linha com addr/orig/novo ({len(_tmpl)}x)")
@@ -225,11 +227,10 @@ jobs:
               print(f"=== CORTE SPNET: {_a:#x} {_o} -> {_n}  ({_d}) ===", flush=True)
           _ps = _ps.replace(_tmpl, _tmpl + "\\n" + "\\n".join(_new), 1)
           _pp.write_text(_ps, encoding="utf-8")
-          print("=== patches.py com os cortes SpNet ===\\n" + _ps + "\\n=== fim patches.py ===", flush=True)
+          print("=== patches.py com o corte SpNet ===\\n" + _ps + "\\n=== fim patches.py ===", flush=True)
           ''')
 
-          # G. Corrigir a linha k_ue gravada pelo pipeline (UE5 -> UE5_SPK) antes de compilar,
-          #    e conferir que a reescrita aplicou exatamente 3 cuts e 1 obs
+          # G. Corrigir a linha k_ue (UE5 -> UE5_SPK) e conferir exatamente 2 cuts e 1 obs
           insert_before('if (exefs / "main.npdm").exists():', '''
           import re as _re
           _hp = Path("dm/host/hle_uemalloc.c")
@@ -254,9 +255,9 @@ jobs:
           _obs = _rows(patched / "main.obs.tsv")
           print("=== main.cuts.tsv ===\\n" + "\\n".join(_cuts), flush=True)
           print("=== main.obs.tsv ===\\n" + "\\n".join(_obs), flush=True)
-          _want = ["0x1e4db30", "0x1b74f78", "0x1b750d4"]
-          if len(_cuts) != 3 or any(not any(w in c for c in _cuts) for w in _want):
-              raise SystemExit("ERRO: main.cuts.tsv nao contem exatamente os 3 cortes " + ", ".join(_want))
+          _want = ["0x1e4db30", "0x1b74d70"]
+          if len(_cuts) != 2 or any(not any(w in c for c in _cuts) for w in _want):
+              raise SystemExit("ERRO: main.cuts.tsv nao contem exatamente os 2 cortes " + ", ".join(_want))
           if len(_obs) != 1 or "0x1e4db34" not in _obs[0]:
               raise SystemExit("ERRO: main.obs.tsv nao contem exatamente o gate em 0x1e4db34")
           ''')
@@ -285,7 +286,7 @@ jobs:
           set -o pipefail
           bash "$RUNNER_TEMP/spk-build.sh" 2>&1 | tee "$RUNNER_TEMP/spk-relatorio/build.log"
 
-      - name: 5b. Auditoria 6 - A/B do SpNet, caminho do crash, PLT, imports nn sem hook, sdk
+      - name: 5b. Auditoria 6 - StartupModule, getter do singleton, PLT (corrigido), imports nn sem hook, sdk
         if: always()
         continue-on-error: true
         shell: bash
@@ -330,7 +331,6 @@ jobs:
                       if bid and h[0x40:0x50].hex() != bid: continue
                       cands.append(p)
                   except Exception as e: P(f"# {p}: {e}")
-              # preferir o original (fora de pastas 'patched')
               cands.sort(key=lambda p: ("patched" in str(p).lower(), len(str(p))))
               for p in cands:
                   try: return load_nso(p)
@@ -395,16 +395,23 @@ jobs:
                   if shndx and val <= addr < val + max(size, 4): return (n, addr - val)
               return None
 
+          def _imm(s):
+              m = re.search(r"#(0x[0-9a-fA-F]+|\d+)", s)
+              return int(m.group(1), 0) if m else 0
+
           def resolve(img, rel, syms, addr, dm, depth=0):
               if addr + 16 > len(img): return "fora da imagem"
               ins = list(md.disasm(bytes(img[addr:addr + 16]), addr))
-              if len(ins) >= 3 and ins[0].mnemonic == "adrp" and ins[1].mnemonic == "ldr" and ins[2].mnemonic == "br":
+              # stub PLT do NSO: adrp x16 ; ldr x17,[x16,#off] ; add x16,x16,#off ; br x17
+              # (tambem aceita a forma curta adrp ; ldr ; br)
+              mn = [i.mnemonic for i in ins]
+              if len(ins) >= 3 and mn[0] == "adrp" and "ldr" in mn[1:3] and "br" in mn[2:4]:
                   page = int(ins[0].op_str.split("#")[1], 16)
-                  m = re.search(r"#(0x[0-9a-fA-F]+|\d+)", ins[1].op_str)
-                  slot = page + (int(m.group(1), 0) if m else 0)
+                  ldr = ins[mn.index("ldr")]
+                  slot = page + _imm(ldr.op_str)
                   nm = rel.get(slot)
                   return f"PLT -> GOT {slot:#x} -> {dm.get(nm, nm) if nm else '(slot sem simbolo: ponteiro interno)'}"
-              if ins and ins[0].mnemonic == "b" and depth < 2:
+              if ins and mn[0] == "b" and depth < 2:
                   t = int(ins[0].op_str.lstrip("#"), 16)
                   return f"b {t:#x} -> " + resolve(img, rel, syms, t, dm, depth + 1)
               s = sym_at(syms, addr)
@@ -430,20 +437,23 @@ jobs:
           dm = demangle(sorted({n for n, *_ in syms} | set(rel.values())))
           P(f"=== simbolos dinamicos: {len(syms)}  relocs com simbolo: {len(rel)} ===\n")
 
-          P("#################### AUDITORIA 6.1: A (caller), B (SpNet init) e o caminho do crash ####################")
-          A  = dis(img, 0x1b74b80, 0x1b74d88, "A: caller de B, ate bl 0x1b74d7c")
-          B  = dis(img, 0x1b74d88, 0x1b75140, "B: SpNet init (cortes em 0x1b74f78 / 0x1b750d4; crash passa por 0x1b75008)")
+          P("#################### AUDITORIA 6.1: StartupModule, B (SpNet init), C, getter e caminho do crash ####################")
+          S  = dis(img, 0x1b74d5c, 0x1b74d88, "FSpNetModule::StartupModule (corte: cbz em 0x1b74d70 -> nop)")
+          B  = dis(img, 0x1b74d88, 0x1b75140, "B: SpNet init (antes cortado em 0x1b74f78 / 0x1b750d4)")
+          C  = dis(img, 0x1b7513c, 0x1b75300, "C: segunda init do modulo (0x1b7513c)")
+          G  = dis(img, 0x48dad60, 0x48dadc0, "getter do singleton SpNet (0x48dad60; devolveu NULL no crash)")
           C1 = dis(img, 0x4bcd160, 0x4bcd1e0, "caller 2 do crash (bt main+0x4bcd1c8)")
           C2 = dis(img, 0x4bea720, 0x4bea7a0, "caller 1 do crash (lr main+0x4bea780)")
-          C3 = dis(img, 0x4be9780, 0x4be9830, "funcao do crash (pc main+0x4be9808, ldr [x0,#0x28] com x0=0x688)")
-          D1 = dis(img, 0x1fb2db0, 0x1fb2e10, "PreInit: chamada de A (bt main+0x1fb2df8)")
-          follow_calls(img, rel, syms, A, dm, "A")
+          C3 = dis(img, 0x4be9780, 0x4be9830, "funcao do crash (pc main+0x4be9808)")
+          D1 = dis(img, 0x1fb2db0, 0x1fb2e10, "FModuleManager: chamada do StartupModule (bt main+0x1fb2df8)")
+          follow_calls(img, rel, syms, S, dm, "StartupModule")
           follow_calls(img, rel, syms, B, dm, "B")
-          follow_calls(img, rel, syms, C1 + C2 + C3, dm, "crash e callers")
-          follow_calls(img, rel, syms, D1, dm, "PreInit")
+          follow_calls(img, rel, syms, C, dm, "C")
+          follow_calls(img, rel, syms, G + C1 + C2 + C3, dm, "getter, crash e callers")
+          follow_calls(img, rel, syms, D1, dm, "FModuleManager")
 
-          P("#################### AUDITORIA 6.2: funcao irma main+0x19cec44 e seus imports ####################")
-          for t in (0x46af000, 0x4721bd0, 0x46b3080, 0x46d3518, 0x4719638, 0x46cae70, 0x46cad30, 0x46cb0a0):
+          P("#################### AUDITORIA 6.2: funcao irma main+0x19cec44 e seus imports (PLT corrigido) ####################")
+          for t in (0x46af000, 0x4721bd0, 0x46b3080, 0x46d3518, 0x4719638, 0x46cae70, 0x46cad30, 0x46cb0a0, 0x4713010, 0x4713030):
               P(f"  {t:#x}  =>  {resolve(img, rel, syms, t, dm)}")
           P()
 
@@ -490,7 +500,7 @@ jobs:
         run: |
           mkdir -p "$RUNNER_TEMP/spk-relatorio"
           {
-            echo "SPNET CORTADO (main+0x1b74f78 b.hs -> nop, main+0x1b750d4 blr -> nop) + AUDITORIA 5 + AUDITORIA 6"
+            echo "SPNET PULADO (main+0x1b74d70 cbz -> nop em FSpNetModule::StartupModule) + AUDITORIA 5 + AUDITORIA 6"
             echo "Execucao: $GITHUB_RUN_ID  commit: $GITHUB_SHA"
             echo
             for f in "$RUNNER_TEMP"/*-work/build/patched_v0/main.cuts.tsv "$RUNNER_TEMP"/*-work/build/patched_v0/main.obs.tsv; do
@@ -503,7 +513,6 @@ jobs:
             ls -la "$RUNNER_TEMP"/*.ipa 2>/dev/null || echo "nenhum"
           } | tee "$RUNNER_TEMP/spk-relatorio/resumo.txt"
 
-          # fatos.txt: auditoria 6 (prioridade) + disassembly da auditoria 5 + patches.py gerado + cortes
           {
             if [ -f "$RUNNER_TEMP/spk-relatorio/auditoria6.txt" ]; then
               cat "$RUNNER_TEMP/spk-relatorio/auditoria6.txt"
@@ -520,7 +529,7 @@ jobs:
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: spk-relatorio-audit6-${{ github.run_id }}
+          name: spk-relatorio-skip-spnet-${{ github.run_id }}
           path: ${{ runner.temp }}/spk-relatorio/
           retention-days: 7
 
@@ -540,7 +549,7 @@ jobs:
       - name: 9. Salvar IPA nos Artifacts
         uses: actions/upload-artifact@v4
         with:
-          name: spk-ipa-audit6-${{ github.run_id }}
+          name: spk-ipa-skip-spnet-${{ github.run_id }}
           path: ${{ runner.temp }}/*${{ env.IPA_SUFFIX }}.ipa
           if-no-files-found: error
           retention-days: 7
