@@ -1,11 +1,10 @@
-name: 2b. Shader Build - Compile (Fatiado)
+  name: 2b. Shader Build - Compile (Fatiado)
 
 on:
   workflow_run:
     workflows: ["2a. Shader Build - Setup Cache"]
     types: [completed]
-    branches:
-      - SpkIOSzero
+    branches: [SpkIOSzero]
   workflow_dispatch:
 
 permissions:
@@ -13,10 +12,34 @@ permissions:
 
 env:
   GAME: "010035F022078000"
+  GAME_NAME: "DRAGON BALL: Sparking! ZERO"
   TOTAL_SLICES: 4
 
 jobs:
+  check_workflow_status:
+    runs-on: macos-latest
+    timeout-minutes: 5
+    outputs:
+      should_continue: ${{ steps.check.outputs.status }}
+
+    steps:
+      - name: Check previous workflow
+        id: check
+        shell: bash
+        run: |
+          WF_CONCLUSION="${{ github.event.workflow_run.conclusion }}"
+          
+          if [ "$WF_CONCLUSION" == "success" ]; then
+            echo "status=true" >> "$GITHUB_OUTPUT"
+            echo "✅ Previous workflow succeeded, proceeding..."
+          else
+            echo "status=false" >> "$GITHUB_OUTPUT"
+            echo "❌ Previous workflow failed or was skipped"
+          fi
+
   compile_slice:
+    needs: check_workflow_status
+    if: needs.check_workflow_status.outputs.should_continue == 'true'
     runs-on: macos-latest
     timeout-minutes: 360
     strategy:
@@ -25,104 +48,282 @@ jobs:
       max-parallel: 2
 
     steps:
-      - name: Checkout
+      - name: Checkout repo
         uses: actions/checkout@v4
         with:
           ref: SpkIOSzero
+          fetch-depth: 1
 
-      - name: Setup Python
+      - name: Setup build environment
         shell: bash
         run: |
-          echo "🔧 Installing dependencies..."
-          pip3 install --break-system-packages PyYAML lz4 capstone
+          set -e
+          
+          echo "═══════════════════════════════════════════"
+          echo "  🔧 SETUP: Slice ${{ matrix.slice }} Build Environment"
+          echo "═══════════════════════════════════════════"
+          echo ""
+          
+          echo "Installing Python dependencies..."
+          python3 -m pip install --upgrade pip 2>&1 | tail -n 3
+          
+          pip3 install --break-system-packages \
+            PyYAML \
+            lz4 \
+            capstone \
+            zstandard \
+            2>&1 | grep -E "(Successfully|Requirement)" || true
           
           echo ""
-          echo "📋 Verifying toolchain:"
-          python3 --version
-          metal --version 2>&1 | head -1
-          spirv-cross --version 2>&1 | head -1
+          echo "Environment:"
+          echo "  Python: $(python3 --version)"
+          echo "  Pip: $(pip3 --version)"
+          echo "  macOS: $(sw_vers -productVersion)"
+          
+          echo ""
+          echo "Disk space:"
+          df -h / | tail -1
 
       - name: Restore shader cache
+        id: cache
         uses: actions/cache@v4
         with:
           path: |
             .dmsh_cas
             dm/gfx/tools/dmsh_cache
-          key: sparking-shaders-${{ hashFiles(format('dm/games/{0}/shaders/shader_facts.tsv', env.GAME)) }}
-          restore-keys: sparking-shaders-
+          key: dbs-shaders-${{ hashFiles(format('dm/games/{0}/shaders/shader_facts.tsv', env.GAME)) }}
+          restore-keys: |
+            dbs-shaders-
 
-      - name: "Compile Slice ${{ matrix.slice }}/${{ env.TOTAL_SLICES }}"
+      - name: Report cache restoration
+        shell: bash
+        run: |
+          HIT="${{ steps.cache.outputs['cache-hit'] }}"
+          
+          if [ "$HIT" == "true" ]; then
+            echo "✅ Cache restored"
+            [ -d ".dmsh_cas" ] && echo "   DMSH_CAS: $(du -sh .dmsh_cas | awk '{print $1}')" || echo "   DMSH_CAS: pending"
+          else
+            echo "📦 Fresh build (no cache)"
+          fi
+
+      - name: Verify shader tables
+        shell: bash
+        run: |
+          set -e
+          GAME="${{ env.GAME }}"
+          MAP="dm/games/$GAME/shaders/shader_map.tsv"
+          
+          if [ ! -f "$MAP" ]; then
+            echo "❌ shader_map.tsv not found!"
+            exit 1
+          fi
+          
+          TOTAL=$(tail -n +2 "$MAP" | wc -l)
+          echo "✅ Found shader_map.tsv with $TOTAL shaders"
+
+      - name: "Calculate slice ${{ matrix.slice }} range"
+        id: slice_calc
+        shell: bash
+        run: |
+          set -e
+          GAME="${{ env.GAME }}"
+          SLICE=${{ matrix.slice }}
+          TOTAL="${{ env.TOTAL_SLICES }}"
+          
+          MAP="dm/games/$GAME/shaders/shader_map.tsv"
+          TOTAL_COUNT=$(tail -n +2 "$MAP" | wc -l)
+          
+          SLICE_SIZE=$(( (TOTAL_COUNT + TOTAL - 1) / TOTAL ))
+          START=$(( SLICE * SLICE_SIZE + 1 ))
+          END=$(( (SLICE + 1) * SLICE_SIZE + 1 ))
+          
+          [ $END -gt $((TOTAL_COUNT + 1)) ] && END=$((TOTAL_COUNT + 1))
+          SHADER_COUNT=$(( END - START ))
+          
+          echo "start=$START" >> "$GITHUB_OUTPUT"
+          echo "end=$END" >> "$GITHUB_OUTPUT"
+          echo "count=$SHADER_COUNT" >> "$GITHUB_OUTPUT"
+          echo "total=$TOTAL_COUNT" >> "$GITHUB_OUTPUT"
+          
+          echo "📍 Slice $SLICE Configuration:"
+          echo "   Total shaders: $TOTAL_COUNT"
+          echo "   Slice range: $START-$END"
+          echo "   Shaders in this slice: $SHADER_COUNT"
+          echo "   Percentage: $(echo "scale=1; 100 * $SHADER_COUNT / $TOTAL_COUNT" | bc)%"
+
+      - name: Extract shader keys for this slice
+        id: extract_keys
+        shell: bash
+        run: |
+          set -e
+          GAME="${{ env.GAME }}"
+          MAP="dm/games/$GAME/shaders/shader_map.tsv"
+          START=${{ steps.slice_calc.outputs.start }}
+          SHADER_COUNT=${{ steps.slice_calc.outputs.count }}
+          
+          SHADER_LIST="$RUNNER_TEMP/slice_${{ matrix.slice }}.keys"
+          
+          echo "📝 Extracting shader keys for slice ${{ matrix.slice }}..."
+          
+          tail -n +$START "$MAP" | head -n $SHADER_COUNT | awk '{print $1}' > "$SHADER_LIST"
+          
+          EXTRACTED=$(wc -l < "$SHADER_LIST")
+          
+          if [ "$EXTRACTED" -ne "$SHADER_COUNT" ]; then
+            echo "❌ Extraction mismatch!"
+            echo "   Expected: $SHADER_COUNT"
+            echo "   Got: $EXTRACTED"
+            exit 1
+          fi
+          
+          echo "✅ Extracted $EXTRACTED shader keys"
+          echo "SHADER_LIST=$SHADER_LIST" >> "$GITHUB_ENV"
+
+      - name: "Build Slice ${{ matrix.slice }} of ${{ env.TOTAL_SLICES }}"
+        id: build
         shell: bash
         timeout-minutes: 350
         run: |
           set -e
           
           GAME="${{ env.GAME }}"
+          GAME_NAME="${{ env.GAME_NAME }}"
           SLICE=${{ matrix.slice }}
-          TOTAL="${{ env.TOTAL_SLICES }}"
           
-          MAP="dm/games/$GAME/shaders/shader_map.tsv"
-          
-          # Count total shaders
-          TOTAL_COUNT=$(tail -n +2 "$MAP" | wc -l)
-          
-          # Calculate slice range
-          SLICE_SIZE=$(( (TOTAL_COUNT + TOTAL - 1) / TOTAL ))
-          START=$(( SLICE * SLICE_SIZE + 1 ))
-          END=$(( (SLICE + 1) * SLICE_SIZE + 1 ))
-          
-          [ $END -gt $((TOTAL_COUNT + 1)) ] && END=$((TOTAL_COUNT + 1))
-          
-          SHADER_COUNT=$(( END - START ))
-          
-          echo "📍 Slice $SLICE/$((TOTAL - 1))"
-          echo "   Range: line $START-$END"
-          echo "   Shaders: $SHADER_COUNT / $TOTAL_COUNT"
-          
-          # Extract shader keys for this slice
-          SHADER_LIST="$RUNNER_TEMP/slice_${SLICE}.keys"
-          tail -n +$START "$MAP" | head -n $SHADER_COUNT | awk '{print $1}' > "$SHADER_LIST"
-          
-          COUNT=$(wc -l < "$SHADER_LIST")
-          echo "   Extracted: $COUNT keys"
+          echo "════════════════════════════════════════════════════════"
+          echo "  🔨 SHADER COMPILATION: Slice $SLICE"
+          echo "════════════════════════════════════════════════════════"
+          echo ""
+          echo "Game: $GAME_NAME"
+          echo "Title ID: $GAME"
+          echo "Slice: $SLICE/$((TOTAL_SLICES - 1))"
+          echo ""
+          echo "Build parameters:"
+          echo "  • Shaders in slice: ${{ steps.slice_calc.outputs.count }}"
+          echo "  • Of total: ${{ steps.slice_calc.outputs.total }}"
+          echo "  • Keylist: ${{ env.SHADER_LIST }}"
+          echo ""
           
           # Setup build environment
           export DM_GAME="$GAME"
           export DMSH_CAS="$PWD/.dmsh_cas"
           export DM_SHADER_SLICE="$SLICE"
-          export DM_SHADER_TOTAL_SLICES="$TOTAL"
+          export DM_SHADER_TOTAL_SLICES="${{ env.TOTAL_SLICES }}"
           
           SLICE_OUT="dm/games/$GAME/shaders/metallib_slice_${SLICE}"
           mkdir -p "$SLICE_OUT"
           
+          echo "Environment:"
+          echo "  DM_GAME: $DM_GAME"
+          echo "  DMSH_CAS: $DMSH_CAS"
+          echo "  Output: $SLICE_OUT"
           echo ""
-          echo "🔨 Building shaders..."
-          echo "   CAS: $DMSH_CAS"
-          echo "   Output: $SLICE_OUT"
           
-          # Run shader build
-          python3 dm/gfx/tools/dmsh_build.py \
-            --keys "$SHADER_LIST" \
+          echo "Starting shader build..."
+          echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+          
+          START_TIME=$(date +%s)
+          
+          if ! python3 dm/gfx/tools/dmsh_build.py \
+            --keys "${{ env.SHADER_LIST }}" \
             --output "$SLICE_OUT" \
             --cache "$DMSH_CAS" \
             --game "$GAME" \
-            2>&1 | tee "$RUNNER_TEMP/build_slice_${SLICE}.log"
-          
-          BUILD_EXIT=${PIPESTATUS[0]}
-          
-          if [ $BUILD_EXIT -eq 0 ]; then
-            METALLIB_COUNT=$(find "$SLICE_OUT" -name "*.metallib" -o -name "*.mtl4a" | wc -l)
+            2>&1 | tee "$RUNNER_TEMP/build_slice_${SLICE}.log"; then
+            
+            BUILD_EXIT=$?
+            END_TIME=$(date +%s)
+            DURATION=$((END_TIME - START_TIME))
+            
             echo ""
-            echo "✅ Slice $SLICE completed"
-            echo "   Metallibs generated: $METALLIB_COUNT"
-          else
+            echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+            echo "❌ Build failed with exit code $BUILD_EXIT (after ${DURATION}s)"
             echo ""
-            echo "❌ Slice $SLICE failed with exit code $BUILD_EXIT"
-            echo ""
-            echo "Build log (last 50 lines):"
+            echo "Last 50 lines of output:"
             tail -n 50 "$RUNNER_TEMP/build_slice_${SLICE}.log"
             exit 1
           fi
+          
+          BUILD_EXIT=${PIPESTATUS[0]}
+          END_TIME=$(date +%s)
+          DURATION=$((END_TIME - START_TIME))
+          
+          echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+          
+          if [ $BUILD_EXIT -eq 0 ]; then
+            echo ""
+            echo "✅ Compilation successful!"
+            echo "   Duration: ${DURATION}s (~$((DURATION/60))m)"
+            
+            if [ -d "$SLICE_OUT" ]; then
+              METALLIB_COUNT=$(find "$SLICE_OUT" -type f \( -name "*.metallib" -o -name "*.mtl4a" \) | wc -l)
+              SLICE_SIZE=$(du -sh "$SLICE_OUT" | awk '{print $1}')
+              echo "   Metallibs generated: $METALLIB_COUNT"
+              echo "   Size: $SLICE_SIZE"
+            fi
+            
+            echo "SLICE_OUT=$SLICE_OUT" >> "$GITHUB_ENV"
+            echo "BUILD_TIME=$DURATION" >> "$GITHUB_ENV"
+          else
+            echo ""
+            echo "❌ Build failed with exit code $BUILD_EXIT"
+            exit 1
+          fi
+
+      - name: Verify slice output
+        shell: bash
+        run: |
+          SLICE=${{ matrix.slice }}
+          SLICE_OUT="${{ env.SLICE_OUT }}"
+          
+          if [ -z "$SLICE_OUT" ]; then
+            echo "❌ No output directory set!"
+            exit 1
+          fi
+          
+          echo "📋 Verifying slice $SLICE output"
+          echo "═══════════════════════════════════════════"
+          echo ""
+          
+          if [ ! -d "$SLICE_OUT" ]; then
+            echo "❌ Output directory not found!"
+            echo "   Expected: $SLICE_OUT"
+            exit 1
+          fi
+          
+          FILE_COUNT=$(find "$SLICE_OUT" -type f | wc -l)
+          DIR_SIZE=$(du -sh "$SLICE_OUT" | awk '{print $1}')
+          
+          echo "Output directory: $SLICE_OUT"
+          echo "  Files: $FILE_COUNT"
+          echo "  Size: $DIR_SIZE"
+          echo ""
+          
+          # List metallib files
+          METALLIBS=$(find "$SLICE_OUT" -type f \( -name "*.metallib" -o -name "*.mtl4a" \))
+          METALLIB_COUNT=$(echo "$METALLIBS" | wc -l)
+          
+          if [ $METALLIB_COUNT -eq 0 ]; then
+            echo "❌ No metallib files generated!"
+            echo ""
+            echo "Directory contents:"
+            find "$SLICE_OUT" -type f | head -20
+            exit 1
+          fi
+          
+          echo "Metallib files:"
+          echo "$METALLIBS" | while read -r file; do
+            SIZE=$(ls -lh "$file" | awk '{print $5}')
+            echo "  ✅ $(basename "$file") - $SIZE"
+          done | head -20
+          
+          if [ $METALLIB_COUNT -gt 20 ]; then
+            echo "  ... and $((METALLIB_COUNT - 20)) more"
+          fi
+          
+          echo ""
+          echo "✅ Slice verification complete"
 
       - name: Save cache after build
         uses: actions/cache/save@v4
@@ -131,24 +332,32 @@ jobs:
           path: |
             .dmsh_cas
             dm/gfx/tools/dmsh_cache
-          key: sparking-shaders-${{ hashFiles(format('dm/games/{0}/shaders/shader_facts.tsv', env.GAME)) }}-${{ github.run_id }}-slice-${{ matrix.slice }}
+          key: dbs-shaders-${{ hashFiles(format('dm/games/{0}/shaders/shader_facts.tsv', env.GAME)) }}-run-${{ github.run_id }}-slice-${{ matrix.slice }}
 
       - name: Upload metallib slice
-        if: always()
         uses: actions/upload-artifact@v4
         with:
           name: metallib-slice-${{ matrix.slice }}
           path: dm/games/010035F022078000/shaders/metallib_slice_*/
           retention-days: 14
+          if-no-files-found: error
 
       - name: Upload build log
-        if: always()
         uses: actions/upload-artifact@v4
+        if: always()
         with:
           name: build-log-slice-${{ matrix.slice }}
           path: ${{ runner.temp }}/build_slice_${{ matrix.slice }}.log
           retention-days: 7
 
+      - name: Report slice completion
+        shell: bash
+        run: |
+          echo ""
+          echo "════════════════════════════════════════════"
+          echo "  ✅ Slice ${{ matrix.slice }} Complete"
+          echo "════════════════════════════════════════════"
+  
   merge_slices:
     needs: compile_slice
     runs-on: macos-latest
@@ -156,44 +365,128 @@ jobs:
     if: always()
 
     steps:
-      - name: Checkout
+      - name: Checkout repo
         uses: actions/checkout@v4
         with:
           ref: SpkIOSzero
+          fetch-depth: 1
 
-      - name: Download all metallib slices
+      - name: Download all slice artifacts
         uses: actions/download-artifact@v4
         with:
           path: ${{ runner.temp }}/artifacts
 
+      - name: Verify all slices downloaded
+        shell: bash
+        run: |
+          echo "📥 Verifying downloaded artifacts"
+          echo "═══════════════════════════════════════════"
+          echo ""
+          
+          SLICES_FOUND=0
+          for slice_num in 0 1 2 3; do
+            SLICE_DIR="$RUNNER_TEMP/artifacts/metallib-slice-$slice_num"
+            
+            if [ -d "$SLICE_DIR" ]; then
+              FILE_COUNT=$(find "$SLICE_DIR" -type f | wc -l)
+              SIZE=$(du -sh "$SLICE_DIR" | awk '{print $1}')
+              echo "  ✅ Slice $slice_num: $FILE_COUNT files ($SIZE)"
+              SLICES_FOUND=$((SLICES_FOUND + 1))
+            else
+              echo "  ❌ Slice $slice_num: NOT FOUND"
+            fi
+          done
+          
+          echo ""
+          if [ $SLICES_FOUND -lt 4 ]; then
+            echo "⚠️  Only $SLICES_FOUND/4 slices found"
+          else
+            echo "✅ All 4 slices present"
+          fi
+
       - name: Merge metallib slices
         shell: bash
         run: |
+          set -e
           GAME="${{ env.GAME }}"
+          GAME_NAME="${{ env.GAME_NAME }}"
           METAL_DIR="dm/games/$GAME/shaders/metallib"
           
           mkdir -p "$METAL_DIR"
           
-          echo "📦 Merging metallib slices..."
+          echo "📦 Merging metallib slices"
+          echo "═══════════════════════════════════════════"
+          echo ""
+          echo "Game: $GAME_NAME"
+          echo "Output: $METAL_DIR"
+          echo ""
+          
+          TOTAL_MERGED=0
           
           for slice_num in 0 1 2 3; do
             SLICE_DIR="$RUNNER_TEMP/artifacts/metallib-slice-$slice_num"
             
             if [ -d "$SLICE_DIR" ]; then
-              echo "  Merging slice $slice_num..."
-              find "$SLICE_DIR" -type f \( -name "*.metallib" -o -name "*.mtl4a" \) | \
-                while read file; do
-                  cp "$file" "$METAL_DIR/" 2>/dev/null || true
-                done
+              SLICE_FILES=$(find "$SLICE_DIR" -type f | wc -l)
+              echo "  Merging slice $slice_num: $SLICE_FILES files"
+              
+              find "$SLICE_DIR" -type f | while read -r file; do
+                cp "$file" "$METAL_DIR/" 2>/dev/null || true
+                TOTAL_MERGED=$((TOTAL_MERGED + 1))
+              done
+            else
+              echo "  ⚠️  Slice $slice_num not found (skipping)"
             fi
           done
           
           MERGED=$(find "$METAL_DIR" -type f | wc -l)
-          echo "✅ Merged $MERGED metallib files"
+          SIZE=$(du -sh "$METAL_DIR" | awk '{print $1}')
+          
+          echo ""
+          echo "✅ Merge complete"
+          echo "   Total metallibs: $MERGED"
+          echo "   Total size: $SIZE"
           
           if [ $MERGED -eq 0 ]; then
-            echo "⚠️  No metallibs merged! Check build logs."
+            echo "❌ No metallibs merged! Check slice builds."
+            exit 1
           fi
+
+      - name: Verify merged metallibs
+        shell: bash
+        run: |
+          GAME="${{ env.GAME }}"
+          METAL_DIR="dm/games/$GAME/shaders/metallib"
+          
+          echo "📋 Merged metallib verification"
+          echo "═══════════════════════════════════════════"
+          echo ""
+          
+          if [ ! -d "$METAL_DIR" ]; then
+            echo "❌ Metallib directory not found!"
+            exit 1
+          fi
+          
+          FILE_COUNT=$(find "$METAL_DIR" -type f | wc -l)
+          DIR_SIZE=$(du -sh "$METAL_DIR" | awk '{print $1}')
+          
+          echo "Directory: $METAL_DIR"
+          echo "  Files: $FILE_COUNT"
+          echo "  Size: $DIR_SIZE"
+          echo ""
+          
+          if [ $FILE_COUNT -eq 0 ]; then
+            echo "❌ No files in merged directory!"
+            exit 1
+          fi
+          
+          echo "File types:"
+          find "$METAL_DIR" -type f | sed 's/.*\.//' | sort | uniq -c | while read count ext; do
+            echo "  • .$ext: $count files"
+          done
+          
+          echo ""
+          echo "✅ Verification complete"
 
       - name: Create metallib archive
         shell: bash
@@ -201,48 +494,128 @@ jobs:
           GAME="${{ env.GAME }}"
           METAL_DIR="dm/games/$GAME/shaders/metallib"
           
-          if [ -d "$METAL_DIR" ] && [ $(find "$METAL_DIR" -type f | wc -l) -gt 0 ]; then
-            ARCHIVE="$RUNNER_TEMP/sparking-shaders-metallib.tar.gz"
-            
-            echo "📦 Creating archive..."
-            tar -czf "$ARCHIVE" -C "$METAL_DIR" .
-            
-            SIZE=$(ls -lh "$ARCHIVE" | awk '{print $5}')
-            echo "✅ Archive created: $SIZE"
-            echo "ARCHIVE_PATH=$ARCHIVE" >> "$GITHUB_ENV"
-          else
-            echo "⚠️  No metallibs to archive"
-            exit 0
+          if [ ! -d "$METAL_DIR" ] || [ $(find "$METAL_DIR" -type f | wc -l) -eq 0 ]; then
+            echo "❌ No metallibs to archive"
+            exit 1
           fi
+          
+          ARCHIVE="$RUNNER_TEMP/dbs-shaders-metallib-$(date +%Y%m%d-%H%M%S).tar.gz"
+          
+          echo "📦 Creating archive"
+          echo "═══════════════════════════════════════════"
+          echo ""
+          echo "Archive: $ARCHIVE"
+          echo ""
+          
+          if ! tar -czf "$ARCHIVE" -C "$METAL_DIR" . 2>&1 | tee "$RUNNER_TEMP/archive.log"; then
+            echo "❌ Archive creation failed"
+            tail -n 20 "$RUNNER_TEMP/archive.log"
+            exit 1
+          fi
+          
+          SIZE=$(ls -lh "$ARCHIVE" | awk '{print $5}')
+          HASH=$(shasum -a 256 "$ARCHIVE" | awk '{print $1}')
+          HASH_SHORT=$(echo $HASH | cut -c1-16)
+          
+          echo "✅ Archive created"
+          echo "  Size: $SIZE"
+          echo "  SHA256: $HASH_SHORT..."
+          
+          echo "ARCHIVE_PATH=$ARCHIVE" >> "$GITHUB_ENV"
 
-      - name: Upload merged metallibs
-        if: env.ARCHIVE_PATH != ''
+      - name: Upload merged metallibs artifact
         uses: actions/upload-artifact@v4
         with:
           name: metallib-merged
-          path: ${{ env.ARCHIVE_PATH }}
+          path: dm/games/010035F022078000/shaders/metallib/
           retention-days: 30
+          if-no-files-found: error
 
-      - name: Report merge results
+      - name: Generate compilation summary
         shell: bash
         run: |
           GAME="${{ env.GAME }}"
+          GAME_NAME="${{ env.GAME_NAME }}"
           METAL_DIR="dm/games/$GAME/shaders/metallib"
           
-          echo "📊 Shader build summary:"
-          echo ""
-          echo "✅ Merged metallibs:"
+          cat > "$RUNNER_TEMP/compilation_summary.txt" << EOF
+          ╔════════════════════════════════════════════════════════╗
+          ║   DRAGON BALL: Sparking! ZERO - Compilation Summary    ║
+          ╚════════════════════════════════════════════════════════╝
+          
+          Game Information:
+            Title ID: $GAME
+            Game: $GAME_NAME
+            Branch: SpkIOSzero
+          
+          Compilation Results:
+            Build Method: Fatiado (sliced) - 4 segments
+            Parallelization: Max 2 simultaneous jobs
+          
+          Metallib Output:
+          EOF
           
           if [ -d "$METAL_DIR" ]; then
-            find "$METAL_DIR" -type f | while read file; do
-              SIZE=$(ls -lh "$file" | awk '{print $5}')
-              echo "   $(basename "$file") - $SIZE"
-            done | head -20
+            METALLIB_COUNT=$(find "$METAL_DIR" -type f | wc -l)
+            METALLIB_SIZE=$(du -sh "$METAL_DIR" | awk '{print $1}')
             
-            TOTAL=$(find "$METAL_DIR" -type f | wc -l)
-            if [ $TOTAL -gt 20 ]; then
-              echo "   ... and $((TOTAL - 20)) more"
+            echo "    Total Files: $METALLIB_COUNT" >> "$RUNNER_TEMP/compilation_summary.txt"
+            echo "    Total Size: $METALLIB_SIZE" >> "$RUNNER_TEMP/compilation_summary.txt"
+            echo "" >> "$RUNNER_TEMP/compilation_summary.txt"
+            
+            find "$METAL_DIR" -type f | head -20 | while read file; do
+              SIZE=$(ls -lh "$file" | awk '{print $5}')
+              echo "    ✅ $(basename "$file") - $SIZE" >> "$RUNNER_TEMP/compilation_summary.txt"
+            done
+            
+            REMAINING=$(find "$METAL_DIR" -type f | wc -l)
+            if [ $REMAINING -gt 20 ]; then
+              echo "    ... and $((REMAINING - 20)) more files" >> "$RUNNER_TEMP/compilation_summary.txt"
             fi
-          else
-            echo "   (none found)"
           fi
+          
+          echo "" >> "$RUNNER_TEMP/compilation_summary.txt"
+          echo "Timestamp: $(date -u)" >> "$RUNNER_TEMP/compilation_summary.txt"
+          
+          cat "$RUNNER_TEMP/compilation_summary.txt"
+
+      - name: Upload compilation summary
+        uses: actions/upload-artifact@v4
+        with:
+          name: compilation-summary
+          path: ${{ runner.temp }}/compilation_summary.txt
+          retention-days: 30
+
+      - name: Report workflow 2b completion
+        shell: bash
+        run: |
+          echo ""
+          echo "════════════════════════════════════════════════════════"
+          echo "  ✅ WORKFLOW 2b COMPLETE: SHADER COMPILATION"
+          echo "════════════════════════════════════════════════════════"
+          echo ""
+          echo "Game: ${{ env.GAME_NAME }}"
+          echo "Title ID: ${{ env.GAME }}"
+          echo ""
+          echo "📊 Results:"
+          
+          GAME="${{ env.GAME }}"
+          METAL_DIR="dm/games/$GAME/shaders/metallib"
+          
+          if [ -d "$METAL_DIR" ]; then
+            COUNT=$(find "$METAL_DIR" -type f | wc -l)
+            SIZE=$(du -sh "$METAL_DIR" | awk '{print $1}')
+            echo "  • Metallib files: $COUNT"
+            echo "  • Total size: $SIZE"
+          fi
+          
+          echo ""
+          echo "🚀 NEXT STEP:"
+          echo "   Workflow 3 will:"
+          echo "   • Organize all artifacts"
+          echo "   • Commit to repository"
+          echo "   • Create release tag"
+          echo ""
+          echo "────────────────────────────────────────────────────────"
+          echo "Workflow 3 will trigger automatically when this completes"
+          echo "════════════════════════════════════════════════════════"
