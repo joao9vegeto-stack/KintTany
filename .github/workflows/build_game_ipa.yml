@@ -30,7 +30,7 @@ jobs:
       EXPECTED_MAIN_BUILD_ID: "68edafd68c7bc1a1af50b82aac838018"
       IPA_SUFFIX: "_PATCH_LAYOUT"
 
-      # Valores medidos no build 68edafd6
+      # Valores medidos no build 68edafd6 (fatos.txt da auditoria 3)
       SPK_CUT_ADDR: "0x1e4db30"
       SPK_CUT_BYTES: "6b740194"
       SPK_OBS_ADDR: "0x1e4db34"
@@ -51,21 +51,21 @@ jobs:
           brew install xcodegen || true
           pip3 install --break-system-packages lz4 capstone fonttools zstandard PyYAML
 
-      - name: 3. Ajustar hle_uemalloc.c para o layout real do SPK
+      - name: 3. Adicionar layout de 23 slots ao hle_uemalloc.c
         shell: bash
         run: |
           set -e
           python3 -u - <<'PYEOF'
           from pathlib import Path
-
           p = Path("dm/host/hle_uemalloc.c")
           src = p.read_text(encoding="utf-8")
 
           old_enum = "enum { UE5, UE4_27, UE5_6 };"
+          new_enum = "enum { UE5, UE4_27, UE5_6, UE5_SPK };"
           if old_enum in src:
-              src = src.replace(old_enum, "enum { UE5, UE4_27, UE5_6, UE5_SPK };", 1)
-          elif "enum { UE5, UE4_27, UE5_6, UE5_SPK };" not in src:
-              raise SystemExit("ERRO: enum de layouts nao encontrado em formato esperado")
+              src = src.replace(old_enum, new_enum, 1)
+          elif new_enum not in src:
+              raise SystemExit("ERRO: enum de layouts nao encontrado")
 
           if "[UE5_SPK]" not in src:
               lines = src.split("\n")
@@ -74,18 +74,11 @@ jobs:
                   raise SystemExit(f"ERRO: linha k_lay[UE5_6] nao encontrada ({len(idx)}x)")
               lines.insert(idx[0] + 1,
                   "    [UE5_SPK] = { 23, 3, 4, 5, 6, 7, 8, 9, { 10, 11, 12, 16 } },   "
-                  "// DRAGON BALL: Sparking! ZERO 2.0.76: UE4_27 + OnPreFork/OnPostFork (vtable main+0x8703ab8)")
+                  "// DRAGON BALL: Sparking! ZERO 2.0.76: UE4.27 layout + OnPreFork/OnPostFork (vtable main+0x8703ab8)")
               src = "\n".join(lines)
 
-          old_kue = '{ "68edafd68c7bc1a1af50b82aac838018", "DRAGON BALL: Sparking! ZERO", UE5, 0, 0x8703ab8, 0x1e4db30 },'
-          new_kue = '{ "68edafd68c7bc1a1af50b82aac838018", "DRAGON BALL: Sparking! ZERO", UE5_SPK, 0, 0x8703ab8, 0x1e4db30 },'
-          if old_kue in src:
-              src = src.replace(old_kue, new_kue, 1)
-          elif new_kue not in src:
-              raise SystemExit("ERRO: entrada k_ue do build 68edafd6 nao encontrada")
-
           p.write_text(src, encoding="utf-8")
-          print("hle_uemalloc.c: UE5_SPK garantido e build 68edafd6 corrigido para UE5_SPK")
+          print("hle_uemalloc.c: layout UE5_SPK garantido (a linha k_ue e gravada pelo pipeline e corrigida no passo 4)")
           PYEOF
 
       - name: 4. Preparar build com os valores corretos
@@ -119,37 +112,33 @@ jobs:
               return hits[0]
 
           def indent_of(i):
-              l = lines[i]
-              return l[: len(l) - len(l.lstrip())]
+              l = lines[i]; return l[: len(l) - len(l.lstrip())]
 
           def insert_after(s, block):
-              i = find_unique(s)
-              ind = indent_of(i)
+              i = find_unique(s); ind = indent_of(i)
               lines[i + 1:i + 1] = [ind + l if l.strip() else "" for l in textwrap.dedent(block).strip("\n").split("\n")]
 
           def insert_before(s, block):
-              i = find_unique(s)
-              ind = indent_of(i)
+              i = find_unique(s); ind = indent_of(i)
               lines[i:i] = [ind + l if l.strip() else "" for l in textwrap.dedent(block).strip("\n").split("\n")]
 
-          # A. Validar o main exato analisado
+          # A. Conferir o main
           insert_after('main_bytes = (exefs / "main").read_bytes()', '''
           import hashlib
           _sha = hashlib.sha256(main_bytes).hexdigest()
           _bid = main_bytes[0x40:0x50].hex()
           print(f"=== SHA-256 main: {_sha}", flush=True)
-          print(f"=== Build ID do main: {_bid} ===", flush=True)
           if _sha != os.environ["EXPECTED_MAIN_SHA256"] or _bid != os.environ["EXPECTED_MAIN_BUILD_ID"]:
               raise SystemExit("ERRO: main diferente do executavel analisado; patch nao se aplica")
           ''')
 
-          # B. Evitar patches herdados
+          # B. Nenhum patches.py antigo
           insert_after("prof_dir.mkdir(parents=True, exist_ok=True)", '''
           if (prof_dir / "patches.py").exists():
               (prof_dir / "patches.py").unlink()
           ''')
 
-          # C. Forcar os valores medidos do patch do construtor
+          # C. Sobrescrever a deteccao heuristica com os valores medidos
           insert_before("if cut_addr is not None and obs_addr is not None:", '''
           cut_addr = int(os.environ["SPK_CUT_ADDR"], 16)
           cut_orig_hex = os.environ["SPK_CUT_BYTES"]
@@ -168,12 +157,28 @@ jobs:
                 f"vtable {vtable_addr:#x} layout {ue_layout} ===", flush=True)
           ''')
 
-          # D. Nome da IPA
+          # D. Nome do IPA
           insert_before('ipa_filename = f"{safe_name}.ipa"',
                         'safe_name = safe_name + os.environ.get("IPA_SUFFIX", "")')
 
-          # E. Conferir que a reescrita aplicou exatamente 1 cut e 1 obs
+          # E. Corrigir a linha k_ue gravada pelo pipeline (UE5 -> UE5_SPK) antes de compilar,
+          #    e conferir que a reescrita aplicou exatamente 1 cut e 1 obs
           insert_before('if (exefs / "main.npdm").exists():', '''
+          import re as _re
+          _hp = Path("dm/host/hle_uemalloc.c")
+          _hs = _hp.read_text(encoding="utf-8")
+          _pat = _re.compile(r'(\\{ "68edafd68c7bc1a1af50b82aac838018", "[^"]*", )UE5(,)')
+          _n = len(_pat.findall(_hs))
+          if _n != 1 and "UE5_SPK, 0, 0x8703ab8" not in _hs:
+              raise SystemExit(f"ERRO: linha k_ue do build 68edafd6 nao foi gravada em formato esperado ({_n}x)")
+          if _n == 1:
+              _hs = _pat.sub(r"\\1UE5_SPK\\2", _hs, count=1)
+              _hp.write_text(_hs, encoding="utf-8")
+          _row = [l for l in _hs.splitlines() if "68edafd68c7bc1a1af50b82aac838018" in l]
+          print("=== k_ue corrigido para UE5_SPK ===\\n" + "\\n".join(_row), flush=True)
+          if not any("UE5_SPK" in l for l in _row):
+              raise SystemExit("ERRO: k_ue ainda nao aponta para UE5_SPK")
+
           def _rows(p):
               if not p.exists():
                   return []
@@ -189,20 +194,20 @@ jobs:
           ''')
 
           command = "\n".join(lines)
-          m = re.search(r"python3 -u - << 'PYEOF'\\n(.*?)\\nPYEOF", command, re.S)
+          m = re.search(r"python3 -u - << 'PYEOF'\n(.*?)\nPYEOF", command, re.S)
           if not m:
               raise SystemExit("ERRO: nao isolei o Python embutido")
           try:
               compile(m.group(1), "<embutido>", "exec")
           except SyntaxError as e:
-              ctx = m.group(1).split("\\n")
+              ctx = m.group(1).split("\n")
               for n in range(max(0, e.lineno - 4), min(len(ctx), e.lineno + 3)):
                   print(f"{n+1:5d}: {ctx[n]}")
               raise SystemExit(f"ERRO de sintaxe: {e}")
-
           print("Python embutido: sintaxe OK")
+
           out = Path(os.environ["RUNNER_TEMP"]) / "spk-build.sh"
-          out.write_text(command + "\\n", encoding="utf-8")
+          out.write_text(command + "\n", encoding="utf-8")
           print(f"Etapa base: {step_name}")
           PYEOF
 
@@ -216,6 +221,7 @@ jobs:
         if: always()
         shell: bash
         run: |
+          mkdir -p "$RUNNER_TEMP/spk-relatorio"
           {
             echo "FIX DO LAYOUT UE5_SPK APOS PATCH DO CONSTRUTOR"
             echo "Execucao: $GITHUB_RUN_ID  commit: $GITHUB_SHA"
@@ -223,8 +229,8 @@ jobs:
             for f in "$RUNNER_TEMP"/*-work/build/patched_v0/main.cuts.tsv "$RUNNER_TEMP"/*-work/build/patched_v0/main.obs.tsv; do
               [ -f "$f" ] && { echo "=== $(basename "$f") ==="; cat "$f"; echo; }
             done
-            echo "=== k_ue em hle_uemalloc.c ==="
-            grep -n "68edafd6\|UE5_SPK" dm/host/hle_uemalloc.c || echo "(nao registrado)"
+            echo "=== k_ue / layouts em hle_uemalloc.c ==="
+            grep -n "68edafd6\|UE5_SPK\|enum { UE5" dm/host/hle_uemalloc.c || echo "(nao registrado)"
             echo
             echo "=== IPAs ==="
             ls -la "$RUNNER_TEMP"/*.ipa 2>/dev/null || echo "nenhum"
