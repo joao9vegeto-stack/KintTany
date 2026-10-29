@@ -1,0 +1,242 @@
+name: 1. Extract Shader Kit + Split
+
+on:
+  push:
+    branches:
+      - SpkIOSzero
+    paths:
+      - '.github/workflows/1-extract-shader-kit.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+env:
+  GAME: "010035F022078000"
+
+jobs:
+  extract_and_split:
+    runs-on: macos-latest
+    timeout-minutes: 120
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Python
+        run: |
+          pip3 install --break-system-packages \
+            lz4 capstone PyYAML zstandard
+
+      - name: Download shader kit part1
+        shell: bash
+        run: |
+          set -e
+          WORK="${RUNNER_TEMP}/shader_build"
+          mkdir -p "$WORK"
+          
+          echo "📥 Downloading part1.zip (140 MB)..."
+          curl -fL --retry 5 --max-time 1800 \
+            -o "$WORK/part1.zip" \
+            "https://github.com/joao9vegeto-stack/KintTany/releases/download/v1.0-kit/shader_kit_010035F022078000_part1.zip"
+          
+          SIZE=$(ls -lh "$WORK/part1.zip" | awk '{print $5}')
+          echo "✅ part1.zip downloaded: $SIZE"
+          
+          echo "WORK=$WORK" >> "$GITHUB_ENV"
+
+      - name: Download shader kit part2 (split)
+        shell: bash
+        run: |
+          WORK="${{ env.WORK }}"
+          
+          echo "📥 Downloading part2.z00 (1900 MB)..."
+          curl -fL --retry 5 --max-time 3600 \
+            -o "$WORK/part2.z00" \
+            "https://github.com/joao9vegeto-stack/KintTany/releases/download/v1.0-kit/shader_kit_010035F022078000_part2.z00"
+          
+          SIZE=$(ls -lh "$WORK/part2.z00" | awk '{print $5}')
+          echo "✅ part2.z00 downloaded: $SIZE"
+          
+          echo "📥 Downloading part2.z01 (1264 MB)..."
+          curl -fL --retry 5 --max-time 3600 \
+            -o "$WORK/part2.z01" \
+            "https://github.com/joao9vegeto-stack/KintTany/releases/download/v1.0-kit/shader_kit_010035F022078000_part2.z01"
+          
+          SIZE=$(ls -lh "$WORK/part2.z01" | awk '{print $5}')
+          echo "✅ part2.z01 downloaded: $SIZE"
+
+      - name: Reconstruct part2.zip from split files
+        shell: bash
+        run: |
+          WORK="${{ env.WORK }}"
+          
+          echo "🔗 Concatenating part2.z00 + part2.z01..."
+          cat "$WORK/part2.z00" "$WORK/part2.z01" > "$WORK/part2.zip"
+          
+          SIZE=$(ls -lh "$WORK/part2.zip" | awk '{print $5}')
+          CHECKSUM=$(shasum -a 256 "$WORK/part2.zip" | cut -d' ' -f1)
+          echo "✅ part2.zip reconstructed: $SIZE"
+          echo "   SHA256: $CHECKSUM"
+
+      - name: Extract part1.zip
+        shell: bash
+        run: |
+          WORK="${{ env.WORK }}"
+          KIT_DIR="$WORK/kit_extracted"
+          
+          mkdir -p "$KIT_DIR"
+          
+          echo "📦 Extracting part1.zip..."
+          unzip -q "$WORK/part1.zip" -d "$KIT_DIR"
+          
+          echo "✅ part1.zip extracted"
+          echo "   Files: $(find "$KIT_DIR" -type f | wc -l)"
+
+      - name: Extract part2.zip
+        shell: bash
+        run: |
+          WORK="${{ env.WORK }}"
+          KIT_DIR="$WORK/kit_extracted"
+          
+          echo "📦 Extracting part2.zip..."
+          unzip -q "$WORK/part2.zip" -d "$KIT_DIR"
+          
+          echo "✅ part2.zip extracted"
+          TOTAL=$(find "$KIT_DIR" -type f | wc -l)
+          echo "   Total files in kit: $TOTAL"
+
+      - name: Locate RomFS and main executable
+        shell: bash
+        run: |
+          WORK="${{ env.WORK }}"
+          KIT_DIR="$WORK/kit_extracted"
+          
+          echo "🔍 Searching for RomFS..."
+          ROMFS=$(find "$KIT_DIR" -type d -name "RomFS" | head -1)
+          
+          if [ -z "$ROMFS" ]; then
+            echo "❌ RomFS not found!"
+            echo "   Directory structure:"
+            find "$KIT_DIR" -maxdepth 3 -type d | head -20
+            exit 1
+          fi
+          
+          echo "✅ RomFS located: $ROMFS"
+          ROMFS_FILES=$(find "$ROMFS" -type f | wc -l)
+          echo "   Files in RomFS: $ROMFS_FILES"
+          
+          echo "🔍 Searching for main executable..."
+          MAIN=$(find "$KIT_DIR" -type f -name "main" -not -path "*/.*" | head -1)
+          
+          if [ -z "$MAIN" ]; then
+            echo "⚠️  main not found, will continue without it"
+            MAIN=""
+          else
+            echo "✅ main located: $MAIN"
+            SIZE=$(ls -lh "$MAIN" | awk '{print $5}')
+            echo "   Size: $SIZE"
+          fi
+          
+          echo "KIT_DIR=$KIT_DIR" >> "$GITHUB_ENV"
+          echo "KIT_ROMFS=$ROMFS" >> "$GITHUB_ENV"
+          echo "KIT_MAIN=$MAIN" >> "$GITHUB_ENV"
+
+      - name: Run shader_split.py
+        shell: bash
+        run: |
+          KIT_ROMFS="${{ env.KIT_ROMFS }}"
+          KIT_MAIN="${{ env.KIT_MAIN }}"
+          GAME="${{ env.GAME }}"
+          
+          SHADER_OUT="dm/games/$GAME/shaders"
+          mkdir -p "$SHADER_OUT"
+          
+          echo "🔧 Running shader_split.py..."
+          echo "   RomFS: $KIT_ROMFS"
+          echo "   Main: ${KIT_MAIN:-(none)}"
+          echo "   Output: $SHADER_OUT"
+          
+          python3 dm/gfx/tools/shader_split.py \
+            "$KIT_ROMFS" \
+            "$KIT_MAIN" \
+            "$SHADER_OUT" \
+            "$SHADER_OUT/shader_map.tsv" \
+            "$SHADER_OUT/shader_facts.tsv" \
+            "$SHADER_OUT/shader_pairs.tsv" \
+            2>&1 | tee "$RUNNER_TEMP/shader_split.log"
+          
+          SPLIT_EXIT=${PIPESTATUS[0]}
+          if [ $SPLIT_EXIT -ne 0 ]; then
+            echo "❌ shader_split.py failed with exit code $SPLIT_EXIT"
+            cat "$RUNNER_TEMP/shader_split.log"
+            exit 1
+          fi
+          
+          echo ""
+          echo "✅ shader_split.py completed successfully"
+
+      - name: Report shader split results
+        shell: bash
+        run: |
+          GAME="${{ env.GAME }}"
+          SHADER_OUT="dm/games/$GAME/shaders"
+          
+          echo "📊 Shader split results:"
+          echo ""
+          
+          for file in "$SHADER_OUT"/*.tsv; do
+            if [ -f "$file" ]; then
+              basename=$(basename "$file")
+              lines=$(wc -l < "$file")
+              size=$(ls -lh "$file" | awk '{print $5}')
+              echo "  ✅ $basename"
+              echo "     Lines: $lines"
+              echo "     Size: $size"
+            fi
+          done
+
+      - name: Upload shader split artifacts
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: shader-split-tables
+          path: dm/games/010035F022078000/shaders/*.tsv
+          retention-days: 30
+
+      - name: Commit shader tables to repo
+        shell: bash
+        run: |
+          git config user.name "GitHub Actions"
+          git config user.email "actions@github.com"
+          
+          GAME="${{ env.GAME }}"
+          
+          git add -A "dm/games/$GAME/shaders/*.tsv"
+          
+          if ! git diff --cached --quiet; then
+            git commit -m "chore: shader split tables for Sparking! Zero
+
+- shader_map.tsv: shader keys and container locations
+- shader_facts.tsv: binding analysis
+- shader_pairs.tsv: vertex/pixel shader pairs
+
+Generated by shader_split.py from extracted RomFS."
+            
+            git push origin HEAD:SpkIOSzero || {
+              echo "⚠️  Git push failed (may be rate-limited)"
+              exit 0
+            }
+            
+            echo "✅ Shader tables committed and pushed"
+          else
+            echo "✅ No changes in shader tables"
+          fi
+
+      - name: Upload build log
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: extract-log
+          path: ${{ runner.temp }}/shader_split.log
+          retention-days: 14
