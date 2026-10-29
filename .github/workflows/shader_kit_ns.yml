@@ -144,20 +144,23 @@ jobs:
                   unsigned long long currentSize = (unsigned long long)ftello(parts[currentPart]);
                   BOOL isGiant = (fsz > maxPartSize);
                   if (isGiant) {
-                      if (currentSize > 0 && currentPart < 49) {
-                          logf([NSString stringWithFormat:@"  fecha %d (%.0f MB) p/ gigante %@", currentPart, currentSize / 1048576.0, relPath.lastPathComponent]);
-                          fclose(parts[currentPart]);
-                          parts[currentPart] = NULL;
-                          currentPart++;
-                          numParts++;
-                          NSString *nextPartPath = [baseZipPath stringByAppendingFormat:@".z%02d", currentPart];
-                          parts[currentPart] = fopen(nextPartPath.fileSystemRepresentation, "wb");
-                          if (!parts[currentPart]) {
-                              free(buf);
-                              for (int i = 0; i < numParts; i++) if (parts[i]) fclose(parts[i]);
-                              return NO;
-                          }
-                      }
+                      if (isGiant && currentPart < 49) {
+    logf([NSString stringWithFormat:@"  GIGANTE: %@ (%.0f MB) → parte dedicada", relPath.lastPathComponent, fsz / 1048576.0]);
+    if (currentSize > 0) {
+        fclose(parts[currentPart]);
+        parts[currentPart] = NULL;
+        currentPart++;
+        numParts++;
+        NSString *nextPartPath = [baseZipPath stringByAppendingFormat:@".z%02d", currentPart];
+        parts[currentPart] = fopen(nextPartPath.fileSystemRepresentation, "wb");
+        if (!parts[currentPart]) {
+            free(buf);
+            for (int i = 0; i < numParts; i++) if (parts[i]) fclose(parts[i]);
+            return NO;
+        }
+    }
+}
+
                   } else if (currentSize > 0 && currentSize + totalNeeded > maxPartSize && currentPart < 49) {
                       logf([NSString stringWithFormat:@"  parte %d cheia (%.0f MB), abre %d", currentPart, currentSize / 1048576.0, currentPart + 1]);
                       fclose(parts[currentPart]);
