@@ -1,7 +1,12 @@
 name: 3. Sonda de shaders - IoStore, ferramentas e cadeia de traducao
 
 on:
-push:
+  push:
+    branches:
+      - SpkIOSzero
+      - SpkIOSZero
+    paths:
+      - ".github/workflows/shader_probe.yml"
   workflow_dispatch:
     inputs:
       github_kit_url:
@@ -80,7 +85,7 @@ jobs:
           for p in sorted(ROMFS.rglob("*.pak")):
               with p.open("rb") as f:
                   f.seek(max(0, p.stat().st_size - 0x200)); tail = f.read()
-              i = tail.rfind(bytes.fromhex("e1126f5a"))   # magic 0x5A6F12E1 LE
+              i = tail.rfind(bytes.fromhex("e1126f5a"))
               if i < 0: P(f"  {p.name}: magic nao encontrado"); continue
               enc_idx = tail[i-1]; guid = tail[i-17:i-1].hex(); ver = struct.unpack_from("<I", tail, i+4)[0]
               P(f"  {p.relative_to(ROMFS)}: versao {ver} indice_criptografado={bool(enc_idx)} key GUID {guid}")
