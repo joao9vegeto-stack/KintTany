@@ -1,0 +1,150 @@
+name: 3. Sonda de shaders - IoStore, ferramentas e cadeia de traducao
+
+on:
+  workflow_dispatch:
+    inputs:
+      github_kit_url:
+        description: "Link direto do github_kit.zip"
+        required: false
+        type: string
+        default: "https://github.com/joao9vegeto-stack/KintTany/releases/download/v1.0-kit/github_kit_Spk.zip"
+
+permissions:
+  contents: read
+
+jobs:
+  probe:
+    runs-on: macos-26
+    timeout-minutes: 40
+    env:
+      KIT_URL: ${{ inputs.github_kit_url || 'https://github.com/joao9vegeto-stack/KintTany/releases/download/v1.0-kit/github_kit_Spk.zip' }}
+      GAME: "010035F022078000"
+      PYTHONUNBUFFERED: "1"
+
+    steps:
+      - name: 1. Baixar versao que compilou
+        uses: actions/checkout@v4
+        with:
+          ref: 306dcdfcb53d348085292e9e527339161c0536c7
+
+      - name: 2. Dependencias
+        shell: bash
+        run: pip3 install --break-system-packages lz4 capstone PyYAML
+
+      - name: 3. Baixar e extrair o kit
+        shell: bash
+        run: |
+          set -e
+          curl -L --retry 3 -o "$RUNNER_TEMP/kit.zip" "$KIT_URL"
+          mkdir -p "$RUNNER_TEMP/kitx"
+          unzip -q "$RUNNER_TEMP/kit.zip" -d "$RUNNER_TEMP/kitx"
+          ROMFS=$(find "$RUNNER_TEMP/kitx" -type d -name RomFS | head -1)
+          [ -n "$ROMFS" ] || { echo "ERRO: RomFS nao encontrado no kit"; find "$RUNNER_TEMP/kitx" -maxdepth 3 | head -50; exit 1; }
+          echo "ROMFS=$ROMFS" >> "$GITHUB_ENV"
+          echo "ROMFS=$ROMFS"
+
+      - name: 4. Sonda
+        shell: bash
+        run: |
+          mkdir -p "$RUNNER_TEMP/sonda"
+          python3 -u - <<'PYEOF' 2>&1 | tee "$RUNNER_TEMP/sonda/sonda.txt"
+          import os, re, struct, subprocess, glob
+          from pathlib import Path
+          ROMFS = Path(os.environ["ROMFS"]); GAME = os.environ["GAME"]
+          def P(s=""): print(s, flush=True)
+          def sh(cmd, n=4000):
+              r = subprocess.run(cmd, shell=True, capture_output=True, text=True)
+              out = (r.stdout + r.stderr).strip()
+              return out[:n] + ("\n…(cortado)" if len(out) > n else "")
+
+          P("#################### A. Containers do Unreal no RomFS ####################")
+          paks = sorted(list(ROMFS.rglob("*.utoc")) + list(ROMFS.rglob("*.ucas")) + list(ROMFS.rglob("*.pak")))
+          for p in paks: P(f"  {p.stat().st_size/2**30:7.2f} GB  {p.relative_to(ROMFS)}")
+          P()
+          P("#################### B. Header de cada .utoc (versao, flags, GUID da chave) ####################")
+          for p in sorted(ROMFS.rglob("*.utoc")):
+              d = p.read_bytes()[:0x90]
+              if len(d) < 0x60: P(f"  {p.name}: header curto ({len(d)} bytes)"); continue
+              ver = d[0x10]
+              hdr, nent, nblk, blksz, ncm, cml, cbs, dirsz, npart = struct.unpack_from("<9I", d, 0x14)
+              cid = struct.unpack_from("<Q", d, 0x38)[0]
+              guid = d[0x40:0x50].hex(); flags = d[0x50]
+              P(f"  {p.relative_to(ROMFS)}")
+              P(f"    versao {ver}  header {hdr}  chunks {nent}  blocos {nblk}  tam_bloco {cbs}  metodos {ncm}  dir_index {dirsz}  particoes {npart}")
+              P(f"    flags {flags:#04x} -> compressed={bool(flags&1)} ENCRYPTED={bool(flags&2)} indexed={bool(flags&4)} signed={bool(flags&8)}")
+              P(f"    key GUID {guid}  {'(zero: sem chave)' if set(guid)=={'0'} else '(NAO zero: chave AES necessaria)'}")
+              P(f"    hex 0x00..0x60: {d[:0x60].hex()}")
+          P()
+          P("#################### C. Footer de cada .pak (indice criptografado?) ####################")
+          for p in sorted(ROMFS.rglob("*.pak")):
+              with p.open("rb") as f:
+                  f.seek(max(0, p.stat().st_size - 0x200)); tail = f.read()
+              i = tail.rfind(bytes.fromhex("e1126f5a"))   # magic 0x5A6F12E1 LE
+              if i < 0: P(f"  {p.name}: magic nao encontrado"); continue
+              enc_idx = tail[i-1]; guid = tail[i-17:i-1].hex(); ver = struct.unpack_from("<I", tail, i+4)[0]
+              P(f"  {p.relative_to(ROMFS)}: versao {ver} indice_criptografado={bool(enc_idx)} key GUID {guid}")
+          P()
+          P("#################### D. Manifest / listas de shaders no RomFS ####################")
+          for pat in ("**/Manifest_UFSFiles_Switch.txt", "**/*.ushaderbytecode", "**/*ShaderArchive*"):
+              for p in sorted(ROMFS.glob(pat))[:20]: P(f"  {p.stat().st_size/2**20:8.1f} MB  {p.relative_to(ROMFS)}")
+          m = next(iter(ROMFS.glob("**/Manifest_UFSFiles_Switch.txt")), None)
+          if m:
+              P("  --- linhas do manifest com 'Shader' ---")
+              for ln in m.read_text(errors="ignore").splitlines():
+                  if "hader" in ln: P("   " + ln.strip()[:160])
+          P()
+          P("#################### E. Perfil do jogo no repositorio ####################")
+          P(sh(f"ls -la dm/games/{GAME}/ && echo --- && cat dm/games/{GAME}/game.tsv"))
+          P()
+          P("#################### F. Ferramentas: existem? ####################")
+          P(sh("ls -la dm/gfx/tools/ | head -80"))
+          P(sh("ls -la dm/tools/ | head -80"))
+          P(sh("ls -la dm/ios/tools/ dm 2>/dev/null | head -60"))
+          P(sh("ls -la dm/gfx/tools/dmsh_xlate_bin* dm/gfx/tools/spirv-cross* 2>&1 | head; find dm -maxdepth 4 -iname '*xlate*' -o -maxdepth 4 -iname '*spirv*' | head -20"))
+          P()
+          P("#################### G. Interface das ferramentas (cabecalhos) ####################")
+          for f in ("dm/gfx/tools/uepak.py", "dm/gfx/tools/shader_split.py", "dm/gfx/tools/dmsh_chain.py", "dm/tools/nsp.py", "dm/tools/nsp_build.py"):
+              if os.path.exists(f):
+                  P(f"=== {f} (primeiras 60 linhas) ==="); P(sh(f"head -60 {f}", 8000))
+                  P(f"=== {f}: argv / usage / def main ==="); P(sh(f"grep -n 'sys.argv\\|usage\\|Usage\\|def main\\|argparse\\|add_argument' {f} | head -40"))
+              else: P(f"=== {f}: NAO EXISTE ===")
+          P()
+          P("#################### H. Quem chama o Oodle do jogo (decode_ue_shaders / DM_OODLE) ####################")
+          P(sh("grep -rn 'decode_ue_shaders\\|DM_OODLE_SERVE\\|DM_OODLE_JOB\\|OodleHost\\|io_archive' --include=*.py --include=*.sh --include=*.c --include=*.m --include=*.md dm docs 2>/dev/null | head -60", 8000))
+          P()
+          P("#################### I. Como o host Mac e compilado (modo ferramenta) ####################")
+          P(sh("ls dm/mac dm/host 2>/dev/null | head -40; find . -maxdepth 3 \\( -name 'Makefile' -o -name '*.xcodeproj' -o -name 'build_mac*' -o -name 'build.sh' -o -name 'project.yml' \\) -not -path './.git/*' | head -20"))
+          P(sh("grep -rn 'tool mode\\|--tool\\|DM_TOOL' --include=*.md --include=*.sh --include=*.py docs dm/tools dm/mac 2>/dev/null | head -30"))
+          P()
+          P("#################### J. Cadeia de traducao: lock e ferramentas ####################")
+          P(sh(f"cd dm/gfx/tools && DM_GAME={GAME} python3 -c \"import dmsh_chain; print('LOCK', dmsh_chain.LOCK); print('XLATE_DIR', dmsh_chain.XLATE_DIR); print('SPIRV_CROSS', dmsh_chain.SPIRV_CROSS); print('check_tools ->', dmsh_chain.check_tools()); print('version ->', dmsh_chain.version())\"", 6000))
+          P(sh("sed -n 's/^#define DMSH_CHAIN \"\\(.*\\)\"/\\1/p' dm/gfx/nvn/dmsh_chain.h"))
+          P()
+          P("#################### K. Docs: as secoes do caminho IoStore / Oodle ####################")
+          for f, a, b in (("docs/agents/01-extract.md", "Compressed RomFS content", "^## "),
+                          ("docs/reference/shaders.md", "IoStore", "^## "),
+                          ("docs/reference/shaders.md", "Oodle", "^## "),
+                          ("docs/agents/02-", "", "")):
+              for path in sorted(glob.glob(f + "*")):
+                  txt = Path(path).read_text(errors="ignore")
+                  if not a: P(f"=== {path} (inteiro, ate 12000 chars) ==="); P(txt[:12000]); continue
+                  for mm in re.finditer(r"^#+ .*" + re.escape(a) + r".*$", txt, re.M):
+                      end = re.search(b, txt[mm.end():], re.M)
+                      sec = txt[mm.start(): mm.end() + (end.start() if end else 6000)]
+                      P(f"=== {path}: '{a}' ==="); P(sec[:9000])
+          P()
+          P("#################### L. main original: tamanho e strings do UE/Oodle ####################")
+          mains = [p for p in Path(os.environ["RUNNER_TEMP"]).rglob("main") if p.is_file() and p.stat().st_size > 2**20]
+          for mp in mains[:1]:
+              P(f"  {mp}  {mp.stat().st_size/2**20:.1f} MB")
+              P(sh(f"strings -n 12 '{mp}' | grep -i 'UnrealEngine-\\|Oodle\\|ShaderArchive\\|ushaderbytecode\\|SF_GLSL\\|SP_GLSL' | sort -u | head -30"))
+          P("=== FIM SONDA ===")
+          PYEOF
+
+      - name: 5. Salvar sonda
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: spk-sonda-shaders-${{ github.run_id }}
+          path: ${{ runner.temp }}/sonda/
+          retention-days: 7
