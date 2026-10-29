@@ -36,12 +36,16 @@ jobs:
           echo "═══════════════════════════════════════════"
           echo ""
           
+          echo "Creating virtual environment..."
+          python3 -m venv /tmp/venv
+          source /tmp/venv/bin/activate
+          
           echo "Updating pip..."
           python3 -m pip install --upgrade pip setuptools wheel 2>&1 | tail -n 5
           
           echo ""
           echo "Installing packages..."
-          pip3 install --user \
+          pip3 install \
             lz4 \
             capstone \
             PyYAML \
