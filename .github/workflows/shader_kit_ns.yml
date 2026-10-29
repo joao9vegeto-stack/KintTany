@@ -1,4 +1,4 @@
-name: 1b. Build ShaderKitNS App IPA (v1.0)
+name: 1b. Build ShaderKitNS App IPA (v1.1)
 
 on:
   push:
@@ -107,7 +107,6 @@ jobs:
           # ---------- app ----------
           cat > "$RUNNER_TEMP/App/main.m" << 'OBJCEOF'
           #import <UIKit/UIKit.h>
-          #import <UniformTypeIdentifiers/UniformTypeIdentifiers.h>
           #include <stdint.h>
           #include <stdio.h>
           #include <stdlib.h>
@@ -255,19 +254,19 @@ jobs:
               return nChunks > 0;
           }
 
-          @interface KitVC : UIViewController <UIDocumentPickerDelegate>
+          @interface KitVC : UIViewController
           @property (nonatomic, strong) UITextField *tidField;
-          @property (nonatomic, strong) UILabel *folderLabel;
           @property (nonatomic, strong) UILabel *statusLabel;
           @property (nonatomic, strong) UIProgressView *progressBar;
           @property (nonatomic, strong) UITextView *logView;
-          @property (nonatomic, strong) UIButton *pickBtn;
+          @property (nonatomic, strong) UIButton *scanBtn;
           @property (nonatomic, strong) UIButton *runBtn;
-          @property (nonatomic, strong) NSURL *folderURL;
+          @property (nonatomic, strong) NSArray<NSString *> *utocs;   // relativos a Documents
           @end
 
           @implementation KitVC
           - (UIStatusBarStyle)preferredStatusBarStyle { return UIStatusBarStyleLightContent; }
+          - (NSString *)docs { return NSSearchPathForDirectoriesInDomains(NSDocumentDirectory, NSUserDomainMask, YES)[0]; }
 
           - (void)viewDidLoad {
               [super viewDidLoad];
@@ -288,7 +287,15 @@ jobs:
               UILabel *sk = [[UILabel alloc] initWithFrame:joy.bounds]; sk.text = @"SK"; sk.textColor = UIColor.whiteColor; sk.font = [UIFont systemFontOfSize:13 weight:UIFontWeightBlack]; sk.textAlignment = NSTextAlignmentCenter; [joy addSubview:sk];
               [header addSubview:joy];
               UILabel *title = [[UILabel alloc] initWithFrame:CGRectMake(60, 10, w - 100, 22)]; title.text = @"ShaderKitNS"; title.textColor = UIColor.whiteColor; title.font = [UIFont systemFontOfSize:20 weight:UIFontWeightHeavy]; [header addSubview:title];
-              UILabel *sub = [[UILabel alloc] initWithFrame:CGRectMake(60, 33, w - 100, 14)]; sub.text = @"IOSTORE ➔ SHADER KIT (SEM COPIAR O JOGO)"; sub.textColor = NS_CYAN_GLOW; sub.font = [UIFont systemFontOfSize:9.5 weight:UIFontWeightBold]; [header addSubview:sub];
+              UILabel *sub = [[UILabel alloc] initWithFrame:CGRectMake(60, 33, w - 100, 14)]; sub.text = @"IOSTORE ➔ SHADER KIT"; sub.textColor = NS_CYAN_GLOW; sub.font = [UIFont systemFontOfSize:9.5 weight:UIFontWeightBold]; [header addSubview:sub];
+
+              self.scanBtn = [UIButton buttonWithType:UIButtonTypeSystem];
+              self.scanBtn.frame = CGRectMake(w - 90, 66, 66, 36); self.scanBtn.autoresizingMask = UIViewAutoresizingFlexibleLeftMargin;
+              self.scanBtn.backgroundColor = NS_BG_COLOR; self.scanBtn.layer.cornerRadius = 10;
+              [self.scanBtn setTitle:@"↻ Scan" forState:UIControlStateNormal]; [self.scanBtn setTitleColor:UIColor.whiteColor forState:UIControlStateNormal];
+              self.scanBtn.titleLabel.font = [UIFont systemFontOfSize:12 weight:UIFontWeightBold];
+              [self.scanBtn addTarget:self action:@selector(scan) forControlEvents:UIControlEventTouchUpInside];
+              [self.view addSubview:self.scanBtn];
 
               UILabel *tl = [[UILabel alloc] initWithFrame:CGRectMake(20, 124, w - 40, 14)]; tl.text = @"TITLE ID"; tl.textColor = [UIColor colorWithWhite:0.6 alpha:1]; tl.font = [UIFont systemFontOfSize:9 weight:UIFontWeightBold]; [self.view addSubview:tl];
               self.tidField = [[UITextField alloc] initWithFrame:CGRectMake(16, 140, w - 32, 40)];
@@ -298,33 +305,21 @@ jobs:
               self.tidField.autocapitalizationType = UITextAutocapitalizationTypeAllCharacters; self.tidField.autocorrectionType = UITextAutocorrectionTypeNo;
               [self.view addSubview:self.tidField];
 
-              self.pickBtn = [UIButton buttonWithType:UIButtonTypeSystem];
-              self.pickBtn.frame = CGRectMake(16, 192, w - 32, 46); self.pickBtn.autoresizingMask = UIViewAutoresizingFlexibleWidth;
-              self.pickBtn.backgroundColor = NS_BLUE_COLOR; self.pickBtn.layer.cornerRadius = 12;
-              [self.pickBtn setTitle:@"📂 ESCOLHER PASTA  (ExtractorNS ▸ Spk ▸ Extracted ▸ romfs)" forState:UIControlStateNormal];
-              [self.pickBtn setTitleColor:UIColor.whiteColor forState:UIControlStateNormal]; self.pickBtn.titleLabel.font = [UIFont systemFontOfSize:12 weight:UIFontWeightHeavy];
-              self.pickBtn.titleLabel.adjustsFontSizeToFitWidth = YES;
-              [self.pickBtn addTarget:self action:@selector(pickFolder) forControlEvents:UIControlEventTouchUpInside];
-              [self.view addSubview:self.pickBtn];
-
-              self.folderLabel = [[UILabel alloc] initWithFrame:CGRectMake(20, 244, w - 40, 16)];
-              self.folderLabel.text = @"Nenhuma pasta escolhida"; self.folderLabel.textColor = NS_CYAN_GLOW; self.folderLabel.font = [UIFont systemFontOfSize:11 weight:UIFontWeightSemibold];
-              self.folderLabel.adjustsFontSizeToFitWidth = YES; [self.view addSubview:self.folderLabel];
-
-              self.statusLabel = [[UILabel alloc] initWithFrame:CGRectMake(20, 266, w - 40, 16)];
-              self.statusLabel.text = @"Aguardando"; self.statusLabel.textColor = [UIColor colorWithWhite:0.75 alpha:1]; self.statusLabel.font = [UIFont systemFontOfSize:11.5 weight:UIFontWeightSemibold]; [self.view addSubview:self.statusLabel];
+              self.statusLabel = [[UILabel alloc] initWithFrame:CGRectMake(20, 190, w - 40, 32)];
+              self.statusLabel.numberOfLines = 2; self.statusLabel.textColor = NS_CYAN_GLOW; self.statusLabel.font = [UIFont systemFontOfSize:11.5 weight:UIFontWeightSemibold];
+              self.statusLabel.autoresizingMask = UIViewAutoresizingFlexibleWidth; [self.view addSubview:self.statusLabel];
 
               self.progressBar = [[UIProgressView alloc] initWithProgressViewStyle:UIProgressViewStyleDefault];
-              self.progressBar.frame = CGRectMake(20, 288, w - 40, 5); self.progressBar.autoresizingMask = UIViewAutoresizingFlexibleWidth;
+              self.progressBar.frame = CGRectMake(20, 228, w - 40, 5); self.progressBar.autoresizingMask = UIViewAutoresizingFlexibleWidth;
               self.progressBar.trackTintColor = NS_CARD_COLOR; self.progressBar.progressTintColor = NS_CYAN_GLOW; [self.view addSubview:self.progressBar];
 
-              self.logView = [[UITextView alloc] initWithFrame:CGRectMake(16, 302, w - 32, h - 394)];
+              self.logView = [[UITextView alloc] initWithFrame:CGRectMake(16, 242, w - 32, h - 334)];
               self.logView.autoresizingMask = UIViewAutoresizingFlexibleWidth | UIViewAutoresizingFlexibleHeight;
               self.logView.backgroundColor = [UIColor colorWithRed:0.07 green:0.08 blue:0.10 alpha:1.0];
               self.logView.textColor = [UIColor colorWithRed:0.75 green:0.88 blue:0.95 alpha:1.0];
               self.logView.font = [UIFont monospacedSystemFontOfSize:11.5 weight:UIFontWeightRegular];
               self.logView.layer.cornerRadius = 14; self.logView.editable = NO; self.logView.textContainerInset = UIEdgeInsetsMake(10, 10, 10, 10);
-              self.logView.text = @"[ShaderKitNS v1.0 — recorta ShaderCodeLibrary/ShaderCode do IoStore]\nEscolha a pasta romfs (ou Content/Paks) extraida pelo ExtractorNS. Os .utoc e .ucas sao lidos no lugar.\n";
+              self.logView.text = @"[ShaderKitNS v1.1 — recorta ShaderCodeLibrary/ShaderCode do IoStore]\nNo app Arquivos, mova a pasta romfs (ou so Content/Paks) para\n  Neste iPhone > ShaderKitNS\nDepois toque em Scan. Os .utoc e .ucas precisam estar lado a lado.\n";
               [self.view addSubview:self.logView];
 
               self.runBtn = [UIButton buttonWithType:UIButtonTypeSystem];
@@ -333,8 +328,11 @@ jobs:
               [self.runBtn setTitle:@"⚡ GERAR SHADER KIT" forState:UIControlStateNormal];
               [self.runBtn setTitleColor:UIColor.whiteColor forState:UIControlStateNormal]; self.runBtn.titleLabel.font = [UIFont systemFontOfSize:15 weight:UIFontWeightHeavy];
               [self.runBtn addTarget:self action:@selector(runKit) forControlEvents:UIControlEventTouchUpInside];
-              self.runBtn.enabled = NO; self.runBtn.alpha = 0.5;
               [self.view addSubview:self.runBtn];
+
+              // pasta raiz visivel no app Arquivos + scan automatico ao abrir
+              [NSFileManager.defaultManager createDirectoryAtPath:[self.docs stringByAppendingPathComponent:@"romfs"] withIntermediateDirectories:YES attributes:nil error:nil];
+              [self scan];
           }
 
           - (void)log:(NSString *)msg {
@@ -344,51 +342,58 @@ jobs:
               });
           }
 
-          - (void)pickFolder {
-              UIDocumentPickerViewController *pk = [[UIDocumentPickerViewController alloc] initForOpeningContentTypes:@[UTTypeFolder]];
-              pk.delegate = self; pk.allowsMultipleSelection = NO;
-              [self presentViewController:pk animated:YES completion:nil];
-          }
-
-          - (void)documentPicker:(UIDocumentPickerViewController *)controller didPickDocumentsAtURLs:(NSArray<NSURL *> *)urls {
-              if (urls.count == 0) return;
-              self.folderURL = urls[0];
-              self.folderLabel.text = [NSString stringWithFormat:@"Pasta: %@", self.folderURL.path];
-              self.runBtn.enabled = YES; self.runBtn.alpha = 1.0;
-              [self log:[NSString stringWithFormat:@"Pasta escolhida: %@", self.folderURL.path]];
+          - (void)scan {
+              NSFileManager *fm = NSFileManager.defaultManager;
+              NSMutableArray *found = [NSMutableArray array];
+              NSDirectoryEnumerator *en = [fm enumeratorAtPath:self.docs];
+              NSString *rel = nil;
+              while ((rel = [en nextObject])) {
+                  if ([rel hasPrefix:@"_shader_staging"]) { [en skipDescendants]; continue; }
+                  if ([rel.lowercaseString hasSuffix:@".utoc"]) [found addObject:rel];
+              }
+              [found sortUsingSelector:@selector(compare:)];
+              self.utocs = found;
+              unsigned long long ucasBytes = 0; int ucasMissing = 0;
+              for (NSString *r in found) {
+                  NSString *ucas = [[[self.docs stringByAppendingPathComponent:r] stringByDeletingPathExtension] stringByAppendingPathExtension:@"ucas"];
+                  NSDictionary *a = [fm attributesOfItemAtPath:ucas error:nil];
+                  if (a) ucasBytes += [a fileSize]; else ucasMissing++;
+              }
+              BOOL ok = found.count > 0 && ucasMissing == 0;
+              self.runBtn.enabled = ok; self.runBtn.alpha = ok ? 1.0 : 0.5;
+              self.statusLabel.text = found.count == 0
+                  ? @"Nenhum .utoc em ShaderKitNS. Mova a pasta romfs para ca e toque em Scan."
+                  : [NSString stringWithFormat:@"%lu .utoc detectados, %.1f GB de .ucas%@", (unsigned long)found.count, ucasBytes / 1073741824.0,
+                     ucasMissing ? [NSString stringWithFormat:@" — %d sem .ucas ao lado!", ucasMissing] : @""];
+              [self log:[NSString stringWithFormat:@"Scan: %@", self.statusLabel.text]];
+              for (NSString *r in found) [self log:[NSString stringWithFormat:@"  %@", r]];
           }
 
           - (void)runKit {
-              self.runBtn.enabled = NO; self.pickBtn.enabled = NO;
+              self.runBtn.enabled = NO; self.scanBtn.enabled = NO;
               [self.tidField resignFirstResponder];
               NSString *tid = [self.tidField.text stringByTrimmingCharactersInSet:NSCharacterSet.whitespaceAndNewlineCharacterSet];
               if (tid.length != 16) tid = @"unknown";
-              NSURL *folder = self.folderURL;
-              self.progressBar.progress = 0.05; self.statusLabel.text = @"Procurando .utoc...";
+              NSArray<NSString *> *utocs = self.utocs;
+              NSString *doc = self.docs;
+              self.progressBar.progress = 0.05;
 
               dispatch_async(dispatch_get_global_queue(QOS_CLASS_USER_INITIATED, 0), ^{
                   NSFileManager *fm = NSFileManager.defaultManager;
-                  BOOL scoped = [folder startAccessingSecurityScopedResource];
-                  NSString *doc = NSSearchPathForDirectoriesInDomains(NSDocumentDirectory, NSUserDomainMask, YES)[0];
                   NSString *staging = [doc stringByAppendingPathComponent:@"_shader_staging"];
                   [fm removeItemAtPath:staging error:nil];
                   [fm createDirectoryAtPath:staging withIntermediateDirectories:YES attributes:nil error:nil];
                   [tid writeToFile:[staging stringByAppendingPathComponent:@"title_id.txt"] atomically:YES encoding:NSUTF8StringEncoding error:nil];
 
-                  NSMutableArray<NSString *> *utocs = [NSMutableArray array];
-                  NSDirectoryEnumerator *en = [fm enumeratorAtPath:folder.path];
-                  NSString *rel = nil;
-                  while ((rel = [en nextObject])) if ([rel.lowercaseString hasSuffix:@".utoc"]) [utocs addObject:rel];
-                  [utocs sortUsingSelector:@selector(compare:)];
-                  [self log:[NSString stringWithFormat:@"%lu arquivo(s) .utoc encontrados", (unsigned long)utocs.count]];
-                  if (utocs.count == 0) [self log:@"✗ Nenhum .utoc. Escolha a pasta romfs ou SparkingZERO/Content/Paks."];
-
                   int found = 0, i = 0;
                   for (NSString *r in utocs) {
                       i++;
                       dispatch_async(dispatch_get_main_queue(), ^{ self.statusLabel.text = [NSString stringWithFormat:@"Recortando %@ (%d/%lu)", r.lastPathComponent, i, (unsigned long)utocs.count]; self.progressBar.progress = 0.05 + 0.8 * i / (float)utocs.count; });
-                      NSString *full = [folder.path stringByAppendingPathComponent:r];
-                      NSString *dstDir = [staging stringByAppendingPathComponent:[@"RomFS" stringByAppendingPathComponent:r.stringByDeletingLastPathComponent]];
+                      NSString *full = [doc stringByAppendingPathComponent:r];
+                      // no zip, normaliza para RomFS/<caminho a partir de SparkingZERO ou do que vier>
+                      NSString *relKit = r;
+                      NSRange rr = [r rangeOfString:@"romfs/"]; if (rr.location != NSNotFound) relKit = [r substringFromIndex:rr.location + rr.length];
+                      NSString *dstDir = [staging stringByAppendingPathComponent:[@"RomFS" stringByAppendingPathComponent:relKit.stringByDeletingLastPathComponent]];
                       [fm createDirectoryAtPath:dstDir withIntermediateDirectories:YES attributes:nil error:nil];
                       [fm copyItemAtPath:full toPath:[dstDir stringByAppendingPathComponent:r.lastPathComponent] error:nil];
                       if (carve_shader_chunks(full, dstDir, ^(NSString *m) { [self log:m]; })) found++;
@@ -398,13 +403,12 @@ jobs:
                   NSString *zipOut = [doc stringByAppendingPathComponent:[NSString stringWithFormat:@"shader_kit_%@.zip", tid]];
                   if (found > 0 && build_zip_file(staging, zipOut)) {
                       NSDictionary *za = [fm attributesOfItemAtPath:zipOut error:nil];
-                      [self log:[NSString stringWithFormat:@"✓ SHADER KIT: ShaderKitNS/%@ (%.1f MB) — containers com shader: %d\nSuba este zip na release v1.0-kit.", zipOut.lastPathComponent, [za fileSize] / (1024.0 * 1024.0), found]];
+                      [self log:[NSString stringWithFormat:@"✓ SHADER KIT: ShaderKitNS/%@ (%.1f MB) — containers com shader: %d\nSuba este zip na release v1.0-kit.", zipOut.lastPathComponent, [za fileSize] / 1048576.0, found]];
                   } else {
                       [self log:@"✗ Nenhum chunk de shader recortado (ver mensagens acima)."];
                   }
                   [fm removeItemAtPath:staging error:nil];
-                  if (scoped) [folder stopAccessingSecurityScopedResource];
-                  dispatch_async(dispatch_get_main_queue(), ^{ self.progressBar.progress = 1.0; self.statusLabel.text = @"Concluido"; self.runBtn.enabled = YES; self.pickBtn.enabled = YES; });
+                  dispatch_async(dispatch_get_main_queue(), ^{ self.progressBar.progress = 1.0; self.statusLabel.text = @"Concluido"; self.runBtn.enabled = YES; self.scanBtn.enabled = YES; });
               });
           }
           @end
@@ -432,21 +436,20 @@ jobs:
             -fobjc-arc \
             "$RUNNER_TEMP/App/main.m" \
             -framework UIKit -framework Foundation -framework CoreGraphics \
-            -framework UniformTypeIdentifiers \
             -lz \
             -o "$APP_DIR/ShaderKitNS"
 
           cat > "$APP_DIR/Info.plist" << 'PLIST'
-          <?xml version="1.0" encoding="UTF-8"?>
-          <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
-          <plist version="1.0">
+          <?xml version="1.1" encoding="UTF-8"?>
+          <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.1//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+          <plist version="1.1">
           <dict>
             <key>CFBundleExecutable</key><string>ShaderKitNS</string>
             <key>CFBundleIdentifier</key><string>com.kinttany.shaderkitns</string>
             <key>CFBundleName</key><string>ShaderKitNS</string>
             <key>CFBundleDisplayName</key><string>ShaderKitNS</string>
-            <key>CFBundleVersion</key><string>1.0</string>
-            <key>CFBundleShortVersionString</key><string>1.0</string>
+            <key>CFBundleVersion</key><string>1.1</string>
+            <key>CFBundleShortVersionString</key><string>1.1</string>
             <key>CFBundlePackageType</key><string>APPL</string>
             <key>LSRequiresIPhoneOS</key><true/>
             <key>UIDeviceFamily</key><array><integer>1</integer><integer>2</integer></array>
