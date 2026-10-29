@@ -4,8 +4,7 @@ on:
   workflow_run:
     workflows: ["1. Extract Shader Kit + Split"]
     types: [completed]
-    branches:
-      - SpkIOSzero
+    branches: [SpkIOSzero]
   workflow_dispatch:
 
 permissions:
@@ -13,63 +12,191 @@ permissions:
 
 env:
   GAME: "010035F022078000"
+  GAME_NAME: "DRAGON BALL: Sparking! ZERO"
 
 jobs:
+  check_workflow_status:
+    runs-on: macos-latest
+    timeout-minutes: 10
+    outputs:
+      should_continue: ${{ steps.check.outputs.status }}
+
+    steps:
+      - name: Check previous workflow status
+        id: check
+        shell: bash
+        run: |
+          WF_CONCLUSION="${{ github.event.workflow_run.conclusion }}"
+          
+          echo "Previous workflow conclusion: $WF_CONCLUSION"
+          
+          if [ "$WF_CONCLUSION" == "success" ]; then
+            echo "status=true" >> "$GITHUB_OUTPUT"
+            echo "✅ Previous workflow succeeded"
+          else
+            echo "status=false" >> "$GITHUB_OUTPUT"
+            echo "❌ Previous workflow did not succeed: $WF_CONCLUSION"
+          fi
+
   setup_cache:
+    needs: check_workflow_status
+    if: needs.check_workflow_status.outputs.should_continue == 'true'
     runs-on: macos-latest
     timeout-minutes: 30
     outputs:
       shader_count: ${{ steps.count.outputs.total }}
-      cache_key: ${{ steps.cache_key.outputs.key }}
-      cache_hit: ${{ steps.cache.outputs.cache-hit }}
+      cache_status: ${{ steps.cache.outputs.cache-hit }}
+      shader_facts_hash: ${{ steps.cache_key.outputs.hash }}
 
     steps:
-      - name: Checkout
+      - name: Checkout repo
         uses: actions/checkout@v4
         with:
           ref: SpkIOSzero
+          fetch-depth: 1
+
+      - name: Setup environment
+        shell: bash
+        run: |
+          echo "═══════════════════════════════════════════"
+          echo "  🔧 SETUP: Cache Configuration"
+          echo "═══════════════════════════════════════════"
+          echo ""
+          
+          echo "Game: ${{ env.GAME_NAME }}"
+          echo "Title ID: ${{ env.GAME }}"
+          echo "Branch: SpkIOSzero"
+          echo ""
+          
+          python3 --version
+          pip3 install --break-system-packages PyYAML 2>&1 | grep -E "(Successfully|Requirement)" || true
 
       - name: Verify shader tables exist
         shell: bash
         run: |
+          set -e
           GAME="${{ env.GAME }}"
           MAP="dm/games/$GAME/shaders/shader_map.tsv"
           
+          echo "📋 Verifying shader tables"
+          echo "═══════════════════════════════════════════"
+          echo ""
+          
           if [ ! -f "$MAP" ]; then
             echo "❌ shader_map.tsv not found!"
-            echo "   Path: $MAP"
+            echo ""
+            echo "Expected at: $MAP"
+            echo ""
+            echo "Contents of dm/games/:
+"
+            ls -la dm/games/ 2>/dev/null || echo "   (directory doesn't exist)"
+            echo ""
+            echo "This indicates workflow 1 did not complete successfully."
             exit 1
           fi
           
           echo "✅ shader_map.tsv found"
-
-      - name: Generate cache key
-        id: cache_key
-        shell: bash
-        run: |
-          GAME="${{ env.GAME }}"
-          FACTS="dm/games/$GAME/shaders/shader_facts.tsv"
           
-          if [ -f "$FACTS" ]; then
-            KEY="sparking-shaders-$(sha256sum "$FACTS" | cut -c1-12)"
-          else
-            KEY="sparking-shaders-fresh"
+          # Check all required tables
+          REQUIRED=("shader_map.tsv" "shader_facts.tsv" "shader_pairs.tsv")
+          MISSING=0
+          
+          for file in "${REQUIRED[@]}"; do
+            if [ -f "dm/games/$GAME/shaders/$file" ]; then
+              echo "  ✅ $file"
+            else
+              echo "  ❌ $file - MISSING"
+              MISSING=$((MISSING + 1))
+            fi
+          done
+          
+          if [ $MISSING -gt 0 ]; then
+            echo ""
+            echo "❌ $MISSING required table(s) missing!"
+            exit 1
           fi
           
-          echo "key=$KEY" >> "$GITHUB_OUTPUT"
-          echo "📌 Cache key: $KEY"
+          echo ""
+          echo "✅ All required tables present"
 
       - name: Count shaders
         id: count
         shell: bash
         run: |
+          set -e
           GAME="${{ env.GAME }}"
           MAP="dm/games/$GAME/shaders/shader_map.tsv"
           
+          echo "📊 Counting shaders"
+          echo "═══════════════════════════════════════════"
+          echo ""
+          
+          # Count excluding header
           TOTAL=$(tail -n +2 "$MAP" 2>/dev/null | wc -l)
           
+          if [ -z "$TOTAL" ] || [ "$TOTAL" -eq 0 ]; then
+            echo "❌ No shaders found in shader_map.tsv!"
+            echo "   File may be empty or corrupt"
+            wc -l "$MAP"
+            exit 1
+          fi
+          
+          echo "output=$TOTAL" >> "$GITHUB_OUTPUT"
           echo "total=$TOTAL" >> "$GITHUB_OUTPUT"
-          echo "📊 Total shaders to build: $TOTAL"
+          
+          echo "Total shaders: $TOTAL"
+          echo ""
+          
+          # Analyze size distribution
+          MIN_LINES=100
+          MAX_LINES=0
+          
+          while IFS=$'\t' read -r key storage rest; do
+            [ -z "$key" ] && continue
+            CURRENT_SIZE=${#storage}
+            [ $CURRENT_SIZE -gt $MAX_LINES ] && MAX_LINES=$CURRENT_SIZE
+          done < <(tail -n +2 "$MAP")
+          
+          echo "📈 Statistics:"
+          echo "  • Total entries: $TOTAL"
+          echo "  • Estimated compile time: ~5-6 hours"
+          echo "  • Parallelization: 4 slices (2 simultaneous)"
+
+      - name: Generate cache key
+        id: cache_key
+        shell: bash
+        run: |
+          set -e
+          GAME="${{ env.GAME }}"
+          FACTS="dm/games/$GAME/shaders/shader_facts.tsv"
+          
+          echo "🔑 Generating cache key"
+          echo "═══════════════════════════════════════════"
+          echo ""
+          
+          if [ ! -f "$FACTS" ]; then
+            echo "⚠️  shader_facts.tsv not found"
+            KEY="dbs-shaders-fresh-$(date +%s)"
+          else
+            FULL_HASH=$(sha256sum "$FACTS" | awk '{print $1}')
+            HASH_SHORT=$(echo "$FULL_HASH" | cut -c1-12)
+            KEY="dbs-shaders-$HASH_SHORT"
+            
+            SIZE=$(ls -lh "$FACTS" | awk '{print $5}')
+            echo "shader_facts.tsv:"
+            echo "  Size: $SIZE"
+            echo "  SHA256: $FULL_HASH"
+            echo "  Short: $HASH_SHORT"
+            echo ""
+          fi
+          
+          echo "key=$KEY" >> "$GITHUB_OUTPUT"
+          echo "hash=$FULL_HASH" >> "$GITHUB_OUTPUT"
+          
+          echo "Cache key: $KEY"
+          echo ""
+          echo "This key identifies build state."
+          echo "If facts change, a new cache will be created."
 
       - name: Restore shader build cache
         id: cache
@@ -80,23 +207,147 @@ jobs:
             dm/gfx/tools/dmsh_cache
           key: ${{ steps.cache_key.outputs.key }}
           restore-keys: |
-            sparking-shaders-
+            dbs-shaders-
 
       - name: Report cache status
         shell: bash
         run: |
-          if [ "${{ steps.cache.outputs.cache-hit }}" == "true" ]; then
-            echo "✅ CACHE HIT! Reusing existing build data"
+          set -e
+          HIT="${{ steps.cache.outputs['cache-hit'] }}"
+          
+          echo "💾 Cache Status Report"
+          echo "═══════════════════════════════════════════"
+          echo ""
+          
+          if [ "$HIT" == "true" ]; then
+            echo "🎯 CACHE HIT!"
+            echo ""
+            echo "Build data will be resumed from checkpoint."
+            echo "This can save 30-50% of compilation time."
+            echo ""
             
-            CAS_SIZE=$(du -sh .dmsh_cas 2>/dev/null | awk '{print $1}')
-            echo "   CAS size: ${CAS_SIZE:-0}"
+            if [ -d ".dmsh_cas" ]; then
+              CAS_FILES=$(find .dmsh_cas -type f | wc -l)
+              CAS_SIZE=$(du -sh .dmsh_cas | awk '{print $1}')
+              echo "DMSH_CAS:"
+              echo "  Files: $CAS_FILES"
+              echo "  Size: $CAS_SIZE"
+            else
+              echo "⚠️  DMSH_CAS not yet restored (will be on next step)"
+            fi
             
-            CACHE_SIZE=$(du -sh dm/gfx/tools/dmsh_cache 2>/dev/null | awk '{print $1}')
-            echo "   Cache size: ${CACHE_SIZE:-0}"
+            if [ -d "dm/gfx/tools/dmsh_cache" ]; then
+              CACHE_FILES=$(find dm/gfx/tools/dmsh_cache -type f | wc -l)
+              CACHE_SIZE=$(du -sh dm/gfx/tools/dmsh_cache | awk '{print $1}')
+              echo ""
+              echo "dmsh_cache:"
+              echo "  Files: $CACHE_FILES"
+              echo "  Size: $CACHE_SIZE"
+            fi
             
             echo ""
-            echo "Build will resume from checkpoint!"
+            echo "✅ Build will resume from last checkpoint"
           else
-            echo "📦 CACHE MISS - Starting fresh build"
-            echo "   Shaders: ${{ steps.count.outputs.total }}"
+            echo "📦 CACHE MISS"
+            echo ""
+            echo "Starting fresh shader compilation."
+            echo ""
+            echo "Build parameters:"
+            echo "  • Total shaders: ${{ steps.count.outputs.total }}"
+            echo "  • Build method: Fatiado (sliced)"
+            echo "  • Slices: 4"
+            echo "  • Parallel jobs: max 2"
+            echo "  • Estimated time: 5-6 hours"
+            echo ""
+            echo "⚠️  This is a long-running operation"
           fi
+          
+          echo ""
+          echo "Next: Workflow 2b will compile shaders"
+
+      - name: Display environment info
+        shell: bash
+        run: |
+          echo "🖥️ Build Environment"
+          echo "═══════════════════════════════════════════"
+          echo ""
+          
+          echo "OS: $(sw_vers -productName) $(sw_vers -productVersion)"
+          echo "Xcode: $(xcode-select --version | head -1 || echo 'Not installed')"
+          echo "Python: $(python3 --version)"
+          echo "Pip: $(pip3 --version)"
+          echo ""
+          
+          echo "Disk space:"
+          df -h / | tail -1
+          echo ""
+          
+          echo "Memory:"
+          VM_STAT=$(vm_stat 2>/dev/null || free -h | head -n 1)
+          echo "  $VM_STAT"
+
+      - name: Generate cache setup summary
+        shell: bash
+        run: |
+          cat > "$RUNNER_TEMP/cache_setup_summary.txt" << 'EOF'
+          ╔════════════════════════════════════════════════════════╗
+          ║     DRAGON BALL: Sparking! ZERO - Cache Setup Report   ║
+          ╚════════════════════════════════════════════════════════╝
+          
+          Game Information:
+            Title ID: 010035F022078000
+            Game: DRAGON BALL: Sparking! ZERO
+            Branch: SpkIOSzero
+          
+          Shader Tables Status:
+            ✅ shader_map.tsv
+            ✅ shader_facts.tsv
+            ✅ shader_pairs.tsv
+          
+          Total Shaders: ${{ steps.count.outputs.total }}
+          
+          Cache Status: ${{ steps.cache.outputs.cache-hit }}
+          Cache Key: ${{ steps.cache_key.outputs.key }}
+          
+          Compilation Plan:
+            • Slicing: 4 segments
+            • Parallelization: Max 2 jobs
+            • Estimated Duration: 5-6 hours
+            • Method: DMSH build with resume capability
+          
+          Generated: $(date -u)
+          EOF
+          
+          cat "$RUNNER_TEMP/cache_setup_summary.txt"
+
+      - name: Upload cache setup summary
+        uses: actions/upload-artifact@v4
+        with:
+          name: cache-setup-summary
+          path: ${{ runner.temp }}/cache_setup_summary.txt
+          retention-days: 30
+
+      - name: Final Summary
+        shell: bash
+        run: |
+          echo ""
+          echo "════════════════════════════════════════════════════════"
+          echo "  ✅ WORKFLOW 2a COMPLETE: CACHE SETUP"
+          echo "════════════════════════════════════════════════════════"
+          echo ""
+          echo "Game: ${{ env.GAME_NAME }}"
+          echo "Title ID: ${{ env.GAME }}"
+          echo ""
+          echo "📊 Configuration:"
+          echo "  • Total shaders: ${{ steps.count.outputs.total }}"
+          echo "  • Cache status: ${{ steps.cache.outputs.cache-hit }}"
+          echo ""
+          echo "🚀 NEXT STEP:"
+          echo "   Workflow 2b will start compilation"
+          echo "   • 4 shader compilation jobs"
+          echo "   • Max 2 running simultaneously"
+          echo "   • Estimated time: ~5-6 hours"
+          echo ""
+          echo "────────────────────────────────────────────────────────"
+          echo "Workflow 2b will trigger automatically when this completes"
+          echo "════════════════════════════════════════════════════════"
