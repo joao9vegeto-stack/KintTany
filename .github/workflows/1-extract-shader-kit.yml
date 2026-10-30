@@ -273,6 +273,38 @@ jobs:
           echo "=== Updated game.tsv ==="
           cat "$GAME_TSV"
 
+      - name: Extract and organize shader files from kit
+        shell: bash
+        run: |
+          set -euo pipefail
+          KIT_DIR="${{ env.KIT_DIR }}"
+          
+          echo "=== Extracting and organizing shader files ==="
+
+          UE_SHADERS="$KIT_DIR/ue_shaders"
+          mkdir -p "$UE_SHADERS"
+
+          # Find all .shaders.bin files recursively
+          if find "$KIT_DIR" -type f -name "*.shaders.bin" 2>/dev/null | head -1 | grep -q .; then
+            echo "Found .shaders.bin files, copying to ue_shaders..."
+            find "$KIT_DIR" -type f -name "*.shaders.bin" -exec cp {} "$UE_SHADERS/" \;
+            find "$KIT_DIR" -type f -name "*.shaders.tsv" -exec cp {} "$UE_SHADERS/" \;
+            
+            FILE_COUNT=$(find "$UE_SHADERS" -type f | wc -l)
+            echo "✅ ue_shaders populated: $FILE_COUNT files"
+          else
+            echo "ERROR: No .shaders.bin files found in kit"
+            echo "Kit contents (first 30 entries):"
+            find "$KIT_DIR" -maxdepth 4 -type f | head -30
+            exit 1
+          fi
+
+          echo ""
+          echo "=== ue_shaders contents ==="
+          ls -lh "$UE_SHADERS" | head -20
+          echo ""
+          echo "UE_SHADERS=$UE_SHADERS" >> "$GITHUB_ENV"
+
       - name: Locate decoded shader archives
         shell: bash
         run: |
