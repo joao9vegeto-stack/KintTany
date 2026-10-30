@@ -124,79 +124,157 @@ jobs:
           echo "KIT_DIR=$KIT_DIR" >> "$GITHUB_ENV"
           echo "✅ All archives extracted"
 
-      - name: Locate RomFS
+      - name: Locate RomFS and ExeFS
         shell: bash
         run: |
           set -euo pipefail
           KIT_DIR="${{ env.KIT_DIR }}"
           
-          echo "🔎 Locating RomFS..."
+          echo "🔎 Locating RomFS and ExeFS..."
+          
           ROMFS=$(find "$KIT_DIR" -type d -name "RomFS" -print -quit || true)
+          EXEFS=$(find "$KIT_DIR" -type d \( -iname "ExeFS" -o -iname "exefs" \) -print -quit || true)
           
           if [ -z "$ROMFS" ]; then
             echo "❌ RomFS not found!"
             exit 1
           fi
           
-          echo "KIT_ROMFS=$ROMFS" >> "$GITHUB_ENV"
+          if [ -z "$EXEFS" ]; then
+            echo "❌ ExeFS not found!"
+            exit 1
+          fi
+          
           echo "✅ RomFS: $ROMFS"
+          echo "✅ ExeFS: $EXEFS"
+          echo "KIT_ROMFS=$ROMFS" >> "$GITHUB_ENV"
+          echo "KIT_EXEFS=$EXEFS" >> "$GITHUB_ENV"
 
-      - name: Locate main executable in ExeFS
+      - name: Discover game profile using profile_guess.py
         shell: bash
         run: |
           set -euo pipefail
-          KIT_DIR="${{ env.KIT_DIR }}"
+          source .venv/bin/activate
           
-          echo "🔎 Locating main executable..."
-          
-          # Procura a pasta ExeFS (várias variações de caso)
-          EXEFS_DIR=$(find "$KIT_DIR" -type d \( -iname "ExeFS" -o -iname "exefs" \) -print -quit || true)
-          
-          if [ -z "$EXEFS_DIR" ]; then
-            echo "❌ ExeFS directory not found"
-            echo ""
-            echo "📁 Kit structure:"
-            find "$KIT_DIR" -maxdepth 3 -type d | head -20
-            exit 1
-          fi
-          
-          echo "Found ExeFS: $EXEFS_DIR"
-          
-          # Procura o arquivo 'main' (sem extensão)
-          MAIN=""
-          if [ -f "$EXEFS_DIR/main" ]; then
-            MAIN="$EXEFS_DIR/main"
-          elif [ -f "$EXEFS_DIR/main.nso" ]; then
-            MAIN="$EXEFS_DIR/main.nso"
-          else
-            MAIN=$(find "$EXEFS_DIR" -maxdepth 1 -name "main*" -type f | head -1 || true)
-          fi
-          
-          if [ -z "$MAIN" ] || [ ! -f "$MAIN" ]; then
-            echo "❌ main executable not found in $EXEFS_DIR"
-            echo ""
-            echo "📄 Files in ExeFS:"
-            ls -lh "$EXEFS_DIR"
-            exit 1
-          fi
-          
-          SIZE=$(ls -lh "$MAIN" | awk '{print $5}')
-          echo "✅ main found: $MAIN"
-          echo "   Size: $SIZE"
-          echo "KIT_MAIN=$MAIN" >> "$GITHUB_ENV"
-
-      - name: Verify game profile directory exists
-        shell: bash
-        run: |
-          set -euo pipefail
           GAME="${{ env.GAME }}"
-          PROFILE_DIR="dm/games/$GAME"
+          GAME_NAME="${{ env.GAME_NAME }}"
+          GAME_DIR="dm/games/$GAME"
+          EXEFS="${{ env.KIT_EXEFS }}"
+          ROMFS="${{ env.KIT_ROMFS }}"
           
-          if [ ! -d "$PROFILE_DIR" ]; then
-            echo "❌ Profile directory missing: $PROFILE_DIR"
-            exit 1
-          fi
-          echo "✅ Profile directory exists"
+          echo "🔍 Discovering game profile metadata..."
+          echo "════════════════════════════════════════"
+          
+          mkdir -p "$GAME_DIR"
+          
+          # Executa profile_guess.py para extrair os fatos do game
+          python3 << 'PROFILE_SCRIPT'
+          import sys
+          sys.path.insert(0, 'dm/games')
+          import profile_guess as pg
+          
+          EXEFS = "${{ env.KIT_EXEFS }}"
+          ROMFS = "${{ env.KIT_ROMFS }}"
+          
+          # Extrai fatos do game
+          facts = pg.facts_of(EXEFS, ROMFS)
+          
+          # Gera os valores do profile
+          guess_vals = pg.guess(facts)
+          
+          # Imprime os fatos e valores adivinhados
+          print("\n📊 FACTS DISCOVERED:")
+          print("════════════════════════════════════════")
+          
+          print(f"\nModules:")
+          for mod_name, mod_info in facts['mods'].items():
+              print(f"  {mod_name}: {mod_info['kind']}, build {mod_info['bid']}")
+          
+          print(f"\nRomFS:")
+          print(f"  Files: {facts['romfs']['n']}")
+          print(f"  Bytes: {facts['romfs']['bytes'] / (1024**3):.2f} GB")
+          print(f"  Paks found: {facts['romfs']['exts'].get('.pak', 0)}")
+          
+          print(f"\nSystem Resource: {facts['sysres'] / (1024**2):.1f} MB")
+          print(f"SDK Version: {facts['sdk']}")
+          
+          print(f"\n📝 PROFILE VALUES:")
+          print("════════════════════════════════════════")
+          for k, (v, reason) in guess_vals.items():
+              print(f"{k}\t{v}")
+              if reason:
+                  print(f"  # {reason}")
+          
+          PROFILE_SCRIPT
+          
+          echo ""
+          echo "✅ Profile discovery complete"
+
+      - name: Create game.tsv with discovered metadata
+        shell: bash
+        run: |
+          set -euo pipefail
+          source .venv/bin/activate
+          
+          GAME="${{ env.GAME }}"
+          GAME_NAME="${{ env.GAME_NAME }}"
+          GAME_DIR="dm/games/$GAME"
+          EXEFS="${{ env.KIT_EXEFS }}"
+          ROMFS="${{ env.KIT_ROMFS }}"
+          
+          echo "📝 Creating game.tsv..."
+          
+          python3 << 'CREATE_PROFILE'
+          import sys
+          sys.path.insert(0, 'dm/games')
+          import profile_guess as pg
+          
+          EXEFS = "${{ env.KIT_EXEFS }}"
+          ROMFS = "${{ env.KIT_ROMFS }}"
+          GAME_ID = "${{ env.GAME }}"
+          GAME_NAME = "${{ env.GAME_NAME }}"
+          GAME_DIR = "dm/games/${{ env.GAME }}"
+          
+          # Extrai fatos e gera profile
+          facts = pg.facts_of(EXEFS, ROMFS)
+          guess_vals = pg.guess(facts)
+          
+          # Cria o arquivo game.tsv com os valores descobertos
+          tsv_content = [
+              f"# Game profile automatically generated for {GAME_NAME}",
+              f"Title\t{GAME_ID}",
+              f"Name\t{GAME_NAME}",
+              ""
+          ]
+          
+          for key in ['op_mode', 'pad_layout', 'modules', 'mem_reserve', 'mem_alias', 
+                      'mem_stack', 'app_pool', 'sys_resource', 'graphics']:
+              if key in guess_vals:
+                  value, reason = guess_vals[key]
+                  tsv_content.append(f"{key}\t{value}")
+                  if reason:
+                      tsv_content.append(f"# {reason}")
+          
+          # Salva o arquivo game.tsv
+          with open(f"{GAME_DIR}/game.tsv", "w") as f:
+              f.write("\n".join(tsv_content))
+          
+          print("✅ game.tsv created")
+          
+          # Também cria shader_groups.tsv se não existir
+          import os
+          if not os.path.exists(f"{GAME_DIR}/shader_groups.tsv"):
+              with open(f"{GAME_DIR}/shader_groups.tsv", "w") as f:
+                  f.write("# Shader source groups\n")
+                  f.write("RomFS\tromfs\n")
+                  f.write("main\tmain\n")
+              print("✅ shader_groups.tsv created")
+          
+          CREATE_PROFILE
+          
+          echo ""
+          echo "📋 Content of game.tsv:"
+          cat "$GAME_DIR/game.tsv"
 
       - name: Run shader_split.py
         shell: bash
@@ -207,7 +285,7 @@ jobs:
           GAME="${{ env.GAME }}"
           GAME_NAME="${{ env.GAME_NAME }}"
           ROMFS="${{ env.KIT_ROMFS }}"
-          MAIN="${{ env.KIT_MAIN }}"
+          EXEFS="${{ env.KIT_EXEFS }}"
           SHADER_OUT="dm/games/$GAME/shaders"
           
           mkdir -p "$SHADER_OUT"
@@ -217,11 +295,13 @@ jobs:
           echo "Game: $GAME_NAME"
           echo "Title ID: $GAME"
           echo "RomFS: $ROMFS"
-          echo "Main: $MAIN"
+          echo "ExeFS: $EXEFS"
           echo "Output: $SHADER_OUT"
           echo ""
           
-          # Crucial: DM_GAME must be set in the same command
+          # Executa shader_split.py com RomFS e main
+          MAIN="$EXEFS/main"
+          
           DM_GAME="$GAME" python3 dm/gfx/tools/shader_split.py \
             "$ROMFS" \
             "$MAIN" \
@@ -273,7 +353,7 @@ jobs:
           cp "$SHADER_DIR/shader_pairs.tsv" "$GAME_DIR/shader_pairs.tsv"
           echo "✅ TSVs copied"
 
-      - name: Commit TSVs to repo
+      - name: Commit all generated files to repo
         shell: bash
         run: |
           set -euo pipefail
@@ -283,14 +363,32 @@ jobs:
           GAME="${{ env.GAME }}"
           GAME_DIR="dm/games/$GAME"
           
-          git add "$GAME_DIR/shader_map.tsv" \
+          echo "📝 Staging generated files..."
+          git add "$GAME_DIR/game.tsv" \
+                  "$GAME_DIR/shader_groups.tsv" \
+                  "$GAME_DIR/shader_map.tsv" \
                   "$GAME_DIR/shader_facts.tsv" \
                   "$GAME_DIR/shader_pairs.tsv" 2>/dev/null || true
           
           if ! git diff --cached --quiet; then
             echo "✅ Changes detected, committing..."
-            git commit -m "chore: shader tables for DRAGON BALL: Sparking! ZERO ($GAME)"
-            git push origin HEAD:SpkIOSzero
+            
+            # Usa variável de ambiente para mensagem multi-linha
+            COMMIT_MSG="chore: auto-generated game profile and shader tables
+
+      - game.tsv: metadata discovered using profile_guess.py
+      - shader_groups.tsv: shader source groups
+      - shader_map.tsv: shader indices
+      - shader_facts.tsv: shader facts
+      - shader_pairs.tsv: shader pairs"
+            
+            git commit -m "$COMMIT_MSG"
+            
+            if git push origin HEAD:SpkIOSzero; then
+              echo "✅ Pushed to repository"
+            else
+              echo "⚠️  Push failed (may need retry)"
+            fi
           else
             echo "✅ No changes to commit"
           fi
@@ -321,9 +419,11 @@ jobs:
           echo "  ✅ WORKFLOW 1 COMPLETE"
           echo "════════════════════════════════════════"
           echo ""
-          echo "Generated TSVs:"
-          echo "  • dm/games/${{ env.GAME }}/shader_map.tsv"
-          echo "  • dm/games/${{ env.GAME }}/shader_facts.tsv"
-          echo "  • dm/games/${{ env.GAME }}/shader_pairs.tsv"
+          echo "Generated Files:"
+          echo "  • dm/games/${{ env.GAME }}/game.tsv (profile metadata)"
+          echo "  • dm/games/${{ env.GAME }}/shader_groups.tsv (shader sources)"
+          echo "  • dm/games/${{ env.GAME }}/shader_map.tsv (shader indices)"
+          echo "  • dm/games/${{ env.GAME }}/shader_facts.tsv (shader facts)"
+          echo "  • dm/games/${{ env.GAME }}/shader_pairs.tsv (shader pairs)"
           echo ""
           echo "Next: Workflow 2a will trigger automatically"
