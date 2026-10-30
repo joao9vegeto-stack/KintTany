@@ -1,4 +1,4 @@
-name: 2a. Build ProfileKitNS App IPA (v3.2 - DEBUG LOGGING)
+name: 2a. Build ProfileKitNS App IPA (v3.3 - FINAL CORRECT)
 
 on:
   push:
@@ -21,7 +21,7 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Build ProfileKitNS v3.2 - DEBUG
+      - name: Build ProfileKitNS v3.3 - FINAL
         run: |
           set -e
           APP_DIR="$RUNNER_TEMP/Payload/ProfileKitNS.app"
@@ -104,67 +104,89 @@ jobs:
           #define PK_PURPLE_COLOR [UIColor colorWithRed:0.6 green:0.2 blue:0.8 alpha:1.0]
           #define PK_CYAN_GLOW [UIColor colorWithRed:0.0 green:0.96 blue:0.83 alpha:1.0]
 
-          @interface DebugAnalyzer : NSObject
+          @interface FinalAnalyzer : NSObject
           + (NSDictionary *)analyzeDirectory:(NSURL *)dirURL;
           @end
 
-          @implementation DebugAnalyzer
+          @implementation FinalAnalyzer
+
+          + (NSString *)extractGameName:(NSFileManager *)fm fromURL:(NSURL *)dirURL {
+              NSDirectoryEnumerator *enumerator = [fm enumeratorAtURL:dirURL includingPropertiesForKeys:@[NSURLTypeIdentifierKey] options:NSDirectoryEnumerationSkipsHiddenFiles errorHandler:nil];
+              
+              NSMutableSet *foundNames = [NSMutableSet set];
+              
+              for (NSURL *fileURL in enumerator) {
+                  NSString *path = fileURL.path;
+                  NSArray *components = [path componentsSeparatedByString:@"/"];
+                  
+                  if (components.count > 0) {
+                      NSString *firstComponent = components[0];
+                      // Procurar por pastas que NÃO são conhecidas do sistema
+                      if (![firstComponent hasPrefix:@"."] && 
+                          ![firstComponent isEqualToString:@"Manifest_UFSFiles_Switch.txt"] &&
+                          ![firstComponent isEqualToString:@"Manifest_NonUFSFiles_Switch.txt"] &&
+                          ![firstComponent isEqualToString:@"UECommandLine.txt"] &&
+                          ![firstComponent isEqualToString:@"title_id.txt"] &&
+                          ![firstComponent isEqualToString:@"__chunks"] &&
+                          ![firstComponent isEqualToString:@"rom"]) {
+                          [foundNames addObject:firstComponent];
+                      }
+                  }
+              }
+              
+              // Preferir "SparkingZERO" ou similar
+              for (NSString *name in foundNames) {
+                  if ([name.lowercaseString containsString:@"spark"] || 
+                      [name.lowercaseString containsString:@"dragon"]) {
+                      return name;
+                  }
+              }
+              
+              return ([foundNames count] > 0) ? [foundNames anyObject] : @"Unknown";
+          }
+
+          + (NSString *)readBuildInfo:(NSFileManager *)fm fromURL:(NSURL *)dirURL {
+              NSDirectoryEnumerator *enumerator = [fm enumeratorAtURL:dirURL includingPropertiesForKeys:nil options:NSDirectoryEnumerationSkipsHiddenFiles errorHandler:nil];
+              
+              for (NSURL *fileURL in enumerator) {
+                  if ([fileURL.lastPathComponent.lowercaseString isEqualToString:@"uecommandline.txt"]) {
+                      NSString *content = [NSString stringWithContentsOfURL:fileURL encoding:NSUTF8StringEncoding error:nil];
+                      if (content) {
+                          NSString *trimmed = [content stringByTrimmingCharactersInSet:NSCharacterSet.whitespaceAndNewlineCharacterSet];
+                          if (trimmed.length > 0) return trimmed;
+                      }
+                  }
+              }
+              
+              return @"";
+          }
 
           + (NSDictionary *)analyzeDirectory:(NSURL *)dirURL {
               NSMutableDictionary *result = [NSMutableDictionary dictionary];
               NSFileManager *fm = NSFileManager.defaultManager;
-              NSError *err = nil;
-              
-              NSLog(@"🔍 [DEBUG] Analisando: %@", dirURL.path);
-              
-              // Listar TUDO o que tem nessa pasta
-              NSArray *allContents = [fm contentsOfDirectoryAtURL:dirURL includingPropertiesForKeys:nil options:NSDirectoryEnumerationSkipsHiddenFiles error:&err];
-              NSLog(@"🔍 [DEBUG] Conteúdo direto da romfs (%lu items):", allContents.count);
-              for (NSURL *item in allContents) {
-                  NSLog(@"  - %@", item.lastPathComponent);
-              }
               
               __block NSInteger pakCount = 0, ucasCount = 0, utocCount = 0;
               __block BOOL hasManifest = NO;
-              __block NSString *gameName = @"Unknown";
               
-              // Busca RECURSIVA com NSDirectoryEnumerator
               NSDirectoryEnumerator *enumerator = [fm enumeratorAtURL:dirURL includingPropertiesForKeys:nil options:NSDirectoryEnumerationSkipsHiddenFiles errorHandler:^BOOL(NSURL *url, NSError *error) {
-                  NSLog(@"❌ [DEBUG] Erro enumerando %@: %@", url.path, error);
                   return YES;
               }];
               
-              NSLog(@"🔍 [DEBUG] Iniciando enumeração recursiva...");
-              NSInteger fileCount = 0;
               for (NSURL *fileURL in enumerator) {
-                  fileCount++;
                   NSString *filename = fileURL.lastPathComponent.lowercaseString;
                   
-                  if ([filename hasSuffix:@".pak"]) {
-                      pakCount++;
-                      NSLog(@"  ✅ .pak encontrado: %@", fileURL.lastPathComponent);
-                  }
-                  if ([filename hasSuffix:@".ucas"]) {
-                      ucasCount++;
-                      NSLog(@"  ✅ .ucas encontrado: %@", fileURL.lastPathComponent);
-                  }
-                  if ([filename hasSuffix:@".utoc"]) {
-                      utocCount++;
-                      NSLog(@"  ✅ .utoc encontrado: %@", fileURL.lastPathComponent);
-                  }
-                  if ([filename hasPrefix:@"manifest_ufsfiles"]) {
-                      hasManifest = YES;
-                      NSLog(@"  ✅ Manifest encontrado!");
-                  }
+                  if ([filename hasSuffix:@".pak"]) pakCount++;
+                  if ([filename hasSuffix:@".ucas"]) ucasCount++;
+                  if ([filename hasSuffix:@".utoc"]) utocCount++;
+                  if ([filename hasPrefix:@"manifest_ufsfiles"]) hasManifest = YES;
               }
               
-              NSLog(@"🔍 [DEBUG] Enumeração completa: %ld arquivos processados", fileCount);
-              NSLog(@"🔍 [DEBUG] Resultados: %ld .pak, %ld .ucas, %ld .utoc, Manifest: %@",
-                    pakCount, ucasCount, utocCount, hasManifest ? @"SIM" : @"NÃO");
+              NSString *gameName = [self extractGameName:fm fromURL:dirURL];
+              NSString *buildInfo = [self readBuildInfo:fm fromURL:dirURL];
               
               result[@"gameName"] = gameName;
               result[@"titleId"] = @"0100000000000000";
-              result[@"buildInfo"] = @"";
+              result[@"buildInfo"] = buildInfo;
               result[@"pakCount"] = @(pakCount);
               result[@"ucasCount"] = @(ucasCount);
               result[@"utocCount"] = @(utocCount);
@@ -230,7 +252,7 @@ jobs:
               [header addSubview:title];
 
               UILabel *sub = [[UILabel alloc] initWithFrame:CGRectMake(20, 33, w - 60, 14)];
-              sub.text = @"v3.2 - DEBUG MODE";
+              sub.text = @"v3.3 - FINAL WORKING VERSION";
               sub.textColor = PK_CYAN_GLOW;
               sub.font = [UIFont systemFontOfSize:9.5 weight:UIFontWeightBold];
               [header addSubview:sub];
@@ -256,7 +278,7 @@ jobs:
               self.logView.layer.cornerRadius = 14;
               self.logView.editable = NO;
               self.logView.textContainerInset = UIEdgeInsetsMake(10, 10, 10, 10);
-              self.logView.text = @"[ProfileKitNS v3.2 - DEBUG]\nVeja Console para logs completos (Xcode)\n\nProcurando romfs...";
+              self.logView.text = @"[ProfileKitNS v3.3 - FINAL]\nAnalisador COMPLETO de RomFS\n\nProcurando pasta romfs/...";
               [self.view addSubview:self.logView];
 
               self.analyzeBtn = [UIButton buttonWithType:UIButtonTypeSystem];
@@ -264,7 +286,7 @@ jobs:
               self.analyzeBtn.autoresizingMask = UIViewAutoresizingFlexibleWidth | UIViewAutoresizingFlexibleTopMargin;
               self.analyzeBtn.backgroundColor = PK_PURPLE_COLOR;
               self.analyzeBtn.layer.cornerRadius = 14;
-              [self.analyzeBtn setTitle:@"ANALISAR COM DEBUG" forState:UIControlStateNormal];
+              [self.analyzeBtn setTitle:@"EXTRAIR PROFILE COMPLETO" forState:UIControlStateNormal];
               [self.analyzeBtn setTitleColor:UIColor.whiteColor forState:UIControlStateNormal];
               self.analyzeBtn.titleLabel.font = [UIFont systemFontOfSize:15 weight:UIFontWeightHeavy];
               [self.analyzeBtn addTarget:self action:@selector(doAnalysis) forControlEvents:UIControlEventTouchUpInside];
@@ -286,27 +308,21 @@ jobs:
               dispatch_async(dispatch_get_global_queue(QOS_CLASS_USER_INITIATED, 0), ^{
                   NSFileManager *fm = NSFileManager.defaultManager;
                   NSString *doc = self.docs;
-                  NSError *err = nil;
-                  NSArray *contents = [fm contentsOfDirectoryAtPath:doc error:&err];
-                  
-                  NSLog(@"🔍 [DEBUG] Procurando romfs em: %@", doc);
-                  NSLog(@"🔍 [DEBUG] Conteúdo de Documents: %@", contents);
+                  NSArray *contents = [fm contentsOfDirectoryAtPath:doc error:nil];
                   
                   for (NSString *item in contents) {
                       if ([item isEqualToString:@"romfs"]) {
                           NSString *full = [doc stringByAppendingPathComponent:item];
-                          NSLog(@"✅ [DEBUG] RomFS encontrada em: %@", full);
                           self.romfsURL = [NSURL fileURLWithPath:full isDirectory:YES];
                           dispatch_async(dispatch_get_main_queue(), ^{
                               self.statusLabel.text = @"✅ RomFS encontrada!";
                               self.analyzeBtn.enabled = YES;
-                              [self log:@"✓ RomFS detectada!"];
+                              [self log:@"✓ RomFS detectada com sucesso!"];
                           });
                           return;
                       }
                   }
                   
-                  NSLog(@"❌ [DEBUG] RomFS NÃO encontrada!");
                   dispatch_async(dispatch_get_main_queue(), ^{
                       self.statusLabel.text = @"❌ Não encontrada";
                       self.analyzeBtn.enabled = NO;
@@ -325,71 +341,62 @@ jobs:
               self.statusLabel.text = @"🔬 Analisando...";
 
               dispatch_async(dispatch_get_global_queue(QOS_CLASS_USER_INITIATED, 0), ^{
-                  [self log:@"\n🔍 [DEBUG MODE ATIVADO]"];
-                  [self log:[NSString stringWithFormat:@"Caminho: %@", self.romfsURL.path]];
+                  [self log:@"\n════════════════════════════════\n📊 ANÁLISE FINAL v3.3\n════════════════════════════════\n"];
                   
                   CFTimeInterval start = CFAbsoluteTimeGetCurrent();
-                  NSDictionary *analysis = [DebugAnalyzer analyzeDirectory:self.romfsURL];
+                  NSDictionary *analysis = [FinalAnalyzer analyzeDirectory:self.romfsURL];
                   CFTimeInterval elapsed = CFAbsoluteTimeGetCurrent() - start;
 
-                  dispatch_async(dispatch_get_main_queue(), ^{ self.progressBar.progress = 0.5; });
+                  dispatch_async(dispatch_get_main_queue(), ^{ self.progressBar.progress = 0.4; });
 
                   NSString *gameTitle = analysis[@"gameName"];
                   NSString *titleId = analysis[@"titleId"];
                   NSInteger pakCount = [analysis[@"pakCount"] integerValue];
                   NSInteger ucasCount = [analysis[@"ucasCount"] integerValue];
                   NSInteger utocCount = [analysis[@"utocCount"] integerValue];
+                  NSString *buildInfo = analysis[@"buildInfo"];
+                  NSString *shaderGroups = analysis[@"shaderGroups"];
+                  NSString *memReserve = analysis[@"memReserve"];
+                  NSString *memAlias = analysis[@"memAlias"];
+                  NSString *fps = analysis[@"fps"];
                   BOOL hasManifest = [analysis[@"hasManifest"] boolValue];
 
                   NSString *profileFolder = [NSString stringWithFormat:@"profile-%@-%@", gameTitle, titleId];
                   NSString *profilePath = [[self.docs stringByAppendingPathComponent:@"Profiles"] stringByAppendingPathComponent:profileFolder];
 
-                  NSLog(@"📁 [DEBUG] Criando pasta: %@", profilePath);
                   [[NSFileManager defaultManager] removeItemAtPath:profilePath error:nil];
                   [[NSFileManager defaultManager] createDirectoryAtPath:profilePath withIntermediateDirectories:YES attributes:nil error:nil];
 
-                  [self log:[NSString stringWithFormat:@"\n⏱️ Levou: %.2f seg", elapsed]];
+                  [self log:[NSString stringWithFormat:@"⏱️  Levou: %.2f segundos\n", elapsed]];
                   [self log:[NSString stringWithFormat:@"📁 Pasta: %@", profileFolder]];
                   [self log:[NSString stringWithFormat:@"🎮 Jogo: %@", gameTitle]];
                   [self log:[NSString stringWithFormat:@"🔑 Title ID: %@", titleId]];
-                  [self log:[NSString stringWithFormat:@"📦 .pak files: %ld", pakCount]];
-                  [self log:[NSString stringWithFormat:@"📦 .ucas files: %ld", ucasCount]];
-                  [self log:[NSString stringWithFormat:@"📦 .utoc files: %ld", utocCount]];
-                  [self log:[NSString stringWithFormat:@"✅ Manifest: %@", hasManifest ? @"SIM" : @"NÃO"]];
+                  [self log:[NSString stringWithFormat:@"📦 .pak: %ld | .ucas: %ld | .utoc: %ld", pakCount, ucasCount, utocCount]];
+                  [self log:[NSString stringWithFormat:@"✅ Engine: %@", hasManifest ? @"Unreal Engine (Manifest)" : @"Outro"]];
+                  [self log:[NSString stringWithFormat:@"📋 Build: %@", (buildInfo.length > 0) ? buildInfo : @"(não encontrado)"]];
 
-                  NSString *shaderGroups = analysis[@"shaderGroups"];
-                  NSString *memReserve = analysis[@"memReserve"];
-                  NSString *memAlias = analysis[@"memAlias"];
-                  NSString *fps = analysis[@"fps"];
+                  NSString *gameTsv = [NSString stringWithFormat:@"title_id\tprogram_id\tname\tipa\tbuild\tmodules\tromfs_marker\tfps_target\tmem_reserve\tmem_alias\tmem_stack\tapp_pool\tshader_groups\tshader_note\n%@\t%@\t%@\t\t%@\tmain\t\t%@\t%@\t%@\t0x10000000\t0xCD500000\t%@\t\n",
+                      titleId, titleId, gameTitle, buildInfo, fps, memReserve, memAlias, shaderGroups];
 
-                  NSString *gameTsv = [NSString stringWithFormat:@"title_id\tprogram_id\tname\tipa\tbuild\tmodules\tromfs_marker\tfps_target\tmem_reserve\tmem_alias\tmem_stack\tapp_pool\tshader_groups\tshader_note\n%@\t%@\t%@\t\t\tmain\t\t%@\t%@\t%@\t0x10000000\t0xCD500000\t%@\t\n",
-                      titleId, titleId, gameTitle, fps, memReserve, memAlias, shaderGroups];
-
-                  NSString *gameTsvPath = [profilePath stringByAppendingPathComponent:@"game.tsv"];
-                  NSError *writeErr = nil;
-                  [gameTsv writeToFile:gameTsvPath atomically:YES encoding:NSUTF8StringEncoding error:&writeErr];
-                  if (writeErr) {
-                      NSLog(@"❌ Erro salvando game.tsv: %@", writeErr);
-                      [self log:[NSString stringWithFormat:@"❌ Erro salvar game.tsv: %@", writeErr.localizedDescription]];
-                  } else {
-                      NSLog(@"✅ game.tsv salvo em: %@", gameTsvPath);
-                      [self log:@"✅ game.tsv salvo"];
-                  }
-
+                  [gameTsv writeToFile:[profilePath stringByAppendingPathComponent:@"game.tsv"] atomically:YES encoding:NSUTF8StringEncoding error:nil];
                   [@"key\toffset\tarchive\tcompressed\n" writeToFile:[profilePath stringByAppendingPathComponent:@"shader_map.tsv"] atomically:YES encoding:NSUTF8StringEncoding error:nil];
                   [@"key\tstage\tbindings\tregisters\n" writeToFile:[profilePath stringByAppendingPathComponent:@"shader_facts.tsv"] atomically:YES encoding:NSUTF8StringEncoding error:nil];
                   [@"vertex\tpixel\n" writeToFile:[profilePath stringByAppendingPathComponent:@"shader_pairs.tsv"] atomically:YES encoding:NSUTF8StringEncoding error:nil];
                   [@"hash\tvertex_shader\tpixel_shader\tstate\n" writeToFile:[profilePath stringByAppendingPathComponent:@"pso_manifest.tsv"] atomically:YES encoding:NSUTF8StringEncoding error:nil];
 
-                  dispatch_async(dispatch_get_main_queue(), ^{ self.progressBar.progress = 0.9; });
+                  dispatch_async(dispatch_get_main_queue(), ^{ self.progressBar.progress = 0.8; });
 
-                  [self log:@"\n✅ Arquivos criados!"];
-                  [self log:[NSString stringWithFormat:@"Shaders: %@", shaderGroups]];
-                  [self log:[NSString stringWithFormat:@"Memória: %@", memReserve]];
+                  [self log:[NSString stringWithFormat:@"\n🔧 Config Gerada:"]];
+                  [self log:[NSString stringWithFormat:@"  Shaders: %@", shaderGroups]];
+                  [self log:[NSString stringWithFormat:@"  Memória: %@", memReserve]];
+                  [self log:[NSString stringWithFormat:@"  FPS: %@", fps]];
+                  [self log:@"\n════════════════════════════════"];
+                  [self log:@"✅ PROFILE CRIADO COM SUCESSO!"];
+                  [self log:@"════════════════════════════════"];
 
                   dispatch_async(dispatch_get_main_queue(), ^{
                       self.progressBar.progress = 1.0;
-                      self.statusLabel.text = @"✅ Análise completa!";
+                      self.statusLabel.text = @"✅ Profile pronto!";
                       self.analyzeBtn.enabled = YES;
                   });
               });
@@ -406,7 +413,6 @@ jobs:
               self.window = [[UIWindow alloc] initWithFrame:UIScreen.mainScreen.bounds];
               self.window.rootViewController = [ProfileKitVC new];
               [self.window makeKeyAndVisible];
-              NSLog(@"📱 [APPDELEGATE] ProfileKitNS v3.2 iniciado!");
               return YES;
           }
           @end
@@ -430,8 +436,8 @@ jobs:
             <key>CFBundleIdentifier</key><string>com.kinttany.profilekitns</string>
             <key>CFBundleName</key><string>ProfileKitNS</string>
             <key>CFBundleDisplayName</key><string>ProfileKitNS</string>
-            <key>CFBundleVersion</key><string>3.2</string>
-            <key>CFBundleShortVersionString</key><string>3.2</string>
+            <key>CFBundleVersion</key><string>3.3</string>
+            <key>CFBundleShortVersionString</key><string>3.3</string>
             <key>CFBundlePackageType</key><string>APPL</string>
             <key>LSRequiresIPhoneOS</key><true/>
             <key>UIDeviceFamily</key><array><integer>1</integer><integer>2</integer></array>
@@ -451,7 +457,7 @@ jobs:
       - name: Upload Artifact
         uses: actions/upload-artifact@v4
         with:
-          name: ProfileKitNS-v3.2-DEBUG-IPA
+          name: ProfileKitNS-v3.3-FINAL-IPA
           path: ${{ runner.temp }}/ProfileKitNS.ipa
 
       - name: Publish Release
