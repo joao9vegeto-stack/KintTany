@@ -273,6 +273,49 @@ jobs:
           echo "=== Updated game.tsv ==="
           cat "$GAME_TSV"
 
+      - name: Locate decoded shader archives
+        shell: bash
+        run: |
+          set -euo pipefail
+          KIT_DIR="${{ env.KIT_DIR }}"
+
+          echo "=== Locating decoded shader archives ==="
+
+          # Search for .shaders.bin or ue_shaders
+          SHADER_BIN=$(find "$KIT_DIR" -type f -name "*.shaders.bin" -print -quit || true)
+          UE_SHADERS=$(find "$KIT_DIR" -type d -name "ue_shaders" -print -quit || true)
+
+          if [ -z "$SHADER_BIN" ] && [ -z "$UE_SHADERS" ]; then
+            echo "ERROR: No decoded shaders found (.shaders.bin or ue_shaders)"
+            echo ""
+            echo "Kit structure:"
+            find "$KIT_DIR" -maxdepth 4 -type f -name "*.bin" -o -name "*.tsv" | head -20
+            exit 1
+          fi
+
+          if [ -n "$SHADER_BIN" ]; then
+            echo "✅ Found .shaders.bin files:"
+            find "$KIT_DIR" -type f -name "*.shaders.bin" | wc -l
+            echo "Location: $(dirname $SHADER_BIN)"
+          fi
+
+          if [ -n "$UE_SHADERS" ]; then
+            echo "✅ Found ue_shaders directory: $UE_SHADERS"
+            echo "Files: $(find $UE_SHADERS -type f | wc -l)"
+          fi
+
+          # Create ue_shaders symlink if needed
+          if [ -z "$UE_SHADERS" ] && [ -n "$SHADER_BIN" ]; then
+            SHADER_DIR=$(dirname "$SHADER_BIN")
+            UE_SHADERS="$KIT_DIR/ue_shaders"
+            mkdir -p "$UE_SHADERS"
+            cp "$SHADER_DIR"/*.shaders.bin "$UE_SHADERS/" 2>/dev/null || true
+            cp "$SHADER_DIR"/*.shaders.tsv "$UE_SHADERS/" 2>/dev/null || true
+            echo "✅ Created ue_shaders from .shaders.bin"
+          fi
+
+          echo "UE_SHADERS=$UE_SHADERS" >> "$GITHUB_ENV"
+
       - name: Run shader_split.py
         shell: bash
         run: |
