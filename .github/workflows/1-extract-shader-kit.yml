@@ -102,6 +102,54 @@ jobs:
           unzip -q -o "$WORK/github_kit_Spk.zip" -d "$KIT_DIR"
           echo "KIT_DIR=$KIT_DIR" >> "$GITHUB_ENV"
 
+      - name: Extract shader files from shader_part1.zip
+        shell: bash
+        run: |
+          set -euo pipefail
+          WORK="${{ env.WORK }}"
+          KIT_DIR="${{ env.KIT_DIR }}"
+          
+          echo "=== Extracting shader files from shader_part1.zip ==="
+
+          # Create temp extraction directory
+          SHADER_TEMP="$WORK/shader_part1_extracted"
+          mkdir -p "$SHADER_TEMP"
+
+          # Extract part1
+          echo "Extracting shader_part1.zip..."
+          unzip -q "$WORK/shader_part1.zip" -d "$SHADER_TEMP"
+
+          # Find the Paks folder with .utoc files
+          PAKS_DIR=$(find "$SHADER_TEMP" -type d -name "Paks" -print -quit || true)
+
+          if [ -z "$PAKS_DIR" ]; then
+            echo "ERROR: Paks directory not found in shader_part1.zip"
+            echo "Contents (first 30):"
+            find "$SHADER_TEMP" -maxdepth 5 -type d | head -30
+            exit 1
+          fi
+
+          echo "✅ Found Paks directory: $PAKS_DIR"
+
+          # Count .utoc files
+          UTOC_COUNT=$(find "$PAKS_DIR" -type f -name "*.utoc" | wc -l)
+          echo "✅ Found $UTOC_COUNT .utoc files"
+
+          # Copy to ue_shaders
+          UE_SHADERS="$KIT_DIR/ue_shaders"
+          mkdir -p "$UE_SHADERS"
+
+          echo "Copying shader files to ue_shaders..."
+          find "$PAKS_DIR" -type f \( -name "*.utoc" -o -name "*.pak" \) -exec cp {} "$UE_SHADERS/" \;
+
+          FILE_COUNT=$(find "$UE_SHADERS" -type f | wc -l)
+          echo "✅ ue_shaders populated: $FILE_COUNT files"
+          echo ""
+          echo "=== ue_shaders contents (first 15) ==="
+          ls -1 "$UE_SHADERS" | head -15
+          echo ""
+          echo "UE_SHADERS=$UE_SHADERS" >> "$GITHUB_ENV"
+
       - name: Locate RomFS and ExeFS
         shell: bash
         run: |
