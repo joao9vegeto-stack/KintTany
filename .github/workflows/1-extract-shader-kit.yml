@@ -135,15 +135,39 @@ jobs:
           
           echo "🔎 Locating main executable in ExeFS..."
           
-          # Procura em qualquer lugar do kit
-          MAIN=$(find "$KIT_DIR" -type f \( -iname "main" -o -iname "main.nso" \) -print -quit || true)
+          # Procura especificamente em ExeFS (várias variações de caso)
+          EXEFS_DIR=$(find "$KIT_DIR" -type d \( -iname "ExeFS" -o -iname "exefs" \) | head -1 || true)
+          
+          if [ -z "$EXEFS_DIR" ]; then
+            echo "❌ ExeFS directory not found"
+            exit 1
+          fi
+          
+          echo "Found ExeFS: $EXEFS_DIR"
+          
+          # Procura por arquivo chamado 'main' exatamente nessa pasta
+          MAIN=""
+          
+          # Primeira tentativa: procurar arquivo 'main' (sem extensão)
+          if [ -f "$EXEFS_DIR/main" ]; then
+            MAIN="$EXEFS_DIR/main"
+          fi
+          
+          # Segunda tentativa: procurar 'main.nso'
+          if [ -z "$MAIN" ] && [ -f "$EXEFS_DIR/main.nso" ]; then
+            MAIN="$EXEFS_DIR/main.nso"
+          fi
+          
+          # Terceira tentativa: procurar qualquer 'main*' 
+          if [ -z "$MAIN" ]; then
+            MAIN=$(find "$EXEFS_DIR" -maxdepth 1 -name "main*" -type f | head -1 || true)
+          fi
           
           if [ -z "$MAIN" ] || [ ! -f "$MAIN" ]; then
-            echo "❌ main executable not found in kit"
-            echo "📂 Searching for ExeFS directories:"
-            find "$KIT_DIR" -type d -iname "*exefs*" || true
-            echo "📄 Searching for main-like files:"
-            find "$KIT_DIR" -type f -iname "*main*" | head -20 || true
+            echo "❌ main executable not found in $EXEFS_DIR"
+            echo ""
+            echo "📄 Files in ExeFS:"
+            ls -lh "$EXEFS_DIR" || true
             exit 1
           fi
           
