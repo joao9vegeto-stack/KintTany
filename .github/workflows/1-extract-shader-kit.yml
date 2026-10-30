@@ -227,12 +227,7 @@ jobs:
           if [ -f "$GAME_DIR/shader_groups.tsv" ]; then
             echo "shader_groups.tsv already exists, skipping"
           else
-            cat > "$GAME_DIR/shader_groups.tsv" <<'EOF'
-          # Shader source groups
-          # Automatically generated for DRAGON BALL: Sparking! ZERO
-            RomFS	romfs
-            main	main
-            EOF
+            printf "# Shader source groups\n# Automatically generated for DRAGON BALL: Sparking! ZERO\nRomFS\tromfs\nmain\tmain\n" > "$GAME_DIR/shader_groups.tsv"
             echo "✅ shader_groups.tsv created"
           fi
 
