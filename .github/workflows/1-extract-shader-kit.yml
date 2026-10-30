@@ -249,6 +249,30 @@ jobs:
             echo "✅ $FILE: $LINES lines"
           done
 
+      - name: Complete game.tsv with required keys
+        shell: bash
+        run: |
+          set -euo pipefail
+          GAME="${{ env.GAME }}"
+          GAME_DIR="dm/games/$GAME"
+          GAME_TSV="$GAME_DIR/game.tsv"
+
+          echo "=== Completing game.tsv with required keys ==="
+
+          if ! grep -q "^shader_note" "$GAME_TSV"; then
+            echo "Adding shader_note..."
+            echo "shader_note	" >> "$GAME_TSV"
+          fi
+
+          if ! grep -q "^shader_groups" "$GAME_TSV"; then
+            echo "Adding shader_groups..."
+            echo "shader_groups	shader_groups.tsv" >> "$GAME_TSV"
+          fi
+
+          echo ""
+          echo "=== Updated game.tsv ==="
+          cat "$GAME_TSV"
+
       - name: Run shader_split.py
         shell: bash
         run: |
