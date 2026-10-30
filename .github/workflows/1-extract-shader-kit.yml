@@ -30,17 +30,20 @@ jobs:
           ref: SpkIOSzero
           fetch-depth: 1
 
-      - name: Setup Python & dependencies
+      - name: Setup Python virtualenv
         shell: bash
         run: |
           set -euo pipefail
           echo "═══════════════════════════════════════════"
-          echo "  🔧 SETUP: Python & Dependencies"
+          echo "  🔧 SETUP: Python & Virtualenv"
           echo "═══════════════════════════════════════════"
-          echo ""
           python3 --version
-          python3 -m pip install --upgrade pip setuptools wheel
-          pip3 install lz4 capstone PyYAML zstandard requests
+          python3 -m venv .venv
+          source .venv/bin/activate
+          python -m pip install --upgrade pip setuptools wheel
+          pip install lz4 capstone PyYAML zstandard requests
+          echo "VIRTUAL_ENV=$PWD/.venv" >> "$GITHUB_ENV"
+          echo "$PWD/.venv/bin" >> "$GITHUB_PATH"
 
       - name: Create work directory
         shell: bash
@@ -52,16 +55,6 @@ jobs:
           echo "📁 Work directory: $WORK"
           df -h "$WORK" | tail -1
 
-      - name: Validate GitHub token
-        shell: bash
-        run: |
-          set -euo pipefail
-          if [ -z "${{ secrets.GITHUB_TOKEN }}" ]; then
-            echo "⚠️  No GitHub token found"
-          else
-            echo "✅ GitHub token available"
-          fi
-
       - name: Download part1.zip
         shell: bash
         run: |
@@ -69,18 +62,12 @@ jobs:
           WORK="${{ env.WORK }}"
           URL="https://github.com/joao9vegeto-stack/KintTany/releases/download/v1.0-kit/shader_kit_010035F022078000_part1.zip"
 
-          echo "📥 Downloading part1.zip"
-          curl -fL \
-            --retry 5 \
-            --retry-delay 2 \
-            --max-time 1800 \
-            --progress-bar \
+          curl -fL --retry 5 --retry-delay 2 --max-time 1800 --progress-bar \
             -o "$WORK/part1.zip" \
             "$URL"
 
           test -f "$WORK/part1.zip"
           echo "✅ part1.zip downloaded"
-          stat -f%z "$WORK/part1.zip" 2>/dev/null || stat -c%s "$WORK/part1.zip"
 
       - name: Download part2.z00
         shell: bash
@@ -89,12 +76,7 @@ jobs:
           WORK="${{ env.WORK }}"
           URL="https://github.com/joao9vegeto-stack/KintTany/releases/download/v1.0-kit/shader_kit_010035F022078000_part2.z00"
 
-          echo "📥 Downloading part2.z00"
-          curl -fL \
-            --retry 5 \
-            --retry-delay 2 \
-            --max-time 3600 \
-            --progress-bar \
+          curl -fL --retry 5 --retry-delay 2 --max-time 3600 --progress-bar \
             -o "$WORK/part2.z00" \
             "$URL"
 
@@ -108,12 +90,7 @@ jobs:
           WORK="${{ env.WORK }}"
           URL="https://github.com/joao9vegeto-stack/KintTany/releases/download/v1.0-kit/shader_kit_010035F022078000_part2.z01"
 
-          echo "📥 Downloading part2.z01"
-          curl -fL \
-            --retry 5 \
-            --retry-delay 2 \
-            --max-time 3600 \
-            --progress-bar \
+          curl -fL --retry 5 --retry-delay 2 --max-time 3600 --progress-bar \
             -o "$WORK/part2.z01" \
             "$URL"
 
@@ -125,16 +102,11 @@ jobs:
         run: |
           set -euo pipefail
           WORK="${{ env.WORK }}"
-
-          echo "🔗 Reconstructing split archive"
           cat "$WORK/part2.z00" "$WORK/part2.z01" > "$WORK/part2.zip"
-
-          echo "🔍 Testing zip integrity"
           unzip -t "$WORK/part2.zip" > /dev/null
+          echo "✅ part2.zip reconstructed"
 
-          echo "✅ Reconstruction OK"
-
-      - name: Extract part1.zip
+      - name: Extract archives
         shell: bash
         run: |
           set -euo pipefail
@@ -142,39 +114,22 @@ jobs:
           KIT_DIR="$WORK/kit"
           mkdir -p "$KIT_DIR"
 
-          echo "📦 Extracting part1.zip"
-          unzip -q "$WORK/part1.zip" -d "$KIT_DIR" 2>&1 | tee "$RUNNER_TEMP/unzip1.log"
+          unzip -q "$WORK/part1.zip" -d "$KIT_DIR"
+          unzip -q -o "$WORK/part2.zip" -d "$KIT_DIR"
 
           echo "KIT_DIR=$KIT_DIR" >> "$GITHUB_ENV"
-          echo "✅ part1 extracted"
-
-      - name: Extract part2.zip
-        shell: bash
-        run: |
-          set -euo pipefail
-          WORK="${{ env.WORK }}"
-          KIT_DIR="${{ env.KIT_DIR }}"
-
-          echo "📦 Extracting part2.zip"
-          unzip -q -o "$WORK/part2.zip" -d "$KIT_DIR" 2>&1 | tee "$RUNNER_TEMP/unzip2.log"
-
-          echo "✅ part2 extracted"
+          echo "✅ archives extracted"
 
       - name: Locate RomFS
         shell: bash
         run: |
           set -euo pipefail
           KIT_DIR="${{ env.KIT_DIR }}"
-
-          echo "🔎 Locating RomFS"
           ROMFS="$(find "$KIT_DIR" -type d -name "RomFS" -print -quit || true)"
-
           if [ -z "$ROMFS" ]; then
-            echo "❌ RomFS directory not found"
-            find "$KIT_DIR" -maxdepth 5 -type d | head -50
+            echo "❌ RomFS not found"
             exit 1
           fi
-
           echo "KIT_ROMFS=$ROMFS" >> "$GITHUB_ENV"
           echo "✅ RomFS: $ROMFS"
 
@@ -183,67 +138,38 @@ jobs:
         run: |
           set -euo pipefail
           KIT_DIR="${{ env.KIT_DIR }}"
-
-          echo "🔎 Locating main executable"
-          MAIN="$(find "$KIT_DIR" -type f \( -name "main" -o -name "main.nso" \) -not -path "*/.*" -print -quit || true)"
-
-          if [ -n "$MAIN" ] && [ -f "$MAIN" ]; then
-            echo "KIT_MAIN=$MAIN" >> "$GITHUB_ENV"
-            echo "✅ main found: $MAIN"
-          else
-            echo "KIT_MAIN=" >> "$GITHUB_ENV"
-            echo "⚠️ main executable not found"
+          MAIN="$(find "$KIT_DIR" -type f \( -name "main" -o -name "main.nso" \) -print -quit || true)"
+          if [ -z "$MAIN" ]; then
+            echo "❌ main executable not found in ExeFS"
+            exit 1
           fi
+          echo "KIT_MAIN=$MAIN" >> "$GITHUB_ENV"
+          echo "✅ main: $MAIN"
 
-      - name: Verify profile exists
+      - name: Verify game profile exists
         shell: bash
         run: |
           set -euo pipefail
           GAME="${{ env.GAME }}"
           PROFILE_DIR="dm/games/$GAME"
-
-          echo "🔎 Verifying game profile directory"
           if [ ! -d "$PROFILE_DIR" ]; then
-            echo "❌ Missing profile directory: $PROFILE_DIR"
+            echo "❌ Missing profile dir: $PROFILE_DIR"
             exit 1
           fi
-
-          echo "✅ Profile directory exists: $PROFILE_DIR"
-          ls -la "$PROFILE_DIR"
+          echo "✅ profile dir exists"
 
       - name: Run shader_split.py
         shell: bash
         run: |
           set -euo pipefail
+          source .venv/bin/activate
           GAME="${{ env.GAME }}"
-          GAME_NAME="${{ env.GAME_NAME }}"
           ROMFS="${{ env.KIT_ROMFS }}"
           MAIN="${{ env.KIT_MAIN }}"
           SHADER_OUT="dm/games/$GAME/shaders"
-
           mkdir -p "$SHADER_OUT"
 
-          echo "🔧 Running shader_split.py"
-          echo "Game: $GAME_NAME"
-          echo "Title ID: $GAME"
-          echo "RomFS: $ROMFS"
-          echo "Main: ${MAIN:-(not provided)}"
-          echo "Output: $SHADER_OUT"
-
-          if [ ! -d "$ROMFS" ]; then
-            echo "❌ RomFS path invalid"
-            exit 1
-          fi
-
-          if [ -z "$MAIN" ]; then
-            echo "❌ main executable not found in kit"
-            echo "   This workflow expects main for this title."
-            exit 1
-          fi
-
-          echo "✅ Using main executable"
-
-          DM_GAME="$GAME" python3 dm/gfx/tools/shader_split.py \
+          DM_GAME="$GAME" python dm/gfx/tools/shader_split.py \
             "$ROMFS" \
             "$MAIN" \
             "$SHADER_OUT" \
@@ -252,8 +178,6 @@ jobs:
             "$SHADER_OUT/shader_pairs.tsv" \
             2>&1 | tee "$RUNNER_TEMP/split.log"
 
-          echo "✅ shader_split.py completed"
-
       - name: Verify TSV outputs
         shell: bash
         run: |
@@ -261,60 +185,25 @@ jobs:
           GAME="${{ env.GAME }}"
           SHADER_OUT="dm/games/$GAME/shaders"
 
-          echo "📊 Verifying TSV outputs"
           for tsv in shader_map.tsv shader_facts.tsv shader_pairs.tsv; do
             FILE="$SHADER_OUT/$tsv"
-            if [ ! -f "$FILE" ]; then
-              echo "❌ Missing: $FILE"
-              exit 1
-            fi
+            [ -f "$FILE" ] || { echo "❌ Missing $FILE"; exit 1; }
             echo "✅ $tsv -> $(wc -l < "$FILE") lines"
           done
 
-      - name: Build game profile from extraction
+      - name: Copy TSVs into game profile
         shell: bash
         run: |
           set -euo pipefail
           GAME="${{ env.GAME }}"
-          GAME_NAME="${{ env.GAME_NAME }}"
           GAME_DIR="dm/games/$GAME"
           SHADER_DIR="$GAME_DIR/shaders"
-
-          echo "🧩 Building game profile"
-
-          PROFILE_OUTPUT="$(python3 dm/games/profile_guess.py "${{ env.KIT_DIR }}/ExeFS" "${{ env.KIT_ROMFS }}" 2>&1 || true)"
-
-          MODULES="$(echo "$PROFILE_OUTPUT" | grep '^modules' | cut -f2 || echo 'main')"
-          MEM_RESERVE="$(echo "$PROFILE_OUTPUT" | grep '^mem_reserve' | cut -f2 || echo '0x30000000')"
-          MEM_ALIAS="$(echo "$PROFILE_OUTPUT" | grep '^mem_alias' | cut -f2 || echo '0x10000000')"
-          MEM_STACK="$(echo "$PROFILE_OUTPUT" | grep '^mem_stack' | cut -f2 || echo '0x10000000')"
-          APP_POOL="$(echo "$PROFILE_OUTPUT" | grep '^app_pool' | cut -f2 || echo '0xCD500000')"
-          FPS_TARGET="$(echo "$PROFILE_OUTPUT" | grep '^fps_target' | cut -f2 || echo '60')"
-          ROMFS_MARKER="$(echo "$PROFILE_OUTPUT" | grep '^romfs_marker' | cut -f2 || echo '')"
-          BUILD="$(echo "$PROFILE_OUTPUT" | grep '^build' | cut -f2 || echo '')"
-          SHADER_GROUPS="$(echo "$PROFILE_OUTPUT" | grep '^shader_groups' | cut -f2 || echo 'global=global')"
-          SHADER_NOTE="$(echo "$PROFILE_OUTPUT" | grep '^shader_note' | cut -f2 || echo '')"
-
-          mkdir -p "$GAME_DIR"
-
-          {
-            printf 'title_id\tprogram_id\tname\tipa\tbuild\tmodules\tromfs_marker\tfps_target\tmem_reserve\tmem_alias\tmem_stack\tapp_pool\tshader_groups\tshader_note\n'
-            printf '%s\t%s\t%s\t\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n' \
-              "$GAME" "$GAME" "$GAME_NAME" \
-              "$BUILD" "$MODULES" "$ROMFS_MARKER" "$FPS_TARGET" \
-              "$MEM_RESERVE" "$MEM_ALIAS" "$MEM_STACK" "$APP_POOL" \
-              "$SHADER_GROUPS" "$SHADER_NOTE"
-          } > "$GAME_DIR/game.tsv"
 
           cp "$SHADER_DIR/shader_map.tsv" "$GAME_DIR/shader_map.tsv"
           cp "$SHADER_DIR/shader_facts.tsv" "$GAME_DIR/shader_facts.tsv"
           cp "$SHADER_DIR/shader_pairs.tsv" "$GAME_DIR/shader_pairs.tsv"
 
-          if [ -f "$SHADER_DIR/pso_manifest.tsv" ]; then
-            cp "$SHADER_DIR/pso_manifest.tsv" "$GAME_DIR/pso_manifest.tsv"
-          fi
-
-          echo "✅ Game profile written"
+          echo "✅ TSVs copied into profile"
 
       - name: Commit TSVs to repo
         shell: bash
@@ -324,14 +213,11 @@ jobs:
           git config user.email "dbs-shader-builder@local"
 
           GAME="${{ env.GAME }}"
-          SHADER_DIR="dm/games/$GAME/shaders"
           GAME_DIR="dm/games/$GAME"
 
-          git add "$GAME_DIR/game.tsv" \
-                  "$GAME_DIR/shader_map.tsv" \
+          git add "$GAME_DIR/shader_map.tsv" \
                   "$GAME_DIR/shader_facts.tsv" \
-                  "$GAME_DIR/shader_pairs.tsv" \
-                  "$GAME_DIR/pso_manifest.tsv" 2>/dev/null || true
+                  "$GAME_DIR/shader_pairs.tsv"
 
           if ! git diff --cached --quiet; then
             git commit -m "chore: generate shader tables for DRAGON BALL: Sparking! ZERO"
@@ -354,14 +240,4 @@ jobs:
         with:
           name: split-execution-log
           path: ${{ runner.temp }}/split.log
-          retention-days: 14
-
-      - name: Upload extraction logs
-        uses: actions/upload-artifact@v4
-        if: always()
-        with:
-          name: extraction-logs
-          path: |
-            ${{ runner.temp }}/unzip1.log
-            ${{ runner.temp }}/unzip2.log
           retention-days: 14
