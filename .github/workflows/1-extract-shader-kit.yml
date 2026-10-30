@@ -46,52 +46,63 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          WORK="${RUNNER_TEMP}/shader_kit_${RANDOM}_$(date +%s)"
+          WORK="${RUNNER_TEMP}/shader_extract_${RANDOM}_$(date +%s)"
           mkdir -p "$WORK"
           echo "WORK=$WORK" >> "$GITHUB_ENV"
           echo "📁 Work directory: $WORK"
 
-      - name: Download part1.zip
+      - name: Download shader kit (part 1)
         shell: bash
         run: |
           set -euo pipefail
           WORK="${{ env.WORK }}"
-          echo "📥 Downloading part1.zip..."
+          echo "📥 Downloading shader kit part 1..."
           curl -fL --retry 5 --retry-delay 2 --max-time 1800 --progress-bar \
-            -o "$WORK/part1.zip" \
+            -o "$WORK/shader_part1.zip" \
             "https://github.com/joao9vegeto-stack/KintTany/releases/download/v1.0-kit/shader_kit_010035F022078000_part1.zip"
-          [ -f "$WORK/part1.zip" ] && echo "✅ part1.zip downloaded" || exit 1
+          [ -f "$WORK/shader_part1.zip" ] && echo "✅ part1 downloaded" || exit 1
 
-      - name: Download part2.z00
+      - name: Download shader kit (part 2a - z00)
         shell: bash
         run: |
           set -euo pipefail
           WORK="${{ env.WORK }}"
-          echo "📥 Downloading part2.z00..."
+          echo "📥 Downloading shader kit part 2a (z00)..."
           curl -fL --retry 5 --retry-delay 2 --max-time 3600 --progress-bar \
-            -o "$WORK/part2.z00" \
+            -o "$WORK/shader_part2.z00" \
             "https://github.com/joao9vegeto-stack/KintTany/releases/download/v1.0-kit/shader_kit_010035F022078000_part2.z00"
-          [ -f "$WORK/part2.z00" ] && echo "✅ part2.z00 downloaded" || exit 1
+          [ -f "$WORK/shader_part2.z00" ] && echo "✅ part2.z00 downloaded" || exit 1
 
-      - name: Download part2.z01
+      - name: Download shader kit (part 2b - z01)
         shell: bash
         run: |
           set -euo pipefail
           WORK="${{ env.WORK }}"
-          echo "📥 Downloading part2.z01..."
+          echo "📥 Downloading shader kit part 2b (z01)..."
           curl -fL --retry 5 --retry-delay 2 --max-time 3600 --progress-bar \
-            -o "$WORK/part2.z01" \
+            -o "$WORK/shader_part2.z01" \
             "https://github.com/joao9vegeto-stack/KintTany/releases/download/v1.0-kit/shader_kit_010035F022078000_part2.z01"
-          [ -f "$WORK/part2.z01" ] && echo "✅ part2.z01 downloaded" || exit 1
+          [ -f "$WORK/shader_part2.z01" ] && echo "✅ part2.z01 downloaded" || exit 1
 
-      - name: Reconstruct part2.zip
+      - name: Reconstruct shader kit (part 2)
         shell: bash
         run: |
           set -euo pipefail
           WORK="${{ env.WORK }}"
-          echo "🔗 Reconstructing part2.zip..."
-          cat "$WORK/part2.z00" "$WORK/part2.z01" > "$WORK/part2.zip"
-          unzip -t "$WORK/part2.zip" > /dev/null && echo "✅ part2.zip OK" || exit 1
+          echo "🔗 Reconstructing shader_part2.zip..."
+          cat "$WORK/shader_part2.z00" "$WORK/shader_part2.z01" > "$WORK/shader_part2.zip"
+          unzip -t "$WORK/shader_part2.zip" > /dev/null && echo "✅ part2.zip OK" || exit 1
+
+      - name: Download github_kit_Spk.zip (contains ExeFS/main)
+        shell: bash
+        run: |
+          set -euo pipefail
+          WORK="${{ env.WORK }}"
+          echo "📥 Downloading github_kit_Spk.zip (ExeFS with main)..."
+          curl -fL --retry 5 --retry-delay 2 --max-time 1800 --progress-bar \
+            -o "$WORK/github_kit_Spk.zip" \
+            "https://github.com/joao9vegeto-stack/KintTany/releases/download/v1.0-kit/github_kit_Spk.zip"
+          [ -f "$WORK/github_kit_Spk.zip" ] && echo "✅ github_kit_Spk.zip downloaded" || exit 1
 
       - name: Extract all archives
         shell: bash
@@ -101,14 +112,17 @@ jobs:
           KIT_DIR="$WORK/kit"
           mkdir -p "$KIT_DIR"
           
-          echo "📦 Extracting part1.zip..."
-          unzip -q "$WORK/part1.zip" -d "$KIT_DIR"
+          echo "📦 Extracting shader kit part 1..."
+          unzip -q "$WORK/shader_part1.zip" -d "$KIT_DIR"
           
-          echo "📦 Extracting part2.zip..."
-          unzip -q -o "$WORK/part2.zip" -d "$KIT_DIR"
+          echo "📦 Extracting shader kit part 2..."
+          unzip -q -o "$WORK/shader_part2.zip" -d "$KIT_DIR"
+          
+          echo "📦 Extracting github_kit_Spk.zip..."
+          unzip -q -o "$WORK/github_kit_Spk.zip" -d "$KIT_DIR"
           
           echo "KIT_DIR=$KIT_DIR" >> "$GITHUB_ENV"
-          echo "✅ Extraction complete"
+          echo "✅ All archives extracted"
 
       - name: Locate RomFS
         shell: bash
@@ -127,44 +141,48 @@ jobs:
           echo "KIT_ROMFS=$ROMFS" >> "$GITHUB_ENV"
           echo "✅ RomFS: $ROMFS"
 
-      - name: Locate main executable
+      - name: Locate main executable in ExeFS
         shell: bash
         run: |
           set -euo pipefail
           KIT_DIR="${{ env.KIT_DIR }}"
           
           echo "🔎 Locating main executable..."
-          echo ""
-          echo "📁 Kit directory structure:"
-          find "$KIT_DIR" -maxdepth 3 -type f -o -type d | head -100
           
-          echo ""
-          echo "🔍 Searching for files ~67MB (main executable)..."
-          find "$KIT_DIR" -type f -size +60M -size -75M 2>/dev/null | while read f; do
-            echo "  Found: $f ($(ls -lh "$f" | awk '{print $5}'))"
-          done
+          # Procura a pasta ExeFS (várias variações de caso)
+          EXEFS_DIR=$(find "$KIT_DIR" -type d \( -iname "ExeFS" -o -iname "exefs" \) -print -quit || true)
           
-          echo ""
-          echo "🔍 Searching for 'main' file..."
-          MAIN=$(find "$KIT_DIR" -type f -name "main" 2>/dev/null | head -1 || true)
+          if [ -z "$EXEFS_DIR" ]; then
+            echo "❌ ExeFS directory not found"
+            echo ""
+            echo "📁 Kit structure:"
+            find "$KIT_DIR" -maxdepth 3 -type d | head -20
+            exit 1
+          fi
           
-          if [ -z "$MAIN" ]; then
-            echo "  Searching in all directories..."
-            MAIN=$(find "$KIT_DIR" -type f -size +60M -size -75M 2>/dev/null | head -1 || true)
+          echo "Found ExeFS: $EXEFS_DIR"
+          
+          # Procura o arquivo 'main' (sem extensão)
+          MAIN=""
+          if [ -f "$EXEFS_DIR/main" ]; then
+            MAIN="$EXEFS_DIR/main"
+          elif [ -f "$EXEFS_DIR/main.nso" ]; then
+            MAIN="$EXEFS_DIR/main.nso"
+          else
+            MAIN=$(find "$EXEFS_DIR" -maxdepth 1 -name "main*" -type f | head -1 || true)
           fi
           
           if [ -z "$MAIN" ] || [ ! -f "$MAIN" ]; then
-            echo "❌ main executable not found in kit"
+            echo "❌ main executable not found in $EXEFS_DIR"
             echo ""
-            echo "📄 All files in kit:"
-            find "$KIT_DIR" -type f -exec ls -lh {} \; 2>/dev/null | head -50
+            echo "📄 Files in ExeFS:"
+            ls -lh "$EXEFS_DIR"
             exit 1
           fi
           
           SIZE=$(ls -lh "$MAIN" | awk '{print $5}')
           echo "✅ main found: $MAIN"
           echo "   Size: $SIZE"
-          echo ""
           echo "KIT_MAIN=$MAIN" >> "$GITHUB_ENV"
 
       - name: Verify game profile directory exists
@@ -265,16 +283,13 @@ jobs:
           GAME="${{ env.GAME }}"
           GAME_DIR="dm/games/$GAME"
           
-          echo "📝 Git status:"
-          git status
-          
           git add "$GAME_DIR/shader_map.tsv" \
                   "$GAME_DIR/shader_facts.tsv" \
                   "$GAME_DIR/shader_pairs.tsv" 2>/dev/null || true
           
           if ! git diff --cached --quiet; then
             echo "✅ Changes detected, committing..."
-            git commit -m "chore: shader tables for DRAGON BALL: Sparking! ZERO (Title: $GAME, Date: $(date -u))"
+            git commit -m "chore: shader tables for DRAGON BALL: Sparking! ZERO ($GAME)"
             git push origin HEAD:SpkIOSzero
           else
             echo "✅ No changes to commit"
@@ -295,7 +310,7 @@ jobs:
           WORK="${{ env.WORK }}"
           if [ -n "$WORK" ] && [ -d "$WORK" ]; then
             rm -rf "$WORK"
-            echo "🧹 Cleaned up"
+            echo "🧹 Cleaned up work directory"
           fi
 
       - name: Summary
@@ -305,5 +320,10 @@ jobs:
           echo "════════════════════════════════════════"
           echo "  ✅ WORKFLOW 1 COMPLETE"
           echo "════════════════════════════════════════"
+          echo ""
+          echo "Generated TSVs:"
+          echo "  • dm/games/${{ env.GAME }}/shader_map.tsv"
+          echo "  • dm/games/${{ env.GAME }}/shader_facts.tsv"
+          echo "  • dm/games/${{ env.GAME }}/shader_pairs.tsv"
           echo ""
           echo "Next: Workflow 2a will trigger automatically"
