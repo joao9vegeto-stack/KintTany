@@ -98,9 +98,11 @@ enum XOWUEDiagnostics {
             $0.contains("BOOT_FINISHED") || $0.contains("BOOT_FAILED") || $0.contains("CRASH ")
         }.suffix(6))
         var audits = Array(lines.filter { $0.contains("B84_CODE_AUDIT") }.suffix(36))
-        var stream = Array(lines.filter { $0.contains("B84_STREAM_STATE") }.suffix(12))
-        var current = Array(lines.filter { $0.contains("B84_") &&
-            !$0.contains("B84_CODE_AUDIT") && !$0.contains("B84_STREAM_STATE") }.suffix(16))
+        var stream = Array(lines.filter { $0.contains("B85_STREAM_STATE") }.suffix(12))
+        var waits = Array(lines.filter { $0.contains("B85_WAIT_") || $0.contains("B85_MULTIWAIT_") }.suffix(16))
+        var current = Array(lines.filter { $0.contains("B85_") &&
+            !$0.contains("B85_STREAM_STATE") && !$0.contains("B85_WAIT_") &&
+            !$0.contains("B85_MULTIWAIT_") }.suffix(16))
         var progress = Array(lines.filter { $0.contains("AOT_PROGRESS") }.suffix(4))
         var hot = Array(lines.filter { $0.contains("HOT_FN_CODE") }.suffix(6))
         var threads = Array(lines.filter { $0.contains("THREAD_DUMP") }.suffix(12))
@@ -109,13 +111,14 @@ enum XOWUEDiagnostics {
         }.suffix(12))
         func assembled() -> [String] {
             ["XOWUE_BUILD_SUMMARY build=\(buildNumber) source=diagnostico-build-\(buildNumber).txt",
-             "CURRENT_BUILD_EVIDENCE_BEGIN"] + boot + progress + hot + audits + stream + current + threads + gpu +
+             "CURRENT_BUILD_EVIDENCE_BEGIN"] + boot + progress + hot + audits + stream + waits + current + threads + gpu +
              ["CURRENT_BUILD_EVIDENCE_END"]
         }
         while assembled().joined(separator: "\n").utf8.count > 8192 {
             if !gpu.isEmpty { gpu.removeFirst() }
             else if !threads.isEmpty { threads.removeFirst() }
             else if !current.isEmpty { current.removeFirst() }
+            else if !waits.isEmpty { waits.removeFirst() }
             else if !stream.isEmpty { stream.removeFirst() }
             else if !hot.isEmpty { hot.removeFirst() }
             else if !progress.isEmpty { progress.removeFirst() }

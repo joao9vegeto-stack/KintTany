@@ -94,10 +94,10 @@ print("PASS: physical heap bookkeeping cannot corrupt first 1MiB Xbox virtual re
 assert "allocateSmallGuestPoolBlock" in engine
 assert "XOWUE_POOL_ALLOC_82DC2BF0" in engine and "XOWUE_POOL_INIT_82DC2B14" in engine
 assert "CODE_AUDIT_B66" in engine and "CODE_AUDIT_83847ABC" in engine
-assert "XOWUE_VBLANK_WATCHDOG_SIGNAL" in engine
+assert "B85_MULTIWAIT_WATCHDOG_PUMP" in engine
 assert "obj_creator_lr=0x%08X obj_signals=%u" in engine
-assert 'CURRENT_PROJECT_VERSION: "84"' in (root / "iOS" / "project.yml").read_text(encoding="utf-8")
-print("PASS: Build 66 allocator, PPC audit, synchronization telemetry and vblank watchdog hooks")
+assert 'CURRENT_PROJECT_VERSION: "85"' in (root / "iOS" / "project.yml").read_text(encoding="utf-8")
+print("PASS: Build 66 allocator, PPC audit, synchronization telemetry and non-signaling wait pump")
 
 # Build 34: Xbox object attributes must use root/name/flags at offsets 0/4/8
 # and a zero-length MEM_RELEASE must search exact reservation base.
@@ -192,22 +192,23 @@ assert "const bool isMainThread = (g_currentGuestThread == nullptr);" in engine
 assert "currentTid = isMainThread ? 0xF8000001u : g_currentGuestThread->handle" in engine
 assert "g_mainThreadGuestLr.load(std::memory_order_relaxed)" in engine
 assert "waitable->changed.wait_for(lock, std::chrono::milliseconds(16), ready)" in engine
-assert "g_waitSetChanged.wait_for(waitLock, std::chrono::milliseconds(16)" in engine
+assert "g_waitSetChanged.wait_until(waitLock, wakeDeadline" in engine
+assert "const auto sliceEnd = nowBeforeWait + std::chrono::milliseconds(16);" in engine
 assert "CODE_AUDIT_B67_MAIN_WAIT_LR" in engine
 assert "dump(0x82DC2A50u,0x82DC2B78u" in engine
 assert "signalGeneration" in engine and "unconsumedSignals" in engine
 assert "signalGuestEventStructure" in engine
-assert "XOWUE_WAIT_WATCHDOG_WAKE" in engine
-assert "g_thread2WatchdogWakes.load(std::memory_order_relaxed) >= 4u" in engine
-assert "XOWUE_ASYNC_TASK_STATE sp=0x%08X frame=0x%08X task=0x%08X words=" in engine
-assert "context.r11.u64 = 1ull" in engine
+assert "B85_WAIT_WATCHDOG_PUMP" in engine
+assert "B85_MULTIWAIT_WATCHDOG_PUMP" in engine
+assert "forced task completion after worker watchdog wake threshold" not in engine
+assert "g_thread2WatchdogWakes" not in engine
 assert "CODE_AUDIT_B68_MAIN_ASYNC_TASK" in engine
 assert "CODE_AUDIT_B68_EVENT_WAIT_IMPLEMENTATION" in engine
 assert "CODE_AUDIT_B68_THREAD2_FULL" in engine
 assert "if ((++audioLoopCalls & 63u) == 0u)" in engine
 assert "std::chrono::milliseconds(2)" in engine
-assert 'CURRENT_PROJECT_VERSION: "84"' in (root / "iOS" / "project.yml").read_text(encoding="utf-8")
-print("PASS: Build 68 lost-wakeup counters, all-thread worker-first watchdog, async-task recovery, PPC audit and audio throttle")
+assert 'CURRENT_PROJECT_VERSION: "85"' in (root / "iOS" / "project.yml").read_text(encoding="utf-8")
+print("PASS: Build 68 lost-wakeup counters, pump-only wait watchdog, PPC audit and audio throttle")
 
 # Build 69: QPC fast path, synthetic timebase, and complete diagnostics.
 assert "const bool qpcFastPath = guestAddress == 0x82C3C4D8u || guestAddress == 0x822A1E08u" in engine
@@ -224,7 +225,7 @@ for address in ("0x82C3C498u","0x822A1BC0u","0x822A01C0u","0x824E6F10u","0x82C25
     assert address in engine, f"Build 69 audit address missing {address}"
 assert "CODE_AUDIT_B69_GUEST_WORD" in engine
 assert "THREAD_DUMP id=%u entry=0x%08X exited=%u waiting=%u wait_target=0x%08X last_fn=0x%08X prev_fn=0x%08X lr=0x%08X" in engine
-assert 'CURRENT_PROJECT_VERSION: "84"' in (root / "iOS" / "project.yml").read_text(encoding="utf-8")
+assert 'CURRENT_PROJECT_VERSION: "85"' in (root / "iOS" / "project.yml").read_text(encoding="utf-8")
 print("PASS: Build 69 QPC fast path, synthetic timebase, main/interrupt thread snapshots, PPC code/data audit")
 
 # Build 69 checks for main-thread PPC context, thread snapshots, and QPC timer pacing.
@@ -280,8 +281,10 @@ print("PASS: Build 74 BinkWait 0x822A0278 bypass stub and Thread 10 audit")
 
 # Build 83: diagnostic-only wait investigation; no state-forcing workaround.
 engine_b83 = Path("Runtime/XOWUEEngine.cpp").read_text(encoding="utf-8")
-assert 'event.find("B83_") != std::string::npos || event.find("B84_") != std::string::npos' in engine_b83
-assert 'guestAddress == 0x82575250u' in engine_b83 and 'const uint32_t object = ctx.r31.u32' in engine_b83 and '(calls & 0xFFFFu) == 0u' in engine_b83
+assert 'event.find("B83_") != std::string::npos' in engine_b83
+assert 'event.find("B84_") != std::string::npos' in engine_b83
+assert 'event.find("B85_") != std::string::npos' in engine_b83
+assert 'guestAddress == 0x82575250u' in engine_b83 and 'const uint32_t object = ctx.r3.u32' in engine_b83 and '(calls & 0xFFFFu) == 0u' in engine_b83
 assert 'plus8C=' in engine_b83 and 'plusA4=' in engine_b83 and 'plusA8=' in engine_b83
 assert 'context.r4.u32 & 0xFFu) != 0u' in engine_b83
 assert 'B83_NTREADFILE call=%llu' in engine_b83
@@ -290,25 +293,39 @@ assert 'B83_NT_RELEASE_SEMAPHORE' in engine_b83 and 'B83_KE_RELEASE_SEMAPHORE' i
 assert 'B83_NT_SET_EVENT' in engine_b83 and 'B83_KE_SET_EVENT' in engine_b83
 assert 'B83_WAIT_SATISFIED' in engine_b83
 assert 'THRED_DUMP' in engine_b83
-assert 'CURRENT_PROJECT_VERSION: "84"' in Path("iOS/project.yml").read_text(encoding="utf-8")
+assert 'CURRENT_PROJECT_VERSION: "85"' in Path("iOS/project.yml").read_text(encoding="utf-8")
 print("PASS: Build 83 unthrottled diagnostic logging, stream object counters, handle 0x112 tracing, alertable-only APC")
 
-# Build 84: correct stream-object register, current-build code audit, and no synthetic wait releases.
-engine_b84 = Path("Runtime/XOWUEEngine.cpp").read_text(encoding="utf-8")
-assert "B84_STREAM_STATE" in engine_b84
-assert "const uint32_t object = ctx.r31.u32" in engine_b84
-assert "B84_CODE_AUDIT" in engine_b84 and "logCodeAuditBuild84" in engine_b84
-assert 'event.find("B84_") != std::string::npos' in engine_b84
-spin_start = engine_b84.index("static void xowue_forward_pump_and_signal_spin(uint32_t guestAddress, PPCContext &ctx) {")
-spin_end = engine_b84.index("static inline void xowue_write_be32_raw", spin_start)
-spin_body = engine_b84[spin_start:spin_end]
+# Build 85: sample the actual PPC ABI argument and preserve real dispatcher semantics.
+engine_b85 = Path("Runtime/XOWUEEngine.cpp").read_text(encoding="utf-8")
+assert "B85_STREAM_STATE" in engine_b85
+assert 'event.find("B85_") != std::string::npos' in engine_b85
+assert "const uint32_t object = ctx.r3.u32" in engine_b85
+assert "obj_r3=0x%08X" in engine_b85
+assert "B84_CODE_AUDIT" in engine_b85 and "logCodeAuditBuild84" in engine_b85
+assert 'event.find("B84_") != std::string::npos' in engine_b85
+wait_start = engine_b85.index("uint32_t waitGuestObject(")
+wait_end = engine_b85.index("uint32_t waitGuestObjects(", wait_start)
+wait_body = engine_b85[wait_start:wait_end]
+assert "B85_WAIT_WATCHDOG_PUMP" in wait_body
+assert "markGuestWaitableSignaledLocked(waitable);" not in wait_body
+multi_end = engine_b85.index("void signalGuestWaitable(", wait_end)
+multi_body = engine_b85[wait_end:multi_end]
+assert "B85_MULTIWAIT_WATCHDOG_PUMP" in multi_body
+assert "candidate->signaled = true" not in multi_body
+assert "candidate.unconsumedSignals != 0u" in multi_body
+assert "if (waitable->unconsumedSignals != 0u) --waitable->unconsumedSignals;" in multi_body
+assert "forced task completion after worker watchdog wake threshold" not in engine_b85
+spin_start = engine_b85.index("static void xowue_forward_pump_and_signal_spin(uint32_t guestAddress, PPCContext &ctx) {")
+spin_end = engine_b85.index("static inline void xowue_write_be32_raw", spin_start)
+spin_body = engine_b85[spin_start:spin_end]
 assert "signalGuestEventHandle(0x00000112u)" not in spin_body
 assert "pumpGuestXenosRingBuffer();" in spin_body
-diag_b84 = Path("iOS/App/XOWUEDiagnostics.swift").read_text(encoding="utf-8")
-assert '"B84_"' in diag_b84
-assert "XOWUE_BUILD_SUMMARY build=" in diag_b84
-assert '"XOWUE_BUILD_SUMMARY build=\\(buildNumber) source=' in diag_b84
-assert 'lines.filter { $0.contains("B84_CODE_AUDIT") }' in diag_b84
-assert 'lines.filter { $0.contains("CODE_AUDIT") }' not in diag_b84
-assert 'CURRENT_PROJECT_VERSION: "84"' in Path("iOS/project.yml").read_text(encoding="utf-8")
-print("PASS: Build 84 stream r31 evidence, current-build summary, bounded PPC audits, and removal of synthetic spin-loop event releases")
+diag_b85 = Path("iOS/App/XOWUEDiagnostics.swift").read_text(encoding="utf-8")
+assert 'lines.filter { $0.contains("B85_STREAM_STATE") }' in diag_b85
+assert 'lines.filter { $0.contains("B85_WAIT_") || $0.contains("B85_MULTIWAIT_") }' in diag_b85
+assert "XOWUE_BUILD_SUMMARY build=" in diag_b85
+assert '"XOWUE_BUILD_SUMMARY build=\\(buildNumber) source=' in diag_b85
+assert 'lines.filter { $0.contains("B84_CODE_AUDIT") }' in diag_b85
+assert 'CURRENT_PROJECT_VERSION: "85"' in Path("iOS/project.yml").read_text(encoding="utf-8")
+print("PASS: Build 85 correct PPC r3 sample, actual waitable completion, multiwait signal accounting, and pump-only watchdogs")
