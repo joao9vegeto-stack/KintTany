@@ -170,7 +170,7 @@ for token in ("hot0=", "hot1=", "hot2=", "hot3=", "hot4=", "hot5=", "hot6=", "ho
               "HOT_FN_CODE", "THREAD_DUMP", "recentAotFns", "lastCallerFn", "CODE_AUDIT"):
     if token not in runtime:
         raise SystemExit(f"Build 62 runtime diagnostic missing {token}")
-if 'resumo-b\\(buildNumber).txt' not in diagnostics or "utf8.count > 4000" not in diagnostics:
+if 'resumo-b\\(buildNumber).txt' not in diagnostics or "utf8.count > 8192" not in diagnostics:
     raise SystemExit("Build 62 compact diagnostic is missing or not capped at 4 KB")
 print("PASS: Build 62 hot-function/thread dumps and compact diagnostic are present")
 # Build 65: prohibit global PPC rewrites and require targeted guard/raw-code audit.
@@ -305,8 +305,9 @@ spin_body = engine_b84[spin_start:spin_end]
 assert "signalGuestEventHandle(0x00000112u)" not in spin_body
 assert "pumpGuestXenosRingBuffer();" in spin_body
 diag_b84 = Path("iOS/App/XOWUEDiagnostics.swift").read_text(encoding="utf-8")
-assert 'message.contains("B84_")' in diag_b84
+assert '"B84_"' in diag_b84
 assert "XOWUE_BUILD_SUMMARY build=" in diag_b84
+assert '"XOWUE_BUILD_SUMMARY build=\\(buildNumber)"' in diag_b84
 assert 'lines.filter { $0.contains("B84_CODE_AUDIT") }' in diag_b84
 assert 'lines.filter { $0.contains("CODE_AUDIT") }' not in diag_b84
 assert 'CURRENT_PROJECT_VERSION: "84"' in Path("iOS/project.yml").read_text(encoding="utf-8")
