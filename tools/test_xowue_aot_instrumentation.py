@@ -280,8 +280,8 @@ print("PASS: Build 74 BinkWait 0x822A0278 bypass stub and Thread 10 audit")
 
 # Build 83: diagnostic-only wait investigation; no state-forcing workaround.
 engine_b83 = Path("Runtime/XOWUEEngine.cpp").read_text(encoding="utf-8")
-assert 'event.find("B83_") != std::string::npos) return true' in engine_b83
-assert 'guestAddress == 0x82575250u' in engine_b83 and 'calls % 100000u' in engine_b83
+assert 'event.find("B83_") != std::string::npos || event.find("B84_") != std::string::npos' in engine_b83
+assert 'guestAddress == 0x82575250u' in engine_b83 and 'const uint32_t object = ctx.r31.u32' in engine_b83 and '(calls & 0xFFFFu) == 0u' in engine_b83
 assert 'plus8C=' in engine_b83 and 'plusA4=' in engine_b83 and 'plusA8=' in engine_b83
 assert 'context.r4.u32 & 0xFFu) != 0u' in engine_b83
 assert 'B83_NTREADFILE call=%llu' in engine_b83
