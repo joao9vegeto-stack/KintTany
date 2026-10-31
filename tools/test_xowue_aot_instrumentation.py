@@ -307,7 +307,7 @@ assert "pumpGuestXenosRingBuffer();" in spin_body
 diag_b84 = Path("iOS/App/XOWUEDiagnostics.swift").read_text(encoding="utf-8")
 assert '"B84_"' in diag_b84
 assert "XOWUE_BUILD_SUMMARY build=" in diag_b84
-assert '"XOWUE_BUILD_SUMMARY build=\\(buildNumber)"' in diag_b84
+assert '"XOWUE_BUILD_SUMMARY build=\\(buildNumber) source=' in diag_b84
 assert 'lines.filter { $0.contains("B84_CODE_AUDIT") }' in diag_b84
 assert 'lines.filter { $0.contains("CODE_AUDIT") }' not in diag_b84
 assert 'CURRENT_PROJECT_VERSION: "84"' in Path("iOS/project.yml").read_text(encoding="utf-8")
