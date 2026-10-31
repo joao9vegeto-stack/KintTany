@@ -108,7 +108,7 @@ enum XOWUEDiagnostics {
             ["XENOS_", "PM4_", "SWAP_", "WAIT_", "VBLANK", "GRAPHICS_INTERRUPT"].contains(where: { line.contains($0) })
         }.suffix(12))
         func assembled() -> [String] {
-            ["XOWUE_BUILD_SUMMARY build=\\(buildNumber) source=diagnostico-build-\\(buildNumber).txt",
+            ["XOWUE_BUILD_SUMMARY build=\(buildNumber) source=diagnostico-build-\(buildNumber).txt",
              "CURRENT_BUILD_EVIDENCE_BEGIN"] + boot + progress + hot + audits + stream + current + threads + gpu +
              ["CURRENT_BUILD_EVIDENCE_END"]
         }
