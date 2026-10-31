@@ -2101,7 +2101,8 @@ void xowue_thread_checkpoint(uint32_t guestAddress);
 static void xowue_forward_pump_and_signal_spin(uint32_t guestAddress, PPCContext &ctx);
 void xowue_thread_checkpoint(uint32_t guestAddress,PPCContext &ctx){
     if (guestAddress == 0x82370500u || guestAddress == 0x82427940u || guestAddress == 0x826CF060u || guestAddress == 0x825F91D8u || guestAddress == 0x824ACBF8u ||
-        guestAddress == 0x824793E0u || guestAddress == 0x824792E0u) {
+        guestAddress == 0x824793E0u || guestAddress == 0x824792E0u ||
+        guestAddress == 0x82575250u) {
         xowue_forward_pump_and_signal_spin(guestAddress, ctx);
     }
 uint32_t lr=static_cast<uint32_t>(ctx.lr);if(g_currentGuestThread){g_currentGuestThread->lastGuestLr.store(lr,std::memory_order_relaxed);g_currentGuestThread->lastR3.store(ctx.r3.u32,std::memory_order_relaxed);g_currentGuestThread->lastR4.store(ctx.r4.u32,std::memory_order_relaxed);g_currentGuestThread->lastR11.store(ctx.r11.u32,std::memory_order_relaxed);g_currentGuestThread->lastR30.store(ctx.r30.u32,std::memory_order_relaxed);g_currentGuestThread->lastR31.store(ctx.r31.u32,std::memory_order_relaxed);}else{uint32_t prev=g_mainThreadLastPc.exchange(guestAddress);if(prev!=guestAddress)g_mainThreadPrevFn.store(prev);g_mainThreadGuestLr.store(lr);g_mainThreadLastR3.store(ctx.r3.u32);g_mainThreadLastR4.store(ctx.r4.u32);g_mainThreadLastR11.store(ctx.r11.u32);g_mainThreadLastR30.store(ctx.r30.u32);g_mainThreadLastR31.store(ctx.r31.u32);uint32_t i=g_mainThreadRecentAotIdx.fetch_add(1);g_mainThreadRecentAotFns[i&15u].store(guestAddress);}xowue_thread_checkpoint(guestAddress);}
@@ -2317,6 +2318,37 @@ static void __xowue_sub_83847AC4_free(PPCContext &ctx, uint8_t *) { ctx.r3.u64=0
 
 static inline void xowue_write_be32_raw(uint8_t *base, uint32_t addr, uint32_t val);
 static void xowue_forward_pump_and_signal_spin(uint32_t guestAddress, PPCContext &ctx) {
+    // Build 81: stream-cache poll state for 0x82575250 (vtable+64 used by 0x82575480).
+    if (guestAddress == 0x82575250u) {
+        static std::atomic<uint32_t> s_b81Polls{0u};
+        const uint32_t n = s_b81Polls.fetch_add(1u, std::memory_order_relaxed) + 1u;
+        if (n <= 6u || (n & 0x7FFFFu) == 0u) {
+            auto b81Mem = g_activeGuestMemory.lock();
+            uint8_t *b81Base = b81Mem ? b81Mem->base : nullptr;
+            const uint32_t o = ctx.r3.u32;
+            size_t pending = 0u;
+            uint32_t nextApc = 0u;
+            if (g_currentGuestThread != nullptr) {
+                std::lock_guard<std::mutex> apcLock(g_currentGuestThread->apcMutex);
+                pending = g_currentGuestThread->pendingApcs.size();
+                if (pending != 0u) nextApc = g_currentGuestThread->pendingApcs.front().routine;
+            }
+            if (b81Base != nullptr && o >= 0x40000000u && o < 0x70000000u &&
+                validGuestRange(o, 0xB0u)) {
+                char ev[320];
+                std::snprintf(ev, sizeof(ev),
+                    "XOWUE_B81_STREAM_POLL n=%u obj=0x%08X off=0x%08X size=0x%08X c136=0x%08X "
+                    "c140=0x%08X c148=0x%08X c164=0x%08X c168=0x%08X c172=0x%08X "
+                    "pending_apcs=%u next_apc=0x%08X thread=%u",
+                    n, o, ctx.r4.u32, ctx.r5.u32, loadGuestBe32(b81Base, o + 136u),
+                    loadGuestBe32(b81Base, o + 140u), loadGuestBe32(b81Base, o + 148u),
+                    loadGuestBe32(b81Base, o + 164u), loadGuestBe32(b81Base, o + 168u),
+                    loadGuestBe32(b81Base, o + 172u), static_cast<uint32_t>(pending), nextApc,
+                    static_cast<uint32_t>(g_currentGuestThreadId));
+                recordRuntimeTrace(ev);
+            }
+        }
+    }
     // Build 80: SetState(0x824ACBF8) list-walk diagnostics (see build80.py).
     if (guestAddress == 0x824793E0u || guestAddress == 0x824792E0u) {
         static std::atomic<uint32_t> s_b80SubCalls{0u};
@@ -6366,6 +6398,20 @@ static uint64_t guestFileOffset(uint8_t *base, uint32_t address,
 
 void xowue_NtReadFile(PPCContext &context, uint8_t *base) {
     GuestEventSignalOnReturn signal(context.r4.u32);
+    {
+        static std::atomic<uint32_t> s_b81Reads{0u};
+        const uint32_t n = s_b81Reads.fetch_add(1u, std::memory_order_relaxed) + 1u;
+        if (n <= 24u) {
+            char ev[256];
+            std::snprintf(ev, sizeof(ev),
+                "XOWUE_B81_NTREADFILE n=%u thread=%u handle=0x%08X event=0x%08X apc=0x%08X "
+                "apc_ctx=0x%08X io_status=0x%08X buf=0x%08X len=0x%08X lr=0x%08X",
+                n, static_cast<uint32_t>(g_currentGuestThreadId), context.r3.u32, context.r4.u32,
+                context.r5.u32, context.r6.u32, context.r7.u32, context.r8.u32, context.r9.u32,
+                static_cast<uint32_t>(context.lr));
+            recordRuntimeTrace(ev);
+        }
+    }
     const uint32_t handle = context.r3.u32;
     const uint32_t ioStatus = context.r7.u32;
     const uint32_t buffer = context.r8.u32;
@@ -7015,6 +7061,23 @@ void xowue_KeSetBasePriorityThread(PPCContext &context) {
 }
 
 void xowue_KeDelayExecutionThread(PPCContext &context, uint8_t *base) {
+    // Build 81: Sleep/KeDelayExecutionThread must run pending guest APCs. NtReadFile
+    // completes synchronously and queues its completion APC on the calling thread;
+    // 0x82575480 then polls Sleep(0) until *(obj+164) drops to zero, which only the
+    // APC routine does. Without delivery here the main thread polls forever.
+    {
+        static std::atomic<uint32_t> s_b81ApcLogs{0u};
+        if (deliverPendingGuestApcs()) {
+            const uint32_t n = s_b81ApcLogs.fetch_add(1u, std::memory_order_relaxed) + 1u;
+            if (n <= 16u) {
+                char ev[160];
+                std::snprintf(ev, sizeof(ev),
+                    "XOWUE_B81_APC_DELIVERED_IN_DELAY n=%u alertable=%u thread=%u",
+                    n, context.r4.u32 & 0xFFu, static_cast<uint32_t>(g_currentGuestThreadId));
+                recordRuntimeTrace(ev);
+            }
+        }
+    }
     const uint32_t intervalPointer = context.r5.u32;
     if (!base || intervalPointer > kGuestAddressSpaceSize - sizeof(uint64_t)) {
         context.r3.u32 = kNtStatusInvalidParameter;
