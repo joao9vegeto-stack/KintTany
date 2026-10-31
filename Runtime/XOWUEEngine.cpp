@@ -2100,7 +2100,8 @@ extern "C" bool xowue_82dc2390_guard(PPCContext &context,uint8_t *base) {
 void xowue_thread_checkpoint(uint32_t guestAddress);
 static void xowue_forward_pump_and_signal_spin(uint32_t guestAddress, PPCContext &ctx);
 void xowue_thread_checkpoint(uint32_t guestAddress,PPCContext &ctx){
-    if (guestAddress == 0x82370500u || guestAddress == 0x82427940u || guestAddress == 0x826CF060u || guestAddress == 0x825F91D8u || guestAddress == 0x824ACBF8u) {
+    if (guestAddress == 0x82370500u || guestAddress == 0x82427940u || guestAddress == 0x826CF060u || guestAddress == 0x825F91D8u || guestAddress == 0x824ACBF8u ||
+        guestAddress == 0x824793E0u || guestAddress == 0x824792E0u) {
         xowue_forward_pump_and_signal_spin(guestAddress, ctx);
     }
 uint32_t lr=static_cast<uint32_t>(ctx.lr);if(g_currentGuestThread){g_currentGuestThread->lastGuestLr.store(lr,std::memory_order_relaxed);g_currentGuestThread->lastR3.store(ctx.r3.u32,std::memory_order_relaxed);g_currentGuestThread->lastR4.store(ctx.r4.u32,std::memory_order_relaxed);g_currentGuestThread->lastR11.store(ctx.r11.u32,std::memory_order_relaxed);g_currentGuestThread->lastR30.store(ctx.r30.u32,std::memory_order_relaxed);g_currentGuestThread->lastR31.store(ctx.r31.u32,std::memory_order_relaxed);}else{uint32_t prev=g_mainThreadLastPc.exchange(guestAddress);if(prev!=guestAddress)g_mainThreadPrevFn.store(prev);g_mainThreadGuestLr.store(lr);g_mainThreadLastR3.store(ctx.r3.u32);g_mainThreadLastR4.store(ctx.r4.u32);g_mainThreadLastR11.store(ctx.r11.u32);g_mainThreadLastR30.store(ctx.r30.u32);g_mainThreadLastR31.store(ctx.r31.u32);uint32_t i=g_mainThreadRecentAotIdx.fetch_add(1);g_mainThreadRecentAotFns[i&15u].store(guestAddress);}xowue_thread_checkpoint(guestAddress);}
@@ -2316,6 +2317,82 @@ static void __xowue_sub_83847AC4_free(PPCContext &ctx, uint8_t *) { ctx.r3.u64=0
 
 static inline void xowue_write_be32_raw(uint8_t *base, uint32_t addr, uint32_t val);
 static void xowue_forward_pump_and_signal_spin(uint32_t guestAddress, PPCContext &ctx) {
+    // Build 80: SetState(0x824ACBF8) list-walk diagnostics (see build80.py).
+    if (guestAddress == 0x824793E0u || guestAddress == 0x824792E0u) {
+        static std::atomic<uint32_t> s_b80SubCalls{0u};
+        const uint32_t n = s_b80SubCalls.fetch_add(1u, std::memory_order_relaxed) + 1u;
+        if (n <= 16u) {
+            char ev[192];
+            std::snprintf(ev, sizeof(ev),
+                "XOWUE_B80_SETSTATE_CALLEE fn=0x%08X n=%u r3=0x%08X r4=0x%08X lr=0x%08X",
+                guestAddress, n, ctx.r3.u32, ctx.r4.u32, static_cast<uint32_t>(ctx.lr));
+            recordRuntimeTrace(ev);
+        }
+    }
+    if (guestAddress == 0x824ACBF8u) {
+        static std::atomic<uint32_t> s_b80Entries{0u};
+        static std::atomic<uint32_t> s_b80Reports{0u};
+        const uint32_t entryNo = s_b80Entries.fetch_add(1u, std::memory_order_relaxed) + 1u;
+        auto b80Mem = g_activeGuestMemory.lock();
+        uint8_t *b80Base = b80Mem ? b80Mem->base : nullptr;
+        const uint32_t obj = ctx.r3.u32;
+        if (b80Base != nullptr && obj >= 0x40000000u && obj < 0x70000000u &&
+            validGuestRange(obj, 0xA0u)) {
+            uint32_t nodes[64]{};
+            uint32_t count = 0u, cycleFrom = 0u, cycleTo = 0u, badNext = 0u;
+            bool cycle = false, truncated = false, invalidNext = false;
+            uint32_t cur = obj;
+            for (;;) {
+                if (count >= 64u) { truncated = true; break; }
+                bool seen = false;
+                for (uint32_t i = 0u; i < count; ++i) {
+                    if (nodes[i] == cur) { seen = true; break; }
+                }
+                if (seen) { cycle = true; cycleTo = cur; cycleFrom = nodes[count - 1u]; break; }
+                nodes[count++] = cur;
+                const uint32_t next = loadGuestBe32(b80Base, cur + 0x28u);
+                if (next == 0u) break;
+                if (next < 0x40000000u || next >= 0x70000000u || !validGuestRange(next, 0xA0u)) {
+                    invalidNext = true; badNext = next; break;
+                }
+                cur = next;
+            }
+            const uint32_t tail = nodes[count - 1u];
+            const bool abnormal = cycle || truncated || invalidNext;
+            if (entryNo <= 8u || (abnormal && s_b80Reports.load(std::memory_order_relaxed) < 8u)) {
+                if (abnormal) s_b80Reports.fetch_add(1u, std::memory_order_relaxed);
+                char ev[512];
+                int used = std::snprintf(ev, sizeof(ev),
+                    "XOWUE_B80_SETSTATE entry=%u r3=0x%08X r4=0x%08X st24=0x%08X lr=0x%08X "
+                    "steps=%u cycle=%u cycle_from=0x%08X cycle_to=0x%08X truncated=%u "
+                    "invalid_next=%u bad_next=0x%08X tail=0x%08X tail98=0x%08X chain=",
+                    entryNo, obj, ctx.r4.u32, loadGuestBe32(b80Base, obj + 0x24u),
+                    static_cast<uint32_t>(ctx.lr), count, cycle ? 1u : 0u, cycleFrom, cycleTo,
+                    truncated ? 1u : 0u, invalidNext ? 1u : 0u, badNext, tail,
+                    loadGuestBe32(b80Base, tail + 0x98u));
+                for (uint32_t i = 0u; i < count && i < 8u && used > 0 &&
+                                      static_cast<size_t>(used) < sizeof(ev); ++i) {
+                    used += std::snprintf(ev + used, sizeof(ev) - static_cast<size_t>(used),
+                                          "%s%08X", i ? "," : "", nodes[i]);
+                }
+                recordRuntimeTrace(ev);
+            }
+            if (cycle) {
+                // Breaks only the cycle-closing link so 0x824ACC1C..0x824ACC30 terminates.
+                xowue_write_be32_raw(b80Base, cycleFrom + 0x28u, 0u);
+                char ev[160];
+                std::snprintf(ev, sizeof(ev),
+                    "XOWUE_B80_CYCLE_BROKEN node=0x%08X was_next=0x%08X entry=%u",
+                    cycleFrom, cycleTo, entryNo);
+                recordRuntimeTrace(ev);
+            }
+        } else if (entryNo <= 8u) {
+            char ev[160];
+            std::snprintf(ev, sizeof(ev),
+                "XOWUE_B80_SETSTATE entry=%u r3=0x%08X invalid_object=1", entryNo, obj);
+            recordRuntimeTrace(ev);
+        }
+    }
     if (guestAddress == 0x82427940u || guestAddress == 0x82370500u) {
         if (guestAddress == 0x82427940u && ctx.r3.u32 > 0u && ctx.r3.u32 < 100000u) {
             ctx.r4.u32 = ctx.r3.u32;
