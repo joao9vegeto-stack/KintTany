@@ -2795,6 +2795,8 @@ extern "C" int xowue_boot_xex(const char *path, char *output, size_t output_capa
                  "D:\\WGame\\Movies\\FOX_LOGO.bik",
                  "D:\\WGame\\Movies\\MARVEL_INTRO.xxx",
                  "D:\\WGame\\Movies\\MARVEL_INTRO.bik",
+                 "D:\\WGame\\Movies\\Copyright.xxx",
+                 "D:\\WGame\\Movies\\Copyright.bik",
                  "D:\\WGame\\Movies\\ATVI_logo.xxx",
                  "D:\\WGame\\Movies\\ATVI_logo.bik"}) {
             std::filesystem::path hostMovie;
