@@ -427,6 +427,8 @@ std::vector<std::shared_ptr<GuestThread>> snapshotAllGuestThreads() {
 }
 
 bool shouldPersistRuntimeTrace(const std::string &event, size_t sequence) {
+    // Build 83: diagnostic-only records bypass every allowlist, quota and sampling gate.
+    if (event.find("B83_") != std::string::npos) return true;
     // Build 64 must persist diagnostics that identify stalls and QPC output writes.
     for (const char *required : {"CODE_AUDIT_B69", "CODE_AUDIT_B69_GUEST_WORD", "APP_LAUNCH", "CODE_AUDIT_B66", "CODE_AUDIT_B67", "CODE_AUDIT_83847ABC", "XOWUE_SYNC_CREATE", "XOWUE_MAIN_WAIT_WATCHDOG", "XOWUE_VBLANK_WATCHDOG_SIGNAL", "XOWUE_POOL_ALLOC_82DC2BF0", "AOT_PROGRESS", "THREAD_DUMP", "XOWUE_AOT_HOTSPOT",
                                  "XOWUE_AOT_HOTSPOT_STATE", "XOWUE_QPC_WRITE",
@@ -808,6 +810,12 @@ void recordAotFunctionExecution(uint32_t guestAddress) {
                     thread->waitTarget.load(), thread->lastGuestPc.load(), thread->lastCallerFn.load(), recent,
                     thread->lastR3.load(), thread->lastR4.load(), thread->lastR11.load(), thread->lastR30.load(), thread->lastR31.load());
                 recordRuntimeTrace(threadLine);
+                if (thread->id == 8u) {
+                    std::string thredLine(threadLine);
+                    const size_t tag = thredLine.find("THREAD_DUMP");
+                    if (tag != std::string::npos) thredLine.replace(tag, 11u, "B83_THRED_DUMP");
+                    recordRuntimeTrace(thredLine);
+                }
             }
         }
     }
@@ -1137,7 +1145,10 @@ uint32_t waitGuestObject(const std::shared_ptr<GuestWaitable> &waitable,
             if (delivered) return kNtStatusUserApc;
         }
         if (g_schedulerStopRequested.load() && g_currentGuestThreadId != 1u) throw GuestThreadStopRequested{};
-        if (waitable->pulseGeneration != initialPulseGeneration) return kNtStatusWait0;
+        if (waitable->pulseGeneration != initialPulseGeneration) {
+            if (waitable->handle == 0x00000112u) { char event[160]; std::snprintf(event, sizeof(event), "B83_WAIT_SATISFIED handle=0x00000112 kind=pulse thread=%u", static_cast<uint32_t>(g_currentGuestThreadId)); recordRuntimeTrace(event); }
+            return kNtStatusWait0;
+        }
         const bool available = waitable->kind == GuestWaitable::Kind::Semaphore
             ? waitable->semaphoreCount > 0
             : waitable->kind == GuestWaitable::Kind::Mutant
@@ -1151,6 +1162,7 @@ uint32_t waitGuestObject(const std::shared_ptr<GuestWaitable> &waitable,
                 if (!waitable->manualReset) waitable->signaled = false;
             }
             syncGuestDispatcherSignalState(waitable);
+            if (waitable->handle == 0x00000112u) { char event[224]; std::snprintf(event, sizeof(event), "B83_WAIT_SATISFIED handle=0x00000112 kind=%s thread=%u count=%d manual=%u", waitable->kind == GuestWaitable::Kind::Semaphore ? "Semaphore" : "Event", static_cast<uint32_t>(g_currentGuestThreadId), waitable->semaphoreCount, waitable->manualReset ? 1u : 0u); recordRuntimeTrace(event); }
             return kNtStatusSuccess;
         }
         // Finite and infinite waits are both polled in bounded slices so every guest thread
@@ -2100,6 +2112,23 @@ extern "C" bool xowue_82dc2390_guard(PPCContext &context,uint8_t *base) {
 void xowue_thread_checkpoint(uint32_t guestAddress);
 static void xowue_forward_pump_and_signal_spin(uint32_t guestAddress, PPCContext &ctx);
 void xowue_thread_checkpoint(uint32_t guestAddress,PPCContext &ctx){
+    if (guestAddress == 0x82575250u) {
+        static std::atomic<uint64_t> s_b83StreamPollCalls{0u};
+        const uint64_t calls = s_b83StreamPollCalls.fetch_add(1u, std::memory_order_relaxed) + 1u;
+        if ((calls % 100000u) == 0u) {
+            const auto memory = g_activeGuestMemory.lock();
+            const uint8_t *guestBase = memory ? memory->base : nullptr;
+            const uint32_t object = ctx.r3.u32;
+            uint32_t v8c = 0xFFFFFFFFu, va4 = 0xFFFFFFFFu, va8 = 0xFFFFFFFFu;
+            if (guestBase && validGuestRange(object + 0x8Cu, 4u)) v8c = loadGuestBe32(guestBase, object + 0x8Cu);
+            if (guestBase && validGuestRange(object + 0xA4u, 4u)) va4 = loadGuestBe32(guestBase, object + 0xA4u);
+            if (guestBase && validGuestRange(object + 0xA8u, 4u)) va8 = loadGuestBe32(guestBase, object + 0xA8u);
+            char event[256];
+            std::snprintf(event, sizeof(event), "B83_STREAM_POLL calls=%llu thread=%u fn=0x82575250 obj=0x%08X plus8C=0x%08X plusA4=0x%08X plusA8=0x%08X lr=0x%08X",
+                static_cast<unsigned long long>(calls), static_cast<uint32_t>(g_currentGuestThreadId), object, v8c, va4, va8, static_cast<uint32_t>(ctx.lr));
+            recordRuntimeTrace(event);
+        }
+    }
     if (guestAddress == 0x82370500u || guestAddress == 0x82427940u || guestAddress == 0x826CF060u || guestAddress == 0x825F91D8u || guestAddress == 0x824ACBF8u ||
         guestAddress == 0x824793E0u || guestAddress == 0x824792E0u ||
         guestAddress == 0x82575250u) {
@@ -6400,30 +6429,24 @@ static uint64_t guestFileOffset(uint8_t *base, uint32_t address,
 
 void xowue_NtReadFile(PPCContext &context, uint8_t *base) {
     GuestEventSignalOnReturn signal(context.r4.u32);
-    {
-        static std::atomic<uint32_t> s_b81Reads{0u};
-        const uint32_t n = s_b81Reads.fetch_add(1u, std::memory_order_relaxed) + 1u;
-        if (n <= 24u) {
-            char ev[256];
-            std::snprintf(ev, sizeof(ev),
-                "XOWUE_B81_NTREADFILE n=%u thread=%u handle=0x%08X event=0x%08X apc=0x%08X "
-                "apc_ctx=0x%08X io_status=0x%08X buf=0x%08X len=0x%08X lr=0x%08X",
-                n, static_cast<uint32_t>(g_currentGuestThreadId), context.r3.u32, context.r4.u32,
-                context.r5.u32, context.r6.u32, context.r7.u32, context.r8.u32, context.r9.u32,
-                static_cast<uint32_t>(context.lr));
-            recordRuntimeTrace(ev);
-        }
-    }
     const uint32_t handle = context.r3.u32;
     const uint32_t ioStatus = context.r7.u32;
     const uint32_t buffer = context.r8.u32;
     const uint32_t length = context.r9.u32;
     const uint32_t offsetPointer = context.r10.u32;
+    static std::atomic<uint64_t> s_b83ReadCalls{0u};
+    const uint64_t b83ReadCall = s_b83ReadCalls.fetch_add(1u, std::memory_order_relaxed) + 1u;
+    const auto b83LogRead = [&](uint32_t status) {
+        const uint32_t iosbStatus = (base && validGuestRange(ioStatus, 8u)) ? PPC_LOAD_U32(ioStatus) : status;
+        char event[224]; std::snprintf(event, sizeof(event), "B83_NTREADFILE call=%llu thread=%u handle=0x%08X size=%u status=0x%08X iosb_status=0x%08X", static_cast<unsigned long long>(b83ReadCall), static_cast<uint32_t>(g_currentGuestThreadId), handle, length, status, iosbStatus);
+        recordRuntimeTrace(event);
+    };
     const auto file = lookupGuestFile(handle);
     if (!base || !file || file->directory || !file->readable || length > 64u * 1024u * 1024u ||
         (length != 0u && !validGuestRange(buffer, length))) {
         context.r3.u32 = file ? kNtStatusInvalidParameter : kNtStatusInvalidHandle;
         writeGuestIoStatus(base, ioStatus, context.r3.u32, 0u);
+        b83LogRead(context.r3.u32);
         return;
     }
     std::lock_guard<std::mutex> lock(file->mutex);
@@ -6433,6 +6456,7 @@ void xowue_NtReadFile(PPCContext &context, uint8_t *base) {
     if (!file->stream) {
         context.r3.u32 = kNtStatusUnsuccessful;
         writeGuestIoStatus(base, ioStatus, context.r3.u32, 0u);
+        b83LogRead(context.r3.u32);
         return;
     }
     file->stream.read(reinterpret_cast<char *>(base + buffer), length);
@@ -6444,6 +6468,7 @@ void xowue_NtReadFile(PPCContext &context, uint8_t *base) {
     writeGuestIoStatus(base, ioStatus, kNtStatusSuccess, bytesRead);
     // Commit BE IoStatusBlock and bytes-read before waking a synchronous guest read.
     signal.signalNow();
+    b83LogRead(context.r3.u32);
 }
 
 void xowue_NtWriteFile(PPCContext &context, uint8_t *base) {
@@ -6822,6 +6847,7 @@ void xowue_NtSetEvent(PPCContext &context, uint8_t *base) {
     waitable->changed.notify_all();
     g_waitSetChanged.notify_all();
     context.r3.u32 = kNtStatusSuccess;
+    if (handle == 0x00000112u) { char event[192]; std::snprintf(event, sizeof(event), "B83_NT_SET_EVENT handle=0x00000112 type=%s previous=%u new=1", waitable->manualReset ? "manual" : "auto", previous ? 1u : 0u); recordRuntimeTrace(event); }
 }
 
 void xowue_NtClearEvent(PPCContext &context) {
@@ -6883,6 +6909,7 @@ void xowue_KeSetEvent(PPCContext &context, uint8_t *base) {
     waitable->changed.notify_all();
     g_waitSetChanged.notify_all();
     context.r3.u32 = previous ? 1u : 0u;
+    if (waitable->handle == 0x00000112u) { char event[192]; std::snprintf(event, sizeof(event), "B83_KE_SET_EVENT object=0x%08X handle=0x00000112 type=%s previous=%u new=1", context.r3.u32, waitable->manualReset ? "manual" : "auto", previous ? 1u : 0u); recordRuntimeTrace(event); }
 }
 
 void xowue_KeResetEvent(PPCContext &context, uint8_t *base) {
@@ -7063,21 +7090,14 @@ void xowue_KeSetBasePriorityThread(PPCContext &context) {
 }
 
 void xowue_KeDelayExecutionThread(PPCContext &context, uint8_t *base) {
-    // Build 81: Sleep/KeDelayExecutionThread must run pending guest APCs. NtReadFile
-    // completes synchronously and queues its completion APC on the calling thread;
-    // 0x82575480 then polls Sleep(0) until *(obj+164) drops to zero, which only the
-    // APC routine does. Without delivery here the main thread polls forever.
-    {
-        static std::atomic<uint32_t> s_b81ApcLogs{0u};
+    // Build 83: preserve Xbox alertability semantics; non-alertable Sleep(0) must not run APCs.
+    if ((context.r4.u32 & 0xFFu) != 0u) {
+        static std::atomic<uint32_t> s_b83ApcLogs{0u};
         if (deliverPendingGuestApcs()) {
-            const uint32_t n = s_b81ApcLogs.fetch_add(1u, std::memory_order_relaxed) + 1u;
-            if (n <= 16u) {
-                char ev[160];
-                std::snprintf(ev, sizeof(ev),
-                    "XOWUE_B81_APC_DELIVERED_IN_DELAY n=%u alertable=%u thread=%u",
-                    n, context.r4.u32 & 0xFFu, static_cast<uint32_t>(g_currentGuestThreadId));
-                recordRuntimeTrace(ev);
-            }
+            const uint32_t n = s_b83ApcLogs.fetch_add(1u, std::memory_order_relaxed) + 1u;
+            char event[160];
+            std::snprintf(event, sizeof(event), "B83_APC_DELIVERED alertable=1 n=%u thread=%u", n, static_cast<uint32_t>(g_currentGuestThreadId));
+            recordRuntimeTrace(event);
         }
     }
     const uint32_t intervalPointer = context.r5.u32;
@@ -7433,11 +7453,14 @@ void xowue_KeInitializeSemaphore(PPCContext &context, uint8_t *base) {
 }
 
 void xowue_KeReleaseSemaphore(PPCContext &context, uint8_t *base) {
+    const uint32_t b83Object = context.r3.u32;
+    const int32_t b83Requested = static_cast<int32_t>(context.r5.u32);
     const uint32_t address = context.r3.u32;
     const int32_t adjustment = static_cast<int32_t>(context.r5.u32);
     const auto semaphore = lookupGuestWaitable(address);
     if (!base || !semaphore || semaphore->kind != GuestWaitable::Kind::Semaphore || adjustment < 0) {
         context.r3.u32 = 0u;
+        if (semaphore && semaphore->handle == 0x00000112u) { char event[224]; std::snprintf(event, sizeof(event), "B83_KE_RELEASE_SEMAPHORE object=0x%08X handle=0x00000112 requested=%d previous=-1 limit=%d status=0", b83Object, b83Requested, semaphore->semaphoreLimit); recordRuntimeTrace(event); }
         return;
     }
     int32_t previous = 0;
@@ -7446,6 +7469,7 @@ void xowue_KeReleaseSemaphore(PPCContext &context, uint8_t *base) {
         previous = semaphore->semaphoreCount;
         if (adjustment > semaphore->semaphoreLimit - semaphore->semaphoreCount) {
             context.r3.u32 = 0u;
+            if (semaphore->handle == 0x00000112u) { char event[224]; std::snprintf(event, sizeof(event), "B83_KE_RELEASE_SEMAPHORE object=0x%08X handle=0x00000112 requested=%d previous=%d limit=%d status=0", b83Object, b83Requested, semaphore->semaphoreCount, semaphore->semaphoreLimit); recordRuntimeTrace(event); }
             return;
         }
         semaphore->semaphoreCount += adjustment;
@@ -7453,6 +7477,7 @@ void xowue_KeReleaseSemaphore(PPCContext &context, uint8_t *base) {
         writeGuestDispatcherSignalState(semaphore, semaphore->semaphoreCount);
     }
     context.r3.u32 = static_cast<uint32_t>(previous);
+    if (semaphore->handle == 0x00000112u) { char event[224]; std::snprintf(event, sizeof(event), "B83_KE_RELEASE_SEMAPHORE object=0x%08X handle=0x00000112 requested=%d previous=%d limit=%d", b83Object, b83Requested, previous, semaphore->semaphoreLimit); recordRuntimeTrace(event); }
     semaphore->changed.notify_all();
     g_waitSetChanged.notify_all();
 }
@@ -7484,15 +7509,22 @@ void xowue_NtCreateSemaphore(PPCContext &context, uint8_t *base) {
     PPC_STORE_U32(object + 16u, static_cast<uint32_t>(limit));
     PPC_STORE_U32(output, handle);
     context.r3.u32 = kNtStatusSuccess;
+    if (handle == 0x00000112u) {
+        char event[192]; std::snprintf(event, sizeof(event), "B83_HANDLE_TYPE handle=0x00000112 type=Semaphore initial=%d limit=%d object=0x%08X", initialCount, limit, object);
+        recordRuntimeTrace(event);
+    }
 }
 
 void xowue_NtReleaseSemaphore(PPCContext &context, uint8_t *base) {
+    const uint32_t b83Handle = context.r3.u32;
+    const int32_t b83Requested = static_cast<int32_t>(context.r4.u32);
     const auto semaphore = lookupGuestWaitable(context.r3.u32);
     const int32_t releaseCount = static_cast<int32_t>(context.r4.u32);
     const uint32_t previousPointer = context.r5.u32;
     if (!base || !semaphore || semaphore->kind != GuestWaitable::Kind::Semaphore ||
         releaseCount <= 0) {
         context.r3.u32 = semaphore ? kNtStatusInvalidParameter : kNtStatusInvalidHandle;
+        if (b83Handle == 0x00000112u) { char event[224]; std::snprintf(event, sizeof(event), "B83_NT_RELEASE_SEMAPHORE handle=0x00000112 requested=%d previous=-1 limit=%d status=0x%08X", b83Requested, semaphore ? semaphore->semaphoreLimit : -1, context.r3.u32); recordRuntimeTrace(event); }
         return;
     }
     int32_t previous = 0;
@@ -7501,6 +7533,7 @@ void xowue_NtReleaseSemaphore(PPCContext &context, uint8_t *base) {
         previous = semaphore->semaphoreCount;
         if (releaseCount > semaphore->semaphoreLimit - previous) {
             context.r3.u32 = kNtStatusInvalidParameter;
+            if (semaphore->handle == 0x00000112u) { char event[224]; std::snprintf(event, sizeof(event), "B83_NT_RELEASE_SEMAPHORE handle=0x00000112 requested=%d previous=%d limit=%d status=0x%08X", b83Requested, previous, semaphore->semaphoreLimit, context.r3.u32); recordRuntimeTrace(event); }
             return;
         }
         semaphore->semaphoreCount += releaseCount;
@@ -7510,6 +7543,7 @@ void xowue_NtReleaseSemaphore(PPCContext &context, uint8_t *base) {
     if (previousPointer && validGuestRange(previousPointer, 4u))
         PPC_STORE_U32(previousPointer, static_cast<uint32_t>(previous));
     context.r3.u32 = kNtStatusSuccess;
+    if (b83Handle == 0x00000112u || semaphore->handle == 0x00000112u) { char event[224]; std::snprintf(event, sizeof(event), "B83_NT_RELEASE_SEMAPHORE handle=0x%08X requested=%d previous=%d limit=%d status=0x%08X", b83Handle, b83Requested, previous, semaphore->semaphoreLimit, context.r3.u32); recordRuntimeTrace(event); }
     semaphore->changed.notify_all(); g_waitSetChanged.notify_all();
 }
 
@@ -7712,6 +7746,10 @@ void xowue_NtCreateEvent(PPCContext &context, uint8_t *base) {
     base[objectAddress] = static_cast<uint8_t>(eventType);
     syncGuestDispatcherSignalState(waitable);
     if (handlePointer != 0u) PPC_STORE_U32(handlePointer, handle);
+    if (handle == 0x00000112u) {
+        char event[192]; std::snprintf(event, sizeof(event), "B83_HANDLE_TYPE handle=0x00000112 type=Event reset=%s initial=%u object=0x%08X", waitable->manualReset ? "manual" : "auto", initialState, objectAddress);
+        recordRuntimeTrace(event);
+    }
     context.r3.u32 = kNtStatusSuccess;
     char event[144];
     std::snprintf(event, sizeof(event),

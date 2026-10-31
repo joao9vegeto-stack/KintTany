@@ -96,7 +96,7 @@ assert "XOWUE_POOL_ALLOC_82DC2BF0" in engine and "XOWUE_POOL_INIT_82DC2B14" in e
 assert "CODE_AUDIT_B66" in engine and "CODE_AUDIT_83847ABC" in engine
 assert "XOWUE_VBLANK_WATCHDOG_SIGNAL" in engine
 assert "obj_creator_lr=0x%08X obj_signals=%u" in engine
-assert 'CURRENT_PROJECT_VERSION: "82"' in (root / "iOS" / "project.yml").read_text(encoding="utf-8")
+assert 'CURRENT_PROJECT_VERSION: "83"' in (root / "iOS" / "project.yml").read_text(encoding="utf-8")
 print("PASS: Build 66 allocator, PPC audit, synchronization telemetry and vblank watchdog hooks")
 
 # Build 34: Xbox object attributes must use root/name/flags at offsets 0/4/8
@@ -277,3 +277,18 @@ assert "xowue_bink_wait_bypass_stub" in engine_b74
 assert "THREAD10_SPIN_826CF060" in engine_b74
 assert "WAIT_CALLER_82C4D4A8" in engine_b74
 print("PASS: Build 74 BinkWait 0x822A0278 bypass stub and Thread 10 audit")
+
+# Build 83: diagnostic-only wait investigation; no state-forcing workaround.
+engine_b83 = Path("Runtime/XOWUEEngine.cpp").read_text(encoding="utf-8")
+assert 'event.find("B83_") != std::string::npos) return true' in engine_b83
+assert 'guestAddress == 0x82575250u' in engine_b83 and 'calls % 100000u' in engine_b83
+assert 'plus8C=' in engine_b83 and 'plusA4=' in engine_b83 and 'plusA8=' in engine_b83
+assert 'context.r4.u32 & 0xFFu) != 0u' in engine_b83
+assert 'B83_NTREADFILE call=%llu' in engine_b83
+assert 'B83_HANDLE_TYPE handle=0x00000112' in engine_b83
+assert 'B83_NT_RELEASE_SEMAPHORE' in engine_b83 and 'B83_KE_RELEASE_SEMAPHORE' in engine_b83
+assert 'B83_NT_SET_EVENT' in engine_b83 and 'B83_KE_SET_EVENT' in engine_b83
+assert 'B83_WAIT_SATISFIED' in engine_b83
+assert 'THRED_DUMP' in engine_b83
+assert 'CURRENT_PROJECT_VERSION: "83"' in Path("iOS/project.yml").read_text(encoding="utf-8")
+print("PASS: Build 83 unthrottled diagnostic logging, stream object counters, handle 0x112 tracing, alertable-only APC")
