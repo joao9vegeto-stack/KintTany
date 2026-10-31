@@ -82,8 +82,7 @@ enum XOWUEDiagnostics {
         defer { lock.unlock() }
         guard let url = fileURL(named: diagnosticFilename) else { return }
         appendLocked(message, to: url)
-        let summaryPrefixes = ["CODE_AUDIT", "AOT_PROGRESS", "HOT_FN_CODE", "THREAD_DUMP",
-                               "XENOS_", "PM4_", "SWAP_", "WAIT_", "VBLANK", "GRAPHICS_INTERRUPT"]
+        let summaryPrefixes = ["B84_", "AOT_PROGRESS", "HOT_FN_CODE", "THREAD_DUMP", "XENOS_", "PM4_", "SWAP_", "WAIT_", "VBLANK", "GRAPHICS_INTERRUPT"]
         if summaryPrefixes.contains(where: { message.contains($0) }) {
             refreshCompactSummaryLocked(diagnosticURL: url)
         }
@@ -92,20 +91,35 @@ enum XOWUEDiagnostics {
     private static func refreshCompactSummaryLocked(diagnosticURL: URL) {
         guard let source = try? String(contentsOf: diagnosticURL, encoding: .utf8) else { return }
         let lines = source.split(whereSeparator: \.isNewline).map(String.init)
-        var audits = lines.filter { $0.contains("CODE_AUDIT") }
+        // Build-labelled summary: never let stale B69/B70 code audits crowd out
+        // the current build's observations. Legacy audits remain in the full log.
+        let boot = Array(lines.filter {
+            $0.contains("APP_LAUNCH") || $0.contains("BOOT_STARTED") ||
+            $0.contains("BOOT_FINISHED") || $0.contains("BOOT_FAILED") || $0.contains("CRASH ")
+        }.suffix(6))
+        var audits = Array(lines.filter { $0.contains("B84_CODE_AUDIT") }.suffix(36))
+        var stream = Array(lines.filter { $0.contains("B84_STREAM_STATE") }.suffix(12))
+        var current = Array(lines.filter { $0.contains("B84_") &&
+            !$0.contains("B84_CODE_AUDIT") && !$0.contains("B84_STREAM_STATE") }.suffix(16))
         var progress = Array(lines.filter { $0.contains("AOT_PROGRESS") }.suffix(4))
         var hot = Array(lines.filter { $0.contains("HOT_FN_CODE") }.suffix(6))
-        var threads = lines.filter { $0.contains("THREAD_DUMP") }
+        var threads = Array(lines.filter { $0.contains("THREAD_DUMP") }.suffix(12))
         var gpu = Array(lines.filter { line in
             ["XENOS_", "PM4_", "SWAP_", "WAIT_", "VBLANK", "GRAPHICS_INTERRUPT"].contains(where: { line.contains($0) })
-        }.suffix(15))
-        func assembled() -> [String] { audits + progress + hot + threads + gpu }
-        while assembled().joined(separator: "\n").utf8.count > 4000 {
+        }.suffix(12))
+        func assembled() -> [String] {
+            ["XOWUE_BUILD_SUMMARY build=\\(buildNumber) source=diagnostico-build-\\(buildNumber).txt",
+             "CURRENT_BUILD_EVIDENCE_BEGIN"] + boot + progress + hot + audits + stream + current + threads + gpu +
+             ["CURRENT_BUILD_EVIDENCE_END"]
+        }
+        while assembled().joined(separator: "\n").utf8.count > 8192 {
             if !gpu.isEmpty { gpu.removeFirst() }
             else if !threads.isEmpty { threads.removeFirst() }
+            else if !current.isEmpty { current.removeFirst() }
+            else if !stream.isEmpty { stream.removeFirst() }
             else if !hot.isEmpty { hot.removeFirst() }
             else if !progress.isEmpty { progress.removeFirst() }
-            else if !audits.isEmpty { audits.removeLast() }
+            else if !audits.isEmpty { audits.removeFirst() }
             else { break }
         }
         let summary = assembled().joined(separator: "\n") + "\n"

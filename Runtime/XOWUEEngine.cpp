@@ -428,7 +428,7 @@ std::vector<std::shared_ptr<GuestThread>> snapshotAllGuestThreads() {
 
 bool shouldPersistRuntimeTrace(const std::string &event, size_t sequence) {
     // Build 83: diagnostic-only records bypass every allowlist, quota and sampling gate.
-    if (event.find("B83_") != std::string::npos) return true;
+    if (event.find("B83_") != std::string::npos || event.find("B84_") != std::string::npos) return true;
     // Build 64 must persist diagnostics that identify stalls and QPC output writes.
     for (const char *required : {"CODE_AUDIT_B69", "CODE_AUDIT_B69_GUEST_WORD", "APP_LAUNCH", "CODE_AUDIT_B66", "CODE_AUDIT_B67", "CODE_AUDIT_83847ABC", "XOWUE_SYNC_CREATE", "XOWUE_MAIN_WAIT_WATCHDOG", "XOWUE_VBLANK_WATCHDOG_SIGNAL", "XOWUE_POOL_ALLOC_82DC2BF0", "AOT_PROGRESS", "THREAD_DUMP", "XOWUE_AOT_HOTSPOT",
                                  "XOWUE_AOT_HOTSPOT_STATE", "XOWUE_QPC_WRITE",
@@ -2051,6 +2051,40 @@ static void emitBuild66CodeAudit(uint8_t *base) {
 static uint32_t loadGuestBe32(const uint8_t *base, uint32_t address);
 
 // B69_AUDIT_ADDRS: 0x822A01C0u 0x822A1BC0u 0x823704C0u 0x824278C0u 0x824E6F10u 0x8257A840 0x826901E0u 0x826903F0u 0x827E1250u 0x82B49DE0u 0x82B4AAE0u 0x82B4AE00u 0x82C257F0u 0x82C30BFC 0x82C3C498u CODE_AUDIT_B65_CPP_BEGIN PASS: Build 35 bctrl target 0x8257A840 included in verified native owner recovery and CI PASS: Build 65 global PPC semantic rewrites removed; targeted 0x82DC2390 guard and raw-code audit wired PASS: Build 72 XAudio2/Bink waiter wake (0x4004ED80/0x4004EDD0) and MAIN_824ACBF8 audit PASS: Build 74 BinkWait 0x822A0278 bypass stub and Thread 10 audit xowue_thread_checkpoint(0x82C3C4D8u, ctx); MAIN_WAIT_8237073C_82370790 THREAD7_82B3DE30 THREAD10_SPIN_826CF060 WAIT_CALLER_82C4D4A8 0x824278C0 0x824ACB80 0x82B3DE00 0x82690640 0x82690D80 0x826CEFC0 0x82C4D440 0x826903F0 0x826901E0 0x827E1250 0x82B49DE0 0x82B4AAE0 0x82B4AE00 0x822A1BC0 0x822A01C0 0x824E6F10 0x82C257F0 0x823704C0 0x82370700 0x82371D80 0x825524C0 0x82493820 0x824E7140 0x82200150
+static void logCodeAuditBuild84(uint8_t *base) {
+    static std::atomic<bool> emitted{false};
+    if (!base || emitted.exchange(true, std::memory_order_acq_rel)) return;
+    struct Range { uint32_t begin, end; const char *name; };
+    static constexpr Range ranges[] = {
+        {0x82575220u, 0x82575320u, "STREAM_POLL_82575250"},
+        {0x82C3EE40u, 0x82C3EF20u, "STREAM_LOOP_82C3EE78"},
+        {0x82C4BE00u, 0x82C4BF00u, "STREAM_WAIT_82C4BE30"},
+        {0x82C3C4B0u, 0x82C3C540u, "TIMEBASE_82C3C4D8"}
+    };
+    for (const auto &range : ranges) {
+        char header[192];
+        std::snprintf(header, sizeof(header),
+            "B84_CODE_AUDIT_BEGIN name=%s range=0x%08X..0x%08X",
+            range.name, range.begin, range.end);
+        recordRuntimeTrace(header);
+        for (uint32_t pc = range.begin; pc < range.end; pc += 16u) {
+            const bool valid = validGuestRange(pc, 16u);
+            char line[256];
+            std::snprintf(line, sizeof(line),
+                "B84_CODE_AUDIT name=%s pc=0x%08X words=%08X,%08X,%08X,%08X valid=%u",
+                range.name, pc,
+                valid ? loadGuestBe32(base, pc) : 0u,
+                valid ? loadGuestBe32(base, pc + 4u) : 0u,
+                valid ? loadGuestBe32(base, pc + 8u) : 0u,
+                valid ? loadGuestBe32(base, pc + 12u) : 0u,
+                valid ? 1u : 0u);
+            recordRuntimeTrace(line);
+        }
+        std::snprintf(header, sizeof(header), "B84_CODE_AUDIT_END name=%s", range.name);
+        recordRuntimeTrace(header);
+    }
+}
+
 static void logCodeAuditBuild69(uint8_t *base) {
  if(!base||g_build69AuditEmitted.exchange(true,std::memory_order_acq_rel))return;
  struct R{uint32_t b,e;const char*n;}; static constexpr R rs[]={
@@ -2113,21 +2147,37 @@ void xowue_thread_checkpoint(uint32_t guestAddress);
 static void xowue_forward_pump_and_signal_spin(uint32_t guestAddress, PPCContext &ctx);
 void xowue_thread_checkpoint(uint32_t guestAddress,PPCContext &ctx){
     if (guestAddress == 0x82575250u) {
-        static std::atomic<uint64_t> s_b83StreamPollCalls{0u};
-        const uint64_t calls = s_b83StreamPollCalls.fetch_add(1u, std::memory_order_relaxed) + 1u;
-        if ((calls % 100000u) == 0u) {
-            const auto memory = g_activeGuestMemory.lock();
-            const uint8_t *guestBase = memory ? memory->base : nullptr;
-            const uint32_t object = ctx.r3.u32;
-            uint32_t v8c = 0xFFFFFFFFu, va4 = 0xFFFFFFFFu, va8 = 0xFFFFFFFFu;
-            if (guestBase && validGuestRange(object + 0x8Cu, 4u)) v8c = loadGuestBe32(guestBase, object + 0x8Cu);
-            if (guestBase && validGuestRange(object + 0xA4u, 4u)) va4 = loadGuestBe32(guestBase, object + 0xA4u);
-            if (guestBase && validGuestRange(object + 0xA8u, 4u)) va8 = loadGuestBe32(guestBase, object + 0xA8u);
-            char event[256];
-            std::snprintf(event, sizeof(event), "B83_STREAM_POLL calls=%llu thread=%u fn=0x82575250 obj=0x%08X plus8C=0x%08X plusA4=0x%08X plusA8=0x%08X lr=0x%08X",
-                static_cast<unsigned long long>(calls), static_cast<uint32_t>(g_currentGuestThreadId), object, v8c, va4, va8, static_cast<uint32_t>(ctx.lr));
+        // Build 83 sampled r3, but the captured stalled context places the
+        // stream object in r31 (r3 is zero at this polling site). Keep both.
+        static std::atomic<uint64_t> s_b84StreamPollCalls{0u};
+        static thread_local uint32_t s_prev8C = 0xFFFFFFFFu;
+        static thread_local uint32_t s_prevA4 = 0xFFFFFFFFu;
+        static thread_local uint32_t s_prevA8 = 0xFFFFFFFFu;
+        const uint64_t calls = s_b84StreamPollCalls.fetch_add(1u, std::memory_order_relaxed) + 1u;
+        const auto memory = g_activeGuestMemory.lock();
+        const uint8_t *guestBase = memory ? memory->base : nullptr;
+        const uint32_t object = ctx.r31.u32;
+        uint32_t v8c = 0xFFFFFFFFu, va4 = 0xFFFFFFFFu, va8 = 0xFFFFFFFFu;
+        const bool objectValid = guestBase && object >= 0x40000000u &&
+            object < 0x70000000u && validGuestRange(object, 0xACu);
+        if (objectValid) {
+            v8c = loadGuestBe32(guestBase, object + 0x8Cu);
+            va4 = loadGuestBe32(guestBase, object + 0xA4u);
+            va8 = loadGuestBe32(guestBase, object + 0xA8u);
+        }
+        const bool changed = objectValid &&
+            (v8c != s_prev8C || va4 != s_prevA4 || va8 != s_prevA8);
+        if (calls <= 8u || changed || (calls & 0xFFFFu) == 0u) {
+            char event[384];
+            std::snprintf(event, sizeof(event),
+                "B84_STREAM_STATE calls=%llu thread=%u pc=0x82575250 obj_r31=0x%08X r3=0x%08X r4=0x%08X "
+                "plus8C=0x%08X plusA4=0x%08X plusA8=0x%08X changed=%u valid=%u lr=0x%08X",
+                static_cast<unsigned long long>(calls), static_cast<uint32_t>(g_currentGuestThreadId),
+                object, ctx.r3.u32, ctx.r4.u32, v8c, va4, va8, changed ? 1u : 0u,
+                objectValid ? 1u : 0u, static_cast<uint32_t>(ctx.lr));
             recordRuntimeTrace(event);
         }
+        if (objectValid) { s_prev8C = v8c; s_prevA4 = va4; s_prevA8 = va8; }
     }
     if (guestAddress == 0x82370500u || guestAddress == 0x82427940u || guestAddress == 0x826CF060u || guestAddress == 0x825F91D8u || guestAddress == 0x824ACBF8u ||
         guestAddress == 0x824793E0u || guestAddress == 0x824792E0u ||
@@ -2143,7 +2193,7 @@ void xowue_thread_checkpoint(uint32_t guestAddress) {
             std::this_thread::sleep_for(std::chrono::milliseconds(2));
     }
     auto auditMemory = g_activeGuestMemory.lock();
-    if (auditMemory && auditMemory->base) { emitBuild65CodeAudit(auditMemory->base); logCodeAuditBuild69(auditMemory->base); }
+    if (auditMemory && auditMemory->base) { emitBuild65CodeAudit(auditMemory->base); logCodeAuditBuild69(auditMemory->base); logCodeAuditBuild84(auditMemory->base); }
     recordAotFunctionExecution(guestAddress);
     struct HotFunctionSlot { uint32_t fn; uint32_t count; };
     static thread_local std::array<HotFunctionSlot, 8> hotFunctions{};
@@ -2489,17 +2539,10 @@ static void xowue_forward_pump_and_signal_spin(uint32_t guestAddress, PPCContext
     if (guestAddress == s_lastAddr) ++s_spinCalls; else { s_lastAddr = guestAddress; s_spinCalls = 1; }
     const uint32_t mask = (guestAddress == 0x822A0278u || guestAddress == 0x822A1BE8u) ? 0x3FFFu : 0x3FFu;
     if ((s_spinCalls & mask) == 0u || guestAddress == 0x8311C638u || guestAddress == 0x824ACBF8u) {
+        // Build 84: do not fabricate completion for unrelated guest waitables.
+        // A scheduler yield and real Xenos pump are safe; only the actual guest
+        // producer/kernel signal may release an event or semaphore.
         pumpGuestXenosRingBuffer();
-        signalGuestEventHandle(0x00000100u);
-        signalGuestEventHandle(0x00000102u);
-        signalGuestEventHandle(0x4004ED80u);
-        signalGuestEventHandle(0x4004EDD0u);
-        signalGuestEventHandle(0x4004EF80u);
-        signalGuestEventHandle(0x00000112u);
-        signalGuestEventHandle(0x00000113u);
-        signalGuestEventHandle(0x00000115u);
-        signalGuestEventHandle(0x70016FA0u);
-        signalGuestEventHandle(0x7003DD80u);
         const bool shouldYieldCpu =
             guestAddress == 0x82B422A8u || guestAddress == 0x82B3DE30u ||
             guestAddress == 0x826CF060u || guestAddress == 0x825F91D8u ||

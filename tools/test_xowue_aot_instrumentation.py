@@ -96,7 +96,7 @@ assert "XOWUE_POOL_ALLOC_82DC2BF0" in engine and "XOWUE_POOL_INIT_82DC2B14" in e
 assert "CODE_AUDIT_B66" in engine and "CODE_AUDIT_83847ABC" in engine
 assert "XOWUE_VBLANK_WATCHDOG_SIGNAL" in engine
 assert "obj_creator_lr=0x%08X obj_signals=%u" in engine
-assert 'CURRENT_PROJECT_VERSION: "83"' in (root / "iOS" / "project.yml").read_text(encoding="utf-8")
+assert 'CURRENT_PROJECT_VERSION: "84"' in (root / "iOS" / "project.yml").read_text(encoding="utf-8")
 print("PASS: Build 66 allocator, PPC audit, synchronization telemetry and vblank watchdog hooks")
 
 # Build 34: Xbox object attributes must use root/name/flags at offsets 0/4/8
@@ -206,7 +206,7 @@ assert "CODE_AUDIT_B68_EVENT_WAIT_IMPLEMENTATION" in engine
 assert "CODE_AUDIT_B68_THREAD2_FULL" in engine
 assert "if ((++audioLoopCalls & 63u) == 0u)" in engine
 assert "std::chrono::milliseconds(2)" in engine
-assert 'CURRENT_PROJECT_VERSION: "83"' in (root / "iOS" / "project.yml").read_text(encoding="utf-8")
+assert 'CURRENT_PROJECT_VERSION: "84"' in (root / "iOS" / "project.yml").read_text(encoding="utf-8")
 print("PASS: Build 68 lost-wakeup counters, all-thread worker-first watchdog, async-task recovery, PPC audit and audio throttle")
 
 # Build 69: QPC fast path, synthetic timebase, and complete diagnostics.
@@ -224,7 +224,7 @@ for address in ("0x82C3C498u","0x822A1BC0u","0x822A01C0u","0x824E6F10u","0x82C25
     assert address in engine, f"Build 69 audit address missing {address}"
 assert "CODE_AUDIT_B69_GUEST_WORD" in engine
 assert "THREAD_DUMP id=%u entry=0x%08X exited=%u waiting=%u wait_target=0x%08X last_fn=0x%08X prev_fn=0x%08X lr=0x%08X" in engine
-assert 'CURRENT_PROJECT_VERSION: "83"' in (root / "iOS" / "project.yml").read_text(encoding="utf-8")
+assert 'CURRENT_PROJECT_VERSION: "84"' in (root / "iOS" / "project.yml").read_text(encoding="utf-8")
 print("PASS: Build 69 QPC fast path, synthetic timebase, main/interrupt thread snapshots, PPC code/data audit")
 
 # Build 69 checks for main-thread PPC context, thread snapshots, and QPC timer pacing.
@@ -290,5 +290,24 @@ assert 'B83_NT_RELEASE_SEMAPHORE' in engine_b83 and 'B83_KE_RELEASE_SEMAPHORE' i
 assert 'B83_NT_SET_EVENT' in engine_b83 and 'B83_KE_SET_EVENT' in engine_b83
 assert 'B83_WAIT_SATISFIED' in engine_b83
 assert 'THRED_DUMP' in engine_b83
-assert 'CURRENT_PROJECT_VERSION: "83"' in Path("iOS/project.yml").read_text(encoding="utf-8")
+assert 'CURRENT_PROJECT_VERSION: "84"' in Path("iOS/project.yml").read_text(encoding="utf-8")
 print("PASS: Build 83 unthrottled diagnostic logging, stream object counters, handle 0x112 tracing, alertable-only APC")
+
+# Build 84: correct stream-object register, current-build code audit, and no synthetic wait releases.
+engine_b84 = Path("Runtime/XOWUEEngine.cpp").read_text(encoding="utf-8")
+assert "B84_STREAM_STATE" in engine_b84
+assert "const uint32_t object = ctx.r31.u32" in engine_b84
+assert "B84_CODE_AUDIT" in engine_b84 and "logCodeAuditBuild84" in engine_b84
+assert 'event.find("B84_") != std::string::npos' in engine_b84
+spin_start = engine_b84.index("static void xowue_forward_pump_and_signal_spin(uint32_t guestAddress, PPCContext &ctx) {")
+spin_end = engine_b84.index("static inline void xowue_write_be32_raw", spin_start)
+spin_body = engine_b84[spin_start:spin_end]
+assert "signalGuestEventHandle(0x00000112u)" not in spin_body
+assert "pumpGuestXenosRingBuffer();" in spin_body
+diag_b84 = Path("iOS/App/XOWUEDiagnostics.swift").read_text(encoding="utf-8")
+assert 'message.contains("B84_")' in diag_b84
+assert "XOWUE_BUILD_SUMMARY build=" in diag_b84
+assert 'lines.filter { $0.contains("B84_CODE_AUDIT") }' in diag_b84
+assert 'lines.filter { $0.contains("CODE_AUDIT") }' not in diag_b84
+assert 'CURRENT_PROJECT_VERSION: "84"' in Path("iOS/project.yml").read_text(encoding="utf-8")
+print("PASS: Build 84 stream r31 evidence, current-build summary, bounded PPC audits, and removal of synthetic spin-loop event releases")
