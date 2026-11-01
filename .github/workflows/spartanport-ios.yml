@@ -78,40 +78,6 @@ jobs:
           cp -R "$APP" "$RUNNER_TEMP/SpartanIPA/Payload/SpartanPort.app"
           ditto -c -k --sequesterRsrc --keepParent "$RUNNER_TEMP/SpartanIPA/Payload" SpartanPort-iOS-KosmicKrisp-unsigned.ipa
           unzip -t SpartanPort-iOS-KosmicKrisp-unsigned.ipa
-      - name: Package KosmicKrisp M3B device smoke IPA
-        run: |
-          set -euo pipefail
-          APP="$RUNNER_TEMP/KosmicKrispM3B/Payload/KosmicKrispM3B.app"
-          mkdir -p "$APP"
-          cp KosmicKrispiOS/build/KosmicKrispM3B "$APP/KosmicKrispM3B"
-          chmod 755 "$APP/KosmicKrispM3B"
-          cat > "$APP/Info.plist" <<'EOF'
-          <?xml version="1.0" encoding="UTF-8"?>
-          <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
-          <plist version="1.0"><dict>
-          <key>CFBundleDevelopmentRegion</key><string>pt_BR</string>
-          <key>CFBundleDisplayName</key><string>KosmicKrisp M3B</string>
-          <key>CFBundleExecutable</key><string>KosmicKrispM3B</string>
-          <key>CFBundleIdentifier</key><string>com.joaopedro.kosmickrisp.m3b</string>
-          <key>CFBundleInfoDictionaryVersion</key><string>6.0</string>
-          <key>CFBundleName</key><string>KosmicKrispM3B</string>
-          <key>CFBundlePackageType</key><string>APPL</string>
-          <key>CFBundleShortVersionString</key><string>0.3.2</string>
-          <key>CFBundleVersion</key><string>1</string>
-          <key>LSRequiresIPhoneOS</key><true/>
-          <key>MinimumOSVersion</key><string>17.4</string>
-          <key>UIDeviceFamily</key><array><integer>1</integer></array>
-          <key>UILaunchScreen</key><dict/>
-          <key>UIRequiresFullScreen</key><true/>
-          <key>UISupportedInterfaceOrientations</key><array>
-          <string>UIInterfaceOrientationPortrait</string><string>UIInterfaceOrientationLandscapeLeft</string><string>UIInterfaceOrientationLandscapeRight</string>
-          </array></dict></plist>
-          EOF
-          plutil -lint "$APP/Info.plist"
-          codesign --force --sign - --timestamp=none "$APP"
-          codesign --verify --deep --strict "$APP"
-          (cd "$RUNNER_TEMP/KosmicKrispM3B" && ditto -c -k --sequesterRsrc --keepParent Payload "$GITHUB_WORKSPACE/KosmicKrisp-M3B-smoke.ipa")
-          unzip -t KosmicKrisp-M3B-smoke.ipa
       - name: Stage reusable KosmicKrispiOS SDK
         run: |
           set -euo pipefail
@@ -121,15 +87,13 @@ jobs:
           cp KosmicKrispiOS/build/KosmicKrispiOS-build.txt KosmicKrispiOS/Artifacts/
           cp KosmicKrispiOS/build/SHA256SUMS KosmicKrispiOS/Artifacts/
           shasum -a 256 KosmicKrispiOS/Artifacts/libkk-kosmickrisp-ios-arm64.a
-      - name: Upload SpartanPort IPA, reusable SDK and smoke IPA
+      - name: Upload SpartanPort IPA and reusable SDK
         uses: actions/upload-artifact@v4
         with:
           name: KosmicKrispiOS-iOS-arm64
           path: |
             SpartanPort-iOS-KosmicKrisp-unsigned.ipa
-            KosmicKrisp-M3B-smoke.ipa
             KosmicKrispiOS/Artifacts/
-            KosmicKrispiOS/build/KosmicKrispM3B
             KosmicKrispiOS/build/file.txt
             KosmicKrispiOS/build/lipo.txt
             KosmicKrispiOS/build/build-version.txt
