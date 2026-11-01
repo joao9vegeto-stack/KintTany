@@ -1,0 +1,1360 @@
+w> 00008403 BaseHeap::AllocFixed attempting commit on unreserved page
+w> 00008403 BaseHeap::AllocFixed attempting commit on unreserved page
+w> 0000DB27 BaseHeap::AllocFixed attempting commit on unreserved page
+w> 0000DB27 BaseHeap::AllocFixed attempting commit on unreserved page
+w> 0000DB27 AllocateContext: using fallback PPC context mapping at 0x10e650000 (low32=0x0E650000)
+w> 01000010 Metal: gamma_render_target_as_unorm16 disabled due to known issues; set --metal_allow_gamma_unorm16=true to force
+w> 01000010 Metal: geometry emulation requested without a pixel shader; using depth-only PS fallback
+w> 01000010 Geometry GS: MSC did not emit mesh stage; using geometry stage library
+w> 0100001C SDL audio queue running low: count=1, submitted=1, played=0, underruns=0, max_queue_depth=1
+w> 0100001C SDL audio queue running low: count=2, submitted=2, played=0, underruns=0, max_queue_depth=2
+w> 0100001C SDL audio queue running low: count=4, submitted=2834, played=2832, underruns=0, max_queue_depth=8
+w> 01000010 Metal: depth-only fallback PS requested without a depth attachment or memexport side effects; skipping no-output emulated draw
+w> F8000008 Attempted to open read-only file/dir for write: d:\KynapseRuntimeConfig.xml
+i> 0000490F   log_level = 2
+i> 0000490F   mappings_file = ''
+i> 0000490F   metal_backend_telemetry = true
+i> 0000490F   metal_pipeline_binary_archive = true
+i> 0000490F   metal_shader_disk_cache = true
+i> 0000490F   render_target_path = 'accuracy'
+i> 0000490F   store_shaders = true
+i> 0000490F   use_50Hz_mode = false
+i> 0000490F Applied 19 game config override(s)
+i> 0000490F Setup: Initializing Memory...
+i> 0000490F Setup: Initializing Exports...
+i> 0000490F Setup: Initializing Processor...
+i> 0000490F iOS JIT: TXM detected on iOS 26; using broker-capable path
+i> 0000490F Setup: Initializing VFS...
+i> 0000490F Setup: Initializing Kernel...
+i> 0000490F FindProfiles: Adding profile E030000013F2234D to profile list
+i> 0000490F ProfileManager: Found 1 Profiles
+i> 0000490F LoadAccount: Loading Account: E030000013F2234D
+F> 0000490F HostPathDevice::ResolvePath()
+i> 0000490F Loaded Jon (GUID: E030000013F2234D) to slot 0
+F> 0000490F HostPathDevice::ResolvePath(\FFFE07D1.gpd)
+F> 0000490F HostPathDevice::ResolvePath(\41560816.gpd)
+F> 0000490F HostPathDevice::ResolvePath()
+F> 0000490F HostPathDevice::ResolvePath()
+F> 0000490F HostPathDevice::ResolvePath()
+F> 0000490F HostPathDevice::ResolvePath()
+w> 0000490F BaseHeap::AllocFixed attempting commit on unreserved page
+w> 0000490F BaseHeap::AllocFixed attempting commit on unreserved page
+i> 0000490F SetupSubsystems: Initializing Audio...
+i> 0000490F SetupSubsystems: Initializing Graphics...
+i> 0000490F SetupSubsystems: Starting graphics_system...
+i> 0000490F Metal device created: Apple A19 Pro GPU
+i> 00000103 Metal presenter initialized with shared command queue
+i> 01000010 Created Metal built-in index buffer (589794 bytes)
+i> 01000010 MetalPrimitiveProcessor initialized (MSC path)
+w> 01000010 Metal: gamma_render_target_as_unorm16 disabled due to known issues; set --metal_allow_gamma_unorm16=true to force
+i> 0000490F SetupSubsystems: Starting audio_system...
+i> 01000010 DxbcShaderTranslator init: gamma_as_unorm8=true, msaa_2x=true, scale=1x1
+i> 01000010 DxbcToDxilConverter: Using default extra options: -skip-container-parts
+i> 01000010 MetalShaderConverter: Initialized successfully
+i> 01000010 MetalPipelineCache: spawned 4 async pipeline creation threads
+i> 0100001C iOS: Audio Worker QoS set to user-interactive
+i> 0000490F iOS: cache: mounted to \CACHE
+i> 00000103 Metal surface connected successfully: 1280x720 (scale=1, drawable=1280x720)
+i> 0000490F iOS: Emulator setup complete
+i> 0000490F iOS: Launching game: /private/var/mobile/Containers/Data/Application/514AE108-9851-4B8F-8DD8-E270530CCDE0/Documents/X-MEN ORIGINS WOLVERINE PT BR/default.xex
+i> 00000103 Loading module GAME:\default.xex
+F> 00000103 HostPathDevice::ResolvePath(\default.xex)
+i> 00000103 Module \Device\Harddisk0\Partition1\default.xex:
+Module Hash: D95CA1F5D153A3AC
+    Module Flags: 00000001
+      XEX_MODULE_TITLE
+Security Header:
+     Image Flags: 00000008
+       XEX_IMAGE_XGD2_MEDIA_ONLY
+    Load Address: 82000000
+      Image Size: 016E0000
+    Export Table: 83263D4C
+Optional Header Count: 15
+  XEX_HEADER_RESOURCE_INFO:
+    41560816 83630000-836DBA39, 703033b
+    HashSec  836DBA80-836DBD6A, 746b
+  XEX_HEADER_FILE_FORMAT_INFO:
+           Info Size: 56
+     Encryption Type: None
+    Compression Type: Basic
+          Data Size: 2719744
+          Zero Size: 32768
+  XEX_HEADER_ENTRY_POINT: 82C3CAA8
+  XEX_HEADER_IMAGE_BASE_ADDRESS: 82000000
+  XEX_HEADER_IMPORT_LIBRARIES:
+    xboxkrnl.exe - 329 imports
+      Version: 2.0.7978.0
+      Min Version: 2.0.7363.0
+    xam.xex - 204 imports
+      Version: 2.0.7978.0
+      Min Version: 2.0.7363.0
+  XEX_HEADER_CHECKSUM_TIMESTAMP:
+    Checksum : 016CBD86
+    Time Stamp: 49AC622A - Mon Mar  2 19:48:10 2009
+  XEX_HEADER_ORIGINAL_PE_NAME: WGame-XeReleaseLTCG.exe
+  XEX_HEADER_STATIC_LIBRARIES:
+    LIBCMT   : 2.0.7978.3
+    XAPILIB  : 2.0.7978.3
+    XHV      : 2.0.7978.3
+    XGRAPHC  : 2.0.7978.3
+    D3DX9    : 2.0.7978.3
+    XBOXKRNL : 2.0.7978.3
+    XONLINE  : 2.0.7978.3
+    XMP      : 2.0.7978.3
+    D3D9LTCG : 2.0.7978.3
+    XAUDLTCG : 2.0.7978.3
+    X3DAUDL  : 2.0.7978.3
+  XEX_HEADER_TLS_INFO:
+          Slot Count: 64
+    Raw Data Address: 00000000
+           Data Size: 0
+       Raw Data Size: 0
+  XEX_HEADER_DEFAULT_STACK_SIZE: 327680
+  XEX_HEADER_SYSTEM_FLAGS: 00000600
+    XEX_SYSTEM_USES_GAME_VOICE_CHANNEL
+    XEX_SYSTEM_PAL50_INCOMPATIBLE
+  XEX_HEADER_EXECUTION_INFO:
+       Media ID: 09FF5403
+       Title ID: 41560816
+    Savegame ID: 41560816
+    Disc Number / Total: 1 / 1
+  XEX_HEADER_GAME_RATINGS:
+          ESRB: Mature 17+
+          PEGI: 18+
+          PEGI-FI: 18+
+          PEGI - PT: 18+
+          BBFC: 18+
+          CERO: Unrated
+          USK: Unrated
+          OFLC - AU: Mature Accompanied
+          OFLC - NZ: R15
+          KMRB: Unrated
+          Brazil: Unrated
+          FPB: Unrated
+  XEX_HEADER_LAN_KEY: 3E 9B BB 67 1A 16 B2 C5 68 76 9A C2 32 A1 59 AA
+  XEX_HEADER_XBOX360_LOGO:
+          Section Size: 1736
+          Logo Size: 1728
+Sections:
+    0 RODATA    1 pages    82000000 - 82010000 (65536 bytes)
+    1 RODATA    1 pages    82010000 - 82020000 (65536 bytes)
+    2 RODATA    1 pages    82020000 - 82030000 (65536 bytes)
+    3 RODATA    1 pages    82030000 - 82040000 (65536 bytes)
+    4 RODATA    1 pages    82040000 - 82050000 (65536 bytes)
+    5 RODATA    1 pages    82050000 - 82060000 (65536 bytes)
+    6 RODATA    1 pages    82060000 - 82070000 (65536 bytes)
+    7 RODATA    1 pages    82070000 - 82080000 (65536 bytes)
+    8 RODATA    1 pages    82080000 - 82090000 (65536 bytes)
+    9 RODATA    1 pages    82090000 - 820A0000 (65536 bytes)
+   10 RODATA    1 pages    820A0000 - 820B0000 (65536 bytes)
+   11 RODATA    1 pages    820B0000 - 820C0000 (65536 bytes)
+   12 RODATA    1 pages    820C0000 - 820D0000 (65536 bytes)
+   13 RODATA    1 pages    820D0000 - 820E0000 (65536 bytes)
+   14 RODATA    1 pages    820E0000 - 820F0000 (65536 bytes)
+   15 RODATA    1 pages    820F0000 - 82100000 (65536 bytes)
+   16 RODATA    1 pages    82100000 - 82110000 (65536 bytes)
+   17 RODATA    1 pages    82110000 - 82120000 (65536 bytes)
+   18 RODATA    1 pages    82120000 - 82130000 (65536 bytes)
+   19 RODATA    1 pages    82130000 - 82140000 (65536 bytes)
+   20 RODATA    1 pages    82140000 - 82150000 (65536 bytes)
+   21 RODATA    1 pages    82150000 - 82160000 (65536 bytes)
+   22 RODATA    1 pages    82160000 - 82170000 (65536 bytes)
+   23 RODATA    1 pages    82170000 - 82180000 (65536 bytes)
+   24 RODATA    1 pages    82180000 - 82190000 (65536 bytes)
+   25 RODATA    1 pages    82190000 - 821A0000 (65536 bytes)
+   26 RODATA    1 pages    821A0000 - 821B0000 (65536 bytes)
+   27 RODATA    1 pages    821B0000 - 821C0000 (65536 bytes)
+   28 RODATA    1 pages    821C0000 - 821D0000 (65536 bytes)
+   29 RODATA    1 pages    821D0000 - 821E0000 (65536 bytes)
+   30 RODATA    1 pages    821E0000 - 821F0000 (65536 bytes)
+   31 RODATA    1 pages    821F0000 - 82200000 (65536 bytes)
+   32 RODATA    1 pages    82200000 - 82210000 (65536 bytes)
+   33 RODATA    1 pages    82210000 - 82220000 (65536 bytes)
+   34 RODATA    1 pages    82220000 - 82230000 (65536 bytes)
+   35 RODATA    1 pages    82230000 - 82240000 (65536 bytes)
+   36 RODATA    1 pages    82240000 - 82250000 (65536 bytes)
+   37 RODATA    1 pages    82250000 - 82260000 (65536 bytes)
+   38 RODATA    1 pages    82260000 - 82270000 (65536 bytes)
+   39 RODATA    1 pages    82270000 - 82280000 (65536 bytes)
+   40 RODATA    1 pages    82280000 - 82290000 (65536 bytes)
+   41 RODATA    1 pages    82290000 - 822A0000 (65536 bytes)
+   42 CODE      1 pages    822A0000 - 822B0000 (65536 bytes)
+   43 CODE      1 pages    822B0000 - 822C0000 (65536 bytes)
+   44 CODE      1 pages    822C0000 - 822D0000 (65536 bytes)
+   45 CODE      1 pages    822D0000 - 822E0000 (65536 bytes)
+   46 CODE      1 pages    822E0000 - 822F0000 (65536 bytes)
+   47 CODE      1 pages    822F0000 - 82300000 (65536 bytes)
+   48 CODE      1 pages    82300000 - 82310000 (65536 bytes)
+   49 CODE      1 pages    82310000 - 82320000 (65536 bytes)
+   50 CODE      1 pages    82320000 - 82330000 (65536 bytes)
+   51 CODE      1 pages    82330000 - 82340000 (65536 bytes)
+   52 CODE      1 pages    82340000 - 82350000 (65536 bytes)
+   53 CODE      1 pages    82350000 - 82360000 (65536 bytes)
+   54 CODE      1 pages    82360000 - 82370000 (65536 bytes)
+   55 CODE      1 pages    82370000 - 82380000 (65536 bytes)
+   56 CODE      1 pages    82380000 - 82390000 (65536 bytes)
+   57 CODE      1 pages    82390000 - 823A0000 (65536 bytes)
+   58 CODE      1 pages    823A0000 - 823B0000 (65536 bytes)
+   59 CODE      1 pages    823B0000 - 823C0000 (65536 bytes)
+   60 CODE      1 pages    823C0000 - 823D0000 (65536 bytes)
+   61 CODE      1 pages    823D0000 - 823E0000 (65536 bytes)
+   62 CODE      1 pages    823E0000 - 823F0000 (65536 bytes)
+   63 CODE      1 pages    823F0000 - 82400000 (65536 bytes)
+   64 CODE      1 pages    82400000 - 82410000 (65536 bytes)
+   65 CODE      1 pages    82410000 - 82420000 (65536 bytes)
+   66 CODE      1 pages    82420000 - 82430000 (65536 bytes)
+   67 CODE      1 pages    82430000 - 82440000 (65536 bytes)
+   68 CODE      1 pages    82440000 - 82450000 (65536 bytes)
+   69 CODE      1 pages    82450000 - 82460000 (65536 bytes)
+   70 CODE      1 pages    82460000 - 82470000 (65536 bytes)
+   71 CODE      1 pages    82470000 - 82480000 (65536 bytes)
+   72 CODE      1 pages    82480000 - 82490000 (65536 bytes)
+   73 CODE      1 pages    82490000 - 824A0000 (65536 bytes)
+   74 CODE      1 pages    824A0000 - 824B0000 (65536 bytes)
+   75 CODE      1 pages    824B0000 - 824C0000 (65536 bytes)
+   76 CODE      1 pages    824C0000 - 824D0000 (65536 bytes)
+   77 CODE      1 pages    824D0000 - 824E0000 (65536 bytes)
+   78 CODE      1 pages    824E0000 - 824F0000 (65536 bytes)
+   79 CODE      1 pages    824F0000 - 82500000 (65536 bytes)
+   80 CODE      1 pages    82500000 - 82510000 (65536 bytes)
+   81 CODE      1 pages    82510000 - 82520000 (65536 bytes)
+   82 CODE      1 pages    82520000 - 82530000 (65536 bytes)
+   83 CODE      1 pages    82530000 - 82540000 (65536 bytes)
+   84 CODE      1 pages    82540000 - 82550000 (65536 bytes)
+   85 CODE      1 pages    82550000 - 82560000 (65536 bytes)
+   86 CODE      1 pages    82560000 - 82570000 (65536 bytes)
+   87 CODE      1 pages    82570000 - 82580000 (65536 bytes)
+   88 CODE      1 pages    82580000 - 82590000 (65536 bytes)
+   89 CODE      1 pages    82590000 - 825A0000 (65536 bytes)
+   90 CODE      1 pages    825A0000 - 825B0000 (65536 bytes)
+   91 CODE      1 pages    825B0000 - 825C0000 (65536 bytes)
+   92 CODE      1 pages    825C0000 - 825D0000 (65536 bytes)
+   93 CODE      1 pages    825D0000 - 825E0000 (65536 bytes)
+   94 CODE      1 pages    825E0000 - 825F0000 (65536 bytes)
+   95 CODE      1 pages    825F0000 - 82600000 (65536 bytes)
+   96 CODE      1 pages    82600000 - 82610000 (65536 bytes)
+   97 CODE      1 pages    82610000 - 82620000 (65536 bytes)
+   98 CODE      1 pages    82620000 - 82630000 (65536 bytes)
+   99 CODE      1 pages    82630000 - 82640000 (65536 bytes)
+  100 CODE      1 pages    82640000 - 82650000 (65536 bytes)
+  101 CODE      1 pages    82650000 - 82660000 (65536 bytes)
+  102 CODE      1 pages    82660000 - 82670000 (65536 bytes)
+  103 CODE      1 pages    82670000 - 82680000 (65536 bytes)
+  104 CODE      1 pages    82680000 - 82690000 (65536 bytes)
+  105 CODE      1 pages    82690000 - 826A0000 (65536 bytes)
+  106 CODE      1 pages    826A0000 - 826B0000 (65536 bytes)
+  107 CODE      1 pages    826B0000 - 826C0000 (65536 bytes)
+  108 CODE      1 pages    826C0000 - 826D0000 (65536 bytes)
+  109 CODE      1 pages    826D0000 - 826E0000 (65536 bytes)
+  110 CODE      1 pages    826E0000 - 826F0000 (65536 bytes)
+  111 CODE      1 pages    826F0000 - 82700000 (65536 bytes)
+  112 CODE      1 pages    82700000 - 82710000 (65536 bytes)
+  113 CODE      1 pages    82710000 - 82720000 (65536 bytes)
+  114 CODE      1 pages    82720000 - 82730000 (65536 bytes)
+  115 CODE      1 pages    82730000 - 82740000 (65536 bytes)
+  116 CODE      1 pages    82740000 - 82750000 (65536 bytes)
+  117 CODE      1 pages    82750000 - 82760000 (65536 bytes)
+  118 CODE      1 pages    82760000 - 82770000 (65536 bytes)
+  119 CODE      1 pages    82770000 - 82780000 (65536 bytes)
+  120 CODE      1 pages    82780000 - 82790000 (65536 bytes)
+  121 CODE      1 pages    82790000 - 827A0000 (65536 bytes)
+  122 CODE      1 pages    827A0000 - 827B0000 (65536 bytes)
+  123 CODE      1 pages    827B0000 - 827C0000 (65536 bytes)
+  124 CODE      1 pages    827C0000 - 827D0000 (65536 bytes)
+  125 CODE      1 pages    827D0000 - 827E0000 (65536 bytes)
+  126 CODE      1 pages    827E0000 - 827F0000 (65536 bytes)
+  127 CODE      1 pages    827F0000 - 82800000 (65536 bytes)
+  128 CODE      1 pages    82800000 - 82810000 (65536 bytes)
+  129 CODE      1 pages    82810000 - 82820000 (65536 bytes)
+  130 CODE      1 pages    82820000 - 82830000 (65536 bytes)
+  131 CODE      1 pages    82830000 - 82840000 (65536 bytes)
+  132 CODE      1 pages    82840000 - 82850000 (65536 bytes)
+  133 CODE      1 pages    82850000 - 82860000 (65536 bytes)
+  134 CODE      1 pages    82860000 - 82870000 (65536 bytes)
+  135 CODE      1 pages    82870000 - 82880000 (65536 bytes)
+  136 CODE      1 pages    82880000 - 82890000 (65536 bytes)
+  137 CODE      1 pages    82890000 - 828A0000 (65536 bytes)
+  138 CODE      1 pages    828A0000 - 828B0000 (65536 bytes)
+  139 CODE      1 pages    828B0000 - 828C0000 (65536 bytes)
+  140 CODE      1 pages    828C0000 - 828D0000 (65536 bytes)
+  141 CODE      1 pages    828D0000 - 828E0000 (65536 bytes)
+  142 CODE      1 pages    828E0000 - 828F0000 (65536 bytes)
+  143 CODE      1 pages    828F0000 - 82900000 (65536 bytes)
+  144 CODE      1 pages    82900000 - 82910000 (65536 bytes)
+  145 CODE      1 pages    82910000 - 82920000 (65536 bytes)
+  146 CODE      1 pages    82920000 - 82930000 (65536 bytes)
+  147 CODE      1 pages    82930000 - 82940000 (65536 bytes)
+  148 CODE      1 pages    82940000 - 82950000 (65536 bytes)
+  149 CODE      1 pages    82950000 - 82960000 (65536 bytes)
+  150 CODE      1 pages    82960000 - 82970000 (65536 bytes)
+  151 CODE      1 pages    82970000 - 82980000 (65536 bytes)
+  152 CODE      1 pages    82980000 - 82990000 (65536 bytes)
+  153 CODE      1 pages    82990000 - 829A0000 (65536 bytes)
+  154 CODE      1 pages    829A0000 - 829B0000 (65536 bytes)
+  155 CODE      1 pages    829B0000 - 829C0000 (65536 bytes)
+  156 CODE      1 pages    829C0000 - 829D0000 (65536 bytes)
+  157 CODE      1 pages    829D0000 - 829E0000 (65536 bytes)
+  158 CODE      1 pages    829E0000 - 829F0000 (65536 bytes)
+  159 CODE      1 pages    829F0000 - 82A00000 (65536 bytes)
+  160 CODE      1 pages    82A00000 - 82A10000 (65536 bytes)
+  161 CODE      1 pages    82A10000 - 82A20000 (65536 bytes)
+  162 CODE      1 pages    82A20000 - 82A30000 (65536 bytes)
+  163 CODE      1 pages    82A30000 - 82A40000 (65536 bytes)
+  164 CODE      1 pages    82A40000 - 82A50000 (65536 bytes)
+  165 CODE      1 pages    82A50000 - 82A60000 (65536 bytes)
+  166 CODE      1 pages    82A60000 - 82A70000 (65536 bytes)
+  167 CODE      1 pages    82A70000 - 82A80000 (65536 bytes)
+  168 CODE      1 pages    82A80000 - 82A90000 (65536 bytes)
+  169 CODE      1 pages    82A90000 - 82AA0000 (65536 bytes)
+  170 CODE      1 pages    82AA0000 - 82AB0000 (65536 bytes)
+  171 CODE      1 pages    82AB0000 - 82AC0000 (65536 bytes)
+  172 CODE      1 pages    82AC0000 - 82AD0000 (65536 bytes)
+  173 CODE      1 pages    82AD0000 - 82AE0000 (65536 bytes)
+  174 CODE      1 pages    82AE0000 - 82AF0000 (65536 bytes)
+  175 CODE      1 pages    82AF0000 - 82B00000 (65536 bytes)
+  176 CODE      1 pages    82B00000 - 82B10000 (65536 bytes)
+  177 CODE      1 pages    82B10000 - 82B20000 (65536 bytes)
+  178 CODE      1 pages    82B20000 - 82B30000 (65536 bytes)
+  179 CODE      1 pages    82B30000 - 82B40000 (65536 bytes)
+  180 CODE      1 pages    82B40000 - 82B50000 (65536 bytes)
+  181 CODE      1 pages    82B50000 - 82B60000 (65536 bytes)
+  182 CODE      1 pages    82B60000 - 82B70000 (65536 bytes)
+  183 CODE      1 pages    82B70000 - 82B80000 (65536 bytes)
+  184 CODE      1 pages    82B80000 - 82B90000 (65536 bytes)
+  185 CODE      1 pages    82B90000 - 82BA0000 (65536 bytes)
+  186 CODE      1 pages    82BA0000 - 82BB0000 (65536 bytes)
+  187 CODE      1 pages    82BB0000 - 82BC0000 (65536 bytes)
+  188 CODE      1 pages    82BC0000 - 82BD0000 (65536 bytes)
+  189 CODE      1 pages    82BD0000 - 82BE0000 (65536 bytes)
+  190 CODE      1 pages    82BE0000 - 82BF0000 (65536 bytes)
+  191 CODE      1 pages    82BF0000 - 82C00000 (65536 bytes)
+  192 CODE      1 pages    82C00000 - 82C10000 (65536 bytes)
+  193 CODE      1 pages    82C10000 - 82C20000 (65536 bytes)
+  194 CODE      1 pages    82C20000 - 82C30000 (65536 bytes)
+  195 CODE      1 pages    82C30000 - 82C40000 (65536 bytes)
+  196 CODE      1 pages    82C40000 - 82C50000 (65536 bytes)
+  197 CODE      1 pages    82C50000 - 82C60000 (65536 bytes)
+  198 CODE      1 pages    82C60000 - 82C70000 (65536 bytes)
+  199 CODE      1 pages    82C70000 - 82C80000 (65536 bytes)
+  200 CODE      1 pages    82C80000 - 82C90000 (65536 bytes)
+  201 CODE      1 pages    82C90000 - 82CA0000 (65536 bytes)
+  202 CODE      1 pages    82CA0000 - 82CB0000 (65536 bytes)
+  203 CODE      1 pages    82CB0000 - 82CC0000 (65536 bytes)
+  204 CODE      1 pages    82CC0000 - 82CD0000 (65536 bytes)
+  205 CODE      1 pages    82CD0000 - 82CE0000 (65536 bytes)
+  206 CODE      1 pages    82CE0000 - 82CF0000 (65536 bytes)
+  207 CODE      1 pages    82CF0000 - 82D00000 (65536 bytes)
+  208 CODE      1 pages    82D00000 - 82D10000 (65536 bytes)
+  209 CODE      1 pages    82D10000 - 82D20000 (65536 bytes)
+  210 CODE      1 pages    82D20000 - 82D30000 (65536 bytes)
+  211 CODE      1 pages    82D30000 - 82D40000 (65536 bytes)
+  212 CODE      1 pages    82D40000 - 82D50000 (65536 bytes)
+  213 CODE      1 pages    82D50000 - 82D60000 (65536 bytes)
+  214 CODE      1 pages    82D60000 - 82D70000 (65536 bytes)
+  215 CODE      1 pages    82D70000 - 82D80000 (65536 bytes)
+  216 CODE      1 pages    82D80000 - 82D90000 (65536 bytes)
+  217 CODE      1 pages    82D90000 - 82DA0000 (65536 bytes)
+  218 CODE      1 pages    82DA0000 - 82DB0000 (65536 bytes)
+  219 CODE      1 pages    82DB0000 - 82DC0000 (65536 bytes)
+  220 CODE      1 pages    82DC0000 - 82DD0000 (65536 bytes)
+  221 CODE      1 pages    82DD0000 - 82DE0000 (65536 bytes)
+  222 CODE      1 pages    82DE0000 - 82DF0000 (65536 bytes)
+  223 CODE      1 pages    82DF0000 - 82E00000 (65536 bytes)
+  224 CODE      1 pages    82E00000 - 82E10000 (65536 bytes)
+  225 CODE      1 pages    82E10000 - 82E20000 (65536 bytes)
+  226 CODE      1 pages    82E20000 - 82E30000 (65536 bytes)
+  227 CODE      1 pages    82E30000 - 82E40000 (65536 bytes)
+  228 CODE      1 pages    82E40000 - 82E50000 (65536 bytes)
+  229 CODE      1 pages    82E50000 - 82E60000 (65536 bytes)
+  230 CODE      1 pages    82E60000 - 82E70000 (65536 bytes)
+  231 CODE      1 pages    82E70000 - 82E80000 (65536 bytes)
+  232 CODE      1 pages    82E80000 - 82E90000 (65536 bytes)
+  233 CODE      1 pages    82E90000 - 82EA0000 (65536 bytes)
+  234 CODE      1 pages    82EA0000 - 82EB0000 (65536 bytes)
+  235 CODE      1 pages    82EB0000 - 82EC0000 (65536 bytes)
+  236 CODE      1 pages    82EC0000 - 82ED0000 (65536 bytes)
+  237 CODE      1 pages    82ED0000 - 82EE0000 (65536 bytes)
+  238 CODE      1 pages    82EE0000 - 82EF0000 (65536 bytes)
+  239 CODE      1 pages    82EF0000 - 82F00000 (65536 bytes)
+  240 CODE      1 pages    82F00000 - 82F10000 (65536 bytes)
+  241 CODE      1 pages    82F10000 - 82F20000 (65536 bytes)
+  242 CODE      1 pages    82F20000 - 82F30000 (65536 bytes)
+  243 CODE      1 pages    82F30000 - 82F40000 (65536 bytes)
+  244 CODE      1 pages    82F40000 - 82F50000 (65536 bytes)
+  245 CODE      1 pages    82F50000 - 82F60000 (65536 bytes)
+  246 CODE      1 pages    82F60000 - 82F70000 (65536 bytes)
+  247 CODE      1 pages    82F70000 - 82F80000 (65536 bytes)
+  248 CODE      1 pages    82F80000 - 82F90000 (65536 bytes)
+  249 CODE      1 pages    82F90000 - 82FA0000 (65536 bytes)
+  250 CODE      1 pages    82FA0000 - 82FB0000 (65536 bytes)
+  251 CODE      1 pages    82FB0000 - 82FC0000 (65536 bytes)
+  252 CODE      1 pages    82FC0000 - 82FD0000 (65536 bytes)
+  253 CODE      1 pages    82FD0000 - 82FE0000 (65536 bytes)
+  254 CODE      1 pages    82FE0000 - 82FF0000 (65536 bytes)
+  255 CODE      1 pages    82FF0000 - 83000000 (65536 bytes)
+  256 CODE      1 pages    83000000 - 83010000 (65536 bytes)
+  257 CODE      1 pages    83010000 - 83020000 (65536 bytes)
+  258 CODE      1 pages    83020000 - 83030000 (65536 bytes)
+  259 CODE      1 pages    83030000 - 83040000 (65536 bytes)
+  260 CODE      1 pages    83040000 - 83050000 (65536 bytes)
+  261 CODE      1 pages    83050000 - 83060000 (65536 bytes)
+  262 CODE      1 pages    83060000 - 83070000 (65536 bytes)
+  263 CODE      1 pages    83070000 - 83080000 (65536 bytes)
+  264 CODE      1 pages    83080000 - 83090000 (65536 bytes)
+  265 CODE      1 pages    83090000 - 830A0000 (65536 bytes)
+  266 CODE      1 pages    830A0000 - 830B0000 (65536 bytes)
+  267 CODE      1 pages    830B0000 - 830C0000 (65536 bytes)
+  268 CODE      1 pages    830C0000 - 830D0000 (65536 bytes)
+  269 CODE      1 pages    830D0000 - 830E0000 (65536 bytes)
+  270 CODE      1 pages    830E0000 - 830F0000 (65536 bytes)
+  271 CODE      1 pages    830F0000 - 83100000 (65536 bytes)
+  272 CODE      1 pages    83100000 - 83110000 (65536 bytes)
+  273 CODE      1 pages    83110000 - 83120000 (65536 bytes)
+  274 CODE      1 pages    83120000 - 83130000 (65536 bytes)
+  275 CODE      1 pages    83130000 - 83140000 (65536 bytes)
+  276 CODE      1 pages    83140000 - 83150000 (65536 bytes)
+  277 CODE      1 pages    83150000 - 83160000 (65536 bytes)
+  278 CODE      1 pages    83160000 - 83170000 (65536 bytes)
+  279 CODE      1 pages    83170000 - 83180000 (65536 bytes)
+  280 CODE      1 pages    83180000 - 83190000 (65536 bytes)
+  281 CODE      1 pages    83190000 - 831A0000 (65536 bytes)
+  282 CODE      1 pages    831A0000 - 831B0000 (65536 bytes)
+  283 CODE      1 pages    831B0000 - 831C0000 (65536 bytes)
+  284 CODE      1 pages    831C0000 - 831D0000 (65536 bytes)
+  285 CODE      1 pages    831D0000 - 831E0000 (65536 bytes)
+  286 CODE      1 pages    831E0000 - 831F0000 (65536 bytes)
+  287 CODE      1 pages    831F0000 - 83200000 (65536 bytes)
+  288 CODE      1 pages    83200000 - 83210000 (65536 bytes)
+  289 CODE      1 pages    83210000 - 83220000 (65536 bytes)
+  290 CODE      1 pages    83220000 - 83230000 (65536 bytes)
+  291 CODE      1 pages    83230000 - 83240000 (65536 bytes)
+  292 CODE      1 pages    83240000 - 83250000 (65536 bytes)
+  293 CODE      1 pages    83250000 - 83260000 (65536 bytes)
+  294 CODE      1 pages    83260000 - 83270000 (65536 bytes)
+  295 CODE      1 pages    83270000 - 83280000 (65536 bytes)
+  296 RWDATA    1 pages    83280000 - 83290000 (65536 bytes)
+  297 RWDATA    1 pages    83290000 - 832A0000 (65536 bytes)
+  298 RWDATA    1 pages    832A0000 - 832B0000 (65536 bytes)
+  299 RWDATA    1 pages    832B0000 - 832C0000 (65536 bytes)
+  300 RWDATA    1 pages    832C0000 - 832D0000 (65536 bytes)
+  301 RWDATA    1 pages    832D0000 - 832E0000 (65536 bytes)
+  302 RWDATA    1 pages    832E0000 - 832F0000 (65536 bytes)
+  303 RWDATA    1 pages    832F0000 - 83300000 (65536 bytes)
+  304 RWDATA    1 pages    83300000 - 83310000 (65536 bytes)
+  305 RWDATA    1 pages    83310000 - 83320000 (65536 bytes)
+  306 RWDATA    1 pages    83320000 - 83330000 (65536 bytes)
+  307 RWDATA    1 pages    83330000 - 83340000 (65536 bytes)
+  308 RWDATA    1 pages    83340000 - 83350000 (65536 bytes)
+  309 RWDATA    1 pages    83350000 - 83360000 (65536 bytes)
+  310 RWDATA    1 pages    83360000 - 83370000 (65536 bytes)
+  311 RWDATA    1 pages    83370000 - 83380000 (65536 bytes)
+  312 RWDATA    1 pages    83380000 - 83390000 (65536 bytes)
+  313 RWDATA    1 pages    83390000 - 833A0000 (65536 bytes)
+  314 RWDATA    1 pages    833A0000 - 833B0000 (65536 bytes)
+  315 RWDATA    1 pages    833B0000 - 833C0000 (65536 bytes)
+  316 RWDATA    1 pages    833C0000 - 833D0000 (65536 bytes)
+  317 RWDATA    1 pages    833D0000 - 833E0000 (65536 bytes)
+  318 RWDATA    1 pages    833E0000 - 833F0000 (65536 bytes)
+  319 RWDATA    1 pages    833F0000 - 83400000 (65536 bytes)
+  320 RWDATA    1 pages    83400000 - 83410000 (65536 bytes)
+  321 RWDATA    1 pages    83410000 - 83420000 (65536 bytes)
+  322 RWDATA    1 pages    83420000 - 83430000 (65536 bytes)
+  323 RWDATA    1 pages    83430000 - 83440000 (65536 bytes)
+  324 RWDATA    1 pages    83440000 - 83450000 (65536 bytes)
+  325 RWDATA    1 pages    83450000 - 83460000 (65536 bytes)
+  326 RWDATA    1 pages    83460000 - 83470000 (65536 bytes)
+  327 RWDATA    1 pages    83470000 - 83480000 (65536 bytes)
+  328 RWDATA    1 pages    83480000 - 83490000 (65536 bytes)
+  329 RWDATA    1 pages    83490000 - 834A0000 (65536 bytes)
+  330 RWDATA    1 pages    834A0000 - 834B0000 (65536 bytes)
+  331 RWDATA    1 pages    834B0000 - 834C0000 (65536 bytes)
+  332 RWDATA    1 pages    834C0000 - 834D0000 (65536 bytes)
+  333 RWDATA    1 pages    834D0000 - 834E0000 (65536 bytes)
+  334 RWDATA    1 pages    834E0000 - 834F0000 (65536 bytes)
+  335 RWDATA    1 pages    834F0000 - 83500000 (65536 bytes)
+  336 RWDATA    1 pages    83500000 - 83510000 (65536 bytes)
+  337 RWDATA    1 pages    83510000 - 83520000 (65536 bytes)
+  338 RWDATA    1 pages    83520000 - 83530000 (65536 bytes)
+  339 RWDATA    1 pages    83530000 - 83540000 (65536 bytes)
+  340 RWDATA    1 pages    83540000 - 83550000 (65536 bytes)
+  341 RWDATA    1 pages    83550000 - 83560000 (65536 bytes)
+  342 RWDATA    1 pages    83560000 - 83570000 (65536 bytes)
+  343 RWDATA    1 pages    83570000 - 83580000 (65536 bytes)
+  344 RWDATA    1 pages    83580000 - 83590000 (65536 bytes)
+  345 RWDATA    1 pages    83590000 - 835A0000 (65536 bytes)
+  346 RWDATA    1 pages    835A0000 - 835B0000 (65536 bytes)
+  347 RWDATA    1 pages    835B0000 - 835C0000 (65536 bytes)
+  348 RWDATA    1 pages    835C0000 - 835D0000 (65536 bytes)
+  349 RWDATA    1 pages    835D0000 - 835E0000 (65536 bytes)
+  350 RWDATA    1 pages    835E0000 - 835F0000 (65536 bytes)
+  351 RWDATA    1 pages    835F0000 - 83600000 (65536 bytes)
+  352 RWDATA    1 pages    83600000 - 83610000 (65536 bytes)
+  353 RWDATA    1 pages    83610000 - 83620000 (65536 bytes)
+  354 RWDATA    1 pages    83620000 - 83630000 (65536 bytes)
+  355 RODATA    1 pages    83630000 - 83640000 (65536 bytes)
+  356 RODATA    1 pages    83640000 - 83650000 (65536 bytes)
+  357 RODATA    1 pages    83650000 - 83660000 (65536 bytes)
+  358 RODATA    1 pages    83660000 - 83670000 (65536 bytes)
+  359 RODATA    1 pages    83670000 - 83680000 (65536 bytes)
+  360 RODATA    1 pages    83680000 - 83690000 (65536 bytes)
+  361 RODATA    1 pages    83690000 - 836A0000 (65536 bytes)
+  362 RODATA    1 pages    836A0000 - 836B0000 (65536 bytes)
+  363 RODATA    1 pages    836B0000 - 836C0000 (65536 bytes)
+  364 RODATA    1 pages    836C0000 - 836D0000 (65536 bytes)
+  365 RODATA    1 pages    836D0000 - 836E0000 (65536 bytes)
+Imports:
+ xboxkrnl - 170 imports
+   Version: 0.0.7978.32
+   Min Version: 0.0.7363.32
+
+         Total:  170
+         Known:  100% (170 known, 0 unknown)
+   Implemented:   92% (157 implemented, 13 unimplemented)
+
+   F 8200059C 832634BC 099 ( 153)    KeSetBasePriorityThread
+   F 820005A0 832634CC 110 ( 272)    ObReferenceObjectByHandle
+   V 820005A4          01B (  27)    ExThreadObjectType
+   F 820005A8 832634DC 0FC ( 252)    NtSuspendThread
+   F 820005AC 832634EC 097 ( 151)    KeSetAffinityThread
+   F 820005B0 832634FC 0E2 ( 226)    NtPulseEvent
+   F 820005B4 8326350C 0D5 ( 213)    NtCreateSemaphore
+   F 820005B8 8326351C 0F3 ( 243)    NtReleaseSemaphore
+   F 820005BC 8326352C 0FE ( 254)    NtWaitForMultipleObjectsEx
+   F 820005C0 8326353C 0F6 ( 246)    NtSetEvent
+   F 820005C4 8326354C 0CE ( 206)    NtClearEvent
+   F 820005C8 8326355C 0F5 ( 245)    NtResumeThread
+   F 820005CC 8326356C 0F2 ( 242)    NtReleaseMutant
+   F 820005D0 8326357C 0D4 ( 212)    NtCreateMutant
+   F 820005D4 8326358C 126 ( 294)    RtlFillMemoryUlong
+   F 820005D8 8326359C 053 (  83)    KeBugCheckEx
+   F 820005DC 832635AC 066 ( 102)    KeGetCurrentProcessType
+   F 820005E0 832635BC 11B ( 283)    RtlCompareMemoryUlong
+   F 820005E4 832635CC 136 ( 310)    RtlRaiseException
+   F 820005E8 832635DC 019 (  25)    ExTerminateThread
+   F 820005EC 832635EC 127 ( 295)    RtlFreeAnsiString
+   F 820005F0 832635FC 142 ( 322)    RtlUnicodeStringToAnsiString
+   F 820005F4 8326360C 12D ( 301)    RtlInitUnicodeString
+   F 820005F8 8326361C 028 (  40)    HalReturnToFirmware
+   F 820005FC 8326362C 0E4 ( 228)    NtQueryDirectoryFile
+   F 82000600 8326363C 0F1 ( 241)    NtReadFileScatter
+   F 82000604 8326364C 0DA ( 218)    NtDuplicateObject
+   F 82000608 8326365C 041 (  65) !! IoInvalidDeviceRequest
+   F 8200060C 8326366C 10F ( 271)    ObReferenceObject
+   F 82000610 8326367C 037 (  55)    IoCreateDevice
+   F 82000614 8326368C 039 (  57)    IoDeleteDevice
+   F 82000618 8326369C 00B (  11)    ExAllocatePoolTypeWithTag
+   F 8200061C 832636AC 11D ( 285)    RtlCompareStringN
+   F 82000620 832636BC 035 (  53) !! IoCompleteRequest
+   F 82000624 832636CC 0B4 ( 180)    KfReleaseSpinLock
+   F 82000628 832636DC 0B1 ( 177)    KfAcquireSpinLock
+   F 8200062C 832636EC 00D (  13)    ExCreateThread
+   F 82000630 832636FC 149 ( 329)    RtlUpcaseUnicodeChar
+   F 82000634 8326370C 109 ( 265) !! ObIsTitleObject
+   F 82000638 8326371C 034 (  52) !! IoCheckShareAccess
+   F 8200063C 8326372C 047 (  71) !! IoSetShareAccess
+   F 82000640 8326373C 045 (  69) !! IoRemoveShareAccess
+   F 82000644 8326374C 03C (  60) !! IoDismountVolumeByFileHandle
+   F 82000648 8326375C 0D9 ( 217)    NtDeviceIoControlFile
+   F 8200064C 8326376C 05A (  90)    KeDelayExecutionThread
+   F 82000650 8326377C 14D ( 333)    _vsnprintf
+   V 82000654          1BE ( 446)    VdGlobalDevice
+   V 82000658          1BF ( 447)    VdGlobalXamDevice
+   F 8200065C 8326378C 1D9 ( 473)    VdSetSystemCommandBufferGpuIdentifierAddress
+   F 82000660 8326379C 1DF ( 479)    KiApcNormalRoutineNop
+   F 82000664 832637AC 0BE ( 190)    MmGetPhysicalAddress
+   F 82000668 832637BC 089 ( 137)    KeReleaseSpinLockFromRaisedIrql
+   F 8200066C 832637CC 1B6 ( 438)    VdEnableRingBufferRPtrWriteBack
+   F 82000670 832637DC 1C3 ( 451)    VdInitializeRingBuffer
+   F 82000674 832637EC 04D (  77)    KeAcquireSpinLockAtRaisedIrql
+   F 82000678 832637FC 1B4 ( 436)    VdEnableDisableClockGating
+   F 8200067C 8326380C 1C7 ( 455)    VdPersistDisplay
+   F 82000680 8326381C 25B ( 603)    VdSwap
+   F 82000684 8326382C 1BD ( 445)    VdGetSystemCommandBuffer
+   V 82000688          266 ( 614)    KeCertMonitorData
+   F 8200068C 8326383C 13B ( 315)    sprintf
+   F 82000690 8326384C 1B9 ( 441)    VdGetCurrentDisplayGamma
+   F 82000694 8326385C 06B ( 107)    KeLockL2
+   F 82000698 8326386C 06C ( 108)    KeUnlockL2
+   F 8200069C 8326387C 1CA ( 458)    VdQueryVideoMode
+   F 820006A0 8326388C 1C5 ( 453)    VdInitializeScalerCommandBuffer
+   F 820006A4 8326389C 1C9 ( 457)    VdQueryVideoFlags
+   V 820006A8          1C0 ( 448)    VdGpuClockInMHz
+   F 820006AC 832638AC 1B1 ( 433)    VdCallGraphicsNotificationRoutines
+   F 820006B0 832638BC 1BA ( 442)    VdGetCurrentDisplayInformation
+   F 820006B4 832638CC 1D3 ( 467)    VdSetDisplayMode
+   F 820006B8 832638DC 1D5 ( 469)    VdSetGraphicsInterruptCallback
+   F 820006BC 832638EC 1C2 ( 450)    VdInitializeEngines
+   F 820006C0 832638FC 1C6 ( 454)    VdIsHSIOTrainingSucceeded
+   F 820006C4 8326390C 1DC ( 476)    VdShutdownEngines
+   F 820006C8 8326391C 269 ( 617)    VdRetrainEDRAM
+   F 820006CC 8326392C 26A ( 618)    VdRetrainEDRAMWorker
+   V 820006D0          1C1 ( 449)    VdHSIOCalibrationLock
+   F 820006D4 832634AC 001 (   1)    DbgBreakPoint
+   F 820006D8 8326349C 0D7 ( 215)    NtCreateTimer
+   F 820006DC 8326348C 083 ( 131)    KeQueryPerformanceFrequency
+   F 820006E0 8326347C 196 ( 406)    XexGetModuleSection
+   F 820006E4 8326346C 197 ( 407)    XexGetProcedureAddress
+   F 820006E8 8326345C 195 ( 405)    XexGetModuleHandle
+   F 820006EC 8326344C 021 (  33)    FscSetCacheElementCount
+   F 820006F0 8326343C 084 ( 132)    KeQuerySystemTime
+   F 820006F4 8326342C 009 (   9)    ExAllocatePool
+   F 820006F8 8326341C 00F (  15)    ExFreePool
+   F 820006FC 8326340C 140 ( 320)    RtlTimeToTimeFields
+   F 82000700 832633FC 0E7 ( 231)    NtQueryFullAttributesFile
+   F 82000704 832633EC 0C4 ( 196)    MmQueryAddressProtect
+   F 82000708 832633DC 0BD ( 189)    MmFreePhysicalMemory
+   F 8200070C 832633CC 0C7 ( 199)    MmSetAddressProtect
+   F 82000710 832633BC 0BA ( 186)    MmAllocatePhysicalMemoryEx
+   F 82000714 832633AC 0FD ( 253)    NtWaitForSingleObjectEx
+   F 82000718 8326339C 0CD ( 205)    NtCancelTimer
+   F 8200071C 8326338C 13F ( 319)    RtlTimeFieldsToTime
+   F 82000720 8326337C 0FA ( 250)    NtSetTimerEx
+   F 82000724 8326336C 0E8 ( 232)    NtQueryInformationFile
+   F 82000728 8326335C 0F7 ( 247)    NtSetInformationFile
+   F 8200072C 8326334C 015 (  21)    ExRegisterTitleTerminateNotification
+   F 82000730 8326333C 09D ( 157)    KeSetEvent
+   F 82000734 8326332C 0B0 ( 176)    KeWaitForSingleObject
+   F 82000738 8326331C 08F ( 143)    KeResetEvent
+   F 8200073C 8326330C 104 ( 260)    ObDeleteSymbolicLink
+   F 82000740 832632FC 103 ( 259)    ObCreateSymbolicLink
+   F 82000744 832632EC 03B (  59) !! IoDismountVolume
+   F 82000748 832632DC 105 ( 261)    ObDereferenceObject
+   F 8200074C 832632CC 05F (  95)    KeEnterCriticalRegion
+   F 82000750 832632BC 0DB ( 219)    NtFlushBuffersFile
+   F 82000754 832632AC 07D ( 125)    KeLeaveCriticalRegion
+   F 82000758 8326329C 13A ( 314)    _snprintf
+   F 8200075C 8326328C 0CC ( 204)    NtAllocateVirtualMemory
+   F 82000760 8326327C 0DC ( 220)    NtFreeVirtualMemory
+   F 82000764 8326326C 0D2 ( 210)    NtCreateFile
+   F 82000768 8326325C 256 ( 598)    XeKeysConsolePrivateKeySign
+   F 8200076C 8326324C 0F0 ( 240)    NtReadFile
+   F 82000770 8326323C 0FF ( 255)    NtWriteFile
+   F 82000774 8326322C 192 ( 402)    XeCryptSha
+   F 82000778 8326321C 257 ( 599) !! XeKeysConsoleSignatureVerification
+   V 8200077C          193 ( 403)    XexExecutableModuleHandle
+   F 82000780 8326320C 12B ( 299)    RtlImageXexHeaderField
+   F 82000784 832631FC 0DF ( 223)    NtOpenFile
+   F 82000788 832631EC 0EF ( 239)    NtQueryVolumeInformationFile
+   F 8200078C 832631DC 259 ( 601) !! StfsCreateDevice
+   F 82000790 832631CC 25A ( 602) !! StfsControlDevice
+   F 82000794 832631BC 0C6 ( 198)    MmQueryStatistics
+   F 82000798 832631AC 0EE ( 238)    NtQueryVirtualMemory
+   F 8200079C 8326319C 12C ( 300)    RtlInitAnsiString
+   F 820007A0 8326318C 143 ( 323)    RtlUnicodeToMultiByteN
+   F 820007A4 8326317C 003 (   3)    DbgPrint
+   F 820007A8 8326316C 194 ( 404)    XexCheckExecutablePrivilege
+   F 820007AC 8326315C 010 (  16)    ExGetXConfigSetting
+   F 820007B0 8326314C 0D1 ( 209)    NtCreateEvent
+   F 820007B4 8326313C 0CF ( 207)    NtClose
+   V 820007B8          1AE ( 430)    ExLoadedCommandLine
+   V 820007BC          158 ( 344)    XboxKrnlVersion
+   F 820007C0 8326312C 133 ( 307)    RtlMultiByteToUnicodeN
+   F 820007C4 8326311C 135 ( 309)    RtlNtStatusToDosError
+   F 820007C8 8326310C 05D (  93)    KeEnableFpuExceptions
+   F 820007CC 832630FC 12F ( 303)    RtlInitializeCriticalSectionAndSpinCount
+   F 820007D0 832630EC 147 ( 327) !! RtlUnwind
+   F 820007D4 832630DC 052 (  82)    KeBugCheck
+   F 820007D8 832630CC 1A5 ( 421) !! __C_specific_handler
+   F 820007DC 832630BC 153 ( 339)    KeTlsFree
+   F 820007E0 832630AC 155 ( 341)    KeTlsSetValue
+   F 820007E4 8326309C 154 ( 340)    KeTlsGetValue
+   F 820007E8 8326308C 152 ( 338)    KeTlsAlloc
+   F 820007EC 8326307C 1FF ( 511)    XAudioGetSpeakerConfig
+   F 820007F0 83262D2C 12E ( 302)    RtlInitializeCriticalSection
+   F 820007F4 83262D1C 130 ( 304)    RtlLeaveCriticalSection
+   F 820007F8 83262D0C 141 ( 321)    RtlTryEnterCriticalSection
+   V 820007FC          059 (  89)    KeDebugMonitorData
+   F 82000800 83262CFC 125 ( 293)    RtlEnterCriticalSection
+   F 82000804 83263C5C 085 ( 133)    KeRaiseIrqlToDpcLevel
+   F 82000808 83263C6C 0B3 ( 179)    KfLowerIrql
+   F 8200080C 83263C7C 1F4 ( 500)    XAudioUnregisterRenderDriverClient
+   F 82000810 83263C8C 1F3 ( 499)    XAudioRegisterRenderDriverClient
+   F 82000814 83263C9C 1F5 ( 501)    XAudioSubmitRenderDriverFrame
+   F 82000818 83263CAC 1F8 ( 504)    XAudioGetVoiceCategoryVolume
+   F 8200081C 83263CBC 092 ( 146)    KeResumeThread
+   F 82000820 83263CCC 074 ( 116)    KeInitializeSemaphore
+   F 82000824 83263CDC 1F7 ( 503)    XAudioGetVoiceCategoryVolumeChangeMask
+   F 82000828 83263CEC 088 ( 136)    KeReleaseSemaphore
+   F 8200082C 83263CFC 0AF ( 175)    KeWaitForMultipleObjects
+   F 82000830 83263D0C 226 ( 550)    XMAReleaseContext
+   F 82000834 83263D1C 224 ( 548)    XMACreateContext
+   V 82000838          0AD ( 173)    KeTimeStampBundle
+   F 8200083C 83263D2C 02C (  44)    InterlockedPopEntrySList
+   F 82000840 83263D3C 02B (  43)    InterlockedFlushSList
+
+ xam - 102 imports
+   Version: 0.0.7978.32
+   Min Version: 0.0.7363.32
+
+         Total:  102
+         Known:  100% (102 known, 0 unknown)
+   Implemented:   89% (91 implemented, 11 unimplemented)
+
+   F 82000400 83263C3C 24E ( 590)    XamCreateEnumeratorHandle
+   F 82000404 83263C2C 24F ( 591)    XamGetPrivateEnumStructureFromHandle
+   F 82000408 83262D3C 3CC ( 972)    XGetGameRegion
+   F 8200040C 83262D4C 1A7 ( 423)    XamLoaderGetLaunchDataSize
+   F 82000410 83262D5C 1A8 ( 424)    XamLoaderGetLaunchData
+   F 82000414 83262D6C 3D1 ( 977)    XGetVideoMode
+   F 82000418 83262D7C 28C ( 652)    XNotifyPositionUI
+   F 8200041C 83262D8C 28B ( 651)    XNotifyGetNext
+   F 82000420 83262D9C 190 ( 400)    XamInputGetCapabilities
+   F 82000424 83262DAC 191 ( 401)    XamInputGetState
+   F 82000428 83262DBC 192 ( 402)    XamInputSetState
+   F 8200042C 83262DCC 2DC ( 732)    XamShowMessageBoxUIEx
+   F 82000430 83262DDC 3CD ( 973)    XGetLanguage
+   F 82000434 83262DEC 3CB ( 971)    XGetAVPack
+   F 82000438 83262DFC 1A9 ( 425)    XamLoaderTerminateTitle
+   F 8200043C 83262E0C 1B3 ( 435)    XamTaskShouldExit
+   F 82000440 83262E1C 1B1 ( 433)    XamTaskCloseHandle
+   F 82000444 83262E2C 1AF ( 431)    XamTaskSchedule
+   F 82000448 83262E3C 259 ( 601)    XamContentCreateEx
+   F 8200044C 83262E4C 266 ( 614)    XamContentGetLicenseMask
+   F 82000450 83262E5C 25C ( 604)    XamContentCreateEnumerator
+   F 82000454 83262E6C 265 ( 613)    XamContentGetDeviceState
+   F 82000458 83262E7C 25E ( 606)    XamContentGetDeviceData
+   F 8200045C 83262E8C 1F7 ( 503)    XMsgStartIORequest
+   F 82000460 83262E9C 2BC ( 700)    XamShowSigninUI
+   F 82000464 83262EAC 2BF ( 703) !! XamShowFriendsUI
+   F 82000468 83262EBC 2C8 ( 712) !! XamShowPlayersUI
+   F 8200046C 83262ECC 2C0 ( 704) !! XamShowMessagesUI
+   F 82000470 83262EDC 2C1 ( 705)    XamShowKeyboardUI
+   F 82000474 83262EEC 2D5 ( 725) !! XamShowGamerCardUIForXUID
+   F 82000478 83262EFC 2C5 ( 709)    XamShowAchievementsUI
+   F 8200047C 83262F0C 2C6 ( 710) !! XamShowPlayerReviewUI
+   F 82000480 83262F1C 2C7 ( 711)    XamShowMarketplaceUI
+   F 82000484 83262F2C 2CB ( 715)    XamShowDeviceSelectorUI
+   F 82000488 83262F3C 2CC ( 716) !! XamShowMessageComposeUI
+   F 8200048C 83262F4C 2CD ( 717) !! XamShowGameInviteUI
+   F 82000490 83262F5C 2CE ( 718) !! XamShowFriendRequestUI
+   F 82000494 83262F6C 2D9 ( 729)    XamShowDirtyDiscErrorUI
+   F 82000498 83262F7C 20E ( 526)    XamUserGetName
+   F 8200049C 83262F8C 210 ( 528)    XamUserGetSigninState
+   F 820004A0 83262F9C 213 ( 531)    XamUserAreUsersFriends
+   F 820004A4 83262FAC 212 ( 530)    XamUserCheckPrivilege
+   F 820004A8 83262FBC 282 ( 642)    XamGetSystemVersion
+   F 820004AC 83262FCC 2F7 ( 759)    XamUserCreateStatsEnumerator
+   F 820004B0 83262FDC 2F0 ( 752)    XamWriteGamerTile
+   F 820004B4 83262FEC 2EE ( 750)    XamUserCreateAchievementEnumerator
+   F 820004B8 83262FFC 20A ( 522)    XamUserGetXUID
+   F 820004BC 8326300C 1F4 ( 500)    XMsgInProcessCall
+   F 820004C0 8326301C 2E6 ( 742) !! XamShowCustomPlayerListUI
+   F 820004C4 8326302C 250 ( 592)    XamEnumerate
+   F 820004C8 8326303C 28A ( 650)    XamNotifyCreateListener
+   F 820004CC 8326304C 227 ( 551)    XamUserGetSigninInfo
+   F 820004D0 8326305C 1A4 ( 420)    XamLoaderLaunchTitle
+   F 820004D4 8326306C 280 ( 640)    XamGetExecutionId
+   F 820004D8 83263C1C 21A ( 538)    XamUserWriteProfileSettings
+   F 820004DC 83263C0C 316 ( 790)    XamSessionCreateHandle
+   F 820004E0 83263BFC 317 ( 791)    XamSessionRefObjByHandle
+   F 820004E4 83263BEC 136 ( 310)    XNetLogonGetTitleID
+   F 820004E8 83263BDC 1EA ( 490)    XamAlloc
+   F 820004EC 83263BCC 1EC ( 492)    XamFree
+   F 820004F0 83263BBC 04B (  75)    NetDll_XNetGetEthernetLinkStatus
+   F 820004F4 83263BAC 049 (  73)    NetDll_XNetGetTitleXnAddr
+   F 820004F8 83263B9C 048 (  72)    NetDll_XNetQosRelease
+   F 820004FC 83263B8C 046 (  70) !! NetDll_XNetQosLookup
+   F 82000500 83263B7C 045 (  69)    NetDll_XNetQosListen
+   F 82000504 83263B6C 044 (  68)    NetDll_XNetDnsRelease
+   F 82000508 83263B5C 043 (  67)    NetDll_XNetDnsLookup
+   F 8200050C 83263B4C 03A (  58) !! NetDll_XNetServerToInAddr
+   F 82000510 83263B3C 039 (  57)    NetDll_XNetXnAddrToInAddr
+   F 82000514 83263B2C 038 (  56)    NetDll_XNetUnregisterKey
+   F 82000518 83263B1C 037 (  55)    NetDll_XNetRegisterKey
+   F 8200051C 83263B0C 035 (  53)    NetDll_XNetRandom
+   F 82000520 83263AFC 034 (  52)    NetDll_XNetCleanup
+   F 82000524 83263AEC 033 (  51)    NetDll_XNetStartup
+   F 82000528 83263ADC 01D (  29)    NetDll_WSACreateEvent
+   F 8200052C 83263ACC 01C (  28)    NetDll_WSASetLastError
+   F 82000530 83263ABC 01B (  27)    NetDll_WSAGetLastError
+   F 82000534 83263AAC 01A (  26)    NetDll_inet_addr
+   F 82000538 83263A9C 018 (  24)    NetDll_sendto
+   F 8200053C 83263A8C 016 (  22)    NetDll_send
+   F 82000540 83263A7C 014 (  20)    NetDll_recvfrom
+   F 82000544 83263A6C 012 (  18)    NetDll_recv
+   F 82000548 83263A5C 00F (  15)    NetDll_select
+   F 8200054C 83263A4C 00E (  14)    NetDll_accept
+   F 82000550 83263A3C 00D (  13)    NetDll_listen
+   F 82000554 83263A2C 00C (  12)    NetDll_connect
+   F 82000558 83263A1C 00B (  11)    NetDll_bind
+   F 8200055C 83263A0C 009 (   9)    NetDll_getsockname
+   F 82000560 832639FC 008 (   8)    NetDll_getsockopt
+   F 82000564 832639EC 007 (   7)    NetDll_setsockopt
+   F 82000568 832639DC 006 (   6)    NetDll_ioctlsocket
+   F 8200056C 832639CC 004 (   4)    NetDll_closesocket
+   F 82000570 832639BC 003 (   3)    NetDll_socket
+   F 82000574 832639AC 002 (   2)    NetDll_WSACleanup
+   F 82000578 8326399C 001 (   1)    NetDll_WSAStartup
+   F 8200057C 8326398C 30C ( 780)    XamVoiceCreate
+   F 82000580 8326397C 30E ( 782)    XamVoiceSubmitPacket
+   F 82000584 8326396C 1F8 ( 504)    XMsgCancelIORequest
+   F 82000588 8326395C 30F ( 783)    XamVoiceClose
+   F 8200058C 8326394C 30D ( 781)    XamVoiceHeadsetPresent
+   F 82000590 8326393C 219 ( 537)    XamUserReadProfileSettings
+   F 82000594 83263C4C 1FC ( 508)    XMsgStartIORequestEx
+
+i> 00000103 PatchDB: Loaded patches for 476 titles
+F> 00000103 HostPathDevice::ResolvePath()
+F> 00000103 HostPathDevice::ResolvePath()
+F> 00000103 HostPathDevice::ResolvePath()
+F> 00000103 HostPathDevice::ResolvePath()
+F> 00000103 HostPathDevice::ResolvePath()
+F> 00000103 HostPathDevice::ResolvePath()
+F> 00000103 HostPathDevice::ResolvePath()
+F> 00000103 HostPathDevice::ResolvePath()
+F> 00000103 HostPathDevice::ResolvePath()
+F> 00000103 HostPathDevice::ResolvePath()
+F> 00000103 HostPathDevice::ResolvePath()
+F> 00000103 HostPathDevice::ResolvePath()
+F> 00000103 HostPathDevice::ResolvePath()
+F> 00000103 HostPathDevice::ResolvePath()
+i> 00000103 Title name: XMen Origins Wolverine
+i> 00000103 -- ACHIEVEMENTS (50) --
+  [1] Bar Fight (30g) â Event: Defeated Victor Creed (Sabretooth)
+  [2] Helicopter Ride (30g) â Event: Defeated David Nord (Agent Zero)
+  [3] Fallen Sentinel (30g) â Event: Defeated the Sentinel Mark I
+  [4] Put up your Dukes (30g) â Event: Defeated Fred Dukes (The Blob)
+  [5] 52 Pickup (30g) â Event: Defeated Remy LeBeau (Gambit)
+  [6] The Dead Pool (50g) â Event: Defeated Weapon 11 (Deadpool)
+  [7] Getting Started (10g) â Event: Killed 100 enemies
+  [8] A Day's Work (20g) â Event: Killed 500 enemies
+  [9] What I Do Best (30g) â Event: Killed 2000 enemies
+  [10] You Can't Hide (20g) â Event: Lunged to 250 enemies
+  [11] Lunge (10g) â Event: Lunged to 25 enemies
+  [12] Pounce (15g) â Event: Lunged to 100 enemies
+  [13] Piggy Back Ride (10g) â Event: Lunged to a W.E.N.D.I.G.0 prototype's back
+  [14] Quick Killer (10g) â Event: Quick Killed 1 enemy
+  [15] Efficient Killer (15g) â Event: Quick Killed 20 enemies
+  [16] Perfect Killer (20g) â Event: Quick Killed 3 enemies in a row
+  [17] Drop Dead (10g) â Event: Killed 10 enemies by throwing them off high areas
+  [18] Apprentice (10g) â Leveling: Raised One Combat Reflex to Master Level
+  [19] Samurai (25g) â Leveling: Raised All Combat Reflexes to Master Level
+  [20] Mutant Lover (15g) â Event: Raised one Mutagen to level 3
+  [21] Astonishing (20g) â Event: Found 1/2 of all Dog Tags in the game
+  [22] Devil's Brigade (30g) â Event: Found all Dog Tags in the game
+  [23] Defensive (10g) â Event: Performed 1 Counter move
+  [24] Untouchable (20g) â Event: Performed 25 Counter moves
+  [25] Catch! (10g) â Event: Killed 1 enemy with a reflected projectile
+  [26] Boomerang (20g) â Event: Killed 25 enemies with a reflected projectile
+  [27] Aerial Assault (10g) â Event: Performed 10 Air Grabs
+  [28] Ultimate Wolverine (15g) â Event: Fought 4 W.E.N.D.I.G.0 prototypes at the same time and defeated them at Alkali lake.
+  [29] Spillway Escape (30g) â Checkpoint: Escapes from Weapon X
+  [30] Threading the Needle (15g) â Event: Flew through the O ring in the Sentinel Boss Battle
+  [31] The Village (30g) â Checkpoint: Completed the Jungle Mission
+  [32] Hot Potato (20g) â Event: Light 20 enemies on fire
+  [33] Shotgun Epic Fail (15g) â Event: Killed 25 Ghosts with their own weapon
+  [34] James Howlett (15g) â Event: Performed a Wolverine to Wolverine Lunge
+  [35] WoW! (15g) â Event: You feel cold as you examine the skeleton and read the name "Arthas" etched into the nearby sword
+  [36] Aerial Master (15g) â Event: Got 6 enemies airborne at once
+  [37] Fully Loaded (35g) â Leveling: Maxed out all upgrades
+  [38] Slice n' Dice (15g) â Event: Killed 6 enemies with a single attack
+  [39] Found! (15g) â Event: You found a mysterious hatch!
+  [40] Slaughter House (15g) â Event: Dismembered 100 enemies
+  [41] Blender (25g) â Event: Killed 200 enemies with Claw Spin
+  [42] Walking Death (50g) â Event: Beat the game on Hard Difficulty
+  [43] Heightened Senses (20g) â Event: Killed 200 enemies in Feral Sense
+  [44] Environmentally Friendly (15g) â Event: Killed 10 enemies using objects in the environment
+  [45] Whatever it Takes (20g) â Event: Killed 30 enemies using objects in the environment
+  [46] Bloodlust (20g) â Event: Killed 50 enemies while in Berserker mode
+  [47] Weapon X (25g) â Event: Killed 150 enemies while in Berserker mode
+  [48] The Cake (15g) â Event: You found the cake, yummy!
+  [49] Stick Around (10g) â Event: Impaled Victor Creed outside the Bar
+  [50] Clean Up on all Aisles (10g) â Event: Destroyed all objects in the grocery store fight with Fred Dukes (The Blob)
+i> 00000103 -- PROPERTIES (18) --
+  10008001 [4 bytes] Rank
+  1000800A [4 bytes] 
+  1000800B [4 bytes] 
+  1000800C [4 bytes] 
+  1000800D [4 bytes] 
+  10008011 [4 bytes] 
+  10008101 [4 bytes, matchmaking] Gamer Zone
+  10008102 [4 bytes, matchmaking] Gamer Country
+  10008103 [4 bytes, matchmaking] Language
+  10008201 [4 bytes, matchmaking] Platform Type
+  10008202 [4 bytes, matchmaking] Platform Lock
+  20008107 [8 bytes, matchmaking] Gamer PUID
+  20008108 [8 bytes, matchmaking] Affiliate Value
+  30008105 [8 bytes, matchmaking] Gamer Mu
+  30008106 [8 bytes, matchmaking] Gamer Sigma
+  40008002 [2 bytes] Gamer Name
+  40008109 [2 bytes, matchmaking] Gamer Host Name
+  50008104 [4 bytes, matchmaking] Gamer Rating
+i> 00000103 -- CONTEXTS (4) --
+  00000001 [default=0, max=11] <String text>
+  00008001 [default=0, max=2] 
+  0000800A [default=0, max=1, matchmaking] Game Type
+  0000800B [default=0, max=0, matchmaking] 
+i> 00000103 -- STATS VIEWS (1) --
+  FFFF0000 [Leaderboard, skilled] 
+i> 00000103 -- PRESENCE MODES (3) --
+  ctx=0: 0 contexts, 0 properties
+  ctx=1: 1 contexts, 0 properties
+  ctx=2: 0 contexts, 0 properties
+i> 00000103 KernelState: Launching module...
+i> 0000490F iOS: Game launched successfully
+i> 01000010 Loaded 0 shaders from storage
+i> 01000010 Loaded 0 pipeline descriptions, 0 shader translations needed
+i> 01000010 Shader 1E6883FCCDE1F688 vertex translated successfully (6088 bytes)
+i> 01000010 Shader 0000000000000000 pixel translated successfully (3164 bytes)
+i> F8000008 Hardware scaler: width ratio 1:1, height ratio 1:1, final aspect ratio 16:9
+i> F8000008 AudioSystem::RegisterClient: driver created for index=0, driver=0x169905900
+i> F8000008 AudioSystem::RegisterClient: client 0 registered successfully
+w> 0100001C SDL audio queue running low: count=1, submitted=1, played=0, underruns=0, max_queue_depth=1
+w> 0100001C SDL audio queue running low: count=2, submitted=2, played=0, underruns=0, max_queue_depth=2
+F> F8000008 HostPathDevice::ResolvePath()
+F> F8000008 HostPathDevice::ResolvePath()
+F> F8000008 HostPathDevice::ResolvePath(\WGame)
+F> F8000008 HostPathDevice::ResolvePath(\Binaries)
+F> F8000008 HostPathDevice::ResolvePath(\WGame\Localization\Xenon)
+F> F8000008 HostPathDevice::ResolvePath(\WGame\Localization\Xenon)
+i> F8000008 NetDll_XNetStartup: caller=1, params=7019F258
+i> F8000008 NetDll_WSAStartup: version=0101, data_ptr=7019F280
+i> F8000008 NetDll_WSAStartup: version=0002, data_ptr=7019F040
+F> F8000008 HostPathDevice::ResolvePath(\WGame\CookedXenon)
+i> F8000008 NetDll_XNetStartup: caller=1, params=7019F1E0
+i> F8000008 NetDll_WSAStartup: version=0202, data_ptr=7019F1F0
+F> F8000008 HostPathDevice::ResolvePath(\WGame\CookedXenon)
+i> F8000058 New controller connected to slot 0.
+F> F8000054 HostPathDevice::ResolvePath(\WGame\Movies)
+F> F8000054 HostPathDevice::ResolvePath(\WGame\Movies)
+F> F8000054 HostPathDevice::ResolvePath(\WGame\Movies)
+F> F8000040 HostPathDevice::ResolvePath(\WGame\Movies)
+F> F8000040 HostPathDevice::ResolvePath(\WGame\Movies)
+F> F8000040 HostPathDevice::ResolvePath(\WGame\CookedXenon)
+F> F8000040 HostPathDevice::ResolvePath(\WGame\CookedXenon)
+F> F8000040 HostPathDevice::ResolvePath(\WGame\CookedXenon)
+F> F8000040 HostPathDevice::ResolvePath(\WGame\CookedXenon)
+F> F8000040 HostPathDevice::ResolvePath(\WGame\CookedXenon)
+F> F8000040 HostPathDevice::ResolvePath(\WGame\CookedXenon)
+F> F8000040 HostPathDevice::ResolvePath(\WGame\CookedXenon)
+F> F8000040 HostPathDevice::ResolvePath(\WGame\CookedXenon)
+F> F8000040 HostPathDevice::ResolvePath(\WGame\CookedXenon)
+F> F8000040 HostPathDevice::ResolvePath(\WGame\CookedXenon)
+F> F8000040 HostPathDevice::ResolvePath(\WGame\CookedXenon)
+F> F8000040 HostPathDevice::ResolvePath(\WGame\CookedXenon)
+F> F8000040 HostPathDevice::ResolvePath(\WGame\CookedXenon)
+F> F8000040 HostPathDevice::ResolvePath(\WGame\CookedXenon)
+F> F8000040 HostPathDevice::ResolvePath(\WGame\CookedXenon)
+F> F8000040 HostPathDevice::ResolvePath(\WGame\CookedXenon)
+i> 0001EA0F Shader 1456901233B6564C vertex translated successfully (6168 bytes)
+i> 0001EA0F Shader F6AFAEAD7D170F51 pixel translated successfully (11952 bytes)
+F> F8000040 HostPathDevice::ResolvePath(\WGame\CookedXenon)
+F> F8000040 HostPathDevice::ResolvePath(\WGame\CookedXenon)
+F> F8000040 HostPathDevice::ResolvePath(\WGame\Movies)
+F> F8000040 HostPathDevice::ResolvePath(\WGame\Movies)
+F> F8000040 HostPathDevice::ResolvePath(\WGame\Movies)
+F> F8000040 HostPathDevice::ResolvePath(\WGame\Movies)
+F> F8000040 HostPathDevice::ResolvePath(\WGame\Movies)
+F> F8000040 HostPathDevice::ResolvePath(\WGame\Movies)
+F> F8000040 HostPathDevice::ResolvePath(\WGame\Movies)
+F> F8000040 HostPathDevice::ResolvePath(\WGame\Movies)
+F> F8000040 HostPathDevice::ResolvePath(\WGame\CookedXenon)
+F> F8000008 HostPathDevice::ResolvePath(\content\0000000000000000\41560816\00000002)
+i> 01000010 MetalTelemetry[swap]: work swaps=120 draws=383 pipelines set/skip=238/0 texture_requests before/after_encoder=118/0
+i> 01000010 MetalTelemetry[swap]: render_encoder begin_calls=238 reused=0 created=238 descriptor_restarts=0 resource_resets=0 desc_fail=0 create_fail=0 end active/no_active=238/1471 reasons={ prepare_wait=1350, swap=120, rt_update_descriptor_dirty=119, resolve_needs_boundary=120 }
+i> 01000010 MetalTelemetry[swap]: transfer_request sources total/active/no_active={ render_target_transfer=119/0/119 } render_end={ none }
+i> 01000010 MetalTelemetry[swap]: shared_memory request failures={ none }
+i> 01000010 MetalTelemetry[swap]: shared_memory upload bytes={ resolve_copy_dest=3768320, draw_materialization=1982464 } outcomes={ already_resident=119, upload_before_render_encoder=122 }
+i> 01000010 MetalTelemetry[swap]: shared_memory upload_batches requests=241 ranges input/coalesced=241/241 bytes=5750784 upload_encoder acquire/reuse/copies=0/0/0 closes={ none } routes counts={ direct_write=122 } bytes={ direct_write=5750784 }
+i> 01000010 MetalTelemetry[swap]: shared_memory direct_write eligible/staged_bytes=5750784/0 rejects={ none } reject_bytes={ none }
+i> 01000010 MetalTelemetry[swap]: shared_memory lazy_upload batches no_upload/direct_only/mixed/staged_only=0/121/0/0 render_active direct_only/mixed/staged_only=0/0/0
+i> 01000010 MetalTelemetry[swap]: texture_upload_source routes counts={ cpu_guest=354, resident_shared_memory=120 } bytes={ cpu_guest=173967872, resident_shared_memory=452198400 } fallback_reasons={ none }
+i> 01000010 MetalTelemetry[swap]: draw_materialization ranges={ vertex_fetch=238 } bytes={ vertex_fetch=21408 } invalid_ranges={ vertex_fetch=121 } invalid_bytes={ vertex_fetch=10176 } per_draw requests/invalid/resident_skip=238/121/117
+i> 01000010 MetalTelemetry[swap]: prepared_draw_queue appends=120 flushes=120 single_draw_flushes=120 draws_flushed=120 ranges_flushed=120 bytes_flushed=10080 invalid_flushes=120 texture_plans=0 texture_loads planned/executed=0/0 flush_reasons={ rt_key_mismatch=119, copy=1 } rejects={ pending_draw_pass_transfers=118 }
+i> 01000010 MetalTelemetry[swap]: constants cbv_uploads={ system=238, float=358, bool_loop=120, fetch=356, descriptor_indices=238 } cbv_reuse={ float=118, bool_loop=118, descriptor_indices=118 } descriptor_index_uploads={ vertex=120, pixel=118 } root_allocations={ graphics=238 } root_reuse={ none } root_rebuild_reasons={ frame_open=120, descriptor_indices_pointer_tuple=118, other_cbv_pointer_tuple=118 } frame_slot_waits=0 waited_submissions=0 last_wait_submission=0
+i> 01000010 MetalTelemetry[swap]: binding_cache constant_payload hits={ none } misses={ none } bytes_saved={ none } descriptor_payload hits={ none } misses={ none } bytes_saved={ none }
+i> 01000010 MetalTelemetry[swap]: root_args allocs={ graphics=238 } reuse={ none } noop={ none } slots_patched={ graphics=3470 } bytes_copied={ graphics=60928 } slot_patches={ srv0=120, srv1=120, srv2=120, srv3=120, srv10=120, uav0=120, uav1=120, uav2=120, uav3=120, sampler0=120, cbv_system=238, cbv_float=120, cbv_bool_loop=120, cbv_fetch=238, cbv_descriptor_indices=120, cbv_hull_float=120, cbv_hull_fetch=120, cbv_hull_descriptor_indices=120, cbv_domain_float=120, cbv_domain_fetch=120, cbv_domain_descriptor_indices=120, cbv_pixel_float=238, cbv_pixel_fetch=238, cbv_pixel_descriptor_indices=238 } rebuild_reasons={ frame_open=120, descriptor_indices_pointer_tuple=118, other_cbv_pointer_tuple=118 }
+i> 01000010 MetalTelemetry[swap]: encoder_bindings full={ vertex=354, fragment=714, object=360, mesh=360 } offset={ none } noop={ none } null={ none } untracked={ none } resource_use calls/skips/upgrades=0/0/0 batches/resources/skips=473/1654/0 resource_sets apply={ fixed=238, texture=235 } skip={ texture=3, root=238 } resources={ fixed=714, texture=940 }
+i> 01000010 MetalTelemetry[swap]: resource_registry serial_skip={ fixed=237, texture=474 } build={ fixed=1, texture=2, root=238 } register={ fixed=238, texture=235 }
+i> 01000010 MetalTelemetry[swap]: residency_set supported/enabled/attached=1/1/1 allocations added/duplicates/commits=11/0/11 resource_refs covered/fallback=1192/9 use_resource covered/fallback=0/1654 use_heap covered/fallback=0/358 live_allocations=11
+i> 01000010 MetalTelemetry[swap]: resolve_direct_host attempt/success=120/119 reject gamma/exp_bias/format/sample/depth_no_fast=0/0/0/0/0
+i> 01000010 MetalTelemetry[swap]: stage_compile requests=5 hits/misses=0/5 waits=0 failures=0 persistent hits/misses=5/0 bytes dxil/metallib=20460/63568 owner_ms total/max=0/0 wait_ms total/max=0/0
+i> 01000010 MetalTelemetry[swap]: shader_prep dxil requests/hits/misses/failures=5/5/0/0 bytes dxbc/dxil=28848/20460 ms total/max=0/0 libraries requests/failures=6/0 bytes=66716 ms total/max=0/0 render_pso requests/failures=2/0 ms total/max=0/0
+i> 0100001C SDL audio stats: submitted=1024, played=1016, underruns=0, low_queue=2, max_queue_depth=8
+F> F80000C8 HostPathDevice::ResolvePath(\WGame\Movies)
+w> F80000C8 pthread_setschedparam failed: err=22 'Invalid argument'
+F> F80000C8 HostPathDevice::ResolvePath(\WGame\Movies)
+F> F80000C8 HostPathDevice::ResolvePath(\WGame\Movies)
+i> 01000010 MetalTelemetry[swap]: work swaps=120 draws=357 pipelines set/skip=237/0 texture_requests before/after_encoder=117/0
+i> 01000010 MetalTelemetry[swap]: render_encoder begin_calls=237 reused=0 created=237 descriptor_restarts=0 resource_resets=0 desc_fail=0 create_fail=0 end active/no_active=237/1993 reasons={ prepare_wait=1873, swap=120, rt_update_descriptor_dirty=117, resolve_needs_boundary=120 }
+i> 01000010 MetalTelemetry[swap]: transfer_request sources total/active/no_active={ render_target_transfer=117/0/117 } render_end={ none }
+i> 01000010 MetalTelemetry[swap]: shared_memory request failures={ none }
+i> 01000010 MetalTelemetry[swap]: shared_memory upload bytes={ draw_materialization=1966080 } outcomes={ already_resident=120, upload_before_render_encoder=120 }
+i> 01000010 MetalTelemetry[swap]: shared_memory upload_batches requests=240 ranges input/coalesced=240/240 bytes=1966080 upload_encoder acquire/reuse/copies=0/0/0 closes={ none } routes counts={ direct_write=120 } bytes={ direct_write=1966080 }
+i> 01000010 MetalTelemetry[swap]: shared_memory direct_write eligible/staged_bytes=1966080/0 rejects={ none } reject_bytes={ none }
+i> 01000010 MetalTelemetry[swap]: shared_memory lazy_upload batches no_upload/direct_only/mixed/staged_only=0/120/0/0 render_active direct_only/mixed/staged_only=0/0/0
+i> 01000010 MetalTelemetry[swap]: texture_upload_source routes counts={ cpu_guest=351, resident_shared_memory=120 } bytes={ cpu_guest=172493568, resident_shared_memory=452198400 } fallback_reasons={ none }
+i> 01000010 MetalTelemetry[swap]: draw_materialization ranges={ vertex_fetch=237 } bytes={ vertex_fetch=21312 } invalid_ranges={ vertex_fetch=120 } invalid_bytes={ vertex_fetch=10080 } per_draw requests/invalid/resident_skip=237/120/117
+i> 01000010 MetalTelemetry[swap]: prepared_draw_queue appends=120 flushes=120 single_draw_flushes=120 draws_flushed=120 ranges_flushed=120 bytes_flushed=10080 invalid_flushes=120 texture_plans=0 texture_loads planned/executed=0/0 flush_reasons={ rt_key_mismatch=117, prepare_wait=3 } rejects={ pending_draw_pass_transfers=117 }
+i> 01000010 MetalTelemetry[swap]: constants cbv_uploads={ system=237, float=357, bool_loop=120, fetch=354, descriptor_indices=237 } cbv_reuse={ float=117, bool_loop=117, descriptor_indices=117 } descriptor_index_uploads={ vertex=120, pixel=117 } root_allocations={ graphics=237 } root_reuse={ none } root_rebuild_reasons={ frame_open=120, descriptor_indices_pointer_tuple=117, other_cbv_pointer_tuple=117 } frame_slot_waits=0 waited_submissions=0 last_wait_submission=0
+i> 01000010 MetalTelemetry[swap]: binding_cache constant_payload hits={ none } misses={ none } bytes_saved={ none } descriptor_payload hits={ none } misses={ none } bytes_saved={ none }
+i> 01000010 MetalTelemetry[swap]: root_args allocs={ graphics=237 } reuse={ none } noop={ none } slots_patched={ graphics=3465 } bytes_copied={ graphics=60672 } slot_patches={ srv0=120, srv1=120, srv2=120, srv3=120, srv10=120, uav0=120, uav1=120, uav2=120, uav3=120, sampler0=120, cbv_system=237, cbv_float=120, cbv_bool_loop=120, cbv_fetch=237, cbv_descriptor_indices=120, cbv_hull_float=120, cbv_hull_fetch=120, cbv_hull_descriptor_indices=120, cbv_domain_float=120, cbv_domain_fetch=120, cbv_domain_descriptor_indices=120, cbv_pixel_float=237, cbv_pixel_fetch=237, cbv_pixel_descriptor_indices=237 } rebuild_reasons={ frame_open=120, descriptor_indices_pointer_tuple=117, other_cbv_pointer_tuple=117 }
+i> 01000010 MetalTelemetry[swap]: encoder_bindings full={ vertex=351, fragment=711, object=360, mesh=360 } offset={ none } noop={ none } null={ none } untracked={ none } resource_use calls/skips/upgrades=0/0/0 batches/resources/skips=474/1659/0 resource_sets apply={ fixed=237, texture=237 } skip={ root=237 } resources={ fixed=711, texture=948 }
+i> 01000010 MetalTelemetry[swap]: resource_registry serial_skip={ fixed=237, texture=471 } build={ texture=3, root=237 } register={ fixed=237, texture=237 }
+i> 01000010 MetalTelemetry[swap]: residency_set supported/enabled/attached=1/1/1 allocations added/duplicates/commits=0/0/0 resource_refs covered/fallback=1179/18 use_resource covered/fallback=0/1659 use_heap covered/fallback=0/357 live_allocations=11
+i> 01000010 MetalTelemetry[swap]: resolve_direct_host attempt/success=120/117 reject gamma/exp_bias/format/sample/depth_no_fast=0/0/0/0/0
+i> 01000010 MetalTelemetry[swap]: stage_compile requests=0 hits/misses=0/0 waits=0 failures=0 persistent hits/misses=0/0 bytes dxil/metallib=0/0 owner_ms total/max=0/0 wait_ms total/max=0/0
+i> 01000010 MetalTelemetry[swap]: shader_prep dxil requests/hits/misses/failures=0/0/0/0 bytes dxbc/dxil=0/0 ms total/max=0/0 libraries requests/failures=0/0 bytes=0 ms total/max=0/0 render_pso requests/failures=0/0 ms total/max=0/0
+F> F80000C8 HostPathDevice::ResolvePath(\WGame\Movies)
+F> F80000C8 HostPathDevice::ResolvePath(\WGame\Movies)
+i> 0100001C SDL audio stats: submitted=2048, played=2040, underruns=0, low_queue=2, max_queue_depth=8
+F> F8000130 HostPathDevice::ResolvePath(\WGame\Movies)
+F> F8000130 HostPathDevice::ResolvePath(\WGame\Movies)
+i> 00001943 Shader 868DFF11A6BDEBAA vertex translated successfully (8624 bytes)
+i> 00001943 Shader A9AC71DCCCEAEBE4 pixel translated successfully (9964 bytes)
+F> F8000040 HostPathDevice::ResolvePath(\WGame\CookedXenon)
+F> F8000040 HostPathDevice::ResolvePath(\WGame\CookedXenon)
+F> F8000040 HostPathDevice::ResolvePath(\WGame\CookedXenon)
+i> 01000010 MetalTelemetry[swap]: work swaps=120 draws=402 pipelines set/skip=280/0 texture_requests before/after_encoder=117/42
+i> 01000010 MetalTelemetry[swap]: render_encoder begin_calls=280 reused=40 created=240 descriptor_restarts=0 resource_resets=0 desc_fail=0 create_fail=0 end active/no_active=240/1581 reasons={ prepare_wait=1461, swap=120, rt_update_descriptor_dirty=117, texture_upload_before_draw_pass=1, shared_memory_upload_before_draw_pass=1, resolve_needs_boundary=121 }
+i> 01000010 MetalTelemetry[swap]: transfer_request sources total/active/no_active={ shared_memory_upload=1/0/1, render_target_transfer=118/0/118 } render_end={ none }
+i> 01000010 MetalTelemetry[swap]: shared_memory request failures={ none }
+i> 01000010 MetalTelemetry[swap]: shared_memory upload bytes={ resolve_copy_dest=1228800, draw_materialization=2457600 } outcomes={ already_resident=120, upload_before_render_encoder=122, upload_inside_render_encoder=29 }
+i> 01000010 MetalTelemetry[swap]: shared_memory upload_batches requests=271 ranges input/coalesced=301/272 bytes=3686400 upload_encoder acquire/reuse/copies=1/0/1 closes={ materialization_drain=1 } routes counts={ staged_blit=1, direct_write=150 } bytes={ staged_blit=16384, direct_write=3670016 }
+i> 01000010 MetalTelemetry[swap]: shared_memory direct_write eligible/staged_bytes=3670016/16384 rejects={ main_gpu_access_in_flight=1 } reject_bytes={ main_gpu_access_in_flight=16384 }
+i> 01000010 MetalTelemetry[swap]: shared_memory lazy_upload batches no_upload/direct_only/mixed/staged_only=0/149/0/1 render_active direct_only/mixed/staged_only=29/0/1
+i> 01000010 MetalTelemetry[swap]: texture_upload_source routes counts={ cpu_guest=352, resident_shared_memory=120 } bytes={ cpu_guest=172559104, resident_shared_memory=452198400 } fallback_reasons={ none }
+i> 01000010 MetalTelemetry[swap]: draw_materialization ranges={ vertex_fetch=280, guest_index=42 } bytes={ vertex_fetch=424596, guest_index=50400 } invalid_ranges={ vertex_fetch=148, guest_index=29 } invalid_bytes={ vertex_fetch=278880, guest_index=34800 } per_draw requests/invalid/resident_skip=280/150/130
+i> 01000010 MetalTelemetry[swap]: prepared_draw_queue appends=151 flushes=151 single_draw_flushes=151 draws_flushed=151 ranges_flushed=181 bytes_flushed=334164 invalid_flushes=150 texture_plans=1 texture_loads planned/executed=1/1 flush_reasons={ rt_key_mismatch=117, prepare_wait=31, copy=3 } rejects={ resident_no_active_queue=12, pending_draw_pass_transfers=117 }
+i> 01000010 MetalTelemetry[swap]: constants cbv_uploads={ system=279, float=441, bool_loop=120, fetch=439, descriptor_indices=279 } cbv_reuse={ system=1, float=118, bool_loop=160, descriptor_indices=160 } descriptor_index_uploads={ vertex=120, pixel=159 } root_allocations={ graphics=280 } root_reuse={ none } root_rebuild_reasons={ frame_open=120, descriptor_indices_pointer_tuple=159, other_cbv_pointer_tuple=160 } frame_slot_waits=0 waited_submissions=0 last_wait_submission=0
+i> 01000010 MetalTelemetry[swap]: binding_cache constant_payload hits={ none } misses={ none } bytes_saved={ none } descriptor_payload hits={ none } misses={ none } bytes_saved={ none }
+i> 01000010 MetalTelemetry[swap]: root_args allocs={ graphics=280 } reuse={ none } noop={ none } slots_patched={ graphics=3718 } bytes_copied={ graphics=71680 } slot_patches={ srv0=120, srv1=120, srv2=120, srv3=120, srv10=120, uav0=120, uav1=120, uav2=120, uav3=120, sampler0=120, cbv_system=279, cbv_float=162, cbv_bool_loop=120, cbv_fetch=280, cbv_descriptor_indices=120, cbv_hull_float=120, cbv_hull_fetch=120, cbv_hull_descriptor_indices=120, cbv_domain_float=120, cbv_domain_fetch=120, cbv_domain_descriptor_indices=120, cbv_pixel_float=279, cbv_pixel_fetch=279, cbv_pixel_descriptor_indices=279 } rebuild_reasons={ frame_open=120, descriptor_indices_pointer_tuple=159, other_cbv_pointer_tuple=160 }
+i> 01000010 MetalTelemetry[swap]: encoder_bindings full={ vertex=357, fragment=720, object=363, mesh=363 } offset={ vertex=40, fragment=40 } noop={ none } null={ none } untracked={ none } resource_use calls/skips/upgrades=0/0/0 batches/resources/skips=520/1674/40 resource_sets apply={ fixed=240, texture=280 } skip={ fixed=40, root=280 } resources={ fixed=720, texture=954 }
+i> 01000010 MetalTelemetry[swap]: resource_registry serial_skip={ fixed=280, texture=473, root=1 } build={ texture=86, root=279 } register={ fixed=240, texture=280 }
+i> 01000010 MetalTelemetry[swap]: residency_set supported/enabled/attached=1/1/1 allocations added/duplicates/commits=1/0/1 resource_refs covered/fallback=1515/348 use_resource covered/fallback=42/1674 use_heap covered/fallback=0/361 live_allocations=12
+i> 01000010 MetalTelemetry[swap]: resolve_direct_host attempt/success=121/117 reject gamma/exp_bias/format/sample/depth_no_fast=0/0/0/0/0
+i> 01000010 MetalTelemetry[swap]: stage_compile requests=2 hits/misses=0/2 waits=0 failures=0 persistent hits/misses=2/0 bytes dxil/metallib=14552/22112 owner_ms total/max=0/0 wait_ms total/max=0/0
+i> 01000010 MetalTelemetry[swap]: shader_prep dxil requests/hits/misses/failures=2/2/0/0 bytes dxbc/dxil=18588/14552 ms total/max=0/0 libraries requests/failures=2/0 bytes=22112 ms total/max=0/0 render_pso requests/failures=2/0 ms total/max=0/0
+i> 00011A2B Shader BF8AD3FD7A465985 vertex translated successfully (7304 bytes)
+i> 00011A2B Shader 3DABEAE3153908FC vertex translated successfully (7304 bytes)
+i> 0001EA0F Shader 16C1AFE183BD5C52 vertex translated successfully (13732 bytes)
+i> 00001943 Shader 21B974F790522F98 vertex translated successfully (18088 bytes)
+i> 00009833 Shader 6877056005D5D697 vertex translated successfully (14624 bytes)
+i> 00011A2B Shader A5DB9DA8BA91CAC2 vertex translated successfully (14700 bytes)
+i> 00001943 Shader CC817E47B4F6EB6D pixel translated successfully (6456 bytes)
+i> 0001EA0F Shader AA84DBDD08502122 vertex translated successfully (15424 bytes)
+i> 00009833 Shader 4FD22344740A582D pixel translated successfully (6400 bytes)
+i> 0001EA0F Shader BAECBCF1A3FDA2B4 pixel translated successfully (10812 bytes)
+i> 00001943 Shader 260A1521268354B5 vertex translated successfully (20220 bytes)
+i> 00001943 Shader B1D0C5795D3400BB pixel translated successfully (18936 bytes)
+i> 00009833 Shader 0F8F54EAA2F01D53 vertex translated successfully (15628 bytes)
+i> 00009833 Shader 79C0BD8CD9E26C4C pixel translated successfully (13916 bytes)
+i> 00011A2B Shader 575A9CA1F4F1E0B6 vertex translated successfully (19200 bytes)
+i> 00011A2B Shader 124189305B2AC380 pixel translated successfully (24324 bytes)
+i> 0001EA0F Shader 18EF70B212300A1A vertex translated successfully (31644 bytes)
+i> 00009833 Shader 79B1452CD355CA92 vertex translated successfully (28468 bytes)
+i> 00001943 Shader 7D1BA1B22B02C325 pixel translated successfully (18124 bytes)
+i> 0001EA0F Shader 3FD2FBA469A4B54F pixel translated successfully (15724 bytes)
+i> 00009833 Shader F4FFB85F0C568247 pixel translated successfully (10020 bytes)
+i> 00011A2B Shader DC41541242E1DD04 pixel translated successfully (23332 bytes)
+i> 00001943 Shader 63F36EC34FF4F87A vertex translated successfully (24588 bytes)
+i> 0001EA0F Shader 34717350AC02971C vertex translated successfully (20424 bytes)
+i> 00009833 Shader 549BB5F6C797C0E5 vertex translated successfully (16312 bytes)
+i> 0001EA0F Shader 26E1DC6360897447 pixel translated successfully (48688 bytes)
+i> 00009833 Shader BC1EDBF85F131779 pixel translated successfully (31784 bytes)
+i> 01000010 Shader 6D769D8D32187155 vertex translated successfully (5900 bytes)
+i> 01000010 Shader 11974DBF86C604A7 pixel translated successfully (12108 bytes)
+i> 00001943 Shader B845CB5AD5BF75D7 vertex translated successfully (28264 bytes)
+i> 0001EA0F Shader 9CBA9D3BCBF2D5CB vertex translated successfully (6468 bytes)
+i> 00001943 Shader 1678F7FAD45BE795 pixel translated successfully (31668 bytes)
+i> 00009833 Shader 567EDC36F621B5A8 vertex translated successfully (5600 bytes)
+i> 00009833 Shader 5966F97B7BF2AE9B pixel translated successfully (20740 bytes)
+i> 00011A2B Shader B4ED697CB92C1759 vertex translated successfully (6200 bytes)
+i> 00011A2B Shader 6E57A6E305D5D69B pixel translated successfully (8460 bytes)
+i> 0001EA0F Shader E2078ED8996F887A vertex translated successfully (19880 bytes)
+i> 00001943 Shader AB4B8243E122E948 vertex translated successfully (16032 bytes)
+i> 0001EA0F Shader C8905CE8648BB11E pixel translated successfully (25148 bytes)
+i> 00009833 Shader 943F0EEE5FAD21C8 vertex translated successfully (25656 bytes)
+i> 00011A2B Shader 053ED796DD07B8F1 vertex translated successfully (26908 bytes)
+i> 00001943 Shader AC6DF8C526434793 pixel translated successfully (31636 bytes)
+i> 00009833 Shader B4500A107D9D8CE5 pixel translated successfully (29256 bytes)
+i> 00011A2B Shader 702D9D8EE9C23674 pixel translated successfully (26756 bytes)
+i> 0001EA0F Shader D2DC0A05ED0BE0E6 pixel translated successfully (28744 bytes)
+i> 00009833 Shader C3BF9959F64763C7 pixel translated successfully (48724 bytes)
+i> 00001943 Shader F6FBE600F821A1B5 vertex translated successfully (29536 bytes)
+i> 00001943 Shader 4DF64E7F8F55652C pixel translated successfully (24344 bytes)
+i> 00011A2B Shader D699998C6132CF79 vertex translated successfully (9044 bytes)
+i> 00011A2B Shader DB2060E3D1F7C77D pixel translated successfully (9100 bytes)
+i> 0001EA0F Shader 9099BE6C17F296D1 vertex translated successfully (14680 bytes)
+i> 0001EA0F Shader 03E6D26334FF50CB pixel translated successfully (6980 bytes)
+i> 00009833 Shader 6C5E1DC495A6B168 vertex translated successfully (6508 bytes)
+i> 00001943 Shader B5A1208D037C2F4F vertex translated successfully (6628 bytes)
+i> 00001943 Shader BB78BCABF1693FF1 pixel translated successfully (42256 bytes)
+i> 00011A2B Shader 47FE7F5C350D6074 vertex translated successfully (23316 bytes)
+i> 0001EA0F Shader 0FCB415FE0EE12FB pixel translated successfully (11112 bytes)
+i> 00001943 Shader 47FE7F5C350D6074 vertex translated successfully (23424 bytes)
+i> 00001943 Shader 4E578B2877E9F30B pixel translated successfully (13300 bytes)
+i> 01000010 Shader 2B887C3877A1707F pixel translated successfully (13372 bytes)
+i> 00011A2B Shader 2E6EDA55613EAE88 vertex translated successfully (6632 bytes)
+i> 00011A2B Shader FB1A2BCD21907258 pixel translated successfully (11296 bytes)
+i> 0001EA0F Shader 7CC8B7C7BF5DED22 vertex translated successfully (15108 bytes)
+i> 0001EA0F Shader 1BAD0E75C3B19796 pixel translated successfully (5000 bytes)
+i> 00009833 Shader 8D149F03A5AE8BCA vertex translated successfully (17304 bytes)
+i> 00011A2B Shader C695D4AC8098972F vertex translated successfully (7168 bytes)
+i> 00009833 Shader E4CE09EF5124C78C pixel translated successfully (12008 bytes)
+i> 00001943 Shader 521ADFDD577EBC3C pixel translated successfully (12372 bytes)
+i> 00011A2B Shader 3DB0BCC1590ADD8D pixel translated successfully (12220 bytes)
+i> 0001EA0F Shader 59424BA3BF37B702 vertex translated successfully (24816 bytes)
+i> 00009833 Shader 3C724F051F820FAE vertex translated successfully (17928 bytes)
+i> 01000010 Shader 1E6883FCCDE1F688 vertex translated successfully (6188 bytes)
+i> 01000010 Shader A4A965C189287B99 pixel translated successfully (4712 bytes)
+i> 0001EA0F Shader 14F44C24BBEE5723 pixel translated successfully (38812 bytes)
+i> 00011A2B Shader 600A4FE901688F41 vertex translated successfully (22160 bytes)
+i> 00001943 Shader 3CB0AF5531B40BE8 vertex translated successfully (20264 bytes)
+i> 00009833 Shader C73FBD4F028DBB9E pixel translated successfully (12468 bytes)
+i> 0001EA0F Shader 972AB8175D085DB3 vertex translated successfully (17928 bytes)
+i> 00011A2B Shader AD340FFE6F1FF6E6 pixel translated successfully (33500 bytes)
+i> 00001943 Shader F5480D7B205EAD7C pixel translated successfully (5780 bytes)
+i> 00009833 Shader B46558DE2A20FBD3 pixel translated successfully (21132 bytes)
+i> 0001EA0F Shader F16E29D550485853 pixel translated successfully (24108 bytes)
+i> 00001943 Shader B1C95A19D7DCE8C1 vertex translated successfully (14652 bytes)
+i> 00001943 Shader 15845069EE2AF6AE pixel translated successfully (9752 bytes)
+i> 01000010 Shader B6C9863F710683EC vertex translated successfully (4472 bytes)
+i> 00009833 Shader 54E1F3889F7E4111 vertex translated successfully (6208 bytes)
+i> 00009833 Shader 25E35BA796CD2323 pixel translated successfully (28464 bytes)
+i> 01000010 Shader A4A965C189287B99 pixel translated successfully (4712 bytes)
+i> 00011A2B Shader A6936FE0A12B0B6C vertex translated successfully (6020 bytes)
+i> 00011A2B Shader 5161E96298B0BA85 pixel translated successfully (24284 bytes)
+i> 0001EA0F Shader 93E31AB4AF9DC1AF vertex translated successfully (6604 bytes)
+i> 00001943 Shader BD3FB22E348664AD vertex translated successfully (15652 bytes)
+i> 0001EA0F Shader DDFC19FCC04E0F35 pixel translated successfully (23892 bytes)
+i> 00001943 Shader 383D349A508A0301 pixel translated successfully (20444 bytes)
+i> 00009833 Shader 6319D531241E72D3 vertex translated successfully (6168 bytes)
+i> 00009833 Shader F7751D870B8948E2 pixel translated successfully (9084 bytes)
+i> 00011A2B Shader 61981B86791E5363 vertex translated successfully (9220 bytes)
+i> 00011A2B Shader A7D4168F80E4C7B6 pixel translated successfully (9768 bytes)
+i> 00011A2B Shader 89DF049B174F1965 pixel translated successfully (10508 bytes)
+i> 0001EA0F Shader 47DBF7FBFCBD6070 vertex translated successfully (7612 bytes)
+i> 00009833 Shader 4C95822F93578460 vertex translated successfully (7952 bytes)
+i> 00009833 Shader 91E2193669FE286A pixel translated successfully (7772 bytes)
+F> F8000118 HostPathDevice::ResolvePath(\WGame\Movies)
+F> F8000118 HostPathDevice::ResolvePath(\WGame\Movies)
+F> 01000020 HostPathDevice::ResolvePath()
+F> 01000020 HostPathDevice::ResolvePath()
+F> 01000020 HostPathDevice::ResolvePath()
+F> 01000020 HostPathDevice::ResolvePath()
+F> 01000020 HostPathDevice::ResolvePath()
+F> 01000020 HostPathDevice::ResolvePath()
+F> 01000020 HostPathDevice::ResolvePath()
+F> 01000020 HostPathDevice::ResolvePath()
+F> 01000020 HostPathDevice::ResolvePath()
+F> 01000020 HostPathDevice::ResolvePath()
+F> 01000020 HostPathDevice::ResolvePath()
+F> 01000020 HostPathDevice::ResolvePath()
+i> 0100001C SDL audio stats: submitted=3072, played=3064, underruns=0, low_queue=2, max_queue_depth=8
+F> F8000040 HostPathDevice::ResolvePath(\WGame\CookedXenon)
+F> F8000040 HostPathDevice::ResolvePath(\WGame\CookedXenon)
+F> F8000008 HostPathDevice::ResolvePath()
+w> F8000008 Attempted to open read-only file/dir for write: d:\KynapseRuntimeConfig.xml
+F> F8000040 HostPathDevice::ResolvePath(\WGame\CookedXenon)
+F> F8000040 HostPathDevice::ResolvePath(\WGame\CookedXenon)
+i> 01000010 MetalTelemetry[swap]: work swaps=120 draws=36453 pipelines set/skip=16491/13559 texture_requests before/after_encoder=5528/6715
+i> 01000010 MetalTelemetry[swap]: render_encoder begin_calls=30050 reused=21619 created=8431 descriptor_restarts=0 resource_resets=0 desc_fail=0 create_fail=0 end active/no_active=8431/2011 reasons={ unknown=304, prepare_wait=1238, swap=120, command_buffer_end=213, transfer_request=304, rt_update_descriptor_dirty=5655, texture_upload_before_draw_pass=54, shared_memory_upload_before_draw_pass=12, resolve_needs_boundary=2542 }
+i> 01000010 MetalTelemetry[swap]: transfer_request sources total/active/no_active={ shared_memory_upload=21/0/21, render_target_transfer=738/304/434 } render_end={ render_target_transfer=304 }
+i> 01000010 MetalTelemetry[swap]: shared_memory request failures={ none }
+i> 01000010 MetalTelemetry[swap]: shared_memory upload bytes={ texture_base_and_mips=49152, resolve_copy_dest=17645568, draw_materialization=184041472 } outcomes={ already_resident=2534, upload_before_render_encoder=1040, upload_inside_render_encoder=377 }
+i> 01000010 MetalTelemetry[swap]: shared_memory upload_batches requests=3951 ranges input/coalesced=18218/7821 bytes=201736192 upload_encoder acquire/reuse/copies=21/0/21 closes={ materialization_drain=21 } routes counts={ staged_blit=21, direct_write=3671 } bytes={ staged_blit=344064, direct_write=201392128 }
+i> 01000010 MetalTelemetry[swap]: shared_memory direct_write eligible/staged_bytes=201392128/344064 rejects={ main_gpu_access_in_flight=21, mixed_range_split=5 } reject_bytes={ main_gpu_access_in_flight=344064, mixed_range_split=1540096 }
+i> 01000010 MetalTelemetry[swap]: shared_memory lazy_upload batches no_upload/direct_only/mixed/staged_only=0/1387/5/16 render_active direct_only/mixed/staged_only=376/4/8
+i> 01000010 MetalTelemetry[swap]: texture_upload_source routes counts={ cpu_guest=250, resident_shared_memory=2151 } bytes={ cpu_guest=96523376, resident_shared_memory=6129696768 } fallback_reasons={ mixed_validity=1, source_already_resident=2179 }
+i> 01000010 MetalTelemetry[swap]: draw_materialization ranges={ vertex_fetch=37244, guest_index=21775, texture_source=1 } bytes={ vertex_fetch=1694317704, guest_index=109083210, texture_source=262144 } invalid_ranges={ vertex_fetch=6879, guest_index=3686, texture_source=1 } invalid_bytes={ vertex_fetch=178685608, guest_index=27152226, texture_source=262144 } per_draw requests/invalid/resident_skip=26402/6253/20149
+i> 01000010 MetalTelemetry[swap]: prepared_draw_queue appends=13032 flushes=3654 single_draw_flushes=3046 draws_flushed=13032 ranges_flushed=29898 bytes_flushed=1070667122 invalid_flushes=812 texture_plans=2063 texture_loads planned/executed=2269/1543 flush_reasons={ rt_key_mismatch=2580, prepare_wait=71, copy=905, command_buffer_end=98 } rejects={ resident_no_active_queue=6593, no_shared_memory_ranges=3648, pending_draw_pass_transfers=4962, zpd_active=1815 }
+i> 01000010 MetalTelemetry[swap]: constants cbv_uploads={ system=12720, float=29355, bool_loop=120, fetch=27345, descriptor_indices=9980 } cbv_reuse={ system=17330, float=18124, bool_loop=29930, fetch=12102, descriptor_indices=37375 } descriptor_index_uploads={ vertex=120, pixel=9860 } root_allocations={ graphics=24248 } root_reuse={ graphics=5802 } root_rebuild_reasons={ frame_open=120, descriptor_indices_pointer_tuple=12248, other_cbv_pointer_tuple=24128 } frame_slot_waits=0 waited_submissions=0 last_wait_submission=0
+i> 01000010 MetalTelemetry[swap]: binding_cache constant_payload hits={ none } misses={ none } bytes_saved={ none } descriptor_payload hits={ none } misses={ none } bytes_saved={ none }
+i> 01000010 MetalTelemetry[swap]: root_args allocs={ graphics=24248 } reuse={ graphics=5802 } noop={ none } slots_patched={ graphics=93029 } bytes_copied={ graphics=6207488 } slot_patches={ srv0=120, srv1=120, srv2=120, srv3=120, srv10=120, uav0=120, uav1=120, uav2=120, uav3=120, sampler0=120, cbv_system=12720, cbv_float=18773, cbv_bool_loop=120, cbv_fetch=18191, cbv_descriptor_indices=120, cbv_hull_float=120, cbv_hull_fetch=120, cbv_hull_descriptor_indices=120, cbv_domain_float=120, cbv_domain_fetch=120, cbv_domain_descriptor_indices=120, cbv_pixel_float=15430, cbv_pixel_fetch=13387, cbv_pixel_descriptor_indices=12368 } rebuild_reasons={ frame_open=120, descriptor_indices_pointer_tuple=12248, other_cbv_pointer_tuple=24128 }
+i> 01000010 MetalTelemetry[swap]: encoder_bindings full={ vertex=13507, fragment=25309, object=11868, mesh=11868 } offset={ vertex=15659, fragment=15801, object=76, mesh=76 } noop={ none } null={ none } untracked={ none } resource_use calls/skips/upgrades=300/225/0 batches/resources/skips=18564/74840/16377 resource_sets apply={ fixed=8431, texture=14951 } skip={ fixed=21619, texture=15099, root=30050 } resources={ fixed=25293, texture=49547 }
+i> 01000010 MetalTelemetry[swap]: resource_registry serial_skip={ fixed=30050, texture=27012, root=20832 } build={ texture=13018, root=9218 } register={ fixed=8431, texture=14951 }
+i> 01000010 MetalTelemetry[swap]: residency_set supported/enabled/attached=1/1/1 allocations added/duplicates/commits=10/0/10 resource_refs covered/fallback=53385/48732 use_resource covered/fallback=21775/75140 use_heap covered/fallback=0/18012 live_allocations=22
+i> 01000010 MetalTelemetry[swap]: resolve_direct_host attempt/success=2542/1947 reject gamma/exp_bias/format/sample/depth_no_fast=0/0/456/0/0
+i> 01000010 MetalTelemetry[swap]: stage_compile requests=109 hits/misses=5/104 waits=5 failures=0 persistent hits/misses=104/0 bytes dxil/metallib=1505420/1786884 owner_ms total/max=0/0 wait_ms total/max=0/0
+i> 01000010 MetalTelemetry[swap]: shader_prep dxil requests/hits/misses/failures=104/104/0/0 bytes dxbc/dxil=1719412/1410736 ms total/max=0/0 libraries requests/failures=107/0 bytes=1796328 ms total/max=0/0 render_pso requests/failures=78/0 ms total/max=0/0
+F> F8000040 HostPathDevice::ResolvePath(\WGame\CookedXenon)
+F> F8000040 HostPathDevice::ResolvePath(\WGame\CookedXenon)
+F> F8000040 HostPathDevice::ResolvePath(\WGame\CookedXenon)
+F> F8000040 HostPathDevice::ResolvePath(\WGame\CookedXenon)
+F> F8000040 HostPathDevice::ResolvePath(\WGame\CookedXenon)
+F> F8000040 HostPathDevice::ResolvePath(\WGame\CookedXenon)
+F> F8000040 HostPathDevice::ResolvePath(\WGame\CookedXenon)
+i> 01000010 MetalTelemetry[swap]: work swaps=120 draws=480 pipelines set/skip=360/0 texture_requests before/after_encoder=120/120
+i> 01000010 MetalTelemetry[swap]: render_encoder begin_calls=360 reused=120 created=240 descriptor_restarts=0 resource_resets=0 desc_fail=0 create_fail=0 end active/no_active=240/2021 reasons={ prepare_wait=1901, swap=120, command_buffer_end=1, rt_update_descriptor_dirty=119, resolve_needs_boundary=120 }
+i> 01000010 MetalTelemetry[swap]: transfer_request sources total/active/no_active={ render_target_transfer=120/0/120 } render_end={ none }
+i> 01000010 MetalTelemetry[swap]: shared_memory request failures={ none }
+i> 01000010 MetalTelemetry[swap]: shared_memory upload bytes={ draw_materialization=18055168 } outcomes={ already_resident=120, upload_before_render_encoder=122, upload_inside_render_encoder=120 }
+i> 01000010 MetalTelemetry[swap]: shared_memory upload_batches requests=362 ranges input/coalesced=482/369 bytes=18055168 upload_encoder acquire/reuse/copies=0/0/0 closes={ none } routes counts={ direct_write=249 } bytes={ direct_write=18055168 }
+i> 01000010 MetalTelemetry[swap]: shared_memory direct_write eligible/staged_bytes=18055168/0 rejects={ none } reject_bytes={ none }
+i> 01000010 MetalTelemetry[swap]: shared_memory lazy_upload batches no_upload/direct_only/mixed/staged_only=0/242/0/0 render_active direct_only/mixed/staged_only=120/0/0
+i> 01000010 MetalTelemetry[swap]: texture_upload_source routes counts={ cpu_guest=360, resident_shared_memory=120 } bytes={ cpu_guest=176916480, resident_shared_memory=452198400 } fallback_reasons={ none }
+i> 01000010 MetalTelemetry[swap]: draw_materialization ranges={ vertex_fetch=360, guest_index=120 } bytes={ vertex_fetch=14264160, guest_index=1780320 } invalid_ranges={ vertex_fetch=242, guest_index=120 } invalid_bytes={ vertex_fetch=14252832, guest_index=1780320 } per_draw requests/invalid/resident_skip=360/242/118
+i> 01000010 MetalTelemetry[swap]: prepared_draw_queue appends=240 flushes=240 single_draw_flushes=240 draws_flushed=240 ranges_flushed=360 bytes_flushed=16032960 invalid_flushes=240 texture_plans=0 texture_loads planned/executed=0/0 flush_reasons={ rt_key_mismatch=119, prepare_wait=120, command_buffer_end=1 } rejects={ pending_draw_pass_transfers=120 }
+i> 01000010 MetalTelemetry[swap]: constants cbv_uploads={ system=360, float=600, bool_loop=120, fetch=600, descriptor_indices=360 } cbv_reuse={ float=120, bool_loop=240, descriptor_indices=240 } descriptor_index_uploads={ vertex=120, pixel=240 } root_allocations={ graphics=360 } root_reuse={ none } root_rebuild_reasons={ frame_open=120, descriptor_indices_pointer_tuple=240, other_cbv_pointer_tuple=240 } frame_slot_waits=0 waited_submissions=0 last_wait_submission=0
+i> 01000010 MetalTelemetry[swap]: binding_cache constant_payload hits={ none } misses={ none } bytes_saved={ none } descriptor_payload hits={ none } misses={ none } bytes_saved={ none }
+i> 01000010 MetalTelemetry[swap]: root_args allocs={ graphics=360 } reuse={ none } noop={ none } slots_patched={ graphics=4200 } bytes_copied={ graphics=92160 } slot_patches={ srv0=120, srv1=120, srv2=120, srv3=120, srv10=120, uav0=120, uav1=120, uav2=120, uav3=120, sampler0=120, cbv_system=360, cbv_float=240, cbv_bool_loop=120, cbv_fetch=360, cbv_descriptor_indices=120, cbv_hull_float=120, cbv_hull_fetch=120, cbv_hull_descriptor_indices=120, cbv_domain_float=120, cbv_domain_fetch=120, cbv_domain_descriptor_indices=120, cbv_pixel_float=360, cbv_pixel_fetch=360, cbv_pixel_descriptor_indices=360 } rebuild_reasons={ frame_open=120, descriptor_indices_pointer_tuple=240, other_cbv_pointer_tuple=240 }
+i> 01000010 MetalTelemetry[swap]: encoder_bindings full={ vertex=360, fragment=720, object=360, mesh=360 } offset={ vertex=120, fragment=120 } noop={ none } null={ none } untracked={ none } resource_use calls/skips/upgrades=0/0/0 batches/resources/skips=600/1680/120 resource_sets apply={ fixed=240, texture=360 } skip={ fixed=120, root=360 } resources={ fixed=720, texture=960 }
+i> 01000010 MetalTelemetry[swap]: resource_registry serial_skip={ fixed=360, texture=480 } build={ texture=240, root=360 } register={ fixed=240, texture=360 }
+i> 01000010 MetalTelemetry[swap]: residency_set supported/enabled/attached=1/1/1 allocations added/duplicates/commits=0/0/0 resource_refs covered/fallback=2160/960 use_resource covered/fallback=120/1680 use_heap covered/fallback=0/360 live_allocations=22
+i> 01000010 MetalTelemetry[swap]: resolve_direct_host attempt/success=120/120 reject gamma/exp_bias/format/sample/depth_no_fast=0/0/0/0/0
+i> 01000010 MetalTelemetry[swap]: stage_compile requests=0 hits/misses=0/0 waits=0 failures=0 persistent hits/misses=0/0 bytes dxil/metallib=0/0 owner_ms total/max=0/0 wait_ms total/max=0/0
+i> 01000010 MetalTelemetry[swap]: shader_prep dxil requests/hits/misses/failures=0/0/0/0 bytes dxbc/dxil=0/0 ms total/max=0/0 libraries requests/failures=0/0 bytes=0 ms total/max=0/0 render_pso requests/failures=0/0 ms total/max=0/0
+i> 0100001C SDL audio stats: submitted=4096, played=4088, underruns=0, low_queue=2, max_queue_depth=8
+i> 01000010 MetalTelemetry[swap]: work swaps=120 draws=480 pipelines set/skip=360/0 texture_requests before/after_encoder=120/120
+i> 01000010 MetalTelemetry[swap]: render_encoder begin_calls=360 reused=120 created=240 descriptor_restarts=0 resource_resets=0 desc_fail=0 create_fail=0 end active/no_active=240/2263 reasons={ prepare_wait=2143, swap=120, rt_update_descriptor_dirty=120, resolve_needs_boundary=120 }
+i> 01000010 MetalTelemetry[swap]: transfer_request sources total/active/no_active={ render_target_transfer=120/0/120 } render_end={ none }
+i> 01000010 MetalTelemetry[swap]: shared_memory request failures={ none }
+i> 01000010 MetalTelemetry[swap]: shared_memory upload bytes={ draw_materialization=13762560 } outcomes={ already_resident=120, upload_before_render_encoder=120, upload_inside_render_encoder=120 }
+i> 01000010 MetalTelemetry[swap]: shared_memory upload_batches requests=360 ranges input/coalesced=480/360 bytes=13762560 upload_encoder acquire/reuse/copies=0/0/0 closes={ none } routes counts={ direct_write=240 } bytes={ direct_write=13762560 }
+i> 01000010 MetalTelemetry[swap]: shared_memory direct_write eligible/staged_bytes=13762560/0 rejects={ none } reject_bytes={ none }
+i> 01000010 MetalTelemetry[swap]: shared_memory lazy_upload batches no_upload/direct_only/mixed/staged_only=0/240/0/0 render_active direct_only/mixed/staged_only=120/0/0
+i> 01000010 MetalTelemetry[swap]: texture_upload_source routes counts={ cpu_guest=360, resident_shared_memory=120 } bytes={ cpu_guest=176916480, resident_shared_memory=452198400 } fallback_reasons={ none }
+i> 01000010 MetalTelemetry[swap]: draw_materialization ranges={ vertex_fetch=360, guest_index=120 } bytes={ vertex_fetch=10504800, guest_index=1310400 } invalid_ranges={ vertex_fetch=240, guest_index=120 } invalid_bytes={ vertex_fetch=10493280, guest_index=1310400 } per_draw requests/invalid/resident_skip=360/240/120
+i> 01000010 MetalTelemetry[swap]: prepared_draw_queue appends=240 flushes=240 single_draw_flushes=240 draws_flushed=240 ranges_flushed=360 bytes_flushed=11803680 invalid_flushes=240 texture_plans=0 texture_loads planned/executed=0/0 flush_reasons={ rt_key_mismatch=120, prepare_wait=120 } rejects={ pending_draw_pass_transfers=120 }
+i> 01000010 MetalTelemetry[swap]: constants cbv_uploads={ system=360, float=600, bool_loop=120, fetch=600, descriptor_indices=360 } cbv_reuse={ float=120, bool_loop=240, descriptor_indices=240 } descriptor_index_uploads={ vertex=120, pixel=240 } root_allocations={ graphics=360 } root_reuse={ none } root_rebuild_reasons={ frame_open=120, descriptor_indices_pointer_tuple=240, other_cbv_pointer_tuple=240 } frame_slot_waits=0 waited_submissions=0 last_wait_submission=0
+i> 01000010 MetalTelemetry[swap]: binding_cache constant_payload hits={ none } misses={ none } bytes_saved={ none } descriptor_payload hits={ none } misses={ none } bytes_saved={ none }
+i> 01000010 MetalTelemetry[swap]: root_args allocs={ graphics=360 } reuse={ none } noop={ none } slots_patched={ graphics=4200 } bytes_copied={ graphics=92160 } slot_patches={ srv0=120, srv1=120, srv2=120, srv3=120, srv10=120, uav0=120, uav1=120, uav2=120, uav3=120, sampler0=120, cbv_system=360, cbv_float=240, cbv_bool_loop=120, cbv_fetch=360, cbv_descriptor_indices=120, cbv_hull_float=120, cbv_hull_fetch=120, cbv_hull_descriptor_indices=120, cbv_domain_float=120, cbv_domain_fetch=120, cbv_domain_descriptor_indices=120, cbv_pixel_float=360, cbv_pixel_fetch=360, cbv_pixel_descriptor_indices=360 } rebuild_reasons={ frame_open=120, descriptor_indices_pointer_tuple=240, other_cbv_pointer_tuple=240 }
+i> 01000010 MetalTelemetry[swap]: encoder_bindings full={ vertex=360, fragment=720, object=360, mesh=360 } offset={ vertex=120, fragment=120 } noop={ none } null={ none } untracked={ none } resource_use calls/skips/upgrades=0/0/0 batches/resources/skips=600/1680/120 resource_sets apply={ fixed=240, texture=360 } skip={ fixed=120, root=360 } resources={ fixed=720, texture=960 }
+i> 01000010 MetalTelemetry[swap]: resource_registry serial_skip={ fixed=360, texture=480 } build={ texture=240, root=360 } register={ fixed=240, texture=360 }
+i> 01000010 MetalTelemetry[swap]: residency_set supported/enabled/attached=1/1/1 allocations added/duplicates/commits=0/0/0 resource_refs covered/fallback=2160/960 use_resource covered/fallback=120/1680 use_heap covered/fallback=0/360 live_allocations=22
+i> 01000010 MetalTelemetry[swap]: resolve_direct_host attempt/success=120/120 reject gamma/exp_bias/format/sample/depth_no_fast=0/0/0/0/0
+i> 01000010 MetalTelemetry[swap]: stage_compile requests=0 hits/misses=0/0 waits=0 failures=0 persistent hits/misses=0/0 bytes dxil/metallib=0/0 owner_ms total/max=0/0 wait_ms total/max=0/0
+i> 01000010 MetalTelemetry[swap]: shader_prep dxil requests/hits/misses/failures=0/0/0/0 bytes dxbc/dxil=0/0 ms total/max=0/0 libraries requests/failures=0/0 bytes=0 ms total/max=0/0 render_pso requests/failures=0/0 ms total/max=0/0
+i> 0001EA0F Shader 488AF094D58F1615 vertex translated successfully (13564 bytes)
+i> 00011A2B Shader 5067343DAF543A47 vertex translated successfully (13564 bytes)
+i> 00009833 Shader 7061F431F50131BA vertex translated successfully (26016 bytes)
+i> 00011A2B Shader 35DE9325EE990F95 pixel translated successfully (8856 bytes)
+i> 00001943 Shader 687A9E5AE5D019E0 pixel translated successfully (9000 bytes)
+i> 0001EA0F Shader EA377E9EDE826064 vertex translated successfully (20816 bytes)
+i> 00011A2B Shader 5B9C1C02434001B1 vertex translated successfully (30020 bytes)
+i> 00009833 Shader 80A30728D0C93D04 vertex translated successfully (27924 bytes)
+i> 00001943 Shader CCA2E7D8C843FC5B vertex translated successfully (26016 bytes)
+i> 0001EA0F Shader B7BB5BB00CDC82F6 vertex translated successfully (18328 bytes)
+i> 00011A2B Shader 7B520AFEA4C99E45 vertex translated successfully (10036 bytes)
+i> 00009833 Shader DA533C830BF581CB vertex translated successfully (15424 bytes)
+i> 00001943 Shader 82CA15706D78389D vertex translated successfully (27812 bytes)
+i> 0001EA0F Shader 0E1579FBBEFD4158 vertex translated successfully (27812 bytes)
+i> 00011A2B Shader 1B9841F9B1FBDE61 vertex translated successfully (20092 bytes)
+i> 00009833 Shader 39F86E8474FA08C3 pixel translated successfully (12884 bytes)
+i> 00001943 Shader 815C0234C66902CB pixel translated successfully (13616 bytes)
+i> 00009833 Shader 9B5EFDB8C361F9C9 vertex translated successfully (17368 bytes)
+i> 00001943 Shader C7FF9E5A0B40F919 vertex translated successfully (17368 bytes)
+i> 00009833 Shader 19DE9C91D155BE9F pixel translated successfully (22636 bytes)
+i> 00011A2B Shader F46B04039667DFC0 vertex translated successfully (24556 bytes)
+i> 0001EA0F Shader A49B3574333F928F pixel translated successfully (13260 bytes)
+i> 00009833 Shader 00407A424051C393 vertex translated successfully (20664 bytes)
+i> 00001943 Shader 77141FD7D5D08908 pixel translated successfully (24832 bytes)
+i> 00011A2B Shader C8402413195BDC75 pixel translated successfully (13448 bytes)
+i> 0001EA0F Shader 6C36A5472994842D vertex translated successfully (15500 bytes)
+i> 00009833 Shader 748F4F07B7306C55 pixel translated successfully (10596 bytes)
+i> 0001EA0F Shader 238D5BE441BAD57D pixel translated successfully (9272 bytes)
+i> 00011A2B Shader FF9C9B159A60DA80 vertex translated successfully (16360 bytes)
+i> 00009833 Shader F291D068CB604555 vertex translated successfully (33824 bytes)
+i> 0001EA0F Shader 8BCA704EE818CC1B vertex translated successfully (18880 bytes)
+i> 00011A2B Shader 7F36F03E4D6FBAA6 pixel translated successfully (20644 bytes)
+i> 00001943 Shader 6678D2BB2DAEFBA9 pixel translated successfully (35820 bytes)
+i> 00009833 Shader A0B5DA77C43CE3B4 pixel translated successfully (62268 bytes)
+i> 0001EA0F Shader FF34246F78D797AC pixel translated successfully (9968 bytes)
+i> 00011A2B Shader A10F20D71EA3D65D vertex translated successfully (84188 bytes)
+i> 00001943 Shader 0D218D0FFF48D068 pixel translated successfully (20068 bytes)
+i> 00009833 Shader 72A551C66EF865B0 pixel translated successfully (24428 bytes)
+i> 0001EA0F Shader 298563C13C9EA132 pixel translated successfully (30012 bytes)
+i> 00011A2B Shader D286D65C6A4F8383 pixel translated successfully (12544 bytes)
+i> 00001943 Shader 8DFD7B3A9B28C9C9 vertex translated successfully (16356 bytes)
+i> 00009833 Shader 8075FFCBFDDDCB9B pixel translated successfully (28796 bytes)
+i> 0001EA0F Shader 7359ECDB05AAA6CF pixel translated successfully (28436 bytes)
+i> 00001943 Shader A14A1DF8C7BF7FF3 pixel translated successfully (16608 bytes)
+i> 0001EA0F Shader C0DC997B6E57901A pixel translated successfully (23196 bytes)
+i> 00011A2B Shader 4F9EA84934D2DDCF pixel translated successfully (14804 bytes)
+i> 00001943 Shader FC175C7CBAE57D54 pixel translated successfully (14332 bytes)
+i> 00009833 Shader 0CB26B9CBA64896C pixel translated successfully (27488 bytes)
+i> 00001943 Shader 7E4DA3CDD657A78F pixel translated successfully (18388 bytes)
+i> 00011A2B Shader 28FE6CE2A5B7E6FA pixel translated successfully (22988 bytes)
+i> 0001EA0F Shader 8D0F759A0E739081 pixel translated successfully (22428 bytes)
+i> 00009833 Shader 94651002C63CACC8 vertex translated successfully (17368 bytes)
+i> 00001943 Shader 2C9065FCFD63408D pixel translated successfully (18792 bytes)
+i> 00011A2B Shader D042A9D9A858CA30 pixel translated successfully (10404 bytes)
+i> 0001EA0F Shader 2F9CCB689DDF087B vertex translated successfully (15352 bytes)
+i> 00009833 Shader D234012E58C55564 vertex translated successfully (21524 bytes)
+i> 00011A2B Shader 3588AB302FF1A9B4 vertex translated successfully (22608 bytes)
+i> 00009833 Shader 22C0EF1A912A35EC pixel translated successfully (25880 bytes)
+i> 00001943 Shader 83C03CE6ADB73D28 pixel translated successfully (23148 bytes)
+i> 0001EA0F Shader 57B38A28E56F853C pixel translated successfully (28772 bytes)
+i> 00001943 Shader 87372617668A3133 vertex translated successfully (31696 bytes)
+i> 00009833 Shader E89EF12A2CA9A592 vertex translated successfully (29592 bytes)
+i> 00011A2B Shader A1762DFB22A24620 pixel translated successfully (20376 bytes)
+i> 0001EA0F Shader 0AF05873EB563068 vertex translated successfully (33572 bytes)
+i> 00001943 Shader EB0D609275321968 pixel translated successfully (26412 bytes)
+i> 00009833 Shader C3B2F7B971C17C04 vertex translated successfully (22036 bytes)
+i> 0001EA0F Shader A74578FA06AD0821 pixel translated successfully (17140 bytes)
+i> 00011A2B Shader EE69F4E208CEF288 pixel translated successfully (15060 bytes)
+i> 00001943 Shader 2F16AF030E32525F vertex translated successfully (24556 bytes)
+i> 0001EA0F Shader B99BB0E8DC790FCC vertex translated successfully (29592 bytes)
+i> 00011A2B Shader 6F7CC56B860CE003 pixel translated successfully (14180 bytes)
+i> 0001EA0F Shader 334F5BD1B52DF3DA pixel translated successfully (16856 bytes)
+i> 00001943 Shader F4906F6BB540324C pixel translated successfully (11132 bytes)
+i> 00009833 Shader 1510BCCA53BB6D15 vertex translated successfully (12324 bytes)
+i> 00011A2B Shader FF38D485153875FC vertex translated successfully (82532 bytes)
+i> 0001EA0F Shader A02B3BC8CF7828DC vertex translated successfully (14108 bytes)
+i> 00001943 Shader 67BDB0557305EC8F vertex translated successfully (84100 bytes)
+i> 00009833 Shader 09799D646E63463D pixel translated successfully (32128 bytes)
+i> 0001EA0F Shader 4B423B1F124F748B pixel translated successfully (4952 bytes)
+i> 00011A2B Shader 360C9234E3B87ED9 vertex translated successfully (53488 bytes)
+i> 00001943 Shader 83860B77B7A03DC7 pixel translated successfully (9200 bytes)
+i> 00009833 Shader 1210B9D427AF9B8C vertex translated successfully (18472 bytes)
+i> 0001EA0F Shader DBA74A1B28AA657C vertex translated successfully (88336 bytes)
+i> 00011A2B Shader 355CA863DD3B7029 pixel translated successfully (15296 bytes)
+i> 00001943 Shader 6100A33EFB23C374 vertex translated successfully (33004 bytes)
+i> 00009833 Shader 40F5E04A90FD97DB pixel translated successfully (27584 bytes)
+i> 0001EA0F Shader 4CBFBA99C3E134AD pixel translated successfully (5612 bytes)
+i> 00011A2B Shader E10B87126768A7C2 vertex translated successfully (20100 bytes)
+i> 00001943 Shader 6DE538E01C73EBD3 pixel translated successfully (10468 bytes)
+i> 0001EA0F Shader CCA1DBC068EA80AF pixel translated successfully (16292 bytes)
+i> 00009833 Shader 05A1E7D9E99DFA7B vertex translated successfully (27972 bytes)
+i> 00011A2B Shader 33C4D782D3B46D3A pixel translated successfully (19648 bytes)
+i> 00001943 Shader 3F4BE32C49F225C4 vertex translated successfully (56352 bytes)
+i> 0001EA0F Shader 6A345F5304620E0B vertex translated successfully (93912 bytes)
+i> 00009833 Shader 13E77A0E31BA0D55 pixel translated successfully (10084 bytes)
+i> 00011A2B Shader 30BDA14D7EAF99AE pixel translated successfully (28088 bytes)
+i> 00001943 Shader 00C6BD602A15F469 vertex translated successfully (16276 bytes)
+i> 00001943 Shader 14B0C6DB40DA2B46 pixel translated successfully (26288 bytes)
+i> 00011A2B Shader 05A1E7D9E99DFA7B vertex translated successfully (28220 bytes)
+i> 00011A2B Shader 3F9C69E124879182 pixel translated successfully (16268 bytes)
+i> 00009833 Shader CA4EBAEE2059E1AF vertex translated successfully (20720 bytes)
+i> 0001EA0F Shader 0FCDC74F6B05BCF5 vertex translated successfully (22288 bytes)
+i> 00011A2B Shader 0DC9178816879997 vertex translated successfully (27056 bytes)
+i> 00011A2B Shader D15444930E85AAD3 vertex translated successfully (51336 bytes)
+i> 00001943 Shader D15444930E85AAD3 vertex translated successfully (51176 bytes)
+i> 00011A2B Shader FB3D4DE563F28468 pixel translated successfully (10988 bytes)
+i> 00001943 Shader 66805D578F3EF53A pixel translated successfully (10088 bytes)
+i> 00011A2B Shader F23C1FD397DF61B7 vertex translated successfully (47748 bytes)
+i> 00001943 Shader 6D1F12A8CDA038AA pixel translated successfully (14548 bytes)
+i> 00009833 Shader B933B4939825D09B pixel translated successfully (14468 bytes)
+i> 0001EA0F Shader C54FB87312BA78B4 vertex translated successfully (51984 bytes)
+i> 0001EA0F Shader 29E6BAD5DB41323D pixel translated successfully (10084 bytes)
+i> 0100001C SDL audio stats: submitted=5120, played=5112, underruns=0, low_queue=2, max_queue_depth=8
+i> 00000103 Controller disconnected from slot 0.
+i> 00019ACB iOS: TerminateCurrentGame requested
+i> 00019ACB KernelState::TerminateTitle
+i> 01000010 iOS: abandoning indirect ringbuffer decode during title stop/shutdown
+i> 0000490F iOS: Game execution finished (exit wait completed)
+i> 0000490F Emulator::Shutdown: starting teardown
+i> 01000010 MetalTelemetry[shutdown]: work swaps=78 draws=103214 pipelines set/skip=14165/83580 texture_requests before/after_encoder=3845/25755
+i> 01000010 MetalTelemetry[shutdown]: render_encoder begin_calls=97745 reused=95011 created=2734 descriptor_restarts=0 resource_resets=0 desc_fail=0 create_fail=0 end active/no_active=2734/1768 reasons={ unknown=280, prepare_wait=1200, swap=78, command_buffer_end=209, transfer_request=138, rt_update_descriptor_dirty=1279, texture_upload_before_draw_pass=44, shared_memory_upload_before_draw_pass=12, resolve_needs_boundary=1262 }
+i> 01000010 MetalTelemetry[shutdown]: transfer_request sources total/active/no_active={ shared_memory_upload=29/0/29, render_target_transfer=431/138/293 } render_end={ render_target_transfer=138 }
+i> 01000010 MetalTelemetry[shutdown]: shared_memory request failures={ none }
+i> 01000010 MetalTelemetry[shutdown]: shared_memory upload bytes={ draw_materialization=527351808 } outcomes={ already_resident=1262, upload_before_render_encoder=740, upload_inside_render_encoder=1033 }
+i> 01000010 MetalTelemetry[shutdown]: shared_memory upload_batches requests=3035 ranges input/coalesced=137028/48573 bytes=527351808 upload_encoder acquire/reuse/copies=29/0/94 closes={ materialization_drain=29 } routes counts={ staged_blit=94, direct_write=16299 } bytes={ staged_blit=2441216, direct_write=524910592 }
+i> 01000010 MetalTelemetry[shutdown]: shared_memory direct_write eligible/staged_bytes=524910592/2441216 rejects={ main_gpu_access_in_flight=149, mixed_range_split=4 } reject_bytes={ main_gpu_access_in_flight=2441216, mixed_range_split=147456 }
+i> 01000010 MetalTelemetry[shutdown]: shared_memory lazy_upload batches no_upload/direct_only/mixed/staged_only=0/1744/9/20 render_active direct_only/mixed/staged_only=1033/7/5
+i> 01000010 MetalTelemetry[shutdown]: texture_upload_source routes counts={ cpu_guest=266, resident_shared_memory=979 } bytes={ cpu_guest=84236032, resident_shared_memory=3687350272 } fallback_reasons={ source_already_resident=971 }
+i> 01000010 MetalTelemetry[shutdown]: draw_materialization ranges={ vertex_fetch=187829, guest_index=95298 } bytes={ vertex_fetch=2725654140, guest_index=349735818 } invalid_ranges={ vertex_fetch=46446, guest_index=21863 } invalid_bytes={ vertex_fetch=720013192, guest_index=106612356 } per_draw requests/invalid/resident_skip=97745/38312/59433
+i> 01000010 MetalTelemetry[shutdown]: prepared_draw_queue appends=51974 flushes=2167 single_draw_flushes=1100 draws_flushed=51974 ranges_flushed=150412 bytes_flushed=1793667340 invalid_flushes=1317 texture_plans=1063 texture_loads planned/executed=1510/789 flush_reasons={ rt_key_mismatch=698, queue_budget=640, prepare_wait=20, copy=669, command_buffer_end=140 } rejects={ resident_no_active_queue=32906, pending_draw_pass_transfers=1421, zpd_active=11444 }
+i> 01000010 MetalTelemetry[shutdown]: constants cbv_uploads={ system=9131, float=99524, bool_loop=79, fetch=87442, descriptor_indices=20944 } cbv_reuse={ system=88614, float=70584, bool_loop=97666, fetch=78502, descriptor_indices=149084 } descriptor_index_uploads={ vertex=79, pixel=20865 } root_allocations={ graphics=92141 } root_reuse={ graphics=5604 } root_rebuild_reasons={ frame_open=79, descriptor_indices_pointer_tuple=21184, other_cbv_pointer_tuple=92062 } frame_slot_waits=0 waited_submissions=0 last_wait_submission=0
+i> 01000010 MetalTelemetry[shutdown]: binding_cache constant_payload hits={ none } misses={ none } bytes_saved={ none } descriptor_payload hits={ none } misses={ none } bytes_saved={ none }
+i> 01000010 MetalTelemetry[shutdown]: root_args allocs={ graphics=92141 } reuse={ graphics=5604 } noop={ none } slots_patched={ graphics=221532 } bytes_copied={ graphics=23588096 } slot_patches={ srv0=79, srv1=79, srv2=79, srv3=79, srv10=79, uav0=79, uav1=79, uav2=79, uav3=79, sampler0=79, cbv_system=9131, cbv_float=77583, cbv_bool_loop=79, cbv_fetch=59930, cbv_descriptor_indices=79, cbv_hull_float=79, cbv_hull_fetch=79, cbv_hull_descriptor_indices=79, cbv_domain_float=79, cbv_domain_fetch=79, cbv_domain_descriptor_indices=79, cbv_pixel_float=23343, cbv_pixel_fetch=28860, cbv_pixel_descriptor_indices=21263 } rebuild_reasons={ frame_open=79, descriptor_indices_pointer_tuple=21184, other_cbv_pointer_tuple=92062 }
+i> 01000010 MetalTelemetry[shutdown]: encoder_bindings full={ vertex=4621, fragment=8265, object=3714, mesh=3714 } offset={ vertex=89247, fragment=89344, object=27, mesh=27 } noop={ none } null={ none } untracked={ none } resource_use calls/skips/upgrades=859/695/0 batches/resources/skips=18233/85262/46242 resource_sets apply={ fixed=2734, texture=22534 } skip={ fixed=95011, texture=75211, root=97745 } resources={ fixed=8202, texture=77060 }
+i> 01000010 MetalTelemetry[shutdown]: resource_registry serial_skip={ fixed=97745, texture=86316, root=94124 } build={ texture=32373, root=3621 } register={ fixed=2734, texture=22534 }
+i> 01000010 MetalTelemetry[shutdown]: residency_set supported/enabled/attached=1/1/1 allocations added/duplicates/commits=3/0/3 resource_refs covered/fallback=22095/112286 use_resource covered/fallback=95298/86121 use_heap covered/fallback=0/5623 live_allocations=25
+i> 01000010 MetalTelemetry[shutdown]: resolve_direct_host attempt/success=1262/964 reject gamma/exp_bias/format/sample/depth_no_fast=0/0/280/0/0
+i> 01000010 MetalTelemetry[shutdown]: stage_compile requests=123 hits/misses=11/112 waits=11 failures=0 persistent hits/misses=112/0 bytes dxil/metallib=2620212/2658424 owner_ms total/max=0/0 wait_ms total/max=0/0
+i> 01000010 MetalTelemetry[shutdown]: shader_prep dxil requests/hits/misses/failures=112/112/0/0 bytes dxbc/dxil=2773740/2479824 ms total/max=0/0 libraries requests/failures=112/0 bytes=2658424 ms total/max=0/0 render_pso requests/failures=88/0 ms total/max=0/0
+i> 0000490F Emulator::Shutdown: teardown complete
+i> 00000103 Saved game config for title 41560816
+i> 00010C9B iOS library scan: starting d
