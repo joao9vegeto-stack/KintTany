@@ -53,7 +53,7 @@ jobs:
           retention-days: 14
 
   analyze-apk:
-    if: ${ inputs.apk_url != '' }
+    if: ${{ inputs.apk_url != '' }}
     runs-on: macos-15
     steps:
       - name: Checkout PandaiOS
@@ -81,7 +81,7 @@ jobs:
           echo "REA_JADX_MCP_JAR=$RUNNER_TEMP/rea/jadx-headless-mcp-0.7.1-all.jar" >> "$GITHUB_ENV"
       - name: Download APK
         env:
-          APK_URL: ${ inputs.apk_url }
+          APK_URL: ${{ inputs.apk_url }}
         run: |
           set -euo pipefail
           case "$APK_URL" in https://*) ;; *) echo "APK URL must use HTTPS"; exit 2;; esac
@@ -98,7 +98,7 @@ jobs:
         with:
           name: PandaiOS-REA-APK-Evidence
           path: |
-            ${ runner.temp }/panda-package-evidence.json
-            ${ runner.temp }/panda-apk.sha256
+            ${{ runner.temp }}/panda-package-evidence.json
+            ${{ runner.temp }}/panda-apk.sha256
           if-no-files-found: error
           retention-days: 14
