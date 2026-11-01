@@ -1,6 +1,6 @@
 # SpartanPort for iOS — engineering baseline
 
-Status: feasibility and porting plan; no playable iOS runtime is claimed yet.
+Status: isolated iOS shell implemented; no playable PS4 runtime is claimed yet. The shell has a SwiftUI launcher, a security-scoped folder picker with basic PS4 dump validation, and a real Metal clear/presentation test. The game-start action remains deliberately disabled.
 
 ## Scope
 
@@ -52,6 +52,10 @@ Upstream references:
 - Device build for arm64; simulator success alone is not evidence of GPU/game compatibility.
 - First milestones: app launch → Metal clear → runtime library load → AOT smoke test → PS4 module initialization → first frame → audio/input → playable section.
 - Package an unsigned IPA in CI; signing requires the user's own Apple signing credentials. Never include a game dump or signing secrets in the repository/artifacts.
+
+## Implemented shell milestone (2026-11-01)
+
+A separate XcodeGen project now lives under `SpartanPort-iOS/`; it does not replace or alter the existing KintTany app target. The app can select a user-owned PS4 game folder, checks for `eboot.bin` and `sce_sys/param.sfo`, and presents a real `MTKView` backed by Metal. The CI workflow builds an unsigned device app and packages it as an IPA artifact. This is a platform-shell milestone only: it does not load the PS4 executable, execute AOT code, translate PS4 GPU commands, or start gameplay. An unsigned IPA is not installable as-is without appropriate signing.
 
 ## Immediate blockers
 

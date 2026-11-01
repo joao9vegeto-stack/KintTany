@@ -1,0 +1,76 @@
+name: SpartanPort iOS
+
+on:
+  push:
+    branches: [SpartanPort-iOS]
+  pull_request:
+    branches: [SpartanPort-iOS]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: spartanport-ios-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build-unsigned-ipa:
+    name: Build iOS app and package unsigned IPA
+    runs-on: macos-26
+    steps:
+      - name: Checkout isolated port branch
+        uses: actions/checkout@v4
+
+      - name: Select Xcode
+        shell: bash
+        run: |
+          set -euo pipefail
+          xcodebuild -version
+          xcrun --sdk iphoneos --show-sdk-version
+
+      - name: Install XcodeGen
+        shell: bash
+        run: |
+          set -euo pipefail
+          if ! command -v xcodegen >/dev/null 2>&1; then
+            brew install xcodegen
+          fi
+          xcodegen --version
+
+      - name: Generate standalone SpartanPort project
+        working-directory: SpartanPort-iOS
+        run: xcodegen generate
+
+      - name: Build for iOS device (ARM64)
+        working-directory: SpartanPort-iOS
+        run: |
+          set -euo pipefail
+          xcodebuild \
+            -project SpartanPort.xcodeproj \
+            -scheme SpartanPort \
+            -configuration Release \
+            -sdk iphoneos \
+            -destination 'generic/platform=iOS' \
+            -derivedDataPath "$RUNNER_TEMP/SpartanPortDerived" \
+            CODE_SIGNING_ALLOWED=NO \
+            build
+
+      - name: Package unsigned IPA
+        shell: bash
+        run: |
+          set -euo pipefail
+          APP="$RUNNER_TEMP/SpartanPortDerived/Build/Products/Release-iphoneos/SpartanPort.app"
+          test -d "$APP"
+          mkdir -p "$RUNNER_TEMP/ipa/Payload"
+          cp -R "$APP" "$RUNNER_TEMP/ipa/Payload/SpartanPort.app"
+          ditto -c -k --sequesterRsrc --keepParent "$RUNNER_TEMP/ipa/Payload" SpartanPort-iOS-unsigned.ipa
+          unzip -t SpartanPort-iOS-unsigned.ipa
+
+      - name: Upload unsigned IPA
+        uses: actions/upload-artifact@v4
+        with:
+          name: SpartanPort-iOS-unsigned-ipa
+          path: SpartanPort-iOS-unsigned.ipa
+          if-no-files-found: error
+          retention-days: 14
