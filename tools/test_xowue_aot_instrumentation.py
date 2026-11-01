@@ -34,6 +34,23 @@ if count != 2 or repeat != actual:
     raise SystemExit("AOT entry instrumentation is not idempotent")
 print("PASS: address-bearing AOT entry instrumentation (fresh, legacy, idempotent)")
 
+# Build 94: a function-entry hook cannot interrupt a tight PPC backedge.
+# Inject cooperative stop checks at every emitted branch label in the measured
+# hot wait routines, while leaving unrelated AOT functions unchanged.
+hot_fixture = (
+    "PPC_FUNC_IMPL(__imp__sub_822A0278) {\\n"
+    "loc_822A0280:\\n\\tif (cr0.eq) goto loc_822A0280;\\n"
+    "loc_822A0290:\\n\\treturn;\\n}\\n"
+    "PPC_FUNC_IMPL(__imp__sub_82345678) {\\n"
+    "loc_8234567C:\\n\\treturn;\\n}\\n"
+)
+hot_patched, hot_count = module.instrument_hot_loop_labels(hot_fixture)
+assert hot_count == 2, f"expected 2 hot-loop label checkpoints, got {hot_count}"
+assert "loc_822A0280:\\n\\txowue_thread_checkpoint(0x822A0280u, ctx);" in hot_patched
+assert "loc_822A0290:\\n\\txowue_thread_checkpoint(0x822A0290u, ctx);" in hot_patched
+assert "loc_8234567C:\\n\\treturn;" in hot_patched
+print("PASS: cancellable checkpoints injected at measured hot PPC loop labels only")
+
 recompiler_patch = (root / "patches" / "XenonRecomp-XOWUE.patch").read_text(encoding="utf-8")
 required_switch_fallback = (
     r'-            println("\t\t__builtin_unreachable();");',
