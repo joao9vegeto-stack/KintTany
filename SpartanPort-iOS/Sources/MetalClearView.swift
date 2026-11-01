@@ -1,5 +1,6 @@
 import MetalKit
 import SwiftUI
+import UIKit
 
 struct MetalClearView: UIViewRepresentable {
     func makeCoordinator() -> Renderer {
@@ -34,15 +35,17 @@ struct MetalClearView: UIViewRepresentable {
                 let queue = commandQueue,
                 let descriptor = view.currentRenderPassDescriptor,
                 let drawable = view.currentDrawable,
-                let commandBuffer = queue.makeCommandBuffer(),
-                let encoder = commandBuffer.makeRenderCommandEncoder(descriptor: descriptor)
+                let commandBuffer = queue.makeCommandBuffer()
             else { return }
 
             descriptor.colorAttachments[0].loadAction = .clear
             descriptor.colorAttachments[0].storeAction = .store
             descriptor.colorAttachments[0].clearColor = view.clearColor
 
-            // Encoding an empty render pass is required for Metal to perform the clear action.
+            guard let encoder = commandBuffer.makeRenderCommandEncoder(descriptor: descriptor) else {
+                return
+            }
+            // Encoding an empty render pass makes Metal execute the attachment clear.
             encoder.endEncoding()
             commandBuffer.present(drawable)
             commandBuffer.commit()
