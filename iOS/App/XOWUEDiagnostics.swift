@@ -86,7 +86,7 @@ enum XOWUEDiagnostics {
         appendLocked(message, to: url)
         let important = ["B83_", "B84_", "B85_", "B86_", "AOT_PROGRESS", "HOT_FN_CODE",
                          "THREAD_DUMP", "XENOS_", "PM4_", "SWAP_", "WAIT_", "VBLANK",
-                         "GRAPHICS_INTERRUPT", "BOOT_", "CRASH ", "runtime.native_return"]
+                         "GRAPHICS_INTERRUPT", "B90_STREAM_", "BOOT_", "CRASH ", "runtime.native_return"]
         if important.contains(where: { message.contains($0) }) {
             refreshCompactSummaryLocked(diagnosticURL: url)
         }
@@ -116,6 +116,7 @@ enum XOWUEDiagnostics {
         let streamTable = Array(lines.filter { $0.contains("B86_STREAM_CHUNK_TABLE") }.suffix(16))
         let streamRecent = Array(lines.filter { $0.contains("B86_STREAM_RECENT_FN") }.suffix(16))
         let streamWait = Array(lines.filter { $0.contains("B87_STREAM_WAIT_STATE") }.suffix(12))
+        let streamTransition = Array(lines.filter { $0.contains("B90_STREAM_") }.suffix(16))
         let streamWaitAnomaly = Array(lines.filter { $0.contains("B87_STREAM_CACHE_ANOMALY") || $0.contains("B87_STREAM_OBJECT_WORD") || $0.contains("B87_STREAM_CHUNK_TABLE") || $0.contains("B87_STREAM_BUFFER_WORD") }.suffix(32))
         let fileReads = Array(lines.filter { $0.contains("B87_NTREADFILE") }.suffix(24))
         let legacyStream = Array(lines.filter {
@@ -148,7 +149,7 @@ enum XOWUEDiagnostics {
         while sections.joined(separator: "\n").utf8.count > 16384 && sections.count > 8 {
             sections.remove(at: sections.count - 2)
         }
-        sections.insert(contentsOf: streamWait + streamWaitAnomaly + fileReads, at: max(3, sections.count - 1))
+        sections.insert(contentsOf: streamTransition + streamWait + streamWaitAnomaly + fileReads, at: max(3, sections.count - 1))
         let summary = sections.joined(separator: "\n") + "\n"
         let summaryURL = diagnosticURL.deletingLastPathComponent().appendingPathComponent(summaryFilename)
         try? summary.write(to: summaryURL, atomically: true, encoding: .utf8)

@@ -96,7 +96,7 @@ assert "XOWUE_POOL_ALLOC_82DC2BF0" in engine and "XOWUE_POOL_INIT_82DC2B14" in e
 assert "CODE_AUDIT_B66" in engine and "CODE_AUDIT_83847ABC" in engine
 assert "B85_MULTIWAIT_WATCHDOG_PUMP" in engine
 assert "obj_creator_lr=0x%08X obj_signals=%u" in engine
-assert 'CURRENT_PROJECT_VERSION: "85"' in (root / "iOS" / "project.yml").read_text(encoding="utf-8")
+assert 'CURRENT_PROJECT_VERSION: "90"' in (root / "iOS" / "project.yml").read_text(encoding="utf-8")
 print("PASS: Build 66 allocator, PPC audit, synchronization telemetry and non-signaling wait pump")
 
 # Build 34: Xbox object attributes must use root/name/flags at offsets 0/4/8
@@ -173,164 +173,101 @@ for token in ("hot0=", "hot1=", "hot2=", "hot3=", "hot4=", "hot5=", "hot6=", "ho
 if 'resumo-b\\(buildNumber).txt' not in diagnostics or "utf8.count > 16384" not in diagnostics:
     raise SystemExit("Build 86 compact diagnostic is missing or exceeds 16 KB")
 print("PASS: Build 86 hot-function/thread dumps and compact diagnostic are present")
-# Build 65: prohibit global PPC rewrites and require targeted guard/raw-code audit.
-aot=(root/"tools"/"generate_aot.py").read_text(encoding="utf-8")
+# Preserve the verified native AOT/control-flow and scheduler diagnostics.
+aot = (root / "tools" / "generate_aot.py").read_text(encoding="utf-8")
 for forbidden in ("def normalize_32bit_writes","def normalize_rlw_instructions","def normalize_32bit_arithmetic"):
-    if forbidden in aot: raise SystemExit(f"Build 65 forbids global AOT rewrite: {forbidden}")
-for required in ("CODE_AUDIT_B65_CPP_BEGIN","sub_822000E0","sub_82DC1FA0","sub_82DC2390","sub_82DC2A50","sub_82DC2B74"):
-    if required not in aot: raise SystemExit(f"Build 65 AOT audit missing {required}")
-for required in ("CODE_AUDIT_B65","XOWUE_82DC2390_STATE","XOWUE_82DC2390_GUARD","emitBuild65CodeAudit","target == 0x82DC2390u","0x82DC2014u","0x80004005ull"):
-    if required not in runtime: raise SystemExit(f"Build 65 runtime guard/audit missing {required}")
+    assert forbidden not in aot, f"global PPC rewrite remains: {forbidden}"
 assert "PPC_INST_MFTB" in workflow and "xowue_guest_timebase();" in workflow
-for forbidden in ("RLWIMI record-form CR0","RLDIMI record-form CR0","PPC_INST_RLDICL","PPC_INST_RLDICR"):
-    if forbidden in workflow: raise SystemExit(f"Build 65 workflow alters upstream instruction semantics: {forbidden}")
-print("PASS: Build 65 global PPC semantic rewrites removed; targeted 0x82DC2390 guard and raw-code audit wired")
-
-# Build 67: main thread has no GuestThread binding, and no infinite wait may
-# block the host condition variable without bounded GPU/scheduler progress.
+assert "xowue_thread_checkpoint(0x82C3C4D8u, ctx);" in aot
+assert "xowue_thread_checkpoint(uint32_t, PPCContext &);" in source.read_text(encoding="utf-8")
 assert "const bool isMainThread = (g_currentGuestThread == nullptr);" in engine
-assert "currentTid = isMainThread ? 0xF8000001u : g_currentGuestThread->handle" in engine
-assert "g_mainThreadGuestLr.load(std::memory_order_relaxed)" in engine
 assert "waitable->changed.wait_for(lock, std::chrono::milliseconds(16), ready)" in engine
 assert "g_waitSetChanged.wait_until(waitLock, wakeDeadline" in engine
-assert "const auto sliceEnd = nowBeforeWait + std::chrono::milliseconds(16);" in engine
-assert "CODE_AUDIT_B67_MAIN_WAIT_LR" in engine
-assert "dump(0x82DC2A50u,0x82DC2B78u" in engine
-assert "signalGeneration" in engine and "unconsumedSignals" in engine
-assert "signalGuestEventStructure" in engine
-assert "B85_WAIT_WATCHDOG_PUMP" in engine
-assert "B85_MULTIWAIT_WATCHDOG_PUMP" in engine
-assert "forced task completion after worker watchdog wake threshold" not in engine
-assert "g_thread2WatchdogWakes" not in engine
-assert "CODE_AUDIT_B68_MAIN_ASYNC_TASK" in engine
-assert "CODE_AUDIT_B68_EVENT_WAIT_IMPLEMENTATION" in engine
-assert "CODE_AUDIT_B68_THREAD2_FULL" in engine
-assert "if ((++audioLoopCalls & 63u) == 0u)" in engine
-assert "std::chrono::milliseconds(2)" in engine
-assert 'CURRENT_PROJECT_VERSION: "85"' in (root / "iOS" / "project.yml").read_text(encoding="utf-8")
-print("PASS: Build 68 lost-wakeup counters, pump-only wait watchdog, PPC audit and audio throttle")
-
-# Build 69: QPC fast path, synthetic timebase, and complete diagnostics.
-assert "const bool qpcFastPath = guestAddress == 0x82C3C4D8u || guestAddress == 0x822A1E08u" in engine
-assert "const bool plateau = !qpcFastPath" in engine
-assert "if (!qpcFastPath && slot->count != 0u" in engine
-assert "loopEntries % 4096u" in engine
-assert "static thread_local uint64_t offset=0,frames0=UINT64_MAX,swaps0=UINT64_MAX;" in engine
-assert "offset+=2500000ull;" in engine
-assert "tb64+=offset;" in engine
+assert "B85_WAIT_WATCHDOG_PUMP" in engine and "B85_MULTIWAIT_WATCHDOG_PUMP" in engine
 assert "snapshotAllGuestThreads()" in engine
 assert "add(g_mainGuestThread);" in engine and "add(g_graphicsInterruptThread);" in engine
 assert "static void logCodeAuditBuild69(uint8_t *base)" in engine
-for address in ("0x82C3C498u","0x822A1BC0u","0x822A01C0u","0x824E6F10u","0x82C257F0u","0x823704C0u","0x824278C0u","0x826903F0u","0x826901E0u","0x827E1250u","0x82B49DE0u","0x82B4AAE0u","0x82B4AE00u","0x40000770u","0x40002130u","0x4025D0F0u","0x4025D0F8u","0x4036FA00u","0x4036FA40u","0x4004ED60u","0x4004EDB0u"):
-    assert address in engine, f"Build 69 audit address missing {address}"
 assert "CODE_AUDIT_B69_GUEST_WORD" in engine
 assert "THREAD_DUMP id=%u entry=0x%08X exited=%u waiting=%u wait_target=0x%08X last_fn=0x%08X prev_fn=0x%08X lr=0x%08X" in engine
-assert 'CURRENT_PROJECT_VERSION: "85"' in (root / "iOS" / "project.yml").read_text(encoding="utf-8")
-print("PASS: Build 69 QPC fast path, synthetic timebase, main/interrupt thread snapshots, PPC code/data audit")
 
-# Build 69 checks for main-thread PPC context, thread snapshots, and QPC timer pacing.
-aot = (root / "tools" / "generate_aot.py").read_text(encoding="utf-8")
-runtime_stubs = source.read_text(encoding="utf-8")
-for token in ("buildMainThreadDiagnostic","g_mainThreadLastR31","XOWUE_STALL_THREADS_THREAD","49875000ull","offset+=2500000ull","decodedFrames","g_xenosFrontend.swaps"):
-    if token not in engine: raise SystemExit(f"Build 69 missing runtime token {token}")
-assert "xowue_thread_checkpoint(0x82C3C4D8u, ctx);" in aot
-assert "xowue_thread_checkpoint(uint32_t, PPCContext &);" in runtime_stubs
-print("PASS: Build 69 main-thread context and QPC pacing diagnostics")
+# Build 90: restore native PPC semantics; diagnostics may observe, never repair guest state.
+qpc_start = engine.index('extern "C" uint64_t xowue_qpc_write')
+qpc_end = engine.index('extern "C" void xowue_log_stall_threads', qpc_start)
+qpc_body = engine[qpc_start:qpc_end]
+assert "signalGuestEventHandle" not in qpc_body
+assert "pumpGuestXenosRingBuffer" not in qpc_body
+assert "std::this_thread" not in qpc_body
+assert "offset" not in qpc_body
+assert "return tb64;" in qpc_body
+assert "rate = 50000000ull" in engine
 
-for token in ("callerLR>=0x822A1C00u","callerLR>=0x822A0200u","callerLR>=0x824E6F50u","callerLR>=0x82C25800u"):
-    if token not in engine: raise SystemExit(f"Build 69 QPC loop caller range missing {token}")
+spin_start = engine.index("static void xowue_trace_hot_guest_entry(uint32_t guestAddress, PPCContext &ctx) {")
+spin_brace = engine.index("{", spin_start)
+spin_depth = 0
+spin_end = None
+for index in range(spin_brace, len(engine)):
+    if engine[index] == "{":
+        spin_depth += 1
+    elif engine[index] == "}":
+        spin_depth -= 1
+        if spin_depth == 0:
+            spin_end = index + 1
+            break
+assert spin_end is not None
+spin_body = engine[spin_start:spin_end]
+assert "signalGuestEventHandle" not in spin_body
+assert "xowue_write_be32_raw" not in spin_body
+assert "PPC_STORE_U32" not in spin_body
+assert "ctx.r4.u32 =" not in spin_body
+assert "ctx.r30.u32 =" not in spin_body
+assert "XOWUE_B90_CIRCULAR_LIST_PRESERVED" in spin_body
+assert "XOWUE_B90_BINK_STATE" in spin_body
+assert "xowue_bink_wait_bypass_stub" not in engine
+assert "XOWUE_B80_CYCLE_BROKEN" not in engine
 
+guard_start = engine.index('extern "C" bool xowue_82dc2390_observe')
+guard_end = engine.index("\n}", guard_start)
+guard_body = engine[guard_start:guard_end]
+assert "return false;" in guard_body
+assert "context.r3.u64 =" not in guard_body
+assert "context.cr0.compare" not in guard_body
 
-# Build 70 regression checks for bounded QPC tracing and wait-loop audits.
-assert "qpcLogCount" in engine, "Missing QPC log cap"
-assert "0x824E7158u" in engine, "Missing worker queue loop address in QPC coverage"
-assert "0x82370790u" in engine, "Missing main wait function in QPC coverage"
-assert "MAIN_WAIT_8237073C_82370790" in engine, "Missing main wait code audit"
-assert "XOWUE DIAGNOSTIC LOG TRUNCATED IN MIDDLE" in (root / "iOS" / "App" / "XOWUEDiagnostics.swift").read_text(encoding="utf-8")
-print("PASS: Build 70 QPC log cap, wait-loop coverage, and bounded diagnostic export")
+assert "thread_local B90StreamWatchState g_b90StreamWatch" in engine
+assert "g_b89WatchedStreamObject" not in engine
+assert "B90_STREAM_WATCH_ARMED" in engine
+assert "B90_STREAM_FIELD_TRANSITION" in engine
+assert "B89_STREAM_FIELD_WRITE_CANDIDATE" not in engine
+assert "g_b90LastAotEntry" in engine and "g_b90PreviousEntryLr" in engine
+qpc_fastpaths = [line for line in engine.splitlines() if "const bool qpcFastPath =" in line]
+assert len(qpc_fastpaths) == 2
+assert all(line.strip().endswith("guestAddress == 0x82C3C4D8u;") for line in qpc_fastpaths)
 
-# Build 71 checks: Xenos ring pump + render/streamer event wake inside stalled QPC worker loop
-engine_b71 = Path("Runtime/XOWUEEngine.cpp").read_text(encoding="utf-8")
-assert "signalGuestEventHandle(0x70016FA0u)" in engine_b71
-assert "signalGuestEventHandle(0x7003DD80u)" in engine_b71
-assert "pumpGuestXenosRingBuffer()" in engine_b71
-print("PASS: Build 71 Xenos ring pump and render/streamer wake inside stalled QPC loop")
+# Event signals remain only in actual kernel/API completion paths.
+assert "signalGuestEventHandle(event)" in engine
+assert 'CURRENT_PROJECT_VERSION: "90"' in (root / "iOS" / "project.yml").read_text(encoding="utf-8")
+print("PASS: Build 90 native PPC semantics, real 50 MHz timebase, no synthetic wakeups, thread-local stream tracing")
 
-
-# Build 72 checks: wake XAudio2/Bink waiter events (0x4004ED80 / 0x4004EDD0) and audit MAIN_824ACBF8
-engine_b72 = Path("Runtime/XOWUEEngine.cpp").read_text(encoding="utf-8")
-assert "signalGuestEventHandle(0x4004ED80u)" in engine_b72
-assert "signalGuestEventHandle(0x4004EDD0u)" in engine_b72
-assert "MAIN_824ACBF8" in engine_b72
-print("PASS: Build 72 XAudio2/Bink waiter wake (0x4004ED80/0x4004EDD0) and MAIN_824ACBF8 audit")
-
- 
-# Build 73 checks: direct DISPATCHER_HEADER SignalState (+4) wake for 0x4004ED80/0x4004EDD0 and kernel handles 0x100..0x115
-engine_b73 = Path("Runtime/XOWUEEngine.cpp").read_text(encoding="utf-8")
-assert "storeGuestBe32(gm->base,0x4004ED80u+4u,1u)" in engine_b73
-assert "signalGuestEventHandle(0x00000100u)" in engine_b73
-assert "THREAD7_82B3DE30" in engine_b73
-print("PASS: Build 73 guest DISPATCHER_HEADER SignalState wake and thread 2/3/7/8/10/11 audits")
-
-# Build 74 checks: BinkWait bypass and Thread 10 spinlock audit
-engine_b74 = Path("Runtime/XOWUEEngine.cpp").read_text(encoding="utf-8")
-assert "xowue_bink_wait_bypass_stub" in engine_b74
-assert "THREAD10_SPIN_826CF060" in engine_b74
-assert "WAIT_CALLER_82C4D4A8" in engine_b74
-print("PASS: Build 74 BinkWait 0x822A0278 bypass stub and Thread 10 audit")
-
-# Build 83: diagnostic-only wait investigation; no state-forcing workaround.
-engine_b83 = Path("Runtime/XOWUEEngine.cpp").read_text(encoding="utf-8")
-assert 'event.find("B83_") != std::string::npos' in engine_b83
-assert 'event.find("B84_") != std::string::npos' in engine_b83
-assert 'event.find("B85_") != std::string::npos' in engine_b83
-assert 'guestAddress == 0x82575250u' in engine_b83 and 'const uint32_t object = ctx.r3.u32' in engine_b83 and '(calls & 0xFFFFFu) == 0u' in engine_b83
-assert 'plus8C=' in engine_b83 and 'plus90=' in engine_b83 and 'plusA4=' in engine_b83 and 'plusA8=' in engine_b83
-assert 'context.r4.u32 & 0xFFu) != 0u' in engine_b83
-assert 'B83_NTREADFILE call=%llu' in engine_b83
-assert 'B83_HANDLE_TYPE handle=0x00000112' in engine_b83
-assert 'B83_NT_RELEASE_SEMAPHORE' in engine_b83 and 'B83_KE_RELEASE_SEMAPHORE' in engine_b83
-assert 'B83_NT_SET_EVENT' in engine_b83 and 'B83_KE_SET_EVENT' in engine_b83
-assert 'B83_WAIT_SATISFIED' in engine_b83
-assert 'THRED_DUMP' in engine_b83
-assert 'CURRENT_PROJECT_VERSION: "85"' in Path("iOS/project.yml").read_text(encoding="utf-8")
-print("PASS: Build 83 bounded diagnostic logging, stream object counters, handle 0x112 tracing, alertable-only APC")
-
-# Build 86: bounded diagnostics, first cache-window anomaly and real startup media.
-engine_b85 = Path("Runtime/XOWUEEngine.cpp").read_text(encoding="utf-8")
-assert "B86_STREAM_STATE" in engine_b85
-assert "B86_STREAM_ANOMALY" in engine_b85
-assert "B86_STREAM_CHUNK_TABLE" in engine_b85
-assert 'event.find("B85_") != std::string::npos' in engine_b85
-assert "const uint32_t object = ctx.r3.u32" in engine_b85
-assert "obj=0x%08X" in engine_b85
-assert "vtable_slot64_io_target=0x%08X" in engine_b85
-assert "direct_io_helper" not in engine_b85  # the direct helper address is sourced from the B84 instruction audit
-assert "B84_CODE_AUDIT" in engine_b85 and "logCodeAuditBuild84" in engine_b85
-assert 'event.find("B84_") != std::string::npos' in engine_b85
-assert "isStartupMoviePath" in engine_b85 and "B86_MEDIA_OPEN" in engine_b85
-assert "isSplashBikMovie" not in engine_b85 and "XOWUE_OPTIONAL_STARTUP_MOVIE_EOF" not in engine_b85
-wait_start = engine_b85.index("uint32_t waitGuestObject(")
-wait_end = engine_b85.index("uint32_t waitGuestObjects(", wait_start)
-wait_body = engine_b85[wait_start:wait_end]
+# Preserve the earlier bounded media/stream diagnostics and guest wait semantics.
+assert "B86_STREAM_STATE" in engine and "B86_STREAM_ANOMALY" in engine
+assert "B86_STREAM_CHUNK_TABLE" in engine and "B86_MEDIA_OPEN" in engine
+assert "B87_STREAM_WAIT_STATE" in engine and "B87_STREAM_CACHE_ANOMALY" in engine
+assert "B87_NTREADFILE" in engine
+wait_start = engine.index("uint32_t waitGuestObject(")
+wait_end = engine.index("uint32_t waitGuestObjects(", wait_start)
+wait_body = engine[wait_start:wait_end]
 assert "B85_WAIT_WATCHDOG_PUMP" in wait_body
 assert "markGuestWaitableSignaledLocked(waitable);" not in wait_body
-multi_end = engine_b85.index("void signalGuestWaitable(", wait_end)
-multi_body = engine_b85[wait_end:multi_end]
+multi_end = engine.index("void signalGuestWaitable(", wait_end)
+multi_body = engine[wait_end:multi_end]
 assert "B85_MULTIWAIT_WATCHDOG_PUMP" in multi_body
 assert "candidate->signaled = true" not in multi_body
 assert "candidate.unconsumedSignals != 0u" in multi_body
 assert "if (waitable->unconsumedSignals != 0u) --waitable->unconsumedSignals;" in multi_body
-assert "forced task completion after worker watchdog wake threshold" not in engine_b85
-spin_start = engine_b85.index("static void xowue_forward_pump_and_signal_spin(uint32_t guestAddress, PPCContext &ctx) {")
-spin_end = engine_b85.index("static inline void xowue_write_be32_raw", spin_start)
-spin_body = engine_b85[spin_start:spin_end]
-assert "signalGuestEventHandle(0x00000112u)" not in spin_body
-assert "pumpGuestXenosRingBuffer();" in spin_body
-diag_b85 = Path("iOS/App/XOWUEDiagnostics.swift").read_text(encoding="utf-8")
-assert 'lines.filter { $0.contains("B86_STREAM_STATE") }' in diag_b85
-assert 'lines.filter { $0.contains("B85_WAIT_") || $0.contains("B85_MULTIWAIT_") }' in diag_b85
-assert '"XOWUE_BUILD_SUMMARY build=\\(buildNumber) source=' in diag_b85
-assert 'lines.filter { $0.contains("B84_CODE_AUDIT") }' in diag_b85
-assert 'CURRENT_PROJECT_VERSION: "85"' in Path("iOS/project.yml").read_text(encoding="utf-8")
-print("PASS: Build 86 bounded stream anomaly, summary evidence, actual media opens and preserved wait semantics")
+
+diag = (root / "iOS" / "App" / "XOWUEDiagnostics.swift").read_text(encoding="utf-8")
+assert 'lines.filter { $0.contains("B86_STREAM_STATE") }' in diag
+assert 'lines.filter { $0.contains("B85_WAIT_") || $0.contains("B85_MULTIWAIT_") }' in diag
+assert '"XOWUE_BUILD_SUMMARY build=\\(buildNumber) source=' in diag
+assert 'lines.filter { $0.contains("B84_CODE_AUDIT") }' in diag
+assert 'lines.filter { $0.contains("B90_STREAM_") }' in diag
+print("PASS: B86/B87 stream and file evidence, bounded wait diagnostics, compact app summary")

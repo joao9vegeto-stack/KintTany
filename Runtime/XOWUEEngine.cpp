@@ -376,9 +376,18 @@ std::atomic<size_t> g_runtimeTracePersistB87{0};
 std::atomic<uint64_t> g_b87StreamWaitCalls{0};
 std::atomic<bool> g_b87StreamAnomalyDumped{false};
 std::atomic<uint64_t> g_b87FileReadLogs{0};
-// Build 89: watch the live UE3 stream object without mutating guest state.
-std::atomic<uint32_t> g_b89WatchedStreamObject{0u};
-std::atomic<uint32_t> g_b89StreamFieldChangeLogs{0u};
+// Build 90: per-host-thread stream observation state; never shared between PPC workers.
+struct B90StreamWatchState {
+    uint32_t object = 0u;
+    uint32_t previous9C = 0u;
+    uint32_t previousA4 = 0u;
+    uint32_t previousAC = 0u;
+    bool armed = false;
+};
+thread_local B90StreamWatchState g_b90StreamWatch{};
+thread_local uint32_t g_b90LastAotEntry = 0u;
+thread_local uint32_t g_b90PreviousEntryLr = 0u;
+std::atomic<uint32_t> g_b90StreamTransitionLogs{0u};
 std::mutex g_tlsMutex;
 std::mutex g_virtualMemoryMutex;
 std::mutex g_guestObjectMutex;
@@ -716,7 +725,7 @@ void recordAotFunctionExecution(uint32_t guestAddress) {
         lastDistinctValue = distinct;
         lastDistinctCall = calls;
     }
-    const bool qpcFastPath = guestAddress == 0x82C3C4D8u || guestAddress == 0x822A1E08u || guestAddress == 0x824E6FD8u || guestAddress == 0x82C25840u;
+    const bool qpcFastPath = guestAddress == 0x82C3C4D8u;
     const bool plateau = !qpcFastPath && calls > 12000000u && calls - lastDistinctCall > 5000000u;
     if (plateau) {
         bool expectedDump = false;
@@ -2154,11 +2163,10 @@ static void emitBuild65CodeAudit(uint8_t *base) {
         (void)event;
     }
 }
-extern "C" bool xowue_82dc2390_guard(PPCContext &context,uint8_t *base) {
-    static thread_local uint32_t calls=0u,previousLR=0u,sameCallerCalls=0u,consecutiveZero=0u;
-    ++calls; const uint32_t lr=static_cast<uint32_t>(context.lr);
-    if(lr==previousLR){if(sameCallerCalls!=UINT32_MAX)++sameCallerCalls;}else{previousLR=lr;sameCallerCalls=1u;}
-    if(lr==0x82DC2014u&&context.r3.u32==0u){if(consecutiveZero!=UINT32_MAX)++consecutiveZero;}else consecutiveZero=0u;
+extern "C" bool xowue_82dc2390_observe(PPCContext &context,uint8_t *base) {
+    static thread_local uint32_t calls=0u;
+    ++calls;
+    const uint32_t lr=static_cast<uint32_t>(context.lr);
     if(calls<=8u) {
         const uint32_t regs[]={context.r3.u32,context.r4.u32,context.r5.u32,context.r6.u32,context.r7.u32,context.r8.u32,context.r9.u32,context.r10.u32,context.r11.u32,context.r12.u32,context.r28.u32,context.r29.u32,context.r30.u32,context.r31.u32};
         const unsigned ids[]={3,4,5,6,7,8,9,10,11,12,28,29,30,31};
@@ -2173,17 +2181,17 @@ extern "C" bool xowue_82dc2390_guard(PPCContext &context,uint8_t *base) {
             for(uint32_t off=0;off<0x40u&&used>0&&static_cast<size_t>(used)<sizeof(dump);off+=4u)used+=std::snprintf(dump+used,sizeof(dump)-static_cast<size_t>(used),"%s%08X",off?",":"",loadGuestBe32(base,ptrs[p]+off));
             recordRuntimeTrace(dump);}
     }
-    if(lr==0x82DC2014u&&sameCallerCalls>=32u){context.r3.u64=0x80004005ull;context.cr0.compare<int32_t>(context.r3.s32,0,context.xer);char event[192];
-        std::snprintf(event,sizeof(event),"XOWUE_82DC2390_GUARD action=error thread=%u lr=0x%08X calls=%u zero_calls=%u r3=0x%08X",g_currentGuestThread?g_currentGuestThread->id:g_currentGuestThreadId,lr,sameCallerCalls,consecutiveZero,context.r3.u32);recordRuntimeTrace(event);return true;}
-    if(lr==0x82DC2014u&&consecutiveZero>=16u){context.r3.u64=1ull;char event[192];
-        std::snprintf(event,sizeof(event),"XOWUE_82DC2390_GUARD action=return_success thread=%u lr=0x%08X calls=%u zero_calls=%u",g_currentGuestThread?g_currentGuestThread->id:g_currentGuestThreadId,lr,sameCallerCalls,consecutiveZero);recordRuntimeTrace(event);return true;}
+    // Diagnostic observer only: native PPC function always executes.
     return false;
 }
 
 
 void xowue_thread_checkpoint(uint32_t guestAddress);
-static void xowue_forward_pump_and_signal_spin(uint32_t guestAddress, PPCContext &ctx);
+static void xowue_trace_hot_guest_entry(uint32_t guestAddress, PPCContext &ctx);
 void xowue_thread_checkpoint(uint32_t guestAddress,PPCContext &ctx){
+    g_b90PreviousEntryLr = g_currentGuestThread
+        ? g_currentGuestThread->lastGuestLr.load(std::memory_order_relaxed)
+        : g_mainThreadGuestLr.load(std::memory_order_relaxed);
     if (guestAddress == 0x82575250u) {
         // Build 86: sparse sampling plus a one-shot dump at the first pointer-like cache-window value.
         const uint64_t calls = g_b86StreamPollCalls.fetch_add(1u, std::memory_order_relaxed) + 1u;
@@ -2280,7 +2288,10 @@ void xowue_thread_checkpoint(uint32_t guestAddress,PPCContext &ctx){
         };
         const uint32_t object = validObject(ctx.r31.u32) ? ctx.r31.u32 :
                                 (validObject(ctx.r3.u32) ? ctx.r3.u32 : 0u);
-        if (object != 0u) g_b89WatchedStreamObject.store(object, std::memory_order_relaxed);
+        if (object != 0u && g_b90StreamWatch.object != object) {
+            g_b90StreamWatch = B90StreamWatchState{};
+            g_b90StreamWatch.object = object;
+        }
         uint32_t words[20]{};
         if (object != 0u) {
             for (uint32_t i = 0; i < 20u; ++i)
@@ -2359,7 +2370,7 @@ void xowue_thread_checkpoint(uint32_t guestAddress,PPCContext &ctx){
     if (guestAddress == 0x82370500u || guestAddress == 0x82427940u || guestAddress == 0x826CF060u || guestAddress == 0x825F91D8u || guestAddress == 0x824ACBF8u ||
         guestAddress == 0x824793E0u || guestAddress == 0x824792E0u ||
         guestAddress == 0x82575250u) {
-        xowue_forward_pump_and_signal_spin(guestAddress, ctx);
+        xowue_trace_hot_guest_entry(guestAddress, ctx);
     }
 uint32_t lr=static_cast<uint32_t>(ctx.lr);if(g_currentGuestThread){g_currentGuestThread->lastGuestLr.store(lr,std::memory_order_relaxed);g_currentGuestThread->lastR3.store(ctx.r3.u32,std::memory_order_relaxed);g_currentGuestThread->lastR4.store(ctx.r4.u32,std::memory_order_relaxed);g_currentGuestThread->lastR11.store(ctx.r11.u32,std::memory_order_relaxed);g_currentGuestThread->lastR30.store(ctx.r30.u32,std::memory_order_relaxed);g_currentGuestThread->lastR31.store(ctx.r31.u32,std::memory_order_relaxed);}else{uint32_t prev=g_mainThreadLastPc.exchange(guestAddress);if(prev!=guestAddress)g_mainThreadPrevFn.store(prev);g_mainThreadGuestLr.store(lr);g_mainThreadLastR3.store(ctx.r3.u32);g_mainThreadLastR4.store(ctx.r4.u32);g_mainThreadLastR11.store(ctx.r11.u32);g_mainThreadLastR30.store(ctx.r30.u32);g_mainThreadLastR31.store(ctx.r31.u32);uint32_t i=g_mainThreadRecentAotIdx.fetch_add(1);g_mainThreadRecentAotFns[i&15u].store(guestAddress);}xowue_thread_checkpoint(guestAddress);}
 void xowue_thread_checkpoint(uint32_t guestAddress) {
@@ -2371,51 +2382,49 @@ void xowue_thread_checkpoint(uint32_t guestAddress) {
     }
     auto auditMemory = g_activeGuestMemory.lock();
     if (auditMemory && auditMemory->base) { emitBuild65CodeAudit(auditMemory->base); logCodeAuditBuild69(auditMemory->base); logCodeAuditBuild84(auditMemory->base); }
+    const uint32_t previousGuestFunction = g_b90LastAotEntry;
+    const uint32_t previousGuestLr = g_b90PreviousEntryLr;
     recordAotFunctionExecution(guestAddress);
-    // Build 89: a field change observed at this function entry was made by
-    // the immediately preceding AOT function on this guest thread. This
-    // watchpoint is read-only and never writes the guest stream object.
+    g_b90LastAotEntry = guestAddress;
+    // Build 90: thread-local read-only transition observer. It reports the
+    // previous AOT entry as a candidate context, never as a proven store PC.
     if (auditMemory && auditMemory->base) {
-        const uint32_t object = g_b89WatchedStreamObject.load(std::memory_order_relaxed);
+        const uint32_t object = g_b90StreamWatch.object;
         if (object != 0u && validGuestRange(object, 0xB0u)) {
             const uint32_t field9C = loadGuestBe32(auditMemory->base, object + 0x9Cu);
             const uint32_t fieldA4 = loadGuestBe32(auditMemory->base, object + 0xA4u);
             const uint32_t fieldAC = loadGuestBe32(auditMemory->base, object + 0xACu);
-            static thread_local uint32_t watchedObject = 0u;
-            static thread_local uint32_t previous9C = 0u;
-            static thread_local uint32_t previousA4 = 0u;
-            static thread_local uint32_t previousAC = 0u;
-            if (watchedObject != object) {
-                watchedObject = object;
-                previous9C = field9C;
-                previousA4 = fieldA4;
-                previousAC = fieldAC;
-                char event[192];
+            if (!g_b90StreamWatch.armed) {
+                g_b90StreamWatch.previous9C = field9C;
+                g_b90StreamWatch.previousA4 = fieldA4;
+                g_b90StreamWatch.previousAC = fieldAC;
+                g_b90StreamWatch.armed = true;
+                char event[224];
                 std::snprintf(event, sizeof(event),
-                    "B89_STREAM_WATCH_ARMED thread=%u object=0x%08X field9C=0x%08X fieldA4=0x%08X fieldAC=0x%08X",
-                    g_currentGuestThread ? g_currentGuestThread->id : 0u,
+                    "B90_STREAM_WATCH_ARMED thread=%u object=0x%08X field9C=%08X fieldA4=%08X fieldAC=%08X",
+                    g_currentGuestThread ? g_currentGuestThread->id : g_currentGuestThreadId,
                     object, field9C, fieldA4, fieldAC);
                 recordRuntimeTrace(event);
-            } else if (field9C != previous9C || fieldA4 != previousA4 || fieldAC != previousAC) {
-                const uint32_t previousFn = g_currentGuestThread
-                    ? g_currentGuestThread->lastCallerFn.load(std::memory_order_relaxed)
-                    : g_mainThreadPrevFn.load(std::memory_order_relaxed);
-                const uint32_t threadId = g_currentGuestThread ? g_currentGuestThread->id : 0u;
-                const uint32_t lr = g_currentGuestThread
-                    ? g_currentGuestThread->lastGuestLr.load(std::memory_order_relaxed)
-                    : g_mainThreadGuestLr.load(std::memory_order_relaxed);
-                if (g_b89StreamFieldChangeLogs.fetch_add(1u, std::memory_order_relaxed) < 256u) {
-                    char event[320];
+            } else if (field9C != g_b90StreamWatch.previous9C ||
+                       fieldA4 != g_b90StreamWatch.previousA4 ||
+                       fieldAC != g_b90StreamWatch.previousAC) {
+                if (g_b90StreamTransitionLogs.fetch_add(1u, std::memory_order_relaxed) < 512u) {
+                    char event[384];
                     std::snprintf(event, sizeof(event),
-                        "B89_STREAM_FIELD_WRITE_CANDIDATE thread=%u object=0x%08X previous_fn=0x%08X observer_fn=0x%08X lr=0x%08X "
-                        "9C=%08X->%08X A4=%08X->%08X AC=%08X->%08X",
-                        threadId, object, previousFn, guestAddress, lr,
-                        previous9C, field9C, previousA4, fieldA4, previousAC, fieldAC);
+                        "B90_STREAM_FIELD_TRANSITION thread=%u object=0x%08X previous_guest_fn=0x%08X previous_lr=0x%08X "
+                        "observer_fn=0x%08X observer_lr=0x%08X 9C=%08X->%08X A4=%08X->%08X AC=%08X->%08X",
+                        g_currentGuestThread ? g_currentGuestThread->id : g_currentGuestThreadId,
+                        object, previousGuestFunction, previousGuestLr, guestAddress,
+                        g_currentGuestThread ? g_currentGuestThread->lastGuestLr.load(std::memory_order_relaxed)
+                                             : g_mainThreadGuestLr.load(std::memory_order_relaxed),
+                        g_b90StreamWatch.previous9C, field9C,
+                        g_b90StreamWatch.previousA4, fieldA4,
+                        g_b90StreamWatch.previousAC, fieldAC);
                     recordRuntimeTrace(event);
                 }
-                previous9C = field9C;
-                previousA4 = fieldA4;
-                previousAC = fieldAC;
+                g_b90StreamWatch.previous9C = field9C;
+                g_b90StreamWatch.previousA4 = fieldA4;
+                g_b90StreamWatch.previousAC = fieldAC;
             }
         }
     }
@@ -2468,7 +2477,7 @@ void xowue_thread_checkpoint(uint32_t guestAddress) {
     }
     // Build 73: QPC is a leaf fast path and can be called from guest timer busy-waits.
     // Never sleep or yield from its AOT entry instrumentation.
-    const bool qpcFastPath = guestAddress == 0x82C3C4D8u || guestAddress == 0x822A1E08u || guestAddress == 0x824E6FD8u || guestAddress == 0x824E7158u || guestAddress == 0x8237073Cu || guestAddress == 0x82370790u || guestAddress == 0x82C25840u;
+    const bool qpcFastPath = guestAddress == 0x82C3C4D8u;
     // Build 89: a hot poll may service the Xenos command processor, but it
     // must never signal unrelated guest events. Only the real producer owns
     // completion; synthetic SetEvent calls corrupt guest wait semantics.
@@ -2613,8 +2622,7 @@ static void __xowue_sub_83847AC0_init(PPCContext &ctx, uint8_t *base) {
 }
 static void __xowue_sub_83847AC4_free(PPCContext &ctx, uint8_t *) { ctx.r3.u64=0ull; }
 
-static inline void xowue_write_be32_raw(uint8_t *base, uint32_t addr, uint32_t val);
-static void xowue_forward_pump_and_signal_spin(uint32_t guestAddress, PPCContext &ctx) {
+static void xowue_trace_hot_guest_entry(uint32_t guestAddress, PPCContext &ctx) {
     // Build 81: stream-cache poll state for 0x82575250 (vtable+64 used by 0x82575480).
     if (guestAddress == 0x82575250u) {
         static std::atomic<uint32_t> s_b81Polls{0u};
@@ -2707,11 +2715,10 @@ static void xowue_forward_pump_and_signal_spin(uint32_t guestAddress, PPCContext
                 recordRuntimeTrace(ev);
             }
             if (cycle) {
-                // Breaks only the cycle-closing link so 0x824ACC1C..0x824ACC30 terminates.
-                xowue_write_be32_raw(b80Base, cycleFrom + 0x28u, 0u);
+                // Circular links are guest-owned data; report them without rewriting the list.
                 char ev[160];
                 std::snprintf(ev, sizeof(ev),
-                    "XOWUE_B80_CYCLE_BROKEN node=0x%08X was_next=0x%08X entry=%u",
+                    "XOWUE_B90_CIRCULAR_LIST_PRESERVED node=0x%08X next=0x%08X entry=%u",
                     cycleFrom, cycleTo, entryNo);
                 recordRuntimeTrace(ev);
             }
@@ -2723,20 +2730,20 @@ static void xowue_forward_pump_and_signal_spin(uint32_t guestAddress, PPCContext
         }
     }
     if (guestAddress == 0x82427940u || guestAddress == 0x82370500u) {
-        if (guestAddress == 0x82427940u && ctx.r3.u32 > 0u && ctx.r3.u32 < 100000u) {
-            ctx.r4.u32 = ctx.r3.u32;
-            ctx.r30.u32 = 0u;
-        }
         auto activeMem = g_activeGuestMemory.lock();
-        uint8_t *base = activeMem ? activeMem->base : nullptr;
+        const uint8_t *base = activeMem ? activeMem->base : nullptr;
         const uint32_t hbink = ctx.r31.u32;
-        if (base != nullptr && hbink >= 0x40000000u && hbink < 0x70000000u && validGuestRange(hbink, 0x40u)) {
+        if (base != nullptr && hbink >= 0x40000000u && hbink < 0x70000000u &&
+            validGuestRange(hbink, 0x40u)) {
             const uint32_t frames = loadGuestBe32(base, hbink + 0x08u);
-            if (frames > 0u && frames < 100000u) {
-                xowue_write_be32_raw(base, hbink + 0x0Cu, frames);
-                xowue_write_be32_raw(base, hbink + 0x10u, frames);
-                ctx.r4.u32 = frames;
-                ctx.r30.u32 = 0u;
+            static std::atomic<uint32_t> binkStateLogs{0u};
+            if (binkStateLogs.fetch_add(1u, std::memory_order_relaxed) < 32u) {
+                char event[224];
+                std::snprintf(event, sizeof(event),
+                    "XOWUE_B90_BINK_STATE fn=0x%08X thread=%u object=0x%08X frames=%u r3=0x%08X r4=0x%08X r30=0x%08X",
+                    guestAddress, g_currentGuestThread ? g_currentGuestThread->id : g_currentGuestThreadId,
+                    hbink, frames, ctx.r3.u32, ctx.r4.u32, ctx.r30.u32);
+                recordRuntimeTrace(event);
             }
         }
     }
@@ -2771,32 +2778,8 @@ static void xowue_forward_pump_and_signal_spin(uint32_t guestAddress, PPCContext
     }
 }
 
-static inline void xowue_write_be32_raw(uint8_t *base, uint32_t addr, uint32_t val) {
-    if (base != nullptr && addr >= 0x00010000u && addr <= 0xFFFFF000u) {
-        const uint32_t be = __builtin_bswap32(val);
-        std::memcpy(base + addr, &be, sizeof(be));
-    }
-}
-
-static void xowue_bink_wait_bypass_stub(PPCContext &context, uint8_t *base) {
-    pumpGuestXenosRingBuffer();
-    xowue_write_be32_raw(base, 0x4004ED80u + 4u, 1u);
-    xowue_write_be32_raw(base, 0x4004EDD0u + 4u, 1u);
-    xowue_write_be32_raw(base, 0x70016FA0u + 4u, 1u);
-    xowue_write_be32_raw(base, 0x7003DD80u + 4u, 1u);
-    signalGuestEventHandle(0x4004ED80u);
-    signalGuestEventHandle(0x4004EDD0u);
-    signalGuestEventHandle(0x00000100u);
-    signalGuestEventHandle(0x00000102u);
-    signalGuestEventHandle(0x00000112u);
-    signalGuestEventHandle(0x00000115u);
-    signalGuestEventHandle(0x70016FA0u);
-    signalGuestEventHandle(0x7003DD80u);
-    context.r3.u64 = 0u;
-}
 
 PPCFunc *xowue_lookup_indirect(PPCContext &context, uint8_t *base, uint32_t target) {
-    (void)xowue_bink_wait_bypass_stub;
     // Generated PPC code can remain in a guest-side indirect-dispatch loop
     // without entering a syscall/wait primitive. Poll cancellation here so the
     // native Exit button can unwind such loops instead of leaving an orphaned
@@ -2828,8 +2811,8 @@ PPCFunc *xowue_lookup_indirect(PPCContext &context, uint8_t *base, uint32_t targ
 }
 
 void xowue_dispatch_indirect(PPCContext &context, uint8_t *base, uint32_t target) {
-    // Build 65: targeted recovery for the observed null callback loop at 0x82DC2390.
-    if (target == 0x82DC2390u && xowue_82dc2390_guard(context, base)) return;
+    // Build 90: retain callback telemetry without replacing native PPC return values.
+    if (target == 0x82DC2390u && xowue_82dc2390_observe(context, base)) return;
     if (g_currentGuestThread) {
         g_currentGuestThread->lastDispatchTarget.store(target, std::memory_order_relaxed);
         g_currentGuestThread->lastR3.store(context.r3.u32, std::memory_order_relaxed);
@@ -7502,21 +7485,39 @@ void xowue_RtlLeaveCriticalSection(PPCContext &context, uint8_t *base) {
     }
 }
 
-extern "C" uint64_t xowue_guest_timebase(void){constexpr uint64_t rate=49875000ull;
+extern "C" uint64_t xowue_guest_timebase(void) {
+    // Match KeQueryPerformanceFrequency's guest-visible 50 MHz clock domain.
 #if defined(__APPLE__)
-uint64_t ns=clock_gettime_nsec_np(CLOCK_UPTIME_RAW);
+    const uint64_t ns = clock_gettime_nsec_np(CLOCK_UPTIME_RAW);
 #else
-uint64_t ns=static_cast<uint64_t>(std::chrono::duration_cast<std::chrono::nanoseconds>(std::chrono::steady_clock::now().time_since_epoch()).count());
+    const uint64_t ns = static_cast<uint64_t>(std::chrono::duration_cast<std::chrono::nanoseconds>(
+        std::chrono::steady_clock::now().time_since_epoch()).count());
 #endif
-return(ns/1000000000ull)*rate+((ns%1000000000ull)*rate)/1000000000ull;}
-extern "C" uint64_t xowue_qpc_write(uint32_t outPtr,uint64_t tb64,uint32_t callerLR){
-static std::atomic<uint64_t> calls{0};static constexpr uint32_t loop[]={0x822A1E08u,0x822A0278u,0x824E6FD8u,0x824E7158u,0x8237073Cu,0x82370790u,0x82C25840u,0x82C259C8u,0x82427940u,0x824ACBF8u,0x82B49E20u};static thread_local uint32_t tid0=UINT32_MAX,repeat=0;static thread_local uint64_t offset=0,frames0=UINT64_MAX,swaps0=UINT64_MAX;
-uint64_t call=calls.fetch_add(1)+1;uint32_t tid=g_currentGuestThread?g_currentGuestThread->id:g_currentGuestThreadId;uint64_t frames=0,swaps=0;{std::lock_guard<std::mutex> l(g_xenosMutex);frames=g_xenosFrontend.decodedFrames;swaps=g_xenosFrontend.swaps;}
-if(tid0!=tid){tid0=tid;repeat=0;offset=0;frames0=frames;swaps0=swaps;}bool fresh=frames!=frames0||swaps!=swaps0;if(fresh){frames0=frames;swaps0=swaps;repeat=0;}
-bool loopCaller=callerLR==loop[0]||(callerLR>=0x822A1C00u&&callerLR<0x822A2100u)||(callerLR>=0x822A0200u&&callerLR<0x822A0450u)||(callerLR>=0x824E6F50u&&callerLR<0x824E7360u)||(callerLR>=0x82370700u&&callerLR<0x82370840u)||(callerLR>=0x82C25800u&&callerLR<0x82C25A40u);for(uint32_t x:loop)loopCaller=loopCaller||callerLR==x;if(!loopCaller&&g_currentGuestThread){uint32_t p=g_currentGuestThread->lastCallerFn.load();loopCaller=p==loop[0]||p==loop[1]||p==loop[2]||p==loop[3];}else if(!loopCaller){uint32_t p=g_mainThreadPrevFn.load();loopCaller=p==loop[0]||p==loop[1]||p==loop[2]||p==loop[3];}
-if(!fresh){if(repeat!=UINT32_MAX)++repeat;if(offset<=UINT64_MAX-2500000ull)offset+=2500000ull;if((repeat&127u)==0u){pumpGuestXenosRingBuffer();if(auto gm=g_activeGuestMemory.lock();gm&&gm->base){storeGuestBe32(gm->base,0x4004ED80u+4u,1u);storeGuestBe32(gm->base,0x4004EDD0u+4u,1u);}signalGuestEventHandle(0x4004ED80u);signalGuestEventHandle(0x4004EDD0u);signalGuestEventHandle(0x00000100u);signalGuestEventHandle(0x00000102u);signalGuestEventHandle(0x00000112u);signalGuestEventHandle(0x00000115u);signalGuestEventHandle(0x70016FA0u);signalGuestEventHandle(0x7003DD80u);signalGuestEventHandle(0x7003DF80u);if(callerLR>=0x824E6F50u&&callerLR<0x824E7360u)std::this_thread::sleep_for(std::chrono::microseconds(100));else std::this_thread::yield();}}else repeat=0;
-if(tb64<=UINT64_MAX-offset)tb64+=offset;if(static_cast<uint32_t>(tb64)==0)tb64|=1ull;auto m=g_activeGuestMemory.lock();bool valid=outPtr&&m&&m->base&&validGuestRange(outPtr,8);if(valid){storeGuestBe32(m->base,outPtr,static_cast<uint32_t>(tb64>>32));storeGuestBe32(m->base,outPtr+4,static_cast<uint32_t>(tb64));}
-static std::atomic<uint32_t> qpcLogCount{0};if((call<=8||!valid||(loopCaller&&repeat==2))&&qpcLogCount.fetch_add(1,std::memory_order_relaxed)<16u){char e[320];std::snprintf(e,sizeof(e),"XOWUE_QPC_WRITE call=%llu thread=%u out_ptr=0x%08X tb64=0x%016llX synthetic_offset=%llu caller_lr=0x%08X frames=%llu swaps=%llu loop_caller=%u out_ptr_valid=%u",(unsigned long long)call,tid,outPtr,(unsigned long long)tb64,(unsigned long long)offset,callerLR,(unsigned long long)frames,(unsigned long long)swaps,loopCaller?1u:0u,valid?1u:0u);std::fprintf(stderr,"%s\n",e);recordRuntimeTrace(e);}return tb64;}
+    constexpr uint64_t rate = 50000000ull;
+    return (ns / 1000000000ull) * rate + ((ns % 1000000000ull) * rate) / 1000000000ull;
+}
+
+extern "C" uint64_t xowue_qpc_write(uint32_t outPtr, uint64_t tb64, uint32_t callerLR) {
+    // This helper implements the guest's timebase read/write only. It must not
+    // advance time synthetically, pump graphics, yield, or signal guest events.
+    const auto memory = g_activeGuestMemory.lock();
+    const bool valid = outPtr != 0u && memory && memory->base && validGuestRange(outPtr, 8u);
+    if (valid) {
+        storeGuestBe32(memory->base, outPtr, static_cast<uint32_t>(tb64 >> 32u));
+        storeGuestBe32(memory->base, outPtr + 4u, static_cast<uint32_t>(tb64));
+    }
+    static std::atomic<uint32_t> qpcLogCount{0u};
+    const uint32_t logIndex = qpcLogCount.fetch_add(1u, std::memory_order_relaxed);
+    if (logIndex < 8u || (!valid && logIndex < 16u)) {
+        char event[256];
+        std::snprintf(event, sizeof(event),
+            "XOWUE_QPC_READ thread=%u value=0x%016llX out_ptr=0x%08X valid=%u caller_lr=0x%08X",
+            g_currentGuestThread ? g_currentGuestThread->id : g_currentGuestThreadId,
+            static_cast<unsigned long long>(tb64), outPtr, valid ? 1u : 0u, callerLR);
+        recordRuntimeTrace(event);
+    }
+    return tb64;
+}
 extern "C" void xowue_log_stall_threads(void) {
     std::vector<std::shared_ptr<GuestThread>> snapshot = snapshotAllGuestThreads();
     const auto mem = g_activeGuestMemory.lock();

@@ -26,9 +26,9 @@ assert "calls & 0xFFFFFu" in engine
 assert "guestAddress == 0x82C4BE30u" in engine
 assert "B87_STREAM_WAIT_STATE" in engine and "B87_STREAM_CACHE_ANOMALY" in engine
 assert "B87_NTREADFILE" in engine
-assert "B89_STREAM_WATCH_ARMED" in engine
-assert "B89_STREAM_FIELD_WRITE_CANDIDATE" in engine
-assert "g_b89WatchedStreamObject" in engine
+assert "B90_STREAM_WATCH_ARMED" in engine
+assert "B90_STREAM_FIELD_TRANSITION" in engine
+assert "g_b90StreamWatch" in engine
 assert "Build 89: a hot poll may service the Xenos command processor" in engine
 assert "Build 73 (MCLA-4iOS / rexglue-sdk pattern): Wake both guest" not in engine
 qpc_fastpaths = [line for line in engine.splitlines() if "const bool qpcFastPath =" in line]
