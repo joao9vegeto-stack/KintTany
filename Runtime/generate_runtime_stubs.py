@@ -159,6 +159,44 @@ def instrument_aot_entries(contents: str) -> tuple[str, int]:
     return PPC_FUNCTION_RE.sub(add_checkpoint, contents), instrumented
 
 
+HOT_LOOP_CHECKPOINT_FUNCTIONS = {0x822A0278, 0x82C25840, 0x82C259C8}
+
+
+def instrument_hot_loop_labels(contents: str) -> tuple[str, int]:
+    """Add cancellable PPC checkpoints at branch labels in the known hot wait functions.
+
+    XenonRecomp emits C++ labels for PPC branch targets. A checkpoint at each
+    label is reached again when a backward branch spins, unlike a function-entry
+    hook. Keep this narrowly scoped to the three hot functions measured by XOWUE.
+    """
+    function_re = re.compile(r"(?m)^PPC_FUNC_IMPL\\(__imp__([^)]*)\\)\\s*\\{")
+    label_re = re.compile(r"(?m)^([ \\t]*)loc_([0-9A-Fa-f]{1,8}):[ \\t]*$")
+    edits: list[tuple[int, int, str]] = []
+    count = 0
+    for function in function_re.finditer(contents):
+        address_match = re.search(r"([0-9A-Fa-f]{8})$", function.group(1))
+        if address_match is None or int(address_match.group(1), 16) not in HOT_LOOP_CHECKPOINT_FUNCTIONS:
+            continue
+        closing = re.search(r"(?m)^}", contents[function.end():])
+        if closing is None:
+            raise ValueError(f"unterminated hot PPC function {function.group(1)}")
+        body_start = function.end()
+        body_end = body_start + closing.start()
+        body = contents[body_start:body_end]
+        for label in label_re.finditer(body):
+            indent, raw_address = label.group(1), label.group(2)
+            guest_address = int(raw_address, 16)
+            replacement = (
+                f"{indent}loc_{raw_address}:\\n"
+                f"{indent}\\txowue_thread_checkpoint(0x{guest_address:08X}u, ctx);"
+            )
+            edits.append((body_start + label.start(), body_start + label.end(), replacement))
+            count += 1
+    for start, end, replacement in reversed(edits):
+        contents = contents[:start] + replacement + contents[end:]
+    return contents, count
+
+
 def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("--ppc-dir", required=True, type=Path)
@@ -189,6 +227,7 @@ def main() -> int:
         contents = source.read_text(encoding="utf-8")
         original = contents
         contents, instrumented = instrument_aot_entries(contents)
+        contents, loop_checkpoints = instrument_hot_loop_labels(contents)
         for address in sorted(tuple(pending)):
             symbol = f"sub_{address:08X}"
             marker = f"PPC_FUNC_IMPL(__imp__{symbol}) {{"
@@ -206,7 +245,7 @@ def main() -> int:
             declarations = []
             if instrumented and "extern void xowue_thread_checkpoint(uint32_t);" not in contents:
                 declarations.append("extern void xowue_thread_checkpoint(uint32_t);")
-            if instrumented and "extern void xowue_thread_checkpoint(uint32_t, PPCContext &);" not in contents:
+            if (instrumented or loop_checkpoints) and "extern void xowue_thread_checkpoint(uint32_t, PPCContext &);" not in contents:
                 declarations.append("extern void xowue_thread_checkpoint(uint32_t, PPCContext &);")
             if "xowue_untranslated_tail(" in contents and "extern void xowue_untranslated_tail(uint32_t);" not in contents:
                 declarations.append("extern void xowue_untranslated_tail(uint32_t);")
@@ -719,7 +758,7 @@ def main() -> int:
             f"compatibility imports lack a dispatch route: {sorted(missing_compat)}"
         )
     implemented_imports = len(set(imports) & implemented)
-    print(f"generated {len(imports)} import adapters ({implemented_imports} explicit handlers, {len(imports) - implemented_imports} classified runtime compatibility handlers); marked {len(to_mark)}/{len(addresses)} undecoded words with function entries")
+    print(f"generated {len(imports)} import adapters ({implemented_imports} explicit handlers, {len(imports) - implemented_imports} classified runtime compatibility handlers); marked {len(to_mark)}/{len(addresses)} undecoded words with function entries; inserted cancellable checkpoints at {sum(1 for _ in ())} hot-loop labels")
     return 0
 
 if __name__ == "__main__":
