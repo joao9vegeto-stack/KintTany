@@ -1604,6 +1604,13 @@ private struct XOWUERootView: View {
                             .foregroundStyle(XOWUEPalette.yellowLight)
                     }
                 }
+                if let url = XOWUEDiagnostics.summaryFileURL() {
+                    ShareLink(item: url) {
+                        Label(XOWUEDiagnostics.summaryFilename, systemImage: "doc.text.magnifyingglass")
+                            .font(.system(size: 10, weight: .bold, design: .rounded))
+                            .foregroundStyle(XOWUEPalette.yellowLight)
+                    }
+                }
                 if let url = XOWUEDiagnostics.existingCrashFileURL() {
                     ShareLink(item: url) {
                         Label(XOWUEDiagnostics.crashFilename, systemImage: "exclamationmark.3")

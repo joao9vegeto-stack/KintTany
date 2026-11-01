@@ -194,17 +194,16 @@ assert "_fpsLabel.layer.zPosition = 1000.0;" in vulkan
 assert "[self bringSubviewToFront:_fpsLabel];" in vulkan
 print("PASS: immediate SAIR dismissal after native stop request and isolated real guest FPS badge")
 
-# Build 39: only known UE3 startup movie files may fall back to EOF when absent.
-assert "isKnownOptionalStartupMovie" in engine
-assert "XOWUE_OPTIONAL_STARTUP_MOVIE_EOF" in engine
-assert '".XOWUEVirtualMedia"' in engine
-assert 'filename == "ravenlogo.xxx"' in engine
-assert 'filename == "blank.bik"' in engine
-assert 'filename == "blank.xxx"' in engine
-assert 'filename == "marvel_intro.xxx"' in engine
-for movie in ("ravenlogo.bik", "ue3_logo.bik", "fox_logo.bik",
-              "marvel_intro.bik", "atvi_logo.bik"):
-    assert movie in engine
+# Build 86: never fake EOF or report existing Bink files as missing.
+assert "isStartupMoviePath" in engine
+assert "B86_MEDIA_OPEN" in engine
+assert "isSplashBikMovie" not in engine
+assert "isKnownOptionalStartupMovie" not in engine
+assert "XOWUE_OPTIONAL_STARTUP_MOVIE_EOF" not in engine
+assert '".XOWUEVirtualMedia"' not in engine
+assert 'lower.find("wgame/movies/")' in engine
+assert 'lower.ends_with(".bik") || lower.ends_with(".xxx")' in engine
+assert "logStartupMovieOpen" in engine
 assert "resolveCaseInsensitivePath(root, rel)" in engine
 assert "signal.signalNow();" in engine
 assert "g_lastValidScratchReg4Callback" in engine
@@ -213,7 +212,7 @@ assert "XENOS_GRAPHICS_INTERRUPT restored SCRATCH_REG4 target=0x%08X" in engine
 assert "XOWUE_AOT_HOTSPOT guest=0x%08X calls=%llu thread=%u cooperative_yield=1" in engine
 patch = Path("patches/XenonRecomp-XOWUE.patch").read_text()
 assert "xowue_note_scratch_reg4_write" in patch
-print("PASS: .bik preflight, APFS path case-folding, one-shot SCRATCH_REG4 recovery, NtReadFile event, hotspot yields")
+print("PASS: real Bink media opens, APFS path case-folding, one-shot SCRATCH_REG4 recovery, NtReadFile event, hotspot yields")
 
 
 # Build 58: AOT spin detector, recursive case-folded UE3 package index,

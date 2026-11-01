@@ -232,6 +232,8 @@ jobs:
           python3 tools/test_xowue_aot_instrumentation.py
           python3 -m py_compile tools/generate_aot.py
           python3 tools/generate_aot.py --self-test
+          python3 -m py_compile tools/test_xowue_build86_diagnostics.py
+          python3 tools/test_xowue_build86_diagnostics.py
 
       - name: Validate ported Xenos shader translator on macOS
         run: |

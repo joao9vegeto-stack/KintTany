@@ -363,6 +363,14 @@ std::atomic<size_t> g_runtimeTracePersistMilestones{0};
 std::atomic<size_t> g_runtimeTracePersistSwaps{0};
 std::atomic<size_t> g_runtimeTracePersistGraphics{0};
 std::atomic<size_t> g_runtimeTracePersistRingKicks{0};
+std::atomic<size_t> g_runtimeTracePersistB83{0};
+std::atomic<size_t> g_runtimeTracePersistB84{0};
+std::atomic<size_t> g_runtimeTracePersistB85{0};
+std::atomic<size_t> g_runtimeTracePersistB86Stream{0};
+std::atomic<size_t> g_runtimeTracePersistB86Media{0};
+std::atomic<bool> g_runtimeTraceFileLimitMarkerWritten{false};
+std::atomic<uint64_t> g_b86StreamPollCalls{0};
+std::atomic<bool> g_b86StreamAnomalyDumped{false};
 std::mutex g_tlsMutex;
 std::mutex g_virtualMemoryMutex;
 std::mutex g_guestObjectMutex;
@@ -425,10 +433,17 @@ std::vector<std::shared_ptr<GuestThread>> snapshotAllGuestThreads() {
 }
 
 bool shouldPersistRuntimeTrace(const std::string &event, size_t sequence) {
-    // Build 83-85 diagnostic records bypass every allowlist, quota and sampling gate.
-    if (event.find("B83_") != std::string::npos ||
-        event.find("B84_") != std::string::npos ||
-        event.find("B85_") != std::string::npos) return true;
+    // Preserve only the first 200 records from each legacy high-volume family.
+    if (event.find("B83_") != std::string::npos)
+        return g_runtimeTracePersistB83.fetch_add(1, std::memory_order_relaxed) < 200u;
+    if (event.find("B84_") != std::string::npos)
+        return g_runtimeTracePersistB84.fetch_add(1, std::memory_order_relaxed) < 200u;
+    if (event.find("B85_") != std::string::npos)
+        return g_runtimeTracePersistB85.fetch_add(1, std::memory_order_relaxed) < 200u;
+    if (event.find("B86_STREAM_") != std::string::npos)
+        return g_runtimeTracePersistB86Stream.fetch_add(1, std::memory_order_relaxed) < 64u;
+    if (event.find("B86_MEDIA_OPEN") != std::string::npos)
+        return g_runtimeTracePersistB86Media.fetch_add(1, std::memory_order_relaxed) < 128u;
     // Build 64 must persist diagnostics that identify stalls and QPC output writes.
     for (const char *required : {"CODE_AUDIT_B69", "CODE_AUDIT_B69_GUEST_WORD", "APP_LAUNCH", "CODE_AUDIT_B66", "CODE_AUDIT_B67", "CODE_AUDIT_83847ABC", "XOWUE_SYNC_CREATE", "XOWUE_MAIN_WAIT_WATCHDOG", "B85_MULTIWAIT_WATCHDOG_PUMP", "B85_WAIT_WATCHDOG_PUMP", "XOWUE_POOL_ALLOC_82DC2BF0", "AOT_PROGRESS", "THREAD_DUMP", "XOWUE_AOT_HOTSPOT",
                                  "XOWUE_AOT_HOTSPOT_STATE", "XOWUE_QPC_WRITE",
@@ -488,6 +503,16 @@ void persistRuntimeTrace(const std::string &tagged, size_t sequence) {
     const std::string line = "RUNTIME seq=" + std::to_string(sequence) + " " + tagged + "\n";
     std::lock_guard<std::mutex> lock(g_runtimeTraceFileMutex);
     if (g_runtimeTraceFileDescriptor < 0) return;
+    constexpr off_t kMaxRuntimeTraceFileBytes = 2 * 1024 * 1024;
+    const off_t currentSize = ::lseek(g_runtimeTraceFileDescriptor, 0, SEEK_END);
+    if (currentSize < 0 || currentSize >= kMaxRuntimeTraceFileBytes) return;
+    if (currentSize + static_cast<off_t>(line.size()) > kMaxRuntimeTraceFileBytes) {
+        static constexpr char marker[] = "RUNTIME TRACE_LIMIT_REACHED max_bytes=2097152; remaining events suppressed\n";
+        if (!g_runtimeTraceFileLimitMarkerWritten.exchange(true, std::memory_order_acq_rel) &&
+            currentSize + static_cast<off_t>(sizeof(marker) - 1u) <= kMaxRuntimeTraceFileBytes)
+            (void)::write(g_runtimeTraceFileDescriptor, marker, sizeof(marker) - 1u);
+        return;
+    }
 
     const char *cursor = line.data();
     size_t remaining = line.size();
@@ -2150,37 +2175,86 @@ void xowue_thread_checkpoint(uint32_t guestAddress);
 static void xowue_forward_pump_and_signal_spin(uint32_t guestAddress, PPCContext &ctx);
 void xowue_thread_checkpoint(uint32_t guestAddress,PPCContext &ctx){
     if (guestAddress == 0x82575250u) {
-        // At function entry 0x82575250 reads +0xA4/+0xA8/+0x8C from r3.
-        // r31 is assigned from r3 only after the prologue.
-        static std::atomic<uint64_t> s_b85StreamPollCalls{0u};
-        static thread_local uint32_t s_prev8C = 0xFFFFFFFFu;
-        static thread_local uint32_t s_prevA4 = 0xFFFFFFFFu;
-        static thread_local uint32_t s_prevA8 = 0xFFFFFFFFu;
-        const uint64_t calls = s_b85StreamPollCalls.fetch_add(1u, std::memory_order_relaxed) + 1u;
+        // Build 86: sparse sampling plus a one-shot dump at the first pointer-like cache-window value.
+        const uint64_t calls = g_b86StreamPollCalls.fetch_add(1u, std::memory_order_relaxed) + 1u;
         const auto memory = g_activeGuestMemory.lock();
         const uint8_t *guestBase = memory ? memory->base : nullptr;
         const uint32_t object = ctx.r3.u32;
-        uint32_t v8c = 0xFFFFFFFFu, va4 = 0xFFFFFFFFu, va8 = 0xFFFFFFFFu;
+        uint32_t words[20]{};
         const bool objectValid = guestBase && object >= 0x40000000u &&
-            object < 0x70000000u && validGuestRange(object, 0xACu);
+            object < 0x70000000u && validGuestRange(object, 0xC0u);
         if (objectValid) {
-            v8c = loadGuestBe32(guestBase, object + 0x8Cu);
-            va4 = loadGuestBe32(guestBase, object + 0xA4u);
-            va8 = loadGuestBe32(guestBase, object + 0xA8u);
+            for (uint32_t i = 0; i < 20u; ++i)
+                words[i] = loadGuestBe32(guestBase, object + 0x70u + i * 4u);
         }
-        const bool changed = objectValid &&
-            (v8c != s_prev8C || va4 != s_prevA4 || va8 != s_prevA8);
-        if (calls <= 8u || changed || (calls & 0xFFFFu) == 0u) {
-            char event[384];
+        const uint32_t plus8C = words[7], plus90 = words[8], chunkTable = words[15];
+        if (calls <= 8u || (calls & 0xFFFFFu) == 0u) {
+            char event[448];
             std::snprintf(event, sizeof(event),
-                "B85_STREAM_STATE calls=%llu thread=%u pc=0x82575250 obj_r3=0x%08X r31=0x%08X r4=0x%08X "
-                "plus8C=0x%08X plusA4=0x%08X plusA8=0x%08X changed=%u valid=%u lr=0x%08X",
+                "B86_STREAM_STATE calls=%llu thread=%u pc=0x82575250 obj=0x%08X r3=0x%08X r4=0x%08X "
+                "plus8C=0x%08X plus90=0x%08X plusA4=0x%08X plusA8=0x%08X plusAC=0x%08X valid=%u lr=0x%08X",
                 static_cast<unsigned long long>(calls), static_cast<uint32_t>(g_currentGuestThreadId),
-                object, ctx.r31.u32, ctx.r4.u32, v8c, va4, va8, changed ? 1u : 0u,
+                object, ctx.r3.u32, ctx.r4.u32, plus8C, plus90, words[13], words[14], chunkTable,
                 objectValid ? 1u : 0u, static_cast<uint32_t>(ctx.lr));
             recordRuntimeTrace(event);
         }
-        if (objectValid) { s_prev8C = v8c; s_prevA4 = va4; s_prevA8 = va8; }
+        const bool pointerLike = objectValid &&
+            ((plus8C >= 0x40000000u && plus8C < 0x80000000u) ||
+             (plus90 >= 0x40000000u && plus90 < 0x80000000u));
+        bool expected = false;
+        if (pointerLike && g_b86StreamAnomalyDumped.compare_exchange_strong(
+                expected, true, std::memory_order_acq_rel)) {
+            const uint32_t vtable = loadGuestBe32(guestBase, object);
+            const uint32_t vtableSlot64 = vtable >= 0x40000000u && vtable < 0x80000000u &&
+                validGuestRange(vtable + 64u, 4u) ? loadGuestBe32(guestBase, vtable + 64u) : 0u;
+            const uint32_t previousFn = g_currentGuestThread
+                ? g_currentGuestThread->lastGuestPc.load(std::memory_order_relaxed)
+                : g_mainThreadLastPc.load(std::memory_order_relaxed);
+            const uint32_t previousCaller = g_currentGuestThread
+                ? g_currentGuestThread->lastCallerFn.load(std::memory_order_relaxed) : 0u;
+            char event[640];
+            std::snprintf(event, sizeof(event),
+                "B86_STREAM_ANOMALY calls=%llu thread=%u object=0x%08X plus8C=0x%08X plus90=0x%08X "
+                "r3=0x%08X r4=0x%08X r5=0x%08X r6=0x%08X r7=0x%08X r8=0x%08X r9=0x%08X r10=0x%08X "
+                "r31=0x%08X lr=0x%08X previous_guest_fn_candidate=0x%08X previous_caller_fn=0x%08X "
+                "vtable=0x%08X vtable_slot64_io_target=0x%08X chunk_table=0x%08X",
+                static_cast<unsigned long long>(calls), static_cast<uint32_t>(g_currentGuestThreadId),
+                object, plus8C, plus90, ctx.r3.u32, ctx.r4.u32, ctx.r5.u32, ctx.r6.u32,
+                ctx.r7.u32, ctx.r8.u32, ctx.r9.u32, ctx.r10.u32, ctx.r31.u32,
+                static_cast<uint32_t>(ctx.lr), previousFn, previousCaller, vtable, vtableSlot64, chunkTable);
+            recordRuntimeTrace(event);
+            for (uint32_t i = 0; i < 20u; ++i) {
+                char wordEvent[128];
+                std::snprintf(wordEvent, sizeof(wordEvent),
+                    "B86_STREAM_OBJECT_WORD offset=0x%02X value=0x%08X",
+                    0x70u + i * 4u, words[i]);
+                recordRuntimeTrace(wordEvent);
+            }
+            if (chunkTable >= 0x40000000u && chunkTable < 0x80000000u &&
+                validGuestRange(chunkTable, 0x40u)) {
+                for (uint32_t i = 0; i < 16u; ++i) {
+                    char tableEvent[128];
+                    std::snprintf(tableEvent, sizeof(tableEvent),
+                        "B86_STREAM_CHUNK_TABLE index=%u value=0x%08X%s",
+                        i, loadGuestBe32(guestBase, chunkTable + i * 4u),
+                        i == 0u ? " first_word_candidate_count" : "");
+                    recordRuntimeTrace(tableEvent);
+                }
+            } else {
+                recordRuntimeTrace("B86_STREAM_CHUNK_TABLE invalid_or_unmapped");
+            }
+            if (g_currentGuestThread) {
+                const uint32_t end = g_currentGuestThread->recentAotIdx.load(std::memory_order_relaxed);
+                for (uint32_t i = 0; i < 16u; ++i) {
+                    const uint32_t index = (end - 1u - i) & 15u;
+                    char recentEvent[96];
+                    std::snprintf(recentEvent, sizeof(recentEvent),
+                        "B86_STREAM_RECENT_FN age=%u address=0x%08X", i,
+                        g_currentGuestThread->recentAotFns[index].load(std::memory_order_relaxed));
+                    recordRuntimeTrace(recentEvent);
+                }
+            }
+        }
     }
     if (guestAddress == 0x82370500u || guestAddress == 0x82427940u || guestAddress == 0x826CF060u || guestAddress == 0x825F91D8u || guestAddress == 0x824ACBF8u ||
         guestAddress == 0x824793E0u || guestAddress == 0x824792E0u ||
@@ -2807,6 +2881,14 @@ extern "C" int xowue_boot_xex(const char *path, char *output, size_t output_capa
             g_runtimeTrace.clear();
         }
         g_runtimeTracePersistSequence.store(0, std::memory_order_relaxed);
+        g_runtimeTracePersistB83.store(0, std::memory_order_relaxed);
+        g_runtimeTracePersistB84.store(0, std::memory_order_relaxed);
+        g_runtimeTracePersistB85.store(0, std::memory_order_relaxed);
+        g_runtimeTracePersistB86Stream.store(0, std::memory_order_relaxed);
+        g_runtimeTracePersistB86Media.store(0, std::memory_order_relaxed);
+        g_runtimeTraceFileLimitMarkerWritten.store(false, std::memory_order_relaxed);
+        g_b86StreamPollCalls.store(0, std::memory_order_relaxed);
+        g_b86StreamAnomalyDumped.store(false, std::memory_order_relaxed);
         g_runtimeTracePersistGraphics.store(0, std::memory_order_relaxed);
         g_runtimeTracePersistRingKicks.store(0, std::memory_order_relaxed);
         g_runtimeTracePersistFailures.store(0, std::memory_order_relaxed);
@@ -2878,7 +2960,7 @@ extern "C" int xowue_boot_xex(const char *path, char *output, size_t output_capa
             const bool mapped = translateGuestFilePath(guestMovie, false, hostMovie);
             std::error_code ioError;
             const bool exists = mapped && std::filesystem::is_regular_file(hostMovie, ioError);
-            recordRuntimeTrace(std::string("XOWUE_ASSET_PREFLIGHT guest=") + guestMovie +
+            recordRuntimeTrace(std::string("XOWUE_MEDIA_INVENTORY guest=") + guestMovie +
                                " mapped=" + (mapped ? "1" : "0") +
                                " present=" + (exists ? "1" : "0") +
                                " host=" + (mapped ? hostMovie.string() : "<rejected>"));
@@ -4719,28 +4801,26 @@ static void writeGuestIoStatus(uint8_t *base, uint32_t address,
     PPC_STORE_U32(address + 4u, information);
 }
 
-static bool isSplashBikMovie(const std::string &guestPath) {
-    const std::string lower = lowerGuestPath(guestPath);
-    if (lower.find(".bik") == std::string::npos) return false;
-    const size_t slash = lower.find_last_of('/');
-    const std::string filename = slash == std::string::npos ? lower : lower.substr(slash + 1u);
-    return filename == "ravenlogo.bik" || filename == "ue3_logo.bik" ||
-           filename == "fox_logo.bik" || filename == "marvel_intro.bik" ||
-           filename == "atvi_logo.bik";
-}
-
-static bool isKnownOptionalStartupMovie(const std::string &guestPath) {
+static bool isStartupMoviePath(const std::string &guestPath) {
     const std::string lower = lowerGuestPath(guestPath);
     if (lower.find("wgame/movies/") == std::string::npos) return false;
-    const size_t slash = lower.find_last_of('/');
-    const std::string filename = slash == std::string::npos
-        ? lower : lower.substr(slash + 1u);
-    return filename == "ravenlogo.xxx" || filename == "ravenlogo.bik" ||
-           filename == "blank.bik" || filename == "blank.xxx" ||
-           filename == "ue3_logo.xxx" || filename == "ue3_logo.bik" ||
-           filename == "fox_logo.xxx" || filename == "fox_logo.bik" ||
-           filename == "marvel_intro.xxx" || filename == "marvel_intro.bik" ||
-           filename == "atvi_logo.xxx" || filename == "atvi_logo.bik";
+    return lower.ends_with(".bik") || lower.ends_with(".xxx");
+}
+
+static void logStartupMovieOpen(const char *api, const std::string &guestPath,
+                                uint32_t status, uint32_t handle) {
+    if (!isStartupMoviePath(guestPath)) return;
+    std::filesystem::path hostPath;
+    const bool mapped = translateGuestFilePath(guestPath, false, hostPath);
+    std::error_code ec;
+    const bool present = mapped && std::filesystem::is_regular_file(hostPath, ec) && !ec;
+    const uint64_t bytes = present ? std::filesystem::file_size(hostPath, ec) : 0u;
+    char event[512];
+    std::snprintf(event, sizeof(event),
+        "B86_MEDIA_OPEN api=%s guest=%s status=0x%08X handle=0x%08X mapped=%u present=%u bytes=%llu",
+        api, guestPath.c_str(), status, handle, mapped ? 1u : 0u, present ? 1u : 0u,
+        static_cast<unsigned long long>(ec ? 0u : bytes));
+    recordRuntimeTrace(event);
 }
 
 static uint32_t createGuestFile(uint8_t *base, const std::string &guestPath,
@@ -4759,37 +4839,6 @@ static uint32_t createGuestFile(uint8_t *base, const std::string &guestPath,
     std::error_code ec;
     bool exists = std::filesystem::exists(path, ec);
     if (ec) exists = false;
-
-    // UE3's startup sequence may poll its movie player forever after a
-    // missing optional logo/blank Bink file. Provide a zero-byte EOF stream
-    // for only the known startup movies, outside the game directory, so the
-    // native guest file API reports a successful open followed by EOF. Never
-    // synthesize gameplay assets or modify the user's game dump.
-    bool virtualStartupMovie = false;
-    if (!exists && !write && !directoryOnly &&
-        disposition == 1u && isKnownOptionalStartupMovie(guestPath) &&
-        !g_guestSaveRoot.empty()) {
-        const std::string normalized = lowerGuestPath(guestPath);
-        const size_t slash = normalized.find_last_of('/');
-        const std::string filename = slash == std::string::npos
-            ? normalized : normalized.substr(slash + 1u);
-        const std::filesystem::path virtualRoot =
-            g_guestSaveRoot / ".XOWUEVirtualMedia";
-        std::filesystem::create_directories(virtualRoot, ec);
-        if (!ec) {
-            path = virtualRoot / filename;
-            if (!std::filesystem::exists(path, ec) && !ec) {
-                std::ofstream emptyMovie(path, std::ios::binary);
-                if (!emptyMovie) ec = std::make_error_code(std::errc::permission_denied);
-            }
-        }
-        exists = !ec && std::filesystem::is_regular_file(path, ec);
-        virtualStartupMovie = exists && !ec;
-        if (virtualStartupMovie) {
-            recordRuntimeTrace("XOWUE_OPTIONAL_STARTUP_MOVIE_EOF guest=" +
-                               guestPath + " virtual=1 bytes=0");
-        }
-    }
 
     const bool existedBeforeOpen = exists;
     const bool createNew = disposition == 2u || disposition == 3u || disposition == 5u || disposition == 0u;
@@ -6402,13 +6451,6 @@ void xowue_NtCreateFile(PPCContext &context, uint8_t *base) {
         recordRuntimeTrace(details);
         return;
     }
-    if (isSplashBikMovie(guestPath)) {
-        PPC_STORE_U32(handleOutAddress, 0u);
-        writeGuestIoStatus(base, ioStatusAddress, 0xC0000034u, 0u);
-        context.r3.u32 = 0xC0000034u;
-        recordRuntimeTrace("NtCreateFile splash-bik bypass path=" + guestPath);
-        return;
-    }
     uint32_t handle = 0u, action = 0u;
     const uint32_t status = createGuestFile(base, guestPath, desiredAccess,
                                             disposition, createOptions, handle, action);
@@ -6416,6 +6458,7 @@ void xowue_NtCreateFile(PPCContext &context, uint8_t *base) {
     else PPC_STORE_U32(handleOutAddress, 0u);
     writeGuestIoStatus(base, ioStatusAddress, status, action);
     context.r3.u32 = status;
+    logStartupMovieOpen("NtCreateFile", guestPath, status, handle);
     recordRuntimeTrace("NtCreateFile path=" + guestPath + " status=0x" + [&] {
         char value[16]; std::snprintf(value, sizeof(value), "%08X", status);
         return std::string(value);
@@ -6432,13 +6475,6 @@ void xowue_NtOpenFile(PPCContext &context, uint8_t *base) {
         writeGuestIoStatus(base, ioStatusAddress, context.r3.u32, 0u);
         return;
     }
-    if (isSplashBikMovie(guestPath)) {
-        PPC_STORE_U32(handleOutAddress, 0u);
-        writeGuestIoStatus(base, ioStatusAddress, 0xC0000034u, 0u);
-        context.r3.u32 = 0xC0000034u;
-        recordRuntimeTrace("NtOpenFile splash-bik bypass path=" + guestPath);
-        return;
-    }
     uint32_t handle = 0u, action = 0u;
     const uint32_t shareAccess = context.r7.u32;
     const uint32_t openOptions = context.r8.u32;
@@ -6447,6 +6483,7 @@ void xowue_NtOpenFile(PPCContext &context, uint8_t *base) {
     PPC_STORE_U32(handleOutAddress, status == kNtStatusSuccess ? handle : 0u);
     writeGuestIoStatus(base, ioStatusAddress, status, action);
     context.r3.u32 = status;
+    logStartupMovieOpen("NtOpenFile", guestPath, status, handle);
     // NtOpenFile is the path used by several UE3/Bink startup assets. Log it
     // explicitly: the preflight inventory alone cannot tell whether a missing
     // logo/movie was actually requested or whether the guest never reached it.

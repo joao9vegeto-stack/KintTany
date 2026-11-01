@@ -158,7 +158,7 @@ assert 'Label("JOGO INSTALADO"' in swift
 assert "16.0 / 9.0" in swift and "9.0 / 16.0" in swift
 assert "XOWUE_REAL_FPS" in backend and "XOWUE_FPS" not in backend
 assert "guestDelta" in backend and "hostDelta" in backend
-assert "XOWUE_ASSET_PREFLIGHT" in engine
+assert "XOWUE_MEDIA_INVENTORY" in engine
 assert "XOWUE_INPUT_POLLED" in engine
 print("PASS: native guest cancellation, real guest-frame FPS, 16:9 viewport, touch diagnostics")
 
@@ -170,9 +170,9 @@ for token in ("hot0=", "hot1=", "hot2=", "hot3=", "hot4=", "hot5=", "hot6=", "ho
               "HOT_FN_CODE", "THREAD_DUMP", "recentAotFns", "lastCallerFn", "CODE_AUDIT"):
     if token not in runtime:
         raise SystemExit(f"Build 62 runtime diagnostic missing {token}")
-if 'resumo-b\\(buildNumber).txt' not in diagnostics or "utf8.count > 8192" not in diagnostics:
-    raise SystemExit("Build 62 compact diagnostic is missing or not capped at 4 KB")
-print("PASS: Build 62 hot-function/thread dumps and compact diagnostic are present")
+if 'resumo-b\\(buildNumber).txt' not in diagnostics or "utf8.count > 16384" not in diagnostics:
+    raise SystemExit("Build 86 compact diagnostic is missing or exceeds 16 KB")
+print("PASS: Build 86 hot-function/thread dumps and compact diagnostic are present")
 # Build 65: prohibit global PPC rewrites and require targeted guard/raw-code audit.
 aot=(root/"tools"/"generate_aot.py").read_text(encoding="utf-8")
 for forbidden in ("def normalize_32bit_writes","def normalize_rlw_instructions","def normalize_32bit_arithmetic"):
@@ -284,8 +284,8 @@ engine_b83 = Path("Runtime/XOWUEEngine.cpp").read_text(encoding="utf-8")
 assert 'event.find("B83_") != std::string::npos' in engine_b83
 assert 'event.find("B84_") != std::string::npos' in engine_b83
 assert 'event.find("B85_") != std::string::npos' in engine_b83
-assert 'guestAddress == 0x82575250u' in engine_b83 and 'const uint32_t object = ctx.r3.u32' in engine_b83 and '(calls & 0xFFFFu) == 0u' in engine_b83
-assert 'plus8C=' in engine_b83 and 'plusA4=' in engine_b83 and 'plusA8=' in engine_b83
+assert 'guestAddress == 0x82575250u' in engine_b83 and 'const uint32_t object = ctx.r3.u32' in engine_b83 and '(calls & 0xFFFFFu) == 0u' in engine_b83
+assert 'plus8C=' in engine_b83 and 'plus90=' in engine_b83 and 'plusA4=' in engine_b83 and 'plusA8=' in engine_b83
 assert 'context.r4.u32 & 0xFFu) != 0u' in engine_b83
 assert 'B83_NTREADFILE call=%llu' in engine_b83
 assert 'B83_HANDLE_TYPE handle=0x00000112' in engine_b83
@@ -294,16 +294,22 @@ assert 'B83_NT_SET_EVENT' in engine_b83 and 'B83_KE_SET_EVENT' in engine_b83
 assert 'B83_WAIT_SATISFIED' in engine_b83
 assert 'THRED_DUMP' in engine_b83
 assert 'CURRENT_PROJECT_VERSION: "85"' in Path("iOS/project.yml").read_text(encoding="utf-8")
-print("PASS: Build 83 unthrottled diagnostic logging, stream object counters, handle 0x112 tracing, alertable-only APC")
+print("PASS: Build 83 bounded diagnostic logging, stream object counters, handle 0x112 tracing, alertable-only APC")
 
-# Build 85: sample the actual PPC ABI argument and preserve real dispatcher semantics.
+# Build 86: bounded diagnostics, first cache-window anomaly and real startup media.
 engine_b85 = Path("Runtime/XOWUEEngine.cpp").read_text(encoding="utf-8")
-assert "B85_STREAM_STATE" in engine_b85
+assert "B86_STREAM_STATE" in engine_b85
+assert "B86_STREAM_ANOMALY" in engine_b85
+assert "B86_STREAM_CHUNK_TABLE" in engine_b85
 assert 'event.find("B85_") != std::string::npos' in engine_b85
 assert "const uint32_t object = ctx.r3.u32" in engine_b85
-assert "obj_r3=0x%08X" in engine_b85
+assert "obj=0x%08X" in engine_b85
+assert "vtable_slot64_io_target=0x%08X" in engine_b85
+assert "direct_io_helper" not in engine_b85  # the direct helper address is sourced from the B84 instruction audit
 assert "B84_CODE_AUDIT" in engine_b85 and "logCodeAuditBuild84" in engine_b85
 assert 'event.find("B84_") != std::string::npos' in engine_b85
+assert "isStartupMoviePath" in engine_b85 and "B86_MEDIA_OPEN" in engine_b85
+assert "isSplashBikMovie" not in engine_b85 and "XOWUE_OPTIONAL_STARTUP_MOVIE_EOF" not in engine_b85
 wait_start = engine_b85.index("uint32_t waitGuestObject(")
 wait_end = engine_b85.index("uint32_t waitGuestObjects(", wait_start)
 wait_body = engine_b85[wait_start:wait_end]
@@ -322,10 +328,9 @@ spin_body = engine_b85[spin_start:spin_end]
 assert "signalGuestEventHandle(0x00000112u)" not in spin_body
 assert "pumpGuestXenosRingBuffer();" in spin_body
 diag_b85 = Path("iOS/App/XOWUEDiagnostics.swift").read_text(encoding="utf-8")
-assert 'lines.filter { $0.contains("B85_STREAM_STATE") }' in diag_b85
+assert 'lines.filter { $0.contains("B86_STREAM_STATE") }' in diag_b85
 assert 'lines.filter { $0.contains("B85_WAIT_") || $0.contains("B85_MULTIWAIT_") }' in diag_b85
-assert "XOWUE_BUILD_SUMMARY build=" in diag_b85
 assert '"XOWUE_BUILD_SUMMARY build=\\(buildNumber) source=' in diag_b85
 assert 'lines.filter { $0.contains("B84_CODE_AUDIT") }' in diag_b85
 assert 'CURRENT_PROJECT_VERSION: "85"' in Path("iOS/project.yml").read_text(encoding="utf-8")
-print("PASS: Build 85 correct PPC r3 sample, actual waitable completion, multiwait signal accounting, and pump-only watchdogs")
+print("PASS: Build 86 bounded stream anomaly, summary evidence, actual media opens and preserved wait semantics")

@@ -9,6 +9,7 @@ enum XOWUEDiagnostics {
         return value?.isEmpty == false ? value! : "unknown"
     }
     static var diagnosticFilename: String { "diagnostico-build-\(buildNumber).txt" }
+    static var summaryFilename: String { "resumo-b\(buildNumber).txt" }
     static var crashFilename: String { "crash-build-\(buildNumber).txt" }
 
     static func startup() {
@@ -36,6 +37,7 @@ enum XOWUEDiagnostics {
         let build = Bundle.main.object(forInfoDictionaryKey: "CFBundleVersion") as? String ?? "unknown"
         appendLocked("APP_LAUNCH build=\(build) title_id=41560816 documents=\(documents.path)", to: diagnosticURL)
         appendLocked("APP_ENV device=\(UIDevice.current.model) os=\(UIDevice.current.systemVersion) bundle=\(Bundle.main.bundleIdentifier ?? "unknown") arch=arm64", to: diagnosticURL)
+        refreshCompactSummaryLocked(diagnosticURL: diagnosticURL)
         NSSetUncaughtExceptionHandler { exception in
             let stack = exception.callStackSymbols.prefix(24).joined(separator: " | ")
             XOWUEDiagnostics.recordCrash("UNCAUGHT_NS_EXCEPTION name=\(exception.name.rawValue) reason=\(exception.reason ?? "none") stack=\(stack)")
@@ -82,51 +84,68 @@ enum XOWUEDiagnostics {
         defer { lock.unlock() }
         guard let url = fileURL(named: diagnosticFilename) else { return }
         appendLocked(message, to: url)
-        let summaryPrefixes = ["B84_", "AOT_PROGRESS", "HOT_FN_CODE", "THREAD_DUMP", "XENOS_", "PM4_", "SWAP_", "WAIT_", "VBLANK", "GRAPHICS_INTERRUPT"]
-        if summaryPrefixes.contains(where: { message.contains($0) }) {
+        let important = ["B83_", "B84_", "B85_", "B86_", "AOT_PROGRESS", "HOT_FN_CODE",
+                         "THREAD_DUMP", "XENOS_", "PM4_", "SWAP_", "WAIT_", "VBLANK",
+                         "GRAPHICS_INTERRUPT", "BOOT_", "CRASH ", "runtime.native_return"]
+        if important.contains(where: { message.contains($0) }) {
             refreshCompactSummaryLocked(diagnosticURL: url)
         }
     }
 
+    static func summaryFileURL() -> URL? {
+        lock.lock()
+        defer { lock.unlock() }
+        guard let diagnosticURL = fileURL(named: diagnosticFilename) else { return nil }
+        refreshCompactSummaryLocked(diagnosticURL: diagnosticURL)
+        return fileURL(named: summaryFilename)
+    }
+
     private static func refreshCompactSummaryLocked(diagnosticURL: URL) {
-        guard let source = try? String(contentsOf: diagnosticURL, encoding: .utf8) else { return }
+        guard let data = try? Data(contentsOf: diagnosticURL, options: .mappedIfSafe) else { return }
+        let source = String(decoding: data, as: UTF8.self)
         let lines = source.split(whereSeparator: \.isNewline).map(String.init)
-        // Build-labelled summary: never let stale B69/B70 code audits crowd out
-        // the current build's observations. Legacy audits remain in the full log.
         let boot = Array(lines.filter {
-            $0.contains("APP_LAUNCH") || $0.contains("BOOT_STARTED") ||
-            $0.contains("BOOT_FINISHED") || $0.contains("BOOT_FAILED") || $0.contains("CRASH ")
-        }.suffix(6))
-        var audits = Array(lines.filter { $0.contains("B84_CODE_AUDIT") }.suffix(36))
-        var stream = Array(lines.filter { $0.contains("B85_STREAM_STATE") }.suffix(12))
-        var waits = Array(lines.filter { $0.contains("B85_WAIT_") || $0.contains("B85_MULTIWAIT_") }.suffix(16))
-        var current = Array(lines.filter { $0.contains("B85_") &&
-            !$0.contains("B85_STREAM_STATE") && !$0.contains("B85_WAIT_") &&
-            !$0.contains("B85_MULTIWAIT_") }.suffix(16))
-        var progress = Array(lines.filter { $0.contains("AOT_PROGRESS") }.suffix(4))
-        var hot = Array(lines.filter { $0.contains("HOT_FN_CODE") }.suffix(6))
-        var threads = Array(lines.filter { $0.contains("THREAD_DUMP") }.suffix(12))
-        var gpu = Array(lines.filter { line in
-            ["XENOS_", "PM4_", "SWAP_", "WAIT_", "VBLANK", "GRAPHICS_INTERRUPT"].contains(where: { line.contains($0) })
+            $0.contains("APP_LAUNCH") || $0.contains("APP_ENV") ||
+            $0.contains("BOOT_STARTED") || $0.contains("BOOT_FINISHED") ||
+            $0.contains("BOOT_FAILED") || $0.contains("CRASH ") ||
+            $0.contains("runtime.native_return")
         }.suffix(12))
-        func assembled() -> [String] {
-            ["XOWUE_BUILD_SUMMARY build=\(buildNumber) source=diagnostico-build-\(buildNumber).txt",
-             "CURRENT_BUILD_EVIDENCE_BEGIN"] + boot + progress + hot + audits + stream + waits + current + threads + gpu +
-             ["CURRENT_BUILD_EVIDENCE_END"]
+        let streamState = Array(lines.filter { $0.contains("B86_STREAM_STATE") }.suffix(8))
+        let streamAnomaly = Array(lines.filter { $0.contains("B86_STREAM_ANOMALY") }.suffix(1))
+        let streamObject = Array(lines.filter { $0.contains("B86_STREAM_OBJECT_WORD") }.suffix(20))
+        let streamTable = Array(lines.filter { $0.contains("B86_STREAM_CHUNK_TABLE") }.suffix(16))
+        let streamRecent = Array(lines.filter { $0.contains("B86_STREAM_RECENT_FN") }.suffix(16))
+        let legacyStream = Array(lines.filter {
+            $0.contains("B85_STREAM_STATE") || $0.contains("STREAM_POLL_") ||
+            $0.contains("STREAM_ANOMALY")
+        }.suffix(12))
+        let media = Array(lines.filter {
+            $0.contains("B86_MEDIA_OPEN") || $0.contains("XOWUE_MEDIA_INVENTORY") ||
+            $0.contains("NtCreateFile path=") || $0.contains("NtOpenFile path=")
+        }.suffix(32))
+        let b83 = Array(lines.filter { $0.contains("B83_") }.suffix(24))
+        let b84 = Array(lines.filter { $0.contains("B84_CODE_AUDIT") }.suffix(24))
+        let b85 = Array(lines.filter { $0.contains("B85_") }.suffix(24))
+        let waits = Array(lines.filter {
+            $0.contains("WAIT_") || $0.contains("MULTIWAIT") || $0.contains("THREAD_DUMP")
+        }.suffix(24))
+        let gpu = Array(lines.filter { line in
+            ["XENOS_", "PM4_", "SWAP_", "VBLANK", "GRAPHICS_INTERRUPT"].contains(where: { line.contains($0) })
+        }.suffix(16))
+        let progress = Array(lines.filter {
+            $0.contains("AOT_PROGRESS") || $0.contains("HOT_FN_CODE")
+        }.suffix(12))
+        let legacyWaits = Array(lines.filter { $0.contains("B85_WAIT_") || $0.contains("B85_MULTIWAIT_") }.suffix(12))
+        var sections = [
+            "XOWUE_BUILD_SUMMARY build=\(buildNumber) source=\(diagnosticFilename)",
+            "DIAGNOSTIC_BYTES=\(data.count)",
+            "CURRENT_BUILD_EVIDENCE_BEGIN"
+        ] + boot + progress + b84 + b83 + b85 + streamState + streamAnomaly + streamObject + streamTable + streamRecent + legacyStream + legacyWaits + media + waits + gpu +
+            ["CURRENT_BUILD_EVIDENCE_END"]
+        while sections.joined(separator: "\n").utf8.count > 16384 && sections.count > 8 {
+            sections.remove(at: sections.count - 2)
         }
-        while assembled().joined(separator: "\n").utf8.count > 8192 {
-            if !gpu.isEmpty { gpu.removeFirst() }
-            else if !threads.isEmpty { threads.removeFirst() }
-            else if !current.isEmpty { current.removeFirst() }
-            else if !waits.isEmpty { waits.removeFirst() }
-            else if !stream.isEmpty { stream.removeFirst() }
-            else if !hot.isEmpty { hot.removeFirst() }
-            else if !progress.isEmpty { progress.removeFirst() }
-            else if !audits.isEmpty { audits.removeFirst() }
-            else { break }
-        }
-        let summary = assembled().joined(separator: "\n") + "\n"
-        let summaryFilename = "resumo-b\(buildNumber).txt"
+        let summary = sections.joined(separator: "\n") + "\n"
         let summaryURL = diagnosticURL.deletingLastPathComponent().appendingPathComponent(summaryFilename)
         try? summary.write(to: summaryURL, atomically: true, encoding: .utf8)
     }
@@ -136,6 +155,7 @@ enum XOWUEDiagnostics {
         defer { lock.unlock() }
         if let url = fileURL(named: diagnosticFilename) {
             appendLocked("BOOT_STARTED build=\(build) title_id=41560816 xex=\(path)", to: url)
+            refreshCompactSummaryLocked(diagnosticURL: url)
         }
     }
 
@@ -145,6 +165,7 @@ enum XOWUEDiagnostics {
         let result = "BOOT_FINISHED code=\(code)\n\(text)"
         if let url = fileURL(named: diagnosticFilename) {
             appendLocked(result, to: url)
+            refreshCompactSummaryLocked(diagnosticURL: url)
         }
     }
 
@@ -157,6 +178,7 @@ enum XOWUEDiagnostics {
         defer { lock.unlock() }
         if let url = fileURL(named: diagnosticFilename) {
             appendLocked("CRASH \(message)", to: url)
+            refreshCompactSummaryLocked(diagnosticURL: url)
         }
         if let url = fileURL(named: crashFilename) {
             appendLocked("CRASH \(message)", to: url)
@@ -170,6 +192,8 @@ enum XOWUEDiagnostics {
 
     private static func appendLocked(_ message: String, to url: URL) {
         ensureFile(url)
+        if let attributes = try? FileManager.default.attributesOfItem(atPath: url.path),
+           let size = attributes[.size] as? NSNumber, size.intValue >= 2 * 1024 * 1024 { return }
         let timestamp = ISO8601DateFormatter().string(from: Date())
         guard let data = "\(timestamp) \(message)\n".data(using: .utf8) else { return }
 
