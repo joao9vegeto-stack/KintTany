@@ -3,6 +3,10 @@ options:
   bundleIdPrefix: com.kinttany
   deploymentTarget:
     iOS: "16.0"
+packages:
+  OpenSSL-Package:
+    url: https://github.com/krzyzanowskim/OpenSSL-Package.git
+    from: 3.1.5004
 settings:
   base:
     SWIFT_VERSION: "5.9"
@@ -14,6 +18,9 @@ targets:
     platform: iOS
     sources:
       - Sources
+    dependencies:
+      - package: OpenSSL-Package
+        product: OpenSSL
     settings:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: com.kinttany.pandaios
@@ -24,6 +31,6 @@ targets:
         SWIFT_OBJC_BRIDGING_HEADER: Sources/PandaiOS-Bridging-Header.h
         HEADER_SEARCH_PATHS: "$(inherited) $(PROJECT_DIR)/ThirdParty/moonlight-ios/moonlight-common/moonlight-common-c/src"
         LIBRARY_SEARCH_PATHS: "$(inherited) $(PROJECT_DIR)/build/MoonlightCoreDerived/Build/Products/Release-iphoneos"
-        OTHER_LDFLAGS: "$(inherited) -lmoonlight-common"
+        OTHER_LDFLAGS: "$(inherited) -Wl,-force_load,$(PROJECT_DIR)/build/MoonlightCoreDerived/Build/Products/Release-iphoneos/libmoonlight-common.a"
         GENERATE_INFOPLIST_FILE: YES
         CODE_SIGN_STYLE: Automatic
