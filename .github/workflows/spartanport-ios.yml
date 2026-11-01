@@ -87,6 +87,7 @@ jobs:
           cp -R KosmicKrispiOS/build/include KosmicKrispiOS/Artifacts/
           cp KosmicKrispiOS/build/KosmicKrispiOS-build.txt KosmicKrispiOS/Artifacts/
           cp KosmicKrispiOS/build/SHA256SUMS KosmicKrispiOS/Artifacts/
+          cp KosmicKrispiOS/build/static-dependency-archives.txt KosmicKrispiOS/Artifacts/
           shasum -a 256 KosmicKrispiOS/Artifacts/libkk-kosmickrisp-ios-arm64.a
       - name: Upload SpartanPort IPA and reusable SDK
         uses: actions/upload-artifact@v4
@@ -99,6 +100,7 @@ jobs:
             KosmicKrispiOS/build/lipo.txt
             KosmicKrispiOS/build/build-version.txt
             KosmicKrispiOS/build/symbols.txt
+            KosmicKrispiOS/build/static-dependency-archives.txt
             KosmicKrispiOS/build/meson-logs/
           if-no-files-found: error
           retention-days: 30
