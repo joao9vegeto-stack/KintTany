@@ -20,6 +20,14 @@ Upstream references:
 4. The Android/Linux GPU implementation is Vulkan-based and depends on shadPS4. iOS has no system Vulkan API. A MoltenVK compatibility layer may be useful for an early experiment, but it is not proof that shadPS4's complete Vulkan feature set, synchronization, memory model, shader pipeline, or presentation path works on iOS.
 5. The existing KintTany target is a SwiftUI app with an existing unrelated product UI. This branch must keep the work isolated; do not replace unrelated application behavior or touch other branches.
 
+## Source-level review pinned to upstream `arm` commit `53afee63597b10a5a1f250cdb62dd4390caa13f1`
+
+- `cpu/guest_cpu_fex.cpp` creates FEXCore contexts and uses its JIT/code-cache plus Linux signal/ucontext facilities. The published ARM64 branch is not a native AOT CPU implementation.
+- `cpu/gportcpu.cmake` links `FEXCore`, `Common`, `JemallocLibs` and `fmt`; it produces `libgportcpu.so`.
+- `gpu/CMakeLists.txt` requires Vulkan, SDL3 and X11 on non-Windows builds, in addition to shadPS4 renderer/recompiler and shader tooling. This is not an iOS Metal backend and cannot be assumed to compile unchanged for iOS.
+- `src/runtime_memory.c` reserves a large PS4 guest virtual-address range and uses platform-specific mappings. The POSIX path relies on `mmap`/`mprotect`; the Windows path has a separate placeholder/section implementation. iOS address-space placement, executable mappings and memory pressure need a dedicated design and device tests.
+- The upstream ARM64 CPU adapter is GPL-2.0-or-later. No upstream source has been copied into this iOS shell; license compatibility and notices must be resolved before importing runtime code.
+
 ## Required porting work
 
 ### P0 — make the source reproducible
@@ -55,7 +63,7 @@ Upstream references:
 
 ## Implemented shell milestone (2026-11-01)
 
-A separate XcodeGen project now lives under `SpartanPort-iOS/`; it does not replace or alter the existing KintTany app target. The app can select a user-owned PS4 game folder, checks for `eboot.bin` and `sce_sys/param.sfo`, and presents a real `MTKView` backed by Metal. The CI workflow builds an unsigned device app and packages it as an IPA artifact. This is a platform-shell milestone only: it does not load the PS4 executable, execute AOT code, translate PS4 GPU commands, or start gameplay. An unsigned IPA is not installable as-is without appropriate signing.
+A separate XcodeGen project now lives under `SpartanPort-iOS/`; it does not replace or alter the existing KintTany app target. The app can select a user-owned PS4 game folder, checks for `eboot.bin` and `sce_sys/param.sfo`, inspects the ELF64 little-endian x86-64 header and program-header table bounds without loading the game, and presents a real `MTKView` backed by Metal. XCTest covers a valid ELF64 header, a non-ELF/SELF-like file and an out-of-bounds program-header table. The CI workflow builds an unsigned device app and packages it as an IPA artifact. This is a platform-shell milestone only: it does not load the PS4 executable, execute AOT code, translate PS4 GPU commands, or start gameplay. An unsigned IPA is not installable as-is without appropriate signing.
 
 ## Immediate blockers
 

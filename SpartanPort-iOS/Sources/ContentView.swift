@@ -46,6 +46,7 @@ struct ContentView: View {
                             .font(.headline)
                         statusRow("Aplicativo iOS / SwiftUI", state: "Implementado", good: true)
                         statusRow("Superfície Metal", state: "Teste inicial", good: true)
+                        statusRow("Inspeção do eboot.bin", state: gameFolder.executableValidated ? "ELF64 x86-64" : "Não validado", good: gameFolder.executableValidated)
                         statusRow("Runtime PS4 ARM64", state: "Pendente", good: false)
                         statusRow("AOT x86-64 → ARM64", state: "Pendente", good: false)
                         statusRow("Backend gráfico shadPS4 → Metal", state: "Pendente", good: false)
@@ -135,7 +136,7 @@ struct ContentView: View {
 
             Text(gameFolder.message)
                 .font(.caption)
-                .foregroundStyle(gameFolder.isValidPayload ? .green : .secondary)
+                .foregroundStyle(gameFolder.executableValidated ? Color.green : Color.secondary)
 
             Button("Iniciar jogo") {}
                 .frame(maxWidth: .infinity)

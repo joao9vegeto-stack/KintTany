@@ -23,3 +23,27 @@ targets:
         INFOPLIST_KEY_UILaunchScreen_Generation: YES
         SUPPORTS_MACCATALYST: NO
         ENABLE_PREVIEWS: YES
+
+  SpartanPortTests:
+    type: bundle.unit-test
+    platform: iOS
+    sources:
+      - path: Tests
+    dependencies:
+      - target: SpartanPort
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: com.joaopedro.spartanport.tests
+        SWIFT_VERSION: "5.0"
+        IPHONEOS_DEPLOYMENT_TARGET: "17.0"
+        GENERATE_INFOPLIST_FILE: YES
+
+schemes:
+  SpartanPort:
+    build:
+      targets:
+        SpartanPort: all
+        SpartanPortTests: [test]
+    test:
+      targets:
+        - SpartanPortTests
