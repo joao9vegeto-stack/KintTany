@@ -6,9 +6,10 @@ typedef struct {
   VkImage color,resolved;
   VkDeviceMemory colorMemory,resolvedMemory;
   VkImageView view;
-  VkRenderPass pass;
+  VkRenderPass pass,loadPass;
   VkFramebuffer framebuffer;
   VkExtent2D extent;
+  bool initialized;
   bool resolvedLayoutReady;
 } XDColorTarget;
 static XDColorTarget g_xd_color[16]={0};
@@ -56,6 +57,7 @@ static void XDDestroyGuestColor(KKVulkanState* state) {
     XDColorTarget *t=&g_xd_color[i];
     if(t->framebuffer)XD(DestroyFramebuffer)(state->device,t->framebuffer,NULL);
     if(t->pass)XD(DestroyRenderPass)(state->device,t->pass,NULL);
+    if(t->loadPass)XD(DestroyRenderPass)(state->device,t->loadPass,NULL);
     if(t->view)XD(DestroyImageView)(state->device,t->view,NULL);
     if(t->color)XD(DestroyImage)(state->device,t->color,NULL);
     if(t->resolved)XD(DestroyImage)(state->device,t->resolved,NULL);
@@ -142,6 +144,13 @@ static XDColorTarget* XDGetGuestColor(KKVulkanState* state,
     .attachmentCount=1,.pAttachments=&attachment,.subpassCount=1,
     .pSubpasses=&subpass};
   if(XD(CreateRenderPass)(state->device,&rp,NULL,&t->pass)!=VK_SUCCESS)goto fail;
+  // First use clears the target; later submissions preserve EDRAM with LOAD.
+  VkAttachmentDescription loadAttachment=attachment;
+  loadAttachment.loadOp=VK_ATTACHMENT_LOAD_OP_LOAD;
+  loadAttachment.initialLayout=VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
+  VkRenderPassCreateInfo loadRp=rp;
+  loadRp.pAttachments=&loadAttachment;
+  if(XD(CreateRenderPass)(state->device,&loadRp,NULL,&t->loadPass)!=VK_SUCCESS)goto fail;
   VkFramebufferCreateInfo fb={.sType=VK_STRUCTURE_TYPE_FRAMEBUFFER_CREATE_INFO,
     .renderPass=t->pass,.attachmentCount=1,.pAttachments=&t->view,
     .width=t->extent.width,.height=t->extent.height,.layers=1u};
@@ -153,6 +162,7 @@ static XDColorTarget* XDGetGuestColor(KKVulkanState* state,
 fail:
   if(t->framebuffer)XD(DestroyFramebuffer)(state->device,t->framebuffer,NULL);
   if(t->pass)XD(DestroyRenderPass)(state->device,t->pass,NULL);
+  if(t->loadPass)XD(DestroyRenderPass)(state->device,t->loadPass,NULL);
   if(t->view)XD(DestroyImageView)(state->device,t->view,NULL);
   if(t->color)XD(DestroyImage)(state->device,t->color,NULL);
   if(t->resolved)XD(DestroyImage)(state->device,t->resolved,NULL);
@@ -196,6 +206,7 @@ static bool XDResolveGuestColor(KKVulkanState* state,
         .clearValueCount=1,.pClearValues=&clear};
       XD(CmdBeginRenderPass)(cmd,&begin,VK_SUBPASS_CONTENTS_INLINE);
       XD(CmdEndRenderPass)(cmd);
+      t->initialized=true;
       KKLog(@"XENOS_EDRAM_COLOR_CLEAR_RESOLVE tile=%u destination=0x%08X source=%u",
         sourceTile,draw->rb_copy_dest_base,sourceIndex);
     } else {
@@ -320,6 +331,18 @@ static bool XDResolveGuestColor(KKVulkanState* state,
     .subresourceRange={.aspectMask=VK_IMAGE_ASPECT_COLOR_BIT,.levelCount=1,.layerCount=1}};
   state->CmdPipelineBarrier(cmd,VK_PIPELINE_STAGE_TRANSFER_BIT,
     VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT,0,0,NULL,0,NULL,1,&toAttachment);
+  // Restore the EDRAM source after readback/blit so the next LOAD pass is legal.
+  VkImageMemoryBarrier colorForNextDraw={.sType=VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER,
+    .srcAccessMask=VK_ACCESS_TRANSFER_READ_BIT,
+    .dstAccessMask=VK_ACCESS_COLOR_ATTACHMENT_READ_BIT|VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT,
+    .oldLayout=VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
+    .newLayout=VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL,
+    .srcQueueFamilyIndex=VK_QUEUE_FAMILY_IGNORED,
+    .dstQueueFamilyIndex=VK_QUEUE_FAMILY_IGNORED,
+    .image=t->color,
+    .subresourceRange={.aspectMask=VK_IMAGE_ASPECT_COLOR_BIT,.levelCount=1,.layerCount=1}};
+  state->CmdPipelineBarrier(cmd,VK_PIPELINE_STAGE_TRANSFER_BIT,
+    VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT,0,0,NULL,0,NULL,1,&colorForNextDraw);
   KKLog(@"XENOS_EDRAM_RESOLVE_NATIVE source_tile=%u samples=%u pitch=%u copied_to_swapchain=1 guest_memory_commit=0",
     sourceTile,(unsigned)t->samples,t->pitch);
   return true;

@@ -493,10 +493,10 @@ static uint32_t XDProcessDraws(KKVulkanState *state, uint32_t image_index,
       const uint32_t count=(primitive==8u)?(draw->index_count/3u)*6u:
                            (primitive==13u)?(draw->index_count/4u)*6u:
                            draw->index_count;
+      const VkRenderPass drawPass=depthOnly?depthTarget->pass:
+          colorTarget?(colorTarget->initialized?colorTarget->loadPass:colorTarget->pass):g_xd.render_pass;
       if (!count || count>131072u ||
-          !XDGetPipeline(state,draw,topology,
-                         depthOnly?depthTarget->pass:
-                           colorTarget?colorTarget->pass:g_xd.render_pass,
+          !XDGetPipeline(state,draw,topology,drawPass,
                          depthOnly?depthTarget->samples:
                            colorTarget?colorTarget->samples:VK_SAMPLE_COUNT_1_BIT,
                          depthOnly)) {
@@ -541,8 +541,7 @@ static uint32_t XDProcessDraws(KKVulkanState *state, uint32_t image_index,
                vte,push.flags,push.posScale[0],push.posScale[1],
                push.posScale[2],push.posScale[3],primitive,count);
       }
-      VkRenderPass neededPass=depthOnly?depthTarget->pass:
-          colorTarget?colorTarget->pass:g_xd.render_pass;
+      VkRenderPass neededPass=drawPass;
       if(began && currentPass!=neededPass) {
          XD(CmdEndRenderPass)(command);began=false;currentPass=VK_NULL_HANDLE;
       }
@@ -558,10 +557,11 @@ static uint32_t XDProcessDraws(KKVulkanState *state, uint32_t image_index,
       if (!began && colorTarget) {
          VkClearValue clear={0};
          VkRenderPassBeginInfo offscreen={.sType=VK_STRUCTURE_TYPE_RENDER_PASS_BEGIN_INFO,
-            .renderPass=colorTarget->pass,.framebuffer=colorTarget->framebuffer,
+            .renderPass=drawPass,.framebuffer=colorTarget->framebuffer,
             .renderArea={.offset={0,0},.extent=colorTarget->extent},
             .clearValueCount=1,.pClearValues=&clear};
          XD(CmdBeginRenderPass)(command,&offscreen,VK_SUBPASS_CONTENTS_INLINE);
+         colorTarget->initialized=true;
          began=true;currentPass=neededPass;
       }
       if (!began) {

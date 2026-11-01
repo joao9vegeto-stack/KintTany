@@ -287,3 +287,16 @@ assert addr == 0x10310004
 assert stored.to_bytes(4, "little") == bytes.fromhex("00000001")
 assert int.from_bytes(stored.to_bytes(4, "little"), "big") == value
 print("PASS: Build 61 CP writeback endian/physical address, 50 MHz mftb, and non-mutating plateau diagnostics")
+
+
+# Build 88: EDRAM attachments preserve guest color across submissions.
+guest_color=Path("iOS/App/XOWUEGuestColor.inc").read_text()
+assert "VkRenderPass pass,loadPass;" in guest_color
+assert "VK_ATTACHMENT_LOAD_OP_LOAD" in guest_color
+assert "loadAttachment.initialLayout=VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL" in guest_color
+assert "colorForNextDraw" in guest_color
+assert "t->initialized=true;" in guest_color
+assert "if(t->loadPass)XD(DestroyRenderPass)" in guest_color
+assert "const VkRenderPass drawPass=" in renderer
+assert ".renderPass=drawPass,.framebuffer=colorTarget->framebuffer" in renderer
+print("PASS: Build 88 EDRAM CLEAR-on-first-use / LOAD-on-reuse and resolve layout restoration")
