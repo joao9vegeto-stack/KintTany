@@ -64,9 +64,9 @@ int SpartanKosmicKrispProbe(void)
     int has_surface = 0;
     int has_metal_surface = 0;
     for (uint32_t i = 0; i < returned; ++i) {
-        if (strcmp(extensions[i].extensionName, VK_KHR_SURFACE_EXTENSION_NAME) == 0)
+        if (strcmp(extensions[i].extensionName, "VK_KHR_surface") == 0)
             has_surface = 1;
-        if (strcmp(extensions[i].extensionName, VK_EXT_METAL_SURFACE_EXTENSION_NAME) == 0)
+        if (strcmp(extensions[i].extensionName, "VK_EXT_metal_surface") == 0)
             has_metal_surface = 1;
     }
     free(extensions);
