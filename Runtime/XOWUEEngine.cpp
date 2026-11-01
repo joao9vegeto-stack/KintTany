@@ -2475,9 +2475,26 @@ void xowue_thread_checkpoint(uint32_t guestAddress) {
         std::fprintf(stderr, "%s\n", event);
         recordRuntimeTrace(event);
     }
-    // Build 73: QPC is a leaf fast path and can be called from guest timer busy-waits.
-    // Never sleep or yield from its AOT entry instrumentation.
+    // QPC is guest-visible timebase code and may be polled in a guest busy-wait.
+    // Never sleep, synthesize time, pump graphics, or signal guest objects here.
+    // A bounded host-only yield lets other PPC worker threads run without changing
+    // the guest's registers, timebase value, or synchronization state.
     const bool qpcFastPath = guestAddress == 0x82C3C4D8u;
+    static thread_local uint64_t qpcCooperativeCalls = 0u;
+    if (qpcFastPath) {
+        ++qpcCooperativeCalls;
+        if ((qpcCooperativeCalls & 0xFFFu) == 0u) {
+            std::this_thread::yield();
+            if ((qpcCooperativeCalls & 0xFFFFFu) == 0u) {
+                char event[160];
+                std::snprintf(event, sizeof(event),
+                    "XOWUE_QPC_COOPERATIVE_YIELD calls=%llu thread=%u",
+                    static_cast<unsigned long long>(qpcCooperativeCalls),
+                    g_currentGuestThread ? g_currentGuestThread->id : 0u);
+                recordRuntimeTrace(event);
+            }
+        }
+    }
     // Build 89: a hot poll may service the Xenos command processor, but it
     // must never signal unrelated guest events. Only the real producer owns
     // completion; synthetic SetEvent calls corrupt guest wait semantics.
@@ -2496,7 +2513,6 @@ void xowue_thread_checkpoint(uint32_t guestAddress) {
     if (likelyWaitFamily) {
         ++loopEntries;
         // CP packet execution/callbacks remain owned by the dedicated worker; avoid recursive pumping here.
-        if (guestAddress == 0x82C3C4D8u && (loopEntries % 4096u) == 0u) std::this_thread::yield();
         if (loopEntries == 1u || loopEntries % 250000u == 0u) {
             char event[176];
             std::snprintf(event, sizeof(event),
