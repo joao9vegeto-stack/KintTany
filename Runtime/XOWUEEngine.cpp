@@ -2192,6 +2192,70 @@ void xowue_thread_checkpoint(uint32_t guestAddress,PPCContext &ctx){
     g_b90PreviousEntryLr = g_currentGuestThread
         ? g_currentGuestThread->lastGuestLr.load(std::memory_order_relaxed)
         : g_mainThreadGuestLr.load(std::memory_order_relaxed);
+    // Build 92: capture the real PPC caller of the hot timebase helpers.
+    // The return address in ctx.lr identifies the BL site; dumping its surrounding
+    // guest instructions lets us distinguish a timer poll from a blocked producer.
+    if (guestAddress == 0x82C3C4D8u || guestAddress == 0x82C3EE78u) {
+        static thread_local std::unordered_set<uint32_t> auditedQpcCallers;
+        const uint32_t callerLr = static_cast<uint32_t>(ctx.lr);
+        if (callerLr >= 0x82000004u && callerLr < 0x84000000u &&
+            auditedQpcCallers.insert(callerLr).second) {
+            const auto callerMemory = g_activeGuestMemory.lock();
+            const uint8_t *callerBase = callerMemory ? callerMemory->base : nullptr;
+            char state[512];
+            std::snprintf(state, sizeof(state),
+                "XOWUE_B92_QPC_CALLSITE thread=%u helper=0x%08X lr=0x%08X "
+                "call_pc=0x%08X sp=0x%08X cr0=%u%u%u%u xer=%u%u%u "
+                "r3=0x%08X r4=0x%08X r5=0x%08X r6=0x%08X r7=0x%08X "
+                "r8=0x%08X r9=0x%08X r10=0x%08X r11=0x%08X r12=0x%08X "
+                "r30=0x%08X r31=0x%08X",
+                g_currentGuestThread ? g_currentGuestThread->id : g_currentGuestThreadId,
+                guestAddress, callerLr, callerLr - 4u, ctx.r1.u32,
+                static_cast<unsigned>(ctx.cr0.lt), static_cast<unsigned>(ctx.cr0.gt), static_cast<unsigned>(ctx.cr0.eq), static_cast<unsigned>(ctx.cr0.so),
+                static_cast<unsigned>(ctx.xer.so), static_cast<unsigned>(ctx.xer.ov), static_cast<unsigned>(ctx.xer.ca),
+                ctx.r3.u32, ctx.r4.u32, ctx.r5.u32, ctx.r6.u32, ctx.r7.u32,
+                ctx.r8.u32, ctx.r9.u32, ctx.r10.u32, ctx.r11.u32, ctx.r12.u32,
+                ctx.r30.u32, ctx.r31.u32);
+            recordRuntimeTrace(state);
+            if (callerBase) {
+                const uint32_t first = callerLr > 0x80u ? callerLr - 0x80u : 0u;
+                const uint32_t end = callerLr <= 0x83FFFFDFu ? callerLr + 0x20u : callerLr;
+                uint32_t functionStart = first;
+                for (uint32_t pc = callerLr - 4u; pc >= first + 4u; ) {
+                    pc -= 4u;
+                    const uint32_t word = loadGuestBe32(callerBase, pc);
+                    if (word == 0x7C0802A6u || (word & 0xFFFF0000u) == 0x94210000u) {
+                        functionStart = pc;
+                        break;
+                    }
+                }
+                char boundary[160];
+                std::snprintf(boundary, sizeof(boundary),
+                    "XOWUE_B92_QPC_CALLER_FUNCTION helper=0x%08X lr=0x%08X start_candidate=0x%08X",
+                    guestAddress, callerLr, functionStart);
+                recordRuntimeTrace(boundary);
+                for (uint32_t pc = first; pc < end && validGuestRange(pc, 4u); pc += 4u) {
+                    char instruction[128];
+                    std::snprintf(instruction, sizeof(instruction),
+                        "XOWUE_B92_QPC_CALLER_CODE helper=0x%08X lr=0x%08X pc=0x%08X word=0x%08X%s",
+                        guestAddress, callerLr, pc, loadGuestBe32(callerBase, pc),
+                        pc == callerLr - 4u ? " call_instruction" : "");
+                    recordRuntimeTrace(instruction);
+                }
+                if (validGuestRange(ctx.r1.u32, 0x40u)) {
+                    for (uint32_t offset = 0; offset < 0x40u; offset += 4u) {
+                        char stackWord[112];
+                        std::snprintf(stackWord, sizeof(stackWord),
+                            "XOWUE_B92_QPC_CALLER_STACK lr=0x%08X offset=0x%02X value=0x%08X",
+                            callerLr, offset, loadGuestBe32(callerBase, ctx.r1.u32 + offset));
+                        recordRuntimeTrace(stackWord);
+                    }
+                }
+            } else {
+                recordRuntimeTrace("XOWUE_B92_QPC_CALLSITE_NO_GUEST_MEMORY");
+            }
+        }
+    }
     if (guestAddress == 0x82575250u) {
         // Build 86: sparse sampling plus a one-shot dump at the first pointer-like cache-window value.
         const uint64_t calls = g_b86StreamPollCalls.fetch_add(1u, std::memory_order_relaxed) + 1u;
