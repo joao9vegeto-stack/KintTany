@@ -11,6 +11,7 @@ Port nativo iOS do cliente Panda Cloud Gaming. O desenvolvimento fica isolado ne
 
 ## Evidências iniciais do APK recebido
 
+- SHA-256 do APK original recebido: `72d3f472a778e400473095407b24244b780e9871b1541345099f9422b937716b`.
 - Package ID observado em strings DEX: \`com.qudian.qudianyun\`.
 - DEX primário: \`classes.dex\` (~1,0 MB); o payload também contém \`assets/classes0.jar\` (~7,4 MB) e \`assets/1728530695\` (~6,4 MB), que precisam ser caracterizados.
 - Bibliotecas ARM64: \`libijkplayerplugin.so\`, \`libmmkv.so\`, \`libsgcore.so\`, \`libzeus_direct_dex.so\`, \`libSecShell.so\`, entre outras.
