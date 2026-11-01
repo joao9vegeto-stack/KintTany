@@ -58,13 +58,18 @@ jobs:
             echo '- Original SHA-256: `736af25ca8cd42719ad9ca8b661bcd63b8a6ec89a6e471618d1af841065690ac`'
             echo "- Split size: 900 KiB per part (final part may be smaller)"
             echo "- Parts are byte-contiguous and ordered by the three-digit suffix."
+            echo '- Per-part hashes: SHA256SUMS (run sha256sum -c SHA256SUMS from this directory).'
             echo
             echo "## Parts"
             for f in logs/diagnostico-build-85.part-*.txt; do
               printf -- '- [%s](%s) — %s bytes\n' "$(basename "$f")" "$(basename "$f")" "$(stat -c '%s' "$f")"
             done
           } > logs/README.md
-          printf '%s  %s\n' "736af25ca8cd42719ad9ca8b661bcd63b8a6ec89a6e471618d1af841065690ac" "diagnostico-build-85.txt" > logs/SHA256SUMS
+          expected="736af25ca8cd42719ad9ca8b661bcd63b8a6ec89a6e471618d1af841065690ac"
+          actual="$(cat logs/diagnostico-build-85.part-*.txt | sha256sum | cut -d ' ' -f1)"
+          test "$actual" = "$expected"
+          (cd logs && sha256sum diagnostico-build-85.part-*.txt > SHA256SUMS)
+          printf 'Original Release asset SHA-256: %s\n' "$expected" > logs/SOURCE-SHA256.txt
           printf 'parts=%s\n' "$(find logs -maxdepth 1 -type f -name 'diagnostico-build-85.part-*.txt' | wc -l | tr -d ' ')" >> "$GITHUB_STEP_SUMMARY"
           printf 'source_sha256=%s\n' "736af25ca8cd42719ad9ca8b661bcd63b8a6ec89a6e471618d1af841065690ac" >> "$GITHUB_STEP_SUMMARY"
 
