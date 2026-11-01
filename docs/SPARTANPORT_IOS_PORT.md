@@ -30,7 +30,7 @@ Upstream references:
 
 ## KosmicKrisp backend reused from PsTJohn
 
-The graphics provider is the user's existing KosmicKrisp/Mesa port from `PsTJohn`, not a replacement MoltenVK backend. `KosmicKrispiOS/` contains the pinned Mesa build, M2 iOS platform patch, M3 Metal WSI patch, M3B smoke-target patch, reference CAMetalLayer test, static/dynamic adapters and CMake integration helper. SpartanPort's iOS app force-loads `libkk-kosmickrisp-ios-arm64.a` and runs a direct ICD entrypoint/instance-extension probe. CI compiles the M3B smoke executable as a build check but does not package a second IPA. Physical-device surface/swapchain presentation remains pending. A compile or extension probe is not evidence of game rendering.
+The graphics provider is the user's existing KosmicKrisp/Mesa port from `PsTJohn`, not a replacement MoltenVK backend. `KosmicKrispiOS/` contains the pinned Mesa build, M2 iOS platform patch, M3 Metal WSI patch, M3B smoke-target patch, reference CAMetalLayer test, static/dynamic adapters and CMake integration helper. The delivered `libkk-kosmickrisp-ios-arm64.a` must be a merged static dependency closure, not the bare Meson `libkk.a`: Mesa keeps `simple_mtx.c`, C11 thread support, NIR, Vulkan utilities, MSL compiler, Metal bridge and shader objects in separate static archives. The app force-loads the merged archive and does not permit `-undefined dynamic_lookup`; unresolved symbols must fail the Xcode link instead of surfacing as a dyld launch crash. CI also checks that Mesa's `_simple_mtx_plain_init_once` and C11 `mtx_init` implementations are defined in the delivered archive. CI compiles the M3B smoke executable as a build check but does not package a second IPA. Physical-device surface/swapchain presentation remains pending. A compile or extension probe is not evidence of game rendering.
 
 ## Required porting work
 
@@ -79,3 +79,8 @@ A separate XcodeGen project now lives under `SpartanPort-iOS/`; it does not repl
 ## Acceptance rule
 
 Do not label a build “working” merely because Xcode compiles the SwiftUI shell or creates an IPA. A milestone is complete only when its stated runtime/device test passes and its logs/artifacts are retained. The first deliverable is a reproducible iOS shell plus a measured CPU/GPU feasibility result, not a fake launcher that claims to run the game.
+
+
+## Runtime linker correction (2026-11-01)
+
+The first installed IPA failed at launch with dyld reporting `__simple_mtx_plain_init_once` missing from the flat namespace. Inspection of the run #17 artifact showed this symbol undefined in multiple members of the bare `libkk.a`. Mesa defines it in `src/util/simple_mtx.c`, which is part of the separate `libmesa_util.a`; the C11 mutex implementation is also delivered in a separate archive. The previous Xcode flags allowed undefined dynamic lookup, so the app linked while leaving Mesa-internal references unresolved. The build now merges all iOS static dependency archives produced under `build-ios` into the single SDK archive, verifies the Mesa mutex and C11 thread implementations are present, and removes `-undefined dynamic_lookup` from the app link. The next device IPA must be installed and launched to validate the fix on hardware; a successful CI build alone is not a device-runtime pass.
