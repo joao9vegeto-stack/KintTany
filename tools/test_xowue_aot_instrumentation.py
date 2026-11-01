@@ -253,13 +253,13 @@ assert "B86_STREAM_CHUNK_TABLE" in engine and "B86_MEDIA_OPEN" in engine
 assert "B87_STREAM_WAIT_STATE" in engine and "B87_STREAM_CACHE_ANOMALY" in engine
 assert "B87_NTREADFILE" in engine
 
-# Build 92: .xxx file reads must compare on-disk bytes with guest-buffer bytes
-# before signaling the waiting guest; status/byte-count alone is insufficient.
+# Build 92.2: .xxx and .bik reads compare on-disk bytes with guest-buffer bytes
+# before signaling the guest; persist those records and make MFTB cancellable.
 read_start = engine.index("void xowue_NtReadFile(PPCContext &context, uint8_t *base) {")
 read_end = engine.index("\n}\n\nvoid xowue_NtWriteFile", read_start)
 read_body = engine[read_start:read_end]
 for token in (
-    'readExtension == ".xxx"',
+    'readExtension == ".xxx" || readExtension == ".bik"',
     "std::filesystem::file_size(file->path",
     "sourceFile.seekg(static_cast<std::streamoff>(offset)",
     "sourceHash",
@@ -267,12 +267,23 @@ for token in (
     "sourceNonZero",
     "guestNonZero",
     "B92_XXX_INTEGRITY",
+    "B92_BIK_INTEGRITY",
     "rangeWithinFile",
 ):
     assert token in read_body, f"Build 92 .xxx integrity check missing {token}"
 assert read_body.index("B92_XXX_INTEGRITY") < read_body.index("signal.signalNow();")
+assert read_body.index("B92_BIK_INTEGRITY") < read_body.index("signal.signalNow();")
 assert "const uint8_t *guestBytes = base + buffer;" in read_body
-print("PASS: Build 92 .xxx source-vs-guest integrity, actual file size/offset, zero-byte detection before wake")
+assert "g_runtimeTracePersistB92.fetch_add" in engine
+assert "XOWUE_B92_QPC_" in engine[engine.index("bool shouldPersistRuntimeTrace"):engine.index("void persistRuntimeTrace")]
+timebase_start = engine.index('extern "C" uint64_t xowue_guest_timebase(void) {')
+timebase_end = engine.index('extern "C" uint64_t xowue_qpc_write', timebase_start)
+timebase_body = engine[timebase_start:timebase_end]
+assert "g_schedulerStopRequested.load(std::memory_order_relaxed)" in timebase_body
+assert "throw GuestThreadStopRequested{};" in timebase_body
+assert "B92_XXX_INTEGRITY" in diag and "B92_BIK_INTEGRITY" in diag
+assert 'lines.filter { $0.contains("XOWUE_B92_QPC_") }' in diag
+print("PASS: Build 92.2 .xxx/.bik source-vs-guest integrity, persisted evidence, and MFTB/AOT cooperative cancellation")
 wait_start = engine.index("uint32_t waitGuestObject(")
 wait_end = engine.index("uint32_t waitGuestObjects(", wait_start)
 wait_body = engine[wait_start:wait_end]

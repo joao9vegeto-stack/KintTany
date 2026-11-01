@@ -373,6 +373,7 @@ std::atomic<bool> g_runtimeTraceFileLimitMarkerWritten{false};
 std::atomic<uint64_t> g_b86StreamPollCalls{0};
 std::atomic<bool> g_b86StreamAnomalyDumped{false};
 std::atomic<size_t> g_runtimeTracePersistB87{0};
+std::atomic<size_t> g_runtimeTracePersistB92{0};
 std::atomic<uint64_t> g_b87StreamWaitCalls{0};
 std::atomic<bool> g_b87StreamAnomalyDumped{false};
 std::atomic<uint64_t> g_b87FileReadLogs{0};
@@ -461,6 +462,10 @@ bool shouldPersistRuntimeTrace(const std::string &event, size_t sequence) {
         return g_runtimeTracePersistB86Stream.fetch_add(1, std::memory_order_relaxed) < 64u;
     if (event.find("B86_MEDIA_OPEN") != std::string::npos)
         return g_runtimeTracePersistB86Media.fetch_add(1, std::memory_order_relaxed) < 128u;
+    if (event.find("B92_XXX_INTEGRITY") != std::string::npos ||
+        event.find("B92_BIK_INTEGRITY") != std::string::npos ||
+        event.find("XOWUE_B92_QPC_") != std::string::npos)
+        return g_runtimeTracePersistB92.fetch_add(1, std::memory_order_relaxed) < 2048u;
     if (event.find("B87_") != std::string::npos)
         return g_runtimeTracePersistB87.fetch_add(1, std::memory_order_relaxed) < 160u;
     // Build 64 must persist diagnostics that identify stalls and QPC output writes.
@@ -2189,6 +2194,10 @@ extern "C" bool xowue_82dc2390_observe(PPCContext &context,uint8_t *base) {
 void xowue_thread_checkpoint(uint32_t guestAddress);
 static void xowue_trace_hot_guest_entry(uint32_t guestAddress, PPCContext &ctx);
 void xowue_thread_checkpoint(uint32_t guestAddress,PPCContext &ctx){
+    // Check before diagnostic work: a stop request must not be delayed by a
+    // one-shot caller/stack dump at a hot AOT entry.
+    if (g_schedulerStopRequested.load(std::memory_order_relaxed))
+        throw GuestThreadStopRequested{};
     g_b90PreviousEntryLr = g_currentGuestThread
         ? g_currentGuestThread->lastGuestLr.load(std::memory_order_relaxed)
         : g_mainThreadGuestLr.load(std::memory_order_relaxed);
@@ -3094,6 +3103,7 @@ extern "C" int xowue_boot_xex(const char *path, char *output, size_t output_capa
         g_b86StreamPollCalls.store(0, std::memory_order_relaxed);
         g_b86StreamAnomalyDumped.store(false, std::memory_order_relaxed);
         g_runtimeTracePersistB87.store(0, std::memory_order_relaxed);
+    g_runtimeTracePersistB92.store(0, std::memory_order_relaxed);
         g_b87StreamWaitCalls.store(0, std::memory_order_relaxed);
         g_b87StreamAnomalyDumped.store(false, std::memory_order_relaxed);
         g_b87FileReadLogs.store(0, std::memory_order_relaxed);
@@ -6768,7 +6778,9 @@ void xowue_NtReadFile(PPCContext &context, uint8_t *base) {
     std::string readExtension = file->path.extension().string();
     std::transform(readExtension.begin(), readExtension.end(), readExtension.begin(),
         [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
-    if (readExtension == ".xxx") {
+    if (readExtension == ".xxx" || readExtension == ".bik") {
+        const char *integrityTag = readExtension == ".xxx"
+            ? "B92_XXX_INTEGRITY" : "B92_BIK_INTEGRITY";
         static std::atomic<uint64_t> s_xxxIntegrityLogCount{0u};
         const uint64_t integrityLogIndex =
             s_xxxIntegrityLogCount.fetch_add(1u, std::memory_order_relaxed);
@@ -6830,11 +6842,11 @@ void xowue_NtReadFile(PPCContext &context, uint8_t *base) {
             }
             char event[1200];
             std::snprintf(event, sizeof(event),
-                "B92_XXX_INTEGRITY thread=%u handle=0x%08X path=%s file_size=%llu "
+                "%s thread=%u handle=0x%08X path=%s file_size=%llu "
                 "file_size_known=%u offset=0x%016llX requested=%u bytes=%u status=0x%08X "
                 "range_in_file=%u source_bytes=%u source_complete=%u source_hash=%016llX "
                 "guest_hash=%016llX source_nonzero=%llu guest_nonzero=%llu sample=%s mismatch=%u",
-                static_cast<uint32_t>(g_currentGuestThreadId), handle, file->path.string().c_str(),
+                integrityTag, static_cast<uint32_t>(g_currentGuestThreadId), handle, file->path.string().c_str(),
                 static_cast<unsigned long long>(actualFileSize), fileSizeKnown ? 1u : 0u,
                 static_cast<unsigned long long>(offset), length, bytesRead, readStatus,
                 rangeWithinFile ? 1u : 0u, sourceBytes, sourceComplete ? 1u : 0u,
@@ -7649,6 +7661,11 @@ void xowue_RtlLeaveCriticalSection(PPCContext &context, uint8_t *base) {
 }
 
 extern "C" uint64_t xowue_guest_timebase(void) {
+    // MFTB is a frequent guest polling primitive. It is also a safe cancellation
+    // boundary: once SAIR is requested, unwind PPC instead of waiting for a
+    // guest spin loop to reach a kernel wait or return naturally.
+    if (g_schedulerStopRequested.load(std::memory_order_relaxed))
+        throw GuestThreadStopRequested{};
     // Match KeQueryPerformanceFrequency's guest-visible 50 MHz clock domain.
 #if defined(__APPLE__)
     const uint64_t ns = clock_gettime_nsec_np(CLOCK_UPTIME_RAW);

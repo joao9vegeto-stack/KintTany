@@ -86,7 +86,9 @@ enum XOWUEDiagnostics {
         appendLocked(message, to: url)
         let important = ["B83_", "B84_", "B85_", "B86_", "AOT_PROGRESS", "HOT_FN_CODE",
                          "THREAD_DUMP", "XENOS_", "PM4_", "SWAP_", "WAIT_", "VBLANK",
-                         "GRAPHICS_INTERRUPT", "B90_STREAM_", "BOOT_", "CRASH ", "runtime.native_return"]
+                         "GRAPHICS_INTERRUPT", "B90_STREAM_", "B92_XXX_INTEGRITY",
+                         "B92_BIK_INTEGRITY", "XOWUE_B92_QPC_", "XOWUE_USER_EXIT",
+                         "runtime.stop", "BOOT_", "CRASH ", "runtime.native_return"]
         if important.contains(where: { message.contains($0) }) {
             refreshCompactSummaryLocked(diagnosticURL: url)
         }
@@ -139,17 +141,25 @@ enum XOWUEDiagnostics {
         let progress = Array(lines.filter {
             $0.contains("AOT_PROGRESS") || $0.contains("HOT_FN_CODE")
         }.suffix(12))
+        let xxxIntegrity = Array(lines.filter { $0.contains("B92_XXX_INTEGRITY") }.suffix(16))
+        let bikIntegrity = Array(lines.filter { $0.contains("B92_BIK_INTEGRITY") }.suffix(16))
+        let qpcCaller = Array(lines.filter { $0.contains("XOWUE_B92_QPC_") }.suffix(24))
+        let cancellation = Array(lines.filter {
+            $0.contains("XOWUE_USER_EXIT") || $0.contains("runtime.stop")
+        }.suffix(12))
         let legacyWaits = Array(lines.filter { $0.contains("B85_WAIT_") || $0.contains("B85_MULTIWAIT_") }.suffix(12))
         var sections = [
             "XOWUE_BUILD_SUMMARY build=\(buildNumber) source=\(diagnosticFilename)",
             "DIAGNOSTIC_BYTES=\(data.count)",
             "CURRENT_BUILD_EVIDENCE_BEGIN"
-        ] + boot + progress + b84 + b83 + b85 + streamState + streamAnomaly + streamObject + streamTable + streamRecent + legacyStream + legacyWaits + media + waits + gpu +
+        ] + boot + progress + qpcCaller + xxxIntegrity + bikIntegrity + cancellation +
+            b84 + b83 + b85 + streamState + streamAnomaly + streamObject + streamTable +
+            streamRecent + legacyStream + legacyWaits + media + waits + gpu +
+            streamTransition + streamWait + streamWaitAnomaly + fileReads +
             ["CURRENT_BUILD_EVIDENCE_END"]
         while sections.joined(separator: "\n").utf8.count > 16384 && sections.count > 8 {
             sections.remove(at: sections.count - 2)
         }
-        sections.insert(contentsOf: streamTransition + streamWait + streamWaitAnomaly + fileReads, at: max(3, sections.count - 1))
         let summary = sections.joined(separator: "\n") + "\n"
         let summaryURL = diagnosticURL.deletingLastPathComponent().appendingPathComponent(summaryFilename)
         try? summary.write(to: summaryURL, atomically: true, encoding: .utf8)
