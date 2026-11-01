@@ -1,13 +1,16 @@
 name: Panda iOS Build
 
 on:
+  push:
+    branches:
+      - PandaiOS
   workflow_dispatch:
 
 permissions:
   contents: read
 
 concurrency:
-  group: pandaios-manual-build
+  group: pandaios-build
   cancel-in-progress: false
 
 jobs:
