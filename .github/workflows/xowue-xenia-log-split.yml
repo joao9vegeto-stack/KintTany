@@ -1,0 +1,103 @@
+name: XOWUE Xenia log splitter
+
+on:
+  push:
+    branches:
+      - XOWUE
+    paths:
+      - ".github/workflows/xowue-xenia-log-split.yml"
+
+concurrency:
+  group: xowue-xenia-log-split
+  cancel-in-progress: false
+
+permissions:
+  contents: write
+
+jobs:
+  fetch-and-split:
+    name: Download Release log and publish readable parts
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - name: Checkout only XOWUE
+        uses: actions/checkout@v4
+        with:
+          ref: XOWUE
+          fetch-depth: 1
+
+      - name: Download Xenia log from Release
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p "$RUNNER_TEMP/xowue-xenia"
+          curl --fail --location --retry 5 --retry-all-errors \
+            --connect-timeout 30 --max-time 1200 \
+            "https://github.com/joao9vegeto-stack/KintTany/releases/download/Xowue/xenia.log" \
+            --output "$RUNNER_TEMP/xowue-xenia/xenia.log"
+          test -s "$RUNNER_TEMP/xowue-xenia/xenia.log"
+          stat -c 'Downloaded bytes: %s' "$RUNNER_TEMP/xowue-xenia/xenia.log" | tee "$RUNNER_TEMP/xowue-xenia/size.txt"
+          sha256sum "$RUNNER_TEMP/xowue-xenia/xenia.log" | tee "$RUNNER_TEMP/xowue-xenia/source.sha256"
+
+      - name: Split into GitHub-readable contiguous parts
+        shell: bash
+        run: |
+          set -euo pipefail
+          out="logs/xenia"
+          mkdir -p "$out"
+          find "$out" -maxdepth 1 -type f \\( -name 'xenia.part-*.txt' -o -name 'SHA256SUMS' -o -name 'SOURCE-SHA256.txt' -o -name 'README.md' \\) -delete
+
+          split --bytes=900K --numeric-suffixes=0 --suffix-length=4 \
+            --additional-suffix=.txt \
+            "$RUNNER_TEMP/xowue-xenia/xenia.log" \
+            "$out/xenia.part-"
+
+          bytes="$(stat -c '%s' "$RUNNER_TEMP/xowue-xenia/xenia.log")"
+          sha="$(cut -d ' ' -f1 "$RUNNER_TEMP/xowue-xenia/source.sha256")"
+          parts="$(find "$out" -maxdepth 1 -type f -name 'xenia.part-*.txt' | wc -l | tr -d ' ')"
+
+          {
+            echo "# XOWUE — Xenia diagnostic log"
+            echo
+            echo "- Source: GitHub Release `Xowue` / [xenia.log](https://github.com/joao9vegeto-stack/KintTany/releases/download/Xowue/xenia.log)"
+            echo "- Original size: $bytes bytes"
+            echo "- Original SHA-256: `$sha`"
+            echo "- Split size: 900 KiB per part (final part may be smaller)"
+            echo "- Parts: $parts; byte-contiguous and ordered by the four-digit suffix"
+            echo "- Verify each part with `sha256sum -c SHA256SUMS` from this directory"
+            echo
+            echo "## Parts"
+            for f in "$out"/xenia.part-*.txt; do
+              printf -- '- [%s](%s) — %s bytes\n' "$(basename "$f")" "$(basename "$f")" "$(stat -c '%s' "$f")"
+            done
+          } > "$out/README.md"
+
+          (cd "$out" && sha256sum xenia.part-*.txt > SHA256SUMS)
+          printf '%s  xenia.log (Release asset)\n' "$sha" > "$out/SOURCE-SHA256.txt"
+
+          reconstructed_sha="$(cat "$out"/xenia.part-*.txt | sha256sum | cut -d ' ' -f1)"
+          test "$reconstructed_sha" = "$sha"
+          reconstructed_bytes="$(cat "$out"/xenia.part-*.txt | wc -c | tr -d ' ')"
+          test "$reconstructed_bytes" = "$bytes"
+
+          {
+            echo "### Xenia log split completed"
+            echo "- Source bytes: $bytes"
+            echo "- Source SHA-256: `$sha`"
+            echo "- Parts created: $parts"
+            echo "- Reassembled byte count and SHA-256: verified"
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Commit split log under logs/xenia on XOWUE
+        shell: bash
+        run: |
+          set -euo pipefail
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add logs/xenia/
+          if git diff --cached --quiet; then
+            echo "No changes in logs/xenia; nothing to commit."
+            exit 0
+          fi
+          git commit -m "Add split Xenia diagnostic log"
+          git push origin HEAD:XOWUE
