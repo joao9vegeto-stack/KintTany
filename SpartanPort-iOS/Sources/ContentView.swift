@@ -47,7 +47,7 @@ struct ContentView: View {
                             .font(.headline)
                         statusRow("Aplicativo iOS / SwiftUI", state: "Implementado", good: true)
                         statusRow("Superfície Metal", state: "Teste inicial", good: true)
-                        statusRow("KosmicKrisp Vulkan ICD", state: kosmicKrispProbe, good: kosmicKrispProbe.hasPrefix("ICD carregado"))
+                        statusRow("KosmicKrisp Vulkan ICD", state: kosmicKrispProbe, good: kosmicKrispProbe.hasPrefix("ICD loaded"))
                         statusRow("Inspeção do eboot.bin", state: gameFolder.executableValidated ? "ELF64 x86-64" : "Não validado", good: gameFolder.executableValidated)
                         statusRow("Runtime PS4 ARM64", state: "Pendente", good: false)
                         statusRow("AOT x86-64 → ARM64", state: "Pendente", good: false)
