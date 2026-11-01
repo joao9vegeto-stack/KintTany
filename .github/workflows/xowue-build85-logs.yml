@@ -1,0 +1,84 @@
+name: XOWUE Build 85 diagnostic splitter
+
+on:
+  push:
+    branches:
+      - XOWUE
+    paths:
+      - ".github/workflows/xowue-build85-logs.yml"
+
+concurrency:
+  group: xowue-build85-logs
+  cancel-in-progress: false
+
+permissions:
+  contents: write
+
+jobs:
+  fetch-and-split:
+    name: Download Release and publish logs parts
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - name: Checkout only XOWUE
+        uses: actions/checkout@v4
+        with:
+          ref: XOWUE
+          fetch-depth: 1
+
+      - name: Download and verify Build 85 diagnostic
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p "$RUNNER_TEMP/xowue-build85"
+          curl --fail --location --retry 4 --retry-all-errors \
+            --connect-timeout 30 --max-time 600 \
+            "https://github.com/joao9vegeto-stack/KintTany/releases/download/Xowue/diagnostico-build-85.txt" \
+            --output "$RUNNER_TEMP/xowue-build85/diagnostico-build-85.txt"
+          printf '%s  %s\n' \
+            "736af25ca8cd42719ad9ca8b661bcd63b8a6ec89a6e471618d1af841065690ac" \
+            "$RUNNER_TEMP/xowue-build85/diagnostico-build-85.txt" | sha256sum --check
+          test "$(stat -c '%s' "$RUNNER_TEMP/xowue-build85/diagnostico-build-85.txt")" = "64537044"
+
+      - name: Split into GitHub-readable text parts
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p logs
+          find logs -maxdepth 1 -type f -name 'diagnostico-build-85.part-*.txt' -delete
+          split --bytes=900K --numeric-suffixes=0 --suffix-length=3 \
+            --additional-suffix=.txt \
+            "$RUNNER_TEMP/xowue-build85/diagnostico-build-85.txt" \
+            logs/diagnostico-build-85.part-
+          cp "$RUNNER_TEMP/xowue-build85/diagnostico-build-85.txt" "$RUNNER_TEMP/diagnostico-build-85.txt"
+          {
+            echo "# XOWUE — Build 85 diagnostic"
+            echo
+            echo "- Source: GitHub Release `Xowue` / `diagnostico-build-85.txt`"
+            echo "- Original size: 64,537,044 bytes"
+            echo "- Original SHA-256: `736af25ca8cd42719ad9ca8b661bcd63b8a6ec89a6e471618d1af841065690ac`"
+            echo "- Split size: 900 KiB per part (final part may be smaller)"
+            echo "- Parts are byte-contiguous and ordered by the three-digit suffix."
+            echo
+            echo "## Parts"
+            for f in logs/diagnostico-build-85.part-*.txt; do
+              printf -- '- [%s](%s) — %s bytes\n' "$(basename "$f")" "$(basename "$f")" "$(stat -c '%s' "$f")"
+            done
+          } > logs/README.md
+          sha256sum "$RUNNER_TEMP/xowue-build85/diagnostico-build-85.txt" > logs/SHA256SUMS
+          printf 'parts=%s\n' "$(find logs -maxdepth 1 -type f -name 'diagnostico-build-85.part-*.txt' | wc -l | tr -d ' ')" >> "$GITHUB_STEP_SUMMARY"
+          printf 'source_sha256=%s\n' "736af25ca8cd42719ad9ca8b661bcd63b8a6ec89a6e471618d1af841065690ac" >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Commit parts into logs/ on XOWUE
+        shell: bash
+        run: |
+          set -euo pipefail
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add logs/
+          if git diff --cached --quiet; then
+            echo "No changes in logs/; nothing to commit."
+            exit 0
+          fi
+          git commit -m "Add split Build 85 diagnostic logs"
+          git push origin HEAD:XOWUE
