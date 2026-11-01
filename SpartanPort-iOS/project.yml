@@ -19,7 +19,7 @@ targets:
         IPHONEOS_DEPLOYMENT_TARGET: "17.4"
         HEADER_SEARCH_PATHS: "$(inherited) $(SRCROOT)/../KosmicKrispiOS/build/include"
         SWIFT_OBJC_BRIDGING_HEADER: "Sources/SpartanPort-Bridging-Header.h"
-        OTHER_LDFLAGS: "$(inherited) -Wl,-force_load,$(SRCROOT)/../KosmicKrispiOS/build/libkk-kosmickrisp-ios-arm64.a -Wl,-undefined,dynamic_lookup -framework Metal -framework QuartzCore -framework UIKit -framework Foundation -framework CoreGraphics"
+        "OTHER_LDFLAGS[sdk=iphoneos*]": "$(inherited) -Wl,-force_load,$(SRCROOT)/../KosmicKrispiOS/build/libkk-kosmickrisp-ios-arm64.a -Wl,-undefined,dynamic_lookup -framework Metal -framework QuartzCore -framework UIKit -framework Foundation -framework CoreGraphics"
         TARGETED_DEVICE_FAMILY: "1,2"
         GENERATE_INFOPLIST_FILE: YES
         INFOPLIST_KEY_UIUserInterfaceStyle: Dark

@@ -29,6 +29,10 @@ CI may set `KK_SKIP_PREREQUISITES=1` after installing Homebrew dependencies. Out
 
 The build compiles the M3B test application. A compile is not physical-device proof; install/run the M3B smoke IPA on the target iPhone and validate Metal surface creation, swapchain acquire/present, foreground/background, resize and a 10-minute soak.
 
+## Build dynamic libraries for SDL
+
+After `./build.sh`, run `./make-dylibs.sh`. It creates `build/Frameworks/libKosmicKrisp.dylib` and `build/Frameworks/libvulkan.dylib`, matching the PoPTST adapter's sibling-library layout. Embed both in the consuming app's Frameworks directory and sign them with the app. The build script verifies the exported entrypoints.
+
 ## Integration
 For a custom Vulkan renderer, link the static archive using `-Wl,-force_load,<archive>`, add `build/include` to the header search path and use the static bridge in `Integration/Static`. Link Metal, QuartzCore, UIKit, Foundation and CoreGraphics. For SDL or a loader that expects a dynamic library path, use the dynamic adapter in `Integration/Dynamic`, put `libvulkan.dylib` and `libKosmicKrisp.dylib` side-by-side in Frameworks, and set `SDL_HINT_VULKAN_LIBRARY` to the sandbox path of the shim before SDL initialization.
 
