@@ -376,6 +376,9 @@ std::atomic<size_t> g_runtimeTracePersistB87{0};
 std::atomic<uint64_t> g_b87StreamWaitCalls{0};
 std::atomic<bool> g_b87StreamAnomalyDumped{false};
 std::atomic<uint64_t> g_b87FileReadLogs{0};
+// Build 89: watch the live UE3 stream object without mutating guest state.
+std::atomic<uint32_t> g_b89WatchedStreamObject{0u};
+std::atomic<uint32_t> g_b89StreamFieldChangeLogs{0u};
 std::mutex g_tlsMutex;
 std::mutex g_virtualMemoryMutex;
 std::mutex g_guestObjectMutex;
@@ -713,7 +716,7 @@ void recordAotFunctionExecution(uint32_t guestAddress) {
         lastDistinctValue = distinct;
         lastDistinctCall = calls;
     }
-    const bool qpcFastPath = guestAddress == 0x82C3C4D8u || guestAddress == 0x822A1E08u || guestAddress == 0x822A0278u || guestAddress == 0x824E6FD8u || guestAddress == 0x82C25840u;
+    const bool qpcFastPath = guestAddress == 0x82C3C4D8u || guestAddress == 0x822A1E08u || guestAddress == 0x824E6FD8u || guestAddress == 0x82C25840u;
     const bool plateau = !qpcFastPath && calls > 12000000u && calls - lastDistinctCall > 5000000u;
     if (plateau) {
         bool expectedDump = false;
@@ -2277,6 +2280,7 @@ void xowue_thread_checkpoint(uint32_t guestAddress,PPCContext &ctx){
         };
         const uint32_t object = validObject(ctx.r31.u32) ? ctx.r31.u32 :
                                 (validObject(ctx.r3.u32) ? ctx.r3.u32 : 0u);
+        if (object != 0u) g_b89WatchedStreamObject.store(object, std::memory_order_relaxed);
         uint32_t words[20]{};
         if (object != 0u) {
             for (uint32_t i = 0; i < 20u; ++i)
@@ -2368,6 +2372,53 @@ void xowue_thread_checkpoint(uint32_t guestAddress) {
     auto auditMemory = g_activeGuestMemory.lock();
     if (auditMemory && auditMemory->base) { emitBuild65CodeAudit(auditMemory->base); logCodeAuditBuild69(auditMemory->base); logCodeAuditBuild84(auditMemory->base); }
     recordAotFunctionExecution(guestAddress);
+    // Build 89: a field change observed at this function entry was made by
+    // the immediately preceding AOT function on this guest thread. This
+    // watchpoint is read-only and never writes the guest stream object.
+    if (auditMemory && auditMemory->base) {
+        const uint32_t object = g_b89WatchedStreamObject.load(std::memory_order_relaxed);
+        if (object != 0u && validGuestRange(object, 0xB0u)) {
+            const uint32_t field9C = loadGuestBe32(auditMemory->base, object + 0x9Cu);
+            const uint32_t fieldA4 = loadGuestBe32(auditMemory->base, object + 0xA4u);
+            const uint32_t fieldAC = loadGuestBe32(auditMemory->base, object + 0xACu);
+            static thread_local uint32_t watchedObject = 0u;
+            static thread_local uint32_t previous9C = 0u;
+            static thread_local uint32_t previousA4 = 0u;
+            static thread_local uint32_t previousAC = 0u;
+            if (watchedObject != object) {
+                watchedObject = object;
+                previous9C = field9C;
+                previousA4 = fieldA4;
+                previousAC = fieldAC;
+                char event[192];
+                std::snprintf(event, sizeof(event),
+                    "B89_STREAM_WATCH_ARMED thread=%u object=0x%08X field9C=0x%08X fieldA4=0x%08X fieldAC=0x%08X",
+                    g_currentGuestThread ? g_currentGuestThread->id : 0u,
+                    object, field9C, fieldA4, fieldAC);
+                recordRuntimeTrace(event);
+            } else if (field9C != previous9C || fieldA4 != previousA4 || fieldAC != previousAC) {
+                const uint32_t previousFn = g_currentGuestThread
+                    ? g_currentGuestThread->lastCallerFn.load(std::memory_order_relaxed)
+                    : g_mainThreadPrevFn.load(std::memory_order_relaxed);
+                const uint32_t threadId = g_currentGuestThread ? g_currentGuestThread->id : 0u;
+                const uint32_t lr = g_currentGuestThread
+                    ? g_currentGuestThread->lastGuestLr.load(std::memory_order_relaxed)
+                    : g_mainThreadGuestLr.load(std::memory_order_relaxed);
+                if (g_b89StreamFieldChangeLogs.fetch_add(1u, std::memory_order_relaxed) < 256u) {
+                    char event[320];
+                    std::snprintf(event, sizeof(event),
+                        "B89_STREAM_FIELD_WRITE_CANDIDATE thread=%u object=0x%08X previous_fn=0x%08X observer_fn=0x%08X lr=0x%08X "
+                        "9C=%08X->%08X A4=%08X->%08X AC=%08X->%08X",
+                        threadId, object, previousFn, guestAddress, lr,
+                        previous9C, field9C, previousA4, fieldA4, previousAC, fieldAC);
+                    recordRuntimeTrace(event);
+                }
+                previous9C = field9C;
+                previousA4 = fieldA4;
+                previousAC = fieldAC;
+            }
+        }
+    }
     struct HotFunctionSlot { uint32_t fn; uint32_t count; };
     static thread_local std::array<HotFunctionSlot, 8> hotFunctions{};
     static thread_local uint64_t loopEntries = 0u;
@@ -2417,21 +2468,15 @@ void xowue_thread_checkpoint(uint32_t guestAddress) {
     }
     // Build 73: QPC is a leaf fast path and can be called from guest timer busy-waits.
     // Never sleep or yield from its AOT entry instrumentation.
-    const bool qpcFastPath = guestAddress == 0x82C3C4D8u || guestAddress == 0x822A1E08u || guestAddress == 0x822A0278u || guestAddress == 0x824E6FD8u || guestAddress == 0x824E7158u || guestAddress == 0x8237073Cu || guestAddress == 0x82370790u || guestAddress == 0x82C25840u;
-    // Build 73 (MCLA-4iOS / rexglue-sdk pattern): Wake both guest DISPATCHER_HEADER SignalState (+4)
-    // in virtual memory (0x4004ED80 / 0x4004EDD0) AND kernel handles (0x100, 0x102, 0x112, 0x115),
-    // and pump Xenos ring buffer when Bink/UE3 spins in 0x822A0278, 0x82C25840, 0x82427940, 0x824ACBF8, or 0x82B3DE30.
-    if ((guestAddress == 0x822A0278u || guestAddress == 0x82C25840u || guestAddress == 0x82427940u || guestAddress == 0x824ACBF8u || guestAddress == 0x82B3DE30u) &&
+    const bool qpcFastPath = guestAddress == 0x82C3C4D8u || guestAddress == 0x822A1E08u || guestAddress == 0x824E6FD8u || guestAddress == 0x824E7158u || guestAddress == 0x8237073Cu || guestAddress == 0x82370790u || guestAddress == 0x82C25840u;
+    // Build 89: a hot poll may service the Xenos command processor, but it
+    // must never signal unrelated guest events. Only the real producer owns
+    // completion; synthetic SetEvent calls corrupt guest wait semantics.
+    if ((guestAddress == 0x822A0278u || guestAddress == 0x82C25840u ||
+         guestAddress == 0x82427940u || guestAddress == 0x824ACBF8u ||
+         guestAddress == 0x82B3DE30u) &&
         slot->count != 0u && (slot->count & 511u) == 0u) {
         pumpGuestXenosRingBuffer();
-        signalGuestEventHandle(0x4004ED80u);
-        signalGuestEventHandle(0x4004EDD0u);
-        signalGuestEventHandle(0x00000100u);
-        signalGuestEventHandle(0x00000102u);
-        signalGuestEventHandle(0x00000112u);
-        signalGuestEventHandle(0x00000115u);
-        signalGuestEventHandle(0x70016FA0u);
-        signalGuestEventHandle(0x7003DD80u);
     }
     if (!qpcFastPath && slot->count != 0u && (slot->count % 2000u) == 0u)
         std::this_thread::yield();
