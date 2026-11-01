@@ -1,8 +1,8 @@
 # XOWUE — Build 85 diagnostic
 
-- Source: GitHub Release  / 
+- Source: GitHub Release `Xowue` / `diagnostico-build-85.txt`
 - Original size: 64,537,044 bytes
-- Original SHA-256: 
+- Original SHA-256: `736af25ca8cd42719ad9ca8b661bcd63b8a6ec89a6e471618d1af841065690ac`
 - Split size: 900 KiB per part (final part may be smaller)
 - Parts are byte-contiguous and ordered by the three-digit suffix.
 
