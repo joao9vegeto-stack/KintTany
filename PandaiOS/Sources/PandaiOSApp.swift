@@ -18,6 +18,8 @@ struct PandaHomeView: View {
     @State private var showingPlayer = false
     @State private var errorMessage: String?
     @State private var controllerCount = GCController.controllers().count
+    @State private var showingSessionImport = false
+    @State private var hasSavedSession = PandaSessionVault.hasSavedSession
 
     private var streamURL: URL? {
         guard let url = URL(string: streamAddress.trimmingCharacters(in: .whitespacesAndNewlines)),
@@ -35,6 +37,7 @@ struct PandaHomeView: View {
                         header
                         engineStatus
                         providerStatus
+                        sessionTools
                         diagnosticPlayer
                     }
                     .padding(20)
@@ -43,6 +46,9 @@ struct PandaHomeView: View {
                 }
             }
             .navigationBarHidden(true)
+            .sheet(isPresented: $showingSessionImport) {
+                PandaSessionImportView { hasSavedSession = PandaSessionVault.hasSavedSession }
+            }
             .fullScreenCover(isPresented: $showingPlayer) {
                 if let player {
                     DirectPlayerView(player: player) {
@@ -142,6 +148,40 @@ struct PandaHomeView: View {
         .padding(18)
         .frame(maxWidth: .infinity, alignment: .leading)
         .background(.purple.opacity(0.09), in: RoundedRectangle(cornerRadius: 18))
+    }
+
+    private var sessionTools: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            HStack {
+                Label("Sessão GameStream", systemImage: "lock.shield").font(.headline)
+                Spacer()
+                Text(hasSavedSession ? "IMPORTADA" : "AGUARDANDO")
+                    .font(.system(size: 10, weight: .bold, design: .rounded))
+                    .foregroundStyle(hasSavedSession ? .green : .secondary)
+            }
+            Text(hasSavedSession
+                 ? "Uma configuração validada está protegida no Chaves. O início do streaming ainda depende da integração do gerenciador de sessão e do renderer nativo."
+                 : "A estrutura para receber os dados reais foi implementada. Host, certificado, aplicativo e URL RTSP devem vir do serviço Panda.")
+                .font(.caption).foregroundStyle(.secondary)
+            HStack {
+                Button { showingSessionImport = true } label: {
+                    Label("Importar sessão", systemImage: "square.and.arrow.down")
+                }
+                .buttonStyle(.borderedProminent).tint(.purple)
+                if hasSavedSession {
+                    Button(role: .destructive) {
+                        do {
+                            try PandaSessionVault.clear()
+                            hasSavedSession = false
+                        } catch { errorMessage = error.localizedDescription }
+                    } label: { Image(systemName: "trash") }
+                    .buttonStyle(.bordered)
+                }
+            }
+        }
+        .padding(18)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(.white.opacity(0.055), in: RoundedRectangle(cornerRadius: 18))
     }
 
     private var diagnosticPlayer: some View {
