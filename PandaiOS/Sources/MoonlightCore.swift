@@ -1,8 +1,7 @@
 import Foundation
 
-/// Small Swift-facing probe for the upstream GameStream core.
-/// The actual stream lifecycle is connected only after Panda's session broker
-/// supplies a host, port, certificate, app identifier, and session key.
+/// Link-time probe for the upstream GameStream client.
+/// Session creation remains behind the Panda provider adapter.
 enum MoonlightCore {
     static var launchQueryParameters: String {
         guard let value = LiGetLaunchUrlQueryParameters() else {
@@ -12,6 +11,6 @@ enum MoonlightCore {
     }
 
     static var isLinked: Bool {
-        !launchQueryParameters.isEmpty
+        PandaGameStreamCoreIsAvailable() && !launchQueryParameters.isEmpty
     }
 }
