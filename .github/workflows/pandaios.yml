@@ -1,0 +1,104 @@
+name: PandaiOS — REA analysis and iOS build
+
+on:
+  workflow_dispatch:
+    inputs:
+      apk_url:
+        description: "Optional HTTPS URL for the original APK (REA/JADX analysis)"
+        required: false
+        type: string
+
+permissions:
+  contents: read
+
+concurrency:
+  group: pandaios-manual
+  cancel-in-progress: false
+
+jobs:
+  build-ios:
+    runs-on: macos-15
+    steps:
+      - name: Checkout PandaiOS only
+        uses: actions/checkout@v4
+        with:
+          ref: PandaiOS
+          fetch-depth: 1
+      - name: Select Xcode
+        run: xcodebuild -version
+      - name: Install XcodeGen
+        run: brew install xcodegen
+      - name: Generate project
+        working-directory: PandaiOS
+        run: xcodegen generate
+      - name: Build unsigned iOS app
+        working-directory: PandaiOS
+        run: |
+          set -euo pipefail
+          xcodebuild -project PandaiOS.xcodeproj -scheme PandaiOS \
+            -configuration Release -sdk iphoneos \
+            -derivedDataPath "$RUNNER_TEMP/PandaiOSDerived" \
+            CODE_SIGNING_ALLOWED=NO CODE_SIGNING_REQUIRED=NO build
+          APP="$RUNNER_TEMP/PandaiOSDerived/Build/Products/Release-iphoneos/PandaiOS.app"
+          test -d "$APP"
+          mkdir -p "$RUNNER_TEMP/ipa/Payload"
+          cp -R "$APP" "$RUNNER_TEMP/ipa/Payload/PandaiOS.app"
+          (cd "$RUNNER_TEMP/ipa" && /usr/bin/zip -qry "$GITHUB_WORKSPACE/PandaiOS-unsigned.ipa" Payload)
+      - name: Upload unsigned IPA
+        uses: actions/upload-artifact@v4
+        with:
+          name: PandaiOS-unsigned-IPA
+          path: PandaiOS-unsigned.ipa
+          if-no-files-found: error
+          retention-days: 14
+
+  analyze-apk:
+    if: ${ inputs.apk_url != '' }
+    runs-on: macos-15
+    steps:
+      - name: Checkout PandaiOS
+        uses: actions/checkout@v4
+        with:
+          ref: PandaiOS
+          fetch-depth: 1
+      - name: Install Java and Node
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '21'
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22.23.4'
+      - name: Download and verify JADX engine
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p "$RUNNER_TEMP/rea"
+          cd "$RUNNER_TEMP/rea"
+          curl -fL --retry 3 -o jadx-headless-mcp-0.7.1-all.jar \
+            https://github.com/1013503897/jadx-headless-mcp/releases/download/v0.7.1/jadx-headless-mcp-0.7.1-all.jar
+          echo '6e5eacf500b64292bfb73c49797c1958f6ee44646e43e868039ae7feb573ff75  jadx-headless-mcp-0.7.1-all.jar' | shasum -a 256 -c -
+          echo "REA_JADX_MCP_JAR=$RUNNER_TEMP/rea/jadx-headless-mcp-0.7.1-all.jar" >> "$GITHUB_ENV"
+      - name: Download APK
+        env:
+          APK_URL: ${ inputs.apk_url }
+        run: |
+          set -euo pipefail
+          case "$APK_URL" in https://*) ;; *) echo "APK URL must use HTTPS"; exit 2;; esac
+          curl -fL --retry 3 --max-time 300 "$APK_URL" -o "$RUNNER_TEMP/panda.apk"
+          shasum -a 256 "$RUNNER_TEMP/panda.apk" | tee "$RUNNER_TEMP/panda-apk.sha256"
+      - name: Install REA and inspect APK
+        run: |
+          set -euo pipefail
+          npm install --global rea-agents@4.1.0
+          rea doctor --provider jadx --json
+          rea inspect-android-package "$RUNNER_TEMP/panda.apk" --json > "$RUNNER_TEMP/panda-package-evidence.json"
+      - name: Upload REA evidence
+        uses: actions/upload-artifact@v4
+        with:
+          name: PandaiOS-REA-APK-Evidence
+          path: |
+            ${ runner.temp }/panda-package-evidence.json
+            ${ runner.temp }/panda-apk.sha256
+          if-no-files-found: error
+          retention-days: 14
