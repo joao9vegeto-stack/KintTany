@@ -50,13 +50,12 @@ jobs:
             --additional-suffix=.txt \
             "$RUNNER_TEMP/xowue-build85/diagnostico-build-85.txt" \
             logs/diagnostico-build-85.part-
-          cp "$RUNNER_TEMP/xowue-build85/diagnostico-build-85.txt" "$RUNNER_TEMP/diagnostico-build-85.txt"
           {
             echo "# XOWUE — Build 85 diagnostic"
             echo
-            echo "- Source: GitHub Release `Xowue` / `diagnostico-build-85.txt`"
+            echo '- Source: GitHub Release `Xowue` / `diagnostico-build-85.txt`'
             echo "- Original size: 64,537,044 bytes"
-            echo "- Original SHA-256: `736af25ca8cd42719ad9ca8b661bcd63b8a6ec89a6e471618d1af841065690ac`"
+            echo '- Original SHA-256: `736af25ca8cd42719ad9ca8b661bcd63b8a6ec89a6e471618d1af841065690ac`'
             echo "- Split size: 900 KiB per part (final part may be smaller)"
             echo "- Parts are byte-contiguous and ordered by the three-digit suffix."
             echo
@@ -65,7 +64,7 @@ jobs:
               printf -- '- [%s](%s) — %s bytes\n' "$(basename "$f")" "$(basename "$f")" "$(stat -c '%s' "$f")"
             done
           } > logs/README.md
-          sha256sum "$RUNNER_TEMP/xowue-build85/diagnostico-build-85.txt" > logs/SHA256SUMS
+          printf '%s  %s\\n' "736af25ca8cd42719ad9ca8b661bcd63b8a6ec89a6e471618d1af841065690ac" "diagnostico-build-85.txt" > logs/SHA256SUMS
           printf 'parts=%s\n' "$(find logs -maxdepth 1 -type f -name 'diagnostico-build-85.part-*.txt' | wc -l | tr -d ' ')" >> "$GITHUB_STEP_SUMMARY"
           printf 'source_sha256=%s\n' "736af25ca8cd42719ad9ca8b661bcd63b8a6ec89a6e471618d1af841065690ac" >> "$GITHUB_STEP_SUMMARY"
 
