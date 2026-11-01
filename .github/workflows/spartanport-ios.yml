@@ -1,4 +1,4 @@
-name: SpartanPort iOS
+name: SpartanPort iOS + KosmicKrisp
 
 on:
   push:
@@ -15,89 +15,123 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
-  build-unsigned-ipa:
-    name: Test, build ARM64 and package unsigned IPA
+  build:
+    name: Build KosmicKrisp ICD and SpartanPort iOS arm64
     runs-on: macos-26
+    timeout-minutes: 240
+    env:
+      KK_SKIP_PREREQUISITES: "1"
     steps:
       - name: Checkout isolated port branch
         uses: actions/checkout@v4
-
-      - name: Select Xcode
-        shell: bash
+      - name: Select Xcode and install dependencies
         run: |
           set -euo pipefail
           xcodebuild -version
           xcrun --sdk iphoneos --show-sdk-version
-
-      - name: Install XcodeGen
-        shell: bash
+          brew update
+          for pkg in cmake pkg-config libclc llvm@20 spirv-tools ninja xcodegen; do brew list "$pkg" >/dev/null 2>&1 || brew install "$pkg"; done
+      - name: Build pinned KosmicKrisp iOS arm64 ICD and Metal WSI
         run: |
           set -euo pipefail
-          if ! command -v xcodegen >/dev/null 2>&1; then brew install xcodegen; fi
-          xcodegen --version
-
-      - name: Generate standalone SpartanPort project
+          chmod +x KosmicKrispiOS/build.sh
+          ./KosmicKrispiOS/build.sh
+      - name: Generate standalone SpartanPort Xcode project
         working-directory: SpartanPort-iOS
         run: xcodegen generate
-
       - name: Select an available iPhone simulator
-        shell: bash
         run: |
           set -euo pipefail
           SIM_UDID="$(xcrun simctl list devices available --json | python3 -c '
           import json,sys
-          data=json.load(sys.stdin)
-          devices=[d for runtime,items in data.get("devices",{}).items() if "iOS" in runtime
-                   for d in items if d.get("isAvailable") and d.get("udid") and d.get("name","").startswith("iPhone")]
-          preferred=[d for d in devices if d.get("name")=="iPhone 17 Pro"]
-          choices=preferred or devices
+          d=json.load(sys.stdin)
+          ds=[x for runtime,items in d.get("devices",{}).items() if "iOS" in runtime for x in items if x.get("isAvailable") and x.get("name","").startswith("iPhone")]
+          pref=[x for x in ds if x.get("name")=="iPhone 17 Pro"]
+          choices=pref or ds
           print(choices[0]["udid"] if choices else "")
           ')"
           test -n "$SIM_UDID"
           echo "SIMULATOR_UDID=$SIM_UDID" >> "$GITHUB_ENV"
-
       - name: Run ELF inspector unit tests
         working-directory: SpartanPort-iOS
         run: |
           set -euo pipefail
-          xcodebuild \
-            -project SpartanPort.xcodeproj \
-            -scheme SpartanPort \
-            -configuration Debug \
+          xcodebuild -project SpartanPort.xcodeproj -scheme SpartanPort -configuration Debug \
             -destination "platform=iOS Simulator,id=$SIMULATOR_UDID" \
-            -derivedDataPath "$RUNNER_TEMP/SpartanPortTestDerived" \
-            CODE_SIGNING_ALLOWED=NO \
-            test
-
-      - name: Build for iOS device (ARM64)
+            -derivedDataPath "$RUNNER_TEMP/SpartanPortTestDerived" CODE_SIGNING_ALLOWED=NO test
+      - name: Build SpartanPort for iOS device ARM64
         working-directory: SpartanPort-iOS
         run: |
           set -euo pipefail
-          xcodebuild \
-            -project SpartanPort.xcodeproj \
-            -scheme SpartanPort \
-            -configuration Release \
-            -sdk iphoneos \
-            -destination 'generic/platform=iOS' \
-            -derivedDataPath "$RUNNER_TEMP/SpartanPortDerived" \
-            CODE_SIGNING_ALLOWED=NO \
-            build
-
-      - name: Package unsigned IPA
-        shell: bash
+          xcodebuild -project SpartanPort.xcodeproj -scheme SpartanPort -configuration Release \
+            -sdk iphoneos -destination 'generic/platform=iOS' \
+            -derivedDataPath "$RUNNER_TEMP/SpartanPortDerived" CODE_SIGNING_ALLOWED=NO build
+      - name: Package unsigned SpartanPort IPA
         run: |
           set -euo pipefail
           APP="$RUNNER_TEMP/SpartanPortDerived/Build/Products/Release-iphoneos/SpartanPort.app"
           test -d "$APP"
-          mkdir -p "$RUNNER_TEMP/ipa/Payload"
-          cp -R "$APP" "$RUNNER_TEMP/ipa/Payload/SpartanPort.app"
-          ditto -c -k --sequesterRsrc --keepParent "$RUNNER_TEMP/ipa/Payload" SpartanPort-iOS-unsigned.ipa
-          unzip -t SpartanPort-iOS-unsigned.ipa
-
-      - name: Upload unsigned IPA
+          mkdir -p "$RUNNER_TEMP/SpartanIPA/Payload"
+          cp -R "$APP" "$RUNNER_TEMP/SpartanIPA/Payload/SpartanPort.app"
+          ditto -c -k --sequesterRsrc --keepParent "$RUNNER_TEMP/SpartanIPA/Payload" SpartanPort-iOS-KosmicKrisp-unsigned.ipa
+          unzip -t SpartanPort-iOS-KosmicKrisp-unsigned.ipa
+      - name: Package KosmicKrisp M3B device smoke IPA
+        run: |
+          set -euo pipefail
+          APP="$RUNNER_TEMP/KosmicKrispM3B/Payload/KosmicKrispM3B.app"
+          mkdir -p "$APP"
+          cp KosmicKrispiOS/build/KosmicKrispM3B "$APP/KosmicKrispM3B"
+          chmod 755 "$APP/KosmicKrispM3B"
+          cat > "$APP/Info.plist" <<'EOF'
+          <?xml version="1.0" encoding="UTF-8"?>
+          <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+          <plist version="1.0"><dict>
+          <key>CFBundleDevelopmentRegion</key><string>pt_BR</string>
+          <key>CFBundleDisplayName</key><string>KosmicKrisp M3B</string>
+          <key>CFBundleExecutable</key><string>KosmicKrispM3B</string>
+          <key>CFBundleIdentifier</key><string>com.joaopedro.kosmickrisp.m3b</string>
+          <key>CFBundleInfoDictionaryVersion</key><string>6.0</string>
+          <key>CFBundleName</key><string>KosmicKrispM3B</string>
+          <key>CFBundlePackageType</key><string>APPL</string>
+          <key>CFBundleShortVersionString</key><string>0.3.2</string>
+          <key>CFBundleVersion</key><string>1</string>
+          <key>LSRequiresIPhoneOS</key><true/>
+          <key>MinimumOSVersion</key><string>17.4</string>
+          <key>UIDeviceFamily</key><array><integer>1</integer></array>
+          <key>UILaunchScreen</key><dict/>
+          <key>UIRequiresFullScreen</key><true/>
+          <key>UISupportedInterfaceOrientations</key><array>
+          <string>UIInterfaceOrientationPortrait</string><string>UIInterfaceOrientationLandscapeLeft</string><string>UIInterfaceOrientationLandscapeRight</string>
+          </array></dict></plist>
+          EOF
+          plutil -lint "$APP/Info.plist"
+          codesign --force --sign - --timestamp=none "$APP"
+          codesign --verify --deep --strict "$APP"
+          (cd "$RUNNER_TEMP/KosmicKrispM3B" && ditto -c -k --sequesterRsrc --keepParent Payload "$GITHUB_WORKSPACE/KosmicKrisp-M3B-smoke.ipa")
+          unzip -t KosmicKrisp-M3B-smoke.ipa
+      - name: Stage reusable KosmicKrispiOS SDK
+        run: |
+          set -euo pipefail
+          mkdir -p KosmicKrispiOS/Artifacts
+          cp KosmicKrispiOS/build/libkk-kosmickrisp-ios-arm64.a KosmicKrispiOS/Artifacts/
+          cp -R KosmicKrispiOS/build/include KosmicKrispiOS/Artifacts/
+          cp KosmicKrispiOS/build/KosmicKrispiOS-build.txt KosmicKrispiOS/Artifacts/
+          cp KosmicKrispiOS/build/SHA256SUMS KosmicKrispiOS/Artifacts/
+          shasum -a 256 KosmicKrispiOS/Artifacts/libkk-kosmickrisp-ios-arm64.a
+      - name: Upload SpartanPort IPA, reusable SDK and smoke IPA
         uses: actions/upload-artifact@v4
         with:
-          name: SpartanPort-iOS-unsigned-ipa
-          path: SpartanPort-iOS-unsigned.ipa
+          name: KosmicKrispiOS-iOS-arm64
+          path: |
+            SpartanPort-iOS-KosmicKrisp-unsigned.ipa
+            KosmicKrisp-M3B-smoke.ipa
+            KosmicKrispiOS/Artifacts/
+            KosmicKrispiOS/build/KosmicKrispM3B
+            KosmicKrispiOS/build/file.txt
+            KosmicKrispiOS/build/lipo.txt
+            KosmicKrispiOS/build/build-version.txt
+            KosmicKrispiOS/build/symbols.txt
+            KosmicKrispiOS/build/meson-logs/
           if-no-files-found: error
-          retention-days: 14
+          retention-days: 30
+          compression-level: 0

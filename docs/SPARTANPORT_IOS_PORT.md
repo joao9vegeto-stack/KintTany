@@ -1,6 +1,6 @@
 # SpartanPort for iOS — engineering baseline
 
-Status: isolated iOS shell implemented; no playable PS4 runtime is claimed yet. The shell has a SwiftUI launcher, a security-scoped folder picker with basic PS4 dump validation, and a real Metal clear/presentation test. The game-start action remains deliberately disabled.
+Status: SpartanPort iOS shell is wired to the pinned KosmicKrisp Vulkan ICD. It links the iOS arm64 archive and probes the ICD entrypoints/instance extensions at launch. The reusable SDK lives in `KosmicKrispiOS/`; CI builds a separate M3B CAMetalLayer smoke IPA. No playable PS4 runtime is claimed; game-start remains disabled.
 
 ## Scope
 
@@ -27,6 +27,10 @@ Upstream references:
 - `gpu/CMakeLists.txt` requires Vulkan, SDL3 and X11 on non-Windows builds, in addition to shadPS4 renderer/recompiler and shader tooling. This is not an iOS Metal backend and cannot be assumed to compile unchanged for iOS.
 - `src/runtime_memory.c` reserves a large PS4 guest virtual-address range and uses platform-specific mappings. The POSIX path relies on `mmap`/`mprotect`; the Windows path has a separate placeholder/section implementation. iOS address-space placement, executable mappings and memory pressure need a dedicated design and device tests.
 - The upstream ARM64 CPU adapter is GPL-2.0-or-later. No upstream source has been copied into this iOS shell; license compatibility and notices must be resolved before importing runtime code.
+
+## KosmicKrisp backend reused from PsTJohn
+
+The graphics provider is the user's existing KosmicKrisp/Mesa port from `PsTJohn`, not a replacement MoltenVK backend. `KosmicKrispiOS/` contains the pinned Mesa build, M2 iOS platform patch, M3 Metal WSI patch, M3B smoke-target patch, reference CAMetalLayer test, static/dynamic adapters and CMake integration helper. SpartanPort's iOS app force-loads `libkk-kosmickrisp-ios-arm64.a` and runs a direct ICD entrypoint/instance-extension probe. CI separately builds the M3B smoke IPA to test actual surface/swapchain presentation on a physical device. A compile or extension probe is not evidence of game rendering.
 
 ## Required porting work
 
