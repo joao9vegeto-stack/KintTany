@@ -462,6 +462,9 @@ bool shouldPersistRuntimeTrace(const std::string &event, size_t sequence) {
         return g_runtimeTracePersistB86Stream.fetch_add(1, std::memory_order_relaxed) < 64u;
     if (event.find("B86_MEDIA_OPEN") != std::string::npos)
         return g_runtimeTracePersistB86Media.fetch_add(1, std::memory_order_relaxed) < 128u;
+    if (event.find("B94_CODE_AUDIT") != std::string::npos ||
+        event.find("B94_STREAM_CONTEXT") != std::string::npos)
+        return true;
     if (event.find("B92_XXX_INTEGRITY") != std::string::npos ||
         event.find("B92_BIK_INTEGRITY") != std::string::npos ||
         event.find("XOWUE_B92_QPC_") != std::string::npos)
@@ -2137,6 +2140,34 @@ static void logCodeAuditBuild84(uint8_t *base) {
     }
 }
 
+static void logCodeAuditBuild94(uint8_t *base) {
+    static std::atomic<bool> emitted{false};
+    if (!base || emitted.exchange(true, std::memory_order_acq_rel)) return;
+    struct Range { uint32_t begin, end; const char *name; };
+    static constexpr Range ranges[] = {
+        {0x824E6F00u, 0x824E7300u, "THREAD10_WAIT_824E6F10"},
+        {0x82B3DE00u, 0x82B3DF00u, "THREAD7_LOOP_82B3DE30"},
+        {0x82B42280u, 0x82B42340u, "THREAD7_BACKEDGE_82B422A8"}
+    };
+    for (const auto &range : ranges) {
+        char header[192];
+        std::snprintf(header, sizeof(header), "B94_CODE_AUDIT_BEGIN name=%s range=0x%08X..0x%08X", range.name, range.begin, range.end);
+        recordRuntimeTrace(header);
+        for (uint32_t pc = range.begin; pc < range.end; pc += 16u) {
+            const bool valid = validGuestRange(pc, 16u);
+            char line[256];
+            std::snprintf(line, sizeof(line), "B94_CODE_AUDIT name=%s pc=0x%08X words=%08X,%08X,%08X,%08X valid=%u",
+                range.name, pc, valid ? loadGuestBe32(base, pc) : 0u,
+                valid ? loadGuestBe32(base, pc + 4u) : 0u,
+                valid ? loadGuestBe32(base, pc + 8u) : 0u,
+                valid ? loadGuestBe32(base, pc + 12u) : 0u, valid ? 1u : 0u);
+            recordRuntimeTrace(line);
+        }
+        std::snprintf(header, sizeof(header), "B94_CODE_AUDIT_END name=%s", range.name);
+        recordRuntimeTrace(header);
+    }
+}
+
 static void logCodeAuditBuild69(uint8_t *base) {
  if(!base||g_build69AuditEmitted.exchange(true,std::memory_order_acq_rel))return;
  struct R{uint32_t b,e;const char*n;}; static constexpr R rs[]={
@@ -2198,6 +2229,8 @@ void xowue_thread_checkpoint(uint32_t guestAddress,PPCContext &ctx){
     // one-shot caller/stack dump at a hot AOT entry.
     if (g_schedulerStopRequested.load(std::memory_order_relaxed))
         throw GuestThreadStopRequested{};
+    if (const auto auditMemory = g_activeGuestMemory.lock(); auditMemory && auditMemory->base)
+        logCodeAuditBuild94(auditMemory->base);
     g_b90PreviousEntryLr = g_currentGuestThread
         ? g_currentGuestThread->lastGuestLr.load(std::memory_order_relaxed)
         : g_mainThreadGuestLr.load(std::memory_order_relaxed);
@@ -2297,8 +2330,9 @@ void xowue_thread_checkpoint(uint32_t guestAddress,PPCContext &ctx){
         if (pointerLike && g_b86StreamAnomalyDumped.compare_exchange_strong(
                 expected, true, std::memory_order_acq_rel)) {
             const uint32_t vtable = loadGuestBe32(guestBase, object);
-            const uint32_t vtableSlot64 = vtable >= 0x40000000u && vtable < 0x80000000u &&
-                validGuestRange(vtable + 64u, 4u) ? loadGuestBe32(guestBase, vtable + 64u) : 0u;
+            const uint32_t vtableSlot64 = guestBase && vtable >= 0x10000u &&
+                validGuestRange(vtable, 68u)
+                ? loadGuestBe32(guestBase, vtable + 64u) : 0u;
             const uint32_t previousFn = g_currentGuestThread
                 ? g_currentGuestThread->lastGuestPc.load(std::memory_order_relaxed)
                 : g_mainThreadLastPc.load(std::memory_order_relaxed);
@@ -2322,8 +2356,7 @@ void xowue_thread_checkpoint(uint32_t guestAddress,PPCContext &ctx){
                     0x70u + i * 4u, words[i]);
                 recordRuntimeTrace(wordEvent);
             }
-            if (chunkTable >= 0x40000000u && chunkTable < 0x80000000u &&
-                validGuestRange(chunkTable, 0x40u)) {
+            if (guestBase && chunkTable >= 0x10000u && validGuestRange(chunkTable, 0x40u)) {
                 for (uint32_t i = 0; i < 16u; ++i) {
                     char tableEvent[128];
                     std::snprintf(tableEvent, sizeof(tableEvent),
@@ -2355,12 +2388,14 @@ void xowue_thread_checkpoint(uint32_t guestAddress,PPCContext &ctx){
         const uint64_t calls = g_b87StreamWaitCalls.fetch_add(1u, std::memory_order_relaxed) + 1u;
         const auto memory = g_activeGuestMemory.lock();
         const uint8_t *guestBase = memory ? memory->base : nullptr;
+        // Build 94: include writable data objects mapped inside the XEX image;
+        // the 0x40000000..0x70000000 interval is only the dynamic heap.
         const auto validObject = [&](uint32_t address) {
-            return guestBase && address >= 0x40000000u && address < 0x70000000u &&
-                   validGuestRange(address, 0xC0u);
+            return guestBase && address >= 0x10000u && validGuestRange(address, 0xC0u);
         };
         const uint32_t object = validObject(ctx.r31.u32) ? ctx.r31.u32 :
                                 (validObject(ctx.r3.u32) ? ctx.r3.u32 : 0u);
+        const char *objectSource = object == 0u ? "none" : (object == ctx.r31.u32 ? "r31" : "r3");
         if (object != 0u && g_b90StreamWatch.object != object) {
             g_b90StreamWatch = B90StreamWatchState{};
             g_b90StreamWatch.object = object;
@@ -2371,8 +2406,11 @@ void xowue_thread_checkpoint(uint32_t guestAddress,PPCContext &ctx){
                 words[i] = loadGuestBe32(guestBase, object + 0x70u + i * 4u);
         }
         const uint32_t plus8C = words[7], plus90 = words[8], chunkTable = words[15];
-        const bool offsetPointerLike = object != 0u &&
-            plus8C >= 0x40000000u && plus8C < 0x80000000u;
+        const auto validGuestPointer = [&](uint32_t address, uint32_t size) {
+            return guestBase && address >= 0x10000000u && (address & 3u) == 0u &&
+                   validGuestRange(address, size);
+        };
+        const bool offsetPointerLike = object != 0u && validGuestPointer(plus8C, 4u);
         const bool firstAnomaly = offsetPointerLike &&
             !g_b87StreamAnomalyDumped.load(std::memory_order_relaxed);
         if (calls <= 8u || (calls & 0xFFFFu) == 0u || firstAnomaly) {
@@ -2381,13 +2419,38 @@ void xowue_thread_checkpoint(uint32_t guestAddress,PPCContext &ctx){
                 "B87_STREAM_WAIT_STATE calls=%llu thread=%u object=0x%08X r3=0x%08X r4=0x%08X "
                 "r5=0x%08X r6=0x%08X r7=0x%08X r8=0x%08X r9=0x%08X r10=0x%08X r31=0x%08X "
                 "plus8C=0x%08X plus90=0x%08X plus94=0x%08X plus98=0x%08X plus9C=0x%08X "
-                "plusA0=0x%08X plusA4=0x%08X plusA8=0x%08X plusAC=0x%08X valid=%u lr=0x%08X",
+                "plusA0=0x%08X plusA4=0x%08X plusA8=0x%08X plusAC=0x%08X valid=%u source=%s lr=0x%08X",
                 static_cast<unsigned long long>(calls), static_cast<uint32_t>(g_currentGuestThreadId),
                 object, ctx.r3.u32, ctx.r4.u32, ctx.r5.u32, ctx.r6.u32, ctx.r7.u32, ctx.r8.u32,
                 ctx.r9.u32, ctx.r10.u32, ctx.r31.u32, plus8C, plus90, words[9], words[10],
                 words[11], words[12], words[13], words[14], chunkTable, object ? 1u : 0u,
-                static_cast<uint32_t>(ctx.lr));
+                objectSource, static_cast<uint32_t>(ctx.lr));
             recordRuntimeTrace(event);
+        }
+        // Build 94's stuck caller enters with LR=0x824E72B4 and r31=0x835FF498.
+        // Capture the image-backed caller context instead of reporting zeros.
+        if (static_cast<uint32_t>(ctx.lr) == 0x824E72B4u &&
+            ctx.r31.u32 >= 0x82000000u && ctx.r31.u32 < 0x84000000u &&
+            validGuestRange(ctx.r31.u32, 0xC0u)) {
+            static std::atomic<uint32_t> b94ContextSamples{0u};
+            const uint32_t sample = b94ContextSamples.fetch_add(1u, std::memory_order_relaxed);
+            if (sample == 0u || (calls & 0xFFFFu) == 0u) {
+                char contextEvent[320];
+                std::snprintf(contextEvent, sizeof(contextEvent),
+                    "B94_STREAM_CONTEXT sample=%u thread=%u lr=0x%08X r3=0x%08X r4=0x%08X r5=0x%08X "
+                    "r6=0x%08X r7=0x%08X r8=0x%08X r9=0x%08X r10=0x%08X r31=0x%08X valid=1",
+                    sample, static_cast<uint32_t>(g_currentGuestThreadId),
+                    static_cast<uint32_t>(ctx.lr), ctx.r3.u32, ctx.r4.u32, ctx.r5.u32,
+                    ctx.r6.u32, ctx.r7.u32, ctx.r8.u32, ctx.r9.u32, ctx.r10.u32, ctx.r31.u32);
+                recordRuntimeTrace(contextEvent);
+                for (uint32_t i = 0; i < 48u; ++i) {
+                    char wordEvent[128];
+                    std::snprintf(wordEvent, sizeof(wordEvent),
+                        "B94_STREAM_CONTEXT_WORD offset=0x%02X value=0x%08X",
+                        i * 4u, loadGuestBe32(guestBase, ctx.r31.u32 + i * 4u));
+                    recordRuntimeTrace(wordEvent);
+                }
+            }
         }
         bool expected = false;
         if (offsetPointerLike && g_b87StreamAnomalyDumped.compare_exchange_strong(
@@ -2428,8 +2491,7 @@ void xowue_thread_checkpoint(uint32_t guestAddress,PPCContext &ctx){
             } else {
                 recordRuntimeTrace("B87_STREAM_CHUNK_TABLE invalid_or_unmapped");
             }
-            if (plus90 >= 0x40000000u && plus90 < 0x80000000u &&
-                validGuestRange(plus90, 0x20u)) {
+            if (validGuestPointer(plus90, 0x20u)) {
                 for (uint32_t i = 0; i < 8u; ++i) {
                     char bufferEvent[128];
                     std::snprintf(bufferEvent, sizeof(bufferEvent),

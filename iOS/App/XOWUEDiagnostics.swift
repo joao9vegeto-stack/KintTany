@@ -117,6 +117,8 @@ enum XOWUEDiagnostics {
         let streamObject = Array(lines.filter { $0.contains("B86_STREAM_OBJECT_WORD") }.suffix(20))
         let streamTable = Array(lines.filter { $0.contains("B86_STREAM_CHUNK_TABLE") }.suffix(16))
         let streamRecent = Array(lines.filter { $0.contains("B86_STREAM_RECENT_FN") }.suffix(16))
+        let b94Audit = Array(lines.filter { $0.contains("B94_CODE_AUDIT") }.suffix(96))
+        let b94Stream = Array(lines.filter { $0.contains("B94_STREAM_CONTEXT") || $0.contains("B94_STREAM_CONTEXT_WORD") }.suffix(56))
         let streamWait = Array(lines.filter { $0.contains("B87_STREAM_WAIT_STATE") }.suffix(12))
         let streamTransition = Array(lines.filter { $0.contains("B90_STREAM_") }.suffix(16))
         let streamWaitAnomaly = Array(lines.filter { $0.contains("B87_STREAM_CACHE_ANOMALY") || $0.contains("B87_STREAM_OBJECT_WORD") || $0.contains("B87_STREAM_CHUNK_TABLE") || $0.contains("B87_STREAM_BUFFER_WORD") }.suffix(32))
@@ -156,6 +158,7 @@ enum XOWUEDiagnostics {
             b84 + b83 + b85 + streamState + streamAnomaly + streamObject + streamTable +
             streamRecent + legacyStream + legacyWaits + media + waits + gpu +
             streamTransition + streamWait + streamWaitAnomaly + fileReads +
+            b94Audit + b94Stream +
             ["CURRENT_BUILD_EVIDENCE_END"]
         while sections.joined(separator: "\n").utf8.count > 16384 && sections.count > 8 {
             sections.remove(at: sections.count - 2)

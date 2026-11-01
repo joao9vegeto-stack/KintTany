@@ -51,6 +51,30 @@ assert "loc_822A0290:\n\txowue_thread_checkpoint(0x822A0290u, ctx);" in hot_patc
 assert "loc_8234567C:\n\treturn;" in hot_patched
 print("PASS: cancellable checkpoints injected at measured hot PPC loop labels only")
 
+build94_fixture = (
+    "PPC_FUNC_IMPL(__imp__sub_824E6F10) {\n"
+    "loc_824E6FD8:\n\tif (cr0.eq) goto loc_824E6FD8;\n"
+    "}\n"
+    "PPC_FUNC_IMPL(__imp__sub_82B3DE00) {\n"
+    "loc_82B3DE30:\n\tif (cr0.eq) goto loc_82B3DE30;\n"
+    "}\n"
+    "PPC_FUNC_IMPL(__imp__sub_82C4BE30) {\n"
+    "loc_82C4BE90:\n\tif (cr0.eq) goto loc_82C4BE90;\n"
+    "}\n"
+)
+build94_patched, build94_count = module.instrument_hot_loop_labels(build94_fixture)
+assert build94_count == 3, f"Build 94 hot-loop checkpoints missing: {build94_count}"
+for address in ("824E6FD8", "82B3DE30", "82C4BE90"):
+    assert f"loc_{address}:\n\txowue_thread_checkpoint(0x{address}u, ctx);" in build94_patched
+print("PASS: Build 94 Thread 10, Thread 7 and stream-wait loops receive cooperative stop checkpoints")
+
+aot_generator_source = (root / "tools" / "generate_aot.py").read_text(encoding="utf-8")
+assert "load_runtime_loop_instrumenter" in aot_generator_source
+assert "instrument_hot_loop_labels(source)" in aot_generator_source
+assert "total_hot_loop_checkpoints" in aot_generator_source
+assert "include + chr(10)" in aot_generator_source
+print("PASS: production AOT generation actually applies Build 94 hot-loop instrumentation")
+
 recompiler_patch = (root / "patches" / "XenonRecomp-XOWUE.patch").read_text(encoding="utf-8")
 required_switch_fallback = (
     r'-            println("\t\t__builtin_unreachable();");',

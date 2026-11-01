@@ -2,8 +2,18 @@
 """Patch only the QPC helper and print source-level Build 66 PPC audit bodies."""
 from __future__ import annotations
 import argparse
+import importlib.util
 import re
 from pathlib import Path
+
+def load_runtime_loop_instrumenter():
+    runtime_script = Path(__file__).resolve().parents[1] / "Runtime" / "generate_runtime_stubs.py"
+    spec = importlib.util.spec_from_file_location("xowue_runtime_stubs", runtime_script)
+    if spec is None or spec.loader is None:
+        raise RuntimeError(f"cannot load PPC loop instrumenter: {runtime_script}")
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
 QPC_BODY = """PPC_FUNC_IMPL(__imp__sub_82C3C4D8) {
     xowue_thread_checkpoint(0x82C3C4D8u, ctx);
     const uint32_t outPtr = ctx.r3.u32;
@@ -61,13 +71,21 @@ def main():
     if not args.ppc_dir:parser.error("--ppc-dir is required unless --self-test is selected")
     sources=sorted(args.ppc_dir.glob("ppc_recomp.*.cpp"))
     if not sources:raise SystemExit(f"no generated AOT sources found in {args.ppc_dir}")
-    qpc_count=0; bodies={}
+    loop_instrumenter = load_runtime_loop_instrumenter()
+    qpc_count=0; total_hot_loop_checkpoints=0; bodies={}
     for path in sources:
         source=path.read_text(encoding="utf-8"); source,n=replace_qpc(source);qpc_count+=n
+        source, loop_checkpoints = loop_instrumenter.instrument_hot_loop_labels(source)
+        total_hot_loop_checkpoints += loop_checkpoints
+        if loop_checkpoints and "extern void xowue_thread_checkpoint(uint32_t, PPCContext &);" not in source:
+            include = '#include "ppc_recomp_shared.h"'
+            if include not in source:
+                raise RuntimeError(f"missing shared PPC include in {path}")
+            source = source.replace(include, include + chr(10) + "extern void xowue_thread_checkpoint(uint32_t, PPCContext &);", 1)
         for target,(owner,body) in audit_bodies(source).items():bodies.setdefault(target,(owner,body,path.name))
-        if n:path.write_text(source,encoding="utf-8")
+        if n or loop_checkpoints:path.write_text(source,encoding="utf-8")
     if qpc_count!=1:raise SystemExit(f"expected exactly one QPC helper, found {qpc_count}")
-    print(f"XOWUE_B65_AOT_PATCH qpc={qpc_count} global_instruction_rewrites=0")
+    print(f"XOWUE_B65_AOT_PATCH qpc={qpc_count} hot_loop_checkpoints={total_hot_loop_checkpoints} global_instruction_rewrites=0")
     for target in AUDIT_SYMBOLS:
         if target not in bodies:
             print(f"CODE_AUDIT_B65_CPP_MISSING target={target} standalone_or_owner_body_not_found")

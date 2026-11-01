@@ -21,7 +21,7 @@ for required in ("B86_MEDIA_OPEN", "isStartupMoviePath", "B86_STREAM_ANOMALY",
 assert "fetch_add(1, std::memory_order_relaxed) < 200u" in engine
 assert "2 * 1024 * 1024" in engine
 assert "object + 0x70u + i * 4u" in engine
-assert "validGuestRange(object, 0xC0u)" in engine
+assert "validGuestRange(address, 0xC0u)" in engine
 assert "calls & 0xFFFFFu" in engine
 assert "guestAddress == 0x82C4BE30u" in engine
 assert "B87_STREAM_WAIT_STATE" in engine and "B87_STREAM_CACHE_ANOMALY" in engine
@@ -35,7 +35,9 @@ qpc_fastpaths = [line for line in engine.splitlines() if "const bool qpcFastPath
 assert len(qpc_fastpaths) == 2 and all("0x822A0278u" not in line for line in qpc_fastpaths)
 assert "kNtStatusEndOfFile = 0xC0000011u" in engine
 assert "bytesRead == 0u && readEof" in engine
-assert "plus90 >= 0x40000000u" in engine
+assert "validGuestPointer(plus90, 0x20u)" in engine
+assert "objectSource" in engine
+assert "B94_STREAM_CONTEXT" in engine
 assert "streamAnomaly" in diagnostics and "streamObject" in diagnostics
 assert "streamTable" in diagnostics and "streamRecent" in diagnostics
 
