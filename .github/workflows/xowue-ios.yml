@@ -50,18 +50,28 @@ jobs:
               owner: context.repo.owner,
               repo: context.repo.repo,
               branch: "XOWUE",
-              status: "completed",
               per_page: 100
             });
-            // Build 1 is successful run #8. Count only successful XOWUE IPA runs
-            // from that baseline so failed CI attempts never consume a build number.
-            const completedIPAs = runs.filter(run =>
+            // Build 1 is successful run #8. A retry after an unsuccessful or
+            // cancelled build keeps the same base number and adds an attempt
+            // suffix (92.1, 92.2, ...); successful IPA builds advance the base.
+            const priorRuns = runs.filter(run =>
               run.path === ".github/workflows/xowue-ios.yml" &&
-              run.conclusion === "success" &&
               run.run_number >= 8 &&
               run.id !== context.runId
+            );
+            const successfulRuns = priorRuns.filter(run => run.conclusion === "success");
+            const completedIPAs = successfulRuns.length;
+            const lastSuccessfulRunNumber = successfulRuns.reduce(
+              (latest, run) => Math.max(latest, run.run_number), 7
+            );
+            const failedAttempts = priorRuns.filter(
+              run => run.run_number > lastSuccessfulRunNumber
             ).length;
-            const buildNumber = completedIPAs + 2;
+            const baseBuildNumber = completedIPAs + 2;
+            const buildNumber = failedAttempts > 0
+              ? `${baseBuildNumber}.${failedAttempts}`
+              : String(baseBuildNumber);
             core.exportVariable("XOWUE_BUILD_NUMBER", String(buildNumber));
             core.setOutput("build_number", String(buildNumber));
             core.info("XOWUE Build " + buildNumber);

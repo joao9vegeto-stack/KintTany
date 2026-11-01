@@ -292,3 +292,11 @@ assert '"XOWUE_BUILD_SUMMARY build=\\(buildNumber) source=' in diag
 assert 'lines.filter { $0.contains("B84_CODE_AUDIT") }' in diag
 assert 'lines.filter { $0.contains("B90_STREAM_") }' in diag
 print("PASS: B86/B87 stream and file evidence, bounded wait diagnostics, compact app summary")
+
+# Retry builds retain the successful base version and receive a dotted attempt suffix.
+workflow_text = (root / ".github" / "workflows" / "xowue-ios.yml").read_text(encoding="utf-8")
+assert 'const failedAttempts = priorRuns.filter(' in workflow_text
+assert '`${baseBuildNumber}.${failedAttempts}`' in workflow_text
+assert 'CURRENT_PROJECT_VERSION="$XOWUE_BUILD_NUMBER"' in workflow_text
+assert 'IPA_NAME="XOWUE-Build-${XOWUE_BUILD_NUMBER}.ipa"' in workflow_text
+print("PASS: failed/cancelled retries use dotted build identifiers (92.1, 92.2, ...) without consuming successful build numbers")
