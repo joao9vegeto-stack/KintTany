@@ -5,6 +5,7 @@
 - Original SHA-256: `736af25ca8cd42719ad9ca8b661bcd63b8a6ec89a6e471618d1af841065690ac`
 - Split size: 900 KiB per part (final part may be smaller)
 - Parts are byte-contiguous and ordered by the three-digit suffix.
+- Per-part hashes: SHA256SUMS (run sha256sum -c SHA256SUMS from this directory).
 
 ## Parts
 - [diagnostico-build-85.part-000.txt](diagnostico-build-85.part-000.txt) — 921600 bytes
