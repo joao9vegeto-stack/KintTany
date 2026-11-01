@@ -163,14 +163,9 @@ HOT_LOOP_CHECKPOINT_FUNCTIONS = {0x822A0278, 0x82C25840, 0x82C259C8}
 
 
 def instrument_hot_loop_labels(contents: str) -> tuple[str, int]:
-    """Add cancellable PPC checkpoints at branch labels in the known hot wait functions.
-
-    XenonRecomp emits C++ labels for PPC branch targets. A checkpoint at each
-    label is reached again when a backward branch spins, unlike a function-entry
-    hook. Keep this narrowly scoped to the three hot functions measured by XOWUE.
-    """
-    function_re = re.compile(r"(?m)^PPC_FUNC_IMPL\\(__imp__([^)]*)\\)\\s*\\{")
-    label_re = re.compile(r"(?m)^([ \\t]*)loc_([0-9A-Fa-f]{1,8}):[ \\t]*$")
+    """Add cancellable PPC checkpoints at branch labels in the measured hot wait functions."""
+    function_re = re.compile(r"(?m)^PPC_FUNC_IMPL\(__imp__([^)]*)\)\s*\{")
+    label_re = re.compile(r"(?m)^([ \t]*)loc_([0-9A-Fa-f]{1,8}):[ \t]*$")
     edits: list[tuple[int, int, str]] = []
     count = 0
     for function in function_re.finditer(contents):
@@ -187,8 +182,8 @@ def instrument_hot_loop_labels(contents: str) -> tuple[str, int]:
             indent, raw_address = label.group(1), label.group(2)
             guest_address = int(raw_address, 16)
             replacement = (
-                f"{indent}loc_{raw_address}:\\n"
-                f"{indent}\\txowue_thread_checkpoint(0x{guest_address:08X}u, ctx);"
+                f"{indent}loc_{raw_address}:\n"
+                f"{indent}\txowue_thread_checkpoint(0x{guest_address:08X}u, ctx);"
             )
             edits.append((body_start + label.start(), body_start + label.end(), replacement))
             count += 1
@@ -223,11 +218,13 @@ def main() -> int:
     ))
     to_mark = set(addresses) & mapped
     pending = set(to_mark)
+    total_loop_checkpoints = 0
     for source in sorted(args.ppc_dir.glob("ppc_recomp.*.cpp")):
         contents = source.read_text(encoding="utf-8")
         original = contents
         contents, instrumented = instrument_aot_entries(contents)
         contents, loop_checkpoints = instrument_hot_loop_labels(contents)
+        total_loop_checkpoints += loop_checkpoints
         for address in sorted(tuple(pending)):
             symbol = f"sub_{address:08X}"
             marker = f"PPC_FUNC_IMPL(__imp__{symbol}) {{"
@@ -758,7 +755,7 @@ def main() -> int:
             f"compatibility imports lack a dispatch route: {sorted(missing_compat)}"
         )
     implemented_imports = len(set(imports) & implemented)
-    print(f"generated {len(imports)} import adapters ({implemented_imports} explicit handlers, {len(imports) - implemented_imports} classified runtime compatibility handlers); marked {len(to_mark)}/{len(addresses)} undecoded words with function entries; inserted cancellable checkpoints at {sum(1 for _ in ())} hot-loop labels")
+    print(f"generated {len(imports)} import adapters ({implemented_imports} explicit handlers, {len(imports) - implemented_imports} classified runtime compatibility handlers); marked {len(to_mark)}/{len(addresses)} undecoded words with function entries; inserted cancellable checkpoints at {total_loop_checkpoints} hot-loop labels")
     return 0
 
 if __name__ == "__main__":
