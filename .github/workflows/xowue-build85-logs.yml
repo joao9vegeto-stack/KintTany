@@ -64,7 +64,7 @@ jobs:
               printf -- '- [%s](%s) — %s bytes\n' "$(basename "$f")" "$(basename "$f")" "$(stat -c '%s' "$f")"
             done
           } > logs/README.md
-          printf '%s  %s\\n' "736af25ca8cd42719ad9ca8b661bcd63b8a6ec89a6e471618d1af841065690ac" "diagnostico-build-85.txt" > logs/SHA256SUMS
+          printf '%s  %s\n' "736af25ca8cd42719ad9ca8b661bcd63b8a6ec89a6e471618d1af841065690ac" "diagnostico-build-85.txt" > logs/SHA256SUMS
           printf 'parts=%s\n' "$(find logs -maxdepth 1 -type f -name 'diagnostico-build-85.part-*.txt' | wc -l | tr -d ' ')" >> "$GITHUB_STEP_SUMMARY"
           printf 'source_sha256=%s\n' "736af25ca8cd42719ad9ca8b661bcd63b8a6ec89a6e471618d1af841065690ac" >> "$GITHUB_STEP_SUMMARY"
 
