@@ -110,7 +110,7 @@ struct ContentView: View {
 
             Text(gameFolder.folderName ?? "Nenhuma pasta selecionada")
                 .font(.subheadline.weight(.semibold))
-                .foregroundStyle(gameFolder.folderName == nil ? .secondary : .white)
+                .foregroundStyle(gameFolder.folderName == nil ? Color.secondary : Color.white)
                 .lineLimit(1)
 
             Button {
