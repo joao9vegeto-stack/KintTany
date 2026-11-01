@@ -1,7 +1,13 @@
 name: SpartanPort iOS + KosmicKrisp
 
-# Manual only: do not launch builds on cleanup or ordinary pushes.
+# Build automatically for every committed change on the isolated SpartanPort branch.
 on:
+  push:
+    branches:
+      - SpartanPort-iOS
+  pull_request:
+    branches:
+      - SpartanPort-iOS
   workflow_dispatch:
 
 permissions:
