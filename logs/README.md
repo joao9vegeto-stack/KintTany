@@ -1,0 +1,80 @@
+# XOWUE — Build 85 diagnostic
+
+- Source: GitHub Release  / 
+- Original size: 64,537,044 bytes
+- Original SHA-256: 
+- Split size: 900 KiB per part (final part may be smaller)
+- Parts are byte-contiguous and ordered by the three-digit suffix.
+
+## Parts
+- [diagnostico-build-85.part-000.txt](diagnostico-build-85.part-000.txt) — 921600 bytes
+- [diagnostico-build-85.part-001.txt](diagnostico-build-85.part-001.txt) — 921600 bytes
+- [diagnostico-build-85.part-002.txt](diagnostico-build-85.part-002.txt) — 921600 bytes
+- [diagnostico-build-85.part-003.txt](diagnostico-build-85.part-003.txt) — 921600 bytes
+- [diagnostico-build-85.part-004.txt](diagnostico-build-85.part-004.txt) — 921600 bytes
+- [diagnostico-build-85.part-005.txt](diagnostico-build-85.part-005.txt) — 921600 bytes
+- [diagnostico-build-85.part-006.txt](diagnostico-build-85.part-006.txt) — 921600 bytes
+- [diagnostico-build-85.part-007.txt](diagnostico-build-85.part-007.txt) — 921600 bytes
+- [diagnostico-build-85.part-008.txt](diagnostico-build-85.part-008.txt) — 921600 bytes
+- [diagnostico-build-85.part-009.txt](diagnostico-build-85.part-009.txt) — 921600 bytes
+- [diagnostico-build-85.part-010.txt](diagnostico-build-85.part-010.txt) — 921600 bytes
+- [diagnostico-build-85.part-011.txt](diagnostico-build-85.part-011.txt) — 921600 bytes
+- [diagnostico-build-85.part-012.txt](diagnostico-build-85.part-012.txt) — 921600 bytes
+- [diagnostico-build-85.part-013.txt](diagnostico-build-85.part-013.txt) — 921600 bytes
+- [diagnostico-build-85.part-014.txt](diagnostico-build-85.part-014.txt) — 921600 bytes
+- [diagnostico-build-85.part-015.txt](diagnostico-build-85.part-015.txt) — 921600 bytes
+- [diagnostico-build-85.part-016.txt](diagnostico-build-85.part-016.txt) — 921600 bytes
+- [diagnostico-build-85.part-017.txt](diagnostico-build-85.part-017.txt) — 921600 bytes
+- [diagnostico-build-85.part-018.txt](diagnostico-build-85.part-018.txt) — 921600 bytes
+- [diagnostico-build-85.part-019.txt](diagnostico-build-85.part-019.txt) — 921600 bytes
+- [diagnostico-build-85.part-020.txt](diagnostico-build-85.part-020.txt) — 921600 bytes
+- [diagnostico-build-85.part-021.txt](diagnostico-build-85.part-021.txt) — 921600 bytes
+- [diagnostico-build-85.part-022.txt](diagnostico-build-85.part-022.txt) — 921600 bytes
+- [diagnostico-build-85.part-023.txt](diagnostico-build-85.part-023.txt) — 921600 bytes
+- [diagnostico-build-85.part-024.txt](diagnostico-build-85.part-024.txt) — 921600 bytes
+- [diagnostico-build-85.part-025.txt](diagnostico-build-85.part-025.txt) — 921600 bytes
+- [diagnostico-build-85.part-026.txt](diagnostico-build-85.part-026.txt) — 921600 bytes
+- [diagnostico-build-85.part-027.txt](diagnostico-build-85.part-027.txt) — 921600 bytes
+- [diagnostico-build-85.part-028.txt](diagnostico-build-85.part-028.txt) — 921600 bytes
+- [diagnostico-build-85.part-029.txt](diagnostico-build-85.part-029.txt) — 921600 bytes
+- [diagnostico-build-85.part-030.txt](diagnostico-build-85.part-030.txt) — 921600 bytes
+- [diagnostico-build-85.part-031.txt](diagnostico-build-85.part-031.txt) — 921600 bytes
+- [diagnostico-build-85.part-032.txt](diagnostico-build-85.part-032.txt) — 921600 bytes
+- [diagnostico-build-85.part-033.txt](diagnostico-build-85.part-033.txt) — 921600 bytes
+- [diagnostico-build-85.part-034.txt](diagnostico-build-85.part-034.txt) — 921600 bytes
+- [diagnostico-build-85.part-035.txt](diagnostico-build-85.part-035.txt) — 921600 bytes
+- [diagnostico-build-85.part-036.txt](diagnostico-build-85.part-036.txt) — 921600 bytes
+- [diagnostico-build-85.part-037.txt](diagnostico-build-85.part-037.txt) — 921600 bytes
+- [diagnostico-build-85.part-038.txt](diagnostico-build-85.part-038.txt) — 921600 bytes
+- [diagnostico-build-85.part-039.txt](diagnostico-build-85.part-039.txt) — 921600 bytes
+- [diagnostico-build-85.part-040.txt](diagnostico-build-85.part-040.txt) — 921600 bytes
+- [diagnostico-build-85.part-041.txt](diagnostico-build-85.part-041.txt) — 921600 bytes
+- [diagnostico-build-85.part-042.txt](diagnostico-build-85.part-042.txt) — 921600 bytes
+- [diagnostico-build-85.part-043.txt](diagnostico-build-85.part-043.txt) — 921600 bytes
+- [diagnostico-build-85.part-044.txt](diagnostico-build-85.part-044.txt) — 921600 bytes
+- [diagnostico-build-85.part-045.txt](diagnostico-build-85.part-045.txt) — 921600 bytes
+- [diagnostico-build-85.part-046.txt](diagnostico-build-85.part-046.txt) — 921600 bytes
+- [diagnostico-build-85.part-047.txt](diagnostico-build-85.part-047.txt) — 921600 bytes
+- [diagnostico-build-85.part-048.txt](diagnostico-build-85.part-048.txt) — 921600 bytes
+- [diagnostico-build-85.part-049.txt](diagnostico-build-85.part-049.txt) — 921600 bytes
+- [diagnostico-build-85.part-050.txt](diagnostico-build-85.part-050.txt) — 921600 bytes
+- [diagnostico-build-85.part-051.txt](diagnostico-build-85.part-051.txt) — 921600 bytes
+- [diagnostico-build-85.part-052.txt](diagnostico-build-85.part-052.txt) — 921600 bytes
+- [diagnostico-build-85.part-053.txt](diagnostico-build-85.part-053.txt) — 921600 bytes
+- [diagnostico-build-85.part-054.txt](diagnostico-build-85.part-054.txt) — 921600 bytes
+- [diagnostico-build-85.part-055.txt](diagnostico-build-85.part-055.txt) — 921600 bytes
+- [diagnostico-build-85.part-056.txt](diagnostico-build-85.part-056.txt) — 921600 bytes
+- [diagnostico-build-85.part-057.txt](diagnostico-build-85.part-057.txt) — 921600 bytes
+- [diagnostico-build-85.part-058.txt](diagnostico-build-85.part-058.txt) — 921600 bytes
+- [diagnostico-build-85.part-059.txt](diagnostico-build-85.part-059.txt) — 921600 bytes
+- [diagnostico-build-85.part-060.txt](diagnostico-build-85.part-060.txt) — 921600 bytes
+- [diagnostico-build-85.part-061.txt](diagnostico-build-85.part-061.txt) — 921600 bytes
+- [diagnostico-build-85.part-062.txt](diagnostico-build-85.part-062.txt) — 921600 bytes
+- [diagnostico-build-85.part-063.txt](diagnostico-build-85.part-063.txt) — 921600 bytes
+- [diagnostico-build-85.part-064.txt](diagnostico-build-85.part-064.txt) — 921600 bytes
+- [diagnostico-build-85.part-065.txt](diagnostico-build-85.part-065.txt) — 921600 bytes
+- [diagnostico-build-85.part-066.txt](diagnostico-build-85.part-066.txt) — 921600 bytes
+- [diagnostico-build-85.part-067.txt](diagnostico-build-85.part-067.txt) — 921600 bytes
+- [diagnostico-build-85.part-068.txt](diagnostico-build-85.part-068.txt) — 921600 bytes
+- [diagnostico-build-85.part-069.txt](diagnostico-build-85.part-069.txt) — 921600 bytes
+- [diagnostico-build-85.part-070.txt](diagnostico-build-85.part-070.txt) — 25044 bytes
