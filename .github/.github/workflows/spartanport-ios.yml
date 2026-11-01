@@ -1,10 +1,7 @@
 name: SpartanPort iOS + KosmicKrisp
 
+# Manual only: do not launch builds on cleanup or ordinary pushes.
 on:
-  push:
-    branches: [SpartanPort-iOS]
-  pull_request:
-    branches: [SpartanPort-iOS]
   workflow_dispatch:
 
 permissions:
