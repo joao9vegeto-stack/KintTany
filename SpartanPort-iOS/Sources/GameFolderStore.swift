@@ -6,6 +6,9 @@ final class GameFolderStore: ObservableObject {
     @Published private(set) var folderName: String?
     @Published private(set) var isValidPayload = false
     @Published private(set) var executableValidated = false
+    @Published private(set) var gameTitle: String?
+    @Published private(set) var titleID: String?
+    @Published private(set) var contentVersion: String?
     @Published private(set) var message = "Selecione a pasta do jogo PS4."
     @Published private(set) var details: [String] = []
 
@@ -20,6 +23,9 @@ final class GameFolderStore: ObservableObject {
             folderName = nil
             isValidPayload = false
             executableValidated = false
+            gameTitle = nil
+            titleID = nil
+            contentVersion = nil
             message = "O iOS não concedeu acesso à pasta selecionada."
             details = ["Escolha novamente a pasta pelo seletor de Arquivos."]
             return
@@ -27,19 +33,39 @@ final class GameFolderStore: ObservableObject {
 
         scopedFolder = url
         folderName = url.lastPathComponent
-        let fileManager = FileManager.default
-        let eboot = url.appendingPathComponent("eboot.bin", isDirectory: false)
-        let param = url.appendingPathComponent("sce_sys/param.sfo", isDirectory: false)
+        gameTitle = nil
+        titleID = nil
+        contentVersion = nil
+        let fm = FileManager.default
+        let eboot = url.appendingPathComponent("eboot.bin")
+        let param = url.appendingPathComponent("sce_sys/param.sfo")
         let modules = url.appendingPathComponent("sce_module", isDirectory: true)
-        let hasEboot = fileManager.fileExists(atPath: eboot.path)
-        let hasParam = fileManager.fileExists(atPath: param.path)
-        let hasModules = fileManager.fileExists(atPath: modules.path)
+        let hasEboot = fm.fileExists(atPath: eboot.path)
+        let hasParam = fm.fileExists(atPath: param.path)
+        let hasModules = fm.fileExists(atPath: modules.path)
 
         var checks = [
             "\(hasEboot ? "✓" : "✕") eboot.bin",
             "\(hasParam ? "✓" : "✕") sce_sys/param.sfo",
             "\(hasModules ? "✓" : "–") sce_module/ (opcional nesta validação)"
         ]
+
+        if hasParam {
+            do {
+                let sfo = try PS4ParamSFO.load(from: param)
+                gameTitle = sfo.title
+                titleID = sfo.titleID
+                contentVersion = sfo.contentVersion
+                checks.append("✓ param.sfo: estrutura e tabela válidas")
+                if let title = sfo.title { checks.append("Título: \(title)") }
+                if let id = sfo.titleID { checks.append("Title ID: \(id)") }
+                if let version = sfo.contentVersion { checks.append("Versão: \(version)") }
+                if let category = sfo.category { checks.append("Categoria: \(category)") }
+            } catch {
+                checks.append("⚠ param.sfo: \(error.localizedDescription)")
+            }
+        }
+
         executableValidated = false
         if hasEboot {
             do {
@@ -50,14 +76,14 @@ final class GameFolderStore: ObservableObject {
             }
         }
         details = checks
-        isValidPayload = hasEboot && hasParam
+        isValidPayload = hasEboot && hasParam && gameTitle != nil && titleID != nil
 
         if isValidPayload && executableValidated {
-            message = "Estrutura básica e cabeçalho ELF64 x86-64 validados. O jogo ainda não é executado pelo aplicativo."
+            message = "Metadados PSF e cabeçalho ELF64 x86-64 validados. O jogo ainda não é executado."
         } else if isValidPayload {
-            message = "Os arquivos básicos existem, mas eboot.bin não passou na inspeção ELF."
+            message = "Metadados do jogo válidos; eboot.bin não passou na inspeção ELF decifrado."
         } else {
-            message = "A pasta selecionada não contém a estrutura mínima esperada."
+            message = "Dump incompleto ou metadados param.sfo inválidos."
         }
     }
 
