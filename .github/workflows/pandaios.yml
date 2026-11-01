@@ -1,0 +1,65 @@
+name: Panda iOS Build
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: pandaios-manual-build
+  cancel-in-progress: false
+
+jobs:
+  build:
+    runs-on: macos-15
+    steps:
+      - name: Checkout PandaiOS only
+        uses: actions/checkout@v4
+        with:
+          ref: PandaiOS
+          persist-credentials: false
+
+      - name: Select Xcode
+        run: |
+          xcodebuild -version
+          xcrun --sdk iphoneos --show-sdk-version
+
+      - name: Install XcodeGen
+        run: brew install xcodegen
+
+      - name: Generate Xcode project
+        working-directory: PandaiOS
+        run: xcodegen generate
+
+      - name: Build unsigned iOS app
+        working-directory: PandaiOS
+        run: |
+          set -o pipefail
+          xcodebuild \
+            -project PandaiOS.xcodeproj \
+            -scheme PandaiOS \
+            -configuration Release \
+            -sdk iphoneos \
+            -destination 'generic/platform=iOS' \
+            -derivedDataPath build/DerivedData \
+            CODE_SIGNING_ALLOWED=NO \
+            build
+
+      - name: Package unsigned IPA
+        working-directory: PandaiOS
+        run: |
+          set -euo pipefail
+          APP_PATH="build/DerivedData/Build/Products/Release-iphoneos/PandaiOS.app"
+          test -d "$APP_PATH"
+          mkdir -p build/ipa/Payload
+          cp -R "$APP_PATH" build/ipa/Payload/
+          ditto -c -k --sequesterRsrc --keepParent build/ipa/Payload build/PandaCloud-iOS-unsigned.ipa
+
+      - name: Upload IPA
+        uses: actions/upload-artifact@v4
+        with:
+          name: PandaCloud-iOS-unsigned
+          path: PandaiOS/build/PandaCloud-iOS-unsigned.ipa
+          if-no-files-found: error
+          retention-days: 14
