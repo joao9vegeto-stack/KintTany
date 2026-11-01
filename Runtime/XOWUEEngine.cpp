@@ -106,6 +106,7 @@ constexpr uint32_t kFirstPhysicalAllocation = 0x10000000u;
 constexpr uint32_t kLastPhysicalAllocation = 0x20000000u;
 static_assert(kLastPhysicalAllocation<=kFirstVirtualAllocation);
 constexpr uint32_t kNtStatusSuccess = 0x00000000u;
+constexpr uint32_t kNtStatusEndOfFile = 0xC0000011u;
 constexpr uint32_t kNtStatusNotImplemented = 0xC0000002u;
 constexpr uint32_t kNtStatusInvalidParameter = 0xC000000Du;
 constexpr uint32_t kNtStatusBufferTooSmall = 0xC0000023u;
@@ -371,6 +372,10 @@ std::atomic<size_t> g_runtimeTracePersistB86Media{0};
 std::atomic<bool> g_runtimeTraceFileLimitMarkerWritten{false};
 std::atomic<uint64_t> g_b86StreamPollCalls{0};
 std::atomic<bool> g_b86StreamAnomalyDumped{false};
+std::atomic<size_t> g_runtimeTracePersistB87{0};
+std::atomic<uint64_t> g_b87StreamWaitCalls{0};
+std::atomic<bool> g_b87StreamAnomalyDumped{false};
+std::atomic<uint64_t> g_b87FileReadLogs{0};
 std::mutex g_tlsMutex;
 std::mutex g_virtualMemoryMutex;
 std::mutex g_guestObjectMutex;
@@ -444,6 +449,8 @@ bool shouldPersistRuntimeTrace(const std::string &event, size_t sequence) {
         return g_runtimeTracePersistB86Stream.fetch_add(1, std::memory_order_relaxed) < 64u;
     if (event.find("B86_MEDIA_OPEN") != std::string::npos)
         return g_runtimeTracePersistB86Media.fetch_add(1, std::memory_order_relaxed) < 128u;
+    if (event.find("B87_") != std::string::npos)
+        return g_runtimeTracePersistB87.fetch_add(1, std::memory_order_relaxed) < 160u;
     // Build 64 must persist diagnostics that identify stalls and QPC output writes.
     for (const char *required : {"CODE_AUDIT_B69", "CODE_AUDIT_B69_GUEST_WORD", "APP_LAUNCH", "CODE_AUDIT_B66", "CODE_AUDIT_B67", "CODE_AUDIT_83847ABC", "XOWUE_SYNC_CREATE", "XOWUE_MAIN_WAIT_WATCHDOG", "B85_MULTIWAIT_WATCHDOG_PUMP", "B85_WAIT_WATCHDOG_PUMP", "XOWUE_POOL_ALLOC_82DC2BF0", "AOT_PROGRESS", "THREAD_DUMP", "XOWUE_AOT_HOTSPOT",
                                  "XOWUE_AOT_HOTSPOT_STATE", "XOWUE_QPC_WRITE",
@@ -2198,9 +2205,10 @@ void xowue_thread_checkpoint(uint32_t guestAddress,PPCContext &ctx){
                 objectValid ? 1u : 0u, static_cast<uint32_t>(ctx.lr));
             recordRuntimeTrace(event);
         }
+        // +0x90 is a cache-buffer pointer in this object layout; only +0x8C
+        // is the offset field whose becoming pointer-like would be anomalous.
         const bool pointerLike = objectValid &&
-            ((plus8C >= 0x40000000u && plus8C < 0x80000000u) ||
-             (plus90 >= 0x40000000u && plus90 < 0x80000000u));
+            (plus8C >= 0x40000000u && plus8C < 0x80000000u);
         bool expected = false;
         if (pointerLike && g_b86StreamAnomalyDumped.compare_exchange_strong(
                 expected, true, std::memory_order_acq_rel)) {
@@ -2252,6 +2260,94 @@ void xowue_thread_checkpoint(uint32_t guestAddress,PPCContext &ctx){
                         "B86_STREAM_RECENT_FN age=%u address=0x%08X", i,
                         g_currentGuestThread->recentAotFns[index].load(std::memory_order_relaxed));
                     recordRuntimeTrace(recentEvent);
+                }
+            }
+        }
+    }
+    if (guestAddress == 0x82C4BE30u) {
+        // Build 87: sample the hot wait helper inside the long-running stream
+        // request. Build 86 only observed 0x82575250 at function entry, before
+        // its cache fields changed; this hook sees the object during the poll.
+        const uint64_t calls = g_b87StreamWaitCalls.fetch_add(1u, std::memory_order_relaxed) + 1u;
+        const auto memory = g_activeGuestMemory.lock();
+        const uint8_t *guestBase = memory ? memory->base : nullptr;
+        const auto validObject = [&](uint32_t address) {
+            return guestBase && address >= 0x40000000u && address < 0x70000000u &&
+                   validGuestRange(address, 0xC0u);
+        };
+        const uint32_t object = validObject(ctx.r31.u32) ? ctx.r31.u32 :
+                                (validObject(ctx.r3.u32) ? ctx.r3.u32 : 0u);
+        uint32_t words[20]{};
+        if (object != 0u) {
+            for (uint32_t i = 0; i < 20u; ++i)
+                words[i] = loadGuestBe32(guestBase, object + 0x70u + i * 4u);
+        }
+        const uint32_t plus8C = words[7], plus90 = words[8], chunkTable = words[15];
+        const bool offsetPointerLike = object != 0u &&
+            plus8C >= 0x40000000u && plus8C < 0x80000000u;
+        const bool firstAnomaly = offsetPointerLike &&
+            !g_b87StreamAnomalyDumped.load(std::memory_order_relaxed);
+        if (calls <= 8u || (calls & 0xFFFFu) == 0u || firstAnomaly) {
+            char event[640];
+            std::snprintf(event, sizeof(event),
+                "B87_STREAM_WAIT_STATE calls=%llu thread=%u object=0x%08X r3=0x%08X r4=0x%08X "
+                "r5=0x%08X r6=0x%08X r7=0x%08X r8=0x%08X r9=0x%08X r10=0x%08X r31=0x%08X "
+                "plus8C=0x%08X plus90=0x%08X plus94=0x%08X plus98=0x%08X plus9C=0x%08X "
+                "plusA0=0x%08X plusA4=0x%08X plusA8=0x%08X plusAC=0x%08X valid=%u lr=0x%08X",
+                static_cast<unsigned long long>(calls), static_cast<uint32_t>(g_currentGuestThreadId),
+                object, ctx.r3.u32, ctx.r4.u32, ctx.r5.u32, ctx.r6.u32, ctx.r7.u32, ctx.r8.u32,
+                ctx.r9.u32, ctx.r10.u32, ctx.r31.u32, plus8C, plus90, words[9], words[10],
+                words[11], words[12], words[13], words[14], chunkTable, object ? 1u : 0u,
+                static_cast<uint32_t>(ctx.lr));
+            recordRuntimeTrace(event);
+        }
+        bool expected = false;
+        if (offsetPointerLike && g_b87StreamAnomalyDumped.compare_exchange_strong(
+                expected, true, std::memory_order_acq_rel)) {
+            const uint32_t vtable = loadGuestBe32(guestBase, object);
+            const uint32_t vtableSlot64 = vtable >= 0x40000000u && vtable < 0x80000000u &&
+                validGuestRange(vtable + 64u, 4u) ? loadGuestBe32(guestBase, vtable + 64u) : 0u;
+            const uint32_t previousFn = g_currentGuestThread
+                ? g_currentGuestThread->lastGuestPc.load(std::memory_order_relaxed)
+                : g_mainThreadLastPc.load(std::memory_order_relaxed);
+            const uint32_t previousCaller = g_currentGuestThread
+                ? g_currentGuestThread->lastCallerFn.load(std::memory_order_relaxed) : 0u;
+            char event[640];
+            std::snprintf(event, sizeof(event),
+                "B87_STREAM_CACHE_ANOMALY calls=%llu thread=%u object=0x%08X plus8C=0x%08X "
+                "plus90=0x%08X r3=0x%08X r4=0x%08X r31=0x%08X lr=0x%08X "
+                "previous_guest_fn=0x%08X previous_caller_fn=0x%08X vtable=0x%08X "
+                "vtable_slot64_io_target=0x%08X chunk_table=0x%08X",
+                static_cast<unsigned long long>(calls), static_cast<uint32_t>(g_currentGuestThreadId),
+                object, plus8C, plus90, ctx.r3.u32, ctx.r4.u32, ctx.r31.u32,
+                static_cast<uint32_t>(ctx.lr), previousFn, previousCaller, vtable, vtableSlot64, chunkTable);
+            recordRuntimeTrace(event);
+            for (uint32_t i = 0; i < 20u; ++i) {
+                char wordEvent[128];
+                std::snprintf(wordEvent, sizeof(wordEvent),
+                    "B87_STREAM_OBJECT_WORD offset=0x%02X value=0x%08X", 0x70u + i * 4u, words[i]);
+                recordRuntimeTrace(wordEvent);
+            }
+            if (chunkTable >= 0x40000000u && chunkTable < 0x80000000u &&
+                validGuestRange(chunkTable, 0x40u)) {
+                for (uint32_t i = 0; i < 16u; ++i) {
+                    char tableEvent[128];
+                    std::snprintf(tableEvent, sizeof(tableEvent),
+                        "B87_STREAM_CHUNK_TABLE index=%u value=0x%08X",
+                        i, loadGuestBe32(guestBase, chunkTable + i * 4u));
+                    recordRuntimeTrace(tableEvent);
+                }
+            } else {
+                recordRuntimeTrace("B87_STREAM_CHUNK_TABLE invalid_or_unmapped");
+            }
+            if (plus90 >= 0x40000000u && plus90 < 0x80000000u &&
+                validGuestRange(plus90, 0x20u)) {
+                for (uint32_t i = 0; i < 8u; ++i) {
+                    char bufferEvent[128];
+                    std::snprintf(bufferEvent, sizeof(bufferEvent),
+                        "B87_STREAM_BUFFER_WORD index=%u value=0x%08X",
+                        i, loadGuestBe32(guestBase, plus90 + i * 4u));
+                    recordRuntimeTrace(bufferEvent);
                 }
             }
         }
@@ -2889,6 +2985,10 @@ extern "C" int xowue_boot_xex(const char *path, char *output, size_t output_capa
         g_runtimeTraceFileLimitMarkerWritten.store(false, std::memory_order_relaxed);
         g_b86StreamPollCalls.store(0, std::memory_order_relaxed);
         g_b86StreamAnomalyDumped.store(false, std::memory_order_relaxed);
+        g_runtimeTracePersistB87.store(0, std::memory_order_relaxed);
+        g_b87StreamWaitCalls.store(0, std::memory_order_relaxed);
+        g_b87StreamAnomalyDumped.store(false, std::memory_order_relaxed);
+        g_b87FileReadLogs.store(0, std::memory_order_relaxed);
         g_runtimeTracePersistGraphics.store(0, std::memory_order_relaxed);
         g_runtimeTracePersistRingKicks.store(0, std::memory_order_relaxed);
         g_runtimeTracePersistFailures.store(0, std::memory_order_relaxed);
@@ -6544,14 +6644,35 @@ void xowue_NtReadFile(PPCContext &context, uint8_t *base) {
     }
     file->stream.read(reinterpret_cast<char *>(base + buffer), length);
     const uint32_t bytesRead = static_cast<uint32_t>(file->stream.gcount());
+    const bool readEof = file->stream.eof();
+    const bool readBad = file->stream.bad();
+    const bool readFailed = file->stream.fail();
     file->stream.clear();
     if (offsetPointer == 0u) file->stream.seekg(static_cast<std::streamoff>(offset + bytesRead));
+    // NTSTATUS_END_OF_FILE is distinct from SUCCESS with a zero-byte read.
+    // ReXGlue's XFile/HostPathFile follows this contract; returning SUCCESS
+    // forever at EOF can keep UE3's async stream cache polling the same offset.
+    const uint32_t readStatus = (readBad || (readFailed && !readEof))
+        ? kNtStatusUnsuccessful
+        : ((length != 0u && bytesRead == 0u && readEof) ? kNtStatusEndOfFile : kNtStatusSuccess);
     queueGuestApc(g_currentGuestThread, context.r5.u32, context.r6.u32, ioStatus, 0u);
-    context.r3.u32 = kNtStatusSuccess;
-    writeGuestIoStatus(base, ioStatus, kNtStatusSuccess, bytesRead);
+    context.r3.u32 = readStatus;
+    writeGuestIoStatus(base, ioStatus, readStatus, bytesRead);
     // Commit BE IoStatusBlock and bytes-read before waking a synchronous guest read.
     signal.signalNow();
-    b83LogRead(context.r3.u32);
+    b83LogRead(readStatus);
+    const uint64_t b87ReadLog = g_b87FileReadLogs.fetch_add(1u, std::memory_order_relaxed);
+    if (b87ReadLog < 64u || readStatus != kNtStatusSuccess || bytesRead < length) {
+        const std::string hostPath = file->path.string();
+        char event[1024];
+        std::snprintf(event, sizeof(event),
+            "B87_NTREADFILE call=%llu thread=%u handle=0x%08X path=%s offset=0x%016llX "
+            "requested=%u bytes=%u event=0x%08X status=0x%08X eof=%u fail=%u bad=%u",
+            static_cast<unsigned long long>(b87ReadLog + 1u), static_cast<uint32_t>(g_currentGuestThreadId),
+            handle, hostPath.c_str(), static_cast<unsigned long long>(offset), length, bytesRead,
+            context.r4.u32, readStatus, readEof ? 1u : 0u, readFailed ? 1u : 0u, readBad ? 1u : 0u);
+        recordRuntimeTrace(event);
+    }
 }
 
 void xowue_NtWriteFile(PPCContext &context, uint8_t *base) {

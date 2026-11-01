@@ -115,6 +115,9 @@ enum XOWUEDiagnostics {
         let streamObject = Array(lines.filter { $0.contains("B86_STREAM_OBJECT_WORD") }.suffix(20))
         let streamTable = Array(lines.filter { $0.contains("B86_STREAM_CHUNK_TABLE") }.suffix(16))
         let streamRecent = Array(lines.filter { $0.contains("B86_STREAM_RECENT_FN") }.suffix(16))
+        let streamWait = Array(lines.filter { $0.contains("B87_STREAM_WAIT_STATE") }.suffix(12))
+        let streamWaitAnomaly = Array(lines.filter { $0.contains("B87_STREAM_CACHE_ANOMALY") || $0.contains("B87_STREAM_OBJECT_WORD") || $0.contains("B87_STREAM_CHUNK_TABLE") || $0.contains("B87_STREAM_BUFFER_WORD") }.suffix(32))
+        let fileReads = Array(lines.filter { $0.contains("B87_NTREADFILE") }.suffix(24))
         let legacyStream = Array(lines.filter {
             $0.contains("B85_STREAM_STATE") || $0.contains("STREAM_POLL_") ||
             $0.contains("STREAM_ANOMALY")
@@ -145,6 +148,7 @@ enum XOWUEDiagnostics {
         while sections.joined(separator: "\n").utf8.count > 16384 && sections.count > 8 {
             sections.remove(at: sections.count - 2)
         }
+        sections.insert(contentsOf: streamWait + streamWaitAnomaly + fileReads, at: max(3, sections.count - 1))
         let summary = sections.joined(separator: "\n") + "\n"
         let summaryURL = diagnosticURL.deletingLastPathComponent().appendingPathComponent(summaryFilename)
         try? summary.write(to: summaryURL, atomically: true, encoding: .utf8)

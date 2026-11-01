@@ -23,13 +23,19 @@ assert "2 * 1024 * 1024" in engine
 assert "object + 0x70u + i * 4u" in engine
 assert "validGuestRange(object, 0xC0u)" in engine
 assert "calls & 0xFFFFFu" in engine
+assert "guestAddress == 0x82C4BE30u" in engine
+assert "B87_STREAM_WAIT_STATE" in engine and "B87_STREAM_CACHE_ANOMALY" in engine
+assert "B87_NTREADFILE" in engine
+assert "kNtStatusEndOfFile = 0xC0000011u" in engine
+assert "bytesRead == 0u && readEof" in engine
+assert "plus90 >= 0x40000000u" in engine
 assert "streamAnomaly" in diagnostics and "streamObject" in diagnostics
 assert "streamTable" in diagnostics and "streamRecent" in diagnostics
 
 for required in ("summaryFilename", "summaryFileURL()", "refreshCompactSummaryLocked",
-                 "B86_STREAM_", "B86_MEDIA_OPEN"):
+                 "B86_STREAM_", "B86_MEDIA_OPEN", "B87_STREAM_WAIT_STATE", "B87_STREAM_CACHE_ANOMALY", "B87_NTREADFILE"):
     assert required in diagnostics, f"summary generation missing {required}"
 assert diagnostics.count("refreshCompactSummaryLocked(diagnosticURL:") >= 4
 assert "XOWUEDiagnostics.summaryFileURL()" in app
 assert "XOWUEDiagnostics.summaryFilename" in app
-print("PASS: Build 86 bounded diagnostics, first-anomaly stream dump, real media opens and app summary")
+print("PASS: Build 87 stream-wait tracing, bounded NT file I/O evidence, EOF status and app summary")
