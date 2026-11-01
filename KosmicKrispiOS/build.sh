@@ -143,10 +143,10 @@ test -f "$OUT/include/vk_video/vulkan_video_codec_h264std.h"
 file "$OUT/libkk-kosmickrisp-ios-arm64.a" | tee "$OUT/file.txt"
 lipo -info "$OUT/libkk-kosmickrisp-ios-arm64.a" | tee "$OUT/lipo.txt"
 nm -g "$OUT/libkk-kosmickrisp-ios-arm64.a" > "$OUT/symbols.txt"
-grep -q vk_icdGetInstanceProcAddr "$OUT/symbols.txt"
-# This Mesa-owned symbol must be defined inside the delivered archive, not
-# left for dyld to search for in the iOS flat namespace.
-grep -q ' T __simple_mtx_plain_init_once
+grep -q 'vk_icdGetInstanceProcAddr' "$OUT/symbols.txt"
+# Mesa-owned mutex and C11 thread symbols must be defined in the merged archive.
+grep -Eq '[[:space:]]T[[:space:]]+__simple_mtx_plain_init_once$' "$OUT/symbols.txt"
+grep -Eq '[[:space:]]T[[:space:]]+_mtx_init$' "$OUT/symbols.txt"
 OBJ="$(find "$OUT/build-ios" -type f -name '*.o' -print -quit)"
 test -n "$OBJ"
 xcrun vtool -show-build "$OBJ" > "$OUT/build-version.txt"
@@ -165,41 +165,4 @@ Mesa simple mutex + C11 thread implementation: verified in archive
 Physical device runtime validation: pending integrator
 EOF
 shasum -a 256 "$OUT/libkk-kosmickrisp-ios-arm64.a" "$OUT/KosmicKrispM3B" "$OUT/static-dependency-archives.txt" "$ROOT"/patches/*.patch > "$OUT/SHA256SUMS"
-echo "PASS: KosmicKrisp iOS arm64 archive and M3B smoke executable built."
- "$OUT/symbols.txt"
-grep -q ' T _mtx_init
-OBJ="$(find "$OUT/build-ios" -type f -name '*.o' -print -quit)"
-test -n "$OBJ"
-xcrun vtool -show-build "$OBJ" > "$OUT/build-version.txt"
-grep -E -qi "platform[[:space:]]+IOS|platform[[:space:]]+2" "$OUT/build-version.txt"
-cat > "$OUT/KosmicKrispiOS-build.txt" <<EOF
-KosmicKrispiOS standalone build
-Mesa/KosmicKrisp: $MESA_SHA
-SPIRV-LLVM-Translator: $SPIRV_SHA
-Meson: $MESON_VERSION
-LLVM: llvm@20
-iOS target: arm64-apple-ios17.4
-M3 Metal WSI: applied
-M3B direct ICD/CAMetalLayer smoke: compiled
-Physical device runtime validation: pending integrator
-EOF
-shasum -a 256 "$OUT/libkk-kosmickrisp-ios-arm64.a" "$OUT/KosmicKrispM3B" "$ROOT"/patches/*.patch > "$OUT/SHA256SUMS"
-echo "PASS: KosmicKrisp iOS arm64 archive and M3B smoke executable built."
- "$OUT/symbols.txt"
-OBJ="$(find "$OUT/build-ios" -type f -name '*.o' -print -quit)"
-test -n "$OBJ"
-xcrun vtool -show-build "$OBJ" > "$OUT/build-version.txt"
-grep -E -qi "platform[[:space:]]+IOS|platform[[:space:]]+2" "$OUT/build-version.txt"
-cat > "$OUT/KosmicKrispiOS-build.txt" <<EOF
-KosmicKrispiOS standalone build
-Mesa/KosmicKrisp: $MESA_SHA
-SPIRV-LLVM-Translator: $SPIRV_SHA
-Meson: $MESON_VERSION
-LLVM: llvm@20
-iOS target: arm64-apple-ios17.4
-M3 Metal WSI: applied
-M3B direct ICD/CAMetalLayer smoke: compiled
-Physical device runtime validation: pending integrator
-EOF
-shasum -a 256 "$OUT/libkk-kosmickrisp-ios-arm64.a" "$OUT/KosmicKrispM3B" "$ROOT"/patches/*.patch > "$OUT/SHA256SUMS"
 echo "PASS: KosmicKrisp iOS arm64 archive and M3B smoke executable built."
