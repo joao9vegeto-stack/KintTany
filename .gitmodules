@@ -1,0 +1,3 @@
+[submodule "ThirdParty/moonlight-ios"]
+	path = ThirdParty/moonlight-ios
+	url = https://github.com/moonlight-stream/moonlight-ios.git
