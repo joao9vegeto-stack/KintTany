@@ -281,7 +281,7 @@ timebase_end = engine.index('extern "C" uint64_t xowue_qpc_write', timebase_star
 timebase_body = engine[timebase_start:timebase_end]
 assert "g_schedulerStopRequested.load(std::memory_order_relaxed)" in timebase_body
 assert "throw GuestThreadStopRequested{};" in timebase_body
-assert "B92_XXX_INTEGRITY" in diag and "B92_BIK_INTEGRITY" in diag
+assert "B92_XXX_INTEGRITY" in diagnostics and "B92_BIK_INTEGRITY" in diagnostics
 assert 'lines.filter { $0.contains("XOWUE_B92_QPC_") }' in diag
 print("PASS: Build 92.2 .xxx/.bik source-vs-guest integrity, persisted evidence, and MFTB/AOT cooperative cancellation")
 wait_start = engine.index("uint32_t waitGuestObject(")
