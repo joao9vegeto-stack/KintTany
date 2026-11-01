@@ -65,9 +65,20 @@ jobs:
             const lastSuccessfulRunNumber = successfulRuns.reduce(
               (latest, run) => Math.max(latest, run.run_number), 7
             );
-            const failedAttempts = priorRuns.filter(
-              run => run.run_number > lastSuccessfulRunNumber
-            ).length;
+            const failedAttempts = priorRuns.filter(run => {
+              if (run.run_number <= lastSuccessfulRunNumber) return false;
+              if (run.conclusion === "failure" || run.conclusion === "timed_out" ||
+                  run.conclusion === "startup_failure" || run.status === "in_progress") return true;
+              // Ignore short cancelled queue/commit-churn runs; count a cancelled
+              // run only if it actually occupied a runner for at least two minutes.
+              if (run.conclusion === "cancelled") {
+                const started = Date.parse(run.run_started_at || run.created_at);
+                const ended = Date.parse(run.updated_at || run.created_at);
+                return Number.isFinite(started) && Number.isFinite(ended) &&
+                  ended - started >= 120000;
+              }
+              return false;
+            }).length;
             const baseBuildNumber = completedIPAs + 2;
             const buildNumber = failedAttempts > 0
               ? `${baseBuildNumber}.${failedAttempts}`
