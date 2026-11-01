@@ -6763,6 +6763,89 @@ void xowue_NtReadFile(PPCContext &context, uint8_t *base) {
     const uint32_t readStatus = (readBad || (readFailed && !readEof))
         ? kNtStatusUnsuccessful
         : ((length != 0u && bytesRead == 0u && readEof) ? kNtStatusEndOfFile : kNtStatusSuccess);
+    // Build 92: independently verify the bytes on disk against the guest buffer
+    // before waking the guest. A successful NTSTATUS alone does not prove data integrity.
+    std::string readExtension = file->path.extension().string();
+    std::transform(readExtension.begin(), readExtension.end(), readExtension.begin(),
+        [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
+    if (readExtension == ".xxx") {
+        static std::atomic<uint64_t> s_xxxIntegrityLogCount{0u};
+        const uint64_t integrityLogIndex =
+            s_xxxIntegrityLogCount.fetch_add(1u, std::memory_order_relaxed);
+        constexpr uint64_t kFnvOffset = 14695981039346656037ull;
+        constexpr uint64_t kFnvPrime = 1099511628211ull;
+        uint64_t guestHash = kFnvOffset;
+        uint64_t guestNonZero = 0u;
+        const uint8_t *guestBytes = base + buffer;
+        for (uint32_t i = 0u; i < bytesRead; ++i) {
+            guestHash = (guestHash ^ guestBytes[i]) * kFnvPrime;
+            if (guestBytes[i] != 0u) ++guestNonZero;
+        }
+
+        std::error_code fileSizeError;
+        const uint64_t actualFileSize = std::filesystem::file_size(file->path, fileSizeError);
+        const bool fileSizeKnown = !fileSizeError;
+        const bool rangeWithinFile = fileSizeKnown && offset <= actualFileSize &&
+            static_cast<uint64_t>(bytesRead) <= actualFileSize - offset;
+        uint64_t sourceHash = kFnvOffset;
+        uint64_t sourceNonZero = 0u;
+        uint32_t sourceBytes = 0u;
+        bool sourceComplete = false;
+        std::array<uint8_t, 4096> sourceChunk{};
+        std::ifstream sourceFile(file->path, std::ios::binary);
+        if (sourceFile && offset <= static_cast<uint64_t>(std::numeric_limits<std::streamoff>::max())) {
+            sourceFile.seekg(static_cast<std::streamoff>(offset), std::ios::beg);
+            if (sourceFile) {
+                sourceComplete = true;
+                uint32_t remaining = bytesRead;
+                while (remaining != 0u) {
+                    const auto chunkSize = static_cast<std::streamsize>(
+                        std::min<uint32_t>(remaining, static_cast<uint32_t>(sourceChunk.size())));
+                    sourceFile.read(reinterpret_cast<char *>(sourceChunk.data()), chunkSize);
+                    const auto got = static_cast<uint32_t>(sourceFile.gcount());
+                    for (uint32_t i = 0u; i < got; ++i) {
+                        sourceHash = (sourceHash ^ sourceChunk[i]) * kFnvPrime;
+                        if (sourceChunk[i] != 0u) ++sourceNonZero;
+                    }
+                    sourceBytes += got;
+                    remaining -= got;
+                    if (got != static_cast<uint32_t>(chunkSize)) {
+                        sourceComplete = false;
+                        break;
+                    }
+                }
+            }
+        }
+        sourceComplete = sourceComplete && sourceBytes == bytesRead;
+        const bool contentMismatch = !sourceComplete || sourceHash != guestHash ||
+            sourceNonZero != guestNonZero;
+        const bool suspiciousRead = contentMismatch || !fileSizeKnown || !rangeWithinFile ||
+            bytesRead != length || (bytesRead != 0u && guestNonZero == 0u);
+        if (integrityLogIndex < 512u || (suspiciousRead && integrityLogIndex < 2048u)) {
+            char sample[25]{};
+            const uint32_t sampleBytes = std::min<uint32_t>(bytesRead, 8u);
+            for (uint32_t i = 0u; i < sampleBytes; ++i) {
+                std::snprintf(sample + i * 3u, sizeof(sample) - i * 3u, "%02X%s",
+                    guestBytes[i], (i + 1u == sampleBytes) ? "" : " ");
+            }
+            char event[1200];
+            std::snprintf(event, sizeof(event),
+                "B92_XXX_INTEGRITY thread=%u handle=0x%08X path=%s file_size=%llu "
+                "file_size_known=%u offset=0x%016llX requested=%u bytes=%u status=0x%08X "
+                "range_in_file=%u source_bytes=%u source_complete=%u source_hash=%016llX "
+                "guest_hash=%016llX source_nonzero=%llu guest_nonzero=%llu sample=%s mismatch=%u",
+                static_cast<uint32_t>(g_currentGuestThreadId), handle, file->path.string().c_str(),
+                static_cast<unsigned long long>(actualFileSize), fileSizeKnown ? 1u : 0u,
+                static_cast<unsigned long long>(offset), length, bytesRead, readStatus,
+                rangeWithinFile ? 1u : 0u, sourceBytes, sourceComplete ? 1u : 0u,
+                static_cast<unsigned long long>(sourceHash),
+                static_cast<unsigned long long>(guestHash),
+                static_cast<unsigned long long>(sourceNonZero),
+                static_cast<unsigned long long>(guestNonZero), sample,
+                contentMismatch ? 1u : 0u);
+            recordRuntimeTrace(event);
+        }
+    }
     queueGuestApc(g_currentGuestThread, context.r5.u32, context.r6.u32, ioStatus, 0u);
     context.r3.u32 = readStatus;
     writeGuestIoStatus(base, ioStatus, readStatus, bytesRead);

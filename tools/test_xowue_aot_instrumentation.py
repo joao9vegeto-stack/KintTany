@@ -252,6 +252,27 @@ assert "B86_STREAM_STATE" in engine and "B86_STREAM_ANOMALY" in engine
 assert "B86_STREAM_CHUNK_TABLE" in engine and "B86_MEDIA_OPEN" in engine
 assert "B87_STREAM_WAIT_STATE" in engine and "B87_STREAM_CACHE_ANOMALY" in engine
 assert "B87_NTREADFILE" in engine
+
+# Build 92: .xxx file reads must compare on-disk bytes with guest-buffer bytes
+# before signaling the waiting guest; status/byte-count alone is insufficient.
+read_start = engine.index("void xowue_NtReadFile(PPCContext &context, uint8_t *base) {")
+read_end = engine.index("\n}\n\nvoid xowue_NtWriteFile", read_start)
+read_body = engine[read_start:read_end]
+for token in (
+    'readExtension == ".xxx"',
+    "std::filesystem::file_size(file->path",
+    "sourceFile.seekg(static_cast<std::streamoff>(offset)",
+    "sourceHash",
+    "guestHash",
+    "sourceNonZero",
+    "guestNonZero",
+    "B92_XXX_INTEGRITY",
+    "rangeWithinFile",
+):
+    assert token in read_body, f"Build 92 .xxx integrity check missing {token}"
+assert read_body.index("B92_XXX_INTEGRITY") < read_body.index("signal.signalNow();")
+assert "const uint8_t *guestBytes = base + buffer;" in read_body
+print("PASS: Build 92 .xxx source-vs-guest integrity, actual file size/offset, zero-byte detection before wake")
 wait_start = engine.index("uint32_t waitGuestObject(")
 wait_end = engine.index("uint32_t waitGuestObjects(", wait_start)
 wait_body = engine[wait_start:wait_end]
