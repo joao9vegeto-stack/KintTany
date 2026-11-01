@@ -79,29 +79,11 @@ jobs:
           cp -R "$APP" "$RUNNER_TEMP/SpartanIPA/Payload/SpartanPort.app"
           ditto -c -k --sequesterRsrc --keepParent "$RUNNER_TEMP/SpartanIPA/Payload" SpartanPort-iOS-KosmicKrisp-unsigned.ipa
           unzip -t SpartanPort-iOS-KosmicKrisp-unsigned.ipa
-      - name: Stage reusable KosmicKrispiOS SDK
-        run: |
-          set -euo pipefail
-          mkdir -p KosmicKrispiOS/Artifacts
-          cp KosmicKrispiOS/build/libkk-kosmickrisp-ios-arm64.a KosmicKrispiOS/Artifacts/
-          cp -R KosmicKrispiOS/build/include KosmicKrispiOS/Artifacts/
-          cp KosmicKrispiOS/build/KosmicKrispiOS-build.txt KosmicKrispiOS/Artifacts/
-          cp KosmicKrispiOS/build/SHA256SUMS KosmicKrispiOS/Artifacts/
-          cp KosmicKrispiOS/build/static-dependency-archives.txt KosmicKrispiOS/Artifacts/
-          shasum -a 256 KosmicKrispiOS/Artifacts/libkk-kosmickrisp-ios-arm64.a
-      - name: Upload SpartanPort IPA and reusable SDK
+      - name: Upload SpartanPort IPA only
         uses: actions/upload-artifact@v4
         with:
-          name: KosmicKrispiOS-iOS-arm64
-          path: |
-            SpartanPort-iOS-KosmicKrisp-unsigned.ipa
-            KosmicKrispiOS/Artifacts/
-            KosmicKrispiOS/build/file.txt
-            KosmicKrispiOS/build/lipo.txt
-            KosmicKrispiOS/build/build-version.txt
-            KosmicKrispiOS/build/symbols.txt
-            KosmicKrispiOS/build/static-dependency-archives.txt
-            KosmicKrispiOS/build/meson-logs/
+          name: SpartanPort-iOS-IPA
+          path: SpartanPort-iOS-KosmicKrisp-unsigned.ipa
           if-no-files-found: error
           retention-days: 30
           compression-level: 0
