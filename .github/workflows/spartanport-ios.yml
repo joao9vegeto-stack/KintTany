@@ -13,9 +13,10 @@ on:
 permissions:
   contents: read
 
+# Never discard an accepted build because a follow-up fix was pushed.
 concurrency:
   group: spartanport-ios-${{ github.ref }}
-  cancel-in-progress: true
+  cancel-in-progress: false
 
 jobs:
   build:
