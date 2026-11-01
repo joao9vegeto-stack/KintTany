@@ -1,0 +1,3 @@
+[submodule "PandaiOS/ThirdParty/moonlight-ios"]
+	path = PandaiOS/ThirdParty/moonlight-ios
+	url = https://github.com/moonlight-stream/moonlight-ios.git

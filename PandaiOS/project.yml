@@ -21,5 +21,9 @@ targets:
         INFOPLIST_KEY_CFBundleDisplayName: Panda Cloud
         INFOPLIST_KEY_UILaunchScreen_Generation: YES
         INFOPLIST_KEY_NSAppTransportSecurity_NSAllowsArbitraryLoads: NO
+        SWIFT_OBJC_BRIDGING_HEADER: Sources/PandaiOS-Bridging-Header.h
+        HEADER_SEARCH_PATHS: "$(inherited) $(PROJECT_DIR)/ThirdParty/moonlight-ios/moonlight-common/moonlight-common-c/src"
+        LIBRARY_SEARCH_PATHS: "$(inherited) $(PROJECT_DIR)/build/MoonlightCoreDerived/Build/Products/Release-iphoneos"
+        OTHER_LDFLAGS: "$(inherited) -lmoonlight-common"
         GENERATE_INFOPLIST_FILE: YES
         CODE_SIGN_STYLE: Automatic

@@ -17,10 +17,11 @@ jobs:
   build:
     runs-on: macos-15
     steps:
-      - name: Checkout PandaiOS only
+      - name: Checkout PandaiOS and pinned engine sources
         uses: actions/checkout@v4
         with:
           ref: PandaiOS
+          submodules: recursive
           persist-credentials: false
 
       - name: Select Xcode
@@ -31,11 +32,27 @@ jobs:
       - name: Install XcodeGen
         run: brew install xcodegen
 
-      - name: Generate Xcode project
+      - name: Build Moonlight GameStream core
+        working-directory: PandaiOS
+        run: |
+          set -euo pipefail
+          CORE_PROJECT="ThirdParty/moonlight-ios/moonlight-common/moonlight-common.xcodeproj"
+          xcodebuild \
+            -project "$CORE_PROJECT" \
+            -scheme moonlight-common \
+            -configuration Release \
+            -sdk iphoneos \
+            -destination 'generic/platform=iOS' \
+            -derivedDataPath build/MoonlightCoreDerived \
+            CODE_SIGNING_ALLOWED=NO \
+            build
+          test -f "build/MoonlightCoreDerived/Build/Products/Release-iphoneos/libmoonlight-common.a"
+
+      - name: Generate Panda Xcode project
         working-directory: PandaiOS
         run: xcodegen generate
 
-      - name: Build unsigned iOS app
+      - name: Build Panda iOS app
         working-directory: PandaiOS
         run: |
           set -o pipefail
@@ -53,11 +70,12 @@ jobs:
         working-directory: PandaiOS
         run: |
           set -euo pipefail
-          APP_PATH="build/DerivedData/Build/Products/Release-iphoneos/PandaiOS.app"
+          APP_PATH="build/DerivedData/Build/Products/Release-iphoneos/Panda Cloud.app"
           test -d "$APP_PATH"
           mkdir -p build/ipa/Payload
           cp -R "$APP_PATH" build/ipa/Payload/
           ditto -c -k --sequesterRsrc --keepParent build/ipa/Payload build/PandaCloud-iOS-unsigned.ipa
+          test -s build/PandaCloud-iOS-unsigned.ipa
 
       - name: Upload IPA
         uses: actions/upload-artifact@v4

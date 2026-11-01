@@ -1,28 +1,43 @@
-# Panda Cloud — iOS native port
+# Panda Cloud — native iOS port
 
-This branch is an isolated working tree for the iOS port. It contains no files or workflows inherited into the branch's current tree from `main`.
+This branch is the isolated Panda iOS workspace. The build workflow runs on
+commits to `PandaiOS` only.
 
-## Current implementation
+## Streaming engine identified
 
-- Native SwiftUI application shell (iOS 16+).
-- AVFoundation/AVPlayer direct-playback diagnostic for HTTPS HLS and MP4 URLs.
-- Manual-only GitHub Actions workflow that builds an unsigned iOS IPA.
-- No Android runtime, emulator, or Android binary is bundled into the iOS app.
+The supplied APK (package `com.qudian.qudianyun`, version 3.1.0) declares
+`com.limelight.preferences.ComputerManagerService` with the label
+"Computer Management Service". That class name and service role match the
+Moonlight/Limelight GameStream client. The iOS port therefore uses the
+upstream Moonlight iOS/Common C code as the native streaming-engine base,
+rather than treating the service as a plain HLS player.
 
-## Important reverse-engineering boundary
+The upstream Moonlight iOS source is pinned as a recursive Git submodule at
+`ThirdParty/moonlight-ios`. Its `moonlight-common` static library is built
+before the Panda SwiftUI app and linked into the app. The Swift bridge calls
+the public GameStream C API so the build verifies the actual core is linked.
 
-The APK analysis previously recorded the package identifier `com.qudian.qudianyun` and native modules including IJKPlayer and MMKV. Those facts do **not** establish that Panda's cloud stream uses ordinary HLS, nor do they identify its authentication, session negotiation, transport, codec configuration, or controller protocol.
+## APK findings
 
-The current player is explicitly a diagnostic path. It is not represented as a working Panda account/session integration.
+See [ReverseEngineering/APK-BASELINE.md](ReverseEngineering/APK-BASELINE.md).
+The original APK is not committed to the repository. Its main application
+payload is protected by SecShell; `assets/classes0.jar` is encrypted and
+the visible DEX is primarily a loader. Login, catalog, provider API and
+session-allocation details are not yet decoded.
 
-## Required next input
+## Current app
 
-The original APK (preferably the exact version used for the earlier inspection) must be available in the working session to inspect:
+- Native SwiftUI shell for iOS 16+.
+- Moonlight Common C GameStream core linked into the iOS target.
+- GameController framework detection for connected controllers.
+- Standalone HLS/MP4 playback remains a diagnostic tool only; it is not
+  represented as the Panda streaming protocol.
 
-1. Manifest, exported activities/services/receivers and permissions.
-2. DEX loading and unpacking path for secondary payloads.
-3. Native library exports/imports and JNI call sites.
-4. Login/API hosts, token lifecycle and device attestation dependencies.
-5. Streaming handshake, transport, codec/audio configuration, latency control and gamepad input mapping.
+## Next implementation stages
 
-Only after these are identified should the Panda provider adapter be implemented. Secrets, account tokens and private user data must not be committed.
+1. Decode the SecShell-protected Panda application payload.
+2. Recover login, token refresh, catalog and session-allocation APIs.
+3. Map Panda's remote host/certificate/app/session response to Moonlight's
+   GameStream session setup.
+4. Connect touch controls and GameController input to the active stream.
+5. Verify a real Panda account session and gameplay before claiming parity.

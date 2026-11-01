@@ -1,5 +1,6 @@
 import SwiftUI
 import AVKit
+import GameController
 
 @main
 struct PandaiOSApp: App {
@@ -16,6 +17,7 @@ struct PandaHomeView: View {
     @State private var player: AVPlayer?
     @State private var showingPlayer = false
     @State private var errorMessage: String?
+    @State private var controllerCount = GCController.controllers().count
 
     private var streamURL: URL? {
         guard let url = URL(string: streamAddress.trimmingCharacters(in: .whitespacesAndNewlines)),
@@ -29,43 +31,15 @@ struct PandaHomeView: View {
             ZStack {
                 Color(red: 0.035, green: 0.045, blue: 0.075).ignoresSafeArea()
                 ScrollView {
-                    VStack(alignment: .leading, spacing: 24) {
+                    VStack(alignment: .leading, spacing: 22) {
                         header
-                        statusCard
-                        VStack(alignment: .leading, spacing: 12) {
-                            Text("Sessão de streaming")
-                                .font(.title3.bold())
-                            Text("A reprodução direta é uma ferramenta de diagnóstico. A autenticação e o protocolo proprietário do Panda ainda precisam ser integrados a partir da análise do APK original.")
-                                .font(.subheadline)
-                                .foregroundStyle(.secondary)
-                            TextField("URL HTTPS HLS (.m3u8) ou MP4", text: $streamAddress)
-                                .textInputAutocapitalization(.never)
-                                .keyboardType(.URL)
-                                .autocorrectionDisabled()
-                                .padding(14)
-                                .background(.white.opacity(0.08), in: RoundedRectangle(cornerRadius: 12))
-                            Button(action: startDirectPlayback) {
-                                Label("Testar reprodução", systemImage: "play.fill")
-                                    .frame(maxWidth: .infinity)
-                                    .padding(.vertical, 14)
-                            }
-                            .buttonStyle(.borderedProminent)
-                            .tint(.purple)
-                            .disabled(streamURL == nil)
-                        }
-                        .padding(18)
-                        .background(.white.opacity(0.055), in: RoundedRectangle(cornerRadius: 18))
-                        VStack(alignment: .leading, spacing: 8) {
-                            Label("Integração Panda", systemImage: "wrench.and.screwdriver")
-                                .font(.headline)
-                            Text("A camada de login, descoberta de servidores, negociação de sessão, decodificação e envio de controles será ligada após identificar as APIs e o transporte usados pelo aplicativo Android. Não há endpoint inventado nesta versão.")
-                                .font(.subheadline)
-                                .foregroundStyle(.secondary)
-                        }
-                        .padding(18)
-                        .background(.white.opacity(0.055), in: RoundedRectangle(cornerRadius: 18))
+                        engineStatus
+                        providerStatus
+                        diagnosticPlayer
                     }
                     .padding(20)
+                    .frame(maxWidth: 760)
+                    .frame(maxWidth: .infinity)
                 }
             }
             .navigationBarHidden(true)
@@ -86,49 +60,114 @@ struct PandaHomeView: View {
             } message: {
                 Text(errorMessage ?? "")
             }
+            .onReceive(NotificationCenter.default.publisher(for: .GCControllerDidConnect)) { _ in
+                controllerCount = GCController.controllers().count
+            }
+            .onReceive(NotificationCenter.default.publisher(for: .GCControllerDidDisconnect)) { _ in
+                controllerCount = GCController.controllers().count
+            }
         }
     }
 
     private var header: some View {
-        VStack(alignment: .leading, spacing: 8) {
+        VStack(alignment: .leading, spacing: 10) {
             HStack {
                 Image(systemName: "cloud.fill")
-                    .font(.system(size: 28, weight: .bold))
+                    .font(.system(size: 30, weight: .bold))
                     .foregroundStyle(.purple)
                 Text("PANDA CLOUD")
-                    .font(.system(size: 20, weight: .black, design: .rounded))
+                    .font(.system(size: 21, weight: .black, design: .rounded))
                     .tracking(2)
                 Spacer()
                 Text("iOS")
                     .font(.caption.bold())
-                    .padding(.horizontal, 10)
+                    .padding(.horizontal, 11)
                     .padding(.vertical, 6)
                     .background(.purple.opacity(0.22), in: Capsule())
             }
-            Text("Cloud gaming, reconstruído para iPhone.")
+            Text("Seu catálogo de jogos, direto no iPhone.")
                 .font(.title2.bold())
-            Text("Base nativa • Apple Silicon • AVFoundation")
+            Text("Cliente nativo • GameStream • controles iOS")
                 .font(.caption)
                 .foregroundStyle(.secondary)
         }
     }
 
-    private var statusCard: some View {
-        HStack(spacing: 12) {
-            Image(systemName: "info.circle.fill")
-                .font(.title2)
-                .foregroundStyle(.orange)
-            VStack(alignment: .leading, spacing: 4) {
-                Text("Base iOS em desenvolvimento")
-                    .font(.headline)
-                Text("O serviço Panda ainda não está conectado. Este build não simula uma sessão autenticada.")
-                    .font(.caption)
+    private var engineStatus: some View {
+        VStack(alignment: .leading, spacing: 14) {
+            HStack(spacing: 10) {
+                Image(systemName: MoonlightCore.isLinked ? "checkmark.circle.fill" : "exclamationmark.triangle.fill")
+                    .font(.title2)
+                    .foregroundStyle(MoonlightCore.isLinked ? .green : .orange)
+                VStack(alignment: .leading, spacing: 3) {
+                    Text("Motor GameStream")
+                        .font(.headline)
+                    Text(MoonlightCore.isLinked
+                         ? "Moonlight Common C vinculado ao aplicativo iOS."
+                         : "Biblioteca GameStream ainda não vinculada.")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
+                Spacer()
+                Text(MoonlightCore.isLinked ? "LINKED" : "PENDING")
+                    .font(.system(size: 10, weight: .bold, design: .rounded))
+                    .tracking(1)
+                    .foregroundStyle(MoonlightCore.isLinked ? .green : .orange)
+            }
+            Divider().overlay(.white.opacity(0.12))
+            HStack {
+                Label("Controle Bluetooth", systemImage: "gamecontroller.fill")
+                    .font(.subheadline.weight(.medium))
+                Spacer()
+                Text(controllerCount == 1 ? "1 conectado" : "\(controllerCount) conectados")
+                    .font(.caption.monospacedDigit())
                     .foregroundStyle(.secondary)
             }
         }
-        .padding(16)
+        .padding(18)
+        .background(.white.opacity(0.055), in: RoundedRectangle(cornerRadius: 18))
+    }
+
+    private var providerStatus: some View {
+        VStack(alignment: .leading, spacing: 9) {
+            Label("Serviço Panda", systemImage: "network")
+                .font(.headline)
+            Text("O APK confirma o uso do cliente Limelight/GameStream. O próximo adaptador precisa obter do serviço Panda o host remoto, certificado, identificador do aplicativo e parâmetros da sessão para iniciar o streaming pelo motor nativo.")
+                .font(.subheadline)
+                .foregroundStyle(.secondary)
+            Text("Login, catálogo e alocação de máquinas ainda estão em engenharia reversa. Nenhum endpoint ou token foi inventado.")
+                .font(.caption)
+                .foregroundStyle(.orange)
+        }
+        .padding(18)
         .frame(maxWidth: .infinity, alignment: .leading)
-        .background(.orange.opacity(0.09), in: RoundedRectangle(cornerRadius: 16))
+        .background(.purple.opacity(0.09), in: RoundedRectangle(cornerRadius: 18))
+    }
+
+    private var diagnosticPlayer: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            Text("Teste de mídia independente")
+                .font(.headline)
+            Text("Ferramenta de diagnóstico HLS/MP4; não representa o protocolo de sessão Panda.")
+                .font(.caption)
+                .foregroundStyle(.secondary)
+            TextField("URL HTTPS HLS (.m3u8) ou MP4", text: $streamAddress)
+                .textInputAutocapitalization(.never)
+                .keyboardType(.URL)
+                .autocorrectionDisabled()
+                .padding(14)
+                .background(.white.opacity(0.08), in: RoundedRectangle(cornerRadius: 12))
+            Button(action: startDirectPlayback) {
+                Label("Testar reprodução", systemImage: "play.fill")
+                    .frame(maxWidth: .infinity)
+                    .padding(.vertical, 13)
+            }
+            .buttonStyle(.borderedProminent)
+            .tint(.purple)
+            .disabled(streamURL == nil)
+        }
+        .padding(18)
+        .background(.white.opacity(0.055), in: RoundedRectangle(cornerRadius: 18))
     }
 
     private func startDirectPlayback() {
@@ -136,8 +175,7 @@ struct PandaHomeView: View {
             errorMessage = "Informe uma URL HTTPS HLS (.m3u8) ou MP4 válida."
             return
         }
-        let item = AVPlayerItem(url: url)
-        let newPlayer = AVPlayer(playerItem: item)
+        let newPlayer = AVPlayer(playerItem: AVPlayerItem(url: url))
         player = newPlayer
         newPlayer.play()
         showingPlayer = true
