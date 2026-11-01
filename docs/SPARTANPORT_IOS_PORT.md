@@ -1,6 +1,6 @@
 # SpartanPort for iOS — engineering baseline
 
-Status: SpartanPort iOS shell is wired to the pinned KosmicKrisp Vulkan ICD. It links the iOS arm64 archive and probes the ICD entrypoints/instance extensions at launch. The reusable SDK lives in `KosmicKrispiOS/`; CI builds a separate M3B CAMetalLayer smoke IPA. No playable PS4 runtime is claimed; game-start remains disabled.
+Status: SpartanPort iOS shell is wired to the pinned KosmicKrisp Vulkan ICD. It links the iOS arm64 archive and probes the ICD entrypoints/instance extensions at launch. The reusable SDK lives in `KosmicKrispiOS/`; CI publishes one unsigned SpartanPort IPA and the reusable SDK as a separate artifact. No playable PS4 runtime is claimed; game-start remains disabled.
 
 ## Scope
 
@@ -30,7 +30,7 @@ Upstream references:
 
 ## KosmicKrisp backend reused from PsTJohn
 
-The graphics provider is the user's existing KosmicKrisp/Mesa port from `PsTJohn`, not a replacement MoltenVK backend. `KosmicKrispiOS/` contains the pinned Mesa build, M2 iOS platform patch, M3 Metal WSI patch, M3B smoke-target patch, reference CAMetalLayer test, static/dynamic adapters and CMake integration helper. SpartanPort's iOS app force-loads `libkk-kosmickrisp-ios-arm64.a` and runs a direct ICD entrypoint/instance-extension probe. CI separately builds the M3B smoke IPA to test actual surface/swapchain presentation on a physical device. A compile or extension probe is not evidence of game rendering.
+The graphics provider is the user's existing KosmicKrisp/Mesa port from `PsTJohn`, not a replacement MoltenVK backend. `KosmicKrispiOS/` contains the pinned Mesa build, M2 iOS platform patch, M3 Metal WSI patch, M3B smoke-target patch, reference CAMetalLayer test, static/dynamic adapters and CMake integration helper. SpartanPort's iOS app force-loads `libkk-kosmickrisp-ios-arm64.a` and runs a direct ICD entrypoint/instance-extension probe. CI compiles the M3B smoke executable as a build check but does not package a second IPA. Physical-device surface/swapchain presentation remains pending. A compile or extension probe is not evidence of game rendering.
 
 ## Required porting work
 
@@ -67,7 +67,7 @@ The graphics provider is the user's existing KosmicKrisp/Mesa port from `PsTJohn
 
 ## Implemented shell milestone (2026-11-01)
 
-A separate XcodeGen project now lives under `SpartanPort-iOS/`; it does not replace or alter the existing KintTany app target. The app can select a user-owned PS4 game folder, checks for `eboot.bin` and `sce_sys/param.sfo`, inspects the ELF64 little-endian x86-64 header and program-header table bounds without loading the game, and presents a real `MTKView` backed by Metal. XCTest covers a valid ELF64 header, a non-ELF/SELF-like file and an out-of-bounds program-header table. The CI workflow builds an unsigned device app and packages it as an IPA artifact. This is a platform-shell milestone only: it does not load the PS4 executable, execute AOT code, translate PS4 GPU commands, or start gameplay. An unsigned IPA is not installable as-is without appropriate signing.
+A separate XcodeGen project now lives under `SpartanPort-iOS/`; it does not replace or alter the existing KintTany app target. The app can select a user-owned PS4 game folder, checks `sce_sys/param.sfo` with a bounds-checked PSF parser (title, Title ID, version and category), checks for `eboot.bin`, and inspects the ELF64 little-endian x86-64 header and program-header table bounds without loading the game, and presents a real `MTKView` backed by Metal. XCTest covers a valid ELF64 header, a non-ELF file, an out-of-bounds program-header table, PSF metadata extraction and truncated PSF rejection. The CI workflow builds an unsigned device app and packages it as an IPA artifact. This is a platform-shell milestone only: it does not load the PS4 executable, execute AOT code, translate PS4 GPU commands, or start gameplay. An unsigned IPA is not installable as-is without appropriate signing.
 
 ## Immediate blockers
 

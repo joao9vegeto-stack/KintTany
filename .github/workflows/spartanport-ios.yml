@@ -55,7 +55,7 @@ jobs:
           ')"
           test -n "$SIM_UDID"
           echo "SIMULATOR_UDID=$SIM_UDID" >> "$GITHUB_ENV"
-      - name: Run ELF inspector unit tests
+      - name: Run PS4 ELF and param.sfo inspector unit tests
         working-directory: SpartanPort-iOS
         run: |
           set -euo pipefail
