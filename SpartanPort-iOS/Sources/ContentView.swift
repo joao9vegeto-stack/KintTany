@@ -4,6 +4,7 @@ import UniformTypeIdentifiers
 struct ContentView: View {
     @StateObject private var gameFolder = GameFolderStore()
     @State private var showingFolderPicker = false
+    @State private var kosmicKrispProbe = "Aguardando verificação"
 
     var body: some View {
         ZStack {
@@ -46,10 +47,11 @@ struct ContentView: View {
                             .font(.headline)
                         statusRow("Aplicativo iOS / SwiftUI", state: "Implementado", good: true)
                         statusRow("Superfície Metal", state: "Teste inicial", good: true)
+                        statusRow("KosmicKrisp Vulkan ICD", state: kosmicKrispProbe, good: kosmicKrispProbe.hasPrefix("ICD carregado"))
                         statusRow("Inspeção do eboot.bin", state: gameFolder.executableValidated ? "ELF64 x86-64" : "Não validado", good: gameFolder.executableValidated)
                         statusRow("Runtime PS4 ARM64", state: "Pendente", good: false)
                         statusRow("AOT x86-64 → ARM64", state: "Pendente", good: false)
-                        statusRow("Backend gráfico shadPS4 → Metal", state: "Pendente", good: false)
+                        statusRow("Backend Vulkan KosmicKrisp", state: "Pendente", good: false)
                         Text("O botão de iniciar jogo permanece indisponível até existir um runtime nativo verificável.")
                             .font(.caption)
                             .foregroundStyle(.secondary)
@@ -62,6 +64,10 @@ struct ContentView: View {
                 .frame(maxWidth: 760)
                 .frame(maxWidth: .infinity)
             }
+        }
+        .onAppear {
+            _ = SpartanKosmicKrispProbe()
+            kosmicKrispProbe = String(cString: SpartanKosmicKrispProbeMessage())
         }
         .fileImporter(
             isPresented: $showingFolderPicker,
