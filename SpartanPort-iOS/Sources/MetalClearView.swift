@@ -34,14 +34,16 @@ struct MetalClearView: UIViewRepresentable {
                 let queue = commandQueue,
                 let descriptor = view.currentRenderPassDescriptor,
                 let drawable = view.currentDrawable,
-                let commandBuffer = queue.makeCommandBuffer()
+                let commandBuffer = queue.makeCommandBuffer(),
+                let encoder = commandBuffer.makeRenderCommandEncoder(descriptor: descriptor)
             else { return }
 
             descriptor.colorAttachments[0].loadAction = .clear
             descriptor.colorAttachments[0].storeAction = .store
             descriptor.colorAttachments[0].clearColor = view.clearColor
 
-            commandBuffer.addCompletedHandler { _ in }
+            // Encoding an empty render pass is required for Metal to perform the clear action.
+            encoder.endEncoding()
             commandBuffer.present(drawable)
             commandBuffer.commit()
         }

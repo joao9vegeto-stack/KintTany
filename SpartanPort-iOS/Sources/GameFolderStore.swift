@@ -34,12 +34,11 @@ final class GameFolderStore: ObservableObject {
         let hasParam = fileManager.fileExists(atPath: param.path)
         let hasModules = fileManager.fileExists(atPath: modules.path)
 
-        var checks: [String] = [
+        details = [
             "\(hasEboot ? "✓" : "✕") eboot.bin",
             "\(hasParam ? "✓" : "✕") sce_sys/param.sfo",
             "\(hasModules ? "✓" : "–") sce_module/ (opcional nesta validação)"
         ]
-        details = checks
         isValidPayload = hasEboot && hasParam
 
         if isValidPayload {
@@ -47,6 +46,11 @@ final class GameFolderStore: ObservableObject {
         } else {
             message = "A pasta selecionada não contém a estrutura mínima esperada."
         }
+    }
+
+    func reportPickerError(_ error: Error) {
+        message = "Não foi possível abrir o seletor: \(error.localizedDescription)"
+        isValidPayload = false
     }
 
     deinit {

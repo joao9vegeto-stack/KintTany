@@ -73,7 +73,7 @@ struct ContentView: View {
                     gameFolder.select(folder: folder)
                 }
             case .failure(let error):
-                gameFolderError(error)
+                gameFolder.reportPickerError(error)
             }
         }
     }
@@ -160,8 +160,4 @@ struct ContentView: View {
         .padding(.vertical, 3)
     }
 
-    private func gameFolderError(_ error: Error) {
-        // The picker error is intentionally kept local; no game data or paths are logged.
-        _ = error
-    }
 }
