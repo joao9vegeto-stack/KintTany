@@ -45,7 +45,7 @@ jobs:
           set -euo pipefail
           out="logs/xenia"
           mkdir -p "$out"
-          find "$out" -maxdepth 1 -type f \\( -name 'xenia.part-*.txt' -o -name 'SHA256SUMS' -o -name 'SOURCE-SHA256.txt' -o -name 'README.md' \\) -delete
+          rm -f "$out"/xenia.part-*.txt "$out/SHA256SUMS" "$out/SOURCE-SHA256.txt" "$out/README.md"
 
           split --bytes=900K --numeric-suffixes=0 --suffix-length=4 \
             --additional-suffix=.txt \
@@ -57,18 +57,18 @@ jobs:
           parts="$(find "$out" -maxdepth 1 -type f -name 'xenia.part-*.txt' | wc -l | tr -d ' ')"
 
           {
-            echo "# XOWUE — Xenia diagnostic log"
+            echo "# XOWUE - Xenia diagnostic log"
             echo
-            echo "- Source: GitHub Release `Xowue` / [xenia.log](https://github.com/joao9vegeto-stack/KintTany/releases/download/Xowue/xenia.log)"
+            echo "- Source: GitHub Release Xowue / xenia.log"
             echo "- Original size: $bytes bytes"
-            echo "- Original SHA-256: `$sha`"
+            echo "- Original SHA-256: $sha"
             echo "- Split size: 900 KiB per part (final part may be smaller)"
             echo "- Parts: $parts; byte-contiguous and ordered by the four-digit suffix"
-            echo "- Verify each part with `sha256sum -c SHA256SUMS` from this directory"
+            echo "- Verify each part with sha256sum -c SHA256SUMS from this directory"
             echo
             echo "## Parts"
             for f in "$out"/xenia.part-*.txt; do
-              printf -- '- [%s](%s) — %s bytes\n' "$(basename "$f")" "$(basename "$f")" "$(stat -c '%s' "$f")"
+              printf -- '- [%s](%s) - %s bytes\n' "$(basename "$f")" "$(basename "$f")" "$(stat -c '%s' "$f")"
             done
           } > "$out/README.md"
 
@@ -83,7 +83,7 @@ jobs:
           {
             echo "### Xenia log split completed"
             echo "- Source bytes: $bytes"
-            echo "- Source SHA-256: `$sha`"
+            echo "- Source SHA-256: $sha"
             echo "- Parts created: $parts"
             echo "- Reassembled byte count and SHA-256: verified"
           } >> "$GITHUB_STEP_SUMMARY"
