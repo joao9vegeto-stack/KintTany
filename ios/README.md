@@ -6,7 +6,7 @@ Graphics reference: this repository's `XOWUE` branch and KosmicKrisp iOS WSI pat
 
 ## Current implementation milestone
 
-- Builds from the upstream ReXGlue recompilation source and its pinned submodules.
+- Builds from the upstream ReXGlue recompilation source and its pinned submodules. The preparation script resolves the upstream root relative to its own file, so it is independent of the workflow working directory.
 - Configures an iOS arm64 application bundle using the upstream SDL3/CAMetalLayer path.
 - Builds the KosmicKrisp Mesa ICD for iOS using the exact pinned Mesa revision and iOS Metal WSI patches already used by XOWUE.
 - Packages the ICD inside the app and probes its exported ICD entry point / Vulkan instance creation at app startup.
