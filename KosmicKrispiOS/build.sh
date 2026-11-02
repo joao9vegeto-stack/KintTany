@@ -211,7 +211,7 @@ LINK_CONFIG="$OUT/KosmicKrispLink.xcconfig"
   for archive in "${LINK_ARCHIVES[@]}"; do
     printf ' -Wl,-force_load,%s' "$archive"
   done
-  printf ' -framework Metal -framework QuartzCore -framework UIKit -framework Foundation -framework CoreGraphics -lc++ -lz\n'
+  printf ' -Wl,-undefined,dynamic_lookup -framework Metal -framework QuartzCore -framework UIKit -framework Foundation -framework CoreGraphics -lc++ -lz\n'
 } > "$LINK_CONFIG"
 cp "$SMOKE" "$OUT/KosmicKrispM3B-smoke-objects.a"
 mkdir -p "$OUT/include"
