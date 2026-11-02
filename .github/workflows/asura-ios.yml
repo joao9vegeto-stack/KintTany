@@ -157,7 +157,10 @@ jobs:
           cp "$DRIVER" "$GITHUB_WORKSPACE/upstream/build-ios/kosmickrisp/libvulkan_kosmickrisp.dylib"
           install_name_tool -id "@rpath/libvulkan_kosmickrisp.dylib" "$GITHUB_WORKSPACE/upstream/build-ios/kosmickrisp/libvulkan_kosmickrisp.dylib"
           lipo "$GITHUB_WORKSPACE/upstream/build-ios/kosmickrisp/libvulkan_kosmickrisp.dylib" -verify_arch arm64
-          nm -g "$GITHUB_WORKSPACE/upstream/build-ios/kosmickrisp/libvulkan_kosmickrisp.dylib" | grep -q vk_icdGetInstanceProcAddr
+          SYMBOLS="$RUNNER_TEMP/kosmickrisp-symbols.txt"
+          nm -g "$GITHUB_WORKSPACE/upstream/build-ios/kosmickrisp/libvulkan_kosmickrisp.dylib" > "$SYMBOLS"
+          grep -q 'vk_icdGetInstanceProcAddr' "$SYMBOLS"
+          echo "KOSMICKRISP_IOS_ARM64_SYMBOL_CHECK_OK"
 
       - name: Build ReXGlue iOS ARM64 app bundle
         run: |
