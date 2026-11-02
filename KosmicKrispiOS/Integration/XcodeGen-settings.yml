@@ -1,4 +1,4 @@
 # XcodeGen settings for an iOS app target; paths relative to SpartanPort-iOS/
 HEADER_SEARCH_PATHS: "$(inherited) $(SRCROOT)/../KosmicKrispiOS/build/include"
 SWIFT_OBJC_BRIDGING_HEADER: "Sources/SpartanPort-Bridging-Header.h"
-OTHER_LDFLAGS: "$(inherited) -Wl,-force_load,$(SRCROOT)/../KosmicKrispiOS/build/libkk-kosmickrisp-ios-arm64.a -Wl,-undefined,dynamic_lookup -framework Metal -framework QuartzCore -framework UIKit -framework Foundation -framework CoreGraphics"
+# Pass ../KosmicKrispiOS/build/KosmicKrispLink.xcconfig to the device xcodebuild invocation.

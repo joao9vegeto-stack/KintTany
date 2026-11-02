@@ -67,14 +67,30 @@ jobs:
         working-directory: SpartanPort-iOS
         run: |
           set -euo pipefail
+          KK_LINK_CONFIG="$GITHUB_WORKSPACE/KosmicKrispiOS/build/KosmicKrispLink.xcconfig"
+          test -s "$KK_LINK_CONFIG"
           xcodebuild -project SpartanPort.xcodeproj -scheme SpartanPort -configuration Release \
             -sdk iphoneos -destination 'generic/platform=iOS' \
+            -xcconfig "$KK_LINK_CONFIG" \
             -derivedDataPath "$RUNNER_TEMP/SpartanPortDerived" CODE_SIGNING_ALLOWED=NO build
       - name: Package unsigned SpartanPort IPA
         run: |
           set -euo pipefail
           APP="$RUNNER_TEMP/SpartanPortDerived/Build/Products/Release-iphoneos/SpartanPort.app"
           test -d "$APP"
+          EXECUTABLE="$(/usr/libexec/PlistBuddy -c 'Print :CFBundleExecutable' "$APP/Info.plist")"
+          APP_BINARY="$APP/$EXECUTABLE"
+          test -s "$APP_BINARY"
+          xcrun lipo -verify_arch arm64 "$APP_BINARY"
+          nm -gU "$APP_BINARY" | grep -F '_vk_icdGetInstanceProcAddr'
+          if otool -L "$APP_BINARY" | grep -E 'libKosmicKrisp|libvulkan\.dylib'; then
+            echo "ERROR: KosmicKrisp was left as a dynamic dependency instead of being linked into the app executable." >&2
+            exit 1
+          fi
+          if find "$APP" -type f \( -name '*.a' -o -name '*KosmicKrisp*.dylib' -o -name 'libvulkan.dylib' \) -print -quit | grep -q .; then
+            echo "ERROR: separate KosmicKrisp archive/dylib leaked into the app bundle." >&2
+            exit 1
+          fi
           mkdir -p "$RUNNER_TEMP/SpartanIPA/Payload"
           cp -R "$APP" "$RUNNER_TEMP/SpartanIPA/Payload/SpartanPort.app"
           ditto -c -k --sequesterRsrc --keepParent "$RUNNER_TEMP/SpartanIPA/Payload" SpartanPort-iOS-KosmicKrisp-unsigned.ipa

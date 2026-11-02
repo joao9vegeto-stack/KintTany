@@ -119,69 +119,79 @@ ninja -C "$OUT/build-ios" src/kosmickrisp/vulkan/libkk.a
 # executable here is invalid: it bypasses the final app's complete static
 # dependency closure and fails on the iOS dynamic_lookup linker restriction.
 meson compile -C "$OUT/build-ios" kk-ios-smoke-objects
-# These Meson targets are marked build_by_default:false because Mesa consumes
-# them through link_whole. Build their archives explicitly so the final app can
-# force-load the weak dispatch overloads.
-ninja -C "$OUT/build-ios" \
-  src/kosmickrisp/vulkan/libkk_device_dispatch_table.a \
-  src/kosmickrisp/vulkan/libkk_device_cmd_dispatch_table.a
+# Build every static-library target Meson registered for this iOS configuration.
+# Building only libkk.a compiles many dependency objects but does not emit the
+# separate archives that Xcode must link (WSI, Mesa utilities, C11 threads,
+# Vulkan runtime, NIR, etc.). Discover the actual target graph instead of
+# guessing an archive count or symbol names.
+MESON_ARCHIVE_TARGETS=()
+while IFS= read -r target; do
+  [[ "$target" == *.a ]] && MESON_ARCHIVE_TARGETS+=("$target")
+done < <(ninja -C "$OUT/build-ios" -t targets all | awk -F': ' '$1 ~ /\.a$/ {print $1}' | sort -u)
+test "${#MESON_ARCHIVE_TARGETS[@]}" -gt 0 || {
+  echo "ERROR: Meson did not expose any iOS static-library targets." >&2
+  exit 1
+}
+printf '%s\n' "${MESON_ARCHIVE_TARGETS[@]}" | tee "$OUT/meson-static-targets.txt"
+ninja -C "$OUT/build-ios" "${MESON_ARCHIVE_TARGETS[@]}"
+
 ARCHIVE="$OUT/build-ios/src/kosmickrisp/vulkan/libkk.a"
 SMOKE="$OUT/build-ios/src/kosmickrisp/libkk-ios-smoke-objects.a"
-test -f "$ARCHIVE" && test -s "$SMOKE"
+KK_DISPATCH_TABLE="$OUT/build-ios/src/kosmickrisp/vulkan/libkk_device_dispatch_table.a"
+KK_CMD_DISPATCH_TABLE="$OUT/build-ios/src/kosmickrisp/vulkan/libkk_device_cmd_dispatch_table.a"
+WSI_ARCHIVE="$OUT/build-ios/src/vulkan/wsi/libvulkan_wsi.a"
+for required in "$ARCHIVE" "$SMOKE" "$KK_DISPATCH_TABLE" "$KK_CMD_DISPATCH_TABLE" "$WSI_ARCHIVE"; do
+  test -s "$required" || {
+    echo "ERROR: required Meson archive was not produced: $required" >&2
+    exit 1
+  }
+done
 
-# libkk.a is not self-contained: Meson keeps Mesa's transitive dependencies
-# (mesa_util, C11 threads, NIR, Vulkan utilities, MSL compiler, Metal bridge,
-# shader archive, etc.) in separate static archives. Merge the iOS build's
-# static dependency closure so the consumer receives one complete archive.
 STATIC_ARCHIVES=()
 while IFS= read -r -d '' archive; do
   STATIC_ARCHIVES+=("$archive")
 done < <(find "$OUT/build-ios" -name '*.a' -print0)
-KK_DISPATCH_TABLE="$OUT/build-ios/src/kosmickrisp/vulkan/libkk_device_dispatch_table.a"
-KK_CMD_DISPATCH_TABLE="$OUT/build-ios/src/kosmickrisp/vulkan/libkk_device_cmd_dispatch_table.a"
-test -s "$KK_DISPATCH_TABLE"
-test -s "$KK_CMD_DISPATCH_TABLE"
-test "${#STATIC_ARCHIVES[@]}" -ge 10 || {
-  echo "ERROR: expected the complete Mesa/KosmicKrisp static dependency closure (at least 10 archives), found ${#STATIC_ARCHIVES[@]}" >&2
-  printf '%s\\n' "${STATIC_ARCHIVES[@]}" >&2
-  exit 1
-}
-printf '%s\\n' "${STATIC_ARCHIVES[@]}" | tee "$OUT/static-dependency-archives.txt"
-rm -f "$OUT/libkk-kosmickrisp-ios-arm64.a"
-# Flatten every Meson static archive into real object members before
-# creating the app-facing archive. Passing .a files directly to Apple's
-# libtool -static can preserve nested archive members instead of extracting
-# their objects; that leaves Mesa utility symbols (hash tables, BLAKE3,
-# simple mutexes and C11 threads) unresolved in the final Xcode link.
-MERGE_ROOT="$OUT/archive-merge"
-rm -rf "$MERGE_ROOT"
-mkdir -p "$MERGE_ROOT"
-archive_index=0
-object_index=0
+LINK_ARCHIVES=()
 for archive in "${STATIC_ARCHIVES[@]}"; do
-  archive_index=$((archive_index + 1))
-  extract_dir="$MERGE_ROOT/extract-$(printf '%04d' "$archive_index")"
-  mkdir -p "$extract_dir"
-  (cd "$extract_dir" && xcrun ar -x "$archive")
-  while IFS= read -r -d '' object; do
-    object_index=$((object_index + 1))
-    object_name="$(basename "$object")"
-    cp "$object" "$MERGE_ROOT/$(printf '%06d' "$object_index")-$object_name"
-  done < <(find "$extract_dir" -type f \( -name '*.o' -o -name '*.obj' \) -print0)
+  # The M3B smoke harness is compiled as a build check, never force-loaded
+  # into the production app executable.
+  [[ "$archive" == "$SMOKE" ]] && continue
+  xcrun lipo -verify_arch arm64 "$archive"
+  LINK_ARCHIVES+=("$archive")
 done
-test "$object_index" -ge 100 || {
-  echo "ERROR: expected at least 100 flattened Mesa objects, found $object_index" >&2
+test "${#LINK_ARCHIVES[@]}" -gt 0 || {
+  echo "ERROR: incomplete iOS static-library target set." >&2
+  printf '%s\n' "${LINK_ARCHIVES[@]}" >&2
   exit 1
 }
-MERGED_OBJECTS=()
-while IFS= read -r -d '' object; do
-  MERGED_OBJECTS+=("$object")
-done < <(find "$MERGE_ROOT" -maxdepth 1 -type f -name '*.o' -print0)
-test "${#MERGED_OBJECTS[@]}" -eq "$object_index"
-rm -f "$OUT/libkk-kosmickrisp-ios-arm64.a"
-xcrun libtool -static -o "$OUT/libkk-kosmickrisp-ios-arm64.a" "${MERGED_OBJECTS[@]}"
-test -s "$OUT/libkk-kosmickrisp-ios-arm64.a"
-echo "Flattened ${#STATIC_ARCHIVES[@]} static archives into $object_index ARM64 object members."
+printf '%s\n' "${LINK_ARCHIVES[@]}" | tee "$OUT/static-link-archives.txt"
+
+# Verify real definitions from the exact failures seen in previous Xcode links:
+# Mesa BLAKE3/hash/mutex, C11 threads, and Vulkan WSI dispatch implementations.
+: > "$OUT/defined-symbols.txt"
+for archive in "${LINK_ARCHIVES[@]}"; do
+  nm -gU "$archive" >> "$OUT/defined-symbols.txt"
+done
+for symbol in __mesa_blake3_compute __mesa_hash_table_create __simple_mtx_plain_init_once _mtx_init _wsi_CreateInstance _wsi_CreateDevice _wsi_QueueSubmit _wsi_CreateSwapchainKHR _vk_icdGetInstanceProcAddr; do
+  grep -F "$symbol" "$OUT/defined-symbols.txt" >/dev/null || {
+    echo "ERROR: required implementation is absent from the Meson static dependency set: $symbol" >&2
+    echo "Archives discovered:" >&2
+    cat "$OUT/static-link-archives.txt" >&2
+    exit 1
+  }
+done
+
+# Keep the Meson archives separate until the final Xcode link. Force-loading
+# each archive makes every static dependency part of SpartanPort.app's main
+# executable; no helper executable, dylib, or .a is shipped in the IPA.
+LINK_CONFIG="$OUT/KosmicKrispLink.xcconfig"
+{
+  printf 'OTHER_LDFLAGS = $(inherited) -Wl,-u,_vk_icdGetInstanceProcAddr'
+  for archive in "${LINK_ARCHIVES[@]}"; do
+    printf ' -Wl,-force_load,%s' "$archive"
+  done
+  printf ' -framework Metal -framework QuartzCore -framework UIKit -framework Foundation -framework CoreGraphics -lc++ -lz\n'
+} > "$LINK_CONFIG"
 cp "$SMOKE" "$OUT/KosmicKrispM3B-smoke-objects.a"
 mkdir -p "$OUT/include"
 rm -rf "$OUT/include/vulkan"
@@ -189,25 +199,9 @@ cp -R "$OUT/mesa-src/include/vulkan" "$OUT/include/vulkan"
 rm -rf "$OUT/include/vk_video"
 cp -R "$OUT/mesa-src/include/vk_video" "$OUT/include/vk_video"
 test -f "$OUT/include/vk_video/vulkan_video_codec_h264std.h"
-file "$OUT/libkk-kosmickrisp-ios-arm64.a" | tee "$OUT/file.txt"
-lipo -info "$OUT/libkk-kosmickrisp-ios-arm64.a" | tee "$OUT/lipo.txt"
-nm -g "$OUT/libkk-kosmickrisp-ios-arm64.a" > "$OUT/symbols.txt"
-# nm -U suppresses undefined references on Apple's nm. Check actual Mach-O
-# symbol spellings (one leading underscore), and only implementations that
-# exist in the pinned Mesa sources and are part of the iOS dependency closure.
-nm -gU "$OUT/libkk-kosmickrisp-ios-arm64.a" > "$OUT/defined-symbols.txt"
-echo "=== Defined ICD, Mesa utility, BLAKE3, mutex and C11 thread symbols ==="
-grep -E '_vk_icdGetInstanceProcAddr|_blake3_compress_in_place|_mesa_hash_table_create|_simple_mtx_plain_init_once|_mtx_init' "$OUT/defined-symbols.txt" || true
-for symbol in _vk_icdGetInstanceProcAddr _blake3_compress_in_place _mesa_hash_table_create _simple_mtx_plain_init_once _mtx_init; do
-  grep -F "$symbol" "$OUT/defined-symbols.txt" >/dev/null || {
-    echo "ERROR: required implementation is not defined in flattened archive: $symbol" >&2
-    echo "Archive inputs:" >&2
-    cat "$OUT/static-dependency-archives.txt" >&2
-    exit 1
-  }
-done
+printf 'Generated static linker configuration: %s\n' "$LINK_CONFIG"
 # Record target metadata without guessing which object happens to be first in find order.
-printf '%s\\n' "target=arm64-apple-ios17.4" "sdk=$(xcrun --sdk iphoneos --show-sdk-version)" > "$OUT/build-version.txt"
+printf '%s\n' "target=arm64-apple-ios17.4" "sdk=$(xcrun --sdk iphoneos --show-sdk-version)" > "$OUT/build-version.txt"
 cat > "$OUT/KosmicKrispiOS-build.txt" <<EOF
 KosmicKrispiOS standalone build
 Mesa/KosmicKrisp: $MESA_SHA
@@ -217,9 +211,9 @@ LLVM: llvm@20
 iOS target: arm64-apple-ios17.4
 M3 Metal WSI: applied
 M3B direct ICD/CAMetalLayer smoke source: compiled to ARM64 object archive (not linked or runtime-tested)
-Static dependency closure and generated dispatch tables: merged and force-loaded as one archive
-Mesa simple mutex + C11 thread implementation: verified in archive
+Meson iOS static archives: individually force-loaded into the SpartanPort app executable
+Mesa BLAKE3/hash/mutex, C11 threads and Vulkan WSI definitions: verified across static archives
 Physical device runtime validation: pending integrator
 EOF
-shasum -a 256 "$OUT/libkk-kosmickrisp-ios-arm64.a" "$OUT/KosmicKrispM3B-smoke-objects.a" "$OUT/static-dependency-archives.txt" "$ROOT"/patches/*.patch > "$OUT/SHA256SUMS"
-echo "PASS: KosmicKrisp iOS arm64 archive and M3B smoke objects compiled."
+shasum -a 256 "${LINK_ARCHIVES[@]}" "$OUT/KosmicKrispM3B-smoke-objects.a" "$OUT/static-link-archives.txt" "$OUT/KosmicKrispLink.xcconfig" "$ROOT"/patches/*.patch > "$OUT/SHA256SUMS"
+echo "PASS: KosmicKrisp iOS arm64 static dependency set and M3B smoke objects compiled."

@@ -25,16 +25,16 @@ cd KosmicKrispiOS
 chmod +x build.sh
 ./build.sh
 ```
-CI may set `KK_SKIP_PREREQUISITES=1` after installing Homebrew dependencies. Output is in `build/`: `libkk-kosmickrisp-ios-arm64.a`, `KosmicKrispM3B`, `include/vulkan/`, `KosmicKrispiOS-build.txt` and SHA-256 evidence.
+CI may set `KK_SKIP_PREREQUISITES=1` after installing Homebrew dependencies. Output is in `build/`: the complete iOS static-library set under `build-ios/`, generated `KosmicKrispLink.xcconfig`, `static-link-archives.txt`, `include/vulkan/`, `KosmicKrispiOS-build.txt` and SHA-256 evidence. The M3B smoke harness is compiled separately as a build check.
 
-The build compiles the M3B test application. A compile is not physical-device proof; install/run the M3B smoke IPA on the target iPhone and validate Metal surface creation, swapchain acquire/present, foreground/background, resize and a 10-minute soak.
+The build compiles the M3B smoke harness into an object archive only; it does not produce or package a separate smoke IPA. This is not physical-device proof. The harness must be linked into a dedicated test host and run on the target iPhone to validate Metal surface creation, swapchain acquire/present, foreground/background, resize and a 10-minute soak.
 
 ## Build dynamic libraries for SDL
 
 After `./build.sh`, run `./make-dylibs.sh`. It creates `build/Frameworks/libKosmicKrisp.dylib` and `build/Frameworks/libvulkan.dylib`, matching the PoPTST adapter's sibling-library layout. Embed both in the consuming app's Frameworks directory and sign them with the app. The build script verifies the exported entrypoints.
 
 ## Integration
-For a custom Vulkan renderer, link the static archive using `-Wl,-force_load,<archive>`, add `build/include` to the header search path and use the static bridge in `Integration/Static`. Link Metal, QuartzCore, UIKit, Foundation and CoreGraphics. For SDL or a loader that expects a dynamic library path, use the dynamic adapter in `Integration/Dynamic`, put `libvulkan.dylib` and `libKosmicKrisp.dylib` side-by-side in Frameworks, and set `SDL_HINT_VULKAN_LIBRARY` to the sandbox path of the shim before SDL initialization.
+For a custom Vulkan renderer, link every archive listed in `build/static-link-archives.txt` using the generated `build/KosmicKrispLink.xcconfig` (pass it to `xcodebuild -xcconfig`), add `build/include` to the header search path and use the static bridge in `Integration/Static`. The archives are intermediate build inputs only: Xcode force-loads them into the app's main executable. Link Metal, QuartzCore, UIKit, Foundation, CoreGraphics, libc++ and zlib. Do not flatten nested archives manually or use `-undefined dynamic_lookup`. For SDL or a loader that expects a dynamic library path, use the dynamic adapter in `Integration/Dynamic`, put `libvulkan.dylib` and `libKosmicKrisp.dylib` side-by-side in Frameworks, and set `SDL_HINT_VULKAN_LIBRARY` to the sandbox path of the shim before SDL initialization.
 
 Every host project still owns its CAMetalLayer, Vulkan surface, swapchain, device/extension negotiation, frame submission, present, drawable resize, app lifecycle, memory policy and shader cache. The driver is not a PS4 runtime or renderer.
 
