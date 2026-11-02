@@ -76,13 +76,16 @@ cat > "$OUT/toolchain/ios-clang" <<'EOF'
 #!/bin/bash
 set -euo pipefail
 SDKROOT="$(xcrun --sdk iphoneos --show-sdk-path)"
-exec xcrun --sdk iphoneos clang -target arm64-apple-ios17.4 -isysroot "$SDKROOT" "$@"
+# Mesa's generated WSI/driver dispatch tables must mark unsupported entrypoints
+# as weak imports on Mach-O. The generator patch defines VK_ENTRY_WEAK only
+# when VK_ENTRY_USE_WEAK is enabled; the iOS cross toolchain must enable it.
+exec xcrun --sdk iphoneos clang -target arm64-apple-ios17.4 -isysroot "$SDKROOT" -DVK_ENTRY_USE_WEAK "$@"
 EOF
 cat > "$OUT/toolchain/ios-clangxx" <<'EOF'
 #!/bin/bash
 set -euo pipefail
 SDKROOT="$(xcrun --sdk iphoneos --show-sdk-path)"
-exec xcrun --sdk iphoneos clang++ -target arm64-apple-ios17.4 -isysroot "$SDKROOT" "$@"
+exec xcrun --sdk iphoneos clang++ -target arm64-apple-ios17.4 -isysroot "$SDKROOT" -DVK_ENTRY_USE_WEAK "$@"
 EOF
 cat > "$OUT/toolchain/ios-ar" <<'EOF'
 #!/bin/bash
@@ -188,13 +191,16 @@ nm -gU "$ARCHIVE" | grep -F '_vk_icdGetInstanceProcAddr' >/dev/null || {
 # unsupported Vulkan entrypoints as optional weak imports. On Mach-O, they must
 # remain weak_import (not hidden strong undefineds), or the final iOS link
 # rejects hundreds of commands the driver does not implement.
-for symbol in _kk_AcquireNextImageKHR _wsi_QueueSubmit; do
-  if ! nm -m "$ARCHIVE" "$KK_CMD_DISPATCH_TABLE" | awk -v symbol="$symbol" '
+# Check each generated dispatch family, including WSI. A previous build
+# checked only the KK command table and missed strong WSI references that then
+# failed the final app link.
+for symbol in _kk_AcquireNextImageKHR _wsi_QueueSubmit _wsi_AllocateCommandBuffers; do
+  if ! nm -m "$ARCHIVE" "$KK_CMD_DISPATCH_TABLE" "$WSI_ARCHIVE" | awk -v symbol="$symbol" '
     $NF == symbol && /weak external/ { found = 1 }
     END { exit !found }
   '; then
     echo "ERROR: expected optional Mach-O weak import is not weak: $symbol" >&2
-    nm -m "$ARCHIVE" "$KK_CMD_DISPATCH_TABLE" | grep -F "$symbol" >&2 || true
+    nm -m "$ARCHIVE" "$KK_CMD_DISPATCH_TABLE" "$WSI_ARCHIVE" | grep -F "$symbol" >&2 || true
     exit 1
   fi
 done
