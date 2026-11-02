@@ -17,7 +17,7 @@ header=root/"src/asurawrath_app.h"
 text=header.read_text()
 marker="// ASURA_IOS_NATIVE_LAUNCHER_V2"
 if marker in text: raise SystemExit("native launcher already applied")
-text=text.replace('#include <rex/rex_app.h>','#include <rex/rex_app.h>\n#include "asura_ios_native.h"\n#include <functional>\n#include <optional>\n#include <string>\n#include <vector>')
+text=text.replace('#include <rex/rex_app.h>','#include <rex/rex_app.h>\n#include "asura_ios_native.h"\n#include <functional>\n#include <optional>\n#include <string>\n#include <vector>\n#include <dispatch/dispatch.h>\n#include <stdexcept>')
 code=r"""
 #ifndef ASURA_IOS_BUILD_NUMBER
 #define ASURA_IOS_BUILD_NUMBER "1"
