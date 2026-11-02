@@ -39,6 +39,19 @@ jobs:
           cp -R ios upstream/ios
           python3 upstream/ios/prepare_ios.py
           python3 ios/launcher_patch.py
+          python3 - <<'PY'
+          from pathlib import Path
+          import re
+          generated = Path("upstream/src/asurawrath_app.h").read_text()
+          hooks = re.findall(r"\bvoid\s+OnPostSetup\s*\(\)\s*override", generated)
+          if len(hooks) != 1:
+              raise SystemExit(f"expected exactly one OnPostSetup override, found {len(hooks)}")
+          if 'AsuraIOSLog("HOOK OnPostSetup");' not in generated:
+              raise SystemExit("original OnPostSetup hook was not instrumented")
+          if generated.count("OnFinalizePaths(") != 1:
+              raise SystemExit("expected exactly one OnFinalizePaths override")
+          print("ASURA_IOS_GENERATED_HOOKS_PREFLIGHT_OK")
+          PY
           grep -q "ASURA_IOS_NATIVE_LAUNCHER_V4" upstream/src/asurawrath_app.h
           grep -q "OnFinalizePaths" upstream/src/asurawrath_app.h
           ! grep -q "dispatch_semaphore_wait(asura_choice_ready" upstream/src/asurawrath_app.h

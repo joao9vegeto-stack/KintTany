@@ -18,6 +18,11 @@ text=header.read_text()
 marker="// ASURA_IOS_NATIVE_LAUNCHER_V4"
 if marker in text: raise SystemExit("native launcher already applied")
 text=text.replace('#include <rex/rex_app.h>','#include <rex/rex_app.h>\n#include "asura_ios_native.h"\n#include <functional>\n#include <optional>\n#include <string>\n#include <vector>\n#include <dispatch/dispatch.h>\n#include <stdexcept>')
+# Preserve the upstream Android setup hook and instrument it in place.
+setup_hook='  void OnPostSetup() override {'
+if text.count(setup_hook)!=1:
+    raise SystemExit(f"expected exactly one upstream OnPostSetup hook, found {text.count(setup_hook)}")
+text=text.replace(setup_hook, setup_hook+'\n    AsuraIOSLog("HOOK OnPostSetup");', 1)
 code=r"""
 #ifndef ASURA_IOS_BUILD_NUMBER
 #define ASURA_IOS_BUILD_NUMBER "1"
@@ -30,7 +35,6 @@ std::filesystem::path FindAsuraGameRoot(const rex::PathConfig&paths){auto docs=s
 text=text.replace("class AsurawrathApp : public rex::ReXApp {",code+"\n"+marker+"\nclass AsurawrathApp : public rex::ReXApp {")
 method=r"""
  void OnPostInitLogging() override { AsuraIOSLog("HOOK OnPostInitLogging"); }
- void OnPostSetup() override { AsuraIOSLog("HOOK OnPostSetup"); }
  void OnPostLoadXexImage() override { AsuraIOSLog("HOOK OnPostLoadXexImage"); }
  void OnPreLaunchModule() override { AsuraIOSLog("HOOK OnPreLaunchModule"); }
  void OnShutdown() override { AsuraIOSLog("HOOK OnShutdown"); }
