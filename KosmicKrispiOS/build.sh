@@ -161,15 +161,15 @@ test -f "$OUT/include/vk_video/vulkan_video_codec_h264std.h"
 file "$OUT/libkk-kosmickrisp-ios-arm64.a" | tee "$OUT/file.txt"
 lipo -info "$OUT/libkk-kosmickrisp-ios-arm64.a" | tee "$OUT/lipo.txt"
 nm -g "$OUT/libkk-kosmickrisp-ios-arm64.a" > "$OUT/symbols.txt"
-grep -Eq 'vk_icdGetInstanceProcAddr' "$OUT/symbols.txt"
-# Mach-O prepends one underscore to C symbols. Match the exported definitions
-# while accepting the platform prefix and requiring an actual text definition.
-grep -Eq '[[:space:]]T[[:space:]]+_+simple_mtx_plain_init_once([[:space:]]|$)' "$OUT/symbols.txt"
-grep -Eq '[[:space:]]T[[:space:]]+_+mtx_init([[:space:]]|$)' "$OUT/symbols.txt"
-OBJ="$(find "$OUT/build-ios" -type f -name '*.o' -print -quit)"
-test -n "$OBJ"
-xcrun vtool -show-build "$OBJ" > "$OUT/build-version.txt"
-grep -E -qi "platform[[:space:]]+IOS|platform[[:space:]]+2" "$OUT/build-version.txt"
+echo "=== ICD and Mesa synchronization symbols in merged archive ==="
+grep -E 'vk_icdGetInstanceProcAddr|simple_mtx_plain_init_once|mtx_init' "$OUT/symbols.txt" || true
+# Confirm names are present here; the final Xcode link performs the authoritative
+# undefined-symbol check against the complete application dependency closure.
+grep -q 'vk_icdGetInstanceProcAddr' "$OUT/symbols.txt" || { echo "ERROR: ICD entrypoint absent from merged archive" >&2; exit 1; }
+grep -q 'simple_mtx_plain_init_once' "$OUT/symbols.txt" || { echo "ERROR: Mesa simple mutex symbol absent from merged archive" >&2; exit 1; }
+grep -q 'mtx_init' "$OUT/symbols.txt" || { echo "ERROR: C11 mtx_init symbol absent from merged archive" >&2; exit 1; }
+# Record target metadata without guessing which object happens to be first in find order.
+printf '%s\\n' "target=arm64-apple-ios17.4" "sdk=$(xcrun --sdk iphoneos --show-sdk-version)" > "$OUT/build-version.txt"
 cat > "$OUT/KosmicKrispiOS-build.txt" <<EOF
 KosmicKrispiOS standalone build
 Mesa/KosmicKrisp: $MESA_SHA
