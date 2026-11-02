@@ -1194,7 +1194,21 @@ uint32_t waitGuestObject(const std::shared_ptr<GuestWaitable> &waitable,
     std::unique_lock<std::mutex> lock(waitable->mutex);
     const uint64_t initialPulseGeneration = waitable->pulseGeneration;
     const uint32_t waitSequence = g_b95SyncWaitLogs.fetch_add(1u, std::memory_order_relaxed);
-    if (waitable->handle == 0x115u) recordRuntimeTrace("B97_WAIT_TARGET_BEGIN handle=0x00000115 tid=" + std::to_string(g_currentGuestThreadId) + " lr=" + std::to_string(currentLr) + " pending=" + std::to_string(waitable->unconsumedSignals) + " generation=" + std::to_string(waitable->signalGeneration));
+    if (waitable->handle == 0x115u) {
+        char target[384];
+        std::snprintf(target, sizeof(target),
+            "B98_WAIT_BEGIN handle=0x00000115 tid=%u lr=0x%08X object=0x%08X kind=%u "
+            "signaled=%u pending=%u generation=%llu creator_tid=%u creator_lr=0x%08X "
+            "manual=%u wait_count=%u",
+            g_currentGuestThreadId, currentLr, waitable->objectAddress,
+            static_cast<unsigned>(waitable->kind), waitable->signaled ? 1u : 0u,
+            waitable->unconsumedSignals,
+            static_cast<unsigned long long>(waitable->signalGeneration),
+            waitable->creatorTid, waitable->creatorLr,
+            waitable->manualReset ? 1u : 0u,
+            waitable->waitCount.load(std::memory_order_relaxed));
+        recordRuntimeTrace(target);
+    }
     if (waitSequence < 512u) {
         char event[320];
         std::snprintf(event, sizeof(event),
@@ -1260,12 +1274,16 @@ uint32_t waitGuestObject(const std::shared_ptr<GuestWaitable> &waitable,
                 recordRuntimeTrace(event);
             }
             if (waitable->handle == 0x00000112u) { char event[224]; std::snprintf(event, sizeof(event), "B83_WAIT_SATISFIED handle=0x00000112 kind=%s thread=%u count=%d manual=%u", waitable->kind == GuestWaitable::Kind::Semaphore ? "Semaphore" : "Event", static_cast<uint32_t>(g_currentGuestThreadId), waitable->semaphoreCount, waitable->manualReset ? 1u : 0u); recordRuntimeTrace(event); }
+            if (waitable->handle == 0x00000115u) recordRuntimeTrace("B98_WAIT_RESULT handle=0x00000115 status=0x00000000");
             return kNtStatusSuccess;
         }
         // Finite and infinite waits are both polled in bounded slices so every guest thread
         // can be recovered during a graphics stall. Worker threads get the earlier deadline.
         const auto nowBeforeWait = std::chrono::steady_clock::now();
-        if (deadline && nowBeforeWait >= *deadline) return kNtStatusTimeout;
+        if (deadline && nowBeforeWait >= *deadline) {
+            if (waitable->handle == 0x00000115u) recordRuntimeTrace("B98_WAIT_RESULT handle=0x00000115 status=0x00000102 reason=timeout");
+            return kNtStatusTimeout;
+        }
         const auto sliceEnd = nowBeforeWait + std::chrono::milliseconds(16);
         if (deadline) {
             if (waitable->changed.wait_until(lock, std::min(sliceEnd, *deadline), ready)) continue;
@@ -1456,6 +1474,14 @@ bool signalGuestEventStructure(uint32_t address, uint8_t *base) {
 void signalGuestEventHandle(uint32_t handle) {
     if (handle == 0u) return;
     const auto waitable = lookupGuestWaitable(handle);
+    if (handle == 0x00000115u) {
+        char event[320];
+        std::snprintf(event, sizeof(event),
+            "B98_EVENT_SIGNAL_ATTEMPT handle=0x00000115 found=%u kind=%u creator_tid=%u creator_lr=0x%08X",
+            waitable ? 1u : 0u, waitable ? static_cast<unsigned>(waitable->kind) : 0u,
+            waitable ? waitable->creatorTid : 0u, waitable ? waitable->creatorLr : 0u);
+        recordRuntimeTrace(event);
+    }
     if (!waitable || waitable->kind != GuestWaitable::Kind::Event) return;
     signalGuestWaitable(waitable);
 }
@@ -8341,6 +8367,8 @@ void xowue_NtCreateEvent(PPCContext &context, uint8_t *base) {
     waitable->objectAddress = objectAddress;
     waitable->manualReset = eventType == 0u;
     waitable->signaled = initialState != 0u;
+    waitable->creatorLr = static_cast<uint32_t>(context.lr);
+    waitable->creatorTid = g_currentGuestThread ? g_currentGuestThread->id : g_currentGuestThreadId;
     {
         std::lock_guard<std::mutex> lock(g_guestObjectMutex);
         g_guestWaitables[handle] = waitable;
@@ -8361,6 +8389,16 @@ void xowue_NtCreateEvent(PPCContext &context, uint8_t *base) {
                   handle, eventType, eventType == 0u ? 1u : 0u, initialState != 0u ? 1u : 0u,
                   objectAttributes != 0 ? 1u : 0u);
     recordRuntimeTrace(event);
+    if (handle == 0x00000115u) {
+        char target[320];
+        std::snprintf(target, sizeof(target),
+            "B98_EVENT_CREATE handle=0x00000115 object=0x%08X type=%u manual=%u initial=%u "
+            "creator_tid=%u creator_lr=0x%08X handle_out=0x%08X",
+            objectAddress, eventType, waitable->manualReset ? 1u : 0u,
+            initialState ? 1u : 0u, waitable->creatorTid, waitable->creatorLr,
+            handlePointer);
+        recordRuntimeTrace(target);
+    }
 }
 
 
