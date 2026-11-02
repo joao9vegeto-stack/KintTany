@@ -199,19 +199,21 @@ for symbol in _kk_AcquireNextImageKHR _wsi_QueueSubmit; do
   fi
 done
 
-# Meson's target graph also emits two archives that are not dependencies of the
-# full Vulkan runtime used by KosmicKrisp: the GTest support library and the
-# alternate lite-instance implementation. Force-loading either is incorrect.
-# Keep the Meson archives separate until the final Xcode link. Force-loading
-# each archive makes every static dependency part of SpartanPort.app's main
-# executable; no helper executable, dylib, or .a is shipped in the IPA.
+# Meson emits overlapping static archives: parent archives may contain object
+# members that are also present in their dependency archives. Force-loading
+# every archive duplicates those definitions (the previous iOS link failed
+# with 1,515 duplicate symbols). Force-load only the ICD root archive so its
+# entrypoint is guaranteed to be included; pass dependency archives as normal
+# linker inputs so ld extracts only members needed to resolve remaining
+# references. Never use dynamic_lookup to mask missing Vulkan symbols.
 LINK_CONFIG="$OUT/KosmicKrispLink.xcconfig"
 {
-  printf 'OTHER_LDFLAGS = $(inherited) -Wl,-u,_vk_icdGetInstanceProcAddr'
+  printf 'OTHER_LDFLAGS = $(inherited) -Wl,-u,_vk_icdGetInstanceProcAddr -Wl,-force_load,%s' "$ARCHIVE"
   for archive in "${LINK_ARCHIVES[@]}"; do
-    printf ' -Wl,-force_load,%s' "$archive"
+    [[ "$archive" == "$ARCHIVE" ]] && continue
+    printf ' %s' "$archive"
   done
-  printf ' -Wl,-undefined,dynamic_lookup -framework Metal -framework QuartzCore -framework UIKit -framework Foundation -framework CoreGraphics -lc++ -lz\n'
+  printf ' -framework Metal -framework QuartzCore -framework UIKit -framework Foundation -framework CoreGraphics -lc++ -lz\\n'
 } > "$LINK_CONFIG"
 cp "$SMOKE" "$OUT/KosmicKrispM3B-smoke-objects.a"
 mkdir -p "$OUT/include"
