@@ -1,14 +1,16 @@
 import Foundation
 
 enum PS4ELFInspectorError: LocalizedError {
-    case truncatedHeader, notELF, not64Bit, notLittleEndian
+    case truncatedHeader, notELF, selfContainer, not64Bit, notLittleEndian
     case unsupportedMachine(UInt16)
     case invalidProgramHeaderTable
 
     var errorDescription: String? {
         switch self {
-        case .truncatedHeader: return "eboot.bin é menor que um cabeçalho ELF64."
-        case .notELF: return "eboot.bin não é um ELF decifrado; pode ser um SELF criptografado ou um arquivo inválido."
+        case .truncatedHeader: return "eboot.bin é menor que o cabeçalho mínimo esperado."
+        case .notELF: return "eboot.bin não contém um cabeçalho ELF decifrado válido."
+        case .selfContainer:
+            return "eboot.bin é um contêiner SELF (SCE). Este app ainda não descriptografa nem extrai SELF; forneça um ELF já preparado por uma ferramenta compatível."
         case .not64Bit: return "O executável não usa o formato ELF de 64 bits."
         case .notLittleEndian: return "O executável ELF não está em little-endian."
         case .unsupportedMachine(let machine):
@@ -25,13 +27,21 @@ enum PS4ELFInspector {
     static func inspect(_ executableURL: URL) throws -> [String] {
         let handle = try FileHandle(forReadingFrom: executableURL)
         defer { try? handle.close() }
-        let header = try handle.read(upToCount: 64) ?? Data()
-        guard header.count == 64 else { throw PS4ELFInspectorError.truncatedHeader }
-        let bytes = Array(header)
 
-        guard bytes[0] == 0x7f, bytes[1] == 0x45, bytes[2] == 0x4c, bytes[3] == 0x46 else {
+        let magic = try handle.read(upToCount: 4) ?? Data()
+        guard magic.count == 4 else { throw PS4ELFInspectorError.truncatedHeader }
+        let prefix = Array(magic)
+        if prefix == [0x53, 0x43, 0x45, 0x00] {
+            throw PS4ELFInspectorError.selfContainer
+        }
+        guard prefix == [0x7f, 0x45, 0x4c, 0x46] else {
             throw PS4ELFInspectorError.notELF
         }
+
+        let remainder = try handle.read(upToCount: 60) ?? Data()
+        guard remainder.count == 60 else { throw PS4ELFInspectorError.truncatedHeader }
+        let bytes = prefix + Array(remainder)
+
         guard bytes[4] == 2 else { throw PS4ELFInspectorError.not64Bit }
         guard bytes[5] == 1 else { throw PS4ELFInspectorError.notLittleEndian }
         guard bytes[6] == 1 else { throw PS4ELFInspectorError.notELF }
