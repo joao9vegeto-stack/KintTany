@@ -169,7 +169,12 @@ jobs:
           cmake -S upstream -B upstream/build-ios -G Xcode \
             -DCMAKE_SYSTEM_NAME=iOS -DCMAKE_OSX_SYSROOT=iphoneos \
             -DCMAKE_OSX_ARCHITECTURES=arm64 -DCMAKE_OSX_DEPLOYMENT_TARGET="$IOS_DEPLOYMENT_TARGET" \
-            -DCMAKE_BUILD_TYPE=Release -DREXGLUE_USE_VULKAN=ON -DREXGLUE_USE_D3D12=OFF
+            -DCMAKE_BUILD_TYPE=Release -DREXGLUE_USE_VULKAN=ON -DREXGLUE_USE_D3D12=OFF \
+            -DCMAKE_XCODE_ATTRIBUTE_CODE_SIGNING_ALLOWED=NO \
+            -DCMAKE_XCODE_ATTRIBUTE_CODE_SIGNING_REQUIRED=NO \
+            -DCMAKE_XCODE_ATTRIBUTE_CODE_SIGN_IDENTITY="" \
+            -DCMAKE_XCODE_ATTRIBUTE_DEVELOPMENT_TEAM="" \
+            -DCMAKE_XCODE_ATTRIBUTE_PROVISIONING_PROFILE_SPECIFIER=""
           cmake --build upstream/build-ios --config Release --target asura_wrath_recomp --parallel 3
           APP="$(find upstream/build-ios -type d -name 'asura_wrath_recomp.app' -print -quit)"
           test -n "$APP"
