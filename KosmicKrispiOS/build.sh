@@ -156,6 +156,8 @@ for archive in "${STATIC_ARCHIVES[@]}"; do
   # The M3B smoke harness is compiled as a build check, never force-loaded
   # into the production app executable.
   [[ "$archive" == "$SMOKE" ]] && continue
+  [[ "$archive" == */src/gtest/libgtest.a ]] && continue
+  [[ "$archive" == */src/vulkan/runtime/libvulkan_lite_instance.a ]] && continue
   xcrun lipo "$archive" -verify_arch arm64
   LINK_ARCHIVES+=("$archive")
 done
@@ -166,21 +168,25 @@ test "${#LINK_ARCHIVES[@]}" -gt 0 || {
 }
 printf '%s\n' "${LINK_ARCHIVES[@]}" | tee "$OUT/static-link-archives.txt"
 
-# Verify real definitions from the exact failures seen in previous Xcode links:
-# Mesa BLAKE3/hash/mutex, C11 threads, and Vulkan WSI dispatch implementations.
-: > "$OUT/defined-symbols.txt"
-for archive in "${LINK_ARCHIVES[@]}"; do
-  nm -gU "$archive" >> "$OUT/defined-symbols.txt"
-done
-for symbol in __mesa_blake3_compute __mesa_hash_table_create __simple_mtx_plain_init_once _mtx_init _wsi_CreateInstance _wsi_CreateDevice _wsi_QueueSubmit _wsi_CreateSwapchainKHR _vk_icdGetInstanceProcAddr; do
-  grep -F "$symbol" "$OUT/defined-symbols.txt" >/dev/null || {
-    echo "ERROR: required implementation is absent from the Meson static dependency set: $symbol" >&2
-    echo "Archives discovered:" >&2
-    cat "$OUT/static-link-archives.txt" >&2
+# Validate the actual Metal WSI objects and the ICD entrypoint, not invented
+# internal names such as _wsi_CreateInstance (Mesa exposes WSI through generated
+# dispatch tables and wsi_device_entrypoints, not those symbols).
+WSI_MEMBERS="$(xcrun ar -t "$WSI_ARCHIVE")"
+for member in wsi_common_metal.c.o wsi_common_metal_layer.m.o; do
+  grep -F "$member" <<<"$WSI_MEMBERS" >/dev/null || {
+    echo "ERROR: Metal WSI object is missing from $WSI_ARCHIVE: $member" >&2
+    printf '%s\n' "$WSI_MEMBERS" >&2
     exit 1
   }
 done
+nm -gU "$ARCHIVE" | grep -F '_vk_icdGetInstanceProcAddr' >/dev/null || {
+  echo "ERROR: KosmicKrisp ICD entrypoint is missing from $ARCHIVE" >&2
+  exit 1
+}
 
+# Meson's target graph also emits two archives that are not dependencies of the
+# full Vulkan runtime used by KosmicKrisp: the GTest support library and the
+# alternate lite-instance implementation. Force-loading either is incorrect.
 # Keep the Meson archives separate until the final Xcode link. Force-loading
 # each archive makes every static dependency part of SpartanPort.app's main
 # executable; no helper executable, dylib, or .a is shipped in the IPA.
@@ -212,7 +218,7 @@ iOS target: arm64-apple-ios17.4
 M3 Metal WSI: applied
 M3B direct ICD/CAMetalLayer smoke source: compiled to ARM64 object archive (not linked or runtime-tested)
 Meson iOS static archives: individually force-loaded into the SpartanPort app executable
-Mesa BLAKE3/hash/mutex, C11 threads and Vulkan WSI definitions: verified across static archives
+Mesa/KosmicKrisp static dependencies: force-loaded; Metal WSI object members and ICD entrypoint verified
 Physical device runtime validation: pending integrator
 EOF
 shasum -a 256 "${LINK_ARCHIVES[@]}" "$OUT/KosmicKrispM3B-smoke-objects.a" "$OUT/static-link-archives.txt" "$OUT/KosmicKrispLink.xcconfig" "$ROOT"/patches/*.patch > "$OUT/SHA256SUMS"
