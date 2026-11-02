@@ -45,4 +45,24 @@ assert 'elseif(APPLE)\n    set(REXUI_PLATFORM_SOURCES' in ui_text
 ui.write_text(ui_text.replace('elseif(APPLE)\n    set(REXUI_PLATFORM_SOURCES',
                               'elseif(APPLE)\n    set(REXUI_PLATFORM_SOURCES', 1))
 
+# The bundled Vulkan-Loader derives SYSTEM_PROCESSOR from
+# CMAKE_SYSTEM_PROCESSOR. CMake's iOS/Xcode toolchain can leave that empty
+# even with CMAKE_OSX_ARCHITECTURES=arm64, which makes its unquoted
+# "if(WIN32 AND ${SYSTEM_PROCESSOR} MATCHES ...)" expressions syntactically
+# invalid. Seed the loader's own architecture variable from the selected
+# Apple target architecture before it configures its loader subdirectory.
+loader_cmake = root / "tools/rexglue/thirdparty/vulkan-loader/CMakeLists.txt"
+loader_text = loader_cmake.read_text()
+loader_needle = '    string(TOLOWER "${CMAKE_SYSTEM_PROCESSOR}" SYSTEM_PROCESSOR)'
+assert loader_text.count(loader_needle) == 1, "unexpected Vulkan-Loader architecture detection"
+loader_replacement = loader_needle + '''
+    if(NOT SYSTEM_PROCESSOR AND CMAKE_OSX_ARCHITECTURES)
+        string(TOLOWER "${CMAKE_OSX_ARCHITECTURES}" SYSTEM_PROCESSOR)
+    endif()
+    if(NOT SYSTEM_PROCESSOR)
+        message(FATAL_ERROR "Vulkan-Loader could not determine target architecture")
+    endif()
+'''
+loader_cmake.write_text(loader_text.replace(loader_needle, loader_replacement))
+
 print("ASURA_IOS_CMAKE_PATCH_OK")
