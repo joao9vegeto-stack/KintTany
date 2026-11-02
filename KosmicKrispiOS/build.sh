@@ -156,7 +156,7 @@ for archive in "${STATIC_ARCHIVES[@]}"; do
   # The M3B smoke harness is compiled as a build check, never force-loaded
   # into the production app executable.
   [[ "$archive" == "$SMOKE" ]] && continue
-  xcrun lipo -verify_arch arm64 "$archive"
+  xcrun lipo "$archive" -verify_arch arm64
   LINK_ARCHIVES+=("$archive")
 done
 test "${#LINK_ARCHIVES[@]}" -gt 0 || {

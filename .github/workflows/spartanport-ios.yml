@@ -81,7 +81,7 @@ jobs:
           EXECUTABLE="$(/usr/libexec/PlistBuddy -c 'Print :CFBundleExecutable' "$APP/Info.plist")"
           APP_BINARY="$APP/$EXECUTABLE"
           test -s "$APP_BINARY"
-          xcrun lipo -verify_arch arm64 "$APP_BINARY"
+          xcrun lipo "$APP_BINARY" -verify_arch arm64
           nm -gU "$APP_BINARY" | grep -F '_vk_icdGetInstanceProcAddr'
           if otool -L "$APP_BINARY" | grep -E 'libKosmicKrisp|libvulkan\.dylib'; then
             echo "ERROR: KosmicKrisp was left as a dynamic dependency instead of being linked into the app executable." >&2
