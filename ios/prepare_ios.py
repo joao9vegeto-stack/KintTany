@@ -17,6 +17,7 @@ if(CMAKE_SYSTEM_NAME STREQUAL "iOS")
   target_sources(asura_wrath_recomp PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/ios/kosmickrisp_probe.m")
   target_sources(asura_wrath_recomp PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/ios/asura_ios_native.mm")
   set_source_files_properties(ios/asura_ios_native.mm PROPERTIES COMPILE_FLAGS "-fobjc-arc -fblocks")
+  target_compile_definitions(asura_wrath_recomp PRIVATE ASURA_IOS_BUILD_NUMBER=\"${ASURA_IOS_BUILD_NUMBER}\")
   target_link_libraries(asura_wrath_recomp PRIVATE
     "-framework UIKit" "-framework Metal" "-framework QuartzCore"
     "-framework Foundation" "-framework GameController"
