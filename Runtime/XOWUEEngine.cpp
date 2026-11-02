@@ -391,6 +391,11 @@ thread_local uint32_t g_b90PreviousEntryLr = 0u;
 std::atomic<uint32_t> g_b90StreamTransitionLogs{0u};
 std::atomic<uint32_t> g_b95SyncWaitLogs{0u};
 std::atomic<uint32_t> g_b95SyncSignalLogs{0u};
+std::array<std::atomic<bool>, 8> g_b97MoviePpcDumped{};
+std::atomic<uint32_t> g_b98WaitTargetLogs{0u};
+std::atomic<uint32_t> g_b98WaitResultLogs{0u};
+std::atomic<uint32_t> g_b98SignalAttemptLogs{0u};
+std::atomic<uint32_t> g_syncObjectRejectLogs{0u};
 std::mutex g_tlsMutex;
 std::mutex g_virtualMemoryMutex;
 std::mutex g_guestObjectMutex;
@@ -1101,7 +1106,7 @@ std::shared_ptr<GuestThread> lookupGuestThread(uint32_t handleOrObject) {
 }
 
 std::shared_ptr<GuestWaitable> ensurePointerWaitable(uint32_t address, uint8_t *base) {
-    if (!base || address > kGuestAddressSpaceSize - 8u) return nullptr;
+    if (!base || !validGuestRange(address, 0x18u)) return nullptr;
     {
         std::lock_guard<std::mutex> lock(g_guestObjectMutex);
         const auto object = g_guestWaitables.find(address);
@@ -1109,21 +1114,54 @@ std::shared_ptr<GuestWaitable> ensurePointerWaitable(uint32_t address, uint8_t *
         const auto found = g_guestPointerWaitables.find(address);
         if (found != g_guestPointerWaitables.end()) return found->second;
     }
+
+    // Kernel dispatcher objects must be initialized explicitly. Never reinterpret
+    // arbitrary guest data (for example a Bink stream/cache pointer) as a
+    // signaled synchronization event merely because its +4 dword is nonzero.
+    if (auto thread = lookupGuestThread(address); thread && thread->completion)
+        return thread->completion;
+
+    bool isCriticalSection = false;
+    {
+        std::lock_guard<std::mutex> lock(g_criticalSectionMapMutex);
+        isCriticalSection = g_criticalSectionLocks.find(address) != g_criticalSectionLocks.end();
+    }
+    const uint8_t objectType = base[address];
+    if (isCriticalSection || (objectType != 0u && objectType != 1u)) {
+        const uint32_t sample = g_syncObjectRejectLogs.fetch_add(1u, std::memory_order_relaxed);
+        if (sample < 64u || address == 0x40270000u) {
+            char event[256];
+            std::snprintf(event, sizeof(event),
+                "XOWUE_SYNC_REJECT object=0x%08X type=0x%02X signal_state=0x%08X critical_section=%u tid=%u lr=0x%08X",
+                address, objectType, PPC_LOAD_U32(address + 4u), isCriticalSection ? 1u : 0u,
+                g_currentGuestThreadId,
+                g_currentGuestThread ? g_currentGuestThread->lastGuestLr.load(std::memory_order_relaxed) : 0u);
+            recordRuntimeTrace(event);
+        }
+        return nullptr;
+    }
+
     auto waitable = std::make_shared<GuestWaitable>();
     waitable->kind = GuestWaitable::Kind::Event;
     waitable->objectAddress = address;
     waitable->guestHeaderAddr = address;
     waitable->creatorLr = g_currentGuestThread ? g_currentGuestThread->lastGuestLr.load(std::memory_order_relaxed) : 0u;
     waitable->creatorTid = g_currentGuestThread ? g_currentGuestThread->id : g_currentGuestThreadId;
-    waitable->manualReset = (base[address] == 0u);
+    waitable->manualReset = objectType == 0u; // NotificationEvent=0; SynchronizationEvent=1.
     waitable->signaled = PPC_LOAD_U32(address + 4u) != 0u;
+    waitable->unconsumedSignals = waitable->signaled ? 1u : 0u;
     {
         std::lock_guard<std::mutex> lock(g_guestObjectMutex);
         const auto inserted = g_guestPointerWaitables.emplace(address, waitable);
         if (!inserted.second) return inserted.first->second;
     }
     if (g_syncObjectLogs.fetch_add(1u, std::memory_order_relaxed) < 32u) {
-        char event[256]; std::snprintf(event, sizeof(event), "XOWUE_SYNC_CREATE handle=0x%08X type=Event guest_addr=0x%08X initial=%u tid=0x%08X lr=0x%08X", address, address, waitable->signaled ? 1u : 0u, waitable->creatorTid, waitable->creatorLr); recordRuntimeTrace(event);
+        char event[256];
+        std::snprintf(event, sizeof(event),
+            "XOWUE_SYNC_CREATE object=0x%08X type=Event event_type=%u initial=%u tid=%u lr=0x%08X",
+            address, objectType, waitable->signaled ? 1u : 0u,
+            waitable->creatorTid, waitable->creatorLr);
+        recordRuntimeTrace(event);
     }
     return waitable;
 }
@@ -1194,13 +1232,15 @@ uint32_t waitGuestObject(const std::shared_ptr<GuestWaitable> &waitable,
     std::unique_lock<std::mutex> lock(waitable->mutex);
     const uint64_t initialPulseGeneration = waitable->pulseGeneration;
     const uint32_t waitSequence = g_b95SyncWaitLogs.fetch_add(1u, std::memory_order_relaxed);
-    if (waitable->handle == 0x115u) {
+    const uint32_t b98WaitSample = g_b98WaitTargetLogs.fetch_add(1u, std::memory_order_relaxed) + 1u;
+    if (waitable->handle == 0x115u &&
+        (b98WaitSample <= 16u || (b98WaitSample % 256u) == 0u)) {
         char target[384];
         std::snprintf(target, sizeof(target),
-            "B98_WAIT_BEGIN handle=0x00000115 tid=%u lr=0x%08X object=0x%08X kind=%u "
+            "B98_WAIT_BEGIN sample=%u handle=0x00000115 tid=%u lr=0x%08X object=0x%08X kind=%u "
             "signaled=%u pending=%u generation=%llu creator_tid=%u creator_lr=0x%08X "
             "manual=%u wait_count=%u",
-            g_currentGuestThreadId, currentLr, waitable->objectAddress,
+            b98WaitSample, g_currentGuestThreadId, currentLr, waitable->objectAddress,
             static_cast<unsigned>(waitable->kind), waitable->signaled ? 1u : 0u,
             waitable->unconsumedSignals,
             static_cast<unsigned long long>(waitable->signalGeneration),
@@ -1222,6 +1262,17 @@ uint32_t waitGuestObject(const std::shared_ptr<GuestWaitable> &waitable,
             static_cast<unsigned long long>(waitable->pulseGeneration), currentLr);
         recordRuntimeTrace(event);
     }
+    const auto logB98WaitResult = [&](uint32_t status, const char *reason) {
+        if (waitable->handle != 0x115u) return;
+        const uint32_t sample = g_b98WaitResultLogs.fetch_add(1u, std::memory_order_relaxed) + 1u;
+        if (sample <= 16u || (sample % 256u) == 0u) {
+            char event[192];
+            std::snprintf(event, sizeof(event),
+                "B98_WAIT_RESULT sample=%u handle=0x00000115 status=0x%08X reason=%s",
+                sample, status, reason);
+            recordRuntimeTrace(event);
+        }
+    };
     const auto ready = [&] {
         const bool available = waitable->kind == GuestWaitable::Kind::Semaphore
             ? waitable->semaphoreCount > 0
@@ -1274,20 +1325,23 @@ uint32_t waitGuestObject(const std::shared_ptr<GuestWaitable> &waitable,
                 recordRuntimeTrace(event);
             }
             if (waitable->handle == 0x00000112u) { char event[224]; std::snprintf(event, sizeof(event), "B83_WAIT_SATISFIED handle=0x00000112 kind=%s thread=%u count=%d manual=%u", waitable->kind == GuestWaitable::Kind::Semaphore ? "Semaphore" : "Event", static_cast<uint32_t>(g_currentGuestThreadId), waitable->semaphoreCount, waitable->manualReset ? 1u : 0u); recordRuntimeTrace(event); }
-            if (waitable->handle == 0x00000115u) recordRuntimeTrace("B98_WAIT_RESULT handle=0x00000115 status=0x00000000");
+            logB98WaitResult(kNtStatusSuccess, "signaled");
             return kNtStatusSuccess;
         }
         // Finite and infinite waits are both polled in bounded slices so every guest thread
         // can be recovered during a graphics stall. Worker threads get the earlier deadline.
         const auto nowBeforeWait = std::chrono::steady_clock::now();
         if (deadline && nowBeforeWait >= *deadline) {
-            if (waitable->handle == 0x00000115u) recordRuntimeTrace("B98_WAIT_RESULT handle=0x00000115 status=0x00000102 reason=timeout");
+            logB98WaitResult(kNtStatusTimeout, "timeout");
             return kNtStatusTimeout;
         }
         const auto sliceEnd = nowBeforeWait + std::chrono::milliseconds(16);
         if (deadline) {
             if (waitable->changed.wait_until(lock, std::min(sliceEnd, *deadline), ready)) continue;
-            if (std::chrono::steady_clock::now() >= *deadline) return kNtStatusTimeout;
+            if (std::chrono::steady_clock::now() >= *deadline) {
+                logB98WaitResult(kNtStatusTimeout, "timeout_after_slice");
+                return kNtStatusTimeout;
+            }
         } else if (waitable->changed.wait_for(lock, std::chrono::milliseconds(16), ready)) {
             continue;
         }
@@ -1474,11 +1528,13 @@ bool signalGuestEventStructure(uint32_t address, uint8_t *base) {
 void signalGuestEventHandle(uint32_t handle) {
     if (handle == 0u) return;
     const auto waitable = lookupGuestWaitable(handle);
-    if (handle == 0x00000115u) {
+    const uint32_t signalSample = g_b98SignalAttemptLogs.fetch_add(1u, std::memory_order_relaxed) + 1u;
+    if (handle == 0x00000115u &&
+        (signalSample <= 16u || (signalSample % 256u) == 0u)) {
         char event[320];
         std::snprintf(event, sizeof(event),
-            "B98_EVENT_SIGNAL_ATTEMPT handle=0x00000115 found=%u kind=%u creator_tid=%u creator_lr=0x%08X",
-            waitable ? 1u : 0u, waitable ? static_cast<unsigned>(waitable->kind) : 0u,
+            "B98_EVENT_SIGNAL_ATTEMPT sample=%u handle=0x00000115 found=%u kind=%u creator_tid=%u creator_lr=0x%08X",
+            signalSample, waitable ? 1u : 0u, waitable ? static_cast<unsigned>(waitable->kind) : 0u,
             waitable ? waitable->creatorTid : 0u, waitable ? waitable->creatorLr : 0u);
         recordRuntimeTrace(event);
     }
@@ -2294,12 +2350,15 @@ void xowue_thread_checkpoint(uint32_t guestAddress);
 static void xowue_trace_hot_guest_entry(uint32_t guestAddress, PPCContext &ctx);
 void xowue_thread_checkpoint(uint32_t guestAddress,PPCContext &ctx){
     // Build 97: observe media-related PPC entries and raw guest instruction words.
-    if (guestAddress == 0x8236E738u || guestAddress == 0x82C3C5E8u ||
-        guestAddress == 0x82C3C4D8u || guestAddress == 0x82C3E928u ||
-        guestAddress == 0x82C4D4A8u || guestAddress == 0x82427940u ||
-        guestAddress == 0x82370500u || guestAddress == 0x822A0278u) {
-        static std::atomic<uint32_t> b97Count{0u};
-        if (b97Count.fetch_add(1u, std::memory_order_relaxed) < 512u) {
+    {
+        static constexpr std::array<uint32_t, 8> kMoviePpcAddresses{
+            0x8236E738u, 0x82C3C5E8u, 0x82C3C4D8u, 0x82C3E928u,
+            0x82C4D4A8u, 0x82427940u, 0x82370500u, 0x822A0278u
+        };
+        for (size_t index = 0; index < kMoviePpcAddresses.size(); ++index) {
+            if (guestAddress != kMoviePpcAddresses[index] ||
+                g_b97MoviePpcDumped[index].exchange(true, std::memory_order_acq_rel))
+                continue;
             char event[512];
             std::snprintf(event, sizeof(event),
                 "B97_MOVIE_PPC pc=0x%08X tid=%u lr=0x%08X sp=0x%08X r3=0x%08X r4=0x%08X r5=0x%08X r6=0x%08X r7=0x%08X r8=0x%08X r9=0x%08X r10=0x%08X r11=0x%08X r12=0x%08X r30=0x%08X r31=0x%08X",
@@ -2318,6 +2377,7 @@ void xowue_thread_checkpoint(uint32_t guestAddress,PPCContext &ctx){
                     recordRuntimeTrace(word);
                 }
             }
+            break;
         }
     }
     // Check before diagnostic work: a stop request must not be delayed by a
@@ -3263,6 +3323,11 @@ extern "C" int xowue_boot_xex(const char *path, char *output, size_t output_capa
         g_b86StreamAnomalyDumped.store(false, std::memory_order_relaxed);
         g_runtimeTracePersistB87.store(0, std::memory_order_relaxed);
     g_runtimeTracePersistB92.store(0, std::memory_order_relaxed);
+        for (auto &dumped : g_b97MoviePpcDumped) dumped.store(false, std::memory_order_relaxed);
+        g_b98WaitTargetLogs.store(0u, std::memory_order_relaxed);
+        g_b98WaitResultLogs.store(0u, std::memory_order_relaxed);
+        g_b98SignalAttemptLogs.store(0u, std::memory_order_relaxed);
+        g_syncObjectRejectLogs.store(0u, std::memory_order_relaxed);
         g_b87StreamWaitCalls.store(0, std::memory_order_relaxed);
         g_b87StreamAnomalyDumped.store(false, std::memory_order_relaxed);
         g_b87FileReadLogs.store(0, std::memory_order_relaxed);
@@ -8054,6 +8119,64 @@ void xowue_KeQuerySystemTime(PPCContext &context, uint8_t *base) {
             std::chrono::duration_cast<std::chrono::nanoseconds>(now).count() / 100);
         PPC_STORE_U64(output, ticks);
     }
+}
+
+void xowue_KeInitializeEvent(PPCContext &context, uint8_t *base) {
+    const uint32_t address = context.r3.u32;
+    const uint32_t eventType = context.r4.u32;
+    const uint32_t initialState = context.r5.u32;
+    if (!base || !validGuestRange(address, 0x18u) || eventType > 1u) {
+        recordRuntimeTrace("KeInitializeEvent rejected guest address or event type");
+        return;
+    }
+
+    std::shared_ptr<GuestWaitable> event;
+    {
+        std::lock_guard<std::mutex> lock(g_guestObjectMutex);
+        const auto pointer = g_guestPointerWaitables.find(address);
+        if (pointer != g_guestPointerWaitables.end()) event = pointer->second;
+        if (!event) {
+            const auto object = g_guestWaitables.find(address);
+            if (object != g_guestWaitables.end() && object->second->objectAddress == address)
+                event = object->second;
+        }
+        if (!event) event = std::make_shared<GuestWaitable>();
+        g_guestPointerWaitables[address] = event;
+        g_guestWaitables[address] = event;
+    }
+
+    {
+        std::lock_guard<std::mutex> lock(event->mutex);
+        event->kind = GuestWaitable::Kind::Event;
+        event->objectAddress = address;
+        event->guestHeaderAddr = address;
+        event->manualReset = eventType == 0u;
+        event->signaled = initialState != 0u;
+        event->unconsumedSignals = initialState != 0u ? 1u : 0u;
+        event->signalGeneration = 0u;
+        event->pulseGeneration = 0u;
+        event->semaphoreCount = 0;
+        event->semaphoreLimit = 0;
+        event->ownerThread = 0u;
+        event->recursion = 0u;
+        event->creatorLr = static_cast<uint32_t>(context.lr);
+        event->creatorTid = g_currentGuestThread ? g_currentGuestThread->id : g_currentGuestThreadId;
+        event->signalCount.store(initialState != 0u ? 1u : 0u, std::memory_order_relaxed);
+        event->waitCount.store(0u, std::memory_order_relaxed);
+    }
+
+    std::memset(base + address, 0, 0x18u);
+    base[address] = static_cast<uint8_t>(eventType);
+    PPC_STORE_U32(address + 4u, initialState != 0u ? 1u : 0u);
+    event->changed.notify_all();
+    g_waitSetChanged.notify_all();
+
+    char trace[224];
+    std::snprintf(trace, sizeof(trace),
+        "KeInitializeEvent object=0x%08X type=%u manual=%u initial=%u tid=%u lr=0x%08X",
+        address, eventType, event->manualReset ? 1u : 0u, initialState != 0u ? 1u : 0u,
+        event->creatorTid, event->creatorLr);
+    recordRuntimeTrace(trace);
 }
 
 void xowue_KeInitializeSemaphore(PPCContext &context, uint8_t *base) {

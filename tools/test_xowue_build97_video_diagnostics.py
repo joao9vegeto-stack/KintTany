@@ -11,8 +11,15 @@ print("Xenia playback oracle: " + " -> ".join(expected_xenia_movie_order))
 
 required = {
     "B97 records bypass legacy sampling": 'event.find("B97_")',
-    "targeted wait handle 0x115": "B97_WAIT_TARGET_BEGIN",
+    "targeted wait handle 0x115": "B98_WAIT_BEGIN",
+    "targeted event creation metadata": "B98_EVENT_CREATE",
+    "targeted signal attempt handle 0x115": "B98_EVENT_SIGNAL_ATTEMPT",
     "targeted signal handle 0x115": "B97_SIGNAL_TARGET",
+    "native KeInitializeEvent": "void xowue_KeInitializeEvent",
+    "strict dispatcher-object pointer validation": "objectType != 0u && objectType != 1u",
+    "invalid dispatcher-object diagnostics": "XOWUE_SYNC_REJECT",
+    "per-address PPC code snapshots": "g_b97MoviePpcDumped[index].exchange",
+    "bounded B98 wait diagnostics": "g_b98WaitTargetLogs.fetch_add",
     "PPC media callsite register capture": "B97_MOVIE_PPC",
     "PPC media instruction words": "B97_MOVIE_PPC_WORD",
     "movie scatter read evidence": "B97_MOVIE_SCATTER",
@@ -35,6 +42,15 @@ for label, token in required.items():
     print(f"{'PASS' if ok else 'FAIL'}: {label}")
     if not ok:
         failed.append(label)
+
+pointer_wait_start = source.index("std::shared_ptr<GuestWaitable> ensurePointerWaitable(")
+pointer_wait_end = source.index("\n}\n", pointer_wait_start)
+pointer_wait_body = source[pointer_wait_start:pointer_wait_end]
+if "objectType != 0u && objectType != 1u" not in pointer_wait_body:
+    failed.append("pointer wait must reject non-dispatcher guest memory")
+    print("FAIL: pointer wait must reject non-dispatcher guest memory")
+else:
+    print("PASS: pointer wait rejects arbitrary guest memory")
 
 wait_start = source.index("uint32_t waitGuestObject(")
 wait_end = source.index("\n}\n", wait_start)
