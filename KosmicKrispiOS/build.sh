@@ -47,7 +47,7 @@ fi
 git -C "$OUT/mesa-src" fetch --depth=1 origin "$MESA_SHA"
 git -C "$OUT/mesa-src" checkout --detach "$MESA_SHA"
 test "$(git -C "$OUT/mesa-src" rev-parse HEAD)" = "$MESA_SHA"
-for patch in "$ROOT/patches/0001-kosmickrisp-ios-m2.patch" "$ROOT/patches/0002-kosmickrisp-ios-m3-metal-wsi.patch" "$ROOT/patches/0003-kosmickrisp-ios-m3b-smoke-target.patch"; do
+for patch in "$ROOT/patches/0001-kosmickrisp-ios-m2.patch" "$ROOT/patches/0002-kosmickrisp-ios-m3-metal-wsi.patch" "$ROOT/patches/0003-kosmickrisp-ios-m3b-smoke-target.patch" "$ROOT/patches/0004-kosmickrisp-ios-macho-weak-import.patch"; do
   git -C "$OUT/mesa-src" apply --check "$patch"
   git -C "$OUT/mesa-src" apply "$patch"
 done
