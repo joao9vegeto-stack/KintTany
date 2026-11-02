@@ -1,26 +1,22 @@
 # iOS guest data-memory layer (AOT-only runtime)
 
-This directory contains a data-memory primitive for the PS4 runtime port.
+The guest arena is allocated with Apple's public `vm_allocate`, `vm_protect`
+and `vm_deallocate` APIs. The iOS SDK intentionally rejects
+`<mach/mach_vm.h>`; using the unsupported 64-bit Mach VM header caused the
+first Xcode 26 simulator test build to fail. On arm64, the public
+`vm_address_t` and `vm_size_t` are pointer-width and support the 64-bit arena.
 
-* Guest memory is a contiguous, relocatable **data** arena. Guest virtual
-  addresses are offsets from its host base; Linux-style fixed low-address
-  mappings are not requested.
-* Per-range data-page protection is implemented with Mach VM protections and
-  checked bounds.
-* Executable pages are intentionally unsupported. The API rejects
-  `PROT_EXEC`; there is no `MAP_JIT`, `pthread_jit_write_protect_np`,
-  runtime code generator, or executable-memory allocator here.
+* Guest addresses are offsets from the host base; no Linux low-address mapping
+  or fixed-address reservation is assumed.
+* Page protection accepts only read/write. `PROT_EXEC` is rejected.
+* Tests cover bounds, zero-length end pointers and executable-protection denial.
+
+This is only a host data-memory primitive. It is not a PS4 CPU, GPU or syscall
+runtime and does not translate x86-64 instructions.
 
 ## Required CPU execution model
 
-The target is static ARM64 AOT recompilation. Translation must happen before
-installation/build: x86-64 guest instructions are translated into ARM64
-objects, those objects are linked into the signed iOS application, and the
-runtime dispatches to already-linked native functions. No guest code is
-translated or emitted while the game is running.
-
-This memory arena is only a host data-memory primitive. It does **not** mean
-that FEXCore or the PS4 CPU/GPU runtime is integrated. The upstream Android/Linux
-port still needs its CPU execution path replaced by an offline AOT pipeline and
-its Linux guest ABI/syscalls adapted to Darwin. GPU guest-address translation
-must use the arena base rather than assuming guest addresses are host pointers.
+The target remains static ARM64 AOT recompilation: translation must happen
+offline, before installation/build, and generated ARM64 objects must be linked
+into the signed application. Runtime code generation, JIT and executable guest
+memory are intentionally absent.
