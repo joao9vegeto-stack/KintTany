@@ -29,9 +29,7 @@ std::filesystem::path FindAsuraGameRoot(const rex::PathConfig&paths){auto docs=s
 """
 text=text.replace("class AsurawrathApp : public rex::ReXApp {",code+"\n"+marker+"\nclass AsurawrathApp : public rex::ReXApp {")
 method=r"""
- void OnPreSetup(rex::RuntimeConfig&config)override{AsuraIOSLog("HOOK OnPreSetup");if(config.gpu_plugin.empty())config.gpu_plugin="xenos";}
  void OnPostInitLogging()override{AsuraIOSLog("HOOK OnPostInitLogging");}
- void OnPostSetup()override{AsuraIOSLog("HOOK OnPostSetup");}
  void OnShutdown()override{AsuraIOSLog("HOOK OnShutdown");}
  std::optional<rex::PathConfig> OnFinalizePaths(const rex::PathConfig&defaults,std::function<void(rex::PathConfig)>resume)override{
   AsuraIOSLog("HOOK OnFinalizePaths BEGIN");auto found=FindAsuraGameRoot(defaults);AsuraIOSLog(found.empty()?"GAME_DISCOVERY NOT_FOUND":"GAME_DISCOVERY FOUND "+found.string());
