@@ -119,6 +119,12 @@ ninja -C "$OUT/build-ios" src/kosmickrisp/vulkan/libkk.a
 # executable here is invalid: it bypasses the final app's complete static
 # dependency closure and fails on the iOS dynamic_lookup linker restriction.
 meson compile -C "$OUT/build-ios" kk-ios-smoke-objects
+# These Meson targets are marked build_by_default:false because Mesa consumes
+# them through link_whole. Build their archives explicitly so the final app can
+# force-load the weak dispatch overloads.
+ninja -C "$OUT/build-ios" \
+  src/kosmickrisp/vulkan/libkk_device_dispatch_table.a \
+  src/kosmickrisp/vulkan/libkk_device_cmd_dispatch_table.a
 ARCHIVE="$OUT/build-ios/src/kosmickrisp/vulkan/libkk.a"
 SMOKE="$OUT/build-ios/src/kosmickrisp/libkk-ios-smoke-objects.a"
 test -f "$ARCHIVE" && test -s "$SMOKE"
