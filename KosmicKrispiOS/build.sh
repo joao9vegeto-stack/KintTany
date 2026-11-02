@@ -184,6 +184,21 @@ nm -gU "$ARCHIVE" | grep -F '_vk_icdGetInstanceProcAddr' >/dev/null || {
   exit 1
 }
 
+# The generated Mesa/KosmicKrisp dispatch tables intentionally reference
+# unsupported Vulkan entrypoints as optional weak imports. On Mach-O, they must
+# remain weak_import (not hidden strong undefineds), or the final iOS link
+# rejects hundreds of commands the driver does not implement.
+for symbol in _kk_AcquireNextImageKHR _wsi_QueueSubmit; do
+  if ! nm -m "$ARCHIVE" "$KK_CMD_DISPATCH_TABLE" | awk -v symbol="$symbol" '
+    $NF == symbol && /weak external/ { found = 1 }
+    END { exit !found }
+  '; then
+    echo "ERROR: expected optional Mach-O weak import is not weak: $symbol" >&2
+    nm -m "$ARCHIVE" "$KK_CMD_DISPATCH_TABLE" | grep -F "$symbol" >&2 || true
+    exit 1
+  fi
+done
+
 # Meson's target graph also emits two archives that are not dependencies of the
 # full Vulkan runtime used by KosmicKrisp: the GTest support library and the
 # alternate lite-instance implementation. Force-loading either is incorrect.
