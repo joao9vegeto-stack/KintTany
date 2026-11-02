@@ -115,7 +115,10 @@ method = r"""
     return std::nullopt;
   }
 """
-assert text.count("\n};\n") == 1, "unexpected app class ending"
-text = text.replace("\n};\n", "\n" + method + "\n};\n")
+class_start = text.find("class AsurawrathApp : public rex::ReXApp {")
+class_end = text.rfind("\n};")
+if class_start < 0 or class_end < class_start or text[class_end + 3:].strip():
+    raise SystemExit("could not locate the final AsurawrathApp class terminator safely")
+text = text[:class_end] + "\n" + method + text[class_end:]
 header.write_text(text)
 print("ASURA_IOS_NATIVE_LAUNCHER_PATCH_OK")
