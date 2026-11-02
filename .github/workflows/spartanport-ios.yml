@@ -1,28 +1,59 @@
 name: SpartanPort iOS + KosmicKrisp
 run-name: SpartanPort iOS ARM64 - ${{ github.sha }}
-
-# Build automatically for every committed change on the isolated SpartanPort branch.
 on:
   push:
-    branches:
-      - SpartanPort-iOS
+    branches: [SpartanPort-iOS]
   pull_request:
-    branches:
-      - SpartanPort-iOS
+    branches: [SpartanPort-iOS]
   workflow_dispatch:
-
 permissions:
   contents: read
-
-# Never discard an accepted build because a follow-up fix was pushed.
+# Keep an accepted build alive; a later push must not cancel it.
 concurrency:
   group: spartanport-ios-${{ github.ref }}
-  cancel-in-progress: true
-
+  cancel-in-progress: false
 jobs:
+  preflight:
+    name: Validate source and pinned Mesa patches
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - name: Checkout isolated port branch
+        uses: actions/checkout@v4
+      - name: Validate scripts and patch applicability before macOS build
+        shell: bash
+        run: |
+          set -euo pipefail
+          bash -n KosmicKrispiOS/build.sh
+          bash -n KosmicKrispiOS/make-dylibs.sh
+          git diff --check
+          MESA_SHA="bfe063f723d436e5cdef8a98f058d4e44a64810c"
+          MESA_DIR="$RUNNER_TEMP/mesa-preflight"
+          if git clone --filter=blob:none --no-checkout https://gitlab.freedesktop.org/mesa/mesa.git "$MESA_DIR"; then
+            echo "Mesa preflight source: official GitLab"
+          else
+            rm -rf "$MESA_DIR"
+            git clone --filter=blob:none --no-checkout https://github.com/Kenji-NX/mesa.git "$MESA_DIR"
+            echo "Mesa preflight source: pinned GitHub mirror"
+          fi
+          git -C "$MESA_DIR" fetch --depth=1 origin "$MESA_SHA"
+          git -C "$MESA_DIR" checkout --detach "$MESA_SHA"
+          test "$(git -C "$MESA_DIR" rev-parse HEAD)" = "$MESA_SHA"
+          for patch in \
+            KosmicKrispiOS/patches/0001-kosmickrisp-ios-m2.patch \
+            KosmicKrispiOS/patches/0002-kosmickrisp-ios-m3-metal-wsi.patch \
+            KosmicKrispiOS/patches/0003-kosmickrisp-ios-m3b-smoke-target.patch \
+            KosmicKrispiOS/patches/0004-kosmickrisp-ios-macho-weak-import.patch; do
+            echo "Checking $patch"
+            git -C "$MESA_DIR" apply --check "$GITHUB_WORKSPACE/$patch"
+            git -C "$MESA_DIR" apply "$GITHUB_WORKSPACE/$patch"
+          done
+          git -C "$MESA_DIR" diff --check
+          echo "PASS: all pinned Mesa patches apply cleanly."
   build:
     name: Build KosmicKrisp ICD and SpartanPort iOS arm64
-    runs-on: macos-26
+    needs: preflight
+    runs-on: macos-15
     timeout-minutes: 240
     env:
       KK_SKIP_PREREQUISITES: "1"
@@ -34,8 +65,9 @@ jobs:
           set -euo pipefail
           xcodebuild -version
           xcrun --sdk iphoneos --show-sdk-version
-          brew update
-          for pkg in cmake pkg-config libclc llvm@20 spirv-tools ninja xcodegen; do brew list "$pkg" >/dev/null 2>&1 || brew install "$pkg"; done
+          for pkg in cmake pkg-config libclc llvm@20 spirv-tools ninja xcodegen; do
+            brew list "$pkg" >/dev/null 2>&1 || brew install "$pkg"
+          done
       - name: Build pinned KosmicKrisp iOS arm64 ICD and Metal WSI
         run: |
           set -euo pipefail
@@ -57,7 +89,7 @@ jobs:
           ')"
           test -n "$SIM_UDID"
           echo "SIMULATOR_UDID=$SIM_UDID" >> "$GITHUB_ENV"
-      - name: Run PS4 ELF and param.sfo inspector unit tests
+      - name: Run PS4 folder, ELF and param.sfo unit tests
         working-directory: SpartanPort-iOS
         run: |
           set -euo pipefail
@@ -74,7 +106,7 @@ jobs:
             -sdk iphoneos -destination 'generic/platform=iOS' \
             -xcconfig "$KK_LINK_CONFIG" \
             -derivedDataPath "$RUNNER_TEMP/SpartanPortDerived" CODE_SIGNING_ALLOWED=NO build
-      - name: Package unsigned SpartanPort IPA
+      - name: Package and validate unsigned ARM64 IPA
         run: |
           set -euo pipefail
           APP="$RUNNER_TEMP/SpartanPortDerived/Build/Products/Release-iphoneos/SpartanPort.app"
@@ -85,18 +117,19 @@ jobs:
           xcrun lipo "$APP_BINARY" -verify_arch arm64
           nm -gU "$APP_BINARY" | grep -F '_vk_icdGetInstanceProcAddr'
           if otool -L "$APP_BINARY" | grep -E 'libKosmicKrisp|libvulkan\.dylib'; then
-            echo "ERROR: KosmicKrisp was left as a dynamic dependency instead of being linked into the app executable." >&2
+            echo "ERROR: KosmicKrisp must be linked into the app executable, not loaded dynamically." >&2
             exit 1
           fi
           if find "$APP" -type f \( -name '*.a' -o -name '*KosmicKrisp*.dylib' -o -name 'libvulkan.dylib' \) -print -quit | grep -q .; then
-            echo "ERROR: separate KosmicKrisp archive/dylib leaked into the app bundle." >&2
+            echo "ERROR: a separate KosmicKrisp archive/dylib leaked into the app bundle." >&2
             exit 1
           fi
           mkdir -p "$RUNNER_TEMP/SpartanIPA/Payload"
           cp -R "$APP" "$RUNNER_TEMP/SpartanIPA/Payload/SpartanPort.app"
           ditto -c -k --sequesterRsrc --keepParent "$RUNNER_TEMP/SpartanIPA/Payload" SpartanPort-iOS-KosmicKrisp-unsigned.ipa
           unzip -t SpartanPort-iOS-KosmicKrisp-unsigned.ipa
-      - name: Upload SpartanPort IPA only
+          unzip -l SpartanPort-iOS-KosmicKrisp-unsigned.ipa | grep -E 'Payload/SpartanPort.app/(Info.plist|SpartanPort)$'
+      - name: Upload unsigned IPA
         uses: actions/upload-artifact@v4
         with:
           name: SpartanPort-iOS-IPA

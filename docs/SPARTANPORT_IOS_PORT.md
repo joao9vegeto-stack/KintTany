@@ -84,3 +84,10 @@ Do not label a build “working” merely because Xcode compiles the SwiftUI she
 ## Runtime linker correction (2026-11-01)
 
 The first installed IPA failed at launch with dyld reporting `__simple_mtx_plain_init_once` missing from the flat namespace. Inspection of the run #17 artifact showed this symbol undefined in multiple members of the bare `libkk.a`. Mesa defines it in `src/util/simple_mtx.c`, which is part of the separate `libmesa_util.a`; the C11 mutex implementation is also delivered in a separate archive. The previous Xcode flags allowed undefined dynamic lookup, so the app linked while leaving Mesa-internal references unresolved. The build now merges all iOS static dependency archives produced under `build-ios` into the single SDK archive, verifies the Mesa mutex and C11 thread implementations are present, and removes `-undefined dynamic_lookup` from the app link. The next device IPA must be installed and launched to validate the fix on hardware; a successful CI build alone is not a device-runtime pass.
+
+
+## Launcher integration milestone (2026-11-02)
+
+The launcher creates Documents/SpartanPort/Jogos, scans the app Documents directory and nested folders for eboot.bin plus sce_sys/param.sfo, displays detected installations, and restores the selected relative path from UserDefaults. The folder picker coordinates access to external Files/iCloud providers and copies the selected game directory into the app sandbox so the selection does not depend on a temporary security-scoped URL. Import runs off the main thread. Documents/diagnostico.txt records detection and validation state; Documents/crash.txt records import/picker errors. File Sharing and in-place document access are enabled so diagnostics and the managed game folder can be inspected in Files.
+
+This milestone implements launcher/storage only. Play remains disabled because this branch still has no PS4 SELF/ELF loader, x86-64-to-ARM64 AOT output, PS4 system services, or PS4 command renderer. KosmicKrisp's separate M3B smoke harness exercises a Vulkan/Metal clear and swapchain path; it is not a PS4 game renderer and is not evidence of God of War III gameplay.

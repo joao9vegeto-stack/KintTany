@@ -12,6 +12,29 @@ MESON_VERSION="1.9.1"
 LLVM_FORMULA="llvm@20"
 mkdir -p "$OUT"; cd "$OUT"
 for cmd in git xcodebuild xcrun cmake ninja brew python3; do command -v "$cmd" >/dev/null || { echo "Missing $cmd" >&2; exit 2; }; done
+# Validate and apply every pinned Mesa patch before Homebrew, Python, or LLVM builds.
+rm -rf "$OUT/mesa-src"
+if git clone --filter=blob:none --no-checkout "$MESA_PRIMARY" "$OUT/mesa-src"; then
+  echo "official GitLab" > "$OUT/mesa-source.txt"
+else
+  rm -rf "$OUT/mesa-src"
+  git clone --filter=blob:none --no-checkout "$MESA_MIRROR" "$OUT/mesa-src"
+  echo "synchronized GitHub mirror fallback" > "$OUT/mesa-source.txt"
+fi
+git -C "$OUT/mesa-src" fetch --depth=1 origin "$MESA_SHA"
+git -C "$OUT/mesa-src" checkout --detach "$MESA_SHA"
+test "$(git -C "$OUT/mesa-src" rev-parse HEAD)" = "$MESA_SHA"
+for patch in "$ROOT/patches/0001-kosmickrisp-ios-m2.patch" "$ROOT/patches/0002-kosmickrisp-ios-m3-metal-wsi.patch" "$ROOT/patches/0003-kosmickrisp-ios-m3b-smoke-target.patch" "$ROOT/patches/0004-kosmickrisp-ios-macho-weak-import.patch"; do
+  git -C "$OUT/mesa-src" apply --check "$patch"
+  git -C "$OUT/mesa-src" apply "$patch"
+done
+cp "$ROOT/smoke/kk_ios_smoke.m" "$OUT/mesa-src/src/kosmickrisp/kk_ios_smoke.m"
+cat > "$OUT/mesa-src/src/kosmickrisp/kk_ios_smoke_build.h" <<EOF
+#define KK_KINTTANY_SHA "standalone-KosmicKrispiOS"
+#define KK_MESA_SHA "$MESA_SHA"
+EOF
+git -C "$OUT/mesa-src" diff --check
+
 if [[ "${KK_SKIP_PREREQUISITES:-0}" != 1 ]]; then
   brew update
   for pkg in cmake pkg-config libclc "$LLVM_FORMULA" spirv-tools ninja; do brew list "$pkg" >/dev/null 2>&1 || brew install "$pkg"; done
@@ -36,27 +59,7 @@ cmake --install "$OUT/spirv-llvm-translator-build"
 test -f "$TRANSLATOR_PREFIX/lib/libLLVMSPIRVLib.a"
 test "$(PKG_CONFIG_PATH="$TRANSLATOR_PREFIX/lib/pkgconfig" pkg-config --modversion LLVMSPIRVLib)" = "20.1.0.0"
 
-rm -rf "$OUT/mesa-src"
-if git clone --filter=blob:none --no-checkout "$MESA_PRIMARY" "$OUT/mesa-src"; then
-  echo "official GitLab" > "$OUT/mesa-source.txt"
-else
-  rm -rf "$OUT/mesa-src"
-  git clone --filter=blob:none --no-checkout "$MESA_MIRROR" "$OUT/mesa-src"
-  echo "synchronized GitHub mirror fallback" > "$OUT/mesa-source.txt"
-fi
-git -C "$OUT/mesa-src" fetch --depth=1 origin "$MESA_SHA"
-git -C "$OUT/mesa-src" checkout --detach "$MESA_SHA"
-test "$(git -C "$OUT/mesa-src" rev-parse HEAD)" = "$MESA_SHA"
-for patch in "$ROOT/patches/0001-kosmickrisp-ios-m2.patch" "$ROOT/patches/0002-kosmickrisp-ios-m3-metal-wsi.patch" "$ROOT/patches/0003-kosmickrisp-ios-m3b-smoke-target.patch" "$ROOT/patches/0004-kosmickrisp-ios-macho-weak-import.patch"; do
-  git -C "$OUT/mesa-src" apply --check "$patch"
-  git -C "$OUT/mesa-src" apply "$patch"
-done
-cp "$ROOT/smoke/kk_ios_smoke.m" "$OUT/mesa-src/src/kosmickrisp/kk_ios_smoke.m"
-cat > "$OUT/mesa-src/src/kosmickrisp/kk_ios_smoke_build.h" <<EOF
-#define KK_KINTTANY_SHA "standalone-KosmicKrispiOS"
-#define KK_MESA_SHA "$MESA_SHA"
-EOF
-git -C "$OUT/mesa-src" diff --check
+
 
 export PATH="$LLVM_PREFIX/bin:$TRANSLATOR_PREFIX/bin:$PATH"
 export LDFLAGS="-L$TRANSLATOR_PREFIX/lib -L$LLVM_PREFIX/lib"
@@ -151,9 +154,9 @@ for required in "$ARCHIVE" "$SMOKE" "$KK_DISPATCH_TABLE" "$KK_CMD_DISPATCH_TABLE
 done
 
 STATIC_ARCHIVES=()
-while IFS= read -r -d '' archive; do
+while IFS= read -r archive; do
   STATIC_ARCHIVES+=("$archive")
-done < <(find "$OUT/build-ios" -name '*.a' -print0)
+done < <(find "$OUT/build-ios" -name '*.a' -print | LC_ALL=C sort)
 LINK_ARCHIVES=()
 for archive in "${STATIC_ARCHIVES[@]}"; do
   # The M3B smoke harness is compiled as a build check, never force-loaded
@@ -229,9 +232,8 @@ done
 LINK_CONFIG="$OUT/KosmicKrispLink.xcconfig"
 {
   # SpartanPort iOS build policy (validated by the next fresh Actions run):
-# Keep the ICD archive lazy: -u extracts the member defining the ICD entrypoint,
-# while force-loading libkk.a also pulls generated WSI dispatch tables whose
-# optional Vulkan entrypoints are not implemented by this iOS driver.
+# Keep the ICD archive lazy: -u extracts the ICD entrypoint, and Mesa's
+# link_whole closure carries the generated WSI dispatch tables.
 printf 'OTHER_LDFLAGS = $(inherited) -Wl,-u,_vk_icdGetInstanceProcAddr %s' "$ARCHIVE"
   for archive in "${LINK_ARCHIVES[@]}"; do
     [[ "$archive" == "$ARCHIVE" ]] && continue
@@ -258,8 +260,8 @@ LLVM: llvm@20
 iOS target: arm64-apple-ios17.4
 M3 Metal WSI: applied
 M3B direct ICD/CAMetalLayer smoke source: compiled to ARM64 object archive (not linked or runtime-tested)
-Meson iOS static archives: individually force-loaded into the SpartanPort app executable
-Mesa/KosmicKrisp static dependencies: lazy archive extraction via ICD -u entrypoint; Metal WSI object members verified
+Meson iOS static archives: deterministic lazy archive inputs to the SpartanPort app linker
+Mesa/KosmicKrisp ICD entrypoint: extracted via -u; Metal WSI object members verified
 Physical device runtime validation: pending integrator
 EOF
 shasum -a 256 "${LINK_ARCHIVES[@]}" "$OUT/KosmicKrispM3B-smoke-objects.a" "$OUT/static-link-archives.txt" "$OUT/KosmicKrispLink.xcconfig" "$ROOT"/patches/*.patch > "$OUT/SHA256SUMS"
