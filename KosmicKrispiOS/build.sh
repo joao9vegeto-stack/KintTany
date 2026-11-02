@@ -144,11 +144,40 @@ test -s "$KK_CMD_DISPATCH_TABLE"
 test "${#STATIC_ARCHIVES[@]}" -ge 4
 printf '%s\\n' "${STATIC_ARCHIVES[@]}" > "$OUT/static-dependency-archives.txt"
 rm -f "$OUT/libkk-kosmickrisp-ios-arm64.a"
-# Fold Mesa's link_whole dispatch tables into the same archive as every
-# transitive dependency. The app force-loads this single archive, reproducing
-# Meson's link_whole semantics without relying on cross-archive extraction order.
-xcrun libtool -static -o "$OUT/libkk-kosmickrisp-ios-arm64.a" "${STATIC_ARCHIVES[@]}"
+# Flatten every Meson static archive into real object members before
+# creating the app-facing archive. Passing .a files directly to Apple's
+# libtool -static can preserve nested archive members instead of extracting
+# their objects; that leaves Mesa utility symbols (hash tables, BLAKE3,
+# simple mutexes and C11 threads) unresolved in the final Xcode link.
+MERGE_ROOT="$OUT/archive-merge"
+rm -rf "$MERGE_ROOT"
+mkdir -p "$MERGE_ROOT"
+archive_index=0
+object_index=0
+for archive in "${STATIC_ARCHIVES[@]}"; do
+  archive_index=$((archive_index + 1))
+  extract_dir="$MERGE_ROOT/extract-$(printf '%04d' "$archive_index")"
+  mkdir -p "$extract_dir"
+  (cd "$extract_dir" && xcrun ar -x "$archive")
+  while IFS= read -r -d '' object; do
+    object_index=$((object_index + 1))
+    object_name="$(basename "$object")"
+    cp "$object" "$MERGE_ROOT/$(printf '%06d' "$object_index")-$object_name"
+  done < <(find "$extract_dir" -type f \( -name '*.o' -o -name '*.obj' \) -print0)
+done
+test "$object_index" -ge 100 || {
+  echo "ERROR: expected at least 100 flattened Mesa objects, found $object_index" >&2
+  exit 1
+}
+MERGED_OBJECTS=()
+while IFS= read -r -d '' object; do
+  MERGED_OBJECTS+=("$object")
+done < <(find "$MERGE_ROOT" -maxdepth 1 -type f -name '*.o' -print0)
+test "${#MERGED_OBJECTS[@]}" -eq "$object_index"
+rm -f "$OUT/libkk-kosmickrisp-ios-arm64.a"
+xcrun libtool -static -o "$OUT/libkk-kosmickrisp-ios-arm64.a" "${MERGED_OBJECTS[@]}"
 test -s "$OUT/libkk-kosmickrisp-ios-arm64.a"
+echo "Flattened ${#STATIC_ARCHIVES[@]} static archives into $object_index ARM64 object members."
 cp "$SMOKE" "$OUT/KosmicKrispM3B-smoke-objects.a"
 mkdir -p "$OUT/include"
 rm -rf "$OUT/include/vulkan"
@@ -159,13 +188,18 @@ test -f "$OUT/include/vk_video/vulkan_video_codec_h264std.h"
 file "$OUT/libkk-kosmickrisp-ios-arm64.a" | tee "$OUT/file.txt"
 lipo -info "$OUT/libkk-kosmickrisp-ios-arm64.a" | tee "$OUT/lipo.txt"
 nm -g "$OUT/libkk-kosmickrisp-ios-arm64.a" > "$OUT/symbols.txt"
-echo "=== ICD and Mesa synchronization symbols in merged archive ==="
-grep -E 'vk_icdGetInstanceProcAddr|simple_mtx_plain_init_once|mtx_init' "$OUT/symbols.txt" || true
-# Confirm names are present here; the final Xcode link performs the authoritative
-# undefined-symbol check against the complete application dependency closure.
-grep -q 'vk_icdGetInstanceProcAddr' "$OUT/symbols.txt" || { echo "ERROR: ICD entrypoint absent from merged archive" >&2; exit 1; }
-grep -q 'simple_mtx_plain_init_once' "$OUT/symbols.txt" || { echo "ERROR: Mesa simple mutex symbol absent from merged archive" >&2; exit 1; }
-grep -q 'mtx_init' "$OUT/symbols.txt" || { echo "ERROR: C11 mtx_init symbol absent from merged archive" >&2; exit 1; }
+# nm -U excludes undefined references. The previous check accidentally used
+# plain nm, so an undefined U entry counted as proof that an implementation
+# existed. Require actual definitions for representative transitive symbols.
+nm -gU "$OUT/libkk-kosmickrisp-ios-arm64.a" > "$OUT/defined-symbols.txt"
+echo "=== Defined ICD and Mesa dependency symbols in flattened archive ==="
+grep -E 'vk_icdGetInstanceProcAddr|mesa_blake3_compute|mesa_hash_table_create|simple_mtx_plain_init_once|mtx_init' "$OUT/defined-symbols.txt" || true
+for symbol in vk_icdGetInstanceProcAddr __mesa_blake3_compute __mesa_hash_table_create __simple_mtx_plain_init_once mtx_init; do
+  grep -F "$symbol" "$OUT/defined-symbols.txt" >/dev/null || {
+    echo "ERROR: required implementation is not defined in flattened archive: $symbol" >&2
+    exit 1
+  }
+done
 # Record target metadata without guessing which object happens to be first in find order.
 printf '%s\\n' "target=arm64-apple-ios17.4" "sdk=$(xcrun --sdk iphoneos --show-sdk-version)" > "$OUT/build-version.txt"
 cat > "$OUT/KosmicKrispiOS-build.txt" <<EOF
