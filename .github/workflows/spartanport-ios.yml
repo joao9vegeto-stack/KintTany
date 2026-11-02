@@ -53,18 +53,37 @@ jobs:
   build:
     name: Build KosmicKrisp ICD and SpartanPort iOS arm64
     needs: preflight
-    runs-on: macos-15
+    runs-on: macos-26
     timeout-minutes: 240
     env:
       KK_SKIP_PREREQUISITES: "1"
     steps:
       - name: Checkout isolated port branch
         uses: actions/checkout@v4
-      - name: Select Xcode and install dependencies
+      - name: Select Xcode 26 and validate Metal 4 SDK
         run: |
           set -euo pipefail
-          xcodebuild -version
-          xcrun --sdk iphoneos --show-sdk-version
+          xcode_apps=(/Applications/Xcode_26*.app)
+          test -d "${xcode_apps[0]}" || {
+            echo "ERROR: macos-26 runner has no Xcode 26 installation." >&2
+            ls -la /Applications/Xcode*.app || true
+            exit 1
+          }
+          sudo xcode-select --switch "${xcode_apps[${#xcode_apps[@]}-1]}/Contents/Developer"
+          XCODE_VERSION="$(xcodebuild -version | awk '/^Xcode / {print $2}')"
+          SDK_VERSION="$(xcrun --sdk iphoneos --show-sdk-version)"
+          echo "Selected Xcode: $XCODE_VERSION"
+          echo "Selected iPhoneOS SDK: $SDK_VERSION"
+          [[ "$XCODE_VERSION" == 26.* ]]
+          [[ "${SDK_VERSION%%.*}" -ge 26 ]]
+          cat > "$RUNNER_TEMP/metal4-sdk-probe.m" <<'EOF'
+          #import <Metal/Metal.h>
+          #import <Metal/MTL4ArgumentTable.h>
+          int main(void) { return 0; }
+          EOF
+          xcrun --sdk iphoneos clang -fsyntax-only -x objective-c \
+            -target arm64-apple-ios17.4 "$RUNNER_TEMP/metal4-sdk-probe.m" -framework Metal
+          echo "PASS: selected Xcode SDK contains Metal 4 argument-table headers."
           for pkg in cmake pkg-config libclc llvm@20 spirv-tools ninja xcodegen; do
             brew list "$pkg" >/dev/null 2>&1 || brew install "$pkg"
           done

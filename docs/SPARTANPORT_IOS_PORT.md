@@ -20,7 +20,7 @@ Upstream references:
 4. The Android/Linux GPU implementation is Vulkan-based and depends on shadPS4. iOS has no system Vulkan API. A MoltenVK compatibility layer may be useful for an early experiment, but it is not proof that shadPS4's complete Vulkan feature set, synchronization, memory model, shader pipeline, or presentation path works on iOS.
 5. The existing KintTany target is a SwiftUI app with an existing unrelated product UI. This branch must keep the work isolated; do not replace unrelated application behavior or touch other branches.
 
-## Source-level review pinned to upstream `arm` commit `53afee63597b10a5a1f250cdb62dd4390caa13f1`
+## Source-level review pinned to the currently published upstream `arm` commit `56e804d1ef3e108257b94c51b6f7fb204930a244`
 
 - `cpu/guest_cpu_fex.cpp` creates FEXCore contexts and uses its JIT/code-cache plus Linux signal/ucontext facilities. The published ARM64 branch is not a native AOT CPU implementation.
 - `cpu/gportcpu.cmake` links `FEXCore`, `Common`, `JemallocLibs` and `fmt`; it produces `libgportcpu.so`.
@@ -91,3 +91,17 @@ The first installed IPA failed at launch with dyld reporting `__simple_mtx_plain
 The launcher creates Documents/SpartanPort/Jogos, scans the app Documents directory and nested folders for eboot.bin plus sce_sys/param.sfo, displays detected installations, and restores the selected relative path from UserDefaults. The folder picker coordinates access to external Files/iCloud providers and copies the selected game directory into the app sandbox so the selection does not depend on a temporary security-scoped URL. Import runs off the main thread. Documents/diagnostico.txt records detection and validation state; Documents/crash.txt records import/picker errors. File Sharing and in-place document access are enabled so diagnostics and the managed game folder can be inspected in Files.
 
 This milestone implements launcher/storage only. Play remains disabled because this branch still has no PS4 SELF/ELF loader, x86-64-to-ARM64 AOT output, PS4 system services, or PS4 command renderer. KosmicKrisp's separate M3B smoke harness exercises a Vulkan/Metal clear and swapchain path; it is not a PS4 game renderer and is not evidence of God of War III gameplay.
+
+## CI failure audit — runs #78–#80 (2026-11-02)
+
+- Run #78 (`41521416660`, commit `a03efa3f82aa847dead4856def07bf3244314a20`) passed the Ubuntu source/Mesa-patch preflight and failed in the KosmicKrisp Objective-C build before XcodeGen, XCTest, the device build or IPA packaging. The exact compiler error was `Metal/MTL4ArgumentTable.h file not found`; the compiler diagnostics identify `Xcode_16.4.app` and `iPhoneOS18.5.sdk`. This is an SDK/toolchain mismatch, not a Mesa patch-application failure.
+- Run #79 (`41523335488`) was cancelled.
+- Run #80 (`41523418021`, commit `94f60aa351cc643333911aeaa4a3767256305481`) was cancelled after the preflight job completed successfully. Its macOS build job was cancelled before any build step ran. It did not reproduce or resolve the #78 compiler failure and produced no IPA.
+- The workflow now targets `macos-26`, selects an installed Xcode 26 explicitly, verifies the iPhoneOS SDK major version, and compiles a tiny Objective-C probe that imports `Metal/MTL4ArgumentTable.h` before Homebrew dependency installation or the full Mesa build. This turns the exact #78 SDK requirement into an early, cheap gate.
+- This pipeline correction does not add a PS4 runtime, AOT compiler, SELF loader or shadPS4 renderer. A successful IPA build remains only an app-shell/backend-link milestone.
+
+## Upstream ARM64 source status — verified against branch head
+
+The published `zFitness/gow3_android:arm` branch currently points to `56e804d1ef3e108257b94c51b6f7fb204930a244`. Its README describes the Android port as FEXCore guest execution plus shadPS4/Vulkan; its AOT section describes a separate experimental `feature/aot-native-arm64` line, but that branch is absent from the repository's published branch list. The documented AOT claims are therefore design/status notes, not a source tree that this iOS project can fetch or build today.
+
+The Android `arm` branch is not an iOS-native execution solution: its packaging contract assumes nixport/rootfs, its CPU adapter uses FEXCore, and its graphics path depends on shadPS4/Vulkan. Reusing its PS4 runtime and loader logic requires an explicit iOS platform layer; copying its Android packaging, Linux process model or FEX JIT path is not an acceptable substitute for ARM64-native execution. No upstream runtime source is claimed as integrated until it is imported with pinned revisions, license notices and iOS-specific build/tests.
