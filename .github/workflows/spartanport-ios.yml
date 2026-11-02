@@ -1,5 +1,5 @@
 name: SpartanPort iOS + KosmicKrisp
-run-name: SpartanPort iOS ARM64 validation • ${{ github.sha }}
+run-name: SpartanPort iOS ARM64 validation • fresh-push-20261102-2045 • ${{ github.sha }}
 on:
   push:
     branches: [SpartanPort-iOS]
