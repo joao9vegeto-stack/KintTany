@@ -187,20 +187,34 @@ nm -gU "$ARCHIVE" | grep -F '_vk_icdGetInstanceProcAddr' >/dev/null || {
   exit 1
 }
 
-# The generated Mesa/KosmicKrisp dispatch tables intentionally reference
-# unsupported Vulkan entrypoints as optional weak imports. On Mach-O, they must
-# remain weak_import (not hidden strong undefineds), or the final iOS link
-# rejects hundreds of commands the driver does not implement.
-# Check each generated dispatch family, including WSI. A previous build
-# checked only the KK command table and missed strong WSI references that then
-# failed the final app link.
-for symbol in _kk_AcquireNextImageKHR _wsi_QueueSubmit _wsi_AllocateCommandBuffers; do
-  if ! nm -m "$ARCHIVE" "$KK_CMD_DISPATCH_TABLE" "$WSI_ARCHIVE" | awk -v symbol="$symbol" '
+# The WSI entrypoint object is copied into libkk.a by Meson's link_whole
+# closure. Validate THAT exact member: aggregate nm output can falsely pass when
+# another archive has a weak reference to the same symbol while this member is
+# still strong (the failure mode from SpartanPort build #67).
+WSI_ENTRYPOINT_MEMBER="$(xcrun ar -t "$ARCHIVE" | grep 'wsi_common_entrypoints.c.o' | head -n 1)"
+test -n "$WSI_ENTRYPOINT_MEMBER" || {
+  echo "ERROR: libkk.a does not contain the expected WSI entrypoint object." >&2
+  exit 1
+}
+xcrun ar -p "$ARCHIVE" "$WSI_ENTRYPOINT_MEMBER" > "$OUT/wsi_common_entrypoints.o"
+for symbol in _wsi_QueueSubmit _wsi_AllocateCommandBuffers _wsi_CreateSwapchainKHR; do
+  if ! nm -m "$OUT/wsi_common_entrypoints.o" | awk -v symbol="$symbol" '
     $NF == symbol && /weak external/ { found = 1 }
     END { exit !found }
   '; then
-    echo "ERROR: expected optional Mach-O weak import is not weak: $symbol" >&2
-    nm -m "$ARCHIVE" "$KK_CMD_DISPATCH_TABLE" "$WSI_ARCHIVE" | grep -F "$symbol" >&2 || true
+    echo "ERROR: WSI entrypoint object still has a strong Mach-O reference: $symbol" >&2
+    nm -m "$OUT/wsi_common_entrypoints.o" | grep -F "$symbol" >&2 || true
+    exit 1
+  fi
+done
+# Also verify the KosmicKrisp generated command table independently.
+for symbol in _kk_AcquireNextImageKHR; do
+  if ! nm -m "$KK_CMD_DISPATCH_TABLE" | awk -v symbol="$symbol" '
+    $NF == symbol && /weak external/ { found = 1 }
+    END { exit !found }
+  '; then
+    echo "ERROR: KosmicKrisp command table has a non-weak optional reference: $symbol" >&2
+    nm -m "$KK_CMD_DISPATCH_TABLE" | grep -F "$symbol" >&2 || true
     exit 1
   fi
 done
