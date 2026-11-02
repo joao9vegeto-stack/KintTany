@@ -1,7 +1,7 @@
 diff --git a/src/vulkan/util/vk_entrypoints_gen.py b/src/vulkan/util/vk_entrypoints_gen.py
 --- a/src/vulkan/util/vk_entrypoints_gen.py
 +++ b/src/vulkan/util/vk_entrypoints_gen.py
-@@ -62,7 +62,12 @@
+@@ -62,5 +62,10 @@
 -#if !defined(_MSC_VER) && defined(VK_ENTRY_USE_WEAK)
 +#if defined(__APPLE__) || (!defined(_MSC_VER) && defined(VK_ENTRY_USE_WEAK))
 +#if defined(__APPLE__)
@@ -12,7 +12,7 @@ diff --git a/src/vulkan/util/vk_entrypoints_gen.py b/src/vulkan/util/vk_entrypoi
  #else
  #define VK_ENTRY_WEAK
  #endif
-@@ -73,7 +78,12 @@
+@@ -73,5 +78,10 @@
  #ifndef _WIN32
 +#if defined(__APPLE__)
 +/* Mach-O cannot weak-import a symbol that is simultaneously hidden. */
