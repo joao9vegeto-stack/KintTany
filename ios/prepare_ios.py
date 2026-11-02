@@ -108,4 +108,33 @@ surface_replacement = """      SDL_Metal_DestroyView(metal_view);
 assert window_sdl_text.count(surface_needle) == 1, "unexpected ReXGlue SDL Metal surface block"
 window_sdl.write_text(window_sdl_text.replace(surface_needle, surface_replacement))
 
+# ReXGlue currently treats every Apple target as macOS in its POSIX memory
+# backend. iOS ships mach/mach.h but explicitly rejects mach/mach_vm.h, and
+# mach_vm_region is unavailable in the iPhoneOS SDK. Keep the macOS region
+# query on macOS only; iOS uses the existing conservative non-Linux fallback
+# in QueryProtect (the API reports that the prior protection is unavailable).
+memory_posix = root / "tools/rexglue/src/core/memory_posix.cpp"
+memory_text = memory_posix.read_text()
+mach_include = """#if REX_PLATFORM_MAC
+#include <mach/mach.h>
+#include <mach/mach_vm.h>
+#include <mach/vm_region.h>
+#endif  // REX_PLATFORM_MAC
+"""
+mach_include_ios = """#if REX_PLATFORM_MAC && !REX_PLATFORM_IOS
+#include <mach/mach.h>
+#include <mach/mach_vm.h>
+#include <mach/vm_region.h>
+#endif  // REX_PLATFORM_MAC && !REX_PLATFORM_IOS
+"""
+assert memory_text.count(mach_include) == 1, "unexpected ReXGlue Mach VM include block"
+memory_text = memory_text.replace(mach_include, mach_include_ios)
+query_start = "bool QueryProtect(void* base_address, size_t& length, PageAccess& access_out) {\n#if REX_PLATFORM_MAC\n"
+query_start_ios = "bool QueryProtect(void* base_address, size_t& length, PageAccess& access_out) {\n#if REX_PLATFORM_MAC && !REX_PLATFORM_IOS\n"
+assert memory_text.count(query_start) == 1, "unexpected ReXGlue QueryProtect implementation"
+memory_text = memory_text.replace(query_start, query_start_ios)
+memory_posix.write_text(memory_text)
+
+print("ASURA_IOS_MACH_VM_GUARD_OK")
+
 print("ASURA_IOS_CMAKE_PATCH_OK")
