@@ -25,7 +25,7 @@ ShaderResult LoadShader(uint32_t stage, const uint32_t* hostOrderWords, size_t c
 void ObserveDraw(uint32_t initiator);
 void NotifyGuestSwap(uint32_t,uint32_t,uint32_t,uint32_t);
 void NotifyGuestResolve(uint32_t,uint32_t,uint32_t,uint32_t,uint32_t,uint32_t);
-void NotifyGuestFrameCommitted();
+void NotifyGuestFrameCommitted(); void NotifyGuestFrameSubmitted();
 void NotifyGuestFrameRejected(const char* reason); void NotifyGuestFramePixels(uint32_t width,uint32_t height,const uint8_t* pixels,size_t bytes); bool ShouldPresentGuestFrame(); bool HasFreshGuestFrame(); bool IsGuestFrameStale(); std::string FrameDiagnostics();
 void QueueDraw(uint32_t initiator, uint32_t count, uint32_t address,
                uint32_t indexInfo, uint32_t indexOffset);

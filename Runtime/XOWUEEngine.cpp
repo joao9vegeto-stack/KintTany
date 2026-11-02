@@ -389,6 +389,8 @@ thread_local B90StreamWatchState g_b90StreamWatch{};
 thread_local uint32_t g_b90LastAotEntry = 0u;
 thread_local uint32_t g_b90PreviousEntryLr = 0u;
 std::atomic<uint32_t> g_b90StreamTransitionLogs{0u};
+std::atomic<uint32_t> g_b95SyncWaitLogs{0u};
+std::atomic<uint32_t> g_b95SyncSignalLogs{0u};
 std::mutex g_tlsMutex;
 std::mutex g_virtualMemoryMutex;
 std::mutex g_guestObjectMutex;
@@ -451,6 +453,7 @@ std::vector<std::shared_ptr<GuestThread>> snapshotAllGuestThreads() {
 }
 
 bool shouldPersistRuntimeTrace(const std::string &event, size_t sequence) {
+    if (event.find("B97_") != std::string::npos) return true;
     // Preserve only the first 200 records from each legacy high-volume family.
     if (event.find("B83_") != std::string::npos)
         return g_runtimeTracePersistB83.fetch_add(1, std::memory_order_relaxed) < 200u;
@@ -1163,6 +1166,20 @@ static void markGuestWaitableSignaledLocked(const std::shared_ptr<GuestWaitable>
     if (waitable->unconsumedSignals == 0u) ++waitable->unconsumedSignals;
     waitable->signalCount.fetch_add(1u, std::memory_order_relaxed);
     syncGuestDispatcherSignalState(waitable);
+    if (waitable->handle == 0x115u) recordRuntimeTrace("B97_SIGNAL_TARGET handle=0x00000115 tid=" + std::to_string(g_currentGuestThreadId) + " creator_lr=" + std::to_string(waitable->creatorLr) + " generation=" + std::to_string(waitable->signalGeneration));
+    const uint32_t sequence = g_b95SyncSignalLogs.fetch_add(1u, std::memory_order_relaxed);
+    if (sequence < 512u) {
+        char event[288];
+        std::snprintf(event, sizeof(event),
+            "B95_SYNC_SIGNAL seq=%u thread=%u handle=0x%08X object=0x%08X "
+            "kind=%u generation=%llu pulse=%llu pending=%u creator_tid=%u creator_lr=0x%08X",
+            sequence + 1u, g_currentGuestThreadId, waitable->handle,
+            waitable->objectAddress, static_cast<unsigned>(waitable->kind),
+            static_cast<unsigned long long>(waitable->signalGeneration),
+            static_cast<unsigned long long>(waitable->pulseGeneration),
+            waitable->unconsumedSignals, waitable->creatorTid, waitable->creatorLr);
+        recordRuntimeTrace(event);
+    }
 }
 
 uint32_t waitGuestObject(const std::shared_ptr<GuestWaitable> &waitable,
@@ -1176,6 +1193,21 @@ uint32_t waitGuestObject(const std::shared_ptr<GuestWaitable> &waitable,
         : g_currentGuestThread->lastGuestLr.load(std::memory_order_relaxed);
     std::unique_lock<std::mutex> lock(waitable->mutex);
     const uint64_t initialPulseGeneration = waitable->pulseGeneration;
+    const uint32_t waitSequence = g_b95SyncWaitLogs.fetch_add(1u, std::memory_order_relaxed);
+    if (waitable->handle == 0x115u) recordRuntimeTrace("B97_WAIT_TARGET_BEGIN handle=0x00000115 tid=" + std::to_string(g_currentGuestThreadId) + " lr=" + std::to_string(currentLr) + " pending=" + std::to_string(waitable->unconsumedSignals) + " generation=" + std::to_string(waitable->signalGeneration));
+    if (waitSequence < 512u) {
+        char event[320];
+        std::snprintf(event, sizeof(event),
+            "B95_SYNC_WAIT_BEGIN seq=%u thread=%u handle=0x%08X object=0x%08X "
+            "target=0x%08X kind=%u signaled=%u pending=%u signal_gen=%llu pulse_gen=%llu lr=0x%08X",
+            waitSequence + 1u, g_currentGuestThreadId, waitable->handle,
+            waitable->objectAddress, waitable->handle ? waitable->handle : waitable->objectAddress,
+            static_cast<unsigned>(waitable->kind), waitable->signaled ? 1u : 0u,
+            waitable->unconsumedSignals,
+            static_cast<unsigned long long>(waitable->signalGeneration),
+            static_cast<unsigned long long>(waitable->pulseGeneration), currentLr);
+        recordRuntimeTrace(event);
+    }
     const auto ready = [&] {
         const bool available = waitable->kind == GuestWaitable::Kind::Semaphore
             ? waitable->semaphoreCount > 0
@@ -1217,6 +1249,16 @@ uint32_t waitGuestObject(const std::shared_ptr<GuestWaitable> &waitable,
                 if (!waitable->manualReset) waitable->signaled = false;
             }
             syncGuestDispatcherSignalState(waitable);
+            if (waitSequence < 512u) {
+                char event[224];
+                std::snprintf(event, sizeof(event),
+                    "B95_SYNC_WAIT_RESULT seq=%u thread=%u handle=0x%08X object=0x%08X "
+                    "status=0x%08X remaining=%u signal_gen=%llu",
+                    waitSequence + 1u, g_currentGuestThreadId, waitable->handle,
+                    waitable->objectAddress, kNtStatusSuccess, waitable->unconsumedSignals,
+                    static_cast<unsigned long long>(waitable->signalGeneration));
+                recordRuntimeTrace(event);
+            }
             if (waitable->handle == 0x00000112u) { char event[224]; std::snprintf(event, sizeof(event), "B83_WAIT_SATISFIED handle=0x00000112 kind=%s thread=%u count=%d manual=%u", waitable->kind == GuestWaitable::Kind::Semaphore ? "Semaphore" : "Event", static_cast<uint32_t>(g_currentGuestThreadId), waitable->semaphoreCount, waitable->manualReset ? 1u : 0u); recordRuntimeTrace(event); }
             return kNtStatusSuccess;
         }
@@ -2225,6 +2267,33 @@ extern "C" bool xowue_82dc2390_observe(PPCContext &context,uint8_t *base) {
 void xowue_thread_checkpoint(uint32_t guestAddress);
 static void xowue_trace_hot_guest_entry(uint32_t guestAddress, PPCContext &ctx);
 void xowue_thread_checkpoint(uint32_t guestAddress,PPCContext &ctx){
+    // Build 97: observe media-related PPC entries and raw guest instruction words.
+    if (guestAddress == 0x8236E738u || guestAddress == 0x82C3C5E8u ||
+        guestAddress == 0x82C3C4D8u || guestAddress == 0x82C3E928u ||
+        guestAddress == 0x82C4D4A8u || guestAddress == 0x82427940u ||
+        guestAddress == 0x82370500u || guestAddress == 0x822A0278u) {
+        static std::atomic<uint32_t> b97Count{0u};
+        if (b97Count.fetch_add(1u, std::memory_order_relaxed) < 512u) {
+            char event[512];
+            std::snprintf(event, sizeof(event),
+                "B97_MOVIE_PPC pc=0x%08X tid=%u lr=0x%08X sp=0x%08X r3=0x%08X r4=0x%08X r5=0x%08X r6=0x%08X r7=0x%08X r8=0x%08X r9=0x%08X r10=0x%08X r11=0x%08X r12=0x%08X r30=0x%08X r31=0x%08X",
+                guestAddress, g_currentGuestThreadId, static_cast<uint32_t>(ctx.lr), ctx.r1.u32,
+                ctx.r3.u32, ctx.r4.u32, ctx.r5.u32, ctx.r6.u32, ctx.r7.u32,
+                ctx.r8.u32, ctx.r9.u32, ctx.r10.u32, ctx.r11.u32, ctx.r12.u32,
+                ctx.r30.u32, ctx.r31.u32);
+            recordRuntimeTrace(event);
+            const auto mem = g_activeGuestMemory.lock();
+            if (mem && mem->base && validGuestRange(guestAddress, 0x40u)) {
+                for (uint32_t off = 0; off < 0x40u; off += 4u) {
+                    char word[128];
+                    std::snprintf(word, sizeof(word),
+                        "B97_MOVIE_PPC_WORD pc=0x%08X address=0x%08X word=0x%08X",
+                        guestAddress, guestAddress + off, loadGuestBe32(mem->base, guestAddress + off));
+                    recordRuntimeTrace(word);
+                }
+            }
+        }
+    }
     // Check before diagnostic work: a stop request must not be delayed by a
     // one-shot caller/stack dump at a hot AOT entry.
     if (g_schedulerStopRequested.load(std::memory_order_relaxed))
@@ -3065,8 +3134,10 @@ extern "C" bool xowue_xenos_commit_resolved_rgba(
         xowue::xenos::NotifyGuestFrameRejected("XENOS_STALE_GUEST_FRAME: resolve_not_ready_for_present");
         return false;
     }
-    if(xowue_vulkan_backend_guest_frame_rgba)
+    if(xowue_vulkan_backend_guest_frame_rgba) {
         xowue_vulkan_backend_guest_frame_rgba(dest,pitch,height,6u,rgba,sourceBytes);
+        xowue::xenos::NotifyGuestFrameSubmitted();
+    }
     return true;
 }
 
@@ -6041,8 +6112,10 @@ static bool executeGuestPM4Words(uint8_t *base,
                     if(xowue::xenos::ShouldPresentGuestFrame()){
                         if (xowue_vulkan_backend_guest_swap)
                             xowue_vulkan_backend_guest_swap(frontbuffer, width, height);
-                        if (xowue_vulkan_backend_guest_frame_rgba)
+                        if (xowue_vulkan_backend_guest_frame_rgba) {
                             xowue_vulkan_backend_guest_frame_rgba(decodedAddress,width,height,textureFormat,rgba.data(),rgba.size());
+                            xowue::xenos::NotifyGuestFrameSubmitted();
+                        }
                     } else {
                         xowue::xenos::NotifyGuestFrameRejected("XENOS_STALE_GUEST_FRAME: swap_decode_not_ready_for_present");
                     }
@@ -6281,6 +6354,9 @@ void xowue_VdSwap(PPCContext &context, uint8_t *base) {
     const bool decoded = decodeXenosSwapTexture(base, fetchWords, textureFormat,
                                                  width, height, decodedAddress,
                                                  rgba);
+    recordRuntimeTrace("B97_XENOS_SWAP_DECODE decoded=" + std::to_string(decoded ? 1 : 0) +
+        " width=" + std::to_string(width) + " height=" + std::to_string(height) +
+        " format=" + std::to_string(textureFormat) + " bytes=" + std::to_string(rgba.size()));
     {
         std::lock_guard<std::mutex> lock(g_xenosMutex);
         ++g_xenosFrontend.swaps;
@@ -6301,8 +6377,10 @@ void xowue_VdSwap(PPCContext &context, uint8_t *base) {
         if(xowue::xenos::ShouldPresentGuestFrame()){
             if (xowue_vulkan_backend_guest_swap)
                 xowue_vulkan_backend_guest_swap(frontbufferPhysicalAddress, width, height);
-            if (xowue_vulkan_backend_guest_frame_rgba)
+            if (xowue_vulkan_backend_guest_frame_rgba) {
                 xowue_vulkan_backend_guest_frame_rgba(decodedAddress,width,height,textureFormat,rgba.data(),rgba.size());
+                xowue::xenos::NotifyGuestFrameSubmitted();
+            }
         } else {
             xowue::xenos::NotifyGuestFrameRejected("XENOS_STALE_GUEST_FRAME: vd_swap_decode_not_ready_for_present");
         }
@@ -6614,6 +6692,16 @@ void xowue_NtClose(PPCContext &context) {
         const auto file = g_guestFiles.find(handle);
         if (file != g_guestFiles.end()) {
             const auto completion = file->second->completion;
+            std::string ext = file->second->path.extension().string();
+            std::transform(ext.begin(), ext.end(), ext.begin(),
+                [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
+            if (ext == ".bik") {
+                recordRuntimeTrace("B97_MOVIE_CLOSE handle=" + std::to_string(handle) +
+                    " path=" + file->second->path.string() +
+                    " lr=" + std::to_string(g_currentGuestThread
+                        ? g_currentGuestThread->lastGuestLr.load(std::memory_order_relaxed)
+                        : g_mainThreadGuestLr.load(std::memory_order_relaxed)));
+            }
             g_guestFiles.erase(file);
             std::lock_guard<std::mutex> objectLock(g_guestObjectMutex);
             g_guestWaitables.erase(handle);
@@ -7246,32 +7334,87 @@ void xowue_NtSetInformationFile(PPCContext &context, uint8_t *base) {
 
 void xowue_NtReadFileScatter(PPCContext &context, uint8_t *base) {
     GuestEventSignalOnReturn signal(context.r4.u32);
-    const auto file = lookupGuestFile(context.r3.u32);
+    const uint32_t handle = context.r3.u32;
+    const auto file = lookupGuestFile(handle);
     const uint32_t ioStatus = context.r7.u32, segments = context.r8.u32;
     const uint32_t length = context.r9.u32, offsetPointer = context.r10.u32;
-    if (!base || !file || file->directory || !file->readable || length > 64u * 1024u * 1024u ||
-        (length && !validGuestRange(segments, static_cast<uint64_t>((length + 4095u) / 4096u) * 8u))) {
+    if (!base || !file || file->directory || !file->readable ||
+        length > 64u * 1024u * 1024u ||
+        (length != 0u && !validGuestRange(segments,
+            static_cast<uint64_t>((length + 4095u) / 4096u) * 8u))) {
         context.r3.u32 = file ? kNtStatusInvalidParameter : kNtStatusInvalidHandle;
         writeGuestIoStatus(base, ioStatus, context.r3.u32, 0u);
         return;
     }
     std::lock_guard<std::mutex> lock(file->mutex);
     const uint64_t offset = guestFileOffset(base, offsetPointer, file, false);
-    file->stream.clear(); file->stream.seekg(static_cast<std::streamoff>(offset));
+    file->stream.clear();
+    file->stream.seekg(static_cast<std::streamoff>(offset), std::ios::beg);
+    if (!file->stream) {
+        context.r3.u32 = kNtStatusUnsuccessful;
+        writeGuestIoStatus(base, ioStatus, context.r3.u32, 0u);
+        queueGuestApc(g_currentGuestThread, context.r5.u32, context.r6.u32, ioStatus, 0u);
+        return;
+    }
     uint32_t total = 0u;
+    uint32_t status = kNtStatusSuccess;
     while (total < length) {
-        const uint32_t segment = PPC_LOAD_U32(segments + (total / 4096u) * 8u);
+        const uint32_t segmentIndex = total / 4096u;
+        const uint32_t segment = PPC_LOAD_U32(segments + segmentIndex * 8u);
         const uint32_t chunk = std::min<uint32_t>(4096u, length - total);
-        if (!validGuestRange(segment, chunk)) break;
-        file->stream.read(reinterpret_cast<char *>(base + segment), chunk);
-        const uint32_t read = static_cast<uint32_t>(file->stream.gcount());
-        total += read;
-        if (read != chunk) break;
+        if (!validGuestRange(segment, chunk)) {
+            status = kNtStatusInvalidParameter;
+            break;
+        }
+        file->stream.read(reinterpret_cast<char *>(base + segment),
+                          static_cast<std::streamsize>(chunk));
+        const uint32_t bytesRead = static_cast<uint32_t>(file->stream.gcount());
+        const bool readEof = file->stream.eof();
+        const bool readBad = file->stream.bad();
+        const bool readFailed = file->stream.fail();
+        total += bytesRead;
+        if (readBad || (readFailed && !readEof)) {
+            status = kNtStatusUnsuccessful;
+            break;
+        }
+        if (bytesRead != chunk) {
+            status = (readEof && total == 0u) ? kNtStatusEndOfFile :
+                     (readEof ? kNtStatusSuccess : kNtStatusUnsuccessful);
+            break;
+        }
     }
     file->stream.clear();
+    if (offsetPointer == 0u) {
+        file->stream.seekg(static_cast<std::streamoff>(offset + total), std::ios::beg);
+        if (!file->stream && status == kNtStatusSuccess)
+            status = kNtStatusUnsuccessful;
+        file->stream.clear();
+    }
+    writeGuestIoStatus(base, ioStatus, status, total);
     queueGuestApc(g_currentGuestThread, context.r5.u32, context.r6.u32, ioStatus, 0u);
-    context.r3.u32 = kNtStatusSuccess;
-    writeGuestIoStatus(base, ioStatus, kNtStatusSuccess, total);
+    context.r3.u32 = status;
+    std::string ext = file->path.extension().string();
+    std::transform(ext.begin(), ext.end(), ext.begin(),
+        [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
+    if (ext == ".bik") {
+        recordRuntimeTrace("B97_MOVIE_SCATTER handle=" + std::to_string(handle) +
+            " path=" + file->path.string() + " offset=" + std::to_string(offset) +
+            " requested=" + std::to_string(length) + " transferred=" + std::to_string(total) +
+            " status=" + std::to_string(status) + " iosb=" + std::to_string(ioStatus) +
+            " apc=" + std::to_string(context.r5.u32) + " event=" + std::to_string(context.r4.u32));
+    }
+    static std::atomic<uint32_t> s_b95ScatterLogs{0u};
+    const uint32_t sequence = s_b95ScatterLogs.fetch_add(1u, std::memory_order_relaxed);
+    if (sequence < 128u) {
+        char event[256];
+        std::snprintf(event, sizeof(event),
+            "B95_SCATTER_READ seq=%u thread=%u handle=0x%08X offset=%llu requested=%u "
+            "transferred=%u status=0x%08X eof=%u",
+            sequence + 1u, g_currentGuestThreadId, handle,
+            static_cast<unsigned long long>(offset), length, total, status,
+            status == kNtStatusEndOfFile ? 1u : 0u);
+        recordRuntimeTrace(event);
+    }
 }
 
 void xowue_NtDeviceIoControlFile(PPCContext &context, uint8_t *base) {
@@ -9106,3 +9249,42 @@ void xowue_NtFreeVirtualMemory(PPCContext &context, uint8_t *base) {
     throw std::runtime_error(message);
 }
 
+
+/* Build 95: exact PPC store watchpoint for Build 89/90 stream objects. */
+void xowue_note_guest_store(uint8_t *base, uint32_t address,
+                            uint32_t width, uint64_t value) {
+    if (!base || width == 0u || width > 8u ||
+        static_cast<uint64_t>(address) + width > PPC_MEMORY_SIZE) return;
+    constexpr uint32_t objects[] = {0x4147A980u, 0x4147B678u};
+    constexpr uint32_t fields[] = {0x9Cu, 0xA4u, 0xACu};
+    uint32_t object = 0u, field = 0u;
+    const uint64_t storeEnd = static_cast<uint64_t>(address) + width;
+    for (uint32_t candidate : objects) {
+        for (uint32_t offset : fields) {
+            const uint32_t fieldAddress = candidate + offset;
+            if (address < fieldAddress + 4u && storeEnd > fieldAddress) {
+                object = candidate; field = offset; break;
+            }
+        }
+        if (object != 0u) break;
+    }
+    if (object == 0u) return;
+    uint64_t oldValue = 0u;
+    for (uint32_t i = 0u; i < width; ++i)
+        oldValue = (oldValue << 8u) | base[address + i];
+    static std::atomic<uint32_t> s_logs{0u};
+    const uint32_t sequence = s_logs.fetch_add(1u, std::memory_order_relaxed);
+    if (sequence >= 1024u) return;
+    const uint32_t threadId = g_currentGuestThread ? g_currentGuestThread->id : g_currentGuestThreadId;
+    const uint32_t pc = g_currentGuestThread
+        ? g_currentGuestThread->lastGuestPc.load(std::memory_order_relaxed)
+        : g_mainThreadLastPc.load(std::memory_order_relaxed);
+    char event[320];
+    std::snprintf(event, sizeof(event),
+        "B95_GUEST_STORE seq=%u thread=%u object=0x%08X field=+0x%02X "
+        "ea=0x%08X width=%u old=0x%016llX new=0x%016llX pc=0x%08X lr=0x%08X",
+        sequence + 1u, threadId, object, field, address, width,
+        static_cast<unsigned long long>(oldValue),
+        static_cast<unsigned long long>(value), pc, 0u);
+    recordRuntimeTrace(event);
+}

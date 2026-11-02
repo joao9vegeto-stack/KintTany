@@ -228,6 +228,10 @@ jobs:
           set -euo pipefail
           python3 -m py_compile tools/test_xowue_gpu_wiring.py
           python3 tools/test_xowue_gpu_wiring.py
+          python3 -m py_compile tools/test_xowue_build95_interventions.py
+          python3 tools/test_xowue_build95_interventions.py
+          python3 -m py_compile tools/test_xowue_build97_video_diagnostics.py
+          python3 tools/test_xowue_build97_video_diagnostics.py
 
       - name: Record native source of Wolverine's failing PPC CTR branch
         run: |

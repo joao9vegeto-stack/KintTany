@@ -101,14 +101,22 @@ void NotifyGuestResolve(uint32_t t,uint32_t w,uint32_t h,uint32_t p,uint32_t c,u
   std::lock_guard lock(stateMutex);
   guestFrame.source_tile=t; if(w)guestFrame.width=w; if(h)guestFrame.height=h; if(p)guestFrame.pitch=p;
   guestFrame.copy_command=c; guestFrame.resolve_status=status;
-  guestFrame.has_color_source=status!=0; guestFrame.copied_to_swapchain=status!=0;
+  // Resolve status certifies guest-memory resolve only, not host submission.
   guestFrame.resolve_valid=status!=0;
   if(status==0){guestFrame.committed=false;guestFrame.stale=true;guestFrame.black_screen_guard=true;lastReject="XENOS_STALE_GUEST_FRAME: resolve_status_zero";}
 }
 void NotifyGuestFrameCommitted(){
   std::lock_guard lock(stateMutex);
   guestFrame.committed=true;
-  if(!guestFrame.nonblack_valid){guestFrame.stale=true;guestFrame.black_screen_guard=true;}
+  if(!guestFrame.resolve_valid || !guestFrame.has_color_source || !guestFrame.nonblack_valid){
+    guestFrame.stale=true;guestFrame.black_screen_guard=true;
+  }
+}
+void NotifyGuestFrameSubmitted(){
+  std::lock_guard lock(stateMutex);
+  if(guestFrame.committed && guestFrame.resolve_valid &&
+     guestFrame.has_color_source && guestFrame.nonblack_valid && !guestFrame.stale)
+    guestFrame.copied_to_swapchain=true;
 }
 void NotifyGuestFrameRejected(const char* reason){
   std::lock_guard lock(stateMutex);
@@ -122,13 +130,14 @@ void NotifyGuestFramePixels(uint32_t width,uint32_t height,const uint8_t* pixels
   uint32_t count=0;
   for(size_t i=0;i+2<limit;i+=4u)if(pixels[i]||pixels[i+1]||pixels[i+2])++count;
   guestFrame.nonblack_pixels=count; guestFrame.nonblack_valid=count>0;
+  guestFrame.has_color_source=count>0;
   guestFrame.width=width; guestFrame.height=height;
   if(count==0){guestFrame.stale=true;guestFrame.committed=false;guestFrame.black_screen_guard=true;lastReject="XENOS_STALE_GUEST_FRAME: black_frame_after_resolve";}
   else {guestFrame.stale=false;guestFrame.black_screen_guard=false;}
 }
 bool ShouldPresentGuestFrame(){
   std::lock_guard lock(stateMutex);
-  return guestFrame.has_guest_swap&&guestFrame.has_color_source&&guestFrame.copied_to_swapchain&&guestFrame.resolve_valid&&guestFrame.committed&&guestFrame.nonblack_valid&&!guestFrame.stale&&!guestFrame.black_screen_guard;
+  return guestFrame.has_guest_swap&&guestFrame.has_color_source&&guestFrame.resolve_valid&&guestFrame.committed&&guestFrame.nonblack_valid&&!guestFrame.stale&&!guestFrame.black_screen_guard;
 }
 bool HasFreshGuestFrame(){return ShouldPresentGuestFrame();}
 bool IsGuestFrameStale(){std::lock_guard lock(stateMutex);return guestFrame.stale;}

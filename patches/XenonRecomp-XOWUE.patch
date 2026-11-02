@@ -553,21 +553,27 @@ diff --git a/XenonUtils/ppc_context.h b/XenonUtils/ppc_context.h
  
  #define PPC_FUNC_PROLOGUE() __builtin_assume(((size_t)base & 0x1F) == 0)
  
-@@ -78,4 +78,12 @@
- #ifndef PPC_STORE_U32
--#define PPC_STORE_U32(x, y) *(volatile uint32_t*)(base + (x)) = __builtin_bswap32(y)
-+#define PPC_STORE_U32(x, y) do { \
-+    const uint32_t xowue_store_address_ = uint32_t(x); \
-+    const uint32_t xowue_store_value_ = uint32_t(y); \
-+    *(volatile uint32_t*)(base + xowue_store_address_) = __builtin_bswap32(xowue_store_value_); \
-+    if (xowue_store_address_ == 0x10311010u || xowue_store_address_ == 0x7FC81710u || \
-+        xowue_store_address_ == 0x90311010u || xowue_store_address_ == 0xB0311010u || \
-+        xowue_store_address_ == 0x000005C4u) \
-+        xowue_note_scratch_reg4_write(xowue_store_address_, xowue_store_value_); \
-+} while (0)
+@@ -70,15 +70,15 @@
+ #ifndef PPC_STORE_U8
+-#define PPC_STORE_U8(x, y) *(volatile uint8_t*)(base + (x)) = (y)
++#define PPC_STORE_U8(x, y) do { const uint32_t xowue_store_address_ = uint32_t(x); const uint8_t xowue_store_value_ = uint8_t(y); if ((xowue_store_address_ >= 0x4147AA15u && xowue_store_address_ < 0x4147AA30u) || (xowue_store_address_ >= 0x4147B70Du && xowue_store_address_ < 0x4147B728u)) xowue_note_guest_store(base, xowue_store_address_, 1u, xowue_store_value_); *(volatile uint8_t*)(base + xowue_store_address_) = xowue_store_value_; } while (0)
  #endif
  
-@@ -108,10 +116,13 @@
+ #ifndef PPC_STORE_U16
+-#define PPC_STORE_U16(x, y) *(volatile uint16_t*)(base + (x)) = __builtin_bswap16(y)
++#define PPC_STORE_U16(x, y) do { const uint32_t xowue_store_address_ = uint32_t(x); const uint16_t xowue_store_value_ = uint16_t(y); if ((xowue_store_address_ >= 0x4147AA15u && xowue_store_address_ < 0x4147AA30u) || (xowue_store_address_ >= 0x4147B70Du && xowue_store_address_ < 0x4147B728u)) xowue_note_guest_store(base, xowue_store_address_, 2u, xowue_store_value_); *(volatile uint16_t*)(base + xowue_store_address_) = __builtin_bswap16(xowue_store_value_); } while (0)
+ #endif
+ 
+ #ifndef PPC_STORE_U32
+-#define PPC_STORE_U32(x, y) *(volatile uint32_t*)(base + (x)) = __builtin_bswap32(y)
++#define PPC_STORE_U32(x, y) do { const uint32_t xowue_store_address_ = uint32_t(x); const uint32_t xowue_store_value_ = uint32_t(y); if ((xowue_store_address_ >= 0x4147AA15u && xowue_store_address_ < 0x4147AA30u) || (xowue_store_address_ >= 0x4147B70Du && xowue_store_address_ < 0x4147B728u)) xowue_note_guest_store(base, xowue_store_address_, 4u, xowue_store_value_); *(volatile uint32_t*)(base + xowue_store_address_) = __builtin_bswap32(xowue_store_value_); if (xowue_store_address_ == 0x10311010u || xowue_store_address_ == 0x7FC81710u || xowue_store_address_ == 0x90311010u || xowue_store_address_ == 0xB0311010u || xowue_store_address_ == 0x000005C4u) xowue_note_scratch_reg4_write(xowue_store_address_, xowue_store_value_); } while (0)
+ #endif
+ 
+ #ifndef PPC_STORE_U64
+-#define PPC_STORE_U64(x, y) *(volatile uint64_t*)(base + (x)) = __builtin_bswap64(y)
++#define PPC_STORE_U64(x, y) do { const uint32_t xowue_store_address_ = uint32_t(x); const uint64_t xowue_store_value_ = uint64_t(y); if ((xowue_store_address_ >= 0x4147AA15u && xowue_store_address_ < 0x4147AA30u) || (xowue_store_address_ >= 0x4147B70Du && xowue_store_address_ < 0x4147B728u)) xowue_note_guest_store(base, xowue_store_address_, 8u, xowue_store_value_); *(volatile uint64_t*)(base + xowue_store_address_) = __builtin_bswap64(xowue_store_value_); } while (0)
+ #endif
+@@ -108,10 +116,14 @@
  #define PPC_MEMORY_SIZE 0x100000000ull
  
 -#define PPC_LOOKUP_FUNC(x, y) *(PPCFunc**)(x + PPC_IMAGE_BASE + PPC_IMAGE_SIZE + (uint64_t(uint32_t(y) - PPC_CODE_BASE) * 2))
@@ -582,4 +588,5 @@ diff --git a/XenonUtils/ppc_context.h b/XenonUtils/ppc_context.h
 +PPCFunc* xowue_lookup_indirect(struct PPCContext& ctx, uint8_t* base, uint32_t target);
 +void xowue_dispatch_indirect(struct PPCContext& ctx, uint8_t* base, uint32_t target);
 +void xowue_note_scratch_reg4_write(uint32_t address, uint32_t value);
++void xowue_note_guest_store(uint8_t* base, uint32_t address, uint32_t width, uint64_t value);
  
