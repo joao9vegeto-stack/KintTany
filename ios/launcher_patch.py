@@ -15,7 +15,7 @@ print(f"ASURA_IOS_NATIVE_HEADER_STAGED={staged_header}")
 
 header=root/"src/asurawrath_app.h"
 text=header.read_text()
-marker="// ASURA_IOS_NATIVE_LAUNCHER_V2"
+marker="// ASURA_IOS_NATIVE_LAUNCHER_V4"
 if marker in text: raise SystemExit("native launcher already applied")
 text=text.replace('#include <rex/rex_app.h>','#include <rex/rex_app.h>\n#include "asura_ios_native.h"\n#include <functional>\n#include <optional>\n#include <string>\n#include <vector>\n#include <dispatch/dispatch.h>\n#include <stdexcept>')
 code=r"""
@@ -29,38 +29,49 @@ std::filesystem::path FindAsuraGameRoot(const rex::PathConfig&paths){auto docs=s
 """
 text=text.replace("class AsurawrathApp : public rex::ReXApp {",code+"\n"+marker+"\nclass AsurawrathApp : public rex::ReXApp {")
 method=r"""
- void OnPostInitLogging()override{AsuraIOSLog("HOOK OnPostInitLogging");}
- void OnShutdown()override{AsuraIOSLog("HOOK OnShutdown");}
+ void OnPostInitLogging() override { AsuraIOSLog("HOOK OnPostInitLogging"); }
+ void OnPostSetup() override { AsuraIOSLog("HOOK OnPostSetup"); }
+ void OnPostLoadXexImage() override { AsuraIOSLog("HOOK OnPostLoadXexImage"); }
+ void OnPreLaunchModule() override { AsuraIOSLog("HOOK OnPreLaunchModule"); }
+ void OnShutdown() override { AsuraIOSLog("HOOK OnShutdown"); }
+
+ // ReXApp calls OnFinalizePaths only after SetupPresentation has created the
+ // SDL/UIKit window and ImGui surface. Returning nullopt keeps the event loop
+ // alive while the native folder launcher is visible. The Play callback runs
+ // on UIKit's main queue and resumes ReXApp with the selected game path.
+ std::optional<rex::PathConfig> OnFinalizePaths(
+     const rex::PathConfig& defaults,
+     std::function<void(rex::PathConfig)> resume) override {
+#if defined(__APPLE__)
+   AsuraIOSLog("HOOK OnFinalizePaths BEGIN");
+   auto detected = FindAsuraGameRoot(defaults);
+   AsuraIOSLog(detected.empty() ? "GAME_DISCOVERY NOT_FOUND" :
+               "GAME_DISCOVERY FOUND " + detected.string());
+   AsuraIOSShowLauncher(detected.string(),
+     [defaults]() { return FindAsuraGameRoot(defaults).string(); },
+     [defaults, resume = std::move(resume)](std::string selected) mutable {
+       if (selected.empty()) {
+         AsuraIOSLog("LAUNCHER_START_REJECTED_EMPTY_PATH");
+         return;
+       }
+       auto paths = defaults;
+       paths.game_data_root = std::move(selected);
+       AsuraIOSLog("LAUNCHER PATH_ACCEPTED " + paths.game_data_root.string());
+       resume(std::move(paths));
+     });
+   return std::nullopt;
+#else
+   return defaults;
+#endif
+ }
 """
 start=text.find("class AsurawrathApp : public rex::ReXApp {");end=text.rfind("\n};")
 if start<0 or end<start or text[end+3:].strip():raise SystemExit("AsurawrathApp terminator not found")
-text=text[:end]+"\n"+method+text[end:];# Inject the launcher into the real ReXGlue path hook. OnFinalizePaths is
-# not part of this app's startup path; upstream actually calls OnConfigurePaths.
-needle = "  void OnConfigurePaths(rex::PathConfig &paths) override {"
-assert text.count(needle) == 1, "upstream OnConfigurePaths hook changed"
-launcher_gate = r"""
-#if defined(__APPLE__)
-    auto asura_detected = FindAsuraGameRoot(paths);
-    AsuraIOSLog("HOOK OnConfigurePaths BEGIN");
-    AsuraIOSLog(asura_detected.empty() ? "GAME_DISCOVERY NOT_FOUND" :
-                "GAME_DISCOVERY FOUND " + asura_detected.string());
-    dispatch_semaphore_t asura_choice_ready = dispatch_semaphore_create(0);
-    std::string asura_selected;
-    AsuraIOSShowLauncher(asura_detected.string(),
-      [&paths]() { return FindAsuraGameRoot(paths).string(); },
-      [&asura_selected, asura_choice_ready](std::string selected) {
-        asura_selected = std::move(selected);
-        dispatch_semaphore_signal(asura_choice_ready);
-      });
-    // ReXGlue calls OnConfigurePaths on its initialization worker. Keep that
-    // worker at the path boundary while UIKit remains free to present the
-    // folder picker and receive the user's Play action.
-    dispatch_semaphore_wait(asura_choice_ready, DISPATCH_TIME_FOREVER);
-    if (asura_selected.empty())
-      throw std::runtime_error("Asura launcher returned an empty game path");
-    paths.game_data_root = asura_selected;
-    AsuraIOSLog("LAUNCHER PATH_ACCEPTED " + asura_selected);
-#endif
-"""
-text = text.replace(needle, needle + launcher_gate)
-header.write_text(text);print("ASURA_IOS_NATIVE_LAUNCHER_V3_OK")
+text=text[:end]+"\n"+method+text[end:];# The launcher belongs to OnFinalizePaths, not OnConfigurePaths:
+# ReXApp invokes OnConfigurePaths inside SetupEnvironment, before it creates
+# the SDL/UIKit window. Blocking there prevents SetupPresentation from ever
+# running and leaves the iOS app as a black screen.
+if "OnFinalizePaths(" not in method:
+    raise SystemExit("missing asynchronous finalization hook")
+header.write_text(text)
+print("ASURA_IOS_FINALIZE_PATHS_LAUNCHER_V4_OK")

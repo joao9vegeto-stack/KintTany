@@ -8,13 +8,20 @@
 #include <ctime>
 #include <cstdlib>
 #include <exception>
+#include <csignal>
+#include <fcntl.h>
+#include <limits.h>
+#include <cstdio>
+#include <cstring>
 namespace {
-std::mutex log_mutex2; std::string log_path2; UIWindow* overlay_window2=nil; UIWindow* prior_window2=nil;
+std::mutex log_mutex2; std::string log_path2; char crash_path2[PATH_MAX]{}; UIWindow* overlay_window2=nil; UIWindow* prior_window2=nil;
 NSURL* selected_game_url2=nil;
 bool selected_game_scope2=false;
 std::string docs_path2(){NSString*p=[NSHomeDirectory() stringByAppendingPathComponent:@"Documents"];[[NSFileManager defaultManager]createDirectoryAtPath:p withIntermediateDirectories:YES attributes:nil error:nil];return p.UTF8String?p.UTF8String:"";}
-void log_line2(const std::string&s){std::lock_guard<std::mutex>l(log_mutex2);if(log_path2.empty())log_path2=docs_path2()+"/asura-ios.log";std::ofstream f(log_path2,std::ios::app);if(!f)return;std::time_t t=std::time(nullptr);std::tm tm{};localtime_r(&t,&tm);char b[32]{};std::strftime(b,sizeof(b),"%Y-%m-%d %H:%M:%S",&tm);f<<b<<" [Asura-iOS] "<<s<<"\n";f.flush();}
-void init_log2(){static dispatch_once_t once;dispatch_once(&once,^{log_line2("PROCESS_START");std::atexit([]{log_line2("PROCESS_EXIT");});std::set_terminate([]{log_line2("FATAL std::terminate");std::abort();});NSNotificationCenter*n=NSNotificationCenter.defaultCenter;NSArray*names=@[UIApplicationDidBecomeActiveNotification,UIApplicationWillResignActiveNotification,UIApplicationDidEnterBackgroundNotification,UIApplicationWillEnterForegroundNotification,UIApplicationWillTerminateNotification];for(NSString*name in names)[n addObserverForName:name object:nil queue:NSOperationQueue.mainQueue usingBlock:^(NSNotification*note){log_line2(std::string("LIFECYCLE ")+note.name.UTF8String);}];});}
+void write_crash_record2(const char* message){if(!crash_path2[0])return;int fd=open(crash_path2,O_WRONLY|O_CREAT|O_APPEND,0600);if(fd>=0){write(fd,message,std::strlen(message));close(fd);}}
+void fatal_signal2(int sig){const char* message="FATAL SIGNAL\\n";switch(sig){case SIGABRT:message="FATAL SIGNAL SIGABRT\\n";break;case SIGSEGV:message="FATAL SIGNAL SIGSEGV\\n";break;case SIGBUS:message="FATAL SIGNAL SIGBUS\\n";break;case SIGILL:message="FATAL SIGNAL SIGILL\\n";break;case SIGFPE:message="FATAL SIGNAL SIGFPE\\n";break;}int fd=open(crash_path2,O_WRONLY|O_CREAT|O_APPEND,0600);if(fd>=0){write(fd,message,std::strlen(message));close(fd);}_exit(128+sig);}
+void log_line2(const std::string&s){std::lock_guard<std::mutex>l(log_mutex2);const std::string docs=docs_path2();if(log_path2.empty())log_path2=docs+"/log.txt";if(!crash_path2[0])std::snprintf(crash_path2,sizeof(crash_path2),"%s/crash.txt",docs.c_str());std::time_t t=std::time(nullptr);std::tm tm{};localtime_r(&t,&tm);char b[32]{};std::strftime(b,sizeof(b),"%Y-%m-%d %H:%M:%S",&tm);const std::string line=std::string(b)+" [Asura-iOS] "+s+"\\n";for(const auto&path:{log_path2,docs+"/asura-ios.log"}){std::ofstream f(path,std::ios::app);if(f){f<<line;f.flush();}}}
+void init_log2(){static dispatch_once_t once;dispatch_once(&once,^{const std::string docs=docs_path2();std::snprintf(crash_path2,sizeof(crash_path2),"%s/crash.txt",docs.c_str());log_line2("PROCESS_START");std::signal(SIGABRT,fatal_signal2);std::signal(SIGSEGV,fatal_signal2);std::signal(SIGBUS,fatal_signal2);std::signal(SIGILL,fatal_signal2);std::signal(SIGFPE,fatal_signal2);std::atexit([]{log_line2("PROCESS_EXIT");});std::set_terminate([]{log_line2("FATAL std::terminate");write_crash_record2("FATAL std::terminate\\n");std::abort();});NSNotificationCenter*n=NSNotificationCenter.defaultCenter;NSArray*names=@[UIApplicationDidBecomeActiveNotification,UIApplicationWillResignActiveNotification,UIApplicationDidEnterBackgroundNotification,UIApplicationWillEnterForegroundNotification,UIApplicationWillTerminateNotification];for(NSString*name in names)[n addObserverForName:name object:nil queue:NSOperationQueue.mainQueue usingBlock:^(NSNotification*note){log_line2(std::string("LIFECYCLE ")+note.name.UTF8String);}];});}
 }
 @interface AsuraNativeLauncher2:UIViewController<UIDocumentPickerDelegate>{std::string path2;std::function<std::string()>scan2;std::function<void(std::string)>start2;UILabel*status2;UILabel*location2;UIButton*play2;UIDocumentPickerViewController*picker2;}
 -(instancetype)initPath:(std::string)p scan:(std::function<std::string()>)s start:(std::function<void(std::string)>)f;
