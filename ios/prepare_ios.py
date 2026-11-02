@@ -91,4 +91,21 @@ loader_replacement = loader_needle + '''
 '''
 loader_cmake.write_text(loader_text.replace(loader_needle, loader_replacement))
 
+
+# ReXGlue's SDL window source is missing the closing brace for the
+# CAMetalLayer allowed-types branch. Close it before the Android branch.
+window_sdl = root / "tools/rexglue/src/ui/window_sdl.cpp"
+window_sdl_text = window_sdl.read_text()
+surface_needle = """      SDL_Metal_DestroyView(metal_view);
+    }
+#elif REX_PLATFORM_ANDROID
+"""
+surface_replacement = """      SDL_Metal_DestroyView(metal_view);
+    }
+  }
+#elif REX_PLATFORM_ANDROID
+"""
+assert window_sdl_text.count(surface_needle) == 1, "unexpected ReXGlue SDL Metal surface block"
+window_sdl.write_text(window_sdl_text.replace(surface_needle, surface_replacement))
+
 print("ASURA_IOS_CMAKE_PATCH_OK")
