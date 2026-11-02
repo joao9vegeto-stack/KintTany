@@ -1,7 +1,7 @@
 diff --git a/src/kosmickrisp/meson.build b/src/kosmickrisp/meson.build
 --- a/src/kosmickrisp/meson.build
 +++ b/src/kosmickrisp/meson.build
-@@ -16,3 +16,17 @@ executable(
+@@ -16,3 +16,18 @@ executable(
      link_with: [libkk],
      link_args: ['-Wl,-undefined,dynamic_lookup'],
  )
