@@ -1,5 +1,18 @@
 from pathlib import Path
+import shutil
+
 root=Path(__file__).resolve().parents[1]/"upstream"
+# asurawrath_app.h is compiled from upstream/src and includes this header
+# with quotes; stage the iOS interface beside it before patching/building.
+native_header=Path(__file__).resolve().with_name("asura_ios_native.h")
+staged_header=root/"src"/"asura_ios_native.h"
+if not native_header.is_file():
+    raise SystemExit(f"missing iOS native interface: {native_header}")
+shutil.copy2(native_header, staged_header)
+if staged_header.read_bytes()!=native_header.read_bytes():
+    raise SystemExit("failed to stage asura_ios_native.h into upstream/src")
+print(f"ASURA_IOS_NATIVE_HEADER_STAGED={staged_header}")
+
 header=root/"src/asurawrath_app.h"
 text=header.read_text()
 marker="// ASURA_IOS_NATIVE_LAUNCHER_V2"
