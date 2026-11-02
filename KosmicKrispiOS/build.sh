@@ -208,7 +208,8 @@ done
 # references. Never use dynamic_lookup to mask missing Vulkan symbols.
 LINK_CONFIG="$OUT/KosmicKrispLink.xcconfig"
 {
-  # Keep the ICD archive lazy: -u extracts the member defining the ICD entrypoint,
+  # SpartanPort iOS build policy (validated by the next fresh Actions run):
+# Keep the ICD archive lazy: -u extracts the member defining the ICD entrypoint,
 # while force-loading libkk.a also pulls generated WSI dispatch tables whose
 # optional Vulkan entrypoints are not implemented by this iOS driver.
 printf 'OTHER_LDFLAGS = $(inherited) -Wl,-u,_vk_icdGetInstanceProcAddr %s' "$ARCHIVE"
