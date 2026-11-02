@@ -208,7 +208,10 @@ done
 # references. Never use dynamic_lookup to mask missing Vulkan symbols.
 LINK_CONFIG="$OUT/KosmicKrispLink.xcconfig"
 {
-  printf 'OTHER_LDFLAGS = $(inherited) -Wl,-u,_vk_icdGetInstanceProcAddr -Wl,-force_load,%s' "$ARCHIVE"
+  # Keep the ICD archive lazy: -u extracts the member defining the ICD entrypoint,
+# while force-loading libkk.a also pulls generated WSI dispatch tables whose
+# optional Vulkan entrypoints are not implemented by this iOS driver.
+printf 'OTHER_LDFLAGS = $(inherited) -Wl,-u,_vk_icdGetInstanceProcAddr %s' "$ARCHIVE"
   for archive in "${LINK_ARCHIVES[@]}"; do
     [[ "$archive" == "$ARCHIVE" ]] && continue
     printf ' %s' "$archive"
@@ -235,7 +238,7 @@ iOS target: arm64-apple-ios17.4
 M3 Metal WSI: applied
 M3B direct ICD/CAMetalLayer smoke source: compiled to ARM64 object archive (not linked or runtime-tested)
 Meson iOS static archives: individually force-loaded into the SpartanPort app executable
-Mesa/KosmicKrisp static dependencies: force-loaded; Metal WSI object members and ICD entrypoint verified
+Mesa/KosmicKrisp static dependencies: lazy archive extraction via ICD -u entrypoint; Metal WSI object members verified
 Physical device runtime validation: pending integrator
 EOF
 shasum -a 256 "${LINK_ARCHIVES[@]}" "$OUT/KosmicKrispM3B-smoke-objects.a" "$OUT/static-link-archives.txt" "$OUT/KosmicKrispLink.xcconfig" "$ROOT"/patches/*.patch > "$OUT/SHA256SUMS"
