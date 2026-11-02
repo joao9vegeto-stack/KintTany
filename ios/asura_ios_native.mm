@@ -13,6 +13,7 @@
 #include <limits.h>
 #include <cstdio>
 #include <cstring>
+#include <memory>
 namespace {
 std::mutex log_mutex2; std::string log_path2; char crash_path2[PATH_MAX]{}; UIWindow* overlay_window2=nil; UIWindow* prior_window2=nil;
 NSURL* selected_game_url2=nil;
@@ -55,23 +56,49 @@ void init_log2(){static dispatch_once_t once;dispatch_once(&once,^{const std::st
 std::string AsuraIOSDocumentsPath(){init_log2();return docs_path2();}
 void AsuraIOSLog(const std::string&s){init_log2();log_line2(s);}
 void AsuraIOSShowLauncher(std::string p,std::function<std::string()>scan,std::function<void(std::string)>start) {
- init_log2(); log_line2("NATIVE_LAUNCHER_REQUEST");
- dispatch_async(dispatch_get_main_queue(), ^{
-  UIWindowScene* scene=nil;
-  for(UIScene* x in UIApplication.sharedApplication.connectedScenes)
-   if([x isKindOfClass:UIWindowScene.class] && x.activationState==UISceneActivationStateForegroundActive){scene=(UIWindowScene*)x;break;}
-  if(scene) {
+ init_log2();
+ log_line2("NATIVE_LAUNCHER_REQUEST");
+ // ReXApp can reach OnFinalizePaths while UIKit is still transitioning its
+ // UIWindowScene from foreground-inactive to foreground-active. Creating a
+ // frame-only UIWindow in that interval produces an unattached window on
+ // scene-based iOS apps: the SDL surface stays black and the launcher never
+ // appears. Wait for a real foreground UIWindowScene and always attach to it.
+ auto path = std::make_shared<std::string>(std::move(p));
+ auto scanner = std::make_shared<std::function<std::string()>>(std::move(scan));
+ auto starter = std::make_shared<std::function<void(std::string)>>(std::move(start));
+ auto attempts = std::make_shared<int>(0);
+ auto present = std::make_shared<std::function<void()>>();
+ *present = [path, scanner, starter, attempts, present]() {
+  dispatch_async(dispatch_get_main_queue(), ^{
+   UIWindowScene* scene=nil;
+   for(UIScene* x in UIApplication.sharedApplication.connectedScenes) {
+    if(![x isKindOfClass:UIWindowScene.class]) continue;
+    UIWindowScene* candidate=(UIWindowScene*)x;
+    if(candidate.activationState==UISceneActivationStateForegroundActive) { scene=candidate; break; }
+    if(!scene && candidate.activationState==UISceneActivationStateForegroundInactive) scene=candidate;
+   }
+   if(!scene) {
+    ++(*attempts);
+    log_line2("LAUNCHER_SCENE_WAIT attempt="+std::to_string(*attempts));
+    if(*attempts<40) {
+     dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(250 * NSEC_PER_MSEC)), dispatch_get_main_queue(), ^{ (*present)(); });
+    } else {
+     log_line2("LAUNCHER_SCENE_UNAVAILABLE_TIMEOUT");
+     *present = nullptr;
+    }
+    return;
+   }
    for(UIWindow* w in scene.windows) if(w.isKeyWindow){prior_window2=w;break;}
    overlay_window2=[[UIWindow alloc]initWithWindowScene:scene];
-   log_line2("LAUNCHER_WINDOW_MODE_SCENE");
-  } else {
-   for(UIWindow* w in UIApplication.sharedApplication.windows) if(w.isKeyWindow){prior_window2=w;break;}
-   overlay_window2=[[UIWindow alloc]initWithFrame:UIScreen.mainScreen.bounds];
-   log_line2("LAUNCHER_WINDOW_MODE_LEGACY_FALLBACK");
-  }
-  overlay_window2.windowLevel=UIWindowLevelNormal+1;
-  overlay_window2.rootViewController=[[AsuraNativeLauncher2 alloc]initPath:std::move(p) scan:std::move(scan) start:std::move(start)];
-  [overlay_window2 makeKeyAndVisible]; log_line2("NATIVE_LAUNCHER_VISIBLE");
- });
+   overlay_window2.frame=scene.coordinateSpace.bounds;
+   overlay_window2.windowLevel=UIWindowLevelNormal+1;
+   overlay_window2.rootViewController=[[AsuraNativeLauncher2 alloc]initPath:*path scan:*scanner start:*starter];
+   [overlay_window2 makeKeyAndVisible];
+   log_line2("LAUNCHER_WINDOW_ATTACHED_TO_FOREGROUND_SCENE");
+   log_line2("NATIVE_LAUNCHER_VISIBLE");
+   *present = nullptr;
+  });
+ };
+ (*present)();
 }
 __attribute__((constructor))static void AsuraIOSBootLog2(){init_log2();}

@@ -57,6 +57,9 @@ jobs:
           ! grep -q "dispatch_semaphore_wait(asura_choice_ready" upstream/src/asurawrath_app.h
           grep -q "PROCESS_START" ios/asura_ios_native.mm
           grep -q "FATAL SIGNAL SIGSEGV" ios/asura_ios_native.mm
+          grep -q "LAUNCHER_SCENE_WAIT" ios/asura_ios_native.mm
+          grep -q "LAUNCHER_WINDOW_ATTACHED_TO_FOREGROUND_SCENE" ios/asura_ios_native.mm
+          ! grep -q "LAUNCHER_WINDOW_MODE_LEGACY_FALLBACK" ios/asura_ios_native.mm
           BUILD_NUMBER=$(cat ios/BUILD_NUMBER)
           [[ "$BUILD_NUMBER" =~ ^[1-9][0-9]*$ ]]
           echo "BUILD_NUMBER=$BUILD_NUMBER" >> "$GITHUB_ENV"
