@@ -50,6 +50,58 @@ jobs:
           done
           git -C "$MESA_DIR" diff --check
           echo "PASS: all pinned Mesa patches apply cleanly."
+
+  ps4-aot-audit:
+    name: Analyze actual PS4 SELF with native ARM64 AOT recompiler
+    runs-on: ubuntu-24.04
+    timeout-minutes: 120
+    steps:
+      - name: Checkout isolated port branch
+        uses: actions/checkout@v4
+      - name: Set up Go for pinned PS4Recomp source
+        uses: actions/setup-go@v6
+        with:
+          go-version: '1.27.1'
+          cache: false
+      - name: Fetch pinned PS4Recomp implementation
+        run: |
+          set -euo pipefail
+          git clone https://github.com/wie-project/PS4Recomp.git "$RUNNER_TEMP/PS4Recomp"
+          git -C "$RUNNER_TEMP/PS4Recomp" checkout --detach 5dc28943ba81550b04de37fc91e0b05e8d3bcec8
+          test "$(git -C "$RUNNER_TEMP/PS4Recomp" rev-parse HEAD)" = "5dc28943ba81550b04de37fc91e0b05e8d3bcec8"
+          mkdir -p "$RUNNER_TEMP/ps4-aot-audit"
+      - name: Test and build the AOT recompiler
+        working-directory: ${{ runner.temp }}/PS4Recomp
+        run: |
+          set -euo pipefail
+          go test -count=1 ./...
+          go build -o "$RUNNER_TEMP/ps4-recomp" ./cmd/ps4-recomp
+          "$RUNNER_TEMP/ps4-recomp" version | tee "$RUNNER_TEMP/ps4-aot-audit/version.txt"
+      - name: Analyze the uploaded God of War III PS4 executable
+        run: |
+          set -euo pipefail
+          test -s "$GITHUB_WORKSPACE/eboot.bin"
+          "$RUNNER_TEMP/ps4-recomp" analyze "$GITHUB_WORKSPACE/eboot.bin" 2>&1 | tee "$RUNNER_TEMP/ps4-aot-audit/analysis.txt"
+      - name: Generate AOT assembly and the real HLE import report
+        run: |
+          set -euo pipefail
+          "$RUNNER_TEMP/ps4-recomp" -compile=false -out "$RUNNER_TEMP/ps4-aot-generated" \
+            "$GITHUB_WORKSPACE/eboot.bin" 2>&1 | tee "$RUNNER_TEMP/ps4-aot-audit/recompile.txt"
+          test -s "$RUNNER_TEMP/ps4-aot-generated/hle_report.txt"
+          cp "$RUNNER_TEMP/ps4-aot-generated/hle_report.txt" "$RUNNER_TEMP/ps4-aot-audit/hle_report.txt"
+          find "$RUNNER_TEMP/ps4-aot-generated" -type f -name '*.s' | wc -l | tee "$RUNNER_TEMP/ps4-aot-audit/assembly_chunks.txt"
+          find "$RUNNER_TEMP/ps4-aot-generated" -type f \( -name '*.c' -o -name '*.cpp' -o -name '*.m' -o -name '*.mm' \) | wc -l | tee "$RUNNER_TEMP/ps4-aot-audit/runtime_sources.txt"
+          # Do not publish generated game code; retain only static analysis and HLE metadata.
+          rm -rf "$RUNNER_TEMP/ps4-aot-generated"
+      - name: Upload AOT compatibility and import audit
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: SpartanPort-PS4-AOT-Audit
+          path: ${{ runner.temp }}/ps4-aot-audit/
+          if-no-files-found: warn
+          retention-days: 14
+
   build:
     name: Build KosmicKrisp ICD and SpartanPort iOS arm64
     # Required runner: macos-26 ARM64 with Xcode 26 / iOS SDK 26 and Metal 4.
