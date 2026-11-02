@@ -136,13 +136,17 @@ test -f "$ARCHIVE" && test -s "$SMOKE"
 STATIC_ARCHIVES=()
 while IFS= read -r -d '' archive; do
   STATIC_ARCHIVES+=("$archive")
-done < <(find "$OUT/build-ios" -type f -name '*.a' -print0)
+done < <(find "$OUT/build-ios" -name '*.a' -print0)
 KK_DISPATCH_TABLE="$OUT/build-ios/src/kosmickrisp/vulkan/libkk_device_dispatch_table.a"
 KK_CMD_DISPATCH_TABLE="$OUT/build-ios/src/kosmickrisp/vulkan/libkk_device_cmd_dispatch_table.a"
 test -s "$KK_DISPATCH_TABLE"
 test -s "$KK_CMD_DISPATCH_TABLE"
-test "${#STATIC_ARCHIVES[@]}" -ge 4
-printf '%s\\n' "${STATIC_ARCHIVES[@]}" > "$OUT/static-dependency-archives.txt"
+test "${#STATIC_ARCHIVES[@]}" -ge 10 || {
+  echo "ERROR: expected the complete Mesa/KosmicKrisp static dependency closure (at least 10 archives), found ${#STATIC_ARCHIVES[@]}" >&2
+  printf '%s\\n' "${STATIC_ARCHIVES[@]}" >&2
+  exit 1
+}
+printf '%s\\n' "${STATIC_ARCHIVES[@]}" | tee "$OUT/static-dependency-archives.txt"
 rm -f "$OUT/libkk-kosmickrisp-ios-arm64.a"
 # Flatten every Meson static archive into real object members before
 # creating the app-facing archive. Passing .a files directly to Apple's
@@ -188,15 +192,17 @@ test -f "$OUT/include/vk_video/vulkan_video_codec_h264std.h"
 file "$OUT/libkk-kosmickrisp-ios-arm64.a" | tee "$OUT/file.txt"
 lipo -info "$OUT/libkk-kosmickrisp-ios-arm64.a" | tee "$OUT/lipo.txt"
 nm -g "$OUT/libkk-kosmickrisp-ios-arm64.a" > "$OUT/symbols.txt"
-# nm -U excludes undefined references. The previous check accidentally used
-# plain nm, so an undefined U entry counted as proof that an implementation
-# existed. Require actual definitions for representative transitive symbols.
+# nm -U suppresses undefined references on Apple's nm. Check actual Mach-O
+# symbol spellings (one leading underscore), and only implementations that
+# exist in the pinned Mesa sources and are part of the iOS dependency closure.
 nm -gU "$OUT/libkk-kosmickrisp-ios-arm64.a" > "$OUT/defined-symbols.txt"
-echo "=== Defined ICD and Mesa dependency symbols in flattened archive ==="
-grep -E 'vk_icdGetInstanceProcAddr|mesa_blake3_compute|mesa_hash_table_create|simple_mtx_plain_init_once|mtx_init' "$OUT/defined-symbols.txt" || true
-for symbol in vk_icdGetInstanceProcAddr __mesa_blake3_compute __mesa_hash_table_create __simple_mtx_plain_init_once mtx_init; do
+echo "=== Defined ICD, Mesa utility, BLAKE3, mutex and C11 thread symbols ==="
+grep -E '_vk_icdGetInstanceProcAddr|_blake3_compress_in_place|_mesa_hash_table_create|_simple_mtx_plain_init_once|_mtx_init' "$OUT/defined-symbols.txt" || true
+for symbol in _vk_icdGetInstanceProcAddr _blake3_compress_in_place _mesa_hash_table_create _simple_mtx_plain_init_once _mtx_init; do
   grep -F "$symbol" "$OUT/defined-symbols.txt" >/dev/null || {
     echo "ERROR: required implementation is not defined in flattened archive: $symbol" >&2
+    echo "Archive inputs:" >&2
+    cat "$OUT/static-dependency-archives.txt" >&2
     exit 1
   }
 done
