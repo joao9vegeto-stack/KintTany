@@ -156,10 +156,15 @@ enum PS4ELFInspector {
             if segmentType == 1 {
                 guard fileSize <= memorySize else { throw PS4ELFInspectorError.invalidLoadSegment }
                 loadSegments += 1
+                // SELF p_offset addresses the reconstructed ELF, not the
+                // container bytes. SELF payload ranges are checked separately.
                 let (relativeEnd, overflow1) = fileOffset.addingReportingOverflow(fileSize)
-                let (absoluteEnd, overflow2) = UInt64(baseOffset).addingReportingOverflow(relativeEnd)
-                guard !overflow1, !overflow2, absoluteEnd <= UInt64(data.count) else {
-                    throw PS4ELFInspectorError.invalidLoadSegment
+                guard !overflow1 else { throw PS4ELFInspectorError.invalidLoadSegment }
+                if container == nil {
+                    let (absoluteEnd, overflow2) = UInt64(baseOffset).addingReportingOverflow(relativeEnd)
+                    guard !overflow2, absoluteEnd <= UInt64(data.count) else {
+                        throw PS4ELFInspectorError.invalidLoadSegment
+                    }
                 }
             }
         }
