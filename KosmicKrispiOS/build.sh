@@ -126,10 +126,19 @@ test -f "$ARCHIVE" && test -f "$SMOKE"
 # static dependency closure so the consumer receives one complete archive.
 STATIC_ARCHIVES=()
 while IFS= read -r -d '' archive; do
+  # Mesa declares these generated dispatch-table archives with link_whole:
+  # their weak overloads must be force-loaded by the final application linker.
+  case "$archive" in
+    */libkk_device_dispatch_table.a|*/libkk_device_cmd_dispatch_table.a) continue ;;
+  esac
   STATIC_ARCHIVES+=("$archive")
 done < <(find "$OUT/build-ios" -type f -name '*.a' -print0)
+KK_DISPATCH_TABLE="$OUT/build-ios/src/kosmickrisp/vulkan/libkk_device_dispatch_table.a"
+KK_CMD_DISPATCH_TABLE="$OUT/build-ios/src/kosmickrisp/vulkan/libkk_device_cmd_dispatch_table.a"
+test -s "$KK_DISPATCH_TABLE"
+test -s "$KK_CMD_DISPATCH_TABLE"
 test "${#STATIC_ARCHIVES[@]}" -ge 2
-printf '%s\\n' "${STATIC_ARCHIVES[@]}" > "$OUT/static-dependency-archives.txt"
+printf '%s\\n' "${STATIC_ARCHIVES[@]}" "$KK_DISPATCH_TABLE" "$KK_CMD_DISPATCH_TABLE" > "$OUT/static-dependency-archives.txt"
 rm -f "$OUT/libkk-kosmickrisp-ios-arm64.a"
 xcrun libtool -static -o "$OUT/libkk-kosmickrisp-ios-arm64.a" "${STATIC_ARCHIVES[@]}"
 test -s "$OUT/libkk-kosmickrisp-ios-arm64.a"
@@ -160,7 +169,7 @@ LLVM: llvm@20
 iOS target: arm64-apple-ios17.4
 M3 Metal WSI: applied
 M3B direct ICD/CAMetalLayer smoke: compiled
-Static dependency closure: merged into the delivered archive
+Static dependency closure: merged; generated dispatch-table archives force-loaded by consumer linker
 Mesa simple mutex + C11 thread implementation: verified in archive
 Physical device runtime validation: pending integrator
 EOF
