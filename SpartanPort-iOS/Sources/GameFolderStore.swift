@@ -41,9 +41,13 @@ final class GameFolderStore: ObservableObject {
         documents.appendingPathComponent("SpartanPort", isDirectory: true).appendingPathComponent("Jogos", isDirectory: true)
     }
 
-    init() { refresh() }
+    init() {
+        StartupDiagnostics.record("event=game_folder_store_init")
+        refresh()
+    }
 
     func refresh(selecting preferredURL: URL? = nil) {
+        StartupDiagnostics.record("event=library_refresh")
         do { try fm.createDirectory(at: gamesDirectory, withIntermediateDirectories: true) }
         catch {
             message = "Falha ao criar a pasta de jogos: \(error.localizedDescription)"
@@ -67,6 +71,7 @@ final class GameFolderStore: ObservableObject {
 
     /// Imports external Files/iCloud folders into Documents so access survives picker closure.
     func select(folder url: URL) {
+        StartupDiagnostics.record("event=folder_import_requested source=\(url.lastPathComponent)")
         guard !isImporting else { return }
         isImporting = true
         message = "Importando dump para o armazenamento do aplicativo…"
@@ -190,13 +195,16 @@ final class GameFolderStore: ObservableObject {
                      "selected=\(selectedRelativePath ?? "none")", "folder=\(folderName ?? "none")",
                      "title=\(gameTitle ?? "unknown")", "title_id=\(titleID ?? "unknown")",
                      "payload_valid=\(isValidPayload)", "elf64_x86_64_valid=\(executableValidated)",
-                     "runtime_ps4=unavailable", "message=\(message)"]
+                     "runtime_ps4=unavailable", "aot_x86_64_arm64=unavailable",
+                     "gpu_game_renderer=unavailable", "message=\(message)"]
         lines.append(contentsOf: details)
         if let error { lines.append("error=\(error.localizedDescription)") }
         try? (lines.joined(separator: "\n") + "\n").write(to: URL(fileURLWithPath: diagnosticsPath), atomically: true, encoding: .utf8)
+        StartupDiagnostics.record("event=library_diagnostics_written selected=\(selectedRelativePath ?? "none") payload_valid=\(isValidPayload) elf_valid=\(executableValidated)")
         if let error {
             let crash = "SPARTANPORT_ERROR \(timestamp)\n\(error.localizedDescription)\n"
             try? crash.write(to: documents.appendingPathComponent("crash.txt"), atomically: true, encoding: .utf8)
+            StartupDiagnostics.record("event=handled_error description=\(error.localizedDescription)")
         }
     }
 }
