@@ -1,7 +1,7 @@
 diff --git a/src/kosmickrisp/meson.build b/src/kosmickrisp/meson.build
 --- a/src/kosmickrisp/meson.build
 +++ b/src/kosmickrisp/meson.build
-@@ -16,6 +16,21 @@
+@@ -12,7 +12,22 @@
  executable(
      'kosmicomp',
      files('kosmicomp.c'),
