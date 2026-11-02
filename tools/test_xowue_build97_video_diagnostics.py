@@ -35,6 +35,11 @@ required = {
     "scatter IOSB completion": "writeGuestIoStatus(base, ioStatus, status, total)",
     "scatter APC delivery": "queueGuestApc(g_currentGuestThread, context.r5.u32, context.r6.u32, ioStatus, 0u)",
     "scatter read diagnostics retained": "B95_SCATTER_READ",
+    "file object completion starts auto-reset unsignaled": "file->completion->manualReset = false;\n    file->completion->signaled = false;",
+    "file completion RAII implementation": "struct GuestFileCompletionSignalOnReturn final",
+    "file completion init telemetry": "B99_FILE_COMPLETION_INIT",
+    "file completion signal telemetry": "B99_FILE_COMPLETION_SIGNAL",
+    "last-alias close wakes file waiters": "B99_FILE_COMPLETION_CLOSE",
 }
 failed = []
 for label, token in required.items():
@@ -60,6 +65,28 @@ if "markGuestWaitableSignaledLocked" in wait_body:
     print("FAIL: wait path must not fabricate signals")
 else:
     print("PASS: wait path does not fabricate signals")
+
+
+for function_name in ("xowue_NtReadFile", "xowue_NtReadFileScatter", "xowue_NtWriteFile"):
+    function_start = source.index("void " + function_name + "(")
+    function_end = source.find("\nvoid ", function_start + 6)
+    if function_end < 0:
+        function_end = len(source)
+    function_body = source[function_start:function_end]
+    if "GuestFileCompletionSignalOnReturn completionSignal(file);" not in function_body:
+        failed.append(function_name + " must signal file completion on return")
+        print("FAIL: " + function_name + " file completion guard")
+    else:
+        print("PASS: " + function_name + " file completion guard")
+
+close_start = source.index("void xowue_NtClose(PPCContext &context) {")
+close_end = source.index("\nstatic bool getGuestObjectPath", close_start)
+close_body = source[close_start:close_end]
+if "lastFileAlias && closedFileCompletion" not in close_body or "signalGuestWaitable(closedFileCompletion)" not in close_body:
+    failed.append("last file alias close must signal completion")
+    print("FAIL: last file alias close must signal completion")
+else:
+    print("PASS: last file alias close signals completion")
 
 if failed:
     raise SystemExit("XOWUE Build 97 diagnostic contract failed: " + "; ".join(failed))

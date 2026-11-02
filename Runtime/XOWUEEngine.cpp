@@ -1232,8 +1232,9 @@ uint32_t waitGuestObject(const std::shared_ptr<GuestWaitable> &waitable,
     std::unique_lock<std::mutex> lock(waitable->mutex);
     const uint64_t initialPulseGeneration = waitable->pulseGeneration;
     const uint32_t waitSequence = g_b95SyncWaitLogs.fetch_add(1u, std::memory_order_relaxed);
-    const uint32_t b98WaitSample = g_b98WaitTargetLogs.fetch_add(1u, std::memory_order_relaxed) + 1u;
-    if (waitable->handle == 0x115u &&
+    const uint32_t b98WaitSample = waitable->handle == 0x115u
+        ? g_b98WaitTargetLogs.fetch_add(1u, std::memory_order_relaxed) + 1u : 0u;
+    if (b98WaitSample != 0u &&
         (b98WaitSample <= 16u || (b98WaitSample % 256u) == 0u)) {
         char target[384];
         std::snprintf(target, sizeof(target),
@@ -1528,8 +1529,9 @@ bool signalGuestEventStructure(uint32_t address, uint8_t *base) {
 void signalGuestEventHandle(uint32_t handle) {
     if (handle == 0u) return;
     const auto waitable = lookupGuestWaitable(handle);
-    const uint32_t signalSample = g_b98SignalAttemptLogs.fetch_add(1u, std::memory_order_relaxed) + 1u;
-    if (handle == 0x00000115u &&
+    const uint32_t signalSample = handle == 0x00000115u
+        ? g_b98SignalAttemptLogs.fetch_add(1u, std::memory_order_relaxed) + 1u : 0u;
+    if (signalSample != 0u &&
         (signalSample <= 16u || (signalSample % 256u) == 0u)) {
         char event[320];
         std::snprintf(event, sizeof(event),
@@ -1552,6 +1554,37 @@ struct GuestEventSignalOnReturn final {
     ~GuestEventSignalOnReturn() { signalNow(); }
     uint32_t handle;
     bool signaled = false;
+};
+
+struct GuestFileCompletionSignalOnReturn final {
+    explicit GuestFileCompletionSignalOnReturn(std::shared_ptr<GuestFile> value)
+        : file(std::move(value)) {}
+    ~GuestFileCompletionSignalOnReturn() {
+        if (!file || !file->completion) return;
+        signalGuestWaitable(file->completion);
+        std::string ext = file->path.extension().string();
+        std::transform(ext.begin(), ext.end(), ext.begin(),
+            [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
+        if (ext == ".bik") {
+            static std::atomic<uint32_t> logs{0u};
+            const uint32_t sample = logs.fetch_add(1u, std::memory_order_relaxed) + 1u;
+            if (sample <= 24u || (sample % 512u) == 0u) {
+                uint64_t generation = 0u;
+                {
+                    std::lock_guard<std::mutex> lock(file->completion->mutex);
+                    generation = file->completion->signalGeneration;
+                }
+                char event[512];
+                std::snprintf(event, sizeof(event),
+                    "B99_FILE_COMPLETION_SIGNAL sample=%u handle=0x%08X object=0x%08X generation=%llu path=%s",
+                    sample, file->completion->handle, file->completion->objectAddress,
+                    static_cast<unsigned long long>(generation),
+                    file->path.string().c_str());
+                recordRuntimeTrace(event);
+            }
+        }
+    }
+    std::shared_ptr<GuestFile> file;
 };
 
 std::shared_ptr<std::recursive_mutex> criticalSectionLock(uint32_t address) {
@@ -5331,8 +5364,14 @@ static uint32_t createGuestFile(uint8_t *base, const std::string &guestPath,
     file->completion->kind = GuestWaitable::Kind::Event;
     file->completion->handle = handle;
     file->completion->objectAddress = objectAddress;
-    file->completion->manualReset = true;
-    file->completion->signaled = true;
+    file->completion->manualReset = false;
+    file->completion->signaled = false;
+    file->completion->unconsumedSignals = 0u;
+    file->completion->signalGeneration = 0u;
+    file->completion->pulseGeneration = 0u;
+    syncGuestDispatcherSignalState(file->completion);
+    if (base && validGuestRange(objectAddress + 4u, 4u))
+        PPC_STORE_U32(objectAddress + 4u, 0u);
     {
         std::lock_guard<std::mutex> lock(g_guestFileMutex);
         g_guestFiles[handle] = file;
@@ -5344,6 +5383,11 @@ static uint32_t createGuestFile(uint8_t *base, const std::string &guestPath,
     }
     handleOut = handle;
     actionOut = existedBeforeOpen ? 1u : 2u;
+    if (file->path.extension() == ".bik") {
+        recordRuntimeTrace("B99_FILE_COMPLETION_INIT handle=" + std::to_string(handle) +
+            " object=" + std::to_string(objectAddress) + " manual=0 signaled=0 path=" +
+            file->path.string());
+    }
     (void)base;
     return kNtStatusSuccess;
 }
@@ -6778,6 +6822,9 @@ void xowue_ExTerminateThread(PPCContext &context) {
 
 void xowue_NtClose(PPCContext &context) {
     const uint32_t handle = context.r3.u32;
+    std::shared_ptr<GuestWaitable> closedFileCompletion;
+    bool closedFile = false;
+    bool lastFileAlias = false;
     {
         std::lock_guard<std::mutex> lock(g_guestFileMutex);
         const auto file = g_guestFiles.find(handle);
@@ -6794,17 +6841,28 @@ void xowue_NtClose(PPCContext &context) {
                         : g_mainThreadGuestLr.load(std::memory_order_relaxed)));
             }
             g_guestFiles.erase(file);
-            std::lock_guard<std::mutex> objectLock(g_guestObjectMutex);
-            g_guestWaitables.erase(handle);
-            if (completion) {
-                const bool aliased = std::any_of(g_guestFiles.begin(), g_guestFiles.end(),
-                    [&completion](const auto &entry) { return entry.second->completion == completion; });
-                if (!aliased) g_guestWaitables.erase(completion->objectAddress);
+            {
+                std::lock_guard<std::mutex> objectLock(g_guestObjectMutex);
+                g_guestWaitables.erase(handle);
+                if (completion) {
+                    lastFileAlias = std::none_of(g_guestFiles.begin(), g_guestFiles.end(),
+                        [&completion](const auto &entry) { return entry.second->completion == completion; });
+                    if (lastFileAlias) g_guestWaitables.erase(completion->objectAddress);
+                }
             }
-            context.r3.u32 = kNtStatusSuccess;
-            recordRuntimeTrace("NtClose file handle closed");
-            return;
+            closedFileCompletion = completion;
+            closedFile = true;
         }
+    }
+    if (closedFile) {
+        if (lastFileAlias && closedFileCompletion) {
+            signalGuestWaitable(closedFileCompletion);
+            recordRuntimeTrace("B99_FILE_COMPLETION_CLOSE handle=0x" +
+                std::to_string(handle) + " last_alias=1");
+        }
+        context.r3.u32 = kNtStatusSuccess;
+        recordRuntimeTrace("NtClose file handle closed");
+        return;
     }
     std::shared_ptr<GuestThread> thread = lookupGuestThread(handle);
     std::shared_ptr<GuestWaitable> waitable = lookupGuestWaitable(handle);
@@ -6984,6 +7042,7 @@ void xowue_NtReadFile(PPCContext &context, uint8_t *base) {
         recordRuntimeTrace(event);
     };
     const auto file = lookupGuestFile(handle);
+    GuestFileCompletionSignalOnReturn completionSignal(file);
     if (!base || !file || file->directory || !file->readable || length > 64u * 1024u * 1024u ||
         (length != 0u && !validGuestRange(buffer, length))) {
         context.r3.u32 = file ? kNtStatusInvalidParameter : kNtStatusInvalidHandle;
@@ -7127,6 +7186,7 @@ void xowue_NtWriteFile(PPCContext &context, uint8_t *base) {
     const uint32_t length = context.r9.u32;
     const uint32_t offsetPointer = context.r10.u32;
     const auto file = lookupGuestFile(handle);
+    GuestFileCompletionSignalOnReturn completionSignal(file);
     if (!base || !file || file->directory || !file->writable || length > 64u * 1024u * 1024u ||
         (length != 0u && !validGuestRange(buffer, length))) {
         context.r3.u32 = file ? kNtStatusInvalidParameter : kNtStatusInvalidHandle;
@@ -7427,6 +7487,7 @@ void xowue_NtReadFileScatter(PPCContext &context, uint8_t *base) {
     GuestEventSignalOnReturn signal(context.r4.u32);
     const uint32_t handle = context.r3.u32;
     const auto file = lookupGuestFile(handle);
+    GuestFileCompletionSignalOnReturn completionSignal(file);
     const uint32_t ioStatus = context.r7.u32, segments = context.r8.u32;
     const uint32_t length = context.r9.u32, offsetPointer = context.r10.u32;
     if (!base || !file || file->directory || !file->readable ||
