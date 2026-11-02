@@ -115,10 +115,13 @@ export PATH="$OUT/host-tools/bin:$PATH"
 rm -rf "$OUT/build-ios"
 meson setup "$OUT/build-ios" "$OUT/mesa-src" --cross-file "$OUT/ios-arm64.cross" --buildtype=release --wrap-mode=nodownload -Dplatforms=ios -Dvulkan-drivers=kosmickrisp -Dgallium-drivers= -Dopengl=false -Dzstd=disabled -Dmesa-clc=system -Dprecomp-compiler=system -Dllvm=disabled -Dspirv-tools=disabled --prefer-static
 ninja -C "$OUT/build-ios" src/kosmickrisp/vulkan/libkk.a
-meson compile -C "$OUT/build-ios" kk-ios-smoke
+# Compile the iOS smoke harness as an object archive only. Linking a standalone
+# executable here is invalid: it bypasses the final app's complete static
+# dependency closure and fails on the iOS dynamic_lookup linker restriction.
+meson compile -C "$OUT/build-ios" kk-ios-smoke-objects
 ARCHIVE="$OUT/build-ios/src/kosmickrisp/vulkan/libkk.a"
-SMOKE="$OUT/build-ios/src/kosmickrisp/kk-ios-smoke"
-test -f "$ARCHIVE" && test -f "$SMOKE"
+SMOKE="$OUT/build-ios/src/kosmickrisp/libkk-ios-smoke-objects.a"
+test -f "$ARCHIVE" && test -s "$SMOKE"
 
 # libkk.a is not self-contained: Meson keeps Mesa's transitive dependencies
 # (mesa_util, C11 threads, NIR, Vulkan utilities, MSL compiler, Metal bridge,
@@ -142,7 +145,7 @@ printf '%s\\n' "${STATIC_ARCHIVES[@]}" "$KK_DISPATCH_TABLE" "$KK_CMD_DISPATCH_TA
 rm -f "$OUT/libkk-kosmickrisp-ios-arm64.a"
 xcrun libtool -static -o "$OUT/libkk-kosmickrisp-ios-arm64.a" "${STATIC_ARCHIVES[@]}"
 test -s "$OUT/libkk-kosmickrisp-ios-arm64.a"
-cp "$SMOKE" "$OUT/KosmicKrispM3B"
+cp "$SMOKE" "$OUT/KosmicKrispM3B-smoke-objects.a"
 mkdir -p "$OUT/include"
 rm -rf "$OUT/include/vulkan"
 cp -R "$OUT/mesa-src/include/vulkan" "$OUT/include/vulkan"
@@ -168,10 +171,10 @@ Meson: $MESON_VERSION
 LLVM: llvm@20
 iOS target: arm64-apple-ios17.4
 M3 Metal WSI: applied
-M3B direct ICD/CAMetalLayer smoke: compiled
+M3B direct ICD/CAMetalLayer smoke source: compiled to ARM64 object archive (not linked or runtime-tested)
 Static dependency closure: merged; generated dispatch-table archives force-loaded by consumer linker
 Mesa simple mutex + C11 thread implementation: verified in archive
 Physical device runtime validation: pending integrator
 EOF
-shasum -a 256 "$OUT/libkk-kosmickrisp-ios-arm64.a" "$OUT/KosmicKrispM3B" "$OUT/static-dependency-archives.txt" "$ROOT"/patches/*.patch > "$OUT/SHA256SUMS"
-echo "PASS: KosmicKrisp iOS arm64 archive and M3B smoke executable built."
+shasum -a 256 "$OUT/libkk-kosmickrisp-ios-arm64.a" "$OUT/KosmicKrispM3B-smoke-objects.a" "$OUT/static-dependency-archives.txt" "$ROOT"/patches/*.patch > "$OUT/SHA256SUMS"
+echo "PASS: KosmicKrisp iOS arm64 archive and M3B smoke objects compiled."

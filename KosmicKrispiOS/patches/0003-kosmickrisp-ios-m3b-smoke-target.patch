@@ -1,25 +1,21 @@
 diff --git a/src/kosmickrisp/meson.build b/src/kosmickrisp/meson.build
 --- a/src/kosmickrisp/meson.build
 +++ b/src/kosmickrisp/meson.build
-@@ -16,3 +16,22 @@ executable(
+@@ -16,3 +16,16 @@ executable(
      link_with: [libkk],
      link_args: ['-Wl,-undefined,dynamic_lookup'],
  )
 +
 +if with_platform_ios
-+  kk_ios_smoke_frameworks = dependency(
-+    'appleframeworks',
-+    modules : ['UIKit', 'Foundation', 'QuartzCore', 'Metal', 'CoreGraphics'],
-+  )
-+
-+  executable(
-+    'kk-ios-smoke',
++  # Compile the device smoke harness without linking a standalone executable.
++  # The app target owns the final static dependency closure and dispatch-table
++  # whole-archive semantics; a separate Meson link would bypass both.
++  static_library(
++    'kk-ios-smoke-objects',
 +    files('kk_ios_smoke.m'),
 +    include_directories : [inc_include, inc_src],
-+    link_whole : [libkk],
-+    dependencies : [idep_vulkan_wsi_defines, kk_ios_smoke_frameworks],
++    dependencies : [idep_vulkan_wsi_defines],
 +    objc_args : ['-Wno-unguarded-availability-new'],
-+    link_args : ['-Wl,-undefined,dynamic_lookup'],
 +    build_by_default : false,
 +    install : false,
 +  )
