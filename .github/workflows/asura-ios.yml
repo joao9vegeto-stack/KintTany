@@ -38,12 +38,16 @@ jobs:
           git -C upstream submodule update --init --recursive
           cp -R ios upstream/ios
           python3 upstream/ios/prepare_ios.py
+          python3 ios/launcher_patch.py
+          BUILD_NUMBER=$(cat ios/BUILD_NUMBER)
+          [[ "$BUILD_NUMBER" =~ ^[1-9][0-9]*$ ]]
+          echo "BUILD_NUMBER=$BUILD_NUMBER" >> "$GITHUB_ENV"
 
       - name: Install iOS and KosmicKrisp build dependencies
         run: |
           set -euxo pipefail
           brew update
-          for pkg in cmake pkg-config libclc "${LLVM_FORMULA}" spirv-tools ninja; do
+          for pkg in cmake pkg-config libclc "${LLVM_FORMULA}" spirv-tools ninja librsvg; do
             brew list "$pkg" >/dev/null 2>&1 || brew install "$pkg"
           done
           python3 -m venv "$GITHUB_WORKSPACE/venv"
@@ -169,7 +173,7 @@ jobs:
           cmake -S upstream -B upstream/build-ios -G Xcode \
             -DCMAKE_SYSTEM_NAME=iOS -DCMAKE_OSX_SYSROOT=iphoneos \
             -DCMAKE_OSX_ARCHITECTURES=arm64 -DCMAKE_OSX_DEPLOYMENT_TARGET="$IOS_DEPLOYMENT_TARGET" \
-            -DCMAKE_BUILD_TYPE=Release -DREXGLUE_USE_VULKAN=ON -DREXGLUE_USE_D3D12=OFF \
+            -DASURA_IOS_BUILD_NUMBER="$BUILD_NUMBER" -DCMAKE_BUILD_TYPE=Release -DREXGLUE_USE_VULKAN=ON -DREXGLUE_USE_D3D12=OFF \
             -DCMAKE_XCODE_ATTRIBUTE_CODE_SIGNING_ALLOWED=NO \
             -DCMAKE_XCODE_ATTRIBUTE_CODE_SIGNING_REQUIRED=NO \
             -DCMAKE_XCODE_ATTRIBUTE_CODE_SIGN_IDENTITY="" \
@@ -190,6 +194,11 @@ jobs:
           cp "$SDK_DYLIB_DIR/librexruntime.dylib" "$APP/Frameworks/"
           cp "$SDK_DYLIB_DIR/librexgpu-xenos.dylib" "$APP/"
           cp upstream/build-ios/kosmickrisp/libvulkan_kosmickrisp.dylib "$APP/Frameworks/"
+          rsvg-convert -w 1024 -h 1024 ios/icons/AppIcon.svg > "$APP/AppIcon-1024.png"
+          sips -z 120 120 "$APP/AppIcon-1024.png" --out "$APP/AppIcon-60@2x.png" >/dev/null
+          sips -z 180 180 "$APP/AppIcon-1024.png" --out "$APP/AppIcon-60@3x.png" >/dev/null
+          /usr/libexec/PlistBuddy -c "Set :CFBundleVersion $BUILD_NUMBER" "$APP/Info.plist"
+          /usr/libexec/PlistBuddy -c "Set :CFBundleShortVersionString 1.0.0" "$APP/Info.plist"
 
           # Remove every build-machine LC_RPATH from the executable and dylibs.
           # The final app uses only paths relative to its own bundle.
@@ -256,13 +265,16 @@ jobs:
           test -f "$APP/Frameworks/libvulkan_kosmickrisp.dylib"
           mkdir -p Payload artifacts
           cp -R "$APP" Payload/AsurasWrath.app
-          ditto -c -k --sequesterRsrc --keepParent Payload artifacts/AsurasWrath-iOS-ARM64.ipa
-          unzip -t artifacts/AsurasWrath-iOS-ARM64.ipa
+          IPA_PATH="artifacts/AsurasWrath-iOS-Build-${BUILD_NUMBER}.ipa"
+          ditto -c -k --sequesterRsrc --keepParent Payload "$IPA_PATH"
+          unzip -t "$IPA_PATH"
+          test -s "$APP/AppIcon-1024.png"
+          echo "ASURA_IOS_BUILD_${BUILD_NUMBER}_IPA_READY=$IPA_PATH"
 
       - name: Upload IPA only
         uses: actions/upload-artifact@v4
         with:
-          name: AsurasWrath-iOS-ARM64
-          path: artifacts/AsurasWrath-iOS-ARM64.ipa
+          name: AsurasWrath-iOS-Build-${{ env.BUILD_NUMBER }}
+          path: artifacts/AsurasWrath-iOS-Build-*.ipa
           if-no-files-found: error
           retention-days: 30
