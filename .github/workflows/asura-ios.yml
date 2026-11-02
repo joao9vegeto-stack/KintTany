@@ -179,10 +179,67 @@ jobs:
           APP="$(find upstream/build-ios -type d -name 'asura_wrath_recomp.app' -print -quit)"
           test -n "$APP"
           mkdir -p "$APP/Frameworks"
+          SDK_DYLIB_DIR="upstream/tools/rexglue/out/mac-arm64/Release"
+          test -f "$SDK_DYLIB_DIR/librexruntime.dylib"
+          test -f "$SDK_DYLIB_DIR/librexgpu-xenos.dylib"
+
+          # ReXGlue's host executable dynamically links librexruntime and
+          # loads rexgpu-xenos at runtime. Bundle both; the GPU plugin stays
+          # beside the executable because the SDK's plugin loader resolves it
+          # from the application directory.
+          cp "$SDK_DYLIB_DIR/librexruntime.dylib" "$APP/Frameworks/"
+          cp "$SDK_DYLIB_DIR/librexgpu-xenos.dylib" "$APP/"
           cp upstream/build-ios/kosmickrisp/libvulkan_kosmickrisp.dylib "$APP/Frameworks/"
-          install_name_tool -add_rpath "@executable_path/Frameworks" "$APP/asura_wrath_recomp" || true
-          otool -L "$APP/asura_wrath_recomp"
+
+          # Remove every build-machine LC_RPATH from the executable and dylibs.
+          # The final app uses only paths relative to its own bundle.
+          for image in "$APP/asura_wrath_recomp" "$APP/Frameworks/librexruntime.dylib" "$APP/librexgpu-xenos.dylib" "$APP/Frameworks/libvulkan_kosmickrisp.dylib"; do
+            while IFS= read -r rpath; do
+              [[ -z "$rpath" ]] && continue
+              if [[ "$rpath" == /* || "$rpath" == *:* ]]; then
+                install_name_tool -delete_rpath "$rpath" "$image"
+              fi
+            done < <(otool -l "$image" | awk '$1 == "cmd" && $2 == "LC_RPATH" { getline; getline; print $2 }')
+          done
+          install_name_tool -add_rpath "@executable_path/Frameworks" "$APP/asura_wrath_recomp"
+          install_name_tool -add_rpath "@loader_path/Frameworks" "$APP/librexgpu-xenos.dylib"
+
+          for image in "$APP/asura_wrath_recomp" "$APP/Frameworks/librexruntime.dylib" "$APP/librexgpu-xenos.dylib" "$APP/Frameworks/libvulkan_kosmickrisp.dylib"; do
+            lipo "$image" -verify_arch arm64
+            otool -L "$image"
+            if otool -l "$image" | grep -Eq "/Users/runner/|/upstream/|/tools/rexglue/out/"; then
+              echo "ERROR: build-machine path leaked into $(basename "$image")" >&2
+              exit 1
+            fi
+          done
+
+          # Fail the package if any non-system @rpath dependency is absent.
+          python3 - "$APP" <<'PY'
+          import pathlib, subprocess, sys
+          app = pathlib.Path(sys.argv[1])
+          images = [app / "asura_wrath_recomp", app / "librexgpu-xenos.dylib"]
+          images += sorted((app / "Frameworks").glob("*.dylib"))
+          for image in images:
+              output = subprocess.check_output(["otool", "-L", str(image)], text=True)
+              for line in output.splitlines()[1:]:
+                  dep = line.strip().split(" (", 1)[0]
+                  if dep.startswith("@rpath/"):
+                      name = dep[len("@rpath/"):]
+                      candidates = [app / "Frameworks" / name, app / name]
+                      if not any(candidate.is_file() for candidate in candidates):
+                          raise SystemExit(f"Unresolved bundled dependency: {image.name} -> {dep}")
+                  elif dep.startswith("@loader_path/"):
+                      candidate = image.parent / dep[len("@loader_path/"):]
+                      if not candidate.is_file():
+                          raise SystemExit(f"Unresolved loader-relative dependency: {image.name} -> {dep}")
+                  elif dep.startswith("/") and not dep.startswith(("/System/Library/", "/usr/lib/")):
+                      raise SystemExit(f"Non-system absolute dependency: {image.name} -> {dep}")
+          print("IOS_BUNDLE_DYLIB_DEPENDENCIES_OK")
+          PY
+
           lipo "$APP/asura_wrath_recomp" -verify_arch arm64
+          lipo "$APP/Frameworks/librexruntime.dylib" -verify_arch arm64
+          lipo "$APP/librexgpu-xenos.dylib" -verify_arch arm64
           lipo "$APP/Frameworks/libvulkan_kosmickrisp.dylib" -verify_arch arm64
           plutil -lint "$APP/Info.plist"
           /usr/libexec/PlistBuddy -c "Print :CFBundleExecutable" "$APP/Info.plist" | grep -qx "asura_wrath_recomp"

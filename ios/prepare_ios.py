@@ -135,6 +135,23 @@ assert memory_text.count(query_start) == 1, "unexpected ReXGlue QueryProtect imp
 memory_text = memory_text.replace(query_start, query_start_ios)
 memory_posix.write_text(memory_text)
 
+
+# The upstream Apple RPATH list is colon-joined, which ld64 records as one
+# invalid LC_RPATH. iOS must use only bundle-relative paths; runtime dylibs
+# are staged into the app's Frameworks directory by the workflow.
+app_cmake = root / "CMakeLists.txt"
+app_text = app_cmake.read_text()
+bad_rpath = '''elseif(APPLE)
+  target_link_options(asura_wrath_recomp PRIVATE "-Wl,-rpath,${REXSDK_DIR}/out/${REX_PLATFORM}:@executable_path/../../../tools/rexglue/out/${REX_PLATFORM}:@executable_path")
+'''
+good_rpath = '''elseif(APPLE AND CMAKE_SYSTEM_NAME STREQUAL "iOS")
+  target_link_options(asura_wrath_recomp PRIVATE "-Wl,-rpath,@executable_path/Frameworks")
+elseif(APPLE)
+  target_link_options(asura_wrath_recomp PRIVATE "-Wl,-rpath,${REXSDK_DIR}/out/${REX_PLATFORM}:@executable_path/../../../tools/rexglue/out/${REX_PLATFORM}:@executable_path")
+'''
+assert app_text.count(bad_rpath) == 1, "unexpected upstream Apple RPATH block"
+app_cmake.write_text(app_text.replace(bad_rpath, good_rpath))
+
 print("ASURA_IOS_MACH_VM_GUARD_OK")
 
 print("ASURA_IOS_CMAKE_PATCH_OK")
