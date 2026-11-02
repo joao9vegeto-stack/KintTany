@@ -36,6 +36,20 @@ sdk.write_text(sdk_text.replace(needle, needle + '''
         add_compile_definitions(REX_PLATFORM_IOS=1)
     endif()
 '''))
+# MoltenVK's CMake project requires AppKit, which is not part of the
+# iPhoneOS SDK. iOS uses the bundled KosmicKrisp ICD, so retain the Vulkan
+# loader but do not configure the macOS MoltenVK implementation.
+thirdparty_cmake = root / "tools/rexglue/thirdparty/CMakeLists.txt"
+thirdparty_text = thirdparty_cmake.read_text()
+moltenvk_needle = "        add_subdirectory(moltenvk)"
+assert thirdparty_text.count(moltenvk_needle) == 1, "unexpected MoltenVK dependency block"
+thirdparty_cmake.write_text(thirdparty_text.replace(
+    moltenvk_needle,
+    """        if(NOT CMAKE_SYSTEM_NAME STREQUAL "iOS")
+            add_subdirectory(moltenvk)
+        endif()"""
+))
+
 
 ui = root / "tools/rexglue/src/ui/CMakeLists.txt"
 ui_text = ui.read_text()
