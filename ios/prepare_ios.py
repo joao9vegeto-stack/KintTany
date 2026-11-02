@@ -1,0 +1,48 @@
+#!/usr/bin/env python3
+"""Prepare upstream Asura/ReXGlue sources for an arm64 iOS app build.
+
+The ReXGlue SDK currently labels all Apple targets as mac-arm64. iOS is also
+AppleClang/ARM64 and its SDL Metal surface is the CAMetalLayer path, so retain
+that ABI/platform code while marking the actual target as iOS for guarded code.
+"""
+from pathlib import Path
+
+root = Path(__file__).resolve().parents[1]
+cmake = root / "CMakeLists.txt"
+text = cmake.read_text()
+needle = 'set_target_properties(asura_wrath_recomp PROPERTIES OUTPUT_NAME "asura_wrath_recomp")'
+assert text.count(needle) == 1, "unexpected upstream CMake target layout"
+replacement = needle + '''
+if(CMAKE_SYSTEM_NAME STREQUAL "iOS")
+  target_sources(asura_wrath_recomp PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/ios/kosmickrisp_probe.m")
+  target_link_libraries(asura_wrath_recomp PRIVATE
+    "-framework UIKit" "-framework Metal" "-framework QuartzCore"
+    "-framework Foundation" "-framework GameController")
+  set_target_properties(asura_wrath_recomp PROPERTIES
+    MACOSX_BUNDLE TRUE
+    MACOSX_BUNDLE_GUI_IDENTIFIER "com.joaopedro.asuraswrath"
+    MACOSX_BUNDLE_BUNDLE_NAME "Asura's Wrath"
+    MACOSX_BUNDLE_INFO_PLIST "${CMAKE_CURRENT_SOURCE_DIR}/ios/Info.plist")
+endif()
+'''
+cmake.write_text(text.replace(needle, replacement))
+
+sdk = root / "tools/rexglue/CMakeLists.txt"
+sdk_text = sdk.read_text()
+needle = '    add_compile_definitions(REX_PLATFORM_MAC=1)'
+assert sdk_text.count(needle) == 1, "ReXGlue Apple platform block changed"
+sdk.write_text(sdk_text.replace(needle, needle + '''
+    if(CMAKE_SYSTEM_NAME STREQUAL "iOS")
+        add_compile_definitions(REX_PLATFORM_IOS=1)
+    endif()
+'''))
+
+ui = root / "tools/rexglue/src/ui/CMakeLists.txt"
+ui_text = ui.read_text()
+assert 'elseif(APPLE)\n    set(REXUI_PLATFORM_SOURCES' in ui_text
+# iOS SDL_Metal_CreateView returns a CAMetalLayer-backed UIView; use the same
+# SDL Metal surface implementation while compiling against the iPhoneOS SDK.
+ui.write_text(ui_text.replace('elseif(APPLE)\n    set(REXUI_PLATFORM_SOURCES',
+                              'elseif(APPLE)\n    set(REXUI_PLATFORM_SOURCES', 1))
+
+print("ASURA_IOS_CMAKE_PATCH_OK")
