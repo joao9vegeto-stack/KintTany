@@ -51,6 +51,18 @@ thirdparty_cmake.write_text(thirdparty_text.replace(
 ))
 
 
+# ReXGlue's generic Apple target setup also stages the macOS Vulkan runtime.
+# Skip that POST_BUILD hook for iOS: its Vulkan implementation is the separately
+# bundled KosmicKrisp ICD, not MoltenVK.
+helpers_cmake = root / "tools/rexglue/cmake/rexglue_helpers.cmake"
+helpers_text = helpers_cmake.read_text()
+stage_needle = "    if(APPLE AND REXGLUE_USE_VULKAN)"
+assert helpers_text.count(stage_needle) == 1, "unexpected ReXGlue Vulkan staging condition"
+helpers_cmake.write_text(helpers_text.replace(
+    stage_needle,
+    '    if(APPLE AND NOT CMAKE_SYSTEM_NAME STREQUAL "iOS" AND REXGLUE_USE_VULKAN)'
+))
+
 ui = root / "tools/rexglue/src/ui/CMakeLists.txt"
 ui_text = ui.read_text()
 assert 'elseif(APPLE)\n    set(REXUI_PLATFORM_SOURCES' in ui_text
