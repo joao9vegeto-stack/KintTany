@@ -1,4 +1,5 @@
 name: SpartanPort iOS + KosmicKrisp
+run-name: SpartanPort iOS ARM64 - ${{ github.sha }}
 
 # Build automatically for every committed change on the isolated SpartanPort branch.
 on:
