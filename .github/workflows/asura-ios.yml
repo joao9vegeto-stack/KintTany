@@ -201,8 +201,17 @@ jobs:
               fi
             done < <(otool -l "$image" | awk '$1 == "cmd" && $2 == "LC_RPATH" { getline; getline; print $2 }')
           done
-          install_name_tool -add_rpath "@executable_path/Frameworks" "$APP/asura_wrath_recomp"
-          install_name_tool -add_rpath "@loader_path/Frameworks" "$APP/librexgpu-xenos.dylib"
+          ensure_rpath() {
+            local image="$1"
+            local wanted="$2"
+            if ! otool -l "$image" | awk '$1 == "cmd" && $2 == "LC_RPATH" { getline; getline; print $2 }' | grep -Fqx "$wanted"; then
+              install_name_tool -add_rpath "$wanted" "$image"
+            else
+              echo "RPATH already present; keeping it: $wanted ($(basename "$image"))"
+            fi
+          }
+          ensure_rpath "$APP/asura_wrath_recomp" "@executable_path/Frameworks"
+          ensure_rpath "$APP/librexgpu-xenos.dylib" "@loader_path/Frameworks"
 
           for image in "$APP/asura_wrath_recomp" "$APP/Frameworks/librexruntime.dylib" "$APP/librexgpu-xenos.dylib" "$APP/Frameworks/libvulkan_kosmickrisp.dylib"; do
             lipo "$image" -verify_arch arm64
