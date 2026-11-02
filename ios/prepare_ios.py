@@ -139,6 +139,34 @@ assert memory_text.count(query_start) == 1, "unexpected ReXGlue QueryProtect imp
 memory_text = memory_text.replace(query_start, query_start_ios)
 memory_posix.write_text(memory_text)
 
+# SDL3 has distinct Cocoa (macOS) and UIKit (iOS) video drivers. This target
+# intentionally keeps REX_PLATFORM_MAC for the shared CAMetalLayer surface,
+# but must never inherit the macOS-only Cocoa driver selection.
+window_context = root / "tools/rexglue/src/ui/windowed_app_context_sdl.cpp"
+window_context_text = window_context.read_text()
+driver_needle = """#if REX_PLATFORM_MAC
+  // macOS presents via a CAMetalLayer surface obtained from the Cocoa driver.
+  if (requested_driver.empty()) {
+    requested_driver = "cocoa";
+  }
+#endif"""
+driver_replacement = """#if REX_PLATFORM_IOS
+  // ASURA_IOS_SDL_UIKIT_DRIVER_V1: iOS must use SDL's UIKit video backend.
+  // Selecting Cocoa makes SDL_InitSubSystem(SDL_INIT_VIDEO) fail before the
+  // ReXApp window and native launcher can ever be created.
+  if (requested_driver.empty()) {
+    requested_driver = "uikit";
+  }
+#elif REX_PLATFORM_MAC
+  // macOS presents via a CAMetalLayer surface obtained from the Cocoa driver.
+  if (requested_driver.empty()) {
+    requested_driver = "cocoa";
+  }
+#endif"""
+assert window_context_text.count(driver_needle) == 1, "unexpected SDL Apple video-driver selection"
+window_context.write_text(window_context_text.replace(driver_needle, driver_replacement))
+print("ASURA_IOS_SDL_UIKIT_DRIVER_PATCH_OK")
+
 
 # The upstream Apple RPATH list is colon-joined, which ld64 records as one
 # invalid LC_RPATH. iOS must use only bundle-relative paths; runtime dylibs

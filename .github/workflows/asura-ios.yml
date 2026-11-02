@@ -41,6 +41,22 @@ jobs:
           python3 ios/launcher_patch.py
           python3 - <<'PY'
           from pathlib import Path
+          import sys
+          source = Path("upstream/tools/rexglue/src/ui/windowed_app_context_sdl.cpp").read_text()
+          marker = "ASURA_IOS_SDL_UIKIT_DRIVER_V1"
+          ios_branch = source.find("#if REX_PLATFORM_IOS")
+          mac_branch = source.find("#elif REX_PLATFORM_MAC", ios_branch)
+          if marker not in source or ios_branch < 0 or mac_branch < 0:
+              raise SystemExit("iOS SDL UIKit driver patch is missing")
+          block = source[ios_branch:mac_branch]
+          if 'requested_driver = "uikit";' not in block:
+              raise SystemExit("iOS SDL video backend is not explicitly UIKit")
+          if 'requested_driver = "cocoa";' in block:
+              raise SystemExit("macOS Cocoa video backend leaked into iOS branch")
+          print("ASURA_IOS_SDL_UIKIT_DRIVER_PREFLIGHT_OK")
+          PY
+          python3 - <<'PY'
+          from pathlib import Path
           import re
           generated = Path("upstream/src/asurawrath_app.h").read_text()
           hooks = re.findall(r"\bvoid\s+OnPostSetup\s*\(\)\s*override", generated)
