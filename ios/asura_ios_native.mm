@@ -1,5 +1,6 @@
 #import <UIKit/UIKit.h>
 #import <Foundation/Foundation.h>
+#import <UniformTypeIdentifiers/UniformTypeIdentifiers.h>
 #include "asura_ios_native.h"
 #include <fstream>
 #include <mutex>
@@ -8,22 +9,61 @@
 #include <exception>
 namespace {
 std::mutex log_mutex2; std::string log_path2; UIWindow* overlay_window2=nil; UIWindow* prior_window2=nil;
+NSURL* selected_game_url2=nil;
+bool selected_game_scope2=false;
 std::string docs_path2(){NSString*p=[NSHomeDirectory() stringByAppendingPathComponent:@"Documents"];[[NSFileManager defaultManager]createDirectoryAtPath:p withIntermediateDirectories:YES attributes:nil error:nil];return p.UTF8String?p.UTF8String:"";}
 void log_line2(const std::string&s){std::lock_guard<std::mutex>l(log_mutex2);if(log_path2.empty())log_path2=docs_path2()+"/asura-ios.log";std::ofstream f(log_path2,std::ios::app);if(!f)return;std::time_t t=std::time(nullptr);std::tm tm{};localtime_r(&t,&tm);char b[32]{};std::strftime(b,sizeof(b),"%Y-%m-%d %H:%M:%S",&tm);f<<b<<" [Asura-iOS] "<<s<<"\n";f.flush();}
 void init_log2(){static dispatch_once_t once;dispatch_once(&once,^{log_line2("PROCESS_START");std::atexit([]{log_line2("PROCESS_EXIT");});std::set_terminate([]{log_line2("FATAL std::terminate");std::abort();});NSNotificationCenter*n=NSNotificationCenter.defaultCenter;NSArray*names=@[UIApplicationDidBecomeActiveNotification,UIApplicationWillResignActiveNotification,UIApplicationDidEnterBackgroundNotification,UIApplicationWillEnterForegroundNotification,UIApplicationWillTerminateNotification];for(NSString*name in names)[n addObserverForName:name object:nil queue:NSOperationQueue.mainQueue usingBlock:^(NSNotification*note){log_line2(std::string("LIFECYCLE ")+note.name.UTF8String);}];});}
 }
-@interface AsuraNativeLauncher2:UIViewController{std::string path2;std::function<std::string()>scan2;std::function<void(std::string)>start2;UILabel*status2;UILabel*location2;UIButton*play2;}
+@interface AsuraNativeLauncher2:UIViewController<UIDocumentPickerDelegate>{std::string path2;std::function<std::string()>scan2;std::function<void(std::string)>start2;UILabel*status2;UILabel*location2;UIButton*play2;}
 -(instancetype)initPath:(std::string)p scan:(std::function<std::string()>)s start:(std::function<void(std::string)>)f;
 @end
 @implementation AsuraNativeLauncher2
 -(instancetype)initPath:(std::string)p scan:(std::function<std::string()>)s start:(std::function<void(std::string)>)f{if((self=[super init])){path2=std::move(p);scan2=std::move(s);start2=std::move(f);}return self;}
 -(UIButton*)button:(NSString*)t action:(SEL)a{UIButton*b=[UIButton buttonWithType:UIButtonTypeSystem];[b setTitle:t forState:UIControlStateNormal];b.titleLabel.font=[UIFont boldSystemFontOfSize:17];b.backgroundColor=[UIColor colorWithRed:.66 green:.07 blue:.13 alpha:1];[b setTitleColor:UIColor.whiteColor forState:UIControlStateNormal];b.layer.cornerRadius=13;[b.heightAnchor constraintEqualToConstant:54].active=YES;[b addTarget:self action:a forControlEvents:UIControlEventTouchUpInside];return b;}
--(void)viewDidLoad{[super viewDidLoad];self.view.backgroundColor=[UIColor colorWithRed:.035 green:.04 blue:.06 alpha:1];UIStackView*s=[UIStackView new];s.axis=UILayoutConstraintAxisVertical;s.spacing=16;s.translatesAutoresizingMaskIntoConstraints=NO;[self.view addSubview:s];[NSLayoutConstraint activateConstraints:@[[s.leadingAnchor constraintEqualToAnchor:self.view.safeAreaLayoutGuide.leadingAnchor constant:24],[s.trailingAnchor constraintEqualToAnchor:self.view.safeAreaLayoutGuide.trailingAnchor constant:-24],[s.centerYAnchor constraintEqualToAnchor:self.view.centerYAnchor]]];UILabel*top=[UILabel new];top.text=@"RECOMPILAÇÃO NATIVA • iOS ARM64";top.textColor=[UIColor colorWithRed:.95 green:.3 blue:.24 alpha:1];top.font=[UIFont boldSystemFontOfSize:12];top.textAlignment=NSTextAlignmentCenter;[s addArrangedSubview:top];UILabel*t=[UILabel new];t.text=@"ASURA'S WRATH";t.textColor=UIColor.whiteColor;t.font=[UIFont systemFontOfSize:34 weight:UIFontWeightBlack];t.textAlignment=NSTextAlignmentCenter;t.adjustsFontSizeToFitWidth=YES;[s addArrangedSubview:t];UILabel*sub=[UILabel new];sub.text=@"KOSMICKRISP • BUILD 1";sub.textColor=UIColor.lightGrayColor;sub.textAlignment=NSTextAlignmentCenter;[s addArrangedSubview:sub];status2=[UILabel new];status2.textAlignment=NSTextAlignmentCenter;status2.font=[UIFont boldSystemFontOfSize:17];status2.numberOfLines=0;[s addArrangedSubview:status2];location2=[UILabel new];location2.textAlignment=NSTextAlignmentCenter;location2.textColor=UIColor.lightGrayColor;location2.font=[UIFont monospacedSystemFontOfSize:10 weight:UIFontWeightRegular];location2.numberOfLines=0;[s addArrangedSubview:location2];UILabel*info=[UILabel new];info.text=[NSString stringWithFormat:@"Pasta Documents:\n%@\n\nColoque aqui a pasta extraída do jogo. Ela precisa conter default.xex e os arquivos de dados.",[NSString stringWithUTF8String:docs_path2().c_str()]];info.textColor=[UIColor colorWithWhite:.8 alpha:1];info.textAlignment=NSTextAlignmentCenter;info.numberOfLines=0;info.font=[UIFont systemFontOfSize:13];[s addArrangedSubview:info];UIButton*scan=[self button:@"VERIFICAR PASTA DO JOGO" action:@selector(scanTap)];scan.backgroundColor=UIColor.darkGrayColor;[s addArrangedSubview:scan];play2=[self button:@"INICIAR JOGO" action:@selector(playTap)];[s addArrangedSubview:play2];[self updateStatus];}
+-(void)viewDidLoad{[super viewDidLoad];self.view.backgroundColor=[UIColor colorWithRed:.035 green:.04 blue:.06 alpha:1];UIStackView*s=[UIStackView new];s.axis=UILayoutConstraintAxisVertical;s.spacing=16;s.translatesAutoresizingMaskIntoConstraints=NO;[self.view addSubview:s];[NSLayoutConstraint activateConstraints:@[[s.leadingAnchor constraintEqualToAnchor:self.view.safeAreaLayoutGuide.leadingAnchor constant:24],[s.trailingAnchor constraintEqualToAnchor:self.view.safeAreaLayoutGuide.trailingAnchor constant:-24],[s.centerYAnchor constraintEqualToAnchor:self.view.centerYAnchor]]];UILabel*top=[UILabel new];top.text=@"RECOMPILAÇÃO NATIVA • iOS ARM64";top.textColor=[UIColor colorWithRed:.95 green:.3 blue:.24 alpha:1];top.font=[UIFont boldSystemFontOfSize:12];top.textAlignment=NSTextAlignmentCenter;[s addArrangedSubview:top];UILabel*t=[UILabel new];t.text=@"ASURA'S WRATH";t.textColor=UIColor.whiteColor;t.font=[UIFont systemFontOfSize:34 weight:UIFontWeightBlack];t.textAlignment=NSTextAlignmentCenter;t.adjustsFontSizeToFitWidth=YES;[s addArrangedSubview:t];UILabel*sub=[UILabel new];sub.text=@"KOSMICKRISP • BUILD 1";sub.textColor=UIColor.lightGrayColor;sub.textAlignment=NSTextAlignmentCenter;[s addArrangedSubview:sub];status2=[UILabel new];status2.textAlignment=NSTextAlignmentCenter;status2.font=[UIFont boldSystemFontOfSize:17];status2.numberOfLines=0;[s addArrangedSubview:status2];location2=[UILabel new];location2.textAlignment=NSTextAlignmentCenter;location2.textColor=UIColor.lightGrayColor;location2.font=[UIFont monospacedSystemFontOfSize:10 weight:UIFontWeightRegular];location2.numberOfLines=0;[s addArrangedSubview:location2];UILabel*info=[UILabel new];info.text=[NSString stringWithFormat:@"Pasta Documents:\n%@\n\nColoque aqui a pasta extraída do jogo. Ela precisa conter default.xex e os arquivos de dados.",[NSString stringWithUTF8String:docs_path2().c_str()]];info.textColor=[UIColor colorWithWhite:.8 alpha:1];info.textAlignment=NSTextAlignmentCenter;info.numberOfLines=0;info.font=[UIFont systemFontOfSize:13];[s addArrangedSubview:info];UIButton*choose=[self button:@"ESCOLHER PASTA DO JOGO" action:@selector(chooseTap)];choose.backgroundColor=[UIColor colorWithRed:.22 green:.24 blue:.30 alpha:1];[s addArrangedSubview:choose];UIButton*scan=[self button:@"DETECTAR AUTOMATICAMENTE" action:@selector(scanTap)];scan.backgroundColor=UIColor.darkGrayColor;[s addArrangedSubview:scan];play2=[self button:@"INICIAR JOGO" action:@selector(playTap)];[s addArrangedSubview:play2];[self updateStatus];}
 -(void)updateStatus{BOOL ok=!path2.empty();status2.text=ok?@"JOGO DETECTADO":@"AGUARDANDO ARQUIVOS DO JOGO";status2.textColor=ok?[UIColor colorWithRed:.25 green:.85 blue:.48 alpha:1]:[UIColor colorWithRed:1 green:.7 blue:.25 alpha:1];location2.text=ok?[NSString stringWithUTF8String:path2.c_str()]:@"default.xex não encontrado";play2.enabled=ok;play2.alpha=ok?1:.4;}
+-(void)chooseTap {
+ log_line2("DOCUMENT_PICKER_OPEN");
+ picker2=[[UIDocumentPickerViewController alloc]initForOpeningContentTypes:@[UTTypeFolder] asCopy:NO];
+ picker2.delegate=self; picker2.allowsMultipleSelection=NO;
+ [self presentViewController:picker2 animated:YES completion:nil];
+}
+-(void)documentPicker:(UIDocumentPickerViewController*)controller didPickDocumentsAtURLs:(NSArray<NSURL*>*)urls {
+ NSURL* picked=urls.firstObject;
+ if(!picked){log_line2("DOCUMENT_PICKER_EMPTY");return;}
+ if(selected_game_scope2){[selected_game_url2 stopAccessingSecurityScopedResource];selected_game_scope2=false;}
+ selected_game_scope2=[picked startAccessingSecurityScopedResource]; selected_game_url2=picked;
+ std::string candidate=picked.path.UTF8String?picked.path.UTF8String:"";
+ if(access((candidate+"/default.xex").c_str(),F_OK)!=0 && access((candidate+"/BCGame/default.xex").c_str(),F_OK)==0) candidate+="/BCGame";
+ if(access((candidate+"/default.xex").c_str(),F_OK)!=0){log_line2("PICKER_FOLDER_MISSING_DEFAULT_XEX "+candidate);path2.clear();}
+ else {path2=candidate;log_line2("PICKER_GAME_SELECTED "+candidate);}
+ [self updateStatus];
+}
+-(void)documentPickerWasCancelled:(UIDocumentPickerViewController*)controller {log_line2("DOCUMENT_PICKER_CANCELLED");}
 -(void)scanTap{log_line2("LAUNCHER_RESCAN");path2=scan2?scan2():std::string();log_line2(path2.empty()?"GAME_NOT_FOUND":"GAME_FOUND "+path2);[self updateStatus];}
 -(void)playTap{if(path2.empty())return;log_line2("LAUNCHER_START "+path2);auto cb=std::move(start2);auto p=path2;overlay_window2.hidden=YES;overlay_window2.rootViewController=nil;overlay_window2=nil;[prior_window2 makeKeyAndVisible];prior_window2=nil;if(cb)cb(std::move(p));}
 @end
 std::string AsuraIOSDocumentsPath(){init_log2();return docs_path2();}
 void AsuraIOSLog(const std::string&s){init_log2();log_line2(s);}
-void AsuraIOSShowLauncher(std::string p,std::function<std::string()>scan,std::function<void(std::string)>start){init_log2();log_line2("NATIVE_LAUNCHER_REQUEST");dispatch_async(dispatch_get_main_queue(),^{UIWindowScene*scene=nil;for(UIScene*x in UIApplication.sharedApplication.connectedScenes)if([x isKindOfClass:UIWindowScene.class]&&x.activationState==UISceneActivationStateForegroundActive){scene=(UIWindowScene*)x;break;}if(!scene){log_line2("ERROR NO_ACTIVE_WINDOW_SCENE");return;}for(UIWindow*w in scene.windows)if(w.isKeyWindow){prior_window2=w;break;}overlay_window2=[[UIWindow alloc]initWithWindowScene:scene];overlay_window2.windowLevel=UIWindowLevelAlert+1;overlay_window2.rootViewController=[[AsuraNativeLauncher2 alloc]initPath:std::move(p) scan:std::move(scan) start:std::move(start)];[overlay_window2 makeKeyAndVisible];log_line2("NATIVE_LAUNCHER_VISIBLE");});}
+void AsuraIOSShowLauncher(std::string p,std::function<std::string()>scan,std::function<void(std::string)>start) {
+ init_log2(); log_line2("NATIVE_LAUNCHER_REQUEST");
+ dispatch_async(dispatch_get_main_queue(), ^{
+  UIWindowScene* scene=nil;
+  for(UIScene* x in UIApplication.sharedApplication.connectedScenes)
+   if([x isKindOfClass:UIWindowScene.class] && x.activationState==UISceneActivationStateForegroundActive){scene=(UIWindowScene*)x;break;}
+  if(scene) {
+   for(UIWindow* w in scene.windows) if(w.isKeyWindow){prior_window2=w;break;}
+   overlay_window2=[[UIWindow alloc]initWithWindowScene:scene];
+   log_line2("LAUNCHER_WINDOW_MODE_SCENE");
+  } else {
+   for(UIWindow* w in UIApplication.sharedApplication.windows) if(w.isKeyWindow){prior_window2=w;break;}
+   overlay_window2=[[UIWindow alloc]initWithFrame:UIScreen.mainScreen.bounds];
+   log_line2("LAUNCHER_WINDOW_MODE_LEGACY_FALLBACK");
+  }
+  overlay_window2.windowLevel=UIWindowLevelNormal+1;
+  overlay_window2.rootViewController=[[AsuraNativeLauncher2 alloc]initPath:std::move(p) scan:std::move(scan) start:std::move(start)];
+  [overlay_window2 makeKeyAndVisible]; log_line2("NATIVE_LAUNCHER_VISIBLE");
+ });
+}
 __attribute__((constructor))static void AsuraIOSBootLog2(){init_log2();}
