@@ -161,72 +161,11 @@ test -f "$OUT/include/vk_video/vulkan_video_codec_h264std.h"
 file "$OUT/libkk-kosmickrisp-ios-arm64.a" | tee "$OUT/file.txt"
 lipo -info "$OUT/libkk-kosmickrisp-ios-arm64.a" | tee "$OUT/lipo.txt"
 nm -g "$OUT/libkk-kosmickrisp-ios-arm64.a" > "$OUT/symbols.txt"
-grep -q 'vk_icdGetInstanceProcAddr' "$OUT/symbols.txt"
-# Mesa-owned mutex and C11 thread symbols must be defined in the merged archive.
-grep -Eq '[[:space:]]T[[:space:]]+_+simple_mtx_plain_init_once
-grep -Eq '[[:space:]]T[[:space:]]+_+mtx_init
-OBJ="$(find "$OUT/build-ios" -type f -name '*.o' -print -quit)"
-test -n "$OBJ"
-xcrun vtool -show-build "$OBJ" > "$OUT/build-version.txt"
-grep -E -qi "platform[[:space:]]+IOS|platform[[:space:]]+2" "$OUT/build-version.txt"
-cat > "$OUT/KosmicKrispiOS-build.txt" <<EOF
-KosmicKrispiOS standalone build
-Mesa/KosmicKrisp: $MESA_SHA
-SPIRV-LLVM-Translator: $SPIRV_SHA
-Meson: $MESON_VERSION
-LLVM: llvm@20
-iOS target: arm64-apple-ios17.4
-M3 Metal WSI: applied
-M3B direct ICD/CAMetalLayer smoke source: compiled to ARM64 object archive (not linked or runtime-tested)
-Static dependency closure: merged; generated dispatch-table archives force-loaded by consumer linker
-Mesa simple mutex + C11 thread implementation: verified in archive
-Physical device runtime validation: pending integrator
-EOF
-shasum -a 256 "$OUT/libkk-kosmickrisp-ios-arm64.a" "$OUT/KosmicKrispM3B-smoke-objects.a" "$OUT/static-dependency-archives.txt" "$ROOT"/patches/*.patch > "$OUT/SHA256SUMS"
-echo "PASS: KosmicKrisp iOS arm64 archive and M3B smoke objects compiled."
- "$OUT/symbols.txt"
-grep -Eq '[[:space:]]T[[:space:]]+_mtx_init$' "$OUT/symbols.txt"
-OBJ="$(find "$OUT/build-ios" -type f -name '*.o' -print -quit)"
-test -n "$OBJ"
-xcrun vtool -show-build "$OBJ" > "$OUT/build-version.txt"
-grep -E -qi "platform[[:space:]]+IOS|platform[[:space:]]+2" "$OUT/build-version.txt"
-cat > "$OUT/KosmicKrispiOS-build.txt" <<EOF
-KosmicKrispiOS standalone build
-Mesa/KosmicKrisp: $MESA_SHA
-SPIRV-LLVM-Translator: $SPIRV_SHA
-Meson: $MESON_VERSION
-LLVM: llvm@20
-iOS target: arm64-apple-ios17.4
-M3 Metal WSI: applied
-M3B direct ICD/CAMetalLayer smoke source: compiled to ARM64 object archive (not linked or runtime-tested)
-Static dependency closure: merged; generated dispatch-table archives force-loaded by consumer linker
-Mesa simple mutex + C11 thread implementation: verified in archive
-Physical device runtime validation: pending integrator
-EOF
-shasum -a 256 "$OUT/libkk-kosmickrisp-ios-arm64.a" "$OUT/KosmicKrispM3B-smoke-objects.a" "$OUT/static-dependency-archives.txt" "$ROOT"/patches/*.patch > "$OUT/SHA256SUMS"
-echo "PASS: KosmicKrisp iOS arm64 archive and M3B smoke objects compiled."
- "$OUT/symbols.txt"
-OBJ="$(find "$OUT/build-ios" -type f -name '*.o' -print -quit)"
-test -n "$OBJ"
-xcrun vtool -show-build "$OBJ" > "$OUT/build-version.txt"
-grep -E -qi "platform[[:space:]]+IOS|platform[[:space:]]+2" "$OUT/build-version.txt"
-cat > "$OUT/KosmicKrispiOS-build.txt" <<EOF
-KosmicKrispiOS standalone build
-Mesa/KosmicKrisp: $MESA_SHA
-SPIRV-LLVM-Translator: $SPIRV_SHA
-Meson: $MESON_VERSION
-LLVM: llvm@20
-iOS target: arm64-apple-ios17.4
-M3 Metal WSI: applied
-M3B direct ICD/CAMetalLayer smoke source: compiled to ARM64 object archive (not linked or runtime-tested)
-Static dependency closure: merged; generated dispatch-table archives force-loaded by consumer linker
-Mesa simple mutex + C11 thread implementation: verified in archive
-Physical device runtime validation: pending integrator
-EOF
-shasum -a 256 "$OUT/libkk-kosmickrisp-ios-arm64.a" "$OUT/KosmicKrispM3B-smoke-objects.a" "$OUT/static-dependency-archives.txt" "$ROOT"/patches/*.patch > "$OUT/SHA256SUMS"
-echo "PASS: KosmicKrisp iOS arm64 archive and M3B smoke objects compiled."
- "$OUT/symbols.txt"
-grep -Eq '[[:space:]]T[[:space:]]+_mtx_init$' "$OUT/symbols.txt"
+grep -Eq 'vk_icdGetInstanceProcAddr' "$OUT/symbols.txt"
+# Mach-O prepends one underscore to C symbols. Match the exported definitions
+# while accepting the platform prefix and requiring an actual text definition.
+grep -Eq '[[:space:]]T[[:space:]]+_+simple_mtx_plain_init_once([[:space:]]|$)' "$OUT/symbols.txt"
+grep -Eq '[[:space:]]T[[:space:]]+_+mtx_init([[:space:]]|$)' "$OUT/symbols.txt"
 OBJ="$(find "$OUT/build-ios" -type f -name '*.o' -print -quit)"
 test -n "$OBJ"
 xcrun vtool -show-build "$OBJ" > "$OUT/build-version.txt"
