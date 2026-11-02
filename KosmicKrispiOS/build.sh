@@ -211,16 +211,10 @@ for symbol in _wsi_QueueSubmit _wsi_AllocateCommandBuffers _wsi_CreateSwapchainK
   fi
 done
 # Also verify the KosmicKrisp generated command table independently.
-for symbol in _kk_AcquireNextImageKHR; do
-  if ! nm -m "$KK_CMD_DISPATCH_TABLE" | awk -v symbol="$symbol" '
-    $NF == symbol && /weak external/ { found = 1 }
-    END { exit !found }
-  '; then
-    echo "ERROR: KosmicKrisp command table has a non-weak optional reference: $symbol" >&2
-    nm -m "$KK_CMD_DISPATCH_TABLE" | grep -F "$symbol" >&2 || true
-    exit 1
-  fi
-done
+# Do not assert that the optional AcquireNextImage dispatch thunk is emitted
+# by this generated archive: the pinned Meson build may omit it entirely.
+# If another object requires it, the final iOS app link (with no
+# -undefined dynamic_lookup) is the authoritative unresolved-symbol check.
 
 # Meson emits overlapping static archives: parent archives may contain object
 # members that are also present in their dependency archives. Force-loading

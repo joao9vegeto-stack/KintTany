@@ -6,6 +6,13 @@ struct ContentView: View {
     @State private var showingFolderPicker = false
     @State private var kosmicKrispProbe = "Aguardando verificação"
 
+    private var executableSummary: String {
+        if gameFolder.preparedExecutablePath != nil { return "ELF reconstruído" }
+        if gameFolder.details.contains(where: { $0.contains("Contêiner PS4 SELF") }) { return "SELF + ELF interno" }
+        if gameFolder.executableValidated { return "ELF64 x86-64" }
+        return "Não validado"
+    }
+
     var body: some View {
         ZStack {
             LinearGradient(colors: [Color(red: 0.025, green: 0.035, blue: 0.055), Color(red: 0.055, green: 0.085, blue: 0.13), .black],
@@ -31,11 +38,13 @@ struct ContentView: View {
                         statusRow("Detecção", state: "\(gameFolder.availableGames.count) instalação(ões)", good: !gameFolder.availableGames.isEmpty)
                         statusRow("Persistência", state: gameFolder.selectedRelativePath == nil ? "Aguardando jogo" : "Ativa", good: gameFolder.selectedRelativePath != nil)
                         statusRow("param.sfo", state: gameFolder.titleID ?? "Não lido", good: gameFolder.titleID != nil)
-                        statusRow("eboot.bin", state: gameFolder.executableValidated ? "ELF64 x86-64" : "Não validado", good: gameFolder.executableValidated)
+                        statusRow("eboot.bin", state: executableSummary, good: gameFolder.executableValidated)
+                        statusRow("ELF preparado", state: gameFolder.preparationStatus,
+                                  good: gameFolder.preparedExecutablePath != nil)
                         statusRow("KosmicKrisp ICD", state: kosmicKrispProbe, good: kosmicKrispProbe.hasPrefix("ICD loaded"))
                         statusRow("Runtime PS4 ARM64", state: "Não integrado", good: false)
                         statusRow("AOT x86-64 → ARM64", state: "Não integrado", good: false)
-                        Text("Iniciar só será habilitado quando existir runtime PS4 real. Esta versão não executa eboot.bin.")
+                        Text("SELF/ELF validado estruturalmente não significa executável carregável. Iniciar permanece bloqueado até existir AOT ARM64 e runtime PS4.")
                             .font(.caption).foregroundStyle(.secondary).padding(.top, 4)
                         Text("Diagnóstico: Documents/diagnostico.txt").font(.caption2.monospaced()).foregroundStyle(.secondary)
                     }.padding(16).background(.white.opacity(0.055), in: RoundedRectangle(cornerRadius: 20))
@@ -87,6 +96,13 @@ struct ContentView: View {
                 }.buttonStyle(.bordered).disabled(gameFolder.isImporting).accessibilityLabel("Redetectar jogos")
             }
             if gameFolder.isImporting { ProgressView("Importando dump…").font(.caption).tint(.orange) }
+            if gameFolder.isPreparingExecutable {
+                ProgressView("Reconstruindo SELF → ELF…").font(.caption).tint(.orange)
+            }
+            if let prepared = gameFolder.preparedExecutablePath {
+                Text("ELF preparado: \(prepared)")
+                    .font(.caption2.monospaced()).foregroundStyle(.green).textSelection(.enabled)
+            }
             if !gameFolder.availableGames.isEmpty {
                 Divider().overlay(.white.opacity(0.1))
                 Label("Instalações detectadas", systemImage: "checkmark.folder").font(.subheadline.weight(.semibold))

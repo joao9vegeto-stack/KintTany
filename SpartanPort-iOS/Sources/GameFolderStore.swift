@@ -33,8 +33,12 @@ final class GameFolderStore: ObservableObject {
     @Published private(set) var isImporting = false
     @Published private(set) var diagnosticsPath = ""
     @Published private(set) var selectedRelativePath: String?
+    @Published private(set) var preparedExecutablePath: String?
+    @Published private(set) var preparationStatus = "Aguardando preparação"
+    @Published private(set) var isPreparingExecutable = false
 
     private let defaultsKey = "SpartanPort.SelectedGameRelativePath"
+    private var preparationToken = UUID()
     private let fm = FileManager.default
     private var documents: URL { fm.urls(for: .documentDirectory, in: .userDomainMask)[0] }
     private var gamesDirectory: URL {
@@ -115,7 +119,7 @@ final class GameFolderStore: ObservableObject {
                 switch result {
                 case .success(let selected):
                     self.refresh(selecting: selected)
-                    self.message = "Dump importado e detectado. O runtime PS4 ainda não está disponível."
+                    self.message = "Dump importado; preparação SELF → ELF iniciada. O runtime PS4 ainda não está disponível."
                 case .failure(let error):
                     self.message = error.localizedDescription
                     self.writeDiagnostics(error: error)
@@ -171,11 +175,61 @@ final class GameFolderStore: ObservableObject {
         details = checks
         isValidPayload = hasEboot && hasParam && metadataValid
         message = isValidPayload && executableValidated
-            ? "Dump detectado; metadados e cabeçalho ELF64 x86-64 validados. O jogo ainda não é executado."
-            : (isValidPayload ? "Metadados válidos; eboot.bin não passou na inspeção ELF decifrado." : "Dump incompleto ou param.sfo inválido.")
+            ? "Dump detectado; SELF/ELF validados. Preparação do ELF iniciada; o jogo ainda não pode ser executado."
+            : (isValidPayload ? "Metadados válidos; eboot.bin não passou na inspeção SELF/ELF." : "Dump incompleto ou param.sfo inválido.")
+        if hasEboot && executableValidated {
+            beginExecutablePreparation(from: eboot)
+        } else {
+            preparationToken = UUID()
+            isPreparingExecutable = false
+            preparedExecutablePath = nil
+            preparationStatus = "Executável não validado"
+        }
+    }
+
+    private func beginExecutablePreparation(from source: URL) {
+        let token = UUID()
+        preparationToken = token
+        isPreparingExecutable = true
+        preparedExecutablePath = nil
+        preparationStatus = "Preparando SELF → ELF…"
+        let rawFolder = titleID ?? source.deletingLastPathComponent().lastPathComponent
+        let safeFolder = String(rawFolder.filter {
+            $0.isLetter || $0.isNumber || $0 == "-" || $0 == "_"
+        })
+        let destination = documents
+            .appendingPathComponent("SpartanPort/Prepared", isDirectory: true)
+            .appendingPathComponent(safeFolder, isDirectory: true)
+            .appendingPathComponent("eboot.elf")
+
+        DispatchQueue.global(qos: .userInitiated).async { [weak self] in
+            let result: Result<[String], Error>
+            do { result = .success(try PS4SELFPreparer.prepare(from: source, to: destination)) }
+            catch { result = .failure(error) }
+            DispatchQueue.main.async {
+                guard let self, self.preparationToken == token else { return }
+                self.isPreparingExecutable = false
+                switch result {
+                case .success(let report):
+                    self.preparedExecutablePath = destination.path
+                    self.preparationStatus = "ELF reconstruído"
+                    self.details.append(contentsOf: report)
+                    self.message = "ELF x86-64 preparado em Documents/SpartanPort/Prepared. Ainda falta AOT ARM64 e runtime PS4."
+                    self.writeDiagnostics()
+                case .failure(let error):
+                    self.preparedExecutablePath = nil
+                    self.preparationStatus = "Falha na preparação"
+                    self.message = "SELF/ELF identificado, mas a reconstrução falhou: \(error.localizedDescription)"
+                    self.writeDiagnostics(error: error)
+                }
+            }
+        }
     }
 
     private func clearSelection(_ text: String) {
+        preparationToken = UUID()
+        isPreparingExecutable = false; preparedExecutablePath = nil
+        preparationStatus = "Aguardando preparação"
         folderName = nil; isValidPayload = false; executableValidated = false
         gameTitle = nil; titleID = nil; contentVersion = nil
         selectedRelativePath = nil; details = []; message = text
@@ -194,7 +248,9 @@ final class GameFolderStore: ObservableObject {
         var lines = ["SPARTANPORT_DIAGNOSTICS", "timestamp=\(timestamp)",
                      "selected=\(selectedRelativePath ?? "none")", "folder=\(folderName ?? "none")",
                      "title=\(gameTitle ?? "unknown")", "title_id=\(titleID ?? "unknown")",
-                     "payload_valid=\(isValidPayload)", "elf64_x86_64_valid=\(executableValidated)",
+                     "payload_valid=\(isValidPayload)", "self_elf_structurally_valid=\(executableValidated)",
+                     "prepared_elf_path=\(preparedExecutablePath ?? "none")",
+                     "preparation_status=\(preparationStatus)", "preparing=\(isPreparingExecutable)",
                      "runtime_ps4=unavailable", "aot_x86_64_arm64=unavailable",
                      "gpu_game_renderer=unavailable", "message=\(message)"]
         lines.append(contentsOf: details)
