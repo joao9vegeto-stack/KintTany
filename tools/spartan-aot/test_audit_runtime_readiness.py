@@ -2,7 +2,7 @@ import json
 import tempfile
 import unittest
 from pathlib import Path
-from audit_runtime_readiness import has_cpu_runtime, read_json
+from audit_runtime_readiness import has_app_aot_link, has_cpu_runtime, read_json
 
 
 class ReadJsonTests(unittest.TestCase):
@@ -32,6 +32,26 @@ class RuntimeDetectionTests(unittest.TestCase):
             root = Path(d)
             (root / "SpartanIOSPS4CPU.c").write_text("void spartan_ps4_cpu_dispatch(void) {}")
             self.assertTrue(has_cpu_runtime(root))
+
+    def test_workflow_reference_is_not_app_linkage(self):
+        with tempfile.TemporaryDirectory() as d:
+            root = Path(d)
+            app = root / "SpartanPort-iOS"
+            workflow = root / ".github" / "workflows"
+            (app / "Sources").mkdir(parents=True)
+            workflow.mkdir(parents=True)
+            (app / "project.yml").write_text("targets:\\n  SpartanPort:\\n    type: application\\n")
+            (app / "Sources" / "ContentView.swift").write_text("struct ContentView {}")
+            (workflow / "build.yml").write_text("libgow3-recompiled-ios bbcpu_run")
+            self.assertFalse(has_app_aot_link(app))
+
+    def test_target_linkage_without_runtime_loader_is_not_ready(self):
+        with tempfile.TemporaryDirectory() as d:
+            app = Path(d) / "SpartanPort-iOS"
+            (app / "Sources").mkdir(parents=True)
+            (app / "project.yml").write_text("libgow3-recompiled-ios")
+            (app / "Sources" / "ContentView.swift").write_text("struct ContentView {}")
+            self.assertFalse(has_app_aot_link(app))
 
 
 if __name__ == "__main__":

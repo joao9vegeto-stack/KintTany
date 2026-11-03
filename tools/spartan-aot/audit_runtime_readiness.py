@@ -47,6 +47,28 @@ def has_cpu_runtime(runtime_dir: Path) -> bool:
     return False
 
 
+def has_app_aot_link(app_root: Path) -> bool:
+    """Require target linkage plus a runtime load/call site inside the app."""
+    if not app_root.is_dir():
+        return False
+    files = [
+        p for p in app_root.rglob("*")
+        if p.is_file() and p.suffix in {".yml", ".yaml", ".pbxproj", ".swift", ".m", ".mm", ".c"}
+    ]
+    contents = {p: p.read_text(errors="ignore") for p in files}
+    configs = [p for p in files if p.name in {"project.yml", "project.yaml"} or p.suffix == ".pbxproj"]
+    archive_declared = any(
+        "libgow3-recompiled-ios" in contents[p] or "libgow3-aot-cpu-ios" in contents[p]
+        for p in configs
+    )
+    runtime_load_present = any(
+        any(token in source for token in ("dlopen(", "bbcpu_recomp_load(", "bbcpu_run("))
+        for p, source in contents.items()
+        if p.suffix in {".swift", ".m", ".mm", ".c"}
+    )
+    return archive_declared and runtime_load_present
+
+
 def main() -> None:
     parser = argparse.ArgumentParser()
     parser.add_argument("--prepared", type=Path, required=True)
@@ -76,13 +98,7 @@ def main() -> None:
 
     runtime_dir = args.project / "SpartanPort-iOS/Sources/Runtime"
     app_has_cpu_runtime = has_cpu_runtime(runtime_dir)
-    app_has_aot_link = any(
-        p.is_file() and p.suffix in {".yml", ".yaml", ".pbxproj", ".swift"}
-        and ("libgow3-recompiled-ios" in p.read_text(errors="ignore")
-             or "bbcpu_run" in p.read_text(errors="ignore"))
-        for p in (args.project / "SpartanPort-iOS", args.project / ".github/workflows")
-        if p.exists() for p in p.rglob("*")
-    )
+    app_has_aot_link = has_app_aot_link(args.project / "SpartanPort-iOS")
     app_has_gpu_runtime = any(
         p.is_file() and p.suffix in {".swift", ".m", ".mm", ".metal", ".c", ".cpp"}
         and any(token in p.read_text(errors="ignore")
