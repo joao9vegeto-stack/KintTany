@@ -56,7 +56,7 @@ async_start = read.index("if (apcRoutine != 0u && apcThread)")
 async_end = read.index("if (apcRoutine != 0u && !apcThread)", async_start)
 async_read = read[async_start:async_end]
 completion_start = async_read.index("auto completion =")
-completion_end = async_read.index("};", completion_start)
+completion_end = async_read.index("\n        };", completion_start)
 completion_body = async_read[completion_start:completion_end]
 
 require(async_read.index("writeGuestIoStatus(base, ioStatus, kNtStatusPending, 0u);") <
