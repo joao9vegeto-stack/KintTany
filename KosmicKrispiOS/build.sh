@@ -216,21 +216,33 @@ done
 # If another object requires it, the final iOS app link (with no
 # -undefined dynamic_lookup) is the authoritative unresolved-symbol check.
 
-# Meson emits overlapping static archives: parent archives may contain object
-# members that are also present in their dependency archives. Force-loading
-# every archive duplicates those definitions (the previous iOS link failed
-# with 1,515 duplicate symbols). Force-load only the ICD root archive so its
-# entrypoint is guaranteed to be included; pass dependency archives as normal
-# linker inputs so ld extracts only members needed to resolve remaining
-# references. Never use dynamic_lookup to mask missing Vulkan symbols.
+# Generated Mesa dispatch tables refer to implementation entrypoints through
+# weak imports. A normal archive scan does not extract members for weak-only
+# references, so the app linker was left with thousands of unresolved kk_*,
+# vk_common_* and wsi_* functions. Force extraction only for symbols that are
+# actually DEFINED by this exact archive set. This preserves lazy archive
+# semantics, avoids -force_load duplicate-object failures, and never uses
+# -undefined dynamic_lookup to hide missing Vulkan implementations.
+FORCE_LINK_SYMBOLS=()
+while IFS= read -r symbol; do
+  [[ -n "$symbol" ]] && FORCE_LINK_SYMBOLS+=("$symbol")
+done < <(
+  nm -gU "${LINK_ARCHIVES[@]}" |
+    awk '{ symbol = $NF; if (symbol ~ /^_(kk|vk_common|wsi)_/) print symbol }' |
+    LC_ALL=C sort -u
+)
+test "${#FORCE_LINK_SYMBOLS[@]}" -gt 0 || {
+  echo "ERROR: no defined Mesa dispatch implementation symbols were found." >&2
+  exit 1
+}
+printf 'Forcing extraction of %s defined Mesa dispatch symbols.\n' "${#FORCE_LINK_SYMBOLS[@]}"
 LINK_CONFIG="$OUT/KosmicKrispLink.xcconfig"
 {
-  # SpartanPort iOS build policy (validated by the next fresh Actions run):
-# Keep the ICD archive lazy: -u extracts the ICD entrypoint, and Mesa's
-# link_whole closure carries the generated WSI dispatch tables.
-printf 'OTHER_LDFLAGS = $(inherited) -Wl,-u,_vk_icdGetInstanceProcAddr %s' "$ARCHIVE"
+  printf 'OTHER_LDFLAGS = $(inherited) -Wl,-u,_vk_icdGetInstanceProcAddr'
+  for symbol in "${FORCE_LINK_SYMBOLS[@]}"; do
+    printf ' -Wl,-u,%s' "$symbol"
+  done
   for archive in "${LINK_ARCHIVES[@]}"; do
-    [[ "$archive" == "$ARCHIVE" ]] && continue
     printf ' %s' "$archive"
   done
   printf '%s\n' ' -framework Metal -framework QuartzCore -framework UIKit -framework Foundation -framework CoreGraphics -lc++ -lz'
