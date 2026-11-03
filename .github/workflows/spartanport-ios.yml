@@ -9,7 +9,6 @@ on:
 permissions:
   contents: read
   actions: read
-# Keep an accepted build alive; a later push must not cancel it.
 concurrency:
   group: spartanport-ios-${{ github.ref }}
   cancel-in-progress: false
@@ -97,9 +96,14 @@ jobs:
           cmake -S "$RUNNER_TEMP/zydis/dependencies/zycore" -B "$IOS/zycore" -G Ninja $IOS_FLAGS -DCMAKE_INSTALL_PREFIX="$IOS/install"
           cmake --build "$IOS/zycore" --parallel 6
           cmake --install "$IOS/zycore"
+          # Use the checked-out Zycore submodule as a CMake target. The package
+          # config produced by its install is not discoverable by find_package
+          # under the iOS cross-build's package search rules.
           cmake -S "$RUNNER_TEMP/zydis" -B "$IOS/zydis" -G Ninja $IOS_FLAGS \
-            -DCMAKE_INSTALL_PREFIX="$IOS/install" -DCMAKE_PREFIX_PATH="$IOS/install" \
-            -DCMAKE_C_FLAGS="-I$IOS/install/include" -DZYAN_SYSTEM_ZYCORE=ON \
+            -DZYAN_SYSTEM_ZYCORE=OFF \
+            -DZYAN_ZYCORE_PATH="$RUNNER_TEMP/zydis/dependencies/zycore" \
+            -DCMAKE_INSTALL_PREFIX="$IOS/install" \
+            -DCMAKE_C_FLAGS="-I$IOS/install/include" \
             -DZYDIS_BUILD_TOOLS=OFF -DZYDIS_BUILD_EXAMPLES=OFF -DZYDIS_BUILD_DOXYGEN=OFF
           cmake --build "$IOS/zydis" --parallel 6
           cmake --install "$IOS/zydis"
