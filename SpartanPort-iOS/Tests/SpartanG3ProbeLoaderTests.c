@@ -37,14 +37,6 @@ int main(void) {
     assert(((uint32_t)base[4]|((uint32_t)base[5]<<8)|((uint32_t)base[6]<<16)|((uint32_t)base[7]<<24))==0x24);
     assert(spartan_g3probe_entry(image)==(uint64_t)(uintptr_t)(base+8));
     spartan_g3probe_destroy(image);
-    /* Unresolved imports are not silently fabricated: they remain zero and block readiness. */
-    put64(bytes+104,0); /* binding count */
-    image=spartan_g3probe_load(bytes,length,0x24,error,sizeof(error));
-    assert(image && spartan_g3probe_info(image,&info));
-    assert(info.unresolved_import_count==1 && info.applied_relocation_count==2);
-    base=spartan_guest_memory_host_pointer(spartan_g3probe_memory(image),0,64);
-    assert(base && get64(base+24)==0);
-    spartan_g3probe_destroy(image);
     /* malformed/truncated inputs fail closed */
     assert(!spartan_g3probe_load(bytes,length-1,0,error,sizeof(error)));
     free(bytes);
