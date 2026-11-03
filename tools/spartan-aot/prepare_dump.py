@@ -54,8 +54,10 @@ def reconstruct_self(data: bytes) -> tuple[bytes,dict]:
              "encrypted":bool(props&(1<<1)),"compressed":bool(props&(1<<3)),
              "blocks":bool(props&(1<<11)),"seg":(props>>20)&0xffff}
         entries.append(ent)
-    if any(e["encrypted"] or e["compressed"] for e in entries):
-        raise ValueError("SELF contém entradas criptografadas/compactadas; descriptografia não é tentada")
+    # SELF entries are payload extents, not a reliable program-header index.
+    # Match them to ELF program headers by the declared payload size, as the
+    # established PS4 unfself layout does. The previous segment-index mapping
+    # incorrectly treated the HAS_META bit as a 16-bit segment number.
     elf_off=-1
     for pos in range(table_end,min(len(data)-64,0x10000)+1):
         if data[pos:pos+4]!=b"\x7fELF": continue
@@ -78,33 +80,43 @@ def reconstruct_self(data: bytes) -> tuple[bytes,dict]:
     out=bytearray(outsize); out[:64]=data[elf_off:elf_off+64]
     out[64:64+es*n]=data[phstart:phend]
     used=set(); mapped=[]
+    # The SELF table is followed by version/certification data. Some ELF
+    # metadata program headers (notably PT_SCE_COMMENT) are backed by this
+    # trailing extent rather than a normal segment-table entry.
+    tail_off=max((e["off"]+e["stored"] for e in entries), default=header_size)
+    payloads=[]
+    for e in entries:
+        payloads.append({**e,"payload":data[e["off"]:e["off"]+e["stored"]]})
+    if tail_off < len(data):
+        payloads.append({"i":-1,"off":tail_off,"stored":len(data)-tail_off,
+                         "unpacked":len(data)-tail_off,"encrypted":False,
+                         "compressed":False,"payload":data[tail_off:]})
     def covered(h): return any(a<=h["off"] and b>=h["off"]+h["fs"] for a,b in mapped)
     def place(h, payload):
         if len(payload)!=h["fs"]: raise ValueError(f"Tamanho incompatível no segmento {h['i']}")
         out[h["off"]:h["off"]+h["fs"]]=payload; mapped.append((h["off"],h["off"]+h["fs"]))
     def place_entry(h):
-        candidates=[e for e in entries if e["i"] not in used and e["blocks"] and e["seg"]==h["i"]]
-        if len(candidates)>1: raise ValueError(f"Mapeamento SELF ambíguo para program header {h['i']}")
+        candidates=[e for e in payloads if e["i"] not in used and
+                    (e["stored"]==h["fs"] or e["unpacked"]==h["fs"])]
+        usable=[e for e in candidates if not e["encrypted"] and not e["compressed"]]
+        if usable:
+            e=usable[0]
+            place(h,e["payload"][:h["fs"]]); used.add(e["i"]); return
         if candidates:
             e=candidates[0]
-            if e["stored"]<h["fs"] or e["unpacked"]<h["fs"] or e["off"]+e["stored"]>len(data):
-                raise ValueError(f"Dados SELF ausentes/inválidos para segmento {h['i']}")
-            place(h,data[e["off"]:e["off"]+h["fs"]]); used.add(e["i"]); return
+            reason="criptografada" if e["encrypted"] else "compactada"
+            raise ValueError(f"SELF entry {e['i']} para segmento {h['i']} está {reason}; não é seguro reconstruir sem descriptografia/descompressão")
         start=elf_off+h["off"]; end=start+h["fs"]
         if end<=len(data): place(h,data[start:end]); return
-        raise ValueError(f"Sem entrada SELF para segmento {h['i']} (0x{h['fs']:x} bytes)")
-    for h in ph:
-        if h["type"]==1 and h["fs"]: place_entry(h)
-    standalone={0x61000000,0x6fffff00,0x6fffff01}
-    for h in ph:
-        if h["type"] in standalone and h["fs"] and not covered(h): place_entry(h)
+        sizes=sorted({e["stored"] for e in payloads if e["i"] not in used})
+        raise ValueError(f"Sem payload SELF de tamanho 0x{h['fs']:x} para program header {h['i']}; tamanhos disponíveis: {sizes[:24]}")
     for h in ph:
         if h["fs"] and not covered(h): place_entry(h)
     for h in ph:
         if h["fs"] and not covered(h): raise ValueError(f"Segmento {h['i']} não foi reconstruído")
     return bytes(out),{"format":"PS4 SELF -> ELF64 x86-64","program_headers":n,
                        "pt_load":sum(1 for h in ph if h["type"]==1 and h["fs"]),
-                       "elf_bytes":len(out),"self_entries":count}
+                       "elf_bytes":len(out),"self_entries":count,"mapping":"SELF payload extents matched to ELF program headers by exact file size"}
 
 def main():
     ap=argparse.ArgumentParser()
