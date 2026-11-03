@@ -129,6 +129,21 @@ jobs:
             "$RUNNER_TEMP/spartan-input/game" --out "$RUNNER_TEMP/spartan-prepared" \
             --tools "$RUNNER_TEMP/aot-deps/aot-host"
           test -s "$RUNNER_TEMP/spartan-prepared/aot/recomp.c"
+      - name: Cross-reference unresolved PS4 NIDs against shadPS4 HLE registry
+        run: |
+          set -euo pipefail
+          SHADPS4="$RUNNER_TEMP/shadps4"
+          git clone --filter=blob:none --no-checkout https://github.com/shadps4-emu/shadPS4.git "$SHADPS4"
+          git -C "$SHADPS4" sparse-checkout init --cone
+          git -C "$SHADPS4" sparse-checkout set src/core/libraries
+          git -C "$SHADPS4" checkout --detach 97b8ee470750913771412bb797e66602af3a464d
+          python3 tools/spartan-aot/audit_shadps4_imports.py \
+            --linked "$RUNNER_TEMP/spartan-prepared/link.json" \
+            --source "$SHADPS4/src/core/libraries" \
+            --out "$RUNNER_TEMP/spartan-prepared/ps4-import-audit.json" \
+            --commit 97b8ee470750913771412bb797e66602af3a464d
+          python3 tools/spartan-aot/test_audit_shadps4_imports.py
+          cat "$RUNNER_TEMP/spartan-prepared/ps4-import-audit.json"
       - name: Compile generated game functions as strict iOS ARM64 AOT
         run: |
           set -euo pipefail
@@ -163,6 +178,7 @@ jobs:
             ${{ runner.temp }}/spartan-prepared/aot/coverage-audit.log
             ${{ runner.temp }}/spartan-prepared/aot/coverage-sites.local.json
             ${{ runner.temp }}/spartan-prepared/link.json
+            ${{ runner.temp }}/spartan-prepared/ps4-import-audit.json
             ${{ runner.temp }}/spartan-prepared/native-inputs.json
             ${{ runner.temp }}/spartan-prepared/aot/functions.tsv
             ${{ runner.temp }}/spartan-prepared/aot/imports.tsv

@@ -65,6 +65,17 @@ arch = subprocess.check_output(["xcrun", "lipo", "-archs", str(archive)], text=T
 if arch != "arm64":
     raise SystemExit("AOT archive is not arm64-only: " + arch)
 
+# bbcpu_recomp_load() uses dlopen/dlsym(BB_RECOMP_INIT), so the static archive alone is not loadable.
+dylib = a.out / "libgow3-recompiled-ios.dylib"
+subprocess.run([clang, "-target", "arm64-apple-ios17.4", "-isysroot", sdk, "-dynamiclib",
+                "-Wl,-install_name,@rpath/libgow3-recompiled-ios.dylib", *objects, "-o", str(dylib)], check=True)
+dylib_arch = subprocess.check_output(["xcrun", "lipo", "-archs", str(dylib)], text=True).strip()
+if dylib_arch != "arm64":
+    raise SystemExit("AOT dynamic library is not arm64-only: " + dylib_arch)
+exports = subprocess.check_output(["/usr/bin/nm", "-gU", str(dylib)], text=True)
+if "_bb_recomp_init" not in exports:
+    raise SystemExit("AOT dynamic library does not export bb_recomp_init for bbcpu_recomp_load")
+
 manifest = {
     "architecture": arch,
     "target": "arm64-apple-ios17.4",
@@ -72,6 +83,11 @@ manifest = {
     "compiled_sources": [src.name for src in sources],
     "archive_bytes": archive.stat().st_size,
     "archive_sha256": hashlib.sha256(archive.read_bytes()).hexdigest(),
+    "dynamic_library": dylib.name,
+    "dynamic_library_bytes": dylib.stat().st_size,
+    "dynamic_library_sha256": hashlib.sha256(dylib.read_bytes()).hexdigest(),
+    "dynamic_library_install_name": "@rpath/libgow3-recompiled-ios.dylib",
+    "dynamic_library_exports_recomp_init": True,
     "execution_model": "generated ARM64 archive only; no executable PS4 runtime integration",
     "complete_recompilation": False,
     "runtime_integrated": False,
