@@ -122,7 +122,7 @@ SpartanG3ProbeImage *spartan_g3probe_load(const void *input,size_t length,uint32
                     continue;
                 }
                 if(binding.kind!=kind || (addend<0) || (uint64_t)addend>4095 ||
-                   !range(binding.value,(uint64_t)addend,size-binding.value)) {
+                   binding.value>=size || (uint64_t)addend>size-binding.value) {
                     seterr(error,error_capacity,"import binding type or addend is invalid"); goto fail;
                 }
                 value=host_base+binding.value+(uint64_t)addend;
