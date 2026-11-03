@@ -48,6 +48,10 @@ enum PS4SELFPreparer {
         let unpackedSize: UInt64
         var encrypted: Bool { (properties & (1 << 1)) != 0 }
         var compressed: Bool { (properties & (1 << 3)) != 0 }
+        // SELF entry properties encode the PT_LOAD program-header index in bits 20...35.
+        // Bit 11 marks an entry that carries blocks for that segment (PS4Recomp elfloader contract).
+        var hasBlocks: Bool { (properties & (1 << 11)) != 0 }
+        var segmentIndex: Int { Int((properties >> 20) & 0xffff) }
     }
 
     private struct ProgramHeader {
@@ -173,28 +177,52 @@ enum PS4SELFPreparer {
         }
 
         func placeFromEntry(_ header: ProgramHeader, allowFooter: Bool = false) throws {
+            // Never associate a SELF payload with a PT_LOAD merely because the sizes match.
+            // Retail SELF files can contain several equal-sized segments; the segment index
+            // encoded in properties is the authoritative mapping (same rule as upstream PS4Recomp).
             let candidates = entries.filter {
                 !usedEntries.contains($0.index) &&
-                $0.storedSize == header.fileSize &&
-                $0.unpackedSize == $0.storedSize &&
+                $0.hasBlocks &&
+                $0.segmentIndex == header.index &&
                 !$0.encrypted && !$0.compressed
             }
             if candidates.count > 1 {
                 throw PS4SELFPreparerError.ambiguousSegmentMapping(header.fileSize)
             }
             if let entry = candidates.first {
+                guard entry.storedSize >= header.fileSize,
+                      entry.unpackedSize >= header.fileSize,
+                      entry.offset <= UInt64(data.count),
+                      entry.storedSize <= UInt64(data.count) - entry.offset else {
+                    throw PS4SELFPreparerError.missingSegmentData(header.fileSize)
+                }
                 let start = Int(entry.offset)
-                let end = Int(entry.offset + entry.storedSize)
+                let end = start + Int(header.fileSize)
                 try place(header, bytes: data.subdata(in: start..<end))
                 usedEntries.insert(entry.index)
                 return
             }
+
+            // Some non-loadable ELF views (PT_DYNAMIC / SCE metadata) are already
+            // represented inside the embedded ELF. Copy only when the complete range
+            // is actually present; never read past the SELF container.
+            let (embeddedStart, startOverflow) = UInt64(elfOffset).addingReportingOverflow(header.offset)
+            let (embeddedEnd, endOverflow) = embeddedStart.addingReportingOverflow(header.fileSize)
+            if !startOverflow, !endOverflow, embeddedEnd <= UInt64(data.count) {
+                let start = Int(embeddedStart)
+                let end = Int(embeddedEnd)
+                try place(header, bytes: data.subdata(in: start..<end))
+                return
+            }
+
             if allowFooter {
                 let footerStart = Int(declaredFileSize)
-                let footer = data.subdata(in: footerStart..<data.count)
-                if UInt64(footer.count) == header.fileSize {
-                    try place(header, bytes: footer)
-                    return
+                if footerStart <= data.count {
+                    let footer = data.subdata(in: footerStart..<data.count)
+                    if UInt64(footer.count) == header.fileSize {
+                        try place(header, bytes: footer)
+                        return
+                    }
                 }
             }
             throw PS4SELFPreparerError.missingSegmentData(header.fileSize)

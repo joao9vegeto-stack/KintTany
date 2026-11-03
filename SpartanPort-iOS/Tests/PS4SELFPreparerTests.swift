@@ -20,7 +20,7 @@ final class PS4SELFPreparerTests: XCTestCase {
     }
 
     func testRefusesEncryptedSELFEntries() throws {
-        let source = temporaryFile(plainSELF(entryProperties: 1 << 1))
+        let source = temporaryFile(plainSELF(entryProperties: (1 << 11) | (1 << 1)))
         let destination = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
         defer {
             try? FileManager.default.removeItem(at: source)
@@ -42,6 +42,67 @@ final class PS4SELFPreparerTests: XCTestCase {
         let report = try PS4SELFPreparer.prepare(from: source, to: destination)
         XCTAssertTrue(report.contains("Bibliotecas PS4 DT_NEEDED: 1"))
         XCTAssertTrue(report.contains("  • libc.prx"))
+    }
+
+    func testMapsEqualSizedLoadSegmentsBySELFProgramHeaderIndex() throws {
+        let source = temporaryFile(selfWithEqualSizedLoadSegments())
+        let destination = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer {
+            try? FileManager.default.removeItem(at: source)
+            try? FileManager.default.removeItem(at: destination)
+        }
+
+        _ = try PS4SELFPreparer.prepare(from: source, to: destination)
+        let prepared = try Data(contentsOf: destination)
+        XCTAssertEqual(Array(prepared[0x1000..<0x1004]), Array("ONE!".utf8))
+        XCTAssertEqual(Array(prepared[0x2000..<0x2004]), Array("TWO!".utf8))
+    }
+
+    private func selfWithEqualSizedLoadSegments() -> [UInt8] {
+        let elfOffset = 0x120
+        let firstPayloadOffset = 0x240
+        let secondPayloadOffset = 0x250
+        var elf = [UInt8](repeating: 0, count: 64 + 2 * 56)
+        elf.replaceSubrange(0..<4, with: [0x7f, 0x45, 0x4c, 0x46])
+        elf[4] = 2; elf[5] = 1; elf[6] = 1
+        write16(0xFE10, into: &elf, at: 16)
+        write16(0x003e, into: &elf, at: 18)
+        write64(0x144060, into: &elf, at: 24)
+        write64(64, into: &elf, at: 32)
+        write16(64, into: &elf, at: 52)
+        write16(56, into: &elf, at: 54)
+        write16(2, into: &elf, at: 56)
+        // Two PT_LOAD headers deliberately have the same file size.
+        write32(1, into: &elf, at: 64)
+        write64(0x1000, into: &elf, at: 64 + 8)
+        write64(4, into: &elf, at: 64 + 32)
+        write64(4, into: &elf, at: 64 + 40)
+        write32(1, into: &elf, at: 120)
+        write64(0x2000, into: &elf, at: 120 + 8)
+        write64(4, into: &elf, at: 120 + 32)
+        write64(4, into: &elf, at: 120 + 40)
+
+        var bytes = [UInt8](repeating: 0, count: secondPayloadOffset + 4)
+        bytes.replaceSubrange(0..<4, with: [0x4f, 0x15, 0x3d, 0x1d])
+        bytes[4] = 0; bytes[5] = 1; bytes[6] = 1; bytes[7] = 0x12
+        write32(0x101, into: &bytes, at: 8)
+        write16(UInt16(elfOffset), into: &bytes, at: 0x0c)
+        write16(0x100, into: &bytes, at: 0x0e)
+        write64(UInt64(bytes.count), into: &bytes, at: 0x10)
+        write16(2, into: &bytes, at: 0x18)
+        // Reverse entry-table order: segment 1 comes before segment 0.
+        write64((1 << 11) | (1 << 2) | (1 << 20), into: &bytes, at: 0x20)
+        write64(UInt64(secondPayloadOffset), into: &bytes, at: 0x28)
+        write64(4, into: &bytes, at: 0x30)
+        write64(4, into: &bytes, at: 0x38)
+        write64((1 << 11) | (1 << 2), into: &bytes, at: 0x40)
+        write64(UInt64(firstPayloadOffset), into: &bytes, at: 0x48)
+        write64(4, into: &bytes, at: 0x50)
+        write64(4, into: &bytes, at: 0x58)
+        bytes.replaceSubrange(elfOffset..<(elfOffset + elf.count), with: elf)
+        bytes.replaceSubrange(firstPayloadOffset..<(firstPayloadOffset + 4), with: Array("ONE!".utf8))
+        bytes.replaceSubrange(secondPayloadOffset..<(secondPayloadOffset + 4), with: Array("TWO!".utf8))
+        return bytes
     }
 
     private func selfWithDynamicDependency() -> [UInt8] {
@@ -99,12 +160,12 @@ final class PS4SELFPreparerTests: XCTestCase {
         write16(2, into: &bytes, at: 0x18)
         write16(0x22, into: &bytes, at: 0x1a)
         // SELF entry for PT_LOAD
-        write64(1 << 2, into: &bytes, at: 0x20)
+        write64((1 << 11) | (1 << 2), into: &bytes, at: 0x20)
         write64(UInt64(loadPayloadOffset), into: &bytes, at: 0x28)
         write64(4, into: &bytes, at: 0x30)
         write64(4, into: &bytes, at: 0x38)
         // SELF entry for PT_SCE_DYNLIBDATA
-        write64(1 << 2, into: &bytes, at: 0x40)
+        write64((1 << 11) | (1 << 2) | (2 << 20), into: &bytes, at: 0x40)
         write64(UInt64(dynlibPayloadOffset), into: &bytes, at: 0x48)
         write64(UInt64(dynlibSize), into: &bytes, at: 0x50)
         write64(UInt64(dynlibSize), into: &bytes, at: 0x58)
@@ -114,7 +175,7 @@ final class PS4SELFPreparerTests: XCTestCase {
         return bytes
     }
 
-    private func plainSELF(entryProperties: UInt64 = 1 << 2) -> [UInt8] {
+    private func plainSELF(entryProperties: UInt64 = (1 << 11) | (1 << 2)) -> [UInt8] {
         let elfOffset = 0x120
         let payloadOffset = 0x200
         let payload = Array("GAME".utf8)
