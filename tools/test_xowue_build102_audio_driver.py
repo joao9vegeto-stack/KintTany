@@ -21,6 +21,9 @@ required = (
     "PPC_STORE_U32(wrapper, callbackContextValue)",
     "XOWUE_XAUDIO_CALLBACK_ENTER",
     "XOWUE_XAUDIO_CALLBACK_RETURN",
+    "B102_TIMER_WAIT_BEGIN",
+    "B102_TIMER_WAIT_RESULT",
+    "target_wait=0x%08X",
     "callbackContext.fpscr.loadFromHost()",
     "XOWUE_XAUDIO_FPSCR_INITIALIZED",
     "routine(callbackContext, base)",
@@ -49,7 +52,13 @@ assert "test_xowue_build102_audio_driver.py" in workflow
 assert "XOWUE_XAUDIO_" in engine
 assert "signalGuestEventHandle(0x4004ED80" not in engine
 assert "signalGuestEventHandle(0x4004EDD0" not in engine
-print("PASS: XAudio render-driver registration, dedicated guest thread/KPCR, 5.333 ms callback cadence, frame submit ABI, category-volume outputs, and no synthetic Bink wake")
+assert "waitable->handle == 0x115u" in engine
+assert "waitable->kind == GuestWaitable::Kind::Timer" in engine
+assert "targetThread->lastGuestPc.load" in engine
+assert "targetThread->waitTarget.load" in engine
+assert "targetThread->waitingInKernel.load" in engine
+assert "B102_TIMER_WAIT_RESULT" in engine
+print("PASS: XAudio callback ABI plus timer wait/fire correlation for the actual timer object, including target PPC PC and wait state")
 
 swift = Path("iOS/App/XOWUEDiagnostics.swift").read_text(encoding="utf-8")
 assert '"XOWUE_XAUDIO_"' in swift

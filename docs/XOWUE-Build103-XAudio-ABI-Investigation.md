@@ -59,3 +59,28 @@ must prove that callback entry is followed by callback return and
 `XAudioSubmitRenderDriverFrame`. The separate bounded callback-credit /
 host-consumption model still requires validation against the iOS audio output
 path. Bink worker events are not synthetically signaled or bypassed.
+
+
+## Build 103.1 — correlate the actual timer waiter
+
+Build 102.1 repeatedly records timer handle 0x00000116 firing with a null
+APC routine and target guest thread 12. The old B98 wait markers were
+hard-coded to handle 0x00000115, so they could not establish whether thread
+12 was blocked on 0x00000116, whether that wait returned, or what PPC address
+thread 12 was executing when the timer fired.
+
+The follow-up source change adds bounded B102_TIMER_WAIT_BEGIN and
+B102_TIMER_WAIT_RESULT records for every timer waitable. Each record captures
+the timer handle/object, guest thread, last PPC PC/LR, signaled/pending state,
+signal and timer generations, timer armed state, APC metadata, wait result,
+reason, and elapsed wait time. B98_TIMER_FIRE is extended with the target
+thread's last PPC PC, wait target, kernel-wait flag, and exited flag at the
+instant the timer fires.
+
+This is instrumentation, not a fabricated wakeup: it does not signal another
+object, return STATUS_WAIT_0 early, change timer periods, or force thread 12
+to run. The next device diagnostic can now distinguish a timer that fires
+while its target is waiting on that same handle from an unrelated timer, and
+can show whether the waiter actually resumes. The existing Swift compact
+summary already retains B98_ records, so no additional summary plumbing is
+needed.

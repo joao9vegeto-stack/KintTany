@@ -417,6 +417,7 @@ std::atomic<uint32_t> g_b98WaitTargetLogs{0u};
 std::atomic<uint32_t> g_b98WaitResultLogs{0u};
 std::atomic<uint32_t> g_b98SignalAttemptLogs{0u};
 std::atomic<uint32_t> g_b98TimerFireLogs{0u};
+std::atomic<uint32_t> g_b102TimerWaitLogs{0u};
 std::atomic<uint32_t> g_syncObjectRejectLogs{0u};
 std::mutex g_tlsMutex;
 std::mutex g_virtualMemoryMutex;
@@ -1307,6 +1308,46 @@ uint32_t waitGuestObject(const std::shared_ptr<GuestWaitable> &waitable,
     const uint32_t waitSequence = g_b95SyncWaitLogs.fetch_add(1u, std::memory_order_relaxed);
     const uint32_t b98WaitSample = waitable->handle == 0x115u
         ? g_b98WaitTargetLogs.fetch_add(1u, std::memory_order_relaxed) + 1u : 0u;
+    const uint32_t timerWaitSample = waitable->kind == GuestWaitable::Kind::Timer
+        ? g_b102TimerWaitLogs.fetch_add(1u, std::memory_order_relaxed) + 1u : 0u;
+    const auto waitStarted = std::chrono::steady_clock::now();
+    if (timerWaitSample != 0u &&
+        (timerWaitSample <= 32u || (timerWaitSample % 128u) == 0u)) {
+        const auto apcThread = waitable->timerApcThread.lock();
+        const uint32_t pc = g_currentGuestThread
+            ? g_currentGuestThread->lastGuestPc.load(std::memory_order_relaxed) : 0u;
+        char event[512];
+        std::snprintf(event, sizeof(event),
+            "B102_TIMER_WAIT_BEGIN sample=%u handle=0x%08X object=0x%08X tid=%u pc=0x%08X lr=0x%08X "
+            "signaled=%u pending=%u signal_gen=%llu timer_gen=%llu armed=%u manual=%u "
+            "apc=0x%08X apc_context=0x%08X apc_target=%u alertable=%u",
+            timerWaitSample, waitable->handle, waitable->objectAddress,
+            g_currentGuestThreadId, pc, currentLr,
+            waitable->signaled ? 1u : 0u, waitable->unconsumedSignals,
+            static_cast<unsigned long long>(waitable->signalGeneration),
+            static_cast<unsigned long long>(waitable->timerGeneration),
+            waitable->timerArmed ? 1u : 0u, waitable->manualReset ? 1u : 0u,
+            waitable->timerApcRoutine, waitable->timerApcContext,
+            apcThread ? apcThread->id : 0u, alertable ? 1u : 0u);
+        recordRuntimeTrace(event);
+    }
+    const auto logTimerWaitResult = [&](uint32_t status, const char *reason) {
+        if (timerWaitSample == 0u) return;
+        if (!(timerWaitSample <= 32u || (timerWaitSample % 128u) == 0u)) return;
+        const auto elapsed = std::chrono::duration_cast<std::chrono::microseconds>(
+            std::chrono::steady_clock::now() - waitStarted).count();
+        char event[384];
+        std::snprintf(event, sizeof(event),
+            "B102_TIMER_WAIT_RESULT sample=%u handle=0x%08X tid=%u status=0x%08X reason=%s "
+            "elapsed_us=%lld signaled=%u pending=%u signal_gen=%llu timer_gen=%llu armed=%u",
+            timerWaitSample, waitable->handle, g_currentGuestThreadId, status, reason,
+            static_cast<long long>(elapsed), waitable->signaled ? 1u : 0u,
+            waitable->unconsumedSignals,
+            static_cast<unsigned long long>(waitable->signalGeneration),
+            static_cast<unsigned long long>(waitable->timerGeneration),
+            waitable->timerArmed ? 1u : 0u);
+        recordRuntimeTrace(event);
+    };
     if (b98WaitSample != 0u &&
         (b98WaitSample <= 16u || (b98WaitSample % 256u) == 0u)) {
         char target[384];
@@ -1369,14 +1410,22 @@ uint32_t waitGuestObject(const std::shared_ptr<GuestWaitable> &waitable,
     for (;;) {
         if (alertable && guestApcCanInterruptWait()) {
             lock.unlock(); const bool delivered = deliverPendingGuestApcs(); lock.lock();
-            if (delivered) return kNtStatusUserApc;
+            if (delivered) {
+                logTimerWaitResult(kNtStatusUserApc, "user_apc");
+                return kNtStatusUserApc;
+            }
         }
         if (g_schedulerStopRequested.load()) {
-            if (g_currentGuestThreadId != 1u) throw GuestThreadStopRequested{};
+            if (g_currentGuestThreadId != 1u) {
+                logTimerWaitResult(kNtStatusCancelled, "scheduler_stop_thread");
+                throw GuestThreadStopRequested{};
+            }
+            logTimerWaitResult(kNtStatusCancelled, "scheduler_stop_main");
             return kNtStatusCancelled;
         }
         if (waitable->pulseGeneration != initialPulseGeneration) {
             if (waitable->handle == 0x00000112u) { char event[160]; std::snprintf(event, sizeof(event), "B83_WAIT_SATISFIED handle=0x00000112 kind=pulse thread=%u", static_cast<uint32_t>(g_currentGuestThreadId)); recordRuntimeTrace(event); }
+            logTimerWaitResult(kNtStatusWait0, "pulse");
             return kNtStatusWait0;
         }
         const bool available = waitable->kind == GuestWaitable::Kind::Semaphore
@@ -1404,6 +1453,7 @@ uint32_t waitGuestObject(const std::shared_ptr<GuestWaitable> &waitable,
             }
             if (waitable->handle == 0x00000112u) { char event[224]; std::snprintf(event, sizeof(event), "B83_WAIT_SATISFIED handle=0x00000112 kind=%s thread=%u count=%d manual=%u", waitable->kind == GuestWaitable::Kind::Semaphore ? "Semaphore" : "Event", static_cast<uint32_t>(g_currentGuestThreadId), waitable->semaphoreCount, waitable->manualReset ? 1u : 0u); recordRuntimeTrace(event); }
             logB98WaitResult(kNtStatusSuccess, "signaled");
+            logTimerWaitResult(kNtStatusSuccess, "signaled");
             return kNtStatusSuccess;
         }
         // Finite and infinite waits are both polled in bounded slices so every guest thread
@@ -1411,6 +1461,7 @@ uint32_t waitGuestObject(const std::shared_ptr<GuestWaitable> &waitable,
         const auto nowBeforeWait = std::chrono::steady_clock::now();
         if (deadline && nowBeforeWait >= *deadline) {
             logB98WaitResult(kNtStatusTimeout, "timeout");
+            logTimerWaitResult(kNtStatusTimeout, "timeout");
             return kNtStatusTimeout;
         }
         const auto sliceEnd = nowBeforeWait + std::chrono::milliseconds(16);
@@ -1418,6 +1469,7 @@ uint32_t waitGuestObject(const std::shared_ptr<GuestWaitable> &waitable,
             if (waitable->changed.wait_until(lock, std::min(sliceEnd, *deadline), ready)) continue;
             if (std::chrono::steady_clock::now() >= *deadline) {
                 logB98WaitResult(kNtStatusTimeout, "timeout_after_slice");
+                logTimerWaitResult(kNtStatusTimeout, "timeout_after_slice");
                 return kNtStatusTimeout;
             }
         } else if (waitable->changed.wait_for(lock, std::chrono::milliseconds(16), ready)) {
@@ -9073,14 +9125,24 @@ void xowue_NtSetTimerEx(PPCContext &context, uint8_t *base) {
                     static_cast<uint32_t>(guestTime >> 32));
                 apcQueued = true;
             }
-            char fireEvent[320];
+            const uint32_t targetPc = targetThread
+                ? targetThread->lastGuestPc.load(std::memory_order_relaxed) : 0u;
+            const uint32_t targetWait = targetThread
+                ? targetThread->waitTarget.load(std::memory_order_relaxed) : 0u;
+            const bool targetWaiting = targetThread
+                ? targetThread->waitingInKernel.load(std::memory_order_acquire) : false;
+            const bool targetExited = targetThread
+                ? targetThread->exited.load(std::memory_order_acquire) : true;
+            char fireEvent[448];
             std::snprintf(fireEvent, sizeof(fireEvent),
                 "B98_TIMER_FIRE handle=0x%08X generation=%llu signal_gen=%llu routine=0x%08X "
-                "apc_context=0x%08X target_tid=%u apc_queued=%u",
+                "apc_context=0x%08X target_tid=%u apc_queued=%u target_pc=0x%08X "
+                "target_wait=0x%08X target_waiting=%u target_exited=%u",
                 current->handle, static_cast<unsigned long long>(generation),
                 static_cast<unsigned long long>(signalGeneration), routine,
                 apcContextValue, targetThread ? targetThread->id : 0u,
-                apcQueued ? 1u : 0u);
+                apcQueued ? 1u : 0u, targetPc, targetWait,
+                targetWaiting ? 1u : 0u, targetExited ? 1u : 0u);
             const uint32_t fireSample = g_b98TimerFireLogs.fetch_add(1u, std::memory_order_relaxed);
             if (fireSample < 256u || ((fireSample + 1u) % 256u) == 0u)
                 recordRuntimeTrace(fireEvent);
