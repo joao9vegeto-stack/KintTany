@@ -1446,7 +1446,7 @@ KKRenderFrame(KKVulkanState *state, CAMetalLayer *layer)
 
    state->frame_count++;
    state->guest_frames_presented +=
-       static_cast<uint32_t>(guestSwapSerial - state->last_guest_swap_count);
+       (uint32_t)(guestSwapSerial - state->last_guest_swap_count);
    state->last_guest_swap_count = guestSwapSerial;
    atomic_store_explicit(&g_xowue_guest_swap_completed_count, guestSwapSerial,
                          memory_order_release);
